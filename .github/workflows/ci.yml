@@ -71,8 +71,12 @@ jobs:
           - name: macos-clang
             os: macos-latest
             cc: clang
+          # macos-latest is Apple silicon, so this is the only entry that
+          # covers the x86_64 macOS ABI. macos-13 used to be the label for it
+          # and was retired, which shows up as a job that queues forever rather
+          # than as an error, so check here first if a run never finishes.
           - name: macos-x64-clang
-            os: macos-13
+            os: macos-15-intel
             cc: clang
           - name: windows-msvc
             os: windows-latest

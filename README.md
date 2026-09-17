@@ -22,9 +22,10 @@ C programmers hand roll a worse version of `strings` in every project. They reac
 #include "burrow.h"
 
 int main(void) {
-    Arena arena = arena_new(NULL);
-    Alloc *a = arena_alloc(&arena);
-    DEFER(arena_free, &arena);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    DEFER(arena_free, &ar);
 
     Str body = S("the quick brown fox");
     Slice words = strings_fields(a, body);
@@ -68,7 +69,9 @@ Slice parts = strings_split(a, path, S("/"));
 
 This is Zig's convention and it is the only answer that works here. Go's API hands back heap objects everywhere because a garbage collector cleans up afterwards. Bolting a tracing GC onto a C library would force a runtime on every consumer and break every FFI host. A `_free` for every constructor means documenting ownership 23,730 times and getting it wrong some of those times. One rule that covers the entire surface beats both.
 
-Arena is the default and it is what makes the ergonomics work. You make an arena, you pass it down, you free it once, and in between you write the code you would have written in Go. A Boehm GC backend is available for people who want Go's exact ergonomics, a tracking allocator finds leaks and use after free in CI, and `malloc` is there for people who want to manage it themselves.
+Arena is the default and it is what makes the ergonomics work. You make an arena, you pass it down, you free it once, and in between you write the code you would have written in Go. A Boehm GC backend is available for people who want Go's exact ergonomics, a tracking allocator finds leaks and use after free in CI, `heap` is `malloc` and `free` behind the same interface for people who want to manage it themselves, and `fixed` runs the whole library out of a buffer you hand it.
+
+The full story is one page, and it is the one page worth reading before you write any burrow: [docs/guides/allocators.md](docs/guides/allocators.md).
 
 ## Status
 
@@ -79,12 +82,12 @@ The design is finished and written down in [docs/design](docs/design), twenty do
 The implementation plan is tracked in milestone issues:
 
 - [P0: substrate, the part everything else stands on](https://github.com/tamnd/burrow/issues/1)
-- [P1: the pure packages, strings through regexp](https://github.com/tamnd/burrow/issues/2)
-- [P2: os, io/fs, time, and the platform layer](https://github.com/tamnd/burrow/issues/3)
-- [P3: crypto](https://github.com/tamnd/burrow/issues/4)
-- [P4: net and net/http](https://github.com/tamnd/burrow/issues/5)
-- [P5: go/\*, templates, database/sql, log/slog](https://github.com/tamnd/burrow/issues/6)
-- [P6: hardening and 1.0](https://github.com/tamnd/burrow/issues/7)
+- [P1: the pure packages, strings through regexp](https://github.com/tamnd/burrow/issues/3)
+- [P2: os, io/fs, time, and the platform layer](https://github.com/tamnd/burrow/issues/4)
+- [P3: crypto](https://github.com/tamnd/burrow/issues/5)
+- [P4: net and net/http](https://github.com/tamnd/burrow/issues/6)
+- [P5: go/\*, templates, database/sql, log/slog](https://github.com/tamnd/burrow/issues/7)
+- [P6: hardening and 1.0](https://github.com/tamnd/burrow/issues/8)
 
 ## Completeness is measured, not claimed
 

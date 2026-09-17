@@ -22,10 +22,11 @@
  * parameter. No exceptions, no hidden global, no per-object free function to
  * remember. Make an arena, pass it down, free it once.
  *
- *     Arena arena = arena_new(NULL);
- *     Alloc *a = arena_alloc(&arena);
+ *     Arena ar;
+ *     arena_init(&ar, NULL, 0);
+ *     Alloc *a = arena_allocator(&ar);
  *     Slice parts = strings_split(a, path, S("/"));
- *     arena_free(&arena);
+ *     arena_free(&ar);
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -36,12 +37,17 @@
 
 #include "burrow/version.h"
 
+#include "burrow/mem.h"
+#include "burrow/mem/arena.h"
+#include "burrow/mem/fixed.h"
+#include "burrow/mem/heap.h"
+
 /* The rest of the library arrives here as it is written. The order is the
  * construction order from docs/design/06-runtime.md section 12, because the
  * headers have the same dependency shape the code does:
  *
  *   core types, allocators, runtime, reflect, then the packages in tier order.
  *
- * Nothing below this line yet. See the milestone issues. */
+ * Allocators are done. Core types are next. See the milestone issues. */
 
 #endif /* BURROW_H */

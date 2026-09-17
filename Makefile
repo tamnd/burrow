@@ -70,7 +70,9 @@ DEFINES := -DBURROW_SOURCE_ID='"$(SOURCE_ID)"'
 CFLAGS  ?= $(STD) $(OPT) $(WARNINGS) $(HARDENING) $(INCLUDES) $(DEFINES)
 LDFLAGS ?=
 
-SRCS := $(wildcard src/*.c)
+# Two levels is what the layout uses, src/version.c and src/mem/arena.c, and
+# spelling them out beats a shell find that behaves differently on every box.
+SRCS := $(wildcard src/*.c) $(wildcard src/*/*.c)
 OBJS := $(patsubst src/%.c,$(BUILD)/obj/%.o,$(SRCS))
 LIB  := $(BUILD)/libburrow.a
 

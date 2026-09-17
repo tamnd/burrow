@@ -31,11 +31,11 @@ report() {
 # its length, so there is never a reason to reach for these.
 BANNED_STRING='strcpy|strcat|sprintf|vsprintf|gets|strtok|strncpy|strncat|alloca|atoi|atol|atof'
 
-# Allocation. It is legal in exactly one file, which is the malloc backend, and
+# Allocation. It is legal in exactly one file, which is the heap backend, and
 # nowhere else, because the whole memory design is that allocation is something
 # a caller hands you rather than something you reach for.
-BANNED_ALLOC='\bmalloc\b|\bcalloc\b|\brealloc\b|\bfree\b'
-ALLOC_ALLOWED='src/mem/malloc.c'
+BANNED_ALLOC='\bmalloc\b|\bcalloc\b|\brealloc\b|\bfree\b|\baligned_alloc\b|\bposix_memalign\b|\b_aligned_malloc\b|\b_aligned_realloc\b|\b_aligned_free\b'
+ALLOC_ALLOWED='src/mem/heap.c'
 
 # Exiting. A library does not get to end the host's process. Failures come back
 # as an Error, and the one case where that is impossible is allocation failure,

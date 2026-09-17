@@ -7,7 +7,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(_MSC_VER)
+#if defined(_WIN32)
+/* Windows spells the over aligned allocators its own way and does not ship
+ * C11's aligned_alloc, under either compiler. */
 #include <malloc.h>
 #endif
 
@@ -21,12 +23,11 @@
  * the ordinary path, which is almost every allocation this library will ever
  * make. */
 
-#define HEAP_ALIGN_MAX _Alignof(max_align_t)
-
 static bool align_ok(size_t align) {
     return align != 0 && (align & (align - 1)) == 0;
 }
 
+#if !defined(_WIN32)
 /* aligned_alloc is C11 and wants a size that is a multiple of the alignment.
  * C17 dropped that requirement but we still compile against libraries that
  * enforce it, so round up rather than find out. */
@@ -34,11 +35,12 @@ static size_t round_up(size_t n, size_t align) {
     size_t r = n % align;
     return r == 0 ? n : n + (align - r);
 }
+#endif
 
 static void *heap_raw(size_t size, size_t align) {
-    if (align <= HEAP_ALIGN_MAX)
+    if (align <= BURROW_ALIGN_MAX)
         return malloc(size);
-#if defined(_MSC_VER)
+#if defined(_WIN32)
     return _aligned_malloc(size, align);
 #else
     size_t padded = round_up(size, align);
@@ -49,11 +51,11 @@ static void *heap_raw(size_t size, size_t align) {
 }
 
 static void heap_raw_free(void *p, size_t align) {
-    if (align <= HEAP_ALIGN_MAX) {
+    if (align <= BURROW_ALIGN_MAX) {
         free(p);
         return;
     }
-#if defined(_MSC_VER)
+#if defined(_WIN32)
     _aligned_free(p);
 #else
     free(p);
@@ -74,7 +76,7 @@ static void *heap_alloc_zeroed(void *self, size_t size, size_t align) {
     (void)self;
     if (!align_ok(align) || size == 0)
         return NULL;
-    if (align <= HEAP_ALIGN_MAX)
+    if (align <= BURROW_ALIGN_MAX)
         return calloc(1, size);
     void *p = heap_raw(size, align);
     if (p != NULL)
@@ -88,9 +90,9 @@ static void *heap_realloc(void *self, void *p, size_t old, size_t nsz, size_t al
         return NULL;
     if (p == NULL)
         return heap_raw(nsz, align);
-    if (align <= HEAP_ALIGN_MAX)
+    if (align <= BURROW_ALIGN_MAX)
         return realloc(p, nsz);
-#if defined(_MSC_VER)
+#if defined(_WIN32)
     return _aligned_realloc(p, nsz, align);
 #else
     /* There is no aligned realloc in standard C, so grow the honest way. The

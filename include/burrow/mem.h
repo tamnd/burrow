@@ -46,6 +46,21 @@
 extern "C" {
 #endif
 
+/* The strictest alignment any fundamental C type needs, which is the threshold
+ * where a request stops being something plain malloc can satisfy.
+ *
+ * max_align_t is the standard spelling for this and it would be the obvious
+ * thing to use, except that MSVC does not define it when compiling C. This
+ * union is what every implementation of max_align_t is underneath anyway. */
+typedef union MaxAlign {
+    long long ll;
+    long double ld;
+    void *p;
+    void (*fp)(void);
+} MaxAlign;
+
+#define BURROW_ALIGN_MAX _Alignof(MaxAlign)
+
 /* What an allocator reports about itself. Every field is cumulative except
  * bytes_live, and an allocator that does not track a particular number leaves
  * it at zero rather than guessing. */

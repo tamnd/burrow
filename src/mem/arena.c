@@ -26,7 +26,7 @@
  * server handles, and every request after it, allocates nothing from the parent
  * at all. */
 
-#define ARENA_ALIGN _Alignof(max_align_t)
+#define ARENA_ALIGN BURROW_ALIGN_MAX
 #define ARENA_DEFAULT_CHUNK ((size_t)64 * 1024)
 #define ARENA_MAX_CHUNK ((size_t)4 * 1024 * 1024)
 

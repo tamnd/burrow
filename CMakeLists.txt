@@ -48,7 +48,10 @@ target_compile_definitions(burrow PRIVATE BURROW_SOURCE_ID="${BURROW_SOURCE_ID}"
 # The warning set mirrors the Makefile's. MSVC gets its own because /W4 is not
 # -Wall and the numbered warnings have no gcc equivalent worth mapping.
 if(MSVC)
-    target_compile_options(burrow PRIVATE /W4 /permissive- /utf-8)
+    # /wd4100 is MSVC's unreferenced formal parameter, and it is off for the
+    # same reason -Wno-unused-parameter is off everywhere else. A vtable slot
+    # has a fixed signature and most implementations of it ignore something.
+    target_compile_options(burrow PRIVATE /W4 /permissive- /utf-8 /wd4100)
     if(BURROW_WERROR)
         target_compile_options(burrow PRIVATE /WX)
     endif()

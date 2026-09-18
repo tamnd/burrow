@@ -4,7 +4,9 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
-## Unreleased
+## v0.0.4 (2026-09-18)
+
+Interfaces, and the first two things built on them. `io.Reader` and `io.Writer` exist now, with the four functions that need nothing else, so there is a real shape for every reader and writer the rest of the library will grow.
 
 ### Interfaces
 

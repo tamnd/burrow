@@ -57,10 +57,19 @@ TEST(a_thread_runs_and_gets_its_argument) {
 }
 
 TEST(a_stack_size_is_a_request_the_system_takes) {
-    /* Two megabytes, which every system accepts, and sixteen kilobytes, which
-     * is at or below the minimum everywhere and so exercises the clamp. */
+    /* Two megabytes, which every system accepts, then the sizes that are the
+     * reason the clamp exists at all.
+     *
+     * 1024 is below every minimum there is. 16 kilobytes is at or below the
+     * minimum on most systems and well below it on glibc arm64, which wants
+     * 128, and that difference is what this test is really for: a build that
+     * guesses a floor instead of asking for one passes here on amd64 and fails
+     * on arm64. 100000 is not a multiple of any page size, which macOS refuses
+     * unless it is rounded up. Every one of them has to start a thread. */
     static burrow__Thread big;
+    static burrow__Thread tiny;
     static burrow__Thread small;
+    static burrow__Thread odd;
 
     ran = 0;
     CHECK(burrow__thread_start(&big, set_ran, NULL, 2u * 1024u * 1024u));
@@ -68,8 +77,18 @@ TEST(a_stack_size_is_a_request_the_system_takes) {
     CHECK(burrow__atomic_load_acquire_u32(&ran) == 1);
 
     ran = 0;
+    CHECK(burrow__thread_start(&tiny, set_ran, NULL, 1024u));
+    CHECK(burrow__thread_join(&tiny));
+    CHECK(burrow__atomic_load_acquire_u32(&ran) == 1);
+
+    ran = 0;
     CHECK(burrow__thread_start(&small, set_ran, NULL, 16u * 1024u));
     CHECK(burrow__thread_join(&small));
+    CHECK(burrow__atomic_load_acquire_u32(&ran) == 1);
+
+    ran = 0;
+    CHECK(burrow__thread_start(&odd, set_ran, NULL, 100000u));
+    CHECK(burrow__thread_join(&odd));
     CHECK(burrow__atomic_load_acquire_u32(&ran) == 1);
 }
 

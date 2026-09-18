@@ -85,7 +85,9 @@ typedef struct burrow__Thread {
  * for anything that is not counting threads in the thousands. A size below the
  * platform's minimum is raised to the minimum rather than rejected, because the
  * minimum is different on every system and a caller asking for 16 kilobytes
- * means "small" rather than "exactly this".
+ * means "small" rather than "exactly this". It is 16 kilobytes on macOS and 128
+ * on glibc arm64, so that is not a small difference, and the size is also
+ * rounded up to a whole page because macOS refuses one that is not.
  *
  * False means the system said no, which in practice is a thread limit or an
  * address space that has no room for another stack. It is not a panic, because

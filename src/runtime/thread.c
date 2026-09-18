@@ -34,15 +34,59 @@
 #include <unistd.h>
 #endif
 
-/* The smallest stack we will ask for. PTHREAD_STACK_MIN is the system's own
- * answer and is the one to use when it is visible, but glibc hides it unless a
- * feature macro is set and burrow is built as strict C11, so there is a floor
- * here for when it is not. Sixteen kilobytes is the smallest value any system
- * burrow targets accepts. */
+/* The smallest stack we will ask for, and a guessed constant is not good enough
+ * for it. glibc on arm64 wants 128 kilobytes where glibc on amd64 wants 16, and
+ * it hides PTHREAD_STACK_MIN behind a feature macro that a strict C11 build does
+ * not set, so a build that reads the macro on one machine and a fallback on the
+ * next gets a number that is right in one place and rejected with EINVAL in the
+ * other.
+ *
+ * sysconf(_SC_THREAD_STACK_MIN) is the same answer asked at runtime, it is
+ * declared with no feature macro anywhere, and on glibc it is what the macro
+ * expands to these days in any case. The macro is still consulted where it is
+ * visible, since a system whose two answers disagree should get the larger one.
+ *
+ * 16384 is the last resort for a system that answers neither, and it is the
+ * value macOS uses. */
+#define STACK_FLOOR ((size_t)16384)
+
+#if !defined(BURROW_OS_WINDOWS)
+static size_t stack_min(void) {
+    size_t min = STACK_FLOOR;
+
+    long answer = sysconf(_SC_THREAD_STACK_MIN);
+    if (answer > 0 && (size_t)answer > min)
+        min = (size_t)answer;
+
 #if defined(PTHREAD_STACK_MIN)
-#define STACK_MIN PTHREAD_STACK_MIN
-#else
-#define STACK_MIN ((size_t)16384)
+    if ((size_t)PTHREAD_STACK_MIN > min)
+        min = (size_t)PTHREAD_STACK_MIN;
+#endif
+
+    return min;
+}
+
+/* macOS documents the stack size as having to be a multiple of the page size
+ * and rejects one that is not, which no other system here cares about. Rounding
+ * up everywhere costs less than one page per thread and means a caller never has
+ * to know which system it is on, which is the whole job of this file. */
+static size_t round_to_page(size_t bytes) {
+    long page = sysconf(_SC_PAGESIZE);
+    if (page <= 0)
+        return bytes;
+
+    size_t size = (size_t)page;
+    size_t over = bytes % size;
+    if (over == 0)
+        return bytes;
+
+    /* A request this close to the top is not a real request, and growing it
+     * would wrap. Give back what was asked for and let the system refuse it. */
+    if (bytes > SIZE_MAX - (size - over))
+        return bytes;
+
+    return bytes + (size - over);
+}
 #endif
 
 #if defined(BURROW_OS_WINDOWS)
@@ -68,8 +112,12 @@ bool burrow__thread_start(burrow__Thread *t, burrow__ThreadFn fn, void *arg,
     t->id = 0;
     t->started = false;
 
-    if (stack_bytes != 0 && stack_bytes < (size_t)STACK_MIN)
-        stack_bytes = (size_t)STACK_MIN;
+    /* Windows has no minimum of its own worth the name: a size below one page
+     * is rounded up to one and nothing is refused. The floor is applied anyway
+     * so that a caller asking for a small stack gets the same small stack on
+     * every system rather than a different one on each. */
+    if (stack_bytes != 0 && stack_bytes < STACK_FLOOR)
+        stack_bytes = STACK_FLOOR;
 #if SIZE_MAX > UINT_MAX
     /* Only on a 64 bit build, where the two are different. On a 32 bit one they
      * are the same number and the compiler says so. */
@@ -162,8 +210,10 @@ bool burrow__thread_start(burrow__Thread *t, burrow__ThreadFn fn, void *arg,
         return false;
 
     if (stack_bytes != 0) {
-        if (stack_bytes < (size_t)STACK_MIN)
-            stack_bytes = (size_t)STACK_MIN;
+        size_t min = stack_min();
+        if (stack_bytes < min)
+            stack_bytes = min;
+        stack_bytes = round_to_page(stack_bytes);
         if (pthread_attr_setstacksize(&attr, stack_bytes) != 0) {
             (void)pthread_attr_destroy(&attr);
             return false;

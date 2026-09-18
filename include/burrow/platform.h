@@ -194,6 +194,32 @@
 
 #define BURROW_LITTLE_ENDIAN (!BURROW_BIG_ENDIAN)
 
+/* ------------------------------------------------------- the sanitizers
+ *
+ * Whether this translation unit is being compiled under the address sanitizer,
+ * which matters to the handful of places that have to tell it what they are
+ * about to do. Switching stacks is the one that exists today: a sanitizer that
+ * is not told believes the thread is still on the stack it was on before.
+ *
+ * Two spellings because the compilers disagree. clang answers __has_feature and
+ * gcc predefines a macro. A compiler that does neither reads as off and the
+ * code goes unannotated, which is the same as building with no sanitizer at
+ * all, and is the right way for this to fail. */
+
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define BURROW_ASAN 1
+#endif
+#endif
+
+#if !defined(BURROW_ASAN)
+#if defined(__SANITIZE_ADDRESS__)
+#define BURROW_ASAN 1
+#else
+#define BURROW_ASAN 0
+#endif
+#endif
+
 /* --------------------------------------------------- attributes and hints
  *
  * Spelled once here so that no other file in the tree has to know which

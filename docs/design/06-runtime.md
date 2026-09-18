@@ -138,12 +138,21 @@ Two details that are easy to get wrong and expensive to discover late:
   stack rather than reading whatever the buffer held before. Win64 also needs a
   registered dynamic function table, which comes with the Win64 assembly.
 
-One more that is not done and is written down so it does not get lost. The
-sanitizers are not told about the switch: ASan and TSan both have calls for it
-and without them a sanitizer believes a thread is still on the stack it was on
-before. The suite passes under both today, including with ASan's fake stacks
-turned on, so this is missing rather than broken. Guard pages were on this list
-and are now in `burrow/stack.h`, which §4 describes.
+- **Telling the sanitizers.** A sanitizer that is not told about a stack switch
+  believes the thread is still on the stack it was on before, and from then on
+  everything it says is about the wrong memory. ASan gets
+  `__sanitizer_start_switch_fiber` on the way out and its matching finish on the
+  way in, and the context carries the bounds of its stack so the call has
+  something to pass. TSan is deliberately left alone. Its fiber API allocates a
+  whole thread state per fiber and the implementation holds a few hundred of
+  them before it starts reclaiming slots by stopping the world, so a run that
+  starts around five hundred goroutines stops answering. Until that gets
+  cheaper, TSan sees one shadow stack per thread with goroutines interleaved on
+  it, which makes some traces odd to read and has not stopped it finding real
+  races.
+
+Guard pages were on this list and are now in `burrow/stack.h`, which §4
+describes.
 
 The performance target is libmill's, which sets the bar for whether Go-style
 code feels natural in C: **≥10 M goroutine launches/sec and ≥20 M context

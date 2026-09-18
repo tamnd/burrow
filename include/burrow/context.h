@@ -27,13 +27,9 @@
  * overflow today runs off the end of the buffer rather than hitting a page that
  * faults. That arrives with stack allocation, which is the next piece.
  *
- * The sanitizers are not told about the switch. Address sanitizer and thread
- * sanitizer both have calls for this, `__sanitizer_start_switch_fiber` and
- * `__tsan_switch_to_fiber`, and without them a sanitizer believes a thread is
- * still on the stack it was on before. The tests pass under both today,
- * including with fake stacks turned on, so this is a thing that is missing
- * rather than a thing that is broken, and it is written down here because the
- * day it starts mattering nobody will guess it from the symptom.
+ * Address sanitizer is told about the switch, because a sanitizer that is not
+ * told believes the thread is still on the stack it was on before. Thread
+ * sanitizer is not told, which is a decision and is argued for further down.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -72,6 +68,36 @@ extern "C" {
 #define BURROW_CONTEXT_FIBERS 1
 #else
 #define BURROW_CONTEXT_UCONTEXT 1
+#endif
+
+/* Whether the sanitizer annotations are compiled in.
+ *
+ * What they are is one `__sanitizer_start_switch_fiber` on the way out of a
+ * stack and one matching finish on the way in, which is how the address
+ * sanitizer is told that the thread has moved. None of it is compiled unless
+ * that sanitizer is on, so an ordinary build is the same machine code it was
+ * before.
+ *
+ * Off on Fibers whatever else is true. The calls want the bottom and the size
+ * of the stack being switched to, and a fiber allocates its own stack somewhere
+ * Windows does not tell us about, so the only numbers we could pass there are
+ * the caller's buffer, which is not the memory the context runs on. Wrong
+ * numbers are worse than none. Nothing that runs a sanitizer targets Windows
+ * today, so this costs nothing, and the day it does the fix is to ask the
+ * operating system for the fiber's real bounds.
+ *
+ * Thread sanitizer is left alone on purpose. It has an API for this too,
+ * `__tsan_create_fiber` and `__tsan_switch_to_fiber`, and a fiber there is a
+ * whole thread state with its own shadow stack and trace buffer. The
+ * implementation keeps a few hundred of those at a time and reclaims slots by
+ * stopping the world, which is fine for a coroutine library and is not fine for
+ * a goroutine runtime. Measured here: a program that starts around five hundred
+ * goroutines slows to nothing and then stops answering. So the thread sanitizer
+ * sees one shadow stack per thread with goroutines interleaved on it, which
+ * makes some stack traces odd to read and has not so far stopped it finding
+ * real races. Worth revisiting if that API ever gets cheap. */
+#if BURROW_ASAN && !defined(BURROW_CONTEXT_FIBERS)
+#define BURROW_CONTEXT_ANNOTATE 1
 #endif
 
 #if defined(BURROW_CONTEXT_UCONTEXT)
@@ -121,6 +147,23 @@ struct burrow__Context {
 
     /* Where to go when entry returns. */
     burrow__Context *link;
+
+#if defined(BURROW_CONTEXT_ANNOTATE)
+    /* What the address sanitizer needs and nothing else does, which is why it
+     * is not here in an ordinary build.
+     *
+     * `stack` and `stack_size` are the buffer make was given, because the
+     * sanitizer has to be handed the bounds of the stack being switched to
+     * before the switch rather than after. They are NULL and zero on a thread's
+     * own context until the first switch away from it fills them in, which is
+     * explained where that happens.
+     *
+     * `fake_stack` is the sanitizer's, written when this context is switched
+     * away from and read when it is switched back to. */
+    void *stack;
+    size_t stack_size;
+    void *fake_stack;
+#endif
 };
 
 /* The smallest stack burrow__context_make will accept.
@@ -180,6 +223,41 @@ bool burrow__context_make(burrow__Context *ctx, void *stack, size_t size,
  * again. Safe on a context that was never made. */
 void burrow__context_free(burrow__Context *ctx);
 
+/* The switch itself, with nothing around it. The assembly defines this one, and
+ * so do the two portable backends, and none of them knows what a sanitizer is.
+ * Call burrow__context_switch below instead. */
+void burrow__context_switch_raw(burrow__Context *from, burrow__Context *to);
+
+/* The two halves of telling the address sanitizer that a switch is about to
+ * happen and that one has just happened. Leave is called on the old stack and
+ * enter on the new one, and between them is the only place a thread is on
+ * neither.
+ *
+ * `burrow__context_leave_final` is leave for a context that is finished and
+ * will never be switched to again, which is a different thing to the sanitizer:
+ * it is what says the fake stack can go rather than be kept for a return that
+ * is not coming.
+ *
+ * With no sanitizer on, all three are empty and the compiler deletes them. */
+#if defined(BURROW_CONTEXT_ANNOTATE)
+void burrow__context_leave(burrow__Context *from, burrow__Context *to);
+void burrow__context_leave_final(burrow__Context *from, burrow__Context *to);
+void burrow__context_enter(burrow__Context *self);
+#else
+static inline void burrow__context_leave(burrow__Context *from, burrow__Context *to) {
+    (void)from;
+    (void)to;
+}
+static inline void burrow__context_leave_final(burrow__Context *from,
+                                               burrow__Context *to) {
+    (void)from;
+    (void)to;
+}
+static inline void burrow__context_enter(burrow__Context *self) {
+    (void)self;
+}
+#endif
+
 /* Saves where the caller is into `from` and resumes `to`.
  *
  * Returns when somebody switches back to `from`, and from the caller's point of
@@ -187,8 +265,16 @@ void burrow__context_free(burrow__Context *ctx);
  * to belong to the calling thread: a context is a stack, and two threads on one
  * stack at the same time is not something this or anything else can survive.
  *
- * Switching a context to itself is allowed and is a slow way of doing nothing. */
-void burrow__context_switch(burrow__Context *from, burrow__Context *to);
+ * Switching a context to itself is allowed and is a slow way of doing nothing.
+ *
+ * It is inline here rather than a function in context.c so that the ordinary
+ * build is still one call straight into the assembly. The two annotations
+ * around the switch are empty unless a sanitizer is on. */
+static inline void burrow__context_switch(burrow__Context *from, burrow__Context *to) {
+    burrow__context_leave(from, to);
+    burrow__context_switch_raw(from, to);
+    burrow__context_enter(from);
+}
 
 /* The other end of every trampoline. Runs entry, then goes to link.
  *

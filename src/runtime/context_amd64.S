@@ -49,18 +49,18 @@
 
 	.text
 
-/* void burrow__context_switch(burrow__Context *from, burrow__Context *to)
+/* void burrow__context_switch_raw(burrow__Context *from, burrow__Context *to)
  *
  * rdi is from, rsi is to. The unwinding directives describe the pushes and are
  * accurate all the way through, including after the stack pointer has been
  * swapped, because the frame on the other stack has the same shape by
  * construction. */
-	.globl SYM(burrow__context_switch)
+	.globl SYM(burrow__context_switch_raw)
 #if !defined(__APPLE__)
-	.type burrow__context_switch,@function
+	.type burrow__context_switch_raw,@function
 #endif
 	.p2align 4
-SYM(burrow__context_switch):
+SYM(burrow__context_switch_raw):
 	.cfi_startproc
 	pushq	%rbp
 	.cfi_adjust_cfa_offset 8
@@ -116,7 +116,7 @@ SYM(burrow__context_switch):
 	ret
 	.cfi_endproc
 #if !defined(__APPLE__)
-	.size burrow__context_switch, . - burrow__context_switch
+	.size burrow__context_switch_raw, . - burrow__context_switch_raw
 #endif
 
 /* void *burrow__context_make_asm(void *stack_top, burrow__Context *self)

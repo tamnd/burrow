@@ -49,15 +49,15 @@
 
 	.text
 
-/* void burrow__context_switch(burrow__Context *from, burrow__Context *to)
+/* void burrow__context_switch_raw(burrow__Context *from, burrow__Context *to)
  *
  * x0 is from, x1 is to. */
-	.globl SYM(burrow__context_switch)
+	.globl SYM(burrow__context_switch_raw)
 #if !defined(__APPLE__)
-	.type burrow__context_switch,%function
+	.type burrow__context_switch_raw,%function
 #endif
 	.p2align 4
-SYM(burrow__context_switch):
+SYM(burrow__context_switch_raw):
 	.cfi_startproc
 	sub	sp, sp, #176
 	.cfi_def_cfa_offset 176
@@ -122,7 +122,7 @@ SYM(burrow__context_switch):
 	ret
 	.cfi_endproc
 #if !defined(__APPLE__)
-	.size burrow__context_switch, . - burrow__context_switch
+	.size burrow__context_switch_raw, . - burrow__context_switch_raw
 #endif
 
 /* void *burrow__context_make_asm(void *stack_top, burrow__Context *self)

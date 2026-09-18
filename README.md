@@ -73,6 +73,36 @@ Arena is the default and it is what makes the ergonomics work. You make an arena
 
 The full story is one page, and it is the one page worth reading before you write any burrow: [docs/guides/allocators.md](docs/guides/allocators.md).
 
+## Numbers
+
+Go's numeric types are C's numeric types. `int8` through `int64` are `int8_t` through `int64_t`, `int` is `Int` and is 64 bits on a 64 bit machine and 32 on a 32 bit one exactly as Go's is, and `float64` is `double`.
+
+Keep writing `+`. What burrow adds is the handful of cases where C says the behaviour is undefined and Go says exactly what the answer is.
+
+```c
+Int n = int_add(a, b);          /* wraps, like Go. a + b is undefined if it overflows */
+Int q = int_div(a, b);          /* b == 0 stops the program with Go's message */
+Uint h = uint_shl(hash, 70);    /* zero, not h << 6, which is what x86 does */
+Int i = int_from_float64(f);    /* saturates, NaN gives zero */
+```
+
+Signed overflow is the one to care about. A compiler that sees `a + 1 > a` is entitled to fold it to `true` and delete the overflow check you wrote, without a warning. Every one of these is a `static inline` that compiles to the same instruction the operator would have, so `int_add` is one `add` at `-O2` and `int_div` puts two compares in front of a divide that was going to cost thirty cycles anyway.
+
+Details, including the one place where two correct Go implementations disagree and burrow has to pick a side: [docs/guides/numbers.md](docs/guides/numbers.md).
+
+## Zero values and results
+
+Go promises that the zero value of a type is a working value, and C gives you the same bit pattern for free. `Str s = {0}` is the empty string, a zeroed `Error` means nothing went wrong, a zeroed interface is nil. That holds for every type in the library, which is a constraint on the design rather than a happy accident: it is why `SyncMutex` is an atomic word rather than a `pthread_mutex_t`, and there is a test that takes the zero value of every public type and uses it.
+
+Go returns two things where C returns one, so the extra results move to the end of the parameter list in Go's order, `error` goes last, and any of them can be `NULL` if you do not want it.
+
+```c
+Int n = strconv_atoi(s, &err);
+Int m = strconv_atoi(s, NULL);   /* do not care why it failed */
+```
+
+Details: [docs/guides/conventions.md](docs/guides/conventions.md).
+
 ## Strings
 
 A string is a pointer and a length, passed by value, and it is not NUL terminated.

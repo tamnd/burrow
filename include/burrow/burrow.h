@@ -48,6 +48,7 @@
 #include "burrow/mem/arena.h"
 #include "burrow/mem/fixed.h"
 #include "burrow/mem/heap.h"
+#include "burrow/num.h"
 #include "burrow/runtime.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
@@ -59,11 +60,12 @@
  *   core types, allocators, runtime, reflect, then the packages in tier order.
  *
  * Allocators are done. Str, the type descriptor, Slice, Error, Map, the
- * interface machinery and function values are done, which is all of the core
- * types. io.Reader and io.Writer are here as the first interfaces built on it,
- * with nothing behind them yet: os and bytes are what fill them in.
+ * interface machinery, function values and the numeric operations are done,
+ * which is all of the core types. io.Reader and io.Writer are here as the first
+ * interfaces built on it, with nothing behind them yet: os and bytes are what
+ * fill them in.
  *
- * The numeric conversions and rune handling are next, and then the runtime.
- * See the milestone issues. */
+ * Rune and UTF-8 handling is next, and then the runtime. See the milestone
+ * issues. */
 
 #endif /* BURROW_H */

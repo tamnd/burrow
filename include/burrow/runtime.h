@@ -55,6 +55,20 @@ BURROW_NORETURN void runtime_index_out_of_range(Int i, Int len);
 /* runtime error: slice bounds out of range [lo:hi] with capacity cap */
 BURROW_NORETURN void runtime_slice_bounds_out_of_range(Int lo, Int hi, Int cap);
 
+/* runtime error: integer divide by zero
+ *
+ * Every division in burrow/num.h checks its divisor first, because the bare
+ * instruction faults on x86 and a fault arrives as a signal with no message in
+ * it. Go prints this line and so does this. */
+BURROW_NORETURN void runtime_integer_divide_by_zero(void);
+
+/* runtime error: negative shift amount
+ *
+ * Go's shift count is a count rather than a direction, so a negative one is a
+ * bug in the caller rather than a shift the other way. The message does not
+ * carry the number, because Go's does not either. */
+BURROW_NORETURN void runtime_negative_shift(void);
+
 /* Where the message goes on the way out.
  *
  * The default writes to standard error and ends the process. That is right for

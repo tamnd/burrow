@@ -68,6 +68,41 @@ support `_Complex` in C mode and because Go's `complex128` has defined
 behaviour on infinities and NaNs that `math/cmplx`'s tests pin. `math/cmplx` is
 ported as arithmetic over these structs, not delegated to `<complex.h>`.
 
+The arithmetic itself shipped as `burrow/num.h`, and the scope of that header is
+narrow on purpose: it covers the operations where C is undefined, or where C is
+defined and disagrees with Go, and nothing else. That is five cases. Signed
+overflow, which is undefined in C and wraps in Go, so `int_add`, `int_sub`,
+`int_mul` and `int_neg` exist for every signed width. Division by zero and
+`MinInt / -1`, which fault on x86 and which Go answers, one with a message and
+one with the wrapped value. Shifts at or past the width of the type, which are
+undefined in C and which x86 answers with the low six bits of the count, while
+Go gives zero or a sign extension. A negative shift count, which Go treats as a
+run-time error. And float to integer conversion out of range, which is the one
+case Go's own specification calls implementation dependent.
+
+That last one needs a decision rather than a port, because there is no single
+Go answer to copy: amd64 gives `MinInt64` for both `int64(1e300)` and
+`int64(NaN)` while arm64 saturates and maps NaN to zero, and both are conformant
+Go. burrow saturates and maps NaN to zero everywhere, matching arm64, wasm and
+Rust. It is not a ledger entry, since the spec permits the answer and burrow is
+conformant either way, but it is called out in the header, the guide and the
+tests, because it is the one place a program ported from amd64 Go can change
+behaviour.
+
+Unsigned wrapping, float arithmetic, comparisons, the bitwise operators and
+narrowing conversions are all the same in both languages, so they stay as the
+plain operator and the header says so. The unsigned families still get the same
+nine function names so that generic code does not have to know which half of the
+table it is in, and those expand to the operator with the integer promotions
+pinned down, which matters below 32 bits where `uint16_t * uint16_t` otherwise
+promotes to a signed `int` and can overflow it.
+
+`Int` and `Uint` get their own named functions rather than macro aliases to the
+`int64` set, so that a 32-bit build gets 32-bit wrapping without a second code
+path. The `_Generic` selection macros deliberately omit them, because on any
+given platform they are a duplicate association with whichever fixed-width type
+they already are.
+
 ## 3. Strings
 
 ```c
@@ -559,7 +594,7 @@ itself an out-shaped aggregate, a named result struct is generated instead —
 consistent, if slightly verbose:
 
 ```c
-typedef struct { Str name; Str value; bool ok; } StringsCutRet;
+typedef struct { Str before; Str after; bool found; } StringsCutRet;
 ```
 
 Functions with no meaningful first result return `Error` directly, which
@@ -569,6 +604,29 @@ makes the common check natural:
 Error err = os_write_file(path, data, 0644);
 if (BURROW_FAILED(err)) return err;
 ```
+
+**What shipped.** The rule above, unchanged, plus `BURROW_OUT(p, v)` for the
+writing side of it:
+
+```c
+if (min > buf.len) {
+    BURROW_OUT(err, io_err_short_buffer);
+    return 0;
+}
+```
+
+It writes through the pointer if there is one and does nothing if there is not.
+The alternative was `if (err != NULL) *err = ...` at every site, which is three
+lines of noise around one assignment and which gets forgotten, and a forgotten
+check is a crash in a caller who did nothing wrong. The pointer appears twice in
+the expansion, so the macro's contract is that it takes a pointer variable and
+not an expression with a side effect in it. `src/io/io.c` is the first user and
+every function that grows a second result is expected to use it.
+
+The `NULL`-is-allowed half of the rule has to hold without exceptions to be
+worth having. A caller who wants only the first result should not have to
+declare a variable to throw away, and a rule with holes in it gets looked up
+every time instead of learned once.
 
 **Variadics.** Go's `...T` is a slice. The C form takes a `Slice`, and a
 `va_list` convenience variant is generated for the handful of cases where
@@ -624,9 +682,29 @@ every design decision in Tier 0, and it is worth the cost:
   appendable. `elem == NULL` is tolerated by `append` when an element
   descriptor is supplied.
 
-`BURROW_ZERO(T)` is provided for clarity, and every public struct carries a
-generated static assertion that its zero value passes the type's
-`is_valid_zero` check, so a regression here is a compile error.
+`BURROW_ZERO(T)` is provided for clarity, and expands to a compound literal, so
+it is for the places that need a value rather than an initialiser: a `return`, a
+call argument, a comparison. Something with static storage still gets `= {0}`
+written out by hand, which is the same bits and is a constant expression.
+
+The plan here was a generated static assertion per public struct, checking that
+the zero value passes an `is_valid_zero` predicate. That does not work and is
+not what shipped. C has no way to evaluate `str_is_empty` or `map_len` at
+compile time, and a static assertion over the bytes of a struct would only be
+restating `= {0}` back to itself. What stands in for it is a test,
+`the_zero_value_of_every_type_is_the_useful_one` in `tests/core_test.c`, which
+takes the zero value of every public type and exercises it: the empty `Str`, the
+nil `Slice`, the succeeding `Error`, the nil `Map` read through `map_len(NULL)`
+and `map_get(NULL, k)`, the nil interface, the nil `Func`. It grows by a few
+lines whenever a type lands, and that growth is part of landing a type.
+
+One qualification on the `Slice` entry above. A zeroed `Slice` has no element
+descriptor, and `slice_append` needs to know how big an element is, so the zero
+value is the one that cannot do everything its non-zero form can.
+`slice_nil(TYPE_INT)` is the nil slice that can be appended to. Allocators are
+the other qualification and are not really one: an `Arena` holds memory rather
+than describing it, so it has `arena_init` for the same reason a file has
+`open`.
 
 ## 12. What this buys
 

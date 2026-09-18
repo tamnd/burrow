@@ -139,8 +139,7 @@ Int io_read_at_least(IoReader r, Slice buf, Int min, Error *err) {
     Int n = 0;
 
     if (min > buf.len) {
-        if (err != NULL)
-            *err = io_err_short_buffer;
+        BURROW_OUT(err, io_err_short_buffer);
         return 0;
     }
 
@@ -155,8 +154,7 @@ Int io_read_at_least(IoReader r, Slice buf, Int min, Error *err) {
     else if (n > 0 && is_eof(e))
         e = io_err_unexpected_eof;
 
-    if (err != NULL)
-        *err = e;
+    BURROW_OUT(err, e);
     return n;
 }
 
@@ -169,8 +167,7 @@ int64_t io_copy_buffer(IoWriter dst, IoReader src, Slice buf, Error *err) {
     Error e = BURROW_NO_ERROR;
 
     if (buf.len < 1) {
-        if (err != NULL)
-            *err = io_err_short_buffer;
+        BURROW_OUT(err, io_err_short_buffer);
         return 0;
     }
 
@@ -207,8 +204,7 @@ int64_t io_copy_buffer(IoWriter dst, IoReader src, Slice buf, Error *err) {
         }
     }
 
-    if (err != NULL)
-        *err = e;
+    BURROW_OUT(err, e);
     return written;
 }
 
@@ -227,8 +223,7 @@ int64_t io_copy(Alloc *a, IoWriter dst, IoReader src, Error *err) {
      * is pure waste. */
     p = mem_alloc_nozero(a, (size_t)COPY_BUF, 1);
     if (p == NULL) {
-        if (err != NULL)
-            *err = burrow_err_out_of_memory;
+        BURROW_OUT(err, burrow_err_out_of_memory);
         return 0;
     }
 

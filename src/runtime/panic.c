@@ -83,6 +83,18 @@ void runtime_index_out_of_range(Int i, Int len) {
         str_from_bytes(buf, (Int)(n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1)));
 }
 
+/* These two carry no numbers, so they are a throw with a constant string and
+ * nothing else. They exist as functions rather than as the string written out
+ * at each call site because burrow/num.h has forty of those call sites and
+ * because the text has to stay identical across all of them. */
+void runtime_integer_divide_by_zero(void) {
+    runtime_throw(BURROW_S("runtime error: integer divide by zero"));
+}
+
+void runtime_negative_shift(void) {
+    runtime_throw(BURROW_S("runtime error: negative shift amount"));
+}
+
 void runtime_slice_bounds_out_of_range(Int lo, Int hi, Int cap) {
     char buf[MSG_MAX];
     int n = snprintf(

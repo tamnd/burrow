@@ -5,6 +5,11 @@
  * operations on them are str_, slice_, map_ and so on, which is the same rule
  * the ported packages follow with the package name in front.
  *
+ * Two of Go's rules live here as well, the zero value and the shape of a
+ * function with more than one result, because they apply to every type in the
+ * library rather than to one of them. Arithmetic that C and Go disagree about
+ * is in burrow/num.h.
+ *
  * Slice is not here, it is in burrow/slice.h. It carries a pointer to a type
  * descriptor and the descriptor carries a Str, so the order has to be Str then
  * Type then Slice, and a header cannot come before the one it depends on.
@@ -27,6 +32,62 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* ------------------------------------------------------- zero values and outs
+ *
+ * Two of Go's rules turn up in every header in the tree, so they get their
+ * spelling here rather than being described nine times.
+ *
+ * The first is that every type has a useful zero value. var buf bytes.Buffer is
+ * a working empty buffer in Go, a nil map reads as empty, a nil slice appends,
+ * and a Mutex is unlocked. C gives the same bit pattern for free with = {0}, so
+ * the rule transfers on one condition: no type in burrow may need non zero
+ * initialisation. That is a constraint on the design of every struct here and
+ * it is why SyncMutex will be an atomic word rather than a pthread_mutex_t,
+ * whose initialiser is not portably all zero.
+ *
+ * BURROW_ZERO(T) is the spelling for a value, which is what you want inside an
+ * expression:
+ *
+ *     Str empty = BURROW_ZERO(Str);
+ *     return BURROW_ZERO(Slice);
+ *
+ * It is a compound literal, so it cannot initialise something with static
+ * storage. Write = {0} by hand there, which is the same bits and is a constant
+ * expression.
+ *
+ * The rule is checked rather than asserted. C cannot evaluate str_is_empty at
+ * compile time, so a static assertion is not available, and what stands in for
+ * it is a test per type in tests/core_test.c that takes the zero value and
+ * exercises it. */
+#define BURROW_ZERO(T) ((T){0})
+
+/* The second rule is how a Go function with more than one result is spelled.
+ * The first result comes back, everything after it is an out parameter at the
+ * end of the parameter list in Go's order, error is always last, and any out
+ * parameter may be NULL to throw that result away:
+ *
+ *     func Atoi(s string) (int, error)
+ *     Int strconv_atoi(Str s, Error *err);
+ *
+ *     n := strconv.Atoi(s)         Int n = strconv_atoi(s, NULL);
+ *     n, err := strconv.Atoi(s)    Int n = strconv_atoi(s, &err);
+ *
+ * NULL being allowed is the part that has to hold everywhere, because a caller
+ * who does not care about the second result should not have to declare a
+ * variable for it. BURROW_OUT is what that looks like on the writing side:
+ *
+ *     BURROW_OUT(err, io_err_short_buffer);
+ *     return 0;
+ *
+ * p is written twice by the macro, so hand it a pointer variable rather than a
+ * call. Both arguments are evaluated at most once for any pointer expression
+ * without a side effect, which covers every out parameter in the library. */
+#define BURROW_OUT(p, v)                                                               \
+    do {                                                                               \
+        if ((p) != NULL)                                                               \
+            *(p) = (v);                                                                \
+    } while (0)
 
 /* ------------------------------------------------------------- numbers
  *

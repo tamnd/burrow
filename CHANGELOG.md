@@ -6,6 +6,23 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 
 ## Unreleased
 
+### Numbers
+
+- `burrow/num.h`, which covers the operations where C is undefined or where C is defined and disagrees with Go, and nothing else. Unsigned wrapping, float arithmetic, truncating conversions and the bitwise operators are all the same in both languages and stay as the plain operator.
+- `int_add`, `int_sub`, `int_mul` and `int_neg` wrap the way Go says signed overflow wraps, for all nine integer families: `int8` to `int64`, `uint8` to `uint64`, and `Int` and `Uint`. Signed overflow is undefined in C, which means an overflow check written as `a + 1 > a` can be folded to `true` and deleted from the binary, so the wrap has to be spelled out.
+- `int_div` and `int_mod` stop the program with `runtime error: integer divide by zero` rather than taking a hardware fault with no message in it, and the smallest value divided by `-1` gives the smallest value back with a remainder of zero, which is what Go prints and what the divide instruction faults on.
+- `int_shl` and `int_shr` answer a shift of any width. Past the width of the type a left shift is zero and a right shift is `-1` or `0` depending on the sign, where C is undefined and x86 quietly uses the low six bits of the count. A negative count stops the program with `runtime error: negative shift amount`.
+- `int_from_float64` and the rest of the `_from_float64` set saturate to the nearest value that fits and give zero for NaN. Go's specification calls the out of range result implementation dependent and the two big architectures really do disagree, so a library has to pick, and this is arm64's answer, wasm's and Rust's.
+- `BURROW_ADD`, `BURROW_SUB`, `BURROW_MUL`, `BURROW_NEG`, `BURROW_DIV`, `BURROW_MOD`, `BURROW_SHL` and `BURROW_SHR` select by the type of the first argument for code that does not know which width it has. They stay out of `BURROW_SHORT`, since `ADD` and `SHL` are names other headers already use.
+- Every answer in `tests/num_test.c` came from running the equivalent Go program on darwin/arm64 and linux/amd64 rather than from reading the C standard.
+- `docs/guides/numbers.md` is new.
+
+### Zero values and multiple results
+
+- `BURROW_ZERO(T)` for the zero value of a type where you need a value rather than an initialiser, and `BURROW_OUT(p, v)` for writing through an out parameter that the caller is allowed to pass as `NULL`.
+- The zero value rule is now checked rather than stated. `tests/core_test.c` takes the zero value of every public type and uses it, and it grows by a few lines every time a type lands. C cannot evaluate `str_is_empty` at compile time, so a test is what stands in for a static assertion here.
+- `docs/guides/conventions.md` is new, and it is the page that explains both rules once so that no other header has to.
+
 ### Function values
 
 - `BURROW_FUNC` and `BURROW_FUNC0` declare a function value type, which is a function pointer and the environment it was made with. Every Go `func` in a signature becomes one of these, and the environment word is what makes a callback with state possible without a global.

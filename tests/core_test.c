@@ -4,8 +4,7 @@
 
 #include "harness.h"
 
-#include "burrow/core.h"
-#include "burrow/mem/arena.h"
+#include "burrow/burrow.h"
 
 TEST(str_literals_carry_their_own_length) {
     Str empty = BURROW_S("");
@@ -190,6 +189,101 @@ TEST(the_platform_knows_what_it_is) {
     CHECK_INT_EQ(first, BURROW_BIG_ENDIAN ? 0x01 : 0x04);
 }
 
+/* --------------------------------------------------------- the zero value
+ *
+ * Go promises that the zero value of every type is a useful one, and a good
+ * deal of Go code is written on that promise. C cannot check this at compile
+ * time, since none of the predicates below are constant expressions, so the
+ * check is this test and it grows by a few lines every time a public type
+ * arrives. */
+
+TEST(the_zero_value_of_every_type_is_the_useful_one) {
+    /* A zeroed Str is the empty string, which is why nothing in the library
+     * tests a Str pointer for NULL before reading its length. */
+    Str s = BURROW_ZERO(Str);
+    CHECK(str_is_empty(s));
+    CHECK_INT_EQ(s.len, 0);
+    CHECK(str_eq(s, BURROW_S("")));
+    CHECK_INT_EQ(str_cmp(s, BURROW_S("a")), -1);
+    CHECK(!str_has_nul(s));
+
+    /* A zeroed Error is no error, so a function that returns one without
+     * touching it has reported success. */
+    CHECK(BURROW_OK(BURROW_ZERO(Error)));
+    CHECK(!BURROW_FAILED(BURROW_ZERO(Error)));
+
+    /* A zeroed Slice is the nil slice: no length, no capacity, nothing behind
+     * it. It has no element type either, so it is the one zero value that
+     * cannot do everything its non zero form can, and slice_nil is there for
+     * when you need a nil slice that can be appended to. */
+    Slice sl = BURROW_ZERO(Slice);
+    CHECK_INT_EQ(sl.len, 0);
+    CHECK_INT_EQ(sl.cap, 0);
+    CHECK(sl.p == NULL);
+    CHECK(slice_is_nil(sl));
+
+    /* A nil map reads as an empty one and only fails on a write, which is
+     * Go's behaviour down to the message. Reading one is common in real code:
+     * a config that was never populated still answers questions. */
+    CHECK_INT_EQ(map_len(NULL), 0);
+    CHECK(map_get(NULL, "anything") == NULL);
+
+    /* A zeroed interface value is the nil interface, and a zeroed function
+     * value is a nil func. Both are a pair of words that are both NULL, which
+     * is the reason the vtable pointer comes first in each. */
+    IoReader r = BURROW_ZERO(IoReader);
+    CHECK(r.vt == NULL && r.data == NULL);
+    CHECK(BURROW_FUNC_IS_NIL(BURROW_ZERO(Func)));
+
+    /* A zeroed Arena is not usable without arena_init, and that is worth
+     * stating out loud because it is the one place the rule bends: an
+     * allocator holds memory rather than describing it, so it has a
+     * constructor. Every type that is a value rather than a resource is above
+     * this line. */
+    CHECK(sizeof(Arena) > 0);
+}
+
+/* ------------------------------------------------------- out parameters
+ *
+ * The other rule that every header follows. A Go function with two results
+ * becomes a C function that returns the first and writes the rest through
+ * pointers, and any of those pointers may be NULL. */
+
+static Int divide(Int a, Int b, bool *ok, Error *err) {
+    if (b == 0) {
+        BURROW_OUT(ok, false);
+        BURROW_OUT(err, burrow_err_out_of_memory); /* any error will do here */
+        return 0;
+    }
+    BURROW_OUT(ok, true);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return a / b;
+}
+
+TEST(an_out_parameter_may_be_null) {
+    bool ok = false;
+    Error err = BURROW_NO_ERROR;
+
+    CHECK_INT_EQ(divide(10, 2, &ok, &err), 5);
+    CHECK(ok);
+    CHECK(BURROW_OK(err));
+
+    CHECK_INT_EQ(divide(10, 0, &ok, &err), 0);
+    CHECK(!ok);
+    CHECK(BURROW_FAILED(err));
+
+    /* The point of the rule. A caller who does not want the second result
+     * should not have to declare a variable to throw away. */
+    CHECK_INT_EQ(divide(10, 2, NULL, NULL), 5);
+    CHECK_INT_EQ(divide(10, 0, NULL, NULL), 0);
+
+    /* And one of the two, which is the common shape: take the error, ignore
+     * the flag. */
+    err = BURROW_NO_ERROR;
+    CHECK_INT_EQ(divide(1, 0, NULL, &err), 0);
+    CHECK(BURROW_FAILED(err));
+}
+
 int main(void) {
     RUN(str_literals_carry_their_own_length);
     RUN(str_at_the_c_string_boundary);
@@ -200,5 +294,7 @@ int main(void) {
     RUN(str_prints_with_printf);
     RUN(numbers_are_the_width_go_says);
     RUN(the_platform_knows_what_it_is);
+    RUN(the_zero_value_of_every_type_is_the_useful_one);
+    RUN(an_out_parameter_may_be_null);
     return harness_report("core");
 }

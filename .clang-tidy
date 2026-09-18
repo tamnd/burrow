@@ -20,6 +20,7 @@ Checks: >
   readability-*,
   -bugprone-easily-swappable-parameters,
   -cert-err33-c,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
   -misc-include-cleaner,
   -misc-no-recursion,
   -performance-no-int-to-ptr,
@@ -47,6 +48,21 @@ Checks: >
 #     nowhere to report a failed report to. Every other ignored return in the
 #     tree would be a bug, so this one is a comment in panic.c rather than a
 #     check for the whole library.
+#
+#   clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+#     It wants memcpy_s, memset_s and memmove_s, which are C11 Annex K. Annex K
+#     is optional, glibc has never implemented it and has said it will not, musl
+#     does not have it either, and the one widely shipped implementation is
+#     Microsoft's and predates the annex. So following this check would mean
+#     either writing a memcpy_s of our own, which is memcpy with an argument
+#     nobody checks, or not calling memcpy, in a library whose job includes
+#     copying bytes. Every call it flags has a length computed from a size the
+#     caller owns, and the bounds are the thing the tests and the sanitisers are
+#     for.
+#
+#     This check fires on Linux and not on the macOS SDK, which is how the job
+#     stayed red on CI while every local run looked clean. Worth knowing before
+#     trusting a green tidy on a Mac.
 #
 #   misc-include-cleaner
 #     It wants every file to include the header that declares each symbol it
@@ -86,9 +102,11 @@ Checks: >
 #     programmer knows.
 #
 #   readability-trailing-comma, -use-concise-preprocessor-directives
-#     Both appeared in a recent release and both disagree with how the tree is
-#     already written. Worth revisiting when the pin moves, not worth a
-#     reformat now.
+#     Both arrive after the pinned 20.1.0, which reports them as unknown checks
+#     under --verify-config, and both disagree with how the tree is already
+#     written. They are switched off ahead of time so that moving the pin is one
+#     line in CI and not an afternoon of reformatting. Worth revisiting when the
+#     pin moves.
 #
 # Warnings from headers are on, because the headers are where most of this
 # library lives.

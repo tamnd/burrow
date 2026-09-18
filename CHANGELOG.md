@@ -6,6 +6,18 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 
 ## Unreleased
 
+### Atomics
+
+- `burrow/atomic.h` is the layer everything concurrent in burrow will be built on. Four widths, `u32`, `u64`, `uptr` and `ptr`, and load, store, add, and, or, swap, compare and swap, the weak compare and swap, three fences and a spin hint over each of them. The memory order is part of every name, because the only caller is code that has already thought about which order it wants.
+- This is not `sync/atomic`. That is a Go package with a public surface and sequentially consistent semantics and it will be written on top of this one, which is why the names here carry the internal prefix.
+- Three backends. The `__atomic` builtins on GCC and Clang, `Interlocked*` and `__iso_volatile_*` on MSVC, and `<stdatomic.h>` through a cast for anything else. The builtins rather than `<stdatomic.h>` where both exist, because they work on ordinary objects, and that is what lets a caller pass a plain `uint32_t *` instead of wrapping every field in a struct.
+- MSVC gets the full barrier form of every read modify write, because the acquire and release variants only exist on ARM and a fast path that compiles on one of the two Windows architectures is a bug waiting for a machine to turn up on. The relaxed loads and stores, which are the ones a spin loop runs, still get the cheap intrinsic.
+- Compare and swap takes the expected value by pointer and writes back what it actually saw, which is what C11 does and what a retry loop needs, since the loop has to compute its next attempt from the current value.
+- 64-bit operations on a 32-bit machine go through a table of spin locks keyed on the address, the way Go does it. The decision is made on pointer width rather than on what the compiler says about compare and swap, because otherwise a 64-bit load on 32-bit x86 compiles into a call into `libatomic` and the library acquires a link-time dependency that only bites on one platform.
+- The lock table is compiled everywhere, not only where it is used. It is four kilobytes of bss a 64-bit build never touches, and in exchange `-DBURROW_ATOMIC_FORCE_LOCK64=1` lets the test suite run it on the machines we own.
+- `tests/atomic_test.c` is compiled three times: once as itself, once with the lock table forced on, and once with the C11 backend forced on. So the two paths a normal build never takes are still run by every job in the matrix. The tests are single threaded, since there is no thread abstraction yet, and they use full width values with the top bit set because a cast that truncates or sign extends shows up immediately on one thread with the right value in it.
+- The design docs said `<stdatomic.h>` on GCC and Clang and a lock table on 32-bit ARM. Both are now corrected to what the code does.
+
 ### Memory
 
 - `burrow/mem/track.h` is the tracking allocator. It wraps any other allocator, passes everything through, and remembers what it handed out so that `track_check` can say what you did wrong at the end. Leaks, double frees, wild frees, size mismatches, alignment mismatches and writes after free.

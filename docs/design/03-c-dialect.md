@@ -182,6 +182,7 @@ nothing outside them is allowed:
 | Markers (`zerobase`, the tombstone) | An address has to come from somewhere | None needed; never written, never read through |
 | The fatal handler | Something has to run when the runtime gives up | Written once at startup, atomic load once `sync/atomic` exists |
 | The random generator | Map iteration order and hash seeding | Thread-local, which is what makes it lock free |
+| The 64-bit atomic lock table | A 32-bit machine cannot load eight bytes atomically | It is the synchronisation. One spin lock per address hash, held for one operation |
 
 Anything else that wants to be global is a design error. The test harness
 constructs fresh instances of the first four to run tests in parallel.
@@ -224,11 +225,11 @@ Learned the hard way in every C port; written down so we do not relearn them.
 | Path separators and case | `path` is always `/`; `path/filepath` is platform-aware. Windows `\\?\` long-path and UNC handling, and Windows' reserved device names, are in the PAL. → [10](10-packages-os.md) §7 |
 | `int` width for syscall returns | PAL normalises to `int64_t` + `Error`. |
 | Alignment on strict-alignment targets | No unaligned loads outside `#if BURROW_UNALIGNED_OK`. |
-| Unaligned atomics on 32-bit ARM | 64-bit atomics fall back to a lock table, as Go does. |
+| 64-bit atomics on 32-bit machines | They fall back to a table of spin locks keyed on the address, as Go does. The decision is made on pointer width rather than on what the compiler claims, because the builtins will otherwise compile a 64-bit load into a call into `libatomic` and give the library a link-time dependency that only bites on one platform. `-DBURROW_ATOMIC_FORCE_LOCK64=1` takes that path anywhere, which is how it gets tested. |
 | Denormals, FMA contraction, `-ffast-math` | `burrow` compiles with `-ffp-contract=off` and rejects `-ffast-math`; `math` and `strconv` tests are bit-exact. |
 | Stack size for the main thread | Deep-recursion packages get explicit limits; the scheduler allocates its own goroutine stacks. |
 | TLS model on Android/musl/static binaries | `_Thread_local` only; no `__thread` tricks, no `pthread_key_t` in hot paths. |
-| MSVC's lack of `_Atomic` | `go/atomic.h` wraps `<stdatomic.h>` on GCC/Clang and `Interlocked*`/`__iso_volatile_*` on MSVC behind one set of `sync_atomic_*` functions. |
+| MSVC's lack of `_Atomic` | `burrow/atomic.h` has three backends behind one set of `burrow__atomic_*` functions: the `__atomic` builtins on GCC and Clang, `Interlocked*` plus `__iso_volatile_*` on MSVC, and `<stdatomic.h>` through a cast as a last resort. The builtins rather than `<stdatomic.h>` on the two compilers that have both, because they work on ordinary objects, which is what lets a caller pass a plain `uint32_t *` instead of a wrapper struct. The public `sync_atomic_*` set is written on top. |
 | `%zu`, `%lld` portability in MSVC's printf | `burrow` never uses the platform printf in library code; `fmt` is our own. |
 
 ## 8. Build without a build system

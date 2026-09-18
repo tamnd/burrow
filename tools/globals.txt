@@ -31,6 +31,7 @@ category	package-vars	os.Args, os.Stdout and the rest that Go exposes as package
 category	marker	An address that exists to be unique. Never read through, never written.
 category	fatal-handler	Where an unrecoverable runtime failure goes before the process ends.
 category	rand	The generator behind map iteration order and hash seeding.
+category	atomic-lock-table	The spin locks that stand in for 64 bit atomics on machines that do not have them.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -39,3 +40,4 @@ global	src/mem/gc.c	gc_singleton	allocator	The same as heap_singleton. One colle
 global	src/mem/gc.c	started	allocator	Written once by the first gc_allocator call, which the header requires to come from the main thread before any others exist.
 global	src/runtime/panic.c	fatal_handler	fatal-handler	Written once during startup and read on the way out. Becomes an atomic load when sync/atomic lands, which weakens the contract rather than changing any caller.
 global	src/runtime/rand.c	rand_state	rand	Thread local, which is what makes it lock free. A shared generator would be a place for two goroutines to contend over bits neither of them cares about.
+global	src/runtime/atomic64.c	locks	atomic-lock-table	This is the synchronisation. A table of spin locks, one taken for the duration of each 64 bit operation, chosen by hashing the address so that unrelated counters rarely meet.

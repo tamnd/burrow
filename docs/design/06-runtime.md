@@ -289,12 +289,24 @@ in CI flags any `setjmp` use outside the three sanctioned macros.
 
 ## 7. `sync`, `sync/atomic`, `context`
 
-**`sync/atomic`** (94 declarations) maps to `<stdatomic.h>` on GCC/Clang and to
-`Interlocked*` plus `__iso_volatile_*` on MSVC, behind one `sync_atomic_*` set.
-Go's `atomic.Int64`, `atomic.Pointer[T]`, `atomic.Value` types become structs
-with the same zero-value-is-usable property, and `atomic.Value`'s
-consistent-type requirement is enforced with the stored type descriptor. 64-bit
-atomics on 32-bit ARM fall back to a lock table, as Go does.
+**`sync/atomic`** (94 declarations) is a thin sequentially consistent layer over
+`burrow/atomic.h`, which is burrow's own and is written first because the
+scheduler needs it long before there is a package to expose. That header has
+three backends: the `__atomic` builtins on GCC and Clang, `Interlocked*` plus
+`__iso_volatile_*` on MSVC, and `<stdatomic.h>` through a cast for anything
+else. The builtins rather than `<stdatomic.h>` where both exist, because they
+operate on ordinary objects, and that is what allows `sync_atomic_add_int64` to
+take an `Int64 *` the way Go's takes an `*int64` instead of demanding a wrapper
+type at every call site. Go's `atomic.Int64`, `atomic.Pointer[T]` and
+`atomic.Value` still become structs, with the same zero-value-is-usable
+property, and `atomic.Value`'s consistent-type requirement is enforced with the
+stored type descriptor.
+
+64-bit atomics on a 32-bit machine go through a table of spin locks keyed on the
+address, as Go does. The choice is made on pointer width, so it is the same on
+32-bit ARM and 32-bit x86, and `-DBURROW_ATOMIC_FORCE_LOCK64=1` takes that path
+on a 64-bit machine so the fallback is run by the test suite everywhere rather
+than only on hardware nobody has on their desk.
 
 **`sync`** primitives are built on the scheduler, not on pthreads, because a
 goroutine blocking on a mutex must park the *goroutine* and free the *thread* —

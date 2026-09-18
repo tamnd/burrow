@@ -50,6 +50,23 @@ Ms blocked in syscalls, deliver preemption signals, poll the netpoller if
 nothing else has recently, and fire timers. Go degrades badly without it; so
 would we.
 
+An M is an OS thread and `burrow/thread.h` is where one comes from: start,
+join, detach, yield, an identity for the calling thread, and a processor count.
+Pthreads everywhere and `_beginthreadex` on Windows, which is the one that
+gives the new thread its own CRT state where `CreateThread` does not. The
+handle carries the entry function and the argument, because a thread entry
+point has room for one pointer and nothing in this library allocates behind the
+caller's back to make room for two, so the handle has to outlive the thread.
+
+There is no mutex and no condition variable in that header, which is the point
+of it. A goroutine that blocks has to park the goroutine and free the thread,
+so a `pthread_mutex_t` is the wrong tool at every level above this one, and the
+one place the runtime genuinely has to put a thread to sleep gets a futex-style
+primitive of its own rather than a general purpose lock. The processor count is
+the number of processors that exist, which under a cpuset or a container CPU
+limit is not the number this process may use; reconciling those two is
+`GOMAXPROCS`'s job and is where a caller can override the answer anyway.
+
 ## 2. Context switching
 
 This is where the POSIX-only prior art ([02](02-landscape.md) §3) is

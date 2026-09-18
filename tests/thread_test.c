@@ -1,0 +1,199 @@
+/* Tests for the platform threads.
+ *
+ * A thread test that only checks a flag got set proves the thread ran and
+ * nothing else, so these check the parts that are actually different between
+ * pthreads and Windows: that the argument arrives, that a join waits rather
+ * than returning early, that a detached thread still runs, that an identity is
+ * an identity, and that a stack size is a request the system accepts.
+ *
+ * The handles are file scope rather than on the stack of the test, because the
+ * running thread reads the function and the argument out of its own handle and
+ * a handle that goes away first is a use after free. The header says so and
+ * these tests are written the way the header says to write them.
+ *
+ * Copyright 2026 The burrow Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style licence that can be found
+ * in the LICENSE file. */
+
+#include "burrow/thread.h"
+
+#include "burrow/atomic.h"
+
+#include "harness.h"
+
+#include <stdint.h>
+#include <string.h>
+
+/* ------------------------------------------------------------ one at a time */
+
+static uint32_t ran;
+static void *got_arg;
+
+static void set_ran(void *arg) {
+    got_arg = arg;
+    burrow__atomic_store_release_u32(&ran, 1);
+}
+
+static burrow__Thread one;
+
+TEST(a_thread_runs_and_gets_its_argument) {
+    int marker = 42;
+
+    ran = 0;
+    got_arg = NULL;
+
+    CHECK(burrow__thread_start(&one, set_ran, &marker, 0));
+    CHECK(burrow__thread_join(&one));
+
+    /* After a join the thread is finished, so this needs no atomic to be
+     * correct. It is read with one anyway, because a test that would still pass
+     * if the join did nothing is not testing the join. */
+    CHECK(burrow__atomic_load_acquire_u32(&ran) == 1);
+    CHECK(got_arg == &marker);
+    CHECK(marker == 42);
+
+    /* Joining twice is a caller bug and says so rather than crashing. */
+    CHECK(!burrow__thread_join(&one));
+}
+
+TEST(a_stack_size_is_a_request_the_system_takes) {
+    /* Two megabytes, which every system accepts, and sixteen kilobytes, which
+     * is at or below the minimum everywhere and so exercises the clamp. */
+    static burrow__Thread big;
+    static burrow__Thread small;
+
+    ran = 0;
+    CHECK(burrow__thread_start(&big, set_ran, NULL, 2u * 1024u * 1024u));
+    CHECK(burrow__thread_join(&big));
+    CHECK(burrow__atomic_load_acquire_u32(&ran) == 1);
+
+    ran = 0;
+    CHECK(burrow__thread_start(&small, set_ran, NULL, 16u * 1024u));
+    CHECK(burrow__thread_join(&small));
+    CHECK(burrow__atomic_load_acquire_u32(&ran) == 1);
+}
+
+TEST(a_handle_that_was_never_started_is_not_joinable) {
+    burrow__Thread never;
+    memset(&never, 0, sizeof never);
+
+    CHECK(!burrow__thread_join(&never));
+    CHECK(!burrow__thread_detach(&never));
+    CHECK(!burrow__thread_start(&never, NULL, NULL, 0));
+    CHECK(!burrow__thread_start(NULL, set_ran, NULL, 0));
+}
+
+/* ----------------------------------------------------------------- identity */
+
+#define IDS 8
+
+static uint64_t ids[IDS];
+static burrow__Thread id_threads[IDS];
+
+static void record_id(void *arg) {
+    size_t i = (size_t)(uintptr_t)arg;
+
+    uint64_t first = burrow__thread_self();
+    uint64_t second = burrow__thread_self();
+
+    /* Asking twice has to give the same answer, which is the whole of what
+     * "stable for as long as that thread runs" means. */
+    ids[i] = first == second ? first : 0;
+}
+
+TEST(every_running_thread_has_its_own_identity) {
+    uint64_t mine = burrow__thread_self();
+    CHECK(mine == burrow__thread_self());
+
+    for (size_t i = 0; i < IDS; i++)
+        CHECK(burrow__thread_start(&id_threads[i], record_id, (void *)(uintptr_t)i, 0));
+    for (size_t i = 0; i < IDS; i++)
+        CHECK(burrow__thread_join(&id_threads[i]));
+
+    for (size_t i = 0; i < IDS; i++) {
+        CHECK(ids[i] != 0);
+        CHECK(ids[i] != mine);
+        for (size_t j = i + 1; j < IDS; j++)
+            CHECK(ids[i] != ids[j]);
+    }
+}
+
+/* -------------------------------------------------------------- contention */
+
+#define WORKERS 8
+#define PER_WORKER 20000
+
+static uint32_t counter32;
+static uint64_t counter64;
+static burrow__Thread workers[WORKERS];
+
+static void count_up(void *arg) {
+    (void)arg;
+    for (int i = 0; i < PER_WORKER; i++) {
+        (void)burrow__atomic_add_u32(&counter32, 1);
+        (void)burrow__atomic_add_u64(&counter64, 1);
+    }
+}
+
+TEST(eight_threads_adding_to_one_counter_lose_nothing) {
+    counter32 = 0;
+    counter64 = 0;
+
+    for (size_t i = 0; i < WORKERS; i++)
+        CHECK(burrow__thread_start(&workers[i], count_up, NULL, 0));
+    for (size_t i = 0; i < WORKERS; i++)
+        CHECK(burrow__thread_join(&workers[i]));
+
+    CHECK(burrow__atomic_load_u32(&counter32) == (uint32_t)(WORKERS * PER_WORKER));
+    CHECK(burrow__atomic_load_u64(&counter64) == (uint64_t)(WORKERS * PER_WORKER));
+}
+
+/* ---------------------------------------------------------- detach and yield */
+
+static uint32_t detached_done;
+static burrow__Thread detached;
+
+static void finish(void *arg) {
+    (void)arg;
+    burrow__atomic_store_release_u32(&detached_done, 1);
+}
+
+TEST(a_detached_thread_still_runs) {
+    detached_done = 0;
+
+    CHECK(burrow__thread_start(&detached, finish, NULL, 0));
+    CHECK(burrow__thread_detach(&detached));
+
+    /* There is nothing to wait on, which is the point of detaching, so this
+     * waits the only way a caller without a join can: it looks, and it gives
+     * the processor up while it is not its turn. That is also the only test
+     * here that yield is doing something rather than merely being callable,
+     * since on one processor this loop never finishes without it. */
+    while (burrow__atomic_load_acquire_u32(&detached_done) == 0)
+        burrow__thread_yield();
+
+    CHECK(burrow__atomic_load_acquire_u32(&detached_done) == 1);
+    CHECK(!burrow__thread_detach(&detached));
+}
+
+TEST(there_is_at_least_one_processor) {
+    int n = burrow__thread_ncpu();
+
+    CHECK(n >= 1);
+
+    /* Not a real upper bound, a sanity check. A number in the millions means
+     * something was read as the wrong width or the wrong sign. */
+    CHECK(n < 1000000);
+    CHECK(burrow__thread_ncpu() == n);
+}
+
+int main(void) {
+    RUN(a_thread_runs_and_gets_its_argument);
+    RUN(a_stack_size_is_a_request_the_system_takes);
+    RUN(a_handle_that_was_never_started_is_not_joinable);
+    RUN(every_running_thread_has_its_own_identity);
+    RUN(eight_threads_adding_to_one_counter_lose_nothing);
+    RUN(a_detached_thread_still_runs);
+    RUN(there_is_at_least_one_processor);
+    return harness_report("thread");
+}

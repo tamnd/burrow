@@ -53,6 +53,16 @@ target_include_directories(burrow PUBLIC
 
 target_compile_definitions(burrow PRIVATE BURROW_SOURCE_ID="${BURROW_SOURCE_ID}")
 
+# Threads. This is the one find_package in the file and it is not a feature
+# check either: the runtime needs OS threads on every platform and the only
+# question is what the local toolchain calls them, which is -pthread here and
+# nothing at all on Windows. PUBLIC because a program linking burrow links the
+# same threads, and THREADS_PREFER_PTHREAD_FLAG because -pthread sets defines
+# that -lpthread does not.
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+target_link_libraries(burrow PUBLIC Threads::Threads)
+
 if(BURROW_ENABLE_BOEHM)
     target_compile_definitions(burrow PRIVATE BURROW_ENABLE_BOEHM=1)
     target_link_libraries(burrow PUBLIC gc)

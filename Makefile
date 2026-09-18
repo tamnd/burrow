@@ -81,6 +81,15 @@ endif
 CFLAGS  ?= $(STD) $(OPT) $(WARNINGS) $(HARDENING) $(INCLUDES) $(DEFINES)
 LDFLAGS ?=
 
+# Threads. -pthread is a compile flag and a link flag at the same time, which is
+# why it is on both rules below and why -lpthread on its own is not enough on
+# every system. Windows has threads in the CRT and no flag to ask for them, and
+# this file is not the Windows build anyway. It is separate from CFLAGS for the
+# same reason DEPFLAGS is: CI overrides CFLAGS wholesale.
+ifneq ($(OS),Windows_NT)
+  THREADS := -pthread
+endif
+
 # Two levels is what the layout uses, src/version.c and src/mem/arena.c, and
 # spelling them out beats a shell find that behaves differently on every box.
 SRCS := $(wildcard src/*.c) $(wildcard src/*/*.c)
@@ -110,11 +119,11 @@ $(LIB): $(OBJS)
 
 $(BUILD)/obj/%.o: src/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(THREADS) $(DEPFLAGS) -c $< -o $@
 
 $(BUILD)/tests/%: tests/%.c $(LIB)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(DEPFLAGS) -MF $@.d -Itests $< $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(THREADS) $(DEPFLAGS) -MF $@.d -Itests $< $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
 
 -include $(DEPS)
 

@@ -1,10 +1,8 @@
 /* Tests for the atomics abstraction.
  *
- * These are single threaded, and that is on purpose rather than a gap. burrow
- * has no thread abstraction yet, so there is nothing portable to start a second
- * thread with, and a test that spawns one through the platform API of whichever
- * machine happens to be running it tests that machine and not the library.
- * Contention gets its own tests when platform threads land.
+ * These are single threaded, and that is on purpose rather than a gap. What a
+ * second thread finds is a lost update, and that has its own file now that
+ * there are platform threads to write it with. See atomic_concurrent_test.c.
  *
  * What is left is still most of what goes wrong. Every backend has a cast in
  * every operation, and a cast that truncates, sign extends or drops the top

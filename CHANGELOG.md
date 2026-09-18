@@ -4,6 +4,19 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+### Threads
+
+- `burrow/thread.h` starts an OS thread. Start, join, detach, yield, an identity for the calling thread and a processor count, which is all the scheduler needs from the operating system and is deliberately where the file stops. Pthreads everywhere and `_beginthreadex` on Windows.
+- There is no mutex and no condition variable in it. A goroutine that blocks has to park the goroutine and free the thread, so a pthread mutex is the wrong tool everywhere above this, and the one place the runtime does have to sleep a thread gets a futex primitive of its own. That is the next piece.
+- The handle carries the function and the argument, because a thread entry point has room for one pointer and the library does not allocate behind the caller's back to make room for two. So the handle has to outlive the thread, which is written in the header and is what the tests do.
+- A stack size below the platform's minimum is raised to it rather than rejected, since the minimum is a different number on every system and a caller asking for 16 kilobytes means small rather than exactly that.
+- `burrow__thread_ncpu` is the number of processors that exist, which under a cpuset or a container cpu limit is not the number this process may use. Getting that right belongs with GOMAXPROCS, which is where a caller can override it anyway.
+- `tests/atomic_concurrent_test.c` is the half of the atomics tests that could not be written before there were threads. Eight threads against counters with a known total, a bitmask where each thread owns one bit, compare and swap loops in both the strong and the weak form, and a published pointer that is checked for tearing. Every answer is known in advance, so a lost update fails it rather than merely being unlikely.
+- That file is compiled twice, the second time with the lock table forced on, which is the only way the 64 bit spin locks are run under real contention on a 64 bit machine.
+- Checked under ThreadSanitizer, AddressSanitizer, UndefinedBehaviorSanitizer and MemorySanitizer on Linux, on 32 bit x86 in Docker where the lock table is the real path rather than a forced one, and on Windows with mingw gcc 16.
+
 ## v0.0.7 (2026-09-18)
 
 Groundwork. Nothing in this release is a package a user calls, and all of it is what the next ones stand on: the atomics the scheduler needs, an allocator that catches the mistakes the ownership annotations describe, and a check that the annotations and the list of global state are true rather than merely written down.

@@ -205,6 +205,22 @@ jobs:
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure
 
+  # The gc backend is the only optional dependency in the project, and an
+  # optional backend nobody builds is a backend that is already broken. One job
+  # is enough: it is the same tests, and what it is really checking is that the
+  # collector is still behind the interface the rest of the library agrees on.
+  boehm:
+    name: gc backend (boehm)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y libgc-dev
+      - run: make BOEHM=1 test
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBURROW_ENABLE_BOEHM=ON
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+
   # Five sanitisers, because the memory design is the part of this project most
   # likely to be wrong and the part where being wrong is worst. MemorySanitizer
   # needs every dependency instrumented to avoid false positives, which for now

@@ -273,8 +273,8 @@ least pleasant and most familiar.
 ### `gc` — Boehm-backed
 
 ```c
-#define BURROW_ENABLE_BOEHM 1      /* build flag; links -lgc */
-Alloc *a = gc_alloc();       /* pass this everywhere, never free */
+/* make BOEHM=1, or cmake -DBURROW_ENABLE_BOEHM=ON; either links -lgc */
+Alloc *a = gc_allocator();   /* pass this everywhere, never free */
 ```
 
 Signatures are unchanged — you still pass an allocator, it just happens to be
@@ -285,7 +285,21 @@ functional rather than approximated. → [01](01-scope.md) §6
 
 Opt-in, off by default, never used by `burrow`'s internals, and never required
 to run the test suite — so `burrow` never inherits Boehm's portability surface
-as a hard dependency.
+as a hard dependency. In a build without it every function is still there and
+still links, `gc_available()` answers false and `gc_allocator()` returns `NULL`.
+`NULL` rather than a quiet fall back to `heap`, because the fall back is a
+program that allocates in a loop, frees nothing, believes a collector is behind
+it and grows until the machine stops.
+
+`free` is a no-op and `reset` is not offered, which is the collector's answer
+rather than a gap: memory goes away when nothing can reach it, and there is no
+moment at which everything is known to be dead. It is also what makes the
+over-aligned path safe, since `GC_memalign` may hand back a pointer into the
+middle of the object the collector actually allocated and nothing may be handed
+back to `GC_free` or `GC_realloc`. `mem_stats` reports the collector's own
+numbers, so `bytes_live` includes its per-object overhead and `blocks` is the
+collection count; `allocs`, `frees` and `bytes_peak` stay zero rather than being
+invented.
 
 ### `track` — the debugging allocator
 

@@ -47,6 +47,7 @@
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/fixed.h"
+#include "burrow/mem/gc.h"
 #include "burrow/mem/heap.h"
 #include "burrow/num.h"
 #include "burrow/own.h"

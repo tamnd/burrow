@@ -35,6 +35,17 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 - `tools/check-alloc.sh` reads `src/` and fails the build on an allocation whose result is dropped, never tested against NULL, or dereferenced before the test. It runs in `make check` and in CI, as does `tools/check-annotations.sh`, which was only in `make check` before this.
 - `docs/design/05-memory.md` section 7 and `docs/guides/allocators.md` describe the policy as it now is rather than as it was planned. The one part still outstanding is raising a panic from functions with no error return, which waits on the runtime because there is no panic to raise yet.
 
+### The gc backend
+
+- `burrow/mem/gc.h` is the collecting allocator, which is the Boehm collector behind the same `Alloc` interface as everything else. You get an allocator, you pass it down, and you never free anything, which is Go's ergonomics back for the people who want them.
+- It is off unless you ask. `make BOEHM=1` or `cmake -DBURROW_ENABLE_BOEHM=ON` links `-lgc` and turns it on. Every function is present in either build, so code that uses it compiles everywhere and is only skipped at run time.
+- Without the collector, `gc_available` answers false and `gc_allocator` returns NULL. It does not fall back to the heap, because that fallback is a program that allocates in a loop, frees nothing, believes something is cleaning up behind it and grows until the machine stops.
+- `mem_free` through this allocator does nothing and `mem_can_reset` is false. That is the collector's answer rather than a missing piece: memory goes away when nothing can reach it, and there is no moment at which everything is known to be dead.
+- Alignment stricter than a pointer goes through `GC_memalign`, which may hand back a pointer into the middle of the object the collector actually allocated. Those blocks are grown with a fresh allocation and a copy rather than through `GC_realloc`, which is also why nothing here is ever handed to `GC_free`.
+- `mem_stats` reports the collector's own numbers. `bytes_live` is the heap minus what it knows to be free, so it includes its own per object overhead, and `blocks` is the collection count. `allocs`, `frees` and `bytes_peak` stay at zero, because a plausible number would be worse than an honest gap.
+- `gc_collect` is `runtime.GC`, and like `runtime.GC` it is almost always the wrong thing to call.
+- Nothing in burrow uses this backend and no test needs it, so the library still has no required dependency beyond libc. The tests for it run in both builds and were checked against Boehm 8.2 on Debian.
+
 ### Corrections
 
 - The note in v0.0.6 about how `utf8_valid_string` reads a machine word said it was built from separate byte loads and shifts. What shipped uses `memcpy`, for the reason now recorded in `docs/design/09-packages-pure.md`.

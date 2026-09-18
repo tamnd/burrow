@@ -116,7 +116,26 @@ Never NULL, never needs initialising, no state to carry. Reach for it when indiv
 
 A conservative collector, optional, off unless you ask for it at build time.
 
-This exists for people porting Go code that genuinely depends on a collector, and for the shape of program where object lifetimes form a graph rather than a tree. It is the escape hatch, not the default, and choosing it means taking on a dependency the rest of the library does not have.
+```c
+Alloc *a = gc_allocator();
+if (a == NULL)
+    /* this build does not have the collector in it */;
+
+Slice parts = strings_split(a, line, S(","));
+/* never free anything */
+```
+
+This is the one backend that takes the lifetime question off your desk, which is what writing Go feels like and is the reason it exists. It is for people porting Go code that genuinely depends on a collector, and for the shape of program where object lifetimes form a graph rather than a tree. It is the escape hatch, not the default, and choosing it means taking on a dependency the rest of the library does not have.
+
+It is the Boehm collector underneath. Build with `make BOEHM=1`, or with CMake `-DBURROW_ENABLE_BOEHM=ON`, either of which links `-lgc`. Without that flag the functions are all still there and still link, `gc_available` answers false, and `gc_allocator` hands back NULL. That NULL is deliberate and it is not a fallback to the heap: a fallback would give you a program that allocates in a loop, frees nothing, believes something is cleaning up behind it, and grows until the machine stops. Ask `gc_available` once at startup and decide there.
+
+Two things to do before you turn it on. Call `gc_allocator` once from the main thread before you start any others, because the collector has to be started by the thread whose stack it is going to scan. And if your program has threads, the Boehm you link has to have been built with thread support and has to be told about each one, which is Boehm's documentation rather than ours.
+
+`mem_free` through this allocator does nothing at all. That is the collector's answer rather than a missing piece: memory goes away when nothing can reach it, and you saying you are finished is not the same claim. `mem_can_reset` is false for the same reason, since there is no moment at which everything is known to be dead. `gc_collect` is `runtime.GC` and is almost always the wrong thing to call, for the same reason `runtime.GC` is.
+
+`mem_stats` reports what the collector reports, which is not quite the same set of numbers as the other backends. `bytes_live` is the heap minus what the collector knows to be free, so it includes the collector's own per object overhead as well as yours. `bytes_total` is every byte ever handed out. `blocks` is the number of collections, since for this backend that is the number somebody watching a program actually wants. `allocs`, `frees` and `bytes_peak` stay at zero, because the collector does not count those and a plausible number would be worse than an honest gap.
+
+Nothing in burrow uses this backend and no test needs it, so the library never depends on Boehm being present or on Boehm having been ported to wherever you are building. That is on purpose. A collector has to see the real stack and has to be started by the host, which is fine in a program you own end to end and is not something a library gets to impose on everyone who embeds it.
 
 ### track
 

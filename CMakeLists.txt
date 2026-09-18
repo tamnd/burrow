@@ -24,6 +24,14 @@ set(CMAKE_C_EXTENSIONS OFF)
 option(BURROW_BUILD_TESTS "Build burrow's tests" ${PROJECT_IS_TOP_LEVEL})
 option(BURROW_WERROR "Turn warnings into errors" ${PROJECT_IS_TOP_LEVEL})
 
+# The gc backend, off by default. This is the project's only optional
+# dependency and it is still not a feature check: turning it on says you have
+# the Boehm collector and want it linked, and leaving it off means gc_allocator
+# answers NULL. Nothing here looks for the library, because a build that asks
+# for a collector it does not have should fail at the link line saying so
+# rather than quietly produce a program without one.
+option(BURROW_ENABLE_BOEHM "Link the Boehm collector and enable the gc backend" OFF)
+
 execute_process(
     COMMAND git describe --always --dirty --match v[0-9]*
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -44,6 +52,11 @@ target_include_directories(burrow PUBLIC
     $<INSTALL_INTERFACE:include>)
 
 target_compile_definitions(burrow PRIVATE BURROW_SOURCE_ID="${BURROW_SOURCE_ID}")
+
+if(BURROW_ENABLE_BOEHM)
+    target_compile_definitions(burrow PRIVATE BURROW_ENABLE_BOEHM=1)
+    target_link_libraries(burrow PUBLIC gc)
+endif()
 
 # The warning set mirrors the Makefile's. MSVC gets its own because /W4 is not
 # -Wall and the numbered warnings have no gcc equivalent worth mapping.

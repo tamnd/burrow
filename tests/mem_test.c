@@ -7,6 +7,7 @@
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/fixed.h"
+#include "burrow/mem/gc.h"
 #include "burrow/mem/heap.h"
 
 #include <stdint.h>
@@ -498,6 +499,171 @@ TEST(oom_without_a_handler_is_still_just_null) {
     mem_set_oom(NULL, oom_spy, &fx);
 }
 
+/* The gc backend is the only part of this library that is not in every build,
+ * which makes it the only part whose tests have to ask first. They are written
+ * as one set rather than two behind an #ifdef, so the code that uses the
+ * collector is compiled by every job in the matrix and only runs in the one that
+ * has it. A test that exists in half the builds is a test that rots in the other
+ * half without anybody noticing.
+ *
+ * Nothing here calls mem_free expecting memory back, because not giving it back
+ * is what this backend is. */
+
+TEST(gc_says_whether_this_build_has_it) {
+    if (gc_available()) {
+        Alloc *a = gc_allocator();
+        CHECK(a != NULL);
+
+        /* One collector in a process, so one object, and comparing against it
+         * is a fair way to ask whether some Alloc you were handed is this one. */
+        CHECK(a == gc_allocator());
+        return;
+    }
+
+    /* Without it, everything still links and nothing crashes. This is the half
+     * that runs on almost every machine, and it is checking that a program
+     * written against the collector fails by getting a NULL it can look at
+     * rather than by silently leaking through some fallback. */
+    CHECK(gc_allocator() == NULL);
+    CHECK(mem_alloc(gc_allocator(), 16, 8) == NULL);
+    CHECK(mem_realloc(gc_allocator(), NULL, 0, 16, 8) == NULL);
+    CHECK(!mem_can_reset(gc_allocator()));
+    mem_free(gc_allocator(), NULL, 0, 8);
+    gc_collect();
+}
+
+TEST(gc_hands_out_zeroed_memory) {
+    Alloc *a = gc_allocator();
+    if (a == NULL)
+        return;
+
+    CHECK(mem_alloc(a, 0, 8) == NULL);
+    CHECK(mem_alloc(a, 8, 3) == NULL);
+
+    for (size_t n = 1; n <= 4096; n *= 4) {
+        void *p = mem_alloc(a, n, 8);
+        CHECK(p != NULL);
+        if (p == NULL)
+            continue;
+        CHECK(aligned_to(p, 8));
+        CHECK(all_zero(p, n));
+        memset(p, 0xAB, n);
+    }
+}
+
+TEST(gc_respects_alignment_it_does_not_get_for_free) {
+    Alloc *a = gc_allocator();
+    if (a == NULL)
+        return;
+
+    /* 64 is a cache line and 256 is past anything a fundamental type needs, so
+     * both of these go down the explicit path rather than the ordinary one. */
+    for (size_t align = 1; align <= 256; align *= 2) {
+        void *p = mem_alloc(a, 100, align);
+        CHECK(p != NULL);
+        if (p == NULL)
+            continue;
+        CHECK(aligned_to(p, align));
+        CHECK(all_zero(p, 100));
+    }
+}
+
+TEST(gc_realloc_keeps_what_was_there) {
+    Alloc *a = gc_allocator();
+    if (a == NULL)
+        return;
+
+    /* Both paths, since an over aligned block cannot be grown the way an
+     * ordinary one can and takes a copy instead. */
+    size_t aligns[] = {8, 64};
+    for (size_t i = 0; i < sizeof aligns / sizeof aligns[0]; i++) {
+        size_t align = aligns[i];
+        unsigned char *p = (unsigned char *)mem_alloc(a, 32, align);
+        CHECK(p != NULL);
+        if (p == NULL)
+            continue;
+        for (size_t k = 0; k < 32; k++)
+            p[k] = (unsigned char)(k + 1);
+
+        unsigned char *q = (unsigned char *)mem_realloc(a, p, 32, 512, align);
+        CHECK(q != NULL);
+        if (q == NULL)
+            continue;
+        CHECK(aligned_to(q, align));
+        for (size_t k = 0; k < 32; k++)
+            CHECK_INT_EQ(q[k], (int)(k + 1));
+
+        /* Grown memory is zeroed, the same as everywhere else in this
+         * interface, because Go's zero value rule does not have exceptions. */
+        CHECK(all_zero(q + 32, 512 - 32));
+
+        unsigned char *s = (unsigned char *)mem_realloc(a, q, 512, 16, align);
+        CHECK(s != NULL);
+        if (s != NULL) {
+            for (size_t k = 0; k < 16; k++)
+                CHECK_INT_EQ(s[k], (int)(k + 1));
+        }
+    }
+}
+
+TEST(gc_free_does_nothing_and_reset_is_not_offered) {
+    Alloc *a = gc_allocator();
+    if (a == NULL)
+        return;
+
+    CHECK(!mem_can_reset(a));
+
+    unsigned char *p = (unsigned char *)mem_alloc(a, 64, 8);
+    CHECK(p != NULL);
+    if (p == NULL)
+        return;
+    memset(p, 0x5A, 64);
+
+    /* Saying you are finished with a block is not a claim the collector acts
+     * on, and while this pointer is still here the block is still reachable, so
+     * reading it back is defined and has to give the same bytes. Under any other
+     * backend this would be a use after free. That difference is the backend. */
+    mem_free(a, p, 64, 8);
+    CHECK_INT_EQ(p[0], 0x5A);
+    CHECK_INT_EQ(p[63], 0x5A);
+
+    /* And mem_reset on an allocator that cannot reset is a no-op rather than a
+     * fault, so generic code does not have to ask first. */
+    mem_reset(a);
+    CHECK_INT_EQ(p[0], 0x5A);
+}
+
+TEST(gc_collects_and_reports_the_collector_numbers) {
+    Alloc *a = gc_allocator();
+    if (a == NULL)
+        return;
+
+    /* Enough garbage that the collector has something to find, and none of it
+     * kept, which is the point. */
+    for (int i = 0; i < 4096; i++) {
+        void *p = mem_alloc(a, 256, 8);
+        CHECK(p != NULL);
+        if (p == NULL)
+            break;
+    }
+
+    AllocStats before = mem_stats(a);
+    CHECK(before.bytes_total > 0);
+    CHECK(before.bytes_live > 0);
+
+    gc_collect();
+
+    AllocStats after = mem_stats(a);
+    CHECK(after.bytes_total >= before.bytes_total);
+    CHECK(after.blocks > before.blocks); /* one more collection than before */
+
+    /* The fields this backend has nothing true to say about stay at zero rather
+     * than being filled in with something plausible. */
+    CHECK(after.allocs == 0);
+    CHECK(after.frees == 0);
+    CHECK(after.bytes_peak == 0);
+}
+
 int main(void) {
     RUN(interface_rejects_nonsense);
     RUN(interface_zeroes);
@@ -521,5 +687,11 @@ int main(void) {
     RUN(oom_handler_covers_realloc);
     RUN(oom_handler_can_be_removed_and_belongs_to_one_allocator);
     RUN(oom_without_a_handler_is_still_just_null);
+    RUN(gc_says_whether_this_build_has_it);
+    RUN(gc_hands_out_zeroed_memory);
+    RUN(gc_respects_alignment_it_does_not_get_for_free);
+    RUN(gc_realloc_keeps_what_was_there);
+    RUN(gc_free_does_nothing_and_reset_is_not_offered);
+    RUN(gc_collects_and_reports_the_collector_numbers);
     return harness_report("mem");
 }

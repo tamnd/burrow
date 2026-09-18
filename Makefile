@@ -67,6 +67,17 @@ endif
 
 DEFINES := -DBURROW_SOURCE_ID='"$(SOURCE_ID)"'
 
+# The one optional dependency in the whole project. make BOEHM=1 turns the gc
+# backend into a real collector and links it; without it gc_allocator answers
+# NULL and nothing else in the tree notices either way. It is a variable rather
+# than a configure check because there is nothing to detect: you either asked
+# for the collector or you did not.
+LDLIBS :=
+ifeq ($(BOEHM),1)
+  DEFINES += -DBURROW_ENABLE_BOEHM=1
+  LDLIBS  += -lgc
+endif
+
 CFLAGS  ?= $(STD) $(OPT) $(WARNINGS) $(HARDENING) $(INCLUDES) $(DEFINES)
 LDFLAGS ?=
 
@@ -103,7 +114,7 @@ $(BUILD)/obj/%.o: src/%.c
 
 $(BUILD)/tests/%: tests/%.c $(LIB)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(DEPFLAGS) -MF $@.d -Itests $< $(LIB) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -MF $@.d -Itests $< $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
 
 -include $(DEPS)
 

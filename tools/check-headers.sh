@@ -25,7 +25,10 @@ status=0
 checked=0
 derived=0
 
-sources=$(git ls-files 'src/*.c' 'src/**/*.c' 'include/**/*.h' 'tests/**/*.c' 2>/dev/null || true)
+# --others picks up files that are written but not staged yet, which is the
+# state a file is in exactly when somebody runs this before committing.
+sources=$(git ls-files --cached --others --exclude-standard \
+	'src/*.c' 'src/**/*.c' 'include/**/*.h' 'tests/**/*.c' 2>/dev/null || true)
 [ -n "$sources" ] || exit 0
 
 for f in $sources; do

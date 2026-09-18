@@ -111,11 +111,15 @@ install: $(LIB)
 	install -m 644 $(LIB) $(DESTDIR)$(PREFIX)/lib/
 	cp -R include/burrow/. $(DESTDIR)$(PREFIX)/include/burrow/
 
+# --others so that a file you have written but not staged gets formatted too,
+# since that is the one you are about to commit.
+GIT_FILES := git ls-files --cached --others --exclude-standard
+
 fmt:
-	clang-format -i $(shell git ls-files '*.c' '*.h')
+	clang-format -i $(shell $(GIT_FILES) '*.c' '*.h')
 
 tidy:
-	clang-tidy $(shell git ls-files 'src/*.c') -- $(CFLAGS)
+	clang-tidy $(shell $(GIT_FILES) 'src/*.c' 'src/**/*.c') -- $(CFLAGS)
 
 clean:
 	rm -rf $(BUILD)

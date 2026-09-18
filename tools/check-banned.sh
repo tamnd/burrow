@@ -44,7 +44,11 @@ ALLOC_ALLOWED='src/mem/heap.c'
 BANNED_EXIT='\bexit\b|\babort\b|\b_Exit\b|\bassert\b'
 EXIT_ALLOWED='src/runtime/panic.c|tests/'
 
-sources=$(git ls-files 'src/*.c' 'src/**/*.c' 'include/**/*.h' 2>/dev/null || true)
+# --others picks up files that are written but not staged yet, which is the
+# state a file is in exactly when somebody runs this before committing. Without
+# it the check quietly passes on a tree it never looked at.
+sources=$(git ls-files --cached --others --exclude-standard \
+	'src/*.c' 'src/**/*.c' 'include/**/*.h' 2>/dev/null || true)
 [ -n "$sources" ] || exit 0
 
 for f in $sources; do

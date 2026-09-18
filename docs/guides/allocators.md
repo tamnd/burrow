@@ -57,7 +57,7 @@ The cost is one extra parameter on a lot of functions. The benefit is that you c
 
 ## The five allocators
 
-Three of these exist today. `gc` and `track` are described here because the interface they plug into is finished and they change nothing about how you write your code, but they are still open items on [P0](https://github.com/tamnd/burrow/issues/1).
+Four of these exist today. `gc` is described here because the interface it plugs into is finished and it changes nothing about how you write your code, but it is still an open item on [P0](https://github.com/tamnd/burrow/issues/1).
 
 ### arena
 
@@ -120,19 +120,39 @@ This exists for people porting Go code that genuinely depends on a collector, an
 
 ### track
 
-Wraps another allocator and remembers every block it handed out.
+Wraps another allocator and remembers every block it handed out, so that at the end it can tell you what you did wrong.
 
 ```c
 Track tr;
 track_init(&tr, heap_allocator());
 Alloc *a = track_allocator(&tr);
 
-/* run the thing under test */
+/* run the thing under test, passing a */
 
-track_report(&tr, stderr);   /* every block still outstanding, with a backtrace */
+if (track_check(&tr) != 0)
+    /* something is wrong and track_check has already said what */;
+track_free(&tr);
 ```
 
-This is what tests use. It is how burrow's own test suite proves a function allocates what it says it allocates and nothing more, and it is how you find the one place in your program that is holding on to something.
+`track_check` returns the number of faults. Zero means the code under it allocated and freed correctly, and that is usually the whole of what a test needs. When you want the detail rather than the number, register a callback with `track_on_fault` and each fault arrives as a `TrackEvent` with the pointer, the size and alignment it was allocated with, the size and alignment the caller claimed when giving it back, which allocation it was counting from one, and a file and line if the call site asked for one.
+
+Six things get caught. A block still live at `track_check` is a leak. Freeing a pointer that is not live is a double free. Freeing a pointer this allocator never handed out is a wild free, which in real code is usually two allocators in one function and the wrong one at the end. Passing a size or an alignment to free that does not match the allocation is a mismatch, and it matters more here than it does under `malloc`, because an arena moves its bump pointer back by exactly that number and believes you. Writing to a block after freeing it is a write after free.
+
+That last one is why freed memory is not handed straight back. A freed block is filled with a poison byte and held, and only when the quarantine fills up does the oldest one get checked against the poison and really released. So a write after free is found some time after it happened rather than at the moment it happened, and a read after free is not found at all, because catching a read needs the page tables and this needs to work everywhere. AddressSanitizer catches the reads. This catches the ownership mistakes AddressSanitizer cannot see, because it knows what the sizes were supposed to be and ASan does not. Run both.
+
+`track_set_quarantine` decides how much freed memory to hold, one mebibyte by default. Zero turns it off, which turns off write after free detection and gives the memory straight back, which is what you want if you are leaving this allocator in a long running program.
+
+For a leak report you can act on, name the call site:
+
+```c
+Byte *p = mem_alloc(TRACK_HERE(a), n, 1);
+```
+
+`TRACK_HERE` returns the allocator it was given and does nothing at all unless that allocator is a `Track`, so it is safe to leave in code that also runs against a plain arena, and code you have to edit before you can check it does not get checked.
+
+Two things are worth knowing before you read a report. Realloc here is always a fresh block and a copy, never a grow in place, even when the allocator underneath could have grown it, because growing in place leaves the old pointer valid and hides the bug where somebody kept it. And a reset counts as giving everything back rather than as a thousand leaks, which is what reset means, so a `Track` over an arena stays quiet when you reset the arena.
+
+This is a debugging allocator. It is slow, it holds on to memory, and it does not belong in a program you ship.
 
 ### fixed
 

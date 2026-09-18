@@ -259,10 +259,20 @@ as a hard dependency.
 
 ### `track` — the debugging allocator
 
-Wraps any other allocator. Records call site, size and a shadow stack per
-allocation; reports leaks, double frees, size/align mismatches and
-use-after-free at teardown. Used by the entire test suite by default, which is
-how ownership annotations get validated. Not for production.
+Wraps any other allocator. Records size, alignment, sequence number and call
+site per allocation; reports leaks, double frees, wild frees, size and align
+mismatches and write-after-free. Faults arrive through a callback as a struct,
+so a test asserts on a field rather than parsing text. Used by the test suite,
+which is how ownership annotations get validated. Not for production.
+
+Write-after-free needs the freed block to still be readable and still be ours,
+so a free poisons the block and holds it in a quarantine instead of passing the
+free down, and the poison is checked when the block is finally evicted. That
+finds the write late rather than at the moment it happened and does not find
+reads at all, which is the price of working on every platform without touching
+the page tables. AddressSanitizer covers the reads; this covers the ownership
+mistakes AddressSanitizer cannot see, because the interface tells it what the
+sizes were supposed to be. The two are complementary and CI runs both.
 
 ### `fixed` — a caller-supplied buffer
 

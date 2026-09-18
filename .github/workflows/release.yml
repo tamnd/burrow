@@ -76,9 +76,10 @@ jobs:
       - name: pack
         run: |
           v="${{ needs.verify.outputs.version }}"
+          sha256="$PWD/tools/sha256.sh"
           mkdir -p dist
           git archive --format=tar.gz --prefix="burrow-$v/" -o "dist/burrow-$v-source.tar.gz" HEAD
-          (cd dist && sha256sum *.tar.gz > "burrow-$v-source.tar.gz.sha256")
+          (cd dist && "$sha256" *.tar.gz > "burrow-$v-source.tar.gz.sha256")
       - uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*.tar.gz
@@ -124,13 +125,14 @@ jobs:
         run: |
           v="${{ needs.verify.outputs.version }}"
           name="burrow-$v-${{ matrix.name }}"
+          sha256="$PWD/tools/sha256.sh"
           mkdir -p "stage/$name"
           cp -R include "stage/$name/"
           cp LICENSE NOTICE PATENTS README.md "stage/$name/"
           find build -name 'libburrow.a' -o -name 'burrow.lib' | head -1 | xargs -I{} cp {} "stage/$name/"
           mkdir -p dist
           tar -C stage -czf "dist/$name.tar.gz" "$name"
-          (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+          (cd dist && "$sha256" "$name.tar.gz" > "$name.tar.gz.sha256")
       - uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*.tar.gz

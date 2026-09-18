@@ -33,6 +33,10 @@ report() {
 allowed() {
 	file=$1
 	shift
+	# SC2048: the splitting is the point, since the list is one pattern per word.
+	# SC2254: the pattern must stay unquoted, since it is a glob and quoting it
+	# would make tests/* match a directory literally called "tests/*".
+	# shellcheck disable=SC2048,SC2254
 	for pattern in $*; do
 		case "$file" in
 		$pattern) return 0 ;;

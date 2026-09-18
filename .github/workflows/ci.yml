@@ -41,6 +41,13 @@ jobs:
           clang-format --version
           clang-format --dry-run --Werror $(git ls-files '*.c' '*.h')
 
+      # The scripts in tools/ decide whether a pull request lands and whether a
+      # release ships, so they get checked like anything else that can stop the
+      # build. Two of the last three problems in this repository were a checker
+      # that was quietly not checking.
+      - name: shellcheck
+        run: shellcheck tools/*.sh
+
       - name: Trailing whitespace and tabs
         run: |
           if git grep -nIP '[ \t]+$' -- '*.c' '*.h' '*.md' '*.yml'; then

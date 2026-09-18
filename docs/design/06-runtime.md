@@ -67,6 +67,28 @@ the number of processors that exist, which under a cpuset or a container CPU
 limit is not the number this process may use; reconciling those two is
 `GOMAXPROCS`'s job and is where a caller can override the answer anyway.
 
+That primitive is `burrow/note.h`, and it keeps Go's name for it. A note is a
+one shot gate with five operations: init, free, clear, wake, and sleep. It
+starts closed, a wake opens it and releases everybody waiting, and a sleep on an
+open one returns straight away. That last part is what makes it usable without a
+lock wrapped round it, because the waker never has to know whether the sleeper
+has arrived yet. Linux gets a futex, so a note is one 32 bit word of the
+caller's own memory and an uncontended note costs no system call at all. Windows
+gets a manual reset event, which is a one shot gate under a different name and
+is what Go uses there. Everything else gets a mutex and a condition variable,
+which is what Go uses on darwin.
+
+This is the piece that section 6 below calls `sched_park` and `sched_ready`.
+Those two are the G-level operations and they park a goroutine, which needs Gs
+and a scheduler to park them in. A note is the M-level half underneath, and it
+is what `sched_park` will block on once there is nothing left for a thread to
+run. It lands first because everything above it needs a thread that can sleep.
+
+There is no timed sleep on a note yet. A timeout needs a monotonic clock that
+does not move when somebody sets the system time, C11 has no such clock, and the
+runtime has to grow one for timers regardless. The timed version arrives with
+it.
+
 ## 2. Context switching
 
 This is where the POSIX-only prior art ([02](02-landscape.md) §3) is

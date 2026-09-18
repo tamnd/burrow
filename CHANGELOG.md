@@ -17,6 +17,19 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 - That file is compiled twice, the second time with the lock table forced on, which is the only way the 64 bit spin locks are run under real contention on a 64 bit machine.
 - Checked under ThreadSanitizer, AddressSanitizer, UndefinedBehaviorSanitizer and MemorySanitizer on Linux, on 32 bit x86 in Docker where the lock table is the real path rather than a forced one, and on Windows with mingw gcc 16.
 
+### Notes
+
+- `burrow/note.h` is the one place in burrow where a thread genuinely blocks in the kernel. Everything above it parks a goroutine and hands the thread to somebody else, and this is what is underneath when there is nobody left to hand it to.
+- A note is a one shot gate. It starts closed, a wake opens it and releases everybody waiting, and a sleep on one that is already open returns straight away. That last part is the whole reason it works without a lock around it, because the waker never has to know whether the sleeper got there first.
+- The name is Go's. `runtime.note` is the same object with the same operations, so somebody reading Go's scheduler next to this one finds the same word for the same thing.
+- Linux gets a futex, which is one 32 bit word of the caller's own memory and no kernel object at all until a thread actually has to sleep. The constants are written out rather than taken from a kernel header, because they are part of the system call interface and cannot change, and `syscall` is declared in the file because both glibc and musl hide it behind `_GNU_SOURCE` and burrow is built as strict C11.
+- Windows gets a manual reset event, which is a one shot gate under another name and is what Go uses there. `WaitOnAddress` would be the closer match to a futex and is not used, because it lives in `synchronization.lib` and burrow still links nothing.
+- Everything else gets a mutex and a condition variable, broadcast rather than signalled, since a note releases every sleeper and not one of them.
+- The open flag is read and written atomically even on the path where every write already happens under a mutex. That is what lets `burrow__note_is_open` answer without taking the lock, which is what a caller that must not block needs.
+- No timed sleep yet. A timeout wants a monotonic clock that does not move when the system time is set, C11 has none, and the runtime has to grow one for timers anyway. The timed version arrives with it.
+- The tests are written so that a sleep which does not sleep fails them: the sleeper sets a flag going in and another coming out, and the checker looks at the second one while it still has to be clear. There is also a wake that lands before the thread exists, eight sleepers released by one wake, sixteen rounds of clear and reuse, and a thousand volleys of two threads passing a turn back and forth, which is what the scheduler will actually do with these.
+- Checked on macOS arm64, on Linux x86_64 with gcc and clang, under ThreadSanitizer and AddressSanitizer, on 32 bit x86 in Docker where the futex is the time32 one, and on Windows with mingw gcc 16.
+
 ## v0.0.7 (2026-09-18)
 
 Groundwork. Nothing in this release is a package a user calls, and all of it is what the next ones stand on: the atomics the scheduler needs, an allocator that catches the mistakes the ownership annotations describe, and a check that the annotations and the list of global state are true rather than merely written down.

@@ -12,6 +12,8 @@
 #ifndef BURROW_VERSION_H
 #define BURROW_VERSION_H
 
+#include "burrow/own.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -32,22 +34,22 @@ extern "C" {
  * version of the header you compiled against. Worth checking if you ship
  * burrow as a shared object, pointless if you amalgamate, and the amalgamation
  * is the supported path. */
-const char *burrow_version(void);
+BURROW_STATIC(ret) const char *burrow_version(void);
 int burrow_version_number(void);
 
 /* The git commit the amalgamation was generated from, or "unknown" for a build
  * out of a working tree that was not clean. Same idea as sqlite3_sourceid. */
-const char *burrow_sourceid(void);
+BURROW_STATIC(ret) const char *burrow_sourceid(void);
 
 /* The Go release this port was read against, as "go1.27.1 5f0b5b1b". Every
  * ported file names its upstream source in the same terms, so this is the
  * single number that tells you what to diff against. */
-const char *burrow_go_version(void);
+BURROW_STATIC(ret) const char *burrow_go_version(void);
 
 /* The full text of LICENSE, NOTICE and PATENTS, concatenated. Embedding it
  * means a binary that ships burrow can satisfy the attribution clause by
  * printing something, which is the only mechanism some deployments have. */
-const char *burrow_license(void);
+BURROW_STATIC(ret) const char *burrow_license(void);
 
 #ifdef __cplusplus
 }

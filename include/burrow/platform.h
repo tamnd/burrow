@@ -18,6 +18,8 @@
 #ifndef BURROW_PLATFORM_H
 #define BURROW_PLATFORM_H
 
+#include "burrow/own.h"
+
 /* ---------------------------------------------------------------- compiler */
 
 #if defined(_MSC_VER) && !defined(__clang__)
@@ -229,8 +231,8 @@ extern "C" {
  * is anything reaching burrow through a foreign function interface, and it is
  * also the amalgamation user who wants a bug report to say which build they
  * have without recompiling anything. */
-const char *burrow_os_name(void);
-const char *burrow_arch_name(void);
+BURROW_STATIC(ret) const char *burrow_os_name(void);
+BURROW_STATIC(ret) const char *burrow_arch_name(void);
 
 #ifdef __cplusplus
 }

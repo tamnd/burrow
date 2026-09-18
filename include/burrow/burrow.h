@@ -49,6 +49,7 @@
 #include "burrow/mem/fixed.h"
 #include "burrow/mem/heap.h"
 #include "burrow/num.h"
+#include "burrow/own.h"
 #include "burrow/runtime.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"

@@ -150,7 +150,7 @@ BURROW_OWNS(ret) Error errors_new(Alloc *a, Str text);
  * A multi error unwraps to nothing here, exactly as in Go: errors.Unwrap is
  * defined over Unwrap() error and says nothing about the tree form. Walk it
  * with errors_is or errors_as, or call the vtable slot yourself. */
-Error errors_unwrap(Error err);
+BURROW_BORROWS(ret, err) Error errors_unwrap(Error err);
 
 /* errors.Is. Walks the chain and the tree, asking each error whether it matches
  * and then asking it what it wraps.

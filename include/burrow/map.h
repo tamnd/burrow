@@ -78,8 +78,8 @@ Int map_len(const Map *m);
 
 /* What the map was made with, for code that was handed a map and has to ask.
  * This is what fmt and encoding/json will use to print one. */
-const Type *map_key_type(const Map *m);
-const Type *map_val_type(const Map *m);
+BURROW_STATIC(ret) const Type *map_key_type(const Map *m);
+BURROW_STATIC(ret) const Type *map_val_type(const Map *m);
 
 /* m[key], as a pointer to the value in the table, or NULL when the key is not
  * there. Reading through a NULL map gives NULL, since a nil map in Go reads as

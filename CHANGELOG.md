@@ -17,6 +17,16 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 - Checked under AddressSanitizer, UndefinedBehaviorSanitizer, MemorySanitizer and ThreadSanitizer on Linux, on 32 bit x86 in Docker, and on Windows with mingw gcc 16.
 - `docs/guides/allocators.md` has the real API and the reasoning behind the quarantine.
 
+### Ownership annotations
+
+- `burrow/own.h` is where `BURROW_OWNS`, `BURROW_BORROWS`, `BURROW_RETAINS` and the new `BURROW_STATIC` live. It has no dependencies, because `platform.h` and `version.h` have functions to annotate and no business depending on the allocator interface to do it.
+- `BURROW_STATIC(ret)` says the result has static storage duration or is nil, so there is nothing to free and nothing it can outlive. That is what `burrow_version`, `kind_name`, `heap_allocator`, `map_key_type` and `slice_nil` actually do, and writing `BURROW_BORROWS(ret)` with the source left off would have been indistinguishable from somebody forgetting to fill it in.
+- `tools/check-annotations.sh` runs in `make check`. A declaration whose return type carries a pointer needs an annotation naming `ret`, and every name inside an annotation has to be `ret` or a parameter of that same declaration, which is what catches the annotation that was right until somebody renamed the parameter.
+- That check found 26 declarations saying nothing about their result, including `slice_nil`, `slice_at_fast`, the whole `mem_alloc` family, all four allocator accessors and every function in `version.h`. All of them are annotated now.
+- `slice_append`, `slice_append_slice`, `slice_append_fast` and `utf8_append_rune` were annotated `BURROW_OWNS(ret)` alone, which was wrong. Append writes into the array it was given when there is capacity and allocates when there is not, so both `BURROW_OWNS(ret)` and `BURROW_BORROWS(ret, s)` are true of the declaration and the caller has to act on both.
+- `tests/lifetime_test.c` checks the annotations are true rather than merely present, which needs the memory to exist and so could not be done before the tracking allocator landed. `BURROW_OWNS` has to make the live block count go up, `BURROW_BORROWS` and `BURROW_STATIC` have to leave it alone, and a borrow into a buffer has to land inside that buffer.
+- The four macros are `AttributeMacros` in `.clang-format`, so the formatter stops breaking a declaration in the middle of its return type.
+
 ### Corrections
 
 - The note in v0.0.6 about how `utf8_valid_string` reads a machine word said it was built from separate byte loads and shifts. What shipped uses `memcpy`, for the reason now recorded in `docs/design/09-packages-pure.md`.

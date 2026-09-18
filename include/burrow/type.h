@@ -206,7 +206,7 @@ BURROW_BORROWS(ret, t) Str type_name(const Type *t);
 /* "bool", "int", "slice". This is Kind.String() and it is what fmt's %v prints
  * for a Kind. An out of range kind gives "invalid" rather than reading off the
  * end of the table. */
-BURROW_BORROWS(ret) Str kind_name(Kind k);
+BURROW_STATIC(ret) Str kind_name(Kind k);
 
 /* The three questions that get asked about a kind constantly, spelled out here
  * so that nobody writes the range check by hand and gets it subtly wrong.
@@ -238,11 +238,11 @@ void type_zero(const Type *t, void *p);
 /* The field with this name, or NULL. Linear, because structs have a handful of
  * fields and a linear scan over a contiguous array beats anything cleverer at
  * that size. */
-const Field *type_field_by_name(const Type *t, Str name);
+BURROW_BORROWS(ret, t) const Field *type_field_by_name(const Type *t, Str name);
 
 /* The method with this name, or NULL. Methods are sorted by name in a
  * descriptor, the way Go sorts them, so this is a binary search. */
-const Method *type_method_by_name(const Type *t, Str name);
+BURROW_BORROWS(ret, t) const Method *type_method_by_name(const Type *t, Str name);
 
 #ifdef __cplusplus
 }

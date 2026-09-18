@@ -22,3 +22,12 @@ IncludeBlocks: Preserve
 # Comments are prose in this project and prose is reflowed by the person
 # writing it, not by a tool that does not know where the sentence ends.
 ReflowComments: false
+
+# The ownership annotations sit in front of a declaration the way an attribute
+# does, and without this clang-format treats them as the start of the return
+# type and breaks the line in the middle of one.
+AttributeMacros:
+  - BURROW_OWNS
+  - BURROW_BORROWS
+  - BURROW_RETAINS
+  - BURROW_STATIC

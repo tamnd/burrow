@@ -101,7 +101,8 @@ Int utf8_encode_rune(Slice p, Rune r);
 /* The same encoding appended to a byte slice, which is the one to reach for
  * when you are building a string rather than filling a buffer. Takes an
  * allocator because appending can grow. */
-BURROW_OWNS(ret) Slice utf8_append_rune(Alloc *a, Slice p, Rune r);
+BURROW_OWNS(ret) BURROW_BORROWS(ret, p) Slice utf8_append_rune(Alloc *a, Slice p,
+                                                               Rune r);
 
 /* ------------------------------------------------------------------ counting */
 

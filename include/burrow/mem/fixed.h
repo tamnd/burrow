@@ -46,7 +46,7 @@ typedef struct Fixed {
  * examined, so a buffer with old data in it is fine. */
 void fixed_init(Fixed *fx, void *buf, size_t size);
 
-Alloc *fixed_allocator(Fixed *fx);
+BURROW_BORROWS(ret, fx) Alloc *fixed_allocator(Fixed *fx);
 
 /* Everything allocated becomes invalid and the whole buffer is available again.
  * Reachable through mem_reset too. */

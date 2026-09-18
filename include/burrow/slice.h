@@ -64,7 +64,7 @@ BURROW_OWNS(ret) Slice slice_make(Alloc *a, const Type *elem, Int len, Int cap);
  * marshals to null and an empty one to [], and that shows up in the output of
  * every program that encodes JSON. So a zeroed Slice with an element type is
  * nil, and a zero length slice with a real pointer is empty, exactly as in Go. */
-Slice slice_nil(const Type *elem);
+BURROW_STATIC(ret) Slice slice_nil(const Type *elem);
 bool slice_is_nil(Slice s);
 
 /* A slice over memory you already have, which does not copy and does not take
@@ -108,10 +108,12 @@ BURROW_BORROWS(ret, s) Slice slice_sub3(Slice s, Int lo, Int hi, Int max);
  * works in Go: the copy happens after the allocation.
  *
  * n <= 0 returns s unchanged, which is append(s) with nothing to add. */
-BURROW_OWNS(ret) Slice slice_append(Alloc *a, Slice s, const void *elems, Int n);
+BURROW_OWNS(ret) BURROW_BORROWS(ret, s) Slice slice_append(Alloc *a, Slice s,
+                                                           const void *elems, Int n);
 
 /* append(dst, src...). The element sizes have to match. */
-BURROW_OWNS(ret) Slice slice_append_slice(Alloc *a, Slice dst, Slice src);
+BURROW_OWNS(ret) BURROW_BORROWS(ret, dst) Slice slice_append_slice(Alloc *a, Slice dst,
+                                                                   Slice src);
 
 /* copy(dst, src), returning the number of elements copied, which is the
  * smaller of the two lengths. Overlapping is fine and is what Go's copy
@@ -154,15 +156,16 @@ BURROW_OWNS(ret) Str str_from_slice(Alloc *a, Slice s);
  *
  * Use BURROW_AT and BURROW_APPEND rather than calling these. They exist to be
  * what the macros expand to. */
-static inline void *slice_at_fast(Slice s, Int i, size_t elem_size) {
+BURROW_BORROWS(ret, s) static inline void *slice_at_fast(Slice s, Int i,
+                                                         size_t elem_size) {
     if (s.elem != NULL && s.p != NULL && (Uint)i < (Uint)s.len &&
         (size_t)s.elem->size == elem_size)
         return (Byte *)s.p + (size_t)i * elem_size;
     return slice_at(s, i);
 }
 
-static inline Slice slice_append_fast(Alloc *a, Slice s, const void *elem,
-                                      size_t elem_size) {
+BURROW_OWNS(ret) BURROW_BORROWS(ret, s) static inline Slice
+slice_append_fast(Alloc *a, Slice s, const void *elem, size_t elem_size) {
     if (s.elem != NULL && s.p != NULL && s.len < s.cap &&
         (size_t)s.elem->size == elem_size) {
         memcpy((Byte *)s.p + (size_t)s.len * elem_size, elem, elem_size);

@@ -30,7 +30,7 @@ extern "C" {
  * library for them and counting in the wrapper would make the common path pay
  * for something almost nobody reads. Wrap it in the tracking allocator when you
  * want numbers. */
-Alloc *heap_allocator(void);
+BURROW_STATIC(ret) Alloc *heap_allocator(void);
 
 #ifdef __cplusplus
 }

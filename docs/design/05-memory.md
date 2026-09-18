@@ -183,13 +183,32 @@ tooling parses:
 ```c
 BURROW_OWNS(ret)        Str   strings_to_upper(Alloc *a, Str s);
 BURROW_BORROWS(ret, s)  Str   strings_trim_space(Str s);
+BURROW_STATIC(ret)      const char *burrow_version(void);
 BURROW_OWNS(ret) BURROW_BORROWS(ret.elem, s)
                     Slice strings_split(Alloc *a, Str s, Str sep);
 BURROW_RETAINS(w)       Int   io_copy(IoWriter w, IoReader r, Error *e);
 ```
 
-`BURROW_OWNS`/`BURROW_BORROWS`/`BURROW_RETAINS` expand to nothing by default. Three
-consumers read them:
+They live in `burrow/own.h`, which is a header of its own rather than a section
+of `mem.h` because `platform.h` and `version.h` have functions to annotate and
+no business depending on the allocator interface to do it.
+
+`BURROW_STATIC` is the third answer to the lifetime question and it is not a
+weaker `BURROW_BORROWS`. It says the result has static storage duration or is
+nil, so there is nothing to free and nothing it can outlive. A borrow has to
+name what it came from, and a version string or a type descriptor has nothing to
+name. Writing `BURROW_BORROWS(ret)` with no source for those would have been
+indistinguishable from somebody forgetting to fill in the source, which is
+exactly the silence the annotations exist to remove.
+
+`BURROW_OWNS` and `BURROW_BORROWS` can both appear on one declaration, and on
+the growable containers they do. `slice_append` writes into the array it was
+given when there is capacity and allocates a bigger one when there is not, and
+the caller cannot tell which happened. So the caller has to keep the input alive
+and also free the result, and annotating only one of the two would have told
+them to do half of that.
+
+All four expand to nothing by default. Three consumers read them:
 
 - **The doc generator**, which turns them into the lifetime sentence in every
   function's documentation. Nobody writes those sentences by hand.
@@ -203,6 +222,17 @@ consumers read them:
 
 `strings.Split`'s awkward case — owned header, borrowed elements — is expressed
 precisely and checked, rather than buried in prose.
+
+Two checks keep them honest, and they answer different questions.
+`tools/check-annotations.sh` is structural and runs in `make check`: a
+declaration whose return type carries a pointer needs an `OWNS`, a `BORROWS` or
+a `STATIC` naming `ret`, and every name inside an annotation has to be `ret` or
+a parameter of that same declaration. That catches the declaration added without
+one and the annotation that was right until somebody renamed the parameter.
+Whether an annotation is *true* needs the memory to exist, so it is checked at
+runtime in `tests/lifetime_test.c` using the tracking allocator: `OWNS` means the
+live block count went up, `BORROWS` and `STATIC` mean it did not, and where the
+borrow is into a buffer the result has to be inside that buffer.
 
 ## 5. The backends
 

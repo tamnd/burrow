@@ -126,7 +126,7 @@ typedef struct Track {
  * reason to do that. */
 void track_init(Track *tr, Alloc *under);
 
-Alloc *track_allocator(Track *tr);
+BURROW_BORROWS(ret, tr) Alloc *track_allocator(Track *tr);
 
 /* Where the bookkeeping is kept, which is not the allocator being tracked.
  * Records have to survive a reset of the thing underneath and must not show up
@@ -186,7 +186,7 @@ void track_free(Track *tr);
  * better when the runtime brings thread local storage. */
 #define TRACK_HERE(a) track_note((a), __FILE__, __LINE__)
 
-Alloc *track_note(Alloc *a, const char *file, int line);
+BURROW_BORROWS(ret, a) Alloc *track_note(Alloc *a, const char *file, int line);
 
 #ifdef __cplusplus
 }

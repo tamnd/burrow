@@ -76,7 +76,7 @@ void arena_init(Arena *ar, Alloc *parent, size_t chunk_size);
 
 /* The allocator to pass to everything else. Valid until arena_free, and tied to
  * this exact Arena, so do not copy the Arena after calling this. */
-Alloc *arena_allocator(Arena *ar);
+BURROW_BORROWS(ret, ar) Alloc *arena_allocator(Arena *ar);
 
 /* Everything allocated becomes invalid, and the chunks are kept for reuse, so
  * the next round of work does no allocation from the parent at all. This is the

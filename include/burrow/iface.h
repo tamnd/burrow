@@ -119,7 +119,7 @@ typedef struct Iface {
 
 /* The concrete type behind an interface value, or NULL when the value is nil or
  * its vtable declines to say. */
-const Type *iface_type(Iface v);
+BURROW_STATIC(ret) const Type *iface_type(Iface v);
 
 /* Go's v.(T), the one result form: the data pointer when the dynamic type is
  * want, and NULL otherwise. In C the pointer is the answer to both questions,
@@ -132,7 +132,7 @@ const Type *iface_type(Iface v);
  * because a C caller has the pointer in hand and can see for itself, and
  * because a library that ends the process over a failed conversion is not one
  * people can build on. */
-void *iface_assert(Iface v, const Type *want);
+BURROW_BORROWS(ret, v) void *iface_assert(Iface v, const Type *want);
 
 /* ------------------------------------------------------------------ any
  *
@@ -180,7 +180,7 @@ typedef struct Any {
 BURROW_OWNS(ret) Any any_box(Alloc *a, Any v);
 
 /* Go's v.(T) for the empty interface, with the same shape as iface_assert. */
-void *any_assert(Any v, const Type *want);
+BURROW_BORROWS(ret, v) void *any_assert(Any v, const Type *want);
 
 /* Go's == on two interface values.
  *

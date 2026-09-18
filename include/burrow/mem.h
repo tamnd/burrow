@@ -38,6 +38,8 @@
 #ifndef BURROW_MEM_H
 #define BURROW_MEM_H
 
+#include "burrow/own.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -112,18 +114,19 @@ struct AllocVT {
 
 /* Zeroed, because Go's zero value rule is not a convention there, it is the
  * language, and code ported from Go assumes it everywhere. */
-void *mem_alloc(Alloc *a, size_t size, size_t align);
+BURROW_OWNS(ret) void *mem_alloc(Alloc *a, size_t size, size_t align);
 
 /* Not zeroed. Only worth reaching for when the next thing you do is overwrite
  * every byte, which in this library means the copy loops and nothing else. */
-void *mem_alloc_nozero(Alloc *a, size_t size, size_t align);
+BURROW_OWNS(ret) void *mem_alloc_nozero(Alloc *a, size_t size, size_t align);
 
 /* n * size with the multiplication checked, because an attacker controlled
  * element count that wraps is the oldest heap overflow there is. Returns NULL
  * on overflow rather than allocating something too small. */
-void *mem_alloc_array(Alloc *a, size_t n, size_t size, size_t align);
+BURROW_OWNS(ret) void *mem_alloc_array(Alloc *a, size_t n, size_t size, size_t align);
 
-void *mem_realloc(Alloc *a, void *p, size_t old, size_t nsz, size_t align);
+BURROW_OWNS(ret) void *mem_realloc(Alloc *a, void *p, size_t old, size_t nsz,
+                                   size_t align);
 void mem_free(Alloc *a, void *p, size_t size, size_t align);
 
 /* Gives everything back at once. Safe to call on an allocator that does not
@@ -134,32 +137,16 @@ bool mem_can_reset(Alloc *a);
 
 AllocStats mem_stats(Alloc *a);
 
-/* The obvious two, which is what most call sites want. BURROW_NEW zeroes,
+/* The declarations above and everywhere else in burrow carry BURROW_OWNS,
+ * BURROW_BORROWS, BURROW_STATIC and BURROW_RETAINS. Those say whether a result
+ * is fresh memory or a view into an argument, which is the one lifetime
+ * question the allocator rule does not answer on its own. They expand to
+ * nothing and burrow/own.h explains them.
+ *
+ * The obvious two, which is what most call sites want. BURROW_NEW zeroes,
  * matching Go's new(T). */
 #define BURROW_NEW(a, T) ((T *)mem_alloc((a), sizeof(T), _Alignof(T)))
 #define BURROW_NEW_N(a, T, n) ((T *)mem_alloc_array((a), (n), sizeof(T), _Alignof(T)))
-
-/* Ownership annotations.
- *
- * Even with one allocator convention, one question is left per function: does
- * the Str or Slice coming back alias the input, or is it fresh? Go's collector
- * makes that invisible. In C it decides whether the input can be freed, so
- * every declaration says which it is, in a form three different tools read.
- *
- *     BURROW_OWNS(ret)        Str strings_to_upper(Alloc *a, Str s);
- *     BURROW_BORROWS(ret, s)  Str strings_trim_space(Str s);
- *
- * They expand to nothing. The documentation generator turns them into the
- * lifetime sentence on every reference page, so nobody writes those by hand and
- * nobody gets them wrong in prose. The conformance harness generates an
- * AddressSanitizer test per annotated function which frees the input and
- * touches the output and requires a report exactly when BURROW_BORROWS says the
- * two alias, so a wrong annotation is a failing test rather than a comment
- * somebody will believe. And a clang plugin reads them for people who want the
- * check in their own code. */
-#define BURROW_OWNS(...)
-#define BURROW_BORROWS(...)
-#define BURROW_RETAINS(...)
 
 #ifdef __cplusplus
 }

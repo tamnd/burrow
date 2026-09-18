@@ -167,7 +167,7 @@ Alloc *a = fixed_allocator(&fx);
 
 Two reasons to want this. One is a target with no allocator at all, where a firmware image gets a region at link time and that is the whole story. The other is a test that proves a function stays inside a budget, which it does by handing it exactly that many bytes and watching it either fit or fail.
 
-## Ownership, and the three annotations
+## Ownership, and the four annotations
 
 Even with one allocator convention, one question is left per function. Does the `Str` coming back point into the input, or is it fresh memory?
 
@@ -176,13 +176,27 @@ Go's collector makes that invisible and it does not matter. In C it decides whet
 ```c
 BURROW_OWNS(ret)        Str strings_to_upper(Alloc *a, Str s);
 BURROW_BORROWS(ret, s)  Str strings_trim_space(Str s);
+BURROW_STATIC(ret)      const char *burrow_version(void);
 ```
 
-`BURROW_OWNS(ret)` means the return value is fresh memory from `a` and does not depend on the input. `BURROW_BORROWS(ret, s)` means the return value points into `s` and dies when `s` does. `BURROW_RETAINS` means the function kept a reference to an argument past the call.
+`BURROW_OWNS(ret)` means the return value is fresh memory from `a` and does not depend on the input. `BURROW_BORROWS(ret, s)` means the return value points into `s` and dies when `s` does. `BURROW_RETAINS` means the function kept a reference to an argument past the call, which is what you need to know before reusing a buffer you passed in.
+
+`BURROW_STATIC(ret)` is the fourth and it is not a weaker borrow. It means the result has static storage duration or is nil, so there is nothing to free and nothing it can outlive. You can hold a `burrow_version()` or a `kind_name()` result for the life of the program and never think about it again. A borrow has to name what it came from, and these have nothing to name, so writing `BURROW_BORROWS(ret)` with the source left off would have looked exactly like somebody forgetting to fill it in.
 
 Notice that `strings_trim_space` has no allocator parameter at all. That is the tell. A function that cannot allocate cannot give you fresh memory, so anything it returns must point into what you gave it.
 
+Two of them can appear on one declaration, and on append they do:
+
+```c
+BURROW_OWNS(ret) BURROW_BORROWS(ret, s)
+Slice slice_append(Alloc *a, Slice s, const void *elems, Int n);
+```
+
+That is not hedging. Append writes into the array it was given when there is spare capacity and allocates a bigger one when there is not, and from the outside you cannot tell which happened. So both are true and you have to act on both: keep `s` alive, because the result may be pointing at it, and free the result, because it may be memory of its own. If you are using an arena, which you probably are, this is one more thing you get to not think about.
+
 The annotations expand to nothing, and they are not decoration. The documentation generator turns them into the lifetime sentence on every reference page, so nobody writes those by hand and nobody gets them wrong in prose. The conformance suite generates an AddressSanitizer test per annotated function that frees the input and touches the output, and requires a report exactly when `BURROW_BORROWS` says the two alias, so a wrong annotation is a failing test rather than a comment somebody believed. And there is a clang plugin that reads them if you want the check in your own code.
+
+Inside burrow they are checked twice, because being present and being true are different problems. `tools/check-annotations.sh` runs in `make check` and refuses a declaration that returns a pointer and says nothing about it, or an annotation naming a parameter that does not exist. `tests/lifetime_test.c` runs the annotated functions under the tracking allocator and checks the claim itself: `BURROW_OWNS` has to make the live block count go up, `BURROW_BORROWS` and `BURROW_STATIC` have to leave it alone, and a borrow into a buffer has to land inside that buffer.
 
 ## Allocation failure
 
@@ -219,6 +233,7 @@ What it costs you is thinking about lifetimes, once, at the point where you deci
 ## See also
 
 - `include/burrow/mem.h` for the interface itself
+- `include/burrow/own.h` for the four annotations and what each one promises
 - `docs/design/05-memory.md` for why each decision went the way it did
 - `docs/guides/errors.md` for what happens to a failed allocation on its way back to you
 - `docs/guides/maps.md` for the one type that stores an allocator, and why

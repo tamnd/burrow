@@ -114,6 +114,7 @@ test: $(TEST_BINS)
 check:
 	@tools/check-banned.sh
 	@tools/check-headers.sh
+	@tools/check-annotations.sh
 	@$(MAKE) test
 
 install: $(LIB)

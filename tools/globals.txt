@@ -1,0 +1,41 @@
+# Every mutable global in burrow's own source, one per line.
+#
+# Reentrancy is a requirement, not a preference, so global mutable state is
+# enumerated rather than merely discouraged. This file is the enumeration, and
+# tools/check-globals.sh fails the build when the tree and this file disagree in
+# either direction: a global that is not listed here, or a line here whose global
+# no longer exists. A list that can rot is a list nobody trusts.
+#
+# Adding a global means adding a line, which means a reviewer sees it in the
+# diff and gets to ask the question. That is the entire point. The question is
+# not "is this convenient", it is "what happens when two threads reach it", and
+# the answer goes in the last column.
+#
+# Two kinds of line, tab separated.
+#
+#   category  <name>  <what it covers>
+#   global    <file>  <symbol>  <category>  <how it is synchronised>
+#
+# The categories come from docs/design/03-c-dialect.md section 5. Some of them
+# have no members yet because the code they belong to is not written, and they
+# are here so that the work has somewhere to go rather than somewhere to be
+# invented.
+
+category	scheduler	Ps, Ms, run queues, everything that is the runtime itself.
+category	netpoller	The epoll, kqueue or IOCP handle. One per process is correct.
+category	type-registry	Process wide type identity, which is what reflect needs.
+category	allocator	Allocator singletons and their per process state.
+category	time-zone-cache	LoadLocation's cache, which matches what Go does.
+category	signal-table	Signal disposition, because the OS has one per process.
+category	package-vars	os.Args, os.Stdout and the rest that Go exposes as package level variables.
+category	marker	An address that exists to be unique. Never read through, never written.
+category	fatal-handler	Where an unrecoverable runtime failure goes before the process ends.
+category	rand	The generator behind map iteration order and hash seeding.
+
+global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
+global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
+global	src/mem/heap.c	heap_singleton	allocator	Immutable except through mem_set_oom, which is documented as a decision the host makes once, before there is a second thread.
+global	src/mem/gc.c	gc_singleton	allocator	The same as heap_singleton. One collector in a process means one object.
+global	src/mem/gc.c	started	allocator	Written once by the first gc_allocator call, which the header requires to come from the main thread before any others exist.
+global	src/runtime/panic.c	fatal_handler	fatal-handler	Written once during startup and read on the way out. Becomes an atomic load when sync/atomic lands, which weakens the contract rather than changing any caller.
+global	src/runtime/rand.c	rand_state	rand	Thread local, which is what makes it lock free. A shared generator would be a place for two goroutines to contend over bits neither of them cares about.

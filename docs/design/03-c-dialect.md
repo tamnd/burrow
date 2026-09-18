@@ -167,20 +167,30 @@ Mitigations, all mandatory:
 ## 5. The global state list
 
 Reentrancy is a requirement, so global mutable state is enumerated,
-justified, and individually synchronised. There are exactly seven:
+justified, and individually synchronised. These are the categories, and
+nothing outside them is allowed:
 
 | State | Why unavoidable | Synchronisation |
 | --- | --- | --- |
 | The scheduler (Ps, Ms, run queues) | It is the runtime | Per-P locks + atomics, work-stealing protocol |
 | The netpoller (epoll/kqueue/IOCP handle) | One per process is correct | Internal lock; multiple instances supported for tests |
 | Type descriptor registry | `reflect` needs process-wide type identity | Write-once at init, then read-only; RW lock for dynamic registration |
-| Default allocator | Ergonomics layer only | Atomic pointer; settable once before first use |
+| Allocator singletons | `malloc` is a singleton and so is a collector | Written only by `mem_set_oom`, before the second thread |
 | `time` zone cache | `LoadLocation` caching, matches Go | Mutex-guarded map |
 | Signal disposition table | The OS has one per process | Matches `os/signal`'s design exactly |
 | `flag.CommandLine`, `os.Args`, `os.Stdout`… | Go exposes these as package-level vars | Public, documented, same caveats as Go |
+| Markers (`zerobase`, the tombstone) | An address has to come from somewhere | None needed; never written, never read through |
+| The fatal handler | Something has to run when the runtime gives up | Written once at startup, atomic load once `sync/atomic` exists |
+| The random generator | Map iteration order and hash seeding | Thread-local, which is what makes it lock free |
 
 Anything else that wants to be global is a design error. The test harness
 constructs fresh instances of the first four to run tests in parallel.
+
+This list is not prose. `tools/globals.txt` has one line per global with its
+category and how it is synchronised, and `tools/check-globals.sh` fails the
+build when the tree and that file disagree in either direction — a global that
+is not listed, or a line whose global no longer exists. The second direction is
+the one that matters, because a list that can rot is a list nobody reads.
 
 ## 6. Header discipline
 

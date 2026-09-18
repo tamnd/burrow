@@ -42,6 +42,9 @@ jobs:
       - name: Nothing ignores a failed allocation
         run: tools/check-alloc.sh
 
+      - name: Every mutable global is enumerated
+        run: tools/check-globals.sh
+
       # The version is pinned because clang-format changes its mind between
       # releases. Whatever ubuntu-latest happened to ship disagreed with what
       # contributors had installed about where the space goes in

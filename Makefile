@@ -127,6 +127,7 @@ check:
 	@tools/check-headers.sh
 	@tools/check-annotations.sh
 	@tools/check-alloc.sh
+	@tools/check-globals.sh
 	@$(MAKE) test
 
 install: $(LIB)

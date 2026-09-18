@@ -28,6 +28,7 @@ The recipe is the same every time.
 - No compiler warnings. The build is `-Wall -Wextra -Werror` plus about thirty more, on four compilers.
 - No allocation without an allocator parameter. `malloc`, `calloc`, `realloc` and `free` appear in exactly one file, which is the malloc backend.
 - No libc string functions. `strcpy`, `strcat`, `sprintf` and the rest of that family are banned outright, and the banned list is in `tools/check-banned`.
+- No mutable global that is not in `tools/globals.txt`, with its category and a line saying what happens when two threads reach it. The check is `tools/check-globals`, and it fails in both directions, so a line whose global has gone fails too. Adding a global is allowed. Adding one without a reviewer seeing it is not.
 - Clean under AddressSanitizer, UndefinedBehaviorSanitizer, MemorySanitizer, ThreadSanitizer and the tracking allocator.
 - Every public symbol maps back to a Go declaration in `$GOROOT/api`, checked by `tools/coverage`.
 - Formatted by clang-format 20.1.7, which is the version CI runs and the version `make fmt` should be run with. Get it with `pipx install clang-format==20.1.7` if the one on your machine is a different release. The versions disagree with each other about a few constructs, so a tree formatted by a newer one fails the gate on a correctly formatted file, and the only fix for that is for everybody to run the same one.

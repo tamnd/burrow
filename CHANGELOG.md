@@ -46,6 +46,14 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 - `gc_collect` is `runtime.GC`, and like `runtime.GC` it is almost always the wrong thing to call.
 - Nothing in burrow uses this backend and no test needs it, so the library still has no required dependency beyond libc. The tests for it run in both builds and were checked against Boehm 8.2 on Debian.
 
+### Global state
+
+- `tools/globals.txt` lists every mutable global in burrow's own source, one line each, with its category and how it is synchronised. `tools/check-globals.sh` runs in `make check` and in CI and fails when the tree and that list disagree.
+- It fails in both directions. A global that is not listed fails, which is the case everybody expects, and a line whose global no longer exists fails too, which is the one that matters, because a list that can rot is a list nobody reads.
+- What counts as mutable is the C rule rather than a guess. A const object is not mutable, a pointer to const is because the pointer can be repointed, and a pointer that is itself const is not.
+- Seven globals in the tree today: `zerobase` and the tracking allocator's tombstone, which are addresses that exist to be unique and are never written; the `heap` and `gc` allocator singletons and the collector's started flag; the runtime's fatal handler; and the thread local generator behind map iteration order.
+- Three of those categories were not in `docs/design/03-c-dialect.md` section 5, which said there were exactly seven categories and named a different set. The table now has the markers, the fatal handler and the generator in it, which is the checker doing its job on the first day it existed.
+
 ### Corrections
 
 - The note in v0.0.6 about how `utf8_valid_string` reads a machine word said it was built from separate byte loads and shifts. What shipped uses `memcpy`, for the reason now recorded in `docs/design/09-packages-pure.md`.

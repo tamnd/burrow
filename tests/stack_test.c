@@ -255,6 +255,12 @@ TEST(a_context_runs_on_a_stack_this_file_allocated) {
      * deliberately not the memory it runs on. burrow/context.h says so. And not
      * under a sanitizer, for the reason at the top of this file. */
     CHECK(sp_was_inside);
+#else
+    /* Worked out above and deliberately not checked here. Said out loud because
+     * a compiler that notices a variable which is written and never read is
+     * right to ask, and the answer is that the platform is the reason and not an
+     * oversight. */
+    (void)sp_was_inside;
 #endif
 
     burrow__context_free(&ran_here);

@@ -4,6 +4,20 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+### Scheduler
+
+- `burrow/sched.h` has the three structures Go's scheduler is made of. G is a goroutine, M is an operating system thread, P is a scheduling context that owns a run queue. The names are Go's and are kept letter for letter, because anybody who has read `runtime/proc.go` should be able to read this and anybody who has not should be able to go and read that.
+- `src/runtime/runq.c` has the queues. A runnable goroutine is in exactly one of three places: the `runnext` slot, which holds the one goroutine that was just made runnable and is about to be handed over to, the per P ring of 256, or the global queue for everything that overflows. The order is what keeps a channel handoff on one core and in one cache.
+- The ring is lock free, single producer at the tail and multiple consumer at the head. Adding work to your own queue is a load and a store with no atomic read modify write anywhere in it, which is the whole reason for the shape. The release store to the tail is what publishes a slot and the acquire load of it is what makes the contents visible.
+- The ring slots are relaxed atomics rather than plain pointers, which is the one place this differs from Go. The indices guarantee that the slot the owner writes is never the slot a thief reads at that instant, but a thief can be descheduled between working out which slots it wants and reading them, and the owner can go all the way round the ring in that time. The thief's compare and swap then fails and the value is thrown away, so nothing goes wrong, but the accesses really do overlap and in C that is undefined behaviour rather than a stale read. ThreadSanitizer found it. Relaxed costs nothing on any architecture burrow targets, since all the ordering lives on the tail and the head.
+- Work stealing takes half of a victim's queue, rounded up so that a queue holding one goroutine gives that one up instead of nothing. The goroutine the thief returns is the last of the batch and never becomes visible in the thief's own ring, so a steal does not push and pop anything for no reason.
+- A thief takes the victim's `runnext` only on the last pass of a search that has already failed everywhere else, because that goroutine is the one the victim is about to run and taking it is exactly the cache miss the slot exists to avoid. Go sleeps three microseconds before doing it and this yields instead, since there is no monotonic sleep here yet. That becomes the sleep when timers land.
+- `burrow__runq_put` hands back the goroutine that overflowed rather than leaving the caller to work it out, because when the put asked for the `runnext` slot the one that overflows is whatever came out of that slot and not the one that went in. Getting that backwards loses a goroutine and runs another one twice.
+- The tests run the goroutines standing still, which is the only way to find out whether stealing takes the half it says it takes. Two of them run three thieves against an owner and check that every goroutine came out exactly once, which a queue that duplicates one and drops another passes on counting alone and fails here.
+- Checked on macOS arm64, on Linux glibc and musl on both amd64 and arm64, on 32 bit x86, on eight real x86 cores with gcc 13 and clang 18, under AddressSanitizer, UndefinedBehaviorSanitizer, ThreadSanitizer and MemorySanitizer, and on Windows with mingw gcc 16.
+
 ## v0.0.9 (2026-09-19)
 
 Where a goroutine stack comes from. One mapping with an unreadable page underneath it, and a handler that turns a landing on that page into `fatal error: stack overflow` instead of a segmentation fault with nothing to go on. It is the last piece the scheduler needs before there is something to schedule.

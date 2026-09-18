@@ -14,14 +14,34 @@
  * cannot forget it, and the alloc_zeroed hook means the backends that already
  * know the memory is zero do not pay for it twice. */
 
+/* One place decides what happens when a backend says no, which is why the hook
+ * is on the interface and not on any backend. An allocator somebody wrote
+ * themselves gets the same treatment as the four in this tree, without knowing
+ * the hook exists.
+ *
+ * Once, not in a loop. A handler that answers true without having freed
+ * anything would spin here forever, and above one there is no number of
+ * attempts anybody can defend. */
+static bool oom_retry(Alloc *a, size_t size, size_t align) {
+    if (a->oom == NULL)
+        return false;
+    return a->oom(a->oom_ctx, size, align);
+}
+
 void *mem_alloc(Alloc *a, size_t size, size_t align) {
     if (a == NULL || a->vt == NULL)
         return NULL;
     if (size == 0)
         return NULL;
-    if (a->vt->alloc_zeroed != NULL)
-        return a->vt->alloc_zeroed(a->self, size, align);
+    if (a->vt->alloc_zeroed != NULL) {
+        void *z = a->vt->alloc_zeroed(a->self, size, align);
+        if (z == NULL && oom_retry(a, size, align))
+            z = a->vt->alloc_zeroed(a->self, size, align);
+        return z;
+    }
     void *p = a->vt->alloc(a->self, size, align);
+    if (p == NULL && oom_retry(a, size, align))
+        p = a->vt->alloc(a->self, size, align);
     if (p != NULL)
         memset(p, 0, size);
     return p;
@@ -32,7 +52,10 @@ void *mem_alloc_nozero(Alloc *a, size_t size, size_t align) {
         return NULL;
     if (size == 0)
         return NULL;
-    return a->vt->alloc(a->self, size, align);
+    void *p = a->vt->alloc(a->self, size, align);
+    if (p == NULL && oom_retry(a, size, align))
+        p = a->vt->alloc(a->self, size, align);
+    return p;
 }
 
 void *mem_alloc_array(Alloc *a, size_t n, size_t size, size_t align) {
@@ -51,6 +74,8 @@ void *mem_realloc(Alloc *a, void *p, size_t old, size_t nsz, size_t align) {
         return NULL;
     }
     void *q = a->vt->realloc(a->self, p, old, nsz, align);
+    if (q == NULL && oom_retry(a, nsz, align))
+        q = a->vt->realloc(a->self, p, old, nsz, align);
     /* Growing past the old size exposes memory the caller never wrote, and Go
      * would have zeroed it, so we do. Shrinking exposes nothing. */
     if (q != NULL && nsz > old)
@@ -79,4 +104,11 @@ AllocStats mem_stats(Alloc *a) {
     if (a == NULL || a->vt == NULL || a->vt->stats == NULL)
         return zero;
     return a->vt->stats(a->self);
+}
+
+void mem_set_oom(Alloc *a, OomFunc fn, void *ctx) {
+    if (a == NULL)
+        return;
+    a->oom = fn;
+    a->oom_ctx = ctx;
 }

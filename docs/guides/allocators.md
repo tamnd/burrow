@@ -204,19 +204,41 @@ Inside burrow they are checked twice, because being present and being true are d
 
 Inside burrow, a failed allocation becomes an `Error` that travels back up through the normal error return, the same as any other failure. Callers check errors and this is one more reason an error might be there.
 
-If you would rather crash than check, which is a reasonable choice for a command line tool, write six lines of wrapper around the allocator you are using and crash in its `alloc`. That is your decision to make and it stays in your code, which is exactly where it belongs.
+If you would rather do something else, there is a hook:
+
+```c
+static bool out_of_room(void *ctx, size_t size, size_t align) {
+    (void)align;
+    fprintf(stderr, "could not get %zu bytes\n", size);
+    return false;
+}
+
+mem_set_oom(a, out_of_room, NULL);
+```
+
+The handler is told what was asked for and answers whether it is worth asking again. Return false and the NULL goes back to the caller as it always did, which is what you want if all you meant to do was log it. Return true and the allocation is tried once more, which is what you want if you just freed something. Not returning at all is also fine, by `longjmp` back to a safe point or by ending the process, and that is your decision to make rather than this library's.
+
+Once, not in a loop. A handler that answers true without having freed anything would spin forever, and there is no number of retries above one that anybody can defend.
+
+It fires when an allocator refuses a request and at no other time. Asking for zero bytes is not a failure, and neither is an element count that overflows when it is multiplied by the element size, since no amount of free memory would have helped with that one.
+
+Two things to know before you reach for it. `heap_allocator()` hands back one shared object, so a handler set on it applies to everything in the process that allocates from the heap; every other backend is an object you made and the handler belongs to that object. And the hook is on the interface rather than on any backend, so it works just as well on an allocator you wrote yourself, which does not need to know the hook exists.
+
+Inside burrow, every allocation is checked. That is not a convention, it is `tools/check-alloc.sh`, which reads `src/` and fails the build on a result that is dropped, never tested against NULL, or dereferenced before the test.
 
 ## Writing your own
 
-An `Alloc` is a vtable and a receiver, which is the same shape as a Go interface value, and that is not an accident. Fill in the six slots, point `self` at your state, and hand it to anything in burrow:
+An `Alloc` starts with a vtable and a receiver, which is the same shape as a Go interface value, and that is not an accident. Fill in the six slots, point `self` at your state, and hand it to anything in burrow:
 
 ```c
 static const AllocVT my_vt = {
     my_alloc, NULL, my_realloc, my_free, NULL, NULL,
 };
 
-Alloc my_allocator = {&my_vt, &my_state};
+Alloc my_allocator = {.vt = &my_vt, .self = &my_state};
 ```
+
+Name the two fields. There are two more after them, for the out of memory handler above, and they are zero unless you set them. Writing `{&my_vt, &my_state}` means the same thing and gets you a `-Wextra` warning about the two you left out on purpose.
 
 Three of the six are optional. `alloc_zeroed` is how a backend says it can skip the memset, which an arena handing out untouched memory can and `malloc` cannot. `reset` is NULL for allocators that cannot give everything back at once. `stats` is NULL when you do not count.
 

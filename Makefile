@@ -115,6 +115,7 @@ check:
 	@tools/check-banned.sh
 	@tools/check-headers.sh
 	@tools/check-annotations.sh
+	@tools/check-alloc.sh
 	@$(MAKE) test
 
 install: $(LIB)

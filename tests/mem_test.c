@@ -336,6 +336,168 @@ TEST(fixed_handles_an_empty_buffer) {
     CHECK(mem_can_reset(a));
 }
 
+/* The out of memory handler.
+ *
+ * Everything here uses fixed, because it is the one backend where running out
+ * is a normal Tuesday rather than a machine in trouble, and because the size of
+ * the hole is decided by the test rather than by the host. */
+
+typedef struct OomSpy {
+    int calls;
+    size_t size;
+    size_t align;
+    bool answer;
+    Fixed *widen; /* reset this on the way through, if set */
+} OomSpy;
+
+static bool oom_spy(void *ctx, size_t size, size_t align) {
+    OomSpy *s = (OomSpy *)ctx;
+    s->calls++;
+    s->size = size;
+    s->align = align;
+    if (s->widen != NULL)
+        fixed_reset(s->widen);
+    return s->answer;
+}
+
+TEST(oom_handler_fires_and_is_told_what_was_asked_for) {
+    unsigned char buf[64];
+    Fixed fx;
+    fixed_init(&fx, buf, sizeof buf);
+    Alloc *a = fixed_allocator(&fx);
+
+    OomSpy spy = {0, 0, 0, false, NULL};
+    mem_set_oom(a, oom_spy, &spy);
+
+    CHECK(mem_alloc(a, 4096, 16) == NULL);
+    CHECK_INT_EQ(spy.calls, 1);
+    CHECK_INT_EQ(spy.size, 4096);
+    CHECK_INT_EQ(spy.align, 16);
+}
+
+TEST(oom_handler_saying_no_lets_the_null_through) {
+    unsigned char buf[64];
+    Fixed fx;
+    fixed_init(&fx, buf, sizeof buf);
+    Alloc *a = fixed_allocator(&fx);
+
+    OomSpy spy = {0, 0, 0, false, NULL};
+    mem_set_oom(a, oom_spy, &spy);
+
+    CHECK(mem_alloc(a, 4096, 1) == NULL);
+    CHECK(mem_alloc_nozero(a, 4096, 1) == NULL);
+    CHECK_INT_EQ(spy.calls, 2);
+}
+
+TEST(oom_handler_that_makes_room_gets_the_allocation_through) {
+    unsigned char buf[64];
+    Fixed fx;
+    fixed_init(&fx, buf, sizeof buf);
+    Alloc *a = fixed_allocator(&fx);
+
+    /* Fill it, so the next request has nowhere to go. */
+    CHECK(mem_alloc(a, 48, 1) != NULL);
+
+    OomSpy spy = {0, 0, 0, true, &fx};
+    mem_set_oom(a, oom_spy, &spy);
+
+    void *p = mem_alloc(a, 48, 1);
+    CHECK_INT_EQ(spy.calls, 1);
+    CHECK(p != NULL);
+    CHECK(all_zero(p, 48));
+}
+
+TEST(oom_handler_is_asked_once_and_not_in_a_loop) {
+    unsigned char buf[64];
+    Fixed fx;
+    fixed_init(&fx, buf, sizeof buf);
+    Alloc *a = fixed_allocator(&fx);
+
+    /* Answers yes every time and frees nothing, which is the handler that would
+     * hang the program if the retry were a loop. */
+    OomSpy spy = {0, 0, 0, true, NULL};
+    mem_set_oom(a, oom_spy, &spy);
+
+    CHECK(mem_alloc(a, 4096, 1) == NULL);
+    CHECK_INT_EQ(spy.calls, 1);
+}
+
+TEST(oom_handler_ignores_requests_no_allocator_could_have_met) {
+    unsigned char buf[64];
+    Fixed fx;
+    fixed_init(&fx, buf, sizeof buf);
+    Alloc *a = fixed_allocator(&fx);
+
+    OomSpy spy = {0, 0, 0, false, NULL};
+    mem_set_oom(a, oom_spy, &spy);
+
+    /* Nothing was asked for, so nothing was refused. */
+    CHECK(mem_alloc(a, 0, 1) == NULL);
+
+    /* The element count times the element size does not fit in a size_t, so
+     * there is no amount of free memory that would have helped. */
+    CHECK(mem_alloc_array(a, SIZE_MAX, 2, 1) == NULL);
+
+    CHECK_INT_EQ(spy.calls, 0);
+}
+
+TEST(oom_handler_covers_realloc) {
+    unsigned char buf[64];
+    Fixed fx;
+    fixed_init(&fx, buf, sizeof buf);
+    Alloc *a = fixed_allocator(&fx);
+
+    void *p = mem_alloc(a, 16, 1);
+    CHECK(p != NULL);
+
+    OomSpy spy = {0, 0, 0, false, NULL};
+    mem_set_oom(a, oom_spy, &spy);
+
+    CHECK(mem_realloc(a, p, 16, 4096, 1) == NULL);
+    CHECK_INT_EQ(spy.calls, 1);
+    CHECK_INT_EQ(spy.size, 4096);
+}
+
+TEST(oom_handler_can_be_removed_and_belongs_to_one_allocator) {
+    unsigned char buf_a[64];
+    unsigned char buf_b[64];
+    Fixed fa;
+    Fixed fb;
+    fixed_init(&fa, buf_a, sizeof buf_a);
+    fixed_init(&fb, buf_b, sizeof buf_b);
+
+    OomSpy spy = {0, 0, 0, false, NULL};
+    mem_set_oom(fixed_allocator(&fa), oom_spy, &spy);
+
+    /* The other allocator never heard of it. */
+    CHECK(mem_alloc(fixed_allocator(&fb), 4096, 1) == NULL);
+    CHECK_INT_EQ(spy.calls, 0);
+
+    CHECK(mem_alloc(fixed_allocator(&fa), 4096, 1) == NULL);
+    CHECK_INT_EQ(spy.calls, 1);
+
+    mem_set_oom(fixed_allocator(&fa), NULL, NULL);
+    CHECK(mem_alloc(fixed_allocator(&fa), 4096, 1) == NULL);
+    CHECK_INT_EQ(spy.calls, 1);
+}
+
+/* An allocator with no handler behaves the way it always did, which is the
+ * thing that must not have changed. */
+TEST(oom_without_a_handler_is_still_just_null) {
+    unsigned char buf[64];
+    Fixed fx;
+    fixed_init(&fx, buf, sizeof buf);
+    Alloc *a = fixed_allocator(&fx);
+
+    CHECK(mem_alloc(a, 4096, 1) == NULL);
+    CHECK(mem_alloc_nozero(a, 4096, 1) == NULL);
+    CHECK(mem_alloc_array(a, 4096, 4, 1) == NULL);
+
+    /* And setting one on nothing is not a crash, since every other entry point
+     * in this header takes a NULL allocator without complaint. */
+    mem_set_oom(NULL, oom_spy, &fx);
+}
+
 int main(void) {
     RUN(interface_rejects_nonsense);
     RUN(interface_zeroes);
@@ -351,5 +513,13 @@ int main(void) {
     RUN(arena_free_is_safe_twice_and_when_unused);
     RUN(fixed_stays_inside_the_budget);
     RUN(fixed_handles_an_empty_buffer);
+    RUN(oom_handler_fires_and_is_told_what_was_asked_for);
+    RUN(oom_handler_saying_no_lets_the_null_through);
+    RUN(oom_handler_that_makes_room_gets_the_allocation_through);
+    RUN(oom_handler_is_asked_once_and_not_in_a_loop);
+    RUN(oom_handler_ignores_requests_no_allocator_could_have_met);
+    RUN(oom_handler_covers_realloc);
+    RUN(oom_handler_can_be_removed_and_belongs_to_one_allocator);
+    RUN(oom_without_a_handler_is_still_just_null);
     return harness_report("mem");
 }

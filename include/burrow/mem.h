@@ -77,12 +77,37 @@ typedef struct AllocStats {
 
 typedef struct AllocVT AllocVT;
 
-/* Deliberately the same shape as an interface value, a vtable and a receiver,
- * so that writing your own allocator needs no machinery this library has to
- * know about. Fill in a vtable, point self at your state, pass it in. */
+/* What to do when an allocation from this allocator could not be satisfied.
+ *
+ * size and align are what was asked for, and ctx is whatever you passed to
+ * mem_set_oom. Return true to have the allocation tried once more, which is for
+ * a handler that just made room, and false to let the NULL through to the
+ * caller. A handler is also free not to return at all, by longjmp or by ending
+ * the process, and that is the host's decision to make rather than this
+ * library's. */
+typedef bool (*OomFunc)(void *ctx, size_t size, size_t align);
+
+/* The first two fields are an interface value, a vtable and a receiver, so that
+ * writing your own allocator needs no machinery this library has to know about.
+ * Fill in a vtable, point self at your state, pass it in.
+ *
+ *     Alloc a = {.vt = &my_vt, .self = &my_state};
+ *
+ * still does the whole job. The two fields after it are policy rather than
+ * dispatch, they are zero unless you ask for them, and mem_set_oom is how you
+ * ask. They live here instead of in the vtable because a vtable is shared by
+ * every allocator using it and an out of memory handler is a decision about one
+ * allocator.
+ *
+ * Name the fields as above rather than writing {&my_vt, &my_state}, which is
+ * the same thing and which -Wextra will tell you is missing two initialisers
+ * that you did in fact mean to leave zero. */
 typedef struct Alloc {
     const AllocVT *vt;
     void *self;
+
+    OomFunc oom;
+    void *oom_ctx;
 } Alloc;
 
 struct AllocVT {
@@ -136,6 +161,26 @@ void mem_reset(Alloc *a);
 bool mem_can_reset(Alloc *a);
 
 AllocStats mem_stats(Alloc *a);
+
+/* Installs the out of memory handler for one allocator. fn may be NULL, which
+ * removes whatever was there.
+ *
+ * This is where the whole failure policy ends up for anybody who wants to do
+ * something other than propagate a NULL. burrow itself never calls exit and
+ * never calls abort, because a library that ends the host's process is not a
+ * library you can embed, so a failed allocation comes back as NULL and turns
+ * into burrow_err_out_of_memory at the first function that returns an Error.
+ * If you would rather it did not get that far, this is the hook.
+ *
+ * It fires for a request the allocator refused and for nothing else. A zero
+ * sized request is not a failure and neither is an element count that overflows
+ * when multiplied by the element size, because no allocator on earth could have
+ * satisfied that one.
+ *
+ * The heap allocator is a single shared object, so setting a handler on it sets
+ * it for everything in the process that allocates from the heap. Every other
+ * backend is an object you made and the handler belongs to that object. */
+void mem_set_oom(Alloc *a, OomFunc fn, void *ctx);
 
 /* The declarations above and everywhere else in burrow carry BURROW_OWNS,
  * BURROW_BORROWS, BURROW_STATIC and BURROW_RETAINS. Those say whether a result

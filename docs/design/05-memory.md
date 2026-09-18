@@ -351,21 +351,58 @@ in production Go services.
 `alloc` can return `NULL`, and on a fixed allocator it routinely will. The
 policy, uniform across the library:
 
-1. **Library internals check every allocation.** No exceptions, enforced by a
-   CI checker that flags an unchecked `->alloc(` result.
-2. **Allocation failure surfaces as `err_out_of_memory`** through the normal
-   error return, in any function that returns an `error`.
+1. **Library internals check every allocation.** No exceptions, enforced by
+   `tools/check-alloc.sh` rather than by discipline.
+2. **Allocation failure surfaces as `burrow_err_out_of_memory`** through the
+   normal error return, in any function that returns an `Error`.
 3. **In functions with no error return** — and Go has plenty, e.g.
    `strings.ToUpper` — failure raises a panic
-   (`panic(err_out_of_memory)`), which is recoverable and which unwinds the
-   defer chain. This matches Go's behaviour for out-of-memory, which is also a
-   non-returnable condition, and it means `strings_to_upper`'s signature does
+   (`panic(burrow_err_out_of_memory)`), which is recoverable and which unwinds
+   the defer chain. This matches Go's behaviour for out-of-memory, which is also
+   a non-returnable condition, and it means `strings_to_upper`'s signature does
    not have to grow an error parameter for a condition that essentially never
-   happens on a hosted platform.
+   happens on a hosted platform. This one waits on the runtime, since there is
+   no panic to raise yet.
 4. **A per-allocator OOM hook** lets fixed-pool users handle it without
    panicking.
 5. **Never abort, never `exit`.** A library that kills the host process is not
-   embeddable.
+   embeddable. `tools/check-banned.sh` is what makes that true rather than
+   intended.
+
+### The hook
+
+```c
+typedef bool (*OomFunc)(void *ctx, size_t size, size_t align);
+
+void mem_set_oom(Alloc *a, OomFunc fn, void *ctx);
+```
+
+The handler is told what was asked for and answers whether it is worth asking
+again. Returning true retries the allocation once, which is the answer for a
+handler that just made room. Returning false lets the `NULL` through to the
+caller, which is the answer for a handler that only wanted to log it. Not
+returning at all is also allowed, by `longjmp` or by ending the process, and
+that is the host's decision rather than this library's.
+
+Once, not in a loop. A handler that answers true without having freed anything
+would spin forever, and above one there is no number of attempts anybody can
+defend.
+
+The two fields live on `Alloc` rather than on `AllocVT` because a vtable is
+shared by every allocator using it and this is a decision about one allocator.
+That grows `Alloc` from two words to four, which is the one visible cost, and it
+buys a hook that works on an allocator somebody else wrote without that
+allocator knowing the hook exists. `mem_alloc` is the only funnel, so there is
+exactly one place where a refusal is noticed.
+
+It fires for a request an allocator refused and for nothing else. A zero sized
+request is not a failure, and neither is an element count that overflows when
+multiplied by the element size, because no amount of free memory would have
+satisfied that one.
+
+`heap_allocator()` hands back a single shared object, so a handler set on it is
+set for everything in the process that allocates from the heap. Every other
+backend is an object you made, and the handler belongs to that object.
 
 ## 8. What Go's GC does that we must explicitly replace
 

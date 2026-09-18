@@ -27,6 +27,14 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 - `tests/lifetime_test.c` checks the annotations are true rather than merely present, which needs the memory to exist and so could not be done before the tracking allocator landed. `BURROW_OWNS` has to make the live block count go up, `BURROW_BORROWS` and `BURROW_STATIC` have to leave it alone, and a borrow into a buffer has to land inside that buffer.
 - The four macros are `AttributeMacros` in `.clang-format`, so the formatter stops breaking a declaration in the middle of its return type.
 
+### Out of memory
+
+- `mem_set_oom` installs a handler on one allocator, which is told the size and alignment that was refused and answers whether the allocation is worth trying again. True retries it once, false lets the NULL through as before, and a handler is also free not to return at all, by `longjmp` or by ending the process. Once rather than in a loop, because a handler that says true without having freed anything would otherwise spin forever.
+- The handler lives on `Alloc` rather than on `AllocVT`, since a vtable is shared by every allocator using it and this is a decision about one allocator. That makes `Alloc` four words instead of two and means the hook works on an allocator somebody else wrote, without that allocator knowing the hook exists. Write `Alloc a = {.vt = &my_vt, .self = &my_state}` and name the fields, or `-Wextra` will point out the two you meant to leave zero.
+- The handler fires for a request an allocator refused and for nothing else. A zero sized request is not a failure and neither is an element count that overflows when multiplied by the element size, since no amount of free memory would have satisfied that one.
+- `tools/check-alloc.sh` reads `src/` and fails the build on an allocation whose result is dropped, never tested against NULL, or dereferenced before the test. It runs in `make check` and in CI, as does `tools/check-annotations.sh`, which was only in `make check` before this.
+- `docs/design/05-memory.md` section 7 and `docs/guides/allocators.md` describe the policy as it now is rather than as it was planned. The one part still outstanding is raising a panic from functions with no error return, which waits on the runtime because there is no panic to raise yet.
+
 ### Corrections
 
 - The note in v0.0.6 about how `utf8_valid_string` reads a machine word said it was built from separate byte loads and shifts. What shipped uses `memcpy`, for the reason now recorded in `docs/design/09-packages-pure.md`.

@@ -119,7 +119,7 @@ static const AllocVT heap_vt = {
     heap_alloc, heap_alloc_zeroed, heap_realloc, heap_free, NULL, NULL,
 };
 
-static Alloc heap_singleton = {&heap_vt, NULL};
+static Alloc heap_singleton = {.vt = &heap_vt, .self = NULL};
 
 Alloc *heap_allocator(void) {
     return &heap_singleton;

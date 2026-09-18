@@ -282,9 +282,10 @@ Headers mirror Go's import paths exactly, so translation is textual:
 ```
 include/burrow/
   platform.h          detected platform macros
-  core.h              Str, Slice, Any, Error, Int
+  core.h              Str, Any, Error, Int
   mem.h               Alloc, and mem/arena.h mem/heap.h … per backend
   type.h              Type, BURROW_STRUCT and friends
+  slice.h             Slice, BURROW_AT, BURROW_APPEND
   runtime.h           go, Chan, chan_select, BURROW_DEFER
   all.h               everything, for the impatient
   strings.h  bytes.h  strconv.h  …                        (one per package)
@@ -292,8 +293,10 @@ include/burrow/
   encoding/json.h  …
 ```
 
-`core.h` + `mem.h` + `type.h` + `runtime.h` are the substrate and are always
-present. Every package header includes exactly what it needs and nothing more.
+`core.h` + `mem.h` + `type.h` + `slice.h` + `runtime.h` are the substrate and
+are always present. They go in that order, because a Slice points at a Type and
+a Type holds a Str, and a header cannot come before the one it needs. Every
+package header includes exactly what it needs and nothing more.
 
 Rules from [03](03-c-dialect.md) §6 apply: self-contained, idempotent, no
 platform headers leaked, no unprefixed macros, `extern "C"` guarded.

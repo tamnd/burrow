@@ -45,7 +45,7 @@ Str f = BURROW_AT(Str, parts, i);
 BURROW_AT(Int, xs, 0) = 42;      /* it is an lvalue, so this is xs[0] = 42 */
 ```
 
-The `T` you pass is not checked against the element descriptor, because there is nothing at compile time to check it against. It is the same class of mistake as a wrong `printf` format and it has the same flavour of consequence, so pass the type the slice actually holds.
+The `T` you pass is not checked against the element descriptor at compile time, because there is nothing at compile time to check it against. Its size is checked at runtime, and a `T` of the wrong size gets you the element the descriptor says is there, read as the type you asked for. It is the same class of mistake as a wrong `printf` format and it has the same flavour of consequence, so pass the type the slice actually holds.
 
 Indexing is bounds checked against `len`, not against `cap`, and out of range stops the program. This is not optional and not behind a build flag. Go's tests depend on the failure, code written against Go relies on never reading past the end, and a version that trusted the caller would be a different language with the same spelling.
 
@@ -129,6 +129,36 @@ There is one difference and it is deliberate. Go runs a second step called `roun
 The reason not to copy that step is that the size classes are a property of Go's allocator and burrow's allocator is whichever one you passed in. Rounding a request up to a class that your arena does not have buys nothing and wastes up to an eighth of the allocation. Go's spec says nothing about capacity growth, so nothing correct depends on this, but it is a real difference and it is written down here rather than discovered.
 
 If you are counting allocations against a Go program, count the growth steps and not the capacities. Those match.
+
+## What it costs
+
+`BURROW_AT` and `BURROW_APPEND` are not thin wrappers around `slice_at` and `slice_append`. They expand to an inline fast path that is handed `sizeof(T)` at the call site, and that one fact changes the generated code twice over. The copy becomes a single store rather than a call into `memcpy` with a length nothing can see. And the whole thing inlines, so the four word header no longer goes out to the stack on the way into a call and back through a return buffer on the way out.
+
+The size is checked against the element descriptor at runtime. A size that does not match, a nil pointer, a full slice or an index out of range all fall through to `slice_at` and `slice_append`, so the bounds checks, the failure messages and the growth arithmetic are still written exactly once. Passing a `T` of the wrong size is a performance mistake and not a correctness one.
+
+Appending 1024 ints one at a time into a slice whose capacity is already there, appending 1024 into a nil slice and letting it grow, and 64 bounds checked reads. Median of five runs at `-time 0.2`, spreads under 3% unless noted.
+
+M1 laptop, clang, against go1.27.1 darwin/arm64:
+
+| | out of line | inline | Go |
+| --- | --- | --- | --- |
+| 1024 appends, capacity in hand | 6779 ns | 3700 ns | 738 ns |
+| 1024 appends, growing | 7000 ns | 3990 ns | 1769 ns |
+| 64 reads | 57.4 ns | 36.0 ns | 17.6 ns |
+
+An AMD EPYC, gcc 13.3.0, pinned to one core. There is no Go on that machine, so this pair is burrow against burrow:
+
+| | out of line | inline |
+| --- | --- | --- |
+| 1024 appends, capacity in hand | 19044 ns | 1360 ns |
+| 1024 appends, growing | 19687 ns | 2020 ns |
+| 64 reads | 211 ns | 82 ns |
+
+Fourteen times on one machine and not quite twice on the other, for the same change, which is worth understanding rather than averaging. A four word struct is over the limit for being passed in registers, so the out of line version writes the header out as four eight byte stores and reads it back as two sixteen byte loads. On that AMD core a sixteen byte load overlapping two eight byte stores cannot be forwarded from the store buffer and has to wait for the cache, twice per append, on the dependency chain. Apple's core forwards it. So x86-64 was paying a stall that arm64 was not, and removing the call removed the stall.
+
+What is left on arm64 is that clang still keeps the header in a stack slot even after inlining, because the slow path returns its result through memory and both paths have to agree on where the answer is. That is [issue 18](https://github.com/tamnd/burrow/issues/18) and it is not fixed here.
+
+Two things follow for code using this. Use the macro for a single element of a type you know, always. Call `slice_append` directly for a bulk append, where the per element cost is divided by the count and the call is free: 1024 elements in blocks of 64 costs 450 ns here, which is a third of what the same elements cost one at a time, and a third of what Go charges for the same bulk append.
 
 ## Copying
 

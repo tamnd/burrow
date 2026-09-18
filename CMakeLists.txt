@@ -91,6 +91,14 @@ if(BURROW_BUILD_TESTS)
     file(GLOB BURROW_TEST_SOURCES CONFIGURE_DEPENDS tests/*_test.c)
     foreach(test_source ${BURROW_TEST_SOURCES})
         get_filename_component(test_name ${test_source} NAME_WE)
+        # MSVC keeps C11 atomics behind /experimental:c11atomics, so including
+        # <stdatomic.h> without it is a hard error. The C11 backend is never the
+        # one MSVC picks and this test exists only to force it, so there is
+        # nothing here worth an experimental compiler switch. Every other
+        # platform builds and runs it.
+        if(MSVC AND test_name STREQUAL "atomic_c11_test")
+            continue()
+        endif()
         add_executable(${test_name} ${test_source})
         target_link_libraries(${test_name} PRIVATE burrow)
         target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)

@@ -20,8 +20,11 @@
  * ordinary objects and are the reason a caller can hand us a plain uint32_t *
  * instead of a wrapper struct. MSVC gets Interlocked and the __iso_volatile
  * loads and stores, because it has no _Atomic. Anything else falls back to
- * <stdatomic.h> through a cast, which is the path nothing in CI exercises and
- * the one to be suspicious of.
+ * <stdatomic.h> through a cast. Nothing in CI selects that last one on its own,
+ * so it is forced and run on every platform that can compile it, which is all
+ * of them except MSVC. MSVC keeps C11 atomics behind /experimental:c11atomics
+ * and including <stdatomic.h> without that switch is a hard error, so the
+ * forced build is skipped there rather than turning an experimental flag on.
  *
  * Where 64 bit atomics are not lock free, which here means every 32 bit
  * machine, the u64 operations go through a table of spin locks keyed on the
@@ -50,7 +53,8 @@ extern "C" {
 
 /* Set BURROW_ATOMIC_BACKEND_C11 to 1 to force the last resort path. It exists
  * so the fallback can be compiled and run somewhere, since a backend nothing
- * builds is a backend that is already broken. */
+ * builds is a backend that is already broken. On MSVC it needs
+ * /experimental:c11atomics as well, or <stdatomic.h> refuses to compile. */
 #if defined(BURROW_ATOMIC_BACKEND_C11) && BURROW_ATOMIC_BACKEND_C11
 #define BURROW__ATOMIC_C11 1
 #elif BURROW_CC_MSVC

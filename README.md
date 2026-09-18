@@ -102,6 +102,20 @@ A descriptor is a `const Type` in read only memory, one per type, shared by ever
 
 Details: [docs/guides/types.md](docs/guides/types.md).
 
+## Slices
+
+A pointer, a length, a capacity, and the element's type descriptor. Go's header is three words and this one is four, and the fourth is what buys you one `append` that works for every element type without templates.
+
+```c
+Slice xs = slice_make(a, TYPE_INT, 0, 16);
+xs = APPEND(Int, a, xs, 42);
+Int v = AT(Int, xs, 0);
+```
+
+Append matches Go exactly, including the part people rely on without being able to state it: when the capacity is already there the elements go into the existing backing array and every other slice over that array sees them. The growth progression is Go's `nextslicecap`, so a program tuned against Go's allocation count gets the same one here.
+
+Details, including the one place the capacity numbers differ from Go's and why: [docs/guides/slices.md](docs/guides/slices.md).
+
 ## Status
 
 Early. Nothing is usable yet.

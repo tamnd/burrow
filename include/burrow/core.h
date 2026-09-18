@@ -168,10 +168,149 @@ bool str_is_empty(Str s);
  * internally and it is not cheating. */
 Byte str_at(Str s, Int i);
 
+/* -------------------------------------------------------------- slices
+ *
+ * A pointer, a length, a capacity, and the element's type descriptor.
+ *
+ * Go's header is three words and this one is four. The fourth is what buys the
+ * whole thing: with the element descriptor in hand, one implementation of
+ * append works for every element type, and reflect, fmt and encoding/json can
+ * see into a slice nobody told them about. C has no templates, so the choice is
+ * between carrying a descriptor pointer and generating a slice type per element
+ * with a macro, and the macro version cannot be passed to a function that does
+ * not already know the element type. It is one word, it points at a static
+ * object, and it costs nothing to initialise.
+ *
+ * The fields are public because Go's len and cap are not function calls either
+ * and because half the loops in the library are `for (Int i = 0; i < s.len;
+ * i++)`. Read them freely. Write them only if you are certain, since nothing
+ * checks that len is within cap after you have done it. */
+
+typedef struct Type Type;
+
+typedef struct Slice {
+    void *p;
+    Int len;
+    Int cap;
+    const Type *elem;
+} Slice;
+
+/* make([]T, len, cap), zeroed, because Go's zero value rule is the language
+ * and not a convention.
+ *
+ * Passing cap < 0, len < 0 or len > cap is a fatal error carrying the text Go
+ * panics with, since none of those is a condition a caller can sensibly handle
+ * and all of them mean the arithmetic that produced them was wrong.
+ *
+ * A failed allocation gives you the nil slice for elem, the same way str_clone
+ * gives you the empty string, because a Slice has no spare value to signal with
+ * and the alternative is a second out parameter on the most common call in the
+ * library. Check `p == NULL && cap > 0` if you need to tell that apart. */
+BURROW_OWNS(ret) Slice slice_make(Alloc *a, const Type *elem, Int len, Int cap);
+
+/* The nil slice of a given element type.
+ *
+ * Go keeps nil and empty distinct and the difference is observable: a nil slice
+ * marshals to null and an empty one to [], and that shows up in the output of
+ * every program that encodes JSON. So a zeroed Slice with an element type is
+ * nil, and a zero length slice with a real pointer is empty, exactly as in Go. */
+Slice slice_nil(const Type *elem);
+bool slice_is_nil(Slice s);
+
+/* A slice over memory you already have, which does not copy and does not take
+ * ownership. The result lives exactly as long as p does. This is the bridge
+ * from a C array, and it is also how you hand burrow a stack buffer. */
+BURROW_BORROWS(ret, p) Slice slice_from(void *p, Int len, Int cap, const Type *elem);
+
+/* Go's s[i], bounds checked against len and not against cap, returning a
+ * pointer to the element rather than the element, because C cannot return a
+ * value whose type is only known at runtime. Use BURROW_AT to get the value.
+ *
+ * Out of range stops the program with the message Go prints. That is not
+ * optional and not behind a build flag, for the reasons written out over
+ * str_at. */
+BURROW_BORROWS(ret, s) void *slice_at(Slice s, Int i);
+
+/* s[lo:hi] and s[lo:hi:max].
+ *
+ * The bounds are Go's: 0 <= lo <= hi <= cap for the two index form, and
+ * 0 <= lo <= hi <= max <= cap for the three index one. Note that both are
+ * checked against cap rather than len, which surprises people the first time
+ * they reslice past the length on purpose and is exactly what Go does.
+ *
+ * Neither copies. The result points into the same backing array, so writing
+ * through it is visible through the original, which is the entire reason
+ * slicing is cheap. */
+BURROW_BORROWS(ret, s) Slice slice_sub(Slice s, Int lo, Int hi);
+BURROW_BORROWS(ret, s) Slice slice_sub3(Slice s, Int lo, Int hi, Int max);
+
+/* append(s, elems...), with Go's semantics including the part people trip on.
+ *
+ * When cap is big enough the elements are written into the existing backing
+ * array and the returned header shares it with s. Anything else holding a
+ * slice of that array sees the new elements. When cap is not big enough a new
+ * array is allocated and the old one is left alone, so the same two slices now
+ * disagree. Go behaves this way, Go's tests depend on it, and code ported from
+ * Go would break if we quietly always copied.
+ *
+ * elems points at n contiguous elements of s.elem's type. It may point into s
+ * itself, which is append(s, s...) and which works here for the same reason it
+ * works in Go: the copy happens after the allocation.
+ *
+ * n <= 0 returns s unchanged, which is append(s) with nothing to add. */
+BURROW_OWNS(ret) Slice slice_append(Alloc *a, Slice s, const void *elems, Int n);
+
+/* append(dst, src...). The element sizes have to match. */
+BURROW_OWNS(ret) Slice slice_append_slice(Alloc *a, Slice dst, Slice src);
+
+/* copy(dst, src), returning the number of elements copied, which is the
+ * smaller of the two lengths. Overlapping is fine and is what Go's copy
+ * promises, so this is a memmove and not a memcpy. */
+Int slice_copy(Slice dst, Slice src);
+
+/* copy(dst, src) where src is a string, which Go allows for a []byte
+ * destination and which turns up in every buffer implementation there is. */
+Int slice_copy_str(Slice dst, Str src);
+
+/* []byte(s) and string(b), both of which copy in Go and both of which copy
+ * here. The result of the first has TYPE_BYTE as its element type.
+ *
+ * Neither borrows. If you want the cheap version, s.p and s.len are right
+ * there and you already know whether the lifetime works out. */
+BURROW_OWNS(ret) Slice slice_from_str(Alloc *a, Str s);
+BURROW_OWNS(ret) Str str_from_slice(Alloc *a, Slice s);
+
+/* Typed access, which is where the static typing C does have comes back.
+ *
+ *     Slice parts = strings_split(a, line, BURROW_S(","));
+ *     for (Int i = 0; i < parts.len; i++) {
+ *         Str f = BURROW_AT(Str, parts, i);
+ *     }
+ *
+ * BURROW_AT gives an lvalue, so assigning through it is s[i] = v:
+ *
+ *     BURROW_AT(Int, xs, 0) = 42;
+ *
+ * The T you pass is not checked against the slice's element descriptor, because
+ * there is nothing at compile time to check it against. Getting it wrong is the
+ * same mistake as getting a printf format wrong and it has the same flavour of
+ * consequence, so pass the type the slice actually holds. */
+#define BURROW_AT(T, s, i) (*(T *)slice_at((s), (i)))
+
+/* append(s, v) for a single value, without the temporary:
+ *
+ *     xs = BURROW_APPEND(Int, a, xs, 42);
+ *
+ * The compound literal lives until the end of the enclosing block, which
+ * outlasts the call, so there is nothing dangling here. */
+#define BURROW_APPEND(T, a, s, v) slice_append((a), (s), (const T[]){(v)}, 1)
+
 #if defined(BURROW_SHORT) && BURROW_SHORT
 #define S(lit) BURROW_S(lit)
 #define STR_FMT BURROW_STR_FMT
 #define STR_ARG(s) BURROW_STR_ARG(s)
+#define AT(T, s, i) BURROW_AT(T, s, i)
+#define APPEND(T, a, s, v) BURROW_APPEND(T, a, s, v)
 #endif
 
 #ifdef __cplusplus

@@ -39,6 +39,12 @@ global	src/mem/heap.c	heap_singleton	allocator	Immutable except through mem_set_
 global	src/mem/gc.c	gc_singleton	allocator	The same as heap_singleton. One collector in a process means one object.
 global	src/mem/gc.c	started	allocator	Written once by the first gc_allocator call, which the header requires to come from the main thread before any others exist.
 global	src/runtime/context.c	resuming	scheduler	Thread local, and it only exists on the ucontext path. Written by a switch and read by the trampoline on the other side of that same switch, on the same thread, with nothing in between.
+global	src/runtime/stack.c	armed	signal-table	Three states and a compare and swap between them. The thread that wins installs the handlers and publishes the done state with a release, and the threads that lose spin on an acquire load rather than answering yes while the handler is still not there.
+global	src/runtime/stack.c	current	scheduler	Thread local. Written by whoever switched to this stack and read by the fault handler on the same thread, which is the one place a signal handler is allowed to look at.
+global	src/runtime/stack.c	prev_bus	signal-table	Written once by the thread that wins the arm, before that thread publishes the done state, and read only from a handler that cannot run until after it. The signal disposition is per process because the operating system says so.
+global	src/runtime/stack.c	prev_segv	signal-table	The same as prev_bus, for the other signal.
+global	src/runtime/stack.c	signal_stack	scheduler	Thread local, and only ever touched by the thread it belongs to. It is the mapping sigaltstack was given, kept so that disarming can give it back.
+global	src/runtime/stack.c	veh	signal-table	Windows only. The handle from AddVectoredExceptionHandler, kept so that a second arm can tell it has already happened.
 global	src/runtime/panic.c	fatal_handler	fatal-handler	Written once during startup and read on the way out. Becomes an atomic load when sync/atomic lands, which weakens the contract rather than changing any caller.
 global	src/runtime/rand.c	rand_state	rand	Thread local, which is what makes it lock free. A shared generator would be a place for two goroutines to contend over bits neither of them cares about.
 global	src/runtime/atomic64.c	locks	atomic-lock-table	This is the synchronisation. A table of spin locks, one taken for the duration of each 64 bit operation, chosen by hashing the address so that unrelated counters rarely meet.

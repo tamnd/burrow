@@ -138,14 +138,12 @@ Two details that are easy to get wrong and expensive to discover late:
   stack rather than reading whatever the buffer held before. Win64 also needs a
   registered dynamic function table, which comes with the Win64 assembly.
 
-Two more that are not done and are written down so they do not get lost. The
+One more that is not done and is written down so it does not get lost. The
 sanitizers are not told about the switch: ASan and TSan both have calls for it
 and without them a sanitizer believes a thread is still on the stack it was on
 before. The suite passes under both today, including with ASan's fake stacks
-turned on, so this is missing rather than broken. And stacks have no guard
-pages, so an overflow today runs off the end of the buffer instead of hitting a
-page that faults. That one arrives with stack allocation, which is the next
-piece of work.
+turned on, so this is missing rather than broken. Guard pages were on this list
+and are now in `burrow/stack.h`, which §4 describes.
 
 The performance target is libmill's, which sets the bar for whether Go-style
 code feels natural in C: **≥10 M goroutine launches/sec and ≥20 M context
@@ -226,6 +224,41 @@ prominently rather than discovered.
 All library code obeys the no-VLA, no-`alloca`, bounded-recursion rules from
 [03](03-c-dialect.md) §3 precisely so that the default 256 KB is comfortably
 sufficient for everything `burrow` itself does.
+
+### What exists
+
+`burrow/stack.h` is the first half of the above: the mapping, the guard and the
+conversion of a fault on the guard into `fatal error: stack overflow`. The
+per-goroutine size, the segmented option and the 32-bit default arrive with the
+scheduler, since there is nothing yet to configure them on.
+
+A stack is one anonymous mapping of the guard and the usable part together, so
+they are next to each other by construction rather than by luck, with the guard
+`mprotect`ed to `PROT_NONE` on POSIX and left reserved but uncommitted on
+Windows. Reserved and uncommitted is the same fault for no commit charge, which
+is the cheaper of the two ways to spell it there. The struct is `lo`, `hi` and
+the guard size, nothing is derived from anything else, and all zeroes is both a
+stack that was never allocated and one that has been freed, which is what makes
+a double free do nothing.
+
+The handler is a SIGSEGV and SIGBUS handler with `SA_ONSTACK` and `SA_SIGINFO`,
+or a vectored exception handler on Windows. It claims a fault only when the
+address is inside the guard of the stack the faulting thread said it was on,
+which a thread says through `burrow__stack_set_current` and the scheduler will
+say on every switch. Anything else is chained to whatever handler was installed
+before, or has the old disposition put back and is allowed to happen again, so
+burrow linked into a program with its own handler takes nothing away from it and
+an ordinary segmentation fault still produces a core file.
+
+Two things it does not catch, both in the header next to the function so nobody
+has to come here to find them. A single frame larger than the guard can step
+over it, which is exactly what Go's per-function prologue check prevents and
+what a library has no way to reach for. `-fstack-clash-protection` closes it for
+code built with that flag. And on Windows the vectored handler runs on the stack
+that faulted, which is by definition the one with no room left, so it is best
+effort there in a way it is not elsewhere. The Win64 assembly fixes that, because
+that is what lets the TIB describe the goroutine stack and lets Windows' own
+guard machinery do this job.
 
 ## 5. Channels and `select`
 

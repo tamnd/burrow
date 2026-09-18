@@ -1,0 +1,97 @@
+# What clang-tidy looks for, and what it has been told not to.
+#
+# The set is wide on purpose. The checks that find real bugs in C are
+# bugprone-*, cert-* and the static analyser, and none of them cost anything
+# except the time to run them. Everything switched off below is switched off for
+# a reason written next to it, because a checker configured by attrition ends up
+# checking nothing and nobody can tell when that happened.
+#
+# CI pins the clang-tidy version for the same reason it pins clang-format: the
+# checks change between releases and a new one appearing in the middle of an
+# unrelated pull request is somebody else's afternoon.
+
+Checks: >
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  misc-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -cert-err33-c,
+  -misc-include-cleaner,
+  -misc-no-recursion,
+  -performance-no-int-to-ptr,
+  -readability-avoid-nested-conditional-operator,
+  -readability-braces-around-statements,
+  -readability-function-cognitive-complexity,
+  -readability-identifier-length,
+  -readability-implicit-bool-conversion,
+  -readability-isolate-declaration,
+  -readability-magic-numbers,
+  -readability-math-missing-parentheses,
+  -readability-trailing-comma,
+  -readability-use-concise-preprocessor-directives
+
+# Why each of those is off:
+#
+#   bugprone-easily-swappable-parameters
+#     str_eq(Str a, Str b) is not a design flaw, it is a comparison. Go's
+#     signatures come across as they are and most of them have two parameters of
+#     the same type because the operation has two operands.
+#
+#   cert-err33-c
+#     The fatal error path writes its message with fputs and does not look at
+#     the result, on purpose. It is already ending the process and there is
+#     nowhere to report a failed report to. Every other ignored return in the
+#     tree would be a bug, so this one is a comment in panic.c rather than a
+#     check for the whole library.
+#
+#   misc-include-cleaner
+#     It wants every file to include the header that declares each symbol it
+#     uses, which for this library means every .c file including stdint.h for
+#     uint32_t and burrow/core.h for Str. The headers are layered deliberately,
+#     core.h is the one that owns the numeric types, and a file that includes
+#     burrow/slice.h has already been given them. Following this check would
+#     mean writing the layering out again in every file.
+#
+#   misc-no-recursion
+#     errors_is, errors_as and type_is_comparable recurse, because the things
+#     they walk are trees. Go's implementations recurse over the same trees.
+#
+#   performance-no-int-to-ptr
+#     An allocator aligns a pointer by casting it to an integer, rounding it and
+#     casting it back. There is no other way to write that in C, and the three
+#     places that do it are the allocators.
+#
+#   readability-braces-around-statements, -isolate-declaration
+#     House style, set by .clang-format and by the existing tree.
+#
+#   readability-function-cognitive-complexity, -magic-numbers
+#     This is a port. The function is as complicated as the Go function it came
+#     from and the constants are Go's constants. Simplifying either would be a
+#     rewrite, and a rewrite is how a port stops matching.
+#
+#   readability-identifier-length
+#     i, a, b, n. Go's own code uses them and so does every C library worth
+#     reading.
+#
+#   readability-implicit-bool-conversion
+#     Flags `return n == 0` style code that is already clear, and would have us
+#     write `!= 0` on things that are already truth values.
+#
+#   readability-math-missing-parentheses
+#     Wants parentheses around * inside +, which is the precedence every C
+#     programmer knows.
+#
+#   readability-trailing-comma, -use-concise-preprocessor-directives
+#     Both appeared in a recent release and both disagree with how the tree is
+#     already written. Worth revisiting when the pin moves, not worth a
+#     reformat now.
+#
+# Warnings from headers are on, because the headers are where most of this
+# library lives.
+HeaderFilterRegex: 'include/burrow/.*'
+WarningsAsErrors: '*'
+FormatStyle: file

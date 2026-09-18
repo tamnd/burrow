@@ -177,7 +177,11 @@ static Int next_cap(Int new_len, Int old_cap) {
 
     Uint nc = (Uint)old_cap;
     while (nc < (Uint)new_len) {
-        nc += (nc + 3 * (Uint)threshold) >> 2;
+        /* Divided rather than shifted, which is how Go writes the same line.
+         * nc is unsigned, so the compiler emits the shift either way, and a
+         * shift by a signed literal is the kind of thing a checker asks about
+         * for good reasons that do not apply here. */
+        nc += (nc + 3 * (Uint)threshold) / 4;
         /* Go checks for the overflow after the fact by comparing as unsigned.
          * Here the value simply keeps growing, so the exit is the same
          * condition and the impossible case is caught below. */

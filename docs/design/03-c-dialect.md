@@ -70,6 +70,15 @@ big-endian target available, and it catches the entire class of byte-order bugs
 that `encoding/binary`, `debug/elf`, `crypto` and every wire format can hide.
 Go supports it; so do we.
 
+In practice s390x runs on every pull request rather than nightly, which is a
+deviation from the table above and one worth taking. Under QEMU the whole suite
+takes about three minutes, and the first time it ran it found a test that read
+the first byte of an `Int` and expected the low one. That is exactly the bug the
+slot exists for, and finding it the next morning in a nightly against a tree
+that had moved on would have been strictly worse. The rest of Tier B stays
+nightly, because the rest of Tier B is about toolchains and platforms rather
+than about a property every line of code in the tree has to have.
+
 Tier C's tiny compilers (TCC, cproc, chibicc) are not vanity. They enforce that
 we have not accidentally become GCC-dependent, and TCC in particular makes
 `burrow` usable as a scripting substrate. They compile the C11 core only, with

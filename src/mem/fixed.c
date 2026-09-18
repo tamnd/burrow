@@ -18,7 +18,7 @@ static bool align_ok(size_t align) {
 }
 
 static uintptr_t align_ptr(uintptr_t p, size_t align) {
-    uintptr_t m = (uintptr_t)align - 1u;
+    uintptr_t m = (uintptr_t)align - 1U;
     return (p + m) & ~m;
 }
 
@@ -93,7 +93,7 @@ static AllocStats fixed_vt_stats(void *self) {
     s.bytes_total = fx->bytes_total;
     s.allocs = fx->allocs;
     s.frees = fx->frees;
-    s.blocks = fx->base != NULL ? 1u : 0u;
+    s.blocks = fx->base != NULL ? 1U : 0U;
     return s;
 }
 

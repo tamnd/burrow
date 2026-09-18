@@ -31,6 +31,8 @@ The recipe is the same every time.
 - Clean under AddressSanitizer, UndefinedBehaviorSanitizer, MemorySanitizer, ThreadSanitizer and the tracking allocator.
 - Every public symbol maps back to a Go declaration in `$GOROOT/api`, checked by `tools/coverage`.
 - Formatted by clang-format 20.1.7, which is the version CI runs and the version `make fmt` should be run with. Get it with `pipx install clang-format==20.1.7` if the one on your machine is a different release. The versions disagree with each other about a few constructs, so a tree formatted by a newer one fails the gate on a correctly formatted file, and the only fix for that is for everybody to run the same one.
+- Clean under clang-tidy 20.1.0, which is `make tidy` locally and a job in CI. Pinned for the same reason the formatter is, and available the same way with `pipx install clang-tidy==20.1.0`. The configuration is `.clang-tidy` in the root, every check that is switched off has a paragraph next to it saying why, and if one of them is in your way then the thing to argue with is that paragraph. On macOS the pinned build ships no default sysroot, so pass one: `make tidy CLANG_TIDY="clang-tidy --extra-arg=-isysroot --extra-arg=$(xcrun --show-sdk-path)"`.
+- Passes on a big endian machine. CI builds and runs the suite on s390x under emulation on every pull request, and it takes about three minutes. Nothing in the library is allowed to care about byte order, and the way that rule gets broken is almost never a cast that looks wrong. It is a test that reads the first byte of an integer, and it passes on every machine any of us owns.
 
 None of this is negotiable per PR, but all of it is negotiable in an issue. If a rule is wrong it should be changed everywhere rather than waived once.
 

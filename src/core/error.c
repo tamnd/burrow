@@ -15,10 +15,9 @@
  *
  * errors_is and errors_as are ports of Go's, walk for walk, including the part
  * where a multi error turns the walk from a chain into a depth first search of
- * a tree and the part where an error that defines both Unwrap forms is ignored
- * rather than guessed at. Those are not edge cases: errors.Join produces the
- * tree form, every wrapped error in the library produces the chain form, and
- * code ported from Go asks errors.Is questions about both. */
+ * a tree. That is not an edge case: errors.Join produces the tree form, every
+ * wrapped error in the library produces the chain form, and code ported from Go
+ * asks errors.Is questions about both. */
 
 /* ------------------------------------------------------------- descriptors */
 
@@ -38,9 +37,9 @@ static bool error_ops_equal(const void *a, const void *b) {
 
 static uint64_t error_ops_hash(const void *p, uint64_t seed) {
     const Error *e = (const Error *)p;
-    uint64_t h = seed ^ 0x9e3779b97f4a7c15u;
-    h = (h ^ (uint64_t)(Uintptr)e->vt) * 0x100000001b3u;
-    h = (h ^ (uint64_t)(Uintptr)e->data) * 0x100000001b3u;
+    uint64_t h = seed ^ 0x9e3779b97f4a7c15U;
+    h = (h ^ (uint64_t)(Uintptr)e->vt) * 0x100000001b3U;
+    h = (h ^ (uint64_t)(Uintptr)e->data) * 0x100000001b3U;
     return h;
 }
 
@@ -64,7 +63,7 @@ static const Type error_type = {
     NULL,
     NULL,
     0,
-    0x65727200u, /* "err\0", distinct from every builtin's */
+    0x65727200U, /* "err\0", distinct from every builtin's */
     &error_ops,
 };
 
@@ -151,24 +150,21 @@ Error errors_unwrap(Error err) {
     return err.vt->unwrap(err.data);
 }
 
-/* Which of the two wrap forms an error uses, in the order Go's Is and As ask.
+/* ----------------------------------------------------------------------- is
  *
- * Go asks about Unwrap() error first and Unwrap() []error second, in a type
- * switch, and a Go type can only ever satisfy one of them because it has one
- * method of that name. Here they are two vtable slots and a caller can fill in
- * both, which is a mistake with no Go equivalent and therefore no Go behaviour
- * to be faithful to. So the chain form wins, because that is the first case in
- * Go's switch, and that keeps errors_unwrap and errors_is answering the same
- * question the same way instead of needing a rule of their own. */
-static bool wraps_one(Error err) {
-    return err.vt != NULL && err.vt->unwrap != NULL;
-}
-
-static bool wraps_many(Error err) {
-    return err.vt != NULL && err.vt->unwrap == NULL && err.vt->unwrap_multi != NULL;
-}
-
-/* ----------------------------------------------------------------------- is */
+ * Both walks below ask about the two wrap forms in the order Go's type switch
+ * asks: Unwrap() error first, Unwrap() []error second. A Go type can only ever
+ * satisfy one of them, because it has one method of that name. Here they are
+ * two vtable slots and a caller can fill in both, which is a mistake with no Go
+ * equivalent and therefore no Go behaviour to be faithful to, so the chain form
+ * wins. That also keeps errors_unwrap and errors_is answering the same question
+ * the same way instead of needing a rule of their own.
+ *
+ * The null check on the vtable is written out in the loop rather than folded
+ * into a helper. It was in a helper, and the static analyser lost track of it
+ * once the recursion got deep enough to stop inlining, which produced a null
+ * dereference report on a path that cannot happen. A check the analyser can see
+ * is worth more than a check that reads slightly better. */
 
 static bool error_identical(Error a, Error b) {
     return a.vt == b.vt && a.data == b.data;
@@ -186,17 +182,18 @@ bool errors_is(Error err, Error target) {
         if (error_identical(err, target))
             return true;
 
-        if (err.vt != NULL && err.vt->is != NULL && err.vt->is(err.data, target))
+        if (err.vt == NULL)
+            return false;
+
+        if (err.vt->is != NULL && err.vt->is(err.data, target))
             return true;
 
-        if (wraps_one(err)) {
+        if (err.vt->unwrap != NULL) {
             err = err.vt->unwrap(err.data);
-            if (err.vt == NULL)
-                return false;
             continue;
         }
 
-        if (wraps_many(err)) {
+        if (err.vt->unwrap_multi != NULL) {
             Slice kids = err.vt->unwrap_multi(err.data);
             Int i;
             for (i = 0; i < kids.len; i++) {
@@ -229,12 +226,12 @@ const void *errors_as(Error err, const Type *target) {
                 return got;
         }
 
-        if (wraps_one(err)) {
+        if (err.vt->unwrap != NULL) {
             err = err.vt->unwrap(err.data);
             continue;
         }
 
-        if (wraps_many(err)) {
+        if (err.vt->unwrap_multi != NULL) {
             Slice kids = err.vt->unwrap_multi(err.data);
             Int i;
             for (i = 0; i < kids.len; i++) {

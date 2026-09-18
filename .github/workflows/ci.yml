@@ -130,6 +130,58 @@ jobs:
         shell: msys2 {0}
         run: make CC=${{ matrix.cc }} test
 
+  # clang-tidy, which is a separate job because it takes a couple of minutes and
+  # lint is meant to answer in under one. The configuration is .clang-tidy in the
+  # root, and every check that is switched off there says why next to it.
+  #
+  # Pinned for the same reason clang-format is. clang-tidy gains checks with
+  # every release, and a check that arrives on a Tuesday turns an unrelated pull
+  # request into an afternoon of reformatting things nobody was looking at.
+  # Moving the pin is a line here, a line in CONTRIBUTING.md, and whatever the
+  # new checks have to say, all in one commit.
+  tidy:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: clang-tidy
+        run: |
+          pipx install clang-tidy==20.1.0
+          clang-tidy --version
+          make tidy
+
+  # Big endian, which is the bug class you cannot find any other way.
+  #
+  # Nothing in burrow is allowed to care about byte order, and the way that rule
+  # gets broken is never a cast that looks wrong. It is a test that reads the
+  # first byte of an int, or a hash that walks a word, and it passes everywhere
+  # anybody runs it. s390x is the only big endian target still maintained well
+  # enough to build on, and under emulation the whole suite takes about three
+  # minutes, which is cheap for the only check in the matrix that can find this.
+  #
+  # The gcc image is used rather than a distro image with a compiler installed,
+  # because apt under emulation costs more than the build does. s390x is not in
+  # the tag list for every gcc release, so check that before moving the tag.
+  bigendian:
+    name: linux-s390x-gcc (big endian)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: s390x
+      # The byte order is checked before the build rather than assumed. A
+      # container that quietly came up on the host architecture would run the
+      # suite, pass, and report a big endian job that never saw a big endian
+      # machine, which is worse than not having the job at all.
+      - name: build and test
+        run: |
+          docker run --rm --platform linux/s390x \
+            -v "$PWD":/src -w /src gcc:15 \
+            sh -c 'cc -dM -E - </dev/null | grep -q "__BYTE_ORDER__ __ORDER_BIG_ENDIAN__" || { echo "this is not a big endian compiler" >&2; exit 1; }; make test'
+
   # The same tree under cmake on the platforms that already built it with make,
   # because the two build descriptions drift apart silently and the only way to
   # notice is to run both.

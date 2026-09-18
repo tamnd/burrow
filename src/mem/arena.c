@@ -49,7 +49,7 @@ static size_t round_up(size_t n, size_t align) {
 }
 
 static uintptr_t align_ptr(uintptr_t p, size_t align) {
-    uintptr_t m = (uintptr_t)align - 1u;
+    uintptr_t m = (uintptr_t)align - 1U;
     return (p + m) & ~m;
 }
 

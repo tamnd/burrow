@@ -502,8 +502,19 @@ TEST(the_fast_append_falls_back_when_the_size_does_not_match) {
     for (Int i = 0; i < 8; i++)
         ((Byte *)s.p)[i] = 0xEE;
 
-    Int wide = 0x41;
-    s = slice_append_fast(a, s, &wide, sizeof(Int));
+    /* The source is a byte array rather than an Int, so that the first byte of
+     * it is the same byte on every machine. An Int holding 0x41 begins with
+     * 0x41 on a little endian machine and with 0x00 on a big endian one, and a
+     * test that reads the first byte of one is asserting on the byte order
+     * instead of on the append. It is still sizeof(Int) bytes wide, so a
+     * version of slice_append_fast that believed the hint would copy the 0xAA
+     * filler into the slice and the loop below would catch it. */
+    Byte wide[sizeof(Int)];
+    for (size_t i = 0; i < sizeof wide; i++)
+        wide[i] = 0xAA;
+    wide[0] = 0x41;
+
+    s = slice_append_fast(a, s, wide, sizeof(Int));
 
     CHECK_INT_EQ(s.len, 1);
     CHECK_INT_EQ(s.cap, 8);

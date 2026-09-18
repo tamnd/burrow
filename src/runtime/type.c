@@ -234,7 +234,7 @@ static const TypeOps string_ops = {string_equal, string_hash, NULL, NULL};
  * test that looks for duplicates. Generated descriptors will compute theirs. */
 #define BUILTIN(var, kindv, ctype, gonm, hashv, opsv)                                  \
     static const Type var##_desc = {                                                   \
-        {(const Byte *)gonm, (Int)(sizeof(gonm) - 1)},                                 \
+        {(const Byte *)(gonm), (Int)(sizeof(gonm) - 1)},                               \
         {NULL, 0},                                                                     \
         kindv,                                                                         \
         (uint32_t)sizeof(ctype),                                                       \

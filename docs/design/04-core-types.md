@@ -450,27 +450,49 @@ never a silent nil error. → [05](05-memory.md) §7
 ## 7. Function values and closures
 
 ```c
-typedef struct {
+typedef struct ReadFn {
     Int (*f)(void *env, Slice p, Error *err);
-    void   *env;
+    void *env;
 } ReadFn;
 ```
 
-Every function type in a stdlib signature — `http.HandlerFunc`,
-`sort.Slice`'s `less`, `filepath.WalkFunc`, `slices.SortFunc`'s comparator,
-`sync.Once.Do`'s `f` — becomes a named `{fnptr, env}` pair. A bare function
-pointer would be cheaper and would make every callback that needs captured
-state require a global, which is the classic C API mistake. The `env` word is
-non-negotiable.
+Every function type in a stdlib signature, `http.HandlerFunc`, `sort.Slice`'s
+`less`, `filepath.WalkFunc`, `slices.SortFunc`'s comparator, `sync.Once.Do`'s
+`f`, becomes a named `{fnptr, env}` pair. A bare function pointer would be
+cheaper and would make every callback that needs captured state require a
+global, which is the classic C API mistake. The `env` word is non-negotiable.
 
-A `BURROW_FUNC` macro plus C11 compound literals gets close to a closure:
+`BURROW_FUNC` declares one, and `BURROW_FUNC0` is the same thing for a
+signature that takes nothing, since C99 has no way to write a variadic macro
+accepting an empty argument list. The parameters written at the declaration are
+the ones the caller writes; the macro puts the `env` in front of them.
 
 ```c
-slices_sort_func(items, BURROW_CMP(cmp_by_name, &ctx));
+BURROW_FUNC(Filter, bool, Str s);
+BURROW_FUNC0(Func, void);
+```
+
+`Func` is Go's `func()` and ships declared, spelled without a package under R5
+of [08](08-naming-abi.md) because it is a builtin type and not any package's.
+
+The three rules are the interface rules from section 5, for the reason that a
+function value is an interface with one unnamed method. The function pointer is
+first, so a zeroed value is nil and `BURROW_FUNC_IS_NIL` asks. The env goes in
+first at the call, which `BURROW_CALLF` and `BURROW_CALLF0` do, and the target
+declares the parameter even when it ignores it: calling through a pointer of a
+different type is undefined behaviour and traps under wasm or control flow
+integrity, so nothing casts the pointer. And the env has to outlive the value,
+which is the one part Go does silently by moving a captured variable to the
+heap and the one part nothing here can see.
+
+```c
+Filter f = BURROW_FN(Filter, has_prefix, &ctx);
+bool keep = BURROW_CALLF(f, line);
 ```
 
 Go closures capturing variables become an explicit context struct, which is
-mechanical and is what the porting guide covers. Not as pretty as Go; entirely
+mechanical and is what the porting guide covers. Capture by reference comes out
+of it for free, since the env is a pointer. Not as pretty as Go, entirely
 workable.
 
 ## 8. Structs, methods and embedding

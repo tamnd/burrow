@@ -146,6 +146,25 @@ Any v = ANY_VAL(TYPE_INT, Int, 42);
 
 Details, including what `Any` costs you that Go's `any` does not, which is that the pointee has to outlive it: [docs/guides/interfaces.md](docs/guides/interfaces.md).
 
+## Function values
+
+A Go `func` is code plus the variables it captured, so a function value here is a pair of the same two words an interface is. Every function type in a Go signature gets a named type, and `BURROW_FUNC` declares one.
+
+```c
+BURROW_FUNC(Filter, bool, Str s);
+
+static bool has_prefix(void *env, Str s) { ... }
+
+PrefixEnv e = {S("go")};
+Int n = count_if(lines, FN(Filter, has_prefix, &e));
+```
+
+The environment word is not optional. A library that takes a bare function pointer forces every caller who needs state to reach for a global, and then two callers cannot use it at once. `qsort` is that mistake and every platform has since grown a `qsort_r` to undo it. Nothing in burrow takes a bare function pointer.
+
+The function pointer is first, so a zeroed value is nil the same way a zeroed interface is, and the environment goes in first at the call, so the target declares it and ignores it rather than anybody casting a function pointer to a different signature, which is undefined behaviour and a trap under wasm or control flow integrity.
+
+Details, including the one thing that needs thinking about, which is where the environment lives when the value outlives the frame that made it: [docs/guides/functions.md](docs/guides/functions.md).
+
 ## io
 
 `io.Reader` and `io.Writer`, the two interfaces everything that moves bytes speaks, plus `Closer`, `Seeker` and the combinations, the sentinel errors with Go's messages, and the four functions that need nothing but an interface to run.

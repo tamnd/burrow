@@ -4,6 +4,17 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+### Function values
+
+- `BURROW_FUNC` and `BURROW_FUNC0` declare a function value type, which is a function pointer and the environment it was made with. Every Go `func` in a signature becomes one of these, and the environment word is what makes a callback with state possible without a global.
+- `BURROW_FN` builds one, `BURROW_CALLF` and `BURROW_CALLF0` call one, and `BURROW_FUNC_IS_NIL` is the nil check. With `BURROW_SHORT` those are `FN`, `CALLF` and `CALLF0`.
+- `Func` is Go's `func()`, already declared, and it is what `sync.Once.Do`, `time.AfterFunc`, a goroutine and a deferred call will all take.
+- The function pointer is the first member, so a zeroed value is nil and a function value in a struct out of an allocator starts out nil the way a Go struct's func fields do.
+- The environment goes in first at the call and the target declares the parameter even when it ignores it. Calling a function through a pointer of a different signature is undefined behaviour and traps under wasm or control flow integrity, so nothing here casts the pointer to avoid writing the parameter.
+- `docs/guides/functions.md` is new, and section 7 of `docs/design/04-core-types.md` now describes what shipped rather than what was sketched.
+
 ## v0.0.4 (2026-09-18)
 
 Interfaces, and the first two things built on them. `io.Reader` and `io.Writer` exist now, with the four functions that need nothing else, so there is a real shape for every reader and writer the rest of the library will grow.

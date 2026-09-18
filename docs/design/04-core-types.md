@@ -150,6 +150,27 @@ the conformance harness under ASan. → [05](05-memory.md) §4
 `strings.Builder`, `bytes.Buffer` and friends port directly; `Str` from a
 builder is borrowed from the builder's arena.
 
+**The range loop.** Go's `for i, r := range s` decodes UTF-8, and it is the one
+piece of string behaviour that lives in the language rather than in a package,
+so it has to be spelled here rather than in `unicode/utf8`. The shape is the
+`MapIter` shape, which is the only one C offers for an iterator that has to
+survive across calls:
+
+```c
+typedef struct StrIter { Str s; Int i; } StrIter;
+
+StrIter str_runes(Str s);
+bool    str_next_rune(StrIter *it, Int *index, Rune *r);
+```
+
+The index is the byte offset the rune started at, not a count of runes, because
+that is what Go's loop yields and what a caller needs in order to reslice.
+Both out-parameters are nullable, per §9. The implementation lives in
+`src/core/str.c` and calls into `utf8_decode_rune_in_string`, so `core.h`
+declares the loop without including `utf8.h` and the header order stays acyclic.
+Invalid bytes yield `UTF8_RUNE_ERROR` and advance one byte, which is what makes
+a loop over corrupt input terminate. → [09](09-packages-pure.md) §3
+
 ## 4. Slices, arrays and maps
 
 ```c

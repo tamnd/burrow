@@ -117,6 +117,23 @@ That is the same shape Go uses, and it is the only shape that works, because a G
 
 Details, including how to get a real C string back when you need one: [docs/guides/strings.md](docs/guides/strings.md).
 
+## Runes
+
+Those bytes are UTF-8 when you decide to read them that way, and the loop that does it is Go's `for i, r := range s`.
+
+```c
+Int i;
+Rune r;
+for (StrIter it = str_runes(s); str_next_rune(&it, &i, &r); )
+    printf("%lld: %lx\n", (long long)i, (unsigned long)r);
+```
+
+`i` is the byte offset, not a count of runes, because the next thing you want after finding a rune is usually the text on either side of it. Underneath is `unicode/utf8`, ported whole, so `utf8_decode_rune_in_string`, `utf8_encode_rune`, `utf8_rune_count_in_string` and `utf8_valid_string` are all there with Go's exact behaviour on input that is not valid UTF-8.
+
+That behaviour is the part worth knowing. Nothing in the package fails. A bad sequence decodes as U+FFFD with a width of one byte, so a loop over a corrupt file prints mojibake and terminates instead of hanging, and it never skips a byte that might have started something valid. Overlong encodings and surrogate halves are rejected, which matters more than it sounds: a slash written the long way is not a slash here, and a filter that only looked for the short one is a filter somebody would have walked straight past.
+
+For ASCII work, index the bytes and skip all of this. A newline is a newline at the byte level in UTF-8 and no multi byte sequence can contain one, which is why Go's own `strings.IndexByte` is a byte loop and so is ours. Details: [docs/guides/runes.md](docs/guides/runes.md).
+
 ## Types
 
 Go's library leans on its type system far more than it looks like it does. `fmt` prints anything because it can ask the value what it is, `encoding/json` walks a struct nobody wrote code for, `sort` works on a slice of anything. None of that is possible in C unless the types describe themselves, so in burrow they do.

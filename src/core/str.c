@@ -4,6 +4,7 @@
 
 #include "burrow/core.h"
 #include "burrow/runtime.h"
+#include "burrow/utf8.h"
 
 #include <string.h>
 
@@ -103,4 +104,35 @@ Byte str_at(Str s, Int i) {
     if (i < 0 || i >= s.len)
         runtime_index_out_of_range(i, s.len);
     return s.p[i];
+}
+
+StrIter str_runes(Str s) {
+    StrIter it = {s, 0};
+    return it;
+}
+
+bool str_next_rune(StrIter *it, Int *index, Rune *r) {
+    Int start = it->i;
+    Int size;
+    Rune got;
+
+    if (start >= it->s.len)
+        return false;
+
+    /* The ASCII case by hand rather than through the decoder. Go's range loop
+     * does the same thing and for the same reason: it is the case almost every
+     * loop takes, and it is a compare and a load against a table lookup and a
+     * call. */
+    if (it->s.p[start] < (Byte)UTF8_RUNE_SELF) {
+        got = (Rune)it->s.p[start];
+        size = 1;
+    } else {
+        Str rest = {it->s.p + start, it->s.len - start};
+        got = utf8_decode_rune_in_string(rest, &size);
+    }
+
+    it->i = start + size;
+    BURROW_OUT(index, start);
+    BURROW_OUT(r, got);
+    return true;
 }

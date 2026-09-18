@@ -4,6 +4,18 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+### Runes and UTF-8
+
+- `burrow/utf8.h` is `unicode/utf8`, ported whole from go1.27.1. All sixteen functions, both spellings of each one where Go has two, and the four constants. The size that Go returns as a second value is an out parameter here that may be `NULL`, which is the rule the rest of the library follows.
+- Invalid input behaves exactly as it does in Go: `UTF8_RUNE_ERROR` with a width of one byte, so a loop over a corrupt string terminates and never skips a byte that could have started something valid. Overlong encodings, surrogate halves and runes above U+10FFFF are all rejected.
+- `str_runes` and `str_next_rune` in `burrow/core.h` are `for i, r := range s`. The index is the byte offset the rune started at, both out parameters are optional, and the iterator's zero value iterates zero times.
+- `tests/utf8_test.c` carries Go's tables across, including the thirty six invalid four byte sequences, one per branch of the accept table, and Go's sequencing test that checks the forward loop, the one shot decoder and the backwards decoder all visit the same runes.
+- Checked against Go directly as well: 200,000 random byte strings through both implementations produce identical output for every function and for the whole range loop transcript.
+- `docs/guides/runes.md` is new.
+- Not here yet: the word at a time ASCII skip inside `utf8_valid_string`. It needs the unaligned load and the endianness question answered in the platform layer, the behaviour is identical without it, and there is a benchmark waiting in burrow-bench.
+
 ## v0.0.5 (2026-09-18)
 
 Two of Go's rules that everything else stands on. A function value, which is what a Go closure becomes here, and the arithmetic where Go's answer and C's answer are not the same answer.

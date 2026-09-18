@@ -52,6 +52,7 @@
 #include "burrow/runtime.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
+#include "burrow/utf8.h"
 
 /* The rest of the library arrives here as it is written. The order is the
  * construction order from docs/design/06-runtime.md section 12, because the
@@ -59,13 +60,12 @@
  *
  *   core types, allocators, runtime, reflect, then the packages in tier order.
  *
- * Allocators are done. Str, the type descriptor, Slice, Error, Map, the
- * interface machinery, function values and the numeric operations are done,
- * which is all of the core types. io.Reader and io.Writer are here as the first
- * interfaces built on it, with nothing behind them yet: os and bytes are what
- * fill them in.
+ * Allocators are done, and so are the core types: Str, the type descriptor,
+ * Slice, Error, Map, the interface machinery, function values, the numeric
+ * operations, and now runes and the UTF-8 decode path underneath them.
+ * io.Reader and io.Writer are here as the first interfaces built on it, with
+ * nothing behind them yet: os and bytes are what fill them in.
  *
- * Rune and UTF-8 handling is next, and then the runtime. See the milestone
- * issues. */
+ * The runtime is next, and then reflect. See the milestone issues. */
 
 #endif /* BURROW_H */

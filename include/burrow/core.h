@@ -239,6 +239,36 @@ bool str_is_empty(Str s);
  * internally and it is not cheating. */
 Byte str_at(Str s, Int i);
 
+/* The iterator behind the rune loop below. Keep one on the stack.
+ *
+ * The fields are here because C has no other way to let you declare one, and
+ * not because they are yours to read. */
+typedef struct StrIter {
+    Str s;
+    Int i;
+} StrIter;
+
+/* for i, r := range s.
+ *
+ *     Int i;
+ *     Rune r;
+ *     for (StrIter it = str_runes(s); str_next_rune(&it, &i, &r); )
+ *         printf("%lld: %lx\n", (long long)i, (unsigned long)r);
+ *
+ * Either pointer may be NULL if you only want the other one, and the index is
+ * the byte offset the rune started at rather than a count of runes, which is
+ * what Go's loop gives you and what you need to slice with.
+ *
+ * Go's range over a string decodes UTF-8, and so does this, including what
+ * happens to bytes that are not valid UTF-8: you get U+FFFD and the loop
+ * advances one byte. That means a loop over a corrupt string still terminates.
+ * See burrow/utf8.h for the whole story and for the functions underneath this.
+ *
+ * Walking the bytes instead is s.p[i] with your own loop, or str_at for the
+ * bounds checked version, and for ASCII data that is what you want. */
+StrIter str_runes(Str s);
+bool str_next_rune(StrIter *it, Int *index, Rune *r);
+
 #if defined(BURROW_SHORT) && BURROW_SHORT
 #define S(lit) BURROW_S(lit)
 #define STR_FMT BURROW_STR_FMT

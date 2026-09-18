@@ -141,6 +141,28 @@ dependencies, complete test suites, immediately useful, and they validate the
 whole `Str` design. `utf8.DecodeRune`'s handling of invalid sequences —
 returning `RuneError, 1` under specific conditions — is subtle and tested.
 
+**What shipped.** `unicode/utf8` is done, all sixteen functions and four
+constants, ported from go1.27.1. Go's two copies of every function, one for
+`string` and one for `[]byte`, are one internal function over a pointer and a
+length with both public spellings on top, because a `Str` and a byte `Slice`
+are the same two words here and Go only has the duplication because generics
+arrived after the package was written. The second return value becomes a
+nullable out-parameter per [04](04-core-types.md) §9.
+
+The prediction above held: the invalid-sequence behaviour was the whole job.
+Go's test tables came across unchanged, including the thirty-six four-byte
+sequences that exercise one branch each of the accept table, and the port was
+then checked against Go directly with 200,000 random byte strings through both
+implementations, comparing every function's output and the full range-loop
+transcript. They agree byte for byte.
+
+One optimisation is deliberately absent. Go's `Valid` skips runs of ASCII a
+machine word at a time; that needs the unaligned load and the endianness
+question settled in the platform layer, and it belongs there rather than
+copied into this file. The behaviour is identical without it.
+
+`unicode/utf16` is next and is the same size of job.
+
 `golang.org/x/text`-style normalisation is not in the stdlib and is out of
 scope, except for `vendor/golang.org/x/net/idna`, which `net/url` and
 `net/http` need. → [11](11-packages-net.md) §2

@@ -92,18 +92,36 @@ it.
 ## 2. Context switching
 
 This is where the POSIX-only prior art ([02](02-landscape.md) §3) is
-insufficient. `swapcontext` does not exist on Windows and makes a
-`sigprocmask` syscall per switch where it does. The answer, as in `minicoro`,
-`libaco` and Boost.Context: **hand-written per-ABI assembly**, about 40
-instructions each.
+insufficient. `swapcontext` does not exist on Windows, it makes a `sigprocmask`
+syscall per switch where it does, and musl does not implement it at all, which
+is worth knowing before anybody plans around it: the functions are not hidden
+behind a feature macro on musl, they are absent, and a build that reaches for
+them fails at the link line. The answer, as in `minicoro`, `libaco` and
+Boost.Context: **hand-written per-ABI assembly**, about 40 instructions each.
 
-| ABI | Registers to save | Notes |
+`burrow/context.h` is the interface and it is deliberately small: attach a
+thread, make a context on a stack the caller owns, switch, free. Nothing in it
+allocates. Three backends, picked by the machine rather than by a configure
+step: assembly on amd64 and arm64 away from Windows, Fibers on Windows, and
+ucontext for anything else. `-DBURROW_PORTABLE_CONTEXT=1` forces the fallback,
+which is how you find out whether a bug is in the assembly or above it, and CI
+builds and runs the suite both ways on every pull request.
+
+`burrow__context_start` is the one piece all three share. Each backend's entry
+stub gets as far as having the new stack live and then calls it, so running the
+entry function, going to the link when that returns, and failing loudly when
+there is no link are written once rather than three times in three languages.
+The ucontext backend passes the context through a thread local rather than
+through `makecontext`'s pair of ints, because splitting a pointer into two ints
+and putting it back is undefined behaviour with a long tradition behind it.
+
+| ABI | Registers to save | State |
 | --- | --- | --- |
-| SysV AMD64 | rbx, rbp, r12–r15, rsp, rip, mxcsr, x87 CW | ~30 instrs |
-| Win64 | above + rsi, rdi, xmm6–xmm15, TIB stack limits | must update `NT_TIB` stack bounds or Windows guard pages fire |
-| AArch64 AAPCS | x19–x30, sp, d8–d15 | + PAC/BTI landing pads on Apple and hardened Linux |
-| RISC-V | s0–s11, sp, ra, fs0–fs11 | |
-| PPC64 ELFv2, s390x | per ABI | |
+| SysV AMD64 | rbx, rbp, r12–r15, rsp, rip, mxcsr, x87 CW | done, `context_amd64.S` |
+| AArch64 AAPCS | x19–x30, sp, d8–d15, fpcr | done, `context_arm64.S`. PAC and BTI are not used yet and belong with the hardening pass |
+| Win64 | above + rsi, rdi, xmm6–xmm15, TIB stack limits | Fibers for now. Must update `NT_TIB` stack bounds or Windows guard pages fire |
+| RISC-V | s0–s11, sp, ra, fs0–fs11 | ucontext |
+| PPC64 ELFv2, s390x | per ABI | ucontext |
 | wasm | — | no switching; see §9 |
 
 Two details that are easy to get wrong and expensive to discover late:
@@ -111,14 +129,23 @@ Two details that are easy to get wrong and expensive to discover late:
 - **Windows requires updating the TIB's `StackBase`/`StackLimit`** on every
   switch. Omit it and Windows' stack guard page mechanism misfires on the
   second goroutine, usually as a mysterious access violation deep in a callee.
+  This is most of why Windows is on Fibers rather than assembly: a fiber is the
+  operating system doing that bookkeeping for us.
 - **Unwinding metadata.** Each goroutine stack needs correct CFI/SEH so that
-  debuggers, profilers and `runtime.Stack()` can walk it. Hand-written
-  `.cfi_*` directives per switch stub, and a registered dynamic function table
-  on Win64.
+  debuggers, profilers and `runtime.Stack()` can walk it. Both `.S` files carry
+  `.cfi_*` directives through every push and pop, and the entry stub declares
+  the return address undefined so a walk stops at the bottom of the goroutine
+  stack rather than reading whatever the buffer held before. Win64 also needs a
+  registered dynamic function table, which comes with the Win64 assembly.
 
-A portable fallback exists (`ucontext` on POSIX, Fibers on Windows) selected by
-`-DBURROW_PORTABLE_CONTEXT=1`, for architectures we have not written assembly
-for. It is correct and ~10× slower per switch.
+Two more that are not done and are written down so they do not get lost. The
+sanitizers are not told about the switch: ASan and TSan both have calls for it
+and without them a sanitizer believes a thread is still on the stack it was on
+before. The suite passes under both today, including with ASan's fake stacks
+turned on, so this is missing rather than broken. And stacks have no guard
+pages, so an overflow today runs off the end of the buffer instead of hitting a
+page that faults. That one arrives with stack allocation, which is the next
+piece of work.
 
 The performance target is libmill's, which sets the bar for whether Go-style
 code feels natural in C: **≥10 M goroutine launches/sec and ≥20 M context

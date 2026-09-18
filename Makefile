@@ -78,6 +78,15 @@ ifeq ($(BOEHM),1)
   LDLIBS  += -lgc
 endif
 
+# Forces the portable context switch on a machine that has assembly for it.
+# This is not a fallback you would ship, it is how you find out whether a bug is
+# in the assembly or above it, and it has to go in DEFINES rather than on one
+# compile line because it changes the shape of burrow__Context and so every file
+# that sees the header has to agree about it.
+ifeq ($(PORTABLE_CONTEXT),1)
+  DEFINES += -DBURROW_PORTABLE_CONTEXT=1
+endif
+
 CFLAGS  ?= $(STD) $(OPT) $(WARNINGS) $(HARDENING) $(INCLUDES) $(DEFINES)
 LDFLAGS ?=
 
@@ -93,8 +102,18 @@ endif
 # Two levels is what the layout uses, src/version.c and src/mem/arena.c, and
 # spelling them out beats a shell find that behaves differently on every box.
 SRCS := $(wildcard src/*.c) $(wildcard src/*/*.c)
-OBJS := $(patsubst src/%.c,$(BUILD)/obj/%.o,$(SRCS))
+ASMS := $(wildcard src/*/*.S)
+OBJS := $(patsubst src/%.c,$(BUILD)/obj/%.o,$(SRCS)) \
+	$(patsubst src/%.S,$(BUILD)/obj/%.asm.o,$(ASMS))
 LIB  := $(BUILD)/libburrow.a
+
+# Assembly gets its own flags rather than CFLAGS, because most of CFLAGS is
+# about C and a compiler handed -Wstrict-prototypes for an assembler file is
+# entitled to complain that the argument did nothing. It still needs the
+# defines: every .S here is guarded on the same macros the header picks the
+# backend with, and an assembler file that disagrees with the header about which
+# backend is in use produces a duplicate symbol or a missing one.
+ASFLAGS ?= -g $(INCLUDES) $(DEFINES)
 
 TEST_SRCS := $(wildcard tests/*_test.c)
 TEST_BINS := $(patsubst tests/%.c,$(BUILD)/tests/%,$(TEST_SRCS))
@@ -120,6 +139,10 @@ $(LIB): $(OBJS)
 $(BUILD)/obj/%.o: src/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(THREADS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD)/obj/%.asm.o: src/%.S
+	@mkdir -p $(dir $@)
+	$(CC) $(ASFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(BUILD)/tests/%: tests/%.c $(LIB)
 	@mkdir -p $(dir $@)

@@ -108,6 +108,24 @@ Checks: >
 #     line in CI and not an afternoon of reformatting. Worth revisiting when the
 #     pin moves.
 #
+CheckOptions:
+  # _XOPEN_SOURCE is a reserved identifier and being one is the whole point of
+  # it. It is the name POSIX picked for asking a libc to declare ucontext and
+  # there is no unreserved spelling of it, so src/runtime/context.c defines it
+  # before its first include. Naming the one identifier here keeps the check on
+  # for everything else, which is better than a NOLINT that grows a second
+  # instance nobody notices.
+  #
+  # Three lines for one check because cert-dcl37-c and cert-dcl51-cpp are
+  # aliases of it and each alias reads its options under its own name. Set only
+  # the first and the finding comes back with the other two in the brackets.
+  - key: bugprone-reserved-identifier.AllowedIdentifiers
+    value: '_XOPEN_SOURCE'
+  - key: cert-dcl37-c.AllowedIdentifiers
+    value: '_XOPEN_SOURCE'
+  - key: cert-dcl51-cpp.AllowedIdentifiers
+    value: '_XOPEN_SOURCE'
+
 # Warnings from headers are on, because the headers are where most of this
 # library lives.
 HeaderFilterRegex: 'include/burrow/.*'

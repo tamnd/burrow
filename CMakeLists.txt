@@ -32,6 +32,23 @@ option(BURROW_WERROR "Turn warnings into errors" ${PROJECT_IS_TOP_LEVEL})
 # rather than quietly produce a program without one.
 option(BURROW_ENABLE_BOEHM "Link the Boehm collector and enable the gc backend" OFF)
 
+# Forces the portable context switch on a machine that has assembly for it. This
+# is not something you would ship, it is how you find out whether a bug is in
+# the assembly or above it. It has to be a PUBLIC definition further down rather
+# than a private one, because it changes the shape of burrow__Context and every
+# file that reads the header has to agree about that.
+option(BURROW_PORTABLE_CONTEXT "Use ucontext or Fibers instead of the context switch assembly" OFF)
+
+# The assembler, which is the same compiler driver under another name. MSVC does
+# not get it: its assembler reads a different syntax entirely, and Windows takes
+# the Fibers path anyway, so there is nothing for it to assemble. Every .S in
+# the tree is guarded on the same macros the header picks a backend with, so a
+# file that is not wanted on this target assembles to an empty object rather
+# than needing a rule here to leave it out.
+if(NOT MSVC)
+    enable_language(ASM)
+endif()
+
 execute_process(
     COMMAND git describe --always --dirty --match v[0-9]*
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -43,6 +60,10 @@ if(NOT BURROW_SOURCE_ID)
 endif()
 
 file(GLOB_RECURSE BURROW_SOURCES CONFIGURE_DEPENDS src/*.c)
+if(NOT MSVC)
+    file(GLOB_RECURSE BURROW_ASM_SOURCES CONFIGURE_DEPENDS src/*.S)
+    list(APPEND BURROW_SOURCES ${BURROW_ASM_SOURCES})
+endif()
 
 add_library(burrow STATIC ${BURROW_SOURCES})
 add_library(burrow::burrow ALIAS burrow)
@@ -52,6 +73,13 @@ target_include_directories(burrow PUBLIC
     $<INSTALL_INTERFACE:include>)
 
 target_compile_definitions(burrow PRIVATE BURROW_SOURCE_ID="${BURROW_SOURCE_ID}")
+
+# PUBLIC, and see the option above for why: this one is part of the layout of a
+# type, so a program that links burrow has to be compiled with the same answer
+# the library was.
+if(BURROW_PORTABLE_CONTEXT)
+    target_compile_definitions(burrow PUBLIC BURROW_PORTABLE_CONTEXT=1)
+endif()
 
 # Threads. This is the one find_package in the file and it is not a feature
 # check either: the runtime needs OS threads on every platform and the only
@@ -83,16 +111,14 @@ if(MSVC)
     # only ever noise here.
     target_compile_definitions(burrow PRIVATE _CRT_SECURE_NO_WARNINGS)
 else()
+    # All of it is behind COMPILE_LANGUAGE:C, because most of this list is about
+    # C and a compiler handed -Wstrict-prototypes for an assembler file is
+    # entitled to say the argument did nothing. With -Werror on, saying so is
+    # enough to fail the build.
     target_compile_options(burrow PRIVATE
-        -Wall -Wextra -Wpedantic
-        -Wshadow -Wcast-qual -Wcast-align -Wconversion -Wsign-conversion
-        -Wwrite-strings -Wpointer-arith -Wstrict-prototypes -Wmissing-prototypes
-        -Wmissing-declarations -Wredundant-decls -Wundef -Wswitch-enum
-        -Wswitch-default -Wdouble-promotion -Wformat=2 -Wformat-security
-        -Wnull-dereference -Wstack-protector -Wvla -Wno-unused-parameter
-        -fstack-protector-strong -fno-common)
+        "$<$<COMPILE_LANGUAGE:C>:-Wall;-Wextra;-Wpedantic;-Wshadow;-Wcast-qual;-Wcast-align;-Wconversion;-Wsign-conversion;-Wwrite-strings;-Wpointer-arith;-Wstrict-prototypes;-Wmissing-prototypes;-Wmissing-declarations;-Wredundant-decls;-Wundef;-Wswitch-enum;-Wswitch-default;-Wdouble-promotion;-Wformat=2;-Wformat-security;-Wnull-dereference;-Wstack-protector;-Wvla;-Wno-unused-parameter;-fstack-protector-strong;-fno-common>")
     if(BURROW_WERROR)
-        target_compile_options(burrow PRIVATE -Werror)
+        target_compile_options(burrow PRIVATE "$<$<COMPILE_LANGUAGE:C>:-Werror>")
     endif()
 endif()
 

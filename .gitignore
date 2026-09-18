@@ -1,6 +1,9 @@
 # Build output. The tree builds out of source, into build/, and nothing else
-# is supposed to appear anywhere.
-build/
+# is supposed to appear anywhere. The glob is for the second and third tree you
+# end up with the moment anything is built two ways, which BUILD= is for:
+# build-portable/ next to build/ is how the context switch gets checked both
+# ways, and CI does the same thing under the same names.
+build*/
 *.o
 *.a
 *.so

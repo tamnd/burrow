@@ -36,8 +36,16 @@ jobs:
       - name: Every ported file names the Go file it came from
         run: tools/check-headers.sh
 
+      # The version is pinned because clang-format changes its mind between
+      # releases. Whatever ubuntu-latest happened to ship disagreed with what
+      # contributors had installed about where the space goes in
+      # (uint16_t)_Alignof(T), so a correctly formatted tree failed the gate.
+      # A formatter that cannot be reproduced is not a gate, it is a lottery.
+      # Moving the pin is fine, it is one line here and one line in
+      # CONTRIBUTING.md, and it comes with the reformat in the same commit.
       - name: clang-format
         run: |
+          pipx install clang-format==20.1.7
           clang-format --version
           clang-format --dry-run --Werror $(git ls-files '*.c' '*.h')
 

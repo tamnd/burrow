@@ -30,6 +30,7 @@ The recipe is the same every time.
 - No libc string functions. `strcpy`, `strcat`, `sprintf` and the rest of that family are banned outright, and the banned list is in `tools/check-banned`.
 - Clean under AddressSanitizer, UndefinedBehaviorSanitizer, MemorySanitizer, ThreadSanitizer and the tracking allocator.
 - Every public symbol maps back to a Go declaration in `$GOROOT/api`, checked by `tools/coverage`.
+- Formatted by clang-format 20.1.7, which is the version CI runs and the version `make fmt` should be run with. Get it with `pipx install clang-format==20.1.7` if the one on your machine is a different release. The versions disagree with each other about a few constructs, so a tree formatted by a newer one fails the gate on a correctly formatted file, and the only fix for that is for everybody to run the same one.
 
 None of this is negotiable per PR, but all of it is negotiable in an issue. If a rule is wrong it should be changed everywhere rather than waived once.
 

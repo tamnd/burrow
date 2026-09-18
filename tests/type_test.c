@@ -141,7 +141,10 @@ TEST(the_kind_predicates_group_things_the_way_reflect_does) {
 TEST(a_string_compares_by_its_bytes_not_by_its_pointer) {
     char a[] = "hello";
     char b[] = "hello";
-    CHECK(a != b); /* two buffers, or the rest of this proves nothing */
+    /* Two buffers, or the rest of this proves nothing. Spelled with the
+     * addresses of the first elements because gcc rejects comparing two arrays
+     * directly, on the grounds that people who write it usually meant strcmp. */
+    CHECK(&a[0] != &b[0]);
 
     Str sa = str_from_cstr(a);
     Str sb = str_from_cstr(b);

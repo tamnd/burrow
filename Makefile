@@ -125,11 +125,17 @@ install: $(LIB)
 # since that is the one you are about to commit.
 GIT_FILES := git ls-files --cached --others --exclude-standard
 
+# CI pins clang-format to 20.1.7, because the releases disagree about a handful
+# of constructs and a tree formatted by a different one fails the gate. Override
+# this if yours lives somewhere else: make fmt CLANG_FORMAT=clang-format-20
+CLANG_FORMAT ?= clang-format
+CLANG_TIDY   ?= clang-tidy
+
 fmt:
-	clang-format -i $(shell $(GIT_FILES) '*.c' '*.h')
+	$(CLANG_FORMAT) -i $(shell $(GIT_FILES) '*.c' '*.h')
 
 tidy:
-	clang-tidy $(shell $(GIT_FILES) 'src/*.c' 'src/**/*.c') -- $(CFLAGS)
+	$(CLANG_TIDY) $(shell $(GIT_FILES) 'src/*.c' 'src/**/*.c') -- $(CFLAGS)
 
 clean:
 	rm -rf $(BUILD)

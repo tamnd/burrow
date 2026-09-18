@@ -70,7 +70,7 @@ Three things fall out of it immediately, and they are the payoff:
    that wants per-request arenas, a firmware image that wants a fixed pool, and
    a script that wants Boehm GC.
 
-### The two carve-outs
+### The three carve-outs
 
 Stated here, in full, so that "no exceptions" stays true elsewhere.
 
@@ -111,6 +111,41 @@ same paired API, because the resource is an OS handle and not memory. These
 still take an allocator for their memory; `Close` releases the *handle*, and
 the memory goes when the arena goes. This matches Go, where forgetting `Close`
 leaks an fd regardless of the GC.
+
+**A growable container stores the allocator it was made with.** Today that is
+exactly one type, `Map`. An insert can grow the table, so `map_set` allocates,
+and the rule as written would put an `Alloc *` on the hottest operation a hash
+table has:
+
+```c
+Map *m = map_make(a, TYPE_STRING, TYPE_INT, 0);
+bool ok = map_set(m, &key, &val);   /* no Alloc, and it can still allocate */
+```
+
+The signature hides an allocation, which is carve-out 1 above given up, and it
+is worth being clear that is the cost. What is bought is the property the rule
+exists for. A caller who passes a different allocator on the second insert gets
+a table with half its memory from one place and half from another, which is an
+ownership question per insert instead of per map, and neither the caller nor a
+reviewer can see it in a signature either. Storing it once means everything a
+map allocated came from the one allocator its `map_make` was given, which is
+point 2 of the payoff, kept.
+
+`Slice` is the type that shows why this is a carve-out and not a new rule.
+`slice_append` takes an allocator because a `Slice` is a value the caller
+holds, four words they can copy, alias and sub-slice, and there is nowhere to
+put a fifth word without making every slice in the library bigger for the
+benefit of the calls that grow. A `Map` is a pointer to a header that is
+already opaque, so one more field in it costs nothing per use and nothing per
+copy, because a map is not copied.
+
+`map_free` follows from the same asymmetry. `Str` and `Slice` need no free
+function, since they hand you the pointer and the size and `mem_free` takes
+both. Nothing outside `map.c` can name a map's pointer or its size, so the
+free has to live there. It is the first per-object free in the library and the
+argument in §1 against per-object `free` still holds: this one is safe to have
+because there is exactly one thing to free, the map itself, there is no
+aliasing question, and arena and GC users can carry on ignoring it.
 
 ## 3. The allocator interface
 

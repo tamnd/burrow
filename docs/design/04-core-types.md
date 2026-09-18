@@ -182,10 +182,14 @@ typedef struct Map Map;   /* opaque */
 Map *map_make(Alloc *a, const Type *key, const Type *val, Int hint);
 void   *map_get(Map *m, const void *key);          /* NULL if absent */
 bool    map_get2(Map *m, const void *key, void *out_val);
-void    map_set(Map *m, const void *key, const void *val);
+bool    map_set(Map *m, const void *key, const void *val);
 void    map_del(Map *m, const void *key);
-Int  map_len(Map *m);
-bool    map_next(Map *m, map_iter *it, void **k, void **v);
+void    map_clear(Map *m);
+void    map_free(Map *m);
+Int     map_len(const Map *m);
+
+MapIter map_iter(Map *m);
+bool    map_next(MapIter *it, const void **key, void **val);
 ```
 
 Implemented as Swiss tables, matching Go 1.24+, because the iteration-order
@@ -198,6 +202,36 @@ when they port back.
 
 `Map` is opaque and heap-allocated (Go's `map` is also a pointer under the
 hood), so `map` values are reference-like in C exactly as in Go.
+
+Three signatures above differ from what this document first wrote down, and each
+difference is forced by C rather than chosen:
+
+- `map_set` returns `bool`. Go's assignment cannot fail because the runtime
+  stops the world on an allocation failure. A library that takes an allocator
+  from the caller has to hand that decision back, so `false` means the table
+  needed to grow and the allocator refused, and the map is unchanged.
+- The iterator is a caller-owned value, `MapIter it = map_iter(m)`, not a
+  cursor the map holds. Go's `range` hides the same state in the frame. Making
+  it a struct the caller declares is what allows two live iterators over one
+  map, which Go allows, without the map paying for a list of them.
+- `map_free` exists, and it is the first per-object free in the library.
+  → [05](05-memory.md) §2.
+
+One behavioural deviation, and it is the only one in the core types. Go's table
+is a directory of fixed-size tables and grows by splitting one, so a growth
+leaves every other entry where it was and an iterator survives it. This
+implementation is a single table that doubles and reinserts, which is what
+Abseil does and what makes the lookup path as tight as it is. The cost is that
+a growth moves every entry, so an iterator cannot survive one. Go's
+specification already leaves the result of inserting during a range
+unspecified, so rather than produce an arbitrary answer, `map_next` calls
+`runtime_throw` with `map grew during iteration`. Keeping the old table alive
+for the iterator is the Go answer and it needs a collector to decide when the
+old table dies; without one the choice is a dangling pointer or a leak, and
+reporting the program's existing bug beats both.
+
+The table stores its `Alloc *`, which is the documented exception to the
+allocator-passing rule. → [05](05-memory.md) §2.
 
 ## 5. Interfaces
 

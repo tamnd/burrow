@@ -140,6 +140,31 @@ const OsPathError *pe = errors_as(err, TYPE_OS_PATH_ERROR);
 
 Details, including how to write your own error type and what happens when the allocator says no: [docs/guides/errors.md](docs/guides/errors.md).
 
+## Maps
+
+A Swiss table, which is what Go's map has been since 1.24. Keys and values are copied in and compared by value, so a map keyed by string is keyed by the bytes.
+
+```c
+Map *counts = map_make(a, TYPE_STRING, TYPE_INT, 0);
+MAP_SET(Str, Int, counts, S("the"), 1);
+
+Int *n = MAP_GET(Str, Int, counts, S("the"));
+if (n != NULL)
+    (*n)++;
+```
+
+Eight slots to a group and eight control bytes in front of them, so asking which of the eight might hold your key is a few instructions on one 64 bit word, no branches and no key comparisons. A lookup that misses usually touches one cache line and compares nothing.
+
+Iteration order is randomised per iterator, and that is on purpose. A program that depends on map order is already broken, and breaking it on the first run beats breaking it the day somebody adds a key.
+
+Go's awkward corners come along unchanged because they are observable: a nil map reads as empty and writing to one stops the program, `-0.0` and `0.0` are one key, and every NaN key is a different key that can never be found again.
+
+```c
+for (MapIter it = map_iter(m); map_next(&it, &k, &v); ) { ... }
+```
+
+Details, including the one deviation from Go, which is that an insert that grows the table invalidates a live iterator and says so: [docs/guides/maps.md](docs/guides/maps.md).
+
 ## Status
 
 Early. Nothing is usable yet.

@@ -188,4 +188,4 @@ Both copy, which is what both conversions do in Go. If you want the cheap versio
 
 The `slices` package, which is where `slices_sort`, `slices_index`, `slices_contains`, `slices_grow` and the rest of the generic helpers live. Those are a port of a Go package and they belong under their package name, not on the core type.
 
-`Map`, which is next after `Error`.
+A way to ask for the descriptor of `[]T`. A slice of slices works already, since a `Slice` is just a value with a size and an alignment, but you have to write the `[]T` descriptor out yourself. The function that builds one on demand belongs to `reflect`, which is where Go puts it too.

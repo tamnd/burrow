@@ -6,7 +6,29 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 
 ## Unreleased
 
-Nothing yet.
+### Errors
+
+- `Error`: an interface value, a vtable pointer and a data pointer, returned by value, and a zeroed one means nothing went wrong. Succeeding allocates nothing and leaves nothing to free.
+- `errors_new`, `errors_is`, `errors_as`, `errors_unwrap`, `errors_join` and `errors_join_v`, ported walk for walk from Go's, including the `Unwrap() []error` trees that `errors.Join` builds. `errors_as` returns the pointer rather than taking one and returning a bool, because in C the pointer is the bool.
+- Sentinel errors are static `const` objects in read only memory, so comparing against one is two pointer loads and declaring one is a line the linker resolves.
+- `docs/guides/errors.md` and `docs/guides/failure.md`.
+
+### Maps
+
+- `Map`: a Swiss table, which is what Go's map has been since 1.24. Eight slots to a group with eight control bytes in front of them, so asking which of the eight might hold a key is a few instructions on one 64 bit word with no branches and no key comparisons.
+- `map_make`, `map_get`, `map_get2`, `map_set`, `map_del`, `map_clear`, `map_len`, `map_free`, `map_iter` and `map_next`, plus `MAP_SET`, `MAP_GET`, `MAP_HAS` and `MAP_DEL` for the call sites where the types are known.
+- Iteration order is randomised per iterator, deliberately, because a program that depends on map order is already broken and breaking it on the first run beats breaking it the day somebody adds a key.
+- Go's awkward corners come across because they are observable: a nil map reads as empty and writing to one stops the program, a negative zero and a positive zero are one key, and every NaN key is a different key that can never be found again.
+- Float and complex descriptors got their own equality and hash, which is what those two rules are made of. Complex compares and hashes componentwise.
+- Tombstones are reclaimed by rebuilding at the same size when the live entries would fit, so filling and emptying a map forever, which is what a cache does, reaches a steady state instead of growing without bound.
+- `map_set` returns false when the table needed to grow and the allocator refused, and the map is unchanged. Go stops the world instead, and a library that takes the caller's allocator has to hand that decision back.
+- One deviation from Go, and it is entry fifteen in `docs/ledger.md`. An insert that grows the table while an iterator is live moves every entry, so `map_next` stops the program rather than producing an arbitrary answer. Go keeps the displaced table alive for the iterator and needs a collector to know when it dies.
+- `map_make` takes an allocator and the map keeps it, which is the third carve-out in the allocator rule and the reason `map_free` exists. Both are argued in `docs/design/05-memory.md` §2.
+- `docs/guides/maps.md`.
+
+### Runtime
+
+- `runtime_rand64`, xoshiro256++ seeded from the OS, per thread. Every map gets its own hash seed from it, so two maps holding the same keys have different layouts and a program cannot be fed keys that all land in one group.
 
 ## v0.0.2 (2026-09-18)
 

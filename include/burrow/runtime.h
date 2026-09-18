@@ -73,6 +73,26 @@ BURROW_NORETURN void runtime_slice_bounds_out_of_range(Int lo, Int hi, Int cap);
 typedef void (*RuntimeFatalFunc)(Str msg);
 void runtime_set_fatal_handler(RuntimeFatalFunc fn);
 
+/* ------------------------------------------------------------------ random
+ *
+ * Sixty four random bits, from a generator seeded once per thread out of
+ * whatever the operating system hands out.
+ *
+ * This is Go's runtime.rand and it is here for the same reason Go has it in the
+ * runtime rather than in math/rand: a map needs a hash seed before any user
+ * code has run, and the seed has to be unpredictable rather than merely
+ * arbitrary. A map with a fixed seed is a map an attacker can fill with keys
+ * that all land in one bucket, and the request that does it costs them nothing.
+ *
+ * It is not a cryptographic generator and crypto/rand will not be built on it.
+ * It is fast, it is seeded from the system, and its output is fine for hash
+ * seeds, for shuffling an iteration order, and for tests.
+ *
+ * The state is per thread, so there is no lock on the fast path and no data
+ * race for ThreadSanitizer to find. Two threads therefore get two independent
+ * streams, which is what Go's per-m generator gives as well. */
+uint64_t runtime_rand64(void);
+
 #ifdef __cplusplus
 }
 #endif

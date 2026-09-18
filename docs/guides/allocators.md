@@ -6,7 +6,7 @@ It is shorter than you are expecting.
 
 ## The rule
 
-Every function in burrow that can allocate takes an allocator as its first parameter. There are no exceptions, there is no hidden global, and there is no per object free function to remember.
+Every function in burrow that can allocate takes an allocator as its first parameter. There is one exception, described below, there is no hidden global, and there is no per object free function to remember.
 
 ```c
 #include "burrow/burrow.h"
@@ -27,6 +27,21 @@ int main(void) {
 Two allocations happened in there and possibly a few hundred underneath them, and one call cleaned up all of it. You do not free `body`. You do not free `lines`. You do not free the strings inside `lines`. You free the arena.
 
 That is the whole model. The rest of this page is about the cases where the default is not what you want.
+
+## The exception, which is Map
+
+`map_make` takes an allocator and the map keeps it, so `map_set` does not take one and can still allocate:
+
+```c
+Map *m = map_make(a, TYPE_STRING, TYPE_INT, 0);
+map_set(m, &key, &val);      /* this can grow the table */
+```
+
+An insert can grow the table, and the alternative is an allocator parameter on the hottest call a hash table has, plus a caller who passes a different one on the second insert and ends up with a table half from one place and half from another. Storing it once keeps the part that matters, which is that everything a map allocated came from the allocator you handed to `map_make`.
+
+`map_free` exists for the same reason and it is the only per object free in the library. `Str` and `Slice` hand you the pointer and the size, so `mem_free` takes them directly. A `Map` is opaque and moves its own memory around, so nothing outside the map can name the pointer to give back. If you are using an arena, keep ignoring it.
+
+Nothing else in burrow does this, and if something else ever needs to, it will be a growable container for the same reason and it will say so here.
 
 ## Why it works this way
 
@@ -186,3 +201,4 @@ What it costs you is thinking about lifetimes, once, at the point where you deci
 - `include/burrow/mem.h` for the interface itself
 - `docs/design/05-memory.md` for why each decision went the way it did
 - `docs/guides/errors.md` for what happens to a failed allocation on its way back to you
+- `docs/guides/maps.md` for the one type that stores an allocator, and why

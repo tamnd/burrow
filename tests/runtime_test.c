@@ -2,70 +2,11 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
-#include "harness.h"
-
 #include "burrow/core.h"
 #include "burrow/runtime.h"
 
-#include <setjmp.h>
-
-/* Testing something that ends the process needs a way to not end the process,
- * and the fatal handler is that way. It is not a hack for the tests, it is the
- * hook a kernel module or a wasm host needs for the same reason: somewhere else
- * to put the last message.
- *
- * The handler here does the one thing the documentation says a handler must not
- * do, which is fail to return by leaving sideways instead. That is fine.
- * longjmp out of it is still not returning, so the contract holds, and the
- * process survives. What a real program would do here is write the message
- * somewhere and then stop.
- *
- * This is also the only setjmp in the tree. When defer and panic land they own
- * setjmp, there will be a checker that says so, and this file gets rewritten
- * against BURROW_TRY along with everything else. */
-
-static jmp_buf escape;
-static char caught[256];
-static bool did_catch;
-
-static void catch_fatal(Str msg) {
-    size_t n =
-        (size_t)(msg.len < (Int)sizeof(caught) - 1 ? msg.len : (Int)sizeof(caught) - 1);
-    if (msg.p != NULL && n > 0)
-        memcpy(caught, msg.p, n);
-    caught[n] = '\0';
-    did_catch = true;
-    longjmp(escape, 1);
-}
-
-/* Run something that is supposed to stop, and come back.
- *
- * setjmp has to be the whole controlling expression of an if for this to be
- * defined, which is why this is a statement macro rather than something that
- * returns the message. Everything it touches is at file scope, since a local
- * that changes between setjmp and longjmp has an indeterminate value afterwards
- * unless it is volatile. */
-#define EXPECT_FATAL(stmt)                                                             \
-    do {                                                                               \
-        memset(caught, 0, sizeof(caught));                                             \
-        did_catch = false;                                                             \
-        runtime_set_fatal_handler(catch_fatal);                                        \
-        if (setjmp(escape) == 0) {                                                     \
-            stmt;                                                                      \
-        }                                                                              \
-        runtime_set_fatal_handler(NULL);                                               \
-    } while (0)
-
-/* The common case: it stopped, and it said this. Not stopping at all is a
- * different failure from stopping with the wrong text, so they report
- * differently. */
-#define CHECK_FATAL(stmt, want)                                                        \
-    do {                                                                               \
-        EXPECT_FATAL(stmt);                                                            \
-        CHECK(did_catch);                                                              \
-        if (did_catch)                                                                 \
-            CHECK_STR_EQ(caught, want);                                                \
-    } while (0)
+#include "fatal.h"
+#include "harness.h"
 
 TEST(throw_carries_the_message_through) {
     CHECK_FATAL(runtime_throw(BURROW_S("something is wrong")), "something is wrong");
@@ -79,8 +20,8 @@ TEST(throw_carries_the_message_through) {
      * which is the handler's problem rather than the runtime's, but the length
      * that got handed over is the real one. */
     EXPECT_FATAL(runtime_throw(BURROW_S("stop\0here")));
-    CHECK(did_catch);
-    CHECK_STR_EQ(caught, "stop");
+    CHECK(fatal_did_catch);
+    CHECK_STR_EQ(fatal_caught, "stop");
 }
 
 TEST(the_messages_are_the_ones_go_prints) {
@@ -125,9 +66,9 @@ TEST(an_absurd_number_truncates_rather_than_overflowing) {
      * running out of memory is one of the things that will eventually arrive
      * here. So the only question is what the widest possible numbers do. */
     EXPECT_FATAL(runtime_index_out_of_range(BURROW_INT_MAX, BURROW_INT_MIN));
-    CHECK(did_catch);
-    CHECK(strncmp(caught, "runtime error: index out of range [", 35) == 0);
-    CHECK(strlen(caught) < 128);
+    CHECK(fatal_did_catch);
+    CHECK(strncmp(fatal_caught, "runtime error: index out of range [", 35) == 0);
+    CHECK(strlen(fatal_caught) < 128);
 }
 
 int main(void) {

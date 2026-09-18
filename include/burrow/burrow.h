@@ -40,6 +40,7 @@
 
 #include "burrow/core.h"
 #include "burrow/error.h"
+#include "burrow/map.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/fixed.h"
@@ -54,8 +55,8 @@
  *
  *   core types, allocators, runtime, reflect, then the packages in tier order.
  *
- * Allocators are done. Str, the type descriptor, Slice and Error are done. Map
- * is next, and then interfaces, which is the last of the core types before the
- * runtime. See the milestone issues. */
+ * Allocators are done. Str, the type descriptor, Slice, Error and Map are done.
+ * Interfaces are next, which is the last of the core types before the runtime.
+ * See the milestone issues. */
 
 #endif /* BURROW_H */

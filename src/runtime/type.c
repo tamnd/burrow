@@ -11,6 +11,8 @@
 
 #include "burrow/type.h"
 
+#include "burrow/runtime.h"
+
 #include <string.h>
 
 /* ------------------------------------------------------------------- names */
@@ -228,6 +230,81 @@ static uint64_t string_hash(const void *p, uint64_t seed) {
 
 static const TypeOps string_ops = {string_equal, string_hash, NULL, NULL};
 
+/* Floats do not compare by their bytes either, and the reasons are the two
+ * corners of IEEE 754 that Go's map inherits from the hardware.
+ *
+ * A negative zero and a positive zero are different bit patterns and are the
+ * same number, so m[0.0] has to find an entry stored under -0.0. Both of them
+ * therefore hash as a positive zero.
+ *
+ * A NaN is not equal to itself, so a NaN key can be stored and can never be
+ * found again, and storing two of them stores two entries. Hashing the bits
+ * would put every NaN in one bucket, and since none of them ever matches, a
+ * program that manages to fill a map with NaN keys would turn every one of
+ * those inserts into a walk over all of them. Mixing a random number in
+ * scatters them instead, which is exactly what Go's runtime does and the reason
+ * runtime.rand is reachable from the hashing code.
+ *
+ * Everything else, including the infinities, is just its bits. */
+static uint64_t float64_hash_bits(double f, uint64_t seed) {
+    if (f == 0)
+        f = 0; /* turns a negative zero into a positive one */
+    else if (f != f)
+        return fnv1a("", 0, seed ^ runtime_rand64());
+    return fnv1a(&f, sizeof f, seed);
+}
+
+static bool float32_equal(const void *a, const void *b) {
+    return *(const float *)a == *(const float *)b;
+}
+
+static uint64_t float32_hash(const void *p, uint64_t seed) {
+    /* Widened to double first, so that a float32 and a float64 holding the same
+     * number are not required to hash the same and the zero and NaN rules only
+     * have to be written once. They are different types and never share a map,
+     * so nothing depends on the two agreeing. */
+    return float64_hash_bits((double)*(const float *)p, seed);
+}
+
+static bool float64_equal(const void *a, const void *b) {
+    return *(const double *)a == *(const double *)b;
+}
+
+static uint64_t float64_hash(const void *p, uint64_t seed) {
+    return float64_hash_bits(*(const double *)p, seed);
+}
+
+/* A complex number is two floats and it follows both rules componentwise, since
+ * Go defines its equality as the real parts being equal and the imaginary parts
+ * being equal. So a complex with a NaN anywhere in it is never equal to
+ * anything, including itself. */
+static bool complex64_equal(const void *a, const void *b) {
+    const Complex64 *x = (const Complex64 *)a;
+    const Complex64 *y = (const Complex64 *)b;
+    return x->re == y->re && x->im == y->im;
+}
+
+static uint64_t complex64_hash(const void *p, uint64_t seed) {
+    const Complex64 *c = (const Complex64 *)p;
+    return float64_hash_bits((double)c->im, float64_hash_bits((double)c->re, seed));
+}
+
+static bool complex128_equal(const void *a, const void *b) {
+    const Complex128 *x = (const Complex128 *)a;
+    const Complex128 *y = (const Complex128 *)b;
+    return x->re == y->re && x->im == y->im;
+}
+
+static uint64_t complex128_hash(const void *p, uint64_t seed) {
+    const Complex128 *c = (const Complex128 *)p;
+    return float64_hash_bits(c->im, float64_hash_bits(c->re, seed));
+}
+
+static const TypeOps float32_ops = {float32_equal, float32_hash, NULL, NULL};
+static const TypeOps float64_ops = {float64_equal, float64_hash, NULL, NULL};
+static const TypeOps complex64_ops = {complex64_equal, complex64_hash, NULL, NULL};
+static const TypeOps complex128_ops = {complex128_equal, complex128_hash, NULL, NULL};
+
 /* The hash field is a small distinct constant per builtin rather than anything
  * derived. It only has to differ between types within one build, and hand
  * numbering the two dozen builtins is both obviously correct and checkable by a
@@ -263,9 +340,10 @@ BUILTIN(TYPE_UINT16, KIND_UINT16, uint16_t, "uint16", 9, NULL);
 BUILTIN(TYPE_UINT32, KIND_UINT32, uint32_t, "uint32", 10, NULL);
 BUILTIN(TYPE_UINT64, KIND_UINT64, uint64_t, "uint64", 11, NULL);
 BUILTIN(TYPE_UINTPTR, KIND_UINTPTR, Uintptr, "uintptr", 12, NULL);
-BUILTIN(TYPE_FLOAT32, KIND_FLOAT32, float, "float32", 13, NULL);
-BUILTIN(TYPE_FLOAT64, KIND_FLOAT64, double, "float64", 14, NULL);
-BUILTIN(TYPE_COMPLEX64, KIND_COMPLEX64, Complex64, "complex64", 15, NULL);
-BUILTIN(TYPE_COMPLEX128, KIND_COMPLEX128, Complex128, "complex128", 16, NULL);
+BUILTIN(TYPE_FLOAT32, KIND_FLOAT32, float, "float32", 13, &float32_ops);
+BUILTIN(TYPE_FLOAT64, KIND_FLOAT64, double, "float64", 14, &float64_ops);
+BUILTIN(TYPE_COMPLEX64, KIND_COMPLEX64, Complex64, "complex64", 15, &complex64_ops);
+BUILTIN(TYPE_COMPLEX128, KIND_COMPLEX128, Complex128, "complex128", 16,
+        &complex128_ops);
 BUILTIN(TYPE_STRING, KIND_STRING, Str, "string", 17, &string_ops);
 BUILTIN(TYPE_UNSAFE_POINTER, KIND_UNSAFE_POINTER, void *, "unsafe.Pointer", 18, NULL);

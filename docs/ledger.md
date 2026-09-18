@@ -2,11 +2,11 @@
 
 burrow's claim is that it is the Go standard library, complete, with nothing missing. This page is the only qualification on that claim and it is meant to be read before the claim is believed.
 
-Everything here is a declaration that cannot be a one to one port, because it is a property of the Go compiler and toolchain rather than of a library. Every one of them has a defined substitute and every one of them says plainly whether the substitute is as capable as the original. Eleven of the fourteen are full capability replacements. Three are genuine semantic differences and those are the ones worth your attention.
+Everything here is a declaration that cannot be a one to one port, because it is a property of the Go compiler and toolchain rather than of a library, or because it needs a garbage collector to mean what Go means by it. Every one of them has a defined substitute and every one of them says plainly whether the substitute is as capable as the original. Eleven of the fifteen are full capability replacements. Four are genuine semantic differences and those are the ones worth your attention.
 
-Out of 23,730 exported declarations, fourteen. That is the whole asterisk.
+Out of 23,730 exported declarations, fifteen. That is the whole asterisk.
 
-A symbol with an entry here links to it from its reference page, and the entry links back, so you meet the caveat at the point where it matters rather than afterwards. Adding a fifteenth entry is allowed and it needs the same argument the first fourteen got.
+A symbol with an entry here links to it from its reference page, and the entry links back, so you meet the caveat at the point where it matters rather than afterwards. Adding a sixteenth entry is allowed and it needs the same argument the first fifteen got.
 
 ## Full capability substitutes
 
@@ -26,7 +26,17 @@ A symbol with an entry here links to it from its reference page, and the entry l
 
 ## Genuine differences
 
-These three do not do what Go does, and no amount of engineering will change that.
+These four do not do what Go does, and no amount of engineering will change that.
+
+### Inserting into a map while ranging over it
+
+Go's map is a directory of smaller tables and it grows by splitting one of them, so an insert that grows the map leaves the other entries where they are and a `range` already in progress keeps working. burrow's map is a single Swiss table that doubles and reinserts, which is what Abseil does and what makes the lookup path as tight as it is, and a growth therefore moves every entry.
+
+So an insert that grows the table while an iterator is live makes `map_next` stop the program with `map grew during iteration`. Deleting during a range is fine, and so is an insert that does not grow the table, which is the overwhelming majority of them.
+
+Go's own specification says the entries produced after an insert during a range are unspecified, so a program this catches is a program that was already relying on something Go does not promise. What Go does have is a collector, which lets it keep the displaced table alive for exactly as long as some iterator can still see it. Without one, the two available answers are handing out pointers into memory that was freed, or never freeing it, and reporting the bug beats both.
+
+If you need to insert while walking, collect the keys first and walk those. The rest of the iteration rules, which are Go's, are in [guides/maps.md](guides/maps.md).
 
 ### `plugin`
 

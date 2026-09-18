@@ -30,6 +30,12 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 - The tests are written so that a sleep which does not sleep fails them: the sleeper sets a flag going in and another coming out, and the checker looks at the second one while it still has to be clear. There is also a wake that lands before the thread exists, eight sleepers released by one wake, sixteen rounds of clear and reuse, and a thousand volleys of two threads passing a turn back and forth, which is what the scheduler will actually do with these.
 - Checked on macOS arm64, on Linux x86_64 with gcc and clang, under ThreadSanitizer and AddressSanitizer, on 32 bit x86 in Docker where the futex is the time32 one, and on Windows with mingw gcc 16.
 
+### Portability
+
+- The runtime seeds itself with `getrandom` on Linux now instead of `getentropy`, which fixes the build on musl. musl declares `getentropy` only under `_BSD_SOURCE` or `_GNU_SOURCE`, neither of which is set in a strict C11 build, and its `<sys/random.h>` does not declare it at all, so the library did not compile on Alpine. `getrandom` is declared with no feature macro by both musl and glibc. macOS and the BSDs keep `getentropy`, which is the portable one there.
+- `getrandom` can be interrupted and can return fewer bytes than asked for, which `getentropy` cannot, so the call site grew a retry loop with a bounded attempt count. It also needs a Linux 3.17 kernel, which is 2014.
+- CI has a musl job now, because a platform nothing builds on is a platform that breaks again a week later. It is Alpine in a container and it checks that it really is a musl toolchain before it builds, the same way the big endian job checks its byte order.
+
 ## v0.0.7 (2026-09-18)
 
 Groundwork. Nothing in this release is a package a user calls, and all of it is what the next ones stand on: the atomics the scheduler needs, an allocator that catches the mistakes the ownership annotations describe, and a check that the annotations and the list of global state are true rather than merely written down.

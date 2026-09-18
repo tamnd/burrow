@@ -27,19 +27,30 @@
 
 /* Where the seed comes from.
  *
- * getentropy is the one call that exists on every Unix burrow targets, needs no
- * file descriptor, cannot be interrupted, and cannot partially succeed. It
- * lives in <sys/random.h> on Linux, macOS and most of the BSDs, and in
- * <unistd.h> on OpenBSD. Both headers declare it without a feature macro, which
- * matters because this library is built as strict C11 and glibc hides most of
- * POSIX in that mode.
+ * On Linux it is getrandom. On every other Unix it is getentropy, which needs
+ * no file descriptor, cannot be interrupted and cannot partially succeed, and
+ * is the one call the BSDs and macOS all have.
+ *
+ * Linux is the exception because of musl. getentropy is declared there only
+ * under _BSD_SOURCE or _GNU_SOURCE, neither of which is set when this library
+ * is built as strict C11, and <sys/random.h> on musl does not declare it at
+ * all. getrandom is declared by <sys/random.h> with no feature macro on musl
+ * and on glibc both, so it is the call that works on every Linux libc without
+ * giving up strict C11 and without reaching for _GNU_SOURCE. The price is that
+ * it can be interrupted and can return short, which is what the loop in
+ * system_seed is for, and that it needs a 3.17 kernel, which is 2014.
  *
  * On Windows it is rand_s, which is the CRT's wrapper over the system generator.
  * It needs _CRT_RAND_S defined before <stdlib.h>, which is what the block above
  * does, and it needs no library beyond the CRT. That last part is why it is used
  * here in preference to BCryptGenRandom: burrow links nothing today and that is
  * worth keeping. */
-#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS) || \
+#if defined(BURROW_OS_LINUX)
+#define BURROW_RAND_GETRANDOM 1
+#include <errno.h>
+#include <sys/random.h>
+#include <sys/types.h> /* ssize_t, which getrandom returns */
+#elif defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS) ||                           \
     defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_NETBSD) ||                         \
     defined(BURROW_OS_DRAGONFLY) || defined(BURROW_OS_SOLARIS)
 #define BURROW_RAND_GETENTROPY 1
@@ -99,7 +110,39 @@ static uint64_t splitmix64(uint64_t *x) {
 static uint64_t system_seed(void) {
     uint64_t seed = 0;
 
-#if defined(BURROW_RAND_GETENTROPY)
+#if defined(BURROW_RAND_GETRANDOM)
+    {
+        /* getrandom can come back with less than was asked for and can be cut
+         * short by a signal, so it gets a loop where getentropy needs none. The
+         * attempt count is a guard rather than a policy: a kernel that keeps
+         * returning EINTR forever is a kernel this is not going to win against,
+         * and falling through to the weak mix below is better than spinning.
+         *
+         * Zero flags, so no GRND_RANDOM and no GRND_NONBLOCK. This runs once
+         * per thread at startup and the only case where it blocks is a machine
+         * that has not gathered any entropy at all yet, where the right answer
+         * is to wait rather than to take whatever is lying around. */
+        unsigned char *p = (unsigned char *)&seed;
+        size_t want = sizeof seed;
+        int attempts = 0;
+
+        while (want > 0 && attempts < 16) {
+            ssize_t got = getrandom(p, want, 0);
+            attempts++;
+            if (got > 0) {
+                p += (size_t)got;
+                want -= (size_t)got;
+                continue;
+            }
+            if (got < 0 && errno == EINTR)
+                continue;
+            break;
+        }
+
+        if (want == 0 && seed != 0)
+            return seed;
+    }
+#elif defined(BURROW_RAND_GETENTROPY)
     if (getentropy(&seed, sizeof seed) == 0 && seed != 0)
         return seed;
 #elif defined(BURROW_RAND_WINDOWS)

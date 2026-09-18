@@ -30,6 +30,13 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 
 - `runtime_rand64`, xoshiro256++ seeded from the OS, per thread. Every map gets its own hash seed from it, so two maps holding the same keys have different layouts and a program cannot be fed keys that all land in one group.
 
+### Performance
+
+- `type_hash` is a multiply and fold hash now instead of FNV-1a. FNV is one multiply per byte and each multiply waits for the one before it, so an eight byte key was eight multiplies the chip could not overlap, measured at 8.6 ns out of a 36 ns map insert. The replacement is two multiplies for anything up to sixteen bytes and one more per sixteen bytes after that, and the multiplies in the loop are independent. Map operations came down by thirteen to forty two percent, measured pinned with the minimum of thirty runs on Linux x86-64, and the hash on its own went from 5.16 to 2.55 ns for an int key and from 1315 to 96 ns for a kilobyte.
+- Nothing about this is observable. The hash is not part of any API, its values were never stable between runs because every map seeds its own, and byte order is deliberately not corrected on big endian for the same reason.
+- The quality is tested and not assumed. `type_test` checks that flipping any one bit of a key flips each bit of the hash between a quarter and three quarters of the time, that a thousand int keys and a thousand string keys spread across the groups and the control bytes a map slices them into without a pile up, and that every length from zero to thirty nine hashes to its own number. That last test earned its keep immediately by catching a bug where the length was folded in with an exclusive or and `"ab"` and `"abc"` cancelled it against their last byte and hashed identically.
+- New benchmarks in burrow-bench for the hash on its own, five of them, against `hash/maphash`. The map benchmarks are what found the FNV problem but could never say how much of their own time was the hash, so now that question has its own file.
+
 ## v0.0.2 (2026-09-18)
 
 Type descriptors and `Slice`, which are the two things `Map`, `Error`, `fmt` and `encoding/json` were all waiting on. Still nothing you can use as a Go standard library.

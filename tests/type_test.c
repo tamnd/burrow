@@ -172,6 +172,149 @@ TEST(the_seed_changes_the_hash) {
     CHECK(type_hash(TYPE_STRING, &e, 7) == type_hash(TYPE_STRING, &e, 7));
 }
 
+/* Avalanche. Flip one bit of a key, and every bit of the hash should change
+ * about half the time. This is the property that a hash either has or does not,
+ * and it is the one that catches a mixing step that looks fine and is not: the
+ * first version of this hash used a single multiply, passed every other test in
+ * this file, and had pairs of bits here that never moved together at all.
+ *
+ * Two hundred and fifty six base values per pair, so a pair that is genuinely
+ * fifty fifty lands inside a tenth of a half about always, and the bound is
+ * loose enough that this does not turn into a flaky test on some future
+ * platform. A broken hash misses it by much more than that. */
+TEST(one_flipped_key_bit_moves_half_the_hash) {
+    for (int bit = 0; bit < 64; bit++) {
+        for (int out = 0; out < 64; out++) {
+            int flips = 0;
+            for (int i = 0; i < 256; i++) {
+                /* Spread the bases out rather than counting up from zero, so
+                 * the test is not only about keys with sixty leading zeroes. */
+                uint64_t x = (uint64_t)i * (uint64_t)0x9e3779b97f4a7c15ULL;
+                uint64_t y = x ^ ((uint64_t)1 << bit);
+                uint64_t hx = type_hash(TYPE_UINT64, &x, 12345);
+                uint64_t hy = type_hash(TYPE_UINT64, &y, 12345);
+                if (((hx ^ hy) >> out) & 1)
+                    flips++;
+            }
+            CHECK(flips > 256 / 4 && flips < 256 * 3 / 4);
+        }
+    }
+}
+
+/* The distribution, measured the way the map uses it. A map takes the group
+ * from the bits above the low seven and the control byte from the low seven, so
+ * a hash can be excellent overall and still be useless if either of those two
+ * slices is lumpy.
+ *
+ * A thousand and twenty four keys into a hundred and twenty eight buckets
+ * averages eight. A perfect hash is not expected, and a random one puts up to
+ * about twenty in the fullest bucket often enough that a tighter bound than
+ * this would fail on a different seed. What this catches is the real failure,
+ * which is a hash that leaves whole buckets empty because some input bits never
+ * reach the bucket index. */
+static void check_spread(const uint64_t *h, int n) {
+    int groups[128] = {0};
+    int ctrl[128] = {0};
+    int gempty = 0, cempty = 0, gmax = 0, cmax = 0;
+
+    for (int i = 0; i < n; i++) {
+        groups[(h[i] >> 7) & 127]++;
+        ctrl[h[i] & 127]++;
+    }
+    for (int i = 0; i < 128; i++) {
+        if (groups[i] == 0)
+            gempty++;
+        if (ctrl[i] == 0)
+            cempty++;
+        if (groups[i] > gmax)
+            gmax = groups[i];
+        if (ctrl[i] > cmax)
+            cmax = ctrl[i];
+    }
+
+    CHECK(gmax <= 24);
+    CHECK(cmax <= 24);
+    CHECK(gempty <= 8);
+    CHECK(cempty <= 8);
+}
+
+TEST(the_hash_spreads_the_keys_a_map_actually_gets) {
+    enum { N = 1024 };
+    static uint64_t h[N];
+    char buf[32];
+
+    /* Counting numbers, which is what a map keyed by an index or an id holds
+     * and the case a weak hash fails on first. */
+    for (int i = 0; i < N; i++) {
+        Int k = i;
+        h[i] = type_hash(TYPE_INT, &k, 7);
+    }
+    check_spread(h, N);
+
+    /* Multiples of sixteen, which is what a map keyed by a pointer holds. */
+    for (int i = 0; i < N; i++) {
+        Int k = (Int)i * 16;
+        h[i] = type_hash(TYPE_INT, &k, 7);
+    }
+    check_spread(h, N);
+
+    /* Keys that differ only in their last few bytes, which is every table
+     * keyed by a name with a common prefix. */
+    for (int i = 0; i < N; i++) {
+        snprintf(buf, sizeof buf, "some/long/prefix/key%04d", i);
+        Str s = str_from_cstr(buf);
+        h[i] = type_hash(TYPE_STRING, &s, 7);
+    }
+    check_spread(h, N);
+
+    /* Short strings, where there is the least input to work with. */
+    for (int i = 0; i < N; i++) {
+        snprintf(buf, sizeof buf, "%d", i);
+        Str s = str_from_cstr(buf);
+        h[i] = type_hash(TYPE_STRING, &s, 7);
+    }
+    check_spread(h, N);
+
+    /* Floats, which go through their own hash on the way to the same mixer. */
+    for (int i = 0; i < N; i++) {
+        double d = (double)i;
+        h[i] = type_hash(TYPE_FLOAT64, &d, 7);
+    }
+    check_spread(h, N);
+}
+
+/* Every length up to a bit past the sixteen byte boundary, because the short
+ * path, the overlapping tail read and the loop all meet there and an off by one
+ * in any of them shows up as two different lengths hashing the same or as a
+ * read outside the key. The second half is what the sanitiser build is for, and
+ * this is what gives it something to look at. */
+TEST(every_short_length_hashes_to_its_own_number) {
+    unsigned char buf[40];
+    uint64_t seen[40];
+
+    for (int i = 0; i < 40; i++)
+        buf[i] = (unsigned char)(i + 1);
+
+    for (int n = 0; n < 40; n++) {
+        Str s = {buf, n};
+        seen[n] = type_hash(TYPE_STRING, &s, 3);
+        for (int m = 0; m < n; m++)
+            CHECK(seen[m] != seen[n]);
+    }
+
+    /* And the same bytes with one changed anywhere still moves the answer, at
+     * every length, which is the tail read doing its job. */
+    for (int n = 1; n < 40; n++) {
+        Str s = {buf, n};
+        uint64_t before = type_hash(TYPE_STRING, &s, 3);
+        for (int i = 0; i < n; i++) {
+            buf[i] = (unsigned char)(buf[i] ^ 0x40);
+            CHECK(type_hash(TYPE_STRING, &s, 3) != before);
+            buf[i] = (unsigned char)(buf[i] ^ 0x40);
+        }
+    }
+}
+
 TEST(copy_and_zero_go_through_the_type) {
     int32_t src = 0x11223344;
     int32_t dst = 0;
@@ -332,6 +475,9 @@ int main(void) {
     RUN(a_string_compares_by_its_bytes_not_by_its_pointer);
     RUN(a_plain_type_compares_by_its_bytes);
     RUN(the_seed_changes_the_hash);
+    RUN(one_flipped_key_bit_moves_half_the_hash);
+    RUN(the_hash_spreads_the_keys_a_map_actually_gets);
+    RUN(every_short_length_hashes_to_its_own_number);
     RUN(copy_and_zero_go_through_the_type);
     RUN(comparability_matches_the_language);
     RUN(fields_are_found_by_name);

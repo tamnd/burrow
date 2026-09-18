@@ -73,6 +73,20 @@ Arena is the default and it is what makes the ergonomics work. You make an arena
 
 The full story is one page, and it is the one page worth reading before you write any burrow: [docs/guides/allocators.md](docs/guides/allocators.md).
 
+## Strings
+
+A string is a pointer and a length, passed by value, and it is not NUL terminated.
+
+```c
+Str name = S("burrow");
+Str arg  = str_from_cstr(argv[1]);   /* borrows, does not copy */
+printf(STR_FMT "\n", STR_ARG(name));
+```
+
+That is the same shape Go uses, and it is the only shape that works, because a Go string can contain a NUL byte and a `char *` cannot. `os.ReadFile` on a JPEG returns a perfectly legal Go string. Every substring is also free, since the result just points into the middle of the original, which is why `strings_split` can hand back a thousand pieces without a thousand allocations.
+
+Details, including how to get a real C string back when you need one: [docs/guides/strings.md](docs/guides/strings.md).
+
 ## Status
 
 Early. Nothing is usable yet.

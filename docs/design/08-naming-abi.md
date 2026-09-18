@@ -281,9 +281,9 @@ Headers mirror Go's import paths exactly, so translation is textual:
 
 ```
 include/burrow/
-  platform.h          detected platform macros           (~400 lines)
+  platform.h          detected platform macros
   core.h              Str, Slice, Any, Error, Int
-  alloc.h             Alloc and the backends
+  mem.h               Alloc, and mem/arena.h mem/heap.h … per backend
   type.h              Type, BURROW_STRUCT and friends
   runtime.h           go, Chan, chan_select, BURROW_DEFER
   all.h               everything, for the impatient
@@ -292,7 +292,7 @@ include/burrow/
   encoding/json.h  …
 ```
 
-`core.h` + `alloc.h` + `type.h` + `runtime.h` are the substrate and are always
+`core.h` + `mem.h` + `type.h` + `runtime.h` are the substrate and are always
 present. Every package header includes exactly what it needs and nothing more.
 
 Rules from [03](03-c-dialect.md) §6 apply: self-contained, idempotent, no

@@ -35,8 +35,10 @@
 #ifndef BURROW_H
 #define BURROW_H
 
+#include "burrow/platform.h"
 #include "burrow/version.h"
 
+#include "burrow/core.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/fixed.h"

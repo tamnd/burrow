@@ -79,6 +79,14 @@ LIB  := $(BUILD)/libburrow.a
 TEST_SRCS := $(wildcard tests/*_test.c)
 TEST_BINS := $(patsubst tests/%.c,$(BUILD)/tests/%,$(TEST_SRCS))
 
+# Header dependencies, written by the compiler as it goes. Without these, make
+# only rebuilds a .o when its .c changes, so editing a header leaves stale
+# objects in the tree and the tests you then run are testing the old code. It is
+# separate from CFLAGS because CI overrides CFLAGS wholesale and this should
+# survive that.
+DEPFLAGS := -MMD -MP
+DEPS     := $(OBJS:.o=.d) $(TEST_BINS:=.d)
+
 .PHONY: all lib test check clean install fmt tidy
 
 all: lib
@@ -91,11 +99,13 @@ $(LIB): $(OBJS)
 
 $(BUILD)/obj/%.o: src/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(BUILD)/tests/%: tests/%.c $(LIB)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -Itests $< $(LIB) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -MF $@.d -Itests $< $(LIB) $(LDFLAGS) -o $@
+
+-include $(DEPS)
 
 test: $(TEST_BINS)
 	@fail=0; for t in $(TEST_BINS); do ./$$t || fail=1; done; exit $$fail

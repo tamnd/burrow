@@ -71,9 +71,9 @@ typedef enum Kind {
     KIND_MAX /* not a kind, just the count, for bounds checking a table */
 } Kind;
 
-/* Type itself is forward declared in core.h, because Slice carries a pointer to
- * one and Slice lives next to Str where it belongs. C11 allows a typedef to be
- * repeated with the same meaning, but there is no reason to write it twice. */
+/* The descriptor is named before it is defined, because Field and Method both
+ * point at one and both are part of it. */
+typedef struct Type Type;
 
 /* What a type can do, for the operations that cannot be worked out from size
  * and alignment alone.

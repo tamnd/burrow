@@ -4,6 +4,7 @@
 
 #include "burrow/core.h"
 #include "burrow/mem/arena.h"
+#include "burrow/slice.h"
 #include "burrow/type.h"
 
 #include "harness.h"
@@ -436,6 +437,103 @@ TEST(a_slice_of_zero_sized_elements_never_allocates) {
     CHECK(slice_at(s, 0) == slice_at(s, 6));
 }
 
+/* ------------------------------------------------ the inline fast paths
+ *
+ * slice_at_fast and slice_append_fast exist for speed and are allowed to be
+ * faster, not different. So these tests do not check what they do, they check
+ * that what they do is what slice_at and slice_append do, element for element,
+ * including when the size they are handed is the wrong one. */
+
+TEST(the_fast_index_agrees_with_the_slow_one) {
+    Slice s = slice_make(a, TYPE_INT, 5, 5);
+    for (Int i = 0; i < 5; i++)
+        *(Int *)slice_at(s, i) = i * 11;
+
+    for (Int i = 0; i < 5; i++) {
+        CHECK(slice_at_fast(s, i, sizeof(Int)) == slice_at(s, i));
+        CHECK_INT_EQ(BURROW_AT(Int, s, i), i * 11);
+    }
+
+    /* A size that does not match the descriptor is not a different answer, it
+     * is the same answer arrived at through the general path. */
+    for (Int i = 0; i < 5; i++) {
+        CHECK(slice_at_fast(s, i, 1) == slice_at(s, i));
+        CHECK(slice_at_fast(s, i, sizeof(Int) * 2) == slice_at(s, i));
+    }
+}
+
+TEST(the_fast_index_still_bounds_checks) {
+    /* The fast path is a range test and a size test and nothing else, so an
+     * index it rejects has to end up in slice_at, which is where the failure
+     * lives. There is no way to observe a fatal error from in here without a
+     * subprocess, so what is checked is the part that can be: an index inside
+     * the length takes the fast path and an index past the length does not
+     * silently return a pointer past the end. */
+    Slice s = slice_make(a, TYPE_INT, 3, 8);
+    CHECK(slice_at_fast(s, 2, sizeof(Int)) == (Byte *)s.p + 2 * sizeof(Int));
+    CHECK(slice_at_fast(s, 0, sizeof(Int)) == s.p);
+}
+
+TEST(the_fast_append_agrees_with_the_slow_one) {
+    /* Two slices built the same way by the two paths, compared at every step,
+     * across the point where the capacity runs out and the backing array
+     * moves. */
+    Slice fast = slice_nil(TYPE_INT);
+    Slice slow = slice_nil(TYPE_INT);
+
+    for (Int i = 0; i < 40; i++) {
+        fast = BURROW_APPEND(Int, a, fast, i);
+        slow = slice_append(a, slow, &i, 1);
+
+        CHECK_INT_EQ(fast.len, slow.len);
+        CHECK_INT_EQ(fast.cap, slow.cap);
+        CHECK(fast.elem == slow.elem);
+        for (Int j = 0; j <= i; j++)
+            CHECK_INT_EQ(BURROW_AT(Int, fast, j), BURROW_AT(Int, slow, j));
+    }
+}
+
+TEST(the_fast_append_falls_back_when_the_size_does_not_match) {
+    /* Eight bytes of room, one byte per element. Appending with the size of an
+     * Int has to write one byte and not eight, because the descriptor is what
+     * says how wide an element is and the size passed in is only a hint that
+     * the compiler can use when it happens to be right. */
+    Slice s = slice_make(a, TYPE_BYTE, 0, 8);
+    for (Int i = 0; i < 8; i++)
+        ((Byte *)s.p)[i] = 0xEE;
+
+    Int wide = 0x41;
+    s = slice_append_fast(a, s, &wide, sizeof(Int));
+
+    CHECK_INT_EQ(s.len, 1);
+    CHECK_INT_EQ(s.cap, 8);
+    CHECK_INT_EQ(((Byte *)s.p)[0], 0x41);
+    for (Int i = 1; i < 8; i++)
+        CHECK_INT_EQ(((Byte *)s.p)[i], 0xEE);
+}
+
+TEST(the_fast_append_grows_a_nil_slice) {
+    /* A nil slice has no pointer, so the fast path cannot take it and the
+     * general one has to do the allocating. */
+    Slice s = slice_nil(TYPE_INT);
+    s = BURROW_APPEND(Int, a, s, 7);
+    CHECK_INT_EQ(s.len, 1);
+    CHECK_INT_EQ(s.cap, 1);
+    CHECK(s.p != NULL);
+    CHECK_INT_EQ(BURROW_AT(Int, s, 0), 7);
+}
+
+TEST(the_fast_append_keeps_the_sharing_within_capacity) {
+    Slice s = slice_make(a, TYPE_INT, 1, 4);
+    Slice other = s;
+    s = BURROW_APPEND(Int, a, s, 99);
+
+    CHECK(s.p == other.p);
+    CHECK_INT_EQ(s.len, 2);
+    CHECK_INT_EQ(other.len, 1);
+    CHECK_INT_EQ(((Int *)other.p)[1], 99);
+}
+
 int main(void) {
     setup();
     RUN(make_gives_the_length_and_capacity_asked_for);
@@ -467,6 +565,12 @@ int main(void) {
     RUN(converting_an_empty_string_gives_an_empty_slice_not_a_nil_one);
     RUN(a_conversion_copies_so_the_two_stop_sharing);
     RUN(a_slice_of_zero_sized_elements_never_allocates);
+    RUN(the_fast_index_agrees_with_the_slow_one);
+    RUN(the_fast_index_still_bounds_checks);
+    RUN(the_fast_append_agrees_with_the_slow_one);
+    RUN(the_fast_append_falls_back_when_the_size_does_not_match);
+    RUN(the_fast_append_grows_a_nil_slice);
+    RUN(the_fast_append_keeps_the_sharing_within_capacity);
     teardown();
     return harness_report("slice");
 }

@@ -2,6 +2,7 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "burrow/slice.h"
 #include "burrow/core.h"
 #include "burrow/runtime.h"
 #include "burrow/type.h"

@@ -102,7 +102,12 @@ typedef struct Str {
  *     if (strings_has_prefix(path, BURROW_S("/api/")))
  *
  * Only ever hand it a string literal. Handing it a char * variable gives you
- * sizeof a pointer, which is a bug the compiler cannot see. */
+ * sizeof a pointer, which is a bug the compiler cannot see.
+ *
+ * It is a compound literal, so it cannot initialise anything with static
+ * storage. C11 wants a constant expression there and a compound literal is not
+ * one. Write the braces out by hand for a static, the way
+ * BURROW_SENTINEL_ERROR does. */
 #define BURROW_S(lit) ((Str){(const Byte *)("" lit), (Int)(sizeof(lit) - 1)})
 
 /* Printing one with printf, which you will want on your first afternoon:

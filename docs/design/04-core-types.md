@@ -289,30 +289,61 @@ allocator when the value must escape.
 ```c
 typedef struct ErrorVT {
     const Type *self_type;
-    Str (*Error)(void *self);
-    Error (*Unwrap)(void *self);        /* NULL if not wrapping */
-    bool   (*Is)(void *self, Error target);
-    bool   (*As)(void *self, Any target);
+    Str    (*message)(const void *self);
+    Error  (*unwrap)(const void *self);         /* NULL if not wrapping */
+    Slice  (*unwrap_multi)(const void *self);   /* the Unwrap() []error form */
+    bool   (*is)(const void *self, Error target);
+    const void *(*as)(const void *self, const Type *target);
 } ErrorVT;
 
-typedef struct { const ErrorVT *vt; void *data; } Error;
+typedef struct { const ErrorVT *vt; const void *data; } Error;
 
-#define BURROW_NO_ERROR  ((Error){ 0, 0 })
+#define BURROW_NO_ERROR  ((Error){ NULL, NULL })
 #define BURROW_FAILED(e) ((e).vt != NULL)
+#define BURROW_OK(e)     ((e).vt == NULL)
 ```
+
+Four things in there differ from the first draft of this section, and all four
+came out of writing the code:
+
+- `data` is `const void *`, so a sentinel can live in read only memory with no
+  cast anywhere. The alternative was throwing `const` away a few hundred times
+  across the library.
+- `as` returns the pointer rather than filling one in and returning a bool. In C
+  the pointer is the bool, `void *` converts to any object pointer so there is no
+  cast at the call site, and both of Go's panics (nil target, non pointer target)
+  stop existing.
+- The message method is `message`, and the function is `error_message`. The
+  mechanical rule gives `error_error`, which is the one place the naming rules
+  produce a name that says the same word twice. → [08](08-naming-abi.md) R2
+- The out of memory sentinel is `burrow_err_out_of_memory`, not
+  `errors_err_out_of_memory`, because it is not a Go symbol and the coverage
+  round trip maps every `errors_` symbol back to Go's API manifest.
+
+`message` also takes no allocator, so an error builds its message at
+construction time and printing one cannot fail. Go builds it in `Error()` on
+demand, which saves an allocation when nobody prints; on an error path the
+unfailing print is worth more.
 
 `Error` is an interface value with `Unwrap`, `Is` and `As` promoted into the
 vtable rather than discovered by type assertion. Go discovers them
 dynamically; putting them in the vtable is faster, and `errors.Is`/`As`/
 `Unwrap` behave identically from the outside, including `Unwrap() []error`
-multi-error trees (a second vtable slot, `UnwrapMulti`).
+multi-error trees (the second slot, `unwrap_multi`).
+
+Two slots for one Go method is the one place the vtable is wider than the
+interface. A Go type cannot satisfy both forms, because it has a single method
+of that name, so a vtable with both filled in has no Go equivalent and no Go
+behaviour to be faithful to. `errors_is`, `errors_as` and `errors_unwrap` all
+take the chain form in that case, since it is the first arm of Go's type switch,
+which keeps the three of them answering the same question the same way.
 
 Three constructors cover almost everything:
 
 ```c
 Error errors_new(Alloc *a, Str text);
 Error fmt_errorf(Alloc *a, Str format, ...);   /* %w supported */
-extern const ErrorVT ErrorsSentinelVT;            /* for package vars */
+extern const ErrorVT burrow_sentinel_error_vt;    /* for package vars */
 ```
 
 Sentinel errors — `io.EOF`, `os.ErrNotExist`, `sql.ErrNoRows`, and there are
@@ -332,8 +363,8 @@ to fail.
 allocator is available, and error paths are exactly where allocation is least
 welcome. Two mitigations: sentinels need none, and every allocator has a
 reserved emergency block so that constructing an error message never fails.
-If even that is exhausted, `errors_new` returns a static
-`errors_err_out_of_memory`. Allocation failure is therefore never a crash and
+If even that is exhausted, `errors_new` and `errors_join` return a static
+`burrow_err_out_of_memory`. Allocation failure is therefore never a crash and
 never a silent nil error. → [05](05-memory.md) §7
 
 ## 7. Function values and closures

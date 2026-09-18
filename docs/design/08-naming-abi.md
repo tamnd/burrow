@@ -166,6 +166,12 @@ pointer receivers. The type name snake-cases under R2, so
 `(time.Time).Add` → `time_add`. Go forbids a type having both `T.M` and `*T.M`,
 so there is no collision.
 
+The rule has exactly one exception in the whole library. `error.Error()` would
+become `error_error`, a name that says the same word twice at every one of the
+call sites where a message gets printed, so it is `error_message`. The
+generator's table carries it as a special case in both directions so the
+round-trip test still closes. → [04](04-core-types.md) §6
+
 **R7 — Consts and enum members SCREAM**, package first:
 `time.Second` → `TIME_SECOND`, `os.O_RDONLY` → `OS_O_RDONLY`,
 `http.StatusNotFound` → `HTTP_STATUS_NOT_FOUND`, `reflect.Struct` →
@@ -197,8 +203,15 @@ derived.
 
 **R11 — Internal symbols** get `burrow__` (double underscore) and are `static`
 wherever possible. The double underscore is the grep-able marker for "not API,
-may change", and the only place the library's own name appears in an
-identifier.
+may change".
+
+**R11a, public symbols with no Go original**, get a single `burrow_`:
+`burrow_version()`, `burrow_err_out_of_memory`, `burrow_sentinel_error_vt`.
+There are few of them and they are supported API, they just have nothing in
+Go's manifest to map back to. Naming them after a Go package instead would put
+a symbol in that package's namespace that the coverage round trip then has to
+carry an exception for, so the prefix is doing real work: it says "ours" and it
+keeps `errors_`, `os_` and the rest exactly as wide as Go's.
 
 **R12 — Generic functions** get the dispatching macro at the base name plus an
 explicit-type variant per instantiation: `slices_sort(x)` (the `_Generic`
@@ -228,7 +241,8 @@ Worked examples across the awkward cases:
 | `sync.Map` | `typedef struct SyncMap SyncMap;` |
 | `sync/atomic.AddInt64` | `Int64 sync_atomic_add_int64(Int64 *, Int64)` (R1 collision) |
 | `slices.Sort[S ~[]E, E cmp.Ordered](x S)` | `slices_sort(x)` macro + `slices_sort_int64(Slice)` etc. |
-| `errors.Join(errs ...error) error` | `Error errors_join(Slice errs)` + `errors_join_v(int n, …)` |
+| `errors.Join(errs ...error) error` | `Error errors_join(Alloc *a, Slice errs)` + `errors_join_v(Alloc *a, int n, …)` |
+| `error.Error() string` | `Str error_message(Error)` (R6's one exception) |
 
 **Round-tripping is a test.** The generator implements the mapping in both
 directions and CI checks that `go→c→go` is the identity over all 23,730

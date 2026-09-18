@@ -19,11 +19,13 @@ A file that is not there, a connection that was refused, JSON that does not pars
 ```c
 Error err;
 Slice data = os_read_file(a, BURROW_S("config.json"), &err);
-if (err != NULL)
+if (BURROW_FAILED(err))
     return err;
 ```
 
-This is most of the library. If you are wondering which of the three a given function uses, it is this one.
+An `Error` is a struct rather than a pointer, so the test is `BURROW_FAILED` and not a comparison against `NULL` or against `BURROW_NO_ERROR`. A function whose only result is the error returns it directly, and one with something else to hand back takes an `Error *` last, which is the closest C has to Go's second return value.
+
+This is most of the library. If you are wondering which of the three a given function uses, it is this one. The whole convention, including sentinels, wrapping, `errors_is` and `errors_as`, is one page: [errors.md](errors.md).
 
 ## Panics
 

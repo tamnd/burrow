@@ -118,6 +118,28 @@ Append matches Go exactly, including the part people rely on without being able 
 
 Details, including what it costs against Go and the one place the capacity numbers differ from Go's and why: [docs/guides/slices.md](docs/guides/slices.md).
 
+## Errors
+
+Go's `error` is an interface with one method, so burrow's is an interface value: a vtable pointer and a data pointer, returned by value, and a zeroed one means nothing went wrong.
+
+```c
+Error err = os_write_file(path, data, 0644);
+if (FAILED(err))
+    return err;
+
+if (errors_is(err, os_err_not_exist)) { ... }
+```
+
+Succeeding costs nothing, since there is no allocation on the happy path and nothing to free. The several hundred sentinels in Go's library, `io.EOF` and friends, are static `const` objects in read only memory here, so comparing against one is two pointer loads and creating one is a line the linker resolves. `errors_is` and `errors_as` are ports of Go's, walk for walk, including the `Unwrap() []error` trees that `errors.Join` builds.
+
+`errors_as` returns the pointer instead of taking one and returning a bool, because in C the pointer is the bool:
+
+```c
+const OsPathError *pe = errors_as(err, TYPE_OS_PATH_ERROR);
+```
+
+Details, including how to write your own error type and what happens when the allocator says no: [docs/guides/errors.md](docs/guides/errors.md).
+
 ## Status
 
 Early. Nothing is usable yet.

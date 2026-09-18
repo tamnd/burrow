@@ -8,6 +8,49 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 
 Nothing yet.
 
+## v0.0.2 (2026-09-18)
+
+Type descriptors and `Slice`, which are the two things `Map`, `Error`, `fmt` and `encoding/json` were all waiting on. Still nothing you can use as a Go standard library.
+
+### Types
+
+- The type descriptor. A `const Type` in read only memory, one per type, shared by everything that mentions it, so pointing at one costs a word and initialising one costs nothing because the linker did it. `Kind` is numbered exactly the way `reflect.Kind` numbers it, since those numbers are observable through `fmt`.
+- `TypeOps`, optional, for the types whose equality is not a `memcmp` of the struct. `Str` is the reason it exists: two `Str` values pointing at different buffers holding the same bytes are one value in Go.
+- `type_equal`, `type_hash`, `type_size`, `type_align`, `kind_name`, and the descriptors for every builtin.
+- `docs/guides/types.md`.
+
+### Slices
+
+- `Slice`: pointer, length, capacity, and the element's descriptor. Four words where Go has three, and the fourth is what buys one `append` that works for every element type without templates or a macro per type.
+- `append` matching Go exactly, including the part people rely on without being able to state it. When the capacity is already there the elements go into the existing backing array and every other slice over that array sees them.
+- The growth progression is a port of Go's `nextslicecap`, so a program tuned against Go's allocation count gets the same one here. Go's `roundupsize` step is deliberately not ported, because size classes are a property of Go's allocator and burrow's allocator is whichever one you passed in. That is the one place the capacity numbers differ from Go's, and the table of where is in the guide.
+- Nil and empty kept apart, because Go keeps them apart and the difference is visible in JSON output.
+- `slice_sub` and `slice_sub3`, bounds checked against `cap` and not `len`, which is Go's rule and is how you get at the spare capacity on purpose.
+- `slice_copy`, which handles overlap, because `copy(s, s[1:])` is how you delete an element and Go promises it works.
+- Zero sized elements never allocate, so `[]struct{}` costs no memory and grows without calling the allocator.
+- `docs/guides/slices.md`.
+
+### Performance
+
+`AT` and `APPEND` are no longer wrappers around `slice_at` and `slice_append`. They expand to an inline fast path that is handed the element size at the call site, which makes the copy a single store and keeps the four word header in registers instead of writing it to the stack on the way into a call and reading it back through a return buffer on the way out.
+
+That is worth fourteen times on x86-64 and not quite twice on arm64, for the same change. A four word struct is over the register passing limit on both ABIs, but on the AMD core tested the callee's four eight byte stores cannot be forwarded to the caller's two sixteen byte loads, so it waited for cache twice per append. Apple's core forwards it.
+
+- 1024 appends into a slice with the capacity in hand: 6779 ns to 3700 ns on an M1, 19044 ns to 1360 ns on an EPYC.
+- 64 bounds checked reads: 57.4 ns to 36.0 ns on an M1, 211 ns to 82 ns on an EPYC.
+
+The element size is still checked against the descriptor at runtime, and a wrong size, a nil pointer, a full slice or an index out of range all fall through to the general path, so the bounds checks and the growth arithmetic are written exactly once and passing a `T` of the wrong size is a performance mistake rather than a correctness one.
+
+Go is still ahead on both. 738 ns for the same appends and 17.6 ns for the same reads, because its compiler can often prove the bounds check away and burrow's cannot.
+
+### Headers
+
+`Slice` is in `burrow/slice.h` rather than `burrow/core.h`. A `Slice` points at a `Type` and a `Type` contains a `Str`, so the three have to be declared in that order. `burrow/burrow.h` includes them in the right order and nobody else has to care.
+
+### Fixed
+
+- CI was red on gcc and on the formatter and both failures were invisible on macOS. gcc rejects comparing two arrays with `!=`, and the formatter gate had no pinned version so it failed on a correctly formatted file. clang-format is now pinned to 20.1.7 in CI and named in `CONTRIBUTING.md`.
+
 ## v0.0.1 (2026-09-18)
 
 The first tag. Nothing in here is usable as a Go standard library yet, and the point of releasing it is to find out whether the release machinery works while the mistakes are still cheap.

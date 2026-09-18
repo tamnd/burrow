@@ -44,6 +44,7 @@
 #include "burrow/mem/fixed.h"
 #include "burrow/mem/heap.h"
 #include "burrow/runtime.h"
+#include "burrow/type.h"
 
 /* The rest of the library arrives here as it is written. The order is the
  * construction order from docs/design/06-runtime.md section 12, because the
@@ -51,6 +52,8 @@
  *
  *   core types, allocators, runtime, reflect, then the packages in tier order.
  *
- * Allocators are done. Core types are next. See the milestone issues. */
+ * Allocators are done. Str and the type descriptor are done. Slice is next,
+ * since it is the first thing that needs a descriptor to point at. See the
+ * milestone issues. */
 
 #endif /* BURROW_H */

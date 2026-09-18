@@ -87,6 +87,21 @@ That is the same shape Go uses, and it is the only shape that works, because a G
 
 Details, including how to get a real C string back when you need one: [docs/guides/strings.md](docs/guides/strings.md).
 
+## Types
+
+Go's library leans on its type system far more than it looks like it does. `fmt` prints anything because it can ask the value what it is, `encoding/json` walks a struct nobody wrote code for, `sort` works on a slice of anything. None of that is possible in C unless the types describe themselves, so in burrow they do.
+
+```c
+const Type *t = TYPE_INT;
+printf("%u bytes\n", t->size);
+
+if (type_equal(TYPE_STRING, &a, &b)) { ... }
+```
+
+A descriptor is a `const Type` in read only memory, one per type, shared by everything that mentions it. Pointing at one costs a word and initialising one costs nothing, because the linker did it. Kinds are numbered exactly the way `reflect.Kind` numbers them, since those numbers are observable through `fmt`.
+
+Details: [docs/guides/types.md](docs/guides/types.md).
+
 ## Status
 
 Early. Nothing is usable yet.

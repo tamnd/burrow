@@ -93,6 +93,25 @@ int order = str_cmp(a, b);
 
 A zeroed `Str` and a `Str` pointing at zero bytes are both the empty string, and `str_eq` says so. That is why nothing in burrow ever checks `s.p == NULL`, and neither should you. Use `str_is_empty`.
 
+## Indexing
+
+```c
+Byte b = str_at(s, 3);
+```
+
+Go's `s[i]`, including what Go does when `i` is out of range, which is stop. The check is not optional and it is not behind a build flag, because code written against Go relies on never reading past the end, and a version of this that trusted the caller would be a different language with the same spelling. It costs a compare and a branch the processor predicts perfectly.
+
+It is a fatal error rather than a panic today, carrying the message Go's panic carries. See [failure.md](failure.md) for why and for what changes later.
+
+When you are walking a string you have already bounds checked, index `s.p` directly and let the loop condition be the check:
+
+```c
+for (Int i = 0; i < s.len; i++)
+    total += s.p[i];
+```
+
+That is what the library does internally and it is not cheating.
+
 ## Lifetimes
 
 Every function that returns a `Str` says where the bytes came from, on the declaration:

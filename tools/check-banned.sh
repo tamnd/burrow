@@ -26,6 +26,21 @@ report() {
 	status=1
 }
 
+# One pattern per word. This is a loop rather than a case with alternatives
+# because a | inside an expanded variable is not an alternation separator, it is
+# a literal character, so a list written as 'a.c|b.c' matches neither file and
+# does it quietly.
+allowed() {
+	file=$1
+	shift
+	for pattern in $*; do
+		case "$file" in
+		$pattern) return 0 ;;
+		esac
+	done
+	return 1
+}
+
 # The string family. Every one of them either cannot express a bound or gets
 # the bound wrong in a way that has shipped a CVE. burrow has Str, which carries
 # its length, so there is never a reason to reach for these.
@@ -42,13 +57,13 @@ ALLOC_ALLOWED='src/mem/heap.c'
 # which goes through the allocator's own out of memory handler so the host can
 # decide.
 BANNED_EXIT='\bexit\b|\babort\b|\b_Exit\b|\bassert\b'
-EXIT_ALLOWED='src/runtime/panic.c|tests/'
+EXIT_ALLOWED='src/runtime/panic.c tests/*'
 
 # --others picks up files that are written but not staged yet, which is the
 # state a file is in exactly when somebody runs this before committing. Without
 # it the check quietly passes on a tree it never looked at.
 sources=$(git ls-files --cached --others --exclude-standard \
-	'src/*.c' 'src/**/*.c' 'include/**/*.h' 2>/dev/null || true)
+	'src/*.c' 'src/**/*.c' 'include/**/*.h' 'tests/*.c' 'tests/*.h' 2>/dev/null || true)
 [ -n "$sources" ] || exit 0
 
 for f in $sources; do
@@ -58,27 +73,21 @@ $hits
   burrow has Str, which carries its length. See docs/design/04-core-types.md."
 	fi
 
-	case "$f" in
-	$ALLOC_ALLOWED) ;;
-	*)
+	if ! allowed "$f" "$ALLOC_ALLOWED"; then
 		if hits=$(grep -nE "(^|[^a-zA-Z0-9_.>])($BANNED_ALLOC)[[:space:]]*\(" "$f"); then
 			report "$f" "$f: allocation outside the malloc backend
 $hits
   Every function that allocates takes an Alloc *a. See docs/design/05-memory.md."
 		fi
-		;;
-	esac
+	fi
 
-	case "$f" in
-	$EXIT_ALLOWED) ;;
-	*)
+	if ! allowed "$f" "$EXIT_ALLOWED"; then
 		if hits=$(grep -nE "(^|[^a-zA-Z0-9_])($BANNED_EXIT)[[:space:]]*\(" "$f"); then
 			report "$f" "$f: a library does not end the host's process
 $hits
   Return an Error. See docs/design/05-memory.md section 7."
 		fi
-		;;
-	esac
+	fi
 done
 
 if [ "$status" -eq 0 ]; then

@@ -151,6 +151,23 @@ BURROW_OWNS(ret) Str str_clone(Alloc *a, Str s);
  * pointing at a real buffer with nothing in it. */
 bool str_is_empty(Str s);
 
+/* Go's s[i], including what Go does when i is out of range, which is stop.
+ *
+ * The check is not optional and it is not behind a build flag. Go's tests
+ * depend on the failure, code written against Go relies on never reading past
+ * the end, and a version of this that trusted the caller would be a different
+ * language with the same spelling. The cost is a compare and a branch the
+ * processor predicts perfectly.
+ *
+ * It does not panic yet, because panic needs defer and defer needs the
+ * scheduler. Today it is a fatal error carrying the message Go's panic carries.
+ * See burrow/runtime.h.
+ *
+ * When you are walking a string you already bounds checked, index s.p directly
+ * and let the loop condition be the check. That is what the library does
+ * internally and it is not cheating. */
+Byte str_at(Str s, Int i);
+
 #if defined(BURROW_SHORT) && BURROW_SHORT
 #define S(lit) BURROW_S(lit)
 #define STR_FMT BURROW_STR_FMT

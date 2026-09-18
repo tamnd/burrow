@@ -3,6 +3,7 @@
  * in the LICENSE file. */
 
 #include "burrow/core.h"
+#include "burrow/runtime.h"
 
 #include <string.h>
 
@@ -89,4 +90,17 @@ Str str_clone(Alloc *a, Str s) {
 
 bool str_is_empty(Str s) {
     return s.len <= 0;
+}
+
+Byte str_at(Str s, Int i) {
+    /* Both ends, spelled out. The usual trick is to compare as unsigned so that
+     * a negative index becomes an enormous one and a single branch covers both,
+     * and that is what Go's compiler emits, but it is only sound because Go's
+     * len can never be negative. Str is a struct anybody can fill in by hand, so
+     * here it can be, and the unsigned version would turn that into a read
+     * through a NULL pointer instead of a message. Two compares the branch
+     * predictor gets right every time is not a cost worth arguing about. */
+    if (i < 0 || i >= s.len)
+        runtime_index_out_of_range(i, s.len);
+    return s.p[i];
 }

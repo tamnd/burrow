@@ -43,6 +43,7 @@
 #include "burrow/mem/arena.h"
 #include "burrow/mem/fixed.h"
 #include "burrow/mem/heap.h"
+#include "burrow/runtime.h"
 
 /* The rest of the library arrives here as it is written. The order is the
  * construction order from docs/design/06-runtime.md section 12, because the

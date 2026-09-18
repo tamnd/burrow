@@ -271,6 +271,37 @@ for (MapIter it = map_iter(m); map_next(&it, &k, &v); ) { ... }
 
 Details, including the one deviation from Go, which is that an insert that grows the table invalidates a live iterator and says so: [docs/guides/maps.md](docs/guides/maps.md).
 
+## Goroutines
+
+Go's scheduler, with Go's algorithms and Go's names. A goroutine is a function on a stack of its own, put on a thread by the runtime rather than by the kernel.
+
+```c
+static void worker(void *env) {
+    Job *j = env;
+    ...
+}
+
+static void run(void *env) {
+    (void)env;
+    go(BURROW_FN(Func, worker, job));
+}
+
+int main(void) {
+    runtime_main(BURROW_FN(Func, run, NULL));
+    return 0;
+}
+```
+
+`runtime_main` is the one call here that Go does not make you write. Go's runtime starts before your `main` because the toolchain arranges it, and since there is no toolchain here, something has to say where the goroutine world begins and ends. It starts the threads, runs the function you give it as the first goroutine, and joins everything before it returns.
+
+A runnable goroutine is in one of three places: the `runnext` slot of a P, which holds the one that was just woken and keeps a handoff on one core, the lock free ring of 256 behind it, or the global queue. A thread with nothing to do looks in its own ring, then the global queue, then steals half of somebody else's, and gives its P up before it parks so that a wakeup cannot be lost.
+
+`sched_park` and `sched_ready` are what channels, mutexes and the netpoller are all built on. Park a goroutine with the lock released by a callback rather than by the caller, and ready it when the thing it waited for happens.
+
+One deviation from Go, and it is in the header. A goroutine stack is a fixed size decided once and never moved, because growing a stack means finding every pointer into it, which Go's compiler can do and nothing can do for C. The default is a quarter of a megabyte of lazily mapped address space, so a goroutine that touches one page costs one page.
+
+Details: [docs/guides/goroutines.md](docs/guides/goroutines.md).
+
 ## Status
 
 Early. Nothing is usable yet.

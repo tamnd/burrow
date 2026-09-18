@@ -156,6 +156,14 @@ struct burrow__G {
     /* Set while this goroutine is on a free list or a linked queue. Not used by
      * the per P ring. */
     burrow__G *next;
+
+    /* Every G ever created, in one list under the scheduler lock. Go calls it
+     * allgs and keeps it for the same two reasons: a traceback has to be able to
+     * name every goroutine, and shutting the runtime down has to be able to give
+     * back the stack of a goroutine that parked and never woke up. A G is on
+     * this list from the moment it exists until the runtime stops, dead or
+     * alive, so `next` and `allnext` are never the same list. */
+    burrow__G *allnext;
 };
 
 /* A scheduling context. GOMAXPROCS of these and no more, which is what makes
@@ -182,6 +190,12 @@ struct burrow__P {
     /* The M running this P, or NULL when it is idle. Borrowed: an M owns
      * itself. */
     BURROW_BORROWS(1) burrow__M *m;
+
+    /* Next on the idle P list, under the scheduler lock. A P is on that list
+     * exactly when no M is holding it, which is the same thing as `m` being
+     * NULL, and the two are set together with the lock held so they cannot
+     * disagree. */
+    BURROW_BORROWS(1) burrow__P *link;
 
     /* Taken by a thief with a compare and swap, so it has to be atomic and it
      * has to be alone. This is the goroutine a channel send just made runnable
@@ -232,6 +246,42 @@ struct burrow__M {
      * without work or an M in a system call looks like. */
     BURROW_BORROWS(1) burrow__P *p;
 
+    /* The P this M is to pick up when it wakes, handed over by whoever woke it.
+     * Go has the same field for the same reason: the waker holds the scheduler
+     * lock and knows which P is free, and making the sleeper go and look again
+     * after it wakes is a second trip through the lock and a chance for somebody
+     * else to take the P in between. */
+    BURROW_BORROWS(1) burrow__P *nextp;
+
+    /* What to run on g0 after the next switch back to it, and the goroutine that
+     * asked for it.
+     *
+     * This pair is Go's mcall, which is a call that happens on the scheduler's
+     * stack rather than on the caller's. Everything that stops a goroutine needs
+     * it. Parking a goroutine means publishing it somewhere another M can find
+     * it, and doing that while still standing on its stack is a race with that
+     * other M picking it up, so the switch has to come first and the bookkeeping
+     * has to come after. Go writes this in assembly. Here the switch lands back
+     * in the scheduler loop, which reads these two and makes the call, which
+     * needs no assembly and costs one branch per schedule.
+     *
+     * The call answers the goroutine to run next, or NULL for go and find one.
+     * That is Go's tail call out of park_m into execute, spelled as a return
+     * value because a C function that returns cannot tail call the thing that
+     * called it. */
+    burrow__G *(*mcall)(burrow__M *m, burrow__G *g);
+    BURROW_BORROWS(1) burrow__G *mcallg;
+
+    /* What sched_park was asked to unlock once this goroutine is off its stack,
+     * and the pointer to hand it. Set by sched_park and read by the call it
+     * leaves behind, both on this thread with a stack switch in between, which
+     * is the only reason they have to live here rather than in a local.
+     *
+     * Spelled out longhand rather than through SchedUnlockFn so that this header
+     * does not have to include burrow/proc.h. The two types are the same type. */
+    bool (*parkunlock)(burrow__G *g, void *lock);
+    void *parklock;
+
     /* The gate this M sleeps on when there is nothing to run. One per M rather
      * than one shared one, so that waking a thread wakes the thread that was
      * chosen rather than all of them. */
@@ -252,6 +302,42 @@ struct burrow__M {
     /* Monotonic, and mostly for reading in a debugger. */
     int64_t id;
 };
+
+/* ------------------------------------------------------------------ the lock
+ *
+ * The runtime's own lock, which is the thing Go calls a mutex in runtime2.go
+ * and which is not what a program means by one.
+ *
+ * A sync.Mutex parks the goroutine and hands the thread to somebody else. This
+ * cannot do that, because it is one of the things parking a goroutine is built
+ * out of, and a lock that needs a scheduler cannot be the lock the scheduler
+ * takes. So it blocks the thread, and the rule that makes that acceptable is
+ * that every critical section under it is a handful of pointer writes with no
+ * call out of the runtime inside it.
+ *
+ * Spin and then yield, for now. The spin is what makes the uncontended and
+ * lightly contended cases cost nothing, and the yield is what stops a thread
+ * burning a core waiting for a lock whose holder has been descheduled. The
+ * futex version, which is a spin and then a note, arrives with sync, since that
+ * is where the rest of the same machinery is going. Swapping it in changes this
+ * file and nothing above it.
+ *
+ * All zeroes is unlocked, which is the same rule as everywhere else in burrow
+ * and means a lock in a static or a calloc'd struct is ready to use. */
+typedef struct burrow__Lock {
+    uint32_t state;
+} burrow__Lock;
+
+/* Takes the lock, blocking the calling thread until it has it. Not recursive:
+ * taking one twice on one thread hangs that thread, which is what every
+ * non-recursive lock does and is worth knowing before the first deadlock. */
+void burrow__lock(burrow__Lock *l);
+
+/* Takes the lock if it is free and answers whether it did. Never blocks. */
+bool burrow__trylock(burrow__Lock *l);
+
+/* Releases the lock. The caller has to be holding it, and nothing checks. */
+void burrow__unlock(burrow__Lock *l);
 
 /* ------------------------------------------------------------------ the ring
  *
@@ -371,6 +457,48 @@ void burrow__gqueue_push_all(burrow__GQueue *dst, burrow__GQueue *src);
  * the one that stays close to the P that made it. */
 bool burrow__runq_put_slow(burrow__P *p, BURROW_RETAINS(2) burrow__G *g,
                            burrow__GQueue *batch);
+
+/* --------------------------------------------------------- the scheduler
+ *
+ * src/runtime/sched.c, and the part of it the rest of the runtime is allowed to
+ * see. Everything a program outside the runtime wants is in burrow/proc.h
+ * instead, spelled without the burrow__ and documented for somebody who has not
+ * read runtime/proc.go.
+ *
+ * These four exist so that channels, timers and the netpoller can find the P
+ * they are running on, which is where a timer heap lives and where a ready
+ * goroutine goes. They are also what the scheduler's own tests look at, since a
+ * work stealing scheduler that is only observed through its public API is one
+ * whose interesting states are all invisible. */
+
+/* The largest GOMAXPROCS this build will accept.
+ *
+ * The Ps are a static array, so this is the size of it. That choice is worth a
+ * sentence: it is in BSS, so it costs address space and not memory until a P is
+ * actually used, and it means the scheduler has no allocator underneath it and
+ * cannot fail to start. Go reaches for persistentalloc here, which is the same
+ * decision with more moving parts.
+ *
+ * Define it yourself on a machine with more than 256 processors, or on a small
+ * one where even untouched BSS is worth counting. */
+#ifndef BURROW_MAXPROCS
+#define BURROW_MAXPROCS 256
+#endif
+
+/* The M the calling thread is, or NULL if this thread is not one of the
+ * scheduler's. */
+BURROW_STATIC(ret) burrow__M *burrow__curm(void);
+
+/* The goroutine running on this thread, or NULL. The same thing sched_current
+ * answers, under the internal name. */
+BURROW_BORROWS(ret) burrow__G *burrow__curg(void);
+
+/* The P at index i, or NULL if i is not in range. Every P exists for as long as
+ * the scheduler is running, whether or not an M is holding it. */
+BURROW_STATIC(ret) burrow__P *burrow__allp(int32_t i);
+
+/* How many Ps there are. Fixed while the scheduler is running. */
+int32_t burrow__gomaxprocs(void);
 
 #ifdef __cplusplus
 }

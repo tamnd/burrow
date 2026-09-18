@@ -4,6 +4,30 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+### Interfaces
+
+- The interface value: a vtable pointer and a data pointer, two words, passed by value. Every vtable is a static `const` object per implementing type, so satisfying an interface costs a few words of read only memory and a constructor that is two moves, and calling through one is a load and an indirect call with no lookup.
+- `BURROW_CALL` and `BURROW_CALL0` for the call, `BURROW_IFACE_IS_NIL` for the nil check. Two call macros rather than one because C99 needs at least one argument for the ellipsis and the thing that fixes it is C23, and a method with no arguments is far too common to write around.
+- Every vtable starts with a `const Type *self_type`, which is what makes `iface_assert`, Go's `v.(T)`, work on a value that has already forgotten its concrete type. A `NULL` there means the type declines to be asserted to, which is what an unexported type gets you in Go.
+- A zeroed interface value is nil, so an interface field in a struct out of an allocator starts out nil with nobody writing a line to say so.
+- Embedding is by named member rather than by a prefix compatible cast. That is a change from `docs/design/04-core-types.md`, and the reason is in there now: a cast is right for whichever interface is embedded first and quietly wrong for the second, while the address of a member is the same instruction and the compiler checks it.
+- `Any`, Go's empty interface, with `BURROW_ANY`, `BURROW_ANY_VAL`, `any_assert`, `any_box` and `any_equal`. Boxing copies through the descriptor and no deeper, which is what assignment does in Go.
+- `any_equal` is Go's `==` on two interface values, including the part where comparing two uncomparable values stops the program at run time with Go's message, because the static type on both sides is `any` and neither compiler can see inside.
+- `TYPE_ANY` hashes the dynamic type along with the value, so an `Any` holding an `Int` 1 and an `Any` holding an `Int8` 1 are different keys, which is what makes `map[any]T` behave as Go's does.
+- `docs/guides/interfaces.md`.
+
+### io
+
+- `IoReader`, `IoWriter`, `IoCloser`, `IoSeeker` and the combinations, which are the first interfaces built on the machinery above and the reason it exists.
+- `io_read_full`, `io_read_at_least`, `io_copy` and `io_copy_buffer`, ported line for line from Go's, including the two parts that look wrong and are not. A read that gets everything it asked for is a success even when the reader reported the end in the same call, and a copy that ran to the end of its source is a success rather than a failure carrying `io_eof`.
+- The distinction those functions exist for: an input that ends before anything arrives is `io_eof`, and an input that ends halfway through is `io_err_unexpected_eof`. The first means there was no next record and the second means the file is truncated.
+- A wrapped `io_eof` is a failure and not a clean end, which is Go comparing with `==` rather than `errors.Is` in both of those loops. A reader that wraps the end has dressed up the one value meaning nothing went wrong, and believing it would turn a truncated download into a complete one.
+- `io_copy` returns an `int64_t` rather than an `Int`, which is Go's choice and the right one, because a copy is the one operation here whose result does not fit in a word on a 32 bit machine.
+- The sentinels with Go's messages: `io_eof`, `io_err_unexpected_eof`, `io_err_short_write`, `io_err_short_buffer` and `io_err_no_progress`.
+- The down conversions, `io_read_writer_as_io_reader` and the rest, since C has no implicit conversion step. There is deliberately no combination to combination conversion, and `include/burrow/io.h` says why.
+
 ## v0.0.3 (2026-09-18)
 
 `Error` and `Map`, which are the last two core types that everything else was waiting on, and a hash worth having under the map. Still nothing you can use as a Go standard library.

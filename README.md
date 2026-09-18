@@ -118,6 +118,46 @@ Append matches Go exactly, including the part people rely on without being able 
 
 Details, including what it costs against Go and the one place the capacity numbers differ from Go's and why: [docs/guides/slices.md](docs/guides/slices.md).
 
+## Interfaces
+
+Two words, a vtable pointer and a data pointer, which is what Go's interface value is too. Implementing one is a static `const` vtable and a constructor, both written once next to your type, so satisfying an interface costs a few words of read only memory and a call through it is a load and an indirect call.
+
+```c
+static Int counter_read(void *self, Slice p, Error *err) { ... }
+static const IoReaderVT counter_reader_vt = {&counter_type, counter_read};
+
+IoReader counter_as_io_reader(Counter *c) {
+    IoReader r = {&counter_reader_vt, c};
+    return r;
+}
+
+Int n = CALL(r, read, buf, &err);
+```
+
+A zeroed interface value is nil, so an interface field in a struct that came out of an allocator starts out nil without anybody writing a line to say so. Every vtable starts with a `const Type *self_type`, which is what makes `iface_assert`, Go's `v.(T)`, possible on a value that has already forgotten its concrete type.
+
+Embedding is by member, so an `IoReadWriter`'s vtable holds an `IoReaderVT` and an `IoWriterVT` and narrowing to either one is the address of a member rather than a pointer cast that would be right for the first and wrong for the second.
+
+Go's empty interface is `Any`, a type descriptor and a pointer, and it is what `fmt`'s arguments and `json_marshal`'s parameter become.
+
+```c
+Any v = ANY_VAL(TYPE_INT, Int, 42);
+```
+
+Details, including what `Any` costs you that Go's `any` does not, which is that the pointee has to outlive it: [docs/guides/interfaces.md](docs/guides/interfaces.md).
+
+## io
+
+`io.Reader` and `io.Writer`, the two interfaces everything that moves bytes speaks, plus `Closer`, `Seeker` and the combinations, the sentinel errors with Go's messages, and the four functions that need nothing but an interface to run.
+
+```c
+int64_t n = io_copy(a, dst, src, &err);
+```
+
+`io_read_full` and `io_read_at_least` are ported line for line from Go's, including the distinction that makes them worth having: an input that ends before anything arrives is `io_eof` and an input that ends halfway through is `io_err_unexpected_eof`, which is the difference between there was no next record and the file is truncated.
+
+The implementations that fill these in live where they live in Go, which is `os` and `bytes`, and neither of those is written yet.
+
 ## Errors
 
 Go's `error` is an interface with one method, so burrow's is an interface value: a vtable pointer and a data pointer, returned by value, and a zeroed one means nothing went wrong.

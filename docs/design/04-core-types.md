@@ -244,12 +244,13 @@ representations.
 
 ```c
 typedef struct IoReaderVT {
-    Int (*Read)(void *self, Slice p, Error *err);
+    const Type *self_type;
+    Int (*read)(void *self, Slice p, Error *err);
 } IoReaderVT;
 
-typedef struct {
+typedef struct IoReader {
     const IoReaderVT *vt;
-    void                  *data;
+    void *data;
 } IoReader;
 ```
 
@@ -259,18 +260,24 @@ reads like a method:
 ```c
 #define BURROW_CALL(iface, m, ...) ((iface).vt->m((iface).data, __VA_ARGS__))
 
-Int n = BURROW_CALL(r, Read, buf, &err);
+Int n = BURROW_CALL(r, read, buf, &err);
 ```
+
+There is a `BURROW_CALL0` next to it for methods that take no arguments, because
+C99 requires at least one argument for the ellipsis and `__VA_OPT__`, which
+would avoid the second macro, is C23. `Close`, `String` and `Len` are common
+enough that living without it was worse.
 
 Implementing an interface is a static vtable plus a constructor — the libgit2
 pattern, explicit and greppable:
 
 ```c
-static Int myread(void *self, Slice p, Error *err) { ... }
-static const IoReaderVT my_reader_vt = { .Read = myread };
+static Int mything_read(void *self, Slice p, Error *err) { ... }
+static const IoReaderVT mything_reader_vt = { &mything_type, mything_read };
 
-IoReader my_reader(MyThing *t) {
-    return (IoReader){ &my_reader_vt, t };
+IoReader mything_as_io_reader(MyThing *t) {
+    IoReader r = { &mything_reader_vt, t };
+    return r;
 }
 ```
 
@@ -283,26 +290,58 @@ BufioReader *br = bufio_new_reader(a, os_stdin_as_io_reader());
 ```
 
 **Interface embedding** (`io.ReadWriter` = `Reader` + `Writer`) becomes vtable
-struct embedding, with the outer vtable's layout a prefix-compatible
-superset — so an `io_ReadWriter` can be down-converted to an `io_Reader` by a
-pointer cast of the vtable. Enforced by a generated static assertion on offsets.
+struct embedding, with the embedded vtables held as named members:
+
+```c
+typedef struct IoReadWriterVT {
+    IoReaderVT reader;
+    IoWriterVT writer;
+} IoReadWriterVT;
+```
+
+Down-converting is the address of a member, with no cast and no assumption about
+layout: `(IoReader){&rw.vt->reader, rw.data}`. The library writes those out as
+`io_read_writer_as_io_reader` and friends, since C has no implicit conversion
+step.
+
+This section originally called for the outer vtable to be a prefix-compatible
+superset reached by a pointer cast, checked by a generated static assertion on
+offsets. That was changed when the code was written, for a reason worth
+recording: a prefix cast works for whichever interface is embedded first and
+quietly does not for the second, because the second one's function pointers sit
+at an offset the cast knows nothing about. The static assertion would have had
+to be right about every combination, and the thing it was protecting was not
+buying anything, since the member address compiles to the same instruction the
+cast does.
+
+Combination to combination conversion is not offered at all, so there is no
+`io_read_write_closer_as_io_read_writer`. The value is two words with nowhere to
+keep a vtable and a function cannot return a pointer to one it made on its
+stack, so the only way to produce it is the layout assumption above. The answer
+is to go back to the concrete type, which has an `_as_` adapter for every
+interface it satisfies.
 
 **Type assertions and type switches.** These need the dynamic type, which
 non-empty interface values do not carry. Solution: every generated vtable's
 first member is a `const Type *self_type` slot, so:
 
 ```c
-type_assert(iface, type_of(OsFile));   /* returns void* or NULL */
+OsFile *f = iface_assert(BURROW_IFACE(r), TYPE_OS_FILE);  /* NULL if it is not */
 ```
 
-Zero cost for the common case, and a full answer when needed.
+Zero cost for the common case, and a full answer when needed. `BURROW_IFACE` is
+the cast to the generic `Iface`, and it is defined behaviour rather than a trick
+because C guarantees that a pointer to a struct points at its first member. A
+vtable may leave `self_type` as `NULL`, which means the type declines to be
+asserted to, the same thing an unexported type gets you in Go.
 
 **Empty interface → `Any`.**
 
 ```c
-typedef struct { const Type *t; void *data; } Any;
+typedef struct Any { const Type *t; void *data; } Any;
 
-#define BURROW_ANY(T, ptr)  ((Any){ type_of(T), (void *)(ptr) })
+#define BURROW_ANY(t, ptr)      ((Any){ (t), (void *)(ptr) })
+#define BURROW_ANY_VAL(t, T, v) ((Any){ (t), (void *)(T[]){(v)} })
 ```
 
 `Any` is what `fmt.Printf`'s variadic arguments, `encoding/json.Marshal`'s
@@ -313,10 +352,17 @@ carries a descriptor, which is why [07](07-reflect.md) is a prerequisite for
 **Note on boxing.** Go's interface values sometimes store small values directly
 and sometimes point to heap copies, invisibly. `Any` and interface values
 always hold a pointer, so the caller must ensure the pointee outlives the call.
-For literals, `BURROW_ANY(int, &(Int){42})` uses a compound literal whose
-lifetime is the enclosing block — correct for the overwhelmingly common
-`Printf` case, and documented. A `any_box(a, T, v)` helper copies into an
-allocator when the value must escape.
+For literals, `BURROW_ANY_VAL(TYPE_INT, Int, 42)` uses a compound literal whose
+lifetime is the enclosing block, which is correct for the overwhelmingly common
+`Printf` case and is documented. `any_box(a, v)` copies into an allocator when
+the value must escape, through the descriptor's copy operation and no deeper,
+so boxing an `Any` holding a `Slice` copies the header and not the elements.
+
+`any_equal` is Go's `==` on two interface values, including the part where
+comparing two uncomparable values is a run time failure rather than a compile
+error, because the static type on both sides is `any` and neither compiler can
+see inside. `TYPE_ANY` exists and hashes the dynamic type along with the value,
+which is what makes `map[any]T` behave as Go's does.
 
 ## 6. Errors
 

@@ -28,6 +28,22 @@
 
 #include <setjmp.h>
 
+/* gcc's -Wclobbered fires on every local a test builds before EXPECT_FATAL and
+ * then hands to the statement inside it, because the local is live across the
+ * setjmp and gcc cannot prove it is never written to afterwards. The rule it is
+ * guarding is about locals that *change* between the setjmp and the longjmp,
+ * and none of these do: a test sets its values up, calls the thing that stops,
+ * and never touches them again.
+ *
+ * It only fires on 32 bit x86, where there are not enough registers to keep
+ * them all in memory, which is what makes it a false positive rather than a
+ * portability warning worth restructuring for. Turned off here rather than in
+ * the Makefile so that it stays off in exactly the translation units that use
+ * setjmp, which is the ones that include this header and nothing else. */
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wclobbered"
+#endif
+
 static jmp_buf fatal_escape;
 static char fatal_caught[256];
 static bool fatal_did_catch;

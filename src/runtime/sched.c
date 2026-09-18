@@ -326,8 +326,16 @@ static void runq_put(burrow__P *p, BURROW_RETAINS(2) burrow__G *g, bool next) {
  * an M is on the idle list exactly when it is asleep on its note, and those two
  * facts are what the whole wakeup protocol rests on. */
 
+/* A P's status is written under the scheduler lock and read without it, by a
+ * thief deciding whether the victim is running and so whether its runnext slot
+ * is worth reaching for. A plain store against an atomic load is a data race in
+ * C whatever the hardware does with it, so the store is atomic too. */
+static void set_pstatus(burrow__P *p, burrow__PStatus s) {
+    burrow__atomic_store_u32(&p->status, (uint32_t)s);
+}
+
 static void pidle_put(burrow__P *p) {
-    p->status = (uint32_t)BURROW_PIDLE;
+    set_pstatus(p, BURROW_PIDLE);
     p->m = NULL;
     p->link = sched.pidle;
     sched.pidle = p;
@@ -352,7 +360,7 @@ static burrow__P *pidle_get(void) {
 static void acquirep(burrow__M *m, burrow__P *p) {
     m->p = p;
     p->m = m;
-    p->status = (uint32_t)BURROW_PRUNNING;
+    set_pstatus(p, BURROW_PRUNNING);
 }
 
 static void midle_put(burrow__M *m) {

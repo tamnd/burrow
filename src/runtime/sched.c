@@ -140,6 +140,20 @@ typedef struct Sched {
     uint32_t running;
     uint32_t stopping;
 
+    /* Atomic. Set while sysmon is asleep with no deadline on it, because there
+     * was nothing running anywhere and no timer to come back for. Whoever takes
+     * a P off the idle list reads this and opens the gate, since that is the one
+     * event that makes the world worth watching again. */
+    uint32_t sysmonwait;
+
+    /* sysmon and the gate it waits on. Started once the world is up and woken
+     * once when it is coming down. `sysmonstarted` is false on a run where the
+     * thread could not be created, which is allowed: see the section below for
+     * why a runtime without sysmon is still a runtime. */
+    burrow__Thread sysmonthread;
+    burrow__Note sysmonnote;
+    bool sysmonstarted;
+
     /* Fixed while the scheduler is running. */
     int32_t gomaxprocs;
 
@@ -342,6 +356,17 @@ static burrow__P *pidle_get(void) {
     p->link = NULL;
     burrow__atomic_store_release_u32(
         &sched.npidle, burrow__atomic_load_relaxed_u32(&sched.npidle) - 1U);
+
+    /* The world was completely still and is about to stop being, so sysmon has
+     * something to watch again. This is the only place that wake lives, because
+     * a P leaving the idle list is the only way out of the state sysmon sleeps
+     * in, and it is the only place because sysmon decides to sleep while holding
+     * this same lock. One relaxed load on a path nowhere near hot enough to
+     * mind. */
+    if (burrow__atomic_load_relaxed_u32(&sched.sysmonwait) != 0) {
+        burrow__atomic_store_u32(&sched.sysmonwait, 0);
+        burrow__note_wake(&sched.sysmonnote);
+    }
     return p;
 }
 
@@ -781,6 +806,141 @@ static void wakep(void) {
  * searcher sees this timer or this sees a searcher that has not finished. */
 void burrow__timers_wake(void) {
     wakep();
+}
+
+/* ------------------------------------------------------------------- sysmon
+ *
+ * The thread that is not an M, never holds a P, never runs a goroutine, and is
+ * there to notice the things a thread which is busy working cannot notice about
+ * itself. Go's `sysmon` in runtime/proc.go.
+ *
+ * Go gives it four jobs and burrow has one of them to do today. It takes a P
+ * back off a thread that has been inside a system call too long, and burrow has
+ * no system calls that hand their P over yet. It sends the signal that preempts
+ * a goroutine which has been running too long, which is the last item on the
+ * runtime list in docs/design/06-runtime.md and is last on purpose. It forces a
+ * collection nobody asked for, and there is no collector. What is left is the
+ * timers, and that one is worth having now.
+ *
+ * The timer job is a backstop and not the mechanism, which is the thing to
+ * understand about this whole file section before reading any of it. A timer
+ * armed for sooner than the sleeping threads were told already cuts their sleep
+ * short, through burrow__timers_wake above, and that is the path every timer in
+ * a working program takes. This catches the case where that did not happen: a
+ * timer already due on a P nobody is holding. That should not be reachable, and
+ * the argument for why is written out at the end of findrunnable. The reason to
+ * have a second chance at it anyway is the shape of the failure rather than its
+ * likelihood. A missed wakeup here is not a callback that runs late, it is a
+ * program that never runs it at all and never explains why, and that is the
+ * worst kind of bug to be handed by a library. Ten milliseconds late is a bug
+ * worth fixing on a program that still works.
+ *
+ * Which is also why a runtime that cannot start this thread starts anyway.
+ * Everything here is a second chance at something that already has a first one,
+ * so losing it costs a hang where there would have been a delay, on a run that
+ * was already in trouble, and that is not a reason to refuse to run a program. */
+
+/* How long sysmon waits between passes at the two ends of its range, and how
+ * many quiet passes it takes to get from one end to the other. Go's numbers.
+ *
+ * Twenty microseconds is short enough that the first pass after something
+ * happens comes soon after it. Ten milliseconds is long enough that a program
+ * which has been quiet for half a second is not paying for this thread, which
+ * matters more here than it does in Go, because this is a library inside
+ * somebody else's program and that program may be on a battery. */
+#define SYSMON_MIN_DELAY 20000
+#define SYSMON_MAX_DELAY 10000000
+#define SYSMON_QUIET_PASSES 50
+
+/* Whether any P is holding a timer that is already due.
+ *
+ * Reads the wake times each set publishes rather than taking any P's lock,
+ * which is what makes this cheap enough to do a hundred times a second with
+ * every P in the program to get through. Those readings are allowed to be
+ * earlier than the truth and never later, so this can answer true about a timer
+ * that turns out not to be due, and the whole cost of that is one thread waking
+ * up, finding nothing and going back to sleep. Answering false about one that is
+ * due would be the expensive direction and the readings cannot do that. */
+static bool timer_overdue(void) {
+    int64_t now = burrow__nanotime();
+
+    for (int32_t i = 0; i < sched.gomaxprocs; i++) {
+        int64_t w = burrow__timers_wake_time(&allp[i].timers);
+        if (w != 0 && w <= now)
+            return true;
+    }
+    return false;
+}
+
+/* Whether there is nothing for sysmon to come back and look at.
+ *
+ * Every P on the idle list means no goroutine is running anywhere, and no timer
+ * in any set means nothing is going to become due on its own. Between them
+ * there is no event this thread could be early for, so the only thing another
+ * pass could do is cost a wakeup.
+ *
+ * Called with the lock held, and the reason is the race it closes rather than
+ * either of the things it reads. The way out of this state is a P leaving the
+ * idle list, the wake for it lives in pidle_get, and pidle_get runs under this
+ * lock. So deciding to sleep and being told not to cannot interleave: either
+ * this reads an idle world and sets the flag before the P moves, in which case
+ * the thread moving it sees the flag, or the P has already moved and this does
+ * not sleep. Doing it with two atomics instead would be the store buffer problem
+ * and would need both sides sequentially consistent to be right, for a lock that
+ * is uncontended a hundred times a second. */
+static bool world_is_asleep(void) {
+    if (burrow__atomic_load_acquire_u32(&sched.npidle) < (uint32_t)sched.gomaxprocs)
+        return false;
+
+    for (int32_t i = 0; i < sched.gomaxprocs; i++) {
+        if (burrow__timers_wake_time(&allp[i].timers) != 0)
+            return false;
+    }
+    return true;
+}
+
+static void sysmon(void *arg) {
+    (void)arg;
+
+    int64_t delay = SYSMON_MIN_DELAY;
+    uint32_t quiet = 0;
+
+    while (burrow__atomic_load_acquire_u32(&sched.stopping) == 0) {
+        burrow__lock(&sched.lock);
+        bool nothing_to_watch = world_is_asleep();
+        if (nothing_to_watch)
+            burrow__atomic_store_u32(&sched.sysmonwait, 1);
+        burrow__unlock(&sched.lock);
+
+        if (nothing_to_watch) {
+            burrow__note_sleep(&sched.sysmonnote);
+            burrow__note_clear(&sched.sysmonnote);
+            burrow__atomic_store_u32(&sched.sysmonwait, 0);
+
+            /* Back to the short delay, because whatever woke this is the
+             * program starting to do something and the passes just after that
+             * are the ones worth taking soon. */
+            delay = SYSMON_MIN_DELAY;
+            quiet = 0;
+            continue;
+        }
+
+        (void)burrow__note_sleep_timeout(&sched.sysmonnote, delay);
+        burrow__note_clear(&sched.sysmonnote);
+
+        if (burrow__atomic_load_acquire_u32(&sched.stopping) != 0)
+            break;
+
+        if (timer_overdue()) {
+            wakep();
+            delay = SYSMON_MIN_DELAY;
+            quiet = 0;
+        } else if (++quiet > SYSMON_QUIET_PASSES) {
+            delay *= 2;
+            if (delay > SYSMON_MAX_DELAY)
+                delay = SYSMON_MAX_DELAY;
+        }
+    }
 }
 
 /* Parks this thread until somebody hands it a P. Comes back with m->p set, or
@@ -1374,6 +1534,18 @@ void runtime_main(Func fn) {
 
     burrow__atomic_store_release_u32(&sched.running, 1);
 
+    /* sysmon, after the world is up so that it never looks at a half built
+     * scheduler, and before the threads, so that the first thing it sees is the
+     * program starting rather than a program already running. A run where the
+     * gate or the thread cannot be made goes ahead without it, for the reason
+     * written at the top of the sysmon section. */
+    if (burrow__note_init(&sched.sysmonnote)) {
+        sched.sysmonstarted =
+            burrow__thread_start(&sched.sysmonthread, sysmon, NULL, 0);
+        if (!sched.sysmonstarted)
+            burrow__note_free(&sched.sysmonnote);
+    }
+
     /* One thread per P, each handed its P directly rather than made to go and
      * look for one. All but the one that picks up the main goroutine will find
      * nothing and park, which is a few microseconds of startup and is what makes
@@ -1396,6 +1568,18 @@ void runtime_main(Func fn) {
      * first and is on the idle list by the time this walks it, or this takes the
      * lock first and the thread sees the flag and does not park at all. */
     burrow__atomic_store_u32(&sched.stopping, 1);
+
+    /* sysmon first, before the Ms, so that nothing is starting threads while
+     * this is trying to count them. It cannot start one after the flag above is
+     * set, since wakep is the only call it makes into the scheduler and wakep
+     * reads that flag first, but joining it here means not having to rely on
+     * that to know how many threads there are. */
+    if (sched.sysmonstarted) {
+        burrow__note_wake(&sched.sysmonnote);
+        (void)burrow__thread_join(&sched.sysmonthread);
+        burrow__note_free(&sched.sysmonnote);
+        sched.sysmonstarted = false;
+    }
 
     burrow__lock(&sched.lock);
     for (burrow__M *m = sched.midle; m != NULL; m = m->next)

@@ -45,10 +45,13 @@ event, zero returns immediately, positive blocks for a duration — so waiting
 for goroutines and waiting for I/O are the same wait, with no dedicated poller
 thread and no wakeup latency.
 
-`sysmon` is a dedicated thread waking roughly every 10 ms to retake Ps from
-Ms blocked in syscalls, deliver preemption signals, poll the netpoller if
-nothing else has recently, and fire timers. Go degrades badly without it; so
-would we.
+`sysmon` is a dedicated thread that wakes on a timer and looks for the things
+no running thread is in a position to notice: a P held by a thread that is
+stuck in a syscall, a goroutine that has been on a processor too long, a
+netpoller nobody has polled recently, and a timer that has come due on a P with
+nothing on it. Go degrades badly without it and so would we. The section on it
+below says which of those four burrow does today and why the other three are
+waiting on parts that do not exist yet.
 
 An M is an OS thread and `burrow/thread.h` is where one comes from: start,
 join, detach, yield, an identity for the calling thread, and a processor count.
@@ -179,6 +182,56 @@ and the sequence numbers that go with them, both of which need channels, fake
 time for `testing/synctest`, and the netpoller wakeup, which here is a call
 into the scheduler instead because the thread with nothing to do is asleep on
 its own note rather than in `epoll_wait`.
+
+### The monitor thread
+
+`sysmon` is one thread started when the runtime comes up and joined when it
+goes down, and it holds no P while it runs, which is the whole reason it can do
+its job. Everything else in the scheduler only gets to look around while it is
+between goroutines. The monitor looks around when nobody else can.
+
+Go gives it four jobs and burrow can only do one of them today, which is worth
+stating plainly rather than shipping a thread that appears to do four. Retaking
+a P from a thread stuck in a syscall needs syscalls that release a P, and there
+are none, because there is no netpoller and no file I/O yet. Preemption needs
+something to preempt with, and that is its own milestone further down this
+document. A forced garbage collection needs a garbage collector. What is left
+is timers, and that one is real now.
+
+The timer job is a backstop and is written as one. The ordinary path already
+covers the common case twice over: a thread about to go idle works out the
+earliest wake time across every P and sleeps with that as its deadline, and a
+thread that has run out of work runs a victim's due timers on the last stealing
+pass. So the monitor is not how timers normally fire. It is what notices that
+one of those two has not happened, and all it does about it is call `wakep`,
+which is the same call a goroutine becoming runnable makes. A monitor that is
+slightly too eager costs a thread a wakeup and cannot cost anybody a wrong
+answer, and that asymmetry is what makes a backstop worth having at all.
+
+The interval starts at 20 microseconds and doubles after fifty passes that find
+nothing, up to 10 milliseconds. Go's numbers, Go's shape. The point of the
+ramp is that a program with work in it gets checked often and a program sitting
+idle does not get woken two hundred times a second to be told nothing has
+changed.
+
+Below the bottom of that ramp is a state the monitor sleeps in with no deadline
+at all, which is every P on the idle list and not one timer anywhere. Nothing
+inside a runtime in that state can change it, so a deadline would only be a
+promise to wake up and find the same thing. The way out is `pidle_get`, which
+is the one place a P leaves the idle list, and it opens the gate on the way
+past. That decision and that wake both happen under the scheduler lock, which
+is not incidental: the monitor reads the idle count and then says it is asleep,
+`pidle_get` changes the idle count and then reads whether the monitor is
+asleep, and without the lock those two stores can sit in store buffers long
+enough for both sides to see the old value and for the wake to be lost.
+
+A Go program cannot reach that state and still be alive. A burrow program can,
+because burrow is a library inside somebody else's program and that program's
+own threads are allowed to call `sched_ready` on a parked goroutine. The same
+fact is why there is no deadlock detector here yet. Go's `checkdead` runs in
+this exact spot and throws, and the same check in burrow would throw on a
+program that is working correctly and waiting on a thread the runtime has never
+heard of. If it arrives it has to arrive as something the program asks for.
 
 ## 2. Context switching
 

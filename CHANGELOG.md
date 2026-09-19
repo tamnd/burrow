@@ -4,6 +4,26 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+The monitor thread, which Go calls sysmon. One thread that holds no P and therefore gets to look around while every other thread is busy, which is the only reason it exists.
+
+Go gives it four jobs and burrow can do one of them today. Retaking a P from a thread stuck in a syscall needs syscalls that release a P and there are none yet. Preemption is its own milestone. A forced collection needs a collector. What is left is timers, and the honest description of that job is a backstop: a thread going idle already sleeps with the earliest deadline anywhere as its own deadline, and a thread out of work already runs a victim's due timers on the last stealing pass, so the monitor is what notices when neither of those has happened. All it does about it is call `wakep`, which is the call a goroutine becoming runnable makes, so being slightly too eager costs a thread a wakeup and cannot cost anybody a wrong answer.
+
+An idle program stays idle. The interval starts at 20 microseconds and doubles after fifty quiet passes up to 10 milliseconds, and below the bottom of that there is a state with every P idle and no timer anywhere where the monitor sleeps with no deadline at all, because nothing inside a runtime in that state can change it.
+
+### Runtime
+
+- `sysmon` starts in `runtime_main` once the world is up and is woken and joined on the way down. A run where the thread cannot be started carries on without it, because every job it does today is a backstop for a path that already works.
+- The wake out of the indefinite sleep lives in `pidle_get`, since a P leaving the idle list is the only event that makes the world worth watching again.
+- That decision and that wake both happen under the scheduler lock. The monitor reads the idle count and then says it is asleep, `pidle_get` changes the idle count and then reads whether the monitor is asleep, and without a lock across both pairs those stores can sit in store buffers long enough for each side to see the old value and for the wake to be lost.
+- No deadlock detector, deliberately. Go's `checkdead` runs in this spot and throws when there is a runnable goroutine and nothing to run it. burrow is a library inside somebody else's program and that program's own threads are allowed to ready a parked goroutine, so the same check would throw on a program that is working. If it arrives it arrives as something the program asks for.
+
+### Docs
+
+- `docs/design/06-runtime.md` has a section on the monitor, saying which of Go's four jobs are done and which are waiting on parts that do not exist yet.
+- `docs/guides/goroutines.md` mentions the extra thread, because it is one more than `runtime_gomaxprocs` would have you count and somebody is going to see it in a debugger.
+
 ## v0.0.12 (2026-09-19)
 
 Timers, both halves. The machine underneath is a set per P with a four way heap in each, which is Go's design down to the number of children per node, and on top of it sit the three calls a program actually makes: `time_sleep`, `time_after_func`, and the stop and reset that go with a timer once you have one.

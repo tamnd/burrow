@@ -151,6 +151,8 @@ A thread that finds nothing gives its P up and looks again before parking. Doing
 
 `runtime_gosched` from a goroutine puts it on the global queue rather than the local one, which is Go's behaviour and matters for fairness. `sched_ready` puts the woken goroutine in `runnext`, which is also Go's, for the cache.
 
+One more thread exists than you might count from `runtime_gomaxprocs`, and it is the monitor, which Go calls `sysmon`. It holds no P, so it is the only part of the scheduler that can look around while everything else is busy, and today the one thing it looks for is a timer that has come due on a P nobody is holding. That should never happen, because a thread going idle already sleeps with the earliest deadline anywhere as its own, and this is the thing that notices when it has. It wakes on a timer that starts at 20 microseconds and stretches to 10 milliseconds while a program stays quiet, and if every P is idle with no timer anywhere it stops waking at all until a P is taken. So an idle burrow program is genuinely idle and this thread does not show up in a profile of one.
+
 ## What is not here yet
 
 Three things, all of them on the P0 milestone.

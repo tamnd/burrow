@@ -84,14 +84,15 @@ This is one of the few places burrow deliberately does more than Go's runtime
 does, and the reason is a measurement rather than a preference: opening a gate
 nobody was standing at cost 352 nanoseconds and the `sync.WaitGroup` it was
 measured against, which keeps its own waiter count in the word next to its
-counter, did the same thing in 17. A scheduler parks and unparks threads all
-day, so that is not a rounding error. Nothing is given up for it. A sleeper
-joins the count and then looks at the flag, a waker sets the flag and then looks
-at the count, and all four of those are sequentially consistent, so they happen
-in one order that every thread agrees on and in that order the sleeper cannot
-pass the waker. The count is a second word rather than spare bits in the flag
-because the flag is what a futex compares against, and a flag that changed every
-time somebody arrived would wake everybody already asleep for nothing.
+counter, did the same thing in 17. It costs 11 now, against 15 for the
+WaitGroup. A scheduler parks and unparks threads all day, so that is not a
+rounding error. Nothing is given up for it. A sleeper joins the count and then
+looks at the flag, a waker sets the flag and then looks at the count, and all
+four of those are sequentially consistent, so they happen in one order that
+every thread agrees on and in that order the sleeper cannot pass the waker. The
+count is a second word rather than spare bits in the flag because the flag is
+what a futex compares against, and a flag that changed every time somebody
+arrived would wake everybody already asleep for nothing.
 
 This is the piece that section 6 below calls `sched_park` and `sched_ready`.
 Those two are the G-level operations and they park a goroutine, which needs Gs

@@ -10,13 +10,32 @@
  * mistaken for one. That loop is the whole of the correctness argument and the
  * rest is which system call does the sleeping.
  *
+ * The timed sleep adds one more thing to that shape and it is also worth saying
+ * once. Every backend loops, and every time round the loop it works out what is
+ * left of the timeout from burrow__nanotime rather than waiting the original
+ * amount again, so a sleep that is interrupted nine times still waits the length
+ * it was asked for. Each individual wait is capped at NOTE_MAX_WAIT_NS below,
+ * which costs one extra system call every quarter of an hour and in exchange
+ * makes every conversion from nanoseconds into whatever the platform counts in
+ * something that cannot overflow rather than something that usually does not.
+ *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+/* For CLOCK_MONOTONIC and pthread_condattr_setclock, which the portable backend
+ * needs and which are POSIX rather than C. Not on macOS, where the default
+ * visibility is everything and asking for POSIX instead takes away the _np call
+ * that backend uses, and not on Linux, which never reaches that backend and
+ * whose futex path deliberately declares syscall itself. */
+#if !defined(_WIN32) && !defined(__linux__) && !defined(__APPLE__)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "burrow/note.h"
 
 #include "burrow/atomic.h"
+#include "burrow/clock.h"
 #include "burrow/platform.h"
 
 #include <stdbool.h>
@@ -28,7 +47,12 @@
 #include <sys/syscall.h>
 #else
 #include <pthread.h>
+#include <time.h>
 #endif
+
+/* The longest any single wait below may be, a thousand seconds. See the note at
+ * the top of the file for why there is a cap at all. */
+#define NOTE_MAX_WAIT_NS 1000000000000LL
 
 #if defined(BURROW_OS_WINDOWS)
 
@@ -71,6 +95,38 @@ void burrow__note_sleep(burrow__Note *n) {
     (void)WaitForSingleObject((HANDLE)n->event, INFINITE);
 }
 
+bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
+    if (ns <= 0)
+        return burrow__note_is_open(n);
+
+    int64_t deadline = burrow__nanotime() + ns;
+
+    for (;;) {
+        int64_t left = deadline - burrow__nanotime();
+        if (left <= 0)
+            return burrow__note_is_open(n);
+
+        if (left > NOTE_MAX_WAIT_NS)
+            left = NOTE_MAX_WAIT_NS;
+
+        /* Rounded up rather than down, because a wait of zero milliseconds does
+         * not wait and a loop of those is a spin with the word timeout on it.
+         * The resolution here is the timer tick, which is about sixteen
+         * milliseconds by default, so a short timeout on Windows is late by a
+         * lot. That is a thing about Windows and not about this function. */
+        DWORD ms = (DWORD)((left + 999999) / 1000000);
+
+        DWORD r = WaitForSingleObject((HANDLE)n->event, ms);
+        if (r == WAIT_OBJECT_0)
+            return true;
+
+        /* Anything other than a timeout is a handle that is closed or not an
+         * event, which is a caller bug rather than something to spin on. */
+        if (r != WAIT_TIMEOUT)
+            return false;
+    }
+}
+
 bool burrow__note_is_open(const burrow__Note *n) {
     /* A zero timeout is the documented way to ask an event its state without
      * waiting on it, and on a manual reset event it does not consume anything. */
@@ -97,17 +153,32 @@ bool burrow__note_is_open(const burrow__Note *n) {
 #define FUTEX_WAIT_PRIVATE 128
 #define FUTEX_WAKE_PRIVATE 129
 
-/* Which system call number to use. Architectures added after 2019 have no 32
- * bit time_t and so have only the time64 variant, while everything older has
- * both and the plain one is what its libc uses. The timeout argument is always
- * NULL here, so the two are interchangeable for this use. */
+/* Which system call number to use, and what shape the timeout that goes with it
+ * has. Architectures added after 2019 have no 32 bit time_t and so have only the
+ * time64 variant, while everything older has both and the plain one is what its
+ * libc uses.
+ *
+ * The timespec is written out here rather than taken from <time.h> because the
+ * two do not have to agree. SYS_futex wants the kernel's old timespec, whose
+ * fields are both a long, and a 32 bit build with _TIME_BITS=64 has a libc
+ * timespec whose seconds field is eight bytes wide. Handing the second to the
+ * first is a struct the kernel reads the wrong way, and it is the sort of
+ * mistake that only appears on the one platform nobody builds for. Writing the
+ * layout that goes with the chosen system call number keeps the two together. */
 #if defined(SYS_futex)
 #define NOTE_SYS_FUTEX SYS_futex
+typedef long NoteTime;
 #elif defined(SYS_futex_time64)
 #define NOTE_SYS_FUTEX SYS_futex_time64
+typedef int64_t NoteTime;
 #else
 #error "no futex system call number on this Linux architecture"
 #endif
+
+typedef struct NoteTimespec {
+    NoteTime tv_sec;
+    NoteTime tv_nsec;
+} NoteTimespec;
 
 /* Declared here rather than taken from <unistd.h>, because both glibc and musl
  * hide syscall behind _GNU_SOURCE and burrow is built as strict C11. The
@@ -122,6 +193,19 @@ static void futex_wait(uint32_t *addr, uint32_t expected) {
      * the caller's loop handles all three the same way by looking at the flag
      * again. There is nothing here worth branching on. */
     (void)syscall(NOTE_SYS_FUTEX, addr, FUTEX_WAIT_PRIVATE, expected, NULL, NULL, 0);
+}
+
+/* The same wait with a deadline on it. The kernel reads the timespec as a
+ * duration and measures it on CLOCK_MONOTONIC, which is the clock
+ * burrow__nanotime reads on this platform, so the two agree about how long a
+ * second is without anybody having to convert between them. */
+static void futex_wait_for(uint32_t *addr, uint32_t expected, int64_t ns) {
+    NoteTimespec ts;
+
+    ts.tv_sec = (NoteTime)(ns / 1000000000);
+    ts.tv_nsec = (NoteTime)(ns % 1000000000);
+
+    (void)syscall(NOTE_SYS_FUTEX, addr, FUTEX_WAIT_PRIVATE, expected, &ts, NULL, 0);
 }
 
 static void futex_wake_all(uint32_t *addr) {
@@ -161,6 +245,29 @@ void burrow__note_sleep(burrow__Note *n) {
     }
 }
 
+bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
+    if (ns <= 0)
+        return burrow__atomic_load_acquire_u32(&n->state) != 0;
+
+    int64_t deadline = burrow__nanotime() + ns;
+
+    while (burrow__atomic_load_acquire_u32(&n->state) == 0) {
+        int64_t left = deadline - burrow__nanotime();
+        if (left <= 0)
+            break;
+
+        if (left > NOTE_MAX_WAIT_NS)
+            left = NOTE_MAX_WAIT_NS;
+
+        futex_wait_for(&n->state, 0, left);
+    }
+
+    /* Read again rather than returning what the loop decided, because the wake
+     * can land between the last check and the deadline passing, and a note that
+     * is open is open however late the thread noticed. */
+    return burrow__atomic_load_acquire_u32(&n->state) != 0;
+}
+
 bool burrow__note_is_open(const burrow__Note *n) {
     return burrow__atomic_load_acquire_u32(&n->state) != 0;
 }
@@ -175,7 +282,22 @@ bool burrow__note_is_open(const burrow__Note *n) {
  * The flag is still read and written atomically even though every write happens
  * under the mutex. That is not belt and braces, it is what lets is_open answer
  * without taking the lock, which in turn is what keeps it usable from a caller
- * that must not block. */
+ * that must not block.
+ *
+ * The timed wait is the one place where this backend is two backends. A
+ * condition variable measures an absolute deadline on CLOCK_REALTIME unless it
+ * is told otherwise, and CLOCK_REALTIME is the wall clock, which is the clock a
+ * timeout must not be measured on. Every POSIX system since 2001 can be told
+ * otherwise with pthread_condattr_setclock, and macOS is the exception: it has
+ * never implemented that call and offers pthread_cond_timedwait_relative_np
+ * instead, which takes a duration and measures it on the monotonic clock
+ * already. Go does exactly this split for exactly this reason. */
+
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+#define NOTE_COND_RELATIVE 1
+#else
+#define NOTE_COND_RELATIVE 0
+#endif
 
 bool burrow__note_init(burrow__Note *n) {
     n->state = 0;
@@ -183,10 +305,31 @@ bool burrow__note_init(burrow__Note *n) {
     if (pthread_mutex_init(&n->mu, NULL) != 0)
         return false;
 
+#if NOTE_COND_RELATIVE
     if (pthread_cond_init(&n->cv, NULL) != 0) {
         (void)pthread_mutex_destroy(&n->mu);
         return false;
     }
+#else
+    pthread_condattr_t attr;
+
+    if (pthread_condattr_init(&attr) != 0) {
+        (void)pthread_mutex_destroy(&n->mu);
+        return false;
+    }
+
+    /* A failure here is a system that has the call and will not do it, which
+     * leaves the condvar on the wall clock. Better to refuse to make the note
+     * than to hand back one whose timeouts are wrong twice a year. */
+    if (pthread_condattr_setclock(&attr, CLOCK_MONOTONIC) != 0 ||
+        pthread_cond_init(&n->cv, &attr) != 0) {
+        (void)pthread_condattr_destroy(&attr);
+        (void)pthread_mutex_destroy(&n->mu);
+        return false;
+    }
+
+    (void)pthread_condattr_destroy(&attr);
+#endif
 
     return true;
 }
@@ -218,6 +361,49 @@ void burrow__note_sleep(burrow__Note *n) {
     while (burrow__atomic_load_acquire_u32(&n->state) == 0)
         (void)pthread_cond_wait(&n->cv, &n->mu);
     (void)pthread_mutex_unlock(&n->mu);
+}
+
+bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
+    if (ns <= 0)
+        return burrow__atomic_load_acquire_u32(&n->state) != 0;
+
+    int64_t deadline = burrow__nanotime() + ns;
+
+    (void)pthread_mutex_lock(&n->mu);
+
+    while (burrow__atomic_load_acquire_u32(&n->state) == 0) {
+        int64_t left = deadline - burrow__nanotime();
+        if (left <= 0)
+            break;
+
+        if (left > NOTE_MAX_WAIT_NS)
+            left = NOTE_MAX_WAIT_NS;
+
+#if NOTE_COND_RELATIVE
+        struct timespec wait;
+        wait.tv_sec = (time_t)(left / 1000000000);
+        wait.tv_nsec = (long)(left % 1000000000);
+
+        (void)pthread_cond_timedwait_relative_np(&n->cv, &n->mu, &wait);
+#else
+        /* Absolute, and on the same clock the condvar was given in init, which
+         * is the clock burrow__nanotime reads on every platform that gets here.
+         * So the deadline can be handed over as it stands rather than being
+         * converted through anything. */
+        int64_t at = burrow__nanotime() + left;
+
+        struct timespec wait;
+        wait.tv_sec = (time_t)(at / 1000000000);
+        wait.tv_nsec = (long)(at % 1000000000);
+
+        (void)pthread_cond_timedwait(&n->cv, &n->mu, &wait);
+#endif
+    }
+
+    bool open = burrow__atomic_load_acquire_u32(&n->state) != 0;
+
+    (void)pthread_mutex_unlock(&n->mu);
+    return open;
 }
 
 bool burrow__note_is_open(const burrow__Note *n) {

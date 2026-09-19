@@ -21,10 +21,12 @@
 #include "burrow/note.h"
 
 #include "burrow/atomic.h"
+#include "burrow/clock.h"
 #include "burrow/thread.h"
 
 #include "harness.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /* ------------------------------------------------------- the easy directions */
@@ -253,6 +255,171 @@ TEST(two_threads_pass_a_turn_back_and_forth) {
     burrow__note_free(&to_worker);
 }
 
+/* ---------------------------------------------------------- the timed sleep */
+
+/* Half a millisecond, which is long enough that the measurement below is not
+ * all overhead and short enough that a test which does it a few hundred times
+ * still finishes quickly. */
+#define SHORT_NS 500000
+
+TEST(a_timed_sleep_on_an_open_note_returns_true_without_waiting) {
+    burrow__Note n;
+
+    CHECK(burrow__note_init(&n));
+    burrow__note_wake(&n);
+
+    int64_t start = burrow__nanotime();
+    CHECK(burrow__note_sleep_timeout(&n, 10000000000LL));
+
+    /* Ten seconds asked for and it had better not have waited any of them. A
+     * tenth of a second of slack, which is a loaded machine and not a wait. */
+    CHECK(burrow__nanotime() - start < 100000000);
+
+    burrow__note_free(&n);
+}
+
+TEST(a_timed_sleep_with_no_time_left_is_a_poll) {
+    burrow__Note n;
+
+    CHECK(burrow__note_init(&n));
+
+    /* Zero and negative both mean do not wait, so these answer the note's
+     * state and nothing else. */
+    CHECK(!burrow__note_sleep_timeout(&n, 0));
+    CHECK(!burrow__note_sleep_timeout(&n, -1));
+
+    burrow__note_wake(&n);
+
+    CHECK(burrow__note_sleep_timeout(&n, 0));
+    CHECK(burrow__note_sleep_timeout(&n, -1));
+
+    burrow__note_free(&n);
+}
+
+TEST(a_timed_sleep_that_nobody_wakes_times_out_and_says_so) {
+    burrow__Note n;
+
+    CHECK(burrow__note_init(&n));
+
+    int64_t start = burrow__nanotime();
+    CHECK(!burrow__note_sleep_timeout(&n, SHORT_NS));
+    int64_t taken = burrow__nanotime() - start;
+
+    /* Early is a bug and late is the operating system. The lower bound is the
+     * real check here: a timed sleep that returns straight away passes a test
+     * which only looks at the false. */
+    CHECK(taken >= SHORT_NS);
+    CHECK(!burrow__note_is_open(&n));
+
+    burrow__note_free(&n);
+}
+
+#define TIMEOUT_ROUNDS 20
+
+TEST(the_same_short_timeout_used_again_does_not_grow) {
+    burrow__Note n;
+
+    CHECK(burrow__note_init(&n));
+
+    int64_t start = burrow__nanotime();
+
+    for (int i = 0; i < TIMEOUT_ROUNDS; i++)
+        CHECK(!burrow__note_sleep_timeout(&n, SHORT_NS));
+
+    int64_t taken = burrow__nanotime() - start;
+
+    /* A hundred milliseconds allowed for each half millisecond asked for, which
+     * is two hundred times the slack and is deliberate. Windows rounds every
+     * wait up to a timer tick, which is about sixteen milliseconds by default,
+     * so a bound tight enough to be interesting on Linux fails there for a
+     * reason that has nothing to do with this code. What is left after that is
+     * still worth having: a backend that took nanoseconds for microseconds, or
+     * milliseconds for nanoseconds, is out by a factor of a thousand and lands
+     * well outside even this. */
+    CHECK(taken >= TIMEOUT_ROUNDS * (int64_t)SHORT_NS);
+    CHECK(taken < TIMEOUT_ROUNDS * 100000000LL);
+
+    burrow__note_free(&n);
+}
+
+static burrow__Note timed;
+static burrow__Thread timed_waker;
+
+static void wake_after_a_moment(void *arg) {
+    (void)arg;
+
+    /* Spun rather than slept, because the thing being tested is the only sleep
+     * this library has. */
+    int64_t start = burrow__nanotime();
+    while (burrow__nanotime() - start < SHORT_NS) {
+    }
+
+    burrow__note_wake(&timed);
+}
+
+TEST(a_wake_that_arrives_before_the_timeout_wins) {
+    CHECK(burrow__note_init(&timed));
+
+    CHECK(burrow__thread_start(&timed_waker, wake_after_a_moment, NULL, 0));
+
+    /* Ten seconds against a wake half a millisecond away. Either this comes
+     * back true quickly or the wake is being lost, and the elapsed check is
+     * what tells those two apart from a test that just sat there. */
+    int64_t start = burrow__nanotime();
+    bool got = burrow__note_sleep_timeout(&timed, 10000000000LL);
+    int64_t taken = burrow__nanotime() - start;
+
+    CHECK(got);
+    CHECK(taken < 5000000000LL);
+
+    CHECK(burrow__thread_join(&timed_waker));
+    CHECK(burrow__note_is_open(&timed));
+
+    burrow__note_free(&timed);
+}
+
+/* Every sleeper released by one wake, the same as the untimed case, and with
+ * timeouts long enough that a lost wake shows up as a failure rather than as a
+ * hung test. */
+static burrow__Note timed_crowd;
+static uint32_t timed_released;
+static uint32_t timed_timedout;
+static burrow__Thread timed_threads[SLEEPERS];
+
+static void wait_with_a_deadline(void *arg) {
+    (void)arg;
+
+    (void)burrow__atomic_add_u32(&arrived, 1);
+
+    if (burrow__note_sleep_timeout(&timed_crowd, 10000000000LL))
+        (void)burrow__atomic_add_u32(&timed_released, 1);
+    else
+        (void)burrow__atomic_add_u32(&timed_timedout, 1);
+}
+
+TEST(one_wake_releases_every_timed_sleeper_too) {
+    CHECK(burrow__note_init(&timed_crowd));
+    arrived = 0;
+    timed_released = 0;
+    timed_timedout = 0;
+
+    for (size_t i = 0; i < SLEEPERS; i++)
+        CHECK(burrow__thread_start(&timed_threads[i], wait_with_a_deadline, NULL, 0));
+
+    while (burrow__atomic_load_u32(&arrived) < SLEEPERS)
+        burrow__thread_yield();
+
+    burrow__note_wake(&timed_crowd);
+
+    for (size_t i = 0; i < SLEEPERS; i++)
+        CHECK(burrow__thread_join(&timed_threads[i]));
+
+    CHECK(burrow__atomic_load_u32(&timed_released) == SLEEPERS);
+    CHECK(burrow__atomic_load_u32(&timed_timedout) == 0);
+
+    burrow__note_free(&timed_crowd);
+}
+
 int main(void) {
     RUN(a_fresh_note_is_closed_and_a_wake_opens_it);
     RUN(sleeping_on_a_note_that_is_already_open_returns_at_once);
@@ -261,5 +428,11 @@ int main(void) {
     RUN(one_wake_releases_every_sleeper);
     RUN(a_note_can_be_closed_again_and_used_for_the_next_round);
     RUN(two_threads_pass_a_turn_back_and_forth);
+    RUN(a_timed_sleep_on_an_open_note_returns_true_without_waiting);
+    RUN(a_timed_sleep_with_no_time_left_is_a_poll);
+    RUN(a_timed_sleep_that_nobody_wakes_times_out_and_says_so);
+    RUN(the_same_short_timeout_used_again_does_not_grow);
+    RUN(a_wake_that_arrives_before_the_timeout_wins);
+    RUN(one_wake_releases_every_timed_sleeper_too);
     return harness_report("note");
 }

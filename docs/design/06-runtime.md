@@ -68,8 +68,8 @@ limit is not the number this process may use; reconciling those two is
 `GOMAXPROCS`'s job and is where a caller can override the answer anyway.
 
 That primitive is `burrow/note.h`, and it keeps Go's name for it. A note is a
-one shot gate with five operations: init, free, clear, wake, and sleep. It
-starts closed, a wake opens it and releases everybody waiting, and a sleep on an
+one shot gate with six operations: init, free, clear, wake, sleep, and a sleep
+with a timeout on it. It starts closed, a wake opens it and releases everybody waiting, and a sleep on an
 open one returns straight away. That last part is what makes it usable without a
 lock wrapped round it, because the waker never has to know whether the sleeper
 has arrived yet. Linux gets a futex, so a note is one 32 bit word of the
@@ -84,10 +84,29 @@ and a scheduler to park them in. A note is the M-level half underneath, and it
 is what `sched_park` will block on once there is nothing left for a thread to
 run. It lands first because everything above it needs a thread that can sleep.
 
-There is no timed sleep on a note yet. A timeout needs a monotonic clock that
-does not move when somebody sets the system time, C11 has no such clock, and the
-runtime has to grow one for timers regardless. The timed version arrives with
-it.
+The timed sleep is `burrow__note_sleep_timeout`, which is Go's `notetsleep`, and
+what wants it is a thread with no work to do and a timer due in a millisecond.
+It needed a monotonic clock first, because a timeout measured against the system
+time is a timeout that fires twice or never on the day the machine syncs with
+ntp, and C11 has no such clock: `clock` counts processor time, `time` has a
+resolution of a second, and `timespec_get(TIME_UTC)` is the wall clock. So there
+is `burrow/clock.h`, one function, `burrow__nanotime`, and it is `nanotime` from
+Go's runtime down to the four system calls underneath it. `CLOCK_MONOTONIC` on
+Linux and the BSDs, `mach_absolute_time` on macOS, and `QueryPerformanceCounter`
+on Windows. Only the difference between two readings means anything, which is
+all a timer or a timeout ever asks for.
+
+The timed sleep is three implementations and one of them is two. Linux passes a
+relative timespec to `FUTEX_WAIT`, which the kernel already measures on
+`CLOCK_MONOTONIC`. Windows passes a millisecond count to `WaitForSingleObject`.
+The portable backend has to ask, because a condition variable measures an
+absolute deadline on the wall clock unless it is told otherwise: every POSIX
+system since 2001 is told otherwise with `pthread_condattr_setclock`, and macOS
+is the exception that never implemented that call and offers
+`pthread_cond_timedwait_relative_np` instead. Go makes the same split for the
+same reason. All three loop and recompute what is left of the timeout from the
+clock each time round, so a sleep that is interrupted nine times still waits the
+length it was asked for rather than nine times it.
 
 ## 2. Context switching
 

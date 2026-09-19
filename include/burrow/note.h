@@ -26,10 +26,10 @@
  * Everything else gets a mutex and a condition variable, which is what Go uses
  * on darwin and is the portable answer.
  *
- * There is no timed sleep here yet. A timeout needs a monotonic clock that does
- * not jump when somebody sets the system time, C11 offers no such clock, and
- * the runtime has to grow one anyway for timers. That is where the timed
- * version belongs and it will arrive with it.
+ * There is a timed sleep as well, and it waits on burrow's monotonic clock
+ * rather than on the system time. That distinction is the whole reason it waited
+ * for burrow/clock.h: a timeout measured against a clock somebody can set is a
+ * timeout that fires twice or never on the day the machine syncs with ntp.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -114,6 +114,26 @@ void burrow__note_wake(burrow__Note *n);
  * Spurious wakeups are handled here rather than by the caller, so this returns
  * when the note is open and at no other time. */
 void burrow__note_sleep(burrow__Note *n);
+
+/* Waits until the gate is open or until ns nanoseconds have gone by, whichever
+ * comes first. True means the note is open, false means the time ran out.
+ *
+ * ns is a duration and not a deadline, and it is counted on burrow's monotonic
+ * clock, so nothing anybody does to the system time can make this return early
+ * or late. Zero or less does not wait at all and just reports the state, which
+ * makes a poll and a timeout the same call.
+ *
+ * Coming back early is not possible and coming back late is. A spurious wakeup
+ * is absorbed here the same way the untimed sleep absorbs it, with the time
+ * remaining recomputed each round rather than restarted, so a thread that is
+ * interrupted nine times still waits ns in total and not ten times ns. How late
+ * it can be is the scheduler's business: a timeout of one nanosecond is a
+ * request to be woken as soon as possible and on every platform here that means
+ * tens of microseconds at best.
+ *
+ * This is Go's notetsleep, and the M park loop is what wants it: a thread with
+ * no work should not sleep forever when there is a timer due in a millisecond. */
+bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns);
 
 /* Whether the gate is open, without waiting. For a caller that has something
  * better to do than block, and for tests. */

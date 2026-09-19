@@ -4,6 +4,28 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+### Runtime
+
+- `burrow/timer.h` and `src/runtime/timer.c` are the timers, which is Go's `runtime/time.go`. A set per P, a four way heap inside each one, and a call the scheduler makes to run whatever is due. Nothing user facing sits on top of them yet, so this is the machine underneath `time.Sleep` and `time.AfterFunc` rather than either of those.
+- The set is per P because the alternative is every goroutine that sets a deadline taking one lock, and a server that sets and clears a read deadline per request does nothing else all day. Go moved off a single global heap in 1.9 for the same reason.
+- The heap has four children per node rather than two. Same logarithm, a third fewer levels, and the four entries a node compares against sit in one or two cache lines. Go's number.
+- Stopping a timer does not take it out of the heap, because the heap belongs to a P that another thread may be holding. A stop marks the timer and the owning P throws it out later, which means a timer stopped and started again before the owner looks never leaves the heap at all. That is the case a read deadline on a busy connection hits every time.
+- Two published minimums per set, one for the head of the heap and one for the timers whose recorded time has gone stale, so a thread working out how long to sleep reads two words rather than taking every P's lock. Together they are allowed to be earlier than the truth and never later, because early costs a wakeup and late is a timer that does not fire.
+- Arming a timer answers false when the heap needed to grow and the allocator said no. Go cannot fail here because Go throws instead. burrow does not have that option and says so rather than losing the timer quietly.
+- The scheduler pays for all this in three places: this P's timers at the top of find runnable, a victim's on the last stealing pass, and a deadline on the sleep a thread takes when it has run out of places to look. The deadline comes from a scan of every P's wake time, and the scan happens after the thread has stopped counting itself as a searcher, which is the same ordering argument as the note's sleeper count.
+- The runtime's own lock moved out of `burrow/sched.h` into `burrow/lock.h`. The timers need it and do not otherwise need the scheduler, and a header that includes the scheduler to get a lock is a cycle waiting for the first file that goes the other way.
+
+### Tests
+
+- `tests/timer_test.c`. Most of it drives a set of timers with no scheduler near it and a clock the test makes up, so a timer due at 5000 not firing at 1000 is a check rather than a hope, and the checks can look at the heap directly and confirm that a stop left the timer in it. Two tests go through the real scheduler with the real clock, because arithmetic being right is not the same as a sleeping thread waking up.
+- One of those two found a real bug before it was ever committed. Find runnable took its reading of the clock once and then looped, so a thread that slept until a timer was due woke up, compared the timer against the time from before it went to sleep, decided nothing was due and went round again, forever. The reading is taken once per pass now, which is where Go takes it.
+
+### Docs
+
+- `docs/design/06-runtime.md` has a section on timers: why the sets are per P, what the three state bits are for, why there are two published minimums, what it costs the scheduler, and what Go has here that burrow does not have yet.
+
 ## v0.0.11 (2026-09-19)
 
 The monotonic clock and the timed sleep that goes on top of it, which is the first half of timers. Both are the ones Go has, `nanotime` and `notetsleep`, and the second one waits on the first rather than on the wall clock, so nothing anybody does to the system time can make a timeout fire early or late.

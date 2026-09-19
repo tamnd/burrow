@@ -18,13 +18,17 @@
  * it somewhere another thread can find it, and doing that while still standing
  * on its stack is a race with that thread picking it up and running it.
  *
- * Three things Go has that are not here yet, all of them further down the list
- * in docs/design/06-runtime.md section 12. There is no netpoll step in
- * findrunnable, because there is no netpoller. There is no timer check, because
- * there are no timers. And nothing preempts a goroutine, so a loop that never
- * blocks holds its thread until it finishes. Each of those is a gap in this
- * file that the corresponding change fills in, and each is marked below where
- * it goes.
+ * Two things Go has that are not here yet, both of them further down the list in
+ * docs/design/06-runtime.md section 12. There is no netpoll step in
+ * findrunnable, because there is no netpoller, and where it goes is marked. And
+ * nothing preempts a goroutine, so a loop that never blocks holds its thread
+ * until it finishes.
+ *
+ * Timers are here. What that costs this file is three things: a check of this
+ * P's own timers at the top of findrunnable, a check of a victim's on the last
+ * stealing pass, and a deadline on the sleep a thread takes when it has run out
+ * of places to look. The last one is where Go calls the netpoller with a
+ * timeout, and swapping this for that is what the netpoller change does.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -33,6 +37,7 @@
 #include "burrow/proc.h"
 
 #include "burrow/atomic.h"
+#include "burrow/clock.h"
 #include "burrow/context.h"
 #include "burrow/core.h"
 #include "burrow/func.h"
@@ -44,6 +49,7 @@
 #include "burrow/sched.h"
 #include "burrow/stack.h"
 #include "burrow/thread.h"
+#include "burrow/timer.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -71,44 +77,6 @@
  * Go's number. The last one is the only one allowed to take a victim's runnext,
  * which is why there is more than one. */
 #define STEAL_PASSES 4
-
-/* How many times burrow__lock spins before it stops burning the processor.
- *
- * Every critical section under this lock is a handful of pointer writes, so the
- * holder is almost always gone within a few tens of cycles and spinning wins.
- * When it does not, the holder has usually been descheduled by the operating
- * system, and then no amount of spinning helps and yielding is the only thing
- * that does. */
-#define LOCK_SPINS 60
-
-/* ----------------------------------------------------------------- the lock */
-
-void burrow__lock(burrow__Lock *l) {
-    for (;;) {
-        for (int i = 0; i < LOCK_SPINS; i++) {
-            /* Read before trying. A compare and swap on a lock somebody else is
-             * holding takes the cache line exclusively and takes it away from
-             * the holder, which makes the holder slower and therefore makes the
-             * wait longer. A plain load leaves the line shared. */
-            if (burrow__atomic_load_relaxed_u32(&l->state) == 0) {
-                uint32_t free = 0;
-                if (burrow__atomic_cas_acquire_u32(&l->state, &free, 1))
-                    return;
-            }
-            burrow__atomic_spin_hint();
-        }
-        burrow__thread_yield();
-    }
-}
-
-bool burrow__trylock(burrow__Lock *l) {
-    uint32_t free = 0;
-    return burrow__atomic_cas_acquire_u32(&l->state, &free, 1);
-}
-
-void burrow__unlock(burrow__Lock *l) {
-    burrow__atomic_store_release_u32(&l->state, 0);
-}
 
 /* ---------------------------------------------------------------- the world
  *
@@ -216,6 +184,12 @@ burrow__P *burrow__allp(int32_t i) {
 
 int32_t burrow__gomaxprocs(void) {
     return sched.gomaxprocs;
+}
+
+burrow__Timers *burrow__timers_local(void) {
+    if (curm == NULL || curm->p == NULL)
+        return NULL;
+    return &curm->p->timers;
 }
 
 Goroutine *sched_current(void) {
@@ -367,6 +341,31 @@ static void midle_put(burrow__M *m) {
     m->next = sched.midle;
     sched.midle = m;
     sched.nmidle++;
+}
+
+/* Takes an M off the idle list if it is still on it, and answers whether it was.
+ *
+ * A thread that parked with a deadline and reached it has to do this before it
+ * goes back to looking for work, because being on that list is a promise to be
+ * asleep. Whoever finds it there next would hand it a P and wake a thread that
+ * is already awake and holding a different one.
+ *
+ * A walk rather than a doubly linked list. The list is at most one entry per P
+ * and this runs only when a sleep runs out, which is once per timer rather than
+ * once per goroutine. */
+static bool midle_remove(burrow__M *m) {
+    burrow__M **at = &sched.midle;
+
+    while (*at != NULL) {
+        if (*at == m) {
+            *at = m->next;
+            m->next = NULL;
+            sched.nmidle--;
+            return true;
+        }
+        at = &(*at)->next;
+    }
+    return false;
 }
 
 static burrow__M *midle_get(void) {
@@ -743,24 +742,83 @@ static void wakep(void) {
     startm(NULL, true);
 }
 
+/* A timer has been set for earlier than whoever is asleep was told. Go pokes the
+ * netpoller here, since in Go the thread with nothing to do is sitting in
+ * epoll_wait with a deadline. burrow has no netpoller, so that thread is asleep
+ * on its own note with a deadline on it, and the way to cut that short is the
+ * same way new work cuts it short.
+ *
+ * The thread this has to reach has already given its P up, which is what makes
+ * wakep the right call rather than a second mechanism: a P with a timer due and
+ * nobody holding it is a P on the idle list, and that is exactly what wakep goes
+ * looking for.
+ *
+ * wakep does nothing when a thread is already out searching, and that is safe
+ * for the same reason it is safe for a goroutine being readied. A searching
+ * thread stops counting itself as searching and then takes one more look before
+ * it parks, and that last look reads every P's wake time. Both halves are
+ * sequentially consistent, so in any order the threads agree on, either the
+ * searcher sees this timer or this sees a searcher that has not finished. */
+void burrow__timers_wake(void) {
+    wakep();
+}
+
 /* Parks this thread until somebody hands it a P. Comes back with m->p set, or
- * with m->p NULL when the world is coming down. */
-static void stopm(burrow__M *m) {
-    burrow__lock(&sched.lock);
-    if (burrow__atomic_load_relaxed_u32(&sched.stopping) != 0) {
+ * with m->p NULL when the world is coming down.
+ *
+ * `until` is a burrow__nanotime reading to wake at whether or not anybody hands
+ * this thread anything, or 0 to sleep until somebody does. That is how a timer
+ * gets run when every thread has run out of work: the earliest timer anybody has
+ * becomes the deadline on this sleep. In Go the same deadline goes to the
+ * netpoller, because in Go this thread is the one sitting in epoll_wait.
+ *
+ * The loop is because a deadline that passes is not on its own a reason to stop
+ * being idle. The thread takes itself off the idle list, looks for a P to do the
+ * work with, and if there is not one to be had it goes back to sleep, this time
+ * with no deadline: every P is busy, so every P has a thread that will get to its
+ * own timers. */
+static void stopm(burrow__M *m, int64_t until) {
+    for (;;) {
+        burrow__lock(&sched.lock);
+        if (burrow__atomic_load_relaxed_u32(&sched.stopping) != 0) {
+            burrow__unlock(&sched.lock);
+            return;
+        }
+        midle_put(m);
         burrow__unlock(&sched.lock);
-        return;
+
+        bool woken = true;
+        if (until == 0) {
+            burrow__note_sleep(&m->park);
+        } else {
+            woken = burrow__note_sleep_timeout(&m->park, until - burrow__nanotime());
+        }
+        burrow__note_clear(&m->park);
+
+        burrow__lock(&sched.lock);
+        if (!woken) {
+            /* The deadline passed. Off the list, and if it turns out somebody
+             * took this thread off it already then that somebody has left a P in
+             * nextp and the sleep was going to end anyway. */
+            (void)midle_remove(m);
+        }
+        burrow__P *p = m->nextp;
+        m->nextp = NULL;
+        if (p == NULL && !woken)
+            p = pidle_get();
+        burrow__unlock(&sched.lock);
+
+        if (p != NULL) {
+            acquirep(m, p);
+            return;
+        }
+        if (burrow__atomic_load_acquire_u32(&sched.stopping) != 0)
+            return;
+
+        /* Whatever the deadline was for, this thread could not get a P to do it
+         * with. Sleep until somebody has something to hand over. */
+        until = 0;
     }
-    midle_put(m);
-    burrow__unlock(&sched.lock);
-
-    burrow__note_sleep(&m->park);
-    burrow__note_clear(&m->park);
-
-    burrow__P *p = m->nextp;
-    m->nextp = NULL;
-    if (p != NULL)
-        acquirep(m, p);
 }
 
 /* ------------------------------------------------------------- finding work */
@@ -782,7 +840,7 @@ static uint32_t gcd_u32(uint32_t a, uint32_t b) {
  * that shares a factor visits only some of them. This picks the stride the same
  * way, by walking up from a random point until the greatest common divisor is
  * one, which always terminates because one is coprime with everything. */
-static burrow__G *steal_work(burrow__M *m) {
+static burrow__G *steal_work(burrow__M *m, int64_t *now, bool *ran_timer) {
     burrow__P *p = m->p;
     uint32_t n = (uint32_t)sched.gomaxprocs;
     if (n < 2)
@@ -800,6 +858,26 @@ static burrow__G *steal_work(burrow__M *m) {
             at = (at + step) % n;
             if (victim == p)
                 continue;
+
+            /* The last pass also runs the victim's timers, for the case where
+             * the whole program is asleep on one. Nobody is going to come and
+             * run them: the P they belong to has no thread on it, which is why
+             * there was nothing to steal from it either. Doing it on the last
+             * pass rather than the first keeps it off the path of a thread that
+             * is about to find real work. */
+            if (pass == STEAL_PASSES - 1) {
+                bool ran = false;
+                *now = burrow__timers_check(&victim->timers, *now, NULL, &ran);
+                if (ran) {
+                    /* A timer that readied a goroutine put it on this thread's
+                     * own queue, not on the victim's, because readying happens
+                     * wherever the thread doing it is standing. */
+                    burrow__G *own = burrow__runq_get(p);
+                    if (own != NULL)
+                        return own;
+                    *ran_timer = true;
+                }
+            }
 
             /* Only the last pass may take the victim's runnext, and only then
              * because every other way of finding work has already failed. That
@@ -847,6 +925,20 @@ static burrow__G *findrunnable(burrow__M *m) {
 
         burrow__P *p = m->p;
 
+        /* One reading of the clock per pass, shared by this P's timers and by
+         * every other P's in the stealing loop below, because a thread looking
+         * at eight Ps does not need eight readings a few nanoseconds apart. It
+         * has to be taken again on the next pass though, and hoisting it out of
+         * this loop is a thread that sleeps until a timer is due, wakes up,
+         * compares the timer against the time before it went to sleep, decides
+         * nothing is due yet and goes round again forever. */
+        int64_t now = 0;
+
+        /* Timers before anything else, because a timer that is due readies a
+         * goroutine onto this P's own queue and the next thing this does is look
+         * there. A P with no timers pays two atomic loads for this. */
+        now = burrow__timers_check(&p->timers, now, NULL, NULL);
+
         burrow__G *gp = burrow__runq_get(p);
         if (gp != NULL)
             return gp;
@@ -872,9 +964,12 @@ static burrow__G *findrunnable(burrow__M *m) {
             burrow__atomic_add_u32(&sched.nmspinning, 1);
         }
         if (m->spinning != 0) {
-            gp = steal_work(m);
+            bool ran_timer = false;
+            gp = steal_work(m, &now, &ran_timer);
             if (gp != NULL)
                 return gp;
+            if (ran_timer)
+                continue;
         }
 
         /* Nothing anywhere. Give the P up, and then look again.
@@ -934,7 +1029,25 @@ static burrow__G *findrunnable(burrow__M *m) {
             }
         }
 
-        stopm(m);
+        /* How long to sleep for: the earliest timer anybody has, or forever.
+         *
+         * This scan comes after the thread has stopped counting itself as a
+         * searcher, and that order is the same trick as dropping the P before
+         * taking the last look at the run queues. A timer set just now either
+         * publishes its time before this reads it, or arrives to find a thread
+         * that has not yet stopped searching and wakes it. Both sides are
+         * sequentially consistent, so there is no order in which each misses the
+         * other. Reading it before the transition would leave the window where
+         * both do, which is a program that goes to sleep with a timer due and
+         * wakes up when something else happens to it. */
+        int64_t until = 0;
+        for (int32_t i = 0; i < sched.gomaxprocs; i++) {
+            int64_t w = burrow__timers_wake_time(&allp[i].timers);
+            if (w != 0 && (until == 0 || w < until))
+                until = w;
+        }
+
+        stopm(m, until);
     }
 }
 
@@ -1156,6 +1269,7 @@ static void schedinit(void) {
     for (int32_t i = sched.gomaxprocs - 1; i >= 0; i--) {
         burrow__P *p = &allp[i];
         p->id = i;
+        burrow__timers_init(&p->timers);
         pidle_put(p);
     }
 }
@@ -1180,8 +1294,10 @@ static void teardown(void) {
         burrow__note_free(&allm[i].park);
     burrow__note_free(&sched.mainnote);
 
-    for (int32_t i = 0; i < sched.gomaxprocs; i++)
+    for (int32_t i = 0; i < sched.gomaxprocs; i++) {
+        burrow__timers_free(&allp[i].timers);
         allp[i] = (burrow__P){0};
+    }
     for (int32_t i = 0; i < sched.nmcreated; i++)
         allm[i] = (burrow__M){0};
 

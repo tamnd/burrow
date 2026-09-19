@@ -41,11 +41,13 @@
 #define BURROW_SCHED_H
 
 #include "burrow/context.h"
+#include "burrow/lock.h"
 #include "burrow/note.h"
 #include "burrow/own.h"
 #include "burrow/platform.h"
 #include "burrow/stack.h"
 #include "burrow/thread.h"
+#include "burrow/timer.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -218,6 +220,11 @@ struct burrow__P {
      * and neither of those needs a separate count. */
     burrow__G *runq[BURROW_RUNQ_SIZE];
 
+    /* This P's timers. The set has its own lock, because a thread with nothing
+     * to run looks at other Ps' timers before it parks, the same way it looks
+     * at their run queues. See burrow/timer.h. */
+    burrow__Timers timers;
+
     /* Dead goroutines with their stacks still attached, owned by this P alone so
      * that taking one needs no atomic at all. Bounded, because a P that spawned
      * a million goroutines once should not hold a million stacks forever: the
@@ -302,42 +309,6 @@ struct burrow__M {
     /* Monotonic, and mostly for reading in a debugger. */
     int64_t id;
 };
-
-/* ------------------------------------------------------------------ the lock
- *
- * The runtime's own lock, which is the thing Go calls a mutex in runtime2.go
- * and which is not what a program means by one.
- *
- * A sync.Mutex parks the goroutine and hands the thread to somebody else. This
- * cannot do that, because it is one of the things parking a goroutine is built
- * out of, and a lock that needs a scheduler cannot be the lock the scheduler
- * takes. So it blocks the thread, and the rule that makes that acceptable is
- * that every critical section under it is a handful of pointer writes with no
- * call out of the runtime inside it.
- *
- * Spin and then yield, for now. The spin is what makes the uncontended and
- * lightly contended cases cost nothing, and the yield is what stops a thread
- * burning a core waiting for a lock whose holder has been descheduled. The
- * futex version, which is a spin and then a note, arrives with sync, since that
- * is where the rest of the same machinery is going. Swapping it in changes this
- * file and nothing above it.
- *
- * All zeroes is unlocked, which is the same rule as everywhere else in burrow
- * and means a lock in a static or a calloc'd struct is ready to use. */
-typedef struct burrow__Lock {
-    uint32_t state;
-} burrow__Lock;
-
-/* Takes the lock, blocking the calling thread until it has it. Not recursive:
- * taking one twice on one thread hangs that thread, which is what every
- * non-recursive lock does and is worth knowing before the first deadlock. */
-void burrow__lock(burrow__Lock *l);
-
-/* Takes the lock if it is free and answers whether it did. Never blocks. */
-bool burrow__trylock(burrow__Lock *l);
-
-/* Releases the lock. The caller has to be holding it, and nothing checks. */
-void burrow__unlock(burrow__Lock *l);
 
 /* ------------------------------------------------------------------ the ring
  *

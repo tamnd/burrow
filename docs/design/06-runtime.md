@@ -124,6 +124,62 @@ same reason. All three loop and recompute what is left of the timeout from the
 clock each time round, so a sleep that is interrupted nine times still waits the
 length it was asked for rather than nine times it.
 
+### Timers
+
+`burrow/timer.h` is Go's `runtime/time.go`, the layer underneath `time.Sleep`,
+`time.After`, `time.AfterFunc`, `time.Ticker`, context deadlines and every
+network read timeout. None of those exist yet. What exists is the thing they
+are all built out of: a set of timers per P, ordered so that the earliest one
+is cheap to find, and a call the scheduler makes to run whatever is due.
+
+Per P rather than one global set, because the alternative is every goroutine
+that sets a deadline taking one lock, and a program that does nothing but set
+and clear deadlines is a normal kind of server. Go started with a single heap
+under a single lock and moved to this in 1.9 for exactly that reason. The heap
+has four children per node rather than two, which is still logarithmic but a
+third shallower, and the four entries a node compares against sit next to each
+other in one or two cache lines. Go's number and Go's reason.
+
+The part that shapes the rest is that a timer cannot be taken out of the heap
+by whoever stops it. Stopping happens on whatever thread the goroutine was
+running on, and the heap belongs to a P that some other thread may be holding,
+so a stop marks the timer and walks away. Three bits do the marking: `HEAPED`
+says the timer is in some P's heap, `MODIFIED` says `when` has changed since
+the heap recorded it and the heap order is a guess until somebody fixes it, and
+`ZOMBIE` says it was stopped and is waiting for the owning P to throw it out. A
+timer that is stopped and started again before the owner gets round to it never
+leaves the heap at all, and that case is a read deadline on a busy connection.
+
+Two published minimums come out of the same fact. A thread deciding how long to
+sleep needs to know when the earliest timer anywhere is due, and it cannot take
+every P's lock to find out. So the set keeps `min_when_heap`, which is the head
+of the heap, and `min_when_modified`, which is a lower bound over the timers
+whose recorded time is stale. Whoever moves a timer earlier lowers the second
+one without holding the set's lock at all. Together they are allowed to be
+earlier than the truth and never later, which is the direction that costs a
+thread waking up to find nothing to do rather than a timer that does not fire.
+
+What this costs the scheduler is three things. A check of this P's own timers
+at the top of `findrunnable`, which is two atomic loads for a P with no timers.
+A check of a victim's on the last stealing pass, for the case where the whole
+program is asleep on a timer belonging to a P that has no thread on it. And a
+deadline on the sleep a thread takes when it has run out of places to look,
+worked out by scanning every P's wake time after the thread has stopped
+counting itself as a searcher. That order is the same argument as the note's
+sleeper count: both sides are sequentially consistent, so there is no order in
+which a timer being set misses a searching thread and the searching thread
+misses the timer.
+
+One difference from Go worth naming. Go's heap cannot fail to grow, because Go
+throws if the allocation fails. burrow does not have that option and does not
+pretend to, so arming a timer answers false when the heap needed to grow and
+the allocator said no, and the caller is told rather than left with a timer
+that will never fire. What Go has here that this does not, yet: timer channels
+and the sequence numbers that go with them, both of which need channels, fake
+time for `testing/synctest`, and the netpoller wakeup, which here is a call
+into the scheduler instead because the thread with nothing to do is asleep on
+its own note rather than in `epoll_wait`.
+
 ## 2. Context switching
 
 This is where the POSIX-only prior art ([02](02-landscape.md) §3) is

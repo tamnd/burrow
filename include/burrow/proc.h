@@ -265,6 +265,12 @@ void sched_park(SchedUnlockFn unlockf, void *lock);
  * signal handler or a callback from a C library needs. It is not safe from an
  * actual signal handler yet, because it may take the scheduler lock.
  *
+ * A call from a thread that is not a goroutine holds the runtime open until it
+ * returns. That matters because the goroutine being readied may be the one
+ * runtime_main is waiting for, so the run can end part way through this call,
+ * and without the promise the memory this is standing on would be freed
+ * underneath it. runtime_main waits instead.
+ *
  * Readying a goroutine that is not parked is a bug and stops the program, since
  * the alternative is two threads running one stack. */
 void sched_ready(Goroutine *g);

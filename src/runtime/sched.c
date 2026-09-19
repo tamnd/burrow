@@ -134,6 +134,10 @@ typedef struct Sched {
     uint32_t ngoroutine;
     uint64_t nextgoid;
 
+    /* Atomic. How many threads that this scheduler did not start are part way
+     * through a call into it. See outside_enter below for what that is for. */
+    uint32_t noutside;
+
     /* Atomic. Set once the world is up, and once again when it is coming down.
      * Every M checks the second one at the top of its search and before it
      * parks, which are the only two places it can safely stop. */
@@ -1365,6 +1369,35 @@ static void newm(burrow__P *p, bool spinning) {
 
 /* ------------------------------------------------------------------ starting */
 
+/* A thread this scheduler did not start is allowed to ready a goroutine and to
+ * start one, and both of those reach into the Ms. The catch is that the run can
+ * end while it is in there. The goroutine it readies may be the one the whole
+ * program was waiting for, so main returns, every M is joined and every gate
+ * they were sleeping on is freed, and all of that can happen while the thread
+ * that set it off is still a few instructions from opening one of those gates.
+ *
+ * So a call from outside counts itself in on the way in and out on the way out,
+ * and the shutdown waits for the count to fall to zero before it frees
+ * anything. The count going up happens before the goroutine is readied, which
+ * happens before main can return, which happens before the shutdown looks, so a
+ * call that was in flight when the run ended is always seen.
+ *
+ * A goroutine's own call does not count and does not pay for any of this, since
+ * a goroutine cannot outlive the runtime it is running on. Nor does sysmon,
+ * which is this scheduler's own thread and is joined before the Ms are. */
+static bool outside_enter(void) {
+    if (curm != NULL)
+        return false;
+
+    burrow__atomic_add_u32(&sched.noutside, 1);
+    return true;
+}
+
+static void outside_leave(bool counted) {
+    if (counted)
+        burrow__atomic_add_u32(&sched.noutside, (uint32_t)-1);
+}
+
 bool go_stack(Func fn, size_t stack_bytes) {
     if (fn.f == NULL)
         runtime_throw(BURROW_S("go of a nil function"));
@@ -1374,12 +1407,16 @@ bool go_stack(Func fn, size_t stack_bytes) {
     if (stack_bytes == 0)
         stack_bytes = BURROW_GOROUTINE_STACK;
 
+    bool counted = outside_enter();
+
     burrow__M *m = curm;
     burrow__P *p = m != NULL ? m->p : NULL;
 
     burrow__G *newg = gfget(p, stack_bytes);
-    if (newg == NULL)
+    if (newg == NULL) {
+        outside_leave(counted);
         return false;
+    }
 
     newg->entry = fn.f;
     newg->arg = fn.env;
@@ -1387,6 +1424,7 @@ bool go_stack(Func fn, size_t stack_bytes) {
 
     if (!make_context(newg, stack_bytes)) {
         gfput(p, newg);
+        outside_leave(counted);
         return false;
     }
 
@@ -1404,6 +1442,7 @@ bool go_stack(Func fn, size_t stack_bytes) {
     }
 
     wakep();
+    outside_leave(counted);
     return true;
 }
 
@@ -1427,9 +1466,13 @@ void sched_ready(Goroutine *g) {
     if (g == NULL)
         runtime_throw(BURROW_S("sched_ready of a nil goroutine"));
 
+    bool counted = outside_enter();
+
     uint32_t waiting = (uint32_t)BURROW_GWAITING;
-    if (!burrow__atomic_cas_u32(&g->status, &waiting, (uint32_t)BURROW_GRUNNABLE))
+    if (!burrow__atomic_cas_u32(&g->status, &waiting, (uint32_t)BURROW_GRUNNABLE)) {
+        outside_leave(counted);
         runtime_throw(BURROW_S("sched_ready: goroutine is not parked"));
+    }
 
     burrow__M *m = curm;
     if (m != NULL && m->p != NULL) {
@@ -1441,6 +1484,7 @@ void sched_ready(Goroutine *g) {
     }
 
     wakep();
+    outside_leave(counted);
 }
 
 void runtime_gosched(void) {
@@ -1506,6 +1550,13 @@ static void schedinit(void) {
  * alone. */
 static void teardown(void) {
     Alloc *a = heap_allocator();
+
+    /* Except for one thing that is not an M and cannot be joined: a thread from
+     * the program burrow is a library inside, part way through a call in. The
+     * gates below are what it is most likely to be holding, since readying a
+     * goroutine ends in opening one. outside_enter says the rest. */
+    while (burrow__atomic_load_acquire_u32(&sched.noutside) != 0)
+        burrow__thread_yield();
 
     /* The timer sets go first, before any goroutine does, because a goroutine
      * that was asleep when the runtime stopped still has its timer in one of

@@ -192,9 +192,10 @@ annotation, so a function that returns borrowed memory the caller then frees is
 caught mechanically rather than by review. → [05](05-memory.md) §4
 
 TSan on `runtime` requires care: the hand-written context-switch assembly is
-invisible to TSan and will produce false positives. The mitigation is TSan's
-annotation API around the switch points, plus a `BURROW_SCHED=ucontext` build
-for TSan runs where the assembly path is bypassed entirely.
+invisible to TSan, so a run that is not told about a switch reports goroutines
+against whichever thread happened to be carrying them. The mitigation is TSan's
+fiber API at the switch points, which every backend goes through, so the
+assembly path is tested rather than bypassed.
 → [06](06-runtime.md) §3
 
 ## 6. Benchmarks

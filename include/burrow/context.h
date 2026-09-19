@@ -42,6 +42,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,31 +73,51 @@ extern "C" {
 
 /* Whether the sanitizer annotations are compiled in.
  *
- * What they are is one `__sanitizer_start_switch_fiber` on the way out of a
- * stack and one matching finish on the way in, which is how the address
- * sanitizer is told that the thread has moved. None of it is compiled unless
- * that sanitizer is on, so an ordinary build is the same machine code it was
- * before.
+ * There are two sets of them and they answer different questions. The address
+ * sanitizer gets one `__sanitizer_start_switch_fiber` on the way out of a stack
+ * and one matching finish on the way in, which is how it is told that the
+ * thread has moved. The thread sanitizer gets a fiber per context and one
+ * `__tsan_switch_to_fiber` at those same two points, which is how it is told
+ * whose call stack it is looking at. Neither is compiled unless the sanitizer it
+ * belongs to is on, so an ordinary build is the same machine code it was before.
  *
- * Off on Fibers whatever else is true. The calls want the bottom and the size
- * of the stack being switched to, and a fiber allocates its own stack somewhere
- * Windows does not tell us about, so the only numbers we could pass there are
- * the caller's buffer, which is not the memory the context runs on. Wrong
- * numbers are worse than none. Nothing that runs a sanitizer targets Windows
+ * Both are off on Fibers whatever else is true. For the address sanitizer the
+ * calls want the bottom and the size of the stack being switched to, and a fiber
+ * allocates its own stack somewhere Windows does not tell us about, so the only
+ * numbers we could pass there are the caller's buffer, which is not the memory
+ * the context runs on. Wrong numbers are worse than none. The thread sanitizer
+ * does not run on Windows at all. Nothing that runs a sanitizer targets Windows
  * today, so this costs nothing, and the day it does the fix is to ask the
  * operating system for the fiber's real bounds.
  *
- * Thread sanitizer is left alone on purpose. It has an API for this too,
- * `__tsan_create_fiber` and `__tsan_switch_to_fiber`, and a fiber there is a
- * whole thread state with its own shadow stack and trace buffer. The
- * implementation keeps a few hundred of those at a time and reclaims slots by
- * stopping the world, which is fine for a coroutine library and is not fine for
- * a goroutine runtime. Measured here: a program that starts around five hundred
- * goroutines slows to nothing and then stops answering. So the thread sanitizer
- * sees one shadow stack per thread with goroutines interleaved on it, which
- * makes some stack traces odd to read and has not so far stopped it finding
- * real races. Worth revisiting if that API ever gets cheap. */
+ * The thread sanitizer half is not a nicety. It keeps a call stack per thread,
+ * pushed and popped by code it compiles into the prologue and epilogue of every
+ * function it sees. A goroutine that parks on one thread and carries on from
+ * another pushes on the first and pops on the second, so the two counts drift
+ * apart, and in the C and C++ runtime that buffer is a fixed size with no code
+ * anywhere to grow it. Enough drift and one of them walks off the end and the
+ * process dies inside the sanitizer with a SEGV and no report worth reading.
+ * That is what a fiber fixes: the call stack follows the goroutine rather than
+ * staying with the thread.
+ *
+ * It is not free. A fiber there is a whole thread state, and the identifier
+ * space is one way. Destroying a fiber does not give its slot back, and the
+ * eight thousand one hundred and ninety third one a process asks for takes the
+ * process down. That is kMaxTid in the sanitizer's own source and it is what
+ * measuring it on gcc 13 and clang 18 gives. So src/runtime/context.c keeps a
+ * pool and hands the same fiber to one context after another, which turns the
+ * number needed into the most goroutines alive at once rather than the number
+ * ever started. Creating one costs about fourteen microseconds and switching
+ * about twenty five nanoseconds, so only the first is worth avoiding. */
 #if BURROW_ASAN && !defined(BURROW_CONTEXT_FIBERS)
+#define BURROW_CONTEXT_ASAN 1
+#endif
+
+#if BURROW_TSAN && !defined(BURROW_CONTEXT_FIBERS)
+#define BURROW_CONTEXT_TSAN 1
+#endif
+
+#if defined(BURROW_CONTEXT_ASAN) || defined(BURROW_CONTEXT_TSAN)
 #define BURROW_CONTEXT_ANNOTATE 1
 #endif
 
@@ -148,7 +169,7 @@ struct burrow__Context {
     /* Where to go when entry returns. */
     burrow__Context *link;
 
-#if defined(BURROW_CONTEXT_ANNOTATE)
+#if defined(BURROW_CONTEXT_ASAN)
     /* What the address sanitizer needs and nothing else does, which is why it
      * is not here in an ordinary build.
      *
@@ -163,6 +184,18 @@ struct burrow__Context {
     void *stack;
     size_t stack_size;
     void *fake_stack;
+#endif
+
+#if defined(BURROW_CONTEXT_TSAN)
+    /* The thread sanitizer's fiber for this context, and how many contexts have
+     * had it before this one.
+     *
+     * NULL means there is none, which is every context in a build with that
+     * sanitizer off and is also a context that was never made. A count of zero
+     * means the fiber is the calling thread's own and was borrowed rather than
+     * created, so freeing the context must leave it alone. */
+    void *tsan_fiber;
+    uint32_t tsan_uses;
 #endif
 };
 
@@ -228,15 +261,15 @@ void burrow__context_free(burrow__Context *ctx);
  * Call burrow__context_switch below instead. */
 void burrow__context_switch_raw(burrow__Context *from, burrow__Context *to);
 
-/* The two halves of telling the address sanitizer that a switch is about to
- * happen and that one has just happened. Leave is called on the old stack and
- * enter on the new one, and between them is the only place a thread is on
- * neither.
+/* The two halves of telling a sanitizer that a switch is about to happen and
+ * that one has just happened. Leave is called on the old stack and enter on the
+ * new one, and between them is the only place a thread is on neither.
  *
  * `burrow__context_leave_final` is leave for a context that is finished and
- * will never be switched to again, which is a different thing to the sanitizer:
- * it is what says the fake stack can go rather than be kept for a return that
- * is not coming.
+ * will never be switched to again, which is a different thing to the address
+ * sanitizer: it is what says the fake stack can go rather than be kept for a
+ * return that is not coming. The thread sanitizer does not care, because a
+ * context that is finished still has to hand its fiber over the same way.
  *
  * With no sanitizer on, all three are empty and the compiler deletes them. */
 #if defined(BURROW_CONTEXT_ANNOTATE)

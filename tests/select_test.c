@@ -522,11 +522,7 @@ TEST(a_send_arm_waits_for_a_receiver_and_then_hands_the_value_over) {
  * a deadlock, and a hung test is a failed test. */
 
 #ifndef CROSS_ROUNDS
-#if BURROW_TSAN
-#define CROSS_ROUNDS 300
-#else
 #define CROSS_ROUNDS 5000
-#endif
 #endif
 
 static void cross_child(void *arg) {

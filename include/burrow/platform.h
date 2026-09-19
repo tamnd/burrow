@@ -222,14 +222,12 @@
 
 /* The same question for the thread sanitizer, asked the same two ways.
  *
- * Nothing in the runtime changes its behaviour for this one. What reads it is
- * the tests, which run far fewer rounds under it, and the reason is in
- * include/burrow/context.h: burrow does not tell the thread sanitizer that a
- * goroutine switch happened. The sanitizer keeps its own copy of the call stack
- * per thread, pushed and popped by code it compiles into every function, and a
- * goroutine that parks on one thread and carries on from another pushes on the
- * first and pops on the second. Enough of that and one of them walks off the end
- * of a fixed size buffer and the process dies inside the sanitizer. */
+ * Nothing about what burrow does changes when this is on. What it decides is
+ * how much burrow has to say out loud: a build with it on hands that sanitizer
+ * a fiber per goroutine so that the call stack it keeps follows the goroutine
+ * rather than the thread, which include/burrow/context.h explains at length,
+ * and it is also what BURROW_NO_TSAN below is gated on. With it off none of
+ * that exists and there is nothing to gate. */
 
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)
@@ -270,6 +268,38 @@
     __attribute__((format(printf, fmt_index, first_arg)))
 #define BURROW_LIKELY(x) __builtin_expect(!!(x), 1)
 #define BURROW_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#endif
+
+/* Leaves one function out of the thread sanitizer entirely.
+ *
+ * Not a way of hiding a race. There is exactly one function in the tree that
+ * wants this, the one that tells the sanitizer a goroutine switch is happening,
+ * and the reason is that the sanitizer adds a push to the front of every
+ * function it compiles and a matching pop to the end. A function that changes
+ * which stack those two are counted against pushes on one and pops on the
+ * other, which is the exact bookkeeping error it is there to prevent. See
+ * src/runtime/context.c.
+ *
+ * Two spellings, and they are not interchangeable. gcc takes no_sanitize and
+ * leaves the function alone. clang takes no_sanitize as being about the memory
+ * accesses only and still adds the push and the pop, and the one that stops it
+ * doing that is disable_sanitizer_instrumentation, which gcc 13 in turn rejects
+ * outright. Both were checked by compiling a function with each and counting
+ * the calls to __tsan_func_entry in the object file, which is also how to check
+ * it again if a compiler changes its mind. If one ever does, the goroutine
+ * tests go back to dying inside the sanitizer, loudly, which is the sort of
+ * failure that gets noticed.
+ *
+ * Empty unless that sanitizer is on, so no other build has to have an opinion
+ * on any of this. */
+#if BURROW_TSAN && !BURROW_CC_MSVC
+#if BURROW_CC_CLANG
+#define BURROW_NO_TSAN __attribute__((disable_sanitizer_instrumentation))
+#else
+#define BURROW_NO_TSAN __attribute__((no_sanitize("thread")))
+#endif
+#else
+#define BURROW_NO_TSAN
 #endif
 
 /* ------------------------------------------------------------- at runtime */

@@ -697,21 +697,14 @@ TEST(a_goroutine_can_hand_a_value_to_a_thread_that_is_not_one) {
  * list was work nobody ever came back for, and the whole program stopped. Fifty
  * rounds almost never lands in that gap. Twenty thousand does.
  *
- * Far fewer under a thread sanitizer, and that is a limit of the sanitizer
- * rather than a choice. burrow deliberately does not tell it about goroutine
- * switches, which include/burrow/context.h explains, so the sanitizer's idea of
- * the call stack drifts every time a goroutine parks on one thread and carries
- * on somewhere else. Twenty thousand parks drifts it off the end and the process
- * dies inside the sanitizer with nothing to do with this code. Two hundred is
- * enough to exercise every path here, which is what a sanitizer run is for, and
- * the ordinary build is where the count does its real job. */
+ * The same twenty thousand under a thread sanitizer, which took a fix in
+ * src/runtime/context.c to be possible and is worth keeping an eye on: this is
+ * the test that goes first when the sanitizer stops being told about goroutine
+ * switches, and what it does then is die inside the sanitizer rather than fail
+ * anything here. It costs about five seconds. */
 
 #ifndef ROUNDS
-#if BURROW_TSAN
-#define ROUNDS 200
-#else
 #define ROUNDS 20000
-#endif
 #endif
 
 static Chan *pong;

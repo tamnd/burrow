@@ -66,19 +66,29 @@ _Static_assert(_Alignof(ucontext_t) <= 16,
 
 /* -------------------------------------------------------- the sanitizers */
 
-/* The address sanitizer keeps its own idea of where the thread's stack is and
+/* Two sanitizers have to be told that a stack switch happened, for two
+ * unrelated reasons, and this section is the only place in the tree that talks
+ * to either of them. The backends below call four helpers and know nothing else
+ * about it. With both sanitizers off the helpers have empty bodies and the
+ * compiler deletes them, so an ordinary build is unchanged.
+ *
+ * The address sanitizer keeps its own idea of where the thread's stack is and
  * what is live on it. Switching stacks behind its back leaves that idea
  * pointing at memory the thread is no longer using, and everything it says
- * afterwards is about the wrong stack. It has a pair of calls for this, and
- * this section is the only place we make them, so the backends below can just
- * call these without knowing anything about it.
+ * afterwards is about the wrong stack.
  *
- * See burrow/context.h for why the thread sanitizer does not get the same
- * treatment. None of this is compiled unless the address sanitizer is on: the
- * helpers still exist so that every backend calls them unconditionally, and
- * with it off they have empty bodies and cost nothing. */
+ * The thread sanitizer keeps a call stack per thread in a buffer it never
+ * grows, pushed and popped by code it puts in every function. A goroutine that
+ * parks on one thread and carries on from another pushes on the first and pops
+ * on the second, and enough of that walks off the end of the buffer and kills
+ * the process from inside the sanitizer. Its answer to this is a fiber, which
+ * is a call stack the switch hands over along with the stack itself.
+ *
+ * burrow/context.h has the longer version of both. */
 
-#if defined(BURROW_CONTEXT_ANNOTATE)
+/* ------------------------------------------------ the address sanitizer */
+
+#if defined(BURROW_CONTEXT_ASAN)
 
 #include <sanitizer/asan_interface.h>
 
@@ -96,13 +106,13 @@ _Static_assert(_Alignof(ucontext_t) <= 16,
  * side knows whose context to fill. */
 static BURROW_THREAD_LOCAL burrow__Context *annotate_prev;
 
-static void annotate_make(burrow__Context *ctx, void *stack, size_t size) {
+static void asan_make(burrow__Context *ctx, void *stack, size_t size) {
     ctx->stack = stack;
     ctx->stack_size = size;
     ctx->fake_stack = NULL;
 }
 
-static void annotate_attach(burrow__Context *self) {
+static void asan_attach(burrow__Context *self) {
     /* No bounds, because nobody handed this thread its stack. The comment on
      * annotate_prev says where they come from instead. */
     self->stack = NULL;
@@ -114,21 +124,13 @@ static void annotate_attach(burrow__Context *self) {
  * which the sanitizer wants to know: passing NULL where the fake stack would be
  * saved is what tells it to throw that fake stack away instead of keeping it
  * for a return that is not coming. */
-static void annotate_leave(burrow__Context *from, burrow__Context *to, bool final) {
+static void asan_leave(burrow__Context *from, burrow__Context *to, bool final) {
     annotate_prev = from;
     __sanitizer_start_switch_fiber(final ? NULL : &from->fake_stack, to->stack,
                                    to->stack_size);
 }
 
-void burrow__context_leave(burrow__Context *from, burrow__Context *to) {
-    annotate_leave(from, to, false);
-}
-
-void burrow__context_leave_final(burrow__Context *from, burrow__Context *to) {
-    annotate_leave(from, to, true);
-}
-
-void burrow__context_enter(burrow__Context *self) {
+static void asan_enter(burrow__Context *self) {
     const void *bottom = NULL;
     size_t size = 0;
 
@@ -149,14 +151,240 @@ void burrow__context_enter(burrow__Context *self) {
 
 #else
 
-static void annotate_make(burrow__Context *ctx, void *stack, size_t size) {
+static void asan_make(burrow__Context *ctx, void *stack, size_t size) {
     (void)ctx;
     (void)stack;
     (void)size;
 }
 
-static void annotate_attach(burrow__Context *self) {
+static void asan_attach(burrow__Context *self) {
     (void)self;
+}
+
+/* The other two only when something else is annotating. With every sanitizer
+ * off the three functions that would call them are inline nothing in the header
+ * and this file does not define them at all, so a no-op here would be a static
+ * function nobody calls, which this tree treats as an error. */
+#if defined(BURROW_CONTEXT_ANNOTATE)
+
+static void asan_leave(burrow__Context *from, burrow__Context *to, bool final) {
+    (void)from;
+    (void)to;
+    (void) final;
+}
+
+static void asan_enter(burrow__Context *self) {
+    (void)self;
+}
+
+#endif
+
+#endif
+
+/* ------------------------------------------------- the thread sanitizer */
+
+#if defined(BURROW_CONTEXT_TSAN)
+
+#include "burrow/lock.h"
+
+#include <sanitizer/tsan_interface.h>
+
+/* How many contexts one fiber is handed to before it is thrown away and a fresh
+ * one takes its place.
+ *
+ * A fiber comes back to the pool with whatever was on its call stack when the
+ * goroutine stopped for the last time, and nothing ever pops that, because the
+ * frames belonged to a goroutine that is not going to return from them. It is a
+ * handful of entries each time, five or six for the usual exit path, and the
+ * buffer they go in holds sixty four thousand. Retiring a fiber after five
+ * hundred and twelve goroutines keeps the worst case an order of magnitude
+ * under that and costs one identifier per five hundred and twelve goroutines,
+ * which against the budget below is about four million goroutines per process.
+ * Nothing in the tests comes close and neither does anything else that would
+ * still be running under this sanitizer. */
+#define TSAN_FIBER_USES 512
+
+/* How many fibers the pool holds. Past this they are destroyed on the way back
+ * instead of kept, which costs identifiers, so it is set well above any number
+ * of goroutines that can be alive at once in a sanitizer build. */
+#define TSAN_FIBER_POOL 4096
+
+/* How many fibers this process may create at all, ever.
+ *
+ * The sanitizer's limit is kMaxTid, which is eight thousand one hundred and
+ * ninety two, and asking for one past it is not an error you can catch: the
+ * process dies inside the sanitizer with a SEGV and a stack trace that points
+ * at nothing useful. So we stop short of it and say what happened instead. */
+#define TSAN_FIBER_BUDGET 8000
+
+/* A fiber that is not in use, and how many contexts have already had it. The
+ * count travels with the fiber rather than resetting, because what it is
+ * counting is how much the frames left behind by all of them add up to. */
+typedef struct {
+    void *fiber;
+    uint32_t uses;
+} Spare;
+
+static burrow__Lock tsan_pool_lock;
+static Spare tsan_pool[TSAN_FIBER_POOL];
+static int32_t tsan_pool_len;
+static int32_t tsan_fibers_made;
+
+static void tsan_make(burrow__Context *ctx) {
+    burrow__lock(&tsan_pool_lock);
+    if (tsan_pool_len > 0) {
+        tsan_pool_len--;
+        ctx->tsan_fiber = tsan_pool[tsan_pool_len].fiber;
+        ctx->tsan_uses = tsan_pool[tsan_pool_len].uses + 1;
+        burrow__unlock(&tsan_pool_lock);
+        return;
+    }
+    if (tsan_fibers_made >= TSAN_FIBER_BUDGET) {
+        burrow__unlock(&tsan_pool_lock);
+        runtime_throw(BURROW_S("this build has run the thread sanitizer out of fibers, "
+                               "which takes more goroutines alive at once than it can "
+                               "follow. See include/burrow/context.h."));
+    }
+    tsan_fibers_made++;
+    burrow__unlock(&tsan_pool_lock);
+
+    /* Outside the lock because it is the slow half, about fourteen microseconds,
+     * and the count above has already reserved the slot it is going to use. */
+    ctx->tsan_fiber = __tsan_create_fiber(0);
+    ctx->tsan_uses = 1;
+
+    if (ctx->tsan_fiber == NULL)
+        runtime_throw(BURROW_S("the thread sanitizer would not give out a fiber"));
+}
+
+static void tsan_free(burrow__Context *ctx) {
+    void *fiber = ctx->tsan_fiber;
+    uint32_t uses = ctx->tsan_uses;
+
+    /* Nothing to give back on a context that was never made, and nothing we are
+     * allowed to give back on one that borrowed the calling thread's own fiber,
+     * which is what a use count of zero means. */
+    if (fiber == NULL || uses == 0)
+        return;
+
+    ctx->tsan_fiber = NULL;
+    ctx->tsan_uses = 0;
+
+    if (uses < TSAN_FIBER_USES) {
+        burrow__lock(&tsan_pool_lock);
+        if (tsan_pool_len < TSAN_FIBER_POOL) {
+            tsan_pool[tsan_pool_len].fiber = fiber;
+            tsan_pool[tsan_pool_len].uses = uses;
+            tsan_pool_len++;
+            burrow__unlock(&tsan_pool_lock);
+            return;
+        }
+        burrow__unlock(&tsan_pool_lock);
+    }
+
+    /* Destroying the fiber a thread is currently on is not allowed, and this is
+     * never that: a context is only freed once nothing can switch to it, which
+     * is what the header asks the caller for. */
+    __tsan_destroy_fiber(fiber);
+}
+
+static void tsan_attach(burrow__Context *self) {
+    /* The thread already has one and it is the one its own stack belongs to.
+     * Zero uses says it is borrowed, so freeing this context leaves it alone. */
+    self->tsan_fiber = __tsan_get_current_fiber();
+    self->tsan_uses = 0;
+}
+
+/* Called on the old stack, immediately before the switch, because from here on
+ * the frames being pushed belong to the context being switched to.
+ *
+ * The flag argument is zero rather than __tsan_switch_to_fiber_no_sync, which
+ * says the fiber being switched to inherits everything the one being switched
+ * away from knows. That is not a shortcut, it is the truth: one thread ran the
+ * first and is about to run the second, in that order, so everything the first
+ * did really did happen before everything the second is going to do. Saying
+ * otherwise reports the runtime's own handover as a race, because a context is
+ * filled in by the goroutine that started it and read by the goroutine that
+ * runs it, and the only thing in between is a run queue that the scheduler
+ * touches on its own stack and not on either of theirs. */
+static BURROW_NO_TSAN void tsan_switch(burrow__Context *to) {
+    if (to->tsan_fiber != NULL)
+        __tsan_switch_to_fiber(to->tsan_fiber, 0);
+}
+
+#else
+
+static void tsan_make(burrow__Context *ctx) {
+    (void)ctx;
+}
+
+static void tsan_free(burrow__Context *ctx) {
+    (void)ctx;
+}
+
+static void tsan_attach(burrow__Context *self) {
+    (void)self;
+}
+
+/* Gated for the reason the address sanitizer's pair above is gated. */
+#if defined(BURROW_CONTEXT_ANNOTATE)
+
+static void tsan_switch(burrow__Context *to) {
+    (void)to;
+}
+
+#endif
+
+#endif
+
+/* ------------------------------------------------- what the backends call */
+
+static void annotate_make(burrow__Context *ctx, void *stack, size_t size) {
+    asan_make(ctx, stack, size);
+    tsan_make(ctx);
+}
+
+static void annotate_attach(burrow__Context *self) {
+    asan_attach(self);
+    tsan_attach(self);
+}
+
+static void annotate_free(burrow__Context *ctx) {
+    tsan_free(ctx);
+}
+
+#if defined(BURROW_CONTEXT_ANNOTATE)
+
+/* The fiber goes first, because once the address sanitizer has been told a
+ * switch has started it wants the switch and nothing much else.
+ *
+ * Both halves of leave are outside the thread sanitizer, and this is the whole
+ * reason BURROW_NO_TSAN exists. That sanitizer puts a push at the top of every
+ * function it compiles and a pop at the bottom, counted against whichever stack
+ * it believes the thread is on. A function that changes that belief halfway
+ * through pushes on the fiber it was called on and pops on the one it switched
+ * to, and the two counts drift apart by one on each side of every switch, which
+ * is the exact thing the fibers are here to stop. Left instrumented this makes
+ * the crash worse rather than better, which is how it was found.
+ *
+ * Nothing is being hidden by that. What these read is two pointers out of a
+ * context, and the switch itself is assembly the sanitizer never sees either
+ * way. Enter is ordinary instrumented code because it does not move: it is
+ * called on the far side of the switch and pushes and pops on one fiber. */
+
+BURROW_NO_TSAN void burrow__context_leave(burrow__Context *from, burrow__Context *to) {
+    tsan_switch(to);
+    asan_leave(from, to, false);
+}
+
+BURROW_NO_TSAN void burrow__context_leave_final(burrow__Context *from,
+                                                burrow__Context *to) {
+    tsan_switch(to);
+    asan_leave(from, to, true);
+}
+
+void burrow__context_enter(burrow__Context *self) {
+    asan_enter(self);
 }
 
 #endif
@@ -231,8 +459,12 @@ bool burrow__context_make(burrow__Context *ctx, void *stack, size_t size,
 }
 
 void burrow__context_free(burrow__Context *ctx) {
-    /* The caller owns the stack and always did. */
-    (void)ctx;
+    /* The caller owns the stack and always did, so the only thing here is
+     * whatever a sanitizer was holding, which in an ordinary build is nothing. */
+    if (ctx == NULL)
+        return;
+
+    annotate_free(ctx);
 }
 
 #elif defined(BURROW_CONTEXT_FIBERS)
@@ -302,7 +534,12 @@ bool burrow__context_make(burrow__Context *ctx, void *stack, size_t size,
 }
 
 void burrow__context_free(burrow__Context *ctx) {
-    if (ctx == NULL || ctx->fiber == NULL || !ctx->owns_fiber)
+    if (ctx == NULL)
+        return;
+
+    annotate_free(ctx);
+
+    if (ctx->fiber == NULL || !ctx->owns_fiber)
         return;
 
     /* Deleting the fiber a thread is currently running would end the thread, so
@@ -396,7 +633,12 @@ bool burrow__context_make(burrow__Context *ctx, void *stack, size_t size,
 }
 
 void burrow__context_free(burrow__Context *ctx) {
-    (void)ctx;
+    /* Nothing of the context's own, since a ucontext holds no kernel object and
+     * the stack belongs to the caller. A sanitizer may still have something. */
+    if (ctx == NULL)
+        return;
+
+    annotate_free(ctx);
 }
 
 void burrow__context_switch_raw(burrow__Context *from, burrow__Context *to) {

@@ -316,13 +316,20 @@ Two details that are easy to get wrong and expensive to discover late:
   everything it says is about the wrong memory. ASan gets
   `__sanitizer_start_switch_fiber` on the way out and its matching finish on the
   way in, and the context carries the bounds of its stack so the call has
-  something to pass. TSan is deliberately left alone. Its fiber API allocates a
-  whole thread state per fiber and the implementation holds a few hundred of
-  them before it starts reclaiming slots by stopping the world, so a run that
-  starts around five hundred goroutines stops answering. Until that gets
-  cheaper, TSan sees one shadow stack per thread with goroutines interleaved on
-  it, which makes some traces odd to read and has not stopped it finding real
-  races.
+  something to pass. TSan gets a fiber per context, created on the way in and
+  switched to on the way out, which is what gives each goroutine its own call
+  stack in the sanitizer's eyes instead of one per thread with goroutines
+  interleaved on it. That is not a nicety. Interleaved, the push the sanitizer
+  adds to the front of every function it compiles lands on one goroutine and the
+  matching pop lands on another, and a few thousand parks later one of them
+  walks off the end of its buffer and the process dies inside the sanitizer.
+
+  The fibers are pooled, because the identifier space is one way: destroying a
+  fiber does not give its slot back, and the eight thousand one hundred and
+  ninety third one a process asks for takes it down. Pooling makes the number
+  that matters the most goroutines alive at once rather than the number ever
+  started. `include/burrow/context.h` has the arithmetic and
+  `src/runtime/context.c` the code.
 
 Guard pages were on this list and are now in `burrow/stack.h`, which §4
 describes.

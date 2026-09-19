@@ -169,6 +169,39 @@ TEST(one_wake_releases_every_sleeper) {
     burrow__note_free(&crowd);
 }
 
+/* The same crowd, over and over, which is the test for the sleeper count rather
+ * than for the gate. The note keeps a count of the threads that are about to
+ * sleep so that a wake with nobody waiting can stay out of the kernel, and a
+ * count that drifts downwards is a wake that decides there is nobody to tell
+ * while eight threads are asleep. That does not fail, it hangs, so this runs
+ * the count up to eight and back to zero sixteen times to give it the chance. */
+#define CROWD_ROUNDS 16
+
+TEST(a_crowd_can_go_to_sleep_round_after_round) {
+    CHECK(burrow__note_init(&crowd));
+
+    for (uint32_t round = 0; round < CROWD_ROUNDS; round++) {
+        arrived = 0;
+        released = 0;
+        burrow__note_clear(&crowd);
+
+        for (size_t i = 0; i < SLEEPERS; i++)
+            CHECK(burrow__thread_start(&crowd_threads[i], join_the_crowd, NULL, 0));
+
+        while (burrow__atomic_load_u32(&arrived) < SLEEPERS)
+            burrow__thread_yield();
+
+        burrow__note_wake(&crowd);
+
+        for (size_t i = 0; i < SLEEPERS; i++)
+            CHECK(burrow__thread_join(&crowd_threads[i]));
+
+        CHECK(burrow__atomic_load_u32(&released) == SLEEPERS);
+    }
+
+    burrow__note_free(&crowd);
+}
+
 /* ------------------------------------------------------------ clear and reuse */
 
 #define ROUNDS 16
@@ -426,6 +459,7 @@ int main(void) {
     RUN(a_sleeper_waits_until_somebody_else_wakes_it);
     RUN(a_wake_that_lands_before_the_sleep_is_not_lost);
     RUN(one_wake_releases_every_sleeper);
+    RUN(a_crowd_can_go_to_sleep_round_after_round);
     RUN(a_note_can_be_closed_again_and_used_for_the_next_round);
     RUN(two_threads_pass_a_turn_back_and_forth);
     RUN(a_timed_sleep_on_an_open_note_returns_true_without_waiting);

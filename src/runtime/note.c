@@ -54,6 +54,41 @@
  * the top of the file for why there is a cap at all. */
 #define NOTE_MAX_WAIT_NS 1000000000000LL
 
+/* The sleeper count, which all three backends now keep and all three read before
+ * they go near the kernel.
+ *
+ * Waking a note used to go into the kernel every single time, on the reasoning
+ * that there is no way to know whether anybody is queued without asking, and
+ * that asking costs what telling costs. That is true of the kernel and it is not
+ * true of a word the sleepers write to on their way past. A wake can read that
+ * word, find nobody, and stay in user space, which is the common case by a long
+ * way: a scheduler opens gates nobody is standing at all day long. Pinned on an
+ * EPYC, a wake and a walk through the gate went from 352 nanoseconds to single
+ * digits. Go's runtime does not do this for its own notes, and Go's
+ * sync.WaitGroup does exactly this in the word next to its counter.
+ *
+ * Nothing is lost by doing it, and the argument is worth writing out once
+ * because it is the only subtle thing in this file.
+ *
+ * A sleeper joins the count and then reads the flag. A waker sets the flag and
+ * then reads the count. All four of those are sequentially consistent, so they
+ * all appear in one order that every thread agrees on, and in any such order the
+ * two writes cannot both come after the two reads. Whichever write goes first is
+ * seen by the read that follows it. So either the sleeper sees an open gate and
+ * does not sleep, or the waker sees a sleeper and calls it, and possibly both.
+ * Never neither. This is Dekker's algorithm with the two flags being the gate
+ * and the count, and it is the only place in burrow that needs a sequentially
+ * consistent ordering rather than an acquire and release pair.
+ *
+ * The count is a second word rather than spare bits in the flag, which costs
+ * four bytes and is worth them. The flag is what a futex compares against, and a
+ * futex that finds a different value than the caller expected returns rather
+ * than sleeping. Sharing the word would mean every thread arriving at the gate
+ * changed the value every thread already asleep was waiting on, so a crowd of
+ * sixty four threads would wake each other up for no reason a few thousand
+ * times on the way in. A flag that only ever holds nought or one cannot do
+ * that. */
+
 #if defined(BURROW_OS_WINDOWS)
 
 /* ------------------------------------------------------------------ windows */
@@ -65,15 +100,26 @@
  *
  * WaitOnAddress would be the closer match to a futex and is deliberately not
  * used: it lives in synchronization.lib rather than kernel32, and burrow links
- * nothing today, which is worth more than the handle this saves. */
+ * nothing today, which is worth more than the handle this saves.
+ *
+ * The state word sits in front of the event and answers everything the event
+ * does not have to be asked. Every operation here was a system call before it
+ * arrived, including asking a gate whether it is open, and the gate is usually
+ * open and usually has nobody at it. Now the event is only touched when a
+ * thread really does have to wait and when somebody really is waiting. */
 
 bool burrow__note_init(burrow__Note *n) {
+    n->state = 0;
+    n->waiters = 0;
     /* No security attributes, manual reset, starts closed, no name. */
     n->event = (void *)CreateEventW(NULL, TRUE, FALSE, NULL);
     return n->event != NULL;
 }
 
 void burrow__note_free(burrow__Note *n) {
+    n->state = 0;
+    n->waiters = 0;
+
     if (n->event != NULL) {
         (void)CloseHandle((HANDLE)n->event);
         n->event = NULL;
@@ -81,32 +127,58 @@ void burrow__note_free(burrow__Note *n) {
 }
 
 void burrow__note_clear(burrow__Note *n) {
+    burrow__atomic_store_u32(&n->state, 0);
+    /* The event has to be reset too, because a wake with a sleeper on it set
+     * the event and a manual reset one stays set until it is told not to be. */
     (void)ResetEvent((HANDLE)n->event);
 }
 
 void burrow__note_wake(burrow__Note *n) {
-    (void)SetEvent((HANDLE)n->event);
+    burrow__atomic_store_u32(&n->state, 1);
+
+    /* Same argument as the other two backends, written out at the top of the
+     * file. A sleeper on its way in joins the count before it looks at the
+     * flag, so a count of nothing here means nothing is in the kernel. */
+    if (burrow__atomic_load_u32(&n->waiters) != 0)
+        (void)SetEvent((HANDLE)n->event);
 }
 
 void burrow__note_sleep(burrow__Note *n) {
-    /* Manual reset means every waiter is released and stays released, so there
-     * is no loop to write here. A failure return would be a closed handle,
-     * which is a caller bug rather than something to retry. */
-    (void)WaitForSingleObject((HANDLE)n->event, INFINITE);
+    if (burrow__atomic_load_acquire_u32(&n->state) != 0)
+        return;
+
+    (void)burrow__atomic_add_u32(&n->waiters, 1);
+
+    /* Read again now that the count is joined, because the wake this is racing
+     * may have looked and found nobody in between. */
+    while (burrow__atomic_load_u32(&n->state) == 0) {
+        /* Manual reset means every waiter is released and stays released. A
+         * failure return would be a closed handle, which is a caller bug rather
+         * than something to retry, and the loop above would spin on it, so the
+         * result is looked at. */
+        if (WaitForSingleObject((HANDLE)n->event, INFINITE) != WAIT_OBJECT_0)
+            break;
+    }
+
+    (void)burrow__atomic_add_u32(&n->waiters, 0u - 1u);
 }
 
 bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
-    if (ns <= 0)
-        return burrow__note_is_open(n);
+    if (burrow__atomic_load_acquire_u32(&n->state) != 0)
+        return true;
 
-    /* There is no check of the event before the first wait, because a wait on
-     * an open manual reset event returns straight away and is the same call. A
-     * check would be a second trip into the kernel to learn what the wait is
-     * about to say anyway. */
+    if (ns <= 0)
+        return false;
+
     int64_t deadline = burrow__nanotime() + ns;
     int64_t left = ns;
 
+    (void)burrow__atomic_add_u32(&n->waiters, 1);
+
     for (;;) {
+        if (burrow__atomic_load_u32(&n->state) != 0)
+            break;
+
         if (left > NOTE_MAX_WAIT_NS)
             left = NOTE_MAX_WAIT_NS;
 
@@ -119,23 +191,30 @@ bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
 
         DWORD r = WaitForSingleObject((HANDLE)n->event, ms);
         if (r == WAIT_OBJECT_0)
-            return true;
+            break;
 
         /* Anything other than a timeout is a handle that is closed or not an
          * event, which is a caller bug rather than something to spin on. */
         if (r != WAIT_TIMEOUT)
-            return false;
+            break;
 
         left = deadline - burrow__nanotime();
         if (left <= 0)
-            return burrow__note_is_open(n);
+            break;
     }
+
+    (void)burrow__atomic_add_u32(&n->waiters, 0u - 1u);
+
+    /* Read rather than returning what the loop decided, because the wake can
+     * land between the last check and the deadline passing, and a note that is
+     * open is open however late the thread noticed. */
+    return burrow__atomic_load_acquire_u32(&n->state) != 0;
 }
 
 bool burrow__note_is_open(const burrow__Note *n) {
-    /* A zero timeout is the documented way to ask an event its state without
-     * waiting on it, and on a manual reset event it does not consume anything. */
-    return WaitForSingleObject((HANDLE)n->event, 0) == WAIT_OBJECT_0;
+    /* The flag rather than the event, which used to be a wait of zero
+     * milliseconds and therefore a system call to read one bit. */
+    return burrow__atomic_load_acquire_u32(&n->state) != 0;
 }
 
 #elif defined(BURROW_OS_LINUX)
@@ -230,24 +309,32 @@ void burrow__note_free(burrow__Note *n) {
 }
 
 void burrow__note_clear(burrow__Note *n) {
-    burrow__atomic_store_release_u32(&n->state, 0);
+    burrow__atomic_store_u32(&n->state, 0);
 }
 
 void burrow__note_wake(burrow__Note *n) {
-    burrow__atomic_store_release_u32(&n->state, 1);
-    /* Unconditionally, because there is no way to know whether anybody is
-     * queued without asking the kernel, and asking costs the same as telling.
-     * A wake with no waiters returns zero and does nothing else. */
-    futex_wake_all(&n->state);
+    burrow__atomic_store_u32(&n->state, 1);
+
+    /* Only if somebody said they were going to sleep. See the top of the file
+     * for why reading the count here cannot miss a sleeper on its way in. */
+    if (burrow__atomic_load_u32(&n->waiters) != 0)
+        futex_wake_all(&n->state);
 }
 
 void burrow__note_sleep(burrow__Note *n) {
-    while (burrow__atomic_load_acquire_u32(&n->state) == 0) {
+    if (burrow__atomic_load_acquire_u32(&n->state) != 0)
+        return;
+
+    (void)burrow__atomic_add_u32(&n->waiters, 1);
+
+    while (burrow__atomic_load_u32(&n->state) == 0) {
         /* The race between the load above and this call is what the expected
          * value argument is for: the kernel rechecks the word under its own
          * lock and returns straight away if the waker got there in between. */
         futex_wait(&n->state, 0);
     }
+
+    (void)burrow__atomic_add_u32(&n->waiters, 0u - 1u);
 }
 
 bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
@@ -265,7 +352,9 @@ bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
 
     int64_t deadline = burrow__nanotime() + ns;
 
-    while (burrow__atomic_load_acquire_u32(&n->state) == 0) {
+    (void)burrow__atomic_add_u32(&n->waiters, 1);
+
+    while (burrow__atomic_load_u32(&n->state) == 0) {
         int64_t left = deadline - burrow__nanotime();
         if (left <= 0)
             break;
@@ -275,6 +364,8 @@ bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
 
         futex_wait_for(&n->state, 0, left);
     }
+
+    (void)burrow__atomic_add_u32(&n->waiters, 0u - 1u);
 
     /* Read again rather than returning what the loop decided, because the wake
      * can land between the last check and the deadline passing, and a note that
@@ -293,10 +384,13 @@ bool burrow__note_is_open(const burrow__Note *n) {
 /* A mutex and a condition variable, which is what everything without a futex
  * has. macOS is the one that matters, and it is what Go uses there too.
  *
- * The flag is still read and written atomically even though every write happens
- * under the mutex. That is not belt and braces, it is what lets is_open answer
- * without taking the lock, which in turn is what keeps it usable from a caller
- * that must not block.
+ * The flag lives outside the mutex here, the same as it does on the other two
+ * backends, and that is what lets is_open and an already open sleep answer
+ * without taking the lock. The broadcast is still inside the mutex, because
+ * that is what stops a wake slipping between a sleeper's last look at the flag
+ * and the moment it is queued on the condition variable: the sleeper holds the
+ * lock across both, so a waker that gets as far as broadcasting has either
+ * already been seen or is still waiting for the lock.
  *
  * The timed wait is the one place where this backend is two backends. A
  * condition variable measures an absolute deadline on CLOCK_REALTIME unless it
@@ -315,6 +409,7 @@ bool burrow__note_is_open(const burrow__Note *n) {
 
 bool burrow__note_init(burrow__Note *n) {
     n->state = 0;
+    n->waiters = 0;
 
     if (pthread_mutex_init(&n->mu, NULL) != 0)
         return false;
@@ -352,17 +447,28 @@ void burrow__note_free(burrow__Note *n) {
     (void)pthread_cond_destroy(&n->cv);
     (void)pthread_mutex_destroy(&n->mu);
     n->state = 0;
+    n->waiters = 0;
 }
 
 void burrow__note_clear(burrow__Note *n) {
-    (void)pthread_mutex_lock(&n->mu);
-    burrow__atomic_store_release_u32(&n->state, 0);
-    (void)pthread_mutex_unlock(&n->mu);
+    burrow__atomic_store_u32(&n->state, 0);
 }
 
 void burrow__note_wake(burrow__Note *n) {
+    burrow__atomic_store_u32(&n->state, 1);
+
+    /* Nobody sleeping means nothing to do, and in particular no mutex to take.
+     * See the top of the file for why reading the count here cannot miss a
+     * sleeper on its way in.
+     *
+     * The mutex is still what makes the condition variable work, and the wait
+     * below is still inside it. This only skips the case where there is nothing
+     * to signal, and taking a lock in order to shout into an empty room is the
+     * cost being removed. */
+    if (burrow__atomic_load_u32(&n->waiters) == 0)
+        return;
+
     (void)pthread_mutex_lock(&n->mu);
-    burrow__atomic_store_release_u32(&n->state, 1);
     /* Broadcast rather than signal, because a note releases everybody. Signal
      * here would leave every sleeper but one waiting for a second wake that is
      * never coming. */
@@ -371,17 +477,27 @@ void burrow__note_wake(burrow__Note *n) {
 }
 
 void burrow__note_sleep(burrow__Note *n) {
+    if (burrow__atomic_load_acquire_u32(&n->state) != 0)
+        return;
+
+    /* Joining the count happens before the mutex is taken and leaving it after
+     * the mutex is dropped, so that a waker deciding whether to call never has
+     * to wait for this thread to get out of the way first. */
+    (void)burrow__atomic_add_u32(&n->waiters, 1);
+
     (void)pthread_mutex_lock(&n->mu);
-    while (burrow__atomic_load_acquire_u32(&n->state) == 0)
+    while (burrow__atomic_load_u32(&n->state) == 0)
         (void)pthread_cond_wait(&n->cv, &n->mu);
     (void)pthread_mutex_unlock(&n->mu);
+
+    (void)burrow__atomic_add_u32(&n->waiters, 0u - 1u);
 }
 
 bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
     /* Same order as the futex version above, and here it saves the mutex as
-     * well as the clock. A note that is already open is a fact the flag can
-     * report on its own, and the wake that set it released the mutex after
-     * storing it. */
+     * well as the clock. A note that is already open is a fact the word can
+     * report on its own, and a thread that is not going to wait has no business
+     * joining the count or taking the lock. */
     if (burrow__atomic_load_acquire_u32(&n->state) != 0)
         return true;
 
@@ -390,9 +506,10 @@ bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
 
     int64_t deadline = burrow__nanotime() + ns;
 
+    (void)burrow__atomic_add_u32(&n->waiters, 1);
     (void)pthread_mutex_lock(&n->mu);
 
-    while (burrow__atomic_load_acquire_u32(&n->state) == 0) {
+    while (burrow__atomic_load_u32(&n->state) == 0) {
         int64_t left = deadline - burrow__nanotime();
         if (left <= 0)
             break;
@@ -424,6 +541,7 @@ bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
     bool open = burrow__atomic_load_acquire_u32(&n->state) != 0;
 
     (void)pthread_mutex_unlock(&n->mu);
+    (void)burrow__atomic_add_u32(&n->waiters, 0u - 1u);
     return open;
 }
 

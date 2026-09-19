@@ -57,22 +57,38 @@ extern "C" {
 
 typedef struct burrow__Note {
     /* HANDLE of a manual reset event, spelled void * so that <windows.h> is not
-     * dragged into every file that includes this one. */
+     * dragged into every file that includes this one. Only touched when a
+     * thread really has to wait. */
     void *event;
+    /* 0 while the gate is closed and 1 once it is open, so that the common
+     * questions can be answered without asking the kernel about the event. */
+    uint32_t state;
+    /* How many threads are about to sleep or are asleep, which is what lets a
+     * wake with nobody waiting stay out of the kernel. */
+    uint32_t waiters;
 } burrow__Note;
 
 #elif defined(BURROW_OS_LINUX)
 
 typedef struct burrow__Note {
     /* 0 while the gate is closed and 1 once it is open. The address of this
-     * word is what the kernel queues sleepers against. */
+     * word is what the kernel queues the sleepers against. */
     uint32_t state;
+    /* How many threads are about to sleep or are asleep. A separate word from
+     * the gate because the gate is what a futex compares against, and a value
+     * that changes every time somebody arrives would keep waking the ones who
+     * are already there. */
+    uint32_t waiters;
 } burrow__Note;
 
 #else
 
 typedef struct burrow__Note {
+    /* Same two words as the other backends, and the count here is what lets a
+     * wake skip the mutex and the broadcast when there is nobody to broadcast
+     * to. */
     uint32_t state;
+    uint32_t waiters;
     pthread_mutex_t mu;
     pthread_cond_t cv;
 } burrow__Note;

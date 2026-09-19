@@ -27,12 +27,34 @@
 #include "harness.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /* ------------------------------------------------------- the easy directions */
 
+/* Filled with something that is not zero before init, because a note has more
+ * than one field now and leaving one of them out of init is a bug that hides.
+ * Stack memory is usually zero already, so the note works anyway and every test
+ * here passes on every machine anybody runs them on. The memory sanitiser found
+ * exactly that on the Linux backend, on CI, after the change had been through
+ * six platforms clean.
+ *
+ * This does not catch every version of the mistake, and it is not meant to. A
+ * sleeper count that starts at 0xffffffff still works, because every wake sees
+ * a count that is not zero and makes the call it would have made anyway. What
+ * it does catch is the gate itself, and it says in one line what init's job is,
+ * which is the part somebody adding the next field will read. */
+static void fill_with_rubbish(burrow__Note *n) {
+    unsigned char *p = (unsigned char *)n;
+
+    for (size_t i = 0; i < sizeof(*n); i++)
+        p[i] = 0xff;
+}
+
 TEST(a_fresh_note_is_closed_and_a_wake_opens_it) {
     burrow__Note n;
+
+    fill_with_rubbish(&n);
 
     CHECK(burrow__note_init(&n));
     CHECK(!burrow__note_is_open(&n));

@@ -102,7 +102,14 @@ if(MSVC)
     # /wd4100 is MSVC's unreferenced formal parameter, and it is off for the
     # same reason -Wno-unused-parameter is off everywhere else. A vtable slot
     # has a fixed signature and most implementations of it ignore something.
-    target_compile_options(burrow PRIVATE /W4 /permissive- /utf-8 /wd4100)
+    #
+    # /wd4324 is "structure was padded due to alignment specifier", which MSVC
+    # says every time it sees _Alignas on a member. It is a warning about
+    # something being done on purpose. The P structure puts its run queue head
+    # and tail on separate cache lines specifically so that a thief and an owner
+    # do not fight over one, and the padding that comes with that is the point
+    # rather than an accident. gcc and clang do not warn about this at all.
+    target_compile_options(burrow PRIVATE /W4 /permissive- /utf-8 /wd4100 /wd4324)
     if(BURROW_WERROR)
         target_compile_options(burrow PRIVATE /WX)
     endif()

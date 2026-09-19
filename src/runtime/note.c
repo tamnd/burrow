@@ -160,7 +160,7 @@ void burrow__note_sleep(burrow__Note *n) {
             break;
     }
 
-    (void)burrow__atomic_add_u32(&n->waiters, 0u - 1u);
+    (void)burrow__atomic_add_u32(&n->waiters, 0U - 1U);
 }
 
 bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
@@ -203,7 +203,7 @@ bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
             break;
     }
 
-    (void)burrow__atomic_add_u32(&n->waiters, 0u - 1u);
+    (void)burrow__atomic_add_u32(&n->waiters, 0U - 1U);
 
     /* Read rather than returning what the loop decided, because the wake can
      * land between the last check and the deadline passing, and a note that is
@@ -298,14 +298,17 @@ static void futex_wake_all(uint32_t *addr) {
 
 bool burrow__note_init(burrow__Note *n) {
     n->state = 0;
+    n->waiters = 0;
     return true;
 }
 
 void burrow__note_free(burrow__Note *n) {
-    /* Nothing was ever allocated. The store is here so that a use after free
-     * finds a closed gate and hangs where a debugger can see it, rather than
-     * finding whatever the memory is reused for and carrying on. */
+    /* Nothing was ever allocated. The stores are here so that a use after free
+     * finds a closed gate with nobody at it and hangs where a debugger can see
+     * it, rather than finding whatever the memory is reused for and carrying
+     * on. */
     n->state = 0;
+    n->waiters = 0;
 }
 
 void burrow__note_clear(burrow__Note *n) {
@@ -334,7 +337,7 @@ void burrow__note_sleep(burrow__Note *n) {
         futex_wait(&n->state, 0);
     }
 
-    (void)burrow__atomic_add_u32(&n->waiters, 0u - 1u);
+    (void)burrow__atomic_add_u32(&n->waiters, 0U - 1U);
 }
 
 bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
@@ -365,7 +368,7 @@ bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
         futex_wait_for(&n->state, 0, left);
     }
 
-    (void)burrow__atomic_add_u32(&n->waiters, 0u - 1u);
+    (void)burrow__atomic_add_u32(&n->waiters, 0U - 1U);
 
     /* Read again rather than returning what the loop decided, because the wake
      * can land between the last check and the deadline passing, and a note that
@@ -490,7 +493,7 @@ void burrow__note_sleep(burrow__Note *n) {
         (void)pthread_cond_wait(&n->cv, &n->mu);
     (void)pthread_mutex_unlock(&n->mu);
 
-    (void)burrow__atomic_add_u32(&n->waiters, 0u - 1u);
+    (void)burrow__atomic_add_u32(&n->waiters, 0U - 1U);
 }
 
 bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
@@ -541,7 +544,7 @@ bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
     bool open = burrow__atomic_load_acquire_u32(&n->state) != 0;
 
     (void)pthread_mutex_unlock(&n->mu);
-    (void)burrow__atomic_add_u32(&n->waiters, 0u - 1u);
+    (void)burrow__atomic_add_u32(&n->waiters, 0U - 1U);
     return open;
 }
 

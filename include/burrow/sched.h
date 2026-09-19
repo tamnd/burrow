@@ -159,6 +159,18 @@ struct burrow__G {
      * the per P ring. */
     burrow__G *next;
 
+    /* The timer time_sleep parks on, made the first time this goroutine sleeps
+     * and kept from then on, including while it is dead on a free list. Go's g
+     * has the same field for the same two reasons.
+     *
+     * It cannot live on the sleeping goroutine's stack, because a timer that has
+     * fired stays in its P's heap until that P throws it out, which is after the
+     * sleep has returned and the frame holding it has gone. And it is kept
+     * rather than freed at every wake because a goroutine that sleeps once
+     * usually sleeps again, and this way a loop with a sleep in it allocates
+     * nothing after the first turn. */
+    BURROW_OWNS(1) burrow__Timer *timer;
+
     /* Every G ever created, in one list under the scheduler lock. Go calls it
      * allgs and keeps it for the same two reasons: a traceback has to be able to
      * name every goroutine, and shutting the runtime down has to be able to give
@@ -470,6 +482,18 @@ BURROW_STATIC(ret) burrow__P *burrow__allp(int32_t i);
 
 /* How many Ps there are. Fixed while the scheduler is running. */
 int32_t burrow__gomaxprocs(void);
+
+/* The calling goroutine's own timer, the one time_sleep parks on, made on the
+ * first call and handed back on every one after it.
+ *
+ * NULL on a thread that is not running a goroutine, and NULL if the allocator
+ * would not give out the timer, which is the only allocation a sleep ever makes.
+ * Callers treat those two the same way and sleep the thread instead.
+ *
+ * It belongs to the goroutine and the scheduler frees it, so the caller arms it
+ * and nothing else. Nobody else may use it, because a goroutine sleeps in one
+ * place at a time by definition. */
+BURROW_BORROWS(ret) burrow__Timer *burrow__sleep_timer(void);
 
 #ifdef __cplusplus
 }

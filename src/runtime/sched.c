@@ -192,6 +192,22 @@ burrow__Timers *burrow__timers_local(void) {
     return &curm->p->timers;
 }
 
+burrow__Timer *burrow__sleep_timer(void) {
+    burrow__G *g = burrow__curg();
+    if (g == NULL)
+        return NULL;
+
+    if (g->timer == NULL) {
+        Alloc *a = heap_allocator();
+        burrow__Timer *t = mem_alloc(a, sizeof(burrow__Timer), _Alignof(burrow__Timer));
+        if (t == NULL)
+            return NULL;
+        burrow__timer_init(t, NULL, NULL);
+        g->timer = t;
+    }
+    return g->timer;
+}
+
 Goroutine *sched_current(void) {
     return burrow__curg();
 }
@@ -345,14 +361,18 @@ static void midle_put(burrow__M *m) {
 
 /* Takes an M off the idle list if it is still on it, and answers whether it was.
  *
- * A thread that parked with a deadline and reached it has to do this before it
- * goes back to looking for work, because being on that list is a promise to be
- * asleep. Whoever finds it there next would hand it a P and wake a thread that
- * is already awake and holding a different one.
+ * Every thread that stops sleeping does this before it goes back to looking for
+ * work, because being on that list is a promise to be asleep. Whoever finds it
+ * there next would hand it a P and wake a thread that is already awake and
+ * holding a different one, and a thread that parks again without coming off
+ * first goes on the list twice.
+ *
+ * Answering false is the ordinary case where whoever woke this thread took it
+ * off on the way past, so there is nothing here for callers to check.
  *
  * A walk rather than a doubly linked list. The list is at most one entry per P
- * and this runs only when a sleep runs out, which is once per timer rather than
- * once per goroutine. */
+ * and this runs once per thread wakeup, which is once per timer or per batch of
+ * new work rather than once per goroutine. */
 static bool midle_remove(burrow__M *m) {
     burrow__M **at = &sched.midle;
 
@@ -776,7 +796,18 @@ void burrow__timers_wake(void) {
  * being idle. The thread takes itself off the idle list, looks for a P to do the
  * work with, and if there is not one to be had it goes back to sleep, this time
  * with no deadline: every P is busy, so every P has a thread that will get to its
- * own timers. */
+ * own timers.
+ *
+ * Nothing below trusts the note for anything except the decision to stop
+ * sleeping. Whether this thread is still on the idle list, and whether it has a
+ * P, are read from the lists themselves under the lock, and the reason is that
+ * the note is allowed to be open when nobody is waiting for it. The window is
+ * small and it is always there: a thread whose deadline runs out returns from the
+ * sleep, and a wake meant for it can land after that and before the clear below,
+ * which leaves the note open with the wake already accounted for. The next sleep
+ * then ends the moment it starts. Go never sees this because in Go a thread is
+ * woken only when it is being handed a P, so the note and the handover cannot
+ * disagree. Deadlines are what make them able to. */
 static void stopm(burrow__M *m, int64_t until) {
     for (;;) {
         burrow__lock(&sched.lock);
@@ -787,24 +818,24 @@ static void stopm(burrow__M *m, int64_t until) {
         midle_put(m);
         burrow__unlock(&sched.lock);
 
-        bool woken = true;
-        if (until == 0) {
+        if (until == 0)
             burrow__note_sleep(&m->park);
-        } else {
-            woken = burrow__note_sleep_timeout(&m->park, until - burrow__nanotime());
-        }
+        else
+            (void)burrow__note_sleep_timeout(&m->park, until - burrow__nanotime());
         burrow__note_clear(&m->park);
 
         burrow__lock(&sched.lock);
-        if (!woken) {
-            /* The deadline passed. Off the list, and if it turns out somebody
-             * took this thread off it already then that somebody has left a P in
-             * nextp and the sleep was going to end anyway. */
-            (void)midle_remove(m);
-        }
+
+        /* Off the list however the sleep ended, because being on it is a promise
+         * to be asleep and this thread is not. Doing this only when the deadline
+         * passed is what put the same thread on the list twice, and a list whose
+         * head points at itself is a shutdown that never finishes and an idle
+         * thread that is handed two Ps. */
+        (void)midle_remove(m);
+
         burrow__P *p = m->nextp;
         m->nextp = NULL;
-        if (p == NULL && !woken)
+        if (p == NULL)
             p = pidle_get();
         burrow__unlock(&sched.lock);
 
@@ -1281,11 +1312,20 @@ static void schedinit(void) {
 static void teardown(void) {
     Alloc *a = heap_allocator();
 
+    /* The timer sets go first, before any goroutine does, because a goroutine
+     * that was asleep when the runtime stopped still has its timer in one of
+     * these heaps and freeing the timer under the heap would leave a pointer to
+     * nothing in it. Emptying the sets first takes every timer out of reach. */
+    for (int32_t i = 0; i < sched.gomaxprocs; i++)
+        burrow__timers_free(&allp[i].timers);
+
     burrow__G *g = sched.allg;
     while (g != NULL) {
         burrow__G *next = g->allnext;
         burrow__context_free(&g->ctx);
         stack_give_back(g);
+        if (g->timer != NULL)
+            mem_free(a, g->timer, sizeof(burrow__Timer), _Alignof(burrow__Timer));
         mem_free(a, g, sizeof(burrow__G), _Alignof(burrow__G));
         g = next;
     }
@@ -1294,10 +1334,8 @@ static void teardown(void) {
         burrow__note_free(&allm[i].park);
     burrow__note_free(&sched.mainnote);
 
-    for (int32_t i = 0; i < sched.gomaxprocs; i++) {
-        burrow__timers_free(&allp[i].timers);
+    for (int32_t i = 0; i < sched.gomaxprocs; i++)
         allp[i] = (burrow__P){0};
-    }
     for (int32_t i = 0; i < sched.nmcreated; i++)
         allm[i] = (burrow__M){0};
 

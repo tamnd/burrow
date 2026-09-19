@@ -314,6 +314,40 @@ static void delete_min(burrow__Timers *ts) {
         burrow__atomic_store_u64(&ts->min_when_modified, 0);
 }
 
+/* Takes the timer at `i` out, wherever in the heap it is.
+ *
+ * Only burrow__timer_drop wants this. Every other path here works on the head,
+ * which is what a heap is for, and this one exists because memory that is about
+ * to be given back has to stop being reachable first.
+ *
+ * The last entry fills the hole and then goes whichever way it has to. It cannot
+ * need both directions, so the comparison against its new parent decides which
+ * one to do. */
+static void delete_at(burrow__Timers *ts, uint32_t i) {
+    burrow__Timer *t = ts->heap[i].t;
+
+    if (t->ts != ts || i >= ts->len)
+        bad_timer();
+    t->ts = NULL;
+
+    uint32_t last = ts->len - 1U;
+    if (i != last)
+        ts->heap[i] = ts->heap[last];
+    ts->heap[last] = (burrow__TimerWhen){0};
+    ts->len = last;
+
+    if (i < last) {
+        if (i > 0 && tw_less(ts->heap[i], ts->heap[(i - 1U) / TIMER_HEAP_N]))
+            sift_up(ts, i);
+        else
+            sift_down(ts, i);
+    }
+    update_min_when_heap(ts);
+
+    if (ts->len == 0)
+        burrow__atomic_store_u64(&ts->min_when_modified, 0);
+}
+
 /* Does whatever the state bits of the earliest timer say needs doing, and
  * answers whether anything changed. The timer has to be heap[0], and both its
  * lock and the set's have to be held.
@@ -522,6 +556,59 @@ bool burrow__timer_stop(burrow__Timer *t) {
     t->when = 0;
     timer_unlock(t);
     return pending;
+}
+
+void burrow__timer_drop(burrow__Timer *t) {
+    for (;;) {
+        timer_lock(t);
+        if ((t->state & BURROW__TIMER_HEAPED) == 0) {
+            /* In no heap, so there is nothing to take it out of and the whole
+             * job is forgetting what it was going to do. */
+            t->state = 0;
+            t->when = 0;
+            t->period = 0;
+            t->ts = NULL;
+            timer_unlock(t);
+            return;
+        }
+
+        /* In a heap, and the heap's lock comes before the timer's, so the
+         * timer's has to go down first. The set can be handed to another P in
+         * between, which is what the second look under both locks is for. */
+        burrow__Timers *ts = t->ts;
+        if (ts == NULL)
+            bad_timer();
+        timer_unlock(t);
+
+        timers_lock(ts);
+        timer_lock(t);
+        if ((t->state & BURROW__TIMER_HEAPED) == 0 || t->ts != ts) {
+            timer_unlock(t);
+            timers_unlock(ts);
+            continue;
+        }
+
+        uint32_t at = ts->len;
+        for (uint32_t i = 0; i < ts->len; i++) {
+            if (ts->heap[i].t == t) {
+                at = i;
+                break;
+            }
+        }
+        if (at == ts->len)
+            bad_timer();
+
+        if ((t->state & BURROW__TIMER_ZOMBIE) != 0)
+            burrow__atomic_add_u32(&ts->zombies, 0U - 1U);
+        t->state = 0;
+        t->when = 0;
+        t->period = 0;
+
+        delete_at(ts, at);
+        timer_unlock(t);
+        timers_unlock(ts);
+        return;
+    }
 }
 
 bool burrow__timer_reset_on(burrow__Timers *ts, burrow__Timer *t, int64_t when,

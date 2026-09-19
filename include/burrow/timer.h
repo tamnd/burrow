@@ -208,6 +208,24 @@ bool burrow__timer_reset_on(burrow__Timers *ts, burrow__Timer *t, int64_t when,
  * arm while it is still in the heap. */
 bool burrow__timer_stop(burrow__Timer *t);
 
+/* Disarms a timer and takes it out of whatever heap it is in, so that the memory
+ * underneath it can be given back.
+ *
+ * This is the one thing Go does not need and burrow does. Go's timer stays alive
+ * as long as a heap points at it and the collector deals with the rest, so a
+ * stop can be a mark and nothing more. Here the memory belongs to somebody, and
+ * a free that leaves the pointer in a P's heap is a use after free the next time
+ * that P walks it.
+ *
+ * Costs a walk of the heap the timer is in, because the heap entries carry no
+ * back index and paying for one on every sift would slow the hot path down to
+ * make this rare call faster. A timer that has already fired, or that was never
+ * armed, is not in a heap and costs nothing.
+ *
+ * The timer is left the way burrow__timer_init leaves one, so it can be armed
+ * again rather than freed if that is what the caller wants. */
+void burrow__timer_drop(burrow__Timer *t);
+
 /* Prepares an empty set. A zeroed burrow__Timers is already a valid empty one,
  * so this exists for symmetry with the free and for the day it needs to do
  * something. */

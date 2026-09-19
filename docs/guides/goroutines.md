@@ -153,9 +153,11 @@ A thread that finds nothing gives its P up and looks again before parking. Doing
 
 ## What is not here yet
 
-Four things, all of them on the P0 milestone.
+Three things, all of them on the P0 milestone.
 
-Timers, which is what makes `sched_park` able to come back on its own after a while. The netpoller, which is what makes a blocked read give its thread up instead of holding it. Channels and `select`, which are the interface most of this exists to support. And preemption, which is what stops a goroutine that never yields from holding a thread forever.
+The netpoller, which is what makes a blocked read give its thread up instead of holding it. Channels and `select`, which are the interface most of this exists to support. And preemption, which is what stops a goroutine that never yields from holding a thread forever.
+
+Timers have landed. `sched_park` can come back on its own after a while now, which is what [guides/time.md](time.md) is built on.
 
 Until preemption lands, a goroutine that runs a long computation should call `runtime_gosched` from time to time. It is one function call and it costs about two hundred nanoseconds.
 

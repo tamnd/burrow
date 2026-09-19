@@ -6,8 +6,19 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 
 ## Unreleased
 
+### Time
+
+- `burrow/time.h` is the half of Go's `time` package that needs a scheduler under it: `Duration` with its units, `time_sleep`, and `time_after_func` with the stop and reset that go with it. The calendar half, `Time` and formatting and timezones, does not need the runtime and is a separate job.
+- `time_sleep` parks the goroutine and arms a timer, so the thread goes and finds other work. A program with a hundred thousand goroutines on a hundred thousand deadlines is asleep in the kernel using nothing.
+- The timer is armed from inside the park callback rather than before the park, because arming it first lets it fire on another thread and ready a goroutine that is still running on this one, which is two threads on one stack.
+- `time_after_func` runs the callback on a goroutine of its own, which is Go's rule. The callback gets a fresh stack and may block, take locks or sleep again without holding up the thread that noticed the timer was due.
+- `time_timer_free` is the half Go does not have, because Go has a collector. It stops the timer and takes it out of whatever heap it is sitting in before freeing it, since a stopped timer stays in its P's heap until that P throws it out and freeing underneath that leaves the scheduler pointing at a hole. Arena users can ignore it.
+- `time_after_func` and `time_timer_reset` answer failure rather than panicking when the P's heap will not grow. Go throws there and a C library does not get to make that choice for the program using it.
+
 ### Runtime
 
+- A scheduler hang, found by the first test that made threads park with a deadline on them. `stopm` only took the thread off the idle list when the deadline had passed, and a thread woken any other way stayed on a list that is a promise to be asleep. It then put itself on again, the list pointed at itself, shutdown never finished and an idle thread was handed two Ps. The same path threw its deadline away and slept forever while a timer sat overdue on an idle P.
+- The cause is that a note is allowed to be open with nobody waiting on it. A thread whose deadline runs out returns from the sleep, a wake meant for it lands before the clear, and the next park ends the moment it starts. Go never sees this because in Go a thread is only ever woken while being handed a P, so the note and the handover cannot disagree. Deadlines are what make them able to. `stopm` now reads the idle lists under the lock and treats the note as a hint about when to stop sleeping and nothing else.
 - `burrow/timer.h` and `src/runtime/timer.c` are the timers, which is Go's `runtime/time.go`. A set per P, a four way heap inside each one, and a call the scheduler makes to run whatever is due. Nothing user facing sits on top of them yet, so this is the machine underneath `time.Sleep` and `time.AfterFunc` rather than either of those.
 - The set is per P because the alternative is every goroutine that sets a deadline taking one lock, and a server that sets and clears a read deadline per request does nothing else all day. Go moved off a single global heap in 1.9 for the same reason.
 - The heap has four children per node rather than two. Same logarithm, a third fewer levels, and the four entries a node compares against sit in one or two cache lines. Go's number.
@@ -21,10 +32,15 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 
 - `tests/timer_test.c`. Most of it drives a set of timers with no scheduler near it and a clock the test makes up, so a timer due at 5000 not firing at 1000 is a check rather than a hope, and the checks can look at the heap directly and confirm that a stop left the timer in it. Two tests go through the real scheduler with the real clock, because arithmetic being right is not the same as a sleeping thread waking up.
 - One of those two found a real bug before it was ever committed. Find runnable took its reading of the clock once and then looped, so a thread that slept until a timer was due woke up, compared the timer against the time from before it went to sleep, decided nothing was due and went round again, forever. The reading is taken once per pass now, which is where Go takes it.
+- `tests/time_test.c` is the user facing calls on the real scheduler and the real clock. It is what found the idle list bug above, and it found it by hanging rather than by failing, which took a watchdog and a dump of every thread's state to get to the bottom of.
+- One test in it started out asserting the order three sleepers came back in, and that is scheduling order rather than timer order, so it failed on a four core virtual machine and deserved to. It measures each sleeper's own wait now. The heap's ordering is tested in `tests/timer_test.c` on a clock the test drives, where the answer does not depend on anything else the machine is doing.
+- Both contended run queue tests now wait for every thief thread to be in its steal loop before the owner starts. Starting a thread is a request, and on a machine with as many busy threads as cores it can take longer to be granted than the owner's whole loop takes to run, which left the check that says at least one steal succeeded failing for a thread that was never given a core rather than for a broken steal.
 
 ### Docs
 
 - `docs/design/06-runtime.md` has a section on timers: why the sets are per P, what the three state bits are for, why there are two published minimums, what it costs the scheduler, and what Go has here that burrow does not have yet.
+- `docs/guides/time.md` is the guide for the user facing calls: durations and their units, sleeping, running a function later, stopping and moving a timer, why the free exists and when it can be skipped, and what it all costs.
+- `docs/guides/goroutines.md` no longer lists timers among the things that are missing, and the README has a section on sleeping and timers.
 
 ## v0.0.11 (2026-09-19)
 

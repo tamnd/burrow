@@ -302,6 +302,27 @@ One deviation from Go, and it is in the header. A goroutine stack is a fixed siz
 
 Details: [docs/guides/goroutines.md](docs/guides/goroutines.md).
 
+## Sleeping and timers
+
+```c
+time_sleep(500 * TIME_MILLISECOND);
+
+TimeTimer *t = time_after_func(a, 5 * TIME_SECOND, BURROW_FN(Func, give_up, conn));
+...
+time_timer_stop(t);
+time_timer_free(t);
+```
+
+`time_sleep` is `time.Sleep` and it costs a timer, not a thread. The thread the goroutine was on goes and finds other work, so a program with a hundred thousand goroutines waiting on a hundred thousand deadlines is asleep in the kernel using no processor at all.
+
+The timers are Go's, one set per P with a four way heap inside it, so a server that sets a deadline per request has every core pushing onto a different heap rather than queueing on one lock. Stopping a timer marks it and leaves it where it is, and the P that owns the heap throws it out later, which means a deadline set and cleared on every read never touches a heap.
+
+One difference from Go, and it is the usual one. A timer has a lifetime and there is no collector, so `time_after_func` is paired with `time_timer_free`, which takes the timer out of whatever heap it is in before it hands the memory back. Arena users can ignore it.
+
+`Duration` is a plain `int64_t` of nanoseconds, the same as Go's, with `TIME_SECOND` and the rest of the units.
+
+Details: [docs/guides/time.md](docs/guides/time.md).
+
 ## Status
 
 Early. Nothing is usable yet.

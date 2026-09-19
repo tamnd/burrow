@@ -26,6 +26,7 @@
 #include "burrow/sched.h"
 
 #include "burrow/atomic.h"
+#include "burrow/clock.h"
 #include "burrow/thread.h"
 
 #include "harness.h"
@@ -483,6 +484,7 @@ struct Thief {
 static struct Thief thieves[THIEVES];
 static uint32_t seen[POOL];
 static uint32_t stress_stop;
+static uint32_t thieves_running;
 
 /* Steals until the flag goes up, draining whatever lands in its own ring as it
  * goes. Every goroutine it ends up holding is counted in its own array, so that
@@ -490,6 +492,8 @@ static uint32_t stress_stop;
  * measured. */
 static void steal_loop(void *arg) {
     struct Thief *t = (struct Thief *)arg;
+
+    (void)burrow__atomic_add_u32(&thieves_running, 1);
 
     while (burrow__atomic_load_acquire_u32(&stress_stop) == 0) {
         burrow__G *g = burrow__runq_steal(&t->p, t->victim, true);
@@ -523,13 +527,24 @@ static void steal_loop(void *arg) {
     }
 }
 
-TEST(nothing_is_lost_or_duplicated_while_thieves_are_running) {
-    reset_p(&p1, 1);
-    memset(seen, 0, sizeof(seen));
+/* Starts the thieves and does not come back until every one of them is in its
+ * steal loop.
+ *
+ * The waiting is the point. Starting a thread is a request, and on a machine
+ * with as many busy threads as cores the request can take longer to be granted
+ * than the owner's whole loop takes to run. A thief that is still inside
+ * thread_start when the stop flag goes up reads the flag once, finds it set, and
+ * steals nothing, which looks from the outside exactly like a steal that is
+ * broken. That is what the thief_total checks at the end of both tests are for,
+ * so it is worth the few microseconds here to make sure they only ever fail for
+ * the reason they are written to catch. It cost a red run on a four core virtual
+ * machine to find that out.
+ *
+ * Answering false means a thread would not start, and the caller gives up rather
+ * than waiting for a thief that is never going to arrive. */
+static bool start_thieves(void) {
     stress_stop = 0;
-
-    for (uint64_t i = 1; i <= POOL; i++)
-        (void)fresh(i);
+    thieves_running = 0;
 
     for (int i = 0; i < THIEVES; i++) {
         memset(&thieves[i], 0, sizeof(thieves[i]));
@@ -537,8 +552,29 @@ TEST(nothing_is_lost_or_duplicated_while_thieves_are_running) {
         thieves[i].victim = &p1;
     }
 
+    bool ok = true;
     for (int i = 0; i < THIEVES; i++)
-        CHECK(burrow__thread_start(&thieves[i].thread, steal_loop, &thieves[i], 0));
+        ok = burrow__thread_start(&thieves[i].thread, steal_loop, &thieves[i], 0) && ok;
+
+    CHECK(ok);
+    if (!ok)
+        return false;
+
+    while (burrow__atomic_load_acquire_u32(&thieves_running) < (uint32_t)THIEVES)
+        burrow__thread_yield();
+
+    return true;
+}
+
+TEST(nothing_is_lost_or_duplicated_while_thieves_are_running) {
+    reset_p(&p1, 1);
+    memset(seen, 0, sizeof(seen));
+
+    for (uint64_t i = 1; i <= POOL; i++)
+        (void)fresh(i);
+
+    if (!start_thieves())
+        return;
 
     /* The owner fills and drains its own queue over and over while the thieves
      * work at the other end of it.
@@ -627,6 +663,26 @@ TEST(nothing_is_lost_or_duplicated_while_thieves_are_running) {
     CHECK(thief_total > 0);
 }
 
+/* Holds the owner off long enough that a thief can win.
+ *
+ * A thief backs off before it touches a running victim's runnext, on purpose,
+ * because the goroutine in that slot is the one the victim is about to run and
+ * moving it to another core is work for nothing. So on a round where the owner
+ * does no more than yield, the owner is supposed to win, and on a quiet machine
+ * it wins every single time. Asking afterwards whether any steal succeeded is
+ * then asking the runtime to be worse at its job, and it failed on an idle six
+ * core box for exactly that reason.
+ *
+ * Fifty microseconds is a long time next to a yield and a compare and swap, so a
+ * thief that is working takes the slot on every one of these rounds, and a run
+ * where none of them do is a broken steal rather than a quiet machine. */
+static void let_a_thief_in(void) {
+    int64_t end = burrow__nanotime() + 50000;
+
+    while (burrow__nanotime() < end)
+        burrow__thread_yield();
+}
+
 /* The same idea with the queue kept nearly empty instead of nearly full, which
  * is a different set of windows. A steal from a queue with one goroutine on it
  * races with the owner taking that same goroutine, and the runnext slot is
@@ -635,24 +691,42 @@ TEST(nothing_is_lost_or_duplicated_while_thieves_are_running) {
 TEST(one_goroutine_at_a_time_is_never_handed_to_two_threads) {
     reset_p(&p1, 1);
     memset(seen, 0, sizeof(seen));
-    stress_stop = 0;
 
     for (uint64_t i = 1; i <= POOL; i++)
         (void)fresh(i);
 
-    for (int i = 0; i < THIEVES; i++) {
-        memset(&thieves[i], 0, sizeof(thieves[i]));
-        reset_p(&thieves[i].p, (int32_t)(i + 2));
-        thieves[i].victim = &p1;
-    }
-
-    for (int i = 0; i < THIEVES; i++)
-        CHECK(burrow__thread_start(&thieves[i].thread, steal_loop, &thieves[i], 0));
+    if (!start_thieves())
+        return;
 
     uint32_t owner_total = 0;
     uint32_t rounds = 0;
 
-    for (int round = 0; round < ROUNDS * 20; round++) {
+    /* How many rounds ended with the owner's own get coming back empty, which
+     * on this queue can only mean a thief took the goroutine out of the slot.
+     *
+     * This is the same fact as the thief counters at the end, read from the
+     * owner's side, and it is read this way for two reasons. The thief counters
+     * are plain words written by running threads and cannot be read until those
+     * threads are joined, and by then it is too late to do anything about an
+     * answer of zero. This one can be watched as it goes. */
+    uint32_t taken_from_me = 0;
+
+    /* When to stop waiting for a steal that is not coming, in the case below
+     * where the fixed rounds produced none.
+     *
+     * Two seconds is a very long time for three threads that are already awake
+     * and already spinning on the slot, and the number is that large on purpose.
+     * The machines this runs on include a four core box that sits at a load
+     * average of sixty, where a thread that is perfectly healthy still waits
+     * tens of milliseconds for a core. The thing being ruled out is a steal that
+     * never works, not a machine that is busy, and two seconds tells those two
+     * apart with room to spare while costing nothing at all on a run where the
+     * fixed rounds already saw a steal. */
+    int64_t give_up = burrow__nanotime() + 2000000000;
+
+    for (int round = 0;
+         round < ROUNDS * 20 || (taken_from_me == 0 && burrow__nanotime() < give_up);
+         round++) {
         burrow__G *overflow = NULL;
         burrow__G *g = &pool[round % POOL];
 
@@ -672,11 +746,22 @@ TEST(one_goroutine_at_a_time_is_never_handed_to_two_threads) {
          * looking for would never get the chance to prove it. With it, the
          * queue is sitting there holding one goroutine while three other
          * threads reach for it, and the get below has to come back empty
-         * whenever one of them got there first. */
-        burrow__thread_yield();
+         * whenever one of them got there first.
+         *
+         * Most rounds are a bare yield, because a narrow window is the one that
+         * catches a broken steal. Every eighth round is wide enough that a
+         * thief which gets a core at all will win it, and so is every round
+         * past the fixed count, which are the rounds that only happen when
+         * nothing has been stolen yet. */
+        if (round >= ROUNDS * 20 || (round % 8) == 0)
+            let_a_thief_in();
+        else
+            burrow__thread_yield();
 
         burrow__G *got = burrow__runq_get(&p1);
-        if (got != NULL) {
+        if (got == NULL) {
+            taken_from_me++;
+        } else {
             seen[got->id - 1]++;
             owner_total++;
         }
@@ -703,7 +788,17 @@ TEST(one_goroutine_at_a_time_is_never_handed_to_two_threads) {
     }
 
     CHECK_INT_EQ(owner_total + thief_total, rounds);
-    CHECK(thief_total > 0);
+
+    /* At least one steal happened, without which everything above passes on a
+     * steal that always answers NULL.
+     *
+     * Both halves of this are worth having. The first is what the owner watched
+     * happen while it was running and is what the loop above waits for. The
+     * second is the thieves agreeing that they were the ones who took them,
+     * which is not the same statement: a queue that handed a goroutine to
+     * nobody at all would satisfy the first and fail the second. */
+    CHECK(taken_from_me > 0);
+    CHECK(thief_total >= taken_from_me);
 }
 
 int main(void) {

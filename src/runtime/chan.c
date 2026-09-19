@@ -825,10 +825,15 @@ void chan_close(Chan *c) {
  * case order, because two selects listing the same two channels the other way
  * round would take one each and wait for the other forever. Address order is
  * something every select in the program agrees on without any of them having to
- * coordinate. Go sorts a list of the channels to walk in that order. This walks
- * the case list once per lock taken instead, which needs no list, skips a
- * channel that appears in several cases for free, and costs a handful of
- * comparisons on a case count that is almost always under five. */
+ * coordinate. So the cases are sorted by the address of their channel, once,
+ * and the locking and the unlocking both walk that.
+ *
+ * This used to find the next channel to lock by scanning the whole case list
+ * for the lowest address above the last one, which needed no list and no sort
+ * and read well. It was also quadratic, and burrow-bench says what that was
+ * worth: a select over eight arms spent a quarter of its time in the unlock
+ * alone, because locking and unlocking eight channels once meant a hundred and
+ * forty four passes over the case list. Sorting costs one pass and a heap. */
 
 /* How many cases fit in the frame of the call. See the note on chan_select in
  * burrow/chan.h for why there is a number here at all. */
@@ -845,6 +850,12 @@ typedef struct Select {
 
     /* A random permutation of 0 through n, the order to visit the cases in. */
     const uint32_t *order;
+
+    /* The cases that have a channel, in increasing address order, with the
+     * duplicates left in. nlock is how many, which is the case count less the
+     * defaults and the nil channels. */
+    const uint32_t *lock_order;
+    Int nlock;
 
     /* One entry per case, used only if the select has to wait. Indexed by case
      * number, including the cases that never get one, because an index that
@@ -864,59 +875,98 @@ typedef struct Select {
     bool send_on_closed;
 } Select;
 
-/* The next channel to lock after `after`, or NULL when there are none left.
+/* The address of the channel case i is on, as an integer.
  *
  * Addresses go through uintptr_t because comparing two pointers that are not
  * into the same object with < is not something C defines, and comparing the
- * integers is. Zero is not a channel, so it works as the starting point. */
-static Chan *next_chan(const SelectCase *cases, Int n, uintptr_t after) {
-    Chan *best = NULL;
+ * integers is. */
+static uintptr_t chan_at(const SelectCase *cases, uint32_t i) {
+    return (uintptr_t)cases[i].c;
+}
+
+/* One step of the heap, moving the entry at root down until the subtree below
+ * it has no larger address in it. */
+static void sift(uint32_t *order, const SelectCase *cases, Int root, Int len) {
+    for (;;) {
+        Int child = 2 * root + 1;
+        if (child >= len)
+            return;
+
+        if (child + 1 < len &&
+            chan_at(cases, order[child]) < chan_at(cases, order[child + 1]))
+            child++;
+
+        if (chan_at(cases, order[root]) >= chan_at(cases, order[child]))
+            return;
+
+        uint32_t t = order[root];
+        order[root] = order[child];
+        order[child] = t;
+        root = child;
+    }
+}
+
+/* Fills order with the cases that have a channel, in increasing address order,
+ * and answers how many there are. Duplicates stay in, and the walks below step
+ * over them, because a channel listed twice has to be locked once.
+ *
+ * A heap sort rather than the insertion sort that would be faster on the three
+ * or four cases a real select has, and it is the same choice Go makes for the
+ * same reason. This runs on a list the caller built, the caller is allowed
+ * sixty five thousand of them, and an insertion sort handed that many in
+ * descending address order would sit there for the rest of the afternoon. */
+static Int lock_order(uint32_t *order, const SelectCase *cases, Int n) {
+    Int len = 0;
 
     for (Int i = 0; i < n; i++) {
-        Chan *c = cases[i].c;
-        if (c == NULL || cases[i].op == SELECT_DEFAULT)
+        if (cases[i].op == SELECT_DEFAULT || cases[i].c == NULL)
             continue;
-
-        uintptr_t at = (uintptr_t)c;
-        if (at <= after)
-            continue;
-        if (best != NULL && at >= (uintptr_t)best)
-            continue;
-
-        best = c;
+        order[len++] = (uint32_t)i;
     }
 
-    return best;
+    for (Int i = len / 2 - 1; i >= 0; i--)
+        sift(order, cases, i, len);
+
+    for (Int i = len - 1; i > 0; i--) {
+        uint32_t t = order[0];
+        order[0] = order[i];
+        order[i] = t;
+        sift(order, cases, 0, i);
+    }
+
+    return len;
 }
 
-static void sel_lock(const SelectCase *cases, Int n) {
-    uintptr_t at = 0;
-    for (;;) {
-        Chan *c = next_chan(cases, n, at);
-        if (c == NULL)
-            return;
+static void sel_lock(const Select *s) {
+    Chan *last = NULL;
+
+    for (Int k = 0; k < s->nlock; k++) {
+        Chan *c = s->cases[s->lock_order[k]].c;
+        if (c == last)
+            continue;
 
         burrow__lock(&c->lock);
-        at = (uintptr_t)c;
+        last = c;
     }
 }
 
-static void sel_unlock(const SelectCase *cases, Int n) {
-    uintptr_t at = 0;
-    for (;;) {
-        Chan *c = next_chan(cases, n, at);
-        if (c == NULL)
-            return;
+static void sel_unlock(const Select *s) {
+    Chan *last = NULL;
+
+    for (Int k = 0; k < s->nlock; k++) {
+        Chan *c = s->cases[s->lock_order[k]].c;
+        if (c == last)
+            continue;
 
         burrow__unlock(&c->lock);
-        at = (uintptr_t)c;
+        last = c;
     }
 }
 
 static bool unlock_select(Goroutine *g, void *arg) {
     Select *s = (Select *)arg;
     (void)g;
-    sel_unlock(s->cases, s->n);
+    sel_unlock(s);
 
     /* Nothing below this line may read the select, and nothing above it may be
      * skipped, because the commit is what hands the frame over. */
@@ -925,15 +975,25 @@ static bool unlock_select(Goroutine *g, void *arg) {
 
 /* Fisher and Yates, out of the runtime's generator.
  *
- * The modulo is biased, by about one part in two to the forty eighth for the
- * largest case list this allows. That is not a number anybody can measure and
- * the alternative is a rejection loop on a path that runs on every select. */
+ * The number below the bound comes from a multiply and a shift rather than a
+ * modulo, which is Lemire's, and it is what Go's cheaprandn does. Take a random
+ * number in 0 to 2^32, multiply it by the bound, and the top half of the 64 bit
+ * product is a number in 0 to the bound. The reason to bother is that the
+ * modulo it replaces is a hardware divide, and on the machine in burrow-bench's
+ * results a select over eight arms was spending a quarter of its time in this
+ * function waiting for seven of them.
+ *
+ * Both are biased, by a part in two to the thirty second here against a part in
+ * two to the forty eighth before, over a case list that is almost always three
+ * long. Neither is a number anybody can measure, and the unbiased answer is a
+ * rejection loop on a path that runs on every select. */
 static void shuffle(uint32_t *order, Int n) {
     for (Int i = 0; i < n; i++)
         order[i] = (uint32_t)i;
 
     for (Int i = n - 1; i > 0; i--) {
-        Int j = (Int)(runtime_rand64() % (uint64_t)(i + 1));
+        uint64_t r = runtime_rand64() >> 32U;
+        Int j = (Int)((r * (uint64_t)(i + 1)) >> 32U);
         uint32_t t = order[i];
         order[i] = order[j];
         order[j] = t;
@@ -1084,6 +1144,7 @@ Int chan_select(SelectCase *cases, Int n) {
     }
 
     uint32_t small_order[SELECT_SMALL];
+    uint32_t small_locks[SELECT_SMALL];
     Waiter small_waiters[SELECT_SMALL];
 
     Select s;
@@ -1092,6 +1153,7 @@ Int chan_select(SelectCase *cases, Int n) {
     s.n = n;
 
     uint32_t *order = small_order;
+    uint32_t *locks = small_locks;
     void *scratch = NULL;
     size_t scratch_size = 0;
     const size_t scratch_align = _Alignof(Waiter);
@@ -1102,13 +1164,14 @@ Int chan_select(SelectCase *cases, Int n) {
          * pointer that has to be nudged into place. */
         size_t count = (size_t)n;
 
-        scratch_size = count * (sizeof(Waiter) + sizeof(uint32_t));
+        scratch_size = count * (sizeof(Waiter) + 2 * sizeof(uint32_t));
         scratch = mem_alloc(home, scratch_size, scratch_align);
         if (scratch == NULL)
             runtime_throw(BURROW_S("chan_select: out of memory"));
 
         s.waiters = (Waiter *)scratch;
         order = (uint32_t *)(s.waiters + count);
+        locks = order + count;
     } else {
         s.waiters = small_waiters;
     }
@@ -1116,14 +1179,17 @@ Int chan_select(SelectCase *cases, Int n) {
     shuffle(order, n);
     s.order = order;
 
-    sel_lock(cases, n);
+    s.nlock = lock_order(locks, cases, n);
+    s.lock_order = locks;
+
+    sel_lock(&s);
     Int won = sel_try(&s);
 
     if (won < 0 && dflt >= 0)
         won = dflt;
 
     if (won >= 0) {
-        sel_unlock(cases, n);
+        sel_unlock(&s);
 
         if (s.wake != NULL)
             parked_wake(s.wake);
@@ -1139,7 +1205,7 @@ Int chan_select(SelectCase *cases, Int n) {
 
     /* Nothing was ready and there is no default, so wait on all of them. */
     if (!parked_init(&s.p)) {
-        sel_unlock(cases, n);
+        sel_unlock(&s);
         if (scratch != NULL)
             mem_free(home, scratch, scratch_size, scratch_align);
         runtime_throw(BURROW_S("chan_select: out of memory"));
@@ -1154,9 +1220,9 @@ Int chan_select(SelectCase *cases, Int n) {
      * they completed. The other entries are still sitting on their queues, or
      * have been dropped by a pop that could not claim them, and either way they
      * have to be gone before this frame is. */
-    sel_lock(cases, n);
+    sel_lock(&s);
     sel_dequeue(&s);
-    sel_unlock(cases, n);
+    sel_unlock(&s);
 
     parked_done(&s.p);
 

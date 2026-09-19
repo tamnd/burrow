@@ -51,6 +51,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ----------------------------------------------------- without a scheduler */
@@ -343,6 +344,63 @@ TEST(a_select_with_more_arms_than_fit_still_works_and_gives_the_memory_back) {
 
     CHECK_INT_EQ((Int)track_live(&tr), 0);
     track_free(&tr);
+}
+
+/* --- the same thing with the arms in the worst order
+ *
+ * The lock order is built by sorting the arms by the address of their channel,
+ * so the case that costs the sort the most is a list that is already in the
+ * wrong order. This one is in descending address order with a channel listed
+ * twice, a nil arm and a default mixed in, which is every kind of arm the sort
+ * has to leave out or leave alone in one list.
+ *
+ * What it can check from one goroutine is that the right arm still wins and the
+ * right value still arrives. That a list in this order takes its locks in the
+ * same order as a list in any other is what the pair of selects in opposite
+ * orders further down is for. */
+static int by_address_descending(const void *x, const void *y) {
+    Uintptr a = (Uintptr) * (Chan *const *)x;
+    Uintptr b = (Uintptr) * (Chan *const *)y;
+    if (a > b)
+        return -1;
+    return a < b ? 1 : 0;
+}
+
+TEST(a_wide_select_with_its_arms_in_descending_order_still_works) {
+    Chan *chans[MANY];
+    for (int i = 0; i < MANY; i++) {
+        chans[i] = chan_make(heap_allocator(), TYPE_INT, 1);
+        CHECK(chans[i] != NULL);
+    }
+
+    qsort(chans, MANY, sizeof chans[0], by_address_descending);
+
+    Int got = -1;
+    SelectCase cases[MANY + 3];
+    for (int i = 0; i < MANY; i++)
+        cases[i] = BURROW_RECV(chans[i], &got);
+    cases[MANY] = BURROW_RECV(chans[7], &got); /* the same channel again */
+    cases[MANY + 1] = BURROW_RECV(NULL, &got);
+    cases[MANY + 2] = BURROW_DEFAULT;
+
+    CHECK_INT_EQ(chan_select(cases, MANY + 3), MANY + 2);
+
+    /* On the channel that is listed twice, so either of the two arms is a right
+     * answer and the value says which. */
+    Int v = 77;
+    chan_send(chans[7], &v);
+    Int won = chan_select(cases, MANY + 3);
+    CHECK(won == 7 || won == MANY);
+    CHECK_INT_EQ(got, 77);
+
+    /* On one that is listed once, where the answer is exact. */
+    v = 88;
+    chan_send(chans[MANY - 1], &v);
+    CHECK_INT_EQ(chan_select(cases, MANY + 3), MANY - 1);
+    CHECK_INT_EQ(got, 88);
+
+    for (int i = 0; i < MANY; i++)
+        chan_free(chans[i]);
 }
 
 /* ------------------------------------------------------- with a scheduler
@@ -746,6 +804,7 @@ int main(void) {
     RUN(the_same_channel_can_appear_in_several_arms);
     RUN(the_ready_arm_that_runs_is_chosen_at_random);
     RUN(a_select_with_more_arms_than_fit_still_works_and_gives_the_memory_back);
+    RUN(a_wide_select_with_its_arms_in_descending_order_still_works);
 
     RUN(a_select_with_no_default_waits_for_one_of_its_channels);
     RUN(a_close_wakes_a_waiting_select_and_says_so);

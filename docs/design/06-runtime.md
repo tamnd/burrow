@@ -553,11 +553,17 @@ Fairness matters and is copied exactly: when multiple cases are ready, one is
 chosen **uniformly at random**, using the per-P fast RNG, because Go does this
 and Go programs (and tests) depend on the absence of starvation. The poll order
 and lock order across the case set follow Go's channel-address ordering to
-avoid deadlock. Go sorts a scratch array to get that order; burrow walks the
-case list for the lowest address above the last one it locked, which is
-quadratic in the number of arms, needs no storage, and folds duplicate channels
-into one lock for free. The array is sixteen arms before it allocates and real
-selects are three.
+avoid deadlock. The arms are sorted by channel address to get that order, with
+a heap sort, and both the locking and the unlocking walk the sorted list and
+step over a channel that appears in more than one arm. That is Go's answer and
+the heap sort is there for Go's reason, which is that the case list comes from
+the caller and the caller is allowed sixty five thousand arms.
+
+An earlier version walked the case list for the lowest address above the last
+one it locked, which needed no storage and read better, and was quadratic. That
+looked defensible for the three arms a real select has and burrow-bench
+disagreed: at eight arms a quarter of the whole call was in the unlock. The
+array is sixteen arms before it allocates.
 
 Two deviations from Go are worth naming, and both come from the same place:
 burrow keeps the per-arm wait records in the calling goroutine's stack frame,

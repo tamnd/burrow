@@ -107,7 +107,7 @@ typedef struct Waitq {
 /* True if anybody is waiting. Safe to call without the lock, and then it is a
  * snapshot, which is all the caller wanted. */
 static bool waitq_any(const Waitq *q) {
-    return burrow__atomic_load_acquire_u32((const uint32_t *)&q->n) != 0;
+    return burrow__atomic_load_acquire_u32(&q->n) != 0;
 }
 
 static void waitq_push(Waitq *q, Waiter *w) {
@@ -430,16 +430,17 @@ static bool chan_recv_impl(Chan *c, void *out, bool *ok, bool block) {
      * answer, so the closed check comes after the emptiness check and not
      * before. Reading them the other way round would let a receive on a channel
      * that was closed while this ran report that nothing was ready. */
-    if (!block &&
-        ((c->dataqsiz == 0 && !waitq_any(&c->sendq)) ||
-         (c->dataqsiz > 0 && burrow__atomic_load_acquire_u32(&c->qcount) == 0))) {
-        if (burrow__atomic_load_acquire_u32(&c->closed) == 0)
-            return false;
+    if (!block) {
+        const bool empty =
+            (c->dataqsiz == 0 && !waitq_any(&c->sendq)) ||
+            (c->dataqsiz > 0 && burrow__atomic_load_acquire_u32(&c->qcount) == 0);
 
-        /* Closed and empty, as far as the unlocked read can tell. Fall through
-         * and settle it under the lock, because a value may have arrived in
-         * between and a closed channel with a value in it still hands it
-         * over. */
+        /* Empty and closed is not an answer on its own, which is why only the
+         * open case answers here. A value may have arrived since the read above,
+         * and a closed channel with a value in it still hands it over, so that
+         * one falls through and gets settled under the lock. */
+        if (empty && burrow__atomic_load_acquire_u32(&c->closed) == 0)
+            return false;
     }
 
     burrow__lock(&c->lock);
@@ -601,7 +602,7 @@ Int chan_len(const Chan *c) {
     /* Deliberately without the lock, because this is a snapshot either way and
      * a lock would only make it a snapshot that cost more. Go reads the field
      * unsynchronised here too. */
-    return (Int)burrow__atomic_load_acquire_u32((const uint32_t *)&c->qcount);
+    return (Int)burrow__atomic_load_acquire_u32(&c->qcount);
 }
 
 Int chan_cap(const Chan *c) {

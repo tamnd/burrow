@@ -4,6 +4,13 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+### Runtime
+
+- The channel ping pong test asks for two hundred rounds under a thread sanitizer instead of twenty thousand. burrow does not tell the sanitizer about goroutine switches, which `include/burrow/context.h` explains, so its idea of the call stack grows by a frame on every park and never shrinks, and twenty thousand parks runs it off the end. Two hundred covers every path in the test, which is what a sanitizer run is for. The count that hunts for a lost wakeup is the one the ordinary build uses.
+- Two clang-tidy complaints in the channel code, both cosmetic: a cast to the type the argument already had, and a nested `if` that reads better as one condition and a comment.
+
 ## v0.0.14 (2026-09-19)
 
 Channels. The thing goroutines exist in order to talk to, and the reason the scheduler had `sched_park` and `sched_ready` in it before there was anything to use them.

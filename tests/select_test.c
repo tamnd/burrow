@@ -352,6 +352,7 @@ TEST(a_select_with_more_arms_than_fit_still_works_and_gives_the_memory_back) {
 
 static Chan *c1;
 static Chan *c2;
+static Chan *fin;
 static uint32_t took;
 static uint32_t value_ok;
 static uint32_t closed_seen;
@@ -361,6 +362,7 @@ static uint32_t child_done;
 static void reset(void) {
     c1 = NULL;
     c2 = NULL;
+    fin = NULL;
     took = 0;
     value_ok = 0;
     closed_seen = 0;
@@ -538,13 +540,24 @@ static void cross_child(void *arg) {
     }
 
     burrow__atomic_store_u32(&child_done, 1);
+
+    /* Says so out loud, because the last round leaves this goroutine runnable
+     * rather than run. The value that ends the loop above goes straight to the
+     * other one, which then has three instructions left before it returns and
+     * the whole runtime comes down, and nothing in between says this one has to
+     * be given a turn first. Without this the store above lands after the test
+     * has read it, one run in a hundred, and the leftover entry this select
+     * still has on the other channel is still there when chan_free looks. */
+    Int over = 1;
+    chan_send(fin, &over);
 }
 
 static void cross_body(void *arg) {
     (void)arg;
     c1 = chan_make(heap_allocator(), TYPE_INT, 0);
     c2 = chan_make(heap_allocator(), TYPE_INT, 0);
-    if (c1 == NULL || c2 == NULL)
+    fin = chan_make(heap_allocator(), TYPE_INT, 0);
+    if (c1 == NULL || c2 == NULL || fin == NULL)
         return;
 
     if (!go(BURROW_FN(Func, cross_child, NULL)))
@@ -563,6 +576,9 @@ static void cross_body(void *arg) {
     }
 
     burrow__atomic_store_u32(&rounds_done, good);
+
+    Int over = 0;
+    (void)chan_recv(fin, &over);
 }
 
 TEST(two_selects_listing_the_same_channels_the_other_way_round_agree) {
@@ -575,6 +591,7 @@ TEST(two_selects_listing_the_same_channels_the_other_way_round_agree) {
 
     chan_free(c1);
     chan_free(c2);
+    chan_free(fin);
     (void)runtime_gomaxprocs(0);
 }
 

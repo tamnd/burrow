@@ -99,13 +99,14 @@ bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
     if (ns <= 0)
         return burrow__note_is_open(n);
 
+    /* There is no check of the event before the first wait, because a wait on
+     * an open manual reset event returns straight away and is the same call. A
+     * check would be a second trip into the kernel to learn what the wait is
+     * about to say anyway. */
     int64_t deadline = burrow__nanotime() + ns;
+    int64_t left = ns;
 
     for (;;) {
-        int64_t left = deadline - burrow__nanotime();
-        if (left <= 0)
-            return burrow__note_is_open(n);
-
         if (left > NOTE_MAX_WAIT_NS)
             left = NOTE_MAX_WAIT_NS;
 
@@ -124,6 +125,10 @@ bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
          * event, which is a caller bug rather than something to spin on. */
         if (r != WAIT_TIMEOUT)
             return false;
+
+        left = deadline - burrow__nanotime();
+        if (left <= 0)
+            return burrow__note_is_open(n);
     }
 }
 
@@ -246,8 +251,17 @@ void burrow__note_sleep(burrow__Note *n) {
 }
 
 bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
+    /* The note is read before the clock is. The caller here is a thread that
+     * has just failed to find work and is parking with a deadline on it, and by
+     * then the wake it was racing has usually already landed, so the common
+     * case returns without ever asking what time it is. Asking first put a vdso
+     * call in front of every one of those, which is what the note_timeout_hit
+     * row in burrow-bench is there to catch. */
+    if (burrow__atomic_load_acquire_u32(&n->state) != 0)
+        return true;
+
     if (ns <= 0)
-        return burrow__atomic_load_acquire_u32(&n->state) != 0;
+        return false;
 
     int64_t deadline = burrow__nanotime() + ns;
 
@@ -364,8 +378,15 @@ void burrow__note_sleep(burrow__Note *n) {
 }
 
 bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
+    /* Same order as the futex version above, and here it saves the mutex as
+     * well as the clock. A note that is already open is a fact the flag can
+     * report on its own, and the wake that set it released the mutex after
+     * storing it. */
+    if (burrow__atomic_load_acquire_u32(&n->state) != 0)
+        return true;
+
     if (ns <= 0)
-        return burrow__atomic_load_acquire_u32(&n->state) != 0;
+        return false;
 
     int64_t deadline = burrow__nanotime() + ns;
 

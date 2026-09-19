@@ -94,11 +94,23 @@ TEST(a_measured_millisecond_is_a_millisecond_and_not_a_tick) {
     CHECK(taken < 20000000);
 }
 
-TEST(successive_readings_are_finer_than_a_microsecond_apart) {
-    /* Resolution, loosely. Every platform this builds for reads the clock in
-     * tens of nanoseconds, so out of a thousand tries at least one pair has to
-     * differ by less than a microsecond. One pair and not all of them, since an
-     * interrupt can land between any two of them. */
+TEST(the_clock_can_tell_two_points_less_than_a_microsecond_apart) {
+    /* Resolution. A clock that only ticks every millisecond is no use for a
+     * timer, and this is the test that would catch one.
+     *
+     * There are two ways to show that a clock can express something finer than
+     * a microsecond and either of them is enough. Two readings in a row can
+     * differ by less than a microsecond, which is what happens on any machine
+     * that reads its clock in tens of nanoseconds. Or a reading can come back
+     * as something that is not a whole number of microseconds, which is what a
+     * clock with nanosecond or hundred nanosecond ticks does whatever the call
+     * costs to make.
+     *
+     * The second one is here because of the first one's blind spot. Under qemu
+     * a reading is a translated system call and takes microseconds, so no pair
+     * is ever close together, and the clock underneath is still a nanosecond
+     * clock. A thousand readings all landing on a microsecond boundary is not
+     * something that happens by accident. */
     bool fine = false;
 
     for (int i = 0; i < 1000 && !fine; i++) {
@@ -106,6 +118,9 @@ TEST(successive_readings_are_finer_than_a_microsecond_apart) {
         int64_t b = burrow__nanotime();
 
         if (b > a && b - a < 1000)
+            fine = true;
+
+        if (a % 1000 != 0 || b % 1000 != 0)
             fine = true;
     }
 
@@ -183,7 +198,7 @@ int main(void) {
     RUN(a_hundred_thousand_readings_never_go_backwards);
     RUN(the_clock_moves_forward_while_a_loop_spins);
     RUN(a_measured_millisecond_is_a_millisecond_and_not_a_tick);
-    RUN(successive_readings_are_finer_than_a_microsecond_apart);
+    RUN(the_clock_can_tell_two_points_less_than_a_microsecond_apart);
     RUN(four_threads_read_one_clock_and_agree_about_it);
     return harness_report("clock");
 }

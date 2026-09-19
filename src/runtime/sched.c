@@ -753,9 +753,11 @@ static void startm(burrow__P *p, bool spinning) {
             return;
         }
 
-        /* Every thread is busy. Put the P back and leave: whichever thread
-         * finishes first will look at the idle list before it parks, which is
-         * the step in findrunnable that exists for exactly this. */
+        /* Every thread is busy. Put the P back and leave: whichever thread runs
+         * out of work first takes one more look before it parks, and it takes
+         * that look from the idle list with this lock held, so it cannot miss
+         * what has just been queued. stopm is where that happens and says more
+         * about why it has to be there and not a few lines earlier. */
         pidle_put(p);
         burrow__unlock(&sched.lock);
         if (spinning)
@@ -943,6 +945,24 @@ static void sysmon(void *arg) {
     }
 }
 
+/* Whether there is a goroutine anywhere waiting for a thread to run it.
+ *
+ * Every count here is read without taking anything, and both readings can be
+ * stale. A yes that should have been no costs one trip round findrunnable. A no
+ * that should have been a yes is the one that would matter, and neither caller
+ * relies on this alone to rule work out: the one in stopm holds sched.lock,
+ * which is the only lock the global count is written under, and the one in
+ * findrunnable has just been through the queues properly. */
+static bool any_work_left(void) {
+    if (burrow__atomic_load_acquire_u32(&sched.runqsize) != 0)
+        return true;
+    for (int32_t i = 0; i < sched.gomaxprocs; i++) {
+        if (burrow__runq_len(&allp[i]) != 0)
+            return true;
+    }
+    return false;
+}
+
 /* Parks this thread until somebody hands it a P. Comes back with m->p set, or
  * with m->p NULL when the world is coming down.
  *
@@ -976,6 +996,33 @@ static void stopm(burrow__M *m, int64_t until) {
             return;
         }
         midle_put(m);
+
+        /* The last look for work, and the reason it is here rather than in
+         * findrunnable is that here this thread is already on the idle list.
+         *
+         * A look taken before joining the list leaves a gap, and it is a real
+         * one rather than a narrow one. Something queues a goroutine and calls
+         * wakep in that gap. wakep finds the idle P this thread has just given
+         * up, goes looking for a thread to hand it to, finds the idle list still
+         * empty, and is not allowed to make a new thread because there are
+         * already as many as there are Ps. So it puts the P back and leaves, and
+         * then this thread parks with a runnable goroutine sitting on the queue
+         * and every thread asleep. Go never gets here because Go always makes
+         * another thread rather than giving up.
+         *
+         * Taking the look under the same lock a wakeup has to hold, with this
+         * thread already visible on the list, means one of the two always sees
+         * the other. */
+        if (any_work_left()) {
+            burrow__P *idle = pidle_get();
+            if (idle != NULL) {
+                (void)midle_remove(m);
+                burrow__unlock(&sched.lock);
+                acquirep(m, idle);
+                return;
+            }
+        }
+
         burrow__unlock(&sched.lock);
 
         if (until == 0)
@@ -1196,27 +1243,15 @@ static burrow__G *findrunnable(burrow__M *m) {
         /* The second look. Only a thread that was spinning does it, because a
          * thread that was not spinning was never the one responsible for finding
          * this work, and Go makes the same distinction for the same reason. */
-        if (was_spinning) {
-            bool found = false;
-            for (int32_t i = 0; i < sched.gomaxprocs; i++) {
-                if (burrow__runq_len(&allp[i]) != 0) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found && burrow__atomic_load_acquire_u32(&sched.runqsize) != 0)
-                found = true;
-
-            if (found) {
-                burrow__lock(&sched.lock);
-                burrow__P *again = pidle_get();
-                burrow__unlock(&sched.lock);
-                if (again != NULL) {
-                    acquirep(m, again);
-                    m->spinning = 1;
-                    burrow__atomic_add_u32(&sched.nmspinning, 1);
-                    continue;
-                }
+        if (was_spinning && any_work_left()) {
+            burrow__lock(&sched.lock);
+            burrow__P *again = pidle_get();
+            burrow__unlock(&sched.lock);
+            if (again != NULL) {
+                acquirep(m, again);
+                m->spinning = 1;
+                burrow__atomic_add_u32(&sched.nmspinning, 1);
+                continue;
             }
         }
 

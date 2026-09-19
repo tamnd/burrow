@@ -302,6 +302,40 @@ One deviation from Go, and it is in the header. A goroutine stack is a fixed siz
 
 Details: [docs/guides/goroutines.md](docs/guides/goroutines.md).
 
+## Channels
+
+```c
+static void producer(void *env) {
+    Chan *c = env;
+    for (Int i = 0; i < 10; i++)
+        chan_send(c, &i);
+    chan_close(c);
+}
+
+Chan *c = chan_make(a, TYPE_INT, 0);
+go(BURROW_FN(Func, producer, c));
+
+Int v;
+while (chan_recv(c, &v))
+    use(v);
+
+chan_free(c);
+```
+
+That loop is Go's `for v := range c`, and it ends when the producer closes the channel.
+
+A capacity of zero is unbuffered, which is a rendezvous rather than a queue of one: the value goes straight from the sender's variable into the receiver's, and by the time `chan_send` returns, some other goroutine has it. A positive capacity is a ring buffer and a send only blocks once it is full.
+
+Values go by pointer and are copied through the type descriptor, so a channel of `Str` copies a `Str` properly and sending a loop variable does what it looks like it does. Closing is a broadcast and it is one way. `chan_try_send` and `chan_try_recv` are the select with a default arm that most code actually writes.
+
+The rules that stop the program are Go's, exactly: send on closed, close of closed, close of nil. Each one means two parts of the program disagree about who owns the channel, and no return value would make such a program correct. They become recoverable panics once defer and recover land.
+
+One thing Go has no equivalent of: a host thread that is not running a goroutine can block on a channel, because burrow is a library inside somebody else's program and that program has its own threads. It costs the thread, which a goroutine parking does not.
+
+`chan_select` is not here yet. It is next.
+
+Details: [docs/guides/channels.md](docs/guides/channels.md).
+
 ## Sleeping and timers
 
 ```c

@@ -4,6 +4,34 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+Channels. The thing goroutines exist in order to talk to, and the reason the scheduler had `sched_park` and `sched_ready` in it before there was anything to use them.
+
+It is Go's algorithm, which is more specific than a queue with blocking. An unbuffered send is a rendezvous with a direct handoff, so the value goes from the sender's variable into the receiver's without passing through the channel, and by the time `chan_send` returns somebody else has it. A buffered send takes the buffer only when nobody is waiting on it. A sender that has to block holds out a pointer to its value rather than a copy, so a large struct crossing a full channel is still copied exactly once. Closing is a broadcast. The rules that stop the program are Go's exactly, because each of them means two parts of a program disagree about who owns the channel and there is no return value that would fix that.
+
+`chan_select` is not in this release. It needs a way to wait on several channels at once, a uniform random choice among the ready cases, and Go's lock ordering by channel address, and it is the next thing. In the meantime `chan_try_send` and `chan_try_recv` are the select with a default arm that most code actually writes.
+
+### Runtime
+
+- `burrow/chan.h` is Go's channel: `chan_make`, `chan_send`, `chan_recv`, `chan_try_send`, `chan_try_recv`, `chan_close`, `chan_len`, `chan_cap`, `chan_elem`, and `chan_free` because there is no collector.
+- One lock per channel, which Go has tried to improve on more than once and has not. The critical section is a handful of pointer writes and one element copy, and waiters are made runnable after the lock is released, which is what `burrow/lock.h` requires of anything that holds it.
+- The record of a blocked goroutine lives on that goroutine's stack, which is Go's `sudog` without the pool. A parked goroutine's stack is not going anywhere and the one thing a pool buys is not needed when the record is already free.
+- A thread that is not running a goroutine can block on a channel. Go cannot be in that situation and so its waiter only ever holds a `g`; ours holds a goroutine or a note and the wakeup path picks. It costs the thread, which a goroutine parking does not, and that is the only difference a caller can see.
+- Values are copied through the type descriptor rather than with `memcpy`, so a channel of `Str` copies a `Str` the way that type says to, and a close zeroes a waiting receiver's variable the same way.
+- The wait queues carry an atomic length so that the non-blocking paths can ask whether anybody is waiting without taking the lock. Go reads the queue head there unsynchronised and gets away with it because its race detector does not look at the runtime, and ours is an ordinary library that a thread sanitizer looks at all of.
+- `chan_send` returns nothing and `chan_try_send` has no `ok` out-parameter, which is a change from the sketch in the design document. A send has one failure and it is a panic, so a `bool` would only have offered a caller the chance to ignore it.
+- `burrow__note_init_transient` is new, and it is there because putting a waiter on the stack found a real bug in notes. A wake opens the gate first, since opening it last would let a sleeper arrive in between and never be seen, and then it has a few instructions left to run on a note whose sleeper is already awake. For a note inside an M that is nothing. For a note in the frame the sleeper just returned from, the wake is reading memory that is gone, and on the backend with a mutex in the note it is about to lock one that has been destroyed. A transient note counts the wakes inside it and a free waits for that count to reach nought.
+- Only transient notes count, because counting is not free. Two atomic additions on an otherwise untouched cache line took `note_cycle` from 11 to 23 nanoseconds pinned on an EPYC, which is not a price the scheduler should pay on every park, so the note says at init time which kind it is.
+- A thread on its way to sleep now takes its last look for work after joining the idle list rather than before it, which fixes a deadlock. The old order left a gap: a goroutine readied in it went onto the queue, the wakeup that followed found an idle P but an empty idle list, and was not allowed to make a new thread because there were already as many threads as there are Ps, so it put the P back and left, and then the thread that was going to sleep went to sleep. Every thread idle, one runnable goroutine, nothing to start it. Go never reaches this because Go makes another thread rather than giving up. Taking the look under the scheduler lock with the thread already on the list means the sleeper and the waker cannot both miss each other.
+- A host thread and a goroutine handing a value back and forth twenty thousand times is a test now. The old channel tests did the same thing fifty times, which found this deadlock roughly once in a working day on one machine and never on the others. Twenty thousand rounds found it nine runs out of thirty on a laptop.
+
+### Docs
+
+- `docs/guides/channels.md` is the page, including which of buffered and unbuffered you want and why that is a design question rather than a performance one.
+- `docs/design/06-runtime.md` section 5 now describes the channels that exist instead of the ones that were planned, and keeps the `select` half as a plan.
+- The README has a channels section.
+
 ## v0.0.13 (2026-09-19)
 
 The monitor thread, which Go calls sysmon. One thread that holds no P and therefore gets to look around while every other thread is busy, which is the only reason it exists.

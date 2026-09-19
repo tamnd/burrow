@@ -45,6 +45,21 @@ event, zero returns immediately, positive blocks for a duration — so waiting
 for goroutines and waiting for I/O are the same wait, with no dedicated poller
 thread and no wakeup latency.
 
+One step at the end of that search is not Go's, and it is there because burrow
+holds a thread count Go does not. A thread with nothing left to do gives up its
+P, takes one more look for work, and parks. Go can afford to take that look
+before joining the list of parked threads, because when something readies a
+goroutine and finds no parked thread to hand the idle P to, Go simply makes
+another thread. burrow will not: there are as many threads as there are Ps and
+no more, so the waker has nothing to do but put the P back and leave, and it
+does that on the understanding that whichever thread is on its way to sleep will
+see the work first. A look taken before joining the list breaks that
+understanding, since work can arrive in the gap between the two. So the look is
+taken after, under the scheduler lock, with the thread already visible on the
+list, which leaves no order in which the sleeper and the waker miss each other.
+Getting it wrong is a program where every thread is asleep and one goroutine is
+runnable, and it takes tens of thousands of handoffs to see once.
+
 `sysmon` is a dedicated thread that wakes on a timer and looks for the things
 no running thread is in a position to notice: a P held by a thread that is
 stuck in a syscall, a goroutine that has been on a processor too long, a
@@ -96,6 +111,20 @@ every thread agrees on and in that order the sleeper cannot pass the waker. The
 count is a second word rather than spare bits in the flag because the flag is
 what a futex compares against, and a flag that changed every time somebody
 arrived would wake everybody already asleep for nothing.
+
+That ordering has a consequence that took a thread sanitizer to find. The waker
+has to set the flag before it reads the count, and setting the flag is what
+releases the sleeper, so every instruction of a wake after that store is running
+against a sleeper that is already awake. For a note inside an M, which lives as
+long as the thread does, that is nothing to think about. For a note in the stack
+frame of the thread that just woke up, the frame is gone, and on the backend
+with a mutex in the note the wake is about to lock one that has been destroyed.
+So a note says at init time which kind it is. `burrow__note_init_transient`
+makes one that counts the wakes inside it and whose free waits for that count to
+reach nought, and that is what anything blocking a host thread on a stack local
+asks for. The default does not count, because two atomic additions on an
+otherwise untouched cache line doubled the cost of a wake and a walk through the
+gate on an EPYC, and the scheduler's own notes cannot have the problem.
 
 This is the piece that section 6 below calls `sched_park` and `sched_ready`.
 Those two are the G-level operations and they park a goroutine, which needs Gs
@@ -415,15 +444,29 @@ guard machinery do this job.
 
 ## 5. Channels and `select`
 
+The channels half of this is built. `select` is not, and the second half of
+this section is still a plan.
+
 ```c
 Chan *chan_make(Alloc *a, const Type *elem, Int cap);
-bool     chan_send(Chan *c, const void *v);          /* false if closed */
-bool     chan_recv(Chan *c, void *out);              /* false if closed+drained */
-bool     chan_try_send(Chan *c, const void *v, bool *ok);
-void     chan_close(Chan *c);
-Int   chan_len(Chan *c);
-Int   chan_cap(Chan *c);
+void  chan_free(Chan *c);
+void  chan_send(Chan *c, const void *v);
+bool  chan_recv(Chan *c, void *out);             /* false if closed+drained */
+bool  chan_try_send(Chan *c, const void *v);
+bool  chan_try_recv(Chan *c, void *out, bool *ok);
+void  chan_close(Chan *c);
+Int   chan_len(const Chan *c);
+Int   chan_cap(const Chan *c);
+const Type *chan_elem(const Chan *c);
 ```
+
+Two things moved between this list and the sketch it replaces, and both are the
+same decision. `chan_send` returns nothing, because a send on a closed channel
+is a panic in Go and a `bool` return would have offered a caller the choice of
+ignoring it. `chan_try_send` loses its `ok` out-parameter for the same reason:
+there is only one thing it can report, which is whether it sent. The `ok` that
+matters is on the receiving side, where closed and empty is a real answer and
+has to be distinguishable from nothing happened.
 
 Go's exact semantics, which are more specific than "a queue with blocking" and
 all of which are test-observable:
@@ -440,6 +483,29 @@ all of which are test-observable:
   close happens before a receive that returns zero. These are the guarantees
   the Go memory model makes and they dictate the memory ordering on the
   fast paths (acquire/release, not relaxed).
+
+Two places where the implementation differs from Go's, both forced by burrow
+being a library rather than a whole program.
+
+A channel is freed. `chan_free` hands the header and the buffer back, which is
+one call because they are one allocation, and freeing a channel that goroutines
+are still blocked on stops the program rather than leaving a parked goroutine
+with a pointer into returned memory.
+
+A thread that is not running a goroutine can block on a channel. Go cannot be
+in that situation and so its `sudog` only ever holds a `g`; burrow's waiter
+holds either a goroutine or a note, and the wakeup path picks. A goroutine that
+blocks costs no thread, a host thread that blocks costs itself, and that is the
+only difference a caller can see. The note in that waiter is the reason
+`burrow__note_init_transient` exists, and section 1 above says why.
+
+One place where the implementation differs from Go's for a reason that is
+ours rather than Go's: the wait queues carry an atomic length. The non-blocking
+paths want to know whether anybody is waiting without taking the lock, Go reads
+`q.first` there unsynchronised and gets away with it because its race detector
+does not instrument the runtime, and ours is an ordinary library that a thread
+sanitizer looks at all of. One relaxed store on a path that already holds the
+lock buys a clean TSan run.
 
 **`select`** is the interesting one because Go's `select` is a statement and C
 has no statement to hook. The implementation is a case array plus a driver, and

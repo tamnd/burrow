@@ -66,6 +66,10 @@ typedef struct burrow__Note {
     /* How many threads are about to sleep or are asleep, which is what lets a
      * wake with nobody waiting stay out of the kernel. */
     uint32_t waiters;
+    /* How many threads are inside a wake right now, and whether anybody is
+     * counting. See burrow__note_init_transient. */
+    uint32_t wakers;
+    bool transient;
 } burrow__Note;
 
 #elif defined(BURROW_OS_LINUX)
@@ -79,6 +83,10 @@ typedef struct burrow__Note {
      * that changes every time somebody arrives would keep waking the ones who
      * are already there. */
     uint32_t waiters;
+    /* How many threads are inside a wake right now, and whether anybody is
+     * counting. See burrow__note_init_transient. */
+    uint32_t wakers;
+    bool transient;
 } burrow__Note;
 
 #else
@@ -89,6 +97,12 @@ typedef struct burrow__Note {
      * to. */
     uint32_t state;
     uint32_t waiters;
+    /* How many threads are inside a wake right now, and whether anybody is
+     * counting. See burrow__note_init_transient, which matters more here than
+     * anywhere else: a late wake on this backend would be taking a mutex that
+     * has already been destroyed. */
+    uint32_t wakers;
+    bool transient;
     pthread_mutex_t mu;
     pthread_cond_t cv;
 } burrow__Note;
@@ -105,9 +119,34 @@ typedef struct burrow__Note {
  * something on are the ones nobody is testing on. */
 bool burrow__note_init(burrow__Note *n);
 
+/* The same, for a note that may be freed the moment its sleeper wakes up.
+ *
+ * A wake does not let go of the note at the instant the sleeper is released. It
+ * opens the gate first, because opening it last would let a sleeper arrive in
+ * between and never be seen, and then it has a little more work to do on a note
+ * whose sleeper is already running. For a note inside a long lived structure
+ * that is nothing to think about. For a note in the stack frame of the thread
+ * that just woke up, the frame is gone.
+ *
+ * A note initialised this way keeps count of the wakes inside it, and a free
+ * waits for that count to reach nought. It costs two atomic additions on every
+ * wake, which is why it is a separate call rather than the default: the
+ * scheduler's own notes live as long as the thread does and should not pay for
+ * a problem they cannot have.
+ *
+ * Use this for a note that lives on a stack, and for anything holding a note
+ * that some other thread can free. Everything that blocks one thread on another
+ * and then returns wants it. */
+bool burrow__note_init_transient(burrow__Note *n);
+
 /* Releases whatever the note was holding. The note must not have a sleeper on
  * it, which is the caller's problem the same way it is with a pthread mutex:
- * freeing something a thread is asleep inside cannot be made safe here. */
+ * freeing something a thread is asleep inside cannot be made safe here.
+ *
+ * On a transient note this also waits for any wake still in flight to let go,
+ * which is what makes it safe to sleep on a local and free it on the next line.
+ * On any other note it does not, and freeing one while a wake is in flight is
+ * the same kind of bug as freeing one with a sleeper on it. */
 void burrow__note_free(burrow__Note *n);
 
 /* Closes the gate again so the note can be used for the next round.

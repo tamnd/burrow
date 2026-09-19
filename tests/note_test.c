@@ -310,6 +310,84 @@ TEST(two_threads_pass_a_turn_back_and_forth) {
     burrow__note_free(&to_worker);
 }
 
+/* -------------------------------------------------------- the transient note */
+
+/* A note that lives in a stack frame and is freed the instant the sleep on it
+ * returns, which is what a channel does with the waiter of a thread that is not
+ * a goroutine.
+ *
+ * A wake opens the gate first and then has a little more to do, and by then the
+ * sleeper is running again and the frame the note was in has been returned to
+ * whatever wants it next. On the backend with a mutex in the note, the wake is
+ * about to lock one that has been destroyed. That is what
+ * burrow__note_init_transient is for, and this is the test that fails without
+ * it.
+ *
+ * It does not fail by giving a wrong answer, which is worth saying because an
+ * ordinary run of it passes either way. Run it under a thread sanitiser and the
+ * unfixed version reports a race between the free and the wake inside a round or
+ * two, and under an address sanitiser with stack use after return turned on it
+ * reports that instead. Without a sanitiser it is still a liveness test, because
+ * a lost wakeup here hangs. */
+#define HANDOFFS 2000
+
+/* Plain rather than atomic, because the two gates below are what order it: it is
+ * written before the go gate is opened and read after the sleep on that gate has
+ * returned. */
+static burrow__Note *handoff_note;
+static burrow__Note handoff_go;
+static uint32_t handoffs_seen;
+static burrow__Thread handoff_thread;
+
+static void handoff_waker(void *arg) {
+    (void)arg;
+
+    for (int i = 0; i < HANDOFFS; i++) {
+        burrow__note_sleep(&handoff_go);
+        /* Closed before the reply goes out, so the next round's wake is not
+         * thrown away by a clear that arrives after it. */
+        burrow__note_clear(&handoff_go);
+
+        burrow__note_wake(handoff_note);
+        (void)burrow__atomic_add_u32(&handoffs_seen, 1);
+    }
+}
+
+/* One round, in its own frame so that the frame really does go away. */
+static bool one_handoff(void) {
+    burrow__Note n;
+
+    fill_with_rubbish(&n);
+
+    if (!burrow__note_init_transient(&n))
+        return false;
+
+    handoff_note = &n;
+    burrow__note_wake(&handoff_go);
+
+    burrow__note_sleep(&n);
+    burrow__note_free(&n);
+    return true;
+}
+
+TEST(a_note_on_a_stack_can_be_freed_the_moment_the_sleep_returns) {
+    CHECK(burrow__note_init(&handoff_go));
+    burrow__note_clear(&handoff_go);
+    handoffs_seen = 0;
+
+    CHECK(burrow__thread_start(&handoff_thread, handoff_waker, NULL, 0));
+
+    bool all = true;
+    for (int i = 0; i < HANDOFFS; i++)
+        all = one_handoff() && all;
+
+    CHECK(all);
+    CHECK(burrow__thread_join(&handoff_thread));
+    CHECK(burrow__atomic_load_u32(&handoffs_seen) == HANDOFFS);
+
+    burrow__note_free(&handoff_go);
+}
+
 /* ---------------------------------------------------------- the timed sleep */
 
 /* Half a millisecond, which is long enough that the measurement below is not
@@ -484,6 +562,7 @@ int main(void) {
     RUN(a_crowd_can_go_to_sleep_round_after_round);
     RUN(a_note_can_be_closed_again_and_used_for_the_next_round);
     RUN(two_threads_pass_a_turn_back_and_forth);
+    RUN(a_note_on_a_stack_can_be_freed_the_moment_the_sleep_returns);
     RUN(a_timed_sleep_on_an_open_note_returns_true_without_waiting);
     RUN(a_timed_sleep_with_no_time_left_is_a_poll);
     RUN(a_timed_sleep_that_nobody_wakes_times_out_and_says_so);

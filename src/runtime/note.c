@@ -37,6 +37,7 @@
 #include "burrow/atomic.h"
 #include "burrow/clock.h"
 #include "burrow/platform.h"
+#include "burrow/thread.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -89,6 +90,71 @@
  * times on the way in. A flag that only ever holds nought or one cannot do
  * that. */
 
+/* The waker count, which is the other half of the same idea and is there for a
+ * different reason.
+ *
+ * Read the argument above again and look at what it forces. The waker has to set
+ * the flag before it reads the count, or the two writes could both come after
+ * the two reads and a sleeper would be missed. So the flag is set first, and the
+ * flag is what releases the sleeper, which means every line of a wake after that
+ * store is running against a sleeper that is already awake and already gone. If
+ * the note was a local in the frame that sleeper just returned from, the wake is
+ * reading memory that is not there any more, and on the backend with a mutex in
+ * it the wake is about to lock something that has been destroyed.
+ *
+ * That is not theoretical and it is not rare. A channel puts its waiter on the
+ * stack of whoever is blocking, the way Go's sudog does, and the last thing the
+ * blocking side does is free the note and return. A thread sanitiser finds it in
+ * seconds.
+ *
+ * So a wake can join a count on the way in and leave it on the way out, and a
+ * free waits for that count to reach nought before it touches anything. The join
+ * is before the flag is set, so a free that sees nought can be sure no wake is
+ * holding the note and none is about to, because any wake that had not joined
+ * yet had not set the flag yet either, and a sleeper that has returned was
+ * released by a flag somebody had already set.
+ *
+ * Can rather than does, because it is not free. Two atomic additions on an
+ * otherwise untouched cache line took a wake and a walk through the gate from
+ * eleven nanoseconds to twenty three on an EPYC, which is not a price a
+ * scheduler should pay on every park. So a note says at init time whether it is
+ * the kind that can be freed out from under a wake, and only those count. The
+ * flag is read before the gate is opened, which is the last moment the note is
+ * certainly still there.
+ *
+ * Waiting in the free rather than leaving the last one out to turn off the
+ * lights is deliberate. A note that owns a kernel object has to give it back,
+ * and a rule about which thread does that is a rule nobody can follow from the
+ * outside. The wait is bounded by the rest of one wake, which is a store, a load
+ * and at most one system call. */
+
+/* Waits until no wake is holding the note. All three frees start with this, and
+ * on a note that is not transient it is one load that always finds nought. */
+static void note_drain_wakers(burrow__Note *n) {
+    for (int spins = 0; burrow__atomic_load_acquire_u32(&n->wakers) != 0; spins++) {
+        /* Spin first, because the thread being waited for is running and has a
+         * handful of instructions left. Yield after that, because on a machine
+         * with one core or an oversubscribed one it is holding a timeslice this
+         * thread could give it. */
+        if (spins < 64)
+            burrow__atomic_spin_hint();
+        else
+            burrow__thread_yield();
+    }
+}
+
+/* Shared by all three backends, because the only thing that differs is what the
+ * init underneath it had to ask the system for. */
+bool burrow__note_init_transient(burrow__Note *n) {
+    if (!burrow__note_init(n))
+        return false;
+
+    /* Written before the note is shared with anybody, and never written again,
+     * so a wake can read it without an atomic. */
+    n->transient = true;
+    return true;
+}
+
 #if defined(BURROW_OS_WINDOWS)
 
 /* ------------------------------------------------------------------ windows */
@@ -111,12 +177,18 @@
 bool burrow__note_init(burrow__Note *n) {
     n->state = 0;
     n->waiters = 0;
+    n->wakers = 0;
+    n->transient = false;
     /* No security attributes, manual reset, starts closed, no name. */
     n->event = (void *)CreateEventW(NULL, TRUE, FALSE, NULL);
     return n->event != NULL;
 }
 
 void burrow__note_free(burrow__Note *n) {
+    /* See the top of the file. A wake that has already released its sleeper may
+     * still be about to call SetEvent on this handle. */
+    note_drain_wakers(n);
+
     n->state = 0;
     n->waiters = 0;
 
@@ -134,6 +206,12 @@ void burrow__note_clear(burrow__Note *n) {
 }
 
 void burrow__note_wake(burrow__Note *n) {
+    /* Joined before the flag is set, so that a free cannot start taking the
+     * event apart underneath the lines below. See the top of the file. */
+    const bool pin = n->transient;
+    if (pin)
+        (void)burrow__atomic_add_u32(&n->wakers, 1);
+
     burrow__atomic_store_u32(&n->state, 1);
 
     /* Same argument as the other two backends, written out at the top of the
@@ -141,6 +219,9 @@ void burrow__note_wake(burrow__Note *n) {
      * flag, so a count of nothing here means nothing is in the kernel. */
     if (burrow__atomic_load_u32(&n->waiters) != 0)
         (void)SetEvent((HANDLE)n->event);
+
+    if (pin)
+        (void)burrow__atomic_add_u32(&n->wakers, 0U - 1U);
 }
 
 void burrow__note_sleep(burrow__Note *n) {
@@ -299,14 +380,20 @@ static void futex_wake_all(uint32_t *addr) {
 bool burrow__note_init(burrow__Note *n) {
     n->state = 0;
     n->waiters = 0;
+    n->wakers = 0;
+    n->transient = false;
     return true;
 }
 
 void burrow__note_free(burrow__Note *n) {
-    /* Nothing was ever allocated. The stores are here so that a use after free
-     * finds a closed gate with nobody at it and hangs where a debugger can see
-     * it, rather than finding whatever the memory is reused for and carrying
-     * on. */
+    /* Nothing was ever allocated, but a wake that has already released its
+     * sleeper may still be reading these words, and on this backend it may be
+     * about to hand their address to the kernel. See the top of the file. */
+    note_drain_wakers(n);
+
+    /* The stores are here so that a use after free finds a closed gate with
+     * nobody at it and hangs where a debugger can see it, rather than finding
+     * whatever the memory is reused for and carrying on. */
     n->state = 0;
     n->waiters = 0;
 }
@@ -316,12 +403,21 @@ void burrow__note_clear(burrow__Note *n) {
 }
 
 void burrow__note_wake(burrow__Note *n) {
+    /* Joined before the flag is set, so that a free cannot run to completion
+     * underneath the lines below. See the top of the file. */
+    const bool pin = n->transient;
+    if (pin)
+        (void)burrow__atomic_add_u32(&n->wakers, 1);
+
     burrow__atomic_store_u32(&n->state, 1);
 
     /* Only if somebody said they were going to sleep. See the top of the file
      * for why reading the count here cannot miss a sleeper on its way in. */
     if (burrow__atomic_load_u32(&n->waiters) != 0)
         futex_wake_all(&n->state);
+
+    if (pin)
+        (void)burrow__atomic_add_u32(&n->wakers, 0U - 1U);
 }
 
 void burrow__note_sleep(burrow__Note *n) {
@@ -413,6 +509,8 @@ bool burrow__note_is_open(const burrow__Note *n) {
 bool burrow__note_init(burrow__Note *n) {
     n->state = 0;
     n->waiters = 0;
+    n->wakers = 0;
+    n->transient = false;
 
     if (pthread_mutex_init(&n->mu, NULL) != 0)
         return false;
@@ -447,6 +545,13 @@ bool burrow__note_init(burrow__Note *n) {
 }
 
 void burrow__note_free(burrow__Note *n) {
+    /* This is the backend the waker count matters most on. A wake that has
+     * already released its sleeper may still be on its way to taking this mutex,
+     * and destroying a mutex somebody is about to lock is not a race that ends
+     * in a wrong answer, it is one that ends in a crash. See the top of the
+     * file. */
+    note_drain_wakers(n);
+
     (void)pthread_cond_destroy(&n->cv);
     (void)pthread_mutex_destroy(&n->mu);
     n->state = 0;
@@ -458,6 +563,12 @@ void burrow__note_clear(burrow__Note *n) {
 }
 
 void burrow__note_wake(burrow__Note *n) {
+    /* Joined before the flag is set, so that a free cannot destroy the mutex
+     * underneath the lines below. See the top of the file. */
+    const bool pin = n->transient;
+    if (pin)
+        (void)burrow__atomic_add_u32(&n->wakers, 1);
+
     burrow__atomic_store_u32(&n->state, 1);
 
     /* Nobody sleeping means nothing to do, and in particular no mutex to take.
@@ -468,15 +579,17 @@ void burrow__note_wake(burrow__Note *n) {
      * below is still inside it. This only skips the case where there is nothing
      * to signal, and taking a lock in order to shout into an empty room is the
      * cost being removed. */
-    if (burrow__atomic_load_u32(&n->waiters) == 0)
-        return;
+    if (burrow__atomic_load_u32(&n->waiters) != 0) {
+        (void)pthread_mutex_lock(&n->mu);
+        /* Broadcast rather than signal, because a note releases everybody.
+         * Signal here would leave every sleeper but one waiting for a second
+         * wake that is never coming. */
+        (void)pthread_cond_broadcast(&n->cv);
+        (void)pthread_mutex_unlock(&n->mu);
+    }
 
-    (void)pthread_mutex_lock(&n->mu);
-    /* Broadcast rather than signal, because a note releases everybody. Signal
-     * here would leave every sleeper but one waiting for a second wake that is
-     * never coming. */
-    (void)pthread_cond_broadcast(&n->cv);
-    (void)pthread_mutex_unlock(&n->mu);
+    if (pin)
+        (void)burrow__atomic_add_u32(&n->wakers, 0U - 1U);
 }
 
 void burrow__note_sleep(burrow__Note *n) {

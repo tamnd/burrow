@@ -444,8 +444,8 @@ guard machinery do this job.
 
 ## 5. Channels and `select`
 
-The channels half of this is built. `select` is not, and the second half of
-this section is still a plan.
+Both halves are built. What is still a plan is the `BURROW_SELECT` block at the
+end of this section, which is sugar over what exists.
 
 ```c
 Chan *chan_make(Alloc *a, const Type *elem, Int cap);
@@ -458,6 +458,7 @@ void  chan_close(Chan *c);
 Int   chan_len(const Chan *c);
 Int   chan_cap(const Chan *c);
 const Type *chan_elem(const Chan *c);
+Int   chan_select(SelectCase *cases, Int n);     /* index of the arm that ran */
 ```
 
 Two things moved between this list and the sketch it replaces, and both are the
@@ -537,11 +538,41 @@ BURROW_SELECT {
 ```
 
 `BURROW_SELECT` expands to the array-plus-switch form; there is no hidden
-allocation and no `setjmp`. Fairness matters and is copied exactly: when
-multiple cases are ready, one is chosen **uniformly at random**, using the
-per-P fast RNG, because Go does this and Go programs (and tests) depend on the
-absence of starvation. The poll order and lock order across the case set follow
-Go's channel-address ordering to avoid deadlock.
+allocation and no `setjmp`. It is the one part of this section that is still a
+plan, and it is waiting on `time_after`, because a select sugar without a
+timeout arm is sugar nobody reaches for.
+
+Fairness matters and is copied exactly: when multiple cases are ready, one is
+chosen **uniformly at random**, using the per-P fast RNG, because Go does this
+and Go programs (and tests) depend on the absence of starvation. The poll order
+and lock order across the case set follow Go's channel-address ordering to
+avoid deadlock. Go sorts a scratch array to get that order; burrow walks the
+case list for the lowest address above the last one it locked, which is
+quadratic in the number of arms, needs no storage, and folds duplicate channels
+into one lock for free. The array is sixteen arms before it allocates and real
+selects are three.
+
+Two deviations from Go are worth naming, and both come from the same place:
+burrow keeps the per-arm wait records in the calling goroutine's stack frame,
+as it does for a plain send or receive, while Go pools them.
+
+The first is that `chan_select` is where the runtime's only stack-frame
+handover lives. `sched_park` marks the goroutine as waiting and then calls the
+unlock callback from the scheduler's stack, and that callback walks the case
+list, which is in the goroutine's frame. The instant it unlocks the first
+channel, a claim on any arm can make the goroutine runnable and another thread
+can be executing that frame while the callback is still reading it. So the
+select and its claimer swap values into one state word, and whichever of them
+finds the word untouched is the one that waits: a claim that lands mid-unlock
+records itself and returns without a wakeup, and the unlock finds the record
+and skips the sleep. Go needs none of this because a pooled record outlives the
+frame. One atomic swap per wait against one allocation per wait is the right
+side of that trade.
+
+The second is smaller. Whether a waiter is a goroutine or a host thread is
+already a per-waiter question here, and a select adds nothing to it: one record
+per select, one queue entry per arm, all pointing at the same sleeper, and the
+sleeper knows which kind it is.
 
 ## 6. `defer`, `panic`, `recover`
 

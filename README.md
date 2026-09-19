@@ -332,7 +332,26 @@ The rules that stop the program are Go's, exactly: send on closed, close of clos
 
 One thing Go has no equivalent of: a host thread that is not running a goroutine can block on a channel, because burrow is a library inside somebody else's program and that program has its own threads. It costs the thread, which a goroutine parking does not.
 
-`chan_select` is not here yet. It is next.
+`chan_select` is Go's `select`, under a longer name because POSIX has the short one. You describe the arms and it tells you which one ran.
+
+```c
+Int job;
+Str msg;
+
+SelectCase cases[] = {
+    BURROW_RECV(work, &job),
+    BURROW_RECV(control, &msg),
+    BURROW_DEFAULT,
+};
+
+switch (chan_select(cases, 3)) {
+case 0: do_the_job(job); break;
+case 1: obey(msg); break;
+case 2: nothing_ready(); break;
+}
+```
+
+No default arm means it waits. A default arm means it never waits. When more than one arm is ready the winner is picked uniformly at random, so a busy channel cannot starve a quiet one, and an arm on a `NULL` channel never fires, which is how a loop stops listening to a channel that has closed. Sixteen arms fit in your own stack frame with no allocation, and the locks are taken in channel address order so two selects listing the same channels the other way round cannot deadlock.
 
 Details: [docs/guides/channels.md](docs/guides/channels.md).
 

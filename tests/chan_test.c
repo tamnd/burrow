@@ -700,22 +700,18 @@ TEST(a_goroutine_can_hand_a_value_to_a_thread_that_is_not_one) {
  * Far fewer under a thread sanitizer, and that is a limit of the sanitizer
  * rather than a choice. burrow deliberately does not tell it about goroutine
  * switches, which include/burrow/context.h explains, so the sanitizer's idea of
- * the call stack grows by a frame every time a goroutine parks and never
- * shrinks. Twenty thousand parks runs it off the end of that stack and the
- * process dies inside the sanitizer with nothing to do with this code. Two
- * hundred is enough to exercise every path here, which is what a sanitizer run
- * is for, and the ordinary build is where the count does its real job. */
-
-#if defined(__SANITIZE_THREAD__)
-#define ROUNDS 200
-#elif defined(__has_feature)
-#if __has_feature(thread_sanitizer)
-#define ROUNDS 200
-#endif
-#endif
+ * the call stack drifts every time a goroutine parks on one thread and carries
+ * on somewhere else. Twenty thousand parks drifts it off the end and the process
+ * dies inside the sanitizer with nothing to do with this code. Two hundred is
+ * enough to exercise every path here, which is what a sanitizer run is for, and
+ * the ordinary build is where the count does its real job. */
 
 #ifndef ROUNDS
+#if BURROW_TSAN
+#define ROUNDS 200
+#else
 #define ROUNDS 20000
+#endif
 #endif
 
 static Chan *pong;

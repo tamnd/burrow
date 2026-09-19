@@ -46,7 +46,7 @@
 #include <stdint.h>
 #include <string.h>
 
-/* ------------------------------------------------------------- the waiter
+/* ------------------------------------------------------------- the sleeper
  *
  * A goroutine, or a thread, blocked on a channel.
  *
@@ -57,18 +57,93 @@
  * and costs itself. Go cannot be in the second situation and therefore has only
  * the first half of this.
  *
- * `sendp` and `recvp` are one field in Go and two here, because a sender offers
- * a const pointer and a receiver hands out a mutable one, and casting the const
- * away to store them in one field is the sort of thing that is fine until
- * somebody writes through the wrong one. Exactly one of the two is set. */
-typedef struct Waiter Waiter;
-struct Waiter {
+ * This is one struct and the entry on a channel's queue is another, which looks
+ * like one struct too many until select turns up. A select is one sleeper with
+ * a queue entry on every channel it is waiting on, and only one of those
+ * entries may complete it. Keeping who is asleep apart from what is queued is
+ * what makes that one decision rather than several. */
+typedef struct Parked {
     /* The goroutine, or NULL for a thread that is not running one. */
     Goroutine *g;
 
     /* The gate a thread waits on, used only when g is NULL. */
     burrow__Note note;
     bool has_note;
+
+    /* Select only, and the reason select needs anything beyond a queue entry.
+     *
+     * `claimed` goes from zero to one exactly once, by a compare and swap taken
+     * by whoever pops one of this select's entries with that channel's lock
+     * held. Winning it is what owning the select means. Losing it means another
+     * channel got there first, so the entry that was just popped is a leftover
+     * and the search moves on to the next one.
+     *
+     * It cannot be a per channel decision, because the whole point is that the
+     * decision is shared across every channel the select is on, and the locks
+     * are per channel. Go keeps the same flag on the g and uses it the same
+     * way. */
+    bool is_select;
+    uint32_t claimed;
+
+    /* Select only again, and the other half of what select needs.
+     *
+     * A plain send or receive hands park one channel to unlock and park
+     * dereferences nothing else. A select hands it a list, and that list is a
+     * local in the frame of the goroutine that is parking. Park runs the unlock
+     * on the scheduler's own stack, after the goroutine is marked waiting, and
+     * the moment the first channel in that list comes unlocked somebody may
+     * claim this select and start the goroutine running again. Then two threads
+     * are reading the same frame: one finishing the unlock and one running the
+     * goroutine that owns it.
+     *
+     * So the wake is held back until the unlock says it is finished. Each side
+     * swaps in its own answer and reads back what the other one left, which
+     * means exactly one of them finds PARKING and that one is the loser of the
+     * race:
+     *
+     *   PARKING  nobody has decided yet, which is where it starts
+     *   PARKED   the unlock finished first, so a claim wakes the sleeper
+     *   WOKEN    a claim landed first, so the sleeper does not park at all and
+     *            carries straight on
+     *
+     * A swap and not a compare and swap, because this word is what hands the
+     * frame from one thread to the other and a swap is a read and a write
+     * whichever way it goes. A compare and swap that fails is only a read, and
+     * a read that fails to be a release leaves the unlock's own reads with
+     * nothing ordering them against whatever the woken goroutine does next.
+     * That is a real race and a thread sanitizer says so.
+     *
+     * Go has no version of this because a Go sudog comes from a pool rather
+     * than a stack, so the list Go's unlock walks stays valid whatever the
+     * goroutine does next. Trading an allocation per wait for a compare and
+     * swap per wait is the right way round. */
+    uint32_t state;
+
+    /* Which case the winner completed, written under the claim and read by the
+     * sleeper once it wakes. */
+    Int won;
+} Parked;
+
+#define PARK_PARKING 0u
+#define PARK_PARKED 1u
+#define PARK_WOKEN 2u
+
+/* ------------------------------------------------------------- the waiter
+ *
+ * One entry on one channel's queue. A plain send or receive has one of these
+ * and a select has one per case, and they all point at the same sleeper.
+ *
+ * `sendp` and `recvp` are one field in Go and two here, because a sender offers
+ * a const pointer and a receiver hands out a mutable one, and casting the const
+ * away to store them in one field is the sort of thing that is fine until
+ * somebody writes through the wrong one. Exactly one of the two is set. */
+typedef struct Waiter Waiter;
+struct Waiter {
+    /* Who to start again, and never NULL. */
+    Parked *p;
+
+    /* Which case this entry is, for a select. Ignored otherwise. */
+    Int caseidx;
 
     /* Where the value comes from, for a sender. */
     const void *sendp;
@@ -88,16 +163,20 @@ struct Waiter {
 };
 
 /* A queue of them, in arrival order, because Go wakes waiters first in first
- * out and programs are written expecting that. Doubly linked because select
- * has to take a waiter out of the middle when another of its cases wins, and
- * that is one PR away.
+ * out and programs are written expecting that. Doubly linked because a select
+ * has to take its losing entries out of the middle of queues when one of its
+ * cases wins.
  *
  * `n` is the length, kept because the non-blocking paths want to know whether
  * anybody is waiting without taking the lock. Go reads `q.first` there instead
  * and gets away with it because its race detector does not look at the runtime.
  * Ours is an ordinary library and a thread sanitizer looks at all of it, so the
  * unlocked question is asked of a word that is written atomically. It costs one
- * relaxed store on a path that already holds a lock. */
+ * relaxed store on a path that already holds a lock.
+ *
+ * With select in the picture `n` can count entries that are leftovers, so a yes
+ * from it is now only a reason to go and look properly under the lock. That was
+ * already all anybody did with it. */
 typedef struct Waitq {
     Waiter *first;
     Waiter *last;
@@ -121,21 +200,66 @@ static void waitq_push(Waitq *q, Waiter *w) {
     burrow__atomic_store_u32(&q->n, q->n + 1);
 }
 
-static Waiter *waitq_pop(Waitq *q) {
-    Waiter *w = q->first;
-    if (w == NULL)
-        return NULL;
-
-    q->first = w->next;
-    if (q->first != NULL)
-        q->first->prev = NULL;
+static void waitq_unlink(Waitq *q, Waiter *w) {
+    if (w->prev != NULL)
+        w->prev->next = w->next;
     else
-        q->last = NULL;
-    burrow__atomic_store_u32(&q->n, q->n - 1);
+        q->first = w->next;
+
+    if (w->next != NULL)
+        w->next->prev = w->prev;
+    else
+        q->last = w->prev;
 
     w->next = NULL;
     w->prev = NULL;
-    return w;
+    burrow__atomic_store_u32(&q->n, q->n - 1);
+}
+
+/* Takes the first entry that is still there to be taken, with the lock held.
+ *
+ * Coming off the queue is not the same as being owned once select exists, so
+ * the compare and swap is the real answer and the unlink is bookkeeping. Losing
+ * the swap means some other channel completed that select already and this
+ * entry is a leftover, so it stays off the queue and the search carries on.
+ * Dropping it here rather than leaving it is deliberate: the select will come
+ * along and unlink its own entries when it wakes, and whichever of the two gets
+ * there first, the other finds it already gone.
+ *
+ * The winner writes down which case it is completing, here rather than in each
+ * of the five callers, because here is where the claim is and the two belong
+ * together. A plain send or receive skips the atomic entirely, which is what
+ * the flag is for. */
+static Waiter *waitq_pop(Waitq *q) {
+    for (;;) {
+        Waiter *w = q->first;
+        if (w == NULL)
+            return NULL;
+
+        waitq_unlink(q, w);
+
+        if (!w->p->is_select)
+            return w;
+
+        uint32_t unclaimed = 0;
+        if (burrow__atomic_cas_u32(&w->p->claimed, &unclaimed, 1)) {
+            w->p->won = w->caseidx;
+            return w;
+        }
+    }
+}
+
+/* Takes one particular entry off, if it is still on, with the lock held.
+ *
+ * The first test is the one that needs explaining. An entry with no neighbours
+ * is either the only thing on the queue or something a pop already dropped, and
+ * those two look identical from the entry. The queue's own head is what tells
+ * them apart. */
+static void waitq_remove(Waitq *q, Waiter *w) {
+    if (w->prev == NULL && w->next == NULL && q->first != w)
+        return;
+
+    waitq_unlink(q, w);
 }
 
 /* ------------------------------------------------------------- the channel */
@@ -175,6 +299,73 @@ static uint8_t *slot(Chan *c, uint32_t i) {
     return c->buf + (size_t)i * (size_t)c->elemsize;
 }
 
+/* ------------------------------------------------------- moving one value
+ *
+ * The four ways a value crosses a channel, each with the lock held and none of
+ * them deciding anything. The deciding is done by the callers, and there are
+ * three of those now that select is one of them, which is why these are
+ * functions rather than the straight line they used to be.
+ *
+ * The two that take a waiter mark it done. None of them wake anybody, because
+ * waking happens with the lock down and these are called with it up. */
+
+/* Straight into a waiting receiver's variable. This is what makes an unbuffered
+ * channel a handoff rather than a queue of one, and what keeps a buffered
+ * channel that is empty from touching its buffer at all. */
+static void give_to_receiver(Chan *c, Waiter *w, const void *v) {
+    if (w->recvp != NULL)
+        type_copy(c->elem, w->recvp, v);
+    w->success = true;
+}
+
+/* Out of a waiting sender.
+ *
+ * On an unbuffered channel that is the sender's own variable going straight
+ * into the receiver's. On a buffered one the buffer is full, which is the only
+ * way a sender is waiting on one, so the value that comes out is the one at the
+ * head and the sender's goes in at the tail. Head and tail are the same slot
+ * when the buffer is full, so that is one slot read and then written, and the
+ * two indices move together. */
+static void take_from_sender(Chan *c, Waiter *w, void *out) {
+    if (c->dataqsiz == 0) {
+        if (out != NULL)
+            type_copy(c->elem, out, w->sendp);
+    } else {
+        uint8_t *qp = slot(c, c->recvx);
+        if (out != NULL)
+            type_copy(c->elem, out, qp);
+        type_copy(c->elem, qp, w->sendp);
+
+        c->recvx++;
+        if (c->recvx == c->dataqsiz)
+            c->recvx = 0;
+        c->sendx = c->recvx;
+    }
+    w->success = true;
+}
+
+/* Into the tail of the buffer, which the caller has checked has room. */
+static void put_in_buffer(Chan *c, const void *v) {
+    type_copy(c->elem, slot(c, c->sendx), v);
+    c->sendx++;
+    if (c->sendx == c->dataqsiz)
+        c->sendx = 0;
+    burrow__atomic_store_u32(&c->qcount, c->qcount + 1);
+}
+
+/* Out of the head of the buffer, which the caller has checked is not empty. */
+static void take_from_buffer(Chan *c, void *out) {
+    uint8_t *qp = slot(c, c->recvx);
+    if (out != NULL)
+        type_copy(c->elem, out, qp);
+    type_zero(c->elem, qp);
+
+    c->recvx++;
+    if (c->recvx == c->dataqsiz)
+        c->recvx = 0;
+    burrow__atomic_store_u32(&c->qcount, c->qcount - 1);
+}
+
 /* ------------------------------------------------------------- blocking
  *
  * The two ways to stop, and the two ways to be started again.
@@ -196,49 +387,87 @@ static bool unlock_chan(Goroutine *g, void *p) {
     return true;
 }
 
-/* Sets `w` up to block, with the channel lock held.
+/* Sets a sleeper up, with the channel lock held.
  *
  * False means this thread cannot block here, which happens when it is not
  * running a goroutine and a note could not be allocated. That is an out of
  * memory condition on a path with nothing useful to do about it, so the caller
  * stops the program rather than returning a channel operation that silently
  * did not happen. */
-static bool waiter_init(Waiter *w) {
-    memset(w, 0, sizeof(*w));
+static bool parked_init(Parked *p) {
+    memset(p, 0, sizeof(*p));
 
-    w->g = sched_current();
-    if (w->g != NULL)
+    p->g = sched_current();
+    if (p->g != NULL)
         return true;
 
     /* Transient, because this note is a local in the frame of whoever is about
      * to block and it is freed the moment the sleep returns. See the waker count
      * in src/runtime/note.c for what that costs and why it is asked for. */
-    w->has_note = burrow__note_init_transient(&w->note);
-    return w->has_note;
+    p->has_note = burrow__note_init_transient(&p->note);
+    return p->has_note;
 }
 
-/* Blocks until somebody completes the operation. The channel lock is held on
- * the way in and is not held on the way out. */
-static void waiter_block(Waiter *w, Chan *c) {
-    if (w->g != NULL) {
-        sched_park(unlock_chan, c);
+/* Says the unlock is finished and nobody is reading the sleeper's frame any
+ * more, so a claim may start it again. Answers false if a claim already landed,
+ * which means do not go to sleep at all.
+ *
+ * Called from inside the unlock callback, which is the last thing that touches
+ * the frame before the sleeper stops being the only one who can. */
+static bool parked_commit(Parked *p) {
+    if (!p->is_select)
+        return true;
+
+    return burrow__atomic_swap_u32(&p->state, PARK_PARKED) == PARK_PARKING;
+}
+
+/* Blocks until somebody completes the operation. Whatever locks are held on the
+ * way in are dropped by `unlockf` and are not held on the way out. */
+static void parked_sleep(Parked *p, SchedUnlockFn unlockf, void *arg) {
+    if (p->g != NULL) {
+        sched_park(unlockf, arg);
         return;
     }
 
-    burrow__unlock(&c->lock);
-    burrow__note_sleep(&w->note);
-    burrow__note_free(&w->note);
+    /* A thread has no window to close, because the gate it sleeps on is allowed
+     * to be opened before anybody is standing at it. So it unlocks out in the
+     * open, and a wake that lands in between leaves the gate open and the sleep
+     * returns at once. The callback is the same one a goroutine would hand to
+     * park, and it gets a NULL goroutine because there is not one.
+     *
+     * A false from it means a claim landed while the unlock was still going, in
+     * which case nobody opened the gate and nobody is going to, so there is
+     * nothing here to wait for. */
+    if (!unlockf(NULL, arg))
+        return;
+
+    burrow__note_sleep(&p->note);
 }
 
-/* Starts `w` again. The channel lock must already be released, and `w` must not
+/* Gives back whatever the sleep needed. Call it once the sleeper can no longer
+ * be reached from any queue, which for a plain send or receive is the moment
+ * the sleep returns and for a select is after it has unlinked its entries. */
+static void parked_done(Parked *p) {
+    if (p->has_note)
+        burrow__note_free(&p->note);
+}
+
+/* Starts a sleeper again. No channel lock may be held, and the sleeper must not
  * be touched after this: the goroutine it belongs to may be running by the time
- * this returns, and the stack frame the waiter lives in may be gone. */
-static void waiter_wake(Waiter *w) {
-    if (w->g != NULL) {
-        sched_ready(w->g);
+ * this returns, and the stack frame it lives in may be gone. */
+static void parked_wake(Parked *p) {
+    /* A select that has not committed yet is still using its own frame to
+     * unlock the channels it locked, so it cannot be started here. The claim is
+     * already recorded, so leaving a note that says so is enough: the commit
+     * fails, the sleeper skips the sleep and reads the claim out for itself. */
+    if (p->is_select && burrow__atomic_swap_u32(&p->state, PARK_WOKEN) == PARK_PARKING)
+        return;
+
+    if (p->g != NULL) {
+        sched_ready(p->g);
         return;
     }
-    burrow__note_wake(&w->note);
+    burrow__note_wake(&p->note);
 }
 
 /* A send or a receive on a NULL channel, which Go says blocks forever.
@@ -354,29 +583,20 @@ static bool chan_send_impl(Chan *c, const void *v, bool block) {
         runtime_throw(BURROW_S("send on closed channel"));
     }
 
-    /* 1. Somebody is waiting for exactly this. Straight into their variable,
-     *    which is what makes an unbuffered channel a handoff rather than a
-     *    queue of one, and what keeps a buffered channel that is empty from
-     *    touching its buffer. */
+    /* 1. Somebody is waiting for exactly this. */
     Waiter *w = waitq_pop(&c->recvq);
     if (w != NULL) {
-        if (w->recvp != NULL)
-            type_copy(c->elem, w->recvp, v);
-        w->success = true;
+        give_to_receiver(c, w, v);
+        Parked *p = w->p;
 
         burrow__unlock(&c->lock);
-        waiter_wake(w);
+        parked_wake(p);
         return true;
     }
 
     /* 2. Room in the buffer. */
     if (c->qcount < c->dataqsiz) {
-        type_copy(c->elem, slot(c, c->sendx), v);
-        c->sendx++;
-        if (c->sendx == c->dataqsiz)
-            c->sendx = 0;
-        burrow__atomic_store_u32(&c->qcount, c->qcount + 1);
-
+        put_in_buffer(c, v);
         burrow__unlock(&c->lock);
         return true;
     }
@@ -389,15 +609,20 @@ static bool chan_send_impl(Chan *c, const void *v, bool block) {
     /* 3. Wait, holding out a pointer to the value rather than a copy of it. The
      *    receiver that eventually arrives copies from there, so a send of a
      *    large struct across a full channel still copies it exactly once. */
-    Waiter w2;
-    if (!waiter_init(&w2)) {
+    Parked p;
+    if (!parked_init(&p)) {
         burrow__unlock(&c->lock);
         runtime_throw(BURROW_S("chan_send: out of memory"));
     }
+
+    Waiter w2;
+    memset(&w2, 0, sizeof(w2));
+    w2.p = &p;
     w2.sendp = v;
     waitq_push(&c->sendq, &w2);
 
-    waiter_block(&w2, c);
+    parked_sleep(&p, unlock_chan, c);
+    parked_done(&p);
 
     /* Woken. Either the value went somewhere or the channel closed under us,
      * and the second one is a program that is already wrong. */
@@ -449,29 +674,11 @@ static bool chan_recv_impl(Chan *c, void *out, bool *ok, bool block) {
      *    holding the value and on a buffered one means the buffer is full. */
     Waiter *w = waitq_pop(&c->sendq);
     if (w != NULL) {
-        if (c->dataqsiz == 0) {
-            if (out != NULL)
-                type_copy(c->elem, out, w->sendp);
-        } else {
-            /* The wrinkle. The buffer is full, so the value that comes out is
-             * the one at the head and not the one the sender is holding, and
-             * the sender's goes in at the tail. Head and tail are the same slot
-             * when the buffer is full, so this is one slot read and then
-             * written, and the two indices move together. */
-            uint8_t *qp = slot(c, c->recvx);
-            if (out != NULL)
-                type_copy(c->elem, out, qp);
-            type_copy(c->elem, qp, w->sendp);
-
-            c->recvx++;
-            if (c->recvx == c->dataqsiz)
-                c->recvx = 0;
-            c->sendx = c->recvx;
-        }
-        w->success = true;
+        take_from_sender(c, w, out);
+        Parked *p = w->p;
 
         burrow__unlock(&c->lock);
-        waiter_wake(w);
+        parked_wake(p);
 
         if (ok != NULL)
             *ok = true;
@@ -480,15 +687,7 @@ static bool chan_recv_impl(Chan *c, void *out, bool *ok, bool block) {
 
     /* 2. Something in the buffer. */
     if (c->qcount > 0) {
-        uint8_t *qp = slot(c, c->recvx);
-        if (out != NULL)
-            type_copy(c->elem, out, qp);
-        type_zero(c->elem, qp);
-
-        c->recvx++;
-        if (c->recvx == c->dataqsiz)
-            c->recvx = 0;
-        burrow__atomic_store_u32(&c->qcount, c->qcount - 1);
+        take_from_buffer(c, out);
 
         burrow__unlock(&c->lock);
         if (ok != NULL)
@@ -512,15 +711,20 @@ static bool chan_recv_impl(Chan *c, void *out, bool *ok, bool block) {
         return false;
     }
 
-    Waiter w2;
-    if (!waiter_init(&w2)) {
+    Parked p;
+    if (!parked_init(&p)) {
         burrow__unlock(&c->lock);
         runtime_throw(BURROW_S("chan_recv: out of memory"));
     }
+
+    Waiter w2;
+    memset(&w2, 0, sizeof(w2));
+    w2.p = &p;
     w2.recvp = out;
     waitq_push(&c->recvq, &w2);
 
-    waiter_block(&w2, c);
+    parked_sleep(&p, unlock_chan, c);
+    parked_done(&p);
 
     /* Woken. A sender filled `out` directly, or close zeroed it. */
     if (ok != NULL)
@@ -587,10 +791,391 @@ void chan_close(Chan *c) {
     burrow__unlock(&c->lock);
 
     while (woken != NULL) {
+        /* Read before the wake and not after, because by the time the wake
+         * returns the frame this entry lives in may be gone. */
         Waiter *next = woken->next;
-        waiter_wake(woken);
+        parked_wake(woken->p);
         woken = next;
     }
+}
+
+/* ------------------------------------------------------------------ select
+ *
+ * Go's runtime/select.go, in three passes and with the same order of events.
+ *
+ *   1. Lock every channel in the case list. Walk the cases in a random order
+ *      looking for one that can run now, and run the first one found.
+ *   2. Nothing could run, and there is no default. Put an entry on every
+ *      channel's queue and go to sleep on all of them at once.
+ *   3. Woken. Exactly one case completed. Take the other entries off the queues
+ *      they are still on and report which case it was.
+ *
+ * Two things here are not obvious and both are load bearing.
+ *
+ * The order the cases are visited in is random, and it has to be a shuffled
+ * order rather than a count of what is ready followed by a pick. Finding out
+ * whether a case can run means taking a waiter off a queue and claiming it, and
+ * a claim cannot be taken back. So the choice is made before the looking, by
+ * shuffling, and then the first case that can run is the one that runs. That
+ * comes out uniform over whichever cases turned out to be ready, which is what
+ * Go promises and what stops a loop with a fast channel and a slow one in it
+ * from starving the slow one.
+ *
+ * The order the channels are locked in is increasing address. It cannot be the
+ * case order, because two selects listing the same two channels the other way
+ * round would take one each and wait for the other forever. Address order is
+ * something every select in the program agrees on without any of them having to
+ * coordinate. Go sorts a list of the channels to walk in that order. This walks
+ * the case list once per lock taken instead, which needs no list, skips a
+ * channel that appears in several cases for free, and costs a handful of
+ * comparisons on a case count that is almost always under five. */
+
+/* How many cases fit in the frame of the call. See the note on chan_select in
+ * burrow/chan.h for why there is a number here at all. */
+#define SELECT_SMALL 16
+
+/* Go's limit, and the same one, because the case index has to fit somewhere and
+ * a select with more arms than this is a program that wanted a different
+ * shape. */
+#define SELECT_MAX 65536
+
+typedef struct Select {
+    SelectCase *cases;
+    Int n;
+
+    /* A random permutation of 0 through n, the order to visit the cases in. */
+    const uint32_t *order;
+
+    /* One entry per case, used only if the select has to wait. Indexed by case
+     * number, including the cases that never get one, because an index that
+     * lines up with the case list is worth more than the few unused structs. */
+    Waiter *waiters;
+
+    /* The sleeper every one of those entries points at. */
+    Parked p;
+
+    /* Carried out of the first pass rather than acted on where it happens.
+     *
+     * A waiter whose operation this select completed has to be started again
+     * with no channel lock held, and a send that found its channel closed has
+     * to bring the locks down before it brings the program down. Both of those
+     * are decided under the locks and done above them. */
+    Parked *wake;
+    bool send_on_closed;
+} Select;
+
+/* The next channel to lock after `after`, or NULL when there are none left.
+ *
+ * Addresses go through uintptr_t because comparing two pointers that are not
+ * into the same object with < is not something C defines, and comparing the
+ * integers is. Zero is not a channel, so it works as the starting point. */
+static Chan *next_chan(const SelectCase *cases, Int n, uintptr_t after) {
+    Chan *best = NULL;
+
+    for (Int i = 0; i < n; i++) {
+        Chan *c = cases[i].c;
+        if (c == NULL || cases[i].op == SELECT_DEFAULT)
+            continue;
+
+        uintptr_t at = (uintptr_t)c;
+        if (at <= after)
+            continue;
+        if (best != NULL && at >= (uintptr_t)best)
+            continue;
+
+        best = c;
+    }
+
+    return best;
+}
+
+static void sel_lock(const SelectCase *cases, Int n) {
+    uintptr_t at = 0;
+    for (;;) {
+        Chan *c = next_chan(cases, n, at);
+        if (c == NULL)
+            return;
+
+        burrow__lock(&c->lock);
+        at = (uintptr_t)c;
+    }
+}
+
+static void sel_unlock(const SelectCase *cases, Int n) {
+    uintptr_t at = 0;
+    for (;;) {
+        Chan *c = next_chan(cases, n, at);
+        if (c == NULL)
+            return;
+
+        burrow__unlock(&c->lock);
+        at = (uintptr_t)c;
+    }
+}
+
+static bool unlock_select(Goroutine *g, void *arg) {
+    Select *s = (Select *)arg;
+    (void)g;
+    sel_unlock(s->cases, s->n);
+
+    /* Nothing below this line may read the select, and nothing above it may be
+     * skipped, because the commit is what hands the frame over. */
+    return parked_commit(&s->p);
+}
+
+/* Fisher and Yates, out of the runtime's generator.
+ *
+ * The modulo is biased, by about one part in two to the forty eighth for the
+ * largest case list this allows. That is not a number anybody can measure and
+ * the alternative is a rejection loop on a path that runs on every select. */
+static void shuffle(uint32_t *order, Int n) {
+    for (Int i = 0; i < n; i++)
+        order[i] = (uint32_t)i;
+
+    for (Int i = n - 1; i > 0; i--) {
+        Int j = (Int)(runtime_rand64() % (uint64_t)(i + 1));
+        uint32_t t = order[i];
+        order[i] = order[j];
+        order[j] = t;
+    }
+}
+
+/* One pass over the cases in poll order, with every channel locked, looking for
+ * one that can run now and running it. Answers its index, or -1 for none.
+ *
+ * The checks per case are the same three the plain send and receive do and in
+ * the same order, because a select arm that behaved differently from the bare
+ * operation would be a trap. */
+static Int sel_try(Select *s) {
+    for (Int k = 0; k < s->n; k++) {
+        SelectCase *sc = &s->cases[s->order[k]];
+        Chan *c = sc->c;
+
+        if (sc->op == SELECT_DEFAULT || c == NULL)
+            continue;
+
+        if (sc->op == SELECT_SEND) {
+            /* Checked before anything else, the way Go checks it, which is why
+             * a select with a ready case and a send on a closed channel may or
+             * may not stop the program. The random order decides. */
+            if (c->closed != 0) {
+                s->send_on_closed = true;
+                return (Int)s->order[k];
+            }
+
+            Waiter *w = waitq_pop(&c->recvq);
+            if (w != NULL) {
+                give_to_receiver(c, w, sc->send);
+                s->wake = w->p;
+                return (Int)s->order[k];
+            }
+
+            if (c->qcount < c->dataqsiz) {
+                put_in_buffer(c, sc->send);
+                return (Int)s->order[k];
+            }
+
+            continue;
+        }
+
+        Waiter *w = waitq_pop(&c->sendq);
+        if (w != NULL) {
+            take_from_sender(c, w, sc->recv);
+            s->wake = w->p;
+            if (sc->ok != NULL)
+                *sc->ok = true;
+            return (Int)s->order[k];
+        }
+
+        if (c->qcount > 0) {
+            take_from_buffer(c, sc->recv);
+            if (sc->ok != NULL)
+                *sc->ok = true;
+            return (Int)s->order[k];
+        }
+
+        if (c->closed != 0) {
+            if (sc->recv != NULL)
+                type_zero(c->elem, sc->recv);
+            if (sc->ok != NULL)
+                *sc->ok = false;
+            return (Int)s->order[k];
+        }
+    }
+
+    return -1;
+}
+
+/* Puts an entry on every channel in the list, with every channel locked. */
+static void sel_enqueue(Select *s) {
+    for (Int i = 0; i < s->n; i++) {
+        SelectCase *sc = &s->cases[i];
+        if (sc->op == SELECT_DEFAULT || sc->c == NULL)
+            continue;
+
+        Waiter *w = &s->waiters[i];
+        memset(w, 0, sizeof(*w));
+        w->p = &s->p;
+        w->caseidx = i;
+
+        if (sc->op == SELECT_SEND) {
+            w->sendp = sc->send;
+            waitq_push(&sc->c->sendq, w);
+        } else {
+            w->recvp = sc->recv;
+            waitq_push(&sc->c->recvq, w);
+        }
+    }
+}
+
+/* Takes them all off again, with every channel locked. The winning entry is in
+ * here too and is already off, which waitq_remove works out for itself. */
+static void sel_dequeue(Select *s) {
+    for (Int i = 0; i < s->n; i++) {
+        SelectCase *sc = &s->cases[i];
+        if (sc->op == SELECT_DEFAULT || sc->c == NULL)
+            continue;
+
+        if (sc->op == SELECT_SEND)
+            waitq_remove(&sc->c->sendq, &s->waiters[i]);
+        else
+            waitq_remove(&sc->c->recvq, &s->waiters[i]);
+    }
+}
+
+Int chan_select(SelectCase *cases, Int n) {
+    if (n < 0)
+        runtime_throw(BURROW_S("chan_select: negative case count"));
+    if (n > SELECT_MAX)
+        runtime_throw(BURROW_S("select case count too large"));
+
+    /* The first default in the list, and the first channel, in one pass.
+     *
+     * Go's compiler rejects a second default. This is an array built at run
+     * time and nothing can reject anything, so the first one wins and the rest
+     * are unreachable, which is what a second default means anyway. */
+    Int dflt = -1;
+    Alloc *home = NULL;
+
+    for (Int i = 0; i < n; i++) {
+        switch (cases[i].op) {
+        case SELECT_DEFAULT:
+            if (dflt < 0)
+                dflt = i;
+            break;
+        case SELECT_SEND:
+        case SELECT_RECV:
+            if (home == NULL && cases[i].c != NULL)
+                home = cases[i].c->a;
+            break;
+        default:
+            runtime_throw(BURROW_S("chan_select: bad case op"));
+        }
+    }
+
+    /* No channel anywhere means nothing can ever become ready, so the answer is
+     * the default if there is one and a wait that never ends if there is not.
+     * Taken here because it is also the one shape that would want scratch space
+     * with nowhere to get it from: no channel means no allocator to ask. */
+    if (home == NULL) {
+        if (dflt >= 0)
+            return dflt;
+        block_forever();
+    }
+
+    uint32_t small_order[SELECT_SMALL];
+    Waiter small_waiters[SELECT_SMALL];
+
+    Select s;
+    memset(&s, 0, sizeof(s));
+    s.cases = cases;
+    s.n = n;
+
+    uint32_t *order = small_order;
+    void *scratch = NULL;
+    size_t scratch_size = 0;
+    const size_t scratch_align = _Alignof(Waiter);
+
+    if (n > SELECT_SMALL) {
+        /* One block, entries first, because a Waiter is the stricter of the two
+         * alignments and putting it first means no padding to compute and no
+         * pointer that has to be nudged into place. */
+        size_t count = (size_t)n;
+
+        scratch_size = count * (sizeof(Waiter) + sizeof(uint32_t));
+        scratch = mem_alloc(home, scratch_size, scratch_align);
+        if (scratch == NULL)
+            runtime_throw(BURROW_S("chan_select: out of memory"));
+
+        s.waiters = (Waiter *)scratch;
+        order = (uint32_t *)(s.waiters + count);
+    } else {
+        s.waiters = small_waiters;
+    }
+
+    shuffle(order, n);
+    s.order = order;
+
+    sel_lock(cases, n);
+    Int won = sel_try(&s);
+
+    if (won < 0 && dflt >= 0)
+        won = dflt;
+
+    if (won >= 0) {
+        sel_unlock(cases, n);
+
+        if (s.wake != NULL)
+            parked_wake(s.wake);
+
+        if (scratch != NULL)
+            mem_free(home, scratch, scratch_size, scratch_align);
+
+        if (s.send_on_closed)
+            runtime_throw(BURROW_S("send on closed channel"));
+
+        return won;
+    }
+
+    /* Nothing was ready and there is no default, so wait on all of them. */
+    if (!parked_init(&s.p)) {
+        sel_unlock(cases, n);
+        if (scratch != NULL)
+            mem_free(home, scratch, scratch_size, scratch_align);
+        runtime_throw(BURROW_S("chan_select: out of memory"));
+    }
+    s.p.is_select = true;
+    s.p.won = -1;
+
+    sel_enqueue(&s);
+    parked_sleep(&s.p, unlock_select, &s);
+
+    /* Woken, which means somebody claimed this select and wrote down which case
+     * they completed. The other entries are still sitting on their queues, or
+     * have been dropped by a pop that could not claim them, and either way they
+     * have to be gone before this frame is. */
+    sel_lock(cases, n);
+    sel_dequeue(&s);
+    sel_unlock(cases, n);
+
+    parked_done(&s.p);
+
+    won = s.p.won;
+    SelectCase *sc = &cases[won];
+    bool success = s.waiters[won].success;
+
+    if (scratch != NULL)
+        mem_free(home, scratch, scratch_size, scratch_align);
+
+    /* A send that woke up unsuccessful was in flight across a close, which is
+     * the same mistake as a send after one. */
+    if (sc->op == SELECT_SEND && !success)
+        runtime_throw(BURROW_S("send on closed channel"));
+
+    if (sc->op == SELECT_RECV && sc->ok != NULL)
+        *sc->ok = success;
+
+    return won;
 }
 
 /* ------------------------------------------------------------------ asking */

@@ -129,6 +129,92 @@ So a false return is the case the default arm exists for. `ok` may be `NULL` if 
 
 `chan_try_send` stops the program on a closed channel, exactly as a send does. A select does not make a send on a closed channel legal.
 
+## Waiting on several at once
+
+`chan_select` is Go's `select`. The name has the extra word because POSIX got to `select` first and a header that takes it away from you is a header nobody can include.
+
+You describe the arms and it tells you which one ran.
+
+```c
+Int job;
+Str msg;
+
+SelectCase cases[] = {
+    BURROW_RECV(work, &job),
+    BURROW_RECV(control, &msg),
+};
+
+switch (chan_select(cases, 2)) {
+case 0:
+    do_the_job(job);
+    break;
+case 1:
+    obey(msg);
+    break;
+default:
+    break;
+}
+```
+
+The return value is the index of the arm that ran, so the `switch` is on the same numbers the array is in. There are four ways to build an arm.
+
+| arm | what it does |
+| --- | --- |
+| `BURROW_RECV(c, out)` | receive into `out`, which may be `NULL` if you only want to know it happened |
+| `BURROW_RECV_OK(c, out, okp)` | the same with `*okp` set the way `chan_recv`'s return value works |
+| `BURROW_SEND(c, v)` | send the value at `v` |
+| `BURROW_DEFAULT` | run when nothing else is ready |
+
+With no default arm, `chan_select` waits until one of the channels is ready. With a default arm it never waits: if nothing else can run at the moment it looks, the default does. There is no third behaviour, which is Go, and it means a select with a default in a tight loop is a spin and should be a select without one.
+
+When more than one arm is ready, the one that runs is chosen uniformly at random. That is not a detail to work around. It is what keeps a channel that is always ready from starving one that is only sometimes ready, and code that depends on arm order is code that will starve something.
+
+### Turning an arm off
+
+An arm on a `NULL` channel never fires, which is how a loop stops listening to a channel that has closed without rewriting the array.
+
+```c
+Chan *a = ..., *b = ...;
+
+while (a != NULL || b != NULL) {
+    Int v;
+    bool ok;
+    SelectCase cases[] = {
+        BURROW_RECV_OK(a, &v, &ok),
+        BURROW_RECV_OK(b, &v, &ok),
+    };
+
+    Int arm = chan_select(cases, 2);
+    if (!ok) {
+        /* that one is closed and drained, so stop listening to it */
+        if (arm == 0)
+            a = NULL;
+        else
+            b = NULL;
+        continue;
+    }
+    use(v);
+}
+```
+
+A closed channel is ready forever, so an arm left pointing at one would spin the loop. Setting the variable to `NULL` is what Go code writes here and it works for the same reason.
+
+A select where every arm is a `NULL` channel and there is no default blocks forever, which is the same answer a receive on a `NULL` channel gives.
+
+### The rules
+
+A send arm on a closed channel stops the program, exactly as a bare send does. Because the choice among ready arms is random, a select that has such an arm may stop the program on one run and not on the next, which is worth knowing when you are reading a crash report.
+
+The same channel may appear in several arms. It is locked once.
+
+`chan_select` with no arms at all blocks forever. It is not an error, it is the empty `select {}`.
+
+### What it costs
+
+Up to sixteen arms need nothing but your own stack frame. Past that there is one allocation, taken from the allocator of the first channel in the list, and it is given back before the call returns whichever way the call goes. Sixteen is well past what real code uses and a goroutine stack is a quarter of a megabyte, so the inline case is the case.
+
+Two selects listing the same channels in different orders cannot deadlock, because the locks are taken in channel address order rather than in the order you wrote the arms.
+
 ## The allocator
 
 `chan_make` takes an allocator and the channel remembers it, which is the same deal a `Map` gets and for the same reason: a send must not need one, and a buffer freed to a different allocator than it came from is a bug nobody sees until much later.
@@ -165,8 +251,14 @@ It is also the part that was hardest to get right, which is worth a paragraph be
 
 The other half of it is the runtime thread on the receiving end. It has nothing to run while it waits, so it goes to sleep, and the host thread sending to it is the one that has to wake it up. That handshake had a gap in it, and a value sent into the gap left the runtime asleep with a goroutine ready to run. Fifty handoffs almost never land in the gap and twenty thousand do, which is why there is now a test that does twenty thousand. `docs/design/06-runtime.md` has both of these in full.
 
+### How a select waits
+
+A select that cannot run anything puts an entry on every one of its channels and goes to sleep. Any one of those entries being taken has to wake it exactly once, and the arm that took it is the arm that ran, so the whole thing turns on one flag: a sender, a receiver or a close that wants a waiting select has to win a compare and swap on that flag first, and the winner writes down which arm it was. Losers put the entry back and look for another one. That is Go's design.
+
+The part that is not Go's is what happens next. Go keeps those entries in a pool, so the list the scheduler walks while parking the goroutine stays valid no matter what the goroutine does afterwards. burrow keeps them in the parking goroutine's own stack frame, which is the same choice the rest of this header makes and is free. The cost is a window: the scheduler marks a goroutine as waiting before it unlocks the channels, so the moment the first channel comes unlocked somebody may claim the select and start that goroutine on another thread, while the first thread is still reading the case list out of the frame it is standing on.
+
+So the frame is handed over deliberately. Both sides swap a value into one word, the one that finds it untouched is the one that has to wait, and a claim that arrives before the unlock finishes leaves a note instead of a wakeup. `src/runtime/chan.c` has it written out. It is the kind of thing that is invisible in ordinary running and that a thread sanitizer finds in about a minute, which is the argument for running one.
+
 ## What is not here yet
 
-`chan_select`, which is Go's `select`, and which has to be called something else because POSIX got to the name first. It needs a way to wait on several channels at once without racing, a uniform random choice among the cases that are ready, and the lock ordering that keeps two selects on the same pair of channels from deadlocking. It is the next thing.
-
-Until it lands, `chan_try_send` and `chan_try_recv` cover the select with a default that most code actually writes.
+`BURROW_SELECT` as a block, with `BURROW_CASE_RECV` and friends reading like Go's statement rather than like an array. The array is the honest version and stays whatever else arrives, and the sugar is worth having once there is a `time_after` to write `BURROW_CASE_AFTER` against, which needs timers to hand out channels and they do not yet.

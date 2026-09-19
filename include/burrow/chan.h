@@ -202,6 +202,136 @@ Int chan_cap(const Chan *c);
  * NULL channel. */
 BURROW_STATIC(ret) const Type *chan_elem(const Chan *c);
 
+/* ------------------------------------------------------------------ select
+ *
+ * Waiting on several channels at once, and taking whichever is ready first.
+ *
+ * Go spells this `select` and it is a statement. C has no statement to hook, so
+ * here it is an array of cases and a call that answers which one of them ran.
+ * The answer is an index into the array, which lines up with a switch:
+ *
+ *     Int job;
+ *     SelectCase cases[] = {
+ *         BURROW_RECV(work, &job),
+ *         BURROW_RECV(quit, NULL),
+ *         BURROW_SEND(results, &answer),
+ *     };
+ *
+ *     switch (chan_select(cases, 3)) {
+ *     case 0:
+ *         do_the_job(job);
+ *         break;
+ *     case 1:
+ *         return;
+ *     case 2:
+ *         answer = next_answer();
+ *         break;
+ *     default:
+ *         break;
+ *     }
+ *
+ * That is the whole API. The rest of this is what it promises.
+ *
+ * With no BURROW_DEFAULT case the call blocks until one of the cases can run.
+ * With one it never blocks: if nothing is ready the default's index comes back
+ * and no channel was touched. That is Go's `default:` arm and it is what
+ * chan_try_send and chan_try_recv are, for the single channel shape that does
+ * not need an array.
+ *
+ * When more than one case is ready, the one that runs is chosen uniformly at
+ * random. This is not a detail to be improved on later. Go does it, Go programs
+ * are written on top of it, and a select that preferred the first ready case
+ * would starve the last one in every loop that has a fast channel and a slow
+ * one in it.
+ *
+ * A case on a NULL channel is a case that can never fire, which is the idiom
+ * for turning an arm off. Set the channel variable to NULL when that arm is not
+ * wanted and set it back when it is, and the case list stays the same shape.
+ * A select where every case is on a NULL channel, and a select with no cases at
+ * all, blocks forever, exactly as Go's does.
+ *
+ * The same channel may appear in as many cases as you like, including once to
+ * send and once to receive.
+ *
+ * Everything else behaves the way the single channel calls above do. A receive
+ * on a closed channel is ready at once and reports false through its ok
+ * pointer. A send on a closed channel stops the program, and because the cases
+ * are visited in a random order, a select with one ready case and one send on a
+ * closed channel may or may not reach the second one. That is Go's behaviour
+ * and it is worth knowing rather than relying on. */
+
+typedef enum SelectOp {
+    /* v, ok := <-c */
+    SELECT_RECV = 0,
+    /* c <- v */
+    SELECT_SEND = 1,
+    /* The default arm. Its channel and pointers are ignored. */
+    SELECT_DEFAULT = 2,
+} SelectOp;
+
+/* One arm of a select. Build these with the macros below rather than by hand,
+ * which keeps the unused halves zero and makes the case list read like Go's.
+ *
+ * `send` and `recv` are two fields rather than one union because a send offers
+ * a const pointer and a receive is handed a mutable one, and a union would need
+ * the const cast away at every use.
+ *
+ * Nothing here is copied. The pointers are read and written where they point,
+ * during the call and not after it, so pointing them at locals is right. */
+typedef struct SelectCase {
+    SelectOp op;
+
+    /* The channel. NULL is a case that never fires. Ignored for a default. */
+    Chan *c;
+
+    /* Where a send's value comes from. */
+    const void *send;
+
+    /* Where a receive's value goes, or NULL for a receive whose value is not
+     * wanted. The channel is still read from. */
+    void *recv;
+
+    /* Where a receive's second answer goes, or NULL. True means a real value,
+     * false means the channel was closed and drained, which is exactly what
+     * chan_recv returns. Only written when this is the case that ran. */
+    bool *ok;
+} SelectCase;
+
+/* The case builders.
+ *
+ *   BURROW_RECV(c, &v)           v := <-c
+ *   BURROW_RECV_OK(c, &v, &ok)   v, ok := <-c
+ *   BURROW_SEND(c, &v)           c <- v
+ *   BURROW_DEFAULT               default:
+ *
+ * BURROW_RECV with NULL for the value is Go's `<-c` with nothing on the left.
+ *
+ * These are not in the BURROW_SHORT set. SEND, RECV and above all DEFAULT are
+ * names other people's headers use, and a library that takes DEFAULT away from
+ * its users has overstepped. */
+#define BURROW_RECV(ch, out) ((SelectCase){.op = SELECT_RECV, .c = (ch), .recv = (out)})
+#define BURROW_RECV_OK(ch, out, okp)                                                   \
+    ((SelectCase){.op = SELECT_RECV, .c = (ch), .recv = (out), .ok = (okp)})
+#define BURROW_SEND(ch, v) ((SelectCase){.op = SELECT_SEND, .c = (ch), .send = (v)})
+#define BURROW_DEFAULT ((SelectCase){.op = SELECT_DEFAULT})
+
+/* Runs exactly one of the cases and answers which one, as an index into
+ * `cases`. Never answers anything else: a select that cannot run a case blocks
+ * until it can, and a select with a default always has one it can run.
+ *
+ * `n` is how many cases there are. Zero blocks forever.
+ *
+ * Callable from a goroutine, which parks and costs no thread, and from a thread
+ * of the host program's own, which sleeps and costs itself. Both are supported
+ * for the same reason chan_send and chan_recv support both.
+ *
+ * A select with up to sixteen cases needs nothing but its own stack frame.
+ * Above that it makes one allocation, from the allocator of the first channel
+ * in the list, and gives it back before returning. Sixteen is a great many more
+ * arms than a select in real code has, so this is written down for the person
+ * reading an allocation profile rather than as something to design around. */
+Int chan_select(SelectCase *cases, Int n);
+
 #ifdef __cplusplus
 }
 #endif

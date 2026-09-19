@@ -220,6 +220,31 @@
 #endif
 #endif
 
+/* The same question for the thread sanitizer, asked the same two ways.
+ *
+ * Nothing in the runtime changes its behaviour for this one. What reads it is
+ * the tests, which run far fewer rounds under it, and the reason is in
+ * include/burrow/context.h: burrow does not tell the thread sanitizer that a
+ * goroutine switch happened. The sanitizer keeps its own copy of the call stack
+ * per thread, pushed and popped by code it compiles into every function, and a
+ * goroutine that parks on one thread and carries on from another pushes on the
+ * first and pops on the second. Enough of that and one of them walks off the end
+ * of a fixed size buffer and the process dies inside the sanitizer. */
+
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define BURROW_TSAN 1
+#endif
+#endif
+
+#if !defined(BURROW_TSAN)
+#if defined(__SANITIZE_THREAD__)
+#define BURROW_TSAN 1
+#else
+#define BURROW_TSAN 0
+#endif
+#endif
+
 /* --------------------------------------------------- attributes and hints
  *
  * Spelled once here so that no other file in the tree has to know which

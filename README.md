@@ -390,7 +390,7 @@ BURROW_SCOPE {
 BURROW_SCOPE_END;
 ```
 
-The close runs when control leaves the block, however it leaves: off the end, `return`, `break`, `continue`, a `goto` out, or a panic once panic lands. Calls run last in first out and the argument is read at the line you wrote it on, both of which are Go's.
+The close runs when control leaves the block, however it leaves: off the end, `return`, `break`, `continue`, a `goto` out, or a panic unwinding past it. Calls run last in first out and the argument is read at the line you wrote it on, both of which are Go's.
 
 The block is required and a `BURROW_DEFER` outside one does not compile. That is the point of it. A bare `BURROW_DEFER` is possible on GCC and Clang, which have the `cleanup` attribute, and impossible on MSVC, which does not, and a macro that silently leaks on one of three supported platforms is worse than one that costs a line on all three. Inside the block a defer is an ordinary statement and goes wherever a statement goes.
 
@@ -399,6 +399,29 @@ The one difference from Go is the unit: a scope rather than a function. Put the 
 A scope is one struct in your frame and the calls live in it, eight of them with nothing allocated, which is the same number Go's compiler open-codes into a frame. A scope that goes past eight takes one allocation that doubles as it fills and is freed before the scope returns, which is the trade Go makes for the defers it cannot put in the frame. The chain of open scopes belongs to the goroutine rather than the thread, so a goroutine that parks mid scope and wakes up elsewhere keeps its defers, and `runtime_goexit` runs all of them on the way out.
 
 Details: [docs/guides/defer.md](docs/guides/defer.md).
+
+## panic and recover
+
+```c
+BURROW_TRY {
+    parse(input);
+}
+BURROW_CATCH(p) {
+    log_bad_input(panic_text(p));
+    err = errors_new(a, BURROW_S("bad input"));
+}
+BURROW_TRY_END;
+```
+
+A panic unwinds until something catches it, running the deferred calls of every scope in between, innermost first. Unrecovered, it prints the value and ends the process with status 2, which is what Go does. The value is an `Any`, which is Go's `any`, which is what `recover` hands you there.
+
+The one deviation from Go in the whole feature is where the recovery is written. Go recovers inside a deferred function and burrow recovers in a catch block, because resuming in the frame that recovered means a `setjmp` in that frame, and Go's rule would need one in every function that has a `defer` in it. Ours needs one only where somebody actually catches something, so a `defer` stays two stores and a call for everybody else.
+
+Everything else is Go's, including the corners people forget: a panic inside a deferred call chains onto the one already unwinding and the rest of that scope's calls still run, `panic` with nil gets you a value that says so, and a panic does not cross a goroutine.
+
+Underneath it is `setjmp` and `longjmp` on all three platforms, with the unwinding done by hand rather than by a personality routine, so there is no unwinder to link, no tables, and no allocation on the panic path. Code with no `BURROW_TRY` in it pays nothing at all.
+
+Details, including what a panicked value's lifetime actually is, which is the one thing that bites: [docs/guides/panic.md](docs/guides/panic.md).
 
 ## Status
 

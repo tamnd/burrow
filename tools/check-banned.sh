@@ -63,6 +63,20 @@ ALLOC_ALLOWED='src/mem/heap.c'
 BANNED_EXIT='\bexit\b|\babort\b|\b_Exit\b|\bassert\b'
 EXIT_ALLOWED='src/runtime/panic.c tests/*'
 
+# Jumping. A longjmp does not run a cleanup handler, so code that jumps past a
+# BURROW_SCOPE skips the deferred calls in it, and code that jumps into a frame
+# that has already returned does something worse. burrow has one jump and it is
+# a panic, which unwinds the scopes on the way by hand. Everything else, the
+# tests included, goes through BURROW_TRY.
+#
+# tests/stack_test.c is the one exception and it is a real one. It leaves a
+# signal handler, which a panic cannot do: getting out of a handler means
+# sigsetjmp and siglongjmp so that the signal mask goes back, and a handler that
+# runs with its own signal still blocked never sees the next fault. The test
+# says the same thing at more length where it does it.
+BANNED_JUMP='\bsetjmp\b|\b_setjmp\b|\bsigsetjmp\b|\blongjmp\b|\b_longjmp\b|\bsiglongjmp\b'
+JUMP_ALLOWED='include/burrow/panic.h src/runtime/panic.c tests/stack_test.c'
+
 # --others picks up files that are written but not staged yet, which is the
 # state a file is in exactly when somebody runs this before committing. Without
 # it the check quietly passes on a tree it never looked at.
@@ -90,6 +104,14 @@ $hits
 			report "$f" "$f: a library does not end the host's process
 $hits
   Return an Error. See docs/design/05-memory.md section 7."
+		fi
+	fi
+
+	if ! allowed "$f" "$JUMP_ALLOWED"; then
+		if hits=$(grep -nE "(^|[^a-zA-Z0-9_])($BANNED_JUMP)[[:space:]]*\(" "$f"); then
+			report "$f" "$f: a jump outside the panic machinery
+$hits
+  Use BURROW_TRY and BURROW_CATCH. See burrow/panic.h."
 		fi
 	fi
 done

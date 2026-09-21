@@ -658,39 +658,97 @@ thing people write.
 ends, which is Go's rule for `Goexit`, and re-reads the chain after each call so
 that a deferred call is free to defer things of its own.
 
-**`panic`/`recover`** is the other half of this section and is not built yet. It
-is `setjmp`/`longjmp` over the chain of scopes above, scoped to a single
+**`panic`/`recover`** is the other half of this section and it is built. It is
+`setjmp`/`longjmp` over the chain of scopes above, scoped to a single
 goroutine:
 
 ```c
-void      panic(Any v);
-Any    recover(void);        /* valid only inside a deferred call */
+BURROW_NORETURN void panic(Any v);
+BURROW_NORETURN void panic_str(Str s);
+Any panic_value(void);
+Str panic_text(Any v);
 
 BURROW_TRY {
     risky();
-} BURROW_CATCH(p) {
-    log_panic(p);
 }
+BURROW_CATCH(p) {
+    log_panic(panic_text(p));
+}
+BURROW_TRY_END;
 ```
 
-Rules, matching Go:
+There is no `recover` function, which is the one deviation from Go in the whole
+feature and the one thing in this section that is a judgement call rather than
+a translation. Go recovers inside a deferred function and then returns normally
+from the function that deferred it. Resuming in the frame that recovered means
+that frame has somewhere to come back to, which is a `setjmp`, which is a
+couple of hundred bytes of `jmp_buf` in the frame, a call, and a compiler that
+stops keeping locals in registers across it. Go's rule needs one of those in
+every function that has a `defer` in it, and a `defer` that costs a `setjmp` is
+a `defer` people stop using. The catch block puts the `setjmp` only where
+somebody actually catches something, which in a program of any size is a
+handful of places, and leaves `BURROW_SCOPE` at two stores and a call. It also
+reads the way a C programmer expects recovery to read.
 
-- A panic runs the deferred functions of each frame as it unwinds, in LIFO
-  order, until one of them calls `recover`.
-- An unrecovered panic terminates the *program*, printing the panicking
-  goroutine's stack and the goroutine that created it — Go's behaviour, and
-  important: a panic in one goroutine is not contained to it.
-- `recover` outside a deferred call returns nil.
-- Re-panicking inside a defer chains the panics and prints both.
-- Runtime errors that Go panics on — nil map write, index out of range, nil
-  dereference through an interface, integer divide by zero, slice bounds,
-  type-assertion failure — panic with the corresponding `runtime.Error` type,
-  with the same message text, because those strings appear in tests.
+The rest is Go's:
 
-The [03](03-c-dialect.md) §3 restriction — no `longjmp` across allocator or
-lock boundaries — is enforced by having every `burrow` lock and every arena
-scope register a defer record, so unwinding releases them in order. A checker
-in CI flags any `setjmp` use outside the three sanctioned macros.
+- A panic runs the deferred calls of every scope between it and the catch
+  block, innermost scope first and LIFO inside each scope.
+- An unrecovered panic prints the value and ends the process with status 2,
+  which is Go's exit status for the same thing. Ending the process is what
+  crosses goroutines here. The unwinding does not: a goroutine that panics
+  walks its own scopes and finds its own catch blocks, the same as Go, which
+  is why the panic state is a field of the `G` next to the defer chain and for
+  the same reason.
+- A panic inside a deferred call chains onto the one already unwinding rather
+  than replacing it, both are printed if neither is caught, and the deferred
+  calls beside the one that panicked still run. That last part is why
+  `burrow__scope_close` takes each call off the scope before making it and
+  leaves the scope on the chain until its calls are done: a panic from inside
+  one comes back around, finds the scope still there, and finishes it.
+- `panic(nil)` gets a value that says nil was panicked with, which is Go's
+  behaviour since 1.21 and for Go's reason, that a catch block receiving nil
+  cannot tell it caught anything.
+- `panic_value` is what a deferred call asks instead of calling `recover` to
+  find out whether it is running because of a panic. It returns the value being
+  unwound, or nil during an ordinary scope close.
+
+The value is an `Any`, so it is a type descriptor and a pointer into a frame
+the jump is about to leave. A recovery point carries thirty two bytes of
+storage and `panic` copies the pointee into it before jumping, which covers
+`Str`, `Error`, `Any`, every number and every small struct. Anything larger
+keeps pointing where it pointed and has to outlive the jump on its own.
+Copying the value is not copying what the value points at in turn, so a
+panicked `Str` still borrows its bytes, which is the rule everywhere else in
+burrow and is the one thing about this feature that has already caught us out
+in a test.
+
+`longjmp` rather than SEH on Windows, on all three compilers and both Windows
+toolchains. The by-hand walk over the defer chain is doing the work that an
+unwinder would otherwise do, which leaves `RaiseException` with nothing to add
+except a second code path to keep in step. On MSVC a `longjmp` runs the
+`__finally` blocks of the frames it jumps over, including scopes the panic has
+already closed by hand, so closing a scope twice has to be harmless, and it is
+for the same reason re-entering one is.
+
+Nothing on the panic path allocates, which matters because running out of
+memory is one of the things that will eventually arrive here.
+
+The [03](03-c-dialect.md) §3 restriction, no `longjmp` across allocator or lock
+boundaries, holds because the only `longjmp` in the tree is the panic and it
+closes the scopes it passes rather than skipping them.
+`tools/check-banned.sh` refuses `setjmp`, `longjmp` and their signal variants
+anywhere outside `burrow/panic.h`, `src/runtime/panic.c` and one signal handler
+test that needs `sigsetjmp` to restore the signal mask, which a panic cannot
+do.
+
+Still to come in this half: the runtime's own checks, `runtime_index_out_of_range`
+and the three beside it, currently take the fatal path rather than panicking
+with a `runtime.Error`. The message text is already the final one, so only the
+mechanism changes and no call site moves. It needs per-goroutine message
+storage first, because those messages are formatted into the throwing frame and
+a panic jumps past it. The stack trace the printer should carry waits on the
+stack walker in §4.
 
 ## 7. `sync`, `sync/atomic`, `context`
 

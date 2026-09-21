@@ -5,12 +5,14 @@ Three ways, and which one you get is not a style choice. It follows from whether
 | What happened | What you get | Can you carry on |
 | --- | --- | --- |
 | The operation did not work | An `Error` return | Yes, that is the point |
-| The program's belief about itself is wrong | A panic | Only with `recover` |
+| The program's belief about itself is wrong | A panic | Yes, in a catch block |
 | The runtime cannot continue at all | A fatal error | No |
 
 Go draws the same three lines in the same places, and burrow follows it case for case, because the line a Go programmer already knows is the line worth keeping.
 
-Today the middle row does not exist yet, and it is now one step away rather than several. `recover` needs `defer`, `defer` needs the chain of open scopes on the goroutine, and that chain is built and tested: it is [defer.md](defer.md). What is left is the jump itself, which is the next thing. Until it lands, the things that will panic take the fatal path instead. The message text is already the final one, so only the mechanism changes.
+All three exist now. The middle one is `BURROW_TRY` and `BURROW_CATCH` rather than a `recover` you call from a deferred function, which is the one place burrow's shape differs from Go's, and [panic.md](panic.md) says why.
+
+One thing is still in transit. The runtime's own checks, the index and slice bounds ones below, still take the fatal path rather than panicking with a recoverable value. That is the next change, the message text is already the final one, and no call site of theirs moves when it happens.
 
 ## Errors
 
@@ -32,6 +34,22 @@ This is most of the library. If you are wondering which of the three a given fun
 Indexing past the end of a string, writing to a nil map, dividing by zero, a type assertion that does not hold. The common thread is that none of them can happen in a program that is doing what its author thinks it is doing.
 
 Go panics on these rather than returning an error, and so does burrow, for a reason worth being explicit about: returning an error here would mean every index expression has a failure branch, so nobody would check any of them, and the failure would be discovered later at a place that has nothing to do with the cause. A bug that stops the program at the line that caused it is worth more than one that is reported politely three subsystems away.
+
+A panic unwinds, running the deferred calls of every scope on the way out, and lands in the nearest enclosing catch block:
+
+```c
+BURROW_TRY {
+    handle(request);
+}
+BURROW_CATCH(p) {
+    log_crash(panic_text(p));
+}
+BURROW_TRY_END;
+```
+
+If nothing catches it, the value is printed and the process exits with status 2, the same as Go. The whole feature, including the deviation from Go's `recover` and what a panicked value's lifetime is, is one page: [panic.md](panic.md).
+
+The bar for catching one is high and it is the bar Go sets. A server that does not want one bad request to take the process down is the case this exists for. Wrapping every call in a catch block because it feels safer is how you get a program that carries on after its own invariants have broken, which is worse than stopping.
 
 ## Fatal errors
 

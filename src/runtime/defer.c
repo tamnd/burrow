@@ -108,21 +108,34 @@ void burrow__scope_close(burrow__DeferScope *s) {
     if (s->chain == NULL)
         return;
 
-    /* Off the chain before the calls run, so that a deferred call opening a
-     * scope of its own nests inside the one that contains this scope rather
-     * than inside a scope that is halfway through being taken apart. It is also
-     * what makes closing a scope twice safe, which the MSVC path needs: a
-     * longjmp there runs the __finally blocks of frames a panic has already
-     * unwound by hand. */
-    *s->chain = s->outer;
-    s->chain = NULL;
-
+    /* The scope stays on the chain while its calls run, and each call is taken
+     * off the scope before it is made rather than after. That pair is what
+     * makes a panic from inside a deferred call behave the way Go's does: the
+     * panic walks the chain, finds this scope still on it, comes back in here
+     * and runs the calls that have not run yet. A scope taken off the chain
+     * first would lose them, and Go is explicit that a panic in a deferred
+     * function does not cancel the deferred functions beside it.
+     *
+     * It is also safe to re-enter for the same reason it is safe to close
+     * twice, which the MSVC path needs, because a longjmp there runs the
+     * __finally blocks of frames a panic has already unwound by hand. A call
+     * that has been taken off cannot be made again by whoever comes in next,
+     * and a scope that has been taken off the chain is recognisably closed. */
     while (s->n > 0) {
         s->n--;
 
         Func fn = s->n < BURROW_DEFER_INLINE ? s->calls[s->n]
                                              : s->over[s->n - BURROW_DEFER_INLINE];
         BURROW_CALLF0(fn);
+    }
+
+    /* The check is for the deferred call that closed this scope itself, which
+     * is what runtime_goexit does from inside one: by the time that call
+     * returns here, this is already off the chain and the overflow is already
+     * given back. */
+    if (s->chain != NULL) {
+        *s->chain = s->outer;
+        s->chain = NULL;
     }
 
     if (s->over != NULL) {

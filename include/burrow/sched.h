@@ -45,6 +45,7 @@
 #include "burrow/lock.h"
 #include "burrow/note.h"
 #include "burrow/own.h"
+#include "burrow/panic.h"
 #include "burrow/platform.h"
 #include "burrow/stack.h"
 #include "burrow/thread.h"
@@ -178,6 +179,13 @@ struct burrow__G {
      * thread, and a chain that stayed behind on the first thread would be a
      * chain of deferred calls that never run. */
     BURROW_BORROWS(1) burrow__DeferScope *scopes;
+
+    /* The panics this goroutine is in the middle of and the BURROW_TRY blocks
+     * that can catch them, from burrow/panic.h. It is here rather than in a
+     * thread local for the reason the scopes are, and it is the goroutine's own
+     * because a panic does not cross one: a goroutine that panics unwinds its
+     * own stack and nothing else, the same as Go. */
+    burrow__PanicState panic;
 
     /* Every G ever created, in one list under the scheduler lock. Go calls it
      * allgs and keeps it for the same two reasons: a traceback has to be able to

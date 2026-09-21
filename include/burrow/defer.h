@@ -16,7 +16,7 @@
  *
  * The close runs when control leaves the block, and it does not matter how
  * control leaves: falling off the end, `return`, `break`, `continue`, a `goto`
- * out, or a panic once panic lands. That is the whole feature, and it is worth
+ * out, or a panic unwinding past it. That is the whole feature, and it is worth
  * having in C for the same reason it is worth having in Go: the line that opens
  * a thing and the line that closes it are next to each other, so the reader can
  * see both at once and a new early return added later cannot forget the second

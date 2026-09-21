@@ -5,14 +5,26 @@
  * wasm host needs for the same reason: somewhere else to put the last message.
  *
  * The handler here does the one thing runtime.h says a handler must not do,
- * which is fail to return by leaving sideways instead. That is fine. longjmp
+ * which is fail to return by leaving sideways instead. That is fine. A panic
  * out of it is still not returning, so the contract holds, and the process
  * survives. What a real program would do here is write the message somewhere
  * and then stop.
  *
- * This is the only setjmp in the tree. When defer and panic land they own
- * setjmp, there will be a checker that says so, and everything here gets
- * rewritten against BURROW_TRY.
+ * This used to be the only setjmp in the tree and it is now a BURROW_TRY like
+ * everything else, which is what burrow/panic.h is for. tools/check-banned.sh
+ * keeps it that way.
+ *
+ * Both things a test can be checking for end up in the same place. A throw goes
+ * through the handler and is turned into a panic here. A panic arrives on its
+ * own. Either way the catch block below has the text, so CHECK_FATAL reads the
+ * same whichever one the code under test reaches for.
+ *
+ * The throw's message needs copying before the panic and not after, which is
+ * the one thing here that is easy to get wrong. runtime_index_out_of_range and
+ * the rest of them format their message into a buffer in their own frame, and
+ * the handler runs while that frame is still there but the catch block does
+ * not, because the panic jumped past it. So the handler copies the bytes into a
+ * buffer at file scope and panics with a Str over that instead.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -22,56 +34,65 @@
 #define BURROW_TESTS_FATAL_H
 
 #include "burrow/core.h"
+#include "burrow/panic.h"
 #include "burrow/runtime.h"
 
 #include "harness.h"
 
-#include <setjmp.h>
-
 /* gcc's -Wclobbered fires on every local a test builds before EXPECT_FATAL and
  * then hands to the statement inside it, because the local is live across the
- * setjmp and gcc cannot prove it is never written to afterwards. The rule it is
- * guarding is about locals that *change* between the setjmp and the longjmp,
- * and none of these do: a test sets its values up, calls the thing that stops,
- * and never touches them again.
+ * setjmp inside BURROW_TRY and gcc cannot prove it is never written to
+ * afterwards. The rule it is guarding is about locals that *change* between the
+ * setjmp and the jump back, and none of these do: a test sets its values up,
+ * calls the thing that stops, and never touches them again.
  *
  * It only fires on 32 bit x86, where there are not enough registers to keep
  * them all in memory, which is what makes it a false positive rather than a
  * portability warning worth restructuring for. Turned off here rather than in
- * the Makefile so that it stays off in exactly the translation units that use
- * setjmp, which is the ones that include this header and nothing else. */
+ * the Makefile so that it stays off in exactly the translation units that catch
+ * panics, which is the ones that include this header and nothing else. */
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic ignored "-Wclobbered"
 #endif
 
-static jmp_buf fatal_escape;
 static char fatal_caught[256];
+static char fatal_thrown[256];
 static bool fatal_did_catch;
 
-static void fatal_handler(Str msg) {
-    size_t n = (size_t)(msg.len < (Int)sizeof(fatal_caught) - 1
-                            ? msg.len
-                            : (Int)sizeof(fatal_caught) - 1);
+/* Truncating rather than growing, because a test that wants more than this out
+ * of a fatal message is testing the wrong thing. Returns what it wrote. */
+static Int fatal_copy(char *dst, size_t cap, Str msg) {
+    size_t n = (size_t)(msg.len < (Int)cap - 1 ? msg.len : (Int)cap - 1);
+
     if (msg.p != NULL && n > 0)
-        memcpy(fatal_caught, msg.p, n);
-    fatal_caught[n] = '\0';
-    fatal_did_catch = true;
-    longjmp(fatal_escape, 1);
+        memcpy(dst, msg.p, n);
+    dst[n] = '\0';
+    return (Int)n;
 }
 
-/* setjmp has to be the whole controlling expression of an if for this to be
- * defined, which is why this is a statement macro rather than something that
- * returns the message. Everything it touches is at file scope, since a local
- * that changes between setjmp and longjmp has an indeterminate value afterwards
- * unless it is volatile. */
+/* The throw's way in, and the place the message stops being the thrower's. */
+static void fatal_handler(Str msg) {
+    Int n = fatal_copy(fatal_thrown, sizeof(fatal_thrown), msg);
+
+    panic_str(str_from_bytes(fatal_thrown, n));
+}
+
+/* Everything it touches is at file scope, for the reason the pragma above
+ * gives. */
 #define EXPECT_FATAL(stmt)                                                             \
     do {                                                                               \
         memset(fatal_caught, 0, sizeof(fatal_caught));                                 \
+        memset(fatal_thrown, 0, sizeof(fatal_thrown));                                 \
         fatal_did_catch = false;                                                       \
         runtime_set_fatal_handler(fatal_handler);                                      \
-        if (setjmp(fatal_escape) == 0) {                                               \
+        BURROW_TRY {                                                                   \
             stmt;                                                                      \
         }                                                                              \
+        BURROW_CATCH(fatal_p) {                                                        \
+            fatal_copy(fatal_caught, sizeof(fatal_caught), panic_text(fatal_p));       \
+            fatal_did_catch = true;                                                    \
+        }                                                                              \
+        BURROW_TRY_END;                                                                \
         runtime_set_fatal_handler(NULL);                                               \
     } while (0)
 

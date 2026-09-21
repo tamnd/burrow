@@ -4,6 +4,37 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+`panic` and `recover`, which is the other half of the failure story and the half the docs have been promising since the first page of them. A panic unwinds the open scopes, running their deferred calls innermost first, and lands in the nearest catch block. Unrecovered, it prints the value and ends the process with status 2, the same as Go.
+
+Recovery is a catch block rather than a `recover` call inside a deferred function, and that is the one deviation from Go in the feature. Go's shape needs the recovering frame to have somewhere to come back to, which is a `setjmp`, and that means a `setjmp` in every function that has a `defer` in it. A `defer` that costs a `setjmp` is a `defer` people stop using. This way the cost lands only where somebody actually catches something, and everybody else keeps a scope that is two stores and a call.
+
+Everything else is Go's, including the corners that are easy to get wrong and that nobody notices until a cleanup fails in production. A panic from inside a deferred call chains onto the one already unwinding and the rest of that scope's calls still run. `panic` with nil gets you a value that says so. A panic does not cross a goroutine.
+
+### Runtime
+
+- `burrow/panic.h` is the whole surface: `panic`, `panic_str`, `panic_value`, `panic_text`, and the three macros `BURROW_TRY`, `BURROW_CATCH(p)` and `BURROW_TRY_END`. The value is an `Any`, which is Go's `any`, which is what `recover` gives you there.
+- There is no `recover` function and there will not be one. The reasoning is in `docs/guides/panic.md` and in `docs/design/06-runtime.md` section 6, which has been rewritten from a plan into a description of what was built.
+- A recovery point carries thirty two bytes and `panic` copies the value into it before jumping, so a panicked `Str`, `Error`, `Any`, number or small struct is still there when the catch block reads it. Copying the value is not copying what the value points at in turn, so a panicked `Str` still borrows its bytes and a message formatted into the panicking frame is a message the catch block cannot read. The docs say this twice because the thread sanitizer caught us doing it.
+- `panic_value` is what a deferred call asks to find out whether it is running because of a panic, which is the question Go's deferred functions ask `recover` and there is no `recover` here to ask.
+- `panic_text` turns a value into something printable without allocating. It knows nil, strings, errors, bools and the number kinds, and falls back to the type's name, which is what the default printer does too.
+- Nothing on the panic path allocates, because running out of memory is one of the things that will eventually arrive on it.
+- The panic state lives on the goroutine next to the defer chain and for the same reason, which is that a goroutine can park inside a block and wake up on another thread. A thread that is not running a goroutine gets a thread local instead, so the macros work before the runtime starts and after it stops.
+- `burrow__scope_close` now leaves the scope on the chain while its calls run and takes each call off before making it. That pair is what makes a panic from inside a deferred call behave the way Go's does, which is that the deferred calls beside it still run. It also makes closing a scope twice harmless, which the MSVC path needs, since a `longjmp` there runs the `__finally` blocks of frames the panic has already unwound by hand.
+- It is `setjmp` and `longjmp` on all three compilers, including MSVC, rather than SEH on Windows. The by-hand walk over the defer chain is doing the work an unwinder would do, which leaves `RaiseException` with nothing to add except a second code path to keep in step.
+
+### Tooling
+
+- `tools/check-banned.sh` refuses `setjmp`, `longjmp` and their signal variants anywhere outside `burrow/panic.h` and `src/runtime/panic.c`. A jump that is not a panic skips deferred calls, and this is the one jump that does not. The single exception is a signal handler test that needs `sigsetjmp` to put the signal mask back, which a panic cannot do, and it is allowlisted by name with the reason written next to it.
+- `tests/fatal.h` was the only `setjmp` in the tree and is now a `BURROW_TRY` like everything else, which is what the file's own comment had promised for three releases.
+
+### Docs
+
+- `docs/guides/panic.md` is the page, including a table of what matches Go and what does not, the lifetime rule for a panicked value, and what a catch block costs.
+- `docs/guides/failure.md` no longer describes the middle of its three rows as missing.
+- The README has a panic section next to the defer one.
+
 ## v0.0.16 (2026-09-21)
 
 `defer`, which is the first half of the failure story the library has been promising since the first page of docs. It is a block rather than a bare statement, because the bare form works on GCC and Clang and silently does nothing on MSVC, and a feature that is missing on one of three supported platforms without saying so is worse than one that costs a line everywhere. The chain of open scopes belongs to the goroutine, so a goroutine that parks in the middle of a scope and wakes up on another thread still has its cleanups, and `runtime_goexit` runs all of them on the way out.

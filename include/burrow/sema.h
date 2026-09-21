@@ -42,6 +42,8 @@
 #ifndef BURROW_SEMA_H
 #define BURROW_SEMA_H
 
+#include "burrow/lock.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -71,6 +73,69 @@ void burrow__sema_acquire(uint32_t *addr, bool lifo);
  * Nothing else wants it. A handoff costs a scheduling round trip on every
  * unlock, which is exactly the cost the ordinary path exists to avoid. */
 void burrow__sema_release(uint32_t *addr, bool handoff);
+
+/* ------------------------------------------------------------ notify lists
+ *
+ * The other kind of waiting, and the one a sync.Cond is built out of.
+ *
+ * A semaphore wakes one waiter at a time and has no opinion about which one. A
+ * Cond has to wake every waiter that was already waiting when Broadcast was
+ * called, and none of the ones that arrive afterwards, and it has to do that
+ * while the caller is holding a lock that the waiters themselves need. So it
+ * gets a queue of its own rather than a call into the one above.
+ *
+ * The thing that makes it work is a ticket, taken in two steps:
+ *
+ *     uint32_t t = burrow__notify_list_add(&l);
+ *     sync_locker_unlock(c->l);
+ *     burrow__notify_list_wait(&l, t);
+ *     sync_locker_lock(c->l);
+ *
+ * The ticket is taken while the caller still holds its own lock, so it is
+ * ordered against whatever the waiter just observed. The wait happens after
+ * that lock is dropped, which is the window where a notify can land, and the
+ * ticket is what closes it: the list remembers how far it has notified, and a
+ * wait whose ticket has already been passed returns immediately instead of
+ * sleeping through a wakeup that has been and gone. Without the two steps this
+ * is the classic lost wakeup and a Cond built on it would hang.
+ *
+ * The zero value is an empty list, like everything else here. Internal, for the
+ * same reasons the semaphore is.
+ *
+ * Derived from Go's notifyList in src/runtime/sema.go. */
+typedef struct burrow__NotifyList {
+    /* The next ticket to hand out. Atomic, and read without the lock, because
+     * the fast path of a notify with nobody waiting is a comparison of these
+     * two numbers and nothing else. */
+    uint32_t wait;
+
+    /* The next ticket to be notified. Everything before it has been. Written
+     * under the lock and read atomically outside it. */
+    uint32_t notify;
+
+    /* Guards the list below. The runtime's lock rather than a sync.Mutex,
+     * because a sync.Mutex parks and this is the thing parking is built on. */
+    burrow__Lock lock;
+
+    /* The waiters, oldest first. Tickets increase along it, which is what lets
+     * a notify of one ticket stop as soon as it passes that ticket. */
+    struct burrow__SemaWaiter *head;
+    struct burrow__SemaWaiter *tail;
+} burrow__NotifyList;
+
+/* Takes a ticket. Call this while holding whatever lock protects the condition
+ * being waited on, then drop that lock, then wait on the ticket. */
+uint32_t burrow__notify_list_add(burrow__NotifyList *l);
+
+/* Waits until this ticket is notified, or returns straight away if it already
+ * has been. The lock the ticket was taken under must not be held. */
+void burrow__notify_list_wait(burrow__NotifyList *l, uint32_t t);
+
+/* Wakes the oldest waiter that has not been woken yet, if there is one. */
+void burrow__notify_list_notify_one(burrow__NotifyList *l);
+
+/* Wakes everybody who has a ticket so far, and nobody who takes one after. */
+void burrow__notify_list_notify_all(burrow__NotifyList *l);
 
 /* ---------------------------------------------------------------- spinning
  *

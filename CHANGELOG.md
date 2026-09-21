@@ -4,6 +4,24 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+### sync
+
+- `SyncCond` is Go's `Cond`, from `src/sync/cond.go`. `sync_cond_wait` drops the caller's lock, sleeps, and takes the lock again before returning. `sync_cond_signal` wakes one waiter and `sync_cond_broadcast` wakes everybody who was waiting when it was called. `SYNC_COND` is the initialiser and is Go's `NewCond` by another spelling, since a `Cond` has to know which lock it belongs to and so is the one thing in `burrow/sync.h` whose zero value is not ready to use.
+- Copying a `Cond` after its first use is caught and stops the program. A copy holds the same queue at a different address, so a waiter sleeping on one of them could be signalled through the other and never wake up. Go has `go vet` for this at build time and C has nothing, so the first use writes the Cond's own address down and every later use compares against it, which costs one atomic load on a path that is about to take a lock anyway. A copy taken before the first use is not caught and cannot be, which is Go's hole as well.
+
+### Runtime
+
+- A port of Go's `notifyList`, from `src/runtime/sema.go`, in `burrow/sema.h`. `burrow__notify_list_add`, `burrow__notify_list_wait`, `burrow__notify_list_notify_one` and `burrow__notify_list_notify_all`. The semaphore already there wakes one waiter at a time by address, and a `Cond` has to wake all of them and know which ones were present when it was asked, so this is a queue of its own rather than a call into what existed.
+- The ticket is what makes it correct. A waiter takes a number while it still holds its own lock, drops that lock, and only then sleeps, and the list remembers how far it has notified so a wait whose ticket has already been passed returns instead of sleeping through a wakeup that has been and gone. Take the number after dropping the lock and it is a lost wakeup. Both notify paths skip the lock entirely when nobody has taken a ticket since the last one, so a signal on an idle `Cond` is two loads.
+- The semaphore's waiter is now `struct burrow__SemaWaiter` rather than a file local type, and sleeping takes the lock to drop rather than the root that holds it, so the notify list can queue the same waiter without a second copy of the parking machinery.
+
+### Tests
+
+- 30 checks over `Cond`: a signal and a broadcast with nobody waiting leaving nothing behind, one waiter woken, five waiters all woken by one broadcast, a signal handing over one at a time with no token left behind, two hundred rounds of ping pong between a waiter and a signaller with no handshake beyond the condition itself, a `Cond` on the read side of an `RWMutex` through `RLocker`, five threads that are not goroutines waiting on one, and a copied `Cond` caught.
+- The ping pong test is the one this file exists for. It puts the signal all over the window between a waiter dropping its lock and going to sleep, which is where a lost wakeup lives, and it hangs rather than failing if the ticket is taken in the wrong order.
+
 ## v0.0.21 (2026-09-21)
 
 Most of `sync`. `sync.Mutex`, `sync.RWMutex`, `sync.Locker`, `sync.WaitGroup`, `sync.Once` and the three `Once` wrappers are in the new `burrow/sync.h`, on top of a port of Go's runtime semaphore.

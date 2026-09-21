@@ -38,10 +38,12 @@
 #ifndef BURROW_SYNC_H
 #define BURROW_SYNC_H
 
+#include "burrow/core.h"
 #include "burrow/func.h"
 #include "burrow/iface.h"
 #include "burrow/own.h"
 #include "burrow/panic.h"
+#include "burrow/sema.h"
 #include "burrow/sync/atomic.h"
 #include "burrow/type.h"
 
@@ -513,6 +515,103 @@ struct SyncOnceValues {
  * later call. Either pointer may be NULL to ignore that result. Re-raises f's
  * panic instead if it panicked. */
 void sync_once_values_get(SyncOnceValues *ov, Any *a, Any *b);
+
+/* ---------------------------------------------------------------- sync.Cond
+ *
+ * A place for goroutines to wait until something they care about changes.
+ *
+ * A Cond is a queue attached to a lock. The lock is yours and it is the one
+ * that guards whatever the condition is about. Waiting drops the lock, sleeps,
+ * and takes the lock again before returning, so a waiter always comes back
+ * holding what it was holding when it went to sleep.
+ *
+ *     static SyncMutex mu;
+ *     static SyncCond ready;
+ *     static bool has_work;
+ *
+ *     void consume(void) {
+ *         sync_mutex_lock(&mu);
+ *         while (!has_work)
+ *             sync_cond_wait(&ready);
+ *         take_the_work();
+ *         sync_mutex_unlock(&mu);
+ *     }
+ *
+ *     void produce(void) {
+ *         sync_mutex_lock(&mu);
+ *         has_work = true;
+ *         sync_cond_signal(&ready);
+ *         sync_mutex_unlock(&mu);
+ *     }
+ *
+ * The `while` is not a style preference. A Cond makes exactly one promise, that
+ * a waiter which was waiting when the signal went out will wake up, and it
+ * promises nothing about what is true when it does. Somebody else may have
+ * taken the work in between. Go says the same thing, and a Cond used with an
+ * `if` is the most common way to misuse one.
+ *
+ * Unlike everything else in this file, the zero value is not ready to use: a
+ * Cond has to know which lock it belongs to. That is what the initialiser
+ * below is for, and it is Go's NewCond by another spelling.
+ *
+ * Go's Cond has a note saying most uses are better served by a channel, and it
+ * is right. A Cond is for the case where the thing being waited on is a
+ * condition over shared state rather than a value being handed over. If what
+ * you have is a value being handed over, use a channel.
+ *
+ * Derived from Go's src/sync/cond.go. */
+typedef struct SyncCond {
+    /* The lock held while the condition is observed or changed. Go's `L`. Set
+     * it once, before the first wait, and do not change it afterwards. */
+    SyncLocker l;
+
+    /* The queue. The implementation's, and not a thing to read or write. */
+    burrow__NotifyList notify;
+
+    /* Where this Cond was the first time it was used, so that a copy of one can
+     * be caught. Also the implementation's. */
+    Uintptr checker;
+} SyncCond;
+
+/* The initialiser. Works at file scope and in a block.
+ *
+ *     SyncCond ready = SYNC_COND(sync_mutex_locker(&mu));
+ *
+ * A Cond in a static cannot be written this way, because sync_mutex_locker is
+ * a call and a static initialiser is a constant. Assign the whole struct at
+ * start up instead:
+ *
+ *     static SyncCond ready;
+ *     ...
+ *     ready = SYNC_COND(sync_mutex_locker(&mu));
+ *
+ * which is fine for as long as it happens before the first wait. */
+#define SYNC_COND(locker) ((SyncCond){.l = (locker)})
+
+/* The descriptor, so that an Any holding a Cond can be asserted back. */
+extern const Type *const TYPE_SYNC_COND;
+
+/* Waits for a signal or a broadcast.
+ *
+ * The lock must be held on the way in. It is dropped for the duration of the
+ * wait and taken again before this returns, so a wakeup is not a place where
+ * the caller loses the lock.
+ *
+ * It returns when it has been woken, which is not the same as the condition
+ * being true. Call it in a loop that re-tests the condition. */
+void sync_cond_wait(SyncCond *c);
+
+/* Wakes one waiter, if there is one. Waking nobody is not an error, and is what
+ * happens when the signal arrives before anybody is waiting, which is why the
+ * condition has to be re-tested rather than trusted.
+ *
+ * The lock does not have to be held. Holding it is usually clearer, because
+ * then the change and the signal cannot be seen out of order by a reader. */
+void sync_cond_signal(SyncCond *c);
+
+/* Wakes every waiter that is waiting now, and none that arrive afterwards. The
+ * lock does not have to be held here either. */
+void sync_cond_broadcast(SyncCond *c);
 
 #ifdef __cplusplus
 }

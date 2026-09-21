@@ -65,7 +65,8 @@ void burrow__sync_do_spin(void) {
 
 /* -------------------------------------------------------------- the waiter */
 
-/* One goroutine, or one thread, waiting on one address.
+/* One goroutine, or one thread, waiting. On an address if it came in through
+ * the semaphore, on a notify list if it came in through a Cond.
  *
  * It is a local in the frame of whoever is blocking, which is Go's sudog
  * without the pool for the reason channels do the same thing: a waiter that is
@@ -74,30 +75,34 @@ void burrow__sync_do_spin(void) {
  *
  * Whoever takes it off the queue owns it until the moment it wakes the waiter,
  * and must not touch it afterwards, because by then the frame may be gone. */
-typedef struct Waiter {
-    /* The counter being waited on, and the treap key. */
+struct burrow__SemaWaiter {
+    /* The counter being waited on, and the treap key. Unused by a waiter on a
+     * notify list, which is queued on the list itself rather than an address. */
     uint32_t *addr;
 
     /* The treap. `prev` holds lower addresses and `next` higher ones, and
      * `parent` is what makes a rotation something that can be done from the
      * node rather than from the root. */
-    struct Waiter *parent;
-    struct Waiter *prev;
-    struct Waiter *next;
+    struct burrow__SemaWaiter *parent;
+    struct burrow__SemaWaiter *prev;
+    struct burrow__SemaWaiter *next;
 
     /* Everybody else waiting on this same address, oldest first, hanging off
      * the one of them that is in the treap. The tail is kept so that arriving
      * at the back of the queue is a pointer write rather than a walk, and it is
-     * only meaningful on the node that is actually in the treap. */
-    struct Waiter *waitlink;
-    struct Waiter *waittail;
+     * only meaningful on the node that is actually in the treap. A waiter on a
+     * notify list uses `waitlink` as the link in that list and leaves the tail
+     * alone, since the list keeps its own. */
+    struct burrow__SemaWaiter *waitlink;
+    struct burrow__SemaWaiter *waittail;
 
-    /* Two jobs, never at the same time. While this waiter is in the treap it is
-     * the random priority that keeps the tree balanced, and it always has its
-     * low bit set so that it cannot be zero. Once the waiter has been taken out
-     * it is cleared, and a release doing a handoff then sets it to one to say
-     * that the wakeup has already been paid for and the waiter should not go
-     * looking for another. */
+    /* Three jobs, never two at the same time. While this waiter is in the treap
+     * it is the random priority that keeps the tree balanced, and it always has
+     * its low bit set so that it cannot be zero. Once the waiter has been taken
+     * out it is cleared, and a release doing a handoff then sets it to one to
+     * say that the wakeup has already been paid for and the waiter should not go
+     * looking for another. On a notify list it is the ticket, and none of the
+     * treap's rules apply because a waiter there is never in a treap. */
     uint32_t ticket;
 
     /* The goroutine to ready, or NULL for a thread that is not running one. */
@@ -106,7 +111,9 @@ typedef struct Waiter {
     /* The gate a thread waits on, used only when g is NULL. */
     burrow__Note note;
     bool has_note;
-} Waiter;
+};
+
+typedef struct burrow__SemaWaiter Waiter;
 
 /* ---------------------------------------------------------------- the table */
 
@@ -327,9 +334,9 @@ static Waiter *root_dequeue(Root *root, const uint32_t *addr) {
  * The two functions where a goroutine and a thread differ, and the reason the
  * rest of this file does not have to know which it is holding. */
 
-static bool unlock_root(Goroutine *g, void *p) {
+static bool unlock_lock(Goroutine *g, void *p) {
     (void)g;
-    burrow__unlock(&((Root *)p)->lock);
+    burrow__unlock((burrow__Lock *)p);
     return true;
 }
 
@@ -349,11 +356,12 @@ static bool waiter_init(Waiter *w) {
     return w->has_note;
 }
 
-/* Blocks until somebody dequeues this waiter and wakes it. The root's lock is
- * held on the way in and is not held on the way out. */
-static void waiter_sleep(Waiter *w, Root *root) {
+/* Blocks until somebody takes this waiter off whatever queue it is on and wakes
+ * it. `lk` is the lock guarding that queue, held on the way in and not held on
+ * the way out. */
+static void waiter_sleep(Waiter *w, burrow__Lock *lk) {
     if (w->g != NULL) {
-        sched_park(unlock_root, root);
+        sched_park(unlock_lock, lk);
         return;
     }
 
@@ -361,7 +369,7 @@ static void waiter_sleep(Waiter *w, Root *root) {
      * a note is allowed to be opened before anybody is standing at it. So it
      * unlocks out in the open and a wake that lands in between leaves the gate
      * open and the sleep returns at once. */
-    burrow__unlock(&root->lock);
+    burrow__unlock(lk);
     burrow__note_sleep(&w->note);
 }
 
@@ -437,7 +445,7 @@ void burrow__sema_acquire(uint32_t *addr, bool lifo) {
         }
 
         root_queue(root, addr, &w, lifo);
-        waiter_sleep(&w, root);
+        waiter_sleep(&w, &root->lock);
 
         /* A ticket means the release handed the wakeup straight over and there
          * is nothing left to take. Otherwise the wakeup went back on the
@@ -495,4 +503,128 @@ void burrow__sema_release(uint32_t *addr, bool handoff) {
      * it wins, which is the behaviour the handoff exists to stop. */
     if (given && sched_current() != NULL)
         runtime_gosched();
+}
+
+/* --------------------------------------------------------- the notify list
+ *
+ * The queue a sync.Cond waits on. See the long comment in burrow/sema.h for
+ * why it is not the semaphore above.
+ *
+ * Derived from Go's notifyList in src/runtime/sema.go. */
+
+/* Ticket comparison, which has to allow for the counters wrapping. Tickets are
+ * handed out forever and a program that takes four billion of them starts again
+ * at zero, so the question is never "is a smaller than b" but "is a behind b",
+ * and the signed difference answers that for any two tickets less than two
+ * billion apart. Go's `less`. */
+static bool ticket_before(uint32_t a, uint32_t b) {
+    return (int32_t)(a - b) < 0;
+}
+
+uint32_t burrow__notify_list_add(burrow__NotifyList *l) {
+    /* The add returns the value before it, which is this caller's ticket. No
+     * lock: taking a number is the only thing that happens here, and the order
+     * the numbers come out in is the order the waiters will be woken in. */
+    return burrow__atomic_add_u32(&l->wait, 1);
+}
+
+void burrow__notify_list_wait(burrow__NotifyList *l, uint32_t t) {
+    burrow__lock(&l->lock);
+
+    /* Already notified, between the ticket being taken and this lock. This is
+     * the case the ticket exists for, and getting it wrong is the lost wakeup
+     * that makes a Cond hang. */
+    if (ticket_before(t, burrow__atomic_load_u32(&l->notify))) {
+        burrow__unlock(&l->lock);
+        return;
+    }
+
+    Waiter w;
+    if (!waiter_init(&w))
+        runtime_throw(BURROW_S("sema: out of memory waiting on a condition"));
+    w.ticket = t;
+
+    /* On the end, which is where the tickets say this one belongs. Two waiters
+     * can take their numbers and then reach this lock in the other order, so
+     * the list is very nearly sorted rather than sorted, which is a thing the
+     * notify of a single ticket below has to know about. */
+    if (l->tail == NULL)
+        l->head = &w;
+    else
+        l->tail->waitlink = &w;
+    l->tail = &w;
+
+    waiter_sleep(&w, &l->lock);
+    waiter_free(&w);
+}
+
+void burrow__notify_list_notify_all(burrow__NotifyList *l) {
+    /* Nobody has taken a ticket since the last notify, so there is nobody to
+     * wake and no reason to touch the lock. This is a Broadcast on an idle Cond
+     * and it costs two loads. */
+    if (burrow__atomic_load_u32(&l->wait) == burrow__atomic_load_u32(&l->notify))
+        return;
+
+    burrow__lock(&l->lock);
+    Waiter *w = l->head;
+    l->head = NULL;
+    l->tail = NULL;
+
+    /* Everybody up to the current `wait` counts as notified. The ones already
+     * on the list are about to be woken, and the ones that have a ticket but
+     * have not reached the lock yet will see this and not sleep at all. */
+    burrow__atomic_store_u32(&l->notify, burrow__atomic_load_u32(&l->wait));
+    burrow__unlock(&l->lock);
+
+    /* Outside the lock, because waking a goroutine can run the scheduler and
+     * holding a runtime lock across that is how a deadlock is built. */
+    while (w != NULL) {
+        Waiter *next = w->waitlink;
+        w->waitlink = NULL;
+        waiter_wake(w);
+        w = next;
+    }
+}
+
+void burrow__notify_list_notify_one(burrow__NotifyList *l) {
+    if (burrow__atomic_load_u32(&l->wait) == burrow__atomic_load_u32(&l->notify))
+        return;
+
+    burrow__lock(&l->lock);
+
+    uint32_t t = burrow__atomic_load_u32(&l->notify);
+    if (t == burrow__atomic_load_u32(&l->wait)) {
+        burrow__unlock(&l->lock);
+        return;
+    }
+    burrow__atomic_store_u32(&l->notify, t + 1);
+
+    /* Find the waiter holding that ticket. It may not be on the list yet, in
+     * which case there is nothing to do here: it is between taking its number
+     * and reaching the lock, and the store above means it will find itself
+     * already notified and go straight through.
+     *
+     * The scan looks linear and is not, in practice. A waiter is only behind
+     * others in the list because it lost the race between taking a number and
+     * queueing, so the one being looked for is at or near the front. */
+    Waiter *prev = NULL;
+    for (Waiter *w = l->head; w != NULL; prev = w, w = w->waitlink) {
+        if (w->ticket != t)
+            continue;
+
+        Waiter *next = w->waitlink;
+        if (prev != NULL)
+            prev->waitlink = next;
+        else
+            l->head = next;
+        if (next == NULL)
+            l->tail = prev;
+
+        burrow__unlock(&l->lock);
+        w->waitlink = NULL;
+        waiter_wake(w);
+        return;
+    }
+
+    burrow__unlock(&l->lock);
 }

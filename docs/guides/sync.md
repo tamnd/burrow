@@ -124,7 +124,7 @@ Go needs no conversion function, because a `*Mutex` satisfies `Locker` by having
 
 It is a vtable pointer and a data pointer, the same shape as every other interface in the library, and the rules are explained once in [guides/interfaces.md](interfaces.md). A zeroed `SyncLocker` is nil, and locking or unlocking a nil one stops the program the same way calling a method on a nil interface does in Go.
 
-`sync_rw_mutex_r_locker` is Go's `RLocker`. Locking it takes a read lock and unlocking it gives that read lock back, which is how a `Cond` waits on the read side of an `RWMutex`. `Cond` is the main reason `Locker` exists at all, and it is the next thing to be written.
+`sync_rw_mutex_r_locker` is Go's `RLocker`. Locking it takes a read lock and unlocking it gives that read lock back, which is how a `Cond` waits on the read side of an `RWMutex`. `Cond` is the main reason `Locker` exists at all.
 
 ## WaitGroup
 
@@ -206,6 +206,53 @@ Go's `OnceValue` is generic in the result type and this one is an `Any`, for the
 
 One thing worth knowing about the panic these keep. A caught panic value lives in the frame that caught it, so keeping it for a later call means copying it out, and each of these three structs has thirty two bytes to copy it into. That is the same bargain and the same number `burrow/panic.h` makes for a catch block. A panic value bigger than that keeps pointing where it pointed, which in practice means do not panic with a large value you built on the stack.
 
+## Cond
+
+A place for goroutines to wait until something they care about changes.
+
+```c
+static SyncMutex mu;
+static SyncCond ready;
+static bool has_work;
+
+void consume(void) {
+    sync_mutex_lock(&mu);
+    while (!has_work)
+        sync_cond_wait(&ready);
+    take_the_work();
+    sync_mutex_unlock(&mu);
+}
+
+void produce(void) {
+    sync_mutex_lock(&mu);
+    has_work = true;
+    sync_cond_signal(&ready);
+    sync_mutex_unlock(&mu);
+}
+```
+
+A `Cond` is a queue attached to a lock, and the lock is yours. `sync_cond_wait` drops it, sleeps, and takes it again before returning, so a waiter always comes back holding what it was holding when it went to sleep. `sync_cond_signal` wakes one waiter and `sync_cond_broadcast` wakes all of them, and neither requires the lock to be held, though holding it is usually clearer.
+
+The `while` is not a style preference. A `Cond` promises exactly one thing, which is that a waiter already waiting when the signal went out will wake up. It promises nothing about what is true when it does, because somebody else may have taken the work in between. Go says the same, and a `Cond` used with an `if` instead of a `while` is the most common way to get one wrong.
+
+Unlike everything else in this file, the zero value is not ready to use, since a `Cond` has to know which lock it belongs to. `SYNC_COND` is the initialiser and it is Go's `NewCond` by another spelling.
+
+```c
+SyncCond ready = SYNC_COND(sync_mutex_locker(&mu));
+```
+
+A `Cond` in a static cannot be written that way, because `sync_mutex_locker` is a call and a static initialiser has to be a constant. Assign the whole struct at start up instead, which is fine for as long as it happens before the first wait.
+
+```c
+static SyncCond ready;
+...
+ready = SYNC_COND(sync_mutex_locker(&mu));
+```
+
+Copying a `Cond` after it has been used is caught. A copy holds the same queue at a different address, so a waiter sleeping on one of them could be signalled through the other and never wake up. Go has `go vet` to catch this at build time. C does not, so the first use writes the address down and every later use compares against it, which costs one atomic load on a path that is about to take a lock anyway. A copy taken before the first use is not caught and cannot be, since nothing has happened yet that could tell the two apart. Go has the same hole.
+
+Go's documentation for `Cond` notes that most uses are better served by a channel, and it is right. A `Cond` is for waiting on a condition over shared state. If what you have is a value being handed from one goroutine to another, use a channel.
+
 ## What it costs
 
 An uncontended lock and unlock is about eleven nanoseconds on a server core, which is what one compare and swap and one atomic add cost on hardware nobody else is touching. A write lock and unlock on an `RWMutex` is about twice that, because it goes through the inner mutex first and then touches the reader count. A read lock and unlock is the same as a plain mutex, since both are one atomic on one word.
@@ -218,13 +265,13 @@ Under contention, four goroutines locking an empty critical section as fast as t
 
 Waiters queue on the runtime's semaphore, which is Go's, from `src/runtime/sema.go`. A semaphore here is a `uint32_t` that the caller owns, and the waiters for it live in a table of 251 roots shared by every semaphore in the program, keyed on the address of that word. Each root holds a balanced tree of addresses with the waiters for one address chained off its node, so a program with a million mutexes has one table and not a million queues, and a mutex nobody is waiting on has no queue anywhere.
 
+`Cond` is the exception. It waits on a notify list rather than the semaphore, which is also Go's and also from `src/runtime/sema.go`. A semaphore wakes one waiter at a time and has no opinion about which, and a `Cond` has to be able to wake everybody who was waiting when the broadcast went out and nobody who arrived after, so it has a queue of its own. What makes that work is a ticket. The waiter takes a number while it still holds its own lock, drops the lock, and only then sleeps, and the list remembers how far it has notified, so a signal that lands in the gap between the unlock and the sleep is not lost. Take the number after dropping the lock and the program hangs, which is the oldest bug a condition variable has.
+
 Before queueing, a goroutine spins a few times, but only on a machine with more than one processor and only when there is a processor free to be running the lock holder. Spinning for a lock held by a goroutine that cannot be running is pure waste. The processor count that decision uses is the count of processors this process is allowed to run on rather than the count the machine has, which is a different number inside a container with a cpuset or under `taskset`.
 
 ## What is not here yet
 
-`Cond`, `Map` and `Pool`, in that order. All three are on the P0 milestone and all three are built on what is above.
-
-`Cond` needs one thing that does not exist yet, which is Go's `notifyList` from `src/runtime/sema.go`. The semaphore underneath these locks wakes one waiter at a time by address and a `Cond` needs to wake all of them by ticket, so that is a port of its own rather than a call into what is there.
+`Map` and `Pool`, in that order. Both are on the P0 milestone and both are built on what is above.
 
 ## See also
 

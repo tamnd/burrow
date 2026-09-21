@@ -489,6 +489,19 @@ Go's `sync.Once`. What it promises is that when any call returns, f has finished
 
 `sync.OnceFunc`, `sync.OnceValue` and `sync.OnceValues` are here too. Go returns closures from those and burrow cannot, so they are structs you declare with an initialiser macro, nothing is allocated and there is nothing to free. They remember a panic and raise it again on every later call, which is the difference from a bare `Once` and the reason to reach for one.
 
+```c
+static SyncMutex mu;
+static SyncCond ready;
+
+sync_mutex_lock(&mu);
+while (!has_work)
+    sync_cond_wait(&ready);
+take_the_work();
+sync_mutex_unlock(&mu);
+```
+
+Go's `sync.Cond`, for waiting until something you share with another goroutine changes. Waiting drops your lock, sleeps, and takes the lock again before it returns. `sync_cond_signal` wakes one waiter and `sync_cond_broadcast` wakes all of them. The `while` matters: a `Cond` promises you will be woken, not that the thing you were waiting for is true when you are.
+
 Details: [docs/guides/sync.md](docs/guides/sync.md).
 
 ## Status

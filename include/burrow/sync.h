@@ -41,6 +41,7 @@
 #include "burrow/core.h"
 #include "burrow/func.h"
 #include "burrow/iface.h"
+#include "burrow/mem.h"
 #include "burrow/own.h"
 #include "burrow/panic.h"
 #include "burrow/sema.h"
@@ -612,6 +613,221 @@ void sync_cond_signal(SyncCond *c);
 /* Wakes every waiter that is waiting now, and none that arrive afterwards. The
  * lock does not have to be held here either. */
 void sync_cond_broadcast(SyncCond *c);
+
+/* ----------------------------------------------------------------- sync.Map
+ *
+ * A map many goroutines can read and write at once without a lock around it.
+ *
+ *     static SyncMap cache;
+ *     cache = SYNC_MAP(heap_allocator(), TYPE_STRING, TYPE_INT);
+ *
+ *     Int n = 1;
+ *     Str k = BURROW_S("hits");
+ *     sync_map_store(&cache, &k, &n);
+ *
+ *     Int got;
+ *     if (sync_map_load(&cache, &k, &got))
+ *         use(got);
+ *
+ * The first question to ask is whether you want one. A plain Map behind a
+ * SyncMutex is simpler, it is faster for most workloads, and it is what Go's
+ * own documentation tells you to reach for first. This is for the two cases
+ * where it wins, and they are the two Go names: a cache that is written once
+ * per key and read many times, and a map that many goroutines touch but with
+ * little overlap in the keys they touch. In both, the point is that readers do
+ * not write to a shared cache line and so do not fight each other.
+ *
+ * Underneath is Go's own implementation, a hash trie of sixteen way nodes taken
+ * four hash bits at a time. A read follows pointers and takes no lock at all. A
+ * write locks one node, which is the node holding the slot being changed, so
+ * two writes to different parts of the map do not meet.
+ *
+ * Keys and values go in and come out by pointer, for the same reason they do in
+ * burrow/map.h: the map holds values of a type it learns at runtime. The macros
+ * at the end put the static typing back.
+ *
+ * Unlike the rest of this file the zero value is not ready to use, because a
+ * map has to be told its key type, its value type and where its memory comes
+ * from. Go gets all three from the type system and burrow has to be handed
+ * them. Use SYNC_MAP below.
+ *
+ * Two differences from Go that are worth knowing before you start.
+ *
+ * The first is that a range callback must not block. The reclamation this map
+ * stands on is tied to the thread, so a goroutine that parks in the middle of a
+ * read is a bug the runtime will report. Read below at sync_map_range.
+ *
+ * The second is that everything which can allocate says so. Go's Store cannot
+ * fail because Go stops the world when it runs out of memory; a C library has
+ * to hand that decision back, so the allocating calls return whether they could
+ * do it and give you Go's result through a pointer.
+ *
+ * Derived from Go's src/internal/sync/hashtriemap.go and src/sync/map.go. */
+typedef struct SyncMap {
+    /* Where the nodes come from, and what is in them. Set by SYNC_MAP and not
+     * changed afterwards. */
+    Alloc *a;
+    const Type *key;
+    const Type *val;
+
+    /* The trie, the hash seed, and where the key and the value sit inside a
+     * node. The implementation's, all of it. */
+    void *root;
+    uint64_t seed;
+    uint32_t key_off;
+    uint32_t val_off;
+    uint32_t node_size;
+    uint32_t node_align;
+    SyncMutex init_mu;
+    SyncAtomicUint32 inited;
+} SyncMap;
+
+/* The initialiser. Works in a block and at file scope, and a map in a static
+ * has to be assigned at start up the same way a Cond does, because
+ * heap_allocator is a call.
+ *
+ *     SyncMap cache = SYNC_MAP(heap_allocator(), TYPE_STRING, TYPE_INT);
+ *
+ * Nothing is allocated here. The first store builds the trie, so a map that is
+ * declared and never written costs its own struct and no more.
+ *
+ * Stops the program if the key type is not comparable, at the first store
+ * rather than here, since a macro cannot check anything. Same rule as
+ * map_make: a slice, a map and a function cannot be keys. */
+#define SYNC_MAP(alloc, key_type, val_type)                                            \
+    ((SyncMap){.a = (alloc), .key = (key_type), .val = (val_type)})
+
+/* The descriptor, so that an Any holding a Map can be asserted back. */
+extern const Type *const TYPE_SYNC_MAP;
+
+/* m.Load(key). Copies the value out and answers whether the key was there.
+ *
+ * out_val may be NULL to ask only whether the key is present. When the key is
+ * absent nothing is written, which differs from map_get2 and is deliberate:
+ * this map is read concurrently and a caller that ignores the answer and reads
+ * the buffer anyway should get its own uninitialised value rather than a zero
+ * that looks like a stored one.
+ *
+ * Takes no lock and allocates nothing. */
+bool sync_map_load(SyncMap *m, const void *key, void *out_val);
+
+/* m.Store(key, value). Copies both in, replacing whatever was there.
+ *
+ * val may be NULL, which stores the value type's zero value.
+ *
+ * Returns false when a node was needed and the allocator said no, in which case
+ * the map is unchanged. */
+bool sync_map_store(SyncMap *m, const void *key, const void *val);
+
+/* m.Swap(key, value). Stores, and hands back what was there before.
+ *
+ * out_prev gets the old value and out_loaded gets whether there was one. Either
+ * may be NULL. Nothing is written to out_prev when the key was absent.
+ *
+ * Returns false on allocation failure, with the map unchanged, which is why
+ * Go's `loaded` comes out through a pointer rather than as the result. */
+bool sync_map_swap(SyncMap *m, const void *key, const void *val, void *out_prev,
+                   bool *out_loaded);
+
+/* m.LoadOrStore(key, value). Stores only if the key is absent.
+ *
+ * out_actual gets the value that is in the map afterwards, which is the one
+ * that was already there or the one just stored, and out_loaded gets which of
+ * those happened. Either may be NULL.
+ *
+ * Returns false on allocation failure, with the map unchanged. A key that was
+ * already present never allocates, so the read mostly path through this cannot
+ * fail. */
+bool sync_map_load_or_store(SyncMap *m, const void *key, const void *val,
+                            void *out_actual, bool *out_loaded);
+
+/* m.CompareAndSwap(key, old, new). Replaces the value only if what is there
+ * equals old.
+ *
+ * out_swapped gets whether it happened, and may be NULL. Returns false on
+ * allocation failure, with the map unchanged.
+ *
+ * Stops the program if the value type is not comparable, which is Go's panic
+ * for the same call. */
+bool sync_map_compare_and_swap(SyncMap *m, const void *key, const void *old,
+                               const void *val, bool *out_swapped);
+
+/* m.LoadAndDelete(key). Removes the key and copies out what it held.
+ *
+ * out_val may be NULL. Answers whether the key was there. Allocates nothing,
+ * so there is nothing to fail. */
+bool sync_map_load_and_delete(SyncMap *m, const void *key, void *out_val);
+
+/* m.Delete(key). Does nothing if the key is not there. */
+void sync_map_delete(SyncMap *m, const void *key);
+
+/* m.CompareAndDelete(key, old). Removes the key only if what it holds equals
+ * old, and answers whether it happened.
+ *
+ * Stops the program if the value type is not comparable. */
+bool sync_map_compare_and_delete(SyncMap *m, const void *key, const void *old);
+
+/* m.Clear(). Empties the map and hands every node back to the allocator once no
+ * reader can still be inside one.
+ *
+ * Returns false if the one node it needs could not be allocated, in which case
+ * the map is untouched. Go's Clear cannot fail for the usual reason. */
+bool sync_map_clear(SyncMap *m);
+
+/* What sync_map_range calls, once per entry. Return false to stop the walk,
+ * which is Go's `yield` returning false. key and value point into the map and
+ * are only valid until you return, so copy anything you want to keep. */
+typedef bool (*SyncMapRangeFunc)(const void *key, const void *val, void *arg);
+
+/* m.Range(f). Calls f for every key and value, in no particular order.
+ *
+ * There is no snapshot. No key is visited more than once, but a key stored or
+ * deleted while the walk is running may or may not be visited, and a value
+ * changed during the walk may be seen before or after the change. Go says the
+ * same thing about its Range and means it the same way.
+ *
+ * f may call back into the same map, including to store and delete.
+ *
+ * f must not block. Not on a channel, not on a mutex, not on anything that can
+ * park the goroutine. A walk holds a reclamation pin for its whole length, a
+ * pin belongs to the thread rather than to the goroutine, and a goroutine that
+ * parks inside one is a fatal error the runtime reports rather than a quiet
+ * wrong answer. If what you want to do per entry can block, copy the keys out
+ * in f and do the work after the walk has finished. This restriction is the one
+ * place this map is not Go's, and it is there because Go's version of this
+ * problem is solved by the garbage collector. */
+void sync_map_range(SyncMap *m, SyncMapRangeFunc f, void *arg);
+
+/* Hands every node back to the allocator, and leaves the map empty and still
+ * usable, the way a freshly initialised one is.
+ *
+ * Go has no such thing, because Go has a collector. This is here for the same
+ * reason map_free is: the nodes are the map's and nothing outside can name
+ * them, so nobody else can give them back.
+ *
+ * Unlike every other call here this one is not safe to make concurrently with
+ * the others. Nothing may be reading or writing the map while it runs. A map in
+ * an arena can ignore it, since arena_free covers everything. */
+void sync_map_free(SyncMap *m);
+
+/* Typed access, for the call sites that know the types. Same shape as the map.h
+ * macros: types first, then the map, then the values. */
+#define BURROW_SYNC_MAP_STORE(KT, VT, m, k, v)                                         \
+    sync_map_store((m), (const KT[]){(k)}, (const VT[]){(v)})
+
+#define BURROW_SYNC_MAP_LOAD(KT, m, k, out_val)                                        \
+    sync_map_load((m), (const KT[]){(k)}, (out_val))
+
+#define BURROW_SYNC_MAP_HAS(KT, m, k) sync_map_load((m), (const KT[]){(k)}, NULL)
+
+#define BURROW_SYNC_MAP_DELETE(KT, m, k) sync_map_delete((m), (const KT[]){(k)})
+
+#if defined(BURROW_SHORT) && BURROW_SHORT
+#define SYNC_MAP_STORE(KT, VT, m, k, v) BURROW_SYNC_MAP_STORE(KT, VT, m, k, v)
+#define SYNC_MAP_LOAD(KT, m, k, out_val) BURROW_SYNC_MAP_LOAD(KT, m, k, out_val)
+#define SYNC_MAP_HAS(KT, m, k) BURROW_SYNC_MAP_HAS(KT, m, k)
+#define SYNC_MAP_DELETE(KT, m, k) BURROW_SYNC_MAP_DELETE(KT, m, k)
+#endif
 
 #ifdef __cplusplus
 }

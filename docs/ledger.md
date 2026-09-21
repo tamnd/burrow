@@ -26,7 +26,7 @@ A symbol with an entry here links to it from its reference page, and the entry l
 
 ## Genuine differences
 
-These four do not do what Go does, and no amount of engineering will change that.
+The ones below do not do what Go does, and no amount of engineering will change that.
 
 ### Inserting into a map while ranging over it
 
@@ -37,6 +37,16 @@ So an insert that grows the table while an iterator is live makes `map_next` sto
 Go's own specification says the entries produced after an insert during a range are unspecified, so a program this catches is a program that was already relying on something Go does not promise. What Go does have is a collector, which lets it keep the displaced table alive for exactly as long as some iterator can still see it. Without one, the two available answers are handing out pointers into memory that was freed, or never freeing it, and reporting the bug beats both.
 
 If you need to insert while walking, collect the keys first and walk those. The rest of the iteration rules, which are Go's, are in [guides/maps.md](guides/maps.md).
+
+### Blocking inside a `sync_map_range` callback
+
+`sync_map_range` walks a structure that other goroutines are inserting into and deleting from at the same time, so the walk is following pointers to nodes somebody may already have unlinked. What keeps those nodes alive is a reclamation pin, and `sync_map_range` takes one pin and holds it for the whole walk, including across every call into your callback.
+
+A pin belongs to the thread and not to the goroutine. So a callback that parks, whether on a channel, a `SyncMutex` somebody else holds, a `WaitGroup`, or a sleep, leaves the pin behind on whichever thread it was running on and takes it back on whichever thread it resumes on. When those are different threads the runtime notices and stops the program with `reclaim: unpin without a pin`. When they happen to be the same thread it goes unnoticed, and the only symptom is that nothing anywhere in the program gets reclaimed for as long as your callback is blocked. Neither of those is a thing to leave in a program, so the rule is that the callback does not block.
+
+Go's `Range` has no such rule, because the collector keeps a node alive for as long as the walk is holding it and Go's walk therefore takes nothing at all. This is the same missing collector as the map iteration entry above, arriving in a different place.
+
+If you need to do something blocking per entry, copy what you need out during the walk and do the blocking part after `sync_map_range` returns. Everything else is allowed, including storing into the same map and deleting from it, which is what Go allows too.
 
 ### `plugin`
 

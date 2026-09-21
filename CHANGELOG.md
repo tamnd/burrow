@@ -6,6 +6,15 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 
 ## Unreleased
 
+### sync
+
+- `SyncMap` is Go's `sync.Map`, ported from `src/internal/sync/hashtriemap.go` and `src/sync/map.go`. All ten methods are there: `sync_map_load`, `sync_map_store`, `sync_map_swap`, `sync_map_load_or_store`, `sync_map_compare_and_swap`, `sync_map_load_and_delete`, `sync_map_delete`, `sync_map_compare_and_delete`, `sync_map_clear` and `sync_map_range`. `SYNC_MAP` is the initialiser and takes the allocator and the two type descriptors, since a C map has to be told what is in it.
+- It is a hash trie, sixteen children per level, which is what Go's has been since 1.24. Reads take no lock and write nothing, so readers on different cores do not contend with each other at all, and a write locks only the one node that owns the slot it is changing.
+- Failure is reported where it can happen. The methods that may have to allocate return whether they could, and hand back Go's own result through an out parameter. The methods that cannot allocate return Go's result directly. A map that has never been written to is empty and is not initialised, so every read path and every delete path allocates nothing and cannot fail.
+- The per node lock is the runtime's spinning lock rather than `SyncMutex`. A writer is holding a reclamation pin when it reaches the lock, and a pinned thread must not park, so a lock that parks is not available here. The critical sections are a slot store, a walk of an overflow chain, and at most sixteen small allocations.
+- Against Go on the same machine, a lookup that hits is 1.23x, a lookup that misses is level, an insert and delete pair is 1.05x and a store over an existing key is 1.22x. Most of the gap on the reads is the reclamation pin, which is one sequentially consistent store that Go does not have to make because it has a collector. The numbers are in [burrow-bench](https://github.com/tamnd/burrow-bench).
+- A callback passed to `sync_map_range` must not block. The walk holds one pin across the whole of it, which is the one place this map is not Go's, and it is written up in [docs/ledger.md](docs/ledger.md). `sync_map_free` releases the tree and is the other thing Go does not need, since Go's map goes away when the last reference to it does.
+
 ### Runtime
 
 - Epoch based reclamation, in `burrow/reclaim.h`. `burrow__pin` and `burrow__unpin` mark the window in which a thread is following pointers into a structure somebody else may be unlinking from, and `burrow__retire` hands an unlinked object over to be freed once no reader can still be holding it. This is the piece Go gets from the garbage collector for free and burrow has to write, and `sync.Map` is the first thing that needs it.

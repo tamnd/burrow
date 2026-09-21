@@ -253,6 +253,91 @@ Copying a `Cond` after it has been used is caught. A copy holds the same queue a
 
 Go's documentation for `Cond` notes that most uses are better served by a channel, and it is right. A `Cond` is for waiting on a condition over shared state. If what you have is a value being handed from one goroutine to another, use a channel.
 
+## Map
+
+A map that many goroutines read and write at once, with no lock around it.
+
+```c
+static SyncMap cache;
+
+void setup(void) {
+    cache = SYNC_MAP(heap_allocator(), TYPE_STRING, TYPE_INT);
+}
+
+void record(Str name, Int n) {
+    sync_map_store(&cache, &name, &n);
+}
+
+bool lookup(Str name, Int *out) {
+    return sync_map_load(&cache, &name, out);
+}
+```
+
+The first question is whether you want one. A plain `Map` behind a `SyncMutex` is simpler, it is faster for most workloads, and it is what Go's own documentation tells you to reach for first. `SyncMap` is for the two cases Go names, and they are the same two here. One is a cache that is written once per key and then read over and over. The other is a map that many goroutines touch where they mostly touch different keys. In both, what wins is that a reader writes nothing, so readers on different cores never take each other's cache lines away.
+
+Unlike everything else in this file the zero value is not ready to use. A map has to know its key type, its value type and where its memory comes from, and Go gets all three from the type system. `SYNC_MAP` is where you hand them over. It allocates nothing, so a map that is declared and never written costs its own struct and no more, and it works at file scope as well as in a block, with the same start up assignment a `Cond` in a static needs.
+
+Keys and values go in and out by pointer, for the reason they do in [guides/maps.md](maps.md): the map holds values of a type it only learns at runtime. `SYNC_MAP_STORE`, `SYNC_MAP_LOAD`, `SYNC_MAP_HAS` and `SYNC_MAP_DELETE` put the static typing back at the call sites that know the types.
+
+```c
+SYNC_MAP_STORE(Str, Int, &cache, BURROW_S("hits"), 1);
+
+Int n;
+if (SYNC_MAP_LOAD(Str, &cache, BURROW_S("hits"), &n))
+    use(n);
+```
+
+All ten of Go's methods are there. `sync_map_load`, `sync_map_store`, `sync_map_swap`, `sync_map_load_or_store`, `sync_map_compare_and_swap`, `sync_map_load_and_delete`, `sync_map_delete`, `sync_map_compare_and_delete`, `sync_map_clear` and `sync_map_range`.
+
+### Which calls can fail
+
+Go's `Store` cannot fail, because a Go program that runs out of memory stops. A C library has to hand that decision back, so the calls that may need a node return whether they got one, and Go's own result comes out through a pointer:
+
+```c
+bool loaded;
+Int actual;
+if (!sync_map_load_or_store(&cache, &k, &n, &actual, &loaded))
+    return out_of_memory();
+```
+
+That is `sync_map_store`, `sync_map_swap`, `sync_map_load_or_store`, `sync_map_compare_and_swap` and `sync_map_clear`. When one of them returns false the map is exactly as it was.
+
+The calls that cannot allocate return Go's answer directly, with nothing to check: `sync_map_load`, `sync_map_load_and_delete`, `sync_map_delete` and `sync_map_compare_and_delete`. A map that has never been written to is empty and is never initialised, so a program that only ever reads one allocates nothing at all.
+
+### Ranging
+
+`sync_map_range` calls your function for every key and value, in no order, and stops early if you return false. There is no snapshot. No key is visited twice, but a key stored or deleted while the walk is running may or may not show up. That is Go's rule, word for word.
+
+```c
+static bool print_one(const void *key, const void *val, void *arg) {
+    printf("%.*s = %lld\n", (int)((const Str *)key)->len, ((const Str *)key)->ptr,
+           (long long)*(const Int *)val);
+    return true;
+}
+
+sync_map_range(&cache, print_one, NULL);
+```
+
+The callback must not block. Not on a channel, not on a mutex somebody else holds, not on a sleep. The walk is following pointers to nodes another goroutine may already have unlinked, what keeps those nodes alive is a reclamation pin, and a pin belongs to the thread rather than to the goroutine. A goroutine that parks inside one leaves it behind. The runtime usually catches it and stops the program, and when it does not the whole program's reclamation stalls until the callback comes back, so neither outcome is one to ship. If the work you want to do per entry can block, copy what you need out in the callback and do the rest after the walk returns. This is the one place `SyncMap` is not `sync.Map`, and it is in [ledger.md](../ledger.md) with the others.
+
+The key and value pointers are only valid until you return. Copy anything you want to keep.
+
+### Giving it back
+
+`sync_map_free` hands every node back and leaves the map empty and still usable. Go has no such call because Go has a collector, and this is here for the reason `map_free` is: the nodes belong to the map and nothing outside it can name them.
+
+It is the one call here that is not safe to make concurrently with the others. Nothing may be reading or writing the map while it runs. A map whose allocator is an arena can skip it, since `arena_free` covers everything at once.
+
+### Underneath
+
+A hash trie, sixteen children per node, taken four hash bits at a time. It is Go's, from `src/internal/sync/hashtriemap.go`, which is what has been under `sync.Map` since Go 1.24. A thousand entries is between two and three levels deep, so a read is a couple of dependent loads and a key comparison.
+
+An entry is immutable once it is published, so changing a value builds a new entry and swaps it in. That is what makes a read need no lock, and it is also why the old entry has to go somewhere. In Go it goes to the collector. Here it goes to the epoch reclaimer in `burrow/reclaim.h`, which frees it once no reader can still be inside it, and that is the machinery the range rule above comes from.
+
+The per node lock a writer takes is the runtime's spinning lock and not a `SyncMutex`. A writer is holding a pin by the time it gets there and a pinned thread must not park, so a lock that parks is not available. What it guards is a slot store, a walk of a short overflow chain, or at most sixteen small allocations, so there is nothing there worth parking for.
+
+On a server core, a lookup that hits is about forty nanoseconds against Go's thirty three, a lookup that misses is level with Go, and a store over an existing key is about a hundred and thirty seven against Go's a hundred and thirteen. Most of what is left on the read side is the pin, which is one sequentially consistent store and about eight nanoseconds on that machine. Asking only whether a key is present, with `SYNC_MAP_HAS` or a `NULL` out pointer, is about three nanoseconds cheaper than asking for the value. The numbers and the machine are in [burrow-bench](https://github.com/tamnd/burrow-bench).
+
 ## What it costs
 
 An uncontended lock and unlock is about eleven nanoseconds on a server core, which is what one compare and swap and one atomic add cost on hardware nobody else is touching. A write lock and unlock on an `RWMutex` is about twice that, because it goes through the inner mutex first and then touches the reader count. A read lock and unlock is the same as a plain mutex, since both are one atomic on one word.
@@ -271,11 +356,12 @@ Before queueing, a goroutine spins a few times, but only on a machine with more 
 
 ## What is not here yet
 
-`Map` and `Pool`, in that order. Both are on the P0 milestone and both are built on what is above.
+`Pool`. It is on the P0 milestone and it is the last thing in this package.
 
 ## See also
 
 - [guides/atomics.md](atomics.md) for `sync/atomic`, which is what these are built out of
+- [guides/maps.md](maps.md) for the plain `Map`, which is what most programs should use behind one of these
 - [guides/goroutines.md](goroutines.md) for what parking actually does
 - [guides/interfaces.md](interfaces.md) for the shape of `SyncLocker`
 - [design/06-runtime.md](../design/06-runtime.md) for the semaphore and the scheduler

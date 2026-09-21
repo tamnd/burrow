@@ -43,6 +43,7 @@
 #include "burrow/func.h"
 #include "burrow/mem.h"
 #include "burrow/mem/heap.h"
+#include "burrow/netpoll.h"
 #include "burrow/note.h"
 #include "burrow/platform.h"
 #include "burrow/reclaim.h"
@@ -150,6 +151,23 @@ typedef struct Sched {
      * a P off the idle list reads this and opens the gate, since that is the one
      * event that makes the world worth watching again. */
     uint32_t sysmonwait;
+
+    /* Atomic, and a nanotime packed the way timer.c packs one. When a thread is
+     * about to sleep inside the netpoller it swaps this to zero, and it puts the
+     * time back on the way out. So a zero means some thread is in there now and
+     * a non zero is when the last poll finished.
+     *
+     * Two things read it. A thread that wants to poll takes the zero as meaning
+     * somebody else already is, and goes to sleep on its note instead, because
+     * one thread in the poller is all a program ever needs. sysmon takes a value
+     * that is more than ten milliseconds old as meaning nobody has polled in far
+     * too long, and polls itself. */
+    uint64_t lastpoll;
+
+    /* Atomic, same packing. What the polling thread asked to be woken at, or
+     * zero if it asked for no deadline at all. A timer set for earlier than this
+     * has to interrupt the poll, and this is how it knows whether it does. */
+    uint64_t pollwake;
 
     /* sysmon and the gate it waits on. Started once the world is up and woken
      * once when it is coming down. `sysmonstarted` is false on a run where the
@@ -771,6 +789,99 @@ static burrow__G *park0(burrow__M *m, burrow__G *gp) {
     return NULL;
 }
 
+/* -------------------------------------------------------------- the poller
+ *
+ * How the netpoller and the scheduler reach each other. burrow/netpoll.h is the
+ * poller's side of this and src/runtime/netpoll.c is the machinery; what is
+ * here is the three questions the scheduler has to answer about it.
+ *
+ * Is there any point polling. Before the poller has ever been opened there is
+ * nothing registered with the kernel, so a poll would sleep until interrupted
+ * and find nothing, and every one of these paths skips it. On a platform with
+ * no backend at all the poller never reports itself as started, so this is also
+ * what keeps Windows out of here entirely for now.
+ *
+ * Whether somebody is already inside. `lastpoll` is the flag and the clock at
+ * once: a thread going in swaps it to zero, and a thread that finds zero knows
+ * to sleep on its note instead. One thread in the poller is all a program
+ * needs, and letting two in would have the second one waiting on a kqueue that
+ * the first is going to drain.
+ *
+ * And how to get a thread back out of there. That is the awkward one, and it is
+ * awkward because of a design decision two files away. burrow runs at most one
+ * thread per P and startm gives up rather than making another, so a thread
+ * asleep in the kernel is a thread wakep cannot reach: a program with a
+ * runnable goroutine and every thread in epoll_wait would simply stop. So
+ * anything that would have called wakep and found nobody to wake has to break
+ * the poll instead, and there are four of those. startm when it gives the P
+ * back, burrow__timers_wake when a timer lands before the sleeper's deadline,
+ * shutdown, and a poll from sysmon every ten milliseconds that catches whatever
+ * the first three missed. The last one is why a bug in the first three is a
+ * program that runs late rather than one that hangs. */
+
+static void wakep(void);
+static bool outside_enter(void);
+static void outside_leave(bool counted);
+
+static bool poller_on(void) {
+    return burrow__netpoll_inited();
+}
+
+static void poller_break(void) {
+    if (!poller_on())
+        return;
+
+    /* Nobody is in there, so there is no poll to interrupt. Whoever goes in
+     * next will see whatever this wakeup was about, because they read the run
+     * queues after taking the flag and this wrote them before reading it. */
+    if (burrow__atomic_load_u64(&sched.lastpoll) != 0)
+        return;
+
+    burrow__netpoll_break();
+}
+
+/* Puts a batch of goroutines the poller readied back on the run queues.
+ *
+ * They come out of the poller in the waiting state and none of them belongs to
+ * this thread, so this is the same work `ready` does, once per goroutine, with
+ * the one wakeup at the end rather than one apiece. A thousand connections that
+ * became readable together are a thousand goroutines and one wakep.
+ *
+ * The outside counter is taken once for the batch for the same reason: this can
+ * run on sysmon, which is not an M, and shutdown has to wait for it. */
+static void ready_list(burrow__GQueue *q) {
+    if (q->head == NULL)
+        return;
+
+    bool counted = outside_enter();
+    burrow__M *m = curm;
+    bool local = m != NULL && m->p != NULL;
+
+    if (!local)
+        burrow__lock(&sched.lock);
+
+    for (;;) {
+        burrow__G *g = burrow__gqueue_pop(q);
+        if (g == NULL)
+            break;
+
+        uint32_t waiting = (uint32_t)BURROW_GWAITING;
+        if (!burrow__atomic_cas_u32(&g->status, &waiting, (uint32_t)BURROW_GRUNNABLE))
+            runtime_throw(BURROW_S("netpoll: readied a goroutine that was not parked"));
+
+        if (local)
+            runq_put(m->p, g, false);
+        else
+            globrunq_put(g);
+    }
+
+    if (!local)
+        burrow__unlock(&sched.lock);
+
+    wakep();
+    outside_leave(counted);
+}
+
 /* ---------------------------------------------------------------- waking up */
 
 static void newm(burrow__P *p, bool spinning);
@@ -792,6 +903,7 @@ static void startm(burrow__P *p, bool spinning) {
             burrow__unlock(&sched.lock);
             if (spinning)
                 burrow__atomic_add_u32(&sched.nmspinning, (uint32_t)-1);
+            poller_break();
             return;
         }
     }
@@ -813,6 +925,7 @@ static void startm(burrow__P *p, bool spinning) {
         burrow__unlock(&sched.lock);
         if (spinning)
             burrow__atomic_add_u32(&sched.nmspinning, (uint32_t)-1);
+        poller_break();
         return;
     }
 
@@ -840,25 +953,39 @@ static void wakep(void) {
     startm(NULL, true);
 }
 
-/* A timer has been set for earlier than whoever is asleep was told. Go pokes the
- * netpoller here, since in Go the thread with nothing to do is sitting in
- * epoll_wait with a deadline. burrow has no netpoller, so that thread is asleep
- * on its own note with a deadline on it, and the way to cut that short is the
- * same way new work cuts it short.
+/* A timer has been set for `when`, which is earlier than whoever is asleep was
+ * told. The thread it has to reach is asleep in one of two places and this has
+ * to cover both.
  *
- * The thread this has to reach has already given its P up, which is what makes
- * wakep the right call rather than a second mechanism: a P with a timer due and
- * nobody holding it is a P on the idle list, and that is exactly what wakep goes
- * looking for.
+ * Most of the time it is asleep on its own note with a deadline on it, and the
+ * way to cut that short is the way new work cuts it short. The thread has
+ * already given its P up, which is what makes wakep the right call rather than
+ * a second mechanism: a P with a timer due and nobody holding it is a P on the
+ * idle list, and that is exactly what wakep goes looking for.
  *
  * wakep does nothing when a thread is already out searching, and that is safe
  * for the same reason it is safe for a goroutine being readied. A searching
  * thread stops counting itself as searching and then takes one more look before
  * it parks, and that last look reads every P's wake time. Both halves are
  * sequentially consistent, so in any order the threads agree on, either the
- * searcher sees this timer or this sees a searcher that has not finished. */
-void burrow__timers_wake(void) {
+ * searcher sees this timer or this sees a searcher that has not finished.
+ *
+ * The other place is inside the netpoller, which is where the last thread in a
+ * program with open connections goes. It is asleep in the kernel and wakep
+ * cannot reach it, so the poll has to be interrupted, and only when this timer
+ * really is earlier than the one it went in with. A poll with no deadline at
+ * all publishes a zero and always needs breaking. */
+void burrow__timers_wake(int64_t when) {
     wakep();
+
+    if (!poller_on())
+        return;
+    if (burrow__atomic_load_u64(&sched.lastpoll) != 0)
+        return;
+
+    uint64_t wake = burrow__atomic_load_u64(&sched.pollwake);
+    if (wake == 0 || when < (int64_t)wake)
+        burrow__netpoll_break();
 }
 
 /* ------------------------------------------------------------------- sysmon
@@ -922,6 +1049,17 @@ void burrow__timers_wake(void) {
  * sweeps and not one, so the real floor on how long a pooled object lives is
  * one second and the ceiling is two. */
 #define SYSMON_SWEEP_PERIOD 1000000000
+
+/* How long the poller may go unvisited before sysmon visits it. Go's number.
+ *
+ * This is for the program where every thread is busy running goroutines while a
+ * connection sits readable with a goroutine waiting on it. Nobody is in the
+ * poller and nobody is about to be, because a thread only goes in on its way to
+ * having nothing to do, so without this the byte waits for the program to go
+ * quiet. Ten milliseconds is late for a network read and it is not a hang, and
+ * a program where this is the path that finds the event is a program that is
+ * already using every thread it has. */
+#define SYSMON_POLL_PERIOD 10000000
 
 /* Whether any P is holding a timer that is already due.
  *
@@ -1014,6 +1152,20 @@ static void sysmon(void *arg) {
         if (now - swept >= SYSMON_SWEEP_PERIOD) {
             swept = now;
             sweep();
+        }
+
+        /* The backstop poll. The compare and swap is what stops two of these
+         * from happening at once and, more to the point, what stops this from
+         * running while a thread is inside the poller: that thread put a zero
+         * there on its way in, and a zero is not the value being swapped from. */
+        if (poller_on() && burrow__netpoll_waiters() != 0) {
+            uint64_t last = burrow__atomic_load_u64(&sched.lastpoll);
+            if (last != 0 && (int64_t)last + SYSMON_POLL_PERIOD < now &&
+                burrow__atomic_cas_u64(&sched.lastpoll, &last, (uint64_t)now)) {
+                burrow__GQueue ready = {0};
+                burrow__netpoll(0, &ready);
+                ready_list(&ready);
+            }
         }
 
         if (timer_overdue()) {
@@ -1276,9 +1428,23 @@ static burrow__G *findrunnable(burrow__M *m) {
                 return gp;
         }
 
-        /* The netpoller goes here, as a poll with no timeout, so that a thread
-         * with nothing to run finds a socket that became readable before it
-         * starts taking work off other threads. */
+        /* A look at the poller, not a wait on it, so that a thread with nothing
+         * to run finds a socket that became readable before it starts taking
+         * work off other threads.
+         *
+         * Skipped when nothing is waiting on a descriptor, since the call would
+         * be a system call that can only come back empty, and skipped when some
+         * other thread is inside the poller already, because everything it
+         * finds it puts on the run queues and this pass goes round again. */
+        if (poller_on() && burrow__netpoll_waiters() != 0 &&
+            burrow__atomic_load_u64(&sched.lastpoll) != 0) {
+            burrow__GQueue ready = {0};
+            burrow__netpoll(0, &ready);
+            if (ready.head != NULL) {
+                ready_list(&ready);
+                continue;
+            }
+        }
 
         if (m->spinning == 0 && may_spin()) {
             m->spinning = 1;
@@ -1354,6 +1520,68 @@ static burrow__G *findrunnable(burrow__M *m) {
             int64_t w = burrow__timers_wake_time(&allp[i].timers);
             if (w != 0 && (until == 0 || w < until))
                 until = w;
+        }
+
+        /* With goroutines waiting on descriptors, this thread sleeps inside the
+         * poller rather than on its note, and the deadline it would have slept
+         * with becomes the poll's deadline. That is the whole point of the
+         * netpoller: the thread that has nothing to do is the thread waiting on
+         * the kernel, so a byte arriving wakes somebody directly instead of
+         * waking a thread that then goes looking.
+         *
+         * The swap is what keeps it to one thread. A second one finds a zero,
+         * does not go in, and carries on to its note below.
+         *
+         * Coming out with nothing is normal and is not a reason to park. A
+         * wakeup meant for somebody else, a signal, a deadline that turned out
+         * to belong to a timer another thread got to first: any of those ends
+         * the poll early, and a thread that then went to sleep on its note
+         * would be a thread that gave the poller up while goroutines were still
+         * waiting on it. With one P that is the whole program stopping. So it
+         * takes its P back and goes round, which either finds work or arrives
+         * back here and polls again. */
+        int64_t delay = -1;
+        if (until != 0) {
+            delay = until - burrow__nanotime();
+            if (delay < 0)
+                delay = 0;
+        }
+
+        /* A delay of zero would be a poll that does not sleep, and there is no
+         * point: the deadline has passed, so there is a timer to run and this
+         * wants to be round the loop rather than in the kernel. */
+        if (delay != 0 && poller_on() && burrow__netpoll_waiters() != 0 &&
+            burrow__atomic_swap_u64(&sched.lastpoll, 0) != 0) {
+            burrow__atomic_store_u64(&sched.pollwake, (uint64_t)until);
+
+            burrow__GQueue ready = {0};
+            burrow__netpoll(delay, &ready);
+
+            /* Both back before anything is readied, so that a wakeup racing
+             * with the end of this poll breaks the next one rather than being
+             * dropped on the floor as meant for a poll nobody is in. */
+            burrow__atomic_store_u64(&sched.pollwake, 0);
+            burrow__atomic_store_u64(&sched.lastpoll, (uint64_t)burrow__nanotime());
+
+            burrow__lock(&sched.lock);
+            burrow__P *back = burrow__atomic_load_relaxed_u32(&sched.stopping) != 0
+                                  ? NULL
+                                  : pidle_get();
+            burrow__unlock(&sched.lock);
+
+            if (back != NULL) {
+                acquirep(m, back);
+                if (was_spinning) {
+                    m->spinning = 1;
+                    burrow__atomic_add_u32(&sched.nmspinning, 1);
+                }
+                ready_list(&ready);
+                continue;
+            }
+
+            /* Every P is busy, so every P has a thread that will get to its own
+             * timers and one of them will be back here to poll. */
+            ready_list(&ready);
         }
 
         stopm(m, until);
@@ -1620,6 +1848,11 @@ static void schedinit(void) {
      * and is not a reason to refuse to start. */
     (void)burrow__stack_guard_arm();
 
+    /* Non zero from the start, because a zero means a thread is inside the
+     * poller and on a runtime that has just started nobody is. */
+    burrow__atomic_store_u64(&sched.lastpoll, (uint64_t)burrow__nanotime());
+    burrow__atomic_store_u64(&sched.pollwake, 0);
+
     for (int32_t i = sched.gomaxprocs - 1; i >= 0; i--) {
         burrow__P *p = &allp[i];
         p->id = i;
@@ -1647,6 +1880,15 @@ static void teardown(void) {
      * runs, which is exactly the condition a drain needs, so the last few
      * objects go back here rather than looking like a leak to a sanitizer. */
     burrow__reclaim_drain();
+
+    /* Every goroutine still parked on a descriptor, taken off it. The run is
+     * over and the goroutines below are about to be freed, and a descriptor
+     * holding a pointer to one of them is a kernel event away from readying
+     * memory that has been given back. This has to be before the walk and not
+     * inside it, because a descriptor's pointer is not reachable from the
+     * goroutine. */
+    if (burrow__netpoll_inited())
+        burrow__netpoll_drop_waiters();
 
     /* The timer sets go first, before any goroutine does, because a goroutine
      * that was asleep when the runtime stopped still has its timer in one of
@@ -1744,6 +1986,13 @@ void runtime_main(Func fn) {
      * first and is on the idle list by the time this walks it, or this takes the
      * lock first and the thread sees the flag and does not park at all. */
     burrow__atomic_store_u32(&sched.stopping, 1);
+
+    /* A thread asleep in the poller is asleep in the kernel and the note wake
+     * below cannot reach it. It reads the flag on its way out, so one break is
+     * enough, and a break when nobody is in there costs a write to an eventfd
+     * that the next poll throws away. */
+    if (poller_on())
+        burrow__netpoll_break();
 
     /* sysmon first, before the Ms, so that nothing is starting threads while
      * this is trying to count them. It cannot start one after the flag above is

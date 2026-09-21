@@ -276,9 +276,10 @@ bool burrow__timers_take(burrow__Timers *ts, burrow__Timers *src);
  * Supplied by the scheduler, called from here. A thread with nothing to run is
  * asleep with a deadline worked out from the timers that existed when it went
  * to sleep, and a timer added or moved after that has to cut the sleep short.
- * When the netpoller lands this becomes the call that pokes the poller, which
- * is where Go does it from. */
-void burrow__timers_wake(void);
+ * That thread may be asleep on a note or inside the netpoller, and `when` is
+ * the new timer's firing time so that the scheduler can tell whether it beats
+ * the deadline the poll went in with. */
+void burrow__timers_wake(int64_t when);
 
 /* The calling thread's own set, or NULL on a thread that is not running a
  * goroutine.

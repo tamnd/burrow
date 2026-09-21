@@ -4,6 +4,26 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+### Runtime
+
+- The netpoller, in `burrow/netpoll.h`, which is what lets a goroutine block on a descriptor without holding an OS thread. It is internal and no program calls it directly. `net` will, and it is the piece that has to exist before `net` can be written at all.
+- `burrow__poll_open` registers a descriptor, `burrow__poll_wait` parks the calling goroutine until that descriptor is readable or writable, `burrow__poll_unblock` wakes everyone waiting on one and leaves it woken so a close is not a race, and `burrow__poll_close` gives it back. A wait answers ready, closed, timed out or unpollable.
+- `src/runtime/netpoll.c` is everything that does not depend on which kernel this is, ported from Go's `src/runtime/netpoll.go`. One file per backend is everything that does. `netpoll_epoll.c` is Linux and `netpoll_kqueue.c` is macOS and the BSDs.
+- Windows selects no backend yet. `burrow__netpoll_inited` answers false there, the scheduler skips every call into the poller, and `burrow__poll_open` refuses, so the runtime on Windows behaves exactly as it did before this landed. The IOCP backend is a separate change, because completion and readiness are different enough that pretending otherwise would cost both of them.
+- Registration is edge triggered and happens once, for reading and writing together, for as long as the descriptor is open. That is Go's choice and it is why a busy connection makes no system calls beyond the reads and writes themselves. It asks in exchange that a caller reads or writes until the answer is that it would block, because a caller that stops early has consumed an edge that will not come again.
+- A descriptor is two words, one per direction, each holding empty, ready, claimed, or the goroutine parked on it. Park and wake meet at a compare and swap on that word rather than at a lock, which is Go's `pollDesc` and the reason a thousand connections going ready at once do not queue behind each other.
+- Descriptors come from a cache that never gives memory back, in blocks of sixty four, with a handle packing a block index and a generation. A kernel event can name a descriptor that was closed a moment ago, and the code receiving it has to be able to read the memory to find that out. Go calls this type stability. The generation is how a stale event gets dropped instead of waking a goroutine that has nothing to do with it.
+- The wakeup is level triggered on both backends, an `eventfd` on Linux and a self pipe on kqueue, and this is the one place the port deliberately differs from Go. Go can afford to lose a wakeup because a thread that stays asleep gets replaced by a new one. burrow runs at most one thread per P and `startm` gives a P back rather than making a thread, so a thread asleep in the kernel that nobody can reach is a program that stops. A level triggered wakeup survives being picked up by a thread it was not meant for, which an `EVFILT_USER` registered with `EV_CLEAR` does not.
+- A thread with nothing left to do now sleeps inside the poller rather than on its note. It gives its P up first, which is what makes a lost wakeup impossible, polls with the deadline of the earliest timer, then takes a P back and goes round the scheduler loop again rather than assuming the poll answered its question. A poll returning with nothing is routine, and only when there is no P left to take does the thread fall through to the ordinary note.
+- `sysmon` gained a second real job. If nobody has polled for ten milliseconds and goroutines are waiting on descriptors, it polls once itself and readies whatever is ready. That only fires when every P is busy running goroutines, which is the case where no thread reaches the idle path at all.
+- `burrow__timers_wake` takes the time the new timer is due. It still wakes a thread on a note, and it now also breaks a poll, but only when the sleeping poller asked for a later deadline than the timer needs. Without the comparison every timer anybody arms would drag a thread out of the kernel to discover it has nothing to do.
+
+### Timers
+
+- `burrow__timers_wake(int64_t when)` replaces `burrow__timers_wake(void)`. Internal, so no program is affected.
+
 ## v0.0.23 (2026-09-22)
 
 `sync.Map` and `sync.Pool`, which finishes the `sync` package, and the epoch based reclamation underneath the first of them.

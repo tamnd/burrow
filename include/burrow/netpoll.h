@@ -1,0 +1,328 @@
+/* The netpoller: how a goroutine waits for a socket without holding a thread.
+ *
+ * This is Go's runtime/netpoll.go and the backend files next to it. Nothing
+ * above it exists yet, which is the whole point of building it now: net,
+ * net/http, os and everything that reads or writes a descriptor is a goroutine
+ * per connection, and a goroutine per connection is only affordable if a
+ * goroutine waiting for one of them costs a stack and not an OS thread.
+ *
+ * The deal a caller makes is the same one Go's internal/poll makes. Put the
+ * descriptor into non-blocking mode, hand it here once, and from then on do the
+ * read or the write yourself. When it answers that it would block, call
+ * burrow__poll_wait and the goroutine parks until the kernel says the
+ * descriptor is ready again. No data is copied here and no read or write is
+ * made here. This layer only ever answers the question of when it is worth
+ * trying again.
+ *
+ * Registration is edge triggered and it happens once, for reading and writing
+ * together, for as long as the descriptor is open. That is Go's choice and it
+ * is why a busy connection makes no system calls beyond the reads and writes
+ * themselves. What it asks in exchange is the discipline every edge triggered
+ * poller asks for: read or write until the answer is that it would block, since
+ * a caller that stops early has consumed an edge that will not come again.
+ *
+ * The scheduler is the other half of this file. There is no poller thread. A
+ * thread that runs out of goroutines to run looks here on its way past, and the
+ * last thread with nothing left to do goes to sleep inside the poller rather
+ * than on its own note, so waiting for work and waiting for the network are one
+ * wait with one wakeup. burrow__netpoll and burrow__netpoll_break are the two
+ * calls the scheduler makes for that, and they are not for anybody else.
+ *
+ * What is not here yet: deadlines, which net.Conn.SetDeadline needs and which
+ * are a timer per descriptor per direction on top of this, and a completion
+ * based backend for Windows, where the kernel reports finished work rather than
+ * readiness. Until the second one lands this file is inert on Windows.
+ * burrow__netpoll_inited answers false, the scheduler skips every call into it,
+ * and burrow__poll_open refuses, so a program that would have parked a
+ * goroutine here keeps its thread instead.
+ *
+ * Copyright 2026 The burrow Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style licence that can be found
+ * in the LICENSE file. */
+
+#ifndef BURROW_NETPOLL_H
+#define BURROW_NETPOLL_H
+
+#include "burrow/lock.h"
+#include "burrow/own.h"
+#include "burrow/platform.h"
+#include "burrow/sched.h"
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Which backend this build has. One of these is defined and the other two are
+ * not, and every file that implements one is wrapped in its own macro so that a
+ * backend which is not wanted on this target compiles to nothing rather than
+ * needing the build to leave the file out.
+ *
+ * io_uring is not a fourth entry here. It is a Linux backend that would sit
+ * beside epoll and be chosen at run time rather than at compile time, which is
+ * a different kind of decision from this one, and it is worth having only once
+ * there is file I/O to point at it. */
+#if defined(BURROW_OS_LINUX)
+#define BURROW_NETPOLL_EPOLL 1
+#elif defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS) || BURROW_BSD
+#define BURROW_NETPOLL_KQUEUE 1
+#else
+#define BURROW_NETPOLL_NONE 1
+#endif
+
+/* What a descriptor is on this platform.
+ *
+ * An int everywhere Unix, and pointer sized on Windows, where a SOCKET is an
+ * opaque handle that is not an int and is not always small. The name is here
+ * rather than being spelled out at every call so that the signatures in this
+ * file do not have to change when the completion backend lands. */
+#if defined(BURROW_OS_WINDOWS)
+typedef uintptr_t burrow__PollFd;
+#else
+typedef int burrow__PollFd;
+#endif
+
+/* Reading, writing, or both. A bit each rather than Go's 'r' and 'w' characters
+ * added together, because the case that carries both is the interesting one and
+ * adding two letters to mean it is a trick that has to be explained every time
+ * it is read.
+ *
+ * A wait is for exactly one of the two. Both together is what a backend reports
+ * when one event says the descriptor is ready in both directions, which happens
+ * whenever a connection is closed at the far end. */
+#define BURROW_POLL_READ 1U
+#define BURROW_POLL_WRITE 2U
+
+/* How a wait ended.
+ *
+ * These are Go's four codes from internal/poll, and they are the ones a caller
+ * has to tell apart: ready means try the read again, closed means the
+ * descriptor went away underneath the wait, timeout means a deadline passed,
+ * and unpollable means this descriptor is not one the kernel will report
+ * readiness for and the caller should fall back to a blocking call on a thread.
+ *
+ * Timeouts cannot happen yet because deadlines are not here yet. The code is in
+ * the list now because the callers that will check for it are being written
+ * against this list, and a value added to the middle of an enumeration later is
+ * a value that changes what the ones after it mean. */
+typedef enum burrow__PollStatus {
+    BURROW_POLL_READY = 0,
+    BURROW_POLL_CLOSED = 1,
+    BURROW_POLL_TIMEOUT = 2,
+    BURROW_POLL_UNPOLLABLE = 3
+} burrow__PollStatus;
+
+/* Everything the poller knows about one descriptor.
+ *
+ * One of these is made by burrow__poll_open and lives until burrow__poll_close,
+ * and the memory it is in is never given back to the allocator. That is not
+ * thrift, it is the only way the kernel's side of this is safe: an event for a
+ * descriptor that has just been closed can still be sitting in the kernel's
+ * ready list, and a thread draining that list has to be able to look at whatever
+ * the event points at without wondering whether it is still there. Go does the
+ * same thing and for the same reason, in pollCache.
+ *
+ * `rg` and `wg` are the two words the whole design turns on. Each is a one
+ * place semaphore holding one of four things: nothing, a readiness notification
+ * that nobody has taken yet, a goroutine that is on its way to parking, or the
+ * goroutine that has parked. Every transition between those is a compare and
+ * swap and there is no lock on the path a busy connection takes. */
+typedef struct burrow__PollDesc {
+    /* Set when the descriptor is taken out of the cache and not touched again
+     * while it is in use. The backend needs it to unregister. */
+    burrow__PollFd fd;
+
+    /* Where this descriptor sits in the cache. Set when the slot is made and
+     * never changed after that, since the slot never moves and is never given
+     * back to the allocator. */
+    uint32_t index;
+
+    /* What the backend was told to hand back when this descriptor is ready.
+     * The index above and the generation count below, packed into one word,
+     * because a pointer sized word is all a kernel event carries. Constant
+     * while the descriptor is open. */
+    uintptr_t handle;
+
+    /* Atomic. Which generation this slot is on. Raised every time the slot goes
+     * back to the free list, which is what makes an event that arrives after a
+     * close recognisably stale. */
+    uint32_t gen;
+
+    /* Atomic. The bits burrow__poll_wait has to look at before it parks, kept
+     * out here rather than read under the lock because the read happens on
+     * every wait and the writes happen when a connection is being closed. */
+    uint32_t info;
+
+    /* Atomic. The reader and the writer, one each. See the note above. */
+    uintptr_t rg;
+    uintptr_t wg;
+
+    /* The rest is under the lock, and the lock is only ever taken by a caller
+     * that is closing the descriptor or setting a deadline on it. Nothing on a
+     * read or a write path comes here. */
+    burrow__Lock mu;
+    bool closing;
+
+    /* The free list in the cache, under the cache's own lock and not this one.
+     * NULL while the descriptor is open. */
+    struct burrow__PollDesc *link;
+} burrow__PollDesc;
+
+/* ------------------------------------------------------------ for a caller
+ *
+ * The four calls something like net.Conn is built out of.
+ *
+ * Takes a descriptor into the poller and answers a place to wait on it. The
+ * answer is 0, or an errno saying why not.
+ *
+ * The descriptor has to be non-blocking already, and it has to stay open until
+ * burrow__poll_close. What comes back is not tied to the file table entry in
+ * any way the kernel knows about, so closing the descriptor without coming back
+ * here leaves this pointing at a number that now means something else.
+ *
+ * EPERM from Linux is the answer worth expecting: it is what epoll says about a
+ * regular file, which is a descriptor the kernel will not report readiness for
+ * because a regular file is always ready in the only sense it has. A caller
+ * that gets an error here has not done anything wrong, it has a descriptor that
+ * has to be read on a thread instead. */
+int burrow__poll_open(burrow__PollFd fd, burrow__PollDesc **out);
+
+/* Takes it out again and gives the slot back.
+ *
+ * burrow__poll_unblock has to have been called first, which is Go's rule too.
+ * Closing a descriptor that a goroutine is parked on without waking it first is
+ * a goroutine that waits forever for a file that no longer exists, so this
+ * refuses rather than allowing it.
+ *
+ * Does not close the descriptor. The caller opened it and the caller closes it,
+ * and on every backend here the close itself is what removes the registration,
+ * so the order of the two does not matter. */
+void burrow__poll_close(burrow__PollDesc *pd);
+
+/* Parks the calling goroutine until the descriptor is ready in `mode`, which is
+ * BURROW_POLL_READ or BURROW_POLL_WRITE and not both.
+ *
+ * BURROW_POLL_READY means the kernel has said there is something to be had, and
+ * also means try again, because between the notification and the read the data
+ * can have been taken by somebody else. Anything else is a reason to stop.
+ *
+ * One goroutine per descriptor per direction. Two goroutines reading one
+ * connection is a program with a bug in it whatever this layer does, and rather
+ * than pick a winner quietly, the second one stops the program.
+ *
+ * Callable only from a goroutine, since parking is the whole of what it does. */
+burrow__PollStatus burrow__poll_wait(burrow__PollDesc *pd, uint32_t mode);
+
+/* Wakes whoever is parked on the descriptor and makes every later wait answer
+ * BURROW_POLL_CLOSED at once.
+ *
+ * This is what a Close on a connection calls first. The goroutine blocked in a
+ * read on it has to come back and find out that the connection went away, and
+ * it has to do that before the descriptor number is handed back to the kernel
+ * and handed out again to something else. */
+void burrow__poll_unblock(burrow__PollDesc *pd);
+
+/* ---------------------------------------------------------- for the scheduler
+ *
+ * Whether the poller has been started. It starts on the first burrow__poll_open
+ * in the process and stays started, so a program that never touches a
+ * descriptor never makes an epoll or a kqueue and the scheduler never calls in
+ * here at all. */
+bool burrow__netpoll_inited(void);
+
+/* How many goroutines are parked on descriptors.
+ *
+ * The scheduler reads this to decide whether going to sleep inside the poller
+ * is worth doing. Zero means every goroutine that is waiting for something is
+ * waiting for something else, and the thread should sleep on its own note where
+ * a wakeup costs less. */
+uint32_t burrow__netpoll_waiters(void);
+
+/* Asks the kernel which descriptors are ready and puts whoever was waiting for
+ * them on `out`, which the caller then readies.
+ *
+ * A negative delay blocks until something happens, zero looks and comes
+ * straight back, and a positive one blocks for that many nanoseconds. Those
+ * three are the reason the scheduler needs nothing else: the same call is the
+ * idle thread's sleep, the busy thread's glance on the way past, and the sleep
+ * with a timer deadline on it.
+ *
+ * It can come back with nothing on `out` for any of the three, including the
+ * blocking one, because a wakeup can be somebody calling burrow__netpoll_break
+ * and because a signal can end the wait early. The caller goes round again. */
+void burrow__netpoll(int64_t delay, burrow__GQueue *out);
+
+/* Ends a blocking burrow__netpoll early.
+ *
+ * Whoever is asleep in there is the thread that would otherwise be asleep on a
+ * note, so this is the poller's half of a note wake: it is what a goroutine
+ * being readied by some other thread, or a timer coming due, has to call to get
+ * that thread looking at the run queues again. Costs nothing when nobody is
+ * inside the poller and nothing when a break is already on its way. */
+void burrow__netpoll_break(void);
+
+/* Forgets every goroutine parked on a descriptor, without waking any of them.
+ *
+ * The scheduler calls this on the way out of runtime_main, after every thread
+ * has stopped and before the goroutines are freed. A program that reaches the
+ * end of main with a connection still being read is a program with a goroutine
+ * parked here forever, which is allowed and is what a leaked connection looks
+ * like in Go too. What is not allowed is leaving a pointer to a freed goroutine
+ * in a descriptor that the kernel can still produce an event for, and this is
+ * what cuts that pointer. */
+void burrow__netpoll_drop_waiters(void);
+
+/* ------------------------------------------------------------- for a backend
+ *
+ * The five calls a backend supplies and the one it makes. Everything above is
+ * written once against these, which is what keeps the per platform files down
+ * to the shape of their own system call.
+ *
+ * Starts the poller. Called once, under the lock in burrow__poll_open, and it
+ * stops the program if the kernel will not give it what it asks for, which is
+ * what Go does: a machine that cannot make an epoll descriptor cannot run a
+ * program that needs one, and pretending otherwise puts the failure somewhere
+ * further away from the cause. */
+void burrow__netpoll_backend_init(void);
+
+/* Registers `fd` for reading and writing, edge triggered, and asks for `handle`
+ * back with every event about it. An errno, or 0.
+ *
+ * A handle is one pointer sized word, because that is what every one of these
+ * kernel interfaces carries, and it is never a word of all ones. A backend that
+ * needs a value of its own to tell its own wakeup apart from a connection has
+ * that one. */
+int burrow__netpoll_backend_open(burrow__PollFd fd, uintptr_t handle);
+
+/* Unregisters it. An errno, or 0. Both backends here treat closing the
+ * descriptor as unregistering it, so this is allowed to be, and on kqueue is,
+ * nothing at all. */
+int burrow__netpoll_backend_close(burrow__PollFd fd);
+
+/* The wait itself. Reports every ready descriptor by calling
+ * burrow__netpoll_ready below, which is where the generic half takes over. */
+void burrow__netpoll_backend_wait(int64_t delay, burrow__GQueue *out);
+
+/* The wakeup. Whatever the backend's own way of interrupting its wait is. */
+void burrow__netpoll_backend_break(void);
+
+/* What a backend calls for each ready descriptor.
+ *
+ * `handle` is the one the backend was given in burrow__netpoll_backend_open and
+ * has been carrying since. `mode` is BURROW_POLL_READ, BURROW_POLL_WRITE or
+ * both. `failed` says the event was an error rather than readiness, which is
+ * reported to the reader and not to the writer, because a write that goes on to
+ * fail can say what went wrong and a read that has nothing to read cannot.
+ *
+ * A handle from a use of the slot that has since ended is dropped here, so a
+ * backend does not have to know that there is such a thing. */
+void burrow__netpoll_ready(burrow__GQueue *out, uintptr_t handle, uint32_t mode,
+                           bool failed);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* BURROW_NETPOLL_H */

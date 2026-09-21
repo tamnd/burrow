@@ -513,13 +513,14 @@ static bool needs_add(burrow__Timer *t) {
 static bool maybe_add(burrow__Timers *ts, burrow__Timer *t) {
     bool ok = true;
     bool wake = false;
+    int64_t when = 0;
 
     timers_lock(ts);
     clean_head(ts);
     timer_lock(t);
     if (needs_add(t)) {
-        int64_t when = t->when;
         int64_t next = burrow__timers_wake_time(ts);
+        when = t->when;
 
         t->state |= BURROW__TIMER_HEAPED;
         ok = add_heap(ts, t);
@@ -534,7 +535,7 @@ static bool maybe_add(burrow__Timers *ts, burrow__Timer *t) {
     /* Outside both locks, because what this ends up doing is starting a thread
      * and a thread start is not something to do with a scheduler lock held. */
     if (wake)
-        burrow__timers_wake();
+        burrow__timers_wake(when);
     return ok;
 }
 
@@ -657,7 +658,7 @@ bool burrow__timer_reset_on(burrow__Timers *ts, burrow__Timer *t, int64_t when,
         if (pending != NULL)
             *pending = was_pending;
         if (wake)
-            burrow__timers_wake();
+            burrow__timers_wake(when);
         return true;
     }
 

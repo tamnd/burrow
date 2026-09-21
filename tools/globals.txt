@@ -87,3 +87,17 @@ global	src/runtime/sched.c	sweepfn	scheduler	The callback the system monitor mak
 global	src/runtime/sched.c	sweepset	scheduler	Whether the pointer above has been set. A release store here and an acquire load in sysmon are what make the plain write to sweepfn visible to the monitor's thread.
 global	src/sync/pool.c	pools_lock	pool	This is the synchronisation for the list below. Held for the length of a sweep, which is a walk of every pool's victim shard, so it is the one lock in the package that is held for a while rather than for a few instructions.
 global	src/sync/pool.c	allpools	pool	Every pool that has been used, so that the sweep can find them. A pool goes on the list the first time it is touched and comes off in sync_pool_free, both under pools_lock above.
+global	src/runtime/netpoll.c	cache_lock	netpoller	The lock over the descriptor table below. Taken only to make a block or move a descriptor on or off the free list, which is once per connection and never on the path an event takes.
+global	src/runtime/netpoll.c	cache_first	netpoller	The free list of descriptors, under cache_lock. A descriptor is never given back to the heap, so a slot handed out here has been used before and its generation says how many times.
+global	src/runtime/netpoll.c	cache_blocks	netpoller	The blocks of descriptors, published with a release store under cache_lock and read without it. A block is only ever added, never moved or freed, which is what makes the read safe.
+global	src/runtime/netpoll.c	cache_ndescs	netpoller	How many descriptors exist, raised last when a block is added so that a reader that sees the count sees the block.
+global	src/runtime/netpoll.c	init_lock	netpoller	The lock the poller is started under, so that two goroutines opening their first descriptor at once make one epoll or kqueue between them.
+global	src/runtime/netpoll.c	init_done	netpoller	Whether the poller is started. A release store under init_lock and an acquire load everywhere else, which is what lets the scheduler ask the question without taking anything.
+global	src/runtime/netpoll.c	netpoll_nwaiters	netpoller	How many goroutines are parked on a descriptor. Atomic, and read by the scheduler to decide whether a poll could find anything.
+global	src/runtime/netpoll_epoll.c	epfd	netpoller	The epoll descriptor. One per process, made once under init_lock and read without anything afterwards.
+global	src/runtime/netpoll_epoll.c	breakfd	netpoller	The eventfd a wakeup is written to, made alongside epfd and read the same way.
+global	src/runtime/netpoll_epoll.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one write, and cleared by whoever drains the eventfd.
+global	src/runtime/netpoll_kqueue.c	kq	netpoller	The kqueue descriptor. One per process, made once under init_lock and read without anything afterwards.
+global	src/runtime/netpoll_kqueue.c	breakrd	netpoller	The read end of the wakeup pipe, which is what the kqueue watches.
+global	src/runtime/netpoll_kqueue.c	breakwr	netpoller	The write end of the wakeup pipe, which is where a byte goes to interrupt a poll.
+global	src/runtime/netpoll_kqueue.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one byte, and cleared by whoever drains the pipe.

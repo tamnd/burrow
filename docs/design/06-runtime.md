@@ -207,10 +207,16 @@ throws if the allocation fails. burrow does not have that option and does not
 pretend to, so arming a timer answers false when the heap needed to grow and
 the allocator said no, and the caller is told rather than left with a timer
 that will never fire. What Go has here that this does not, yet: timer channels
-and the sequence numbers that go with them, both of which need channels, fake
-time for `testing/synctest`, and the netpoller wakeup, which here is a call
-into the scheduler instead because the thread with nothing to do is asleep on
-its own note rather than in `epoll_wait`.
+and the sequence numbers that go with them, both of which need channels, and
+fake time for `testing/synctest`.
+
+Arming a timer takes the earliest time it could fire and hands it to the
+scheduler, which wakes a thread on a note and, if a thread is asleep inside the
+poller with a later deadline than that, breaks the poll as well. The comparison
+matters. A thread polling with a deadline of a second away has to be brought
+out for a timer due in a millisecond and must not be brought out for one due in
+two seconds, because the second case is a wakeup that finds nothing to do and
+goes straight back to sleep, on every timer anybody arms.
 
 ### The monitor thread
 
@@ -219,13 +225,22 @@ goes down, and it holds no P while it runs, which is the whole reason it can do
 its job. Everything else in the scheduler only gets to look around while it is
 between goroutines. The monitor looks around when nobody else can.
 
-Go gives it four jobs and burrow can only do one of them today, which is worth
-stating plainly rather than shipping a thread that appears to do four. Retaking
+Go gives it five jobs and burrow can do two of them today, which is worth
+stating plainly rather than shipping a thread that appears to do five. Retaking
 a P from a thread stuck in a syscall needs syscalls that release a P, and there
-are none, because there is no netpoller and no file I/O yet. Preemption needs
-something to preempt with, and that is its own milestone further down this
-document. A forced garbage collection needs a garbage collector. What is left
-is timers, and that one is real now.
+are none, because there is no file I/O yet. Preemption needs something to
+preempt with, and that is its own milestone further down this document. A
+forced garbage collection needs a garbage collector. What is left is timers and
+the netpoller backstop, and both of those are real now.
+
+The netpoller job is the same shape as the timer one. If nobody has polled for
+ten milliseconds and there are goroutines waiting on descriptors, the monitor
+takes a look itself and readies whatever is ready. The ordinary path is a
+thread that goes idle and sleeps inside the poller, so this only ever fires
+when every thread is busy running goroutines and none of them has been round
+the idle path recently. Without it a program that is compute bound on every P
+would not notice a connection becoming readable until one of those goroutines
+finished.
 
 The timer job is a backstop and is written as one. The ordinary path already
 covers the common case twice over: a thread about to go idle works out the
@@ -857,6 +872,72 @@ so the program keeps making progress. `burrow` matches this, and additionally
 routes file I/O through `io_uring` when it is available and enabled, which is
 better than Go.
 
+### What exists
+
+`burrow/netpoll.h` is the interface and it is internal: no program calls it,
+`net` will. Underneath it `src/runtime/netpoll.c` is everything that does not
+depend on which kernel this is, and one file per backend is everything that
+does. `netpoll_epoll.c` covers Linux and `netpoll_kqueue.c` covers macOS and
+the BSDs. Windows selects neither, the header answers that the poller is not
+initialised, and every call the scheduler would make into it is skipped, so
+the runtime on Windows behaves exactly as it did before this landed until the
+IOCP backend arrives.
+
+Four calls are the whole surface. `burrow__poll_open` takes a descriptor and
+gives back a `PollDesc`, `burrow__poll_wait` parks the calling goroutine until
+the descriptor is ready in the direction asked for, `burrow__poll_unblock`
+wakes every goroutine on a descriptor and leaves it woken so that a close is
+not a race, and `burrow__poll_close` gives the descriptor back. A wait answers
+ready, closed, timed out or unpollable, and the third of those is unreachable
+until deadlines land.
+
+Registration is edge triggered and happens once, for both directions together,
+for as long as the descriptor is open. That is Go's choice and it is why a busy
+connection costs no system calls beyond the reads and writes themselves. What
+it asks for in exchange is the discipline every edge triggered poller asks for,
+which is that a caller reads or writes until the answer is that it would block,
+because a caller that stops early has consumed an edge that will not come
+again.
+
+A descriptor is two words, one per direction, each of which is empty, ready,
+claimed, or a pointer to the goroutine parked on it. That is Go's `pollDesc`
+and the reason it works is that the park and the wake meet at a compare and
+swap on that word rather than at a lock. Descriptors come from a cache that
+never returns memory to the allocator, because a kernel event can name a
+descriptor that was closed a moment ago and the layer that receives it has to
+be able to look at the memory to find that out. Go calls this type stability.
+Here it is blocks of sixty four, and a handle packing a block index and a
+generation, so a stale event fails the generation check and is dropped.
+
+The one thing here that is not a port is the wakeup, and it is worth saying why
+because both backends are shaped by it. Go can afford to lose a wakeup: a
+thread that stays asleep when it should not have is replaced by a new one, and
+the program carries on with one thread more than it needed. burrow runs at most
+one thread per P and `startm` gives a P back rather than creating a thread, so
+a thread asleep in the kernel that nobody can reach is a program that stops. So
+every path that would have woken a thread and found nobody to wake breaks the
+poll instead, and the break must survive being picked up by a thread it was not
+meant for. That rules out the edge triggered wakeup primitives, `EVFILT_USER`
+on kqueue in particular, which the kernel forgets the moment anybody receives
+it. Both backends use a level triggered wakeup instead, an `eventfd` on Linux
+and a self pipe on kqueue, so a poll that was only looking sees the wakeup,
+leaves it where it is, and the thread it was for still finds it. The cost is
+one spurious return for a thread that was going to sleep anyway.
+
+The other half of that is the idle path. A thread with nothing left to do gives
+its P up, then polls with the deadline of the earliest timer, then takes a P
+back and goes round the loop again rather than assuming the poll answered its
+question. Giving the P up first is what makes a lost wakeup impossible, since
+a goroutine readied by anybody at that point finds a P on the idle list and a
+thread to hand it to. Going round again rather than parking is what makes a
+poll that returned with nothing harmless, and a poll returns with nothing
+routinely: a wakeup meant for another thread, a signal, a deadline another
+thread got to first. Only when there is no P left to take does the thread fall
+through to the ordinary note.
+
+Deadlines are the next piece and they are a timer per descriptor per direction
+on top of this, which is what `net.Conn.SetDeadline` needs. After that, IOCP.
+
 ## 9. Preemption
 
 Cooperative-only scheduling is what makes libmill and libdill unsuitable as a
@@ -951,7 +1032,7 @@ The build order within Tier 0, because it is unusually constrained:
 6. Channels, then `select`.
 7. `defer`/`panic`/`recover`, then stack walking and symbolisation.
 8. `sync` package on top of park/unpark.
-9. Netpoller: `epoll` first, then `kqueue`, then IOCP.
+9. Netpoller: `epoll` first, then `kqueue`, then deadlines, then IOCP.
 10. `context`. Then `synctest`, and immediately retro-test 4–9 inside it.
 11. Preemption. Last, because it is the hardest to debug and everything else
     must be stable first.

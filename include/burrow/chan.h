@@ -50,20 +50,22 @@
 extern "C" {
 #endif
 
-/* The rules, which are Go's exactly, including the ones that stop the program,
- * because those are the ones that turn a race into a crash at the place the
- * mistake was made rather than a wrong answer somewhere else later.
+/* The rules, which are Go's exactly, including the ones that panic, because
+ * those are the ones that turn a race into a crash at the place the mistake was
+ * made rather than a wrong answer somewhere else later.
  *
- *   send on a closed channel      stops the program
- *   close of a closed channel     stops the program
- *   close of a NULL channel       stops the program
+ *   send on a closed channel      panics
+ *   close of a closed channel     panics
+ *   close of a NULL channel       panics
  *   receive on a closed channel   the zero value and false, once drained
  *   send or receive on NULL       blocks forever
  *
- * Stopping the program is runtime_throw today and will be a panic once defer
- * and recover land, at which point every one of these becomes recoverable and
- * nothing here changes. See burrow/runtime.h for why the mechanism is temporary
- * and the messages are not.
+ * Panicking means what it means everywhere else here: a BURROW_TRY around the
+ * call catches it, the value is a RuntimeError carrying Go's message, and a
+ * server that does not want one bad handler to take the process down can carry
+ * on. The channel's lock is released before the panic, so the channel is still
+ * usable from another goroutine afterwards. burrow/runtime.h has the rule for
+ * which conditions panic and which end the program.
  *
  * Blocking forever on a NULL channel is Go's behaviour for a nil one and it is
  * useful rather than a trap: a select with a case on a channel variable that is
@@ -96,9 +98,9 @@ typedef struct Chan Chan;
  * throws there. A caller that would rather stop than check can, and the check
  * is one branch on a call that happens once per channel.
  *
- * Stops the program if cap is negative, which is Go's `makechan: size out of
- * range`, and if elem is NULL, because a channel with no element type cannot
- * copy anything.
+ * Panics if cap is negative, which is Go's `makechan: size out of range`, and
+ * stops the program if elem is NULL, because a channel with no element type
+ * cannot copy anything and Go has no such case to be recoverable about.
  *
  * The channel remembers the allocator, for the same reason a Map does: sends
  * and receives must not need one, and a buffer freed to a different allocator

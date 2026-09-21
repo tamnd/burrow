@@ -64,7 +64,7 @@ Int r = int_mod(a, b);
 
 Two things happen here that `/` and `%` do not do.
 
-A zero divisor stops the program with `runtime error: integer divide by zero`, which is the line Go prints. Without the check, the x86 divide instruction raises a hardware exception, and that arrives as a signal with no message in it and a stack trace pointing at an instruction rather than at your bug.
+A zero divisor panics with `runtime error: integer divide by zero`, which is the line Go prints. Without the check, the x86 divide instruction raises a hardware exception, and that arrives as a signal with no message in it and a stack trace pointing at an instruction rather than at your bug.
 
 The smallest value divided by `-1` gives the smallest value back, and the remainder is zero. The true answer is one larger than the type can hold, so it wraps, and that is what Go prints. The same x86 instruction faults on this case too. The Go compiler emits its own check here for the same reason this does.
 
@@ -81,7 +81,7 @@ Go answers a shift of any size. Shift left past the width of the type and every 
 
 C calls all of that undefined, and on x86 the hardware quietly uses the low six bits of the count, so `1 << 64` comes out as `1`. That is the kind of difference that survives every test you wrote and then breaks on the one input with a large shift in it.
 
-A negative count stops the program with `runtime error: negative shift amount`. Go's shift count is a count and not a direction, so a negative one is a bug in the caller rather than a shift the other way.
+A negative count panics with `runtime error: negative shift amount`. Go's shift count is a count and not a direction, so a negative one is a bug in the caller rather than a shift the other way.
 
 ## From a float
 

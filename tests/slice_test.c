@@ -7,6 +7,10 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "burrow/panic.h"
+#include "burrow/runtime.h"
+
+#include "fatal.h"
 #include "harness.h"
 
 static Arena ar;
@@ -462,16 +466,77 @@ TEST(the_fast_index_agrees_with_the_slow_one) {
     }
 }
 
+/* ------------------------------------------------------------ the checks
+ *
+ * Every one of these is a panic rather than a fatal error, because Go's version
+ * of each is something recover can catch. File static because a local live
+ * across the setjmp inside these macros is a local gcc warns about. */
+
+static Slice checked;
+
+TEST(indexing_past_the_end_panics) {
+    checked = slice_make(a, TYPE_INT, 3, 8);
+
+    CHECK_RUNTIME_ERROR((void)slice_at(checked, 3),
+                        "runtime error: index out of range [3] with length 3");
+
+    /* Against the length and not the capacity, which is what s[i] checks in
+     * Go. The spare capacity is reslicing's business. */
+    CHECK_RUNTIME_ERROR((void)slice_at(checked, 7),
+                        "runtime error: index out of range [7] with length 3");
+
+    CHECK_RUNTIME_ERROR((void)slice_at(checked, -1),
+                        "runtime error: index out of range [-1] with length 3");
+}
+
+TEST(a_slice_expression_past_the_capacity_panics) {
+    checked = slice_make(a, TYPE_INT, 3, 8);
+
+    CHECK_RUNTIME_ERROR(
+        (void)slice_sub(checked, 0, 9),
+        "runtime error: slice bounds out of range [0:9] with capacity 8");
+
+    CHECK_RUNTIME_ERROR(
+        (void)slice_sub(checked, 5, 2),
+        "runtime error: slice bounds out of range [5:2] with capacity 8");
+
+    CHECK_RUNTIME_ERROR(
+        (void)slice_sub(checked, -1, 2),
+        "runtime error: slice bounds out of range [-1:2] with capacity 8");
+}
+
+TEST(an_impossible_length_panics) {
+    CHECK_RUNTIME_ERROR((void)slice_make(a, TYPE_INT, -1, 0),
+                        "runtime error: makeslice: len out of range");
+
+    CHECK_RUNTIME_ERROR((void)slice_make(a, TYPE_INT, 4, 2),
+                        "runtime error: makeslice: cap out of range");
+
+    /* Go reports the length first when the length itself is impossible and the
+     * capacity otherwise, and the two messages are different because people
+     * search for them. */
+    CHECK_RUNTIME_ERROR((void)slice_from(NULL, -1, 0, TYPE_INT),
+                        "runtime error: slice_from: len out of range");
+}
+
 TEST(the_fast_index_still_bounds_checks) {
     /* The fast path is a range test and a size test and nothing else, so an
      * index it rejects has to end up in slice_at, which is where the failure
-     * lives. There is no way to observe a fatal error from in here without a
-     * subprocess, so what is checked is the part that can be: an index inside
-     * the length takes the fast path and an index past the length does not
-     * silently return a pointer past the end. */
-    Slice s = slice_make(a, TYPE_INT, 3, 8);
-    CHECK(slice_at_fast(s, 2, sizeof(Int)) == (Byte *)s.p + 2 * sizeof(Int));
-    CHECK(slice_at_fast(s, 0, sizeof(Int)) == s.p);
+     * lives. Both halves are checked: an index inside the length takes the fast
+     * path, and one past it comes out of slice_at with Go's message rather than
+     * a pointer past the end. */
+    checked = slice_make(a, TYPE_INT, 3, 8);
+    CHECK(slice_at_fast(checked, 2, sizeof(Int)) ==
+          (Byte *)checked.p + 2 * sizeof(Int));
+    CHECK(slice_at_fast(checked, 0, sizeof(Int)) == checked.p);
+
+    CHECK_RUNTIME_ERROR((void)slice_at_fast(checked, 3, sizeof(Int)),
+                        "runtime error: index out of range [3] with length 3");
+
+    /* And an element size that does not match the descriptor falls off the fast
+     * path into the same check. */
+    CHECK_RUNTIME_ERROR((void)slice_at_fast(checked, 3, 1),
+                        "runtime error: index out of range [3] with length 3");
 }
 
 TEST(the_fast_append_agrees_with_the_slow_one) {
@@ -577,6 +642,9 @@ int main(void) {
     RUN(a_conversion_copies_so_the_two_stop_sharing);
     RUN(a_slice_of_zero_sized_elements_never_allocates);
     RUN(the_fast_index_agrees_with_the_slow_one);
+    RUN(indexing_past_the_end_panics);
+    RUN(a_slice_expression_past_the_capacity_panics);
+    RUN(an_impossible_length_panics);
     RUN(the_fast_index_still_bounds_checks);
     RUN(the_fast_append_agrees_with_the_slow_one);
     RUN(the_fast_append_falls_back_when_the_size_does_not_match);

@@ -58,7 +58,7 @@ bool ok = map_get2(m, &key, &out);   /* v, ok := m[key] */
 
 `map_get2` copies the value out, which is the safe version, and writes the zero value when the key is absent so that the C reads like the Go it came from. Pass `NULL` for the output to ask only whether the key is there.
 
-A `NULL` map reads as empty rather than crashing, because a nil map in Go does. `map_len`, `map_get`, `map_get2`, `map_del`, `map_clear` and iteration all treat it as a map with nothing in it. Writing to one stops the program with Go's message, `assignment to entry in nil map`, since quietly accepting the write would lose data instead of reporting it.
+A `NULL` map reads as empty rather than crashing, because a nil map in Go does. `map_len`, `map_get`, `map_get2`, `map_del`, `map_clear` and iteration all treat it as a map with nothing in it. Writing to one panics with Go's message, `assignment to entry in nil map`, since quietly accepting the write would lose data instead of reporting it.
 
 ## Writing
 

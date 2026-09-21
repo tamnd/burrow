@@ -101,7 +101,7 @@ Byte b = str_at(s, 3);
 
 Go's `s[i]`, including what Go does when `i` is out of range, which is stop. The check is not optional and it is not behind a build flag, because code written against Go relies on never reading past the end, and a version of this that trusted the caller would be a different language with the same spelling. It costs a compare and a branch the processor predicts perfectly.
 
-It is a fatal error rather than a panic today, carrying the message Go's panic carries. See [failure.md](failure.md) for why and for what changes later.
+It panics, carrying the message Go's panic carries, so a `BURROW_TRY` around the call catches it and `runtime_error_from` says it was the runtime's doing and not somebody else's. See [failure.md](failure.md) for the three ways burrow reports failure and which one you get.
 
 When you are walking a string you have already bounds checked, index `s.p` directly and let the loop condition be the check:
 

@@ -86,14 +86,16 @@ bool any_equal(Any a, Any b) {
      * message is Go's, including the prefix, because that is what somebody
      * searches for after they hit it. */
     if (!type_is_comparable(a.t)) {
-        char buf[128];
+        char buf[BURROW_RUNTIME_ERROR_MAX];
         Str name = type_name(a.t);
         int n = snprintf(buf, sizeof(buf),
                          "runtime error: comparing uncomparable type %.*s",
                          (int)name.len, (const char *)name.p);
         if (n < 0)
-            runtime_throw(BURROW_S("runtime error: comparing uncomparable type"));
-        runtime_throw(str_from_bytes(
+            runtime_panic(BURROW_S("runtime error: comparing uncomparable type"));
+        /* runtime_panic copies, so this buffer only has to outlive the call and
+         * not the jump the call turns into. */
+        runtime_panic(str_from_bytes(
             buf, (Int)(n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1)));
     }
 

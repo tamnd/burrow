@@ -128,6 +128,6 @@ A thread that is not a goroutine has a chain of its own, which is what makes the
 
 ## Panic
 
-Not yet. `panic` and `recover` are the next thing, and the chain this page describes is what a panic will unwind. When it lands, a panic will run the deferred calls of each scope on its way out, the same as Go, and nothing on this page changes.
+A panic unwinds the chain this page describes. It runs the deferred calls of every scope between the panic and the catch block, innermost scope first and last in first out inside each scope, which is Go's rule and is most of the reason defer is worth having: a panic closes the files.
 
-Until then, the things that will become panics stop the program instead. [failure.md](failure.md) is the page about that.
+That includes the panics the runtime raises itself, an index past the end and the rest of them, so a scope that opened between the bad index and the `BURROW_TRY` above it still gets closed on the way past. [panic.md](panic.md) is the page about the catch block, and [failure.md](failure.md) is the page about which failures panic and which end the process.

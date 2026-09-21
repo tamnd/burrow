@@ -27,10 +27,9 @@
  * channels afterwards, because chan_free is the thing that notices a waiter
  * that was left behind.
  *
- * What is not tested here is the case that stops the program, which is a send
- * arm on a closed channel. That calls runtime_throw and ends the process, and a
- * harness that ends the process has failed. It comes back the moment defer and
- * recover land and throw becomes a panic.
+ * The one case that used to be untestable is a send arm on a closed channel.
+ * That was a fatal error, and a harness that ends the process has failed, so
+ * there was nothing to write. It panics today and there is a test for it below.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -46,6 +45,10 @@
 #include "burrow/sched.h"
 #include "burrow/thread.h"
 
+#include "burrow/panic.h"
+#include "burrow/runtime.h"
+
+#include "fatal.h"
 #include "harness.h"
 
 #include <stdbool.h>
@@ -116,6 +119,42 @@ TEST(a_send_arm_is_ready_while_there_is_room) {
     CHECK_INT_EQ(chan_len(c), 2);
 
     chan_free(c);
+}
+
+/* The other direction, where the channel being closed is a mistake rather than
+ * an answer. A send arm on a closed channel says the same thing a plain send
+ * says, because it is the same mistake and somebody searching for the message
+ * should not have to know which of the two they wrote.
+ *
+ * File static for the reason the header gives: a local live across the setjmp
+ * inside CHECK_RUNTIME_ERROR is a local gcc warns about. */
+static Chan *shut;
+static Int outgoing;
+
+/* Its own function because a braced initialiser has commas in it and a macro
+ * argument cannot. */
+static void select_send_on_shut(void) {
+    SelectCase cases[] = {
+        BURROW_SEND(shut, &outgoing),
+        BURROW_DEFAULT,
+    };
+
+    (void)chan_select(cases, 2);
+}
+
+TEST(a_send_arm_on_a_closed_channel_panics) {
+    shut = chan_make(heap_allocator(), TYPE_INT, 1);
+    CHECK(shut != NULL);
+    outgoing = 1;
+
+    chan_close(shut);
+
+    CHECK_RUNTIME_ERROR(select_send_on_shut(), "send on closed channel");
+
+    /* Caught, and the select left nothing of itself on the channel's queues,
+     * which is what chan_free notices. */
+    chan_free(shut);
+    shut = NULL;
 }
 
 /* A receive arm on a closed channel is ready at once, hands over whatever is
@@ -797,6 +836,7 @@ int main(void) {
     RUN(a_default_arm_answers_when_nothing_is_ready);
     RUN(a_ready_case_beats_the_default);
     RUN(a_send_arm_is_ready_while_there_is_room);
+    RUN(a_send_arm_on_a_closed_channel_panics);
     RUN(a_closed_channel_makes_its_arm_ready_forever);
     RUN(an_arm_on_a_nil_channel_never_fires);
     RUN(a_select_with_nothing_but_nil_arms_takes_the_default);

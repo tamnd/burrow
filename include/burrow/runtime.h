@@ -7,16 +7,24 @@
  * silently wrong answer, so the check has to exist before anything with an index
  * can be written.
  *
- * What is here today is Go's fatal error rather than Go's panic. The difference
- * is that a fatal error cannot be recovered from, and it cannot be recovered
- * from because recover needs defer, defer needs the goroutine's defer chain, and
- * that needs the scheduler. So the mechanism is temporary and it is the only
- * temporary thing about this file. The message text is not temporary. Those
- * strings appear in Go's own tests, byte for byte, which is why they are written
- * out in full here rather than being approximated now and fixed later.
+ * There are two ways out of this file and the difference between them is the
+ * whole subject. A throw is the runtime saying its own invariants are broken,
+ * and the process ends, which is Go's runtime.throw. A panic is the runtime
+ * saying a call was wrong, and a program that wants to can catch it, which is
+ * Go's panic. runtime_throw is the first. The four checks under it are the
+ * second: they panic with a RuntimeError, which is Go's runtime.Error.
  *
- * When defer and recover land, these functions start panicking with the matching
- * runtime.Error value and every caller stays as it is.
+ * Which condition gets which is not a judgement call, it is a lookup. If Go's
+ * version of the same condition is a recoverable panic then burrow's is a
+ * panic, and if Go throws, or if the condition only exists because burrow is
+ * written in C, burrow throws. So an index past the end panics, a nil map
+ * written to panics, a send on a closed channel panics, and a map that grew
+ * under an iterator ends the process, because that is the line Go draws in each
+ * of those four places.
+ *
+ * The message text is Go's, byte for byte. Those strings appear in Go's own
+ * tests and they are what somebody pastes into a search box when they hit one,
+ * which is why they are written out in full here rather than approximated.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -26,11 +34,77 @@
 #define BURROW_RUNTIME_H
 
 #include "burrow/core.h"
+#include "burrow/error.h"
+#include "burrow/iface.h"
 #include "burrow/platform.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Go's runtime.Error: the error a panic raised by the runtime carries.
+ *
+ * Go's is an interface with a marker method on it, because the concrete types
+ * behind it are unexported and the only thing a program is allowed to ask is
+ * whether this failure came from the runtime or from somewhere else. Here it is
+ * a struct with the message in it and TYPE_RUNTIME_ERROR is how errors_as finds
+ * it, which is the same question with the same answer.
+ *
+ * You get one out of a catch block:
+ *
+ *     BURROW_TRY {
+ *         handle(request);
+ *     }
+ *     BURROW_CATCH(p) {
+ *         const RuntimeError *re = runtime_error_from(p);
+ *
+ *         if (re != NULL)
+ *             log_bug(re->message);
+ *         else
+ *             log_panic(panic_text(p));
+ *     }
+ *     BURROW_TRY_END;
+ *
+ * or out of an Error that came from somewhere else with errors_as, since the
+ * value panicked with is a plain Error and behaves like one:
+ *
+ *     const RuntimeError *re = errors_as(err, TYPE_RUNTIME_ERROR); */
+typedef struct RuntimeError {
+    /* What went wrong, in Go's words. It borrows, and the paragraph over
+     * BURROW_RUNTIME_ERROR_MAX says for how long. */
+    Str message;
+} RuntimeError;
+
+/* The descriptor, which is what errors_as matches on. Its name is "Error" and
+ * its package is "runtime", so it prints as runtime.Error. */
+extern const Type *const TYPE_RUNTIME_ERROR;
+
+/* How long a runtime error's message can be, and where it lives.
+ *
+ * Both halves of that sentence are the same fact. The message is built out of
+ * the numbers that caused the failure, so it cannot be a literal, and the frame
+ * that would hold it is a frame the panic jumps past. So it is built in a slot
+ * on the goroutine instead, which is still there when the catch block runs, and
+ * the slot is a fixed size because nothing on this path is allowed to allocate:
+ * running out of memory is one of the conditions that eventually arrives here
+ * and a reporting path that needs an allocator stops working exactly when it is
+ * needed. A message longer than this is truncated rather than growing.
+ *
+ * One slot per goroutine, and the next runtime error on the same goroutine
+ * writes over it. So a message you intend to keep past the catch block is a
+ * message to copy, which is the rule every borrowed Str in burrow follows and
+ * the same thing panic_text says about its own scratch. The window is wide
+ * enough for anything normal: it closes on the next index out of range on this
+ * goroutine and not before. */
+#define BURROW_RUNTIME_ERROR_MAX 128
+
+/* Go's recover().(runtime.Error), which is the question "did the runtime stop
+ * this, or did the program".
+ *
+ * Hand it what a catch block caught. It gives you the runtime error inside, or
+ * NULL for a panic that is anything else, including a panic with an ordinary
+ * Error. It borrows from v, and v's message borrows from the goroutine. */
+BURROW_BORROWS(ret, v) const RuntimeError *runtime_error_from(Any v);
 
 /* Stop the program, the way Go's runtime.throw does: print
  *
@@ -40,14 +114,36 @@ extern "C" {
  * not an Error return, because every caller of this has already established that
  * the program's state is not what the program believes it to be.
  *
- * Callers inside burrow are the bounds checks below and nothing else yet. You
- * are welcome to call it from your own code if you have a condition of the same
- * kind, but if you are reaching for it to report a bad argument, return an Error
- * instead. */
+ * You are welcome to call it from your own code if you have a condition of the
+ * same kind, but if you are reaching for it to report a bad argument, return an
+ * Error instead, and if the caller could reasonably want to carry on, the
+ * function under this one is the one you want. */
 BURROW_NORETURN void runtime_throw(Str msg);
 
-/* The specific ones. Each prints exactly what Go prints, because the text is
- * what people search for when they hit it, and because Go's tests compare it. */
+/* Panic with a RuntimeError carrying msg, which is what every check below does
+ * and what Go's runtime does for the conditions it lets you recover from.
+ *
+ * The bytes are copied, so msg may point into the calling frame, and that is
+ * the reason this exists as a function rather than as panic with an error each
+ * caller built for itself. A panic does not come back, so the frame that
+ * formatted the message is gone by the time a catch block reads it, and a
+ * message built out of the numbers that caused the failure is the only kind
+ * worth having. The copy goes somewhere that outlives the jump. See
+ * BURROW_RUNTIME_ERROR_MAX for how long it may be and how long it lasts.
+ *
+ * Call it for the same class of condition burrow calls it for: the caller asked
+ * for something that cannot be done because the caller's own belief about its
+ * state was wrong. A bad argument from a user is an Error return, not this. */
+BURROW_NORETURN void runtime_panic(Str msg);
+
+/* The specific ones. Each says exactly what Go says, because the text is what
+ * people search for when they hit it, and because Go's tests compare it. All
+ * four panic, so all four can be caught with BURROW_TRY, and an uncaught one
+ * prints
+ *
+ *     panic: runtime error: index out of range [5] with length 3
+ *
+ * and ends the process with status 2, which is Go down to the prefix. */
 
 /* runtime error: index out of range [i] with length len */
 BURROW_NORETURN void runtime_index_out_of_range(Int i, Int len);

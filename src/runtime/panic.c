@@ -12,7 +12,8 @@
  * is the runtime saying its own invariants are broken, and it ends the process,
  * which is Go's runtime.throw. A panic is a program saying a call was wrong,
  * and a program that wants to can catch it, which is Go's panic and recover.
- * The first half of this file is the throw and the second is the panic.
+ * This file is the throw, then the runtime's own errors, which are panics with
+ * a RuntimeError in them, then the panic machinery all three run on.
  *
  * The panic half is three moving parts. The chain of open defer scopes, which
  * burrow/defer.h builds and this walks. A chain of recovery points, one per
@@ -40,6 +41,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* Read on the way out and written once during startup. It is a plain pointer
  * rather than an atomic because the atomics layer does not exist yet and
@@ -87,49 +89,159 @@ void runtime_throw(Str msg) {
     _Exit(2);
 }
 
-/* Both of the specific ones format into a stack buffer. Nothing here allocates,
- * on purpose: running out of memory is one of the things that will eventually
- * get here, and a reporting path that needs an allocator is a reporting path
- * that stops working exactly when it is needed.
- *
- * 128 bytes holds the longest either of these can produce, since the text is
- * fixed and the three numbers are at most twenty digits each. snprintf
- * truncates rather than overflowing if that arithmetic is ever wrong. */
-#define MSG_MAX 128
+/* ---------------------------------------------------------- runtime errors */
 
-void runtime_index_out_of_range(Int i, Int len) {
-    char buf[MSG_MAX];
-    int n = snprintf(buf, sizeof(buf),
-                     "runtime error: index out of range [%lld] with length %lld",
-                     (long long)i, (long long)len);
-    if (n < 0)
-        runtime_throw(BURROW_S("runtime error: index out of range"));
-    runtime_throw(
-        str_from_bytes(buf, (Int)(n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1)));
+/* The smallest vtable an error can have: a message and nothing else. No unwrap,
+ * because a runtime error is the bottom of a chain by definition and there is
+ * nothing under it to wrap. No is, because two of these are the same failure
+ * only when they are the same object, which is what identity already says.
+ *
+ * self_type is filled in, unlike the sentinels and unlike errors_new, and that
+ * is the one thing worth pointing at. Go's runtime error types are unexported
+ * and errors.As from outside the runtime can never name one, but runtime.Error
+ * is exported and the assertion to it is the whole interface. So the descriptor
+ * exists, and errors_as on it is that assertion. */
+static Str runtime_error_message(const void *self) {
+    return ((const RuntimeError *)self)->message;
 }
 
-/* These two carry no numbers, so they are a throw with a constant string and
+static const Type runtime_error_desc = {
+    {(const Byte *)"Error", 5},
+    {(const Byte *)"runtime", 7},
+    KIND_STRUCT,
+    (uint32_t)sizeof(RuntimeError),
+    (uint16_t)_Alignof(RuntimeError),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x72746572U, /* "rter", distinct from every builtin's and from error's */
+    NULL,
+};
+
+const Type *const TYPE_RUNTIME_ERROR = &runtime_error_desc;
+
+static const ErrorVT runtime_error_vt = {
+    &runtime_error_desc, runtime_error_message, NULL, NULL, NULL, NULL,
+};
+
+const RuntimeError *runtime_error_from(Any v) {
+    if (v.t != TYPE_ERROR || v.data == NULL)
+        return NULL;
+    return errors_as(*(const Error *)v.data, TYPE_RUNTIME_ERROR);
+}
+
+/* The last step of both entry points below, once the message is in the slot.
+ *
+ * The Error lives in this frame and points at the slot, which is the whole
+ * arrangement in one line: stash copies the Error into the catching frame
+ * because it is sixteen bytes, and what it points at is on the goroutine, so
+ * both halves survive a jump that this frame does not. */
+static BURROW_NORETURN void raise_runtime_error(burrow__PanicState *st, Int n) {
+    Error err;
+
+    st->rterr.message = str_from_bytes(st->rttext, n);
+    err = (Error){&runtime_error_vt, &st->rterr};
+    panic(BURROW_ANY(TYPE_ERROR, &err));
+}
+
+void runtime_panic(Str msg) {
+    burrow__PanicState *st = burrow__panic_state();
+    Int n = msg.len;
+
+    if (msg.p == NULL || n < 0)
+        n = 0;
+    if (n > (Int)sizeof(st->rttext))
+        n = (Int)sizeof(st->rttext);
+    if (n > 0)
+        memcpy(st->rttext, msg.p, (size_t)n);
+    raise_runtime_error(st, n);
+}
+
+/* The same thing for a message with numbers in it, built straight into the slot
+ * rather than into a buffer here and copied.
+ *
+ * Built by hand rather than handed to vsnprintf, which would be one line, for
+ * two reasons. The first is the rule over the slot: nothing on this path may
+ * allocate, and a printf is allowed to. This is where a program that has run
+ * out of memory ends up, and a reporting path that needs an allocator is one
+ * that stops working exactly when it is needed.
+ *
+ * The second is what it costs. Building this message is about ten nanoseconds
+ * this way and about a hundred and forty through snprintf on macOS, which
+ * parses a format string and consults a locale to find out that a decimal point
+ * is a full stop. A panic is not a hot path and neither number matters on its
+ * own, but a test suite that checks a few thousand failure cases pays it a few
+ * thousand times, and the cheap one is twenty lines.
+ *
+ * It formats what these messages are made of, which is literal text and decimal
+ * integers, and nothing else. Anything past the end of the slot is dropped
+ * rather than growing it, which is BURROW_RUNTIME_ERROR_MAX's rule. */
+typedef struct Msg {
+    Byte *p;
+    Int cap;
+    Int len;
+} Msg;
+
+static void msg_text(Msg *m, const char *s) {
+    while (*s != '\0' && m->len < m->cap)
+        m->p[m->len++] = (Byte)*s++;
+}
+
+static void msg_int(Msg *m, Int v) {
+    /* Widest an Int gets is nineteen digits, and the sign goes out separately.
+     * Negated as unsigned because the most negative Int has no positive. */
+    Byte digits[20];
+    uint64_t u = v < 0 ? (uint64_t)0 - (uint64_t)v : (uint64_t)v;
+    Int n = 0;
+
+    if (v < 0)
+        msg_text(m, "-");
+    do {
+        digits[n++] = (Byte)('0' + (int)(u % 10));
+        u /= 10;
+    } while (u != 0);
+    while (n > 0 && m->len < m->cap)
+        m->p[m->len++] = digits[--n];
+}
+
+void runtime_index_out_of_range(Int i, Int len) {
+    burrow__PanicState *st = burrow__panic_state();
+    Msg m = {st->rttext, (Int)sizeof(st->rttext), 0};
+
+    msg_text(&m, "runtime error: index out of range [");
+    msg_int(&m, i);
+    msg_text(&m, "] with length ");
+    msg_int(&m, len);
+    raise_runtime_error(st, m.len);
+}
+
+void runtime_slice_bounds_out_of_range(Int lo, Int hi, Int cap) {
+    burrow__PanicState *st = burrow__panic_state();
+    Msg m = {st->rttext, (Int)sizeof(st->rttext), 0};
+
+    msg_text(&m, "runtime error: slice bounds out of range [");
+    msg_int(&m, lo);
+    msg_text(&m, ":");
+    msg_int(&m, hi);
+    msg_text(&m, "] with capacity ");
+    msg_int(&m, cap);
+    raise_runtime_error(st, m.len);
+}
+
+/* These two carry no numbers, so they are a panic with a constant string and
  * nothing else. They exist as functions rather than as the string written out
  * at each call site because burrow/num.h has forty of those call sites and
  * because the text has to stay identical across all of them. */
 void runtime_integer_divide_by_zero(void) {
-    runtime_throw(BURROW_S("runtime error: integer divide by zero"));
+    runtime_panic(BURROW_S("runtime error: integer divide by zero"));
 }
 
 void runtime_negative_shift(void) {
-    runtime_throw(BURROW_S("runtime error: negative shift amount"));
-}
-
-void runtime_slice_bounds_out_of_range(Int lo, Int hi, Int cap) {
-    char buf[MSG_MAX];
-    int n = snprintf(
-        buf, sizeof(buf),
-        "runtime error: slice bounds out of range [%lld:%lld] with capacity %lld",
-        (long long)lo, (long long)hi, (long long)cap);
-    if (n < 0)
-        runtime_throw(BURROW_S("runtime error: slice bounds out of range"));
-    runtime_throw(
-        str_from_bytes(buf, (Int)(n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1)));
+    runtime_panic(BURROW_S("runtime error: negative shift amount"));
 }
 
 /* ------------------------------------------------------------------ panic */

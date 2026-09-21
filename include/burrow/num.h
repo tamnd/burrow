@@ -4,8 +4,8 @@
  * they part company completely. Go says a signed integer wraps, C says signed
  * overflow is undefined and lets the optimiser delete the code around it. Go
  * says a shift by 64 is zero, C says it is undefined. Go says dividing by zero
- * stops the program with a message, C says undefined again, and on x86 it is a
- * hardware fault with no message at all.
+ * panics with a message, C says undefined again, and on x86 it is a hardware
+ * fault with no message at all.
  *
  * None of that is theoretical. A ported hash function wraps on every round. A
  * ported parser shifts by a variable it got from the input. strconv, math/big,

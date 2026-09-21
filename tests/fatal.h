@@ -19,6 +19,13 @@
  * own. Either way the catch block below has the text, so CHECK_FATAL reads the
  * same whichever one the code under test reaches for.
  *
+ * Reading the same is exactly what you do not want when the question is which
+ * of the two happened, and that is what CHECK_PANIC and CHECK_RUNTIME_ERROR are
+ * for. They install no handler, so a statement that throws under one of them
+ * ends the process instead of being caught. Use CHECK_FATAL for a condition
+ * that is meant to stop the program and CHECK_PANIC for one that is meant to be
+ * survivable, and the test then says which it is rather than accepting either.
+ *
  * The throw's message needs copying before the panic and not after, which is
  * the one thing here that is easy to get wrong. runtime_index_out_of_range and
  * the rest of them format their message into a buffer in their own frame, and
@@ -59,6 +66,11 @@ static char fatal_caught[256];
 static char fatal_thrown[256];
 static bool fatal_did_catch;
 
+/* BURROW_UNUSED for the reason fatal_handler has it: a test file that only
+ * reaches for CHECK_FATAL never touches this one, and gcc treats an untouched
+ * static as an error under this build's warnings. */
+static BURROW_UNUSED bool fatal_was_runtime_error;
+
 /* Truncating rather than growing, because a test that wants more than this out
  * of a fatal message is testing the wrong thing. Returns what it wrote. */
 static Int fatal_copy(char *dst, size_t cap, Str msg) {
@@ -70,8 +82,12 @@ static Int fatal_copy(char *dst, size_t cap, Str msg) {
     return (Int)n;
 }
 
-/* The throw's way in, and the place the message stops being the thrower's. */
-static void fatal_handler(Str msg) {
+/* The throw's way in, and the place the message stops being the thrower's.
+ *
+ * BURROW_UNUSED because a test file that only reaches for CHECK_PANIC never
+ * names this, and a static function nobody calls is an error under this
+ * build's warnings. */
+static BURROW_UNUSED void fatal_handler(Str msg) {
     Int n = fatal_copy(fatal_thrown, sizeof(fatal_thrown), msg);
 
     panic_str(str_from_bytes(fatal_thrown, n));
@@ -105,6 +121,50 @@ static void fatal_handler(Str msg) {
         CHECK(fatal_did_catch);                                                        \
         if (fatal_did_catch)                                                           \
             CHECK_STR_EQ(fatal_caught, want);                                          \
+    } while (0)
+
+/* The recoverable half, and the difference from the pair above is one line that
+ * is not there: no fatal handler is installed.
+ *
+ * That absence is the assertion. A statement that throws rather than panicking
+ * has no net under it here, so it ends the process and takes the run with it,
+ * which is a loud failure rather than a quiet pass. A condition Go lets you
+ * recover from has to be one burrow lets you recover from, and from inside a
+ * test the only way to check that is to remove the alternative. */
+#define EXPECT_PANIC(stmt)                                                             \
+    do {                                                                               \
+        memset(fatal_caught, 0, sizeof(fatal_caught));                                 \
+        fatal_did_catch = false;                                                       \
+        fatal_was_runtime_error = false;                                               \
+        BURROW_TRY {                                                                   \
+            stmt;                                                                      \
+        }                                                                              \
+        BURROW_CATCH(fatal_p) {                                                        \
+            fatal_copy(fatal_caught, sizeof(fatal_caught), panic_text(fatal_p));       \
+            fatal_was_runtime_error = runtime_error_from(fatal_p) != NULL;             \
+            fatal_did_catch = true;                                                    \
+        }                                                                              \
+        BURROW_TRY_END;                                                                \
+    } while (0)
+
+#define CHECK_PANIC(stmt, want)                                                        \
+    do {                                                                               \
+        EXPECT_PANIC(stmt);                                                            \
+        CHECK(fatal_did_catch);                                                        \
+        if (fatal_did_catch)                                                           \
+            CHECK_STR_EQ(fatal_caught, want);                                          \
+    } while (0)
+
+/* A panic carrying one of the runtime's own errors, which is what every check
+ * in burrow/runtime.h raises and what Go hands back from a recover as a
+ * runtime.Error. Checking the type as well as the text matters because the text
+ * would still match if somebody panicked with a bare string that happened to
+ * say the same thing, and a caller sorting its own mistakes from the runtime's
+ * asks the type. */
+#define CHECK_RUNTIME_ERROR(stmt, want)                                                \
+    do {                                                                               \
+        CHECK_PANIC(stmt, want);                                                       \
+        CHECK(fatal_was_runtime_error);                                                \
     } while (0)
 
 #endif /* BURROW_TESTS_FATAL_H */

@@ -164,7 +164,7 @@ any_equal(BURROW_ANY(TYPE_INT, &i), BURROW_ANY(TYPE_INT64, &j));  /* false */
 
 The same number and the same bytes, and Go says they are different, because the dynamic types differ. That is the rule that keeps `int(3)` and `int64(3)` apart as keys in a `map[any]int`, and `TYPE_ANY` hashes the dynamic type along with the value so the map agrees with the comparison.
 
-Comparing two values of a type that cannot be compared, a slice or a map or a function, stops the program with Go's message:
+Comparing two values of a type that cannot be compared, a slice or a map or a function, panics with Go's message:
 
 ```
 runtime error: comparing uncomparable type []int

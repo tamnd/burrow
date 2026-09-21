@@ -4,6 +4,35 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+The runtime's own failures are catchable now. An index past the end of a slice, a write to a nil map, a send on a closed channel, a divide by zero and the rest of the conditions Go panics on panic here too, instead of printing a line and ending the process, so a program can put a `BURROW_TRY` around a piece of work and survive one the way a Go program survives its own.
+
+What arrives in the catch block is a `RuntimeError`, which is Go's `runtime.Error`, and it carries the message Go prints for the same condition word for word. `runtime_error_from` takes the panic value and gives back a pointer to one if that is what the panic was carrying, and `NULL` if it was anything else, which is the first line of a catch block that only means to handle its own.
+
+Which conditions panic and which end the process is not a judgement call and is not made one at a time. If Go's version of the condition is a recoverable panic then burrow panics, and if Go throws, or if the condition only exists because burrow is written in C, burrow ends the process. So a map that grows under an iterator still stops everything and an append between two slices of different element types still stops everything, because the first is where Go puts it and the second is a mistake Go's compiler catches before the program runs.
+
+### Runtime
+
+- `runtime_panic` is the new front door and it copies the message before jumping. That is the whole reason it exists as a function rather than each caller building a panic of its own: a panic does not come back, so the frame that formatted `index out of range [5] with length 3` out of the two numbers that caused it is gone by the time anybody reads the text.
+- The copy goes into a fixed slot on the goroutine, `BURROW_RUNTIME_ERROR_MAX` bytes of it, so nothing on this path allocates. Running out of memory is one of the conditions that will eventually arrive here and a reporting path that needs an allocator fails exactly when it is needed. One slot per goroutine, so the message is borrowed and the next runtime error on the same goroutine writes over it.
+- The messages with numbers in them are built by hand rather than by `vsnprintf`, which is twenty lines and is worth it twice over. A libc's printf is allowed to allocate and this is where a program that has run out of memory ends up, and building the index out of range message costs about ten nanoseconds this way against about a hundred and forty through `snprintf` on macOS.
+- `runtime_index_out_of_range`, `runtime_slice_bounds_out_of_range`, `runtime_integer_divide_by_zero` and `runtime_negative_shift` panic rather than throw. They print `panic: runtime error: ...` and exit 2 when nothing catches them, which is Go down to the prefix.
+- The converted sites are the ones Go recovers from: slice length and capacity out of range in `slice_from`, `slice_make` and growth, `assignment to entry in nil map` and a map size out of range, `send on closed channel` in all three places it can happen including the select send arm, `close of nil channel`, `close of closed channel`, a channel size out of range, and comparing an uncomparable type through an interface.
+- `runtime_throw` keeps everything else, and the list is worth knowing because it is short: a map that grew during iteration, an invalid map key type, freeing a channel with goroutines still blocked on it, mismatched element types, out of memory, and the scheduler's own invariants.
+- `errors_as(err, TYPE_RUNTIME_ERROR)` works on one too, so a runtime error that has been turned into an `Error` and passed up a call stack is still identifiable at the top.
+
+### Windows
+
+- MinGW builds no longer walk the stack twice on a panic. MinGW spells `setjmp` as a macro that hands the stack pointer to `_setjmp`, and a `longjmp` that was given one runs `RtlUnwindEx`, the same structured unwinder a C++ throw uses. burrow has already walked its defer chain by hand before it jumps, so that second pass is looking for handlers over frames that are gone, and on x86_64 it faulted inside ntdll and kept faulting until the stack was used up. It showed up as a crash in about one run in six of the runtime tests and never once under a debugger. burrow now asks for the pair MinGW itself uses when `__USE_MINGW_SETJMP_NON_SEH` is set, spelled out in `burrow/panic.h` rather than by defining that macro, because the macro only takes effect if burrow gets to `setjmp.h` first and a user who includes it above us would quietly get the other one back.
+
+### Docs
+
+- `docs/guides/failure.md` has the rule for which failures panic and which end the process, with the reasoning for the line being where it is, and an example of a catch block that handles the runtime's panics and re-raises everything else.
+- `docs/guides/panic.md` gained a section on the runtime's own panics and what `runtime_error_from` is for.
+- `docs/design/06-runtime.md` section 6 goes from a plan to a description of what was built, including why the message lives where it lives.
+- Every page that said one of these conditions stops the program now says it panics. That was `channels.md`, `maps.md`, `slices.md`, `strings.md`, `numbers.md`, `interfaces.md`, `defer.md`, `conventions.md` and the README, plus the same sentences in `chan.h`, `map.h`, `slice.h`, `iface.h`, `num.h` and `core.h`.
+
 ## v0.0.17 (2026-09-21)
 
 `panic` and `recover`, which is the other half of the failure story and the half the docs have been promising since the first page of them. A panic unwinds the open scopes, running their deferred calls innermost first, and lands in the nearest catch block. Unrecovered, it prints the value and ends the process with status 2, the same as Go.

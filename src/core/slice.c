@@ -82,7 +82,7 @@ bool slice_is_nil(Slice s) {
 
 Slice slice_from(void *p, Int len, Int cap, const Type *elem) {
     if (len < 0 || cap < len)
-        runtime_throw(BURROW_S("runtime error: slice_from: len out of range"));
+        runtime_panic(BURROW_S("runtime error: slice_from: len out of range"));
     Slice s = {p, len, cap, elem};
     return s;
 }
@@ -95,9 +95,9 @@ Slice slice_make(Alloc *a, const Type *elem, Int len, Int cap) {
      * people do search for them. makeslice reports the length first when the
      * length itself is impossible, and the capacity otherwise. */
     if (len < 0)
-        runtime_throw(BURROW_S("runtime error: makeslice: len out of range"));
+        runtime_panic(BURROW_S("runtime error: makeslice: len out of range"));
     if (cap < len || !bytes_for(cap, sz, &total))
-        runtime_throw(BURROW_S("runtime error: makeslice: cap out of range"));
+        runtime_panic(BURROW_S("runtime error: makeslice: cap out of range"));
 
     if (total == 0) {
         /* Either a zero sized element or a zero capacity. Both are real slices
@@ -196,7 +196,7 @@ Slice slice_append(Alloc *a, Slice s, const void *elems, Int n) {
         return s;
 
     if (s.len > BURROW_INT_MAX - n)
-        runtime_throw(BURROW_S("runtime error: growslice: len out of range"));
+        runtime_panic(BURROW_S("runtime error: growslice: len out of range"));
 
     Int new_len = s.len + n;
     size_t sz = elem_size(s.elem);
@@ -222,7 +222,7 @@ Slice slice_append(Alloc *a, Slice s, const void *elems, Int n) {
     Int new_cap = next_cap(new_len, s.cap);
     size_t total = 0;
     if (new_cap < new_len || !bytes_for(new_cap, sz, &total))
-        runtime_throw(BURROW_S("runtime error: growslice: cap out of range"));
+        runtime_panic(BURROW_S("runtime error: growslice: cap out of range"));
 
     /* Not zeroed, because all three regions are written below: the old
      * elements, the new ones, and the tail out to the capacity. Go clears that

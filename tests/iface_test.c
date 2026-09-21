@@ -445,7 +445,8 @@ TEST(comparing_uncomparable_values_stops_the_program_the_way_go_does) {
     Any a1 = BURROW_ANY(&slice_of_int, &s1);
     Any a2 = BURROW_ANY(&slice_of_int, &s2);
 
-    CHECK_FATAL(any_equal(a1, a2), "runtime error: comparing uncomparable type []int");
+    CHECK_RUNTIME_ERROR(any_equal(a1, a2),
+                        "runtime error: comparing uncomparable type []int");
 }
 
 TEST(the_any_descriptor_describes_an_interface) {

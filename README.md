@@ -328,7 +328,7 @@ A capacity of zero is unbuffered, which is a rendezvous rather than a queue of o
 
 Values go by pointer and are copied through the type descriptor, so a channel of `Str` copies a `Str` properly and sending a loop variable does what it looks like it does. Closing is a broadcast and it is one way. `chan_try_send` and `chan_try_recv` are the select with a default arm that most code actually writes.
 
-The rules that stop the program are Go's, exactly: send on closed, close of closed, close of nil. Each one means two parts of the program disagree about who owns the channel, and no return value would make such a program correct. They become recoverable panics once defer and recover land.
+The rules that panic are Go's, exactly: send on closed, close of closed, close of nil. Each one means two parts of the program disagree about who owns the channel, and no return value would make such a program correct. The channel's lock is released before the panic goes up, so a catch block can survive one and the channel still works afterwards.
 
 One thing Go has no equivalent of: a host thread that is not running a goroutine can block on a channel, because burrow is a library inside somebody else's program and that program has its own threads. It costs the thread, which a goroutine parking does not.
 
@@ -418,6 +418,8 @@ A panic unwinds until something catches it, running the deferred calls of every 
 The one deviation from Go in the whole feature is where the recovery is written. Go recovers inside a deferred function and burrow recovers in a catch block, because resuming in the frame that recovered means a `setjmp` in that frame, and Go's rule would need one in every function that has a `defer` in it. Ours needs one only where somebody actually catches something, so a `defer` stays two stores and a call for everybody else.
 
 Everything else is Go's, including the corners people forget: a panic inside a deferred call chains onto the one already unwinding and the rest of that scope's calls still run, `panic` with nil gets you a value that says so, and a panic does not cross a goroutine.
+
+The runtime's own checks panic too, with an `Error` whose concrete type is `RuntimeError`, which is Go's `runtime.Error`. An index past the end, a slice expression past the capacity, a divide by zero, a write to a nil map, a send on a closed channel. `runtime_error_from(p)` in a catch block says whether the panic came from the runtime or from somebody's own code, and the messages are Go's text byte for byte.
 
 Underneath it is `setjmp` and `longjmp` on all three platforms, with the unwinding done by hand rather than by a personality routine, so there is no unwinder to link, no tables, and no allocation on the panic path. Code with no `BURROW_TRY` in it pays nothing at all.
 

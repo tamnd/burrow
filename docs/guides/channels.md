@@ -82,25 +82,25 @@ chan_close(c);
 
 Every receiver blocked on the channel wakes up. Every receive after the buffer drains answers false immediately and writes the element type's zero value, for ever. There is no reopening.
 
-That is what ends the `while (chan_recv(c, &v))` loop, and it is why closing is the sender's job. A receiver that closes has told the sender something the sender did not agree to, and the sender's next send stops the program. Where there are several senders, something above all of them has to close, once they have all finished.
+That is what ends the `while (chan_recv(c, &v))` loop, and it is why closing is the sender's job. A receiver that closes has told the sender something the sender did not agree to, and the sender's next send panics. Where there are several senders, something above all of them has to close, once they have all finished.
 
-Closing is not idempotent and that is on purpose. A double close stops the program because it means two things both believe they own the channel, and that is worth finding at the second close rather than much later.
+Closing is not idempotent and that is on purpose. A double close panics because it means two things both believe they own the channel, and that is worth finding at the second close rather than much later.
 
-## The rules that stop the program
+## The rules that panic
 
 These are Go's, exactly.
 
 | what | what happens |
 | --- | --- |
-| send on a closed channel | stops the program |
-| close of a closed channel | stops the program |
-| close of a `NULL` channel | stops the program |
+| send on a closed channel | panics |
+| close of a closed channel | panics |
+| close of a `NULL` channel | panics |
 | receive on a closed channel | the zero value and false, once drained |
 | send or receive on `NULL` | blocks forever |
 
 They look harsh for a C library. They are the right ones anyway, because each of them is a statement that two parts of the program disagree about who owns the channel, and there is no value any of these calls could return that would make such a program correct. A send on a closed channel that quietly did nothing would turn a race into lost data somewhere else later, which is worse in every way than a crash at the line that made the mistake.
 
-Stopping the program is `runtime_throw` today. Once defer and recover land it becomes a panic, every one of these becomes recoverable, and nothing in this header changes.
+The panic is the ordinary kind. A `BURROW_TRY` around the call catches it, the value is a `RuntimeError` carrying Go's text, and the channel's lock is released before the panic goes up, so the channel is still usable from another goroutine afterwards. A server that does not want one confused handler to take the whole process down can survive this, which is the same latitude Go gives.
 
 Blocking forever on a `NULL` channel is Go's behaviour for a nil one, and it is useful rather than a trap. A select case on a channel variable that is `NULL` is a case that can never fire, which is how a loop turns one of its arms off, and that idiom only works if a bare send or receive agrees. `chan_try_send` and `chan_try_recv` both answer false on `NULL` without blocking, for the same reason.
 
@@ -127,7 +127,7 @@ if (!chan_try_send(work, &job)) {
 
 So a false return is the case the default arm exists for. `ok` may be `NULL` if you do not need to tell the first two apart.
 
-`chan_try_send` stops the program on a closed channel, exactly as a send does. A select does not make a send on a closed channel legal.
+`chan_try_send` panics on a closed channel, exactly as a send does. A select does not make a send on a closed channel legal.
 
 ## Waiting on several at once
 
@@ -203,7 +203,7 @@ A select where every arm is a `NULL` channel and there is no default blocks fore
 
 ### The rules
 
-A send arm on a closed channel stops the program, exactly as a bare send does. Because the choice among ready arms is random, a select that has such an arm may stop the program on one run and not on the next, which is worth knowing when you are reading a crash report.
+A send arm on a closed channel panics, exactly as a bare send does. Because the choice among ready arms is random, a select that has such an arm may panic on one run and not on the next, which is worth knowing when you are reading a crash report.
 
 The same channel may appear in several arms. It is locked once.
 

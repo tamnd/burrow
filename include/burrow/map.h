@@ -110,9 +110,9 @@ bool map_get2(Map *m, const void *key, void *out_val);
  * map is unchanged in that case. Go's assignment cannot fail because Go stops
  * the world instead, and a library in C has to hand the decision back.
  *
- * Stops the program when m is NULL, which is Go's "assignment to entry in nil
- * map". A nil map is readable and not writable in Go, and quietly accepting a
- * write here would lose data instead of reporting it. */
+ * Panics when m is NULL, which is Go's "assignment to entry in nil map" and is
+ * recoverable there and here. A nil map is readable and not writable in Go, and
+ * quietly accepting a write here would lose data instead of reporting it. */
 bool map_set(Map *m, const void *key, const void *val);
 
 /* delete(m, key). Does nothing if the key is not there or the map is NULL. */

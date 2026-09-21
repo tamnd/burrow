@@ -190,7 +190,8 @@ BURROW_BORROWS(ret, v) void *any_assert(Any v, const Type *want);
  *
  * Go makes comparing two uncomparable values a run time panic rather than a
  * compile error, because it cannot know the dynamic types until it runs. This
- * does the same, through runtime_throw, with Go's message. */
+ * does the same, through runtime_panic, with Go's message, so it is catchable
+ * the same way Go's is recoverable. */
 bool any_equal(Any a, Any b);
 
 /* The descriptor for Any itself, so that map[any]T works, which is what json

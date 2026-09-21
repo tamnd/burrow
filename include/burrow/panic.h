@@ -153,6 +153,7 @@
 #include "burrow/iface.h"
 #include "burrow/own.h"
 #include "burrow/platform.h"
+#include "burrow/runtime.h"
 
 #include <setjmp.h>
 
@@ -245,6 +246,15 @@ typedef struct burrow__PanicState {
      * two goroutines printing panic values at once do not meet, and reused by
      * the next call, which is why the header says to copy what you keep. */
     Byte text[48];
+
+    /* The runtime's own error while it is in flight, and the bytes behind its
+     * message. runtime_panic fills both in and then panics with an Error
+     * pointing at rterr, because the frame that formatted the message is a
+     * frame the jump lands past and the message is the whole point. Here
+     * rather than in a frame for the same reason everything else in this
+     * struct is here, and burrow/runtime.h has the lifetime rule. */
+    RuntimeError rterr;
+    Byte rttext[BURROW_RUNTIME_ERROR_MAX];
 } burrow__PanicState;
 
 BURROW_BORROWS(ret) burrow__PanicState *burrow__panic_state(void);
@@ -268,8 +278,20 @@ void burrow__recover_close(burrow__Recover *r);
  * does not declare _longjmp, so asking for the pair there is a build failure
  * for no gain. On glibc the two are the same code behind different names.
  *
- * Windows has no mask to save, so its setjmp is already the cheap one, and
- * MinGW spells setjmp as a macro taking an argument that _setjmp does not.
+ * Windows has no mask to save, so its setjmp is already the cheap one, but it
+ * has a different problem. MinGW spells setjmp as a macro that hands the stack
+ * pointer to _setjmp, and a longjmp that was given one runs RtlUnwindEx, which
+ * is the same structured unwinder a C++ throw uses. burrow does not want that.
+ * The defer chain is walked by hand before the jump, so a second unwinder
+ * looking for handlers over frames burrow has already left is work at best, and
+ * on x86_64 it is worse than that: it reads a frame that is no longer described
+ * by anything, faults inside ntdll, and faults again on the way out until the
+ * stack is gone. Passing a null frame instead is the pair MinGW itself uses
+ * when __USE_MINGW_SETJMP_NON_SEH is set, and the ucrt longjmp checks that
+ * field and restores the context directly when it is null. Spelled out here
+ * rather than by defining that macro, because the macro only takes effect if
+ * burrow/panic.h is the first thing in the translation unit to reach setjmp.h,
+ * and a user who includes <setjmp.h> above us would silently get the other one.
  *
  * Anything not named here gets the portable pair, which is correct everywhere
  * and slow on the systems listed above. Adding one is a line. */
@@ -278,6 +300,12 @@ void burrow__recover_close(burrow__Recover *r);
     defined(BURROW_OS_NETBSD) || defined(BURROW_OS_DRAGONFLY)
 #define BURROW_SETJMP(buf) _setjmp(buf)
 #define BURROW_LONGJMP(buf) _longjmp((buf), 1)
+#elif defined(__MINGW32__) && defined(__x86_64__)
+#define BURROW_SETJMP(buf) _setjmp((buf), NULL)
+#define BURROW_LONGJMP(buf) longjmp((buf), 1)
+#elif defined(__MINGW32__) && (defined(__aarch64__) || defined(__arm__))
+#define BURROW_SETJMP(buf) __mingw_setjmp(buf)
+#define BURROW_LONGJMP(buf) __mingw_longjmp((buf), 1)
 #else
 #define BURROW_SETJMP(buf) setjmp(buf)
 #define BURROW_LONGJMP(buf) longjmp((buf), 1)

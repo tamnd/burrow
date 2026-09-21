@@ -12,7 +12,7 @@ Go draws the same three lines in the same places, and burrow follows it case for
 
 All three exist now. The middle one is `BURROW_TRY` and `BURROW_CATCH` rather than a `recover` you call from a deferred function, which is the one place burrow's shape differs from Go's, and [panic.md](panic.md) says why.
 
-One thing is still in transit. The runtime's own checks, the index and slice bounds ones below, still take the fatal path rather than panicking with a recoverable value. That is the next change, the message text is already the final one, and no call site of theirs moves when it happens.
+The line between the last two is the one worth getting right, and burrow does not draw it by taste. If Go's version of a condition is a recoverable panic then burrow panics, and if Go throws, or if the condition only exists because burrow is written in C, burrow ends the process. So an index past the end panics, a write to a nil map panics, a send on a closed channel panics, and a map that grew under an iterator stops everything, because that is where Go puts each of those four.
 
 ## Errors
 
@@ -49,6 +49,20 @@ BURROW_TRY_END;
 
 If nothing catches it, the value is printed and the process exits with status 2, the same as Go. The whole feature, including the deviation from Go's `recover` and what a panicked value's lifetime is, is one page: [panic.md](panic.md).
 
+The ones the runtime raises carry a `RuntimeError`, which is Go's `runtime.Error` and is how a catch block tells a bad index from a panic somebody wrote by hand:
+
+```c
+BURROW_CATCH(p) {
+    const RuntimeError *re = runtime_error_from(p);
+    if (re != NULL)
+        log_crash(re->message);
+    else
+        panic(p);
+}
+```
+
+`runtime_error_from` hands back `NULL` for anything else, the message is Go's text byte for byte, and `runtime_panic` is there if you want your own container's bounds check to say so in the same voice. The message is borrowed from the goroutine and the next runtime error on it writes over the bytes, so copy it if you are keeping it.
+
 The bar for catching one is high and it is the bar Go sets. A server that does not want one bad request to take the process down is the case this exists for. Wrapping every call in a catch block because it feels safer is how you get a program that carries on after its own invariants have broken, which is worse than stopping.
 
 ## Fatal errors
@@ -56,7 +70,7 @@ The bar for catching one is high and it is the bar Go sets. A server that does n
 Not recoverable and not catchable. Go calls these fatal errors too, and prints them the same way:
 
 ```
-fatal error: runtime error: index out of range [5] with length 3
+fatal error: map grew during iteration
 ```
 
 Then the process ends with status 2, which is what an unrecovered Go panic exits with.

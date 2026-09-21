@@ -657,9 +657,9 @@ TEST(a_map_on_the_heap_can_be_freed) {
 
 /* ---------------------------------------------------------- the fatal errors */
 
-TEST(assigning_to_a_nil_map_stops_the_program) {
+TEST(assigning_to_a_nil_map_panics) {
     Int k = 1, v = 1;
-    CHECK_FATAL((void)map_set(NULL, &k, &v), "assignment to entry in nil map");
+    CHECK_RUNTIME_ERROR((void)map_set(NULL, &k, &v), "assignment to entry in nil map");
 }
 
 TEST(a_map_keyed_by_an_uncomparable_type_stops_the_program) {
@@ -670,9 +670,9 @@ TEST(a_map_keyed_by_an_uncomparable_type_stops_the_program) {
     CHECK(map_make(a, TYPE_INT, &slice_of_int, 0) != NULL);
 }
 
-TEST(an_absurd_hint_stops_the_program) {
-    CHECK_FATAL((void)map_make(a, TYPE_INT, TYPE_INT, -1),
-                "runtime error: makemap: size out of range");
+TEST(an_absurd_hint_panics) {
+    CHECK_RUNTIME_ERROR((void)map_make(a, TYPE_INT, TYPE_INT, -1),
+                        "runtime error: makemap: size out of range");
 }
 
 /* Growing the table while an iterator is live moves every entry, so the
@@ -726,9 +726,9 @@ int main(void) {
     RUN(an_insert_that_cannot_allocate_says_so);
     RUN(a_map_that_cannot_be_made_returns_null);
     RUN(a_map_on_the_heap_can_be_freed);
-    RUN(assigning_to_a_nil_map_stops_the_program);
+    RUN(assigning_to_a_nil_map_panics);
     RUN(a_map_keyed_by_an_uncomparable_type_stops_the_program);
-    RUN(an_absurd_hint_stops_the_program);
+    RUN(an_absurd_hint_panics);
     RUN(growing_during_iteration_stops_the_program);
     teardown();
     return harness_report("map");

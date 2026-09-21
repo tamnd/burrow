@@ -230,9 +230,9 @@ bool str_is_empty(Str s);
  * language with the same spelling. The cost is a compare and a branch the
  * processor predicts perfectly.
  *
- * It does not panic yet, because panic needs defer and defer needs the
- * scheduler. Today it is a fatal error carrying the message Go's panic carries.
- * See burrow/runtime.h.
+ * Out of range panics, carrying the message Go's panic carries, and the value
+ * is a RuntimeError so a catch block can tell it from a panic somebody wrote by
+ * hand. See burrow/runtime.h.
  *
  * When you are walking a string you already bounds checked, index s.p directly
  * and let the loop condition be the check. That is what the library does

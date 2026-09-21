@@ -355,7 +355,7 @@ Map *map_make(Alloc *a, const Type *key, const Type *val, Int hint) {
      * multiplication in mem_alloc_array would catch, so the message says what
      * is wrong instead of the allocation quietly failing. */
     if (hint < 0 || (uint64_t)hint > (uint64_t)1 << 40)
-        runtime_throw(BURROW_S("runtime error: makemap: size out of range"));
+        runtime_panic(BURROW_S("runtime error: makemap: size out of range"));
 
     m = BURROW_NEW(a, Map);
     if (m == NULL)
@@ -463,7 +463,7 @@ bool map_set(Map *m, const void *key, const void *val) {
     Loc l;
 
     if (m == NULL)
-        runtime_throw(BURROW_S("assignment to entry in nil map"));
+        runtime_panic(BURROW_S("assignment to entry in nil map"));
 
     if (m->groups == NULL && !map_rehash(m, 1))
         return false;

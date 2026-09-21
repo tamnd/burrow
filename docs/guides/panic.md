@@ -84,6 +84,27 @@ Copying the value is not copying what the value points at in turn, and that is t
 
 `panic_value` tells a deferred call whether it is running because of a panic. It returns the value being unwound, or a nil `Any` when the scope is closing normally, which is the question Go's deferred functions ask `recover` and burrow has no `recover` to ask.
 
+## The runtime's own
+
+An index past the end, a slice expression past the capacity, a divide by zero, a write to a nil map, a send on a closed channel. These panic with an `Error` whose concrete type is `RuntimeError`, which is Go's `runtime.Error`, and asking is one call:
+
+```c
+BURROW_CATCH(p) {
+    const RuntimeError *re = runtime_error_from(p);
+    if (re == NULL)
+        panic(p);
+    log_crash(re->message);
+}
+```
+
+`runtime_error_from` gives back `NULL` for every other panicked value, including an ordinary `Error`, so the check separates a bug in the code from a panic the program raised on purpose. Re-panicking from inside a catch block, as above, goes outward to the next one rather than back into the block that is running, which is what makes that pattern work.
+
+The value is a plain `Error` underneath, so `errors_as(err, TYPE_RUNTIME_ERROR)` finds it through a wrapper and `error_message` prints it. The message is Go's text byte for byte, because those strings are what somebody pastes into a search box.
+
+The message borrows. It lives in a fixed slot on the goroutine, `BURROW_RUNTIME_ERROR_MAX` bytes of it, and the next runtime error on the same goroutine writes over it, so copy the bytes if they need to outlive the catch block. The slot is there because this path cannot allocate: running out of memory is one of the things that arrives on it.
+
+`runtime_panic` raises one with a message of your own, which is what a container of your own writes for its own bounds check. It copies the bytes, so the message may point into your frame.
+
 ## setjmp's rule
 
 A local of the function containing the `BURROW_TRY`, modified inside the try block and read in the catch block or after it, has an indeterminate value unless it is `volatile`. That is C's rule for `setjmp` and not something burrow can paper over. In practice it bites the accumulator pattern and nothing else:

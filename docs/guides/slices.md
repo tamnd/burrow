@@ -25,7 +25,7 @@ Slice xs = slice_make(a, TYPE_INT, 0, 16);
 
 That is `make([]int, 0, 16)`. The memory is zeroed, because Go's zero value rule is the language and not a convention, and code ported from Go assumes it in places where it never says so.
 
-`len < 0`, `cap < 0` or `len > cap` stops the program with the message Go panics with. None of those is a condition a caller can handle and all of them mean the arithmetic that produced them was already wrong.
+`len < 0`, `cap < 0` or `len > cap` panics with the message Go panics with. None of those is a condition a caller can handle and all of them mean the arithmetic that produced them was already wrong.
 
 Over memory you already have, which does not copy and does not take ownership:
 
@@ -47,7 +47,7 @@ BURROW_AT(Int, xs, 0) = 42;      /* it is an lvalue, so this is xs[0] = 42 */
 
 The `T` you pass is not checked against the element descriptor at compile time, because there is nothing at compile time to check it against. Its size is checked at runtime, and a `T` of the wrong size gets you the element the descriptor says is there, read as the type you asked for. It is the same class of mistake as a wrong `printf` format and it has the same flavour of consequence, so pass the type the slice actually holds.
 
-Indexing is bounds checked against `len`, not against `cap`, and out of range stops the program. This is not optional and not behind a build flag. Go's tests depend on the failure, code written against Go relies on never reading past the end, and a version that trusted the caller would be a different language with the same spelling.
+Indexing is bounds checked against `len`, not against `cap`, and out of range panics. This is not optional and not behind a build flag. Go's tests depend on the failure, code written against Go relies on never reading past the end, and a version that trusted the caller would be a different language with the same spelling.
 
 ## Nil and empty
 

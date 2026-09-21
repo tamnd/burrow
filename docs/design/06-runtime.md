@@ -742,13 +742,34 @@ anywhere outside `burrow/panic.h`, `src/runtime/panic.c` and one signal handler
 test that needs `sigsetjmp` to restore the signal mask, which a panic cannot
 do.
 
-Still to come in this half: the runtime's own checks, `runtime_index_out_of_range`
-and the three beside it, currently take the fatal path rather than panicking
-with a `runtime.Error`. The message text is already the final one, so only the
-mechanism changes and no call site moves. It needs per-goroutine message
-storage first, because those messages are formatted into the throwing frame and
-a panic jumps past it. The stack trace the printer should carry waits on the
-stack walker in §4.
+The runtime's own checks panic rather than throwing, and what they panic with
+is an `Error` whose concrete type is `RuntimeError`, which is Go's
+`runtime.Error`. `runtime_error_from` is how a catch block asks, and it gives
+back nothing for any other panicked value, so a caller can tell a bug in the
+code from a panic the program raised on purpose. `runtime_panic` raises one
+with a message of the caller's own, for somebody writing their own container's
+bounds check.
+
+Which conditions those are is a lookup and not a judgement. If Go's version of
+a condition is a recoverable panic then burrow panics, and if Go throws, or if
+the condition only exists because burrow is written in C, burrow throws. That
+puts the index and slice bounds checks, the divide by zero, the nil map write,
+the send on a closed channel, the double close and the impossible make sizes on
+the panic side, and leaves the map that grew under an iterator, the invalid map
+key type, running out of memory and every scheduler invariant on the throw
+side.
+
+The message is the thing that made this need thought. It is formatted into a
+frame the jump lands past, so it cannot live there, and the path cannot
+allocate, so it cannot live on the heap either. It lives in a fixed
+`BURROW_RUNTIME_ERROR_MAX` slot on the goroutine beside the panic state, which
+means it borrows and the next runtime error on the same goroutine writes over
+it. The header says so and the tests hold it to that. The `Error` value itself
+is sixteen bytes, so the existing copy into the recovery point's storage
+carries it.
+
+Still to come in this half: the stack trace the printer should carry waits on
+the stack walker in §4.
 
 ## 7. `sync`, `sync/atomic`, `context`
 

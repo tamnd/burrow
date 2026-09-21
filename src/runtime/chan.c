@@ -501,7 +501,7 @@ Chan *chan_make(Alloc *a, const Type *elem, Int cap) {
     if (elem == NULL)
         runtime_throw(BURROW_S("chan_make: nil element type"));
     if (cap < 0)
-        runtime_throw(BURROW_S("makechan: size out of range"));
+        runtime_panic(BURROW_S("makechan: size out of range"));
 
     size_t n = (size_t)cap;
     size_t each = elem->size;
@@ -510,7 +510,7 @@ Chan *chan_make(Alloc *a, const Type *elem, Int cap) {
      * number the program computed and elemsize is a number the type carries, so
      * the product is not bounded by anything the caller checked. */
     if (each != 0 && n > (SIZE_MAX / 2) / each)
-        runtime_throw(BURROW_S("makechan: size out of range"));
+        runtime_panic(BURROW_S("makechan: size out of range"));
 
     /* One allocation for the header and the buffer, which is what Go does. The
      * alignment is the stricter of the two, and the buffer starts at the first
@@ -580,7 +580,7 @@ static bool chan_send_impl(Chan *c, const void *v, bool block) {
 
     if (c->closed != 0) {
         burrow__unlock(&c->lock);
-        runtime_throw(BURROW_S("send on closed channel"));
+        runtime_panic(BURROW_S("send on closed channel"));
     }
 
     /* 1. Somebody is waiting for exactly this. */
@@ -627,7 +627,7 @@ static bool chan_send_impl(Chan *c, const void *v, bool block) {
     /* Woken. Either the value went somewhere or the channel closed under us,
      * and the second one is a program that is already wrong. */
     if (!w2.success)
-        runtime_throw(BURROW_S("send on closed channel"));
+        runtime_panic(BURROW_S("send on closed channel"));
 
     return true;
 }
@@ -752,13 +752,13 @@ bool chan_try_recv(Chan *c, void *out, bool *ok) {
 
 void chan_close(Chan *c) {
     if (c == NULL)
-        runtime_throw(BURROW_S("close of nil channel"));
+        runtime_panic(BURROW_S("close of nil channel"));
 
     burrow__lock(&c->lock);
 
     if (c->closed != 0) {
         burrow__unlock(&c->lock);
-        runtime_throw(BURROW_S("close of closed channel"));
+        runtime_panic(BURROW_S("close of closed channel"));
     }
 
     burrow__atomic_store_u32(&c->closed, 1);
@@ -1198,7 +1198,7 @@ Int chan_select(SelectCase *cases, Int n) {
             mem_free(home, scratch, scratch_size, scratch_align);
 
         if (s.send_on_closed)
-            runtime_throw(BURROW_S("send on closed channel"));
+            runtime_panic(BURROW_S("send on closed channel"));
 
         return won;
     }
@@ -1236,7 +1236,7 @@ Int chan_select(SelectCase *cases, Int n) {
     /* A send that woke up unsuccessful was in flight across a close, which is
      * the same mistake as a send after one. */
     if (sc->op == SELECT_SEND && !success)
-        runtime_throw(BURROW_S("send on closed channel"));
+        runtime_panic(BURROW_S("send on closed channel"));
 
     if (sc->op == SELECT_RECV && sc->ok != NULL)
         *sc->ok = success;

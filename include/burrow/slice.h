@@ -48,9 +48,9 @@ typedef struct Slice {
 /* make([]T, len, cap), zeroed, because Go's zero value rule is the language
  * and not a convention.
  *
- * Passing cap < 0, len < 0 or len > cap is a fatal error carrying the text Go
- * panics with, since none of those is a condition a caller can sensibly handle
- * and all of them mean the arithmetic that produced them was wrong.
+ * Passing cap < 0, len < 0 or len > cap panics with the text Go panics with,
+ * since none of those is a condition a caller can sensibly handle and all of
+ * them mean the arithmetic that produced them was wrong.
  *
  * A failed allocation gives you the nil slice for elem, the same way str_clone
  * gives you the empty string, because a Slice has no spare value to signal with
@@ -76,9 +76,8 @@ BURROW_BORROWS(ret, p) Slice slice_from(void *p, Int len, Int cap, const Type *e
  * pointer to the element rather than the element, because C cannot return a
  * value whose type is only known at runtime. Use BURROW_AT to get the value.
  *
- * Out of range stops the program with the message Go prints. That is not
- * optional and not behind a build flag, for the reasons written out over
- * str_at. */
+ * Out of range panics with the message Go prints. That is not optional and not
+ * behind a build flag, for the reasons written out over str_at. */
 BURROW_BORROWS(ret, s) void *slice_at(Slice s, Int i);
 
 /* s[lo:hi] and s[lo:hi:max].

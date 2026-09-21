@@ -21,11 +21,11 @@
  * so a channel has to work from one. It costs the thread, which a goroutine
  * parking does not, and that is the only difference the caller can see.
  *
- * What is not tested here is the cases that stop the program: a send on a
- * closed channel, a double close, a close of NULL. Those call runtime_throw,
- * which ends the process, and a harness that ends the process has failed. They
- * come back as tests the moment defer and recover land and throw becomes a
- * panic, which is the next milestone item but one.
+ * The three mistakes that used to be untestable are tested here now. A send on
+ * a closed channel, a double close and a close of NULL were fatal errors, and a
+ * harness that ends the process has failed, so there was nothing to write. They
+ * panic today, so the test is a BURROW_TRY around each one and a look at what
+ * came out.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -41,6 +41,10 @@
 #include "burrow/sched.h"
 #include "burrow/thread.h"
 
+#include "burrow/panic.h"
+#include "burrow/runtime.h"
+
+#include "fatal.h"
 #include "harness.h"
 
 #include <stdbool.h>
@@ -276,6 +280,58 @@ TEST(a_channel_gives_back_everything_it_took) {
 
     CHECK_INT_EQ((Int)track_live(&tr), 0);
     track_free(&tr);
+}
+
+/* --------------------------------------------------------- the three mistakes
+ *
+ * Go panics on each of these and so does burrow, so each one is catchable and
+ * the process carries on. The channel is file static because everything else a
+ * BURROW_TRY touches in here would be a local live across a setjmp. */
+
+static Chan *doomed;
+
+TEST(a_send_on_a_closed_channel_panics) {
+    doomed = chan_make(heap_allocator(), TYPE_INT, 1);
+    CHECK(doomed != NULL);
+
+    chan_close(doomed);
+
+    CHECK_RUNTIME_ERROR(
+        {
+            Int v = 1;
+            chan_send(doomed, &v);
+        },
+        "send on closed channel");
+
+    /* Recovering from it leaves the channel usable, which is the part worth
+     * checking: the send took the lock and let go of it before panicking, so a
+     * caught panic here is not a deadlock later. */
+    CHECK_INT_EQ(chan_len(doomed), 0);
+    CHECK_INT_EQ(chan_cap(doomed), 1);
+
+    chan_free(doomed);
+    doomed = NULL;
+}
+
+TEST(closing_twice_panics) {
+    doomed = chan_make(heap_allocator(), TYPE_INT, 0);
+    CHECK(doomed != NULL);
+
+    chan_close(doomed);
+    CHECK_RUNTIME_ERROR(chan_close(doomed), "close of closed channel");
+    CHECK_RUNTIME_ERROR(chan_close(doomed), "close of closed channel");
+
+    chan_free(doomed);
+    doomed = NULL;
+}
+
+TEST(closing_nothing_panics) {
+    CHECK_RUNTIME_ERROR(chan_close(NULL), "close of nil channel");
+}
+
+TEST(an_absurd_capacity_panics) {
+    CHECK_RUNTIME_ERROR((void)chan_make(heap_allocator(), TYPE_INT, -1),
+                        "makechan: size out of range");
 }
 
 /* ------------------------------------------------------- with a scheduler
@@ -765,6 +821,11 @@ int main(void) {
     RUN(a_channel_carries_whatever_its_type_says);
     RUN(a_nil_channel_is_empty_and_never_ready);
     RUN(a_channel_gives_back_everything_it_took);
+
+    RUN(a_send_on_a_closed_channel_panics);
+    RUN(closing_twice_panics);
+    RUN(closing_nothing_panics);
+    RUN(an_absurd_capacity_panics);
 
     RUN(an_unbuffered_send_does_not_return_until_somebody_has_the_value);
     RUN(everything_sent_arrives_in_order_and_the_close_ends_the_loop);

@@ -106,5 +106,5 @@ Slightly verbose, and better than four out parameters in a row where transposing
 ## See also
 
 - [errors](errors.md), for what an `Error` is and how to make one
-- [failure](failure.md), for which failures are an `Error` and which stop the program
+- [failure](failure.md), for which failures are an `Error`, which panic, and which stop the program
 - `include/burrow/core.h`, where both macros live with the reasoning next to them

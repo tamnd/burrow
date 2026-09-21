@@ -8,6 +8,10 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 
 `sync.Map` and `sync.Pool`, which finishes the `sync` package, and the epoch based reclamation underneath the first of them.
 
+### Build
+
+- The CMake build passes `-fno-omit-frame-pointer`, which the Makefile has had from the start and this file was missing. Without it a release build on x86-64 Linux has no frame pointers to walk, so a panic prints its message and no traceback, and `trace_test` fails. It is `PUBLIC` rather than private, because a program linking burrow wants its own frames walkable in a trace as much as burrow's. This is what has been failing the release workflow since v0.0.19.
+
 ### sync
 
 - `SyncMap` is Go's `sync.Map`, ported from `src/internal/sync/hashtriemap.go` and `src/sync/map.go`. All ten methods are there: `sync_map_load`, `sync_map_store`, `sync_map_swap`, `sync_map_load_or_store`, `sync_map_compare_and_swap`, `sync_map_load_and_delete`, `sync_map_delete`, `sync_map_compare_and_delete`, `sync_map_clear` and `sync_map_range`. `SYNC_MAP` is the initialiser and takes the allocator and the two type descriptors, since a C map has to be told what is in it.

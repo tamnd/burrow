@@ -133,6 +133,20 @@ else()
     if(BURROW_WERROR)
         target_compile_options(burrow PRIVATE "$<$<COMPILE_LANGUAGE:C>:-Werror>")
     endif()
+
+    # PUBLIC, and separate from the warning list, because this one is not a
+    # warning and it is not private either. The stack walker follows the frame
+    # pointer chain, so a build without frame pointers gets a panic message and
+    # no trace, which is the difference between a bug report somebody can act on
+    # and one they cannot. Anything linking burrow wants its own frames walkable
+    # too, which is why it crosses the target boundary.
+    #
+    # It costs a register on amd64 and nothing on arm64, macOS has kept frame
+    # pointers all along, and the Linux distributions have been turning them
+    # back on because the profilers and the debuggers want them. The Makefile
+    # has had this from the start. Release builds here did not, which is why a
+    # -O2 build on x86-64 Linux failed trace_test and a -O0 one did not.
+    target_compile_options(burrow PUBLIC "$<$<COMPILE_LANGUAGE:C>:-fno-omit-frame-pointer>")
 endif()
 
 if(BURROW_BUILD_TESTS)

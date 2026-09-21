@@ -4,6 +4,31 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+The first locks a program can actually reach for. `sync.Mutex`, `sync.RWMutex` and `sync.Locker` are in the new `burrow/sync.h`, on top of a port of Go's runtime semaphore.
+
+### sync
+
+- `SyncMutex` is Go's mutex, ported from `src/internal/sync/mutex.go` with the starvation handoff intact. One `int32_t` holds the lock bit, the woken bit, the starving bit and the waiter count, so an uncontended lock is one compare and swap. A waiter queued for more than a millisecond switches the mutex into starvation mode and unlocking then hands the lock straight to the front of the queue, which is what stops a tight loop from starving a queue forever without paying a scheduling round trip on every unlock.
+- `sync_mutex_lock`, `sync_mutex_try_lock` and `sync_mutex_unlock`, plus `sync_mutex_locker` to get a `SyncLocker` out of one. The zero value is an unlocked mutex, so there is no init function and nothing to destroy.
+- `SyncRWMutex` is Go's `RWMutex`, from `src/sync/rwmutex.go`. A writer subtracts a large constant from the reader count, which in one atomic both announces the writer and closes the door on arriving readers, and the last reader out wakes it. `sync_rw_mutex_lock`, `sync_rw_mutex_try_lock`, `sync_rw_mutex_unlock`, `sync_rw_mutex_r_lock`, `sync_rw_mutex_try_r_lock`, `sync_rw_mutex_r_unlock`, `sync_rw_mutex_locker` and `sync_rw_mutex_r_locker`.
+- `SyncLocker` is Go's `Locker` interface, a vtable and a data pointer like every other interface here. C has no structural typing, so the three converter functions above are what a `*Mutex` satisfying `Locker` looks like when it has to be written down. `sync_rw_mutex_r_locker` is Go's `RLocker` and is what a `Cond` will wait on.
+- The fast paths are `static inline` in the header with the slow halves out of line, which is what Go's compiler does for the same functions. Putting one compare and swap behind a call across a library boundary roughly doubles what an uncontended lock costs, and moving them into the header took the mutex row from twenty percent behind Go to level with it.
+- Waiting parks the goroutine rather than blocking the thread, so a mutex with ten thousand goroutines queued on it costs ten thousand stacks and no threads. A thread that is not a goroutine may take these locks as well and sleeps instead, which Go never has to handle and a library living inside somebody else's program does.
+
+### Runtime
+
+- A port of Go's semaphore, from `src/runtime/sema.go`, in the internal `burrow/sema.h`. A semaphore is a `uint32_t` the caller owns and the waiters live in a table of 251 roots shared by the whole program, each a treap keyed on the address of that word with same-address waiters chained off the node. So a million mutexes need one table rather than a million queues, and a semaphore nobody is waiting on has no queue anywhere. The waiter count is read without the lock so an uncontended release skips it.
+- The spin budget, `burrow__sync_can_spin` and `burrow__sync_do_spin`, and `burrow__sched_spin_ok` to answer whether spinning can pay off at all. Spinning for a lock held by a goroutine that has no processor to run on is waste, so a machine with one processor and a scheduler with nothing idle both skip it.
+- `burrow__thread_ncpu` now asks `sched_getaffinity` on Linux before falling back to `sysconf`. The count of processors this process may use and the count the machine has are different numbers inside a container with a cpuset or under `taskset`, and picking the larger one gives every consumer the wrong answer: `GOMAXPROCS` becomes a thread per core on a box where two cores are allowed, and a thread decides to spin for a lock on the strength of cores it cannot run on. Found by a pinned benchmark run, which is the only place it shows up.
+
+### Tests
+
+- 95 checks over the locks: the zero value, ordinary exclusion, `TryLock` against a held lock, read locks running together, a writer closing the door on arriving readers, `RLocker` and `Locker` dispatch, and the throws on unlocking something that is not locked. The contended ones ask questions whose answer is known in advance and is only reachable if nothing was lost.
+- A Linux test that narrows its own affinity mask to one processor, checks the count follows, and puts the mask back, rather than trusting whoever runs the binary to have used `taskset`.
+- Checked on macOS, Linux and Windows, under gcc, clang, MinGW and MSVC, and under the address, undefined behaviour, thread and memory sanitizers.
+
 ## v0.0.20 (2026-09-21)
 
 `sync/atomic` is here, both halves of it, in the new `burrow/sync/atomic.h`.

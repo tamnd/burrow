@@ -16,6 +16,13 @@
 #define _WIN32_WINNT 0x0601
 #endif
 
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+/* For sched_getaffinity, which burrow__thread_ncpu needs. Also before every
+ * include, and for the same reason: a feature test macro set after a header has
+ * already been read is a macro nobody looked at. */
+#define _GNU_SOURCE
+#endif
+
 #include "burrow/thread.h"
 
 #include "burrow/platform.h"
@@ -334,8 +341,11 @@ bool burrow__thread_stack_bounds(void **lo, void **hi) {
 
 #elif defined(BURROW_OS_LINUX)
 
-extern int pthread_getattr_np(pthread_t thread, pthread_attr_t *attr);
-extern int pthread_attr_getstack(const pthread_attr_t *attr, void **addr, size_t *size);
+/* pthread_getattr_np and pthread_attr_getstack used to be declared by hand
+ * here, because neither is visible without a feature macro and there was none.
+ * The top of this file defines _GNU_SOURCE now, for sched_getaffinity, and with
+ * that both come out of pthread.h. Declaring them again is a redundant
+ * declaration and the build treats that as an error. */
 
 bool burrow__thread_stack_bounds(void **lo, void **hi) {
     pthread_attr_t attr;
@@ -418,6 +428,28 @@ bool burrow__thread_stack_bounds(void **lo, void **hi) {
 #endif
 
 int burrow__thread_ncpu(void) {
+#if defined(BURROW_OS_LINUX)
+    /* How many processors this process may run on, which is not how many the
+     * machine has whenever anybody has said otherwise: a container started with
+     * a cpuset, a process under taskset, a job placed by a batch scheduler. The
+     * difference matters twice over. A program that starts one thread per core
+     * on a box where it is allowed two of them spends its life switching
+     * between threads that cannot run, and a thread that decides to spin
+     * waiting for a lock because the machine has plenty of cores is spinning on
+     * the one core it shares with the holder. Go reads the mask here for
+     * exactly these reasons and so does this.
+     *
+     * The fixed size mask covers 1024 processors. Past that the call fails and
+     * the answer below is the machine's count, which on a box that large is
+     * near enough and is what the code did before. */
+    cpu_set_t set;
+    if (sched_getaffinity(0, sizeof(set), &set) == 0) {
+        int allowed = CPU_COUNT(&set);
+        if (allowed >= 1)
+            return allowed;
+    }
+#endif
+
     long n = sysconf(_SC_NPROCESSORS_ONLN);
     if (n < 1)
         return 1;

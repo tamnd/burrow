@@ -139,8 +139,9 @@ methods. `ListenAndServe` → `listen_and_serve`, `ParseFloat` → `parse_float`
 `parse_ip`. The acronym table is checked in (`URL HTTP HTTPS TLS TCP UDP IP DNS
 ID API CPU IO EOF ASN1 DER PEM JSON XML UTF8 UTF16 RSA ECDSA GCM CBC SHA MD5
 CRC FS DB SQL RPC MIME SMTP URI UUID PKCS OID SAN CA OCSP SCT ALPN SNI QUIC
-HPACK GZIP ZIP`), because acronym splitting is the one part of case conversion
-that cannot be inferred.
+HPACK GZIP ZIP RW`), because acronym splitting is the one part of case
+conversion that cannot be inferred. `RW` is in the list for `sync.RWMutex`,
+which is `sync_rw_mutex_*` and not `sync_r_w_mutex_*`.
 
 **R3 — Functions.** `pkg.Func` → `<pkg>_<func>`.
 `http.ListenAndServe` → `http_listen_and_serve`.

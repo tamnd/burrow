@@ -499,6 +499,24 @@ BURROW_STATIC(ret) burrow__P *burrow__allp(int32_t i);
 /* How many Ps there are. Fixed while the scheduler is running. */
 int32_t burrow__gomaxprocs(void);
 
+/* Whether a thread waiting for a lock should spin rather than give its turn up.
+ *
+ * This is the scheduler's half of Go's sync_runtime_canSpin. The iteration
+ * count is the caller's half and is not here, because the number of turns
+ * before spinning stops paying is a property of the lock rather than of the
+ * scheduler.
+ *
+ * The answer is no on a single processor machine, where the holder cannot be
+ * running anywhere else and spinning is pure waste. It is no when nearly every
+ * P is idle or searching, because then there is nobody left who is going to
+ * release the thing being waited for soon. And it is no when this P has
+ * goroutines queued, since running one of those is better than burning the core
+ * on a wait.
+ *
+ * It lives here because the two counts behind the middle answer are the
+ * scheduler's own and are not published anywhere else. */
+bool burrow__sched_spin_ok(void);
+
 /* The calling goroutine's own timer, the one time_sleep parks on, made on the
  * first call and handed back on every one after it.
  *

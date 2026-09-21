@@ -15,14 +15,25 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+/* For sched_getaffinity and sched_setaffinity, which the processor count test
+ * uses to narrow the mask and put it back. Before every include. */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #include "burrow/thread.h"
 
 #include "burrow/atomic.h"
+#include "burrow/platform.h"
 
 #include "harness.h"
 
 #include <stdint.h>
 #include <string.h>
+
+#if defined(__linux__)
+#include <sched.h>
+#endif
 
 /* ------------------------------------------------------------ one at a time */
 
@@ -206,6 +217,50 @@ TEST(there_is_at_least_one_processor) {
     CHECK(burrow__thread_ncpu() == n);
 }
 
+#if defined(BURROW_OS_LINUX)
+
+/* The count has to be the processors this process may use rather than the
+ * processors the machine has, because those are different numbers inside a
+ * container with a cpuset and under taskset, and everything downstream of the
+ * count gets the wrong answer when it picks the larger one. GOMAXPROCS becomes
+ * a thread per core on a box where two cores are allowed, and a thread decides
+ * to spin waiting for a lock on the strength of cores it cannot run on.
+ *
+ * Narrowing the mask to one processor here rather than trusting the caller to
+ * have run the test under taskset, so that it proves something when somebody
+ * runs the binary by hand. */
+TEST(the_processor_count_is_the_ones_this_process_may_use) {
+    cpu_set_t before;
+    if (sched_getaffinity(0, sizeof(before), &before) != 0)
+        return; /* Blocked by a sandbox or a seccomp filter. Nothing to prove. */
+
+    if (CPU_COUNT(&before) < 2)
+        return; /* Already pinned, so there is no narrowing left to do. */
+
+    /* The lowest processor in the current mask, because a processor outside it
+     * is one this process is not allowed to ask for. */
+    size_t only = (size_t)CPU_SETSIZE;
+    for (size_t i = 0; i < (size_t)CPU_SETSIZE && only == (size_t)CPU_SETSIZE; i++) {
+        if (CPU_ISSET(i, &before))
+            only = i;
+    }
+    CHECK(only < (size_t)CPU_SETSIZE);
+
+    cpu_set_t narrow;
+    CPU_ZERO(&narrow);
+    CPU_SET(only, &narrow);
+    if (sched_setaffinity(0, sizeof(narrow), &narrow) != 0)
+        return;
+
+    int narrowed = burrow__thread_ncpu();
+    CHECK(sched_setaffinity(0, sizeof(before), &before) == 0);
+
+    CHECK(narrowed == 1);
+    CHECK(burrow__thread_ncpu() == CPU_COUNT(&before));
+}
+
+#endif
+
 int main(void) {
     RUN(a_thread_runs_and_gets_its_argument);
     RUN(a_stack_size_is_a_request_the_system_takes);
@@ -214,5 +269,8 @@ int main(void) {
     RUN(eight_threads_adding_to_one_counter_lose_nothing);
     RUN(a_detached_thread_still_runs);
     RUN(there_is_at_least_one_processor);
+#if defined(BURROW_OS_LINUX)
+    RUN(the_processor_count_is_the_ones_this_process_may_use);
+#endif
     return harness_report("thread");
 }

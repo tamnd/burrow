@@ -204,6 +204,26 @@ int32_t burrow__gomaxprocs(void) {
     return sched.gomaxprocs;
 }
 
+bool burrow__sched_spin_ok(void) {
+    if (burrow__thread_ncpu() <= 1)
+        return false;
+
+    burrow__M *m = curm;
+    if (m == NULL || m->p == NULL) {
+        /* A thread that is not running a goroutine, which Go is never in a
+         * position to ask about. There is no run queue here to starve and no P
+         * to hold onto, so the processor count is the whole question. */
+        return true;
+    }
+
+    uint32_t idle = burrow__atomic_load_acquire_u32(&sched.npidle);
+    uint32_t spinning = burrow__atomic_load_acquire_u32(&sched.nmspinning);
+    if ((uint32_t)sched.gomaxprocs <= idle + spinning + 1U)
+        return false;
+
+    return burrow__runq_len(m->p) == 0;
+}
+
 burrow__Timers *burrow__timers_local(void) {
     if (curm == NULL || curm->p == NULL)
         return NULL;

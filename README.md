@@ -443,6 +443,29 @@ Everything except the four `SyncAtomicValue` calls is inline, so an add is one `
 
 Details, including how `Value` publishes two words without a lock and what happens on a 32 bit machine: [docs/guides/atomics.md](docs/guides/atomics.md).
 
+## Locks
+
+```c
+static SyncMutex mu;
+static int balance;
+
+void deposit(int n) {
+    sync_mutex_lock(&mu);
+    balance += n;
+    sync_mutex_unlock(&mu);
+}
+```
+
+Go's `sync.Mutex`, `sync.RWMutex` and `sync.Locker`. The zero value is unlocked, so there is nothing to initialise and nothing to destroy, and a lock in a static or in a struct you calloc'd is ready the moment its memory is zero.
+
+These park. A goroutine waiting here gives its thread back to the scheduler and costs nothing but its own stack, so ten thousand goroutines queued on one mutex are ten thousand parked goroutines and not ten thousand blocked threads. A thread that is not a goroutine may take these locks too and sleeps instead, which is the part Go does not need and a library inside somebody else's program does.
+
+Go's starvation handoff is ported rather than simplified. The lock goes to whoever is running, which is fast, until a waiter has been queued for more than a millisecond, and then it goes to the front of the queue until the queue drains. That is what stops a tight loop from starving a queue forever without paying a scheduling round trip on every unlock.
+
+The fast paths are inline, so an uncontended lock is one compare and swap and about eleven nanoseconds, level with Go on the same machine.
+
+Details, including why read locks do not nest and when an `RWMutex` is actually worth having: [docs/guides/sync.md](docs/guides/sync.md).
+
 ## Status
 
 Early. Nothing is usable yet.

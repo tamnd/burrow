@@ -32,6 +32,7 @@ category	marker	An address that exists to be unique. Never read through, never w
 category	fatal-handler	Where an unrecoverable runtime failure goes before the process ends.
 category	rand	The generator behind map iteration order and hash seeding.
 category	atomic-lock-table	The spin locks that stand in for 64 bit atomics on machines that do not have them.
+category	sema-table	The wait queues behind sync, keyed on the address of the counter being waited on, which is what makes them one per process by definition.
 category	clock	The conversion factor between what the machine's counter counts and nanoseconds. Fixed at boot, so it is asked for once.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
@@ -54,6 +55,7 @@ global	src/runtime/stack.c	veh	signal-table	Windows only. The handle from AddVec
 global	src/runtime/panic.c	fatal_handler	fatal-handler	Written once during startup and read on the way out. Becomes an atomic load when sync/atomic lands, which weakens the contract rather than changing any caller.
 global	src/runtime/rand.c	rand_state	rand	Thread local, which is what makes it lock free. A shared generator would be a place for two goroutines to contend over bits neither of them cares about.
 global	src/runtime/atomic64.c	locks	atomic-lock-table	This is the synchronisation. A table of spin locks, one taken for the duration of each 64 bit operation, chosen by hashing the address so that unrelated counters rarely meet.
+global	src/runtime/sema.c	semtable	sema-table	251 roots, each with its own lock and each holding the waiters for every address that hashed to it. A waiter is on exactly one root and every read and write of a root happens under that root's lock, except the waiter count, which is atomic so that an uncontended release can skip the lock entirely.
 global	src/runtime/sched.c	sched	scheduler	The scheduler itself, which is one per process because a second one would be a second set of threads fighting the first over the same cores. Every field is either under sched.lock or an atomic, and the comment on each one says which.
 global	src/runtime/sched.c	allp	scheduler	The Ps, a fixed array rather than an allocation so that the scheduler has nothing underneath it that can fail. A P is owned by at most one M at a time and that ownership is what makes its ring safe to touch.
 global	src/runtime/sched.c	allm	scheduler	The Ms, the same fixed array for the same reason. An entry is handed out once by newm under sched.lock and belongs to that thread until the run is over.

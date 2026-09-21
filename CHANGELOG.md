@@ -4,6 +4,25 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+### Runtime
+
+- `burrow/defer.h` is Go's `defer`, as a block: `BURROW_SCOPE`, your braces, `BURROW_SCOPE_END`, and `BURROW_DEFER(fn, arg)` inside. The deferred calls run when control leaves the block whichever way it leaves, including a `return` from the middle, and they run last in first out with the argument read at the line the defer was written on. `BURROW_DEFER_FUNC` takes a `Func` you already have.
+- The block is required and a defer outside one does not compile. The design document had planned two forms, a bare `BURROW_DEFER` on the GCC and Clang `cleanup` attribute and a portable block for everything else, and the problem with offering both is that the bare one compiles on MSVC and does nothing at all, because there is no attribute there to reject it. A feature that is silently missing on one of three supported platforms is worse than one that costs a line on all three.
+- Underneath it is the `cleanup` attribute on GCC and Clang and `__try`/`__finally` on MSVC. A scope is one struct in the frame that opened it and the deferred calls live in it, four of them with nothing allocated. A scope that goes past four takes one allocation that doubles as it fills and is freed before the scope returns, which is the trade Go makes for the defers it cannot open-code into a frame.
+- The chain of open scopes is a field of the goroutine rather than a thread local, because a goroutine that parks inside a scope can wake up on another thread, and a chain left behind on the first thread is a chain of calls that never run. A thread that is not a goroutine gets a thread local instead, so the macros work before `runtime_main` is called and after it returns.
+- The unit is a scope and not a function, which is the one deliberate difference from Go. Wrap a whole function body and Go's rule is back. Leave the scope inside a loop and every turn runs its own cleanup, which is the thing people writing `defer` in a Go `for` body wanted and did not get, and is a mistake common enough that `go vet` has a check for its shape.
+- The calls live in the scope rather than one record per defer in the frame that wrote it, which is the cheaper layout and is wrong. Those records sit between the caller's braces, the calls run after that block has ended, and a C object's lifetime ends with the block that declares it, so the scope reads storage the compiler may have reused by then. The address sanitizer calls that a stack use after scope and it found this before the code was a day old.
+- A defer in a loop whose scope is outside the loop piles up and runs at the end of the scope, which is Go's behaviour for a defer in a loop, and is almost never what anybody wanted. `BURROW_DEFER` is an ordinary statement too, so a defer as the unbraced body of an `if` or a `for` is fine.
+- `runtime_goexit` runs the deferred calls of every scope the goroutine is inside, innermost first, before the goroutine ends. That is Go's rule for `Goexit`, and the chain is re-read after each call so a deferred call may defer things of its own.
+
+### Docs
+
+- `docs/guides/defer.md` is the page, including what a scope costs and why the block is not optional.
+- `docs/design/06-runtime.md` section 6 describes the `defer` that exists rather than the two that were planned, and keeps `panic` and `recover` as a plan.
+- The README has a defer section, and the goroutines and failure pages say what changed for them.
+
 ## v0.0.15 (2026-09-21)
 
 `select`, which is the last piece of the channel work and the thing that makes a goroutine able to wait on more than one conversation at once. `chan_select` because POSIX has owned the short name since 1983.

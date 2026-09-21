@@ -1497,7 +1497,12 @@ void runtime_goexit(void) {
     if (curm == NULL || curm->curg == NULL)
         runtime_throw(BURROW_S("runtime_goexit: not on a goroutine"));
 
-    /* Deferred calls run here once defer exists. */
+    /* Go's Goexit runs the deferred calls before the goroutine ends, and the
+     * frames they are in are still here, because this is a call from inside
+     * them. Anything a deferred call defers runs too, since the chain is
+     * re-read after every one. */
+    burrow__defer_unwind_all();
+
     mcall(goexit0);
     runtime_throw(BURROW_S("runtime_goexit: a dead goroutine came back"));
 }

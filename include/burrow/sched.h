@@ -41,6 +41,7 @@
 #define BURROW_SCHED_H
 
 #include "burrow/context.h"
+#include "burrow/defer.h"
 #include "burrow/lock.h"
 #include "burrow/note.h"
 #include "burrow/own.h"
@@ -170,6 +171,13 @@ struct burrow__G {
      * usually sleeps again, and this way a loop with a sleep in it allocates
      * nothing after the first turn. */
     BURROW_OWNS(1) burrow__Timer *timer;
+
+    /* The innermost open defer scope, from burrow/defer.h, or NULL when this
+     * goroutine is not inside one. It lives here rather than in a thread local
+     * because a goroutine that parks inside a scope can wake up on a different
+     * thread, and a chain that stayed behind on the first thread would be a
+     * chain of deferred calls that never run. */
+    BURROW_BORROWS(1) burrow__DeferScope *scopes;
 
     /* Every G ever created, in one list under the scheduler lock. Go calls it
      * allgs and keeps it for the same two reasons: a traceback has to be able to

@@ -589,35 +589,75 @@ sleeper knows which kind it is.
 
 ## 6. `defer`, `panic`, `recover`
 
-**`defer`** has two implementations and a user choice between them.
+**`defer`** is one implementation and no user choice between them, which is a
+change from the plan this section used to hold.
 
-The cheap one uses the GCC/Clang `cleanup` attribute, which runs a function on
-scope exit. It is zero-cost, it composes with early `return`, and it is not
-available on MSVC:
-
-```c
-#define BURROW_DEFER(fn, arg) \
-    __attribute__((cleanup(burrow__defer_run))) burrow__defer_rec _gd##__LINE__ = {fn, arg}
-```
-
-The portable one pushes a record onto the goroutine's defer chain and requires
-an explicit scope block, which is the form used inside `burrow` and the form
-that works on MSVC and that panic-unwinding can see:
+The plan was two: a cheap `BURROW_DEFER` on its own, built on the GCC and Clang
+`cleanup` attribute, and a portable `BURROW_SCOPE` block for MSVC and for the
+code panic has to be able to unwind. The problem with offering both is that the
+cheap one compiles on MSVC and does nothing, because there is no attribute
+there to reject it, so the same source builds clean on three platforms and
+leaks on one of them. A feature that is silently absent on a supported platform
+is worse than a feature that costs a line, so there is one form and it is the
+block:
 
 ```c
 BURROW_SCOPE {
     OsFile *f = os_open(a, path, &err);
-    BURROW_DEFER_CALL(os_file_close, f);
+    if (BURROW_FAILED(err))
+        return err;
+    BURROW_DEFER(os_file_close, f);
     ...
-}   /* defers run here, LIFO, even on panic */
+}
+BURROW_SCOPE_END;
 ```
 
-LIFO order, argument evaluation at `defer` time, and the ability to modify
-named results are all preserved; the last of these requires the deferred
-function to receive a pointer to the result slot, which `BURROW_DEFER_RET` provides.
+`BURROW_DEFER` names the scope variable, so a defer written outside a scope does
+not compile, on any of the three compilers rather than on two of them.
+Underneath, `BURROW_SCOPE` is the `cleanup` attribute on GCC and Clang and
+`__try`/`__finally` on MSVC, and both of those handle a `return` out of the
+middle, which is the only property the block needs from the compiler.
 
-**`panic`/`recover`** is `setjmp`/`longjmp` over the defer chain, scoped to a
-single goroutine:
+The deferred calls live in the scope itself: four of them in the struct and the
+rest in one allocation that doubles as it fills and is freed before the scope
+returns, which is the trade Go makes for the defers it cannot open-code into a
+frame. The obvious cheaper layout is one record per defer, declared where the
+defer is written, and it is wrong for a reason that takes a sanitizer to
+notice. Those records sit between the caller's braces, the calls run after that
+block has ended, and an object's lifetime in C ends with the block that declares
+it, so the scope would be reading storage the compiler is entitled to have
+reused. The address sanitizer calls it a stack use after scope and it was right.
+
+The chain of open scopes is a field of the goroutine rather than a thread local,
+because a goroutine that parks inside a scope can wake up on another thread and
+a chain left behind on the first one is a chain of calls that never run. A
+thread that is not a goroutine gets a thread local instead, so the macros work
+in a program that uses burrow's allocators and never starts the runtime.
+
+LIFO order and argument evaluation at `defer` time are Go's and are kept. The
+scope rather than the function as the unit is not Go's, and it is the better
+rule: a `defer` inside a Go `for` body does not run until the function returns,
+which is a bug people write often enough that `go vet` has a check for its
+shape, and a `BURROW_DEFER` inside a scope inside a loop runs every turn.
+Modifying a named result does not arise, because C has no named results, and a
+deferred call that wants to change what the function returns takes a pointer to
+the variable like any other call.
+
+A defer in a loop whose scope is outside the loop piles up and runs at the end
+of the scope, which is exactly Go's behaviour for a defer in a loop, and is what
+the storage above buys: a defer is a value the scope appends rather than a
+record in the loop body, so the same source line can be reached any number of
+times. That also makes `BURROW_DEFER` an ordinary statement, which is worth more
+than it sounds, because a defer as the unbraced body of an `if` or a `for` is a
+thing people write.
+
+`runtime_goexit` runs every open scope on the goroutine before the goroutine
+ends, which is Go's rule for `Goexit`, and re-reads the chain after each call so
+that a deferred call is free to defer things of its own.
+
+**`panic`/`recover`** is the other half of this section and is not built yet. It
+is `setjmp`/`longjmp` over the chain of scopes above, scoped to a single
+goroutine:
 
 ```c
 void      panic(Any v);

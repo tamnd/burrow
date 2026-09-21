@@ -10,7 +10,7 @@ Three ways, and which one you get is not a style choice. It follows from whether
 
 Go draws the same three lines in the same places, and burrow follows it case for case, because the line a Go programmer already knows is the line worth keeping.
 
-Today the middle row does not exist yet. `recover` needs `defer`, `defer` needs the goroutine's defer chain, and that needs the scheduler, which is most of the way down the P0 list. Until then the things that will panic take the fatal path instead. The message text is already the final one, so only the mechanism changes.
+Today the middle row does not exist yet, and it is now one step away rather than several. `recover` needs `defer`, `defer` needs the chain of open scopes on the goroutine, and that chain is built and tested: it is [defer.md](defer.md). What is left is the jump itself, which is the next thing. Until it lands, the things that will panic take the fatal path instead. The message text is already the final one, so only the mechanism changes.
 
 ## Errors
 

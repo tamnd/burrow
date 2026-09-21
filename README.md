@@ -376,6 +376,30 @@ One difference from Go, and it is the usual one. A timer has a lifetime and ther
 
 Details: [docs/guides/time.md](docs/guides/time.md).
 
+## defer
+
+```c
+BURROW_SCOPE {
+    OsFile *f = os_open(a, path, &err);
+    if (BURROW_FAILED(err))
+        return err;
+    BURROW_DEFER(os_file_close, f);
+
+    ...
+}
+BURROW_SCOPE_END;
+```
+
+The close runs when control leaves the block, however it leaves: off the end, `return`, `break`, `continue`, a `goto` out, or a panic once panic lands. Calls run last in first out and the argument is read at the line you wrote it on, both of which are Go's.
+
+The block is required and a `BURROW_DEFER` outside one does not compile. That is the point of it. A bare `BURROW_DEFER` is possible on GCC and Clang, which have the `cleanup` attribute, and impossible on MSVC, which does not, and a macro that silently leaks on one of three supported platforms is worse than one that costs a line on all three. Inside the block a defer is an ordinary statement and goes wherever a statement goes.
+
+The one difference from Go is the unit: a scope rather than a function. Put the scope around the whole function body and you have Go's rule back. Leave it inside a loop and you get the thing Go programmers actually wanted, which is the file closed on every turn rather than n of them held open until the function returns.
+
+A scope is one struct in your frame and the calls live in it, four of them with nothing allocated. A scope that goes past four takes one allocation that doubles as it fills and is freed before the scope returns, which is the trade Go makes for the defers it cannot put in the frame. The chain of open scopes belongs to the goroutine rather than the thread, so a goroutine that parks mid scope and wakes up elsewhere keeps its defers, and `runtime_goexit` runs all of them on the way out.
+
+Details: [docs/guides/defer.md](docs/guides/defer.md).
+
 ## Status
 
 Early. Nothing is usable yet.

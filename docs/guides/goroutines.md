@@ -74,7 +74,7 @@ A goroutine ends when its function returns. `runtime_goexit` ends it where it st
 runtime_goexit();
 ```
 
-Go runs the goroutine's deferred calls on the way out and this will too once `defer` exists. Today it stops the goroutine and nothing else, which is the same thing for a goroutine with no defers and is the only case that can arise yet.
+It runs the goroutine's deferred calls on the way out, every scope it is inside and innermost first, which is what Go's `Goexit` does. A deferred call that defers something of its own gets that run too. See [defer.md](defer.md).
 
 Go says calling it from the main goroutine ends that goroutine and leaves the program running, and then crashes when there is nothing left to run. burrow does the first part: the main goroutine ends and `runtime_main` returns. That difference exists because burrow's main goroutine returns to a caller and Go's does not have one.
 

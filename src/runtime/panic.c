@@ -35,6 +35,7 @@
 #include "burrow/iface.h"
 #include "burrow/runtime.h"
 #include "burrow/sched.h"
+#include "burrow/trace.h"
 #include "burrow/type.h"
 
 #include <setjmp.h>
@@ -140,15 +141,24 @@ const RuntimeError *runtime_error_from(Any v) {
  * arrangement in one line: stash copies the Error into the catching frame
  * because it is sixteen bytes, and what it points at is on the goroutine, so
  * both halves survive a jump that this frame does not. */
-static BURROW_NORETURN void raise_runtime_error(burrow__PanicState *st, Int n) {
+static BURROW_NORETURN void raise_runtime_error(burrow__PanicState *st, Int n,
+                                                Uintptr origin) {
     Error err;
+
+    /* Where the check that failed was called from, which is where a trace of
+     * this should start. Everything between there and here is burrow, and
+     * burrow/panic.h's origin field says how the printer uses it. */
+    st->origin = origin;
 
     st->rterr.message = str_from_bytes(st->rttext, n);
     err = (Error){&runtime_error_vt, &st->rterr};
     panic(BURROW_ANY(TYPE_ERROR, &err));
 }
 
-void runtime_panic(Str msg) {
+/* The body of runtime_panic, with the frame to blame handed in rather than
+ * taken here, because taking it here would name whichever of the functions
+ * below called it and the program wants the line that called one of those. */
+static BURROW_NORETURN void panic_message(Str msg, Uintptr origin) {
     burrow__PanicState *st = burrow__panic_state();
     Int n = msg.len;
 
@@ -158,7 +168,11 @@ void runtime_panic(Str msg) {
         n = (Int)sizeof(st->rttext);
     if (n > 0)
         memcpy(st->rttext, msg.p, (size_t)n);
-    raise_runtime_error(st, n);
+    raise_runtime_error(st, n, origin);
+}
+
+void runtime_panic(Str msg) {
+    panic_message(msg, (Uintptr)BURROW_RETURN_ADDRESS);
 }
 
 /* The same thing for a message with numbers in it, built straight into the slot
@@ -216,7 +230,7 @@ void runtime_index_out_of_range(Int i, Int len) {
     msg_int(&m, i);
     msg_text(&m, "] with length ");
     msg_int(&m, len);
-    raise_runtime_error(st, m.len);
+    raise_runtime_error(st, m.len, (Uintptr)BURROW_RETURN_ADDRESS);
 }
 
 void runtime_slice_bounds_out_of_range(Int lo, Int hi, Int cap) {
@@ -229,7 +243,7 @@ void runtime_slice_bounds_out_of_range(Int lo, Int hi, Int cap) {
     msg_int(&m, hi);
     msg_text(&m, "] with capacity ");
     msg_int(&m, cap);
-    raise_runtime_error(st, m.len);
+    raise_runtime_error(st, m.len, (Uintptr)BURROW_RETURN_ADDRESS);
 }
 
 /* These two carry no numbers, so they are a panic with a constant string and
@@ -237,11 +251,13 @@ void runtime_slice_bounds_out_of_range(Int lo, Int hi, Int cap) {
  * at each call site because burrow/num.h has forty of those call sites and
  * because the text has to stay identical across all of them. */
 void runtime_integer_divide_by_zero(void) {
-    runtime_panic(BURROW_S("runtime error: integer divide by zero"));
+    panic_message(BURROW_S("runtime error: integer divide by zero"),
+                  (Uintptr)BURROW_RETURN_ADDRESS);
 }
 
 void runtime_negative_shift(void) {
-    runtime_panic(BURROW_S("runtime error: negative shift amount"));
+    panic_message(BURROW_S("runtime error: negative shift amount"),
+                  (Uintptr)BURROW_RETURN_ADDRESS);
 }
 
 /* ------------------------------------------------------------------ panic */
@@ -423,7 +439,8 @@ static burrow__Panic *oldest_first(burrow__Panic *p) {
     return head;
 }
 
-static BURROW_NORETURN void print_and_exit(burrow__PanicState *st) {
+static BURROW_NORETURN void print_and_exit(burrow__PanicState *st, const Uintptr *pcs,
+                                           Int npcs) {
     RuntimeFatalFunc fn = fatal_handler;
     bool again = st->printing;
     char buf[PANIC_MSG_MAX];
@@ -448,11 +465,19 @@ static BURROW_NORETURN void print_and_exit(burrow__PanicState *st) {
     fputs(buf, stderr);
     fputc('\n', stderr);
 
-    /* Go prints the goroutine and then its stack. The stack is the next thing
-     * to land in the runtime and this is where it goes. */
+    /* Go prints the goroutine and then its stack, so that is what this prints.
+     * A thread that is not running a goroutine has no number to give and gets
+     * the stack on its own, which is more than Go can say: Go has no such
+     * thread. The frames were collected by panic, in the frame below this one,
+     * because that is where the program's own stack starts. They are addresses
+     * until the symbol table lands and docs/guides/panic.md says what to do
+     * with one in the meantime. */
     burrow__G *g = burrow__curg();
     if (g != NULL)
-        fprintf(stderr, "\ngoroutine %llu [running]\n", (unsigned long long)g->id);
+        fprintf(stderr, "\ngoroutine %llu [running]:\n", (unsigned long long)g->id);
+    else
+        fputc('\n', stderr);
+    burrow__traceback(pcs, npcs);
 
     fflush(stderr);
 
@@ -480,13 +505,22 @@ static Any stash(burrow__Recover *r, Any v) {
     return v;
 }
 
-void panic(Any v) {
+/* Not inlined, because the trace of an unrecovered panic is walked from this
+ * frame and a copy of it somewhere else is a frame the search below would not
+ * recognise. */
+BURROW_NOINLINE void panic(Any v) {
     burrow__PanicState *st = burrow__panic_state();
     burrow__DeferScope **chain = burrow__defer_chain();
     burrow__Recover *r = st->recovers;
     burrow__DeferScope *stop = r != NULL ? r->scopes : NULL;
     burrow__Panic p;
     Str nil_text;
+
+    /* Read and cleared here, whoever set it, so that a value left behind cannot
+     * be used by a later panic that has nothing to do with it. */
+    Uintptr origin = st->origin;
+
+    st->origin = 0;
 
     /* Go turned panic(nil) into a real value in 1.21, because a recover that
      * hands back nil cannot be told apart from a recover that caught nothing,
@@ -518,8 +552,32 @@ void panic(Any v) {
     while (*chain != NULL && *chain != stop)
         burrow__scope_close(*chain);
 
-    if (r == NULL)
-        print_and_exit(st);
+    if (r == NULL) {
+        /* Nothing catches this, so the program is about to stop and the last
+         * useful thing left to do is say where it was.
+         *
+         * The walk happens here rather than in the printer because here is a
+         * frame the program's own stack is directly above: the deferred calls
+         * that just ran are below this one and are gone, and everything from
+         * this frame upwards is the program. A panic the runtime raised has a
+         * few of burrow's own frames in between, and origin is the return
+         * address of the call that caused it, so the trace starts at the first
+         * frame that matches and starts at the top when none does. */
+        Uintptr pcs[BURROW_TRACEBACK_MAX];
+        Int n = burrow__callers(BURROW_WALK_FROM, 0, pcs,
+                                (Int)(sizeof pcs / sizeof pcs[0]));
+        Int first = 0;
+
+        if (origin != 0) {
+            for (Int i = 0; i < n; i++) {
+                if (pcs[i] == origin) {
+                    first = i;
+                    break;
+                }
+            }
+        }
+        print_and_exit(st, pcs + first, n - first);
+    }
 
     r->value = stash(r, v);
 
@@ -536,6 +594,11 @@ void panic(Any v) {
 }
 
 void panic_str(Str s) {
+    /* Where this was called from, so that a trace of an unrecovered one starts
+     * at the program rather than at this line. The field belongs to panic,
+     * which reads it and clears it. */
+    burrow__panic_state()->origin = (Uintptr)BURROW_RETURN_ADDRESS;
+
     /* The Str is copied into the catching frame by stash, so this compound
      * literal only has to outlive the walk, and it does. */
     panic(BURROW_ANY(TYPE_STRING, &s));

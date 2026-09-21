@@ -34,6 +34,17 @@
 #include <unistd.h>
 #endif
 
+/* Where the BSDs keep the call that says how big the current thread's stack is.
+ * NetBSD and illumos declare theirs in pthread.h, which is already in through
+ * burrow/thread.h, and OpenBSD's answer comes back in a stack_t. */
+#if defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_DRAGONFLY) ||                      \
+    defined(BURROW_OS_OPENBSD)
+#include <pthread_np.h>
+#endif
+#if defined(BURROW_OS_OPENBSD)
+#include <signal.h>
+#endif
+
 /* The smallest stack we will ask for, and a guessed constant is not good enough
  * for it. glibc on arm64 wants 128 kilobytes where glibc on amd64 wants 16, and
  * it hides PTHREAD_STACK_MIN behind a feature macro that a strict C11 build does
@@ -176,6 +187,31 @@ void burrow__thread_yield(void) {
     (void)SwitchToThread();
 }
 
+bool burrow__thread_stack_bounds(void **lo, void **hi) {
+    /* Both ends are in the thread information block, which every thread has and
+     * which NtCurrentTeb hands back with no call at all: it is a register read.
+     * GetCurrentThreadStackLimits is the documented spelling of the same two
+     * words and it arrived in Windows 8, which is above the floor this file is
+     * built to, so the block it would have read is read here instead. NT_TIB is
+     * the first member of the block and winnt.h describes it in full, which is
+     * what makes the cast the usual way to say this.
+     *
+     * StackLimit is the lowest page committed so far rather than the lowest the
+     * stack is allowed to reach. That is the tighter of the two bounds and it
+     * is the right one for a walk, since a frame below it is a frame that was
+     * never written. */
+    const NT_TIB *tib = (const NT_TIB *)NtCurrentTeb();
+
+    if (tib == NULL || tib->StackLimit == NULL || tib->StackBase == NULL)
+        return false;
+    if ((const char *)tib->StackLimit >= (const char *)tib->StackBase)
+        return false;
+
+    *lo = tib->StackLimit;
+    *hi = tib->StackBase;
+    return true;
+}
+
 int burrow__thread_ncpu(void) {
     /* ALL_PROCESSOR_GROUPS because a machine with more than 64 processors puts
      * them in groups, and the obvious call reports the size of one group. A
@@ -266,6 +302,120 @@ uint64_t burrow__thread_self(void) {
 void burrow__thread_yield(void) {
     (void)sched_yield();
 }
+
+/* Asking a pthreads system where the current thread's stack is.
+ *
+ * There is no POSIX call for this, so there is one of these per system. What
+ * they have in common is that all of them answer for the thread that is asking
+ * and several of them answer for no other, which is why the header says to only
+ * ask about yourself.
+ *
+ * The two prototypes below are written out rather than taken from a header, the
+ * same way src/runtime/note.c writes out syscall and for the same reason: both
+ * glibc and musl hide them unless a feature macro is set, burrow is built as
+ * strict C11, and these signatures are fixed by an ABI that has not moved in
+ * twenty years. Picking what is declared without a feature macro is the rule,
+ * and where nothing is, saying what the ABI already says is the fallback. */
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+
+bool burrow__thread_stack_bounds(void **lo, void **hi) {
+    /* Darwin gives the top and the size, which is the same pair the other way
+     * round. Both calls are declared in pthread.h with no feature macro and
+     * neither of them can fail for the calling thread. */
+    char *top = (char *)pthread_get_stackaddr_np(pthread_self());
+    size_t size = pthread_get_stacksize_np(pthread_self());
+
+    if (top == NULL || size == 0)
+        return false;
+    *lo = top - size;
+    *hi = top;
+    return true;
+}
+
+#elif defined(BURROW_OS_LINUX)
+
+extern int pthread_getattr_np(pthread_t thread, pthread_attr_t *attr);
+extern int pthread_attr_getstack(const pthread_attr_t *attr, void **addr, size_t *size);
+
+bool burrow__thread_stack_bounds(void **lo, void **hi) {
+    pthread_attr_t attr;
+    void *base = NULL;
+    size_t size = 0;
+
+    /* This fills an attribute block with what the thread actually got rather
+     * than with what was asked for, which for the main thread means the current
+     * stack limit and not a size anybody passed anywhere. It allocates on some
+     * glibc versions, which is why the destroy below is not optional. */
+    if (pthread_getattr_np(pthread_self(), &attr) != 0)
+        return false;
+    if (pthread_attr_getstack(&attr, &base, &size) != 0) {
+        (void)pthread_attr_destroy(&attr);
+        return false;
+    }
+    (void)pthread_attr_destroy(&attr);
+
+    if (base == NULL || size == 0)
+        return false;
+    *lo = base;
+    *hi = (char *)base + size;
+    return true;
+}
+
+#elif defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_NETBSD) ||                       \
+    defined(BURROW_OS_DRAGONFLY) || defined(BURROW_OS_SOLARIS)
+
+bool burrow__thread_stack_bounds(void **lo, void **hi) {
+    pthread_attr_t attr;
+    void *base = NULL;
+    size_t size = 0;
+
+    if (pthread_attr_init(&attr) != 0)
+        return false;
+    if (pthread_attr_get_np(pthread_self(), &attr) != 0) {
+        (void)pthread_attr_destroy(&attr);
+        return false;
+    }
+    if (pthread_attr_getstack(&attr, &base, &size) != 0) {
+        (void)pthread_attr_destroy(&attr);
+        return false;
+    }
+    (void)pthread_attr_destroy(&attr);
+
+    if (base == NULL || size == 0)
+        return false;
+    *lo = base;
+    *hi = (char *)base + size;
+    return true;
+}
+
+#elif defined(BURROW_OS_OPENBSD)
+
+bool burrow__thread_stack_bounds(void **lo, void **hi) {
+    /* OpenBSD's is the odd one and the odd part is ss_sp, which is the top of
+     * the stack here and the bottom of it in the sigaltstack that stack_t was
+     * borrowed from. */
+    stack_t seg;
+
+    if (pthread_stackseg_np(pthread_self(), &seg) != 0)
+        return false;
+    if (seg.ss_sp == NULL || seg.ss_size == 0)
+        return false;
+    *lo = (char *)seg.ss_sp - seg.ss_size;
+    *hi = seg.ss_sp;
+    return true;
+}
+
+#else
+
+bool burrow__thread_stack_bounds(void **lo, void **hi) {
+    /* Nobody has written this one. The header says false means exactly that and
+     * the stack walker does less rather than guessing. */
+    (void)lo;
+    (void)hi;
+    return false;
+}
+
+#endif
 
 int burrow__thread_ncpu(void) {
     long n = sysconf(_SC_NPROCESSORS_ONLN);

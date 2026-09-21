@@ -4,6 +4,24 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+A panic that nobody catches now prints a stack trace under the message, which is the difference between knowing a program indexed past the end of a slice and knowing which line did it.
+
+### Runtime
+
+- `runtime_callers` is Go's `runtime.Callers`, with Go's numbering, where frame 0 is the call to `runtime_callers` itself and frame 1 is whoever made that call. It fills a `Slice` of `Uintptr`, allocates nothing and takes no locks, so it is safe to call from a signal handler or from a program that has run out of memory.
+- The walk follows the saved frame pointers on amd64, arm64 and 386. Those three keep the caller's frame pointer and the return address in a pair of words at the frame pointer, and they are the three burrow is built and tested on. Anything else reports no frames rather than a layout read off a reference manual, and `Callers` answering zero is a normal answer that the header says to expect.
+- Windows asks `RtlCaptureStackBackTrace` instead, on both toolchains. MSVC keeps no frame pointer on amd64 at all and describes each frame with an unwind table, and that call is what reads them. Which of the frames it hands back belongs to the caller is found by looking for that caller's return address rather than by counting burrow's own frames off the front, because a compiler may turn any of those calls into a jump and a count that is one too high silently eats a frame of the program's. MSVC was doing exactly that.
+- Every step of the walk is checked before it is taken. The frame has to be inside the bounds of the stack it claims to be on, it has to be aligned the way a frame pointer would be, and it has to be above the frame before it. A broken chain ends the walk instead of faulting, which matters because a smashed frame pointer is one of the reasons somebody wanted a trace in the first place.
+- Goroutine stacks walk as well as thread stacks. The bounds come from the scheduler when the frame asking is on a goroutine stack and from the operating system otherwise, which is `pthread_getattr_np` on Linux, `pthread_get_stackaddr_np` on macOS, `pthread_attr_get_np` on the BSDs and Solaris, `pthread_stackseg_np` on OpenBSD and the thread information block on Windows.
+- The trace is printed without burrow's own frames on the front. A runtime error is raised two or three calls below the code that caused it, and the panic path records the return address of the call that failed so the trace can start there. It is a return address and not a frame pointer on purpose, because the functions in between never return and a compiler is free to reuse the frame it jumped from.
+- The frames are addresses for now. `docs/guides/panic.md` has the `addr2line` and `atos` invocations for turning one into a file and a line. Names come with the symbol table, which the amalgamation generator will emit.
+
+### Build
+
+- `-fno-omit-frame-pointer` is on in every mode. It costs a register on amd64 and nothing on arm64, and without it the walk above has nothing to follow. Anybody building the amalgamation who wants tracebacks wants the same flag.
+
 ## v0.0.18 (2026-09-21)
 
 The runtime's own failures are catchable now. An index past the end of a slice, a write to a nil map, a send on a closed channel, a divide by zero and the rest of the conditions Go panics on panic here too, instead of printing a line and ending the process, so a program can put a `BURROW_TRY` around a piece of work and survive one the way a Go program survives its own.

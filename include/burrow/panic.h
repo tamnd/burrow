@@ -255,6 +255,25 @@ typedef struct burrow__PanicState {
      * struct is here, and burrow/runtime.h has the lifetime rule. */
     RuntimeError rterr;
     Byte rttext[BURROW_RUNTIME_ERROR_MAX];
+
+    /* Which frame the trace of an unrecovered panic should start at, as the
+     * return address of the call that went wrong, or zero for the usual case.
+     *
+     * A panic the program raised needs nothing here: the trace starts at
+     * whoever called panic and that is the frame under panic's own. A panic the
+     * runtime raised is two or three frames deeper than the line that caused
+     * it, because the check called a helper which called panic, and those
+     * frames are burrow's rather than the program's. So the check writes down
+     * where it was called from, and the printer starts the trace at the first
+     * frame that matches. It is a return address rather than a frame pointer
+     * because the frames in between belong to functions that do not return, and
+     * a compiler may enter one of those by reusing the frame it jumped from.
+     *
+     * Read and cleared by panic, which is the only reader, so a value left here
+     * by a check that somehow did not panic cannot outlive the next one. A
+     * trace that does not contain the address is printed whole, which is what
+     * happens when the frame in between was inlined away. */
+    Uintptr origin;
 } burrow__PanicState;
 
 BURROW_BORROWS(ret) burrow__PanicState *burrow__panic_state(void);

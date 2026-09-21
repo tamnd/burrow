@@ -105,6 +105,34 @@ The message borrows. It lives in a fixed slot on the goroutine, `BURROW_RUNTIME_
 
 `runtime_panic` raises one with a message of your own, which is what a container of your own writes for its own bounds check. It copies the bytes, so the message may point into your frame.
 
+## When nothing catches it
+
+A panic with no catch block above it prints what it was and where it was, and exits with status 2:
+
+```
+panic: runtime error: index out of range [5] with length 3
+
+goroutine 1 [running]:
+	0x100e09408
+	0x100e08750
+	0x18fc02b98
+```
+
+The frames are innermost first, and the first one is the call that went wrong rather than anything inside burrow. A panic the runtime raised for you gets the same treatment as one you raised yourself, so an index panic starts at the function doing the indexing and not at the bounds check.
+
+They are addresses rather than names because burrow does not have a symbol table yet. Turning one into a file and a line is one command. On Linux, `addr2line -e ./yourprogram -f -C 0x100e09408`. On macOS, `atos -o ./yourprogram -l <load address> 0x100e09408`, where the load address is what `vmmap` reports for the binary or what `_dyld_get_image_vmaddr_slide(0)` plus `0x100000000` comes to. Build with `-g` if you want line numbers, and keep `-fno-omit-frame-pointer` on, which is the flag that makes the frames visible at all.
+
+Sixty four frames is as far as it goes. Deeper than that and the ones you want are in there anyway, since they are at the top.
+
+You can take the same walk yourself:
+
+```c
+Uintptr pcs[32];
+Int n = runtime_callers(0, slice_from(pcs, 32, 32, TYPE_UINTPTR));
+```
+
+This is Go's `runtime.Callers` with Go's numbering, where frame 0 is `runtime_callers` itself and frame 1 is whoever called it, so a logger that wants its own caller passes 2. It writes nothing but addresses, it allocates nothing, and it answers zero on an architecture burrow has no frame layout for, which today is anything that is not amd64, arm64 or 386. On Windows it asks the operating system instead, so it works under MSVC where there is no frame pointer to follow.
+
 ## setjmp's rule
 
 A local of the function containing the `BURROW_TRY`, modified inside the try block and read in the catch block or after it, has an indeterminate value unless it is `volatile`. That is C's rule for `setjmp` and not something burrow can paper over. In practice it bites the accumulator pattern and nothing else:

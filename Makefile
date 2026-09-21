@@ -58,6 +58,15 @@ WARNINGS := \
 # clean crash instead of a foothold. _FORTIFY_SOURCE needs optimisation to do
 # anything, so it is only set when we are optimising.
 HARDENING := -fstack-protector-strong -fno-common
+
+# The stack walker needs the frame pointer to still be there to walk. Without
+# it a panic prints its message and no trace, which is the difference between a
+# bug report somebody can act on and one they cannot. It costs a register on
+# amd64 and nothing on arm64, macOS has kept frame pointers all along, and the
+# Linux distributions have been turning them back on for the same reason: the
+# profilers and the debuggers all want them. Anybody building the amalgamation
+# who wants tracebacks wants this flag too, which is what burrow/trace.h says.
+CFRAME := -fno-omit-frame-pointer
 ifeq ($(MODE),debug)
   OPT := -O0 -g3
 else
@@ -87,7 +96,7 @@ ifeq ($(PORTABLE_CONTEXT),1)
   DEFINES += -DBURROW_PORTABLE_CONTEXT=1
 endif
 
-CFLAGS  ?= $(STD) $(OPT) $(WARNINGS) $(HARDENING) $(INCLUDES) $(DEFINES)
+CFLAGS  ?= $(STD) $(OPT) $(WARNINGS) $(HARDENING) $(CFRAME) $(INCLUDES) $(DEFINES)
 LDFLAGS ?=
 
 # Threads. -pthread is a compile flag and a link flag at the same time, which is

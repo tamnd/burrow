@@ -37,6 +37,7 @@
 #include "burrow/error.h"
 #include "burrow/iface.h"
 #include "burrow/platform.h"
+#include "burrow/slice.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -182,6 +183,38 @@ BURROW_NORETURN void runtime_negative_shift(void);
  * once, during startup, before there is a second thread. */
 typedef void (*RuntimeFatalFunc)(Str msg);
 void runtime_set_fatal_handler(RuntimeFatalFunc fn);
+
+/* ---------------------------------------------------------- stack walking
+ *
+ * Go's runtime.Callers: fill pcs with the return addresses of the frames above
+ * this call, innermost first, and answer how many went in.
+ *
+ * skip counts the same frames Go counts. Zero is the frame for runtime_callers
+ * itself, one is whoever called it, two is that function's caller, and a trace
+ * meant for a person to read normally starts at one. A skip past the bottom of
+ * the stack writes nothing and answers zero rather than failing.
+ *
+ *     Uintptr buf[32];
+ *     Slice pcs = slice_from(buf, 32, 32, TYPE_UINTPTR);
+ *     Int n = runtime_callers(1, pcs);
+ *
+ * pcs has to be a slice of Uintptr and the element type is not checked, for the
+ * same reason nothing else on this path allocates or validates: one of the
+ * callers is a program that is already failing.
+ *
+ * What you get back is addresses and not names. Turning one into a function, a
+ * file and a line is symbolisation, and the table that does it is generated
+ * when the amalgamation is built, which has not happened yet. So Caller,
+ * CallersFrames and FuncForPC are not here alongside this yet either. An
+ * address on its own is still worth having: it is what addr2line and atos take,
+ * and it is what an uncaught panic prints under the goroutine line.
+ *
+ * Zero frames is a real answer rather than an error. It is what an architecture
+ * burrow has no frame layout for gives, and what a build with frame pointers
+ * omitted gives on the architectures that need them. burrow's own Makefile
+ * passes -fno-omit-frame-pointer, and a project that wants tracebacks out of
+ * the amalgamation wants that flag too. */
+Int runtime_callers(Int skip, Slice pcs);
 
 /* ------------------------------------------------------------------ random
  *

@@ -124,6 +124,28 @@ uint64_t burrow__thread_self(void);
  * it is the only way the thread being waited on gets to run. */
 void burrow__thread_yield(void);
 
+/* Where the calling thread's own stack begins and ends.
+ *
+ * lo is the lowest address on it and hi is one past the highest, which is the
+ * same way burrow__Stack describes a stack the library mapped itself. The
+ * difference is whose stack it is: this one is the one the operating system
+ * gave the thread, so it is the answer for the main thread and for any thread
+ * that is not currently running a goroutine.
+ *
+ * The stack walker is the only caller and the bounds are what keep it safe. A
+ * walk follows saved frame pointers, one of which is eventually a value that
+ * was never a frame pointer, and the only thing standing between that and a
+ * fault is knowing which addresses are stack.
+ *
+ * False means the system has no way to ask, which is the honest answer on a
+ * platform nobody has written this for rather than a failure. A caller that
+ * gets false does less rather than guesses: the walker returns no frames.
+ *
+ * Only ever call it for the thread you are on. Every system underneath offers
+ * this for the current thread and several of them offer nothing else, and a
+ * caller asking about another thread is asking about a stack that is moving. */
+bool burrow__thread_stack_bounds(void **lo, void **hi);
+
 /* How many processors there are, at least 1, never 0.
  *
  * This is the number of processors that exist, which is not always the number

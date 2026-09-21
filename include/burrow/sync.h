@@ -829,6 +829,129 @@ void sync_map_free(SyncMap *m);
 #define SYNC_MAP_DELETE(KT, m, k) BURROW_SYNC_MAP_DELETE(KT, m, k)
 #endif
 
+/* ---------------------------------------------------------------- sync.Pool
+ *
+ * A set of spare objects that goroutines hand back when they are done with one
+ * and take again when they need one, without going to the allocator and without
+ * a lock.
+ *
+ *     static Any make_buf(void *env) {
+ *         (void)env;
+ *         Buf *b = BURROW_NEW(heap_allocator(), Buf);
+ *         return BURROW_ANY(TYPE_BUF, b);
+ *     }
+ *
+ *     static void drop_buf(void *env, Any v) {
+ *         (void)env;
+ *         mem_free(heap_allocator(), v.data, sizeof(Buf), _Alignof(Buf));
+ *     }
+ *
+ *     static SyncPool bufs;
+ *     bufs = SYNC_POOL(heap_allocator(), BURROW_FN(SyncPoolNewFunc, make_buf, NULL),
+ *                      BURROW_FN(SyncPoolFreeFunc, drop_buf, NULL));
+ *
+ *     Any v = sync_pool_get(&bufs);
+ *     Buf *b = any_assert(v, TYPE_BUF);
+ *     use(b);
+ *     sync_pool_put(&bufs, v);
+ *
+ * What it is for is the case where the same short lived object is made and
+ * thrown away over and over by many goroutines at once, a scratch buffer being
+ * the usual one. It is not a free list and it is not a cache. Anything put in
+ * may be gone the next time you look, so it can hold nothing you would miss.
+ *
+ * Underneath is Go's design. Every P has a slot of its own and a queue of its
+ * own, so a Get and a Put that stay on one P touch no shared memory at all. A P
+ * that finds its own queue empty steals from the far end of another P's, which
+ * is the only time two of them meet.
+ *
+ * Two things are burrow's rather than Go's, and both come from there being no
+ * collector.
+ *
+ * The first is the free function. Go drops an object and the collector takes it
+ * from there. Here the pool has to be told how to give one back, because the
+ * pool is the only thing holding it when the time comes.
+ *
+ * The second is when that time is. Go throws a pool's contents away at a
+ * garbage collection, which means the objects live about as long as a
+ * collection cycle. burrow has the system monitor do it on a timer, with Go's
+ * two generation rule kept intact: what you put in survives at least one sweep
+ * in the live set and one more in the victim set behind it, so an object put
+ * back and taken again within a second is the same object. A program whose
+ * runtime never started the monitor, and one that has gone completely idle,
+ * does not sweep at all. That costs memory held and not correctness, and
+ * sync_pool_free is the way to get it back on demand.
+ *
+ * Derived from Go's src/sync/pool.go and src/sync/poolqueue.go. */
+
+/* What the pool calls when it has nothing to hand out. Returns a nil Any to say
+ * it could not make one, which is what a Get that fails returns too. */
+BURROW_FUNC0(SyncPoolNewFunc, Any);
+
+/* What the pool calls when it is throwing one away, which is on a sweep and in
+ * sync_pool_free. It must not block and it must not call back into the same
+ * pool. Leave it nil to have the pool drop objects without freeing them, which
+ * is right when the objects come from an arena that will be reset anyway. */
+BURROW_FUNC(SyncPoolFreeFunc, void, Any v);
+
+typedef struct SyncPool {
+    /* Yours. Set by SYNC_POOL and not read anywhere else. */
+    Alloc *a;
+    SyncPoolNewFunc new_fn;
+    SyncPoolFreeFunc free_fn;
+
+    /* The implementation's. The two per P arrays, which one is live and which
+     * one is the victim behind it, the registry link, and the lock that covers
+     * setting the arrays up and the one extra slot a thread with no P uses. */
+    void *shard[2];
+    void *live;
+    void *victim;
+    struct SyncPool *allnext;
+    SyncMutex mu;
+    SyncAtomicUint32 inited;
+} SyncPool;
+
+/* The initialiser. Works in a block and at file scope, and a pool in a static
+ * has to be assigned at start up the same way a Cond does, because
+ * heap_allocator is a call.
+ *
+ * Nothing is allocated here. The first Get or Put builds the per P arrays, so a
+ * pool that is declared and never used costs its own struct and no more. */
+#define SYNC_POOL(alloc, new_func, free_func)                                          \
+    ((SyncPool){.a = (alloc), .new_fn = (new_func), .free_fn = (free_func)})
+
+/* Go's Get. Takes an object out of the pool, or makes one with new_fn when the
+ * pool is empty, or returns a nil Any when the pool is empty and new_fn is nil
+ * or could not make one.
+ *
+ * Which object you get back is not defined and may be one another goroutine put
+ * in. Go says the same. An object that comes out of here is yours until you put
+ * it back, and it still holds whatever the last user left in it, so reset it. */
+BURROW_OWNS(ret) Any sync_pool_get(SyncPool *p);
+
+/* Go's Put. Hands an object back, and may drop it on the floor instead, which
+ * is what happens when this P's queue is full.
+ *
+ * A nil Any is ignored, which is what makes putting back the result of a failed
+ * Get harmless. Do not put an object back twice and do not keep using it after
+ * you have, for the same reason you would not free it twice. */
+void sync_pool_put(SyncPool *p, Any v);
+
+/* Hands everything in the pool to free_fn, gives the per P arrays back to the
+ * allocator, and leaves the pool empty and still usable.
+ *
+ * Go has no such thing, because Go has a collector. Unlike Get and Put this one
+ * is not safe to call concurrently with anything else on the same pool. */
+void sync_pool_free(SyncPool *p);
+
+/* Sweep every pool now, which is what the system monitor calls on its timer.
+ *
+ * Here so that a test can make the thing happen instead of waiting a second for
+ * it, and for a program that knows it has just finished with something large
+ * and would rather not wait either. Safe to call from anywhere and at any time,
+ * including with every other call here running. */
+void burrow__pool_sweep(void);
+
 #ifdef __cplusplus
 }
 #endif

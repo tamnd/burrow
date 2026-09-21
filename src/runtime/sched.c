@@ -205,6 +205,32 @@ int32_t burrow__gomaxprocs(void) {
     return sched.gomaxprocs;
 }
 
+/* The sweep callback, set once by the first sync.Pool that gets used and read
+ * by the system monitor on its own thread. A plain pointer rather than a list
+ * because there is one caller and there is going to stay one.
+ *
+ * The flag beside it is what makes the pair safe across the two threads without
+ * an atomic on the pointer itself. C says nothing about atomics on function
+ * pointers and casting one through void * to get at them is the sort of thing
+ * that works everywhere and is still undefined, so the release store on the
+ * flag publishes the plain write and the acquire load on the read side picks it
+ * up. It is set at most once and never taken back, so there is nothing else for
+ * the ordering to have to cover. */
+typedef void (*SweepFn)(void);
+
+static SweepFn sweepfn;
+static uint32_t sweepset;
+
+void burrow__set_sweep(void (*fn)(void)) {
+    sweepfn = fn;
+    burrow__atomic_store_u32(&sweepset, 1);
+}
+
+static void sweep(void) {
+    if (burrow__atomic_load_acquire_u32(&sweepset) != 0)
+        sweepfn();
+}
+
 bool burrow__sched_spin_ok(void) {
     if (burrow__thread_ncpu() <= 1)
         return false;
@@ -841,13 +867,18 @@ void burrow__timers_wake(void) {
  * there to notice the things a thread which is busy working cannot notice about
  * itself. Go's `sysmon` in runtime/proc.go.
  *
- * Go gives it four jobs and burrow has one of them to do today. It takes a P
+ * Go gives it four jobs and burrow has two of them to do today. It takes a P
  * back off a thread that has been inside a system call too long, and burrow has
  * no system calls that hand their P over yet. It sends the signal that preempts
  * a goroutine which has been running too long, which is the last item on the
- * runtime list in docs/design/06-runtime.md and is last on purpose. It forces a
- * collection nobody asked for, and there is no collector. What is left is the
- * timers, and that one is worth having now.
+ * runtime list in docs/design/06-runtime.md and is last on purpose. What is
+ * left is the timers and the sweep, and both of those are worth having now.
+ *
+ * The sweep is the fourth job wearing different clothes. In Go it is the forced
+ * collection, and what makes it matter to anything outside the collector is
+ * that sync.Pool empties itself when one happens. There is no collector here,
+ * so the thing that hung off it gets its own timer instead, and that is all
+ * burrow__set_sweep is.
  *
  * The timer job is a backstop and not the mechanism, which is the thing to
  * understand about this whole file section before reading any of it. A timer
@@ -878,6 +909,19 @@ void burrow__timers_wake(void) {
 #define SYSMON_MIN_DELAY 20000
 #define SYSMON_MAX_DELAY 10000000
 #define SYSMON_QUIET_PASSES 50
+
+/* How long between sweeps, which today means how long a sync.Pool holds on to
+ * something nobody has asked for.
+ *
+ * Go does this at a garbage collection and so has the number chosen for it by
+ * how fast the program allocates. Nothing here can see that, so it is a clock,
+ * and a second is picked the way Go's own numbers were: long enough that a
+ * server handling requests in milliseconds reuses its buffers thousands of
+ * times between sweeps, short enough that a burst of work does not leave its
+ * peak sitting in memory for the rest of the day. An object survives two
+ * sweeps and not one, so the real floor on how long a pooled object lives is
+ * one second and the ceiling is two. */
+#define SYSMON_SWEEP_PERIOD 1000000000
 
 /* Whether any P is holding a timer that is already due.
  *
@@ -931,6 +975,7 @@ static void sysmon(void *arg) {
 
     int64_t delay = SYSMON_MIN_DELAY;
     uint32_t quiet = 0;
+    int64_t swept = burrow__nanotime();
 
     while (burrow__atomic_load_acquire_u32(&sched.stopping) == 0) {
         burrow__lock(&sched.lock);
@@ -949,6 +994,13 @@ static void sysmon(void *arg) {
              * are the ones worth taking soon. */
             delay = SYSMON_MIN_DELAY;
             quiet = 0;
+
+            /* The sleep was open ended, so a program that has been idle for an
+             * hour must not now decide it is an hour overdue a sweep and start
+             * counting from an hour ago. Nothing changed in a pool while every
+             * P was parked either, so the sweep that was skipped had nothing to
+             * do. */
+            swept = burrow__nanotime();
             continue;
         }
 
@@ -957,6 +1009,12 @@ static void sysmon(void *arg) {
 
         if (burrow__atomic_load_acquire_u32(&sched.stopping) != 0)
             break;
+
+        int64_t now = burrow__nanotime();
+        if (now - swept >= SYSMON_SWEEP_PERIOD) {
+            swept = now;
+            sweep();
+        }
 
         if (timer_overdue()) {
             wakep();

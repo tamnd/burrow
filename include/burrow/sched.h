@@ -499,6 +499,19 @@ BURROW_STATIC(ret) burrow__P *burrow__allp(int32_t i);
 /* How many Ps there are. Fixed while the scheduler is running. */
 int32_t burrow__gomaxprocs(void);
 
+/* Register the callback the system monitor makes roughly once a second, which
+ * today is sync.Pool's sweep and nothing else.
+ *
+ * It is a registration rather than a direct call because this is the runtime
+ * and sync.Pool is a package on top of it, and the runtime knowing the names of
+ * the packages above it is the wrong way round. Go does the same thing for the
+ * same reason, in runtime_registerPoolCleanup.
+ *
+ * Called at most once, from the first pool that gets used, and the setting is
+ * never taken back. The callback runs on the monitor's own thread, which is not
+ * an M and holds no P, so it must not do anything that needs either. */
+void burrow__set_sweep(void (*fn)(void));
+
 /* Whether a thread waiting for a lock should spin rather than give its turn up.
  *
  * This is the scheduler's half of Go's sync_runtime_canSpin. The iteration

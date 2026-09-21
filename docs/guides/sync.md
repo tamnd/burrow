@@ -338,6 +338,82 @@ The per node lock a writer takes is the runtime's spinning lock and not a `SyncM
 
 On a server core, a lookup that hits is about forty nanoseconds against Go's thirty three, a lookup that misses is level with Go, and a store over an existing key is about a hundred and thirty seven against Go's a hundred and thirteen. Most of what is left on the read side is the pin, which is one sequentially consistent store and about eight nanoseconds on that machine. Asking only whether a key is present, with `SYNC_MAP_HAS` or a `NULL` out pointer, is about three nanoseconds cheaper than asking for the value. The numbers and the machine are in [burrow-bench](https://github.com/tamnd/burrow-bench).
 
+## Pool
+
+A set of temporary objects that goroutines take from and hand back, so that the same short lived thing is not made and thrown away a million times a second.
+
+```c
+static Any make_buf(void *env) {
+    (void)env;
+    Buf *b = BURROW_NEW(heap_allocator(), Buf);
+    return BURROW_ANY(TYPE_BUF, b);
+}
+
+static void drop_buf(void *env, Any v) {
+    (void)env;
+    mem_free(heap_allocator(), v.data, sizeof(Buf), _Alignof(Buf));
+}
+
+static SyncPool bufs;
+
+void setup(void) {
+    bufs = SYNC_POOL(heap_allocator(), BURROW_FN(SyncPoolNewFunc, make_buf, NULL),
+                     BURROW_FN(SyncPoolFreeFunc, drop_buf, NULL));
+}
+
+void work(void) {
+    Any v = sync_pool_get(&bufs);
+    Buf *b = any_assert(v, TYPE_BUF);
+
+    b->len = 0;
+    fill(b);
+
+    sync_pool_put(&bufs, v);
+}
+```
+
+A pool is not a free list and it is not a cache. Anything you put in may be gone the next time you look, and a `Get` is allowed to hand you a brand new object even when you just put one back. That is what makes it cheap, and it is also what decides whether you want one. Put a scratch buffer in a pool. Do not put a database connection in a pool, because a pool that quietly drops one and opens another is not what you meant.
+
+The object that comes out still holds whatever the last user left in it. Reset it. This is the same rule Go has and it is the same bug when you forget.
+
+Like `Map` and unlike everything else here, the zero value is not ready to use. `SYNC_POOL` takes the allocator, the function that makes an object and the function that gives one back. It allocates nothing, so a pool that is declared and never used costs its own struct and no more.
+
+### The free function
+
+Go has no such thing. In Go a pool drops an object and the collector takes it from there, and none of the three calls in this section need to exist.
+
+Here the pool is the only thing holding the object when it decides to let go of it, so it has to be told how. `SyncPoolFreeFunc` is called on the objects a sweep throws away and on everything left when you call `sync_pool_free`. It must not block and it must not call back into the same pool. Leaving it nil is legal and means the pool drops objects without freeing them, which is right when the objects came from an arena that is going to be reset anyway.
+
+You can also leave the new function nil, in which case a `Get` from an empty pool returns a nil `Any` and it is up to you what to do about it. Check with `BURROW_ANY_IS_NIL`. A new function that cannot allocate returns a nil `Any` too, and it comes back out of `Get` the same way.
+
+### When things get thrown away
+
+Go empties a pool at a garbage collection, so objects live about as long as a collection cycle. There is no collector here, so the system monitor does it on a timer, about once a second.
+
+Go's two generation rule is kept exactly. What is in the pool now is the live set, and behind it is the victim set, which is what was live at the last sweep. A sweep throws the victim set away, the live set becomes the new victim, and the pool starts filling an empty live set again. So an object put back survives at least one sweep and at most two, and an object taken again shortly after it went in is the same object.
+
+Two cases do not sweep at all. A program whose runtime never started, and one that has gone completely idle with no goroutine to run. Both cost memory held rather than anything going wrong, and `sync_pool_free` is there for a program that would rather not wait.
+
+The private slot each P keeps is emptied a little later than the rest. A sweep does not touch the private slots, because they are the one thing in a pool that is read and written with no atomic at all and the sweep is a different thread. Instead it moves a counter on, and each P notices and empties its own slot on its next `Get` or `Put`. So a P that stops using a pool entirely holds on to at most two objects, one per generation, until something touches the pool again or you free it. That is the same order of memory as the pool being warm at all.
+
+### Giving it back
+
+`sync_pool_free` hands everything in the pool to the free function, gives the per P arrays back to the allocator, and leaves the pool empty and still usable. A `Get` after it works and starts the pool again from nothing.
+
+Like `sync_map_free` it is the one call here that is not safe to make while anything else is touching the same pool.
+
+`burrow__pool_sweep` sweeps every pool in the program right now, which is the same thing the system monitor does on its timer. It is safe to call at any time and from anywhere, including with every other call here running. It is in the header so that a test can make a sweep happen instead of sleeping a second for one, and for a program that has just finished with something large and knows it.
+
+### Underneath
+
+Every P gets a slot of its own and a queue of its own. A `Get` looks in its own slot first, which is a load and a store and no atomic anywhere, then in the head of its own queue, and only then steals from the far end of another P's. A `Put` fills its own slot or pushes on the head of its own queue. So two goroutines on different Ps, doing what a pool is for, touch no memory in common and never take a cache line off each other.
+
+The queue is Go's, from `src/sync/poolqueue.go`. A ring buffer with one producer at the head and any number of consumers at the tail, with the head and the tail packed into one word so that a steal can move the tail and check the head in a single compare and swap, and a chain of those rings, each twice the size of the one before, so a queue that fills grows instead of dropping work.
+
+The one thing here that is not Go's shape is that a sweep empties the rings and keeps them rather than freeing them. A sweep runs while the program runs, so freeing a ring would mean freeing memory another P might be halfway through stealing from, and the fixes for that are stopping the world, which burrow cannot do, or a reclamation pin on the steal path, which would put a sequentially consistent store on every `Get`. Emptying a ring is a pop from the tail, which is what a thief already does and needs nothing extra. The cost is that the rings stay at their high water mark until `sync_pool_free`, and a ring is two words and its slots, so a pool that once held a thousand objects holds on to about sixteen kilobytes and not to the thousand objects.
+
+A thread that walked in from outside the scheduler, with no P to be indexed by, shares one extra slot on the end under the pool's own mutex. Go has no such case because in Go there is nothing that is not a goroutine.
+
 ## What it costs
 
 An uncontended lock and unlock is about eleven nanoseconds on a server core, which is what one compare and swap and one atomic add cost on hardware nobody else is touching. A write lock and unlock on an `RWMutex` is about twice that, because it goes through the inner mutex first and then touches the reader count. A read lock and unlock is the same as a plain mutex, since both are one atomic on one word.
@@ -353,10 +429,6 @@ Waiters queue on the runtime's semaphore, which is Go's, from `src/runtime/sema.
 `Cond` is the exception. It waits on a notify list rather than the semaphore, which is also Go's and also from `src/runtime/sema.go`. A semaphore wakes one waiter at a time and has no opinion about which, and a `Cond` has to be able to wake everybody who was waiting when the broadcast went out and nobody who arrived after, so it has a queue of its own. What makes that work is a ticket. The waiter takes a number while it still holds its own lock, drops the lock, and only then sleeps, and the list remembers how far it has notified, so a signal that lands in the gap between the unlock and the sleep is not lost. Take the number after dropping the lock and the program hangs, which is the oldest bug a condition variable has.
 
 Before queueing, a goroutine spins a few times, but only on a machine with more than one processor and only when there is a processor free to be running the lock holder. Spinning for a lock held by a goroutine that cannot be running is pure waste. The processor count that decision uses is the count of processors this process is allowed to run on rather than the count the machine has, which is a different number inside a container with a cpuset or under `taskset`.
-
-## What is not here yet
-
-`Pool`. It is on the P0 milestone and it is the last thing in this package.
 
 ## See also
 

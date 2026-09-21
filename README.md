@@ -502,6 +502,32 @@ sync_mutex_unlock(&mu);
 
 Go's `sync.Cond`, for waiting until something you share with another goroutine changes. Waiting drops your lock, sleeps, and takes the lock again before it returns. `sync_cond_signal` wakes one waiter and `sync_cond_broadcast` wakes all of them. The `while` matters: a `Cond` promises you will be woken, not that the thing you were waiting for is true when you are.
 
+```c
+static SyncMap cache;
+cache = SYNC_MAP(heap_allocator(), TYPE_STRING, TYPE_INT);
+
+SYNC_MAP_STORE(Str, Int, &cache, BURROW_S("hits"), 1);
+
+Int n;
+if (SYNC_MAP_LOAD(Str, &cache, BURROW_S("hits"), &n))
+    use(n);
+```
+
+Go's `sync.Map`, on the same hash trie Go has used since 1.24. A read takes no lock and writes nothing, so readers on different cores never take each other's cache lines away, and a write locks the one node that owns the slot it is changing. All ten of Go's methods are there. Reach for it in the two cases Go names, a key written once and then read over and over, or many goroutines touching mostly different keys, and reach for a plain `Map` behind a `SyncMutex` for everything else.
+
+```c
+static SyncPool bufs;
+bufs = SYNC_POOL(heap_allocator(), BURROW_FN(SyncPoolNewFunc, make_buf, NULL),
+                 BURROW_FN(SyncPoolFreeFunc, drop_buf, NULL));
+
+Any v = sync_pool_get(&bufs);
+Buf *b = any_assert(v, TYPE_BUF);
+use(b);
+sync_pool_put(&bufs, v);
+```
+
+Go's `sync.Pool`, for the short lived object that gets made and thrown away a million times a second. Every P has a slot and a queue of its own, so a Get and a Put that stay on one P touch nothing another core is looking at. Go throws a pool's contents away at a garbage collection and there is no collector here, so the system monitor does it on a timer with Go's two generation rule kept intact, and the free function you supply is what an object goes to when its time is up.
+
 Details: [docs/guides/sync.md](docs/guides/sync.md).
 
 ## Status

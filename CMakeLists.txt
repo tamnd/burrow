@@ -109,7 +109,13 @@ if(MSVC)
     # and tail on separate cache lines specifically so that a thief and an owner
     # do not fight over one, and the padding that comes with that is the point
     # rather than an accident. gcc and clang do not warn about this at all.
-    target_compile_options(burrow PRIVATE /W4 /permissive- /utf-8 /wd4100 /wd4324)
+    #
+    # /wd4200 is "zero-sized array in struct/union", which MSVC calls a
+    # nonstandard extension. It was one in C89 and it has been in the standard
+    # since C99, which is two revisions before the one this builds as. MSVC
+    # compiles it correctly and warns anyway. sync.Pool's rings and per P arrays
+    # are one allocation each because of it.
+    target_compile_options(burrow PRIVATE /W4 /permissive- /utf-8 /wd4100 /wd4200 /wd4324)
     if(BURROW_WERROR)
         target_compile_options(burrow PRIVATE /WX)
     endif()

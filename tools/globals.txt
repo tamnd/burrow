@@ -34,6 +34,7 @@ category	rand	The generator behind map iteration order and hash seeding.
 category	atomic-lock-table	The spin locks that stand in for 64 bit atomics on machines that do not have them.
 category	sema-table	The wait queues behind sync, keyed on the address of the counter being waited on, which is what makes them one per process by definition.
 category	reclaim	The epoch and the handover lists behind lock free reading. One epoch per process is the whole idea, since a reader on any thread has to be able to hold any of them back.
+category	pool	sync.Pool's registry and the lock over it, which is one per process because the sweep has to be able to find every pool from the system monitor's thread.
 category	clock	The conversion factor between what the machine's counter counts and nanoseconds. Fixed at boot, so it is asked for once.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
@@ -82,3 +83,7 @@ global	src/runtime/reclaim.c	pending	reclaim	Atomic counter, and nothing reads i
 global	src/runtime/reclaim.c	pockets	reclaim	What each M has retired and not yet pushed. Only the thread running that M touches its own entry, and the only reason they are an array rather than thread local is so that burrow__reclaim_drain can find them all at the end.
 global	src/runtime/reclaim.c	my_slot	reclaim	Thread local. Which slot this thread is pinned through, written and read by that thread alone.
 global	src/runtime/reclaim.c	my_depth	reclaim	Thread local. How many pins deep this thread is, so a pin inside a pin publishes once.
+global	src/runtime/sched.c	sweepfn	scheduler	The callback the system monitor makes on its timer, which is sync.Pool's sweep and nothing else today. Set at most once, from the first pool anybody uses, and published by the flag below rather than written atomically, because C says nothing about atomic operations on function pointers.
+global	src/runtime/sched.c	sweepset	scheduler	Whether the pointer above has been set. A release store here and an acquire load in sysmon are what make the plain write to sweepfn visible to the monitor's thread.
+global	src/sync/pool.c	pools_lock	pool	This is the synchronisation for the list below. Held for the length of a sweep, which is a walk of every pool's victim shard, so it is the one lock in the package that is held for a while rather than for a few instructions.
+global	src/sync/pool.c	allpools	pool	Every pool that has been used, so that the sweep can find them. A pool goes on the list the first time it is touched and comes off in sync_pool_free, both under pools_lock above.

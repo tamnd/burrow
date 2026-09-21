@@ -28,13 +28,11 @@
  * wait with one wakeup. burrow__netpoll and burrow__netpoll_break are the two
  * calls the scheduler makes for that, and they are not for anybody else.
  *
- * What is not here yet: deadlines, which net.Conn.SetDeadline needs and which
- * are a timer per descriptor per direction on top of this, and a completion
- * based backend for Windows, where the kernel reports finished work rather than
- * readiness. Until the second one lands this file is inert on Windows.
- * burrow__netpoll_inited answers false, the scheduler skips every call into it,
- * and burrow__poll_open refuses, so a program that would have parked a
- * goroutine here keeps its thread instead.
+ * What is not here yet: a completion based backend for Windows, where the
+ * kernel reports finished work rather than readiness. Until that lands this
+ * file is inert on Windows. burrow__netpoll_inited answers false, the scheduler
+ * skips every call into it, and burrow__poll_open refuses, so a program that
+ * would have parked a goroutine here keeps its thread instead.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -47,6 +45,7 @@
 #include "burrow/own.h"
 #include "burrow/platform.h"
 #include "burrow/sched.h"
+#include "burrow/timer.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -101,12 +100,7 @@ typedef int burrow__PollFd;
  * has to tell apart: ready means try the read again, closed means the
  * descriptor went away underneath the wait, timeout means a deadline passed,
  * and unpollable means this descriptor is not one the kernel will report
- * readiness for and the caller should fall back to a blocking call on a thread.
- *
- * Timeouts cannot happen yet because deadlines are not here yet. The code is in
- * the list now because the callers that will check for it are being written
- * against this list, and a value added to the middle of an enumeration later is
- * a value that changes what the ones after it mean. */
+ * readiness for and the caller should fall back to a blocking call on a thread. */
 typedef enum burrow__PollStatus {
     BURROW_POLL_READY = 0,
     BURROW_POLL_CLOSED = 1,
@@ -165,6 +159,25 @@ typedef struct burrow__PollDesc {
     burrow__Lock mu;
     bool closing;
 
+    /* The two deadlines, as burrow__nanotime readings. Zero is no deadline at
+     * all, a positive value is one that has not arrived yet, and -1 is one that
+     * has, which is the state every later wait in that direction answers
+     * BURROW_POLL_TIMEOUT from until somebody sets a new one. Go's rd and wd,
+     * with Go's three meanings for the sign. */
+    int64_t rd;
+    int64_t wd;
+
+    /* The timers those deadlines are armed on, and whether each is armed.
+     *
+     * Two of them rather than one because the two deadlines move independently,
+     * and only one of them is used when they happen to be equal, which is the
+     * common case since SetDeadline sets both to the same instant. The timer
+     * that covers both is the read one. */
+    burrow__Timer rt;
+    burrow__Timer wt;
+    bool rt_armed;
+    bool wt_armed;
+
     /* The free list in the cache, under the cache's own lock and not this one.
      * NULL while the descriptor is open. */
     struct burrow__PollDesc *link;
@@ -214,6 +227,30 @@ void burrow__poll_close(burrow__PollDesc *pd);
  *
  * Callable only from a goroutine, since parking is the whole of what it does. */
 burrow__PollStatus burrow__poll_wait(burrow__PollDesc *pd, uint32_t mode);
+
+/* Sets, moves or clears a deadline. `mode` is BURROW_POLL_READ,
+ * BURROW_POLL_WRITE, or both together, and this is the one call where both
+ * together is the ordinary thing to ask for.
+ *
+ * `when` is a burrow__nanotime reading. Zero clears the deadline and leaves the
+ * direction with no deadline at all. Anything already in the past, which
+ * includes any negative number, expires at once: whoever is parked comes back
+ * with BURROW_POLL_TIMEOUT and so does every wait after it, until a later
+ * deadline or a zero is set. That last part is Go's rule and it is what makes a
+ * timed out connection stay timed out rather than quietly working again.
+ *
+ * An expired deadline is not an error on the descriptor. The connection is
+ * still open, the poller is still watching it, and moving the deadline forward
+ * makes waits work again.
+ *
+ * Answers false only when arming the timer needed the P's heap to grow and the
+ * allocator said no, in which case the deadline is recorded but will not fire
+ * by itself. Go cannot fail here because Go's heap grows by panicking. The
+ * deadline still applies to every wait that starts after it has passed, since
+ * that check reads the clock rather than waiting for a timer.
+ *
+ * Callable only from a goroutine, because arming a timer needs a P. */
+bool burrow__poll_set_deadline(burrow__PollDesc *pd, int64_t when, uint32_t mode);
 
 /* Wakes whoever is parked on the descriptor and makes every later wait answer
  * BURROW_POLL_CLOSED at once.

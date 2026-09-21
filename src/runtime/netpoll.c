@@ -35,6 +35,7 @@
 #include "burrow/netpoll.h"
 
 #include "burrow/atomic.h"
+#include "burrow/clock.h"
 #include "burrow/core.h"
 #include "burrow/lock.h"
 #include "burrow/mem.h"
@@ -70,6 +71,8 @@
  * that was true at some moment and never a mixture of two. */
 #define INFO_CLOSING 1U
 #define INFO_FAILED 2U
+#define INFO_RD_EXPIRED 4U
+#define INFO_WD_EXPIRED 8U
 
 /* ---------------------------------------------------------------- the table
  *
@@ -178,6 +181,13 @@ static bool cache_grow(void) {
         pd->index = nblocks * POLL_PER_BLOCK + i;
         pd->link = cache_first;
         cache_first = pd;
+
+        /* Once for the life of the slot, and not again when it is reused. A
+         * timer that fired and has not been thrown out of its P's heap yet is
+         * still in that heap, and arming it again from there is the cheap path
+         * rather than something to undo. */
+        burrow__timer_init(&pd->rt, NULL, NULL);
+        burrow__timer_init(&pd->wt, NULL, NULL);
     }
 
     /* The block goes up before the count does, and the count is what a reader
@@ -237,6 +247,10 @@ static void publish_info(burrow__PollDesc *pd) {
     uint32_t info = 0;
     if (pd->closing)
         info |= INFO_CLOSING;
+    if (pd->rd < 0)
+        info |= INFO_RD_EXPIRED;
+    if (pd->wd < 0)
+        info |= INFO_WD_EXPIRED;
 
     /* The failure bit is not under the lock and is not owned by this. It is set
      * by whichever thread drained the event that said the descriptor is in a
@@ -263,6 +277,14 @@ static burrow__PollStatus check_err(burrow__PollDesc *pd, uint32_t mode) {
 
     if ((info & INFO_CLOSING) != 0)
         return BURROW_POLL_CLOSED;
+
+    /* The deadline that has passed is the one for this direction and not the
+     * other, which is why the two are separate bits rather than one. A
+     * connection with a read deadline that has gone by is still writable. */
+    uint32_t expired = (mode == BURROW_POLL_READ) ? (uint32_t)INFO_RD_EXPIRED
+                                                  : (uint32_t)INFO_WD_EXPIRED;
+    if ((info & expired) != 0)
+        return BURROW_POLL_TIMEOUT;
 
     /* Only the reader hears about it, which is Go's rule. A write that is going
      * to fail is about to say why in its own error, and that answer is more
@@ -388,6 +410,96 @@ void burrow__netpoll_ready(burrow__GQueue *out, uintptr_t handle, uint32_t mode,
     adjust_waiters(delta);
 }
 
+/* ------------------------------------------------------------- the deadlines
+ *
+ * A deadline is a timer that marks one direction as expired and wakes whoever
+ * is waiting in it. Everything a wait does with that is already written: the
+ * mark is a bit in pd->info and check_err reads it, so the read and write paths
+ * cost nothing at all for a descriptor that has no deadline on it and one
+ * predictable branch for a descriptor that has.
+ *
+ * Go carries a sequence number per direction, bumped on every change, copied
+ * into the timer when it is armed and compared when it fires, so that a timer
+ * which went off and has not had its turn yet cannot act on a deadline that has
+ * since moved. This does not have one, and the reason is worth stating because
+ * the absence looks like an oversight.
+ *
+ * What the sequence number is really asking is whether the deadline this timer
+ * is about is still the one that is due, and that question can be answered from
+ * the deadline itself: a timer only acts when the deadline it finds under the
+ * lock is a real one and has actually passed. A deadline moved later is not
+ * past, so the late timer does nothing and the new arming fires in its own
+ * time. A deadline cleared is not a deadline, so it does nothing. A deadline
+ * moved earlier is past, and acting on it is right rather than stale, because
+ * being past is the whole of what makes a deadline worth acting on. Even a slot
+ * closed and reused underneath the timer lands on the same answer, since the
+ * new connection's deadline either has passed, in which case it was due, or has
+ * not, in which case nothing happens. One clock read against a counter and the
+ * word of state that goes with it. */
+
+static void deadline_fired(burrow__PollDesc *pd, bool read, bool write) {
+    burrow__lock(&pd->mu);
+
+    int64_t now = burrow__nanotime();
+    bool rexp = read && pd->rd > 0 && pd->rd <= now;
+    bool wexp = write && pd->wd > 0 && pd->wd <= now;
+
+    if (!rexp && !wexp) {
+        burrow__unlock(&pd->mu);
+        return;
+    }
+
+    if (rexp)
+        pd->rd = -1;
+    if (wexp)
+        pd->wd = -1;
+    publish_info(pd);
+
+    /* False, not true, because a deadline is not the kernel saying there is
+     * something to be had. Leaving PD_READY behind would make the next wait in
+     * that direction come straight back claiming readiness that nobody was
+     * told about. */
+    int32_t delta = 0;
+    burrow__G *rg = rexp ? netpoll_unblock(pd, BURROW_POLL_READ, false, &delta) : NULL;
+    burrow__G *wg = wexp ? netpoll_unblock(pd, BURROW_POLL_WRITE, false, &delta) : NULL;
+    burrow__unlock(&pd->mu);
+
+    if (rg != NULL)
+        sched_ready(rg);
+    if (wg != NULL)
+        sched_ready(wg);
+    adjust_waiters(delta);
+}
+
+static void read_deadline(void *arg, int64_t delay) {
+    (void)delay;
+    deadline_fired((burrow__PollDesc *)arg, true, false);
+}
+
+static void write_deadline(void *arg, int64_t delay) {
+    (void)delay;
+    deadline_fired((burrow__PollDesc *)arg, false, true);
+}
+
+/* Both at once, which is what SetDeadline asks for and is the reason the two
+ * timers are not simply always both armed. */
+static void both_deadlines(void *arg, int64_t delay) {
+    (void)delay;
+    deadline_fired((burrow__PollDesc *)arg, true, true);
+}
+
+/* Stops both timers, with pd->mu held. */
+static void deadlines_stop(burrow__PollDesc *pd) {
+    if (pd->rt_armed) {
+        (void)burrow__timer_stop(&pd->rt);
+        pd->rt_armed = false;
+    }
+    if (pd->wt_armed) {
+        (void)burrow__timer_stop(&pd->wt);
+        pd->wt_armed = false;
+    }
+}
+
 /* ------------------------------------------------------------- starting up */
 
 bool burrow__netpoll_inited(void) {
@@ -454,6 +566,10 @@ int burrow__poll_open(burrow__PollFd fd, burrow__PollDesc **out) {
 
     pd->fd = fd;
     pd->closing = false;
+    pd->rd = 0;
+    pd->wd = 0;
+    pd->rt_armed = false;
+    pd->wt_armed = false;
     pd->handle = handle_of(pd->index, burrow__atomic_load_relaxed_u32(&pd->gen));
     burrow__atomic_store_relaxed_uptr(&pd->rg, PD_NIL);
     burrow__atomic_store_relaxed_uptr(&pd->wg, PD_NIL);
@@ -520,6 +636,12 @@ void burrow__poll_unblock(burrow__PollDesc *pd) {
     int32_t delta = 0;
     burrow__G *rg = netpoll_unblock(pd, BURROW_POLL_READ, false, &delta);
     burrow__G *wg = netpoll_unblock(pd, BURROW_POLL_WRITE, false, &delta);
+
+    /* The timers come off here rather than in burrow__poll_close, because this
+     * is the call that has the lock and is the one that happens first. A timer
+     * left armed on a descriptor that is going back on the free list is a timer
+     * that fires on somebody else's connection. */
+    deadlines_stop(pd);
     burrow__unlock(&pd->mu);
 
     if (rg != NULL)
@@ -527,6 +649,84 @@ void burrow__poll_unblock(burrow__PollDesc *pd) {
     if (wg != NULL)
         sched_ready(wg);
     adjust_waiters(delta);
+}
+
+bool burrow__poll_set_deadline(burrow__PollDesc *pd, int64_t when, uint32_t mode) {
+    if (mode == 0 || (mode & ~(BURROW_POLL_READ | BURROW_POLL_WRITE)) != 0)
+        runtime_throw(BURROW_S("netpoll: a deadline for neither reading nor writing"));
+    if (sched_current() == NULL)
+        runtime_throw(
+            BURROW_S("netpoll: a deadline set on a thread that is not a goroutine"));
+
+    /* Everything already past becomes the one value that means past, so that
+     * nothing below this line has to ask twice whether a reading from the clock
+     * has been overtaken by the clock. */
+    if (when != 0 && when <= burrow__nanotime())
+        when = -1;
+
+    burrow__lock(&pd->mu);
+
+    /* A deadline on a descriptor that is being closed is not an error and is
+     * not worth arming anything for. Every wait on it answers closed already,
+     * which is a better answer than a timeout. */
+    if (pd->closing) {
+        burrow__unlock(&pd->mu);
+        return true;
+    }
+
+    int64_t rd0 = pd->rd;
+    int64_t wd0 = pd->wd;
+    bool combo0 = rd0 > 0 && rd0 == wd0;
+
+    if ((mode & BURROW_POLL_READ) != 0)
+        pd->rd = when;
+    if ((mode & BURROW_POLL_WRITE) != 0)
+        pd->wd = when;
+    publish_info(pd);
+
+    /* One timer when both deadlines are the same instant, which is what the two
+     * together mode always produces and is therefore the usual case. The read
+     * timer is the one that carries both. */
+    bool combo = pd->rd > 0 && pd->rd == pd->wd;
+    burrow__TimerFn rf = combo ? both_deadlines : read_deadline;
+    bool ok = true;
+
+    if (!pd->rt_armed || pd->rd != rd0 || combo != combo0) {
+        if (pd->rd > 0) {
+            pd->rt_armed = burrow__timer_reset(&pd->rt, pd->rd, 0, rf, pd, NULL);
+            ok = ok && pd->rt_armed;
+        } else if (pd->rt_armed) {
+            (void)burrow__timer_stop(&pd->rt);
+            pd->rt_armed = false;
+        }
+    }
+
+    if (!pd->wt_armed || pd->wd != wd0 || combo != combo0) {
+        if (pd->wd > 0 && !combo) {
+            pd->wt_armed =
+                burrow__timer_reset(&pd->wt, pd->wd, 0, write_deadline, pd, NULL);
+            ok = ok && pd->wt_armed;
+        } else if (pd->wt_armed) {
+            (void)burrow__timer_stop(&pd->wt);
+            pd->wt_armed = false;
+        }
+    }
+
+    /* A deadline that was already past when it was set. Nothing is going to
+     * fire, so whoever is waiting is woken here instead. */
+    int32_t delta = 0;
+    burrow__G *rg =
+        pd->rd < 0 ? netpoll_unblock(pd, BURROW_POLL_READ, false, &delta) : NULL;
+    burrow__G *wg =
+        pd->wd < 0 ? netpoll_unblock(pd, BURROW_POLL_WRITE, false, &delta) : NULL;
+    burrow__unlock(&pd->mu);
+
+    if (rg != NULL)
+        sched_ready(rg);
+    if (wg != NULL)
+        sched_ready(wg);
+    adjust_waiters(delta);
+    return ok;
 }
 
 void burrow__netpoll_drop_waiters(void) {

@@ -888,8 +888,8 @@ gives back a `PollDesc`, `burrow__poll_wait` parks the calling goroutine until
 the descriptor is ready in the direction asked for, `burrow__poll_unblock`
 wakes every goroutine on a descriptor and leaves it woken so that a close is
 not a race, and `burrow__poll_close` gives the descriptor back. A wait answers
-ready, closed, timed out or unpollable, and the third of those is unreachable
-until deadlines land.
+ready, closed, timed out or unpollable. A fifth call,
+`burrow__poll_set_deadline`, is what makes the timed out answer reachable.
 
 Registration is edge triggered and happens once, for both directions together,
 for as long as the descriptor is open. That is Go's choice and it is why a busy
@@ -935,8 +935,44 @@ routinely: a wakeup meant for another thread, a signal, a deadline another
 thread got to first. Only when there is no P left to take does the thread fall
 through to the ordinary note.
 
-Deadlines are the next piece and they are a timer per descriptor per direction
-on top of this, which is what `net.Conn.SetDeadline` needs. After that, IOCP.
+Deadlines are a timer per descriptor per direction on top of all that, which is
+what `net.Conn.SetDeadline` needs. `burrow__poll_set_deadline` takes a
+descriptor, an instant on the runtime clock and a direction, and each direction
+keeps the deadline it was given in one of three states: zero for no deadline,
+a positive instant for one that has not arrived, and minus one for one that
+has. That last state is what every later wait in that direction answers timed
+out from, until somebody sets a new deadline, which is what Go does and is the
+behaviour `net` callers rely on when a timed out connection stays timed out
+rather than quietly becoming usable again.
+
+When both deadlines are the same instant, which is exactly what `SetDeadline`
+asks for and therefore the common case, only one timer is armed and it expires
+both directions. Two timers exist because the two deadlines can move
+independently, and the moment one of them does the pair splits.
+
+The one thing deliberately left out is Go's sequence number. Go carries an
+`rseq` and a `wseq` per direction, snapshots one into the timer when it arms
+and compares it when the timer fires, so that a timer which went off after its
+deadline moved does nothing. burrow's timer has no field to carry a sequence in
+and adding one would widen every timer in the program, so the callback asks the
+question directly instead: it acts only if the deadline for that direction is
+still positive and still in the past. A deadline moved later is not in the
+past, so a stale timer does nothing and the new arming fires in its own time.
+A deadline cleared is not positive. A deadline moved earlier is in the past and
+acting on it is right rather than stale. Even a descriptor closed and reused
+under a timer that is still in flight lands on the same answer, because the
+close clears both deadlines. The cost is one clock reading per firing and the
+saving is a word on every descriptor and a counter to keep in step.
+
+Timers are initialised once for the lifetime of a cache slot rather than once
+per descriptor, because a timer that has fired and has not yet been dropped
+from its P's heap is still in that heap, and re-arming it from there is the
+cheap path. They are stopped in `burrow__poll_unblock`, which is the call that
+already holds the descriptor's lock and the one that happens first on the way
+to a close. A timer left armed on a descriptor going back on the free list is a
+timer that fires on somebody else's connection.
+
+After this, IOCP.
 
 ## 9. Preemption
 

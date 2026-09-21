@@ -429,6 +429,291 @@ TEST(many_descriptors_and_many_waiters_at_once) {
     }
 }
 
+/* ------------------------------------------------------------- the deadlines */
+
+/* Writes until the kernel says the send buffer is full, so that the next write
+ * on this socket is one that has to wait. There is no portable size for that
+ * buffer, so the loop is bounded by something far larger than any of them and a
+ * failure to fill is a failure of the test rather than a silent pass. */
+static bool fill_socket(int fd) {
+    static char buf[4096];
+
+    for (int i = 0; i < 100000; i++) {
+        ssize_t n = write(fd, buf, sizeof buf);
+        if (n < 0)
+            return errno == EAGAIN || errno == EWOULDBLOCK;
+    }
+    return false;
+}
+
+static int64_t dl_elapsed;
+static burrow__PollStatus dl_first;
+static burrow__PollStatus dl_second;
+static burrow__PollStatus dl_third;
+static bool dl_set;
+
+static void read_deadline_passes(void *env) {
+    (void)env;
+
+    if (!pipe_open(&shared))
+        return;
+    if (burrow__poll_open(shared.rd, &shared_pd) != 0)
+        return;
+
+    dl_set = burrow__poll_set_deadline(
+        shared_pd, burrow__nanotime() + 40 * TIME_MILLISECOND, BURROW_POLL_READ);
+
+    int64_t start = burrow__nanotime();
+    dl_first = burrow__poll_wait(shared_pd, BURROW_POLL_READ);
+    dl_elapsed = burrow__nanotime() - start;
+
+    /* A deadline that has gone by stays gone by. This is the part that makes a
+     * timed out connection stay timed out rather than quietly working again on
+     * the next read. */
+    dl_second = burrow__poll_wait(shared_pd, BURROW_POLL_READ);
+
+    /* And clearing it puts the descriptor back to work. */
+    (void)burrow__poll_set_deadline(shared_pd, 0, BURROW_POLL_READ);
+    CHECK(put_byte(shared.wr));
+    dl_third = burrow__poll_wait(shared_pd, BURROW_POLL_READ);
+}
+
+TEST(a_read_deadline_that_passes_wakes_the_waiter) {
+    shared = (Pipe){-1, -1};
+    shared_pd = NULL;
+    dl_set = false;
+    dl_elapsed = 0;
+    dl_first = BURROW_POLL_UNPOLLABLE;
+    dl_second = BURROW_POLL_UNPOLLABLE;
+    dl_third = BURROW_POLL_UNPOLLABLE;
+    (void)runtime_gomaxprocs(2);
+
+    runtime_main(BURROW_FN(Func, read_deadline_passes, NULL));
+
+    CHECK(dl_set);
+    CHECK_INT_EQ(dl_first, BURROW_POLL_TIMEOUT);
+    CHECK_INT_EQ(dl_second, BURROW_POLL_TIMEOUT);
+    CHECK_INT_EQ(dl_third, BURROW_POLL_READY);
+
+    /* It waited, rather than answering at once. The bound is well under the
+     * forty milliseconds asked for, because what is being checked is that a
+     * timer ran and not how good the timer is at being on time. */
+    CHECK(dl_elapsed > 20 * TIME_MILLISECOND);
+
+    if (shared_pd != NULL) {
+        burrow__poll_unblock(shared_pd);
+        burrow__poll_close(shared_pd);
+    }
+    pipe_shut(&shared);
+}
+
+/* A socket rather than a pipe, because the second half of this asks about the
+ * write direction and the read end of a pipe is never writable. */
+static void deadline_already_past(void *env) {
+    (void)env;
+
+    if (!socket_pair(sock))
+        return;
+    if (burrow__poll_open(sock[0], &sock_pd) != 0)
+        return;
+
+    dl_set = burrow__poll_set_deadline(sock_pd, burrow__nanotime() - TIME_SECOND,
+                                       BURROW_POLL_READ);
+
+    int64_t start = burrow__nanotime();
+    dl_first = burrow__poll_wait(sock_pd, BURROW_POLL_READ);
+    dl_elapsed = burrow__nanotime() - start;
+
+    /* The other direction was not asked about and is not affected by this one,
+     * which is the reason the two are separate bits rather than one. */
+    dl_second = burrow__poll_wait(sock_pd, BURROW_POLL_WRITE);
+}
+
+TEST(a_deadline_already_past_times_out_without_parking) {
+    sock[0] = -1;
+    sock[1] = -1;
+    sock_pd = NULL;
+    dl_set = false;
+    dl_elapsed = 0;
+    dl_first = BURROW_POLL_UNPOLLABLE;
+    dl_second = BURROW_POLL_UNPOLLABLE;
+    (void)runtime_gomaxprocs(2);
+
+    runtime_main(BURROW_FN(Func, deadline_already_past, NULL));
+
+    CHECK(dl_set);
+    CHECK_INT_EQ(dl_first, BURROW_POLL_TIMEOUT);
+    CHECK(dl_elapsed < 10 * TIME_MILLISECOND);
+    CHECK_INT_EQ(dl_second, BURROW_POLL_READY);
+
+    if (sock_pd != NULL) {
+        burrow__poll_unblock(sock_pd);
+        burrow__poll_close(sock_pd);
+    }
+    if (sock[0] >= 0)
+        (void)close(sock[0]);
+    if (sock[1] >= 0)
+        (void)close(sock[1]);
+}
+
+static void write_after_a_pause(void *env) {
+    (void)env;
+    time_sleep(20 * TIME_MILLISECOND);
+    wrote = put_byte(shared.wr);
+    burrow__atomic_add_u32(&done, 1);
+}
+
+static void deadline_moves(void *env) {
+    (void)env;
+
+    if (!pipe_open(&shared))
+        return;
+    if (burrow__poll_open(shared.rd, &shared_pd) != 0)
+        return;
+
+    /* Armed close enough to be believable, then pushed far enough out that a
+     * timer which fired on the first one would be seen. This is the case a
+     * sequence number exists for in Go and that the clock reading covers here. */
+    CHECK(burrow__poll_set_deadline(
+        shared_pd, burrow__nanotime() + 20 * TIME_MILLISECOND, BURROW_POLL_READ));
+    time_sleep(10 * TIME_MILLISECOND);
+    CHECK(burrow__poll_set_deadline(shared_pd, burrow__nanotime() + 5 * TIME_SECOND,
+                                    BURROW_POLL_READ));
+
+    CHECK(go(BURROW_FN(Func, write_after_a_pause, NULL)));
+
+    int64_t start = burrow__nanotime();
+    dl_first = burrow__poll_wait(shared_pd, BURROW_POLL_READ);
+    dl_elapsed = burrow__nanotime() - start;
+    CHECK(wait_for(&done, 1));
+}
+
+TEST(a_deadline_moved_out_does_not_fire_on_the_old_one) {
+    shared = (Pipe){-1, -1};
+    shared_pd = NULL;
+    wrote = false;
+    done = 0;
+    dl_elapsed = 0;
+    dl_first = BURROW_POLL_UNPOLLABLE;
+    (void)runtime_gomaxprocs(2);
+
+    runtime_main(BURROW_FN(Func, deadline_moves, NULL));
+
+    CHECK(wrote);
+    CHECK_INT_EQ(dl_first, BURROW_POLL_READY);
+    CHECK(dl_elapsed < TIME_SECOND);
+
+    if (shared_pd != NULL) {
+        burrow__poll_unblock(shared_pd);
+        burrow__poll_close(shared_pd);
+    }
+    pipe_shut(&shared);
+}
+
+static void write_deadline_passes(void *env) {
+    (void)env;
+
+    if (!socket_pair(sock))
+        return;
+    if (burrow__poll_open(sock[0], &sock_pd) != 0)
+        return;
+    if (!fill_socket(sock[0]))
+        return;
+
+    dl_set = burrow__poll_set_deadline(
+        sock_pd, burrow__nanotime() + 40 * TIME_MILLISECOND, BURROW_POLL_WRITE);
+
+    int64_t start = burrow__nanotime();
+    dl_first = burrow__poll_wait(sock_pd, BURROW_POLL_WRITE);
+    dl_elapsed = burrow__nanotime() - start;
+}
+
+TEST(a_write_deadline_that_passes_wakes_the_waiter) {
+    sock[0] = -1;
+    sock[1] = -1;
+    sock_pd = NULL;
+    dl_set = false;
+    dl_elapsed = 0;
+    dl_first = BURROW_POLL_UNPOLLABLE;
+    (void)runtime_gomaxprocs(2);
+
+    runtime_main(BURROW_FN(Func, write_deadline_passes, NULL));
+
+    CHECK(dl_set);
+    CHECK_INT_EQ(dl_first, BURROW_POLL_TIMEOUT);
+    CHECK(dl_elapsed > 20 * TIME_MILLISECOND);
+
+    if (sock_pd != NULL) {
+        burrow__poll_unblock(sock_pd);
+        burrow__poll_close(sock_pd);
+    }
+    if (sock[0] >= 0)
+        (void)close(sock[0]);
+    if (sock[1] >= 0)
+        (void)close(sock[1]);
+}
+
+static void both_directions_time_out(void *env) {
+    (void)env;
+
+    dl_third = burrow__poll_wait(sock_pd, BURROW_POLL_READ);
+    burrow__atomic_add_u32(&done, 1);
+}
+
+static void one_deadline_both_ways(void *env) {
+    (void)env;
+
+    if (!socket_pair(sock))
+        return;
+    if (burrow__poll_open(sock[0], &sock_pd) != 0)
+        return;
+    if (!fill_socket(sock[0]))
+        return;
+
+    /* Both directions to the same instant, which is what SetDeadline does and
+     * is the case that arms one timer rather than two. */
+    dl_set =
+        burrow__poll_set_deadline(sock_pd, burrow__nanotime() + 40 * TIME_MILLISECOND,
+                                  BURROW_POLL_READ | BURROW_POLL_WRITE);
+
+    CHECK(go(BURROW_FN(Func, both_directions_time_out, NULL)));
+    dl_first = burrow__poll_wait(sock_pd, BURROW_POLL_WRITE);
+    CHECK(wait_for(&done, 1));
+
+    /* Moving one of them on its own splits the pair back into two timers, and
+     * the one that was not moved has to stay where it was. */
+    (void)burrow__poll_set_deadline(sock_pd, 0, BURROW_POLL_READ);
+    dl_second = burrow__poll_wait(sock_pd, BURROW_POLL_WRITE);
+}
+
+TEST(one_deadline_covers_both_directions) {
+    sock[0] = -1;
+    sock[1] = -1;
+    sock_pd = NULL;
+    done = 0;
+    dl_set = false;
+    dl_first = BURROW_POLL_UNPOLLABLE;
+    dl_second = BURROW_POLL_UNPOLLABLE;
+    dl_third = BURROW_POLL_UNPOLLABLE;
+    (void)runtime_gomaxprocs(2);
+
+    runtime_main(BURROW_FN(Func, one_deadline_both_ways, NULL));
+
+    CHECK(dl_set);
+    CHECK_INT_EQ(dl_first, BURROW_POLL_TIMEOUT);
+    CHECK_INT_EQ(dl_third, BURROW_POLL_TIMEOUT);
+    CHECK_INT_EQ(dl_second, BURROW_POLL_TIMEOUT);
+
+    if (sock_pd != NULL) {
+        burrow__poll_unblock(sock_pd);
+        burrow__poll_close(sock_pd);
+    }
+    if (sock[0] >= 0)
+        (void)close(sock[0]);
+    if (sock[1] >= 0)
+        (void)close(sock[1]);
+}
+
 /* ------------------------------------------------- the one that needs the poller */
 
 static burrow__Thread outsider;
@@ -517,6 +802,11 @@ int main(void) {
     RUN(a_reader_and_a_writer_share_one_descriptor);
     RUN(unblocking_wakes_the_waiter_and_stays_closed);
     RUN(many_descriptors_and_many_waiters_at_once);
+    RUN(a_read_deadline_that_passes_wakes_the_waiter);
+    RUN(a_deadline_already_past_times_out_without_parking);
+    RUN(a_deadline_moved_out_does_not_fire_on_the_old_one);
+    RUN(a_write_deadline_that_passes_wakes_the_waiter);
+    RUN(one_deadline_covers_both_directions);
     RUN(the_last_thread_sleeps_inside_the_poller);
     RUN(the_last_thread_sleeps_inside_the_poller_again);
     return harness_report("netpoll");

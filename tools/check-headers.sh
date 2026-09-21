@@ -60,8 +60,11 @@ for f in $sources; do
 		;;
 	esac
 
+	# The year is the upstream file's own, since that is the notice being
+	# carried, and Go's tree has files from 2009 through to last year. So the
+	# check is that the notice is there and not that it says any one year.
 	case "$head" in
-	*"Copyright 2009 The Go Authors"*) ;;
+	*"The Go Authors. All rights reserved."*) ;;
 	*)
 		printf '%s: derived from %s but does not carry the Go Authors copyright\n' "$f" "$upstream" >&2
 		status=1

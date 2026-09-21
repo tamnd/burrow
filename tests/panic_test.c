@@ -395,6 +395,55 @@ TEST(a_panic_from_a_catch_block_goes_outward) {
     check_clean();
 }
 
+/* The same thing again, with the blocks in frames of their own.
+ *
+ * The version above has both blocks in one frame, so the jump out of the catch
+ * never leaves a frame. These three do, and that is a different path: MSVC
+ * spells the end of a block as a __finally, and a longjmp past the frame runs
+ * it, after panic has already taken the block off the chain and moved the head
+ * further out. Windows is where this showed up and it is not a Windows test,
+ * because what it asserts is true everywhere. */
+static void innermost(void) {
+    BURROW_TRY {
+        panic_str(BURROW_S("first"));
+    }
+    BURROW_CATCH(p) {
+        record(p);
+        panic_str(BURROW_S("second"));
+    }
+    BURROW_TRY_END;
+}
+
+static void middle(void) {
+    BURROW_TRY {
+        innermost();
+    }
+    BURROW_CATCH(p) {
+        record(p);
+        panic_str(BURROW_S("third"));
+    }
+    BURROW_TRY_END;
+}
+
+TEST(a_panic_from_a_catch_block_in_a_called_function_goes_outward) {
+    reset();
+
+    BURROW_TRY {
+        middle();
+    }
+    BURROW_CATCH(p) {
+        record(p);
+    }
+    BURROW_TRY_END;
+
+    /* Three catches, each one further out than the last. A block that caught
+     * twice, or a jump that went back into a frame it had already left, shows
+     * up here as the wrong count or the wrong text. */
+    CHECK_INT_EQ(catches, 3);
+    CHECK_STR_EQ(caught, "third");
+    check_clean();
+}
+
 static void returns_from_inside_a_try(void) {
     BURROW_TRY {
         return;
@@ -559,6 +608,7 @@ int main(void) {
 
     RUN(the_innermost_block_catches);
     RUN(a_panic_from_a_catch_block_goes_outward);
+    RUN(a_panic_from_a_catch_block_in_a_called_function_goes_outward);
     RUN(a_return_out_of_a_try_block_leaves_nothing_behind);
 
     RUN(a_panic_stays_on_the_goroutine_that_raised_it);

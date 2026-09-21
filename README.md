@@ -466,6 +466,31 @@ The fast paths are inline, so an uncontended lock is one compare and swap and ab
 
 Details, including why read locks do not nest and when an `RWMutex` is actually worth having: [docs/guides/sync.md](docs/guides/sync.md).
 
+## Waiting, and doing something once
+
+```c
+static SyncWaitGroup wg;
+
+for (int i = 0; i < n; i++)
+    sync_wait_group_go(&wg, BURROW_FN(Func, work, &jobs[i]));
+
+sync_wait_group_wait(&wg);
+```
+
+Go's `sync.WaitGroup`. `sync_wait_group_go` adds one and starts the goroutine together, so the counter and the goroutine cannot get out of step. The zero value is a group with nothing in it. Go's misuse checks come with it: a counter taken below zero and an `Add` on a group somebody is already waiting on both stop the program, because the alternative is a bug that does not show up on the machine it was written on.
+
+```c
+static SyncOnce started;
+
+sync_once_do(&started, BURROW_FN(Func, start, NULL));
+```
+
+Go's `sync.Once`. What it promises is that when any call returns, f has finished, which is stronger than "f runs once" and is why it is a mutex underneath rather than a compare and swap. The fast path is one atomic load, inline in the header.
+
+`sync.OnceFunc`, `sync.OnceValue` and `sync.OnceValues` are here too. Go returns closures from those and burrow cannot, so they are structs you declare with an initialiser macro, nothing is allocated and there is nothing to free. They remember a panic and raise it again on every later call, which is the difference from a bare `Once` and the reason to reach for one.
+
+Details: [docs/guides/sync.md](docs/guides/sync.md).
+
 ## Status
 
 Early. Nothing is usable yet.

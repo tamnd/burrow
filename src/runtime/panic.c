@@ -584,10 +584,18 @@ BURROW_NOINLINE void panic(Any v) {
     /* Off both chains before the jump. The panics started inside this block are
      * over, and the block itself cannot catch a second time, so a panic thrown
      * by the catch block goes outward rather than back into the setjmp that is
-     * running it. The close at the end of the block writes the same value to the
-     * same place again, which is what makes that safe. */
+     * running it.
+     *
+     * Marked closed as well as popped, and that second line is not tidying. A
+     * block whose frame the jump is about to leave still has a close waiting on
+     * it, and on Windows that close runs: MSVC spells the end of a block as a
+     * __finally, and a longjmp past the frame runs it. It would write this
+     * record's outer over a head that has since moved further out, which puts a
+     * frame nobody is in back at the front of the chain, and the next panic
+     * jumps into it. Closed here, that close is the no-op it should be. */
     st->panics = r->panics;
     st->recovers = r->outer;
+    r->chain = NULL;
     st->printing = false;
 
     BURROW_LONGJMP(r->jb);

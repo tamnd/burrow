@@ -38,7 +38,10 @@
 #ifndef BURROW_SYNC_H
 #define BURROW_SYNC_H
 
+#include "burrow/func.h"
+#include "burrow/iface.h"
 #include "burrow/own.h"
+#include "burrow/panic.h"
 #include "burrow/sync/atomic.h"
 #include "burrow/type.h"
 
@@ -285,6 +288,231 @@ BURROW_BORROWS(ret, rw) SyncLocker sync_rw_mutex_r_locker(SyncRWMutex *rw);
  * stops the program, the same as calling a method on a nil interface in Go. */
 void sync_locker_lock(SyncLocker l);
 void sync_locker_unlock(SyncLocker l);
+
+/* ----------------------------------------------------------- sync.WaitGroup
+ *
+ * A counter of things still to finish, and a way to wait for it to reach zero.
+ *
+ *     static SyncWaitGroup wg;
+ *
+ *     for (int i = 0; i < 4; i++)
+ *         sync_wait_group_go(&wg, BURROW_FN(Func, worker, &jobs[i]));
+ *     sync_wait_group_wait(&wg);
+ *
+ * The zero value is a group with nothing in it, so there is nothing to
+ * initialise, and the same rule about not copying applies. */
+typedef struct SyncWaitGroup {
+    /* The counter in the high 32 bits and the waiter count in the low ones, so
+     * that adding to the counter and reading how many are waiting is one
+     * atomic. Bit 31 is left alone: it is Go's synctest bubble flag, and
+     * keeping the hole means this layout does not have to move when
+     * testing/synctest lands. */
+    uint64_t state;
+
+    /* What the waiters queue on. Zero until somebody actually waits. */
+    uint32_t sema;
+} SyncWaitGroup;
+
+extern const Type *const TYPE_SYNC_WAIT_GROUP;
+
+/* Adds delta, which may be negative, to the counter. Releases everybody in Wait
+ * when the counter reaches zero, and stops the program if it goes below zero.
+ *
+ * The ordering rule is Go's and it is the part people get wrong. A call that
+ * takes the counter up from zero has to happen before the Wait it is meant to
+ * hold, which in practice means adding before starting the goroutine rather
+ * than inside it. Adding while the counter is already above zero, or
+ * subtracting, may happen whenever. Reusing a group for a second round of work
+ * means waiting for the first round to finish first.
+ *
+ * Prefer sync_wait_group_go, which cannot get any of that wrong. */
+void sync_wait_group_add(SyncWaitGroup *wg, int delta);
+
+/* Takes one off the counter. The same as adding minus one, and the name worth
+ * using because it is what the call site means. */
+void sync_wait_group_done(SyncWaitGroup *wg);
+
+/* Waits until the counter is zero. */
+void sync_wait_group_wait(SyncWaitGroup *wg);
+
+/* Adds one, starts f in a new goroutine, and takes one off when f returns.
+ *
+ * Go's WaitGroup.Go, and the call to reach for, since the counter and the
+ * goroutine cannot get out of step with each other. Answers false when the
+ * goroutine could not be started, and takes the one back off the counter first,
+ * so a group that fails to start anything is a group with nothing in it.
+ *
+ * f must not panic. A panic that nobody recovers inside a goroutine ends the
+ * program, and it ends it without taking one off the counter, so a Wait
+ * somewhere else cannot return and race the shutdown. That is Go's behaviour
+ * and it is deliberate. */
+bool sync_wait_group_go(SyncWaitGroup *wg, Func f);
+
+/* ---------------------------------------------------------------- sync.Once
+ *
+ * Runs one function one time, however many callers ask and however many of them
+ * ask at once.
+ *
+ *     static SyncOnce started;
+ *
+ *     void ensure_started(void) {
+ *         sync_once_do(&started, BURROW_FN(Func, start, NULL));
+ *     }
+ *
+ * The zero value has not run yet, so again there is nothing to initialise.
+ *
+ * What it promises is stronger than "f is called once", and the difference is
+ * the reason this is not just a compare and swap. When any call returns, f has
+ * finished. The caller that lost the race waits for the caller that won rather
+ * than carrying on past a half built thing. */
+typedef struct SyncOnce {
+    /* First, because it is the field the fast path reads and the only one an
+     * already initialised Once ever touches. */
+    SyncAtomicBool done;
+
+    SyncMutex m;
+} SyncOnce;
+
+extern const Type *const TYPE_SYNC_ONCE;
+
+void burrow__sync_once_do_slow(SyncOnce *o, Func f);
+
+/* Runs f if no call on this Once has run one yet, and otherwise waits for the
+ * call that is running one.
+ *
+ * A different f on a later call is not run. One Once means one action, and a
+ * second action wants a second Once.
+ *
+ * Calling this from inside f, on the same Once, deadlocks. So does calling it
+ * on a Once whose f is waiting for this goroutine.
+ *
+ * If f panics, the Once counts as done and later calls return without running
+ * anything. That is Go's rule: f had its turn. */
+static inline void sync_once_do(SyncOnce *o, Func f) {
+    if (!sync_atomic_bool_load(&o->done))
+        burrow__sync_once_do_slow(o, f);
+}
+
+/* ------------------------------------------------------------ sync.OnceFunc
+ *
+ * Go returns a closure from OnceFunc and lets the collector clean it up. C has
+ * no closures and no collector, so the state is a struct you declare and the
+ * function is a call on it. Nothing is allocated and there is nothing to free.
+ *
+ *     static SyncOnceFunc setup = SYNC_ONCE_FUNC(BURROW_FN(Func, load, NULL));
+ *
+ *     sync_once_func_call(&setup);
+ *
+ * The difference from a bare Once is what happens to a panic. A Once lets the
+ * panic out once and then reports the action as done, so every later caller
+ * carries on as if the thing had been built. These remember the panic and raise
+ * it again on every later call, so nobody gets a half built thing quietly. That
+ * is Go's behaviour for all three of these. */
+typedef struct SyncOnceFunc {
+    SyncOnce once;
+
+    /* Cleared once it has run, so that whatever the environment pointer keeps
+     * alive is not kept alive by this for the rest of the program. */
+    Func f;
+
+    /* Whether f returned rather than panicked. */
+    bool ok;
+
+    /* What it panicked with, when it did, and room to keep it.
+     *
+     * The value a catch block is holding lives in the frame that caught it, so
+     * it has to be copied somewhere that outlives that frame before it can be
+     * raised again later. Thirty two bytes covers every builtin and most small
+     * structs, which is the same bargain and the same number burrow/panic.h
+     * makes for a catch block. A panic value bigger than that keeps pointing
+     * where it pointed and has to outlive this struct, which in practice means
+     * do not panic with a large value you built on the stack. */
+    Any p;
+    burrow__PanicValue storage;
+} SyncOnceFunc;
+
+/* The initialiser, since the function to run has to be known before the first
+ * call and a zero value cannot hold it. Works at file scope and in a block. */
+#define SYNC_ONCE_FUNC(fn) ((SyncOnceFunc){.f = (fn)})
+
+/* Runs f once, and re-raises its panic on this and every later call if it
+ * panicked. */
+void sync_once_func_call(SyncOnceFunc *of);
+
+/* The same thing as a Func, for handing to something that takes one. Borrows
+ * of and is valid for exactly as long as it is. */
+BURROW_BORROWS(ret, of) Func sync_once_func_fn(SyncOnceFunc *of);
+
+/* ----------------------------------------------------------- sync.OnceValue
+ *
+ * The same, for a function that produces a value.
+ *
+ *     static Config cfg;
+ *
+ *     static Any load(void *env) {
+ *         (void)env;
+ *         cfg = read_config();
+ *         return BURROW_ANY(TYPE_CONFIG, &cfg);
+ *     }
+ *
+ *     static SyncOnceValue config = SYNC_ONCE_VALUE(BURROW_FN(AnyFunc, load, NULL));
+ *
+ *     Config *c = any_assert(sync_once_value_get(&config), TYPE_CONFIG);
+ *
+ * Go's OnceValue is generic in the result type. This one is an Any, for the
+ * reason every other place in the library that holds one value of any type is
+ * an Any: C has no type parameters, the descriptor is what carries the type,
+ * and an assertion on the way out is what the compiler would otherwise have
+ * checked. An Any points rather than holds, so what f returns has to outlive
+ * the SyncOnceValue, which is the ordinary rule for Any and is usually free
+ * here since the thing being computed once is usually a static. */
+typedef struct SyncOnceValue {
+    SyncOnce once;
+    AnyFunc f;
+    bool ok;
+    Any p;
+    burrow__PanicValue storage;
+    Any result;
+} SyncOnceValue;
+
+#define SYNC_ONCE_VALUE(fn) ((SyncOnceValue){.f = (fn)})
+
+/* Runs f once and gives back what it returned, on this and every later call.
+ * Re-raises f's panic instead if it panicked.
+ *
+ * The Any is the one f produced, kept in ov, so it is borrowed twice over: it
+ * lives as long as ov does, and what it points at has to outlive both. */
+BURROW_BORROWS(ret, ov) Any sync_once_value_get(SyncOnceValue *ov);
+
+/* ---------------------------------------------------------- sync.OnceValues
+ *
+ * Two results rather than one, because Go's second result is usually an error
+ * and dropping it would make this useless for the case it exists for.
+ *
+ * The function writes both through pointers rather than returning a pair, which
+ * is how the rest of the library spells two results. */
+typedef struct SyncOnceValues SyncOnceValues;
+
+/* What such a function looks like. Both out pointers are non-NULL and both are
+ * zeroed before the call. */
+BURROW_FUNC(SyncOnceValuesFn, void, Any *a, Any *b);
+
+struct SyncOnceValues {
+    SyncOnce once;
+    SyncOnceValuesFn f;
+    bool ok;
+    Any p;
+    burrow__PanicValue storage;
+    Any first;
+    Any second;
+};
+
+#define SYNC_ONCE_VALUES(fn) ((SyncOnceValues){.f = (fn)})
+
+/* Runs f once and writes both of its results through a and b, on this and every
+ * later call. Either pointer may be NULL to ignore that result. Re-raises f's
+ * panic instead if it panicked. */
+void sync_once_values_get(SyncOnceValues *ov, Any *a, Any *b);
 
 #ifdef __cplusplus
 }

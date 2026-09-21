@@ -64,6 +64,7 @@
 #define BURROW_IFACE_H
 
 #include "burrow/core.h"
+#include "burrow/func.h"
 #include "burrow/mem.h"
 #include "burrow/type.h"
 
@@ -201,6 +202,14 @@ bool any_equal(Any a, Any b);
  * of the value, so an Any holding an Int(1) and an Any holding an Int8(1) are
  * different keys, which is what Go does. */
 extern const Type *const TYPE_ANY;
+
+/* A function that produces one value of any type, which is Go's `func() any`.
+ *
+ * It is here rather than in burrow/func.h because that file cannot see Any, and
+ * it is one type rather than one per package because the packages that want it
+ * all want the same thing: sync.OnceValue computes a value once, sync.Pool
+ * makes one when the pool is empty. */
+BURROW_FUNC0(AnyFunc, Any);
 
 #if defined(BURROW_SHORT) && BURROW_SHORT
 #define CALL(v, m, ...) BURROW_CALL(v, m, __VA_ARGS__)

@@ -19,7 +19,7 @@
  * Derived from Go's src/internal/sync/mutex.go.
  * Go source: go1.27.1.
  *
- * Copyright 2009 The Go Authors. All rights reserved.
+ * Copyright 2024 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */

@@ -126,6 +126,86 @@ It is a vtable pointer and a data pointer, the same shape as every other interfa
 
 `sync_rw_mutex_r_locker` is Go's `RLocker`. Locking it takes a read lock and unlocking it gives that read lock back, which is how a `Cond` waits on the read side of an `RWMutex`. `Cond` is the main reason `Locker` exists at all, and it is the next thing to be written.
 
+## WaitGroup
+
+```c
+static SyncWaitGroup wg;
+
+static void work(void *env) {
+    Job *j = env;
+    process(j);
+}
+
+for (int i = 0; i < n; i++)
+    sync_wait_group_go(&wg, BURROW_FN(Func, work, &jobs[i]));
+
+sync_wait_group_wait(&wg);
+```
+
+A counter with a queue on it. `sync_wait_group_add` moves the counter, `sync_wait_group_done` takes one off, and `sync_wait_group_wait` returns when the counter reaches zero. The zero value is a group with nothing in it, so again there is nothing to initialise.
+
+`sync_wait_group_go` is Go's `WaitGroup.Go` and it is the call to reach for, because it adds one and starts the goroutine together and there is no window between them for anything to go wrong. It answers false when the goroutine could not be started and takes the one back off the counter first, so a group that failed to start anything is a group with nothing in it rather than a group nobody can wait on.
+
+The function handed to `sync_wait_group_go` must not panic. A panic nobody recovers inside a goroutine ends the program, and it ends it with the counter still up. That is deliberate and it is Go's behaviour: taking one off on the way out of a panic would let a `Wait` somewhere else return and race the shutdown, which can mean a process that exits zero while it is in the middle of reporting a crash.
+
+Two misuses stop the program rather than hanging somewhere else later. Taking the counter below zero, which is a `Done` too many. And adding to a group somebody is already waiting on, which means the `Add` that was supposed to happen before the `Wait` did not. Both are Go's checks and both are worth keeping, because the alternative is a bug that does not show up on the machine it was written on.
+
+The counter and the waiter count live in one `uint64_t`, the counter in the high half and the waiters in the low. That is what lets `Add` take the counter down and find out whether anybody is waiting in a single atomic, which is the whole trick: the two questions have to be answered together or a wakeup goes missing.
+
+An `Add` and a `Done` with nobody waiting is about thirteen nanoseconds on a server core, which is level with Go. Four goroutines started through `Go` and waited for is about 880 nanoseconds against Go's 2183, and that row is mostly the scheduler rather than the group.
+
+## Once
+
+```c
+static SyncOnce started;
+
+void ensure_started(void) {
+    sync_once_do(&started, BURROW_FN(Func, start, NULL));
+}
+```
+
+Runs one function one time, however many callers ask and however many ask at once.
+
+What it promises is stronger than "f is called once", and the difference is the reason this is not just a compare and swap. When any call returns, f has finished. A compare and swap gives the first guarantee and not the second: the caller that loses the race would return straight away, past a thing that is still being built. So the slow path is a mutex, the flag is set after f returns rather than before it runs, and the loser waits on the mutex for the winner.
+
+The fast path is one atomic load and a branch, inline in the header, which is all a `Once` that has already run ever costs. It measures at about a nanosecond and Go's at about half of one, and both figures are a loop rather than a `Once`: the body is a single load and the loop around it is larger than the body.
+
+A different function on a later call is not run. One `Once` means one action, and a second action wants a second `Once`. Calling `sync_once_do` from inside f, on the same `Once`, deadlocks.
+
+If f panics, the `Once` counts as done and later calls return without running anything. That is Go's rule and the reasoning is that f had its turn. It is also the reason the three wrappers below exist.
+
+## OnceFunc, OnceValue and OnceValues
+
+```c
+static SyncOnceFunc setup = SYNC_ONCE_FUNC(BURROW_FN(Func, load, NULL));
+
+sync_once_func_call(&setup);
+```
+
+The difference from a bare `Once` is what happens to a panic. A `Once` lets the panic out once and then reports the action as done, so every later caller carries on as if the thing had been built. These remember the panic and raise it again on every later call, so nobody gets a half built thing quietly. That is Go's behaviour for all three.
+
+Go returns a closure from each of them and lets the collector clean it up. C has no closures and no collector, so the state is a struct you declare and the function is a call on it. Nothing is allocated and there is nothing to free, and `sync_once_func_fn` hands back a `Func` for the cases that want to pass it on rather than call it. The cost of that shape is that the caller has to find somewhere to put the struct, which in practice is a static or a field of whatever the thing belongs to. The gain is that the call is direct: `sync_once_func_call` is 2.70 nanoseconds on a server core against Go's 5.34, and `sync_once_value_get` is 4.06 against 5.22.
+
+`SyncOnceValue` produces one value and `SyncOnceValues` produces two, because Go's second result is usually an error and dropping it would make the thing useless for the case it exists for.
+
+```c
+static Config cfg;
+
+static Any load(void *env) {
+    (void)env;
+    cfg = read_config();
+    return BURROW_ANY(TYPE_CONFIG, &cfg);
+}
+
+static SyncOnceValue config = SYNC_ONCE_VALUE(BURROW_FN(AnyFunc, load, NULL));
+
+Config *c = any_assert(sync_once_value_get(&config), TYPE_CONFIG);
+```
+
+Go's `OnceValue` is generic in the result type and this one is an `Any`, for the reason every other place in the library that holds one value of any type is an `Any`: C has no type parameters, the descriptor is what carries the type, and the assertion on the way out is what a compiler would otherwise have checked. An `Any` points rather than holds, so what f returns has to outlive the `SyncOnceValue`, which is usually free here since the thing being computed once is usually a static.
+
+One thing worth knowing about the panic these keep. A caught panic value lives in the frame that caught it, so keeping it for a later call means copying it out, and each of these three structs has thirty two bytes to copy it into. That is the same bargain and the same number `burrow/panic.h` makes for a catch block. A panic value bigger than that keeps pointing where it pointed, which in practice means do not panic with a large value you built on the stack.
+
 ## What it costs
 
 An uncontended lock and unlock is about eleven nanoseconds on a server core, which is what one compare and swap and one atomic add cost on hardware nobody else is touching. A write lock and unlock on an `RWMutex` is about twice that, because it goes through the inner mutex first and then touches the reader count. A read lock and unlock is the same as a plain mutex, since both are one atomic on one word.
@@ -142,9 +222,9 @@ Before queueing, a goroutine spins a few times, but only on a machine with more 
 
 ## What is not here yet
 
-`WaitGroup`, `Once`, `Cond`, `Map` and `Pool`, in roughly that order. All of them are on the P0 milestone and all of them are built on what is above.
+`Cond`, `Map` and `Pool`, in that order. All three are on the P0 milestone and all three are built on what is above.
 
-Until `WaitGroup` lands, waiting for a set of goroutines to finish is an atomic counter and a `runtime_gosched` loop, which works and is not what you want in the end.
+`Cond` needs one thing that does not exist yet, which is Go's `notifyList` from `src/runtime/sema.go`. The semaphore underneath these locks wakes one waiter at a time by address and a `Cond` needs to wake all of them by ticket, so that is a port of its own rather than a call into what is there.
 
 ## See also
 

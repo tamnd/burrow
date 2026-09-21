@@ -112,9 +112,9 @@ Everything else is Go's.
 
 ## What it costs
 
-A scope is one struct in your stack frame, and the deferred calls live in it. Four of them fit there. The fifth and everything after it go in one allocation from the heap allocator, which doubles as it fills and is freed before the scope returns, and that is the same trade Go makes for the defers it cannot open-code into the frame.
+A scope is one struct in your stack frame, and the deferred calls live in it. Eight of them fit there. The ninth and everything after it go in one allocation from the heap allocator, which doubles as it fills and is freed before the scope returns, and that is the same trade Go makes for the defers it cannot open-code into the frame.
 
-Four is the number because a scope with more than four cleanups in it is rare, and carrying room for eight in every scope in the library is a worse deal than paying for the fifth where somebody actually writes it. It is not a knob, since the number is part of the shape of the struct.
+Eight is the number for two reasons. It is where Go's compiler gives up on open-coding as well, so a scope that allocates here is a function that would allocate there. And it was four first, on the argument that a scope with five cleanups in it is rare enough to pay for the fifth itself, which burrow-bench answered: the fifth call cost about a hundred nanoseconds, because paying means a malloc and a free, and the four empty slots cost sixty four bytes of a frame and no time, because the array is never initialised. It is not a knob, since the number is part of the shape of the struct.
 
 The calls live in the scope rather than one local variable each because the last of them runs after your closing brace, and a variable declared between your braces is dead by then. That is a rule C has always had, an address sanitizer will tell you about it, and it is the kind of thing that works in every test you write and then does not.
 

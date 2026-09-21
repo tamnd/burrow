@@ -4,7 +4,7 @@
  * long explanation. What is worth saying here is where the calls live and where
  * the chain lives, which are two different questions with two answers.
  *
- * The calls live in the scope, four of them in the scope itself and the rest in
+ * The calls live in the scope, eight of them in the scope itself and the rest in
  * one allocation hanging off it. The obvious alternative is one record per
  * deferred call declared where the defer is written, which is free and which is
  * wrong: those records are between the caller's braces and the last of the
@@ -44,8 +44,8 @@
 static BURROW_THREAD_LOCAL burrow__DeferScope *thread_scopes;
 
 /* The first size the overflow is asked for, and it is eight rather than one
- * because a scope that has gone past four calls is a scope collecting them in a
- * loop, and a loop rarely goes round once. */
+ * because a scope that has gone past the eight in the frame is a scope
+ * collecting calls in a loop, and a loop rarely goes round once. */
 #define OVER_FIRST 8
 
 burrow__DeferScope **burrow__defer_chain(void) {

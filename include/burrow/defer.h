@@ -76,11 +76,12 @@
  *
  * ---------------------------------------------------------------- what it costs
  *
- * A scope is one struct in your frame and the deferred calls live in it, four
- * of them without asking anything of anybody. The fifth and everything after it
- * go in one allocation from the heap allocator that doubles as it fills and is
- * freed before the scope returns, which is the same trade Go makes when it
- * cannot open-code a frame's defers.
+ * A scope is one struct in your frame and the deferred calls live in it, eight
+ * of them without asking anything of anybody, which is the same number Go's
+ * compiler open-codes into a frame. The ninth and everything after it go in one
+ * allocation from the heap allocator that doubles as it fills and is freed
+ * before the scope returns, which is the same trade Go makes when it cannot
+ * open-code a frame's defers.
  *
  * The calls live in the scope rather than each in its own local so that the
  * storage outlives your braces, since that is where the last of it runs. A
@@ -129,12 +130,19 @@ extern "C" {
 
 /* How many deferred calls a scope holds before it has to allocate.
  *
- * Four because a scope with more than four cleanups in it is rare enough that
- * paying for the fifth is better than every scope in the library carrying room
- * for a case it does not have. It is not a knob: the number is part of the
- * shape of the struct below, so a translation unit that changed it would
- * disagree with the library about where the fields are. */
-#define BURROW_DEFER_INLINE 4
+ * Eight, which is also where Go's compiler stops open-coding defers into the
+ * frame, and it is eight because burrow-bench measured the alternative. It was
+ * four, on the argument that a scope with five cleanups in it is rare and
+ * should be the one that pays. The row that came back said the fifth call cost
+ * a hundred nanoseconds, because paying means a malloc and a free, while the
+ * four empty slots cost sixty four bytes of a stack frame and no time at all:
+ * this array is deliberately never initialised, so a slot nobody uses is
+ * address space and nothing more.
+ *
+ * It is not a knob. The number is part of the shape of the struct below, so a
+ * translation unit that changed it would disagree with the library about where
+ * the fields are. */
+#define BURROW_DEFER_INLINE 8
 
 /* One scope, living in the frame that opened it.
  *

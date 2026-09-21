@@ -618,10 +618,12 @@ Underneath, `BURROW_SCOPE` is the `cleanup` attribute on GCC and Clang and
 `__try`/`__finally` on MSVC, and both of those handle a `return` out of the
 middle, which is the only property the block needs from the compiler.
 
-The deferred calls live in the scope itself: four of them in the struct and the
+The deferred calls live in the scope itself: eight of them in the struct and the
 rest in one allocation that doubles as it fills and is freed before the scope
 returns, which is the trade Go makes for the defers it cannot open-code into a
-frame. The obvious cheaper layout is one record per defer, declared where the
+frame. Eight is the number Go's compiler stops open-coding at, and it was four
+here until burrow-bench priced the fifth call at a hundred nanoseconds against
+sixty four bytes of never initialised frame for the four slots that fill it. The obvious cheaper layout is one record per defer, declared where the
 defer is written, and it is wrong for a reason that takes a sanitizer to
 notice. Those records sit between the caller's braces, the calls run after that
 block has ended, and an object's lifetime in C ends with the block that declares

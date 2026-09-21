@@ -396,7 +396,7 @@ The block is required and a `BURROW_DEFER` outside one does not compile. That is
 
 The one difference from Go is the unit: a scope rather than a function. Put the scope around the whole function body and you have Go's rule back. Leave it inside a loop and you get the thing Go programmers actually wanted, which is the file closed on every turn rather than n of them held open until the function returns.
 
-A scope is one struct in your frame and the calls live in it, four of them with nothing allocated. A scope that goes past four takes one allocation that doubles as it fills and is freed before the scope returns, which is the trade Go makes for the defers it cannot put in the frame. The chain of open scopes belongs to the goroutine rather than the thread, so a goroutine that parks mid scope and wakes up elsewhere keeps its defers, and `runtime_goexit` runs all of them on the way out.
+A scope is one struct in your frame and the calls live in it, eight of them with nothing allocated, which is the same number Go's compiler open-codes into a frame. A scope that goes past eight takes one allocation that doubles as it fills and is freed before the scope returns, which is the trade Go makes for the defers it cannot put in the frame. The chain of open scopes belongs to the goroutine rather than the thread, so a goroutine that parks mid scope and wakes up elsewhere keeps its defers, and `runtime_goexit` runs all of them on the way out.
 
 Details: [docs/guides/defer.md](docs/guides/defer.md).
 

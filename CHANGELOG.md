@@ -4,6 +4,26 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+`sync/atomic` is here, both halves of it, in the new `burrow/sync/atomic.h`.
+
+### sync/atomic
+
+- The plain functions come first: `add`, `and`, `or`, `load`, `store`, `swap` and `compare_and_swap` over `int32`, `int64`, `uint32`, `uint64` and `uintptr`, plus the four that make sense for a pointer. Thirty nine functions, each one Go's with Go's argument order and Go's return value, so add gives back the new total and and and or give back the old one.
+- The types come second: `SyncAtomicBool`, `SyncAtomicInt32`, `SyncAtomicInt64`, `SyncAtomicUint32`, `SyncAtomicUint64`, `SyncAtomicUintptr`, `SyncAtomicPointer` and `SyncAtomicValue`. The zero value of every one of them is ready to use and costs what the integer costs, so one in a struct of your own changes neither its size nor its alignment.
+- The prefix is `sync_atomic_` and not `atomic_` because `<stdatomic.h>` reserves `atomic_` followed by a lowercase letter for functions the C committee has not written yet. It is the import path with the slash turned into an underscore, which is the rule the rest of the library already follows, so it needs no special case anywhere.
+- `SyncAtomicPointer` is one type rather than Go's `Pointer[T]`, since `void *` converts both ways without a cast and a lock free list then needs no instantiation and no macro. What is given up is the compiler noticing that you stored one type and loaded another.
+- `SyncAtomicValue` is Go's `Value`, ported from `src/sync/atomic/value.go`. An `Any` is two words, so the type descriptor is stored last and loaded first, and the first store is serialised behind a sentinel that no reader can mistake for a type. A reader that lands in the middle answers nil, which is the answer it would have given a moment earlier, and a second storer spins and then yields rather than guessing what type the value is going to be. Compare and swap goes through the descriptor, so it compares values and not addresses.
+- The panics are Go's, word for word, on a nil value and on a value whose type is not the one the first store used.
+- Everything except the four `Value` calls is inline, so an add is one `lock xadd` on x86 and one `ldaddal` on arm64. The signed functions do their arithmetic unsigned and convert back through `burrow__int32_wrap` and `burrow__int64_wrap`, because signed overflow is undefined in C and a counter that wraps is a counter somebody wrapped on purpose.
+- Sequential consistency throughout, which is the only ordering Go's package offers. Acquire and release stay in `burrow/atomic.h` for code that has thought about which one it wants.
+
+### Tests
+
+- 170 single threaded checks over every function, every type and every panic, and 4072 more under eight threads. The contention tests ask questions whose answer is known in advance and only reachable if nothing was lost: every thread counting to twenty thousand, every thread claiming a bit of its own, and thousands of untouched `Value` slots where exactly one swap per slot may come back empty and exactly one compare and swap per slot may win.
+- The whole single threaded file is compiled a second time with `BURROW_ATOMIC_FORCE_LOCK64` set, which puts the 64 bit surface on the lock table path a 32 bit machine would take. Nothing in CI is 32 bit, so without that the fallback would be run by nobody.
+
 ## v0.0.19 (2026-09-21)
 
 A panic that nobody catches now prints a stack trace under the message, which is the difference between knowing a program indexed past the end of a slice and knowing which line did it.

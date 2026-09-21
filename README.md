@@ -425,6 +425,24 @@ Underneath it is `setjmp` and `longjmp` on all three platforms, with the unwindi
 
 Details, including what a panicked value's lifetime actually is, which is the one thing that bites: [docs/guides/panic.md](docs/guides/panic.md).
 
+## Atomics
+
+```c
+static int64_t hits;
+sync_atomic_add_int64(&hits, 1);
+
+static SyncAtomicInt64 served;
+sync_atomic_int64_add(&served, 1);
+```
+
+Go's `sync/atomic`, both halves of it. The plain functions work on an object you already have, so a counter stays an `int64_t` in your own struct, and the types are the same operations bound to a value that can only be reached through them. Five integer widths with add, and, or, load, store, swap and compare and swap, plus the pointer set, plus `SyncAtomicBool` and `SyncAtomicValue`.
+
+`sync_atomic_` rather than `atomic_` because `<stdatomic.h>` reserves the short prefix for names the C committee has not written yet, and a library that takes a reserved name is a library that stops building on some future compiler for reasons its users cannot fix. It is the import path with the slash turned into an underscore, and it is the whole of the difference from Go's names.
+
+Everything except the four `SyncAtomicValue` calls is inline, so an add is one `lock xadd` on x86 and one `ldaddal` on arm64 with nothing around it. Sequential consistency throughout, which is the only ordering Go's package has. The acquire and release forms exist a layer down in `burrow/atomic.h` for code that has a reason.
+
+Details, including how `Value` publishes two words without a lock and what happens on a 32 bit machine: [docs/guides/atomics.md](docs/guides/atomics.md).
+
 ## Status
 
 Early. Nothing is usable yet.

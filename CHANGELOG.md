@@ -4,6 +4,16 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+### Runtime
+
+- Epoch based reclamation, in `burrow/reclaim.h`. `burrow__pin` and `burrow__unpin` mark the window in which a thread is following pointers into a structure somebody else may be unlinking from, and `burrow__retire` hands an unlinked object over to be freed once no reader can still be holding it. This is the piece Go gets from the garbage collector for free and burrow has to write, and `sync.Map` is the first thing that needs it.
+- A pin is one sequentially consistent store and an unpin is a store release. A goroutine finds its participant slot by indexing on its M, so the fast path has no compare and swap at all. A thread the scheduler did not start has no M to index on, so it takes a slot out of a pool on the way in and gives it back on the way out, which costs a compare and swap on each side. Slots come back rather than being kept, so a program that starts and stops threads in a loop does not run the table out.
+- Retired objects sit in a per M pocket and move to a shared list in batches of sixty four, so the walk of the participant slots that a collection needs is paid once per batch and not once per delete. The pockets are per M rather than thread local because a thread local list cannot be found by anybody else, and `burrow__reclaim_drain` at shutdown has to be able to find all of them.
+- The one rule is that a pinned thread must not park. A pin belongs to the thread and not to the goroutine, so a goroutine that blocks in the middle of one leaves the pin behind for whatever runs next on that thread and stops the epoch from moving until it comes back. This is the same rule Go's runtime has for `acquirem`.
+- `teardown` drains what is left when the runtime stops. Nothing is pinned at that point and the Ms are about to stop existing, so the last few objects go back rather than looking like a leak to a sanitizer.
+
 ## v0.0.22 (2026-09-21)
 
 `sync.Cond`, on a port of Go's `notifyList`. That is the whole release.

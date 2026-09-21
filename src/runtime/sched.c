@@ -45,6 +45,7 @@
 #include "burrow/mem/heap.h"
 #include "burrow/note.h"
 #include "burrow/platform.h"
+#include "burrow/reclaim.h"
 #include "burrow/runtime.h"
 #include "burrow/sched.h"
 #include "burrow/stack.h"
@@ -1582,6 +1583,12 @@ static void teardown(void) {
      * goroutine ends in opening one. outside_enter says the rest. */
     while (burrow__atomic_load_acquire_u32(&sched.noutside) != 0)
         burrow__thread_yield();
+
+    /* Anything an M retired and had not yet handed on is in that M's pocket,
+     * and the M is about to stop existing. Nobody is pinned by the time this
+     * runs, which is exactly the condition a drain needs, so the last few
+     * objects go back here rather than looking like a leak to a sanitizer. */
+    burrow__reclaim_drain();
 
     /* The timer sets go first, before any goroutine does, because a goroutine
      * that was asleep when the runtime stopped still has its timer in one of

@@ -33,6 +33,7 @@ category	fatal-handler	Where an unrecoverable runtime failure goes before the pr
 category	rand	The generator behind map iteration order and hash seeding.
 category	atomic-lock-table	The spin locks that stand in for 64 bit atomics on machines that do not have them.
 category	sema-table	The wait queues behind sync, keyed on the address of the counter being waited on, which is what makes them one per process by definition.
+category	reclaim	The epoch and the handover lists behind lock free reading. One epoch per process is the whole idea, since a reader on any thread has to be able to hold any of them back.
 category	clock	The conversion factor between what the machine's counter counts and nanoseconds. Fixed at boot, so it is asked for once.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
@@ -70,3 +71,14 @@ global	src/runtime/panic.c	thread_panic	scheduler	Thread local, and only reachab
 global	src/runtime/trace.c	thread_lo	scheduler	Thread local. The bottom of the stack this thread was given, asked for once because asking goes to the kernel on both Linux and macOS, and kept because a thread keeps its stack for as long as it exists.
 global	src/runtime/trace.c	thread_hi	scheduler	Thread local. The top of the same stack, written by the same first walk that fills the one above.
 global	src/runtime/trace.c	thread_asked	scheduler	Thread local. Whether the two above have been filled in, which is a separate flag because a system that will not say gets asked once rather than on every walk.
+global	src/runtime/reclaim.c	slots	reclaim	This is the synchronisation. One word per participant, each on its own cache line, written only by the thread that owns it and read by whoever is trying to move the epoch on. The store that pins is sequentially consistent so that the reads it protects cannot be hoisted above it.
+global	src/runtime/reclaim.c	cur_epoch	reclaim	Atomic. Read by every pin and written only under bag_lock by a thread that has just walked the slots and found nobody behind.
+global	src/runtime/reclaim.c	mhigh	reclaim	Atomic, and only ever raised. How far into the goroutine half of slots anybody has been, so the walk stops there. Raised before the slot it describes is published, which is what stops a walk from missing a pin.
+global	src/runtime/reclaim.c	fhigh	reclaim	The same as mhigh, for the half that foreign threads take from.
+global	src/runtime/reclaim.c	bag_lock	reclaim	This is the synchronisation for the three lists below and for the write to cur_epoch. Held for a splice and a walk of the slots, never across a free.
+global	src/runtime/reclaim.c	bag	reclaim	The handed over objects, one list per epoch modulo three, under bag_lock above.
+global	src/runtime/reclaim.c	bag_since	reclaim	How many objects have arrived on the bags since the last walk of the slots, under bag_lock above. It is the thing that decides whether this arrival pays for a walk.
+global	src/runtime/reclaim.c	pending	reclaim	Atomic counter, and nothing reads it to make a decision. It is there so a test and a debugger can see how much is waiting.
+global	src/runtime/reclaim.c	pockets	reclaim	What each M has retired and not yet pushed. Only the thread running that M touches its own entry, and the only reason they are an array rather than thread local is so that burrow__reclaim_drain can find them all at the end.
+global	src/runtime/reclaim.c	my_slot	reclaim	Thread local. Which slot this thread is pinned through, written and read by that thread alone.
+global	src/runtime/reclaim.c	my_depth	reclaim	Thread local. How many pins deep this thread is, so a pin inside a pin publishes once.

@@ -14,6 +14,10 @@ b-asan/
 b-tsan/
 b-msan/
 b-ubsan/
+bsan/
+btsan/
+bmsan/
+bport/
 *.o
 *.a
 *.so

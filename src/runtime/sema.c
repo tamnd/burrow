@@ -455,6 +455,14 @@ void burrow__sema_acquire(uint32_t *addr, bool lifo) {
             break;
     }
 
+    /* The waiter is on this frame and it was on a list in the global semtable a
+     * moment ago, which is what the analyser is objecting to. It is off that
+     * list on both ways out of the loop: the first break never queued on this
+     * turn, and the second one is reached only after waiter_sleep returned,
+     * which happens when a release has already dequeued this waiter to wake it.
+     * The analyser cannot follow that, because the dequeue is in another
+     * function and the wakeup that orders the two is a note. */
+    /* NOLINTNEXTLINE(clang-analyzer-core.StackAddressEscape) */
     waiter_free(&w);
 }
 

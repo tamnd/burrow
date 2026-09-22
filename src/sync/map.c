@@ -568,9 +568,15 @@ static bool indirect_empty(Indirect *i) {
  * subtree that is no longer attached to anything. */
 static void prune(Indirect *i, uint64_t hash, uint32_t shift) {
     while (i->parent != NULL && indirect_empty(i)) {
-        if (shift == HASH_BITS)
-            runtime_throw(BURROW_S("sync.Map: ran out of hash bits"));
+        /* Going up means the slot this node sits in was picked with a wider
+         * shift than the one it picks its own children with. The check is after
+         * the add rather than before it because what has to be in range is the
+         * value about to be shifted by, and a shift of 64 on a 64 bit word is
+         * undefined behaviour rather than zero. The tree cannot get this deep
+         * with a root whose parent is NULL, but nothing in the loop says so. */
         shift += NCHILD_LOG2;
+        if (shift >= HASH_BITS)
+            runtime_throw(BURROW_S("sync.Map: ran out of hash bits"));
 
         Indirect *parent = i->parent;
         burrow__lock(&parent->mu);

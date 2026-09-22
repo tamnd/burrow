@@ -40,9 +40,9 @@
 #ifndef BURROW_SCHED_H
 #define BURROW_SCHED_H
 
-#include "burrow/mcontext.h"
 #include "burrow/defer.h"
 #include "burrow/lock.h"
+#include "burrow/mcontext.h"
 #include "burrow/note.h"
 #include "burrow/own.h"
 #include "burrow/panic.h"

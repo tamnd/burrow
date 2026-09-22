@@ -20,8 +20,8 @@
 
 #include "burrow/stack.h"
 
-#include "burrow/mcontext.h"
 #include "burrow/core.h"
+#include "burrow/mcontext.h"
 #include "burrow/platform.h"
 #include "burrow/runtime.h"
 #include "burrow/thread.h"
@@ -246,7 +246,7 @@ TEST(a_context_runs_on_a_stack_this_file_allocated) {
 
     CHECK(burrow__mcontext_attach(&back_to));
     CHECK(burrow__mcontext_make(&ran_here, s.lo, usable(&s), note_where_i_am, &s,
-                               &back_to));
+                                &back_to));
     burrow__mcontext_switch(&back_to, &ran_here);
 
     CHECK(it_ran);

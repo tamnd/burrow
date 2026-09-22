@@ -32,6 +32,7 @@ Checks: >
   -readability-isolate-declaration,
   -readability-magic-numbers,
   -readability-math-missing-parentheses,
+  -readability-non-const-parameter,
   -readability-trailing-comma,
   -readability-use-concise-preprocessor-directives
 
@@ -101,6 +102,16 @@ Checks: >
 #     Wants parentheses around * inside +, which is the precedence every C
 #     programmer knows.
 #
+#   readability-non-const-parameter
+#     Almost everything in this library is reached through a vtable, and a
+#     vtable slot has one signature that every implementation of it has to
+#     match. An implementation that happens not to write through its out
+#     parameter, such as the Deadline of a context that has no deadline, cannot
+#     take a const pointer instead, because then it is not the same type and
+#     cannot go in the slot. The check has no way of knowing which functions are
+#     the members of an interface, so what it finds here is never the thing it
+#     is looking for.
+#
 #   readability-trailing-comma, -use-concise-preprocessor-directives
 #     Both arrive after the pinned 20.1.0, which reports them as unknown checks
 #     under --verify-config, and both disagree with how the tree is already
@@ -109,7 +120,7 @@ Checks: >
 #     pin moves.
 #
 CheckOptions:
-  # Feature macros. All four are reserved identifiers and being one is the
+  # Feature macros. All five are reserved identifiers and being one is the
   # whole point of them: they are the names a libc looks for when deciding what
   # to declare, and none of them has an unreserved spelling.
   #
@@ -117,11 +128,13 @@ CheckOptions:
   # src/runtime/mcontext.c and src/runtime/stack.c define it before their first
   # include. _POSIX_C_SOURCE is the smaller one next to it, which is what
   # src/runtime/clock.c asks for to get CLOCK_MONOTONIC and what
-  # src/runtime/note.c asks for to get pthread_condattr_setclock. The other two
-  # go with them wherever mmap is involved, because MAP_ANONYMOUS is not POSIX
-  # and asking a libc for POSIX is also telling it that is all you want:
-  # _DEFAULT_SOURCE puts the flag back on glibc and _DARWIN_C_SOURCE puts it
-  # back on macOS.
+  # src/runtime/note.c asks for to get pthread_condattr_setclock.
+  # _GNU_SOURCE is what src/runtime/thread.c asks for to get
+  # sched_getaffinity, which is how the processor count is worked out on Linux.
+  # The other two go with them wherever mmap is involved, because MAP_ANONYMOUS
+  # is not POSIX and asking a libc for POSIX is also telling it that is all you
+  # want: _DEFAULT_SOURCE puts the flag back on glibc and _DARWIN_C_SOURCE puts
+  # it back on macOS.
   #
   # Naming them here keeps the check on for everything else, which is better
   # than a NOLINT that grows a second instance nobody notices.
@@ -130,11 +143,11 @@ CheckOptions:
   # aliases of it and each alias reads its options under its own name. Set only
   # the first and the finding comes back with the other two in the brackets.
   - key: bugprone-reserved-identifier.AllowedIdentifiers
-    value: '_XOPEN_SOURCE;_POSIX_C_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE'
+    value: '_XOPEN_SOURCE;_POSIX_C_SOURCE;_GNU_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE'
   - key: cert-dcl37-c.AllowedIdentifiers
-    value: '_XOPEN_SOURCE;_POSIX_C_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE'
+    value: '_XOPEN_SOURCE;_POSIX_C_SOURCE;_GNU_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE'
   - key: cert-dcl51-cpp.AllowedIdentifiers
-    value: '_XOPEN_SOURCE;_POSIX_C_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE'
+    value: '_XOPEN_SOURCE;_POSIX_C_SOURCE;_GNU_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE'
 
 # Warnings from headers are on, because the headers are where most of this
 # library lives.

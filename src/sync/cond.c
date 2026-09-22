@@ -62,7 +62,7 @@ const Type *const TYPE_SYNC_COND = &cond_desc;
  * A copy taken before the first use is not caught, and cannot be: nothing has
  * happened yet that could tell the two apart. Go has the same hole. */
 static void check_copy(SyncCond *c) {
-    Uintptr self = (Uintptr)(void *)c;
+    Uintptr self = (Uintptr)c;
 
     if (sync_atomic_load_uintptr(&c->checker) == self)
         return;

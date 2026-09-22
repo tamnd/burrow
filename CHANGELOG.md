@@ -4,6 +4,20 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+### Build and CI
+
+- The lint and clang-tidy jobs are green again. They had both been failing for long enough that nobody was reading them, which is the same as not having them, so everything either job had to say is answered here rather than suppressed.
+- Two files kept an include in the wrong place after the `burrow/context.h` to `burrow/mcontext.h` rename, and one call in `tests/stack_test.c` was a space out. `clang-format` had been saying so on every run since.
+- `_GNU_SOURCE` joins the four feature macros the reserved identifier check is told to allow. `src/runtime/thread.c` defines it to get `sched_getaffinity`, which is how the processor count is worked out on Linux, and it is a reserved name for exactly the reason the other four are.
+- `readability-non-const-parameter` is off, with the reason next to the others. Almost everything here is reached through a vtable and a slot has one signature, so an implementation that happens not to write through its out parameter still cannot take a `const` pointer. The check has no way to tell which functions are members of an interface.
+
+### sync
+
+- `Map` no longer has a shift by the width of the word in the pruning path. Walking up from an empty node widens the shift before using it, and the check that it is still in range was reading the value before the widening rather than after it. The tree cannot get deep enough for it to matter, but nothing in the loop says so and a shift of 64 on a 64 bit word is undefined behaviour rather than zero. Found by the static analyser.
+- `Pool`'s unlink on free looks for the pool in the list and unlinks it in the same step, rather than walking to the end and then asking whether it stopped early. Same behaviour, and the analyser can now see that what it is unlinking is not `NULL`.
+
 ## v0.0.25 (2026-09-22)
 
 Go's `context` package, all of it, from `Background` to `AfterFunc`.

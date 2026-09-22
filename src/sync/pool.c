@@ -668,10 +668,13 @@ void sync_pool_free(SyncPool *p) {
 
     burrow__lock(&pools_lock);
     SyncPool **link = &allpools;
-    while (*link != NULL && *link != p)
+    while (*link != NULL) {
+        if (*link == p) {
+            *link = p->allnext;
+            break;
+        }
         link = &(*link)->allnext;
-    if (*link == p)
-        *link = p->allnext;
+    }
     burrow__unlock(&pools_lock);
 
     shard_free(p->a, (Shard *)p->shard[0], p->free_fn);

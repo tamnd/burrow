@@ -25,9 +25,10 @@
  *   - The done channel is made when the node is, because context_done has no
  *     allocator and no way to report a failure.
  *   - The node is reference counted, and the count is only ever above one while
- *     a watcher goroutine exists. That is what makes it safe to free a context
- *     whose watcher has not woken up yet: whoever puts the node down last frees
- *     it, and the loser of that race has already stopped touching it.
+ *     a watcher goroutine or an armed deadline timer exists. That is what makes
+ *     it safe to free a context whose watcher has not woken up yet, or whose
+ *     deadline is a nanosecond away: whoever puts the node down last frees it,
+ *     and the loser of that race has already stopped touching it.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -45,6 +46,8 @@
 #include "burrow/proc.h"
 #include "burrow/runtime.h"
 #include "burrow/sync.h"
+#include "burrow/time.h"
+#include "burrow/timer.h"
 #include "burrow/type.h"
 
 #include <stdbool.h>
@@ -182,7 +185,7 @@ static const Type cancel_ctx_type = {
     NULL,
 };
 
-/* ------------------------------------------------------------- the two nodes */
+/* --------------------------------------------------------------- the nodes */
 
 typedef struct CancelCtx CancelCtx;
 
@@ -203,8 +206,18 @@ struct CancelCtx {
     Chan *done;
 
     /* One for whoever made the context, and one more for the watcher goroutine
-     * when there is one. Whoever drops the last reference frees. */
+     * when there is one and for the deadline timer while it is armed. Whoever
+     * drops the last reference frees. */
     uint32_t refs;
+
+    /* Whether this node is the first member of a TimerCtx. Sitting in the
+     * padding after refs, so it costs a plain WithCancel nothing.
+     *
+     * Go has no such field: a timerCtx is a different type and every call that
+     * cares goes through an interface. Here the two share a vtable slot for
+     * three of the four methods and share every line of the cancelling code, so
+     * the code that needs to know asks. */
+    bool timed;
 
     SyncMutex mu;
 
@@ -230,6 +243,23 @@ struct CancelCtx {
     CancelCtx *next;
 };
 
+/* A cancel node with a deadline attached, which is Go's timerCtx. Go embeds a
+ * cancelCtx in it and so does this, and because the embedded one is the first
+ * member the two pointers are the same address. That is what lets cancel_node,
+ * remove_child, release and three of the four methods work on either kind
+ * without knowing which they have, the same way Go's promoted methods do. */
+typedef struct TimerCtx {
+    CancelCtx c;
+
+    /* Set once, before the node is visible to anybody, and read without the
+     * lock. Go keeps the deadline in the node the same way. */
+    int64_t when;
+
+    /* Under c.mu. NULL when the deadline had already gone by, and NULL again
+     * once whoever cancelled has disarmed it. */
+    TimeTimer *timer;
+} TimerCtx;
+
 typedef struct ValueCtx {
     Context parent;
     Alloc *a;
@@ -248,6 +278,8 @@ static bool cancel_deadline(void *self, int64_t *when);
 static Chan *cancel_done(void *self);
 static Error cancel_err(void *self);
 static Any cancel_value(void *self, Any key);
+
+static bool timer_deadline(void *self, int64_t *when);
 
 static bool value_deadline(void *self, int64_t *when);
 static Chan *value_done(void *self);
@@ -274,6 +306,12 @@ static const ContextVT todo_vt = {
 
 static const ContextVT cancel_vt = {
     NULL, cancel_deadline, cancel_done, cancel_err, cancel_value,
+};
+
+/* Three slots of cancel_vt and one of its own, which is Go's timerCtx: it
+ * overrides Deadline and promotes the rest from the cancelCtx inside it. */
+static const ContextVT timer_vt = {
+    NULL, timer_deadline, cancel_done, cancel_err, cancel_value,
 };
 
 static const ContextVT value_vt = {
@@ -337,7 +375,7 @@ Any context_value(Context c, Any key) {
             continue;
         }
 
-        if (c.vt == &cancel_vt) {
+        if (c.vt == &cancel_vt || c.vt == &timer_vt) {
             CancelCtx *cc = (CancelCtx *)c.data;
             if (any_equal(key, cancel_key))
                 return BURROW_ANY(&cancel_ctx_type, &cc->self);
@@ -487,6 +525,10 @@ static void remove_child(CancelCtx *c) {
     sync_mutex_unlock(&p->mu);
 }
 
+/* Declared up here because cancelling can be what puts the deadline timer's
+ * reference down, and the two are easier to read in this order. */
+static void release(CancelCtx *c);
+
 /* Cancels this node and everything under it, once.
  *
  * The child's lock is taken while this node's is held, which looks like the
@@ -508,6 +550,19 @@ static void cancel_node(CancelCtx *c, bool remove_from_parent, Error err) {
         return;
     }
 
+    /* Exactly one call gets past the check above, so exactly one disarms the
+     * deadline timer, and a stop that says true means the callback will never
+     * run and its reference on the node is this call's to put down. The put down
+     * is at the bottom, after the last read of c, because it can be the last
+     * reference. The memory behind the timer itself goes back in release, which
+     * is the only place that knows nothing else can be looking at it. */
+    bool timer_stopped = false;
+    if (c->timed) {
+        TimerCtx *t = (TimerCtx *)c;
+        if (t->timer != NULL)
+            timer_stopped = time_timer_stop(t->timer);
+    }
+
     c->err = err;
     chan_close(c->done);
 
@@ -525,6 +580,9 @@ static void cancel_node(CancelCtx *c, bool remove_from_parent, Error err) {
 
     if (remove_from_parent)
         remove_child(c);
+
+    if (timer_stopped)
+        release(c);
 }
 
 /* Puts one reference down, and frees on the last one.
@@ -539,9 +597,23 @@ static void release(CancelCtx *c) {
         return;
 
     Alloc *a = c->a;
+    Chan *done = c->done;
+    size_t size = sizeof(CancelCtx);
+    size_t align = _Alignof(CancelCtx);
 
-    chan_free(c->done);
-    mem_free(a, c, sizeof(CancelCtx), _Alignof(CancelCtx));
+    if (c->timed) {
+        /* The timer is freed rather than stopped here because nothing can be
+         * holding it: an armed timer is a reference of its own, so this being
+         * the last one means the timer has either fired or been disarmed.
+         * time_timer_free takes it out of whatever P's heap it is still sitting
+         * in, which a plain mem_free would not, and NULL is fine. */
+        time_timer_free(((TimerCtx *)c)->timer);
+        size = sizeof(TimerCtx);
+        align = _Alignof(TimerCtx);
+    }
+
+    chan_free(done);
+    mem_free(a, c, size, align);
 }
 
 static void cancel_func(void *env) {
@@ -690,13 +762,178 @@ Context context_with_cancel(Alloc *a, Context parent, CancelFunc *cancel) {
     return out;
 }
 
+/* ------------------------------------------------------- WithDeadline, WithTimeout
+ *
+ * A deadline is a cancel node with a timer pointed at it, which is all Go's
+ * timerCtx is. The only thing worth thinking about is who owns the node while
+ * the timer is armed.
+ *
+ * The timer holds a reference. It has to: the callback runs on a goroutine of
+ * its own and touches the node, and a program is allowed to free its context a
+ * nanosecond before the deadline. Whoever disarms the timer first puts that
+ * reference down, which is the callback when the deadline wins and cancel_node
+ * when the cancel wins, and time_timer_stop answering true is what says which
+ * of the two happened.
+ *
+ * There is one hole and it is time_after_func's. The callback is started with
+ * go, a goroutine that will not start is a program with no memory left, and
+ * then the reference the timer held is never put down and the node is never
+ * freed. Nothing better is available from here: refusing to arm the timer is
+ * the same failure earlier, and taking the reference back from inside the
+ * runtime is a race. A leaked node on the way out of memory is the least of
+ * what is going wrong by then. */
+
+static bool timer_deadline(void *self, int64_t *when) {
+    *when = ((TimerCtx *)self)->when;
+    return true;
+}
+
+/* What the timer runs when the deadline arrives.
+ *
+ * On a goroutine of its own, because that is what a time_after_func callback
+ * gets and because this one wants it: cancelling walks a subtree taking a lock
+ * and closing a channel per node, and none of that belongs on a scheduler
+ * thread in the middle of looking for work. Go runs timerCtx's cancellation on
+ * a goroutine for the same reason.
+ *
+ * The release at the end is the timer's own reference. The stop inside
+ * cancel_node cannot have taken it as well, because a timer that has already
+ * fired answers false to a stop. */
+static void deadline_reached(void *env) {
+    CancelCtx *c = (CancelCtx *)env;
+
+    cancel_node(c, true, context_deadline_exceeded);
+    release(c);
+}
+
+Context context_with_deadline(Alloc *a, Context parent, int64_t when,
+                              CancelFunc *cancel) {
+    Context none = {NULL, NULL};
+
+    if (BURROW_CONTEXT_IS_NIL(parent))
+        panic_str(BURROW_S("cannot create context from nil parent"));
+
+    /* Checked here rather than left to time_after_func, so that the message
+     * says what the program got wrong rather than naming a function it has
+     * never heard of. Checked on every path and not only on the one that arms a
+     * timer, because a call that works or throws depending on what the clock
+     * says is worse than one that always throws. */
+    if (burrow__timers_local() == NULL)
+        runtime_throw(
+            BURROW_S("context: a deadline needs a goroutine to put the timer on"));
+
+    /* A parent that gives up sooner makes the timer pointless: its cancellation
+     * arrives first every time, and a plain cancel node answers its parent's
+     * deadline when it has none of its own, so nothing is lost by not having
+     * one. Go hands the whole job to WithCancel here and uses the same strict
+     * comparison, so two contexts with the same instant on them both get a
+     * timer. */
+    int64_t parent_when = 0;
+    if (context_deadline(parent, &parent_when) && parent_when < when)
+        return context_with_cancel(a, parent, cancel);
+
+    if (cancel != NULL)
+        *cancel = BURROW_FN(CancelFunc, cancel_nothing, NULL);
+
+    TimerCtx *t = BURROW_NEW(a, TimerCtx);
+    if (t == NULL)
+        return none;
+
+    Chan *done = chan_make(a, TYPE_UINT8, 0);
+    if (done == NULL) {
+        mem_free(a, t, sizeof(TimerCtx), _Alignof(TimerCtx));
+        return none;
+    }
+
+    CancelCtx *c = &t->c;
+
+    c->parent = parent;
+    c->a = a;
+    c->self = c;
+    c->done = done;
+    c->refs = 1;
+    c->timed = true;
+    t->when = when;
+
+    if (!propagate_cancel(c, parent)) {
+        chan_free(done);
+        mem_free(a, t, sizeof(TimerCtx), _Alignof(TimerCtx));
+        return none;
+    }
+
+    if (cancel != NULL)
+        *cancel = BURROW_FN(CancelFunc, cancel_func, c);
+
+    Context out = {&timer_vt, c};
+
+    /* Already gone by, so there is nothing to arm. Go cancels here too and
+     * hands back a context whose done channel is closed, which is more useful
+     * than a failure: the caller's select wakes at once and takes the same path
+     * it would have taken a second later. */
+    Duration left = when - burrow_nanotime();
+    if (left <= 0) {
+        cancel_node(c, false, context_deadline_exceeded);
+        return out;
+    }
+
+    bool no_timer = false;
+
+    /* Armed under the lock, and only if nothing has cancelled this already,
+     * which is what Go does at the same point. A parent that cancelled during
+     * propagate_cancel has closed the channel and set the error, and a timer
+     * armed after that is one nobody will ever stop. */
+    sync_mutex_lock(&c->mu);
+    if (BURROW_OK(c->err)) {
+        (void)burrow__atomic_add_u32(&c->refs, 1);
+
+        TimeTimer *timer =
+            time_after_func(a, left, BURROW_FN(Func, deadline_reached, c));
+        if (timer == NULL) {
+            (void)burrow__atomic_add_u32(&c->refs, (uint32_t)-1);
+            no_timer = true;
+        }
+        t->timer = timer;
+    }
+    sync_mutex_unlock(&c->mu);
+
+    /* No memory for the timer. Undo what propagate_cancel did, which is exactly
+     * what context_free does, and answer the nil context. The release here does
+     * not always free: a watcher goroutine may still hold the node, and then it
+     * frees when it wakes. */
+    if (no_timer) {
+        cancel_node(c, true, context_canceled);
+        release(c);
+        if (cancel != NULL)
+            *cancel = BURROW_FN(CancelFunc, cancel_nothing, NULL);
+        return none;
+    }
+
+    return out;
+}
+
+Context context_with_timeout(Alloc *a, Context parent, Duration d, CancelFunc *cancel) {
+    int64_t now = burrow_nanotime();
+    int64_t when;
+
+    /* now + d, without the signed overflow, which is undefined rather than
+     * negative. A reading of this clock is never below zero, so the only end
+     * that can be run off is the far one, and a timeout that lands 292 years
+     * out is one nobody meant. */
+    if (d > 0 && d > INT64_MAX - now)
+        when = INT64_MAX;
+    else
+        when = now + d;
+
+    return context_with_deadline(a, parent, when, cancel);
+}
+
 /* --------------------------------------------------------------------- free */
 
 void context_free(Context c) {
     if (c.vt == NULL || c.vt == &background_vt || c.vt == &todo_vt)
         return;
 
-    if (c.vt == &cancel_vt) {
+    if (c.vt == &cancel_vt || c.vt == &timer_vt) {
         CancelCtx *cc = (CancelCtx *)c.data;
 
         /* Cancel first, so that the done channel is closed and anything parked

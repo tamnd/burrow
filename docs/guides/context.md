@@ -80,6 +80,32 @@ A nil `Context` comes back when the allocator will not give out the node and its
 
 Calling the cancel function is not optional. Until it runs, the context is still attached to its parent and the parent still holds a pointer to it, so a long lived parent with a cancel nobody called accumulates children forever. Go says the same thing and ships a vet check for it. Calling it twice, or a hundred times, does nothing after the first.
 
+## Deadlines
+
+```c
+CancelFunc cancel;
+Context ctx = context_with_timeout(a, parent, 5 * TIME_SECOND, &cancel);
+if (BURROW_CONTEXT_IS_NIL(ctx))
+    return err_no_memory;
+
+Error err = talk_to_the_database(ctx);
+
+BURROW_CALLF0(cancel);
+context_free(ctx);
+```
+
+`context_with_timeout` is `context.WithTimeout` and is the one almost every caller wants. Five seconds later the done channel closes on its own, `context_err` is `context_deadline_exceeded`, and everything derived from this context stops with it.
+
+`context_with_deadline` is `context.WithDeadline` and takes the instant rather than the duration, for the case where several things share one deadline. The instant is a reading of the monotonic clock, which is what `burrow_nanotime` returns and what `context_deadline` hands back, so `burrow_nanotime() + 3 * TIME_SECOND` is a deadline three seconds out. Go takes a `time.Time` and this will too once burrow has a calendar.
+
+Both have to be called from a goroutine. The timer goes into the timer heap of the P the caller is running on, and a thread the runtime did not start has no P, so calling either from your own `main` stops the program rather than silently not firing. Everything else in this package works anywhere.
+
+Call the cancel function even when the deadline is what you expect to fire. It is the thing that stops the timer, and a server that leaves one armed per request is a server carrying a timer per request until each one goes off.
+
+A deadline that has already gone by is not an error. What comes back is a real context whose done channel is already closed, which is Go's rule too, so the code underneath takes the path it would have taken a second later rather than a path nobody wrote.
+
+A child cannot outlast its parent. Asking for a deadline later than the parent's gets you a context with no timer at all, since the parent's cancellation would always arrive first, and it reports the parent's deadline as its own. Asking for a sooner one gets a timer, and then the child gives up while the parent carries on.
+
 ## Values
 
 ```c
@@ -153,8 +179,6 @@ A cancel walks the subtree once, closing each done channel and setting each erro
 `context_value` is a pointer chase per context between the lookup and the value, with one `Any` comparison each. Keep the chain short if it is on a hot path, which is Go's advice too.
 
 ## What Go has that this does not, yet
-
-`context.WithDeadline` and `context.WithTimeout` are next, and they are the reason `context_deadline` is in the interface already.
 
 `context_deadline` answers an `int64_t` on the monotonic clock rather than a `Time`, because burrow has no calendar `Time` yet. It becomes a `Time` when the calendar half of the `time` package lands, and until then `burrow_nanotime` is the reading to compare it against. That is the part every caller actually uses: a deadline gets compared against now and subtracted from now, and both of those want the clock that cannot go backwards.
 

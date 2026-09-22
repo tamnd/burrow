@@ -8,11 +8,12 @@
  * points at the context and not at the context or the scheduler or the timing.
  * A cancel closes a channel nobody is waiting on, which is a lock and a flag.
  *
- * The second half starts the runtime, because two things need it. A goroutine
- * parked on a done channel is the whole point of the package, and the fallback
- * path for a parent this package did not make is a goroutine watching two
- * channels. Those tests follow the rule tests/sched_test.c sets out: what a
- * child goroutine finds out it says through an atomic.
+ * The second half starts the runtime, because three things need it. A goroutine
+ * parked on a done channel is the whole point of the package, the fallback path
+ * for a parent this package did not make is a goroutine watching two channels,
+ * and a deadline is a timer in the heap of a P. Those tests follow the rule
+ * tests/sched_test.c sets out: what a child goroutine finds out it says through
+ * an atomic.
  *
  * The fake context near the top is not padding. Go's context is an interface
  * and so is this one, and the two hardest paths in the package only run when
@@ -525,6 +526,15 @@ TEST(a_nil_parent_panics) {
     CHECK_PANIC((void)context_with_value(panic_alloc, panic_parent, REQUEST_ID_KEY,
                                          BURROW_ANY(TYPE_INT, &id)),
                 "cannot create context from nil parent");
+
+    /* The two deadline calls check the parent before they check anything else,
+     * which is why these are here and not down with the runtime tests: a nil
+     * parent is caught before the missing goroutine is. */
+    CHECK_PANIC((void)context_with_deadline(panic_alloc, panic_parent, 0, NULL),
+                "cannot create context from nil parent");
+    CHECK_PANIC(
+        (void)context_with_timeout(panic_alloc, panic_parent, TIME_SECOND, NULL),
+        "cannot create context from nil parent");
 }
 
 TEST(a_bad_key_panics) {
@@ -555,6 +565,20 @@ TEST(a_nil_context_has_no_methods) {
     CHECK_RUNTIME_ERROR((void)context_done(panic_parent),
                         "runtime error: invalid memory address or nil pointer "
                         "dereference");
+}
+
+/* Here rather than with the other deadline tests, because the whole point of it
+ * is that there is no runtime running. A P is where the timer heap lives, and a
+ * thread the runtime did not start has no P to put one on. */
+TEST(a_deadline_off_a_goroutine_stops_the_program) {
+    panic_alloc = heap_allocator();
+    panic_parent = context_background();
+
+    CHECK_FATAL(
+        (void)context_with_timeout(panic_alloc, panic_parent, TIME_SECOND, NULL),
+        "context: a deadline needs a goroutine to put the timer on");
+    CHECK_FATAL((void)context_with_deadline(panic_alloc, panic_parent, 0, NULL),
+                "context: a deadline needs a goroutine to put the timer on");
 }
 
 static Fake foreign;
@@ -796,6 +820,557 @@ TEST(a_context_with_a_watcher_can_be_freed_before_the_watcher_wakes) {
     track_free(&rt_track);
 }
 
+/* ------------------------------------------------------------ with a deadline
+ *
+ * All of these need the runtime, including the ones that never arm a timer,
+ * because context_with_deadline wants a P to put the timer on and says so on
+ * every path rather than only on the ones that use it.
+ *
+ * So each one is a body that does the work on the goroutine runtime_main
+ * starts and leaves what it found in dl below, and a test that starts the
+ * runtime and then does the checking. Plain fields and no atomics, because one
+ * goroutine writes them and runtime_main has returned before anything reads
+ * them.
+ *
+ * The waiting is polling with a limit rather than a receive on the done
+ * channel. A timer that never fires should fail one test rather than hang the
+ * whole run, and a limit of several seconds against a deadline of twenty
+ * milliseconds is a machine that has stopped rather than a machine that is
+ * busy. The one test that does park on the channel is the one whose whole
+ * subject is the parking. */
+
+#define DL_SOON (20 * TIME_MILLISECOND)
+#define DL_NEVER TIME_HOUR
+#define DL_LIMIT (5 * TIME_SECOND)
+
+typedef struct DeadlineResult {
+    bool made;
+    bool made_child;
+    bool has_deadline;
+    bool done_at_once;
+    bool done_in_the_end;
+    bool parent_done;
+    bool child_done;
+    int64_t started;
+    int64_t elapsed;
+    int64_t when;
+    int64_t parent_when;
+    Error err;
+    Error err_after;
+    Error parent_err;
+    Error child_err;
+} DeadlineResult;
+
+static DeadlineResult dl;
+
+static void dl_reset(void) {
+    DeadlineResult zero = {0};
+
+    dl = zero;
+}
+
+static bool wait_done(Context c) {
+    int64_t give_up = burrow_nanotime() + DL_LIMIT;
+
+    while (burrow_nanotime() < give_up) {
+        if (is_done(c))
+            return true;
+        time_sleep(TIME_MILLISECOND);
+    }
+    return false;
+}
+
+static void future_body(void *env) {
+    (void)env;
+
+    CancelFunc cancel;
+
+    dl.started = burrow_nanotime();
+
+    Context c = context_with_timeout(rt_alloc, context_background(), DL_NEVER, &cancel);
+    if (BURROW_CONTEXT_IS_NIL(c))
+        return;
+
+    dl.made = true;
+    dl.has_deadline = context_deadline(c, &dl.when);
+    dl.done_at_once = is_done(c);
+    dl.err = context_err(c);
+
+    /* An hour away, so the cancel wins every time and this is the path where
+     * the stop takes the timer's reference back. */
+    BURROW_CALLF0(cancel);
+    dl.done_in_the_end = is_done(c);
+    dl.err_after = context_err(c);
+
+    context_free(c);
+}
+
+TEST(a_deadline_an_hour_away_leaves_the_cancel_to_win) {
+    dl_reset();
+    rt_alloc = heap_allocator();
+
+    runtime_main(BURROW_FN(Func, future_body, NULL));
+
+    CHECK(dl.made);
+    CHECK(dl.has_deadline);
+
+    /* An hour from the clock reading inside the call, which is at or after the
+     * one taken outside it, so the lower bound is exact and the upper bound is
+     * however long the call took plus room for a machine having a bad day. */
+    CHECK(dl.when >= dl.started + DL_NEVER);
+    CHECK(dl.when <= dl.started + DL_NEVER + TIME_SECOND);
+
+    CHECK(!dl.done_at_once);
+    CHECK(BURROW_OK(dl.err));
+    CHECK(dl.done_in_the_end);
+    CHECK(is(dl.err_after, context_canceled));
+}
+
+static void past_body(void *env) {
+    (void)env;
+
+    CancelFunc cancel;
+    Context c =
+        context_with_timeout(rt_alloc, context_background(), -TIME_SECOND, &cancel);
+    if (BURROW_CONTEXT_IS_NIL(c))
+        return;
+
+    dl.made = true;
+    dl.done_at_once = is_done(c);
+    dl.err = context_err(c);
+    dl.has_deadline = context_deadline(c, &dl.when);
+
+    /* A cancel after the fact changes nothing, which is Go's rule everywhere in
+     * this package: the first answer is the only answer. */
+    BURROW_CALLF0(cancel);
+    dl.err_after = context_err(c);
+    context_free(c);
+
+    /* The same thing said as an instant rather than as a duration, and with no
+     * cancel function asked for at all. */
+    Context d = context_with_deadline(rt_alloc, context_background(),
+                                      burrow_nanotime() - TIME_SECOND, NULL);
+    if (BURROW_CONTEXT_IS_NIL(d))
+        return;
+
+    dl.made_child = true;
+    dl.child_done = is_done(d);
+    dl.child_err = context_err(d);
+    context_free(d);
+}
+
+TEST(a_deadline_that_has_gone_by_comes_back_already_cancelled) {
+    dl_reset();
+    rt_alloc = heap_allocator();
+
+    runtime_main(BURROW_FN(Func, past_body, NULL));
+
+    CHECK(dl.made);
+    CHECK(dl.done_at_once);
+    CHECK(is(dl.err, context_deadline_exceeded));
+    CHECK(is(dl.err_after, context_deadline_exceeded));
+
+    /* It still has the deadline it was given, in the past though it is. */
+    CHECK(dl.has_deadline);
+    CHECK(dl.when < burrow_nanotime());
+
+    CHECK(dl.made_child);
+    CHECK(dl.child_done);
+    CHECK(is(dl.child_err, context_deadline_exceeded));
+}
+
+static void fires_body(void *env) {
+    (void)env;
+
+    CancelFunc cancel;
+
+    dl.started = burrow_nanotime();
+
+    Context c = context_with_timeout(rt_alloc, context_background(), DL_SOON, &cancel);
+    if (BURROW_CONTEXT_IS_NIL(c))
+        return;
+
+    dl.made = true;
+    dl.done_at_once = is_done(c);
+    dl.done_in_the_end = wait_done(c);
+    dl.elapsed = burrow_nanotime() - dl.started;
+    dl.err = context_err(c);
+
+    /* The cancel that arrives after the timer has fired, which is the path
+     * where the stop loses and the callback owns the reference. */
+    BURROW_CALLF0(cancel);
+    dl.err_after = context_err(c);
+
+    context_free(c);
+}
+
+TEST(a_timeout_fires_and_says_the_deadline_went_by) {
+    dl_reset();
+    rt_alloc = heap_allocator();
+
+    runtime_main(BURROW_FN(Func, fires_body, NULL));
+
+    CHECK(dl.made);
+    CHECK(!dl.done_at_once);
+    CHECK(dl.done_in_the_end);
+    CHECK(is(dl.err, context_deadline_exceeded));
+    CHECK(is(dl.err_after, context_deadline_exceeded));
+
+    /* Not early. Late is the machine's business and there is no upper bound
+     * worth asserting, which is what burrow/time.h says about every timer. */
+    CHECK(dl.elapsed >= DL_SOON);
+}
+
+static void parent_sooner_body(void *env) {
+    (void)env;
+
+    CancelFunc parent_cancel;
+    CancelFunc cancel;
+
+    Context p =
+        context_with_timeout(rt_alloc, context_background(), DL_SOON, &parent_cancel);
+    if (BURROW_CONTEXT_IS_NIL(p))
+        return;
+
+    dl.made = context_deadline(p, &dl.parent_when);
+
+    Context c = context_with_deadline(rt_alloc, p, dl.parent_when + TIME_HOUR, &cancel);
+    if (BURROW_CONTEXT_IS_NIL(c)) {
+        BURROW_CALLF0(parent_cancel);
+        context_free(p);
+        return;
+    }
+
+    dl.made_child = true;
+    dl.has_deadline = context_deadline(c, &dl.when);
+
+    /* No timer of its own, so the only thing that can cancel it is the parent,
+     * and the parent is twenty milliseconds from giving up. */
+    dl.parent_done = wait_done(p);
+    dl.child_done = is_done(c);
+    dl.child_err = context_err(c);
+
+    BURROW_CALLF0(cancel);
+    BURROW_CALLF0(parent_cancel);
+    context_free(c);
+    context_free(p);
+}
+
+TEST(a_parent_that_gives_up_sooner_keeps_the_deadline) {
+    dl_reset();
+    rt_alloc = heap_allocator();
+
+    runtime_main(BURROW_FN(Func, parent_sooner_body, NULL));
+
+    CHECK(dl.made);
+    CHECK(dl.made_child);
+    CHECK(dl.has_deadline);
+    CHECK_INT_EQ((Int)dl.when, (Int)dl.parent_when);
+    CHECK(dl.parent_done);
+    CHECK(dl.child_done);
+    CHECK(is(dl.child_err, context_deadline_exceeded));
+}
+
+static void child_sooner_body(void *env) {
+    (void)env;
+
+    CancelFunc parent_cancel;
+    CancelFunc cancel;
+
+    Context p =
+        context_with_timeout(rt_alloc, context_background(), DL_NEVER, &parent_cancel);
+    if (BURROW_CONTEXT_IS_NIL(p))
+        return;
+
+    Context c = context_with_timeout(rt_alloc, p, DL_SOON, &cancel);
+    if (BURROW_CONTEXT_IS_NIL(c)) {
+        BURROW_CALLF0(parent_cancel);
+        context_free(p);
+        return;
+    }
+
+    dl.made = true;
+    dl.child_done = wait_done(c);
+    dl.parent_done = is_done(p);
+    dl.child_err = context_err(c);
+    dl.parent_err = context_err(p);
+
+    BURROW_CALLF0(cancel);
+    BURROW_CALLF0(parent_cancel);
+    context_free(c);
+    context_free(p);
+}
+
+TEST(a_child_with_a_sooner_deadline_fires_on_its_own) {
+    dl_reset();
+    rt_alloc = heap_allocator();
+
+    runtime_main(BURROW_FN(Func, child_sooner_body, NULL));
+
+    CHECK(dl.made);
+    CHECK(dl.child_done);
+    CHECK(is(dl.child_err, context_deadline_exceeded));
+
+    /* Nothing goes upwards. The parent has fifty nine minutes left on it. */
+    CHECK(!dl.parent_done);
+    CHECK(BURROW_OK(dl.parent_err));
+}
+
+static void deadline_downwards_body(void *env) {
+    (void)env;
+
+    CancelFunc parent_cancel;
+    Int id = 7;
+
+    Context p =
+        context_with_timeout(rt_alloc, context_background(), DL_SOON, &parent_cancel);
+    if (BURROW_CONTEXT_IS_NIL(p))
+        return;
+
+    dl.made = context_deadline(p, &dl.parent_when);
+
+    Context kid = context_with_cancel(rt_alloc, p, NULL);
+    if (BURROW_CONTEXT_IS_NIL(kid)) {
+        BURROW_CALLF0(parent_cancel);
+        context_free(p);
+        return;
+    }
+
+    Context grandkid =
+        context_with_value(rt_alloc, kid, REQUEST_ID_KEY, BURROW_ANY(TYPE_INT, &id));
+    if (BURROW_CONTEXT_IS_NIL(grandkid)) {
+        BURROW_CALLF0(parent_cancel);
+        context_free(kid);
+        context_free(p);
+        return;
+    }
+
+    dl.made_child = true;
+
+    /* The deadline is visible from the bottom, through a cancel node and a
+     * value node, because neither of them has one of its own. */
+    dl.has_deadline = context_deadline(grandkid, &dl.when);
+
+    dl.parent_done = wait_done(p);
+    dl.child_done = is_done(kid);
+    dl.child_err = context_err(kid);
+    dl.err = context_err(grandkid);
+
+    BURROW_CALLF0(parent_cancel);
+    context_free(grandkid);
+    context_free(kid);
+    context_free(p);
+}
+
+TEST(a_deadline_reaches_everything_underneath_it) {
+    dl_reset();
+    rt_alloc = heap_allocator();
+
+    runtime_main(BURROW_FN(Func, deadline_downwards_body, NULL));
+
+    CHECK(dl.made);
+    CHECK(dl.made_child);
+    CHECK(dl.has_deadline);
+    CHECK_INT_EQ((Int)dl.when, (Int)dl.parent_when);
+    CHECK(dl.parent_done);
+    CHECK(dl.child_done);
+    CHECK(is(dl.child_err, context_deadline_exceeded));
+    CHECK(is(dl.err, context_deadline_exceeded));
+}
+
+/* The tracked allocator sees everything come back whichever of the two wins,
+ * and the two are different paths. The cancel stops the timer and takes its
+ * reference back on the spot. The deadline fires, and then the reference goes
+ * down on a goroutine the caller never saw and whichever of the two is last
+ * does the freeing. */
+static void dl_memory(bool let_it_fire) {
+    CancelFunc cancel;
+    Context p = context_with_timeout(rt_alloc, context_background(),
+                                     let_it_fire ? DL_SOON : DL_NEVER, &cancel);
+    if (BURROW_CONTEXT_IS_NIL(p))
+        return;
+
+    Context kid = context_with_cancel(rt_alloc, p, NULL);
+    if (BURROW_CONTEXT_IS_NIL(kid)) {
+        BURROW_CALLF0(cancel);
+        context_free(p);
+        return;
+    }
+
+    dl.made = true;
+    if (let_it_fire)
+        dl.done_in_the_end = wait_done(p);
+    else
+        BURROW_CALLF0(cancel);
+
+    context_free(kid);
+    context_free(p);
+
+    /* Long enough for the callback's goroutine to have finished with the node
+     * if it was still inside it. Nothing is asked of the tracker from in here,
+     * for the reason the test above this one gives. */
+    time_sleep(100 * TIME_MILLISECOND);
+}
+
+static void deadline_won_body(void *env) {
+    (void)env;
+    dl_memory(true);
+}
+
+static void cancel_won_body(void *env) {
+    (void)env;
+    dl_memory(false);
+}
+
+TEST(everything_is_given_back_when_the_deadline_wins) {
+    dl_reset();
+    track_init(&rt_track, heap_allocator());
+    track_set_quarantine(&rt_track, 0);
+    rt_alloc = track_allocator(&rt_track);
+
+    runtime_main(BURROW_FN(Func, deadline_won_body, NULL));
+
+    CHECK(dl.made);
+    CHECK(dl.done_in_the_end);
+    CHECK_INT_EQ((Int)track_live(&rt_track), 0);
+    CHECK_INT_EQ((Int)track_check(&rt_track), 0);
+
+    track_free(&rt_track);
+}
+
+TEST(everything_is_given_back_when_the_cancel_wins) {
+    dl_reset();
+    track_init(&rt_track, heap_allocator());
+    track_set_quarantine(&rt_track, 0);
+    rt_alloc = track_allocator(&rt_track);
+
+    runtime_main(BURROW_FN(Func, cancel_won_body, NULL));
+
+    CHECK(dl.made);
+    CHECK_INT_EQ((Int)track_live(&rt_track), 0);
+    CHECK_INT_EQ((Int)track_check(&rt_track), 0);
+
+    track_free(&rt_track);
+}
+
+static void early_deadline_free_body(void *env) {
+    (void)env;
+
+    Context c = context_with_timeout(rt_alloc, context_background(), DL_SOON, NULL);
+    if (BURROW_CONTEXT_IS_NIL(c))
+        return;
+
+    dl.made = true;
+
+    /* Freed with the timer armed and twenty milliseconds still to run. The free
+     * cancels, the cancel stops the timer and takes its reference back, and
+     * there is nothing left for the callback to walk into. */
+    context_free(c);
+
+    time_sleep(DL_SOON + 100 * TIME_MILLISECOND);
+}
+
+TEST(a_context_freed_before_its_deadline_takes_the_timer_with_it) {
+    dl_reset();
+    track_init(&rt_track, heap_allocator());
+    track_set_quarantine(&rt_track, 0);
+    rt_alloc = track_allocator(&rt_track);
+
+    runtime_main(BURROW_FN(Func, early_deadline_free_body, NULL));
+
+    CHECK(dl.made);
+    CHECK_INT_EQ((Int)track_live(&rt_track), 0);
+    CHECK_INT_EQ((Int)track_check(&rt_track), 0);
+
+    track_free(&rt_track);
+}
+
+static uint32_t rt_err_was_deadline;
+
+static void deadline_waiter(void *env) {
+    (void)env;
+
+    chan_close(rt_ready);
+    (void)chan_recv(context_done(rt_ctx), NULL);
+
+    if (is(context_err(rt_ctx), context_deadline_exceeded))
+        burrow__atomic_store_release_u32(&rt_err_was_deadline, 1);
+    burrow__atomic_store_release_u32(&rt_woke, 1);
+}
+
+static void deadline_waiter_body(void *env) {
+    (void)env;
+
+    rt_ready = chan_make(rt_alloc, TYPE_UINT8, 0);
+    if (rt_ready == NULL)
+        return;
+
+    rt_ctx = context_with_timeout(rt_alloc, context_background(), DL_SOON, &rt_cancel);
+    if (BURROW_CONTEXT_IS_NIL(rt_ctx))
+        return;
+
+    if (!go(BURROW_FN(Func, deadline_waiter, NULL)))
+        return;
+
+    /* Inside the receive before the deadline can arrive, so that this is a test
+     * of a timer waking a parked goroutine rather than of a goroutine finding a
+     * channel that was closed while it was being started. */
+    (void)chan_recv(rt_ready, NULL);
+
+    while (burrow__atomic_load_acquire_u32(&rt_woke) == 0)
+        time_sleep(TIME_MILLISECOND);
+
+    dl.made = true;
+}
+
+TEST(a_goroutine_parked_on_done_wakes_up_when_the_deadline_goes_by) {
+    dl_reset();
+    reset();
+    rt_err_was_deadline = 0;
+    rt_alloc = heap_allocator();
+
+    runtime_main(BURROW_FN(Func, deadline_waiter_body, NULL));
+
+    CHECK(dl.made);
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&rt_woke), 1);
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&rt_err_was_deadline), 1);
+    CHECK(is_done(rt_ctx));
+
+    BURROW_CALLF0(rt_cancel);
+    context_free(rt_ctx);
+    chan_free(rt_ready);
+}
+
+static void far_future_body(void *env) {
+    (void)env;
+
+    /* The largest duration there is, which is the one that would run off the
+     * end of the clock if the addition were written the obvious way. */
+    Context c = context_with_timeout(rt_alloc, context_background(), INT64_MAX, NULL);
+    if (BURROW_CONTEXT_IS_NIL(c))
+        return;
+
+    dl.made = true;
+    dl.has_deadline = context_deadline(c, &dl.when);
+    dl.done_at_once = is_done(c);
+    dl.err = context_err(c);
+
+    context_free(c);
+}
+
+TEST(a_timeout_too_big_to_add_lands_at_the_end_of_the_clock) {
+    dl_reset();
+    rt_alloc = heap_allocator();
+
+    runtime_main(BURROW_FN(Func, far_future_body, NULL));
+
+    CHECK(dl.made);
+    CHECK(dl.has_deadline);
+    CHECK_INT_EQ((Int)dl.when, (Int)INT64_MAX);
+    CHECK(!dl.done_at_once);
+    CHECK(BURROW_OK(dl.err));
+}
+
 int main(void) {
     RUN(the_root_is_never_cancelled_and_carries_nothing);
     RUN(background_and_todo_are_not_the_same_context);
@@ -822,12 +1397,25 @@ int main(void) {
     RUN(a_nil_parent_panics);
     RUN(a_bad_key_panics);
     RUN(a_nil_context_has_no_methods);
+    RUN(a_deadline_off_a_goroutine_stops_the_program);
     RUN(freeing_a_context_this_package_did_not_make_stops_the_program);
 
     RUN(a_goroutine_parked_on_done_wakes_up_when_somebody_cancels);
     RUN(a_parent_from_outside_the_package_still_cancels_what_is_under_it);
     RUN(a_wrapper_that_replaces_done_is_not_mistaken_for_what_it_wraps);
     RUN(a_context_with_a_watcher_can_be_freed_before_the_watcher_wakes);
+
+    RUN(a_deadline_an_hour_away_leaves_the_cancel_to_win);
+    RUN(a_deadline_that_has_gone_by_comes_back_already_cancelled);
+    RUN(a_timeout_fires_and_says_the_deadline_went_by);
+    RUN(a_parent_that_gives_up_sooner_keeps_the_deadline);
+    RUN(a_child_with_a_sooner_deadline_fires_on_its_own);
+    RUN(a_deadline_reaches_everything_underneath_it);
+    RUN(everything_is_given_back_when_the_deadline_wins);
+    RUN(everything_is_given_back_when_the_cancel_wins);
+    RUN(a_context_freed_before_its_deadline_takes_the_timer_with_it);
+    RUN(a_goroutine_parked_on_done_wakes_up_when_the_deadline_goes_by);
+    RUN(a_timeout_too_big_to_add_lands_at_the_end_of_the_clock);
 
     return harness_report("context");
 }

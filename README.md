@@ -560,6 +560,8 @@ static void work(void *env) {
 
 Go's `context` package. A context is what a server hands down through every layer so that when the client hangs up, the database query, the two outbound requests and the retry loop underneath it all stop instead of finishing work nobody is waiting for. It is two words, it answers Go's four questions, and `context_done` gives you a channel that is closed when the work should stop, so waiting for a cancel is an ordinary `select` and costs nothing while it waits.
 
+`context_with_timeout` is the same thing with a clock attached, so `context_with_timeout(a, parent, 5 * TIME_SECOND, &cancel)` gives the work five seconds and then closes the done channel underneath it. `context_with_deadline` takes the instant instead of the duration, for when several things share one. Either way the cancel function is still what stops the timer, and the error afterwards says which of the two arrived first.
+
 `context_with_value` carries a request id or an authenticated user down the same tree, under a key of a type private to whoever put it there. Cancellation reaches a context built on a parent from somebody else's code too, which takes one goroutine watching two channels, the same as it does in Go.
 
 What is different is the ownership. Go leaves a context to the collector and there is none here, so every constructor takes an allocator and what it hands back is given back with `context_free`, parents after children. Freeing cancels first, so forgetting the cancel function cannot corrupt anything, and an arena user can skip the whole subject.

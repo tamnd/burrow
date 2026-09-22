@@ -151,6 +151,29 @@ It is for the work a handler starts and does not wait for. Flushing a buffer, wr
 
 The break is one way. A context derived from a detached one is as cancellable as any other, it just is not cancelled by what the detached one came from, so a detached goroutine can still give its own work a timeout of its own.
 
+## Cleanup that nobody is waiting for
+
+```c
+StopFunc stop;
+Context reg = context_after_func(a, ctx, BURROW_FN(Func, close_the_connection, c),
+                                 &stop);
+if (BURROW_CONTEXT_IS_NIL(reg))
+    return err_no_memory;
+...
+(void)BURROW_CALLF0(stop);
+context_free(reg);
+```
+
+`context_after_func` is `context.AfterFunc`. It runs a function on a goroutine of its own after a context is cancelled, for the cleanup nobody is sitting in a `select` waiting to do. A connection to close, a temporary file to remove, a lock to hand back. Go's own network package uses it to stop a read when the context behind it goes away.
+
+The function runs once or not at all. If the context is already cancelled when you register, it is started straight away rather than never, which is the only reading of "after this is cancelled" that is any use.
+
+`*stop` is what cancels the arrangement, and it answers whether it got in first. True means the function will not run. False means the cancellation was there before you and the function has been started, and it may still be running now, because a stop does not wait. If you need to know when it has finished, close a channel at the end of it and wait on that, which is what Go says too.
+
+What comes back is the registration itself, as a `Context`. Go returns only the stop function and leaves the node to the collector. There is no collector here, so something has to be the handle for the free, and a registration is a real context anyway: it is cancelled when its parent is, and it answers the four questions like anything else, so it can be waited on and derived from.
+
+Freeing one stops it first. Handing something back is not a reason for its cleanup to run, and a caller who wanted the function to run has a stop function to not call.
+
 ## Values
 
 ```c
@@ -227,7 +250,7 @@ A cancel walks the subtree once, closing each done channel and setting each erro
 
 `context_deadline` answers an `int64_t` on the monotonic clock rather than a `Time`, because burrow has no calendar `Time` yet. It becomes a `Time` when the calendar half of the `time` package lands, and until then `burrow_nanotime` is the reading to compare it against. That is the part every caller actually uses: a deadline gets compared against now and subtracted from now, and both of those want the clock that cannot go backwards.
 
-`AfterFunc` is not here yet. It is the one Go 1.21 addition still missing, and it is a different shape from the rest of the package: it runs a function when a context is cancelled rather than closing a channel, and hands back a stop function that says whether it got in first.
+Go's `afterFuncer` is not ported. It is an unexported interface that lets a parent context arrange its own `AfterFunc` rather than having one hung off it, and it exists for `testing/synctest`, whose contexts have to know about every goroutine waiting on them. It is a fifth method Go can type assert for and `ContextVT` has four slots. It comes back with `synctest` if `synctest` turns out to need it.
 
 `context_deadline_exceeded` satisfies `net.Error` with `Timeout()` true in Go, so that code written against the network package treats it as a timeout rather than a hard failure. There is no `net` package here yet and it is a plain sentinel until there is.
 

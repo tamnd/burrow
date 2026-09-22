@@ -173,6 +173,18 @@ typedef Func CancelFunc;
  * it at all is not optional. */
 BURROW_FUNC(CancelCauseFunc, void, Error cause);
 
+/* What context_after_func hands back, which is Go's `stop func() bool`.
+ *
+ *     if (BURROW_CALLF0(stop))
+ *         ... the function will not run ...
+ *
+ * True means this call stopped it and false means it was too late, either
+ * because the context was already cancelled and the function has been started,
+ * or because an earlier call to this already stopped it. So exactly one call
+ * out of all the calls ever made on one of these answers true, and only if the
+ * cancellation did not get there first. */
+BURROW_FUNC0(StopFunc, bool);
+
 /* context.Background(). The root, which is never cancelled, has no deadline and
  * carries no values.
  *
@@ -287,6 +299,50 @@ BURROW_BORROWS(ret, c) Error context_cause(Context c);
  * A nil Context is returned when the allocator says no. Panics on a nil
  * parent. */
 BURROW_OWNS(ret) Context context_without_cancel(Alloc *a, Context parent);
+
+/* context.AfterFunc(ctx, f).
+ *
+ * Arranges for f to run on a goroutine of its own after ctx is cancelled, and
+ * writes to *stop a function that cancels the arrangement.
+ *
+ *     StopFunc stop;
+ *     Context reg = context_after_func(a, ctx, BURROW_FN(Func, tidy_up, &s),
+ *                                      &stop);
+ *     if (BURROW_CONTEXT_IS_NIL(reg))
+ *         return err_no_memory;
+ *     ...
+ *     (void)BURROW_CALLF0(stop);
+ *     context_free(reg);
+ *
+ * For the cleanup that has to happen when a request goes away and that nobody
+ * is sitting in a select waiting to do. A connection to close, a temporary file
+ * to remove, a lock to give back. Go's own net package uses it to stop a read
+ * when the context behind it is cancelled.
+ *
+ * f runs on a goroutine, so it may block and it may take as long as it likes,
+ * and it does not hold anything up. It runs once or not at all. If ctx is
+ * already cancelled it is started straight away rather than never.
+ *
+ * The stop function answers whether it got in first, and calling it any number
+ * of times is fine. It does not wait for f: a stop that answers false means f
+ * has been started and may still be running, and waiting for it is a channel f
+ * closes on its way out, which is what Go says too.
+ *
+ * What comes back is the registration itself, as a Context. Go returns only the
+ * stop function and leaves the rest to the collector, and there is no collector
+ * here, so this is the handle the free needs. It is a real context: it is
+ * cancelled when ctx is, so it can be waited on and derived from like any
+ * other, and it is one more thing burrow gives you rather than a difference in
+ * what f does.
+ *
+ * context_free stops the arrangement and then frees it, so a registration that
+ * is freed without ever being stopped does not run f on the way out. Free it
+ * once and free it before its parent, the same as everything else here.
+ *
+ * A nil Context is returned when the allocator says no, and then *stop is a
+ * function that answers false. Panics on a nil parent. */
+BURROW_OWNS(ret) Context context_after_func(Alloc *a, Context parent, Func f,
+                                            StopFunc *stop);
 
 /* context.WithDeadline(parent, when).
  *

@@ -219,6 +219,12 @@ struct CancelCtx {
      * the code that needs to know asks. */
     bool timed;
 
+    /* Whether this node is the first member of an AfterFuncCtx. The same
+     * argument as timed, and in the same padding, so neither of them costs a
+     * plain WithCancel anything. Unlike timed this one changes no method, only
+     * what cancelling does at the end and what freeing has to size. */
+    bool after;
+
     SyncMutex mu;
 
     /* Set once, under mu, at the same moment done is closed. */
@@ -272,6 +278,27 @@ typedef struct TimerCtx {
      * it on a path where the deadline did not win. */
     Error deadline_cause;
 } TimerCtx;
+
+/* Go's afterFuncCtx, a cancel node with a function to run instead of anybody
+ * waiting on the channel. Embedded the same way TimerCtx embeds one, so the two
+ * pointers are the same address and everything that works on a CancelCtx works
+ * on this.
+ *
+ * The once is what makes exactly one of the two outcomes happen. Either the
+ * stop function takes it and f never runs, or the cancellation takes it and f
+ * is started, and whichever arrives second finds it taken and does nothing. Go
+ * uses a sync.Once here for the same reason and in the same two places. */
+typedef struct AfterFuncCtx {
+    CancelCtx c;
+
+    SyncOnce once;
+
+    /* Set once, before the node is visible to anybody. Read on the cancelling
+     * goroutine when it hands the function to go, and not after that: what runs
+     * is the caller's function with the caller's environment, so the goroutine
+     * never touches this node and the node can be freed underneath it. */
+    Func f;
+} AfterFuncCtx;
 
 typedef struct ValueCtx {
     Context parent;
@@ -573,6 +600,10 @@ static void remove_child(CancelCtx *c) {
  * reference down, and the two are easier to read in this order. */
 static void release(CancelCtx *c);
 
+/* Declared up here for the same reason: cancelling an AfterFunc node is what
+ * starts the function, and the section that builds one is a long way below. */
+static void after_func_start(AfterFuncCtx *af);
+
 /* Cancels this node and everything under it, once.
  *
  * The child's lock is taken while this node's is held, which looks like the
@@ -632,6 +663,13 @@ static void cancel_node(CancelCtx *c, bool remove_from_parent, Error err, Error 
     if (remove_from_parent)
         remove_child(c);
 
+    /* Outside the lock, because this starts a goroutine and because the
+     * function it starts is the caller's. Go puts the same call at the same
+     * point, in the override afterFuncCtx has for cancel. Nothing gets here
+     * twice: the check at the top lets exactly one cancel past. */
+    if (c->after)
+        after_func_start((AfterFuncCtx *)c);
+
     if (timer_stopped)
         release(c);
 }
@@ -661,6 +699,9 @@ static void release(CancelCtx *c) {
         time_timer_free(((TimerCtx *)c)->timer);
         size = sizeof(TimerCtx);
         align = _Alignof(TimerCtx);
+    } else if (c->after) {
+        size = sizeof(AfterFuncCtx);
+        align = _Alignof(AfterFuncCtx);
     }
 
     chan_free(done);
@@ -946,6 +987,122 @@ Context context_without_cancel(Alloc *a, Context parent) {
     return out;
 }
 
+/* ------------------------------------------------------------------- AfterFunc
+ *
+ * A cancel node with a function hanging off it. Nobody waits on the channel;
+ * the cancellation itself is what starts the work.
+ *
+ * The whole of it is one Once with two callers. The stop function takes it and
+ * the function never runs, or cancel_node takes it and the function is started.
+ * Whichever is second finds it taken and does nothing, and that is also what
+ * makes a second call to stop answer false rather than do it again.
+ *
+ * Go returns only the stop function and lets the collector have the node. There
+ * is no collector here, so the node comes back as a Context and context_free is
+ * how it is given back. Making it a Context rather than a handle of its own is
+ * not a stretch: it is a cancel node, it has a parent and a done channel and an
+ * error, and it answers all four questions correctly already.
+ *
+ * Go also has an afterFuncer escape hatch, where a parent that implements
+ * AfterFunc itself gets to do the arranging. That exists for testing/synctest,
+ * whose contexts have to know about every goroutine waiting on them, and it is
+ * a fifth method on an interface Go can type assert for and this cannot. It
+ * comes back with synctest if synctest turns out to need it. */
+
+/* Under the once, so this and the stop function cannot both win.
+ *
+ * The function is handed to go by value, so once the goroutine exists nothing
+ * on it reads this node again and the node may be freed underneath it. That is
+ * why f is copied out before anything else here.
+ *
+ * A go that fails is a program with no memory left, which Go treats as fatal
+ * and so does this. The alternative is running the function on the goroutine
+ * that did the cancelling, and that one is holding no locks but is also not
+ * expecting to block, which is a worse failure than stopping. */
+static void after_func_go(void *env) {
+    AfterFuncCtx *af = (AfterFuncCtx *)env;
+    Func f = af->f;
+
+    if (!go(f))
+        runtime_throw(BURROW_S("context: out of memory starting an AfterFunc"));
+}
+
+static void after_func_start(AfterFuncCtx *af) {
+    sync_once_do(&af->once, BURROW_FN(Func, after_func_go, af));
+}
+
+/* Under the once, to find out whether this call is the one that took it. Go
+ * writes the same thing as a closure over a local. */
+static void after_func_claim(void *env) {
+    *(bool *)env = true;
+}
+
+static bool after_func_stop(void *env) {
+    AfterFuncCtx *af = (AfterFuncCtx *)env;
+    bool stopped = false;
+
+    sync_once_do(&af->once, BURROW_FN(Func, after_func_claim, &stopped));
+    if (!stopped)
+        return false;
+
+    /* The once is taken, so the cancel below cannot start the function and this
+     * is only detaching the node from its parent and closing its channel. Go
+     * cancels here for the same reason: a stopped registration that stayed in
+     * the parent's child list would be a leak for as long as the parent lives. */
+    cancel_node(&af->c, true, context_canceled, BURROW_NO_ERROR);
+    return true;
+}
+
+static bool after_func_stop_nothing(void *env) {
+    (void)env;
+    return false;
+}
+
+Context context_after_func(Alloc *a, Context parent, Func f, StopFunc *stop) {
+    Context none = {NULL, NULL};
+
+    if (BURROW_CONTEXT_IS_NIL(parent))
+        panic_str(BURROW_S("cannot create context from nil parent"));
+
+    if (stop != NULL)
+        *stop = BURROW_FN(StopFunc, after_func_stop_nothing, NULL);
+
+    AfterFuncCtx *af = BURROW_NEW(a, AfterFuncCtx);
+    if (af == NULL)
+        return none;
+
+    Chan *done = chan_make(a, TYPE_UINT8, 0);
+    if (done == NULL) {
+        mem_free(a, af, sizeof(AfterFuncCtx), _Alignof(AfterFuncCtx));
+        return none;
+    }
+
+    CancelCtx *c = &af->c;
+
+    c->parent = parent;
+    c->a = a;
+    c->self = c;
+    c->done = done;
+    c->refs = 1;
+    c->after = true;
+    af->f = f;
+
+    /* Everything above is in place first, because this is where a parent that
+     * is already cancelled cancels this node, and that reads the flag and the
+     * function. Go orders it the same way. */
+    if (!propagate_cancel(c, parent)) {
+        chan_free(done);
+        mem_free(a, af, sizeof(AfterFuncCtx), _Alignof(AfterFuncCtx));
+        return none;
+    }
+
+    if (stop != NULL)
+        *stop = BURROW_FN(StopFunc, after_func_stop, af);
+
+    Context out = {&cancel_vt, c};
+    return out;
+}
+
 /* ------------------------------------------------------- WithDeadline, WithTimeout
  *
  * A deadline is a cancel node with a timer pointed at it, which is all Go's
@@ -1133,6 +1290,14 @@ void context_free(Context c) {
 
     if (c.vt == &cancel_vt || c.vt == &timer_vt) {
         CancelCtx *cc = (CancelCtx *)c.data;
+
+        /* An AfterFunc registration is stopped before it is cancelled, or the
+         * free would be what starts the function. Giving something back is not
+         * a reason for its cleanup to run, and a caller that wanted the
+         * function to run has a stop function to not call. This does nothing if
+         * the cancellation already got there. */
+        if (cc->after)
+            (void)after_func_stop(cc);
 
         /* Cancel first, so that the done channel is closed and anything parked
          * on it has been let go before the channel stops existing. */

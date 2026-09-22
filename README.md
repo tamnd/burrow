@@ -564,6 +564,8 @@ Go's `context` package. A context is what a server hands down through every laye
 
 `context_err` answers one of two sentinels, which is enough to decide whether to stop and not enough to explain afterwards why. `context_with_cancel_cause` hands you a cancel function that takes a reason with it and `context_cause` reads that reason back at the bottom of the call stack, without the error changing and without anybody threading it through by hand. `context_without_cancel` goes the other way, for the audit log or the metric a handler starts and does not wait for: it keeps everything the request was carrying and drops everything the request does about stopping.
 
+`context_after_func` runs a function on a goroutine of its own once a context is cancelled, for the cleanup nobody is sitting in a `select` waiting to do, and hands back a stop function that says whether it got in before the cancellation did.
+
 `context_with_value` carries a request id or an authenticated user down the same tree, under a key of a type private to whoever put it there. Cancellation reaches a context built on a parent from somebody else's code too, which takes one goroutine watching two channels, the same as it does in Go.
 
 What is different is the ownership. Go leaves a context to the collector and there is none here, so every constructor takes an allocator and what it hands back is given back with `context_free`, parents after children. Freeing cancels first, so forgetting the cancel function cannot corrupt anything, and an arena user can skip the whole subject.

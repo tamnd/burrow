@@ -573,6 +573,150 @@ TEST(a_detached_context_is_given_back_to_the_allocator) {
     track_free(&tr);
 }
 
+/* ----------------------------------------------------------------- AfterFunc
+ *
+ * The half that does not need a scheduler. Stopping never starts a goroutine,
+ * and a registration under a parent this package made never gets a watcher, so
+ * everything here except actually running the function is testable flat. */
+
+static uint32_t after_ran;
+
+static void count_a_run(void *env) {
+    (void)env;
+
+    (void)burrow__atomic_add_u32(&after_ran, 1);
+}
+
+TEST(a_stopped_after_func_never_runs) {
+    Alloc *a = heap_allocator();
+    CancelFunc cancel;
+    StopFunc stop;
+
+    after_ran = 0;
+
+    Context req = context_with_cancel(a, context_background(), &cancel);
+    Context reg = context_after_func(a, req, BURROW_FN(Func, count_a_run, NULL), &stop);
+
+    CHECK(!BURROW_CONTEXT_IS_NIL(reg));
+    CHECK(BURROW_CALLF0(stop));
+
+    /* Stopping cancels the registration, because one left in the parent's child
+     * list would sit there for as long as the parent does. */
+    CHECK(is_done(reg));
+
+    BURROW_CALLF0(cancel);
+
+    CHECK_INT_EQ((Int)burrow__atomic_load_u32(&after_ran), 0);
+
+    context_free(reg);
+    context_free(req);
+}
+
+TEST(only_one_stop_ever_answers_true) {
+    Alloc *a = heap_allocator();
+    CancelFunc cancel;
+    StopFunc stop;
+
+    after_ran = 0;
+
+    Context req = context_with_cancel(a, context_background(), &cancel);
+    Context reg = context_after_func(a, req, BURROW_FN(Func, count_a_run, NULL), &stop);
+
+    CHECK(BURROW_CALLF0(stop));
+    CHECK(!BURROW_CALLF0(stop));
+    CHECK(!BURROW_CALLF0(stop));
+
+    BURROW_CALLF0(cancel);
+    CHECK_INT_EQ((Int)burrow__atomic_load_u32(&after_ran), 0);
+
+    context_free(reg);
+    context_free(req);
+}
+
+TEST(freeing_a_registration_is_not_a_reason_to_run_it) {
+    Alloc *a = heap_allocator();
+    CancelFunc cancel;
+    StopFunc stop;
+
+    after_ran = 0;
+
+    Context req = context_with_cancel(a, context_background(), &cancel);
+    Context reg = context_after_func(a, req, BURROW_FN(Func, count_a_run, NULL), &stop);
+
+    /* Given back without ever being stopped. Handing something back is not a
+     * reason for its cleanup to run, and a caller who wanted the function to
+     * run has a stop function to not call. */
+    context_free(reg);
+
+    BURROW_CALLF0(cancel);
+    CHECK_INT_EQ((Int)burrow__atomic_load_u32(&after_ran), 0);
+
+    context_free(req);
+}
+
+TEST(a_registration_answers_the_four_questions_like_anything_else) {
+    Alloc *a = heap_allocator();
+    Fake f = {0};
+    CancelFunc cancel;
+    StopFunc stop;
+    Int id = 12;
+
+    f.has_deadline = true;
+    f.when = burrow_nanotime() + TIME_SECOND;
+
+    Context req = context_with_cancel(a, fake_context(&f), &cancel);
+    Context with =
+        context_with_value(a, req, REQUEST_ID_KEY, BURROW_ANY(TYPE_INT, &id));
+    Context reg =
+        context_after_func(a, with, BURROW_FN(Func, count_a_run, NULL), &stop);
+
+    /* Go hands back only the stop function and keeps the node to itself. This
+     * hands the node back too, because something has to free it, and then it
+     * may as well be usable. */
+    int64_t when = 0;
+    CHECK(context_deadline(reg, &when));
+    CHECK_INT_EQ(when, f.when);
+    CHECK(context_done(reg) != NULL);
+    CHECK(BURROW_OK(context_err(reg)));
+    CHECK_INT_EQ(*(Int *)context_value(reg, REQUEST_ID_KEY).data, 12);
+
+    /* Stopped rather than cancelled from above, because a cancellation that
+     * reaches this node starts a goroutine and there is no scheduler here. The
+     * parent's cancellation getting through is the runtime half's subject. */
+    CHECK(BURROW_CALLF0(stop));
+    CHECK(is_done(reg));
+    CHECK(is(context_err(reg), context_canceled));
+
+    BURROW_CALLF0(cancel);
+
+    context_free(reg);
+    context_free(with);
+    context_free(req);
+}
+
+TEST(a_registration_is_given_back_to_the_allocator) {
+    Track tr;
+    track_init(&tr, heap_allocator());
+    track_set_quarantine(&tr, 0);
+    Alloc *a = track_allocator(&tr);
+
+    CancelFunc cancel;
+    StopFunc stop;
+
+    Context req = context_with_cancel(a, context_background(), &cancel);
+    Context reg = context_after_func(a, req, BURROW_FN(Func, count_a_run, NULL), &stop);
+
+    CHECK(track_live(&tr) > 0);
+    CHECK(BURROW_CALLF0(stop));
+
+    context_free(reg);
+    context_free(req);
+
+    CHECK_INT_EQ((Int)track_live(&tr), 0);
+    CHECK_INT_EQ((Int)track_check(&tr), 0);
+    track_free(&tr);
+}
+
 /* ----------------------------------------------------------------- WithValue */
 
 TEST(a_value_is_found_through_everything_above_it) {
@@ -783,6 +927,12 @@ TEST(the_monotonic_clock_only_goes_forwards) {
 static Alloc *panic_alloc;
 static Context panic_parent;
 
+/* Something to hand context_after_func in the test below. It never runs, since
+ * the call it is passed to panics before the registration exists. */
+static void panic_never_runs(void *env) {
+    (void)env;
+}
+
 TEST(a_nil_parent_panics) {
     Context none = {NULL, NULL};
     CancelFunc cancel;
@@ -805,6 +955,12 @@ TEST(a_nil_parent_panics) {
     CHECK_PANIC(
         (void)context_with_timeout(panic_alloc, panic_parent, TIME_SECOND, NULL),
         "cannot create context from nil parent");
+
+    StopFunc stop;
+    CHECK_PANIC((void)context_after_func(panic_alloc, panic_parent,
+                                         BURROW_FN(Func, panic_never_runs, NULL),
+                                         &stop),
+                "cannot create context from nil parent");
 
     CancelCauseFunc cancel_cause;
     CHECK_PANIC(
@@ -1769,6 +1925,229 @@ TEST(a_deadline_already_gone_by_still_carries_its_reason) {
     CHECK(is(dl.child_err, err_gave_up));
 }
 
+/* ------------------------------------------------------- AfterFunc, running it
+ *
+ * The other half. A cancellation that reaches one of these starts a goroutine,
+ * so everything below needs a scheduler, and what the function found out it
+ * says through an atomic like every other child goroutine in this file.
+ *
+ * The waiting is polling with a limit, for the reason written over the deadline
+ * tests: a function that never runs should fail one test rather than hang the
+ * run. */
+
+static uint32_t af_ran;
+static bool af_stopped;
+static bool af_made;
+
+static void af_reset(void) {
+    burrow__atomic_store_u32(&af_ran, 0);
+    af_stopped = false;
+    af_made = false;
+}
+
+static void af_run(void *env) {
+    (void)env;
+
+    (void)burrow__atomic_add_u32(&af_ran, 1);
+}
+
+static bool wait_ran(void) {
+    int64_t give_up = burrow_nanotime() + DL_LIMIT;
+
+    while (burrow_nanotime() < give_up) {
+        if (burrow__atomic_load_acquire_u32(&af_ran) != 0)
+            return true;
+        time_sleep(TIME_MILLISECOND);
+    }
+    return false;
+}
+
+static void af_cancel_body(void *env) {
+    (void)env;
+
+    CancelFunc cancel;
+    StopFunc stop;
+
+    Context req = context_with_cancel(rt_alloc, context_background(), &cancel);
+    Context reg =
+        context_after_func(rt_alloc, req, BURROW_FN(Func, af_run, NULL), &stop);
+    if (BURROW_CONTEXT_IS_NIL(reg))
+        return;
+
+    af_made = true;
+    BURROW_CALLF0(cancel);
+
+    af_stopped = wait_ran();
+
+    /* Too late, and saying so is the whole of what a false answer means. */
+    af_stopped = af_stopped && !BURROW_CALLF0(stop);
+
+    context_free(reg);
+    context_free(req);
+}
+
+TEST(a_cancel_runs_the_function_on_a_goroutine_of_its_own) {
+    af_reset();
+    rt_alloc = heap_allocator();
+
+    runtime_main(BURROW_FN(Func, af_cancel_body, NULL));
+
+    CHECK(af_made);
+    CHECK(af_stopped);
+    CHECK_INT_EQ((Int)burrow__atomic_load_u32(&af_ran), 1);
+}
+
+static void af_already_body(void *env) {
+    (void)env;
+
+    CancelFunc cancel;
+    StopFunc stop;
+
+    Context req = context_with_cancel(rt_alloc, context_background(), &cancel);
+    BURROW_CALLF0(cancel);
+
+    /* Registered against something that is already over. Go starts the function
+     * straight away rather than never, which is the only reading of "after this
+     * is cancelled" that is any use. */
+    Context reg =
+        context_after_func(rt_alloc, req, BURROW_FN(Func, af_run, NULL), &stop);
+    if (BURROW_CONTEXT_IS_NIL(reg))
+        return;
+
+    af_made = true;
+    af_stopped = wait_ran();
+
+    context_free(reg);
+    context_free(req);
+}
+
+TEST(a_context_that_is_already_over_starts_the_function_at_once) {
+    af_reset();
+    rt_alloc = heap_allocator();
+
+    runtime_main(BURROW_FN(Func, af_already_body, NULL));
+
+    CHECK(af_made);
+    CHECK(af_stopped);
+    CHECK_INT_EQ((Int)burrow__atomic_load_u32(&af_ran), 1);
+}
+
+static void af_deadline_body(void *env) {
+    (void)env;
+
+    CancelFunc cancel;
+    StopFunc stop;
+
+    Context req =
+        context_with_timeout(rt_alloc, context_background(), DL_SOON, &cancel);
+    if (BURROW_CONTEXT_IS_NIL(req))
+        return;
+
+    Context reg =
+        context_after_func(rt_alloc, req, BURROW_FN(Func, af_run, NULL), &stop);
+    if (BURROW_CONTEXT_IS_NIL(reg))
+        return;
+
+    af_made = true;
+    af_stopped = wait_ran();
+
+    BURROW_CALLF0(cancel);
+    context_free(reg);
+    context_free(req);
+}
+
+TEST(a_deadline_running_out_runs_the_function_too) {
+    af_reset();
+    rt_alloc = heap_allocator();
+
+    runtime_main(BURROW_FN(Func, af_deadline_body, NULL));
+
+    CHECK(af_made);
+    CHECK(af_stopped);
+    CHECK_INT_EQ((Int)burrow__atomic_load_u32(&af_ran), 1);
+}
+
+static void af_once_body(void *env) {
+    (void)env;
+
+    CancelFunc cancel;
+    StopFunc stop;
+
+    Context req = context_with_cancel(rt_alloc, context_background(), &cancel);
+    Context reg =
+        context_after_func(rt_alloc, req, BURROW_FN(Func, af_run, NULL), &stop);
+    if (BURROW_CONTEXT_IS_NIL(reg))
+        return;
+
+    af_made = true;
+
+    /* Cancelled, freed and cancelled again. None of the three after the first
+     * gets past the once, so the count below is the assertion. */
+    BURROW_CALLF0(cancel);
+    af_stopped = wait_ran();
+
+    context_free(reg);
+    BURROW_CALLF0(cancel);
+    context_free(req);
+
+    time_sleep(20 * TIME_MILLISECOND);
+}
+
+TEST(the_function_runs_once_however_many_things_cancel) {
+    af_reset();
+    rt_alloc = heap_allocator();
+
+    runtime_main(BURROW_FN(Func, af_once_body, NULL));
+
+    CHECK(af_made);
+    CHECK(af_stopped);
+    CHECK_INT_EQ((Int)burrow__atomic_load_u32(&af_ran), 1);
+}
+
+static Track af_track;
+
+static void af_memory_body(void *env) {
+    (void)env;
+
+    CancelFunc cancel;
+    StopFunc stop;
+
+    Context req = context_with_cancel(rt_alloc, context_background(), &cancel);
+    Context reg =
+        context_after_func(rt_alloc, req, BURROW_FN(Func, af_run, NULL), &stop);
+    if (BURROW_CONTEXT_IS_NIL(reg))
+        return;
+
+    af_made = true;
+
+    BURROW_CALLF0(cancel);
+    af_stopped = wait_ran();
+
+    /* Freed after the function has been started, which is the case that has a
+     * goroutine in flight while the node goes. Nothing on that goroutine reads
+     * the node, because what it runs is the caller's function with the caller's
+     * environment, and this is where that is checked. */
+    context_free(reg);
+    context_free(req);
+
+    time_sleep(20 * TIME_MILLISECOND);
+}
+
+TEST(a_registration_whose_function_has_run_is_still_given_back) {
+    af_reset();
+    track_init(&af_track, heap_allocator());
+    track_set_quarantine(&af_track, 0);
+    rt_alloc = track_allocator(&af_track);
+
+    runtime_main(BURROW_FN(Func, af_memory_body, NULL));
+
+    CHECK(af_made);
+    CHECK(af_stopped);
+    CHECK_INT_EQ((Int)track_live(&af_track), 0);
+    CHECK_INT_EQ((Int)track_check(&af_track), 0);
+    track_free(&af_track);
+}
+
 int main(void) {
     RUN(the_root_is_never_cancelled_and_carries_nothing);
     RUN(background_and_todo_are_not_the_same_context);
@@ -1788,6 +2167,12 @@ int main(void) {
     RUN(a_child_of_something_cancelled_with_a_reason_starts_with_it);
     RUN(a_plain_cancel_context_still_has_a_cause);
     RUN(a_context_that_cannot_be_cancelled_has_no_cause);
+
+    RUN(a_stopped_after_func_never_runs);
+    RUN(only_one_stop_ever_answers_true);
+    RUN(freeing_a_registration_is_not_a_reason_to_run_it);
+    RUN(a_registration_answers_the_four_questions_like_anything_else);
+    RUN(a_registration_is_given_back_to_the_allocator);
 
     RUN(work_that_outlives_its_request_keeps_the_values);
     RUN(nothing_under_a_without_cancel_is_reached_by_the_parent);
@@ -1833,6 +2218,12 @@ int main(void) {
     RUN(a_deadline_that_fires_says_what_it_was_waiting_for);
     RUN(a_cancel_before_the_deadline_leaves_the_deadline_cause_alone);
     RUN(a_deadline_already_gone_by_still_carries_its_reason);
+
+    RUN(a_cancel_runs_the_function_on_a_goroutine_of_its_own);
+    RUN(a_context_that_is_already_over_starts_the_function_at_once);
+    RUN(a_deadline_running_out_runs_the_function_too);
+    RUN(the_function_runs_once_however_many_things_cancel);
+    RUN(a_registration_whose_function_has_run_is_still_given_back);
 
     return harness_report("context");
 }

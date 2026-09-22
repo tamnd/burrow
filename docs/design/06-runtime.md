@@ -1142,7 +1142,11 @@ at a stack is a source of corruption that appears under load and nowhere else.
 
 The cost when nobody is waiting is a relaxed load of one word on the G and a
 branch, which is why it can sit at the top of `chan_send` without showing up in
-`bench/chan_bench.c`.
+`bench/chan_bench.c`. Measured, it is around seven nanoseconds on an Apple M
+series core, most of which is finding the M in thread local storage rather than
+the load itself, against around two hundred and forty for `runtime_gosched` on
+the same machine going round an empty run queue. The rows are
+`preempt_point_idle` and `goroutine_yield_alone` in burrow-bench.
 
 `GOMAXPROCS`, `NumCPU`, `NumGoroutine`, `Gosched`, `LockOSThread`/
 `UnlockOSThread` (needed by `os/signal` and by GUI interop) all port faithfully.

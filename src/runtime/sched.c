@@ -18,17 +18,22 @@
  * it somewhere another thread can find it, and doing that while still standing
  * on its stack is a race with that thread picking it up and running it.
  *
- * Two things Go has that are not here yet, both of them further down the list in
- * docs/design/06-runtime.md section 12. There is no netpoll step in
- * findrunnable, because there is no netpoller, and where it goes is marked. And
- * nothing preempts a goroutine, so a loop that never blocks holds its thread
- * until it finishes.
- *
  * Timers are here. What that costs this file is three things: a check of this
  * P's own timers at the top of findrunnable, a check of a victim's on the last
  * stealing pass, and a deadline on the sleep a thread takes when it has run out
- * of places to look. The last one is where Go calls the netpoller with a
- * timeout, and swapping this for that is what the netpoller change does.
+ * of places to look.
+ *
+ * The netpoller is here too, though not in the shape Go puts it in. Go polls
+ * from inside findrunnable; this polls from whichever thread is about to run
+ * out of places to look, and gets woken by a break rather than by a timeout.
+ * The section above poller_on below is the whole of that arrangement.
+ *
+ * Preemption is here and is the one thing in this file that is deliberately
+ * weaker than Go's. Go's signal handler can move a goroutine off its processor
+ * wherever it stands; this asks, and the goroutine gives way when it next
+ * passes a safe point. A loop that calls nothing in burrow passes none and is
+ * not preempted. The section above burrow__preempt_requested says what that
+ * costs and why there is no alternative from C.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -426,7 +431,7 @@ static void set_pstatus(burrow__P *p, burrow__PStatus s) {
 
 static void pidle_put(burrow__P *p) {
     set_pstatus(p, BURROW_PIDLE);
-    p->m = NULL;
+    burrow__atomic_store_ptr((void **)&p->m, NULL);
     p->link = sched.pidle;
     sched.pidle = p;
     burrow__atomic_store_release_u32(
@@ -457,10 +462,14 @@ static burrow__P *pidle_get(void) {
 }
 
 /* Hands a P to an M. Three writes that always go together, and a P with an M and
- * a status that disagree is a P two threads think they own. */
+ * a status that disagree is a P two threads think they own.
+ *
+ * The back pointer is written atomically for the reason set_pstatus gives about
+ * the status: sysmon reads it from its own thread to find the goroutine a P is
+ * running, so a plain store here is a race in C however the machine behaves. */
 static void acquirep(burrow__M *m, burrow__P *p) {
     m->p = p;
-    p->m = m;
+    burrow__atomic_store_ptr((void **)&p->m, m);
     set_pstatus(p, BURROW_PRUNNING);
 }
 
@@ -736,16 +745,36 @@ static void mcall(burrow__G *(*fn)(burrow__M *m, burrow__G *g)) {
  * Everything between the two switches is on the goroutine's own stack and
  * everything outside them is on the thread's. */
 static burrow__G *execute(burrow__M *m, burrow__G *gp) {
-    m->curg = gp;
+    /* Atomic because sysmon reads it to find the goroutine this M is running,
+     * the same reason acquirep writes the P's back pointer atomically. Read
+     * back plainly everywhere else in this file, which is allowed because every
+     * one of those reads is on the thread that owns the M. */
+    burrow__atomic_store_ptr((void **)&m->curg, gp);
     set_status(gp, BURROW_GRUNNING);
     burrow__stack_set_current(&gp->stack);
+
+    /* Both of these are the preemption bookkeeping and both belong here rather
+     * than anywhere else, because here is the one place that knows a processor
+     * has started running something new.
+     *
+     * The tick is what sysmon watches. Written atomically and read atomically
+     * from there, and this is the only thread that ever increments it, so the
+     * load and the store do not have to be one operation.
+     *
+     * The clear is because a request that was made of the goroutine that just
+     * stopped, and that it honoured by stopping, must not follow it to its next
+     * turn and make it give way again the moment it gets one. Go clears it in
+     * the same place. */
+    burrow__atomic_store_u32(&m->p->schedtick,
+                             burrow__atomic_load_relaxed_u32(&m->p->schedtick) + 1U);
+    burrow__atomic_store_u32(&gp->preempt, 0);
 
     burrow__mcontext_switch(&m->g0.ctx, &gp->ctx);
 
     /* Back on the thread's own stack, so the goroutine's bounds are no longer
      * what a stack overflow should be measured against. */
     burrow__stack_set_current(NULL);
-    m->curg = NULL;
+    burrow__atomic_store_ptr((void **)&m->curg, NULL);
 
     burrow__G *(*fn)(burrow__M *, burrow__G *) = m->mcall;
     burrow__G *arg = m->mcallg;
@@ -1132,6 +1161,22 @@ void burrow__timers_wake(int64_t when) {
  * already using every thread it has. */
 #define SYSMON_POLL_PERIOD 10000000
 
+/* How long one goroutine may hold a processor before sysmon asks it to give
+ * way. Go's forcePreemptNS, and Go's number.
+ *
+ * Ten milliseconds is chosen from the other end to most scheduling numbers.
+ * The question is not how quickly a waiting goroutine gets its turn, it is how
+ * much work a running one may do before being interrupted for no reason of its
+ * own. A request handler that finishes in under ten milliseconds, which is most
+ * of them, is never preempted at all and never pays anything. One that takes a
+ * second gets interrupted a hundred times, which is invisible next to a second.
+ *
+ * It is a floor rather than a promise, twice over. sysmon only looks every
+ * SYSMON_MIN_DELAY to SYSMON_MAX_DELAY, so on a quiet program the look itself
+ * can be ten milliseconds late, and the goroutine then gives way at its next
+ * safe point rather than at once. */
+#define SYSMON_PREEMPT_PERIOD 10000000
+
 /* Whether any P is holding a timer that is already due.
  *
  * Reads the wake times each set publishes rather than taking any P's lock,
@@ -1179,12 +1224,64 @@ static bool world_is_asleep(void) {
     return true;
 }
 
+/* What sysmon remembers about a P between passes, so that it can tell one that
+ * is working through a queue from one that is stuck on the same goroutine.
+ *
+ * Go keeps this inside the P as pd.schedtick and pd.schedwhen. It is here
+ * instead, on sysmon's own stack, because it is nobody else's business and
+ * because a field in the P is a field every thief and every scheduler pulls
+ * into cache for no reason. */
+typedef struct SysmonP {
+    uint32_t tick;
+    int64_t when;
+} SysmonP;
+
+/* Asks any goroutine that has held a processor for too long to give way.
+ *
+ * The test is Go's and it is indirect, because there is nothing to read that
+ * says how long this goroutine has been running. What there is instead is a
+ * count of how many goroutines this P has started. A P whose count has not
+ * moved since the last look, and which was running something then and is
+ * running something now, has been running one goroutine for the whole gap. If
+ * the gap is long enough, that is the thing being looked for.
+ *
+ * The first pass after a P starts running sets the clock rather than judging
+ * it, which is what the tick comparison does for free: a P seen for the first
+ * time has a tick that does not match the zero remembered for it, so it is
+ * recorded and left alone until the pass after that. */
+static void preempt_long_runners(SysmonP *pd, int64_t now) {
+    for (int32_t i = 0; i < sched.gomaxprocs; i++) {
+        burrow__P *p = &allp[i];
+        if (burrow__atomic_load_u32(&p->status) != (uint32_t)BURROW_PRUNNING)
+            continue;
+
+        uint32_t tick = burrow__atomic_load_u32(&p->schedtick);
+        if (pd[i].tick != tick) {
+            pd[i].tick = tick;
+            pd[i].when = now;
+            continue;
+        }
+
+        if (now - pd[i].when < SYSMON_PREEMPT_PERIOD)
+            continue;
+
+        /* Whether or not there was anybody to ask, the clock restarts. A
+         * request that lands is honoured some time later and the P gets a new
+         * tick then, so leaving the clock where it is would mean asking again
+         * on every pass until that happened. A request that finds nobody is
+         * about a P that has moved on anyway. */
+        pd[i].when = now;
+        (void)burrow__preempt_one(p);
+    }
+}
+
 static void sysmon(void *arg) {
     (void)arg;
 
     int64_t delay = SYSMON_MIN_DELAY;
     uint32_t quiet = 0;
     int64_t swept = burrow__nanotime();
+    SysmonP pd[BURROW_MAXPROCS] = {{0, 0}};
 
     while (burrow__atomic_load_acquire_u32(&sched.stopping) == 0) {
         burrow__lock(&sched.lock);
@@ -1238,6 +1335,8 @@ static void sysmon(void *arg) {
                 ready_list(&ready);
             }
         }
+
+        preempt_long_runners(pd, now);
 
         if (timer_overdue()) {
             wakep();
@@ -1782,6 +1881,11 @@ static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble, bool b
     if (burrow__atomic_load_acquire_u32(&sched.running) == 0)
         runtime_throw(BURROW_S("go outside runtime_main"));
 
+    /* A safe point, before anything is taken or locked. A loop that starts
+     * goroutines and does not wait for any of them is a loop that never blocks,
+     * and it is the shape a fan out is written in. */
+    burrow__preempt_point();
+
     if (stack_bytes == 0)
         stack_bytes = BURROW_GOROUTINE_STACK;
 
@@ -1919,6 +2023,78 @@ void runtime_gosched(void) {
     if (curm == NULL || curm->curg == NULL)
         runtime_throw(BURROW_S("runtime_gosched: not on a goroutine"));
     mcall(gosched0);
+}
+
+/* ---------------------------------------------------------------- preemption
+ *
+ * The request half. The deciding half is in sysmon and the honouring half is
+ * every caller of burrow__preempt_point, which is most of the library.
+ *
+ * What makes this different from Go is that Go's signal handler can move a
+ * goroutine off its processor where it stands, because Go's compiler emitted a
+ * stack map for the instruction the signal landed on. There is no such map
+ * here and there is no way to make one from C, so the request is a flag and
+ * the goroutine honours it when it next passes somewhere it is safe to stop.
+ * docs/design/06-runtime.md section 9 calls that cooperative at safe points
+ * with asynchronous requesting, and names it as the third and last of the
+ * runtime's acknowledged compromises.
+ *
+ * There is no signal here at all, which is a smaller thing than it sounds and
+ * is worth saying plainly. In Go the signal does two jobs: it moves the
+ * goroutine, and it interrupts a thread sitting in a system call. The first is
+ * not available here for the reason above, and the second has nothing to
+ * interrupt yet, because the only place in burrow that blocks in the kernel for
+ * a long time is the netpoller and that one already has its own way to be woken
+ * from another thread. A signal that does neither job is a signal handler, a
+ * per platform mechanism and a new class of bug, in exchange for nothing. It
+ * goes in when there is a blocking system call to break, which is the os
+ * milestone. */
+
+bool burrow__preempt_requested(void) {
+    burrow__M *m = curm;
+    if (m == NULL || m->curg == NULL)
+        return false;
+    return burrow__atomic_load_u32(&m->curg->preempt) != 0;
+}
+
+void burrow__preempt_point(void) {
+    if (!burrow__preempt_requested())
+        return;
+
+    /* Cleared here rather than left for execute, so that a goroutine which was
+     * asked to give way and then found the run queue empty, and so came
+     * straight back, is not asked again by the very next safe point it walks
+     * past. That would turn one preemption into a loop of them. */
+    burrow__atomic_store_u32(&curm->curg->preempt, 0);
+    mcall(gosched0);
+}
+
+/* The same thing under a public name, for a loop in user code that would
+ * otherwise contain no safe point at all. Unlike runtime_gosched this does not
+ * throw when it is called off a goroutine, because a function that is sometimes
+ * called from one and sometimes not should be able to put a safe point in its
+ * loop without first asking which it is today. */
+void runtime_preempt_point(void) {
+    burrow__preempt_point();
+}
+
+bool burrow__preempt_one(burrow__P *p) {
+    /* Both of these can go out of date between the read and the store, and
+     * neither matters. A P that let its M go, or an M that moved on to another
+     * goroutine, means the flag lands on a goroutine that was not the one this
+     * was about. That goroutine gives way once at its next safe point and
+     * carries on, which costs a trip through the run queue and is the same
+     * thing that happens to it when it is genuinely preempted. */
+    burrow__M *m = burrow__atomic_load_acquire_ptr((void **)&p->m);
+    if (m == NULL)
+        return false;
+
+    burrow__G *gp = burrow__atomic_load_acquire_ptr((void **)&m->curg);
+    if (gp == NULL)
+        return false;
+
+    burrow__atomic_store_u32(&gp->preempt, 1);
+    return true;
 }
 
 void runtime_goexit(void) {

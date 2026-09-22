@@ -359,10 +359,12 @@ static void worker(void *arg) {
  * built around: the monitor's thread is not an M, holds no P, and runs with
  * everything else still going.
  *
- * It yields every pass. There is no preemption yet, so a goroutine that spins
- * without yielding or parking can hold its processor against the workers and
- * wait forever for a flag only they can set. Take the yield out once preemption
- * lands. */
+ * It yields every pass, and it stays that way now that preemption exists. The
+ * yield is no longer what stops this waiting forever for a flag only the
+ * workers can set, since sysmon would eventually take the processor off it
+ * anyway. It is what makes the test quick: eventually here is ten milliseconds
+ * per turn, and a run that sweeps a handful of times is not much of a test of
+ * sweeping while everything else is going. */
 static void sweeper(void *arg) {
     (void)arg;
 

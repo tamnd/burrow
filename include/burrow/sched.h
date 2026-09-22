@@ -211,6 +211,20 @@ struct burrow__G {
      * status change, and this is what makes only that one adjust the bubble. */
     uint32_t bubbleblocked;
 
+    /* Somebody has asked this goroutine to give way at the next safe point.
+     * Go's g.preempt, and set for the same reason: it has been on a processor
+     * long enough that whatever else is waiting deserves a turn.
+     *
+     * Atomic, because sysmon writes it from its own thread and the goroutine
+     * reads it on whichever thread is running it. Relaxed on both sides. There
+     * is nothing to order against: a read that misses the write sees it on the
+     * next safe point instead, and the whole mechanism is already a request
+     * that gets honoured some time later rather than an instruction that gets
+     * obeyed now.
+     *
+     * Cleared by the goroutine itself, at the safe point where it gives way. */
+    uint32_t preempt;
+
     /* Every G ever created, in one list under the scheduler lock. Go calls it
      * allgs and keeps it for the same two reasons: a traceback has to be able to
      * name every goroutine, and shutting the runtime down has to be able to give
@@ -242,7 +256,13 @@ struct burrow__P {
     uint32_t status;
 
     /* The M running this P, or NULL when it is idle. Borrowed: an M owns
-     * itself. */
+     * itself.
+     *
+     * Written atomically for the same reason the status above is: sysmon reads
+     * it from its own thread, on the way to the goroutine it wants to ask to
+     * give way, and a plain store against that load is a race in C whatever the
+     * hardware does with it. Everything else reads it under the scheduler lock
+     * or on the thread that owns the P. */
     BURROW_BORROWS(1) burrow__M *m;
 
     /* Next on the idle P list, under the scheduler lock. A P is on that list
@@ -283,6 +303,20 @@ struct burrow__P {
      * overflow goes to a central list the scheduler file owns. */
     BURROW_OWNS(1) burrow__G *gfree;
     int32_t gfree_count;
+
+    /* How many goroutines this P has started running, ever. Go's p.schedtick
+     * and it exists for the one reason Go's does: it is how sysmon tells a P
+     * that is working through a queue from a P that has been stuck on the same
+     * goroutine for the last ten milliseconds. Those two look identical from
+     * the outside and the difference is the whole of the preemption decision.
+     *
+     * Only the M holding the P writes it, and only between goroutines, so the
+     * increment does not have to be one operation. Both halves are still atomic
+     * and so is sysmon's read, because a plain store against a load from
+     * another thread is a race in C whatever the machine does with it. A stale
+     * read costs one more pass before a preemption, which is ten milliseconds
+     * on a decision that was already about ten milliseconds. */
+    uint32_t schedtick;
 };
 
 /* An operating system thread, and the bookkeeping that belongs to the thread
@@ -298,7 +332,12 @@ struct burrow__M {
      * runnable, and the context every switch goes through. */
     burrow__G g0;
 
-    /* What this M is running now, or NULL if it is between goroutines. */
+    /* What this M is running now, or NULL if it is between goroutines.
+     *
+     * Written atomically, because sysmon follows a P's back pointer to its M
+     * and reads this to find the goroutine to ask to give way. Read plainly
+     * everywhere else, which is allowed because every other read is on the
+     * thread that owns the M. */
     BURROW_BORROWS(1) burrow__G *curg;
 
     /* The P this M is holding, or NULL if it has none, which is what an M
@@ -600,6 +639,49 @@ BURROW_BORROWS(ret) burrow__Timer *burrow__sleep_timer(void);
  * waiting on top of the scheduler is waiting for something the bubble has no
  * way to reason about. */
 void burrow__park(bool (*unlockf)(burrow__G *g, void *lock), void *lock, bool durable);
+
+/* ------------------------------------------------------------- preemption
+ *
+ * Whether somebody has asked the running goroutine to give way.
+ *
+ * Cheap on purpose, because it goes on paths that are otherwise a handful of
+ * instructions. One relaxed load of a field on the current goroutine, and a
+ * NULL check for the case where there is no goroutine because the caller is on
+ * a plain thread. Nothing here takes a lock or touches another core's memory.
+ *
+ * A false is allowed to be out of date. See the comment on burrow__G.preempt
+ * for why that costs nothing.
+ *
+ * This is the half of a safe point that is worth inlining. The other half,
+ * actually giving way, is a function call and a stack switch, and it happens
+ * once every ten milliseconds at most. */
+bool burrow__preempt_requested(void);
+
+/* A safe point.
+ *
+ * Gives way if somebody has asked, and does nothing at all if not. The
+ * goroutine comes back on a processor some time later having lost nothing: a
+ * safe point is a plain yield, not a park, so it goes on the run queue rather
+ * than into a wait.
+ *
+ * Call it anywhere a goroutine is between two pieces of work rather than in the
+ * middle of one, which in practice means at the top of an operation and never
+ * while holding a runtime lock. Everything in burrow that loops or that a loop
+ * is likely to call has one of these. Code outside burrow that computes for a
+ * long time without calling into burrow at all has no safe point in it and will
+ * not be preempted, which is the compromise docs/design/06-runtime.md section 9
+ * sets out, and runtime_preempt_point is that section's answer for code that
+ * wants to opt in. */
+void burrow__preempt_point(void);
+
+/* Asks whatever goroutine is running on p to give way at its next safe point.
+ *
+ * Answers false if there was nobody to ask, which is a P between goroutines or
+ * a P whose M has let it go. Go's preemptone, and like Go's it is a request
+ * with no acknowledgement: the caller learns nothing about whether the
+ * goroutine honoured it, and finds out on the next pass by looking at the same
+ * thing it looked at to get here. */
+bool burrow__preempt_one(burrow__P *p);
 
 /* Starts fn as a goroutine in b rather than in the caller's bubble, which is
  * what makes the first goroutine of a bubble the first goroutine of a bubble.

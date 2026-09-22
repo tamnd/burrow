@@ -413,12 +413,14 @@ TEST(clear_empties_the_map_and_leaves_it_usable) {
  * almost certainly show something else. Under the address sanitizer the read
  * itself is the report, which is the real reason this test exists.
  *
- * The readers and the walker yield at the end of every pass. They run until the
- * writers are finished and nothing here ever parks, and the scheduler has no
- * preemption yet, so a reader that never yields can hold its processor against
- * a writer that has not started. That is a hang and not a slow test: the reader
- * is waiting for a writer that is waiting for the reader. Take the yields out
- * once preemption lands. */
+ * The readers and the walker yield at the end of every pass, and they keep
+ * doing it now that preemption exists. They run until the writers are finished
+ * and nothing here ever parks, so before preemption a reader that never yielded
+ * would hold its processor against a writer that had not started, and that was
+ * a hang rather than a slow test. It is a slow test now, which is still not
+ * worth having: sysmon takes ten milliseconds to notice, and this wants
+ * thousands of passes of two thousand rounds against each other rather than
+ * however many fit in ten milliseconds at a time. */
 
 #define WORKERS 4
 #define ROUNDS 2000

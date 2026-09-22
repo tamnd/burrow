@@ -1105,6 +1105,45 @@ C code with no `burrow` calls will not be preempted, and the documentation says
 so and points at `gosched()`. This is the third and final acknowledged
 runtime compromise.
 
+### What landed, and how it differs
+
+The compromise above is what shipped. Three details came out differently once
+it was built, and they are recorded here rather than left for somebody to
+rediscover from the source.
+
+There is no signal. The plan above sends `SIGURG` and has the handler set the
+flag; what landed has `sysmon` set the flag directly from its own thread. The
+signal was there to do two jobs, and neither of them survives. It cannot move
+the goroutine, for the stack map reason already given, so it would set the same
+flag the monitor thread can set without it. And it would break a thread out of a
+blocking system call, except that the only place `burrow` blocks in the kernel
+for any length of time is the netpoller, which already has a way to be woken
+from another thread. A signal that does neither job is a per platform mechanism
+and a new class of bug in exchange for nothing. It goes in when there is a
+blocking system call to break, which is the `os` milestone.
+
+The safe points are narrower than the list above. What is there is: every
+channel send, every channel receive, every `select`, and starting a goroutine,
+plus the public `runtime_preempt_point` for code that passes none of them. The
+`sync` package and allocation are not on the list, for two different reasons.
+`sync` does not need to be: every path through it either finishes in a few
+atomics, which cannot take ten milliseconds, or ends up waiting, and waiting
+gives the processor up anyway. Allocation must not be, and this is the one worth
+remembering. `burrow__lock` spins and then yields to the operating system rather
+than to the scheduler, so a goroutine that gives way while holding one leaves
+the next goroutine spinning on a lock whose holder is sitting in the run queue,
+which on one P is a livelock. Allocation happens under that lock in several
+places. Every safe point in the library is therefore at the top of a function,
+before anything is taken.
+
+`BURROW_PREEMPT_HARD` and the stack-scanning heuristic are not implemented and
+should probably stay that way. A best-effort preemption that works by guessing
+at a stack is a source of corruption that appears under load and nowhere else.
+
+The cost when nobody is waiting is a relaxed load of one word on the G and a
+branch, which is why it can sit at the top of `chan_send` without showing up in
+`bench/chan_bench.c`.
+
 `GOMAXPROCS`, `NumCPU`, `NumGoroutine`, `Gosched`, `LockOSThread`/
 `UnlockOSThread` (needed by `os/signal` and by GUI interop) all port faithfully.
 

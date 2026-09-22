@@ -458,11 +458,19 @@ static void catch_up(SyncPool *p, Shard *s, Local *l) {
 
 /* Which slot this thread gets, and whether it had to take the mutex to get it.
  *
- * A goroutine gets its P's slot and nothing more happens. There is no
- * preemption yet, so a goroutine that is running on a P stays on it until it
- * parks or yields, and nothing between here and the end of a Get or a Put does
- * either. When preemption lands this has to become Go's procPin, which also
- * makes the M non-preemptible for as long as the index is being used.
+ * A goroutine gets its P's slot and nothing more happens, where Go has to pin
+ * the P with procPin and unpin it afterwards. burrow does not, and the reason
+ * is the shape of its preemption rather than the absence of it: a goroutine
+ * here gives way only at a safe point, and there is no safe point between this
+ * returning and the end of a Get or a Put. The path is atomics and at most one
+ * uncontended mutex, none of which asks. If burrow ever gets preemption that
+ * can move a goroutine anywhere, as Go's signal based version can, this becomes
+ * procPin on the same day.
+ *
+ * One hole, and it is older than preemption. catch_up below calls the pool's
+ * free function, which is somebody else's code, and if that code blocks then
+ * the goroutine can come back on a different P with this slot already handed to
+ * another one. A free function that blocks was never safe here. See issue 101.
  *
  * A thread with no P gets the slot on the end under the pool's mutex. That slot
  * behaves exactly like a P's, it just has more than one owner taking turns. */

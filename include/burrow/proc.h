@@ -122,10 +122,9 @@ bool go_stack(Func fn, size_t stack_bytes);
  * before this returns, so that by the time your main gets control back, nothing
  * of burrow's is still running. A goroutine that is parked forever does not
  * hold anything up, because a parked goroutine is not holding a thread. A
- * goroutine spinning in a loop that never blocks does hold one up, and that is
- * the same bug as the one that used to hang a Go program before asynchronous
- * preemption, which is the last item on the runtime's list here for the same
- * reason.
+ * goroutine spinning in a loop that calls nothing in burrow does hold one up,
+ * because that loop passes no safe point and so is never preempted. See
+ * runtime_preempt_point below for the one line that fixes it.
  *
  * May be called again after it returns, which Go cannot do and which the tests
  * here need. Not reentrant: calling it from inside a goroutine is a bug and
@@ -138,10 +137,43 @@ void runtime_main(Func fn);
  * something else gets a turn. Comes straight back if there is nothing else to
  * run.
  *
- * This is runtime.Gosched, and until preemption lands it is the only thing that
- * lets a compute loop share a thread. A loop with no call in it that blocks and
- * no call to this holds its thread until it finishes. */
+ * This is runtime.Gosched. A loop with no call in it that blocks, no call to
+ * anything in burrow, and no call to this or to runtime_preempt_point holds its
+ * thread until it finishes. */
 void runtime_gosched(void);
+
+/* Gives up the processor, but only if the scheduler has asked for it.
+ *
+ * The cheap one. runtime_gosched above always goes through the scheduler, which
+ * is a stack switch and a trip through the global run queue, and a loop that
+ * calls it every turn spends most of its time in the scheduler. This reads one
+ * field and returns, and only does the expensive thing on the turn where
+ * something is actually waiting, which is at most once every ten milliseconds.
+ *
+ * Go has no equivalent because Go does not need one: its compiler puts a safe
+ * point in your loop for you and its signal handler can move a goroutine
+ * wherever it stands. Neither is available to a C library. So burrow's
+ * preemption is a request that a goroutine honours at the next place it is safe
+ * to stop. Those places are the ones a loop that never blocks actually passes
+ * through: a send, a receive, a select, and starting a goroutine. Everything
+ * else in burrow that a loop might call either goes through one of those or
+ * ends up waiting, and waiting gives the processor up anyway. A loop that does
+ * none of it has no safe point in it, and this is how to put one there.
+ *
+ *     while (still_going(&work)) {
+ *         crunch(&work);
+ *         runtime_preempt_point();
+ *     }
+ *
+ * Costs a relaxed load and a branch when nobody is waiting, so it is cheap
+ * enough for the inside of a loop that does real work per turn and not cheap
+ * enough for the inside of one that does a single arithmetic operation. In the
+ * second case put it in the outer loop.
+ *
+ * Safe to call from a plain thread, where it does nothing, so a function that
+ * is sometimes called from a goroutine and sometimes not does not need to ask
+ * which. */
+void runtime_preempt_point(void);
 
 /* Ends the calling goroutine. Does not return.
  *
@@ -173,12 +205,13 @@ BURROW_NORETURN void runtime_goexit(void);
  * reconciles those. burrow does not yet, so a program in a container with a
  * fraction of a core should set this itself.
  *
- * One limitation, and it is temporary. Changing the number while the scheduler
- * is running means taking Ps away from threads that are using them, which is
- * stopping the world, which needs preemption, which is deliberately the last
- * piece of the runtime to be built. So a call with a positive n while
- * runtime_main is running changes nothing and returns the current value. Call
- * it before runtime_main and it does what Go does. */
+ * One limitation. Changing the number while the scheduler is running means
+ * taking Ps away from threads that are using them, which is stopping the world.
+ * burrow can ask a goroutine to give way but it cannot make one that is between
+ * safe points do it, so there is no bound on how long stopping the world would
+ * take and no honest way to offer it. A call with a positive n while
+ * runtime_main is running therefore changes nothing and returns the current
+ * value. Call it before runtime_main and it does what Go does. */
 int runtime_gomaxprocs(int n);
 
 /* How many processors the machine has. runtime.NumCPU, and the same number

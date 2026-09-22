@@ -613,6 +613,15 @@ void chan_free(Chan *c) {
 /* -------------------------------------------------------------------- send */
 
 static bool chan_send_impl(Chan *c, const void *v, bool block) {
+    /* A safe point, here at the top where no lock is held. A send that ends up
+     * waiting gives the processor up anyway, so the one this matters for is the
+     * send that finds a receiver or finds room and returns straight away: a
+     * producer feeding a buffered channel faster than anybody drains it never
+     * blocks and would otherwise hold its thread until it ran out of things to
+     * send. See src/runtime/sched.c under preemption for why the request cannot
+     * simply move the goroutine where it stands. */
+    burrow__preempt_point();
+
     /* At the top rather than at the park, because the question of whether this
      * goroutine is allowed to touch this channel at all does not depend on
      * whether it ends up waiting, and a program that gets it wrong should hear
@@ -704,6 +713,10 @@ bool chan_try_send(Chan *c, const void *v) {
 /* ----------------------------------------------------------------- receive */
 
 static bool chan_recv_impl(Chan *c, void *out, bool *ok, bool block) {
+    /* The send side's safe point, mirrored, and for the consumer that is always
+     * a value behind rather than the producer that is always ahead. */
+    burrow__preempt_point();
+
     bool durable = bubbled(c);
 
     /* The mirror of the send side's early reject, with the extra clause Go has:
@@ -1165,6 +1178,11 @@ Int chan_select(SelectCase *cases, Int n) {
         runtime_throw(BURROW_S("chan_select: negative case count"));
     if (n > SELECT_MAX)
         runtime_throw(BURROW_S("select case count too large"));
+
+    /* A safe point for the same reason the two above are, and this one earns it
+     * more than either: a select with a default arm in a loop is the one shape
+     * in the language that is built to go round for ever without blocking. */
+    burrow__preempt_point();
 
     /* The first default in the list, and the first channel, in one pass.
      *

@@ -136,6 +136,12 @@ ASFLAGS ?= -g $(INCLUDES) $(DEFINES)
 TEST_SRCS := $(wildcard tests/*_test.c)
 TEST_BINS := $(patsubst tests/%.c,$(BUILD)/tests/%,$(TEST_SRCS))
 
+# Descriptors that tools/burrow-gen produced from the annotated structs in
+# tests/gen. They are checked in and every test binary links them, because
+# generating them needs libclang and building burrow must never need libclang.
+# tools/check-gen.sh regenerates them and diffs, on a machine that has one.
+TEST_GEN := $(wildcard tests/gen/*.c)
+
 # Header dependencies, written by the compiler as it goes. Without these, make
 # only rebuilds a .o when its .c changes, so editing a header leaves stale
 # objects in the tree and the tests you then run are testing the old code. It is
@@ -162,9 +168,9 @@ $(BUILD)/obj/%.asm.o: src/%.S
 	@mkdir -p $(dir $@)
 	$(CC) $(ASFLAGS) $(DEPFLAGS) -c $< -o $@
 
-$(BUILD)/tests/%: tests/%.c $(LIB)
+$(BUILD)/tests/%: tests/%.c $(TEST_GEN) $(LIB)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(THREADS) $(DEPFLAGS) -MF $@.d -Itests $< $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(THREADS) $(DEPFLAGS) -MF $@.d -Itests $< $(TEST_GEN) $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
 
 -include $(DEPS)
 
@@ -178,6 +184,7 @@ check:
 	@tools/check-annotations.sh
 	@tools/check-alloc.sh
 	@tools/check-globals.sh
+	@tools/check-gen.sh
 	@$(MAKE) test
 
 install: $(LIB)

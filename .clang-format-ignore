@@ -1,0 +1,13 @@
+# Generated files are not formatted, they are regenerated.
+#
+# tools/burrow-gen writes one line per initialiser member because that is the
+# shape that stays readable when a struct has thirty fields, and clang-format
+# would pack them onto shared lines. Neither is wrong, but only one of them can
+# win, and running a formatter over a file whose header says "do not edit" puts
+# the format gate and tools/check-gen.sh in a fight that ends with somebody
+# turning off the checker.
+#
+# This is also worth knowing if you use the generator in your own tree: add the
+# same line for whatever you generate.
+tests/gen/*_gen.c
+tests/gen/*_gen.h

@@ -241,6 +241,19 @@ extern const Type burrow_type_UnsafePointer;
 #define burrow_type_Byte burrow_type_uint8_t
 #define burrow_type_Rune burrow_type_int32_t
 
+/* And one that is not an alias so much as an apology for stdbool.h.
+ *
+ * Before C23, bool is a macro for _Bool rather than a keyword. TYPE_OF pastes
+ * its argument onto a prefix, and an argument that reaches the paste through
+ * another macro's parameter has already been expanded by the time it gets
+ * there, so a field declared "bool Flag" asks for burrow_type__Bool. Under C23
+ * bool is a keyword and the same field asks for burrow_type_bool.
+ *
+ * Both names therefore have to work, and this is the cheaper of the two ways
+ * to make that true. The other is to stop pasting, which means a table of every
+ * type name in the library. */
+#define burrow_type__Bool burrow_type_bool
+
 /* The Go spelling of each, which is what most code reaches for and what the
  * rest of burrow is written in. TYPE_OF is for a field list, where the C
  * spelling is what is already written down. */

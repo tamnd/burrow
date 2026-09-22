@@ -1,0 +1,771 @@
+#!/usr/bin/env python3
+# burrow-gen: type descriptors for structs nobody is going to rewrite.
+#
+# The X macro DSL in burrow/declare.h is the default way to get a descriptor,
+# and it needs no tool and no build step. It also needs you to write your struct
+# as a field list, which is fine for new code and is not going to happen to a
+# hundred thousand lines of existing C. This reads the structs you already have
+# and emits the same descriptors the DSL would have.
+#
+#     /* burrow:reflect */
+#     typedef struct {
+#         Int X     BURROW_TAG("json:\"x\"");
+#         Int Y     BURROW_TAG("json:\"y\"");
+#         Str Label BURROW_TAG("json:\"label,omitempty\"");
+#     } Point;
+#
+#     burrow-gen reflect shapes.h -o shapes_gen.c -Iinclude
+#
+# Neither path is deprecated and neither is preferred. The DSL is the default
+# because of the no build step promise, and this exists because a large existing
+# codebase will not restructure its headers to get %v to work.
+#
+# WHAT IT DOES NOT COMPUTE
+#
+# It does not compute offsets, sizes or alignments. It emits offsetof, sizeof
+# and _Alignof and lets the compiler that is actually building for the target
+# work them out. That is not laziness, it is the only correct answer: a
+# generator that computed 12 for an offset would be computing it for whatever
+# machine the generator ran on, and the whole point of a portable library is
+# that the answer is different on some of them. The generator's job is to find
+# out which fields exist and what they are called, and nothing else.
+#
+# WHAT IT NEEDS
+#
+# Python 3 and a libclang shared library, which you already have if you compile
+# C with clang. There is no pip install: the binding is about a hundred lines of
+# ctypes at the bottom of this file, because a code generator that makes you
+# build a virtualenv first is a code generator people work around.
+#
+# libclang is not needed to build burrow, to use the DSL, or to compile what
+# this emits. It is needed to run this, once, when your structs change.
+#
+# Copyright 2026 The burrow Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style licence that can be found
+# in the LICENSE file.
+
+import argparse
+import ctypes
+import glob
+import os
+import platform
+import re
+import sys
+
+PROG = "burrow-gen"
+
+# ---------------------------------------------------------------- the model
+
+
+class Field:
+    def __init__(self, name, ctype, tag, where):
+        self.name = name
+        self.ctype = ctype
+        self.tag = tag
+        self.where = where
+
+
+class Struct:
+    def __init__(self, name, where):
+        self.name = name
+        self.where = where
+        self.fields = []
+
+
+class Error(Exception):
+    """A problem with the input, reported with a file and a line."""
+
+
+# TYPE_OF pastes its argument into an identifier, so a field's type has to be
+# spellable as one. "Int" works, "struct Foo" and "char *" do not, and the
+# answer to both is a typedef. This is the same restriction the DSL has, for
+# the same reason, and saying so here beats a paste error in the output.
+IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+MARKER = re.compile(r"\bburrow:reflect\b")
+
+TAG_PREFIX = "burrow:tag:"
+
+
+# ------------------------------------------------------------- reading them
+
+
+def annotations(lib, cursor):
+    out = []
+    for child in lib.children(cursor):
+        if child.kind == CURSOR_ANNOTATE_ATTR:
+            out.append(lib.cursor_spelling(child))
+    return out
+
+
+def is_marked(lib, cursor):
+    comment = lib.raw_comment(cursor)
+    if comment and MARKER.search(comment):
+        return True
+    return any(MARKER.search(a) for a in annotations(lib, cursor))
+
+
+def tag_of(lib, cursor):
+    for a in annotations(lib, cursor):
+        if a.startswith(TAG_PREFIX):
+            return a[len(TAG_PREFIX) :]
+    return ""
+
+
+def read_struct(lib, typedef, record, name):
+    where = lib.location(typedef)
+    s = Struct(name, where)
+
+    for child in lib.children(record):
+        if child.kind != CURSOR_FIELD_DECL:
+            continue
+
+        at = lib.location(child)
+        fname = lib.cursor_spelling(child)
+
+        if not fname:
+            raise Error(
+                "%s: an anonymous member of %s. offsetof needs a name, so give "
+                "it one or leave the struct out." % (at, name)
+            )
+
+        if lib.is_bitfield(child):
+            raise Error(
+                "%s: %s.%s is a bit field. A bit field has no address and so no "
+                "offsetof, which means no descriptor can describe it."
+                % (at, name, fname)
+            )
+
+        ctype = lib.type_spelling(lib.cursor_type(child))
+
+        if not IDENTIFIER.match(ctype):
+            raise Error(
+                "%s: %s.%s is a %s, which is not spellable as one identifier. "
+                "TYPE_OF pastes its argument into a name, so give the type a "
+                "typedef and use that." % (at, name, fname, ctype)
+            )
+
+        s.fields.append(Field(fname, ctype, tag_of(lib, child), at))
+
+    if not s.fields:
+        raise Error("%s: %s has no fields, so there is nothing to describe." % (where, name))
+
+    return s
+
+
+def collect(lib, tu, wanted):
+    """Every marked struct declared in one of the files we were asked about."""
+    found = []
+    marked_records = []
+    used_records = []
+
+    # A marked struct in a header this one included is that header's business,
+    # not ours. Run the generator on it separately if you want its descriptors,
+    # so that two runs never emit the same one twice.
+    top = [c for c in lib.children(lib.tu_cursor(tu)) if lib.file_of(c) in wanted]
+
+    for cursor in top:
+        if cursor.kind == CURSOR_STRUCT_DECL and is_marked(lib, cursor):
+            marked_records.append(cursor)
+
+        if cursor.kind != CURSOR_TYPEDEF_DECL:
+            continue
+
+        where = lib.location(cursor)
+        record = lib.type_declaration(lib.typedef_underlying(cursor))
+
+        # For "typedef struct { ... } Point;" the comment attaches to the
+        # anonymous record and for "typedef ... Point BURROW_REFLECT;" the
+        # attribute is on the typedef, so ask both rather than depending on
+        # which shape somebody used.
+        if not (is_marked(lib, cursor) or is_marked(lib, record)):
+            continue
+
+        if record.kind != CURSOR_STRUCT_DECL:
+            raise Error(
+                "%s: burrow:reflect on %s, which is not a struct. Only structs "
+                "have fields to describe." % (where, lib.cursor_spelling(cursor))
+            )
+
+        used_records.append(record)
+        found.append(read_struct(lib, cursor, record, lib.cursor_spelling(cursor)))
+
+    # A marked struct with no typedef over it is reachable only as "struct Foo",
+    # which is two tokens, so no descriptor could be named after it.
+    for record in marked_records:
+        if any(lib.same_cursor(record, used) for used in used_records):
+            continue
+        raise Error(
+            "%s: burrow:reflect on struct %s, which has no typedef. TYPE_OF "
+            "needs a single identifier, so add one."
+            % (lib.location(record), lib.cursor_spelling(record) or "(anonymous)")
+        )
+
+    return found
+
+
+# ------------------------------------------------------------- writing them
+
+
+def c_string(s):
+    """A C string literal for s, escaped so the compiler reads back what we saw."""
+    out = ['"']
+    for ch in s:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        elif " " <= ch <= "~":
+            out.append(ch)
+        else:
+            # Anything else goes out as bytes, because a tag is bytes and the
+            # encoding of the source file is not our business.
+            for b in ch.encode("utf-8"):
+                out.append("\\%03o" % b)
+    out.append('"')
+    return "".join(out)
+
+
+def guard_of(path):
+    name = re.sub(r"[^A-Za-z0-9]", "_", os.path.basename(path)).upper()
+    return "BURROW_GEN_" + name
+
+
+def emit_header(structs, includes, banner, path):
+    """The externs, so a descriptor can be reached from another file.
+
+    The DSL's DECL form puts these in your header for the same reason: TYPE_OF
+    is an address-of on a name, and a name has to be declared before another
+    translation unit's static initialiser can take its address.
+    """
+    w = []
+    if banner:
+        w.append(banner.rstrip("\n"))
+        w.append("")
+
+    guard = guard_of(path)
+    w.append("/* Generated by %s reflect. Do not edit. */" % PROG)
+    w.append("")
+    w.append("#ifndef %s" % guard)
+    w.append("#define %s" % guard)
+    w.append("")
+    w.append('#include "burrow/type.h"')
+    w.append("")
+    for inc in includes:
+        w.append('#include "%s"' % inc)
+    w.append("")
+    for s in structs:
+        w.append("extern const Type burrow_type_%s;" % s.name)
+    w.append("")
+    w.append("#endif /* %s */" % guard)
+    return "\n".join(w)
+
+
+def emit(structs, includes, banner, register, header):
+    w = []
+    if banner:
+        w.append(banner.rstrip("\n"))
+        w.append("")
+
+    w.append("/* Generated by %s reflect. Do not edit." % PROG)
+    w.append(" *")
+    w.append(" * Edit the annotated structs and run the generator again. The offsets and")
+    w.append(" * sizes are left as offsetof and sizeof on purpose, so that the compiler")
+    w.append(" * building for your target is the one that works them out. */")
+    w.append("")
+    w.append('#include "burrow/declare.h"')
+    w.append('#include "burrow/type.h"')
+    w.append("")
+    w.append("#include <stddef.h>")
+    w.append("#include <stdint.h>")
+    w.append("")
+    if header:
+        w.append('#include "%s"' % os.path.basename(header))
+    for inc in includes:
+        w.append('#include "%s"' % inc)
+    w.append("")
+
+    for s in structs:
+        w.append("/* %s, from %s */" % (s.name, s.where))
+        w.append("static const Field burrow__fields_%s[] = {" % s.name)
+        for f in s.fields:
+            w.append("    {")
+            w.append("        BURROW_S_INIT(%s)," % c_string(f.name))
+            w.append("        BURROW_S_INIT(%s)," % c_string(f.tag))
+            w.append("        TYPE_OF(%s)," % f.ctype)
+            w.append("        (uint32_t)offsetof(%s, %s)," % (s.name, f.name))
+            w.append("    },")
+        w.append("};")
+        w.append("")
+        # Only when there is no generated header carrying it, because two
+        # declarations of one object is what -Wredundant-decls is about.
+        if not header:
+            w.append("extern const Type burrow_type_%s;" % s.name)
+            w.append("")
+        w.append("const Type burrow_type_%s = {" % s.name)
+        w.append("    BURROW_S_INIT(%s)," % c_string(s.name))
+        w.append("    {NULL, 0},")
+        w.append("    KIND_STRUCT,")
+        w.append("    (uint32_t)sizeof(%s)," % s.name)
+        w.append("    (uint16_t)_Alignof(%s)," % s.name)
+        w.append(
+            "    (uint16_t)(sizeof burrow__fields_%s / sizeof burrow__fields_%s[0]),"
+            % (s.name, s.name)
+        )
+        w.append("    0,")
+        w.append("    burrow__fields_%s," % s.name)
+        w.append("    NULL,")
+        w.append("    NULL,")
+        w.append("    NULL,")
+        w.append("    0,")
+        w.append("    0,")
+        w.append("    NULL,")
+        w.append("};")
+        if register:
+            w.append("")
+            w.append("BURROW_REGISTER_TYPE(%s);" % s.name)
+        w.append("")
+
+    return "\n".join(w)
+
+
+# ------------------------------------------------------------------- driver
+
+
+def run_reflect(args):
+    lib = LibClang(args.libclang)
+
+    argv = ["-x", "c", "-std=" + args.std, "-fparse-all-comments", "-DBURROW_GEN=1"]
+    argv += ["-I" + d for d in args.include_dir]
+    argv += ["-D" + d for d in args.define]
+    argv += lib.toolchain_flags(args.extra)
+    argv += args.extra
+
+    wanted = set(os.path.realpath(h) for h in args.headers)
+    structs = []
+
+    for header in args.headers:
+        tu = lib.parse(header, argv)
+        structs += collect(lib, tu, wanted)
+        lib.dispose(tu)
+
+    if not structs:
+        raise Error(
+            "no struct marked burrow:reflect in %s. The marker is a "
+            "/* burrow:reflect */ comment on the typedef, or BURROW_REFLECT on it."
+            % ", ".join(args.headers)
+        )
+
+    seen = {}
+    for s in structs:
+        if s.name in seen:
+            raise Error(
+                "%s: %s is marked here and at %s. Two descriptors with one name "
+                "will not link." % (s.where, s.name, seen[s.name])
+            )
+        seen[s.name] = s.where
+
+    includes = args.include_as or [os.path.basename(h) for h in args.headers]
+
+    banner = ""
+    if args.banner:
+        with open(args.banner, "r") as f:
+            banner = f.read()
+
+    if args.header:
+        with open(args.header, "w") as f:
+            f.write(emit_header(structs, includes, banner, args.header) + "\n")
+
+    text = emit(structs, includes, banner, args.register, args.header) + "\n"
+
+    if args.output == "-":
+        sys.stdout.write(text)
+    else:
+        with open(args.output, "w") as f:
+            f.write(text)
+
+    return len(structs)
+
+
+def main():
+    p = argparse.ArgumentParser(
+        prog=PROG,
+        description="Type descriptors for annotated C structs.",
+    )
+    sub = p.add_subparsers(dest="command", required=True)
+
+    r = sub.add_parser("reflect", help="descriptors for structs marked burrow:reflect")
+    r.add_argument("headers", nargs="+", help="headers to read")
+    r.add_argument("-o", "--output", default="-", help="where to write, - for stdout")
+    r.add_argument("-I", "--include-dir", action="append", default=[], metavar="DIR")
+    r.add_argument("-D", "--define", action="append", default=[], metavar="NAME[=VAL]")
+    r.add_argument("--std", default="c11", help="language standard, default c11")
+    r.add_argument(
+        "--include-as",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="how the output should spell its #include, default the header's base name",
+    )
+    r.add_argument(
+        "--header",
+        metavar="FILE",
+        help="also write a header declaring each descriptor, for use from other files",
+    )
+    r.add_argument(
+        "--banner",
+        metavar="FILE",
+        help="a file to put at the top of the output, for a licence header",
+    )
+    r.add_argument(
+        "--register",
+        action="store_true",
+        help="also register each descriptor so type_by_name can find it",
+    )
+    r.add_argument(
+        "--libclang",
+        metavar="PATH",
+        help="the libclang shared library, if it is somewhere unusual",
+    )
+    r.add_argument(
+        "--extra",
+        action="append",
+        default=[],
+        metavar="FLAG",
+        help="one more flag for the parser, repeatable",
+    )
+
+    args = p.parse_args()
+
+    try:
+        n = run_reflect(args)
+    except Error as e:
+        sys.stderr.write("%s: %s\n" % (PROG, e))
+        return 1
+
+    if args.output != "-":
+        sys.stderr.write(
+            "%s: %d descriptor%s to %s\n" % (PROG, n, "" if n == 1 else "s", args.output)
+        )
+    return 0
+
+
+# ------------------------------------------------------- the libclang binding
+#
+# Only the dozen calls the generator makes. There is a full binding on PyPI and
+# it is a fine piece of work, but it brings a hundred megabyte wheel with its
+# own copy of libclang, and asking someone to build a virtualenv before they can
+# regenerate a header is how a generator ends up unused.
+
+CURSOR_STRUCT_DECL = 2
+CURSOR_FIELD_DECL = 6
+CURSOR_TYPEDEF_DECL = 20
+CURSOR_ANNOTATE_ATTR = 406
+
+DIAGNOSTIC_ERROR = 3
+
+SKIP_FUNCTION_BODIES = 0x40
+
+VISIT_CONTINUE = 1
+
+
+class CXString(ctypes.Structure):
+    _fields_ = [("data", ctypes.c_void_p), ("private_flags", ctypes.c_uint)]
+
+
+class CXCursor(ctypes.Structure):
+    _fields_ = [
+        ("kind", ctypes.c_int),
+        ("xdata", ctypes.c_int),
+        ("data", ctypes.c_void_p * 3),
+    ]
+
+
+class CXType(ctypes.Structure):
+    _fields_ = [("kind", ctypes.c_int), ("data", ctypes.c_void_p * 2)]
+
+
+class CXSourceLocation(ctypes.Structure):
+    _fields_ = [("ptr_data", ctypes.c_void_p * 2), ("int_data", ctypes.c_uint)]
+
+
+VISITOR = ctypes.CFUNCTYPE(ctypes.c_int, CXCursor, CXCursor, ctypes.c_void_p)
+
+
+def libclang_candidates():
+    system = platform.system()
+
+    if system == "Darwin":
+        out = [
+            "/opt/homebrew/opt/llvm/lib/libclang.dylib",
+            "/usr/local/opt/llvm/lib/libclang.dylib",
+            "/Library/Developer/CommandLineTools/usr/lib/libclang.dylib",
+        ]
+        out += sorted(
+            glob.glob(
+                "/Applications/Xcode*.app/Contents/Developer/Toolchains/"
+                "*.xctoolchain/usr/lib/libclang.dylib"
+            )
+        )
+        return out + ["libclang.dylib"]
+
+    if system == "Windows":
+        return [
+            r"C:\Program Files\LLVM\bin\libclang.dll",
+            "libclang.dll",
+        ]
+
+    out = sorted(glob.glob("/usr/lib/llvm-*/lib/libclang.so*"), reverse=True)
+    out += sorted(glob.glob("/usr/lib/*/libclang*.so*"), reverse=True)
+    out += sorted(glob.glob("/usr/local/lib/libclang*.so*"), reverse=True)
+    return out + ["libclang.so.1", "libclang.so"]
+
+
+def sdk_path():
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["xcrun", "--show-sdk-path"], capture_output=True, text=True, timeout=20
+        )
+    except (OSError, ValueError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+class LibClang:
+    def __init__(self, explicit=None):
+        names = [explicit] if explicit else []
+        if not names and os.environ.get("BURROW_LIBCLANG"):
+            names = [os.environ["BURROW_LIBCLANG"]]
+        if not names:
+            names = libclang_candidates()
+
+        self.lib = None
+        self.path = ""
+        for name in names:
+            try:
+                self.lib = ctypes.cdll.LoadLibrary(name)
+                self.path = name
+                break
+            except OSError:
+                continue
+
+        if self.lib is None:
+            raise Error(
+                "no libclang. Install one, or point at it with --libclang or "
+                "BURROW_LIBCLANG. On Debian it is libclang-dev, on macOS it comes "
+                "with the command line tools or with homebrew's llvm."
+            )
+
+        self._prototypes()
+        self.index = self.lib.clang_createIndex(0, 0)
+
+    def _prototypes(self):
+        f = self.lib
+
+        f.clang_createIndex.restype = ctypes.c_void_p
+        f.clang_createIndex.argtypes = [ctypes.c_int, ctypes.c_int]
+
+        f.clang_parseTranslationUnit.restype = ctypes.c_void_p
+        f.clang_parseTranslationUnit.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_char_p),
+            ctypes.c_int,
+            ctypes.c_void_p,
+            ctypes.c_uint,
+            ctypes.c_uint,
+        ]
+
+        f.clang_disposeTranslationUnit.argtypes = [ctypes.c_void_p]
+
+        f.clang_getNumDiagnostics.restype = ctypes.c_uint
+        f.clang_getNumDiagnostics.argtypes = [ctypes.c_void_p]
+        f.clang_getDiagnostic.restype = ctypes.c_void_p
+        f.clang_getDiagnostic.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        f.clang_getDiagnosticSeverity.restype = ctypes.c_int
+        f.clang_getDiagnosticSeverity.argtypes = [ctypes.c_void_p]
+        f.clang_formatDiagnostic.restype = CXString
+        f.clang_formatDiagnostic.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        f.clang_disposeDiagnostic.argtypes = [ctypes.c_void_p]
+
+        f.clang_getTranslationUnitCursor.restype = CXCursor
+        f.clang_getTranslationUnitCursor.argtypes = [ctypes.c_void_p]
+
+        f.clang_visitChildren.restype = ctypes.c_uint
+        f.clang_visitChildren.argtypes = [CXCursor, VISITOR, ctypes.c_void_p]
+
+        f.clang_getCursorSpelling.restype = CXString
+        f.clang_getCursorSpelling.argtypes = [CXCursor]
+        f.clang_getCursorType.restype = CXType
+        f.clang_getCursorType.argtypes = [CXCursor]
+        f.clang_getTypedefDeclUnderlyingType.restype = CXType
+        f.clang_getTypedefDeclUnderlyingType.argtypes = [CXCursor]
+        f.clang_getTypeDeclaration.restype = CXCursor
+        f.clang_getTypeDeclaration.argtypes = [CXType]
+        f.clang_getTypeSpelling.restype = CXString
+        f.clang_getTypeSpelling.argtypes = [CXType]
+        f.clang_Cursor_getRawCommentText.restype = CXString
+        f.clang_Cursor_getRawCommentText.argtypes = [CXCursor]
+        f.clang_Cursor_isBitField.restype = ctypes.c_uint
+        f.clang_Cursor_isBitField.argtypes = [CXCursor]
+        f.clang_equalCursors.restype = ctypes.c_uint
+        f.clang_equalCursors.argtypes = [CXCursor, CXCursor]
+
+        f.clang_getCursorLocation.restype = CXSourceLocation
+        f.clang_getCursorLocation.argtypes = [CXCursor]
+        f.clang_getFileLocation.argtypes = [
+            CXSourceLocation,
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.POINTER(ctypes.c_uint),
+            ctypes.POINTER(ctypes.c_uint),
+            ctypes.POINTER(ctypes.c_uint),
+        ]
+        f.clang_getFileName.restype = CXString
+        f.clang_getFileName.argtypes = [ctypes.c_void_p]
+
+        f.clang_getCString.restype = ctypes.c_char_p
+        f.clang_getCString.argtypes = [CXString]
+        f.clang_disposeString.argtypes = [CXString]
+
+    def toolchain_flags(self, given):
+        """The flags libclang needs to find the headers a compiler would find.
+
+        A compiler driver works these out before it ever starts parsing, and
+        libclang is not a driver, so without them the very first #include of
+        stdbool.h fails and every error after that is noise. Anything the caller
+        passed itself wins, because they know their cross build and we do not.
+        """
+        out = []
+        text = " ".join(given)
+
+        # The compiler's own headers, stdbool.h and stddef.h and the rest, which
+        # live next to libclang rather than in the system.
+        if "-resource-dir" not in text and os.sep in self.path:
+            libdir = os.path.dirname(os.path.realpath(self.path))
+            for candidate in sorted(glob.glob(os.path.join(libdir, "clang", "*"))):
+                if os.path.exists(os.path.join(candidate, "include", "stddef.h")):
+                    out.append("-resource-dir=" + candidate)
+                    break
+
+        # macOS keeps the system headers in an SDK that moves with Xcode, and
+        # only xcrun knows where today's one is.
+        if platform.system() == "Darwin" and "-isysroot" not in text:
+            sdk = sdk_path()
+            if sdk:
+                out.append("-isysroot" + sdk)
+
+        return out
+
+    def _str(self, cxstring):
+        p = self.lib.clang_getCString(cxstring)
+        out = p.decode("utf-8", "replace") if p else ""
+        self.lib.clang_disposeString(cxstring)
+        return out
+
+    def parse(self, path, argv):
+        if not os.path.exists(path):
+            raise Error("%s: no such file" % path)
+
+        arr = (ctypes.c_char_p * len(argv))(*[a.encode() for a in argv])
+        tu = self.lib.clang_parseTranslationUnit(
+            self.index, path.encode(), arr, len(argv), None, 0, SKIP_FUNCTION_BODIES
+        )
+        if not tu:
+            raise Error("%s: libclang could not parse this at all" % path)
+
+        errors = []
+        for i in range(self.lib.clang_getNumDiagnostics(tu)):
+            d = self.lib.clang_getDiagnostic(tu, i)
+            if self.lib.clang_getDiagnosticSeverity(d) >= DIAGNOSTIC_ERROR:
+                errors.append(self._str(self.lib.clang_formatDiagnostic(d, 1)))
+            self.lib.clang_disposeDiagnostic(d)
+
+        if errors:
+            raise Error(
+                "%s does not compile, so there is nothing to read:\n  %s"
+                % (path, "\n  ".join(errors))
+            )
+
+        return tu
+
+    def dispose(self, tu):
+        self.lib.clang_disposeTranslationUnit(tu)
+
+    def tu_cursor(self, tu):
+        return self.lib.clang_getTranslationUnitCursor(tu)
+
+    def children(self, cursor):
+        out = []
+
+        @VISITOR
+        def visit(child, parent, data):
+            # A copy, because the cursor the callback is handed is only ours
+            # for the length of the call.
+            kept = CXCursor()
+            ctypes.memmove(
+                ctypes.byref(kept), ctypes.byref(child), ctypes.sizeof(CXCursor)
+            )
+            out.append(kept)
+            return VISIT_CONTINUE
+
+        self.lib.clang_visitChildren(cursor, visit, None)
+        return out
+
+    def cursor_spelling(self, cursor):
+        return self._str(self.lib.clang_getCursorSpelling(cursor))
+
+    def cursor_type(self, cursor):
+        return self.lib.clang_getCursorType(cursor)
+
+    def type_spelling(self, t):
+        return self._str(self.lib.clang_getTypeSpelling(t))
+
+    def typedef_underlying(self, cursor):
+        return self.lib.clang_getTypedefDeclUnderlyingType(cursor)
+
+    def type_declaration(self, t):
+        return self.lib.clang_getTypeDeclaration(t)
+
+    def raw_comment(self, cursor):
+        return self._str(self.lib.clang_Cursor_getRawCommentText(cursor))
+
+    def is_bitfield(self, cursor):
+        return self.lib.clang_Cursor_isBitField(cursor) != 0
+
+    def same_cursor(self, a, b):
+        return self.lib.clang_equalCursors(a, b) != 0
+
+    def _file_line(self, cursor):
+        loc = self.lib.clang_getCursorLocation(cursor)
+        cxfile = ctypes.c_void_p()
+        line = ctypes.c_uint()
+        col = ctypes.c_uint()
+        off = ctypes.c_uint()
+        self.lib.clang_getFileLocation(
+            loc,
+            ctypes.byref(cxfile),
+            ctypes.byref(line),
+            ctypes.byref(col),
+            ctypes.byref(off),
+        )
+        if not cxfile:
+            return "", 0
+        return self._str(self.lib.clang_getFileName(cxfile)), line.value
+
+    def file_of(self, cursor):
+        name, _ = self._file_line(cursor)
+        return os.path.realpath(name) if name else ""
+
+    def location(self, cursor):
+        name, line = self._file_line(cursor)
+        return "%s:%d" % (name, line) if name else "<unknown>"
+
+
+if __name__ == "__main__":
+    sys.exit(main())

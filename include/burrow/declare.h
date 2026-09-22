@@ -105,6 +105,41 @@ extern "C" {
  * avoid. Neither is worth doing badly to fill a gap nothing has asked for yet.
  * See docs/design/07-reflect.md section 3. */
 
+/* ------------------------------------------------- marking a plain struct
+ *
+ * The other way in. Write the struct the way you would have written it anyway,
+ * mark it, and let tools/burrow-gen emit the descriptor:
+ *
+ *     typedef struct {
+ *         Int X     BURROW_TAG("json:\"x\"");
+ *         Int Y     BURROW_TAG("json:\"y\"");
+ *         Str Label BURROW_TAG("json:\"label,omitempty\"");
+ *     } Point BURROW_REFLECT;
+ *
+ *     burrow-gen reflect point.h -o point_gen.c -Iinclude
+ *
+ * A block comment reading burrow:reflect immediately above the typedef marks it
+ * just as well, and that is the form docs/design/07-reflect.md uses because it
+ * leaves the declaration untouched. Whichever you pick, the descriptor that
+ * comes out is the one BURROW_STRUCT would have emitted from the same fields,
+ * and burrow's own tests compare the two.
+ *
+ * In an ordinary build both of these expand to nothing at all, so the struct is
+ * exactly the struct you wrote and there is no cost and nothing for another
+ * compiler to choke on. They turn into annotations only when burrow-gen is the
+ * one doing the parsing, because it defines BURROW_GEN and it is always clang.
+ *
+ * The reason the tag has to be a macro rather than a comment, when the marker
+ * can be a comment, is that a comment attaches to a declaration and there is
+ * one declaration for the whole struct. A tag belongs to a field. */
+#ifdef BURROW_GEN
+#define BURROW_TAG(s) __attribute__((annotate("burrow:tag:" s)))
+#define BURROW_REFLECT __attribute__((annotate("burrow:reflect")))
+#else
+#define BURROW_TAG(s)
+#define BURROW_REFLECT
+#endif
+
 /* The two things done to each line of a field list.
  *
  * Both take the same four arguments in the same order, which is what lets one

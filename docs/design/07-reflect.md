@@ -188,20 +188,90 @@ typedef struct {
 } Point;
 ```
 
-`burrow-gen reflect src/*.h -o src/reflect_gen.c` parses these with libclang
-and emits the descriptors. Natural declarations, one build step, one heavy
-build-time dependency (libclang) that is *not* required to build `burrow`
-itself or to use the DSL.
+```
+tools/burrow-gen reflect point.h -o point_gen.c --header point_gen.h -Iinclude
+```
 
-Both paths produce byte-identical descriptors, and the same test suite runs
-against both. Neither is deprecated; the DSL is the default because of the
-no-build-step promise, and the generator exists because a large existing
-codebase will not rewrite its structs.
+`tools/burrow-gen` reads the header with libclang and writes the descriptors.
+Natural declarations, one build step, and one heavy build time dependency that
+is not required to build burrow, to use the DSL, or to compile what the
+generator emits. It is required to run the generator, once, when your structs
+change.
 
-A third path for the truly reluctant: **`burrow-gen reflect --from-go`**
-ingests a Go type declaration and emits both the C struct and its descriptor.
-For someone porting a Go program, this is the natural direction of travel, and
-it is the same machinery the conformance harness uses to translate Go's tests.
+Neither path is deprecated and neither is preferred. The DSL is the default
+because of the no build step promise, and this exists because a large existing
+codebase will not restructure its headers to get `%v` to work.
+
+### It does not compute offsets
+
+The generated file is full of `offsetof`, `sizeof` and `_Alignof`. The generator
+works out which fields exist and what they are called, and nothing else.
+
+That is not laziness. A generator that computed 12 for an offset would be
+computing it for whatever machine the generator ran on, and the entire reason
+this library is careful about layout is that the answer differs between the
+machines it has to run on. Leaving the arithmetic to the compiler that is
+actually building for the target is the only answer that is right everywhere,
+and it has the pleasant side effect that a generated file can be committed and
+then compiled for a target the generator has never seen.
+
+`tests/gen_test.c` checks this on a struct whose second field is padded, so a
+generator that started guessing would be caught rather than accidentally right.
+
+### Two markers, one meaning
+
+A block comment reading `burrow:reflect` above the typedef is the marker the
+example uses, because it leaves the declaration alone. `BURROW_REFLECT` after
+the typedef name does the same thing, for anyone whose tooling does not preserve
+comments. Both expand to nothing in an ordinary build, as does `BURROW_TAG`, so
+the struct a normal compiler sees is exactly the struct that was written.
+
+The tag has to be a macro rather than a comment because a comment attaches to a
+declaration and there is one declaration for the whole struct, while a tag
+belongs to a field.
+
+### What it refuses
+
+A field's type has to be spellable as a single identifier, because `TYPE_OF`
+pastes its argument onto a prefix. `char *name` is refused with a message saying
+so and pointing at the line, and the fix is a typedef. This is the same
+restriction the DSL has, for the same reason, and it is better as a message from
+the generator than as a paste error in generated code.
+
+A bit field is refused, because it has no address and therefore no `offsetof`. A
+marked struct with no typedef over it is refused, because `struct Foo` is two
+tokens and the descriptor could not be named after it. A marked typedef that is
+not a struct is refused, because there are no fields to describe.
+
+### It agrees with the DSL, and the test says so
+
+`tests/gen/shapes.h` holds plain annotated structs, `tests/gen/shapes_gen.c` is
+what the generator made of them, and `tests/gen_test.c` declares the same fields
+again through the DSL and compares the two descriptors member by member. Kind,
+size, alignment, field count, and every field's name, tag, type pointer and
+offset.
+
+The generated file is committed rather than built, so that building burrow never
+needs libclang and a contributor without one can still run the whole suite.
+`tools/check-gen.sh` regenerates it and diffs, and says so and passes on a
+machine with no libclang. The output is stable across libclang versions:
+libclang 18 on Linux and libclang 23 on macOS produce the same bytes.
+
+### The binding
+
+`tools/burrow-gen` needs Python 3 and a libclang shared library. It does not
+need `pip install`, because the libclang binding is about a hundred lines of
+`ctypes` at the bottom of the script. The full binding on PyPI is a fine piece
+of work and it brings a hundred megabyte wheel with its own copy of libclang,
+and a code generator that makes you build a virtualenv first is a code generator
+people work around.
+
+### Still to come
+
+**`burrow-gen reflect --from-go`** would ingest a Go type declaration and emit
+both the C struct and its descriptor. For someone porting a Go program that is
+the natural direction of travel, and it is the same machinery the conformance
+harness wants for translating Go's tests. It is not built.
 → [14](14-conformance.md) §3
 
 ## 5. Registration and type identity

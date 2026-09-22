@@ -1,0 +1,18 @@
+# What find_package(burrow) reads. Without this file the install directory has
+# a targets file that nothing loads, so find_package fails and the install is
+# only useful to somebody who knew to include the targets file by hand.
+#
+# Threads is here because burrow's own targets file says the library links
+# Threads::Threads, and a target that names an import nobody has defined is an
+# error at the point the consumer tries to link. find_dependency is the same
+# find_package with the arguments a config file is supposed to pass on.
+
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_dependency(Threads)
+
+include("${CMAKE_CURRENT_LIST_DIR}/burrowTargets.cmake")
+
+check_required_components(burrow)

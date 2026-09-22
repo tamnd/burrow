@@ -230,7 +230,7 @@ Int burrow__callers(void *from, Int skip, Uintptr *pcs, Int max) {
 
 #endif
 
-void burrow__traceback(const Uintptr *pcs, Int n) {
+Int burrow__frame_text(Uintptr pc, char *buf, Int cap) {
     /* A name and an offset on one line and the address on the next, indented
      * under the line that said which goroutine this is, which is the shape Go's
      * traceback has. Go has the source file and the line on the second of those
@@ -241,21 +241,45 @@ void burrow__traceback(const Uintptr *pcs, Int n) {
      * A frame with no name prints the address alone, which is what every frame
      * printed before there was a table and what a frame outside burrow still
      * prints. */
-    for (Int i = 0; i < n; i++) {
-        burrow__Frame f;
+    burrow__Frame f;
+    int n;
 
-        /* One below the address, because the address is where the call will
-         * return to and that is the instruction after it. A call in tail
-         * position puts that byte in the next function, so looking the return
-         * address up unchanged would name the wrong one. The offset printed is
-         * still measured from the address that was actually there. */
-        if (pcs[i] != 0 && burrow__symbolise(pcs[i] - 1, &f)) {
-            fprintf(stderr, "\t%.*s+%#llx\n\t\t%#llx\n", (int)f.name.len,
-                    (const char *)f.name.p, (unsigned long long)(pcs[i] - f.entry),
-                    (unsigned long long)pcs[i]);
+    if (buf == NULL || cap <= 0)
+        return 0;
+
+    /* One below the address, because the address is where the call will return
+     * to and that is the instruction after it. A call in tail position puts
+     * that byte in the next function, so looking the return address up
+     * unchanged would name the wrong one. The offset printed is still measured
+     * from the address that was actually there. */
+    if (pc != 0 && burrow__symbolise(pc - 1, &f))
+        n = snprintf(buf, (size_t)cap, "\t%.*s+%#llx\n\t\t%#llx\n", (int)f.name.len,
+                     (const char *)f.name.p, (unsigned long long)(pc - f.entry),
+                     (unsigned long long)pc);
+    else
+        n = snprintf(buf, (size_t)cap, "\t%#llx\n", (unsigned long long)pc);
+
+    /* Nothing rather than half a line. The caller either has room for the frame
+     * or does not want it, and a line cut in the middle of a symbol looks like
+     * a different symbol. */
+    if (n < 0 || n >= cap) {
+        buf[0] = '\0';
+        return 0;
+    }
+    return (Int)n;
+}
+
+void burrow__traceback(const Uintptr *pcs, Int n) {
+    char line[BURROW_FRAME_TEXT_MAX];
+
+    for (Int i = 0; i < n; i++) {
+        if (burrow__frame_text(pcs[i], line, (Int)sizeof line) > 0) {
+            fputs(line, stderr);
             continue;
         }
 
+        /* Only a name long enough to fill the buffer gets here, and the address
+         * on its own is still the useful half. */
         fprintf(stderr, "\t%#llx\n", (unsigned long long)pcs[i]);
     }
 }

@@ -568,6 +568,29 @@ BURROW_STATIC(ret) burrow__P *burrow__allp(int32_t i);
 /* How many Ps there are. Fixed while the scheduler is running. */
 int32_t burrow__gomaxprocs(void);
 
+/* One goroutine, as much of it as a traceback can say from outside. */
+typedef struct burrow__GInfo {
+    uint64_t id;
+    uint32_t status; /* burrow__GStatus */
+} burrow__GInfo;
+
+/* Copies out the id and status of every goroutine that has ever been created,
+ * for runtime_stack when it was asked for all of them.
+ *
+ * It copies rather than handing the list over because the list is only stable
+ * under the scheduler lock, and the caller is formatting text, which is far too
+ * much work to do while holding it. Copying an id and a word of status per
+ * goroutine is a few hundred nanoseconds for a program with a thousand of them.
+ *
+ * Takes the lock if it is free and answers -1 if it is not, rather than waiting.
+ * The caller is usually a program that is failing, and the thread that failed
+ * may be the one holding this lock, in which case waiting for it is a hang on
+ * top of a crash. A -1 costs the report the other goroutines and nothing else.
+ *
+ * Writes at most max entries and puts the number that exist in total, so a
+ * caller with a small buffer can say how many it left out. */
+int32_t burrow__allg_snapshot(burrow__GInfo *out, int32_t max, int32_t *total);
+
 /* Register the callback the system monitor makes roughly once a second, which
  * today is sync.Pool's sweep and nothing else.
  *

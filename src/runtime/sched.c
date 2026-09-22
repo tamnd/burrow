@@ -233,6 +233,37 @@ int32_t burrow__gomaxprocs(void) {
     return sched.gomaxprocs;
 }
 
+int32_t burrow__allg_snapshot(burrow__GInfo *out, int32_t max, int32_t *total) {
+    int32_t n = 0;
+    int32_t seen = 0;
+
+    if (total != NULL)
+        *total = 0;
+    if (out == NULL || max < 0)
+        return -1;
+
+    /* Try rather than wait, for the reason the header gives: this runs on the
+     * way out of a crash and the crash may be inside the section this lock
+     * protects. */
+    if (!burrow__trylock(&sched.lock))
+        return -1;
+
+    for (burrow__G *g = sched.allg; g != NULL; g = g->allnext) {
+        seen++;
+        if (n >= max)
+            continue;
+        out[n].id = g->id;
+        out[n].status = burrow__atomic_load_acquire_u32(&g->status);
+        n++;
+    }
+
+    burrow__unlock(&sched.lock);
+
+    if (total != NULL)
+        *total = seen;
+    return n;
+}
+
 /* The sweep callback, set once by the first sync.Pool that gets used and read
  * by the system monitor on its own thread. A plain pointer rather than a list
  * because there is one caller and there is going to stay one.
@@ -618,7 +649,11 @@ static burrow__G *gfget(burrow__P *p, size_t bytes) {
         if (g == NULL)
             return NULL;
 
-        g->id = burrow__atomic_add_u64(&sched.nextgoid, 1);
+        /* One based, because the add answers with the value before it and the
+         * header says zero is not a valid id. It also puts the main goroutine
+         * at 1, which is the number Go gives it and the number that turns up in
+         * every Go traceback anybody has ever read. */
+        g->id = burrow__atomic_add_u64(&sched.nextgoid, 1) + 1;
 
         burrow__lock(&sched.lock);
         g->allnext = sched.allg;

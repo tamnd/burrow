@@ -202,12 +202,10 @@ void runtime_set_fatal_handler(RuntimeFatalFunc fn);
  * same reason nothing else on this path allocates or validates: one of the
  * callers is a program that is already failing.
  *
- * What you get back is addresses and not names. Turning one into a function, a
- * file and a line is symbolisation, and the table that does it is generated
- * when the amalgamation is built, which has not happened yet. So Caller,
- * CallersFrames and FuncForPC are not here alongside this yet either. An
- * address on its own is still worth having: it is what addr2line and atos take,
- * and it is what an uncaught panic prints under the goroutine line.
+ * What you get back is addresses. runtime_func_for_pc and runtime_frames_next
+ * below turn one into a name. An address on its own is still worth having: it
+ * is what addr2line and atos take, and it is what an uncaught panic prints
+ * under the goroutine line.
  *
  * Zero frames is a real answer rather than an error. It is what an architecture
  * burrow has no frame layout for gives, and what a build with frame pointers
@@ -215,6 +213,144 @@ void runtime_set_fatal_handler(RuntimeFatalFunc fn);
  * passes -fno-omit-frame-pointer, and a project that wants tracebacks out of
  * the amalgamation wants that flag too. */
 Int runtime_callers(Int skip, Slice pcs);
+
+/* Go's runtime.Caller: the address of the frame skip levels above this call.
+ *
+ * Zero is whoever called runtime_caller and one is that function's caller. That
+ * is one off from the way runtime_callers counts, where zero is the frame for
+ * runtime_callers itself, and it is off by exactly as much as Go's Caller is
+ * off from Go's Callers. The difference is a wart and it is Go's wart, so
+ * burrow keeps it rather than being subtly incompatible with every piece of
+ * code that gets ported across.
+ *
+ * Answers false when there is no such frame, and then leaves the outputs alone.
+ * Any output pointer may be NULL.
+ *
+ *     Uintptr pc;
+ *     Str file;
+ *     Int line;
+ *     if (runtime_caller(1, &pc, &file, &line)) { ... }
+ *
+ * file comes back empty and line comes back zero, on every platform, today.
+ * They are here because Go's signature has them and because the table that will
+ * fill them in is already planned: it needs the amalgamation, which is one
+ * translation unit a source reader can get exact line numbers out of. Nothing
+ * about this call changes when they start being filled in, which is why they
+ * are in the signature now rather than later. Use runtime_func_for_pc on the
+ * address for a name, which does work today. */
+bool runtime_caller(Int skip, Uintptr *pc, Str *file, Int *line);
+
+/* What burrow knows about one function. Both fields are empty or zero when the
+ * lookup failed. name points into the program's own read only data and lives as
+ * long as the program does, so it needs no freeing and may be kept. */
+typedef struct RuntimeFunc {
+    Str name;
+    Uintptr entry;
+} RuntimeFunc;
+
+/* Go's runtime.FuncForPC: the function containing pc, or false if there is not
+ * one.
+ *
+ * Go answers with a pointer to a Func and burrow answers with a value, because
+ * burrow's table is two parallel arrays with no per function object in it to
+ * hand a pointer to. name and entry are the two things Go's *Func is asked for
+ * almost every time it is asked for anything, and they are both here.
+ *
+ * The address is looked up exactly as given, which matters when the address
+ * came out of runtime_callers: those are return addresses, the instruction
+ * after a call, and a call in tail position puts that byte in the next
+ * function. Subtract one first and the answer names the function that made the
+ * call. runtime_frames_next does the subtraction for you.
+ *
+ * False is an ordinary answer. Static functions are not in the table yet, nor
+ * is anything outside burrow, and burrow/symtab.h says why. The first call may
+ * allocate, once per process; if it cannot, it answers the same question more
+ * slowly instead of failing. */
+bool runtime_func_for_pc(Uintptr pc, RuntimeFunc *out);
+
+/* One frame, as much of it as burrow can say.
+ *
+ * pc is the address that was in the slice, unchanged. That is a return address
+ * rather than the call it came back to, so it is one or more bytes past the
+ * instruction that is really in this frame, and the lookup that filled in the
+ * rest of this struct already accounted for that. It is left unchanged here
+ * because it is the number an uncaught panic prints and the number addr2line
+ * wants, and having two nearly equal addresses in circulation for one frame
+ * helps nobody. Go decrements it; this is the one place burrow does not follow.
+ *
+ * function and entry are empty and zero for a frame with no name. file and line
+ * are empty and zero everywhere today, for the reason runtime_caller gives. */
+typedef struct RuntimeFrame {
+    Uintptr pc;
+    Uintptr entry;
+    Str function;
+    Str file;
+    Int line;
+} RuntimeFrame;
+
+/* Go's runtime.Frames: a cursor over the addresses runtime_callers filled in.
+ *
+ * A plain value with no allocation behind it, so it needs no freeing and can be
+ * made on the stack of a program that has run out of memory. It borrows the
+ * slice rather than copying it, so the slice has to outlive it. */
+typedef struct RuntimeFrames {
+    const Uintptr *pcs;
+    Int len;
+    Int at;
+} RuntimeFrames;
+
+/* Go's runtime.CallersFrames: start reading the frames in pcs.
+ *
+ * Takes the same slice runtime_callers filled, and it is fine to pass the whole
+ * slice when only the first n entries were written, as long as the slice is cut
+ * to n first. A slice with a NULL pointer or a length of zero gives a cursor
+ * that is immediately finished. */
+RuntimeFrames runtime_callers_frames(Slice pcs);
+
+/* The next frame, or false when there are none left.
+ *
+ * Every address in the slice produces exactly one frame, whether or not a name
+ * was found for it, so a caller counting frames gets the number it put in. Go
+ * can produce more frames than addresses, because one address can be several
+ * inlined calls; burrow cannot yet, since the table has nothing about inlining
+ * in it.
+ *
+ *     RuntimeFrames it = runtime_callers_frames(slice_sub(pcs, 0, n));
+ *     RuntimeFrame f;
+ *     while (runtime_frames_next(&it, &f))
+ *         printf("%.*s\n", (int)f.function.len, (const char *)f.function.p);
+ */
+bool runtime_frames_next(RuntimeFrames *it, RuntimeFrame *out);
+
+/* Go's runtime.Stack: write a traceback into buf and answer how many bytes went
+ * in.
+ *
+ * buf is a slice of Byte and the text is not terminated, so the result is the
+ * first n bytes of it and not a C string. That is Go's shape, and it is the
+ * right one here too: this is called by code that is failing, and a function
+ * that cannot overrun and cannot allocate is worth more than a convenience.
+ * Text that does not fit is dropped rather than truncated mid line.
+ *
+ * The format is the one an uncaught panic prints, because it is the same
+ * printer: a goroutine line, then a name and an offset per frame with the
+ * address under it. A frame with no name is the address on its own.
+ *
+ *     Byte buf[4096];
+ *     Int n = runtime_stack(slice_from(buf, 4096, 4096, TYPE_BYTE), false);
+ *     fwrite(buf, 1, (size_t)n, stderr);
+ *
+ * With all false this is the calling goroutine, which is what almost every use
+ * of it wants. With all true every other goroutine follows it, as a line each
+ * giving its number and what it is doing, without frames. Walking a goroutine
+ * that is parked on another thread means reading a stack nobody is on out of a
+ * saved context, which is per architecture work the scheduler has not been
+ * given yet, so those lines say so rather than guessing. The numbers and the
+ * states are still enough to see a deadlock in.
+ *
+ * all true takes the scheduler lock if it is free and gives up on the other
+ * goroutines if it is not, rather than waiting, since the thread that is failing
+ * may be the thread holding it. */
+Int runtime_stack(Slice buf, bool all);
 
 /* ------------------------------------------------------------------ random
  *

@@ -119,6 +119,23 @@ Int burrow__callers(void *from, Int skip, Uintptr *pcs, Int max);
  * problem rather than this one's. */
 void burrow__traceback(const Uintptr *pcs, Int n);
 
+/* Room for one frame's two lines, terminator included. The longest exported
+ * name in the library is well under half of this and the two addresses are
+ * eighteen characters each at most, so nothing real gets near it. */
+#define BURROW_FRAME_TEXT_MAX 256
+
+/* The two lines burrow__traceback prints for one address, written into buf as a
+ * C string, and the length not counting the terminator.
+ *
+ * This exists so that there is one printer rather than two. runtime_stack
+ * writes the same text into a caller's buffer instead of to standard error, and
+ * two copies of a format string are two copies that drift apart.
+ *
+ * Answers zero and leaves an empty string when the text does not fit, rather
+ * than cutting a line in half, so a buffer of BURROW_FRAME_TEXT_MAX always gets
+ * the whole frame and a smaller one may get nothing. Allocates nothing. */
+Int burrow__frame_text(Uintptr pc, char *buf, Int cap);
+
 #ifdef __cplusplus
 }
 #endif

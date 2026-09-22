@@ -1253,6 +1253,30 @@ platform has to share.
 same sorted array and binary search in both cases. Sorting happens at runtime
 because the generator knows the names and the linker decides the addresses.
 
+On top of that lookup sit the four public calls, all in `burrow/runtime.h`.
+`runtime_func_for_pc` names one address and takes it exactly as given, which is
+Go's rule for `FuncForPC` and Go's reason for warning about handing it a return
+address. `runtime_callers_frames` and `runtime_frames_next` walk a slice of
+addresses and subtract one from each before looking it up, because a return
+address is the instruction after the call and a call in tail position puts that
+byte in the next function. `runtime_caller` is the single frame version, and it
+numbers its caller zero where `runtime_callers` numbers itself zero; that is
+Go's off by one and burrow keeps it so that ported code counts the same frames.
+`runtime_stack` writes the traceback an uncaught panic would print into a
+caller's buffer, using the same formatter `src/runtime/panic.c` uses so the two
+cannot drift.
+
+`runtime_stack(buf, true)` is the one of the four that is not finished. It gives
+the calling goroutine its frames and every other goroutine a line with its
+number and its status, because walking a goroutine that is parked on another
+thread means recovering a frame pointer from a saved machine context, which is
+per architecture work that belongs with the scheduler rather than here. The
+numbers and the states are enough to see a deadlock in, and the shape of the
+output does not change when the frames arrive. Two smaller gaps go with it:
+burrow records a goroutine's status and not the reason it parked, so the
+brackets say `waiting` where Go would say `chan receive`, and the file and line
+on `RuntimeFrame` stay empty until the amalgamation table lands.
+
 Naming every global function means the linker has to keep every object that
 defines one, so a small program linking `burrow` statically gets all of it.
 `make SYMTAB=0` builds an empty table and gives that back, at the cost of a

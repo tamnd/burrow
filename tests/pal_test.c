@@ -1,0 +1,420 @@
+/* The platform layer.
+ *
+ * These are thin tests on purpose. There is no way to check from inside the
+ * process that pal_clock_monotonic really read the machine's counter, and a
+ * test that mocked the system call would be testing the mock. What can be
+ * checked is the contract burrow/pal.h states, which is what everything above
+ * the layer is written against: that the monotonic clock does not go backwards,
+ * that a page size is a power of two, that a reservation cannot be touched and
+ * a commit can, and that the arguments a caller can get wrong are refused
+ * rather than passed through to a kernel.
+ *
+ * Copyright 2026 The burrow Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style licence that can be found
+ * in the LICENSE file. */
+
+#include "burrow/pal.h"
+
+#include "harness.h"
+
+#include <string.h>
+
+/* ---------------------------------------------------------------- the codes */
+
+TEST(every_code_has_a_message) {
+    /* The static assert in src/pal/errno.c already ties the table's length to
+     * the enum. This checks the other half, which is that no entry is empty and
+     * no two of them are the same string, since a copied line in a table of
+     * fifty is invisible and a duplicated message makes two failures look like
+     * one. */
+    for (PalErrno a = PAL_EPERM; a <= PAL_EOTHER; a++) {
+        const char *msg = pal_errno_string(a);
+        CHECK(msg != NULL);
+        CHECK(msg[0] != '\0');
+
+        for (PalErrno b = PAL_EPERM; b < a; b++)
+            CHECK(strcmp(msg, pal_errno_string(b)) != 0);
+    }
+}
+
+TEST(success_and_nonsense_are_not_the_same_answer) {
+    CHECK(strcmp(pal_errno_string(PAL_OK), "no error") == 0);
+    CHECK(strcmp(pal_errno_string(PAL_EOTHER), "unknown error") == 0);
+
+    /* Outside the range in either direction, including a raw POSIX errno, which
+     * is the mistake the numbering starts at 1000 to make visible. */
+    CHECK(strcmp(pal_errno_string(2), "unknown error") == 0);
+    CHECK(strcmp(pal_errno_string(-1), "unknown error") == 0);
+    CHECK(strcmp(pal_errno_string(999999), "unknown error") == 0);
+}
+
+/* --------------------------------------------------------------- the clocks */
+
+TEST(the_monotonic_clock_only_goes_forwards) {
+    int64_t first = pal_clock_monotonic();
+    CHECK(first > 0);
+
+    int64_t last = first;
+    for (int i = 0; i < 10000; i++) {
+        int64_t now = pal_clock_monotonic();
+        CHECK(now >= last);
+        last = now;
+    }
+
+    /* Ten thousand readings have to take some time, or the clock is stuck. */
+    CHECK(last > first);
+}
+
+TEST(the_wall_clock_says_it_is_after_the_time_this_was_written) {
+    /* 2026-01-01T00:00:00Z in nanoseconds. A machine whose clock is before that
+     * is a machine with no battery and no network, and the test is here to
+     * catch a backend that returns an offset from the wrong epoch, which is the
+     * mistake the Windows one is most exposed to. */
+    const int64_t y2026 = 1767225600LL * 1000000000LL;
+
+    int64_t now = pal_clock_realtime();
+    CHECK(now > y2026);
+
+    /* And before the year 2200, which catches a reading that was multiplied by
+     * a billion twice. */
+    CHECK(now < 7258118400LL * 1000000000LL);
+}
+
+TEST(the_two_clocks_are_not_the_same_clock) {
+    /* The monotonic one counts from an arbitrary point, usually boot, and the
+     * wall clock counts from 1970. A backend that wired one to the other would
+     * pass every test above and fail this. */
+    int64_t mono = pal_clock_monotonic();
+    int64_t wall = pal_clock_realtime();
+    CHECK(wall - mono > 0);
+}
+
+TEST(a_sleep_takes_at_least_as_long_as_it_was_asked_for) {
+    const int64_t want = 2 * 1000 * 1000; /* two milliseconds */
+
+    int64_t before = pal_clock_monotonic();
+    pal_nanosleep(want);
+    int64_t took = pal_clock_monotonic() - before;
+
+    CHECK(took >= want);
+
+    /* And not absurdly longer. A hundred times the ask is loose enough for a
+     * loaded machine and tight enough to catch a unit mix up, which would be a
+     * factor of a thousand or a million. */
+    CHECK(took < want * 100);
+}
+
+TEST(a_sleep_of_nothing_returns) {
+    /* Zero and negative both mean give up the processor and come back, so the
+     * only thing to check is that neither hangs and neither takes long. */
+    int64_t before = pal_clock_monotonic();
+    pal_nanosleep(0);
+    pal_nanosleep(-1);
+    pal_nanosleep(-1000000000);
+    int64_t took = pal_clock_monotonic() - before;
+
+    CHECK(took < 1000 * 1000 * 1000);
+}
+
+/* -------------------------------------------------------------- the machine */
+
+TEST(the_page_size_is_a_power_of_two) {
+    int64_t page = pal_page_size();
+
+    CHECK(page >= 512);
+    CHECK(page <= 1024 * 1024);
+    CHECK((page & (page - 1)) == 0);
+}
+
+TEST(the_page_size_is_the_same_every_time) {
+    /* It is cached after the first call, and a cache that answers differently
+     * once it is warm is worse than no cache. */
+    int64_t first = pal_page_size();
+    for (int i = 0; i < 100; i++)
+        CHECK(pal_page_size() == first);
+}
+
+TEST(there_is_at_least_one_processor) {
+    int64_t n = pal_cpu_count();
+
+    CHECK(n >= 1);
+
+    /* A machine with more than this exists and is not a machine this test runs
+     * on. The bound is here to catch a count read out of the wrong field. */
+    CHECK(n <= 4096);
+
+    for (int i = 0; i < 100; i++)
+        CHECK(pal_cpu_count() == n);
+}
+
+/* --------------------------------------------------------------- the memory */
+
+TEST(a_reservation_can_be_committed_and_written_and_given_back) {
+    int64_t page = pal_page_size();
+    PalErrno err = PAL_EOTHER;
+
+    void *p = pal_vm_reserve(page * 8, &err);
+    CHECK(p != NULL);
+    CHECK(err == PAL_OK);
+
+    err = PAL_EOTHER;
+    CHECK(pal_vm_commit(p, page * 2, &err));
+    CHECK(err == PAL_OK);
+
+    /* The part that was committed is memory now. Writing every page rather than
+     * the first byte, because a backend that committed one page and reported
+     * two would otherwise go unnoticed. */
+    unsigned char *bytes = (unsigned char *)p;
+    for (int64_t i = 0; i < page * 2; i++)
+        bytes[i] = (unsigned char)(i & 0xff);
+    for (int64_t i = 0; i < page * 2; i++)
+        CHECK(bytes[i] == (unsigned char)(i & 0xff));
+
+    err = PAL_EOTHER;
+    CHECK(pal_vm_decommit(p, page * 2, &err));
+    CHECK(err == PAL_OK);
+
+    err = PAL_EOTHER;
+    CHECK(pal_vm_release(p, page * 8, &err));
+    CHECK(err == PAL_OK);
+}
+
+TEST(committing_twice_is_not_an_error) {
+    int64_t page = pal_page_size();
+
+    void *p = pal_vm_reserve(page * 4, NULL);
+    CHECK(p != NULL);
+
+    /* A grow loop commits from the bottom every time rather than tracking where
+     * it got to, and that only works if this is free and quiet. */
+    for (int i = 0; i < 4; i++) {
+        PalErrno err = PAL_EOTHER;
+        CHECK(pal_vm_commit(p, page * 2, &err));
+        CHECK(err == PAL_OK);
+    }
+
+    *(volatile unsigned char *)p = 42;
+    CHECK(*(volatile unsigned char *)p == 42);
+
+    CHECK(pal_vm_release(p, page * 4, NULL));
+}
+
+TEST(a_guard_can_be_put_on_a_committed_page) {
+    int64_t page = pal_page_size();
+
+    void *p = pal_vm_reserve(page * 2, NULL);
+    CHECK(p != NULL);
+    CHECK(pal_vm_commit(p, page * 2, NULL));
+
+    /* Only that it is accepted. Whether touching it faults is what
+     * tests/stack_test.c checks, because checking it here would mean catching
+     * the fault, and the machinery for that is the runtime's. */
+    PalErrno err = PAL_EOTHER;
+    CHECK(pal_vm_guard(p, page, &err));
+    CHECK(err == PAL_OK);
+
+    /* The page above the guard is still writable, which is the half that makes
+     * a guard a guard rather than a wall across the whole mapping. */
+    *((volatile unsigned char *)p + page) = 7;
+    CHECK(*((volatile unsigned char *)p + page) == 7);
+
+    CHECK(pal_vm_release(p, page * 2, NULL));
+}
+
+TEST(memory_that_is_not_page_aligned_is_refused) {
+    int64_t page = pal_page_size();
+
+    PalErrno err = PAL_OK;
+    CHECK(pal_vm_reserve(page + 1, &err) == NULL);
+    CHECK(err == PAL_EINVAL);
+
+    err = PAL_OK;
+    CHECK(pal_vm_reserve(0, &err) == NULL);
+    CHECK(err == PAL_EINVAL);
+
+    err = PAL_OK;
+    CHECK(pal_vm_reserve(-page, &err) == NULL);
+    CHECK(err == PAL_EINVAL);
+
+    void *p = pal_vm_reserve(page * 2, NULL);
+    CHECK(p != NULL);
+
+    /* An address in the middle of a page, which is the mistake a caller makes
+     * by adding a byte count to a base rather than a page count. */
+    err = PAL_OK;
+    CHECK(!pal_vm_commit((unsigned char *)p + 1, page, &err));
+    CHECK(err == PAL_EINVAL);
+
+    err = PAL_OK;
+    CHECK(!pal_vm_commit(p, page - 1, &err));
+    CHECK(err == PAL_EINVAL);
+
+    err = PAL_OK;
+    CHECK(!pal_vm_commit(NULL, page, &err));
+    CHECK(err == PAL_EINVAL);
+
+    err = PAL_OK;
+    CHECK(!pal_vm_decommit(p, 0, &err));
+    CHECK(err == PAL_EINVAL);
+
+    err = PAL_OK;
+    CHECK(!pal_vm_guard(p, page + 1, &err));
+    CHECK(err == PAL_EINVAL);
+
+    CHECK(pal_vm_release(p, page * 2, NULL));
+}
+
+TEST(a_large_reservation_costs_address_space_and_not_memory) {
+    int64_t page = pal_page_size();
+
+    /* A gigabyte, reserved and never committed. This is what a goroutine stack
+     * does, and on a machine where reserving meant committing it would either
+     * fail or make the process a gigabyte bigger. Ten of them in a row makes
+     * the point without depending on how the machine reports its own size. */
+    void *held[10];
+    int64_t bytes = 1024 * 1024 * 1024;
+    bytes -= bytes % page;
+
+    for (int i = 0; i < 10; i++) {
+        held[i] = pal_vm_reserve(bytes, NULL);
+        CHECK(held[i] != NULL);
+    }
+
+    for (int i = 0; i < 10; i++)
+        CHECK(pal_vm_release(held[i], bytes, NULL));
+}
+
+/* --------------------------------------------------------------- the random */
+
+TEST(random_bytes_fills_the_buffer) {
+    unsigned char buf[64];
+    memset(buf, 0, sizeof buf);
+
+    PalErrno err = PAL_EOTHER;
+    bool ok = pal_random_bytes(buf, (int64_t)sizeof buf, &err);
+
+    /* A platform with nowhere to ask says so, and that is a pass here. What is
+     * not a pass is claiming success and leaving the buffer alone. */
+    if (!ok) {
+        CHECK(err == PAL_ENOSYS);
+        return;
+    }
+    CHECK(err == PAL_OK);
+
+    /* All zeroes is what an untouched buffer looks like, and it is a valid
+     * answer with probability one in two to the five hundred and twelve. */
+    int zeroes = 0;
+    for (size_t i = 0; i < sizeof buf; i++)
+        if (buf[i] == 0)
+            zeroes++;
+    CHECK(zeroes < (int)sizeof buf);
+
+    /* And every byte the same, which is what a backend that filled with one
+     * value would give. */
+    int same = 0;
+    for (size_t i = 1; i < sizeof buf; i++)
+        if (buf[i] == buf[0])
+            same++;
+    CHECK(same < (int)sizeof buf - 1);
+}
+
+TEST(two_asks_do_not_give_the_same_answer) {
+    unsigned char a[32];
+    unsigned char b[32];
+
+    if (!pal_random_bytes(a, (int64_t)sizeof a, NULL))
+        return;
+    CHECK(pal_random_bytes(b, (int64_t)sizeof b, NULL));
+
+    CHECK(memcmp(a, b, sizeof a) != 0);
+}
+
+TEST(random_writes_exactly_as_many_bytes_as_it_was_asked_for) {
+    /* A guard byte on each side, because a loop that goes one past the end is
+     * the mistake a chunked backend makes, and both the BSD and the Windows
+     * ones are chunked. */
+    unsigned char buf[130];
+
+    for (int64_t n = 1; n <= 128; n++) {
+        memset(buf, 0xaa, sizeof buf);
+
+        if (!pal_random_bytes(buf + 1, n, NULL))
+            return;
+
+        CHECK(buf[0] == 0xaa);
+        CHECK(buf[n + 1] == 0xaa);
+    }
+}
+
+TEST(asking_for_nothing_is_not_a_failure) {
+    unsigned char buf[1] = {0x5a};
+
+    PalErrno err = PAL_EOTHER;
+    CHECK(pal_random_bytes(buf, 0, &err));
+    CHECK(err == PAL_OK);
+    CHECK(buf[0] == 0x5a);
+
+    /* A NULL buffer with a zero length is the empty slice and is fine. A NULL
+     * buffer with a length is a bug and is refused. */
+    err = PAL_EOTHER;
+    CHECK(pal_random_bytes(NULL, 0, &err));
+    CHECK(err == PAL_OK);
+
+    err = PAL_OK;
+    CHECK(!pal_random_bytes(NULL, 8, &err));
+    CHECK(err == PAL_EINVAL);
+
+    err = PAL_OK;
+    CHECK(!pal_random_bytes(buf, -1, &err));
+    CHECK(err == PAL_EINVAL);
+}
+
+/* ------------------------------------------------------------- the out slot */
+
+TEST(the_error_is_optional_like_every_other_out_parameter) {
+    /* Every entry point takes the error last and every one of them has to
+     * accept NULL there, because a caller that only wants to know whether it
+     * worked should not have to declare a variable to throw away. */
+    int64_t page = pal_page_size();
+
+    CHECK(pal_vm_reserve(page + 1, NULL) == NULL);
+
+    void *p = pal_vm_reserve(page, NULL);
+    CHECK(p != NULL);
+    CHECK(pal_vm_commit(p, page, NULL));
+    CHECK(pal_vm_decommit(p, page, NULL));
+    CHECK(pal_vm_guard(p, page, NULL));
+    CHECK(pal_vm_release(p, page, NULL));
+
+    CHECK(!pal_vm_commit(NULL, page, NULL));
+}
+
+int main(void) {
+    RUN(every_code_has_a_message);
+    RUN(success_and_nonsense_are_not_the_same_answer);
+
+    RUN(the_monotonic_clock_only_goes_forwards);
+    RUN(the_wall_clock_says_it_is_after_the_time_this_was_written);
+    RUN(the_two_clocks_are_not_the_same_clock);
+    RUN(a_sleep_takes_at_least_as_long_as_it_was_asked_for);
+    RUN(a_sleep_of_nothing_returns);
+
+    RUN(the_page_size_is_a_power_of_two);
+    RUN(the_page_size_is_the_same_every_time);
+    RUN(there_is_at_least_one_processor);
+
+    RUN(a_reservation_can_be_committed_and_written_and_given_back);
+    RUN(committing_twice_is_not_an_error);
+    RUN(a_guard_can_be_put_on_a_committed_page);
+    RUN(memory_that_is_not_page_aligned_is_refused);
+    RUN(a_large_reservation_costs_address_space_and_not_memory);
+
+    RUN(random_bytes_fills_the_buffer);
+    RUN(two_asks_do_not_give_the_same_answer);
+    RUN(random_writes_exactly_as_many_bytes_as_it_was_asked_for);
+    RUN(asking_for_nothing_is_not_a_failure);
+
+    RUN(the_error_is_optional_like_every_other_out_parameter);
+
+    return harness_report("pal");
+}

@@ -36,6 +36,7 @@ category	sema-table	The wait queues behind sync, keyed on the address of the cou
 category	reclaim	The epoch and the handover lists behind lock free reading. One epoch per process is the whole idea, since a reader on any thread has to be able to hold any of them back.
 category	pool	sync.Pool's registry and the lock over it, which is one per process because the sweep has to be able to find every pool from the system monitor's thread.
 category	clock	The conversion factor between what the machine's counter counts and nanoseconds. Fixed at boot, so it is asked for once.
+category	machine	What the machine is: the page size and how many cores the process may run on. Both are fixed for the life of the process, so both are asked for once.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -61,11 +62,11 @@ global	src/runtime/sema.c	semtable	sema-table	251 roots, each with its own lock 
 global	src/runtime/sched.c	sched	scheduler	The scheduler itself, which is one per process because a second one would be a second set of threads fighting the first over the same cores. Every field is either under sched.lock or an atomic, and the comment on each one says which.
 global	src/runtime/sched.c	allp	scheduler	The Ps, a fixed array rather than an allocation so that the scheduler has nothing underneath it that can fail. A P is owned by at most one M at a time and that ownership is what makes its ring safe to touch.
 global	src/runtime/sched.c	allm	scheduler	The Ms, the same fixed array for the same reason. An entry is handed out once by newm under sched.lock and belongs to that thread until the run is over.
-global	src/runtime/clock.c	qpc_ready	clock	Windows only. Written with a release once the two halves below hold the tick rate, and read with an acquire, so a thread that sees it set also sees them. Two threads racing here ask the kernel twice and write the same number twice, which costs a duplicate call and nothing else.
-global	src/runtime/clock.c	qpc_lo	clock	Windows only. The low 32 bits of the tick rate, in two halves because a 64 bit atomic on a 32 bit machine takes a lock and this is read on every clock reading.
-global	src/runtime/clock.c	qpc_hi	clock	Windows only. The high 32 bits, published by the same release store as the low ones.
-global	src/runtime/clock.c	timebase_numer	clock	macOS only. The numerator of the tick to nanosecond fraction, written before the denominator below and read after it.
-global	src/runtime/clock.c	timebase_denom	clock	macOS only. The denominator, and the flag. Written with a release and nonzero means both it and the numerator are readable, the same arrangement as qpc_ready above with one fewer variable because a denominator of zero is already impossible.
+global	src/pal/time_windows.c	qpc_ready	clock	Windows only. Written with a release once the two halves below hold the tick rate, and read with an acquire, so a thread that sees it set also sees them. Two threads racing here ask the kernel twice and write the same number twice, which costs a duplicate call and nothing else.
+global	src/pal/time_windows.c	qpc_lo	clock	Windows only. The low 32 bits of the tick rate, in two halves because a 64 bit atomic on a 32 bit machine takes a lock and this is read on every clock reading.
+global	src/pal/time_windows.c	qpc_hi	clock	Windows only. The high 32 bits, published by the same release store as the low ones.
+global	src/pal/time_darwin.c	timebase_numer	clock	macOS only. The numerator of the tick to nanosecond fraction, written before the denominator below and read after it.
+global	src/pal/time_darwin.c	timebase_denom	clock	macOS only. The denominator, and the flag. Written with a release and nonzero means both it and the numerator are readable, the same arrangement as qpc_ready above with one fewer variable because a denominator of zero is already impossible.
 global	src/runtime/sched.c	curm	scheduler	Thread local. It is which M this thread is, written when the thread starts and cleared when it stops, and read by everything that needs to know which P it may use.
 global	src/runtime/defer.c	thread_scopes	scheduler	Thread local, and only reachable from a thread that is not running a goroutine. A goroutine's defer chain is a field of the goroutine, because a goroutine that parks inside a scope can wake up on another thread.
 global	src/runtime/panic.c	thread_panic	scheduler	Thread local, and only reachable from a thread that is not running a goroutine. A goroutine keeps its panics and its recovery points in the goroutine, for the reason the defer chain is there: a goroutine that parks inside a BURROW_TRY can wake up on another thread.
@@ -108,3 +109,7 @@ global	src/runtime/registry.c	registry_lock	type-registry	The reader writer lock
 global	src/runtime/registry.c	registry_slots	type-registry	The table. Written under registry_lock when it is built and when it grows, read under it the rest of the time.
 global	src/runtime/registry.c	registry_cap	type-registry	How many slots there are, always a power of two. Same lock as the table it describes, because the two have to change together.
 global	src/runtime/registry.c	registry_len	type-registry	How many of the slots are taken. Same lock, same reason.
+global	src/pal/machine_posix.c	cached_page	machine	Relaxed atomic, and the race is benign by construction. Two threads arriving together both ask the system, both get the same number, and both write it. There is nothing published alongside it, so there is nothing for a release store to order.
+global	src/pal/machine_posix.c	cached_cpus	machine	The same as cached_page above. The affinity mask cannot change under a running process in a way this layer promises to notice, which is the same promise Go's NumCPU makes.
+global	src/pal/machine_windows.c	cached_page	machine	The Windows half of cached_page above, with the same reasoning.
+global	src/pal/machine_windows.c	cached_cpus	machine	The Windows half of cached_cpus above, with the same reasoning.

@@ -36,10 +36,16 @@ internal dependency graph means a bug in `syscall` cannot break `os`.
 
 ## 2. The PAL
 
-Forty entry points, grouped. Each returns `int64_t` plus a `pal_errno`,
-which the caller maps to a `Error`. No Go types cross this boundary — no
-`Str`, no `Slice` — because the PAL must be trivially auditable per
-platform.
+Seventy five entry points, grouped. Each returns `int64_t` or a `bool` plus a
+`PalErrno`, which the caller maps to an `Error`. No Go types cross this
+boundary, no `Str` and no `Slice`, because the PAL has to be trivially
+auditable one platform at a time.
+
+The boundary is declared in [`include/burrow/pal.h`](../../include/burrow/pal.h)
+and the table below is what it declares. `tools/check-pal.sh` is what keeps the
+first sentence of that header true: it fails a file outside `src/pal/` that
+includes a system header or defines a feature test macro, and it fails an entry
+in `tools/pal-exceptions.txt` that has stopped needing to be there.
 
 | Group | Entry points |
 | --- | --- |
@@ -52,8 +58,19 @@ platform.
 | Memory | `vm_reserve`, `vm_commit`, `vm_decommit`, `vm_release`, `vm_guard` |
 | Misc | `random_bytes`, `signal_install`, `signal_mask`, `dl_open`, `dl_sym`, `page_size`, `hostname`, `user_lookup` |
 
-That is 68 rather than 40 once enumerated honestly, and it is still small
-enough that a new platform is a week of work rather than a port.
+That is 27 files, 9 process, 6 threads, 4 time, 12 net, 4 poll, 5 memory and 8
+misc. An earlier draft of this section said forty and then said sixty eight, both
+of which were counts from before the table had finished growing. Seventy five is
+what is written above and it is still small enough that a new platform is a week
+of work rather than a port.
+
+Not all seventy five have a backend today. All of them are declared, because the
+shape of the boundary is worth deciding once rather than discovering package by
+package, and because a call to one that is missing is a link error that names it.
+Time, memory, random and the machine queries are implemented and in use. Poll is
+implemented in `src/runtime/netpoll_*.c` and has not moved behind the
+declarations yet. Files, process, threads and net land with the packages that
+need them, where there is a real caller to design against.
 
 Three PAL rules:
 
@@ -68,7 +85,11 @@ Three PAL rules:
    mandatory and we use it. On Windows, Win32 only — never the CRT's POSIX
    emulation layer, which has the wrong semantics for almost everything.
 3. **One file per platform per group**, never `#ifdef` forests inside a
-   function. `pal/file_linux.c`, `pal/file_windows.c`, etc.
+   function. `src/pal/file_linux.c`, `src/pal/file_windows.c`, and so on. Where
+   two platforms want the same code the file is shared and named for the family
+   rather than copied, which is what `src/pal/vm_posix.c` is. Either way the
+   whole file sits under one `#if` and a reader can tell what runs on their
+   machine by looking at the top of it.
 
 ## 3. Platform support commitments
 

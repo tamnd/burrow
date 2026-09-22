@@ -1,11 +1,10 @@
 /* Deterministic tests for concurrent code.
  *
- * A test for something concurrent usually ends up written one of two ways.
- * Either it sleeps for long enough that the thing under test has probably
- * finished, which makes the suite slow and flaky in proportion to how loaded
- * the machine is, or it grows a pile of channels and wait groups that exist
- * only so the test can tell when to look, which means the test is now testing a
- * different program from the one that ships.
+ * A test for something concurrent usually ends up written one of two ways. It
+ * sleeps for long enough that the thing under test has probably finished, which
+ * is slow and is flaky in proportion to how loaded the machine is, or it grows a
+ * pile of channels and wait groups that exist only so the test can tell when to
+ * look, which means it now tests a different program from the one that ships.
  *
  * A bubble is the third way. Every goroutine started inside one belongs to it,
  * and the bubble knows at every moment whether any of them can still make
@@ -19,16 +18,19 @@
  *         go(BURROW_FN(Func, worker, c));
  *         synctest_wait();
  *
- *         // Every goroutine in the bubble is blocked now, so the worker is
- *         // sitting on the send. Nothing raced to get here and nothing slept.
- *         Int v;
+ *         Int v; // The worker is sitting on the send. Nothing slept.
  *         chan_recv(c, &v);
  *     }
  *
  *     synctest_run(BURROW_FN(Func, body, NULL));
  *
- * Two calls, and the whole of the idea is in what "blocked" means, which is
- * written out at synctest_wait below.
+ * A bubble also has a clock of its own, and it is the same idea again. The
+ * clock only moves when nothing in the bubble can move, and then it jumps
+ * straight to whatever timer is due next. So a sleep of an hour inside a bubble
+ * takes no time at all and still happens after a sleep of a minute that started
+ * with it. What that is worth is a test for a timeout that runs in microseconds
+ * and never has to pick a number small enough to be quick and large enough not
+ * to be flaky. See time_sleep in burrow/time.h.
  *
  * Derived from Go's src/testing/synctest/synctest.go.
  * Go source: go1.27.1.
@@ -63,10 +65,15 @@ extern "C" {
  * only reason go answers false and means the same thing. True means the bubble
  * ran and is finished.
  *
- * Stops the program if every goroutine in the bubble is durably blocked and
- * none of them is in synctest_wait, because that is a deadlock and there is
- * nothing left that could end it. Stops the program if called from outside a
- * goroutine, and if called from inside a bubble, since bubbles do not nest.
+ * Stops the program if every goroutine in the bubble is durably blocked, none
+ * of them is in synctest_wait, and no timer is left to fire, because that is a
+ * deadlock and there is nothing left that could end it. A bubble whose f has
+ * returned and which still has goroutines blocked gets a different message,
+ * because that one is a leak rather than a deadlock: the clock stops when f
+ * returns, so a goroutine waiting on a timer in there waits forever.
+ *
+ * Stops the program if called from outside a goroutine, and if called from
+ * inside a bubble, since bubbles do not nest.
  *
  * Go 1.25 replaced Run with Test, which takes the *testing.T so that a deadlock
  * fails the test rather than the process. burrow has no testing package yet, so

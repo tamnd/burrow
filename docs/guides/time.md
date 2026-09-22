@@ -33,6 +33,8 @@ Never backwards and never a jump, which is the point of it. The wall clock does 
 
 Callable from any thread, including one the runtime knows nothing about, and it costs a few nanoseconds everywhere, because every platform answers this out of the vdso or its equivalent rather than from a system call.
 
+Inside a synctest bubble this reads the bubble's clock instead. See the section on fake time below.
+
 ## Sleeping
 
 ```c
@@ -116,6 +118,27 @@ What it does not do is wait for a callback that is already running, for the reas
 
 An arena user can skip all of this. `arena_free` takes the whole region at once and the timers in it go with everything else. [guides/allocators.md](allocators.md) has the rest.
 
+## Fake time
+
+Inside a [synctest](synctest.md) bubble, everything on this page runs on the bubble's clock rather than the machine's.
+
+That clock starts at midnight UTC on 1 January 2000 and moves only when every goroutine in the bubble is durably blocked, and then it jumps straight to the next timer that is due. So a sleep of an hour in a bubble costs microseconds, an `AfterFunc` armed for a day fires on the next line, and a context deadline thirty seconds out is something a test can wait for rather than something it has to work around.
+
+```c
+static void body(void *env) {
+    int64_t start = burrow_nanotime();
+
+    time_sleep(TIME_HOUR);
+
+    // An hour later on the bubble's clock, and no time at all on yours.
+    assert(burrow_nanotime() - start == TIME_HOUR);
+}
+
+synctest_run(BURROW_FN(Func, body, NULL));
+```
+
+Nothing on this page had to be told about bubbles for that to work, and neither did `burrow/context.h`. Every timer in the program is armed through one function in the runtime that picks the caller's timer set, and inside a bubble that is the bubble's own set. [guides/synctest.md](synctest.md) has the rules, including the two that catch people out.
+
 ## What it costs
 
 A sleeping goroutine is a stack and a timer. The timer is 64 bytes and lives in the heap of the P that armed it, so arming one is a push onto a four way heap under that P's own lock and not a global one. That is the reason this scales: a server that sets a deadline per request has every core pushing onto a different heap, and Go moved off a single global heap in 1.9 after measuring the version that did not.
@@ -137,4 +160,5 @@ The calendar half is the larger piece and none of it is here: `Time`, `time.Now`
 - [guides/goroutines.md](goroutines.md) for `runtime_main`, `go` and the scheduler these sit on
 - [guides/functions.md](functions.md) for `Func`, `BURROW_FN` and where a callback's environment lives
 - [guides/allocators.md](allocators.md) for what to pass as `Alloc *` and when the free can be skipped
+- [guides/synctest.md](synctest.md) for the bubble's clock and what a test gets out of it
 - [design/06-runtime.md](../design/06-runtime.md) for the timer heaps themselves

@@ -23,7 +23,23 @@
 
 #include <stdint.h>
 
-/* When a duration that starts now is up, on the runtime's clock.
+/* What time it is for the calling goroutine.
+ *
+ * Inside a synctest bubble that is the bubble's own reading, which moves in
+ * jumps and only when nothing in the bubble can run. Everywhere else it is the
+ * machine's monotonic clock. Everything in this file that needs to know what
+ * time it is asks here, which is what makes a sleep inside a bubble a sleep on
+ * the bubble's clock without any of the callers having to know. See
+ * burrow/synctest.h.
+ *
+ * Go does the same thing in the same place, in runtime.nanotime. */
+static int64_t now_ns(void) {
+    burrow__Bubble *b = burrow__curbubble();
+
+    return b != NULL ? burrow__bubble_now(b) : burrow__nanotime();
+}
+
+/* When a duration that starts now is up, on whichever clock the caller is on.
  *
  * Timers are armed with a deadline rather than a duration because the heap sorts
  * on it and because the answer has to stay right across however many times the
@@ -32,7 +48,7 @@
  * reading so early in the life of the process that adding nothing to it leaves a
  * deadline the timer code will not take. */
 static int64_t deadline(Duration d) {
-    int64_t now = burrow__nanotime();
+    int64_t now = now_ns();
 
     if (d > 0 && d > INT64_MAX - now)
         return INT64_MAX;
@@ -56,7 +72,9 @@ static void sleep_thread(int64_t ns) {
     burrow__Note n;
 
     if (!burrow__note_init(&n)) {
-        int64_t end = deadline(ns);
+        /* The machine's clock and not now_ns, because this is a thread waiting
+         * and a thread has no goroutine and so no bubble. */
+        int64_t end = burrow__nanotime() + (ns > 0 ? ns : 0);
         while (burrow__nanotime() < end)
             burrow__thread_yield();
         return;
@@ -88,6 +106,42 @@ typedef struct Sleeper {
     bool armed;
 } Sleeper;
 
+/* A sleep inside a synctest bubble, which is a different shape from the one
+ * below and is Go's shape for the same case.
+ *
+ * The timer is armed here, before the park, rather than from the park's own
+ * callback. Two reasons, and the second is the one that matters. The bubble's
+ * clock cannot move until this goroutine has parked, because moving it takes
+ * every goroutine in the bubble to be blocked, so there is no timer to lose a
+ * race with and no reason to wait. And the callback runs after the goroutine is
+ * off its thread, where there is no goroutine to ask which bubble this is, so it
+ * is not a place the answer is even available.
+ *
+ * The park is durable. A bubbled timer is run by the goroutine in synctest_run
+ * and by nothing else, so the only thing that can end this wait is the bubble
+ * deciding that nothing in it can move, which is exactly what durable means. */
+static void sleep_in_bubble(Goroutine *g, burrow__Bubble *b, Duration d) {
+    /* The goroutine that runs the bubble's timers cannot wait for one of them.
+     * Nothing reaches here on it today, since the only thing that runs on it is
+     * a timer callback and none of those sleep, and Go keeps the same check for
+     * the same reason: the day one does, this says so rather than handing back
+     * a sleep that did not happen. */
+    if (burrow__bubble_is_root(b, g))
+        runtime_throw(BURROW_S("time_sleep: called from synctest_run"));
+
+    burrow__Timer *t = burrow__sleep_timer();
+
+    /* Out of memory, and the usual answer of sleeping the thread instead is not
+     * available: the duration is on a clock that only moves when every
+     * goroutine in here is blocked, so a thread that waited for it would wait
+     * for something that is never going to arrive. */
+    if (t == NULL || !burrow__timer_reset_on(burrow__bubble_timers(b), t, deadline(d),
+                                             0, wake_sleeper, g, NULL))
+        runtime_throw(BURROW_S("time_sleep: out of memory arming a bubbled timer"));
+
+    burrow__park(NULL, NULL, true);
+}
+
 /* Arms the timer once the goroutine is off its thread and can no longer be
  * reached from it.
  *
@@ -114,7 +168,7 @@ static bool arm_sleep(Goroutine *g, void *lock) {
  * syscall is dear enough to be worth it. This one is supported API and will go
  * on meaning exactly what burrow/time.h says it means. */
 int64_t burrow_nanotime(void) {
-    return burrow__nanotime();
+    return now_ns();
 }
 
 void time_sleep(Duration d) {
@@ -122,6 +176,13 @@ void time_sleep(Duration d) {
         return;
 
     Goroutine *g = sched_current();
+    burrow__Bubble *b = burrow__curbubble();
+
+    if (b != NULL) {
+        sleep_in_bubble(g, b, d);
+        return;
+    }
+
     burrow__Timer *t = g != NULL ? burrow__sleep_timer() : NULL;
 
     /* Not on a goroutine, or on one that cannot have a timer because the

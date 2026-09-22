@@ -271,13 +271,28 @@ project whose distribution model invites unusual compilers.
 deterministic scheduling, idle detection — and argues it is cleaner than Go's
 because we own the scheduler.
 
+The timer half is settled and shipped. A bubble owns a set of timers and a
+reading of its own, `burrow__timers_local` hands a goroutine inside a bubble
+the bubble's set rather than its P's, and the goroutine in `synctest_run` runs
+what is due and then winds the reading forward to the next deadline.
+Everything built on timers followed for free, including the `context`
+deadlines, which needed no change at all. [06](06-runtime.md) §10 has the
+shape and [guides/synctest.md](../guides/synctest.md) has the rules.
+
 The unresolved part is the interaction with the netpoller: `synctest` requires
 that all goroutines in a bubble be durably blocked before time advances, and a
 goroutine blocked on a real socket is not durably blocked in any way the
 scheduler can distinguish from one that is about to be woken. Go handles this
-by making network I/O outside a bubble an error. Whether that is sufficient for
-testing `net/http` — which is where deterministic tests would be most valuable
-— is unclear.
+by making network I/O outside a bubble an error. Whether that is sufficient
+for testing `net/http`, which is where deterministic tests would be most
+valuable, is unclear.
+
+There is a second half to that which is now concrete rather than hypothetical.
+A deadline armed on a socket inside a bubble becomes a timer on the bubble's
+clock, and the clock cannot move while the socket read is keeping the bubble
+from going idle, so the deadline never fires. Go has the same shape. It is
+fine as long as the rule is that real network IO does not go in a bubble, and
+it is the thing to revisit when `net` lands.
 
 **What settles it:** porting Go's own `synctest` tests and then trying to write
 a deterministic `net/http` timeout test. If it works, `burrow` has something

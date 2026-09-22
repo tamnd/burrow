@@ -575,9 +575,9 @@ BURROW_BORROWS(ret) burrow__Timer *burrow__sleep_timer(void);
 /* ------------------------------------------------------------------ bubbles
  *
  * The scheduler's half of testing/synctest. burrow/synctest.h is what a test
- * calls and src/runtime/synctest.c is the bubble itself; these are the six
- * points where the scheduler has to tell a bubble what just happened to one of
- * its goroutines.
+ * calls and src/runtime/synctest.c is the bubble itself; these are the points
+ * where the scheduler has to tell a bubble what just happened to one of its
+ * goroutines, and the two it asks a bubble about instead.
  *
  * The rule the bubble keeps is a count of how many of its goroutines could
  * still get somewhere on their own, and the whole of synctest falls out of
@@ -618,10 +618,18 @@ BURROW_BORROWS(ret) burrow__Bubble *burrow__curbubble(void);
 /* A goroutine has been born into b, and is about to be made runnable. */
 void burrow__bubble_join(burrow__Bubble *b);
 
-/* A goroutine of b has exited. May start the goroutine that is waiting in
+/* g is the goroutine synctest_run started, the one the bubble was made for.
+ * Called once, before that goroutine can run, and only by burrow__go_bubble.
+ *
+ * The bubble wants to know because the clock stops when this one exits. A
+ * bubble whose body has returned and which still has goroutines blocked on
+ * timers is a leak, and winding time forward for it would hide that. */
+void burrow__bubble_main(burrow__Bubble *b, burrow__G *g);
+
+/* Goroutine g of b has exited. May start the goroutine that is waiting in
  * synctest_run, so the caller must not touch the dead goroutine, or b, after
  * this. */
-void burrow__bubble_leave(burrow__Bubble *b);
+void burrow__bubble_exit(burrow__Bubble *b, burrow__G *g);
 
 /* A park of one of b's goroutines has begun, and until it ends b must neither
  * decide it has gone idle nor decide it is over. Paired with
@@ -655,6 +663,36 @@ void burrow__bubble_blocking(burrow__G *g);
  * if it was never counted as blocked or if somebody else has already given the
  * count back, which is what makes this safe to call on every wake. */
 void burrow__bubble_unblock(burrow__G *g);
+
+/* What time it is in b, in nanoseconds on the same scale as burrow_nanotime.
+ *
+ * A bubble has a clock of its own and it is not the machine's. It starts at
+ * midnight UTC on the first of January 2000, which is Go's number, and it only
+ * ever moves when every goroutine in the bubble is durably blocked, at which
+ * point it jumps straight to whenever the next timer in the bubble is due. So a
+ * test that sleeps for an hour takes no time at all, and a test that sleeps for
+ * a microsecond is not flaky on a loaded machine, because neither of them is
+ * measuring anything real.
+ *
+ * Readable from any goroutine in the bubble. The answer cannot go stale under a
+ * caller that is running, because moving it takes every goroutine in the bubble
+ * to be blocked and a caller that is running is not. */
+int64_t burrow__bubble_now(burrow__Bubble *b);
+
+/* The timers of b, which is where a timer armed inside the bubble goes.
+ *
+ * A P's heap is checked by whichever thread gets round to it against the
+ * machine's clock. This one is checked by the goroutine sitting in synctest_run
+ * against the clock above, and by nobody else. */
+BURROW_BORROWS(ret, b) burrow__Timers *burrow__bubble_timers(burrow__Bubble *b);
+
+/* Whether g is the goroutine that called synctest_run.
+ *
+ * That one runs the bubble's timers, so anything it does that waits for one
+ * would be waiting for itself. Nothing in the runtime does that today, and this
+ * is what lets the places that could say so rather than hand back a wait that
+ * never happened. Go keeps the same check. */
+bool burrow__bubble_is_root(burrow__Bubble *b, burrow__G *g);
 
 #ifdef __cplusplus
 }

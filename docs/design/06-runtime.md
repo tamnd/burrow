@@ -207,8 +207,18 @@ throws if the allocation fails. burrow does not have that option and does not
 pretend to, so arming a timer answers false when the heap needed to grow and
 the allocator said no, and the caller is told rather than left with a timer
 that will never fire. What Go has here that this does not, yet: timer channels
-and the sequence numbers that go with them, both of which need channels, and
-fake time for `testing/synctest`.
+and the sequence numbers that go with them, both of which need channels.
+
+A set of timers does not have to belong to a P. A `testing/synctest` bubble
+has one of its own, and that is the whole of how fake time works:
+`burrow__timers_local` answers the bubble's set rather than the P's for a
+goroutine inside a bubble, so every timer in the program lands on the right
+clock without any of the code that arms one knowing there is more than one
+clock. The bubble's set carries a `fake` flag, and the only thing it turns off
+is the wake: a P's heap has to be able to cut short a thread asleep waiting
+for a later timer, and a bubble's heap is run by the goroutine in
+`synctest_run` and by nobody else, so the wake would be a thread brought out
+for nothing.
 
 Arming a timer takes the earliest time it could fire and hands it to the
 scheduler, which wakes a thread on a note and, if a thread is asleep inside the

@@ -275,6 +275,18 @@ bool burrow__sched_spin_ok(void) {
 }
 
 burrow__Timers *burrow__timers_local(void) {
+    /* A goroutine inside a synctest bubble arms its timers into the bubble,
+     * which is what puts them on the bubble's clock instead of the machine's.
+     * Every timer in the program goes through here, so this is the one place
+     * that has to know, and everything built on timers gets it for free.
+     *
+     * The goroutine and not the thread. The P's set is still the right answer
+     * for the scheduler itself, which runs on a thread with no goroutine on it
+     * and so reads NULL from burrow__curg. */
+    burrow__Bubble *b = burrow__curbubble();
+    if (b != NULL)
+        return burrow__bubble_timers(b);
+
     if (curm == NULL || curm->p == NULL)
         return NULL;
     return &curm->p->timers;
@@ -771,9 +783,13 @@ static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
 
     /* After the free list, because the last goroutine out of a bubble starts
      * the goroutine sitting in synctest_run, and that one returning takes the
-     * bubble's memory with it. Nothing here may touch the bubble afterwards. */
+     * bubble's memory with it. Nothing here may touch the bubble afterwards.
+     *
+     * gp is handed over after it has gone on the free list, which is safe
+     * because the bubble only ever compares the pointer with the one it wrote
+     * down for its own body goroutine and never follows it. */
     if (bubble != NULL)
-        burrow__bubble_leave(bubble);
+        burrow__bubble_exit(bubble, gp);
     return NULL;
 }
 
@@ -1760,7 +1776,7 @@ static void outside_leave(bool counted) {
         burrow__atomic_add_u32(&sched.noutside, (uint32_t)-1);
 }
 
-static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble) {
+static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble, bool body) {
     if (fn.f == NULL)
         runtime_throw(BURROW_S("go of a nil function"));
     if (burrow__atomic_load_acquire_u32(&sched.running) == 0)
@@ -1795,9 +1811,14 @@ static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble) {
     /* Before the goroutine is runnable, so that a bubble can never see a
      * goroutine running that it has not counted. Everything the bubble decides
      * rests on that: a count that lags behind by one running goroutine is a
-     * deadlock reported on a program that is fine. */
-    if (bubble != NULL)
+     * deadlock reported on a program that is fine. Which one is the body goes
+     * down here for the same reason: the bubble has to know before that
+     * goroutine can exit, not after. */
+    if (bubble != NULL) {
+        if (body)
+            burrow__bubble_main(bubble, newg);
         burrow__bubble_join(bubble);
+    }
 
     set_status(newg, BURROW_GRUNNABLE);
     burrow__atomic_add_u32(&sched.ngoroutine, 1);
@@ -1825,7 +1846,7 @@ bool go_stack(Func fn, size_t stack_bytes) {
     burrow__M *m = curm;
     burrow__Bubble *bubble = (m != NULL && m->curg != NULL) ? m->curg->bubble : NULL;
 
-    return go_start(fn, stack_bytes, bubble);
+    return go_start(fn, stack_bytes, bubble, false);
 }
 
 bool go(Func fn) {
@@ -1836,7 +1857,7 @@ bool burrow__go_bubble(Func fn, burrow__Bubble *b) {
     if (b == NULL)
         runtime_throw(BURROW_S("burrow__go_bubble: no bubble"));
 
-    return go_start(fn, 0, b);
+    return go_start(fn, 0, b, true);
 }
 
 /* ------------------------------------------------------------ park and ready */

@@ -31,12 +31,16 @@
 
 #include "burrow/atomic.h"
 #include "burrow/chan.h"
+#include "burrow/clock.h"
+#include "burrow/context.h"
+#include "burrow/error.h"
 #include "burrow/func.h"
 #include "burrow/mem/heap.h"
 #include "burrow/panic.h"
 #include "burrow/proc.h"
 #include "burrow/runtime.h"
 #include "burrow/sync.h"
+#include "burrow/time.h"
 #include "burrow/type.h"
 
 #include "fatal.h"
@@ -59,6 +63,15 @@ static uint32_t wait_returned;
 static uint32_t child_had_the_value;
 static uint32_t caught;
 
+static int64_t clock_at_start;
+static int64_t clock_at_end;
+static int64_t fired_at;
+static uint32_t order;
+static uint32_t minute_was;
+static uint32_t hour_was;
+static uint32_t fired;
+static uint32_t deadline_hit;
+
 static SyncWaitGroup wg;
 static SyncMutex cond_mu;
 static SyncCond cond;
@@ -74,6 +87,14 @@ static void reset(void) {
     wait_returned = 0;
     child_had_the_value = 0;
     caught = 0;
+    clock_at_start = 0;
+    clock_at_end = 0;
+    fired_at = 0;
+    order = 0;
+    minute_was = 0;
+    hour_was = 0;
+    fired = 0;
+    deadline_hit = 0;
     memset(&wg, 0, sizeof(wg));
     memset(&cond_mu, 0, sizeof(cond_mu));
     memset(&cond, 0, sizeof(cond));
@@ -567,6 +588,209 @@ TEST(a_wait_group_cannot_be_added_to_from_inside_and_outside_a_bubble) {
                                "a synctest bubble");
 }
 
+/* ------------------------------------------------------------------ the clock
+ *
+ * A bubble has a clock of its own, and the rule it follows is the same rule the
+ * rest of synctest follows: it moves only when nothing in the bubble can move,
+ * and then it jumps straight to the next timer that is due.
+ *
+ * So a sleep of an hour in here is free, and the tests below are the three
+ * things that has to mean. The sleep has to come back, having taken no real
+ * time. Two sleeps have to come back in the order their durations say, not in
+ * the order they were started. And anything else built on timers, AfterFunc
+ * being the one that exists, has to be on the same clock.
+ *
+ * The reading at the top of a bubble is a fixed number rather than whatever the
+ * machine says, which is checked here because it is a promise burrow/time.h
+ * makes and a test that prints an elapsed time depends on it. */
+
+#define BUBBLE_START ((int64_t)946684800000000000)
+
+/* --- a sleep in a bubble is free */
+
+static void sleep_body(void *env) {
+    (void)env;
+
+    clock_at_start = burrow_nanotime();
+    time_sleep(TIME_HOUR);
+    clock_at_end = burrow_nanotime();
+}
+
+static void sleep_top(void *env) {
+    (void)env;
+
+    if (synctest_run(BURROW_FN(Func, sleep_body, NULL)))
+        (void)burrow__atomic_add_u32(&children_done, 1);
+}
+
+TEST(a_sleep_inside_a_bubble_costs_no_real_time) {
+    reset();
+
+    int64_t before = burrow__nanotime();
+    runtime_main(BURROW_FN(Func, sleep_top, NULL));
+    int64_t really_took = burrow__nanotime() - before;
+
+    CHECK_INT_EQ((Int)burrow__atomic_load_acquire_u32(&children_done), 1);
+    CHECK(clock_at_start == BUBBLE_START);
+    CHECK(clock_at_end - clock_at_start == TIME_HOUR);
+
+    /* Five seconds rather than something tight, because the number that has to
+     * be wrong for this to be a real sleep is an hour. Anything in this range
+     * is the cost of starting a runtime. */
+    CHECK(really_took < 5 * TIME_SECOND);
+}
+
+/* --- two sleeps come back in the order their durations say
+ *
+ * The hour is started first and has to finish last, which is the whole of what
+ * a fake clock has to get right and is the thing a clock that simply returned
+ * from every sleep at once would fail. */
+
+static void hour_sleeper(void *env) {
+    (void)env;
+
+    time_sleep(TIME_HOUR);
+    hour_was = burrow__atomic_add_u32(&order, 1);
+    sync_wait_group_done(&wg);
+}
+
+static void minute_sleeper(void *env) {
+    (void)env;
+
+    time_sleep(TIME_MINUTE);
+    minute_was = burrow__atomic_add_u32(&order, 1);
+    sync_wait_group_done(&wg);
+}
+
+static void order_body(void *env) {
+    (void)env;
+
+    clock_at_start = burrow_nanotime();
+
+    sync_wait_group_add(&wg, 2);
+    (void)go(BURROW_FN(Func, hour_sleeper, NULL));
+    (void)go(BURROW_FN(Func, minute_sleeper, NULL));
+    sync_wait_group_wait(&wg);
+
+    clock_at_end = burrow_nanotime();
+}
+
+static void order_top(void *env) {
+    (void)env;
+
+    if (synctest_run(BURROW_FN(Func, order_body, NULL)))
+        (void)burrow__atomic_add_u32(&children_done, 1);
+}
+
+TEST(sleeps_in_a_bubble_finish_in_the_order_their_durations_say) {
+    reset();
+    runtime_main(BURROW_FN(Func, order_top, NULL));
+
+    CHECK_INT_EQ((Int)burrow__atomic_load_acquire_u32(&children_done), 1);
+    CHECK_INT_EQ((Int)minute_was, 0);
+    CHECK_INT_EQ((Int)hour_was, 1);
+    CHECK(clock_at_end - clock_at_start == TIME_HOUR);
+}
+
+/* --- AfterFunc is on the bubble's clock too
+ *
+ * The body arms a callback for fifty milliseconds and then sleeps for a second,
+ * so the clock has to stop at the callback on its way. By the time the sleep
+ * returns the callback has not only fired but finished, because the clock could
+ * not have moved on to the second while the goroutine it started was still
+ * running. That is a thing a real clock cannot promise at all. */
+
+static void after_fires(void *env) {
+    (void)env;
+
+    fired_at = burrow_nanotime();
+    burrow__atomic_store_release_u32(&fired, 1);
+}
+
+static void after_body(void *env) {
+    (void)env;
+
+    clock_at_start = burrow_nanotime();
+
+    TimeTimer *t = time_after_func(heap_allocator(), 50 * TIME_MILLISECOND,
+                                   BURROW_FN(Func, after_fires, NULL));
+    if (t == NULL)
+        return;
+
+    time_sleep(TIME_SECOND);
+    clock_at_end = burrow_nanotime();
+
+    time_timer_free(t);
+}
+
+static void after_top(void *env) {
+    (void)env;
+
+    if (synctest_run(BURROW_FN(Func, after_body, NULL)))
+        (void)burrow__atomic_add_u32(&children_done, 1);
+}
+
+TEST(an_after_func_in_a_bubble_runs_on_the_bubble_clock) {
+    reset();
+    runtime_main(BURROW_FN(Func, after_top, NULL));
+
+    CHECK_INT_EQ((Int)burrow__atomic_load_acquire_u32(&children_done), 1);
+    CHECK_INT_EQ((Int)burrow__atomic_load_acquire_u32(&fired), 1);
+    CHECK(clock_at_start == BUBBLE_START);
+    CHECK(fired_at == BUBBLE_START + 50 * TIME_MILLISECOND);
+    CHECK(clock_at_end == BUBBLE_START + TIME_SECOND);
+}
+
+/* --- a context deadline is on the bubble's clock as well
+ *
+ * Nothing in burrow/context.h knows what a bubble is. It arms a timer, the
+ * timer goes into whichever set the goroutine arming it belongs to, and inside
+ * a bubble that is the bubble's set. This is the test that the rest of the
+ * library gets the clock for free, and it is the shape a real test for a
+ * timeout wants: thirty seconds of deadline and no thirty second test.
+ *
+ * The wait is on the context's own channel and not a sleep of the same length.
+ * Two timers due at the same instant both run, but the goroutine one of them
+ * wakes is free to start on another thread before the other has run, so a sleep
+ * that ended exactly at the deadline would be a race. That is true in Go too,
+ * and the answer in both is to wait for the thing rather than for the clock. */
+
+static void deadline_body(void *env) {
+    (void)env;
+
+    CancelFunc cancel;
+    Context ctx = context_with_timeout(heap_allocator(), context_background(),
+                                       30 * TIME_SECOND, &cancel);
+
+    clock_at_start = burrow_nanotime();
+
+    Int v;
+    (void)chan_recv(context_done(ctx), &v);
+    clock_at_end = burrow_nanotime();
+
+    if (errors_is(context_err(ctx), context_deadline_exceeded))
+        burrow__atomic_store_release_u32(&deadline_hit, 1);
+
+    BURROW_CALLF0(cancel);
+    context_free(ctx);
+}
+
+static void deadline_top(void *env) {
+    (void)env;
+
+    if (synctest_run(BURROW_FN(Func, deadline_body, NULL)))
+        (void)burrow__atomic_add_u32(&children_done, 1);
+}
+
+TEST(a_context_deadline_in_a_bubble_is_on_the_bubble_clock) {
+    reset();
+    runtime_main(BURROW_FN(Func, deadline_top, NULL));
+
+    CHECK_INT_EQ((Int)burrow__atomic_load_acquire_u32(&children_done), 1);
+    CHECK_INT_EQ((Int)burrow__atomic_load_acquire_u32(&deadline_hit), 1);
+    CHECK(clock_at_end - clock_at_start == 30 * TIME_SECOND);
+}
+
 /* --- the two that need no runtime at all */
 
 TEST(a_wait_outside_a_bubble_stops_the_program) {
@@ -591,6 +815,10 @@ int main(void) {
     RUN(a_cond_wait_inside_the_bubble_is_durable);
     RUN(a_channel_made_in_a_bubble_cannot_be_used_from_outside_it);
     RUN(a_wait_group_cannot_be_added_to_from_inside_and_outside_a_bubble);
+    RUN(a_sleep_inside_a_bubble_costs_no_real_time);
+    RUN(sleeps_in_a_bubble_finish_in_the_order_their_durations_say);
+    RUN(an_after_func_in_a_bubble_runs_on_the_bubble_clock);
+    RUN(a_context_deadline_in_a_bubble_is_on_the_bubble_clock);
     RUN(a_wait_outside_a_bubble_stops_the_program);
     RUN(a_run_outside_a_goroutine_stops_the_program);
 

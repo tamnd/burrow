@@ -1,4 +1,4 @@
-# Deterministic tests for concurrent code
+#Deterministic tests for concurrent code
 
 A test for something concurrent usually ends up written one of two ways, and both of them are bad.
 
@@ -69,17 +69,25 @@ Here is every wait in the library and the answer it gives.
 | `sync_wait_group_wait`, when every Add came from inside the bubble | Yes | Then only a Done from inside can take the counter to zero. |
 | `sync_wait_group_wait`, on a group used from outside | No | Anybody can call Done. |
 | `sync_mutex_lock`, `sync_rw_mutex_lock`, `sync_rw_mutex_r_lock` | No | A goroutine waiting for a lock is waiting for the goroutine holding it, and that one is running. |
-| `time_sleep` | No, for now | See the last section. |
+| `time_sleep` | Yes | The bubble's clock cannot move while anything in the bubble can run, so only the bubble can end the sleep. |
 | Anything built on `sched_park` outside the runtime | No | The runtime cannot tell what will end it, so the honest answer is that something might. |
 
-A WaitGroup that is added to from inside a bubble belongs to that bubble until its counter reaches zero, and adding to it from outside in the meantime stops the program. That is the same rule channels have and it is there for the same reason: without it, a Wait that counted as durable could be ended by a Done from somewhere the test cannot see. The association goes away on its own as soon as the counter is back to zero, so the same group can be used again by a later bubble or by nothing in particular.
+A WaitGroup that is added to from inside a bubble belongs to that bubble until its counter reaches zero, and adding to it from outside in the meantime stops the program. That is the same rule channels have and it is there for the same reason:
+without it,
+    a Wait that counted as durable
+        could be ended by a Done from somewhere the test cannot see.The
+            association goes away on its own as soon as the counter is back to zero,
+    so the same group can be used again by a later bubble or
+        by nothing in particular.
 
-## What the test gets to say
+        ##What the test gets to say
 
-Because the bubble knows the difference between blocked and finished, a test can assert on a program in the middle of its work rather than only at the end of it.
+            Because the bubble knows the difference between blocked and finished,
+    a test can assert on a program in the middle of its work rather than only at the end
+        of it.
 
-```c
-static void worker(void *env) {
+```c static void
+        worker(void *env) {
     Chan *c = env;
 
     Int v = 1;
@@ -110,9 +118,60 @@ That sounds strict and it is the rule that makes the rest work. If code outside 
 
 A channel made outside the bubble and used inside it is fine, and waits on it are not durable. That is the escape hatch for a test that genuinely does want to talk to something outside, and the bubble stays honest about it.
 
+## The clock
+
+A bubble has a clock of its own, and it is the same idea as durable blocking applied to time.
+
+The clock starts at midnight UTC on 1 January 2000, which is 946684800000000000 nanoseconds after the unix epoch. It moves only when every goroutine in the bubble is durably blocked, and when it moves it jumps straight to the deadline of the next timer that is due. Nothing in between happens, because there is nothing in between: no goroutine could have run during that stretch anyway.
+
+So a sleep of an hour costs microseconds.
+
+```c
+static void body(void *env) {
+    int64_t start = burrow_nanotime();
+
+    time_sleep(TIME_HOUR);
+
+    // Exactly an hour later, on the bubble's clock. The test took no time.
+    assert(burrow_nanotime() - start == TIME_HOUR);
+}
+```
+
+The order still holds, which is the part that makes this worth having rather than merely fast. A goroutine that sleeps for a minute comes back before one that sleeps for an hour, whichever of them started first, because the clock stops at each deadline in turn.
+
+Everything in the library that asks what time it is asks the bubble when it is in one. `burrow_nanotime` returns the bubble's reading, `time_sleep` sleeps on the bubble's clock, `time_after_func` fires on it, and a context deadline is measured against it. None of those had to be told about bubbles: they all go through one function in the runtime that picks the caller's timer set, and inside a bubble that is the bubble's set.
+
+That gives a test for a timeout that a real clock cannot give.
+
+```c
+static void body(void *env) {
+    CancelFunc cancel;
+    Context ctx = context_with_timeout(heap_allocator(), context_background(),
+                                       30 * TIME_SECOND, &cancel);
+
+    // Nothing in the bubble can run, so the clock jumps to the deadline and the
+    // context expires. A real thirty second wait, for free, and nothing to be
+    // flaky about.
+    Int v;
+    chan_recv(context_done(ctx), &v);
+    assert(errors_is(context_err(ctx), context_deadline_exceeded));
+
+    BURROW_CALLF0(cancel);
+    context_free(ctx);
+}
+```
+
+Wait for the thing rather than for the clock, as that example does. Two timers that come due at the same instant both run, but a goroutine that one of them wakes can start on another thread before the other has run, so a sleep that ended exactly on a deadline would be a race. Go is the same here and for the same reason.
+
+Two things follow from the clock only moving when the bubble is idle, and both of them surprise people once.
+
+`synctest_wait` does not move the clock. It returns when every other goroutine is durably blocked, and at that moment the goroutine that called it is still running, so the bubble is not idle. A test that wants time to pass has to sleep. Go behaves the same way.
+
+The clock stops when the bubble's body returns. From then on the bubble is only waiting for goroutines to exit, and a goroutine still waiting on a timer in there is a leak rather than something the clock should rescue. That case gets its own message, separate from the deadlock below.
+
 ## Deadlock
 
-When every goroutine in a bubble is durably blocked and none of them is sitting in `synctest_wait`, nothing in there is ever going to run again. The program stops and says so.
+When every goroutine in a bubble is durably blocked, none of them is sitting in `synctest_wait`, and no timer is left to fire, nothing in there is ever going to run again. The program stops and says so.
 
 That is a better answer than hanging, and it is available here for a reason that does not hold for a program at large: the bubble knows the complete set of goroutines involved and knows that none of them can be woken from outside. Go's runtime does the same thing for the same reason.
 
@@ -128,11 +187,13 @@ Inside a bubble a park costs a few atomic adds and one uncontended lock, a wake 
 
 Go 1.24 shipped this as `synctest.Run`. Go 1.25 replaced it with `synctest.Test`, which takes the `*testing.T` so that a deadlock fails the test rather than the process. burrow has no `testing` package yet, so the shape here is `Run`, and `synctest_test` arrives with `testing`.
 
-Fake time is the other half and is not here yet. In Go, a bubble has a clock of its own that starts at midnight UTC on 1 January 2000 and moves forward only when every goroutine in the bubble is durably blocked, so a test that sleeps for an hour takes no time at all. Until that lands, `time_sleep` is not durable: a sleeping goroutine keeps counting as running, which means `synctest_wait` waits for it and a bubble with a timer in it does not report a false deadlock. The behaviour is honest, it is just slow, and the cure is a separate change.
+Go runs a bubbled timer that is already due at the moment it is armed on the spot, on the goroutine that armed it, rather than waiting for the clock to be asked to move. burrow arms it and lets the run loop pick it up on the next pass, which gets to the same place with one more trip through the scheduler. That is a difference in cost and not in behaviour, and it is worth fixing when timer channels land and arming gets hot.
+
+A deadline armed on a socket inside a bubble becomes a timer on the bubble's clock, and the clock will not move while the socket read is keeping the bubble from going idle, so the deadline never fires. Go has the same shape and the same answer: do not put real network IO inside a bubble.
 
 ## See also
 
 - [guides/goroutines.md](goroutines.md) for `runtime_main`, `go` and what a park is
 - [guides/channels.md](channels.md) for `chan_make`, `chan_select` and what a closed channel does
 - [guides/sync.md](sync.md) for `WaitGroup`, `Cond` and the locks
-- [guides/time.md](time.md) for `time_sleep` and the timer heap fake time will sit on
+- [guides/time.md](time.md) for `time_sleep`, `time_after_func` and the timer heap the clock sits on

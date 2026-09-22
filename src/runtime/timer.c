@@ -527,7 +527,7 @@ static bool maybe_add(burrow__Timers *ts, burrow__Timer *t) {
         if (!ok)
             t->state &= ~BURROW__TIMER_HEAPED;
         else
-            wake = next == 0 || when < next;
+            wake = !ts->fake && (next == 0 || when < next);
     }
     timer_unlock(t);
     timers_unlock(ts);
@@ -646,7 +646,7 @@ bool burrow__timer_reset_on(burrow__Timers *ts, burrow__Timer *t, int64_t when,
 
         burrow__Timers *in = t->ts;
         int64_t next = burrow__timers_wake_time(in);
-        wake = next == 0 || when < next;
+        wake = !in->fake && (next == 0 || when < next);
 
         /* The bit has to be out where the owning P can see it before the
          * published minimum moves, or the P's next pass can clear a lower bound

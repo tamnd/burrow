@@ -25,12 +25,16 @@
  * P gets round to it never leaves the heap at all. That case is a read deadline
  * on a busy connection, and it is why this shape is worth its complexity.
  *
+ * A set does not have to belong to a P. A synctest bubble has one of its own, so
+ * that a timer armed inside the bubble runs on the bubble's clock rather than on
+ * the machine's, and `fake` below is the one thing that set does differently.
+ * burrow/synctest.h is what that is for.
+ *
  * What Go has here that this does not, yet. Timer channels, which need channels,
- * and the sequence numbers that go with them. Fake time, which is synctest. And
- * the netpoller wakeup, which is how Go tells a sleeping thread that its deadline
- * moved. burrow has no netpoller, so the thread that is asleep with nothing to do
- * is asleep on its own note with a deadline on it, and burrow__timers_wake below
- * is what cuts that short.
+ * and the sequence numbers that go with them. And the netpoller wakeup, which is
+ * how Go tells a sleeping thread that its deadline moved. A thread with nothing
+ * to do here is asleep on its own note with a deadline on it, and
+ * burrow__timers_wake below is what cuts that short.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -133,6 +137,17 @@ typedef struct burrow__TimerWhen {
  * looking at their run queues. */
 struct burrow__Timers {
     burrow__Lock mu;
+
+    /* Set for the one set that belongs to a synctest bubble rather than to a P.
+     *
+     * Only one thing turns on it. A timer added to a P's heap has to be able to
+     * cut short a thread that is asleep waiting for a later one, and that is
+     * burrow__timers_wake. A bubble's timers are run by the goroutine sitting in
+     * synctest_run and by nobody else, so there is no sleeping thread to cut
+     * short and the wake would be a thread woken for nothing.
+     *
+     * Written once, before the set is reachable from anywhere else. */
+    bool fake;
 
     /* The heap. Under mu. */
     BURROW_OWNS(1) burrow__TimerWhen *heap;

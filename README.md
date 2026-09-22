@@ -598,7 +598,9 @@ A bubble is the third way. Every goroutine started inside one belongs to it, and
 
 The question it answers is whether a goroutine is durably blocked, meaning the only thing that can wake it is another goroutine in the same bubble. A receive on a channel made inside the bubble is durable, a socket read is not, and the difference is decided at the park by the code that knows what is being waited for. A bubble where everything is durably blocked and nobody is waiting has deadlocked, and that stops the program rather than hanging it.
 
-Details, including what a bubbled channel is and why fake time is a separate change: [docs/guides/synctest.md](docs/guides/synctest.md).
+A bubble also has a clock of its own. It starts at midnight UTC on 1 January 2000, it moves only when every goroutine in the bubble is durably blocked, and then it jumps straight to the next timer that is due, so a test that sleeps for an hour takes microseconds and a thirty second timeout is something a test can wait for. `burrow_nanotime`, `time_sleep`, `time_after_func` and a `Context` deadline are all on it inside a bubble, and none of them had to be told about bubbles to be.
+
+Details, including what a bubbled channel is and the two things about the clock that catch people out: [docs/guides/synctest.md](docs/guides/synctest.md).
 
 ## Status
 

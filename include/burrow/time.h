@@ -79,7 +79,18 @@ typedef int64_t Duration;
  *
  * Callable from any thread, including one the runtime knows nothing about.
  * Costs a few nanoseconds everywhere, because every platform answers this out
- * of the vdso or its equivalent rather than from a system call. */
+ * of the vdso or its equivalent rather than from a system call.
+ *
+ * Inside a synctest bubble this is the bubble's clock and not the machine's, so
+ * a deadline set in a bubble and a sleep in a bubble agree with each other.
+ * Which also means the difference between two readings taken in a bubble is how
+ * long the code under test thinks it took, not how long it really took, and the
+ * second number is not available in there. See burrow/synctest.h.
+ *
+ * A bubble starts its clock at midnight UTC on 2000-01-01, which comes to
+ * 946684800000000000 nanoseconds after the unix epoch. Go's number, and worth
+ * knowing because it makes a test that prints an elapsed time print the same
+ * thing on every machine and every run. */
 int64_t burrow_nanotime(void);
 
 /* Stops the calling goroutine for at least d.
@@ -97,7 +108,13 @@ int64_t burrow_nanotime(void);
  * Callable from a thread that is not one of the scheduler's, and then it sleeps
  * the thread rather than parking a goroutine, because there is no goroutine to
  * park. That is a courtesy for setup code and tests rather than a thing to build
- * on. */
+ * on.
+ *
+ * Inside a synctest bubble this returns as soon as every other goroutine in the
+ * bubble is blocked too, because that is when the bubble's clock jumps to the
+ * next timer that is due. A sleep of an hour in there costs microseconds. The
+ * order still holds: the goroutine that asked for a minute comes back before
+ * the one that asked for an hour. See burrow/synctest.h. */
 void time_sleep(Duration d);
 
 /* A timer that runs a function once its time is up. Go's time.Timer.

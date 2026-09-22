@@ -24,6 +24,13 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 - `synctest_wait` does not move the clock, and a test that wants time to pass has to sleep. It returns when every other goroutine is durably blocked, and at that moment the goroutine that called it is running, so the bubble is not idle. Go behaves the same way.
 - Go 1.25 replaced `Run` with `Test`, which takes the `*testing.T` so a deadlock fails the test rather than the process. The shape here is Go 1.24's `Run`, and `synctest_test` arrives with the `testing` package.
 
+### Tests
+
+- The scheduler, the timers and the channels have a pass of their own inside a bubble now, which is what step 10 of the order of construction in `docs/design/06-runtime.md` asks for. A bubble is not a layer sitting on top of the scheduler, it is a set of counters threaded through the middle of it, so every park and every wake that was written before bubbles existed has to be asked the question again in there.
+- `tests/bubble_test.c` is the file. Five hundred goroutines parking on one channel, a goroutine that is only yielding, a goroutine three removes from the body, a stopped timer that the clock walks straight past, a timer reset onto the bubble's clock, a timer that arms a timer, a select where every case is bubbled, a select with one case from outside, a select with a default, and a pipeline of two thousand handoffs.
+- Nothing needed fixing, which is the result rather than the absence of one. The two things that would have shown up are a bubble that counts run queues instead of parks, which returns from `synctest_wait` into the middle of somebody else's loop, and a fake clock that takes what it finds in the timer heap rather than what is still armed, which runs a cancelled callback on the way past. Both were checked by breaking them on purpose, and both take the run down with a fatal error rather than letting it pass.
+- Steps 7, 8 and 9, which are `defer` and `panic`, the `sync` package and the netpoller, are still to come.
+
 ### Build and CI
 
 - The lint and clang-tidy jobs are green again. They had both been failing for long enough that nobody was reading them, which is the same as not having them, so everything either job had to say is answered here rather than suppressed.

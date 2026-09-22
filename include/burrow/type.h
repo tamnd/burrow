@@ -336,6 +336,165 @@ bool field_is_embedded(const Field *f);
  * descriptor, the way Go sorts them, so this is a binary search. */
 BURROW_BORROWS(ret, t) const Method *type_method_by_name(const Type *t, Str name);
 
+/* --------------------------------------------------------------- the registry
+ *
+ * Reflection on a value you are holding needs no registry. You have the
+ * descriptor, it is a static object, and that is the whole of it. The registry
+ * answers the other question, which is what a program does when it has a type's
+ * name and nothing else:
+ *
+ *     BURROW_REGISTER_TYPE(Point);   at file scope, once
+ *
+ *     const Type *t = type_by_name(BURROW_S("image.Point"));
+ *
+ * encoding/gob puts type names on the wire, net/rpc names the type of an
+ * argument, and text/template resolves a method on a name it was handed. None
+ * of those can work from an address, so somewhere there has to be a map from a
+ * name to a descriptor, and a program has to say which of its types go in it.
+ *
+ * Registering is opt in and stays that way. A registry that held every type in
+ * the binary would be a table nobody asked for, and would keep every descriptor
+ * the linker would otherwise drop. */
+
+/* Where a registered descriptor's pointer goes.
+ *
+ * One pointer per registered type, in a section of its own, so that the
+ * registry can find all of them by reading the section between the two symbols
+ * the linker puts either side of it. Nothing runs to put them there. The
+ * section is part of the image the same way a string literal is.
+ *
+ * Three spellings, because the three object formats name sections differently
+ * and Mach-O wants a segment as well. The PE spelling relies on the linker
+ * sorting sections whose names differ after a dollar sign, which is how the C
+ * runtime's own initialiser lists have worked since before C99.
+ *
+ * BURROW__TYPE_SECTION on its own is the attribute. Nothing outside burrow
+ * should need it; BURROW_REGISTER_TYPE is the thing to use. */
+/* Do not let the address sanitizer put a redzone around one of these.
+ *
+ * This is not a nicety. The registry reads the section as an array, one pointer
+ * after another, and a sanitizer that puts twenty four bytes of poison between
+ * two globals turns that array into something with holes in it. The walk then
+ * reads the first hole and the sanitizer reports the overflow it created. There
+ * is no way to walk around it, because the padding is only knowable from inside
+ * the sanitizer, so the answer is to ask for none.
+ *
+ * clang only. gcc needs nothing here, because its sanitizer already leaves a
+ * global with a section of its own alone, and it rejects the attribute on
+ * anything that is not a function, so asking would be an error rather than a
+ * no-op. __has_attribute says yes on gcc either way, which is why this asks
+ * which compiler it is instead.
+ *
+ * What it gives up is the redzone on one pointer per registered type, and that
+ * pointer is written by the linker and never touched again. It expands to
+ * nothing in a build without the sanitizer. */
+#if defined(__clang__) && defined(__has_attribute)
+#if __has_attribute(no_sanitize_address)
+#define BURROW__TYPE_NO_REDZONE __attribute__((no_sanitize_address))
+#endif
+#endif
+#if !defined(BURROW__TYPE_NO_REDZONE)
+#define BURROW__TYPE_NO_REDZONE
+#endif
+
+#if defined(__APPLE__) && defined(__GNUC__)
+#define BURROW__TYPE_SECTION                                                           \
+    BURROW__TYPE_NO_REDZONE __attribute__((used, section("__DATA,__burrowtype")))
+#elif defined(_WIN32) && defined(__GNUC__)
+#define BURROW__TYPE_SECTION                                                           \
+    BURROW__TYPE_NO_REDZONE __attribute__((used, section(".brwt$b")))
+#elif defined(__ELF__) && defined(__GNUC__)
+#define BURROW__TYPE_SECTION                                                           \
+    BURROW__TYPE_NO_REDZONE __attribute__((used, section("burrowtype")))
+#elif defined(_MSC_VER)
+#define BURROW__TYPE_SECTION __declspec(allocate(".brwt$b"))
+#endif
+
+#if defined(BURROW__TYPE_SECTION)
+#define BURROW__TYPE_SECTION_ENTRY(T, sym)                                             \
+    BURROW__TYPE_SECTION static const Type *const burrow__typeref_##T = &(sym)
+#elif defined(__GNUC__)
+/* No section, but constructors work, which is the case for a target with an
+ * object format burrow has not been told about. One store each, before main. */
+#define BURROW__TYPE_SECTION_ENTRY(T, sym)                                             \
+    __attribute__((constructor)) static void burrow__register_##T(void) {              \
+        (void)type_register(&(sym));                                                   \
+    }                                                                                  \
+    extern const Type *const burrow__typeref_##T
+#else
+/* Neither. Call type_register yourself at the top of main; there is nowhere
+ * else for it to go, and failing here is better than a registry that is quietly
+ * empty. */
+#define BURROW__TYPE_SECTION_ENTRY(T, sym)                                             \
+    _Static_assert(0, "BURROW_REGISTER_TYPE needs sections or constructors, "          \
+                      "neither of which this compiler has. Call type_register "        \
+                      "at the start of main instead.")
+#endif
+
+/* Put a descriptor in the registry, at file scope.
+ *
+ * This costs no code and runs nothing at startup on the common platforms. It
+ * places one pointer in a section of its own, and the registry reads that
+ * section the first time anybody looks a name up. Where that is not available
+ * it falls back to a constructor, which is the only part of burrow that runs
+ * anything before main, and it runs one store.
+ *
+ * The semicolon is yours, as it is for BURROW_STRUCT, and for the same reason.
+ *
+ * T is the type's C spelling, so BURROW_REGISTER_TYPE(Point) for a type named
+ * Point. It works on any descriptor named the way TYPE_OF expects, whether it
+ * came out of BURROW_STRUCT or was written by hand. */
+#define BURROW_REGISTER_TYPE(T) BURROW__TYPE_SECTION_ENTRY(T, burrow_type_##T)
+
+/* The descriptor registered under this qualified name, or NULL.
+ *
+ * The name is Go's: "image.Point" for a type in a package, "Point" for one with
+ * no package path, "int" for a builtin. The split is at the last dot, because a
+ * package path can contain dots and a type name cannot.
+ *
+ * NULL means not registered, and it means that rather than anything else. A
+ * name that reached here from a network connection naming a type this program
+ * does not have is the case this has to get right, and guessing at it is how a
+ * decoder turns someone else's bytes into a call into your program. */
+BURROW_STATIC(ret) const Type *type_by_name(Str name);
+
+/* Add a descriptor to the registry while the program is running, for a type
+ * that arrived in a module loaded after startup.
+ *
+ * True when the name is now registered, which includes the case where it
+ * already was and to the same type. False when a different type is already
+ * registered under that name, and the first one stays: a registry that let the
+ * second win would change what a name means underneath whoever is already using
+ * it. Go panics here; burrow returns the answer and lets the caller decide,
+ * because the caller is usually a plugin loader that has somewhere to put it. */
+bool type_register(const Type *t);
+
+/* How many names the registry holds. For tests and for a status page. */
+Int type_registry_len(void);
+
+/* Whether two descriptors describe the same type.
+ *
+ * Within one program this is a pointer comparison and nothing else, because a
+ * descriptor is defined once. It is not always one program: the same type
+ * compiled into two shared libraries arrives twice, at two addresses, and Go
+ * does not have this problem because Go links the two definitions together.
+ *
+ * So the fallback compares the qualified name, the kind and the size. That is
+ * as far as it can honestly go. Two unrelated types with one name, one kind and
+ * one size are indistinguishable from here, and the answer for two unnamed
+ * types is their addresses, since there is no name to compare. */
+bool type_same(const Type *a, const Type *b);
+
+/* Write a type's qualified name into buf and return it.
+ *
+ * The caller supplies the buffer because a descriptor does not carry the joined
+ * name: it holds the package path and the name separately, joining them would
+ * mean a string allocated per type at startup, and almost nothing ever asks.
+ *
+ * A name longer than the buffer is truncated rather than allocated for. 256
+ * bytes holds every name in Go's standard library with room to spare. */
+BURROW_BORROWS(ret, buf) Str type_qualified_name(const Type *t, Byte *buf, Int cap);
+
 #ifdef __cplusplus
 }
 #endif

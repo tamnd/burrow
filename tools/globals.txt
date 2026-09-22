@@ -103,3 +103,8 @@ global	src/runtime/netpoll_kqueue.c	breakwr	netpoller	The write end of the wakeu
 global	src/runtime/netpoll_kqueue.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one byte, and cleared by whoever drains the pipe.
 global	src/runtime/netpoll_iocp.c	iocp	netpoller	The completion port. One per process, made once under init_lock and read without anything afterwards.
 global	src/runtime/netpoll_iocp.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one posted completion, and cleared by whoever takes that completion off the port.
+global	src/runtime/registry.c	registry_once	type-registry	Guards the one read of the linker section that builds the table. A Once, so whoever loses the race waits for the table rather than seeing half of one.
+global	src/runtime/registry.c	registry_lock	type-registry	The reader writer lock over the three fields below. Read on every lookup, taken for writing only by type_register, which is the runtime half nothing uses until a module is loaded after startup.
+global	src/runtime/registry.c	registry_slots	type-registry	The table. Written under registry_lock when it is built and when it grows, read under it the rest of the time.
+global	src/runtime/registry.c	registry_cap	type-registry	How many slots there are, always a power of two. Same lock as the table it describes, because the two have to change together.
+global	src/runtime/registry.c	registry_len	type-registry	How many of the slots are taken. Same lock, same reason.

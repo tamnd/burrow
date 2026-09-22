@@ -221,9 +221,55 @@ BURROW_REGISTER_TYPE(Point);                    /* file scope; gob/rpc need this
 const Type *t = type_by_name(BURROW_S("main.Point"));
 ```
 
-The registry is write-once during static init (via a linker-section trick on
-ELF/Mach-O/PE, with an explicit `types_init()` fallback for wasm and
-Cosmopolitan), then read-only and lock-free. → [03](03-c-dialect.md) §5
+`BURROW_REGISTER_TYPE` puts one pointer in a section of its own and costs
+nothing else. The linker gathers every such pointer into one run and hands the
+bounds over as two symbols, so the first lookup can read the whole list at once
+and build the table. Every object format burrow targets can do this, though no
+two of them spell it the same way:
+
+| Format | Section | Bounds |
+| --- | --- | --- |
+| ELF | `burrowtype` | `__start_burrowtype` and `__stop_burrowtype`, from the linker |
+| Mach-O | `__DATA,__burrowtype` | `section$start$` and `section$end$` asm labels |
+| PE | `.brwt$b` | objects of our own in `.brwt$a` and `.brwt$z`, which sort either side |
+
+A compiler with no sections but with `__attribute__((constructor))` gets a
+constructor per type instead, which calls `type_register` before `main`. A
+compiler with neither gets a `_Static_assert` telling the caller to register by
+hand, because failing at compile time is better than a lookup that silently
+returns nothing.
+
+The table is built on first use rather than during static init, because a
+constructor cannot take a lock that another constructor might be initialising.
+It is a power of two open addressed table keyed on the package path, a dot and
+the type name hashed together. The key is never materialised anywhere: a
+descriptor keeps its package path and its name apart, and a query is split at
+the last dot rather than the first, since an import path has dots in it and a
+type name cannot.
+
+Registration is not write-once, because a shared library can arrive after
+`main` has started. So the table is behind a read-write lock rather than being
+lock-free. Lookups take the read lock, which is the case that matters, and
+`type_register` takes the write lock. Registering the same descriptor twice is
+fine, and registering two different descriptors under one name fails rather
+than picking a winner.
+
+`type_same` answers identity. It is pointer equality first, which is the answer
+within one link. When that fails it compares kind, size, name and package path,
+which is the shared library case where the same type was compiled twice. Two
+unnamed types are never the same, on purpose: an anonymous struct has no
+identity to compare, and saying so is more useful than guessing from a layout
+that two unrelated types could share.
+
+One thing worth knowing if you touch the section walk. clang's address
+sanitizer puts a redzone around every global, including globals in a section of
+your own, and that turns the packed run of pointers into one with holes in it.
+The entries are declared `no_sanitize_address` to stop it. gcc needs nothing,
+because it already leaves a global with its own section alone, and it rejects
+the attribute anywhere but on a function, which is why this is asked for by
+compiler rather than through `__has_attribute`. The attribute does nothing in a
+build without the sanitizer, and it is not decoration, so please do not tidy it
+away. → [03](03-c-dialect.md) §5
 
 ## 6. Methods and dynamic calls
 

@@ -17,6 +17,22 @@ Signed, because the difference between two readings of a clock can be negative, 
 
 The units are `TIME_NANOSECOND`, `TIME_MICROSECOND`, `TIME_MILLISECOND`, `TIME_SECOND`, `TIME_MINUTE` and `TIME_HOUR`, and they are Go's constants with the names the mapping in [design/08-naming-abi.md](../design/08-naming-abi.md) gives them. Write the multiplication rather than the nanoseconds. `500000000` and `5000000000` look alike at a glance, one of them is ten times the other, and that is a bug that has shipped in real programs more than once.
 
+## Reading the clock
+
+```c
+int64_t start = burrow_nanotime();
+work();
+Duration took = burrow_nanotime() - start;
+```
+
+`burrow_nanotime` is nanoseconds on a clock that only goes forwards, measured from an arbitrary point that means nothing on its own. Subtract two readings and the answer is a `Duration`.
+
+It says `burrow` rather than `time` because Go has no such function, which is what rule R11a in [design/08-naming-abi.md](../design/08-naming-abi.md) asks for. Go's `time.Now` carries a monotonic reading around inside it and `time.Since` pulls it back out, so a Go program never names the clock directly. burrow has no `Time` yet and the parts that need a deadline need one now, so the reading is exposed on its own. `burrow/context.h` measures a deadline on this clock, and so does anything that has to know how long something took.
+
+Never backwards and never a jump, which is the point of it. The wall clock does both whenever somebody sets the date or ntp corrects a drift, and a timeout measured on the wall clock either waits an hour or fires twice.
+
+Callable from any thread, including one the runtime knows nothing about, and it costs a few nanoseconds everywhere, because every platform answers this out of the vdso or its equivalent rather than from a system call.
+
 ## Sleeping
 
 ```c

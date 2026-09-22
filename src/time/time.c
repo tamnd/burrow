@@ -107,6 +107,16 @@ static bool arm_sleep(Goroutine *g, void *lock) {
     return s->armed;
 }
 
+/* One line, and it is here rather than being the same symbol as the runtime's
+ * clock because the two make different promises. burrow__nanotime is the
+ * runtime's own and carries the double underscore that says it may change:
+ * there is already a plan for a cached reading on the platforms where the
+ * syscall is dear enough to be worth it. This one is supported API and will go
+ * on meaning exactly what burrow/time.h says it means. */
+int64_t burrow_nanotime(void) {
+    return burrow__nanotime();
+}
+
 void time_sleep(Duration d) {
     if (d <= 0)
         return;

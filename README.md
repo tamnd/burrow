@@ -530,6 +530,42 @@ Go's `sync.Pool`, for the short lived object that gets made and thrown away a mi
 
 Details: [docs/guides/sync.md](docs/guides/sync.md).
 
+## Cancellation and deadlines
+
+```c
+CancelFunc cancel;
+Context ctx = context_with_cancel(a, context_background(), &cancel);
+
+go(BURROW_FN(Func, work, &ctx));
+...
+BURROW_CALLF0(cancel);
+context_free(ctx);
+```
+
+```c
+static void work(void *env) {
+    Context ctx = *(Context *)env;
+
+    SelectCase cases[2];
+    cases[0] = BURROW_RECV(context_done(ctx), NULL);
+    cases[1] = BURROW_RECV(jobs, &job);
+
+    for (;;) {
+        if (chan_select(cases, 2) == 0)
+            return;
+        do_the_job(&job);
+    }
+}
+```
+
+Go's `context` package. A context is what a server hands down through every layer so that when the client hangs up, the database query, the two outbound requests and the retry loop underneath it all stop instead of finishing work nobody is waiting for. It is two words, it answers Go's four questions, and `context_done` gives you a channel that is closed when the work should stop, so waiting for a cancel is an ordinary `select` and costs nothing while it waits.
+
+`context_with_value` carries a request id or an authenticated user down the same tree, under a key of a type private to whoever put it there. Cancellation reaches a context built on a parent from somebody else's code too, which takes one goroutine watching two channels, the same as it does in Go.
+
+What is different is the ownership. Go leaves a context to the collector and there is none here, so every constructor takes an allocator and what it hands back is given back with `context_free`, parents after children. Freeing cancels first, so forgetting the cancel function cannot corrupt anything, and an arena user can skip the whole subject.
+
+Details, including how to write your own `Context` and what each piece costs: [docs/guides/context.md](docs/guides/context.md).
+
 ## Status
 
 Early. Nothing is usable yet.

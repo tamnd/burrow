@@ -59,6 +59,29 @@ typedef int64_t Duration;
 #define TIME_MINUTE (60 * TIME_SECOND)
 #define TIME_HOUR (60 * TIME_MINUTE)
 
+/* Nanoseconds on a clock that only goes forwards, measured from an arbitrary
+ * point that means nothing on its own.
+ *
+ *     int64_t start = burrow_nanotime();
+ *     work();
+ *     Duration took = burrow_nanotime() - start;
+ *
+ * It says burrow rather than time because Go has no such function. Go's
+ * time.Now carries a monotonic reading around inside it and time.Since pulls it
+ * back out, so a Go program never names the clock directly. burrow has no Time
+ * yet, and the parts that need a deadline need it now, so the reading is
+ * exposed on its own: burrow/context.h measures a deadline on this clock, and
+ * so does anything that has to know how long something took.
+ *
+ * Never goes backwards and never jumps, which is the point. The wall clock does
+ * both whenever somebody sets the date or ntp corrects a drift, and a timeout
+ * measured on it waits for an hour or fires twice.
+ *
+ * Callable from any thread, including one the runtime knows nothing about.
+ * Costs a few nanoseconds everywhere, because every platform answers this out
+ * of the vdso or its equivalent rather than from a system call. */
+int64_t burrow_nanotime(void);
+
 /* Stops the calling goroutine for at least d.
  *
  * At least, and never exactly. The goroutine becomes runnable when the time is

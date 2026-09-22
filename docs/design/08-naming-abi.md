@@ -207,7 +207,8 @@ wherever possible. The double underscore is the grep-able marker for "not API,
 may change".
 
 **R11a, public symbols with no Go original**, get a single `burrow_`:
-`burrow_version()`, `burrow_err_out_of_memory`, `burrow_sentinel_error_vt`.
+`burrow_version()`, `burrow_err_out_of_memory`, `burrow_sentinel_error_vt`,
+`burrow_nanotime()`.
 There are few of them and they are supported API, they just have nothing in
 Go's manifest to map back to. Naming them after a Go package instead would put
 a symbol in that package's namespace that the coverage round trip then has to

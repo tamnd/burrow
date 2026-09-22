@@ -307,13 +307,23 @@ void sync_locker_unlock(SyncLocker l);
 typedef struct SyncWaitGroup {
     /* The counter in the high 32 bits and the waiter count in the low ones, so
      * that adding to the counter and reading how many are waiting is one
-     * atomic. Bit 31 is left alone: it is Go's synctest bubble flag, and
-     * keeping the hole means this layout does not have to move when
-     * testing/synctest lands. */
+     * atomic. Bit 31, the top of the low half, says this group belongs to a
+     * synctest bubble, which is why the waiter count is read with that bit
+     * masked out. */
     uint64_t state;
 
     /* What the waiters queue on. Zero until somebody actually waits. */
     uint32_t sema;
+
+    /* Which bubble, when the bit above is set, and NULL otherwise. Only ever
+     * compared, never followed, and set and cleared by Add.
+     *
+     * Go keeps this in a table in the runtime keyed on the address of the group,
+     * because the size of a sync.WaitGroup is something programs depend on.
+     * Nothing depends on the size of this one yet, and a word here is a
+     * comparison where a table would be a hash and a lock on every Add made
+     * inside a bubble. */
+    BURROW_BORROWS(1) void *bubble;
 } SyncWaitGroup;
 
 extern const Type *const TYPE_SYNC_WAIT_GROUP;

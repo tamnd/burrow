@@ -358,10 +358,12 @@ static bool waiter_init(Waiter *w) {
 
 /* Blocks until somebody takes this waiter off whatever queue it is on and wakes
  * it. `lk` is the lock guarding that queue, held on the way in and not held on
- * the way out. */
-static void waiter_sleep(Waiter *w, burrow__Lock *lk) {
+ * the way out. `durable` is the caller's answer to the synctest question, and a
+ * thread has no opinion about it: a bubble is a set of goroutines, so a thread
+ * blocking here is not in one and the flag has nowhere to go. */
+static void waiter_sleep(Waiter *w, burrow__Lock *lk, bool durable) {
     if (w->g != NULL) {
-        sched_park(unlock_lock, lk);
+        burrow__park(unlock_lock, lk, durable);
         return;
     }
 
@@ -412,7 +414,7 @@ static bool can_acquire(uint32_t *addr) {
     }
 }
 
-void burrow__sema_acquire(uint32_t *addr, bool lifo) {
+void burrow__sema_acquire(uint32_t *addr, bool lifo, bool durable) {
     /* The whole of the uncontended case. No lock, no queue, one compare and
      * swap on a word the caller already owns. */
     if (can_acquire(addr))
@@ -445,7 +447,7 @@ void burrow__sema_acquire(uint32_t *addr, bool lifo) {
         }
 
         root_queue(root, addr, &w, lifo);
-        waiter_sleep(&w, &root->lock);
+        waiter_sleep(&w, &root->lock, durable);
 
         /* A ticket means the release handed the wakeup straight over and there
          * is nothing left to take. Otherwise the wakeup went back on the
@@ -536,7 +538,7 @@ uint32_t burrow__notify_list_add(burrow__NotifyList *l) {
     return burrow__atomic_add_u32(&l->wait, 1);
 }
 
-void burrow__notify_list_wait(burrow__NotifyList *l, uint32_t t) {
+void burrow__notify_list_wait(burrow__NotifyList *l, uint32_t t, bool durable) {
     burrow__lock(&l->lock);
 
     /* Already notified, between the ticket being taken and this lock. This is
@@ -562,7 +564,7 @@ void burrow__notify_list_wait(burrow__NotifyList *l, uint32_t t) {
         l->tail->waitlink = &w;
     l->tail = &w;
 
-    waiter_sleep(&w, &l->lock);
+    waiter_sleep(&w, &l->lock, durable);
     waiter_free(&w);
 }
 

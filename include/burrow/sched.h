@@ -607,6 +607,14 @@ void burrow__park(bool (*unlockf)(burrow__G *g, void *lock), void *lock, bool du
  * Answers what go answers. */
 bool burrow__go_bubble(Func fn, burrow__Bubble *b);
 
+/* The bubble the caller is in, or NULL for a goroutine outside every bubble and
+ * for a thread that is not running a goroutine at all.
+ *
+ * The one thing to do with the answer is compare it with another one. Two
+ * callers that get the same non-NULL pointer are in the same bubble, and that is
+ * the whole of what anything outside the runtime needs to know. */
+BURROW_BORROWS(ret) burrow__Bubble *burrow__curbubble(void);
+
 /* A goroutine has been born into b, and is about to be made runnable. */
 void burrow__bubble_join(burrow__Bubble *b);
 

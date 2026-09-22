@@ -62,7 +62,9 @@ const Type *const TYPE_SYNC_RW_MUTEX = &rwmutex_desc;
 /* ------------------------------------------------------------------ readers */
 
 void burrow__sync_rw_mutex_r_lock_slow(SyncRWMutex *rw) {
-    burrow__sema_acquire(&rw->reader_sem, false);
+    /* Not durable, for the reason sync_mutex_lock gives: the writer this is
+     * waiting for is running. */
+    burrow__sema_acquire(&rw->reader_sem, false, false);
 }
 
 bool sync_rw_mutex_try_r_lock(SyncRWMutex *rw) {
@@ -102,7 +104,7 @@ void sync_rw_mutex_lock(SyncRWMutex *rw) {
      * leaves in between takes reader_wait back to zero itself, which is why the
      * result of the add is what decides rather than r. */
     if (r != 0 && sync_atomic_add_int32(&rw->reader_wait, r) != 0)
-        burrow__sema_acquire(&rw->writer_sem, false);
+        burrow__sema_acquire(&rw->writer_sem, false, false);
 }
 
 bool sync_rw_mutex_try_lock(SyncRWMutex *rw) {

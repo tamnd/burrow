@@ -56,6 +56,24 @@ That distinction is the point. Something that merely watched the run queues woul
 
 A goroutine that has been woken but has not run yet counts as running, so `synctest_wait` does not return early on a goroutine that is on its way back. That is the case a hand rolled version of this always gets wrong.
 
+Here is every wait in the library and the answer it gives.
+
+| Waiting on | Durable | Why |
+| --- | --- | --- |
+| A channel made inside the bubble | Yes | Nothing outside can reach it. |
+| A channel made outside the bubble | No | Somebody out there holds the other end. |
+| `chan_select` where every channel was made inside | Yes | The same argument, for all the cases at once. |
+| `chan_select` mixing inside and outside channels | No | One outside case is enough to complete the whole select. |
+| A receive or send on a nil channel, or a select with no cases | Yes | Nothing can ever complete it, which is durable in the strictest sense. |
+| `sync_cond_wait` | Yes | Only a Signal or a Broadcast ends it, and a bubble where everybody is here has nobody left to send one. |
+| `sync_wait_group_wait`, when every Add came from inside the bubble | Yes | Then only a Done from inside can take the counter to zero. |
+| `sync_wait_group_wait`, on a group used from outside | No | Anybody can call Done. |
+| `sync_mutex_lock`, `sync_rw_mutex_lock`, `sync_rw_mutex_r_lock` | No | A goroutine waiting for a lock is waiting for the goroutine holding it, and that one is running. |
+| `time_sleep` | No, for now | See the last section. |
+| Anything built on `sched_park` outside the runtime | No | The runtime cannot tell what will end it, so the honest answer is that something might. |
+
+A WaitGroup that is added to from inside a bubble belongs to that bubble until its counter reaches zero, and adding to it from outside in the meantime stops the program. That is the same rule channels have and it is there for the same reason: without it, a Wait that counted as durable could be ended by a Done from somewhere the test cannot see. The association goes away on its own as soon as the counter is back to zero, so the same group can be used again by a later bubble or by nothing in particular.
+
 ## What the test gets to say
 
 Because the bubble knows the difference between blocked and finished, a test can assert on a program in the middle of its work rather than only at the end of it.
@@ -116,5 +134,5 @@ Fake time is the other half and is not here yet. In Go, a bubble has a clock of 
 
 - [guides/goroutines.md](goroutines.md) for `runtime_main`, `go` and what a park is
 - [guides/channels.md](channels.md) for `chan_make`, `chan_select` and what a closed channel does
-- [guides/sync.md](sync.md) for `WaitGroup` and `Cond`, which learn about bubbles next
+- [guides/sync.md](sync.md) for `WaitGroup`, `Cond` and the locks
 - [guides/time.md](time.md) for `time_sleep` and the timer heap fake time will sit on

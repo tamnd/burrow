@@ -36,6 +36,7 @@
 #include "burrow/panic.h"
 #include "burrow/proc.h"
 #include "burrow/runtime.h"
+#include "burrow/sync.h"
 #include "burrow/type.h"
 
 #include "fatal.h"
@@ -58,6 +59,10 @@ static uint32_t wait_returned;
 static uint32_t child_had_the_value;
 static uint32_t caught;
 
+static SyncWaitGroup wg;
+static SyncMutex cond_mu;
+static SyncCond cond;
+
 static void reset(void) {
     bubbled_chan = NULL;
     outside_chan = NULL;
@@ -69,6 +74,9 @@ static void reset(void) {
     wait_returned = 0;
     child_had_the_value = 0;
     caught = 0;
+    memset(&wg, 0, sizeof(wg));
+    memset(&cond_mu, 0, sizeof(cond_mu));
+    memset(&cond, 0, sizeof(cond));
     memset(fatal_caught, 0, sizeof(fatal_caught));
 }
 
@@ -297,6 +305,119 @@ TEST(a_wait_on_a_channel_from_outside_the_bubble_is_not_durable) {
     CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&wait_returned), 23);
 }
 
+/* --------------------------------------------------- the rest of sync
+ *
+ * A WaitGroup whose work was all added from inside the bubble, and a Cond,
+ * both of which are durable waits, so synctest_wait has to come back while a
+ * goroutine is sitting in one.
+ *
+ * Both tests hang rather than fail if the durability is lost, which is the one
+ * shape a missing durability can have: the bubble never goes idle and the wait
+ * in the body never returns. There is no arrangement that turns it into a wrong
+ * answer, because the whole claim is about a wait that has to end.
+ *
+ * There is no test here for a mutex, which is the other way round and is not
+ * durable. A bubble whose goroutines are all waiting for a mutex has to keep
+ * running, and every way of writing that down needs the test to know when the
+ * waiter has parked, which is the thing a mutex gives no way to ask. */
+
+static void wg_worker(void *env) {
+    (void)env;
+
+    Int v;
+    (void)chan_recv(bubbled_chan, &v);
+    sync_wait_group_done(&wg);
+}
+
+static void wg_waiter(void *env) {
+    (void)env;
+
+    sync_wait_group_wait(&wg);
+    burrow__atomic_store_release_u32(&wait_returned, 1);
+}
+
+static void wg_body(void *env) {
+    (void)env;
+
+    bubbled_chan = chan_make(heap_allocator(), TYPE_INT, 0);
+    if (bubbled_chan == NULL)
+        return;
+
+    /* Added from in here, which is what makes the group this bubble's and the
+     * Wait below a durable one. */
+    sync_wait_group_add(&wg, 1);
+    (void)go(BURROW_FN(Func, wg_worker, NULL));
+    (void)go(BURROW_FN(Func, wg_waiter, NULL));
+
+    /* Comes back only when both of them are durably blocked: the worker on a
+     * bubbled channel and the waiter on the group. */
+    synctest_wait();
+
+    if (burrow__atomic_load_acquire_u32(&wait_returned) == 0)
+        burrow__atomic_store_release_u32(&child_had_the_value, 1);
+
+    Int v = 5;
+    if (chan_try_send(bubbled_chan, &v))
+        burrow__atomic_store_release_u32(&receiver_was_parked, 1);
+}
+
+static void wg_top(void *env) {
+    (void)env;
+
+    if (synctest_run(BURROW_FN(Func, wg_body, NULL)))
+        chan_free(bubbled_chan);
+}
+
+TEST(a_wait_group_wait_inside_the_bubble_is_durable) {
+    reset();
+    runtime_main(BURROW_FN(Func, wg_top, NULL));
+
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&receiver_was_parked), 1);
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&child_had_the_value), 1);
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&wait_returned), 1);
+}
+
+static void cond_waiter(void *env) {
+    (void)env;
+
+    sync_mutex_lock(&cond_mu);
+    while (burrow__atomic_load_acquire_u32(&child_had_the_value) == 0)
+        sync_cond_wait(&cond);
+    sync_mutex_unlock(&cond_mu);
+
+    burrow__atomic_store_release_u32(&wait_returned, 1);
+}
+
+static void cond_body(void *env) {
+    (void)env;
+
+    cond = SYNC_COND(sync_mutex_locker(&cond_mu));
+    (void)go(BURROW_FN(Func, cond_waiter, NULL));
+
+    synctest_wait();
+
+    if (burrow__atomic_load_acquire_u32(&wait_returned) == 0)
+        burrow__atomic_store_release_u32(&receiver_was_parked, 1);
+
+    sync_mutex_lock(&cond_mu);
+    burrow__atomic_store_release_u32(&child_had_the_value, 1);
+    sync_cond_broadcast(&cond);
+    sync_mutex_unlock(&cond_mu);
+}
+
+static void cond_top(void *env) {
+    (void)env;
+    (void)synctest_run(BURROW_FN(Func, cond_body, NULL));
+}
+
+TEST(a_cond_wait_inside_the_bubble_is_durable) {
+    reset();
+    runtime_main(BURROW_FN(Func, cond_top, NULL));
+
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&receiver_was_parked), 1);
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&wait_returned), 1);
+}
+
 /* ------------------------------------------------------------ the refusals */
 
 static void nested_inner(void *env) {
@@ -386,6 +507,66 @@ TEST(a_channel_made_in_a_bubble_cannot_be_used_from_outside_it) {
                                "used from outside it");
 }
 
+/* --- a WaitGroup belongs to the bubble that added to it
+ *
+ * Same shape as the channel above. The body claims the group by adding to it
+ * from inside the bubble, then holds still on a channel from outside while a
+ * goroutine in no bubble at all adds to the same group. Go stops the program
+ * for this and so does burrow, because a Wait that counted as durable while
+ * somebody outside could still call Done would be a synctest_wait answering a
+ * question it cannot answer. */
+
+static void wg_misuser(void *env) {
+    (void)env;
+
+    Int v;
+    if (!chan_recv(handshake, &v))
+        return;
+
+    CAUGHT_HERE(sync_wait_group_add(&wg, 1));
+
+    v = 1;
+    chan_send(release, &v);
+}
+
+static void wg_misuse_body(void *env) {
+    (void)env;
+
+    sync_wait_group_add(&wg, 1);
+
+    Int v = 1;
+    chan_send(handshake, &v);
+    (void)chan_recv(release, &v);
+
+    sync_wait_group_done(&wg);
+}
+
+static void wg_misuse_top(void *env) {
+    (void)env;
+
+    handshake = chan_make(heap_allocator(), TYPE_INT, 0);
+    release = chan_make(heap_allocator(), TYPE_INT, 0);
+    if (handshake == NULL || release == NULL)
+        return;
+
+    (void)go(BURROW_FN(Func, wg_misuser, NULL));
+    (void)synctest_run(BURROW_FN(Func, wg_misuse_body, NULL));
+
+    chan_free(handshake);
+    chan_free(release);
+}
+
+TEST(a_wait_group_cannot_be_added_to_from_inside_and_outside_a_bubble) {
+    reset();
+    runtime_set_fatal_handler(fatal_handler);
+    runtime_main(BURROW_FN(Func, wg_misuse_top, NULL));
+    runtime_set_fatal_handler(NULL);
+
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&caught), 1);
+    CHECK_STR_EQ(fatal_caught, "sync: WaitGroup.Add called from inside and outside "
+                               "a synctest bubble");
+}
+
 /* --- the two that need no runtime at all */
 
 TEST(a_wait_outside_a_bubble_stops_the_program) {
@@ -406,7 +587,10 @@ int main(void) {
     RUN(a_wait_with_nothing_else_in_the_bubble_returns);
     RUN(a_wait_on_a_channel_from_outside_the_bubble_is_not_durable);
     RUN(bubbles_do_not_nest);
+    RUN(a_wait_group_wait_inside_the_bubble_is_durable);
+    RUN(a_cond_wait_inside_the_bubble_is_durable);
     RUN(a_channel_made_in_a_bubble_cannot_be_used_from_outside_it);
+    RUN(a_wait_group_cannot_be_added_to_from_inside_and_outside_a_bubble);
     RUN(a_wait_outside_a_bubble_stops_the_program);
     RUN(a_run_outside_a_goroutine_stops_the_program);
 

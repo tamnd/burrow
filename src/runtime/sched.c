@@ -213,6 +213,11 @@ burrow__G *burrow__curg(void) {
     return curm != NULL ? curm->curg : NULL;
 }
 
+burrow__Bubble *burrow__curbubble(void) {
+    burrow__G *g = burrow__curg();
+    return g != NULL ? g->bubble : NULL;
+}
+
 burrow__P *burrow__allp(int32_t i) {
     if (i < 0 || i >= sched.gomaxprocs)
         return NULL;

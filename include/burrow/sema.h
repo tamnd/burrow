@@ -59,8 +59,15 @@ extern "C" {
  * it again is the one that has been waiting longest, so putting it at the back
  * a second time is how a queue turns into a lottery.
  *
- * Everything else asks for false and gets first in, first out. */
-void burrow__sema_acquire(uint32_t *addr, bool lifo);
+ * Everything else asks for false and gets first in, first out.
+ *
+ * `durable` says that the only thing which can release this semaphore is
+ * another goroutine in the same synctest bubble, so a bubble where everybody is
+ * waiting like this has stopped. See burrow/synctest.h. Only the caller knows
+ * the answer: a WaitGroup can say yes when every Add came from inside the
+ * bubble, and a Mutex always says no, because a goroutine waiting for a mutex
+ * is waiting for a goroutine that is running. */
+void burrow__sema_acquire(uint32_t *addr, bool lifo, bool durable);
 
 /* Adds one wakeup to the counter and gives it to a waiter if there is one.
  *
@@ -128,8 +135,14 @@ typedef struct burrow__NotifyList {
 uint32_t burrow__notify_list_add(burrow__NotifyList *l);
 
 /* Waits until this ticket is notified, or returns straight away if it already
- * has been. The lock the ticket was taken under must not be held. */
-void burrow__notify_list_wait(burrow__NotifyList *l, uint32_t t);
+ * has been. The lock the ticket was taken under must not be held.
+ *
+ * `durable` has the meaning it has on the semaphore above. Go's answer for a
+ * sync.Cond is always yes, without asking which bubble the Cond belongs to,
+ * because a Cond cannot be signalled by anything except a Signal or a Broadcast
+ * and a bubble where every goroutine is waiting for one of those has nobody
+ * left to send it. */
+void burrow__notify_list_wait(burrow__NotifyList *l, uint32_t t, bool durable);
 
 /* Wakes the oldest waiter that has not been woken yet, if there is one. */
 void burrow__notify_list_notify_one(burrow__NotifyList *l);

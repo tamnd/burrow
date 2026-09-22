@@ -430,8 +430,19 @@ Waiters queue on the runtime's semaphore, which is Go's, from `src/runtime/sema.
 
 Before queueing, a goroutine spins a few times, but only on a machine with more than one processor and only when there is a processor free to be running the lock holder. Spinning for a lock held by a goroutine that cannot be running is pure waste. The processor count that decision uses is the count of processors this process is allowed to run on rather than the count the machine has, which is a different number inside a container with a cpuset or under `taskset`.
 
+## Inside a synctest bubble
+
+`Cond.Wait` and a `WaitGroup.Wait` whose work was all added from inside the bubble are durable waits, which means `synctest_wait` counts a goroutine sitting in one of them as blocked and a bubble in which everything is sitting in one has stopped. The locks are not, because a goroutine waiting for a lock is waiting for the goroutine holding it, and that one is running.
+
+A `WaitGroup` that is added to from inside a bubble belongs to that bubble until its counter reaches zero. Adding to it from outside in the meantime stops the program, for the same reason a channel made inside a bubble cannot be used from outside one: a `Wait` that counted as durable while anybody at all could call `Done` would be reporting something it does not know. The association is dropped as soon as the counter is back to zero, so nothing has to be reset between tests.
+
+None of this costs a program that never makes a bubble anything. The flag lives in a bit of the `WaitGroup` state word that was already there, and the check is a load of a pointer that is `NULL`.
+
+See [guides/synctest.md](synctest.md) for what a bubble is.
+
 ## See also
 
+- [guides/synctest.md](synctest.md) for deterministic tests, and the full table of what counts as durably blocked
 - [guides/atomics.md](atomics.md) for `sync/atomic`, which is what these are built out of
 - [guides/maps.md](maps.md) for the plain `Map`, which is what most programs should use behind one of these
 - [guides/goroutines.md](goroutines.md) for what parking actually does

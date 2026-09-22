@@ -90,7 +90,10 @@ void sync_cond_wait(SyncCond *c) {
      * moment later with nothing left to wake it. */
     uint32_t t = burrow__notify_list_add(&c->notify);
     sync_locker_unlock(c->l);
-    burrow__notify_list_wait(&c->notify, t);
+    /* Durable, always. Nothing but a Signal or a Broadcast can end this wait,
+     * so a bubble in which every goroutine is here has nobody left to send one.
+     * Go answers the same without asking which bubble the Cond belongs to. */
+    burrow__notify_list_wait(&c->notify, t, true);
     sync_locker_lock(c->l);
 }
 

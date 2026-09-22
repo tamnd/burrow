@@ -21,12 +21,14 @@
 
 #include "burrow/sync.h"
 
+#include "burrow/atomic.h"
 #include "burrow/core.h"
 #include "burrow/func.h"
 #include "burrow/mem.h"
 #include "burrow/mem/heap.h"
 #include "burrow/proc.h"
 #include "burrow/runtime.h"
+#include "burrow/sched.h"
 #include "burrow/sema.h"
 #include "burrow/sync/atomic.h"
 #include "burrow/type.h"
@@ -35,11 +37,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Bit 31 of the state word, which Go uses to mark a group that belongs to a
- * synctest bubble. Nothing here sets it, because there are no bubbles yet, and
- * the waiter count is masked with it left out anyway so that the layout does
- * not have to move when testing/synctest arrives. */
+/* Bit 31 of the state word marks a group that belongs to a synctest bubble, so
+ * the waiter count is the low half with that bit taken out. Which bubble is in
+ * the field next to the state. */
 #define WAIT_GROUP_WAITER_MASK ((uint32_t)0x7fffffffU)
+#define WAIT_GROUP_BUBBLE_FLAG ((uint64_t)0x80000000U)
 
 static const Type wait_group_desc = {
     {(const Byte *)"WaitGroup", 9},
@@ -70,12 +72,68 @@ static uint32_t waiters_of(uint64_t state) {
     return (uint32_t)state & WAIT_GROUP_WAITER_MASK;
 }
 
+/* ------------------------------------------------------------------ bubbles
+ *
+ * A Wait is durable when every Add that put work into this group came from the
+ * bubble the waiter is in, because then the only thing that can take the
+ * counter back down is a goroutine in that bubble. Both halves of that have to
+ * be checked, and mixing them is a misuse that stops the program, the same as
+ * the other WaitGroup misuses here: a group that half a bubble is using is a
+ * program whose bug shows up as a test that hangs on somebody else's machine.
+ *
+ * Go keeps the association in a table in its runtime. Here it is a field, which
+ * is the same information without the hash and the lock. */
+
+/* True when this group belongs to the bubble the caller is in. NULL is not a
+ * bubble, so a caller outside every bubble is never associated with anything. */
+static bool associated(const SyncWaitGroup *wg, const void *bubble) {
+    return bubble != NULL &&
+           burrow__atomic_load_acquire_ptr((void *const *)&wg->bubble) == bubble;
+}
+
+/* Puts the group in the caller's bubble if it is not in one already. Stops the
+ * program if it is already in a different one.
+ *
+ * The compare and swap can only be lost to another goroutine doing this at the
+ * same moment, and two goroutines in the same bubble racing to associate the
+ * same group is ordinary, so losing it is only a problem when the winner is
+ * from somewhere else. */
+static void associate(SyncWaitGroup *wg, void *bubble) {
+    void *have = NULL;
+    if (burrow__atomic_cas_ptr(&wg->bubble, &have, bubble))
+        return;
+    if (have != bubble)
+        runtime_throw(BURROW_S("sync: WaitGroup.Add called from two synctest bubbles"));
+}
+
 void sync_wait_group_add(SyncWaitGroup *wg, int delta) {
+    /* Claiming the group for this bubble happens before the counter moves, and
+     * the flag rather than the field is what answers the misuse question,
+     * because the flag and the counter are one word and so cannot disagree. A
+     * previous state that was not zero and had no flag is a group that somebody
+     * outside the bubble has already put work into. */
+    void *bubble = burrow__curbubble();
+    if (bubble != NULL) {
+        associate(wg, bubble);
+
+        uint64_t prev = sync_atomic_or_uint64(&wg->state, WAIT_GROUP_BUBBLE_FLAG);
+        if (prev != 0 && (prev & WAIT_GROUP_BUBBLE_FLAG) == 0)
+            runtime_throw(BURROW_S("sync: WaitGroup.Add called from inside and outside "
+                                   "a synctest bubble"));
+    }
+
     /* Delta goes into the high half. Shifting it as unsigned is what makes a
      * negative delta a borrow out of the high half, which is the arithmetic
      * this wants and which shifting a signed value does not define. */
     uint64_t state =
         sync_atomic_add_uint64(&wg->state, (uint64_t)(uint32_t)(int32_t)delta << 32);
+
+    /* The other way round: the group is in a bubble and this caller is not in
+     * it. Read from the same word the add returned, so there is no second look
+     * for the flag to change under. */
+    if ((state & WAIT_GROUP_BUBBLE_FLAG) != 0 && bubble == NULL)
+        runtime_throw(BURROW_S(
+            "sync: WaitGroup.Add called from inside and outside a synctest bubble"));
 
     int32_t v = counter_of(state);
     uint32_t w = waiters_of(state);
@@ -102,8 +160,14 @@ void sync_wait_group_add(SyncWaitGroup *wg, int delta) {
             BURROW_S("sync: WaitGroup misuse: Add called concurrently with Wait"));
 
     /* Clear both halves before waking anybody, so that the group is ready for
-     * a second round the moment the last waiter returns. */
+     * a second round the moment the last waiter returns. The bubble flag goes
+     * with them, and the field it points at goes next, because this is the one
+     * moment where nothing can be adding and nothing can be waiting. A group
+     * that kept the association would be one that a later bubble could not
+     * use. */
     sync_atomic_store_uint64(&wg->state, 0);
+    if (bubble != NULL)
+        burrow__atomic_store_release_ptr(&wg->bubble, NULL);
 
     for (; w != 0; w--)
         burrow__sema_release(&wg->sema, false);
@@ -114,17 +178,37 @@ void sync_wait_group_done(SyncWaitGroup *wg) {
 }
 
 void sync_wait_group_wait(SyncWaitGroup *wg) {
+    void *bubble = burrow__curbubble();
+
     for (;;) {
         uint64_t state = sync_atomic_load_uint64(&wg->state);
 
-        if (counter_of(state) == 0)
+        if (counter_of(state) == 0) {
+            /* Nothing to wait for, and nobody else waiting either, so this is
+             * the other moment where the association can be let go. Add does
+             * the same thing when it takes the counter to zero, and between
+             * them a group that has gone quiet does not hold on to a bubble
+             * that is about to end. */
+            if (waiters_of(state) == 0 && (state & WAIT_GROUP_BUBBLE_FLAG) != 0 &&
+                associated(wg, bubble) &&
+                sync_atomic_compare_and_swap_uint64(&wg->state, state, 0))
+                burrow__atomic_store_release_ptr(&wg->bubble, NULL);
             return;
+        }
 
         /* One more waiter, which is one on the low half. The compare and swap
          * is what makes this safe against an Add landing in between: if it
          * fails the counter may now be zero and the loop looks again. */
         if (sync_atomic_compare_and_swap_uint64(&wg->state, state, state + 1)) {
-            burrow__sema_acquire(&wg->sema, false);
+            /* Durable when every Add came from the bubble this goroutine is in,
+             * because then the Done that ends this wait has to come from in
+             * there too. The flag is read from the state this waiter just
+             * counted itself into, so an Add from outside cannot have slipped
+             * in unnoticed: it would have stopped the program. */
+            bool durable =
+                (state & WAIT_GROUP_BUBBLE_FLAG) != 0 && associated(wg, bubble);
+
+            burrow__sema_acquire(&wg->sema, false, durable);
 
             /* Add zeroes the state before releasing anybody, so a state that
              * is not zero here means somebody started a second round of work

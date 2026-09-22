@@ -69,6 +69,15 @@ static Int user_key = 1;
 #define REQUEST_ID_KEY BURROW_ANY(&ctx_key_type, &request_id_key)
 #define USER_KEY BURROW_ANY(&ctx_key_type, &user_key)
 
+/* Two reasons to cancel something, spelled out rather than built with
+ * BURROW_SENTINEL_ERROR because that macro makes the Error extern and a test
+ * file has no header to declare it in. The shape is the macro's shape. */
+static const Str too_slow_text = {(const Byte *)"too slow", 8};
+static const Error err_too_slow = {&burrow_sentinel_error_vt, &too_slow_text};
+
+static const Str gave_up_text = {(const Byte *)"gave up", 7};
+static const Error err_gave_up = {&burrow_sentinel_error_vt, &gave_up_text};
+
 /* []int, for the one key that cannot be compared. The kind is all anything
  * looks at to decide that, so elem is left NULL. */
 static const Type slice_of_int = {
@@ -303,6 +312,267 @@ TEST(a_child_of_something_already_cancelled_starts_cancelled) {
     context_free(top);
 }
 
+/* ------------------------------------------------------- WithCancelCause, Cause */
+
+TEST(a_cause_says_why_where_the_error_only_says_that) {
+    Alloc *a = heap_allocator();
+    CancelCauseFunc cancel;
+    Context c = context_with_cancel_cause(a, context_background(), &cancel);
+
+    CHECK(!BURROW_CONTEXT_IS_NIL(c));
+    CHECK(BURROW_OK(context_cause(c)));
+
+    BURROW_CALLF(cancel, err_too_slow);
+
+    CHECK(is_done(c));
+
+    /* The error is the same one a plain cancel gives, because every caller
+     * that only wants to know whether to stop should not have to learn a new
+     * error to compare against. The reason is the extra. */
+    CHECK(is(context_err(c), context_canceled));
+    CHECK(is(context_cause(c), err_too_slow));
+    CHECK_STR_EQ((const char *)error_message(context_cause(c)).p, "too slow");
+
+    context_free(c);
+}
+
+TEST(a_cancel_with_no_reason_leaves_the_cause_equal_to_the_error) {
+    Alloc *a = heap_allocator();
+    CancelCauseFunc cancel;
+    Context c = context_with_cancel_cause(a, context_background(), &cancel);
+
+    BURROW_CALLF(cancel, BURROW_NO_ERROR);
+
+    /* Nothing in particular went wrong, so the cause is the cancellation
+     * itself and context_cause still has an answer. Asking both questions is
+     * never necessary. */
+    CHECK(is(context_err(c), context_canceled));
+    CHECK(is(context_cause(c), context_canceled));
+
+    context_free(c);
+}
+
+TEST(the_first_reason_is_the_one_that_sticks) {
+    Alloc *a = heap_allocator();
+    CancelCauseFunc cancel;
+    Context c = context_with_cancel_cause(a, context_background(), &cancel);
+
+    BURROW_CALLF(cancel, err_too_slow);
+    BURROW_CALLF(cancel, err_gave_up);
+    BURROW_CALLF(cancel, BURROW_NO_ERROR);
+
+    CHECK(is(context_cause(c), err_too_slow));
+
+    context_free(c);
+}
+
+TEST(a_live_context_has_no_cause) {
+    Alloc *a = heap_allocator();
+    CancelCauseFunc cancel;
+    Context c = context_with_cancel_cause(a, context_background(), &cancel);
+
+    CHECK(BURROW_OK(context_cause(c)));
+    CHECK(BURROW_OK(context_cause(context_background())));
+    CHECK(BURROW_OK(context_cause(context_todo())));
+
+    BURROW_CALLF(cancel, err_too_slow);
+    context_free(c);
+}
+
+TEST(a_reason_given_at_the_top_is_the_answer_at_the_bottom) {
+    Alloc *a = heap_allocator();
+    CancelCauseFunc cancel_top;
+    CancelFunc cancel_leaf;
+    Int id = 4;
+
+    Context top = context_with_cancel_cause(a, context_background(), &cancel_top);
+    Context with =
+        context_with_value(a, top, REQUEST_ID_KEY, BURROW_ANY(TYPE_INT, &id));
+    Context leaf = context_with_cancel(a, with, &cancel_leaf);
+
+    BURROW_CALLF(cancel_top, err_too_slow);
+
+    /* The reason travels down with the cancellation, so a function three
+     * levels away from the call that gave up learns why without anyone
+     * passing it along by hand. */
+    CHECK(is(context_err(leaf), context_canceled));
+    CHECK(is(context_cause(leaf), err_too_slow));
+    CHECK(is(context_cause(top), err_too_slow));
+
+    context_free(leaf);
+    context_free(with);
+    context_free(top);
+}
+
+TEST(a_cause_given_below_stays_below) {
+    Alloc *a = heap_allocator();
+    CancelCauseFunc cancel_top;
+    CancelCauseFunc cancel_leaf;
+
+    Context top = context_with_cancel_cause(a, context_background(), &cancel_top);
+    Context leaf = context_with_cancel_cause(a, top, &cancel_leaf);
+
+    BURROW_CALLF(cancel_leaf, err_gave_up);
+
+    CHECK(is(context_cause(leaf), err_gave_up));
+    CHECK(BURROW_OK(context_cause(top)));
+
+    /* And the parent's own reason afterwards does not reach down and rewrite
+     * what the child already settled on. */
+    BURROW_CALLF(cancel_top, err_too_slow);
+    CHECK(is(context_cause(leaf), err_gave_up));
+    CHECK(is(context_cause(top), err_too_slow));
+
+    context_free(leaf);
+    context_free(top);
+}
+
+TEST(a_child_of_something_cancelled_with_a_reason_starts_with_it) {
+    Alloc *a = heap_allocator();
+    CancelCauseFunc cancel_top;
+    CancelFunc cancel_child;
+
+    Context top = context_with_cancel_cause(a, context_background(), &cancel_top);
+    BURROW_CALLF(cancel_top, err_too_slow);
+
+    Context child = context_with_cancel(a, top, &cancel_child);
+
+    CHECK(is_done(child));
+    CHECK(is(context_cause(child), err_too_slow));
+
+    context_free(child);
+    context_free(top);
+}
+
+TEST(a_plain_cancel_context_still_has_a_cause) {
+    Alloc *a = heap_allocator();
+    CancelFunc cancel;
+    Context c = context_with_cancel(a, context_background(), &cancel);
+
+    BURROW_CALLF0(cancel);
+
+    /* Nobody asked for a reason here, so the reason is the cancellation.
+     * Code that reads context_cause works against contexts built by code that
+     * has never heard of it. */
+    CHECK(is(context_cause(c), context_canceled));
+
+    context_free(c);
+}
+
+TEST(a_context_that_cannot_be_cancelled_has_no_cause) {
+    Alloc *a = heap_allocator();
+    Fake f = {0};
+    Int id = 8;
+
+    Context with = context_with_value(a, context_background(), REQUEST_ID_KEY,
+                                      BURROW_ANY(TYPE_INT, &id));
+
+    CHECK(BURROW_OK(context_cause(with)));
+    CHECK(BURROW_OK(context_cause(fake_context(&f))));
+
+    context_free(with);
+}
+
+/* ------------------------------------------------------------- WithoutCancel */
+
+TEST(work_that_outlives_its_request_keeps_the_values) {
+    Alloc *a = heap_allocator();
+    CancelFunc cancel;
+    Int id = 11;
+
+    Context req = context_with_cancel(a, context_background(), &cancel);
+    Context with =
+        context_with_value(a, req, REQUEST_ID_KEY, BURROW_ANY(TYPE_INT, &id));
+    Context detached = context_without_cancel(a, with);
+
+    CHECK(!BURROW_CONTEXT_IS_NIL(detached));
+    CHECK_INT_EQ(*(Int *)context_value(detached, REQUEST_ID_KEY).data, 11);
+
+    BURROW_CALLF0(cancel);
+
+    /* The request is over and the logging or the cleanup that hangs off it is
+     * not. Everything the handler put in the context is still readable, and
+     * nothing about the context says to stop. */
+    CHECK(is_done(req));
+    CHECK_INT_EQ(*(Int *)context_value(detached, REQUEST_ID_KEY).data, 11);
+    CHECK(context_done(detached) == NULL);
+    CHECK(BURROW_OK(context_err(detached)));
+
+    context_free(detached);
+    context_free(with);
+    context_free(req);
+}
+
+TEST(nothing_under_a_without_cancel_is_reached_by_the_parent) {
+    Alloc *a = heap_allocator();
+    CancelFunc cancel_req;
+    CancelFunc cancel_task;
+
+    Context req = context_with_cancel(a, context_background(), &cancel_req);
+    Context detached = context_without_cancel(a, req);
+    Context task = context_with_cancel(a, detached, &cancel_task);
+
+    BURROW_CALLF0(cancel_req);
+
+    /* The break is the point. A cancellable context under a detached one is
+     * still cancellable, it just is not cancelled by what it came from. */
+    CHECK(is_done(req));
+    CHECK(!is_done(task));
+
+    BURROW_CALLF0(cancel_task);
+    CHECK(is_done(task));
+
+    context_free(task);
+    context_free(detached);
+    context_free(req);
+}
+
+TEST(a_without_cancel_has_no_deadline_and_no_cause) {
+    Alloc *a = heap_allocator();
+    Fake f = {0};
+    CancelCauseFunc cancel;
+
+    f.has_deadline = true;
+    f.when = burrow_nanotime() + TIME_SECOND;
+
+    Context req = context_with_cancel_cause(a, fake_context(&f), &cancel);
+    Context detached = context_without_cancel(a, req);
+
+    int64_t when = 1234;
+    CHECK(!context_deadline(detached, &when));
+    CHECK_INT_EQ(when, 1234);
+
+    BURROW_CALLF(cancel, err_too_slow);
+
+    CHECK(BURROW_OK(context_err(detached)));
+    CHECK(BURROW_OK(context_cause(detached)));
+
+    context_free(detached);
+    context_free(req);
+}
+
+TEST(a_detached_context_is_given_back_to_the_allocator) {
+    Track tr;
+    track_init(&tr, heap_allocator());
+    track_set_quarantine(&tr, 0);
+    Alloc *a = track_allocator(&tr);
+
+    CancelFunc cancel;
+    Context req = context_with_cancel(a, context_background(), &cancel);
+    Context detached = context_without_cancel(a, req);
+    Context task = context_with_cancel(a, detached, &cancel);
+
+    CHECK(track_live(&tr) > 0);
+
+    context_free(task);
+    context_free(detached);
+    context_free(req);
+
+    CHECK_INT_EQ((Int)track_live(&tr), 0);
+    CHECK_INT_EQ((Int)track_check(&tr), 0);
+    track_free(&tr);
+}
+
 /* ----------------------------------------------------------------- WithValue */
 
 TEST(a_value_is_found_through_everything_above_it) {
@@ -535,6 +805,19 @@ TEST(a_nil_parent_panics) {
     CHECK_PANIC(
         (void)context_with_timeout(panic_alloc, panic_parent, TIME_SECOND, NULL),
         "cannot create context from nil parent");
+
+    CancelCauseFunc cancel_cause;
+    CHECK_PANIC(
+        (void)context_with_cancel_cause(panic_alloc, panic_parent, &cancel_cause),
+        "cannot create context from nil parent");
+    CHECK_PANIC((void)context_without_cancel(panic_alloc, panic_parent),
+                "cannot create context from nil parent");
+    CHECK_PANIC((void)context_with_deadline_cause(panic_alloc, panic_parent, 0,
+                                                  err_too_slow, NULL),
+                "cannot create context from nil parent");
+    CHECK_PANIC((void)context_with_timeout_cause(panic_alloc, panic_parent, TIME_SECOND,
+                                                 err_too_slow, NULL),
+                "cannot create context from nil parent");
 }
 
 TEST(a_bad_key_panics) {
@@ -565,6 +848,9 @@ TEST(a_nil_context_has_no_methods) {
     CHECK_RUNTIME_ERROR((void)context_done(panic_parent),
                         "runtime error: invalid memory address or nil pointer "
                         "dereference");
+    CHECK_RUNTIME_ERROR((void)context_cause(panic_parent),
+                        "runtime error: invalid memory address or nil pointer "
+                        "dereference");
 }
 
 /* Here rather than with the other deadline tests, because the whole point of it
@@ -578,6 +864,12 @@ TEST(a_deadline_off_a_goroutine_stops_the_program) {
         (void)context_with_timeout(panic_alloc, panic_parent, TIME_SECOND, NULL),
         "context: a deadline needs a goroutine to put the timer on");
     CHECK_FATAL((void)context_with_deadline(panic_alloc, panic_parent, 0, NULL),
+                "context: a deadline needs a goroutine to put the timer on");
+    CHECK_FATAL((void)context_with_timeout_cause(panic_alloc, panic_parent, TIME_SECOND,
+                                                 err_too_slow, NULL),
+                "context: a deadline needs a goroutine to put the timer on");
+    CHECK_FATAL((void)context_with_deadline_cause(panic_alloc, panic_parent, 0,
+                                                  err_too_slow, NULL),
                 "context: a deadline needs a goroutine to put the timer on");
 }
 
@@ -1371,6 +1663,112 @@ TEST(a_timeout_too_big_to_add_lands_at_the_end_of_the_clock) {
     CHECK(BURROW_OK(dl.err));
 }
 
+/* ---------------------------------------------------- with a deadline and a cause
+ *
+ * A cause carried by a deadline cannot live in a closure the way Go's does,
+ * so it sits on the node and the timer reads it when it fires. That is worth
+ * testing from all three directions: the timer wins, the cancel wins, and the
+ * deadline was already behind us when the context was made. */
+
+static void deadline_cause_body(void *env) {
+    (void)env;
+
+    CancelFunc cancel;
+    Context c = context_with_timeout_cause(rt_alloc, context_background(), DL_SOON,
+                                           err_too_slow, &cancel);
+    if (BURROW_CONTEXT_IS_NIL(c))
+        return;
+
+    dl.made = true;
+    dl.err = context_cause(c);
+    dl.done_in_the_end = wait_done(c);
+    dl.err_after = context_err(c);
+    dl.child_err = context_cause(c);
+
+    BURROW_CALLF0(cancel);
+    context_free(c);
+}
+
+TEST(a_deadline_that_fires_says_what_it_was_waiting_for) {
+    dl_reset();
+    rt_alloc = heap_allocator();
+
+    runtime_main(BURROW_FN(Func, deadline_cause_body, NULL));
+
+    CHECK(dl.made);
+    CHECK(BURROW_OK(dl.err)); /* nothing has happened yet */
+    CHECK(dl.done_in_the_end);
+
+    /* The error is the usual one, so a caller that only cares whether the
+     * clock ran out does not have to change. The reason is what the caller
+     * handed over when it set the timeout. */
+    CHECK(is(dl.err_after, context_deadline_exceeded));
+    CHECK(is(dl.child_err, err_too_slow));
+}
+
+static void cancel_beats_cause_body(void *env) {
+    (void)env;
+
+    CancelFunc cancel;
+    Context c = context_with_deadline_cause(rt_alloc, context_background(),
+                                            burrow_nanotime() + DL_NEVER, err_too_slow,
+                                            &cancel);
+    if (BURROW_CONTEXT_IS_NIL(c))
+        return;
+
+    dl.made = true;
+
+    /* An hour away, so this is the stop path and the deadline's reason should
+     * never be reached. */
+    BURROW_CALLF0(cancel);
+    dl.err_after = context_err(c);
+    dl.child_err = context_cause(c);
+
+    context_free(c);
+}
+
+TEST(a_cancel_before_the_deadline_leaves_the_deadline_cause_alone) {
+    dl_reset();
+    rt_alloc = heap_allocator();
+
+    runtime_main(BURROW_FN(Func, cancel_beats_cause_body, NULL));
+
+    CHECK(dl.made);
+    CHECK(is(dl.err_after, context_canceled));
+    CHECK(is(dl.child_err, context_canceled));
+}
+
+static void past_cause_body(void *env) {
+    (void)env;
+
+    Context c = context_with_timeout_cause(rt_alloc, context_background(), -TIME_SECOND,
+                                           err_gave_up, NULL);
+    if (BURROW_CONTEXT_IS_NIL(c))
+        return;
+
+    dl.made = true;
+    dl.done_at_once = is_done(c);
+    dl.err = context_err(c);
+    dl.child_err = context_cause(c);
+
+    context_free(c);
+}
+
+TEST(a_deadline_already_gone_by_still_carries_its_reason) {
+    dl_reset();
+    rt_alloc = heap_allocator();
+
+    runtime_main(BURROW_FN(Func, past_cause_body, NULL));
+
+    CHECK(dl.made);
+    CHECK(dl.done_at_once);
+    CHECK(is(dl.err, context_deadline_exceeded));
+
+    /* The early path never arms a timer, so it is a separate piece of code
+     * from the one above and it has to remember the reason too. */
+    CHECK(is(dl.child_err, err_gave_up));
+}
+
 int main(void) {
     RUN(the_root_is_never_cancelled_and_carries_nothing);
     RUN(background_and_todo_are_not_the_same_context);
@@ -1380,6 +1778,21 @@ int main(void) {
     RUN(cancelling_a_parent_cancels_every_child);
     RUN(cancelling_a_child_leaves_the_parent_alone);
     RUN(a_child_of_something_already_cancelled_starts_cancelled);
+
+    RUN(a_cause_says_why_where_the_error_only_says_that);
+    RUN(a_cancel_with_no_reason_leaves_the_cause_equal_to_the_error);
+    RUN(the_first_reason_is_the_one_that_sticks);
+    RUN(a_live_context_has_no_cause);
+    RUN(a_reason_given_at_the_top_is_the_answer_at_the_bottom);
+    RUN(a_cause_given_below_stays_below);
+    RUN(a_child_of_something_cancelled_with_a_reason_starts_with_it);
+    RUN(a_plain_cancel_context_still_has_a_cause);
+    RUN(a_context_that_cannot_be_cancelled_has_no_cause);
+
+    RUN(work_that_outlives_its_request_keeps_the_values);
+    RUN(nothing_under_a_without_cancel_is_reached_by_the_parent);
+    RUN(a_without_cancel_has_no_deadline_and_no_cause);
+    RUN(a_detached_context_is_given_back_to_the_allocator);
 
     RUN(a_value_is_found_through_everything_above_it);
     RUN(an_unknown_key_answers_nothing);
@@ -1416,6 +1829,10 @@ int main(void) {
     RUN(a_context_freed_before_its_deadline_takes_the_timer_with_it);
     RUN(a_goroutine_parked_on_done_wakes_up_when_the_deadline_goes_by);
     RUN(a_timeout_too_big_to_add_lands_at_the_end_of_the_clock);
+
+    RUN(a_deadline_that_fires_says_what_it_was_waiting_for);
+    RUN(a_cancel_before_the_deadline_leaves_the_deadline_cause_alone);
+    RUN(a_deadline_already_gone_by_still_carries_its_reason);
 
     return harness_report("context");
 }

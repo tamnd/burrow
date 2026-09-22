@@ -224,6 +224,13 @@ struct CancelCtx {
     /* Set once, under mu, at the same moment done is closed. */
     Error err;
 
+    /* Why, as opposed to err, which says only that. Set under mu at the same
+     * moment as err and never changed again, so the first reason is the one
+     * that sticks. Equal to err when nobody gave a reason, which is what Go
+     * does and is what makes context_cause safe to read instead of
+     * context_err rather than as well as it. */
+    Error cause;
+
     /* Head of the child list, under mu. */
     CancelCtx *children;
 
@@ -258,6 +265,12 @@ typedef struct TimerCtx {
     /* Under c.mu. NULL when the deadline had already gone by, and NULL again
      * once whoever cancelled has disarmed it. */
     TimeTimer *timer;
+
+    /* What to blame if the deadline is what stops this context. Set once
+     * before the node is visible and read without the lock, because Go keeps
+     * it in a closure the timer holds and this has no closures. Nothing reads
+     * it on a path where the deadline did not win. */
+    Error deadline_cause;
 } TimerCtx;
 
 typedef struct ValueCtx {
@@ -266,6 +279,13 @@ typedef struct ValueCtx {
     Any key;
     Any val;
 } ValueCtx;
+
+/* Go's withoutCancelCtx, which is a parent and nothing else. No lock, no
+ * channel and no place in any child list, because it is never cancelled. */
+typedef struct WithoutCancelCtx {
+    Context parent;
+    Alloc *a;
+} WithoutCancelCtx;
 
 /* ------------------------------------------------------------- the vtables */
 
@@ -280,6 +300,11 @@ static Error cancel_err(void *self);
 static Any cancel_value(void *self, Any key);
 
 static bool timer_deadline(void *self, int64_t *when);
+
+static bool without_cancel_deadline(void *self, int64_t *when);
+static Chan *without_cancel_done(void *self);
+static Error without_cancel_err(void *self);
+static Any without_cancel_value(void *self, Any key);
 
 static bool value_deadline(void *self, int64_t *when);
 static Chan *value_done(void *self);
@@ -312,6 +337,17 @@ static const ContextVT cancel_vt = {
  * overrides Deadline and promotes the rest from the cancelCtx inside it. */
 static const ContextVT timer_vt = {
     NULL, timer_deadline, cancel_done, cancel_err, cancel_value,
+};
+
+/* Four slots of its own rather than three shared with background_vt, because
+ * the value slot has a parent to walk into and because the vtable pointer is
+ * what context_free and the value loop tell the node types apart by. */
+static const ContextVT without_cancel_vt = {
+    NULL,
+    without_cancel_deadline,
+    without_cancel_done,
+    without_cancel_err,
+    without_cancel_value,
 };
 
 static const ContextVT value_vt = {
@@ -380,6 +416,14 @@ Any context_value(Context c, Any key) {
             if (any_equal(key, cancel_key))
                 return BURROW_ANY(&cancel_ctx_type, &cc->self);
             c = cc->parent;
+            continue;
+        }
+
+        if (c.vt == &without_cancel_vt) {
+            WithoutCancelCtx *w = (WithoutCancelCtx *)c.data;
+            if (any_equal(key, cancel_key))
+                return none;
+            c = w->parent;
             continue;
         }
 
@@ -540,9 +584,15 @@ static void release(CancelCtx *c);
  * the loop empties the list wholesale and a child unlinking itself from a list
  * that is being thrown away is work at best and a walk into the parent's lock
  * from underneath it at worst. */
-static void cancel_node(CancelCtx *c, bool remove_from_parent, Error err) {
+static void cancel_node(CancelCtx *c, bool remove_from_parent, Error err, Error cause) {
     if (BURROW_OK(err))
         panic_str(BURROW_S("context: internal error: missing cancel error"));
+
+    /* No reason given means the reason is the error, so that context_cause
+     * always has an answer for a cancelled context and a caller never has to
+     * ask both questions. Go does this in the same line of its cancel. */
+    if (BURROW_OK(cause))
+        cause = err;
 
     sync_mutex_lock(&c->mu);
     if (BURROW_FAILED(c->err)) {
@@ -564,6 +614,7 @@ static void cancel_node(CancelCtx *c, bool remove_from_parent, Error err) {
     }
 
     c->err = err;
+    c->cause = cause;
     chan_close(c->done);
 
     CancelCtx *child = c->children;
@@ -572,7 +623,7 @@ static void cancel_node(CancelCtx *c, bool remove_from_parent, Error err) {
 
         child->prev = NULL;
         child->next = NULL;
-        cancel_node(child, false, err);
+        cancel_node(child, false, err, cause);
         child = after;
     }
     c->children = NULL;
@@ -617,7 +668,11 @@ static void release(CancelCtx *c) {
 }
 
 static void cancel_func(void *env) {
-    cancel_node((CancelCtx *)env, true, context_canceled);
+    cancel_node((CancelCtx *)env, true, context_canceled, BURROW_NO_ERROR);
+}
+
+static void cancel_cause_func(void *env, Error cause) {
+    cancel_node((CancelCtx *)env, true, context_canceled, cause);
 }
 
 /* What *cancel is set to when the context could not be made. Calling a cancel
@@ -625,6 +680,11 @@ static void cancel_func(void *env) {
  * deferred the cancel before looking at the context is then still right. */
 static void cancel_nothing(void *env) {
     (void)env;
+}
+
+static void cancel_cause_nothing(void *env, Error cause) {
+    (void)env;
+    (void)cause;
 }
 
 /* The nearest cancellable ancestor, or NULL if there is not one to be had.
@@ -669,7 +729,7 @@ static void watch(void *env) {
     cases[1] = BURROW_RECV(c->done, NULL);
 
     if (chan_select(cases, 2) == 0)
-        cancel_node(c, false, context_err(c->parent));
+        cancel_node(c, false, context_err(c->parent), context_cause(c->parent));
 
     release(c);
 }
@@ -692,7 +752,7 @@ static bool propagate_cancel(CancelCtx *c, Context parent) {
      * channel, since nothing ever sends on one. */
     bool had_value = false;
     if (chan_try_recv(done, NULL, &had_value) && !had_value) {
-        cancel_node(c, false, context_err(parent));
+        cancel_node(c, false, context_err(parent), context_cause(parent));
         return true;
     }
 
@@ -702,7 +762,7 @@ static bool propagate_cancel(CancelCtx *c, Context parent) {
         if (BURROW_FAILED(p->err)) {
             /* The parent was cancelled between the check above and this lock,
              * which is the race the whole lock is here for. */
-            cancel_node(c, false, p->err);
+            cancel_node(c, false, p->err, p->cause);
         } else {
             c->plink = p;
             c->next = p->children;
@@ -724,23 +784,19 @@ static bool propagate_cancel(CancelCtx *c, Context parent) {
     return true;
 }
 
-Context context_with_cancel(Alloc *a, Context parent, CancelFunc *cancel) {
-    Context none = {NULL, NULL};
-
-    if (BURROW_CONTEXT_IS_NIL(parent))
-        panic_str(BURROW_S("cannot create context from nil parent"));
-
-    if (cancel != NULL)
-        *cancel = BURROW_FN(CancelFunc, cancel_nothing, NULL);
-
+/* The node, the channel and the attaching, which is everything the two
+ * WithCancel constructors have in common. NULL means the allocator said no or a
+ * watcher goroutine would not start, and nothing has been kept in either
+ * case. */
+static CancelCtx *new_cancel_ctx(Alloc *a, Context parent) {
     CancelCtx *c = BURROW_NEW(a, CancelCtx);
     if (c == NULL)
-        return none;
+        return NULL;
 
     Chan *done = chan_make(a, TYPE_UINT8, 0);
     if (done == NULL) {
         mem_free(a, c, sizeof(CancelCtx), _Alignof(CancelCtx));
-        return none;
+        return NULL;
     }
 
     c->parent = parent;
@@ -752,13 +808,141 @@ Context context_with_cancel(Alloc *a, Context parent, CancelFunc *cancel) {
     if (!propagate_cancel(c, parent)) {
         chan_free(done);
         mem_free(a, c, sizeof(CancelCtx), _Alignof(CancelCtx));
-        return none;
+        return NULL;
     }
+
+    return c;
+}
+
+Context context_with_cancel(Alloc *a, Context parent, CancelFunc *cancel) {
+    Context none = {NULL, NULL};
+
+    if (BURROW_CONTEXT_IS_NIL(parent))
+        panic_str(BURROW_S("cannot create context from nil parent"));
+
+    if (cancel != NULL)
+        *cancel = BURROW_FN(CancelFunc, cancel_nothing, NULL);
+
+    CancelCtx *c = new_cancel_ctx(a, parent);
+    if (c == NULL)
+        return none;
 
     if (cancel != NULL)
         *cancel = BURROW_FN(CancelFunc, cancel_func, c);
 
     Context out = {&cancel_vt, c};
+    return out;
+}
+
+/* ---------------------------------------------------- WithCancelCause, Cause
+ *
+ * The same node. A cause is a second error written beside the first one at the
+ * moment of cancellation, and everything that cancels was already carrying it
+ * down the subtree before this section existed.
+ *
+ * What is new is the reading. Cause looks up the nearest cancellable context
+ * the way the value walk does, rather than asking the context in front of it,
+ * and that is the feature: a reason given at the top is the answer five layers
+ * down, where the layers in between are WithValues that cancel nothing. */
+
+Context context_with_cancel_cause(Alloc *a, Context parent, CancelCauseFunc *cancel) {
+    Context none = {NULL, NULL};
+
+    if (BURROW_CONTEXT_IS_NIL(parent))
+        panic_str(BURROW_S("cannot create context from nil parent"));
+
+    if (cancel != NULL)
+        *cancel = BURROW_FN(CancelCauseFunc, cancel_cause_nothing, NULL);
+
+    CancelCtx *c = new_cancel_ctx(a, parent);
+    if (c == NULL)
+        return none;
+
+    if (cancel != NULL)
+        *cancel = BURROW_FN(CancelCauseFunc, cancel_cause_func, c);
+
+    Context out = {&cancel_vt, c};
+    return out;
+}
+
+Error context_cause(Context c) {
+    nonnil(c);
+
+    /* The same lookup parent_cancel_ctx makes, without the done channel check
+     * it does. Go's Cause leaves that check out too, and it has to: the check
+     * is there to stop a node joining the child list of a context it does not
+     * really sit under, and reading a reason is not joining anything. */
+    Any v = context_value(c, cancel_key);
+    CancelCtx **p = (CancelCtx **)any_assert(v, &cancel_ctx_type);
+
+    /* Nothing cancellable above this, so there is nowhere for a reason to have
+     * been written and the honest answer is whatever this context says about
+     * itself. That covers Background, a tree of nothing but WithValues, a
+     * context somebody else's package wrote, and the WithoutCancel node, which
+     * answers nothing to this key on purpose. */
+    if (p == NULL || *p == NULL)
+        return context_err(c);
+
+    CancelCtx *cc = *p;
+
+    sync_mutex_lock(&cc->mu);
+    Error cause = cc->cause;
+    sync_mutex_unlock(&cc->mu);
+    return cause;
+}
+
+/* --------------------------------------------------------------- WithoutCancel
+ *
+ * A context that keeps the values and drops everything else, for work that has
+ * to outlive the request it came from: the access log line, the metric, the
+ * transaction that would otherwise be rolled back.
+ *
+ * It is a two word node with no lock, no channel and no place in any child
+ * list, which is the whole of Go's withoutCancelCtx as well. The only part
+ * worth a comment is that it answers nothing to the cancel key, which is two
+ * things at once: a cancellable context built on this one finds no ancestor to
+ * join, so cancellation really does stop here, and context_cause answers
+ * nothing rather than reaching past it for the parent's reason. */
+
+static bool without_cancel_deadline(void *self, int64_t *when) {
+    (void)self;
+    (void)when;
+    return false;
+}
+
+static Chan *without_cancel_done(void *self) {
+    (void)self;
+    return NULL;
+}
+
+static Error without_cancel_err(void *self) {
+    (void)self;
+    return BURROW_NO_ERROR;
+}
+
+static Any without_cancel_value(void *self, Any key) {
+    WithoutCancelCtx *w = (WithoutCancelCtx *)self;
+    Any none = {NULL, NULL};
+
+    if (any_equal(key, cancel_key))
+        return none;
+    return context_value(w->parent, key);
+}
+
+Context context_without_cancel(Alloc *a, Context parent) {
+    Context none = {NULL, NULL};
+
+    if (BURROW_CONTEXT_IS_NIL(parent))
+        panic_str(BURROW_S("cannot create context from nil parent"));
+
+    WithoutCancelCtx *w = BURROW_NEW(a, WithoutCancelCtx);
+    if (w == NULL)
+        return none;
+
+    w->parent = parent;
+    w->a = a;
+
+    Context out = {&without_cancel_vt, w};
     return out;
 }
 
@@ -802,12 +986,12 @@ static bool timer_deadline(void *self, int64_t *when) {
 static void deadline_reached(void *env) {
     CancelCtx *c = (CancelCtx *)env;
 
-    cancel_node(c, true, context_deadline_exceeded);
+    cancel_node(c, true, context_deadline_exceeded, ((TimerCtx *)c)->deadline_cause);
     release(c);
 }
 
-Context context_with_deadline(Alloc *a, Context parent, int64_t when,
-                              CancelFunc *cancel) {
+Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Error cause,
+                                    CancelFunc *cancel) {
     Context none = {NULL, NULL};
 
     if (BURROW_CONTEXT_IS_NIL(parent))
@@ -854,6 +1038,7 @@ Context context_with_deadline(Alloc *a, Context parent, int64_t when,
     c->refs = 1;
     c->timed = true;
     t->when = when;
+    t->deadline_cause = cause;
 
     if (!propagate_cancel(c, parent)) {
         chan_free(done);
@@ -872,7 +1057,7 @@ Context context_with_deadline(Alloc *a, Context parent, int64_t when,
      * it would have taken a second later. */
     Duration left = when - burrow_nanotime();
     if (left <= 0) {
-        cancel_node(c, false, context_deadline_exceeded);
+        cancel_node(c, false, context_deadline_exceeded, t->deadline_cause);
         return out;
     }
 
@@ -901,7 +1086,7 @@ Context context_with_deadline(Alloc *a, Context parent, int64_t when,
      * not always free: a watcher goroutine may still hold the node, and then it
      * frees when it wakes. */
     if (no_timer) {
-        cancel_node(c, true, context_canceled);
+        cancel_node(c, true, context_canceled, BURROW_NO_ERROR);
         release(c);
         if (cancel != NULL)
             *cancel = BURROW_FN(CancelFunc, cancel_nothing, NULL);
@@ -911,20 +1096,33 @@ Context context_with_deadline(Alloc *a, Context parent, int64_t when,
     return out;
 }
 
-Context context_with_timeout(Alloc *a, Context parent, Duration d, CancelFunc *cancel) {
+Context context_with_deadline(Alloc *a, Context parent, int64_t when,
+                              CancelFunc *cancel) {
+    return context_with_deadline_cause(a, parent, when, BURROW_NO_ERROR, cancel);
+}
+
+/* now + d, with the two constructors that take a duration sharing the one
+ * conversion to an instant rather than each doing it slightly differently. */
+static int64_t deadline_from(Duration d) {
     int64_t now = burrow_nanotime();
-    int64_t when;
 
-    /* now + d, without the signed overflow, which is undefined rather than
-     * negative. A reading of this clock is never below zero, so the only end
-     * that can be run off is the far one, and a timeout that lands 292 years
-     * out is one nobody meant. */
+    /* Without the signed overflow, which is undefined rather than negative. A
+     * reading of this clock is never below zero, so the only end that can be
+     * run off is the far one, and a timeout that lands 292 years out is one
+     * nobody meant. */
     if (d > 0 && d > INT64_MAX - now)
-        when = INT64_MAX;
-    else
-        when = now + d;
+        return INT64_MAX;
+    return now + d;
+}
 
-    return context_with_deadline(a, parent, when, cancel);
+Context context_with_timeout_cause(Alloc *a, Context parent, Duration d, Error cause,
+                                   CancelFunc *cancel) {
+    return context_with_deadline_cause(a, parent, deadline_from(d), cause, cancel);
+}
+
+Context context_with_timeout(Alloc *a, Context parent, Duration d, CancelFunc *cancel) {
+    return context_with_deadline_cause(a, parent, deadline_from(d), BURROW_NO_ERROR,
+                                       cancel);
 }
 
 /* --------------------------------------------------------------------- free */
@@ -938,7 +1136,7 @@ void context_free(Context c) {
 
         /* Cancel first, so that the done channel is closed and anything parked
          * on it has been let go before the channel stops existing. */
-        cancel_node(cc, true, context_canceled);
+        cancel_node(cc, true, context_canceled, BURROW_NO_ERROR);
         release(cc);
         return;
     }
@@ -947,6 +1145,13 @@ void context_free(Context c) {
         ValueCtx *v = (ValueCtx *)c.data;
 
         mem_free(v->a, v, sizeof(ValueCtx), _Alignof(ValueCtx));
+        return;
+    }
+
+    if (c.vt == &without_cancel_vt) {
+        WithoutCancelCtx *w = (WithoutCancelCtx *)c.data;
+
+        mem_free(w->a, w, sizeof(WithoutCancelCtx), _Alignof(WithoutCancelCtx));
         return;
     }
 

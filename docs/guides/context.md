@@ -106,6 +106,51 @@ A deadline that has already gone by is not an error. What comes back is a real c
 
 A child cannot outlast its parent. Asking for a deadline later than the parent's gets you a context with no timer at all, since the parent's cancellation would always arrive first, and it reports the parent's deadline as its own. Asking for a sooner one gets a timer, and then the child gives up while the parent carries on.
 
+## Causes
+
+```c
+BURROW_SENTINEL_ERROR(err_client_hung_up, "the client hung up");
+
+CancelCauseFunc cancel;
+Context ctx = context_with_cancel_cause(a, parent, &cancel);
+...
+BURROW_CALLF(cancel, err_client_hung_up);
+...
+if (BURROW_FAILED(context_err(ctx)))
+    log_error(context_cause(ctx)); /* the client hung up */
+```
+
+`context_err` answers one of two sentinels and always has. That is the right amount of detail for the code that has to decide whether to stop, and it is nowhere near enough for the code that has to explain afterwards why it did. A cancel arrives at the bottom of a call stack with nothing attached to say what happened at the top.
+
+`context_with_cancel_cause` is `context.WithCancelCause` and fixes that. It is `context_with_cancel` with a different cancel function, one that takes an `Error` describing the reason, and `context_cause` is what reads it back. The error stays exactly what it was, so nothing that only asks `context_err` has to change. The reason is the extra.
+
+The reason travels down with the cancellation. A function three levels below the one that gave up gets the same answer from `context_cause` that the one that gave up passed in, without anybody threading it through by hand. It does not travel up: a child cancelled with its own reason keeps it, and the parent is not affected at all.
+
+The first reason is the one that sticks. Calling the cancel twice does nothing the second time, the same as a plain `CancelFunc`, and that includes the reason.
+
+`context_cause` always has an answer for a cancelled context. Pass `BURROW_NO_ERROR` as the reason, or cancel with a plain `CancelFunc`, and the cause is whatever `context_err` says, so reading the cause instead of the error is always safe and reading both is never necessary. A context that is still live answers `BURROW_NO_ERROR`, as does one that cannot be cancelled at all.
+
+```c
+Context ctx = context_with_timeout_cause(a, parent, 5 * TIME_SECOND,
+                                         err_the_database_is_slow, &cancel);
+```
+
+`context_with_deadline_cause` and `context_with_timeout_cause` are the same idea for a clock. The reason is what `context_cause` answers if the deadline is what stops the context, and it is ignored if a cancel gets there first, which is the only sensible reading of a reason attached to an event that did not happen.
+
+## Work that outlives the request
+
+```c
+Context detached = context_without_cancel(a, ctx);
+
+go(BURROW_FN(Func, write_the_audit_log, detached));
+```
+
+`context_without_cancel` is `context.WithoutCancel`. It keeps everything the parent carries and drops everything the parent does about stopping. Values still resolve through it, the deadline is gone, the done channel is `NULL`, and the error and the cause are both nothing no matter what happens above it.
+
+It is for the work a handler starts and does not wait for. Flushing a buffer, writing an audit record, reporting a metric. Handing that work the request's context means it gets cancelled the moment the response goes out, which is exactly when it was about to start, and handing it `context_background` throws away the request id and the trace span it needed.
+
+The break is one way. A context derived from a detached one is as cancellable as any other, it just is not cancelled by what the detached one came from, so a detached goroutine can still give its own work a timeout of its own.
+
 ## Values
 
 ```c
@@ -182,7 +227,7 @@ A cancel walks the subtree once, closing each done channel and setting each erro
 
 `context_deadline` answers an `int64_t` on the monotonic clock rather than a `Time`, because burrow has no calendar `Time` yet. It becomes a `Time` when the calendar half of the `time` package lands, and until then `burrow_nanotime` is the reading to compare it against. That is the part every caller actually uses: a deadline gets compared against now and subtracted from now, and both of those want the clock that cannot go backwards.
 
-The Go 1.20 and 1.21 additions are not here: `WithCancelCause`, `Cause`, `WithoutCancel`, `WithDeadlineCause`, `WithTimeoutCause` and `AfterFunc`.
+`AfterFunc` is not here yet. It is the one Go 1.21 addition still missing, and it is a different shape from the rest of the package: it runs a function when a context is cancelled rather than closing a channel, and hands back a stop function that says whether it got in first.
 
 `context_deadline_exceeded` satisfies `net.Error` with `Timeout()` true in Go, so that code written against the network package treats it as a timeout rather than a hard failure. There is no `net` package here yet and it is a plain sentinel until there is.
 

@@ -101,3 +101,5 @@ global	src/runtime/netpoll_kqueue.c	kq	netpoller	The kqueue descriptor. One per 
 global	src/runtime/netpoll_kqueue.c	breakrd	netpoller	The read end of the wakeup pipe, which is what the kqueue watches.
 global	src/runtime/netpoll_kqueue.c	breakwr	netpoller	The write end of the wakeup pipe, which is where a byte goes to interrupt a poll.
 global	src/runtime/netpoll_kqueue.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one byte, and cleared by whoever drains the pipe.
+global	src/runtime/netpoll_iocp.c	iocp	netpoller	The completion port. One per process, made once under init_lock and read without anything afterwards.
+global	src/runtime/netpoll_iocp.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one posted completion, and cleared by whoever takes that completion off the port.

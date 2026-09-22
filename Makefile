@@ -87,6 +87,15 @@ ifeq ($(BOEHM),1)
   LDLIBS  += -lgc
 endif
 
+# Winsock, on Windows only. The completion port the netpoller runs on is
+# kernel32 and comes in for free, so the library itself does not need this. What
+# needs it is anything holding a socket to submit an operation on, which is the
+# tests today and net later, and putting it here is what saves each of them
+# having to ask.
+ifeq ($(OS),Windows_NT)
+  LDLIBS += -lws2_32
+endif
+
 # Forces the portable context switch on a machine that has assembly for it.
 # This is not a fallback you would ship, it is how you find out whether a bug is
 # in the assembly or above it, and it has to go in DEFINES rather than on one

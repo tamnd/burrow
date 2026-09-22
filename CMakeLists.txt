@@ -96,6 +96,14 @@ if(BURROW_ENABLE_BOEHM)
     target_link_libraries(burrow PUBLIC gc)
 endif()
 
+# Winsock. The completion port itself is kernel32, which comes in for free, so
+# nothing in the library needs this yet. What needs it is every caller that has
+# a socket to submit an operation on, which is the tests today and net later,
+# and PUBLIC is what puts it on their link line without each of them asking.
+if(WIN32)
+    target_link_libraries(burrow PUBLIC ws2_32)
+endif()
+
 # The warning set mirrors the Makefile's. MSVC gets its own because /W4 is not
 # -Wall and the numbered warnings have no gcc equivalent worth mapping.
 if(MSVC)

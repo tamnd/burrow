@@ -15,8 +15,11 @@
  * its note. That is the whole point of the netpoller and nothing else in this
  * file would notice if it were missing.
  *
- * On a platform with no backend yet this file compiles to a main that says so.
- * Windows is that platform today.
+ * Everything in here is written against a readiness backend, so it is epoll and
+ * kqueue only. That is not a gap: readiness is what this file is testing, and a
+ * completion backend has a different deal with its caller and a test of its own
+ * in netpoll_iocp_test.c. On Windows, and on the web targets that have no
+ * backend at all, this compiles to a main that says so.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -24,16 +27,20 @@
 
 #include "burrow/netpoll.h"
 
-#include "harness.h"
+#if !defined(BURROW_NETPOLL_READINESS) || defined(BURROW_NETPOLL_NONE)
 
-#if defined(BURROW_NETPOLL_NONE)
+/* Not harness.h, because everything in it is static and a build with
+ * -Wunused-function counts a harness nothing calls as a mistake. */
+#include <stdio.h>
 
 int main(void) {
-    printf("ok\tnetpoll\t0 checks (no backend on this platform)\n");
+    printf("ok\tnetpoll\t0 checks (not a readiness backend)\n");
     return 0;
 }
 
 #else
+
+#include "harness.h"
 
 #include "burrow/atomic.h"
 #include "burrow/clock.h"
@@ -812,4 +819,4 @@ int main(void) {
     return harness_report("netpoll");
 }
 
-#endif /* BURROW_NETPOLL_NONE */
+#endif /* BURROW_NETPOLL_READINESS */

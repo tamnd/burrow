@@ -323,8 +323,14 @@ static bool park_commit(Goroutine *g, void *word) {
  * a notification that is already there ends the wait without parking at all,
  * which is the common case on a busy connection. Anything else at all in the
  * word is a second goroutine waiting in the same direction, which is a bug in
- * the program above and is worth stopping for rather than working around. */
-static bool netpoll_block(burrow__PollDesc *pd, uint32_t mode) {
+ * the program above and is worth stopping for rather than working around.
+ *
+ * `waitio` says park whatever the error bits say, which is a wait that wants the
+ * notification itself rather than an answer about the connection. There is one
+ * caller and it is burrow__poll_wait_canceled: a closed or timed out descriptor
+ * is exactly the state that wait is called in, so the usual check would send it
+ * straight back without the notification it came for. */
+static bool netpoll_block(burrow__PollDesc *pd, uint32_t mode, bool waitio) {
     uintptr_t *gpp = (mode == BURROW_POLL_READ) ? &pd->rg : &pd->wg;
 
     for (;;) {
@@ -347,7 +353,7 @@ static bool netpoll_block(burrow__PollDesc *pd, uint32_t mode) {
      * closing, publishes it, and then looks at this word. So a close that
      * happened while this was getting as far as PD_WAIT is one whose look
      * found nothing, and this is the look that catches it. */
-    if (check_err(pd, mode) == BURROW_POLL_READY)
+    if (waitio || check_err(pd, mode) == BURROW_POLL_READY)
         sched_park(park_commit, gpp);
 
     uintptr_t old = burrow__atomic_swap_uptr(gpp, PD_NIL);
@@ -508,9 +514,9 @@ bool burrow__netpoll_inited(void) {
 
 /* Makes sure there is a poller, and answers whether this build has one at all.
  *
- * Lazy, so that a program which never opens a descriptor never makes an epoll
- * or a kqueue, which is most programs that link a library. Go does the same
- * thing from the same place, in poll_runtime_pollServerInit. */
+ * Lazy, so that a program which never opens a descriptor never makes an epoll,
+ * a kqueue or a completion port, which is most programs that link a library. Go
+ * does the same thing from the same place, in poll_runtime_pollServerInit. */
 static bool netpoll_start(void) {
 #if defined(BURROW_NETPOLL_NONE)
     return false;
@@ -585,6 +591,20 @@ int burrow__poll_open(burrow__PollFd fd, burrow__PollDesc **out) {
     return 0;
 }
 
+#if defined(BURROW_NETPOLL_COMPLETION)
+
+void burrow__poll_op_init(burrow__PollOp *op, burrow__PollDesc *pd, uint32_t mode) {
+    if (mode != BURROW_POLL_READ && mode != BURROW_POLL_WRITE)
+        runtime_throw(
+            BURROW_S("netpoll: an operation for neither reading nor writing"));
+
+    *op = (burrow__PollOp){0};
+    op->desc = pd->handle;
+    op->mode = mode;
+}
+
+#endif /* BURROW_NETPOLL_COMPLETION */
+
 void burrow__poll_close(burrow__PollDesc *pd) {
     if (!pd->closing)
         runtime_throw(
@@ -612,13 +632,30 @@ burrow__PollStatus burrow__poll_wait(burrow__PollDesc *pd, uint32_t mode) {
      * reason. That happens when a deadline fires and is moved again before the
      * goroutine gets a turn, so the state it woke up to complain about is no
      * longer there. There is nothing to report, so it waits again. */
-    while (!netpoll_block(pd, mode)) {
+    while (!netpoll_block(pd, mode, false)) {
         st = check_err(pd, mode);
         if (st != BURROW_POLL_READY)
             return st;
     }
     return BURROW_POLL_READY;
 }
+
+#if defined(BURROW_NETPOLL_COMPLETION)
+
+void burrow__poll_wait_canceled(burrow__PollDesc *pd, uint32_t mode) {
+    if (mode != BURROW_POLL_READ && mode != BURROW_POLL_WRITE)
+        runtime_throw(
+            BURROW_S("netpoll: a cancelled wait for neither reading nor writing"));
+
+    /* No answer and no way out other than the notification, which is the point.
+     * The descriptor is closed or its deadline has gone by, so a wait that
+     * looked at the error bits would come straight back and the caller would go
+     * on to free an operation the kernel is still holding. */
+    while (!netpoll_block(pd, mode, true)) {
+    }
+}
+
+#endif /* BURROW_NETPOLL_COMPLETION */
 
 void burrow__poll_unblock(burrow__PollDesc *pd) {
     burrow__lock(&pd->mu);
@@ -745,7 +782,7 @@ void burrow__netpoll_drop_waiters(void) {
 
 /* ----------------------------------------------------------- with no backend
  *
- * Windows and the two web targets, until each of them has one. Nothing above
+ * The two web targets, until each of them has one. Nothing above
  * ever reaches these, because netpoll_start answers false there and every entry
  * point either asks it first or asks whether the poller has started. They are
  * written out anyway so that the library links, and they throw rather than

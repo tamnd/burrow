@@ -877,11 +877,17 @@ better than Go.
 `burrow/netpoll.h` is the interface and it is internal: no program calls it,
 `net` will. Underneath it `src/runtime/netpoll.c` is everything that does not
 depend on which kernel this is, and one file per backend is everything that
-does. `netpoll_epoll.c` covers Linux and `netpoll_kqueue.c` covers macOS and
-the BSDs. Windows selects neither, the header answers that the poller is not
-initialised, and every call the scheduler would make into it is skipped, so
-the runtime on Windows behaves exactly as it did before this landed until the
-IOCP backend arrives.
+does. `netpoll_epoll.c` covers Linux, `netpoll_kqueue.c` covers macOS and the
+BSDs, and `netpoll_iocp.c` covers Windows. The two web targets select none of
+them, the header answers that the poller is not initialised, and every call the
+scheduler would make into it is skipped, so the runtime there behaves exactly
+as it did before any of this landed.
+
+The header also says which family the build got, because a caller has to know:
+`BURROW_NETPOLL_READINESS` on epoll and kqueue, `BURROW_NETPOLL_COMPLETION` on
+IOCP. That is not a build detail leaking out. The deal a caller has with the
+poller is genuinely different on the two, as the rest of this section describes,
+and a caller that guessed would be wrong on one of the three platforms.
 
 Four calls are the whole surface. `burrow__poll_open` takes a descriptor and
 gives back a `PollDesc`, `burrow__poll_wait` parks the calling goroutine until
@@ -891,13 +897,13 @@ not a race, and `burrow__poll_close` gives the descriptor back. A wait answers
 ready, closed, timed out or unpollable. A fifth call,
 `burrow__poll_set_deadline`, is what makes the timed out answer reachable.
 
-Registration is edge triggered and happens once, for both directions together,
-for as long as the descriptor is open. That is Go's choice and it is why a busy
-connection costs no system calls beyond the reads and writes themselves. What
-it asks for in exchange is the discipline every edge triggered poller asks for,
-which is that a caller reads or writes until the answer is that it would block,
-because a caller that stops early has consumed an edge that will not come
-again.
+On a readiness backend, registration is edge triggered and happens once, for
+both directions together, for as long as the descriptor is open. That is Go's
+choice and it is why a busy connection costs no system calls beyond the reads
+and writes themselves. What it asks for in exchange is the discipline every
+edge triggered poller asks for, which is that a caller reads or writes until
+the answer is that it would block, because a caller that stops early has
+consumed an edge that will not come again.
 
 A descriptor is two words, one per direction, each of which is empty, ready,
 claimed, or a pointer to the goroutine parked on it. That is Go's `pollDesc`
@@ -972,7 +978,91 @@ already holds the descriptor's lock and the one that happens first on the way
 to a close. A timer left armed on a descriptor going back on the free list is a
 timer that fires on somebody else's connection.
 
-After this, IOCP.
+### Windows, where the deal is different
+
+Everything above is written for a poller that answers whether a descriptor is
+worth trying. A completion port does not answer that question and cannot be
+made to. It watches operations: somebody submits a read with an `OVERLAPPED`
+attached, the kernel does the read into the caller's buffer, and the port hands
+the `OVERLAPPED` back when the read is finished. There is nothing to arm and
+nothing to re-arm, no edge and no level for a connection, and the only thing
+`burrow__poll_open` does on Windows is attach the descriptor to the port so
+that its completions have somewhere to arrive.
+
+So the caller does more work on Windows, and the header says so rather than
+pretending otherwise. A read is: fill in a `burrow__PollOp` with
+`burrow__poll_op_init`, hand it to the kernel as the `OVERLAPPED` argument of
+`WSARecv` or `ReadFile`, then call `burrow__poll_wait`. The operation's first
+member is laid out to be an `OVERLAPPED`, so the pointer the kernel gives back
+is the pointer to the operation, which is how the poller finds its way from a
+completion to the goroutine to wake. Go does the same thing with
+`internal/poll.operation` and the runtime's `net_op`. The one improvement here
+is what travels in the operation: burrow carries the generation checked handle
+rather than a pointer to the descriptor, so a completion for a connection that
+was closed while the operation was in flight names a slot that has since been
+reused, and it is dropped rather than waking whoever holds that slot now.
+
+The layout is declared by hand, because including `windows.h` in a header that
+the whole runtime reads is not a trade worth making. That leaves the question of
+whether the hand written layout is right, which cannot be checked at runtime,
+and `netpoll_iocp.c` answers it with six `_Static_assert`s on size, alignment
+and the offset of every field the kernel writes. A field of the wrong width or
+two fields in the wrong order fails the build rather than showing up later as a
+kernel writing a byte count into somebody else's memory.
+
+Two numbers come back with the completion. `qty` is how many bytes moved, and
+`status` is the kernel's own status word, an `NTSTATUS` and not a winsock error.
+It is not translated, and the reason is worth writing down. The call that would
+translate it properly, `WSAGetOverlappedResult`, needs the socket, and the
+poller does not have the socket: the socket belongs to whoever submitted the
+operation, and keeping a copy would mean the poller holding a handle it might
+look at after the owner closed it. `RtlNtStatusToDosError` needs no socket but
+gives back Win32 numbers that differ from winsock's for the same failure, so a
+caller would have to know which it got anyway. Reading the word off the
+completion costs nothing, loses nothing, and the translation happens where the
+socket is.
+
+There is one rule, and it is the rule that makes cancellation a real part of the
+interface rather than a detail. An operation has to stay alive until its
+completion has arrived. Not until the read finishes, and not until the goroutine
+stops waiting for it: until the kernel has handed the thing back. Every way out
+of `burrow__poll_wait` other than ready leaves the operation with the kernel, so
+a caller that returns at that point has handed the kernel a stack frame that no
+longer exists. That is three steps, not one: `CancelIoEx`, which is allowed to
+fail with `ERROR_NOT_FOUND` and means the operation finished first, then
+`burrow__poll_wait_canceled`, which waits for the completion and nothing else,
+and only then letting the operation go. Go does the same three steps in
+`internal/poll.execIO` and for the same reason.
+
+`burrow__poll_wait_canceled` is the piece of the generic layer that only a
+completion backend needs, and it is a wait with no way out other than the
+completion, which is the point. The descriptor is closed or its deadline has
+gone by, so an ordinary wait would look at the error bits, come straight back,
+and the caller would free the operation anyway. Underneath, this is Go's
+`waitio` argument to `netpollblock` and there is exactly one caller of it.
+The test for this found the bug the hard way first: a timed out read that
+cancelled and returned produced a `STATUS_CANCELLED` completion pointing at a
+dead stack frame, which arrived in the poller as an operation for neither
+reading nor writing. The backend still throws on that shape, and the message
+says what it means, because it is the only warning a caller who gets this wrong
+is going to get.
+
+The wakeup is shaped by the same constraint as the other two backends and
+answers it differently, because it has to. A posted completion is taken off the
+port by whoever receives it and there is no leaving it where it is, which is what
+the `eventfd` and the self pipe rely on. So a poll that was only looking, rather
+than going to sleep, posts the wakeup again before it returns, and the thread it
+was meant for still finds it. That is Go's approach in `netpoll_windows.go` and
+it keeps the invariant that matters here, which is that a break is never lost
+when there is no spare thread to notice.
+
+The telemetry is free on this backend, which is a small piece of luck.
+`GetQueuedCompletionStatusEx` fills in an `OVERLAPPED_ENTRY` per event carrying
+both the byte count and the status, so the backend makes no system call per
+event at all, where the readiness backends have to ask the kernel about a
+descriptor to find out anything beyond that it moved.
+
+After this, `io_uring`.
 
 ## 9. Preemption
 

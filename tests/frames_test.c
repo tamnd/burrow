@@ -14,6 +14,14 @@
  * rather than failing, which is what have_table is for. The tests about frame
  * counting and about buffers do not need one and always run.
  *
+ * A machine with no stack walk is a supported machine too, for the same reason
+ * and with the same consequences. burrow/trace.h says which architectures have
+ * one and says that no frames is a normal answer everywhere else, so s390x and
+ * riscv64 get a traceback that is one header line and nothing under it. That is
+ * what have_walk is for, and it asks rather than testing for an architecture,
+ * because a build with frame pointers omitted answers the same way on a machine
+ * that would otherwise have had one.
+ *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
@@ -36,6 +44,18 @@
 
 static bool have_table(void) {
     return burrow__symtab_len() > 0;
+}
+
+/* Whether this build can walk a stack at all.
+ *
+ * Asked with a skip of one rather than zero, because frame zero is the one
+ * runtime_callers writes itself without walking anything, so a skip of zero
+ * answers one on every machine and would tell us nothing. */
+static bool have_walk(void) {
+    Uintptr buf[4];
+    Slice s = {buf, 4, 4, NULL};
+
+    return runtime_callers(1, s) > 0;
 }
 
 /* ------------------------------------------------------------- FuncForPC */
@@ -273,8 +293,13 @@ TEST(a_stack_starts_with_a_header_and_has_frames_under_it) {
      * ask for a scheduler. */
     CHECK(memcmp(stack_buf, "thread [running]:\n", 18) == 0);
 
-    /* The frames are indented under it, the same as an uncaught panic. */
-    CHECK(memchr(stack_buf, '\t', (size_t)n) != NULL);
+    /* The frames are indented under it, the same as an uncaught panic. On a
+     * machine with no walk there are no frames to indent and the header is the
+     * whole answer, which is the documented outcome rather than a failure. */
+    if (have_walk())
+        CHECK(memchr(stack_buf, '\t', (size_t)n) != NULL);
+    else
+        CHECK(n == 18);
 }
 
 TEST(a_stack_names_the_function_that_asked_for_it) {

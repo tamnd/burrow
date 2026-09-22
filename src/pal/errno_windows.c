@@ -23,9 +23,15 @@
 
 #include "internal.h"
 
-#include <windows.h>
-
+/* winsock2.h first, and it is the one include order in this project that is not
+ * alphabetical. windows.h pulls in winsock.h, which is the 1.1 header, and the
+ * two define the same names differently, so whichever arrives second loses.
+ * Winsock's own documentation says to include winsock2.h first and the mingw
+ * header enforces it with a #warning, which under -Werror is an error and is
+ * what this file was failing to build with. */
 #include <winsock2.h>
+
+#include <windows.h>
 
 PalErrno burrow__pal_errno_win(unsigned long native) {
     switch (native) {

@@ -106,6 +106,33 @@ extern const Type *const __stop_burrowtype[] __attribute__((weak));
 
 #endif
 
+/* Takes an address the compiler thinks it understands and hands back the same
+ * address with nothing known about it.
+ *
+ * The whole point of the section is that the linker puts things between the two
+ * ends, which happens after the compiler has stopped looking. On PE the start
+ * bound is one past an eight byte object of ours, so a compiler reading the
+ * loop below sees a walk off the end of that object and says so. gcc 12 and
+ * later say it as -Warray-bounds, which under -Werror is a build that fails at
+ * a walk that is correct.
+ *
+ * An empty asm with the pointer as an in and out operand is the usual way to
+ * say this. It emits nothing, and the compiler has to assume the value came
+ * back different, so everything it knew about where the address points stops
+ * being true. The other spellings do not work: a volatile local still has its
+ * provenance, and turning the warning off for the file turns it off for code
+ * that would deserve it. */
+#if defined(__GNUC__)
+#define BURROW__SEC_BOUND(p)                                                           \
+    (__extension__({                                                                   \
+        const Type *const *burrow__b = (p);                                            \
+        __asm__("" : "+r"(burrow__b));                                                 \
+        burrow__b;                                                                     \
+    }))
+#else
+#define BURROW__SEC_BOUND(p) (p)
+#endif
+
 /* --------------------------------------------------------------- the table */
 
 typedef struct Slot {
@@ -240,8 +267,8 @@ static void registry_build(void *env) {
     (void)env;
 
 #if defined(BURROW__HAVE_TYPE_SECTION)
-    const Type *const *first = burrow__type_sec_start;
-    const Type *const *last = burrow__type_sec_stop;
+    const Type *const *first = BURROW__SEC_BOUND(burrow__type_sec_start);
+    const Type *const *last = BURROW__SEC_BOUND(burrow__type_sec_stop);
     if (first == NULL || last == NULL)
         return;
 

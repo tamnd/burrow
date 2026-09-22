@@ -147,6 +147,24 @@ void pal_thread_yield(void) {
     (void)SwitchToThread();
 }
 
+/* A warning about the mingw header rather than about anything here.
+ *
+ * NtCurrentTeb is a read through the gs segment at a fixed offset, which the
+ * header spells as a dereference of a null pointer with a segment override on
+ * it. That is the only way to say it in C and it is correct, but gcc's array
+ * bounds pass does not model segment overrides, so it sees a load from address
+ * zero, says so, and -Werror turns saying so into a failed build. It has been
+ * doing this since gcc 12. Nothing burrow writes differently makes it stop,
+ * including not comparing the result against null, which was the first guess.
+ *
+ * The alternative is GetCurrentThreadStackLimits and the comment below says why
+ * that is not an alternative here. clang compiles the same header without
+ * complaining, so it is left to say what it thinks. */
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#endif
+
 bool pal_thread_stack_bounds(void **lo, void **hi) {
     /* Both ends are in the thread information block, which every thread has and
      * which NtCurrentTeb hands back with no call at all: it is a register read.
@@ -171,5 +189,9 @@ bool pal_thread_stack_bounds(void **lo, void **hi) {
     BURROW_OUT(hi, tib->StackBase);
     return true;
 }
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 #endif /* BURROW_OS_WINDOWS */

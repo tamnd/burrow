@@ -886,12 +886,17 @@ better than Go.
 
 `burrow/netpoll.h` is the interface and it is internal: no program calls it,
 `net` will. Underneath it `src/runtime/netpoll.c` is everything that does not
-depend on which kernel this is, and one file per backend is everything that
-does. `netpoll_epoll.c` covers Linux, `netpoll_kqueue.c` covers macOS and the
-BSDs, and `netpoll_iocp.c` covers Windows. The two web targets select none of
-them, the header answers that the poller is not initialised, and every call the
-scheduler would make into it is skipped, so the runtime there behaves exactly
-as it did before any of this landed.
+depend on which kernel this is, and below that there are two layers rather than
+one. `netpoll_readiness.c` and `netpoll_completion.c` turn an event into a
+readied goroutine and make no system call at all, and the calls themselves live
+in `src/pal/poll_linux.c` for epoll, `src/pal/poll_bsd.c` for kqueue and
+`src/pal/poll_windows.c` for IOCP. There are two shim files rather than one
+because the readiness and completion split is the one difference the platform
+layer deliberately does not hide, and the code above each of them is a
+genuinely different shape. The two web targets select no backend at all, the
+header answers that the poller is not initialised, and every call the scheduler
+would make into it is skipped, so the runtime there behaves exactly as it did
+before any of this landed.
 
 The header also says which family the build got, because a caller has to know:
 `BURROW_NETPOLL_READINESS` on epoll and kqueue, `BURROW_NETPOLL_COMPLETION` on
@@ -1015,9 +1020,14 @@ reused, and it is dropped rather than waking whoever holds that slot now.
 The layout is declared by hand, because including `windows.h` in a header that
 the whole runtime reads is not a trade worth making. That leaves the question of
 whether the hand written layout is right, which cannot be checked at runtime,
-and `netpoll_iocp.c` answers it with six `_Static_assert`s on size, alignment
-and the offset of every field the kernel writes. A field of the wrong width or
-two fields in the wrong order fails the build rather than showing up later as a
+and the answer is a chain of two `_Static_assert` blocks rather than one, for
+the same reason. `src/pal/poll_windows.c` is allowed to include `windows.h`, so
+it checks that the platform layer's `PalOverlapped` is an `OVERLAPPED`.
+`src/runtime/netpoll_completion.c` must not include it, so it checks that
+`burrow__PollOverlapped` is a `PalOverlapped`. Neither file can check both, and
+together they say the same thing the single block used to: size, alignment and
+the offset of every field the kernel writes. A field of the wrong width or two
+fields in the wrong order fails the build rather than showing up later as a
 kernel writing a byte count into somebody else's memory.
 
 Two numbers come back with the completion. `qty` is how many bytes moved, and

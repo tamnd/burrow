@@ -3,9 +3,11 @@
  * burrow/netpoll.h says what this is for. This file is the two words per
  * descriptor that a goroutine parks on, the table those descriptors live in,
  * and the rules that decide when a wait ends. Everything that knows the name of
- * a system call is in netpoll_epoll.c or netpoll_kqueue.c, and the whole of
- * what those two have to do is defined by the six functions at the bottom of
- * the header.
+ * a system call is below the platform layer, in src/pal/poll_linux.c,
+ * src/pal/poll_bsd.c and src/pal/poll_windows.c, and the whole of what a
+ * backend has to do is defined by the five functions at the bottom of the
+ * header. netpoll_readiness.c and netpoll_completion.c are the two files that
+ * meet them.
  *
  * The algorithms are Go's, from runtime/netpoll.go, including the exact order
  * of the compare and swaps in netpollblock and netpollunblock, which is the

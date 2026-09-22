@@ -389,6 +389,196 @@ TEST(the_error_is_optional_like_every_other_out_parameter) {
     CHECK(!pal_vm_commit(NULL, page, NULL));
 }
 
+/* ---------------------------------------------------------------- the poller
+ *
+ * Only on a readiness backend. The completion port wants an operation submitted
+ * against a real handle before it has anything to report, which is a net test
+ * and not a PAL one, so Windows gets the same treatment netpoll_iocp_test.c
+ * gives the other direction.
+ *
+ * There is one poller per process and these share it, so the order below
+ * matters: the first test makes it and the rest use it. */
+#if !defined(_WIN32)
+
+#include <unistd.h>
+
+static int64_t poller = PAL_INVALID_HANDLE;
+
+/* A pipe, or the test gives up rather than reporting a failure that is not
+ * about the code under test. */
+static void open_pipe(int *rd, int *wr) {
+    int fds[2];
+    CHECK(pipe(fds) == 0);
+    *rd = fds[0];
+    *wr = fds[1];
+}
+
+TEST(there_is_one_poller_and_a_second_ask_is_refused) {
+    PalErrno err = PAL_OK;
+
+    poller = pal_poll_create(&err);
+    CHECK(poller != PAL_INVALID_HANDLE);
+    CHECK_INT_EQ(err, PAL_OK);
+
+    /* Not a limitation to work around. Nothing in the PAL allocates, so the
+     * poller is static storage, and a second one would have nowhere to live. */
+    err = PAL_OK;
+    CHECK(pal_poll_create(&err) == PAL_INVALID_HANDLE);
+    CHECK_INT_EQ(err, PAL_EBUSY);
+}
+
+TEST(a_descriptor_with_something_on_it_comes_back_ready) {
+    int rd, wr;
+    open_pipe(&rd, &wr);
+
+    void *tag = (void *)(uintptr_t)0x1234;
+    PalErrno err = PAL_OK;
+    CHECK(pal_poll_add(poller, rd, tag, &err));
+    CHECK_INT_EQ(err, PAL_OK);
+
+    CHECK(write(wr, "x", 1) == 1);
+
+    PalPollEvent events[8];
+    int64_t n = pal_poll_wait(poller, events, 8, 1000000000, &err);
+    CHECK_INT_EQ(err, PAL_OK);
+    CHECK_INT_EQ(n, 1);
+    CHECK(events[0].user == tag);
+    CHECK((events[0].ready & PAL_POLL_READY_READ) != 0);
+
+    /* No operation produced these, so there is nothing for them to hold. */
+    CHECK_INT_EQ(events[0].bytes, 0);
+    CHECK_INT_EQ(events[0].status, 0);
+
+    CHECK(pal_poll_del(poller, rd, &err));
+    CHECK_INT_EQ(err, PAL_OK);
+    (void)close(rd);
+    (void)close(wr);
+}
+
+TEST(a_look_with_nothing_to_see_comes_back_empty) {
+    PalPollEvent events[8];
+    PalErrno err = PAL_ETIMEDOUT;
+
+    /* Zero is the non blocking look the scheduler does when it is hunting for
+     * work, and finding nothing is not a failure. */
+    CHECK_INT_EQ(pal_poll_wait(poller, events, 8, 0, &err), 0);
+    CHECK_INT_EQ(err, PAL_OK);
+}
+
+TEST(a_break_ends_a_wait_and_is_never_reported_as_an_event) {
+    PalPollEvent events[8];
+    PalErrno err = PAL_OK;
+
+    CHECK(pal_poll_break(poller, &err));
+    CHECK_INT_EQ(err, PAL_OK);
+
+    /* A wait that would otherwise sit here for a second. The wakeup ends it,
+     * and it comes back with no events, because the wakeup belongs to the
+     * backend and is not something a caller should ever see. */
+    int64_t start = pal_clock_monotonic();
+    int64_t n = pal_poll_wait(poller, events, 8, 1000000000, &err);
+    int64_t took = pal_clock_monotonic() - start;
+
+    CHECK_INT_EQ(err, PAL_OK);
+    CHECK_INT_EQ(n, 0);
+    CHECK(took < 500000000);
+
+    /* And the wakeup was consumed rather than left behind, which is what this
+     * second wait proves: it has nothing to wake it, so it has to sit out its
+     * own timeout. A backend that failed to drain would come straight back. */
+    start = pal_clock_monotonic();
+    CHECK_INT_EQ(pal_poll_wait(poller, events, 8, 50000000, &err), 0);
+    took = pal_clock_monotonic() - start;
+    CHECK_INT_EQ(err, PAL_OK);
+    CHECK(took >= 40000000);
+
+    /* The flag that collapses many wakeups into one has to have been cleared
+     * by that drain, or every break from here on would be swallowed. */
+    CHECK(pal_poll_break(poller, &err));
+    start = pal_clock_monotonic();
+    CHECK_INT_EQ(pal_poll_wait(poller, events, 8, 1000000000, &err), 0);
+    CHECK(pal_clock_monotonic() - start < 500000000);
+}
+
+TEST(many_breaks_at_once_cost_one_wakeup) {
+    PalPollEvent events[8];
+    PalErrno err = PAL_OK;
+
+    for (int i = 0; i < 1000; i++)
+        CHECK(pal_poll_break(poller, &err));
+
+    CHECK_INT_EQ(err, PAL_OK);
+
+    /* One wait takes all thousand of them, because a wait that is about to
+     * return has already answered every one. The second sits out its timeout,
+     * which is what says the collapsing works. */
+    CHECK_INT_EQ(pal_poll_wait(poller, events, 8, 1000000000, &err), 0);
+
+    int64_t start = pal_clock_monotonic();
+    CHECK_INT_EQ(pal_poll_wait(poller, events, 8, 50000000, &err), 0);
+    CHECK(pal_clock_monotonic() - start >= 40000000);
+}
+
+TEST(a_handle_that_is_not_the_poller_is_refused) {
+    PalPollEvent events[8];
+    PalErrno err = PAL_OK;
+
+    /* A wrong handle is a caller bug and not a system failure, so it is
+     * PAL_EINVAL and not a guess at what was meant. */
+    CHECK(!pal_poll_add(PAL_INVALID_HANDLE, 0, (void *)1, &err));
+    CHECK_INT_EQ(err, PAL_EINVAL);
+
+    CHECK(!pal_poll_del(poller + 4096, 0, &err));
+    CHECK_INT_EQ(err, PAL_EINVAL);
+
+    CHECK(!pal_poll_break(poller + 4096, &err));
+    CHECK_INT_EQ(err, PAL_EINVAL);
+
+    CHECK_INT_EQ(pal_poll_wait(poller + 4096, events, 8, 0, &err), -1);
+    CHECK_INT_EQ(err, PAL_EINVAL);
+}
+
+TEST(the_wakeups_own_tag_cannot_be_used_as_a_user_pointer) {
+    int rd, wr;
+    open_pipe(&rd, &wr);
+
+    /* The all ones pointer is what a readiness backend registers its own
+     * wakeup with, so a caller cannot have it. pal.h says so and this is the
+     * refusal, because the alternative is a caller whose events quietly
+     * disappear into the wakeup path. */
+    PalErrno err = PAL_OK;
+    CHECK(!pal_poll_add(poller, rd, (void *)(uintptr_t)-1, &err));
+    CHECK_INT_EQ(err, PAL_EINVAL);
+
+    (void)close(rd);
+    (void)close(wr);
+}
+
+TEST(a_wait_with_nowhere_to_put_the_answer_is_refused) {
+    PalPollEvent events[8];
+    PalErrno err = PAL_OK;
+
+    CHECK_INT_EQ(pal_poll_wait(poller, NULL, 8, 0, &err), -1);
+    CHECK_INT_EQ(err, PAL_EINVAL);
+
+    CHECK_INT_EQ(pal_poll_wait(poller, events, 0, 0, &err), -1);
+    CHECK_INT_EQ(err, PAL_EINVAL);
+
+    CHECK_INT_EQ(pal_poll_wait(poller, events, -1, 0, &err), -1);
+    CHECK_INT_EQ(err, PAL_EINVAL);
+}
+
+TEST(the_poller_takes_a_null_error_like_everything_else) {
+    PalPollEvent events[8];
+
+    CHECK_INT_EQ(pal_poll_wait(poller, events, 8, 0, NULL), 0);
+    CHECK(pal_poll_break(poller, NULL));
+    CHECK_INT_EQ(pal_poll_wait(poller, events, 8, 1000000000, NULL), 0);
+    CHECK(!pal_poll_add(PAL_INVALID_HANDLE, 0, (void *)1, NULL));
+}
+
+#endif /* not windows */
+
 int main(void) {
     RUN(every_code_has_a_message);
     RUN(success_and_nonsense_are_not_the_same_answer);
@@ -415,6 +605,18 @@ int main(void) {
     RUN(asking_for_nothing_is_not_a_failure);
 
     RUN(the_error_is_optional_like_every_other_out_parameter);
+
+#if !defined(_WIN32)
+    RUN(there_is_one_poller_and_a_second_ask_is_refused);
+    RUN(a_descriptor_with_something_on_it_comes_back_ready);
+    RUN(a_look_with_nothing_to_see_comes_back_empty);
+    RUN(a_break_ends_a_wait_and_is_never_reported_as_an_event);
+    RUN(many_breaks_at_once_cost_one_wakeup);
+    RUN(a_handle_that_is_not_the_poller_is_refused);
+    RUN(the_wakeups_own_tag_cannot_be_used_as_a_user_pointer);
+    RUN(a_wait_with_nowhere_to_put_the_answer_is_refused);
+    RUN(the_poller_takes_a_null_error_like_everything_else);
+#endif
 
     return harness_report("pal");
 }

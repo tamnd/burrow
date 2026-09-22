@@ -4,6 +4,19 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+### The netpoller stopped making system calls
+
+- The three netpoll backends moved behind the platform layer. `src/runtime/netpoll_epoll.c`, `netpoll_kqueue.c` and `netpoll_iocp.c` are gone. What used to be in them is now `src/pal/poll_linux.c`, `src/pal/poll_bsd.c` and `src/pal/poll_windows.c` for the parts that name a system call, and `src/runtime/netpoll_readiness.c` and `src/runtime/netpoll_completion.c` for the parts that ready a goroutine. Neither of the two runtime files includes a system header, which is the whole point of the exercise.
+- There are two shim files rather than one with an `#if` in it, because readiness and completion is the one difference `pal.h` says it does not hide. A readiness backend says a descriptor is worth trying and a completion backend says an operation has finished, and the code that sits on each of them is a different shape for a real reason: a completion writes what the operation produced back into the caller's own struct and takes the direction from there.
+- `pal_poll_break` is new, and it is new because the table in `docs/design/10-packages-os.md` never had it. All three backends have had a wakeup since the netpoller was written, and enumerating the boundary from a design rather than from working code is how it got left out. The table is 76 entry points now, not 75.
+- The wakeup is invisible above the boundary. Each backend keeps its own dedup flag so a thousand goroutines readied at once cost one wakeup, and each one handles its own consumption rule: a level triggered descriptor can be left readable, a completion taken off a port cannot be left, so a wait that was only looking puts it back. `pal_poll_wait` never reports the wakeup as an event.
+- One poller per process. A second `pal_poll_create` returns `PAL_EBUSY`. Nothing in the PAL allocates, so a poller lives in static storage, and a runtime with two netpollers would have two answers to the question of which thread is asleep in the kernel.
+- `PalOverlapped` is declared in `pal.h` so that a caller can lay out an operation without including `windows.h`. Checking that the hand written layout is right takes two `_Static_assert` blocks now instead of one: `src/pal/poll_windows.c` ties `PalOverlapped` to `OVERLAPPED`, `src/runtime/netpoll_completion.c` ties `burrow__PollOverlapped` to `PalOverlapped`, and neither file can do both because one of them must not include `windows.h`.
+- `tools/pal-exceptions.txt` is down from ten entries to seven. What is left is `stack.c`, `thread.c`, `note.c` and their two headers, which need the threads group, plus `mcontext.c`, which is assembly and stays, and `trace.c`, which waits on symbolisation.
+- `tests/pal_test.c` grew a poll section: nine tests covering the one poller rule, a descriptor with something on it, a look with nothing to see, a break ending a wait without showing up as an event, many breaks costing one wakeup, and the argument checks.
+
 ## v0.0.28 (2026-09-22)
 
 There is one place in burrow that talks to an operating system now, and reflect says why a lookup failed instead of handing back a null pointer.

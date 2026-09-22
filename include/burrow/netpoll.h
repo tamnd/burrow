@@ -303,8 +303,10 @@ void burrow__poll_unblock(burrow__PollDesc *pd);
  *
  * The field names are lower case because these are burrow's names for
  * somebody else's structure, and nothing here reads or writes them: the kernel
- * fills them in and src/runtime/netpoll_iocp.c checks at compile time that this
- * is the same size and alignment as the real thing. */
+ * fills them in. src/runtime/netpoll_completion.c checks at compile time that
+ * this matches PalOverlapped, and src/pal/poll_windows.c checks that
+ * PalOverlapped matches the real thing, so the two asserts together are what
+ * says this is right. */
 typedef struct burrow__PollOverlapped {
     uintptr_t internal;
     uintptr_t internal_high;

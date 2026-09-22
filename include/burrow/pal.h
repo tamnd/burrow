@@ -61,11 +61,10 @@ extern "C" {
  * Not every entry point has a backend yet. The ones that don't are declared
  * anyway, because the shape of the boundary is a decision worth writing down
  * once rather than discovering package by package, and because a call to a
- * missing one is a link error that names it. Today the time, memory, random and
- * machine query groups are implemented and in use, the poll group is
- * implemented in src/runtime/netpoll_*.c and has not moved behind these
- * declarations yet, and files, process, threads and net land with the packages
- * that need them. Each group below says where it stands. */
+ * missing one is a link error that names it. Today the time, memory, random,
+ * machine query and poll groups are implemented and in use, and files, process,
+ * threads and net land with the packages that need them. Each group below says
+ * where it stands. */
 
 /* ------------------------------------------------------------------ failure
  *
@@ -755,39 +754,111 @@ int64_t pal_if_enumerate(PalInterface *out, int64_t cap, PalErrno *err);
  * completion port on Windows. The first two answer when a descriptor is ready
  * and the third answers when an operation has finished, which is a real
  * difference and not one this layer hides. What it does hide is the shape of
- * the structs and the spelling of the calls.
+ * the structs, the spelling of the calls, and the wakeup, which is a pipe on
+ * one platform, an eventfd on another and a posted completion on the third and
+ * is not something a caller should have to know about.
  *
- * The runtime implements this directly today in src/runtime/netpoll_*.c. Those
- * files move behind these calls next, which is the one place in the PAL where a
- * working implementation exists and has not been moved yet. */
+ * Implemented, in src/pal/poll_linux.c, poll_bsd.c and poll_windows.c. */
 
 enum { PAL_POLL_READ = 1u << 0, PAL_POLL_WRITE = 1u << 1 };
 
 enum {
     PAL_POLL_READY_READ = 1u << 0,
     PAL_POLL_READY_WRITE = 1u << 1,
-    /* The peer went away or the descriptor broke. A caller wakes both
-     * directions for this, because a read that will now fail and a write that
-     * will now fail are both better than a goroutine that waits forever. */
+    /* The only thing reported was a failure, with no readiness in either
+     * direction behind it. The read and write bits are set as well, because a
+     * read that will now fail and a write that will now fail are both better
+     * than a goroutine that waits forever, and this bit is how a caller tells
+     * that apart from a descriptor that genuinely has something on it. */
     PAL_POLL_READY_ERROR = 1u << 2
 };
 
-/* What came back. user is whatever was handed to pal_poll_add, which is how the
- * caller finds its own state without a table lookup. bytes is the completion
- * count on Windows and 0 elsewhere. */
+/* An OVERLAPPED, laid out by hand so that this header does not have to drag
+ * windows.h in behind it, and so that nothing above the PAL has to either.
+ *
+ * A completion backend needs the caller to submit its operations with one of
+ * these attached, because that is how the kernel knows where to put the answer
+ * and it is the only thing that comes back. So the shape of it is part of this
+ * boundary whether or not the other two platforms have anything like it, and
+ * pretending otherwise would only mean the caller declaring it instead and
+ * nobody checking.
+ *
+ * The field names are lower case because these are burrow's names for somebody
+ * else's structure, and nothing outside the Windows backend reads or writes
+ * them. src/pal/poll_windows.c checks at compile time that this is the same
+ * size, alignment and field order as the real one. */
+typedef struct PalOverlapped {
+    uintptr_t internal;
+    uintptr_t internal_high;
+    uint32_t offset;
+    uint32_t offset_high;
+    void *event;
+} PalOverlapped;
+
+/* What came back.
+ *
+ * user is whatever was handed to pal_poll_add on a readiness backend, which is
+ * how the caller finds its own state without a table lookup. On a completion
+ * backend it is the OVERLAPPED the caller submitted the operation with, because
+ * that is what the kernel hands back and nothing else about the operation
+ * reaches the port.
+ *
+ * bytes and status are the completion's own and are 0 on a readiness backend,
+ * where there is no operation to have produced either. status is the kernel's
+ * status word untranslated, for the same reason burrow__PollOp keeps it
+ * untranslated: the caller turns it into an error with the operation in hand
+ * and this layer does not have the operation. */
 typedef struct PalPollEvent {
     void *user;
     uint32_t ready;
     uint32_t bytes;
+    int32_t status;
 } PalPollEvent;
 
+/* Makes the poller and whatever it wakes up with, which is one object as far as
+ * anything above here is concerned. The wakeup has to be registered in the set
+ * on two of the three platforms, so there is no point in it being a second
+ * call that a caller could forget.
+ *
+ * There is one poller per process and a second call gives PAL_EBUSY. That is
+ * not a simplification, it is the rule: nothing in the PAL allocates, so a
+ * poller has to be static storage, and a runtime with two netpollers would have
+ * two answers to the question of which thread is asleep in the kernel. Go has
+ * one and so does this. The handle that comes back is the poller's own
+ * descriptor where a platform has one, so that a debugger and lsof agree with
+ * each other, and is only ever meant to be passed back in here. */
 int64_t pal_poll_create(PalErrno *err);
 
 /* Register for reading and writing together, edge triggered, once for the life
  * of the descriptor. Both halves at once because that is one system call
- * instead of two and because a descriptor in burrow is always both. */
+ * instead of two and because a descriptor in burrow is always both.
+ *
+ * user is handed back in every event for this descriptor, which is how the
+ * caller finds its own state without a table lookup. It may be NULL and it may
+ * be anything else except the all ones pointer, which a readiness backend keeps
+ * for its own wakeup. That reservation is the price of there being no table: a
+ * value that means the wakeup has to come from the same space the caller's
+ * values come from. A caller that is passing an index rather than a pointer, as
+ * the runtime's netpoller is, gets that for free by never filling every bit.
+ *
+ * On a completion backend there is nothing to arm and this attaches the handle
+ * to the port so that its completions have somewhere to arrive. user is not
+ * used there, since the operation carries its own. */
 bool pal_poll_add(int64_t poll, int64_t fd, void *user, PalErrno *err);
+
+/* Undo it. On kqueue and on a completion port this does nothing, because
+ * closing the descriptor is what takes it off and the caller is about to. */
 bool pal_poll_del(int64_t poll, int64_t fd, PalErrno *err);
+
+/* Ends a blocking pal_poll_wait early, from any thread, including one that is
+ * not in the poller. Collapses: a thousand of these while one wait is asleep
+ * cost one wakeup, because a wait that is about to return has already answered
+ * all of them.
+ *
+ * The wakeup never comes back as an event. A wait that was going to block
+ * consumes it and a wait that was only looking leaves it for the thread it was
+ * meant for, and neither is something a caller has to arrange. */
+bool pal_poll_break(int64_t poll, PalErrno *err);
 
 /* Wait for up to cap events. timeout_ns below zero waits forever and 0 returns
  * at once, which is the non blocking poll the scheduler does when it is looking

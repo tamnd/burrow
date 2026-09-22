@@ -95,15 +95,17 @@ global	src/runtime/netpoll.c	cache_ndescs	netpoller	How many descriptors exist, 
 global	src/runtime/netpoll.c	init_lock	netpoller	The lock the poller is started under, so that two goroutines opening their first descriptor at once make one epoll or kqueue between them.
 global	src/runtime/netpoll.c	init_done	netpoller	Whether the poller is started. A release store under init_lock and an acquire load everywhere else, which is what lets the scheduler ask the question without taking anything.
 global	src/runtime/netpoll.c	netpoll_nwaiters	netpoller	How many goroutines are parked on a descriptor. Atomic, and read by the scheduler to decide whether a poll could find anything.
-global	src/runtime/netpoll_epoll.c	epfd	netpoller	The epoll descriptor. One per process, made once under init_lock and read without anything afterwards.
-global	src/runtime/netpoll_epoll.c	breakfd	netpoller	The eventfd a wakeup is written to, made alongside epfd and read the same way.
-global	src/runtime/netpoll_epoll.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one write, and cleared by whoever drains the eventfd.
-global	src/runtime/netpoll_kqueue.c	kq	netpoller	The kqueue descriptor. One per process, made once under init_lock and read without anything afterwards.
-global	src/runtime/netpoll_kqueue.c	breakrd	netpoller	The read end of the wakeup pipe, which is what the kqueue watches.
-global	src/runtime/netpoll_kqueue.c	breakwr	netpoller	The write end of the wakeup pipe, which is where a byte goes to interrupt a poll.
-global	src/runtime/netpoll_kqueue.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one byte, and cleared by whoever drains the pipe.
-global	src/runtime/netpoll_iocp.c	iocp	netpoller	The completion port. One per process, made once under init_lock and read without anything afterwards.
-global	src/runtime/netpoll_iocp.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one posted completion, and cleared by whoever takes that completion off the port.
+global	src/pal/poll_linux.c	epfd	netpoller	The epoll descriptor. One per process, made once by pal_poll_create and read without anything afterwards.
+global	src/pal/poll_linux.c	breakfd	netpoller	The eventfd a wakeup is written to, made alongside epfd and read the same way.
+global	src/pal/poll_linux.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one write, and cleared by whoever drains the eventfd.
+global	src/pal/poll_bsd.c	kq	netpoller	The kqueue descriptor. One per process, made once by pal_poll_create and read without anything afterwards.
+global	src/pal/poll_bsd.c	breakrd	netpoller	The read end of the wakeup pipe, which is what the kqueue watches.
+global	src/pal/poll_bsd.c	breakwr	netpoller	The write end of the wakeup pipe, which is where a byte goes to interrupt a wait.
+global	src/pal/poll_bsd.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one byte, and cleared by whoever drains the pipe.
+global	src/pal/poll_windows.c	iocp	netpoller	The completion port. One per process, made once by pal_poll_create and read without anything afterwards.
+global	src/pal/poll_windows.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one posted completion, and cleared by whoever takes that completion off the port.
+global	src/runtime/netpoll_readiness.c	poller	netpoller	The PAL's handle for the poller. Set once by the backend init, which runs under init_lock, and read without anything afterwards.
+global	src/runtime/netpoll_completion.c	poller	netpoller	The PAL's handle for the completion port. Set once by the backend init, which runs under init_lock, and read without anything afterwards.
 global	src/runtime/registry.c	registry_once	type-registry	Guards the one read of the linker section that builds the table. A Once, so whoever loses the race waits for the table rather than seeing half of one.
 global	src/runtime/registry.c	registry_lock	type-registry	The reader writer lock over the three fields below. Read on every lookup, taken for writing only by type_register, which is the runtime half nothing uses until a module is loaded after startup.
 global	src/runtime/registry.c	registry_slots	type-registry	The table. Written under registry_lock when it is built and when it grows, read under it the rest of the time.

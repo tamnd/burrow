@@ -36,7 +36,7 @@ internal dependency graph means a bug in `syscall` cannot break `os`.
 
 ## 2. The PAL
 
-Seventy five entry points, grouped. Each returns `int64_t` or a `bool` plus a
+Seventy six entry points, grouped. Each returns `int64_t` or a `bool` plus a
 `PalErrno`, which the caller maps to an `Error`. No Go types cross this
 boundary, no `Str` and no `Slice`, because the PAL has to be trivially
 auditable one platform at a time.
@@ -54,23 +54,39 @@ in `tools/pal-exceptions.txt` that has stopped needing to be there.
 | Threads | `thread_create`, `thread_join`, `thread_self`, `futex_wait`, `futex_wake`, `cpu_count` |
 | Time | `clock_realtime`, `clock_monotonic`, `nanosleep`, `tz_load` |
 | Net | `socket`, `bind`, `listen`, `accept`, `connect`, `sendto`, `recvfrom`, `getsockopt`, `setsockopt`, `shutdown`, `getaddrinfo`, `if_enumerate` |
-| Poll | `poll_create`, `poll_add`, `poll_del`, `poll_wait` |
+| Poll | `poll_create`, `poll_add`, `poll_del`, `poll_wait`, `poll_break` |
 | Memory | `vm_reserve`, `vm_commit`, `vm_decommit`, `vm_release`, `vm_guard` |
 | Misc | `random_bytes`, `signal_install`, `signal_mask`, `dl_open`, `dl_sym`, `page_size`, `hostname`, `user_lookup` |
 
-That is 27 files, 9 process, 6 threads, 4 time, 12 net, 4 poll, 5 memory and 8
+That is 27 files, 9 process, 6 threads, 4 time, 12 net, 5 poll, 5 memory and 8
 misc. An earlier draft of this section said forty and then said sixty eight, both
-of which were counts from before the table had finished growing. Seventy five is
+of which were counts from before the table had finished growing. Seventy six is
 what is written above and it is still small enough that a new platform is a week
 of work rather than a port.
 
-Not all seventy five have a backend today. All of them are declared, because the
+`poll_break` is the newest of them and how it got there is worth a sentence. The
+table had four poll entry points and no way to end a wait early, which is a
+thing every one of the three backends had been doing since the netpoller was
+written. Nobody noticed until the netpoller actually moved down here, which is
+the argument for moving working code behind a boundary rather than declaring the
+boundary and calling it done: the declarations were checked against a design and
+the design was short a call.
+
+Not all seventy six have a backend today. All of them are declared, because the
 shape of the boundary is worth deciding once rather than discovering package by
 package, and because a call to one that is missing is a link error that names it.
-Time, memory, random and the machine queries are implemented and in use. Poll is
-implemented in `src/runtime/netpoll_*.c` and has not moved behind the
-declarations yet. Files, process, threads and net land with the packages that
-need them, where there is a real caller to design against.
+Time, memory, random, the machine queries and poll are implemented and in use.
+Files, process, threads and net land with the packages that need them, where
+there is a real caller to design against.
+
+Poll is the one group whose two shapes are not hidden. A readiness backend says
+a descriptor is worth trying and a completion backend says an operation has
+finished, and no amount of wrapping makes those the same deal for a caller, so
+the header says which one the build got and the runtime has a file for each.
+`PalOverlapped` is there for the same reason: it is the completion's own
+structure, declared in `pal.h` so that the code above the boundary can lay out
+an operation without including `windows.h`, with a `_Static_assert` on each side
+tying it to the real thing.
 
 Three PAL rules:
 

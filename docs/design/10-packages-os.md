@@ -36,7 +36,7 @@ internal dependency graph means a bug in `syscall` cannot break `os`.
 
 ## 2. The PAL
 
-Seventy six entry points, grouped. Each returns `int64_t` or a `bool` plus a
+Seventy nine entry points, grouped. Each returns `int64_t` or a `bool` plus a
 `PalErrno`, which the caller maps to an `Error`. No Go types cross this
 boundary, no `Str` and no `Slice`, because the PAL has to be trivially
 auditable one platform at a time.
@@ -51,18 +51,25 @@ in `tools/pal-exceptions.txt` that has stopped needing to be there.
 | --- | --- |
 | Files | `open`, `close`, `read`, `pread`, `write`, `pwrite`, `seek`, `fsync`, `ftruncate`, `stat`, `lstat`, `fstat`, `unlink`, `rename`, `mkdir`, `rmdir`, `readdir`, `link`, `symlink`, `readlink`, `chmod`, `chown`, `utimes`, `dup`, `pipe`, `mmap`, `munmap` |
 | Process | `spawn`, `wait`, `kill`, `getpid`, `exit`, `environ`, `chdir`, `getcwd`, `exec_lookup` |
-| Threads | `thread_create`, `thread_join`, `thread_self`, `futex_wait`, `futex_wake`, `cpu_count` |
+| Threads | `thread_create`, `thread_join`, `thread_detach`, `thread_self`, `thread_yield`, `thread_stack_bounds`, `futex_wait`, `futex_wake`, `cpu_count` |
 | Time | `clock_realtime`, `clock_monotonic`, `nanosleep`, `tz_load` |
 | Net | `socket`, `bind`, `listen`, `accept`, `connect`, `sendto`, `recvfrom`, `getsockopt`, `setsockopt`, `shutdown`, `getaddrinfo`, `if_enumerate` |
 | Poll | `poll_create`, `poll_add`, `poll_del`, `poll_wait`, `poll_break` |
 | Memory | `vm_reserve`, `vm_commit`, `vm_decommit`, `vm_release`, `vm_guard` |
 | Misc | `random_bytes`, `signal_install`, `signal_mask`, `dl_open`, `dl_sym`, `page_size`, `hostname`, `user_lookup` |
 
-That is 27 files, 9 process, 6 threads, 4 time, 12 net, 5 poll, 5 memory and 8
+That is 27 files, 9 process, 9 threads, 4 time, 12 net, 5 poll, 5 memory and 8
 misc. An earlier draft of this section said forty and then said sixty eight, both
-of which were counts from before the table had finished growing. Seventy six is
+of which were counts from before the table had finished growing. Seventy nine is
 what is written above and it is still small enough that a new platform is a week
 of work rather than a port.
+
+Three of the nine threads entries are newer than the rest and arrived the same
+way `poll_break` did. `thread_detach`, `thread_yield` and `thread_stack_bounds`
+were all things `src/runtime/thread.c` had been doing since before the platform
+layer was drawn, and the table did not have them because the table was written
+from what a scheduler was expected to need rather than from what the file in
+front of us actually called. Moving the file down was what produced the list.
 
 `poll_break` is the newest of them and how it got there is worth a sentence. The
 table had four poll entry points and no way to end a wait early, which is a
@@ -72,13 +79,12 @@ the argument for moving working code behind a boundary rather than declaring the
 boundary and calling it done: the declarations were checked against a design and
 the design was short a call.
 
-Not all seventy six have a backend today. All of them are declared, because the
+Not all seventy nine have a backend today. All of them are declared, because the
 shape of the boundary is worth deciding once rather than discovering package by
 package, and because a call to one that is missing is a link error that names it.
-Time, memory, random, the machine queries, poll and the futex pair are
-implemented and in use. The three thread calls next to the futex are not yet,
-and files, process and net land with the packages that need them, where there is
-a real caller to design against.
+Time, memory, random, the machine queries, poll and the whole of threads are
+implemented and in use. Files, process and net land with the packages that need
+them, where there is a real caller to design against.
 
 The futex pair is the one place where the layer builds a primitive instead of
 forwarding to one, and it is worth saying why rather than leaving it to be
@@ -91,6 +97,17 @@ not use it either. The BSDs have three more spellings that agree on nothing. So
 a fixed table of locks and condition variables keyed on the address. Nothing
 allocates, the caller's word stays the caller's word, and an uncontended wait or
 wake never enters the layer at all because the caller checks its own word first.
+
+`thread_create` is the other place the layer does more than forward. A platform
+thread entry point has room for exactly one pointer and this takes two, a
+function and an argument, and the PAL does not allocate, so there is nowhere to
+put them. The way out is a small structure on the starter's own stack and a
+handshake: the new thread copies both out and then stores a word, and the
+starter waits on `pal_futex_wait` until it sees it. That is one futex round trip
+per thread, which is nothing next to what starting a thread costs anyway, and
+what it buys is that the handle a caller ends up with is a number rather than a
+structure that has to outlive the thread. `include/burrow/thread.h` used to say
+the opposite and now does not.
 
 Poll is the one group whose two shapes are not hidden. A readiness backend says
 a descriptor is worth trying and a completion backend says an operation has

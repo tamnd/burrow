@@ -11,8 +11,8 @@
  * that blocks has to park the goroutine and free the thread, so a pthread mutex
  * is the wrong tool at every level above this one, and the one place the
  * runtime really does have to put a thread to sleep gets a dedicated primitive
- * built on futexes rather than a general purpose lock. That primitive is the
- * next piece and it is not this file.
+ * built on futexes rather than a general purpose lock. That primitive is
+ * burrow/note.h and it is not this file.
  *
  *     static void worker(void *arg) { ... }
  *
@@ -21,12 +21,13 @@
  *         return false;
  *     burrow__thread_join(&t);
  *
- * The handle carries the function and the argument, which is how the thread
- * gets both of them through an interface that has room for one pointer. So the
- * handle has to outlive the thread. A handle on the stack of a function that
- * returns before the thread does is a use after free, and the same rule the
- * whole library follows applies here: the caller owns the memory and the
- * library never allocates behind the caller's back.
+ * Everything underneath is the platform layer, which means this file is
+ * portable C and the handle is a number. It used to carry the function and the
+ * argument, because that was how both of them reached a thread entry point with
+ * room for one pointer, and it meant the handle had to outlive the thread. It
+ * does not any more. pal_thread_create does that handshake itself, so a handle
+ * is a started thread and nothing else, and one on the stack of a function that
+ * returns first is no longer a use after free.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -35,18 +36,9 @@
 #ifndef BURROW_THREAD_H
 #define BURROW_THREAD_H
 
-#include "burrow/platform.h"
-
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-
-#if !defined(BURROW_OS_WINDOWS)
-/* Everywhere except Windows this is pthreads, and pthread_t has to be a real
- * type here rather than a blob of bytes, because a blob would have to guess a
- * size and an alignment for a type the standard deliberately leaves opaque. */
-#include <pthread.h>
-#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,22 +51,15 @@ extern "C" {
  * wants to report something writes it where the starter can see it. */
 typedef void (*burrow__ThreadFn)(void *arg);
 
-/* A started thread, and the argument it was started with.
+/* A started thread.
  *
  * The fields are here rather than behind an opaque pointer so that a handle can
  * live on a stack or inside an M without an allocation. They are not part of
- * the interface: read them and the next platform added here breaks you. */
+ * the interface: read them and the next thing that changes underneath breaks
+ * you. It is a pthread_t on one system and a Win32 HANDLE on another and the
+ * platform layer is what knows which. */
 typedef struct burrow__Thread {
-    burrow__ThreadFn fn;
-    void *arg;
-#if defined(BURROW_OS_WINDOWS)
-    /* HANDLE, spelled void * so that <windows.h> is not dragged into every file
-     * that includes this one. It is a void * in the Windows headers too. */
-    void *handle;
-    unsigned long id;
-#else
-    pthread_t id;
-#endif
+    int64_t handle;
     bool started;
 } burrow__Thread;
 
@@ -105,9 +90,9 @@ bool burrow__thread_start(burrow__Thread *t, burrow__ThreadFn fn, void *arg,
 bool burrow__thread_join(burrow__Thread *t);
 
 /* Says the thread will never be joined, so the system can release what it was
- * holding as soon as the thread returns. The handle is dead afterwards, but the
- * running thread still reads fn and arg out of it, so the memory has to stay
- * valid until the thread is finished with it. */
+ * holding as soon as the thread returns. The handle is dead afterwards and the
+ * memory it sat in is the caller's to reuse straight away, because the running
+ * thread has nothing left to read out of it. */
 bool burrow__thread_detach(burrow__Thread *t);
 
 /* An identity for the calling thread, stable for as long as that thread runs
@@ -146,13 +131,13 @@ void burrow__thread_yield(void);
  * caller asking about another thread is asking about a stack that is moving. */
 bool burrow__thread_stack_bounds(void **lo, void **hi);
 
-/* How many processors there are, at least 1, never 0.
+/* How many processors this process may run on, at least 1, never 0.
  *
- * This is the number of processors that exist, which is not always the number
- * this process is allowed to use. A cpuset or a container cpu limit makes those
- * two different, and Go gets that right through affinity and cgroups. That
- * belongs with GOMAXPROCS, which decides how many Ps to make and is where a
- * caller can override it anyway, so it is not decided here. */
+ * The affinity mask where the platform can tell us one, so a container pinned
+ * to two cores sees two and not the ninety six on the host. It is asked afresh
+ * every time, because a process can be moved onto fewer processors while it
+ * runs. Deciding how many Ps to make from the answer is GOMAXPROCS's job and is
+ * where a caller can override it anyway, so it is not decided here. */
 int burrow__thread_ncpu(void);
 
 #ifdef __cplusplus

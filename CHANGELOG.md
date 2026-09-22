@@ -6,6 +6,17 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 
 ## Unreleased
 
+### Threads moved behind the platform layer
+
+- The whole threads group is implemented. `src/runtime/thread.c` used to be two implementations of six functions with `<pthread.h>` and `<windows.h>` in it, and it is eighty lines of portable C now. The per platform half is `src/pal/thread_posix.c` and `src/pal/thread_windows.c`.
+- `pal_thread_create` does a handshake, and it is worth knowing about. A platform thread entry point has room for exactly one pointer and this call takes two, a function and an argument, and the layer does not allocate. So the pair goes in a small structure on the starter's own stack, the new thread copies both out and stores a word, and the starter waits on `pal_futex_wait` until it sees the word. One futex round trip per thread, which is nothing next to what starting a thread costs.
+- What that buys is a handle that is a number. `burrow__Thread` used to carry the function and the argument, because that was how both of them reached the thread, and it meant the handle had to outlive the thread. It does not any more, so a handle on the stack of a function that returns first is no longer a use after free. The header said the opposite and now says this.
+- Three entry points are new: `pal_thread_detach`, `pal_thread_yield` and `pal_thread_stack_bounds`. All three were things the runtime had been doing since before the boundary was drawn, and the table in the design doc did not list them because the table was written from what a scheduler was expected to need rather than from the file in front of us. Moving the file down is what produced the list. The table is 79 entry points now, not 76.
+- `pal_cpu_count` stopped caching its answer. It is the affinity mask and a process can be moved onto fewer processors while it runs, so an answer kept from startup goes quietly stale. Nobody asks it in a loop. The page size is still cached, because that one really cannot change.
+- The Windows processor count got better on its way through. It was `GetSystemInfo`, which reports the size of this process's processor group and tops out at sixty four, and it is `GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)` now. A hundred and twenty eight processor box answering sixty four is the kind of wrong that looks right.
+- `tests/pal_test.c` grew twelve thread tests: the function running, the argument arriving unchanged, a stack below the system minimum being raised rather than refused, detach instead of join, sixteen threads started and joined, sixteen identities that are all different, the stack bounds holding a variable that is on the stack, and the argument checks.
+- `tools/pal-exceptions.txt` is down to three entries. `src/runtime/thread.c` and `include/burrow/thread.h` came off. What is left is `mcontext.c`, which is assembly and stays, `stack.c`, which waits on `pal_signal_install`, and `trace.c`, which waits on symbolisation.
+
 ### One note instead of three
 
 - `pal_futex_wait` and `pal_futex_wake` are implemented, on all three platforms, and `src/runtime/note.c` is portable C over them. It used to be a futex on Linux, a manual reset event on Windows and a mutex with a condition variable everywhere else, three backends that agreed on everything except which call does the sleeping.

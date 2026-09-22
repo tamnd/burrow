@@ -69,21 +69,28 @@ below says which of those four burrow does today and why the other three are
 waiting on parts that do not exist yet.
 
 An M is an OS thread and `burrow/thread.h` is where one comes from: start,
-join, detach, yield, an identity for the calling thread, and a processor count.
-Pthreads everywhere and `_beginthreadex` on Windows, which is the one that
-gives the new thread its own CRT state where `CreateThread` does not. The
-handle carries the entry function and the argument, because a thread entry
-point has room for one pointer and nothing in this library allocates behind the
-caller's back to make room for two, so the handle has to outlive the thread.
+join, detach, yield, an identity for the calling thread, its stack bounds, and a
+processor count. All of it is portable C over the platform layer, which uses
+pthreads everywhere and `_beginthreadex` on Windows, the one that gives the new
+thread its own CRT state where `CreateThread` does not.
+
+The handle used to carry the entry function and the argument, because a thread
+entry point has room for one pointer and nothing in this library allocates
+behind the caller's back to make room for two, and that meant the handle had to
+outlive the thread. `pal_thread_create` does the handshake itself now, on a
+structure on its own stack, so a handle is a number and a caller can keep one
+wherever it likes.
 
 There is no mutex and no condition variable in that header, which is the point
 of it. A goroutine that blocks has to park the goroutine and free the thread,
 so a `pthread_mutex_t` is the wrong tool at every level above this one, and the
 one place the runtime genuinely has to put a thread to sleep gets a futex-style
 primitive of its own rather than a general purpose lock. The processor count is
-the number of processors that exist, which under a cpuset or a container CPU
-limit is not the number this process may use; reconciling those two is
-`GOMAXPROCS`'s job and is where a caller can override the answer anyway.
+the affinity limited one, so a container pinned to two cores sees two and not
+the ninety six on the host, and it is asked afresh every time because a process
+can be moved onto fewer processors while it runs. Deciding how many Ps to make
+from it is `GOMAXPROCS`'s job and is where a caller can override the answer
+anyway.
 
 That primitive is `burrow/note.h`, and it keeps Go's name for it. A note is a
 one shot gate with six operations: init, free, clear, wake, sleep, and a sleep

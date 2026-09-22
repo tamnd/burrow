@@ -753,6 +753,240 @@ TEST(the_futex_takes_a_null_error_like_everything_else) {
     CHECK(!pal_futex_wait(NULL, 0, 0, NULL));
 }
 
+/* --------------------------------------------------------------- the threads
+ *
+ * burrow/thread.h has its own suite and it is the one that covers the shape a
+ * caller sees. What is here is the part that only exists below the boundary:
+ * the handshake that carries a function and an argument through an entry point
+ * with room for one pointer, and the handle surviving the trip through an
+ * int64_t and back. */
+
+/* Whether a sanitizer is watching, which one test below has to know. Address
+ * sanitizer moves locals into a shadow frame of its own so that it can catch a
+ * pointer to one outliving the call, and that means the address of a local
+ * stops being a way to find out where the stack pointer is. tests/stack_test.c
+ * says the same thing at more length and for the same reason. */
+#if defined(__SANITIZE_ADDRESS__)
+#define SANITIZED 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(memory_sanitizer)
+#define SANITIZED 1
+#endif
+#endif
+
+#define THREAD_PARTY 16
+
+typedef struct ThreadParty {
+    uint32_t ran;
+    void *arg_seen;
+    int64_t self;
+    /* Raised by the thread when it is finished, for the detach test, which has
+     * no join to wait on. */
+    uint32_t done;
+} ThreadParty;
+
+static void thread_marker(void *arg) {
+    ThreadParty *p = (ThreadParty *)arg;
+
+    p->arg_seen = arg;
+    p->self = pal_thread_self();
+    (void)burrow__atomic_add_u32(&p->ran, 1);
+    burrow__atomic_store_u32(&p->done, 1);
+    (void)pal_futex_wake(&p->done, INT64_MAX, NULL);
+}
+
+TEST(a_thread_runs_the_function_it_was_given) {
+    ThreadParty p = {0, NULL, 0, 0};
+    PalErrno err = PAL_EOTHER;
+
+    int64_t h = pal_thread_create(thread_marker, &p, 0, &err);
+    CHECK(h != PAL_INVALID_HANDLE);
+    CHECK_INT_EQ(err, PAL_OK);
+
+    err = PAL_EOTHER;
+    CHECK(pal_thread_join(h, &err));
+    CHECK_INT_EQ(err, PAL_OK);
+
+    CHECK_INT_EQ(burrow__atomic_load_u32(&p.ran), 1);
+}
+
+TEST(the_argument_arrives_at_the_new_thread_unchanged) {
+    ThreadParty p = {0, NULL, 0, 0};
+
+    int64_t h = pal_thread_create(thread_marker, &p, 0, NULL);
+    CHECK(h != PAL_INVALID_HANDLE);
+    CHECK(pal_thread_join(h, NULL));
+
+    CHECK(p.arg_seen == &p);
+}
+
+TEST(a_stack_smaller_than_the_system_allows_is_raised_and_not_refused) {
+    ThreadParty p = {0, NULL, 0, 0};
+
+    /* A kilobyte is below every platform's minimum. The layer raises it to the
+     * minimum rather than handing the caller an EINVAL that means something
+     * different on every system. */
+    int64_t h = pal_thread_create(thread_marker, &p, 1024, NULL);
+    CHECK(h != PAL_INVALID_HANDLE);
+    CHECK(pal_thread_join(h, NULL));
+
+    CHECK_INT_EQ(burrow__atomic_load_u32(&p.ran), 1);
+}
+
+TEST(a_stack_bigger_than_the_default_is_taken) {
+    ThreadParty p = {0, NULL, 0, 0};
+
+    int64_t h = pal_thread_create(thread_marker, &p, 2 * 1024 * 1024, NULL);
+    CHECK(h != PAL_INVALID_HANDLE);
+    CHECK(pal_thread_join(h, NULL));
+
+    CHECK_INT_EQ(burrow__atomic_load_u32(&p.ran), 1);
+}
+
+TEST(a_thread_can_be_detached_instead_of_joined) {
+    static ThreadParty p;
+
+    /* Static rather than on this frame, because a detached thread is still
+     * running when the test moves on and nothing here waits for it to be gone,
+     * only for it to have finished with the structure. */
+    p.ran = 0;
+    p.done = 0;
+
+    int64_t h = pal_thread_create(thread_marker, &p, 0, NULL);
+    CHECK(h != PAL_INVALID_HANDLE);
+
+    PalErrno err = PAL_EOTHER;
+    CHECK(pal_thread_detach(h, &err));
+    CHECK_INT_EQ(err, PAL_OK);
+
+    while (burrow__atomic_load_acquire_u32(&p.done) == 0)
+        (void)pal_futex_wait(&p.done, 0, -1, NULL);
+
+    CHECK_INT_EQ(burrow__atomic_load_u32(&p.ran), 1);
+}
+
+TEST(sixteen_threads_all_start_and_all_finish) {
+    ThreadParty parties[THREAD_PARTY];
+    int64_t handles[THREAD_PARTY];
+
+    for (int i = 0; i < THREAD_PARTY; i++) {
+        parties[i].ran = 0;
+        parties[i].arg_seen = NULL;
+        parties[i].self = 0;
+        parties[i].done = 0;
+
+        handles[i] = pal_thread_create(thread_marker, &parties[i], 0, NULL);
+        CHECK(handles[i] != PAL_INVALID_HANDLE);
+    }
+
+    for (int i = 0; i < THREAD_PARTY; i++)
+        CHECK(pal_thread_join(handles[i], NULL));
+
+    for (int i = 0; i < THREAD_PARTY; i++) {
+        CHECK_INT_EQ(burrow__atomic_load_u32(&parties[i].ran), 1);
+        CHECK(parties[i].arg_seen == &parties[i]);
+    }
+}
+
+TEST(every_thread_running_at_once_has_its_own_identity) {
+    ThreadParty parties[THREAD_PARTY];
+    int64_t handles[THREAD_PARTY];
+    int64_t mine = pal_thread_self();
+
+    for (int i = 0; i < THREAD_PARTY; i++) {
+        parties[i].ran = 0;
+        parties[i].arg_seen = NULL;
+        parties[i].self = 0;
+        parties[i].done = 0;
+
+        handles[i] = pal_thread_create(thread_marker, &parties[i], 0, NULL);
+        CHECK(handles[i] != PAL_INVALID_HANDLE);
+    }
+
+    /* Every one of them is joined before anything is compared, so all sixteen
+     * were alive together and none of the identities can be a number the system
+     * handed out twice. */
+    for (int i = 0; i < THREAD_PARTY; i++)
+        CHECK(pal_thread_join(handles[i], NULL));
+
+    for (int i = 0; i < THREAD_PARTY; i++) {
+        CHECK(parties[i].self != 0);
+        CHECK(parties[i].self != mine);
+
+        for (int j = i + 1; j < THREAD_PARTY; j++)
+            CHECK(parties[i].self != parties[j].self);
+    }
+}
+
+TEST(my_own_identity_is_the_same_every_time_i_ask) {
+    CHECK_INT_EQ(pal_thread_self(), pal_thread_self());
+}
+
+TEST(the_stack_bounds_hold_a_variable_that_is_on_the_stack) {
+    void *lo = NULL;
+    void *hi = NULL;
+    /* Its address is taken below, which is what keeps it on the stack rather
+     * than in a register where there would be nothing to compare. */
+    char here = 0;
+
+    if (!pal_thread_stack_bounds(&lo, &hi)) {
+        /* An honest no from a platform nobody has written this for. There is
+         * nothing to check and there is nothing wrong. */
+        CHECK(lo == NULL);
+        return;
+    }
+
+    CHECK((char *)lo < (char *)hi);
+
+#if !defined(SANITIZED)
+    CHECK((const char *)&here >= (char *)lo);
+    CHECK((const char *)&here < (char *)hi);
+#else
+    (void)here;
+#endif
+}
+
+TEST(yielding_is_allowed_as_often_as_you_like) {
+    for (int i = 0; i < 1000; i++)
+        pal_thread_yield();
+
+    /* There is nothing to observe. It is here because a yield that faulted or
+     * took a lock it should not have would show up under the sanitizers, which
+     * is what this suite is run under. */
+    CHECK(true);
+}
+
+TEST(starting_or_joining_nothing_is_refused) {
+    PalErrno err = PAL_OK;
+
+    CHECK_INT_EQ(pal_thread_create(NULL, NULL, 0, &err), PAL_INVALID_HANDLE);
+    CHECK_INT_EQ(err, PAL_EINVAL);
+
+    err = PAL_OK;
+    CHECK_INT_EQ(pal_thread_create(thread_marker, NULL, -1, &err), PAL_INVALID_HANDLE);
+    CHECK_INT_EQ(err, PAL_EINVAL);
+
+    err = PAL_OK;
+    CHECK(!pal_thread_join(PAL_INVALID_HANDLE, &err));
+    CHECK_INT_EQ(err, PAL_EINVAL);
+
+    err = PAL_OK;
+    CHECK(!pal_thread_detach(PAL_INVALID_HANDLE, &err));
+    CHECK_INT_EQ(err, PAL_EINVAL);
+}
+
+TEST(the_threads_take_a_null_error_like_everything_else) {
+    ThreadParty p = {0, NULL, 0, 0};
+
+    CHECK_INT_EQ(pal_thread_create(NULL, NULL, 0, NULL), PAL_INVALID_HANDLE);
+    CHECK(!pal_thread_join(PAL_INVALID_HANDLE, NULL));
+    CHECK(!pal_thread_detach(PAL_INVALID_HANDLE, NULL));
+
+    int64_t h = pal_thread_create(thread_marker, &p, 0, NULL);
+    CHECK(h != PAL_INVALID_HANDLE);
+    CHECK(pal_thread_join(h, NULL));
+}
+
 int main(void) {
     RUN(every_code_has_a_message);
     RUN(success_and_nonsense_are_not_the_same_answer);
@@ -802,6 +1036,19 @@ int main(void) {
     RUN(a_sleeper_with_a_deadline_gives_up_when_nobody_comes);
     RUN(a_wait_or_wake_on_nothing_is_refused);
     RUN(the_futex_takes_a_null_error_like_everything_else);
+
+    RUN(a_thread_runs_the_function_it_was_given);
+    RUN(the_argument_arrives_at_the_new_thread_unchanged);
+    RUN(a_stack_smaller_than_the_system_allows_is_raised_and_not_refused);
+    RUN(a_stack_bigger_than_the_default_is_taken);
+    RUN(a_thread_can_be_detached_instead_of_joined);
+    RUN(sixteen_threads_all_start_and_all_finish);
+    RUN(every_thread_running_at_once_has_its_own_identity);
+    RUN(my_own_identity_is_the_same_every_time_i_ask);
+    RUN(the_stack_bounds_hold_a_variable_that_is_on_the_stack);
+    RUN(yielding_is_allowed_as_often_as_you_like);
+    RUN(starting_or_joining_nothing_is_refused);
+    RUN(the_threads_take_a_null_error_like_everything_else);
 
     return harness_report("pal");
 }

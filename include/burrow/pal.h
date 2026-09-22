@@ -273,6 +273,10 @@ int64_t pal_page_size(void);
  * affinity limited count where the platform can tell us one, so a container
  * pinned to two cores sees two rather than the ninety six on the host.
  *
+ * Asked every time rather than cached, because the mask can be narrowed under a
+ * running process and an answer from startup would quietly go stale. Nothing
+ * asks this in a loop.
+ *
  * Never less than one, including on a platform that will not say. */
 int64_t pal_cpu_count(void);
 
@@ -297,26 +301,58 @@ bool pal_random_bytes(void *buf, int64_t n, PalErrno *err);
  * OS threads, which in Go's terms is an M. Goroutines are not here: they are
  * stacks and a scheduler, both of which are portable C above this line.
  *
- * The futex pair below is implemented and in use: src/runtime/note.c is
- * portable C over it on every platform. The three thread calls are not, and
- * src/runtime/thread.c moves behind them next. */
+ * The whole group is implemented and in use. src/runtime/thread.c and
+ * src/runtime/note.c are both portable C over it on every platform. */
 
 /* Start a thread running fn(arg) on a stack of at least stack_bytes, or 0 for
  * the platform's default. Returns a handle, or PAL_INVALID_HANDLE.
  *
- * The thread is joinable. A thread that is never joined leaks its handle on
- * Windows and its stack on POSIX, so the runtime joins every one it starts,
- * including on the way out. */
+ * A size below the platform's minimum is raised to the minimum rather than
+ * refused, because the minimum is 16 kilobytes on macOS and 128 on glibc arm64
+ * and a caller asking for a small stack means small rather than exactly that.
+ * It is also rounded up to a whole page, because macOS refuses one that is not.
+ *
+ * The thread is joinable. A thread that is neither joined nor detached leaks
+ * its handle on Windows and its stack on POSIX, so the runtime accounts for
+ * every one it starts, including on the way out.
+ *
+ * This is the one call in the group that does real work to exist. A platform
+ * thread entry point has room for exactly one pointer and this takes two, so
+ * the two are handed over in a small structure on the starter's own stack and
+ * the starter waits on pal_futex_wait until the new thread has copied them out.
+ * That costs one handshake per thread, which is nothing next to what starting a
+ * thread costs anyway, and it is what keeps the layer free of allocation. */
 int64_t pal_thread_create(void (*fn)(void *), void *arg, int64_t stack_bytes,
                           PalErrno *err);
 
 /* Wait for a thread to finish and release its handle. */
 bool pal_thread_join(int64_t thread, PalErrno *err);
 
+/* Say the thread will never be joined, so the system can release what it holds
+ * as soon as the thread returns. The handle is dead afterwards. */
+bool pal_thread_detach(int64_t thread, PalErrno *err);
+
 /* An identifier for the calling thread that is unique among the threads running
  * right now. It is not stable across a thread's death and another's birth, and
  * it is not the same number the debugger shows. Never fails. */
 int64_t pal_thread_self(void);
+
+/* Give up the rest of this thread's time slice. Never fails, and on a machine
+ * with one processor it is the only way the thread being waited on gets to
+ * run. */
+void pal_thread_yield(void);
+
+/* Where the calling thread's own stack begins and ends: lo is the lowest
+ * address on it and hi is one past the highest.
+ *
+ * Only ever ask about the thread you are on. Every system underneath answers
+ * for the current thread and several of them answer for no other, and a caller
+ * asking about another thread is asking about a stack that is moving.
+ *
+ * False means the platform has no way to ask, which is the honest answer on a
+ * system nobody has written this for rather than a failure. The stack walker is
+ * the only caller and it does less rather than guessing. */
+bool pal_thread_stack_bounds(void **lo, void **hi);
 
 /* Sleep until the 32 bit word at addr stops being expect, or until somebody
  * wakes it, or until timeout_ns passes. A negative timeout waits forever and a

@@ -1,10 +1,16 @@
 /* What the machine is, on everything that is not Windows.
  *
- * Two questions, both with answers that cannot change while the process runs,
- * so both are asked once and kept. The cache is a plain relaxed atomic and not
- * a lock: two threads arriving together both ask the system, both get the same
- * number, and both write it. There is nothing to publish alongside it, so there
- * is nothing for a release store to order.
+ * Two questions. The page size cannot change while the process runs, so it is
+ * asked once and kept. The cache is a plain relaxed atomic and not a lock: two
+ * threads arriving together both ask the system, both get the same number, and
+ * both write it. There is nothing to publish alongside it, so there is nothing
+ * for a release store to order.
+ *
+ * The processor count is asked every time, because it is the affinity mask and
+ * a process can be moved onto fewer processors while it runs. sched_setaffinity
+ * does it, a container being resized does it, and a batch scheduler does it.
+ * Nobody asks this in a loop, so what a cache would save is a system call at
+ * startup and what it would cost is an answer that quietly goes stale.
  *
  * _GNU_SOURCE is here for sched_getaffinity and CPU_COUNT, and it goes before
  * the first include because glibc reads the feature test macros when its first
@@ -37,7 +43,6 @@
 /* Zero until somebody has asked. A page size of zero is impossible, so zero can
  * be the "not yet" marker without a second flag. */
 static uint32_t cached_page;
-static uint32_t cached_cpus;
 
 int64_t pal_page_size(void) {
     uint32_t got = burrow__atomic_load_relaxed_u32(&cached_page);
@@ -58,10 +63,6 @@ int64_t pal_page_size(void) {
 }
 
 int64_t pal_cpu_count(void) {
-    uint32_t got = burrow__atomic_load_relaxed_u32(&cached_cpus);
-    if (got != 0)
-        return (int64_t)got;
-
     long n = 0;
 
 #if defined(__linux__)
@@ -91,7 +92,6 @@ int64_t pal_cpu_count(void) {
     if (n <= 0)
         n = 1;
 
-    burrow__atomic_store_relaxed_u32(&cached_cpus, (uint32_t)n);
     return (int64_t)n;
 }
 

@@ -117,6 +117,4 @@ global	src/runtime/registry.c	registry_slots	type-registry	The table. Written un
 global	src/runtime/registry.c	registry_cap	type-registry	How many slots there are, always a power of two. Same lock as the table it describes, because the two have to change together.
 global	src/runtime/registry.c	registry_len	type-registry	How many of the slots are taken. Same lock, same reason.
 global	src/pal/machine_posix.c	cached_page	machine	Relaxed atomic, and the race is benign by construction. Two threads arriving together both ask the system, both get the same number, and both write it. There is nothing published alongside it, so there is nothing for a release store to order.
-global	src/pal/machine_posix.c	cached_cpus	machine	The same as cached_page above. The affinity mask cannot change under a running process in a way this layer promises to notice, which is the same promise Go's NumCPU makes.
 global	src/pal/machine_windows.c	cached_page	machine	The Windows half of cached_page above, with the same reasoning.
-global	src/pal/machine_windows.c	cached_cpus	machine	The Windows half of cached_cpus above, with the same reasoning.

@@ -1,11 +1,17 @@
 /* What the machine is, on Windows.
  *
- * Both answers come from GetSystemInfo, which fills a struct in one call, and
- * both are cached for the reason machine_posix.c gives.
+ * The page size is cached and the processor count is not, for the reasons
+ * machine_posix.c gives.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
+
+#if defined(_WIN32) && !defined(_WIN32_WINNT)
+/* Windows 7, which is what GetActiveProcessorCount needs and is a floor no
+ * machine anybody compiles for today is below. */
+#define _WIN32_WINNT 0x0601
+#endif
 
 #include "burrow/platform.h"
 
@@ -16,10 +22,11 @@
 
 #include "internal.h"
 
+#include <stdint.h>
+
 #include <windows.h>
 
 static uint32_t cached_page;
-static uint32_t cached_cpus;
 
 int64_t pal_page_size(void) {
     uint32_t got = burrow__atomic_load_relaxed_u32(&cached_page);
@@ -42,27 +49,21 @@ int64_t pal_page_size(void) {
 }
 
 int64_t pal_cpu_count(void) {
-    uint32_t got = burrow__atomic_load_relaxed_u32(&cached_cpus);
-    if (got != 0)
-        return (int64_t)got;
-
-    /* dwNumberOfProcessors is the count in this process's processor group, and
-     * a group holds at most sixty four. A machine with more than that has
-     * several groups and this answers the size of ours, which is the same
-     * answer Go gives and is right for a process that has not gone out of its
-     * way to span them.
+    /* ALL_PROCESSOR_GROUPS, because a machine with more than sixty four
+     * processors puts them in groups and GetSystemInfo reports the size of one
+     * group. A hundred and twenty eight processor box answering sixty four is
+     * the kind of wrong that looks right.
      *
-     * The affinity mask would be more precise, and GetProcessAffinityMask is
-     * the call for it. It arrives when there is something above this layer that
-     * can act on the difference. */
-    SYSTEM_INFO info;
-    GetSystemInfo(&info);
-
-    DWORD n = info.dwNumberOfProcessors;
+     * The affinity mask would be more precise still, and GetProcessAffinityMask
+     * is the call for it, but it answers for one group as well and stitching
+     * the groups back together is a loop over GetLogicalProcessorInformationEx.
+     * That arrives when there is a Windows machine to test it on. */
+    DWORD n = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
     if (n == 0)
         n = 1;
+    if (n > (DWORD)INT32_MAX)
+        n = (DWORD)INT32_MAX;
 
-    burrow__atomic_store_relaxed_u32(&cached_cpus, (uint32_t)n);
     return (int64_t)n;
 }
 

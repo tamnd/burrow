@@ -6,6 +6,18 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 
 ## Unreleased
 
+### testing/synctest
+
+- `burrow/synctest.h`, which is Go's `testing/synctest`: `synctest_run` and `synctest_wait`. A bubble is a set of goroutines that grew out of one, and it knows at every moment whether any of them can still make progress on its own, so a test can wait for the program to be finished rather than sleeping for long enough that it probably is. `docs/guides/synctest.md` is the guide.
+- `synctest_run` gives the function a goroutine of its own and returns when the last goroutine that was ever in the bubble has exited, not when the function returns. That is Go's rule and it is what turns a leaked goroutine into a test that does not finish rather than something the next test finds out about.
+- `synctest_wait` returns once every other goroutine in the bubble is durably blocked, which means the only thing that can wake it is another goroutine in the same bubble. A goroutine that has been woken but has not run yet still counts as running, so the wait does not return early on one that is on its way back.
+- Durability is decided at the park, by the code that knows what is being waited for, rather than by watching the run queues. A receive on a channel made inside the bubble is durable, a receive on one made outside it is not, and a `select` is durable only when every channel in it is bubbled, because a select mixing the two can be completed from outside.
+- A channel made inside a bubble stops the program when it is used from outside it. Without that rule a goroutine parked on such a channel would not be durably blocked after all, and the wait would be answering a question it could not answer.
+- A bubble where every goroutine is durably blocked and nobody is in `synctest_wait` stops the program instead of hanging. That answer is available because the bubble knows the complete set of goroutines involved and knows none of them can be woken from outside, which is not true of a program at large.
+- A program that never makes a bubble pays one load and one branch per send and per receive. Every goroutine carries a bubble pointer, `NULL` outside a test and inherited from whoever called `go`, and every channel carries the one it was made in. There is no thread local lookup on the fast path.
+- `time_sleep` is deliberately not durable yet. Fake time is the other half of Go's package and is a separate change, and until it lands a sleeping goroutine keeps counting as running, so a bubble with a timer in it is slow rather than wrong.
+- Go 1.25 replaced `Run` with `Test`, which takes the `*testing.T` so a deadlock fails the test rather than the process. The shape here is Go 1.24's `Run`, and `synctest_test` arrives with the `testing` package.
+
 ### Build and CI
 
 - The lint and clang-tidy jobs are green again. They had both been failing for long enough that nobody was reading them, which is the same as not having them, so everything either job had to say is answered here rather than suppressed.

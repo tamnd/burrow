@@ -40,6 +40,7 @@
 #include "burrow/note.h"
 #include "burrow/proc.h"
 #include "burrow/runtime.h"
+#include "burrow/sched.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -293,7 +294,38 @@ struct Chan {
 
     Waitq recvq;
     Waitq sendq;
+
+    /* The synctest bubble this channel was made in, or NULL, which is what
+     * every channel outside a test is. Set once and never written again.
+     *
+     * A channel carries this rather than the goroutines deciding for
+     * themselves, because the question a bubble asks about a blocked receive is
+     * whether anybody outside could still send, and that is a property of the
+     * channel and not of whoever is standing at it. A channel made in the
+     * bubble can only be reached from inside it, so a wait on one is a wait on
+     * another goroutine in the bubble and nothing else. */
+    burrow__Bubble *bubble;
 };
+
+/* Whether a wait on this channel is one a bubble should count as durable, and
+ * the place the misuse Go makes fatal is caught.
+ *
+ * The cost to a program with no bubbles anywhere is one load and one branch,
+ * which is why the channel is asked before the goroutine is. A channel made
+ * outside a bubble can be used from anywhere and never makes a wait durable,
+ * and that is the answer on every send and receive in every program that is not
+ * a test. */
+static bool bubbled(const Chan *c) {
+    if (c->bubble == NULL)
+        return false;
+
+    const Goroutine *g = sched_current();
+    if (g == NULL || g->bubble != c->bubble)
+        runtime_throw(
+            BURROW_S("chan: a channel made inside a synctest bubble was used from "
+                     "outside it"));
+    return true;
+}
 
 static uint8_t *slot(Chan *c, uint32_t i) {
     return c->buf + (size_t)i * (size_t)c->elemsize;
@@ -422,10 +454,16 @@ static bool parked_commit(Parked *p) {
 }
 
 /* Blocks until somebody completes the operation. Whatever locks are held on the
- * way in are dropped by `unlockf` and are not held on the way out. */
-static void parked_sleep(Parked *p, SchedUnlockFn unlockf, void *arg) {
+ * way in are dropped by `unlockf` and are not held on the way out.
+ *
+ * `durable` is for a synctest bubble and says that the only thing which can end
+ * this wait is another goroutine in the same bubble, which for a channel means
+ * the channel was made inside it. A thread waiting on a note is never durable:
+ * it is not a goroutine, so it is not in anybody's bubble, and the park below
+ * is not the one being asked about. */
+static void parked_sleep(Parked *p, SchedUnlockFn unlockf, void *arg, bool durable) {
     if (p->g != NULL) {
-        sched_park(unlockf, arg);
+        burrow__park(unlockf, arg, durable);
         return;
     }
 
@@ -481,8 +519,13 @@ static void parked_wake(Parked *p) {
  * thread may be about to wake somebody and the runtime cannot see it. */
 BURROW_NORETURN static void block_forever(void) {
     if (sched_current() != NULL) {
+        /* Durable, which sounds odd for a wait that never ends and is exactly
+         * right. A bubble asks whether anything outside it could end this wait,
+         * and here the answer is that nothing anywhere could, so a bubble whose
+         * goroutines have all ended up here has deadlocked and should say so.
+         * Go counts a nil channel the same way. */
         for (;;)
-            sched_park(NULL, NULL);
+            burrow__park(NULL, NULL, true);
     }
 
     burrow__Note n;
@@ -533,6 +576,12 @@ Chan *chan_make(Alloc *a, const Type *elem, Int cap) {
     c->elemsize = (uint32_t)each;
     c->dataqsiz = (uint32_t)n;
 
+    /* Whoever is making it decides, once, and that is the whole of how a
+     * channel comes to belong to a bubble. There is no call to put one in and
+     * none to take one out, the same as Go. */
+    const Goroutine *g = sched_current();
+    c->bubble = g != NULL ? g->bubble : NULL;
+
     /* A zero sized element type has a buffer with nothing in it, and pointing
      * at the header rather than past the end of the allocation keeps every copy
      * a copy between two real addresses. Go points its buffer at the channel
@@ -564,6 +613,12 @@ void chan_free(Chan *c) {
 /* -------------------------------------------------------------------- send */
 
 static bool chan_send_impl(Chan *c, const void *v, bool block) {
+    /* At the top rather than at the park, because the question of whether this
+     * goroutine is allowed to touch this channel at all does not depend on
+     * whether it ends up waiting, and a program that gets it wrong should hear
+     * about it on the send that happened to find a receiver too. */
+    bool durable = bubbled(c);
+
     /* Go's unlocked early reject, and only for the non-blocking form. A send
      * that is not going to block has to answer now, and a full channel that is
      * open cannot become sendable by the time the lock is taken without some
@@ -621,7 +676,7 @@ static bool chan_send_impl(Chan *c, const void *v, bool block) {
     w2.sendp = v;
     waitq_push(&c->sendq, &w2);
 
-    parked_sleep(&p, unlock_chan, c);
+    parked_sleep(&p, unlock_chan, c, durable);
     parked_done(&p);
 
     /* Woken. Either the value went somewhere or the channel closed under us,
@@ -649,6 +704,8 @@ bool chan_try_send(Chan *c, const void *v) {
 /* ----------------------------------------------------------------- receive */
 
 static bool chan_recv_impl(Chan *c, void *out, bool *ok, bool block) {
+    bool durable = bubbled(c);
+
     /* The mirror of the send side's early reject, with the extra clause Go has:
      * an empty channel that is not closed cannot produce a value without
      * somebody else running, but an empty channel that is closed can produce an
@@ -723,7 +780,7 @@ static bool chan_recv_impl(Chan *c, void *out, bool *ok, bool block) {
     w2.recvp = out;
     waitq_push(&c->recvq, &w2);
 
-    parked_sleep(&p, unlock_chan, c);
+    parked_sleep(&p, unlock_chan, c, durable);
     parked_done(&p);
 
     /* Woken. A sender filled `out` directly, or close zeroed it. */
@@ -1116,6 +1173,8 @@ Int chan_select(SelectCase *cases, Int n) {
      * are unreachable, which is what a second default means anyway. */
     Int dflt = -1;
     Alloc *home = NULL;
+    Int nchan = 0;
+    Int nbubbled = 0;
 
     for (Int i = 0; i < n; i++) {
         switch (cases[i].op) {
@@ -1125,13 +1184,33 @@ Int chan_select(SelectCase *cases, Int n) {
             break;
         case SELECT_SEND:
         case SELECT_RECV:
-            if (home == NULL && cases[i].c != NULL)
+            if (cases[i].c == NULL)
+                break;
+            if (home == NULL)
                 home = cases[i].c->a;
+            nchan++;
+            if (bubbled(cases[i].c))
+                nbubbled++;
             break;
         default:
             runtime_throw(BURROW_S("chan_select: bad case op"));
         }
     }
+
+    /* Every channel or none, which is stricter than asking whether any of them
+     * is in the bubble and is the only answer that is safe.
+     *
+     * A select waiting on one channel from inside the bubble and one from
+     * outside it can be completed by a goroutine the bubble knows nothing
+     * about, so it is not durably blocked however bubbled the other case is.
+     * Calling it durable would let a test decide everybody had stopped while
+     * one of them was waiting on the outside world.
+     *
+     * A case on a NULL channel is not counted either way, because it can never
+     * fire and so cannot be the thing that ends the wait. A select made
+     * entirely of them has nchan zero, which is not durable here and does not
+     * need to be: it goes to block_forever below, which has its own answer. */
+    bool durable = nchan > 0 && nbubbled == nchan;
 
     /* No channel anywhere means nothing can ever become ready, so the answer is
      * the default if there is one and a wait that never ends if there is not.
@@ -1214,7 +1293,7 @@ Int chan_select(SelectCase *cases, Int n) {
     s.p.won = -1;
 
     sel_enqueue(&s);
-    parked_sleep(&s.p, unlock_select, &s);
+    parked_sleep(&s.p, unlock_select, &s, durable);
 
     /* Woken, which means somebody claimed this select and wrote down which case
      * they completed. The other entries are still sitting on their queues, or

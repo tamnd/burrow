@@ -749,12 +749,26 @@ static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
     burrow__atomic_add_u32(&sched.ngoroutine, (uint32_t)-1);
 
     bool was_main = gp == sched.maing;
+
+    /* Taken off the goroutine before it goes on a free list, so that the next
+     * goroutine to reuse this one starts outside every bubble, and kept in a
+     * local so that the bubble can be told after the free list has it. */
+    burrow__Bubble *bubble = gp->bubble;
+    gp->bubble = NULL;
+    burrow__atomic_store_release_u32(&gp->bubbleblocked, 0);
+
     gfput(m->p, gp);
 
     /* Last, so that by the time runtime_main wakes up, the goroutine it was
      * waiting for is on a free list and not half way there. */
     if (was_main)
         burrow__note_wake(&sched.mainnote);
+
+    /* After the free list, because the last goroutine out of a bubble starts
+     * the goroutine sitting in synctest_run, and that one returning takes the
+     * bubble's memory with it. Nothing here may touch the bubble afterwards. */
+    if (bubble != NULL)
+        burrow__bubble_leave(bubble);
     return NULL;
 }
 
@@ -776,16 +790,52 @@ static burrow__G *park0(burrow__M *m, burrow__G *gp) {
 
     SchedUnlockFn unlockf = m->parkunlock;
     void *lock = m->parklock;
+    bool durable = m->parkdurable;
     m->parkunlock = NULL;
     m->parklock = NULL;
+    m->parkdurable = false;
+
+    /* Read now and used for the rest of this function, because after the unlock
+     * below another thread may start this goroutine, and a goroutine that is
+     * running again can exit, go on a free list and be handed out to somebody
+     * else. The hold below is what keeps the bubble the local points at alive
+     * for as long as the local is in use. */
+    burrow__Bubble *bubble = gp->bubble;
+    bool blocked = durable && bubble != NULL;
+
+    if (blocked) {
+        /* The hold first and the count second, which together leave the bubble
+         * where it was. See burrow/sched.h: the park is not over until the
+         * unlock function has had its say, and until then this goroutine may
+         * still turn out to be running.
+         *
+         * The count itself has to go before the unlock, because a wake arriving
+         * the instant the lock is released has to find a count it can put
+         * back. */
+        burrow__bubble_hold(bubble);
+        burrow__bubble_blocking(gp);
+    }
 
     if (unlockf != NULL && !unlockf(gp, lock)) {
         /* One more look under the lock found the thing this goroutine was about
          * to wait for. Nobody else has seen it in the waiting state, because
          * nobody else could have taken the lock, so it can simply carry on. */
+        if (blocked) {
+            burrow__bubble_unblock(gp);
+            burrow__bubble_release(bubble);
+        }
         set_status(gp, BURROW_GRUNNABLE);
         return gp;
     }
+
+    /* Last, and only once the unlock has happened, because this is where the
+     * bubble may find it has nothing left that can run and start somebody as a
+     * result. Somebody may be this goroutine, which is what a synctest_wait
+     * with nothing left to wait for looks like, and that is safe only here:
+     * the context was saved before park0 was ever called and the lock this
+     * goroutine was parking under has been let go. */
+    if (blocked)
+        burrow__bubble_release(bubble);
     return NULL;
 }
 
@@ -1705,7 +1755,7 @@ static void outside_leave(bool counted) {
         burrow__atomic_add_u32(&sched.noutside, (uint32_t)-1);
 }
 
-bool go_stack(Func fn, size_t stack_bytes) {
+static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble) {
     if (fn.f == NULL)
         runtime_throw(BURROW_S("go of a nil function"));
     if (burrow__atomic_load_acquire_u32(&sched.running) == 0)
@@ -1728,12 +1778,21 @@ bool go_stack(Func fn, size_t stack_bytes) {
     newg->entry = fn.f;
     newg->arg = fn.env;
     newg->next = NULL;
+    newg->bubble = bubble;
+    burrow__atomic_store_release_u32(&newg->bubbleblocked, 0);
 
     if (!make_context(newg, stack_bytes)) {
         gfput(p, newg);
         outside_leave(counted);
         return false;
     }
+
+    /* Before the goroutine is runnable, so that a bubble can never see a
+     * goroutine running that it has not counted. Everything the bubble decides
+     * rests on that: a count that lags behind by one running goroutine is a
+     * deadlock reported on a program that is fine. */
+    if (bubble != NULL)
+        burrow__bubble_join(bubble);
 
     set_status(newg, BURROW_GRUNNABLE);
     burrow__atomic_add_u32(&sched.ngoroutine, 1);
@@ -1753,20 +1812,46 @@ bool go_stack(Func fn, size_t stack_bytes) {
     return true;
 }
 
+bool go_stack(Func fn, size_t stack_bytes) {
+    /* The bubble comes from the parent, which is what makes a bubble a subtree
+     * rather than a list somebody has to keep up to date. A caller that is not
+     * a goroutine is not in one, which is right: a thread that has come in from
+     * outside the runtime cannot be inside a test's bubble. */
+    burrow__M *m = curm;
+    burrow__Bubble *bubble = (m != NULL && m->curg != NULL) ? m->curg->bubble : NULL;
+
+    return go_start(fn, stack_bytes, bubble);
+}
+
 bool go(Func fn) {
     return go_stack(fn, 0);
 }
 
+bool burrow__go_bubble(Func fn, burrow__Bubble *b) {
+    if (b == NULL)
+        runtime_throw(BURROW_S("burrow__go_bubble: no bubble"));
+
+    return go_start(fn, 0, b);
+}
+
 /* ------------------------------------------------------------ park and ready */
 
-void sched_park(SchedUnlockFn unlockf, void *lock) {
+void burrow__park(bool (*unlockf)(burrow__G *g, void *lock), void *lock, bool durable) {
     burrow__M *m = curm;
     if (m == NULL || m->curg == NULL)
         runtime_throw(BURROW_S("sched_park: not on a goroutine"));
 
     m->parkunlock = unlockf;
     m->parklock = lock;
+    m->parkdurable = durable;
     mcall(park0);
+}
+
+void sched_park(SchedUnlockFn unlockf, void *lock) {
+    /* Never durable. A caller outside the runtime has built its own waiting on
+     * top of the scheduler, and a bubble has no way to tell what will end it,
+     * so the honest answer is that this goroutine might still get somewhere. */
+    burrow__park(unlockf, lock, false);
 }
 
 void sched_ready(Goroutine *g) {
@@ -1780,6 +1865,16 @@ void sched_ready(Goroutine *g) {
         outside_leave(counted);
         runtime_throw(BURROW_S("sched_ready: goroutine is not parked"));
     }
+
+    /* Before the queue and not after it, so that a bubble counts a goroutine
+     * from the moment it could run rather than from the moment it does. A
+     * synctest_wait that returned while a goroutine was sitting on a run queue
+     * would be exactly the race the call exists to remove.
+     *
+     * Only whoever won the status change above gets here, which is what makes
+     * the count go back exactly once however many wakeups were racing. */
+    if (g->bubble != NULL)
+        burrow__bubble_unblock(g);
 
     burrow__M *m = curm;
     if (m != NULL && m->p != NULL) {

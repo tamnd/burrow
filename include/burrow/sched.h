@@ -41,6 +41,7 @@
 #define BURROW_SCHED_H
 
 #include "burrow/defer.h"
+#include "burrow/func.h"
 #include "burrow/lock.h"
 #include "burrow/mcontext.h"
 #include "burrow/note.h"
@@ -85,6 +86,7 @@ extern "C" {
 typedef struct burrow__G burrow__G;
 typedef struct burrow__P burrow__P;
 typedef struct burrow__M burrow__M;
+typedef struct burrow__Bubble burrow__Bubble;
 
 /* What a goroutine is doing. Go's names and Go's meanings.
  *
@@ -186,6 +188,28 @@ struct burrow__G {
      * because a panic does not cross one: a goroutine that panics unwinds its
      * own stack and nothing else, the same as Go. */
     burrow__PanicState panic;
+
+    /* The synctest bubble this goroutine is in, or NULL, which is what every
+     * goroutine outside a test is. Inherited from whoever called go, so a
+     * bubble is the subtree of goroutines that grew out of the one it started
+     * with, and it never changes afterwards: a goroutine is born into a bubble
+     * or is never in one.
+     *
+     * Read without a lock by this goroutine and by whoever is about to park or
+     * ready it. That is safe because the only write is the one go makes before
+     * the goroutine exists, and everything that reads it has already
+     * synchronised with that write by getting hold of the goroutine at all. */
+    BURROW_BORROWS(1) burrow__Bubble *bubble;
+
+    /* Whether the bubble above is currently counting this goroutine as durably
+     * blocked. Atomic, because the goroutine sets it on the way into a park and
+     * whoever wakes it clears it, and those are two threads.
+     *
+     * It is a flag on the goroutine rather than a number in the bubble because
+     * the count has to be given back exactly once. A wake and a timer expiry
+     * can both decide to start the same goroutine, only one of them wins the
+     * status change, and this is what makes only that one adjust the bubble. */
+    uint32_t bubbleblocked;
 
     /* Every G ever created, in one list under the scheduler lock. Go calls it
      * allgs and keeps it for the same two reasons: a traceback has to be able to
@@ -316,6 +340,12 @@ struct burrow__M {
      * does not have to include burrow/proc.h. The two types are the same type. */
     bool (*parkunlock)(burrow__G *g, void *lock);
     void *parklock;
+
+    /* Whether a synctest bubble should count the park about to happen as
+     * durable, which means the only thing that can end it is another goroutine
+     * in the same bubble. Set and read alongside the two above and for the same
+     * reason they are here rather than in a local. */
+    bool parkdurable;
 
     /* The gate this M sleeps on when there is nothing to run. One per M rather
      * than one shared one, so that waking a thread wakes the thread that was
@@ -541,6 +571,82 @@ bool burrow__sched_spin_ok(void);
  * and nothing else. Nobody else may use it, because a goroutine sleeps in one
  * place at a time by definition. */
 BURROW_BORROWS(ret) burrow__Timer *burrow__sleep_timer(void);
+
+/* ------------------------------------------------------------------ bubbles
+ *
+ * The scheduler's half of testing/synctest. burrow/synctest.h is what a test
+ * calls and src/runtime/synctest.c is the bubble itself; these are the six
+ * points where the scheduler has to tell a bubble what just happened to one of
+ * its goroutines.
+ *
+ * The rule the bubble keeps is a count of how many of its goroutines could
+ * still get somewhere on their own, and the whole of synctest falls out of
+ * that count reaching zero. So every transition that changes the answer goes
+ * through here, and every one of them is on a path that was already going to
+ * touch the scheduler, which is why none of this costs anything to a program
+ * that never makes a bubble. */
+
+/* Parks the calling goroutine, the same as sched_park, and says whether a
+ * bubble should count the wait as durable.
+ *
+ * Durable means the only thing that can end this wait is another goroutine in
+ * the same bubble. A receive on a channel that was made in the bubble is
+ * durable. A read on a socket is not, and neither is a receive on a channel
+ * from outside, because in both of those a bubble that decided everybody was
+ * stuck would be wrong.
+ *
+ * The public sched_park is this with durable false, which is the right answer
+ * for anything the runtime does not recognise: a caller that has built its own
+ * waiting on top of the scheduler is waiting for something the bubble has no
+ * way to reason about. */
+void burrow__park(bool (*unlockf)(burrow__G *g, void *lock), void *lock, bool durable);
+
+/* Starts fn as a goroutine in b rather than in the caller's bubble, which is
+ * what makes the first goroutine of a bubble the first goroutine of a bubble.
+ * Every one after it inherits the bubble from its parent in the ordinary way.
+ * Answers what go answers. */
+bool burrow__go_bubble(Func fn, burrow__Bubble *b);
+
+/* A goroutine has been born into b, and is about to be made runnable. */
+void burrow__bubble_join(burrow__Bubble *b);
+
+/* A goroutine of b has exited. May start the goroutine that is waiting in
+ * synctest_run, so the caller must not touch the dead goroutine, or b, after
+ * this. */
+void burrow__bubble_leave(burrow__Bubble *b);
+
+/* A park of one of b's goroutines has begun, and until it ends b must neither
+ * decide it has gone idle nor decide it is over. Paired with
+ * burrow__bubble_release, and the two of them bracket everything a park does.
+ *
+ * Idle, because in between them the bubble's count of goroutines that can still
+ * move is short by one for a goroutine that may yet carry on running. Over,
+ * because once a park has let go of the lock it was parking under, the goroutine
+ * can be woken and can exit while the park is still running, and the bubble
+ * lives on a stack frame that the end of the bubble takes away. */
+void burrow__bubble_hold(burrow__Bubble *b);
+
+/* The park is over. Gives back what the call above took and then looks at what
+ * the bubble has become: it may start the goroutine sitting in synctest_wait or
+ * the one sitting in synctest_run, or stop the program because nothing in the
+ * bubble can move. Called with no lock of the caller's held, and the caller must
+ * not touch b afterwards.
+ *
+ * Takes the bubble rather than the goroutine on purpose. By this point the
+ * goroutine may already have been started again by somebody else and may
+ * already be finished, so reading its bubble here would be reading a field that
+ * belongs to whoever has it now. */
+void burrow__bubble_release(burrow__Bubble *b);
+
+/* g is about to park durably and must stop counting. Called with whatever lock
+ * the park is happening under still held, so that nobody can wake g in between
+ * and find the count already given back. */
+void burrow__bubble_blocking(burrow__G *g);
+
+/* g is running again, or is about to be, so it counts once more. Does nothing
+ * if it was never counted as blocked or if somebody else has already given the
+ * count back, which is what makes this safe to call on every wake. */
+void burrow__bubble_unblock(burrow__G *g);
 
 #ifdef __cplusplus
 }

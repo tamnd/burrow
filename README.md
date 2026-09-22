@@ -572,6 +572,34 @@ What is different is the ownership. Go leaves a context to the collector and the
 
 Details, including how to write your own `Context` and what each piece costs: [docs/guides/context.md](docs/guides/context.md).
 
+## Tests for concurrent code that do not sleep
+
+```c
+static void body(void *env) {
+    (void)env;
+
+    Chan *c = chan_make(heap_allocator(), TYPE_INT, 0);
+    go(BURROW_FN(Func, worker, c));
+
+    synctest_wait();
+
+    /* The worker is sitting on the send. Not probably, not usually. */
+    Int v;
+    chan_recv(c, &v);
+    chan_free(c);
+}
+
+synctest_run(BURROW_FN(Func, body, NULL));
+```
+
+Go's `testing/synctest`. A test for something concurrent usually either sleeps for long enough that the thing under test has probably finished, which makes the suite slow and flaky in proportion to how loaded the machine is, or grows a pile of channels and wait groups that exist only so the test can tell when to look, which means the test is no longer testing the program that ships.
+
+A bubble is the third way. Every goroutine started inside one belongs to it, and the bubble knows at every moment whether any of them can still make progress on its own. `synctest_wait` returns when none of them can, which is not a guess and not a timeout but a fact the scheduler already had. `synctest_run` returns when the last goroutine that was ever in the bubble has exited, so a goroutine a test forgot about is a test that does not finish rather than a surprise two tests later.
+
+The question it answers is whether a goroutine is durably blocked, meaning the only thing that can wake it is another goroutine in the same bubble. A receive on a channel made inside the bubble is durable, a socket read is not, and the difference is decided at the park by the code that knows what is being waited for. A bubble where everything is durably blocked and nobody is waiting has deadlocked, and that stops the program rather than hanging it.
+
+Details, including what a bubbled channel is and why fake time is a separate change: [docs/guides/synctest.md](docs/guides/synctest.md).
+
 ## Status
 
 Early. Nothing is usable yet.

@@ -19,7 +19,7 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
-/* Guarded to match the backend choice in burrow/context.h exactly, so that a
+/* Guarded to match the backend choice in burrow/mcontext.h exactly, so that a
  * Windows on arm build and a build that asked for the portable path both get an
  * empty object file rather than a duplicate symbol. */
 #if defined(__aarch64__) && !defined(_WIN32) && !defined(BURROW_PORTABLE_CONTEXT)
@@ -49,15 +49,15 @@
 
 	.text
 
-/* void burrow__context_switch_raw(burrow__Context *from, burrow__Context *to)
+/* void burrow__mcontext_switch_raw(burrow__MContext *from, burrow__MContext *to)
  *
  * x0 is from, x1 is to. */
-	.globl SYM(burrow__context_switch_raw)
+	.globl SYM(burrow__mcontext_switch_raw)
 #if !defined(__APPLE__)
-	.type burrow__context_switch_raw,%function
+	.type burrow__mcontext_switch_raw,%function
 #endif
 	.p2align 4
-SYM(burrow__context_switch_raw):
+SYM(burrow__mcontext_switch_raw):
 	.cfi_startproc
 	sub	sp, sp, #176
 	.cfi_def_cfa_offset 176
@@ -122,10 +122,10 @@ SYM(burrow__context_switch_raw):
 	ret
 	.cfi_endproc
 #if !defined(__APPLE__)
-	.size burrow__context_switch_raw, . - burrow__context_switch_raw
+	.size burrow__mcontext_switch_raw, . - burrow__mcontext_switch_raw
 #endif
 
-/* void *burrow__context_make_asm(void *stack_top, burrow__Context *self)
+/* void *burrow__mcontext_make_asm(void *stack_top, burrow__MContext *self)
  *
  * x0 is one past the last byte of the caller's stack buffer and x1 is the
  * context. Returns the stack pointer the first switch should load.
@@ -133,12 +133,12 @@ SYM(burrow__context_switch_raw):
  * x19 gets the context and x30 gets the entry stub, so that the loads above
  * hand the trampoline what it needs and then return straight into it. x29 is
  * zeroed, which is how a frame pointer walk knows it has reached the bottom. */
-	.globl SYM(burrow__context_make_asm)
+	.globl SYM(burrow__mcontext_make_asm)
 #if !defined(__APPLE__)
-	.type burrow__context_make_asm,%function
+	.type burrow__mcontext_make_asm,%function
 #endif
 	.p2align 4
-SYM(burrow__context_make_asm):
+SYM(burrow__mcontext_make_asm):
 	.cfi_startproc
 	and	x0, x0, #-16
 	sub	x0, x0, #176
@@ -152,11 +152,11 @@ SYM(burrow__context_make_asm):
 	str	xzr, [x0, #80]		/* x29 */
 
 #if defined(__APPLE__)
-	adrp	x2, SYM(burrow__context_entry)@PAGE
-	add	x2, x2, SYM(burrow__context_entry)@PAGEOFF
+	adrp	x2, SYM(burrow__mcontext_entry)@PAGE
+	add	x2, x2, SYM(burrow__mcontext_entry)@PAGEOFF
 #else
-	adrp	x2, burrow__context_entry
-	add	x2, x2, :lo12:burrow__context_entry
+	adrp	x2, burrow__mcontext_entry
+	add	x2, x2, :lo12:burrow__mcontext_entry
 #endif
 	str	x2, [x0, #88]		/* x30 */
 
@@ -175,28 +175,28 @@ SYM(burrow__context_make_asm):
 	ret
 	.cfi_endproc
 #if !defined(__APPLE__)
-	.size burrow__context_make_asm, . - burrow__context_make_asm
+	.size burrow__mcontext_make_asm, . - burrow__mcontext_make_asm
 #endif
 
 /* Where a fresh context begins. Reached by the ret above, so x30 holds this
  * address rather than a real caller's, and there is nothing underneath to
  * unwind into. .cfi_undefined on x30 is what tells a debugger to stop here. */
-	.globl SYM(burrow__context_entry)
+	.globl SYM(burrow__mcontext_entry)
 #if !defined(__APPLE__)
-	.type burrow__context_entry,%function
+	.type burrow__mcontext_entry,%function
 #endif
 	.p2align 4
-SYM(burrow__context_entry):
+SYM(burrow__mcontext_entry):
 	.cfi_startproc
 	.cfi_undefined x30
 	mov	x0, x19
-	bl	SYM(burrow__context_start)
-	/* burrow__context_start is declared _Noreturn and ends in a fatal error,
+	bl	SYM(burrow__mcontext_start)
+	/* burrow__mcontext_start is declared _Noreturn and ends in a fatal error,
 	 * so this is only reached if that stops being true. */
 	brk	#1
 	.cfi_endproc
 #if !defined(__APPLE__)
-	.size burrow__context_entry, . - burrow__context_entry
+	.size burrow__mcontext_entry, . - burrow__mcontext_entry
 #endif
 
 /* Says the stack does not need to be executable. One object file with no

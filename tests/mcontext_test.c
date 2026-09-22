@@ -19,23 +19,23 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
-#include "burrow/context.h"
+#include "burrow/mcontext.h"
 
 #include "harness.h"
 
 #include <stdint.h>
 
 /* Comfortably more than anything here needs, and a long way above
- * BURROW_CONTEXT_STACK_MIN so that the fallback paths have room for whatever
+ * BURROW_MCONTEXT_STACK_MIN so that the fallback paths have room for whatever
  * their signal frames want. */
 #define STACK_SIZE (64 * 1024)
 
 /* The context for the thread's own stack. Everything switches back to this. */
-static burrow__Context main_ctx;
+static burrow__MContext main_ctx;
 
 /* ------------------------------------------------------ run, and come back */
 
-static burrow__Context ran_ctx;
+static burrow__MContext ran_ctx;
 static _Alignas(16) unsigned char ran_stack[STACK_SIZE];
 static int ran_count;
 static void *ran_arg;
@@ -48,30 +48,30 @@ static void note_that_it_ran(void *arg) {
 TEST(a_context_runs_its_entry_and_returns_to_its_link) {
     int marker = 7;
 
-    CHECK(burrow__context_attach(&main_ctx));
+    CHECK(burrow__mcontext_attach(&main_ctx));
     ran_count = 0;
     ran_arg = NULL;
 
-    CHECK(burrow__context_make(&ran_ctx, ran_stack, sizeof ran_stack, note_that_it_ran,
-                               &marker, &main_ctx));
+    CHECK(burrow__mcontext_make(&ran_ctx, ran_stack, sizeof ran_stack, note_that_it_ran,
+                                &marker, &main_ctx));
 
     /* Making a context runs none of it. */
     CHECK(ran_count == 0);
 
-    burrow__context_switch(&main_ctx, &ran_ctx);
+    burrow__mcontext_switch(&main_ctx, &ran_ctx);
 
     /* The entry ran and then returned, and returning is what sent control back
      * here, since nothing in note_that_it_ran switches anywhere. */
     CHECK(ran_count == 1);
     CHECK(ran_arg == &marker);
 
-    burrow__context_free(&ran_ctx);
-    burrow__context_detach(&main_ctx);
+    burrow__mcontext_free(&ran_ctx);
+    burrow__mcontext_detach(&main_ctx);
 }
 
 /* ------------------------------------------------- stopping and continuing */
 
-static burrow__Context step_ctx;
+static burrow__MContext step_ctx;
 static _Alignas(16) unsigned char step_stack[STACK_SIZE];
 static int step_stage;
 
@@ -83,34 +83,34 @@ static void three_steps(void *arg) {
     int mine = 100;
 
     step_stage = mine + 1;
-    burrow__context_switch(&step_ctx, &main_ctx);
+    burrow__mcontext_switch(&step_ctx, &main_ctx);
 
     step_stage = mine + 2;
-    burrow__context_switch(&step_ctx, &main_ctx);
+    burrow__mcontext_switch(&step_ctx, &main_ctx);
 
     step_stage = mine + 3;
 }
 
 TEST(a_context_carries_on_where_it_stopped) {
-    CHECK(burrow__context_attach(&main_ctx));
+    CHECK(burrow__mcontext_attach(&main_ctx));
     step_stage = 0;
 
-    CHECK(burrow__context_make(&step_ctx, step_stack, sizeof step_stack, three_steps,
-                               NULL, &main_ctx));
+    CHECK(burrow__mcontext_make(&step_ctx, step_stack, sizeof step_stack, three_steps,
+                                NULL, &main_ctx));
 
-    burrow__context_switch(&main_ctx, &step_ctx);
+    burrow__mcontext_switch(&main_ctx, &step_ctx);
     CHECK(step_stage == 101);
 
-    burrow__context_switch(&main_ctx, &step_ctx);
+    burrow__mcontext_switch(&main_ctx, &step_ctx);
     CHECK(step_stage == 102);
 
     /* The third one runs off the end of three_steps, so this return is the link
      * being taken rather than a switch. */
-    burrow__context_switch(&main_ctx, &step_ctx);
+    burrow__mcontext_switch(&main_ctx, &step_ctx);
     CHECK(step_stage == 103);
 
-    burrow__context_free(&step_ctx);
-    burrow__context_detach(&main_ctx);
+    burrow__mcontext_free(&step_ctx);
+    burrow__mcontext_detach(&main_ctx);
 }
 
 /* ------------------------------------------------------------- the registers */
@@ -124,7 +124,7 @@ TEST(a_context_carries_on_where_it_stopped) {
 static volatile uint64_t int_seed = 0x0123456789abcdefU;
 static volatile double fp_seed = 3.0;
 
-static burrow__Context reg_ctx;
+static burrow__MContext reg_ctx;
 static _Alignas(16) unsigned char reg_stack[STACK_SIZE];
 static int reg_ok;
 
@@ -142,7 +142,7 @@ static void scribble_over_everything(void *arg) {
     double s = fp_seed * 14.0, t = fp_seed * 15.0, u = fp_seed * 16.0;
     double v = fp_seed * 17.0, w = fp_seed * 18.0;
 
-    burrow__context_switch(&reg_ctx, &main_ctx);
+    burrow__mcontext_switch(&reg_ctx, &main_ctx);
 
     reg_ok = a == (int_seed ^ 0x11U) && b == (int_seed ^ 0x22U) &&
              c == (int_seed ^ 0x33U) && d == (int_seed ^ 0x44U) &&
@@ -162,15 +162,15 @@ TEST(everything_the_abi_promised_survives_a_switch) {
     double s = fp_seed + 4.0, t = fp_seed + 5.0, u = fp_seed + 6.0;
     double v = fp_seed + 7.0, w = fp_seed + 8.0;
 
-    CHECK(burrow__context_attach(&main_ctx));
+    CHECK(burrow__mcontext_attach(&main_ctx));
     reg_ok = 0;
 
-    CHECK(burrow__context_make(&reg_ctx, reg_stack, sizeof reg_stack,
-                               scribble_over_everything, NULL, &main_ctx));
+    CHECK(burrow__mcontext_make(&reg_ctx, reg_stack, sizeof reg_stack,
+                                scribble_over_everything, NULL, &main_ctx));
 
     /* Out to a context that fills every callee saved register with something
      * else, and back. */
-    burrow__context_switch(&main_ctx, &reg_ctx);
+    burrow__mcontext_switch(&main_ctx, &reg_ctx);
 
     CHECK(a == int_seed + 1U);
     CHECK(b == int_seed + 2U);
@@ -191,11 +191,11 @@ TEST(everything_the_abi_promised_survives_a_switch) {
     CHECK(w == fp_seed + 8.0);
 
     /* And the same question asked from the other side. */
-    burrow__context_switch(&main_ctx, &reg_ctx);
+    burrow__mcontext_switch(&main_ctx, &reg_ctx);
     CHECK(reg_ok == 1);
 
-    burrow__context_free(&reg_ctx);
-    burrow__context_detach(&main_ctx);
+    burrow__mcontext_free(&reg_ctx);
+    burrow__mcontext_detach(&main_ctx);
 }
 
 /* ----------------------------------------------------------------- ping pong */
@@ -205,7 +205,7 @@ TEST(everything_the_abi_promised_survives_a_switch) {
  * volley out of a thousand stops the count dead. */
 #define VOLLEYS 1000
 
-static burrow__Context pong_ctx;
+static burrow__MContext pong_ctx;
 static _Alignas(16) unsigned char pong_stack[STACK_SIZE];
 static int volleys_seen;
 
@@ -213,26 +213,26 @@ static void pong(void *arg) {
     (void)arg;
     for (int i = 0; i < VOLLEYS; i++) {
         volleys_seen++;
-        burrow__context_switch(&pong_ctx, &main_ctx);
+        burrow__mcontext_switch(&pong_ctx, &main_ctx);
     }
 }
 
 TEST(two_contexts_pass_control_back_and_forth) {
-    CHECK(burrow__context_attach(&main_ctx));
+    CHECK(burrow__mcontext_attach(&main_ctx));
     volleys_seen = 0;
 
-    CHECK(burrow__context_make(&pong_ctx, pong_stack, sizeof pong_stack, pong, NULL,
-                               &main_ctx));
+    CHECK(burrow__mcontext_make(&pong_ctx, pong_stack, sizeof pong_stack, pong, NULL,
+                                &main_ctx));
 
     for (int i = 0; i < VOLLEYS; i++) {
-        burrow__context_switch(&main_ctx, &pong_ctx);
+        burrow__mcontext_switch(&main_ctx, &pong_ctx);
         CHECK(volleys_seen == i + 1);
     }
 
     CHECK(volleys_seen == VOLLEYS);
 
-    burrow__context_free(&pong_ctx);
-    burrow__context_detach(&main_ctx);
+    burrow__mcontext_free(&pong_ctx);
+    burrow__mcontext_detach(&main_ctx);
 }
 
 /* -------------------------------------------------------------------- nesting */
@@ -241,8 +241,8 @@ TEST(two_contexts_pass_control_back_and_forth) {
  * it. Nothing here is a stack of callers, and proving that is the point: the
  * scheduler hands control sideways constantly. */
 
-static burrow__Context outer_ctx;
-static burrow__Context inner_ctx;
+static burrow__MContext outer_ctx;
+static burrow__MContext inner_ctx;
 static _Alignas(16) unsigned char outer_stack[STACK_SIZE];
 static _Alignas(16) unsigned char inner_stack[STACK_SIZE];
 static int trail[8];
@@ -256,30 +256,30 @@ static void leave_a_mark(int mark) {
 static void inner_body(void *arg) {
     (void)arg;
     leave_a_mark(3);
-    burrow__context_switch(&inner_ctx, &outer_ctx);
+    burrow__mcontext_switch(&inner_ctx, &outer_ctx);
     leave_a_mark(5);
 }
 
 static void outer_body(void *arg) {
     (void)arg;
     leave_a_mark(2);
-    burrow__context_switch(&outer_ctx, &inner_ctx);
+    burrow__mcontext_switch(&outer_ctx, &inner_ctx);
     leave_a_mark(4);
-    burrow__context_switch(&outer_ctx, &inner_ctx);
+    burrow__mcontext_switch(&outer_ctx, &inner_ctx);
     leave_a_mark(6);
 }
 
 TEST(three_contexts_hand_control_around) {
-    CHECK(burrow__context_attach(&main_ctx));
+    CHECK(burrow__mcontext_attach(&main_ctx));
     trail_len = 0;
 
-    CHECK(burrow__context_make(&outer_ctx, outer_stack, sizeof outer_stack, outer_body,
-                               NULL, &main_ctx));
-    CHECK(burrow__context_make(&inner_ctx, inner_stack, sizeof inner_stack, inner_body,
-                               NULL, &main_ctx));
+    CHECK(burrow__mcontext_make(&outer_ctx, outer_stack, sizeof outer_stack, outer_body,
+                                NULL, &main_ctx));
+    CHECK(burrow__mcontext_make(&inner_ctx, inner_stack, sizeof inner_stack, inner_body,
+                                NULL, &main_ctx));
 
     leave_a_mark(1);
-    burrow__context_switch(&main_ctx, &outer_ctx);
+    burrow__mcontext_switch(&main_ctx, &outer_ctx);
 
     /* inner runs off the end of inner_body on its second turn, so its link
      * brings control back here, which is why the trail stops at 5 rather than
@@ -291,16 +291,16 @@ TEST(three_contexts_hand_control_around) {
     CHECK(trail[3] == 4);
     CHECK(trail[4] == 5);
 
-    burrow__context_free(&inner_ctx);
-    burrow__context_free(&outer_ctx);
-    burrow__context_detach(&main_ctx);
+    burrow__mcontext_free(&inner_ctx);
+    burrow__mcontext_free(&outer_ctx);
+    burrow__mcontext_detach(&main_ctx);
 }
 
 /* -------------------------------------------------------------- many at once */
 
 #define CREW 16
 
-static burrow__Context crew_ctx[CREW];
+static burrow__MContext crew_ctx[CREW];
 static _Alignas(16) unsigned char crew_stack[CREW][STACK_SIZE];
 static int crew_turns[CREW];
 
@@ -308,37 +308,37 @@ static void crew_body(void *arg) {
     int me = *(int *)arg;
     for (int i = 0; i < 4; i++) {
         crew_turns[me]++;
-        burrow__context_switch(&crew_ctx[me], &main_ctx);
+        burrow__mcontext_switch(&crew_ctx[me], &main_ctx);
     }
 }
 
 static int crew_ids[CREW];
 
 TEST(a_round_robin_over_sixteen_contexts) {
-    CHECK(burrow__context_attach(&main_ctx));
+    CHECK(burrow__mcontext_attach(&main_ctx));
 
     for (int i = 0; i < CREW; i++) {
         crew_ids[i] = i;
         crew_turns[i] = 0;
-        CHECK(burrow__context_make(&crew_ctx[i], crew_stack[i], STACK_SIZE, crew_body,
-                                   &crew_ids[i], &main_ctx));
+        CHECK(burrow__mcontext_make(&crew_ctx[i], crew_stack[i], STACK_SIZE, crew_body,
+                                    &crew_ids[i], &main_ctx));
     }
 
     for (int round = 0; round < 4; round++)
         for (int i = 0; i < CREW; i++)
-            burrow__context_switch(&main_ctx, &crew_ctx[i]);
+            burrow__mcontext_switch(&main_ctx, &crew_ctx[i]);
 
     for (int i = 0; i < CREW; i++)
         CHECK(crew_turns[i] == 4);
 
     for (int i = 0; i < CREW; i++)
-        burrow__context_free(&crew_ctx[i]);
-    burrow__context_detach(&main_ctx);
+        burrow__mcontext_free(&crew_ctx[i]);
+    burrow__mcontext_detach(&main_ctx);
 }
 
 /* ---------------------------------------------------------- what make refuses */
 
-static burrow__Context reject_ctx;
+static burrow__MContext reject_ctx;
 static _Alignas(16) unsigned char reject_stack[STACK_SIZE];
 
 static void never_runs(void *arg) {
@@ -348,20 +348,20 @@ static void never_runs(void *arg) {
 TEST(make_refuses_what_it_cannot_honour) {
     /* Below the floor. A stack this small would not hold a signal frame on the
      * fallback paths, never mind anything the caller wants to do. */
-    CHECK(!burrow__context_make(&reject_ctx, reject_stack, 128, never_runs, NULL,
-                                &main_ctx));
+    CHECK(!burrow__mcontext_make(&reject_ctx, reject_stack, 128, never_runs, NULL,
+                                 &main_ctx));
 
     /* Nothing to run. */
-    CHECK(!burrow__context_make(&reject_ctx, reject_stack, sizeof reject_stack, NULL,
-                                NULL, &main_ctx));
+    CHECK(!burrow__mcontext_make(&reject_ctx, reject_stack, sizeof reject_stack, NULL,
+                                 NULL, &main_ctx));
 
     /* No stack. Windows does not use the buffer, and it is still required
      * there, so that this is one rule rather than two. */
-    CHECK(!burrow__context_make(&reject_ctx, NULL, sizeof reject_stack, never_runs,
-                                NULL, &main_ctx));
+    CHECK(!burrow__mcontext_make(&reject_ctx, NULL, sizeof reject_stack, never_runs,
+                                 NULL, &main_ctx));
 
     /* A context that was never made is safe to free. */
-    burrow__context_free(&reject_ctx);
+    burrow__mcontext_free(&reject_ctx);
 }
 
 int main(void) {
@@ -372,5 +372,5 @@ int main(void) {
     RUN(three_contexts_hand_control_around);
     RUN(a_round_robin_over_sixteen_contexts);
     RUN(make_refuses_what_it_cannot_honour);
-    return harness_report("context");
+    return harness_report("mcontext");
 }

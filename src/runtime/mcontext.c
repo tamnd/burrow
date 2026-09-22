@@ -1,8 +1,8 @@
 /* The two backends that are not assembly, and the trampoline all three share.
  *
- * See burrow/context.h for what a context is. What is here is the portable
+ * See burrow/mcontext.h for what a context is. What is here is the portable
  * fallback in its two flavours, Fibers on Windows and ucontext everywhere else,
- * plus burrow__context_start, which is where every backend's entry trampoline
+ * plus burrow__mcontext_start, which is where every backend's entry trampoline
  * ends up once the new stack is live.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -18,7 +18,7 @@
 #define _XOPEN_SOURCE 700
 #endif
 
-#include "burrow/context.h"
+#include "burrow/mcontext.h"
 
 #include "burrow/core.h"
 #include "burrow/platform.h"
@@ -28,9 +28,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#if defined(BURROW_CONTEXT_FIBERS)
+#if defined(BURROW_MCONTEXT_FIBERS)
 #include <windows.h>
-#elif defined(BURROW_CONTEXT_UCONTEXT)
+#elif defined(BURROW_MCONTEXT_UCONTEXT)
 #include <ucontext.h>
 #endif
 
@@ -40,7 +40,7 @@
  * is the only file in the tree that is allowed to hear it. macOS on arm64 and
  * amd64 takes the assembly path anyway, so the only way to get here is to ask
  * for the fallback on purpose. */
-#if defined(BURROW_CONTEXT_UCONTEXT) && defined(BURROW_OS_DARWIN) &&                   \
+#if defined(BURROW_MCONTEXT_UCONTEXT) && defined(BURROW_OS_DARWIN) &&                  \
     defined(BURROW_CC_CLANG)
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #endif
@@ -49,17 +49,17 @@
  * way getentropy is, the functions are simply not there, and a build that gets
  * this far fails at the link line with four undefined references and no hint
  * about why. Saying it here turns that into something you can act on. */
-#if defined(BURROW_CONTEXT_UCONTEXT) && defined(BURROW_OS_LINUX) && !defined(__GLIBC__)
+#if defined(BURROW_MCONTEXT_UCONTEXT) && defined(BURROW_OS_LINUX) && !defined(__GLIBC__)
 #error "this libc has no ucontext, so this machine needs assembly"
 #endif
 
-#if defined(BURROW_CONTEXT_UCONTEXT)
-/* If either of these fires, raise BURROW_CONTEXT_STORAGE in burrow/context.h to
+#if defined(BURROW_MCONTEXT_UCONTEXT)
+/* If either of these fires, raise BURROW_MCONTEXT_STORAGE in burrow/mcontext.h to
  * the number the compiler is complaining about and put the platform in the
  * comment next to it. Catching this here is the entire reason the storage is a
  * fixed size array rather than a guess nobody checks. */
-_Static_assert(sizeof(ucontext_t) <= BURROW_CONTEXT_STORAGE,
-               "BURROW_CONTEXT_STORAGE is too small for this platform's ucontext_t");
+_Static_assert(sizeof(ucontext_t) <= BURROW_MCONTEXT_STORAGE,
+               "BURROW_MCONTEXT_STORAGE is too small for this platform's ucontext_t");
 _Static_assert(_Alignof(ucontext_t) <= 16,
                "this platform's ucontext_t wants more alignment than the storage has");
 #endif
@@ -84,11 +84,11 @@ _Static_assert(_Alignof(ucontext_t) <= 16,
  * the process from inside the sanitizer. Its answer to this is a fiber, which
  * is a call stack the switch hands over along with the stack itself.
  *
- * burrow/context.h has the longer version of both. */
+ * burrow/mcontext.h has the longer version of both. */
 
 /* ------------------------------------------------ the address sanitizer */
 
-#if defined(BURROW_CONTEXT_ASAN)
+#if defined(BURROW_MCONTEXT_ASAN)
 
 #include <sanitizer/asan_interface.h>
 
@@ -104,15 +104,15 @@ _Static_assert(_Alignof(ucontext_t) <= 16,
  * with the bounds of the stack that was just left. So the first switch away
  * from a thread is what fills that thread's context in, and this is how the far
  * side knows whose context to fill. */
-static BURROW_THREAD_LOCAL burrow__Context *annotate_prev;
+static BURROW_THREAD_LOCAL burrow__MContext *annotate_prev;
 
-static void asan_make(burrow__Context *ctx, void *stack, size_t size) {
+static void asan_make(burrow__MContext *ctx, void *stack, size_t size) {
     ctx->stack = stack;
     ctx->stack_size = size;
     ctx->fake_stack = NULL;
 }
 
-static void asan_attach(burrow__Context *self) {
+static void asan_attach(burrow__MContext *self) {
     /* No bounds, because nobody handed this thread its stack. The comment on
      * annotate_prev says where they come from instead. */
     self->stack = NULL;
@@ -124,13 +124,13 @@ static void asan_attach(burrow__Context *self) {
  * which the sanitizer wants to know: passing NULL where the fake stack would be
  * saved is what tells it to throw that fake stack away instead of keeping it
  * for a return that is not coming. */
-static void asan_leave(burrow__Context *from, burrow__Context *to, bool final) {
+static void asan_leave(burrow__MContext *from, burrow__MContext *to, bool final) {
     annotate_prev = from;
     __sanitizer_start_switch_fiber(final ? NULL : &from->fake_stack, to->stack,
                                    to->stack_size);
 }
 
-static void asan_enter(burrow__Context *self) {
+static void asan_enter(burrow__MContext *self) {
     const void *bottom = NULL;
     size_t size = 0;
 
@@ -151,13 +151,13 @@ static void asan_enter(burrow__Context *self) {
 
 #else
 
-static void asan_make(burrow__Context *ctx, void *stack, size_t size) {
+static void asan_make(burrow__MContext *ctx, void *stack, size_t size) {
     (void)ctx;
     (void)stack;
     (void)size;
 }
 
-static void asan_attach(burrow__Context *self) {
+static void asan_attach(burrow__MContext *self) {
     (void)self;
 }
 
@@ -165,15 +165,15 @@ static void asan_attach(burrow__Context *self) {
  * off the three functions that would call them are inline nothing in the header
  * and this file does not define them at all, so a no-op here would be a static
  * function nobody calls, which this tree treats as an error. */
-#if defined(BURROW_CONTEXT_ANNOTATE)
+#if defined(BURROW_MCONTEXT_ANNOTATE)
 
-static void asan_leave(burrow__Context *from, burrow__Context *to, bool final) {
+static void asan_leave(burrow__MContext *from, burrow__MContext *to, bool final) {
     (void)from;
     (void)to;
     (void) final;
 }
 
-static void asan_enter(burrow__Context *self) {
+static void asan_enter(burrow__MContext *self) {
     (void)self;
 }
 
@@ -183,7 +183,7 @@ static void asan_enter(burrow__Context *self) {
 
 /* ------------------------------------------------- the thread sanitizer */
 
-#if defined(BURROW_CONTEXT_TSAN)
+#if defined(BURROW_MCONTEXT_TSAN)
 
 #include "burrow/lock.h"
 
@@ -230,7 +230,7 @@ static Spare tsan_pool[TSAN_FIBER_POOL];
 static int32_t tsan_pool_len;
 static int32_t tsan_fibers_made;
 
-static void tsan_make(burrow__Context *ctx) {
+static void tsan_make(burrow__MContext *ctx) {
     burrow__lock(&tsan_pool_lock);
     if (tsan_pool_len > 0) {
         tsan_pool_len--;
@@ -243,7 +243,7 @@ static void tsan_make(burrow__Context *ctx) {
         burrow__unlock(&tsan_pool_lock);
         runtime_throw(BURROW_S("this build has run the thread sanitizer out of fibers, "
                                "which takes more goroutines alive at once than it can "
-                               "follow. See include/burrow/context.h."));
+                               "follow. See include/burrow/mcontext.h."));
     }
     tsan_fibers_made++;
     burrow__unlock(&tsan_pool_lock);
@@ -257,7 +257,7 @@ static void tsan_make(burrow__Context *ctx) {
         runtime_throw(BURROW_S("the thread sanitizer would not give out a fiber"));
 }
 
-static void tsan_free(burrow__Context *ctx) {
+static void tsan_free(burrow__MContext *ctx) {
     void *fiber = ctx->tsan_fiber;
     uint32_t uses = ctx->tsan_uses;
 
@@ -288,7 +288,7 @@ static void tsan_free(burrow__Context *ctx) {
     __tsan_destroy_fiber(fiber);
 }
 
-static void tsan_attach(burrow__Context *self) {
+static void tsan_attach(burrow__MContext *self) {
     /* The thread already has one and it is the one its own stack belongs to.
      * Zero uses says it is borrowed, so freeing this context leaves it alone. */
     self->tsan_fiber = __tsan_get_current_fiber();
@@ -307,29 +307,29 @@ static void tsan_attach(burrow__Context *self) {
  * filled in by the goroutine that started it and read by the goroutine that
  * runs it, and the only thing in between is a run queue that the scheduler
  * touches on its own stack and not on either of theirs. */
-static BURROW_NO_TSAN void tsan_switch(burrow__Context *to) {
+static BURROW_NO_TSAN void tsan_switch(burrow__MContext *to) {
     if (to->tsan_fiber != NULL)
         __tsan_switch_to_fiber(to->tsan_fiber, 0);
 }
 
 #else
 
-static void tsan_make(burrow__Context *ctx) {
+static void tsan_make(burrow__MContext *ctx) {
     (void)ctx;
 }
 
-static void tsan_free(burrow__Context *ctx) {
+static void tsan_free(burrow__MContext *ctx) {
     (void)ctx;
 }
 
-static void tsan_attach(burrow__Context *self) {
+static void tsan_attach(burrow__MContext *self) {
     (void)self;
 }
 
 /* Gated for the reason the address sanitizer's pair above is gated. */
-#if defined(BURROW_CONTEXT_ANNOTATE)
+#if defined(BURROW_MCONTEXT_ANNOTATE)
 
-static void tsan_switch(burrow__Context *to) {
+static void tsan_switch(burrow__MContext *to) {
     (void)to;
 }
 
@@ -339,21 +339,21 @@ static void tsan_switch(burrow__Context *to) {
 
 /* ------------------------------------------------- what the backends call */
 
-static void annotate_make(burrow__Context *ctx, void *stack, size_t size) {
+static void annotate_make(burrow__MContext *ctx, void *stack, size_t size) {
     asan_make(ctx, stack, size);
     tsan_make(ctx);
 }
 
-static void annotate_attach(burrow__Context *self) {
+static void annotate_attach(burrow__MContext *self) {
     asan_attach(self);
     tsan_attach(self);
 }
 
-static void annotate_free(burrow__Context *ctx) {
+static void annotate_free(burrow__MContext *ctx) {
     tsan_free(ctx);
 }
 
-#if defined(BURROW_CONTEXT_ANNOTATE)
+#if defined(BURROW_MCONTEXT_ANNOTATE)
 
 /* The fiber goes first, because once the address sanitizer has been told a
  * switch has started it wants the switch and nothing much else.
@@ -372,18 +372,19 @@ static void annotate_free(burrow__Context *ctx) {
  * way. Enter is ordinary instrumented code because it does not move: it is
  * called on the far side of the switch and pushes and pops on one fiber. */
 
-BURROW_NO_TSAN void burrow__context_leave(burrow__Context *from, burrow__Context *to) {
+BURROW_NO_TSAN void burrow__mcontext_leave(burrow__MContext *from,
+                                           burrow__MContext *to) {
     tsan_switch(to);
     asan_leave(from, to, false);
 }
 
-BURROW_NO_TSAN void burrow__context_leave_final(burrow__Context *from,
-                                                burrow__Context *to) {
+BURROW_NO_TSAN void burrow__mcontext_leave_final(burrow__MContext *from,
+                                                 burrow__MContext *to) {
     tsan_switch(to);
     asan_leave(from, to, true);
 }
 
-void burrow__context_enter(burrow__Context *self) {
+void burrow__mcontext_enter(burrow__MContext *self) {
     asan_enter(self);
 }
 
@@ -391,11 +392,11 @@ void burrow__context_enter(burrow__Context *self) {
 
 /* ------------------------------------------------------------- the trampoline */
 
-BURROW_NORETURN void burrow__context_start(burrow__Context *self) {
+BURROW_NORETURN void burrow__mcontext_start(burrow__MContext *self) {
     /* The other half of the switch that got here. On a context that has never
      * run there is nothing saved to hand back, which is what the NULL in its
      * fake_stack means. */
-    burrow__context_enter(self);
+    burrow__mcontext_enter(self);
 
     self->entry(self->arg);
 
@@ -407,8 +408,8 @@ BURROW_NORETURN void burrow__context_start(burrow__Context *self) {
 
     /* The final form of the switch, because this context is done and the stack
      * it is standing on stops meaning anything the moment the switch lands. */
-    burrow__context_leave_final(self, self->link);
-    burrow__context_switch_raw(self, self->link);
+    burrow__mcontext_leave_final(self, self->link);
+    burrow__mcontext_switch_raw(self, self->link);
 
     /* Something switched back into a context that has already finished. Its
      * stack is whatever the entry function left behind, so carrying on would be
@@ -416,17 +417,17 @@ BURROW_NORETURN void burrow__context_start(burrow__Context *self) {
     runtime_throw(BURROW_S("switched into a context that already returned"));
 }
 
-#if defined(BURROW_CONTEXT_ASM)
+#if defined(BURROW_MCONTEXT_ASM)
 
 /* ------------------------------------------------------------------ assembly */
 
-/* Both of these are in src/runtime/context_<arch>.S. burrow__context_switch_raw
+/* Both of these are in src/runtime/mcontext_<arch>.S. burrow__mcontext_switch_raw
  * is declared in the header and is entirely assembly. This one is the other half
  * of make: it lays out the frame that switch will pop the first time, which
  * means the frame layout is described once, in the file that also pops it. */
-void *burrow__context_make_asm(void *stack_top, burrow__Context *self);
+void *burrow__mcontext_make_asm(void *stack_top, burrow__MContext *self);
 
-bool burrow__context_attach(burrow__Context *self) {
+bool burrow__mcontext_attach(burrow__MContext *self) {
     /* Nothing for the machine to do. The first switch away from this thread is
      * what fills the context in, and there is no kernel object to ask for. */
     if (self == NULL)
@@ -436,14 +437,14 @@ bool burrow__context_attach(burrow__Context *self) {
     return true;
 }
 
-void burrow__context_detach(burrow__Context *self) {
+void burrow__mcontext_detach(burrow__MContext *self) {
     (void)self;
 }
 
-bool burrow__context_make(burrow__Context *ctx, void *stack, size_t size,
-                          void (*entry)(void *), void *arg, burrow__Context *link) {
+bool burrow__mcontext_make(burrow__MContext *ctx, void *stack, size_t size,
+                           void (*entry)(void *), void *arg, burrow__MContext *link) {
     if (ctx == NULL || stack == NULL || entry == NULL ||
-        size < BURROW_CONTEXT_STACK_MIN)
+        size < BURROW_MCONTEXT_STACK_MIN)
         return false;
 
     ctx->entry = entry;
@@ -454,11 +455,11 @@ bool burrow__context_make(burrow__Context *ctx, void *stack, size_t size,
     /* Stacks grow down on both architectures with assembly here, so the context
      * starts at the top of the buffer. The alignment the ABI wants is applied on
      * the other side, because it is the same file that knows the frame size. */
-    ctx->sp = burrow__context_make_asm((unsigned char *)stack + size, ctx);
+    ctx->sp = burrow__mcontext_make_asm((unsigned char *)stack + size, ctx);
     return true;
 }
 
-void burrow__context_free(burrow__Context *ctx) {
+void burrow__mcontext_free(burrow__MContext *ctx) {
     /* The caller owns the stack and always did, so the only thing here is
      * whatever a sanitizer was holding, which in an ordinary build is nothing. */
     if (ctx == NULL)
@@ -467,7 +468,7 @@ void burrow__context_free(burrow__Context *ctx) {
     annotate_free(ctx);
 }
 
-#elif defined(BURROW_CONTEXT_FIBERS)
+#elif defined(BURROW_MCONTEXT_FIBERS)
 
 /* -------------------------------------------------------------------- fibers */
 
@@ -478,10 +479,10 @@ void burrow__context_free(burrow__Context *ctx) {
  * for somebody to find with a debugger. */
 
 static void WINAPI fiber_proc(void *param) {
-    burrow__context_start((burrow__Context *)param);
+    burrow__mcontext_start((burrow__MContext *)param);
 }
 
-bool burrow__context_attach(burrow__Context *self) {
+bool burrow__mcontext_attach(burrow__MContext *self) {
     if (self == NULL)
         return false;
 
@@ -498,7 +499,7 @@ bool burrow__context_attach(burrow__Context *self) {
     return self->fiber != NULL;
 }
 
-void burrow__context_detach(burrow__Context *self) {
+void burrow__mcontext_detach(burrow__MContext *self) {
     if (self == NULL || self->fiber == NULL || self->owns_fiber)
         return;
 
@@ -506,14 +507,14 @@ void burrow__context_detach(burrow__Context *self) {
     self->fiber = NULL;
 }
 
-bool burrow__context_make(burrow__Context *ctx, void *stack, size_t size,
-                          void (*entry)(void *), void *arg, burrow__Context *link) {
+bool burrow__mcontext_make(burrow__MContext *ctx, void *stack, size_t size,
+                           void (*entry)(void *), void *arg, burrow__MContext *link) {
     /* The stack is checked even though it is not used, so that the contract is
      * the same sentence on every platform. A caller that passes NULL here has a
      * bug on three platforms out of four, and finding it on the fourth as well
      * is worth more than the call it allows. */
     if (ctx == NULL || stack == NULL || entry == NULL ||
-        size < BURROW_CONTEXT_STACK_MIN)
+        size < BURROW_MCONTEXT_STACK_MIN)
         return false;
 
     /* See the note above: the fiber brings its own stack and the caller's is
@@ -533,7 +534,7 @@ bool burrow__context_make(burrow__Context *ctx, void *stack, size_t size,
     return ctx->fiber != NULL;
 }
 
-void burrow__context_free(burrow__Context *ctx) {
+void burrow__mcontext_free(burrow__MContext *ctx) {
     if (ctx == NULL)
         return;
 
@@ -549,7 +550,7 @@ void burrow__context_free(burrow__Context *ctx) {
     ctx->fiber = NULL;
 }
 
-void burrow__context_switch_raw(burrow__Context *from, burrow__Context *to) {
+void burrow__mcontext_switch_raw(burrow__MContext *from, burrow__MContext *to) {
     /* A fiber saves itself, so there is nothing to write into `from`. It stays
      * in the signature because every other backend needs it and a caller should
      * not have to know which one it is talking to. */
@@ -566,23 +567,23 @@ void burrow__context_switch_raw(burrow__Context *from, burrow__Context *to) {
  * is enough, so this cast is the one the array was shaped for. Going through
  * void * is what stops -Wcast-align from objecting to a cast it cannot see the
  * alignment of. */
-static ucontext_t *as_ucontext(burrow__Context *c) {
+static ucontext_t *as_ucontext(burrow__MContext *c) {
     return (ucontext_t *)(void *)c->storage;
 }
 
 /* makecontext hands its function no arguments worth having. The usual way round
  * that is to chop a pointer into two ints and put it back together, which is
  * undefined behaviour dressed up as a calling convention. This is a thread local
- * instead: burrow__context_switch_raw writes it on the way out, and the trampoline
+ * instead: burrow__mcontext_switch_raw writes it on the way out, and the trampoline
  * is the first thing that runs on the other side of that switch, on the same
  * thread, so it reads back what the switch wrote. */
-static BURROW_THREAD_LOCAL burrow__Context *resuming;
+static BURROW_THREAD_LOCAL burrow__MContext *resuming;
 
 static void ucontext_trampoline(void) {
-    burrow__context_start(resuming);
+    burrow__mcontext_start(resuming);
 }
 
-bool burrow__context_attach(burrow__Context *self) {
+bool burrow__mcontext_attach(burrow__MContext *self) {
     if (self == NULL)
         return false;
 
@@ -598,16 +599,16 @@ bool burrow__context_attach(burrow__Context *self) {
     return getcontext(as_ucontext(self)) == 0;
 }
 
-void burrow__context_detach(burrow__Context *self) {
+void burrow__mcontext_detach(burrow__MContext *self) {
     (void)self;
 }
 
-bool burrow__context_make(burrow__Context *ctx, void *stack, size_t size,
-                          void (*entry)(void *), void *arg, burrow__Context *link) {
+bool burrow__mcontext_make(burrow__MContext *ctx, void *stack, size_t size,
+                           void (*entry)(void *), void *arg, burrow__MContext *link) {
     ucontext_t *uc;
 
     if (ctx == NULL || stack == NULL || entry == NULL ||
-        size < BURROW_CONTEXT_STACK_MIN)
+        size < BURROW_MCONTEXT_STACK_MIN)
         return false;
 
     ctx->entry = entry;
@@ -623,7 +624,7 @@ bool burrow__context_make(burrow__Context *ctx, void *stack, size_t size,
     uc->uc_stack.ss_size = size;
 
     /* NULL rather than the link, because the trampoline never returns. It calls
-     * burrow__context_start, which switches to the link itself, so that all
+     * burrow__mcontext_start, which switches to the link itself, so that all
      * three backends do the same thing in the same place. uc_link would do it
      * here and nowhere else, which is one more difference to remember. */
     uc->uc_link = NULL;
@@ -632,7 +633,7 @@ bool burrow__context_make(burrow__Context *ctx, void *stack, size_t size,
     return true;
 }
 
-void burrow__context_free(burrow__Context *ctx) {
+void burrow__mcontext_free(burrow__MContext *ctx) {
     /* Nothing of the context's own, since a ucontext holds no kernel object and
      * the stack belongs to the caller. A sanitizer may still have something. */
     if (ctx == NULL)
@@ -641,7 +642,7 @@ void burrow__context_free(burrow__Context *ctx) {
     annotate_free(ctx);
 }
 
-void burrow__context_switch_raw(burrow__Context *from, burrow__Context *to) {
+void burrow__mcontext_switch_raw(burrow__MContext *from, burrow__MContext *to) {
     resuming = to;
     (void)swapcontext(as_ucontext(from), as_ucontext(to));
 }

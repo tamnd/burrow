@@ -38,7 +38,7 @@
 
 #include "burrow/atomic.h"
 #include "burrow/clock.h"
-#include "burrow/context.h"
+#include "burrow/mcontext.h"
 #include "burrow/core.h"
 #include "burrow/func.h"
 #include "burrow/mem.h"
@@ -63,7 +63,7 @@
  * every goroutine would cost its whole stack in real memory rather than in the
  * pages it touches. So the mapping is skipped there and the size is handed to
  * the fiber instead. */
-#if defined(BURROW_CONTEXT_FIBERS)
+#if defined(BURROW_MCONTEXT_FIBERS)
 #define GOROUTINE_MAPS_ITS_STACK 0
 #else
 #define GOROUTINE_MAPS_ITS_STACK 1
@@ -626,8 +626,8 @@ static burrow__G *gfget(burrow__P *p, size_t bytes) {
  * to the central one. The context goes now rather than at reuse, because on
  * Windows it is a fiber and holding on to it holds a stack with it. */
 static void gfput(burrow__P *p, BURROW_RETAINS(2) burrow__G *g) {
-    burrow__context_free(&g->ctx);
-    g->ctx = (burrow__Context){0};
+    burrow__mcontext_free(&g->ctx);
+    g->ctx = (burrow__MContext){0};
 
     if (p == NULL) {
         burrow__lock(&sched.lock);
@@ -690,14 +690,14 @@ static void goroutine_start(void *arg) {
 static bool make_context(burrow__G *g, size_t asked) {
 #if GOROUTINE_MAPS_ITS_STACK
     (void)asked;
-    return burrow__context_make(&g->ctx, g->stack.lo, goroutine_stack_bytes(g),
+    return burrow__mcontext_make(&g->ctx, g->stack.lo, goroutine_stack_bytes(g),
                                 goroutine_start, g, NULL);
 #else
     /* The fiber backend makes its own stack and ignores the one it is handed,
      * but it checks the argument anyway so that a NULL is a bug on every
      * platform rather than on three out of four. So it gets an address that
      * exists, belongs to this goroutine, and is never read through here. */
-    return burrow__context_make(&g->ctx, (void *)g, asked, goroutine_start, g, NULL);
+    return burrow__mcontext_make(&g->ctx, (void *)g, asked, goroutine_start, g, NULL);
 #endif
 }
 
@@ -710,7 +710,7 @@ static void mcall(burrow__G *(*fn)(burrow__M *m, burrow__G *g)) {
 
     m->mcall = fn;
     m->mcallg = gp;
-    burrow__context_switch(&gp->ctx, &m->g0.ctx);
+    burrow__mcontext_switch(&gp->ctx, &m->g0.ctx);
 }
 
 /* Runs one goroutine until it stops, makes the call it left behind, and answers
@@ -723,7 +723,7 @@ static burrow__G *execute(burrow__M *m, burrow__G *gp) {
     set_status(gp, BURROW_GRUNNING);
     burrow__stack_set_current(&gp->stack);
 
-    burrow__context_switch(&m->g0.ctx, &gp->ctx);
+    burrow__mcontext_switch(&m->g0.ctx, &gp->ctx);
 
     /* Back on the thread's own stack, so the goroutine's bounds are no longer
      * what a stack overflow should be measured against. */
@@ -1615,7 +1615,7 @@ static void mstart(void *arg) {
     burrow__M *m = (burrow__M *)arg;
 
     curm = m;
-    if (!burrow__context_attach(&m->g0.ctx))
+    if (!burrow__mcontext_attach(&m->g0.ctx))
         runtime_throw(BURROW_S("mstart: this thread cannot be made switchable"));
 
     /* Per thread alternate signal stack, so that a goroutine's stack overflow
@@ -1639,7 +1639,7 @@ static void mstart(void *arg) {
     }
 
     burrow__stack_guard_disarm_thread();
-    burrow__context_detach(&m->g0.ctx);
+    burrow__mcontext_detach(&m->g0.ctx);
     curm = NULL;
 }
 
@@ -1900,7 +1900,7 @@ static void teardown(void) {
     burrow__G *g = sched.allg;
     while (g != NULL) {
         burrow__G *next = g->allnext;
-        burrow__context_free(&g->ctx);
+        burrow__mcontext_free(&g->ctx);
         stack_give_back(g);
         if (g->timer != NULL)
             mem_free(a, g->timer, sizeof(burrow__Timer), _Alignof(burrow__Timer));

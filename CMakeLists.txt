@@ -35,7 +35,7 @@ option(BURROW_ENABLE_BOEHM "Link the Boehm collector and enable the gc backend" 
 # Forces the portable context switch on a machine that has assembly for it. This
 # is not something you would ship, it is how you find out whether a bug is in
 # the assembly or above it. It has to be a PUBLIC definition further down rather
-# than a private one, because it changes the shape of burrow__Context and every
+# than a private one, because it changes the shape of burrow__MContext and every
 # file that reads the header has to agree about that.
 option(BURROW_PORTABLE_CONTEXT "Use ucontext or Fibers instead of the context switch assembly" OFF)
 

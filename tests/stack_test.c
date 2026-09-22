@@ -20,7 +20,7 @@
 
 #include "burrow/stack.h"
 
-#include "burrow/context.h"
+#include "burrow/mcontext.h"
 #include "burrow/core.h"
 #include "burrow/platform.h"
 #include "burrow/runtime.h"
@@ -218,8 +218,8 @@ TEST(the_current_stack_belongs_to_one_thread) {
 
 /* ------------------------------------------------------ running on a stack */
 
-static burrow__Context ran_here;
-static burrow__Context back_to;
+static burrow__MContext ran_here;
+static burrow__MContext back_to;
 static bool it_ran;
 static bool sp_was_inside;
 
@@ -244,15 +244,15 @@ TEST(a_context_runs_on_a_stack_this_file_allocated) {
     it_ran = false;
     sp_was_inside = false;
 
-    CHECK(burrow__context_attach(&back_to));
-    CHECK(burrow__context_make(&ran_here, s.lo, usable(&s), note_where_i_am, &s,
+    CHECK(burrow__mcontext_attach(&back_to));
+    CHECK(burrow__mcontext_make(&ran_here, s.lo, usable(&s), note_where_i_am, &s,
                                &back_to));
-    burrow__context_switch(&back_to, &ran_here);
+    burrow__mcontext_switch(&back_to, &ran_here);
 
     CHECK(it_ran);
-#if !defined(BURROW_CONTEXT_FIBERS) && !defined(SANITIZED)
+#if !defined(BURROW_MCONTEXT_FIBERS) && !defined(SANITIZED)
     /* Not on Windows, where a fiber brings its own stack and the one above is
-     * deliberately not the memory it runs on. burrow/context.h says so. And not
+     * deliberately not the memory it runs on. burrow/mcontext.h says so. And not
      * under a sanitizer, for the reason at the top of this file. */
     CHECK(sp_was_inside);
 #else
@@ -263,8 +263,8 @@ TEST(a_context_runs_on_a_stack_this_file_allocated) {
     (void)sp_was_inside;
 #endif
 
-    burrow__context_free(&ran_here);
-    burrow__context_detach(&back_to);
+    burrow__mcontext_free(&ran_here);
+    burrow__mcontext_detach(&back_to);
     burrow__stack_free(&s);
 }
 
@@ -358,7 +358,7 @@ TEST(a_write_into_the_guard_is_a_stack_overflow) {
  * Windows.
  *
  * A fiber brings its own stack and the mapping allocated here is deliberately
- * not the memory it runs on, which burrow/context.h says and the test above
+ * not the memory it runs on, which burrow/mcontext.h says and the test above
  * already works around. So a recursion inside a fiber runs off the end of the
  * fiber's stack and hits the operating system's guard page rather than this
  * library's, and the handler correctly decides the fault is none of its
@@ -368,7 +368,7 @@ TEST(a_write_into_the_guard_is_a_stack_overflow) {
  *
  * It is also the second caveat next to burrow__stack_guard_arm happening for
  * real: a vectored handler runs on the stack that faulted. */
-#if !defined(BURROW_CONTEXT_FIBERS)
+#if !defined(BURROW_MCONTEXT_FIBERS)
 
 /* A frame small enough that it cannot step over a guard page, since the
  * smallest page anywhere here is 4096. This is the thing the header warns
@@ -403,8 +403,8 @@ static BURROW_NOINLINE size_t eat_stack(size_t depth) {
     return below + (size_t)pad[sizeof pad - 1];
 }
 
-static burrow__Context deep;
-static burrow__Context shallow;
+static burrow__MContext deep;
+static burrow__MContext shallow;
 
 static void go_too_deep(void *arg) {
     (void)arg;
@@ -423,12 +423,12 @@ static void run_off_the_bottom(void *arg) {
     if (!burrow__stack_alloc(&s, 64u * 1024u))
         return;
 
-    if (!burrow__context_attach(&shallow)) {
+    if (!burrow__mcontext_attach(&shallow)) {
         burrow__stack_free(&s);
         return;
     }
-    if (!burrow__context_make(&deep, s.lo, usable(&s), go_too_deep, NULL, &shallow)) {
-        burrow__context_detach(&shallow);
+    if (!burrow__mcontext_make(&deep, s.lo, usable(&s), go_too_deep, NULL, &shallow)) {
+        burrow__mcontext_detach(&shallow);
         burrow__stack_free(&s);
         return;
     }
@@ -440,7 +440,7 @@ static void run_off_the_bottom(void *arg) {
     memset(reported, 0, sizeof reported);
 
     if (ESCAPE_SET(escape) == 0)
-        burrow__context_switch(&shallow, &deep);
+        burrow__mcontext_switch(&shallow, &deep);
 
     runtime_set_fatal_handler(NULL);
     overflowing_said_so = did_report && strcmp(reported, "stack overflow") == 0;
@@ -451,8 +451,8 @@ static void run_off_the_bottom(void *arg) {
      * back. Nothing on that stack has to be unwound, because the stack is about
      * to stop existing, and that is the whole reason a goroutine stack is a
      * mapping of its own. */
-    burrow__context_free(&deep);
-    burrow__context_detach(&shallow);
+    burrow__mcontext_free(&deep);
+    burrow__mcontext_detach(&shallow);
     burrow__stack_free(&s);
     burrow__stack_guard_disarm_thread();
 }
@@ -467,7 +467,7 @@ TEST(running_off_the_bottom_of_a_stack_is_a_stack_overflow) {
     CHECK(overflowing_said_so);
 }
 
-#endif /* !BURROW_CONTEXT_FIBERS */
+#endif /* !BURROW_MCONTEXT_FIBERS */
 
 #endif /* !SANITIZED */
 
@@ -481,7 +481,7 @@ int main(void) {
     RUN(a_context_runs_on_a_stack_this_file_allocated);
 #if !defined(SANITIZED)
     RUN(a_write_into_the_guard_is_a_stack_overflow);
-#if !defined(BURROW_CONTEXT_FIBERS)
+#if !defined(BURROW_MCONTEXT_FIBERS)
     RUN(running_off_the_bottom_of_a_stack_is_a_stack_overflow);
 #endif
 #endif

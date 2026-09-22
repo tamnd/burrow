@@ -1,6 +1,6 @@
 /* Memory for a goroutine to run on, with a page underneath it that faults.
  *
- * burrow/context.h switches between stacks and does not care where one came
+ * burrow/mcontext.h switches between stacks and does not care where one came
  * from. This is where one comes from. A stack here is a mapping the library
  * owns, with one or more unreadable pages immediately below the usable part, so
  * that a goroutine which runs off the bottom hits memory that is not there
@@ -10,7 +10,7 @@
  *     if (!burrow__stack_alloc(&s, 64 * 1024))
  *         return false;
  *     size_t size = (size_t)((char *)s.hi - (char *)s.lo);
- *     burrow__context_make(&ctx, s.lo, size, run, arg, &main_ctx);
+ *     burrow__mcontext_make(&ctx, s.lo, size, run, arg, &main_ctx);
  *     burrow__stack_free(&s);
  *
  * Stacks grow down everywhere burrow runs, so `hi` is where a context starts
@@ -55,7 +55,7 @@ extern "C" {
 
 /* The smallest usable stack burrow__stack_alloc will hand out.
  *
- * The same number as BURROW_CONTEXT_STACK_MIN, and that is on purpose rather
+ * The same number as BURROW_MCONTEXT_STACK_MIN, and that is on purpose rather
  * than a coincidence: the only reason to allocate one of these is to run a
  * context on it, so a stack this file is willing to produce has to be one that
  * file is willing to accept. */

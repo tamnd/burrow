@@ -754,7 +754,7 @@ TEST(a_goroutine_can_hand_a_value_to_a_thread_that_is_not_one) {
  * rounds almost never lands in that gap. Twenty thousand does.
  *
  * The same twenty thousand under a thread sanitizer, which took a fix in
- * src/runtime/context.c to be possible and is worth keeping an eye on: this is
+ * src/runtime/mcontext.c to be possible and is worth keeping an eye on: this is
  * the test that goes first when the sanitizer stops being told about goroutine
  * switches, and what it does then is die inside the sanitizer rather than fail
  * anything here. It costs about five seconds. */

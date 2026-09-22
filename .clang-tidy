@@ -114,7 +114,7 @@ CheckOptions:
   # to declare, and none of them has an unreserved spelling.
   #
   # _XOPEN_SOURCE is what asks for ucontext and for the POSIX signal API, and
-  # src/runtime/context.c and src/runtime/stack.c define it before their first
+  # src/runtime/mcontext.c and src/runtime/stack.c define it before their first
   # include. _POSIX_C_SOURCE is the smaller one next to it, which is what
   # src/runtime/clock.c asks for to get CLOCK_MONOTONIC and what
   # src/runtime/note.c asks for to get pthread_condattr_setclock. The other two

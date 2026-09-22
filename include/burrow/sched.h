@@ -40,7 +40,7 @@
 #ifndef BURROW_SCHED_H
 #define BURROW_SCHED_H
 
-#include "burrow/context.h"
+#include "burrow/mcontext.h"
 #include "burrow/defer.h"
 #include "burrow/lock.h"
 #include "burrow/note.h"
@@ -137,7 +137,7 @@ typedef enum burrow__PStatus {
 struct burrow__G {
     /* Where to resume. First, because the switch touches it on every schedule
      * and a goroutine that is about to run is a cache miss either way. */
-    burrow__Context ctx;
+    burrow__MContext ctx;
 
     /* The memory ctx runs on, from burrow/stack.h. Kept when the goroutine dies
      * so that the next one on this P can have it without a system call. */

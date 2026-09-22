@@ -225,7 +225,7 @@
  * Nothing about what burrow does changes when this is on. What it decides is
  * how much burrow has to say out loud: a build with it on hands that sanitizer
  * a fiber per goroutine so that the call stack it keeps follows the goroutine
- * rather than the thread, which include/burrow/context.h explains at length,
+ * rather than the thread, which include/burrow/mcontext.h explains at length,
  * and it is also what BURROW_NO_TSAN below is gated on. With it off none of
  * that exists and there is nothing to gate. */
 
@@ -278,7 +278,7 @@
  * function it compiles and a matching pop to the end. A function that changes
  * which stack those two are counted against pushes on one and pops on the
  * other, which is the exact bookkeeping error it is there to prevent. See
- * src/runtime/context.c.
+ * src/runtime/mcontext.c.
  *
  * Two spellings, and they are not interchangeable. gcc takes no_sanitize and
  * leaves the function alone. clang takes no_sanitize as being about the memory

@@ -287,7 +287,7 @@ behind a feature macro on musl, they are absent, and a build that reaches for
 them fails at the link line. The answer, as in `minicoro`, `libaco` and
 Boost.Context: **hand-written per-ABI assembly**, about 40 instructions each.
 
-`burrow/context.h` is the interface and it is deliberately small: attach a
+`burrow/mcontext.h` is the interface and it is deliberately small: attach a
 thread, make a context on a stack the caller owns, switch, free. Nothing in it
 allocates. Three backends, picked by the machine rather than by a configure
 step: assembly on amd64 and arm64 away from Windows, Fibers on Windows, and
@@ -295,7 +295,7 @@ ucontext for anything else. `-DBURROW_PORTABLE_CONTEXT=1` forces the fallback,
 which is how you find out whether a bug is in the assembly or above it, and CI
 builds and runs the suite both ways on every pull request.
 
-`burrow__context_start` is the one piece all three share. Each backend's entry
+`burrow__mcontext_start` is the one piece all three share. Each backend's entry
 stub gets as far as having the new stack live and then calls it, so running the
 entry function, going to the link when that returns, and failing loudly when
 there is no link are written once rather than three times in three languages.
@@ -343,8 +343,8 @@ Two details that are easy to get wrong and expensive to discover late:
   fiber does not give its slot back, and the eight thousand one hundred and
   ninety third one a process asks for takes it down. Pooling makes the number
   that matters the most goroutines alive at once rather than the number ever
-  started. `include/burrow/context.h` has the arithmetic and
-  `src/runtime/context.c` the code.
+  started. `include/burrow/mcontext.h` has the arithmetic and
+  `src/runtime/mcontext.c` the code.
 
 Guard pages were on this list and are now in `burrow/stack.h`, which §4
 describes.

@@ -1,5 +1,10 @@
 /* Putting one stack down and picking another one up.
  *
+ * The m is for machine, and it is there because `burrow/context.h` is Go's
+ * `context` package, which is a thing a program uses and this is not. This is
+ * a register set and a stack pointer, the same thing POSIX calls an
+ * `mcontext_t`, and nothing outside the runtime has any reason to include it.
+ *
  * A goroutine is a stack and a place to resume on it. Switching between two of
  * them means saving the registers the ABI says a function is allowed to expect
  * to survive a call, pointing the stack pointer at the other stack, and loading
@@ -23,9 +28,9 @@
  * are built both ways for that reason.
  *
  * Nothing here allocates. The caller owns the stack, passes it in, and keeps it
- * alive until the context is finished with. Guard pages are not here yet, so an
- * overflow today runs off the end of the buffer rather than hitting a page that
- * faults. That arrives with stack allocation, which is the next piece.
+ * alive until the context is finished with. Where that stack comes from and
+ * what stops an overflow running off the end of it are `burrow/stack.h`, which
+ * is the caller this file was written to be used by.
  *
  * Address sanitizer is told about the switch, because a sanitizer that is not
  * told believes the thread is still on the stack it was on before. Thread
@@ -35,8 +40,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
-#ifndef BURROW_CONTEXT_H
-#define BURROW_CONTEXT_H
+#ifndef BURROW_MCONTEXT_H
+#define BURROW_MCONTEXT_H
 
 #include "burrow/platform.h"
 
@@ -64,11 +69,11 @@ extern "C" {
 #endif
 
 #if !defined(BURROW_PORTABLE_CONTEXT)
-#define BURROW_CONTEXT_ASM 1
+#define BURROW_MCONTEXT_ASM 1
 #elif defined(BURROW_OS_WINDOWS)
-#define BURROW_CONTEXT_FIBERS 1
+#define BURROW_MCONTEXT_FIBERS 1
 #else
-#define BURROW_CONTEXT_UCONTEXT 1
+#define BURROW_MCONTEXT_UCONTEXT 1
 #endif
 
 /* Whether the sanitizer annotations are compiled in.
@@ -104,24 +109,24 @@ extern "C" {
  * space is one way. Destroying a fiber does not give its slot back, and the
  * eight thousand one hundred and ninety third one a process asks for takes the
  * process down. That is kMaxTid in the sanitizer's own source and it is what
- * measuring it on gcc 13 and clang 18 gives. So src/runtime/context.c keeps a
+ * measuring it on gcc 13 and clang 18 gives. So src/runtime/mcontext.c keeps a
  * pool and hands the same fiber to one context after another, which turns the
  * number needed into the most goroutines alive at once rather than the number
  * ever started. Creating one costs about fourteen microseconds and switching
  * about twenty five nanoseconds, so only the first is worth avoiding. */
-#if BURROW_ASAN && !defined(BURROW_CONTEXT_FIBERS)
-#define BURROW_CONTEXT_ASAN 1
+#if BURROW_ASAN && !defined(BURROW_MCONTEXT_FIBERS)
+#define BURROW_MCONTEXT_ASAN 1
 #endif
 
-#if BURROW_TSAN && !defined(BURROW_CONTEXT_FIBERS)
-#define BURROW_CONTEXT_TSAN 1
+#if BURROW_TSAN && !defined(BURROW_MCONTEXT_FIBERS)
+#define BURROW_MCONTEXT_TSAN 1
 #endif
 
-#if defined(BURROW_CONTEXT_ASAN) || defined(BURROW_CONTEXT_TSAN)
-#define BURROW_CONTEXT_ANNOTATE 1
+#if defined(BURROW_MCONTEXT_ASAN) || defined(BURROW_MCONTEXT_TSAN)
+#define BURROW_MCONTEXT_ANNOTATE 1
 #endif
 
-#if defined(BURROW_CONTEXT_UCONTEXT)
+#if defined(BURROW_MCONTEXT_UCONTEXT)
 /* Room for a ucontext_t without dragging <ucontext.h> into every file that
  * includes this one. That header needs _XOPEN_SOURCE defined before it, which
  * is something only a .c file can promise, and on macOS it also deprecates
@@ -129,10 +134,10 @@ extern "C" {
  *
  * The number is measured rather than guessed. glibc is 968 bytes on amd64 and
  * 4560 on arm64, where the signal context reserves space for the widest vector
- * registers the architecture might have. src/runtime/context.c asserts at
+ * registers the architecture might have. src/runtime/mcontext.c asserts at
  * compile time that this is big enough, so a platform that needs more fails to
  * build and says so instead of writing past the end of it. */
-#define BURROW_CONTEXT_STORAGE 8192
+#define BURROW_MCONTEXT_STORAGE 8192
 #endif
 
 /* A saved execution state. One of these per goroutine, plus one per thread for
@@ -141,15 +146,15 @@ extern "C" {
  * The fields are here so a context can sit inside a G without an allocation.
  * They are not the interface and the assembly knows about exactly one of them,
  * which is that `sp` is the first word. */
-typedef struct burrow__Context burrow__Context;
+typedef struct burrow__MContext burrow__MContext;
 
-struct burrow__Context {
-#if defined(BURROW_CONTEXT_ASM)
+struct burrow__MContext {
+#if defined(BURROW_MCONTEXT_ASM)
     /* The switched out stack pointer, and everything else is saved on the stack
      * it points at. Must stay at offset zero: the assembly hard codes that and
      * nothing else about this struct. */
     void *sp;
-#elif defined(BURROW_CONTEXT_FIBERS)
+#elif defined(BURROW_MCONTEXT_FIBERS)
     /* LPVOID from CreateFiber or ConvertThreadToFiber, spelled void * so that
      * <windows.h> stays out of this header. */
     void *fiber;
@@ -157,7 +162,7 @@ struct burrow__Context {
      * down deletes it or hands the thread back. */
     bool owns_fiber;
 #else
-    _Alignas(16) unsigned char storage[BURROW_CONTEXT_STORAGE];
+    _Alignas(16) unsigned char storage[BURROW_MCONTEXT_STORAGE];
 #endif
 
     /* What to run and what to hand it. Read by the entry trampoline once the
@@ -167,9 +172,9 @@ struct burrow__Context {
     void *arg;
 
     /* Where to go when entry returns. */
-    burrow__Context *link;
+    burrow__MContext *link;
 
-#if defined(BURROW_CONTEXT_ASAN)
+#if defined(BURROW_MCONTEXT_ASAN)
     /* What the address sanitizer needs and nothing else does, which is why it
      * is not here in an ordinary build.
      *
@@ -186,7 +191,7 @@ struct burrow__Context {
     void *fake_stack;
 #endif
 
-#if defined(BURROW_CONTEXT_TSAN)
+#if defined(BURROW_MCONTEXT_TSAN)
     /* The thread sanitizer's fiber for this context, and how many contexts have
      * had it before this one.
      *
@@ -199,13 +204,13 @@ struct burrow__Context {
 #endif
 };
 
-/* The smallest stack burrow__context_make will accept.
+/* The smallest stack burrow__mcontext_make will accept.
  *
  * It is larger than it looks like it needs to be because the fallback paths set
  * the floor. A ucontext stack has to hold whatever the platform's signal frame
  * needs, and on arm64 that alone is several kilobytes. Real goroutine stacks are
  * sized by the scheduler and are much bigger than this. */
-#define BURROW_CONTEXT_STACK_MIN 16384
+#define BURROW_MCONTEXT_STACK_MIN 16384
 
 /* Makes the calling thread's own stack switchable, recording it in `self` so
  * that something can switch back to it.
@@ -219,11 +224,11 @@ struct burrow__Context {
  * converted into one, and skipping it there means the first switch quietly does
  * nothing. Call it everywhere anyway, because the platform where it matters is
  * not the platform anybody is testing on. */
-bool burrow__context_attach(burrow__Context *self);
+bool burrow__mcontext_attach(burrow__MContext *self);
 
 /* Undoes attach. The thread must be running on its own stack again, which is to
  * say the last switch has already come back. */
-void burrow__context_detach(burrow__Context *self);
+void burrow__mcontext_detach(burrow__MContext *self);
 
 /* Arranges `stack` so that switching to `ctx` starts running `entry(arg)` on it.
  *
@@ -235,7 +240,7 @@ void burrow__context_detach(burrow__Context *self);
  * context too. Passing NULL says entry never returns, and if it does anyway the
  * program stops with a fatal error rather than returning into rubble.
  *
- * False means the size was below BURROW_CONTEXT_STACK_MIN or the system would
+ * False means the size was below BURROW_MCONTEXT_STACK_MIN or the system would
  * not give out what the context needs. It does not mean the stack is too small
  * for what entry will actually do, which is not a thing that can be known from
  * here.
@@ -245,8 +250,8 @@ void burrow__context_detach(burrow__Context *self);
  * so `stack` is ignored there and only `size` is used. Passing a real buffer
  * anyway is what keeps the same call working everywhere, and the buffer is
  * simply not the memory the context runs on. */
-bool burrow__context_make(burrow__Context *ctx, void *stack, size_t size,
-                          void (*entry)(void *), void *arg, burrow__Context *link);
+bool burrow__mcontext_make(burrow__MContext *ctx, void *stack, size_t size,
+                           void (*entry)(void *), void *arg, burrow__MContext *link);
 
 /* Releases whatever the context was holding, which on most platforms is nothing
  * at all, because the caller owns the stack. On Windows it deletes the fiber,
@@ -254,39 +259,40 @@ bool burrow__context_make(burrow__Context *ctx, void *stack, size_t size,
  *
  * The context must not be the one currently running and must not be switched to
  * again. Safe on a context that was never made. */
-void burrow__context_free(burrow__Context *ctx);
+void burrow__mcontext_free(burrow__MContext *ctx);
 
 /* The switch itself, with nothing around it. The assembly defines this one, and
  * so do the two portable backends, and none of them knows what a sanitizer is.
- * Call burrow__context_switch below instead. */
-void burrow__context_switch_raw(burrow__Context *from, burrow__Context *to);
+ * Call burrow__mcontext_switch below instead. */
+void burrow__mcontext_switch_raw(burrow__MContext *from, burrow__MContext *to);
 
 /* The two halves of telling a sanitizer that a switch is about to happen and
  * that one has just happened. Leave is called on the old stack and enter on the
  * new one, and between them is the only place a thread is on neither.
  *
- * `burrow__context_leave_final` is leave for a context that is finished and
+ * `burrow__mcontext_leave_final` is leave for a context that is finished and
  * will never be switched to again, which is a different thing to the address
  * sanitizer: it is what says the fake stack can go rather than be kept for a
  * return that is not coming. The thread sanitizer does not care, because a
  * context that is finished still has to hand its fiber over the same way.
  *
  * With no sanitizer on, all three are empty and the compiler deletes them. */
-#if defined(BURROW_CONTEXT_ANNOTATE)
-void burrow__context_leave(burrow__Context *from, burrow__Context *to);
-void burrow__context_leave_final(burrow__Context *from, burrow__Context *to);
-void burrow__context_enter(burrow__Context *self);
+#if defined(BURROW_MCONTEXT_ANNOTATE)
+void burrow__mcontext_leave(burrow__MContext *from, burrow__MContext *to);
+void burrow__mcontext_leave_final(burrow__MContext *from, burrow__MContext *to);
+void burrow__mcontext_enter(burrow__MContext *self);
 #else
-static inline void burrow__context_leave(burrow__Context *from, burrow__Context *to) {
+static inline void burrow__mcontext_leave(burrow__MContext *from,
+                                          burrow__MContext *to) {
     (void)from;
     (void)to;
 }
-static inline void burrow__context_leave_final(burrow__Context *from,
-                                               burrow__Context *to) {
+static inline void burrow__mcontext_leave_final(burrow__MContext *from,
+                                                burrow__MContext *to) {
     (void)from;
     (void)to;
 }
-static inline void burrow__context_enter(burrow__Context *self) {
+static inline void burrow__mcontext_enter(burrow__MContext *self) {
     (void)self;
 }
 #endif
@@ -303,10 +309,11 @@ static inline void burrow__context_enter(burrow__Context *self) {
  * It is inline here rather than a function in context.c so that the ordinary
  * build is still one call straight into the assembly. The two annotations
  * around the switch are empty unless a sanitizer is on. */
-static inline void burrow__context_switch(burrow__Context *from, burrow__Context *to) {
-    burrow__context_leave(from, to);
-    burrow__context_switch_raw(from, to);
-    burrow__context_enter(from);
+static inline void burrow__mcontext_switch(burrow__MContext *from,
+                                           burrow__MContext *to) {
+    burrow__mcontext_leave(from, to);
+    burrow__mcontext_switch_raw(from, to);
+    burrow__mcontext_enter(from);
 }
 
 /* The other end of every trampoline. Runs entry, then goes to link.
@@ -314,10 +321,10 @@ static inline void burrow__context_switch(burrow__Context *from, burrow__Context
  * Not something to call. It is here because the assembly has to name it, and a
  * symbol the assembly reaches for that has no declaration in a header is a
  * symbol that gets renamed one day and fails at link time on one architecture. */
-BURROW_NORETURN void burrow__context_start(burrow__Context *self);
+BURROW_NORETURN void burrow__mcontext_start(burrow__MContext *self);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* BURROW_CONTEXT_H */
+#endif /* BURROW_MCONTEXT_H */

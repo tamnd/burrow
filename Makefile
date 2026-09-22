@@ -99,8 +99,8 @@ endif
 # Forces the portable context switch on a machine that has assembly for it.
 # This is not a fallback you would ship, it is how you find out whether a bug is
 # in the assembly or above it, and it has to go in DEFINES rather than on one
-# compile line because it changes the shape of burrow__Context and so every file
-# that sees the header has to agree about it.
+# compile line because it changes the shape of burrow__MContext and so every
+# file that sees the header has to agree about it.
 ifeq ($(PORTABLE_CONTEXT),1)
   DEFINES += -DBURROW_PORTABLE_CONTEXT=1
 endif

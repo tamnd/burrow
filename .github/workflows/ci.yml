@@ -244,14 +244,14 @@ jobs:
           # the right outcome rather than a failure. The default shell has
           # pipefail on, so nm cannot be on the left of a pipe.
           #
-          # burrow__context_make_asm and not burrow__context_switch, because
+          # burrow__mcontext_make_asm and not burrow__mcontext_switch, because
           # every backend defines a context switch and only the assembly defines
           # this one. Looking for the name both paths have would be a check that
           # passes whatever happens.
           syms=$(nm build-asm/libburrow.a 2>/dev/null || true)
           case "$syms" in
-            *"T burrow__context_make_asm"*) ;;
-            *"T _burrow__context_make_asm"*) ;;
+            *"T burrow__mcontext_make_asm"*) ;;
+            *"T _burrow__mcontext_make_asm"*) ;;
             *)
               echo "the default build has no context switch assembly in it" >&2
               exit 1

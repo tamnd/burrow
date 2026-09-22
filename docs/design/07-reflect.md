@@ -51,8 +51,6 @@ typedef struct {
     Str          tag;         /* `json:"x,omitempty"` */
     const Type  *type;
     uint32_t        offset;
-    bool            exported;
-    bool            anonymous;   /* embedded */
 } Field;
 
 typedef struct {
@@ -78,6 +76,11 @@ struct Type {
 };
 ```
 
+Whether a field is exported and whether it is embedded are not stored. Both are
+answers to questions about the name, both are `field_is_exported` and
+`field_is_embedded` instead, and a stored copy of something derivable is a
+stored copy that can be wrong. Go's `reflect` treats them as questions too.
+
 One static `const` struct per type, in rodata, shared. A program using twelve
 types pays for twelve descriptors. `reflect` is then ordinary library code over
 these — all 265 declarations of it — and so are `fmt`, `encoding/json` and the
@@ -90,12 +93,12 @@ whether `burrow` keeps its "`cc burrow.c`, no build step" promise. So the
 primary mechanism requires no external tool at all:
 
 ```c
-#define POINT_FIELDS(F)                          \
-    F(Int, X, "json:\"x\"")                   \
-    F(Int, Y, "json:\"y\"")                   \
-    F(Str, Label, "json:\"label,omitempty\"")
+#define POINT_FIELDS(F, T)                    \
+    F(T, Int, X, "json:\"x\"")                \
+    F(T, Int, Y, "json:\"y\"")                \
+    F(T, Str, Label, "json:\"label,omitempty\"")
 
-BURROW_STRUCT(Point, POINT_FIELDS)
+BURROW_STRUCT(Point, POINT_FIELDS);
 ```
 
 `BURROW_STRUCT` expands twice over the field list: once to emit the struct
@@ -103,6 +106,14 @@ definition, once to emit the descriptor with `offsetof` for each field. The
 declaration and the metadata cannot drift because there is one source for both
 — which is the property that makes this better than annotations plus a
 generator, not merely cheaper.
+
+The list takes two parameters rather than one. `F` is the thing being done to
+each line and `T` is the struct being declared, because a descriptor entry needs
+`offsetof(T, field)` and C gives a macro no way to bind `T` for the lines below
+it. Passing it in means the type's name is written once, at the `BURROW_STRUCT`
+call, rather than on every line where it could be got wrong during a rename.
+The semicolon is the caller's, since a macro that ate one would leave a stray
+semicolon at file scope, which `-Wpedantic -Werror` rejects.
 
 Resulting usage:
 
@@ -124,15 +135,37 @@ That is the target ergonomic, and it is within a line or two of Go.
 Companion macros cover the rest of the type space:
 
 ```c
-BURROW_STRUCT(T, FIELDS)          /* struct + descriptor */
-BURROW_ENUM(T, VALUES)            /* named integer type + value names, for %v */
-BURROW_ALIAS(T, Underlying)       /* named type over an existing one, with methods */
-BURROW_SLICE_TYPE(T)              /* descriptor for []T */
-BURROW_MAP_TYPE(K, V)
-BURROW_PTR_TYPE(T)
-BURROW_METHOD(T, Name, fn)        /* registers a method + thunk */
+BURROW_STRUCT(T, FIELDS)            /* struct + descriptor */
+BURROW_SLICE_TYPE(Name, T)          /* descriptor for []T */
+BURROW_ARRAY_TYPE(Name, T, N)       /* descriptor for [N]T */
+BURROW_PTR_TYPE(Name, T)
+BURROW_MAP_TYPE(Name, K, V)
+BURROW_METHOD(T, Name, fn)          /* registers a method + thunk */
 BURROW_IMPLEMENTS(T, FmtStringer, adapter)
 ```
+
+The four composite macros take the new type's name first, because C gives no
+way to derive one and `TYPE_OF` needs a name to paste. Go does not have this
+problem: `[]int` is both a type and its own spelling. The convention that reads
+best is the Go name with the punctuation written out, so `IntSlice`, `PointPtr`,
+`StrIntMap`, but nothing enforces it.
+
+Each macro has a `_DECL` form. The plain macro defines objects, so it belongs in
+exactly one translation unit; the `_DECL` form declares only, for a type whose
+struct has to live in a header. `BURROW_STRUCT` is `BURROW_STRUCT_DECL` followed
+by `BURROW_STRUCT_DEFINE`, both driven by the same list.
+
+**`BURROW_ENUM` and `BURROW_ALIAS` are not implemented and are not scheduled.**
+Both need the underlying type's `Kind` in the descriptor, and the only way to
+reach it from a type's name is `TYPE_OF(U)->kind`, which is a load rather than a
+constant expression and therefore cannot appear in the static initialiser these
+descriptors are. The two ways out are both worse than the gap: spell the kind at
+the call site, which adds a second place to state something the compiler already
+knows and can disagree with the type; or fill it in during a pass at startup,
+which is exactly the registration this approach exists to avoid. A named integer
+type still works today by declaring it as its underlying type. It loses the
+value names in `%v`, which is what `BURROW_ENUM` was for, and that is the whole
+of what is missing.
 
 Every one of `burrow`'s own ~1,900 public struct types is declared this way, so
 the DSL is exercised across the entire library before any user sees it. If it
@@ -268,9 +301,10 @@ This is a small detail with a large effect on how portable a port feels.
 so this is the first Tier 0 subsystem after the core types. Sequence:
 
 1. `Type` and the ops table; primitive descriptors.
-2. `BURROW_STRUCT`/`BURROW_ENUM`/`BURROW_ALIAS` macros; `offsetof` correctness tests on all
-   Tier A platforms (padding and alignment differ, and this is where
-   big-endian s390x earns its CI slot).
+2. `BURROW_STRUCT` and the composite type macros; `offsetof` correctness tests
+   on all Tier A platforms (padding and alignment differ, and this is where
+   big-endian s390x earns its CI slot). `BURROW_ENUM` and `BURROW_ALIAS` came
+   out of this step for the reason given in §3.
 3. `reflect`'s read side: `TypeOf`, `ValueOf`, `Kind`, `Field`, `Len`, `Index`,
    `MapKeys`, `Interface`, `String`.
 4. `fmt`'s `%v`, `%+v`, `%#v`, `%T`. **This is the gate for Tier 0.**

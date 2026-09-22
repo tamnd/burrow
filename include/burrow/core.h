@@ -167,9 +167,19 @@ typedef struct Str {
  *
  * It is a compound literal, so it cannot initialise anything with static
  * storage. C11 wants a constant expression there and a compound literal is not
- * one. Write the braces out by hand for a static, the way
- * BURROW_SENTINEL_ERROR does. */
+ * one. Use BURROW_S_INIT below for a static. */
 #define BURROW_S(lit) ((Str){(const Byte *)("" lit), (Int)(sizeof(lit) - 1)})
+
+/* The same thing as a brace initialiser rather than a value, which is what a
+ * static needs:
+ *
+ *     static const Str name = BURROW_S_INIT("burrow");
+ *
+ * No outer parentheses and no cast, so it is not an expression and cannot be
+ * used as one. That is the whole difference between the two, and the reason
+ * there are two: a type descriptor built by BURROW_STRUCT has half a dozen of
+ * these in it and every one of them is in a static initialiser. */
+#define BURROW_S_INIT(lit) {(const Byte *)("" lit), (Int)(sizeof(lit) - 1)}
 
 /* Printing one with printf, which you will want on your first afternoon:
  *

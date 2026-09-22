@@ -371,9 +371,9 @@ typedef struct Point {
 } Point;
 
 static const Field point_fields[] = {
-    {{(const Byte *)"X", 1}, {(const Byte *)"json:\"x\"", 8}, NULL, 0, true, false},
-    {{(const Byte *)"Y", 1}, {(const Byte *)"json:\"y\"", 8}, NULL, 0, true, false},
-    {{(const Byte *)"label", 5}, {NULL, 0}, NULL, 0, false, false},
+    {{(const Byte *)"X", 1}, {(const Byte *)"json:\"x\"", 8}, NULL, 0},
+    {{(const Byte *)"Y", 1}, {(const Byte *)"json:\"y\"", 8}, NULL, 0},
+    {{(const Byte *)"label", 5}, {NULL, 0}, NULL, 0},
 };
 
 /* Sorted by name, because type_method_by_name is a binary search and Go sorts
@@ -412,13 +412,13 @@ TEST(fields_are_found_by_name) {
     CHECK(f != NULL);
     if (f != NULL) {
         CHECK(str_is(f->name, "Y"));
-        CHECK(f->exported);
+        CHECK(field_is_exported(f));
     }
 
     const Field *unexported = type_field_by_name(&point_type, BURROW_S("label"));
     CHECK(unexported != NULL);
     if (unexported != NULL)
-        CHECK(!unexported->exported);
+        CHECK(!field_is_exported(unexported));
 
     CHECK(type_field_by_name(&point_type, BURROW_S("Z")) == NULL);
     /* Case matters, the way it does in Go. */

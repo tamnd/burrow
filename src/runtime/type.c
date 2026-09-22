@@ -128,11 +128,60 @@ bool type_is_comparable(const Type *t) {
 
 /* -------------------------------------------------------------- operations */
 
+/* A struct and an array are walked a piece at a time rather than compared as
+ * bytes, and the reason is padding.
+ *
+ * struct { char a; int b; } has three bytes between its two fields on most
+ * machines, and nothing in C says what is in them. Two structs built the same
+ * way with the same values routinely differ there: one came off the stack, one
+ * came out of a designated initialiser, one was memcpy'd from a wider buffer.
+ * memcmp says they are different values and Go says they are the same one, and
+ * a map keyed by such a struct would lose lookups that used a key it had just
+ * been handed.
+ *
+ * The same walk is also what makes a field of a type with its own idea of
+ * equality work at all. A struct with a Str in it compares that field by its
+ * bytes and not by its pointer, because going field by field means going
+ * through type_equal again and Str's ops are there.
+ *
+ * Everything else still goes through memcmp, which is correct for a type that
+ * is nothing but its bytes, and that is most of them. */
+static bool struct_equal(const Type *t, const void *a, const void *b) {
+    const Byte *pa = (const Byte *)a;
+    const Byte *pb = (const Byte *)b;
+
+    for (uint16_t i = 0; i < t->nfield; i++) {
+        const Field *f = &t->fields[i];
+        if (!type_equal(f->type, pa + f->offset, pb + f->offset))
+            return false;
+    }
+    return true;
+}
+
+static bool array_equal(const Type *t, const void *a, const void *b) {
+    const Type *e = t->elem;
+    const Byte *pa = (const Byte *)a;
+    const Byte *pb = (const Byte *)b;
+
+    if (e == NULL || e->size == 0)
+        return true;
+
+    for (uint32_t i = 0; i < t->len; i++) {
+        if (!type_equal(e, pa + (size_t)i * e->size, pb + (size_t)i * e->size))
+            return false;
+    }
+    return true;
+}
+
 bool type_equal(const Type *t, const void *a, const void *b) {
     if (t == NULL || a == NULL || b == NULL)
         return a == b;
     if (t->ops != NULL && t->ops->equal != NULL)
         return t->ops->equal(a, b);
+    if (t->kind == KIND_STRUCT && t->fields != NULL)
+        return struct_equal(t, a, b);
+    if (t->kind == KIND_ARRAY)
+        return array_equal(t, a, b);
     return memcmp(a, b, t->size) == 0;
 }
 
@@ -311,14 +360,53 @@ static uint64_t hash_bytes(const void *p, size_t n, uint64_t seed) {
     return hash_mix(a ^ HK1, c ^ HK2);
 }
 
+/* The other half of the padding story. Equality that skips the padding and a
+ * hash that does not would be worse than either mistake on its own: two values
+ * that compare equal would land in different buckets, and a map would hold two
+ * entries for one key and find whichever of them it probed first.
+ *
+ * So the hash walks whatever the comparison walks, field by field and element
+ * by element, and the result is the seed threaded through all of them. */
+static uint64_t struct_hash(const Type *t, const void *p, uint64_t seed) {
+    const Byte *b = (const Byte *)p;
+
+    for (uint16_t i = 0; i < t->nfield; i++) {
+        const Field *f = &t->fields[i];
+        seed = type_hash(f->type, b + f->offset, seed);
+    }
+    return seed;
+}
+
+static uint64_t array_hash(const Type *t, const void *p, uint64_t seed) {
+    const Type *e = t->elem;
+    const Byte *b = (const Byte *)p;
+
+    if (e == NULL || e->size == 0)
+        return seed;
+
+    for (uint32_t i = 0; i < t->len; i++)
+        seed = type_hash(e, b + (size_t)i * e->size, seed);
+    return seed;
+}
+
 uint64_t type_hash(const Type *t, const void *p, uint64_t seed) {
     if (t == NULL || p == NULL)
         return seed;
     if (t->ops != NULL && t->ops->hash != NULL)
         return t->ops->hash(p, seed);
+    if (t->kind == KIND_STRUCT && t->fields != NULL)
+        return struct_hash(t, p, seed);
+    if (t->kind == KIND_ARRAY)
+        return array_hash(t, p, seed);
     return hash_bytes(p, t->size, seed);
 }
 
+/* No field by field walk here, unlike the two above, and it is not an
+ * oversight. Copying the padding along with the fields is harmless, because
+ * nothing reads it and neither of the two functions above looks at it. A walk
+ * would only be needed for a struct with a field whose type has a copy op of
+ * its own, and no type in burrow has one. When the first one appears, this is
+ * where it gets handled. */
 void type_copy(const Type *t, void *dst, const void *src) {
     if (t == NULL || dst == NULL || src == NULL)
         return;
@@ -349,6 +437,23 @@ const Field *type_field_by_name(const Type *t, Str name) {
             return &t->fields[i];
     }
     return NULL;
+}
+
+bool field_is_exported(const Field *f) {
+    if (f == NULL || f->name.len <= 0 || f->name.p == NULL)
+        return false;
+    return f->name.p[0] >= 'A' && f->name.p[0] <= 'Z';
+}
+
+bool field_is_embedded(const Field *f) {
+    if (f == NULL || f->type == NULL || f->type->name.len <= 0)
+        return false;
+    /* The descriptor's own name and not type_name, which falls back to the kind
+     * for an unnamed type. Going through the fallback would make a field called
+     * slice of type []int look embedded, since type_name of an unnamed slice is
+     * "slice". An unnamed type cannot be embedded in Go at all, so the right
+     * answer for one is no rather than a comparison. */
+    return str_eq(f->name, f->type->name);
 }
 
 const Method *type_method_by_name(const Type *t, Str name) {
@@ -470,9 +575,17 @@ static const TypeOps complex128_ops = {complex128_equal, complex128_hash, NULL, 
 /* The hash field is a small distinct constant per builtin rather than anything
  * derived. It only has to differ between types within one build, and hand
  * numbering the two dozen builtins is both obviously correct and checkable by a
- * test that looks for duplicates. Generated descriptors will compute theirs. */
-#define BUILTIN(var, kindv, ctype, gonm, hashv, opsv)                                  \
-    static const Type var##_desc = {                                                   \
+ * test that looks for duplicates. Nothing else in the library has one, for the
+ * reason written on the field in type.h.
+ *
+ * The object is named after the C spelling of the type rather than after the Go
+ * one, because TYPE_OF pastes that name and a field list is written in C. The
+ * two disagree more often than they look: Go's int is C's Int, Go's float32 is
+ * C's float, and Go's int64 is also C's Int on a 64 bit machine, which is why
+ * the name has to come from the spelling somebody wrote and not from the type
+ * the compiler resolves it to. */
+#define BUILTIN(cname, kindv, ctype, gonm, hashv, opsv)                                \
+    const Type burrow_type_##cname = {                                                 \
         {(const Byte *)(gonm), (Int)(sizeof(gonm) - 1)},                               \
         {NULL, 0},                                                                     \
         kindv,                                                                         \
@@ -487,25 +600,23 @@ static const TypeOps complex128_ops = {complex128_equal, complex128_hash, NULL, 
         0,                                                                             \
         hashv,                                                                         \
         opsv,                                                                          \
-    };                                                                                 \
-    const Type *const var = &var##_desc
+    }
 
-BUILTIN(TYPE_BOOL, KIND_BOOL, bool, "bool", 1, NULL);
-BUILTIN(TYPE_INT, KIND_INT, Int, "int", 2, NULL);
-BUILTIN(TYPE_INT8, KIND_INT8, int8_t, "int8", 3, NULL);
-BUILTIN(TYPE_INT16, KIND_INT16, int16_t, "int16", 4, NULL);
-BUILTIN(TYPE_INT32, KIND_INT32, int32_t, "int32", 5, NULL);
-BUILTIN(TYPE_INT64, KIND_INT64, int64_t, "int64", 6, NULL);
-BUILTIN(TYPE_UINT, KIND_UINT, Uint, "uint", 7, NULL);
-BUILTIN(TYPE_UINT8, KIND_UINT8, uint8_t, "uint8", 8, NULL);
-BUILTIN(TYPE_UINT16, KIND_UINT16, uint16_t, "uint16", 9, NULL);
-BUILTIN(TYPE_UINT32, KIND_UINT32, uint32_t, "uint32", 10, NULL);
-BUILTIN(TYPE_UINT64, KIND_UINT64, uint64_t, "uint64", 11, NULL);
-BUILTIN(TYPE_UINTPTR, KIND_UINTPTR, Uintptr, "uintptr", 12, NULL);
-BUILTIN(TYPE_FLOAT32, KIND_FLOAT32, float, "float32", 13, &float32_ops);
-BUILTIN(TYPE_FLOAT64, KIND_FLOAT64, double, "float64", 14, &float64_ops);
-BUILTIN(TYPE_COMPLEX64, KIND_COMPLEX64, Complex64, "complex64", 15, &complex64_ops);
-BUILTIN(TYPE_COMPLEX128, KIND_COMPLEX128, Complex128, "complex128", 16,
-        &complex128_ops);
-BUILTIN(TYPE_STRING, KIND_STRING, Str, "string", 17, &string_ops);
-BUILTIN(TYPE_UNSAFE_POINTER, KIND_UNSAFE_POINTER, void *, "unsafe.Pointer", 18, NULL);
+BUILTIN(bool, KIND_BOOL, bool, "bool", 1, NULL);
+BUILTIN(Int, KIND_INT, Int, "int", 2, NULL);
+BUILTIN(int8_t, KIND_INT8, int8_t, "int8", 3, NULL);
+BUILTIN(int16_t, KIND_INT16, int16_t, "int16", 4, NULL);
+BUILTIN(int32_t, KIND_INT32, int32_t, "int32", 5, NULL);
+BUILTIN(int64_t, KIND_INT64, int64_t, "int64", 6, NULL);
+BUILTIN(Uint, KIND_UINT, Uint, "uint", 7, NULL);
+BUILTIN(uint8_t, KIND_UINT8, uint8_t, "uint8", 8, NULL);
+BUILTIN(uint16_t, KIND_UINT16, uint16_t, "uint16", 9, NULL);
+BUILTIN(uint32_t, KIND_UINT32, uint32_t, "uint32", 10, NULL);
+BUILTIN(uint64_t, KIND_UINT64, uint64_t, "uint64", 11, NULL);
+BUILTIN(Uintptr, KIND_UINTPTR, Uintptr, "uintptr", 12, NULL);
+BUILTIN(float, KIND_FLOAT32, float, "float32", 13, &float32_ops);
+BUILTIN(double, KIND_FLOAT64, double, "float64", 14, &float64_ops);
+BUILTIN(Complex64, KIND_COMPLEX64, Complex64, "complex64", 15, &complex64_ops);
+BUILTIN(Complex128, KIND_COMPLEX128, Complex128, "complex128", 16, &complex128_ops);
+BUILTIN(Str, KIND_STRING, Str, "string", 17, &string_ops);
+BUILTIN(UnsafePointer, KIND_UNSAFE_POINTER, void *, "unsafe.Pointer", 18, NULL);

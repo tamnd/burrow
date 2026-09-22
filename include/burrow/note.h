@@ -20,11 +20,12 @@
  * operations, and this is a port, so somebody reading Go's scheduler next to
  * this one should find the same word for the same thing.
  *
- * Three implementations. Linux gets a futex, which is one 32 bit word and no
- * kernel object until a thread actually has to sleep. Windows gets a manual
- * reset event, which is exactly a one shot gate and is what Go uses there.
- * Everything else gets a mutex and a condition variable, which is what Go uses
- * on darwin and is the portable answer.
+ * One implementation, over pal_futex_wait and pal_futex_wake. There used to be
+ * three, one per platform, and the three of them agreed on everything except
+ * which call does the sleeping, which is exactly the thing the platform layer
+ * is for. A note is now three words and a flag on every platform, it owns
+ * nothing the system has to hand out, and the init that used to be able to fail
+ * on two of the three cannot fail anywhere.
  *
  * There is a timed sleep as well, and it waits on burrow's monotonic clock
  * rather than on the system time. That distinction is the whole reason it waited
@@ -38,14 +39,8 @@
 #ifndef BURROW_NOTE_H
 #define BURROW_NOTE_H
 
-#include "burrow/platform.h"
-
 #include <stdbool.h>
 #include <stdint.h>
-
-#if !defined(BURROW_OS_WINDOWS) && !defined(BURROW_OS_LINUX)
-#include <pthread.h>
-#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -53,35 +48,15 @@ extern "C" {
 
 /* A note. The fields are here so that one can sit inside an M without an
  * allocation, and they are not part of the interface. */
-#if defined(BURROW_OS_WINDOWS)
-
-typedef struct burrow__Note {
-    /* HANDLE of a manual reset event, spelled void * so that <windows.h> is not
-     * dragged into every file that includes this one. Only touched when a
-     * thread really has to wait. */
-    void *event;
-    /* 0 while the gate is closed and 1 once it is open, so that the common
-     * questions can be answered without asking the kernel about the event. */
-    uint32_t state;
-    /* How many threads are about to sleep or are asleep, which is what lets a
-     * wake with nobody waiting stay out of the kernel. */
-    uint32_t waiters;
-    /* How many threads are inside a wake right now, and whether anybody is
-     * counting. See burrow__note_init_transient. */
-    uint32_t wakers;
-    bool transient;
-} burrow__Note;
-
-#elif defined(BURROW_OS_LINUX)
-
 typedef struct burrow__Note {
     /* 0 while the gate is closed and 1 once it is open. The address of this
-     * word is what the kernel queues the sleepers against. */
+     * word is what sleepers are queued against. */
     uint32_t state;
-    /* How many threads are about to sleep or are asleep. A separate word from
-     * the gate because the gate is what a futex compares against, and a value
-     * that changes every time somebody arrives would keep waking the ones who
-     * are already there. */
+    /* How many threads are about to sleep or are asleep, which is what lets a
+     * wake with nobody waiting stay out of the kernel. A separate word from the
+     * gate because the gate is what a wait compares against, and a value that
+     * changed every time somebody arrived would keep waking the ones who are
+     * already there. */
     uint32_t waiters;
     /* How many threads are inside a wake right now, and whether anybody is
      * counting. See burrow__note_init_transient. */
@@ -89,34 +64,15 @@ typedef struct burrow__Note {
     bool transient;
 } burrow__Note;
 
-#else
-
-typedef struct burrow__Note {
-    /* Same two words as the other backends, and the count here is what lets a
-     * wake skip the mutex and the broadcast when there is nobody to broadcast
-     * to. */
-    uint32_t state;
-    uint32_t waiters;
-    /* How many threads are inside a wake right now, and whether anybody is
-     * counting. See burrow__note_init_transient, which matters more here than
-     * anywhere else: a late wake on this backend would be taking a mutex that
-     * has already been destroyed. */
-    uint32_t wakers;
-    bool transient;
-    pthread_mutex_t mu;
-    pthread_cond_t cv;
-} burrow__Note;
-
-#endif
-
-/* Gets the note ready to use and leaves it closed. False means the system would
- * not hand over what the note needs, which can happen anywhere a note owns
- * something the kernel has to allocate. On Linux it never fails, because a note
- * there is one word of the caller's own memory.
+/* Gets the note ready to use and leaves it closed.
  *
- * Every note has to be initialised once before anything else touches it, even
- * on the platform where that costs nothing, because the platforms it costs
- * something on are the ones nobody is testing on. */
+ * It returns a bool and the bool is always true. A note used to own a kernel
+ * object on two of the three platforms and the system could refuse to hand one
+ * over; it owns nothing now, on any platform, so there is nothing left to
+ * refuse. The result is still there because every caller already checks it and
+ * because a call that cannot fail today is not a promise about tomorrow.
+ *
+ * Every note has to be initialised once before anything else touches it. */
 bool burrow__note_init(burrow__Note *n);
 
 /* The same, for a note that may be freed the moment its sleeper wakes up.
@@ -139,9 +95,11 @@ bool burrow__note_init(burrow__Note *n);
  * and then returns wants it. */
 bool burrow__note_init_transient(burrow__Note *n);
 
-/* Releases whatever the note was holding. The note must not have a sleeper on
- * it, which is the caller's problem the same way it is with a pthread mutex:
- * freeing something a thread is asleep inside cannot be made safe here.
+/* Finishes with the note. It holds nothing, so this frees nothing, and it is
+ * still the call that ends a note's life because the transient case above has
+ * something to wait for. The note must not have a sleeper on it, which is the
+ * caller's problem the same way it is with a mutex: freeing something a thread
+ * is asleep inside cannot be made safe here.
  *
  * On a transient note this also waits for any wake still in flight to let go,
  * which is what makes it safe to sleep on a local and free it on the next line.

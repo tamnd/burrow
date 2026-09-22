@@ -297,8 +297,9 @@ bool pal_random_bytes(void *buf, int64_t n, PalErrno *err);
  * OS threads, which in Go's terms is an M. Goroutines are not here: they are
  * stacks and a scheduler, both of which are portable C above this line.
  *
- * Not implemented yet. src/runtime/thread.c and note.c do this directly today
- * and move behind these calls next. */
+ * The futex pair below is implemented and in use: src/runtime/note.c is
+ * portable C over it on every platform. The three thread calls are not, and
+ * src/runtime/thread.c moves behind them next. */
 
 /* Start a thread running fn(arg) on a stack of at least stack_bytes, or 0 for
  * the platform's default. Returns a handle, or PAL_INVALID_HANDLE.
@@ -317,23 +318,50 @@ bool pal_thread_join(int64_t thread, PalErrno *err);
  * it is not the same number the debugger shows. Never fails. */
 int64_t pal_thread_self(void);
 
-/* Sleep until the 32 bit word at addr stops being expect, or until timeout_ns
- * passes, or until a signal arrives. A negative timeout waits forever.
+/* Sleep until the 32 bit word at addr stops being expect, or until somebody
+ * wakes it, or until timeout_ns passes. A negative timeout waits forever and a
+ * zero one does not wait at all.
  *
- * This is Linux's futex, macOS's __ulock_wait, and Windows'
- * WaitOnAddress, which are the same primitive with three names. The caller must
- * treat a wake as advice and re-check the word, because all three of them wake
- * spuriously and because a lock built on the assumption that they don't is a
- * lock that deadlocks once a month.
+ * This is Linux's futex and it is emulated everywhere else, because the three
+ * native spellings are not three spellings of the same thing. Linux has the
+ * real one. Windows has WaitOnAddress, which lives in synchronization.lib and
+ * burrow links nothing, so a note is not worth a link line. macOS has
+ * __ulock_wait, which is private, undocumented and has changed shape between
+ * releases, and Go does not use it either. So src/pal/futex_posix.c and
+ * src/pal/futex_windows.c build the same primitive out of a fixed table of
+ * locks and condition variables, keyed by the address. Nothing allocates and
+ * the caller's word stays the caller's word, which is the part that matters:
+ * an uncontended wait or wake still never enters this layer at all, because
+ * the caller checks its own word first.
  *
- * Returns false only for a real failure. A timeout is PAL_ETIMEDOUT and an
- * interrupt is PAL_EINTR, both of which a caller normally loops on. */
+ * The caller must treat a wake as advice and re-check the word. All three
+ * backends may return early and a lock written on the assumption that they do
+ * not is a lock that deadlocks once a month.
+ *
+ * True means the wait ended normally, which covers being woken, being told the
+ * word had already changed, and waking for no reason anybody can name. False
+ * means it did not: PAL_ETIMEDOUT when the time ran out, PAL_EINTR when a
+ * signal arrived, PAL_EINVAL for a null address. A caller loops on the first
+ * two. Nothing here reports a word that already differed as a failure, because
+ * the caller is going to look at the word again in either case and an error out
+ * of a successful early return is a branch nobody wants to write. */
 bool pal_futex_wait(uint32_t *addr, uint32_t expect, int64_t timeout_ns, PalErrno *err);
 
-/* Wake at most n waiters on addr, returning how many were woken. n may be
- * INT64_MAX for all of them. Waking an address nobody waits on is free and is
- * not an error, which is what lets an unlock path skip the bookkeeping that
- * would tell it whether the call was needed. */
+/* Wake at most n waiters on addr, returning how many were woken, or -1. n may
+ * be INT64_MAX for all of them. Waking an address nobody waits on is free and
+ * is not an error, which is what lets an unlock path skip the bookkeeping that
+ * would tell it whether the call was needed.
+ *
+ * The count is how many waiters this call released, not how many are running:
+ * on Linux it is what the kernel reported and on the emulated backends it is
+ * how many queued waiters were marked. Either way it is a number for a test or
+ * a statistic to read, and a caller that branches on it is a caller that has
+ * assumed a waiter cannot have given up a nanosecond earlier.
+ *
+ * Nothing this call touches belongs to the caller except the address, which it
+ * compares and never reads through. A wake that is still in flight when the
+ * word it names is freed is therefore looking at this layer's own memory, which
+ * is what lets a note live in a stack frame the sleeper has already left. */
 int64_t pal_futex_wake(uint32_t *addr, int64_t n, PalErrno *err);
 
 /* -------------------------------------------------------------------- files

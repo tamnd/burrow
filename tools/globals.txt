@@ -33,6 +33,7 @@ category	fatal-handler	Where an unrecoverable runtime failure goes before the pr
 category	rand	The generator behind map iteration order and hash seeding.
 category	atomic-lock-table	The spin locks that stand in for 64 bit atomics on machines that do not have them.
 category	sema-table	The wait queues behind sync, keyed on the address of the counter being waited on, which is what makes them one per process by definition.
+category	futex	The wait queues that stand in for a futex on the platforms that have no such call, keyed on the address being waited on, which is what makes them one per process by definition.
 category	reclaim	The epoch and the handover lists behind lock free reading. One epoch per process is the whole idea, since a reader on any thread has to be able to hold any of them back.
 category	pool	sync.Pool's registry and the lock over it, which is one per process because the sweep has to be able to find every pool from the system monitor's thread.
 category	clock	The conversion factor between what the machine's counter counts and nanoseconds. Fixed at boot, so it is asked for once.
@@ -106,6 +107,10 @@ global	src/pal/poll_windows.c	iocp	netpoller	The completion port. One per proces
 global	src/pal/poll_windows.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one posted completion, and cleared by whoever takes that completion off the port.
 global	src/runtime/netpoll_readiness.c	poller	netpoller	The PAL's handle for the poller. Set once by the backend init, which runs under init_lock, and read without anything afterwards.
 global	src/runtime/netpoll_completion.c	poller	netpoller	The PAL's handle for the completion port. Set once by the backend init, which runs under init_lock, and read without anything afterwards.
+global	src/pal/futex_posix.c	buckets	futex	The wait queues, sixty four of them, each a mutex and a condition variable and a list. Fixed at compile time because nothing in the PAL allocates, and an address always hashes to the same one.
+global	src/pal/futex_posix.c	setup_once	futex	Guards the one pass that initialises the table. A pthread_once, because a condition variable's clock cannot be set by a static initialiser.
+global	src/pal/futex_posix.c	setup_ok	futex	Whether that pass worked. Written inside the once and read after it, which is what makes it safe without an atomic. A false here makes every wait and wake fail loudly rather than return as if it had slept.
+global	src/pal/futex_windows.c	buckets	futex	The same sixty four wait queues over an SRWLOCK and a CONDITION_VARIABLE. Both have a static initialiser that is a zeroed structure, so this table needs no setup pass at all.
 global	src/runtime/registry.c	registry_once	type-registry	Guards the one read of the linker section that builds the table. A Once, so whoever loses the race waits for the table rather than seeing half of one.
 global	src/runtime/registry.c	registry_lock	type-registry	The reader writer lock over the three fields below. Read on every lookup, taken for writing only by type_register, which is the runtime half nothing uses until a module is loaded after startup.
 global	src/runtime/registry.c	registry_slots	type-registry	The table. Written under registry_lock when it is built and when it grows, read under it the rest of the time.

@@ -90,13 +90,23 @@ one shot gate with six operations: init, free, clear, wake, sleep, and a sleep
 with a timeout on it. It starts closed, a wake opens it and releases everybody waiting, and a sleep on an
 open one returns straight away. That last part is what makes it usable without a
 lock wrapped round it, because the waker never has to know whether the sleeper
-has arrived yet. Linux gets a futex, so a note is one 32 bit word of the
-caller's own memory and an uncontended note costs no system call at all. Windows
-gets a manual reset event, which is a one shot gate under a different name and
-is what Go uses there. Everything else gets a mutex and a condition variable,
-which is what Go uses on darwin.
+has arrived yet. A note is three words and a flag, on every platform, and the
+sleeping is done by `pal_futex_wait` and `pal_futex_wake`.
 
-All three keep a count of the threads that are about to sleep in a word next to
+There used to be three notes, one per platform: a futex on Linux, a manual reset
+event on Windows, and a mutex with a condition variable everywhere else. They
+agreed on everything except which call does the sleeping, which is exactly the
+thing the platform layer exists to take away, so the three of them are one file
+now and the platform difference is one group in
+[`include/burrow/pal.h`](../../include/burrow/pal.h). Two things fell out of
+that which are worth recording. A note owns nothing the system has to hand out
+any more, on any platform, so an init that used to be able to fail on two of the
+three cannot fail anywhere. And `pal_futex_wake` compares the address it is
+given and never reads through it, so a wake still in flight when the word it
+names is freed is looking at the platform layer's own memory rather than the
+caller's, which used to be true only on Linux.
+
+The note keeps a count of the threads that are about to sleep in a word next to
 the open flag, and a wake with nobody in that count does not go near the kernel.
 This is one of the few places burrow deliberately does more than Go's runtime
 does, and the reason is a measurement rather than a preference: opening a gate
@@ -117,9 +127,9 @@ has to set the flag before it reads the count, and setting the flag is what
 releases the sleeper, so every instruction of a wake after that store is running
 against a sleeper that is already awake. For a note inside an M, which lives as
 long as the thread does, that is nothing to think about. For a note in the stack
-frame of the thread that just woke up, the frame is gone, and on the backend
-with a mutex in the note the wake is about to lock one that has been destroyed.
-So a note says at init time which kind it is. `burrow__note_init_transient`
+frame of the thread that just woke up, the frame is gone, and the wake is
+writing to a word that is not there. So a note says at init time which kind it
+is. `burrow__note_init_transient`
 makes one that counts the wakes inside it and whose free waits for that count to
 reach nought, and that is what anything blocking a host thread on a stack local
 asks for. The default does not count, because two atomic additions on an
@@ -144,17 +154,19 @@ Linux and the BSDs, `mach_absolute_time` on macOS, and `QueryPerformanceCounter`
 on Windows. Only the difference between two readings means anything, which is
 all a timer or a timeout ever asks for.
 
-The timed sleep is three implementations and one of them is two. Linux passes a
-relative timespec to `FUTEX_WAIT`, which the kernel already measures on
-`CLOCK_MONOTONIC`. Windows passes a millisecond count to `WaitForSingleObject`.
-The portable backend has to ask, because a condition variable measures an
-absolute deadline on the wall clock unless it is told otherwise: every POSIX
-system since 2001 is told otherwise with `pthread_condattr_setclock`, and macOS
-is the exception that never implemented that call and offers
-`pthread_cond_timedwait_relative_np` instead. Go makes the same split for the
-same reason. All three loop and recompute what is left of the timeout from the
-clock each time round, so a sleep that is interrupted nine times still waits the
-length it was asked for rather than nine times it.
+The timed sleep is one loop now and it recomputes what is left of the timeout
+from the clock each time round, so a sleep that is interrupted nine times still
+waits the length it was asked for rather than nine times it. What each platform
+does with the duration it is handed is the platform layer's problem: Linux
+passes a relative timespec to `FUTEX_WAIT`, which the kernel already measures on
+`CLOCK_MONOTONIC`, and the two emulated backends do the same arithmetic against
+a condition variable. That last part is where the one remaining platform split
+lives, because a condition variable measures an absolute deadline on the wall
+clock unless it is told otherwise: every POSIX system since 2001 is told
+otherwise with `pthread_condattr_setclock`, and macOS is the exception that
+never implemented that call and offers `pthread_cond_timedwait_relative_np`
+instead. Go makes the same split for the same reason. It is four lines in
+`src/pal/futex_posix.c` rather than a backend of its own.
 
 ### Timers
 

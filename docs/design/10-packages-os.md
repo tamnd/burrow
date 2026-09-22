@@ -75,9 +75,22 @@ the design was short a call.
 Not all seventy six have a backend today. All of them are declared, because the
 shape of the boundary is worth deciding once rather than discovering package by
 package, and because a call to one that is missing is a link error that names it.
-Time, memory, random, the machine queries and poll are implemented and in use.
-Files, process, threads and net land with the packages that need them, where
-there is a real caller to design against.
+Time, memory, random, the machine queries, poll and the futex pair are
+implemented and in use. The three thread calls next to the futex are not yet,
+and files, process and net land with the packages that need them, where there is
+a real caller to design against.
+
+The futex pair is the one place where the layer builds a primitive instead of
+forwarding to one, and it is worth saying why rather than leaving it to be
+discovered. Linux has a futex. Windows has `WaitOnAddress`, which is the same
+thing and lives in `synchronization.lib`, and burrow links nothing, which is
+worth more than the few dozen lines it would save. macOS has `__ulock_wait`,
+which is private, undocumented and has changed shape between releases; Go does
+not use it either. The BSDs have three more spellings that agree on nothing. So
+`src/pal/futex_posix.c` and `src/pal/futex_windows.c` build the primitive out of
+a fixed table of locks and condition variables keyed on the address. Nothing
+allocates, the caller's word stays the caller's word, and an uncontended wait or
+wake never enters the layer at all because the caller checks its own word first.
 
 Poll is the one group whose two shapes are not hidden. A readiness backend says
 a descriptor is worth trying and a completion backend says an operation has

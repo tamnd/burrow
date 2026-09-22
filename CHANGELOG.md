@@ -6,6 +6,16 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 
 ## Unreleased
 
+### One note instead of three
+
+- `pal_futex_wait` and `pal_futex_wake` are implemented, on all three platforms, and `src/runtime/note.c` is portable C over them. It used to be a futex on Linux, a manual reset event on Windows and a mutex with a condition variable everywhere else, three backends that agreed on everything except which call does the sleeping.
+- A note is three words and a flag on every platform now. It owns nothing the system has to hand out, so `burrow__note_init` cannot fail anywhere, where before it could fail on two of the three. The call still returns a bool, because every caller already checks it and a call that cannot fail today is not a promise about tomorrow.
+- Only Linux gets the real thing. Windows has `WaitOnAddress` and it lives in `synchronization.lib`, and burrow links nothing, which is worth more than the lines it saves. macOS has `__ulock_wait`, which is private, undocumented and has changed shape between releases, and Go does not use it either. So `src/pal/futex_posix.c` and `src/pal/futex_windows.c` build the primitive out of a fixed table of sixty four locks and condition variables keyed on the address. Nothing allocates, the waiter's record lives in the stack frame of the thread about to sleep on it, and two addresses in the same bucket wake each other up, which costs a few instructions and is what every futex emulation does including the one inside glibc.
+- Nothing gets slower. A caller checks its own word before it calls, so an uncontended note still costs two atomics and no call into the platform layer at all, which is what it cost on Linux before and is what it cost on macOS before.
+- One sharp edge is gone. The waker count in a transient note exists because a wake that has already released its sleeper may still be touching a note whose stack frame is gone. On the old POSIX backend that meant locking a mutex that had been destroyed, which is a crash rather than a wrong answer. `pal_futex_wake` compares the address and never reads through it, so the worst a late wake can now do is walk a list that does not name it. The count still earns its keep and the failure it protects against is a smaller one.
+- `tests/pal_test.c` grew ten futex tests, and unlike the poller tests they run on every platform, because all three backends can be driven from inside one process with a word and a thread. Two of those backends are code burrow wrote rather than a call it forwards, so those tests are the only thing standing behind them.
+- `tools/pal-exceptions.txt` is down to five entries. `src/runtime/note.c` and `include/burrow/note.h` came off.
+
 ### The netpoller stopped making system calls
 
 - The three netpoll backends moved behind the platform layer. `src/runtime/netpoll_epoll.c`, `netpoll_kqueue.c` and `netpoll_iocp.c` are gone. What used to be in them is now `src/pal/poll_linux.c`, `src/pal/poll_bsd.c` and `src/pal/poll_windows.c` for the parts that name a system call, and `src/runtime/netpoll_readiness.c` and `src/runtime/netpoll_completion.c` for the parts that ready a goroutine. Neither of the two runtime files includes a system header, which is the whole point of the exercise.

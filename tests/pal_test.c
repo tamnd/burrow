@@ -15,6 +15,9 @@
 
 #include "burrow/pal.h"
 
+#include "burrow/atomic.h"
+#include "burrow/thread.h"
+
 #include "harness.h"
 
 #include <string.h>
@@ -579,6 +582,177 @@ TEST(the_poller_takes_a_null_error_like_everything_else) {
 
 #endif /* not windows */
 
+/* ----------------------------------------------------------------- the futex
+ *
+ * These run on every platform, because unlike the poller all three backends can
+ * be driven from inside one process with nothing but a word and a thread. That
+ * matters more here than usual: two of the three backends are an emulation
+ * burrow wrote rather than a call burrow forwards, so these are the only thing
+ * standing behind them. */
+
+typedef struct FutexParty {
+    uint32_t word;
+    /* Counts what actually happened, so a test can tell a real wake from a
+     * timeout without guessing from the timing. */
+    uint32_t woke;
+    uint32_t timedout;
+    int64_t timeout_ns;
+} FutexParty;
+
+static void futex_sleeper(void *arg) {
+    FutexParty *p = (FutexParty *)arg;
+    PalErrno err = PAL_OK;
+
+    while (burrow__atomic_load_acquire_u32(&p->word) == 0) {
+        if (!pal_futex_wait(&p->word, 0, p->timeout_ns, &err) && err == PAL_ETIMEDOUT) {
+            (void)burrow__atomic_add_u32(&p->timedout, 1);
+            return;
+        }
+    }
+
+    (void)burrow__atomic_add_u32(&p->woke, 1);
+}
+
+TEST(a_word_that_already_differs_does_not_wait) {
+    uint32_t word = 7;
+    PalErrno err = PAL_ENOSYS;
+
+    /* No timeout and no waker, so if this did wait the test would hang rather
+     * than fail, which is the honest way to check it. */
+    CHECK(pal_futex_wait(&word, 1, -1, &err));
+    CHECK_INT_EQ(err, PAL_OK);
+}
+
+TEST(a_wait_with_no_time_and_no_change_times_out) {
+    uint32_t word = 0;
+    PalErrno err = PAL_OK;
+
+    CHECK(!pal_futex_wait(&word, 0, 0, &err));
+    CHECK_INT_EQ(err, PAL_ETIMEDOUT);
+}
+
+TEST(a_wait_with_a_deadline_waits_at_least_that_long) {
+    uint32_t word = 0;
+    PalErrno err = PAL_OK;
+
+    int64_t start = pal_clock_monotonic();
+    CHECK(!pal_futex_wait(&word, 0, 20000000, &err));
+    CHECK_INT_EQ(err, PAL_ETIMEDOUT);
+
+    /* Fifteen rather than twenty, because a condition variable and a futex both
+     * measure in units coarser than a nanosecond and rounding is allowed to go
+     * the way that makes this shorter. Coming back far too early is the bug
+     * worth catching here, not a few hundred microseconds. */
+    CHECK(pal_clock_monotonic() - start >= 15000000);
+}
+
+TEST(a_sleeper_is_woken_by_a_wake) {
+    FutexParty p = {0, 0, 0, -1};
+    burrow__Thread t;
+
+    CHECK(burrow__thread_start(&t, futex_sleeper, &p, 0));
+
+    /* The store is what the wait is really waiting for, and the wake is only
+     * what tells the kernel to go and look. Ordered this way round because the
+     * other way round is the lost wakeup every futex user writes once. */
+    burrow__atomic_store_u32(&p.word, 1);
+
+    PalErrno err = PAL_ENOSYS;
+    CHECK(pal_futex_wake(&p.word, INT64_MAX, &err) >= 0);
+    CHECK_INT_EQ(err, PAL_OK);
+
+    CHECK(burrow__thread_join(&t));
+    CHECK_INT_EQ(p.woke, 1);
+    CHECK_INT_EQ(p.timedout, 0);
+}
+
+TEST(everybody_waiting_can_be_released_at_once) {
+    enum { SLEEPERS = 8 };
+
+    FutexParty p = {0, 0, 0, -1};
+    burrow__Thread t[SLEEPERS];
+
+    for (int i = 0; i < SLEEPERS; i++)
+        CHECK(burrow__thread_start(&t[i], futex_sleeper, &p, 0));
+
+    burrow__atomic_store_u32(&p.word, 1);
+    CHECK(pal_futex_wake(&p.word, INT64_MAX, NULL) >= 0);
+
+    for (int i = 0; i < SLEEPERS; i++)
+        CHECK(burrow__thread_join(&t[i]));
+
+    /* Every one of them, and none of them by a timeout, since they were started
+     * without one. A backend that woke only the first would hang here instead,
+     * which is the same answer said more slowly. */
+    CHECK_INT_EQ(p.woke, SLEEPERS);
+    CHECK_INT_EQ(p.timedout, 0);
+}
+
+TEST(a_sleeper_on_one_word_is_not_released_by_a_wake_on_another) {
+    FutexParty mine = {0, 0, 0, -1};
+    uint32_t other = 0;
+    burrow__Thread t;
+
+    CHECK(burrow__thread_start(&t, futex_sleeper, &mine, 0));
+
+    /* A wake on a word nobody is waiting on. It may share a bucket with the one
+     * that does have a sleeper on it, which is allowed to wake that sleeper
+     * spuriously, and the sleeper's loop is what makes that not matter: it
+     * looks at its own word and goes back down. */
+    CHECK_INT_EQ(pal_futex_wake(&other, INT64_MAX, NULL), 0);
+
+    burrow__atomic_store_u32(&mine.word, 1);
+    CHECK(pal_futex_wake(&mine.word, INT64_MAX, NULL) >= 0);
+
+    CHECK(burrow__thread_join(&t));
+    CHECK_INT_EQ(mine.woke, 1);
+}
+
+TEST(a_wake_with_nobody_waiting_is_free_and_not_an_error) {
+    uint32_t word = 0;
+    PalErrno err = PAL_ENOSYS;
+
+    CHECK_INT_EQ(pal_futex_wake(&word, INT64_MAX, &err), 0);
+    CHECK_INT_EQ(err, PAL_OK);
+
+    CHECK_INT_EQ(pal_futex_wake(&word, 1, NULL), 0);
+    CHECK_INT_EQ(pal_futex_wake(&word, 0, NULL), 0);
+}
+
+TEST(a_sleeper_with_a_deadline_gives_up_when_nobody_comes) {
+    FutexParty p = {0, 0, 0, 20000000};
+    burrow__Thread t;
+
+    CHECK(burrow__thread_start(&t, futex_sleeper, &p, 0));
+    CHECK(burrow__thread_join(&t));
+
+    CHECK_INT_EQ(p.timedout, 1);
+    CHECK_INT_EQ(p.woke, 0);
+}
+
+TEST(a_wait_or_wake_on_nothing_is_refused) {
+    PalErrno err = PAL_OK;
+
+    CHECK(!pal_futex_wait(NULL, 0, 0, &err));
+    CHECK_INT_EQ(err, PAL_EINVAL);
+
+    CHECK_INT_EQ(pal_futex_wake(NULL, 1, &err), -1);
+    CHECK_INT_EQ(err, PAL_EINVAL);
+
+    uint32_t word = 0;
+    CHECK_INT_EQ(pal_futex_wake(&word, -1, &err), -1);
+    CHECK_INT_EQ(err, PAL_EINVAL);
+}
+
+TEST(the_futex_takes_a_null_error_like_everything_else) {
+    uint32_t word = 3;
+
+    CHECK(pal_futex_wait(&word, 0, -1, NULL));
+    CHECK(!pal_futex_wait(&word, 3, 0, NULL));
+    CHECK_INT_EQ(pal_futex_wake(&word, INT64_MAX, NULL), 0);
+    CHECK(!pal_futex_wait(NULL, 0, 0, NULL));
+}
+
 int main(void) {
     RUN(every_code_has_a_message);
     RUN(success_and_nonsense_are_not_the_same_answer);
@@ -617,6 +791,17 @@ int main(void) {
     RUN(a_wait_with_nowhere_to_put_the_answer_is_refused);
     RUN(the_poller_takes_a_null_error_like_everything_else);
 #endif
+
+    RUN(a_word_that_already_differs_does_not_wait);
+    RUN(a_wait_with_no_time_and_no_change_times_out);
+    RUN(a_wait_with_a_deadline_waits_at_least_that_long);
+    RUN(a_sleeper_is_woken_by_a_wake);
+    RUN(everybody_waiting_can_be_released_at_once);
+    RUN(a_sleeper_on_one_word_is_not_released_by_a_wake_on_another);
+    RUN(a_wake_with_nobody_waiting_is_free_and_not_an_error);
+    RUN(a_sleeper_with_a_deadline_gives_up_when_nobody_comes);
+    RUN(a_wait_or_wake_on_nothing_is_refused);
+    RUN(the_futex_takes_a_null_error_like_everything_else);
 
     return harness_report("pal");
 }

@@ -38,9 +38,9 @@
 
 #include "burrow/atomic.h"
 #include "burrow/clock.h"
-#include "burrow/mcontext.h"
 #include "burrow/core.h"
 #include "burrow/func.h"
+#include "burrow/mcontext.h"
 #include "burrow/mem.h"
 #include "burrow/mem/heap.h"
 #include "burrow/netpoll.h"
@@ -691,7 +691,7 @@ static bool make_context(burrow__G *g, size_t asked) {
 #if GOROUTINE_MAPS_ITS_STACK
     (void)asked;
     return burrow__mcontext_make(&g->ctx, g->stack.lo, goroutine_stack_bytes(g),
-                                goroutine_start, g, NULL);
+                                 goroutine_start, g, NULL);
 #else
     /* The fiber backend makes its own stack and ignores the one it is handed,
      * but it checks the argument anyway so that a NULL is a bug on every
@@ -2002,6 +2002,21 @@ void runtime_main(Func fn) {
     if (sched.sysmonstarted) {
         burrow__note_wake(&sched.sysmonnote);
         (void)burrow__thread_join(&sched.sysmonthread);
+
+        /* sysmon has gone, but pidle_get still wakes this note whenever it
+         * finds the wait flag set, and the flag is only cleared by sysmon
+         * itself on its way out of the sleep. A thread taking a P off the idle
+         * list here would be waking a note this is one line away from freeing.
+         *
+         * The lock is the whole fix. pidle_get reads the flag and does the wake
+         * with the lock held, so taking it means any wake already decided on
+         * has finished, and clearing the flag under it means no later one is
+         * decided on. The join above is what makes clearing it safe, since the
+         * only thread that ever sets it is no longer running. */
+        burrow__lock(&sched.lock);
+        burrow__atomic_store_u32(&sched.sysmonwait, 0);
+        burrow__unlock(&sched.lock);
+
         burrow__note_free(&sched.sysmonnote);
         sched.sysmonstarted = false;
     }

@@ -511,6 +511,38 @@ TEST(a_wake_that_arrives_before_the_timeout_wins) {
     burrow__note_free(&timed);
 }
 
+static burrow__Note forever;
+static burrow__Thread forever_waker;
+
+static void wake_forever(void *arg) {
+    (void)arg;
+
+    int64_t start = burrow__nanotime();
+    while (burrow__nanotime() - start < SHORT_NS) {
+    }
+
+    burrow__note_wake(&forever);
+}
+
+TEST(a_timeout_at_the_end_of_the_clock_is_a_sleep_with_no_end) {
+    CHECK(burrow__note_init(&forever));
+
+    CHECK(burrow__thread_start(&forever_waker, wake_forever, NULL, 0));
+
+    /* The largest duration there is, which is what the scheduler asks for when
+     * the next timer is set for the end of the clock. Adding it to the current
+     * time is signed overflow written the obvious way, so the only thing this
+     * test really wants is for the sanitizer builds to have nothing to say
+     * about the line that does the adding. The wake is here so that the test
+     * finishes. */
+    bool got = burrow__note_sleep_timeout(&forever, INT64_MAX);
+
+    CHECK(got);
+    CHECK(burrow__thread_join(&forever_waker));
+
+    burrow__note_free(&forever);
+}
+
 /* Every sleeper released by one wake, the same as the untimed case, and with
  * timeouts long enough that a lost wake shows up as a failure rather than as a
  * hung test. */
@@ -568,6 +600,7 @@ int main(void) {
     RUN(a_timed_sleep_that_nobody_wakes_times_out_and_says_so);
     RUN(the_same_short_timeout_used_again_does_not_grow);
     RUN(a_wake_that_arrives_before_the_timeout_wins);
+    RUN(a_timeout_at_the_end_of_the_clock_is_a_sleep_with_no_end);
     RUN(one_wake_releases_every_timed_sleeper_too);
     return harness_report("note");
 }

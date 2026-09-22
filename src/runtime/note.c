@@ -55,6 +55,30 @@
  * the top of the file for why there is a cap at all. */
 #define NOTE_MAX_WAIT_NS 1000000000000LL
 
+/* When a wait of ns nanoseconds starting now runs out.
+ *
+ * The addition needs the guard because the duration comes from a timer and a
+ * timer can be set for the end of the clock. A context made with a deadline of
+ * INT64_MAX is the obvious way to get one, and it is a reasonable thing to
+ * write: it means this has a deadline in the sense the type system cares about
+ * and no deadline in the sense the caller cares about. The scheduler then asks
+ * to be woken in INT64_MAX minus now nanoseconds, and now plus that is not a
+ * number. Signed overflow is undefined behaviour, so this is not a wrong answer
+ * that gets clamped later, it is a program the compiler may do anything with,
+ * and the undefined behaviour sanitizer says so.
+ *
+ * Landing on INT64_MAX is the right answer as well as a defined one. Each
+ * individual wait is capped at NOTE_MAX_WAIT_NS anyway, so a deadline at the
+ * end of the clock is a loop that goes back to sleep for another thousand
+ * seconds, which is what a wait with no end should look like. */
+static int64_t note_deadline(int64_t ns) {
+    int64_t now = burrow__nanotime();
+
+    if (ns > INT64_MAX - now)
+        return INT64_MAX;
+    return now + ns;
+}
+
 /* The sleeper count, which all three backends now keep and all three read before
  * they go near the kernel.
  *
@@ -251,7 +275,7 @@ bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
     if (ns <= 0)
         return false;
 
-    int64_t deadline = burrow__nanotime() + ns;
+    int64_t deadline = note_deadline(ns);
     int64_t left = ns;
 
     (void)burrow__atomic_add_u32(&n->waiters, 1);
@@ -449,7 +473,7 @@ bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
     if (ns <= 0)
         return false;
 
-    int64_t deadline = burrow__nanotime() + ns;
+    int64_t deadline = note_deadline(ns);
 
     (void)burrow__atomic_add_u32(&n->waiters, 1);
 
@@ -620,7 +644,7 @@ bool burrow__note_sleep_timeout(burrow__Note *n, int64_t ns) {
     if (ns <= 0)
         return false;
 
-    int64_t deadline = burrow__nanotime() + ns;
+    int64_t deadline = note_deadline(ns);
 
     (void)burrow__atomic_add_u32(&n->waiters, 1);
     (void)pthread_mutex_lock(&n->mu);

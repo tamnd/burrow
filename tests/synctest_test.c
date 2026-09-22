@@ -340,7 +340,9 @@ TEST(a_wait_on_a_channel_from_outside_the_bubble_is_not_durable) {
  * There is no test here for a mutex, which is the other way round and is not
  * durable. A bubble whose goroutines are all waiting for a mutex has to keep
  * running, and every way of writing that down needs the test to know when the
- * waiter has parked, which is the thing a mutex gives no way to ask. */
+ * waiter has parked, which is the thing a mutex gives no way to ask. There is
+ * one in tests/bubble_test.c that buys the answer with a real sleep from
+ * outside the bubble, which is the only way to get it. */
 
 static void wg_worker(void *env) {
     (void)env;

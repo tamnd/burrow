@@ -15,17 +15,21 @@
  * outside not one. Everything a bubble has an opinion about, asked of the code
  * that was written before the bubble existed.
  *
- * Roadmap steps 4, 5 and 6 are here: the scheduler, the timers and the
- * channels. Steps 7, 8 and 9, which are defer and panic, the sync package and
- * the netpoller, are their own file for the same reason they are their own
- * steps.
+ * Roadmap steps 4 through 8 are here: the scheduler, the timers, the channels,
+ * defer and panic, and the sync package. Step 9 is the netpoller and it is in
+ * tests/bubble_netpoll_test.c, because everything in it needs a readiness
+ * backend and half the platforms burrow builds for do not have one.
  *
  * The rules are tests/synctest_test.c's rules, because the difficulty is the
  * same. A broken bubble has to give the wrong answer rather than a slow one, so
  * the waiting is done with chan_try_send on an unbuffered channel, which is
- * true only if a receiver is parked on it at that instant. Nothing here sleeps
- * for real, only goroutines call anything concurrent, and only the test
- * function itself calls CHECK.
+ * true only if a receiver is parked on it at that instant. Only goroutines call
+ * anything concurrent, and only the test function itself calls CHECK.
+ *
+ * One test sleeps for real and says why where it is. It is the one about a
+ * mutex, which is the only wait in the runtime that a test cannot ask about,
+ * and twenty milliseconds of somebody else's time is what it costs to have the
+ * test at all.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -35,17 +39,22 @@
 
 #include "burrow/atomic.h"
 #include "burrow/chan.h"
+#include "burrow/defer.h"
 #include "burrow/func.h"
 #include "burrow/mem/heap.h"
+#include "burrow/panic.h"
 #include "burrow/proc.h"
+#include "burrow/sync.h"
 #include "burrow/time.h"
 #include "burrow/type.h"
 
+#include "fatal.h"
 #include "harness.h"
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 /* Where a bubble's clock starts, which is midnight UTC on 2000-01-01 in
  * nanoseconds since the unix epoch. Every reading taken in here is measured
@@ -706,6 +715,612 @@ TEST(a_pipeline_of_two_thousand_handoffs_runs_through_a_bubble) {
     CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&ran), 1);
 }
 
+/* ------------------------------------------- 7. defer, panic and recover */
+
+/* --- a panic with a park on each side of it
+ *
+ * A panic unwinds a goroutine's stack by jumping back to a frame it has already
+ * left, and a bubble's count of that goroutine lives in the scheduler rather
+ * than on the stack, so the two have to not know about each other. The way to
+ * find out that they do is to park, panic, recover, and park again, and see
+ * whether the bubble still knows the goroutine is there for the second one.
+ *
+ * The first park matters as much as the panic. It puts the goroutine through
+ * the scheduler and onto another thread before anything unwinds, so what the
+ * recover is picking up is a stack that has been moved rather than one that has
+ * only ever run. */
+
+static void raise_it(void *env) {
+    (void)env;
+    panic_str(BURROW_S("a panic in a bubble"));
+}
+
+static void panic_child(void *env) {
+    (void)env;
+
+    Int v;
+    if (!chan_recv(gate, &v))
+        return;
+
+    EXPECT_PANIC(raise_it(NULL));
+
+    if (chan_recv(other, &v))
+        burrow__atomic_store_release_u32(&got, (uint32_t)v);
+}
+
+static void panic_body(void *env) {
+    (void)env;
+
+    gate = chan_make(heap_allocator(), TYPE_INT, 0);
+    other = chan_make(heap_allocator(), TYPE_INT, 0);
+    if (gate == NULL || other == NULL)
+        return;
+
+    if (!go(BURROW_FN(Func, panic_child, NULL)))
+        return;
+
+    synctest_wait();
+
+    Int v = 1;
+    if (chan_try_send(gate, &v))
+        (void)burrow__atomic_add_u32(&parked, 1);
+
+    /* Comes back with the child parked on the second channel, which it only
+     * reaches by way of the panic and the recover. */
+    synctest_wait();
+
+    v = 5;
+    if (chan_try_send(other, &v))
+        (void)burrow__atomic_add_u32(&parked, 1);
+}
+
+static void panic_top(void *env) {
+    (void)env;
+
+    if (synctest_run(BURROW_FN(Func, panic_body, NULL))) {
+        chan_free(gate);
+        chan_free(other);
+    }
+}
+
+TEST(a_panic_and_a_recover_in_a_bubble_leave_the_goroutine_counted) {
+    reset();
+    other = NULL;
+    runtime_main(BURROW_FN(Func, panic_top, NULL));
+
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&parked), 2);
+    CHECK(fatal_did_catch);
+    CHECK_STR_EQ(fatal_caught, "a panic in a bubble");
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&got), 5);
+}
+
+/* --- a deferred call that blocks
+ *
+ * Deferred calls run on the way out of a scope, which is a moment when the
+ * goroutine is finished as far as the code reads but is very much still there
+ * as far as the scheduler is concerned. A bubble that let go of a goroutine at
+ * the end of its function rather than at the end of its last defer would decide
+ * everybody had stopped while one of them was still inside a cleanup, and the
+ * test would read its result while the cleanup was still writing it.
+ *
+ * So the middle of the three defers parks. The body has to wait three times:
+ * once for the child to reach the end of its scope, once for it to reach the
+ * park inside the second defer, and once for it to finish. The order it writes
+ * down is the other half of the check, because a defer that ran on a different
+ * goroutine or got skipped in the unwinding would still leave the count right
+ * and the order wrong. */
+
+static int order_log[4];
+static int order_len;
+
+static void note_one(void *env) {
+    (void)env;
+    order_log[order_len++] = 1;
+}
+
+static void note_two(void *env) {
+    (void)env;
+
+    Int v;
+    (void)chan_recv(other, &v);
+    order_log[order_len++] = 2;
+}
+
+static void note_three(void *env) {
+    (void)env;
+    order_log[order_len++] = 3;
+}
+
+static void defer_child(void *env) {
+    (void)env;
+
+    BURROW_SCOPE {
+        BURROW_DEFER(note_one, NULL);
+        BURROW_DEFER(note_two, NULL);
+        BURROW_DEFER(note_three, NULL);
+
+        Int v;
+        (void)chan_recv(gate, &v);
+    }
+    BURROW_SCOPE_END;
+
+    burrow__atomic_store_release_u32(&ran, 1);
+}
+
+static void defer_body(void *env) {
+    (void)env;
+
+    gate = chan_make(heap_allocator(), TYPE_INT, 0);
+    other = chan_make(heap_allocator(), TYPE_INT, 0);
+    if (gate == NULL || other == NULL)
+        return;
+
+    if (!go(BURROW_FN(Func, defer_child, NULL)))
+        return;
+
+    synctest_wait();
+
+    Int v = 1;
+    if (chan_try_send(gate, &v))
+        (void)burrow__atomic_add_u32(&parked, 1);
+
+    synctest_wait();
+
+    if (chan_try_send(other, &v))
+        (void)burrow__atomic_add_u32(&parked, 1);
+
+    /* Nothing left to be blocked, so this comes back once the child has run its
+     * last defer and gone. */
+    synctest_wait();
+    burrow__atomic_store_release_u32(&total, burrow__atomic_load_acquire_u32(&ran));
+}
+
+static void defer_top(void *env) {
+    (void)env;
+
+    if (synctest_run(BURROW_FN(Func, defer_body, NULL))) {
+        chan_free(gate);
+        chan_free(other);
+    }
+}
+
+TEST(a_deferred_call_that_parks_in_a_bubble_is_still_waited_for) {
+    reset();
+    other = NULL;
+    order_len = 0;
+    for (int i = 0; i < 4; i++)
+        order_log[i] = 0;
+
+    runtime_main(BURROW_FN(Func, defer_top, NULL));
+
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&parked), 2);
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&total), 1);
+    CHECK_INT_EQ(order_len, 3);
+    CHECK_INT_EQ(order_log[0], 3);
+    CHECK_INT_EQ(order_log[1], 2);
+    CHECK_INT_EQ(order_log[2], 1);
+}
+
+/* --------------------------------------------------- 8. the sync package */
+
+#define WORKERS 64
+
+static SyncWaitGroup wg;
+static SyncMutex mu;
+static SyncRWMutex rw;
+static SyncOnce once;
+static SyncMutex cond_mu;
+static SyncCond cond;
+
+/* Under mu and under rw respectively, so neither is an atomic and that is the
+ * point: a lock that let two goroutines in at once would show up here as a
+ * count that is short rather than as anything the sanitisers would have to be
+ * running to catch. */
+static int guarded;
+static int shared;
+
+/* --- a mutex under contention
+ *
+ * Sixty four goroutines taking the same lock a hundred times each, which is six
+ * thousand four hundred trips through the semaphore, most of them contended.
+ * None of those waits is durable, so for the whole of this the bubble has
+ * goroutines that are blocked and has to keep saying it is not idle. A bubble
+ * that called a lock wait durable would decide everybody had stopped and report
+ * a deadlock in a program that was making perfectly good progress.
+ *
+ * The Wait at the end is durable, because the Add that put the work in happened
+ * in here. So this is both answers in one test: the lock is not a durable wait
+ * and the group is. */
+
+static void locker_child(void *env) {
+    (void)env;
+
+    for (int i = 0; i < 100; i++) {
+        sync_mutex_lock(&mu);
+        guarded++;
+        sync_mutex_unlock(&mu);
+    }
+
+    sync_wait_group_done(&wg);
+}
+
+static void mutex_body(void *env) {
+    (void)env;
+
+    sync_wait_group_add(&wg, WORKERS);
+    for (int i = 0; i < WORKERS; i++)
+        if (!go(BURROW_FN(Func, locker_child, NULL))) {
+            sync_wait_group_add(&wg, -(WORKERS - i));
+            break;
+        }
+
+    sync_wait_group_wait(&wg);
+    burrow__atomic_store_release_u32(&total, (uint32_t)guarded);
+
+    synctest_wait();
+    burrow__atomic_store_release_u32(&ran, 1);
+}
+
+static void mutex_top(void *env) {
+    (void)env;
+    (void)synctest_run(BURROW_FN(Func, mutex_body, NULL));
+}
+
+TEST(sixty_four_goroutines_can_contend_for_a_mutex_in_a_bubble) {
+    reset();
+    guarded = 0;
+    memset(&wg, 0, sizeof(wg));
+    memset(&mu, 0, sizeof(mu));
+
+    runtime_main(BURROW_FN(Func, mutex_top, NULL));
+
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&total), WORKERS * 100);
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&ran), 1);
+}
+
+/* --- a mutex wait is not durable
+ *
+ * tests/synctest_test.c says there is no test for this and says why: every way
+ * of writing it down needs the test to know when the waiter has parked, and a
+ * mutex is the one wait in the runtime that gives no way to ask. A channel has
+ * chan_try_send, a WaitGroup has its counter, a Cond has the flag its waiters
+ * are looking at. A mutex has nothing.
+ *
+ * So this one buys the answer with twenty milliseconds of real time, from a
+ * goroutine outside the bubble where the clock is the machine's. The body holds
+ * the lock, a goroutine in the bubble blocks on it, and the outsider waits long
+ * enough for that to have certainly happened before letting go. If the wait
+ * were durable, synctest_wait would come back during those twenty milliseconds
+ * with the child still stuck and the value it writes still zero.
+ *
+ * Unlocking from a goroutine other than the one that locked is allowed, here
+ * and in Go. A mutex is not owned by a goroutine, and a handoff like this one is
+ * why. */
+
+static uint32_t released;
+
+static void outside_unlocker(void *env) {
+    (void)env;
+
+    Int v;
+    if (!chan_recv(handshake, &v))
+        return;
+
+    time_sleep(20 * TIME_MILLISECOND);
+    burrow__atomic_store_release_u32(&released, 1);
+    sync_mutex_unlock(&mu);
+}
+
+static void mutex_waiter(void *env) {
+    (void)env;
+
+    sync_mutex_lock(&mu);
+    burrow__atomic_store_release_u32(&got, 1);
+    sync_mutex_unlock(&mu);
+}
+
+static void not_durable_body(void *env) {
+    (void)env;
+
+    sync_mutex_lock(&mu);
+    if (!go(BURROW_FN(Func, mutex_waiter, NULL))) {
+        sync_mutex_unlock(&mu);
+        return;
+    }
+
+    /* Unbuffered, so the outsider has it before this returns and its twenty
+     * milliseconds start now rather than whenever it gets scheduled. */
+    Int v = 1;
+    chan_send(handshake, &v);
+
+    synctest_wait();
+    burrow__atomic_store_release_u32(&total, burrow__atomic_load_acquire_u32(&got));
+}
+
+static void not_durable_top(void *env) {
+    (void)env;
+
+    handshake = chan_make(heap_allocator(), TYPE_INT, 0);
+    if (handshake == NULL)
+        return;
+
+    if (go(BURROW_FN(Func, outside_unlocker, NULL)))
+        (void)synctest_run(BURROW_FN(Func, not_durable_body, NULL));
+
+    chan_free(handshake);
+}
+
+TEST(a_mutex_wait_in_a_bubble_is_not_durable) {
+    reset();
+    released = 0;
+    memset(&mu, 0, sizeof(mu));
+
+    runtime_main(BURROW_FN(Func, not_durable_top, NULL));
+
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&released), 1);
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&total), 1);
+}
+
+/* --- readers and writers
+ *
+ * Eight readers and two writers on the same lock, which is the other shape of
+ * semaphore wait: a writer queues behind readers and readers queue behind a
+ * writer, and both of those are parks the bubble has to count as running.
+ *
+ * The invariant is that the shared number is always a multiple of seven,
+ * because that is the only thing a writer ever adds to it and it does so under
+ * the write lock. A reader that got in while a writer was halfway through would
+ * see a number that is not, and there is nowhere else for such a number to come
+ * from. */
+
+#define READERS 8
+#define WRITERS 2
+#define ROUNDS 50
+
+static void reader_child(void *env) {
+    (void)env;
+
+    for (int i = 0; i < ROUNDS; i++) {
+        sync_rw_mutex_r_lock(&rw);
+        if (shared % 7 != 0)
+            burrow__atomic_store_release_u32(&which, 1);
+        sync_rw_mutex_r_unlock(&rw);
+    }
+
+    sync_wait_group_done(&wg);
+}
+
+static void writer_child(void *env) {
+    (void)env;
+
+    for (int i = 0; i < ROUNDS; i++) {
+        sync_rw_mutex_lock(&rw);
+        shared += 7;
+        sync_rw_mutex_unlock(&rw);
+    }
+
+    sync_wait_group_done(&wg);
+}
+
+static void rw_body(void *env) {
+    (void)env;
+
+    sync_wait_group_add(&wg, READERS + WRITERS);
+
+    for (int i = 0; i < READERS; i++)
+        if (!go(BURROW_FN(Func, reader_child, NULL)))
+            return;
+    for (int i = 0; i < WRITERS; i++)
+        if (!go(BURROW_FN(Func, writer_child, NULL)))
+            return;
+
+    sync_wait_group_wait(&wg);
+    burrow__atomic_store_release_u32(&total, (uint32_t)shared);
+}
+
+static void rw_top(void *env) {
+    (void)env;
+    (void)synctest_run(BURROW_FN(Func, rw_body, NULL));
+}
+
+TEST(readers_and_writers_share_a_lock_in_a_bubble) {
+    reset();
+    shared = 0;
+    memset(&wg, 0, sizeof(wg));
+    memset(&rw, 0, sizeof(rw));
+
+    runtime_main(BURROW_FN(Func, rw_top, NULL));
+
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&which), 0);
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&total), WRITERS * ROUNDS * 7);
+}
+
+/* --- a Once
+ *
+ * Sixty four goroutines and one function, and the sixty three that lose the
+ * race block until the winner is finished. That wait is the interesting part
+ * here rather than the counting: it is a park in the middle of a call that
+ * looks like it does not have one, and every one of those is a place the
+ * bubble's count can go missing. */
+
+static void once_fn(void *env) {
+    (void)env;
+    (void)burrow__atomic_add_u32(&ran, 1);
+}
+
+static void once_child(void *env) {
+    (void)env;
+
+    sync_once_do(&once, BURROW_FN(Func, once_fn, NULL));
+    (void)burrow__atomic_add_u32(&total, 1);
+    sync_wait_group_done(&wg);
+}
+
+static void once_body(void *env) {
+    (void)env;
+
+    sync_wait_group_add(&wg, WORKERS);
+    for (int i = 0; i < WORKERS; i++)
+        if (!go(BURROW_FN(Func, once_child, NULL))) {
+            sync_wait_group_add(&wg, -(WORKERS - i));
+            break;
+        }
+
+    sync_wait_group_wait(&wg);
+}
+
+static void once_top(void *env) {
+    (void)env;
+    (void)synctest_run(BURROW_FN(Func, once_body, NULL));
+}
+
+TEST(a_once_in_a_bubble_runs_its_function_once) {
+    reset();
+    memset(&wg, 0, sizeof(wg));
+    memset(&once, 0, sizeof(once));
+
+    runtime_main(BURROW_FN(Func, once_top, NULL));
+
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&ran), 1);
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&total), WORKERS);
+}
+
+/* --- a broadcast
+ *
+ * tests/synctest_test.c has one goroutine in a Cond wait and checks that the
+ * bubble calls it durably blocked. This is the same question asked of eight of
+ * them at once, which is worth asking separately because a broadcast wakes them
+ * all from inside the notify list and the bubble has to count eight goroutines
+ * coming back rather than one.
+ *
+ * The first wait is the claim that all eight are really in there. Nobody has
+ * incremented anything at that point, and a bubble that came back early would
+ * be coming back with goroutines that had not reached the Cond yet, which is
+ * the case where the broadcast below goes out to an empty list and the run
+ * never ends. */
+
+#define SLEEPERS 8
+
+static void cond_child(void *env) {
+    (void)env;
+
+    sync_mutex_lock(&cond_mu);
+    while (burrow__atomic_load_acquire_u32(&which) == 0)
+        sync_cond_wait(&cond);
+    sync_mutex_unlock(&cond_mu);
+
+    (void)burrow__atomic_add_u32(&total, 1);
+}
+
+static void cond_body(void *env) {
+    (void)env;
+
+    cond = SYNC_COND(sync_mutex_locker(&cond_mu));
+
+    for (int i = 0; i < SLEEPERS; i++)
+        if (!go(BURROW_FN(Func, cond_child, NULL)))
+            return;
+
+    synctest_wait();
+    if (burrow__atomic_load_acquire_u32(&total) == 0)
+        burrow__atomic_store_release_u32(&parked, 1);
+
+    sync_mutex_lock(&cond_mu);
+    burrow__atomic_store_release_u32(&which, 1);
+    sync_cond_broadcast(&cond);
+    sync_mutex_unlock(&cond_mu);
+
+    synctest_wait();
+    burrow__atomic_store_release_u32(&got, burrow__atomic_load_acquire_u32(&total));
+}
+
+static void cond_top(void *env) {
+    (void)env;
+    (void)synctest_run(BURROW_FN(Func, cond_body, NULL));
+}
+
+TEST(a_broadcast_in_a_bubble_wakes_every_waiter) {
+    reset();
+    memset(&cond_mu, 0, sizeof(cond_mu));
+    memset(&cond, 0, sizeof(cond));
+
+    runtime_main(BURROW_FN(Func, cond_top, NULL));
+
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&parked), 1);
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&got), SLEEPERS);
+}
+
+/* --- a Map
+ *
+ * Sixteen goroutines writing sixteen keys each into the same map, which is the
+ * one thing in sync that is not built on the semaphore. It has a lock of its
+ * own for the slow path and reclamation underneath it that is tied to the
+ * thread rather than to the goroutine, and a bubble moves goroutines between
+ * threads more than an ordinary program does, because everything in one stops
+ * and starts together.
+ *
+ * So this is a test of the reclamation as much as of the map. The count at the
+ * end is what says every write landed. */
+
+#define POSTERS 16
+#define PER_POSTER 16
+
+static SyncMap cache;
+
+static void map_child(void *env) {
+    Int base = (Int)(intptr_t)env;
+
+    for (Int i = 0; i < PER_POSTER; i++) {
+        Int k = base * PER_POSTER + i;
+        Int v = k * 2;
+
+        if (sync_map_store(&cache, &k, &v))
+            (void)burrow__atomic_add_u32(&total, 1);
+    }
+
+    sync_wait_group_done(&wg);
+}
+
+static void map_body(void *env) {
+    (void)env;
+
+    cache = SYNC_MAP(heap_allocator(), TYPE_INT, TYPE_INT);
+    sync_wait_group_add(&wg, POSTERS);
+
+    for (Int i = 0; i < POSTERS; i++)
+        if (!go(BURROW_FN(Func, map_child, (void *)(intptr_t)i))) {
+            sync_wait_group_add(&wg, -(POSTERS - (int)i));
+            break;
+        }
+
+    sync_wait_group_wait(&wg);
+
+    uint32_t found = 0;
+    for (Int k = 0; k < POSTERS * PER_POSTER; k++) {
+        Int v = 0;
+        if (sync_map_load(&cache, &k, &v) && v == k * 2)
+            found++;
+    }
+
+    burrow__atomic_store_release_u32(&got, found);
+    sync_map_free(&cache);
+}
+
+static void map_top(void *env) {
+    (void)env;
+    (void)synctest_run(BURROW_FN(Func, map_body, NULL));
+}
+
+TEST(a_sync_map_in_a_bubble_keeps_every_write) {
+    reset();
+    memset(&wg, 0, sizeof(wg));
+
+    runtime_main(BURROW_FN(Func, map_top, NULL));
+
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&total), POSTERS * PER_POSTER);
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&got), POSTERS * PER_POSTER);
+}
+
 int main(void) {
     RUN(five_hundred_goroutines_in_a_bubble_are_all_waited_for);
     RUN(a_goroutine_that_is_only_yielding_still_counts_as_running);
@@ -717,6 +1332,14 @@ int main(void) {
     RUN(a_select_with_a_case_from_outside_the_bubble_is_not_durable);
     RUN(a_select_with_a_default_never_parks_in_a_bubble);
     RUN(a_pipeline_of_two_thousand_handoffs_runs_through_a_bubble);
+    RUN(a_panic_and_a_recover_in_a_bubble_leave_the_goroutine_counted);
+    RUN(a_deferred_call_that_parks_in_a_bubble_is_still_waited_for);
+    RUN(sixty_four_goroutines_can_contend_for_a_mutex_in_a_bubble);
+    RUN(a_mutex_wait_in_a_bubble_is_not_durable);
+    RUN(readers_and_writers_share_a_lock_in_a_bubble);
+    RUN(a_once_in_a_bubble_runs_its_function_once);
+    RUN(a_broadcast_in_a_bubble_wakes_every_waiter);
+    RUN(a_sync_map_in_a_bubble_keeps_every_write);
 
     return harness_report("bubble");
 }

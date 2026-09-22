@@ -56,13 +56,14 @@ in `tools/pal-exceptions.txt` that has stopped needing to be there.
 | Net | `socket`, `bind`, `listen`, `accept`, `connect`, `sendto`, `recvfrom`, `getsockopt`, `setsockopt`, `shutdown`, `getaddrinfo`, `if_enumerate` |
 | Poll | `poll_create`, `poll_add`, `poll_del`, `poll_wait`, `poll_break` |
 | Memory | `vm_reserve`, `vm_commit`, `vm_decommit`, `vm_release`, `vm_guard` |
-| Misc | `random_bytes`, `signal_install`, `signal_mask`, `dl_open`, `dl_sym`, `page_size`, `hostname`, `user_lookup` |
+| Signals | `signal_install`, `signal_mask`, `signal_stack_install`, `signal_stack_remove`, `signal_fault_addr` |
+| Misc | `random_bytes`, `dl_open`, `dl_sym`, `page_size`, `hostname`, `user_lookup` |
 
-That is 27 files, 9 process, 9 threads, 4 time, 12 net, 5 poll, 5 memory and 8
-misc. An earlier draft of this section said forty and then said sixty eight, both
-of which were counts from before the table had finished growing. Seventy nine is
-what is written above and it is still small enough that a new platform is a week
-of work rather than a port.
+That is 27 files, 9 process, 9 threads, 4 time, 12 net, 5 poll, 5 memory, 5
+signals and 6 misc. An earlier draft of this section said forty and then said
+sixty eight, both of which were counts from before the table had finished
+growing. Eighty two is what is written above and it is still small enough that a
+new platform is a week of work rather than a port.
 
 Three of the nine threads entries are newer than the rest and arrived the same
 way `poll_break` did. `thread_detach`, `thread_yield` and `thread_stack_bounds`
@@ -79,12 +80,37 @@ the argument for moving working code behind a boundary rather than declaring the
 boundary and calling it done: the declarations were checked against a design and
 the design was short a call.
 
-Not all seventy nine have a backend today. All of them are declared, because the
+Signals have their own row now, and the three at the end of it arrived the same
+way. The table had `signal_install` and `signal_mask` and nothing else, which is
+enough to catch a signal and not enough to do anything useful with one.
+`src/runtime/stack.c` had been installing a handler on a signal stack it mapped
+itself and reading the faulting address out of a `siginfo_t` since before the
+platform layer was drawn, so moving it down produced `signal_stack_install`,
+`signal_stack_remove` and `signal_fault_addr`. Two of those exist because a
+handler for a stack overflow cannot run on the stack that overflowed, which is a
+fact about the problem rather than about any platform, and the third exists
+because the one field a fault handler wants out of the platform's structure
+should not cost the caller a system header.
+
+`PAL_SIGFAULT` is the other thing that came out of it, and it is the only entry
+in the signal number table that is not a signal. A bad memory access is SIGSEGV
+on Linux, SIGBUS on macOS for some of the same accesses, and a structured
+exception on Windows that reaches a vectored handler and is not a signal in any
+sense. A caller that had to know which of those three it was on would be a
+caller this layer had failed, so installing for `PAL_SIGFAULT` installs for
+whatever the platform actually raises. Its number is outside the range the real
+ones come from so that nobody reads it as one, and `pal_kill` does not take it.
+
+Not all eighty two have a backend today. All of them are declared, because the
 shape of the boundary is worth deciding once rather than discovering package by
 package, and because a call to one that is missing is a link error that names it.
-Time, memory, random, the machine queries, poll and the whole of threads are
-implemented and in use. Files, process and net land with the packages that need
-them, where there is a real caller to design against.
+Time, memory, random, the machine queries, poll, the whole of threads and the
+whole of signals are implemented and in use. Files, process, dynamic loading,
+user and net land with the packages that need them, where there is a real caller
+to design against. Signals are implemented on POSIX in full and on Windows for
+the one thing Windows has anything to offer for, which is the fault; mapping
+`PAL_SIGINT` and `PAL_SIGTERM` onto a console control handler is `os/signal`'s
+to design against and says `PAL_ENOTSUP` until then.
 
 The futex pair is the one place where the layer builds a primitive instead of
 forwarding to one, and it is worth saying why rather than leaving it to be

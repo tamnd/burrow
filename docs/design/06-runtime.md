@@ -465,23 +465,30 @@ conversion of a fault on the guard into `fatal error: stack overflow`. The
 per-goroutine size, the segmented option and the 32-bit default arrive with the
 scheduler, since there is nothing yet to configure them on.
 
-A stack is one anonymous mapping of the guard and the usable part together, so
-they are next to each other by construction rather than by luck, with the guard
-`mprotect`ed to `PROT_NONE` on POSIX and left reserved but uncommitted on
-Windows. Reserved and uncommitted is the same fault for no commit charge, which
-is the cheaper of the two ways to spell it there. The struct is `lo`, `hi` and
-the guard size, nothing is derived from anything else, and all zeroes is both a
-stack that was never allocated and one that has been freed, which is what makes
-a double free do nothing.
+A stack is one reservation of the guard and the usable part together, so they
+are next to each other by construction rather than by luck, with only the usable
+part committed. What is left over is address space that is spoken for and has
+nothing behind it, which faults on any access and costs no memory at all. That
+is the Win32 shape and it is what `pal_vm_reserve` and `pal_vm_commit` offer on
+every platform, so on POSIX the guard is a page this process has never made
+readable rather than one it made readable and took back. The struct is `lo`,
+`hi` and the guard size, nothing is derived from anything else, and all zeroes
+is both a stack that was never allocated and one that has been freed, which is
+what makes a double free do nothing.
 
-The handler is a SIGSEGV and SIGBUS handler with `SA_ONSTACK` and `SA_SIGINFO`,
-or a vectored exception handler on Windows. It claims a fault only when the
-address is inside the guard of the stack the faulting thread said it was on,
-which a thread says through `burrow__stack_set_current` and the scheduler will
-say on every switch. Anything else is chained to whatever handler was installed
-before, or has the old disposition put back and is allowed to happen again, so
-burrow linked into a program with its own handler takes nothing away from it and
-an ordinary segmentation fault still produces a core file.
+The handler is installed for `PAL_SIGFAULT`, which is the platform layer's name
+for a bad memory access and is not a signal. It is SIGSEGV and SIGBUS both on
+POSIX, with `SA_ONSTACK` and `SA_SIGINFO`, because which of the two a guard page
+raises is not the same on Linux as it is on macOS, and it is a vectored
+exception handler on Windows. `src/runtime/stack.c` knows none of that. It
+claims a fault only when the address is inside the guard of the stack the
+faulting thread said it was on, which a thread says through
+`burrow__stack_set_current` and the scheduler will say on every switch.
+Anything else the handler declines, and declining is what sends it back to
+whatever handler was installed before, or puts the old disposition back and lets
+it happen again, so burrow linked into a program with its own handler takes
+nothing away from it and an ordinary segmentation fault still produces a core
+file.
 
 Two things it does not catch, both in the header next to the function so nobody
 has to come here to find them. A single frame larger than the guard can step

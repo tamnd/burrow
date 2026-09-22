@@ -987,6 +987,180 @@ TEST(the_threads_take_a_null_error_like_everything_else) {
     CHECK(pal_thread_join(h, NULL));
 }
 
+/* --------------------------------------------------------------- the signals
+ *
+ * The fault half of this group is tested end to end in tests/stack_test.c,
+ * which runs a goroutine off the bottom of its own stack in a child process and
+ * reads the message that comes out. That is the only honest way to check it,
+ * since a handler that claims a fault never returns, and it is why there is no
+ * test here that makes one. What is left for this file is the contract around
+ * it: what the arguments refuse, that a signal stack is per thread, and that a
+ * handler installed for an ordinary signal actually runs when it arrives. */
+
+#if !defined(_WIN32)
+#include <signal.h>
+#endif
+
+static uint32_t signal_hits;
+static int32_t signal_seen;
+
+static bool count_signal(int32_t sig, void *info, void *ctx) {
+    (void)info;
+    (void)ctx;
+
+    signal_seen = sig;
+    (void)burrow__atomic_add_u32(&signal_hits, 1);
+    return true;
+}
+
+TEST(a_signal_stack_can_be_installed_and_given_back) {
+    PalErrno err = PAL_EOTHER;
+
+    CHECK(pal_signal_stack_install(&err));
+    CHECK_INT_EQ(err, PAL_OK);
+
+    /* Twice is not an error and does not map a second one, which is what lets
+     * every thread call it on the way in without checking first. */
+    CHECK(pal_signal_stack_install(NULL));
+
+    pal_signal_stack_remove();
+    /* And removing one that has already gone is not an error either. */
+    pal_signal_stack_remove();
+
+    /* Back again afterwards, because the tests below and the harness itself
+     * share this thread and a thread with no signal stack is a thread with no
+     * overflow message. */
+    CHECK(pal_signal_stack_install(NULL));
+}
+
+static void signal_stack_on_a_thread(void *arg) {
+    uint32_t *ok = (uint32_t *)arg;
+
+    if (pal_signal_stack_install(NULL) && pal_signal_stack_install(NULL))
+        *ok = 1;
+    pal_signal_stack_remove();
+}
+
+TEST(every_thread_installs_its_own_signal_stack) {
+    uint32_t ok = 0;
+
+    int64_t h = pal_thread_create(signal_stack_on_a_thread, &ok, 0, NULL);
+    CHECK(h != PAL_INVALID_HANDLE);
+    CHECK(pal_thread_join(h, NULL));
+    CHECK_INT_EQ(ok, 1);
+
+    /* The thread removed its own and this one still has the one the test above
+     * put back, which is the whole claim: they are not the same mapping. */
+    CHECK(pal_signal_stack_install(NULL));
+}
+
+TEST(a_handler_that_is_not_there_is_refused) {
+    PalErrno err = PAL_OK;
+
+    CHECK(!pal_signal_install(PAL_SIGFAULT, NULL, &err));
+    CHECK_INT_EQ(err, PAL_EINVAL);
+}
+
+TEST(a_number_that_is_not_a_signal_is_refused) {
+    PalErrno err = PAL_OK;
+
+    CHECK(!pal_signal_install(4242, count_signal, &err));
+#if defined(_WIN32)
+    /* Windows has one of these and says so about the rest, so a number nobody
+     * recognises and a signal it cannot offer come back the same way. */
+    CHECK_INT_EQ(err, PAL_ENOTSUP);
+#else
+    CHECK_INT_EQ(err, PAL_EINVAL);
+
+    /* The two that cannot be caught, which the system would refuse anyway. They
+     * are refused here so that the answer is the same on a libc that decides to
+     * be helpful about it. */
+    err = PAL_OK;
+    CHECK(!pal_signal_install(PAL_SIGKILL, count_signal, &err));
+    CHECK_INT_EQ(err, PAL_EINVAL);
+
+    err = PAL_OK;
+    CHECK(!pal_signal_install(PAL_SIGSTOP, count_signal, &err));
+    CHECK_INT_EQ(err, PAL_EINVAL);
+#endif
+}
+
+TEST(a_fault_address_needs_a_fault_to_read_it_from) {
+    CHECK(pal_signal_fault_addr(NULL) == NULL);
+}
+
+#if !defined(_WIN32)
+
+TEST(a_handler_runs_when_the_signal_arrives) {
+    PalErrno err = PAL_EOTHER;
+
+    signal_hits = 0;
+    signal_seen = 0;
+
+    /* The preemption signal, because it is the one the scheduler will send
+     * itself and because its default disposition is to be ignored, so a build
+     * where this fails to install does not take the test process with it. */
+    CHECK(pal_signal_install(PAL_SIGPREEMPT, count_signal, &err));
+    CHECK_INT_EQ(err, PAL_OK);
+
+    CHECK_INT_EQ(raise(SIGURG), 0);
+
+    CHECK_INT_EQ(burrow__atomic_load_u32(&signal_hits), 1);
+
+    /* The handler is told our number and not the platform's, which is the
+     * difference between a caller that knows what SIGURG is and one that does
+     * not have to. */
+    CHECK_INT_EQ(signal_seen, PAL_SIGPREEMPT);
+}
+
+TEST(a_blocked_signal_waits_and_arrives_when_it_is_let_through) {
+    signal_hits = 0;
+
+    CHECK(pal_signal_install(PAL_SIGPREEMPT, count_signal, NULL));
+
+    PalErrno err = PAL_EOTHER;
+    CHECK(pal_signal_mask(PAL_SIGPREEMPT, true, &err));
+    CHECK_INT_EQ(err, PAL_OK);
+
+    CHECK_INT_EQ(raise(SIGURG), 0);
+    CHECK_INT_EQ(burrow__atomic_load_u32(&signal_hits), 0);
+
+    /* Unblocking is what delivers it, and it is delivered before this call
+     * returns, which is what makes the count below safe to read straight
+     * away. */
+    CHECK(pal_signal_mask(PAL_SIGPREEMPT, false, &err));
+    CHECK_INT_EQ(err, PAL_OK);
+    CHECK_INT_EQ(burrow__atomic_load_u32(&signal_hits), 1);
+}
+
+TEST(installing_twice_replaces_the_handler_and_keeps_what_was_there_first) {
+    signal_hits = 0;
+
+    /* Two installs and one raise. A second install that stacked rather than
+     * replaced would count twice, and one that recorded our own dispatcher as
+     * the thing to forward to would loop instead of returning at all. */
+    CHECK(pal_signal_install(PAL_SIGPREEMPT, count_signal, NULL));
+    CHECK(pal_signal_install(PAL_SIGPREEMPT, count_signal, NULL));
+
+    CHECK_INT_EQ(raise(SIGURG), 0);
+    CHECK_INT_EQ(burrow__atomic_load_u32(&signal_hits), 1);
+}
+
+#endif /* !_WIN32 */
+
+TEST(the_signals_take_a_null_error_like_everything_else) {
+    CHECK(!pal_signal_install(PAL_SIGFAULT, NULL, NULL));
+    CHECK(!pal_signal_install(4242, count_signal, NULL));
+    CHECK(pal_signal_stack_install(NULL));
+
+#if !defined(_WIN32)
+    CHECK(pal_signal_mask(PAL_SIGPREEMPT, true, NULL));
+    CHECK(pal_signal_mask(PAL_SIGPREEMPT, false, NULL));
+#else
+    CHECK(!pal_signal_mask(PAL_SIGPREEMPT, true, NULL));
+#endif
+}
+
 int main(void) {
     RUN(every_code_has_a_message);
     RUN(success_and_nonsense_are_not_the_same_answer);
@@ -1049,6 +1223,18 @@ int main(void) {
     RUN(yielding_is_allowed_as_often_as_you_like);
     RUN(starting_or_joining_nothing_is_refused);
     RUN(the_threads_take_a_null_error_like_everything_else);
+
+    RUN(a_signal_stack_can_be_installed_and_given_back);
+    RUN(every_thread_installs_its_own_signal_stack);
+    RUN(a_handler_that_is_not_there_is_refused);
+    RUN(a_number_that_is_not_a_signal_is_refused);
+    RUN(a_fault_address_needs_a_fault_to_read_it_from);
+#if !defined(_WIN32)
+    RUN(a_handler_runs_when_the_signal_arrives);
+    RUN(a_blocked_signal_waits_and_arrives_when_it_is_let_through);
+    RUN(installing_twice_replaces_the_handler_and_keeps_what_was_there_first);
+#endif
+    RUN(the_signals_take_a_null_error_like_everything_else);
 
     return harness_report("pal");
 }

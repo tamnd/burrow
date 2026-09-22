@@ -62,9 +62,9 @@ extern "C" {
  * anyway, because the shape of the boundary is a decision worth writing down
  * once rather than discovering package by package, and because a call to a
  * missing one is a link error that names it. Today the time, memory, random,
- * machine query and poll groups are implemented and in use, and files, process,
- * threads and net land with the packages that need them. Each group below says
- * where it stands. */
+ * machine query, poll, thread and signal groups are implemented and in use, and
+ * files, process, dynamic loading, user and net land with the packages that
+ * need them. Each group below says where it stands. */
 
 /* ------------------------------------------------------------------ failure
  *
@@ -626,7 +626,19 @@ enum {
     PAL_SIGSTOP = 19,
     /* The one the runtime sends itself, to take a goroutine off a core it has
      * been on too long. Go uses SIGURG for this. */
-    PAL_SIGPREEMPT = 23
+    PAL_SIGPREEMPT = 23,
+    /* Not a signal, and the number is outside the range the others come from so
+     * that nobody reads it as one. It means a bad memory access, which is two
+     * signals on POSIX and none at all on Windows.
+     *
+     * POSIX raises SIGSEGV for some of those and SIGBUS for others, and which
+     * one a guard page gives you is not the same on Linux as it is on macOS.
+     * Windows raises an access violation, which reaches a vectored exception
+     * handler and is not a signal in any sense. A caller that had to know which
+     * of those three it was on would be a caller this layer had failed, so
+     * installing for this one installs for whatever the platform actually
+     * raises. Only pal_signal_install takes it. pal_kill does not. */
+    PAL_SIGFAULT = 64
 };
 
 bool pal_kill(int64_t pid, int32_t sig, PalErrno *err);
@@ -655,19 +667,94 @@ int64_t pal_getcwd(char *buf, int64_t cap, PalErrno *err);
  * application directory first. */
 int64_t pal_exec_lookup(const char *name, char *buf, int64_t cap, PalErrno *err);
 
-/* Install a handler for a signal. The handler runs on a signal stack the
- * backend sets up, and it is called with the platform's siginfo and context as
- * opaque pointers, because the preemption handler is the only caller and it
- * needs the context to find the interrupted program counter.
+/* ------------------------------------------------------------------ signals
  *
- * Windows has no signals. The backend maps PAL_SIGINT and PAL_SIGTERM onto a
- * console control handler and reports PAL_ENOTSUP for the rest. */
-bool pal_signal_install(int32_t sig,
-                        void (*handler)(int32_t sig, void *info, void *ctx),
-                        PalErrno *err);
+ * Running something of ours when the operating system interrupts a thread.
+ *
+ * Implemented, and PAL_SIGFAULT is in use: it is what turns a goroutine running
+ * off the bottom of its stack into "fatal error: stack overflow" rather than
+ * into a segmentation fault with nothing said. PAL_SIGPREEMPT is what the
+ * scheduler will send itself to take a goroutine off a core it has held too
+ * long, and that has no caller yet.
+ *
+ * This is the group with the least room to be clever in. A handler runs with
+ * the thread stopped wherever it was, which may be in the middle of malloc, so
+ * everything below is written to take a lock the handler could already be
+ * holding exactly never. */
 
-/* Block or unblock a signal for the calling thread only. */
+/* What a handler is called with and what it says back.
+ *
+ * sig is the PAL number it was installed for. info and ctx are the platform's
+ * own two structures, opaque here, because the callers that want anything out
+ * of them want one field each and there is a call below for the field the fault
+ * handler wants. The preemption handler will want the interrupted program
+ * counter out of ctx and will get a call of its own when it is written.
+ *
+ * True means the handler dealt with it and the interrupted instruction should
+ * be resumed. False means this one was not ours, and the backend puts back
+ * whatever disposition was there before burrow arrived and lets it happen
+ * again, so a program with its own handler still gets it and a program with
+ * none still dies the way it would have, core file and all.
+ *
+ * That return value is the whole reason this is not a void function. A POSIX
+ * handler returns nothing and a Windows vectored handler returns one of three
+ * codes, and a caller that had to know which it was writing is a caller this
+ * layer had failed. */
+typedef bool (*PalSignalHandler)(int32_t sig, void *info, void *ctx);
+
+/* Install a handler. The handler runs on the signal stack pal_signal_stack_
+ * install gave the thread, where the platform has such a thing, which is what
+ * lets it run at all when the fault it is handling is a stack that ran out.
+ *
+ * Installing twice for the same signal replaces the handler. The disposition
+ * kept for the forwarding above is the one that was there before the first
+ * install, so a caller cannot lose the program's own handler by arming twice.
+ *
+ * Windows has no signals. PAL_SIGFAULT is a vectored exception handler there
+ * and works. The rest report PAL_ENOTSUP for now: mapping PAL_SIGINT and
+ * PAL_SIGTERM onto a console control handler is os/signal's to design against,
+ * and a handler written with no caller in front of it is a handler nobody has
+ * ever run. */
+bool pal_signal_install(int32_t sig, PalSignalHandler handler, PalErrno *err);
+
+/* Block or unblock a signal for the calling thread only. PAL_ENOTSUP on
+ * Windows. */
 bool pal_signal_mask(int32_t sig, bool block, PalErrno *err);
+
+/* Gives the calling thread somewhere for a handler to run that is not the stack
+ * it is already on.
+ *
+ * Once per thread, for every thread that wants a handler to be able to report a
+ * stack overflow. The stack that overflowed is the one with no room left on it,
+ * so a handler that has nowhere else to go is a handler that faults again and
+ * takes the message with it.
+ *
+ * Calling it twice on one thread does nothing the second time and answers true.
+ * It answers true on Windows too, where there is nothing to do: a vectored
+ * handler runs on whatever stack faulted and the platform offers no way to say
+ * otherwise. */
+bool pal_signal_stack_install(PalErrno *err);
+
+/* Gives back what the call above took. Call it before the thread ends or the
+ * mapping lives as long as the process does. Safe on a thread that never
+ * installed one. */
+void pal_signal_stack_remove(void);
+
+/* The address a bad memory access was trying to reach, out of the info pointer
+ * a PAL_SIGFAULT handler was called with.
+ *
+ * It is an address and not a pointer: reading it is what faulted, so reading it
+ * again would fault again. Compare it against something and nothing else.
+ *
+ * NULL means either the platform did not say or the access really was at
+ * address zero, and this does not distinguish them, because the one caller
+ * there is compares the answer against a range and zero is never in one. A
+ * caller that needs to tell a null dereference from silence needs a different
+ * call and can have one when it turns up.
+ *
+ * Only meaningful inside a PAL_SIGFAULT handler and only for the info pointer
+ * that handler was handed. */
+BURROW_BORROWS(ret) const void *pal_signal_fault_addr(const void *info);
 
 /* ------------------------------------------------------------ dynamic loading
  *

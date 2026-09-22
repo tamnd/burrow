@@ -14,5 +14,4 @@
 # A file with nowhere to go is a file that is never coming off.
 
 src/runtime/mcontext.c	ucontext on POSIX and the fiber API on Windows, to switch a goroutine's stack.	None, and this one is deliberate. A context switch is assembly and a kernel interface in equal measure, it is on the hottest path in the runtime, and putting a call boundary in the middle of it would cost more than the tidiness is worth. docs/design/10-packages-os.md section 2 lists no entry point for it. This line stays.
-src/runtime/stack.c	mmap and mprotect, VirtualAlloc, and a fault handler for the guard page.	Memory for the mapping half, which is pal_vm_reserve and the four calls next to it and is already written. The handler half is Misc, waiting on pal_signal_install. The file stops being per platform once both are in.
 src/runtime/trace.c	The Windows stack walker, for a backtrace on a platform with no unwinder we can reach.	None yet, and no group covers it. Symbolisation is its own item on the P0 list and the shape of it is not settled, so this line is honest about not having an answer rather than inventing a group to put it in.

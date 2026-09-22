@@ -13,6 +13,7 @@
 #include "burrow/declare.h"
 
 #include "burrow/core.h"
+#include "burrow/error.h"
 #include "burrow/proc.h"
 #include "burrow/sync/atomic.h"
 #include "burrow/type.h"
@@ -65,7 +66,7 @@ const Type burrow_type_Circle = {
 BURROW_REGISTER_TYPE(Circle);
 
 TEST(a_registered_type_is_found_by_name) {
-    const Type *t = type_by_name(BURROW_S("RegPoint"));
+    const Type *t = type_by_name(BURROW_S("RegPoint"), NULL);
 
     CHECK(t == TYPE_OF(RegPoint));
     if (t != NULL)
@@ -75,26 +76,26 @@ TEST(a_registered_type_is_found_by_name) {
 TEST(a_type_that_was_not_registered_is_not_found) {
     /* It still has a descriptor and reflection on a value of it still works.
      * Registration is only about finding it from a name. */
-    CHECK(type_by_name(BURROW_S("QuietPoint")) == NULL);
+    CHECK(type_by_name(BURROW_S("QuietPoint"), NULL) == NULL);
     CHECK(TYPE_OF(QuietPoint) != NULL);
 }
 
 TEST(a_name_nothing_registered_gives_null) {
-    CHECK(type_by_name(BURROW_S("NoSuchType")) == NULL);
-    CHECK(type_by_name(BURROW_S("a.b.c.NoSuchType")) == NULL);
-    CHECK(type_by_name(BURROW_STR_EMPTY) == NULL);
+    CHECK(type_by_name(BURROW_S("NoSuchType"), NULL) == NULL);
+    CHECK(type_by_name(BURROW_S("a.b.c.NoSuchType"), NULL) == NULL);
+    CHECK(type_by_name(BURROW_STR_EMPTY, NULL) == NULL);
 }
 
 TEST(the_package_path_is_part_of_the_name) {
-    const Type *t = type_by_name(BURROW_S("github.com/tamnd/shapes.v2.Circle"));
+    const Type *t = type_by_name(BURROW_S("github.com/tamnd/shapes.v2.Circle"), NULL);
     CHECK(t == &burrow_type_Circle);
 
     /* The bare name is not the qualified name, and a type in a package is not
      * reachable without it. Two packages are allowed to have a Circle. */
-    CHECK(type_by_name(BURROW_S("Circle")) == NULL);
+    CHECK(type_by_name(BURROW_S("Circle"), NULL) == NULL);
 
     /* Nor is a prefix of the package path. */
-    CHECK(type_by_name(BURROW_S("shapes.v2.Circle")) == NULL);
+    CHECK(type_by_name(BURROW_S("shapes.v2.Circle"), NULL) == NULL);
 }
 
 TEST(a_qualified_name_can_be_written_out) {
@@ -109,20 +110,88 @@ TEST(a_qualified_name_can_be_written_out) {
 
     /* And it round trips, which is the property that matters: the name this
      * writes is the name the lookup takes. */
-    CHECK(type_by_name(p) == TYPE_OF(RegPoint));
+    CHECK(type_by_name(p, NULL) == TYPE_OF(RegPoint));
 }
 
-TEST(a_name_too_long_for_the_buffer_is_cut_short) {
+TEST(a_name_too_long_for_the_buffer_is_not_written_at_all) {
     Byte buf[8];
 
-    Str q = type_qualified_name(&burrow_type_Circle, buf, (Int)sizeof buf);
-    CHECK_INT_EQ((int)q.len, 8);
-    CHECK(str_eq(q, BURROW_S("github.c")));
+    /* "github.c" would be a perfectly well formed qualified name and a lookup
+     * would take it, which is exactly the problem: the caller would get an
+     * answer about a type nobody asked about. Nothing is the answer that can be
+     * acted on. */
+    CHECK(type_qualified_name(&burrow_type_Circle, buf, (Int)sizeof buf).len == 0);
 
-    /* Not allocated for, not an error, and not silently longer than the buffer,
-     * which is the one of those three that would matter. */
+    /* Exactly enough room still works, so this is a bounds check and not a
+     * margin somebody guessed at. */
+    Byte exact[8];
+    Str p = type_qualified_name(TYPE_OF(RegPoint), exact, 8);
+    CHECK(str_eq(p, BURROW_S("RegPoint")));
+    CHECK(type_qualified_name(TYPE_OF(RegPoint), exact, 7).len == 0);
+
     CHECK(type_qualified_name(&burrow_type_Circle, NULL, 64).len == 0);
     CHECK(type_qualified_name(NULL, buf, (Int)sizeof buf).len == 0);
+}
+
+/* ------------------------------------------------------------- the boundary
+ *
+ * The registry is the one part of reflect that can be handed a name from
+ * outside the program, so it is the one part that has to be specific about why
+ * it could not answer. A caller holding nothing but a NULL cannot tell a
+ * corrupt stream from a peer built against a newer version of the schema, and
+ * those two get handled by different people. */
+
+TEST(an_unregistered_name_says_it_is_unregistered) {
+    Error err = BURROW_NO_ERROR;
+
+    CHECK(type_by_name(BURROW_S("NoSuchType"), &err) == NULL);
+    CHECK(BURROW_FAILED(err));
+    CHECK(errors_is(err, type_err_not_registered));
+
+    /* A type that exists in this program but was never registered is the same
+     * answer, because from in here the two are the same situation. */
+    CHECK(type_by_name(BURROW_S("QuietPoint"), &err) == NULL);
+    CHECK(errors_is(err, type_err_not_registered));
+}
+
+TEST(a_name_that_is_not_a_name_says_so_instead) {
+    Error err = BURROW_NO_ERROR;
+
+    CHECK(type_by_name(BURROW_STR_EMPTY, &err) == NULL);
+    CHECK(errors_is(err, type_err_name_invalid));
+
+    /* A trailing dot names a package and then no type. */
+    CHECK(type_by_name(BURROW_S("image."), &err) == NULL);
+    CHECK(errors_is(err, type_err_name_invalid));
+
+    /* A leading one claims a package and does not name it. */
+    CHECK(type_by_name(BURROW_S(".Point"), &err) == NULL);
+    CHECK(errors_is(err, type_err_name_invalid));
+
+    CHECK(type_by_name(BURROW_S("."), &err) == NULL);
+    CHECK(errors_is(err, type_err_name_invalid));
+
+    /* Dots in the middle of a package path are ordinary, so this one is merely
+     * unknown rather than malformed. The difference is the point of the test. */
+    CHECK(type_by_name(BURROW_S("a.b.c.NoSuchType"), &err) == NULL);
+    CHECK(errors_is(err, type_err_not_registered));
+}
+
+TEST(a_name_that_is_found_leaves_no_error_behind) {
+    /* Set to something first, because a caller reuses one err across a loop and
+     * a function that only ever writes on failure leaves the last failure
+     * sitting there to be read as this call's answer. */
+    Error err = type_err_conflict;
+
+    CHECK(type_by_name(BURROW_S("RegPoint"), &err) == TYPE_OF(RegPoint));
+    CHECK(BURROW_OK(err));
+}
+
+TEST(the_error_is_optional_like_every_other_out_parameter) {
+    /* Already how the rest of this file calls it, so this is the test that says
+     * it is deliberate rather than tolerated. */
+    CHECK(type_by_name(BURROW_S("NoSuchType"), NULL) == NULL);
+    CHECK(type_register(NULL, NULL) == false);
 }
 
 /* A descriptor that is not in the section, for the runtime half. */
@@ -144,23 +213,23 @@ static const Type late_type = {
 };
 
 TEST(a_type_can_be_registered_while_the_program_runs) {
-    CHECK(type_by_name(BURROW_S("plugin.Late")) == NULL);
+    CHECK(type_by_name(BURROW_S("plugin.Late"), NULL) == NULL);
 
     Int before = type_registry_len();
-    CHECK(type_register(&late_type));
+    CHECK(type_register(&late_type, NULL));
     CHECK_INT_EQ((int)(type_registry_len() - before), 1);
 
-    CHECK(type_by_name(BURROW_S("plugin.Late")) == &late_type);
+    CHECK(type_by_name(BURROW_S("plugin.Late"), NULL) == &late_type);
 }
 
 TEST(registering_the_same_type_twice_changes_nothing) {
-    CHECK(type_register(&late_type));
+    CHECK(type_register(&late_type, NULL));
 
     Int before = type_registry_len();
-    CHECK(type_register(&late_type));
+    CHECK(type_register(&late_type, NULL));
     CHECK_INT_EQ((int)(type_registry_len() - before), 0);
 
-    CHECK(type_register(NULL) == false);
+    CHECK(type_register(NULL, NULL) == false);
 }
 
 /* The same type reaching the program twice, which is what two shared libraries
@@ -202,25 +271,86 @@ static const Type late_impostor = {
 };
 
 TEST(a_second_copy_of_one_type_is_accepted) {
-    CHECK(type_register(&late_type));
+    CHECK(type_register(&late_type, NULL));
 
     Int before = type_registry_len();
-    CHECK(type_register(&late_again));
+    CHECK(type_register(&late_again, NULL));
     CHECK_INT_EQ((int)(type_registry_len() - before), 0);
 
     /* The first one stays. Which of two identical descriptors answers is not
      * something a caller can tell apart, but it should not change. */
-    CHECK(type_by_name(BURROW_S("plugin.Late")) == &late_type);
+    CHECK(type_by_name(BURROW_S("plugin.Late"), NULL) == &late_type);
 }
 
 TEST(a_different_type_under_a_taken_name_is_refused) {
-    CHECK(type_register(&late_type));
+    CHECK(type_register(&late_type, NULL));
 
-    CHECK(type_register(&late_impostor) == false);
+    Error err = BURROW_NO_ERROR;
+    CHECK(type_register(&late_impostor, &err) == false);
+    CHECK(errors_is(err, type_err_conflict));
 
     /* Refused means the first one is still there, not that the name is now
      * broken. Whoever is already holding this name keeps it. */
-    CHECK(type_by_name(BURROW_S("plugin.Late")) == &late_type);
+    CHECK(type_by_name(BURROW_S("plugin.Late"), NULL) == &late_type);
+}
+
+/* A descriptor with no name, which is what an unnamed type such as []int has.
+ * Registering one would put a row in the table that no lookup can ever reach,
+ * so it is refused rather than accepted and forgotten. */
+static const Type nameless = {
+    BURROW_S_INIT(""),
+    BURROW_S_INIT(""),
+    KIND_INT,
+    (uint32_t)sizeof(Int),
+    (uint16_t)_Alignof(Int),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
+TEST(a_descriptor_with_nothing_to_register_it_under_is_refused) {
+    Error err = BURROW_NO_ERROR;
+
+    CHECK(type_register(&nameless, &err) == false);
+    CHECK(errors_is(err, type_err_name_invalid));
+
+    CHECK(type_register(NULL, &err) == false);
+    CHECK(errors_is(err, type_err_name_invalid));
+
+    /* And an unnamed type from the DSL is the same case, which is the one a
+     * program actually runs into. */
+    CHECK(type_register(TYPE_OF(IntsA), &err) == false);
+    CHECK(errors_is(err, type_err_name_invalid));
+}
+
+TEST(a_registration_that_worked_leaves_no_error_behind) {
+    Error err = type_err_conflict;
+
+    CHECK(type_register(&late_type, &err));
+    CHECK(BURROW_OK(err));
+}
+
+/* The three of them are distinct, which is the only property the whole thing
+ * rests on: a caller that cannot tell them apart is back to holding a bool. */
+TEST(the_three_answers_are_three_different_answers) {
+    CHECK(!errors_is(type_err_not_registered, type_err_name_invalid));
+    CHECK(!errors_is(type_err_not_registered, type_err_conflict));
+    CHECK(!errors_is(type_err_name_invalid, type_err_conflict));
+
+    CHECK(errors_is(type_err_not_registered, type_err_not_registered));
+    CHECK(!errors_is(type_err_not_registered, BURROW_NO_ERROR));
+
+    /* Each says what it is, because these get logged and a log line reading
+     * "reflect: error" helps nobody. */
+    CHECK(error_message(type_err_not_registered).len > 0);
+    CHECK(error_message(type_err_name_invalid).len > 0);
+    CHECK(error_message(type_err_conflict).len > 0);
 }
 
 TEST(identity_is_the_address_when_there_is_one) {
@@ -261,8 +391,8 @@ TEST(the_registry_holds_what_was_put_in_it) {
      * holds whatever the whole program registered, and this file is linked with
      * the library. */
     CHECK(type_registry_len() >= 2);
-    CHECK(type_by_name(BURROW_S("RegPoint")) != NULL);
-    CHECK(type_by_name(BURROW_S("github.com/tamnd/shapes.v2.Circle")) != NULL);
+    CHECK(type_by_name(BURROW_S("RegPoint"), NULL) != NULL);
+    CHECK(type_by_name(BURROW_S("github.com/tamnd/shapes.v2.Circle"), NULL) != NULL);
 }
 
 /* --------------------------------------------------------- under contention
@@ -293,12 +423,12 @@ static void race_reader(void *arg) {
     while (sync_atomic_uint32_load(&race_stop) == 0) {
         /* A name that was there before the writer started and must stay
          * findable through every growth of the table. */
-        if (type_by_name(BURROW_S("RegPoint")) != TYPE_OF(RegPoint))
+        if (type_by_name(BURROW_S("RegPoint"), NULL) != TYPE_OF(RegPoint))
             sync_atomic_int64_add(&race_misses, 1);
-        if (type_by_name(BURROW_S("github.com/tamnd/shapes.v2.Circle")) !=
+        if (type_by_name(BURROW_S("github.com/tamnd/shapes.v2.Circle"), NULL) !=
             &burrow_type_Circle)
             sync_atomic_int64_add(&race_misses, 1);
-        if (type_by_name(BURROW_S("NotThere")) != NULL)
+        if (type_by_name(BURROW_S("NotThere"), NULL) != NULL)
             sync_atomic_int64_add(&race_misses, 1);
         sync_atomic_int64_add(&race_lookups, 1);
         runtime_gosched();
@@ -311,7 +441,7 @@ static void race_writer(void *arg) {
     (void)arg;
 
     for (Int i = 0; i < LATECOMERS; i++) {
-        if (!type_register(&latecomers[i]))
+        if (!type_register(&latecomers[i], NULL))
             sync_atomic_int64_add(&race_misses, 1);
         runtime_gosched();
     }
@@ -368,7 +498,7 @@ TEST(lookups_keep_working_while_the_table_grows_underneath_them) {
     Byte q[16];
     for (Int i = 0; i < LATECOMERS; i++) {
         Str name = type_qualified_name(&latecomers[i], q, (Int)sizeof q);
-        CHECK(type_by_name(name) == &latecomers[i]);
+        CHECK(type_by_name(name, NULL) == &latecomers[i]);
     }
 }
 
@@ -378,11 +508,18 @@ int main(void) {
     RUN(a_name_nothing_registered_gives_null);
     RUN(the_package_path_is_part_of_the_name);
     RUN(a_qualified_name_can_be_written_out);
-    RUN(a_name_too_long_for_the_buffer_is_cut_short);
+    RUN(a_name_too_long_for_the_buffer_is_not_written_at_all);
+    RUN(an_unregistered_name_says_it_is_unregistered);
+    RUN(a_name_that_is_not_a_name_says_so_instead);
+    RUN(a_name_that_is_found_leaves_no_error_behind);
+    RUN(the_error_is_optional_like_every_other_out_parameter);
     RUN(a_type_can_be_registered_while_the_program_runs);
     RUN(registering_the_same_type_twice_changes_nothing);
     RUN(a_second_copy_of_one_type_is_accepted);
     RUN(a_different_type_under_a_taken_name_is_refused);
+    RUN(a_descriptor_with_nothing_to_register_it_under_is_refused);
+    RUN(a_registration_that_worked_leaves_no_error_behind);
+    RUN(the_three_answers_are_three_different_answers);
     RUN(identity_is_the_address_when_there_is_one);
     RUN(identity_falls_back_to_the_name);
     RUN(an_unnamed_type_has_no_identity_beyond_its_address);

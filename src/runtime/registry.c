@@ -39,6 +39,7 @@
 #include "burrow/type.h"
 
 #include "burrow/core.h"
+#include "burrow/error.h"
 #include "burrow/mem.h"
 #include "burrow/mem/heap.h"
 #include "burrow/sync.h"
@@ -265,17 +266,48 @@ static void registry_ensure(void) {
     sync_once_do(&registry_once, BURROW_FN(Func, registry_build, NULL));
 }
 
+/* ------------------------------------------------------------------ the wall
+ *
+ * Three sentinels, so that a caller who gets nothing back learns which nothing
+ * it was. They cost two words of read only data each and no code, and none of
+ * the three can fail to be constructed, which matters because two of them are
+ * produced on paths a program under memory pressure is already having a bad
+ * day on. */
+
+BURROW_SENTINEL_ERROR(type_err_not_registered, "reflect: type not registered");
+BURROW_SENTINEL_ERROR(type_err_name_invalid, "reflect: not a type name");
+BURROW_SENTINEL_ERROR(
+    type_err_conflict,
+    "reflect: a different type is already registered under this name");
+
 /* ------------------------------------------------------------------- lookup */
 
-BURROW_STATIC(ret) const Type *type_by_name(Str q) {
-    if (q.p == NULL || q.len <= 0)
+BURROW_STATIC(ret) const Type *type_by_name(Str q, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+
+    if (q.p == NULL || q.len <= 0) {
+        BURROW_OUT(err, type_err_name_invalid);
         return NULL;
+    }
 
     registry_ensure();
 
     Str pkg;
     Str name;
     split_name(q, &pkg, &name);
+
+    /* A dot that separates nothing from something, or something from nothing.
+     * "image." names no type and ".Point" claims a package and then does not
+     * name one, and both of those arrive from a decoder that read a length
+     * wrong rather than from a program that has a type in mind. Telling them
+     * apart from a name that is merely unknown is the difference between a
+     * corrupt stream and a version mismatch, and those get fixed by different
+     * people. */
+    if (name.len <= 0 || (name.len < q.len && pkg.len <= 0)) {
+        BURROW_OUT(err, type_err_name_invalid);
+        return NULL;
+    }
+
     uint64_t h = name_hash(pkg, name);
 
     sync_rw_mutex_r_lock(&registry_lock);
@@ -294,27 +326,46 @@ BURROW_STATIC(ret) const Type *type_by_name(Str q) {
     }
 
     sync_rw_mutex_r_unlock(&registry_lock);
+
+    if (found == NULL)
+        BURROW_OUT(err, type_err_not_registered);
+
     return found;
 }
 
-bool type_register(const Type *t) {
-    if (t == NULL)
+bool type_register(const Type *t, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+
+    /* No name, nothing to register it under. Saying so beats returning true
+     * for a call that put nothing in the table. */
+    if (t == NULL || t->name.len <= 0 || t->name.p == NULL) {
+        BURROW_OUT(err, type_err_name_invalid);
         return false;
+    }
 
     registry_ensure();
 
     sync_rw_mutex_lock(&registry_lock);
 
-    bool ok;
+    bool room;
     if (registry_cap == 0 || (registry_len + 1) * 2 > registry_cap)
-        ok = table_grow((registry_len + 1) * 4);
+        room = table_grow((registry_len + 1) * 4);
     else
-        ok = true;
+        room = true;
 
-    if (ok)
-        ok = table_insert(registry_slots, registry_cap, &registry_len, t);
+    bool ok = room && table_insert(registry_slots, registry_cap, &registry_len, t);
 
     sync_rw_mutex_unlock(&registry_lock);
+
+    /* The two failures are not the same failure. Out of memory is worth
+     * retrying and a conflict is worth fixing, and a plugin loader that got a
+     * bare false could do nothing sensible with either. table_insert only
+     * fails by refusing, since the grow above guarantees it a free slot. */
+    if (!room)
+        BURROW_OUT(err, burrow_err_out_of_memory);
+    else if (!ok)
+        BURROW_OUT(err, type_err_conflict);
+
     return ok;
 }
 
@@ -351,12 +402,21 @@ BURROW_BORROWS(ret, buf) Str type_qualified_name(const Type *t, Byte *buf, Int c
     if (t == NULL)
         return BURROW_STR_EMPTY;
 
+    /* Measured first, because half a name is a name. "image.Point" cut to
+     * "image.Poi" is still something type_by_name will take, and it will either
+     * find nothing or find the wrong thing, with no way for anyone downstream
+     * to tell that the buffer was the problem. Nothing at all is the answer a
+     * caller can act on. */
+    Int want = t->name.len + (t->pkg_path.len > 0 ? t->pkg_path.len + 1 : 0);
+    if (want > cap)
+        return BURROW_STR_EMPTY;
+
     Int n = 0;
-    for (Int i = 0; i < t->pkg_path.len && n < cap; i++)
+    for (Int i = 0; i < t->pkg_path.len; i++)
         buf[n++] = t->pkg_path.p[i];
-    if (t->pkg_path.len > 0 && n < cap)
+    if (t->pkg_path.len > 0)
         buf[n++] = (Byte)'.';
-    for (Int i = 0; i < t->name.len && n < cap; i++)
+    for (Int i = 0; i < t->name.len; i++)
         buf[n++] = t->name.p[i];
 
     return (Str){buf, n};

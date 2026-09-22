@@ -4,6 +4,18 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## Unreleased
+
+### The boundary, in the return value and not only in the docs
+
+- `type_by_name` and `type_register` take an `Error *` now, like every other fallible function in the library. A name that nothing answers to gives `type_err_not_registered`, a query that is not a type name at all gives `type_err_name_invalid`, a second type under a name somebody already holds gives `type_err_conflict`, and a table that could not grow gives `burrow_err_out_of_memory`. All four are sentinels, so none of them allocates and none of them can fail to be constructed, which matters because two arrive on paths where memory is already the problem.
+- The reason they are separate is that they get fixed by different people. A name that arrived off a socket and is well formed but unknown is two peers built against different versions of a schema, which is a deployment to look at. A name that is a bare dot is a decoder that read a length wrong, which is a stream to stop trusting. A caller holding one `NULL` for both cannot tell, and neither can the log line it writes.
+- Nothing in reflect guesses. A lookup that misses on the full qualified name does not fall back to the last path element, does not fall back to the bare type name, and does not return the only registered type that is nearly the right shape. Matching `your.Config` for a stream that asked about `theirs.Config` is how a decoder ends up putting someone else's bytes into your struct, and most of the deserialisation vulnerabilities ever written start there.
+- `type_register` refuses a descriptor with no name rather than accepting it and putting an unreachable row in the table. An unnamed type such as `[]int` has nothing to be looked up by, so registering one was already a no-op that returned true.
+- `type_qualified_name` gives back the empty string when the name does not fit the buffer, where it used to give back as much of the name as there was room for. "github.com/tamnd/shapes.v2.Circle" cut to "github.c" is still a well formed qualified name, so it would go straight back through a lookup as a question about a different type and nobody downstream would learn that a buffer was the problem.
+- A struct from somebody else's header can be described without touching that header, and there is now a test proving it. `BURROW_STRUCT_DEFINE` emits the descriptor and nothing else, so it can be pointed at a struct that already exists, with the offsets coming from `offsetof` on their type so they cannot drift from it. The design doc named a `BURROW_STRUCT_EXTERNAL` macro for this that was never built; what it described has been there all along under a name that already existed, and the doc now says the name that works.
+- `Error` itself moved to `burrow/core.h`, along with `BURROW_NO_ERROR`, `BURROW_FAILED` and `BURROW_OK`. The value is two pointers and depends on nothing, an `ErrorVT` names a `Type`, and a function in type.h that reports why it could not answer needs the value before either. Everything you do with an error is still in `burrow/error.h` and nothing that included it needs changing.
+
 ## v0.0.27 (2026-09-22)
 
 A type can carry its methods and be called through one by name, a field's struct tag can be read the way Go reads it, and a plain C struct can get a descriptor without anybody rewriting it.

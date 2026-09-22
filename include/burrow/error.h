@@ -48,19 +48,11 @@
 extern "C" {
 #endif
 
-typedef struct ErrorVT ErrorVT;
-
-/* The interface value. Two words, passed and returned by value, and a zeroed
- * one is no error.
- *
- * data is const because nothing reads an error in order to change it. That is
- * not fussiness: it is what lets a sentinel live in read only memory with no
- * cast anywhere, and this header would otherwise have to throw const away a few
- * hundred times across the library. */
-typedef struct Error {
-    const ErrorVT *vt;
-    const void *data;
-} Error;
+/* Error itself, and BURROW_NO_ERROR, BURROW_FAILED and BURROW_OK with it, are
+ * in burrow/core.h. The value is two pointers and depends on nothing, an
+ * ErrorVT names a Type, and type.h has functions that report an error, so the
+ * value had to be below all three of them. The comment there says the same
+ * thing from the other side. */
 
 struct ErrorVT {
     /* The concrete type behind data, which is what errors_as matches on. It may

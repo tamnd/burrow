@@ -326,10 +326,50 @@ static inline bool str_next_rune(StrIter *it, Int *index, Rune *r) {
     }
 }
 
+/* --------------------------------------------------------------- errors
+ *
+ * The value only. Everything you do with an error, which is errors_new,
+ * errors_is, errors_as, errors_join and the sentinel macro, is in
+ * burrow/error.h, along with the vtable this points at.
+ *
+ * It is split because of the order headers have to come in. An ErrorVT names
+ * the Type behind the error so that errors_as can match on it, which puts
+ * error.h after type.h, and a function in type.h that wants to report why it
+ * could not answer needs Error before that. Two pointers and three macros is
+ * the part everyone needs and the part that depends on nothing, so that is the
+ * part that lives down here with Str.
+ *
+ * An error is a vtable pointer and a data pointer, the same two words an
+ * interface value is anywhere else in the library, and a zeroed one is no
+ * error. So a function returning Error costs nothing to succeed and a struct
+ * with an Error field in it starts out holding no error without anybody
+ * writing that down. */
+
+typedef struct ErrorVT ErrorVT;
+
+typedef struct Error {
+    const ErrorVT *vt;
+    /* const because nothing reads an error in order to change it. That is what
+     * lets a sentinel live in read only memory with no cast anywhere. */
+    const void *data;
+} Error;
+
+/* Success, and the test for it.
+ *
+ * Write BURROW_FAILED rather than comparing against BURROW_NO_ERROR, because C
+ * has no == on structs and the version people write by hand compares data too,
+ * which is wrong for any error whose data pointer happens to be NULL. */
+#define BURROW_NO_ERROR ((Error){NULL, NULL})
+#define BURROW_FAILED(e) ((e).vt != NULL)
+#define BURROW_OK(e) ((e).vt == NULL)
+
 #if defined(BURROW_SHORT) && BURROW_SHORT
 #define S(lit) BURROW_S(lit)
 #define STR_FMT BURROW_STR_FMT
 #define STR_ARG(s) BURROW_STR_ARG(s)
+#define NO_ERROR BURROW_NO_ERROR
+#define FAILED(e) BURROW_FAILED(e)
+#define OK(e) BURROW_OK(e)
 #endif
 
 #ifdef __cplusplus

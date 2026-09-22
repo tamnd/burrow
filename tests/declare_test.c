@@ -380,6 +380,73 @@ TEST(the_same_c_type_under_two_names_stays_two_types) {
     CHECK(str_eq(TYPE_OF(int64_t)->name, BURROW_S("int64")));
 }
 
+/* ------------------------------------------------- a struct you did not write
+ *
+ * The case the boundary in burrow/type.h is really about. This struct is
+ * somebody else's: it came out of a library header, it is a plain C struct, and
+ * nobody is going to accept a patch that wraps it in a macro from a reflection
+ * library. Describing it does not need one. BURROW_STRUCT_DECL emits the struct
+ * and the declaration, BURROW_STRUCT_DEFINE emits only the descriptor, and the
+ * second half works perfectly well against a struct that already exists.
+ *
+ * So there is a way out, it is one field list rather than a fork of the header,
+ * and the test is here because a documented escape hatch that nobody compiles
+ * is a documented escape hatch that stops working. */
+
+struct vendor_rect {
+    int32_t w;
+    int32_t h;
+    double area;
+};
+
+/* TYPE_OF pastes one identifier, and "struct vendor_rect" is two tokens. The
+ * typedef is the whole adaptation. */
+typedef struct vendor_rect VendorRect;
+
+#define VENDOR_RECT_FIELDS(F, T)                                                       \
+    F(T, int32_t, w, "json:\"width\"")                                                 \
+    F(T, int32_t, h, "json:\"height\"")                                                \
+    F(T, double, area, "json:\"-\"")
+
+BURROW_STRUCT_DEFINE(VendorRect, VENDOR_RECT_FIELDS);
+
+TEST(a_struct_nobody_declared_here_can_still_be_described) {
+    const Type *t = TYPE_OF(VendorRect);
+
+    CHECK_INT_EQ(t->kind, KIND_STRUCT);
+    CHECK_INT_EQ(t->nfield, 3);
+    CHECK_INT_EQ(t->size, (uint32_t)sizeof(VendorRect));
+    CHECK_INT_EQ(t->align, (uint16_t)_Alignof(VendorRect));
+
+    /* The name is the typedef's, which is the name a lookup would use. */
+    CHECK(str_eq(t->name, BURROW_S("VendorRect")));
+
+    CHECK_INT_EQ(t->fields[0].offset, (uint32_t)offsetof(VendorRect, w));
+    CHECK_INT_EQ(t->fields[2].offset, (uint32_t)offsetof(VendorRect, area));
+    CHECK(str_eq(t->fields[0].tag, BURROW_S("json:\"width\"")));
+}
+
+TEST(a_described_foreign_struct_behaves_like_a_declared_one) {
+    const Type *t = TYPE_OF(VendorRect);
+
+    /* Built by hand, byte for byte, the way a vendor library would hand one
+     * over. Padding deliberately left as it fell, which is the case equality
+     * has to get right. */
+    VendorRect a;
+    VendorRect b;
+    memset(&a, 0x5a, sizeof a);
+    memset(&b, 0x00, sizeof b);
+    a.w = b.w = 3;
+    a.h = b.h = 4;
+    a.area = b.area = 12.0;
+
+    CHECK(type_equal(t, &a, &b));
+    CHECK_INT_EQ((int)(type_hash(t, &a, 0) == type_hash(t, &b, 0)), 1);
+
+    b.h = 5;
+    CHECK(!type_equal(t, &a, &b));
+}
+
 int main(void) {
     RUN(a_declared_struct_is_the_struct_you_wrote);
     RUN(a_declared_struct_describes_itself);
@@ -401,6 +468,8 @@ int main(void) {
     RUN(a_map_descriptor_carries_both_halves);
     RUN(the_c_spelling_and_the_go_spelling_agree);
     RUN(the_same_c_type_under_two_names_stays_two_types);
+    RUN(a_struct_nobody_declared_here_can_still_be_described);
+    RUN(a_described_foreign_struct_behaves_like_a_declared_one);
 
     return harness_report("declare");
 }

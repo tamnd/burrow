@@ -332,9 +332,55 @@ bool field_is_exported(const Field *f);
  * situation in Go. */
 bool field_is_embedded(const Field *f);
 
-/* The method with this name, or NULL. Methods are sorted by name in a
- * descriptor, the way Go sorts them, so this is a binary search. */
+/* The method with this name, or NULL.
+ *
+ * Linear, over an array that a type has a handful of entries in. It used to be
+ * a binary search, on the strength of the array being sorted by name, and the
+ * array is only sorted by name if whoever wrote the list happened to write it
+ * in order. The preprocessor cannot sort, so nothing enforces that, and a
+ * binary search over an array that is nearly sorted finds most of what it looks
+ * for and silently misses the rest, which is the worst way for this to be
+ * wrong. Comparing a handful of short strings in order is cheaper than the
+ * branch mispredictions a binary search costs at these sizes anyway.
+ *
+ * The order still matters for walking the array, because that is the order a
+ * caller enumerating a type's methods sees, and Go's is by name. See
+ * type_methods_sorted. */
 BURROW_BORROWS(ret, t) const Method *type_method_by_name(const Type *t, Str name);
+
+/* Whether a type's methods are in the order Go would enumerate them in, which
+ * is by name. For a test to assert about a type it declares, since the macro
+ * that built the array could not check it. */
+bool type_methods_sorted(const Type *t);
+
+/* Make the call.
+ *
+ * args points at nin pointers, each to an argument, and rets points at one
+ * pointer to somewhere the result fits. Either may be NULL when the count is
+ * zero. False means there was nothing to call, which is a NULL method or one
+ * with no thunk, and is the answer to asking a type for a method it does not
+ * have rather than a reason to stop.
+ *
+ * Nothing here checks the types, because the caller has the signature and is in
+ * a position to. reflect's Value.Call is where that check belongs and it is the
+ * layer above this one. */
+bool method_call(const Method *m, void *recv, void **args, void **rets);
+
+/* A function type's parameters and results.
+ *
+ * KIND_FUNC uses fields for both, parameters first and then results, with
+ * nfield the total of the two and len the number of parameters. That is one
+ * array rather than two because a descriptor has one pointer for a list of
+ * fields and adding a second would grow every descriptor of every kind to pay
+ * for a kind most programs never reflect on.
+ *
+ * There is at most one result. A C function returns one value, and a burrow
+ * function returning several returns a struct of them, so this counts what C
+ * counts. Anything else gives 0 and NULL rather than a wrong answer. */
+Int type_num_in(const Type *t);
+Int type_num_out(const Type *t);
+BURROW_BORROWS(ret, t) const Type *type_in(const Type *t, Int i);
+BURROW_BORROWS(ret, t) const Type *type_out(const Type *t, Int i);
 
 /* --------------------------------------------------------------- the registry
  *

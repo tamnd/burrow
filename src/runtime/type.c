@@ -460,21 +460,66 @@ const Method *type_method_by_name(const Type *t, Str name) {
     if (t == NULL || t->methods == NULL || t->nmethod == 0)
         return NULL;
 
-    /* Sorted by name, so binary search. The bounds are kept as int rather than
-     * uint16_t because lo can go one past hi and hi can go to minus one. */
-    int lo = 0;
-    int hi = (int)t->nmethod - 1;
-    while (lo <= hi) {
-        int mid = lo + (hi - lo) / 2;
-        int c = str_cmp(t->methods[mid].name, name);
-        if (c == 0)
-            return &t->methods[mid];
-        if (c < 0)
-            lo = mid + 1;
-        else
-            hi = mid - 1;
-    }
+    /* Linear, and the header says why: nothing can make the array sorted, so
+     * nothing may assume it is. */
+    for (uint16_t i = 0; i < t->nmethod; i++)
+        if (str_eq(t->methods[i].name, name))
+            return &t->methods[i];
+
     return NULL;
+}
+
+bool type_methods_sorted(const Type *t) {
+    if (t == NULL || t->methods == NULL || t->nmethod < 2)
+        return true;
+
+    for (uint16_t i = 1; i < t->nmethod; i++)
+        if (str_cmp(t->methods[i - 1].name, t->methods[i].name) >= 0)
+            return false;
+
+    return true;
+}
+
+bool method_call(const Method *m, void *recv, void **args, void **rets) {
+    if (m == NULL || m->thunk == NULL)
+        return false;
+
+    m->thunk(recv, args, rets);
+    return true;
+}
+
+/* ----------------------------------------------------------- function types
+ *
+ * Parameters then results in one fields array, len parameters of them. A type
+ * that is not a function answers zero and NULL, which is what a caller that did
+ * not check the kind would want anyway. */
+
+Int type_num_in(const Type *t) {
+    if (t == NULL || t->kind != KIND_FUNC)
+        return 0;
+
+    return (Int)t->len;
+}
+
+Int type_num_out(const Type *t) {
+    if (t == NULL || t->kind != KIND_FUNC)
+        return 0;
+
+    return (Int)t->nfield - (Int)t->len;
+}
+
+const Type *type_in(const Type *t, Int i) {
+    if (i < 0 || i >= type_num_in(t) || t->fields == NULL)
+        return NULL;
+
+    return t->fields[i].type;
+}
+
+const Type *type_out(const Type *t, Int i) {
+    if (i < 0 || i >= type_num_out(t) || t->fields == NULL)
+        return NULL;
+
+    return t->fields[(Int)t->len + i].type;
 }
 
 /* ---------------------------------------------------------------- builtins */

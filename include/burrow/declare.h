@@ -44,6 +44,7 @@
 #define BURROW_DECLARE_H
 
 #include "burrow/core.h"
+#include "burrow/func.h"
 #include "burrow/map.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
@@ -290,6 +291,171 @@ extern "C" {
         NULL,                                                                          \
         TYPE_OF(V),                                                                    \
         TYPE_OF(K),                                                                    \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+    }
+
+/* ------------------------------------------------------------------ methods
+ *
+ * A method is two things at once. It is data, so that something can ask a type
+ * what it can do, and it is a call, made with a signature that the caller does
+ * not know until it runs. net/rpc is handed a method name off a socket.
+ * text/template is handed one out of a template. Neither of them can write the
+ * call, so the call has to already be there.
+ *
+ * What is already there is a thunk: a function of one fixed shape, emitted next
+ * to the method, that takes the receiver, an array of pointers to the arguments
+ * and an array of pointers to where the results go, and makes the real call.
+ * You write none of them. The signature list does:
+ *
+ *     static Str point_string(Point *p);
+ *     static void point_move(Point *p, Int dx, Int dy);
+ *
+ *     #define POINT_SIG_String(IN, OUT)  OUT(Str)
+ *     #define POINT_SIG_Move(IN, OUT)    IN(0, Int) IN(1, Int)
+ *
+ *     #define POINT_METHODS(M, T)                       \
+ *         M(T, Move, point_move, POINT_SIG_Move)        \
+ *         M(T, String, point_string, POINT_SIG_String)
+ *
+ *     BURROW_STRUCT_DECL(Point, POINT_FIELDS);
+ *     ... the two functions above, written by hand ...
+ *     BURROW_STRUCT_DEFINE_METHODS(Point, POINT_FIELDS, POINT_METHODS);
+ *
+ * Then a caller with a name and no knowledge of any of this can do the call:
+ *
+ *     const Method *m = type_method_by_name(TYPE_OF(Point), BURROW_S("String"));
+ *     Str out;
+ *     void *rets[] = {&out};
+ *     method_call(m, &p, NULL, rets);
+ *
+ * THE PARAMETER INDEX, WHICH YOU HAVE TO WRITE
+ *
+ * IN takes the position as well as the type, and the position is the one thing
+ * here that is written twice. The preprocessor cannot count: there is no way to
+ * turn a list into 0, 1, 2 without either a fixed table of arities or a
+ * counter, and a counter would have to be incremented inside an expression
+ * whose evaluation order is not defined. Writing it is the honest version, and
+ * it is one number per parameter in a list you are already writing. A test can
+ * hold you to it, because the positions end up in the descriptor: burrow's own
+ * does exactly that.
+ *
+ * ONE RESULT, WHICH IS NOT THE LIMIT IT LOOKS LIKE
+ *
+ * OUT appears once or not at all. A C function returns one value, and a burrow
+ * function that returns several does what every other one in the library does
+ * and returns a struct holding them, so the count of results a caller sees here
+ * is the count C has rather than the count Go would have. A method returning a
+ * value and an error is one OUT naming the struct of the two.
+ *
+ * THE RECEIVER IS A POINTER
+ *
+ * The thunk passes the receiver as T *, so the method takes T *. Go has value
+ * receivers too and this does not, because a dynamic call arrives holding a
+ * pointer to the value either way, and a method that wants a copy can take one
+ * on its first line. What that costs is the Go distinction between the method
+ * set of T and the method set of *T, which is a distinction about what
+ * satisfies an interface, and in C an interface is satisfied by a vtable you
+ * filled in by hand. Nothing in the library can tell the difference. */
+
+/* The signature, read in the five places it has to be read. Two spellings of
+ * nothing, because a macro passed as IN is called with two arguments and one
+ * passed as OUT is called with one. */
+#define BURROW__SIG_SKIP1(ctype)
+#define BURROW__SIG_SKIP2(i, ctype)
+
+#define BURROW__SIG_IN_FIELD(i, ctype)                                                 \
+    {BURROW_S_INIT(""), BURROW_S_INIT(""), TYPE_OF(ctype), (uint32_t)(i)},
+#define BURROW__SIG_OUT_FIELD(ctype)                                                   \
+    {BURROW_S_INIT(""), BURROW_S_INIT(""), TYPE_OF(ctype), 0},
+
+/* One "+ 1" per parameter, summed into an enum constant, which is how a list
+ * gets counted without the preprocessor being able to count. An enum constant
+ * rather than an array of bytes because it occupies nothing: the count is
+ * wanted in one static initialiser and nowhere at runtime. */
+#define BURROW__SIG_IN_PLUS(i, ctype) +1
+
+#define BURROW__SIG_PASS(i, ctype) , *(ctype *)args[i]
+#define BURROW__SIG_STORE(ctype) *(ctype *)rets[0] =
+
+/* Everything one method needs, emitted next to it.
+ *
+ * The terminator on the signature array is not a sentinel anybody reads. It is
+ * there because a method with no parameters and no result is an ordinary thing
+ * to want, Close being the obvious one, and an empty initialiser list is not
+ * legal C. The field count below subtracts it. */
+#define BURROW__METHOD_DEFS(T, mname, fn, SIG)                                         \
+    static const Field burrow__sig_##T##_##mname[] = {                                 \
+        SIG(BURROW__SIG_IN_FIELD, BURROW__SIG_OUT_FIELD){BURROW_S_INIT(""),            \
+                                                         BURROW_S_INIT(""), NULL, 0},  \
+    };                                                                                 \
+    enum {                                                                             \
+        burrow__nin_##T##_##mname = 0 SIG(BURROW__SIG_IN_PLUS, BURROW__SIG_SKIP1)      \
+    };                                                                                 \
+    static const Type burrow__ftype_##T##_##mname = {                                  \
+        BURROW_S_INIT(""),                                                             \
+        {NULL, 0},                                                                     \
+        KIND_FUNC,                                                                     \
+        (uint32_t)sizeof(Func),                                                        \
+        (uint16_t)_Alignof(Func),                                                      \
+        (uint16_t)(sizeof burrow__sig_##T##_##mname /                                  \
+                       sizeof burrow__sig_##T##_##mname[0] -                           \
+                   1),                                                                 \
+        0,                                                                             \
+        burrow__sig_##T##_##mname,                                                     \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        (uint32_t)burrow__nin_##T##_##mname,                                           \
+        0,                                                                             \
+        NULL,                                                                          \
+    };                                                                                 \
+    static void burrow__thunk_##T##_##mname(void *recv, void **args, void **rets) {    \
+        (void)args;                                                                    \
+        (void)rets;                                                                    \
+        SIG(BURROW__SIG_SKIP2, BURROW__SIG_STORE)                                      \
+        fn((T *)recv SIG(BURROW__SIG_PASS, BURROW__SIG_SKIP1));                        \
+    }
+
+#define BURROW__METHOD_ENTRY(T, mname, fn, SIG)                                        \
+    {BURROW_S_INIT(#mname), &burrow__ftype_##T##_##mname, burrow__thunk_##T##_##mname},
+
+/* The thunks, the signatures and the array tying them to names.
+ *
+ * Separate from the descriptor because a type can have methods without this
+ * file knowing how its descriptor gets built, and because a test wants to be
+ * able to look at the array on its own. */
+#define BURROW_METHODS_DEFINE(T, METHODS)                                              \
+    METHODS(BURROW__METHOD_DEFS, T)                                                    \
+    static const Method burrow__methods_##T[] = {METHODS(BURROW__METHOD_ENTRY, T)}
+
+/* A struct, its fields and its methods.
+ *
+ * The methods have to be named after the struct is declared, since a thunk
+ * casts the receiver to it, so this is the define half of the pair and
+ * BURROW_STRUCT_DECL is still the declare half. Between the two go the method
+ * functions themselves, which are the only part of this you write.
+ *
+ * List the methods in name order. Nothing makes you, because the preprocessor
+ * cannot sort any more than it can count, but Go enumerates a type's methods in
+ * name order and anything walking this array inherits whatever order you used.
+ * type_methods_sorted is there for a test to say so out loud. */
+#define BURROW_STRUCT_DEFINE_METHODS(T, FIELDS, METHODS)                               \
+    BURROW_METHODS_DEFINE(T, METHODS);                                                 \
+    static const Field burrow__fields_##T[] = {FIELDS(BURROW__FIELD, T)};              \
+    const Type burrow_type_##T = {                                                     \
+        BURROW_S_INIT(#T),                                                             \
+        {NULL, 0},                                                                     \
+        KIND_STRUCT,                                                                   \
+        (uint32_t)sizeof(T),                                                           \
+        (uint16_t)_Alignof(T),                                                         \
+        (uint16_t)(sizeof burrow__fields_##T / sizeof burrow__fields_##T[0]),          \
+        (uint16_t)(sizeof burrow__methods_##T / sizeof burrow__methods_##T[0]),        \
+        burrow__fields_##T,                                                            \
+        burrow__methods_##T,                                                           \
+        NULL,                                                                          \
+        NULL,                                                                          \
         0,                                                                             \
         0,                                                                             \
         NULL,                                                                          \

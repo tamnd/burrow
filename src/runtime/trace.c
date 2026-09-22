@@ -21,6 +21,7 @@
 #include "burrow/runtime.h"
 #include "burrow/slice.h"
 #include "burrow/stack.h"
+#include "burrow/symtab.h"
 #include "burrow/thread.h"
 
 #include <stdbool.h>
@@ -230,13 +231,33 @@ Int burrow__callers(void *from, Int skip, Uintptr *pcs, Int max) {
 #endif
 
 void burrow__traceback(const Uintptr *pcs, Int n) {
-    /* One address a line, indented under the line that said which goroutine
-     * this is, which is the shape Go's traceback has. Go puts a function name
-     * and a source line on each of them and burrow will too once there is a
-     * symbol table to look them up in. Until then the address is what addr2line
-     * and atos want anyway. */
-    for (Int i = 0; i < n; i++)
+    /* A name and an offset on one line and the address on the next, indented
+     * under the line that said which goroutine this is, which is the shape Go's
+     * traceback has. Go has the source file and the line on the second of those
+     * and burrow has the address, because that is what the table it looks names
+     * up in holds; burrow/symtab.h says why, and the address is what addr2line
+     * and atos want anyway.
+     *
+     * A frame with no name prints the address alone, which is what every frame
+     * printed before there was a table and what a frame outside burrow still
+     * prints. */
+    for (Int i = 0; i < n; i++) {
+        burrow__Frame f;
+
+        /* One below the address, because the address is where the call will
+         * return to and that is the instruction after it. A call in tail
+         * position puts that byte in the next function, so looking the return
+         * address up unchanged would name the wrong one. The offset printed is
+         * still measured from the address that was actually there. */
+        if (pcs[i] != 0 && burrow__symbolise(pcs[i] - 1, &f)) {
+            fprintf(stderr, "\t%.*s+%#llx\n\t\t%#llx\n", (int)f.name.len,
+                    (const char *)f.name.p, (unsigned long long)(pcs[i] - f.entry),
+                    (unsigned long long)pcs[i]);
+            continue;
+        }
+
         fprintf(stderr, "\t%#llx\n", (unsigned long long)pcs[i]);
+    }
 }
 
 BURROW_NOINLINE Int runtime_callers(Int skip, Slice pcs) {

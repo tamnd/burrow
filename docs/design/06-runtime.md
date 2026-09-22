@@ -1225,9 +1225,39 @@ either a platform unwinder (`libunwind`, `_Unwind_Backtrace`, `dbghelp`) or
 frame-pointer walking plus a generated symbol table. Decision: frame-pointer
 walking (compile `burrow` with `-fno-omit-frame-pointer`, which costs
 essentially nothing on 64-bit and which distributions increasingly default to)
-plus an embedded symbol table generated at amalgamation time. This gives
-readable panic tracebacks with no dependency, which is the actual requirement —
-a panic without a traceback is a support nightmare.
+plus an embedded symbol table. This gives readable panic tracebacks with no
+dependency, which is the actual requirement — a panic without a traceback is a
+support nightmare.
+
+The table is generated twice, by two tools, for two different builds, and the
+reason is worth writing down because the obvious plan was one tool.
+
+`tools/burrow-symtab` runs `nm` over the objects the split build just produced
+and writes an address and a name for every global function in them. That is the
+build that is actually happening, so the table is right on whichever of the
+three platforms is being built, and nobody has to keep three checked in copies
+in step or regenerate anything when they add a function. It costs the file, the
+line, and every static function, because `nm` has no line numbers and a static
+function has no name outside its own translation unit.
+
+The amalgamation generator is where those come back. The amalgamation is one
+translation unit, so a static function can be named from inside it and a tool
+reading it with libclang gets the definition site of everything exactly. That
+table is strictly better and it only exists for that one build shape, which is
+why both tools exist rather than one. A generator reading the split source
+instead would be reading one platform's view of it, and a function behind an
+`#if` for either of the other two would be missing from a table that every
+platform has to share.
+
+`burrow/symtab.h` is the lookup either table is read through, and it is the
+same sorted array and binary search in both cases. Sorting happens at runtime
+because the generator knows the names and the linker decides the addresses.
+
+Naming every global function means the linker has to keep every object that
+defines one, so a small program linking `burrow` statically gets all of it.
+`make SYMTAB=0` builds an empty table and gives that back, at the cost of a
+traceback that is addresses again. The default is on, because a panic without a
+readable traceback is the support nightmare this section opened with.
 
 `runtime/pprof` and `runtime/trace` then emit Go's exact wire formats
 (pprof protobuf, the Go execution-trace format), so `go tool pprof` and

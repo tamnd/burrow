@@ -125,6 +125,19 @@ OBJS := $(patsubst src/%.c,$(BUILD)/obj/%.o,$(SRCS)) \
 	$(patsubst src/%.S,$(BUILD)/obj/%.asm.o,$(ASMS))
 LIB  := $(BUILD)/libburrow.a
 
+# The table of names a traceback prints, read out of the objects above by
+# tools/burrow-symtab once they are built. See burrow/symtab.h for what it is
+# and what it costs. SYMTAB=0 builds an empty one, which gives back the bare
+# addresses and lets the linker drop objects nothing calls.
+SYMTAB     ?= 1
+SYMTAB_SRC := $(BUILD)/gen/symtab_gen.c
+SYMTAB_OBJ := $(BUILD)/obj/gen/symtab_gen.o
+ifeq ($(SYMTAB),0)
+  SYMTAB_ARGS := --empty
+else
+  SYMTAB_ARGS :=
+endif
+
 # Assembly gets its own flags rather than CFLAGS, because most of CFLAGS is
 # about C and a compiler handed -Wstrict-prototypes for an assembler file is
 # entitled to complain that the argument did nothing. It still needs the
@@ -156,9 +169,21 @@ all: lib
 
 lib: $(LIB)
 
-$(LIB): $(OBJS)
+$(LIB): $(OBJS) $(SYMTAB_OBJ)
 	@mkdir -p $(dir $@)
-	$(AR) rcs $@ $(OBJS)
+	$(AR) rcs $@ $(OBJS) $(SYMTAB_OBJ)
+
+# Generated after the objects and before the archive, which is the only order
+# that works: the names come out of the objects and the table goes in beside
+# them. Nothing else in the tree depends on it, so a change anywhere rebuilds
+# one object and relinks.
+$(SYMTAB_SRC): $(OBJS) tools/burrow-symtab
+	@mkdir -p $(dir $@)
+	@tools/burrow-symtab $(SYMTAB_ARGS) -o $@ $(OBJS)
+
+$(SYMTAB_OBJ): $(SYMTAB_SRC)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(THREADS) -c $< -o $@
 
 $(BUILD)/obj/%.o: src/%.c
 	@mkdir -p $(dir $@)

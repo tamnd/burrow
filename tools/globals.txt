@@ -38,6 +38,7 @@ category	reclaim	The epoch and the handover lists behind lock free reading. One 
 category	pool	sync.Pool's registry and the lock over it, which is one per process because the sweep has to be able to find every pool from the system monitor's thread.
 category	clock	The conversion factor between what the machine's counter counts and nanoseconds. Fixed at boot, so it is asked for once.
 category	machine	What the machine is: the page size and how many cores the process may run on. Both are fixed for the life of the process, so both are asked for once.
+category	symbol-table	The sorted copy of the table of function names, which is one per process because the addresses in it are one per process.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -121,3 +122,6 @@ global	src/runtime/registry.c	registry_cap	type-registry	How many slots there ar
 global	src/runtime/registry.c	registry_len	type-registry	How many of the slots are taken. Same lock, same reason.
 global	src/pal/machine_posix.c	cached_page	machine	Relaxed atomic, and the race is benign by construction. Two threads arriving together both ask the system, both get the same number, and both write it. There is nothing published alongside it, so there is nothing for a release store to order.
 global	src/pal/machine_windows.c	cached_page	machine	The Windows half of cached_page above, with the same reasoning.
+global	src/runtime/symtab.c	symtab_once	symbol-table	A Once, which is what makes the sort happen exactly once however many threads panic at the same moment.
+global	src/runtime/symtab.c	symtab_sorted	symbol-table	Written once inside the Once and read after it, so the Once is the ordering. Null afterwards means the allocation failed and the lookup walks the unsorted table instead, which is why it is read into a local before it is used.
+global	src/runtime/symtab.c	symtab_sorted_len	symbol-table	How long symtab_sorted is, written beside it under the same Once.

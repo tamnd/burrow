@@ -5,11 +5,11 @@
  * machinery that answers it: given a frame to start from, follow the saved
  * frame pointers and write down the return address in each one.
  *
- * The addresses are the whole of it for now. Turning one into a file and a line
- * is symbolisation, which needs a table of function addresses that does not
- * exist yet, and the design in docs/design/06-runtime.md section 11 says where
- * that table comes from: the amalgamation generator emits it. Until then an
- * address is still worth printing, because addr2line and atos both take one.
+ * Turning an address into a name is symbolisation and it lives next door, in
+ * burrow/symtab.h. It has the names of every global function in the library and
+ * neither the file nor the line, so a traceback prints a name, an offset and
+ * the address, and the address is still worth printing because addr2line and
+ * atos both take one. The header next door says where the rest comes from.
  *
  * How the walk works is the same everywhere it works at all. A frame pointer
  * points at a pair of words, the saved frame pointer of the caller and the
@@ -104,15 +104,19 @@ Int burrow__callers(void *from, Int skip, Uintptr *pcs, Int max);
  * the top. */
 #define BURROW_TRACEBACK_MAX 64
 
-/* Prints frames collected by the walk above to standard error, one address a
- * line, indented the way Go indents the lines under a goroutine.
+/* Prints frames collected by the walk above to standard error, a name and an
+ * offset on one line and the address on the next, indented the way Go indents
+ * the lines under a goroutine. A frame with no name in the table prints the
+ * address on its own.
  *
  * Separate from the walk because the two happen in different frames: the panic
  * printer collects where the program went wrong and prints it several calls
- * later, once it has worked out what to say above it. It allocates nothing and
- * formats nothing but hexadecimal, for the reason the whole of that path is
- * written the way it is: running out of memory is one of the ways a program
- * arrives here. The names arrive with symbolisation, and they arrive here. */
+ * later, once it has worked out what to say above it. It allocates nothing of
+ * its own and formats nothing but hexadecimal and a name, for the reason the
+ * whole of that path is written the way it is: running out of memory is one of
+ * the ways a program arrives here. Looking a name up allocates once per process
+ * and answers without allocating when it cannot, which is burrow/symtab.h's
+ * problem rather than this one's. */
 void burrow__traceback(const Uintptr *pcs, Int n);
 
 #ifdef __cplusplus

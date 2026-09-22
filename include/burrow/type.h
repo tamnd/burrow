@@ -332,6 +332,38 @@ bool field_is_exported(const Field *f);
  * situation in Go. */
 bool field_is_embedded(const Field *f);
 
+/* --------------------------------------------------------------- struct tags
+ *
+ * A tag is one string and it holds one entry per package that cares about the
+ * field, which is Go's convention and this is Go's format exactly:
+ *
+ *     json:"id,omitempty" xml:"id,attr" db:"user_id"
+ *
+ * encoding/json asks for "json", encoding/xml asks for "xml", and neither has
+ * to know the other is there. What comes back is everything between that key's
+ * quotes, unescaped but not otherwise touched: "id,omitempty" and not "id",
+ * because what the commas mean is the asking package's business and Go does not
+ * centralise it either.
+ *
+ * A tag that is not in the format is a tag with no keys in it rather than an
+ * error. There is nothing useful to do with an error here, which is the
+ * position Go takes as well.
+ *
+ * The value is allocated, always, where Go returns a slice of the tag when
+ * there is nothing to unescape. The alternative is a function that owns what it
+ * returns on some tags and borrows it on others, decided by whether a backslash
+ * happened to appear, and there is no honest way to annotate or to free that.
+ * Free it with mem_free over its length. */
+
+/* True when the key is there, including when its value is empty, which is not
+ * the same thing as the key being absent. Nothing is allocated for an empty
+ * value or for a key that is not found. */
+BURROW_OWNS(value) bool tag_lookup(Alloc *a, Str tag, Str key, Str *value);
+
+/* The same, for callers that have nothing to do with the difference between an
+ * empty value and no key at all. */
+BURROW_OWNS(ret) Str tag_get(Alloc *a, Str tag, Str key);
+
 /* The method with this name, or NULL.
  *
  * Linear, over an array that a type has a handful of entries in. It used to be

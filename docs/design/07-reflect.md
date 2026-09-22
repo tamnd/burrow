@@ -400,11 +400,71 @@ is a welcome addition here.
 
 ## 8. Struct tags
 
-Go's struct tags are a convention over a string, parsed by each consumer. We
-port `reflect.StructTag`'s `Get`/`Lookup` exactly, and the tag string format is
-identical, which means **every Go struct tag in existing code works unchanged**
-— `json:"name,omitempty"`, `xml:"ns url"`, `db:"col"`, `validate:"required"`.
-This is a small detail with a large effect on how portable a port feels.
+A struct tag is one string on a field that holds several things at once, one per
+package that cares about it. The format is a space separated list of
+`key:"value"` pairs:
+
+```
+json:"id,omitempty" xml:"id,attr" db:"user_id"
+```
+
+`encoding/json` reads the `json` one, `encoding/xml` reads the `xml` one, and
+neither has to know the other is there. The format is Go's exactly, which means
+**every Go struct tag in existing code works unchanged**. That is a small detail
+with a large effect on how portable a port feels, because a tag is the one piece
+of a Go struct definition people copy across by hand.
+
+Two functions, in `burrow/type.h`:
+
+```c
+BURROW_OWNS(value) bool tag_lookup(Alloc *a, Str tag, Str key, Str *value);
+BURROW_OWNS(ret)   Str  tag_get(Alloc *a, Str tag, Str key);
+```
+
+`tag_lookup` is the one to reach for. It separates "the key is not there" from
+"the key is there and its value is empty", and those mean different things:
+`json:""` is a field that asked for the default name, and no `json` key at all
+is a field that never opted in. `tag_get` is the convenience form for when you
+do not need to tell those apart.
+
+### Nothing validates the tag
+
+A tag that does not parse is a tag nobody finds a key in, rather than an error.
+That is Go's behaviour and it is the right one, because the place a malformed
+tag is noticed is deep inside a marshaller that has nothing useful to do with an
+error and no way to point at the line that caused it. The scan stops at the
+first pair that is not in the format, so a good pair behind a bad one is not
+reachable either.
+
+The one case worth knowing about, because it catches people out in Go too: pairs
+are separated by a space and by nothing else. A tab between two pairs ends the
+scan and everything after it is invisible.
+
+### Why the value is copied
+
+Go returns a slice of the tag itself when the value has no escapes in it. It can
+do that because a Go string is immutable and a tag lives as long as the program
+does. burrow copies instead, always, and takes an allocator to do it.
+
+The reason is the ownership scheme. The alternative is a function that sometimes
+owns what it returns and sometimes borrows it, decided by whether the tag
+happened to contain a backslash. There is no way to annotate that with
+`BURROW_OWNS`/`BURROW_BORROWS`, no way for a caller to know which one it got,
+and every other function in this library answers that question the same way
+every time it is called. A copy of a short string, on an arena, in code that
+caches its answer per type anyway, is not worth the hole that would put in it.
+
+The value is a Go string literal with its quotes on, so getting the string out
+means undoing the escapes: `\n`, `\xNN`, three digit octal, `\uHHHH`,
+`\UHHHHHHHH` and the rest. That is `strconv.Unquote` for the double quoted case,
+and it lives in `src/runtime/tag.c` for now because `strconv` is a later
+milestone and this is needed today. It moves when `strconv` lands.
+
+The unquoter runs twice, once with a NULL destination to measure and once to
+write. That costs a second pass over a string that is almost always under thirty
+bytes, and it buys an allocation of exactly the right size, so the `Str`'s
+length and its allocation agree and the caller can free it. Sizing by an upper
+bound instead would hand back a `Str` that cannot be freed correctly.
 
 ## 9. Ordering, and the gate
 

@@ -438,6 +438,85 @@ static void child_example_panic(void *env) {
     panic_str(BURROW_S("boom"));
 }
 
+/* The fuzz targets the child runs, the same ones as a Go program whose
+ * output the scenarios below were checked against. */
+static void child_fuzz_good_fn(void *env, TestingT *t, Slice args) {
+    (void)env;
+    testing_t_log_v(t, "got", testing_fuzz_arg(args, 0, Str),
+                    testing_fuzz_arg(args, 1, Int));
+}
+
+static void child_fuzz_good(void *env, TestingF *f) {
+    (void)env;
+    testing_f_add_v(f, "hello", (Int)5);
+    testing_f_add_v(f, "", (Int)0);
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, child_fuzz_good_fn, NULL),
+                     TYPE_STRING, TYPE_INT);
+}
+
+static void child_fuzz_bad_fn(void *env, TestingT *t, Slice args) {
+    (void)env;
+    Str s = testing_fuzz_arg(args, 0, Str);
+    if (s.len > 0 && s.p[0] == 'x')
+        testing_t_errorf_v(t, "bad %q", s);
+}
+
+static void child_fuzz_bad(void *env, TestingF *f) {
+    (void)env;
+    testing_f_add_v(f, "abc");
+    testing_f_add_v(f, "xyz");
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, child_fuzz_bad_fn, NULL),
+                     TYPE_STRING);
+}
+
+static void child_fuzz_no_call(void *env, TestingF *f) {
+    (void)env;
+    testing_f_log_v(f, "setup");
+}
+
+static void child_fuzz_nothing(void *env, TestingT *t, Slice args) {
+    (void)env;
+    (void)t;
+    (void)args;
+}
+
+static void child_fuzz_mismatch(void *env, TestingF *f) {
+    (void)env;
+    testing_f_add_v(f, (Int)1);
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, child_fuzz_nothing, NULL),
+                     TYPE_STRING);
+}
+
+static void child_fuzz_count(void *env, TestingF *f) {
+    (void)env;
+    testing_f_add_v(f, (Int)1, (Int)2);
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, child_fuzz_nothing, NULL), TYPE_INT);
+}
+
+static void child_fuzz_skip(void *env, TestingF *f) {
+    (void)env;
+    testing_f_skip_v(f, "not today");
+}
+
+static void child_fuzz_empty(void *env, TestingF *f) {
+    (void)env;
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, child_fuzz_nothing, NULL),
+                     TYPE_BYTES);
+}
+
+/* Calls F's Log from inside the fuzz function, which Go stops with a panic. */
+static void child_fuzz_inside_fn(void *env, TestingT *t, Slice args) {
+    (void)t;
+    (void)args;
+    testing_f_log_v((TestingF *)env, "no");
+}
+
+static void child_fuzz_inside(void *env, TestingF *f) {
+    (void)env;
+    testing_f_add_v(f, (bool)true);
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, child_fuzz_inside_fn, f), TYPE_BOOL);
+}
+
 /* testing.Benchmark on its own, outside any test binary's main. */
 static int run_benchfunc(void) {
     TestingBenchmarkResult r =
@@ -456,6 +535,8 @@ static int run_child(const char *scenario) {
     Int nb = 0;
     TestingInternalExample examples[5];
     Int ne = 0;
+    TestingInternalFuzzTarget fuzz[8];
+    Int nf = 0;
     if (strcmp(scenario, "benchfunc") == 0)
         return run_benchfunc();
     if (strcmp(scenario, "bench") == 0 || strcmp(scenario, "benchbare") == 0) {
@@ -501,6 +582,23 @@ static int run_child(const char *scenario) {
                                                   {child_example_panic, NULL},
                                                   BURROW_S("before"),
                                                   false};
+    } else if (strcmp(scenario, "fuzz") == 0) {
+        fuzz[nf++] =
+            (TestingInternalFuzzTarget){BURROW_S("FuzzGood"), {child_fuzz_good, NULL}};
+        fuzz[nf++] =
+            (TestingInternalFuzzTarget){BURROW_S("FuzzBad"), {child_fuzz_bad, NULL}};
+        fuzz[nf++] = (TestingInternalFuzzTarget){BURROW_S("FuzzNoCall"),
+                                                 {child_fuzz_no_call, NULL}};
+        fuzz[nf++] = (TestingInternalFuzzTarget){BURROW_S("FuzzMismatch"),
+                                                 {child_fuzz_mismatch, NULL}};
+        fuzz[nf++] = (TestingInternalFuzzTarget){BURROW_S("FuzzCount"),
+                                                 {child_fuzz_count, NULL}};
+        fuzz[nf++] =
+            (TestingInternalFuzzTarget){BURROW_S("FuzzSkip"), {child_fuzz_skip, NULL}};
+        fuzz[nf++] = (TestingInternalFuzzTarget){BURROW_S("FuzzEmpty"),
+                                                 {child_fuzz_empty, NULL}};
+        fuzz[nf++] = (TestingInternalFuzzTarget){BURROW_S("FuzzInside"),
+                                                 {child_fuzz_inside, NULL}};
     } else if (strcmp(scenario, "panic") == 0) {
         tests[n++] = (TestingInternalTest){BURROW_S("TestPass"), {child_pass, NULL}};
         tests[n++] = (TestingInternalTest){BURROW_S("TestPanic"), {child_panic, NULL}};
@@ -516,7 +614,7 @@ static int run_child(const char *scenario) {
         (TestingMatchString){NULL, NULL},
         slice_from(tests, n, n, TYPE_TESTING_INTERNAL_TEST),
         slice_from(benchmarks, nb, nb, TYPE_TESTING_INTERNAL_BENCHMARK),
-        slice_nil(TYPE_TESTING_INTERNAL_FUZZ_TARGET),
+        slice_from(fuzz, nf, nf, TYPE_TESTING_INTERNAL_FUZZ_TARGET),
         slice_from(examples, ne, ne, TYPE_TESTING_INTERNAL_EXAMPLE));
     testing_m_set_bare(m, strcmp(scenario, "bare") == 0 ||
                               strcmp(scenario, "benchbare") == 0);
@@ -808,6 +906,68 @@ static const Scenario scenarios[] = {
      "--- FAIL: ExamplePanic (0.00s)\n"
      "panic: boom",
      true},
+    {"-test.skip=FuzzInside", "fuzz", 1,
+     "--- FAIL: FuzzBad (0.00s)\n"
+     "    --- FAIL: FuzzBad/seed#1 (0.00s)\n"
+     "        testing_test.c:N: bad \"xyz\"\n"
+     "--- FAIL: FuzzNoCall (0.00s)\n"
+     "    testing_test.c:N: setup\n"
+     "    testing.c:N: returned without calling F.Fuzz, F.Fail, or F.Skip\n"
+     "--- FAIL: FuzzMismatch (0.00s)\n"
+     "    testing_test.c:N: mismatched types in corpus entry: [int], want [string]\n"
+     "--- FAIL: FuzzCount (0.00s)\n"
+     "    testing_test.c:N: wrong number of values in corpus entry: 2, want 1\n"
+     "FAIL\n",
+     false},
+    {"-test.v -test.skip=FuzzInside", "fuzz", 1,
+     "=== RUN   FuzzGood\n"
+     "=== RUN   FuzzGood/seed#0\n"
+     "    testing_test.c:N: got hello 5\n"
+     "=== RUN   FuzzGood/seed#1\n"
+     "    testing_test.c:N: got  0\n"
+     "--- PASS: FuzzGood (0.00s)\n"
+     "    --- PASS: FuzzGood/seed#0 (0.00s)\n"
+     "    --- PASS: FuzzGood/seed#1 (0.00s)\n"
+     "=== RUN   FuzzBad\n"
+     "=== RUN   FuzzBad/seed#0\n"
+     "=== RUN   FuzzBad/seed#1\n"
+     "    testing_test.c:N: bad \"xyz\"\n"
+     "--- FAIL: FuzzBad (0.00s)\n"
+     "    --- PASS: FuzzBad/seed#0 (0.00s)\n"
+     "    --- FAIL: FuzzBad/seed#1 (0.00s)\n"
+     "=== RUN   FuzzNoCall\n"
+     "    testing_test.c:N: setup\n"
+     "    testing.c:N: returned without calling F.Fuzz, F.Fail, or F.Skip\n"
+     "--- FAIL: FuzzNoCall (0.00s)\n"
+     "=== RUN   FuzzMismatch\n"
+     "    testing_test.c:N: mismatched types in corpus entry: [int], want [string]\n"
+     "--- FAIL: FuzzMismatch (0.00s)\n"
+     "=== RUN   FuzzCount\n"
+     "    testing_test.c:N: wrong number of values in corpus entry: 2, want 1\n"
+     "--- FAIL: FuzzCount (0.00s)\n"
+     "=== RUN   FuzzSkip\n"
+     "    testing_test.c:N: not today\n"
+     "--- SKIP: FuzzSkip (0.00s)\n"
+     "=== RUN   FuzzEmpty\n"
+     "--- PASS: FuzzEmpty (0.00s)\n"
+     "FAIL\n",
+     false},
+    {"-test.run=FuzzBad/seed#1 -test.v", "fuzz", 1,
+     "=== RUN   FuzzBad\n"
+     "=== RUN   FuzzBad/seed#1\n"
+     "    testing_test.c:N: bad \"xyz\"\n"
+     "--- FAIL: FuzzBad (0.00s)\n"
+     "    --- FAIL: FuzzBad/seed#1 (0.00s)\n"
+     "FAIL\n",
+     false},
+    {"-test.run=FuzzGood -test.count=2", "fuzz", 0, "PASS\n", false},
+    {"-test.run=Nothing", "fuzz", 0, "testing: warning: no tests to run\nPASS\n",
+     false},
+    {"-test.run=FuzzInside", "fuzz", 2,
+     "--- FAIL: FuzzInside (0.00s)\n"
+     "    --- FAIL: FuzzInside/seed#0 (0.00s)\n"
+     "panic: testing: f.Log was called inside the fuzz target, use t.Log instead",
+     true},
     {"-test.timeout=300ms -test.v", "sleep", 2,
      "=== RUN   TestSleep\n"
      "panic: test timed out after 300ms\n"
@@ -969,6 +1129,189 @@ static void ExampleNeverRun(void) {
     abort();
 }
 
+/* ------------------------------------------------------------- fuzz targets */
+
+/* The text of the panic the last guarded call raised, or nothing. */
+static char caught_text[200];
+
+static void keep_caught_text(Any p) {
+    caught_text[0] = '\0';
+    if (p.t != TYPE_STRING)
+        return;
+    Str s = *(const Str *)p.data;
+    size_t n =
+        s.len < (Int)sizeof caught_text - 1 ? (size_t)s.len : sizeof caught_text - 1;
+    memcpy(caught_text, s.p, n);
+    caught_text[n] = '\0';
+}
+
+/* Calls fn and keeps the text of the panic it raises. The calls are
+ * functions of their own so that nothing the setjmp can clobber lives here. */
+static void guard(void (*fn)(void *), void *env) {
+    caught_text[0] = '\0';
+    BURROW_TRY {
+        fn(env);
+    }
+    BURROW_CATCH(p) {
+        keep_caught_text(p);
+    }
+    BURROW_TRY_END;
+}
+
+static void call_f_fail(void *f) {
+    testing_f_fail((TestingF *)f);
+}
+
+static void call_f_skipped(void *f) {
+    (void)testing_f_skipped((TestingF *)f);
+}
+
+static void call_f_context(void *f) {
+    (void)testing_f_context((TestingF *)f);
+}
+
+static void call_arg_wrong_type(void *args) {
+    (void)testing_fuzz_arg(*(Slice *)args, 0, Int);
+}
+
+static void call_arg_past_end(void *args) {
+    (void)testing_fuzz_arg(*(Slice *)args, 15, Int);
+}
+
+static void fuzz_types_fn(void *env, TestingT *t, Slice args);
+
+static void call_add_uintptr(void *f) {
+    testing_f_add_v((TestingF *)f, BURROW_ANY_VAL(TYPE_UINTPTR, Uintptr, 1));
+}
+
+static void call_fuzz_no_types(void *f) {
+    testing_f_fuzz((TestingF *)f, BURROW_FN(TestingFuzzFunc, fuzz_types_fn, NULL),
+                   slice_nil(TYPE_UNSAFE_POINTER));
+}
+
+static void call_fuzz_int(void *f) {
+    testing_f_fuzz_v((TestingF *)f, BURROW_FN(TestingFuzzFunc, fuzz_types_fn, NULL),
+                     TYPE_INT);
+}
+
+static void call_fuzz_uintptr(void *f) {
+    testing_f_fuzz_v((TestingF *)f, BURROW_FN(TestingFuzzFunc, fuzz_types_fn, NULL),
+                     TYPE_UINTPTR);
+}
+
+static int32_t fuzz_seeds_run;
+
+/* Every type a fuzz function can take, two seeds of them, the second all
+ * zeroes. The seeds go parallel, which keeps the F alive past its target. */
+static void fuzz_types_fn(void *env, TestingT *t, Slice args) {
+    TestingF *f = (TestingF *)env;
+    guard(call_f_fail, f);
+    if (strcmp(
+            caught_text,
+            "testing: f.Fail was called inside the fuzz target, use t.Fail instead") !=
+        0)
+        testing_t_errorf_v(t, "f.Fail inside: %q", caught_text);
+    guard(call_f_skipped, f);
+    if (strcmp(caught_text, "testing: f.Skipped was called inside the fuzz target, use "
+                            "t.Skipped instead") != 0)
+        testing_t_errorf_v(t, "f.Skipped inside: %q", caught_text);
+    guard(call_f_context, f);
+    if (strcmp(caught_text, "testing: f.Context was called inside the fuzz target, use "
+                            "t.Context instead") != 0)
+        testing_t_errorf_v(t, "f.Context inside: %q", caught_text);
+    testing_t_parallel(t);
+    bool first = testing_fuzz_arg(args, 2, bool);
+    Str s = testing_fuzz_arg(args, 0, Str);
+    Bytes b = testing_fuzz_arg(args, 1, Bytes);
+    Byte by = testing_fuzz_arg(args, 3, Byte);
+    Rune r = testing_fuzz_arg(args, 4, Rune);
+    float f32 = testing_fuzz_arg(args, 5, float);
+    double f64 = testing_fuzz_arg(args, 6, double);
+    Int i = testing_fuzz_arg(args, 7, Int);
+    int8_t i8 = testing_fuzz_arg(args, 8, int8_t);
+    int16_t i16 = testing_fuzz_arg(args, 9, int16_t);
+    int64_t i64 = testing_fuzz_arg(args, 10, int64_t);
+    Uint u = testing_fuzz_arg(args, 11, Uint);
+    uint16_t u16 = testing_fuzz_arg(args, 12, uint16_t);
+    uint32_t u32 = testing_fuzz_arg(args, 13, uint32_t);
+    uint64_t u64 = testing_fuzz_arg(args, 14, uint64_t);
+    if (first) {
+        if (!str_eq(s, BURROW_S("h\xc3\xa9llo")) || b.len != 3 ||
+            memcmp(b.p, "raw", 3) != 0 || by != 'x' || r != 0x263A || f32 != 1.5f ||
+            f64 != -2.25 || i != -7 || i8 != -8 || i16 != 300 || i64 != INT64_MIN ||
+            u != 7 || u16 != 65535 || u32 != 70000 || u64 != UINT64_MAX)
+            testing_t_errorf_v(
+                t, "first seed came back as %q %q %v %v %v %v %v %v %v %v %v %v %v %v",
+                s, b, by, r, f32, f64, i, i8, i16, i64, u, u16, u32, u64);
+    } else if (s.len != 0 || b.len != 0 || by != 0 || r != 0 || f32 != 0 || f64 != 0 ||
+               i != 0 || i8 != 0 || i16 != 0 || i64 != 0 || u != 0 || u16 != 0 ||
+               u32 != 0 || u64 != 0) {
+        testing_t_error_v(t, "second seed is not all zeroes");
+    }
+
+    guard(call_arg_wrong_type, &args);
+    if (strcmp(caught_text, "testing: fuzz argument 0 is string, not int") != 0)
+        testing_t_errorf_v(t, "asking for the wrong type: %q", caught_text);
+    guard(call_arg_past_end, &args);
+    if (strcmp(caught_text, "testing: fuzz argument 15 out of range with 15 values") !=
+        0)
+        testing_t_errorf_v(t, "asking past the end: %q", caught_text);
+    sync_atomic_add_int32(&fuzz_seeds_run, 1);
+}
+
+static void seed_count_cleanup(void *env) {
+    TestingT *t = (TestingT *)env;
+    if (sync_atomic_load_int32(&fuzz_seeds_run) != 2)
+        testing_t_errorf_v(t, "%d seeds ran, want 2",
+                           sync_atomic_load_int32(&fuzz_seeds_run));
+}
+
+static void FuzzTypes(TestingF *f) {
+    Byte raw[] = {'r', 'a', 'w'};
+    testing_f_add_v(f, "h\xc3\xa9llo", slice_from(raw, 3, 3, TYPE_BYTE), (bool)true,
+                    (Byte)'x', BURROW_ANY_VAL(TYPE_RUNE, Rune, 0x263A), 1.5f, -2.25,
+                    (Int)-7, (int8_t)-8, (int16_t)300,
+                    BURROW_ANY_VAL(TYPE_INT64, int64_t, INT64_MIN), (Uint)7,
+                    (uint16_t)65535, BURROW_ANY_VAL(TYPE_UINT32, uint32_t, 70000),
+                    BURROW_ANY_VAL(TYPE_UINT64, uint64_t, UINT64_MAX));
+    /* The seed is a copy, so this does not change it. */
+    raw[0] = 'X';
+    testing_f_add_v(f, "", slice_nil(TYPE_BYTE), (bool)false, (Byte)0,
+                    BURROW_ANY_VAL(TYPE_RUNE, Rune, 0), 0.0f, 0.0, (Int)0, (int8_t)0,
+                    (int16_t)0, BURROW_ANY_VAL(TYPE_INT64, int64_t, 0), (Uint)0,
+                    (uint16_t)0, BURROW_ANY_VAL(TYPE_UINT32, uint32_t, 0),
+                    BURROW_ANY_VAL(TYPE_UINT64, uint64_t, 0));
+    sync_atomic_store_int32(&fuzz_seeds_run, 0);
+    testing_f_cleanup(f, BURROW_FN(Func, seed_count_cleanup, burrow__testing_f_t(f)));
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, fuzz_types_fn, f), TYPE_STRING,
+                     TYPE_BYTES, TYPE_BOOL, TYPE_BYTE, TYPE_RUNE, TYPE_FLOAT32,
+                     TYPE_FLOAT64, TYPE_INT, TYPE_INT8, TYPE_INT16, TYPE_INT64,
+                     TYPE_UINT, TYPE_UINT16, TYPE_UINT32, TYPE_UINT64);
+    if (!str_eq(testing_f_name(f), BURROW_S("FuzzTypes")))
+        testing_f_errorf_v(f, "name %q", testing_f_name(f));
+}
+
+/* The misuse Go stops with a panic, each with its message. */
+static void FuzzMisuse(TestingF *f) {
+    guard(call_add_uintptr, f);
+    if (strcmp(caught_text, "testing: unsupported type to Add uintptr") != 0)
+        testing_f_errorf_v(f, "adding a uintptr: %q", caught_text);
+    guard(call_fuzz_no_types, f);
+    if (strcmp(caught_text,
+               "testing: fuzz target must receive at least two arguments, where "
+               "the first argument is a *T") != 0)
+        testing_f_errorf_v(f, "no types: %q", caught_text);
+    guard(call_fuzz_int, f);
+    if (strcmp(caught_text, "testing: F.Fuzz called more than once") != 0)
+        testing_f_errorf_v(f, "a second call: %q", caught_text);
+}
+
+static void FuzzUnsupported(TestingF *f) {
+    guard(call_fuzz_uintptr, f);
+    if (strcmp(caught_text, "testing: unsupported type for fuzzing uintptr") != 0)
+        testing_f_errorf_v(f, "a uintptr: %q", caught_text);
+}
+
 static void TestHelpers(TestingT *t) {
     if (!testing_testing())
         testing_t_error_v(t, "Testing() is false inside a test");
@@ -993,6 +1336,9 @@ static void TestHelpers(TestingT *t) {
     X(TestHelpers)                                                                     \
     X(TestOutput)                                                                      \
     X(TestBenchmarkOutput)                                                             \
+    X(FuzzTypes)                                                                       \
+    X(FuzzMisuse)                                                                      \
+    X(FuzzUnsupported)                                                                 \
     X(ExampleCapture, "printf\nfmt 2\n  trailing space goes")                          \
     X(ExampleUnordered, TESTING_UNORDERED("1\n2\n3"))                                  \
     X(ExampleNeverRun)

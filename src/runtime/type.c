@@ -13,6 +13,7 @@
 
 #include "burrow/platform.h"
 #include "burrow/runtime.h"
+#include "burrow/slice.h"
 
 #include <string.h>
 
@@ -665,3 +666,23 @@ BUILTIN(Complex64, KIND_COMPLEX64, Complex64, "complex64", 15, &complex64_ops);
 BUILTIN(Complex128, KIND_COMPLEX128, Complex128, "complex128", 16, &complex128_ops);
 BUILTIN(Str, KIND_STRING, Str, "string", 17, &string_ops);
 BUILTIN(UnsafePointer, KIND_UNSAFE_POINTER, void *, "unsafe.Pointer", 18, NULL);
+
+/* []byte, declared in slice.h. Unnamed like every slice type, with no ops
+ * because a slice is not comparable, and numbered with the builtins because
+ * it is defined along with them. */
+const Type burrow_type_Bytes = {
+    {NULL, 0},
+    {NULL, 0},
+    KIND_SLICE,
+    (uint32_t)sizeof(Slice),
+    (uint16_t)_Alignof(Slice),
+    0,
+    0,
+    NULL,
+    NULL,
+    &burrow_type_uint8_t,
+    NULL,
+    0,
+    19,
+    NULL,
+};

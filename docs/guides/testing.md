@@ -378,6 +378,73 @@ FAIL
 
 An example that panics fails, and then the panic carries on and ends the run with its stack trace, the way it does in Go.
 
+## Fuzz targets
+
+A fuzz target takes a `TestingF`. It adds seed inputs with `testing_f_add_v` and then passes `testing_f_fuzz_v` the function to run on each input. Go reads the input types from the function's parameters, but C has no way to ask a function what it takes, so the types go after the function instead. The function receives the values as a `Slice`, and `testing_fuzz_arg` reads each one back as its C type.
+
+<!-- example: ../examples/testing/fuzz.c#fuzz -->
+```c
+/* Reverses s byte by byte, which is wrong for any rune longer than a byte. */
+static Str reverse(Alloc *a, Str s) {
+    Byte *p = (Byte *)mem_alloc(a, (size_t)s.len + 1, 1);
+    for (Int i = 0; i < s.len; i++)
+        p[i] = s.p[s.len - 1 - i];
+    return str_from_bytes(p, s.len);
+}
+
+static void fuzz_reverse(void *env, TestingT *t, Slice args) {
+    (void)env;
+    Str s = testing_fuzz_arg(args, 0, Str);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Str rev = reverse(arena_allocator(&ar), s);
+    if (utf8_valid_string(s) && !utf8_valid_string(rev))
+        testing_t_errorf_v(t, "reverse(%q) = %q, not valid UTF-8", s, rev);
+    arena_free(&ar);
+}
+
+/* Takes a []byte and an int, and skips the inputs it has no use for. */
+static void fuzz_count(void *env, TestingT *t, Slice args) {
+    (void)env;
+    Bytes b = testing_fuzz_arg(args, 0, Bytes);
+    Int max = testing_fuzz_arg(args, 1, Int);
+    if (b.len > max)
+        testing_t_skip_v(t, "longer than", max);
+    Int n = utf8_rune_count(b);
+    if (n > b.len)
+        testing_t_errorf_v(t, "%d runes in %d bytes", n, b.len);
+}
+
+static void FuzzReverse(TestingF *f) {
+    testing_f_add_v(f, "gopher");
+    testing_f_add_v(f, "h\xc3\xa9llo");
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, fuzz_reverse, NULL), TYPE_STRING);
+}
+
+static void FuzzCount(TestingF *f) {
+    Byte data[] = {'a', 0xE2, 0x98, 0xBA, 'b'};
+    testing_f_add_v(f, slice_from(data, 5, 5, TYPE_BYTE), 16);
+    testing_f_add_v(f, slice_from(data, 5, 5, TYPE_BYTE), 2);
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, fuzz_count, NULL), TYPE_BYTES,
+                     TYPE_INT);
+}
+
+#define TESTS(X) X(FuzzReverse) X(FuzzCount)
+```
+
+Each seed runs as a subtest named after its place in the corpus, so `-test.run=FuzzReverse/seed#1` runs just that one. The program above prints this:
+
+```
+--- FAIL: FuzzReverse (0.00s)
+    --- FAIL: FuzzReverse/seed#1 (0.00s)
+        fuzz.c:22: reverse("héllo") = "oll\xa9\xc3h", not valid UTF-8
+FAIL
+```
+
+The types allowed are Go's: `TYPE_STRING`, `TYPE_BYTES`, `TYPE_BOOL`, `TYPE_BYTE`, `TYPE_RUNE`, the two float types and every sized and unsized integer type. `testing_f_add_v` boxes values the way fmt's `_v` macros do, so a literal `16` is Go's int. Before C23, `true` is an int too, so a bool seed is written `(bool)true`. Some C types stand for two Go types, as `int64_t` does for int and int64. For those, `BURROW_ANY_VAL(TYPE_INT64, int64_t, 42)` says which type is meant. A seed that does not match the declared types fails the target with Go's message.
+
+A target has to call `testing_f_fuzz`, `testing_f_fail` or `testing_f_skip`, and fails if it returns without doing any of them. Inside the fuzz function, report through the `TestingT` it gets. Calling F's log, fail, skip or cleanup functions from there panics and tells you to use the T, as Go does.
+
 ## What is not there yet
 
-Fuzz targets can go in the tables and `-test.list` shows them, but they do not run yet. The flags for profiles, coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.
+For now fuzz targets only run their seeds. `-test.fuzz` does not generate new inputs yet, and seeds are not read from `testdata/fuzz`. The flags for profiles, coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.

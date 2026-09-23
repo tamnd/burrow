@@ -1,4 +1,4 @@
-/* The test runner: Go's src/testing/testing.go and benchmark.go, less fuzzing.
+/* The test runner: Go's src/testing/testing.go, benchmark.go and fuzz.go.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -502,6 +502,9 @@ struct TestingT {
     Chan *signal;
     bool signal_value;
     bool bench; /* the common part of a TestingB */
+    /* Set on a fuzz target's T while a seed runs, which is when most of F's
+     * methods are off limits. */
+    bool in_fuzz_fn;
 
     /* Who is running the test function, so that FailNow can tell whether it
      * was called there, and what it panicked with. */
@@ -1111,6 +1114,16 @@ BURROW_NORETURN static void panic_after(const char *format, Str name, Str extra)
     panic_str(fmt_sprintf_v(a, format, name, extra));
 }
 
+/* checkFuzzFn. */
+static void check_fuzz_fn(TestingT *t, const char *name) {
+    if (t->in_fuzz_fn) {
+        Str n = str_from_cstr(name);
+        panic_str(fmt_sprintf_v(
+            error_allocator(),
+            "testing: f.%s was called inside the fuzz target, use t.%s instead", n, n));
+    }
+}
+
 static bool is_mark(Byte b) {
     return b == 0x16 || b == 0x0F || b == 0x0E || b == 0x1B;
 }
@@ -1262,6 +1275,7 @@ bool testing_t_failed(TestingT *t) {
 }
 
 void testing_t_fail_now(TestingT *t) {
+    check_fuzz_fn(t, "FailNow");
     testing_t_fail(t);
     sync_mutex_lock(&t->mu);
     t->finished = true;
@@ -1270,6 +1284,7 @@ void testing_t_fail_now(TestingT *t) {
 }
 
 void testing_t_skip_now(TestingT *t) {
+    check_fuzz_fn(t, "SkipNow");
     sync_mutex_lock(&t->mu);
     t->skipped = true;
     t->finished = true;
@@ -1289,6 +1304,7 @@ void testing_t_helper(TestingT *t) {
 }
 
 void testing_t_cleanup(TestingT *t, Func f) {
+    check_fuzz_fn(t, "Cleanup");
     sync_mutex_lock(&t->mu);
     if (t->ncleanups == t->ccleanups) {
         Int ncap = t->ccleanups == 0 ? 4 : t->ccleanups * 2;
@@ -1302,6 +1318,7 @@ void testing_t_cleanup(TestingT *t, Func f) {
 }
 
 Context testing_t_context(TestingT *t) {
+    check_fuzz_fn(t, "Context");
     return t->ctx;
 }
 
@@ -1320,6 +1337,7 @@ static Int output_write(void *self, Slice p, Error *err) {
 static const IoWriterVT output_vt = {NULL, output_write};
 
 IoWriter testing_t_output(TestingT *t) {
+    check_fuzz_fn(t, "Output");
     TestingT *n = destination(t);
     if (n == NULL)
         panic_after("Output called after %s has completed%s", t->name, BURROW_S(""));
@@ -1375,6 +1393,21 @@ void testing_t_attr(TestingT *t, Str key, Str value) {
     arena_free(&ar);
 }
 
+/* The name check_fuzz_fn gives each log kind. */
+static const char *log_name(burrow__TestingLogKind kind, bool f) {
+    switch (kind) {
+    case BURROW__TESTING_ERROR:
+        return f ? "Errorf" : "Error";
+    case BURROW__TESTING_FATAL:
+        return f ? "Fatalf" : "Fatal";
+    case BURROW__TESTING_SKIP:
+        return f ? "Skipf" : "Skip";
+    case BURROW__TESTING_LOG:
+    default:
+        return f ? "Logf" : "Log";
+    }
+}
+
 /* What Log and the rest end with. */
 static void after_log(TestingT *t, burrow__TestingLogKind kind) {
     switch (kind) {
@@ -1393,6 +1426,7 @@ static void after_log(TestingT *t, burrow__TestingLogKind kind) {
 
 void burrow__testing_t_logln(TestingT *t, const char *file, int line,
                              burrow__TestingLogKind kind, Slice args) {
+    check_fuzz_fn(t, log_name(kind, false));
     Arena ar;
     arena_init(&ar, NULL, 0);
     Str s = fmt_sprintln(arena_allocator(&ar), args);
@@ -1410,6 +1444,7 @@ void burrow__testing_t_logln(TestingT *t, const char *file, int line,
 
 void burrow__testing_t_logf(TestingT *t, const char *file, int line,
                             burrow__TestingLogKind kind, Str format, Slice args) {
+    check_fuzz_fn(t, log_name(kind, true));
     Arena ar;
     arena_init(&ar, NULL, 0);
     Str s = fmt_sprintf(arena_allocator(&ar), format, args);
@@ -1979,6 +2014,312 @@ void testing_t_parallel(TestingT *t) {
     t->start = burrow_nanotime();
 }
 
+/* ----------------------------------------------------------- fuzz targets
+ *
+ * Go's src/testing/fuzz.go, the part that runs without -test.fuzz: a target
+ * adds its seeds, hands over the function, and each seed runs as a subtest
+ * named after its place in the corpus. */
+
+/* corpusEntry. The values are copies the F owns. */
+typedef struct FuzzEntry {
+    Str path;
+    Any *values;
+    Int n;
+} FuzzEntry;
+
+/* What a seed's subtest needs, kept apart from the corpus so that it stays
+ * put while the corpus grows. */
+typedef struct FuzzSeed {
+    TestingF *f;
+    Int i;
+} FuzzSeed;
+
+struct TestingF {
+    TestingT *common;
+    FuzzEntry *corpus;
+    Int ncorpus;
+    Int ccorpus;
+    FuzzSeed *seeds;
+    Int nseeds;
+    TestingFuzzFunc fn;
+    bool fuzz_called;
+};
+
+/* supportedTypes, answering with the descriptor a value of type t is kept
+ * as, or NULL. Any []uint8 is Go's []byte, whichever descriptor it came in
+ * with. */
+static const Type *fuzz_type(const Type *t) {
+    if (t == NULL)
+        return NULL;
+    if (t->kind == KIND_SLICE && t->name.len == 0 && t->elem == TYPE_UINT8)
+        return TYPE_BYTES;
+    if (t == TYPE_STRING || t == TYPE_BOOL || t == TYPE_FLOAT32 || t == TYPE_FLOAT64 ||
+        t == TYPE_INT || t == TYPE_INT8 || t == TYPE_INT16 || t == TYPE_INT32 ||
+        t == TYPE_INT64 || t == TYPE_UINT || t == TYPE_UINT8 || t == TYPE_UINT16 ||
+        t == TYPE_UINT32 || t == TYPE_UINT64)
+        return t;
+    return NULL;
+}
+
+static Any fuzz_copy(const Type *t, const void *src) {
+    Alloc *h = heap_allocator();
+    void *dst = must_alloc(h, t->size, t->align);
+    if (t == TYPE_STRING) {
+        *(Str *)dst = str_clone(h, *(const Str *)src);
+    } else if (t == TYPE_BYTES) {
+        const Slice *s = (const Slice *)src;
+        Slice d = slice_nil(TYPE_UINT8);
+        if (s->len > 0) {
+            d = slice_make(h, TYPE_UINT8, s->len, s->len);
+            memcpy(d.p, s->p, (size_t)s->len);
+        }
+        *(Slice *)dst = d;
+    } else {
+        memcpy(dst, src, t->size);
+    }
+    return (Any){t, dst};
+}
+
+static void fuzz_value_free(Any v) {
+    Alloc *h = heap_allocator();
+    if (v.t == TYPE_STRING) {
+        str_release(*(Str *)v.data);
+    } else if (v.t == TYPE_BYTES) {
+        Slice *s = (Slice *)v.data;
+        if (s->p != NULL)
+            mem_free(h, s->p, (size_t)s->cap, 1);
+    }
+    mem_free(h, v.data, v.t->size, v.t->align);
+}
+
+static void fuzz_entry_free(FuzzEntry *e) {
+    for (Int i = 0; i < e->n; i++)
+        fuzz_value_free(e->values[i]);
+    if (e->values != NULL)
+        mem_free(heap_allocator(), e->values, (size_t)e->n * sizeof(Any),
+                 _Alignof(Any));
+    str_release(e->path);
+}
+
+static void f_free(void *env) {
+    TestingF *f = (TestingF *)env;
+    Alloc *h = heap_allocator();
+    for (Int i = 0; i < f->ncorpus; i++)
+        fuzz_entry_free(&f->corpus[i]);
+    if (f->corpus != NULL)
+        mem_free(h, f->corpus, (size_t)f->ccorpus * sizeof(FuzzEntry),
+                 _Alignof(FuzzEntry));
+    if (f->seeds != NULL)
+        mem_free(h, f->seeds, (size_t)f->nseeds * sizeof(FuzzSeed), _Alignof(FuzzSeed));
+    mem_free(h, f, sizeof(TestingF), _Alignof(TestingF));
+}
+
+/* A type as reflect.Type's String spells it, which is what %T prints. Only
+ * the descriptor is looked at for the types fuzzing allows, and the zeroes
+ * are there for the ones it does not. */
+static Str type_string(Alloc *a, const Type *t) {
+    static const uint64_t zero[4] = {0};
+    Any v = {t, (void *)(uintptr_t)zero};
+    return fmt_sprintf_v(a, "%T", v);
+}
+
+/* The "[int string]" CheckCorpus prints for a list of types. */
+static Str type_list(Alloc *a, const Any *values, const Type *const *types, Int n) {
+    Buf b = {0};
+    buf_str(&b, BURROW_S("["));
+    for (Int i = 0; i < n; i++) {
+        if (i > 0)
+            buf_str(&b, BURROW_S(" "));
+        buf_str(&b, values != NULL ? fmt_sprintf_v(a, "%T", values[i])
+                                   : type_string(a, types[i]));
+    }
+    buf_str(&b, BURROW_S("]"));
+    Str s = str_clone(a, buf_view(&b));
+    buf_free(&b);
+    return s;
+}
+
+void testing_f_add(TestingF *f, Slice args) {
+    const Any *v = (const Any *)args.p;
+    for (Int i = 0; i < args.len; i++)
+        if (fuzz_type(v[i].t) == NULL)
+            panic_str(fmt_sprintf_v(error_allocator(),
+                                    "testing: unsupported type to Add %T", v[i]));
+    Alloc *h = heap_allocator();
+    Any *values = NULL;
+    if (args.len > 0) {
+        values = (Any *)must_alloc(h, (size_t)args.len * sizeof(Any), _Alignof(Any));
+        for (Int i = 0; i < args.len; i++)
+            values[i] = fuzz_copy(fuzz_type(v[i].t), v[i].data);
+    }
+    if (f->ncorpus == f->ccorpus) {
+        Int ncap = f->ccorpus == 0 ? 4 : f->ccorpus * 2;
+        f->corpus = (FuzzEntry *)must_realloc(
+            h, f->corpus, (size_t)f->ccorpus * sizeof(FuzzEntry),
+            (size_t)ncap * sizeof(FuzzEntry), _Alignof(FuzzEntry));
+        f->ccorpus = ncap;
+    }
+    Str path = str_clone(h, fmt_sprintf_v(error_allocator(), "seed#%d", f->ncorpus));
+    f->corpus[f->ncorpus++] = (FuzzEntry){path, values, args.len};
+}
+
+/* CheckCorpus. Answers with the error's text, or an empty string. */
+static Str check_corpus(Alloc *a, const FuzzEntry *e, const Type *const *types,
+                        Int ntypes) {
+    if (e->n != ntypes)
+        return fmt_sprintf_v(a, "wrong number of values in corpus entry: %d, want %d",
+                             e->n, ntypes);
+    for (Int i = 0; i < ntypes; i++)
+        if (e->values[i].t != types[i])
+            return fmt_sprintf_v(a, "mismatched types in corpus entry: %s, want %s",
+                                 type_list(a, e->values, NULL, e->n),
+                                 type_list(a, NULL, types, ntypes));
+    return BURROW_S("");
+}
+
+static void seed_body(void *env, TestingT *t) {
+    FuzzSeed *s = (FuzzSeed *)env;
+    FuzzEntry *e = &s->f->corpus[s->i];
+    BURROW_CALLF(s->f->fn, t, slice_from(e->values, e->n, e->n, TYPE_ANY));
+}
+
+void burrow__testing_f_fuzz(TestingF *f, const char *file, int line, TestingFuzzFunc ff,
+                            Slice types) {
+    if (f->fuzz_called)
+        panic_str(BURROW_S("testing: F.Fuzz called more than once"));
+    f->fuzz_called = true;
+    if (testing_t_failed(f->common))
+        return;
+    if (BURROW_FUNC_IS_NIL(ff))
+        panic_str(BURROW_S("testing: F.Fuzz must receive a function"));
+    if (types.len < 1)
+        panic_str(BURROW_S("testing: fuzz target must receive at least two arguments, "
+                           "where the first argument is a *T"));
+
+    Alloc *h = heap_allocator();
+    const Type **ts = (const Type **)must_alloc(
+        h, (size_t)types.len * sizeof(const Type *), _Alignof(const Type *));
+    for (Int i = 0; i < types.len; i++) {
+        const Type *t = ((const Type *const *)types.p)[i];
+        ts[i] = fuzz_type(t);
+        if (ts[i] == NULL) {
+            mem_free(h, (void *)ts, (size_t)types.len * sizeof(const Type *),
+                     _Alignof(const Type *));
+            panic_str(fmt_sprintf_v(error_allocator(),
+                                    "testing: unsupported type for fuzzing %s",
+                                    type_string(error_allocator(), t)));
+        }
+    }
+
+    for (Int i = 0; i < f->ncorpus; i++) {
+        Str err = check_corpus(error_allocator(), &f->corpus[i], ts, types.len);
+        if (err.len > 0) {
+            mem_free(h, (void *)ts, (size_t)types.len * sizeof(const Type *),
+                     _Alignof(const Type *));
+            burrow__testing_t_logln(f->common, file, line, BURROW__TESTING_FATAL,
+                                    BURROW__FMT_ARGS(BURROW_ANY_OF, err));
+        }
+    }
+    mem_free(h, (void *)ts, (size_t)types.len * sizeof(const Type *),
+             _Alignof(const Type *));
+
+    f->fn = ff;
+    if (f->ncorpus > 0) {
+        f->seeds = (FuzzSeed *)must_alloc(h, (size_t)f->ncorpus * sizeof(FuzzSeed),
+                                          _Alignof(FuzzSeed));
+        f->nseeds = f->ncorpus;
+    }
+    for (Int i = 0; i < f->nseeds; i++) {
+        f->seeds[i] = (FuzzSeed){f, i};
+        f->common->in_fuzz_fn = true;
+        testing_t_run(f->common, f->corpus[i].path,
+                      BURROW_FN(TestingTFunc, seed_body, &f->seeds[i]));
+        f->common->in_fuzz_fn = false;
+    }
+}
+
+void *burrow__testing_fuzz_arg(Slice args, Int i, const Type *want) {
+    if (i < 0 || i >= args.len)
+        panic_str(fmt_sprintf_v(error_allocator(),
+                                "testing: fuzz argument %d out of range with %d values",
+                                i, args.len));
+    Any v = ((const Any *)args.p)[i];
+    if (fuzz_type(want) != v.t)
+        panic_str(fmt_sprintf_v(error_allocator(),
+                                "testing: fuzz argument %d is %T, not %s", i, v,
+                                type_string(error_allocator(), want)));
+    return v.data;
+}
+
+TestingT *burrow__testing_f_t(TestingF *f) {
+    return f->common;
+}
+
+Str testing_f_name(TestingF *f) {
+    return testing_t_name(f->common);
+}
+
+void testing_f_fail(TestingF *f) {
+    check_fuzz_fn(f->common, "Fail");
+    testing_t_fail(f->common);
+}
+
+bool testing_f_failed(TestingF *f) {
+    return testing_t_failed(f->common);
+}
+
+void testing_f_fail_now(TestingF *f) {
+    testing_t_fail_now(f->common);
+}
+
+void testing_f_skip_now(TestingF *f) {
+    testing_t_skip_now(f->common);
+}
+
+bool testing_f_skipped(TestingF *f) {
+    check_fuzz_fn(f->common, "Skipped");
+    return testing_t_skipped(f->common);
+}
+
+void testing_f_helper(TestingF *f) {
+    check_fuzz_fn(f->common, "Helper");
+}
+
+void testing_f_cleanup(TestingF *f, Func fn) {
+    testing_t_cleanup(f->common, fn);
+}
+
+Context testing_f_context(TestingF *f) {
+    return testing_t_context(f->common);
+}
+
+IoWriter testing_f_output(TestingF *f) {
+    return testing_t_output(f->common);
+}
+
+void testing_f_attr(TestingF *f, Str key, Str value) {
+    testing_t_attr(f->common, key, value);
+}
+
+TestingTB testing_f_as_testing_tb(TestingF *f) {
+    return testing_t_as_testing_tb(f->common);
+}
+
+/* fRunner, less what the T's runner already does. The F lives until the T's
+ * cleanups run, which is after any seed that went parallel has finished. */
+static void fuzz_target_body(void *env, TestingT *t) {
+    const TestingInternalFuzzTarget *ft = (const TestingInternalFuzzTarget *)env;
+    TestingF *f =
+        (TestingF *)must_alloc(heap_allocator(), sizeof(TestingF), _Alignof(TestingF));
+    *f = (TestingF){0};
+    f->common = t;
+    testing_t_cleanup(t, BURROW_FN(Func, f_free, f));
+    set_ran(t);
+    BURROW_CALLF(ft->fn, f);
+    if (!f->fuzz_called && !testing_t_skipped(t) && !testing_t_failed(t))
+        testing_t_error_v(t, "returned without calling F.Fuzz, F.Fail, or F.Skip");
+}
+
 /* ---------------------------------------------------------------- tables */
 
 #define INTERNAL_TYPE(var, T, name)                                                    \
@@ -2183,10 +2524,14 @@ static void parse_cpu_list(void) {
         pkg.cpus[pkg.ncpus++] = runtime_gomaxprocs(0);
 }
 
+/* One of tests and fuzz is empty: a pass runs the tests or the seed corpus
+ * of the fuzz targets, which Go runs as a pass of their own after the tests. */
 typedef struct RunState {
     TestingMatchString match;
     const TestingInternalTest *tests;
     Int ntests;
+    const TestingInternalFuzzTarget *fuzz;
+    Int nfuzz;
     int64_t deadline;
     bool bare;
     bool ran;
@@ -2197,6 +2542,10 @@ static void run_all(void *env, TestingT *t) {
     RunState *rs = (RunState *)env;
     for (Int i = 0; i < rs->ntests; i++)
         testing_t_run(t, rs->tests[i].name, rs->tests[i].f);
+    for (Int i = 0; i < rs->nfuzz; i++)
+        testing_t_run(
+            t, rs->fuzz[i].name,
+            BURROW_FN(TestingTFunc, fuzz_target_body, (void *)(uintptr_t)&rs->fuzz[i]));
 }
 
 /* One pass for one -test.cpu value: -test.count runs of every test. */
@@ -2231,19 +2580,37 @@ static void run_pass(void *env) {
     }
 }
 
-static bool run_tests(TestingMatchString match, const TestingInternalTest *tests,
-                      Int ntests, int64_t deadline, bool bare, bool *ran) {
-    RunState rs = {match, tests, ntests, deadline, bare, false, true};
+static bool run_passes(RunState *rs) {
     for (Int k = 0; k < pkg.ncpus; k++) {
-        if (!bare && burrow__curg() == NULL) {
+        if (!rs->bare && burrow__curg() == NULL) {
             runtime_gomaxprocs(pkg.cpus[k]);
-            runtime_main(BURROW_FN(Func, run_pass, &rs));
+            runtime_main(BURROW_FN(Func, run_pass, rs));
         } else {
-            run_pass(&rs);
+            run_pass(rs);
         }
     }
+    return rs->ok;
+}
+
+static bool run_tests(TestingMatchString match, const TestingInternalTest *tests,
+                      Int ntests, int64_t deadline, bool bare, bool *ran) {
+    RunState rs = {match, tests, ntests, NULL, 0, deadline, bare, false, true};
+    bool ok = run_passes(&rs);
     *ran = rs.ran;
-    return rs.ok;
+    return ok;
+}
+
+/* runFuzzTests: the seed corpus of every fuzz target, as tests. */
+static bool run_fuzz_tests(TestingMatchString match,
+                           const TestingInternalFuzzTarget *fuzz, Int nfuzz,
+                           int64_t deadline, bool bare, bool *ran) {
+    *ran = false;
+    if (nfuzz == 0 || pkg.flags[F_FUZZWORKER].b)
+        return true;
+    RunState rs = {match, NULL, 0, fuzz, nfuzz, deadline, bare, false, true};
+    bool ok = run_passes(&rs);
+    *ran = rs.ran;
+    return ok;
 }
 
 bool testing_run_tests(TestingMatchString match, Slice tests) {
@@ -3712,14 +4079,17 @@ int testing_m_run(TestingM *m) {
         pkg.have_examples = m->nexamples > 0;
         bool ran;
         bool ok = run_tests(m->match, m->tests, m->ntests, deadline, m->bare, &ran);
+        bool fuzz_ran;
+        bool fuzz_ok = run_fuzz_tests(m->match, m->fuzz_targets, m->nfuzz_targets,
+                                      deadline, m->bare, &fuzz_ran);
         bool example_ran;
         bool example_ok =
             run_examples(m->match, m->examples, m->nexamples, m->bare, &example_ran);
         stop_alarm();
-        if (!ran && !example_ran && pkg.flags[F_BENCH].s.len == 0 &&
+        if (!ran && !fuzz_ran && !example_ran && pkg.flags[F_BENCH].s.len == 0 &&
             pkg.flags[F_FUZZ].s.len == 0)
             write_to(err_out(), BURROW_S("testing: warning: no tests to run\n"));
-        if (!ok || !example_ok ||
+        if (!ok || !fuzz_ok || !example_ok ||
             !run_benchmarks(m->match, m->benchmarks, m->nbenchmarks, m->bare)) {
             write_to(stdout, fmt_sprintf_v(a, "%sFAIL\n", prefix));
             m->exit_code = 1;
@@ -3755,6 +4125,11 @@ static void entry_benchmark(void *env, TestingB *b) {
     ((void (*)(TestingB *))e->fn)(b);
 }
 
+static void entry_fuzz(void *env, TestingF *f) {
+    const burrow__TestingEntry *e = (const burrow__TestingEntry *)env;
+    ((void (*)(TestingF *))e->fn)(f);
+}
+
 static void entry_example(void *env) {
     const burrow__TestingEntry *e = (const burrow__TestingEntry *)env;
     e->fn();
@@ -3766,7 +4141,11 @@ int burrow__testing_main(int argc, char **argv, const burrow__TestingEntry *entr
     TestingInternalTest *tests = NULL;
     TestingInternalBenchmark *benchmarks = NULL;
     TestingInternalExample *examples = NULL;
+    TestingInternalFuzzTarget *fuzz = NULL;
     if (n > 0) {
+        fuzz = (TestingInternalFuzzTarget *)must_alloc(
+            h, (size_t)n * sizeof(TestingInternalFuzzTarget),
+            _Alignof(TestingInternalFuzzTarget));
         examples = (TestingInternalExample *)must_alloc(
             h, (size_t)n * sizeof(TestingInternalExample),
             _Alignof(TestingInternalExample));
@@ -3779,6 +4158,7 @@ int burrow__testing_main(int argc, char **argv, const burrow__TestingEntry *entr
     Int ntests = 0;
     Int nbenchmarks = 0;
     Int nexamples = 0;
+    Int nfuzz = 0;
     for (Int i = 0; i < n; i++) {
         const burrow__TestingEntry *e = &entries[i];
         if (e->kind == BURROW__TESTING_KIND_EXAMPLE) {
@@ -3788,7 +4168,10 @@ int burrow__testing_main(int argc, char **argv, const burrow__TestingEntry *entr
                 examples[nexamples++] = (TestingInternalExample){
                     e->name, BURROW_FN(Func, entry_example, (void *)(uintptr_t)e),
                     str_from_cstr(e->output), e->unordered};
-        } else if (e->kind == BURROW__TESTING_KIND_BENCHMARK)
+        } else if (e->kind == BURROW__TESTING_KIND_FUZZ)
+            fuzz[nfuzz++] = (TestingInternalFuzzTarget){
+                e->name, BURROW_FN(TestingFFunc, entry_fuzz, (void *)(uintptr_t)e)};
+        else if (e->kind == BURROW__TESTING_KIND_BENCHMARK)
             benchmarks[nbenchmarks++] = (TestingInternalBenchmark){
                 e->name,
                 BURROW_FN(TestingBFunc, entry_benchmark, (void *)(uintptr_t)e)};
@@ -3802,7 +4185,7 @@ int burrow__testing_main(int argc, char **argv, const burrow__TestingEntry *entr
         slice_from(tests, ntests, ntests, TYPE_TESTING_INTERNAL_TEST),
         slice_from(benchmarks, nbenchmarks, nbenchmarks,
                    TYPE_TESTING_INTERNAL_BENCHMARK),
-        slice_nil(TYPE_TESTING_INTERNAL_FUZZ_TARGET),
+        slice_from(fuzz, nfuzz, nfuzz, TYPE_TESTING_INTERNAL_FUZZ_TARGET),
         slice_from(examples, nexamples, nexamples, TYPE_TESTING_INTERNAL_EXAMPLE));
     testing_m_set_bare(m, bare);
     int code = main_fn(m);
@@ -3814,6 +4197,8 @@ int burrow__testing_main(int argc, char **argv, const burrow__TestingEntry *entr
                  _Alignof(TestingInternalBenchmark));
         mem_free(h, examples, (size_t)n * sizeof(TestingInternalExample),
                  _Alignof(TestingInternalExample));
+        mem_free(h, fuzz, (size_t)n * sizeof(TestingInternalFuzzTarget),
+                 _Alignof(TestingInternalFuzzTarget));
     }
     return code;
 }

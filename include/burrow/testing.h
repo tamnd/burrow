@@ -91,8 +91,7 @@ typedef struct TestingT TestingT;
 /* testing.M, what a TestMain function receives and runs. */
 typedef struct TestingM TestingM;
 
-/* testing.B, what a benchmark gets, and testing.F, declared so that the
- * tables below can name it. */
+/* testing.B, what a benchmark gets, and testing.F, what a fuzz target gets. */
 typedef struct TestingB TestingB;
 typedef struct TestingF TestingF;
 
@@ -106,6 +105,12 @@ BURROW_FUNC(TestingTFunc, void, TestingT *t);
 BURROW_FUNC(TestingBFunc, void, TestingB *b);
 BURROW_FUNC(TestingFFunc, void, TestingF *f);
 BURROW_FUNC(TestingPBFunc, void, TestingPB *pb);
+
+/* func(*T, ...), the function a fuzz target hands testing_f_fuzz. Go's takes
+ * the fuzzed values as parameters of their own types, which C can only do
+ * with one function type per signature, so here they come as a Slice of Any
+ * in the order they were declared. testing_fuzz_arg reads one. */
+BURROW_FUNC(TestingFuzzFunc, void, TestingT *t, Slice args);
 
 /* The function Go hands MainStart for -test.run and friends, which says
  * whether a pattern matches a name. A nil one means the built in matcher,
@@ -181,8 +186,7 @@ typedef struct TestingTB {
  * line the test. prefix can be left off, so -v and -run=Foo work. The ones
  * for profiles, coverage, tracing and fuzzing are accepted and do nothing.
  * -test.shuffle takes the same values but shuffles with a generator of its
- * own, so a seed gives a different order from the one Go would give. A table
- * of fuzz targets is accepted and listed by -test.list, and is not run yet. */
+ * own, so a seed gives a different order from the one Go would give. */
 void testing_init(int argc, char **argv);
 
 /* testing.Short, testing.Verbose and testing.Testing. Short and Verbose read
@@ -516,15 +520,171 @@ TestingTB testing_b_as_testing_tb(TestingB *b);
                            BURROW__TESTING_SKIP,                                       \
                            BURROW__FMT_FARGS(BURROW_ANY_OF, __VA_ARGS__))
 
+/* ---------------------------------------------------------------- fuzz targets
+ *
+ * A fuzz target is a function taking a TestingF. It adds seed inputs with
+ * testing_f_add and then hands testing_f_fuzz the function to run on each
+ * input, along with the types that function takes:
+ *
+ *     static void fuzz_reverse(void *env, TestingT *t, Slice args) {
+ *         (void)env;
+ *         Str s = testing_fuzz_arg(args, 0, Str);
+ *         Str twice = reverse(reverse(s));
+ *         if (!str_eq(s, twice))
+ *             testing_t_errorf_v(t, "before: %q, after: %q", s, twice);
+ *     }
+ *
+ *     static void FuzzReverse(TestingF *f) {
+ *         testing_f_add_v(f, "hello");
+ *         testing_f_add_v(f, "");
+ *         testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, fuzz_reverse, NULL),
+ *                          TYPE_STRING);
+ *     }
+ *
+ * Go takes the types from the function's signature. C has no way to ask a
+ * function for its parameter types, so they are listed after it instead. The
+ * ones Go allows are the ones allowed here: TYPE_BYTES, TYPE_STRING,
+ * TYPE_BOOL, TYPE_BYTE, TYPE_RUNE, TYPE_FLOAT32, TYPE_FLOAT64 and every
+ * signed and unsigned integer type. TYPE_BYTE and TYPE_UINT8 are the same
+ * type, as they are in Go, and so are TYPE_RUNE and TYPE_INT32.
+ *
+ * testing_f_add_v boxes its operands the way fmt's _v macros do, so a string
+ * literal is a string and an int is Go's int. Before C23 true and false are
+ * ints too, so a bool seed is written (bool)true. Where one C type stands for
+ * two Go types, as int64_t does for int and int64 and int32_t does for int and
+ * rune, BURROW_ANY_VAL says which one is meant:
+ *
+ *     testing_f_add_v(f, BURROW_ANY_VAL(TYPE_INT64, int64_t, 42), (bool)true);
+ *
+ * A seed whose values do not match the declared types fails the target with
+ * Go's message.
+ *
+ * Without -test.fuzz, which is the only way this runs for now, each seed is a
+ * subtest named FuzzReverse/seed#0, FuzzReverse/seed#1 and so on, and -test.run
+ * picks them out by those names. A fuzz target has to call testing_f_fuzz,
+ * testing_f_fail or testing_f_skip, and fails if it returns having done none
+ * of them. Inside the function given to testing_f_fuzz, report through the T
+ * it receives: calling most of F's methods from there panics, as in Go. */
+
+/* f.Add. Every value is copied, so the operands can go away as soon as this
+ * returns. A type fuzzing cannot use panics with Go's message. */
+void testing_f_add(TestingF *f, Slice args);
+#define testing_f_add_v(f, ...)                                                        \
+    testing_f_add((f), BURROW__FMT_ARGS(BURROW_ANY_OF, __VA_ARGS__))
+
+/* f.Fuzz. types is a Slice of const Type *, one per value the function takes.
+ * A corpus entry that does not match is reported at the call, which is why
+ * these are macros. */
+void burrow__testing_f_fuzz(TestingF *f, const char *file, int line, TestingFuzzFunc ff,
+                            Slice types);
+#define testing_f_fuzz(f, ff, types)                                                   \
+    burrow__testing_f_fuzz((f), __FILE__, __LINE__, (ff), (types))
+#define testing_f_fuzz_v(f, ff, ...)                                                   \
+    burrow__testing_f_fuzz(                                                            \
+        (f), __FILE__, __LINE__, (ff),                                                 \
+        slice_from(                                                                    \
+            (void *)(const Type *[]){__VA_ARGS__},                                     \
+            (Int)(sizeof((const Type *[]){__VA_ARGS__}) / sizeof(const Type *)),       \
+            (Int)(sizeof((const Type *[]){__VA_ARGS__}) / sizeof(const Type *)),       \
+            TYPE_UNSAFE_POINTER))
+
+/* Value i of a fuzz function's args, as a C type: Str, Bytes, bool, Byte,
+ * Rune, float, double, Int, Uint or one of the fixed width integer types.
+ * Asking for a type other than the one declared panics, and so does an index
+ * out of range. The value belongs to the run and should not be kept after
+ * the function returns. */
+#define testing_fuzz_arg(args, i, T)                                                   \
+    (*(T *)burrow__testing_fuzz_arg((args), (i), TYPE_OF(T)))
+BURROW_BORROWS(ret, args) void *burrow__testing_fuzz_arg(Slice args, Int i,
+                                                         const Type *want);
+
+/* The methods F shares with T. Go keeps the calls that would make no sense
+ * inside the fuzz function from being made there, and so does this: from
+ * inside it, F's fail, skip, log, cleanup and helper functions panic and say
+ * to use the T instead. Name and Failed are allowed anywhere. */
+BURROW_BORROWS(ret, f) Str testing_f_name(TestingF *f);
+void testing_f_fail(TestingF *f);
+bool testing_f_failed(TestingF *f);
+BURROW_NORETURN void testing_f_fail_now(TestingF *f);
+BURROW_NORETURN void testing_f_skip_now(TestingF *f);
+bool testing_f_skipped(TestingF *f);
+void testing_f_helper(TestingF *f);
+void testing_f_cleanup(TestingF *f, Func fn);
+BURROW_BORROWS(ret, f) Context testing_f_context(TestingF *f);
+IoWriter testing_f_output(TestingF *f);
+void testing_f_attr(TestingF *f, Str key, Str value);
+TestingTB testing_f_as_testing_tb(TestingF *f);
+
+BURROW_BORROWS(ret, f) TestingT *burrow__testing_f_t(TestingF *f);
+
+#define testing_f_log(f, args)                                                         \
+    burrow__testing_t_logln(burrow__testing_f_t(f), __FILE__, __LINE__,                \
+                            BURROW__TESTING_LOG, (args))
+#define testing_f_logf(f, format, args)                                                \
+    burrow__testing_t_logf(burrow__testing_f_t(f), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_LOG, (format), (args))
+#define testing_f_error(f, args)                                                       \
+    burrow__testing_t_logln(burrow__testing_f_t(f), __FILE__, __LINE__,                \
+                            BURROW__TESTING_ERROR, (args))
+#define testing_f_errorf(f, format, args)                                              \
+    burrow__testing_t_logf(burrow__testing_f_t(f), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_ERROR, (format), (args))
+#define testing_f_fatal(f, args)                                                       \
+    burrow__testing_t_logln(burrow__testing_f_t(f), __FILE__, __LINE__,                \
+                            BURROW__TESTING_FATAL, (args))
+#define testing_f_fatalf(f, format, args)                                              \
+    burrow__testing_t_logf(burrow__testing_f_t(f), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_FATAL, (format), (args))
+#define testing_f_skip(f, args)                                                        \
+    burrow__testing_t_logln(burrow__testing_f_t(f), __FILE__, __LINE__,                \
+                            BURROW__TESTING_SKIP, (args))
+#define testing_f_skipf(f, format, args)                                               \
+    burrow__testing_t_logf(burrow__testing_f_t(f), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_SKIP, (format), (args))
+
+#define testing_f_log_v(f, ...)                                                        \
+    burrow__testing_t_logln(burrow__testing_f_t(f), __FILE__, __LINE__,                \
+                            BURROW__TESTING_LOG,                                       \
+                            BURROW__FMT_ARGS(BURROW_ANY_OF, __VA_ARGS__))
+#define testing_f_logf_v(f, ...)                                                       \
+    burrow__testing_t_logf(burrow__testing_f_t(f), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_LOG,                                        \
+                           BURROW__FMT_FARGS(BURROW_ANY_OF, __VA_ARGS__))
+#define testing_f_error_v(f, ...)                                                      \
+    burrow__testing_t_logln(burrow__testing_f_t(f), __FILE__, __LINE__,                \
+                            BURROW__TESTING_ERROR,                                     \
+                            BURROW__FMT_ARGS(BURROW_ANY_OF, __VA_ARGS__))
+#define testing_f_errorf_v(f, ...)                                                     \
+    burrow__testing_t_logf(burrow__testing_f_t(f), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_ERROR,                                      \
+                           BURROW__FMT_FARGS(BURROW_ANY_OF, __VA_ARGS__))
+#define testing_f_fatal_v(f, ...)                                                      \
+    burrow__testing_t_logln(burrow__testing_f_t(f), __FILE__, __LINE__,                \
+                            BURROW__TESTING_FATAL,                                     \
+                            BURROW__FMT_ARGS(BURROW_ANY_OF, __VA_ARGS__))
+#define testing_f_fatalf_v(f, ...)                                                     \
+    burrow__testing_t_logf(burrow__testing_f_t(f), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_FATAL,                                      \
+                           BURROW__FMT_FARGS(BURROW_ANY_OF, __VA_ARGS__))
+#define testing_f_skip_v(f, ...)                                                       \
+    burrow__testing_t_logln(burrow__testing_f_t(f), __FILE__, __LINE__,                \
+                            BURROW__TESTING_SKIP,                                      \
+                            BURROW__FMT_ARGS(BURROW_ANY_OF, __VA_ARGS__))
+#define testing_f_skipf_v(f, ...)                                                      \
+    burrow__testing_t_logf(burrow__testing_f_t(f), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_SKIP,                                       \
+                           BURROW__FMT_FARGS(BURROW_ANY_OF, __VA_ARGS__))
+
 /* ------------------------------------------------------------------ main
  *
  * The part go test writes for you. LIST is an X macro naming each test,
- * benchmark and example function. A test takes a TestingT, a benchmark takes
- * a TestingB and an example takes nothing, and the macro tells them apart by
- * type, the way go test tells them apart by name, so a function of any other
- * type is a compile error:
+ * benchmark, fuzz target and example function. A test takes a TestingT, a
+ * benchmark takes a TestingB, a fuzz target takes a TestingF and an example
+ * takes nothing, and the macro tells them apart by type, the way go test
+ * tells them apart by name, so a function of any other type is a compile
+ * error:
  *
- *     #define TESTS(X) X(TestParse) X(TestFormat) X(BenchmarkParse)
+ *     #define TESTS(X) X(TestParse) X(TestFormat) X(BenchmarkParse) X(FuzzParse)
  *     TESTING_MAIN(TESTS)
  *
  * An example takes nothing, and its entry says what it should print. The run
@@ -558,6 +718,7 @@ typedef enum burrow__TestingKind {
     BURROW__TESTING_KIND_TEST = 1,
     BURROW__TESTING_KIND_BENCHMARK = 2,
     BURROW__TESTING_KIND_EXAMPLE = 3,
+    BURROW__TESTING_KIND_FUZZ = 4,
 } burrow__TestingKind;
 
 typedef struct burrow__TestingEntry {
@@ -579,6 +740,7 @@ int burrow__testing_main(int argc, char **argv, const burrow__TestingEntry *entr
     _Generic(&(name),                                                                  \
         void (*)(TestingT *): BURROW__TESTING_KIND_TEST,                               \
         void (*)(TestingB *): BURROW__TESTING_KIND_BENCHMARK,                          \
+        void (*)(TestingF *): BURROW__TESTING_KIND_FUZZ,                               \
         void (*)(void): BURROW__TESTING_KIND_EXAMPLE)
 #define BURROW__TESTING_EXAMPLE_KIND(name)                                             \
     _Generic(&(name), void (*)(void): BURROW__TESTING_KIND_EXAMPLE)

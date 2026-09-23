@@ -45,6 +45,16 @@ typedef struct Slice {
     const Type *elem;
 } Slice;
 
+/* []byte, the one slice type the library needs a descriptor for before any
+ * package declares it: testing's fuzz targets take one, and later bytes, io
+ * and every encoder hand them around. Bytes is only a Slice by another name,
+ * so that TYPE_OF(Bytes) works the way it does for the builtins, and TYPE_BYTES
+ * is the descriptor. Its element is TYPE_BYTE and it has no name, since Go's
+ * []byte is an unnamed type. */
+typedef Slice Bytes;
+extern const Type burrow_type_Bytes;
+#define TYPE_BYTES TYPE_OF(Bytes)
+
 /* make([]T, len, cap), zeroed, because Go's zero value rule is the language
  * and not a convention.
  *

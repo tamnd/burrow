@@ -54,6 +54,15 @@ static void put_byte(QuoteOut *o, Byte b) {
     o->n++;
 }
 
+/* Two bytes, which is every escape but the long ones. */
+static void put2(QuoteOut *o, Byte b0, Byte b1) {
+    if (o->cap - o->n >= 2) {
+        o->p[o->n] = b0;
+        o->p[o->n + 1] = b1;
+    }
+    o->n += 2;
+}
+
 static void put_rune(QuoteOut *o, Rune r) {
     if (r >= 0 && r < UTF8_RUNE_SELF) {
         put_byte(o, (Byte)r);
@@ -97,32 +106,32 @@ static void escaped_rune(QuoteOut *o, Rune r, Byte quote, bool ascii_only,
 
     switch (r) {
     case '\a':
-        put(o, "\\a", 2);
+        put2(o, '\\', 'a');
         return;
     case '\b':
-        put(o, "\\b", 2);
+        put2(o, '\\', 'b');
         return;
     case '\f':
-        put(o, "\\f", 2);
+        put2(o, '\\', 'f');
         return;
     case '\n':
-        put(o, "\\n", 2);
+        put2(o, '\\', 'n');
         return;
     case '\r':
-        put(o, "\\r", 2);
+        put2(o, '\\', 'r');
         return;
     case '\t':
-        put(o, "\\t", 2);
+        put2(o, '\\', 't');
         return;
     case '\v':
-        put(o, "\\v", 2);
+        put2(o, '\\', 'v');
         return;
     default:
         break;
     }
 
     if (r < ' ' || r == 0x7f) {
-        put(o, "\\x", 2);
+        put2(o, '\\', 'x');
         put_byte(o, (Byte)lowerhex[(Byte)r >> 4]);
         put_byte(o, (Byte)lowerhex[(Byte)r & 0xF]);
         return;
@@ -130,12 +139,12 @@ static void escaped_rune(QuoteOut *o, Rune r, Byte quote, bool ascii_only,
     if (!utf8_valid_rune(r))
         r = 0xFFFD;
     if (r < 0x10000) {
-        put(o, "\\u", 2);
+        put2(o, '\\', 'u');
         for (int s = 12; s >= 0; s -= 4)
             put_byte(o, (Byte)lowerhex[(r >> s) & 0xF]);
         return;
     }
-    put(o, "\\U", 2);
+    put2(o, '\\', 'U');
     for (int s = 28; s >= 0; s -= 4)
         put_byte(o, (Byte)lowerhex[(r >> s) & 0xF]);
 }
@@ -143,12 +152,14 @@ static void escaped_rune(QuoteOut *o, Rune r, Byte quote, bool ascii_only,
 static void quoted(QuoteOut *o, Str s, Byte quote, bool ascii_only, bool graphic_only) {
     put_byte(o, quote);
     for (Int i = 0; i < s.len;) {
-        Int width = 0;
-        Rune r = utf8_decode_rune_in_string(str_from_bytes(s.p + i, s.len - i), &width);
+        Int width = 1;
+        Rune r = s.p[i];
+        if (r >= UTF8_RUNE_SELF)
+            r = utf8_decode_rune_in_string(str_from_bytes(s.p + i, s.len - i), &width);
         if (width == 1 && r == UTF8_RUNE_ERROR) {
             /* A byte that is not part of any rune. It goes out as the byte it
              * was, so that unquoting the result gives back the same string. */
-            put(o, "\\x", 2);
+            put2(o, '\\', 'x');
             put_byte(o, (Byte)lowerhex[s.p[i] >> 4]);
             put_byte(o, (Byte)lowerhex[s.p[i] & 0xF]);
             i++;

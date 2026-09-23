@@ -402,9 +402,12 @@ TEST(the_error_is_optional_like_every_other_out_parameter) {
  * and not a PAL one, so Windows gets the same treatment netpoll_iocp_test.c
  * gives the other direction.
  *
+ * A target with no poller at all, which is Cosmopolitan for now, has none of
+ * these to run.
+ *
  * There is one poller per process and these share it, so the order below
  * matters: the first test makes it and the rest use it. */
-#if !defined(_WIN32)
+#if defined(BURROW_NETPOLL_READINESS)
 
 #include <unistd.h>
 
@@ -583,7 +586,7 @@ TEST(the_poller_takes_a_null_error_like_everything_else) {
     CHECK(!pal_poll_add(PAL_INVALID_HANDLE, 0, (void *)1, NULL));
 }
 
-#endif /* not windows */
+#endif /* BURROW_NETPOLL_READINESS */
 
 /* ----------------------------------------------------------------- the futex
  *
@@ -1191,7 +1194,7 @@ int main(void) {
 
     RUN(the_error_is_optional_like_every_other_out_parameter);
 
-#if !defined(_WIN32)
+#if defined(BURROW_NETPOLL_READINESS)
     RUN(there_is_one_poller_and_a_second_ask_is_refused);
     RUN(a_descriptor_with_something_on_it_comes_back_ready);
     RUN(a_look_with_nothing_to_see_comes_back_empty);

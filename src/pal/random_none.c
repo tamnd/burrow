@@ -21,7 +21,7 @@
     !defined(BURROW_OS_DARWIN) && !defined(BURROW_OS_IOS) &&                           \
     !defined(BURROW_OS_FREEBSD) && !defined(BURROW_OS_NETBSD) &&                       \
     !defined(BURROW_OS_OPENBSD) && !defined(BURROW_OS_DRAGONFLY) &&                    \
-    !defined(BURROW_OS_SOLARIS)
+    !defined(BURROW_OS_SOLARIS) && !defined(BURROW_OS_COSMO)
 
 #include "burrow/pal.h"
 

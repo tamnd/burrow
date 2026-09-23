@@ -272,8 +272,10 @@ bool pal_thread_stack_bounds(void **lo, void **hi) {
     return true;
 }
 
-#elif defined(BURROW_OS_LINUX)
+#elif defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO)
 
+/* Cosmopolitan's libc has the glibc call, and answers it on every system one of
+ * its binaries runs on. */
 bool pal_thread_stack_bounds(void **lo, void **hi) {
     pthread_attr_t attr;
     void *base = NULL;

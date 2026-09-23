@@ -1,4 +1,4 @@
-/* The system generator on macOS and the BSDs: getentropy.
+/* The system generator on macOS, the BSDs and Cosmopolitan: getentropy.
  *
  * It needs no loop, which is the difference from Linux's getrandom: getentropy
  * either fills the whole buffer or fails, and it cannot be cut short by a
@@ -9,6 +9,10 @@
  * The header it lives in differs. macOS and most of the BSDs put it in
  * sys/random.h, OpenBSD puts it in unistd.h, and both are the same function.
  *
+ * Cosmopolitan is here rather than with Linux because one of its binaries runs
+ * on all of these, and getentropy is the call its libc answers on every one of
+ * them.
+ *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
@@ -18,7 +22,7 @@
 #if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS) ||                             \
     defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_NETBSD) ||                         \
     defined(BURROW_OS_OPENBSD) || defined(BURROW_OS_DRAGONFLY) ||                      \
-    defined(BURROW_OS_SOLARIS)
+    defined(BURROW_OS_SOLARIS) || defined(BURROW_OS_COSMO)
 
 #include "burrow/pal.h"
 
@@ -65,4 +69,4 @@ bool pal_random_bytes(void *buf, int64_t n, PalErrno *err) {
     return true;
 }
 
-#endif /* darwin and the bsds */
+#endif /* darwin, the bsds and cosmopolitan */

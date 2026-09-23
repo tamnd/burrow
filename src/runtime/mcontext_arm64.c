@@ -8,6 +8,9 @@
  * mxcsr is saved on amd64: a goroutine that changes the rounding mode and then
  * parks should not hand that mode to whoever runs next.
  *
+ * Under Cosmopolitan x28 is the exception. It holds the thread pointer there,
+ * so the switch below leaves it alone rather than restoring it.
+ *
  * Pointer authentication is not used. macOS builds for arm64 rather than
  * arm64e for everything that is not a system binary, and the signed return
  * address there would have to be re-signed against the new stack pointer.
@@ -122,9 +125,20 @@ __asm__(
     "\tldp x29, x30, [sp, #80]\n"
     "\t.cfi_restore x29\n"
     "\t.cfi_restore x30\n"
+    /* Cosmopolitan keeps its thread pointer in x28 and builds everything with
+     * it reserved, so x28 belongs to the thread and not to the goroutine. The
+     * goroutine coming in may have last run on another thread, and loading its
+     * x28 would hand this thread somebody else's thread local storage, or none
+     * at all for a goroutine that has never run. So there it is saved, for the
+     * frame layout's sake, and never loaded. */
+#if defined(__COSMOPOLITAN__)
+    "\tldr x27, [sp, #64]\n"
+    "\t.cfi_restore x27\n"
+#else
     "\tldp x27, x28, [sp, #64]\n"
     "\t.cfi_restore x27\n"
     "\t.cfi_restore x28\n"
+#endif
     "\tldp x25, x26, [sp, #48]\n"
     "\t.cfi_restore x25\n"
     "\t.cfi_restore x26\n"

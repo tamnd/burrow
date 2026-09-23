@@ -127,8 +127,11 @@ static burrow__PollDesc *cache_first;
 static void *cache_blocks[POLL_MAX_BLOCKS];
 static uint32_t cache_ndescs;
 
-/* Started once, on the first descriptor anybody opens. */
+/* Started once, on the first descriptor anybody opens. A build with no poller
+ * never starts one and only ever reads the flag. */
+#if !defined(BURROW_NETPOLL_NONE)
 static burrow__Lock init_lock;
+#endif
 static uint32_t init_done;
 
 /* How many goroutines are parked on a descriptor right now. */

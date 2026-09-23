@@ -319,6 +319,67 @@ jobs:
           x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-parameter -c dist-a/burrow.c -o burrow-windows.o
           x86_64-w64-mingw32-gcc -std=c11 -O2 -Idist-a tests/amalgamation/hello.c burrow-windows.o -lws2_32 -o hello.exe
 
+  # Cosmopolitan, which builds one binary that runs as it is on Linux, macOS,
+  # Windows and the BSDs. The suite runs under the x86-64 compiler alone, because
+  # the archive tool only keeps one architecture's objects and the fat compiler
+  # then has nothing to link its arm64 half against. The single file build does
+  # not have that problem, so hello is built fat, run here, and handed to a
+  # macOS and a Windows runner that run the same file without building anything.
+  #
+  # The release is pinned by version and by hash.
+  cosmopolitan:
+    name: cosmopolitan (build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      COSMOCC_VERSION: 4.0.2
+      COSMOCC_SHA256: 85b8c37a406d862e656ad4ec14be9f6ce474c1b436b9615e91a55208aced3f44
+    steps:
+      - uses: actions/checkout@v7
+      - name: install cosmocc
+        run: |
+          curl -fsSL -o cosmocc.zip "https://github.com/jart/cosmopolitan/releases/download/$COSMOCC_VERSION/cosmocc-$COSMOCC_VERSION.zip"
+          echo "$COSMOCC_SHA256  cosmocc.zip" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/cosmocc"
+          unzip -q cosmocc.zip -d "$RUNNER_TEMP/cosmocc"
+          # The compilers are themselves portable binaries, and a runner with
+          # something else registered for files that start with MZ hands them to
+          # that instead. Registering the loader is what cosmocc's own README
+          # says to do about it.
+          sudo cp "$RUNNER_TEMP/cosmocc/bin/ape-x86_64.elf" /usr/bin/ape
+          sudo sh -c "echo ':APE:M::MZqFpD::/usr/bin/ape:' >/proc/sys/fs/binfmt_misc/register" || true
+          echo "$RUNNER_TEMP/cosmocc/bin" >>"$GITHUB_PATH"
+      - name: the test suite
+        run: make BUILD=build-cosmo CC=x86_64-unknown-cosmo-cc AR=x86_64-unknown-cosmo-ar test
+      - name: hello, from the single file build
+        run: |
+          tools/burrow-gen amalgamate --out dist --source-id ci
+          cosmocc -std=c11 -O2 -Wall -Wextra -Werror -Idist -o hello.com dist/burrow.c tests/amalgamation/hello.c
+          ./hello.com
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hello-cosmo
+          path: hello.com
+
+  cosmopolitan-run:
+    name: cosmopolitan (${{ matrix.os }})
+    needs: cosmopolitan
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: hello-cosmo
+      - name: the same file, unchanged
+        shell: bash
+        run: |
+          chmod +x hello.com
+          ./hello.com
+
   # The gc backend is the only optional dependency in the project, and an
   # optional backend nobody builds is a backend that is already broken. One job
   # is enough: it is the same tests, and what it is really checking is that the

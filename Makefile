@@ -59,6 +59,15 @@ WARNINGS := \
 # anything, so it is only set when we are optimising.
 HARDENING := -fstack-protector-strong -fno-common
 
+# Except under Cosmopolitan, where a test built with the stack protector crashes
+# on the first instruction of main, reading the canary through a thread pointer
+# that is still zero. Asking the preprocessor is the one check that works for
+# cosmocc and for the per architecture compilers next to it.
+COSMO := $(shell echo | $(CC) -dM -E -x c - 2>/dev/null | grep -c __COSMOPOLITAN__)
+ifneq ($(COSMO),0)
+  HARDENING := -fno-common
+endif
+
 # The stack walker needs the frame pointer to still be there to walk. Without
 # it a panic prints its message and no trace, which is the difference between a
 # bug report somebody can act on and one they cannot. It costs a register on

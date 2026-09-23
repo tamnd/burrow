@@ -81,7 +81,7 @@ extern "C" {
  * to the kernel has finished. See burrow__poll_wait, which is where it shows. */
 #if defined(BURROW_NETPOLL_IOCP)
 #define BURROW_NETPOLL_COMPLETION 1
-#else
+#elif !defined(BURROW_NETPOLL_NONE)
 #define BURROW_NETPOLL_READINESS 1
 #endif
 

@@ -80,9 +80,17 @@ static int32_t pal_numbers[SIG_SLOTS];
 static struct sigaction previous[SIG_SLOTS];
 
 /* SIGSEGV and SIGBUS are the two the table has to have room for, since
- * PAL_SIGFAULT is installed for both by number rather than by lookup. */
+ * PAL_SIGFAULT is installed for both by number rather than by lookup.
+ *
+ * Cosmopolitan is the exception. One of its binaries runs on systems that
+ * number their signals differently, so its signal macros are variables that
+ * are filled in at startup, and there is nothing here for the compiler to
+ * check. install_one checks the same thing at run time on every platform, and
+ * every system Cosmopolitan runs on keeps these two below 32. */
+#if !defined(BURROW_OS_COSMO)
 _Static_assert(SIGSEGV < SIG_SLOTS && SIGBUS < SIG_SLOTS,
                "the signal table is too small for the fault signals");
+#endif
 
 static PalSignalHandler handler_of(int native) {
     Handler h;
@@ -104,6 +112,15 @@ static void set_handler(int native, PalSignalHandler fn) {
 static BURROW_THREAD_LOCAL void *altstack;
 static BURROW_THREAD_LOCAL int64_t altstack_bytes;
 
+/* Not const under Cosmopolitan, for the reason above: the right hand column is
+ * only known at startup, and its compiler fills the table in then and warns
+ * about doing it to a const one. */
+#if defined(BURROW_OS_COSMO)
+#define SIGNAL_PAIRS_CONST
+#else
+#define SIGNAL_PAIRS_CONST const
+#endif
+
 /* Ours on the left, the platform's on the right.
  *
  * PAL_SIGFAULT is not in here on purpose. It is not one signal and the install
@@ -112,7 +129,7 @@ static BURROW_THREAD_LOCAL int64_t altstack_bytes;
  * A table rather than a switch, because eleven cases that each return a
  * different constant are eleven branches a clone detector reads as copies of
  * one another, and because two columns is how a mapping wants to be read. */
-static const struct {
+static SIGNAL_PAIRS_CONST struct {
     int32_t pal;
     int native;
 } signal_pairs[] = {

@@ -81,6 +81,19 @@ The list of packages is at the top of `burrow.h`, and so are the checks. Leaving
 
 `--packages` is the better of the two when you control the build, since the smaller file compiles faster. The macros are for one vendored copy that several programs with different needs share.
 
+## One binary for every system
+
+[Cosmopolitan](https://github.com/jart/cosmopolitan) builds a program that runs as it is on Linux, macOS, Windows and the BSDs, on x86-64 and arm64, out of one file. burrow builds with it unchanged, so the two files are all it takes:
+
+```sh
+cosmocc -std=c11 -O2 -o hello burrow.c hello.c
+./hello
+```
+
+CI builds `tests/amalgamation/hello.c` this way on Linux and runs the same binary, without rebuilding it, on macOS and Windows. It is about a megabyte.
+
+Some things to know. The netpoller has no Cosmopolitan backend yet, so nothing under cosmocc waits on a descriptor through it, which matters once there is a net package to use it. The stack protector is left out of a cosmocc build, because a binary built with it crashes on its first check. And `make test` works with the x86-64 compiler, `x86_64-unknown-cosmo-cc` with `x86_64-unknown-cosmo-ar`, but not with `cosmocc` itself, whose archive tool keeps only one architecture's objects. The single file build has no archive and so has no such problem.
+
 ## make
 
 From a checkout, `make` builds `build/libburrow.a`, and your program adds `-Iinclude` and links the archive. `make test` runs the suite and `make check` runs the source gates first. `make amalgamation` writes the two files into `build/amalgamation`, and `make AMALGAMATION=1 test` builds the library out of them and runs every test against exactly what ships.

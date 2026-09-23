@@ -284,6 +284,64 @@ TEST(gosched_lets_another_goroutine_have_the_thread) {
     CHECK_INT_EQ(yield_turns, 1);
 }
 
+/* The global queue is not starved by goroutines that keep yielding.
+ *
+ * A yield goes to the back of the P's own ring, so with one P and three
+ * goroutines that do nothing but yield, that ring is never empty. A goroutine
+ * started from a thread that is not running one goes on the global queue
+ * instead, and only the check findrunnable makes every 61 goroutines ever looks
+ * there while the ring has work. Without it this waits the full limit. */
+
+static uint32_t fair_flag;
+static uint32_t fair_started;
+static long fair_turns;
+
+static void fair_setter(void *env) {
+    (void)env;
+    burrow__atomic_store_release_u32(&fair_flag, 1);
+}
+
+static void fair_outsider(void *arg) {
+    (void)arg;
+    if (go(BURROW_FN(Func, fair_setter, NULL)))
+        burrow__atomic_store_release_u32(&fair_started, 1);
+}
+
+static void fair_yielder(void *env) {
+    (void)env;
+    for (long i = 0;
+         i < YIELD_LIMIT && burrow__atomic_load_acquire_u32(&fair_flag) == 0; i++)
+        runtime_gosched();
+}
+
+static void fair_body(void *env) {
+    (void)env;
+    CHECK(go(BURROW_FN(Func, fair_yielder, NULL)));
+    CHECK(go(BURROW_FN(Func, fair_yielder, NULL)));
+
+    burrow__Thread t;
+    CHECK(burrow__thread_start(&t, fair_outsider, NULL, 0));
+    while (burrow__atomic_load_acquire_u32(&fair_flag) == 0 &&
+           fair_turns < YIELD_LIMIT) {
+        fair_turns++;
+        runtime_gosched();
+    }
+    CHECK(burrow__thread_join(&t));
+}
+
+TEST(gosched_does_not_starve_the_global_queue) {
+    fair_flag = 0;
+    fair_started = 0;
+    fair_turns = 0;
+
+    (void)runtime_gomaxprocs(1);
+    runtime_main(BURROW_FN(Func, fair_body, NULL));
+
+    CHECK_INT_EQ(fair_started, 1);
+    CHECK_INT_EQ(fair_flag, 1);
+    CHECK(fair_turns < YIELD_LIMIT);
+}
+
 static uint32_t exit_before;
 static uint32_t exit_after;
 
@@ -781,6 +839,7 @@ int main(void) {
 
     RUN(the_newest_goroutine_runs_first_and_the_rest_run_oldest_first);
     RUN(gosched_lets_another_goroutine_have_the_thread);
+    RUN(gosched_does_not_starve_the_global_queue);
     RUN(goexit_ends_the_goroutine_where_it_stands);
 
     RUN(numgoroutine_counts_parked_goroutines_too);

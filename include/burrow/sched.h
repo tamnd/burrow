@@ -317,6 +317,15 @@ struct burrow__P {
      * read costs one more pass before a preemption, which is ten milliseconds
      * on a decision that was already about ten milliseconds. */
     uint32_t schedtick;
+
+    /* Goroutines started on this P less goroutines that exited on it, which
+     * goes negative on a P that mostly runs other people's. The sum over every
+     * P and sched.ngoroutine is runtime_numgoroutine. It is per P because one
+     * shared counter was two locked adds on every launch, and a cache line that
+     * every P writes. Only the M holding the P writes it, so the update is a
+     * relaxed load and store, atomic only because runtime_numgoroutine reads it
+     * from anywhere. */
+    int32_t ngoroutine;
 };
 
 /* An operating system thread, and the bookkeeping that belongs to the thread

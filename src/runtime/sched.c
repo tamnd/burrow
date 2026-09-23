@@ -384,11 +384,40 @@ int runtime_numcpu(void) {
 }
 
 int runtime_numgoroutine(void) {
-    return (int)burrow__atomic_load_u32(&sched.ngoroutine);
+    /* A snapshot, and not an instantaneous one, since the Ps keep counting
+     * while it adds them up. Go's is the same. */
+    int64_t n = (int32_t)burrow__atomic_load_u32(&sched.ngoroutine);
+    for (int32_t i = 0; i < sched.gomaxprocs; i++)
+        n += (int32_t)burrow__atomic_load_relaxed_u32((uint32_t *)&allp[i].ngoroutine);
+    return (int)n;
+}
+
+/* One more or one fewer goroutine, counted on the P when there is one. */
+static void count_goroutine(burrow__P *p, int32_t delta) {
+    if (p == NULL) {
+        burrow__atomic_add_u32(&sched.ngoroutine, (uint32_t)delta);
+        return;
+    }
+    uint32_t *c = (uint32_t *)&p->ngoroutine;
+    burrow__atomic_store_relaxed_u32(c, burrow__atomic_load_relaxed_u32(c) +
+                                            (uint32_t)delta);
 }
 
 static void set_status(burrow__G *g, burrow__GStatus s) {
     burrow__atomic_store_u32(&g->status, (uint32_t)s);
+}
+
+/* The same store with release ordering only, which is a plain move on x86
+ * where the one above is an xchg and costs twenty cycles or so. It is for the
+ * transitions nobody pairs a load with in the other direction: into running,
+ * which only this thread acts on, into runnable just before a queue put that
+ * publishes the goroutine with a release of its own, and into dead. Into
+ * waiting keeps the full barrier, because a parking goroutine stores the
+ * status and then its unlock function may only load a flag, while the waker
+ * stores the flag and then CASes the status, and each side has to see the
+ * other's store. */
+static void set_status_release(burrow__G *g, burrow__GStatus s) {
+    burrow__atomic_store_release_u32(&g->status, (uint32_t)s);
 }
 
 /* ------------------------------------------------------ the global run queue
@@ -815,8 +844,8 @@ static burrow__G *execute(burrow__M *m, burrow__G *gp) {
      * the same reason acquirep writes the P's back pointer atomically. Read
      * back plainly everywhere else in this file, which is allowed because every
      * one of those reads is on the thread that owns the M. */
-    burrow__atomic_store_ptr((void **)&m->curg, gp);
-    set_status(gp, BURROW_GRUNNING);
+    burrow__atomic_store_release_ptr((void **)&m->curg, gp);
+    set_status_release(gp, BURROW_GRUNNING);
     burrow__stack_set_current(&gp->stack);
 
     /* Both of these are the preemption bookkeeping and both belong here rather
@@ -830,17 +859,25 @@ static burrow__G *execute(burrow__M *m, burrow__G *gp) {
      * The clear is because a request that was made of the goroutine that just
      * stopped, and that it honoured by stopping, must not follow it to its next
      * turn and make it give way again the moment it gets one. Go clears it in
-     * the same place. */
-    burrow__atomic_store_u32(&m->p->schedtick,
-                             burrow__atomic_load_relaxed_u32(&m->p->schedtick) + 1U);
-    burrow__atomic_store_u32(&gp->preempt, 0);
+     * the same place.
+     *
+     * All four stores in here are release stores rather than full barriers.
+     * sysmon only ever loads these, and nothing on this thread loads anything
+     * afterwards that depends on sysmon having seen them first. The worst a
+     * late store can do is make sysmon ask a goroutine to give way once when it
+     * did not need to, or not ask for one more tick. Go writes all of them with
+     * plain stores. Full barriers here were five xchg instructions on every
+     * switch, which was a third of what a switch cost. */
+    burrow__atomic_store_release_u32(
+        &m->p->schedtick, burrow__atomic_load_relaxed_u32(&m->p->schedtick) + 1U);
+    burrow__atomic_store_release_u32(&gp->preempt, 0);
 
     burrow__mcontext_switch(&m->g0.ctx, &gp->ctx);
 
     /* Back on the thread's own stack, so the goroutine's bounds are no longer
      * what a stack overflow should be measured against. */
     burrow__stack_set_current(NULL);
-    burrow__atomic_store_ptr((void **)&m->curg, NULL);
+    burrow__atomic_store_release_ptr((void **)&m->curg, NULL);
 
     burrow__G *(*fn)(burrow__M *, burrow__G *) = m->mcall;
     burrow__G *arg = m->mcallg;
@@ -855,10 +892,10 @@ static burrow__G *execute(burrow__M *m, burrow__G *gp) {
 /* --------------------------------------------------- the three ways to stop */
 
 static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
-    set_status(gp, BURROW_GDEAD);
+    set_status_release(gp, BURROW_GDEAD);
     gp->entry = NULL;
     gp->arg = NULL;
-    burrow__atomic_add_u32(&sched.ngoroutine, (uint32_t)-1);
+    count_goroutine(m->p, -1);
 
     bool was_main = gp == sched.maing;
 
@@ -889,15 +926,15 @@ static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
 }
 
 static burrow__G *gosched0(burrow__M *m, burrow__G *gp) {
-    (void)m;
-    set_status(gp, BURROW_GRUNNABLE);
+    set_status_release(gp, BURROW_GRUNNABLE);
 
-    /* The global queue and not this P's own ring, because a goroutine that asked
-     * to give way and then went straight back to the front of its own queue has
-     * not given way to anything. Go does the same. */
-    burrow__lock(&sched.lock);
-    globrunq_put(gp);
-    burrow__unlock(&sched.lock);
+    /* The back of this P's own ring, and not the front, because a goroutine
+     * that asked to give way and went straight back to the front of its queue
+     * has not given way to anything. Go puts it on the global queue instead,
+     * which gives way to the other Ps' goroutines too, but costs a lock every
+     * time. Here those wait for the fairness check in findrunnable or for a
+     * thief, and a yield costs what a switch costs. */
+    runq_put(m->p, gp, false);
     return NULL;
 }
 
@@ -1646,9 +1683,26 @@ static burrow__G *findrunnable(burrow__M *m) {
         /* Timers before anything else, because a timer that is due readies a
          * goroutine onto this P's own queue and the next thing this does is look
          * there. A P with no timers pays two atomic loads for this. */
-        now = burrow__timers_check(&p->timers, now, NULL, NULL);
+        if (burrow__timers_any(&p->timers))
+            now = burrow__timers_check(&p->timers, now, NULL, NULL);
 
-        burrow__G *gp = burrow__runq_get(p);
+        /* Go's fairness check. Once every 61 goroutines this P runs, the global
+         * queue goes first, and the one it hands over comes on its own rather
+         * than with a share, so that two goroutines passing control back and
+         * forth through this P's ring cannot keep the global queue waiting for
+         * ever. 61 is Go's, picked for being prime and not too small. */
+        burrow__G *gp = NULL;
+        if (burrow__atomic_load_relaxed_u32(&p->schedtick) % 61U == 0 &&
+            burrow__atomic_load_acquire_u32(&sched.runqsize) != 0) {
+            burrow__lock(&sched.lock);
+            gp = burrow__gqueue_pop(&sched.runq);
+            globrunq_publish();
+            burrow__unlock(&sched.lock);
+            if (gp != NULL)
+                return gp;
+        }
+
+        gp = burrow__runq_get(p);
         if (gp != NULL)
             return gp;
 
@@ -1990,20 +2044,32 @@ static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble, bool b
         burrow__bubble_join(bubble);
     }
 
-    set_status(newg, BURROW_GRUNNABLE);
-    burrow__atomic_add_u32(&sched.ngoroutine, 1);
+    /* A release store is enough, because nobody can see newg until the queue
+     * put below publishes it, and that is a release too. */
+    set_status_release(newg, BURROW_GRUNNABLE);
+    count_goroutine(p, 1);
 
     if (p != NULL) {
         /* The runnext slot, because the overwhelmingly common reason to start a
          * goroutine is that this one is about to wait for it. */
         runq_put(p, newg, true);
+
+        /* Only worth waking a thread if there is an idle P for it to take. If
+         * this reads a stale zero, newg still runs, on this P, when this
+         * goroutine next stops, so what is lost is a moment of parallelism and
+         * never the goroutine. Go checked the same way until 1.21. Without the
+         * check, every launch on a machine with every P busy was a compare and
+         * swap, the scheduler lock, and an add, all to find nothing to do. */
+        if (burrow__atomic_load_relaxed_u32(&sched.npidle) != 0)
+            wakep();
     } else {
         burrow__lock(&sched.lock);
         globrunq_put(newg);
         burrow__unlock(&sched.lock);
-    }
 
-    wakep();
+        /* No P, so nobody here will run it, and somebody has to be woken. */
+        wakep();
+    }
     outside_leave(counted);
     return true;
 }

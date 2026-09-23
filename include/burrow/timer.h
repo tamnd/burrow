@@ -43,6 +43,7 @@
 #ifndef BURROW_TIMER_H
 #define BURROW_TIMER_H
 
+#include "burrow/atomic.h"
 #include "burrow/lock.h"
 #include "burrow/own.h"
 
@@ -258,6 +259,14 @@ void burrow__timers_free(burrow__Timers *ts);
  * and goes back to sleep, and a thread that does not wake at all sleeps through
  * the deadline. */
 int64_t burrow__timers_wake_time(burrow__Timers *ts);
+
+/* Whether burrow__timers_wake_time would say anything other than zero, inline,
+ * because the scheduler asks on every pass and a P with no timers is the
+ * common case. The loads are in the same order and for the same reason. */
+static inline bool burrow__timers_any(burrow__Timers *ts) {
+    return burrow__atomic_load_u64(&ts->min_when_modified) != 0 ||
+           burrow__atomic_load_u64(&ts->min_when_heap) != 0;
+}
 
 /* Roughly how many timers are in the set, from the copy published at the last
  * unlock. For deciding whether a set is worth looking at. */

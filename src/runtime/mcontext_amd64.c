@@ -102,6 +102,8 @@ __asm__(
     "\t.cfi_adjust_cfa_offset 8\n"
     "\tstmxcsr (%rsp)\n"
     "\tfnstcw 4(%rsp)\n"
+    "\tmovl (%rsp), %eax\n"
+    "\tmovzwl 4(%rsp), %ecx\n"
 
     /* The swap itself, and the only two instructions that touch the
      * contexts. Everything before this belongs to the old stack and
@@ -109,8 +111,18 @@ __asm__(
     "\tmovq %rsp, (%rdi)\n"
     "\tmovq (%rsi), %rsp\n"
 
+    /* ldmxcsr and fldcw are slow, and fldcw waits for the x87 unit to
+     * drain, while the modes almost never differ between two contexts. So
+     * each is loaded only when the incoming value is not what the thread
+     * has already, which eax and ecx still hold from before the swap. */
+    "\tcmpl (%rsp), %eax\n"
+    "\tje 1f\n"
     "\tldmxcsr (%rsp)\n"
+    "1:\n"
+    "\tcmpw 4(%rsp), %cx\n"
+    "\tje 2f\n"
     "\tfldcw 4(%rsp)\n"
+    "2:\n"
     "\taddq $8, %rsp\n"
     "\t.cfi_adjust_cfa_offset -8\n"
     "\tpopq %r15\n"

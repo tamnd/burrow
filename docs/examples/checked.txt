@@ -8,3 +8,6 @@ docs/guides/synctest.md
 docs/guides/failure.md
 docs/guides/panic.md
 docs/guides/defer.md
+docs/guides/numbers.md
+docs/guides/runes.md
+docs/guides/time.md

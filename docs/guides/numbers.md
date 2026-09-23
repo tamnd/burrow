@@ -24,10 +24,11 @@ That is what `burrow/num.h` is for, and it is all it is for.
 
 Nothing in this guide asks you to stop writing `+`. Unsigned arithmetic wraps in C exactly the way it wraps in Go. Float arithmetic is IEEE 754 in both. Converting a wide integer to a narrow one truncates on every compiler burrow supports. Comparisons, bitwise and, or, xor and not all mean the same thing in both languages.
 
+<!-- example: ../examples/numbers/num.c#operators -->
 ```c
-uint32_t h = (h * 16777619u) ^ b;   /* fine, wraps the same in both */
-double avg = total / (double)n;     /* fine */
-int8_t low = (int8_t)wide;          /* fine, truncates */
+h = (h * 16777619u) ^ b;        /* fine, wraps the same in both */
+double avg = total / (double)n; /* fine */
+int8_t low = (int8_t)wide;      /* fine, truncates */
 ```
 
 Reach for `burrow/num.h` for the five cases below and leave everything else alone.
@@ -36,16 +37,17 @@ Reach for `burrow/num.h` for the five cases below and leave everything else alon
 
 Signed overflow is defined in Go and undefined in C.
 
+<!-- example: ../examples/numbers/num.c#wrap -->
 ```c
-Int n = int_add(a, b);        /* wraps, like Go */
-Int m = a + b;                /* undefined behaviour if it overflows */
+Int n = int_add(a, b); /* wraps, like Go */
+Int m = a + b;         /* undefined behaviour if it overflows */
 ```
 
 The undefined version is not merely a different answer. A compiler that sees `a + 1 > a` is entitled to fold it to `true`, and an overflow check written that way disappears from your binary without a warning. Sanitiser builds trap on it, which is how you find out, and burrow's CI runs those builds for exactly this reason.
 
 There is a function for each width and each signedness:
 
-```c
+```
 int64_add   int64_sub   int64_mul   int64_neg
 int32_add   int32_sub   int32_mul   int32_neg
 int_add     int_sub     int_mul     int_neg
@@ -57,6 +59,7 @@ The smallest value of a type negates to itself, in Go and here. `int64_neg(INT64
 
 ## Dividing
 
+<!-- example: ../examples/numbers/num.c#divide -->
 ```c
 Int q = int_div(a, b);
 Int r = int_mod(a, b);
@@ -72,9 +75,10 @@ Rounding is the same in both languages and always has been: division truncates t
 
 ## Shifting
 
+<!-- example: ../examples/numbers/num.c#shift -->
 ```c
 Uint h = uint_shl(hash, 13);
-Int  s = int_shr(value, n);
+Int s = int_shr(value, n);
 ```
 
 Go answers a shift of any size. Shift left past the width of the type and every bit has gone, so the answer is zero. Shift right past the width and a negative value leaves `-1`, because the sign bit keeps arriving, while everything else leaves zero.
@@ -85,6 +89,7 @@ A negative count panics with `runtime error: negative shift amount`. Go's shift 
 
 ## From a float
 
+<!-- example: ../examples/numbers/num.c#float -->
 ```c
 Int n = int_from_float64(f);
 ```
@@ -117,6 +122,7 @@ Write `int_add` for an `Int` and `int64_add` for an `int64_t`. The compiler inli
 
 For code that does not know which type it has, there is a generic form of each operation.
 
+<!-- example: ../examples/numbers/num.c#generic -->
 ```c
 Int total = BURROW_ADD(subtotal, tax);
 uint32_t h = BURROW_SHL(hash, 5);

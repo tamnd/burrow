@@ -6,6 +6,7 @@ The calendar half, the `Time` type with its wall clock and its formatting and it
 
 ## Durations
 
+<!-- example: ../examples/time/clock.c#durations -->
 ```c
 Duration d = 500 * TIME_MILLISECOND;
 Duration total = 2 * TIME_SECOND + 300 * TIME_MILLISECOND;
@@ -19,6 +20,7 @@ The units are `TIME_NANOSECOND`, `TIME_MICROSECOND`, `TIME_MILLISECOND`, `TIME_S
 
 ## Reading the clock
 
+<!-- example: ../examples/time/clock.c#clock -->
 ```c
 int64_t start = burrow_nanotime();
 work();
@@ -37,17 +39,18 @@ Inside a synctest bubble this reads the bubble's clock instead. See the section 
 
 ## Sleeping
 
+<!-- example: ../examples/time/sleep.c#poll -->
 ```c
-#include "burrow/time.h"
-
 static void poll(void *env) {
     (void)env;
-    for (;;) {
+    while (!sync_atomic_bool_load(&stopping)) {
         check_the_thing();
         time_sleep(30 * TIME_SECOND);
     }
 }
 ```
+
+`stopping` is a `SyncAtomicBool` that whoever wants the polling to end sets.
 
 `time_sleep` is `time.Sleep`. The goroutine stops for at least `d` and the thread it was running on goes and finds something else to do, which is the difference between this and every sleep C has. A thousand goroutines sleeping is a thousand stacks and no threads, and while they are all waiting the process is asleep in the kernel using no processor at all.
 
@@ -59,19 +62,23 @@ Calling it off a scheduler thread, from your own `main` or from a test, sleeps t
 
 ## Running a function later
 
+<!-- example: ../examples/time/timer.c#after -->
 ```c
 static void give_up(void *env) {
     conn_close(env);
 }
 
-TimeTimer *t = time_after_func(a, 5 * TIME_SECOND, BURROW_FN(Func, give_up, conn));
-if (t == NULL)
-    return err_no_memory;
+static Error serve(Alloc *a, Conn *conn) {
+    TimeTimer *t = time_after_func(a, 5 * TIME_SECOND, BURROW_FN(Func, give_up, conn));
+    if (t == NULL)
+        return burrow_err_out_of_memory;
 
-...
+    conn_read_request(conn);
 
-time_timer_stop(t);
-time_timer_free(t);
+    time_timer_stop(t);
+    time_timer_free(t);
+    return BURROW_NO_ERROR;
+}
 ```
 
 `time_after_func` is `time.AfterFunc`. The function runs in a goroutine of its own once the duration is up, which is Go's rule and matters more than it sounds: the callback has a fresh stack, so it may block, take locks, sleep again or talk to the network without holding up the thread that noticed the timer was due. The price is that two callbacks due at the same instant have no order between them, exactly as in Go.
@@ -82,6 +89,7 @@ It has to be called from a goroutine, because the timer goes into the heap of th
 
 ## Stopping and moving one
 
+<!-- example: ../examples/time/timer.c#stop -->
 ```c
 bool was_waiting = time_timer_stop(t);
 ```
@@ -90,10 +98,11 @@ bool was_waiting = time_timer_stop(t);
 
 False does not mean the callback has finished. It does not even mean the callback has started, because a stop that loses the race by a nanosecond still says false while the goroutine is still being put together. Go has exactly this and the answer is the same in both: a stop does not synchronise with the callback, so anything the callback touches needs a lock of its own.
 
+<!-- example: ../examples/time/timer.c#reset -->
 ```c
 bool pending;
 if (!time_timer_reset(t, 5 * TIME_SECOND, &pending))
-    return err_no_memory;
+    return burrow_err_out_of_memory;
 ```
 
 `Reset`, and it arms the timer for `d` from now whether or not it was running. `pending` may be `NULL`, and when it is not it is set to whether the timer was still waiting, which is what Go's `Reset` returns. That answer is out here rather than in the return value because arming a timer that had already fired can need the P's heap to grow, and a heap that will not grow is a failure this has to report. A false return means the timer is not armed and will not run.
@@ -104,6 +113,7 @@ A stop costs the timer's own lock and nothing else. The timer is left where it i
 
 ## Giving the memory back
 
+<!-- example: ../examples/time/timer.c#free -->
 ```c
 time_timer_free(t);
 ```
@@ -124,18 +134,19 @@ Inside a [synctest](synctest.md) bubble, everything on this page runs on the bub
 
 That clock starts at midnight UTC on 1 January 2000 and moves only when every goroutine in the bubble is durably blocked, and then it jumps straight to the next timer that is due. So a sleep of an hour in a bubble costs microseconds, an `AfterFunc` armed for a day fires on the next line, and a context deadline thirty seconds out is something a test can wait for rather than something it has to work around.
 
+<!-- example: ../examples/synctest/clock.c#body -->
 ```c
 static void body(void *env) {
     int64_t start = burrow_nanotime();
 
     time_sleep(TIME_HOUR);
 
-    // An hour later on the bubble's clock, and no time at all on yours.
+    // Exactly an hour later, on the bubble's clock. The test took no time.
     assert(burrow_nanotime() - start == TIME_HOUR);
 }
-
-synctest_run(BURROW_FN(Func, body, NULL));
 ```
+
+Hand that to `synctest_run` and it gets a bubble of its own.
 
 Nothing on this page had to be told about bubbles for that to work, and neither did `burrow/context.h`. Every timer in the program is armed through one function in the runtime that picks the caller's timer set, and inside a bubble that is the bubble's own set. [guides/synctest.md](synctest.md) has the rules, including the two that catch people out.
 
@@ -149,7 +160,7 @@ A thread with nothing to run reads two published words per P to work out how lon
 
 ## What Go has that this does not, yet
 
-`time.After`, `time.Tick`, `time.NewTimer` and `time.NewTicker` all hand back a channel, and channels are the next thing being built. When they land these arrive with them, and `TimeTimer` grows an accessor for its channel rather than changing shape, so nothing written against this header has to be rewritten.
+`time.After`, `time.Tick`, `time.NewTimer` and `time.NewTicker` all hand back a channel. Channels are in `burrow/chan.h` now, and these four are the next thing to build on them. When they arrive, `TimeTimer` grows an accessor for its channel rather than changing shape, so nothing written against this header has to be rewritten.
 
 Repeating timers are in the runtime underneath already, since `burrow__timer_reset` takes a period. Nothing up here uses it until `Ticker` exists.
 

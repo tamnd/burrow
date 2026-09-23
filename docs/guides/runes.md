@@ -8,10 +8,11 @@ Go takes the same position. A Go string is a byte slice with a different type na
 
 This is the one to reach for. It is `for i, r := range s`.
 
+<!-- example: ../examples/runes/runes.c#loop -->
 ```c
 Int i;
 Rune r;
-for (StrIter it = str_runes(s); str_next_rune(&it, &i, &r); )
+for (StrIter it = str_runes(s); str_next_rune(&it, &i, &r);)
     printf("%lld: %lx\n", (long long)i, (unsigned long)r);
 ```
 
@@ -19,9 +20,10 @@ for (StrIter it = str_runes(s); str_next_rune(&it, &i, &r); )
 
 Either pointer may be `NULL` if you only want the other one, which is the same rule every multiple result in the library follows:
 
+<!-- example: ../examples/runes/runes.c#count -->
 ```c
 Int count = 0;
-for (StrIter it = str_runes(s); str_next_rune(&it, NULL, NULL); )
+for (StrIter it = str_runes(s); str_next_rune(&it, NULL, NULL);)
     count++;
 ```
 
@@ -33,6 +35,7 @@ Keep the `StrIter` on the stack. The fields are visible because C has no other w
 
 For ASCII data, do not decode. Index `s.p` directly and let the loop condition be your bounds check:
 
+<!-- example: ../examples/runes/runes.c#bytes -->
 ```c
 for (Int i = 0; i < s.len; i++)
     if (s.p[i] == '\n')
@@ -71,10 +74,11 @@ Decode when the answer depends on what the characters are: upper casing, countin
 
 The size comes back through an out parameter rather than as a second return value, which is the library's rule for every Go function with more than one result, and it may be `NULL`:
 
+<!-- example: ../examples/runes/runes.c#decode -->
 ```c
 Int size;
-Rune r = utf8_decode_rune_in_string(s, &size);   /* r, size := ... */
-Rune r = utf8_decode_rune_in_string(s, NULL);    /* r, _ := ... */
+Rune r = utf8_decode_rune_in_string(s, &size); /* r, size := ... */
+r = utf8_decode_rune_in_string(s, NULL);       /* r, _ = ... */
 ```
 
 ## Nothing here fails
@@ -103,9 +107,13 @@ That last one is the security case and it is the reason to care about this list.
 
 Check bytes that came from outside your program once, at the boundary:
 
+<!-- example: ../examples/runes/runes.c#validate -->
 ```c
-if (!utf8_valid_string(body))
-    return err_bad_request;
+static Error accept(Str body) {
+    if (!utf8_valid_string(body))
+        return err_bad_request;
+    return BURROW_NO_ERROR;
+}
 ```
 
 After that, decode freely. The point of validating at the edge is that everything downstream can stop worrying, which is worth more than the one pass it costs.
@@ -116,6 +124,7 @@ After that, decode freely. The point of validating at the edge is that everythin
 
 `utf8_encode_rune` writes into a buffer you provide and answers how many bytes that took:
 
+<!-- example: ../examples/runes/runes.c#encode -->
 ```c
 Byte buf[UTF8_UTF_MAX];
 Slice out = slice_from(buf, sizeof buf, sizeof buf, TYPE_BYTE);
@@ -128,6 +137,7 @@ A rune that cannot be encoded, meaning a negative one, one above U+10FFFF, or a 
 
 When you are building a string rather than filling a fixed buffer, append:
 
+<!-- example: ../examples/runes/runes.c#append -->
 ```c
 Slice out = slice_nil(TYPE_BYTE);
 for (Int i = 0; i < n; i++)
@@ -144,6 +154,7 @@ Do not use `Rune` as a byte. `Byte` is `uint8_t` and it is a different thing. As
 
 `utf8_rune_start` answers whether a byte could begin an encoding. Continuation bytes always have their top two bits set to `10` and nothing else does, so this is one mask and one compare:
 
+<!-- example: ../examples/runes/runes.c#start -->
 ```c
 while (i > 0 && !utf8_rune_start(buf[i]))
     i--;

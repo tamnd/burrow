@@ -1049,7 +1049,7 @@ static void indent_into(TestingT *c, Str b) {
         if (end < b.len)
             end++;
         Str line = str_from_bytes(b.p, end);
-        if (line.p[0] == 0x16) {
+        if (b.p[0] == 0x16) {
             buf_append(&c->output, line.p, 1);
             line = str_from_bytes(line.p + 1, line.len - 1);
         }

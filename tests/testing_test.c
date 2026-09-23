@@ -333,6 +333,7 @@ static void spin(void) {
     volatile Int sum = 0;
     for (Int i = 0; i < 2000; i++)
         sum += i;
+    (void)sum;
 }
 
 static void child_bench_plain(void *env, TestingB *b) {

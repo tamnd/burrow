@@ -46,8 +46,7 @@
 
 #if defined(BURROW_OS_LINUX)
 #define CPUNAME_PROC 1
-#include <fcntl.h>
-#include <unistd.h>
+#include <stdio.h>
 #endif
 
 #if defined(CPUNAME_X86) || defined(CPUNAME_SYSCTL) || defined(CPUNAME_PROC)
@@ -120,18 +119,12 @@ static bool cpuname_has(const char *s, size_t n, const char *sub) {
  * /proc/cpuinfo, with the clock speed after it when the name does not already
  * carry one. */
 static int64_t cpuname_proc(char *buf, int64_t cap) {
-    int fd = open("/proc/cpuinfo", O_RDONLY);
-    if (fd < 0)
+    FILE *f = fopen("/proc/cpuinfo", "rb");
+    if (f == NULL)
         return 0;
     char data[512];
-    size_t got = 0;
-    while (got < sizeof data) {
-        ssize_t r = read(fd, data + got, sizeof data - got);
-        if (r <= 0)
-            break;
-        got += (size_t)r;
-    }
-    close(fd);
+    size_t got = fread(data, 1, sizeof data, f);
+    fclose(f);
 
     const char *model = NULL;
     size_t nmodel = 0;

@@ -8,7 +8,10 @@ It is shorter than you are expecting.
 
 Every function in burrow that can allocate takes an allocator as its first parameter. There is one exception, described below, there is no hidden global, and there is no per object free function to remember.
 
+<!-- example: ../examples/allocators/rule.c#rule -->
 ```c
+#include <stdio.h>
+
 #include "burrow/burrow.h"
 
 int main(void) {
@@ -16,15 +19,21 @@ int main(void) {
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
 
-    Str body = os_read_file(a, S("go.mod"));
-    Slice lines = strings_split(a, body, S("\n"));
+    Str name = str_clone(a, BURROW_S("squares"));
+    Map *squares = map_make(a, TYPE_INT, TYPE_INT, 0);
+    for (Int i = 0; i < 1000; i++) {
+        Int sq = i * i;
+        map_set(squares, &i, &sq);
+    }
+    printf(BURROW_STR_FMT " has %lld entries\n", BURROW_STR_ARG(name),
+           (long long)map_len(squares));
 
     arena_free(&ar);
     return 0;
 }
 ```
 
-Two allocations happened in there and possibly a few hundred underneath them, and one call cleaned up all of it. You do not free `body`. You do not free `lines`. You do not free the strings inside `lines`. You free the arena.
+Two calls allocated in there, the map grew its table several times underneath them, and one call cleaned up all of it. You do not free `name`. You do not free `squares`. You do not free the tables `squares` outgrew on the way to a thousand entries. You free the arena.
 
 That is the whole model. The rest of this page is about the cases where the default is not what you want.
 
@@ -32,9 +41,10 @@ That is the whole model. The rest of this page is about the cases where the defa
 
 `map_make` takes an allocator and the map keeps it, so `map_set` does not take one and can still allocate:
 
+<!-- example: ../examples/allocators/alloc.c#map -->
 ```c
 Map *m = map_make(a, TYPE_STRING, TYPE_INT, 0);
-map_set(m, &key, &val);      /* this can grow the table */
+map_set(m, &key, &val); /* this can grow the table */
 ```
 
 An insert can grow the table, and the alternative is an allocator parameter on the hottest call a hash table has, plus a caller who passes a different one on the second insert and ends up with a table half from one place and half from another. Storing it once keeps the part that matters, which is that everything a map allocated came from the allocator you handed to `map_make`.
@@ -65,11 +75,12 @@ The default, and the one to use unless you have a reason not to.
 
 An arena hands out memory by moving a pointer forward through a large chunk, and gives all of it back at once. Allocation is a bounds check and an add. There is no per object bookkeeping, so there is no per object cost and no way to leak a single object.
 
+<!-- example: ../examples/allocators/alloc.c#arena -->
 ```c
 Arena ar;
 arena_init(&ar, NULL, 0);
 Alloc *a = arena_allocator(&ar);
-/* ... */
+/* allocate from a as much as you like */
 arena_free(&ar);
 ```
 
@@ -77,12 +88,13 @@ It fits the shape of most programs better than people expect. A request handler,
 
 For a server, the pattern is one arena per request, reset rather than freed:
 
+<!-- example: ../examples/allocators/alloc.c#server -->
 ```c
 Arena ar;
 arena_init(&ar, NULL, 0);
 
-for (;;) {
-    Request *req = accept_one();
+Request *req;
+while ((req = accept_one()) != NULL) {
     handle(arena_allocator(&ar), req);
     arena_reset(&ar);
 }
@@ -92,6 +104,7 @@ A reset keeps the chunks instead of returning them, so the second request and ev
 
 Arenas nest. Pass another arena's allocator as the parent and the child's chunks come from it:
 
+<!-- example: ../examples/allocators/alloc.c#nest -->
 ```c
 Arena conn;
 arena_init(&conn, NULL, 0);
@@ -106,6 +119,7 @@ An `Arena` is not thread safe and is not meant to be. Give each goroutine its ow
 
 `malloc` and `free` behind the same interface.
 
+<!-- example: ../examples/allocators/alloc.c#heap -->
 ```c
 Alloc *a = heap_allocator();
 ```
@@ -116,12 +130,15 @@ Never NULL, never needs initialising, no state to carry. Reach for it when indiv
 
 A conservative collector, optional, off unless you ask for it at build time.
 
+<!-- example: ../examples/allocators/alloc.c#gc -->
 ```c
 Alloc *a = gc_allocator();
-if (a == NULL)
-    /* this build does not have the collector in it */;
+if (a == NULL) {
+    printf("this build does not have the collector in it\n");
+    return;
+}
 
-Slice parts = strings_split(a, line, S(","));
+Str kept = str_clone(a, line);
 /* never free anything */
 ```
 
@@ -141,6 +158,7 @@ Nothing in burrow uses this backend and no test needs it, so the library never d
 
 Wraps another allocator and remembers every block it handed out, so that at the end it can tell you what you did wrong.
 
+<!-- example: ../examples/allocators/alloc.c#track -->
 ```c
 Track tr;
 track_init(&tr, heap_allocator());
@@ -149,7 +167,7 @@ Alloc *a = track_allocator(&tr);
 /* run the thing under test, passing a */
 
 if (track_check(&tr) != 0)
-    /* something is wrong and track_check has already said what */;
+    printf("something is wrong and track_check has already said what\n");
 track_free(&tr);
 ```
 
@@ -163,6 +181,7 @@ That last one is why freed memory is not handed straight back. A freed block is 
 
 For a leak report you can act on, name the call site:
 
+<!-- example: ../examples/allocators/alloc.c#here -->
 ```c
 Byte *p = mem_alloc(TRACK_HERE(a), n, 1);
 ```
@@ -177,6 +196,7 @@ This is a debugging allocator. It is slow, it holds on to memory, and it does no
 
 An allocator over a buffer you already have. It never calls anything underneath, because there is nothing underneath.
 
+<!-- example: ../examples/allocators/alloc.c#fixed -->
 ```c
 unsigned char buf[4096];
 Fixed fx;
@@ -192,20 +212,22 @@ Even with one allocator convention, one question is left per function. Does the 
 
 Go's collector makes that invisible and it does not matter. In C it decides whether you can free the input while still holding the output, so every declaration in burrow says which it is:
 
+<!-- example: ../examples/allocators/alloc.c#annotations -->
 ```c
-BURROW_OWNS(ret)        Str strings_to_upper(Alloc *a, Str s);
-BURROW_BORROWS(ret, s)  Str strings_trim_space(Str s);
-BURROW_STATIC(ret)      const char *burrow_version(void);
+BURROW_OWNS(ret) Str str_clone(Alloc *a, Str s);
+BURROW_BORROWS(ret, p) Str str_from_bytes(const void *p, Int n);
+BURROW_STATIC(ret) const char *burrow_version(void);
 ```
 
-`BURROW_OWNS(ret)` means the return value is fresh memory from `a` and does not depend on the input. `BURROW_BORROWS(ret, s)` means the return value points into `s` and dies when `s` does. `BURROW_RETAINS` means the function kept a reference to an argument past the call, which is what you need to know before reusing a buffer you passed in.
+`BURROW_OWNS(ret)` means the return value is fresh memory from `a` and does not depend on the input. `BURROW_BORROWS(ret, p)` means the return value points into `p` and dies when `p` does. `BURROW_RETAINS` means the function kept a reference to an argument past the call, which is what you need to know before reusing a buffer you passed in.
 
 `BURROW_STATIC(ret)` is the fourth and it is not a weaker borrow. It means the result has static storage duration or is nil, so there is nothing to free and nothing it can outlive. You can hold a `burrow_version()` or a `kind_name()` result for the life of the program and never think about it again. A borrow has to name what it came from, and these have nothing to name, so writing `BURROW_BORROWS(ret)` with the source left off would have looked exactly like somebody forgetting to fill it in.
 
-Notice that `strings_trim_space` has no allocator parameter at all. That is the tell. A function that cannot allocate cannot give you fresh memory, so anything it returns must point into what you gave it.
+Notice that `str_from_bytes` has no allocator parameter at all. That is the tell. A function that cannot allocate cannot give you fresh memory, so anything it returns must point into what you gave it.
 
 Two of them can appear on one declaration, and on append they do:
 
+<!-- example: ../examples/allocators/alloc.c#append -->
 ```c
 BURROW_OWNS(ret) BURROW_BORROWS(ret, s)
 Slice slice_append(Alloc *a, Slice s, const void *elems, Int n);
@@ -225,14 +247,18 @@ Inside burrow, a failed allocation becomes an `Error` that travels back up throu
 
 If you would rather do something else, there is a hook:
 
+<!-- example: ../examples/allocators/alloc.c#oom -->
 ```c
 static bool out_of_room(void *ctx, size_t size, size_t align) {
+    (void)ctx;
     (void)align;
     fprintf(stderr, "could not get %zu bytes\n", size);
     return false;
 }
 
-mem_set_oom(a, out_of_room, NULL);
+static void setup(Alloc *a) {
+    mem_set_oom(a, out_of_room, NULL);
+}
 ```
 
 The handler is told what was asked for and answers whether it is worth asking again. Return false and the NULL goes back to the caller as it always did, which is what you want if all you meant to do was log it. Return true and the allocation is tried once more, which is what you want if you just freed something. Not returning at all is also fine, by `longjmp` back to a safe point or by ending the process, and that is your decision to make rather than this library's.
@@ -249,6 +275,7 @@ Inside burrow, every allocation is checked. That is not a convention, it is `too
 
 An `Alloc` starts with a vtable and a receiver, which is the same shape as a Go interface value, and that is not an accident. Fill in the six slots, point `self` at your state, and hand it to anything in burrow:
 
+<!-- example: ../examples/allocators/alloc.c#custom -->
 ```c
 static const AllocVT my_vt = {
     my_alloc, NULL, my_realloc, my_free, NULL, NULL,

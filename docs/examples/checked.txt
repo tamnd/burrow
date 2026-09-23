@@ -22,3 +22,5 @@ docs/guides/types.md
 docs/guides/context.md
 docs/guides/errors.md
 docs/guides/interfaces.md
+docs/guides/strings.md
+docs/guides/allocators.md

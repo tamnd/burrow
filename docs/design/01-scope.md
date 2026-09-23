@@ -9,8 +9,10 @@ a library, together with the substitute each one gets.
 
 Nothing in this document is estimated. All figures are measured from a Go
 1.27.1 tree, with exported-declaration counts taken from the union of
-`$GOROOT/api/go1.txt` … `go1.27.txt` with per-OS/arch variants collapsed to a
-single target. Reproduce with `tools/inventory.sh` in `tamnd/burrow`.
+`$GOROOT/api/go1.txt` … `go1.27.txt`, where a line that only exists on some
+platforms counts if it exists on linux-amd64, darwin-arm64 or windows-amd64, and
+a line on all three counts once. Reproduce with `tools/inventory.sh` in
+`tamnd/burrow`, which prints this table from any Go tree.
 
 ## 1. The totals
 

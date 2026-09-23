@@ -3,6 +3,45 @@
 #include "burrow/burrow.h"
 #include "burrow/mem/heap.h"
 
+static void integers(Alloc *a) {
+    // doc: parse
+    Error err;
+    int64_t n = strconv_parse_int(BURROW_S("-0x_7f"), 0, 8, &err);
+    // doc: end
+    printf("%lld %d\n", (long long)n, BURROW_OK(err));
+
+    // doc: range
+    int64_t big = strconv_parse_int(BURROW_S("300"), 10, 8, &err);
+    if (errors_is(err, strconv_err_range))
+        printf("clamped to %lld: " BURROW_STR_FMT "\n", (long long)big,
+               BURROW_STR_ARG(error_text(err)));
+    // doc: end
+
+    // doc: numerror
+    (void)strconv_atoi(BURROW_S("12a"), &err);
+    const StrconvNumError *ne = errors_as(err, TYPE_STRCONV_NUM_ERROR);
+    if (ne != NULL)
+        printf(BURROW_STR_FMT " failed on " BURROW_STR_FMT "\n",
+               BURROW_STR_ARG(ne->func), BURROW_STR_ARG(ne->num));
+    // doc: end
+
+    // doc: format
+    Str hex = strconv_format_int(a, -255, 16);
+    Str dec = strconv_itoa(a, 1234567);
+    Slice line = strconv_append_uint(a, slice_from_str(a, BURROW_S("id=")), 42, 10);
+    // doc: end
+    printf(BURROW_STR_FMT " " BURROW_STR_FMT " %.*s\n", BURROW_STR_ARG(hex),
+           BURROW_STR_ARG(dec), (int)line.len, (const char *)line.p);
+}
+
+static void booleans(void) {
+    // doc: bool
+    bool on = strconv_parse_bool(BURROW_S("True"), NULL);
+    Str text = strconv_format_bool(on);
+    // doc: end
+    printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(text));
+}
+
 static void quoting(Alloc *a) {
     // doc: quote
     Str q = strconv_quote(a, BURROW_S("tab\there, bell\a, ☺"));
@@ -70,6 +109,8 @@ int main(void) {
     arena_init(&ar, heap_allocator(), 0);
     Alloc *a = arena_allocator(&ar);
 
+    integers(a);
+    booleans();
     quoting(a);
     appending(a);
     unquoting(a);
@@ -80,6 +121,11 @@ int main(void) {
 }
 
 /* Output:
+-127 1
+clamped to 127: strconv.ParseInt: parsing "300": value out of range
+Atoi failed on 12a
+-ff 1234567 id=42
+true
 "tab\there, bell\a, ☺"
 "na\u00efve \u263a" '☺' "\xff\xfe"
 key="a \"quoted\" value"

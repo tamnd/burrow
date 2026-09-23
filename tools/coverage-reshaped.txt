@@ -37,3 +37,9 @@ sync: method (*Map) Delete: keys by pointer
 sync: method (*Map) CompareAndSwap: keys and values by pointer, returns false if it could not allocate and the swap comes back through a pointer
 sync: method (*Map) CompareAndDelete: keys and values by pointer
 sync: method (*Map) Range: the callback is a function pointer with a context argument, and gets the key and value by pointer
+
+# include/burrow/strconv.h: the Error method of a NumError built by hand has to
+# put its message somewhere, so it takes the allocator Go's string result would
+# have come from. An error from a Parse function already carries its text, and
+# error_text reads it without one.
+strconv: method (*NumError) Error: takes the allocator the message is built in

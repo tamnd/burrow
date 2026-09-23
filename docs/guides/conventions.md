@@ -74,11 +74,11 @@ Int n = strconv_atoi(s, NULL);
 
 `NULL` being allowed everywhere is the part that has to hold without exception. A caller who wants only the first result should not have to declare a variable to throw away, and a rule with holes in it is one you have to look up every time.
 
-On the writing side that is `BURROW_OUT`, here in a cut down `strconv_atoi` that only knows digits:
+On the writing side that is `BURROW_OUT`, here in `parse_digits`, a cut down `strconv_atoi` that only knows digits:
 
 <!-- example: ../examples/conventions/results.c#out -->
 ```c
-static Int strconv_atoi(Str s, Error *err) {
+static Int parse_digits(Str s, Error *err) {
     Int n = 0;
     if (s.len == 0) {
         BURROW_OUT(err, strconv_err_syntax);

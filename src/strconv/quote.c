@@ -222,6 +222,13 @@ static QuoteJob rune_job(Rune r, bool ascii_only, bool graphic_only) {
     return j;
 }
 
+Int burrow__strconv_quote_into(Byte *dst, Str s) {
+    QuoteJob j = str_job(s, false, false);
+    QuoteOut o = {dst, 0};
+    run(&o, &j);
+    return o.n;
+}
+
 Str strconv_quote(Alloc *a, Str s) {
     return quote_str(a, str_job(s, false, false));
 }

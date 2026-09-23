@@ -2,12 +2,11 @@
 
 #include "burrow/burrow.h"
 
-// strconv_atoi is not ported yet, so this is a cut down one with the signature
-// the real one will have, using the real strconv_err_syntax. When the real one
-// lands this file stops compiling, which is the reminder to delete the stand-in.
+// parse_digits is a cut down strconv_atoi that only knows digits, to show the
+// writing side of an out parameter. The calls use the real strconv_atoi.
 
 // doc: out
-static Int strconv_atoi(Str s, Error *err) {
+static Int parse_digits(Str s, Error *err) {
     Int n = 0;
     if (s.len == 0) {
         BURROW_OUT(err, strconv_err_syntax);
@@ -54,11 +53,13 @@ int main(void) {
     Str msg = error_text(err);
     printf("failed: %.*s\n", (int)msg.len, (const char *)msg.p);
     port_or_zero(BURROW_S("http"));
+    printf("digits %lld\n", (long long)parse_digits(BURROW_S("42"), NULL));
     return 0;
 }
 
 /* Output:
 port 8080
-failed: invalid syntax
+failed: strconv.Atoi: parsing "http": invalid syntax
 port 0
+digits 42
 */

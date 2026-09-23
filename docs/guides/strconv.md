@@ -2,7 +2,65 @@
 
 `burrow/strconv.h` is Go's `strconv`: the package that writes values as text and reads them back. It never looks at the C locale, so a program that calls `setlocale` gets the same answers as one that does not, which is the first thing that goes wrong with `printf` and `strtod`.
 
-This page covers quoting, the part that has landed so far. Integers, booleans and floats come next, in that order.
+This page covers integers, booleans and quoting, the parts that have landed so far. Floats come next.
+
+## Integers
+
+`strconv_parse_int` reads a signed integer in any base from 2 to 36 and checks that it fits in the number of bits you ask for. Base 0 means the base comes from the prefix, the way Go source writes it, and then underscores between digits are allowed too:
+
+<!-- example: ../examples/strconv/strconv.c#parse -->
+```c
+Error err;
+int64_t n = strconv_parse_int(BURROW_S("-0x_7f"), 0, 8, &err);
+```
+
+That is -127, which fits in 8 bits. A bit size of 0 means `Int`, whose width is `STRCONV_INT_SIZE`. `strconv_parse_uint` is the same without the sign, and `strconv_atoi` is `strconv_parse_int(s, 10, 0, err)` with a faster path for the short numbers most input is made of.
+
+A number that is well formed but too big gives `strconv_err_range`, and the value you get back is the closest one that fits rather than zero:
+
+<!-- example: ../examples/strconv/strconv.c#range -->
+```c
+int64_t big = strconv_parse_int(BURROW_S("300"), 10, 8, &err);
+if (errors_is(err, strconv_err_range))
+    printf("clamped to %lld: " BURROW_STR_FMT "\n", (long long)big,
+           BURROW_STR_ARG(error_text(err)));
+```
+
+That prints `clamped to 127: strconv.ParseInt: parsing "300": value out of range`. Bad input gives `strconv_err_syntax` and 0.
+
+Both come wrapped in a `StrconvNumError`, which is Go's `*NumError`: the name of the function, a copy of the input and the reason. `errors_is` sees through it to the reason, as above, and `errors_as` gets you the struct:
+
+<!-- example: ../examples/strconv/strconv.c#numerror -->
+```c
+(void)strconv_atoi(BURROW_S("12a"), &err);
+const StrconvNumError *ne = errors_as(err, TYPE_STRCONV_NUM_ERROR);
+if (ne != NULL)
+    printf(BURROW_STR_FMT " failed on " BURROW_STR_FMT "\n",
+           BURROW_STR_ARG(ne->func), BURROW_STR_ARG(ne->num));
+```
+
+The error is built in the calling goroutine's error arena, so the parse functions take no allocator for it, and it is only built at all when you pass somewhere to put it. With `NULL` for `err` a failed parse costs nothing more than a successful one. To keep an error past the end of the goroutine, `error_retain` it.
+
+Going the other way, `strconv_format_int` and `strconv_format_uint` write a number in any base from 2 to 36, `strconv_itoa` is base 10 for an `Int`, and the append forms add the digits to a byte slice:
+
+<!-- example: ../examples/strconv/strconv.c#format -->
+```c
+Str hex = strconv_format_int(a, -255, 16);
+Str dec = strconv_itoa(a, 1234567);
+Slice line = strconv_append_uint(a, slice_from_str(a, BURROW_S("id=")), 42, 10);
+```
+
+That gives `-ff`, `1234567` and `id=42`. A base outside 2 to 36 is a panic, as it is in Go, because it is a bug in the caller and not something the input did. Results are allocated from `a` at exactly their length.
+
+## Booleans
+
+<!-- example: ../examples/strconv/strconv.c#bool -->
+```c
+bool on = strconv_parse_bool(BURROW_S("True"), NULL);
+Str text = strconv_format_bool(on);
+```
+
+`strconv_parse_bool` takes `1`, `t`, `T`, `TRUE`, `true` and `True` and the same six spellings of false, and anything else is `strconv_err_syntax` in a `StrconvNumError`. `strconv_format_bool` returns one of two literals, so it needs no allocator and there is nothing to free. `strconv_append_bool` adds the word to a byte slice.
 
 ## Quoting
 

@@ -17,3 +17,5 @@ docs/guides/channels.md
 atomics.md
 slices.md
 maps.md
+functions.md
+types.md

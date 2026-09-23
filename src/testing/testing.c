@@ -2262,6 +2262,232 @@ bool testing_run_tests(TestingMatchString match, Slice tests) {
     return ok;
 }
 
+/* --------------------------------------------------------------- examples
+ *
+ * Go's src/testing/example.go and run_example.go. An example runs with the
+ * process's standard output captured, and passes when what it printed is the
+ * output it was listed with, both trimmed of white space at the ends first.
+ * An example that panics fails, and then the panic carries on up and ends the
+ * run, as it does in Go. */
+
+/* unicode.IsSpace. */
+static bool ex_space(Rune r) {
+    switch (r) {
+    case '\t':
+    case '\n':
+    case '\v':
+    case '\f':
+    case '\r':
+    case ' ':
+    case 0x85:
+    case 0xA0:
+    case 0x1680:
+    case 0x2028:
+    case 0x2029:
+    case 0x202F:
+    case 0x205F:
+    case 0x3000:
+        return true;
+    default:
+        return r >= 0x2000 && r <= 0x200A;
+    }
+}
+
+/* strings.TrimSpace. */
+static Str ex_trim(Str s) {
+    while (s.len > 0) {
+        Int n;
+        if (!ex_space(utf8_decode_rune_in_string(s, &n)))
+            break;
+        s = str_from_bytes(s.p + n, s.len - n);
+    }
+    while (s.len > 0) {
+        Int n;
+        if (!ex_space(utf8_decode_last_rune_in_string(s, &n)))
+            break;
+        s.len -= n;
+    }
+    return s;
+}
+
+#if defined(BURROW_OS_WINDOWS)
+/* strings.ReplaceAll(s, "\r\n", "\n"), which Go does to both sides on
+ * Windows. */
+static Str ex_crlf(Alloc *a, Str s) {
+    Byte *p = (Byte *)must_alloc(a, (size_t)s.len + 1, 1);
+    Int n = 0;
+    for (Int i = 0; i < s.len; i++) {
+        if (s.p[i] == '\r' && i + 1 < s.len && s.p[i + 1] == '\n')
+            continue;
+        p[n++] = (Byte)s.p[i];
+    }
+    return str_from_bytes((const char *)p, n);
+}
+#endif
+
+/* The lines of s, split on newlines, in sorted order. */
+static Str *ex_lines(Alloc *a, Str s, Int *n) {
+    Int count = 1;
+    for (Int i = 0; i < s.len; i++)
+        if (s.p[i] == '\n')
+            count++;
+    Str *lines = (Str *)must_alloc(a, (size_t)count * sizeof(Str), _Alignof(Str));
+    Int k = 0;
+    Int start = 0;
+    for (Int i = 0; i <= s.len; i++) {
+        if (i < s.len && s.p[i] != '\n')
+            continue;
+        Str line = str_from_bytes(s.p + start, i - start);
+        Int j = k++;
+        while (j > 0 && str_cmp(lines[j - 1], line) > 0) {
+            lines[j] = lines[j - 1];
+            j--;
+        }
+        lines[j] = line;
+        start = i + 1;
+    }
+    *n = count;
+    return lines;
+}
+
+/* sortLines(a) == sortLines(b). The lines have no newlines in them, so two
+ * joins are equal exactly when the sorted lists are. */
+static bool ex_same_lines(Alloc *a, Str x, Str y) {
+    Int nx;
+    Int ny;
+    Str *lx = ex_lines(a, x, &nx);
+    Str *ly = ex_lines(a, y, &ny);
+    if (nx != ny)
+        return false;
+    for (Int i = 0; i < nx; i++)
+        if (!str_eq(lx[i], ly[i]))
+            return false;
+    return true;
+}
+
+static void ex_sink(void *env, const void *p, int64_t n) {
+    buf_append((Buf *)env, p, (Int)n);
+}
+
+typedef struct ExampleState {
+    Buf out;
+    bool finished;
+    bool has_panic;
+    Any perr;
+} ExampleState;
+
+/* runExample and processRunResult, which say whether eg passed. */
+static bool run_example(const TestingInternalExample *eg) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    bool chatty = pkg.flags[F_V].b;
+    const char *prefix = pkg.flags[F_V].json ? "\x16" : "";
+    if (chatty)
+        write_to(stdout, fmt_sprintf_v(a, "%s=== RUN   %s\n", prefix, eg->name));
+
+    ExampleState st = {0};
+    ExampleState *sp = &st;
+    PalStdoutCapture cap;
+    PalErrno perr = PAL_OK;
+    if (!pal_stdout_capture_begin(&cap, ex_sink, &sp->out, &perr)) {
+        write_to(stderr, fmt_sprintf_v(a, "%s\n", pal_errno_string(perr)));
+        exit(1);
+    }
+    int64_t start = burrow_nanotime();
+    BURROW_TRY {
+        BURROW_CALLF0(eg->f);
+        sp->finished = true;
+    }
+    BURROW_CATCH(p) {
+        if (pkg.repanicking)
+            panic(pkg.repanic);
+        sp->perr = keep_panic(p);
+        sp->has_panic = true;
+    }
+    BURROW_TRY_END;
+    int64_t spent = burrow_nanotime() - start;
+    if (!pal_stdout_capture_end(&cap, &perr)) {
+        write_to(stderr, fmt_sprintf_v(a, "testing: copying pipe: %s\n",
+                                       pal_errno_string(perr)));
+        exit(1);
+    }
+
+    Str stdout_s = buf_view(&sp->out);
+    Str got = ex_trim(stdout_s);
+    Str want = ex_trim(eg->output);
+#if defined(BURROW_OS_WINDOWS)
+    got = ex_crlf(a, got);
+    want = ex_crlf(a, want);
+#endif
+    Str fail = BURROW_STR_EMPTY;
+    if (eg->unordered) {
+        if (!ex_same_lines(a, got, want) && !sp->has_panic)
+            fail = fmt_sprintf_v(a, "got:\n%s\nwant (unordered):\n%s\n", stdout_s,
+                                 eg->output);
+    } else if (!str_eq(got, want) && !sp->has_panic) {
+        fail = fmt_sprintf_v(a, "got:\n%s\nwant:\n%s\n", got, want);
+    }
+    bool passed = true;
+    Str dstr = fmt_dur(a, spent);
+    if (fail.len > 0 || !sp->finished || sp->has_panic) {
+        write_to(stdout, fmt_sprintf_v(a, "%s--- FAIL: %s (%s)\n%s", prefix, eg->name,
+                                       dstr, fail));
+        passed = false;
+    } else if (chatty) {
+        write_to(stdout,
+                 fmt_sprintf_v(a, "%s--- PASS: %s (%s)\n", prefix, eg->name, dstr));
+    }
+    if (chatty && pkg.flags[F_V].json)
+        write_to(stdout, fmt_sprintf_v(a, "%s=== NAME   %s\n", prefix, BURROW_S("")));
+    buf_free(&sp->out);
+    arena_free(&ar);
+    if (sp->has_panic)
+        panic(sp->perr);
+    return passed;
+}
+
+typedef struct ExampleRun {
+    TestingMatchString match;
+    const TestingInternalExample *examples;
+    Int n;
+    bool ran;
+    bool ok;
+} ExampleRun;
+
+static void examples_body(void *env) {
+    ExampleRun *er = (ExampleRun *)env;
+    burrow__TestingMatcher *m = burrow__testing_matcher_new(
+        er->match, pkg.flags[F_RUN].s, BURROW_S("-test.run"), pkg.flags[F_SKIP].s);
+    for (Int i = 0; i < er->n; i++) {
+        bool matched;
+        bool partial;
+        str_release(burrow__testing_full_name(m, NULL, er->examples[i].name, &matched,
+                                              &partial));
+        if (!matched)
+            continue;
+        er->ran = true;
+        if (!run_example(&er->examples[i]))
+            er->ok = false;
+    }
+    burrow__testing_matcher_free(m);
+}
+
+/* runExamples. Examples run on the main goroutine in Go, so here they run in
+ * one of their own like a test does, unless the run is bare. */
+static bool run_examples(TestingMatchString match, const TestingInternalExample *egs,
+                         Int n, bool bare, bool *ran) {
+    ExampleRun er = {match, egs, n, false, true};
+    if (n > 0) {
+        if (!bare && burrow__curg() == NULL)
+            runtime_main(BURROW_FN(Func, examples_body, &er));
+        else
+            examples_body(&er);
+    }
+    *ran = er.ran;
+    return er.ok;
+}
+
 /* ------------------------------------------------------------- benchmarks
  *
  * Go's src/testing/benchmark.go. A B is a T's common part with the timer and
@@ -3486,10 +3712,15 @@ int testing_m_run(TestingM *m) {
         pkg.have_examples = m->nexamples > 0;
         bool ran;
         bool ok = run_tests(m->match, m->tests, m->ntests, deadline, m->bare, &ran);
+        bool example_ran;
+        bool example_ok =
+            run_examples(m->match, m->examples, m->nexamples, m->bare, &example_ran);
         stop_alarm();
-        if (!ran && pkg.flags[F_BENCH].s.len == 0 && pkg.flags[F_FUZZ].s.len == 0)
+        if (!ran && !example_ran && pkg.flags[F_BENCH].s.len == 0 &&
+            pkg.flags[F_FUZZ].s.len == 0)
             write_to(err_out(), BURROW_S("testing: warning: no tests to run\n"));
-        if (!ok || !run_benchmarks(m->match, m->benchmarks, m->nbenchmarks, m->bare)) {
+        if (!ok || !example_ok ||
+            !run_benchmarks(m->match, m->benchmarks, m->nbenchmarks, m->bare)) {
             write_to(stdout, fmt_sprintf_v(a, "%sFAIL\n", prefix));
             m->exit_code = 1;
             goto out;
@@ -3524,12 +3755,21 @@ static void entry_benchmark(void *env, TestingB *b) {
     ((void (*)(TestingB *))e->fn)(b);
 }
 
+static void entry_example(void *env) {
+    const burrow__TestingEntry *e = (const burrow__TestingEntry *)env;
+    e->fn();
+}
+
 int burrow__testing_main(int argc, char **argv, const burrow__TestingEntry *entries,
                          Int n, bool bare, int (*main_fn)(TestingM *m)) {
     Alloc *h = heap_allocator();
     TestingInternalTest *tests = NULL;
     TestingInternalBenchmark *benchmarks = NULL;
+    TestingInternalExample *examples = NULL;
     if (n > 0) {
+        examples = (TestingInternalExample *)must_alloc(
+            h, (size_t)n * sizeof(TestingInternalExample),
+            _Alignof(TestingInternalExample));
         tests = (TestingInternalTest *)must_alloc(
             h, (size_t)n * sizeof(TestingInternalTest), _Alignof(TestingInternalTest));
         benchmarks = (TestingInternalBenchmark *)must_alloc(
@@ -3538,9 +3778,17 @@ int burrow__testing_main(int argc, char **argv, const burrow__TestingEntry *entr
     }
     Int ntests = 0;
     Int nbenchmarks = 0;
+    Int nexamples = 0;
     for (Int i = 0; i < n; i++) {
         const burrow__TestingEntry *e = &entries[i];
-        if (e->kind == BURROW__TESTING_KIND_BENCHMARK)
+        if (e->kind == BURROW__TESTING_KIND_EXAMPLE) {
+            /* go test leaves an example with no output comment out of the
+             * table, compiled and never run, and so does this. */
+            if (e->output != NULL)
+                examples[nexamples++] = (TestingInternalExample){
+                    e->name, BURROW_FN(Func, entry_example, (void *)(uintptr_t)e),
+                    str_from_cstr(e->output), e->unordered};
+        } else if (e->kind == BURROW__TESTING_KIND_BENCHMARK)
             benchmarks[nbenchmarks++] = (TestingInternalBenchmark){
                 e->name,
                 BURROW_FN(TestingBFunc, entry_benchmark, (void *)(uintptr_t)e)};
@@ -3555,7 +3803,7 @@ int burrow__testing_main(int argc, char **argv, const burrow__TestingEntry *entr
         slice_from(benchmarks, nbenchmarks, nbenchmarks,
                    TYPE_TESTING_INTERNAL_BENCHMARK),
         slice_nil(TYPE_TESTING_INTERNAL_FUZZ_TARGET),
-        slice_nil(TYPE_TESTING_INTERNAL_EXAMPLE));
+        slice_from(examples, nexamples, nexamples, TYPE_TESTING_INTERNAL_EXAMPLE));
     testing_m_set_bare(m, bare);
     int code = main_fn(m);
     testing_m_free(m);
@@ -3564,6 +3812,8 @@ int burrow__testing_main(int argc, char **argv, const burrow__TestingEntry *entr
                  _Alignof(TestingInternalTest));
         mem_free(h, benchmarks, (size_t)n * sizeof(TestingInternalBenchmark),
                  _Alignof(TestingInternalBenchmark));
+        mem_free(h, examples, (size_t)n * sizeof(TestingInternalExample),
+                 _Alignof(TestingInternalExample));
     }
     return code;
 }

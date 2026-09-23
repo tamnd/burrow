@@ -181,9 +181,8 @@ typedef struct TestingTB {
  * line the test. prefix can be left off, so -v and -run=Foo work. The ones
  * for profiles, coverage, tracing and fuzzing are accepted and do nothing.
  * -test.shuffle takes the same values but shuffles with a generator of its
- * own, so a seed gives a different order from the one Go would give. Tables of
- * fuzz targets and examples are accepted and listed by -test.list, and are not
- * run yet. */
+ * own, so a seed gives a different order from the one Go would give. A table
+ * of fuzz targets is accepted and listed by -test.list, and is not run yet. */
 void testing_init(int argc, char **argv);
 
 /* testing.Short, testing.Verbose and testing.Testing. Short and Verbose read
@@ -519,13 +518,30 @@ TestingTB testing_b_as_testing_tb(TestingB *b);
 
 /* ------------------------------------------------------------------ main
  *
- * The part go test writes for you. LIST is an X macro naming each test and
- * benchmark function. A test takes a TestingT, a benchmark takes a TestingB,
- * and the macro tells them apart by type, the way go test tells them apart by
- * name, so a function of any other type is a compile error:
+ * The part go test writes for you. LIST is an X macro naming each test,
+ * benchmark and example function. A test takes a TestingT, a benchmark takes
+ * a TestingB and an example takes nothing, and the macro tells them apart by
+ * type, the way go test tells them apart by name, so a function of any other
+ * type is a compile error:
  *
  *     #define TESTS(X) X(TestParse) X(TestFormat) X(BenchmarkParse)
  *     TESTING_MAIN(TESTS)
+ *
+ * An example takes nothing, and its entry says what it should print. The run
+ * captures what it writes to standard output, through printf, fmt or straight
+ * to descriptor 1, and fails it when the two differ after trimming white space
+ * from both ends. TESTING_UNORDERED is Go's "Unordered output:" comment, which
+ * compares the lines in any order. An example listed with no output is
+ * compiled and never run, which is what go test does with one that has no
+ * output comment:
+ *
+ *     static void ExampleAbs(void) {
+ *         fmt_println_v(abs_int(-3));
+ *     }
+ *     static void ExampleKeys(void) { ... prints the keys of a map ... }
+ *
+ *     #define TESTS(X) X(TestAbs) X(ExampleAbs, "3") \
+ *                      X(ExampleKeys, TESTING_UNORDERED("a\nb\nc"))
  *
  * TESTING_MAIN_WITH also takes a TestMain, which gets the M and returns the
  * exit status, usually after doing some setup around testing_m_run.
@@ -541,13 +557,20 @@ TestingTB testing_b_as_testing_tb(TestingB *b);
 typedef enum burrow__TestingKind {
     BURROW__TESTING_KIND_TEST = 1,
     BURROW__TESTING_KIND_BENCHMARK = 2,
+    BURROW__TESTING_KIND_EXAMPLE = 3,
 } burrow__TestingKind;
 
 typedef struct burrow__TestingEntry {
     Str name;
     int kind;
     void (*fn)(void);
+    const char *output; /* NULL for an example that is not run */
+    bool unordered;
 } burrow__TestingEntry;
+
+/* The second argument of an example's entry when the order of the lines does
+ * not matter. */
+#define TESTING_UNORDERED(output) output, true
 
 int burrow__testing_main(int argc, char **argv, const burrow__TestingEntry *entries,
                          Int n, bool bare, int (*main_fn)(TestingM *m));
@@ -555,9 +578,27 @@ int burrow__testing_main(int argc, char **argv, const burrow__TestingEntry *entr
 #define BURROW__TESTING_KIND(name)                                                     \
     _Generic(&(name),                                                                  \
         void (*)(TestingT *): BURROW__TESTING_KIND_TEST,                               \
-        void (*)(TestingB *): BURROW__TESTING_KIND_BENCHMARK)
-#define BURROW__TESTING_ENTRY(name)                                                    \
-    {BURROW_S_INIT(#name), BURROW__TESTING_KIND(name), (void (*)(void))(name)},
+        void (*)(TestingB *): BURROW__TESTING_KIND_BENCHMARK,                          \
+        void (*)(void): BURROW__TESTING_KIND_EXAMPLE)
+#define BURROW__TESTING_EXAMPLE_KIND(name)                                             \
+    _Generic(&(name), void (*)(void): BURROW__TESTING_KIND_EXAMPLE)
+
+/* One entry for one, two or three arguments: a name, an example's output, and
+ * whether that output is unordered. */
+#define BURROW__TESTING_PICK(a, b, c, d, ...) d
+#define BURROW__TESTING_ENTRY(...)                                                     \
+    BURROW__TESTING_PICK(__VA_ARGS__, BURROW__TESTING_ENTRY3, BURROW__TESTING_ENTRY2,  \
+                         BURROW__TESTING_ENTRY1, ~)                                    \
+    (__VA_ARGS__)
+#define BURROW__TESTING_ENTRY1(name)                                                   \
+    {BURROW_S_INIT(#name), BURROW__TESTING_KIND(name), (void (*)(void))(name), NULL,   \
+     false},
+#define BURROW__TESTING_ENTRY2(name, output)                                           \
+    {BURROW_S_INIT(#name), BURROW__TESTING_EXAMPLE_KIND(name), (void (*)(void))(name), \
+     "" output, false},
+#define BURROW__TESTING_ENTRY3(name, output, unordered)                                \
+    {BURROW_S_INIT(#name), BURROW__TESTING_EXAMPLE_KIND(name), (void (*)(void))(name), \
+     "" output, (unordered)},
 
 #define BURROW__TESTING_MAIN(LIST, bare, main_fn)                                      \
     int main(int argc, char **argv) {                                                  \

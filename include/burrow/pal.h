@@ -62,9 +62,10 @@ extern "C" {
  * anyway, because the shape of the boundary is a decision worth writing down
  * once rather than discovering package by package, and because a call to a
  * missing one is a link error that names it. Today the time, memory, random,
- * machine query, poll, thread and signal groups are implemented and in use, and
- * files, process, dynamic loading, user and net land with the packages that
- * need them. Each group below says where it stands. */
+ * machine query, poll, thread, stdout capture and signal groups are
+ * implemented and in use, and files, process, dynamic loading, user and net
+ * land with the packages that need them. Each group below says where it
+ * stands. */
 
 /* ------------------------------------------------------------------ failure
  *
@@ -404,6 +405,41 @@ bool pal_futex_wait(uint32_t *addr, uint32_t expect, int64_t timeout_ns, PalErrn
  * word it names is freed is therefore looking at this layer's own memory, which
  * is what lets a note live in a stack frame the sleeper has already left. */
 int64_t pal_futex_wake(uint32_t *addr, int64_t n, PalErrno *err);
+
+/* ----------------------------------------------------------- stdout capture
+ *
+ * What testing needs to run an example, and implemented. For a while
+ * everything the process writes to its standard output goes into a pipe
+ * instead, and a thread the capture starts hands each piece to sink as it
+ * arrives, so a writer never blocks on a full pipe.
+ *
+ * Go swaps os.Stdout for the write end of a pipe, which catches everything Go
+ * code prints. C code prints through the stdout stream and straight to
+ * descriptor 1, and both have to be caught, so this moves the descriptor under
+ * the stream instead of replacing the stream. The stream is flushed on the way
+ * in and on the way out, so nothing written before the capture ends up in it
+ * and nothing written during it is left behind in a buffer.
+ *
+ * On Windows the stream belongs to the C runtime, which keeps its own table of
+ * descriptors on top of the handles, so that backend moves the runtime's
+ * descriptor 1 with its own calls. It is the one place this layer uses them,
+ * because it is the one place the thing being moved is the runtime's.
+ *
+ * sink runs on the capture's thread only, and never after
+ * pal_stdout_capture_end has returned. One capture at a time: a second begin
+ * before the first has ended captures into the second and loses the first. */
+typedef struct PalStdoutCapture {
+    int64_t saved;
+    int64_t read;
+    int64_t thread;
+    void (*sink)(void *env, const void *p, int64_t n);
+    void *env;
+} PalStdoutCapture;
+
+bool pal_stdout_capture_begin(PalStdoutCapture *c,
+                              void (*sink)(void *env, const void *p, int64_t n),
+                              void *env, PalErrno *err);
+bool pal_stdout_capture_end(PalStdoutCapture *c, PalErrno *err);
 
 /* -------------------------------------------------------------------- files
  *

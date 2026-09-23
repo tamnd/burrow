@@ -409,6 +409,35 @@ static void child_bench_alloc(void *env, TestingB *b) {
     }
 }
 
+/* The examples the child runs. One prints through stdio and fmt both, since
+ * the capture has to catch the two. */
+static void child_example_hello(void *env) {
+    (void)env;
+    printf("hello from printf\n");
+    fmt_println_v(BURROW_S("hello from fmt"));
+}
+
+static void child_example_wrong(void *env) {
+    (void)env;
+    fmt_println_v(BURROW_S("one"));
+}
+
+static void child_example_lines(void *env) {
+    (void)env;
+    fmt_print_v(BURROW_S("c\nb\na\n"));
+}
+
+static void child_example_lines_wrong(void *env) {
+    (void)env;
+    fmt_print_v(BURROW_S("c\na\n"));
+}
+
+static void child_example_panic(void *env) {
+    (void)env;
+    fmt_println_v(BURROW_S("before"));
+    panic_str(BURROW_S("boom"));
+}
+
 /* testing.Benchmark on its own, outside any test binary's main. */
 static int run_benchfunc(void) {
     TestingBenchmarkResult r =
@@ -425,6 +454,8 @@ static int run_child(const char *scenario) {
     Int n = 0;
     TestingInternalBenchmark benchmarks[10];
     Int nb = 0;
+    TestingInternalExample examples[5];
+    Int ne = 0;
     if (strcmp(scenario, "benchfunc") == 0)
         return run_benchfunc();
     if (strcmp(scenario, "bench") == 0 || strcmp(scenario, "benchbare") == 0) {
@@ -447,6 +478,29 @@ static int run_child(const char *scenario) {
                                                       {child_bench_break, NULL}};
         benchmarks[nb++] = (TestingInternalBenchmark){BURROW_S("BenchmarkAlloc"),
                                                       {child_bench_alloc, NULL}};
+    } else if (strcmp(scenario, "examples") == 0) {
+        tests[n++] = (TestingInternalTest){BURROW_S("TestPass"), {child_pass, NULL}};
+        examples[ne++] =
+            (TestingInternalExample){BURROW_S("ExampleHello"),
+                                     {child_example_hello, NULL},
+                                     BURROW_S("hello from printf\nhello from fmt\n"),
+                                     false};
+        examples[ne++] = (TestingInternalExample){BURROW_S("ExampleWrong"),
+                                                  {child_example_wrong, NULL},
+                                                  BURROW_S("two"),
+                                                  false};
+        examples[ne++] = (TestingInternalExample){BURROW_S("ExampleLines"),
+                                                  {child_example_lines, NULL},
+                                                  BURROW_S("a\nb\nc"),
+                                                  true};
+        examples[ne++] = (TestingInternalExample){BURROW_S("ExampleLinesWrong"),
+                                                  {child_example_lines_wrong, NULL},
+                                                  BURROW_S("a\nb"),
+                                                  true};
+        examples[ne++] = (TestingInternalExample){BURROW_S("ExamplePanic"),
+                                                  {child_example_panic, NULL},
+                                                  BURROW_S("before"),
+                                                  false};
     } else if (strcmp(scenario, "panic") == 0) {
         tests[n++] = (TestingInternalTest){BURROW_S("TestPass"), {child_pass, NULL}};
         tests[n++] = (TestingInternalTest){BURROW_S("TestPanic"), {child_panic, NULL}};
@@ -463,7 +517,7 @@ static int run_child(const char *scenario) {
         slice_from(tests, n, n, TYPE_TESTING_INTERNAL_TEST),
         slice_from(benchmarks, nb, nb, TYPE_TESTING_INTERNAL_BENCHMARK),
         slice_nil(TYPE_TESTING_INTERNAL_FUZZ_TARGET),
-        slice_nil(TYPE_TESTING_INTERNAL_EXAMPLE));
+        slice_from(examples, ne, ne, TYPE_TESTING_INTERNAL_EXAMPLE));
     testing_m_set_bare(m, strcmp(scenario, "bare") == 0 ||
                               strcmp(scenario, "benchbare") == 0);
     int code = testing_m_run(m);
@@ -716,6 +770,44 @@ static const Scenario scenarios[] = {
      "--- FAIL: TestPanic (0.00s)\n"
      "panic: boom",
      true},
+    {"-test.v -test.skip=Panic", "examples", 1,
+     "=== RUN   TestPass\n"
+     "    testing_test.c:N: hello\n"
+     "--- PASS: TestPass (0.00s)\n"
+     "=== RUN   ExampleHello\n"
+     "--- PASS: ExampleHello (0.00s)\n"
+     "=== RUN   ExampleWrong\n"
+     "--- FAIL: ExampleWrong (0.00s)\n"
+     "got:\n"
+     "one\n"
+     "want:\n"
+     "two\n"
+     "=== RUN   ExampleLines\n"
+     "--- PASS: ExampleLines (0.00s)\n"
+     "=== RUN   ExampleLinesWrong\n"
+     "--- FAIL: ExampleLinesWrong (0.00s)\n"
+     "got:\n"
+     "c\n"
+     "a\n"
+     "\n"
+     "want (unordered):\n"
+     "a\n"
+     "b\n"
+     "FAIL\n",
+     false},
+    {"-test.run=Hello", "examples", 0, "PASS\n", false},
+    {"-test.run=Nothing", "examples", 0, "testing: warning: no tests to run\nPASS\n",
+     false},
+    {"-test.v=test2json -test.run=Hello", "examples", 0,
+     "\x16=== RUN   ExampleHello\n"
+     "\x16--- PASS: ExampleHello (0.00s)\n"
+     "\x16=== NAME   \n"
+     "\x16PASS\n",
+     false},
+    {"-test.run=Panic", "examples", 2,
+     "--- FAIL: ExamplePanic (0.00s)\n"
+     "panic: boom",
+     true},
     {"-test.timeout=300ms -test.v", "sleep", 2,
      "=== RUN   TestSleep\n"
      "panic: test timed out after 300ms\n"
@@ -858,6 +950,25 @@ static void TestOutput(TestingT *t) {
     check_scenarios(t, scenarios, sizeof scenarios / sizeof scenarios[0]);
 }
 
+/* Examples in this binary's own list, which run in process with its standard
+ * output captured, the way every test binary's examples do. */
+static void ExampleCapture(void) {
+    printf("printf\n");
+    fflush(stdout);
+    fmt_printf_v("fmt %d\n", 2);
+    fmt_println_v(BURROW_S("  trailing space goes  "));
+}
+
+static void ExampleUnordered(void) {
+    for (int i = 3; i > 0; i--)
+        printf("%d\n", i);
+}
+
+/* Listed without output, so it is compiled and never run. */
+static void ExampleNeverRun(void) {
+    abort();
+}
+
 static void TestHelpers(TestingT *t) {
     if (!testing_testing())
         testing_t_error_v(t, "Testing() is false inside a test");
@@ -881,7 +992,10 @@ static void TestHelpers(TestingT *t) {
     X(TestParallel)                                                                    \
     X(TestHelpers)                                                                     \
     X(TestOutput)                                                                      \
-    X(TestBenchmarkOutput)
+    X(TestBenchmarkOutput)                                                             \
+    X(ExampleCapture, "printf\nfmt 2\n  trailing space goes")                          \
+    X(ExampleUnordered, TESTING_UNORDERED("1\n2\n3"))                                  \
+    X(ExampleNeverRun)
 
 int main(int argc, char **argv) {
     if (argc >= 3 && strcmp(argv[argc - 2], "child") == 0) {

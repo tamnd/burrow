@@ -330,6 +330,54 @@ int main(void) {
 
 GOMAXPROCS cannot change while the scheduler runs, so all the benchmarks run with the largest `-test.cpu` value and the name says which value that pass is for. It only really matters to `testing_b_run_parallel`, which starts that many goroutines. Under `TESTING_MAIN_BARE` there are no goroutines, so benchmarks run on the calling thread and the bodies passed to `testing_b_run_parallel` take turns.
 
+## Examples
+
+An example is a function that takes nothing and prints something. In Go the expected output is an `// Output:` comment at the end of the function, which C cannot read back, so here it is the second argument of the example's entry in the list. The runner captures what the example writes to standard output, whether through `printf`, fmt or straight to descriptor 1, and the example fails when that differs from the expected output. White space at either end does not count.
+
+<!-- example: ../examples/testing/examples.c#examples -->
+```c
+static void ExampleStrClone(void) {
+    Str s = str_clone(heap_allocator(), BURROW_S("gopher"));
+    fmt_println_v(s, s.len);
+    mem_free(heap_allocator(), (void *)(uintptr_t)s.p, (size_t)s.len, 1);
+}
+
+static void ExampleFruit(void) {
+    printf("banana\n");
+    printf("apple\n");
+    printf("cherry\n");
+}
+
+static void ExampleSum(void) {
+    fmt_println_v(2 + 2);
+}
+
+static void ExampleDraft(void) {
+    printf("not checked yet\n");
+}
+
+#define TESTS(X)                                                                       \
+    X(ExampleStrClone, "gopher 6")                                                     \
+    X(ExampleFruit, TESTING_UNORDERED("apple\nbanana\ncherry"))                        \
+    X(ExampleSum, "5")                                                                 \
+    X(ExampleDraft)
+```
+
+`TESTING_UNORDERED` is Go's `// Unordered output:`, for output whose lines can come in any order, like the keys of a map. An example listed with no output is compiled and never run, which is what go test does with an example that has no output comment. It still has to build, so it cannot go stale without anybody noticing.
+
+Examples run after the tests and before the benchmarks, and `-test.run` and `-test.skip` pick them by name the same way they pick tests. The program above prints this, with the failing example showing what it printed and what it should have printed:
+
+```
+--- FAIL: ExampleSum (0.00s)
+got:
+4
+want:
+5
+FAIL
+```
+
+An example that panics fails, and then the panic carries on and ends the run with its stack trace, the way it does in Go.
+
 ## What is not there yet
 
-Fuzz targets and examples can go in the tables and `-test.list` shows them, but they do not run yet. The flags for profiles, coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.
+Fuzz targets can go in the tables and `-test.list` shows them, but they do not run yet. The flags for profiles, coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.

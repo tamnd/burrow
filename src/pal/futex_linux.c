@@ -9,9 +9,17 @@
  * This was src/runtime/note.c's linux half until the platform layer existed,
  * and the reasoning in the comments below came with it.
  *
+ * _DEFAULT_SOURCE is for syscall, which glibc and musl both hide from a strict
+ * C11 build. Writing the prototype out instead worked until some other file in
+ * the amalgamation included unistd.h first and made it a redeclaration.
+ *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
+
+#if !defined(_WIN32)
+#define _DEFAULT_SOURCE 1
+#endif
 
 #include "burrow/platform.h"
 
@@ -23,6 +31,7 @@
 
 #include <errno.h>
 #include <sys/syscall.h>
+#include <unistd.h>
 
 /* FUTEX_WAIT and FUTEX_WAKE are 0 and 1, and the PRIVATE flag is 128, which
  * says the futex is never shared between processes and lets the kernel skip
@@ -61,12 +70,6 @@ typedef struct FutexTimespec {
     FutexTime tv_sec;
     FutexTime tv_nsec;
 } FutexTimespec;
-
-/* Declared here rather than taken from <unistd.h>, because both glibc and musl
- * hide syscall behind _GNU_SOURCE and burrow is built as strict C11. The
- * prototype is the one both of them use and it is fixed by the ABI, so writing
- * it out is not a guess. */
-extern long syscall(long number, ...);
 
 /* The longest any single wait may be, a thousand seconds. It costs one extra
  * system call every quarter of an hour, and in exchange the conversion from

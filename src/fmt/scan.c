@@ -574,9 +574,10 @@ static Int ss_float_token(Ss *s, Int start) {
 /* Go's math.Ldexp, which libm's ldexp agrees with, but burrow does not link
  * libm. */
 static double scan_ldexp(double frac, Int exp) {
-    if (frac == 0 || frac != frac || frac - frac != 0)
-        return frac;
     uint64_t x;
+    memcpy(&x, &frac, sizeof x);
+    if (frac == 0 || ((x >> 52) & 0x7ff) == 0x7ff) /* zero, NaN or an infinity */
+        return frac;
     if ((frac < 0 ? -frac : frac) < 2.2250738585072014e-308) { /* SmallestNormal */
         frac *= (double)(UINT64_C(1) << 52);
         exp -= 52;
@@ -1384,7 +1385,9 @@ Any burrow__scan_of_slice(Slice *p, burrow__ScanBox *box) {
     return (Any){&box->t, p};
 }
 
+/* T is a type and cannot be parenthesised. */
 #define SCAN_OF(name, T, type)                                                         \
+    /* NOLINTNEXTLINE(bugprone-macro-parentheses) */                                   \
     Any burrow__scan_of_##name(T *p, burrow__ScanBox *box) {                           \
         (void)box;                                                                     \
         return (Any){(type), p};                                                       \

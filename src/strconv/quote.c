@@ -43,20 +43,20 @@ typedef struct QuoteOut {
 #define QUOTE_STACK 256
 
 static void put(QuoteOut *o, const void *b, Int k) {
-    if (k > 0 && k <= o->cap - o->n)
+    if (o->p != NULL && k > 0 && k <= o->cap - o->n)
         memcpy(o->p + o->n, b, (size_t)k);
     o->n += k;
 }
 
 static void put_byte(QuoteOut *o, Byte b) {
-    if (o->n < o->cap)
+    if (o->p != NULL && o->n < o->cap)
         o->p[o->n] = b;
     o->n++;
 }
 
 /* Two bytes, which is every escape but the long ones. */
 static void put2(QuoteOut *o, Byte b0, Byte b1) {
-    if (o->cap - o->n >= 2) {
+    if (o->p != NULL && o->cap - o->n >= 2) {
         o->p[o->n] = b0;
         o->p[o->n + 1] = b1;
     }
@@ -230,9 +230,9 @@ static Slice quote_append(Alloc *a, Slice dst, QuoteJob j) {
     Int spare = dst.cap - dst.len;
     Int least = j.is_rune ? 3 : j.s.len + 2;
     Byte tmp[QUOTE_STACK];
-    Byte *room = (Byte *)dst.p + dst.len;
-    bool in_place = spare >= least;
-    QuoteOut o = {in_place ? room : tmp, 0, in_place ? spare : QUOTE_STACK};
+    bool in_place = dst.p != NULL && spare >= least;
+    QuoteOut o = {in_place ? (Byte *)dst.p + dst.len : tmp, 0,
+                  in_place ? spare : QUOTE_STACK};
     run(&o, &j);
 
     if (o.n <= o.cap) {

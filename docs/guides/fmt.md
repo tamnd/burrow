@@ -119,13 +119,15 @@ A type whose descriptor has a `String` method taking nothing and returning `Str`
 BURROW_STRUCT_DECL(Celsius, CELSIUS_FIELDS);
 
 static Str celsius_string(Celsius *c) {
-    return fmt_sprintf_v(heap_allocator(), "%.1f°C", c->Deg);
+    return fmt_sprintf_v(error_allocator(), "%.1f°C", c->Deg);
 }
 
 #define CELSIUS_SIG_String(IN, OUT) OUT(Str)
 #define CELSIUS_METHODS(M, T) M(T, String, celsius_string, CELSIUS_SIG_String)
 BURROW_STRUCT_DEFINE_METHODS(Celsius, CELSIUS_FIELDS, CELSIUS_METHODS);
 ```
+
+fmt copies what the method returns and never frees it, the same way Go leaves the string to its collector. A method that builds its text should put it somewhere that gets cleaned up without the caller's help, and the goroutine's error arena is the handy place for that: `error_allocator()` is always there, and what goes in it dies with the goroutine or at the next `error_release`.
 
 Any other verb prints the fields, so `%d` shows what is underneath:
 

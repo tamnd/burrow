@@ -15,7 +15,7 @@ BURROW_STRUCT(Point, POINT_FIELDS);
 BURROW_STRUCT_DECL(Celsius, CELSIUS_FIELDS);
 
 static Str celsius_string(Celsius *c) {
-    return fmt_sprintf_v(heap_allocator(), "%.1f°C", c->Deg);
+    return fmt_sprintf_v(error_allocator(), "%.1f°C", c->Deg);
 }
 
 #define CELSIUS_SIG_String(IN, OUT) OUT(Str)

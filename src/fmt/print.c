@@ -353,7 +353,7 @@ static void write_error_type(FmtBuf *b, const Error *e) {
 }
 
 static void write_arg_type(FmtBuf *b, const Type *t, const void *d) {
-    if (t == TYPE_ERROR)
+    if (t == TYPE_ERROR && d != NULL)
         write_error_type(b, (const Error *)d);
     else
         write_type(b, t);
@@ -862,7 +862,7 @@ static void call_string_method(Pp *p, const Type *t, void *d, const Method *m,
 static bool is_error(const Type *t, void *d) {
     if (t == TYPE_ERROR)
         return true;
-    Recv r;
+    Recv r = {NULL, NULL};
     return method_holder(t, d, &r) && find_method(&r, LIT("Error"), false) != NULL;
 }
 
@@ -880,7 +880,7 @@ static bool handle_methods(Pp *p, const Type *t, void *d, Rune verb) {
         verb = 'v';
     }
 
-    Recv r;
+    Recv r = {NULL, NULL};
     bool has = method_holder(t, d, &r);
 
     /* A Formatter is in charge of everything. */
@@ -1460,8 +1460,10 @@ static void print_arg(Pp *p, const Type *t, void *d, Rune verb) {
         const Slice *s = (const Slice *)d;
         const Type *et = t->elem != NULL ? t->elem : s->elem;
         if (et == &burrow_type_uint8_t) {
-            fmt_bytes(p, (const Byte *)s->p, s->len, s->p == NULL, verb, LIT("[]byte"),
-                      d);
+            /* A nil slice has length 0 already, but say so where the
+             * analyzer can see it. */
+            fmt_bytes(p, (const Byte *)s->p, s->p == NULL ? 0 : s->len, s->p == NULL,
+                      verb, LIT("[]byte"), d);
             return;
         }
     }

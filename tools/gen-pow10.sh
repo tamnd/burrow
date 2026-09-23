@@ -23,16 +23,16 @@ tmp=$(mktemp)
 trap 'rm -f "$tmp" "$tmp.c"' EXIT
 
 {
-	printf '/* clang-format off */\n'
+	printf '    /* clang-format off */\n'
 	grep '^	{0x' "$src" |
 		sed -e 's|^	{\(0x[0-9a-f]*\), \(0x[0-9a-f]*\)}, // \(.*\)$|    {\1ULL, \2ULL}, /* \3 */|'
-	printf '/* clang-format on */\n'
+	printf '    /* clang-format on */\n'
 } >"$tmp"
 
 awk -v tables="$tmp" '
-	/^\/\* END GENERATED TABLES \*\/$/ { skip = 0 }
+	/^ *\/\* END GENERATED TABLES \*\/$/ { skip = 0 }
 	!skip { print }
-	/^\/\* BEGIN GENERATED TABLES \*\/$/ {
+	/^ *\/\* BEGIN GENERATED TABLES \*\/$/ {
 		while ((getline line < tables) > 0) print line
 		skip = 1
 	}

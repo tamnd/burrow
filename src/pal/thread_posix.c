@@ -109,14 +109,14 @@ static size_t round_to_page(size_t bytes) {
 static int64_t to_handle(pthread_t id) {
     int64_t h = 0;
 
-    memcpy(&h, &id, sizeof id);
+    memcpy(&h, (const void *)&id, sizeof(pthread_t));
     return h;
 }
 
 static pthread_t from_handle(int64_t h) {
     pthread_t id;
 
-    memcpy(&id, &h, sizeof id);
+    memcpy((void *)&id, &h, sizeof(pthread_t));
     return id;
 }
 

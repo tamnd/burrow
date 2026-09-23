@@ -198,8 +198,8 @@ TEST(format_float) {
         Str got = strconv_format_float(a, f, tt->fmt, tt->prec, tt->bit_size);
         if (!str_eq(got, tt->out))
             fprintf(stderr, "FormatFloat(%016llx, '%c', %d, %d) = %.*s\n",
-                    (unsigned long long)tt->in, tt->fmt, (int)tt->prec, (int)tt->bit_size,
-                    (int)got.len, (const char *)got.p);
+                    (unsigned long long)tt->in, tt->fmt, (int)tt->prec,
+                    (int)tt->bit_size, (int)got.len, (const char *)got.p);
         CHECK(str_eq(got, tt->out));
 
         Slice dst = slice_from_str(a, S("abc"));
@@ -313,8 +313,8 @@ TEST(parse_complex) {
         Error err = BURROW_NO_ERROR;
         Complex128 c = strconv_parse_complex(tt->in, tt->bit_size, &err);
         if (!same64(c.re, tt->re) || !same64(c.im, tt->im))
-            fprintf(stderr, "ParseComplex(%.*s, %d) = %016llx %016llx\n", (int)tt->in.len,
-                    (const char *)tt->in.p, (int)tt->bit_size,
+            fprintf(stderr, "ParseComplex(%.*s, %d) = %016llx %016llx\n",
+                    (int)tt->in.len, (const char *)tt->in.p, (int)tt->bit_size,
                     (unsigned long long)bits64(c.re), (unsigned long long)bits64(c.im));
         CHECK(same64(c.re, tt->re));
         CHECK(same64(c.im, tt->im));

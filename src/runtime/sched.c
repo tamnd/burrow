@@ -907,9 +907,14 @@ static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
     gp->bubble = NULL;
 
     /* Every error this goroutine made dies with it, which is the lifetime
-     * burrow/error.h promises and the reason error_retain exists. */
-    if (gp->errors != NULL)
+     * burrow/error.h promises and the reason error_retain exists. The Arena
+     * struct goes too rather than riding the free list, since a g can live in
+     * memory a leak checker does not scan and then the struct looks lost. */
+    if (gp->errors != NULL) {
         arena_free(gp->errors);
+        mem_free(heap_allocator(), gp->errors, sizeof(Arena), _Alignof(Arena));
+        gp->errors = NULL;
+    }
     burrow__atomic_store_release_u32(&gp->bubbleblocked, 0);
 
     gfput(m->p, gp);

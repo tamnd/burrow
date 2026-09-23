@@ -14,8 +14,8 @@
  * of its binary expansion, hi then lo, scaled so the high bit is set. The table
  * between the markers is tools/gen-pow10.sh's output. */
 const uint64_t burrow__strconv_pow10[696][2] = {
-/* BEGIN GENERATED TABLES */
-/* clang-format off */
+    /* BEGIN GENERATED TABLES */
+    /* clang-format off */
     {0xfa8fd5a0081c0289ULL, 0xe8cd3796329f1bacULL}, /* 1e-348 * 2**1284 */
     {0x9c99e58405118196ULL, 0xf18042bddfa3714bULL}, /* 1e-347 * 2**1280 */
     {0xc3c05ee50655e1fbULL, 0xade0536d578c4d9eULL}, /* 1e-346 * 2**1277 */
@@ -712,6 +712,6 @@ const uint64_t burrow__strconv_pow10[696][2] = {
     {0x85eab0e41a6940e6ULL, 0x0d27f1f3f3f4b1eeULL}, /* 1e345 * 2**-1019 */
     {0xa7655d1d21039120ULL, 0x9071ee70f0f1de6aULL}, /* 1e346 * 2**-1022 */
     {0xd13eb46469447568ULL, 0xb48e6a0d2d2e5604ULL}, /* 1e347 * 2**-1025 */
-/* clang-format on */
-/* END GENERATED TABLES */
+    /* clang-format on */
+    /* END GENERATED TABLES */
 };

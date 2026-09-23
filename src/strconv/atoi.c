@@ -323,7 +323,8 @@ static uint64_t parse_uint(Str s, Int base, Int bit_size, ParseCode *code) {
         if (c == '_' && base0) {
             underscores = true;
             continue;
-        } else if ('0' <= c && c <= '9') {
+        }
+        if ('0' <= c && c <= '9') {
             d = (Byte)(c - '0');
         } else if ('a' <= atoi_lower(c) && atoi_lower(c) <= 'z') {
             d = (Byte)(atoi_lower(c) - 'a' + 10);

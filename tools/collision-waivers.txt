@@ -26,3 +26,8 @@ exec_command   libnetsnmpmibs.*   net-snmp agent internals, only SNMP agents lin
 
 # reiserfsprogs' private library, which nothing but the reiserfs tools links.
 mem_alloc   libreiserfscore.*   reiserfsprogs internals, linked only by the reiserfs tools
+
+# UW c-client, the old IMAP library behind PHP's imap extension, which PHP 8.4
+# dropped. It parses RFC 822 dates for itself, and a mail client built on it
+# has no reason to also want net/mail, or can build with a prefix if it does.
+mail_parse_date   libc-client.*   UW IMAP c-client internals, linked by old mail tools and PHP imap

@@ -291,6 +291,10 @@ static float pack32(uint32_t m, int e, bool *range) {
 
 /* d * 10^p rounded to the nearest double, for d of at most 19 digits. */
 static double parse_float64(uint64_t d, int p, uint64_t sign, bool *range) {
+    /* The callers never pass zero, but the shift below would be by 64 if they
+     * did. */
+    if (d == 0)
+        return f64_from_bits(sign);
     int b = (int)bits_len64(d);
     int lp = log2_pow10(p);
     int e = 53 - b - lp;
@@ -311,6 +315,8 @@ static double parse_float64(uint64_t d, int p, uint64_t sign, bool *range) {
 }
 
 static float parse_float32(uint64_t d, int p, uint32_t sign, bool *range) {
+    if (d == 0)
+        return f32_from_bits(sign);
     int b = (int)bits_len64(d);
     int lp = log2_pow10(p);
     int e = 24 - b - lp;
@@ -750,7 +756,8 @@ overflow:
 
 out:;
     uint64_t bits = mant & ((1ULL << flt->mant_bits) - 1);
-    bits |= (uint64_t)((exp - flt->bias) & ((1 << flt->exp_bits) - 1)) << flt->mant_bits;
+    bits |= (uint64_t)((exp - flt->bias) & ((1 << flt->exp_bits) - 1))
+            << flt->mant_bits;
     if (d->neg)
         bits |= 1ULL << flt->mant_bits << flt->exp_bits;
     return bits;
@@ -956,8 +963,8 @@ static const double float64_pow10[] = {
     1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
 };
 
-static const float float32_pow10[] = {1e0f, 1e1f, 1e2f, 1e3f, 1e4f, 1e5f,
-                                      1e6f, 1e7f, 1e8f, 1e9f, 1e10f};
+static const float float32_pow10[] = {1e0F, 1e1F, 1e2F, 1e3F, 1e4F, 1e5F,
+                                      1e6F, 1e7F, 1e8F, 1e9F, 1e10F};
 
 /* mantissa * 10^exp in one correctly rounded operation, when both factors are
  * exact: an integer, an integer times an exact power of ten, or one divided by
@@ -1005,7 +1012,7 @@ static bool atof32_exact(uint64_t mantissa, Int exp, bool neg, float *out) {
             f *= float32_pow10[exp - 10];
             exp = 10;
         }
-        if (f > 1e7f || f < -1e7f)
+        if (f > 1e7F || f < -1e7F)
             return false;
         *out = f * float32_pow10[exp];
         return true;
@@ -1020,8 +1027,8 @@ static bool atof32_exact(uint64_t mantissa, Int exp, bool neg, float *out) {
 
 /* A hex float, already read into mantissa and exp, rounded to flt. Only a
  * mantissa with more bits than fit rounds at all. */
-static double atof_hex(const FloatInfo *flt, uint64_t mantissa, Int exp, bool neg, bool trunc,
-                       bool *range) {
+static double atof_hex(const FloatInfo *flt, uint64_t mantissa, Int exp, bool neg,
+                       bool trunc, bool *range) {
     Int max_exp = (1 << flt->exp_bits) + flt->bias - 2;
     Int min_exp = flt->bias + 1;
     exp += flt->mant_bits;
@@ -1067,7 +1074,8 @@ static double atof_hex(const FloatInfo *flt, uint64_t mantissa, Int exp, bool ne
     }
 
     uint64_t bits = mantissa & ((1ULL << flt->mant_bits) - 1);
-    bits |= (uint64_t)((exp - flt->bias) & ((1 << flt->exp_bits) - 1)) << flt->mant_bits;
+    bits |= (uint64_t)((exp - flt->bias) & ((1 << flt->exp_bits) - 1))
+            << flt->mant_bits;
     if (neg)
         bits |= 1ULL << flt->mant_bits << flt->exp_bits;
     if (flt == &float32_info)
@@ -1111,8 +1119,8 @@ static double atof32(Str s, Int *n, FloatCode *code) {
         return (double)exact;
 #endif
     float f = parse_float32(r.mantissa, (int)r.exp, sign, &range);
-    if (!r.trunc || f32_bits(f) == f32_bits(parse_float32(r.mantissa + 1, (int)r.exp, sign,
-                                                          &(bool){false}))) {
+    if (!r.trunc || f32_bits(f) == f32_bits(parse_float32(r.mantissa + 1, (int)r.exp,
+                                                          sign, &(bool){false}))) {
         *code = range ? FLOAT_RANGE : FLOAT_OK;
         return (double)f;
     }
@@ -1166,8 +1174,8 @@ static double atof64(Str s, Int *n, FloatCode *code) {
     double f = parse_float64(r.mantissa, (int)r.exp, sign, &range);
     /* With digits dropped from the mantissa, the answer stands if one more
      * in the last kept place gives the same float. */
-    if (!r.trunc || f64_bits(f) == f64_bits(parse_float64(r.mantissa + 1, (int)r.exp, sign,
-                                                          &(bool){false}))) {
+    if (!r.trunc || f64_bits(f) == f64_bits(parse_float64(r.mantissa + 1, (int)r.exp,
+                                                          sign, &(bool){false}))) {
         *code = range ? FLOAT_RANGE : FLOAT_OK;
         return f;
     }
@@ -1223,7 +1231,8 @@ static Complex128 complex_syntax(Error *err, Str s) {
     return (Complex128){0, 0};
 }
 
-static Complex128 complex_done(Error *err, Str s, FloatCode pending, double re, double im) {
+static Complex128 complex_done(Error *err, Str s, FloatCode pending, double re,
+                               double im) {
     float_report(err, "ParseComplex", s, pending);
     return (Complex128){re, im};
 }
@@ -1298,7 +1307,7 @@ static void fo_bytes(FloatOut *o, const void *b, int64_t k) {
         return;
     if (o->n == 0)
         o->first = *(const Byte *)b;
-    if (k <= o->cap - o->n)
+    if (o->p != NULL && k <= o->cap - o->n)
         memcpy(o->p + o->n, b, (size_t)k);
     o->n += k;
 }
@@ -1306,7 +1315,7 @@ static void fo_bytes(FloatOut *o, const void *b, int64_t k) {
 static void fo_byte(FloatOut *o, Byte c) {
     if (o->n == 0)
         o->first = c;
-    if (o->n < o->cap)
+    if (o->p != NULL && o->n < o->cap)
         o->p[o->n] = c;
     o->n++;
 }
@@ -1318,7 +1327,7 @@ static void fo_fill(FloatOut *o, Byte c, int64_t k) {
         return;
     if (o->n == 0)
         o->first = c;
-    if (k <= o->cap - o->n)
+    if (o->p != NULL && k <= o->cap - o->n)
         memset(o->p + o->n, c, (size_t)k);
     o->n += k;
 }
@@ -1408,7 +1417,8 @@ static void ftoa_prepare(FloatJob *j, uint64_t bits, const FloatInfo *flt, int m
     if (prec < 0) {
         int s = 64 - (int)bits_len64(mant);
         int p;
-        uint64_t d = short_float(mant << s, exp - s - mant_bits, mant_bits, min_exp, &p);
+        uint64_t d =
+            short_float(mant << s, exp - s - mant_bits, mant_bits, min_exp, &p);
         j->nd = set_digits(j->buf, d, p, float_num_digits(d), &j->dp);
         switch (fmt) {
         case 'e':
@@ -1461,8 +1471,8 @@ static void ftoa_prepare(FloatJob *j, uint64_t bits, const FloatInfo *flt, int m
         if (digits > 0) {
             int s = 64 - (int)bits_len64(mant);
             int p;
-            uint64_t d = fixed_width_float(mant << s, exp - s - mant_bits, (int)digits, prec,
-                                           fmt, &p);
+            uint64_t d = fixed_width_float(mant << s, exp - s - mant_bits, (int)digits,
+                                           prec, fmt, &p);
             if (d != 0)
                 j->nd = set_digits(j->buf, d, p, float_num_digits(d), &j->dp);
         }
@@ -1587,10 +1597,10 @@ static void emit_efg(FloatOut *o, const FloatJob *j) {
 
         if (prec > 0) {
             fo_byte(o, '.');
-            int64_t lz = min64(prec, max64(0, -dp));        /* leading zeros */
+            int64_t lz = min64(prec, max64(0, -dp)); /* leading zeros */
             int64_t off = dp + lz;
             int64_t m = min64(prec - lz, max64(0, nd - off)); /* digits */
-            int64_t tz = max64(0, prec - lz - m);           /* trailing zeros */
+            int64_t tz = max64(0, prec - lz - m);             /* trailing zeros */
             fo_fill(o, '0', lz);
             fo_bytes(o, s + off, m);
             fo_fill(o, '0', tz);
@@ -1745,7 +1755,8 @@ static bool float_job(FloatJob *j, double f, Byte fmt, int64_t prec, Int bit_siz
 
 /* The bytes of a run into tmp, copied to p, or written again into p when they
  * did not fit. */
-static void float_finish(Byte *p, const Byte *tmp, const FloatOut *o, const FloatJob *j) {
+static void float_finish(Byte *p, const Byte *tmp, const FloatOut *o,
+                         const FloatJob *j) {
     if (o->n <= FLOAT_STACK) {
         memcpy(p, tmp, (size_t)o->n);
         return;
@@ -1787,7 +1798,8 @@ static Byte *float_grow(Alloc *a, Slice *dst, int64_t n) {
     return dst->p == NULL ? NULL : (Byte *)dst->p + old;
 }
 
-Slice strconv_append_float(Alloc *a, Slice dst, double f, Byte fmt, Int prec, Int bit_size) {
+Slice strconv_append_float(Alloc *a, Slice dst, double f, Byte fmt, Int prec,
+                           Int bit_size) {
     FloatJob j;
     if (!float_job(&j, f, fmt, prec, bit_size, "strconv: illegal AppendFloat bitSize"))
         return slice_nil(TYPE_BYTE);
@@ -1820,7 +1832,8 @@ Slice strconv_append_float(Alloc *a, Slice dst, double f, Byte fmt, Int prec, In
 }
 
 /* (re+imi), with the + only when the imaginary part has no sign of its own. */
-static void emit_complex(FloatOut *o, const FloatJob *re, const FloatJob *im, bool im_signed) {
+static void emit_complex(FloatOut *o, const FloatJob *re, const FloatJob *im,
+                         bool im_signed) {
     fo_byte(o, '(');
     emit_float(o, re);
     if (!im_signed)
@@ -1835,8 +1848,10 @@ Str strconv_format_complex(Alloc *a, Complex128 c, Byte fmt, Int prec, Int bit_s
     bit_size >>= 1; /* complex64 is two float32s */
 
     FloatJob re, im;
-    if (!float_job(&re, c.re, fmt, prec, bit_size, "strconv: illegal AppendFloat bitSize") ||
-        !float_job(&im, c.im, fmt, prec, bit_size, "strconv: illegal AppendFloat bitSize"))
+    if (!float_job(&re, c.re, fmt, prec, bit_size,
+                   "strconv: illegal AppendFloat bitSize") ||
+        !float_job(&im, c.im, fmt, prec, bit_size,
+                   "strconv: illegal AppendFloat bitSize"))
         return BURROW_STR_EMPTY;
 
     FloatOut first = {NULL, 0, 0, 0};

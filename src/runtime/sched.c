@@ -233,6 +233,8 @@ int32_t burrow__gomaxprocs(void) {
     return sched.gomaxprocs;
 }
 
+#define SNAPSHOT_TRIES 100
+
 int32_t burrow__allg_snapshot(burrow__GInfo *out, int32_t max, int32_t *total) {
     int32_t n = 0;
     int32_t seen = 0;
@@ -244,9 +246,19 @@ int32_t burrow__allg_snapshot(burrow__GInfo *out, int32_t max, int32_t *total) {
 
     /* Try rather than wait, for the reason the header gives: this runs on the
      * way out of a crash and the crash may be inside the section this lock
-     * protects. */
-    if (!burrow__trylock(&sched.lock))
-        return -1;
+     * protects. But try more than once. A healthy program holds this lock for
+     * a few hundred nanoseconds at a time and takes it on every schedule, so a
+     * goroutine in a tight loop of runtime_gosched on another thread wins a
+     * single try often enough to make the answer look random. A hundred tries
+     * with a yield between them is well under a millisecond when the lock is
+     * really stuck, and it is enough to get in between two holders when it is
+     * only busy. */
+    int tries = 0;
+    while (!burrow__trylock(&sched.lock)) {
+        if (++tries == SNAPSHOT_TRIES)
+            return -1;
+        burrow__thread_yield();
+    }
 
     for (burrow__G *g = sched.allg; g != NULL; g = g->allnext) {
         seen++;

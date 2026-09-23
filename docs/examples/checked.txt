@@ -11,3 +11,5 @@ docs/guides/defer.md
 docs/guides/numbers.md
 docs/guides/runes.md
 docs/guides/time.md
+docs/guides/conventions.md
+docs/guides/goroutines.md

@@ -8,6 +8,7 @@ Everything here is `burrow/proc.h`. The header next to it, `burrow/sched.h`, is 
 
 Go's runtime starts before your `main` because the Go toolchain arranges it. There is no toolchain here, so something has to say where the goroutine world begins and ends, and that is `runtime_main`.
 
+<!-- example: ../examples/goroutines/main.c -->
 ```c
 #include "burrow/proc.h"
 
@@ -28,13 +29,17 @@ That is the one call in this header that Go does not make you write. Everything 
 
 ## Starting one
 
+<!-- example: ../examples/goroutines/go.c#go -->
 ```c
 static void worker(void *env) {
     Job *j = env;
-    ...
+    j->result = j->input * j->input;
+    sync_wait_group_done(j->done);
 }
 
-go(BURROW_FN(Func, worker, job));
+static void start(Job *job) {
+    go(BURROW_FN(Func, worker, job));
+}
 ```
 
 `go` is Go's `go f()`. It returns as soon as the goroutine exists, which is before the goroutine has run, and there is no handle and no way to wait for it. Waiting is what a channel or a wait group is for, exactly as in Go.
@@ -47,8 +52,9 @@ The function value is an ordinary `Func`, which is `burrow/func.h`'s name for `f
 
 `runtime_gomaxprocs` is `runtime.GOMAXPROCS`. It is the number of Ps, so it bounds how many goroutines are running at the same instant rather than how many threads exist, and a program with ten thousand goroutines blocked on a channel is unaffected by it.
 
+<!-- example: ../examples/goroutines/procs.c#gomaxprocs -->
 ```c
-runtime_gomaxprocs(4);        /* before runtime_main */
+runtime_gomaxprocs(4); /* before runtime_main */
 runtime_main(BURROW_FN(Func, run, NULL));
 ```
 
@@ -58,6 +64,7 @@ One limitation, and it is temporary. Changing the number while the scheduler is 
 
 ## Yielding
 
+<!-- example: ../examples/goroutines/procs.c#gosched -->
 ```c
 runtime_gosched();
 ```
@@ -70,6 +77,7 @@ Until preemption lands this is the only thing that lets a compute loop share a t
 
 A goroutine ends when its function returns. `runtime_goexit` ends it where it stands.
 
+<!-- example: ../examples/goroutines/goexit.c#goexit -->
 ```c
 runtime_goexit();
 ```
@@ -82,14 +90,21 @@ Go says calling it from the main goroutine ends that goroutine and leaves the pr
 
 Channels, mutexes, wait groups, timers and the netpoller are all the same shape underneath. Remember which goroutine is waiting, park it, and ready it again when the thing it was waiting for happens. `sched_park` and `sched_ready` are that shape, and they are the reason a goroutine waiting on a channel costs a stack and not a thread.
 
+A channel cut down to the bone shows the whole of it. A receiver waits on a list under the channel's lock, and this is the callback it parks with:
+
+<!-- example: ../examples/goroutines/park.c#callback -->
 ```c
 static bool unlock_chan(Goroutine *g, void *arg) {
     (void)g;
-    unlock(&((Chan *)arg)->lock);
+    sync_mutex_unlock(&((Chan *)arg)->lock);
     return true;
 }
+```
 
-/* The waiting side, with the lock held. */
+The waiting side takes the lock, puts itself on the list, and parks with that callback:
+
+<!-- example: ../examples/goroutines/park.c#wait -->
+```c
 w.g = sched_current();
 w.next = c->waiters;
 c->waiters = &w;
@@ -97,8 +112,10 @@ sched_park(unlock_chan, c);
 /* Woken, and whoever woke us left the answer in w. */
 ```
 
+The other side takes the same lock, and with it held:
+
+<!-- example: ../examples/goroutines/park.c#ready -->
 ```c
-/* The other side, also with the lock held. */
 c->waiters = w->next;
 w->result = value;
 sched_ready(w->g);
@@ -120,6 +137,7 @@ Go starts a goroutine on eight kilobytes and grows the stack by copying it somew
 
 The default is a quarter of a megabyte, and it is not as expensive as it sounds. The mapping is lazy on every system burrow targets, so a goroutine that uses one page costs one page and the rest is address space, which 64 bit machines have a great deal of. A million goroutines is a quarter of a terabyte of address space and as much real memory as they actually touch.
 
+<!-- example: ../examples/goroutines/stack.c#stack -->
 ```c
 go_stack(BURROW_FN(Func, parse, input), 4 * 1024 * 1024);
 ```
@@ -130,14 +148,15 @@ Running off the end is not silent. Every stack is mapped with unreadable pages u
 
 ## Counting
 
+<!-- example: ../examples/goroutines/procs.c#count -->
 ```c
-runtime_numcpu();        /* processors on the machine */
-runtime_numgoroutine();  /* goroutines that exist right now */
+int cpus = runtime_numcpu();       /* processors on the machine */
+int live = runtime_numgoroutine(); /* goroutines that exist right now */
 ```
 
 `runtime_numgoroutine` counts running, runnable and parked goroutines, including the one asking. It is a snapshot, and on a busy program it is out of date before you read it, which is true of Go's as well. It is for reporting and for tests, and a program that branches on it is a program with a race in it.
 
-Both answer zero outside `runtime_main`.
+`runtime_numgoroutine` answers zero outside `runtime_main`, since no goroutines exist there. `runtime_numcpu` answers the same anywhere, the way Go's does.
 
 ## What the scheduler does
 

@@ -8,6 +8,7 @@ Go promises that the zero value of a type is a working value of that type. `var 
 
 C gives you the same bit pattern for free.
 
+<!-- example: ../examples/conventions/zero.c#zero -->
 ```c
 Str s = {0};
 Slice parts = {0};
@@ -16,9 +17,15 @@ Error err = {0};
 
 `BURROW_ZERO(T)` is the same thing where you need a value rather than an initialiser.
 
+<!-- example: ../examples/conventions/zero.c#zero-return -->
 ```c
-return BURROW_ZERO(Slice);
-if (str_eq(name, BURROW_ZERO(Str))) { ... }
+static Slice nothing(void) {
+    return BURROW_ZERO(Slice);
+}
+
+static bool unnamed(Str name) {
+    return str_eq(name, BURROW_ZERO(Str));
+}
 ```
 
 It expands to a compound literal, so it cannot initialise something with static storage. Write `= {0}` by hand there, which is the same bits and is a constant expression.
@@ -42,6 +49,7 @@ func Atoi(s string) (int, error)
 func ReadFile(name string) ([]byte, error)
 ```
 
+<!-- example: ../examples/conventions/results.c#declarations -->
 ```c
 Int strconv_atoi(Str s, Error *err);
 Slice os_read_file(Alloc *a, Str name, Error *err);
@@ -49,6 +57,7 @@ Slice os_read_file(Alloc *a, Str name, Error *err);
 
 Which reads at the call site as:
 
+<!-- example: ../examples/conventions/results.c#call -->
 ```c
 Error err = BURROW_NO_ERROR;
 Int n = strconv_atoi(s, &err);
@@ -58,21 +67,32 @@ if (BURROW_FAILED(err))
 
 or, when you do not care why it failed:
 
+<!-- example: ../examples/conventions/results.c#call-null -->
 ```c
 Int n = strconv_atoi(s, NULL);
 ```
 
 `NULL` being allowed everywhere is the part that has to hold without exception. A caller who wants only the first result should not have to declare a variable to throw away, and a rule with holes in it is one you have to look up every time.
 
-On the writing side that is `BURROW_OUT`:
+On the writing side that is `BURROW_OUT`, here in a cut down `strconv_atoi` that only knows digits:
 
+<!-- example: ../examples/conventions/results.c#out -->
 ```c
-Int io_read_at_least(IoReader r, Slice buf, Int min, Error *err) {
-    if (min > buf.len) {
-        BURROW_OUT(err, io_err_short_buffer);
+static Int strconv_atoi(Str s, Error *err) {
+    Int n = 0;
+    if (s.len == 0) {
+        BURROW_OUT(err, strconv_err_syntax);
         return 0;
     }
-    ...
+    for (Int i = 0; i < s.len; i++) {
+        if (s.p[i] < '0' || s.p[i] > '9') {
+            BURROW_OUT(err, strconv_err_syntax);
+            return 0;
+        }
+        n = n * 10 + (s.p[i] - '0');
+    }
+    return n;
+}
 ```
 
 It writes through the pointer if there is one and does nothing if there is not. The pointer appears twice in the expansion, so hand it a pointer variable rather than a call with a side effect in it.
@@ -81,6 +101,7 @@ It writes through the pointer if there is one and does nothing if there is not. 
 
 Some functions have nothing useful to return, and those return the `Error` directly, which makes the common check read the way it should.
 
+<!-- not compiled: os is not ported yet, so os_write_file does not exist -->
 ```c
 Error err = os_write_file(path, data, 0644);
 if (BURROW_FAILED(err))
@@ -93,6 +114,7 @@ Some return a value with no spare bit pattern to signal with. `str_clone` return
 
 Go returns three meaningful values rarely, and where it does the port gets a named struct rather than a third pointer.
 
+<!-- example: ../examples/conventions/zero.c#cut -->
 ```c
 typedef struct StringsCutRet {
     Str before;

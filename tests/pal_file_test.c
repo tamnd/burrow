@@ -448,6 +448,40 @@ static void TestPipeAndDup(TestingT *t) {
                            pal_errno_string(err));
 }
 
+static void TestChdirAndGetcwd(TestingT *t) {
+    Scratch *s = scratch(t);
+    char home[1024];
+    PalErrno err = PAL_OK;
+    int64_t n = pal_getcwd(home, sizeof home, &err);
+    if (n <= 0 || (size_t)n != strlen(home))
+        testing_t_fatalf_v(t, "getcwd: %d, %s", n, pal_errno_string(err));
+    char tiny[2];
+    if (pal_getcwd(tiny, sizeof tiny, &err) != -1 || err != PAL_ERANGE)
+        testing_t_errorf_v(t, "getcwd into two bytes: %s, want ERANGE",
+                           pal_errno_string(err));
+
+    char sub[1100];
+    snprintf(sub, sizeof sub, "%s", at(s, "sub"));
+    if (!pal_mkdir(sub, 0755, &err))
+        testing_t_fatalf_v(t, "mkdir: %s", pal_errno_string(err));
+    write_file(t, at(s, "sub/here"), "x");
+    if (!pal_chdir(sub, &err))
+        testing_t_fatalf_v(t, "chdir %s: %s", sub, pal_errno_string(err));
+    PalStat st;
+    if (!pal_stat("here", &st, &err))
+        testing_t_errorf_v(t, "a relative name after chdir: %s", pal_errno_string(err));
+    char now[1024];
+    n = pal_getcwd(now, sizeof now, &err);
+    if (n < 4 ||
+        (strcmp(now + n - 4, "/sub") != 0 && strcmp(now + n - 4, "\\sub") != 0))
+        testing_t_errorf_v(t, "getcwd after chdir is %s", now);
+    if (pal_chdir("missing", &err) || err != PAL_ENOENT)
+        testing_t_errorf_v(t, "chdir to a missing name: %s, want ENOENT",
+                           pal_errno_string(err));
+    if (!pal_chdir(home, &err))
+        testing_t_fatalf_v(t, "chdir back to %s: %s", home, pal_errno_string(err));
+}
+
 static void TestNullArgumentsAreRefused(TestingT *t) {
     PalErrno err = PAL_OK;
     if (pal_open(NULL, PAL_O_RDONLY, 0, &err) != -1 || err != PAL_EINVAL)
@@ -478,6 +512,7 @@ static void TestNullArgumentsAreRefused(TestingT *t) {
     X(TestLinksAndSymlinks)                                                            \
     X(TestChmodAndUtimes)                                                              \
     X(TestPipeAndDup)                                                                  \
+    X(TestChdirAndGetcwd)                                                              \
     X(TestNullArgumentsAreRefused)
 
 TESTING_MAIN(TESTS)

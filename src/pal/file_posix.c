@@ -412,6 +412,29 @@ bool pal_rmdir(const char *path, PalErrno *err) {
     return rmdir(path) == 0 || file_fail(err);
 }
 
+bool pal_chdir(const char *path, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!path_ok(path, err))
+        return false;
+    return chdir(path) == 0 || file_fail(err);
+}
+
+int64_t pal_getcwd(char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (buf == NULL || cap <= 0) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    if (getcwd(buf, (size_t)cap) == NULL) {
+        file_fail(err);
+        return -1;
+    }
+    int64_t n = 0;
+    while (buf[n] != 0)
+        n++;
+    return n;
+}
+
 bool pal_link(const char *from, const char *to, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (!path_ok(from, err) || !path_ok(to, err))

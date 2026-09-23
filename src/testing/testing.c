@@ -4,6 +4,7 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "corpus.h"
 #include "match.h"
 
 #include "burrow/chan.h"
@@ -2061,40 +2062,9 @@ static const Type *fuzz_type(const Type *t) {
     return NULL;
 }
 
-static Any fuzz_copy(const Type *t, const void *src) {
-    Alloc *h = heap_allocator();
-    void *dst = must_alloc(h, t->size, t->align);
-    if (t == TYPE_STRING) {
-        *(Str *)dst = str_clone(h, *(const Str *)src);
-    } else if (t == TYPE_BYTES) {
-        const Slice *s = (const Slice *)src;
-        Slice d = slice_nil(TYPE_UINT8);
-        if (s->len > 0) {
-            d = slice_make(h, TYPE_UINT8, s->len, s->len);
-            memcpy(d.p, s->p, (size_t)s->len);
-        }
-        *(Slice *)dst = d;
-    } else {
-        memcpy(dst, src, t->size);
-    }
-    return (Any){t, dst};
-}
-
-static void fuzz_value_free(Any v) {
-    Alloc *h = heap_allocator();
-    if (v.t == TYPE_STRING) {
-        str_release(*(Str *)v.data);
-    } else if (v.t == TYPE_BYTES) {
-        Slice *s = (Slice *)v.data;
-        if (s->p != NULL)
-            mem_free(h, s->p, (size_t)s->cap, 1);
-    }
-    mem_free(h, v.data, v.t->size, v.t->align);
-}
-
 static void fuzz_entry_free(FuzzEntry *e) {
     for (Int i = 0; i < e->n; i++)
-        fuzz_value_free(e->values[i]);
+        burrow__testing_value_free(e->values[i]);
     if (e->values != NULL)
         mem_free(heap_allocator(), e->values, (size_t)e->n * sizeof(Any),
                  _Alignof(Any));
@@ -2139,6 +2109,17 @@ static Str type_list(Alloc *a, const Any *values, const Type *const *types, Int 
     return s;
 }
 
+static void corpus_push(TestingF *f, FuzzEntry e) {
+    if (f->ncorpus == f->ccorpus) {
+        Int ncap = f->ccorpus == 0 ? 4 : f->ccorpus * 2;
+        f->corpus = (FuzzEntry *)must_realloc(
+            heap_allocator(), f->corpus, (size_t)f->ccorpus * sizeof(FuzzEntry),
+            (size_t)ncap * sizeof(FuzzEntry), _Alignof(FuzzEntry));
+        f->ccorpus = ncap;
+    }
+    f->corpus[f->ncorpus++] = e;
+}
+
 void testing_f_add(TestingF *f, Slice args) {
     const Any *v = (const Any *)args.p;
     for (Int i = 0; i < args.len; i++)
@@ -2150,17 +2131,10 @@ void testing_f_add(TestingF *f, Slice args) {
     if (args.len > 0) {
         values = (Any *)must_alloc(h, (size_t)args.len * sizeof(Any), _Alignof(Any));
         for (Int i = 0; i < args.len; i++)
-            values[i] = fuzz_copy(fuzz_type(v[i].t), v[i].data);
-    }
-    if (f->ncorpus == f->ccorpus) {
-        Int ncap = f->ccorpus == 0 ? 4 : f->ccorpus * 2;
-        f->corpus = (FuzzEntry *)must_realloc(
-            h, f->corpus, (size_t)f->ccorpus * sizeof(FuzzEntry),
-            (size_t)ncap * sizeof(FuzzEntry), _Alignof(FuzzEntry));
-        f->ccorpus = ncap;
+            values[i] = burrow__testing_value_copy(fuzz_type(v[i].t), v[i].data);
     }
     Str path = str_clone(h, fmt_sprintf_v(error_allocator(), "seed#%d", f->ncorpus));
-    f->corpus[f->ncorpus++] = (FuzzEntry){path, values, args.len};
+    corpus_push(f, (FuzzEntry){path, values, args.len});
 }
 
 /* CheckCorpus. Answers with the error's text, or an empty string. */
@@ -2175,6 +2149,195 @@ static Str check_corpus(Alloc *a, const FuzzEntry *e, const Type *const *types,
                                  type_list(a, e->values, NULL, e->n),
                                  type_list(a, NULL, types, ntypes));
     return BURROW_S("");
+}
+
+/* corpusDir, and the separator filepath.Join puts between its parts. */
+#if defined(BURROW_OS_WINDOWS)
+#define FUZZ_SEP "\\"
+#else
+#define FUZZ_SEP "/"
+#endif
+
+/* A path for the PAL, which wants it NUL terminated. */
+static char *path_cstr(Str s) {
+    char *p = (char *)must_alloc(heap_allocator(), (size_t)s.len + 1, 1);
+    memcpy(p, s.p, (size_t)s.len);
+    p[s.len] = '\0';
+    return p;
+}
+
+static void path_cstr_free(char *p) {
+    mem_free(heap_allocator(), p, strlen(p) + 1, 1);
+}
+
+/* os.ReadFile, answering with the PalErrno and the operation that failed. */
+static bool read_whole_file(const char *path, Buf *out, PalErrno *err,
+                            const char **op) {
+    *op = "open";
+    int64_t fd = pal_open(path, PAL_O_RDONLY, 0, err);
+    if (fd == PAL_INVALID_HANDLE)
+        return false;
+    *op = "read";
+    Byte chunk[4096];
+    for (;;) {
+        int64_t n = pal_read(fd, chunk, (int64_t)sizeof chunk, err);
+        if (n < 0) {
+            pal_close(fd, NULL);
+            return false;
+        }
+        if (n == 0)
+            break;
+        buf_append(out, chunk, (Int)n);
+    }
+    pal_close(fd, NULL);
+    return true;
+}
+
+static int corpus_name_cmp(Str a, Str b) {
+    Int n = a.len < b.len ? a.len : b.len;
+    int c = n > 0 ? memcmp(a.p, b.p, (size_t)n) : 0;
+    if (c != 0)
+        return c;
+    return a.len < b.len ? -1 : a.len > b.len ? 1 : 0;
+}
+
+/* The names in dir that are not directories, sorted, as os.ReadDir gives
+ * them. Answers false with *err set when the directory cannot be read. */
+static bool read_dir_names(const char *dir, Str **names, Int *n, PalErrno *err) {
+    Alloc *h = heap_allocator();
+    *names = NULL;
+    *n = 0;
+    int64_t fd = pal_open(dir, PAL_O_RDONLY | PAL_O_DIRECTORY, 0, err);
+    if (fd == PAL_INVALID_HANDLE)
+        return false;
+    PalDir *d = (PalDir *)must_alloc(h, sizeof(PalDir), _Alignof(PalDir));
+    d->fd = fd;
+    PalDirEntry *e =
+        (PalDirEntry *)must_alloc(h, sizeof(PalDirEntry), _Alignof(PalDirEntry));
+    Int cap = 0;
+    *err = PAL_OK;
+    while (pal_readdir(d, e, err)) {
+        Str name = str_from_bytes(e->name, e->name_len);
+        uint32_t type = e->type;
+        if (type == 0) {
+            /* The filesystem did not say, so ask, which is what DirEntry's
+             * IsDir does on such a filesystem. */
+            Str full = fmt_sprintf_v(error_allocator(), "%s" FUZZ_SEP "%s", dir, name);
+            char *p = path_cstr(full);
+            PalStat st;
+            if (pal_lstat(p, &st, NULL))
+                type = st.mode & PAL_S_IFMT;
+            path_cstr_free(p);
+        }
+        if (type == PAL_S_IFDIR)
+            continue;
+        if (*n == cap) {
+            Int ncap = cap == 0 ? 8 : cap * 2;
+            *names = (Str *)must_realloc(h, *names, (size_t)cap * sizeof(Str),
+                                         (size_t)ncap * sizeof(Str), _Alignof(Str));
+            cap = ncap;
+        }
+        (*names)[(*n)++] = str_clone(h, name);
+    }
+    pal_close(fd, NULL);
+    mem_free(h, e, sizeof(PalDirEntry), _Alignof(PalDirEntry));
+    mem_free(h, d, sizeof(PalDir), _Alignof(PalDir));
+    if (*err != PAL_OK) {
+        for (Int i = 0; i < *n; i++)
+            str_release((*names)[i]);
+        if (*names != NULL)
+            mem_free(h, *names, (size_t)cap * sizeof(Str), _Alignof(Str));
+        *names = NULL;
+        *n = 0;
+        return false;
+    }
+    for (Int i = 1; i < *n; i++)
+        for (Int j = i; j > 0 && corpus_name_cmp((*names)[j - 1], (*names)[j]) > 0;
+             j--) {
+            Str t = (*names)[j];
+            (*names)[j] = (*names)[j - 1];
+            (*names)[j - 1] = t;
+        }
+    if (*names != NULL && *n < cap)
+        *names = (Str *)must_realloc(h, *names, (size_t)cap * sizeof(Str),
+                                     (size_t)*n * sizeof(Str), _Alignof(Str));
+    return true;
+}
+
+/* internal/fuzz's ReadCorpus, for testdata/fuzz/<target>. What it reads goes
+ * onto the end of f's corpus. Answers with the error F.Fuzz fails with, or an
+ * empty string. A missing directory is no corpus and no error. */
+static Str read_corpus(TestingF *f, const Type *const *types, Int ntypes) {
+    Alloc *a = error_allocator();
+    Alloc *h = heap_allocator();
+    Str dir = fmt_sprintf_v(a, "testdata" FUZZ_SEP "fuzz" FUZZ_SEP "%s",
+                            testing_t_name(f->common));
+    char *cdir = path_cstr(dir);
+    Str *names;
+    Int n;
+    PalErrno err;
+    bool ok = read_dir_names(cdir, &names, &n, &err);
+    path_cstr_free(cdir);
+    if (!ok) {
+        if (err == PAL_ENOENT)
+            return BURROW_S("");
+        return fmt_sprintf_v(a, "reading seed corpus from testdata: open %s: %s", dir,
+                             pal_errno_string(err));
+    }
+
+    Buf errs = {0};
+    Str fail = BURROW_S("");
+    for (Int i = 0; i < n; i++) {
+        Str path = fmt_sprintf_v(a, "%s" FUZZ_SEP "%s", dir, names[i]);
+        char *cpath = path_cstr(path);
+        Buf data = {0};
+        const char *op;
+        bool read = read_whole_file(cpath, &data, &err, &op);
+        path_cstr_free(cpath);
+        if (!read) {
+            buf_free(&data);
+            fail = fmt_sprintf_v(a, "failed to read corpus file: %s %s: %s", op, path,
+                                 pal_errno_string(err));
+            break;
+        }
+        Any *vals;
+        Int nvals;
+        Str why;
+        bool parsed =
+            burrow__testing_corpus_unmarshal(a, buf_view(&data), &vals, &nvals, &why);
+        buf_free(&data);
+        if (!parsed) {
+            why = fmt_sprintf_v(a, "unmarshal: %s", why);
+        } else {
+            FuzzEntry e = {path, vals, nvals};
+            why = check_corpus(a, &e, types, ntypes);
+            if (why.len > 0)
+                burrow__testing_values_free(vals, nvals);
+            else
+                corpus_push(f, (FuzzEntry){str_clone(h, path), vals, nvals});
+        }
+        if (why.len > 0) {
+            if (errs.len > 0)
+                buf_str(&errs, BURROW_S("\n"));
+            buf_str(&errs, fmt_sprintf_v(a, "%q: %s", path, why));
+        }
+    }
+    for (Int i = 0; i < n; i++)
+        str_release(names[i]);
+    if (names != NULL)
+        mem_free(h, names, (size_t)n * sizeof(Str), _Alignof(Str));
+    if (fail.len == 0 && errs.len > 0)
+        fail = str_clone(a, buf_view(&errs));
+    buf_free(&errs);
+    return fail;
+}
+
+/* filepath.Base, for the name a corpus entry's subtest runs under. */
+static Str path_base(Str p) {
+    Int i = p.len;
+    while (i > 0 && p.p[i - 1] != '/' && p.p[i - 1] != '\\')
+        i--;
+    return str_from_bytes(p.p + i, p.len - i);
 }
 
 static void seed_body(void *env, TestingT *t) {
@@ -2211,17 +2374,17 @@ void burrow__testing_f_fuzz(TestingF *f, const char *file, int line, TestingFuzz
         }
     }
 
-    for (Int i = 0; i < f->ncorpus; i++) {
-        Str err = check_corpus(error_allocator(), &f->corpus[i], ts, types.len);
-        if (err.len > 0) {
-            mem_free(h, (void *)ts, (size_t)types.len * sizeof(const Type *),
-                     _Alignof(const Type *));
-            burrow__testing_t_logln(f->common, file, line, BURROW__TESTING_FATAL,
-                                    BURROW__FMT_ARGS(BURROW_ANY_OF, err));
-        }
-    }
+    Str err = BURROW_S("");
+    for (Int i = 0; i < f->ncorpus && err.len == 0; i++)
+        err = check_corpus(error_allocator(), &f->corpus[i], ts, types.len);
+    /* The seed corpus in testdata, which has to match the types as well. */
+    if (err.len == 0)
+        err = read_corpus(f, ts, types.len);
     mem_free(h, (void *)ts, (size_t)types.len * sizeof(const Type *),
              _Alignof(const Type *));
+    if (err.len > 0)
+        burrow__testing_t_logln(f->common, file, line, BURROW__TESTING_FATAL,
+                                BURROW__FMT_ARGS(BURROW_ANY_OF, err));
 
     f->fn = ff;
     if (f->ncorpus > 0) {
@@ -2232,7 +2395,7 @@ void burrow__testing_f_fuzz(TestingF *f, const char *file, int line, TestingFuzz
     for (Int i = 0; i < f->nseeds; i++) {
         f->seeds[i] = (FuzzSeed){f, i};
         f->common->in_fuzz_fn = true;
-        testing_t_run(f->common, f->corpus[i].path,
+        testing_t_run(f->common, path_base(f->corpus[i].path),
                       BURROW_FN(TestingTFunc, seed_body, &f->seeds[i]));
         f->common->in_fuzz_fn = false;
     }

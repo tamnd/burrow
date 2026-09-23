@@ -443,8 +443,18 @@ FAIL
 
 The types allowed are Go's: `TYPE_STRING`, `TYPE_BYTES`, `TYPE_BOOL`, `TYPE_BYTE`, `TYPE_RUNE`, the two float types and every sized and unsized integer type. `testing_f_add_v` boxes values the way fmt's `_v` macros do, so a literal `16` is Go's int. Before C23, `true` is an int too, so a bool seed is written `(bool)true`. Some C types stand for two Go types, as `int64_t` does for int and int64. For those, `BURROW_ANY_VAL(TYPE_INT64, int64_t, 42)` says which type is meant. A seed that does not match the declared types fails the target with Go's message.
 
+Seeds can also live in files. After the seeds added in code, a target runs every file in `testdata/fuzz/<target name>` under the working directory, each as a subtest named after the file. The files are Go's own format, so a corpus that `go test` wrote works unchanged:
+
+```
+go test fuzz v1
+string("héllo")
+int(7)
+```
+
+A missing directory is no seeds and no error. A file that does not parse, or whose values do not match the declared types, fails the target with the same message Go gives, down to the `go/parser` error for a malformed line.
+
 A target has to call `testing_f_fuzz`, `testing_f_fail` or `testing_f_skip`, and fails if it returns without doing any of them. Inside the fuzz function, report through the `TestingT` it gets. Calling F's log, fail, skip or cleanup functions from there panics and tells you to use the T, as Go does.
 
 ## What is not there yet
 
-For now fuzz targets only run their seeds. `-test.fuzz` does not generate new inputs yet, and seeds are not read from `testdata/fuzz`. The flags for profiles, coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.
+For now fuzz targets only run their seeds. `-test.fuzz` does not generate new inputs yet. The flags for profiles, coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.

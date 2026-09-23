@@ -561,7 +561,11 @@ TestingTB testing_b_as_testing_tb(TestingB *b);
  *
  * Without -test.fuzz, which is the only way this runs for now, each seed is a
  * subtest named FuzzReverse/seed#0, FuzzReverse/seed#1 and so on, and -test.run
- * picks them out by those names. A fuzz target has to call testing_f_fuzz,
+ * picks them out by those names. After those come the files in
+ * testdata/fuzz/FuzzReverse under the working directory, in Go's corpus file
+ * format, each a subtest named after its file. A missing directory is no seeds,
+ * and a file that does not parse or does not match fails the target with Go's
+ * message. A fuzz target has to call testing_f_fuzz,
  * testing_f_fail or testing_f_skip, and fails if it returns having done none
  * of them. Inside the function given to testing_f_fuzz, report through the T
  * it receives: calling most of F's methods from there panics, as in Go. */
@@ -597,6 +601,22 @@ void burrow__testing_f_fuzz(TestingF *f, const char *file, int line, TestingFuzz
     (*(T *)burrow__testing_fuzz_arg((args), (i), TYPE_OF(T)))
 BURROW_BORROWS(ret, args) void *burrow__testing_fuzz_arg(Slice args, Int i,
                                                          const Type *want);
+
+/* The corpus file format, Go's "go test fuzz v1": a version line, then one
+ * value per line written as the Go conversion that makes it, such as int(-23)
+ * or []byte("hi\n"). These are what the runner uses to read testdata/fuzz,
+ * and they are here rather than hidden so that the tests can reach them.
+ *
+ * burrow__testing_corpus_marshal is Go's marshalCorpusFile. The values have
+ * to be of the types fuzzing allows, and there has to be at least one. The
+ * text is allocated from a.
+ *
+ * burrow__testing_corpus_unmarshal is unmarshalCorpusFile. On success *vals
+ * holds *n values on the heap, which burrow__testing_values_free gives back.
+ * On failure it returns false and *err is Go's message, allocated from a. */
+BURROW_OWNS(ret) Str burrow__testing_corpus_marshal(Alloc *a, const Any *vals, Int n);
+bool burrow__testing_corpus_unmarshal(Alloc *a, Str data, Any **vals, Int *n, Str *err);
+void burrow__testing_values_free(Any *vals, Int n);
 
 /* The methods F shares with T. Go keeps the calls that would make no sense
  * inside the fuzz function from being made there, and so does this: from

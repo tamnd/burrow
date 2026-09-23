@@ -28,6 +28,7 @@
 #include "burrow/func.h"
 #include "burrow/mem.h"
 #include "burrow/mem/heap.h"
+#include "burrow/pal.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
 #include "burrow/sync/atomic.h"
@@ -517,6 +518,36 @@ static void child_fuzz_inside(void *env, TestingF *f) {
     testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, child_fuzz_inside_fn, f), TYPE_BOOL);
 }
 
+/* The targets that read testdata/fuzz, which fuzz_dir sets up. */
+static void child_fuzz_seeds_fn(void *env, TestingT *t, Slice args) {
+    (void)env;
+    testing_t_log_v(t, "got", testing_fuzz_arg(args, 0, Str),
+                    testing_fuzz_arg(args, 1, Int));
+}
+
+static void child_fuzz_seeds(void *env, TestingF *f) {
+    (void)env;
+    testing_f_add_v(f, "hello", (Int)5);
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, child_fuzz_seeds_fn, NULL),
+                     TYPE_STRING, TYPE_INT);
+}
+
+static void child_fuzz_ran(void *env, TestingT *t, Slice args) {
+    (void)env;
+    testing_t_log_v(t, "ran", testing_fuzz_arg(args, 0, Str));
+}
+
+static void child_fuzz_broken(void *env, TestingF *f) {
+    (void)env;
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, child_fuzz_ran, NULL), TYPE_STRING);
+}
+
+static void child_fuzz_no_dir(void *env, TestingF *f) {
+    (void)env;
+    testing_f_add_v(f, "only");
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, child_fuzz_ran, NULL), TYPE_STRING);
+}
+
 /* testing.Benchmark on its own, outside any test binary's main. */
 static int run_benchfunc(void) {
     TestingBenchmarkResult r =
@@ -599,6 +630,20 @@ static int run_child(const char *scenario) {
                                                  {child_fuzz_empty, NULL}};
         fuzz[nf++] = (TestingInternalFuzzTarget){BURROW_S("FuzzInside"),
                                                  {child_fuzz_inside, NULL}};
+    } else if (strcmp(scenario, "fuzzdir") == 0) {
+        char dir[1024];
+        snprintf(dir, sizeof dir, "%s.fuzz", self_path);
+        PalErrno err;
+        if (!pal_chdir(dir, &err)) {
+            fprintf(stderr, "chdir %s: %s\n", dir, pal_errno_string(err));
+            return 3;
+        }
+        fuzz[nf++] = (TestingInternalFuzzTarget){BURROW_S("FuzzSeeds"),
+                                                 {child_fuzz_seeds, NULL}};
+        fuzz[nf++] = (TestingInternalFuzzTarget){BURROW_S("FuzzBroken"),
+                                                 {child_fuzz_broken, NULL}};
+        fuzz[nf++] = (TestingInternalFuzzTarget){BURROW_S("FuzzNoDir"),
+                                                 {child_fuzz_no_dir, NULL}};
     } else if (strcmp(scenario, "panic") == 0) {
         tests[n++] = (TestingInternalTest){BURROW_S("TestPass"), {child_pass, NULL}};
         tests[n++] = (TestingInternalTest){BURROW_S("TestPanic"), {child_panic, NULL}};
@@ -765,6 +810,53 @@ static int spawn(const char *flags, const char *scenario, Buf *out) {
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 #endif
 }
+
+/* Writes the testdata/fuzz tree the fuzzdir scenario runs in, next to this
+ * binary so that nothing lands in the source tree. */
+static bool put_file(const char *path, const char *text, PalErrno *err) {
+    int64_t fd = pal_open(path, PAL_O_WRONLY | PAL_O_CREATE | PAL_O_TRUNC, 0644, err);
+    if (fd < 0)
+        return false;
+    int64_t n = (int64_t)strlen(text);
+    bool ok = pal_write(fd, text, n, err) == n;
+    return pal_close(fd, err) && ok;
+}
+
+static bool fuzz_dir(TestingT *t) {
+    static const char *const dirs[] = {"", "/testdata", "/testdata/fuzz",
+                                       "/testdata/fuzz/FuzzSeeds",
+                                       "/testdata/fuzz/FuzzBroken"};
+    static const char *const files[][2] = {
+        {"/testdata/fuzz/FuzzSeeds/aaa",
+         "go test fuzz v1\nstring(\"from file\")\nint(7)\n"},
+        {"/testdata/fuzz/FuzzBroken/bad", "go test fuzz v1\nstring(\"x\" +)\n"},
+        {"/testdata/fuzz/FuzzBroken/wrong", "go test fuzz v1\nint(1)\n"},
+        {"/testdata/fuzz/FuzzBroken/zok", "go test fuzz v1\nstring(\"fine\")\n"},
+    };
+    char path[1024];
+    PalErrno err = PAL_OK;
+    for (size_t i = 0; i < sizeof dirs / sizeof dirs[0]; i++) {
+        snprintf(path, sizeof path, "%s.fuzz%s", self_path, dirs[i]);
+        if (!pal_mkdir(path, 0755, &err) && err != PAL_EEXIST) {
+            testing_t_errorf_v(t, "mkdir %s: %s", path, pal_errno_string(err));
+            return false;
+        }
+    }
+    for (size_t i = 0; i < sizeof files / sizeof files[0]; i++) {
+        snprintf(path, sizeof path, "%s.fuzz%s", self_path, files[i][0]);
+        if (!put_file(path, files[i][1], &err)) {
+            testing_t_errorf_v(t, "write %s: %s", path, pal_errno_string(err));
+            return false;
+        }
+    }
+    return true;
+}
+
+#ifdef _WIN32
+#define FUZZ_DIR "testdata\\\\fuzz\\\\FuzzBroken\\\\"
+#else
+#define FUZZ_DIR "testdata/fuzz/FuzzBroken/"
+#endif
 
 typedef struct Scenario {
     const char *flags;
@@ -968,6 +1060,29 @@ static const Scenario scenarios[] = {
      "    --- FAIL: FuzzInside/seed#0 (0.00s)\n"
      "panic: testing: f.Log was called inside the fuzz target, use t.Log instead",
      true},
+    {"-test.v", "fuzzdir", 1,
+     "=== RUN   FuzzSeeds\n"
+     "=== RUN   FuzzSeeds/seed#0\n"
+     "    testing_test.c:N: got hello 5\n"
+     "=== RUN   FuzzSeeds/aaa\n"
+     "    testing_test.c:N: got from file 7\n"
+     "--- PASS: FuzzSeeds (0.00s)\n"
+     "    --- PASS: FuzzSeeds/seed#0 (0.00s)\n"
+     "    --- PASS: FuzzSeeds/aaa (0.00s)\n"
+     "=== RUN   FuzzBroken\n"
+     "    testing_test.c:N: \"" FUZZ_DIR "bad\": unmarshal: malformed line "
+     "\"string(\\\"x\\\" +)\": (test):1:13: expected operand, found ')'\n"
+     "        \"" FUZZ_DIR "wrong\": mismatched types in corpus entry: [int], want "
+     "[string]\n"
+     "--- FAIL: FuzzBroken (0.00s)\n"
+     "=== RUN   FuzzNoDir\n"
+     "=== RUN   FuzzNoDir/seed#0\n"
+     "    testing_test.c:N: ran only\n"
+     "--- PASS: FuzzNoDir (0.00s)\n"
+     "    --- PASS: FuzzNoDir/seed#0 (0.00s)\n"
+     "FAIL\n",
+     false},
+    {"-test.run=FuzzSeeds/aaa", "fuzzdir", 0, "PASS\n", false},
     {"-test.timeout=300ms -test.v", "sleep", 2,
      "=== RUN   TestSleep\n"
      "panic: test timed out after 300ms\n"
@@ -1107,6 +1222,8 @@ static void TestBenchmarkOutput(TestingT *t) {
 static void TestOutput(TestingT *t) {
     if (self_path == NULL)
         testing_t_skip_v(t, "no path to this binary");
+    if (!fuzz_dir(t))
+        return;
     check_scenarios(t, scenarios, sizeof scenarios / sizeof scenarios[0]);
 }
 
@@ -1344,11 +1461,11 @@ static void TestHelpers(TestingT *t) {
     X(ExampleNeverRun)
 
 int main(int argc, char **argv) {
+    self_path = argv[0];
     if (argc >= 3 && strcmp(argv[argc - 2], "child") == 0) {
         testing_init(argc, argv);
         return run_child(argv[argc - 1]);
     }
-    self_path = argv[0];
     static const burrow__TestingEntry entries[] = {TESTS(BURROW__TESTING_ENTRY)};
     return burrow__testing_main(argc, argv, entries,
                                 (Int)(sizeof entries / sizeof entries[0]), false,

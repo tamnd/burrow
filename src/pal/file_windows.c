@@ -689,6 +689,35 @@ bool pal_rmdir(const char *path, PalErrno *err) {
     return RemoveDirectoryW(w) || file_fail(err);
 }
 
+bool pal_chdir(const char *path, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    wchar_t w[PAL_WPATH_MAX];
+    if (!widen(path, w, PAL_WPATH_MAX, err))
+        return false;
+    return SetCurrentDirectoryW(w) || file_fail(err);
+}
+
+int64_t pal_getcwd(char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    wchar_t w[PAL_WPATH_MAX];
+    DWORD n = GetCurrentDirectoryW(PAL_WPATH_MAX, w);
+    if (n == 0) {
+        file_fail(err);
+        return -1;
+    }
+    if (n >= PAL_WPATH_MAX) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    int64_t len = buf == NULL || cap <= 0 ? -1 : narrow(w, n, buf, (size_t)cap - 1);
+    if (len < 0) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    buf[len] = 0;
+    return len;
+}
+
 bool pal_link(const char *from, const char *to, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     wchar_t wf[PAL_WPATH_MAX], wt[PAL_WPATH_MAX];

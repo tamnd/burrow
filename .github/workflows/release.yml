@@ -141,9 +141,52 @@ jobs:
           name: ${{ matrix.name }}
           path: dist/
 
+  # The two file form, which is what the README tells people to download. It is
+  # generated here from the tagged tree rather than kept anywhere, and the
+  # manifest inside the archive lists the SHA-256 of every file it was made from,
+  # so anyone can regenerate it from the source tarball and compare.
+  amalgamation:
+    name: amalgamation
+    needs: [verify, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: generate
+        run: tools/burrow-gen amalgamate --out "stage/burrow-${{ needs.verify.outputs.version }}-amalgamation" --source-id "v${{ needs.verify.outputs.version }}"
+      - name: smoke test
+        run: |
+          d="stage/burrow-${{ needs.verify.outputs.version }}-amalgamation"
+          cc -std=c11 -O2 -c "$d/burrow.c" -o burrow.o
+          cc -std=c11 -O2 -I"$d" tests/amalgamation/hello.c burrow.o -pthread -o hello
+          ./hello
+      - name: pack
+        run: |
+          v="${{ needs.verify.outputs.version }}"
+          name="burrow-$v-amalgamation"
+          sha256="$PWD/tools/sha256.sh"
+          cp LICENSE NOTICE PATENTS "stage/$name/"
+          mkdir -p dist
+          tar -C stage -czf "dist/$name.tar.gz" "$name"
+          (cd stage && zip -qr "../dist/$name.zip" "$name")
+          (cd dist && "$sha256" "$name.tar.gz" "$name.zip" > "$name.sha256")
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: amalgamation
+          path: dist/
+
   publish:
     name: publish
-    needs: [verify, source, binaries]
+    needs: [verify, source, binaries, amalgamation]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

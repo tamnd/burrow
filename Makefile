@@ -123,6 +123,21 @@ SRCS := $(wildcard src/*.c) $(wildcard src/*/*.c)
 OBJS := $(patsubst src/%.c,$(BUILD)/obj/%.o,$(SRCS))
 LIB  := $(BUILD)/libburrow.a
 
+# The single file build, which is what most people who use burrow will compile.
+# tools/burrow-gen writes burrow.c and burrow.h into $(AMALG_DIR), and
+# AMALGAMATION=1 builds the library out of that one file instead of the tree,
+# so `make AMALGAMATION=1 test` runs every test against exactly what ships.
+# Everything else stays the same: the tests link the same archive and the name
+# table is read out of the one object the same way, which is why the copy of
+# the table burrow.c carries for itself is turned off here.
+AMALG_DIR  := $(BUILD)/amalgamation
+AMALG_SRCS := $(AMALG_DIR)/burrow.c $(AMALG_DIR)/burrow.h
+AMALG_DEPS := $(SRCS) $(wildcard include/burrow/*.h) $(wildcard include/burrow/*/*.h) \
+	$(wildcard src/*/*.h) tools/burrow-gen
+ifeq ($(AMALGAMATION),1)
+  OBJS := $(BUILD)/obj/burrow.o
+endif
+
 # The table of names a traceback prints, read out of the objects above by
 # tools/burrow-symtab once they are built. See burrow/symtab.h for what it is
 # and what it costs. SYMTAB=0 builds an empty one, which gives back the bare
@@ -153,7 +168,7 @@ TEST_GEN := $(wildcard tests/gen/*.c)
 DEPFLAGS := -MMD -MP
 DEPS     := $(OBJS:.o=.d) $(TEST_BINS:=.d)
 
-.PHONY: all lib test check clean install fmt tidy
+.PHONY: all lib test check clean install fmt tidy amalgamation
 
 all: lib
 
@@ -174,6 +189,20 @@ $(SYMTAB_SRC): $(OBJS) tools/burrow-symtab
 $(SYMTAB_OBJ): $(SYMTAB_SRC)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(THREADS) -c $< -o $@
+
+# One run writes both files. burrow.c is the one make tracks, and burrow.h rides
+# along with it, because a grouped target needs a newer make than macOS has.
+$(AMALG_DIR)/burrow.c: $(AMALG_DEPS)
+	@tools/burrow-gen amalgamate --out $(AMALG_DIR) --source-id '$(SOURCE_ID)'
+
+$(AMALG_DIR)/burrow.h: $(AMALG_DIR)/burrow.c
+	@:
+
+amalgamation: $(AMALG_SRCS)
+
+$(BUILD)/obj/burrow.o: $(AMALG_DIR)/burrow.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(THREADS) -DBURROW_EXTERNAL_SYMTAB -c $< -o $@
 
 $(BUILD)/obj/%.o: src/%.c
 	@mkdir -p $(dir $@)

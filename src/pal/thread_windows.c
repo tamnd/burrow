@@ -42,7 +42,7 @@ typedef struct Start {
  * way has no CRT state of its own, and the first thing it calls that keeps
  * something per thread leaks it. Nothing in burrow depends on that today and
  * everything a caller runs on one of these threads might. */
-static unsigned __stdcall entry(void *p) {
+static unsigned __stdcall thread_entry(void *p) {
     Start *s = (Start *)p;
 
     void (*fn)(void *) = s->fn;
@@ -82,7 +82,7 @@ int64_t pal_thread_create(void (*fn)(void *), void *arg, int64_t stack_bytes,
     s.taken = 0;
 
     unsigned id = 0;
-    uintptr_t h = _beginthreadex(NULL, (unsigned)stack_bytes, entry, &s, 0, &id);
+    uintptr_t h = _beginthreadex(NULL, (unsigned)stack_bytes, thread_entry, &s, 0, &id);
     if (h == 0) {
         BURROW_OUT(err, burrow__pal_errno_win(GetLastError()));
         return PAL_INVALID_HANDLE;

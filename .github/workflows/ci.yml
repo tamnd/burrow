@@ -278,6 +278,44 @@ jobs:
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure
 
+  # The single file build, which is what most people will actually compile. It
+  # is generated here twice and compared, because a generator whose output
+  # depends on directory order or the time of day makes releases nobody can
+  # check. Then the whole suite runs against it, and a program that knows
+  # nothing about the tree is built from burrow.c and burrow.h alone, the way a
+  # user would build it.
+  amalgamation:
+    name: amalgamation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - name: the same bytes every time
+        run: |
+          tools/burrow-gen amalgamate --out dist-a --source-id ci
+          tools/burrow-gen amalgamate --out dist-b --source-id ci
+          for f in burrow.c burrow.h burrow-manifest.json; do cmp "dist-a/$f" "dist-b/$f"; done
+      - name: the test suite against it
+        run: make AMALGAMATION=1 BUILD=build-amalg test
+      - name: on its own
+        run: |
+          cc -std=c11 -O2 -c dist-a/burrow.c -o burrow.o
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Idist-a tests/amalgamation/hello.c burrow.o -pthread -o hello
+          ./hello
+      # Windows puts its own headers in an order of their own, and one file with
+      # every source in it is where that goes wrong first, so the same file is
+      # cross compiled for it too. The windows jobs above run the real thing.
+      - name: for windows, with mingw
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+          x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-parameter -c dist-a/burrow.c -o burrow-windows.o
+          x86_64-w64-mingw32-gcc -std=c11 -O2 -Idist-a tests/amalgamation/hello.c burrow-windows.o -lws2_32 -o hello.exe
+
   # The gc backend is the only optional dependency in the project, and an
   # optional backend nobody builds is a backend that is already broken. One job
   # is enough: it is the same tests, and what it is really checking is that the

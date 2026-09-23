@@ -133,7 +133,7 @@ typedef struct Start {
     uint32_t taken;
 } Start;
 
-static void *entry(void *p) {
+static void *thread_entry(void *p) {
     Start *s = (Start *)p;
 
     void (*fn)(void *) = s->fn;
@@ -189,7 +189,7 @@ int64_t pal_thread_create(void (*fn)(void *), void *arg, int64_t stack_bytes,
     s.taken = 0;
 
     pthread_t id;
-    rc = pthread_create(&id, &attr, entry, &s);
+    rc = pthread_create(&id, &attr, thread_entry, &s);
     (void)pthread_attr_destroy(&attr);
     if (rc != 0) {
         BURROW_OUT(err, burrow__pal_errno(rc));

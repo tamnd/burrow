@@ -51,7 +51,7 @@ typedef struct ReclaimSlot {
     _Alignas(BURROW_CACHELINE) uint32_t state;
 } ReclaimSlot;
 
-static ReclaimSlot slots[NSLOTS];
+static ReclaimSlot reclaim_slots[NSLOTS];
 
 /* The epoch. Moves forward by one, and only when every pinned slot is already
  * at it. It wraps, and wrapping is fine, because nothing compares two epochs
@@ -83,7 +83,7 @@ static uint32_t bag_since;
 
 /* How many objects are waiting, counting the ones still in somebody's pocket.
  * Nothing reads this to make a decision. */
-static uint32_t pending;
+static uint32_t reclaim_pending;
 
 /* What one M has retired and not yet pushed.
  *
@@ -134,7 +134,7 @@ static void raise_high(uint32_t *high, uint32_t want) {
 static ReclaimSlot *foreign_acquire(void) {
     for (;;) {
         for (uint32_t i = 0; i < FSLOTS; i++) {
-            ReclaimSlot *s = &slots[MSLOTS + i];
+            ReclaimSlot *s = &reclaim_slots[MSLOTS + i];
             uint32_t free_state = 0;
             uint32_t e = burrow__atomic_load_u32(&cur_epoch);
             raise_high(&fhigh, i + 1);
@@ -155,7 +155,7 @@ void burrow__pin(void) {
         return;
     }
 
-    ReclaimSlot *s = &slots[m->id];
+    ReclaimSlot *s = &reclaim_slots[m->id];
     my_slot = s;
 
     /* Before the publish below, so that a walk which reads the limit and then
@@ -176,7 +176,7 @@ static void free_list(burrow__Retired *r) {
     while (r != NULL) {
         burrow__Retired *next = r->next;
         r->free(r->obj);
-        burrow__atomic_add_u32(&pending, (uint32_t)-1);
+        burrow__atomic_add_u32(&reclaim_pending, (uint32_t)-1);
         r = next;
     }
 }
@@ -192,13 +192,13 @@ static void free_list(burrow__Retired *r) {
 static bool everybody_is_at(uint32_t e) {
     uint32_t mn = burrow__atomic_load_u32(&mhigh);
     for (uint32_t i = 0; i < mn; i++) {
-        uint32_t s = burrow__atomic_load_u32(&slots[i].state);
+        uint32_t s = burrow__atomic_load_u32(&reclaim_slots[i].state);
         if (s != 0 && (s >> 1) != e)
             return false;
     }
     uint32_t fn = burrow__atomic_load_u32(&fhigh);
     for (uint32_t i = 0; i < fn; i++) {
-        uint32_t s = burrow__atomic_load_u32(&slots[MSLOTS + i].state);
+        uint32_t s = burrow__atomic_load_u32(&reclaim_slots[MSLOTS + i].state);
         if (s != 0 && (s >> 1) != e)
             return false;
     }
@@ -283,7 +283,7 @@ void burrow__retire(burrow__Retired *r, void (*free)(void *obj), void *obj) {
     r->free = free;
     r->obj = obj;
     r->next = NULL;
-    burrow__atomic_add_u32(&pending, 1);
+    burrow__atomic_add_u32(&reclaim_pending, 1);
 
     /* A thread the scheduler did not start has no pocket, because a pocket is
      * only findable through the M it belongs to and there is no M. So it pays
@@ -342,5 +342,5 @@ void burrow__reclaim_drain(void) {
 }
 
 Int burrow__reclaim_pending(void) {
-    return (Int)burrow__atomic_load_u32(&pending);
+    return (Int)burrow__atomic_load_u32(&reclaim_pending);
 }

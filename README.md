@@ -602,6 +602,16 @@ A bubble also has a clock of its own. It starts at midnight UTC on 1 January 200
 
 Details, including what a bubbled channel is and the two things about the clock that catch people out: [docs/guides/synctest.md](docs/guides/synctest.md).
 
+## Getting it
+
+Two files, the way SQLite ships. Every release has an amalgamation archive with `burrow.c` and `burrow.h` in it. Add the first to your build, include the second, and link `-pthread` on Linux and macOS or `-lws2_32` on Windows. There is nothing to install and no build system to adopt.
+
+```sh
+cc -std=c11 -O2 main.c burrow.c -pthread -o main
+```
+
+From a checkout, `make` and CMake both build a static library, and `make amalgamation` generates the two files from the tree. Details, including how the pair is generated and how to check it against the source: [docs/guides/building.md](docs/guides/building.md).
+
 ## Status
 
 Early. Nothing is usable yet.

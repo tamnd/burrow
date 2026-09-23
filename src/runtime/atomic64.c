@@ -38,14 +38,14 @@ typedef struct {
     char pad[SLOT_PAD - sizeof(uint32_t)];
 } Atomic64Slot;
 
-static Atomic64Slot locks[NSLOTS];
+static Atomic64Slot atomic64_locks[NSLOTS];
 
 /* Shifted by three because a uint64_t is eight byte aligned when anybody has
  * been careful, so the low three bits carry no information and hashing on them
  * would waste most of the table. */
 static Atomic64Slot *slot_for(const void *p) {
     uintptr_t key = (uintptr_t)p >> 3;
-    return &locks[key % NSLOTS];
+    return &atomic64_locks[key % NSLOTS];
 }
 
 static void lock(Atomic64Slot *s) {

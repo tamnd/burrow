@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-# burrow-gen: type descriptors for structs nobody is going to rewrite.
+# burrow-gen: the code burrow generates rather than writes by hand. There are two
+# subcommands and they have nothing in common except that neither belongs in a
+# compiler.
+#
+#     burrow-gen reflect      type descriptors for structs you already have
+#     burrow-gen amalgamate   the whole library as one burrow.c and one burrow.h
+#
+# REFLECT
 #
 # The X macro DSL in burrow/declare.h is the default way to get a descriptor,
 # and it needs no tool and no build step. It also needs you to write your struct
@@ -40,6 +47,28 @@
 # libclang is not needed to build burrow, to use the DSL, or to compile what
 # this emits. It is needed to run this, once, when your structs change.
 #
+# AMALGAMATE
+#
+#     burrow-gen amalgamate --out dist --source-id "$(git rev-parse HEAD)"
+#
+# writes dist/burrow.c, dist/burrow.h and dist/burrow-manifest.json. The two C
+# files are the whole library, the way SQLite ships: add burrow.c to a build,
+# include burrow.h, and there is nothing else to install. burrow.h is the public
+# headers in dependency order. burrow.c is every private header and then every
+# source file, each behind a marker and a #line so that errors and debuggers
+# name the file the code really lives in.
+#
+# It is generated and never edited, and it is not clever. Nothing is rewritten
+# except include lines, which become comments so the line numbers stay right. A
+# source file's own macros are undefined at the end of that file, because two
+# files are allowed to mean different things by STACK_FLOOR. What it cannot fix
+# is two files with the same static name, and tools/check-statics.sh is what
+# keeps those out of the tree. Running it twice on the same tree gives the same
+# bytes, and CI checks that. It needs Python 3 and nothing else.
+#
+# docs/design/15-build-deploy.md section 2 is the design, including the options
+# that are not here yet: choosing packages, choosing targets, and a prefix.
+#
 # Copyright 2026 The burrow Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style licence that can be found
 # in the LICENSE file.
@@ -47,6 +76,8 @@
 import argparse
 import ctypes
 import glob
+import hashlib
+import json
 import os
 import platform
 import re
@@ -391,10 +422,303 @@ def run_reflect(args):
     return len(structs)
 
 
+# ------------------------------------------------------------ amalgamate
+#
+# burrow.h and burrow.c: the whole library as one header and one source file,
+# the way SQLite ships. The tree stays the tree, one file per Go file, and this
+# is generated from it every time and never edited, so the two cannot drift.
+#
+# What it has to get right is small and all of it is about making many
+# translation units into one without changing what any of them means:
+#
+#   - Every burrow header is pasted once, dependencies first, and each
+#     #include of one is blanked where it was. The public ones, the closure of
+#     burrow/burrow.h, go in burrow.h. The rest go at the top of burrow.c.
+#   - A source file's feature macros, the _GNU_SOURCE block before its first
+#     #include, have to come before every system header in the whole file, so
+#     they are lifted to the top of burrow.c. The first file to define one wins.
+#   - A macro a source file defines is its own, so it is undefined again at the
+#     end of that file. tools/check-statics.sh keeps every other file scope name
+#     unique, which is the rest of what one translation unit needs.
+#   - Every pasted file starts with a #line, and a line that is taken out is
+#     replaced by an empty comment rather than removed, so one #line per file
+#     is enough for every diagnostic, __FILE__ and debugger to name the real
+#     file and the real line.
+#
+# The output depends on the input files and on nothing else: no dates, no
+# paths from the machine it ran on, files in sorted order. Two runs on the same
+# tree give the same bytes, and CI checks that.
+
+AMALG_INCLUDE = re.compile(r'^\s*#\s*include\s+"(burrow/[^"]+|internal\.h)"')
+AMALG_DEFINE = re.compile(r"^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)")
+AMALG_ANY_INCLUDE = re.compile(r"^\s*#\s*include\b")
+AMALG_DIRECTIVE = re.compile(r"^\s*#")
+AMALG_VERSION = re.compile(r'#define\s+BURROW_VERSION_STRING\s+"([^"]+)"')
+
+
+class Amalgamation:
+    def __init__(self, root):
+        self.root = root
+        self.inputs = {}
+
+    def read(self, rel):
+        with open(os.path.join(self.root, rel), "rb") as f:
+            data = f.read()
+        self.inputs[rel] = hashlib.sha256(data).hexdigest()
+        return data.decode("utf-8").split("\n")
+
+    def files(self, top, suffix):
+        out = []
+        for d, dirs, names in os.walk(os.path.join(self.root, top)):
+            dirs.sort()
+            for n in sorted(names):
+                if n.endswith(suffix):
+                    out.append(os.path.relpath(os.path.join(d, n), self.root).replace(os.sep, "/"))
+        return sorted(out)
+
+
+def amalg_header_path(name):
+    if name == "internal.h":
+        return "src/pal/internal.h"
+    return "include/" + name
+
+
+def amalg_order(start, lines_of):
+    """Headers in an order where each comes after everything it includes.
+
+    Depth first over the #include lines in the order they are written, which is
+    deterministic and keeps related headers next to each other."""
+    order = []
+    state = {}
+
+    def visit(path, via):
+        if state.get(path) == "done":
+            return
+        if state.get(path) == "open":
+            raise Error("%s includes itself through %s" % (path, " -> ".join(via)))
+        state[path] = "open"
+        for line in lines_of(path):
+            m = AMALG_INCLUDE.match(line)
+            if m:
+                visit(amalg_header_path(m.group(1)), via + [path])
+        state[path] = "done"
+        order.append(path)
+
+    for s in start:
+        visit(s, [])
+    return order
+
+
+def amalg_blank(line):
+    """What a line that was taken out becomes, so the line count stays true."""
+    return "/* burrow-gen: %s */" % line.strip().replace("*/", "* /")
+
+
+def amalg_paste(out, rel, lines):
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    out.append("/* ==== begin %s ==== */" % rel)
+    out.append('#line 1 "%s"' % rel)
+    out.extend(lines)
+    out.append("/* ==== end %s ==== */" % rel)
+    out.append("")
+
+
+def amalg_prologue(rel, lines):
+    """Split a source file into its feature macro prologue and the rest.
+
+    The prologue is every directive before the first #include. They are the
+    lines that decide what the system headers declare, so they are only
+    meaningful ahead of all of them."""
+    lifted = []
+    body = list(lines)
+    for i, line in enumerate(lines):
+        if AMALG_ANY_INCLUDE.match(line):
+            break
+        if AMALG_DIRECTIVE.match(line):
+            lifted.append(line)
+            body[i] = amalg_blank(line)
+    return lifted, body
+
+
+def amalg_guard_defines(lifted):
+    """The same directives, with each #define made to give way to one before it."""
+    out = []
+    for line in lifted:
+        m = AMALG_DEFINE.match(line)
+        if m:
+            out.append("#if !defined(%s)" % m.group(1))
+            out.append(line.strip())
+            out.append("#endif")
+        else:
+            out.append(line.strip())
+    return out
+
+
+def run_amalgamate(args):
+    root = args.root or os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    a = Amalgamation(root)
+    cache = {}
+
+    def lines_of(rel):
+        if rel not in cache:
+            if not os.path.exists(os.path.join(root, rel)):
+                raise Error("%s is included and does not exist" % rel)
+            cache[rel] = a.read(rel)
+        return cache[rel]
+
+    version = None
+    for line in lines_of("include/burrow/version.h"):
+        m = AMALG_VERSION.search(line)
+        if m:
+            version = m.group(1)
+    if version is None:
+        raise Error("include/burrow/version.h has no BURROW_VERSION_STRING")
+
+    public = amalg_order(["include/burrow/burrow.h"], lines_of)
+    everything = amalg_order(
+        public + a.files("include", ".h") + ["src/pal/internal.h"], lines_of
+    )
+    private = [h for h in everything if h not in public]
+    sources = a.files("src", ".c")
+
+    header_macros = set()
+    for h in everything:
+        for line in lines_of(h):
+            m = AMALG_DEFINE.match(line)
+            if m:
+                header_macros.add(m.group(1))
+
+    def strip_includes(lines):
+        return [amalg_blank(l) if AMALG_INCLUDE.match(l) else l for l in lines]
+
+    banner = [
+        "/* burrow %s, amalgamated." % version,
+        " *",
+        " * Generated by tools/burrow-gen amalgamate from the burrow source tree. Do",
+        " * not edit it: change the tree and generate it again. Every file starts with",
+        " * a #line pointing back at where it came from, so a compiler error or a",
+        " * debugger names the real file. burrow-manifest.json beside this lists the",
+        " * inputs and their SHA-256.",
+        " *",
+        " * Copyright 2026 The burrow Authors. All rights reserved.",
+        " * Use of this source code is governed by a BSD-style licence that can be",
+        " * found in the LICENSE file at https://github.com/tamnd/burrow. */",
+        "",
+    ]
+
+    # burrow.h
+    h = list(banner)
+    h.append("#ifndef BURROW_AMALGAMATION_H")
+    h.append("#define BURROW_AMALGAMATION_H")
+    h.append("")
+    for rel in public:
+        amalg_paste(h, rel, strip_includes(lines_of(rel)))
+    h.append("#endif /* BURROW_AMALGAMATION_H */")
+    h.append("")
+
+    # burrow.c
+    c = list(banner)
+    c.append("/* ==== feature macros, lifted from the top of each source file ==== */")
+    c.append("")
+    bodies = []
+    for rel in sources:
+        lifted, body = amalg_prologue(rel, lines_of(rel))
+        if lifted:
+            c.append("/* %s */" % rel)
+            c.extend(amalg_guard_defines(lifted))
+            c.append("")
+        bodies.append((rel, body))
+
+    c.append("#ifndef BURROW_SOURCE_ID")
+    c.append('#define BURROW_SOURCE_ID "%s"' % c_string(args.source_id)[1:-1])
+    c.append("#endif")
+    c.append("")
+    c.append('#include "burrow.h"')
+    c.append("")
+    # A header's static inline helpers are there for whichever files want them,
+    # and a compiler says nothing about the ones a file does not use, because
+    # they came from a header. Pasted in here they are in the main file, where
+    # an unused static function is a warning. The warning is right about a .c
+    # and wrong about these, so it is off for exactly this stretch.
+    c.append("#if defined(__GNUC__)")
+    c.append("#pragma GCC diagnostic push")
+    c.append('#pragma GCC diagnostic ignored "-Wunused-function"')
+    c.append("#endif")
+    c.append("")
+    for rel in private:
+        amalg_paste(c, rel, strip_includes(lines_of(rel)))
+    c.append("#if defined(__GNUC__)")
+    c.append("#pragma GCC diagnostic pop")
+    c.append("#endif")
+    c.append("")
+
+    for rel, body in bodies:
+        own = []
+        for line in body:
+            m = AMALG_DEFINE.match(line)
+            if not m:
+                continue
+            name = m.group(1)
+            if name in header_macros:
+                raise Error(
+                    "%s defines %s, which a header defines too. The amalgamation "
+                    "undefines a source file's macros at the end of it, and that "
+                    "would take the header's away from every file after it." % (rel, name)
+                )
+            if name not in own:
+                own.append(name)
+        amalg_paste(c, rel, strip_includes(body))
+        if own:
+            c.extend("#undef %s" % name for name in own)
+            c.append("")
+
+    c.extend(
+        [
+            "/* ==== the symbol table ==== */",
+            "",
+            "/* The names a traceback prints are a table built from the compiled",
+            " * library, which a single file cannot contain before it is compiled. So",
+            " * the amalgamation has an empty one, and a traceback prints addresses",
+            " * that addr2line or atos can turn into names. A build that makes its own",
+            " * table with tools/burrow-symtab defines BURROW_EXTERNAL_SYMTAB. */",
+            "#if !defined(BURROW_EXTERNAL_SYMTAB)",
+            "void (*const burrow__symbol_addrs[])(void) = {0};",
+            "const char *const burrow__symbol_names[] = {0};",
+            "const int burrow__symbol_count = 0;",
+            "#endif",
+            "",
+        ]
+    )
+
+    htext = "\n".join(h)
+    ctext = "\n".join(c)
+
+    manifest = {
+        "version": version,
+        "source_id": args.source_id,
+        "packages": "all",
+        "targets": "all",
+        "inputs": a.inputs,
+        "outputs": {
+            "burrow.h": hashlib.sha256(htext.encode("utf-8")).hexdigest(),
+            "burrow.c": hashlib.sha256(ctext.encode("utf-8")).hexdigest(),
+        },
+    }
+    mtext = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+
+    os.makedirs(args.out, exist_ok=True)
+    for name, text in (("burrow.h", htext), ("burrow.c", ctext), ("burrow-manifest.json", mtext)):
+        with open(os.path.join(args.out, name), "w", newline="\n") as f:
+            f.write(text)
+
+    return len(public) + len(private), len(sources)
+
+
 def main():
     p = argparse.ArgumentParser(
         prog=PROG,
-        description="Type descriptors for annotated C structs.",
+        description="Type descriptors for annotated C structs, and the amalgamation.",
     )
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -439,7 +763,31 @@ def main():
         help="one more flag for the parser, repeatable",
     )
 
+    m = sub.add_parser("amalgamate", help="the whole library as burrow.h and burrow.c")
+    m.add_argument("--out", default="dist", help="the directory to write into, default dist")
+    m.add_argument(
+        "--source-id",
+        default="unknown",
+        help="what burrow_sourceid() returns, usually git describe, default unknown",
+    )
+    m.add_argument(
+        "--root",
+        metavar="DIR",
+        help="the burrow tree to read, default the one this script is in",
+    )
+
     args = p.parse_args()
+
+    if args.command == "amalgamate":
+        try:
+            headers, sources = run_amalgamate(args)
+        except Error as e:
+            sys.stderr.write("%s: %s\n" % (PROG, e))
+            return 1
+        sys.stderr.write(
+            "%s: %d headers and %d sources to %s\n" % (PROG, headers, sources, args.out)
+        )
+        return 0
 
     try:
         n = run_reflect(args)

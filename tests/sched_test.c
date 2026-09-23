@@ -199,6 +199,8 @@ TEST(a_goroutine_runs) {
 #define ORDERED 4
 static int order_log[ORDERED + 1];
 static int order_len;
+static int order_early;
+static int order_count;
 static bool order_done;
 
 static void order_child(void *env) {
@@ -211,22 +213,34 @@ static void order_body(void *env) {
         CHECK(go(BURROW_FN(Func, order_child, (void *)(intptr_t)(i + 1))));
 
     /* Everything above is still sitting in the queues, because nothing has given
-     * the thread up yet. */
-    CHECK_INT_EQ(order_len, 0);
-    CHECK_INT_EQ(runtime_numgoroutine(), ORDERED + 1);
+     * the thread up yet. Unless sysmon decided this goroutine had held the
+     * processor long enough and asked it to give way at the safe point inside
+     * go, which is allowed and happens under the thread sanitizer on a busy
+     * machine. The test below tries again when it sees that. */
+    order_early = order_len;
+    order_count = runtime_numgoroutine();
 
     runtime_gosched();
     order_done = true;
 }
 
 TEST(the_newest_goroutine_runs_first_and_the_rest_run_oldest_first) {
-    memset(order_log, 0, sizeof order_log);
-    order_len = 0;
-    order_done = false;
+    /* Ten goes at a run nobody preempted, which is a lot more than a quiet
+     * machine needs and enough that a failure here means the order is wrong.
+     * The processor count is set every time because the runtime forgets it on
+     * the way out of runtime_main. */
+    for (int attempt = 0; attempt < 10; attempt++) {
+        (void)runtime_gomaxprocs(1);
+        memset(order_log, 0, sizeof order_log);
+        order_len = 0;
+        order_done = false;
+        runtime_main(BURROW_FN(Func, order_body, NULL));
+        if (order_early == 0)
+            break;
+    }
 
-    (void)runtime_gomaxprocs(1);
-    runtime_main(BURROW_FN(Func, order_body, NULL));
-
+    CHECK_INT_EQ(order_early, 0);
+    CHECK_INT_EQ(order_count, ORDERED + 1);
     CHECK(order_done);
     CHECK_INT_EQ(order_len, ORDERED);
     CHECK_INT_EQ(order_log[0], ORDERED);

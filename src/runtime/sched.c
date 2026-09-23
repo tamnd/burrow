@@ -205,17 +205,36 @@ static burrow__M allm[BURROW_MAXPROCS];
 
 /* Which M the calling thread is, or NULL on a thread the scheduler did not
  * start. Thread local, written once when the thread becomes an M and once when
- * it stops being one. */
-static BURROW_THREAD_LOCAL burrow__M *curm;
+ * it stops being one.
+ *
+ * Nothing reads or writes it except through getm and setm, and those are kept
+ * out of line on purpose. A compiler takes the address of a thread local
+ * variable to be the same for the whole of a function, so it works it out once
+ * and reuses it. That is true of a thread and false of a goroutine, which can
+ * go to sleep in the middle of a function on one thread and wake up on another.
+ * go_start was the case that showed it: the safe point at its top can move the
+ * goroutine, and the read of this variable after it was going through the old
+ * thread's address and coming back with the old thread's M, whose P by then
+ * belonged to somebody else. A call is a fresh function every time, so the
+ * address is worked out on whatever thread is running it. */
+static BURROW_THREAD_LOCAL burrow__M *curm_slot;
+
+static BURROW_NOINLINE burrow__M *getm(void) {
+    return curm_slot;
+}
+
+static BURROW_NOINLINE void setm(burrow__M *m) {
+    curm_slot = m;
+}
 
 /* ------------------------------------------------------------- the accessors */
 
 burrow__M *burrow__curm(void) {
-    return curm;
+    return getm();
 }
 
 burrow__G *burrow__curg(void) {
-    return curm != NULL ? curm->curg : NULL;
+    return getm() != NULL ? getm()->curg : NULL;
 }
 
 burrow__Bubble *burrow__curbubble(void) {
@@ -306,7 +325,7 @@ bool burrow__sched_spin_ok(void) {
     if (burrow__thread_ncpu() <= 1)
         return false;
 
-    burrow__M *m = curm;
+    burrow__M *m = getm();
     if (m == NULL || m->p == NULL) {
         /* A thread that is not running a goroutine, which Go is never in a
          * position to ask about. There is no run queue here to starve and no P
@@ -335,9 +354,9 @@ burrow__Timers *burrow__timers_local(void) {
     if (b != NULL)
         return burrow__bubble_timers(b);
 
-    if (curm == NULL || curm->p == NULL)
+    if (getm() == NULL || getm()->p == NULL)
         return NULL;
-    return &curm->p->timers;
+    return &getm()->p->timers;
 }
 
 burrow__Timer *burrow__sleep_timer(void) {
@@ -778,7 +797,7 @@ static bool make_context(burrow__G *g, size_t asked) {
  * when somebody schedules this goroutine again, and for goexit it never comes
  * back at all. */
 static void mcall(burrow__G *(*fn)(burrow__M *m, burrow__G *g)) {
-    burrow__M *m = curm;
+    burrow__M *m = getm();
     burrow__G *gp = m->curg;
 
     m->mcall = fn;
@@ -1001,7 +1020,7 @@ static void ready_list(burrow__GQueue *q) {
         return;
 
     bool counted = outside_enter();
-    burrow__M *m = curm;
+    burrow__M *m = getm();
     bool local = m != NULL && m->p != NULL;
 
     if (!local)
@@ -1831,7 +1850,7 @@ static void schedule(burrow__M *m) {
 static void mstart(void *arg) {
     burrow__M *m = (burrow__M *)arg;
 
-    curm = m;
+    setm(m);
     if (!burrow__mcontext_attach(&m->g0.ctx))
         runtime_throw(BURROW_S("mstart: this thread cannot be made switchable"));
 
@@ -1857,7 +1876,7 @@ static void mstart(void *arg) {
 
     burrow__stack_guard_disarm_thread();
     burrow__mcontext_detach(&m->g0.ctx);
-    curm = NULL;
+    setm(NULL);
 }
 
 /* Makes a thread and starts it on `p`. The M comes out of the static array, so
@@ -1910,7 +1929,7 @@ static void newm(burrow__P *p, bool spinning) {
  * a goroutine cannot outlive the runtime it is running on. Nor does sysmon,
  * which is this scheduler's own thread and is joined before the Ms are. */
 static bool outside_enter(void) {
-    if (curm != NULL)
+    if (getm() != NULL)
         return false;
 
     burrow__atomic_add_u32(&sched.noutside, 1);
@@ -1938,7 +1957,7 @@ static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble, bool b
 
     bool counted = outside_enter();
 
-    burrow__M *m = curm;
+    burrow__M *m = getm();
     burrow__P *p = m != NULL ? m->p : NULL;
 
     burrow__G *newg = gfget(p, stack_bytes);
@@ -1994,7 +2013,7 @@ bool go_stack(Func fn, size_t stack_bytes) {
      * rather than a list somebody has to keep up to date. A caller that is not
      * a goroutine is not in one, which is right: a thread that has come in from
      * outside the runtime cannot be inside a test's bubble. */
-    burrow__M *m = curm;
+    burrow__M *m = getm();
     burrow__Bubble *bubble = (m != NULL && m->curg != NULL) ? m->curg->bubble : NULL;
 
     return go_start(fn, stack_bytes, bubble, false);
@@ -2014,7 +2033,7 @@ bool burrow__go_bubble(Func fn, burrow__Bubble *b) {
 /* ------------------------------------------------------------ park and ready */
 
 void burrow__park(bool (*unlockf)(burrow__G *g, void *lock), void *lock, bool durable) {
-    burrow__M *m = curm;
+    burrow__M *m = getm();
     if (m == NULL || m->curg == NULL)
         runtime_throw(BURROW_S("sched_park: not on a goroutine"));
 
@@ -2053,7 +2072,7 @@ void sched_ready(Goroutine *g) {
     if (g->bubble != NULL)
         burrow__bubble_unblock(g);
 
-    burrow__M *m = curm;
+    burrow__M *m = getm();
     if (m != NULL && m->p != NULL) {
         runq_put(m->p, g, true);
     } else {
@@ -2067,7 +2086,7 @@ void sched_ready(Goroutine *g) {
 }
 
 void runtime_gosched(void) {
-    if (curm == NULL || curm->curg == NULL)
+    if (getm() == NULL || getm()->curg == NULL)
         runtime_throw(BURROW_S("runtime_gosched: not on a goroutine"));
     mcall(gosched0);
 }
@@ -2098,7 +2117,7 @@ void runtime_gosched(void) {
  * milestone. */
 
 bool burrow__preempt_requested(void) {
-    burrow__M *m = curm;
+    burrow__M *m = getm();
     if (m == NULL || m->curg == NULL)
         return false;
     return burrow__atomic_load_u32(&m->curg->preempt) != 0;
@@ -2112,7 +2131,7 @@ void burrow__preempt_point(void) {
      * asked to give way and then found the run queue empty, and so came
      * straight back, is not asked again by the very next safe point it walks
      * past. That would turn one preemption into a loop of them. */
-    burrow__atomic_store_u32(&curm->curg->preempt, 0);
+    burrow__atomic_store_u32(&getm()->curg->preempt, 0);
     mcall(gosched0);
 }
 
@@ -2145,7 +2164,7 @@ bool burrow__preempt_one(burrow__P *p) {
 }
 
 void runtime_goexit(void) {
-    if (curm == NULL || curm->curg == NULL)
+    if (getm() == NULL || getm()->curg == NULL)
         runtime_throw(BURROW_S("runtime_goexit: not on a goroutine"));
 
     /* Go's Goexit runs the deferred calls before the goroutine ends, and the
@@ -2267,7 +2286,7 @@ static void teardown(void) {
 void runtime_main(Func fn) {
     if (fn.f == NULL)
         runtime_throw(BURROW_S("runtime_main of a nil function"));
-    if (curm != NULL)
+    if (getm() != NULL)
         runtime_throw(BURROW_S("runtime_main: called from inside a goroutine"));
     if (burrow__atomic_load_acquire_u32(&sched.running) != 0)
         runtime_throw(BURROW_S("runtime_main: already running"));

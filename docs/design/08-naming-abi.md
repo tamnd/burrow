@@ -279,8 +279,11 @@ The mapping's whole purpose. `tools/burrow-coverage` in `tamnd/burrow`:
    entry pointing at the argument for it.
 3. Read the public headers under `include/burrow`, which are what `burrow.h`
    is made of.
-4. Report, per package: present / missing / waived. Signatures are not compared
-   yet.
+4. Report, per package: present / missing / waived. A function or method with
+   a prototype also has its signature held to the shape in
+   [docs/guides/conventions.md](../guides/conventions.md), and one that
+   departs from it on purpose is listed in `tools/coverage-reshaped.txt` with
+   the reason. Vtable members and macros are matched by name only.
 
 ```
 $ tools/burrow-coverage sync sync/atomic unicode/utf8 context

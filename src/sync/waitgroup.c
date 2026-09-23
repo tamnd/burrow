@@ -105,7 +105,7 @@ static void associate(SyncWaitGroup *wg, void *bubble) {
         runtime_throw(BURROW_S("sync: WaitGroup.Add called from two synctest bubbles"));
 }
 
-void sync_wait_group_add(SyncWaitGroup *wg, int delta) {
+void sync_wait_group_add(SyncWaitGroup *wg, Int delta) {
     /* Claiming the group for this bubble happens before the counter moves, and
      * the flag rather than the field is what answers the misuse question,
      * because the flag and the counter are one word and so cannot disagree. A
@@ -124,8 +124,7 @@ void sync_wait_group_add(SyncWaitGroup *wg, int delta) {
     /* Delta goes into the high half. Shifting it as unsigned is what makes a
      * negative delta a borrow out of the high half, which is the arithmetic
      * this wants and which shifting a signed value does not define. */
-    uint64_t state =
-        sync_atomic_add_uint64(&wg->state, (uint64_t)(uint32_t)(int32_t)delta << 32);
+    uint64_t state = sync_atomic_add_uint64(&wg->state, (uint64_t)delta << 32);
 
     /* The other way round: the group is in a bubble and this caller is not in
      * it. Read from the same word the add returned, so there is no second look
@@ -142,7 +141,7 @@ void sync_wait_group_add(SyncWaitGroup *wg, int delta) {
 
     /* Somebody is waiting and this call took the counter up from zero, so the
      * Add that was supposed to happen before the Wait did not. */
-    if (w != 0 && delta > 0 && v == delta)
+    if (w != 0 && delta > 0 && v == (int32_t)delta)
         runtime_panic(
             BURROW_S("sync: WaitGroup misuse: Add called concurrently with Wait"));
 

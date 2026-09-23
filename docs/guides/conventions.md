@@ -110,6 +110,8 @@ if (BURROW_FAILED(err))
 
 Some return a value with no spare bit pattern to signal with. `str_clone` returns a `Str`, and a `Str` has no value that means failure, so a failed allocation gives you the empty string. `slice_make` gives you the nil slice. Both say so on their declaration and both tell you what to compare if you need to tell that apart from an empty result that succeeded. The alternative was an out parameter on the two most common calls in the library, which would have cost every caller something to buy a check that almost nobody writes.
 
+And some have no result in Go at all, but can fail to allocate here, where in Go they can't. Those return `bool`, which is `true` when the work got done. `sync_map_store` and `sync_wait_group_go` are two of them. A `false` leaves everything the way it was.
+
 ### Three or more
 
 Go returns three meaningful values rarely, and where it does the port gets a named struct rather than a third pointer.

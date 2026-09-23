@@ -1,0 +1,39 @@
+# Signatures that are not the shape tools/burrow-coverage expects, on purpose,
+# one per line, as
+#
+#     package: declaration: reason
+#
+# The declaration is spelled the way tools/burrow-coverage -v prints it. The
+# reason says why the C signature departs from the rules, and the header it
+# points at argues it in full. A line here is a promise that the difference is
+# a design decision rather than a slip, so it gets the same review as a waiver.
+
+# include/burrow/context.h: Go returns only the stop function and leaves the
+# registration to the collector. Here the registration is the Context that comes
+# back, because that is what context_release frees, and stop is an out parameter.
+context: func AfterFunc: the registration is returned so it can be freed, stop comes back through a pointer
+
+# include/burrow/context.h: burrow does not have the calendar half of time yet,
+# so a deadline is a reading of the monotonic clock in nanoseconds. Both take a
+# Time once it exists.
+context: func WithDeadline: the deadline is monotonic nanoseconds until time.Time is ported
+context: func WithDeadlineCause: the deadline is monotonic nanoseconds until time.Time is ported
+
+# include/burrow/error.h: errors_as returns the typed pointer, or NULL, which is
+# the shape Go added AsType to get, and takes the target as a type descriptor
+# because C has no pointer to an interface type to pass instead.
+errors: func As: returns the matched error's pointer, NULL for no match, and takes a type descriptor
+
+# include/burrow/sync.h, sync.Map: keys and values go in and come out by
+# pointer, because the map learns their types at run time, and every call that
+# can allocate returns whether it could, with Go's own result moved to an out
+# parameter.
+sync: method (*Map) Load: keys and values by pointer, the found flag is the result
+sync: method (*Map) Store: keys and values by pointer, returns false if it could not allocate
+sync: method (*Map) Swap: keys and values by pointer, returns false if it could not allocate
+sync: method (*Map) LoadOrStore: keys and values by pointer, returns false if it could not allocate
+sync: method (*Map) LoadAndDelete: keys and values by pointer, the found flag is the result
+sync: method (*Map) Delete: keys by pointer
+sync: method (*Map) CompareAndSwap: keys and values by pointer, returns false if it could not allocate and the swap comes back through a pointer
+sync: method (*Map) CompareAndDelete: keys and values by pointer
+sync: method (*Map) Range: the callback is a function pointer with a context argument, and gets the key and value by pointer

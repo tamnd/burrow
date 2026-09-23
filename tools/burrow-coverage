@@ -33,8 +33,29 @@
 # are gone. A struct field is present if the struct with the mapped name has a
 # member with the mapped field name, and an interface method is present if the
 # vtable has a member with that name or there is a function with the method's
-# name. Signatures are not compared yet, so a function with the right name and
-# the wrong parameters passes.
+# name.
+#
+# A function or method that is declared as a prototype also has its signature
+# checked against the shape the rules give it, which is:
+#
+#   - the receiver first, as a value or a pointer the way Go has it
+#   - optionally an Alloc * after it, for anything that allocates
+#   - the parameters in Go's order, with a slice or a variadic as Slice
+#   - the first result as the return value, and void or bool if there is none,
+#     bool being for a call that can fail to allocate where Go's cannot
+#   - every further result as a pointer on the end, in order, and an error
+#     last of all as Error *; or, for three results besides the error, a struct
+#     whose name ends in Ret
+#
+# That is the section "More than one result" in docs/guides/conventions.md,
+# written as a program.
+#
+# A signature that is not that shape is reported as differs, and in a finished
+# package that fails the gate like a missing name does. Where a header departs
+# from the shape on purpose, tools/coverage-reshaped.txt says why, in the same
+# form as the waivers. A name that is only a macro has no prototype to read and
+# is not compared, and neither are generic functions, whose C side is a macro
+# by rule R12.
 #
 # It needs Python 3 and a Go toolchain, or GOROOT pointing at a Go tree.
 #
@@ -223,6 +244,7 @@ class Decl:
         self.alternative = None
         self.status = None
         self.renamed = False
+        self.why = None
 
 
 def map_decl(d):
@@ -372,11 +394,54 @@ class Headers:
     def __init__(self, files):
         self.tokens = set()
         self.members = {}
+        self.protos = {}
         for f in files:
             with open(f) as fh:
                 code = strip_c(fh.read())
             self.tokens.update(TOKEN.findall(code))
             self.read_structs(code)
+            self.read_protos(code)
+
+    def read_protos(self, code):
+        # Everything at file scope up to a semicolon or an opening brace, with
+        # the preprocessor lines gone. A brace after extern "C" is looked
+        # through, and any other brace is a struct or a function body and is
+        # skipped. What is left that looks like name(...) is a prototype.
+        code = re.sub(r"(?m)^[ \t]*#(?:[^\n]*\\\n)*[^\n]*$", "", code)
+        chunk = []
+        depth = 0
+        for c in code:
+            if depth:
+                depth += {"{": 1, "}": -1}.get(c, 0)
+                continue
+            if c == "{":
+                text = "".join(chunk)
+                if re.search(r'extern\s*""\s*$', text):
+                    chunk = []
+                    continue
+                self.add_proto(text)
+                chunk = []
+                depth = 1
+            elif c == ";":
+                self.add_proto("".join(chunk))
+                chunk = []
+            elif c == "}":
+                chunk = []
+            else:
+                chunk.append(c)
+
+    def add_proto(self, text):
+        text = strip_annotations(text).strip()
+        if text.startswith("typedef"):
+            return
+        m = re.match(r"^(.*?)\b(\w+)\s*\((.*)\)\s*$", text, re.S)
+        if not m or "=" in text or not m.group(1).strip():
+            return
+        ret = c_type(m.group(1))
+        params = split_params(m.group(3))
+        if params == ["void"]:
+            params = []
+        self.protos.setdefault(m.group(2), (ret, [c_param(x) for x in params]))
 
     def read_structs(self, code):
         # typedef struct Tag { ... } Name; and struct Name { ... };, with the
@@ -417,11 +482,231 @@ class Headers:
     def has_member(self, owner, member):
         return member in self.members.get(owner, ())
 
+    def proto(self, name):
+        return self.protos.get(name)
+
+
+def strip_annotations(text):
+    """BURROW_OWNS(ret) and friends out, since they are not part of a type."""
+    return re.sub(r"\bBURROW_[A-Z0-9_]+\s*(\([^()]*\))?", " ", text)
+
+
+def split_params(text):
+    out, depth, cur = [], 0, []
+    for c in text:
+        if c in "([":
+            depth += 1
+        elif c in ")]":
+            depth -= 1
+        if c == "," and depth == 0:
+            out.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(c)
+    last = "".join(cur).strip()
+    if last or out:
+        out.append(last)
+    return out
+
+
+# Qualifiers that say nothing about which type a value is. A const pointer is
+# the right spelling for a parameter the function only reads, and Go has no way
+# to say that, so the comparison ignores it.
+QUALIFIERS = {"const", "volatile", "restrict", "static", "inline", "extern", "struct", "enum", "union"}
+
+
+def c_type(text):
+    """A C type as one canonical string: Int *, void, Slice."""
+    words = [w for w in re.findall(r"\w+|\*", text) if w not in QUALIFIERS]
+    base = " ".join(w for w in words if w != "*")
+    stars = words.count("*")
+    return base + (" " + "*" * stars if stars else "")
+
+
+def c_param(text):
+    """One parameter, with its name dropped."""
+    if text == "...":
+        return "..."
+    if re.search(r"\(\s*\*", text):
+        return "(*)"
+    text = re.sub(r"\[[^\]]*\]\s*$", " *", text)
+    words = [w for w in re.findall(r"\w+|\*", text) if w not in QUALIFIERS]
+    # The last word is a name when something other than a star comes before it.
+    names = [w for w in words if w != "*"]
+    if len(names) > 1 and words[-1] != "*":
+        words = words[:-1]
+    return c_type(" ".join(words))
+
 
 def header_files(paths):
     if paths:
         return paths
     return sorted(glob.glob(os.path.join(ROOT, "include", "burrow", "**", "*.h"), recursive=True))
+
+
+# --------------------------------------------------------- the signatures
+
+# What a Go builtin may be spelled as in C. The manifest has already turned
+# byte into uint8 and rune into int32, so both spellings of those are right.
+BUILTIN = {
+    "bool": {"bool"},
+    "string": {"Str"},
+    "error": {"Error"},
+    "int": {"Int"},
+    "uint": {"Uint"},
+    "uintptr": {"Uintptr", "uintptr_t"},
+    "int8": {"int8_t"},
+    "int16": {"int16_t"},
+    "int32": {"int32_t", "Rune"},
+    "int64": {"int64_t"},
+    "uint8": {"uint8_t", "Byte"},
+    "uint16": {"uint16_t"},
+    "uint32": {"uint32_t"},
+    "uint64": {"uint64_t"},
+    "float32": {"float"},
+    "float64": {"double"},
+    "interface{}": {"Any"},
+    "any": {"Any"},
+}
+
+
+def balanced(text, i):
+    """The index just past the bracket group that starts at text[i]."""
+    depth = 0
+    for j in range(i, len(text)):
+        if text[j] in "([{":
+            depth += 1
+        elif text[j] in ")]}":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+    return len(text)
+
+
+def go_list(text):
+    """(A, B, func(C) D) into its parts, or a single result on its own."""
+    text = text.strip()
+    if not text:
+        return []
+    if not text.startswith("("):
+        return [text]
+    inner = text[1 : balanced(text, 0) - 1]
+    return [x for x in split_params(inner) if x]
+
+
+def go_signature(text):
+    """The parameter and result lists of a manifest line's tail: (A, B) C."""
+    end = balanced(text, 0)
+    return go_list(text[:end]), go_list(text[end:])
+
+
+class GoTypes:
+    """Go types as the set of C spellings the rules allow, or None for any."""
+
+    def __init__(self, packages):
+        self.by_name = {}
+        for path in packages:
+            parts = path.split("/")
+            name = parts[-2] if len(parts) > 1 and re.fullmatch(r"v[0-9]+", parts[-1]) else parts[-1]
+            self.by_name.setdefault(name, []).append(path)
+
+    def spell(self, path, t):
+        t = t.strip()
+        if t.startswith("...") or t.startswith("[]"):
+            return {"Slice"}
+        if t.startswith("*"):
+            inner = self.spell(path, t[1:])
+            if inner is None:
+                return None
+            return {e + "*" if e.endswith("*") else e + " *" for e in inner}
+        if t.startswith("map["):
+            return {"Map"}
+        if re.match(r"^(<-)?chan\b", t):
+            return {"Chan", "Chan *"}
+        if t.startswith("func("):
+            return {"Func", "(*)"}
+        if t in BUILTIN:
+            return BUILTIN[t]
+        if t == "unsafe.Pointer":
+            return {"void *"}
+        m = re.fullmatch(r"(\w+)\.(\w+)", t)
+        if m:
+            paths = self.by_name.get(m.group(1), [])
+            if len(paths) != 1:
+                return None
+            return {type_name(paths[0], m.group(2))}
+        if re.fullmatch(r"[A-Z]\w*", t):
+            return {type_name(path, t)}
+        # Arrays, literal structs and interfaces, and type parameters, which
+        # have no single spelling to hold a header to.
+        return None
+
+
+def fits(c, allowed):
+    return allowed is None or c in allowed
+
+
+def spelled(g, allowed):
+    """Go's type and what it is in C: int, which is Int here."""
+    return "%s, which is %s here" % (g, " or ".join(sorted(allowed))) if allowed else g
+
+
+def check_signature(d, headers, gotypes):
+    """None if the prototype has the shape the rules give it, or what is wrong."""
+    if d.cname is None or d.renamed:
+        return None
+    proto = headers.proto(d.cname)
+    if proto is None:
+        return None
+    # The manifest ends a line added after Go 1.0 with the proposal it came
+    # from, as in #57928, which is not part of the type.
+    text = re.sub(r"\s+#\d+$", "", d.text)
+    m = re.match(r"^func \w+(\[[^\]]*\])?(\(.*)$", text)
+    if m:
+        if m.group(1):
+            return None
+        params, results = go_signature(m.group(2))
+        receiver = False
+    else:
+        m = re.match(r"^method \((\*?)(\w+)(\[[^\]]*\])?\) \w+(\(.*)$", text)
+        if not m:
+            return None
+        if m.group(3):
+            return None
+        params, results = go_signature(m.group(4))
+        params = [m.group(1) + m.group(2)] + params
+        receiver = True
+
+    ret, cps = proto[0], list(proto[1])
+    at = 1 if receiver else 0
+    if len(cps) > at and cps[at] == "Alloc *":
+        del cps[at]
+
+    if len(results) >= 2 and results[-1] == "error":
+        if not cps or cps[-1] != "Error *":
+            return "the error result should be an Error * on the end"
+        cps.pop()
+        results = results[:-1]
+    if not results:
+        if ret not in ("void", "bool"):
+            return "returns %s where Go returns nothing" % ret
+    elif len(results) < 3 or not ret.endswith("Ret"):
+        want = gotypes.spell(d.path, results[0])
+        if not fits(ret, want):
+            return "returns %s where Go returns %s" % (ret, spelled(results[0], want))
+        for r in reversed(results[1:]):
+            want = gotypes.spell(d.path, "*" + r)
+            if not cps or not fits(cps[-1], want):
+                return "the %s result should be a pointer on the end" % r
+            cps.pop()
+
+    if len(cps) != len(params):
+        return "takes %d parameters where Go has %d" % (len(cps), len(params))
+    for i, (c, g) in enumerate(zip(cps, params), 1):
+        want = gotypes.spell(d.path, g)
+        if not fits(c, want):
+            return "parameter %d is %s where Go has %s" % (i, c, spelled(g, want))
+    return None
 
 
 # ------------------------------------------------------------- the lists
@@ -453,7 +738,7 @@ def read_waivers(path):
 # ------------------------------------------------------------ the report
 
 
-def classify(d, headers, waivers):
+def classify(d, headers, waivers, reshaped, gotypes):
     if (d.path, d.key) in waivers or (d.path, "*") in waivers:
         return "waived"
     if d.owner is not None:
@@ -464,6 +749,9 @@ def classify(d, headers, waivers):
         return "missing"
     if not headers.has(d.cname):
         return "missing"
+    d.why = check_signature(d, headers, gotypes)
+    if d.why is not None:
+        return "reshaped" if (d.path, d.key) in reshaped else "differs"
     return "renamed" if d.renamed else "present"
 
 
@@ -486,6 +774,7 @@ def main():
     p.add_argument("--header", action="append", help="a header to read, repeatable, include/burrow by default")
     p.add_argument("--done", default=os.path.join(HERE, "coverage-done.txt"), help="the finished packages")
     p.add_argument("--waivers", default=os.path.join(HERE, "coverage-waivers.txt"), help="the waived declarations")
+    p.add_argument("--reshaped", default=os.path.join(HERE, "coverage-reshaped.txt"), help="the signatures that differ on purpose")
     p.add_argument("--no-gate", action="store_true", help="report only, never fail")
     args = p.parse_args()
 
@@ -493,26 +782,33 @@ def main():
     decls = read_api(api_dir, args.target or TARGETS)
     headers = Headers(header_files(args.header))
     waivers = read_waivers(args.waivers)
+    reshaped = read_waivers(args.reshaped)
     done = [line for _, line in read_list(args.done)]
 
     # A package can be public and declare nothing, like unsafe, whose contents
     # are builtins, or time/tzdata, which is imported for its side effect.
     public = public_packages()
+    gotypes = GoTypes(public)
     packages = args.packages or public
     unknown = [pkg for pkg in packages + done if pkg not in decls and pkg not in public]
     if unknown:
         raise SystemExit("%s: not a public standard package: %s" % (PROG, " ".join(unknown)))
 
+    # A declaration whose signature differs is counted with the missing ones,
+    # since a caller written from Go's documentation cannot use it either.
+    counted = {"renamed": "present", "reshaped": "present", "differs": "missing"}
     failed = []
-    totals = {"present": 0, "missing": 0, "waived": 0}
+    totals = {"present": 0, "missing": 0, "waived": 0, "differs": 0}
     width = max(len(pkg) for pkg in packages)
     for pkg in packages:
-        counts = {"present": 0, "missing": 0, "waived": 0}
+        counts = {"present": 0, "missing": 0, "waived": 0, "differs": 0}
         rows = []
         for d in decls.get(pkg, []):
             map_decl(d)
-            d.status = classify(d, headers, waivers)
-            counts["present" if d.status == "renamed" else d.status] += 1
+            d.status = classify(d, headers, waivers, reshaped, gotypes)
+            counts[counted.get(d.status, d.status)] += 1
+            if d.status == "differs":
+                counts["differs"] += 1
             rows.append(d)
         for k in totals:
             totals[k] += counts[k]
@@ -530,25 +826,31 @@ def main():
         elif counts["present"]:
             mark = "partial"
         extra = "  %d waived" % counts["waived"] if counts["waived"] else ""
+        if counts["differs"]:
+            extra += "  %d with the wrong signature" % counts["differs"]
         if not args.missing or counts["missing"]:
             print("%-*s %5d/%-5d %6.1f%%  %s%s" % (width, pkg, counts["present"], want, pct, mark, extra))
         if args.verbose or args.missing:
             for d in rows:
-                if args.missing and d.status != "missing":
+                if args.missing and d.status not in ("missing", "differs"):
                     continue
                 print("    %-8s %-52s %s" % (d.status, d.text if len(d.text) <= 52 else d.key, c_spelling(d)))
+                if d.why is not None and d.status in ("differs", "reshaped"):
+                    print("    %-8s %s" % ("", d.why))
 
     want = totals["present"] + totals["missing"]
     print("-" * (width + 30))
     print(
-        "%-*s %5d/%-5d %6.2f%%  %d packages, %d waived"
-        % (width, "total", totals["present"], want, 100.0 * totals["present"] / want if want else 100.0, len(packages), totals["waived"])
+        "%-*s %5d/%-5d %6.2f%%  %d packages, %d waived, %d with the wrong signature"
+        % (width, "total", totals["present"], want, 100.0 * totals["present"] / want if want else 100.0, len(packages),
+           totals["waived"], totals["differs"])
     )
     if failed and not args.no_gate:
         print(
-            "\n%s: %s %s listed in %s and still missing declarations. Add them, or "
-            "waive them in %s with a reason." % (PROG, " ".join(failed), "is" if len(failed) == 1 else "are",
-                                                 os.path.relpath(args.done), os.path.relpath(args.waivers)),
+            "\n%s: %s %s listed in %s and still missing declarations or getting signatures wrong. Add or fix them, "
+            "waive a declaration in %s, or say why a signature differs in %s." % (
+                PROG, " ".join(failed), "is" if len(failed) == 1 else "are", os.path.relpath(args.done),
+                os.path.relpath(args.waivers), os.path.relpath(args.reshaped)),
             file=sys.stderr,
         )
         return 1

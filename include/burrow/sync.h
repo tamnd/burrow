@@ -341,7 +341,7 @@ extern const Type *const TYPE_SYNC_WAIT_GROUP;
  * means waiting for the first round to finish first.
  *
  * Prefer sync_wait_group_go, which cannot get any of that wrong. */
-void sync_wait_group_add(SyncWaitGroup *wg, int delta);
+void sync_wait_group_add(SyncWaitGroup *wg, Int delta);
 
 /* Takes one off the counter. The same as adding minus one, and the name worth
  * using because it is what the call site means. */

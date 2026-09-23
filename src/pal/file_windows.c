@@ -63,7 +63,7 @@
 /* UTF-8 into UTF-16, NUL terminated, into cap units. Bytes that are not UTF-8
  * become U+FFFD one at a time, and a three byte sequence for a surrogate
  * becomes that surrogate, which is WTF-8 and is Go's rule. */
-static bool widen(const char *s, wchar_t *out, size_t cap, PalErrno *err) {
+bool burrow__pal_widen(const char *s, wchar_t *out, size_t cap, PalErrno *err) {
     if (s == NULL) {
         BURROW_OUT(err, PAL_EINVAL);
         return false;
@@ -119,7 +119,7 @@ static bool widen(const char *s, wchar_t *out, size_t cap, PalErrno *err) {
 /* n units of UTF-16 into UTF-8, not NUL terminated. Returns the length, or -1
  * when it does not fit in cap bytes. An unpaired surrogate is written as its
  * own three bytes rather than replaced. */
-static int64_t narrow(const wchar_t *w, size_t n, char *out, size_t cap) {
+int64_t burrow__pal_narrow(const wchar_t *w, size_t n, char *out, size_t cap) {
     size_t o = 0;
     for (size_t i = 0; i < n; i++) {
         uint32_t c = (uint32_t)w[i];
@@ -290,7 +290,7 @@ static bool stat_handle(HANDLE h, PalStat *out, PalErrno *err) {
 int64_t pal_open(const char *path, uint32_t flags, uint32_t mode, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     wchar_t w[PAL_WPATH_MAX];
-    if (!widen(path, w, PAL_WPATH_MAX, err))
+    if (!burrow__pal_widen(path, w, PAL_WPATH_MAX, err))
         return PAL_INVALID_HANDLE;
 
     uint32_t acc = flags & PAL_O_ACCMODE;
@@ -586,7 +586,7 @@ static bool stat_path(const char *path, PalStat *out, bool follow, PalErrno *err
         return false;
     }
     wchar_t w[PAL_WPATH_MAX];
-    if (!widen(path, w, PAL_WPATH_MAX, err))
+    if (!burrow__pal_widen(path, w, PAL_WPATH_MAX, err))
         return false;
 
     DWORD flags =
@@ -628,7 +628,7 @@ bool pal_fstat(int64_t fd, PalStat *out, PalErrno *err) {
 bool pal_unlink(const char *path, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     wchar_t w[PAL_WPATH_MAX];
-    if (!widen(path, w, PAL_WPATH_MAX, err))
+    if (!burrow__pal_widen(path, w, PAL_WPATH_MAX, err))
         return false;
     if (DeleteFileW(w))
         return true;
@@ -667,7 +667,8 @@ bool pal_unlink(const char *path, PalErrno *err) {
 bool pal_rename(const char *from, const char *to, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     wchar_t wf[PAL_WPATH_MAX], wt[PAL_WPATH_MAX];
-    if (!widen(from, wf, PAL_WPATH_MAX, err) || !widen(to, wt, PAL_WPATH_MAX, err))
+    if (!burrow__pal_widen(from, wf, PAL_WPATH_MAX, err) ||
+        !burrow__pal_widen(to, wt, PAL_WPATH_MAX, err))
         return false;
     return MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING) || file_fail(err);
 }
@@ -676,7 +677,7 @@ bool pal_mkdir(const char *path, uint32_t mode, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     (void)mode; /* no permission bits to set, and Go ignores it here too */
     wchar_t w[PAL_WPATH_MAX];
-    if (!widen(path, w, PAL_WPATH_MAX, err))
+    if (!burrow__pal_widen(path, w, PAL_WPATH_MAX, err))
         return false;
     return CreateDirectoryW(w, NULL) || file_fail(err);
 }
@@ -684,7 +685,7 @@ bool pal_mkdir(const char *path, uint32_t mode, PalErrno *err) {
 bool pal_rmdir(const char *path, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     wchar_t w[PAL_WPATH_MAX];
-    if (!widen(path, w, PAL_WPATH_MAX, err))
+    if (!burrow__pal_widen(path, w, PAL_WPATH_MAX, err))
         return false;
     return RemoveDirectoryW(w) || file_fail(err);
 }
@@ -692,7 +693,7 @@ bool pal_rmdir(const char *path, PalErrno *err) {
 bool pal_chdir(const char *path, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     wchar_t w[PAL_WPATH_MAX];
-    if (!widen(path, w, PAL_WPATH_MAX, err))
+    if (!burrow__pal_widen(path, w, PAL_WPATH_MAX, err))
         return false;
     return SetCurrentDirectoryW(w) || file_fail(err);
 }
@@ -709,7 +710,8 @@ int64_t pal_getcwd(char *buf, int64_t cap, PalErrno *err) {
         BURROW_OUT(err, PAL_ERANGE);
         return -1;
     }
-    int64_t len = buf == NULL || cap <= 0 ? -1 : narrow(w, n, buf, (size_t)cap - 1);
+    int64_t len =
+        buf == NULL || cap <= 0 ? -1 : burrow__pal_narrow(w, n, buf, (size_t)cap - 1);
     if (len < 0) {
         BURROW_OUT(err, PAL_ERANGE);
         return -1;
@@ -721,7 +723,8 @@ int64_t pal_getcwd(char *buf, int64_t cap, PalErrno *err) {
 bool pal_link(const char *from, const char *to, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     wchar_t wf[PAL_WPATH_MAX], wt[PAL_WPATH_MAX];
-    if (!widen(from, wf, PAL_WPATH_MAX, err) || !widen(to, wt, PAL_WPATH_MAX, err))
+    if (!burrow__pal_widen(from, wf, PAL_WPATH_MAX, err) ||
+        !burrow__pal_widen(to, wt, PAL_WPATH_MAX, err))
         return false;
     return CreateHardLinkW(wt, wf, NULL) || file_fail(err);
 }
@@ -733,7 +736,8 @@ static bool is_sep(wchar_t c) {
 bool pal_symlink(const char *target, const char *path, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     wchar_t wt[PAL_WPATH_MAX], wp[PAL_WPATH_MAX];
-    if (!widen(target, wt, PAL_WPATH_MAX, err) || !widen(path, wp, PAL_WPATH_MAX, err))
+    if (!burrow__pal_widen(target, wt, PAL_WPATH_MAX, err) ||
+        !burrow__pal_widen(path, wp, PAL_WPATH_MAX, err))
         return false;
     /* The kernel reads the stored target and does not know about '/'. */
     for (size_t i = 0; wt[i] != 0; i++)
@@ -795,7 +799,7 @@ int64_t pal_readlink(const char *path, char *buf, int64_t cap, PalErrno *err) {
     if (!count_ok(buf, cap, err))
         return -1;
     wchar_t w[PAL_WPATH_MAX];
-    if (!widen(path, w, PAL_WPATH_MAX, err))
+    if (!burrow__pal_widen(path, w, PAL_WPATH_MAX, err))
         return -1;
 
     HANDLE h = CreateFileW(
@@ -869,7 +873,7 @@ int64_t pal_readlink(const char *path, char *buf, int64_t cap, PalErrno *err) {
         o += plen;
         room -= plen;
     }
-    int64_t len = narrow(s, n, o, (size_t)room);
+    int64_t len = burrow__pal_narrow(s, n, o, (size_t)room);
     /* Full is as bad as over, for the reason the POSIX backend gives. */
     if (len < 0 || len >= room) {
         BURROW_OUT(err, PAL_ERANGE);
@@ -881,7 +885,7 @@ int64_t pal_readlink(const char *path, char *buf, int64_t cap, PalErrno *err) {
 bool pal_chmod(const char *path, uint32_t mode, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     wchar_t w[PAL_WPATH_MAX];
-    if (!widen(path, w, PAL_WPATH_MAX, err))
+    if (!burrow__pal_widen(path, w, PAL_WPATH_MAX, err))
         return false;
     DWORD fa = GetFileAttributesW(w);
     if (fa == INVALID_FILE_ATTRIBUTES)
@@ -905,7 +909,7 @@ bool pal_chown(const char *path, int64_t uid, int64_t gid, PalErrno *err) {
 bool pal_utimes(const char *path, int64_t atime_ns, int64_t mtime_ns, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     wchar_t w[PAL_WPATH_MAX];
-    if (!widen(path, w, PAL_WPATH_MAX, err))
+    if (!burrow__pal_widen(path, w, PAL_WPATH_MAX, err))
         return false;
     HANDLE h = CreateFileW(w, FILE_WRITE_ATTRIBUTES,
                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
@@ -1027,7 +1031,7 @@ bool pal_readdir(PalDir *d, PalDirEntry *out, PalErrno *err) {
             (n == 2 && name[0] == L'.' && name[1] == L'.'))
             continue;
 
-        int64_t len = narrow(name, n, out->name, PAL_NAME_MAX);
+        int64_t len = burrow__pal_narrow(name, n, out->name, PAL_NAME_MAX);
         if (len < 0) {
             BURROW_OUT(err, PAL_ENAMETOOLONG);
             return false;

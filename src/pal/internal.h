@@ -24,6 +24,8 @@
 #include "burrow/pal.h"
 #include "burrow/platform.h"
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -42,12 +44,27 @@ PalErrno burrow__pal_errno_win(unsigned long native);
  * function. */
 PalErrno burrow__pal_errno_wsa(int native);
 
+/* UTF-8 into NUL terminated UTF-16 in cap units, and n units of UTF-16 back
+ * into UTF-8 without a NUL, answering the length or -1 when it does not fit.
+ * Both are WTF-8, which is Go's rule. They live in file_windows.c. */
+bool burrow__pal_widen(const char *s, wchar_t *out, size_t cap, PalErrno *err);
+int64_t burrow__pal_narrow(const wchar_t *w, size_t n, char *out, size_t cap);
+
 #else
 
 /* A POSIX errno into one of ours. Zero in gives PAL_EOTHER rather than PAL_OK,
  * because a backend only calls this after something has already failed, and
  * answering success there would turn a failure into a silent zero. */
 PalErrno burrow__pal_errno(int native);
+
+/* A native signal number into one of ours, or the native number itself when
+ * there is no PAL name for it, for the status pal_wait reports. */
+int32_t burrow__pal_signal_from_native(int native);
+
+/* The two halves of the read side of the fork lock in proc_posix.c, held
+ * across any moment where a descriptor is open without close on exec. */
+void burrow__pal_fork_rlock(void);
+void burrow__pal_fork_runlock(void);
 
 #endif
 

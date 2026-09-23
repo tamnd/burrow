@@ -241,8 +241,10 @@ bool pal_vm_guard(void *addr, int64_t bytes, PalErrno *err);
 /* Map a file, or part of one, into memory. prot is PAL_PROT_*. Returns NULL on
  * failure. Unmap with pal_munmap and not with pal_vm_release, because on
  * Windows the two are different calls and the difference is not hideable.
- *
- * Not implemented yet, and it arrives with os. */
+ * A shared mapping and the file see each other's writes. A zero length is
+ * PAL_EINVAL, as it is for mmap(2), and so is asking for a mapping that is
+ * both writable and executable, which some systems refuse anyway and none
+ * should be asked for. */
 BURROW_OWNS(ret) void *pal_mmap(int64_t fd, int64_t off, int64_t len, uint32_t prot,
                                 PalErrno *err);
 bool pal_munmap(void *addr, int64_t len, PalErrno *err);
@@ -643,7 +645,10 @@ bool pal_pipe(int64_t out[2], uint32_t flags, PalErrno *err);
 
 /* ------------------------------------------------------------------ process
  *
- * Not implemented yet. These arrive with os and os/exec. */
+ * A process id is the kernel's on POSIX. On Windows it is the process handle,
+ * because that is what waiting and killing need and a number the system can
+ * give to someone else once the process is gone is not safe to hold. It is
+ * closed by the pal_wait that reaps the child. */
 
 enum {
     /* Put the child in its own process group, so that a signal to ours does not
@@ -663,7 +668,15 @@ enum {
  * i in the child, and PAL_INVALID_HANDLE leaves that slot closed. Descriptors
  * above nfds are closed in the child, which is the only behaviour that is safe
  * in a threaded process where another thread may be opening a file right
- * now. */
+ * now.
+ *
+ * Windows has no descriptor numbers. There the first three slots become the
+ * child's standard handles, and handles in any slot after them are inherited
+ * under the values they have here, for the child to be told about some other
+ * way, which is what Go does too. Nothing else is inherited.
+ *
+ * A relative path is taken relative to dir when dir is set, as it is in
+ * Go. */
 typedef struct PalSpawn {
     const char *path;
     const char *const *argv;

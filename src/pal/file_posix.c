@@ -542,11 +542,16 @@ bool pal_pipe(int64_t out[2], uint32_t flags, PalErrno *err) {
         return file_fail(err);
 #else
     /* No pipe2, so there is a moment where both ends are open without close on
-     * exec, and a fork on another thread in that moment gives the child a copy.
-     * Go closes it with a lock that every fork takes. burrow will too, when it
-     * has a fork to take it. */
-    if (pipe(p) != 0)
-        return file_fail(err);
+     * exec, and a fork on another thread in that moment would give the child a
+     * copy. Go closes it with a lock that every fork takes, and so does
+     * pal_spawn. */
+    burrow__pal_fork_rlock();
+    if (pipe(p) != 0) {
+        PalErrno e = burrow__pal_errno(errno);
+        burrow__pal_fork_runlock();
+        BURROW_OUT(err, e);
+        return false;
+    }
     for (int i = 0; i < 2; i++) {
         bool ok = set_fd_flag(p[i], F_GETFD, F_SETFD, FD_CLOEXEC);
         if (ok && (flags & PAL_O_NONBLOCK))
@@ -555,10 +560,12 @@ bool pal_pipe(int64_t out[2], uint32_t flags, PalErrno *err) {
             PalErrno e = burrow__pal_errno(errno);
             close(p[0]);
             close(p[1]);
+            burrow__pal_fork_runlock();
             BURROW_OUT(err, e);
             return false;
         }
     }
+    burrow__pal_fork_runlock();
 #endif
     out[0] = p[0];
     out[1] = p[1];

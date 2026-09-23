@@ -160,6 +160,28 @@ static int to_native(int32_t sig) {
     return -1;
 }
 
+int32_t burrow__pal_signal_from_native(int native) {
+    for (size_t i = 0; i < sizeof signal_pairs / sizeof signal_pairs[0]; i++) {
+        if (signal_pairs[i].native == native)
+            return signal_pairs[i].pal;
+    }
+    return (int32_t)native;
+}
+
+bool pal_kill(int64_t pid, int32_t sig, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    int native = sig == 0 ? 0 : to_native(sig);
+    if (native < 0 || pid <= 0) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+    if (kill((pid_t)pid, native) != 0) {
+        BURROW_OUT(err, burrow__pal_errno(errno));
+        return false;
+    }
+    return true;
+}
+
 /* Hands the signal back to whoever had it and lets it happen again.
  *
  * A handler that returns from a fault it did not cause would fault again at the

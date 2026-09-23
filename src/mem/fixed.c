@@ -13,22 +13,22 @@
  * alloc_zeroed here: mem_alloc does the memset, every time, which is the
  * honest answer when you cannot prove the memory is already zero. */
 
-static bool align_ok(size_t align) {
+static bool fixed_align_ok(size_t align) {
     return align != 0 && (align & (align - 1)) == 0;
 }
 
-static uintptr_t align_ptr(uintptr_t p, size_t align) {
+static uintptr_t fixed_align_ptr(uintptr_t p, size_t align) {
     uintptr_t m = (uintptr_t)align - 1U;
     return (p + m) & ~m;
 }
 
 static void *fixed_vt_alloc(void *self, size_t size, size_t align) {
     Fixed *fx = (Fixed *)self;
-    if (!align_ok(align) || size == 0 || fx->base == NULL)
+    if (!fixed_align_ok(align) || size == 0 || fx->base == NULL)
         return NULL;
 
     uintptr_t base = (uintptr_t)fx->base;
-    uintptr_t p = align_ptr(base + fx->used, align);
+    uintptr_t p = fixed_align_ptr(base + fx->used, align);
     size_t off = (size_t)(p - base);
     if (off > fx->cap || size > fx->cap - off)
         return NULL;
@@ -41,7 +41,7 @@ static void *fixed_vt_alloc(void *self, size_t size, size_t align) {
     return (void *)p;
 }
 
-static bool is_last(const Fixed *fx, const void *p, size_t size) {
+static bool fixed_is_last(const Fixed *fx, const void *p, size_t size) {
     if (p == NULL || fx->base == NULL)
         return false;
     const unsigned char *q = (const unsigned char *)p;
@@ -51,10 +51,10 @@ static bool is_last(const Fixed *fx, const void *p, size_t size) {
 static void *fixed_vt_realloc(void *self, void *p, size_t old, size_t nsz,
                               size_t align) {
     Fixed *fx = (Fixed *)self;
-    if (!align_ok(align) || nsz == 0)
+    if (!fixed_align_ok(align) || nsz == 0)
         return NULL;
 
-    if (is_last(fx, p, old)) {
+    if (fixed_is_last(fx, p, old)) {
         size_t off = (size_t)((unsigned char *)p - fx->base);
         if (nsz <= fx->cap - off) {
             fx->used = off + nsz;
@@ -76,7 +76,7 @@ static void *fixed_vt_realloc(void *self, void *p, size_t old, size_t nsz,
 static void fixed_vt_free(void *self, void *p, size_t size, size_t align) {
     (void)align;
     Fixed *fx = (Fixed *)self;
-    if (is_last(fx, p, size))
+    if (fixed_is_last(fx, p, size))
         fx->used = (size_t)((unsigned char *)p - fx->base);
     fx->frees++;
 }

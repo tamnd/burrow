@@ -54,7 +54,7 @@ static bool bytes_for(Int n, size_t sz, size_t *out) {
 /* memcpy and memmove with a NULL pointer are undefined even when the length is
  * zero, UndefinedBehaviorSanitizer reports it, and a zero length slice with a
  * NULL pointer is the most ordinary value in this library. */
-static void copy_bytes(void *dst, const void *src, size_t n) {
+static void slice_copy_bytes(void *dst, const void *src, size_t n) {
     if (n > 0 && dst != NULL && src != NULL)
         memcpy(dst, src, n);
 }
@@ -214,7 +214,7 @@ Slice slice_append(Alloc *a, Slice s, const void *elems, Int n) {
      * depend on it, so quietly copying instead would be a nicer library that
      * ports Go code incorrectly. */
     if (new_len <= s.cap) {
-        copy_bytes((Byte *)s.p + (size_t)s.len * sz, elems, (size_t)n * sz);
+        slice_copy_bytes((Byte *)s.p + (size_t)s.len * sz, elems, (size_t)n * sz);
         Slice out = {s.p, new_len, s.cap, s.elem};
         return out;
     }
@@ -238,8 +238,8 @@ Slice slice_append(Alloc *a, Slice s, const void *elems, Int n) {
     /* The copy happens after the allocation, which is what makes
      * append(s, s...) work: elems may point into the old array and the old
      * array is still there. */
-    copy_bytes(p, s.p, old_bytes);
-    copy_bytes(p + old_bytes, elems, new_bytes);
+    slice_copy_bytes(p, s.p, old_bytes);
+    slice_copy_bytes(p + old_bytes, elems, new_bytes);
     zero_bytes(p + old_bytes + new_bytes, total - old_bytes - new_bytes);
 
     Slice out = {p, new_len, new_cap, s.elem};
@@ -297,7 +297,7 @@ Slice slice_from_str(Alloc *a, Str s) {
     Slice out = slice_make(a, TYPE_BYTE, s.len, s.len);
     if (out.p == NULL)
         return out;
-    copy_bytes(out.p, s.p, (size_t)s.len);
+    slice_copy_bytes(out.p, s.p, (size_t)s.len);
     return out;
 }
 

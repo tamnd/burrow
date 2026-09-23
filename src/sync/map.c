@@ -77,7 +77,7 @@ typedef struct Node {
 } Node;
 
 typedef struct Indirect Indirect;
-typedef struct Entry Entry;
+typedef struct MapEntry MapEntry;
 
 /* An internal node. children are read without the lock and written under it. */
 struct Indirect {
@@ -103,7 +103,7 @@ struct Indirect {
  * is what lets a reader copy a value out while somebody else is replacing the
  * entry: it is reading a node nobody will write to, and the node stays there
  * until the epoch says the reader has gone. */
-struct Entry {
+struct MapEntry {
     Node node;
     void *overflow;
     burrow__Retired retired;
@@ -117,15 +117,15 @@ struct Entry {
 
 /* ------------------------------------------------------------------- layout */
 
-static size_t round_up(size_t x, size_t a) {
+static size_t syncmap_round_up(size_t x, size_t a) {
     return (x + a - 1) & ~(a - 1);
 }
 
-static void *ekey(const SyncMap *m, Entry *e) {
+static void *ekey(const SyncMap *m, MapEntry *e) {
     return (Byte *)e + m->key_off;
 }
 
-static void *eval(const SyncMap *m, Entry *e) {
+static void *eval(const SyncMap *m, MapEntry *e) {
     return (Byte *)e + m->val_off;
 }
 
@@ -140,7 +140,7 @@ static void *eval(const SyncMap *m, Entry *e) {
  *
  * The rule is type.c's and has to stay in step with it: a type with a copy of
  * its own gets to use it, and everything else is its bytes. */
-static void copy_bytes(const Type *t, void *dst, const void *src) {
+static void syncmap_copy_bytes(const Type *t, void *dst, const void *src) {
     const TypeOps *ops = t->ops;
 
     if (ops != NULL && ops->copy != NULL) {
@@ -172,8 +172,8 @@ static void copy_bytes(const Type *t, void *dst, const void *src) {
 
 /* --------------------------------------------------------------- allocation */
 
-static Entry *entry_new(SyncMap *m, const void *key, const void *val) {
-    Entry *e = (Entry *)mem_alloc(m->a, m->node_size, m->node_align);
+static MapEntry *entry_new(SyncMap *m, const void *key, const void *val) {
+    MapEntry *e = (MapEntry *)mem_alloc(m->a, m->node_size, m->node_align);
     if (e == NULL)
         return NULL;
 
@@ -181,9 +181,9 @@ static Entry *entry_new(SyncMap *m, const void *key, const void *val) {
     e->a = m->a;
     e->size = m->node_size;
     e->align = m->node_align;
-    copy_bytes(m->key, ekey(m, e), key);
+    syncmap_copy_bytes(m->key, ekey(m, e), key);
     if (val != NULL)
-        copy_bytes(m->val, eval(m, e), val);
+        syncmap_copy_bytes(m->val, eval(m, e), val);
     else
         type_zero(m->val, eval(m, e));
     return e;
@@ -201,7 +201,7 @@ static Indirect *indirect_new(SyncMap *m, Indirect *parent) {
 }
 
 static void entry_free_one(void *p) {
-    Entry *e = (Entry *)p;
+    MapEntry *e = (MapEntry *)p;
     mem_free(e->a, e, e->size, e->align);
 }
 
@@ -213,9 +213,9 @@ static void entry_free_one(void *p) {
  * has no way to know that the reachability argument holds. */
 static void tree_free(void *p) {
     if (((Node *)p)->is_entry) {
-        Entry *e = (Entry *)p;
+        MapEntry *e = (MapEntry *)p;
         while (e != NULL) {
-            Entry *next = (Entry *)burrow__atomic_load_ptr(&e->overflow);
+            MapEntry *next = (MapEntry *)burrow__atomic_load_ptr(&e->overflow);
             entry_free_one(e);
             e = next;
         }
@@ -234,13 +234,13 @@ static void tree_free(void *p) {
 /* Hands a node over. Both of these must be called after the store that took the
  * node out of the trie and never before it, which is the one ordering rule the
  * reclamation cannot check. */
-static void retire_entry(Entry *e) {
+static void retire_entry(MapEntry *e) {
     burrow__retire(&e->retired, entry_free_one, e);
 }
 
 static void retire_tree(void *p) {
     burrow__Retired *r =
-        ((Node *)p)->is_entry ? &((Entry *)p)->retired : &((Indirect *)p)->retired;
+        ((Node *)p)->is_entry ? &((MapEntry *)p)->retired : &((Indirect *)p)->retired;
     burrow__retire(r, tree_free, p);
 }
 
@@ -261,14 +261,14 @@ static bool init_slow(SyncMap *m) {
     if (!type_is_comparable(m->key))
         runtime_panic(BURROW_S("sync.Map: key type is not comparable"));
 
-    size_t align = _Alignof(Entry);
+    size_t align = _Alignof(MapEntry);
     if (m->key->align > align)
         align = m->key->align;
     if (m->val->align > align)
         align = m->val->align;
 
-    size_t koff = round_up(sizeof(Entry), m->key->align);
-    size_t voff = round_up(koff + m->key->size, m->val->align);
+    size_t koff = syncmap_round_up(sizeof(MapEntry), m->key->align);
+    size_t voff = syncmap_round_up(koff + m->key->size, m->val->align);
 
     m->key_off = (uint32_t)koff;
     m->val_off = (uint32_t)voff;
@@ -292,7 +292,7 @@ static bool map_init(SyncMap *m) {
     return init_slow(m);
 }
 
-static bool started(SyncMap *m) {
+static bool syncmap_started(SyncMap *m) {
     return sync_atomic_uint32_load(&m->inited) != 0;
 }
 
@@ -303,19 +303,19 @@ static void need_comparable_values(const SyncMap *m) {
 
 /* ---------------------------------------------------------- walking a chain */
 
-static bool chain_match(const SyncMap *m, Entry *e, const void *key, const void *val,
+static bool chain_match(const SyncMap *m, MapEntry *e, const void *key, const void *val,
                         bool check_val) {
     if (!type_equal(m->key, ekey(m, e), key))
         return false;
     return !check_val || type_equal(m->val, eval(m, e), val);
 }
 
-static Entry *chain_lookup(const SyncMap *m, Entry *e, const void *key, const void *val,
-                           bool check_val) {
+static MapEntry *chain_lookup(const SyncMap *m, MapEntry *e, const void *key,
+                              const void *val, bool check_val) {
     while (e != NULL) {
         if (chain_match(m, e, key, val, check_val))
             return e;
-        e = (Entry *)burrow__atomic_load_ptr(&e->overflow);
+        e = (MapEntry *)burrow__atomic_load_ptr(&e->overflow);
     }
     return NULL;
 }
@@ -328,32 +328,32 @@ static Entry *chain_lookup(const SyncMap *m, Entry *e, const void *key, const vo
  * slot and only then retires the dead node, because a node that is handed over
  * while it is still reachable is a node that gets freed while somebody is
  * reading it. */
-static Entry *chain_swap(const SyncMap *m, Entry *head, Entry *fresh, const void *key,
-                         const void *val, bool check_val, void *out_prev,
-                         Entry **dead) {
+static MapEntry *chain_swap(const SyncMap *m, MapEntry *head, MapEntry *fresh,
+                            const void *key, const void *val, bool check_val,
+                            void *out_prev, MapEntry **dead) {
     if (chain_match(m, head, key, val, check_val)) {
         burrow__atomic_store_ptr(&fresh->overflow,
                                  burrow__atomic_load_ptr(&head->overflow));
         if (out_prev != NULL)
-            copy_bytes(m->val, out_prev, eval(m, head));
+            syncmap_copy_bytes(m->val, out_prev, eval(m, head));
         *dead = head;
         return fresh;
     }
 
     void **link = &head->overflow;
-    Entry *e = (Entry *)burrow__atomic_load_ptr(link);
+    MapEntry *e = (MapEntry *)burrow__atomic_load_ptr(link);
     while (e != NULL) {
         if (chain_match(m, e, key, val, check_val)) {
             burrow__atomic_store_ptr(&fresh->overflow,
                                      burrow__atomic_load_ptr(&e->overflow));
             burrow__atomic_store_ptr(link, fresh);
             if (out_prev != NULL)
-                copy_bytes(m->val, out_prev, eval(m, e));
+                syncmap_copy_bytes(m->val, out_prev, eval(m, e));
             *dead = e;
             return head;
         }
         link = &e->overflow;
-        e = (Entry *)burrow__atomic_load_ptr(link);
+        e = (MapEntry *)burrow__atomic_load_ptr(link);
     }
     return NULL;
 }
@@ -363,30 +363,30 @@ static Entry *chain_swap(const SyncMap *m, Entry *head, Entry *fresh, const void
  * Answers whether it was there. *head is what the slot should hold afterwards,
  * which is NULL when the chain is now empty, and *dead is the node that came
  * out. */
-static bool chain_delete(const SyncMap *m, Entry *head, const void *key,
+static bool chain_delete(const SyncMap *m, MapEntry *head, const void *key,
                          const void *val, bool check_val, void *out_val,
-                         Entry **out_head, Entry **dead) {
+                         MapEntry **out_head, MapEntry **dead) {
     if (chain_match(m, head, key, val, check_val)) {
         if (out_val != NULL)
-            copy_bytes(m->val, out_val, eval(m, head));
-        *out_head = (Entry *)burrow__atomic_load_ptr(&head->overflow);
+            syncmap_copy_bytes(m->val, out_val, eval(m, head));
+        *out_head = (MapEntry *)burrow__atomic_load_ptr(&head->overflow);
         *dead = head;
         return true;
     }
 
     void **link = &head->overflow;
-    Entry *e = (Entry *)burrow__atomic_load_ptr(link);
+    MapEntry *e = (MapEntry *)burrow__atomic_load_ptr(link);
     while (e != NULL) {
         if (chain_match(m, e, key, val, check_val)) {
             burrow__atomic_store_ptr(link, burrow__atomic_load_ptr(&e->overflow));
             if (out_val != NULL)
-                copy_bytes(m->val, out_val, eval(m, e));
+                syncmap_copy_bytes(m->val, out_val, eval(m, e));
             *out_head = head;
             *dead = e;
             return true;
         }
         link = &e->overflow;
-        e = (Entry *)burrow__atomic_load_ptr(link);
+        e = (MapEntry *)burrow__atomic_load_ptr(link);
     }
     return false;
 }
@@ -414,7 +414,7 @@ typedef struct Spot {
  * this answers false without taking any lock and leaves the entry in *found,
  * which is the read mostly path through LoadOrStore. */
 static bool seek_insert(SyncMap *m, const void *key, uint64_t hash, bool probe,
-                        Spot *spot, Entry **found) {
+                        Spot *spot, MapEntry **found) {
     for (;;) {
         Indirect *i = (Indirect *)burrow__atomic_load_ptr(&m->root);
         uint32_t shift = HASH_BITS;
@@ -432,7 +432,7 @@ static bool seek_insert(SyncMap *m, const void *key, uint64_t hash, bool probe,
             }
             if (((Node *)n)->is_entry) {
                 if (probe) {
-                    Entry *e = chain_lookup(m, (Entry *)n, key, NULL, false);
+                    MapEntry *e = chain_lookup(m, (MapEntry *)n, key, NULL, false);
                     if (e != NULL) {
                         *found = e;
                         return false;
@@ -481,7 +481,7 @@ static bool seek_find(SyncMap *m, const void *key, uint64_t hash, const void *va
             if (n == NULL)
                 return false;
             if (((Node *)n)->is_entry) {
-                if (chain_lookup(m, (Entry *)n, key, val, check_val) == NULL)
+                if (chain_lookup(m, (MapEntry *)n, key, val, check_val) == NULL)
                     return false;
                 found = true;
                 break;
@@ -513,7 +513,7 @@ static bool seek_find(SyncMap *m, const void *key, uint64_t hash, const void *va
  *
  * NULL when a node could not be allocated, with everything it did allocate
  * already given back and neither entry touched. */
-static void *expand(SyncMap *m, Entry *old_e, Entry *new_e, uint64_t new_hash,
+static void *expand(SyncMap *m, MapEntry *old_e, MapEntry *new_e, uint64_t new_hash,
                     uint32_t shift, Indirect *parent) {
     uint64_t old_hash = type_hash(m->key, ekey(m, old_e), m->seed);
     if (old_hash == new_hash) {
@@ -594,7 +594,7 @@ static void prune(Indirect *i, uint64_t hash, uint32_t shift) {
 /* ---------------------------------------------------------------- the reads */
 
 bool sync_map_load(SyncMap *m, const void *key, void *out_val) {
-    if (!started(m))
+    if (!syncmap_started(m))
         return false;
 
     uint64_t hash = type_hash(m->key, key, m->seed);
@@ -609,13 +609,13 @@ bool sync_map_load(SyncMap *m, const void *key, void *out_val) {
         if (n == NULL)
             break;
         if (((Node *)n)->is_entry) {
-            Entry *e = chain_lookup(m, (Entry *)n, key, NULL, false);
+            MapEntry *e = chain_lookup(m, (MapEntry *)n, key, NULL, false);
             if (e != NULL) {
                 found = true;
                 /* Copied here rather than after the unpin, because after the
                  * unpin the node may already be gone. */
                 if (out_val != NULL)
-                    copy_bytes(m->val, out_val, eval(m, e));
+                    syncmap_copy_bytes(m->val, out_val, eval(m, e));
             }
             break;
         }
@@ -636,8 +636,8 @@ static bool iter(const SyncMap *m, Indirect *i, SyncMapRangeFunc f, void *arg) {
                 return false;
             continue;
         }
-        for (Entry *e = (Entry *)n; e != NULL;
-             e = (Entry *)burrow__atomic_load_ptr(&e->overflow)) {
+        for (MapEntry *e = (MapEntry *)n; e != NULL;
+             e = (MapEntry *)burrow__atomic_load_ptr(&e->overflow)) {
             if (!f(ekey(m, e), eval(m, e), arg))
                 return false;
         }
@@ -646,7 +646,7 @@ static bool iter(const SyncMap *m, Indirect *i, SyncMapRangeFunc f, void *arg) {
 }
 
 void sync_map_range(SyncMap *m, SyncMapRangeFunc f, void *arg) {
-    if (!started(m))
+    if (!syncmap_started(m))
         return;
 
     /* Pinned for the whole walk, callback included, which is what the header
@@ -671,16 +671,16 @@ bool sync_map_swap(SyncMap *m, const void *key, const void *val, void *out_prev,
     burrow__pin();
     (void)seek_insert(m, key, hash, false, &spot, NULL);
 
-    Entry *fresh = entry_new(m, key, val);
+    MapEntry *fresh = entry_new(m, key, val);
     if (fresh == NULL) {
         ok = false;
         goto out;
     }
 
     if (spot.n != NULL) {
-        Entry *dead = NULL;
-        Entry *head =
-            chain_swap(m, (Entry *)spot.n, fresh, key, NULL, false, out_prev, &dead);
+        MapEntry *dead = NULL;
+        MapEntry *head =
+            chain_swap(m, (MapEntry *)spot.n, fresh, key, NULL, false, out_prev, &dead);
         if (head != NULL) {
             burrow__atomic_store_ptr(spot.slot, head);
             retire_entry(dead);
@@ -689,7 +689,7 @@ bool sync_map_swap(SyncMap *m, const void *key, const void *val, void *out_prev,
             goto out;
         }
 
-        void *top = expand(m, (Entry *)spot.n, fresh, hash, spot.shift, spot.i);
+        void *top = expand(m, (MapEntry *)spot.n, fresh, hash, spot.shift, spot.i);
         if (top == NULL) {
             entry_free_one(fresh);
             ok = false;
@@ -719,13 +719,13 @@ bool sync_map_load_or_store(SyncMap *m, const void *key, const void *val,
 
     uint64_t hash = type_hash(m->key, key, m->seed);
     Spot spot;
-    Entry *found = NULL;
+    MapEntry *found = NULL;
     bool ok = true;
 
     burrow__pin();
     if (!seek_insert(m, key, hash, true, &spot, &found)) {
         if (out_actual != NULL)
-            copy_bytes(m->val, out_actual, eval(m, found));
+            syncmap_copy_bytes(m->val, out_actual, eval(m, found));
         if (out_loaded != NULL)
             *out_loaded = true;
         burrow__unpin();
@@ -735,24 +735,24 @@ bool sync_map_load_or_store(SyncMap *m, const void *key, const void *val,
     /* The walk saw no match, but it was not holding the lock at the time, so
      * the chain gets one more look now that nobody can be changing it. */
     if (spot.n != NULL) {
-        Entry *e = chain_lookup(m, (Entry *)spot.n, key, NULL, false);
+        MapEntry *e = chain_lookup(m, (MapEntry *)spot.n, key, NULL, false);
         if (e != NULL) {
             if (out_actual != NULL)
-                copy_bytes(m->val, out_actual, eval(m, e));
+                syncmap_copy_bytes(m->val, out_actual, eval(m, e));
             if (out_loaded != NULL)
                 *out_loaded = true;
             goto out;
         }
     }
 
-    Entry *fresh = entry_new(m, key, val);
+    MapEntry *fresh = entry_new(m, key, val);
     if (fresh == NULL) {
         ok = false;
         goto out;
     }
 
     if (spot.n != NULL) {
-        void *top = expand(m, (Entry *)spot.n, fresh, hash, spot.shift, spot.i);
+        void *top = expand(m, (MapEntry *)spot.n, fresh, hash, spot.shift, spot.i);
         if (top == NULL) {
             entry_free_one(fresh);
             ok = false;
@@ -763,7 +763,7 @@ bool sync_map_load_or_store(SyncMap *m, const void *key, const void *val,
         burrow__atomic_store_ptr(spot.slot, fresh);
     }
     if (out_actual != NULL)
-        copy_bytes(m->val, out_actual, eval(m, fresh));
+        syncmap_copy_bytes(m->val, out_actual, eval(m, fresh));
     if (out_loaded != NULL)
         *out_loaded = false;
 
@@ -794,14 +794,15 @@ bool sync_map_compare_and_swap(SyncMap *m, const void *key, const void *old,
     if (spot.n == NULL)
         goto out;
 
-    Entry *fresh = entry_new(m, key, val);
+    MapEntry *fresh = entry_new(m, key, val);
     if (fresh == NULL) {
         ok = false;
         goto out;
     }
 
-    Entry *dead = NULL;
-    Entry *head = chain_swap(m, (Entry *)spot.n, fresh, key, old, true, NULL, &dead);
+    MapEntry *dead = NULL;
+    MapEntry *head =
+        chain_swap(m, (MapEntry *)spot.n, fresh, key, old, true, NULL, &dead);
     if (head == NULL) {
         /* It was there during the walk and is not there now, which is a losing
          * compare and swap and not an error. */
@@ -824,7 +825,7 @@ out:
 
 static bool remove_key(SyncMap *m, const void *key, const void *val, bool check_val,
                        void *out_val) {
-    if (!started(m))
+    if (!syncmap_started(m))
         return false;
 
     uint64_t hash = type_hash(m->key, key, m->seed);
@@ -841,9 +842,10 @@ static bool remove_key(SyncMap *m, const void *key, const void *val, bool check_
         return false;
     }
 
-    Entry *head = NULL;
-    Entry *dead = NULL;
-    if (!chain_delete(m, (Entry *)spot.n, key, val, check_val, out_val, &head, &dead)) {
+    MapEntry *head = NULL;
+    MapEntry *dead = NULL;
+    if (!chain_delete(m, (MapEntry *)spot.n, key, val, check_val, out_val, &head,
+                      &dead)) {
         burrow__unlock(&spot.i->mu);
         burrow__unpin();
         return false;
@@ -898,7 +900,7 @@ bool sync_map_clear(SyncMap *m) {
 }
 
 void sync_map_free(SyncMap *m) {
-    if (!started(m))
+    if (!syncmap_started(m))
         return;
 
     void *root = burrow__atomic_swap_ptr(&m->root, NULL);

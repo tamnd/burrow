@@ -85,7 +85,7 @@ const Type *const TYPE_SYNC_MUTEX = &mutex_desc;
 /* How many goroutines are queued, read out of a state word. Unsigned, because a
  * shift of a negative number is not something C defines and the waiter count
  * reaching the top bit is not something this has to rule out by hand. */
-static int32_t waiters_of(int32_t state) {
+static int32_t mutex_waiters_of(int32_t state) {
     return (int32_t)((uint32_t)state >> MUTEX_WAITER_SHIFT);
 }
 
@@ -105,7 +105,7 @@ void burrow__sync_mutex_lock_slow(SyncMutex *m) {
             /* Tell the unlocker not to wake anybody, since this spinner is
              * about to take the lock and a woken waiter would only find it
              * gone. Worth doing only when there is somebody to not wake. */
-            if (!awoke && (old & MUTEX_WOKEN) == 0 && waiters_of(old) != 0 &&
+            if (!awoke && (old & MUTEX_WOKEN) == 0 && mutex_waiters_of(old) != 0 &&
                 sync_atomic_compare_and_swap_int32(&m->state, old, old | MUTEX_WOKEN))
                 awoke = true;
 
@@ -165,7 +165,7 @@ void burrow__sync_mutex_lock_slow(SyncMutex *m) {
              * rather than raced for. The state has not been fixed up yet: the
              * locked bit is not set and this goroutine is still counted as a
              * waiter, and setting both right is this goroutine's job. */
-            if ((old & (MUTEX_LOCKED | MUTEX_WOKEN)) != 0 || waiters_of(old) == 0)
+            if ((old & (MUTEX_LOCKED | MUTEX_WOKEN)) != 0 || mutex_waiters_of(old) == 0)
                 runtime_throw(BURROW_S("sync: inconsistent mutex state"));
 
             int32_t delta = MUTEX_LOCKED - (1 << MUTEX_WAITER_SHIFT);
@@ -174,7 +174,7 @@ void burrow__sync_mutex_lock_slow(SyncMutex *m) {
              * or when it was the last one in the queue. Doing it here rather
              * than on the next unlock is what stops two goroutines handing the
              * lock back and forth in starvation mode forever. */
-            if (!starving || waiters_of(old) == 1)
+            if (!starving || mutex_waiters_of(old) == 1)
                 delta -= MUTEX_STARVING;
 
             sync_atomic_add_int32(&m->state, delta);
@@ -205,7 +205,7 @@ void burrow__sync_mutex_unlock_slow(SyncMutex *m, int32_t next) {
          * or the mutex went into starvation mode after this unlock started, in
          * which case the handoff chain is somebody else's and this call is not
          * part of it. */
-        if (waiters_of(old) == 0 ||
+        if (mutex_waiters_of(old) == 0 ||
             (old & (MUTEX_LOCKED | MUTEX_WOKEN | MUTEX_STARVING)) != 0)
             return;
 

@@ -113,7 +113,7 @@ struct burrow__SemaWaiter {
     bool has_note;
 };
 
-typedef struct burrow__SemaWaiter Waiter;
+typedef struct burrow__SemaWaiter SemaWaiter;
 
 /* ---------------------------------------------------------------- the table */
 
@@ -121,7 +121,7 @@ typedef struct Root {
     burrow__Lock lock;
 
     /* The treap of unique addresses. Under the lock. */
-    Waiter *treap;
+    SemaWaiter *treap;
 
     /* How many waiters are on this root. Atomic and read without the lock,
      * because it is what lets an uncontended release stay out of the lock
@@ -164,10 +164,10 @@ static Root *root_for(const uint32_t *addr) {
  * a colour or a height. */
 
 /* Turns (x a (y b c)) into (y (x a b) c), where x is the node passed in. */
-static void rotate_left(Root *root, Waiter *x) {
-    Waiter *p = x->parent;
-    Waiter *y = x->next;
-    Waiter *b = y->prev;
+static void rotate_left(Root *root, SemaWaiter *x) {
+    SemaWaiter *p = x->parent;
+    SemaWaiter *y = x->next;
+    SemaWaiter *b = y->prev;
 
     y->prev = x;
     x->parent = y;
@@ -188,10 +188,10 @@ static void rotate_left(Root *root, Waiter *x) {
 }
 
 /* Turns (y (x a b) c) into (x a (y b c)), where y is the node passed in. */
-static void rotate_right(Root *root, Waiter *y) {
-    Waiter *p = y->parent;
-    Waiter *x = y->prev;
-    Waiter *b = x->next;
+static void rotate_right(Root *root, SemaWaiter *y) {
+    SemaWaiter *p = y->parent;
+    SemaWaiter *x = y->prev;
+    SemaWaiter *b = x->next;
 
     x->next = y;
     y->parent = x;
@@ -212,17 +212,17 @@ static void rotate_right(Root *root, Waiter *y) {
 }
 
 /* Puts `w` on the queue for `addr`. The root's lock is held. */
-static void root_queue(Root *root, uint32_t *addr, Waiter *w, bool lifo) {
+static void root_queue(Root *root, uint32_t *addr, SemaWaiter *w, bool lifo) {
     w->addr = addr;
     w->prev = NULL;
     w->next = NULL;
     w->waitlink = NULL;
     w->waittail = NULL;
 
-    Waiter *last = NULL;
-    Waiter **pt = &root->treap;
+    SemaWaiter *last = NULL;
+    SemaWaiter **pt = &root->treap;
 
-    for (Waiter *t = *pt; t != NULL; t = *pt) {
+    for (SemaWaiter *t = *pt; t != NULL; t = *pt) {
         if (t->addr == addr) {
             if (lifo) {
                 /* Take t's place in the treap, keeping its priority so that the
@@ -277,9 +277,9 @@ static void root_queue(Root *root, uint32_t *addr, Waiter *w, bool lifo) {
 
 /* Takes the longest waiting waiter for `addr` off the queue, or NULL if there
  * is none. The root's lock is held. */
-static Waiter *root_dequeue(Root *root, const uint32_t *addr) {
-    Waiter **ps = &root->treap;
-    Waiter *w = *ps;
+static SemaWaiter *root_dequeue(Root *root, const uint32_t *addr) {
+    SemaWaiter **ps = &root->treap;
+    SemaWaiter *w = *ps;
 
     while (w != NULL && w->addr != addr) {
         ps = (uintptr_t)addr < (uintptr_t)w->addr ? &w->prev : &w->next;
@@ -288,7 +288,7 @@ static Waiter *root_dequeue(Root *root, const uint32_t *addr) {
     if (w == NULL)
         return NULL;
 
-    Waiter *t = w->waitlink;
+    SemaWaiter *t = w->waitlink;
     if (t != NULL) {
         /* Somebody else is waiting on this address, so they take the treap node
          * and its priority and the tree is untouched. */
@@ -343,7 +343,7 @@ static bool unlock_lock(Goroutine *g, void *p) {
 /* Gets a waiter ready to block. False means this thread cannot block at all,
  * which is a note that could not be allocated and so is an out of memory
  * condition on a path with nothing useful to do about it. */
-static bool waiter_init(Waiter *w) {
+static bool waiter_init(SemaWaiter *w) {
     memset(w, 0, sizeof(*w));
 
     w->g = sched_current();
@@ -361,7 +361,7 @@ static bool waiter_init(Waiter *w) {
  * the way out. `durable` is the caller's answer to the synctest question, and a
  * thread has no opinion about it: a bubble is a set of goroutines, so a thread
  * blocking here is not in one and the flag has nowhere to go. */
-static void waiter_sleep(Waiter *w, burrow__Lock *lk, bool durable) {
+static void waiter_sleep(SemaWaiter *w, burrow__Lock *lk, bool durable) {
     if (w->g != NULL) {
         burrow__park(unlock_lock, lk, durable);
         return;
@@ -381,19 +381,19 @@ static void waiter_sleep(Waiter *w, burrow__Lock *lk, bool durable) {
  * Clearing is safe here and nowhere else: the waiter is off the queue, so
  * nobody can be about to wake it, and the wake it is recovering from has
  * already been seen. */
-static void waiter_reset(Waiter *w) {
+static void waiter_reset(SemaWaiter *w) {
     if (w->has_note)
         burrow__note_clear(&w->note);
 }
 
-static void waiter_free(Waiter *w) {
+static void waiter_free(SemaWaiter *w) {
     if (w->has_note)
         burrow__note_free(&w->note);
 }
 
 /* Starts a waiter again. The root's lock must not be held, and the waiter must
  * not be touched afterwards. */
-static void waiter_wake(Waiter *w) {
+static void waiter_wake(SemaWaiter *w) {
     if (w->g != NULL) {
         sched_ready(w->g);
         return;
@@ -420,7 +420,7 @@ void burrow__sema_acquire(uint32_t *addr, bool lifo, bool durable) {
     if (can_acquire(addr))
         return;
 
-    Waiter w;
+    SemaWaiter w;
     if (!waiter_init(&w))
         runtime_throw(BURROW_S("sema: out of memory blocking on a semaphore"));
 
@@ -490,7 +490,7 @@ void burrow__sema_release(uint32_t *addr, bool handoff) {
         return;
     }
 
-    Waiter *w = root_dequeue(root, addr);
+    SemaWaiter *w = root_dequeue(root, addr);
     if (w != NULL)
         burrow__atomic_add_u32(&root->nwait, (uint32_t)-1);
     burrow__unlock(&root->lock);
@@ -549,7 +549,7 @@ void burrow__notify_list_wait(burrow__NotifyList *l, uint32_t t, bool durable) {
         return;
     }
 
-    Waiter w;
+    SemaWaiter w;
     if (!waiter_init(&w))
         runtime_throw(BURROW_S("sema: out of memory waiting on a condition"));
     w.ticket = t;
@@ -576,7 +576,7 @@ void burrow__notify_list_notify_all(burrow__NotifyList *l) {
         return;
 
     burrow__lock(&l->lock);
-    Waiter *w = l->head;
+    SemaWaiter *w = l->head;
     l->head = NULL;
     l->tail = NULL;
 
@@ -589,7 +589,7 @@ void burrow__notify_list_notify_all(burrow__NotifyList *l) {
     /* Outside the lock, because waking a goroutine can run the scheduler and
      * holding a runtime lock across that is how a deadlock is built. */
     while (w != NULL) {
-        Waiter *next = w->waitlink;
+        SemaWaiter *next = w->waitlink;
         w->waitlink = NULL;
         waiter_wake(w);
         w = next;
@@ -617,12 +617,12 @@ void burrow__notify_list_notify_one(burrow__NotifyList *l) {
      * The scan looks linear and is not, in practice. A waiter is only behind
      * others in the list because it lost the race between taking a number and
      * queueing, so the one being looked for is at or near the front. */
-    Waiter *prev = NULL;
-    for (Waiter *w = l->head; w != NULL; prev = w, w = w->waitlink) {
+    SemaWaiter *prev = NULL;
+    for (SemaWaiter *w = l->head; w != NULL; prev = w, w = w->waitlink) {
         if (w->ticket != t)
             continue;
 
-        Waiter *next = w->waitlink;
+        SemaWaiter *next = w->waitlink;
         if (prev != NULL)
             prev->waitlink = next;
         else

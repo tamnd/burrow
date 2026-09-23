@@ -32,16 +32,16 @@
  * and a branch rather than a trip into the collector. It is a plain bool because
  * the rule is already that the first call comes from the main thread before any
  * others exist, and a lock would not make a later first call correct anyway. */
-static bool started;
+static bool gc_started;
 
 static void start_once(void) {
-    if (started)
+    if (gc_started)
         return;
     GC_INIT();
-    started = true;
+    gc_started = true;
 }
 
-static bool align_ok(size_t align) {
+static bool gc_align_ok(size_t align) {
     return align != 0 && (align & (align - 1)) == 0;
 }
 
@@ -49,7 +49,7 @@ static bool align_ok(size_t align) {
  * below and mem_alloc's memset is skipped: one function does both jobs. */
 static void *gc_raw(void *self, size_t size, size_t align) {
     (void)self;
-    if (!align_ok(align) || size == 0)
+    if (!gc_align_ok(align) || size == 0)
         return NULL;
     if (align <= GC_GUARANTEED_ALIGN)
         return GC_malloc(size);
@@ -57,7 +57,7 @@ static void *gc_raw(void *self, size_t size, size_t align) {
 }
 
 static void *gc_grow(void *self, void *p, size_t old, size_t nsz, size_t align) {
-    if (!align_ok(align) || nsz == 0)
+    if (!gc_align_ok(align) || nsz == 0)
         return NULL;
     if (p == NULL)
         return gc_raw(self, nsz, align);

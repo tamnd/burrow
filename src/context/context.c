@@ -598,7 +598,7 @@ static void remove_child(CancelCtx *c) {
 
 /* Declared up here because cancelling can be what puts the deadline timer's
  * reference down, and the two are easier to read in this order. */
-static void release(CancelCtx *c);
+static void context_release(CancelCtx *c);
 
 /* Declared up here for the same reason: cancelling an AfterFunc node is what
  * starts the function, and the section that builds one is a long way below. */
@@ -671,7 +671,7 @@ static void cancel_node(CancelCtx *c, bool remove_from_parent, Error err, Error 
         after_func_start((AfterFuncCtx *)c);
 
     if (timer_stopped)
-        release(c);
+        context_release(c);
 }
 
 /* Puts one reference down, and frees on the last one.
@@ -681,7 +681,7 @@ static void cancel_node(CancelCtx *c, bool remove_from_parent, Error err, Error 
  * alive, and it exists for that case alone: the watcher may be on the point of
  * waking when the program frees the context, and without the count there is no
  * moment at which freeing is safe. */
-static void release(CancelCtx *c) {
+static void context_release(CancelCtx *c) {
     if (burrow__atomic_add_u32(&c->refs, (uint32_t)-1) != 1)
         return;
 
@@ -772,7 +772,7 @@ static void watch(void *env) {
     if (chan_select(cases, 2) == 0)
         cancel_node(c, false, context_err(c->parent), context_cause(c->parent));
 
-    release(c);
+    context_release(c);
 }
 
 /* Arranges for the parent's cancellation to reach c, and answers whether it
@@ -1144,7 +1144,7 @@ static void deadline_reached(void *env) {
     CancelCtx *c = (CancelCtx *)env;
 
     cancel_node(c, true, context_deadline_exceeded, ((TimerCtx *)c)->deadline_cause);
-    release(c);
+    context_release(c);
 }
 
 Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Error cause,
@@ -1244,7 +1244,7 @@ Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Erro
      * frees when it wakes. */
     if (no_timer) {
         cancel_node(c, true, context_canceled, BURROW_NO_ERROR);
-        release(c);
+        context_release(c);
         if (cancel != NULL)
             *cancel = BURROW_FN(CancelFunc, cancel_nothing, NULL);
         return none;
@@ -1260,7 +1260,7 @@ Context context_with_deadline(Alloc *a, Context parent, int64_t when,
 
 /* now + d, with the two constructors that take a duration sharing the one
  * conversion to an instant rather than each doing it slightly differently. */
-static int64_t deadline_from(Duration d) {
+static int64_t context_deadline_from(Duration d) {
     int64_t now = burrow_nanotime();
 
     /* Without the signed overflow, which is undefined rather than negative. A
@@ -1274,12 +1274,13 @@ static int64_t deadline_from(Duration d) {
 
 Context context_with_timeout_cause(Alloc *a, Context parent, Duration d, Error cause,
                                    CancelFunc *cancel) {
-    return context_with_deadline_cause(a, parent, deadline_from(d), cause, cancel);
+    return context_with_deadline_cause(a, parent, context_deadline_from(d), cause,
+                                       cancel);
 }
 
 Context context_with_timeout(Alloc *a, Context parent, Duration d, CancelFunc *cancel) {
-    return context_with_deadline_cause(a, parent, deadline_from(d), BURROW_NO_ERROR,
-                                       cancel);
+    return context_with_deadline_cause(a, parent, context_deadline_from(d),
+                                       BURROW_NO_ERROR, cancel);
 }
 
 /* --------------------------------------------------------------------- free */
@@ -1302,7 +1303,7 @@ void context_free(Context c) {
         /* Cancel first, so that the done channel is closed and anything parked
          * on it has been let go before the channel stops existing. */
         cancel_node(cc, true, context_canceled, BURROW_NO_ERROR);
-        release(cc);
+        context_release(cc);
         return;
     }
 

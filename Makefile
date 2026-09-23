@@ -209,6 +209,7 @@ check:
 	@tools/check-annotations.sh
 	@tools/check-alloc.sh
 	@tools/check-globals.sh
+	@tools/check-statics.sh
 	@tools/check-pal.sh
 	@tools/check-gen.sh
 	@$(MAKE) test

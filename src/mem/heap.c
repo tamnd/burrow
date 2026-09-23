@@ -23,7 +23,7 @@
  * the ordinary path, which is almost every allocation this library will ever
  * make. */
 
-static bool align_ok(size_t align) {
+static bool heap_align_ok(size_t align) {
     return align != 0 && (align & (align - 1)) == 0;
 }
 
@@ -31,7 +31,7 @@ static bool align_ok(size_t align) {
 /* aligned_alloc is C11 and wants a size that is a multiple of the alignment.
  * C17 dropped that requirement but we still compile against libraries that
  * enforce it, so round up rather than find out. */
-static size_t round_up(size_t n, size_t align) {
+static size_t heap_round_up(size_t n, size_t align) {
     size_t r = n % align;
     return r == 0 ? n : n + (align - r);
 }
@@ -43,7 +43,7 @@ static void *heap_raw(size_t size, size_t align) {
 #if defined(_WIN32)
     return _aligned_malloc(size, align);
 #else
-    size_t padded = round_up(size, align);
+    size_t padded = heap_round_up(size, align);
     if (padded < size) /* the rounding wrapped, which means size was absurd */
         return NULL;
     return aligned_alloc(align, padded);
@@ -64,7 +64,7 @@ static void heap_raw_free(void *p, size_t align) {
 
 static void *heap_alloc(void *self, size_t size, size_t align) {
     (void)self;
-    if (!align_ok(align) || size == 0)
+    if (!heap_align_ok(align) || size == 0)
         return NULL;
     return heap_raw(size, align);
 }
@@ -74,7 +74,7 @@ static void *heap_alloc(void *self, size_t size, size_t align) {
  * how it gets to tell us that. Over aligned requests have no calloc to use. */
 static void *heap_alloc_zeroed(void *self, size_t size, size_t align) {
     (void)self;
-    if (!align_ok(align) || size == 0)
+    if (!heap_align_ok(align) || size == 0)
         return NULL;
     if (align <= BURROW_ALIGN_MAX)
         return calloc(1, size);
@@ -86,7 +86,7 @@ static void *heap_alloc_zeroed(void *self, size_t size, size_t align) {
 
 static void *heap_realloc(void *self, void *p, size_t old, size_t nsz, size_t align) {
     (void)self;
-    if (!align_ok(align) || nsz == 0)
+    if (!heap_align_ok(align) || nsz == 0)
         return NULL;
     if (p == NULL)
         return heap_raw(nsz, align);
@@ -112,7 +112,7 @@ static void heap_free(void *self, void *p, size_t size, size_t align) {
     (void)size;
     if (p == NULL)
         return;
-    heap_raw_free(p, align_ok(align) ? align : 1);
+    heap_raw_free(p, heap_align_ok(align) ? align : 1);
 }
 
 static const AllocVT heap_vt = {

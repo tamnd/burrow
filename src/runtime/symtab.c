@@ -44,16 +44,16 @@
  * ordinary case and is exact. This only does any work at the edges. */
 #define SYMBOL_MAX_SPAN ((Uintptr)1 << 18)
 
-typedef struct Entry {
+typedef struct SymtabEntry {
     Uintptr addr;
     const char *name;
-} Entry;
+} SymtabEntry;
 
 /* The sorted copy, built once. NULL means either that nobody has asked yet or
  * that building it failed, and the lookup below reads it once into a local so
  * that it cannot see both answers in one call. */
 static SyncOnce symtab_once;
-static Entry *symtab_sorted;
+static SymtabEntry *symtab_sorted;
 static Int symtab_sorted_len;
 
 /* Shell sort, with Knuth's gaps.
@@ -62,7 +62,7 @@ static Int symtab_sorted_len;
  * where the choice of algorithm shows up in any measurement. What does show up
  * is that this one needs no second array and no stack, which is the property
  * worth having in code that a panicking program is about to run. */
-static void sort_entries(Entry *a, Int n) {
+static void sort_entries(SymtabEntry *a, Int n) {
     Int gap = 1;
 
     while (gap < n / 3)
@@ -70,7 +70,7 @@ static void sort_entries(Entry *a, Int n) {
 
     for (; gap >= 1; gap /= 3) {
         for (Int i = gap; i < n; i++) {
-            Entry v = a[i];
+            SymtabEntry v = a[i];
             Int j = i;
 
             while (j >= gap && a[j - gap].addr > v.addr) {
@@ -89,7 +89,7 @@ static void symtab_build(void *env) {
     if (n <= 0)
         return;
 
-    Entry *a = BURROW_NEW_N(heap_allocator(), Entry, (size_t)n);
+    SymtabEntry *a = BURROW_NEW_N(heap_allocator(), SymtabEntry, (size_t)n);
     if (a == NULL)
         return;
 
@@ -121,7 +121,8 @@ static void symtab_ensure(void) {
  * function. Two names for one address is an alias, which the toolchain produces
  * for things like a weak symbol and its real definition, and either name is a
  * correct answer. */
-static bool find_sorted(const Entry *a, Int n, Uintptr pc, Int *at, Uintptr *next) {
+static bool find_sorted(const SymtabEntry *a, Int n, Uintptr pc, Int *at,
+                        Uintptr *next) {
     Int lo = 0;
     Int hi = n;
 
@@ -194,7 +195,7 @@ bool burrow__symbolise(Uintptr pc, burrow__Frame *out) {
 
     symtab_ensure();
 
-    const Entry *a = symtab_sorted;
+    const SymtabEntry *a = symtab_sorted;
     Int n = symtab_sorted_len;
 
     if (a != NULL) {

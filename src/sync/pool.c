@@ -70,16 +70,16 @@
  * at the pointer atomics is a cast that every warning worth having complains
  * about and should. Going through a word instead is the same machine code with
  * nothing to apologise for, and the const goes back on as the value leaves. */
-typedef struct Slot {
+typedef struct PoolSlot {
     uintptr_t t;
     void *data;
-} Slot;
+} PoolSlot;
 
-static Slot slot_of_any(Any v) {
-    return (Slot){(uintptr_t)v.t, v.data};
+static PoolSlot slot_of_any(Any v) {
+    return (PoolSlot){(uintptr_t)v.t, v.data};
 }
 
-static Any any_of_slot(Slot s) {
+static Any any_of_slot(PoolSlot s) {
     return (Any){(const Type *)s.t, s.data};
 }
 
@@ -99,7 +99,7 @@ struct Ring {
     Ring *prev;
     Ring *allnext;
     uint32_t n;
-    Slot vals[];
+    PoolSlot vals[];
 };
 
 /* A chain of rings, newest at the head.
@@ -188,8 +188,8 @@ static uint32_t ht_tail(uint64_t ht) {
 }
 
 static Ring *ring_new(Alloc *a, uint32_t n) {
-    Ring *r =
-        (Ring *)mem_alloc(a, sizeof(Ring) + (size_t)n * sizeof(Slot), _Alignof(Ring));
+    Ring *r = (Ring *)mem_alloc(a, sizeof(Ring) + (size_t)n * sizeof(PoolSlot),
+                                _Alignof(Ring));
     if (r == NULL)
         return NULL;
     r->n = n;
@@ -211,13 +211,13 @@ static bool ring_push(Ring *r, Any v) {
     if (((tail + r->n) & HT_MASK) == head)
         return false;
 
-    Slot *slot = &r->vals[head & (r->n - 1)];
+    PoolSlot *slot = &r->vals[head & (r->n - 1)];
     if (burrow__atomic_load_acquire_uptr(&slot->t) != 0)
         return false;
 
     /* Written plainly, published by the add below. A consumer reads headtail
      * before it reads any slot, so the add is what orders this against it. */
-    Slot w = slot_of_any(v);
+    PoolSlot w = slot_of_any(v);
     slot->data = w.data;
     burrow__atomic_store_release_uptr(&slot->t, w.t);
 
@@ -242,7 +242,7 @@ static bool ring_pop(Ring *r, Any *out) {
 
         head--;
         if (burrow__atomic_cas_u64(&r->headtail, &ht, ht_pack(head, tail))) {
-            Slot *slot = &r->vals[head & (r->n - 1)];
+            PoolSlot *slot = &r->vals[head & (r->n - 1)];
             *out = any_of_slot(*slot);
             slot->t = 0;
             slot->data = NULL;
@@ -268,7 +268,7 @@ static bool ring_steal(Ring *r, Any *out) {
             return false;
 
         if (burrow__atomic_cas_u64(&r->headtail, &ht, ht_pack(head, tail + 1))) {
-            Slot *slot = &r->vals[tail & (r->n - 1)];
+            PoolSlot *slot = &r->vals[tail & (r->n - 1)];
             *out = any_of_slot(*slot);
             slot->data = NULL;
             burrow__atomic_store_release_uptr(&slot->t, 0);
@@ -662,7 +662,8 @@ static void shard_free(Alloc *a, Shard *s, SyncPoolFreeFunc free_fn) {
         Ring *r = s->locals[i].shared.first;
         while (r != NULL) {
             Ring *next = r->allnext;
-            mem_free(a, r, sizeof(Ring) + (size_t)r->n * sizeof(Slot), _Alignof(Ring));
+            mem_free(a, r, sizeof(Ring) + (size_t)r->n * sizeof(PoolSlot),
+                     _Alignof(Ring));
             r = next;
         }
     }

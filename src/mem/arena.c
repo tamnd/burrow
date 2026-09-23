@@ -39,16 +39,16 @@ struct ArenaChunk {
     size_t dirty;        /* how far anything has ever been written */
 };
 
-static bool align_ok(size_t align) {
+static bool arena_align_ok(size_t align) {
     return align != 0 && (align & (align - 1)) == 0;
 }
 
-static size_t round_up(size_t n, size_t align) {
+static size_t arena_round_up(size_t n, size_t align) {
     size_t r = n % align;
     return r == 0 ? n : n + (align - r);
 }
 
-static uintptr_t align_ptr(uintptr_t p, size_t align) {
+static uintptr_t arena_align_ptr(uintptr_t p, size_t align) {
     uintptr_t m = (uintptr_t)align - 1U;
     return (p + m) & ~m;
 }
@@ -71,7 +71,7 @@ static void account_free(Arena *ar, size_t size) {
  * chunk cannot hold the request, which is not a failure, just a full chunk. */
 static void *chunk_bump(ArenaChunk *c, size_t size, size_t align, size_t *dirty_bytes) {
     uintptr_t base = (uintptr_t)c->data;
-    uintptr_t p = align_ptr(base + c->used, align);
+    uintptr_t p = arena_align_ptr(base + c->used, align);
     size_t off = (size_t)(p - base);
     if (off > c->cap || size > c->cap - off)
         return NULL;
@@ -114,7 +114,7 @@ static ArenaChunk *chunk_get(Arena *ar, size_t size, size_t align) {
     if (!ordinary)
         want = need;
 
-    size_t header = round_up(sizeof(ArenaChunk), ARENA_ALIGN);
+    size_t header = arena_round_up(sizeof(ArenaChunk), ARENA_ALIGN);
     if (want > SIZE_MAX - header - ARENA_ALIGN)
         return NULL;
     size_t total = header + want + ARENA_ALIGN;
@@ -124,7 +124,7 @@ static ArenaChunk *chunk_get(Arena *ar, size_t size, size_t align) {
         return NULL;
 
     unsigned char *raw = (unsigned char *)c + header;
-    c->data = (unsigned char *)align_ptr((uintptr_t)raw, ARENA_ALIGN);
+    c->data = (unsigned char *)arena_align_ptr((uintptr_t)raw, ARENA_ALIGN);
     c->total = total;
     c->cap = total - header - (size_t)(c->data - raw);
     c->used = 0;
@@ -142,7 +142,7 @@ static ArenaChunk *chunk_get(Arena *ar, size_t size, size_t align) {
 }
 
 static void *arena_take(Arena *ar, size_t size, size_t align, bool zero) {
-    if (!align_ok(align) || size == 0)
+    if (!arena_align_ok(align) || size == 0)
         return NULL;
 
     size_t dirty_bytes = 0;
@@ -177,7 +177,7 @@ static void *arena_vt_alloc_zeroed(void *self, size_t size, size_t align) {
 
 /* True when p is the most recent allocation still outstanding, which is what
  * lets free and realloc undo it rather than abandon it. */
-static bool is_last(Arena *ar, const void *p, size_t size) {
+static bool arena_is_last(Arena *ar, const void *p, size_t size) {
     ArenaChunk *c = ar->live;
     if (c == NULL || p == NULL)
         return false;
@@ -188,10 +188,10 @@ static bool is_last(Arena *ar, const void *p, size_t size) {
 static void *arena_vt_realloc(void *self, void *p, size_t old, size_t nsz,
                               size_t align) {
     Arena *ar = (Arena *)self;
-    if (!align_ok(align) || nsz == 0)
+    if (!arena_align_ok(align) || nsz == 0)
         return NULL;
 
-    if (is_last(ar, p, old)) {
+    if (arena_is_last(ar, p, old)) {
         ArenaChunk *c = ar->live;
         size_t off = (size_t)((unsigned char *)p - c->data);
         if (nsz <= c->cap - off) {
@@ -219,7 +219,7 @@ static void *arena_vt_realloc(void *self, void *p, size_t old, size_t nsz,
 static void arena_vt_free(void *self, void *p, size_t size, size_t align) {
     (void)align;
     Arena *ar = (Arena *)self;
-    if (is_last(ar, p, size))
+    if (arena_is_last(ar, p, size))
         ar->live->used = (size_t)((unsigned char *)p - ar->live->data);
     account_free(ar, size);
 }

@@ -221,7 +221,7 @@ static void evict_oldest(Track *tr) {
 
 /* The accounting and the disposal that a free and the free half of a realloc
  * both do, once the record has been found and checked. */
-static void release(Track *tr, Rec *r) {
+static void track_release(Track *tr, Rec *r) {
     tr->frees++;
     tr->live--;
     tr->bytes_live -= r->size;
@@ -344,7 +344,7 @@ static void track_vt_free(void *self, void *p, size_t size, size_t align) {
     r = claim(tr, p, size, align);
     if (r == NULL)
         return;
-    release(tr, r);
+    track_release(tr, r);
 }
 
 static void *track_vt_realloc(void *self, void *p, size_t old, size_t nsz,
@@ -376,7 +376,7 @@ static void *track_vt_realloc(void *self, void *p, size_t old, size_t nsz,
         note_oom(tr);
         return NULL;
     }
-    release(tr, r);
+    track_release(tr, r);
     return q;
 }
 

@@ -318,7 +318,7 @@ static bool map_rehash(Map *m, Uint ngroups) {
 
 /* Rounds up to a power of two, because the group count has to be one for the
  * mask and the probe sequence to work. */
-static Uint round_up_pow2(Uint n) {
+static Uint map_round_up_pow2(Uint n) {
     Uint p = 1;
     while (p < n)
         p *= 2;
@@ -333,7 +333,7 @@ static Uint groups_for_hint(Int hint) {
     if (hint <= 0)
         return 0;
     need = (Uint)hint + (Uint)hint / (SLOTS - 1) + 1;
-    return round_up_pow2((need + SLOTS - 1) / SLOTS);
+    return map_round_up_pow2((need + SLOTS - 1) / SLOTS);
 }
 
 Map *map_make(Alloc *a, const Type *key, const Type *val, Int hint) {

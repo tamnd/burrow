@@ -43,15 +43,15 @@
  * works in spans of a few dozen for the same reason. */
 #define BATCH 64
 
-typedef struct Slot {
+typedef struct ReclaimSlot {
     /* Zero when this slot is not pinned. Otherwise the epoch it was pinned at,
      * shifted up one, with the low bit set. One word so that the walk reads one
      * thing per participant, and on its own cache line so that the walk does
      * not fight the pins it is reading. */
     _Alignas(BURROW_CACHELINE) uint32_t state;
-} Slot;
+} ReclaimSlot;
 
-static Slot slots[NSLOTS];
+static ReclaimSlot slots[NSLOTS];
 
 /* The epoch. Moves forward by one, and only when every pinned slot is already
  * at it. It wraps, and wrapping is fine, because nothing compares two epochs
@@ -109,7 +109,7 @@ static Pocket pockets[MSLOTS];
  * Thread local rather than per goroutine on purpose. A pin is a promise about
  * what a thread is doing right now, and a goroutine that parks in the middle of
  * one has broken the promise, which is why the header says not to. */
-static BURROW_THREAD_LOCAL Slot *my_slot;
+static BURROW_THREAD_LOCAL ReclaimSlot *my_slot;
 static BURROW_THREAD_LOCAL uint32_t my_depth;
 
 /* Raises a high water mark to at least `want`. Ordinary compare and swap loop,
@@ -131,10 +131,10 @@ static void raise_high(uint32_t *high, uint32_t want) {
  *
  * Waiting cannot deadlock. A pin is not allowed to park, so every thread
  * holding one of these is running and on its way out of it. */
-static Slot *foreign_acquire(void) {
+static ReclaimSlot *foreign_acquire(void) {
     for (;;) {
         for (uint32_t i = 0; i < FSLOTS; i++) {
-            Slot *s = &slots[MSLOTS + i];
+            ReclaimSlot *s = &slots[MSLOTS + i];
             uint32_t free_state = 0;
             uint32_t e = burrow__atomic_load_u32(&cur_epoch);
             raise_high(&fhigh, i + 1);
@@ -155,7 +155,7 @@ void burrow__pin(void) {
         return;
     }
 
-    Slot *s = &slots[m->id];
+    ReclaimSlot *s = &slots[m->id];
     my_slot = s;
 
     /* Before the publish below, so that a walk which reads the limit and then
@@ -270,7 +270,7 @@ void burrow__unpin(void) {
     if (--my_depth > 0)
         return;
 
-    Slot *s = my_slot;
+    ReclaimSlot *s = my_slot;
     my_slot = NULL;
 
     /* Release, so that everything this thread read while pinned stays below it.

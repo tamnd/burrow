@@ -36,19 +36,19 @@
 typedef struct {
     uint32_t held;
     char pad[SLOT_PAD - sizeof(uint32_t)];
-} Slot;
+} Atomic64Slot;
 
-static Slot locks[NSLOTS];
+static Atomic64Slot locks[NSLOTS];
 
 /* Shifted by three because a uint64_t is eight byte aligned when anybody has
  * been careful, so the low three bits carry no information and hashing on them
  * would waste most of the table. */
-static Slot *slot_for(const void *p) {
+static Atomic64Slot *slot_for(const void *p) {
     uintptr_t key = (uintptr_t)p >> 3;
     return &locks[key % NSLOTS];
 }
 
-static void lock(Slot *s) {
+static void lock(Atomic64Slot *s) {
     for (;;) {
         uint32_t free_ = 0;
         if (burrow__atomic_cas_acquire_u32(&s->held, &free_, 1))
@@ -58,12 +58,12 @@ static void lock(Slot *s) {
     }
 }
 
-static void unlock(Slot *s) {
+static void unlock(Atomic64Slot *s) {
     burrow__atomic_store_release_u32(&s->held, 0);
 }
 
 uint64_t burrow__atomic64_load(const uint64_t *p) {
-    Slot *s = slot_for(p);
+    Atomic64Slot *s = slot_for(p);
     lock(s);
     uint64_t v = *p;
     unlock(s);
@@ -71,14 +71,14 @@ uint64_t burrow__atomic64_load(const uint64_t *p) {
 }
 
 void burrow__atomic64_store(uint64_t *p, uint64_t v) {
-    Slot *s = slot_for(p);
+    Atomic64Slot *s = slot_for(p);
     lock(s);
     *p = v;
     unlock(s);
 }
 
 uint64_t burrow__atomic64_add(uint64_t *p, uint64_t v) {
-    Slot *s = slot_for(p);
+    Atomic64Slot *s = slot_for(p);
     lock(s);
     uint64_t old = *p;
     *p = old + v;
@@ -87,7 +87,7 @@ uint64_t burrow__atomic64_add(uint64_t *p, uint64_t v) {
 }
 
 uint64_t burrow__atomic64_and(uint64_t *p, uint64_t v) {
-    Slot *s = slot_for(p);
+    Atomic64Slot *s = slot_for(p);
     lock(s);
     uint64_t old = *p;
     *p = old & v;
@@ -96,7 +96,7 @@ uint64_t burrow__atomic64_and(uint64_t *p, uint64_t v) {
 }
 
 uint64_t burrow__atomic64_or(uint64_t *p, uint64_t v) {
-    Slot *s = slot_for(p);
+    Atomic64Slot *s = slot_for(p);
     lock(s);
     uint64_t old = *p;
     *p = old | v;
@@ -105,7 +105,7 @@ uint64_t burrow__atomic64_or(uint64_t *p, uint64_t v) {
 }
 
 uint64_t burrow__atomic64_swap(uint64_t *p, uint64_t v) {
-    Slot *s = slot_for(p);
+    Atomic64Slot *s = slot_for(p);
     lock(s);
     uint64_t old = *p;
     *p = v;
@@ -114,7 +114,7 @@ uint64_t burrow__atomic64_swap(uint64_t *p, uint64_t v) {
 }
 
 bool burrow__atomic64_cas(uint64_t *p, uint64_t *expected, uint64_t desired) {
-    Slot *s = slot_for(p);
+    Atomic64Slot *s = slot_for(p);
     lock(s);
     uint64_t seen = *p;
     bool ok = seen == *expected;

@@ -68,7 +68,7 @@ static int32_t counter_of(uint64_t state) {
 }
 
 /* How many are waiting, which is the low half with the bubble bit removed. */
-static uint32_t waiters_of(uint64_t state) {
+static uint32_t waitgroup_waiters_of(uint64_t state) {
     return (uint32_t)state & WAIT_GROUP_WAITER_MASK;
 }
 
@@ -135,7 +135,7 @@ void sync_wait_group_add(SyncWaitGroup *wg, int delta) {
             "sync: WaitGroup.Add called from inside and outside a synctest bubble"));
 
     int32_t v = counter_of(state);
-    uint32_t w = waiters_of(state);
+    uint32_t w = waitgroup_waiters_of(state);
 
     if (v < 0)
         runtime_panic(BURROW_S("sync: negative WaitGroup counter"));
@@ -188,8 +188,8 @@ void sync_wait_group_wait(SyncWaitGroup *wg) {
              * the same thing when it takes the counter to zero, and between
              * them a group that has gone quiet does not hold on to a bubble
              * that is about to end. */
-            if (waiters_of(state) == 0 && (state & WAIT_GROUP_BUBBLE_FLAG) != 0 &&
-                associated(wg, bubble) &&
+            if (waitgroup_waiters_of(state) == 0 &&
+                (state & WAIT_GROUP_BUBBLE_FLAG) != 0 && associated(wg, bubble) &&
                 sync_atomic_compare_and_swap_uint64(&wg->state, state, 0))
                 burrow__atomic_store_release_ptr(&wg->bubble, NULL);
             return;

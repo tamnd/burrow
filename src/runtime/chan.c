@@ -138,8 +138,8 @@ typedef struct Parked {
  * a const pointer and a receiver hands out a mutable one, and casting the const
  * away to store them in one field is the sort of thing that is fine until
  * somebody writes through the wrong one. Exactly one of the two is set. */
-typedef struct Waiter Waiter;
-struct Waiter {
+typedef struct ChanWaiter ChanWaiter;
+struct ChanWaiter {
     /* Who to start again, and never NULL. */
     Parked *p;
 
@@ -159,8 +159,8 @@ struct Waiter {
      * program for a sender. */
     bool success;
 
-    Waiter *next;
-    Waiter *prev;
+    ChanWaiter *next;
+    ChanWaiter *prev;
 };
 
 /* A queue of them, in arrival order, because Go wakes waiters first in first
@@ -179,8 +179,8 @@ struct Waiter {
  * from it is now only a reason to go and look properly under the lock. That was
  * already all anybody did with it. */
 typedef struct Waitq {
-    Waiter *first;
-    Waiter *last;
+    ChanWaiter *first;
+    ChanWaiter *last;
     uint32_t n;
 } Waitq;
 
@@ -190,7 +190,7 @@ static bool waitq_any(const Waitq *q) {
     return burrow__atomic_load_acquire_u32(&q->n) != 0;
 }
 
-static void waitq_push(Waitq *q, Waiter *w) {
+static void waitq_push(Waitq *q, ChanWaiter *w) {
     w->next = NULL;
     w->prev = q->last;
     if (q->last != NULL)
@@ -201,7 +201,7 @@ static void waitq_push(Waitq *q, Waiter *w) {
     burrow__atomic_store_u32(&q->n, q->n + 1);
 }
 
-static void waitq_unlink(Waitq *q, Waiter *w) {
+static void waitq_unlink(Waitq *q, ChanWaiter *w) {
     if (w->prev != NULL)
         w->prev->next = w->next;
     else
@@ -231,9 +231,9 @@ static void waitq_unlink(Waitq *q, Waiter *w) {
  * of the five callers, because here is where the claim is and the two belong
  * together. A plain send or receive skips the atomic entirely, which is what
  * the flag is for. */
-static Waiter *waitq_pop(Waitq *q) {
+static ChanWaiter *waitq_pop(Waitq *q) {
     for (;;) {
-        Waiter *w = q->first;
+        ChanWaiter *w = q->first;
         if (w == NULL)
             return NULL;
 
@@ -256,7 +256,7 @@ static Waiter *waitq_pop(Waitq *q) {
  * is either the only thing on the queue or something a pop already dropped, and
  * those two look identical from the entry. The queue's own head is what tells
  * them apart. */
-static void waitq_remove(Waitq *q, Waiter *w) {
+static void waitq_remove(Waitq *q, ChanWaiter *w) {
     if (w->prev == NULL && w->next == NULL && q->first != w)
         return;
 
@@ -344,7 +344,7 @@ static uint8_t *slot(Chan *c, uint32_t i) {
 /* Straight into a waiting receiver's variable. This is what makes an unbuffered
  * channel a handoff rather than a queue of one, and what keeps a buffered
  * channel that is empty from touching its buffer at all. */
-static void give_to_receiver(Chan *c, Waiter *w, const void *v) {
+static void give_to_receiver(Chan *c, ChanWaiter *w, const void *v) {
     if (w->recvp != NULL)
         type_copy(c->elem, w->recvp, v);
     w->success = true;
@@ -358,7 +358,7 @@ static void give_to_receiver(Chan *c, Waiter *w, const void *v) {
  * head and the sender's goes in at the tail. Head and tail are the same slot
  * when the buffer is full, so that is one slot read and then written, and the
  * two indices move together. */
-static void take_from_sender(Chan *c, Waiter *w, void *out) {
+static void take_from_sender(Chan *c, ChanWaiter *w, void *out) {
     if (c->dataqsiz == 0) {
         if (out != NULL)
             type_copy(c->elem, out, w->sendp);
@@ -648,7 +648,7 @@ static bool chan_send_impl(Chan *c, const void *v, bool block) {
     }
 
     /* 1. Somebody is waiting for exactly this. */
-    Waiter *w = waitq_pop(&c->recvq);
+    ChanWaiter *w = waitq_pop(&c->recvq);
     if (w != NULL) {
         give_to_receiver(c, w, v);
         Parked *p = w->p;
@@ -679,7 +679,7 @@ static bool chan_send_impl(Chan *c, const void *v, bool block) {
         runtime_throw(BURROW_S("chan_send: out of memory"));
     }
 
-    Waiter w2;
+    ChanWaiter w2;
     memset(&w2, 0, sizeof(w2));
     w2.p = &p;
     w2.sendp = v;
@@ -742,7 +742,7 @@ static bool chan_recv_impl(Chan *c, void *out, bool *ok, bool block) {
 
     /* 1. A sender is waiting, which on an unbuffered channel means it is
      *    holding the value and on a buffered one means the buffer is full. */
-    Waiter *w = waitq_pop(&c->sendq);
+    ChanWaiter *w = waitq_pop(&c->sendq);
     if (w != NULL) {
         take_from_sender(c, w, out);
         Parked *p = w->p;
@@ -787,7 +787,7 @@ static bool chan_recv_impl(Chan *c, void *out, bool *ok, bool block) {
         runtime_throw(BURROW_S("chan_recv: out of memory"));
     }
 
-    Waiter w2;
+    ChanWaiter w2;
     memset(&w2, 0, sizeof(w2));
     w2.p = &p;
     w2.recvp = out;
@@ -842,8 +842,8 @@ void chan_close(Chan *c) {
      * drained closed channel. Senders get a false as well and turn it into the
      * end of the program when they wake, because a send that was in flight
      * across a close is the same mistake as a send after one. */
-    Waiter *woken = NULL;
-    Waiter *w;
+    ChanWaiter *woken = NULL;
+    ChanWaiter *w;
 
     while ((w = waitq_pop(&c->recvq)) != NULL) {
         if (w->recvp != NULL)
@@ -863,7 +863,7 @@ void chan_close(Chan *c) {
     while (woken != NULL) {
         /* Read before the wake and not after, because by the time the wake
          * returns the frame this entry lives in may be gone. */
-        Waiter *next = woken->next;
+        ChanWaiter *next = woken->next;
         parked_wake(woken->p);
         woken = next;
     }
@@ -930,7 +930,7 @@ typedef struct Select {
     /* One entry per case, used only if the select has to wait. Indexed by case
      * number, including the cases that never get one, because an index that
      * lines up with the case list is worth more than the few unused structs. */
-    Waiter *waiters;
+    ChanWaiter *waiters;
 
     /* The sleeper every one of those entries points at. */
     Parked p;
@@ -1093,7 +1093,7 @@ static Int sel_try(Select *s) {
                 return (Int)s->order[k];
             }
 
-            Waiter *w = waitq_pop(&c->recvq);
+            ChanWaiter *w = waitq_pop(&c->recvq);
             if (w != NULL) {
                 give_to_receiver(c, w, sc->send);
                 s->wake = w->p;
@@ -1108,7 +1108,7 @@ static Int sel_try(Select *s) {
             continue;
         }
 
-        Waiter *w = waitq_pop(&c->sendq);
+        ChanWaiter *w = waitq_pop(&c->sendq);
         if (w != NULL) {
             take_from_sender(c, w, sc->recv);
             s->wake = w->p;
@@ -1143,7 +1143,7 @@ static void sel_enqueue(Select *s) {
         if (sc->op == SELECT_DEFAULT || sc->c == NULL)
             continue;
 
-        Waiter *w = &s->waiters[i];
+        ChanWaiter *w = &s->waiters[i];
         memset(w, 0, sizeof(*w));
         w->p = &s->p;
         w->caseidx = i;
@@ -1242,7 +1242,7 @@ Int chan_select(SelectCase *cases, Int n) {
 
     uint32_t small_order[SELECT_SMALL];
     uint32_t small_locks[SELECT_SMALL];
-    Waiter small_waiters[SELECT_SMALL];
+    ChanWaiter small_waiters[SELECT_SMALL];
 
     Select s;
     memset(&s, 0, sizeof(s));
@@ -1253,20 +1253,20 @@ Int chan_select(SelectCase *cases, Int n) {
     uint32_t *locks = small_locks;
     void *scratch = NULL;
     size_t scratch_size = 0;
-    const size_t scratch_align = _Alignof(Waiter);
+    const size_t scratch_align = _Alignof(ChanWaiter);
 
     if (n > SELECT_SMALL) {
-        /* One block, entries first, because a Waiter is the stricter of the two
+        /* One block, entries first, because a ChanWaiter is the stricter of the two
          * alignments and putting it first means no padding to compute and no
          * pointer that has to be nudged into place. */
         size_t count = (size_t)n;
 
-        scratch_size = count * (sizeof(Waiter) + 2 * sizeof(uint32_t));
+        scratch_size = count * (sizeof(ChanWaiter) + 2 * sizeof(uint32_t));
         scratch = mem_alloc(home, scratch_size, scratch_align);
         if (scratch == NULL)
             runtime_throw(BURROW_S("chan_select: out of memory"));
 
-        s.waiters = (Waiter *)scratch;
+        s.waiters = (ChanWaiter *)scratch;
         order = (uint32_t *)(s.waiters + count);
         locks = order + count;
     } else {

@@ -55,7 +55,7 @@ size_t burrow__stack_page_size(void) {
 /* Rounds up to a whole page, or gives back what it was handed if that would
  * wrap, since a size that close to the top is not a real request and the
  * allocator below is about to refuse it anyway. */
-static size_t round_up(size_t bytes, size_t page) {
+static size_t stack_round_up(size_t bytes, size_t page) {
     if (page == 0)
         return bytes;
 
@@ -79,7 +79,7 @@ bool burrow__stack_alloc(burrow__Stack *stack, size_t size) {
     size_t page = burrow__stack_page_size();
     if (size < BURROW_STACK_MIN)
         size = BURROW_STACK_MIN;
-    size = round_up(size, page);
+    size = stack_round_up(size, page);
     if (size < BURROW_STACK_MIN || size > SIZE_MAX - page)
         return false;
 

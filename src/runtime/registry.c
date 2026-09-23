@@ -135,14 +135,14 @@ extern const Type *const __stop_burrowtype[] __attribute__((weak));
 
 /* --------------------------------------------------------------- the table */
 
-typedef struct Slot {
+typedef struct RegistrySlot {
     const Type *t;
     uint64_t h;
-} Slot;
+} RegistrySlot;
 
 static SyncOnce registry_once;
 static SyncRWMutex registry_lock;
-static Slot *registry_slots;
+static RegistrySlot *registry_slots;
 static Int registry_cap; /* a power of two, or zero when there is no table */
 static Int registry_len;
 
@@ -202,13 +202,13 @@ static void split_name(Str q, Str *pkg, Str *name) {
     name->len = q.len - dot - 1;
 }
 
-static bool slot_matches(const Slot *s, Str pkg, Str name) {
+static bool slot_matches(const RegistrySlot *s, Str pkg, Str name) {
     return s->t != NULL && str_eq(s->t->pkg_path, pkg) && str_eq(s->t->name, name);
 }
 
 /* Put t in, or find that it is already there. Callers hold the write lock or
  * are still building the table and have not published it. */
-static bool table_insert(Slot *slots, Int cap, Int *len, const Type *t) {
+static bool table_insert(RegistrySlot *slots, Int cap, Int *len, const Type *t) {
     uint64_t h = name_hash(t->pkg_path, t->name);
     Int mask = cap - 1;
     Int i = (Int)(h & (uint64_t)mask);
@@ -230,7 +230,7 @@ static bool table_insert(Slot *slots, Int cap, Int *len, const Type *t) {
     }
 }
 
-static Int round_up_pow2(Int n) {
+static Int registry_round_up_pow2(Int n) {
     Int c = 8;
 
     while (c < n)
@@ -240,8 +240,8 @@ static Int round_up_pow2(Int n) {
 
 /* Build a table of at least want slots and move what is there into it. */
 static bool table_grow(Int want) {
-    Int cap = round_up_pow2(want);
-    Slot *slots = BURROW_NEW_N(heap_allocator(), Slot, (size_t)cap);
+    Int cap = registry_round_up_pow2(want);
+    RegistrySlot *slots = BURROW_NEW_N(heap_allocator(), RegistrySlot, (size_t)cap);
     if (slots == NULL)
         return false;
 
@@ -251,13 +251,14 @@ static bool table_grow(Int want) {
             (void)table_insert(slots, cap, &len, registry_slots[i].t);
     }
 
-    Slot *old = registry_slots;
+    RegistrySlot *old = registry_slots;
     Int old_cap = registry_cap;
     registry_slots = slots;
     registry_cap = cap;
     registry_len = len;
     if (old != NULL)
-        mem_free(heap_allocator(), old, (size_t)old_cap * sizeof(Slot), _Alignof(Slot));
+        mem_free(heap_allocator(), old, (size_t)old_cap * sizeof(RegistrySlot),
+                 _Alignof(RegistrySlot));
 
     return true;
 }

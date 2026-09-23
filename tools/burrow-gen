@@ -918,7 +918,12 @@ def doc_run(root, cc, sanitize):
             return 0, ["the amalgamation does not compile:\n" + r.stderr]
         warn = ["-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter"]
         problems = []
+        work = os.path.join(tmp, "work")
         for ex in examples:
+            # Each program starts in an empty directory of its own, so one that
+            # makes files can make them without cleaning up after itself.
+            shutil.rmtree(work, ignore_errors=True)
+            os.makedirs(work)
             rel = os.path.relpath(ex, root)
             exe = os.path.join(tmp, "ex")
             r = subprocess.run(
@@ -930,7 +935,7 @@ def doc_run(root, cc, sanitize):
                 problems.append("%s does not compile:\n%s" % (rel, r.stderr.rstrip()))
                 continue
             try:
-                r = subprocess.run([exe], capture_output=True, text=True, timeout=60)
+                r = subprocess.run([exe], capture_output=True, text=True, timeout=60, cwd=work)
             except subprocess.TimeoutExpired:
                 problems.append("%s did not finish in a minute" % rel)
                 continue

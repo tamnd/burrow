@@ -1,8 +1,7 @@
 # panic and recover
 
+<!-- example: ../examples/panic/parse.c#try -->
 ```c
-#include "burrow/panic.h"
-
 BURROW_TRY {
     parse(input);
 }
@@ -14,6 +13,8 @@ BURROW_TRY_END;
 ```
 
 `panic` stops what you are doing and unwinds until something catches it. On the way out every deferred call of every scope between the panic and the catch runs, innermost scope first and last in first out inside each scope. That last part is the reason this is worth having over returning early: a panic closes the files.
+
+All of it is in `burrow/panic.h`.
 
 If nothing catches it, the value is printed and the process ends with status 2, the same as an unrecovered panic in Go.
 
@@ -68,6 +69,7 @@ The chaining row is the one people forget exists. If a deferred call panics whil
 
 `panic` takes an `Any`, which is a type descriptor and a pointer, and that is Go's `any`, which is what `recover` gives you there.
 
+<!-- not compiled: three alternatives, and only the first would ever run -->
 ```c
 panic(BURROW_ANY_VAL(TYPE_INT, Int, 42));
 panic(BURROW_ANY(TYPE_ERROR, &err));
@@ -88,6 +90,7 @@ Copying the value is not copying what the value points at in turn, and that is t
 
 An index past the end, a slice expression past the capacity, a divide by zero, a write to a nil map, a send on a closed channel. These panic with an `Error` whose concrete type is `RuntimeError`, which is Go's `runtime.Error`, and asking is one call:
 
+<!-- example: ../examples/panic/runtime.c#catch -->
 ```c
 BURROW_CATCH(p) {
     const RuntimeError *re = runtime_error_from(p);
@@ -126,6 +129,7 @@ Sixty four frames is as far as it goes. Deeper than that and the ones you want a
 
 You can take the same walk yourself:
 
+<!-- example: ../examples/panic/callers.c#walk -->
 ```c
 Uintptr pcs[32];
 Int n = runtime_callers(0, slice_from(pcs, 32, 32, TYPE_UINTPTR));
@@ -137,13 +141,19 @@ This is Go's `runtime.Callers` with Go's numbering, where frame 0 is `runtime_ca
 
 A local of the function containing the `BURROW_TRY`, modified inside the try block and read in the catch block or after it, has an indeterminate value unless it is `volatile`. That is C's rule for `setjmp` and not something burrow can paper over. In practice it bites the accumulator pattern and nothing else:
 
+<!-- example: ../examples/panic/volatile.c#body -->
 ```c
 volatile Int done = 0;
 BURROW_TRY {
-    for (Int i = 0; i < n; i++) { step(i); done++; }
+    for (Int i = 0; i < n; i++) {
+        step(i);
+        done++;
+    }
 }
 BURROW_CATCH(p) {
-    printf("stopped after %lld\n", (long long)done);
+    Str why = panic_text(p);
+    printf("stopped after %lld: %.*s\n", (long long)done, (int)why.len,
+           (const char *)why.p);
 }
 BURROW_TRY_END;
 ```

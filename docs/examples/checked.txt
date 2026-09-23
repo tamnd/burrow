@@ -5,3 +5,6 @@
 # in the pull request that converts it.
 
 docs/guides/synctest.md
+docs/guides/failure.md
+docs/guides/panic.md
+docs/guides/defer.md

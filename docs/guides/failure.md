@@ -18,6 +18,7 @@ The line between the last two is the one worth getting right, and burrow does no
 
 A file that is not there, a connection that was refused, JSON that does not parse. None of these are bugs. They are the ordinary outcomes of asking the world a question, they happen to correct programs, and the calling code is the only thing that knows what to do about them.
 
+<!-- not compiled: the os package is not ported yet, so os_read_file does not exist -->
 ```c
 Error err;
 Slice data = os_read_file(a, BURROW_S("config.json"), &err);
@@ -37,6 +38,7 @@ Go panics on these rather than returning an error, and so does burrow, for a rea
 
 A panic unwinds, running the deferred calls of every scope on the way out, and lands in the nearest enclosing catch block:
 
+<!-- example: ../examples/failure/catch.c#try -->
 ```c
 BURROW_TRY {
     handle(request);
@@ -51,6 +53,7 @@ If nothing catches it, the value is printed and the process exits with status 2,
 
 The ones the runtime raises carry a `RuntimeError`, which is Go's `runtime.Error` and is how a catch block tells a bad index from a panic somebody wrote by hand:
 
+<!-- example: ../examples/failure/catch.c#runtime -->
 ```c
 BURROW_CATCH(p) {
     const RuntimeError *re = runtime_error_from(p);
@@ -83,6 +86,7 @@ The default puts it on standard error. That is right for a program and wrong for
 
 So the destination is yours to pick:
 
+<!-- example: ../examples/failure/handler.c#handler -->
 ```c
 static void to_the_log(Str msg) {
     my_log_write(msg.p, msg.len);
@@ -91,7 +95,7 @@ static void to_the_log(Str msg) {
 
 int main(void) {
     runtime_set_fatal_handler(to_the_log);
-    ...
+    runtime_throw(BURROW_S("the queue holds more than its capacity"));
 }
 ```
 

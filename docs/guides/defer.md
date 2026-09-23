@@ -1,25 +1,27 @@
 # defer
 
-Run this when you leave, whichever way you leave.
+Run this when you leave, whichever way you leave. It lives in `burrow/defer.h`.
 
+<!-- example: ../examples/defer/handle.c#handle -->
 ```c
-#include "burrow/defer.h"
-
-static Error handle(Allocator a, Str path) {
+static Error count_lines(const char *path, Int *lines) {
     BURROW_SCOPE {
-        Error err;
-        OsFile *f = os_open(a, path, &err);
-        if (BURROW_FAILED(err))
-            return err;
-        BURROW_DEFER(os_file_close, f);
+        FILE *f = open_file(path);
+        if (f == NULL)
+            return err_cannot_open;
+        BURROW_DEFER(close_file, f);
 
-        ...
+        for (int c; (c = fgetc(f)) != EOF;)
+            if (c == '\n')
+                ++*lines;
     }
     BURROW_SCOPE_END;
 
     return BURROW_NO_ERROR;
 }
 ```
+
+burrow's `os` package is not ported yet, so the examples on this page open files with stdio, and `close_file` is a two line wrapper around `fclose` in the shape a deferred call takes. Nothing about the pattern changes when `os_open` arrives.
 
 The close runs when control leaves the block, and it does not matter how control leaves: falling off the end, `return`, `break`, `continue`, a `goto` out, or a panic once panic lands.
 
@@ -37,6 +39,7 @@ Inside the scope, a defer is an ordinary statement and goes anywhere a statement
 
 Deferred calls run last in first out.
 
+<!-- example: ../examples/defer/order.c#lifo -->
 ```c
 BURROW_SCOPE {
     BURROW_DEFER(say, "a");
@@ -47,17 +50,24 @@ BURROW_SCOPE_END;
 /* prints c b a */
 ```
 
-The argument is read when you write the defer and not when it runs, so this closes the file that `f` pointed at on the `BURROW_DEFER` line, whatever `f` points at later:
+The argument is read when you write the defer and not when it runs, so this prints the word `word` held on the `BURROW_DEFER` line, whatever it holds by the time the scope ends:
 
+<!-- example: ../examples/defer/order.c#argument -->
 ```c
-BURROW_DEFER(os_file_close, f);
-f = something_else;
+BURROW_SCOPE {
+    const char *word = "first";
+    BURROW_DEFER(say, word);
+    word = "second";
+}
+BURROW_SCOPE_END;
+/* prints first */
 ```
 
 There is no way to undo a defer, in this or in Go.
 
 Scopes nest, and the inner one finishes first:
 
+<!-- example: ../examples/defer/order.c#nested -->
 ```c
 BURROW_SCOPE {
     BURROW_DEFER(say, "outer");
@@ -77,10 +87,11 @@ A deferred call may open scopes and defer things of its own, and those run befor
 
 A `Func`, which is a function taking `void *` and the pointer it was made with, so the thing being cleaned up is usually the argument.
 
+<!-- example: ../examples/defer/kinds.c#kinds -->
 ```c
-BURROW_DEFER(os_file_close, f);          /* the common case */
-BURROW_DEFER(mem_free_slice, &s);
-BURROW_DEFER_FUNC(cleanup);              /* a Func you already have */
+BURROW_DEFER(close_file, f); /* the common case */
+BURROW_DEFER(free, buf);     /* a C function that fits already */
+BURROW_DEFER_FUNC(cleanup);  /* a Func you already have */
 ```
 
 A function that returns something other than `void` does not fit and does not compile. Wrap it in a small static function that ignores the result. If the result is an `Error`, that wrapper is the place where a reader can see you decided to ignore it, which is where that decision belongs.
@@ -91,14 +102,17 @@ Go's `defer` runs at function return. This one runs at scope exit, and there is 
 
 The difference shows up in a loop, and when it does, this rule is the one people wanted:
 
+<!-- example: ../examples/defer/loop.c#loop -->
 ```c
 for (Int i = 0; i < n; i++) {
     BURROW_SCOPE {
-        OsFile *f = os_open(a, paths[i], &err);
-        if (BURROW_FAILED(err))
+        FILE *f = open_file(paths[i]);
+        if (f == NULL)
             continue;
-        BURROW_DEFER(os_file_close, f);
-        ...
+        BURROW_DEFER(close_file, f);
+
+        if (fgets(line, sizeof line, f) != NULL)
+            printf("%s says %s\n", paths[i], line);
     }
     BURROW_SCOPE_END;
 }

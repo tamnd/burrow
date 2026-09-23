@@ -94,7 +94,7 @@
  * it was made with, so the thing being cleaned up is usually the argument:
  *
  *     BURROW_DEFER(os_file_close, f);
- *     BURROW_DEFER(mem_free_slice, &s);
+ *     BURROW_DEFER(free, buf);
  *     BURROW_DEFER_FUNC(cleanup);
  *
  * A deferred function returning something other than void does not fit and does

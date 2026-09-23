@@ -1,0 +1,7 @@
+# The markdown files whose C blocks all come from programs under docs/examples.
+#
+# burrow-gen doc --check fails on a C block in one of these that has neither an
+# example comment nor a not compiled comment before it. A file goes on the list
+# in the pull request that converts it.
+
+docs/guides/synctest.md

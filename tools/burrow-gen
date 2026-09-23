@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-# burrow-gen: the code burrow generates rather than writes by hand. There are two
-# subcommands and they have nothing in common except that neither belongs in a
+# burrow-gen: the code burrow generates or checks rather than writes by hand.
+# The subcommands have little in common except that none of them belongs in a
 # compiler.
 #
 #     burrow-gen reflect      type descriptors for structs you already have
 #     burrow-gen amalgamate   the whole library as one burrow.c and one burrow.h
+#     burrow-gen doc          the code in docs/ checked against real programs
 #
 # REFLECT
 #
@@ -69,6 +70,43 @@
 # docs/design/15-build-deploy.md section 2 is the design, including the options
 # that are not here yet: choosing packages, choosing targets, and a prefix.
 #
+# DOC
+#
+#     burrow-gen doc --check          every marked block matches its program
+#     burrow-gen doc --sync           rewrite the marked blocks from the programs
+#     burrow-gen doc --check --run    and compile and run every program too
+#
+# A C block in the docs is not the source of truth for anything. The program it
+# came from is, a whole file under docs/examples that compiles and runs, and the
+# block is a copy of it or of a named part of it. The markdown says which with
+# a comment on the line before the fence, which GitHub does not show:
+#
+#     <!-- example: ../examples/synctest/wait.c#body -->
+#
+# The path is relative to the markdown file, and #body names the lines between
+# "// doc: body" and "// doc: end" in the program, dedented. Without a name the
+# block is the whole program, minus any doc markers. A block that is only there
+# to show something that does not compile, like the mistake a guide is warning
+# about, says so instead:
+#
+#     <!-- not compiled: the wrong way, for contrast -->
+#
+# --check fails when a block and its program disagree, and --sync is the fix.
+# For the markdown files named in docs/examples/checked.txt it also fails on a
+# C block with neither comment, so a guide on that list stays converted.
+#
+# --run builds the amalgamation into a temporary directory, compiles every
+# program under docs/examples against it with -Wall -Wextra -Werror, and runs
+# each one. A program that ends with a comment of the form
+#
+#     /* Output:
+#     what it prints
+#     */
+#
+# has to print exactly that. The programs include burrow/<name>.h the way a
+# program using the split headers does, and each of those names is a one line
+# header that includes the amalgamated burrow.h, so both spellings are tested.
+#
 # Copyright 2026 The burrow Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style licence that can be found
 # in the LICENSE file.
@@ -82,6 +120,7 @@ import os
 import platform
 import re
 import sys
+import textwrap
 
 PROG = "burrow-gen"
 
@@ -715,10 +754,229 @@ def run_amalgamate(args):
     return len(public) + len(private), len(sources)
 
 
+# ------------------------------------------------------------------------ doc
+
+DOC_MARK = re.compile(r"^<!--\s*(example|not compiled):\s*(.*?)\s*-->\s*$")
+DOC_FENCE = re.compile(r"^```(\S*)(.*)$")
+DOC_REGION = re.compile(r"^\s*//\s*doc:\s*(\S+)\s*$")
+DOC_OUTPUT = re.compile(r"/\*\s*Output:\s*\n(.*?)\*/\s*$", re.S)
+
+
+class DocBlock:
+    def __init__(self, md, start, end, lang, info, mark, arg):
+        self.md = md
+        self.start = start  # index of the opening fence
+        self.end = end  # index of the closing fence
+        self.lang = lang
+        self.info = info
+        self.mark = mark
+        self.arg = arg
+
+
+def doc_blocks(md, lines):
+    """Every fenced block in a markdown file, with the comment before it."""
+    out = []
+    i = 0
+    while i < len(lines):
+        m = DOC_FENCE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        j = i + 1
+        while j < len(lines) and not lines[j].startswith("```"):
+            j += 1
+        if j == len(lines):
+            raise Error("%s:%d: a code block that is never closed" % (md, i + 1))
+        mark = arg = None
+        if i > 0:
+            c = DOC_MARK.match(lines[i - 1])
+            if c:
+                mark, arg = c.group(1), c.group(2)
+        out.append(DocBlock(md, i, j, m.group(1), m.group(2).strip(), mark, arg))
+        i = j + 1
+    return out
+
+
+def doc_region(path, name):
+    """The lines of a program a block shows: all of it, or one named region."""
+    if not os.path.exists(path):
+        raise Error("%s does not exist" % path)
+    with open(path) as f:
+        lines = f.read().split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    if name is None:
+        return [l for l in lines if not DOC_REGION.match(l)]
+    got = None
+    for n, l in enumerate(lines):
+        m = DOC_REGION.match(l)
+        if not m:
+            if got is not None:
+                got.append(l)
+            continue
+        if got is None and m.group(1) == name:
+            got = []
+        elif got is not None and m.group(1) == "end":
+            body = "\n".join(got)
+            return textwrap.dedent(body).split("\n") if body else []
+        elif got is not None:
+            raise Error("%s:%d: region %s is not ended before the next one starts" % (path, n + 1, name))
+        continue
+    if got is None:
+        raise Error("%s has no region called %s" % (path, name))
+    raise Error("%s: region %s is never ended with // doc: end" % (path, name))
+
+
+def doc_markdown_files(root):
+    files = sorted(glob.glob(os.path.join(root, "docs", "**", "*.md"), recursive=True))
+    files += [os.path.join(root, f) for f in ("README.md", "CONTRIBUTING.md") if os.path.exists(os.path.join(root, f))]
+    return files
+
+
+def doc_checked(root):
+    path = os.path.join(root, "docs", "examples", "checked.txt")
+    out = set()
+    if os.path.exists(path):
+        with open(path) as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if line:
+                    out.add(os.path.normpath(os.path.join(root, line)))
+    return out
+
+
+def doc_check(root, sync):
+    checked = doc_checked(root)
+    problems = []
+    blocks = 0
+    rewritten = 0
+    for md in doc_markdown_files(root):
+        rel = os.path.relpath(md, root)
+        with open(md) as f:
+            lines = f.read().split("\n")
+        changed = False
+        # Walk backwards so a rewrite does not move the blocks still to come.
+        for b in reversed(doc_blocks(rel, lines)):
+            if b.lang == "c" and b.info:
+                problems.append("%s:%d: text after ```c on the fence, which ends up in the block's language" % (rel, b.start + 1))
+            if b.mark == "not compiled":
+                if not b.arg:
+                    problems.append("%s:%d: say why the block is not compiled" % (rel, b.start))
+                continue
+            if b.mark != "example":
+                if b.lang == "c" and os.path.normpath(md) in checked:
+                    problems.append("%s:%d: a C block with no example comment before it" % (rel, b.start + 1))
+                continue
+            blocks += 1
+            target, _, name = b.arg.partition("#")
+            path = os.path.normpath(os.path.join(os.path.dirname(md), target))
+            try:
+                want = doc_region(path, name or None)
+            except Error as e:
+                problems.append("%s:%d: %s" % (rel, b.start, e))
+                continue
+            have = lines[b.start + 1 : b.end]
+            if have == want:
+                continue
+            if sync:
+                lines[b.start + 1 : b.end] = want
+                changed = True
+                rewritten += 1
+            else:
+                problems.append("%s:%d: the block is not what %s says, run burrow-gen doc --sync" % (rel, b.start + 1, b.arg))
+        if changed:
+            with open(md, "w") as f:
+                f.write("\n".join(lines))
+    return blocks, rewritten, problems
+
+
+def doc_run(root, cc, sanitize):
+    import shutil
+    import subprocess
+    import tempfile
+
+    examples = sorted(glob.glob(os.path.join(root, "docs", "examples", "**", "*.c"), recursive=True))
+    if not examples:
+        return 0, []
+    tmp = tempfile.mkdtemp(prefix="burrow-doc-")
+    try:
+        ns = argparse.Namespace(out=tmp, source_id="docs", root=root)
+        run_amalgamate(ns)
+        inc = os.path.join(tmp, "include")
+        for h in glob.glob(os.path.join(root, "include", "burrow", "**", "*.h"), recursive=True):
+            rel = os.path.relpath(h, os.path.join(root, "include"))
+            shim = os.path.join(inc, rel)
+            os.makedirs(os.path.dirname(shim), exist_ok=True)
+            with open(shim, "w") as f:
+                f.write('#include "%s"\n' % os.path.relpath(os.path.join(tmp, "burrow.h"), os.path.dirname(shim)))
+        flags = ["-std=c11", "-O1", "-g", "-pthread"]
+        if sanitize:
+            flags += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-sanitize-recover=all"]
+        obj = os.path.join(tmp, "burrow.o")
+        r = subprocess.run([cc] + flags + ["-c", os.path.join(tmp, "burrow.c"), "-o", obj], capture_output=True, text=True)
+        if r.returncode:
+            return 0, ["the amalgamation does not compile:\n" + r.stderr]
+        warn = ["-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter"]
+        problems = []
+        for ex in examples:
+            rel = os.path.relpath(ex, root)
+            exe = os.path.join(tmp, "ex")
+            r = subprocess.run(
+                [cc] + flags + warn + ["-I" + inc, "-I" + tmp, ex, obj, "-lm", "-o", exe],
+                capture_output=True,
+                text=True,
+            )
+            if r.returncode:
+                problems.append("%s does not compile:\n%s" % (rel, r.stderr.rstrip()))
+                continue
+            try:
+                r = subprocess.run([exe], capture_output=True, text=True, timeout=60)
+            except subprocess.TimeoutExpired:
+                problems.append("%s did not finish in a minute" % rel)
+                continue
+            if r.returncode:
+                problems.append("%s exited %d:\n%s" % (rel, r.returncode, (r.stdout + r.stderr).rstrip()))
+                continue
+            with open(ex) as f:
+                m = DOC_OUTPUT.search(f.read())
+            if m:
+                want = [l.rstrip() for l in m.group(1).rstrip().split("\n")]
+                got = [l.rstrip() for l in r.stdout.rstrip().split("\n")] if r.stdout.strip() else []
+                if want == [""]:
+                    want = []
+                if got != want:
+                    problems.append(
+                        "%s printed something else.\nwant:\n%s\ngot:\n%s" % (rel, "\n".join(want), "\n".join(got))
+                    )
+        return len(examples), problems
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_doc(args):
+    root = args.root or os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    blocks, rewritten, problems = doc_check(root, args.sync)
+    ran = 0
+    if args.run and not problems:
+        ran, more = doc_run(root, args.cc, args.sanitize)
+        problems += more
+    for p in problems:
+        sys.stderr.write("%s: %s\n" % (PROG, p))
+    if problems:
+        return 1
+    msg = "%d example block%s match their programs" % (blocks, "" if blocks == 1 else "s")
+    if rewritten:
+        msg += ", %d rewritten" % rewritten
+    if args.run:
+        msg += ", %d program%s compiled and ran" % (ran, "" if ran == 1 else "s")
+    sys.stderr.write("%s: %s\n" % (PROG, msg))
+    return 0
+
+
 def main():
     p = argparse.ArgumentParser(
         prog=PROG,
-        description="Type descriptors for annotated C structs, and the amalgamation.",
+        description="Type descriptors, the amalgamation, and the checks on the docs.",
     )
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -776,7 +1034,22 @@ def main():
         help="the burrow tree to read, default the one this script is in",
     )
 
+    d = sub.add_parser("doc", help="the code in docs/ checked against real programs")
+    d.add_argument("--check", action="store_true", help="fail if a block and its program disagree, the default")
+    d.add_argument("--sync", action="store_true", help="rewrite the blocks from their programs")
+    d.add_argument("--run", action="store_true", help="compile and run every program under docs/examples")
+    d.add_argument("--sanitize", action="store_true", help="with --run, build under ASan and UBSan")
+    d.add_argument("--cc", default=os.environ.get("CC", "cc"), help="the compiler for --run, default $CC or cc")
+    d.add_argument("--root", metavar="DIR", help="the burrow tree to read, default the one this script is in")
+
     args = p.parse_args()
+
+    if args.command == "doc":
+        try:
+            return run_doc(args)
+        except Error as e:
+            sys.stderr.write("%s: %s\n" % (PROG, e))
+            return 1
 
     if args.command == "amalgamate":
         try:

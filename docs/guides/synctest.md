@@ -1,4 +1,4 @@
-#Deterministic tests for concurrent code
+# Deterministic tests for concurrent code
 
 A test for something concurrent usually ends up written one of two ways, and both of them are bad.
 
@@ -6,29 +6,36 @@ The first sleeps. Start the worker, sleep ten milliseconds, check the result. It
 
 The second instruments. Add a channel the worker sends on when it reaches the interesting point, add a wait group so the test knows when everything has finished, add a flag so the worker knows it is under test. Now the test is reliable and the thing being tested is not the thing that ships.
 
-A bubble is the third way. Everything in `burrow/synctest.h`, and it is two functions.
+A bubble is the third way. Everything is in `burrow/synctest.h`: two functions, and a third further down that is one of them after a sleep.
 
 ## The two calls
 
+<!-- example: ../examples/synctest/wait.c -->
 ```c
-#include "burrow/synctest.h"
+#include <stdio.h>
+
+#include "burrow/burrow.h"
+
+static void worker(void *env) {
+    Chan *c = env;
+    Int v = 1;
+    chan_send(c, &v);
+}
 
 static void body(void *env) {
-    (void)env;
-
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 0);
     go(BURROW_FN(Func, worker, c));
 
     synctest_wait();
 
-    /* Every other goroutine in the bubble is blocked now. */
+    /* The worker is sitting on the send. Not probably, not usually. */
     Int v;
     chan_recv(c, &v);
+    printf("received %d\n", (int)v);
     chan_free(c);
 }
 
 static void top(void *env) {
-    (void)env;
     synctest_run(BURROW_FN(Func, body, NULL));
 }
 
@@ -36,6 +43,10 @@ int main(void) {
     runtime_main(BURROW_FN(Func, top, NULL));
     return 0;
 }
+
+/* Output:
+received 1
+*/
 ```
 
 `synctest_run` takes a function, gives it a goroutine of its own, and waits. Every goroutine that function starts, and everything those start, is in the bubble too. The run is not over when the function returns, it is over when the last goroutine that was ever in the bubble has exited, so a goroutine a test forgot about is a test that does not finish rather than a surprise two tests later.
@@ -72,38 +83,30 @@ Here is every wait in the library and the answer it gives.
 | `time_sleep` | Yes | The bubble's clock cannot move while anything in the bubble can run, so only the bubble can end the sleep. |
 | Anything built on `sched_park` outside the runtime | No | The runtime cannot tell what will end it, so the honest answer is that something might. |
 
-A WaitGroup that is added to from inside a bubble belongs to that bubble until its counter reaches zero, and adding to it from outside in the meantime stops the program. That is the same rule channels have and it is there for the same reason:
-without it,
-    a Wait that counted as durable
-        could be ended by a Done from somewhere the test cannot see.The
-            association goes away on its own as soon as the counter is back to zero,
-    so the same group can be used again by a later bubble or
-        by nothing in particular.
+A WaitGroup that is added to from inside a bubble belongs to that bubble until its counter reaches zero, and adding to it from outside in the meantime stops the program. That is the same rule channels have and it is there for the same reason: without it, a Wait that counted as durable could be ended by a Done from somewhere the test cannot see. The association goes away on its own as soon as the counter is back to zero, so the same group can be used again by a later bubble or by nothing in particular.
 
-        ##What the test gets to say
+## What the test gets to say
 
-            Because the bubble knows the difference between blocked and finished,
-    a test can assert on a program in the middle of its work rather than only at the end
-        of it.
+Because the bubble knows the difference between blocked and finished, a test can assert on a program in the middle of its work rather than only at the end of it.
 
-```c static void
-        worker(void *env) {
+<!-- example: ../examples/synctest/wait.c#body -->
+```c
+static void worker(void *env) {
     Chan *c = env;
-
     Int v = 1;
     chan_send(c, &v);
 }
 
 static void body(void *env) {
-    (void)env;
-
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 0);
     go(BURROW_FN(Func, worker, c));
+
     synctest_wait();
 
     /* The worker is sitting on the send. Not probably, not usually. */
     Int v;
     chan_recv(c, &v);
+    printf("received %d\n", (int)v);
     chan_free(c);
 }
 ```
@@ -126,6 +129,7 @@ The clock starts at midnight UTC on 1 January 2000, which is 946684800000000000 
 
 So a sleep of an hour costs microseconds.
 
+<!-- example: ../examples/synctest/clock.c#body -->
 ```c
 static void body(void *env) {
     int64_t start = burrow_nanotime();
@@ -143,6 +147,7 @@ Everything in the library that asks what time it is asks the bubble when it is i
 
 That gives a test for a timeout that a real clock cannot give.
 
+<!-- example: ../examples/synctest/deadline.c#body -->
 ```c
 static void body(void *env) {
     ContextCancelFunc cancel;
@@ -165,14 +170,26 @@ Wait for the thing rather than for the clock, as that example does. Two timers t
 
 When the clock is the thing, sleep with `synctest_sleep` instead. It is `time_sleep` followed by `synctest_wait`, so whatever the rest of the bubble does at the moment the sleep ends has been done by the time it returns.
 
+<!-- example: ../examples/synctest/sleep.c#body -->
 ```c
+static int refreshes;
+
+static void refresh_every_minute(void *env) {
+    for (int i = 0; i < 3; i++) {
+        time_sleep(TIME_MINUTE);
+        refreshes++;
+    }
+}
+
 static void body(void *env) {
     go(BURROW_FN(Func, refresh_every_minute, NULL));
 
-    // The refresher wakes at the same instant this does. The wait inside the
-    // sleep lets it finish the refresh before the check below looks.
-    synctest_sleep(TIME_MINUTE);
-    assert(refreshes == 1);
+    // The refresher wakes at the same instant this does each time. The wait
+    // inside the sleep lets it finish the refresh before the check looks.
+    for (int want = 1; want <= 3; want++) {
+        synctest_sleep(TIME_MINUTE);
+        assert(refreshes == want);
+    }
 }
 ```
 

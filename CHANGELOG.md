@@ -6,7 +6,7 @@ Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a mileston
 
 ## v0.0.34 (2026-09-23)
 
-Nine more guides are compiled and run, which makes sixteen of twenty two, with 111 blocks from 36 programs.
+Eight more guides are compiled and run, which makes fifteen of twenty two, with 111 blocks from 36 programs.
 
 ### Checked docs
 

@@ -833,21 +833,28 @@ def doc_markdown_files(root):
     return files
 
 
-def doc_checked(root):
+def doc_checked(root, problems):
     path = os.path.join(root, "docs", "examples", "checked.txt")
     out = set()
     if os.path.exists(path):
         with open(path) as f:
-            for line in f:
+            for n, line in enumerate(f, 1):
                 line = line.split("#", 1)[0].strip()
-                if line:
-                    out.add(os.path.normpath(os.path.join(root, line)))
+                if not line:
+                    continue
+                full = os.path.normpath(os.path.join(root, line))
+                # A name that points at nothing would switch the check off for
+                # the guide it meant without anybody noticing, which is exactly
+                # what happened to five guides before this line existed.
+                if not os.path.isfile(full):
+                    problems.append("docs/examples/checked.txt:%d: %s is not a file, paths are from the top of the repository" % (n, line))
+                out.add(full)
     return out
 
 
 def doc_check(root, sync):
-    checked = doc_checked(root)
     problems = []
+    checked = doc_checked(root, problems)
     blocks = 0
     rewritten = 0
     for md in doc_markdown_files(root):

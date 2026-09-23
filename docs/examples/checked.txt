@@ -14,8 +14,8 @@ docs/guides/time.md
 docs/guides/conventions.md
 docs/guides/goroutines.md
 docs/guides/channels.md
-atomics.md
-slices.md
-maps.md
-functions.md
-types.md
+docs/guides/atomics.md
+docs/guides/slices.md
+docs/guides/maps.md
+docs/guides/functions.md
+docs/guides/types.md

@@ -134,6 +134,21 @@ The argument has to be exactly one of the eight fixed width types. `Int` and `Ui
 
 None of these are in the `BURROW_SHORT` set. `ADD` and `SHL` are names other people's headers already use.
 
+## Bits
+
+`burrow/math/bits.h` is Go's `math/bits`, and the names follow the header path the same way: `bits.Len64` is `bits_len64`, `bits.OnesCount` is `bits_ones_count`, and `bits.UintSize` is `BITS_UINT_SIZE`.
+
+<!-- example: ../examples/numbers/num.c#bits -->
+```c
+Int width = bits_len64(x);               /* 0 for 0, like Go */
+Int set = bits_ones_count64(x);          /* how many bits are 1 */
+uint64_t lo, hi = bits_mul64(x, y, &lo); /* the full 128 bit product */
+```
+
+The functions that return two results in Go, `Add`, `Sub`, `Mul` and `Div`, return the first one and write the second through a pointer, which can be `NULL` when you only want the first. `bits_div64` panics with Go's messages, `integer divide by zero` for a zero divisor and `integer overflow` when the quotient would not fit.
+
+Everything in the header is a `static inline` over the compiler's builtin where there is one, so `bits_len64` is a `clz` and `bits_mul64` is one widening multiply. Where there is no builtin the header falls back to Go's own portable code, and the tests run a second time against that fallback so that it is not left untested until someone brings an unusual compiler.
+
 ## What it costs
 
 Nothing, on the arithmetic, and a compare on the rest.
@@ -146,4 +161,5 @@ Every function in the header is a `static inline`, and the wrapping is free beca
 
 - [zero values and multiple results](conventions.md), the two rules that shape every signature in the library
 - `include/burrow/num.h`, which carries the reasoning next to the code
+- `include/burrow/math/bits.h`, and `tests/bits_test.c`, which is Go's `bits_test.go` ported line for line
 - `tests/num_test.c`, where every answer came from running a Go program on two architectures rather than from reading the C standard

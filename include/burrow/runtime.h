@@ -139,7 +139,7 @@ BURROW_NORETURN void runtime_panic(Str msg);
 
 /* The specific ones. Each says exactly what Go says, because the text is what
  * people search for when they hit it, and because Go's tests compare it. All
- * four panic, so all four can be caught with BURROW_TRY, and an uncaught one
+ * of them panic, so all of them can be caught with BURROW_TRY, and an uncaught one
  * prints
  *
  *     panic: runtime error: index out of range [5] with length 3
@@ -165,6 +165,13 @@ BURROW_NORETURN void runtime_integer_divide_by_zero(void);
  * bug in the caller rather than a shift the other way. The message does not
  * carry the number, because Go's does not either. */
 BURROW_NORETURN void runtime_negative_shift(void);
+
+/* runtime error: integer overflow
+ *
+ * What Go's math/bits panics with when a double width division has a quotient
+ * too big for one word. Go's compiler never raises it for ordinary arithmetic,
+ * which wraps. */
+BURROW_NORETURN void runtime_integer_overflow(void);
 
 /* Where the message goes on the way out.
  *

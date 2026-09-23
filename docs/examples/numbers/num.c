@@ -59,6 +59,16 @@ static void generic(Int subtotal, Int tax, uint32_t hash) {
     printf("%lld %" PRIu32 "\n", (long long)total, h);
 }
 
+static void bit_twiddling(uint64_t x, uint64_t y) {
+    // doc: bits
+    Int width = bits_len64(x);               /* 0 for 0, like Go */
+    Int set = bits_ones_count64(x);          /* how many bits are 1 */
+    uint64_t lo, hi = bits_mul64(x, y, &lo); /* the full 128 bit product */
+    // doc: end
+    printf("len %lld, ones %lld, product %016" PRIx64 "%016" PRIx64 "\n",
+           (long long)width, (long long)set, hi, lo);
+}
+
 int main(void) {
     operators();
     wrapping(40, 2);
@@ -68,6 +78,7 @@ int main(void) {
     from_float(1e300);
     from_float(-2.9);
     generic(40, 2, 1);
+    bit_twiddling(0xff00, UINT64_MAX);
     return 0;
 }
 
@@ -81,4 +92,5 @@ INT64_MAX + 1 is -9223372036854775808
 1e+300 becomes 9223372036854775807
 -2.9 becomes -2
 42 32
+len 16, ones 8, product 000000000000feffffffffffffff0100
 */

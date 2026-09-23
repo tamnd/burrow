@@ -9,3 +9,4 @@ unicode/utf8
 sync
 context
 errors
+math/bits

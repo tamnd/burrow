@@ -48,6 +48,7 @@
 #include "burrow/iface.h"
 #include "burrow/io.h"
 #include "burrow/map.h"
+#include "burrow/math/bits.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/fixed.h"

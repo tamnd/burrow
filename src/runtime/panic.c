@@ -260,6 +260,11 @@ void runtime_negative_shift(void) {
                   (Uintptr)BURROW_RETURN_ADDRESS);
 }
 
+void runtime_integer_overflow(void) {
+    panic_message(BURROW_S("runtime error: integer overflow"),
+                  (Uintptr)BURROW_RETURN_ADDRESS);
+}
+
 /* ------------------------------------------------------------------ panic */
 
 /* The state for a thread that is not running a goroutine, which is the same

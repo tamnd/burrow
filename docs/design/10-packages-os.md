@@ -210,6 +210,7 @@ port gets wrong:
   child sees, and on Windows the environment is UTF-16 and case-insensitive.
   `burrow` maintains its own environment copy (as Go does) with a mutex,
   syncing to the platform on `Setenv`.
+  That is the Unix half. On Windows Go keeps no copy and calls the system every time, and so does `burrow`. → [20](20-windows.md) §12
 - **Atomicity and error mapping.** `os.ErrNotExist`, `ErrExist`,
   `ErrPermission`, `ErrClosed`, `ErrDeadlineExceeded` and
   `errors.Is(err, fs.ErrNotExist)` working across the whole library depend on a
@@ -287,6 +288,8 @@ platform-aware and Windows is where all the complexity lives:
 All Windows path handling lives in the PAL plus one `filepath_windows.c`, and
 the security-relevant functions get their own fuzz target seeded with the
 corpora from Go's path CVEs.
+
+The rules themselves, taken from Go's Windows sources, are in [20](20-windows.md).
 
 ## 8. Processes, signals, users, embed
 

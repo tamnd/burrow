@@ -277,6 +277,7 @@ something meant to be embedded everywhere. → [18](18-legal.md)
 | [17-open-questions.md](17-open-questions.md) | What is genuinely undecided |
 | [18-legal.md](18-legal.md) | Derivative-work obligations, patents, trademark |
 | [19-docs.md](19-docs.md) | `docs/` as a deliverable: reference, guides, compiled examples |
+| [20-windows.md](20-windows.md) | Windows paths, files, modes, links and errors, as Go does them |
 
 ## The one-paragraph version
 

@@ -99,7 +99,7 @@ Go promises that the zero value of a type is a working value, and C gives you th
 
 Go returns two things where C returns one, so the extra results move to the end of the parameter list in Go's order, `error` goes last, and any of them can be `NULL` if you do not want it.
 
-<!-- not compiled: uses strconv, which comes in a later milestone -->
+<!-- example: docs/examples/readme/tour.c#results -->
 ```c
 Int n = strconv_atoi(s, &err);
 Int m = strconv_atoi(s, NULL);   /* do not care why it failed */
@@ -139,6 +139,19 @@ for (StrIter it = str_runes(s); str_next_rune(&it, &i, &r);)
 That behaviour is the part worth knowing. Nothing in the package fails. A bad sequence decodes as U+FFFD with a width of one byte, so a loop over a corrupt file prints mojibake and terminates instead of hanging, and it never skips a byte that might have started something valid. Overlong encodings and surrogate halves are rejected, which matters more than it sounds: a slash written the long way is not a slash here, and a filter that only looked for the short one is a filter somebody would have walked straight past.
 
 For ASCII work, index the bytes and skip all of this. A newline is a newline at the byte level in UTF-8 and no multi byte sequence can contain one, which is why Go's own `strings.IndexByte` is a byte loop and so is ours. Details: [docs/guides/runes.md](docs/guides/runes.md).
+
+## Numbers as text
+
+`strconv` is Go's, all of it, with the same answers. Floats print as the shortest text that reads back to the same bits, parsing is correctly rounded, and quoting escapes exactly what Go escapes.
+
+<!-- example: docs/examples/readme/tour.c#strconv -->
+```c
+Str pi = strconv_format_float(a, 3.141592653589793, 'g', -1, 64);
+double back = strconv_parse_float(pi, 64, NULL);
+Str quoted = strconv_quote(a, S("tab\there, \xff"));
+```
+
+A differential fuzzer runs the whole package against Go's own on the same input, and the benchmarks put parsing a little ahead of Go and formatting level with it. Details: [docs/guides/strconv.md](docs/guides/strconv.md).
 
 ## Types
 

@@ -156,6 +156,12 @@ static Str itoa_own(Alloc *a, const Byte *p, Int n) {
 static Slice itoa_append(Alloc *a, Slice dst, const Byte *p, Int n) {
     if (dst.elem == NULL)
         dst = slice_nil(TYPE_BYTE);
+    /* The usual case, with room to spare, without the call. */
+    if (n <= dst.cap - dst.len) {
+        memcpy((Byte *)dst.p + dst.len, p, (size_t)n);
+        dst.len += n;
+        return dst;
+    }
     return slice_append(a, dst, p, n);
 }
 
@@ -175,13 +181,28 @@ Str strconv_itoa(Alloc *a, Int i) {
     return strconv_format_int(a, (int64_t)i, 10);
 }
 
+/* 0 to 99 in base 10 straight from the table, which is Go's fast path too. */
+static bool itoa_small(uint64_t u, Int base) {
+    return u < 100 && base == 10;
+}
+
+static Slice itoa_append_small(Alloc *a, Slice dst, uint64_t u) {
+    if (u < 10)
+        return itoa_append(a, dst, (const Byte *)itoa_smalls + u * 2 + 1, 1);
+    return itoa_append(a, dst, (const Byte *)itoa_smalls + u * 2, 2);
+}
+
 Slice strconv_append_int(Alloc *a, Slice dst, int64_t i, Int base) {
+    if (i >= 0 && itoa_small((uint64_t)i, base))
+        return itoa_append_small(a, dst, (uint64_t)i);
     Byte buf[ITOA_BUF];
     Int at = itoa_format_bits(buf, (uint64_t)i, base, i < 0);
     return itoa_append(a, dst, buf + at, ITOA_BUF - at);
 }
 
 Slice strconv_append_uint(Alloc *a, Slice dst, uint64_t i, Int base) {
+    if (itoa_small(i, base))
+        return itoa_append_small(a, dst, i);
     Byte buf[ITOA_BUF];
     Int at = itoa_format_bits(buf, i, base, false);
     return itoa_append(a, dst, buf + at, ITOA_BUF - at);

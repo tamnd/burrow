@@ -24,6 +24,30 @@ static void numbers(void) {
            (long long)i);
 }
 
+static void results(void) {
+    Str s = S("12a");
+    Error err = BURROW_NO_ERROR;
+
+    // clang-format off
+    // doc: results
+    Int n = strconv_atoi(s, &err);
+    Int m = strconv_atoi(s, NULL);   /* do not care why it failed */
+    // doc: end
+    // clang-format on
+    printf("%lld %lld " STR_FMT "\n", (long long)n, (long long)m,
+           STR_ARG(error_text(err)));
+}
+
+static void text(Alloc *a) {
+    // doc: strconv
+    Str pi = strconv_format_float(a, 3.141592653589793, 'g', -1, 64);
+    double back = strconv_parse_float(pi, 64, NULL);
+    Str quoted = strconv_quote(a, S("tab\there, \xff"));
+    // doc: end
+    printf(STR_FMT " %d " STR_FMT "\n", STR_ARG(pi), back == 3.141592653589793,
+           STR_ARG(quoted));
+}
+
 static void strings(void) {
     char **argv = args;
 
@@ -340,8 +364,10 @@ static void run(void *env) {
     Alloc *a = arena_allocator(&ar);
 
     numbers();
+    results();
     strings();
     runes();
+    text(a);
     types();
     slices(a);
     interfaces(a);
@@ -364,11 +390,13 @@ int main(int argc, char **argv) {
 
 /* Output:
 -9223372036854775806 3074457345618258602 0 9223372036854775807
+0 0 strconv.Atoi: parsing "12a": invalid syntax
 burrow
 no argument is 0 bytes
 0: 68
 1: e9
 3: 21
+3.141592653589793 1 "tab\there, \xff"
 8 bytes
 same bytes
 xs[0] is 42

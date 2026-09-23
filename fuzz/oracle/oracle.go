@@ -43,4 +43,9 @@ func oracle_utf8(data *C.uchar, n C.size_t, outlen *C.size_t) *C.char {
 	return report(utf8Report(input(data, n)), outlen)
 }
 
+//export oracle_strconv
+func oracle_strconv(data *C.uchar, n C.size_t, outlen *C.size_t) *C.char {
+	return report(strconvReport(input(data, n)), outlen)
+}
+
 func main() {}

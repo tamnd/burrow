@@ -1282,11 +1282,14 @@ Complex128 strconv_parse_complex(Str s, Int bit_size, Error *err) {
 
 /* -------------------------------------------------------------- formatting */
 
-/* Where output goes. p NULL means count only. first is the first byte, which
- * FormatComplex needs to know before it writes anything. */
+/* Where output goes. Bytes are written while they fit in cap and counted
+ * either way, so a run with cap 0 only measures, and a run into a buffer on the
+ * stack that turns out too small still says how much room it needed. first is
+ * the first byte, which FormatComplex needs to know before it writes anything. */
 typedef struct FloatOut {
     Byte *p;
     int64_t n;
+    int64_t cap;
     Byte first;
 } FloatOut;
 
@@ -1295,23 +1298,27 @@ static void fo_bytes(FloatOut *o, const void *b, int64_t k) {
         return;
     if (o->n == 0)
         o->first = *(const Byte *)b;
-    if (o->p != NULL)
+    if (k <= o->cap - o->n)
         memcpy(o->p + o->n, b, (size_t)k);
     o->n += k;
 }
 
 static void fo_byte(FloatOut *o, Byte c) {
-    fo_bytes(o, &c, 1);
+    if (o->n == 0)
+        o->first = c;
+    if (o->n < o->cap)
+        o->p[o->n] = c;
+    o->n++;
 }
 
-/* k copies of c, and in the counting run only an addition, so that a huge
- * precision costs nothing to measure. */
+/* k copies of c, and past the end of the buffer only an addition, so that a
+ * huge precision costs nothing to measure. */
 static void fo_fill(FloatOut *o, Byte c, int64_t k) {
     if (k <= 0)
         return;
     if (o->n == 0)
         o->first = c;
-    if (o->p != NULL)
+    if (k <= o->cap - o->n)
         memset(o->p + o->n, c, (size_t)k);
     o->n += k;
 }
@@ -1731,21 +1738,37 @@ static bool float_job(FloatJob *j, double f, Byte fmt, int64_t prec, Int bit_siz
     return true;
 }
 
+/* Most results fit in this, so they are written once, here, and copied to
+ * where they belong. A longer one is written a second time straight into its
+ * own memory. */
+#define FLOAT_STACK 256
+
+/* The bytes of a run into tmp, copied to p, or written again into p when they
+ * did not fit. */
+static void float_finish(Byte *p, const Byte *tmp, const FloatOut *o, const FloatJob *j) {
+    if (o->n <= FLOAT_STACK) {
+        memcpy(p, tmp, (size_t)o->n);
+        return;
+    }
+    FloatOut w = {p, 0, o->n, 0};
+    emit_float(&w, j);
+}
+
 Str strconv_format_float(Alloc *a, double f, Byte fmt, Int prec, Int bit_size) {
     FloatJob j;
     if (!float_job(&j, f, fmt, prec, bit_size, "strconv: illegal FormatFloat bitSize"))
         return BURROW_STR_EMPTY;
 
-    FloatOut count = {NULL, 0, 0};
-    emit_float(&count, &j);
-    if (count.n > BURROW_INT_MAX)
+    Byte tmp[FLOAT_STACK];
+    FloatOut o = {tmp, 0, FLOAT_STACK, 0};
+    emit_float(&o, &j);
+    if (o.n > BURROW_INT_MAX)
         return BURROW_STR_EMPTY;
 
-    Byte *p = (Byte *)mem_alloc_nozero(a, (size_t)count.n, 1);
+    Byte *p = (Byte *)mem_alloc_nozero(a, (size_t)o.n, 1);
     if (p == NULL)
         return BURROW_STR_EMPTY;
-    FloatOut o = {p, 0, 0};
-    emit_float(&o, &j);
+    float_finish(p, tmp, &o, &j);
     return str_from_bytes(p, (Int)o.n);
 }
 
@@ -1769,13 +1792,30 @@ Slice strconv_append_float(Alloc *a, Slice dst, double f, Byte fmt, Int prec, In
     if (!float_job(&j, f, fmt, prec, bit_size, "strconv: illegal AppendFloat bitSize"))
         return slice_nil(TYPE_BYTE);
 
-    FloatOut count = {NULL, 0, 0};
-    emit_float(&count, &j);
-    Byte *p = float_grow(a, &dst, count.n);
-    if (p == NULL)
+    /* Straight into the room dst already has when there is enough for a
+     * typical number, and into the stack otherwise. */
+    Int spare = dst.elem == NULL ? 0 : dst.cap - dst.len;
+    if (spare >= 32) {
+        FloatOut o = {(Byte *)dst.p + dst.len, 0, spare, 0};
+        emit_float(&o, &j);
+        if (o.n <= spare) {
+            dst.len += (Int)o.n;
+            return dst;
+        }
+        Byte *p = float_grow(a, &dst, o.n);
+        if (p != NULL) {
+            FloatOut w = {p, 0, o.n, 0};
+            emit_float(&w, &j);
+        }
         return dst;
-    FloatOut o = {p, 0, 0};
+    }
+
+    Byte tmp[FLOAT_STACK];
+    FloatOut o = {tmp, 0, FLOAT_STACK, 0};
     emit_float(&o, &j);
+    Byte *p = float_grow(a, &dst, o.n);
+    if (p != NULL)
+        float_finish(p, tmp, &o, &j);
     return dst;
 }
 
@@ -1799,19 +1839,24 @@ Str strconv_format_complex(Alloc *a, Complex128 c, Byte fmt, Int prec, Int bit_s
         !float_job(&im, c.im, fmt, prec, bit_size, "strconv: illegal AppendFloat bitSize"))
         return BURROW_STR_EMPTY;
 
-    FloatOut first = {NULL, 0, 0};
+    FloatOut first = {NULL, 0, 0, 0};
     emit_float(&first, &im);
     bool im_signed = first.first == '+' || first.first == '-';
 
-    FloatOut count = {NULL, 0, 0};
-    emit_complex(&count, &re, &im, im_signed);
-    if (count.n > BURROW_INT_MAX)
+    Byte tmp[FLOAT_STACK];
+    FloatOut o = {tmp, 0, FLOAT_STACK, 0};
+    emit_complex(&o, &re, &im, im_signed);
+    if (o.n > BURROW_INT_MAX)
         return BURROW_STR_EMPTY;
 
-    Byte *p = (Byte *)mem_alloc_nozero(a, (size_t)count.n, 1);
+    Byte *p = (Byte *)mem_alloc_nozero(a, (size_t)o.n, 1);
     if (p == NULL)
         return BURROW_STR_EMPTY;
-    FloatOut o = {p, 0, 0};
-    emit_complex(&o, &re, &im, im_signed);
+    if (o.n <= FLOAT_STACK) {
+        memcpy(p, tmp, (size_t)o.n);
+    } else {
+        FloatOut w = {p, 0, o.n, 0};
+        emit_complex(&w, &re, &im, im_signed);
+    }
     return str_from_bytes(p, (Int)o.n);
 }

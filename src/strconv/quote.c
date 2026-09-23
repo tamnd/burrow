@@ -18,36 +18,47 @@
 #include <string.h>
 
 /* The port follows Go function by function. What changes is where the bytes go.
- * Go appends to a []byte and lets the collector sort out the size. Here every
- * quote and unquote runs twice, first counting and then writing, so that a Str
- * result is exactly as long as its allocation and can be handed back to a heap
- * allocator with its own length. The two runs are the same code with a writer
- * that either stores or only counts, so they cannot disagree. */
+ * Go appends to a []byte and lets the collector sort out the size. Here a Str
+ * result is exactly as long as its allocation, so that it can be handed back to
+ * a heap allocator with its own length. Each quote and unquote writes into a
+ * buffer on the stack while the bytes fit and counts them either way. A result
+ * that fit is copied out, and a longer one is written a second time straight
+ * into memory of the size the first run measured. Both runs are the same code,
+ * so they cannot disagree. */
 
 BURROW_SENTINEL_ERROR(strconv_err_range, "value out of range");
 BURROW_SENTINEL_ERROR(strconv_err_syntax, "invalid syntax");
 
 static const char lowerhex[] = "0123456789abcdef";
 
-/* Where output goes. p NULL means count only. */
+/* Where output goes. Bytes are stored while they fit in cap and counted either
+ * way, so cap 0 only counts. */
 typedef struct QuoteOut {
     Byte *p;
     Int n;
+    Int cap;
 } QuoteOut;
 
+/* The size of the buffer on the stack, which holds most results whole. */
+#define QUOTE_STACK 256
+
 static void put(QuoteOut *o, const void *b, Int k) {
-    if (o->p != NULL)
+    if (k > 0 && k <= o->cap - o->n)
         memcpy(o->p + o->n, b, (size_t)k);
     o->n += k;
 }
 
 static void put_byte(QuoteOut *o, Byte b) {
-    if (o->p != NULL)
+    if (o->n < o->cap)
         o->p[o->n] = b;
     o->n++;
 }
 
 static void put_rune(QuoteOut *o, Rune r) {
+    if (r >= 0 && r < UTF8_RUNE_SELF) {
+        put_byte(o, (Byte)r);
+        return;
+    }
     Byte buf[UTF8_UTF_MAX];
     Int k = utf8_encode_rune(
         slice_from(buf, (Int)sizeof buf, (Int)sizeof buf, TYPE_BYTE), r);
@@ -177,38 +188,58 @@ static void run(QuoteOut *o, const QuoteJob *j) {
 }
 
 static Str quote_str(Alloc *a, QuoteJob j) {
-    QuoteOut count = {NULL, 0};
-    run(&count, &j);
+    Byte tmp[QUOTE_STACK];
+    QuoteOut o = {tmp, 0, QUOTE_STACK};
+    run(&o, &j);
 
     /* Never empty, since the quotes are always there. */
-    Byte *p = (Byte *)mem_alloc_nozero(a, (size_t)count.n, 1);
+    Byte *p = (Byte *)mem_alloc_nozero(a, (size_t)o.n, 1);
     if (p == NULL)
         return BURROW_STR_EMPTY;
 
-    QuoteOut o = {p, 0};
-    run(&o, &j);
+    if (o.n <= QUOTE_STACK) {
+        memcpy(p, tmp, (size_t)o.n);
+    } else {
+        QuoteOut w = {p, 0, o.n};
+        run(&w, &j);
+    }
     return str_from_bytes(p, o.n);
 }
 
 static Slice quote_append(Alloc *a, Slice dst, QuoteJob j) {
-    QuoteOut count = {NULL, 0};
-    run(&count, &j);
-
     /* A zero Slice has no element type, and appending to it would do nothing.
      * Go's nil []byte is what the caller meant. */
     if (dst.elem == NULL)
         dst = slice_nil(TYPE_BYTE);
 
-    /* Grow by the whole length in one append and then write into the space.
-     * slice_append with no elements to copy leaves the new bytes for us to
-     * fill, which the writing run does, every one of them. */
+    /* Straight into the room dst already has when the quotes and the text
+     * alone would fit there, which they usually do, and into the stack when
+     * they would not. Go writes into that room too, before it knows whether
+     * the escapes will overflow it. */
+    Int spare = dst.cap - dst.len;
+    Int least = j.is_rune ? 3 : j.s.len + 2;
+    Byte tmp[QUOTE_STACK];
+    Byte *room = (Byte *)dst.p + dst.len;
+    bool in_place = spare >= least;
+    QuoteOut o = {in_place ? room : tmp, 0, in_place ? spare : QUOTE_STACK};
+    run(&o, &j);
+
+    if (o.n <= o.cap) {
+        if (!in_place)
+            return slice_append(a, dst, tmp, o.n);
+        Slice out = {dst.p, dst.len + o.n, dst.cap, dst.elem};
+        return out;
+    }
+
+    /* Too long for either. Grow by the whole length in one append and write
+     * into the space, which slice_append with no elements leaves for us. */
     Int old = dst.len;
-    Slice out = slice_append(a, dst, NULL, count.n);
+    Slice out = slice_append(a, dst, NULL, o.n);
     if (out.p == NULL)
         return out;
 
-    QuoteOut o = {(Byte *)out.p + old, 0};
-    run(&o, &j);
+    QuoteOut w = {(Byte *)out.p + old, 0, o.n};
+    run(&w, &j);
     return out;
 }
 
@@ -224,7 +255,8 @@ static QuoteJob rune_job(Rune r, bool ascii_only, bool graphic_only) {
 
 Int burrow__strconv_quote_into(Byte *dst, Str s) {
     QuoteJob j = str_job(s, false, false);
-    QuoteOut o = {dst, 0};
+    /* NULL only counts. */
+    QuoteOut o = {dst, 0, dst == NULL ? 0 : BURROW_INT_MAX};
     run(&o, &j);
     return o.n;
 }
@@ -483,8 +515,9 @@ static bool unescape(Str in, Byte quote, QuoteOut *o, Int *end) {
 }
 
 /* Finds the literal at the start of in, how far it runs and how long its value
- * is, without writing anything. */
-static LiteralKind scan(Str in, Int *end, Int *n) {
+ * is. The value of an escaped literal goes to o as far as it fits, and nothing
+ * is written for the other kinds. */
+static LiteralKind scan(Str in, Int *end, Int *n, QuoteOut *o) {
     if (in.len < 2)
         return LITERAL_BAD;
 
@@ -529,12 +562,9 @@ static LiteralKind scan(Str in, Int *end, Int *n) {
                 return LITERAL_PLAIN;
             }
         }
-        {
-            QuoteOut count = {NULL, 0};
-            if (!unescape(in, quote, &count, end))
-                return LITERAL_BAD;
-            *n = count.n;
-        }
+        if (!unescape(in, quote, o, end))
+            return LITERAL_BAD;
+        *n = o->n;
         return LITERAL_ESCAPED;
 
     default:
@@ -544,8 +574,9 @@ static LiteralKind scan(Str in, Int *end, Int *n) {
 
 Str strconv_quoted_prefix(Str s, Error *err) {
     Int end = 0, n = 0;
+    QuoteOut count = {NULL, 0, 0};
 
-    if (scan(s, &end, &n) == LITERAL_BAD) {
+    if (scan(s, &end, &n, &count) == LITERAL_BAD) {
         BURROW_OUT(err, strconv_err_syntax);
         return BURROW_STR_EMPTY;
     }
@@ -555,7 +586,9 @@ Str strconv_quoted_prefix(Str s, Error *err) {
 
 Str strconv_unquote(Alloc *a, Str s, Error *err) {
     Int end = 0, n = 0;
-    LiteralKind kind = scan(s, &end, &n);
+    Byte tmp[QUOTE_STACK];
+    QuoteOut first = {tmp, 0, QUOTE_STACK};
+    LiteralKind kind = scan(s, &end, &n, &first);
 
     if (kind == LITERAL_BAD || end != s.len) {
         BURROW_OUT(err, strconv_err_syntax);
@@ -574,11 +607,14 @@ Str strconv_unquote(Alloc *a, Str s, Error *err) {
         return BURROW_STR_EMPTY;
     }
 
-    QuoteOut o = {p, 0};
+    QuoteOut o = {p, 0, n};
     if (kind == LITERAL_RAW_CR) {
         for (Int i = 1; i < s.len - 1; i++)
             if (s.p[i] != '\r')
                 put_byte(&o, s.p[i]);
+    } else if (n <= QUOTE_STACK) {
+        memcpy(p, tmp, (size_t)n);
+        o.n = n;
     } else {
         (void)unescape(s, s.p[0], &o, &end);
     }

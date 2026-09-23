@@ -868,7 +868,9 @@ bool strconv_is_print(Rune r) {
 /* The graphic runes IsPrint turns down. Only worth asking once IsPrint has said
  * no, which is how quoting uses it. They all fit in 16 bits. */
 static bool in_graphic_list(Rune r) {
-    if (r < 0 || r > 0xFFFF)
+    /* Go only turns away runes above 0xFFFF, so a negative one is looked up by
+     * its low 16 bits, and -53248 is graphic because 0x3000 is. */
+    if (r > 0xFFFF)
         return false;
     bool found = false;
     (void)search16(is_graphic, COUNT(is_graphic), (uint16_t)r, &found);

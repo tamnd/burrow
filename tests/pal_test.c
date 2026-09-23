@@ -273,9 +273,11 @@ TEST(a_large_reservation_costs_address_space_and_not_memory) {
     /* A gigabyte, reserved and never committed. This is what a goroutine stack
      * does, and on a machine where reserving meant committing it would either
      * fail or make the process a gigabyte bigger. Ten of them in a row makes
-     * the point without depending on how the machine reports its own size. */
+     * the point without depending on how the machine reports its own size. A
+     * 32 bit process has 4 gigabytes of address space in all, so there it is
+     * ten slices of 128 megabytes instead. */
     void *held[10];
-    int64_t bytes = 1024 * 1024 * 1024;
+    int64_t bytes = sizeof(void *) >= 8 ? 1024 * 1024 * 1024 : 128 * 1024 * 1024;
     bytes -= bytes % page;
 
     for (int i = 0; i < 10; i++) {

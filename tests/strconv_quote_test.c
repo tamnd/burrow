@@ -62,6 +62,8 @@ TEST(is_print_outside_the_range) {
     CHECK(!strconv_is_print(0x110000));
     CHECK(!strconv_is_graphic(-1));
     CHECK(!strconv_is_graphic(0x7fffffff));
+    /* Go looks a negative rune up by its low 16 bits, and 0x3000 is graphic. */
+    CHECK(strconv_is_graphic(-53248));
 }
 
 typedef struct QuoteTest {
@@ -209,6 +211,43 @@ TEST(results_own_exactly_their_length) {
     CHECK(str_eq(q, S("ab")));
     mem_free(t, (void *)(Uintptr)q.p, (size_t)q.len, 1);
 
+    CHECK(track_check(&tr) == 0);
+    track_free(&tr);
+}
+
+TEST(results_longer_than_the_stack_buffer) {
+    /* 200 copies of a tab, a smiley and a stray byte quote to 1802 bytes, far
+     * past what fits on the stack, so the writing is done a second time into
+     * the result. Unquoting it is long too, and has to give back the input. */
+    Track tr;
+    track_init(&tr, heap_allocator());
+    Alloc *t = track_allocator(&tr);
+
+    Byte in[200 * 5];
+    for (int i = 0; i < 200; i++)
+        memcpy(in + i * 5, "\t\xe2\x98\xba\xff", 5);
+    Str s = str_from_bytes(in, (Int)sizeof in);
+
+    Str q = strconv_quote(t, s);
+    CHECK(q.len == 2 + 200 * 9);
+    CHECK(q.p[0] == '"' && q.p[q.len - 1] == '"');
+    CHECK(memcmp(q.p + 1, "\\t\xe2\x98\xba\\xff\\t", 11) == 0);
+
+    Slice buf = slice_make(t, TYPE_BYTE, 1, 4);
+    ((Byte *)buf.p)[0] = '>';
+    Slice ap = strconv_append_quote(t, buf, s);
+    CHECK(ap.len == 1 + q.len && ((Byte *)ap.p)[0] == '>');
+    CHECK(memcmp((Byte *)ap.p + 1, q.p, (size_t)q.len) == 0);
+
+    Error err;
+    Str u = strconv_unquote(t, q, &err);
+    CHECK(BURROW_OK(err));
+    CHECK(str_eq(u, s));
+
+    mem_free(t, (void *)(Uintptr)u.p, (size_t)u.len, 1);
+    mem_free(t, ap.p, (size_t)ap.cap, 1);
+    mem_free(t, buf.p, (size_t)buf.cap, 1);
+    mem_free(t, (void *)(Uintptr)q.p, (size_t)q.len, 1);
     CHECK(track_check(&tr) == 0);
     track_free(&tr);
 }
@@ -447,6 +486,7 @@ int main(void) {
     RUN(quote_rune_to_graphic);
     RUN(append_to_nothing_and_in_place);
     RUN(results_own_exactly_their_length);
+    RUN(results_longer_than_the_stack_buffer);
     RUN(can_backquote);
     RUN(unquote);
     RUN(unquote_invalid_utf8);

@@ -32,6 +32,12 @@ extern "C" {
  * want numbers. */
 BURROW_STATIC(ret) Alloc *heap_allocator(void);
 
+/* For testing's allocs/op and B/op. Counting is off until a benchmark run turns
+ * it on, and the counts only ever go up, so a benchmark reads them before and
+ * after and subtracts. A realloc that grows counts as one allocation. */
+void burrow__heap_count(bool on);
+void burrow__heap_counts(uint64_t *allocs, uint64_t *bytes);
+
 #ifdef __cplusplus
 }
 #endif

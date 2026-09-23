@@ -1,4 +1,4 @@
-/* The test runner: Go's src/testing/testing.go, less benchmarks and fuzzing.
+/* The test runner: Go's src/testing/testing.go and benchmark.go, less fuzzing.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -18,6 +18,7 @@
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
 #include "burrow/note.h"
+#include "burrow/pal.h"
 #include "burrow/panic.h"
 #include "burrow/proc.h"
 #include "burrow/sched.h"
@@ -498,6 +499,7 @@ struct TestingT {
     Chan *barrier; /* NULL in bare mode, which is what makes Parallel do nothing */
     Chan *signal;
     bool signal_value;
+    bool bench; /* the common part of a TestingB */
 
     /* Who is running the test function, so that FailNow can tell whether it
      * was called there, and what it panicked with. */
@@ -554,6 +556,17 @@ typedef struct Package {
      * runner it passes on the way treats it as somebody else's. */
     bool repanicking;
     Any repanic;
+
+    /* Go's benchmarkLock, and who is inside runN, which is the benchmark's
+     * answer to FailNow's question. A stack, because B.Run lets go of the lock
+     * while the parent's runN is still under way. */
+    SyncMutex bench_mu;
+    uintptr_t *bench_keys;
+    Int nbench_keys;
+    Int cbench_keys;
+    bool labels_done;
+    int bench_procs;   /* the -test.cpu value the benchmark is named for */
+    int heap_counting; /* how many benchmark runs want the heap counted */
 } Package;
 
 static Package pkg;
@@ -953,6 +966,8 @@ static bool on_runner(void) {
     sync_mutex_lock(&pkg.reg_mu);
     for (Int i = 0; i < pkg.nall && !found; i++)
         found = pkg.all[i]->in_runner && pkg.all[i]->runner_key == key;
+    for (Int i = 0; i < pkg.nbench_keys && !found; i++)
+        found = pkg.bench_keys[i] == key;
     sync_mutex_unlock(&pkg.reg_mu);
     return found;
 }
@@ -1123,7 +1138,12 @@ static void write_line(TestingT *c, Str b, bool err_begin, bool err_end) {
     if (err_end && json)
         buf_str(&line, BURROW_S("\x0e"));
     buf_str(&line, tail);
-    chatty_printf(c->chatty, c->name, buf_view(&line));
+    /* Benchmarks print no === CONT lines, so they skip the printer and go
+     * straight to stdout. */
+    if (c->bench)
+        write_to(stdout, buf_view(&line));
+    else
+        chatty_printf(c->chatty, c->name, buf_view(&line));
     buf_free(&line);
 }
 
@@ -1588,7 +1608,8 @@ static TestingT *t_new(TestingT *parent, Str name, TestState *s, Chatty *chatty)
     return t;
 }
 
-static void t_free(TestingT *t) {
+/* Everything a T holds, less the T itself, which a B has inside it. */
+static void t_release(TestingT *t) {
     context_release(t->ctx);
     if (t->barrier != NULL)
         chan_free(t->barrier);
@@ -1603,6 +1624,10 @@ static void t_free(TestingT *t) {
         mem_free(heap_allocator(), t->cleanups, (size_t)t->ccleanups * sizeof(Func),
                  _Alignof(Func));
     str_release(t->name);
+}
+
+static void t_free(TestingT *t) {
+    t_release(t);
     mem_free(heap_allocator(), t, sizeof(TestingT), _Alignof(TestingT));
 }
 
@@ -2235,6 +2260,1106 @@ bool testing_run_tests(TestingMatchString match, Slice tests) {
     return ok;
 }
 
+/* ------------------------------------------------------------- benchmarks
+ *
+ * Go's src/testing/benchmark.go. A B is a T's common part with the timer and
+ * the counts beside it, and the T functions above work on it unchanged. What
+ * a B does differently is where it runs: runN on a goroutine of its own, or on
+ * the calling thread in bare mode, with the benchmark lock held while the
+ * function runs so that two benchmarks never overlap. */
+
+#define LOOP_POISON_TIMER ((uint64_t)1 << 63)
+#define LOOP_POISON_MASK (~(((uint64_t)1 << 62) - 1))
+#define MAX_BENCH_PREDICT_ITERS 1000000000
+
+typedef struct BenchTime {
+    int64_t d;
+    int64_t n;
+} BenchTime;
+
+typedef struct BenchState {
+    burrow__TestingMatcher *match;
+    int max_len; /* the longest name, for the padding */
+    int ext_len; /* the longest -N suffix */
+} BenchState;
+
+struct TestingB {
+    burrow__TestingBHead head; /* first, where testing_b_loop looks for it */
+    TestingT common;
+    BenchState *bstate;
+    int64_t previous_n;
+    int64_t previous_duration;
+    TestingBFunc bench_func;
+    BenchTime bench_time;
+    int64_t bytes;
+    bool missing_bytes;
+    bool timer_on;
+    bool show_alloc_result;
+    bool loop_done;
+    bool discard; /* testing_benchmark's, which prints nothing */
+    TestingBenchmarkResult result;
+    int parallelism;
+    uint64_t start_allocs;
+    uint64_t start_bytes;
+    uint64_t net_allocs;
+    uint64_t net_bytes;
+
+    /* Go's extra map, kept sorted by unit, with the units on the heap. */
+    TestingMetric *extra;
+    Int nextra;
+    Int cextra;
+
+    /* The sub-benchmarks this one started, which it frees with itself. */
+    TestingB **kids;
+    Int nkids;
+    Int ckids;
+};
+
+struct TestingPB {
+    uint64_t *global_n;
+    uint64_t grain;
+    uint64_t cache;
+    uint64_t bn;
+};
+
+TestingT *burrow__testing_b_t(TestingB *b) {
+    return &b->common;
+}
+
+static void bench_count_allocs(bool on) {
+    sync_mutex_lock(&pkg.reg_mu);
+    pkg.heap_counting += on ? 1 : -1;
+    burrow__heap_count(pkg.heap_counting > 0);
+    sync_mutex_unlock(&pkg.reg_mu);
+}
+
+/* -test.benchtime, which testing_benchmark reads too. Go's Benchmark sees
+ * whatever flag.Parse left there, and the nearest thing here is parsing the
+ * command line testing_init was given, if it was given one. */
+static BenchTime bench_time_flag(void) {
+    if (!pkg.init_ran)
+        return (BenchTime){TIME_SECOND, 0};
+    if (!pkg.parsed)
+        flags_parse();
+    return (BenchTime){pkg.flags[F_BENCHTIME].d, pkg.flags[F_BENCHTIME].n};
+}
+
+static const char *chatty_prefix(Chatty *c) {
+    return c != NULL && c->json ? "\x16" : "";
+}
+
+static void b_write(TestingB *b, Str s) {
+    if (!b->discard)
+        write_to(stdout, s);
+}
+
+static TestingB *b_new(TestingB *parent, Str name, Chatty *chatty, TestingBFunc f,
+                       BenchTime bt, BenchState *bs, bool bare, bool discard) {
+    TestingB *b =
+        (TestingB *)must_alloc(heap_allocator(), sizeof(TestingB), _Alignof(TestingB));
+    *b = (TestingB){0};
+    TestingT *c = &b->common;
+    c->name = name;
+    c->parent = parent != NULL ? &parent->common : NULL;
+    c->level = parent != NULL ? parent->common.level + 1 : 0;
+    c->chatty = chatty;
+    c->has_o = true;
+    c->bench = true;
+    c->ctx = context_with_cancel(heap_allocator(), context_background(), &c->cancel);
+    if (!bare)
+        c->signal = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    b->bench_func = f;
+    b->bench_time = bt;
+    b->bstate = bs;
+    b->discard = discard;
+    if (parent != NULL) {
+        if (parent->nkids == parent->ckids) {
+            Int ncap = parent->ckids == 0 ? 4 : parent->ckids * 2;
+            parent->kids = (TestingB **)must_realloc(
+                heap_allocator(), (void *)parent->kids,
+                (size_t)parent->ckids * sizeof(TestingB *),
+                (size_t)ncap * sizeof(TestingB *), _Alignof(TestingB *));
+            parent->ckids = ncap;
+        }
+        parent->kids[parent->nkids++] = b;
+    }
+    return b;
+}
+
+static void metrics_free(TestingMetric *m, Int n, Int cap) {
+    for (Int i = 0; i < n; i++)
+        str_release(m[i].unit);
+    if (m != NULL)
+        mem_free(heap_allocator(), m, (size_t)cap * sizeof(TestingMetric),
+                 _Alignof(TestingMetric));
+}
+
+static void b_free(TestingB *b) {
+    if (b == NULL)
+        return;
+    for (Int i = 0; i < b->nkids; i++)
+        b_free(b->kids[i]);
+    if (b->kids != NULL)
+        mem_free(heap_allocator(), (void *)b->kids,
+                 (size_t)b->ckids * sizeof(TestingB *), _Alignof(TestingB *));
+    metrics_free(b->extra, b->nextra, b->cextra);
+    testing_benchmark_result_free(&b->result);
+    t_release(&b->common);
+    mem_free(heap_allocator(), b, sizeof(TestingB), _Alignof(TestingB));
+}
+
+/* --------------------------------------------------------------- the timer */
+
+void testing_b_start_timer(TestingB *b) {
+    if (!b->timer_on) {
+        burrow__heap_counts(&b->start_allocs, &b->start_bytes);
+        b->common.start = burrow_nanotime();
+        b->timer_on = true;
+        b->head.loop_i &= ~LOOP_POISON_TIMER;
+    }
+}
+
+void testing_b_stop_timer(TestingB *b) {
+    if (b->timer_on) {
+        b->common.duration += burrow_nanotime() - b->common.start;
+        uint64_t allocs;
+        uint64_t bytes;
+        burrow__heap_counts(&allocs, &bytes);
+        b->net_allocs += allocs - b->start_allocs;
+        b->net_bytes += bytes - b->start_bytes;
+        b->timer_on = false;
+        b->head.loop_i |= LOOP_POISON_TIMER;
+    }
+}
+
+void testing_b_reset_timer(TestingB *b) {
+    for (Int i = 0; i < b->nextra; i++)
+        str_release(b->extra[i].unit);
+    b->nextra = 0;
+    if (b->timer_on) {
+        burrow__heap_counts(&b->start_allocs, &b->start_bytes);
+        b->common.start = burrow_nanotime();
+    }
+    b->common.duration = 0;
+    b->net_allocs = 0;
+    b->net_bytes = 0;
+}
+
+void testing_b_set_bytes(TestingB *b, int64_t n) {
+    b->bytes = n;
+}
+
+void testing_b_report_allocs(TestingB *b) {
+    b->show_alloc_result = true;
+}
+
+int64_t testing_b_elapsed(TestingB *b) {
+    int64_t d = b->common.duration;
+    if (b->timer_on)
+        d += burrow_nanotime() - b->common.start;
+    return d;
+}
+
+static Int metric_find(const TestingMetric *m, Int n, Str unit, bool *found) {
+    Int lo = 0;
+    Int hi = n;
+    while (lo < hi) {
+        Int mid = lo + (hi - lo) / 2;
+        int c = name_cmp(&m[mid].unit, &unit);
+        if (c == 0) {
+            *found = true;
+            return mid;
+        }
+        if (c < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    *found = false;
+    return lo;
+}
+
+void testing_b_report_metric(TestingB *b, double n, Str unit) {
+    if (unit.len == 0)
+        panic_str(BURROW_S("metric unit must not be empty"));
+    for (Int i = 0; i < unit.len;) {
+        Int size = 0;
+        Rune r =
+            utf8_decode_rune_in_string(str_from_bytes(unit.p + i, unit.len - i), &size);
+        if (is_space_rune(r))
+            panic_str(BURROW_S("metric unit must not contain whitespace"));
+        i += size;
+    }
+    bool found;
+    Int at = metric_find(b->extra, b->nextra, unit, &found);
+    if (found) {
+        b->extra[at].value = n;
+        return;
+    }
+    if (b->nextra == b->cextra) {
+        Int ncap = b->cextra == 0 ? 16 : b->cextra * 2;
+        b->extra = (TestingMetric *)must_realloc(
+            heap_allocator(), b->extra, (size_t)b->cextra * sizeof(TestingMetric),
+            (size_t)ncap * sizeof(TestingMetric), _Alignof(TestingMetric));
+        b->cextra = ncap;
+    }
+    memmove(b->extra + at + 1, b->extra + at,
+            (size_t)(b->nextra - at) * sizeof(TestingMetric));
+    b->extra[at] = (TestingMetric){str_clone(heap_allocator(), unit), n};
+    if (b->extra[at].unit.p == NULL)
+        panic_str(BURROW_S("testing: out of memory"));
+    b->nextra++;
+}
+
+/* The metrics as a result owns them: an array of exactly the right size. */
+static void metrics_take(TestingB *b, TestingBenchmarkResult *r) {
+    r->extra = NULL;
+    r->nextra = b->nextra;
+    if (b->nextra > 0) {
+        r->extra = (TestingMetric *)must_alloc(
+            heap_allocator(), (size_t)b->nextra * sizeof(TestingMetric),
+            _Alignof(TestingMetric));
+        memcpy(r->extra, b->extra, (size_t)b->nextra * sizeof(TestingMetric));
+    }
+    b->nextra = 0;
+}
+
+/* ------------------------------------------------------------------ runN */
+
+static void bench_key_push(void) {
+    uintptr_t key = current_key();
+    sync_mutex_lock(&pkg.reg_mu);
+    if (pkg.nbench_keys == pkg.cbench_keys) {
+        Int ncap = pkg.cbench_keys == 0 ? 8 : pkg.cbench_keys * 2;
+        pkg.bench_keys = (uintptr_t *)must_realloc(
+            heap_allocator(), pkg.bench_keys,
+            (size_t)pkg.cbench_keys * sizeof(uintptr_t),
+            (size_t)ncap * sizeof(uintptr_t), _Alignof(uintptr_t));
+        pkg.cbench_keys = ncap;
+    }
+    pkg.bench_keys[pkg.nbench_keys++] = key;
+    sync_mutex_unlock(&pkg.reg_mu);
+}
+
+static void bench_key_pop(void) {
+    uintptr_t key = current_key();
+    sync_mutex_lock(&pkg.reg_mu);
+    for (Int i = pkg.nbench_keys - 1; i >= 0; i--) {
+        if (pkg.bench_keys[i] == key) {
+            memmove(pkg.bench_keys + i, pkg.bench_keys + i + 1,
+                    (size_t)(pkg.nbench_keys - i - 1) * sizeof(uintptr_t));
+            pkg.nbench_keys--;
+            break;
+        }
+    }
+    if (pkg.nbench_keys == 0 && pkg.bench_keys != NULL) {
+        mem_free(heap_allocator(), pkg.bench_keys,
+                 (size_t)pkg.cbench_keys * sizeof(uintptr_t), _Alignof(uintptr_t));
+        pkg.bench_keys = NULL;
+        pkg.cbench_keys = 0;
+    }
+    sync_mutex_unlock(&pkg.reg_mu);
+}
+
+typedef struct RunN {
+    TestingB *b;
+    volatile bool returned;
+} RunN;
+
+/* The deferred half of runN, which also runs when the benchmark calls
+ * runtime_goexit itself. */
+static void run_n_exit(void *arg) {
+    RunN *r = (RunN *)arg;
+    if (!r->returned) {
+        Any ignored;
+        run_cleanup(&r->b->common, &ignored);
+    }
+    bench_key_pop();
+    sync_mutex_unlock(&pkg.bench_mu);
+}
+
+/* runN. Answers false when the benchmark stopped itself with FailNow or
+ * SkipNow, which in Go ends the goroutine and so everything after runN too. */
+static bool run_n(TestingB *b, int64_t n) {
+    RunN guard = {b, false};
+    volatile bool stopped = false;
+    volatile bool has_panic = false;
+    Any perr = {0};
+    sync_mutex_lock(&pkg.bench_mu);
+    BURROW_SCOPE {
+        BURROW_DEFER(run_n_exit, &guard);
+        bench_key_push();
+        TestingT *c = &b->common;
+        context_release(c->ctx);
+        c->ctx =
+            context_with_cancel(heap_allocator(), context_background(), &c->cancel);
+        b->head.n = (Int)n;
+        b->head.loop_n = 0;
+        b->head.loop_i = 0;
+        b->loop_done = false;
+        b->parallelism = 1;
+        testing_b_reset_timer(b);
+        testing_b_start_timer(b);
+        BURROW_TRY {
+            BURROW_CALLF(b->bench_func, b);
+        }
+        BURROW_CATCH(p) {
+            if (pkg.repanicking)
+                panic(pkg.repanic);
+            if (is_stop(p)) {
+                stopped = true;
+            } else {
+                perr = keep_panic(p);
+                has_panic = true;
+            }
+        }
+        BURROW_TRY_END;
+        if (!stopped && !has_panic) {
+            testing_b_stop_timer(b);
+            b->previous_n = n;
+            b->previous_duration = c->duration;
+            if (b->head.loop_n > 0 && !b->loop_done && !testing_t_failed(c))
+                burrow__testing_t_logln(
+                    c, __FILE__, __LINE__, BURROW__TESTING_ERROR,
+                    BURROW__FMT_ARGS(BURROW_ANY_OF,
+                                     "benchmark function returned without B.Loop() == "
+                                     "false (break or return in loop?)"));
+        }
+        Any r;
+        if (run_cleanup(c, &r) && !has_panic) {
+            perr = r;
+            has_panic = true;
+        }
+        guard.returned = true;
+    }
+    BURROW_SCOPE_END;
+    if (has_panic)
+        panic(perr);
+    return !stopped;
+}
+
+static void b_signal(void *arg) {
+    TestingB *b = (TestingB *)arg;
+    bool v = true;
+    chan_send(b->common.signal, &v);
+}
+
+/* Runs fn(b) on a goroutine and waits for it, or in line in bare mode. */
+static void b_go(TestingB *b, void (*fn)(void *)) {
+    if (b->common.signal == NULL) {
+        fn(b);
+        return;
+    }
+    if (!go(BURROW_FN(Func, fn, b)))
+        panic_str(BURROW_S("testing: cannot start the goroutine for a benchmark"));
+    bool v;
+    chan_recv(b->common.signal, &v);
+}
+
+static void run1_body(void *arg) {
+    TestingB *b = (TestingB *)arg;
+    if (b->common.signal == NULL) {
+        run_n(b, 1);
+        return;
+    }
+    BURROW_SCOPE {
+        BURROW_DEFER(b_signal, b);
+        run_n(b, 1);
+    }
+    BURROW_SCOPE_END;
+}
+
+/* trimOutput: at most ten lines of what the benchmark logged. */
+static void trim_output(TestingT *c) {
+    int lines = 0;
+    for (Int j = 0; j < c->output.len; j++) {
+        if (c->output.p[j] != '\n')
+            continue;
+        if (++lines >= 10) {
+            c->output.len = j;
+            buf_str(&c->output, BURROW_S("\n\t... [output truncated]\n"));
+            break;
+        }
+    }
+}
+
+/* "--- TAG: name\n" and then what was logged. */
+static void b_report(TestingB *b, const char *tag, Str name) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Buf out = {0};
+    buf_str(&out, fmt_sprintf_v(arena_allocator(&ar), "%s--- %s: %s\n",
+                                chatty_prefix(b->common.chatty), tag, name));
+    arena_free(&ar);
+    buf_append(&out, b->common.output.p, b->common.output.len);
+    b_write(b, buf_view(&out));
+    buf_free(&out);
+}
+
+/* run1: one iteration first, to find out whether the benchmark has
+ * sub-benchmarks, which then do the measuring instead. */
+static bool run1(TestingB *b) {
+    BenchState *s = b->bstate;
+    if (s != NULL) {
+        int n = (int)b->common.name.len + s->ext_len + 1;
+        if (n > s->max_len)
+            s->max_len = n + 8;
+    }
+    b_go(b, run1_body);
+    TestingT *c = &b->common;
+    if (testing_t_failed(c)) {
+        b_report(b, "FAIL", c->name);
+        return false;
+    }
+    sync_mutex_lock(&c->mu);
+    bool finished = c->finished;
+    bool has_sub = c->has_sub;
+    sync_mutex_unlock(&c->mu);
+    if (has_sub || finished) {
+        if (c->chatty != NULL && (c->output.len > 0 || finished)) {
+            trim_output(c);
+            b_report(b, testing_t_skipped(c) ? "SKIP" : "BENCH", c->name);
+        }
+        return false;
+    }
+    return true;
+}
+
+/* The goos, goarch and cpu lines, once per process. */
+static void print_labels(TestingB *b, bool to_stdout) {
+    sync_mutex_lock(&pkg.reg_mu);
+    bool done = pkg.labels_done;
+    pkg.labels_done = true;
+    sync_mutex_unlock(&pkg.reg_mu);
+    if (done || (!to_stdout && b->discard))
+        return;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Buf out = {0};
+    buf_str(&out, fmt_sprintf_v(a, "goos: %s\ngoarch: %s\n", cstr(burrow_os_name()),
+                                cstr(burrow_arch_name())));
+    char cpu[256];
+    if (pal_cpu_name(cpu, (int64_t)sizeof cpu) > 0)
+        buf_str(&out, fmt_sprintf_v(a, "cpu: %s\n", cstr(cpu)));
+    write_to(stdout, buf_view(&out));
+    buf_free(&out);
+    arena_free(&ar);
+}
+
+static int64_t predict_n(int64_t goalns, int64_t prev_iters, int64_t prevns,
+                         int64_t last) {
+    if (prevns == 0)
+        prevns = 1;
+    /* goalns * prev_iters can overflow for a fast benchmark and a long
+     * -benchtime, which Go lets wrap, and so does this, without the undefined
+     * behaviour. */
+    int64_t n = (int64_t)((uint64_t)goalns * (uint64_t)prev_iters) / prevns;
+    n += n / 5;
+    if (last <= INT64_MAX / 100 && n > 100 * last)
+        n = 100 * last;
+    if (n < last + 1)
+        n = last + 1;
+    if (n > MAX_BENCH_PREDICT_ITERS)
+        n = MAX_BENCH_PREDICT_ITERS;
+    return n;
+}
+
+/* launch: run the benchmark with more and more iterations until it takes
+ * -test.benchtime, or the number of times given as Nx. */
+static void launch(TestingB *b) {
+    TestingT *c = &b->common;
+    if (b->head.loop_n == 0) {
+        if (b->bench_time.n > 0) {
+            if (b->bench_time.n > 1 && !run_n(b, b->bench_time.n))
+                return;
+        } else {
+            int64_t d = b->bench_time.d;
+            for (int64_t n = 1;
+                 !testing_t_failed(c) && c->duration < d && n < 1000000000;) {
+                int64_t last = n;
+                n = predict_n(d, (int64_t)b->head.n, c->duration, last);
+                if (!run_n(b, n))
+                    return;
+            }
+        }
+    }
+    testing_benchmark_result_free(&b->result);
+    b->result = (TestingBenchmarkResult){
+        b->head.n, c->duration, b->bytes, b->net_allocs, b->net_bytes, NULL, 0,
+    };
+    metrics_take(b, &b->result);
+}
+
+static void launch_body(void *arg) {
+    TestingB *b = (TestingB *)arg;
+    if (b->common.signal == NULL) {
+        launch(b);
+        return;
+    }
+    BURROW_SCOPE {
+        BURROW_DEFER(b_signal, b);
+        launch(b);
+    }
+    BURROW_SCOPE_END;
+}
+
+static TestingBenchmarkResult do_bench(TestingB *b) {
+    b_go(b, launch_body);
+    return b->result;
+}
+
+/* benchmarkName: the name with the -test.cpu value after it. */
+static Str benchmark_name(Alloc *a, Str name, int n) {
+    if (n != 1)
+        return fmt_sprintf_v(a, "%s-%d", name, n);
+    return name;
+}
+
+/* processBench: the benchmark for each -test.cpu value, -test.count times,
+ * printing Go's line for each. */
+static void process_bench(BenchState *s, TestingB *b) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Chatty *chatty = b->common.chatty;
+    const char *prefix = chatty_prefix(chatty);
+    for (Int i = 0; i < pkg.ncpus; i++) {
+        for (uint64_t j = 0; j < pkg.flags[F_COUNT].u; j++) {
+            int procs = pkg.cpus[i];
+            pkg.bench_procs = procs;
+            Str bench_name = benchmark_name(a, b->common.name, procs);
+            if (chatty == NULL)
+                b_write(b, fmt_sprintf_v(a, "%-*s\t", s->max_len, bench_name));
+            TestingB *cur = b;
+            TestingB *again = NULL;
+            if (i > 0 || j > 0) {
+                again = b_new(NULL, str_clone(heap_allocator(), b->common.name), chatty,
+                              b->bench_func, b->bench_time, NULL,
+                              b->common.signal == NULL, b->discard);
+                cur = again;
+                run1(cur);
+            }
+            TestingBenchmarkResult r = do_bench(cur);
+            TestingT *c = &cur->common;
+            if (testing_t_failed(c)) {
+                b_report(cur, "FAIL", bench_name);
+                b_free(again);
+                continue;
+            }
+            Buf line = {0};
+            if (chatty != NULL)
+                buf_str(&line, fmt_sprintf_v(a, "%-*s\t", s->max_len, bench_name));
+            buf_str(&line, testing_benchmark_result_string(a, r));
+            if (pkg.flags[F_BENCHMEM].b || cur->show_alloc_result) {
+                buf_str(&line, BURROW_S("\t"));
+                buf_str(&line, testing_benchmark_result_mem_string(a, r));
+            }
+            buf_str(&line, BURROW_S("\n"));
+            b_write(cur, buf_view(&line));
+            buf_free(&line);
+            if (c->output.len > 0) {
+                trim_output(c);
+                b_report(cur, "BENCH", bench_name);
+            }
+            if (chatty != NULL && chatty->json)
+                chatty_updatef(chatty, BURROW_S(""), "=== NAME  %s\n", BURROW_S(""));
+            b_free(again);
+        }
+    }
+    (void)prefix;
+    arena_free(&ar);
+}
+
+static void b_run_body(TestingB *b) {
+    print_labels(b, false);
+    if (b->bstate != NULL)
+        process_bench(b->bstate, b);
+    else
+        do_bench(b);
+}
+
+static void bench_relock(void *arg) {
+    (void)arg;
+    sync_mutex_lock(&pkg.bench_mu);
+}
+
+/* add: a parent's result is the sum of its children's per-op figures. */
+static void b_add(TestingB *b, TestingBenchmarkResult other) {
+    TestingBenchmarkResult *r = &b->result;
+    r->n = 1;
+    r->t += testing_benchmark_result_ns_per_op(other);
+    if (other.bytes == 0) {
+        b->missing_bytes = true;
+        r->bytes = 0;
+    }
+    if (!b->missing_bytes)
+        r->bytes += other.bytes;
+    r->mem_allocs += (uint64_t)testing_benchmark_result_allocs_per_op(other);
+    r->mem_bytes += (uint64_t)testing_benchmark_result_alloced_bytes_per_op(other);
+}
+
+bool testing_b_run(TestingB *b, Str name, TestingBFunc f) {
+    TestingT *c = &b->common;
+    sync_mutex_lock(&c->mu);
+    c->has_sub = true;
+    sync_mutex_unlock(&c->mu);
+    volatile bool result = true;
+    sync_mutex_unlock(&pkg.bench_mu);
+    BURROW_SCOPE {
+        BURROW_DEFER(bench_relock, NULL);
+        bool ok = true;
+        bool partial = false;
+        Str bench_name;
+        if (b->bstate != NULL)
+            bench_name = burrow__testing_full_name(
+                b->bstate->match, c->level > 0 ? &c->name : NULL, name, &ok, &partial);
+        else
+            bench_name = str_clone(heap_allocator(), c->name);
+        if (!ok) {
+            str_release(bench_name);
+        } else {
+            TestingB *sub = b_new(b, bench_name, c->chatty, f, b->bench_time, b->bstate,
+                                  c->signal == NULL, b->discard);
+            if (partial)
+                sub->common.has_sub = true;
+            if (c->chatty != NULL) {
+                print_labels(b, true);
+                if (c->chatty->json)
+                    chatty_updatef(c->chatty, bench_name, "=== RUN   %s\n", bench_name);
+                Buf line = {0};
+                buf_str(&line, bench_name);
+                buf_str(&line, BURROW_S("\n"));
+                write_to(stdout, buf_view(&line));
+                buf_free(&line);
+            }
+            if (run1(sub))
+                b_run_body(sub);
+            b_add(b, sub->result);
+            result = !testing_t_failed(&sub->common);
+        }
+    }
+    BURROW_SCOPE_END;
+    return result;
+}
+
+/* ------------------------------------------------------------------- Loop */
+
+/* stopOrScaleBLoop. */
+static bool stop_or_scale(TestingB *b) {
+    int64_t t = testing_b_elapsed(b);
+    if (t >= b->bench_time.d)
+        return false;
+    int64_t prev_iters = (int64_t)b->head.loop_n;
+    b->head.loop_n = (uint64_t)predict_n(b->bench_time.d, prev_iters, t, prev_iters);
+    if ((b->head.loop_n & LOOP_POISON_MASK) != 0)
+        panic_str(BURROW_S("loop iteration target overflow"));
+    return (uint64_t)prev_iters < b->head.loop_n;
+}
+
+bool burrow__testing_b_loop_slow(TestingB *b) {
+    if (!b->timer_on)
+        burrow__testing_t_logln(
+            &b->common, __FILE__, __LINE__, BURROW__TESTING_FATAL,
+            BURROW__FMT_ARGS(BURROW_ANY_OF, "B.Loop called with timer stopped"));
+    if ((b->head.loop_i & LOOP_POISON_MASK) != 0)
+        panic_str(fmt_sprintf_v(error_allocator(), "unknown loop stop condition: %#x",
+                                b->head.loop_i));
+    if (b->head.loop_n == 0) {
+        b->head.loop_n = b->bench_time.n > 0 ? (uint64_t)b->bench_time.n : 1;
+        b->head.n = 0;
+        testing_b_reset_timer(b);
+        b->head.loop_i++;
+        return true;
+    }
+    bool more;
+    if (b->bench_time.n > 0) {
+        if (b->head.loop_i != (uint64_t)b->bench_time.n)
+            panic_str(fmt_sprintf_v(error_allocator(),
+                                    "iteration count %d < fixed target %d",
+                                    b->head.loop_i, b->bench_time.n));
+        more = false;
+    } else {
+        more = stop_or_scale(b);
+    }
+    if (!more) {
+        testing_b_stop_timer(b);
+        b->head.n = (Int)b->head.loop_n;
+        b->loop_done = true;
+        return false;
+    }
+    b->head.loop_i++;
+    return true;
+}
+
+/* ------------------------------------------------------------ RunParallel */
+
+bool testing_pb_next(TestingPB *pb) {
+    if (pb->cache == 0) {
+        uint64_t n = burrow__atomic_add_u64(pb->global_n, pb->grain) + pb->grain;
+        if (n <= pb->bn)
+            pb->cache = pb->grain;
+        else if (n < pb->bn + pb->grain)
+            pb->cache = pb->bn + pb->grain - n;
+        else
+            return false;
+    }
+    pb->cache--;
+    return true;
+}
+
+typedef struct Parallel {
+    SyncWaitGroup wg;
+    uint64_t n;
+    uint64_t grain;
+    uint64_t bn;
+    TestingPBFunc body;
+} Parallel;
+
+static void parallel_done(void *arg) {
+    sync_wait_group_done((SyncWaitGroup *)arg);
+}
+
+static void parallel_worker(void *env) {
+    Parallel *par = (Parallel *)env;
+    BURROW_SCOPE {
+        BURROW_DEFER(parallel_done, &par->wg);
+        TestingPB pb = {&par->n, par->grain, 0, par->bn};
+        BURROW_CALLF(par->body, &pb);
+    }
+    BURROW_SCOPE_END;
+}
+
+void testing_b_run_parallel(TestingB *b, TestingPBFunc body) {
+    if (b->head.n == 0)
+        return;
+    uint64_t grain = 0;
+    if (b->previous_n > 0 && b->previous_duration > 0)
+        grain = 100000 * (uint64_t)b->previous_n / (uint64_t)b->previous_duration;
+    if (grain < 1)
+        grain = 1;
+    if (grain > 10000)
+        grain = 10000;
+    Parallel par = {0};
+    par.grain = grain;
+    par.bn = (uint64_t)b->head.n;
+    par.body = body;
+    int procs = pkg.bench_procs > 0 ? pkg.bench_procs : runtime_gomaxprocs(0);
+    int num = b->parallelism * procs;
+    if (b->common.signal == NULL) {
+        /* Bare mode has no goroutines, so the bodies take turns. */
+        for (int p = 0; p < num; p++) {
+            TestingPB pb = {&par.n, grain, 0, par.bn};
+            BURROW_CALLF(body, &pb);
+        }
+    } else {
+        sync_wait_group_add(&par.wg, num);
+        for (int p = 0; p < num; p++)
+            if (!go(BURROW_FN(Func, parallel_worker, &par)))
+                panic_str(BURROW_S("testing: cannot start a RunParallel goroutine"));
+        sync_wait_group_wait(&par.wg);
+    }
+    if (burrow__atomic_load_u64(&par.n) <= par.bn && !testing_t_failed(&b->common))
+        burrow__testing_t_logln(
+            &b->common, __FILE__, __LINE__, BURROW__TESTING_FATAL,
+            BURROW__FMT_ARGS(BURROW_ANY_OF,
+                             "RunParallel: body exited without pb.Next() == false"));
+}
+
+void testing_b_set_parallelism(TestingB *b, int p) {
+    if (p >= 1)
+        b->parallelism = p;
+}
+
+/* ---------------------------------------------------------- B's T methods */
+
+Str testing_b_name(TestingB *b) {
+    return b->common.name;
+}
+void testing_b_fail(TestingB *b) {
+    testing_t_fail(&b->common);
+}
+bool testing_b_failed(TestingB *b) {
+    return testing_t_failed(&b->common);
+}
+void testing_b_fail_now(TestingB *b) {
+    testing_t_fail_now(&b->common);
+}
+void testing_b_skip_now(TestingB *b) {
+    testing_t_skip_now(&b->common);
+}
+bool testing_b_skipped(TestingB *b) {
+    return testing_t_skipped(&b->common);
+}
+void testing_b_helper(TestingB *b) {
+    (void)b;
+}
+void testing_b_cleanup(TestingB *b, Func f) {
+    testing_t_cleanup(&b->common, f);
+}
+Context testing_b_context(TestingB *b) {
+    return b->common.ctx;
+}
+IoWriter testing_b_output(TestingB *b) {
+    return testing_t_output(&b->common);
+}
+void testing_b_attr(TestingB *b, Str key, Str value) {
+    testing_t_attr(&b->common, key, value);
+}
+TestingTB testing_b_as_testing_tb(TestingB *b) {
+    return (TestingTB){&t_tb_vt, &b->common};
+}
+
+/* --------------------------------------------------------- BenchmarkResult */
+
+static bool result_extra(TestingBenchmarkResult r, const char *unit, double *v) {
+    return testing_benchmark_result_extra(r, cstr(unit), v);
+}
+
+bool testing_benchmark_result_extra(TestingBenchmarkResult r, Str unit, double *value) {
+    bool found;
+    Int at = metric_find(r.extra, r.nextra, unit, &found);
+    if (found && value != NULL)
+        *value = r.extra[at].value;
+    return found;
+}
+
+void testing_benchmark_result_free(TestingBenchmarkResult *r) {
+    metrics_free(r->extra, r->nextra, r->nextra);
+    r->extra = NULL;
+    r->nextra = 0;
+}
+
+int64_t testing_benchmark_result_ns_per_op(TestingBenchmarkResult r) {
+    double v;
+    if (result_extra(r, "ns/op", &v))
+        return (int64_t)v;
+    if (r.n <= 0)
+        return 0;
+    return r.t / (int64_t)r.n;
+}
+
+static double mb_per_sec(TestingBenchmarkResult r) {
+    double v;
+    if (result_extra(r, "MB/s", &v))
+        return v;
+    if (r.bytes <= 0 || r.t <= 0 || r.n <= 0)
+        return 0;
+    return ((double)r.bytes * (double)r.n / 1e6) / ((double)r.t / 1e9);
+}
+
+int64_t testing_benchmark_result_allocs_per_op(TestingBenchmarkResult r) {
+    double v;
+    if (result_extra(r, "allocs/op", &v))
+        return (int64_t)v;
+    if (r.n <= 0)
+        return 0;
+    return (int64_t)r.mem_allocs / (int64_t)r.n;
+}
+
+int64_t testing_benchmark_result_alloced_bytes_per_op(TestingBenchmarkResult r) {
+    double v;
+    if (result_extra(r, "B/op", &v))
+        return (int64_t)v;
+    if (r.n <= 0)
+        return 0;
+    return (int64_t)r.mem_bytes / (int64_t)r.n;
+}
+
+/* prettyPrint: enough digits that small numbers keep three significant ones,
+ * right aligned so the columns line up. */
+static void pretty_print(Buf *b, Alloc *a, double x, Str unit) {
+    double y = x < 0 ? -x : x;
+    const char *format;
+    if (y == 0 || y >= 999.95)
+        format = "%10.0f %s";
+    else if (y >= 99.995)
+        format = "%12.1f %s";
+    else if (y >= 9.9995)
+        format = "%13.2f %s";
+    else if (y >= 0.99995)
+        format = "%14.3f %s";
+    else if (y >= 0.099995)
+        format = "%15.4f %s";
+    else if (y >= 0.0099995)
+        format = "%16.5f %s";
+    else if (y >= 0.00099995)
+        format = "%17.6f %s";
+    else
+        format = "%18.7f %s";
+    buf_str(b, fmt_sprintf_v(a, format, x, unit));
+}
+
+Str testing_benchmark_result_string(Alloc *a, TestingBenchmarkResult r) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *t = arena_allocator(&ar);
+    Buf b = {0};
+    buf_str(&b, fmt_sprintf_v(t, "%8d", r.n));
+    double ns;
+    if (!result_extra(r, "ns/op", &ns))
+        ns = (double)r.t / (double)r.n;
+    if (ns != 0) {
+        buf_str(&b, BURROW_S("\t"));
+        pretty_print(&b, t, ns, BURROW_S("ns/op"));
+    }
+    double mbs = mb_per_sec(r);
+    if (mbs != 0)
+        buf_str(&b, fmt_sprintf_v(t, "\t%7.2f MB/s", mbs));
+    for (Int i = 0; i < r.nextra; i++) {
+        Str k = r.extra[i].unit;
+        if (str_eq(k, BURROW_S("ns/op")) || str_eq(k, BURROW_S("MB/s")) ||
+            str_eq(k, BURROW_S("B/op")) || str_eq(k, BURROW_S("allocs/op")))
+            continue;
+        buf_str(&b, BURROW_S("\t"));
+        pretty_print(&b, t, r.extra[i].value, k);
+    }
+    Str out = str_clone(a, buf_view(&b));
+    buf_free(&b);
+    arena_free(&ar);
+    return out;
+}
+
+Str testing_benchmark_result_mem_string(Alloc *a, TestingBenchmarkResult r) {
+    return fmt_sprintf_v(a, "%8d B/op\t%8d allocs/op",
+                         testing_benchmark_result_alloced_bytes_per_op(r),
+                         testing_benchmark_result_allocs_per_op(r));
+}
+
+/* ------------------------------------------------------------- the runner */
+
+typedef struct BenchRun {
+    TestingMatchString match;
+    const TestingInternalBenchmark *benchmarks;
+    Int n;
+    bool bare;
+    bool ok;
+    TestingBFunc single; /* testing_benchmark's */
+    TestingBenchmarkResult result;
+} BenchRun;
+
+static void bench_all(void *env, TestingB *b) {
+    BenchRun *br = (BenchRun *)env;
+    for (Int i = 0; i < br->n; i++)
+        testing_b_run(b, br->benchmarks[i].name, br->benchmarks[i].f);
+}
+
+/* runBenchmarks, from the point where the scheduler is running. */
+static void bench_pass(void *env) {
+    BenchRun *br = (BenchRun *)env;
+    int maxprocs = 1;
+    for (Int i = 0; i < pkg.ncpus; i++)
+        if (pkg.cpus[i] > maxprocs)
+            maxprocs = pkg.cpus[i];
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    BenchState s = {0};
+    s.match = burrow__testing_matcher_new(br->match, pkg.flags[F_BENCH].s,
+                                          BURROW_S("-test.bench"), pkg.flags[F_SKIP].s);
+    s.ext_len = (int)benchmark_name(a, BURROW_S(""), maxprocs).len;
+    TestingInternalBenchmark *bs = NULL;
+    Int nbs = 0;
+    if (br->n > 0)
+        bs = (TestingInternalBenchmark *)must_alloc(
+            a, (size_t)br->n * sizeof(TestingInternalBenchmark),
+            _Alignof(TestingInternalBenchmark));
+    for (Int i = 0; i < br->n; i++) {
+        bool ok;
+        bool partial;
+        Str full = burrow__testing_full_name(s.match, NULL, br->benchmarks[i].name, &ok,
+                                             &partial);
+        str_release(full);
+        if (!ok)
+            continue;
+        bs[nbs++] = br->benchmarks[i];
+        int l = (int)benchmark_name(a, br->benchmarks[i].name, maxprocs).len +
+                s.ext_len + 1;
+        if (l > s.max_len)
+            s.max_len = l;
+    }
+    BenchRun all = *br;
+    all.benchmarks = bs;
+    all.n = nbs;
+    Chatty *chatty = NULL;
+    if (pkg.flags[F_V].b) {
+        chatty =
+            (Chatty *)must_alloc(heap_allocator(), sizeof(Chatty), _Alignof(Chatty));
+        *chatty = (Chatty){0};
+        chatty->json = pkg.flags[F_V].json;
+    }
+    TestingB *main_b = b_new(NULL, str_clone(heap_allocator(), BURROW_S("Main")),
+                             chatty, BURROW_FN(TestingBFunc, bench_all, &all),
+                             bench_time_flag(), &s, br->bare, false);
+    bench_count_allocs(true);
+    run_n(main_b, 1);
+    bench_count_allocs(false);
+    br->ok = !testing_t_failed(&main_b->common);
+    b_free(main_b);
+    if (chatty != NULL) {
+        buf_free(&chatty->last_name);
+        mem_free(heap_allocator(), chatty, sizeof(Chatty), _Alignof(Chatty));
+    }
+    burrow__testing_matcher_free(s.match);
+    arena_free(&ar);
+}
+
+static bool run_benchmarks(TestingMatchString match, const TestingInternalBenchmark *bs,
+                           Int n, bool bare) {
+    if (pkg.flags[F_BENCH].s.len == 0)
+        return true;
+    if (pkg.cpus == NULL)
+        parse_cpu_list();
+    BenchRun br = {0};
+    br.match = match;
+    br.benchmarks = bs;
+    br.n = n;
+    br.bare = bare;
+    br.ok = true;
+    if (!bare && burrow__curg() == NULL) {
+        int maxprocs = 1;
+        for (Int i = 0; i < pkg.ncpus; i++)
+            if (pkg.cpus[i] > maxprocs)
+                maxprocs = pkg.cpus[i];
+        runtime_gomaxprocs(maxprocs);
+        runtime_main(BURROW_FN(Func, bench_pass, &br));
+    } else {
+        bench_pass(&br);
+    }
+    pkg.bench_procs = 0;
+    return br.ok;
+}
+
+void testing_run_benchmarks(TestingMatchString match, Slice benchmarks) {
+    if (!pkg.parsed)
+        flags_parse();
+    run_benchmarks(match, (const TestingInternalBenchmark *)benchmarks.p,
+                   benchmarks.len, false);
+}
+
+static void benchmark_one(void *env) {
+    BenchRun *br = (BenchRun *)env;
+    TestingB *b = b_new(NULL, BURROW_S(""), NULL, br->single, bench_time_flag(), NULL,
+                        burrow__curg() == NULL, true);
+    bench_count_allocs(true);
+    if (run1(b))
+        b_run_body(b);
+    bench_count_allocs(false);
+    br->result = b->result;
+    b->result = (TestingBenchmarkResult){0};
+    b_free(b);
+}
+
+TestingBenchmarkResult testing_benchmark(TestingBFunc f) {
+    BenchRun br = {0};
+    br.single = f;
+    if (burrow__curg() == NULL)
+        runtime_main(BURROW_FN(Func, benchmark_one, &br));
+    else
+        benchmark_one(&br);
+    return br.result;
+}
+
 static void list_tests(TestingM *m) {
     Str pat = pkg.flags[F_LIST].s;
     Error err = {0};
@@ -2359,7 +3484,7 @@ int testing_m_run(TestingM *m) {
         stop_alarm();
         if (!ran && pkg.flags[F_BENCH].s.len == 0 && pkg.flags[F_FUZZ].s.len == 0)
             write_to(err_out(), BURROW_S("testing: warning: no tests to run\n"));
-        if (!ok) {
+        if (!ok || !run_benchmarks(m->match, m->benchmarks, m->nbenchmarks, m->bare)) {
             write_to(stdout, fmt_sprintf_v(a, "%sFAIL\n", prefix));
             m->exit_code = 1;
             goto out;
@@ -2380,4 +3505,60 @@ void testing_main(TestingMatchString match, Slice tests, Slice benchmarks,
     int code = testing_m_run(m);
     testing_m_free(m);
     exit(code);
+}
+
+/* The functions TESTING_MAIN's table points at take a TestingT or a TestingB,
+ * and these call them through the right type, with the entry as the env. */
+static void entry_test(void *env, TestingT *t) {
+    const burrow__TestingEntry *e = (const burrow__TestingEntry *)env;
+    ((void (*)(TestingT *))e->fn)(t);
+}
+
+static void entry_benchmark(void *env, TestingB *b) {
+    const burrow__TestingEntry *e = (const burrow__TestingEntry *)env;
+    ((void (*)(TestingB *))e->fn)(b);
+}
+
+int burrow__testing_main(int argc, char **argv, const burrow__TestingEntry *entries,
+                         Int n, bool bare, int (*main_fn)(TestingM *m)) {
+    Alloc *h = heap_allocator();
+    TestingInternalTest *tests = NULL;
+    TestingInternalBenchmark *benchmarks = NULL;
+    if (n > 0) {
+        tests = (TestingInternalTest *)must_alloc(
+            h, (size_t)n * sizeof(TestingInternalTest), _Alignof(TestingInternalTest));
+        benchmarks = (TestingInternalBenchmark *)must_alloc(
+            h, (size_t)n * sizeof(TestingInternalBenchmark),
+            _Alignof(TestingInternalBenchmark));
+    }
+    Int ntests = 0;
+    Int nbenchmarks = 0;
+    for (Int i = 0; i < n; i++) {
+        const burrow__TestingEntry *e = &entries[i];
+        if (e->kind == BURROW__TESTING_KIND_BENCHMARK)
+            benchmarks[nbenchmarks++] = (TestingInternalBenchmark){
+                e->name,
+                BURROW_FN(TestingBFunc, entry_benchmark, (void *)(uintptr_t)e)};
+        else
+            tests[ntests++] = (TestingInternalTest){
+                e->name, BURROW_FN(TestingTFunc, entry_test, (void *)(uintptr_t)e)};
+    }
+    testing_init(argc, argv);
+    TestingM *m = testing_main_start(
+        (TestingMatchString){NULL, NULL},
+        slice_from(tests, ntests, ntests, TYPE_TESTING_INTERNAL_TEST),
+        slice_from(benchmarks, nbenchmarks, nbenchmarks,
+                   TYPE_TESTING_INTERNAL_BENCHMARK),
+        slice_nil(TYPE_TESTING_INTERNAL_FUZZ_TARGET),
+        slice_nil(TYPE_TESTING_INTERNAL_EXAMPLE));
+    testing_m_set_bare(m, bare);
+    int code = main_fn(m);
+    testing_m_free(m);
+    if (n > 0) {
+        mem_free(h, tests, (size_t)n * sizeof(TestingInternalTest),
+                 _Alignof(TestingInternalTest));
+        mem_free(h, benchmarks, (size_t)n * sizeof(TestingInternalBenchmark),
+                 _Alignof(TestingInternalBenchmark));
+    }
+    return code;
 }

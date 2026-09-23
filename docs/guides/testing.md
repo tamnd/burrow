@@ -253,6 +253,83 @@ PASS
 
 A test of the scheduler itself cannot run inside a goroutine, because it needs to start and stop `runtime_main` on its own. `TESTING_MAIN_BARE` runs the tests on the calling thread instead. Subtests run inline there, and `testing_t_parallel` does nothing.
 
+## Benchmarks
+
+A benchmark is a function that takes a `TestingB` and whose name starts with `Benchmark`. It goes in the same list as the tests, and `TESTING_MAIN` tells the two apart by the type of the function. Benchmarks only run when `-test.bench` is given a pattern, and they run after the tests, one at a time.
+
+The loop is `while (testing_b_loop(b))`. The runner calls the function once, and `testing_b_loop` keeps saying yes until the loop has run for `-test.benchtime`, which is one second unless you say otherwise. Setup before the loop and cleanup after it are not timed. The older form, a `for` loop up to `testing_b_n(b)`, works too, with the runner calling the function again with a larger count each time.
+
+<!-- example: ../examples/testing/bench.c#bench -->
+```c
+static void BenchmarkJoin(TestingB *b) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    while (testing_b_loop(b)) {
+        join(arena_allocator(&ar), 100);
+        arena_reset(&ar);
+    }
+    arena_free(&ar);
+}
+
+static void join_size(void *env, TestingB *b) {
+    Int n = *(const Int *)env;
+    testing_b_report_allocs(b);
+    testing_b_set_bytes(b, n * 5);
+    while (testing_b_loop(b)) {
+        Str s = join(heap_allocator(), n);
+        mem_free(heap_allocator(), (void *)(uintptr_t)s.p, (size_t)s.len, 1);
+    }
+}
+
+static void BenchmarkJoinSizes(TestingB *b) {
+    static const Int sizes[] = {10, 1000};
+    testing_b_run(b, BURROW_S("10"),
+                  BURROW_FN(TestingBFunc, join_size, (void *)&sizes[0]));
+    testing_b_run(b, BURROW_S("1000"),
+                  BURROW_FN(TestingBFunc, join_size, (void *)&sizes[1]));
+}
+```
+
+Each benchmark prints one line in Go's format, so benchstat and anything else that reads `go test -bench` output reads it too. Running the program above with `-test.bench=.` prints something like this:
+
+```
+goos: darwin
+goarch: arm64
+cpu: Apple M4
+BenchmarkJoin-10         	  272800	       390.3 ns/op
+BenchmarkJoinSizes/10-10 	 2650298	        46.38 ns/op	1077.97 MB/s	      50 B/op	       1 allocs/op
+BenchmarkJoinSizes/1000-10         	   42828	      2910 ns/op	1718.20 MB/s	    5000 B/op	       1 allocs/op
+PASS
+```
+
+The number after the name is the `-test.cpu` value. `testing_b_run` starts a sub-benchmark, and a benchmark with sub-benchmarks reports theirs and none of its own. `testing_b_set_bytes` adds the MB/s column. `testing_b_report_allocs`, or `-test.benchmem` for every benchmark, adds B/op and allocs/op, which count what went through `heap_allocator` while the timer ran. An arena only counts when it takes a new chunk from the heap, which is why `BenchmarkJoin` shows none. `testing_b_report_metric` adds a column of your own, and `testing_b_run_parallel` spreads the iterations over goroutines.
+
+`testing_benchmark` runs one benchmark function outside a test binary and gives back the numbers, which is how a program can measure something and then decide what to do about it.
+
+<!-- example: ../examples/testing/benchresult.c#body -->
+```c
+static void copy_name(void *env, TestingB *b) {
+    (void)env;
+    while (testing_b_loop(b)) {
+        Str s = str_clone(heap_allocator(), BURROW_S("gopher"));
+        mem_free(heap_allocator(), (void *)(uintptr_t)s.p, (size_t)s.len, 1);
+    }
+}
+
+int main(void) {
+    TestingBenchmarkResult r =
+        testing_benchmark(BURROW_FN(TestingBFunc, copy_name, NULL));
+    printf("ran it %s times\n", r.n > 1000 ? "plenty of" : "too few");
+    printf("%lld B/op, %lld allocs/op\n",
+           (long long)testing_benchmark_result_alloced_bytes_per_op(r),
+           (long long)testing_benchmark_result_allocs_per_op(r));
+    testing_benchmark_result_free(&r);
+    return 0;
+}
+```
+
+GOMAXPROCS cannot change while the scheduler runs, so all the benchmarks run with the largest `-test.cpu` value and the name says which value that pass is for. It only really matters to `testing_b_run_parallel`, which starts that many goroutines. Under `TESTING_MAIN_BARE` there are no goroutines, so benchmarks run on the calling thread and the bodies passed to `testing_b_run_parallel` take turns.
+
 ## What is not there yet
 
-Benchmarks, fuzz targets and examples can go in the tables and `-test.list` shows them, but they do not run yet. The flags for profiles, coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.
+Fuzz targets and examples can go in the tables and `-test.list` shows them, but they do not run yet. The flags for profiles, coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.

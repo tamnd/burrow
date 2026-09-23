@@ -4,6 +4,8 @@
 
 #include "burrow/mem/heap.h"
 
+#include "burrow/atomic.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -62,11 +64,39 @@ static void heap_raw_free(void *p, size_t align) {
 #endif
 }
 
+/* What testing reads for a benchmark's allocs/op and B/op, Go's Mallocs and
+ * TotalAlloc. Off unless a benchmark run turned it on, so the common path pays
+ * one relaxed load and a branch that always goes the same way. On, it is two
+ * atomic adds per allocation, which a benchmark that cares about allocations
+ * is measuring anyway. A realloc counts as one allocation of the new size,
+ * which is what growing a slice costs in Go. */
+static uint32_t heap_counting;
+static uint64_t heap_count_allocs;
+static uint64_t heap_count_bytes;
+
+static void heap_note(void *p, size_t size) {
+    if (p == NULL || burrow__atomic_load_relaxed_u32(&heap_counting) == 0)
+        return;
+    burrow__atomic_add_u64(&heap_count_allocs, 1);
+    burrow__atomic_add_u64(&heap_count_bytes, (uint64_t)size);
+}
+
+void burrow__heap_count(bool on) {
+    burrow__atomic_store_relaxed_u32(&heap_counting, on ? 1U : 0U);
+}
+
+void burrow__heap_counts(uint64_t *allocs, uint64_t *bytes) {
+    *allocs = burrow__atomic_load_u64(&heap_count_allocs);
+    *bytes = burrow__atomic_load_u64(&heap_count_bytes);
+}
+
 static void *heap_alloc(void *self, size_t size, size_t align) {
     (void)self;
     if (!heap_align_ok(align) || size == 0)
         return NULL;
-    return heap_raw(size, align);
+    void *p = heap_raw(size, align);
+    heap_note(p, size);
+    return p;
 }
 
 /* calloc rather than malloc plus memset, because a good allocator serving a
@@ -76,23 +106,21 @@ static void *heap_alloc_zeroed(void *self, size_t size, size_t align) {
     (void)self;
     if (!heap_align_ok(align) || size == 0)
         return NULL;
-    if (align <= BURROW_ALIGN_MAX)
-        return calloc(1, size);
-    void *p = heap_raw(size, align);
-    if (p != NULL)
-        memset(p, 0, size);
+    void *p;
+    if (align <= BURROW_ALIGN_MAX) {
+        p = calloc(1, size);
+    } else {
+        p = heap_raw(size, align);
+        if (p != NULL)
+            memset(p, 0, size);
+    }
+    heap_note(p, size);
     return p;
 }
 
-static void *heap_realloc(void *self, void *p, size_t old, size_t nsz, size_t align) {
-    (void)self;
-    if (!heap_align_ok(align) || nsz == 0)
-        return NULL;
-    if (p == NULL)
-        return heap_raw(nsz, align);
-    if (align <= BURROW_ALIGN_MAX)
-        return realloc(p, nsz);
+static void *heap_realloc_aligned(void *p, size_t old, size_t nsz, size_t align) {
 #if defined(_WIN32)
+    (void)old;
     return _aligned_realloc(p, nsz, align);
 #else
     /* There is no aligned realloc in standard C, so grow the honest way. The
@@ -105,6 +133,22 @@ static void *heap_realloc(void *self, void *p, size_t old, size_t nsz, size_t al
     heap_raw_free(p, align);
     return q;
 #endif
+}
+
+static void *heap_realloc(void *self, void *p, size_t old, size_t nsz, size_t align) {
+    (void)self;
+    if (!heap_align_ok(align) || nsz == 0)
+        return NULL;
+    void *q;
+    if (p == NULL)
+        q = heap_raw(nsz, align);
+    else if (align <= BURROW_ALIGN_MAX)
+        q = realloc(p, nsz);
+    else
+        q = heap_realloc_aligned(p, old, nsz, align);
+    if (p == NULL || nsz > old)
+        heap_note(q, nsz);
+    return q;
 }
 
 static void heap_free(void *self, void *p, size_t size, size_t align) {

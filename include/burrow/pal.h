@@ -280,6 +280,11 @@ int64_t pal_page_size(void);
  * Never less than one, including on a platform that will not say. */
 int64_t pal_cpu_count(void);
 
+/* The processor's name, the one a benchmark run prints on its cpu: line, into
+ * buf as a NUL terminated string cut to fit. Returns its length, which is zero
+ * when neither the processor nor the system will say. */
+int64_t pal_cpu_name(char *buf, int64_t cap);
+
 /* The machine's name into buf, NUL terminated, returning its length or -1.
  * A buffer too small is PAL_ERANGE. Not implemented yet, it arrives with os. */
 int64_t pal_hostname(char *buf, int64_t cap, PalErrno *err);

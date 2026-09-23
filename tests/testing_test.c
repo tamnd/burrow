@@ -323,10 +323,130 @@ static void child_sleep(void *env, TestingT *t) {
     time_sleep(10 * TIME_SECOND);
 }
 
+/* The benchmarks the child runs. Their timings differ from run to run and
+ * normalise turns every ns/op figure into N, so what is left to compare is the
+ * shape of the output and the counts that -test.benchtime=Nx fixes. */
+
+/* Enough work per op that no clock rounds it down to nothing, which would drop
+ * the ns/op column the way Go drops it for a zero. */
+static void spin(void) {
+    volatile Int sum = 0;
+    for (Int i = 0; i < 2000; i++)
+        sum += i;
+}
+
+static void child_bench_plain(void *env, TestingB *b) {
+    (void)env;
+    for (Int i = 0; i < testing_b_n(b); i++)
+        spin();
+}
+
+static void child_bench_loop(void *env, TestingB *b) {
+    (void)env;
+    while (testing_b_loop(b))
+        spin();
+}
+
+static void child_bench_metric(void *env, TestingB *b) {
+    (void)env;
+    while (testing_b_loop(b))
+        spin();
+    testing_b_report_metric(b, 42, BURROW_S("widgets/op"));
+    testing_b_set_bytes(b, 0);
+}
+
+static void child_bench_sub(void *env, TestingB *b) {
+    (void)env;
+    testing_b_run(b, BURROW_S("a"), BURROW_FN(TestingBFunc, child_bench_metric, NULL));
+    testing_b_run(b, BURROW_S("b"), BURROW_FN(TestingBFunc, child_bench_plain, NULL));
+}
+
+static void child_pb_body(void *env, TestingPB *pb) {
+    (void)env;
+    while (testing_pb_next(pb))
+        spin();
+}
+
+static void child_bench_parallel(void *env, TestingB *b) {
+    (void)env;
+    testing_b_set_parallelism(b, 2);
+    testing_b_run_parallel(b, BURROW_FN(TestingPBFunc, child_pb_body, NULL));
+}
+
+static void child_bench_fail(void *env, TestingB *b) {
+    (void)env;
+    testing_b_error_v(b, "broken");
+}
+
+static void child_bench_skip(void *env, TestingB *b) {
+    (void)env;
+    testing_b_skip_v(b, "not today");
+}
+
+static void child_bench_log(void *env, TestingB *b) {
+    (void)env;
+    testing_b_log_v(b, "noted");
+    for (Int i = 0; i < testing_b_n(b); i++)
+        spin();
+}
+
+static void child_bench_break(void *env, TestingB *b) {
+    (void)env;
+    while (testing_b_loop(b))
+        break;
+}
+
+static void child_bench_alloc(void *env, TestingB *b) {
+    (void)env;
+    testing_b_report_allocs(b);
+    for (Int i = 0; i < testing_b_n(b); i++) {
+        void *p = mem_alloc(heap_allocator(), 16, 8);
+        if (p == NULL)
+            testing_b_fatal_v(b, "out of memory");
+        spin();
+        mem_free(heap_allocator(), p, 16, 8);
+    }
+}
+
+/* testing.Benchmark on its own, outside any test binary's main. */
+static int run_benchfunc(void) {
+    TestingBenchmarkResult r =
+        testing_benchmark(BURROW_FN(TestingBFunc, child_bench_alloc, NULL));
+    fmt_printf_v("n=%d allocs=%d bytes=%d\n", r.n,
+                 testing_benchmark_result_allocs_per_op(r),
+                 testing_benchmark_result_alloced_bytes_per_op(r));
+    testing_benchmark_result_free(&r);
+    return 0;
+}
+
 static int run_child(const char *scenario) {
     TestingInternalTest tests[4];
     Int n = 0;
-    if (strcmp(scenario, "panic") == 0) {
+    TestingInternalBenchmark benchmarks[10];
+    Int nb = 0;
+    if (strcmp(scenario, "benchfunc") == 0)
+        return run_benchfunc();
+    if (strcmp(scenario, "bench") == 0 || strcmp(scenario, "benchbare") == 0) {
+        tests[n++] = (TestingInternalTest){BURROW_S("TestPass"), {child_pass, NULL}};
+        benchmarks[nb++] = (TestingInternalBenchmark){BURROW_S("BenchmarkPlain"),
+                                                      {child_bench_plain, NULL}};
+        benchmarks[nb++] = (TestingInternalBenchmark){BURROW_S("BenchmarkLoop"),
+                                                      {child_bench_loop, NULL}};
+        benchmarks[nb++] = (TestingInternalBenchmark){BURROW_S("BenchmarkSub"),
+                                                      {child_bench_sub, NULL}};
+        benchmarks[nb++] = (TestingInternalBenchmark){BURROW_S("BenchmarkParallel"),
+                                                      {child_bench_parallel, NULL}};
+        benchmarks[nb++] = (TestingInternalBenchmark){BURROW_S("BenchmarkFail"),
+                                                      {child_bench_fail, NULL}};
+        benchmarks[nb++] = (TestingInternalBenchmark){BURROW_S("BenchmarkSkip"),
+                                                      {child_bench_skip, NULL}};
+        benchmarks[nb++] = (TestingInternalBenchmark){BURROW_S("BenchmarkLog"),
+                                                      {child_bench_log, NULL}};
+        benchmarks[nb++] = (TestingInternalBenchmark){BURROW_S("BenchmarkBreak"),
+                                                      {child_bench_break, NULL}};
+        benchmarks[nb++] = (TestingInternalBenchmark){BURROW_S("BenchmarkAlloc"),
+                                                      {child_bench_alloc, NULL}};
+    } else if (strcmp(scenario, "panic") == 0) {
         tests[n++] = (TestingInternalTest){BURROW_S("TestPass"), {child_pass, NULL}};
         tests[n++] = (TestingInternalTest){BURROW_S("TestPanic"), {child_panic, NULL}};
     } else if (strcmp(scenario, "sleep") == 0) {
@@ -337,13 +457,14 @@ static int run_child(const char *scenario) {
         tests[n++] = (TestingInternalTest){BURROW_S("TestSub"), {child_sub, NULL}};
         tests[n++] = (TestingInternalTest){BURROW_S("TestMulti"), {child_multi, NULL}};
     }
-    TestingM *m =
-        testing_main_start((TestingMatchString){NULL, NULL},
-                           slice_from(tests, n, n, TYPE_TESTING_INTERNAL_TEST),
-                           slice_nil(TYPE_TESTING_INTERNAL_BENCHMARK),
-                           slice_nil(TYPE_TESTING_INTERNAL_FUZZ_TARGET),
-                           slice_nil(TYPE_TESTING_INTERNAL_EXAMPLE));
-    testing_m_set_bare(m, strcmp(scenario, "bare") == 0);
+    TestingM *m = testing_main_start(
+        (TestingMatchString){NULL, NULL},
+        slice_from(tests, n, n, TYPE_TESTING_INTERNAL_TEST),
+        slice_from(benchmarks, nb, nb, TYPE_TESTING_INTERNAL_BENCHMARK),
+        slice_nil(TYPE_TESTING_INTERNAL_FUZZ_TARGET),
+        slice_nil(TYPE_TESTING_INTERNAL_EXAMPLE));
+    testing_m_set_bare(m, strcmp(scenario, "bare") == 0 ||
+                              strcmp(scenario, "benchbare") == 0);
     int code = testing_m_run(m);
     testing_m_free(m);
     return code;
@@ -379,20 +500,70 @@ static bool is_digit(char c) {
     return c >= '0' && c <= '9';
 }
 
+static const char *const machine_lines[] = {"goos: ", "goarch: "};
+
 /* The output with every "(1.23s)" made "(0.00s)", every line number after a
- * file name made N and every \r dropped, which is what Windows adds. */
+ * file name made N and every \r dropped, which is what Windows adds. For
+ * benchmarks, every ns/op figure is made N, the goos and goarch lines lose
+ * what comes after the colon and the cpu line goes, since not every machine
+ * has a name to give it. */
 static void normalise(Buf *out, const char *s) {
     static const char file[] = "testing_test.c:";
+    static const char lib[] = "testing.c:";
     size_t flen = sizeof file - 1;
+    size_t llen = sizeof lib - 1;
+    bool bol = true;
     while (*s != 0) {
         if (*s == '\r') {
             s++;
             continue;
         }
+        if (bol && strncmp(s, "cpu: ", 5) == 0) {
+            while (*s != 0 && *s != '\n')
+                s++;
+            if (*s == '\n')
+                s++;
+            continue;
+        }
+        if (bol) {
+            for (size_t i = 0; i < sizeof machine_lines / sizeof machine_lines[0];
+                 i++) {
+                size_t n = strlen(machine_lines[i]);
+                if (strncmp(s, machine_lines[i], n) == 0) {
+                    put(out, machine_lines[i], n);
+                    put(out, "X", 1);
+                    while (*s != 0 && *s != '\n')
+                        s++;
+                    break;
+                }
+            }
+        }
+        bol = *s == '\n';
+        if (*s == '\t') {
+            const char *e = s + 1;
+            while (*e == ' ')
+                e++;
+            const char *d = e;
+            while (is_digit(*e) || *e == '.')
+                e++;
+            if (e > d && strncmp(e, " ns/op", 6) == 0) {
+                put(out, "\tN ns/op", 8);
+                s = e + 6;
+                continue;
+            }
+        }
         if (strncmp(s, file, flen) == 0 && is_digit(s[flen])) {
             put(out, file, flen);
             put(out, "N", 1);
             s += flen;
+            while (is_digit(*s))
+                s++;
+            continue;
+        }
+        if (strncmp(s, lib, llen) == 0 && is_digit(s[llen])) {
+            put(out, lib, llen);
+            put(out, "N", 1);
+            s += llen;
             while (is_digit(*s))
                 s++;
             continue;
@@ -552,11 +723,111 @@ static const Scenario scenarios[] = {
      false},
 };
 
-static void TestOutput(TestingT *t) {
-    if (self_path == NULL)
-        testing_t_skip_v(t, "no path to this binary");
-    for (size_t i = 0; i < sizeof scenarios / sizeof scenarios[0]; i++) {
-        const Scenario *sc = &scenarios[i];
+/* The same, for benchmarks. */
+static const Scenario bench_scenarios[] = {
+    {"-test.bench=. -test.benchtime=10x -test.cpu=1", "bench", 1,
+     "goos: X\n"
+     "goarch: X\n"
+     "BenchmarkPlain    \t      10\tN ns/op\n"
+     "BenchmarkLoop     \t      10\tN ns/op\n"
+     "BenchmarkSub/a    \t      10\tN ns/op\t        42.00 widgets/op\n"
+     "BenchmarkSub/b    \t      10\tN ns/op\n"
+     "BenchmarkParallel \t      10\tN ns/op\n"
+     "--- FAIL: BenchmarkFail\n"
+     "    testing_test.c:N: broken\n"
+     "BenchmarkLog      \t      10\tN ns/op\n"
+     "--- BENCH: BenchmarkLog\n"
+     "    testing_test.c:N: noted\n"
+     "    testing_test.c:N: noted\n"
+     "--- FAIL: BenchmarkBreak\n"
+     "    testing.c:N: benchmark function returned without B.Loop() == false (break or "
+     "return in loop?)\n"
+     "BenchmarkAlloc    \t      10\tN ns/op\t      16 B/op\t       1 allocs/op\n"
+     "FAIL\n",
+     false},
+    {"-test.bench=. -test.benchtime=10x -test.cpu=2 -test.v", "bench", 1,
+     "=== RUN   TestPass\n"
+     "    testing_test.c:N: hello\n"
+     "--- PASS: TestPass (0.00s)\n"
+     "goos: X\n"
+     "goarch: X\n"
+     "BenchmarkPlain\n"
+     "BenchmarkPlain-2      \t      10\tN ns/op\n"
+     "BenchmarkLoop\n"
+     "BenchmarkLoop-2       \t      10\tN ns/op\n"
+     "BenchmarkSub\n"
+     "BenchmarkSub/a\n"
+     "BenchmarkSub/a-2      \t      10\tN ns/op\t        42.00 widgets/op\n"
+     "BenchmarkSub/b\n"
+     "BenchmarkSub/b-2      \t      10\tN ns/op\n"
+     "BenchmarkParallel\n"
+     "BenchmarkParallel-2   \t      10\tN ns/op\n"
+     "BenchmarkFail\n"
+     "    testing_test.c:N: broken\n"
+     "--- FAIL: BenchmarkFail\n"
+     "BenchmarkSkip\n"
+     "    testing_test.c:N: not today\n"
+     "--- SKIP: BenchmarkSkip\n"
+     "BenchmarkLog\n"
+     "    testing_test.c:N: noted\n"
+     "    testing_test.c:N: noted\n"
+     "BenchmarkLog-2        \t      10\tN ns/op\n"
+     "BenchmarkBreak\n"
+     "    testing.c:N: benchmark function returned without B.Loop() == false (break or "
+     "return in loop?)\n"
+     "--- FAIL: BenchmarkBreak\n"
+     "BenchmarkAlloc\n"
+     "BenchmarkAlloc-2      \t      10\tN ns/op\t      16 B/op\t       1 allocs/op\n"
+     "FAIL\n",
+     false},
+    {"-test.run=X -test.bench=Alloc -test.benchtime=10x -test.cpu=1 -test.benchmem",
+     "bench", 0,
+     "goos: X\n"
+     "goarch: X\n"
+     "BenchmarkAlloc \t      10\tN ns/op\t      16 B/op\t       1 allocs/op\n"
+     "PASS\n",
+     false},
+    {"-test.run=X -test.bench=Plain -test.benchtime=3x -test.cpu=1,2 -test.count=2",
+     "bench", 0,
+     "goos: X\n"
+     "goarch: X\n"
+     "BenchmarkPlain     \t       3\tN ns/op\n"
+     "BenchmarkPlain     \t       3\tN ns/op\n"
+     "BenchmarkPlain-2   \t       3\tN ns/op\n"
+     "BenchmarkPlain-2   \t       3\tN ns/op\n"
+     "PASS\n",
+     false},
+    {"-test.run=Pass -test.bench=Sub/a -test.benchtime=3x -test.cpu=1 "
+     "-test.v=test2json",
+     "bench", 0,
+     "\x16=== RUN   TestPass\n"
+     "    testing_test.c:N: hello\n"
+     "\x16--- PASS: TestPass (0.00s)\n"
+     "\x16=== NAME  \n"
+     "goos: X\n"
+     "goarch: X\n"
+     "\x16=== RUN   BenchmarkSub\n"
+     "BenchmarkSub\n"
+     "\x16=== RUN   BenchmarkSub/a\n"
+     "BenchmarkSub/a\n"
+     "BenchmarkSub/a         \t       3\tN ns/op\t        42.00 widgets/op\n"
+     "\x16=== NAME  \n"
+     "\x16PASS\n",
+     false},
+    {"-test.bench=Sub -test.benchtime=5x -test.cpu=1", "benchbare", 0,
+     "goos: X\n"
+     "goarch: X\n"
+     "BenchmarkSub/a         \t       5\tN ns/op\t        42.00 widgets/op\n"
+     "BenchmarkSub/b         \t       5\tN ns/op\n"
+     "PASS\n",
+     false},
+    {"-test.run=X -test.bench=X", "bench", 0, "PASS\n", false},
+    {"-test.benchtime=7x", "benchfunc", 0, "n=7 allocs=1 bytes=16\n", false},
+};
+
+static void check_scenarios(TestingT *t, const Scenario *list, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        const Scenario *sc = &list[i];
         Buf out = {0};
         int code = spawn(sc->flags, sc->name, &out);
         size_t wlen = strlen(sc->want);
@@ -571,6 +842,19 @@ static void TestOutput(TestingT *t) {
                                sc->want);
         buf_free(&out);
     }
+}
+
+static void TestBenchmarkOutput(TestingT *t) {
+    if (self_path == NULL)
+        testing_t_skip_v(t, "no path to this binary");
+    check_scenarios(t, bench_scenarios,
+                    sizeof bench_scenarios / sizeof bench_scenarios[0]);
+}
+
+static void TestOutput(TestingT *t) {
+    if (self_path == NULL)
+        testing_t_skip_v(t, "no path to this binary");
+    check_scenarios(t, scenarios, sizeof scenarios / sizeof scenarios[0]);
 }
 
 static void TestHelpers(TestingT *t) {
@@ -595,24 +879,17 @@ static void TestHelpers(TestingT *t) {
     X(TestSkip)                                                                        \
     X(TestParallel)                                                                    \
     X(TestHelpers)                                                                     \
-    X(TestOutput)
-
-TESTS(BURROW__TESTING_THUNK)
+    X(TestOutput)                                                                      \
+    X(TestBenchmarkOutput)
 
 int main(int argc, char **argv) {
-    testing_init(argc, argv);
-    if (argc >= 3 && strcmp(argv[argc - 2], "child") == 0)
+    if (argc >= 3 && strcmp(argv[argc - 2], "child") == 0) {
+        testing_init(argc, argv);
         return run_child(argv[argc - 1]);
+    }
     self_path = argv[0];
-    static const TestingInternalTest tests[] = {TESTS(BURROW__TESTING_ENTRY)};
-    Int n = (Int)(sizeof tests / sizeof tests[0]);
-    TestingM *m = testing_main_start(
-        (TestingMatchString){NULL, NULL},
-        slice_from((void *)(uintptr_t)tests, n, n, TYPE_TESTING_INTERNAL_TEST),
-        slice_nil(TYPE_TESTING_INTERNAL_BENCHMARK),
-        slice_nil(TYPE_TESTING_INTERNAL_FUZZ_TARGET),
-        slice_nil(TYPE_TESTING_INTERNAL_EXAMPLE));
-    int code = testing_m_run(m);
-    testing_m_free(m);
-    return code;
+    static const burrow__TestingEntry entries[] = {TESTS(BURROW__TESTING_ENTRY)};
+    return burrow__testing_main(argc, argv, entries,
+                                (Int)(sizeof entries / sizeof entries[0]), false,
+                                testing_m_run);
 }

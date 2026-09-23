@@ -91,9 +91,13 @@ typedef struct TestingT TestingT;
 /* testing.M, what a TestMain function receives and runs. */
 typedef struct TestingM TestingM;
 
-/* testing.B and testing.F, declared so that the tables below can name them. */
+/* testing.B, what a benchmark gets, and testing.F, declared so that the
+ * tables below can name it. */
 typedef struct TestingB TestingB;
 typedef struct TestingF TestingF;
+
+/* testing.PB, what testing_b_run_parallel hands each goroutine. */
+typedef struct TestingPB TestingPB;
 
 /* func(*T), which is what a test and a subtest are. The env comes first as it
  * does for every function value. TESTING_MAIN writes the adapter for a plain
@@ -101,6 +105,7 @@ typedef struct TestingF TestingF;
 BURROW_FUNC(TestingTFunc, void, TestingT *t);
 BURROW_FUNC(TestingBFunc, void, TestingB *b);
 BURROW_FUNC(TestingFFunc, void, TestingF *f);
+BURROW_FUNC(TestingPBFunc, void, TestingPB *pb);
 
 /* The function Go hands MainStart for -test.run and friends, which says
  * whether a pattern matches a name. A nil one means the built in matcher,
@@ -177,8 +182,8 @@ typedef struct TestingTB {
  * for profiles, coverage, tracing and fuzzing are accepted and do nothing.
  * -test.shuffle takes the same values but shuffles with a generator of its
  * own, so a seed gives a different order from the one Go would give. Tables of
- * benchmarks, fuzz targets and examples are accepted and listed by -test.list,
- * and are not run yet. */
+ * fuzz targets and examples are accepted and listed by -test.list, and are not
+ * run yet. */
 void testing_init(int argc, char **argv);
 
 /* testing.Short, testing.Verbose and testing.Testing. Short and Verbose read
@@ -329,12 +334,197 @@ void burrow__testing_t_logf(TestingT *t, const char *file, int line,
     burrow__testing_t_logf((t), __FILE__, __LINE__, BURROW__TESTING_SKIP,              \
                            BURROW__FMT_FARGS(BURROW_ANY_OF, __VA_ARGS__))
 
+/* ---------------------------------------------------------------- benchmarks
+ *
+ * A benchmark is a function taking a TestingB. It runs the code being
+ * measured in a loop, and the runner calls it with a growing count until the
+ * run takes -test.benchtime, one second unless told otherwise:
+ *
+ *     static void BenchmarkAbs(TestingB *b) {
+ *         while (testing_b_loop(b))
+ *             abs_int(-1);
+ *     }
+ *
+ * Benchmarks go in the same list as tests and run when -test.bench matches
+ * them, after the tests, one at a time. The line each prints is Go's, so
+ * benchstat reads it:
+ *
+ *     BenchmarkAbs-10    	667417046	         1.800 ns/op
+ *
+ * The number after the name is the -test.cpu value, left off when it is 1.
+ * The scheduler cannot change GOMAXPROCS while it runs, so every benchmark
+ * runs with the largest value in the list and the name says which one this
+ * pass stands for. testing_b_run_parallel starts that many goroutines, times
+ * the parallelism, which is the part where the number matters.
+ *
+ * allocs/op and B/op count what went through heap_allocator, which is where
+ * everything in burrow allocates unless handed something else. An arena counts
+ * when it takes a chunk from the heap and not when it hands out a piece of
+ * one, which is the point of having an arena.
+ *
+ * testing.BenchmarkResult. The extra metrics are sorted by unit, and the
+ * result owns them: testing_benchmark_result_free gives them back. */
+typedef struct TestingMetric {
+    Str unit;
+    double value;
+} TestingMetric;
+
+typedef struct TestingBenchmarkResult {
+    Int n;               /* the number of iterations */
+    int64_t t;           /* the total time taken, in nanoseconds */
+    int64_t bytes;       /* bytes processed in one iteration */
+    uint64_t mem_allocs; /* the total number of allocations */
+    uint64_t mem_bytes;  /* the total number of bytes allocated */
+    TestingMetric *extra;
+    Int nextra;
+} TestingBenchmarkResult;
+
+int64_t testing_benchmark_result_ns_per_op(TestingBenchmarkResult r);
+int64_t testing_benchmark_result_allocs_per_op(TestingBenchmarkResult r);
+int64_t testing_benchmark_result_alloced_bytes_per_op(TestingBenchmarkResult r);
+BURROW_OWNS(ret) Str testing_benchmark_result_string(Alloc *a,
+                                                     TestingBenchmarkResult r);
+BURROW_OWNS(ret) Str testing_benchmark_result_mem_string(Alloc *a,
+                                                         TestingBenchmarkResult r);
+
+/* r.Extra[unit], which Go reads straight out of the map. */
+bool testing_benchmark_result_extra(TestingBenchmarkResult r, Str unit, double *value);
+void testing_benchmark_result_free(TestingBenchmarkResult *r);
+
+/* testing.Benchmark: runs one benchmark on its own and hands back the result,
+ * for a program that wants the numbers rather than the printed line. It starts
+ * the scheduler when it is not already running. -test.benchtime applies when
+ * the flags have been parsed, and one second when they have not. */
+TestingBenchmarkResult testing_benchmark(TestingBFunc f);
+
+/* testing.RunBenchmarks, the table form, with the flags as they are. */
+void testing_run_benchmarks(TestingMatchString match, Slice benchmarks);
+
+/* The part of a B that testing_b_loop and testing_b_n read without a call.
+ * Nothing else should touch it. */
+typedef struct burrow__TestingBHead {
+    uint64_t loop_n;
+    uint64_t loop_i;
+    Int n;
+} burrow__TestingBHead;
+
+bool burrow__testing_b_loop_slow(TestingB *b);
+BURROW_BORROWS(ret, b) TestingT *burrow__testing_b_t(TestingB *b);
+
+/* b.Loop: true while the benchmark should run another iteration. The first
+ * call starts the clock afresh, so setup before the loop is not measured, and
+ * the one that returns false stops it, so neither is teardown after it. The
+ * common case is an increment and a compare, inline. */
+static inline bool testing_b_loop(TestingB *b) {
+    burrow__TestingBHead *h = (burrow__TestingBHead *)(void *)b;
+    if (h->loop_i < h->loop_n) {
+        h->loop_i++;
+        return true;
+    }
+    return burrow__testing_b_loop_slow(b);
+}
+
+/* b.N, for the older form of the loop:
+ *
+ *     for (Int i = 0; i < testing_b_n(b); i++)
+ *         abs_int(-1);
+ */
+static inline Int testing_b_n(TestingB *b) {
+    return ((burrow__TestingBHead *)(void *)b)->n;
+}
+
+void testing_b_start_timer(TestingB *b);
+void testing_b_stop_timer(TestingB *b);
+void testing_b_reset_timer(TestingB *b);
+void testing_b_set_bytes(TestingB *b, int64_t n);
+void testing_b_report_allocs(TestingB *b);
+void testing_b_report_metric(TestingB *b, double n, Str unit);
+int64_t testing_b_elapsed(TestingB *b);
+bool testing_b_run(TestingB *b, Str name, TestingBFunc f);
+void testing_b_run_parallel(TestingB *b, TestingPBFunc body);
+void testing_b_set_parallelism(TestingB *b, int p);
+bool testing_pb_next(TestingPB *pb);
+
+/* The methods B shares with T, which do what T's do. */
+BURROW_BORROWS(ret, b) Str testing_b_name(TestingB *b);
+void testing_b_fail(TestingB *b);
+bool testing_b_failed(TestingB *b);
+BURROW_NORETURN void testing_b_fail_now(TestingB *b);
+BURROW_NORETURN void testing_b_skip_now(TestingB *b);
+bool testing_b_skipped(TestingB *b);
+void testing_b_helper(TestingB *b);
+void testing_b_cleanup(TestingB *b, Func f);
+BURROW_BORROWS(ret, b) Context testing_b_context(TestingB *b);
+IoWriter testing_b_output(TestingB *b);
+void testing_b_attr(TestingB *b, Str key, Str value);
+TestingTB testing_b_as_testing_tb(TestingB *b);
+
+#define testing_b_log(b, args)                                                         \
+    burrow__testing_t_logln(burrow__testing_b_t(b), __FILE__, __LINE__,                \
+                            BURROW__TESTING_LOG, (args))
+#define testing_b_logf(b, format, args)                                                \
+    burrow__testing_t_logf(burrow__testing_b_t(b), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_LOG, (format), (args))
+#define testing_b_error(b, args)                                                       \
+    burrow__testing_t_logln(burrow__testing_b_t(b), __FILE__, __LINE__,                \
+                            BURROW__TESTING_ERROR, (args))
+#define testing_b_errorf(b, format, args)                                              \
+    burrow__testing_t_logf(burrow__testing_b_t(b), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_ERROR, (format), (args))
+#define testing_b_fatal(b, args)                                                       \
+    burrow__testing_t_logln(burrow__testing_b_t(b), __FILE__, __LINE__,                \
+                            BURROW__TESTING_FATAL, (args))
+#define testing_b_fatalf(b, format, args)                                              \
+    burrow__testing_t_logf(burrow__testing_b_t(b), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_FATAL, (format), (args))
+#define testing_b_skip(b, args)                                                        \
+    burrow__testing_t_logln(burrow__testing_b_t(b), __FILE__, __LINE__,                \
+                            BURROW__TESTING_SKIP, (args))
+#define testing_b_skipf(b, format, args)                                               \
+    burrow__testing_t_logf(burrow__testing_b_t(b), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_SKIP, (format), (args))
+
+#define testing_b_log_v(b, ...)                                                        \
+    burrow__testing_t_logln(burrow__testing_b_t(b), __FILE__, __LINE__,                \
+                            BURROW__TESTING_LOG,                                       \
+                            BURROW__FMT_ARGS(BURROW_ANY_OF, __VA_ARGS__))
+#define testing_b_logf_v(b, ...)                                                       \
+    burrow__testing_t_logf(burrow__testing_b_t(b), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_LOG,                                        \
+                           BURROW__FMT_FARGS(BURROW_ANY_OF, __VA_ARGS__))
+#define testing_b_error_v(b, ...)                                                      \
+    burrow__testing_t_logln(burrow__testing_b_t(b), __FILE__, __LINE__,                \
+                            BURROW__TESTING_ERROR,                                     \
+                            BURROW__FMT_ARGS(BURROW_ANY_OF, __VA_ARGS__))
+#define testing_b_errorf_v(b, ...)                                                     \
+    burrow__testing_t_logf(burrow__testing_b_t(b), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_ERROR,                                      \
+                           BURROW__FMT_FARGS(BURROW_ANY_OF, __VA_ARGS__))
+#define testing_b_fatal_v(b, ...)                                                      \
+    burrow__testing_t_logln(burrow__testing_b_t(b), __FILE__, __LINE__,                \
+                            BURROW__TESTING_FATAL,                                     \
+                            BURROW__FMT_ARGS(BURROW_ANY_OF, __VA_ARGS__))
+#define testing_b_fatalf_v(b, ...)                                                     \
+    burrow__testing_t_logf(burrow__testing_b_t(b), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_FATAL,                                      \
+                           BURROW__FMT_FARGS(BURROW_ANY_OF, __VA_ARGS__))
+#define testing_b_skip_v(b, ...)                                                       \
+    burrow__testing_t_logln(burrow__testing_b_t(b), __FILE__, __LINE__,                \
+                            BURROW__TESTING_SKIP,                                      \
+                            BURROW__FMT_ARGS(BURROW_ANY_OF, __VA_ARGS__))
+#define testing_b_skipf_v(b, ...)                                                      \
+    burrow__testing_t_logf(burrow__testing_b_t(b), __FILE__, __LINE__,                 \
+                           BURROW__TESTING_SKIP,                                       \
+                           BURROW__FMT_FARGS(BURROW_ANY_OF, __VA_ARGS__))
+
 /* ------------------------------------------------------------------ main
  *
- * The part go test writes for you. LIST is an X macro naming each test
- * function, each of which takes a TestingT and returns nothing:
+ * The part go test writes for you. LIST is an X macro naming each test and
+ * benchmark function. A test takes a TestingT, a benchmark takes a TestingB,
+ * and the macro tells them apart by type, the way go test tells them apart by
+ * name, so a function of any other type is a compile error:
  *
- *     #define TESTS(X) X(TestParse) X(TestFormat)
+ *     #define TESTS(X) X(TestParse) X(TestFormat) X(BenchmarkParse)
  *     TESTING_MAIN(TESTS)
  *
  * TESTING_MAIN_WITH also takes a TestMain, which gets the M and returns the
@@ -348,33 +538,35 @@ void burrow__testing_t_logf(TestingT *t, const char *file, int line,
  *     }
  *     TESTING_MAIN_WITH(TestMain, TESTS)
  */
-#define BURROW__TESTING_THUNK(name)                                                    \
-    static void burrow__testing_thunk_##name(void *env, TestingT *t) {                 \
-        (void)env;                                                                     \
-        name(t);                                                                       \
-    }
+typedef enum burrow__TestingKind {
+    BURROW__TESTING_KIND_TEST = 1,
+    BURROW__TESTING_KIND_BENCHMARK = 2,
+} burrow__TestingKind;
+
+typedef struct burrow__TestingEntry {
+    Str name;
+    int kind;
+    void (*fn)(void);
+} burrow__TestingEntry;
+
+int burrow__testing_main(int argc, char **argv, const burrow__TestingEntry *entries,
+                         Int n, bool bare, int (*main_fn)(TestingM *m));
+
+#define BURROW__TESTING_KIND(name)                                                     \
+    _Generic(&(name),                                                                  \
+        void (*)(TestingT *): BURROW__TESTING_KIND_TEST,                               \
+        void (*)(TestingB *): BURROW__TESTING_KIND_BENCHMARK)
 #define BURROW__TESTING_ENTRY(name)                                                    \
-    {BURROW_S_INIT(#name), {burrow__testing_thunk_##name, NULL}},
+    {BURROW_S_INIT(#name), BURROW__TESTING_KIND(name), (void (*)(void))(name)},
 
 #define BURROW__TESTING_MAIN(LIST, bare, main_fn)                                      \
-    LIST(BURROW__TESTING_THUNK)                                                        \
     int main(int argc, char **argv) {                                                  \
-        static const TestingInternalTest burrow__tests[] = {                           \
+        static const burrow__TestingEntry burrow__entries[] = {                        \
             LIST(BURROW__TESTING_ENTRY)};                                              \
-        testing_init(argc, argv);                                                      \
-        TestingM *m = testing_main_start(                                              \
-            (TestingMatchString){NULL, NULL},                                          \
-            slice_from((void *)burrow__tests,                                          \
-                       (Int)(sizeof burrow__tests / sizeof burrow__tests[0]),          \
-                       (Int)(sizeof burrow__tests / sizeof burrow__tests[0]),          \
-                       TYPE_TESTING_INTERNAL_TEST),                                    \
-            slice_nil(TYPE_TESTING_INTERNAL_BENCHMARK),                                \
-            slice_nil(TYPE_TESTING_INTERNAL_FUZZ_TARGET),                              \
-            slice_nil(TYPE_TESTING_INTERNAL_EXAMPLE));                                 \
-        testing_m_set_bare(m, (bare));                                                 \
-        int burrow__code = main_fn(m);                                                 \
-        testing_m_free(m);                                                             \
-        return burrow__code;                                                           \
+        return burrow__testing_main(                                                   \
+            argc, argv, burrow__entries,                                               \
+            (Int)(sizeof burrow__entries / sizeof burrow__entries[0]), (bare),         \
+            main_fn);                                                                  \
     }
 
 #define TESTING_MAIN(LIST) BURROW__TESTING_MAIN(LIST, false, testing_m_run)

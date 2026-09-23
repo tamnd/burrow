@@ -497,13 +497,21 @@ BURROW_BORROWS(ret, t) const Type *type_out(const Type *t, Int i);
 #elif defined(__ELF__) && defined(__GNUC__)
 #define BURROW__TYPE_SECTION                                                           \
     BURROW__TYPE_NO_REDZONE __attribute__((used, section("burrowtype")))
-#elif defined(_MSC_VER)
-#define BURROW__TYPE_SECTION __declspec(allocate(".brwt$b"))
 #endif
 
 #if defined(BURROW__TYPE_SECTION)
 #define BURROW__TYPE_SECTION_ENTRY(T, sym)                                             \
     BURROW__TYPE_SECTION static const Type *const burrow__typeref_##T = &(sym)
+#elif defined(_MSC_VER)
+/* MSVC wants the section declared by a pragma in every file that puts anything
+ * in it, not only in the file that reads it, and __pragma is the spelling of
+ * that which fits in a macro. The pointer is not static here because MSVC has
+ * no used attribute and is free to drop a static that nothing refers to. A
+ * const at file scope in C is external without being told, so this is the
+ * static above with the keyword taken off and nothing else. */
+#define BURROW__TYPE_SECTION_ENTRY(T, sym)                                             \
+    __pragma(section(".brwt$b", read)) __declspec(allocate(".brwt$b"))                 \
+    const Type *const burrow__typeref_##T = &(sym)
 #elif defined(__GNUC__)
 /* No section, but constructors work, which is the case for a target with an
  * object format burrow has not been told about. One store each, before main. */

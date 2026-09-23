@@ -2439,7 +2439,7 @@ static bool run_example(const TestingInternalExample *eg) {
                  fmt_sprintf_v(a, "%s--- PASS: %s (%s)\n", prefix, eg->name, dstr));
     }
     if (chatty && pkg.flags[F_V].json)
-        write_to(stdout, fmt_sprintf_v(a, "%s=== NAME   %s\n", prefix, BURROW_S("")));
+        write_to(stdout, fmt_sprintf_v(a, "%s=== NAME   \n", prefix));
     buf_free(&sp->out);
     arena_free(&ar);
     if (sp->has_panic)

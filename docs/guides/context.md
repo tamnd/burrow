@@ -8,6 +8,7 @@ Nothing in it is complicated on its own. A context is two words, it answers four
 
 ## The four questions
 
+<!-- example: ../examples/context/context.c#questions -->
 ```c
 bool context_deadline(Context c, int64_t *when);
 Chan *context_done(Context c);
@@ -29,6 +30,7 @@ Every one of the four stops the program on the nil `Context`, with the message G
 
 ## Checking, and waiting
 
+<!-- example: ../examples/context/context.c#poll -->
 ```c
 static void work(void *env) {
     Context ctx = *(Context *)env;
@@ -36,11 +38,13 @@ static void work(void *env) {
 
     while (!chan_try_recv(context_done(ctx), NULL, &ok))
         step();
+    sync_wait_group_done(&finished);
 }
 ```
 
 That is the polling shape, for a loop that has something to do between checks. `chan_try_recv` on an open channel answers false and touches nothing, so the check is a load and a branch.
 
+<!-- example: ../examples/context/context.c#select -->
 ```c
 SelectCase cases[2];
 
@@ -48,7 +52,7 @@ cases[0] = BURROW_RECV(context_done(ctx), NULL);
 cases[1] = BURROW_RECV(jobs, &job);
 
 if (chan_select(cases, 2) == 0)
-    return;
+    break;
 do_the_job(&job);
 ```
 
@@ -58,19 +62,24 @@ Never send on a done channel and never close one. It belongs to the context.
 
 ## Making one
 
+<!-- example: ../examples/context/context.c#cancel -->
 ```c
 ContextCancelFunc cancel;
 Context ctx = context_with_cancel(a, context_background(), &cancel);
 if (BURROW_CONTEXT_IS_NIL(ctx))
-    return err_no_memory;
+    return burrow_err_out_of_memory;
 
 go(BURROW_FN(Func, work, &ctx));
-...
+runtime_gosched(); /* give it a moment to get going */
+
 BURROW_CALLF0(cancel);
+sync_wait_group_wait(&finished); /* work has seen it and returned */
 context_free(ctx);
 ```
 
 `context_with_cancel` is `context.WithCancel`. It returns a copy of the parent that is also cancelled when the function it writes to `*cancel` is called.
+
+The wait between the cancel and the free is not decoration. `work` keeps reading the context's done channel until it notices the close, so freeing the context before `work` has returned would leave it reading freed memory. `finished` is a `SyncWaitGroup` that `work` marks done on its way out, which is the last thing it does with the context.
 
 `context_background` is the root of every tree. It is never cancelled, has no deadline, carries no values, costs nothing to make and needs no allocator and no free.
 
@@ -82,11 +91,12 @@ Calling the cancel function is not optional. Until it runs, the context is still
 
 ## Deadlines
 
+<!-- example: ../examples/context/context.c#timeout -->
 ```c
 ContextCancelFunc cancel;
 Context ctx = context_with_timeout(a, parent, 5 * TIME_SECOND, &cancel);
 if (BURROW_CONTEXT_IS_NIL(ctx))
-    return err_no_memory;
+    return burrow_err_out_of_memory;
 
 Error err = talk_to_the_database(ctx);
 
@@ -108,16 +118,24 @@ A child cannot outlast its parent. Asking for a deadline later than the parent's
 
 ## Causes
 
+<!-- example: ../examples/context/context.c#cause -->
 ```c
 BURROW_SENTINEL_ERROR(err_client_hung_up, "the client hung up");
 
-ContextCancelCauseFunc cancel;
-Context ctx = context_with_cancel_cause(a, parent, &cancel);
-...
-BURROW_CALLF(cancel, err_client_hung_up);
-...
-if (BURROW_FAILED(context_err(ctx)))
-    log_error(context_cause(ctx)); /* the client hung up */
+static void handle(Alloc *a, Context parent) {
+    ContextCancelCauseFunc cancel;
+    Context ctx = context_with_cancel_cause(a, parent, &cancel);
+    if (BURROW_CONTEXT_IS_NIL(ctx))
+        return;
+
+    /* Somewhere further up, the connection closes. */
+    BURROW_CALLF(cancel, err_client_hung_up);
+
+    /* And somewhere further down, the work notices. */
+    if (BURROW_FAILED(context_err(ctx)))
+        log_error(context_cause(ctx)); /* the client hung up */
+    context_free(ctx);
+}
 ```
 
 `context_err` answers one of two sentinels and always has. That is the right amount of detail for the code that has to decide whether to stop, and it is nowhere near enough for the code that has to explain afterwards why it did. A cancel arrives at the bottom of a call stack with nothing attached to say what happened at the top.
@@ -130,6 +148,7 @@ The first reason is the one that sticks. Calling the cancel twice does nothing t
 
 `context_cause` always has an answer for a cancelled context. Pass `BURROW_NO_ERROR` as the reason, or cancel with a plain `ContextCancelFunc`, and the cause is whatever `context_err` says, so reading the cause instead of the error is always safe and reading both is never necessary. A context that is still live answers `BURROW_NO_ERROR`, as does one that cannot be cancelled at all.
 
+<!-- example: ../examples/context/context.c#timeout-cause -->
 ```c
 Context ctx = context_with_timeout_cause(a, parent, 5 * TIME_SECOND,
                                          err_the_database_is_slow, &cancel);
@@ -139,13 +158,17 @@ Context ctx = context_with_timeout_cause(a, parent, 5 * TIME_SECOND,
 
 ## Work that outlives the request
 
+<!-- example: ../examples/context/context.c#detached -->
 ```c
-Context detached = context_without_cancel(a, ctx);
+Context *detached = BURROW_NEW(a, Context);
+*detached = context_without_cancel(a, ctx);
 
 go(BURROW_FN(Func, write_the_audit_log, detached));
 ```
 
 `context_without_cancel` is `context.WithoutCancel`. It keeps everything the parent carries and drops everything the parent does about stopping. Values still resolve through it, the deadline is gone, the done channel is `NULL`, and the error and the cause are both nothing no matter what happens above it.
+
+The goroutine outlives the handler that starts it, so the context it is handed lives in the allocator and not on the handler's stack. That is the lifetime rule from [the functions guide](functions.md): whatever a function value's environment points at has to outlive the value.
 
 It is for the work a handler starts and does not wait for. Flushing a buffer, writing an audit record, reporting a metric. Handing that work the request's context means it gets cancelled the moment the response goes out, which is exactly when it was about to start, and handing it `context_background` throws away the request id and the trace span it needed.
 
@@ -153,13 +176,16 @@ The break is one way. A context derived from a detached one is as cancellable as
 
 ## Cleanup that nobody is waiting for
 
+<!-- example: ../examples/context/context.c#after -->
 ```c
 StopFunc stop;
-Context reg = context_after_func(a, ctx, BURROW_FN(Func, close_the_connection, c),
-                                 &stop);
+Context reg =
+    context_after_func(a, ctx, BURROW_FN(Func, close_the_connection, c), &stop);
 if (BURROW_CONTEXT_IS_NIL(reg))
-    return err_no_memory;
-...
+    return burrow_err_out_of_memory;
+
+serve_the_connection(c);
+
 (void)BURROW_CALLF0(stop);
 context_free(reg);
 ```
@@ -176,15 +202,23 @@ Freeing one stops it first. Handing something back is not a reason for its clean
 
 ## Values
 
+<!-- example: ../examples/context/context.c#values -->
 ```c
 /* In your own .c file, and nowhere else. */
-static const Type request_id_type = { ... KIND_INT ... };
-static Int request_id_key;
+#define REQUEST_ID_KEY_FIELDS(F, T) F(T, Int, n, "")
+BURROW_STRUCT(RequestIDKey, REQUEST_ID_KEY_FIELDS);
 
-#define REQUEST_ID BURROW_ANY(&request_id_type, &request_id_key)
+static RequestIDKey request_id_key;
 
+#define REQUEST_ID BURROW_ANY(TYPE_OF(RequestIDKey), &request_id_key)
+```
+
+That declares a key type nobody else can name, and one key of it. Putting a value in and reading it back looks like this:
+
+<!-- example: ../examples/context/context.c#with-value -->
+```c
 Context ctx = context_with_value(a, parent, REQUEST_ID, BURROW_ANY(TYPE_INT, &id));
-...
+
 Any v = context_value(ctx, REQUEST_ID);
 if (!BURROW_ANY_IS_NIL(v))
     log_with_id(*(Int *)v.data);
@@ -192,7 +226,7 @@ if (!BURROW_ANY_IS_NIL(v))
 
 `context_with_value` is `context.WithValue`. Use it for values that belong to the request rather than to the call and that cross an API boundary: a request id, an authenticated user, a trace span. Not for passing arguments, which is what arguments are for.
 
-The key type should be private to whoever puts the value in, so that no two packages can collide on one. In Go that is an unexported named type. Here it is a `Type` descriptor declared `static` in your own `.c` file, and the effect is the same, because a key comparison compares descriptors before it compares anything else and nobody outside that file can name yours.
+The key type should be private to whoever puts the value in, so that no two packages can collide on one. In Go that is an unexported named type. Here it is a type declared in your own `.c` file and never mentioned in a header, and the effect is the same, because a key comparison compares descriptors before it compares anything else and nobody outside that file can name yours. `BURROW_STRUCT` is the short way to get one, and a struct with one `Int` in it is Go's `type ctxKey int` with room for more than one key.
 
 The key has to be comparable, since looking a value up compares keys, and a slice, a map or a function key stops the program the way Go's does.
 
@@ -200,6 +234,7 @@ Nothing is copied. Both `Any` values are two words and the context keeps them as
 
 ## Giving it back
 
+<!-- example: ../examples/context/context.c#free -->
 ```c
 context_free(ctx);
 ```
@@ -218,6 +253,7 @@ An arena user can skip all of it. `arena_free` takes the whole tree at once, the
 
 `Context` is an interface, the same shape an `Error` is, so a wrapper or a context with a different source of cancellation is a vtable and a struct.
 
+<!-- example: ../examples/context/context.c#custom -->
 ```c
 static const ContextVT my_vt = {NULL, my_deadline, my_done, my_err, my_value};
 

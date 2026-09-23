@@ -19,3 +19,4 @@ docs/guides/slices.md
 docs/guides/maps.md
 docs/guides/functions.md
 docs/guides/types.md
+docs/guides/context.md

@@ -17,6 +17,7 @@ C programmers hand roll a worse version of `strings` in every project. They reac
 
 ## What it looks like
 
+<!-- not compiled: uses strings_to_upper and fmt_println, and the strings and fmt packages come in a later milestone -->
 ```c
 #define BURROW_SHORT 1
 #include "burrow.h"
@@ -25,14 +26,14 @@ int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
-    DEFER(arena_free, &ar);
 
     Str body = S("the quick brown fox");
     Slice words = strings_fields(a, body);
 
     for (int i = 0; i < words.len; i++)
-        fmt_println(slice_at(Str, words, i));
+        fmt_println(AT(Str, words, i));
 
+    arena_free(&ar);
     return 0;
 }
 ```
@@ -62,6 +63,7 @@ Macros are the one exception and keep a `BURROW_` prefix, because a header that 
 
 Every function that can allocate takes an allocator as its first parameter. Uniformly, mechanically, with no exceptions.
 
+<!-- not compiled: uses the strings package, which comes in a later milestone -->
 ```c
 Str upper = strings_to_upper(a, name);
 Slice parts = strings_split(a, path, S("/"));
@@ -79,6 +81,7 @@ Go's numeric types are C's numeric types. `int8` through `int64` are `int8_t` th
 
 Keep writing `+`. What burrow adds is the handful of cases where C says the behaviour is undefined and Go says exactly what the answer is.
 
+<!-- example: docs/examples/readme/tour.c#numbers -->
 ```c
 Int n = int_add(a, b);          /* wraps, like Go. a + b is undefined if it overflows */
 Int q = int_div(a, b);          /* b == 0 stops the program with Go's message */
@@ -96,6 +99,7 @@ Go promises that the zero value of a type is a working value, and C gives you th
 
 Go returns two things where C returns one, so the extra results move to the end of the parameter list in Go's order, `error` goes last, and any of them can be `NULL` if you do not want it.
 
+<!-- not compiled: uses strconv, which comes in a later milestone -->
 ```c
 Int n = strconv_atoi(s, &err);
 Int m = strconv_atoi(s, NULL);   /* do not care why it failed */
@@ -107,6 +111,7 @@ Details: [docs/guides/conventions.md](docs/guides/conventions.md).
 
 A string is a pointer and a length, passed by value, and it is not NUL terminated.
 
+<!-- example: docs/examples/readme/tour.c#strings -->
 ```c
 Str name = S("burrow");
 Str arg  = str_from_cstr(argv[1]);   /* borrows, does not copy */
@@ -121,10 +126,11 @@ Details, including how to get a real C string back when you need one: [docs/guid
 
 Those bytes are UTF-8 when you decide to read them that way, and the loop that does it is Go's `for i, r := range s`.
 
+<!-- example: docs/examples/readme/tour.c#runes -->
 ```c
 Int i;
 Rune r;
-for (StrIter it = str_runes(s); str_next_rune(&it, &i, &r); )
+for (StrIter it = str_runes(s); str_next_rune(&it, &i, &r);)
     printf("%lld: %lx\n", (long long)i, (unsigned long)r);
 ```
 
@@ -138,11 +144,13 @@ For ASCII work, index the bytes and skip all of this. A newline is a newline at 
 
 Go's library leans on its type system far more than it looks like it does. `fmt` prints anything because it can ask the value what it is, `encoding/json` walks a struct nobody wrote code for, `sort` works on a slice of anything. None of that is possible in C unless the types describe themselves, so in burrow they do.
 
+<!-- example: docs/examples/readme/tour.c#types -->
 ```c
 const Type *t = TYPE_INT;
 printf("%u bytes\n", t->size);
 
-if (type_equal(TYPE_STRING, &a, &b)) { ... }
+if (type_equal(TYPE_STRING, &a, &b))
+    printf("same bytes\n");
 ```
 
 A descriptor is a `const Type` in read only memory, one per type, shared by everything that mentions it. Pointing at one costs a word and initialising one costs nothing, because the linker did it. Kinds are numbered exactly the way `reflect.Kind` numbers them, since those numbers are observable through `fmt`.
@@ -153,6 +161,7 @@ Details: [docs/guides/types.md](docs/guides/types.md).
 
 A pointer, a length, a capacity, and the element's type descriptor. Go's header is three words and this one is four, and the fourth is what buys you one `append` that works for every element type without templates.
 
+<!-- example: docs/examples/readme/tour.c#slices -->
 ```c
 Slice xs = slice_make(a, TYPE_INT, 0, 16);
 xs = APPEND(Int, a, xs, 42);
@@ -169,16 +178,19 @@ Details, including what it costs against Go and the one place the capacity numbe
 
 Two words, a vtable pointer and a data pointer, which is what Go's interface value is too. Implementing one is a static `const` vtable and a constructor, both written once next to your type, so satisfying an interface costs a few words of read only memory and a call through it is a load and an indirect call.
 
+<!-- example: docs/examples/readme/tour.c#iface -->
 ```c
-static Int counter_read(void *self, Slice p, Error *err) { ... }
-static const IoReaderVT counter_reader_vt = {&counter_type, counter_read};
+static Int counter_read(void *self, Slice p, Error *err);
+static const IoReaderVT counter_reader_vt = {TYPE_OF(Counter), counter_read};
 
 IoReader counter_as_io_reader(Counter *c) {
     IoReader r = {&counter_reader_vt, c};
     return r;
 }
 
-Int n = CALL(r, read, buf, &err);
+Int read_some(IoReader r, Slice buf, Error *err) {
+    return CALL(r, read, buf, err);
+}
 ```
 
 A zeroed interface value is nil, so an interface field in a struct that came out of an allocator starts out nil without anybody writing a line to say so. Every vtable starts with a `const Type *self_type`, which is what makes `iface_assert`, Go's `v.(T)`, possible on a value that has already forgotten its concrete type.
@@ -187,6 +199,7 @@ Embedding is by member, so an `IoReadWriter`'s vtable holds an `IoReaderVT` and 
 
 Go's empty interface is `Any`, a type descriptor and a pointer, and it is what `fmt`'s arguments and `json_marshal`'s parameter become.
 
+<!-- example: docs/examples/readme/tour.c#any -->
 ```c
 Any v = ANY_VAL(TYPE_INT, Int, 42);
 ```
@@ -197,13 +210,16 @@ Details, including what `Any` costs you that Go's `any` does not, which is that 
 
 A Go `func` is code plus the variables it captured, so a function value here is a pair of the same two words an interface is. Every function type in a Go signature gets a named type, and `BURROW_FUNC` declares one.
 
+<!-- example: docs/examples/readme/tour.c#func -->
 ```c
 BURROW_FUNC(Filter, bool, Str s);
 
-static bool has_prefix(void *env, Str s) { ... }
+static bool has_prefix(void *env, Str s);
 
-PrefixEnv e = {S("go")};
-Int n = count_if(lines, FN(Filter, has_prefix, &e));
+Int count_go_lines(Slice lines) {
+    PrefixEnv e = {S("go")};
+    return count_if(lines, FN(Filter, has_prefix, &e));
+}
 ```
 
 The environment word is not optional. A library that takes a bare function pointer forces every caller who needs state to reach for a global, and then two callers cannot use it at once. `qsort` is that mistake and every platform has since grown a `qsort_r` to undo it. Nothing in burrow takes a bare function pointer.
@@ -216,6 +232,7 @@ Details, including the one thing that needs thinking about, which is where the e
 
 `io.Reader` and `io.Writer`, the two interfaces everything that moves bytes speaks, plus `Closer`, `Seeker` and the combinations, the sentinel errors with Go's messages, and the four functions that need nothing but an interface to run.
 
+<!-- example: docs/examples/readme/tour.c#io -->
 ```c
 int64_t n = io_copy(a, dst, src, &err);
 ```
@@ -228,6 +245,7 @@ The implementations that fill these in live where they live in Go, which is `os`
 
 Go's `error` is an interface with one method, so burrow's is an interface value: a vtable pointer and a data pointer, returned by value, and a zeroed one means nothing went wrong.
 
+<!-- not compiled: uses the os package, which comes in a later milestone -->
 ```c
 Error err = os_write_file(path, data, 0644);
 if (FAILED(err))
@@ -240,6 +258,7 @@ Succeeding costs nothing, since there is no allocation on the happy path and not
 
 `errors_as` returns the pointer instead of taking one and returning a bool, because in C the pointer is the bool:
 
+<!-- not compiled: uses the os package, which comes in a later milestone -->
 ```c
 const OsPathError *pe = errors_as(err, TYPE_OS_PATH_ERROR);
 ```
@@ -250,6 +269,7 @@ Details, including how to write your own error type and what happens when the al
 
 A Swiss table, which is what Go's map has been since 1.24. Keys and values are copied in and compared by value, so a map keyed by string is keyed by the bytes.
 
+<!-- example: docs/examples/readme/tour.c#maps -->
 ```c
 Map *counts = map_make(a, TYPE_STRING, TYPE_INT, 0);
 MAP_SET(Str, Int, counts, S("the"), 1);
@@ -265,8 +285,12 @@ Iteration order is randomised per iterator, and that is on purpose. A program th
 
 Go's awkward corners come along unchanged because they are observable: a nil map reads as empty and writing to one stops the program, `-0.0` and `0.0` are one key, and every NaN key is a different key that can never be found again.
 
+<!-- example: docs/examples/readme/tour.c#map-iter -->
 ```c
-for (MapIter it = map_iter(m); map_next(&it, &k, &v); ) { ... }
+const void *k;
+void *v;
+for (MapIter it = map_iter(m); map_next(&it, &k, &v);)
+    total += *(Int *)v;
 ```
 
 Details, including the one deviation from Go, which is that an insert that grows the table invalidates a live iterator and says so: [docs/guides/maps.md](docs/guides/maps.md).
@@ -275,15 +299,16 @@ Details, including the one deviation from Go, which is that an insert that grows
 
 Go's scheduler, with Go's algorithms and Go's names. A goroutine is a function on a stack of its own, put on a thread by the runtime rather than by the kernel.
 
+<!-- example: docs/examples/readme/goroutines.c#goroutines -->
 ```c
 static void worker(void *env) {
     Job *j = env;
-    ...
+    printf("working on job %d\n", j->id);
 }
 
 static void run(void *env) {
     (void)env;
-    go(BURROW_FN(Func, worker, job));
+    go(BURROW_FN(Func, worker, &job));
 }
 
 int main(void) {
@@ -304,6 +329,7 @@ Details: [docs/guides/goroutines.md](docs/guides/goroutines.md).
 
 ## Channels
 
+<!-- example: docs/examples/readme/chan.c#chan -->
 ```c
 static void producer(void *env) {
     Chan *c = env;
@@ -312,14 +338,17 @@ static void producer(void *env) {
     chan_close(c);
 }
 
-Chan *c = chan_make(a, TYPE_INT, 0);
-go(BURROW_FN(Func, producer, c));
+Int sum_all(Alloc *a) {
+    Chan *c = chan_make(a, TYPE_INT, 0);
+    go(BURROW_FN(Func, producer, c));
 
-Int v;
-while (chan_recv(c, &v))
-    use(v);
+    Int v, sum = 0;
+    while (chan_recv(c, &v))
+        sum += v;
 
-chan_free(c);
+    chan_free(c);
+    return sum;
+}
 ```
 
 That loop is Go's `for v := range c`, and it ends when the producer closes the channel.
@@ -334,6 +363,7 @@ One thing Go has no equivalent of: a host thread that is not running a goroutine
 
 `chan_select` is Go's `select`, under a longer name because POSIX has the short one. You describe the arms and it tells you which one ran.
 
+<!-- example: docs/examples/readme/chan.c#select -->
 ```c
 Int job;
 Str msg;
@@ -357,11 +387,12 @@ Details: [docs/guides/channels.md](docs/guides/channels.md).
 
 ## Sleeping and timers
 
+<!-- example: docs/examples/readme/chan.c#timers -->
 ```c
 time_sleep(500 * TIME_MILLISECOND);
 
 TimeTimer *t = time_after_func(a, 5 * TIME_SECOND, BURROW_FN(Func, give_up, conn));
-...
+talk_to(conn);
 time_timer_stop(t);
 time_timer_free(t);
 ```
@@ -378,6 +409,7 @@ Details: [docs/guides/time.md](docs/guides/time.md).
 
 ## defer
 
+<!-- not compiled: uses the os package, which comes in a later milestone -->
 ```c
 BURROW_SCOPE {
     OsFile *f = os_open(a, path, &err);
@@ -385,7 +417,7 @@ BURROW_SCOPE {
         return err;
     BURROW_DEFER(os_file_close, f);
 
-    ...
+    err = read_header(f);
 }
 BURROW_SCOPE_END;
 ```
@@ -402,6 +434,7 @@ Details: [docs/guides/defer.md](docs/guides/defer.md).
 
 ## panic and recover
 
+<!-- example: docs/examples/readme/tour.c#panic -->
 ```c
 BURROW_TRY {
     parse(input);
@@ -427,6 +460,7 @@ Details, including what a panicked value's lifetime actually is, which is the on
 
 ## Atomics
 
+<!-- example: docs/examples/readme/tour.c#atomics -->
 ```c
 static int64_t hits;
 sync_atomic_add_int64(&hits, 1);
@@ -445,6 +479,7 @@ Details, including how `Value` publishes two words without a lock and what happe
 
 ## Locks
 
+<!-- example: docs/examples/readme/tour.c#locks -->
 ```c
 static SyncMutex mu;
 static int balance;
@@ -468,6 +503,7 @@ Details, including why read locks do not nest and when an `RWMutex` is actually 
 
 ## Waiting, and doing something once
 
+<!-- example: docs/examples/readme/tour.c#wait-group -->
 ```c
 static SyncWaitGroup wg;
 
@@ -479,6 +515,7 @@ sync_wait_group_wait(&wg);
 
 Go's `sync.WaitGroup`. `sync_wait_group_go` adds one and starts the goroutine together, so the counter and the goroutine cannot get out of step. The zero value is a group with nothing in it. Go's misuse checks come with it: a counter taken below zero and an `Add` on a group somebody is already waiting on both stop the program, because the alternative is a bug that does not show up on the machine it was written on.
 
+<!-- example: docs/examples/readme/tour.c#once -->
 ```c
 static SyncOnce started;
 
@@ -489,19 +526,24 @@ Go's `sync.Once`. What it promises is that when any call returns, f has finished
 
 `sync.OnceFunc`, `sync.OnceValue` and `sync.OnceValues` are here too. Go returns closures from those and burrow cannot, so they are structs you declare with an initialiser macro, nothing is allocated and there is nothing to free. They remember a panic and raise it again on every later call, which is the difference from a bare `Once` and the reason to reach for one.
 
+<!-- example: docs/examples/readme/cond.c#cond -->
 ```c
 static SyncMutex mu;
 static SyncCond ready;
+static bool has_work;
 
-sync_mutex_lock(&mu);
-while (!has_work)
-    sync_cond_wait(&ready);
-take_the_work();
-sync_mutex_unlock(&mu);
+void consume(void) {
+    sync_mutex_lock(&mu);
+    while (!has_work)
+        sync_cond_wait(&ready);
+    take_the_work();
+    sync_mutex_unlock(&mu);
+}
 ```
 
-Go's `sync.Cond`, for waiting until something you share with another goroutine changes. Waiting drops your lock, sleeps, and takes the lock again before it returns. `sync_cond_signal` wakes one waiter and `sync_cond_broadcast` wakes all of them. The `while` matters: a `Cond` promises you will be woken, not that the thing you were waiting for is true when you are.
+Go's `sync.Cond`, for waiting until something you share with another goroutine changes. Waiting drops your lock, sleeps, and takes the lock again before it returns. `sync_cond_signal` wakes one waiter and `sync_cond_broadcast` wakes all of them. The `while` matters: a `Cond` promises you will be woken, not that the thing you were waiting for is true when you are. Unlike the other types here, a zeroed `Cond` isn't ready to use, since it has to know which lock it belongs to, so start up code sets `ready = SYNC_COND(sync_mutex_locker(&mu))` before anybody waits.
 
+<!-- example: docs/examples/readme/tour.c#sync-map -->
 ```c
 static SyncMap cache;
 cache = SYNC_MAP(heap_allocator(), TYPE_STRING, TYPE_INT);
@@ -515,14 +557,15 @@ if (SYNC_MAP_LOAD(Str, &cache, BURROW_S("hits"), &n))
 
 Go's `sync.Map`, on the same hash trie Go has used since 1.24. A read takes no lock and writes nothing, so readers on different cores never take each other's cache lines away, and a write locks the one node that owns the slot it is changing. All ten of Go's methods are there. Reach for it in the two cases Go names, a key written once and then read over and over, or many goroutines touching mostly different keys, and reach for a plain `Map` behind a `SyncMutex` for everything else.
 
+<!-- example: docs/examples/readme/tour.c#pool -->
 ```c
 static SyncPool bufs;
 bufs = SYNC_POOL(heap_allocator(), BURROW_FN(SyncPoolNewFunc, make_buf, NULL),
                  BURROW_FN(SyncPoolFreeFunc, drop_buf, NULL));
 
 Any v = sync_pool_get(&bufs);
-Buf *b = any_assert(v, TYPE_BUF);
-use(b);
+Buf *b = any_assert(v, TYPE_OF(Buf));
+fill(b);
 sync_pool_put(&bufs, v);
 ```
 
@@ -532,16 +575,19 @@ Details: [docs/guides/sync.md](docs/guides/sync.md).
 
 ## Cancellation and deadlines
 
+<!-- example: docs/examples/readme/context.c#cancel -->
 ```c
-CancelFunc cancel;
+ContextCancelFunc cancel;
 Context ctx = context_with_cancel(a, context_background(), &cancel);
 
-go(BURROW_FN(Func, work, &ctx));
-...
+sync_wait_group_go(&wg, BURROW_FN(Func, work, &ctx));
+queue_the_jobs();
 BURROW_CALLF0(cancel);
+sync_wait_group_wait(&wg);
 context_free(ctx);
 ```
 
+<!-- example: docs/examples/readme/context.c#work -->
 ```c
 static void work(void *env) {
     Context ctx = *(Context *)env;
@@ -574,6 +620,7 @@ Details, including how to write your own `Context` and what each piece costs: [d
 
 ## Tests for concurrent code that do not sleep
 
+<!-- example: docs/examples/readme/synctest.c#synctest -->
 ```c
 static void body(void *env) {
     (void)env;
@@ -589,7 +636,9 @@ static void body(void *env) {
     chan_free(c);
 }
 
-synctest_run(BURROW_FN(Func, body, NULL));
+void test_worker_blocks(void) {
+    synctest_run(BURROW_FN(Func, body, NULL));
+}
 ```
 
 Go's `testing/synctest`. A test for something concurrent usually either sleeps for long enough that the thing under test has probably finished, which makes the suite slow and flaky in proportion to how loaded the machine is, or grows a pile of channels and wait groups that exist only so the test can tell when to look, which means the test is no longer testing the program that ships.
@@ -614,7 +663,7 @@ From a checkout, `make` and CMake both build a static library, and `make amalgam
 
 ## Status
 
-Early. Nothing is usable yet.
+Early. The core that every package stands on works, and every example on this page that doesn't need a package from a later milestone compiles and runs in CI, but the packages themselves are still to come.
 
 The design is finished and written down in [docs/design](docs/design), twenty documents covering the scope measurement, the C dialect, the core types, the memory model, the scheduler, the reflection layer, the naming rules, every package tier, the conformance strategy, the build and deployment story, the phasing, and the legal position on porting a BSD licensed library.
 

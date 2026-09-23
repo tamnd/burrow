@@ -98,6 +98,16 @@ BURROW_ERROR_SCOPE {
 Error kept = error_retain(a, err);   /* deep-copies into a */
 ```
 
+**What shipped.** The arena, per goroutine and per thread for code outside
+the runtime, freed when the goroutine ends. The scope is a mark and a release
+rather than a block macro, `ArenaMark m = error_mark(); ... error_release(m);`,
+because a macro built on `for` quietly captures a `break` meant for the loop
+around it, and because a mark is two numbers held on the goroutine's side, so a
+release that an early return skips leaves memory held and never leaves anything
+dangling. `error_retain` is as above, with a `clone` slot in `ErrorVT` for types
+that want to survive it intact. The emergency block is not built yet, so an
+arena that cannot get memory still gives `burrow_err_out_of_memory`.
+
 Sentinel errors (`io_eof` and several hundred others) are static and live
 forever, so the overwhelmingly common `errors_is(err, io_eof)` path
 touches no arena at all. Every error arena reserves an emergency block so

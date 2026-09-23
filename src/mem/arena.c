@@ -279,6 +279,53 @@ void arena_reset(Arena *ar) {
     ar->bytes_live = 0;
 }
 
+static size_t live_chunks(const Arena *ar) {
+    size_t n = 0;
+    for (const ArenaChunk *c = ar->live; c != NULL; c = c->next)
+        n++;
+    return n;
+}
+
+ArenaMark arena_mark(Arena *ar) {
+    ArenaMark m = {0, 0, 0};
+    if (ar == NULL)
+        return m;
+    m.chunks = live_chunks(ar);
+    m.used = ar->live != NULL ? ar->live->used : 0;
+    m.live = ar->bytes_live;
+    return m;
+}
+
+/* Walking the chunk list to count it keeps the Arena the size it was, and the
+ * list is short, because chunks double until they are 4 MB. */
+void arena_release(Arena *ar, ArenaMark m) {
+    if (ar == NULL)
+        return;
+    size_t n = live_chunks(ar);
+    if (n < m.chunks)
+        return;
+
+    while (n > m.chunks) {
+        ArenaChunk *c = ar->live;
+        ar->live = c->next;
+        c->used = 0;
+        c->next = ar->spare;
+        ar->spare = c;
+        n--;
+    }
+
+    /* A mark taken on an empty arena has no chunk to rewind into, and the loop
+     * above has already emptied it. */
+    if (ar->live != NULL && ar->live->used > m.used)
+        ar->live->used = m.used;
+
+    /* Put back rather than worked out, because what the chunks used includes
+     * alignment padding that was never counted as allocated. Frees since the
+     * mark can only have made it smaller. */
+    if (ar->bytes_live > m.live)
+        ar->bytes_live = m.live;
+}
+
 static void chunks_release(Alloc *parent, ArenaChunk *c) {
     while (c != NULL) {
         ArenaChunk *next = c->next;

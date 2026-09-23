@@ -202,6 +202,63 @@ TEST(arena_reset_keeps_its_chunks) {
     CHECK_INT_EQ(mem_stats(a).blocks, 0);
 }
 
+TEST(arena_release_goes_back_to_the_mark) {
+    Arena ar;
+    arena_init(&ar, NULL, 4096);
+    Alloc *a = arena_allocator(&ar);
+
+    unsigned char *before = (unsigned char *)mem_alloc(a, 100, 8);
+    CHECK(before != NULL);
+    memset(before, 0xab, 100);
+
+    ArenaMark m = arena_mark(&ar);
+    for (int i = 0; i < 40; i++)
+        CHECK(mem_alloc(a, 600, 8) != NULL); /* several chunks' worth */
+    uint64_t blocks = mem_stats(a).blocks;
+    CHECK(blocks > 1);
+
+    arena_release(&ar, m);
+
+    /* What came before the mark is untouched, and the next allocation lands
+     * straight after it, in the first chunk, as if the forty never happened. */
+    CHECK(before[0] == 0xab && before[99] == 0xab);
+    unsigned char *next = (unsigned char *)mem_alloc(a, 8, 8);
+    CHECK(next == before + 104 || next == before + 100);
+
+    /* And the forty again cost the parent nothing, because the chunks were
+     * kept. */
+    for (int i = 0; i < 40; i++)
+        CHECK(mem_alloc(a, 600, 8) != NULL);
+    CHECK_INT_EQ(mem_stats(a).blocks, blocks);
+
+    arena_free(&ar);
+}
+
+TEST(arena_marks_nest_and_go_stale_safely) {
+    Arena ar;
+    arena_init(&ar, NULL, 1024);
+    Alloc *a = arena_allocator(&ar);
+
+    ArenaMark outer = arena_mark(&ar); /* taken on an empty arena */
+    CHECK(mem_alloc(a, 700, 8) != NULL);
+    ArenaMark inner = arena_mark(&ar);
+    CHECK(mem_alloc(a, 700, 8) != NULL);
+
+    /* The inner release is skipped, the way an early return would skip it,
+     * and the outer one takes everything anyway. */
+    arena_release(&ar, outer);
+    CHECK_INT_EQ(mem_stats(a).bytes_live, 0);
+
+    /* The inner mark is now behind where the arena is, and releasing it
+     * afterwards changes nothing. */
+    unsigned char *p = (unsigned char *)mem_alloc(a, 16, 8);
+    CHECK(p != NULL);
+    arena_release(&ar, inner);
+    CHECK(mem_alloc(a, 16, 8) == p + 16);
+
+    arena_free(&ar);
+}
+
 TEST(arena_grows_the_last_allocation_in_place) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -673,6 +730,8 @@ int main(void) {
     RUN(arena_hands_out_zeroed_memory);
     RUN(arena_alignment_and_separation);
     RUN(arena_reset_keeps_its_chunks);
+    RUN(arena_release_goes_back_to_the_mark);
+    RUN(arena_marks_nest_and_go_stale_safely);
     RUN(arena_grows_the_last_allocation_in_place);
     RUN(arena_takes_allocations_larger_than_a_chunk);
     RUN(arena_nests);

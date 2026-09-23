@@ -125,9 +125,28 @@ static const Type runtime_error_desc = {
 
 const Type *const TYPE_RUNTIME_ERROR = &runtime_error_desc;
 
+/* The message lives in the panic state, which the next runtime error on the
+ * same goroutine writes over, so keeping one means copying the text. */
+static Error runtime_error_clone(const void *self, Alloc *a);
+
 static const ErrorVT runtime_error_vt = {
     &runtime_error_desc, runtime_error_message, NULL, NULL, NULL, NULL,
+    runtime_error_clone,
 };
+
+static Error runtime_error_clone(const void *self, Alloc *a) {
+    Str text = ((const RuntimeError *)self)->message;
+    size_t n = text.len > 0 ? (size_t)text.len : 0;
+    RuntimeError *e =
+        (RuntimeError *)mem_alloc(a, sizeof(RuntimeError) + n, _Alignof(RuntimeError));
+    if (e == NULL)
+        return burrow_err_out_of_memory;
+    Byte *bytes = (Byte *)e + sizeof(RuntimeError);
+    if (n > 0)
+        memcpy(bytes, text.p, n);
+    e->message = str_from_bytes(bytes, (Int)n);
+    return (Error){&runtime_error_vt, e};
+}
 
 const RuntimeError *runtime_error_from(Any v) {
     if (v.t != TYPE_ERROR || v.data == NULL)

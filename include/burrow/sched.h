@@ -189,6 +189,12 @@ struct burrow__G {
      * own stack and nothing else, the same as Go. */
     burrow__PanicState panic;
 
+    /* Where error_allocator gets memory for this goroutine's errors, made the
+     * first time it is asked for and NULL until then, since most goroutines
+     * never fail at anything. The chunks go back when the goroutine ends and
+     * the struct stays, so a reused G does not make it again. */
+    BURROW_OWNS(1) struct Arena *errors;
+
     /* The synctest bubble this goroutine is in, or NULL, which is what every
      * goroutine outside a test is. Inherited from whoever called go, so a
      * bubble is the subtree of goroutines that grew out of the one it started

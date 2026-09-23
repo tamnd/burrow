@@ -98,7 +98,7 @@ static Str parse_message(const void *self) {
 }
 
 static const ErrorVT parse_vt = {
-    TYPE_OF(ParseError), parse_message, NULL, NULL, NULL, NULL,
+    TYPE_OF(ParseError), parse_message, NULL, NULL, NULL, NULL, NULL,
 };
 
 // doc: custom
@@ -115,7 +115,7 @@ static Error my_unwrap(const void *self) {
 }
 
 static const ErrorVT my_vt = {
-    NULL, my_message, my_unwrap, NULL, NULL, NULL,
+    NULL, my_message, my_unwrap, NULL, NULL, NULL, NULL,
 };
 // doc: end
 
@@ -165,6 +165,28 @@ static void oom(Alloc *a) {
     (void)err;
 }
 
+static Error handle(Int i) {
+    if (i % 1000 == 999)
+        return errors_new(error_allocator(), BURROW_S("request failed"));
+    return BURROW_NO_ERROR;
+}
+
+static void serve(Alloc *a) {
+    Error last = BURROW_NO_ERROR;
+    // doc: scope
+    for (Int i = 0; i < 100000; i++) {
+        ArenaMark m = error_mark();
+        Error err = handle(i);
+        if (BURROW_FAILED(err))
+            last = error_retain(a, err); /* kept past the release */
+        error_release(m);
+    }
+    // doc: end
+    printf("last: " BURROW_STR_FMT ", error arena holds %llu bytes\n",
+           BURROW_STR_ARG(error_text(last)),
+           (unsigned long long)mem_stats(error_allocator()).bytes_live);
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, heap_allocator(), 0);
@@ -176,6 +198,7 @@ int main(void) {
     extract();
     join(a);
     oom(a);
+    serve(a);
     arena_free(&ar);
     return 0;
 }
@@ -193,4 +216,5 @@ joined:
 record not found
 close failed
 is not found 1
+last: request failed, error arena holds 0 bytes
 */

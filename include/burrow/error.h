@@ -41,6 +41,7 @@
 
 #include "burrow/core.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
@@ -92,6 +93,15 @@ struct ErrorVT {
      * type it is not. Return the pointer to hand back, or NULL to decline.
      * NULL in the slot means self_type comparison, which is the common case. */
     const void *(*as)(const void *self, const Type *target);
+
+    /* A copy of this error in a, deep enough that nothing in it points back at
+     * the original's memory, for error_retain. Copy what the error wraps with
+     * error_retain as well. NULL is fine for an error whose memory never goes
+     * away, which is every sentinel, and error_retain falls back to copying the
+     * message and the chain for everything else, which keeps errors_is working
+     * and loses errors_as. Give an error with a self_type a clone and it keeps
+     * both. */
+    Error (*clone)(const void *self, Alloc *a);
 };
 
 /* The descriptor for Go's error, which is a builtin interface type.
@@ -196,6 +206,58 @@ BURROW_OWNS(ret) Error errors_join(Alloc *a, Slice errs);
  * n is the count because C variadics cannot be counted at runtime. Getting it
  * wrong reads past the arguments, the same way a wrong printf format does. */
 BURROW_OWNS(ret) Error errors_join_v(Alloc *a, int n, ...);
+
+/* ------------------------------------------------------ where errors live
+ *
+ * A function that fails in Go returns an error it made on the spot, and the
+ * garbage collector deals with it later. strconv_atoi has no allocator to make
+ * one from, and should not need one, so the runtime keeps an arena for errors
+ * and hands it out here. There is one per goroutine, and one per thread for
+ * code that is not running on a goroutine.
+ *
+ *     Error err = errors_new(error_allocator(), BURROW_S("no such thing"));
+ *
+ * An error made from it lives until one of two things happens: the goroutine
+ * that made it ends, or a mark taken before it was made is released. That is
+ * what a long running loop uses to stop its errors from piling up:
+ *
+ *     for (;;) {
+ *         ArenaMark m = error_mark();
+ *         Error err = handle(next());
+ *         if (BURROW_FAILED(err))
+ *             log_error(err);
+ *         error_release(m);
+ *     }
+ *
+ * A release that is skipped, because of an early return or a panic, only means
+ * the memory is held until an outer release or the end of the goroutine. It
+ * never leaves anything pointing at freed memory that was not already going to.
+ *
+ * An error that has to outlive both, because it is kept in a struct or sent to
+ * another goroutine that may outlive this one, goes through error_retain on the
+ * way out. */
+
+/* The allocator for the calling goroutine's errors, or the calling thread's
+ * when it is not running one. Never NULL. Use it from the goroutine it belongs
+ * to and nowhere else, since it takes no lock. */
+BURROW_BORROWS(ret) Alloc *error_allocator(void);
+
+/* Where the calling goroutine's error arena is now, and back to there. Take and
+ * release a mark on the same goroutine. Marks nest like arena marks do, which
+ * is what they are. */
+ArenaMark error_mark(void);
+void error_release(ArenaMark m);
+
+/* A copy of err in a that does not depend on the error arena or on anything
+ * else err pointed at. Sentinels come back as they are, since they are already
+ * immortal and errors_is compares them by address. An error whose vtable has a
+ * clone slot is copied by it. Anything else becomes an error with the same
+ * message that wraps a retained copy of what the original wrapped, so errors_is
+ * still finds the sentinels in the chain, and errors_as no longer finds the
+ * original's type.
+ *
+ * A failed allocation gives you burrow_err_out_of_memory. */
+BURROW_OWNS(ret) Error error_retain(Alloc *a, Error err);
 
 /* errors.ErrUnsupported, which Go added so that a caller can ask whether an
  * operation is unavailable rather than whether it failed. */

@@ -61,6 +61,27 @@ Error err = errors_new(a, BURROW_S("record not found"));
 
 The text is copied, so the result does not depend on the buffer it came from. Two calls with the same text give two different errors that are not `errors_is` each other, which is Go's behaviour and is exactly why sentinels are package level variables rather than something you build where you need it.
 
+## Where errors live
+
+`errors_new` takes an allocator, and most of the library does not have one to give it. `strconv_atoi` takes a string and returns a number, and in Go it makes a fresh `*NumError` when the string is bad and lets the garbage collector deal with it. burrow keeps an arena for exactly that, one per goroutine, and `error_allocator()` hands it out. The library uses it for the errors it makes, and you can too.
+
+An error from it lives until the goroutine that made it ends. A goroutine that runs for the life of the program and fails often, a server loop for instance, marks the arena before each piece of work and releases it after, and whatever errors that piece of work made go with it:
+
+<!-- example: ../examples/errors/errors.c#scope -->
+```c
+for (Int i = 0; i < 100000; i++) {
+    ArenaMark m = error_mark();
+    Error err = handle(i);
+    if (BURROW_FAILED(err))
+        last = error_retain(a, err); /* kept past the release */
+    error_release(m);
+}
+```
+
+`error_retain` copies an error out into an allocator you choose. Use it for an error that has to outlive its mark or its goroutine, and above all for one you send to another goroutine, since the goroutine that made it may be gone by the time anyone reads it. A sentinel comes back as it is. An error with a `clone` slot in its vtable is copied by that. Anything else keeps its message and the sentinels in its chain, so `errors_is` still works, but not its type, so `errors_as` does not.
+
+A release that never happens, because of an early return or a panic, is not a bug in the dangerous sense. The memory is held until an outer release or the end of the goroutine, and nothing ends up pointing at memory that was freed early.
+
 ## Sentinels
 
 Most errors in Go's library are not constructed, they are compared. `io.EOF`, `os.ErrNotExist`, `sql.ErrNoRows`, and several hundred more. Those are static here:
@@ -135,7 +156,7 @@ static Error my_unwrap(const void *self) {
 }
 
 static const ErrorVT my_vt = {
-    NULL, my_message, my_unwrap, NULL, NULL, NULL,
+    NULL, my_message, my_unwrap, NULL, NULL, NULL, NULL,
 };
 ```
 

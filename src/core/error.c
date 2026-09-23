@@ -84,7 +84,7 @@ static Str sentinel_message(const void *self) {
 }
 
 const ErrorVT burrow_sentinel_error_vt = {
-    NULL, sentinel_message, NULL, NULL, NULL, NULL,
+    NULL, sentinel_message, NULL, NULL, NULL, NULL, NULL,
 };
 
 BURROW_SENTINEL_ERROR(errors_err_unsupported, "unsupported operation");
@@ -103,10 +103,14 @@ static Str error_string_message(const void *self) {
     return ((const ErrorString *)self)->text;
 }
 
+static Error error_string_clone(const void *self, Alloc *a) {
+    return errors_new(a, ((const ErrorString *)self)->text);
+}
+
 /* No self_type, for the reason written over burrow_sentinel_error_vt: Go's
  * errorString is unexported and errors.As can never match it. */
 static const ErrorVT error_string_vt = {
-    NULL, error_string_message, NULL, NULL, NULL, NULL,
+    NULL, error_string_message, NULL, NULL, NULL, NULL, error_string_clone,
 };
 
 Error errors_new(Alloc *a, Str text) {
@@ -266,8 +270,21 @@ static Slice error_join_unwrap_multi(const void *self) {
     return ((const ErrorJoin *)self)->errs;
 }
 
+static Error join_wrap(Alloc *a, Slice kids);
+
+static Error error_join_clone(const void *self, Alloc *a) {
+    const ErrorJoin *j = (const ErrorJoin *)self;
+    Slice kids = slice_make(a, TYPE_ERROR, j->errs.len, j->errs.len);
+    if (kids.p == NULL)
+        return burrow_err_out_of_memory;
+    for (Int i = 0; i < j->errs.len; i++)
+        BURROW_AT(Error, kids, i) = error_retain(a, BURROW_AT(Error, j->errs, i));
+    return join_wrap(a, kids);
+}
+
 static const ErrorVT error_join_vt = {
-    NULL, error_join_message, NULL, error_join_unwrap_multi, NULL, NULL,
+    NULL, error_join_message, NULL, error_join_unwrap_multi, NULL,
+    NULL, error_join_clone,
 };
 
 /* Takes the children already filtered and already in a Slice, and wraps them.
@@ -386,4 +403,72 @@ Error errors_join_v(Alloc *a, int n, ...) {
     va_end(ap);
 
     return join_wrap(a, kids);
+}
+
+/* ------------------------------------------------------------------- retain */
+
+/* What error_retain makes of an error that has no clone slot: its message, and
+ * a retained copy of whatever it wrapped, in whichever of the two forms it
+ * wrapped it. */
+typedef struct ErrorRetained {
+    Str text;
+    Error inner;
+    Slice kids; /* of Error */
+} ErrorRetained;
+
+static Str retained_message(const void *self) {
+    return ((const ErrorRetained *)self)->text;
+}
+
+static Error retained_unwrap(const void *self) {
+    return ((const ErrorRetained *)self)->inner;
+}
+
+static Slice retained_unwrap_multi(const void *self) {
+    return ((const ErrorRetained *)self)->kids;
+}
+
+static const ErrorVT retained_vt = {
+    NULL, retained_message, retained_unwrap, NULL, NULL, NULL, NULL,
+};
+
+static const ErrorVT retained_multi_vt = {
+    NULL, retained_message, NULL, retained_unwrap_multi, NULL, NULL, NULL,
+};
+
+Error error_retain(Alloc *a, Error err) {
+    if (BURROW_OK(err) || err.vt == &burrow_sentinel_error_vt)
+        return err;
+    if (err.vt->clone != NULL)
+        return err.vt->clone(err.data, a);
+
+    Str text = error_text(err);
+    size_t n = text.len > 0 ? (size_t)text.len : 0;
+    ErrorRetained *r = (ErrorRetained *)mem_alloc(a, sizeof(ErrorRetained) + n,
+                                                  _Alignof(ErrorRetained));
+    if (r == NULL)
+        return burrow_err_out_of_memory;
+    Byte *bytes = (Byte *)r + sizeof(ErrorRetained);
+    if (n > 0)
+        memcpy(bytes, text.p, n);
+    r->text.p = bytes;
+    r->text.len = (Int)n;
+
+    /* The same order errors_is asks in, so a type that sets both slots, which
+     * the header says not to do, is retained as the chain that errors_is
+     * would have walked. */
+    if (err.vt->unwrap != NULL) {
+        r->inner = error_retain(a, err.vt->unwrap(err.data));
+        return (Error){&retained_vt, r};
+    }
+    if (err.vt->unwrap_multi != NULL) {
+        Slice kids = err.vt->unwrap_multi(err.data);
+        r->kids = slice_make(a, TYPE_ERROR, kids.len, kids.len);
+        if (kids.len > 0 && r->kids.p == NULL)
+            return burrow_err_out_of_memory;
+        for (Int i = 0; i < kids.len; i++)
+            BURROW_AT(Error, r->kids, i) = error_retain(a, BURROW_AT(Error, kids, i));
+        return (Error){&retained_multi_vt, r};
+    }
+    return (Error){&retained_vt, r};
 }

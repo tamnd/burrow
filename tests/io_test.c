@@ -220,7 +220,7 @@ static const Type wrapped_eof_type = {
 };
 
 static const ErrorVT wrapped_eof_vt = {
-    &wrapped_eof_type, wrapped_eof_message, wrapped_eof_unwrap, NULL, NULL, NULL,
+    &wrapped_eof_type, wrapped_eof_message, wrapped_eof_unwrap, NULL, NULL, NULL, NULL,
 };
 
 static const WrappedEof wrapped_eof_value = {{(const Byte *)"read tcp: EOF", 13}};

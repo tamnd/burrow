@@ -85,6 +85,30 @@ BURROW_BORROWS(ret, ar) Alloc *arena_allocator(Arena *ar);
  * Reachable through mem_reset too, for code that only has the Alloc. */
 void arena_reset(Arena *ar);
 
+/* A point in an arena's history to come back to, from arena_mark. It is two
+ * numbers rather than a pointer, so holding one keeps nothing alive and a stale
+ * one can be recognised. */
+typedef struct ArenaMark {
+    size_t chunks; /* how many chunks were in use */
+    size_t used;   /* how far into the newest of them */
+    uint64_t live; /* bytes_live then, which a release puts back */
+} ArenaMark;
+
+/* Where the arena is now. Passing it to arena_release later throws away
+ * everything allocated in between and keeps everything allocated before, which
+ * is arena_reset for the inner part of a piece of work instead of all of it. */
+ArenaMark arena_mark(Arena *ar);
+
+/* Everything allocated since the mark becomes invalid. The chunks it used are
+ * kept for reuse, the same as arena_reset.
+ *
+ * Marks nest the way scopes do. Releasing an outer mark releases whatever was
+ * allocated after the inner ones too, so an inner release that never happens,
+ * because of an early return or a panic, costs nothing more than holding that
+ * memory until the outer one. Releasing a mark the arena has already gone back
+ * past does nothing. */
+void arena_release(Arena *ar, ArenaMark m);
+
 /* Everything allocated becomes invalid and every chunk goes back to the parent.
  * Safe on an arena that was initialised and never used, and safe to call twice,
  * which leaves the Arena usable again as if freshly initialised. */

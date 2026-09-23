@@ -70,7 +70,7 @@ static const Type wrapped_type = {
 };
 
 static const ErrorVT wrapped_vt = {
-    &wrapped_type, wrapped_message, wrapped_unwrap, NULL, NULL, NULL,
+    &wrapped_type, wrapped_message, wrapped_unwrap, NULL, NULL, NULL, NULL,
 };
 
 static Error wrap(Str text, Error inner) {
@@ -98,7 +98,7 @@ static bool errno_is(const void *self, Error target) {
 }
 
 static const ErrorVT errno_vt = {
-    NULL, errno_message, NULL, NULL, errno_is, NULL,
+    NULL, errno_message, NULL, NULL, errno_is, NULL, NULL,
 };
 
 static Error make_errno(int code) {
@@ -124,7 +124,7 @@ static const void *disguised_as(const void *self, const Type *target) {
 }
 
 static const ErrorVT disguised_vt = {
-    NULL, disguised_message, NULL, NULL, NULL, disguised_as,
+    NULL, disguised_message, NULL, NULL, NULL, disguised_as, NULL,
 };
 
 /* ------------------------------------------------------------- the basics */
@@ -305,7 +305,7 @@ static Slice confused_unwrap_multi(const void *self) {
 
 TEST(an_error_that_wraps_both_ways_uses_the_chain) {
     static const ErrorVT confused_vt = {
-        NULL, wrapped_message, wrapped_unwrap, confused_unwrap_multi, NULL, NULL,
+        NULL, wrapped_message, wrapped_unwrap, confused_unwrap_multi, NULL, NULL, NULL,
     };
     Wrapped *w = BURROW_NEW(a, Wrapped);
     Error err;

@@ -47,6 +47,7 @@
 #include "burrow/func.h"
 #include "burrow/mcontext.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
 #include "burrow/netpoll.h"
 #include "burrow/note.h"
@@ -904,6 +905,11 @@ static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
      * local so that the bubble can be told after the free list has it. */
     burrow__Bubble *bubble = gp->bubble;
     gp->bubble = NULL;
+
+    /* Every error this goroutine made dies with it, which is the lifetime
+     * burrow/error.h promises and the reason error_retain exists. */
+    if (gp->errors != NULL)
+        arena_free(gp->errors);
     burrow__atomic_store_release_u32(&gp->bubbleblocked, 0);
 
     gfput(m->p, gp);

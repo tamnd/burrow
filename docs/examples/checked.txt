@@ -13,3 +13,5 @@ docs/guides/runes.md
 docs/guides/time.md
 docs/guides/conventions.md
 docs/guides/goroutines.md
+docs/guides/channels.md
+atomics.md

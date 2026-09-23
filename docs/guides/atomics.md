@@ -6,6 +6,7 @@ The prefix is `sync_atomic_` rather than `atomic_`, and that is the only differe
 
 ## The two halves
 
+<!-- example: ../examples/atomics/funcs.c#add -->
 ```c
 #include "burrow/sync/atomic.h"
 
@@ -18,6 +19,7 @@ void serve(void) {
 
 The plain functions take the address of an ordinary object. Your counter is an `int64_t`, it lives in your own struct, and code that prints it at shutdown when nothing else is running can read it directly. This is the half to use when the thing being shared is a field you already had.
 
+<!-- example: ../examples/atomics/typed.c#typed -->
 ```c
 static SyncAtomicInt64 hits;
 
@@ -38,6 +40,7 @@ The types are `SyncAtomicBool`, `SyncAtomicInt32`, `SyncAtomicInt64`, `SyncAtomi
 
 ## Add returns the new value
 
+<!-- example: ../examples/atomics/funcs.c#now -->
 ```c
 int64_t now = sync_atomic_add_int64(&hits, 1);
 ```
@@ -46,25 +49,28 @@ int64_t now = sync_atomic_add_int64(&hits, 1);
 
 Subtraction is addition of a negative. On the signed functions that is what it looks like. On the unsigned ones it means adding the two's complement, the same as in Go:
 
+<!-- example: ../examples/atomics/funcs.c#sub -->
 ```c
-sync_atomic_add_uint64(&n, ~(uint64_t)0);   /* n = n - 1 */
-sync_atomic_add_uint64(&n, -(uint64_t)k);   /* n = n - k */
+sync_atomic_add_uint64(&n, ~(uint64_t)0); /* n = n - 1 */
+sync_atomic_add_uint64(&n, -(uint64_t)k); /* n = n - k */
 ```
 
 Signed overflow is undefined behaviour in C, so the signed functions do their arithmetic in the unsigned type underneath and convert back through the wrapping conversion the rest of burrow uses. A counter that wraps past `INT64_MAX` wraps to `INT64_MIN` here, which is defined, is what Go does, and is what the instruction was going to do anyway.
 
 ## And and or return the old value
 
+<!-- example: ../examples/atomics/funcs.c#or -->
 ```c
 uint32_t before = sync_atomic_or_uint32(&flags, WRITABLE);
 if ((before & WRITABLE) == 0)
-    ...   /* we are the one who set it */
+    open_for_writing(); /* we are the one who set it */
 ```
 
 The opposite of add, and this is Go's rule too. For a bitmask it is the useful answer: the bit you just set is a bit you already know about, and the question you were actually asking was whether somebody had got there first.
 
 ## Compare and swap
 
+<!-- example: ../examples/atomics/funcs.c#cas -->
 ```c
 for (;;) {
     int64_t old = sync_atomic_load_int64(&n);
@@ -80,13 +86,15 @@ There is no weak form. Go has none, and on the platforms where the distinction e
 
 ## Pointers
 
+<!-- example: ../examples/atomics/funcs.c#push -->
 ```c
 static void *head;
 
-Node *n = ...;
-n->next = sync_atomic_load_pointer(&head);
-while (!sync_atomic_compare_and_swap_pointer(&head, n->next, n))
+static void push(Node *n) {
     n->next = sync_atomic_load_pointer(&head);
+    while (!sync_atomic_compare_and_swap_pointer(&head, n->next, n))
+        n->next = sync_atomic_load_pointer(&head);
+}
 ```
 
 `sync_atomic_load_pointer` takes a `void *const *`, so a field you were only lent can be read without casting the const away. The other three take `void **`.
@@ -97,17 +105,21 @@ This library has no garbage collector, so a pointer swapped out is a pointer som
 
 ## Bool
 
+<!-- example: ../examples/atomics/typed.c#bool -->
 ```c
 static SyncAtomicBool stopping;
 
-if (sync_atomic_bool_compare_and_swap(&stopping, false, true))
-    begin_shutdown();   /* only the first caller gets in */
+static void stop(void) {
+    if (sync_atomic_bool_compare_and_swap(&stopping, false, true))
+        begin_shutdown(); /* only the first caller gets in */
+}
 ```
 
 One 32 bit word underneath, because there is no byte wide operation in the layer below and a flag is never the thing that made your struct too big. `load` and `swap` give back a `bool`, and any non zero word reads as true, so a `SyncAtomicBool` written through some other route still behaves.
 
 ## Value
 
+<!-- example: ../examples/atomics/typed.c#value -->
 ```c
 static SyncAtomicValue config;
 

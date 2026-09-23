@@ -4,8 +4,13 @@ A channel is a typed queue with a rendezvous built into it. One goroutine sends,
 
 That sentence is the whole idea, and it is why Go programs share memory by communicating rather than the other way round. Everything below is `burrow/chan.h`.
 
+<!-- example: ../examples/channels/pipeline.c#pipeline -->
 ```c
+#include <stdio.h>
+
 #include "burrow/chan.h"
+#include "burrow/mem/heap.h"
+#include "burrow/proc.h"
 
 static void producer(void *env) {
     Chan *c = env;
@@ -34,19 +39,21 @@ That loop is Go's `for v := range c`. It ends when the producer closes the chann
 
 `chan_send` takes a `const void *` and `chan_recv` takes a `void *`, for the same reason `map_set` does: C has no generics and a channel has to work for any element type.
 
+<!-- example: ../examples/channels/copy.c#copy -->
 ```c
 Int v = 42;
-chan_send(c, &v);       /* copies sizeof(Int) bytes out of v */
+chan_send(c, &v); /* copies sizeof(Int) bytes out of v */
 
 Int got;
-chan_recv(c, &got);     /* copies them into got */
+chan_recv(c, &got); /* copies them into got */
 ```
 
 The channel copies `elem->size` bytes and keeps nothing. A pointer you send is not held after the call returns, and a value you receive is yours. So sending a stack local is fine, and this
 
+<!-- example: ../examples/channels/copy.c#loop -->
 ```c
-for (Int i = 0; i < 10; i++)
-    chan_send(c, &i);   /* fine: the value is copied, not the address */
+for (Int i = 0; i < 3; i++)
+    chan_send(c, &i); /* fine: the value is copied, not the address */
 ```
 
 does what it looks like it does, which is not true of a queue of `void *`.
@@ -59,6 +66,7 @@ The copy goes through the type descriptor rather than through `memcpy`, so a cha
 
 `chan_make(a, elem, 0)` is unbuffered and it is the rendezvous. A send does not complete until a receiver has taken the value.
 
+<!-- example: ../examples/channels/copy.c#handoff -->
 ```c
 chan_send(c, &v);
 /* by the time this line runs, some other goroutine has v */
@@ -76,6 +84,7 @@ Which one you want is a design question and not a performance question. Unbuffer
 
 Closing says there will be no more values. It is a broadcast and it is one way.
 
+<!-- example: ../examples/channels/copy.c#close -->
 ```c
 chan_close(c);
 ```
@@ -110,6 +119,7 @@ Go's runtime notices when every goroutine in a program is blocked like that and 
 
 `chan_try_send` and `chan_try_recv` are a select with a default arm, which is half the uses of select in real code.
 
+<!-- example: ../examples/channels/select.c#try -->
 ```c
 if (!chan_try_send(work, &job)) {
     /* the queue is full, shed the load rather than blocking on it */
@@ -135,6 +145,7 @@ So a false return is the case the default arm exists for. `ok` may be `NULL` if 
 
 You describe the arms and it tells you which one ran.
 
+<!-- example: ../examples/channels/select.c#select -->
 ```c
 Int job;
 Str msg;
@@ -173,27 +184,28 @@ When more than one arm is ready, the one that runs is chosen uniformly at random
 
 An arm on a `NULL` channel never fires, which is how a loop stops listening to a channel that has closed without rewriting the array.
 
+<!-- example: ../examples/channels/select.c#merge -->
 ```c
-Chan *a = ..., *b = ...;
+static void merge(Chan *a, Chan *b) {
+    while (a != NULL || b != NULL) {
+        Int v;
+        bool ok;
+        SelectCase cases[] = {
+            BURROW_RECV_OK(a, &v, &ok),
+            BURROW_RECV_OK(b, &v, &ok),
+        };
 
-while (a != NULL || b != NULL) {
-    Int v;
-    bool ok;
-    SelectCase cases[] = {
-        BURROW_RECV_OK(a, &v, &ok),
-        BURROW_RECV_OK(b, &v, &ok),
-    };
-
-    Int arm = chan_select(cases, 2);
-    if (!ok) {
-        /* that one is closed and drained, so stop listening to it */
-        if (arm == 0)
-            a = NULL;
-        else
-            b = NULL;
-        continue;
+        Int arm = chan_select(cases, 2);
+        if (!ok) {
+            /* that one is closed and drained, so stop listening to it */
+            if (arm == 0)
+                a = NULL;
+            else
+                b = NULL;
+            continue;
+        }
+        use(v);
     }
-    use(v);
 }
 ```
 

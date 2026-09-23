@@ -222,8 +222,8 @@ jobs:
   # tested nowhere until somebody ports burrow to a third architecture and finds
   # out it never worked.
   #
-  # The default build gets checked too, in the other direction. Every .S in the
-  # tree is guarded on the same macros the header picks a backend with, and a
+  # The default build gets checked too, in the other direction. The assembly in
+  # the tree is guarded on the same macros the header picks a backend with, and a
   # guard that is subtly wrong produces an object file with nothing in it, a
   # library that quietly falls back, and a suite that passes. Looking for the
   # symbol is what turns that into a failure.
@@ -243,7 +243,7 @@ jobs:
         run: |
           make BUILD=build-asm lib
           # GNU nm exits non zero when an archive member has no symbols in it,
-          # which here is the .S for the architecture this is not, and that is
+          # which here is the assembly for the architecture this is not, and that is
           # the right outcome rather than a failure. The default shell has
           # pipefail on, so nm cannot be on the left of a pipe.
           #

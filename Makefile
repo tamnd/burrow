@@ -120,9 +120,7 @@ endif
 # Two levels is what the layout uses, src/version.c and src/mem/arena.c, and
 # spelling them out beats a shell find that behaves differently on every box.
 SRCS := $(wildcard src/*.c) $(wildcard src/*/*.c)
-ASMS := $(wildcard src/*/*.S)
-OBJS := $(patsubst src/%.c,$(BUILD)/obj/%.o,$(SRCS)) \
-	$(patsubst src/%.S,$(BUILD)/obj/%.asm.o,$(ASMS))
+OBJS := $(patsubst src/%.c,$(BUILD)/obj/%.o,$(SRCS))
 LIB  := $(BUILD)/libburrow.a
 
 # The table of names a traceback prints, read out of the objects above by
@@ -137,14 +135,6 @@ ifeq ($(SYMTAB),0)
 else
   SYMTAB_ARGS :=
 endif
-
-# Assembly gets its own flags rather than CFLAGS, because most of CFLAGS is
-# about C and a compiler handed -Wstrict-prototypes for an assembler file is
-# entitled to complain that the argument did nothing. It still needs the
-# defines: every .S here is guarded on the same macros the header picks the
-# backend with, and an assembler file that disagrees with the header about which
-# backend is in use produces a duplicate symbol or a missing one.
-ASFLAGS ?= -g $(INCLUDES) $(DEFINES)
 
 TEST_SRCS := $(wildcard tests/*_test.c)
 TEST_BINS := $(patsubst tests/%.c,$(BUILD)/tests/%,$(TEST_SRCS))
@@ -188,10 +178,6 @@ $(SYMTAB_OBJ): $(SYMTAB_SRC)
 $(BUILD)/obj/%.o: src/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(THREADS) $(DEPFLAGS) -c $< -o $@
-
-$(BUILD)/obj/%.asm.o: src/%.S
-	@mkdir -p $(dir $@)
-	$(CC) $(ASFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(BUILD)/tests/%: tests/%.c $(TEST_GEN) $(LIB)
 	@mkdir -p $(dir $@)

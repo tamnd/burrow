@@ -44,16 +44,6 @@ option(BURROW_ENABLE_BOEHM "Link the Boehm collector and enable the gc backend" 
 # file that reads the header has to agree about that.
 option(BURROW_PORTABLE_CONTEXT "Use ucontext or Fibers instead of the context switch assembly" OFF)
 
-# The assembler, which is the same compiler driver under another name. MSVC does
-# not get it: its assembler reads a different syntax entirely, and Windows takes
-# the Fibers path anyway, so there is nothing for it to assemble. Every .S in
-# the tree is guarded on the same macros the header picks a backend with, so a
-# file that is not wanted on this target assembles to an empty object rather
-# than needing a rule here to leave it out.
-if(NOT MSVC)
-    enable_language(ASM)
-endif()
-
 execute_process(
     COMMAND git describe --always --dirty --match v[0-9]*
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -65,10 +55,6 @@ if(NOT BURROW_SOURCE_ID)
 endif()
 
 file(GLOB_RECURSE BURROW_SOURCES CONFIGURE_DEPENDS src/*.c)
-if(NOT MSVC)
-    file(GLOB_RECURSE BURROW_ASM_SOURCES CONFIGURE_DEPENDS src/*.S)
-    list(APPEND BURROW_SOURCES ${BURROW_ASM_SOURCES})
-endif()
 
 # Two library targets where one would do, because of the symbol table further
 # down. It is read out of the compiled objects with nm and then compiled in
@@ -220,9 +206,9 @@ if(MSVC)
     target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)
 else()
     # All of it is behind COMPILE_LANGUAGE:C, because most of this list is about
-    # C and a compiler handed -Wstrict-prototypes for an assembler file is
-    # entitled to say the argument did nothing. With -Werror on, saying so is
-    # enough to fail the build.
+    # C, and a project that adds a language to this build should not have C's
+    # warnings handed to its compiler. With -Werror on, a flag the compiler does
+    # not know is enough to fail the build.
     target_compile_options(${target} PRIVATE
         "$<$<COMPILE_LANGUAGE:C>:-Wall;-Wextra;-Wpedantic;-Wshadow;-Wcast-qual;-Wcast-align;-Wconversion;-Wsign-conversion;-Wwrite-strings;-Wpointer-arith;-Wstrict-prototypes;-Wmissing-prototypes;-Wmissing-declarations;-Wredundant-decls;-Wundef;-Wswitch-enum;-Wswitch-default;-Wdouble-promotion;-Wformat=2;-Wformat-security;-Wnull-dereference;-Wstack-protector;-Wvla;-Wno-unused-parameter;-fstack-protector-strong;-fno-common>")
     if(BURROW_WERROR)

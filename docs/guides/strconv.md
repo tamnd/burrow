@@ -2,7 +2,7 @@
 
 `burrow/strconv.h` is Go's `strconv`: the package that writes values as text and reads them back. It never looks at the C locale, so a program that calls `setlocale` gets the same answers as one that does not, which is the first thing that goes wrong with `printf` and `strtod`.
 
-This page covers integers, booleans and quoting, the parts that have landed so far. Floats come next.
+This page covers integers, booleans, floats, complex numbers and quoting.
 
 ## Integers
 
@@ -61,6 +61,54 @@ Str text = strconv_format_bool(on);
 ```
 
 `strconv_parse_bool` takes `1`, `t`, `T`, `TRUE`, `true` and `True` and the same six spellings of false, and anything else is `strconv_err_syntax` in a `StrconvNumError`. `strconv_format_bool` returns one of two literals, so it needs no allocator and there is nothing to free. `strconv_append_bool` adds the word to a byte slice.
+
+## Floats
+
+`strconv_parse_float` reads a decimal or hexadecimal floating point number and rounds it correctly to the nearest double, or to the nearest float when the bit size is 32. `strconv_format_float` goes the other way, and with a precision of -1 it writes the fewest digits that read back as exactly the same value:
+
+<!-- example: ../examples/strconv/strconv.c#float -->
+```c
+Error err;
+double f = strconv_parse_float(BURROW_S("0.1"), 64, &err);
+Str shortest = strconv_format_float(a, f, 'g', -1, 64);
+Str exact = strconv_format_float(a, f, 'f', 20, 64);
+Str hex = strconv_format_float(a, f, 'x', -1, 64);
+```
+
+That gives `0.1`, `0.10000000000000000555` and `0x1.999999999999ap-04`. The first is the shortest text that parses back to the same double, the second shows the digits the double really holds, and the third is its bits in hexadecimal. The format letters are Go's: `e`, `E`, `f`, `g`, `G`, `b`, `x` and `X`, with the table in the header. Neither direction looks at the locale, so the point is always a dot.
+
+A float parsed with bit size 32 comes back as a `double` holding a value a `float` can represent exactly. Format it with bit size 32 too, or the shortest form is the one for a double, which has more digits than you want:
+
+<!-- example: ../examples/strconv/strconv.c#float32 -->
+```c
+double g = strconv_parse_float(BURROW_S("0.1"), 32, NULL);
+Str as32 = strconv_format_float(a, g, 'g', -1, 32);
+Str as64 = strconv_format_float(a, g, 'g', -1, 64);
+```
+
+That prints `0.1` and `0.10000000149011612`. `strconv_append_float` adds the text to a byte slice, as the integer append forms do.
+
+A number too big for the size is `strconv_err_range`, and you get an infinity of the right sign, as Go does. A number too small to be anything but zero is not an error:
+
+<!-- example: ../examples/strconv/strconv.c#floaterr -->
+```c
+double inf = strconv_parse_float(BURROW_S("1e400"), 64, &err);
+if (errors_is(err, strconv_err_range))
+    printf("%s: " BURROW_STR_FMT "\n", inf > 0 ? "+Inf" : "?",
+           BURROW_STR_ARG(error_text(err)));
+```
+
+The parser is a port of Go 1.27's, including the fast path that scales by a power of ten with a 128 bit multiply and the slow path that falls back to a big decimal when the fast one cannot decide, so it agrees with Go on every input, including the hard ones halfway between two doubles.
+
+## Complex numbers
+
+<!-- example: ../examples/strconv/strconv.c#complex -->
+```c
+Complex128 c = strconv_parse_complex(BURROW_S("(1.5-2i)"), 128, &err);
+Str text = strconv_format_complex(a, c, 'g', -1, 128);
+```
+
+`strconv_parse_complex` takes a real part, an imaginary part ending in `i`, or both, optionally in parentheses, and returns a `Complex128`. A bit size of 64 rounds each part to a float. `strconv_format_complex` writes `(1.5-2i)`, each part formatted the way `strconv_format_float` would.
 
 ## Quoting
 

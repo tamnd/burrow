@@ -42,6 +42,39 @@ static void booleans(void) {
     printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(text));
 }
 
+static void floats(Alloc *a) {
+    // doc: float
+    Error err;
+    double f = strconv_parse_float(BURROW_S("0.1"), 64, &err);
+    Str shortest = strconv_format_float(a, f, 'g', -1, 64);
+    Str exact = strconv_format_float(a, f, 'f', 20, 64);
+    Str hex = strconv_format_float(a, f, 'x', -1, 64);
+    // doc: end
+    printf(BURROW_STR_FMT " " BURROW_STR_FMT " " BURROW_STR_FMT "\n",
+           BURROW_STR_ARG(shortest), BURROW_STR_ARG(exact), BURROW_STR_ARG(hex));
+
+    // doc: float32
+    double g = strconv_parse_float(BURROW_S("0.1"), 32, NULL);
+    Str as32 = strconv_format_float(a, g, 'g', -1, 32);
+    Str as64 = strconv_format_float(a, g, 'g', -1, 64);
+    // doc: end
+    printf(BURROW_STR_FMT " " BURROW_STR_FMT "\n", BURROW_STR_ARG(as32),
+           BURROW_STR_ARG(as64));
+
+    // doc: floaterr
+    double inf = strconv_parse_float(BURROW_S("1e400"), 64, &err);
+    if (errors_is(err, strconv_err_range))
+        printf("%s: " BURROW_STR_FMT "\n", inf > 0 ? "+Inf" : "?",
+               BURROW_STR_ARG(error_text(err)));
+    // doc: end
+
+    // doc: complex
+    Complex128 c = strconv_parse_complex(BURROW_S("(1.5-2i)"), 128, &err);
+    Str text = strconv_format_complex(a, c, 'g', -1, 128);
+    // doc: end
+    printf("%g %g " BURROW_STR_FMT "\n", c.re, c.im, BURROW_STR_ARG(text));
+}
+
 static void quoting(Alloc *a) {
     // doc: quote
     Str q = strconv_quote(a, BURROW_S("tab\there, bell\a, ☺"));
@@ -111,6 +144,7 @@ int main(void) {
 
     integers(a);
     booleans();
+    floats(a);
     quoting(a);
     appending(a);
     unquoting(a);
@@ -126,6 +160,10 @@ clamped to 127: strconv.ParseInt: parsing "300": value out of range
 Atoi failed on 12a
 -ff 1234567 id=42
 true
+0.1 0.10000000000000000555 0x1.999999999999ap-04
+0.1 0.10000000149011612
++Inf: strconv.ParseFloat: parsing "1e400": value out of range
+1.5 -2 (1.5-2i)
 "tab\there, bell\a, ☺"
 "na\u00efve \u263a" '☺' "\xff\xfe"
 key="a \"quoted\" value"

@@ -74,7 +74,7 @@ static void itoa_pair(Byte *a, Int at, uint32_t x2) {
 
 /* The decimal digits of u into a[0:nd], two at a time from the right, with the
  * 64 bit divisions only where the value does not fit in 32 bits. */
-static void itoa_format_base10(Byte *a, Int nd, uint64_t u) {
+void burrow__strconv_format_base10(Byte *a, Int nd, uint64_t u) {
     while (nd >= 8) {
         uint32_t x3210 = (uint32_t)(u % 100000000);
         u /= 100000000;
@@ -119,7 +119,7 @@ static Int itoa_format_bits(Byte buf[ITOA_BUF], uint64_t u, Int base, bool neg) 
     if (base == 10) {
         Int nd = itoa_num_digits(u | 1);
         i -= nd;
-        itoa_format_base10(buf + i, nd, u);
+        burrow__strconv_format_base10(buf + i, nd, u);
     } else if ((base & (base - 1)) == 0) {
         /* Shifts and masks for the powers of two. */
         unsigned shift = (unsigned)bits_trailing_zeros64((uint64_t)base);

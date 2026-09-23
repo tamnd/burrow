@@ -203,7 +203,11 @@ static Error parse_to_error(const char *func, Str s, Int base, Int bit_size,
         return BURROW_NO_ERROR;
     }
 
-    Error e = num_error_build(a, str_from_cstr(func), s, inner);
+    return burrow__strconv_num_error(func, s, inner);
+}
+
+Error burrow__strconv_num_error(const char *func, Str s, Error inner) {
+    Error e = num_error_build(error_allocator(), str_from_cstr(func), s, inner);
     return BURROW_FAILED(e) ? e : inner;
 }
 
@@ -227,7 +231,7 @@ static Byte atoi_lower(Byte c) {
 
 /* Whether the underscores in s are where Go allows them: only between digits,
  * or between a base prefix and a digit. */
-static bool underscore_ok(Str s) {
+bool burrow__strconv_underscore_ok(Str s) {
     /* What was seen last: ^ for the start, 0 for a digit or base prefix, _ for
      * an underscore and ! for anything else. */
     char saw = '^';
@@ -347,7 +351,7 @@ static uint64_t parse_uint(Str s, Int base, Int bit_size, ParseCode *code) {
         n = n1;
     }
 
-    if (underscores && !underscore_ok(s0)) {
+    if (underscores && !burrow__strconv_underscore_ok(s0)) {
         *code = PARSE_SYNTAX;
         return 0;
     }

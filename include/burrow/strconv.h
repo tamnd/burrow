@@ -132,6 +132,60 @@ BURROW_STATIC(ret) Str strconv_format_bool(bool b);
 BURROW_OWNS(ret) BURROW_BORROWS(ret, dst) Slice strconv_append_bool(Alloc *a, Slice dst,
                                                                     bool b);
 
+/* ------------------------------------------------------------------- floats */
+
+/* strconv.ParseFloat: the nearest float to s, rounding half to even, as IEEE
+ * 754 says. bit_size is 32 for a float, in which case the result is a float
+ * widened to double, or 64 for a double.
+ *
+ * s is a decimal number such as 1.5e-3, a hexadecimal one such as 0x1.8p-3,
+ * which has to have its p exponent, or inf, infinity or nan in any case, the
+ * first two with an optional sign. Underscores are allowed between digits, and
+ * after a base prefix, as they are in a Go literal.
+ *
+ * Bad input is strconv_err_syntax and 0. A number too big for the size is
+ * strconv_err_range and an infinity of its sign. A number too small is not an
+ * error at all, and gives a zero of its sign. Both errors come wrapped in a
+ * StrconvNumError. */
+double strconv_parse_float(Str s, Int bit_size, Error *err);
+
+/* strconv.FormatFloat: f as text, in one of these formats.
+ *
+ *     'e'  -d.dddde+dd      'E'  -d.ddddE+dd
+ *     'f'  -ddd.dddd        'g'  %e for large exponents, %f otherwise
+ *     'G'  %E or %f         'b'  -ddddp+ddd, a binary exponent
+ *     'x'  -0x1.ddddp+dd    'X'  -0X1.DDDDP+dd, hexadecimal
+ *
+ * prec is the digits after the point for e, E, f, x and X, and the significant
+ * digits for g and G. A prec of -1 means as few digits as will read back as
+ * exactly f, which is what you want most of the time. bit_size says whether f
+ * is to be rounded as a float, 32, or as a double, 64, and anything else is a
+ * panic. A format letter Go does not know comes out as % and the letter. On an
+ * allocation failure the result is empty. */
+BURROW_OWNS(ret) Str strconv_format_float(Alloc *a, double f, Byte fmt, Int prec,
+                                          Int bit_size);
+
+/* strconv.AppendFloat, the FormatFloat form added to dst. */
+BURROW_OWNS(ret) BURROW_BORROWS(ret, dst) Slice
+strconv_append_float(Alloc *a, Slice dst, double f, Byte fmt, Int prec, Int bit_size);
+
+/* ------------------------------------------------------------ complex numbers */
+
+/* strconv.ParseComplex: s as N, Ni or N+Ni, where each N is what
+ * strconv_parse_float takes, optionally in parentheses. bit_size is 64 for a
+ * complex64, whose parts are floats, or 128.
+ *
+ * Bad input is strconv_err_syntax and zero. A part too big is strconv_err_range
+ * and an infinity in that part, with the other part still parsed. The error
+ * names ParseComplex and holds the whole of s. */
+Complex128 strconv_parse_complex(Str s, Int bit_size, Error *err);
+
+/* strconv.FormatComplex: c as (a+bi), each part the way strconv_format_float
+ * writes it with fmt and prec. bit_size is 64 for a complex64 or 128, and
+ * anything else is a panic. */
+BURROW_OWNS(ret) Str strconv_format_complex(Alloc *a, Complex128 c, Byte fmt, Int prec,
+                                            Int bit_size);
+
 /* ------------------------------------------------------------------- quoting
  *
  * Quote gives you a double quoted Go string literal. Printable runes, as
@@ -217,6 +271,19 @@ bool strconv_is_graphic(Rune r);
  * its length. With dst NULL it only counts. It is how a NumError's message is
  * built at exactly its size. */
 Int burrow__strconv_quote_into(Byte *dst, Str s);
+
+/* Not API. What the rest of strconv shares between its files: a NumError for
+ * func and s in the error arena, falling back to inner when there is no room
+ * for it, Go's rule for underscores in a number, the decimal digits of u
+ * written two at a time into a[0:nd], and the 128 bit powers of ten that float
+ * conversion scales by, from 10^-348 up. */
+BURROW_BORROWS(ret) Error burrow__strconv_num_error(const char *func, Str s,
+                                                    Error inner);
+bool burrow__strconv_underscore_ok(Str s);
+void burrow__strconv_format_base10(Byte *a, Int nd, uint64_t u);
+
+#define BURROW__STRCONV_POW10_MIN (-348)
+extern const uint64_t burrow__strconv_pow10[696][2];
 
 #ifdef __cplusplus
 }

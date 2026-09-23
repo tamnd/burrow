@@ -38,9 +38,9 @@ bport/
 /burrow-documented.h
 dist/
 
-# Fuzzing. Corpora live in burrow-conformance, crashes are triaged and then
-# either fixed or committed there as a regression case.
-fuzz/corpus/
+# Fuzzing. fuzz/corpus holds hand-picked seeds and the regression cases for
+# disagreements already found, and is committed. The much larger corpus that
+# libFuzzer grows, and the crashes, stay under build-fuzz. See fuzz/README.md.
 fuzz/crashes/
 *.profraw
 *.profdata

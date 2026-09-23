@@ -105,10 +105,13 @@ that is known correct, freely available, and mechanically interrogable.**
 ```
 
 Implementation: a Go program compiled with `-buildmode=c-archive` exposing
-`oracle_<pkg>_<func>` entry points, linked into a libFuzzer harness alongside
-`burrow`. Input is the fuzzer's byte string, decoded identically by both sides;
+one `oracle_<pkg>` entry point per package, linked into a libFuzzer harness
+alongside `burrow`. It lives in `fuzz/`, and `fuzz/README.md` says how to run
+it and how to add a target. Input is the fuzzer's byte string, decoded identically by both sides;
 output is a canonical serialisation of the result *and the error*, compared
-byte for byte. Any divergence is a crash, which libFuzzer minimises into a
+byte for byte. Each side walks the whole package over the one input and writes
+a line of text per call, which is simple enough that neither side needs a
+formatter the other lacks. Any divergence is a crash, which libFuzzer minimises into a
 one-line reproducer that becomes a committed regression test.
 
 Targets, in priority order — these are where "nearly right" is most likely and

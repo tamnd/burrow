@@ -244,6 +244,71 @@ check:
 collisions: $(LIB)
 	@BURROW_LIB=$(LIB) tools/check-collisions.sh
 
+# The differential fuzzer, which runs burrow and Go's own standard library on
+# the same inputs and fails on the first byte where they disagree. It needs Go
+# and a clang with libFuzzer, so it is not part of check. On a Mac the clang
+# that ships with Xcode has no libFuzzer and Homebrew's llvm does:
+#
+#     make fuzz FUZZ_CC=$(brew --prefix llvm)/bin/clang
+#
+# make fuzz runs every target for FUZZTIME seconds, or only the one named by
+# FUZZ=utf8. make fuzz-replay needs no libFuzzer: it builds with $(CC) and
+# replays the committed corpus through the same comparison, which is how a
+# crasher that was fixed stays fixed. See fuzz/README.md.
+FUZZ_CC      ?= clang
+FUZZ_BUILD   ?= build-fuzz
+FUZZTIME     ?= 60
+FUZZ_ORACLE  := $(FUZZ_BUILD)/oracle.a
+FUZZ_TARGETS := $(patsubst fuzz/%.c,%,$(filter-out fuzz/driver.c,$(wildcard fuzz/*.c)))
+FUZZ         ?= $(FUZZ_TARGETS)
+
+ifeq ($(shell uname -s),Darwin)
+  FUZZ_LDLIBS := -framework CoreFoundation
+else
+  FUZZ_LDLIBS := -lpthread -ldl -lm
+endif
+
+.PHONY: fuzz fuzz-replay fuzz-lib
+
+$(FUZZ_ORACLE): $(wildcard fuzz/oracle/*.go) fuzz/oracle/go.mod
+	@mkdir -p $(dir $@)
+	cd fuzz/oracle && go build -buildmode=c-archive -o $(abspath $@) .
+
+# burrow itself is built again with coverage instrumentation, so that libFuzzer
+# can see which branches of burrow an input reached and not only which
+# branches of the driver.
+#
+# It is a phony target rather than a rule for the archive, because inside the
+# child make the archive is $(LIB), and a rule for it here would match there
+# and start the child again.
+fuzz-lib:
+	@$(MAKE) --no-print-directory BUILD=$(FUZZ_BUILD)/burrow CC=$(FUZZ_CC) \
+		OPT="-O1 -g" HARDENING="-fno-common -fsanitize=address,fuzzer-no-link" lib
+
+# The replay rule comes first, because the make that ships with macOS takes
+# the first pattern that matches rather than the most specific one.
+$(FUZZ_BUILD)/replay-%: fuzz/%.c fuzz/driver.c fuzz/fuzz.h $(FUZZ_ORACLE) $(LIB)
+	$(CC) -std=c11 -O1 -g $(INCLUDES) -DFUZZ_STANDALONE fuzz/driver.c $< \
+		$(LIB) $(FUZZ_ORACLE) $(THREADS) $(FUZZ_LDLIBS) -o $@
+
+$(FUZZ_BUILD)/%: fuzz/%.c fuzz/driver.c fuzz/fuzz.h $(FUZZ_ORACLE) fuzz-lib
+	$(FUZZ_CC) -std=c11 -O1 -g $(INCLUDES) -fsanitize=address,fuzzer fuzz/driver.c $< \
+		$(FUZZ_BUILD)/burrow/libburrow.a $(FUZZ_ORACLE) $(THREADS) $(FUZZ_LDLIBS) -o $@
+
+# New inputs go into a scratch corpus under the build directory, with the
+# committed one read alongside it, so a fuzzing run never writes into the tree.
+# A disagreement lands in $(FUZZ_BUILD)/crash-<target>-<hash>.
+fuzz: $(addprefix $(FUZZ_BUILD)/,$(FUZZ))
+	@for t in $(FUZZ); do \
+		mkdir -p $(FUZZ_BUILD)/corpus/$$t fuzz/corpus/$$t && \
+		./$(FUZZ_BUILD)/$$t -max_total_time=$(FUZZTIME) -print_final_stats=1 \
+			-artifact_prefix=$(FUZZ_BUILD)/crash-$$t- \
+			$(FUZZ_BUILD)/corpus/$$t fuzz/corpus/$$t || exit 1; \
+	done
+
+fuzz-replay: $(addprefix $(FUZZ_BUILD)/replay-,$(FUZZ))
+	@for t in $(FUZZ); do ./$(FUZZ_BUILD)/replay-$$t fuzz/corpus/$$t || exit 1; done
+
 install: $(LIB)
 	install -d $(DESTDIR)$(PREFIX)/lib $(DESTDIR)$(PREFIX)/include/burrow
 	install -m 644 $(LIB) $(DESTDIR)$(PREFIX)/lib/

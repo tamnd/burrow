@@ -482,3 +482,31 @@ jobs:
           cache: false
       - name: how much of the standard library exists
         run: tools/burrow-coverage
+
+  # burrow and Go handed the same inputs, failing on the first byte where they
+  # disagree. See fuzz/README.md. The oracle is built with the Go release that
+  # burrow tracks, because that release is the definition of the right answer.
+  # The committed corpus is replayed first, which is the regression test for
+  # every disagreement found so far, and then each target gets a minute of new
+  # inputs.
+  differential-fuzz:
+    name: differential fuzz against go1.27.1
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.1"
+          cache: false
+      - name: replay the corpus
+        run: make fuzz-replay
+      - name: fuzz each target for a minute
+        run: make FUZZ_CC=clang FUZZTIME=60 fuzz
+      - name: keep what disagreed
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-crashes
+          path: build-fuzz/crash-*
+          if-no-files-found: ignore

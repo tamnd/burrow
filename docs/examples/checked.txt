@@ -20,3 +20,5 @@ docs/guides/maps.md
 docs/guides/functions.md
 docs/guides/types.md
 docs/guides/context.md
+docs/guides/errors.md
+docs/guides/interfaces.md

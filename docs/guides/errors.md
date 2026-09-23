@@ -2,6 +2,7 @@
 
 An error is two words, passed by value, and a zeroed one means nothing went wrong.
 
+<!-- not compiled: the definition in burrow/core.h, shown for reference -->
 ```c
 typedef struct Error {
     const ErrorVT *vt;
@@ -11,8 +12,11 @@ typedef struct Error {
 
 That is the same shape an interface value has anywhere else in the library, because in Go that is exactly what `error` is: an interface with one method. The vtable says what kind of error it is and the data points at the error's own state.
 
+Anything that can fail returns one, and the caller asks:
+
+<!-- example: ../examples/errors/errors.c#check -->
 ```c
-Error err = os_write_file(path, data, 0644);
+Error err = save_config(path, data);
 if (BURROW_FAILED(err))
     printf("nope: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_message(err)));
 ```
@@ -23,15 +27,21 @@ Succeeding costs nothing. There is no allocation on the happy path, no object to
 
 Write `BURROW_FAILED` or `BURROW_OK`. Do not compare against `BURROW_NO_ERROR`, because C has no `==` on structs and the comparison people write by hand compares both words, which gives the wrong answer for any error whose data pointer happens to be `NULL`. Only `vt` decides.
 
+<!-- example: ../examples/errors/errors.c#failed -->
 ```c
-if (BURROW_FAILED(err)) { ... }
-if (BURROW_OK(err))     { ... }
+if (BURROW_FAILED(err)) {
+    printf("failed\n");
+}
+if (BURROW_OK(err)) {
+    printf("saved\n");
+}
 ```
 
 With `BURROW_SHORT` those are `FAILED` and `OK`, and `NO_ERROR` is the zero value.
 
 ## Getting the message
 
+<!-- example: ../examples/errors/errors.c#message -->
 ```c
 Str msg = error_message(err);
 ```
@@ -44,6 +54,7 @@ The message is built when the error is constructed, not when somebody prints it.
 
 ## Making one
 
+<!-- example: ../examples/errors/errors.c#new -->
 ```c
 Error err = errors_new(a, BURROW_S("record not found"));
 ```
@@ -54,16 +65,18 @@ The text is copied, so the result does not depend on the buffer it came from. Tw
 
 Most errors in Go's library are not constructed, they are compared. `io.EOF`, `os.ErrNotExist`, `sql.ErrNoRows`, and several hundred more. Those are static here:
 
+<!-- example: ../examples/errors/errors.c#sentinel -->
 ```c
 /* in the .c file */
-BURROW_SENTINEL_ERROR(io_eof, "EOF");
+BURROW_SENTINEL_ERROR(err_not_found, "record not found");
 
 /* in the header */
-extern const Error io_eof;
+extern const Error err_not_found;
 ```
 
-The expansion is a `const` struct the linker fills in, so a sentinel costs a `Str` and two words of read only memory, no code at all, and nothing to clean up. All the sentinels in the library share one vtable. Comparing against one is two pointer loads and a branch.
+That is how the library declares `io_eof` and the rest of its own. The expansion is a `const` struct the linker fills in, so a sentinel costs a `Str` and two words of read only memory, no code at all, and nothing to clean up. All the sentinels in the library share one vtable. Comparing against one is two pointer loads and a branch.
 
+<!-- example: ../examples/errors/errors.c#is -->
 ```c
 if (errors_is(err, io_eof))
     break;
@@ -77,6 +90,7 @@ Only ever hand the macro a string literal, the same rule as `BURROW_S`. Note tha
 
 Two vtable slots carry the wrapping. `unwrap` is Go's `Unwrap() error`, the chain form, and it is what almost every wrapping error uses. `unwrap_multi` is Go's `Unwrap() []error`, the tree form, and it is what `errors.Join` produces.
 
+<!-- example: ../examples/errors/errors.c#walk -->
 ```c
 Error errors_unwrap(Error err);
 bool errors_is(Error err, Error target);
@@ -91,11 +105,14 @@ const void *errors_as(Error err, const Type *target);
 
 `errors_as` is Go's `errors.As` with the C spelling. Go takes a pointer to a variable and returns a bool, because Go needs somewhere to put the answer. Here the answer is the return value:
 
+<!-- example: ../examples/errors/errors.c#as -->
 ```c
-const OsPathError *pe = errors_as(err, TYPE_OS_PATH_ERROR);
+const ParseError *pe = errors_as(err, TYPE_OF(ParseError));
 if (pe != NULL)
-    printf("failed on " BURROW_STR_FMT "\n", BURROW_STR_ARG(pe->path));
+    printf("failed on line %lld\n", (long long)pe->line);
 ```
+
+`ParseError` there is a struct declared with `BURROW_STRUCT`, so `TYPE_OF(ParseError)` is its descriptor, and its vtable names that descriptor in the first slot. When `os` lands, `OsPathError` works the same way.
 
 `void *` converts to any object pointer type in C, so there is no cast at the call site and no way to ask for one type and be handed another. It also drops both of Go's panics, since there is no nil target and no non pointer target left to complain about. The outermost matching error wins, the same as Go, and a miss gives `NULL` rather than a guess.
 
@@ -103,24 +120,32 @@ Both walks respect a custom slot. An error that wants to match something it is n
 
 There is no public constructor for a wrapping error yet, because Go does not have one either. Go wraps with `fmt.Errorf` and `%w`, so wrapping arrives with `fmt`. Until then, filling in the vtable by hand is what the library does internally and there is nothing stopping you:
 
+<!-- example: ../examples/errors/errors.c#custom -->
 ```c
 typedef struct MyError {
     Str text;
     Error cause;
 } MyError;
 
-static Str my_message(const void *self)  { return ((const MyError *)self)->text; }
-static Error my_unwrap(const void *self) { return ((const MyError *)self)->cause; }
+static Str my_message(const void *self) {
+    return ((const MyError *)self)->text;
+}
+static Error my_unwrap(const void *self) {
+    return ((const MyError *)self)->cause;
+}
 
 static const ErrorVT my_vt = {
-    &my_error_type, my_message, my_unwrap, NULL, NULL, NULL,
+    NULL, my_message, my_unwrap, NULL, NULL, NULL,
 };
 ```
+
+The first slot is the type `errors_as` matches on. `NULL` there means the error does not want to be extracted, which is what an unexported type gets you in Go, and it is fine for an error that only exists to carry a message and a cause. Give it a descriptor, as `ParseError` did above, when callers need to get at the fields.
 
 Fill in one of `unwrap` and `unwrap_multi`, not both. A Go type cannot satisfy both, since it has one method of that name, so there is no Go behaviour to copy if you do it anyway. What you get is the chain form, because that is the first case in Go's type switch.
 
 ## Joining
 
+<!-- example: ../examples/errors/errors.c#join -->
 ```c
 Error err = errors_join_v(a, 2, close_err, flush_err);
 ```
@@ -129,6 +154,7 @@ Error err = errors_join_v(a, 2, close_err, flush_err);
 
 There is a `Slice` form too, for when you already have the errors in one:
 
+<!-- example: ../examples/errors/errors.c#join-slice -->
 ```c
 Slice errs = slice_make(a, TYPE_ERROR, 0, 4);
 errs = BURROW_APPEND(Error, a, errs, err1);
@@ -141,9 +167,12 @@ Error all = errors_join(a, errs);
 
 `errors_new` and `errors_join` are the only functions here that allocate, and both of them return `burrow_err_out_of_memory` when they cannot. That is a sentinel, so it is always there. The failure mode of an error constructor cannot itself be a failure to construct an error, and returning a success by accident would be worse than either.
 
+<!-- example: ../examples/errors/errors.c#oom -->
 ```c
-Error err = errors_new(a, BURROW_S("..."));
-if (errors_is(err, burrow_err_out_of_memory)) { ... }
+Error err = errors_new(a, BURROW_S("record not found"));
+if (errors_is(err, burrow_err_out_of_memory)) {
+    printf("could not even build the error\n");
+}
 ```
 
 The name says `burrow` rather than `errors` because it is not a Go symbol, and keeping it out of Go's namespace is what lets the coverage tool map every `errors_` symbol back to a real declaration in Go's API manifest.

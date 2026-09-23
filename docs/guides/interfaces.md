@@ -2,6 +2,7 @@
 
 An interface value is two words: a pointer to a vtable and a pointer to the data. That is what Go's is too, and it is why a Go interface costs nothing to pass around and neither does this one.
 
+<!-- not compiled: the definition in burrow/io.h, shown for reference -->
 ```c
 typedef struct IoReader {
     const IoReaderVT *vt;
@@ -15,6 +16,7 @@ There are two kinds, because Go has two kinds. An interface with methods, such a
 
 Call a method with `BURROW_CALL`, or `BURROW_CALL0` when the method takes no arguments.
 
+<!-- example: ../examples/interfaces/iface.c#call -->
 ```c
 Error err = BURROW_NO_ERROR;
 Int n = BURROW_CALL(r, read, buf, &err);
@@ -28,9 +30,12 @@ With `BURROW_SHORT` those are `CALL` and `CALL0`.
 
 A zeroed interface value is nil, and `BURROW_IFACE_IS_NIL` says so.
 
+<!-- example: ../examples/interfaces/iface.c#nil -->
 ```c
 IoReader r = {NULL, NULL};
-if (BURROW_IFACE_IS_NIL(r)) { ... }
+if (BURROW_IFACE_IS_NIL(r)) {
+    printf("r is nil\n");
+}
 ```
 
 This is why the vtable pointer is the first member. A struct that came out of an allocator is zeroed, so an interface field in it is nil before anybody writes a line to say so, exactly as a Go struct's interface fields start out nil.
@@ -41,23 +46,31 @@ Calling a method on a nil interface is a nil dereference, in C and in Go both. N
 
 Two things: a static vtable, and a constructor that hands back the pair. Both go next to your type, and you write them once.
 
+<!-- example: ../examples/interfaces/iface.c#implement -->
 ```c
-typedef struct Counter {
-    Int n;
-} Counter;
+#define COUNTER_FIELDS(F, T) F(T, Int, n, "")
+BURROW_STRUCT(Counter, COUNTER_FIELDS);
 
 static Int counter_read(void *self, Slice p, Error *err) {
     Counter *c = (Counter *)self;
-    ...
+    Int i = 0;
+
+    for (; i < p.len && c->n < 10; i++)
+        BURROW_AT(Byte, p, i) = (Byte)('0' + c->n++);
+    if (i == 0)
+        *err = io_eof;
+    return i;
 }
 
-static const IoReaderVT counter_reader_vt = {&counter_type, counter_read};
+static const IoReaderVT counter_reader_vt = {TYPE_OF(Counter), counter_read};
 
 IoReader counter_as_io_reader(Counter *c) {
     IoReader r = {&counter_reader_vt, c};
     return r;
 }
 ```
+
+`Counter` is declared with `BURROW_STRUCT`, which is what gives it the descriptor `TYPE_OF(Counter)` for the vtable's first slot. It reads out the digits 0 to 9 and then reports `io_eof`.
 
 The vtable is `const` and `static`, so it lives in read only memory and there is one of them per type rather than one per value. The constructor compiles to two moves. Satisfying an interface costs a few words of rodata and nothing at runtime.
 
@@ -69,6 +82,7 @@ Note the first member of the vtable. Every vtable in the library starts with a `
 
 `io.ReadWriter` is `io.Reader` plus `io.Writer`. In C the outer vtable holds the inner vtables as named members.
 
+<!-- not compiled: the definition in burrow/io.h, shown for reference -->
 ```c
 typedef struct IoReadWriterVT {
     IoReaderVT reader;
@@ -76,17 +90,19 @@ typedef struct IoReadWriterVT {
 } IoReadWriterVT;
 ```
 
-A type that is both fills in both halves of one object.
+A type that is both fills in both halves of one object. Here `Pipe` is declared with `BURROW_STRUCT` the same way `Counter` was, and `pipe_read` and `pipe_write` are its two methods.
 
+<!-- example: ../examples/interfaces/iface.c#pipe -->
 ```c
 static const IoReadWriterVT pipe_read_writer_vt = {
-    {&pipe_type, pipe_read},
-    {&pipe_type, pipe_write},
+    {TYPE_OF(Pipe), pipe_read},
+    {TYPE_OF(Pipe), pipe_write},
 };
 ```
 
 Narrowing is then the address of a member, which the library does for you.
 
+<!-- example: ../examples/interfaces/iface.c#narrow -->
 ```c
 IoReader r = io_read_writer_as_io_reader(rw);
 IoWriter w = io_read_writer_as_io_writer(rw);
@@ -102,10 +118,11 @@ There is no conversion from one combination to another, which is to say no `io_r
 
 Go's `v.(T)` is `iface_assert`, which gives you the pointer when the dynamic type matches and `NULL` when it does not.
 
+<!-- example: ../examples/interfaces/iface.c#assert -->
 ```c
-OsFile *f = iface_assert(BURROW_IFACE(r), TYPE_OS_FILE);
-if (f != NULL) {
-    /* it really is a file, so the fast path is available */
+Counter *c = iface_assert(BURROW_IFACE(r), TYPE_OF(Counter));
+if (c != NULL) {
+    /* it really is a counter, so the fast path is available */
 }
 ```
 
@@ -121,6 +138,7 @@ The match is pointer identity on the descriptor, not a comparison of names. Two 
 
 Go's empty interface is `Any`, and it is a descriptor and a pointer.
 
+<!-- not compiled: the definition in burrow/iface.h, shown for reference -->
 ```c
 typedef struct Any {
     const Type *t;
@@ -130,6 +148,7 @@ typedef struct Any {
 
 This is what `fmt`'s arguments, `json_marshal`'s parameter, a `sync.Map`'s values and `context.WithValue`'s value all become. Build one from a pointer you already have, or from a value:
 
+<!-- example: ../examples/interfaces/iface.c#any -->
 ```c
 Int n = 42;
 Any a1 = BURROW_ANY(TYPE_INT, &n);
@@ -140,6 +159,7 @@ Any a2 = BURROW_ANY_VAL(TYPE_INT, Int, 42);
 
 It is not long enough for anything you keep. Go hides this problem by copying small values into the interface word and larger ones onto the heap, invisibly. `Any` always points at something, so that something has to outlive the `Any`. When it needs to escape the block, box it:
 
+<!-- example: ../examples/interfaces/iface.c#box -->
 ```c
 Any kept = any_box(a, a1);
 ```
@@ -148,6 +168,7 @@ That copies the value into the allocator through the descriptor, so a type with 
 
 Getting the value back out is `any_assert`, which is `iface_assert` with a descriptor instead of a vtable.
 
+<!-- example: ../examples/interfaces/iface.c#any-assert -->
 ```c
 Int *got = (Int *)any_assert(v, TYPE_INT);
 ```
@@ -156,10 +177,11 @@ Int *got = (Int *)any_assert(v, TYPE_INT);
 
 `any_equal` is Go's `==` on two interface values. Equal means the same dynamic type and equal values, and the comparison goes through the descriptor, so two `Str` values with different pointers and the same bytes are equal.
 
+<!-- example: ../examples/interfaces/iface.c#equal -->
 ```c
 Int i = 3;
 int64_t j = 3;
-any_equal(BURROW_ANY(TYPE_INT, &i), BURROW_ANY(TYPE_INT64, &j));  /* false */
+any_equal(BURROW_ANY(TYPE_INT, &i), BURROW_ANY(TYPE_INT64, &j)); /* false */
 ```
 
 The same number and the same bytes, and Go says they are different, because the dynamic types differ. That is the rule that keeps `int(3)` and `int64(3)` apart as keys in a `map[any]int`, and `TYPE_ANY` hashes the dynamic type along with the value so the map agrees with the comparison.

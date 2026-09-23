@@ -2,6 +2,7 @@
 
 A map is a hash table that grows by itself, hands out its entries in a different order every time, and compares keys by value rather than by address.
 
+<!-- example: ../examples/maps/maps.c#tour -->
 ```c
 Map *counts = map_make(a, TYPE_STRING, TYPE_INT, 0);
 
@@ -28,6 +29,7 @@ The last argument is `make(map[K]V, hint)`: how many entries you expect. It size
 
 A map holds values of a type it only learns at runtime, so `map_get` and `map_set` deal in `void *`:
 
+<!-- example: ../examples/maps/maps.c#raw -->
 ```c
 Str word = BURROW_S("the");
 Int one = 1;
@@ -36,6 +38,7 @@ map_set(counts, &word, &one);
 
 The macros put the static typing back at the call site, which is where the types are known almost every time:
 
+<!-- example: ../examples/maps/maps.c#macros -->
 ```c
 BURROW_MAP_SET(Str, Int, counts, BURROW_S("the"), 1);
 Int *n = BURROW_MAP_GET(Str, Int, counts, BURROW_S("the"));
@@ -49,9 +52,10 @@ Both the key and the value are copied into the table, so a key built on the stac
 
 ## Reading
 
+<!-- example: ../examples/maps/maps.c#get -->
 ```c
-Int *v = map_get(m, &key);      /* m[key], or NULL when it is not there */
-bool ok = map_get2(m, &key, &out);   /* v, ok := m[key] */
+Int *v = map_get(m, &key);         /* m[key], or NULL when it is not there */
+bool ok = map_get2(m, &key, &out); /* v, ok := m[key] */
 ```
 
 `map_get` returns a pointer into the table, so writing through it changes the entry. That is how `m[k]++` is spelled here and it is worth knowing that Go does not let you do it at all. The reason Go does not is exactly the hazard you now own: the pointer stops being valid at the next insert into that map, because growing the table moves every entry. Take the value out if you are going to keep it.
@@ -62,6 +66,7 @@ A `NULL` map reads as empty rather than crashing, because a nil map in Go does. 
 
 ## Writing
 
+<!-- example: ../examples/maps/maps.c#set -->
 ```c
 if (!map_set(m, &key, &val))
     return errors_new(a, BURROW_S("out of memory"));
@@ -71,10 +76,13 @@ if (!map_set(m, &key, &val))
 
 The value may be `NULL`, which stores the zero value. Go has no way to write that and does not need one, since `m[k] = V{}` says it, but here it saves naming a temporary and for a set it is the only thing you would ever pass:
 
+<!-- example: ../examples/maps/maps.c#seen -->
 ```c
 Map *seen = map_make(a, TYPE_STRING, TYPE_BOOL, 0);
 map_set(seen, &word, NULL);
-if (map_get(seen, &word) != NULL) { ... }
+if (map_get(seen, &word) != NULL) {
+    printf("seen " BURROW_STR_FMT " before\n", BURROW_STR_ARG(word));
+}
 ```
 
 That is `map[string]bool`, which is one byte per entry. Go's set is usually `map[string]struct{}`, which is none, and a map with a zero sized value type works here today and costs nothing per entry. There is just no descriptor to name for `struct{}` until structs land, so write the set with a `bool` for now and the cost is one byte you will get back later.
@@ -83,9 +91,10 @@ Setting a key that is already there replaces the value and keeps the stored key.
 
 ## Deleting, and clearing
 
+<!-- example: ../examples/maps/maps.c#del -->
 ```c
-map_del(m, &key);     /* delete(m, key) */
-map_clear(m);         /* clear(m) */
+map_del(m, &key); /* delete(m, key) */
+map_clear(m);     /* clear(m) */
 ```
 
 `map_clear` empties the map and keeps the memory, the same as Go's builtin, so a map you are about to refill should be cleared rather than remade.
@@ -94,10 +103,11 @@ map_clear(m);         /* clear(m) */
 
 ## Iteration
 
+<!-- example: ../examples/maps/maps.c#iter -->
 ```c
 const void *k;
 void *v;
-for (MapIter it = map_iter(m); map_next(&it, &k, &v); ) {
+for (MapIter it = map_iter(m); map_next(&it, &k, &v);) {
     printf(BURROW_STR_FMT " = %lld\n", BURROW_STR_ARG(*(const Str *)k),
            (long long)*(Int *)v);
 }
@@ -119,18 +129,20 @@ Two corners of IEEE 754 come along with float keys, and both of them are Go's be
 
 A negative zero and a positive zero are equal, so they are one key:
 
+<!-- example: ../examples/maps/maps.c#zero -->
 ```c
 BURROW_MAP_SET(double, Int, m, -0.0, 7);
-BURROW_MAP_HAS(double, m, 0.0);      /* true, and len is 1 */
+BURROW_MAP_HAS(double, m, 0.0); /* true, and len is 1 */
 ```
 
 A NaN is not equal to itself, so a NaN key goes in and can never be found again, can never be deleted, and two of them are two entries:
 
+<!-- example: ../examples/maps/maps.c#nan -->
 ```c
 map_set(m, &nan, &one);
 map_set(m, &nan, &one);
-map_len(m);            /* 2 */
-map_get(m, &nan);      /* NULL */
+map_len(m);       /* 2 */
+map_get(m, &nan); /* NULL */
 ```
 
 Go behaves exactly this way and it catches everybody out once. Do not use a NaN as a key. `map_clear` is the only way to get rid of one.

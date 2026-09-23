@@ -2,6 +2,7 @@
 
 A slice is a pointer, a length, a capacity, and the element's type descriptor.
 
+<!-- not compiled: the definition in burrow/slice.h, shown for reference -->
 ```c
 typedef struct Slice {
     void *p;
@@ -19,6 +20,7 @@ The fields are public. Go's `len` and `cap` are not function calls either, and h
 
 ## Making one
 
+<!-- example: ../examples/slices/slices.c#make -->
 ```c
 Slice xs = slice_make(a, TYPE_INT, 0, 16);
 ```
@@ -29,6 +31,7 @@ That is `make([]int, 0, 16)`. The memory is zeroed, because Go's zero value rule
 
 Over memory you already have, which does not copy and does not take ownership:
 
+<!-- example: ../examples/slices/slices.c#from -->
 ```c
 Int backing[4] = {10, 20, 30, 40};
 Slice s = slice_from(backing, 4, 4, TYPE_INT);
@@ -40,9 +43,10 @@ That is the bridge from a C array, and it is how you hand burrow a stack buffer.
 
 `slice_at` returns a pointer, because C cannot return a value whose type is only known at runtime. `BURROW_AT` turns it back into the value:
 
+<!-- example: ../examples/slices/slices.c#at -->
 ```c
 Str f = BURROW_AT(Str, parts, i);
-BURROW_AT(Int, xs, 0) = 42;      /* it is an lvalue, so this is xs[0] = 42 */
+BURROW_AT(Int, xs, 0) = 42; /* it is an lvalue, so this is xs[0] = 42 */
 ```
 
 The `T` you pass is not checked against the element descriptor at compile time, because there is nothing at compile time to check it against. Its size is checked at runtime, and a `T` of the wrong size gets you the element the descriptor says is there, read as the type you asked for. It is the same class of mistake as a wrong `printf` format and it has the same flavour of consequence, so pass the type the slice actually holds.
@@ -62,9 +66,10 @@ So burrow keeps them apart too. `slice_nil(TYPE_INT)` is the nil slice, `slice_m
 
 ## Reslicing
 
+<!-- example: ../examples/slices/slices.c#sub -->
 ```c
-Slice m = slice_sub(s, 2, 5);        /* s[2:5]    */
-Slice n = slice_sub3(s, 2, 5, 6);    /* s[2:5:6]  */
+Slice m = slice_sub(s, 2, 5);     /* s[2:5]    */
+Slice n = slice_sub3(s, 2, 5, 6); /* s[2:5:6]  */
 ```
 
 Neither copies. The result points into the same backing array, which is why slicing is free and why writing through one is visible through the other.
@@ -77,10 +82,11 @@ The bounds are checked against `cap` and not against `len`. `s[:cap(s)]` is lega
 
 ## Append
 
+<!-- example: ../examples/slices/slices.c#append -->
 ```c
 xs = slice_append(a, xs, elems, n);
-xs = BURROW_APPEND(Int, a, xs, 42);      /* one value, no temporary */
-ys = slice_append_slice(a, ys, xs);      /* append(ys, xs...) */
+xs = BURROW_APPEND(Int, a, xs, 42); /* one value, no temporary */
+ys = slice_append_slice(a, ys, xs); /* append(ys, xs...) */
 ```
 
 Always assign the result back. `append` may or may not have moved the backing array, and the old header does not know which.
@@ -89,11 +95,12 @@ Here is the part worth reading twice, because it is the behaviour people rely on
 
 When the capacity is already there, the new elements are written into the existing backing array. Every other slice over that array sees them:
 
+<!-- example: ../examples/slices/slices.c#share -->
 ```c
 Slice base = slice_make(a, TYPE_INT, 8, 8);
-Slice head = slice_sub(base, 0, 3);      /* len 3, cap 8 */
+Slice head = slice_sub(base, 0, 3); /* len 3, cap 8 */
 
-head = slice_append(a, head, &v, 1);     /* writes base[3] */
+head = slice_append(a, head, &v, 1); /* writes base[3] */
 ```
 
 When the capacity is not there, a new array is allocated and the old one is left alone, so the same two slices now disagree about what the data is.
@@ -162,9 +169,10 @@ Two things follow for code using this. Use the macro for a single element of a t
 
 ## Copying
 
+<!-- example: ../examples/slices/slices.c#copy -->
 ```c
-Int n = slice_copy(dst, src);            /* copy(dst, src) */
-Int m = slice_copy_str(bytes, s);        /* copy(b, s) */
+Int n = slice_copy(dst, src);     /* copy(dst, src) */
+Int m = slice_copy_str(bytes, s); /* copy(b, s) */
 ```
 
 Both return the number of elements copied, which is the smaller of the two lengths, and both handle overlap, because `copy(s, s[1:])` is how you delete an element and Go promises it works.
@@ -173,9 +181,10 @@ The element sizes have to match. Sizes rather than descriptor identity, because 
 
 ## Strings and byte slices
 
+<!-- example: ../examples/slices/slices.c#bytes -->
 ```c
-Slice b = slice_from_str(a, s);          /* []byte(s) */
-Str back = str_from_slice(a, b);         /* string(b) */
+Slice b = slice_from_str(a, s);  /* []byte(s) */
+Str back = str_from_slice(a, b); /* string(b) */
 ```
 
 Both copy, which is what both conversions do in Go. If you want the cheap version, `s.p` and `s.len` are right there and you already know whether the lifetime works out.

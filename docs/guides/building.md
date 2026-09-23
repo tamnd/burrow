@@ -15,6 +15,7 @@ On Windows with MinGW, link `-lws2_32` instead of `-pthread`. With MSVC, add `bu
 
 Your code includes one header:
 
+<!-- not compiled: needs the generated burrow.h, and tests/amalgamation/hello.c is the copy CI builds against a fresh pair -->
 ```c
 #include "burrow.h"
 

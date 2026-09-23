@@ -2,6 +2,7 @@
 
 Go's `sync`, in `burrow/sync.h`. The locks a program written against this library reaches for, as opposed to the one the runtime uses on itself.
 
+<!-- example: ../examples/sync/locks.c#mutex -->
 ```c
 #include "burrow/sync.h"
 
@@ -49,6 +50,7 @@ All of that lives in one `int32_t`: the lock bit, a woken bit, a starving bit, a
 
 ## TryLock
 
+<!-- example: ../examples/sync/locks.c#try-lock -->
 ```c
 if (sync_mutex_try_lock(&mu)) {
     report(balance);
@@ -66,6 +68,7 @@ It is not a cheaper `Lock`, and measurably it is a dearer one. `Lock` goes strai
 
 ## RWMutex
 
+<!-- example: ../examples/sync/rw.c#rw -->
 ```c
 static SyncRWMutex mu;
 
@@ -109,6 +112,7 @@ Measure rather than assume, which is Go's advice as well. The numbers in [burrow
 
 A `SyncLocker` is something with a lock and an unlock, which is what a function that wants to hold a lock without caring which one takes.
 
+<!-- example: ../examples/sync/locks.c#locker -->
 ```c
 void with_lock(SyncLocker l, Func body) {
     sync_locker_lock(l);
@@ -116,8 +120,10 @@ void with_lock(SyncLocker l, Func body) {
     sync_locker_unlock(l);
 }
 
-with_lock(sync_mutex_locker(&mu), BURROW_FN(Func, work, NULL));
-with_lock(sync_rw_mutex_r_locker(&table), BURROW_FN(Func, scan, NULL));
+void update_and_scan(void) {
+    with_lock(sync_mutex_locker(&mu), BURROW_FN(Func, work, NULL));
+    with_lock(sync_rw_mutex_r_locker(&table), BURROW_FN(Func, scan, NULL));
+}
 ```
 
 Go needs no conversion function, because a `*Mutex` satisfies `Locker` by having the methods and the compiler does the rest. C has no structural typing, so the conversion has to be written down, and `sync_mutex_locker`, `sync_rw_mutex_locker` and `sync_rw_mutex_r_locker` are where it is written. Each result borrows its argument and is valid for exactly as long as that argument is.
@@ -128,6 +134,7 @@ It is a vtable pointer and a data pointer, the same shape as every other interfa
 
 ## WaitGroup
 
+<!-- example: ../examples/sync/once.c#wait-group -->
 ```c
 static SyncWaitGroup wg;
 
@@ -136,10 +143,12 @@ static void work(void *env) {
     process(j);
 }
 
-for (int i = 0; i < n; i++)
-    sync_wait_group_go(&wg, BURROW_FN(Func, work, &jobs[i]));
+void run_all(Job *jobs, int n) {
+    for (int i = 0; i < n; i++)
+        sync_wait_group_go(&wg, BURROW_FN(Func, work, &jobs[i]));
 
-sync_wait_group_wait(&wg);
+    sync_wait_group_wait(&wg);
+}
 ```
 
 A counter with a queue on it. `sync_wait_group_add` moves the counter, `sync_wait_group_done` takes one off, and `sync_wait_group_wait` returns when the counter reaches zero. The zero value is a group with nothing in it, so again there is nothing to initialise.
@@ -156,6 +165,7 @@ An `Add` and a `Done` with nobody waiting is about thirteen nanoseconds on a ser
 
 ## Once
 
+<!-- example: ../examples/sync/once.c#once -->
 ```c
 static SyncOnce started;
 
@@ -176,10 +186,13 @@ If f panics, the `Once` counts as done and later calls return without running an
 
 ## OnceFunc, OnceValue and OnceValues
 
+<!-- example: ../examples/sync/once.c#once-func -->
 ```c
-static SyncOnceFunc setup = SYNC_ONCE_FUNC(BURROW_FN(Func, load, NULL));
+static SyncOnceFunc setup = SYNC_ONCE_FUNC(BURROW_FN(Func, load_plugins, NULL));
 
-sync_once_func_call(&setup);
+void prepare(void) {
+    sync_once_func_call(&setup);
+}
 ```
 
 The difference from a bare `Once` is what happens to a panic. A `Once` lets the panic out once and then reports the action as done, so every later caller carries on as if the thing had been built. These remember the panic and raise it again on every later call, so nobody gets a half built thing quietly. That is Go's behaviour for all three.
@@ -188,19 +201,24 @@ Go returns a closure from each of them and lets the collector clean it up. C has
 
 `SyncOnceValue` produces one value and `SyncOnceValues` produces two, because Go's second result is usually an error and dropping it would make the thing useless for the case it exists for.
 
+<!-- example: ../examples/sync/once.c#once-value -->
 ```c
 static Config cfg;
 
 static Any load(void *env) {
     (void)env;
     cfg = read_config();
-    return BURROW_ANY(TYPE_CONFIG, &cfg);
+    return BURROW_ANY(TYPE_OF(Config), &cfg);
 }
 
 static SyncOnceValue config = SYNC_ONCE_VALUE(BURROW_FN(AnyFunc, load, NULL));
 
-Config *c = any_assert(sync_once_value_get(&config), TYPE_CONFIG);
+Config *current_config(void) {
+    return any_assert(sync_once_value_get(&config), TYPE_OF(Config));
+}
 ```
+
+`Config` is declared with `BURROW_STRUCT`, which is where `TYPE_OF(Config)` comes from.
 
 Go's `OnceValue` is generic in the result type and this one is an `Any`, for the reason every other place in the library that holds one value of any type is an `Any`: C has no type parameters, the descriptor is what carries the type, and the assertion on the way out is what a compiler would otherwise have checked. An `Any` points rather than holds, so what f returns has to outlive the `SyncOnceValue`, which is usually free here since the thing being computed once is usually a static.
 
@@ -210,6 +228,7 @@ One thing worth knowing about the panic these keep. A caught panic value lives i
 
 A place for goroutines to wait until something they care about changes.
 
+<!-- example: ../examples/sync/cond.c#cond -->
 ```c
 static SyncMutex mu;
 static SyncCond ready;
@@ -237,16 +256,20 @@ The `while` is not a style preference. A `Cond` promises exactly one thing, whic
 
 Unlike everything else in this file, the zero value is not ready to use, since a `Cond` has to know which lock it belongs to. `SYNC_COND` is the initialiser and it is Go's `NewCond` by another spelling.
 
+<!-- example: ../examples/sync/locks.c#cond-local -->
 ```c
 SyncCond ready = SYNC_COND(sync_mutex_locker(&mu));
 ```
 
 A `Cond` in a static cannot be written that way, because `sync_mutex_locker` is a call and a static initialiser has to be a constant. Assign the whole struct at start up instead, which is fine for as long as it happens before the first wait.
 
+<!-- example: ../examples/sync/cond.c#cond-static -->
 ```c
 static SyncCond ready;
-...
-ready = SYNC_COND(sync_mutex_locker(&mu));
+
+void init_ready(void) {
+    ready = SYNC_COND(sync_mutex_locker(&mu));
+}
 ```
 
 Copying a `Cond` after it has been used is caught. A copy holds the same queue at a different address, so a waiter sleeping on one of them could be signalled through the other and never wake up. Go has `go vet` to catch this at build time. C does not, so the first use writes the address down and every later use compares against it, which costs one atomic load on a path that is about to take a lock anyway. A copy taken before the first use is not caught and cannot be, since nothing has happened yet that could tell the two apart. Go has the same hole.
@@ -257,6 +280,7 @@ Go's documentation for `Cond` notes that most uses are better served by a channe
 
 A map that many goroutines read and write at once, with no lock around it.
 
+<!-- example: ../examples/sync/map.c#map -->
 ```c
 static SyncMap cache;
 
@@ -277,13 +301,14 @@ The first question is whether you want one. A plain `Map` behind a `SyncMutex` i
 
 Unlike everything else in this file the zero value is not ready to use. A map has to know its key type, its value type and where its memory comes from, and Go gets all three from the type system. `SYNC_MAP` is where you hand them over. It allocates nothing, so a map that is declared and never written costs its own struct and no more, and it works at file scope as well as in a block, with the same start up assignment a `Cond` in a static needs.
 
-Keys and values go in and out by pointer, for the reason they do in [guides/maps.md](maps.md): the map holds values of a type it only learns at runtime. `SYNC_MAP_STORE`, `SYNC_MAP_LOAD`, `SYNC_MAP_HAS` and `SYNC_MAP_DELETE` put the static typing back at the call sites that know the types.
+Keys and values go in and out by pointer, for the reason they do in [guides/maps.md](maps.md): the map holds values of a type it only learns at runtime. `BURROW_SYNC_MAP_STORE`, `BURROW_SYNC_MAP_LOAD`, `BURROW_SYNC_MAP_HAS` and `BURROW_SYNC_MAP_DELETE` put the static typing back at the call sites that know the types. With `BURROW_SHORT` they are `SYNC_MAP_STORE` and so on.
 
+<!-- example: ../examples/sync/map.c#macros -->
 ```c
-SYNC_MAP_STORE(Str, Int, &cache, BURROW_S("hits"), 1);
+BURROW_SYNC_MAP_STORE(Str, Int, &cache, BURROW_S("hits"), 1);
 
 Int n;
-if (SYNC_MAP_LOAD(Str, &cache, BURROW_S("hits"), &n))
+if (BURROW_SYNC_MAP_LOAD(Str, &cache, BURROW_S("hits"), &n))
     use(n);
 ```
 
@@ -293,11 +318,12 @@ All ten of Go's methods are there. `sync_map_load`, `sync_map_store`, `sync_map_
 
 Go's `Store` cannot fail, because a Go program that runs out of memory stops. A C library has to hand that decision back, so the calls that may need a node return whether they got one, and Go's own result comes out through a pointer:
 
+<!-- example: ../examples/sync/map.c#load-or-store -->
 ```c
 bool loaded;
 Int actual;
 if (!sync_map_load_or_store(&cache, &k, &n, &actual, &loaded))
-    return out_of_memory();
+    return burrow_err_out_of_memory;
 ```
 
 That is `sync_map_store`, `sync_map_swap`, `sync_map_load_or_store`, `sync_map_compare_and_swap` and `sync_map_clear`. When one of them returns false the map is exactly as it was.
@@ -308,14 +334,19 @@ The calls that cannot allocate return Go's answer directly, with nothing to chec
 
 `sync_map_range` calls your function for every key and value, in no order, and stops early if you return false. There is no snapshot. No key is visited twice, but a key stored or deleted while the walk is running may or may not show up. That is Go's rule, word for word.
 
+<!-- example: ../examples/sync/map.c#range -->
 ```c
 static bool print_one(const void *key, const void *val, void *arg) {
-    printf("%.*s = %lld\n", (int)((const Str *)key)->len, ((const Str *)key)->ptr,
+    const Str *k = key;
+    (void)arg;
+    printf(BURROW_STR_FMT " = %lld\n", BURROW_STR_ARG(*k),
            (long long)*(const Int *)val);
     return true;
 }
 
-sync_map_range(&cache, print_one, NULL);
+void dump(void) {
+    sync_map_range(&cache, print_one, NULL);
+}
 ```
 
 The callback must not block. Not on a channel, not on a mutex somebody else holds, not on a sleep. The walk is following pointers to nodes another goroutine may already have unlinked, what keeps those nodes alive is a reclamation pin, and a pin belongs to the thread rather than to the goroutine. A goroutine that parks inside one leaves it behind. The runtime usually catches it and stops the program, and when it does not the whole program's reclamation stalls until the callback comes back, so neither outcome is one to ship. If the work you want to do per entry can block, copy what you need out in the callback and do the rest after the walk returns. This is the one place `SyncMap` is not `sync.Map`, and it is in [ledger.md](../ledger.md) with the others.
@@ -342,11 +373,12 @@ On a server core, a lookup that hits is about forty nanoseconds against Go's thi
 
 A set of temporary objects that goroutines take from and hand back, so that the same short lived thing is not made and thrown away a million times a second.
 
+<!-- example: ../examples/sync/pool.c#pool -->
 ```c
 static Any make_buf(void *env) {
     (void)env;
     Buf *b = BURROW_NEW(heap_allocator(), Buf);
-    return BURROW_ANY(TYPE_BUF, b);
+    return BURROW_ANY(TYPE_OF(Buf), b);
 }
 
 static void drop_buf(void *env, Any v) {
@@ -363,7 +395,7 @@ void setup(void) {
 
 void work(void) {
     Any v = sync_pool_get(&bufs);
-    Buf *b = any_assert(v, TYPE_BUF);
+    Buf *b = any_assert(v, TYPE_OF(Buf));
 
     b->len = 0;
     fill(b);
@@ -371,6 +403,8 @@ void work(void) {
     sync_pool_put(&bufs, v);
 }
 ```
+
+`Buf` is declared with `BURROW_STRUCT` like any other type that goes in an `Any`.
 
 A pool is not a free list and it is not a cache. Anything you put in may be gone the next time you look, and a `Get` is allowed to hand you a brand new object even when you just put one back. That is what makes it cheap, and it is also what decides whether you want one. Put a scratch buffer in a pool. Do not put a database connection in a pool, because a pool that quietly drops one and opens another is not what you meant.
 

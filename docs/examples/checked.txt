@@ -24,3 +24,5 @@ docs/guides/errors.md
 docs/guides/interfaces.md
 docs/guides/strings.md
 docs/guides/allocators.md
+docs/guides/sync.md
+docs/guides/building.md

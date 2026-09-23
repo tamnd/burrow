@@ -11,3 +11,4 @@ context
 errors
 math/bits
 strconv
+fmt

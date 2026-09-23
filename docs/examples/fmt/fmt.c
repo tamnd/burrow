@@ -23,6 +23,26 @@ static Str celsius_string(Celsius *c) {
 BURROW_STRUCT_DEFINE_METHODS(Celsius, CELSIUS_FIELDS, CELSIUS_METHODS);
 // doc: end
 
+// doc: scanner
+#define RGB_FIELDS(F, T)                                                               \
+    F(T, uint8_t, R, "")                                                               \
+    F(T, uint8_t, G, "")                                                               \
+    F(T, uint8_t, B, "")
+BURROW_STRUCT_DECL(Rgb, RGB_FIELDS);
+
+static Error rgb_scan(Rgb *c, FmtScanState st, Rune verb) {
+    (void)verb;
+    Error err = BURROW_NO_ERROR;
+    fmt_fscanf_v(heap_allocator(), &err, fmt_scan_state_reader(&st), "#%2x%2x%2x",
+                 &c->R, &c->G, &c->B);
+    return err;
+}
+
+#define RGB_SIG_Scan(IN, OUT) IN(0, FmtScanState) IN(1, Rune) OUT(Error)
+#define RGB_METHODS(M, T) M(T, Scan, rgb_scan, RGB_SIG_Scan)
+BURROW_STRUCT_DEFINE_METHODS(Rgb, RGB_FIELDS, RGB_METHODS);
+// doc: end
+
 BURROW_SENTINEL_ERROR(err_not_found, "not found");
 
 static void printing(void) {
@@ -93,6 +113,35 @@ static void errors(void) {
     // doc: end
 }
 
+static void scanning(Alloc *a) {
+    // doc: sscan
+    Int n = 0;
+    Str item = {0};
+    double price = 0;
+    Error err = BURROW_NO_ERROR;
+    Int got = fmt_sscan_v(a, &err, "3 tea\n1.5", &n, &item, &price);
+    // doc: end
+    fmt_println_v(got, n, item, price);
+
+    // doc: sscanf
+    int h = 0, m = 0;
+    fmt_sscanf_v(a, &err, "at 09:45", "at %d:%d", &h, &m);
+    // doc: end
+    fmt_println_v(h, m);
+
+    // doc: scanerr
+    Int x = 0;
+    if (fmt_sscan_v(a, &err, "ten", &x) != 1)
+        fmt_println_v(err);
+    // doc: end
+
+    // doc: scan-method
+    Rgb c = {0};
+    fmt_sscan_v(a, &err, "#ff8000", BURROW_ANY(TYPE_OF(Rgb), &c));
+    fmt_println_v(BURROW_ANY(TYPE_OF(Rgb), &c));
+    // doc: end
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, heap_allocator(), 0);
@@ -103,6 +152,7 @@ int main(void) {
     values(a);
     mistakes(a);
     errors();
+    scanning(a);
 
     arena_free(&ar);
     return 0;
@@ -119,4 +169,8 @@ map[a:1 b:2] [3 1 4]
 it is 21.5°C, or {%!d(float64=21.5)} in the raw
 %!d(string=x) %!s(int=5)|%!d(MISSING)
 load "config.toml": not found
+3 3 tea 1.5
+9 45
+expected integer
+{255 128 0}
 */

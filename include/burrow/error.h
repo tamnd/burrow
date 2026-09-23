@@ -111,7 +111,10 @@ struct ErrorVT {
  * exists. So it is declared here beside the type it describes.
  *
  * You need it to build the Slice that errors_join takes, and reflect needs it
- * to describe a struct with an error field in it, which is most of them. */
+ * to describe a struct with an error field in it, which is most of them. The
+ * burrow_type_Error spelling is what TYPE_OF(Error) pastes together, so that a
+ * field list or a method signature can name the type the way it names Str. */
+extern const Type burrow_type_Error;
 extern const Type *const TYPE_ERROR;
 
 /* Success, and the test for it.

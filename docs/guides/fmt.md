@@ -1,6 +1,6 @@
-# Formatted printing
+# Formatted printing and scanning
 
-`burrow/fmt.h` is the printing half of Go's `fmt`. Its verbs, flags and output match Go's byte for byte, and the test suite runs every case from Go's own `fmt_test.go` whose operand is a plain value. Scanning is the other half of the package and comes later.
+`burrow/fmt.h` is Go's `fmt`, both halves. The verbs, flags and output of the printing functions match Go's byte for byte, and the test suite runs every case from Go's own `fmt_test.go` whose operand is a plain value. The scanning functions read text back into values the way Go's do, and their tests run every table in Go's `scan_test.go` and compare the count, the error and each value against what Go got.
 
 What separates it from `printf` is that every operand carries its type. `%v` works on anything, a width counts runes and not bytes, a wrong verb prints a note in the output instead of undefined behaviour, and a type with a `String` method prints through it.
 
@@ -164,6 +164,80 @@ if (errors_is(err, err_not_found))
 
 With one `%w`, `errors_unwrap` gives back the wrapped error. With more than one, the result wraps all of them, and `errors_is` looks through each. `%w` with an operand that is not an error, or anywhere outside `fmt_errorf`, prints `%!w(...)`. The error comes from `error_allocator()`, the calling goroutine's error arena, like the errors the rest of the library makes, so `error_retain` it into an allocator of your own when it has to outlive the goroutine.
 
+## Scanning
+
+There are three families, the same as in Go. `fmt_sscan` reads from a `Str`, `fmt_fscan` from an `IoReader` and `fmt_scan` from standard input. Each comes in three forms. The plain one treats newlines as spaces, the `ln` one stops at a newline and wants one after the last operand, and the `f` one follows a format. They return how many operands they filled and put the first error in `err`.
+
+The `_v` forms take pointers to the operands, with the allocator and the error first:
+
+<!-- example: ../examples/fmt/fmt.c#sscan -->
+```c
+Int n = 0;
+Str item = {0};
+double price = 0;
+Error err = BURROW_NO_ERROR;
+Int got = fmt_sscan_v(a, &err, "3 tea\n1.5", &n, &item, &price);
+```
+
+That fills all three and returns 3. The type of each operand comes from the C type of the pointer, the way `BURROW_ANY_OF` works when printing, so `int *` scans a 32 bit integer, `Int *` a Go `int`, `double *` a `float64`, `Str *` a string and `Slice *` a byte slice. Strings and byte slices are allocated from the allocator you pass, and so is anything a `%q` has to unquote.
+
+A format matches its text literally, with the verbs Go has for each type:
+
+<!-- example: ../examples/fmt/fmt.c#sscanf -->
+```c
+int h = 0, m = 0;
+fmt_sscanf_v(a, &err, "at 09:45", "at %d:%d", &h, &m);
+```
+
+Spaces in the format match any run of spaces in the input, and a newline has to match a newline, which are Go's rules down to the corner cases. `%d`, `%x`, `%o` and `%b` read in that base, `%v` reads a Go literal with its base prefix and underscores, `%c` reads one rune without skipping space, and a width limits how many runes a verb reads.
+
+When the input does not fit, the scan stops at that operand and `err` says why, with Go's text:
+
+<!-- example: ../examples/fmt/fmt.c#scanerr -->
+```c
+Int x = 0;
+if (fmt_sscan_v(a, &err, "ten", &x) != 1)
+    fmt_println_v(err);
+```
+
+That prints `expected integer`. Running out of input between operands gives `io_eof`, and running out partway through something that had to finish, a quoted string or a literal in the format, gives `io_err_unexpected_eof`.
+
+A type scans itself when its descriptor has a `Scan` method taking a `FmtScanState` and a `Rune` and returning `Error`. The state reads runes, skips space and hands out tokens, and `fmt_scan_state_reader` turns it into an `IoReader` so that the method can run a scan of its own over the same input:
+
+<!-- example: ../examples/fmt/fmt.c#scanner -->
+```c
+#define RGB_FIELDS(F, T)                                                               \
+    F(T, uint8_t, R, "")                                                               \
+    F(T, uint8_t, G, "")                                                               \
+    F(T, uint8_t, B, "")
+BURROW_STRUCT_DECL(Rgb, RGB_FIELDS);
+
+static Error rgb_scan(Rgb *c, FmtScanState st, Rune verb) {
+    (void)verb;
+    Error err = BURROW_NO_ERROR;
+    fmt_fscanf_v(heap_allocator(), &err, fmt_scan_state_reader(&st), "#%2x%2x%2x",
+                 &c->R, &c->G, &c->B);
+    return err;
+}
+
+#define RGB_SIG_Scan(IN, OUT) IN(0, FmtScanState) IN(1, Rune) OUT(Error)
+#define RGB_METHODS(M, T) M(T, Scan, rgb_scan, RGB_SIG_Scan)
+BURROW_STRUCT_DEFINE_METHODS(Rgb, RGB_FIELDS, RGB_METHODS);
+```
+
+A struct is passed as `BURROW_ANY` with its descriptor and its address, as it is for printing:
+
+<!-- example: ../examples/fmt/fmt.c#scan-method -->
+```c
+Rgb c = {0};
+fmt_sscan_v(a, &err, "#ff8000", BURROW_ANY(TYPE_OF(Rgb), &c));
+fmt_println_v(BURROW_ANY(TYPE_OF(Rgb), &c));
+```
+
+That prints `{255 128 0}`. A pointer of a type the `_v` macros do not know is a compile error rather than a scan that fails at run time.
+
+`fmt_scan` and its siblings read standard input with `getc`, one byte at a time, so they share the stream with `scanf` and `fgets`. A scan from an `IoReader` also reads one byte per call, which is what Go does with a reader that has no `ReadRune`. As in Go, a scan may read one rune past the end of what it returns, to see that a number or a word has ended, and that rune is gone for the next call. It only matters when nothing separates one value from the next.
+
 ## Differences from Go
 
 An `Any` holds a pointer to its value, and the `_v` forms put that value in a compound literal. The operands only live until the end of the statement, which is as long as the call needs them.
@@ -171,3 +245,5 @@ An `Any` holds a pointer to its value, and the `_v` forms put that value in a co
 Method sets are those of the descriptor. Every method takes a pointer receiver in burrow, so a value and a pointer to it have the same methods, where Go gives a value only the methods with value receivers.
 
 An error made by `errors_new` prints as `*errors.errorString` under `%T`, which is what Go says for one. An error with a `self_type` in its vtable reports that type instead.
+
+Go's scan functions take `any` and check at run time that each operand is a pointer. The `_v` macros take pointers and check at compile time, and the plain functions take each operand as an `Any` whose data is the address to scan into, so there is no "type not a pointer" error.

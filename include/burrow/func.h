@@ -94,6 +94,11 @@ extern "C" {
  * type and not any package's, the same way Str, Slice, Map and Error are. */
 BURROW_FUNC0(Func, void);
 
+/* Go's func(rune) bool, which is what a scanner's Token takes and what the
+ * strings and bytes functions ending in Func take. Builtin in the same sense
+ * as Func: Go writes the type out at every use and never names it. */
+BURROW_FUNC(RuneFunc, bool, Rune r);
+
 /* Build one. The type comes first because C needs it to know what the compound
  * literal is.
  *

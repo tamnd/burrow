@@ -466,7 +466,8 @@ TEST(append_and_fprint) {
     Error err = BURROW_NO_ERROR;
     Int n = fmt_fprintf_v(w, "%s-%d", "a", 1);
     CHECK_INT_EQ(n, 3);
-    n = fmt_fprintln(w, BURROW__FMT_A1(2.5), &err);
+    Any one[] = {BURROW_ANY_OF(2.5)};
+    n = fmt_fprintln(w, slice_from(one, 1, 1, TYPE_ANY), &err);
     CHECK_INT_EQ(n, 4);
     CHECK(err.vt == NULL);
     CHECK_STR_EQ(cs((Str){sink.b, sink.n}), "a-12.5\n");

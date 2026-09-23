@@ -50,7 +50,7 @@ static const TypeOps error_ops = {
     NULL,
 };
 
-static const Type error_type = {
+const Type burrow_type_Error = {
     {(const Byte *)"error", 5},
     {NULL, 0},
     KIND_INTERFACE,
@@ -67,7 +67,7 @@ static const Type error_type = {
     &error_ops,
 };
 
-const Type *const TYPE_ERROR = &error_type;
+const Type *const TYPE_ERROR = &burrow_type_Error;
 
 /* ---------------------------------------------------------------- sentinels */
 

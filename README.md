@@ -677,6 +677,29 @@ A bubble also has a clock of its own. It starts at midnight UTC on 1 January 200
 
 Details, including what a bubbled channel is and the two things about the clock that catch people out: [docs/guides/synctest.md](docs/guides/synctest.md).
 
+## Tests the way Go writes them
+
+<!-- example: docs/examples/testing/first.c#tests -->
+```c
+static void TestAbs(TestingT *t) {
+    Int got = abs_int(-1);
+    if (got != 1)
+        testing_t_errorf_v(t, "abs_int(-1) = %d; want 1", got);
+}
+
+static void TestAbsZero(TestingT *t) {
+    if (abs_int(0) != 0)
+        testing_t_error_v(t, "abs_int(0) is not 0");
+}
+
+#define TESTS(X) X(TestAbs) X(TestAbsZero)
+TESTING_MAIN(TESTS)
+```
+
+Go's `testing`. A test is a function that takes a `TestingT *`, `TESTING_MAIN` turns the list of them into a `main`, and the binary takes the flags `go test` passes, so `-test.v`, `-test.run`, `-test.count`, `-test.timeout`, `-test.shuffle` and `-test.failfast` all work and print what Go prints. Subtests, cleanups, skips, helpers and parallel tests are there too, and a failing test reports the file and line it failed on.
+
+Details, including how failures read and what is not there yet: [docs/guides/testing.md](docs/guides/testing.md).
+
 ## Getting it
 
 Two files, the way SQLite ships. Every release has an amalgamation archive with `burrow.c` and `burrow.h` in it. Add the first to your build, include the second, and link `-pthread` on Linux and macOS or `-lws2_32` on Windows. There is nothing to install and no build system to adopt.

@@ -59,9 +59,11 @@ ALLOC_ALLOWED='src/mem/heap.c'
 # Exiting. A library does not get to end the host's process. Failures come back
 # as an Error, and the one case where that is impossible is allocation failure,
 # which goes through the allocator's own out of memory handler so the host can
-# decide.
+# decide. testing is the other exception, because it is not a library a host
+# calls but the main of a test binary, and Go's testing ends the process with
+# the run's status, on a bad flag and on a timeout.
 BANNED_EXIT='\bexit\b|\babort\b|\b_Exit\b|\bassert\b'
-EXIT_ALLOWED='src/runtime/panic.c tests/*'
+EXIT_ALLOWED='src/runtime/panic.c src/testing/* tests/*'
 
 # Jumping. A longjmp does not run a cleanup handler, so code that jumps past a
 # BURROW_SCOPE skips the deferred calls in it, and code that jumps into a frame

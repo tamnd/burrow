@@ -66,6 +66,7 @@
 #include "burrow/sync.h"
 #include "burrow/sync/atomic.h"
 #include "burrow/synctest.h"
+#include "burrow/testing.h"
 #include "burrow/time.h"
 #include "burrow/type.h"
 #include "burrow/utf8.h"

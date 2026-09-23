@@ -127,3 +127,5 @@ global	src/pal/machine_windows.c	cached_page	machine	The Windows half of cached_
 global	src/runtime/symtab.c	symtab_once	symbol-table	A Once, which is what makes the sort happen exactly once however many threads panic at the same moment.
 global	src/runtime/symtab.c	symtab_sorted	symbol-table	Written once inside the Once and read after it, so the Once is the ordering. Null afterwards means the allocation failed and the lookup walks the unsorted table instead, which is why it is read into a local before it is used.
 global	src/runtime/symtab.c	symtab_sorted_len	symbol-table	How long symtab_sorted is, written beside it under the same Once.
+global	src/testing/testing.c	pkg	package-vars	Go's flag values, the running tests and the failure count for -failfast. Written by testing_init and flag parsing before any test starts, and after that only under pkg.reg_mu.
+global	src/testing/testing.c	timeout_alarm	package-vars	The -test.timeout thread. Started and joined by testing_m_run on the thread that runs it, so nothing else ever touches it.

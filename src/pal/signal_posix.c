@@ -104,41 +104,43 @@ static void set_handler(int native, PalSignalHandler fn) {
 static BURROW_THREAD_LOCAL void *altstack;
 static BURROW_THREAD_LOCAL int64_t altstack_bytes;
 
-/* One of ours to one of the platform's, or -1.
+/* Ours on the left, the platform's on the right.
  *
  * PAL_SIGFAULT is not in here on purpose. It is not one signal and the install
- * below takes it apart rather than looking it up. */
-static int to_native(int32_t sig) {
-    switch (sig) {
-    case PAL_SIGHUP:
-        return SIGHUP;
-    case PAL_SIGINT:
-        return SIGINT;
-    case PAL_SIGQUIT:
-        return SIGQUIT;
-    case PAL_SIGKILL:
-        return SIGKILL;
-    case PAL_SIGPIPE:
-        return SIGPIPE;
-    case PAL_SIGALRM:
-        return SIGALRM;
-    case PAL_SIGTERM:
-        return SIGTERM;
-    case PAL_SIGCHLD:
-        return SIGCHLD;
-    case PAL_SIGCONT:
-        return SIGCONT;
-    case PAL_SIGSTOP:
-        return SIGSTOP;
+ * below takes it apart rather than looking it up.
+ *
+ * A table rather than a switch, because eleven cases that each return a
+ * different constant are eleven branches a clone detector reads as copies of
+ * one another, and because two columns is how a mapping wants to be read. */
+static const struct {
+    int32_t pal;
+    int native;
+} signal_pairs[] = {
+    {PAL_SIGHUP, SIGHUP},
+    {PAL_SIGINT, SIGINT},
+    {PAL_SIGQUIT, SIGQUIT},
+    {PAL_SIGKILL, SIGKILL},
+    {PAL_SIGPIPE, SIGPIPE},
+    {PAL_SIGALRM, SIGALRM},
+    {PAL_SIGTERM, SIGTERM},
+    {PAL_SIGCHLD, SIGCHLD},
+    {PAL_SIGCONT, SIGCONT},
+    {PAL_SIGSTOP, SIGSTOP},
     /* SIGURG is what Go uses for this and the reasons are the same ones: it is
      * a signal nothing else in a normal program raises, the default disposition
      * is to ignore it, and it does not interrupt a system call in a way that
      * loses data. */
-    case PAL_SIGPREEMPT:
-        return SIGURG;
-    default:
-        return -1;
+    {PAL_SIGPREEMPT, SIGURG},
+};
+
+/* One of ours to one of the platform's, or -1. */
+static int to_native(int32_t sig) {
+    for (size_t i = 0; i < sizeof signal_pairs / sizeof signal_pairs[0]; i++) {
+        if (signal_pairs[i].pal == sig)
+            return signal_pairs[i].native;
     }
+
+    return -1;
 }
 
 /* Hands the signal back to whoever had it and lets it happen again.
@@ -307,7 +309,7 @@ bool pal_signal_mask(int32_t sig, bool block, PalErrno *err) {
  * and the floor is 64 kilobytes because the handler above this layer formats a
  * message and writes it, which MINSIGSTKSZ does not account for. */
 static int64_t stack_bytes(void) {
-    int64_t want = 64 * 1024;
+    int64_t want = INT64_C(64) * 1024;
 
 #if defined(_SC_SIGSTKSZ)
     long answer = sysconf(_SC_SIGSTKSZ);

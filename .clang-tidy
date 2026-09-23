@@ -136,6 +136,10 @@ CheckOptions:
   # want: _DEFAULT_SOURCE puts the flag back on glibc and _DARWIN_C_SOURCE puts
   # it back on macOS.
   #
+  # __start_burrowtype and __stop_burrowtype are not ours to name. The ELF
+  # linker makes up those two for the section src/runtime/registry.c reads, and
+  # a different spelling is a symbol nothing defines.
+  #
   # Naming them here keeps the check on for everything else, which is better
   # than a NOLINT that grows a second instance nobody notices.
   #
@@ -143,11 +147,11 @@ CheckOptions:
   # aliases of it and each alias reads its options under its own name. Set only
   # the first and the finding comes back with the other two in the brackets.
   - key: bugprone-reserved-identifier.AllowedIdentifiers
-    value: '_XOPEN_SOURCE;_POSIX_C_SOURCE;_GNU_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE'
+    value: '_XOPEN_SOURCE;_POSIX_C_SOURCE;_GNU_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE;__start_burrowtype;__stop_burrowtype'
   - key: cert-dcl37-c.AllowedIdentifiers
-    value: '_XOPEN_SOURCE;_POSIX_C_SOURCE;_GNU_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE'
+    value: '_XOPEN_SOURCE;_POSIX_C_SOURCE;_GNU_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE;__start_burrowtype;__stop_burrowtype'
   - key: cert-dcl51-cpp.AllowedIdentifiers
-    value: '_XOPEN_SOURCE;_POSIX_C_SOURCE;_GNU_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE'
+    value: '_XOPEN_SOURCE;_POSIX_C_SOURCE;_GNU_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE;__start_burrowtype;__stop_burrowtype'
 
 # Warnings from headers are on, because the headers are where most of this
 # library lives.

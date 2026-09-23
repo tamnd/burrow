@@ -159,17 +159,17 @@ static Int registry_len;
  * with no package and one named "" in package "Point" are different, which they
  * are. */
 static uint64_t name_hash(Str pkg, Str name) {
-    uint64_t h = 1469598103934665603u;
+    uint64_t h = 1469598103934665603U;
 
     for (Int i = 0; i < pkg.len; i++) {
         h ^= pkg.p[i];
-        h *= 1099511628211u;
+        h *= 1099511628211U;
     }
     h ^= (unsigned char)'.';
-    h *= 1099511628211u;
+    h *= 1099511628211U;
     for (Int i = 0; i < name.len; i++) {
         h ^= name.p[i];
-        h *= 1099511628211u;
+        h *= 1099511628211U;
     }
 
     return h;
@@ -309,10 +309,10 @@ BURROW_SENTINEL_ERROR(
 
 /* ------------------------------------------------------------------- lookup */
 
-BURROW_STATIC(ret) const Type *type_by_name(Str q, Error *err) {
+BURROW_STATIC(ret) const Type *type_by_name(Str name, Error *err) {
     BURROW_OUT(err, BURROW_NO_ERROR);
 
-    if (q.p == NULL || q.len <= 0) {
+    if (name.p == NULL || name.len <= 0) {
         BURROW_OUT(err, type_err_name_invalid);
         return NULL;
     }
@@ -320,8 +320,8 @@ BURROW_STATIC(ret) const Type *type_by_name(Str q, Error *err) {
     registry_ensure();
 
     Str pkg;
-    Str name;
-    split_name(q, &pkg, &name);
+    Str base;
+    split_name(name, &pkg, &base);
 
     /* A dot that separates nothing from something, or something from nothing.
      * "image." names no type and ".Point" claims a package and then does not
@@ -330,12 +330,12 @@ BURROW_STATIC(ret) const Type *type_by_name(Str q, Error *err) {
      * apart from a name that is merely unknown is the difference between a
      * corrupt stream and a version mismatch, and those get fixed by different
      * people. */
-    if (name.len <= 0 || (name.len < q.len && pkg.len <= 0)) {
+    if (base.len <= 0 || (base.len < name.len && pkg.len <= 0)) {
         BURROW_OUT(err, type_err_name_invalid);
         return NULL;
     }
 
-    uint64_t h = name_hash(pkg, name);
+    uint64_t h = name_hash(pkg, base);
 
     sync_rw_mutex_r_lock(&registry_lock);
 
@@ -345,7 +345,7 @@ BURROW_STATIC(ret) const Type *type_by_name(Str q, Error *err) {
         for (Int i = (Int)(h & (uint64_t)mask); registry_slots[i].t != NULL;
              i = (i + 1) & mask) {
             if (registry_slots[i].h == h &&
-                slot_matches(&registry_slots[i], pkg, name)) {
+                slot_matches(&registry_slots[i], pkg, base)) {
                 found = registry_slots[i].t;
                 break;
             }

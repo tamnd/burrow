@@ -87,8 +87,7 @@ static uint32_t waiters_of(uint64_t state) {
 /* True when this group belongs to the bubble the caller is in. NULL is not a
  * bubble, so a caller outside every bubble is never associated with anything. */
 static bool associated(const SyncWaitGroup *wg, const void *bubble) {
-    return bubble != NULL &&
-           burrow__atomic_load_acquire_ptr((void *const *)&wg->bubble) == bubble;
+    return bubble != NULL && burrow__atomic_load_acquire_ptr(&wg->bubble) == bubble;
 }
 
 /* Puts the group in the caller's bubble if it is not in one already. Stops the

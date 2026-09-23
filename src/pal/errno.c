@@ -79,8 +79,8 @@ static const char *const errno_names[] = {
     "unknown error",
 };
 
-_Static_assert(sizeof errno_names / sizeof errno_names[0] ==
-                   (size_t)(PAL_EOTHER - PAL_EPERM + 1),
+_Static_assert((int)(sizeof errno_names / sizeof errno_names[0]) ==
+                   PAL_EOTHER - PAL_EPERM + 1,
                "errno_names and the PalErrno enum have drifted apart");
 
 const char *pal_errno_string(PalErrno e) {

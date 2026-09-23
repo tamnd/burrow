@@ -143,7 +143,18 @@ __asm__(
     "\tpopq %rbp\n"
     "\t.cfi_adjust_cfa_offset -8\n"
     "\t.cfi_restore %rbp\n"
-    "\tret\n"
+
+    /* A pop and a jump rather than a ret, which is what Boost.Context does and
+     * for the same reason. The processor predicts a ret from a stack of the
+     * calls it has seen, and this one returns to a call that was made on
+     * another stack, so a ret here is mispredicted every single time. An
+     * indirect jump is predicted from where it went before, and a scheduler
+     * goes to the same few places over and over. That was more than a third of
+     * the cost of a switch. rdx is caller saved and free. */
+    "\tpopq %rdx\n"
+    "\t.cfi_adjust_cfa_offset -8\n"
+    "\t.cfi_register %rip, %rdx\n"
+    "\tjmp *%rdx\n"
     "\t.cfi_endproc\n"
 #if !defined(__APPLE__)
     "\t.size burrow__mcontext_switch_raw, . - burrow__mcontext_switch_raw\n"

@@ -108,6 +108,10 @@ PalErrno burrow__pal_errno_win(unsigned long native) {
         return PAL_EOVERFLOW;
     case ERROR_CANT_RESOLVE_FILENAME:
         return PAL_ELOOP;
+    case ERROR_PRIVILEGE_NOT_HELD:
+        return PAL_EPERM;
+    case ERROR_NOT_A_REPARSE_POINT:
+        return PAL_EINVAL;
     default:
         return PAL_EOTHER;
     }

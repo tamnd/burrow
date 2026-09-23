@@ -62,9 +62,9 @@ extern "C" {
  * anyway, because the shape of the boundary is a decision worth writing down
  * once rather than discovering package by package, and because a call to a
  * missing one is a link error that names it. Today the time, memory, random,
- * machine query, poll, thread, stdout capture and signal groups are
- * implemented and in use, and files, process, dynamic loading, user and net
- * land with the packages that need them. Each group below says where it
+ * machine query, poll, thread, stdout capture, signal and file groups are
+ * implemented and in use, and process, dynamic loading, user and net land with
+ * the packages that need them. Each group below says where it
  * stands. */
 
 /* ------------------------------------------------------------------ failure
@@ -456,7 +456,17 @@ bool pal_stdout_capture_end(PalStdoutCapture *c, PalErrno *err);
  * same. A caller that wants a descriptor to survive an exec passes it in the
  * PalSpawn fds list, which dups it into place in the child.
  *
- * Not implemented yet. These arrive with the os package. */
+ * Implemented. The first caller is the testing package, which reads a fuzz
+ * target's seeds out of testdata/fuzz, and the os package is the second.
+ *
+ * On Windows a path goes to UTF-16 in a buffer on the stack, because nothing
+ * here allocates, and that buffer holds PAL_WPATH_MAX units. A longer path is
+ * PAL_ENAMETOOLONG. Win32 itself stops at 260 units unless the process has
+ * long paths turned on, so this is the larger of the two limits by a distance,
+ * and a path that needs more than four thousand characters is one the os
+ * package would have to prefix with \\?\ anyway. */
+
+#define PAL_WPATH_MAX 4096
 
 enum {
     PAL_O_RDONLY = 0,
@@ -571,12 +581,41 @@ bool pal_rename(const char *from, const char *to, PalErrno *err);
 bool pal_mkdir(const char *path, uint32_t mode, PalErrno *err);
 bool pal_rmdir(const char *path, PalErrno *err);
 
-/* One entry per call from a descriptor opened with PAL_O_DIRECTORY. Returns
- * false at the end of the directory with no error set, and false with an error
- * set when something went wrong, so a loop tests the error and not the bool.
- * "." and ".." are filtered out here, because no caller has ever wanted them
- * and every one of them would filter them itself. */
-bool pal_readdir(int64_t fd, PalDirEntry *out, PalErrno *err);
+/* A directory being read, which is a descriptor opened with PAL_O_DIRECTORY
+ * and a buffer for what the platform hands back.
+ *
+ * Every platform returns directory entries in batches, and the batch has to
+ * live somewhere between calls. It lives here, in memory the caller owns,
+ * because the alternative is a table in the PAL keyed by descriptor, which is
+ * both global state and an allocation. Set fd, zero the rest, and hand the
+ * same PalDir to every call for that descriptor:
+ *
+ *     PalDir d = {.fd = fd};
+ *     PalDirEntry e;
+ *     PalErrno err = PAL_OK;
+ *     while (pal_readdir(&d, &e, &err))
+ *         use(e.name, e.name_len);
+ *     if (err != PAL_OK)
+ *         fail(err);
+ *
+ * It is eight kilobytes, which is fine in a goroutine and is why it is not
+ * inside PalDirEntry. Closing the descriptor is the caller's, with pal_close,
+ * and nothing else needs undoing. */
+typedef struct PalDir {
+    int64_t fd;
+    int32_t pos;
+    int32_t len;
+    uint32_t state; /* the backend's own, zero to start */
+    uint32_t pad;
+    uint64_t buf[1024];
+} PalDir;
+
+/* One entry per call. Returns false at the end of the directory with no error
+ * set, and false with an error set when something went wrong, so a loop tests
+ * the error and not the bool. "." and ".." are filtered out here, because no
+ * caller has ever wanted them and every one of them would filter them itself.
+ * The order is whatever the filesystem gives. */
+bool pal_readdir(PalDir *d, PalDirEntry *out, PalErrno *err);
 
 bool pal_link(const char *from, const char *to, PalErrno *err);
 bool pal_symlink(const char *target, const char *path, PalErrno *err);

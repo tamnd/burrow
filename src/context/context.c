@@ -654,7 +654,18 @@ static void cancel_node(CancelCtx *c, bool remove_from_parent, Error err, Error 
 
         child->prev = NULL;
         child->next = NULL;
+
+        /* A reference for the length of the call. The child's done channel
+         * closes in the middle of it, and from that moment its owner can wake
+         * and release it, and a release of a context that is already cancelled
+         * does not wait for anything. Without this the rest of the call, from
+         * the unlock of the child's lock onwards, can be on freed memory. Go has
+         * a collector and so never needed to say this. The last reference can
+         * be this one, in which case the free is here, under this node's lock,
+         * and that is fine because a free takes no lock in this file. */
+        (void)burrow__atomic_add_u32(&child->refs, 1);
         cancel_node(child, false, err, cause);
+        cancel_ctx_release(child);
         child = after;
     }
     c->children = NULL;

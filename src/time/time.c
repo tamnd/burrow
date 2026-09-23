@@ -157,8 +157,18 @@ static void sleep_in_bubble(Goroutine *g, burrow__Bubble *b, Duration d) {
 static bool arm_sleep(Goroutine *g, void *lock) {
     Sleeper *s = (Sleeper *)lock;
 
-    s->armed = burrow__timer_reset(s->t, s->when, 0, wake_sleeper, g, NULL);
-    return s->armed;
+    /* Written before the timer is armed and not after, because once it is
+     * armed it can fire on another thread, and the goroutine can run again and
+     * be asleep a second time with a new Sleeper at the same address before
+     * this call has returned. Nothing that happens after a successful reset may
+     * touch the goroutine's stack. A failed one armed nothing, so the goroutine
+     * is still this thread's and the write is safe. */
+    s->armed = true;
+    if (!burrow__timer_reset(s->t, s->when, 0, wake_sleeper, g, NULL)) {
+        s->armed = false;
+        return false;
+    }
+    return true;
 }
 
 /* One line, and it is here rather than being the same symbol as the runtime's

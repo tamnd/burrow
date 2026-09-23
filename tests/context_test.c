@@ -1438,8 +1438,13 @@ static void fires_body(void *env) {
     if (BURROW_CONTEXT_IS_NIL(c))
         return;
 
+    /* Done at once only counts if the look finished before the deadline could
+     * have passed. A loaded machine can take this goroutine off its thread for
+     * longer than DL_SOON between the two lines, and then a done context is
+     * the right answer. */
     dl.made = true;
-    dl.done_at_once = is_done(c);
+    bool done = is_done(c);
+    dl.done_at_once = done && burrow_nanotime() - dl.started < DL_SOON;
     dl.done_in_the_end = wait_done(c);
     dl.elapsed = burrow_nanotime() - dl.started;
     dl.err = context_err(c);
@@ -1494,8 +1499,11 @@ static void parent_sooner_body(void *env) {
 
     /* No timer of its own, so the only thing that can cancel it is the parent,
      * and the parent is twenty milliseconds from giving up. */
+    /* A wait on the child too, and not a look. The parent's channel closes
+     * before the cancel reaches the children, in Go as well as here, so a
+     * goroutine woken by the first can get to the second before it closes. */
     dl.parent_done = wait_done(p);
-    dl.child_done = is_done(c);
+    dl.child_done = wait_done(c);
     dl.child_err = context_err(c);
 
     BURROW_CALLF0(cancel);
@@ -1599,8 +1607,9 @@ static void deadline_downwards_body(void *env) {
      * value node, because neither of them has one of its own. */
     dl.has_deadline = context_deadline(grandkid, &dl.when);
 
+    /* Waiting on each for the reason given in the test above. */
     dl.parent_done = wait_done(p);
-    dl.child_done = is_done(kid);
+    dl.child_done = wait_done(kid);
     dl.child_err = context_err(kid);
     dl.err = context_err(grandkid);
 

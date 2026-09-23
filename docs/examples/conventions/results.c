@@ -2,10 +2,9 @@
 
 #include "burrow/burrow.h"
 
-// strconv is not ported yet, so this is a cut down strconv_atoi with the
-// signature the real one will have. When the real one lands this file stops
-// compiling, which is the reminder to delete the stand-in.
-BURROW_SENTINEL_ERROR(strconv_err_syntax, "invalid syntax");
+// strconv_atoi is not ported yet, so this is a cut down one with the signature
+// the real one will have, using the real strconv_err_syntax. When the real one
+// lands this file stops compiling, which is the reminder to delete the stand-in.
 
 // doc: out
 static Int strconv_atoi(Str s, Error *err) {

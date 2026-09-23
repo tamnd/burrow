@@ -61,6 +61,7 @@
 #include "burrow/proc.h"
 #include "burrow/runtime.h"
 #include "burrow/slice.h"
+#include "burrow/strconv.h"
 #include "burrow/sync.h"
 #include "burrow/sync/atomic.h"
 #include "burrow/synctest.h"

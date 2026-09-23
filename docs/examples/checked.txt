@@ -27,3 +27,4 @@ docs/guides/allocators.md
 docs/guides/sync.md
 docs/guides/building.md
 README.md
+docs/guides/strconv.md

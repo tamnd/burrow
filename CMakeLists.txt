@@ -256,7 +256,12 @@ if(BURROW_BUILD_TESTS)
         add_executable(${test_name} ${test_source} ${BURROW_TEST_GEN})
         target_link_libraries(${test_name} PRIVATE burrow)
         target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+        # /utf-8 for the same reason the library has it. Tests ported from Go
+        # are full of string literals like "　", and without it MSVC turns
+        # them into the system code page, or into a question mark when the code
+        # page has no such character, instead of the UTF-8 that Go means.
         if(MSVC)
+            target_compile_options(${test_name} PRIVATE /utf-8)
             target_compile_definitions(${test_name} PRIVATE _CRT_SECURE_NO_WARNINGS)
         endif()
         add_test(NAME ${test_name} COMMAND ${test_name})

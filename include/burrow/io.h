@@ -42,6 +42,8 @@
  * not an error either, which is why io_read_full exists.
  */
 
+/* burrow:package io */
+
 #ifndef BURROW_IO_H
 #define BURROW_IO_H
 

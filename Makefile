@@ -227,6 +227,7 @@ check:
 	@tools/check-statics.sh
 	@tools/check-pal.sh
 	@tools/check-gen.sh
+	@tools/check-amalg.sh
 	@$(MAKE) test
 
 install: $(LIB)

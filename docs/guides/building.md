@@ -58,6 +58,29 @@ tools/burrow-gen amalgamate --out check --source-id v0.0.31
 cmp check/burrow.c burrow.c
 ```
 
+## Leaving packages out
+
+A package you don't use costs compile time and nothing else, because the linker drops what nothing calls. If the compile time matters, there are two ways to cut it down.
+
+The first is to generate a smaller pair. `--packages` takes a comma separated list of import paths and keeps those packages and whatever they need, and nothing else:
+
+```sh
+tools/burrow-gen amalgamate --packages context --out dist
+```
+
+What else came along is listed in `burrow-manifest.json`, and it is always at least sync, sync/atomic, time and unicode/utf8, because the runtime itself uses them. A name that isn't a package is an error that lists the ones that are.
+
+The second works on the full pair you already have. Every package that can be dropped is wrapped in a `BURROW_OMIT_` macro named after its import path, in capitals with the slashes turned into underscores, so `BURROW_OMIT_CONTEXT` or `BURROW_OMIT_UNICODE_UTF8`. Define it for `burrow.c` and for your own files, which in practice means on the compiler command line:
+
+```sh
+cc -std=c11 -O2 -DBURROW_OMIT_CONTEXT -DBURROW_OMIT_IO -c burrow.c
+cc -std=c11 -O2 -DBURROW_OMIT_CONTEXT -DBURROW_OMIT_IO main.c burrow.o -pthread -o main
+```
+
+The list of packages is at the top of `burrow.h`, and so are the checks. Leaving out a package the runtime needs, or one that a package you kept needs, stops the compile with an `#error` that names both, rather than failing at link time with a missing symbol. `make check` builds every combination the macros allow and runs a program against each one, so none of them can quietly stop compiling.
+
+`--packages` is the better of the two when you control the build, since the smaller file compiles faster. The macros are for one vendored copy that several programs with different needs share.
+
 ## make
 
 From a checkout, `make` builds `build/libburrow.a`, and your program adds `-Iinclude` and links the archive. `make test` runs the suite and `make check` runs the source gates first. `make amalgamation` writes the two files into `build/amalgamation`, and `make AMALGAMATION=1 test` builds the library out of them and runs every test against exactly what ships.
@@ -68,4 +91,4 @@ From a checkout, `make` builds `build/libburrow.a`, and your program adds `-Iinc
 
 ## Not yet
 
-Choosing a subset of packages or a single target platform when generating is designed in [docs/design/15-build-deploy.md](../design/15-build-deploy.md) section 2 and not implemented. Today the pair holds all of burrow for every platform, and the parts for the platforms you are not on compile to nothing.
+Choosing a single target platform, baking in a prefix for the private names, and splitting `burrow.c` into several files are designed in [docs/design/15-build-deploy.md](../design/15-build-deploy.md) section 2 and not implemented. Today the pair holds the code for every platform, and the parts for the platforms you are not on compile to nothing.

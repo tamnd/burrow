@@ -17,7 +17,7 @@ The recipe is the same every time.
 
 1. Claim the package by commenting on its milestone issue, so two people do not do the same one.
 2. Run `tools/inventory.sh <pkg>` to get the symbol list and the line counts you are signing up for.
-3. Translate the Go source file by file, keeping the file names. `strings.go` becomes `strings.c`, `strings_test.go` becomes `strings_test.c`. Keeping the shape means a reviewer can diff against upstream, which is the only practical way to review a port of this size.
+3. Translate the Go source file by file, keeping the file names. `strings.go` becomes `strings.c`, `strings_test.go` becomes `strings_test.c`. Keeping the shape means a reviewer can diff against upstream, which is the only practical way to review a port of this size. The package's header gets a `/* burrow:package strings */` line with its import path, and each of its `.c` files includes that header first. That is how the amalgamation generator knows which files are the package, what it needs, and what `--packages` and `BURROW_OMIT_STRINGS` should drop.
 4. Bring the tests across with the code, in the same commit. `tools/burrow-gen tests` does the mechanical part of the translation for table driven tests, which is most of them.
 5. Run the differential fuzzer against the package. It builds Go's version as a C archive and asks both implementations the same question until they disagree.
 6. Write the docs. A package is not done without them, and the docs job in CI compiles and runs every example, so a broken example is a broken build.

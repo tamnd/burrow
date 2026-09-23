@@ -21,6 +21,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+/* burrow:package unicode/utf8 */
+
 #ifndef BURROW_UTF8_H
 #define BURROW_UTF8_H
 

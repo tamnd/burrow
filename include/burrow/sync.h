@@ -35,6 +35,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+/* burrow:package sync */
+
 #ifndef BURROW_SYNC_H
 #define BURROW_SYNC_H
 

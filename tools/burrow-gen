@@ -67,8 +67,15 @@
 # keeps those out of the tree. Running it twice on the same tree gives the same
 # bytes, and CI checks that. It needs Python 3 and nothing else.
 #
+#     burrow-gen amalgamate --packages context,io --out dist
+#
+# keeps only those packages and what they need. Every package that can be left
+# out is also wrapped in a BURROW_OMIT_ macro, so the full file can be trimmed
+# from the compiler command line instead. The PACKAGES notes further down say
+# how the generator decides what belongs where.
+#
 # docs/design/15-build-deploy.md section 2 is the design, including the options
-# that are not here yet: choosing packages, choosing targets, and a prefix.
+# that are not here yet: choosing targets, a prefix, and splitting the file.
 #
 # DOC
 #
@@ -487,12 +494,37 @@ def run_reflect(args):
 # The output depends on the input files and on nothing else: no dates, no
 # paths from the machine it ran on, files in sorted order. Two runs on the same
 # tree give the same bytes, and CI checks that.
+#
+# PACKAGES
+#
+# A header that is the public face of a Go package says so on a line of its own:
+#
+#     /* burrow:package unicode/utf8 */
+#
+# A source file belongs to the package of the first burrow header it includes,
+# which the tree's convention already makes its own header. Files under the core
+# directories belong to no package, and neither does anything a package header
+# does not claim. That is the core, and it is always in.
+#
+# What a package needs is read off the include graph: every package whose header
+# its files reach. The core needs some packages too, because the runtime uses
+# sync and time, so those are always in and cannot be left out.
+#
+# --packages keeps the named packages and everything they need, and drops the
+# rest from both files. Whatever can still be dropped is wrapped in
+# BURROW_OMIT_<PACKAGE>, the import path in capitals with the slashes turned into
+# underscores, so a full burrow.c can be trimmed from the compiler command line
+# too. burrow.h checks the combination up front, so leaving out a package that a
+# kept one needs is an #error that says which, rather than a link error later.
 
 AMALG_INCLUDE = re.compile(r'^\s*#\s*include\s+"(burrow/[^"]+|internal\.h)"')
 AMALG_DEFINE = re.compile(r"^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)")
 AMALG_ANY_INCLUDE = re.compile(r"^\s*#\s*include\b")
 AMALG_DIRECTIVE = re.compile(r"^\s*#")
 AMALG_VERSION = re.compile(r'#define\s+BURROW_VERSION_STRING\s+"([^"]+)"')
+AMALG_PACKAGE = re.compile(r"^/\*\s*burrow:package\s+([a-z0-9_/]+)\s*\*/\s*$")
+AMALG_CORE_DIRS = ("core", "mem", "pal", "runtime")
+AMALG_UMBRELLA = "include/burrow/burrow.h"
 
 
 class Amalgamation:
@@ -522,16 +554,17 @@ def amalg_header_path(name):
     return "include/" + name
 
 
-def amalg_order(start, lines_of):
+def amalg_order(start, lines_of, skip=()):
     """Headers in an order where each comes after everything it includes.
 
     Depth first over the #include lines in the order they are written, which is
-    deterministic and keeps related headers next to each other."""
+    deterministic and keeps related headers next to each other. Headers in skip
+    are left out, along with anything only they include."""
     order = []
     state = {}
 
     def visit(path, via):
-        if state.get(path) == "done":
+        if path in skip or state.get(path) == "done":
             return
         if state.get(path) == "open":
             raise Error("%s includes itself through %s" % (path, " -> ".join(via)))
@@ -553,14 +586,129 @@ def amalg_blank(line):
     return "/* burrow-gen: %s */" % line.strip().replace("*/", "* /")
 
 
-def amalg_paste(out, rel, lines):
+def amalg_paste(out, rel, lines, omit=None):
     if lines and lines[-1] == "":
         lines = lines[:-1]
     out.append("/* ==== begin %s ==== */" % rel)
+    if omit:
+        out.append("#if !defined(%s)" % omit)
     out.append('#line 1 "%s"' % rel)
     out.extend(lines)
+    if omit:
+        out.append("#endif /* %s */" % omit)
     out.append("/* ==== end %s ==== */" % rel)
     out.append("")
+
+
+def amalg_omit_macro(pkg):
+    return "BURROW_OMIT_" + pkg.upper().replace("/", "_")
+
+
+class Packages:
+    """Which package each file is in and which packages each one needs."""
+
+    def __init__(self, headers, sources, lines_of):
+        self.owner = {}
+        for h in headers:
+            for line in lines_of(h):
+                m = AMALG_PACKAGE.match(line)
+                if not m:
+                    continue
+                if h in self.owner:
+                    raise Error("%s has two burrow:package lines" % h)
+                self.owner[h] = m.group(1)
+        for s in sources:
+            parts = s.split("/")
+            core = len(parts) == 2 or parts[1] in AMALG_CORE_DIRS
+            first = None
+            for line in lines_of(s):
+                m = AMALG_INCLUDE.match(line)
+                if m:
+                    first = amalg_header_path(m.group(1))
+                    break
+            if core:
+                continue
+            if first not in self.owner:
+                raise Error(
+                    "%s is outside the core directories, so it is part of a package, "
+                    "and the first burrow header it includes is %s, which has no "
+                    "burrow:package line" % (s, first or "none")
+                )
+            self.owner[s] = self.owner[first]
+
+        self.names = sorted(set(self.owner.values()))
+        reached = {}
+
+        def reach(rel):
+            if rel not in reached:
+                reached[rel] = set()
+                out = set()
+                for line in lines_of(rel):
+                    m = AMALG_INCLUDE.match(line)
+                    if m:
+                        h = amalg_header_path(m.group(1))
+                        if h != AMALG_UMBRELLA:
+                            out.add(h)
+                            out |= reach(h)
+                reached[rel] = out
+            return reached[rel]
+
+        self.needs = {p: set() for p in self.names}
+        core_needs = set()
+        for f in list(headers) + list(sources):
+            if f == AMALG_UMBRELLA:
+                continue
+            got = set(self.owner[h] for h in reach(f) if h in self.owner)
+            p = self.owner.get(f)
+            if p is None:
+                core_needs |= got
+            else:
+                self.needs[p] |= got - {p}
+        self.required = self.closure(core_needs)
+
+    def closure(self, start):
+        out = set(start)
+        todo = sorted(out)
+        while todo:
+            for q in sorted(self.needs[todo.pop()]):
+                if q not in out:
+                    out.add(q)
+                    todo.append(q)
+        return out
+
+    def select(self, wanted):
+        """The packages to keep for a --packages list, or all of them for None."""
+        if wanted is None:
+            return set(self.names)
+        for p in wanted:
+            if p not in self.names:
+                raise Error(
+                    "there is no package called %s. The packages are %s"
+                    % (p, ", ".join(self.names))
+                )
+        return self.closure(set(wanted) | self.required)
+
+    def checks(self, keep):
+        """The #error lines that refuse a BURROW_OMIT_ combination that cannot link."""
+        out = []
+        for p in sorted(self.required):
+            out.append("#if defined(%s)" % amalg_omit_macro(p))
+            out.append(
+                '#error "%s is set, and the runtime uses %s, so it cannot be left out"'
+                % (amalg_omit_macro(p), p)
+            )
+            out.append("#endif")
+        for p in sorted(keep - self.required):
+            for q in sorted(self.needs[p] - self.required):
+                out.append(
+                    "#if defined(%s) && !defined(%s)" % (amalg_omit_macro(q), amalg_omit_macro(p))
+                )
+                out.append(
+                    '#error "%s is set, and %s uses %s, so leave %s out as well or keep %s"'
+                    % (amalg_omit_macro(q), p, q, p, q)
+                )
+                out.append("#endif")
+        return out
 
 
 def amalg_prologue(rel, lines):
@@ -614,12 +762,27 @@ def run_amalgamate(args):
     if version is None:
         raise Error("include/burrow/version.h has no BURROW_VERSION_STRING")
 
-    public = amalg_order(["include/burrow/burrow.h"], lines_of)
+    all_headers = amalg_order(
+        [AMALG_UMBRELLA] + a.files("include", ".h") + ["src/pal/internal.h"], lines_of
+    )
+    all_sources = a.files("src", ".c")
+    pk = Packages(all_headers, all_sources, lines_of)
+    wanted = getattr(args, "packages", None)
+    if wanted is not None:
+        wanted = [p.strip() for p in wanted.split(",") if p.strip()]
+    keep = pk.select(wanted)
+    skip = set(f for f, p in pk.owner.items() if p not in keep)
+
+    def omit_of(rel):
+        p = pk.owner.get(rel)
+        return amalg_omit_macro(p) if p is not None and p not in pk.required else None
+
+    public = amalg_order([AMALG_UMBRELLA], lines_of, skip)
     everything = amalg_order(
-        public + a.files("include", ".h") + ["src/pal/internal.h"], lines_of
+        public + a.files("include", ".h") + ["src/pal/internal.h"], lines_of, skip
     )
     private = [h for h in everything if h not in public]
-    sources = a.files("src", ".c")
+    sources = [s for s in all_sources if s not in skip]
 
     header_macros = set()
     for h in everything:
@@ -651,8 +814,19 @@ def run_amalgamate(args):
     h.append("#ifndef BURROW_AMALGAMATION_H")
     h.append("#define BURROW_AMALGAMATION_H")
     h.append("")
+    h.append("/* ==== the packages in this file ==== */")
+    h.append("")
+    h.append("/* %s." % ", ".join(sorted(keep)))
+    h.append(" *")
+    h.append(" * Define BURROW_OMIT_ and a package's import path, in capitals with the")
+    h.append(" * slashes as underscores, to leave that package out of the build. Define it")
+    h.append(" * for burrow.c and for every file that includes this, which in practice")
+    h.append(" * means on the compiler command line. The checks below refuse a combination")
+    h.append(" * that leaves out something a remaining package needs. */")
+    h.extend(pk.checks(keep))
+    h.append("")
     for rel in public:
-        amalg_paste(h, rel, strip_includes(lines_of(rel)))
+        amalg_paste(h, rel, strip_includes(lines_of(rel)), omit_of(rel))
     h.append("#endif /* BURROW_AMALGAMATION_H */")
     h.append("")
 
@@ -686,7 +860,7 @@ def run_amalgamate(args):
     c.append("#endif")
     c.append("")
     for rel in private:
-        amalg_paste(c, rel, strip_includes(lines_of(rel)))
+        amalg_paste(c, rel, strip_includes(lines_of(rel)), omit_of(rel))
     c.append("#if defined(__GNUC__)")
     c.append("#pragma GCC diagnostic pop")
     c.append("#endif")
@@ -707,7 +881,7 @@ def run_amalgamate(args):
                 )
             if name not in own:
                 own.append(name)
-        amalg_paste(c, rel, strip_includes(body))
+        amalg_paste(c, rel, strip_includes(body), omit_of(rel))
         if own:
             c.extend("#undef %s" % name for name in own)
             c.append("")
@@ -736,7 +910,7 @@ def run_amalgamate(args):
     manifest = {
         "version": version,
         "source_id": args.source_id,
-        "packages": "all",
+        "packages": sorted(keep),
         "targets": "all",
         "inputs": a.inputs,
         "outputs": {
@@ -1039,6 +1213,11 @@ def main():
         "--source-id",
         default="unknown",
         help="what burrow_sourceid() returns, usually git describe, default unknown",
+    )
+    m.add_argument(
+        "--packages",
+        metavar="LIST",
+        help="comma separated import paths to keep, with what they need, default all",
     )
     m.add_argument(
         "--root",

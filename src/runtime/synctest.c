@@ -49,6 +49,7 @@
 #include "burrow/proc.h"
 #include "burrow/runtime.h"
 #include "burrow/sched.h"
+#include "burrow/time.h"
 #include "burrow/timer.h"
 
 #include <stdbool.h>
@@ -401,4 +402,9 @@ void synctest_wait(void) {
      * durable wait in the runtime uses. */
     b->waiter = g;
     burrow__park(unlock_bubble, b, true);
+}
+
+void synctest_sleep(Duration d) {
+    time_sleep(d);
+    synctest_wait();
 }

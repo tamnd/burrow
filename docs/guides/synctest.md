@@ -163,6 +163,19 @@ static void body(void *env) {
 
 Wait for the thing rather than for the clock, as that example does. Two timers that come due at the same instant both run, but a goroutine that one of them wakes can start on another thread before the other has run, so a sleep that ended exactly on a deadline would be a race. Go is the same here and for the same reason.
 
+When the clock is the thing, sleep with `synctest_sleep` instead. It is `time_sleep` followed by `synctest_wait`, so whatever the rest of the bubble does at the moment the sleep ends has been done by the time it returns.
+
+```c
+static void body(void *env) {
+    go(BURROW_FN(Func, refresh_every_minute, NULL));
+
+    // The refresher wakes at the same instant this does. The wait inside the
+    // sleep lets it finish the refresh before the check below looks.
+    synctest_sleep(TIME_MINUTE);
+    assert(refreshes == 1);
+}
+```
+
 Two things follow from the clock only moving when the bubble is idle, and both of them surprise people once.
 
 `synctest_wait` does not move the clock. It returns when every other goroutine is durably blocked, and at that moment the goroutine that called it is still running, so the bubble is not idle. A test that wants time to pass has to sleep. Go behaves the same way.

@@ -67,6 +67,8 @@ static int64_t clock_at_start;
 static int64_t clock_at_end;
 static int64_t fired_at;
 static uint32_t order;
+static uint32_t ticked;
+static uint32_t ticked_seen;
 static uint32_t minute_was;
 static uint32_t hour_was;
 static uint32_t fired;
@@ -91,6 +93,8 @@ static void reset(void) {
     clock_at_end = 0;
     fired_at = 0;
     order = 0;
+    ticked = 0;
+    ticked_seen = 0;
     minute_was = 0;
     hour_was = 0;
     fired = 0;
@@ -694,6 +698,49 @@ TEST(sleeps_in_a_bubble_finish_in_the_order_their_durations_say) {
     CHECK(clock_at_end - clock_at_start == TIME_HOUR);
 }
 
+/* --- synctest_sleep lets the others finish what they do at the same instant
+ *
+ * The worker and the body both sleep for a minute. With time_sleep alone the
+ * body could look before the worker has counted, and with synctest_sleep it
+ * cannot, because the wait after the sleep holds the body until the worker has
+ * got as far as it can. The worker yields a few times before it counts, which
+ * is a window the body walks straight through without the wait. */
+
+static void ticker(void *env) {
+    (void)env;
+
+    time_sleep(TIME_MINUTE);
+    for (int i = 0; i < 10; i++)
+        runtime_gosched();
+    (void)burrow__atomic_add_u32(&ticked, 1);
+}
+
+static void settle_body(void *env) {
+    (void)env;
+
+    clock_at_start = burrow_nanotime();
+    (void)go(BURROW_FN(Func, ticker, NULL));
+    synctest_sleep(TIME_MINUTE);
+    ticked_seen = burrow__atomic_load_acquire_u32(&ticked);
+    clock_at_end = burrow_nanotime();
+}
+
+static void settle_top(void *env) {
+    (void)env;
+
+    if (synctest_run(BURROW_FN(Func, settle_body, NULL)))
+        (void)burrow__atomic_add_u32(&children_done, 1);
+}
+
+TEST(a_synctest_sleep_returns_after_the_others_have_settled) {
+    reset();
+    runtime_main(BURROW_FN(Func, settle_top, NULL));
+
+    CHECK_INT_EQ((Int)burrow__atomic_load_acquire_u32(&children_done), 1);
+    CHECK_INT_EQ((Int)ticked_seen, 1);
+    CHECK(clock_at_end - clock_at_start == TIME_MINUTE);
+}
+
 /* --- AfterFunc is on the bubble's clock too
  *
  * The body arms a callback for fifty milliseconds and then sleeps for a second,
@@ -819,6 +866,7 @@ int main(void) {
     RUN(a_wait_group_cannot_be_added_to_from_inside_and_outside_a_bubble);
     RUN(a_sleep_inside_a_bubble_costs_no_real_time);
     RUN(sleeps_in_a_bubble_finish_in_the_order_their_durations_say);
+    RUN(a_synctest_sleep_returns_after_the_others_have_settled);
     RUN(an_after_func_in_a_bubble_runs_on_the_bubble_clock);
     RUN(a_context_deadline_in_a_bubble_is_on_the_bubble_clock);
     RUN(a_wait_outside_a_bubble_stops_the_program);

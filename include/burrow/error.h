@@ -168,7 +168,11 @@ bool errors_is(Error err, Error target);
  * void * converts to any object pointer in C, so there is no cast at the call
  * site and no way to ask for one type and get another. It also drops both of
  * Go's panics, since there is no nil target and no non pointer target to
- * complain about. */
+ * complain about.
+ *
+ * That makes it Go 1.26's errors.AsType as well, which exists because Go's As
+ * has the awkward shape and this one never did. There is no second function
+ * for it, since it would be this one again under a longer name. */
 BURROW_BORROWS(ret, err) const void *errors_as(Error err, const Type *target);
 
 /* errors.Join.

@@ -98,6 +98,9 @@ RENAMED = {
     # include/burrow/sync.h: NewCond allocates in Go and has nothing to
     # allocate here, so it is the initialiser too.
     ("sync", "func NewCond"): "SYNC_COND",
+    # include/burrow/error.h: errors_as already returns the typed pointer,
+    # which is the shape AsType was added to Go to get.
+    ("errors", "func AsType"): "errors_as",
     # new is a keyword in C++, and burrow.h has to compile there.
     ("sync", "type Pool struct, New"): "SyncPool.new_fn",
 }

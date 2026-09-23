@@ -45,6 +45,7 @@
 
 #include "burrow/core.h"
 #include "burrow/func.h"
+#include "burrow/time.h"
 
 #include <stdbool.h>
 
@@ -109,6 +110,19 @@ bool synctest_run(Func f);
  * in the same bubble is already inside this call, because two goroutines
  * waiting for each other to block is a test that cannot be read. */
 void synctest_wait(void);
+
+/* Sleeps for d on the bubble's clock and then waits, which is exactly
+ *
+ *     time_sleep(d);
+ *     synctest_wait();
+ *
+ * and is usually what a test wants instead of the sleep alone. If the test and
+ * the code under test both sleep for the same minute, which of them runs first
+ * when the minute is up is anybody's guess. This lets the other one finish
+ * whatever it does at the minute before the test looks.
+ *
+ * Stops the program in the same cases synctest_wait does. */
+void synctest_sleep(Duration d);
 
 #ifdef __cplusplus
 }

@@ -13,7 +13,7 @@
  *             step();
  *     }
  *
- *     CancelFunc cancel;
+ *     ContextCancelFunc cancel;
  *     Context ctx = context_with_cancel(a, context_background(), &cancel);
  *     go(BURROW_FN(Func, work, &ctx));
  *     ...
@@ -158,20 +158,20 @@ extern const Error context_deadline_exceeded;
  * it is not optional: until it runs, the context is still attached to its
  * parent and the parent still has a pointer to it. Go says the same thing and
  * has a vet check for the case where nobody calls it. */
-typedef Func CancelFunc;
+typedef Func ContextCancelFunc;
 
 /* Go's context.CancelCauseFunc, the cancel that takes a reason with it.
  *
  *     BURROW_CALLF(cancel, err_too_slow);
  *
  * Not an alias for anything, because it takes an argument. Pass BURROW_NO_ERROR
- * to say nothing in particular went wrong, which is what a plain CancelFunc
+ * to say nothing in particular went wrong, which is what a plain ContextCancelFunc
  * does, and then context_cause answers context_canceled like context_err.
  *
- * The same rules as a CancelFunc otherwise: calling it more than once does
+ * The same rules as a ContextCancelFunc otherwise: calling it more than once does
  * nothing after the first, the first cause is the one that sticks, and calling
  * it at all is not optional. */
-BURROW_FUNC(CancelCauseFunc, void, Error cause);
+BURROW_FUNC(ContextCancelCauseFunc, void, Error cause);
 
 /* What context_after_func hands back, which is Go's `stop func() bool`.
  *
@@ -228,13 +228,13 @@ BURROW_BORROWS(ret, c) Any context_value(Context c, Any key);
  *
  * Panics on a nil parent, with Go's message. */
 BURROW_OWNS(ret) Context context_with_cancel(Alloc *a, Context parent,
-                                             CancelFunc *cancel);
+                                             ContextCancelFunc *cancel);
 
 /* context.WithCancelCause(parent).
  *
  * WithCancel with a reason attached to the cancel:
  *
- *     CancelCauseFunc cancel;
+ *     ContextCancelCauseFunc cancel;
  *     Context ctx = context_with_cancel_cause(a, parent, &cancel);
  *     ...
  *     BURROW_CALLF(cancel, err_upstream_gone);
@@ -256,13 +256,13 @@ BURROW_OWNS(ret) Context context_with_cancel(Alloc *a, Context parent,
  * refused allocation, the do nothing cancel that goes with it, and the panic on
  * a nil parent. */
 BURROW_OWNS(ret) Context context_with_cancel_cause(Alloc *a, Context parent,
-                                                   CancelCauseFunc *cancel);
+                                                   ContextCancelCauseFunc *cancel);
 
 /* context.Cause(c). Why this context was cancelled, as opposed to context_err,
  * which says only that it was.
  *
  * The answer is BURROW_NO_ERROR while the context is live. Afterwards it is
- * whatever was handed to a CancelCauseFunc or to one of the WithCause
+ * whatever was handed to a ContextCancelCauseFunc or to one of the WithCause
  * constructors, and when nobody supplied a reason it is the same thing
  * context_err says: context_canceled or context_deadline_exceeded.
  *
@@ -375,12 +375,12 @@ BURROW_OWNS(ret) Context context_after_func(Alloc *a, Context parent, Func f,
  * its done channel or the timer, and *cancel is then a function that does
  * nothing. Panics on a nil parent, with Go's message. */
 BURROW_OWNS(ret) Context context_with_deadline(Alloc *a, Context parent, int64_t when,
-                                               CancelFunc *cancel);
+                                               ContextCancelFunc *cancel);
 
 /* context.WithTimeout(parent, d). The deadline measured from now, which is what
  * almost every caller has:
  *
- *     CancelFunc cancel;
+ *     ContextCancelFunc cancel;
  *     Context ctx = context_with_timeout(a, parent, 5 * TIME_SECOND, &cancel);
  *     if (BURROW_CONTEXT_IS_NIL(ctx))
  *         return err_no_memory;
@@ -395,7 +395,7 @@ BURROW_OWNS(ret) Context context_with_deadline(Alloc *a, Context parent, int64_t
  *
  * Everything else is context_with_deadline. */
 BURROW_OWNS(ret) Context context_with_timeout(Alloc *a, Context parent, Duration d,
-                                              CancelFunc *cancel);
+                                              ContextCancelFunc *cancel);
 
 /* context.WithDeadlineCause(parent, when, cause) and
  * context.WithTimeoutCause(parent, d, cause).
@@ -414,8 +414,8 @@ BURROW_OWNS(ret) Context context_with_timeout(Alloc *a, Context parent, Duration
  * parent cancelling from above, because in neither case was the deadline the
  * reason. Pass BURROW_NO_ERROR to get exactly context_with_deadline.
  *
- * Note that the cancel function here is a plain CancelFunc rather than a
- * CancelCauseFunc. That is Go's shape: the cause is fixed when the context is
+ * Note that the cancel function here is a plain ContextCancelFunc rather than a
+ * ContextCancelCauseFunc. That is Go's shape: the cause is fixed when the context is
  * made, and the caller who wants both a reason for the deadline and a reason
  * for the cancel builds this on top of context_with_cancel_cause.
  *
@@ -423,11 +423,11 @@ BURROW_OWNS(ret) Context context_with_timeout(Alloc *a, Context parent, Duration
  * the requirement to call these from a goroutine. */
 BURROW_OWNS(ret) Context context_with_deadline_cause(Alloc *a, Context parent,
                                                      int64_t when, Error cause,
-                                                     CancelFunc *cancel);
+                                                     ContextCancelFunc *cancel);
 
 BURROW_OWNS(ret) Context context_with_timeout_cause(Alloc *a, Context parent,
                                                     Duration d, Error cause,
-                                                    CancelFunc *cancel);
+                                                    ContextCancelFunc *cancel);
 
 /* context.WithValue(parent, key, val).
  *

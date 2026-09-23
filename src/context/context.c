@@ -855,21 +855,21 @@ static CancelCtx *new_cancel_ctx(Alloc *a, Context parent) {
     return c;
 }
 
-Context context_with_cancel(Alloc *a, Context parent, CancelFunc *cancel) {
+Context context_with_cancel(Alloc *a, Context parent, ContextCancelFunc *cancel) {
     Context none = {NULL, NULL};
 
     if (BURROW_CONTEXT_IS_NIL(parent))
         panic_str(BURROW_S("cannot create context from nil parent"));
 
     if (cancel != NULL)
-        *cancel = BURROW_FN(CancelFunc, cancel_nothing, NULL);
+        *cancel = BURROW_FN(ContextCancelFunc, cancel_nothing, NULL);
 
     CancelCtx *c = new_cancel_ctx(a, parent);
     if (c == NULL)
         return none;
 
     if (cancel != NULL)
-        *cancel = BURROW_FN(CancelFunc, cancel_func, c);
+        *cancel = BURROW_FN(ContextCancelFunc, cancel_func, c);
 
     Context out = {&cancel_vt, c};
     return out;
@@ -886,21 +886,22 @@ Context context_with_cancel(Alloc *a, Context parent, CancelFunc *cancel) {
  * and that is the feature: a reason given at the top is the answer five layers
  * down, where the layers in between are WithValues that cancel nothing. */
 
-Context context_with_cancel_cause(Alloc *a, Context parent, CancelCauseFunc *cancel) {
+Context context_with_cancel_cause(Alloc *a, Context parent,
+                                  ContextCancelCauseFunc *cancel) {
     Context none = {NULL, NULL};
 
     if (BURROW_CONTEXT_IS_NIL(parent))
         panic_str(BURROW_S("cannot create context from nil parent"));
 
     if (cancel != NULL)
-        *cancel = BURROW_FN(CancelCauseFunc, cancel_cause_nothing, NULL);
+        *cancel = BURROW_FN(ContextCancelCauseFunc, cancel_cause_nothing, NULL);
 
     CancelCtx *c = new_cancel_ctx(a, parent);
     if (c == NULL)
         return none;
 
     if (cancel != NULL)
-        *cancel = BURROW_FN(CancelCauseFunc, cancel_cause_func, c);
+        *cancel = BURROW_FN(ContextCancelCauseFunc, cancel_cause_func, c);
 
     Context out = {&cancel_vt, c};
     return out;
@@ -1148,7 +1149,7 @@ static void deadline_reached(void *env) {
 }
 
 Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Error cause,
-                                    CancelFunc *cancel) {
+                                    ContextCancelFunc *cancel) {
     Context none = {NULL, NULL};
 
     if (BURROW_CONTEXT_IS_NIL(parent))
@@ -1174,7 +1175,7 @@ Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Erro
         return context_with_cancel(a, parent, cancel);
 
     if (cancel != NULL)
-        *cancel = BURROW_FN(CancelFunc, cancel_nothing, NULL);
+        *cancel = BURROW_FN(ContextCancelFunc, cancel_nothing, NULL);
 
     TimerCtx *t = BURROW_NEW(a, TimerCtx);
     if (t == NULL)
@@ -1204,7 +1205,7 @@ Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Erro
     }
 
     if (cancel != NULL)
-        *cancel = BURROW_FN(CancelFunc, cancel_func, c);
+        *cancel = BURROW_FN(ContextCancelFunc, cancel_func, c);
 
     Context out = {&timer_vt, c};
 
@@ -1246,7 +1247,7 @@ Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Erro
         cancel_node(c, true, context_canceled, BURROW_NO_ERROR);
         context_release(c);
         if (cancel != NULL)
-            *cancel = BURROW_FN(CancelFunc, cancel_nothing, NULL);
+            *cancel = BURROW_FN(ContextCancelFunc, cancel_nothing, NULL);
         return none;
     }
 
@@ -1254,7 +1255,7 @@ Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Erro
 }
 
 Context context_with_deadline(Alloc *a, Context parent, int64_t when,
-                              CancelFunc *cancel) {
+                              ContextCancelFunc *cancel) {
     return context_with_deadline_cause(a, parent, when, BURROW_NO_ERROR, cancel);
 }
 
@@ -1273,12 +1274,13 @@ static int64_t context_deadline_from(Duration d) {
 }
 
 Context context_with_timeout_cause(Alloc *a, Context parent, Duration d, Error cause,
-                                   CancelFunc *cancel) {
+                                   ContextCancelFunc *cancel) {
     return context_with_deadline_cause(a, parent, context_deadline_from(d), cause,
                                        cancel);
 }
 
-Context context_with_timeout(Alloc *a, Context parent, Duration d, CancelFunc *cancel) {
+Context context_with_timeout(Alloc *a, Context parent, Duration d,
+                             ContextCancelFunc *cancel) {
     return context_with_deadline_cause(a, parent, context_deadline_from(d),
                                        BURROW_NO_ERROR, cancel);
 }

@@ -760,7 +760,7 @@ TEST(an_after_func_in_a_bubble_runs_on_the_bubble_clock) {
 static void deadline_body(void *env) {
     (void)env;
 
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     Context ctx = context_with_timeout(heap_allocator(), context_background(),
                                        30 * TIME_SECOND, &cancel);
 

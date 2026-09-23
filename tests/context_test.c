@@ -202,7 +202,7 @@ TEST(background_and_todo_are_not_the_same_context) {
 
 TEST(a_cancel_closes_the_done_channel_and_sets_the_error) {
     Alloc *a = heap_allocator();
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     Context c = context_with_cancel(a, context_background(), &cancel);
 
     CHECK(!BURROW_CONTEXT_IS_NIL(c));
@@ -225,7 +225,7 @@ TEST(a_cancel_closes_the_done_channel_and_sets_the_error) {
 
 TEST(cancelling_twice_changes_nothing) {
     Alloc *a = heap_allocator();
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     Context c = context_with_cancel(a, context_background(), &cancel);
 
     BURROW_CALLF0(cancel);
@@ -241,9 +241,9 @@ TEST(cancelling_twice_changes_nothing) {
 
 TEST(cancelling_a_parent_cancels_every_child) {
     Alloc *a = heap_allocator();
-    CancelFunc cancel_top;
-    CancelFunc cancel_left;
-    CancelFunc cancel_right;
+    ContextCancelFunc cancel_top;
+    ContextCancelFunc cancel_left;
+    ContextCancelFunc cancel_right;
 
     Context top = context_with_cancel(a, context_background(), &cancel_top);
     Context left = context_with_cancel(a, top, &cancel_left);
@@ -271,8 +271,8 @@ TEST(cancelling_a_parent_cancels_every_child) {
 
 TEST(cancelling_a_child_leaves_the_parent_alone) {
     Alloc *a = heap_allocator();
-    CancelFunc cancel_top;
-    CancelFunc cancel_child;
+    ContextCancelFunc cancel_top;
+    ContextCancelFunc cancel_child;
 
     Context top = context_with_cancel(a, context_background(), &cancel_top);
     Context child = context_with_cancel(a, top, &cancel_child);
@@ -296,8 +296,8 @@ TEST(cancelling_a_child_leaves_the_parent_alone) {
 
 TEST(a_child_of_something_already_cancelled_starts_cancelled) {
     Alloc *a = heap_allocator();
-    CancelFunc cancel_top;
-    CancelFunc cancel_child;
+    ContextCancelFunc cancel_top;
+    ContextCancelFunc cancel_child;
 
     Context top = context_with_cancel(a, context_background(), &cancel_top);
     BURROW_CALLF0(cancel_top);
@@ -316,7 +316,7 @@ TEST(a_child_of_something_already_cancelled_starts_cancelled) {
 
 TEST(a_cause_says_why_where_the_error_only_says_that) {
     Alloc *a = heap_allocator();
-    CancelCauseFunc cancel;
+    ContextCancelCauseFunc cancel;
     Context c = context_with_cancel_cause(a, context_background(), &cancel);
 
     CHECK(!BURROW_CONTEXT_IS_NIL(c));
@@ -338,7 +338,7 @@ TEST(a_cause_says_why_where_the_error_only_says_that) {
 
 TEST(a_cancel_with_no_reason_leaves_the_cause_equal_to_the_error) {
     Alloc *a = heap_allocator();
-    CancelCauseFunc cancel;
+    ContextCancelCauseFunc cancel;
     Context c = context_with_cancel_cause(a, context_background(), &cancel);
 
     BURROW_CALLF(cancel, BURROW_NO_ERROR);
@@ -354,7 +354,7 @@ TEST(a_cancel_with_no_reason_leaves_the_cause_equal_to_the_error) {
 
 TEST(the_first_reason_is_the_one_that_sticks) {
     Alloc *a = heap_allocator();
-    CancelCauseFunc cancel;
+    ContextCancelCauseFunc cancel;
     Context c = context_with_cancel_cause(a, context_background(), &cancel);
 
     BURROW_CALLF(cancel, err_too_slow);
@@ -368,7 +368,7 @@ TEST(the_first_reason_is_the_one_that_sticks) {
 
 TEST(a_live_context_has_no_cause) {
     Alloc *a = heap_allocator();
-    CancelCauseFunc cancel;
+    ContextCancelCauseFunc cancel;
     Context c = context_with_cancel_cause(a, context_background(), &cancel);
 
     CHECK(BURROW_OK(context_cause(c)));
@@ -381,8 +381,8 @@ TEST(a_live_context_has_no_cause) {
 
 TEST(a_reason_given_at_the_top_is_the_answer_at_the_bottom) {
     Alloc *a = heap_allocator();
-    CancelCauseFunc cancel_top;
-    CancelFunc cancel_leaf;
+    ContextCancelCauseFunc cancel_top;
+    ContextCancelFunc cancel_leaf;
     Int id = 4;
 
     Context top = context_with_cancel_cause(a, context_background(), &cancel_top);
@@ -406,8 +406,8 @@ TEST(a_reason_given_at_the_top_is_the_answer_at_the_bottom) {
 
 TEST(a_cause_given_below_stays_below) {
     Alloc *a = heap_allocator();
-    CancelCauseFunc cancel_top;
-    CancelCauseFunc cancel_leaf;
+    ContextCancelCauseFunc cancel_top;
+    ContextCancelCauseFunc cancel_leaf;
 
     Context top = context_with_cancel_cause(a, context_background(), &cancel_top);
     Context leaf = context_with_cancel_cause(a, top, &cancel_leaf);
@@ -429,8 +429,8 @@ TEST(a_cause_given_below_stays_below) {
 
 TEST(a_child_of_something_cancelled_with_a_reason_starts_with_it) {
     Alloc *a = heap_allocator();
-    CancelCauseFunc cancel_top;
-    CancelFunc cancel_child;
+    ContextCancelCauseFunc cancel_top;
+    ContextCancelFunc cancel_child;
 
     Context top = context_with_cancel_cause(a, context_background(), &cancel_top);
     BURROW_CALLF(cancel_top, err_too_slow);
@@ -446,7 +446,7 @@ TEST(a_child_of_something_cancelled_with_a_reason_starts_with_it) {
 
 TEST(a_plain_cancel_context_still_has_a_cause) {
     Alloc *a = heap_allocator();
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     Context c = context_with_cancel(a, context_background(), &cancel);
 
     BURROW_CALLF0(cancel);
@@ -477,7 +477,7 @@ TEST(a_context_that_cannot_be_cancelled_has_no_cause) {
 
 TEST(work_that_outlives_its_request_keeps_the_values) {
     Alloc *a = heap_allocator();
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     Int id = 11;
 
     Context req = context_with_cancel(a, context_background(), &cancel);
@@ -505,8 +505,8 @@ TEST(work_that_outlives_its_request_keeps_the_values) {
 
 TEST(nothing_under_a_without_cancel_is_reached_by_the_parent) {
     Alloc *a = heap_allocator();
-    CancelFunc cancel_req;
-    CancelFunc cancel_task;
+    ContextCancelFunc cancel_req;
+    ContextCancelFunc cancel_task;
 
     Context req = context_with_cancel(a, context_background(), &cancel_req);
     Context detached = context_without_cancel(a, req);
@@ -530,7 +530,7 @@ TEST(nothing_under_a_without_cancel_is_reached_by_the_parent) {
 TEST(a_without_cancel_has_no_deadline_and_no_cause) {
     Alloc *a = heap_allocator();
     Fake f = {0};
-    CancelCauseFunc cancel;
+    ContextCancelCauseFunc cancel;
 
     f.has_deadline = true;
     f.when = burrow_nanotime() + TIME_SECOND;
@@ -557,7 +557,7 @@ TEST(a_detached_context_is_given_back_to_the_allocator) {
     track_set_quarantine(&tr, 0);
     Alloc *a = track_allocator(&tr);
 
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     Context req = context_with_cancel(a, context_background(), &cancel);
     Context detached = context_without_cancel(a, req);
     Context task = context_with_cancel(a, detached, &cancel);
@@ -589,7 +589,7 @@ static void count_a_run(void *env) {
 
 TEST(a_stopped_after_func_never_runs) {
     Alloc *a = heap_allocator();
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     StopFunc stop;
 
     after_ran = 0;
@@ -614,7 +614,7 @@ TEST(a_stopped_after_func_never_runs) {
 
 TEST(only_one_stop_ever_answers_true) {
     Alloc *a = heap_allocator();
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     StopFunc stop;
 
     after_ran = 0;
@@ -635,7 +635,7 @@ TEST(only_one_stop_ever_answers_true) {
 
 TEST(freeing_a_registration_is_not_a_reason_to_run_it) {
     Alloc *a = heap_allocator();
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     StopFunc stop;
 
     after_ran = 0;
@@ -657,7 +657,7 @@ TEST(freeing_a_registration_is_not_a_reason_to_run_it) {
 TEST(a_registration_answers_the_four_questions_like_anything_else) {
     Alloc *a = heap_allocator();
     Fake f = {0};
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     StopFunc stop;
     Int id = 12;
 
@@ -700,7 +700,7 @@ TEST(a_registration_is_given_back_to_the_allocator) {
     track_set_quarantine(&tr, 0);
     Alloc *a = track_allocator(&tr);
 
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     StopFunc stop;
 
     Context req = context_with_cancel(a, context_background(), &cancel);
@@ -723,7 +723,7 @@ TEST(a_value_is_found_through_everything_above_it) {
     Alloc *a = heap_allocator();
     Int id = 99;
     Str name = BURROW_S("gopher");
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
 
     Context with = context_with_value(a, context_background(), REQUEST_ID_KEY,
                                       BURROW_ANY(TYPE_INT, &id));
@@ -786,7 +786,7 @@ TEST(a_deadline_is_whatever_the_parent_says) {
     Alloc *a = heap_allocator();
     Fake f = {0};
     Int id = 7;
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
 
     f.has_deadline = true;
     f.when = burrow_nanotime() + TIME_SECOND;
@@ -835,7 +835,7 @@ TEST(a_value_walk_goes_through_a_stranger_and_comes_back) {
 TEST(a_stranger_that_is_never_cancelled_needs_no_watching) {
     Alloc *a = heap_allocator();
     Fake f = {0};
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
 
     /* No done channel, so there is nothing to wait on and no goroutine is
      * started. That is what makes this test runnable with no runtime at all,
@@ -860,8 +860,8 @@ TEST(everything_is_given_back_to_the_allocator) {
     Alloc *a = track_allocator(&tr);
 
     Int id = 3;
-    CancelFunc cancel_top;
-    CancelFunc cancel_leaf;
+    ContextCancelFunc cancel_top;
+    ContextCancelFunc cancel_leaf;
 
     Context top = context_with_cancel(a, context_background(), &cancel_top);
     Context with =
@@ -888,7 +888,7 @@ TEST(a_context_nobody_cancelled_is_still_freed) {
     track_set_quarantine(&tr, 0);
     Alloc *a = track_allocator(&tr);
 
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     Context top = context_with_cancel(a, context_background(), &cancel);
     Context child = context_with_cancel(a, top, &cancel);
 
@@ -935,7 +935,7 @@ static void panic_never_runs(void *env) {
 
 TEST(a_nil_parent_panics) {
     Context none = {NULL, NULL};
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     Int id = 1;
 
     panic_alloc = heap_allocator();
@@ -962,7 +962,7 @@ TEST(a_nil_parent_panics) {
                                          &stop),
                 "cannot create context from nil parent");
 
-    CancelCauseFunc cancel_cause;
+    ContextCancelCauseFunc cancel_cause;
     CHECK_PANIC(
         (void)context_with_cancel_cause(panic_alloc, panic_parent, &cancel_cause),
         "cannot create context from nil parent");
@@ -1046,7 +1046,7 @@ TEST(freeing_a_context_this_package_did_not_make_stops_the_program) {
 
 static Alloc *rt_alloc;
 static Context rt_ctx;
-static CancelFunc rt_cancel;
+static ContextCancelFunc rt_cancel;
 static Chan *rt_ready;
 static Chan *rt_stranger_done;
 static Fake rt_fake;
@@ -1159,7 +1159,7 @@ TEST(a_parent_from_outside_the_package_still_cancels_what_is_under_it) {
 }
 
 static Context rt_wrapped;
-static CancelFunc rt_wrapped_cancel;
+static ContextCancelFunc rt_wrapped_cancel;
 
 static void wrapper_body(void *env) {
     (void)env;
@@ -1331,7 +1331,7 @@ static bool wait_done(Context c) {
 static void future_body(void *env) {
     (void)env;
 
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
 
     dl.started = burrow_nanotime();
 
@@ -1377,7 +1377,7 @@ TEST(a_deadline_an_hour_away_leaves_the_cancel_to_win) {
 static void past_body(void *env) {
     (void)env;
 
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     Context c =
         context_with_timeout(rt_alloc, context_background(), -TIME_SECOND, &cancel);
     if (BURROW_CONTEXT_IS_NIL(c))
@@ -1430,7 +1430,7 @@ TEST(a_deadline_that_has_gone_by_comes_back_already_cancelled) {
 static void fires_body(void *env) {
     (void)env;
 
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
 
     dl.started = burrow_nanotime();
 
@@ -1472,8 +1472,8 @@ TEST(a_timeout_fires_and_says_the_deadline_went_by) {
 static void parent_sooner_body(void *env) {
     (void)env;
 
-    CancelFunc parent_cancel;
-    CancelFunc cancel;
+    ContextCancelFunc parent_cancel;
+    ContextCancelFunc cancel;
 
     Context p =
         context_with_timeout(rt_alloc, context_background(), DL_SOON, &parent_cancel);
@@ -1522,8 +1522,8 @@ TEST(a_parent_that_gives_up_sooner_keeps_the_deadline) {
 static void child_sooner_body(void *env) {
     (void)env;
 
-    CancelFunc parent_cancel;
-    CancelFunc cancel;
+    ContextCancelFunc parent_cancel;
+    ContextCancelFunc cancel;
 
     Context p =
         context_with_timeout(rt_alloc, context_background(), DL_NEVER, &parent_cancel);
@@ -1567,7 +1567,7 @@ TEST(a_child_with_a_sooner_deadline_fires_on_its_own) {
 static void deadline_downwards_body(void *env) {
     (void)env;
 
-    CancelFunc parent_cancel;
+    ContextCancelFunc parent_cancel;
     Int id = 7;
 
     Context p =
@@ -1632,7 +1632,7 @@ TEST(a_deadline_reaches_everything_underneath_it) {
  * down on a goroutine the caller never saw and whichever of the two is last
  * does the freeing. */
 static void dl_memory(bool let_it_fire) {
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     Context p = context_with_timeout(rt_alloc, context_background(),
                                      let_it_fire ? DL_SOON : DL_NEVER, &cancel);
     if (BURROW_CONTEXT_IS_NIL(p))
@@ -1829,7 +1829,7 @@ TEST(a_timeout_too_big_to_add_lands_at_the_end_of_the_clock) {
 static void deadline_cause_body(void *env) {
     (void)env;
 
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     Context c = context_with_timeout_cause(rt_alloc, context_background(), DL_SOON,
                                            err_too_slow, &cancel);
     if (BURROW_CONTEXT_IS_NIL(c))
@@ -1865,7 +1865,7 @@ TEST(a_deadline_that_fires_says_what_it_was_waiting_for) {
 static void cancel_beats_cause_body(void *env) {
     (void)env;
 
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     Context c = context_with_deadline_cause(rt_alloc, context_background(),
                                             burrow_nanotime() + DL_NEVER, err_too_slow,
                                             &cancel);
@@ -1965,7 +1965,7 @@ static bool wait_ran(void) {
 static void af_cancel_body(void *env) {
     (void)env;
 
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     StopFunc stop;
 
     Context req = context_with_cancel(rt_alloc, context_background(), &cancel);
@@ -2000,7 +2000,7 @@ TEST(a_cancel_runs_the_function_on_a_goroutine_of_its_own) {
 static void af_already_body(void *env) {
     (void)env;
 
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     StopFunc stop;
 
     Context req = context_with_cancel(rt_alloc, context_background(), &cancel);
@@ -2035,7 +2035,7 @@ TEST(a_context_that_is_already_over_starts_the_function_at_once) {
 static void af_deadline_body(void *env) {
     (void)env;
 
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     StopFunc stop;
 
     Context req =
@@ -2070,7 +2070,7 @@ TEST(a_deadline_running_out_runs_the_function_too) {
 static void af_once_body(void *env) {
     (void)env;
 
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     StopFunc stop;
 
     Context req = context_with_cancel(rt_alloc, context_background(), &cancel);
@@ -2109,7 +2109,7 @@ static Track af_track;
 static void af_memory_body(void *env) {
     (void)env;
 
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     StopFunc stop;
 
     Context req = context_with_cancel(rt_alloc, context_background(), &cancel);

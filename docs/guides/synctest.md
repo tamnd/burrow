@@ -145,7 +145,7 @@ That gives a test for a timeout that a real clock cannot give.
 
 ```c
 static void body(void *env) {
-    CancelFunc cancel;
+    ContextCancelFunc cancel;
     Context ctx = context_with_timeout(heap_allocator(), context_background(),
                                        30 * TIME_SECOND, &cancel);
 

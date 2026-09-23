@@ -59,7 +59,7 @@ Never send on a done channel and never close one. It belongs to the context.
 ## Making one
 
 ```c
-CancelFunc cancel;
+ContextCancelFunc cancel;
 Context ctx = context_with_cancel(a, context_background(), &cancel);
 if (BURROW_CONTEXT_IS_NIL(ctx))
     return err_no_memory;
@@ -83,7 +83,7 @@ Calling the cancel function is not optional. Until it runs, the context is still
 ## Deadlines
 
 ```c
-CancelFunc cancel;
+ContextCancelFunc cancel;
 Context ctx = context_with_timeout(a, parent, 5 * TIME_SECOND, &cancel);
 if (BURROW_CONTEXT_IS_NIL(ctx))
     return err_no_memory;
@@ -111,7 +111,7 @@ A child cannot outlast its parent. Asking for a deadline later than the parent's
 ```c
 BURROW_SENTINEL_ERROR(err_client_hung_up, "the client hung up");
 
-CancelCauseFunc cancel;
+ContextCancelCauseFunc cancel;
 Context ctx = context_with_cancel_cause(a, parent, &cancel);
 ...
 BURROW_CALLF(cancel, err_client_hung_up);
@@ -126,9 +126,9 @@ if (BURROW_FAILED(context_err(ctx)))
 
 The reason travels down with the cancellation. A function three levels below the one that gave up gets the same answer from `context_cause` that the one that gave up passed in, without anybody threading it through by hand. It does not travel up: a child cancelled with its own reason keeps it, and the parent is not affected at all.
 
-The first reason is the one that sticks. Calling the cancel twice does nothing the second time, the same as a plain `CancelFunc`, and that includes the reason.
+The first reason is the one that sticks. Calling the cancel twice does nothing the second time, the same as a plain `ContextCancelFunc`, and that includes the reason.
 
-`context_cause` always has an answer for a cancelled context. Pass `BURROW_NO_ERROR` as the reason, or cancel with a plain `CancelFunc`, and the cause is whatever `context_err` says, so reading the cause instead of the error is always safe and reading both is never necessary. A context that is still live answers `BURROW_NO_ERROR`, as does one that cannot be cancelled at all.
+`context_cause` always has an answer for a cancelled context. Pass `BURROW_NO_ERROR` as the reason, or cancel with a plain `ContextCancelFunc`, and the cause is whatever `context_err` says, so reading the cause instead of the error is always safe and reading both is never necessary. A context that is still live answers `BURROW_NO_ERROR`, as does one that cannot be cancelled at all.
 
 ```c
 Context ctx = context_with_timeout_cause(a, parent, 5 * TIME_SECOND,

@@ -115,7 +115,10 @@ static bool bounds_for(const void *frame, void **lo, void **hi) {
     return readable(frame, *lo, *hi);
 }
 
-Int burrow__callers(void *from, Int skip, Uintptr *pcs, Int max) {
+/* BURROW_NO_MSAN because the two words read at each step are written by call
+ * instructions and by libc frames, neither of which tells the memory sanitizer.
+ * burrow/platform.h has the long version. */
+BURROW_NO_MSAN Int burrow__callers(void *from, Int skip, Uintptr *pcs, Int max) {
     void **frame = (void **)from;
     void *lo;
     void *hi;

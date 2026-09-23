@@ -302,6 +302,37 @@
 #define BURROW_NO_TSAN
 #endif
 
+/* The memory sanitizer, which only clang has, so there is one way to ask. */
+#if defined(__has_feature)
+#if __has_feature(memory_sanitizer)
+#define BURROW_MSAN 1
+#endif
+#endif
+
+#if !defined(BURROW_MSAN)
+#define BURROW_MSAN 0
+#endif
+
+/* Stops the memory sanitizer checking the loads in one function.
+ *
+ * Also not a way of hiding a bug, and there is also exactly one function that
+ * wants it: the frame pointer walk in src/runtime/trace.c. The walk reads saved
+ * frame pointers and return addresses, and nothing that writes those tells the
+ * sanitizer it did. A call instruction pushes the return address without
+ * touching the shadow, and so does every frame in a libc that was not built with
+ * the sanitizer, which is all of them. So the shadow over those words is left
+ * over from whatever frame was there before, and the sanitizer reports a read
+ * of memory that was written a moment ago.
+ *
+ * clang still instruments the function to the extent of marking what it writes
+ * as initialised, so the program counters the walk hands back are clean and the
+ * caller is checked as usual. */
+#if BURROW_MSAN
+#define BURROW_NO_MSAN __attribute__((no_sanitize("memory")))
+#else
+#define BURROW_NO_MSAN
+#endif
+
 /* ------------------------------------------------------------- at runtime */
 
 #ifdef __cplusplus

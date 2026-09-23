@@ -385,8 +385,11 @@ TEST(the_error_is_optional_like_every_other_out_parameter) {
     void *p = pal_vm_reserve(page, NULL);
     CHECK(p != NULL);
     CHECK(pal_vm_commit(p, page, NULL));
-    CHECK(pal_vm_decommit(p, page, NULL));
+    /* Guard before decommit, because a guard is made from committed memory.
+     * POSIX will protect a page that has nothing behind it and Windows will
+     * not, so the other order passes on one and fails on the other. */
     CHECK(pal_vm_guard(p, page, NULL));
+    CHECK(pal_vm_decommit(p, page, NULL));
     CHECK(pal_vm_release(p, page, NULL));
 
     CHECK(!pal_vm_commit(NULL, page, NULL));

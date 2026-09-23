@@ -103,6 +103,10 @@ RENAMED = {
     ("errors", "func AsType"): "errors_as",
     # new is a keyword in C++, and burrow.h has to compile there.
     ("sync", "type Pool struct, New"): "SyncPool.new_fn",
+    # 08-naming-abi.md section 0: libuuid and macOS's libc define both of
+    # these with other signatures, and burrow-gen collisions says so.
+    ("uuid", "func Parse"): "uuid_parse_str",
+    ("uuid", "method (UUID) Compare"): "uuid_cmp",
 }
 
 

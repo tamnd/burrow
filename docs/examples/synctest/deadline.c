@@ -17,7 +17,7 @@ static void body(void *env) {
     assert(errors_is(context_err(ctx), context_deadline_exceeded));
 
     BURROW_CALLF0(cancel);
-    context_free(ctx);
+    context_release(ctx);
 }
 // doc: end
 

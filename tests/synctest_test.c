@@ -821,7 +821,7 @@ static void deadline_body(void *env) {
         burrow__atomic_store_release_u32(&deadline_hit, 1);
 
     BURROW_CALLF0(cancel);
-    context_free(ctx);
+    context_release(ctx);
 }
 
 static void deadline_top(void *env) {

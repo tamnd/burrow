@@ -57,7 +57,7 @@ The C name is the Go name with the dot turned into an underscore and the case fi
 
 Types are CamelCase and functions are snake_case, which is GTK's convention. It gives Go's builtins a namespace they otherwise lack, keeps the dangerous lowercase words like `string` and `map` out of the global namespace, and lets you tell a type from a call without thinking about it.
 
-Macros are the one exception and keep a `BURROW_` prefix, because a header that defines `DEFER` or `S` globally will break somebody's program and C has no scoping mechanism that prevents it. `#define BURROW_SHORT 1` turns on the bare spellings for programs that want them. If you ever hit a collision anyway, `#define BURROW_PREFIX bw` puts a prefix back on everything, and since you compile burrow from source that is one line rather than a repackaging exercise.
+Macros are the one exception and keep a `BURROW_` prefix, because a header that defines `DEFER` or `S` globally will break somebody's program and C has no scoping mechanism that prevents it. `#define BURROW_SHORT 1` turns on the bare spellings for programs that want them. CI compares every public name, including the ones for packages not written yet, with the symbols of about 1,200 libraries on Linux and macOS, from libc to libcurl to libselinux, and the few that clashed were renamed. If you ever hit a collision anyway, `#define BURROW_PREFIX bw` puts a prefix back on everything, and since you compile burrow from source that is one line rather than a repackaging exercise.
 
 ## Memory
 
@@ -584,7 +584,7 @@ sync_wait_group_go(&wg, BURROW_FN(Func, work, &ctx));
 queue_the_jobs();
 BURROW_CALLF0(cancel);
 sync_wait_group_wait(&wg);
-context_free(ctx);
+context_release(ctx);
 ```
 
 <!-- example: docs/examples/readme/context.c#work -->
@@ -614,7 +614,7 @@ Go's `context` package. A context is what a server hands down through every laye
 
 `context_with_value` carries a request id or an authenticated user down the same tree, under a key of a type private to whoever put it there. Cancellation reaches a context built on a parent from somebody else's code too, which takes one goroutine watching two channels, the same as it does in Go.
 
-What is different is the ownership. Go leaves a context to the collector and there is none here, so every constructor takes an allocator and what it hands back is given back with `context_free`, parents after children. Freeing cancels first, so forgetting the cancel function cannot corrupt anything, and an arena user can skip the whole subject.
+What is different is the ownership. Go leaves a context to the collector and there is none here, so every constructor takes an allocator and what it hands back is given back with `context_release`, parents after children. Freeing cancels first, so forgetting the cancel function cannot corrupt anything, and an arena user can skip the whole subject.
 
 Details, including how to write your own `Context` and what each piece costs: [docs/guides/context.md](docs/guides/context.md).
 

@@ -6,7 +6,7 @@
  *
  *     Error err = os_write_file(path, data, 0644);
  *     if (BURROW_FAILED(err))
- *         printf("nope: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_message(err)));
+ *         printf("nope: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
  *
  * An Error is a vtable pointer and a data pointer, the same two words an
  * interface value is anywhere else, and the zero value means no error. So a
@@ -123,7 +123,7 @@ extern const Type *const TYPE_ERROR;
  * this gets called from log lines and a logging call that can take the process
  * down is worse than a blank message. Test with BURROW_FAILED first if the
  * difference matters. */
-BURROW_BORROWS(ret, err) Str error_message(Error err);
+BURROW_BORROWS(ret, err) Str error_text(Error err);
 
 /* errors.New.
  *

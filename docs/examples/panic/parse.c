@@ -37,7 +37,7 @@ int main(void) {
     Error err = parse_or_fail(a, BURROW_S("x = 1"));
     printf("failed: %s\n", BURROW_FAILED(err) ? "yes" : "no");
     err = parse_or_fail(a, BURROW_S(""));
-    Str msg = error_message(err);
+    Str msg = error_text(err);
     printf("failed: %.*s\n", (int)msg.len, (const char *)msg.p);
 
     arena_free(&arena);

@@ -52,3 +52,4 @@ fuzz/crashes/
 *.swp
 compile_commands.json
 .cache/
+__pycache__/

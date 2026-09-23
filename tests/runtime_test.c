@@ -144,7 +144,7 @@ TEST(a_bounds_check_is_a_panic_the_program_can_catch) {
             Error err = *(const Error *)p.data;
 
             CHECK(errors_as(err, TYPE_RUNTIME_ERROR) != NULL);
-            CHECK(says(error_message(err),
+            CHECK(says(error_text(err),
                        "runtime error: index out of range [99] with length 5"));
         }
 

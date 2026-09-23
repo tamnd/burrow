@@ -49,7 +49,7 @@ int main(void) {
            BURROW_FAILED(err) ? "yes" : "no", open_files);
 
     err = count_lines("missing.txt", &lines);
-    Str msg = error_message(err);
+    Str msg = error_text(err);
     printf("%.*s, files open: %d\n", (int)msg.len, (const char *)msg.p, open_files);
     return 0;
 }

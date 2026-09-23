@@ -132,7 +132,7 @@ Error errors_new(Alloc *a, Str text) {
 
 /* ------------------------------------------------------------------ message */
 
-Str error_message(Error err) {
+Str error_text(Error err) {
     if (err.vt == NULL || err.vt->message == NULL)
         return BURROW_STR_EMPTY;
     return err.vt->message(err.data);
@@ -290,7 +290,7 @@ static Error join_wrap(Alloc *a, Slice kids) {
         return BURROW_NO_ERROR;
 
     for (i = 0; i < kids.len; i++) {
-        Str m = error_message(BURROW_AT(Error, kids, i));
+        Str m = error_text(BURROW_AT(Error, kids, i));
         if (i > 0)
             total += 1;
         if (m.len > 0)
@@ -303,7 +303,7 @@ static Error join_wrap(Alloc *a, Slice kids) {
 
     text = (Byte *)j + sizeof(ErrorJoin);
     for (i = 0; i < kids.len; i++) {
-        Str m = error_message(BURROW_AT(Error, kids, i));
+        Str m = error_text(BURROW_AT(Error, kids, i));
         if (i > 0)
             text[off++] = (Byte)'\n';
         if (m.len > 0) {

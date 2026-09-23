@@ -449,9 +449,13 @@ came out of writing the code:
   the pointer is the bool, `void *` converts to any object pointer so there is no
   cast at the call site, and both of Go's panics (nil target, non pointer target)
   stop existing.
-- The message method is `message`, and the function is `error_message`. The
+- The message method is `message`, and the function is `error_text`. The
   mechanical rule gives `error_error`, which is the one place the naming rules
-  produce a name that says the same word twice. → [08](08-naming-abi.md) R2
+  produce a name that says the same word twice. The obvious alternative,
+  `error_message`, is taken: com_err, which Kerberos and e2fsprogs link, defines
+  `error_message(long)` and calls it internally, so a static definition of ours
+  would answer those calls with the wrong signature. `error_text` matches
+  `panic_text`. → [08](08-naming-abi.md) R2
 - The out of memory sentinel is `burrow_err_out_of_memory`, not
   `errors_err_out_of_memory`, because it is not a Go symbol and the coverage
   round trip maps every `errors_` symbol back to Go's API manifest.

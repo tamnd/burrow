@@ -48,7 +48,7 @@ static Error start_and_stop(Alloc *a) {
 
     BURROW_CALLF0(cancel);
     sync_wait_group_wait(&finished); /* work has seen it and returned */
-    context_free(ctx);
+    context_release(ctx);
     // doc: end
     printf("work stopped\n");
     return BURROW_NO_ERROR;
@@ -98,7 +98,7 @@ static void serve_until_cancelled(Alloc *a) {
     BURROW_CALLF0(cancel);
     sync_wait_group_wait(&finished);
     printf("served jobs adding up to %lld\n", (long long)total);
-    context_free(s.ctx);
+    context_release(s.ctx);
     chan_free(s.jobs);
 }
 
@@ -116,13 +116,13 @@ static Error query(Alloc *a, Context parent) {
     Error err = talk_to_the_database(ctx);
 
     BURROW_CALLF0(cancel);
-    context_free(ctx);
+    context_release(ctx);
     // doc: end
     return err;
 }
 
 static void log_error(Error err) {
-    printf("error: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_message(err)));
+    printf("error: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
 }
 
 // doc: cause
@@ -140,7 +140,7 @@ static void handle(Alloc *a, Context parent) {
     /* And somewhere further down, the work notices. */
     if (BURROW_FAILED(context_err(ctx)))
         log_error(context_cause(ctx)); /* the client hung up */
-    context_free(ctx);
+    context_release(ctx);
 }
 // doc: end
 
@@ -157,8 +157,8 @@ static void slow(Alloc *a, Context parent) {
         return;
     BURROW_CALLF0(cancel);
     printf("cancelled first, so the cause is: " BURROW_STR_FMT "\n",
-           BURROW_STR_ARG(error_message(context_cause(ctx))));
-    context_free(ctx);
+           BURROW_STR_ARG(error_text(context_cause(ctx))));
+    context_release(ctx);
 }
 
 static void expire(Alloc *a) {
@@ -170,10 +170,10 @@ static void expire(Alloc *a) {
         return;
     chan_recv(context_done(ctx), NULL);
     printf("deadline went by: err " BURROW_STR_FMT ", cause " BURROW_STR_FMT "\n",
-           BURROW_STR_ARG(error_message(context_err(ctx))),
-           BURROW_STR_ARG(error_message(context_cause(ctx))));
+           BURROW_STR_ARG(error_text(context_err(ctx))),
+           BURROW_STR_ARG(error_text(context_cause(ctx))));
     BURROW_CALLF0(cancel);
-    context_free(ctx);
+    context_release(ctx);
 }
 
 // doc: values
@@ -202,7 +202,7 @@ static void values(Alloc *a, Context parent) {
     // doc: end
 
     // doc: free
-    context_free(ctx);
+    context_release(ctx);
     // doc: end
 }
 
@@ -232,10 +232,10 @@ static void detach(Alloc *a) {
     // doc: end
 
     sync_wait_group_wait(&finished);
-    context_free(*detached);
+    context_release(*detached);
     mem_free(a, detached, sizeof *detached, _Alignof(Context));
-    context_free(ctx);
-    context_free(req);
+    context_release(ctx);
+    context_release(req);
 }
 
 typedef struct Conn {
@@ -265,7 +265,7 @@ static Error after(Alloc *a, Context ctx) {
     serve_the_connection(c);
 
     (void)BURROW_CALLF0(stop);
-    context_free(reg);
+    context_release(reg);
     // doc: end
     return BURROW_NO_ERROR;
 }
@@ -325,8 +325,8 @@ static void custom(Alloc *a) {
     printf("custom: answer %lld, request %lld, child cancelled %d\n",
            (long long)*(Int *)mine.data, (long long)*(Int *)theirs.data,
            BURROW_FAILED(context_err(child)));
-    context_free(child);
-    context_free(parent);
+    context_release(child);
+    context_release(parent);
 }
 
 static void run(void *env) {

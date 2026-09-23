@@ -182,7 +182,7 @@ TEST(the_root_is_never_cancelled_and_carries_nothing) {
 
     /* Nothing was allocated, so nothing has to be freed, and saying so is
      * allowed rather than a mistake. */
-    context_free(c);
+    context_release(c);
 }
 
 TEST(background_and_todo_are_not_the_same_context) {
@@ -214,13 +214,13 @@ TEST(a_cancel_closes_the_done_channel_and_sets_the_error) {
 
     CHECK(is_done(c));
     CHECK(is(context_err(c), context_canceled));
-    CHECK_STR_EQ((const char *)error_message(context_err(c)).p, "context canceled");
+    CHECK_STR_EQ((const char *)error_text(context_err(c)).p, "context canceled");
 
     /* A cancel says nothing about a deadline, so the parent's answer stands. */
     int64_t when = 0;
     CHECK(!context_deadline(c, &when));
 
-    context_free(c);
+    context_release(c);
 }
 
 TEST(cancelling_twice_changes_nothing) {
@@ -236,7 +236,7 @@ TEST(cancelling_twice_changes_nothing) {
     CHECK(is(context_err(c), context_canceled));
 
     /* And a free after all that is still one free. */
-    context_free(c);
+    context_release(c);
 }
 
 TEST(cancelling_a_parent_cancels_every_child) {
@@ -263,10 +263,10 @@ TEST(cancelling_a_parent_cancels_every_child) {
     CHECK(is_done(deep));
     CHECK(is(context_err(deep), context_canceled));
 
-    context_free(deep);
-    context_free(right);
-    context_free(left);
-    context_free(top);
+    context_release(deep);
+    context_release(right);
+    context_release(left);
+    context_release(top);
 }
 
 TEST(cancelling_a_child_leaves_the_parent_alone) {
@@ -290,8 +290,8 @@ TEST(cancelling_a_child_leaves_the_parent_alone) {
     BURROW_CALLF0(cancel_top);
     CHECK(is_done(top));
 
-    context_free(child);
-    context_free(top);
+    context_release(child);
+    context_release(top);
 }
 
 TEST(a_child_of_something_already_cancelled_starts_cancelled) {
@@ -308,8 +308,8 @@ TEST(a_child_of_something_already_cancelled_starts_cancelled) {
     CHECK(is_done(child));
     CHECK(is(context_err(child), context_canceled));
 
-    context_free(child);
-    context_free(top);
+    context_release(child);
+    context_release(top);
 }
 
 /* ------------------------------------------------------- WithCancelCause, Cause */
@@ -331,9 +331,9 @@ TEST(a_cause_says_why_where_the_error_only_says_that) {
      * error to compare against. The reason is the extra. */
     CHECK(is(context_err(c), context_canceled));
     CHECK(is(context_cause(c), err_too_slow));
-    CHECK_STR_EQ((const char *)error_message(context_cause(c)).p, "too slow");
+    CHECK_STR_EQ((const char *)error_text(context_cause(c)).p, "too slow");
 
-    context_free(c);
+    context_release(c);
 }
 
 TEST(a_cancel_with_no_reason_leaves_the_cause_equal_to_the_error) {
@@ -349,7 +349,7 @@ TEST(a_cancel_with_no_reason_leaves_the_cause_equal_to_the_error) {
     CHECK(is(context_err(c), context_canceled));
     CHECK(is(context_cause(c), context_canceled));
 
-    context_free(c);
+    context_release(c);
 }
 
 TEST(the_first_reason_is_the_one_that_sticks) {
@@ -363,7 +363,7 @@ TEST(the_first_reason_is_the_one_that_sticks) {
 
     CHECK(is(context_cause(c), err_too_slow));
 
-    context_free(c);
+    context_release(c);
 }
 
 TEST(a_live_context_has_no_cause) {
@@ -376,7 +376,7 @@ TEST(a_live_context_has_no_cause) {
     CHECK(BURROW_OK(context_cause(context_todo())));
 
     BURROW_CALLF(cancel, err_too_slow);
-    context_free(c);
+    context_release(c);
 }
 
 TEST(a_reason_given_at_the_top_is_the_answer_at_the_bottom) {
@@ -399,9 +399,9 @@ TEST(a_reason_given_at_the_top_is_the_answer_at_the_bottom) {
     CHECK(is(context_cause(leaf), err_too_slow));
     CHECK(is(context_cause(top), err_too_slow));
 
-    context_free(leaf);
-    context_free(with);
-    context_free(top);
+    context_release(leaf);
+    context_release(with);
+    context_release(top);
 }
 
 TEST(a_cause_given_below_stays_below) {
@@ -423,8 +423,8 @@ TEST(a_cause_given_below_stays_below) {
     CHECK(is(context_cause(leaf), err_gave_up));
     CHECK(is(context_cause(top), err_too_slow));
 
-    context_free(leaf);
-    context_free(top);
+    context_release(leaf);
+    context_release(top);
 }
 
 TEST(a_child_of_something_cancelled_with_a_reason_starts_with_it) {
@@ -440,8 +440,8 @@ TEST(a_child_of_something_cancelled_with_a_reason_starts_with_it) {
     CHECK(is_done(child));
     CHECK(is(context_cause(child), err_too_slow));
 
-    context_free(child);
-    context_free(top);
+    context_release(child);
+    context_release(top);
 }
 
 TEST(a_plain_cancel_context_still_has_a_cause) {
@@ -456,7 +456,7 @@ TEST(a_plain_cancel_context_still_has_a_cause) {
      * has never heard of it. */
     CHECK(is(context_cause(c), context_canceled));
 
-    context_free(c);
+    context_release(c);
 }
 
 TEST(a_context_that_cannot_be_cancelled_has_no_cause) {
@@ -470,7 +470,7 @@ TEST(a_context_that_cannot_be_cancelled_has_no_cause) {
     CHECK(BURROW_OK(context_cause(with)));
     CHECK(BURROW_OK(context_cause(fake_context(&f))));
 
-    context_free(with);
+    context_release(with);
 }
 
 /* ------------------------------------------------------------- WithoutCancel */
@@ -498,9 +498,9 @@ TEST(work_that_outlives_its_request_keeps_the_values) {
     CHECK(context_done(detached) == NULL);
     CHECK(BURROW_OK(context_err(detached)));
 
-    context_free(detached);
-    context_free(with);
-    context_free(req);
+    context_release(detached);
+    context_release(with);
+    context_release(req);
 }
 
 TEST(nothing_under_a_without_cancel_is_reached_by_the_parent) {
@@ -522,9 +522,9 @@ TEST(nothing_under_a_without_cancel_is_reached_by_the_parent) {
     BURROW_CALLF0(cancel_task);
     CHECK(is_done(task));
 
-    context_free(task);
-    context_free(detached);
-    context_free(req);
+    context_release(task);
+    context_release(detached);
+    context_release(req);
 }
 
 TEST(a_without_cancel_has_no_deadline_and_no_cause) {
@@ -547,8 +547,8 @@ TEST(a_without_cancel_has_no_deadline_and_no_cause) {
     CHECK(BURROW_OK(context_err(detached)));
     CHECK(BURROW_OK(context_cause(detached)));
 
-    context_free(detached);
-    context_free(req);
+    context_release(detached);
+    context_release(req);
 }
 
 TEST(a_detached_context_is_given_back_to_the_allocator) {
@@ -564,9 +564,9 @@ TEST(a_detached_context_is_given_back_to_the_allocator) {
 
     CHECK(track_live(&tr) > 0);
 
-    context_free(task);
-    context_free(detached);
-    context_free(req);
+    context_release(task);
+    context_release(detached);
+    context_release(req);
 
     CHECK_INT_EQ((Int)track_live(&tr), 0);
     CHECK_INT_EQ((Int)track_check(&tr), 0);
@@ -608,8 +608,8 @@ TEST(a_stopped_after_func_never_runs) {
 
     CHECK_INT_EQ((Int)burrow__atomic_load_u32(&after_ran), 0);
 
-    context_free(reg);
-    context_free(req);
+    context_release(reg);
+    context_release(req);
 }
 
 TEST(only_one_stop_ever_answers_true) {
@@ -629,8 +629,8 @@ TEST(only_one_stop_ever_answers_true) {
     BURROW_CALLF0(cancel);
     CHECK_INT_EQ((Int)burrow__atomic_load_u32(&after_ran), 0);
 
-    context_free(reg);
-    context_free(req);
+    context_release(reg);
+    context_release(req);
 }
 
 TEST(freeing_a_registration_is_not_a_reason_to_run_it) {
@@ -646,12 +646,12 @@ TEST(freeing_a_registration_is_not_a_reason_to_run_it) {
     /* Given back without ever being stopped. Handing something back is not a
      * reason for its cleanup to run, and a caller who wanted the function to
      * run has a stop function to not call. */
-    context_free(reg);
+    context_release(reg);
 
     BURROW_CALLF0(cancel);
     CHECK_INT_EQ((Int)burrow__atomic_load_u32(&after_ran), 0);
 
-    context_free(req);
+    context_release(req);
 }
 
 TEST(a_registration_answers_the_four_questions_like_anything_else) {
@@ -689,9 +689,9 @@ TEST(a_registration_answers_the_four_questions_like_anything_else) {
 
     BURROW_CALLF0(cancel);
 
-    context_free(reg);
-    context_free(with);
-    context_free(req);
+    context_release(reg);
+    context_release(with);
+    context_release(req);
 }
 
 TEST(a_registration_is_given_back_to_the_allocator) {
@@ -709,8 +709,8 @@ TEST(a_registration_is_given_back_to_the_allocator) {
     CHECK(track_live(&tr) > 0);
     CHECK(BURROW_CALLF0(stop));
 
-    context_free(reg);
-    context_free(req);
+    context_release(reg);
+    context_release(req);
 
     CHECK_INT_EQ((Int)track_live(&tr), 0);
     CHECK_INT_EQ((Int)track_check(&tr), 0);
@@ -743,9 +743,9 @@ TEST(a_value_is_found_through_everything_above_it) {
     CHECK(!BURROW_ANY_IS_NIL(context_value(another, USER_KEY)));
     CHECK(BURROW_ANY_IS_NIL(context_value(with, USER_KEY)));
 
-    context_free(another);
-    context_free(cancellable);
-    context_free(with);
+    context_release(another);
+    context_release(cancellable);
+    context_release(with);
 }
 
 TEST(an_unknown_key_answers_nothing) {
@@ -760,7 +760,7 @@ TEST(an_unknown_key_answers_nothing) {
     CHECK(BURROW_ANY_IS_NIL(context_value(with, BURROW_ANY(TYPE_INT, &same))));
     CHECK(BURROW_ANY_IS_NIL(context_value(with, USER_KEY)));
 
-    context_free(with);
+    context_release(with);
 }
 
 TEST(a_later_value_shadows_an_earlier_one_with_the_same_key) {
@@ -776,8 +776,8 @@ TEST(a_later_value_shadows_an_earlier_one_with_the_same_key) {
     CHECK_INT_EQ(*(Int *)context_value(inner, REQUEST_ID_KEY).data, 2);
     CHECK_INT_EQ(*(Int *)context_value(outer, REQUEST_ID_KEY).data, 1);
 
-    context_free(inner);
-    context_free(outer);
+    context_release(inner);
+    context_release(outer);
 }
 
 /* -------------------------------------------------------------- the stranger */
@@ -804,8 +804,8 @@ TEST(a_deadline_is_whatever_the_parent_says) {
     CHECK(context_deadline(with, &when));
     CHECK_INT_EQ(when, f.when);
 
-    context_free(cancellable);
-    context_free(with);
+    context_release(cancellable);
+    context_release(with);
 }
 
 TEST(a_value_walk_goes_through_a_stranger_and_comes_back) {
@@ -828,8 +828,8 @@ TEST(a_value_walk_goes_through_a_stranger_and_comes_back) {
     CHECK_INT_EQ(*(Int *)context_value(top, USER_KEY).data, 6);
     CHECK_INT_EQ(*(Int *)context_value(top, REQUEST_ID_KEY).data, 5);
 
-    context_free(top);
-    context_free(bottom);
+    context_release(top);
+    context_release(bottom);
 }
 
 TEST(a_stranger_that_is_never_cancelled_needs_no_watching) {
@@ -848,7 +848,7 @@ TEST(a_stranger_that_is_never_cancelled_needs_no_watching) {
     BURROW_CALLF0(cancel);
     CHECK(is_done(c));
 
-    context_free(c);
+    context_release(c);
 }
 
 /* --------------------------------------------------------------- the memory */
@@ -873,9 +873,9 @@ TEST(everything_is_given_back_to_the_allocator) {
     BURROW_CALLF0(cancel_leaf);
     BURROW_CALLF0(cancel_top);
 
-    context_free(leaf);
-    context_free(with);
-    context_free(top);
+    context_release(leaf);
+    context_release(with);
+    context_release(top);
 
     CHECK_INT_EQ((Int)track_live(&tr), 0);
     CHECK_INT_EQ((Int)track_check(&tr), 0);
@@ -894,8 +894,8 @@ TEST(a_context_nobody_cancelled_is_still_freed) {
 
     /* No cancel call anywhere. The free has to do it, or the child is still in
      * the parent's list when the parent's memory goes. */
-    context_free(child);
-    context_free(top);
+    context_release(child);
+    context_release(top);
 
     CHECK_INT_EQ((Int)track_live(&tr), 0);
     CHECK_INT_EQ((Int)track_check(&tr), 0);
@@ -1034,7 +1034,7 @@ static Fake foreign;
 TEST(freeing_a_context_this_package_did_not_make_stops_the_program) {
     panic_parent = fake_context(&foreign);
 
-    CHECK_FATAL(context_free(panic_parent),
+    CHECK_FATAL(context_release(panic_parent),
                 "context: freeing a context this package did not make");
 }
 
@@ -1107,7 +1107,7 @@ TEST(a_goroutine_parked_on_done_wakes_up_when_somebody_cancels) {
     CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&rt_err_was_canceled), 1);
     CHECK(is_done(rt_ctx));
 
-    context_free(rt_ctx);
+    context_release(rt_ctx);
     chan_free(rt_ready);
 }
 
@@ -1154,7 +1154,7 @@ TEST(a_parent_from_outside_the_package_still_cancels_what_is_under_it) {
      * is what makes a custom context worth writing. */
     CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&rt_err_was_canceled), 1);
 
-    context_free(rt_ctx);
+    context_release(rt_ctx);
     chan_free(rt_stranger_done);
 }
 
@@ -1212,8 +1212,8 @@ TEST(a_wrapper_that_replaces_done_is_not_mistaken_for_what_it_wraps) {
     CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&rt_woke), 1);
     CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&rt_err_was_canceled), 1);
 
-    context_free(rt_ctx);
-    context_free(rt_wrapped);
+    context_release(rt_ctx);
+    context_release(rt_wrapped);
     chan_free(rt_stranger_done);
 }
 
@@ -1240,7 +1240,7 @@ static void early_free_body(void *env) {
      * free cancels, which closes the channel the watcher is waiting on, and
      * then puts down one of the two references. The watcher puts down the other
      * one and does the freeing, whenever it gets round to it. */
-    context_free(c);
+    context_release(c);
 
     /* Long enough for the watcher to wake on a channel that is already closed
      * and run three lines. The tracker is deliberately not asked anything here:
@@ -1350,7 +1350,7 @@ static void future_body(void *env) {
     dl.done_in_the_end = is_done(c);
     dl.err_after = context_err(c);
 
-    context_free(c);
+    context_release(c);
 }
 
 TEST(a_deadline_an_hour_away_leaves_the_cancel_to_win) {
@@ -1392,7 +1392,7 @@ static void past_body(void *env) {
      * this package: the first answer is the only answer. */
     BURROW_CALLF0(cancel);
     dl.err_after = context_err(c);
-    context_free(c);
+    context_release(c);
 
     /* The same thing said as an instant rather than as a duration, and with no
      * cancel function asked for at all. */
@@ -1404,7 +1404,7 @@ static void past_body(void *env) {
     dl.made_child = true;
     dl.child_done = is_done(d);
     dl.child_err = context_err(d);
-    context_free(d);
+    context_release(d);
 }
 
 TEST(a_deadline_that_has_gone_by_comes_back_already_cancelled) {
@@ -1449,7 +1449,7 @@ static void fires_body(void *env) {
     BURROW_CALLF0(cancel);
     dl.err_after = context_err(c);
 
-    context_free(c);
+    context_release(c);
 }
 
 TEST(a_timeout_fires_and_says_the_deadline_went_by) {
@@ -1485,7 +1485,7 @@ static void parent_sooner_body(void *env) {
     Context c = context_with_deadline(rt_alloc, p, dl.parent_when + TIME_HOUR, &cancel);
     if (BURROW_CONTEXT_IS_NIL(c)) {
         BURROW_CALLF0(parent_cancel);
-        context_free(p);
+        context_release(p);
         return;
     }
 
@@ -1500,8 +1500,8 @@ static void parent_sooner_body(void *env) {
 
     BURROW_CALLF0(cancel);
     BURROW_CALLF0(parent_cancel);
-    context_free(c);
-    context_free(p);
+    context_release(c);
+    context_release(p);
 }
 
 TEST(a_parent_that_gives_up_sooner_keeps_the_deadline) {
@@ -1533,7 +1533,7 @@ static void child_sooner_body(void *env) {
     Context c = context_with_timeout(rt_alloc, p, DL_SOON, &cancel);
     if (BURROW_CONTEXT_IS_NIL(c)) {
         BURROW_CALLF0(parent_cancel);
-        context_free(p);
+        context_release(p);
         return;
     }
 
@@ -1545,8 +1545,8 @@ static void child_sooner_body(void *env) {
 
     BURROW_CALLF0(cancel);
     BURROW_CALLF0(parent_cancel);
-    context_free(c);
-    context_free(p);
+    context_release(c);
+    context_release(p);
 }
 
 TEST(a_child_with_a_sooner_deadline_fires_on_its_own) {
@@ -1580,7 +1580,7 @@ static void deadline_downwards_body(void *env) {
     Context kid = context_with_cancel(rt_alloc, p, NULL);
     if (BURROW_CONTEXT_IS_NIL(kid)) {
         BURROW_CALLF0(parent_cancel);
-        context_free(p);
+        context_release(p);
         return;
     }
 
@@ -1588,8 +1588,8 @@ static void deadline_downwards_body(void *env) {
         context_with_value(rt_alloc, kid, REQUEST_ID_KEY, BURROW_ANY(TYPE_INT, &id));
     if (BURROW_CONTEXT_IS_NIL(grandkid)) {
         BURROW_CALLF0(parent_cancel);
-        context_free(kid);
-        context_free(p);
+        context_release(kid);
+        context_release(p);
         return;
     }
 
@@ -1605,9 +1605,9 @@ static void deadline_downwards_body(void *env) {
     dl.err = context_err(grandkid);
 
     BURROW_CALLF0(parent_cancel);
-    context_free(grandkid);
-    context_free(kid);
-    context_free(p);
+    context_release(grandkid);
+    context_release(kid);
+    context_release(p);
 }
 
 TEST(a_deadline_reaches_everything_underneath_it) {
@@ -1641,7 +1641,7 @@ static void dl_memory(bool let_it_fire) {
     Context kid = context_with_cancel(rt_alloc, p, NULL);
     if (BURROW_CONTEXT_IS_NIL(kid)) {
         BURROW_CALLF0(cancel);
-        context_free(p);
+        context_release(p);
         return;
     }
 
@@ -1651,8 +1651,8 @@ static void dl_memory(bool let_it_fire) {
     else
         BURROW_CALLF0(cancel);
 
-    context_free(kid);
-    context_free(p);
+    context_release(kid);
+    context_release(p);
 
     /* Long enough for the callback's goroutine to have finished with the node
      * if it was still inside it. Nothing is asked of the tracker from in here,
@@ -1713,7 +1713,7 @@ static void early_deadline_free_body(void *env) {
     /* Freed with the timer armed and twenty milliseconds still to run. The free
      * cancels, the cancel stops the timer and takes its reference back, and
      * there is nothing left for the callback to walk into. */
-    context_free(c);
+    context_release(c);
 
     time_sleep(DL_SOON + 100 * TIME_MILLISECOND);
 }
@@ -1785,7 +1785,7 @@ TEST(a_goroutine_parked_on_done_wakes_up_when_the_deadline_goes_by) {
     CHECK(is_done(rt_ctx));
 
     BURROW_CALLF0(rt_cancel);
-    context_free(rt_ctx);
+    context_release(rt_ctx);
     chan_free(rt_ready);
 }
 
@@ -1803,7 +1803,7 @@ static void far_future_body(void *env) {
     dl.done_at_once = is_done(c);
     dl.err = context_err(c);
 
-    context_free(c);
+    context_release(c);
 }
 
 TEST(a_timeout_too_big_to_add_lands_at_the_end_of_the_clock) {
@@ -1842,7 +1842,7 @@ static void deadline_cause_body(void *env) {
     dl.child_err = context_cause(c);
 
     BURROW_CALLF0(cancel);
-    context_free(c);
+    context_release(c);
 }
 
 TEST(a_deadline_that_fires_says_what_it_was_waiting_for) {
@@ -1880,7 +1880,7 @@ static void cancel_beats_cause_body(void *env) {
     dl.err_after = context_err(c);
     dl.child_err = context_cause(c);
 
-    context_free(c);
+    context_release(c);
 }
 
 TEST(a_cancel_before_the_deadline_leaves_the_deadline_cause_alone) {
@@ -1907,7 +1907,7 @@ static void past_cause_body(void *env) {
     dl.err = context_err(c);
     dl.child_err = context_cause(c);
 
-    context_free(c);
+    context_release(c);
 }
 
 TEST(a_deadline_already_gone_by_still_carries_its_reason) {
@@ -1982,8 +1982,8 @@ static void af_cancel_body(void *env) {
     /* Too late, and saying so is the whole of what a false answer means. */
     af_stopped = af_stopped && !BURROW_CALLF0(stop);
 
-    context_free(reg);
-    context_free(req);
+    context_release(reg);
+    context_release(req);
 }
 
 TEST(a_cancel_runs_the_function_on_a_goroutine_of_its_own) {
@@ -2017,8 +2017,8 @@ static void af_already_body(void *env) {
     af_made = true;
     af_stopped = wait_ran();
 
-    context_free(reg);
-    context_free(req);
+    context_release(reg);
+    context_release(req);
 }
 
 TEST(a_context_that_is_already_over_starts_the_function_at_once) {
@@ -2052,8 +2052,8 @@ static void af_deadline_body(void *env) {
     af_stopped = wait_ran();
 
     BURROW_CALLF0(cancel);
-    context_free(reg);
-    context_free(req);
+    context_release(reg);
+    context_release(req);
 }
 
 TEST(a_deadline_running_out_runs_the_function_too) {
@@ -2086,9 +2086,9 @@ static void af_once_body(void *env) {
     BURROW_CALLF0(cancel);
     af_stopped = wait_ran();
 
-    context_free(reg);
+    context_release(reg);
     BURROW_CALLF0(cancel);
-    context_free(req);
+    context_release(req);
 
     time_sleep(20 * TIME_MILLISECOND);
 }
@@ -2127,8 +2127,8 @@ static void af_memory_body(void *env) {
      * goroutine in flight while the node goes. Nothing on that goroutine reads
      * the node, because what it runs is the caller's function with the caller's
      * environment, and this is where that is checked. */
-    context_free(reg);
-    context_free(req);
+    context_release(reg);
+    context_release(req);
 
     time_sleep(20 * TIME_MILLISECOND);
 }

@@ -381,6 +381,31 @@ jobs:
         env:
           CC: clang
 
+  # burrow's names have no prefix, so none of them can be one a common library
+  # already defines. This installs the libraries in tools/collision-packages.txt
+  # and compares their symbol tables with libburrow.a and with the C name of
+  # everything in Go's API.
+  collisions:
+    name: symbol collisions (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.1"
+          cache: false
+      - name: install the libraries to check against
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq $(grep -v '^#' tools/collision-packages.txt | grep .)
+      - run: make -j4 collisions
+
   # Every declaration in Go's API files mapped to its C name and looked for in
   # the headers. The packages in tools/coverage-done.txt have to be complete,
   # and the rest are reported so the number is a trend rather than a surprise.

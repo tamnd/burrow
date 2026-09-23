@@ -168,7 +168,7 @@ TEST_GEN := $(wildcard tests/gen/*.c)
 DEPFLAGS := -MMD -MP
 DEPS     := $(OBJS:.o=.d) $(TEST_BINS:=.d)
 
-.PHONY: all lib test check clean install fmt tidy amalgamation
+.PHONY: all lib test check collisions clean install fmt tidy amalgamation
 
 all: lib
 
@@ -229,6 +229,11 @@ check:
 	@tools/check-gen.sh
 	@tools/check-amalg.sh
 	@$(MAKE) test
+
+# Not part of check, because what it finds depends on which libraries the
+# machine has installed. CI runs it against a fixed set.
+collisions: $(LIB)
+	@BURROW_LIB=$(LIB) tools/check-collisions.sh
 
 install: $(LIB)
 	install -d $(DESTDIR)$(PREFIX)/lib $(DESTDIR)$(PREFIX)/include/burrow

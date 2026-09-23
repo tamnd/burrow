@@ -74,7 +74,7 @@ runtime_gosched(); /* give it a moment to get going */
 
 BURROW_CALLF0(cancel);
 sync_wait_group_wait(&finished); /* work has seen it and returned */
-context_free(ctx);
+context_release(ctx);
 ```
 
 `context_with_cancel` is `context.WithCancel`. It returns a copy of the parent that is also cancelled when the function it writes to `*cancel` is called.
@@ -101,7 +101,7 @@ if (BURROW_CONTEXT_IS_NIL(ctx))
 Error err = talk_to_the_database(ctx);
 
 BURROW_CALLF0(cancel);
-context_free(ctx);
+context_release(ctx);
 ```
 
 `context_with_timeout` is `context.WithTimeout` and is the one almost every caller wants. Five seconds later the done channel closes on its own, `context_err` is `context_deadline_exceeded`, and everything derived from this context stops with it.
@@ -134,7 +134,7 @@ static void handle(Alloc *a, Context parent) {
     /* And somewhere further down, the work notices. */
     if (BURROW_FAILED(context_err(ctx)))
         log_error(context_cause(ctx)); /* the client hung up */
-    context_free(ctx);
+    context_release(ctx);
 }
 ```
 
@@ -187,7 +187,7 @@ if (BURROW_CONTEXT_IS_NIL(reg))
 serve_the_connection(c);
 
 (void)BURROW_CALLF0(stop);
-context_free(reg);
+context_release(reg);
 ```
 
 `context_after_func` is `context.AfterFunc`. It runs a function on a goroutine of its own after a context is cancelled, for the cleanup nobody is sitting in a `select` waiting to do. A connection to close, a temporary file to remove, a lock to hand back. Go's own network package uses it to stop a read when the context behind it goes away.
@@ -236,14 +236,14 @@ Nothing is copied. Both `Any` values are two words and the context keeps them as
 
 <!-- example: ../examples/context/context.c#free -->
 ```c
-context_free(ctx);
+context_release(ctx);
 ```
 
 Go has no such call. The rule here is burrow's usual one: whoever made it frees it, and the order is the ordinary C order.
 
 Free a context before the ones derived from it. A child holds a pointer to its parent for the value walk, so a parent that goes first leaves the child reading freed memory. Cancelling does detach a child from a cancellable parent, but a value context is not cancellable and has nothing to detach from, so do not lean on it.
 
-`context_free` cancels first. That makes it safe on a context nobody cancelled, and it means anything still parked on the done channel is woken rather than left waiting on memory that is about to go. It is not a substitute for calling the cancel function at the right moment, only a guarantee that forgetting to does not corrupt anything.
+`context_release` cancels first. That makes it safe on a context nobody cancelled, and it means anything still parked on the done channel is woken rather than left waiting on memory that is about to go. It is not a substitute for calling the cancel function at the right moment, only a guarantee that forgetting to does not corrupt anything.
 
 `context_background`, `context_todo` and the nil context are all fine to pass and do nothing, so a cleanup path does not have to ask which kind it has. A context this package did not make stops the program, because the alternative is freeing a pointer to something whose shape is unknown.
 

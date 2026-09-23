@@ -1,0 +1,28 @@
+# Symbols burrow defines, or will, that some library also defines, and why that
+# is fine. burrow-gen collisions reads this. Each line is the C name, a pattern
+# for the library's file name, and the reason, which is not optional.
+#
+# A waiver is for a clash that cannot hurt anyone. If it can, rename the burrow
+# side instead, in tools/burrow-coverage's RENAMED table, and say so in
+# docs/design/08-naming-abi.md section 0.
+
+# macOS: libsystem_kernel exports panic for the kernel's own use, it is not in
+# any public header, and a dylib's internal calls are bound to itself under the
+# two level namespace, so a program's panic never answers them.
+# The .tbd stubs are the SDK's, and libSystem re-exports the symbol through a
+# dozen of them.
+panic   libsystem_kernel.*   private to the macOS kernel library, two level namespace
+panic   *.tbd                the same symbol re-exported through libSystem's stubs
+
+# libktrace is Apple's private library for its own tracing tools, has no public
+# headers, and nothing else links it.
+trace_start   libktrace.*   Apple's private tracing library
+uuid_string   libktrace.*   Apple's private tracing library
+
+# net-snmp's agent library has an exec_command for its extend and exec MIB
+# handlers. Only an SNMP agent links it, and one that also wants os/exec can
+# build with a prefix.
+exec_command   libnetsnmpmibs.*   net-snmp agent internals, only SNMP agents link it
+
+# reiserfsprogs' private library, which nothing but the reiserfs tools links.
+mem_alloc   libreiserfscore.*   reiserfsprogs internals, linked only by the reiserfs tools

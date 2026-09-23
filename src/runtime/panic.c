@@ -389,7 +389,7 @@ Str panic_text(Any v) {
     if (v.t == TYPE_STRING)
         return *(const Str *)v.data;
     if (v.t == TYPE_ERROR)
-        return error_message(*(const Error *)v.data);
+        return error_text(*(const Error *)v.data);
 
     if (v.t->kind == KIND_BOOL)
         return *(const bool *)v.data ? BURROW_S("true") : BURROW_S("false");

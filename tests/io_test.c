@@ -419,7 +419,7 @@ TEST(copy_treats_a_wrapped_end_as_the_failure_it_is) {
 
     CHECK_INT_EQ(n, 3);
     CHECK(BURROW_FAILED(err));
-    CHECK(str_eq(error_message(err), str_from_cstr("read tcp: EOF")));
+    CHECK(str_eq(error_text(err), str_from_cstr("read tcp: EOF")));
     /* It does unwrap to the end, which is how a caller that wants to be
      * generous can still ask. */
     CHECK(errors_is(err, io_eof));
@@ -472,7 +472,7 @@ TEST(copy_catches_a_writer_that_claims_more_than_it_was_given) {
 
     CHECK_INT_EQ(n, 0);
     CHECK(BURROW_FAILED(err));
-    CHECK(str_eq(error_message(err), str_from_cstr("invalid write result")));
+    CHECK(str_eq(error_text(err), str_from_cstr("invalid write result")));
 }
 
 TEST(copy_through_a_buffer_uses_the_buffer_it_was_given) {
@@ -613,12 +613,11 @@ TEST(a_reader_keeps_its_type_through_an_interface) {
 /* ---------------------------------------------------------------- sentinels */
 
 TEST(the_sentinels_carry_gos_messages) {
-    CHECK(str_eq(error_message(io_eof), str_from_cstr("EOF")));
-    CHECK(
-        str_eq(error_message(io_err_unexpected_eof), str_from_cstr("unexpected EOF")));
-    CHECK(str_eq(error_message(io_err_short_write), str_from_cstr("short write")));
-    CHECK(str_eq(error_message(io_err_short_buffer), str_from_cstr("short buffer")));
-    CHECK(str_eq(error_message(io_err_no_progress),
+    CHECK(str_eq(error_text(io_eof), str_from_cstr("EOF")));
+    CHECK(str_eq(error_text(io_err_unexpected_eof), str_from_cstr("unexpected EOF")));
+    CHECK(str_eq(error_text(io_err_short_write), str_from_cstr("short write")));
+    CHECK(str_eq(error_text(io_err_short_buffer), str_from_cstr("short buffer")));
+    CHECK(str_eq(error_text(io_err_no_progress),
                  str_from_cstr("multiple Read calls return no data or error")));
 }
 

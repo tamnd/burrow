@@ -52,7 +52,7 @@ int main(void) {
     Error err = port(BURROW_S("8080"));
     if (BURROW_OK(err))
         err = port(BURROW_S("http"));
-    Str msg = error_message(err);
+    Str msg = error_text(err);
     printf("failed: %.*s\n", (int)msg.len, (const char *)msg.p);
     port_or_zero(BURROW_S("http"));
     return 0;

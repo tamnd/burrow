@@ -102,7 +102,7 @@ BURROW_CATCH(p) {
 
 `runtime_error_from` gives back `NULL` for every other panicked value, including an ordinary `Error`, so the check separates a bug in the code from a panic the program raised on purpose. Re-panicking from inside a catch block, as above, goes outward to the next one rather than back into the block that is running, which is what makes that pattern work.
 
-The value is a plain `Error` underneath, so `errors_as(err, TYPE_RUNTIME_ERROR)` finds it through a wrapper and `error_message` prints it. The message is Go's text byte for byte, because those strings are what somebody pastes into a search box.
+The value is a plain `Error` underneath, so `errors_as(err, TYPE_RUNTIME_ERROR)` finds it through a wrapper and `error_text` prints it. The message is Go's text byte for byte, because those strings are what somebody pastes into a search box.
 
 The message borrows. It lives in a fixed slot on the goroutine, `BURROW_RUNTIME_ERROR_MAX` bytes of it, and the next runtime error on the same goroutine writes over it, so copy the bytes if they need to outlive the catch block. The slot is there because this path cannot allocate: running out of memory is one of the things that arrives on it.
 

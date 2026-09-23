@@ -200,7 +200,7 @@ TEST(owns_errors_new_allocates_and_copies_the_text) {
     Error err = errors_new(c.a, text);
 
     CHECK(counted_grew(&c));
-    Str msg = error_message(err);
+    Str msg = error_text(err);
     CHECK(str_eq(msg, text));
     /* Copied, not kept. Without this the error would be a BURROW_RETAINS on
      * text and every caller would have to keep the text alive. */
@@ -395,7 +395,7 @@ TEST(borrows_error_message_points_into_the_error) {
     Error err = errors_new(c.a, BURROW_S("disk on fire"));
 
     counted_mark(&c);
-    Str msg = error_message(err);
+    Str msg = error_text(err);
 
     CHECK(!counted_grew(&c));
     CHECK(str_eq(msg, BURROW_S("disk on fire")));

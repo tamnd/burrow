@@ -348,9 +348,9 @@ TEST(the_three_answers_are_three_different_answers) {
 
     /* Each says what it is, because these get logged and a log line reading
      * "reflect: error" helps nobody. */
-    CHECK(error_message(type_err_not_registered).len > 0);
-    CHECK(error_message(type_err_name_invalid).len > 0);
-    CHECK(error_message(type_err_conflict).len > 0);
+    CHECK(error_text(type_err_not_registered).len > 0);
+    CHECK(error_text(type_err_name_invalid).len > 0);
+    CHECK(error_text(type_err_conflict).len > 0);
 }
 
 TEST(identity_is_the_address_when_there_is_one) {

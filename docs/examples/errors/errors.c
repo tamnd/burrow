@@ -30,7 +30,7 @@ static void check(void) {
     // doc: check
     Error err = save_config(path, data);
     if (BURROW_FAILED(err))
-        printf("nope: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_message(err)));
+        printf("nope: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
     // doc: end
 
     err = save_config(BURROW_S("config.txt"), data);
@@ -45,7 +45,7 @@ static void check(void) {
     // doc: end
 
     // doc: message
-    Str msg = error_message(err);
+    Str msg = error_text(err);
     // doc: end
     printf("message of no error is %lld bytes\n", (long long)msg.len);
 }
@@ -131,7 +131,7 @@ static void extract(void) {
         printf("failed on line %lld\n", (long long)pe->line);
     // doc: end
     printf("unwraps to: " BURROW_STR_FMT "\n",
-           BURROW_STR_ARG(error_message(errors_unwrap(err))));
+           BURROW_STR_ARG(error_text(errors_unwrap(err))));
 }
 
 static void join(Alloc *a) {
@@ -142,7 +142,7 @@ static void join(Alloc *a) {
     // doc: join
     Error err = errors_join_v(a, 2, close_err, flush_err);
     // doc: end
-    printf("joined: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_message(err)));
+    printf("joined: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
 
     // doc: join-slice
     Slice errs = slice_make(a, TYPE_ERROR, 0, 4);
@@ -151,7 +151,7 @@ static void join(Alloc *a) {
     // doc: end
     errs = BURROW_APPEND(Error, a, errs, close_err);
     all = errors_join(a, errs);
-    printf("joined:\n" BURROW_STR_FMT "\n", BURROW_STR_ARG(error_message(all)));
+    printf("joined:\n" BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(all)));
     printf("is not found %d\n", errors_is(all, err_not_found));
 }
 

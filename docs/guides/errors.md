@@ -18,7 +18,7 @@ Anything that can fail returns one, and the caller asks:
 ```c
 Error err = save_config(path, data);
 if (BURROW_FAILED(err))
-    printf("nope: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_message(err)));
+    printf("nope: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
 ```
 
 Succeeding costs nothing. There is no allocation on the happy path, no object to free, and a struct with an `Error` field in it starts out holding no error without anybody writing a line to say so.
@@ -43,12 +43,12 @@ With `BURROW_SHORT` those are `FAILED` and `OK`, and `NO_ERROR` is the zero valu
 
 <!-- example: ../examples/errors/errors.c#message -->
 ```c
-Str msg = error_message(err);
+Str msg = error_text(err);
 ```
 
 This is Go's `err.Error()`. It borrows, so the result points into the error and lives as long as the error does. No error gives you the empty string rather than stopping the program, because this gets called from log lines and a logging call that can take the process down is worse than a blank message.
 
-The name is `error_message` and not `error_error`. Go's method is called `Error` on a type called `error`, and the mechanical rule would produce a function whose name says the same word twice. This is the only place in the library where a Go name is not carried across letter for letter, and it exists because that one collision reads badly several thousand times.
+The name is `error_text` and not `error_error`. Go's method is called `Error` on a type called `error`, and the mechanical rule would produce a function whose name says the same word twice. This is the only place in the library where a Go name is not carried across letter for letter, and it exists because that one collision reads badly several thousand times.
 
 The message is built when the error is constructed, not when somebody prints it. Go builds it in `Error()` on demand, which saves an allocation for an error nobody prints. Here the printing path takes no allocator, so it cannot allocate and therefore cannot fail. On an error path that trade is the right way round: the case you care about is the one where memory is already tight and you still want to know what happened.
 

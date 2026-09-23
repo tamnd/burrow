@@ -6,6 +6,7 @@
 #     burrow-gen reflect      type descriptors for structs you already have
 #     burrow-gen amalgamate   the whole library as one burrow.c and one burrow.h
 #     burrow-gen doc          the code in docs/ checked against real programs
+#     burrow-gen collisions   burrow's link names against other libraries' symbols
 #
 # REFLECT
 #
@@ -114,6 +115,31 @@
 # program using the split headers does, and each of those names is a one line
 # header that includes the amalgamated burrow.h, so both spellings are tested.
 #
+# COLLISIONS
+#
+#     burrow-gen collisions /usr/lib/x86_64-linux-gnu/libz.so.1 ...
+#
+# burrow's public names have no prefix, which is the right call for the people
+# writing code against it and a risk for the people linking it: a program that
+# links burrow and some other library that also defines str_eq, or crc32_update,
+# gets a duplicate symbol from a static link and, worse, a silent winner from a
+# dynamic one. This reads the symbols every library named on the command line
+# exports and fails on any that burrow defines too.
+#
+# burrow's side is two sets. One is what the built library defines today, read
+# out of build/libburrow.a with nm. The other is every name burrow will define
+# once all of Go is ported: tools/burrow-coverage already turns each func,
+# method and var in Go's API manifest into the C name the naming rules give it,
+# so a collision with a package nobody has written yet shows up now, while the
+# name can still be changed for free. Constants and types are not link names and
+# are not checked.
+#
+# The other side can be an ELF shared object, a static archive, a Mach-O dylib,
+# an Apple SDK .tbd stub or a Windows import library, and a directory stands
+# for every one of those in it. A collision somebody has looked at and decided
+# is harmless goes in tools/collision-waivers.txt with the reason.
+# tools/check-collisions.sh is the list of libraries make check and CI use.
+#
 # Copyright 2026 The burrow Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style licence that can be found
 # in the LICENSE file.
@@ -126,6 +152,7 @@ import json
 import os
 import platform
 import re
+import subprocess
 import sys
 import textwrap
 
@@ -1159,10 +1186,181 @@ def run_doc(args):
     return 0
 
 
+# ----------------------------------------------------------------- collisions
+
+COLL_EXTENSIONS = (".so", ".a", ".dylib", ".tbd", ".lib")
+COLL_TBD_LIST = re.compile(r"(?:^|\s)(?:weak-|thread-local-)?symbols:\s*\[([^\]]*)\]", re.S)
+
+
+def coll_is_library(name):
+    return name.endswith(COLL_EXTENSIONS) or re.search(r"\.so(\.[0-9]+)+$", name) is not None
+
+
+def coll_symbols(path):
+    """The global names a library defines, spelled the way C spells them."""
+    with open(path, "rb") as f:
+        magic = f.read(8)
+    if path.endswith(".tbd"):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        out = set()
+        for body in COLL_TBD_LIST.findall(text):
+            for s in body.split(","):
+                s = s.strip().strip("'\"")
+                if s.startswith("_"):
+                    out.add(s[1:])
+        return out
+    elf = magic[:4] == b"\x7fELF"
+    macho = magic[:4] in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe")
+    # An archive does not say what it holds without opening a member, and the
+    # only archives with a leading underscore on every C name are Apple's.
+    underscore = macho or (magic.startswith(b"!<arch>") and sys.platform == "darwin")
+    argv = ["nm", "-D" if elf else "-g", "--defined-only", path]
+    try:
+        res = subprocess.run(argv, capture_output=True, text=True, errors="replace")
+    except OSError:
+        raise Error("needs nm on PATH to read %s" % path)
+    if res.returncode != 0 and not res.stdout:
+        raise Error("nm could not read %s: %s" % (path, res.stderr.strip()))
+    out = set()
+    for line in res.stdout.split("\n"):
+        parts = line.split()
+        if len(parts) < 2 or line.endswith(":"):
+            continue
+        name = parts[-1].split("@", 1)[0]
+        if underscore:
+            if not name.startswith("_"):
+                continue
+            name = name[1:]
+        out.add(name)
+    return out
+
+
+def coll_libraries(paths):
+    out = []
+    for p in paths:
+        if os.path.isdir(p):
+            for n in sorted(os.listdir(p)):
+                full = os.path.join(p, n)
+                if os.path.isfile(full) and coll_is_library(n):
+                    out.append(full)
+        elif os.path.isfile(p):
+            out.append(p)
+        else:
+            raise Error("%s is not a file or a directory" % p)
+    # libz.so, libz.so.1 and libz.so.1.3 are one library.
+    seen = set()
+    uniq = []
+    for p in out:
+        real = os.path.realpath(p)
+        if real not in seen:
+            seen.add(real)
+            uniq.append(p)
+    return uniq
+
+
+def coll_planned(root, api_dir):
+    """Every func, method and var in Go's API, under the C name it will have."""
+    import importlib.machinery
+    import importlib.util
+
+    path = os.path.join(root, "tools", "burrow-coverage")
+    loader = importlib.machinery.SourceFileLoader("burrow_coverage", path)
+    spec = importlib.util.spec_from_loader("burrow_coverage", loader)
+    cov = importlib.util.module_from_spec(spec)
+    loader.exec_module(cov)
+    if api_dir is None:
+        api_dir = os.path.join(cov.goroot(), "api")
+    out = {}
+    for pkg, decls in sorted(cov.read_api(api_dir, cov.TARGETS).items()):
+        if re.search(r"(^|/)(internal|vendor)(/|$)", pkg):
+            continue
+        for d in decls:
+            if not re.match(r"(func|method|var) ", d.text):
+                continue
+            cov.map_decl(d)
+            if d.owner is None and d.cname:
+                out.setdefault(d.cname, "%s %s" % (pkg, d.key))
+    return out
+
+
+def coll_waivers(path):
+    out = []
+    if not os.path.exists(path):
+        return out
+    with open(path) as f:
+        for n, line in enumerate(f, 1):
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            parts = line.split(None, 2)
+            if len(parts) < 3:
+                raise Error("%s:%d: a waiver is a name, a library pattern and a reason" % (path, n))
+            out.append((parts[0], parts[1]))
+    return out
+
+
+def run_collisions(args):
+    import fnmatch
+
+    root = args.root or os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    built = {}
+    for obj in args.burrow or [os.path.join(root, "build", "libburrow.a")]:
+        if not os.path.exists(obj):
+            raise Error("%s does not exist, so build burrow first or name the library with --burrow" % obj)
+        for name in coll_symbols(obj):
+            built[name] = os.path.basename(obj)
+    planned = {} if args.no_planned else coll_planned(root, args.go_api)
+    waivers = coll_waivers(args.waivers or os.path.join(root, "tools", "collision-waivers.txt"))
+
+    libraries = coll_libraries(args.libraries)
+    # One name is often in many libraries, libSystem's re-exports on macOS
+    # most of all, so the report is by name with the libraries listed after.
+    found = {}
+    waived = 0
+    symbols = 0
+    import concurrent.futures
+
+    # nm is most of the time, and it is one process per library, so they run
+    # side by side.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        tables = list(pool.map(coll_symbols, libraries))
+    for lib, theirs in zip(libraries, tables):
+        symbols += len(theirs)
+        base = os.path.basename(lib)
+        for name in theirs:
+            if name not in built and name not in planned:
+                continue
+            if any(n == name and fnmatch.fnmatch(base, pat) for n, pat in waivers):
+                waived += 1
+                continue
+            found.setdefault(name, []).append(lib)
+
+    for name in sorted(found):
+        if name in built:
+            ours = "defined in %s" % built[name]
+        else:
+            ours = "planned for %s" % planned[name]
+        libs = found[name]
+        more = "" if len(libs) <= 3 else " and %d more" % (len(libs) - 3)
+        sys.stderr.write(
+            "%s: %s is %s, and %s%s define%s it too\n"
+            % (PROG, name, ours, ", ".join(os.path.basename(x) for x in libs[:3]), more,
+               "s" if len(libs) == 1 else "")
+        )
+    sys.stderr.write(
+        "%s: %d names burrow defines and %d it will, against %d symbols from %d libraries: "
+        "%d collision%s, %d waived\n"
+        % (PROG, len(built), len(set(planned) - set(built)), symbols, len(libraries),
+           len(found), "" if len(found) == 1 else "s", waived)
+    )
+    return 1 if found else 0
+
+
 def main():
     p = argparse.ArgumentParser(
         prog=PROG,
-        description="Type descriptors, the amalgamation, and the checks on the docs.",
+        description="Type descriptors, the amalgamation, the checks on the docs, and symbol collisions.",
     )
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -1233,7 +1431,22 @@ def main():
     d.add_argument("--cc", default=os.environ.get("CC", "cc"), help="the compiler for --run, default $CC or cc")
     d.add_argument("--root", metavar="DIR", help="the burrow tree to read, default the one this script is in")
 
+    c = sub.add_parser("collisions", help="burrow's link names against other libraries' symbols")
+    c.add_argument("libraries", nargs="*", help="libraries, or directories of them, to check against")
+    c.add_argument("--burrow", action="append", metavar="LIB", help="burrow's built library, default build/libburrow.a")
+    c.add_argument("--go-api", metavar="DIR", help="the directory with Go's go1*.txt, default $GOROOT/api")
+    c.add_argument("--no-planned", action="store_true", help="check only the names burrow defines today")
+    c.add_argument("--waivers", metavar="FILE", help="default tools/collision-waivers.txt")
+    c.add_argument("--root", metavar="DIR", help="the burrow tree to read, default the one this script is in")
+
     args = p.parse_args()
+
+    if args.command == "collisions":
+        try:
+            return run_collisions(args)
+        except Error as e:
+            sys.stderr.write("%s: %s\n" % (PROG, e))
+            return 1
 
     if args.command == "doc":
         try:

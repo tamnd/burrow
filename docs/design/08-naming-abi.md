@@ -80,11 +80,15 @@ Package-qualified *constants* are not in this category — `TIME_SECOND`,
 `HTTP_STATUS_NOT_FOUND`, `KIND_STRUCT` carry their package and follow the
 function rule.
 
-**3. Three names collide with libc or the standard headers** and are renamed,
-once, by an enumerated table rather than a rule: `select` (POSIX `select(2)`)
-→ `chan_select`; `sync/atomic`'s package segment (`<stdatomic.h>`'s
-`atomic_*`) → `sync_atomic_`; and `runtime`'s park/ready primitives →
-`sched_park`/`sched_ready`. That is the complete list.
+**3. A few names collide with libc, the standard headers or libraries that
+ship with every system** and are renamed, once, by an enumerated table rather
+than a rule: `select` (POSIX `select(2)`) → `chan_select`; `sync/atomic`'s
+package segment (`<stdatomic.h>`'s `atomic_*`) → `sync_atomic_`; `runtime`'s
+park/ready primitives → `sched_park`/`sched_ready`; and Go 1.27's `uuid.Parse`
+and `UUID.Compare`, which libuuid and macOS's libc already define with
+different signatures, → `uuid_parse_str` and `uuid_cmp`. `burrow-gen
+collisions` (below) is what finds these, and the table only grows when it
+does.
 
 ### The escape hatch, which is what makes this safe
 
@@ -169,7 +173,8 @@ so there is no collision.
 
 The rule has exactly one exception in the whole library. `error.Error()` would
 become `error_error`, a name that says the same word twice at every one of the
-call sites where a message gets printed, so it is `error_message`. The
+call sites where a message gets printed, so it is `error_text`, since
+`error_message` belongs to com_err. The
 generator's table carries it as a special case in both directions so the
 round-trip test still closes. → [04](04-core-types.md) §6
 
@@ -244,7 +249,7 @@ Worked examples across the awkward cases:
 | `sync/atomic.AddInt64` | `Int64 sync_atomic_add_int64(Int64 *, Int64)` (R1 collision) |
 | `slices.Sort[S ~[]E, E cmp.Ordered](x S)` | `slices_sort(x)` macro + `slices_sort_int64(Slice)` etc. |
 | `errors.Join(errs ...error) error` | `Error errors_join(Alloc *a, Slice errs)` + `errors_join_v(Alloc *a, int n, …)` |
-| `error.Error() string` | `Str error_message(Error)` (R6's one exception) |
+| `error.Error() string` | `Str error_text(Error)` (R6's one exception) |
 
 **Round-tripping is a test.** The generator implements the mapping in both
 directions and CI checks that `go→c→go` is the identity over all 23,730
@@ -252,10 +257,15 @@ declarations. A rule that is not invertible is a rule that will produce a
 collision eventually, and the round-trip test finds it at the moment the rule is
 written rather than three packages later.
 
-**Collision auditing is also a test.** `burrow-gen collisions` links a probe
-binary against glibc, musl, the macOS SDK, the Windows SDK and the fifty most
-common C libraries, and reports any `burrow` public symbol that is also defined
-there. It runs in CI. If the unprefixed design ever becomes untenable, that
+**Collision auditing is also a test.** `burrow-gen collisions` reads the symbol
+tables of glibc, musl, the macOS SDK, MinGW's import libraries for the Windows
+SDK and the sixty or so most common C libraries, and reports any `burrow` public
+symbol that is also defined there, along with the C name of every Go
+declaration not yet written, so a clash is found before the package that would
+cause it. Reading symbol tables rather than linking a probe catches the case a
+link does not: a static definition in the program silently answering a shared
+library's own calls. It runs in CI, and `tools/collision-waivers.txt` holds the
+few clashes that cannot hurt anyone, each with its reason. If the unprefixed design ever becomes untenable, that
 report is how we will find out — not a user's build log.
 ## 2. The coverage gate
 

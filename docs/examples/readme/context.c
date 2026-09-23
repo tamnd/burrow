@@ -47,7 +47,7 @@ static void run(void *env) {
     queue_the_jobs();
     BURROW_CALLF0(cancel);
     sync_wait_group_wait(&wg);
-    context_free(ctx);
+    context_release(ctx);
     // doc: end
 
     printf("the jobs added up to %lld\n", (long long)done_jobs);

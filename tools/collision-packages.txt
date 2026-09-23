@@ -1,0 +1,88 @@
+# The Debian and Ubuntu packages the collisions job installs before it runs
+# tools/check-collisions.sh, so that the libraries it checks against are the
+# same on every run. The list is the C libraries a program is most likely to be
+# linked with next to burrow, plus musl and MinGW for their libc. The -dev
+# package is named because its name does not change with the soname.
+
+# Compression and archives
+zlib1g-dev
+libzstd-dev
+liblz4-dev
+libbz2-dev
+liblzma-dev
+libbrotli-dev
+libarchive-dev
+
+# Crypto, TLS and auth
+libssl-dev
+libgnutls28-dev
+libgcrypt20-dev
+libsodium-dev
+libkrb5-dev
+comerr-dev
+libidn2-dev
+
+# Networking and event loops
+libcurl4-openssl-dev
+libnghttp2-dev
+libssh2-1-dev
+libssh-dev
+libuv1-dev
+libevent-dev
+libmicrohttpd-dev
+libpcap-dev
+
+# Data formats
+libxml2-dev
+libexpat1-dev
+libyaml-dev
+libjansson-dev
+libjson-c-dev
+libcjson-dev
+libprotobuf-c-dev
+libmagic-dev
+
+# Databases
+libsqlite3-dev
+libpq-dev
+libmariadb-dev
+libhiredis-dev
+
+# Text, regex and terminals
+libpcre2-dev
+libncurses-dev
+libreadline-dev
+libedit-dev
+libicu-dev
+
+# Images, fonts and graphics
+libpng-dev
+libjpeg-dev
+libtiff-dev
+libwebp-dev
+libfreetype-dev
+libcairo2-dev
+libpango1.0-dev
+libsdl2-dev
+libx11-dev
+
+# The system underneath
+libglib2.0-dev
+libdbus-1-dev
+libsystemd-dev
+libudev-dev
+libselinux1-dev
+libcap-dev
+libseccomp-dev
+libelf-dev
+libunwind-dev
+libffi-dev
+uuid-dev
+libgmp-dev
+libgc-dev
+libgit2-dev
+liblua5.4-dev
+
+# Other libcs
+musl-dev
+mingw-w64-x86-64-dev

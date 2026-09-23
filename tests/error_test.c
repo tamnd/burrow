@@ -24,7 +24,7 @@ static void teardown(void) {
 }
 
 static bool msg_is(Error err, const char *want) {
-    return str_eq(error_message(err), str_from_cstr(want));
+    return str_eq(error_text(err), str_from_cstr(want));
 }
 
 /* Two sentinels of our own, because the library has none yet to point at and
@@ -148,8 +148,8 @@ TEST(the_zero_error_is_success) {
 
 TEST(the_message_of_no_error_is_empty_rather_than_a_crash) {
     Error none = BURROW_NO_ERROR;
-    CHECK(str_is_empty(error_message(none)));
-    CHECK_INT_EQ(error_message(none).len, 0);
+    CHECK(str_is_empty(error_text(none)));
+    CHECK_INT_EQ(error_text(none).len, 0);
 }
 
 TEST(errors_new_carries_its_text) {
@@ -174,7 +174,7 @@ TEST(errors_new_of_an_empty_string_is_still_an_error) {
     Error err = errors_new(a, BURROW_STR_EMPTY);
 
     CHECK(BURROW_FAILED(err));
-    CHECK_INT_EQ(error_message(err).len, 0);
+    CHECK_INT_EQ(error_text(err).len, 0);
 }
 
 /* This is the reason sentinels are declared once at file scope and not built

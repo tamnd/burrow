@@ -18,7 +18,7 @@
  *     go(BURROW_FN(Func, work, &ctx));
  *     ...
  *     BURROW_CALLF0(cancel);
- *     context_free(ctx);
+ *     context_release(ctx);
  *
  * A Context is two words and is passed by value, the same shape an Error or any
  * other interface value has here. The zero value is Go's nil context, and
@@ -28,7 +28,7 @@
  *
  * Three things differ from Go, all of them because there is no collector. Every
  * constructor takes an allocator and what it returns has to be given back with
- * context_free. A context has to be freed before the ones derived from it, since
+ * context_release. A context has to be freed before the ones derived from it, since
  * a child holds a pointer to its parent for the value lookup. And the done
  * channel is made when the context is rather than when somebody first asks for
  * it, because context_done has no allocator and no way to report a failure, so a
@@ -314,7 +314,7 @@ BURROW_OWNS(ret) Context context_without_cancel(Alloc *a, Context parent);
  *         return err_no_memory;
  *     ...
  *     (void)BURROW_CALLF0(stop);
- *     context_free(reg);
+ *     context_release(reg);
  *
  * For the cleanup that has to happen when a request goes away and that nobody
  * is sitting in a select waiting to do. A connection to close, a temporary file
@@ -337,7 +337,7 @@ BURROW_OWNS(ret) Context context_without_cancel(Alloc *a, Context parent);
  * other, and it is one more thing burrow gives you rather than a difference in
  * what f does.
  *
- * context_free stops the arrangement and then frees it, so a registration that
+ * context_release stops the arrangement and then frees it, so a registration that
  * is freed without ever being stopped does not run f on the way out. Free it
  * once and free it before its parent, the same as everything else here.
  *
@@ -388,7 +388,7 @@ BURROW_OWNS(ret) Context context_with_deadline(Alloc *a, Context parent, int64_t
  *         return err_no_memory;
  *     ...
  *     BURROW_CALLF0(cancel);
- *     context_free(ctx);
+ *     context_release(ctx);
  *
  * A duration of zero or less is a deadline in the past, so the context comes
  * back already cancelled rather than never firing. A duration long enough to run
@@ -472,7 +472,7 @@ BURROW_OWNS(ret) Context context_with_value(Alloc *a, Context parent, Any key, A
  * Background, TODO and the nil context are fine to pass and do nothing. A
  * context this package did not make stops the program, because the alternative
  * is freeing a pointer to something whose shape is unknown. */
-void context_free(Context c);
+void context_release(Context c);
 
 #ifdef __cplusplus
 }

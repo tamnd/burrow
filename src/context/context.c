@@ -368,7 +368,7 @@ static const ContextVT timer_vt = {
 
 /* Four slots of its own rather than three shared with background_vt, because
  * the value slot has a parent to walk into and because the vtable pointer is
- * what context_free and the value loop tell the node types apart by. */
+ * what context_release and the value loop tell the node types apart by. */
 static const ContextVT without_cancel_vt = {
     NULL,
     without_cancel_deadline,
@@ -598,7 +598,7 @@ static void remove_child(CancelCtx *c) {
 
 /* Declared up here because cancelling can be what puts the deadline timer's
  * reference down, and the two are easier to read in this order. */
-static void context_release(CancelCtx *c);
+static void cancel_ctx_release(CancelCtx *c);
 
 /* Declared up here for the same reason: cancelling an AfterFunc node is what
  * starts the function, and the section that builds one is a long way below. */
@@ -671,7 +671,7 @@ static void cancel_node(CancelCtx *c, bool remove_from_parent, Error err, Error 
         after_func_start((AfterFuncCtx *)c);
 
     if (timer_stopped)
-        context_release(c);
+        cancel_ctx_release(c);
 }
 
 /* Puts one reference down, and frees on the last one.
@@ -681,7 +681,7 @@ static void cancel_node(CancelCtx *c, bool remove_from_parent, Error err, Error 
  * alive, and it exists for that case alone: the watcher may be on the point of
  * waking when the program frees the context, and without the count there is no
  * moment at which freeing is safe. */
-static void context_release(CancelCtx *c) {
+static void cancel_ctx_release(CancelCtx *c) {
     if (burrow__atomic_add_u32(&c->refs, (uint32_t)-1) != 1)
         return;
 
@@ -772,7 +772,7 @@ static void watch(void *env) {
     if (chan_select(cases, 2) == 0)
         cancel_node(c, false, context_err(c->parent), context_cause(c->parent));
 
-    context_release(c);
+    cancel_ctx_release(c);
 }
 
 /* Arranges for the parent's cancellation to reach c, and answers whether it
@@ -999,7 +999,7 @@ Context context_without_cancel(Alloc *a, Context parent) {
  * makes a second call to stop answer false rather than do it again.
  *
  * Go returns only the stop function and lets the collector have the node. There
- * is no collector here, so the node comes back as a Context and context_free is
+ * is no collector here, so the node comes back as a Context and context_release is
  * how it is given back. Making it a Context rather than a handle of its own is
  * not a stretch: it is a cancel node, it has a parent and a done channel and an
  * error, and it answers all four questions correctly already.
@@ -1145,7 +1145,7 @@ static void deadline_reached(void *env) {
     CancelCtx *c = (CancelCtx *)env;
 
     cancel_node(c, true, context_deadline_exceeded, ((TimerCtx *)c)->deadline_cause);
-    context_release(c);
+    cancel_ctx_release(c);
 }
 
 Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Error cause,
@@ -1240,12 +1240,12 @@ Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Erro
     sync_mutex_unlock(&c->mu);
 
     /* No memory for the timer. Undo what propagate_cancel did, which is exactly
-     * what context_free does, and answer the nil context. The release here does
+     * what context_release does, and answer the nil context. The release here does
      * not always free: a watcher goroutine may still hold the node, and then it
      * frees when it wakes. */
     if (no_timer) {
         cancel_node(c, true, context_canceled, BURROW_NO_ERROR);
-        context_release(c);
+        cancel_ctx_release(c);
         if (cancel != NULL)
             *cancel = BURROW_FN(ContextCancelFunc, cancel_nothing, NULL);
         return none;
@@ -1287,7 +1287,7 @@ Context context_with_timeout(Alloc *a, Context parent, Duration d,
 
 /* --------------------------------------------------------------------- free */
 
-void context_free(Context c) {
+void context_release(Context c) {
     if (c.vt == NULL || c.vt == &background_vt || c.vt == &todo_vt)
         return;
 
@@ -1305,7 +1305,7 @@ void context_free(Context c) {
         /* Cancel first, so that the done channel is closed and anything parked
          * on it has been let go before the channel stops existing. */
         cancel_node(cc, true, context_canceled, BURROW_NO_ERROR);
-        context_release(cc);
+        cancel_ctx_release(cc);
         return;
     }
 

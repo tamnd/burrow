@@ -50,6 +50,7 @@
 #include <unistd.h>
 #endif
 
+#if defined(CPUNAME_X86) || defined(CPUNAME_SYSCTL) || defined(CPUNAME_PROC)
 /* Copies n bytes of s into buf as a NUL terminated string, cut to fit, and
  * returns how many it kept. */
 static int64_t cpuname_put(char *buf, int64_t cap, const char *s, size_t n) {
@@ -61,6 +62,7 @@ static int64_t cpuname_put(char *buf, int64_t cap, const char *s, size_t n) {
     buf[n] = '\0';
     return (int64_t)n;
 }
+#endif
 
 #if defined(CPUNAME_X86)
 static void cpuname_cpuid(uint32_t leaf, uint32_t r[4]) {
@@ -85,12 +87,12 @@ static void cpuname_cpuid(uint32_t leaf, uint32_t r[4]) {
 /* cpu.Name: the brand string, leading spaces trimmed and cut at the first NUL. */
 static int64_t cpuname_brand(char *buf, int64_t cap) {
     uint32_t r[4];
-    cpuname_cpuid(0x80000000u, r);
-    if (r[0] < 0x80000004u)
+    cpuname_cpuid(0x80000000U, r);
+    if (r[0] < 0x80000004U)
         return 0;
     char data[48];
     for (uint32_t i = 0; i < 3; i++) {
-        cpuname_cpuid(0x80000002u + i, r);
+        cpuname_cpuid(0x80000002U + i, r);
         for (int j = 0; j < 4; j++)
             for (int k = 0; k < 4; k++)
                 data[i * 16 + (uint32_t)j * 4 + (uint32_t)k] = (char)(r[j] >> (8 * k));
@@ -175,14 +177,16 @@ static int64_t cpuname_proc(char *buf, int64_t cap) {
     /* The two are separate lines of data, so together they fit in it. */
     char joined[sizeof data + 8];
     size_t n = 0;
+    static const char at[] = " @ ";
+    static const char unit[] = "MHz";
     memcpy(joined, model, nmodel);
     n += nmodel;
-    memcpy(joined + n, " @ ", 3);
-    n += 3;
+    for (size_t k = 0; at[k] != '\0'; k++)
+        joined[n++] = at[k];
     memcpy(joined + n, mhz, nmhz);
     n += nmhz;
-    memcpy(joined + n, "MHz", 3);
-    n += 3;
+    for (size_t k = 0; unit[k] != '\0'; k++)
+        joined[n++] = unit[k];
     return cpuname_put(buf, cap, joined, n);
 }
 #endif

@@ -202,6 +202,16 @@ BURROW_NORETURN static void ss_error_str(Str msg) {
     ss_error(errors_new(error_allocator(), msg));
 }
 
+/* ss_error_str for a literal. The Str is built here and not at the call site,
+ * because a compound literal inside BURROW_TRY is a temporary gcc warns might
+ * be clobbered by the longjmp, once enough gets inlined into the function with
+ * the TRY in it, as it does in the amalgamation. */
+BURROW_NORETURN static void ss_error_bytes(const char *p, Int n) {
+    ss_error_str((Str){(const Byte *)p, n});
+}
+
+#define ss_error_lit(lit) ss_error_bytes("" lit, (Int)(sizeof(lit) - 1))
+
 static Rune ss_read_rune(Ss *s, Int *size, Error *err) {
     *size = 0;
     *err = BURROW_NO_ERROR;
@@ -284,7 +294,7 @@ static void ss_skip_space(Ss *s) {
         if (r == '\n') {
             if (s->nl_is_space)
                 continue;
-            ss_error_str(SCAN_LIT("unexpected newline"));
+            ss_error_lit("unexpected newline");
         }
         if (!scan_is_space(r)) {
             ss_unread_rune(s);
@@ -388,13 +398,13 @@ static bool ss_scan_bool(Ss *s, Rune verb) {
     case 't':
     case 'T':
         if (ss_accept(s, "rR") && (!ss_accept(s, "uU") || !ss_accept(s, "eE")))
-            ss_error_str(SCAN_LIT("syntax error scanning boolean"));
+            ss_error_lit("syntax error scanning boolean");
         return true;
     case 'f':
     case 'F':
         if (ss_accept(s, "aA") &&
             (!ss_accept(s, "lL") || !ss_accept(s, "sS") || !ss_accept(s, "eE")))
-            ss_error_str(SCAN_LIT("syntax error scanning boolean"));
+            ss_error_lit("syntax error scanning boolean");
         return false;
     default:
         return false;
@@ -432,7 +442,7 @@ static Str ss_scan_number(Ss *s, const char *digits, bool have_digits) {
     if (!have_digits) {
         ss_not_eof(s);
         if (!ss_accept(s, digits))
-            ss_error_str(SCAN_LIT("expected integer"));
+            ss_error_lit("expected integer");
     }
     while (ss_accept(s, digits)) {
     }
@@ -483,7 +493,7 @@ static int64_t ss_scan_int(Ss *s, Rune verb, Int bit_size) {
     bool have_digits = false;
     if (verb == 'U') {
         if (!ss_consume(s, "U", false) || !ss_consume(s, "+", false))
-            ss_error_str(SCAN_LIT("bad unicode format "));
+            ss_error_lit("bad unicode format ");
     } else {
         ss_accept(
             s, SCAN_SIGN); /* If there's a sign, it will be left in the token buffer. */
@@ -514,7 +524,7 @@ static uint64_t ss_scan_uint(Ss *s, Rune verb, Int bit_size) {
     bool have_digits = false;
     if (verb == 'U') {
         if (!ss_consume(s, "U", false) || !ss_consume(s, "+", false))
-            ss_error_str(SCAN_LIT("bad unicode format "));
+            ss_error_lit("bad unicode format ");
     } else if (verb == 'v') {
         digits = ss_scan_base_prefix(s, &have_digits);
         base = 0;
@@ -666,12 +676,12 @@ static Complex128 ss_scan_complex(Ss *s, Rune verb, Int n) {
     Int real_end = ss_float_token(s, 0);
     s->buf.len = real_end;
     if (!ss_accept(s, "+-"))
-        ss_error_str(SCAN_LIT("syntax error scanning complex number"));
+        ss_error_lit("syntax error scanning complex number");
     Int imag_end = ss_float_token(s, real_end + 1);
     if (!ss_accept(s, "i"))
-        ss_error_str(SCAN_LIT("syntax error scanning complex number"));
+        ss_error_lit("syntax error scanning complex number");
     if (parens && !ss_accept(s, ")"))
-        ss_error_str(SCAN_LIT("syntax error scanning complex number"));
+        ss_error_lit("syntax error scanning complex number");
     Str all = ss_buf_str(s);
     c.re = ss_convert_float((Str){all.p, real_end}, n / 2);
     c.im = ss_convert_float((Str){all.p + real_end, imag_end - real_end}, n / 2);
@@ -682,7 +692,7 @@ static void ss_scan_percent(Ss *s) {
     ss_skip_space(s);
     ss_not_eof(s);
     if (!ss_accept(s, "%"))
-        ss_error_str(SCAN_LIT("missing literal %"));
+        ss_error_lit("missing literal %");
 }
 
 static int scan_hex_digit(Rune d) {
@@ -706,7 +716,7 @@ static bool ss_hex_byte(Ss *s, Byte *b) {
     }
     int value2 = scan_hex_digit(ss_must_read_rune(s));
     if (value2 < 0)
-        ss_error_str(SCAN_LIT("illegal hex digit"));
+        ss_error_lit("illegal hex digit");
     *b = (Byte)(value1 << 4 | value2);
     return true;
 }
@@ -717,7 +727,7 @@ static Str ss_hex_string(Ss *s) {
     while (ss_hex_byte(s, &b))
         fmt_buf_write_byte(&s->buf, b);
     if (s->buf.len == 0)
-        ss_error_str(SCAN_LIT("no hex data for %x string"));
+        ss_error_lit("no hex data for %x string");
     return ss_buf_str(s);
 }
 
@@ -760,7 +770,7 @@ static Str ss_quoted_string(Ss *s) {
         return result;
     }
     default:
-        ss_error_str(SCAN_LIT("expected quoted string"));
+        ss_error_lit("expected quoted string");
     }
 }
 
@@ -851,7 +861,7 @@ static void ss_scan_one(Ss *s, Rune verb, Any arg) {
     const Type *t = arg.t;
     void *p = arg.data;
     if (t == NULL || p == NULL)
-        ss_error_str(SCAN_LIT("can't scan type: <nil>"));
+        ss_error_lit("can't scan type: <nil>");
 
     /* If the operand has its own Scan method, use that. */
     if (t->nmethod > 0) {
@@ -976,7 +986,7 @@ static Int ss_do_scan(Ss *s, Slice args, Error *err) {
                 if (r == '\n' || r == SCAN_EOF)
                     break;
                 if (!scan_is_space(r)) {
-                    ss_error_str(SCAN_LIT("expected newline"));
+                    ss_error_lit("expected newline");
                 }
             }
         }
@@ -1045,7 +1055,7 @@ static Int ss_advance(Ss *s, Str format) {
                 while (scan_is_space(inputc) && inputc != '\n')
                     inputc = ss_get_rune(s);
                 if (inputc != '\n' && inputc != SCAN_EOF)
-                    ss_error_str(SCAN_LIT("newline in format does not match input"));
+                    ss_error_lit("newline in format does not match input");
             }
             if (trailing_space) {
                 Rune inputc = ss_get_rune(s);
@@ -1071,7 +1081,7 @@ static Int ss_advance(Ss *s, Str format) {
         if (fmtc == '%') {
             /* % at end of string is an error. */
             if (i + w == format.len)
-                ss_error_str(SCAN_LIT("missing verb: % at end of format string"));
+                ss_error_lit("missing verb: % at end of format string");
             /* %% acts like a real percent */
             Int w2;
             Rune nextc = scan_decode(format, i + w, &w2);
@@ -1099,7 +1109,10 @@ static Int ss_do_scanf(Ss *s, Str format, Slice args, Error *err) {
         Int end = format.len - 1;
         /* We process one item per non-trivial format */
         for (Int i = 0; i <= end;) {
-            Int w = ss_advance(s, (Str){format.p + i, format.len - i});
+            /* A named local and not a compound literal, which gcc would warn
+             * might be clobbered by the longjmp. */
+            Str tail = {format.p + i, format.len - i};
+            Int w = ss_advance(s, tail);
             if (w > 0) {
                 i += w;
                 continue;
@@ -1109,7 +1122,7 @@ static Int ss_do_scanf(Ss *s, Str format, Slice args, Error *err) {
             if (format.p[i] != '%') {
                 /* Can't advance format. Why not? */
                 if (w < 0)
-                    ss_error_str(SCAN_LIT("input does not match format"));
+                    ss_error_lit("input does not match format");
                 /* Otherwise at EOF; "too many operands" error handled below */
                 break;
             }
@@ -1144,7 +1157,7 @@ static Int ss_do_scanf(Ss *s, Str format, Slice args, Error *err) {
             s->arg_limit = s->limit;
         }
         if (num_processed < args.len)
-            ss_error_str(SCAN_LIT("too many operands"));
+            ss_error_lit("too many operands");
     }
     BURROW_CATCH(p) {
         ss_recover(s, p, &e);

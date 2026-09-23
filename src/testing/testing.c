@@ -153,7 +153,9 @@ static Str dur_string(int64_t d, char buf[32]) {
         } else if (u < (uint64_t)TIME_MILLISECOND) {
             prec = 3;
             w--;
-            memcpy(buf + w, "\xC2\xB5", 2); /* U+00B5, as Go writes it */
+            /* U+00B5, as Go writes it. Two bytes of a buffer, not a string.
+             * NOLINTNEXTLINE(bugprone-not-null-terminated-result) */
+            memcpy(buf + w, "\xC2\xB5", 2);
         } else {
             prec = 6;
             buf[w] = 'm';
@@ -2561,9 +2563,14 @@ static void bench_key_pop(void) {
     sync_mutex_unlock(&pkg.reg_mu);
 }
 
+/* What runN keeps across the TRY. The deferred half takes its address, so it
+ * lives in memory and nothing in it is lost to the longjmp. */
 typedef struct RunN {
     TestingB *b;
-    volatile bool returned;
+    bool returned;
+    bool stopped;
+    bool has_panic;
+    Any perr;
 } RunN;
 
 /* The deferred half of runN, which also runs when the benchmark calls
@@ -2581,13 +2588,11 @@ static void run_n_exit(void *arg) {
 /* runN. Answers false when the benchmark stopped itself with FailNow or
  * SkipNow, which in Go ends the goroutine and so everything after runN too. */
 static bool run_n(TestingB *b, int64_t n) {
-    RunN guard = {b, false};
-    volatile bool stopped = false;
-    volatile bool has_panic = false;
-    Any perr = {0};
+    RunN st = {b, false, false, false, {0}};
+    RunN *rn = &st;
     sync_mutex_lock(&pkg.bench_mu);
     BURROW_SCOPE {
-        BURROW_DEFER(run_n_exit, &guard);
+        BURROW_DEFER(run_n_exit, rn);
         bench_key_push();
         TestingT *c = &b->common;
         context_release(c->ctx);
@@ -2607,14 +2612,14 @@ static bool run_n(TestingB *b, int64_t n) {
             if (pkg.repanicking)
                 panic(pkg.repanic);
             if (is_stop(p)) {
-                stopped = true;
+                rn->stopped = true;
             } else {
-                perr = keep_panic(p);
-                has_panic = true;
+                rn->perr = keep_panic(p);
+                rn->has_panic = true;
             }
         }
         BURROW_TRY_END;
-        if (!stopped && !has_panic) {
+        if (!rn->stopped && !rn->has_panic) {
             testing_b_stop_timer(b);
             b->previous_n = n;
             b->previous_duration = c->duration;
@@ -2626,16 +2631,16 @@ static bool run_n(TestingB *b, int64_t n) {
                                      "false (break or return in loop?)"));
         }
         Any r;
-        if (run_cleanup(c, &r) && !has_panic) {
-            perr = r;
-            has_panic = true;
+        if (run_cleanup(c, &r) && !rn->has_panic) {
+            rn->perr = r;
+            rn->has_panic = true;
         }
-        guard.returned = true;
+        rn->returned = true;
     }
     BURROW_SCOPE_END;
-    if (has_panic)
-        panic(perr);
-    return !stopped;
+    if (rn->has_panic)
+        panic(rn->perr);
+    return !rn->stopped;
 }
 
 static void b_signal(void *arg) {

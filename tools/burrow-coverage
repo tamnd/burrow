@@ -1,0 +1,552 @@
+#!/usr/bin/env python3
+# burrow-coverage: how much of Go's standard library burrow has, and a gate on
+# the packages it says are finished.
+#
+#     tools/burrow-coverage                    one line per package, then a total
+#     tools/burrow-coverage sync context       just those
+#     tools/burrow-coverage -v unicode/utf8    every declaration, with its C name
+#     tools/burrow-coverage --missing sync     only what is not there yet
+#
+# It reads every declaration in $GOROOT/api/go1*.txt, works out the C name that
+# the rules in docs/design/08-naming-abi.md section 1 give it, and looks for that
+# name in burrow's public headers. The declarations are counted the same way as
+# tools/inventory.sh: a line that only exists on some platforms counts if it
+# exists on one of the targets, and a line on all of them counts once.
+#
+# Each declaration comes out as one of four things. Present means the name is
+# declared. Missing means it is not. Waived means tools/coverage-waivers.txt
+# says why it never will be, in the form Go spells it. Renamed means the name
+# rules say one thing and the headers use another on purpose, and the table
+# RENAMED below says which.
+#
+# THE GATE
+#
+# tools/coverage-done.txt lists the packages that are finished. For those, a
+# missing declaration that is not waived is an error and the exit status is 1.
+# Every other package is reported and nothing more. A package goes in the file
+# in the same pull request that finishes it, so from then on nothing in it can
+# be removed or renamed by accident.
+#
+# WHAT IT CHECKS AND WHAT IT DOES NOT
+#
+# A name is present if it is a token in the headers once comments and strings
+# are gone. A struct field is present if the struct with the mapped name has a
+# member with the mapped field name, and an interface method is present if the
+# vtable has a member with that name or there is a function with the method's
+# name. Signatures are not compared yet, so a function with the right name and
+# the wrong parameters passes.
+#
+# It needs Python 3 and a Go toolchain, or GOROOT pointing at a Go tree.
+#
+# Copyright 2026 The burrow Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style licence that can be found
+# in the LICENSE file.
+
+import argparse
+import glob
+import os
+import re
+import subprocess
+import sys
+
+PROG = "burrow-coverage"
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+
+TARGETS = ["linux-amd64", "darwin-arm64", "windows-amd64"]
+
+# ------------------------------------------------------------ the name rules
+
+# R1: two packages with the same name both get longer, and the list is closed.
+# atomic is here because <stdatomic.h> owns atomic_.
+PACKAGE_SEGMENT = {
+    "crypto/rand": "crypto_rand",
+    "math/rand": "math_rand",
+    "math/rand/v2": "mathrand2",
+    "text/template": "text_template",
+    "html/template": "html_template",
+    "runtime/pprof": "runtime_pprof",
+    "net/http/pprof": "http_pprof",
+    "go/scanner": "go_scanner",
+    "text/scanner": "text_scanner",
+    "encoding/json/v2": "jsonv2",
+    "sync/atomic": "sync_atomic",
+}
+
+# R2: the acronyms that stay one word even when a lower case letter follows.
+ACRONYMS = set(
+    "URL HTTP HTTPS TLS TCP UDP IP DNS ID API CPU IO EOF ASN1 DER PEM JSON XML "
+    "UTF8 UTF16 RSA ECDSA GCM CBC SHA MD5 CRC FS DB SQL RPC MIME SMTP URI UUID "
+    "PKCS OID SAN CA OCSP SCT ALPN SNI QUIC HPACK GZIP ZIP RW".split()
+)
+
+# Names the rules would get wrong and the headers spell differently on purpose,
+# keyed by the declaration as Go writes it. Each one is argued for in the design
+# document it points at, and nothing goes here to make a mistake pass.
+RENAMED = {
+    # 08-naming-abi.md section 1, the worked examples: Duration is a
+    # language level type in practice, and TimeDuration at every call site
+    # would be noise.
+    ("time", "type Duration"): "Duration",
+    # include/burrow/sync.h: Go's three Once wrappers return closures that the
+    # collector frees. Here the state is a struct you declare and the macro
+    # fills in, so each Go function becomes an initialiser.
+    ("sync", "func OnceFunc"): "SYNC_ONCE_FUNC",
+    ("sync", "func OnceValue"): "SYNC_ONCE_VALUE",
+    ("sync", "func OnceValues"): "SYNC_ONCE_VALUES",
+    # include/burrow/sync.h: NewCond allocates in Go and has nothing to
+    # allocate here, so it is the initialiser too.
+    ("sync", "func NewCond"): "SYNC_COND",
+    # new is a keyword in C++, and burrow.h has to compile there.
+    ("sync", "type Pool struct, New"): "SyncPool.new_fn",
+}
+
+
+def segment(path):
+    """R1: the package segment, which is the package name unless it collides."""
+    if path in PACKAGE_SEGMENT:
+        return PACKAGE_SEGMENT[path]
+    last = path.rsplit("/", 1)[-1]
+    if re.fullmatch(r"v[0-9]+", last) and "/" in path:
+        last = path.rsplit("/", 2)[-2]
+    return last
+
+
+def words(name):
+    """R2: split a Go identifier into the words its snake case is made of."""
+    out = []
+    for part in name.split("_"):
+        i = 0
+        n = len(part)
+        while i < n:
+            c = part[i]
+            if c.isupper():
+                j = i
+                while j < n and part[j].isupper():
+                    j += 1
+                # A run of capitals. Digits that follow stay with it, so UTF8
+                # and Int64 are one word each.
+                k = j
+                while k < n and part[k].isdigit():
+                    k += 1
+                run = part[i:j]
+                if k < n and part[k].islower() and k == j and len(run) > 1:
+                    # ReadHTTPClient: the last capital starts the next word,
+                    # unless the whole run is an acronym. Then a plural s or a
+                    # version like the v4 in IPv4 stays with it, and anything
+                    # else is a word of its own.
+                    if run in ACRONYMS:
+                        m = k
+                        while m < n and part[m].islower():
+                            m += 1
+                        tail = part[k:m]
+                        if tail == "s" or (m < n and part[m].isdigit()):
+                            while m < n and part[m].isdigit():
+                                m += 1
+                            out.append(part[i:m])
+                            i = m
+                        else:
+                            out.append(run)
+                            i = j
+                        continue
+                    out.append(run[:-1])
+                    i = j - 1
+                    continue
+                if k < n and part[k].islower() and k == j:
+                    # One capital and then lower case: an ordinary word.
+                    m = k
+                    while m < n and (part[m].islower() or part[m].isdigit()):
+                        m += 1
+                    out.append(part[i:m])
+                    i = m
+                    continue
+                out.append(part[i:k])
+                i = k
+            else:
+                m = i
+                while m < n and not part[m].isupper():
+                    m += 1
+                if out and part[i].isdigit():
+                    out[-1] += part[i:m]
+                else:
+                    out.append(part[i:m])
+                i = m
+    return [w for w in out if w]
+
+
+def snake(name):
+    return "_".join(w.lower() for w in words(name))
+
+
+def camel_segment(seg):
+    return "".join(p[:1].upper() + p[1:] for p in seg.split("_"))
+
+
+def type_name(path, name):
+    """R4: package and type run together, with the eponym collapse."""
+    key = (path, "type " + name)
+    if key in RENAMED:
+        return RENAMED[key]
+    seg = segment(path)
+    last = seg.rsplit("_", 1)[-1]
+    if name.lower() == last.lower() or name.lower() == seg.replace("_", "").lower():
+        return camel_segment(seg[: -len(last)].rstrip("_")) + name[:1].upper() + name[1:].lower()
+    return camel_segment(seg) + name
+
+
+def type_snake(path, name):
+    """R6: the method prefix, which is the C type name in snake case."""
+    return snake(type_name(path, name))
+
+
+# ------------------------------------------------------ Go's API manifest
+
+
+class Decl:
+    """One line of the manifest, and what it becomes in C."""
+
+    def __init__(self, path, text):
+        self.path = path
+        self.text = text
+        self.key = text
+        self.cname = None
+        self.owner = None  # the C struct or vtable a member has to be in
+        self.member = None
+        self.alternative = None
+        self.status = None
+        self.renamed = False
+
+
+def map_decl(d):
+    map_by_rule(d)
+    to = RENAMED.get((d.path, d.key))
+    if to is None:
+        return
+    d.renamed = True
+    if "." in to:
+        d.owner, d.member = to.split(".", 1)
+        d.alternative = None
+    else:
+        d.owner = d.member = d.alternative = None
+        d.cname = to
+
+
+def map_by_rule(d):
+    path, text = d.path, d.text
+    seg = segment(path)
+    m = re.match(r"^const (\w+)", text)
+    if m:
+        d.key = m.group(0)
+        d.cname = (seg + "_" + snake(m.group(1))).upper()
+        return
+    m = re.match(r"^var (\w+)", text)
+    if m:
+        d.key = m.group(0)
+        d.cname = seg + "_" + snake(m.group(1))
+        return
+    m = re.match(r"^func (\w+)", text)
+    if m:
+        d.key = m.group(0)
+        d.cname = seg + "_" + snake(m.group(1))
+        return
+    m = re.match(r"^method \((\*?)(\w+)(\[[^\]]*\])?\) (\w+)", text)
+    if m:
+        d.key = "method (%s%s) %s" % (m.group(1), m.group(2), m.group(4))
+        d.cname = type_snake(path, m.group(2)) + "_" + snake(m.group(4))
+        return
+    m = re.match(r"^type (\w+)(\[[^\]]*\])? (struct|interface), (.*)$", text)
+    if m:
+        tname, kind, rest = m.group(1), m.group(3), m.group(4)
+        owner = type_name(path, tname)
+        if rest == "unexported methods":
+            d.key = "type %s interface, unexported methods" % tname
+            d.cname = owner
+            return
+        if rest.startswith("embedded "):
+            what = rest[len("embedded "):].lstrip("*").rsplit(".", 1)[-1]
+            d.key = "type %s struct, embedded %s" % (tname, what)
+            d.owner = owner
+            d.member = snake(what)
+            return
+        fm = re.match(r"(\w+)", rest)
+        d.key = "type %s %s, %s" % (tname, kind, fm.group(1))
+        if kind == "struct":
+            d.owner = owner
+            d.member = snake(fm.group(1))
+        else:
+            d.owner = owner + "VT"
+            d.member = snake(fm.group(1))
+            d.alternative = type_snake(path, tname) + "_" + snake(fm.group(1))
+        return
+    m = re.match(r"^type (\w+)", text)
+    if m:
+        d.key = m.group(0)
+        d.cname = type_name(path, m.group(1))
+        return
+    raise SystemExit("%s: cannot read this line of the Go API: pkg %s, %s" % (PROG, path, text))
+
+
+def goroot():
+    root = os.environ.get("GOROOT")
+    if root:
+        return root
+    try:
+        return subprocess.run(["go", "env", "GOROOT"], check=True, capture_output=True, text=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        raise SystemExit("%s: needs a Go toolchain on PATH or GOROOT set" % PROG)
+
+
+LINE = re.compile(r"^pkg ([^ ,]+)(?: \(([^)]*)\))?, (.*)$")
+
+
+def read_api(api_dir, targets):
+    files = sorted(glob.glob(os.path.join(api_dir, "go1*.txt")))
+    if not files:
+        raise SystemExit("%s: no go1*.txt in %s" % (PROG, api_dir))
+    want = set(targets)
+    seen = set()
+    by_pkg = {}
+    for f in files:
+        with open(f) as fh:
+            for line in fh:
+                m = LINE.match(line.rstrip("\n"))
+                if not m:
+                    continue
+                path, plat, text = m.groups()
+                if plat is not None and re.sub(r"-cgo$", "", plat) not in want:
+                    continue
+                if (path, text) in seen:
+                    continue
+                seen.add((path, text))
+                by_pkg.setdefault(path, []).append(Decl(path, text))
+    return by_pkg
+
+
+def public_packages():
+    out = subprocess.run(["go", "list", "std"], check=True, capture_output=True, text=True).stdout.split()
+    return [p for p in out if not re.search(r"(^|/)(internal|vendor)(/|$)", p) and not p.startswith("cmd/")]
+
+
+# ------------------------------------------------------------ the headers
+
+
+def strip_c(text):
+    """Comments and string literals out, line structure kept."""
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append("\n" * text.count("\n", i, j))
+            i = j
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+        elif c in "\"'":
+            j = i + 1
+            while j < n and text[j] != c:
+                j += 2 if text[j] == "\\" else 1
+            out.append(c + c)
+            i = j + 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+class Headers:
+    def __init__(self, files):
+        self.tokens = set()
+        self.members = {}
+        for f in files:
+            with open(f) as fh:
+                code = strip_c(fh.read())
+            self.tokens.update(TOKEN.findall(code))
+            self.read_structs(code)
+
+    def read_structs(self, code):
+        # typedef struct Tag { ... } Name; and struct Name { ... };, with the
+        # members being the last identifier of each declaration inside, or the
+        # name inside (*name) for a function pointer. BURROW_FUNC and friends
+        # are macros, so a member declared through one is found by its name
+        # appearing at all, which is what the fallback below does.
+        for m in re.finditer(r"\b(?:struct|union)\s+(\w+)?\s*\{", code):
+            depth = 1
+            i = m.end()
+            while i < len(code) and depth:
+                if code[i] == "{":
+                    depth += 1
+                elif code[i] == "}":
+                    depth -= 1
+                i += 1
+            body = code[m.end() : i - 1]
+            tail = re.match(r"\s*(\w+)\s*;", code[i:])
+            names = [x for x in (m.group(1), tail.group(1) if tail else None) if x]
+            members = set()
+            for part in re.split(r";", re.sub(r"\{[^{}]*\}", " ", body)):
+                fp = re.search(r"\(\s*\*\s*(\w+)\s*\)", part)
+                if fp:
+                    members.add(fp.group(1))
+                    continue
+                ids = TOKEN.findall(re.sub(r"\[[^\]]*\]|:\s*\w+", " ", part))
+                if ids:
+                    members.add(ids[-1])
+                # Several declarators on one line: Int a, b;
+                for extra in re.findall(r",\s*\**\s*(\w+)", part):
+                    members.add(extra)
+            for name in names:
+                self.members.setdefault(name, set()).update(members)
+
+    def has(self, name):
+        return name in self.tokens
+
+    def has_member(self, owner, member):
+        return member in self.members.get(owner, ())
+
+
+def header_files(paths):
+    if paths:
+        return paths
+    return sorted(glob.glob(os.path.join(ROOT, "include", "burrow", "**", "*.h"), recursive=True))
+
+
+# ------------------------------------------------------------- the lists
+
+
+def read_list(path):
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path) as fh:
+        for n, line in enumerate(fh, 1):
+            line = line.split("#", 1)[0].rstrip()
+            if line.strip():
+                out.append((n, line.strip()))
+    return out
+
+
+def read_waivers(path):
+    """package: declaration: reason, where the declaration may be *."""
+    waivers = {}
+    for n, line in read_list(path):
+        parts = [p.strip() for p in line.split(":", 2)]
+        if len(parts) != 3 or not parts[2]:
+            raise SystemExit("%s:%d: a waiver is package: declaration: reason" % (path, n))
+        waivers[(parts[0], parts[1])] = parts[2]
+    return waivers
+
+
+# ------------------------------------------------------------ the report
+
+
+def classify(d, headers, waivers):
+    if (d.path, d.key) in waivers or (d.path, "*") in waivers:
+        return "waived"
+    if d.owner is not None:
+        if headers.has_member(d.owner, d.member):
+            return "renamed" if d.renamed else "present"
+        if d.alternative and headers.has(d.alternative):
+            return "present"
+        return "missing"
+    if not headers.has(d.cname):
+        return "missing"
+    return "renamed" if d.renamed else "present"
+
+
+def c_spelling(d):
+    if d.owner is not None:
+        s = "%s.%s" % (d.owner, d.member)
+        if d.alternative:
+            s += " or " + d.alternative
+        return s
+    return d.cname
+
+
+def main():
+    p = argparse.ArgumentParser(prog=PROG, description="How much of Go's standard library burrow declares.")
+    p.add_argument("packages", nargs="*", help="import paths, all public packages by default")
+    p.add_argument("-v", "--verbose", action="store_true", help="every declaration and its C name")
+    p.add_argument("--missing", action="store_true", help="only declarations that are missing")
+    p.add_argument("--go-api", help="the directory with go1*.txt, $GOROOT/api by default")
+    p.add_argument("--target", action="append", help="a platform to count, repeatable, the three release targets by default")
+    p.add_argument("--header", action="append", help="a header to read, repeatable, include/burrow by default")
+    p.add_argument("--done", default=os.path.join(HERE, "coverage-done.txt"), help="the finished packages")
+    p.add_argument("--waivers", default=os.path.join(HERE, "coverage-waivers.txt"), help="the waived declarations")
+    p.add_argument("--no-gate", action="store_true", help="report only, never fail")
+    args = p.parse_args()
+
+    api_dir = args.go_api or os.path.join(goroot(), "api")
+    decls = read_api(api_dir, args.target or TARGETS)
+    headers = Headers(header_files(args.header))
+    waivers = read_waivers(args.waivers)
+    done = [line for _, line in read_list(args.done)]
+
+    # A package can be public and declare nothing, like unsafe, whose contents
+    # are builtins, or time/tzdata, which is imported for its side effect.
+    public = public_packages()
+    packages = args.packages or public
+    unknown = [pkg for pkg in packages + done if pkg not in decls and pkg not in public]
+    if unknown:
+        raise SystemExit("%s: not a public standard package: %s" % (PROG, " ".join(unknown)))
+
+    failed = []
+    totals = {"present": 0, "missing": 0, "waived": 0}
+    width = max(len(pkg) for pkg in packages)
+    for pkg in packages:
+        counts = {"present": 0, "missing": 0, "waived": 0}
+        rows = []
+        for d in decls.get(pkg, []):
+            map_decl(d)
+            d.status = classify(d, headers, waivers)
+            counts["present" if d.status == "renamed" else d.status] += 1
+            rows.append(d)
+        for k in totals:
+            totals[k] += counts[k]
+        total = len(rows)
+        want = total - counts["waived"]
+        pct = 100.0 * counts["present"] / want if want else 100.0
+        gated = pkg in done
+        mark = ""
+        if gated:
+            mark = "done" if counts["missing"] == 0 else "FAIL"
+            if counts["missing"]:
+                failed.append(pkg)
+        elif counts["present"] and not counts["missing"]:
+            mark = "complete, not in the done list"
+        elif counts["present"]:
+            mark = "partial"
+        extra = "  %d waived" % counts["waived"] if counts["waived"] else ""
+        if not args.missing or counts["missing"]:
+            print("%-*s %5d/%-5d %6.1f%%  %s%s" % (width, pkg, counts["present"], want, pct, mark, extra))
+        if args.verbose or args.missing:
+            for d in rows:
+                if args.missing and d.status != "missing":
+                    continue
+                print("    %-8s %-52s %s" % (d.status, d.text if len(d.text) <= 52 else d.key, c_spelling(d)))
+
+    want = totals["present"] + totals["missing"]
+    print("-" * (width + 30))
+    print(
+        "%-*s %5d/%-5d %6.2f%%  %d packages, %d waived"
+        % (width, "total", totals["present"], want, 100.0 * totals["present"] / want if want else 100.0, len(packages), totals["waived"])
+    )
+    if failed and not args.no_gate:
+        print(
+            "\n%s: %s %s listed in %s and still missing declarations. Add them, or "
+            "waive them in %s with a reason." % (PROG, " ".join(failed), "is" if len(failed) == 1 else "are",
+                                                 os.path.relpath(args.done), os.path.relpath(args.waivers)),
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

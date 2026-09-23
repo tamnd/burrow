@@ -259,31 +259,39 @@ there. It runs in CI. If the unprefixed design ever becomes untenable, that
 report is how we will find out — not a user's build log.
 ## 2. The coverage gate
 
-The mapping's whole purpose. `tools/coverage.c` in `tamnd/burrow`:
+The mapping's whole purpose. `tools/burrow-coverage` in `tamnd/burrow`:
 
-1. Parse `$GOROOT/api/go1.txt` … `go1.27.txt`, union them, collapse per-OS/arch
-   variants to the configured target. → 23,730 declarations.
-2. Apply R1–R12 to each, producing an expected C symbol name and a mapped
-   signature.
-3. Parse `burrow.h` (the generated full amalgamation header).
-4. Report, per package: present / missing / signature-mismatch / extra.
+1. Read `$GOROOT/api/go1.txt` … `go1.27.txt` and take the union, keeping a
+   platform specific line if it exists on linux-amd64, darwin-arm64 or
+   windows-amd64. → 23,730 declarations, the same count as `tools/inventory.sh`.
+2. Apply R1–R12 to each, producing the expected C name. The few places where a
+   header spells a name differently on purpose are a table in the tool, each
+   entry pointing at the argument for it.
+3. Read the public headers under `include/burrow`, which are what `burrow.h`
+   is made of.
+4. Report, per package: present / missing / waived. Signatures are not compared
+   yet.
 
 ```
-$ burrow-coverage --go-api $GOROOT/api --target linux-amd64
-  archive/tar          85/85    100.0%  ✓
-  archive/zip          78/78    100.0%  ✓
-  ...
-  crypto/tls          352/352   100.0%  ✓
-  net/http            505/505   100.0%  ✓
-  simd/archsimd         0/61      0.0%  ✗ WAIVED (17-open-questions §2)
-  ------------------------------------------------
-  TOTAL            23,669/23,730  99.74%   61 waived, 0 unexplained
+$ tools/burrow-coverage sync sync/atomic unicode/utf8 context
+sync            46/46     100.0%  done
+sync/atomic     94/94     100.0%  done
+unicode/utf8    23/23     100.0%  done
+context         19/21      90.5%  partial
+------------------------------------------
+total          182/184    98.91%  4 packages, 0 waived
 ```
 
-**Any unexplained missing symbol fails CI.** Waivers live in a checked-in file
-with a reason and a link to the ledger entry in [01](01-scope.md) §6; adding one
-requires review. That is the entire enforcement mechanism for the project's
-headline claim, and it is about 800 lines of code.
+The gate is per package. `tools/coverage-done.txt` lists the packages that are
+finished, and one of those missing a declaration fails CI. A package joins the
+list in the pull request that finishes it, so it cannot lose a declaration
+afterwards without somebody noticing. The rest are reported, which keeps the
+total a trend rather than a surprise.
+
+**Any unexplained missing symbol in a finished package fails CI.** Waivers live
+in `tools/coverage-waivers.txt` with a reason and a link to the ledger entry in
+[01](01-scope.md) §6; adding one requires review. That is the entire enforcement
+mechanism for the project's headline claim, and it is about 500 lines of Python.
 
 ## 3. Header layout
 

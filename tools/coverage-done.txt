@@ -1,0 +1,9 @@
+# The packages burrow says are finished, one import path per line.
+#
+# tools/burrow-coverage fails if any of these is missing a declaration that
+# tools/coverage-waivers.txt does not account for. A package is added in the
+# pull request that finishes it and is never taken out.
+
+sync/atomic
+unicode/utf8
+sync

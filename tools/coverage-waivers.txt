@@ -1,0 +1,9 @@
+# Declarations burrow will never have, one per line, as
+#
+#     package: declaration: reason
+#
+# The declaration is spelled the way tools/burrow-coverage -v prints it, like
+# func Contains or type Pool struct, New, or it is * for the whole package. The
+# reason says why, with a link to the entry in docs/design/01-scope.md section 6
+# that argues for it. Adding a line here needs the same review as removing a
+# feature, because that is what it is.

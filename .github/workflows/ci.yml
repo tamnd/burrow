@@ -360,9 +360,9 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1
 
-  # Not a gate yet. It is here from the first commit so that the number is a
-  # trend rather than a surprise, and so the day it becomes a gate nobody has to
-  # build the tooling under deadline.
+  # Every declaration in Go's API files mapped to its C name and looked for in
+  # the headers. The packages in tools/coverage-done.txt have to be complete,
+  # and the rest are reported so the number is a trend rather than a surprise.
   coverage-gate:
     name: coverage against go1.27.1
     runs-on: ubuntu-latest
@@ -374,9 +374,4 @@ jobs:
           go-version: "1.27.1"
           cache: false
       - name: how much of the standard library exists
-        run: |
-          if [ -x tools/coverage.sh ]; then
-            tools/coverage.sh
-          else
-            echo "tools/coverage.sh does not exist yet, see issue #1"
-          fi
+        run: tools/burrow-coverage

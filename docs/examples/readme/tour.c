@@ -46,6 +46,12 @@ static void text(Alloc *a) {
     // doc: end
     printf(STR_FMT " %d " STR_FMT "\n", STR_ARG(pi), back == 3.141592653589793,
            STR_ARG(quoted));
+
+    // doc: fmt
+    Int xs[] = {3, 1, 4};
+    fmt_printf_v("%-6s|%5.2f|%v|%q\n", "pi", 3.14159, slice_from(xs, 3, 3, TYPE_INT),
+                 'x');
+    // doc: end
 }
 
 static void strings(void) {
@@ -397,6 +403,7 @@ no argument is 0 bytes
 1: e9
 3: 21
 3.141592653589793 1 "tab\there, \xff"
+pi    | 3.14|[3 1 4]|'x'
 8 bytes
 same bytes
 xs[0] is 42

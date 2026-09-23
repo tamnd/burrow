@@ -153,6 +153,19 @@ Str quoted = strconv_quote(a, S("tab\there, \xff"));
 
 A differential fuzzer runs the whole package against Go's own on the same input, and the benchmarks put parsing a little ahead of Go and formatting level with it. Details: [docs/guides/strconv.md](docs/guides/strconv.md).
 
+## Printing
+
+`fmt` prints the way Go does, with the same verbs, flags and output, because every operand carries its type descriptor with it.
+
+<!-- example: docs/examples/readme/tour.c#fmt -->
+```c
+Int xs[] = {3, 1, 4};
+fmt_printf_v("%-6s|%5.2f|%v|%q\n", "pi", 3.14159, slice_from(xs, 3, 3, TYPE_INT),
+             'x');
+```
+
+`%v` prints anything, including structs and maps, a type with a `String` method prints through it, and a verb that does not fit its operand prints a note like `%!d(string=x)` instead of reading garbage off the stack. Details: [docs/guides/fmt.md](docs/guides/fmt.md).
+
 ## Types
 
 Go's library leans on its type system far more than it looks like it does. `fmt` prints anything because it can ask the value what it is, `encoding/json` walks a struct nobody wrote code for, `sort` works on a slice of anything. None of that is possible in C unless the types describe themselves, so in burrow they do.

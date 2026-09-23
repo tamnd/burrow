@@ -544,7 +544,7 @@ def run_reflect(args):
 # too. burrow.h checks the combination up front, so leaving out a package that a
 # kept one needs is an #error that says which, rather than a link error later.
 
-AMALG_INCLUDE = re.compile(r'^\s*#\s*include\s+"(burrow/[^"]+|internal\.h)"')
+AMALG_INCLUDE = re.compile(r'^\s*#\s*include\s+"(burrow/[^"]+|[a-z0-9_]+\.h)"')
 AMALG_DEFINE = re.compile(r"^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)")
 AMALG_ANY_INCLUDE = re.compile(r"^\s*#\s*include\b")
 AMALG_DIRECTIVE = re.compile(r"^\s*#")
@@ -575,9 +575,12 @@ class Amalgamation:
         return sorted(out)
 
 
-def amalg_header_path(name):
-    if name == "internal.h":
-        return "src/pal/internal.h"
+def amalg_header_path(name, includer):
+    """Where an #include points. A name with no directory is a header private to
+    the directory of the file that includes it, as src/fmt/format.h is to the
+    files in src/fmt."""
+    if "/" not in name:
+        return os.path.dirname(includer) + "/" + name
     return "include/" + name
 
 
@@ -599,7 +602,7 @@ def amalg_order(start, lines_of, skip=()):
         for line in lines_of(path):
             m = AMALG_INCLUDE.match(line)
             if m:
-                visit(amalg_header_path(m.group(1)), via + [path])
+                visit(amalg_header_path(m.group(1), path), via + [path])
         state[path] = "done"
         order.append(path)
 
@@ -644,14 +647,17 @@ class Packages:
                 if h in self.owner:
                     raise Error("%s has two burrow:package lines" % h)
                 self.owner[h] = m.group(1)
-        for s in sources:
+        # A header private to a package's directory belongs to the package the
+        # same way the directory's sources do, by the first header it includes.
+        private = [h for h in headers if h.startswith("src/") and h not in self.owner]
+        for s in private + list(sources):
             parts = s.split("/")
             core = len(parts) == 2 or parts[1] in AMALG_CORE_DIRS
             first = None
             for line in lines_of(s):
                 m = AMALG_INCLUDE.match(line)
                 if m:
-                    first = amalg_header_path(m.group(1))
+                    first = amalg_header_path(m.group(1), s)
                     break
             if core:
                 continue
@@ -673,7 +679,7 @@ class Packages:
                 for line in lines_of(rel):
                     m = AMALG_INCLUDE.match(line)
                     if m:
-                        h = amalg_header_path(m.group(1))
+                        h = amalg_header_path(m.group(1), rel)
                         if h != AMALG_UMBRELLA:
                             out.add(h)
                             out |= reach(h)
@@ -790,7 +796,7 @@ def run_amalgamate(args):
         raise Error("include/burrow/version.h has no BURROW_VERSION_STRING")
 
     all_headers = amalg_order(
-        [AMALG_UMBRELLA] + a.files("include", ".h") + ["src/pal/internal.h"], lines_of
+        [AMALG_UMBRELLA] + a.files("include", ".h") + a.files("src", ".h"), lines_of
     )
     all_sources = a.files("src", ".c")
     pk = Packages(all_headers, all_sources, lines_of)
@@ -806,7 +812,7 @@ def run_amalgamate(args):
 
     public = amalg_order([AMALG_UMBRELLA], lines_of, skip)
     everything = amalg_order(
-        public + a.files("include", ".h") + ["src/pal/internal.h"], lines_of, skip
+        public + a.files("include", ".h") + a.files("src", ".h"), lines_of, skip
     )
     private = [h for h in everything if h not in public]
     sources = [s for s in all_sources if s not in skip]

@@ -65,7 +65,9 @@
 
 #include "burrow/core.h"
 #include "burrow/func.h"
+#include "burrow/map.h"
 #include "burrow/mem.h"
+#include "burrow/slice.h"
 #include "burrow/type.h"
 
 #ifdef __cplusplus
@@ -211,7 +213,156 @@ extern const Type *const TYPE_ANY;
  * makes one when the pool is empty. */
 BURROW_FUNC0(AnyFunc, Any);
 
+/* ------------------------------------------------------------ any from a value
+ *
+ * An Any from a plain C value, with the descriptor picked by the value's C type:
+ *
+ *     Int n = 42;
+ *     Any a = BURROW_ANY_OF(n);        an int
+ *     Any b = BURROW_ANY_OF(2.5);      a float64
+ *     Any c = BURROW_ANY_OF("hello");  a string
+ *
+ * This is what fmt's _v forms do to every argument, and it is the reason those
+ * read like a Go call. It copies the value into a compound literal, so an
+ * rvalue works and the result lives until the end of the enclosing block, the
+ * same rule BURROW_ANY_VAL has.
+ *
+ * C types do not map one to one onto Go types, so the choices are written down:
+ *
+ *     Int, and int64_t where it is the same type      int
+ *     Uint, and uint64_t where it is the same type    uint
+ *     int, unsigned, and int32_t where it is int      int, uint
+ *     the other exact width integers                  int8 to uint64
+ *     char                                            uint8, Go's byte
+ *     long and long long                              by their size
+ *     float, double                                   float32, float64
+ *     bool, Complex64, Complex128, Str                themselves
+ *     char * and const char *                         string, NULL is nil
+ *     Error                                           error, a nil one is nil
+ *     Slice, Map *                                    []elem and map[key]elem
+ *     Any                                             passed through
+ *     any other pointer                               unsafe.Pointer
+ *
+ * A struct has no entry because C cannot tell one struct from another here, and
+ * passing one is a compile error rather than a guess. BURROW_ANY with the
+ * struct's descriptor is the way to hand one over. */
+
+/* Room for the value and, for a slice or a map, for the descriptor that has to
+ * be made up on the spot, since []int is a type with no object of its own. */
+typedef struct burrow__AnyBox {
+    union {
+        bool b;
+        int8_t i8;
+        int16_t i16;
+        int32_t i32;
+        int64_t i64;
+        uint8_t u8;
+        uint16_t u16;
+        uint32_t u32;
+        uint64_t u64;
+        Int i;
+        Uint u;
+        float f32;
+        double f64;
+        Complex64 c64;
+        Complex128 c128;
+        Str s;
+        Error e;
+        Slice sl;
+        Map *m;
+        const volatile void *p;
+    } v;
+    Type t;
+} burrow__AnyBox;
+
+BURROW_BORROWS(ret, v) Any burrow__any_of_any(Any v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_str(Str v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_error(Error v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_slice(Slice v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_map(Map *v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_c64(Complex64 v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_c128(Complex128 v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_bool(bool v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_f32(float v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_f64(double v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_cstr(const char *v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_int(Int v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_uint(Uint v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_cint(int v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_cuint(unsigned v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_i8(int8_t v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_i16(int16_t v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_i32(int32_t v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_i64(int64_t v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_u8(uint8_t v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_u16(uint16_t v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_u32(uint32_t v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_u64(uint64_t v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_char(char v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_long(long v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_ulong(unsigned long v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_llong(long long v, burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_ullong(unsigned long long v,
+                                                   burrow__AnyBox *box);
+BURROW_BORROWS(ret, box) Any burrow__any_of_ptr(const volatile void *v,
+                                                burrow__AnyBox *box);
+
+/* Five steps rather than one _Generic, because a _Generic may not name the same
+ * type twice and the typedefs collide differently on every platform: int64_t is
+ * long on one and long long on another, Int is int64_t, and int32_t is int.
+ * Each step names only types that cannot be equal to each other, and whatever
+ * an earlier step claimed never reaches a later one. */
+#define BURROW__ANY_OF5(x)                                                             \
+    _Generic((x),                                                                      \
+        long: burrow__any_of_long,                                                     \
+        unsigned long: burrow__any_of_ulong,                                           \
+        long long: burrow__any_of_llong,                                               \
+        unsigned long long: burrow__any_of_ullong,                                     \
+        default: burrow__any_of_ptr)
+
+#define BURROW__ANY_OF4(x)                                                             \
+    _Generic((x),                                                                      \
+        int8_t: burrow__any_of_i8,                                                     \
+        int16_t: burrow__any_of_i16,                                                   \
+        int32_t: burrow__any_of_i32,                                                   \
+        int64_t: burrow__any_of_i64,                                                   \
+        uint8_t: burrow__any_of_u8,                                                    \
+        uint16_t: burrow__any_of_u16,                                                  \
+        uint32_t: burrow__any_of_u32,                                                  \
+        uint64_t: burrow__any_of_u64,                                                  \
+        char: burrow__any_of_char,                                                     \
+        default: BURROW__ANY_OF5(x))
+
+#define BURROW__ANY_OF3(x)                                                             \
+    _Generic((x),                                                                      \
+        int: burrow__any_of_cint,                                                      \
+        unsigned: burrow__any_of_cuint,                                                \
+        default: BURROW__ANY_OF4(x))
+
+#define BURROW__ANY_OF2(x)                                                             \
+    _Generic((x),                                                                      \
+        Int: burrow__any_of_int,                                                       \
+        Uint: burrow__any_of_uint,                                                     \
+        default: BURROW__ANY_OF3(x))
+
+#define BURROW_ANY_OF(x)                                                               \
+    _Generic((x),                                                                      \
+        Any: burrow__any_of_any,                                                       \
+        Str: burrow__any_of_str,                                                       \
+        Error: burrow__any_of_error,                                                   \
+        Slice: burrow__any_of_slice,                                                   \
+        Map *: burrow__any_of_map,                                                     \
+        Complex64: burrow__any_of_c64,                                                 \
+        Complex128: burrow__any_of_c128,                                               \
+        bool: burrow__any_of_bool,                                                     \
+        float: burrow__any_of_f32,                                                     \
+        double: burrow__any_of_f64,                                                    \
+        char *: burrow__any_of_cstr,                                                   \
+        const char *: burrow__any_of_cstr,                                             \
+        default: BURROW__ANY_OF2(x))((x), &(burrow__AnyBox){.v = {0}})
+
 #if defined(BURROW_SHORT) && BURROW_SHORT
+#define ANY_OF(x) BURROW_ANY_OF(x)
 #define CALL(v, m, ...) BURROW_CALL(v, m, __VA_ARGS__)
 #define CALL0(v, m) BURROW_CALL0(v, m)
 #define ANY(t, ptr) BURROW_ANY(t, ptr)

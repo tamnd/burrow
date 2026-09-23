@@ -28,3 +28,4 @@ docs/guides/sync.md
 docs/guides/building.md
 README.md
 docs/guides/strconv.md
+docs/guides/fmt.md

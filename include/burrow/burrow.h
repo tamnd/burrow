@@ -44,6 +44,7 @@
 #include "burrow/declare.h"
 #include "burrow/defer.h"
 #include "burrow/error.h"
+#include "burrow/fmt.h"
 #include "burrow/func.h"
 #include "burrow/iface.h"
 #include "burrow/io.h"

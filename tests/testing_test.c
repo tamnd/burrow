@@ -868,14 +868,7 @@ static void normalise(Buf *out, const char *s) {
 }
 
 /* Runs this binary on a scenario, with the flags in front. */
-static int spawn(const char *flags, const char *scenario, Buf *out) {
-    char cmd[1024];
-#ifdef _WIN32
-    snprintf(cmd, sizeof cmd, "\"\"%s\" %s child %s 2>&1\"", self_path, flags,
-             scenario);
-#else
-    snprintf(cmd, sizeof cmd, "'%s' %s child %s 2>&1", self_path, flags, scenario);
-#endif
+static int run_cmd(const char *cmd, Buf *out) {
     FILE *f = popen(cmd, "r");
     if (f == NULL)
         return -1;
@@ -895,6 +888,31 @@ static int spawn(const char *flags, const char *scenario, Buf *out) {
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 #endif
 }
+
+static int spawn(const char *flags, const char *scenario, Buf *out) {
+    char cmd[4096];
+#ifdef _WIN32
+    snprintf(cmd, sizeof cmd, "\"\"%s\" %s child %s 2>&1\"", self_path, flags,
+             scenario);
+#else
+    snprintf(cmd, sizeof cmd, "'%s' %s child %s 2>&1", self_path, flags, scenario);
+#endif
+    return run_cmd(cmd, out);
+}
+
+#ifndef _WIN32
+/* spawn, with Ctrl-C pressed once a second until the child is gone. More than
+ * once because the shell starts a background job with SIGINT ignored, so one
+ * that lands before the child has a handler of its own does nothing. */
+static int spawn_interrupted(const char *flags, const char *scenario, Buf *out) {
+    char cmd[4096];
+    snprintf(cmd, sizeof cmd,
+             "'%s' %s child %s 2>&1 & p=$!; for i in 1 2 3 4 5 6 7 8 9 10; do "
+             "sleep 1; kill -INT $p 2>/dev/null || break; done; wait $p",
+             self_path, flags, scenario);
+    return run_cmd(cmd, out);
+}
+#endif
 
 /* Writes the testdata/fuzz tree the fuzzdir scenario runs in, next to this
  * binary so that nothing lands in the source tree. */
@@ -1441,6 +1459,19 @@ static void TestFuzzing(TestingT *t) {
         !has(&out, "execs: 300 (") || !has(&out, "\nPASS\n"))
         testing_t_errorf_v(t, "FuzzFine: exit status %d, output\n%s", code, out.p);
     buf_free(&out);
+
+#ifndef _WIN32
+    /* With no end given, fuzzing runs until Ctrl-C, which stops it the way a
+     * deadline would and passes, as go test -fuzz does. */
+    snprintf(flags, sizeof flags, "-test.fuzz=FuzzFine -test.fuzzcachedir=\"%s\"",
+             cache);
+    out = (Buf){0};
+    code = spawn_interrupted(flags, "fuzzgen", &out);
+    if (code != 0 || !has(&out, "now fuzzing with ") || !has(&out, "\nPASS\n"))
+        testing_t_errorf_v(t, "FuzzFine interrupted: exit status %d, output\n%s", code,
+                           out.p);
+    buf_free(&out);
+#endif
 
     snprintf(flags, sizeof flags, "-test.fuzz=Fuzz -test.fuzzcachedir=\"%s\"", cache);
     out = (Buf){0};

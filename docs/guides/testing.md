@@ -480,6 +480,8 @@ FAIL
 
 That file is a seed from then on, so a plain run of the program fails on it until the bug is fixed. A panic in the fuzz function fails the input with the panic and its stack, as Go reports it. A worker that exits or crashes fails the input it was running, and that input is written out as it was, since the worker is gone and cannot shrink it.
 
+Ctrl-C stops fuzzing the way it does in Go. The workers finish the input they are on, the program prints a last stats line and PASS, and it exits 0, since nothing failed. If a failing input was being shrunk when you pressed it, shrinking stops, the input is written out as it was found, and the run fails, as it does in Go. On Windows, Ctrl-C still ends the program at once, as burrow does not catch console events yet.
+
 ## What is not there yet
 
 Fuzzing is not guided by coverage. Go builds the test with coverage counters and keeps the inputs that reach new code. burrow has no such counters, so every input is a fresh mutation of the corpus, "new interesting" stays at zero, and the cache only grows through failing inputs. That finds shallow bugs well and deep ones slowly. The flags for profiles, coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.

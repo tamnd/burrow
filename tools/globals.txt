@@ -133,6 +133,7 @@ global	src/runtime/symtab.c	symtab_sorted_len	symbol-table	How long symtab_sorte
 global	src/testing/testing.c	pkg	package-vars	Go's flag values, the running tests and the failure count for -failfast. Written by testing_init and flag parsing before any test starts, and after that only under pkg.reg_mu.
 global	src/testing/testing.c	timeout_alarm	package-vars	The -test.timeout thread. Started and joined by testing_m_run on the thread that runs it, so nothing else ever touches it.
 global	src/testing/fuzz.c	fuzz_global_inc	package-vars	internal/fuzz's globalInc, what each new generator adds one to for its stream. Only ever touched with an atomic add.
+global	src/testing/fuzz.c	fuzz_interrupt	signal-table	Whether SIGINT stops fuzzing or kills the process, and whether it has arrived, which a handler has to be able to reach with no argument to find it by. Only ever touched atomically, and the handler does nothing else.
 global	src/pal/proc_posix.c	fork_lock	package-vars	This is the synchronisation, and a lock is what it is. Go has the same one as syscall.ForkLock: pal_spawn holds the write side across a fork, and anything that has a descriptor open without close on exec holds the read side until it is marked.
 global	src/pal/proc_windows.c	env_once	package-vars	Windows only. InitOnceExecuteOnce, which is the synchronisation for env_list below.
 global	src/pal/proc_windows.c	env_list	package-vars	Windows only. Written once inside env_once and only read after it, so every reader sees the finished list.

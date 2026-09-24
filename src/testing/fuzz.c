@@ -142,6 +142,40 @@ static bool fuzz_getenv(const char *name, Str *out) {
     return false;
 }
 
+/* -------------------------------------------------------------- interrupt */
+
+/* What testdeps gets from signal.NotifyContext(ctx, os.Interrupt): while
+ * fuzzing, Ctrl-C stops the coordinator and the workers the way a deadline
+ * does, so a crash being minimized is still written, instead of killing them.
+ * The terminal sends it to the workers as well, and they finish the call they
+ * are on and answer it. FUZZ_INT_OFF is Go after stop, where the next one kills
+ * the process as it would have anyway. */
+enum { FUZZ_INT_OFF, FUZZ_INT_CATCHING, FUZZ_INT_CAUGHT };
+static uint32_t fuzz_interrupt;
+
+static bool fuzz_on_interrupt(int32_t sig, void *info, void *ctx) {
+    (void)sig;
+    (void)info;
+    (void)ctx;
+    uint32_t want = FUZZ_INT_CATCHING;
+    if (burrow__atomic_cas_u32(&fuzz_interrupt, &want, FUZZ_INT_CAUGHT))
+        return true;
+    return want == FUZZ_INT_CAUGHT;
+}
+
+static void fuzz_catch_interrupt(void) {
+    burrow__atomic_store_u32(&fuzz_interrupt, FUZZ_INT_CATCHING);
+    pal_signal_install(PAL_SIGINT, fuzz_on_interrupt, NULL);
+}
+
+static void fuzz_release_interrupt(void) {
+    burrow__atomic_store_u32(&fuzz_interrupt, FUZZ_INT_OFF);
+}
+
+static bool fuzz_interrupted(void) {
+    return burrow__atomic_load_u32(&fuzz_interrupt) == FUZZ_INT_CAUGHT;
+}
+
 /* ---------------------------------------------------------------- pcgRand */
 
 /* Go's globalInc, which gives every generator in the process its own
@@ -1292,7 +1326,8 @@ static void fuzz_serve_fuzz(FuzzServer *s, FuzzReader *r, FuzzBuf *resp) {
         } else {
             int64_t deadline = timeout != 0 ? start + timeout : 0;
             ArenaMark mark = arena_mark(&ar);
-            while (deadline == 0 || pal_clock_monotonic() < deadline) {
+            while ((deadline == 0 || pal_clock_monotonic() < deadline) &&
+                   !fuzz_interrupted()) {
                 if (h->count % FUZZ_CHAINED == 0) {
                     fuzz_views_reset(views, cells, orig, n);
                     h->rand_state = s->m.r.state;
@@ -1339,7 +1374,8 @@ typedef struct FuzzMin {
 
 static bool fuzz_min_stop(void *env) {
     FuzzMin *c = (FuzzMin *)env;
-    return (c->deadline != 0 && pal_clock_monotonic() >= c->deadline) ||
+    return fuzz_interrupted() ||
+           (c->deadline != 0 && pal_clock_monotonic() >= c->deadline) ||
            (c->limit > 0 && fuzz_hdr(&c->s->mem)->count >= c->limit);
 }
 
@@ -1504,13 +1540,16 @@ bool burrow__fuzz_worker(burrow__FuzzRun fn, void *env, Alloc *a, Str *err) {
     s.env = env;
     if (!fuzz_worker_comm(&s, a, err))
         return false;
+    fuzz_catch_interrupt();
     burrow__fuzz_mutator_init(&s.m);
     burrow__note_init(&s.wd_quit);
     bool wd = burrow__thread_start(&s.wd, fuzz_watchdog, &s, 0);
 
     bool ok = true;
     FuzzBuf resp = {0};
-    for (;;) {
+    /* serve's contextReader: once interrupted, the call after the one that
+     * was running is not waited for. */
+    while (!fuzz_interrupted()) {
         FuzzReader r = {.fd = s.in, .a = a};
         uint8_t kind = fuzz_get_u8(&r);
         if (r.failed) {
@@ -1558,6 +1597,7 @@ bool burrow__fuzz_worker(burrow__FuzzRun fn, void *env, Alloc *a, Str *err) {
     burrow__note_free(&s.wd_quit);
     burrow__fuzz_mutator_free(&s.m);
     pal_munmap(s.mem.region, s.mem.size, NULL);
+    fuzz_release_interrupt();
     return ok;
 }
 
@@ -1623,6 +1663,10 @@ typedef struct FuzzMinInput {
 /* workerFuzzDuration and workerTimeoutDuration. */
 #define FUZZ_WORKER_FUZZ_NS ((int64_t)100 * 1000000)
 #define FUZZ_WORKER_TIMEOUT_NS ((int64_t)1000000000)
+
+/* How often the coordinator looks for an interrupt while it has nothing else
+ * to do. */
+#define FUZZ_INT_POLL_NS ((int64_t)50 * 1000000)
 
 /* workerExitCode: what a worker exits with when F.Fuzz was used wrongly. */
 #define FUZZ_WORKER_EXIT_CODE 70
@@ -2870,6 +2914,7 @@ bool burrow__fuzz_coordinate(Alloc *a, const burrow__FuzzOpts *opts, Str *err,
                 panic_str(BURROW_S("testing: cannot start a fuzzing thread"));
     }
 
+    fuzz_catch_interrupt();
     int active = c.parallel;
     int64_t deadline = opts->timeout > 0 ? c.start_time + opts->timeout : 0;
     int64_t next_tick = c.start_time + (int64_t)3 * 1000000000;
@@ -2882,6 +2927,8 @@ bool burrow__fuzz_coordinate(Alloc *a, const burrow__FuzzOpts *opts, Str *err,
         if (opts->limit > 0 && c.count >= opts->limit)
             fuzz_stop(&c, &l, (Str){0}, (Str){0});
         if (!l.stopping && deadline != 0 && now >= deadline)
+            fuzz_stop(&c, &l, (Str){0}, (Str){0});
+        if (!l.stopping && fuzz_interrupted())
             fuzz_stop(&c, &l, (Str){0}, (Str){0});
 
         bool acted = false;
@@ -2943,6 +2990,10 @@ bool burrow__fuzz_coordinate(Alloc *a, const burrow__FuzzOpts *opts, Str *err,
         int64_t wake = next_tick;
         if (!l.stopping && deadline != 0 && deadline < wake)
             wake = deadline;
+        /* A handler cannot wake the loop, so it looks for an interrupt this
+         * often. */
+        if (!l.stopping && now + FUZZ_INT_POLL_NS < wake)
+            wake = now + FUZZ_INT_POLL_NS;
         if (l.stopping) {
             fuzz_escalate(&c, &l, now);
             int64_t t1 = l.stop_at + FUZZ_WORKER_TIMEOUT_NS;
@@ -2960,6 +3011,7 @@ bool burrow__fuzz_coordinate(Alloc *a, const burrow__FuzzOpts *opts, Str *err,
     burrow__unlock(&c.mu);
     for (int i = 0; i < c.parallel; i++)
         burrow__thread_join(&c.workers[i].thread);
+    fuzz_release_interrupt();
     if (c.parallel > 0)
         fuzz_log_stats(&c);
 

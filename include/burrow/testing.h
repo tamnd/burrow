@@ -797,7 +797,8 @@ int burrow__testing_main(int argc, char **argv, const burrow__TestingEntry *entr
 #define TESTING_MAIN(LIST) BURROW__TESTING_MAIN(LIST, false, testing_m_run)
 #define TESTING_MAIN_BARE(LIST) BURROW__TESTING_MAIN(LIST, true, testing_m_run)
 #define TESTING_MAIN_WITH(test_main, LIST) BURROW__TESTING_MAIN(LIST, false, test_main)
-#define TESTING_MAIN_BARE_WITH(test_main, LIST) BURROW__TESTING_MAIN(LIST, true, test_main)
+#define TESTING_MAIN_BARE_WITH(test_main, LIST)                                        \
+    BURROW__TESTING_MAIN(LIST, true, test_main)
 
 #ifdef __cplusplus
 }

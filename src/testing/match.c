@@ -1222,14 +1222,25 @@ burrow__TestingMatcher *burrow__testing_matcher_new(TestingMatchString match,
             exit(1);
         }
     }
-    m->sub_names = map_make(a, TYPE_STRING, TYPE_INT32, 0);
+    arena_init(&m->names, NULL, 0);
+    m->sub_names = map_make(arena_allocator(&m->names), TYPE_STRING, TYPE_INT32, 0);
     return m;
+}
+
+void burrow__testing_clear_sub_names(burrow__TestingMatcher *m) {
+    sync_mutex_lock(&m->mu);
+    map_free(m->sub_names);
+    arena_free(&m->names);
+    arena_init(&m->names, NULL, 0);
+    m->sub_names = map_make(arena_allocator(&m->names), TYPE_STRING, TYPE_INT32, 0);
+    sync_mutex_unlock(&m->mu);
 }
 
 void burrow__testing_matcher_free(burrow__TestingMatcher *m) {
     if (m == NULL)
         return;
     map_free(m->sub_names);
+    arena_free(&m->names);
     arena_free(&m->arena);
     mem_free(heap_allocator(), m, sizeof *m, _Alignof(burrow__TestingMatcher));
 }
@@ -1296,7 +1307,7 @@ static Str parse_subtest_number(Str s, int32_t *nn) {
 
 /* Go's unique, which holds m->mu. */
 static Str unique(burrow__TestingMatcher *m, Str parent, Str subname) {
-    Alloc *a = arena_allocator(&m->arena);
+    Alloc *a = arena_allocator(&m->names);
     Str base = fmt_sprintf_v(a, "%s/%s", parent, subname);
     for (;;) {
         int32_t n = sub_count(m, base);

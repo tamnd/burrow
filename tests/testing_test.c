@@ -518,6 +518,71 @@ static void child_fuzz_inside(void *env, TestingF *f) {
     testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, child_fuzz_inside_fn, f), TYPE_BOOL);
 }
 
+/* The targets -test.fuzz runs, in the fuzzgen scenario. FuzzLong fails on
+ * any input longer than three bytes, which the mutator finds at once and the
+ * minimizer can only bring down to four. */
+static void child_fuzz_long_fn(void *env, TestingT *t, Slice args) {
+    (void)env;
+    Bytes b = testing_fuzz_arg(args, 0, Bytes);
+    if (b.len > 3)
+        testing_t_errorf_v(t, "too long: %d bytes", b.len);
+}
+
+static void child_fuzz_long(void *env, TestingF *f) {
+    (void)env;
+    Byte seed[] = {'a', 'b'};
+    testing_f_add_v(f, slice_from(seed, 2, 2, TYPE_BYTE));
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, child_fuzz_long_fn, NULL),
+                     TYPE_BYTES);
+}
+
+static void child_fuzz_panic_fn(void *env, TestingT *t, Slice args) {
+    (void)env;
+    (void)t;
+    Str s = testing_fuzz_arg(args, 0, Str);
+    if (s.len > 5)
+        panic_str(BURROW_S("too much"));
+}
+
+static void child_fuzz_panic(void *env, TestingF *f) {
+    (void)env;
+    testing_f_add_v(f, "abc");
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, child_fuzz_panic_fn, NULL),
+                     TYPE_STRING);
+}
+
+/* Takes the worker down with it, which the coordinator has to notice. _Exit
+ * and not exit, so that a leak check at exit under a sanitizer does not turn
+ * the status into its own. */
+static void child_fuzz_exit_fn(void *env, TestingT *t, Slice args) {
+    (void)env;
+    (void)t;
+    Str s = testing_fuzz_arg(args, 0, Str);
+    if (s.len > 5)
+        _Exit(3);
+}
+
+static void child_fuzz_exit(void *env, TestingF *f) {
+    (void)env;
+    testing_f_add_v(f, "abc");
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, child_fuzz_exit_fn, NULL),
+                     TYPE_STRING);
+}
+
+static void child_fuzz_fine_fn(void *env, TestingT *t, Slice args) {
+    (void)env;
+    (void)t;
+    (void)testing_fuzz_arg(args, 0, Str);
+    (void)testing_fuzz_arg(args, 1, Int);
+}
+
+static void child_fuzz_fine(void *env, TestingF *f) {
+    (void)env;
+    testing_f_add_v(f, "x", (Int)1);
+    testing_f_fuzz_v(f, BURROW_FN(TestingFuzzFunc, child_fuzz_fine_fn, NULL),
+                     TYPE_STRING, TYPE_INT);
+}
+
 /* The targets that read testdata/fuzz, which fuzz_dir sets up. */
 static void child_fuzz_seeds_fn(void *env, TestingT *t, Slice args) {
     (void)env;
@@ -644,6 +709,26 @@ static int run_child(const char *scenario) {
                                                  {child_fuzz_broken, NULL}};
         fuzz[nf++] = (TestingInternalFuzzTarget){BURROW_S("FuzzNoDir"),
                                                  {child_fuzz_no_dir, NULL}};
+    } else if (strcmp(scenario, "fuzzgen") == 0) {
+        char dir[1024];
+        snprintf(dir, sizeof dir, "%s.gen", self_path);
+        PalErrno err;
+        if (!pal_mkdir(dir, 0755, &err) && err != PAL_EEXIST) {
+            fprintf(stderr, "mkdir %s: %s\n", dir, pal_errno_string(err));
+            return 3;
+        }
+        if (!pal_chdir(dir, &err)) {
+            fprintf(stderr, "chdir %s: %s\n", dir, pal_errno_string(err));
+            return 3;
+        }
+        fuzz[nf++] =
+            (TestingInternalFuzzTarget){BURROW_S("FuzzLong"), {child_fuzz_long, NULL}};
+        fuzz[nf++] = (TestingInternalFuzzTarget){BURROW_S("FuzzPanic"),
+                                                 {child_fuzz_panic, NULL}};
+        fuzz[nf++] =
+            (TestingInternalFuzzTarget){BURROW_S("FuzzFine"), {child_fuzz_fine, NULL}};
+        fuzz[nf++] =
+            (TestingInternalFuzzTarget){BURROW_S("FuzzExit"), {child_fuzz_exit, NULL}};
     } else if (strcmp(scenario, "panic") == 0) {
         tests[n++] = (TestingInternalTest){BURROW_S("TestPass"), {child_pass, NULL}};
         tests[n++] = (TestingInternalTest){BURROW_S("TestPanic"), {child_panic, NULL}};
@@ -1227,6 +1312,155 @@ static void TestOutput(TestingT *t) {
     check_scenarios(t, scenarios, sizeof scenarios / sizeof scenarios[0]);
 }
 
+/* -test.fuzz, for real: the child coordinates, its workers run the inputs,
+ * and a failing input ends up minimized in testdata. What the engine logs
+ * depends on the machine, so only the parts that do not are checked. */
+#ifdef _WIN32
+#define GEN_SEP "\\"
+#else
+#define GEN_SEP "/"
+#endif
+
+static bool has(const Buf *out, const char *want) {
+    return out->p != NULL && strstr(out->p, want) != NULL;
+}
+
+/* The file a crash went to, relative to the child's directory, which the
+ * test removes so that the next run starts clean. */
+static void forget_crash(const Buf *out, const char *target) {
+    static const char intro[] = "Failing input written to ";
+    const char *p = out->p != NULL ? strstr(out->p, intro) : NULL;
+    char rel[512];
+    if (p != NULL) {
+        p += sizeof intro - 1;
+        size_t n = strcspn(p, "\n");
+        snprintf(rel, sizeof rel, "%.*s", (int)n, p);
+    } else {
+        snprintf(rel, sizeof rel, "testdata" GEN_SEP "fuzz" GEN_SEP "%s", target);
+    }
+    char path[1024];
+    snprintf(path, sizeof path, "%s.gen" GEN_SEP "%s", self_path, rel);
+    pal_unlink(path, NULL);
+}
+
+static bool read_back(const char *path, char *buf, size_t cap) {
+    int64_t fd = pal_open(path, PAL_O_RDONLY, 0, NULL);
+    if (fd < 0)
+        return false;
+    int64_t n = pal_read(fd, buf, (int64_t)cap - 1, NULL);
+    pal_close(fd, NULL);
+    if (n < 0)
+        return false;
+    buf[n] = '\0';
+    return true;
+}
+
+static void TestFuzzing(TestingT *t) {
+    if (self_path == NULL)
+        testing_t_skip_v(t, "no path to this binary");
+    if (testing_short())
+        testing_t_skip_v(t, "starts fuzz workers");
+    char flags[2048];
+    char cache[1024];
+    snprintf(cache, sizeof cache, "%s.cache", self_path);
+
+    /* A failing input: found, minimized to the four bytes the target still
+     * fails on, and written where a plain run picks it up as a seed. */
+    snprintf(flags, sizeof flags, "-test.fuzz=FuzzLong -test.fuzzcachedir=\"%s\"",
+             cache);
+    Buf out = {0};
+    int code = spawn(flags, "fuzzgen", &out);
+    if (code != 1)
+        testing_t_errorf_v(t, "FuzzLong: exit status %d, want 1", code);
+    const char *want[] = {
+        "--- FAIL: FuzzLong (0.00s)\n"
+        "    --- FAIL: FuzzLong (0.00s)\n"
+        "        testing_test.c:N: too long: 4 bytes\n",
+        "    Failing input written to testdata" GEN_SEP "fuzz" GEN_SEP
+        "FuzzLong" GEN_SEP "06ba4bdb19de593e\n",
+        "    To re-run:\n",
+        "-test.run=FuzzLong/06ba4bdb19de593e\nFAIL\n",
+    };
+    for (size_t i = 0; i < sizeof want / sizeof want[0]; i++)
+        if (!has(&out, want[i]))
+            testing_t_errorf_v(t, "FuzzLong: output\n%s\nwant it to hold\n%s", out.p,
+                               want[i]);
+    char path[1024];
+    char text[256];
+    snprintf(path, sizeof path,
+             "%s.gen" GEN_SEP "testdata" GEN_SEP "fuzz" GEN_SEP "FuzzLong" GEN_SEP
+             "06ba4bdb19de593e",
+             self_path);
+    if (!read_back(path, text, sizeof text))
+        testing_t_errorf_v(t, "no crash file at %s", path);
+    else if (strcmp(text, "go test fuzz v1\n[]byte(\"0000\")\n") != 0)
+        testing_t_errorf_v(t, "crash file holds %q", text);
+
+    /* Now a seed, which fails the run before any fuzzing starts. */
+    Buf again = {0};
+    code = spawn("-test.run=FuzzLong", "fuzzgen", &again);
+    if (code != 1 || !has(&again, "    --- FAIL: FuzzLong/06ba4bdb19de593e (0.00s)\n"))
+        testing_t_errorf_v(t, "rerun: exit status %d, output\n%s", code, again.p);
+    buf_free(&again);
+    forget_crash(&out, "FuzzLong");
+    buf_free(&out);
+
+    /* A panic fails the input, stack and all, rather than the worker. */
+    snprintf(flags, sizeof flags, "-test.fuzz=FuzzPanic -test.fuzzcachedir=\"%s\"",
+             cache);
+    out = (Buf){0};
+    code = spawn(flags, "fuzzgen", &out);
+    if (code != 1 || !has(&out, "    --- FAIL: FuzzPanic (0.00s)\n") ||
+        !has(&out, ": panic: too much\n") || !has(&out, "goroutine "))
+        testing_t_errorf_v(t, "FuzzPanic: exit status %d, output\n%s", code, out.p);
+    forget_crash(&out, "FuzzPanic");
+    buf_free(&out);
+
+    /* A worker that exits takes the input it was on down with it, and that
+     * input is written out as it was, since there is nothing to minimize in. */
+    snprintf(flags, sizeof flags, "-test.fuzz=FuzzExit -test.fuzzcachedir=\"%s\"",
+             cache);
+    out = (Buf){0};
+    code = spawn(flags, "fuzzgen", &out);
+    if (code != 1 ||
+        !has(&out,
+             "fuzzing process hung or terminated unexpectedly: exit status 3\n") ||
+        !has(&out, "Failing input written to testdata"))
+        testing_t_errorf_v(t, "FuzzExit: exit status %d, output\n%s", code, out.p);
+    forget_crash(&out, "FuzzExit");
+    buf_free(&out);
+
+    /* A target that holds up, for a fixed number of inputs. */
+    snprintf(flags, sizeof flags,
+             "-test.fuzz=FuzzFine -test.fuzztime=300x -test.parallel=2 "
+             "-test.fuzzcachedir=\"%s\"",
+             cache);
+    out = (Buf){0};
+    code = spawn(flags, "fuzzgen", &out);
+    if (code != 0 || !has(&out, "now fuzzing with 2 workers\n") ||
+        !has(&out, "execs: 300 (") || !has(&out, "\nPASS\n"))
+        testing_t_errorf_v(t, "FuzzFine: exit status %d, output\n%s", code, out.p);
+    buf_free(&out);
+
+    snprintf(flags, sizeof flags, "-test.fuzz=Fuzz -test.fuzzcachedir=\"%s\"", cache);
+    out = (Buf){0};
+    code = spawn(flags, "fuzzgen", &out);
+    if (code != 1 ||
+        strcmp(out.p, "testing: will not fuzz, -fuzz matches more than one fuzz test: "
+                      "[FuzzLong FuzzPanic FuzzFine FuzzExit]\nFAIL\n") != 0)
+        testing_t_errorf_v(t, "-fuzz=Fuzz: exit status %d, output\n%s", code, out.p);
+    buf_free(&out);
+
+    snprintf(flags, sizeof flags, "-test.fuzz=Nothing -test.fuzzcachedir=\"%s\"",
+             cache);
+    out = (Buf){0};
+    code = spawn(flags, "fuzzgen", &out);
+    if (code != 0 ||
+        strcmp(out.p, "testing: warning: no fuzz tests to fuzz\nPASS\n") != 0)
+        testing_t_errorf_v(t, "-fuzz=Nothing: exit status %d, output\n%s", code, out.p);
+    buf_free(&out);
+}
+
 /* Examples in this binary's own list, which run in process with its standard
  * output captured, the way every test binary's examples do. */
 static void ExampleCapture(void) {
@@ -1453,6 +1687,7 @@ static void TestHelpers(TestingT *t) {
     X(TestHelpers)                                                                     \
     X(TestOutput)                                                                      \
     X(TestBenchmarkOutput)                                                             \
+    X(TestFuzzing)                                                                     \
     X(FuzzTypes)                                                                       \
     X(FuzzMisuse)                                                                      \
     X(FuzzUnsupported)                                                                 \

@@ -455,6 +455,31 @@ A missing directory is no seeds and no error. A file that does not parse, or who
 
 A target has to call `testing_f_fuzz`, `testing_f_fail` or `testing_f_skip`, and fails if it returns without doing any of them. Inside the fuzz function, report through the `TestingT` it gets. Calling F's log, fail, skip or cleanup functions from there panics and tells you to use the T, as Go does.
 
+### Generating inputs
+
+`-test.fuzz` takes a pattern, and when it matches exactly one fuzz target, the program stops running seeds and starts looking for new failing inputs, the way `go test -fuzz` does. It runs the tests and seeds first as usual, then starts copies of itself as workers, one for each of `-test.parallel`, which defaults to the number of CPUs. The workers mutate the corpus with Go's mutators and random source. `-test.fuzztime` stops fuzzing after a duration, or after a count of inputs when written like `1000x`. Without it, fuzzing runs until an input fails or you press Ctrl-C. `-test.fuzzminimizetime` limits how long a failing input is shrunk for, and `-test.fuzzcachedir` says where inputs found along the way are kept between runs.
+
+When an input fails, a worker shrinks it to the smallest input that still fails, and the program writes it to `testdata/fuzz/<target name>` and says how to run it again. With the failing seed taken out of the example above, the fuzzer finds a two byte rune within a second:
+
+```
+$ ./fuzz_test -test.fuzz=FuzzReverse -test.fuzztime=10s
+warning: the test binary was not built with coverage instrumentation, so fuzzing will run without coverage guidance and may be inefficient
+fuzz: elapsed: 0s, testing seed corpus: 0/1 completed
+fuzz: elapsed: 0s, testing seed corpus: 1/1 completed, now fuzzing with 10 workers
+fuzz: minimizing 33-byte failing input file
+fuzz: elapsed: 0s, minimizing
+--- FAIL: FuzzReverse (0.37s)
+    --- FAIL: FuzzReverse (0.00s)
+        fuzz.c:22: reverse("ɳ") = "\xb3\xc9", not valid UTF-8
+    
+    Failing input written to testdata/fuzz/FuzzReverse/4532eca23d537359
+    To re-run:
+    ./fuzz_test -test.run=FuzzReverse/4532eca23d537359
+FAIL
+```
+
+That file is a seed from then on, so a plain run of the program fails on it until the bug is fixed. A panic in the fuzz function fails the input with the panic and its stack, as Go reports it. A worker that exits or crashes fails the input it was running, and that input is written out as it was, since the worker is gone and cannot shrink it.
+
 ## What is not there yet
 
-For now fuzz targets only run their seeds. `-test.fuzz` does not generate new inputs yet. The flags for profiles, coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.
+Fuzzing is not guided by coverage. Go builds the test with coverage counters and keeps the inputs that reach new code. burrow has no such counters, so every input is a fresh mutation of the corpus, "new interesting" stays at zero, and the cache only grows through failing inputs. That finds shallow bugs well and deep ones slowly. The flags for profiles, coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.

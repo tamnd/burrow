@@ -242,9 +242,19 @@ int64_t pal_spawn(const PalSpawn *req, PalErrno *err) {
     return -1;
 }
 
+/* WCOREDUMP is not POSIX, though every system this runs on has it. */
+static bool proc_core_dumped(int st) {
+#ifdef WCOREDUMP
+    return WCOREDUMP(st) != 0;
+#else
+    (void)st;
+    return false;
+#endif
+}
+
 int64_t pal_wait(int64_t pid, int32_t *status, uint32_t flags, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
-    if (pid <= 0 || (flags & ~(uint32_t)PAL_WAIT_NOHANG) != 0) {
+    if (pid <= 0 || (flags & ~(uint32_t)(PAL_WAIT_NOHANG | PAL_WAIT_SIGNAL)) != 0) {
         BURROW_OUT(err, PAL_EINVAL);
         return -1;
     }
@@ -260,6 +270,9 @@ int64_t pal_wait(int64_t pid, int32_t *status, uint32_t flags, PalErrno *err) {
     int32_t code = 0;
     if (WIFEXITED(st))
         code = (int32_t)WEXITSTATUS(st);
+    else if (WIFSIGNALED(st) && (flags & PAL_WAIT_SIGNAL) != 0)
+        code = -burrow__pal_signal_from_native(WTERMSIG(st)) -
+               (proc_core_dumped(st) ? 256 : 0);
     else if (WIFSIGNALED(st))
         code = 128 + burrow__pal_signal_from_native(WTERMSIG(st));
     BURROW_OUT(status, code);
@@ -268,6 +281,10 @@ int64_t pal_wait(int64_t pid, int32_t *status, uint32_t flags, PalErrno *err) {
 
 int64_t pal_getpid(void) {
     return (int64_t)getpid();
+}
+
+int64_t pal_std_handle(int i) {
+    return i >= 0 && i <= 2 ? (int64_t)i : PAL_INVALID_HANDLE;
 }
 
 void pal_exit(int32_t code) {

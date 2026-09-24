@@ -307,7 +307,7 @@ out:
 
 int64_t pal_wait(int64_t pid, int32_t *status, uint32_t flags, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
-    if (pid <= 0 || (flags & ~(uint32_t)PAL_WAIT_NOHANG) != 0) {
+    if (pid <= 0 || (flags & ~(uint32_t)(PAL_WAIT_NOHANG | PAL_WAIT_SIGNAL)) != 0) {
         BURROW_OUT(err, PAL_EINVAL);
         return -1;
     }
@@ -355,6 +355,17 @@ bool pal_kill(int64_t pid, int32_t sig, PalErrno *err) {
 
 int64_t pal_getpid(void) {
     return (int64_t)GetCurrentProcessId();
+}
+
+int64_t pal_std_handle(int i) {
+    static const DWORD which[3] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+                                   STD_ERROR_HANDLE};
+    if (i < 0 || i > 2)
+        return PAL_INVALID_HANDLE;
+    HANDLE h = GetStdHandle(which[i]);
+    if (h == NULL || h == INVALID_HANDLE_VALUE)
+        return PAL_INVALID_HANDLE;
+    return (int64_t)(intptr_t)h;
 }
 
 /* ExitProcess tells every DLL the process is detaching, and the C runtime

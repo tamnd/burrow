@@ -695,7 +695,15 @@ typedef struct PalSpawn {
  * POSIX backend is for. */
 int64_t pal_spawn(const PalSpawn *req, PalErrno *err);
 
-enum { PAL_WAIT_NOHANG = 1u << 0 };
+enum {
+    PAL_WAIT_NOHANG = 1u << 0,
+    /* Report a process a signal ended as minus the signal's number, ours where
+     * there is one of ours, and 256 further below nought when it left a core
+     * behind. That lets a caller tell "exit status 139" from "signal:
+     * segmentation fault" the way Go's ProcessState does. Windows has no
+     * signals and ignores it. */
+    PAL_WAIT_SIGNAL = 1u << 1
+};
 
 /* Wait for a child. Returns its id, 0 when PAL_WAIT_NOHANG and it is still
  * running, or -1. status gets the exit code, or 128 plus the signal number for
@@ -710,7 +718,18 @@ enum {
     PAL_SIGHUP = 1,
     PAL_SIGINT = 2,
     PAL_SIGQUIT = 3,
+    /* The ones a crash raises. They are here so that pal_kill can send them and
+     * pal_wait can name them. PAL_SIGSEGV and PAL_SIGBUS cannot be installed,
+     * because a handler for a bad memory access is PAL_SIGFAULT's. */
+    PAL_SIGILL = 4,
+    PAL_SIGTRAP = 5,
+    PAL_SIGABRT = 6,
+    PAL_SIGBUS = 7,
+    PAL_SIGFPE = 8,
     PAL_SIGKILL = 9,
+    PAL_SIGUSR1 = 10,
+    PAL_SIGSEGV = 11,
+    PAL_SIGUSR2 = 12,
     PAL_SIGPIPE = 13,
     PAL_SIGALRM = 14,
     PAL_SIGTERM = 15,
@@ -736,6 +755,12 @@ enum {
 
 bool pal_kill(int64_t pid, int32_t sig, PalErrno *err);
 int64_t pal_getpid(void);
+
+/* The handle behind standard input, output or error, for i 0, 1 or 2, which
+ * is what a PalSpawn fds list wants when a child is to share ours. It is i
+ * itself on POSIX and GetStdHandle on Windows. PAL_INVALID_HANDLE for any
+ * other i, or when the process has no such handle. */
+int64_t pal_std_handle(int i);
 
 /* Ends the process now. Does not return and does not run anything on the way
  * out: an exit handler that runs while another thread holds a lock is how a

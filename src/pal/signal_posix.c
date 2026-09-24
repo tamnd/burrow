@@ -126,8 +126,8 @@ static BURROW_THREAD_LOCAL int64_t altstack_bytes;
  * PAL_SIGFAULT is not in here on purpose. It is not one signal and the install
  * below takes it apart rather than looking it up.
  *
- * A table rather than a switch, because eleven cases that each return a
- * different constant are eleven branches a clone detector reads as copies of
+ * A table rather than a switch, because nineteen cases that each return a
+ * different constant are nineteen branches a clone detector reads as copies of
  * one another, and because two columns is how a mapping wants to be read. */
 static SIGNAL_PAIRS_CONST struct {
     int32_t pal;
@@ -136,7 +136,15 @@ static SIGNAL_PAIRS_CONST struct {
     {PAL_SIGHUP, SIGHUP},
     {PAL_SIGINT, SIGINT},
     {PAL_SIGQUIT, SIGQUIT},
+    {PAL_SIGILL, SIGILL},
+    {PAL_SIGTRAP, SIGTRAP},
+    {PAL_SIGABRT, SIGABRT},
+    {PAL_SIGBUS, SIGBUS},
+    {PAL_SIGFPE, SIGFPE},
     {PAL_SIGKILL, SIGKILL},
+    {PAL_SIGUSR1, SIGUSR1},
+    {PAL_SIGSEGV, SIGSEGV},
+    {PAL_SIGUSR2, SIGUSR2},
     {PAL_SIGPIPE, SIGPIPE},
     {PAL_SIGALRM, SIGALRM},
     {PAL_SIGTERM, SIGTERM},
@@ -305,6 +313,13 @@ bool pal_signal_install(int32_t sig, PalSignalHandler handler, PalErrno *err) {
      * It is said here as well, so that the answer is the same on a platform
      * whose libc decides to be helpful about it. */
     if (native == SIGKILL || native == SIGSTOP) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+
+    /* A bad memory access is PAL_SIGFAULT's, and a second handler on one of its
+     * two signals would quietly take half of it away. */
+    if (native == SIGSEGV || native == SIGBUS) {
         BURROW_OUT(err, PAL_EINVAL);
         return false;
     }

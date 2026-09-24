@@ -99,6 +99,11 @@ FNR == 1 { incomment = 0; depth = 0; incont = 0 }
 
     if (line ~ /(^|[^a-zA-Z0-9_])typedef([^a-zA-Z0-9_]|$)/) next
     if (line ~ /^[ \t]*extern([^a-zA-Z0-9_]|$)/) next   # a declaration; the definition is elsewhere
+    # A tag declared ahead of its definition, struct T; with nothing after the
+    # tag, declares no object. Neither does an enum body, whose = gives a
+    # constant its value.
+    if (line ~ /^[ \t]*(struct|union|enum)[ \t]+[A-Za-z_][a-zA-Z0-9_]*[ \t]*;/) next
+    if (line ~ /^[ \t]*enum([ \t]+[A-Za-z_][a-zA-Z0-9_]*)?[ \t]*\{/) next
     if (line !~ /[;=]/) next
     if (line !~ /^[ \t]*[A-Za-z_]/) next
 

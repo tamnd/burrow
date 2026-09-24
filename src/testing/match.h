@@ -43,10 +43,12 @@ typedef struct burrow__TestingMatcher {
     SyncMutex match_mu;
 
     /* Guards sub_names, which counts how often each name has been handed out
-     * so that two subtests with the same name get different ones. Keys and
-     * patterns live in the arena. */
+     * so that two subtests with the same name get different ones. The map and
+     * its keys live in names, which fuzzing empties between inputs, and the
+     * patterns live in arena. */
     SyncMutex mu;
     Map *sub_names;
+    Arena names;
     Arena arena;
 } burrow__TestingMatcher;
 
@@ -56,6 +58,9 @@ BURROW_OWNS(ret) burrow__TestingMatcher *
 burrow__testing_matcher_new(TestingMatchString match, Str patterns, Str name,
                             Str skips);
 void burrow__testing_matcher_free(burrow__TestingMatcher *m);
+
+/* clearSubNames: forgets every name handed out so far. */
+void burrow__testing_clear_sub_names(burrow__TestingMatcher *m);
 
 /* Go's fullName. parent is NULL for a top level test. The name comes back in
  * a heap allocation the caller owns, whether or not it matched. */

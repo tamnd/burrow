@@ -320,6 +320,57 @@ static void TestWaitNoHangAndKill(TestingT *t) {
     pal_close(in[1], NULL);
 }
 
+/* PAL_WAIT_SIGNAL: a child a signal ended says which, rather than 128 plus
+ * it, so that a caller can tell that from a child that exited with such a
+ * code. */
+static void TestWaitSignal(TestingT *t) {
+#if defined(_WIN32)
+    testing_t_skip_v(t, "Windows has no signals to report");
+#else
+    PalErrno err = PAL_OK;
+    int64_t in[2];
+    if (!pal_pipe(in, 0, &err))
+        testing_t_fatalf_v(t, "pipe: %s", pal_errno_string(err));
+    const char *argv[] = {self_path, "child", "cat", NULL};
+    int64_t fds[1] = {in[0]};
+    PalSpawn req = {self_path, argv, NULL, NULL, fds, 1, 0};
+    int64_t pid = pal_spawn(&req, &err);
+    pal_close(in[0], NULL);
+    if (pid < 0) {
+        pal_close(in[1], NULL);
+        testing_t_fatalf_v(t, "spawn: %s", pal_errno_string(err));
+    }
+    if (!pal_kill(pid, PAL_SIGTERM, &err))
+        testing_t_errorf_v(t, "kill: %s", pal_errno_string(err));
+    int32_t status = 0;
+    int64_t got;
+    /* NOHANG until it is gone, which is how the fuzz coordinator reaps. */
+    while ((got = pal_wait(pid, &status, PAL_WAIT_NOHANG | PAL_WAIT_SIGNAL, &err)) == 0)
+        pal_nanosleep(1000000);
+    if (got != pid)
+        testing_t_errorf_v(t, "wait: %s", pal_errno_string(err));
+    if (status != -PAL_SIGTERM)
+        testing_t_errorf_v(t, "a terminated child has status %d, want %d", status,
+                           -PAL_SIGTERM);
+    pal_close(in[1], NULL);
+#endif
+}
+
+static void TestStdHandle(TestingT *t) {
+    for (int i = 0; i < 3; i++)
+        if (pal_std_handle(i) == PAL_INVALID_HANDLE)
+            testing_t_errorf_v(t, "no handle for standard file %d", i);
+#if !defined(_WIN32)
+    for (int i = 0; i < 3; i++)
+        if (pal_std_handle(i) != i)
+            testing_t_errorf_v(t, "standard file %d is handle %d", i,
+                               pal_std_handle(i));
+#endif
+    if (pal_std_handle(3) != PAL_INVALID_HANDLE ||
+        pal_std_handle(-1) != PAL_INVALID_HANDLE)
+        testing_t_error_v(t, "a handle for a standard file that is not one");
+}
+
 static void TestDescriptorTable(TestingT *t) {
 #if defined(_WIN32)
     testing_t_skip_v(t, "Windows has no descriptor numbers to hand a child");
@@ -463,6 +514,8 @@ static void TestMapShared(TestingT *t) {
     X(TestWorkingDirectory)                                                            \
     X(TestMissingProgram)                                                              \
     X(TestWaitNoHangAndKill)                                                           \
+    X(TestWaitSignal)                                                                  \
+    X(TestStdHandle)                                                                   \
     X(TestDescriptorTable)                                                             \
     X(TestGetpid)                                                                      \
     X(TestExecLookup)                                                                  \

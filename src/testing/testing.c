@@ -5,6 +5,7 @@
  * in the LICENSE file. */
 
 #include "corpus.h"
+#include "fuzz.h"
 #include "match.h"
 
 #include "burrow/chan.h"
@@ -36,6 +37,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+/* The separator filepath.Join puts between the parts of a path. */
+#if defined(BURROW_OS_WINDOWS)
+#define FUZZ_SEP "\\"
+#else
+#define FUZZ_SEP "/"
+#endif
 
 /* ---------------------------------------------------------------- buffers */
 
@@ -134,6 +142,12 @@ static int uint_digits(char *buf, int w, uint64_t v) {
 }
 
 /* Duration.String, into the 32 bytes at buf. */
+static Str dur_string(int64_t d, char buf[32]);
+
+Str burrow__testing_duration_string(int64_t d, char buf[32]) {
+    return dur_string(d, buf);
+}
+
 static Str dur_string(int64_t d, char buf[32]) {
     int w = 32;
     uint64_t u = (uint64_t)d;
@@ -463,6 +477,9 @@ typedef struct TestState {
     int running;
     int num_waiting;
     int max_parallel;
+    /* Set while -test.fuzz generates inputs, when a panic in a target fails
+     * its input rather than ending the process. */
+    bool is_fuzzing;
 } TestState;
 
 struct TestingT {
@@ -475,6 +492,11 @@ struct TestingT {
 
     Buf output;
     Buf partial;
+    /* Where the w goes instead, when it is not the usual one: a fuzz worker's
+     * F writes into the buffer the failing input's message is taken from, and
+     * its root throws everything away. */
+    Buf *capture;
+    bool discard;
     bool has_o; /* Go's c.o, which the root does not have */
 
     TestingT **sub;
@@ -541,6 +563,7 @@ struct TestingM {
 typedef struct Package {
     int argc;
     char **argv;
+    char exe[4096];
     bool init_ran;
     bool parsed;
     char parallel_def[24];
@@ -880,9 +903,34 @@ static void flags_parse(void) {
 
 /* ------------------------------------------------------------ the package */
 
+/* Where the test binary is, for the fuzz workers: argv[0] made absolute
+ * against the directory the process started in, which is what os.Executable
+ * does on the systems that cannot ask the kernel. */
+static void find_exe(void) {
+    pkg.exe[0] = '\0';
+    if (pkg.argc < 1 || pkg.argv == NULL || pkg.argv[0] == NULL)
+        return;
+    const char *p = pkg.argv[0];
+    size_t n = strlen(p);
+    bool has_sep = false;
+    for (size_t i = 0; i < n; i++)
+        has_sep = has_sep || p[i] == '/' || (FUZZ_SEP[0] == '\\' && p[i] == '\\');
+    bool abs = n > 0 && (p[0] == '/' || p[0] == FUZZ_SEP[0]);
+    if (FUZZ_SEP[0] == '\\' && n > 2 && p[1] == ':' && (p[2] == '\\' || p[2] == '/'))
+        abs = true;
+    if (!has_sep || abs)
+        return;
+    char wd[sizeof pkg.exe];
+    int64_t w = pal_getcwd(wd, (int64_t)sizeof wd, NULL);
+    if (w <= 0 || (size_t)w + n + 2 > sizeof pkg.exe)
+        return;
+    snprintf(pkg.exe, sizeof pkg.exe, "%.*s" FUZZ_SEP "%s", (int)w, wd, p);
+}
+
 void testing_init(int argc, char **argv) {
     pkg.argc = argc;
     pkg.argv = argv;
+    find_exe();
     if (pkg.init_ran)
         return;
     pkg.init_ran = true;
@@ -1066,7 +1114,11 @@ static void indent_into(TestingT *c, Str b) {
 /* Writes to c's w, which is stdout for the root and the indenter for the
  * rest, with c->mu held. */
 static void write_w(TestingT *c, Str s) {
-    if (c->parent == NULL)
+    if (c->discard)
+        return;
+    if (c->capture != NULL)
+        buf_str(c->capture, s);
+    else if (c->parent == NULL)
         write_to(stdout, s);
     else
         indent_into(c, s);
@@ -1784,7 +1836,9 @@ static void runner_finish(TestingT *t) {
     sync_mutex_unlock(&t->mu);
     bool has_err = t->has_err;
     Any err = t->err;
+    bool nil_panic = false;
     if (!finished && !has_err) {
+        nil_panic = true;
         Error nil_err = errors_new(
             heap_allocator(), BURROW_S("test executed panic(nil) or runtime.Goexit"));
         err = any_box(heap_allocator(), BURROW_ANY_OF(nil_err));
@@ -1804,6 +1858,21 @@ static void runner_finish(TestingT *t) {
             }
         }
     }
+    if (has_err && t->tstate->is_fuzzing && t->level >= 2) {
+        /* The input failed, which the worker reports, and the process has to
+         * carry on to do that. The F itself is not a T for this, as fRunner
+         * does not do it. */
+        Byte stack[16384];
+        Int n = runtime_stack(
+            slice_from(stack, (Int)sizeof stack, (Int)sizeof stack, TYPE_BYTE), false);
+        testing_t_errorf_v(t, "%s%v\n%s\n",
+                           nil_panic ? BURROW_S("") : BURROW_S("panic: "), err,
+                           str_from_bytes(stack, n));
+        sync_mutex_lock(&t->mu);
+        t->finished = true;
+        sync_mutex_unlock(&t->mu);
+        has_err = false;
+    }
     if (has_err)
         do_panic(t, err);
 
@@ -1812,7 +1881,8 @@ static void runner_finish(TestingT *t) {
     if (t->nsub > 0) {
         release(t->tstate);
         set_running(t, false);
-        chan_close(t->barrier);
+        if (t->barrier != NULL)
+            chan_close(t->barrier);
         for (Int i = 0; i < t->nsub; i++) {
             bool v;
             chan_recv(t->sub[i]->signal, &v);
@@ -2021,11 +2091,13 @@ void testing_t_parallel(TestingT *t) {
  * adds its seeds, hands over the function, and each seed runs as a subtest
  * named after its place in the corpus. */
 
-/* corpusEntry. The values are copies the F owns. */
+/* corpusEntry. The values are copies the F owns. data is the file as it was
+ * read, kept only for the coordinator, and NULL for an entry from F.Add. */
 typedef struct FuzzEntry {
     Str path;
     Any *values;
     Int n;
+    Str data;
 } FuzzEntry;
 
 /* What a seed's subtest needs, kept apart from the corpus so that it stays
@@ -2044,6 +2116,12 @@ struct TestingF {
     Int nseeds;
     TestingFuzzFunc fn;
     bool fuzz_called;
+    /* In a fuzz worker: the input being run, and the Ts made for the inputs
+     * before, which are freed a batch behind rather than kept to the end. */
+    Any *vals;
+    Int nvals;
+    Int prune_from;
+    Int prune_to;
 };
 
 /* supportedTypes, answering with the descriptor a value of type t is kept
@@ -2069,6 +2147,7 @@ static void fuzz_entry_free(FuzzEntry *e) {
         mem_free(heap_allocator(), e->values, (size_t)e->n * sizeof(Any),
                  _Alignof(Any));
     str_release(e->path);
+    str_release(e->data);
 }
 
 static void f_free(void *env) {
@@ -2134,7 +2213,7 @@ void testing_f_add(TestingF *f, Slice args) {
             values[i] = burrow__testing_value_copy(fuzz_type(v[i].t), v[i].data);
     }
     Str path = str_clone(h, fmt_sprintf_v(error_allocator(), "seed#%d", f->ncorpus));
-    corpus_push(f, (FuzzEntry){path, values, args.len});
+    corpus_push(f, (FuzzEntry){path, values, args.len, {NULL, 0}});
 }
 
 /* CheckCorpus. Answers with the error's text, or an empty string. */
@@ -2150,13 +2229,6 @@ static Str check_corpus(Alloc *a, const FuzzEntry *e, const Type *const *types,
                                  type_list(a, NULL, types, ntypes));
     return BURROW_S("");
 }
-
-/* corpusDir, and the separator filepath.Join puts between its parts. */
-#if defined(BURROW_OS_WINDOWS)
-#define FUZZ_SEP "\\"
-#else
-#define FUZZ_SEP "/"
-#endif
 
 /* A path for the PAL, which wants it NUL terminated. */
 static char *path_cstr(Str s) {
@@ -2264,14 +2336,16 @@ static bool read_dir_names(const char *dir, Str **names, Int *n, PalErrno *err) 
     return true;
 }
 
-/* internal/fuzz's ReadCorpus, for testdata/fuzz/<target>. What it reads goes
- * onto the end of f's corpus. Answers with the error F.Fuzz fails with, or an
- * empty string. A missing directory is no corpus and no error. */
-static Str read_corpus(TestingF *f, const Type *const *types, Int ntypes) {
+/* internal/fuzz's ReadCorpus. What it reads from dir goes onto the end of f's
+ * corpus, with the file's text too when keep is set. Answers with the error,
+ * or an empty string, and *malformed says whether it was only that some files
+ * did not hold what they should. A missing directory is no corpus and no
+ * error. */
+static Str read_corpus(TestingF *f, Str dir, const Type *const *types, Int ntypes,
+                       bool keep, bool *malformed) {
     Alloc *a = error_allocator();
     Alloc *h = heap_allocator();
-    Str dir = fmt_sprintf_v(a, "testdata" FUZZ_SEP "fuzz" FUZZ_SEP "%s",
-                            testing_t_name(f->common));
+    *malformed = false;
     char *cdir = path_cstr(dir);
     Str *names;
     Int n;
@@ -2305,17 +2379,21 @@ static Str read_corpus(TestingF *f, const Type *const *types, Int ntypes) {
         Str why;
         bool parsed =
             burrow__testing_corpus_unmarshal(a, buf_view(&data), &vals, &nvals, &why);
-        buf_free(&data);
         if (!parsed) {
             why = fmt_sprintf_v(a, "unmarshal: %s", why);
         } else {
-            FuzzEntry e = {path, vals, nvals};
+            FuzzEntry e = {path, vals, nvals, {NULL, 0}};
             why = check_corpus(a, &e, types, ntypes);
-            if (why.len > 0)
+            if (why.len > 0) {
                 burrow__testing_values_free(vals, nvals);
-            else
-                corpus_push(f, (FuzzEntry){str_clone(h, path), vals, nvals});
+            } else {
+                e.path = str_clone(h, path);
+                if (keep)
+                    e.data = str_clone(h, buf_view(&data));
+                corpus_push(f, e);
+            }
         }
+        buf_free(&data);
         if (why.len > 0) {
             if (errs.len > 0)
                 buf_str(&errs, BURROW_S("\n"));
@@ -2326,8 +2404,10 @@ static Str read_corpus(TestingF *f, const Type *const *types, Int ntypes) {
         str_release(names[i]);
     if (names != NULL)
         mem_free(h, names, (size_t)n * sizeof(Str), _Alignof(Str));
-    if (fail.len == 0 && errs.len > 0)
+    if (fail.len == 0 && errs.len > 0) {
         fail = str_clone(a, buf_view(&errs));
+        *malformed = true;
+    }
     buf_free(&errs);
     return fail;
 }
@@ -2344,6 +2424,190 @@ static void seed_body(void *env, TestingT *t) {
     FuzzSeed *s = (FuzzSeed *)env;
     FuzzEntry *e = &s->f->corpus[s->i];
     BURROW_CALLF(s->f->fn, t, slice_from(e->values, e->n, e->n, TYPE_ANY));
+}
+
+/* The run closure F.Fuzz makes when fuzzing, for a T named just like the F.
+ * It runs on the F's own stack: T.Parallel does nothing here, and the input
+ * is over when this returns, which is what lets its T be freed soon after. */
+static TestingT *run_inline(TestingT *parent, Str name, TestingTFunc fn) {
+    TestingT *c = t_new(parent, name, parent->tstate, parent->chatty);
+    if (c->barrier != NULL) {
+        chan_free(c->barrier);
+        c->barrier = NULL;
+    }
+    if (c->signal != NULL) {
+        chan_free(c->signal);
+        c->signal = NULL;
+    }
+    if (c->chatty != NULL)
+        chatty_updatef(c->chatty, c->name, "=== RUN   %s\n", c->name);
+    set_running(c, true);
+    t_runner(c, fn);
+    if (c->chatty != NULL && c->chatty->json)
+        chatty_updatef(c->chatty, parent->name, "=== NAME  %s\n", parent->name);
+    return c;
+}
+
+/* Frees the Ts made for the inputs before the last one, which nothing looks
+ * at any more, so that a worker does not keep one for every input it runs. */
+static void prune_inputs(TestingF *f) {
+    Int from = f->prune_from;
+    Int to = f->prune_to;
+    if (to <= from) {
+        sync_mutex_lock(&pkg.reg_mu);
+        f->prune_to = pkg.nall;
+        sync_mutex_unlock(&pkg.reg_mu);
+        return;
+    }
+    Alloc *h = heap_allocator();
+    size_t size = (size_t)(to - from) * sizeof(TestingT *);
+    TestingT **dead = (TestingT **)must_alloc(h, size, _Alignof(TestingT *));
+    sync_mutex_lock(&pkg.reg_mu);
+    memcpy((void *)dead, (void *)(pkg.all + from), size);
+    memmove((void *)(pkg.all + from), (void *)(pkg.all + to),
+            (size_t)(pkg.nall - to) * sizeof(TestingT *));
+    pkg.nall -= to - from;
+    f->prune_to = pkg.nall;
+    sync_mutex_unlock(&pkg.reg_mu);
+    for (Int i = 0; i < to - from; i++)
+        t_free(dead[i]);
+    mem_free(h, (void *)dead, size, _Alignof(TestingT *));
+}
+
+static void input_body(void *env, TestingT *t) {
+    TestingF *f = (TestingF *)env;
+    BURROW_CALLF(f->fn, t, slice_from(f->vals, f->nvals, f->nvals, TYPE_ANY));
+}
+
+/* What the worker runs each input through. The T's report, which is what
+ * the coordinator shows for a failing input, goes into a buffer rather than
+ * out through the F. */
+static bool fuzz_input(void *env, Any *vals, Int n, Alloc *a, Str *msg) {
+    TestingF *f = (TestingF *)env;
+    prune_inputs(f);
+    if (should_fail_fast())
+        return true;
+    /* A target that calls T.Run would otherwise have every name it ever used
+     * kept, for names nobody can run again. */
+    burrow__testing_clear_sub_names(f->common->tstate->match);
+    Buf out = {0};
+    sync_mutex_lock(&f->common->mu);
+    f->common->capture = &out;
+    sync_mutex_unlock(&f->common->mu);
+    f->vals = vals;
+    f->nvals = n;
+    f->common->in_fuzz_fn = true;
+    TestingT *c = run_inline(f->common, str_clone(heap_allocator(), f->common->name),
+                             BURROW_FN(TestingTFunc, input_body, f));
+    f->common->in_fuzz_fn = false;
+    sync_mutex_lock(&f->common->mu);
+    f->common->capture = NULL;
+    sync_mutex_unlock(&f->common->mu);
+    bool ok = !testing_t_failed(c);
+    if (!ok)
+        *msg = str_clone(a, buf_view(&out));
+    buf_free(&out);
+    return ok;
+}
+
+static void fuzz_work(TestingF *f) {
+    sync_mutex_lock(&pkg.reg_mu);
+    f->prune_from = pkg.nall;
+    f->prune_to = pkg.nall;
+    sync_mutex_unlock(&pkg.reg_mu);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Str err;
+    bool ok = burrow__fuzz_worker(fuzz_input, f, arena_allocator(&ar), &err);
+    prune_inputs(f);
+    if (!ok)
+        testing_t_errorf_v(f->common, "communicating with fuzzing coordinator: %v",
+                           err);
+    arena_free(&ar);
+}
+
+/* The coordinator's side of F.Fuzz: every seed, from F.Add, testdata and the
+ * cache, goes to the engine as a corpus file, and a failure is written out
+ * the way go test writes it. */
+static void fuzz_coordinate(TestingF *f, const Type *const *types, Int ntypes) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Str name = testing_t_name(f->common);
+    Str cache_dir =
+        fmt_sprintf_v(a, "%s" FUZZ_SEP "%s", pkg.flags[F_FUZZCACHEDIR].s, name);
+
+    burrow__FuzzSeed *seeds = NULL;
+    if (f->ncorpus > 0)
+        seeds = (burrow__FuzzSeed *)must_alloc(
+            a, (size_t)f->ncorpus * sizeof(burrow__FuzzSeed),
+            _Alignof(burrow__FuzzSeed));
+    for (Int i = 0; i < f->ncorpus; i++) {
+        FuzzEntry *e = &f->corpus[i];
+        Str data = e->data.p != NULL
+                       ? e->data
+                       : burrow__testing_corpus_marshal(a, e->values, e->n);
+        seeds[i] = (burrow__FuzzSeed){e->path, data};
+    }
+
+    /* The cache, where a file that does not hold what it should is passed
+     * over but one that cannot be read is an error. */
+    TestingF cache = {0};
+    bool malformed;
+    Str err = read_corpus(&cache, cache_dir, types, ntypes, true, &malformed);
+    Str crash = BURROW_S("");
+    bool ok = err.len == 0 || malformed;
+    if (ok) {
+        burrow__FuzzSeed *cached = NULL;
+        if (cache.ncorpus > 0)
+            cached = (burrow__FuzzSeed *)must_alloc(
+                a, (size_t)cache.ncorpus * sizeof(burrow__FuzzSeed),
+                _Alignof(burrow__FuzzSeed));
+        for (Int i = 0; i < cache.ncorpus; i++)
+            cached[i] = (burrow__FuzzSeed){cache.corpus[i].path, cache.corpus[i].data};
+        burrow__FuzzOpts opts = {0};
+        opts.timeout = pkg.flags[F_FUZZTIME].d;
+        opts.limit = pkg.flags[F_FUZZTIME].n;
+        opts.minimize_timeout = pkg.flags[F_FUZZMINIMIZETIME].d;
+        opts.minimize_limit = pkg.flags[F_FUZZMINIMIZETIME].n;
+        opts.parallel = (int)pkg.flags[F_PARALLEL].i;
+        opts.seed = seeds;
+        opts.nseed = f->ncorpus;
+        opts.types = types;
+        opts.ntypes = ntypes;
+        opts.cache = cached;
+        opts.ncache = cache.ncorpus;
+        opts.corpus_dir =
+            fmt_sprintf_v(a, "testdata" FUZZ_SEP "fuzz" FUZZ_SEP "%s", name);
+        opts.cache_dir = cache_dir;
+        opts.argc = pkg.argc;
+        opts.argv = pkg.argv;
+        opts.exe = str_from_cstr(pkg.exe);
+        ok = burrow__fuzz_coordinate(a, &opts, &err, &crash);
+    }
+    for (Int i = 0; i < cache.ncorpus; i++)
+        fuzz_entry_free(&cache.corpus[i]);
+    if (cache.corpus != NULL)
+        mem_free(heap_allocator(), cache.corpus,
+                 (size_t)cache.ccorpus * sizeof(FuzzEntry), _Alignof(FuzzEntry));
+
+    if (!ok) {
+        testing_t_fail(f->common);
+        Buf b = {0};
+        buf_str(&b, err);
+        buf_str(&b, BURROW_S("\n"));
+        if (crash.len > 0) {
+            const char *prog = pkg.argc > 0 && pkg.argv != NULL ? pkg.argv[0] : "";
+            buf_str(&b, fmt_sprintf_v(a, "Failing input written to %s\n", crash));
+            buf_str(&b, fmt_sprintf_v(a, "To re-run:\n%s -test.run=%s/%s\n", prog, name,
+                                      path_base(crash)));
+        }
+        sync_mutex_lock(&f->common->mu);
+        write_w(f->common, buf_view(&b));
+        sync_mutex_unlock(&f->common->mu);
+        buf_free(&b);
+    }
+    arena_free(&ar);
 }
 
 void burrow__testing_f_fuzz(TestingF *f, const char *file, int line, TestingFuzzFunc ff,
@@ -2374,19 +2638,43 @@ void burrow__testing_f_fuzz(TestingF *f, const char *file, int line, TestingFuzz
         }
     }
 
+    f->fn = ff;
+    bool fuzzing = f->common->tstate->is_fuzzing;
+    if (fuzzing && pkg.flags[F_FUZZWORKER].b) {
+        /* A worker has no use for the corpus, which the coordinator has. */
+        mem_free(h, (void *)ts, (size_t)types.len * sizeof(const Type *),
+                 _Alignof(const Type *));
+        fuzz_work(f);
+        return;
+    }
+
     Str err = BURROW_S("");
     for (Int i = 0; i < f->ncorpus && err.len == 0; i++)
         err = check_corpus(error_allocator(), &f->corpus[i], ts, types.len);
     /* The seed corpus in testdata, which has to match the types as well. */
-    if (err.len == 0)
-        err = read_corpus(f, ts, types.len);
-    mem_free(h, (void *)ts, (size_t)types.len * sizeof(const Type *),
-             _Alignof(const Type *));
-    if (err.len > 0)
+    if (err.len == 0) {
+        bool malformed;
+        err = read_corpus(f,
+                          fmt_sprintf_v(error_allocator(),
+                                        "testdata" FUZZ_SEP "fuzz" FUZZ_SEP "%s",
+                                        testing_t_name(f->common)),
+                          ts, types.len, fuzzing, &malformed);
+    }
+    if (err.len > 0) {
+        mem_free(h, (void *)ts, (size_t)types.len * sizeof(const Type *),
+                 _Alignof(const Type *));
         burrow__testing_t_logln(f->common, file, line, BURROW__TESTING_FATAL,
                                 BURROW__FMT_ARGS(BURROW_ANY_OF, err));
+    }
+    if (fuzzing) {
+        fuzz_coordinate(f, ts, types.len);
+        mem_free(h, (void *)ts, (size_t)types.len * sizeof(const Type *),
+                 _Alignof(const Type *));
+        return;
+    }
+    mem_free(h, (void *)ts, (size_t)types.len * sizeof(const Type *),
+             _Alignof(const Type *));
 
-    f->fn = ff;
     if (f->ncorpus > 0) {
         f->seeds = (FuzzSeed *)must_alloc(h, (size_t)f->ncorpus * sizeof(FuzzSeed),
                                           _Alignof(FuzzSeed));
@@ -2773,6 +3061,97 @@ static bool run_fuzz_tests(TestingMatchString match,
     RunState rs = {match, NULL, 0, fuzz, nfuzz, deadline, bare, false, true};
     bool ok = run_passes(&rs);
     *ran = rs.ran;
+    return ok;
+}
+
+/* runFuzzing: the one fuzz target -test.fuzz picks, generating inputs, as
+ * the coordinator or as one of its workers. */
+typedef struct FuzzRun {
+    TestingT *root;
+    Str name;
+    const TestingInternalFuzzTarget *target;
+    bool ok;
+} FuzzRun;
+
+static void fuzz_run_main(void *env) {
+    FuzzRun *fr = (FuzzRun *)env;
+    TestingT *f = run_inline(
+        fr->root, fr->name,
+        BURROW_FN(TestingTFunc, fuzz_target_body, (void *)(uintptr_t)fr->target));
+    fr->ok = !testing_t_failed(f);
+}
+
+static bool run_fuzzing(TestingMatchString match, const TestingInternalFuzzTarget *fuzz,
+                        Int nfuzz, bool bare) {
+    if (nfuzz == 0 || pkg.flags[F_FUZZ].s.len == 0)
+        return true;
+    bool worker = pkg.flags[F_FUZZWORKER].b;
+    burrow__TestingMatcher *m = burrow__testing_matcher_new(
+        match, pkg.flags[F_FUZZ].s, BURROW_S("-test.fuzz"), pkg.flags[F_SKIP].s);
+    TestState *s = tstate_new(1, m, bare);
+    s->is_fuzzing = true;
+    Chatty *chatty = NULL;
+    if (pkg.flags[F_V].b && !worker) {
+        chatty =
+            (Chatty *)must_alloc(heap_allocator(), sizeof(Chatty), _Alignof(Chatty));
+        *chatty = (Chatty){0};
+        chatty->json = pkg.flags[F_V].json;
+    }
+
+    Alloc *h = heap_allocator();
+    Str *matched = (Str *)must_alloc(h, (size_t)nfuzz * sizeof(Str), _Alignof(Str));
+    Int nmatched = 0;
+    const TestingInternalFuzzTarget *target = NULL;
+    for (Int i = 0; i < nfuzz; i++) {
+        bool ok;
+        bool partial;
+        Str name = burrow__testing_full_name(m, NULL, fuzz[i].name, &ok, &partial);
+        if (!ok) {
+            str_release(name);
+            continue;
+        }
+        matched[nmatched++] = name;
+        target = &fuzz[i];
+    }
+
+    bool ok = true;
+    if (nmatched == 0) {
+        write_to(err_out(), BURROW_S("testing: warning: no fuzz tests to fuzz\n"));
+    } else if (nmatched > 1) {
+        Buf b = {0};
+        buf_str(
+            &b,
+            BURROW_S(
+                "testing: will not fuzz, -fuzz matches more than one fuzz test: ["));
+        for (Int i = 0; i < nmatched; i++) {
+            if (i > 0)
+                buf_str(&b, BURROW_S(" "));
+            buf_str(&b, matched[i]);
+        }
+        buf_str(&b, BURROW_S("]\n"));
+        write_to(err_out(), buf_view(&b));
+        buf_free(&b);
+        ok = false;
+    } else {
+        TestingT *root = t_new(NULL, BURROW_S(""), s, chatty);
+        root->discard = worker;
+        FuzzRun fr = {root, matched[0], target, true};
+        nmatched = 0; /* the F owns the name now */
+        if (!bare && burrow__curg() == NULL)
+            runtime_main(BURROW_FN(Func, fuzz_run_main, &fr));
+        else
+            fuzz_run_main(&fr);
+        ok = fr.ok;
+        free_all();
+    }
+    for (Int i = 0; i < nmatched; i++)
+        str_release(matched[i]);
+    mem_free(h, matched, (size_t)nfuzz * sizeof(Str), _Alignof(Str));
+    tstate_free(s);
+    if (chatty != NULL) {
+        buf_free(&chatty->last_name);
+        mem_free(heap_allocator(), chatty, sizeof(Chatty), _Alignof(Chatty));
+    }
     return ok;
 }
 
@@ -4237,7 +4616,8 @@ int testing_m_run(TestingM *m) {
 
     parse_cpu_list();
 
-    {
+    /* A worker only fuzzes: its coordinator has run everything else. */
+    if (!pkg.flags[F_FUZZWORKER].b) {
         int64_t deadline = start_alarm();
         pkg.have_examples = m->nexamples > 0;
         bool ran;
@@ -4259,8 +4639,14 @@ int testing_m_run(TestingM *m) {
             goto out;
         }
     }
+    if (!run_fuzzing(m->match, m->fuzz_targets, m->nfuzz_targets, m->bare)) {
+        write_to(stdout, fmt_sprintf_v(a, "%sFAIL\n", prefix));
+        m->exit_code = pkg.flags[F_FUZZWORKER].b ? 70 : 1;
+        goto out;
+    }
     m->exit_code = 0;
-    write_to(stdout, fmt_sprintf_v(a, "%sPASS\n", prefix));
+    if (!pkg.flags[F_FUZZWORKER].b)
+        write_to(stdout, fmt_sprintf_v(a, "%sPASS\n", prefix));
 out:
     arena_free(&ar);
     return m->exit_code;

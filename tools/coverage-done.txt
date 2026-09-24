@@ -12,3 +12,4 @@ errors
 math/bits
 strconv
 fmt
+unicode/utf16

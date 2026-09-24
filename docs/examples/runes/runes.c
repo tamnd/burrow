@@ -81,6 +81,27 @@ static void back_up(const Byte *buf, Int i) {
     printf("from byte %lld back to %lld\n", (long long)from, (long long)i);
 }
 
+static void wide(Alloc *a) {
+    // doc: utf16
+    Rune in[] = {'h', 'i', 0x1F600};
+    Slice units = utf16_encode(a, slice_from(in, 3, 3, TYPE_RUNE));
+    Slice back = utf16_decode(a, units);
+    // doc: end
+    const uint16_t *u = units.p;
+    printf("%lld runes are %lld units:", (long long)3, (long long)units.len);
+    for (Int i = 0; i < units.len; i++)
+        printf(" %04x", (unsigned)u[i]);
+    printf(", and decode gives back %lld runes\n", (long long)back.len);
+
+    // doc: pair
+    Rune lo;
+    Rune hi = utf16_encode_rune(0x1F600, &lo);
+    Rune r = utf16_decode_rune(hi, lo); /* 0x1F600 again */
+    // doc: end
+    printf("%lx is the pair %lx %lx, and back is %lx\n", (unsigned long)0x1F600,
+           (unsigned long)hi, (unsigned long)lo, (unsigned long)r);
+}
+
 int main(void) {
     Str s = BURROW_S("héllo, 世界");
     loop(BURROW_S("aé世"));
@@ -100,6 +121,7 @@ int main(void) {
     arena_init(&arena, heap_allocator(), 0);
     Rune runes[] = {'h', 0xe9, 0x4e16};
     append(arena_allocator(&arena), runes, 3);
+    wide(arena_allocator(&arena));
     arena_free(&arena);
 
     back_up(s.p, 10);
@@ -118,5 +140,7 @@ the greeting is accepted
 4e16 encodes as e4 b8 96
 d800 encodes as ef bf bd
 appended 3 runes into 6 bytes: hé世
+3 runes are 4 units: 0068 0069 d83d de00, and decode gives back 3 runes
+1f600 is the pair d83d de00, and back is 1f600
 from byte 10 back to 8
 */

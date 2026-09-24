@@ -162,6 +162,28 @@ while (i > 0 && !utf8_rune_start(buf[i]))
 
 This is how you back up to a character boundary after seeking into a file at an arbitrary offset, and it is why the backwards decoders are O(1): a rune is at most four bytes, so the search for the start of the previous one gives up after four.
 
+## UTF-16
+
+Windows, Java and JavaScript keep text as UTF-16, so you meet it at the edge of any of them. `burrow/unicode/utf16.h` is Go's unicode/utf16. A rune below U+10000 is one 16 bit unit, and anything above takes two, called a surrogate pair. The slices are typed: `utf16_encode` takes a slice of `Rune` and gives back a slice of `uint16_t`, and `utf16_decode` goes the other way.
+
+<!-- example: ../examples/runes/runes.c#utf16 -->
+```c
+Rune in[] = {'h', 'i', 0x1F600};
+Slice units = utf16_encode(a, slice_from(in, 3, 3, TYPE_RUNE));
+Slice back = utf16_decode(a, units);
+```
+
+The emoji takes two units, so `units` holds four: `0068 0069 d83d de00`. For one rune at a time there are `utf16_encode_rune` and `utf16_decode_rune`. Go returns the pair as two results, and here the second half comes back through a pointer:
+
+<!-- example: ../examples/runes/runes.c#pair -->
+```c
+Rune lo;
+Rune hi = utf16_encode_rune(0x1F600, &lo);
+Rune r = utf16_decode_rune(hi, lo); /* 0x1F600 again */
+```
+
+Like the UTF-8 side, nothing fails. A rune that cannot be encoded becomes U+FFFD, and so does a surrogate half without its partner when you decode. `utf16_append_rune` appends to a slice you are building, and `utf16_rune_len` tells you 1, 2, or -1 for a rune UTF-16 cannot hold.
+
 ## What is not here yet
 
-`unicode/utf16` is the other half of this and it is not ported yet. `unicode` itself, with the character class tables, is a larger job and is scheduled with the rest of the pure packages.
+`unicode` itself, with the character class tables, is a larger job and is scheduled with the rest of the pure packages.

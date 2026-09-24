@@ -482,6 +482,38 @@ That file is a seed from then on, so a plain run of the program fails on it unti
 
 Ctrl-C stops fuzzing the way it does in Go. The workers finish the input they are on, the program prints a last stats line and PASS, and it exits 0, since nothing failed. If a failing input was being shrunk when you pressed it, shrinking stops, the input is written out as it was found, and the run fails, as it does in Go. On Windows, Ctrl-C still ends the program at once, as burrow does not catch console events yet.
 
+### Coverage guidance
+
+Go builds the package under test with coverage counters, and the fuzzer keeps any input that reaches code no input reached before. Those inputs join the corpus, get mutated in turn, and go to the cache directory so the next run starts from them. That is what lets a fuzzer get past a check that blind mutation would almost never pass.
+
+In C the compiler keeps the counters, so you ask it for them. Build the code you want guidance on with `-fsanitize-coverage=inline-8bit-counters` if you use clang, or with `-fsanitize-coverage=trace-pc` if you use gcc. burrow reads either kind. Build the test file and the code it tests that way, and leave burrow itself as it is, since coverage of the fuzzing engine only adds noise, the same way Go only instruments the package under test:
+
+```
+$ clang -std=c11 -O2 -fsanitize-coverage=inline-8bit-counters parse_test.c parse.c burrow.c -o parse_test
+```
+
+With the counters in, the run first gathers baseline coverage from every input in the corpus, seeds and cache alike, where it would otherwise only run the seeds. Then the stats line counts the inputs that found new code. Here is a target that only fails when its input starts with the four bytes `FUZZ`, tested one byte at a time. Built without counters, it ran four million inputs in ten seconds and found nothing. With them, each right byte is new code, so it gets there a byte at a time:
+
+```
+$ ./cover_test -test.fuzz=FuzzDeep -test.fuzztime=60s -test.parallel=2
+fuzz: elapsed: 0s, gathering baseline coverage: 0/1 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 1/1 completed, now fuzzing with 2 workers
+fuzz: minimizing 32-byte failing input file
+fuzz: elapsed: 0s, minimizing
+--- FAIL: FuzzDeep (0.16s)
+    --- FAIL: FuzzDeep (0.00s)
+        testing_cover_test.c:72: found it
+    
+    Failing input written to testdata/fuzz/FuzzDeep/10a65938dce505e4
+    To re-run:
+    ./cover_test -test.run=FuzzDeep/10a65938dce505e4
+FAIL
+```
+
+An input that reaches new code is shrunk before it is kept, as in Go, down to the smallest input that still reaches it. A longer run prints `new interesting: N (total: M)` on each stats line, where the total counts the baseline inputs too.
+
+Some things to know. burrow defines the functions the compiler calls into, so it cannot be linked with libFuzzer, which defines the same ones. The trace-pc counters are a table of 16384 entries picked by a hash of where each call came from, so two edges can share an entry, which costs a little guidance and nothing else. Both kinds only count code in the program itself, and a shared library loaded at a different address in each worker would not line up, so link the code under test statically. MSVC's `/fsanitize-coverage` is not supported yet.
+
 ## What is not there yet
 
-Fuzzing is not guided by coverage. Go builds the test with coverage counters and keeps the inputs that reach new code. burrow has no such counters, so every input is a fresh mutation of the corpus, "new interesting" stays at zero, and the cache only grows through failing inputs. That finds shallow bugs well and deep ones slowly. The flags for profiles, coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.
+The flags for profiles, coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.

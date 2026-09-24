@@ -1,4 +1,4 @@
-/* The fuzzing engine: Go's src/internal/fuzz, less coverage guidance.
+/* The fuzzing engine: Go's src/internal/fuzz.
  *
  * The shape is Go's. The coordinator, which is the test binary run with
  * -test.fuzz, starts one worker process per -test.parallel, each the same
@@ -20,10 +20,12 @@
  * pair of pipes as Go's do, in a small binary encoding rather than JSON,
  * because both ends are this file and nothing else ever reads it.
  *
- * Coverage is the part that is not here. Go instruments the package under test
- * and keeps an input that reaches new code, and without the instrumentation
- * this does what Go does when coverage is off: it fuzzes the corpus it has and
- * never adds to it. Go prints the same warning in that case.
+ * Coverage guidance is Go's too. Go instruments the package under test and
+ * keeps an input that reaches new code. Here the compiler does the
+ * instrumenting, when the test file is built with -fsanitize-coverage, and
+ * the counters it keeps are read the way Go reads its own. Without them this
+ * does what Go does when coverage is off: it fuzzes the corpus it has and
+ * never adds to it, and it prints the same warning.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -174,6 +176,143 @@ static void fuzz_release_interrupt(void) {
 
 static bool fuzz_interrupted(void) {
     return burrow__atomic_load_u32(&fuzz_interrupt) == FUZZ_INT_CAUGHT;
+}
+
+/* --------------------------------------------------------------- coverage */
+
+/* Go's coverage.go. Go's linker puts the 8-bit counters it compiled into the
+ * package under test between two symbols, and coverage() is the bytes in
+ * between. C compilers have the same counters under a different name.
+ *
+ * clang, and MSVC, with -fsanitize-coverage=inline-8bit-counters, give each
+ * edge a byte in a section of its own and call
+ * __sanitizer_cov_8bit_counters_init with the section's bounds before main
+ * runs, once for each module that has one. gcc has no such counters. What it
+ * has is -fsanitize-coverage=trace-pc, a call to __sanitizer_cov_trace_pc on
+ * every edge, and that call bumps a counter picked by hashing where it was
+ * called from, the way AFL keeps its map. Collisions cost some guidance and
+ * nothing else. The table counts from its first call, and main is the first
+ * thing in an instrumented test file, so it is on before fuzzing looks.
+ *
+ * The counters are bumped without atomics, as Go's are, since a lost count
+ * only ever changes a count that the snapshot rounds anyway. */
+#define FUZZ_COV_MODULES 16
+#define FUZZ_COV_PC_BITS 14
+
+typedef struct FuzzCov {
+    Byte *lo[FUZZ_COV_MODULES];
+    Byte *hi[FUZZ_COV_MODULES];
+    int nmod;
+    uint32_t pc_used;
+    Byte pc[(size_t)1 << FUZZ_COV_PC_BITS];
+    /* coverageSnapshot, which only a worker has. */
+    Byte *snap;
+    Int snap_len;
+} FuzzCov;
+
+static FuzzCov fuzz_cov;
+
+/* Whatever the compiler does for the rest of the program, these two must not
+ * count themselves, or the trace-pc one would call itself forever. */
+#if defined(__has_attribute)
+#if __has_attribute(no_sanitize_coverage)
+#define FUZZ_NO_COVERAGE __attribute__((no_sanitize_coverage))
+#endif
+#endif
+#ifndef FUZZ_NO_COVERAGE
+#define FUZZ_NO_COVERAGE
+#endif
+
+FUZZ_NO_COVERAGE void __sanitizer_cov_8bit_counters_init(
+    char *start,
+    char *stop) { /* NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
+    if (start == NULL || stop <= start || fuzz_cov.nmod == FUZZ_COV_MODULES)
+        return;
+    for (int i = 0; i < fuzz_cov.nmod; i++)
+        if (fuzz_cov.lo[i] == (Byte *)start)
+            return;
+    fuzz_cov.lo[fuzz_cov.nmod] = (Byte *)start;
+    fuzz_cov.hi[fuzz_cov.nmod] = (Byte *)stop;
+    fuzz_cov.nmod++;
+}
+
+#if !BURROW_CC_MSVC
+FUZZ_NO_COVERAGE void __sanitizer_cov_trace_pc(
+    void) { /* NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
+    /* The offset from this function and not the address, since every worker
+     * is loaded somewhere else and they all have to agree on the map. */
+    uint64_t pc = (uint64_t)((uintptr_t)__builtin_return_address(0) -
+                             (uintptr_t)&__sanitizer_cov_trace_pc);
+    uint32_t h = (uint32_t)(pc ^ (pc >> 32)) * 0x9E3779B1U;
+    fuzz_cov.pc[h >> (32 - FUZZ_COV_PC_BITS)]++;
+    fuzz_cov.pc_used = 1;
+}
+#endif
+
+Int burrow__fuzz_coverage_len(void) {
+    Int n = 0;
+    for (int i = 0; i < fuzz_cov.nmod; i++)
+        n += (Int)(fuzz_cov.hi[i] - fuzz_cov.lo[i]);
+    if (fuzz_cov.pc_used)
+        n += (Int)sizeof fuzz_cov.pc;
+    return n;
+}
+
+void burrow__fuzz_coverage_reset(void) {
+    for (int i = 0; i < fuzz_cov.nmod; i++)
+        memset(fuzz_cov.lo[i], 0, (size_t)(fuzz_cov.hi[i] - fuzz_cov.lo[i]));
+    if (fuzz_cov.pc_used)
+        memset(fuzz_cov.pc, 0, sizeof fuzz_cov.pc);
+}
+
+/* pow2Table[b]: b with every bit below its highest cleared. */
+static Byte fuzz_pow2(Byte b) {
+    b |= (Byte)(b >> 1);
+    b |= (Byte)(b >> 2);
+    b |= (Byte)(b >> 4);
+    return (Byte)(b - (b >> 1));
+}
+
+static Int fuzz_cov_copy(Byte *dst, const Byte *src, Int n) {
+    for (Int i = 0; i < n; i++)
+        dst[i] = fuzz_pow2(src[i]);
+    return n;
+}
+
+void burrow__fuzz_coverage_snapshot(void) {
+    if (fuzz_cov.snap == NULL || burrow__fuzz_coverage_len() != fuzz_cov.snap_len)
+        return;
+    Int at = 0;
+    for (int i = 0; i < fuzz_cov.nmod; i++)
+        at += fuzz_cov_copy(fuzz_cov.snap + at, fuzz_cov.lo[i],
+                            (Int)(fuzz_cov.hi[i] - fuzz_cov.lo[i]));
+    if (fuzz_cov.pc_used)
+        fuzz_cov_copy(fuzz_cov.snap + at, fuzz_cov.pc, (Int)sizeof fuzz_cov.pc);
+}
+
+/* diffCoverage without the allocation: whether snapshot has a bit base does
+ * not. */
+static bool fuzz_cov_has_new(const Byte *base, const Byte *snapshot, Int n) {
+    for (Int i = 0; i < n; i++)
+        if ((snapshot[i] & ~base[i]) != 0)
+            return true;
+    return false;
+}
+
+/* isCoverageSubset. */
+static bool fuzz_cov_subset(const Byte *base, const Byte *snapshot, Int n) {
+    for (Int i = 0; i < n; i++)
+        if ((base[i] & snapshot[i]) != base[i])
+            return false;
+    return true;
+}
+
+/* hasCoverageBit. */
+static bool fuzz_cov_any(const Byte *base, const Byte *snapshot, Int n) {
+    for (Int i = 0; i < n; i++)
+        if ((snapshot[i] & base[i]) != 0)
+            return true;
+    return false;
 }
 
 /* ---------------------------------------------------------------- pcgRand */
@@ -1238,6 +1377,9 @@ typedef struct FuzzServer {
     burrow__FuzzMutator m;
     burrow__FuzzRun run;
     void *env;
+    /* ws.coverageMask: the coordinator's, as of the last call that sent it. */
+    Byte *cov_mask;
+    Int cov_mask_len;
 
     /* The watchdog, Go's time.AfterFunc(60*time.Second) around each run. */
     burrow__Lock wd_mu;
@@ -1290,21 +1432,45 @@ static void fuzz_serve_fuzz(FuzzServer *s, FuzzReader *r, FuzzBuf *resp) {
     int64_t timeout = fuzz_get_i64(r);
     int64_t limit = fuzz_get_i64(r);
     bool warmup = fuzz_get_u8(r) != 0;
+    Str cov_data = fuzz_get_str(r);
     if (r->failed)
         return;
     int64_t start = pal_clock_monotonic();
-    FuzzMemHeader *h = fuzz_hdr(&s->mem);
-    h->rand_state = s->m.r.state;
-    h->rand_inc = s->m.r.inc;
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
     Str internal = {0};
     Str err = {0};
     int64_t interesting = 0;
+    /* resp.CoverageData, which is the snapshot or nothing. */
+    bool send_cov = false;
     Any *orig = NULL;
     Int n = 0;
     Str uerr = {0};
+    if (cov_data.len > 0) {
+        if (s->cov_mask != NULL && cov_data.len != s->cov_mask_len) {
+            internal = fmt_sprintf_v(a,
+                                     "unexpected size for CoverageData: got %d, "
+                                     "expected %d",
+                                     cov_data.len, s->cov_mask_len);
+            fuzz_put_i64(resp, 0);
+            fuzz_put_i64(resp, 0);
+            fuzz_put_i64(resp, fuzz_hdr(&s->mem)->count);
+            fuzz_put_str(resp, (Str){0});
+            fuzz_put_str(resp, internal);
+            fuzz_put_str(resp, (Str){0});
+            arena_free(&ar);
+            return;
+        }
+        if (s->cov_mask == NULL) {
+            s->cov_mask = (Byte *)fuzz_must_alloc((size_t)cov_data.len, 1);
+            s->cov_mask_len = cov_data.len;
+        }
+        memcpy(s->cov_mask, cov_data.p, (size_t)cov_data.len);
+    }
+    FuzzMemHeader *h = fuzz_hdr(&s->mem);
+    h->rand_state = s->m.r.state;
+    h->rand_inc = s->m.r.inc;
     if (limit > 0 && h->count >= limit) {
         internal = fmt_sprintf_v(
             a, "mem.header().count %d already exceeds args.Limit %d", h->count, limit);
@@ -1318,11 +1484,13 @@ static void fuzz_serve_fuzz(FuzzServer *s, FuzzReader *r, FuzzBuf *resp) {
         fuzz_views_reset(views, cells, orig, n);
         int64_t dur;
         if (warmup) {
-            if (!fuzz_server_run(s, views, n, a, &dur, &err))
+            if (!fuzz_server_run(s, views, n, a, &dur, &err)) {
                 err =
                     err.len > 0 ? err : BURROW_S("fuzz function failed with no input");
-            else
+            } else {
                 interesting = dur;
+                send_cov = fuzz_cov.snap != NULL;
+            }
         } else {
             int64_t deadline = timeout != 0 ? start + timeout : 0;
             ArenaMark mark = arena_mark(&ar);
@@ -1339,6 +1507,12 @@ static void fuzz_serve_fuzz(FuzzServer *s, FuzzReader *r, FuzzBuf *resp) {
                                       : BURROW_S("fuzz function failed with no input");
                     break;
                 }
+                if (s->cov_mask != NULL && fuzz_cov.snap != NULL &&
+                    fuzz_cov_has_new(s->cov_mask, fuzz_cov.snap, s->cov_mask_len)) {
+                    send_cov = true;
+                    interesting = dur;
+                    break;
+                }
                 arena_release(&ar, mark);
                 if (limit > 0 && h->count >= limit)
                     break;
@@ -1353,6 +1527,9 @@ static void fuzz_serve_fuzz(FuzzServer *s, FuzzReader *r, FuzzBuf *resp) {
     fuzz_put_i64(resp, h->count);
     fuzz_put_str(resp, err);
     fuzz_put_str(resp, internal);
+    fuzz_put_str(resp, send_cov && err.len == 0 && internal.len == 0
+                           ? str_from_bytes(fuzz_cov.snap, fuzz_cov.snap_len)
+                           : (Str){0});
     arena_free(&ar);
 }
 
@@ -1370,6 +1547,9 @@ typedef struct FuzzMin {
     Int mem_len;
     bool failed;
     Str msg;
+    /* keepCoverage, until a candidate fails and makes it nil. */
+    const Byte *keep;
+    Int keep_len;
 } FuzzMin;
 
 static bool fuzz_min_stop(void *env) {
@@ -1409,8 +1589,14 @@ static bool fuzz_min_try(void *env, const Byte *p, Int n) {
     if (!fuzz_server_run(c->s, c->vals, c->n, c->a, &dur, &msg)) {
         c->failed = true;
         c->msg = msg;
+        /* A crash matters more than the coverage being kept, so from here on
+         * only the crash is. */
+        c->keep = NULL;
         return true;
     }
+    if (c->keep != NULL && fuzz_cov.snap != NULL &&
+        fuzz_cov_subset(c->keep, fuzz_cov.snap, c->keep_len))
+        return true;
     memcpy(v.data, &prev, v.t->size);
     return false;
 }
@@ -1420,6 +1606,7 @@ static void fuzz_serve_minimize(FuzzServer *s, FuzzReader *r, FuzzBuf *resp) {
     int64_t timeout = fuzz_get_i64(r);
     int64_t limit = fuzz_get_i64(r);
     int64_t index = fuzz_get_i64(r);
+    Str keep = fuzz_get_str(r);
     if (r->failed)
         return;
     int64_t start = pal_clock_monotonic();
@@ -1443,8 +1630,15 @@ static void fuzz_serve_minimize(FuzzServer *s, FuzzReader *r, FuzzBuf *resp) {
                  a,
                  (Int)fuzz_hdr(&s->mem)->value_len,
                  false,
-                 {0}};
+                 {0},
+                 keep.len > 0 ? keep.p : NULL,
+                 keep.len};
+    if (c.keep != NULL && (fuzz_cov.snap == NULL || keep.len != fuzz_cov.snap_len))
+        c.keep = NULL;
     FuzzMemHeader *h = fuzz_hdr(&s->mem);
+    Byte in_hash[32];
+    Str in_value = fuzz_mem_value(&s->mem);
+    burrow__fuzz_sha256(in_value.p, in_value.len, in_hash);
     bool success = false;
     Any v = vals[index];
     FuzzCell orig;
@@ -1452,9 +1646,18 @@ static void fuzz_serve_minimize(FuzzServer *s, FuzzReader *r, FuzzBuf *resp) {
     int64_t dur;
     Str msg;
     if (!fuzz_min_stop(&c)) {
-        if (fuzz_server_run(s, vals, n, a, &dur, &msg)) {
-            /* It passes, so there is nothing to make smaller. */
-        } else {
+        /* The input has to still be interesting for the reason it was sent:
+         * with coverage to keep, it has to reach some of it and pass, and
+         * without, it has to fail. Anything else was a flake. */
+        bool ok = fuzz_server_run(s, vals, n, a, &dur, &msg);
+        bool interesting = c.keep != NULL
+                               ? ok && fuzz_cov_any(c.keep, fuzz_cov.snap, c.keep_len)
+                               : !ok;
+        if (!ok) {
+            c.failed = true;
+            c.msg = msg;
+        }
+        if (interesting) {
             h->raw_in_mem = 1;
             const Byte *p = v.t == TYPE_STRING ? orig.s.p : (const Byte *)orig.b.p;
             Int len = v.t == TYPE_STRING ? orig.s.len : orig.b.len;
@@ -1472,9 +1675,22 @@ static void fuzz_serve_minimize(FuzzServer *s, FuzzReader *r, FuzzBuf *resp) {
     }
     memcpy(v.data, &orig, v.t->size);
     burrow__testing_values_free(vals, n);
+    /* The coverage of what is now in the memory. When nothing got smaller the
+     * snapshot is of the last candidate tried, so what came in goes back. */
+    Str cov = {0};
+    if (success && !c.failed) {
+        Byte out_hash[32];
+        Str out_value = fuzz_mem_value(&s->mem);
+        burrow__fuzz_sha256(out_value.p, out_value.len, out_hash);
+        if (memcmp(in_hash, out_hash, 32) != 0 && fuzz_cov.snap != NULL)
+            cov = str_from_bytes(fuzz_cov.snap, fuzz_cov.snap_len);
+        else
+            cov = keep;
+    }
     fuzz_put_u8(resp, success ? 1 : 0);
     fuzz_put_str(resp, success && c.failed ? c.msg : (Str){0});
     fuzz_put_i64(resp, pal_clock_monotonic() - start);
+    fuzz_put_str(resp, cov);
     arena_free(&ar);
 }
 
@@ -1540,6 +1756,11 @@ bool burrow__fuzz_worker(burrow__FuzzRun fn, void *env, Alloc *a, Str *err) {
     s.env = env;
     if (!fuzz_worker_comm(&s, a, err))
         return false;
+    Int cov_len = burrow__fuzz_coverage_len();
+    if (cov_len > 0) {
+        fuzz_cov.snap = (Byte *)fuzz_must_alloc((size_t)cov_len, 1);
+        fuzz_cov.snap_len = cov_len;
+    }
     fuzz_catch_interrupt();
     burrow__fuzz_mutator_init(&s.m);
     burrow__note_init(&s.wd_quit);
@@ -1598,6 +1819,13 @@ bool burrow__fuzz_worker(burrow__FuzzRun fn, void *env, Alloc *a, Str *err) {
     burrow__fuzz_mutator_free(&s.m);
     pal_munmap(s.mem.region, s.mem.size, NULL);
     fuzz_release_interrupt();
+    if (s.cov_mask != NULL)
+        fuzz_free(s.cov_mask, (size_t)s.cov_mask_len, 1);
+    if (fuzz_cov.snap != NULL) {
+        fuzz_free(fuzz_cov.snap, (size_t)fuzz_cov.snap_len, 1);
+        fuzz_cov.snap = NULL;
+        fuzz_cov.snap_len = 0;
+    }
     return ok;
 }
 
@@ -1630,6 +1858,9 @@ static void fuzz_centry_free(FuzzCorpusEntry *e) {
 typedef struct FuzzResult {
     FuzzCorpusEntry entry;
     Str crasher_msg;
+    /* coverageData, on the heap, or NULL. */
+    Byte *cov;
+    Int cov_len;
     bool can_minimize;
     int64_t limit;
     int64_t count;
@@ -1642,23 +1873,51 @@ static void fuzz_result_free(FuzzResult *r) {
         return;
     fuzz_centry_free(&r->entry);
     fuzz_str_free(r->crasher_msg);
+    if (r->cov != NULL)
+        fuzz_free(r->cov, (size_t)r->cov_len, 1);
     fuzz_free(r, sizeof *r, _Alignof(FuzzResult));
 }
 
-/* fuzzInput and fuzzMinimizeInput, which borrow their strings. */
+/* fuzzInput, which borrows its entry and owns its copy of the coverage
+ * mask. */
 typedef struct FuzzInput {
     FuzzCorpusEntry entry;
     int64_t timeout;
     int64_t limit;
     bool warmup;
+    Byte *cov;
+    Int cov_len;
 } FuzzInput;
 
+/* fuzzMinimizeInput, which owns all of it. */
 typedef struct FuzzMinInput {
     FuzzCorpusEntry entry;
     Str crasher_msg;
     int64_t timeout;
     int64_t limit;
+    Byte *keep;
+    Int keep_len;
 } FuzzMinInput;
+
+static Byte *fuzz_bytes_dup(const Byte *p, Int n) {
+    if (p == NULL || n == 0)
+        return NULL;
+    Byte *d = (Byte *)fuzz_must_alloc((size_t)n, 1);
+    memcpy(d, p, (size_t)n);
+    return d;
+}
+
+static void fuzz_bytes_free(Byte *p, Int n) {
+    if (p != NULL)
+        fuzz_free(p, (size_t)n, 1);
+}
+
+static void fuzz_min_input_free(FuzzMinInput *in) {
+    fuzz_centry_free(&in->entry);
+    fuzz_str_free(in->crasher_msg);
+    fuzz_bytes_free(in->keep, in->keep_len);
+    *in = (FuzzMinInput){0};
+}
 
 /* workerFuzzDuration and workerTimeoutDuration. */
 #define FUZZ_WORKER_FUZZ_NS ((int64_t)100 * 1000000)
@@ -1728,8 +1987,16 @@ typedef struct FuzzCoord {
     Int qhead;
     Int qlen;
     Int qcap;
-    bool min_queued;
-    FuzzMinInput min_item;
+    /* minimizeQueue, whose items it owns. */
+    FuzzMinInput *minq;
+    Int minq_head;
+    Int minq_len;
+    Int minq_cap;
+
+    /* coverageMask, or NULL when the binary has no counters. */
+    Byte *cov_mask;
+    Int cov_len;
+    int64_t interesting_count;
 
     FuzzResult *results;
     FuzzResult *results_tail;
@@ -2043,8 +2310,11 @@ static Str fuzz_entry_name(Str data) {
 
 typedef struct FuzzResp {
     int64_t total;
+    int64_t interesting;
     int64_t count;
     Str err;
+    /* CoverageData, in the call's arena. */
+    Str cov;
 } FuzzResp;
 
 /* workerClient.fuzz. Answers false when the call failed, with *err, and
@@ -2063,6 +2333,7 @@ static bool fuzz_client_fuzz(FuzzWorker *w, const FuzzInput *in, FuzzCorpusEntry
     fuzz_put_i64(&req, in->timeout);
     fuzz_put_i64(&req, in->limit);
     fuzz_put_u8(&req, in->warmup ? 1 : 0);
+    fuzz_put_str(&req, str_from_bytes(in->cov, in->cov_len));
     FuzzReader r;
     Str call_err = {0};
     bool call_ok = fuzz_call(w, &req, &r, a, &call_err);
@@ -2070,10 +2341,11 @@ static bool fuzz_client_fuzz(FuzzWorker *w, const FuzzInput *in, FuzzCorpusEntry
     Str internal_err = {0};
     if (call_ok) {
         resp->total = fuzz_get_i64(&r);
-        fuzz_get_i64(&r);
+        resp->interesting = fuzz_get_i64(&r);
         fuzz_get_i64(&r);
         resp->err = fuzz_get_str(&r);
         internal_err = fuzz_get_str(&r);
+        resp->cov = fuzz_get_str(&r);
         if (r.failed) {
             call_ok = false;
             call_err = fuzz_reader_error(&r);
@@ -2095,7 +2367,7 @@ static bool fuzz_client_fuzz(FuzzWorker *w, const FuzzInput *in, FuzzCorpusEntry
         *resp = (FuzzResp){0};
         return false;
     }
-    if (!call_ok || resp->err.len > 0) {
+    if (!call_ok || resp->err.len > 0 || (!in->warmup && resp->cov.len > 0)) {
         Any *vals;
         Int n;
         Str why;
@@ -2136,6 +2408,8 @@ typedef struct FuzzMinResp {
     int64_t count;
     int64_t duration;
     Str err;
+    /* CoverageData, in the call's arena. */
+    Str cov;
 } FuzzMinResp;
 
 /* workerClient.minimize. *out is always set, and belongs to the caller. */
@@ -2158,6 +2432,7 @@ static bool fuzz_client_minimize(FuzzWorker *w, const FuzzMinInput *in,
     *out = fuzz_centry_copy(in->entry);
     int64_t timeout = in->timeout;
     int64_t limit = in->limit;
+    Str keep = str_from_bytes(in->keep, in->keep_len);
     bool ok = true;
     for (Int i = 0; i < n; i++) {
         if (vals[i].t != TYPE_STRING && vals[i].t != TYPE_BYTES)
@@ -2167,6 +2442,7 @@ static bool fuzz_client_minimize(FuzzWorker *w, const FuzzMinInput *in,
         fuzz_put_i64(&req, timeout);
         fuzz_put_i64(&req, limit);
         fuzz_put_i64(&req, (int64_t)i);
+        fuzz_put_str(&req, keep);
         FuzzReader r;
         Str call_err = {0};
         bool call_ok = fuzz_call(w, &req, &r, a, &call_err);
@@ -2174,11 +2450,21 @@ static bool fuzz_client_minimize(FuzzWorker *w, const FuzzMinInput *in,
         bool wrote = false;
         if (call_ok) {
             wrote = fuzz_get_u8(&r) != 0;
-            resp->err = fuzz_get_str(&r);
+            Str msg = fuzz_get_str(&r);
             resp->duration = fuzz_get_i64(&r);
+            Str cov = fuzz_get_str(&r);
             if (r.failed) {
                 call_ok = false;
                 call_err = fuzz_reader_error(&r);
+            } else if (wrote) {
+                /* A value that could not be made smaller leaves what the last
+                 * one found alone. */
+                resp->err = msg;
+                resp->cov = cov;
+                /* Once it fails it is a crasher, and the values after this
+                 * one only have to keep it failing. */
+                if (msg.len > 0)
+                    keep = (Str){0};
             }
         }
         fuzz_call_done(w);
@@ -2280,6 +2566,8 @@ static FuzzResult *fuzz_worker_minimize(FuzzWorker *w, const FuzzMinInput *in,
             fuzz_centry_free(&out);
             res->entry = fuzz_centry_copy(in->entry);
             res->crasher_msg = fuzz_str_dup(in->crasher_msg);
+            res->cov = fuzz_bytes_dup(in->keep, in->keep_len);
+            res->cov_len = res->cov != NULL ? in->keep_len : 0;
             return res;
         }
         res->entry = out;
@@ -2300,6 +2588,10 @@ static FuzzResult *fuzz_worker_minimize(FuzzWorker *w, const FuzzMinInput *in,
     }
     res->entry = out;
     res->crasher_msg = fuzz_str_dup(resp.err);
+    if (resp.err.len == 0) {
+        res->cov = fuzz_bytes_dup(resp.cov.p, resp.cov.len);
+        res->cov_len = res->cov != NULL ? resp.cov.len : 0;
+    }
     res->count = resp.count;
     res->total_duration = resp.duration;
     return res;
@@ -2395,7 +2687,9 @@ static Str fuzz_worker_coordinate(FuzzWorker *w, Arena *ar) {
             Str err = {0};
             bool can_minimize = true;
             Str crasher = {0};
-            if (!fuzz_client_fuzz(w, &input, &out, &resp, &internal, a, &err)) {
+            bool fuzz_ok = fuzz_client_fuzz(w, &input, &out, &resp, &internal, a, &err);
+            fuzz_bytes_free(input.cov, input.cov_len);
+            if (!fuzz_ok) {
                 int32_t st = fuzz_worker_stop(w);
                 burrow__lock(&c->mu);
                 bool cancel = c->cancel;
@@ -2437,9 +2731,14 @@ static Str fuzz_worker_coordinate(FuzzWorker *w, Arena *ar) {
             res->entry = out;
             res->crasher_msg = fuzz_str_dup(crasher);
             res->can_minimize = can_minimize;
+            if (crasher.len == 0 && resp.cov.len > 0) {
+                res->cov = fuzz_bytes_dup(resp.cov.p, resp.cov.len);
+                res->cov_len = resp.cov.len;
+            }
             fuzz_post(w, res);
         } else {
             fuzz_post(w, fuzz_worker_minimize(w, &min_input, a));
+            fuzz_min_input_free(&min_input);
         }
         arena_release(ar, mark);
     }
@@ -2548,14 +2847,19 @@ static bool fuzz_write_to_corpus(FuzzCorpusEntry *e, Str dir, Alloc *a, Str *err
     return ok;
 }
 
-/* addCorpusEntries(false, e): e is copied in unless its data is already
- * there. */
-static void fuzz_add_corpus(FuzzCoord *c, FuzzCorpusEntry e) {
+/* addCorpusEntries: e is copied in unless its data is already there, and
+ * with to_cache it is written to the cache directory first, which is where
+ * its path then points. Answers whether it was new, or false with *err set
+ * when the write failed. */
+static bool fuzz_add_corpus_entry(FuzzCoord *c, FuzzCorpusEntry *e, bool to_cache,
+                                  Alloc *a, Str *err) {
     Byte h[32];
-    burrow__fuzz_sha256(e.data.p, e.data.len, h);
+    burrow__fuzz_sha256(e->data.p, e->data.len, h);
     for (Int i = 0; i < c->ncorpus; i++)
         if (memcmp(c->hashes[i], h, 32) == 0)
-            return;
+            return false;
+    if (to_cache && !fuzz_write_to_corpus(e, c->opts->cache_dir, a, err))
+        return false;
     if (c->ncorpus == c->corpus_cap) {
         Int ncap = c->corpus_cap == 0 ? 8 : c->corpus_cap * 2;
         c->corpus = (FuzzCorpusEntry *)fuzz_must_realloc(
@@ -2565,9 +2869,53 @@ static void fuzz_add_corpus(FuzzCoord *c, FuzzCorpusEntry e) {
             c->hashes, (size_t)c->corpus_cap * 32, (size_t)ncap * 32, 1);
         c->corpus_cap = ncap;
     }
-    c->corpus[c->ncorpus] = fuzz_centry_copy(e);
+    c->corpus[c->ncorpus] = fuzz_centry_copy(*e);
     memcpy(c->hashes[c->ncorpus], h, 32);
     c->ncorpus++;
+    return true;
+}
+
+/* addCorpusEntries(false, e). */
+static void fuzz_add_corpus(FuzzCoord *c, FuzzCorpusEntry e) {
+    fuzz_add_corpus_entry(c, &e, false, NULL, NULL);
+}
+
+/* updateCoverage. */
+static void fuzz_update_coverage(FuzzCoord *c, const Byte *cov, Int n) {
+    if (n != c->cov_len)
+        return;
+    for (Int i = 0; i < n; i++)
+        c->cov_mask[i] |= cov[i];
+}
+
+/* queueForMinimization. The queue gets its own copy of everything. A crash
+ * matters more than any coverage waiting to be minimized, so it goes on its
+ * own. */
+static void fuzz_queue_minimize(FuzzCoord *c, const FuzzResult *res, const Byte *keep,
+                                Int keep_len) {
+    if (res->crasher_msg.len > 0) {
+        for (Int i = 0; i < c->minq_len; i++)
+            fuzz_min_input_free(&c->minq[c->minq_head + i]);
+        c->minq_head = 0;
+        c->minq_len = 0;
+    }
+    if (c->minq_head + c->minq_len == c->minq_cap) {
+        if (c->minq_head > 0) {
+            memmove(c->minq, c->minq + c->minq_head,
+                    (size_t)c->minq_len * sizeof(FuzzMinInput));
+            c->minq_head = 0;
+        } else {
+            Int ncap = c->minq_cap == 0 ? 4 : c->minq_cap * 2;
+            c->minq = (FuzzMinInput *)fuzz_must_realloc(
+                c->minq, (size_t)c->minq_cap * sizeof(FuzzMinInput),
+                (size_t)ncap * sizeof(FuzzMinInput), _Alignof(FuzzMinInput));
+            c->minq_cap = ncap;
+        }
+    }
+    Byte *k = fuzz_bytes_dup(keep, keep_len);
+    c->minq[c->minq_head + c->minq_len++] = (FuzzMinInput){
+        fuzz_centry_copy(res->entry), fuzz_str_dup(res->crasher_msg), 0, 0, k,
+        k != NULL ? keep_len : 0};
 }
 
 static void fuzz_enqueue(FuzzCoord *c, FuzzCorpusEntry e) {
@@ -2603,16 +2951,25 @@ static void fuzz_log_stats(FuzzCoord *c) {
     char buf[32];
     Str el = burrow__testing_duration_string(fuzz_elapsed(c), buf);
     if (fuzz_warmup_run(c)) {
-        fuzz_log(fmt_sprintf_v(
-            a, "fuzz: elapsed: %s, testing seed corpus: %d/%d completed\n", el,
-            c->warmup_count - c->warmup_left, c->warmup_count));
+        fuzz_log(fmt_sprintf_v(a, "fuzz: elapsed: %s, %s: %d/%d completed\n", el,
+                               c->cov_mask != NULL
+                                   ? BURROW_S("gathering baseline coverage")
+                                   : BURROW_S("testing seed corpus"),
+                               c->warmup_count - c->warmup_left, c->warmup_count));
     } else if (c->crash_minimizing != NULL) {
         fuzz_log(fmt_sprintf_v(a, "fuzz: elapsed: %s, minimizing\n", el));
     } else {
         double secs = (double)(now - c->time_last_log) / 1e9;
         double rate = (double)(c->count - c->count_last_log) / secs;
-        fuzz_log(fmt_sprintf_v(a, "fuzz: elapsed: %s, execs: %d (%.0f/sec)\n", el,
-                               c->count, rate));
+        if (c->cov_mask != NULL)
+            fuzz_log(fmt_sprintf_v(a,
+                                   "fuzz: elapsed: %s, execs: %d (%.0f/sec), new "
+                                   "interesting: %d (total: %d)\n",
+                                   el, c->count, rate, c->interesting_count,
+                                   (int64_t)c->warmup_count + c->interesting_count));
+        else
+            fuzz_log(fmt_sprintf_v(a, "fuzz: elapsed: %s, execs: %d (%.0f/sec)\n", el,
+                                   c->count, rate));
     }
     c->count_last_log = c->count;
     c->time_last_log = now;
@@ -2631,7 +2988,8 @@ static bool fuzz_peek_input(FuzzCoord *c, FuzzInput *in) {
     }
     if (c->qlen == 0)
         panic_str(BURROW_S("input queue empty after refill"));
-    *in = (FuzzInput){c->queue[c->qhead], FUZZ_WORKER_FUZZ_NS, 0, fuzz_warmup_run(c)};
+    *in = (FuzzInput){
+        c->queue[c->qhead], FUZZ_WORKER_FUZZ_NS, 0, fuzz_warmup_run(c), NULL, 0};
     if (in->warmup) {
         in->limit = 1;
         return true;
@@ -2655,10 +3013,10 @@ static bool fuzz_can_minimize(FuzzCoord *c) {
 
 /* peekMinimizeInput. */
 static bool fuzz_peek_minimize(FuzzCoord *c, FuzzMinInput *in) {
-    if (!fuzz_can_minimize(c) || !c->min_queued)
+    if (!fuzz_can_minimize(c) || c->minq_len == 0)
         return false;
     const burrow__FuzzOpts *o = c->opts;
-    *in = c->min_item;
+    *in = c->minq[c->minq_head];
     if (o->minimize_timeout > 0)
         in->timeout = o->minimize_timeout;
     if (o->minimize_limit > 0) {
@@ -2752,8 +3110,7 @@ static void fuzz_handle_result(FuzzCoord *c, FuzzLoop *l, FuzzResult *res, Alloc
             c->crash_minimizing = res;
             fuzz_log(fmt_sprintf_v(a, "fuzz: minimizing %d-byte failing input file\n",
                                    res->entry.data.len));
-            c->min_item = (FuzzMinInput){res->entry, res->crasher_msg, 0, 0};
-            c->min_queued = true;
+            fuzz_queue_minimize(c, res, NULL, 0);
             return;
         }
         if (!l->crash_written) {
@@ -2763,6 +3120,37 @@ static void fuzz_handle_result(FuzzCoord *c, FuzzLoop *l, FuzzResult *res, Alloc
                 fuzz_stop(c, l, res->crasher_msg, res->entry.path);
             } else {
                 fuzz_stop(c, l, werr, (Str){0});
+            }
+        }
+    } else if (res->cov != NULL && c->cov_mask != NULL) {
+        if (fuzz_warmup_run(c)) {
+            fuzz_update_coverage(c, res->cov, res->cov_len);
+            c->warmup_left--;
+            if (c->warmup_left == 0)
+                fuzz_log(fmt_sprintf_v(
+                    a,
+                    "fuzz: elapsed: %s, gathering baseline coverage: %d/%d completed, "
+                    "now fuzzing with %d workers\n",
+                    burrow__testing_duration_string(fuzz_elapsed(c), buf),
+                    c->warmup_count, c->warmup_count, (Int)c->parallel));
+        } else if (res->cov_len == c->cov_len &&
+                   fuzz_cov_has_new(c->cov_mask, res->cov, c->cov_len)) {
+            /* diffCoverage: what this input reached that nothing before it
+             * did. */
+            for (Int i = 0; i < res->cov_len; i++)
+                res->cov[i] &= (Byte)~c->cov_mask[i];
+            if (fuzz_can_minimize(c) && res->can_minimize &&
+                c->crash_minimizing == NULL) {
+                fuzz_queue_minimize(c, res, res->cov, res->cov_len);
+            } else {
+                Str werr = {0};
+                if (fuzz_add_corpus_entry(c, &res->entry, true, a, &werr)) {
+                    fuzz_update_coverage(c, res->cov, res->cov_len);
+                    fuzz_enqueue(c, c->corpus[c->ncorpus - 1]);
+                    c->interesting_count++;
+                } else if (werr.len > 0) {
+                    fuzz_stop(c, l, werr, (Str){0});
+                }
             }
         }
     } else if (fuzz_warmup_run(c)) {
@@ -2852,13 +3240,25 @@ bool burrow__fuzz_coordinate(Alloc *a, const burrow__FuzzOpts *opts, Str *err,
         for (Int i = 0; i < opts->ntypes; i++)
             if (opts->types[i] == TYPE_STRING || opts->types[i] == TYPE_BYTES)
                 c.minimization_allowed = true;
-    fuzz_log(
-        BURROW_S("warning: the test binary was not built with coverage "
-                 "instrumentation, so fuzzing will run without coverage guidance and "
-                 "may be inefficient\n"));
-    c.warmup_count = c.nseeds;
-    for (Int i = 0; i < c.nseeds; i++)
-        fuzz_enqueue(&c, c.seeds[i]);
+    Int cov_size = burrow__fuzz_coverage_len();
+    if (cov_size == 0) {
+        fuzz_log(BURROW_S(
+            "warning: the test binary was not built with coverage "
+            "instrumentation, so fuzzing will run without coverage guidance and "
+            "may be inefficient\n"));
+        /* Nothing is learned from a warmup without coverage, but the seeds
+         * still have to pass before fuzzing starts. */
+        c.warmup_count = c.nseeds;
+        for (Int i = 0; i < c.nseeds; i++)
+            fuzz_enqueue(&c, c.seeds[i]);
+    } else {
+        c.warmup_count = c.ncorpus;
+        for (Int i = 0; i < c.ncorpus; i++)
+            fuzz_enqueue(&c, c.corpus[i]);
+        c.cov_mask = (Byte *)fuzz_must_alloc((size_t)cov_size, 1);
+        memset(c.cov_mask, 0, (size_t)cov_size);
+        c.cov_len = cov_size;
+    }
     c.warmup_left = c.warmup_count;
     if (c.ncorpus == 0) {
         fuzz_log(BURROW_S("warning: starting with empty corpus\n"));
@@ -2955,10 +3355,29 @@ bool burrow__fuzz_coordinate(Alloc *a, const burrow__FuzzOpts *opts, Str *err,
             continue;
         }
 
-        FuzzInput in;
+        /* Go picks between the two at random when both are ready. Minimizing
+         * first keeps it from waiting behind an input queue that never
+         * empties, which is what the queue does once coverage is adding to
+         * it. */
         FuzzWorker *w = fuzz_idle_worker(&c);
+        FuzzMinInput min;
+        if (w != NULL && !l.stopping && fuzz_peek_minimize(&c, &min)) {
+            w->min_input = min;
+            w->job = FUZZ_JOB_MINIMIZE;
+            w->idle = false;
+            burrow__note_wake(&w->wake);
+            c.minq_head++;
+            c.minq_len--;
+            if (c.minq_len == 0)
+                c.minq_head = 0;
+            c.count_waiting += min.limit;
+            continue;
+        }
+        FuzzInput in;
         if (w != NULL && c.crash_minimizing == NULL && !l.stopping &&
             fuzz_peek_input(&c, &in)) {
+            in.cov = fuzz_bytes_dup(c.cov_mask, c.cov_len);
+            in.cov_len = in.cov != NULL ? c.cov_len : 0;
             w->input = in;
             w->job = FUZZ_JOB_FUZZ;
             w->idle = false;
@@ -2968,16 +3387,6 @@ bool burrow__fuzz_coordinate(Alloc *a, const burrow__FuzzOpts *opts, Str *err,
             if (c.qlen == 0)
                 c.qhead = 0;
             c.count_waiting += in.limit;
-            continue;
-        }
-        FuzzMinInput min;
-        if (w != NULL && !l.stopping && fuzz_peek_minimize(&c, &min)) {
-            w->min_input = min;
-            w->job = FUZZ_JOB_MINIMIZE;
-            w->idle = false;
-            burrow__note_wake(&w->wake);
-            c.min_queued = false;
-            c.count_waiting += min.limit;
             continue;
         }
 
@@ -3049,8 +3458,19 @@ bool burrow__fuzz_coordinate(Alloc *a, const burrow__FuzzOpts *opts, Str *err,
         fuzz_result_free(r);
     }
     fuzz_result_free(c.crash_minimizing);
+    for (Int i = 0; i < c.minq_len; i++)
+        fuzz_min_input_free(&c.minq[c.minq_head + i]);
+    if (c.minq != NULL)
+        fuzz_free(c.minq, (size_t)c.minq_cap * sizeof(FuzzMinInput),
+                  _Alignof(FuzzMinInput));
+    fuzz_bytes_free(c.cov_mask, c.cov_len);
     for (int i = 0; i < c.parallel; i++) {
         FuzzWorker *w = &c.workers[i];
+        /* A job handed over and never taken is still the worker's to free. */
+        if (w->job == FUZZ_JOB_FUZZ)
+            fuzz_bytes_free(w->input.cov, w->input.cov_len);
+        else if (w->job == FUZZ_JOB_MINIMIZE)
+            fuzz_min_input_free(&w->min_input);
         fuzz_str_free(w->err);
         burrow__note_free(&w->wake);
         burrow__fuzz_mutator_free(&w->m);

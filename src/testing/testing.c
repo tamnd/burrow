@@ -2476,7 +2476,9 @@ static void prune_inputs(TestingF *f) {
 
 static void input_body(void *env, TestingT *t) {
     TestingF *f = (TestingF *)env;
+    burrow__fuzz_coverage_reset();
     BURROW_CALLF(f->fn, t, slice_from(f->vals, f->nvals, f->nvals, TYPE_ANY));
+    burrow__fuzz_coverage_snapshot();
 }
 
 /* What the worker runs each input through. The T's report, which is what

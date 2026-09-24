@@ -68,6 +68,13 @@ ifneq ($(COSMO),0)
   HARDENING := -fno-common
 endif
 
+# The compiler's coverage counters, which tests/testing_cover_test.c is built
+# with and nothing else is. clang has 8-bit counters and gcc has only trace-pc,
+# so this asks for the first and falls back to the second. Empty when neither
+# works, and then that test skips.
+COVERFLAGS := $(shell for f in -fsanitize-coverage=inline-8bit-counters -fsanitize-coverage=trace-pc; do \
+	echo 'int f(int x) { return x ? 1 : 2; }' | $(CC) $$f -x c -c - -o /dev/null 2>/dev/null && { echo $$f; break; }; done)
+
 # The stack walker needs the frame pointer to still be there to walk. Without
 # it a panic prints its message and no trace, which is the difference between a
 # bug report somebody can act on and one they cannot. It costs a register on
@@ -219,7 +226,9 @@ $(BUILD)/obj/%.o: src/%.c
 
 $(BUILD)/tests/%: tests/%.c $(TEST_GEN) $(LIB)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(THREADS) $(DEPFLAGS) -MF $@.d -Itests $< $(TEST_GEN) $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_EXTRA) $(THREADS) $(DEPFLAGS) -MF $@.d -Itests $< $(TEST_GEN) $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
+
+$(BUILD)/tests/testing_cover_test: TEST_EXTRA = $(COVERFLAGS)
 
 -include $(DEPS)
 

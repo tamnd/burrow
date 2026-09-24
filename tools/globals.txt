@@ -38,6 +38,7 @@ category	reclaim	The epoch and the handover lists behind lock free reading. One 
 category	pool	sync.Pool's registry and the lock over it, which is one per process because the sweep has to be able to find every pool from the system monitor's thread.
 category	clock	The conversion factor between what the machine's counter counts and nanoseconds. Fixed at boot, so it is asked for once.
 category	machine	What the machine is: the page size and how many cores the process may run on. Both are fixed for the life of the process, so both are asked for once.
+category	coverage	The compiler's coverage counters. The compiler lays them out once per module and calls in to register them before main, so there is one set per process by construction.
 category	symbol-table	The sorted copy of the table of function names, which is one per process because the addresses in it are one per process.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
@@ -133,6 +134,7 @@ global	src/runtime/symtab.c	symtab_sorted_len	symbol-table	How long symtab_sorte
 global	src/testing/testing.c	pkg	package-vars	Go's flag values, the running tests and the failure count for -failfast. Written by testing_init and flag parsing before any test starts, and after that only under pkg.reg_mu.
 global	src/testing/testing.c	timeout_alarm	package-vars	The -test.timeout thread. Started and joined by testing_m_run on the thread that runs it, so nothing else ever touches it.
 global	src/testing/fuzz.c	fuzz_global_inc	package-vars	internal/fuzz's globalInc, what each new generator adds one to for its stream. Only ever touched with an atomic add.
+global	src/testing/fuzz.c	fuzz_cov	coverage	The counter sections the compiler registered and the table trace-pc counts into. Registration happens before main on one thread. The counts are bumped without synchronisation, as Go's are, because a lost count only changes a number the snapshot rounds to a power of two, and the snapshot is only ever taken by a worker process between calls of the fuzz target.
 global	src/testing/fuzz.c	fuzz_interrupt	signal-table	Whether SIGINT stops fuzzing or kills the process, and whether it has arrived, which a handler has to be able to reach with no argument to find it by. Only ever touched atomically, and the handler does nothing else.
 global	src/pal/proc_posix.c	fork_lock	package-vars	This is the synchronisation, and a lock is what it is. Go has the same one as syscall.ForkLock: pal_spawn holds the write side across a fork, and anything that has a descriptor open without close on exec holds the read side until it is marked.
 global	src/pal/proc_windows.c	env_once	package-vars	Windows only. InitOnceExecuteOnce, which is the synchronisation for env_list below.

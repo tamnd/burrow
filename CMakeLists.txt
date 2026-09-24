@@ -266,6 +266,28 @@ if(BURROW_BUILD_TESTS)
         endif()
         add_test(NAME ${test_name} COMMAND ${test_name})
     endforeach()
+
+    # The one test that fuzzes with the compiler's coverage counters, as the
+    # Makefile builds it: 8-bit counters where the compiler has them, trace-pc
+    # where it does not, and neither under MSVC, whose counters need its own
+    # runtime.
+    if(NOT MSVC)
+        include(CheckCSourceCompiles)
+        set(BURROW_COVER_PROBE "
+            void __sanitizer_cov_8bit_counters_init(char *a, char *b) { (void)a; (void)b; }
+            void __sanitizer_cov_trace_pc(void) {}
+            int main(void) { return 0; }")
+        set(CMAKE_REQUIRED_FLAGS "-fsanitize-coverage=inline-8bit-counters")
+        check_c_source_compiles("${BURROW_COVER_PROBE}" BURROW_HAVE_COVER_8BIT)
+        set(CMAKE_REQUIRED_FLAGS "-fsanitize-coverage=trace-pc")
+        check_c_source_compiles("${BURROW_COVER_PROBE}" BURROW_HAVE_COVER_PC)
+        unset(CMAKE_REQUIRED_FLAGS)
+        if(BURROW_HAVE_COVER_8BIT)
+            target_compile_options(testing_cover_test PRIVATE -fsanitize-coverage=inline-8bit-counters)
+        elseif(BURROW_HAVE_COVER_PC)
+            target_compile_options(testing_cover_test PRIVATE -fsanitize-coverage=trace-pc)
+        endif()
+    endif()
 endif()
 
 include(GNUInstallDirs)

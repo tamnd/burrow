@@ -114,4 +114,19 @@ void burrow__fuzz_minimize_bytes(Byte *v, Int *len, burrow__FuzzTry try_fn,
 /* crypto/sha256's Sum256. */
 void burrow__fuzz_sha256(const void *data, Int n, Byte out[32]);
 
+/* coverage.go. The length is 0 when nothing in the program was built with
+ * -fsanitize-coverage, and then the other two do nothing. testing.c resets
+ * the counters before each call of the fuzz target and snapshots them after,
+ * as Go's fuzz function does. */
+Int burrow__fuzz_coverage_len(void);
+void burrow__fuzz_coverage_reset(void);
+void burrow__fuzz_coverage_snapshot(void);
+
+/* The compiler calls these, by these names, in whatever it instrumented. */
+void __sanitizer_cov_8bit_counters_init(
+    char *start,
+    char *stop); /* NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
+void __sanitizer_cov_trace_pc(
+    void); /* NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
+
 #endif

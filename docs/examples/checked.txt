@@ -34,3 +34,4 @@ docs/guides/hashing.md
 docs/guides/unicode.md
 docs/guides/iter.md
 docs/guides/bytes.md
+docs/guides/encoding.md

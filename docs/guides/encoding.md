@@ -129,6 +129,55 @@ fmt_fprintf_v(enc, "%d apples", 12);
 
 `out` now holds `3132206170706c6573`. As in Go, the decoder reports a lone digit at the end as `io_err_unexpected_eof`, since a stream that stops in the middle of a byte has been cut short.
 
+## Base32
+
+`burrow/encoding/base32.h` is Go's `encoding/base32`. Five bytes become eight characters, so the text is longer than base64, but it has no lower case and no punctuation beyond the `=` padding, which makes it safe where case gets folded and easy to read out. `base32_std_encoding` is the RFC 4648 alphabet and `base32_hex_encoding` the "extended hex" one, which sorts in the same order as the bytes it encodes:
+
+<!-- example: ../examples/encoding/base32.c#oneshot -->
+```c
+Str s = base32_encoding_encode_to_string(base32_std_encoding, a,
+                                         BURROW_B("Hello, Gophers"));
+
+Error err = BURROW_NO_ERROR;
+Slice b = base32_encoding_decode_string(base32_hex_encoding, a,
+                                        BURROW_S("91IMOR3F41BMUSJCCG======"), &err);
+```
+
+`s` is `JBSWY3DPFQQEO33QNBSXE4Y=` and `b` is `Hello World`. The rest of the calls match base64's one for one, with `base32_` in front: the lengths, the calls that work into a slice you have, the `append_` forms, and the streaming encoder and decoder. Decoding skips `\r` and `\n` here as well, and does it without copying the input first, which Go's `Decode` does.
+
+`base32_new_encoding` takes a 32 byte alphabet, and `base32_encoding_with_padding` changes the padding or drops it. There is no strict mode, as Go's base32 has none. Both return the `Base32Encoding` by value:
+
+<!-- example: ../examples/encoding/base32.c#raw -->
+```c
+Base32Encoding raw =
+    base32_encoding_with_padding(base32_std_encoding, BASE32_NO_PADDING);
+Str r = base32_encoding_encode_to_string(&raw, a, BURROW_B("key"));
+Slice c = base32_encoding_decode_string(&raw, a, BURROW_S("NNSXS"), &err);
+```
+
+`r` is `NNSXS` and `c` is `key`. Bad input gives back what decoded before it and a `Base32CorruptInputError` with the offset, counted with any newlines left out:
+
+<!-- example: ../examples/encoding/base32.c#bad -->
+```c
+Slice part = base32_encoding_decode_string(base32_std_encoding, a,
+                                           BURROW_S("NBSWY3DPEB3W64TMMQ1="), &err);
+const Base32CorruptInputError *off =
+    errors_as(err, TYPE_BASE32_CORRUPT_INPUT_ERROR);
+```
+
+`part` is `hello worl`, `*off` is 18, and the error reads `illegal base32 data at input byte 18`. The encoder from `base32_new_encoder` holds back up to four bytes until it has five, so Close it at the end:
+
+<!-- example: ../examples/encoding/base32.c#stream -->
+```c
+StringsBuilder out = STRINGS_BUILDER(a);
+IoWriteCloser enc =
+    base32_new_encoder(a, base32_std_encoding, strings_builder_as_io_writer(&out));
+fmt_fprintf_v(io_write_closer_as_io_writer(enc), "%d apples", 12);
+enc.vt->closer.close(enc.data);
+```
+
+`out` now holds `GEZCAYLQOBWGK4Y=`.
+
 ## Base64
 
 `burrow/encoding/base64.h` is Go's `encoding/base64`. The four encodings in common use are ready made: `base64_std_encoding`, `base64_url_encoding` with `-` and `_` in place of `+` and `/`, and the raw forms of both, which leave the `=` padding off. Each call takes the encoding first, then the allocator:
@@ -183,4 +232,4 @@ enc.vt->closer.close(enc.data);
 
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/base64` or `encoding/hex` is missing.
+Nothing from Go's `encoding`, `encoding/base32`, `encoding/base64` or `encoding/hex` is missing.

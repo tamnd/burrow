@@ -23,5 +23,6 @@ iter
 strings
 bytes
 encoding
+encoding/base32
 encoding/base64
 encoding/hex

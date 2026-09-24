@@ -50,3 +50,8 @@ strconv: method (*NumError) Error: takes the allocator the message is built in
 encoding/base64: func NewEncoding: returns the Encoding by value
 encoding/base64: method (Encoding) WithPadding: returns the Encoding by value
 encoding/base64: method (Encoding) Strict: returns the Encoding by value
+
+# include/burrow/encoding/base32.h: the same as base64, an Encoding is a plain
+# value.
+encoding/base32: func NewEncoding: returns the Encoding by value
+encoding/base32: method (Encoding) WithPadding: returns the Encoding by value

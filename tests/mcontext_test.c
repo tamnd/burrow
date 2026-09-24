@@ -373,4 +373,7 @@ static void TestMakeRefusesWhatItCannotHonour(TestingT *t) {
     X(TestARoundRobinOverSixteenContexts)                                              \
     X(TestMakeRefusesWhatItCannotHonour)
 
-TESTING_MAIN(TESTS)
+/* Bare, because these tests attach the thread they run on, and a scheduler
+ * thread is attached already. With Fibers that is a second
+ * ConvertThreadToFiber, which fails. */
+TESTING_MAIN_BARE(TESTS)

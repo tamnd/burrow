@@ -211,9 +211,13 @@ Int burrow__callers(void *from, Int skip, Uintptr *pcs, Int max) {
             RtlCaptureStackBackTrace(base + (ULONG)skip + (ULONG)n, want, frames, NULL);
         if (got == 0)
             break;
-        for (USHORT i = 0; i < got; i++)
-            pcs[n++] = (Uintptr)frames[i];
-        if ((ULONG)got < want)
+        /* A zero is not a return address. Wine gives them for the frames under
+         * main it cannot unwind, and they end the walk as the end of the chain
+         * would. */
+        USHORT i = 0;
+        while (i < got && frames[i] != NULL)
+            pcs[n++] = (Uintptr)frames[i++];
+        if (i < got || (ULONG)got < want)
             break;
     }
     return n;

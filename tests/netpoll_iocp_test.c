@@ -261,7 +261,7 @@ static void write_side(void *env) {
 }
 
 static void one_each_way(void *env) {
-    (void)env;
+    TestingT *t = env;
 
     if (burrow__poll_open(shared.a, &pd_a) != 0)
         return;
@@ -278,7 +278,7 @@ static void TestASubmittedReadIsFinishedByAWriteFromTheOtherSide(TestingT *t) {
     CHECK(pair_open(&shared));
     (void)runtime_gomaxprocs(2);
 
-    runtime_main(BURROW_FN(Func, one_each_way, NULL));
+    runtime_main(BURROW_FN(Func, one_each_way, t));
 
     CHECK_INT_EQ(why, BURROW_POLL_READY);
     CHECK_INT_EQ(got_n, 6);

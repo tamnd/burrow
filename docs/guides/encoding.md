@@ -277,6 +277,83 @@ io_copy(a, bytes_buffer_as_io_writer(&got), dec, &err);
 
 `got` holds `Hello World!`.
 
+## Binary
+
+`burrow/encoding/binary.h` is Go's `encoding/binary`: numbers in a fixed byte order, fixed size values made of them, and varints. The byte orders are `binary_little_endian`, `binary_big_endian` and `binary_native_endian`, each a `BinaryByteOrder` you can pass around. Each order's methods are also plain inline functions, which is what you want in a hot loop:
+
+<!-- example: ../examples/encoding/binary.c#order -->
+```c
+Byte b[4];
+Slice buf = slice_from(b, 4, 4, TYPE_BYTE);
+binary_big_endian_put_uint32(buf, 0xcafe0102);
+uint32_t le = binary_little_endian_uint32(buf);
+Slice out = binary_big_endian_append_uint16(a, slice_nil(TYPE_BYTE), 0xbeef);
+```
+
+`b` holds `ca fe 01 02`, and reading it back little endian gives `0x201feca`. The getters and setters panic with Go's index message when the slice is too short, and they check that before touching anything. The append functions grow the slice from the allocator only when it is full, so `out` holds `be ef`.
+
+`binary_write`, `binary_read`, `binary_encode`, `binary_decode`, `binary_append` and `binary_size` take the value as an `Any`, so they work on any type declared with the macros in `burrow/declare.h`. A value can be a bool, a sized number, a complex number, an array or struct of those, a slice of them, or a pointer to any of these. Structs are written field by field with no padding, and a field named `_` is written as zeros and skipped when read. Declare the type first:
+
+<!-- example: ../examples/encoding/binary.c#declare -->
+```c
+BURROW_ARRAY_TYPE(Magic, uint8_t, 4);
+
+#define HEADER_FIELDS(F, T)                                                            \
+    F(T, Magic, Magic, "")                                                             \
+    F(T, uint16_t, Version, "")                                                        \
+    F(T, uint32_t, Count, "")                                                          \
+    F(T, double, Scale, "")
+BURROW_STRUCT(Header, HEADER_FIELDS);
+```
+
+Then write it. The value is encoded into a buffer and handed to the writer in one call. The buffer is on the stack for values up to 256 bytes, and bigger ones borrow it from the allocator:
+
+<!-- example: ../examples/encoding/binary.c#write -->
+```c
+Header h = {{{'B', 'R', 'W', '1'}}, 2, 1000, 0.5};
+BytesBuffer w = BYTES_BUFFER(a);
+Error err = binary_write(a, bytes_buffer_as_io_writer(&w), binary_big_endian,
+                         BURROW_ANY(TYPE_OF(Header), &h));
+```
+
+Those are 18 bytes, the same as `binary_size` gives: `42 52 57 31 00 02 00 00 03 e8 3f e0 00 00 00 00 00 00`. Reading them back fills in a `Header` again:
+
+<!-- example: ../examples/encoding/binary.c#read -->
+```c
+Header back;
+BytesReader r;
+bytes_reader_reset(&r, wb);
+err = binary_read(a, bytes_reader_as_io_reader(&r), binary_big_endian,
+                  BURROW_ANY(TYPE_OF(Header), &back));
+```
+
+A read that runs out of input partway through gives `io_err_unexpected_eof`, and one that gets nothing gives `io_eof`, as `io_read_full` does. Go's rule about unexported fields comes along too. Reading into a struct with a lowercase field panics the way reflect does, so give fields that are read capital letters, or name padding `_`, `_1`, `_2` and so on.
+
+Varints are the same as Go's. Unsigned ones are seven bits a byte, and signed ones are zigzag encoded first so small negative numbers stay short:
+
+<!-- example: ../examples/encoding/binary.c#varint -->
+```c
+Slice v = binary_append_uvarint(a, slice_nil(TYPE_BYTE), 300);
+v = binary_append_varint(a, v, -3);
+Int n1, n2;
+uint64_t x = binary_uvarint(v, &n1);
+int64_t y = binary_varint(slice_sub(v, n1, v.len), &n2);
+```
+
+That is `ac 02 05`, and it decodes back to 300 from two bytes and -3 from one. `binary_uvarint` reports a short buffer as 0 bytes read and an overflow as a negative count. `binary_read_uvarint` and `binary_read_varint` read from an `IoByteReader`, which you get from `bytes_reader_as_io_byte_reader`, `bytes_buffer_as_io_byte_reader` or `strings_reader_as_io_byte_reader`.
+
+Anything without a fixed size is an error rather than a guess. That includes `Int`, `Uint` and `Uintptr`, which is Go's rule for `int` and `uint`:
+
+<!-- example: ../examples/encoding/binary.c#bad -->
+```c
+Int nums[2] = {1, 2};
+IntSlice ns = slice_from(nums, 2, 2, TYPE_INT);
+err = binary_write(a, bytes_buffer_as_io_writer(&w), binary_little_endian,
+                   BURROW_ANY(TYPE_OF(IntSlice), &ns));
+```
+
+The error reads `binary.Write: some values are not fixed-sized in type []int`.
+
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64` or `encoding/hex` is missing.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary` or `encoding/hex` is missing.

@@ -294,6 +294,7 @@ BURROW_OWNS(ret) Str bytes_buffer_read_string(BytesBuffer *b, Alloc *a, Byte del
 
 IoReader bytes_buffer_as_io_reader(BytesBuffer *b);
 IoWriter bytes_buffer_as_io_writer(BytesBuffer *b);
+IoByteReader bytes_buffer_as_io_byte_reader(BytesBuffer *r);
 
 extern const Type *const TYPE_BYTES_BUFFER;
 
@@ -331,6 +332,7 @@ int64_t bytes_reader_write_to(BytesReader *r, IoWriter w, Error *err);
 
 IoReader bytes_reader_as_io_reader(BytesReader *r);
 IoSeeker bytes_reader_as_io_seeker(BytesReader *r);
+IoByteReader bytes_reader_as_io_byte_reader(BytesReader *r);
 
 extern const Type *const TYPE_BYTES_READER;
 

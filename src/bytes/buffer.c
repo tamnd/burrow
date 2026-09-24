@@ -513,3 +513,15 @@ IoWriter bytes_buffer_as_io_writer(BytesBuffer *b) {
     IoWriter w = {&buffer_writer_vt, b};
     return w;
 }
+
+static Byte bytes_buffer_io_read_byte(void *self, Error *err) {
+    return bytes_buffer_read_byte((BytesBuffer *)self, err);
+}
+
+static const IoByteReaderVT bytes_buffer_byte_reader_vt = {&bytes_buffer_desc,
+                                                           bytes_buffer_io_read_byte};
+
+IoByteReader bytes_buffer_as_io_byte_reader(BytesBuffer *r) {
+    IoByteReader br = {&bytes_buffer_byte_reader_vt, r};
+    return br;
+}

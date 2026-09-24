@@ -130,20 +130,9 @@ void *slice_at(Slice s, Int i) {
     return (Byte *)s.p + (size_t)i * elem_size(s.elem);
 }
 
-Slice slice_sub3(Slice s, Int lo, Int hi, Int max) {
-    if (lo < 0 || hi < lo || max < hi || max > s.cap)
-        runtime_slice_bounds_out_of_range(lo, hi, s.cap);
-
-    Byte *p = (Byte *)s.p;
-    if (p != NULL)
-        p += (size_t)lo * elem_size(s.elem);
-
-    Slice out = {p, hi - lo, max - lo, s.elem};
-    return out;
-}
-
-Slice slice_sub(Slice s, Int lo, Int hi) {
-    return slice_sub3(s, lo, hi, s.cap);
+void slice__sub3(Slice s, Int lo, Int hi, Int max) {
+    (void)max;
+    runtime_slice_bounds_out_of_range(lo, hi, s.cap);
 }
 
 /* ----------------------------------------------------------------- append */

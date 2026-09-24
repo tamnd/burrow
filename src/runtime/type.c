@@ -446,6 +446,15 @@ bool field_is_exported(const Field *f) {
     return f->name.p[0] >= 'A' && f->name.p[0] <= 'Z';
 }
 
+bool field_is_blank(const Field *f) {
+    if (f == NULL || f->name.len <= 0 || f->name.p == NULL || f->name.p[0] != '_')
+        return false;
+    for (Int i = 1; i < f->name.len; i++)
+        if (f->name.p[i] < '0' || f->name.p[i] > '9')
+            return false;
+    return true;
+}
+
 bool field_is_embedded(const Field *f) {
     if (f == NULL || f->type == NULL || f->type->name.len <= 0)
         return false;

@@ -100,8 +100,29 @@ BURROW_BORROWS(ret, s) void *slice_at(Slice s, Int i);
  * Neither copies. The result points into the same backing array, so writing
  * through it is visible through the original, which is the entire reason
  * slicing is cheap. */
-BURROW_BORROWS(ret, s) Slice slice_sub(Slice s, Int lo, Int hi);
-BURROW_BORROWS(ret, s) Slice slice_sub3(Slice s, Int lo, Int hi, Int max);
+BURROW_BORROWS(ret, s) static inline Slice slice_sub3(Slice s, Int lo, Int hi, Int max);
+BURROW_BORROWS(ret, s) static inline Slice slice_sub(Slice s, Int lo, Int hi);
+
+/* Both are inline because reslicing sits in the middle of hot loops, and as a
+ * call the thirty two byte header goes out through memory and comes back the
+ * same way, which costs more than the slicing. Out of bounds goes to
+ * slice__sub3, which panics with Go's message. Call the public names. */
+BURROW_NORETURN void slice__sub3(Slice s, Int lo, Int hi, Int max);
+
+BURROW_BORROWS(ret, s) static inline Slice slice_sub3(Slice s, Int lo, Int hi,
+                                                      Int max) {
+    if (lo < 0 || hi < lo || max < hi || max > s.cap)
+        slice__sub3(s, lo, hi, max);
+    Byte *p = (Byte *)s.p;
+    if (p != NULL && s.elem != NULL)
+        p += (size_t)lo * (size_t)s.elem->size;
+    Slice out = {p, hi - lo, max - lo, s.elem};
+    return out;
+}
+
+BURROW_BORROWS(ret, s) static inline Slice slice_sub(Slice s, Int lo, Int hi) {
+    return slice_sub3(s, lo, hi, s.cap);
+}
 
 /* append(s, elems...), with Go's semantics including the part people trip on.
  *

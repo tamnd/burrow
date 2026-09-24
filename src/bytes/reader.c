@@ -240,3 +240,15 @@ IoSeeker bytes_reader_as_io_seeker(BytesReader *r) {
     IoSeeker sk = {&bytes_reader_seeker_vt, r};
     return sk;
 }
+
+static Byte bytes_reader_io_read_byte(void *self, Error *err) {
+    return bytes_reader_read_byte((BytesReader *)self, err);
+}
+
+static const IoByteReaderVT bytes_reader_byte_reader_vt = {&bytes_reader_desc,
+                                                           bytes_reader_io_read_byte};
+
+IoByteReader bytes_reader_as_io_byte_reader(BytesReader *r) {
+    IoByteReader br = {&bytes_reader_byte_reader_vt, r};
+    return br;
+}

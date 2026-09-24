@@ -238,3 +238,15 @@ IoSeeker strings_reader_as_io_seeker(StringsReader *r) {
     IoSeeker sk = {&reader_seeker_vt, r};
     return sk;
 }
+
+static Byte strings_reader_io_read_byte(void *self, Error *err) {
+    return strings_reader_read_byte((StringsReader *)self, err);
+}
+
+static const IoByteReaderVT strings_reader_byte_reader_vt = {
+    &reader_desc, strings_reader_io_read_byte};
+
+IoByteReader strings_reader_as_io_byte_reader(StringsReader *r) {
+    IoByteReader br = {&strings_reader_byte_reader_vt, r};
+    return br;
+}

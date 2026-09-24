@@ -336,6 +336,12 @@ BURROW_BORROWS(ret, t) const Field *type_field_by_name(const Type *t, Str name);
  * This is reflect.StructField.IsExported, which is a method there too. */
 bool field_is_exported(const Field *f);
 
+/* Go's blank field, the one named _, which takes up room and cannot be named.
+ * C cannot have two members called _ in one struct, so _ followed by digits
+ * counts as well, which lets _1, _2 and so on stand in for Go's repeated _.
+ * encoding/binary is what asks. */
+bool field_is_blank(const Field *f);
+
 /* True for an embedded field, which Go's reflect calls Anonymous.
  *
  * Go's rule is that an embedded field has no name of its own and takes the

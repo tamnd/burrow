@@ -131,6 +131,18 @@ typedef struct IoSeeker {
     void *data;
 } IoSeeker;
 
+/* io.ByteReader. ReadByte returns the next byte, or an error and no byte, so a
+ * caller that gets an error ignores the byte that came with it. */
+typedef struct IoByteReaderVT {
+    const Type *self_type;
+    Byte (*read_byte)(void *self, Error *err);
+} IoByteReaderVT;
+
+typedef struct IoByteReader {
+    const IoByteReaderVT *vt;
+    void *data;
+} IoByteReader;
+
 /* ------------------------------------------------------------- the combinations
  *
  * Go builds these by embedding, and so does this, by holding the embedded

@@ -77,12 +77,19 @@ static void fuzz_free(void *p, size_t size, size_t align) {
         mem_free(heap_allocator(), p, size, align);
 }
 
+/* memmove for a length that can be zero. An empty value's pointer can be
+ * NULL, and the C library does not allow that even for no bytes at all. */
+static void fuzz_copy(void *dst, const void *src, size_t n) {
+    if (n > 0)
+        memmove(dst, src, n);
+}
+
 /* A heap copy of s, which fuzz_str_free gives back. */
 static Str fuzz_str_dup(Str s) {
     if (s.len == 0)
         return (Str){0};
     Byte *p = (Byte *)fuzz_must_alloc((size_t)s.len, 1);
-    memcpy(p, s.p, (size_t)s.len);
+    fuzz_copy(p, s.p, (size_t)s.len);
     return str_from_bytes(p, s.len);
 }
 
@@ -108,7 +115,7 @@ static void fuzz_buf_append(FuzzBuf *b, const void *p, Int n) {
         b->p = (Byte *)fuzz_must_realloc(b->p, (size_t)b->cap, (size_t)ncap, 1);
         b->cap = ncap;
     }
-    memcpy(b->p + b->len, p, (size_t)n);
+    fuzz_copy(b->p + b->len, p, (size_t)n);
     b->len += n;
 }
 
@@ -548,7 +555,7 @@ static Int fuzz_remove_bytes(burrow__FuzzMutator *m, Byte *b, Int len, Int cap) 
         return -1;
     Int pos0 = fuzz_rand(m, len);
     Int pos1 = pos0 + fuzz_choose_len(m, len - pos0);
-    memmove(b + pos0, b + pos1, (size_t)(len - pos1));
+    fuzz_copy(b + pos0, b + pos1, (size_t)(len - pos1));
     return len - (pos1 - pos0);
 }
 
@@ -557,7 +564,7 @@ static Int fuzz_insert_random_bytes(burrow__FuzzMutator *m, Byte *b, Int len, In
     Int n = fuzz_choose_len(m, 1024);
     if (len + n >= cap)
         return -1;
-    memmove(b + pos + n, b + pos, (size_t)(len - pos));
+    fuzz_copy(b + pos + n, b + pos, (size_t)(len - pos));
     for (Int i = 0; i < n; i++)
         b[pos + i] = (Byte)fuzz_rand(m, 256);
     return len + n;
@@ -574,9 +581,9 @@ static Int fuzz_duplicate_bytes(burrow__FuzzMutator *m, Byte *b, Int len, Int ca
     if (len + n * 2 >= cap)
         return -1;
     Int end = len;
-    memmove(b + end + n, b + src, (size_t)n);
-    memmove(b + dst + n, b + dst, (size_t)(end - dst));
-    memmove(b + dst, b + end + n, (size_t)n);
+    fuzz_copy(b + end + n, b + src, (size_t)n);
+    fuzz_copy(b + dst + n, b + dst, (size_t)(end - dst));
+    fuzz_copy(b + dst, b + end + n, (size_t)n);
     return end + n;
 }
 
@@ -589,7 +596,7 @@ static Int fuzz_overwrite_bytes(burrow__FuzzMutator *m, Byte *b, Int len, Int ca
     while (dst == src)
         dst = fuzz_rand(m, len);
     Int n = fuzz_choose_len(m, len - src - 1);
-    memmove(b + dst, b + src, (size_t)fuzz_min(len - dst, n));
+    fuzz_copy(b + dst, b + src, (size_t)fuzz_min(len - dst, n));
     return len;
 }
 
@@ -717,7 +724,7 @@ static Int fuzz_insert_constant_bytes(burrow__FuzzMutator *m, Byte *b, Int len,
     Int n = fuzz_choose_len(m, 4096);
     if (len + n >= cap)
         return -1;
-    memmove(b + dst + n, b + dst, (size_t)(len - dst));
+    fuzz_copy(b + dst + n, b + dst, (size_t)(len - dst));
     Byte rb = (Byte)fuzz_rand(m, 256);
     memset(b + dst, rb, (size_t)n);
     return len + n;
@@ -766,9 +773,9 @@ static Int fuzz_swap_bytes(burrow__FuzzMutator *m, Byte *b, Int len, Int cap) {
     if (len + n >= cap)
         return -1;
     Int end = len;
-    memmove(b + end, b + dst, (size_t)n);
-    memmove(b + dst, b + src, (size_t)n);
-    memmove(b + src, b + end, (size_t)n);
+    fuzz_copy(b + end, b + dst, (size_t)n);
+    fuzz_copy(b + dst, b + src, (size_t)n);
+    fuzz_copy(b + src, b + end, (size_t)n);
     return end;
 }
 
@@ -824,12 +831,12 @@ static void fuzz_to_scratch(burrow__FuzzMutator *m, const Byte *p, Int len,
                             Int max_per_val) {
     if (m->scratch_cap < max_per_val) {
         Byte *s = (Byte *)fuzz_must_alloc((size_t)max_per_val, 1);
-        memcpy(s, p, (size_t)len);
+        fuzz_copy(s, p, (size_t)len);
         fuzz_retire(m, m->scratch, m->scratch_cap);
         m->scratch = s;
         m->scratch_cap = max_per_val;
     } else {
-        memmove(m->scratch, p, (size_t)len);
+        fuzz_copy(m->scratch, p, (size_t)len);
     }
 }
 
@@ -908,7 +915,7 @@ void burrow__fuzz_mutate(burrow__FuzzMutator *m, Any *vals, Int n, Int max_bytes
         fuzz_to_scratch(m, s.p, s.len, max_per_val);
         Int got = burrow__fuzz_mutate_bytes(m, m->scratch, s.len, m->scratch_cap);
         Byte *p = fuzz_str_buf(m, i, got);
-        memcpy(p, m->scratch, (size_t)got);
+        fuzz_copy(p, m->scratch, (size_t)got);
         *(Str *)d = str_from_bytes(p, got);
     } else if (t == TYPE_BYTES) {
         Slice *s = (Slice *)d;
@@ -949,26 +956,26 @@ void burrow__fuzz_minimize_bytes(Byte *v, Int *lenp, burrow__FuzzTry try_fn,
     for (Int i = 0; i < len - 1; i++) {
         if (stop(env))
             goto done;
-        memcpy(tmp, v, (size_t)i);
-        memcpy(tmp + i, v + i + 1, (size_t)(len - i - 1));
+        fuzz_copy(tmp, v, (size_t)i);
+        fuzz_copy(tmp + i, v + i + 1, (size_t)(len - i - 1));
         if (!try_fn(env, tmp, len - 1))
             continue;
-        memmove(v + i, v + i + 1, (size_t)(len - i - 1));
+        fuzz_copy(v + i, v + i + 1, (size_t)(len - i - 1));
         len--;
         i--;
     }
 
     /* Removing runs of bytes. */
     for (Int i = 0; i < len - 1; i++) {
-        memcpy(tmp, v, (size_t)i);
+        fuzz_copy(tmp, v, (size_t)i);
         for (Int j = len; j > i + 1; j--) {
             if (stop(env))
                 goto done;
             Int clen = len - j + i;
-            memcpy(tmp + i, v + j, (size_t)(clen - i));
+            fuzz_copy(tmp + i, v + j, (size_t)(clen - i));
             if (!try_fn(env, tmp, clen))
                 continue;
-            memmove(v + i, v + j, (size_t)(len - j));
+            fuzz_copy(v + i, v + j, (size_t)(len - j));
             len = clen;
             j = len;
         }
@@ -1063,7 +1070,7 @@ void burrow__fuzz_sha256(const void *data, Int n, Byte out[32]) {
         left -= 64;
     }
     Byte tail[128] = {0};
-    memcpy(tail, p, (size_t)left);
+    fuzz_copy(tail, p, (size_t)left);
     tail[left] = 0x80;
     Int blocks = left < 56 ? 1 : 2;
     uint64_t bits = (uint64_t)n * 8;
@@ -1153,7 +1160,7 @@ static void fuzz_mem_set_value(FuzzMem *m, Str v) {
                                 "value length %d larger than shared memory capacity %d",
                                 v.len, fuzz_mem_cap(m)));
     fuzz_hdr(m)->value_len = v.len;
-    memcpy(fuzz_mem_bytes(m), v.p, (size_t)v.len);
+    fuzz_copy(fuzz_mem_bytes(m), v.p, (size_t)v.len);
 }
 
 /* os.TempDir. */
@@ -1466,7 +1473,7 @@ static void fuzz_serve_fuzz(FuzzServer *s, FuzzReader *r, FuzzBuf *resp) {
             s->cov_mask = (Byte *)fuzz_must_alloc((size_t)cov_data.len, 1);
             s->cov_mask_len = cov_data.len;
         }
-        memcpy(s->cov_mask, cov_data.p, (size_t)cov_data.len);
+        fuzz_copy(s->cov_mask, cov_data.p, (size_t)cov_data.len);
     }
     FuzzMemHeader *h = fuzz_hdr(&s->mem);
     h->rand_state = s->m.r.state;
@@ -1581,7 +1588,7 @@ static bool fuzz_min_try(void *env, const Byte *p, Int n) {
     FuzzCell prev;
     memcpy(&prev, v.data, v.t->size);
     fuzz_min_set(c, p, n);
-    memmove(fuzz_mem_bytes(&c->s->mem), p, (size_t)fuzz_min(c->mem_len, n));
+    fuzz_copy(fuzz_mem_bytes(&c->s->mem), p, (size_t)fuzz_min(c->mem_len, n));
     c->mem_len = n;
     fuzz_hdr(&c->s->mem)->value_len = n;
     int64_t dur;
@@ -1663,7 +1670,7 @@ static void fuzz_serve_minimize(FuzzServer *s, FuzzReader *r, FuzzBuf *resp) {
             Int len = v.t == TYPE_STRING ? orig.s.len : orig.b.len;
             Int cap = len > 0 ? len : 1;
             Byte *buf = (Byte *)fuzz_must_alloc((size_t)cap, 1);
-            memcpy(buf, p, (size_t)len);
+            fuzz_copy(buf, p, (size_t)len);
             burrow__fuzz_minimize_bytes(buf, &len, fuzz_min_try, fuzz_min_stop, &c);
             fuzz_min_set(&c, buf, len);
             success = true;
@@ -1903,7 +1910,7 @@ static Byte *fuzz_bytes_dup(const Byte *p, Int n) {
     if (p == NULL || n == 0)
         return NULL;
     Byte *d = (Byte *)fuzz_must_alloc((size_t)n, 1);
-    memcpy(d, p, (size_t)n);
+    fuzz_copy(d, p, (size_t)n);
     return d;
 }
 
@@ -2192,7 +2199,7 @@ static bool fuzz_worker_start(FuzzWorker *w, Alloc *a, Str *err) {
     const char **argv = (const char **)fuzz_must_alloc((size_t)nargs * sizeof(char *),
                                                        _Alignof(char *));
     char *path = (char *)fuzz_must_alloc((size_t)c->argv0.len + 1, 1);
-    memcpy(path, c->argv0.p, (size_t)c->argv0.len);
+    fuzz_copy(path, c->argv0.p, (size_t)c->argv0.len);
     path[c->argv0.len] = '\0';
     argv[0] = path;
     argv[1] = "-test.fuzzworker";
@@ -2775,7 +2782,7 @@ static void fuzz_worker_main(void *arg) {
 static char *fuzz_cpath(Str s, size_t *size) {
     *size = (size_t)s.len + 1;
     char *p = (char *)fuzz_must_alloc(*size, 1);
-    memcpy(p, s.p, (size_t)s.len);
+    fuzz_copy(p, s.p, (size_t)s.len);
     p[s.len] = '\0';
     return p;
 }
@@ -2901,8 +2908,8 @@ static void fuzz_queue_minimize(FuzzCoord *c, const FuzzResult *res, const Byte 
     }
     if (c->minq_head + c->minq_len == c->minq_cap) {
         if (c->minq_head > 0) {
-            memmove(c->minq, c->minq + c->minq_head,
-                    (size_t)c->minq_len * sizeof(FuzzMinInput));
+            fuzz_copy(c->minq, c->minq + c->minq_head,
+                      (size_t)c->minq_len * sizeof(FuzzMinInput));
             c->minq_head = 0;
         } else {
             Int ncap = c->minq_cap == 0 ? 4 : c->minq_cap * 2;
@@ -2921,8 +2928,8 @@ static void fuzz_queue_minimize(FuzzCoord *c, const FuzzResult *res, const Byte 
 static void fuzz_enqueue(FuzzCoord *c, FuzzCorpusEntry e) {
     if (c->qhead + c->qlen == c->qcap) {
         if (c->qhead > 0) {
-            memmove(c->queue, c->queue + c->qhead,
-                    (size_t)c->qlen * sizeof(FuzzCorpusEntry));
+            fuzz_copy(c->queue, c->queue + c->qhead,
+                      (size_t)c->qlen * sizeof(FuzzCorpusEntry));
             c->qhead = 0;
         } else {
             Int ncap = c->qcap == 0 ? 8 : c->qcap * 2;

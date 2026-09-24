@@ -4,6 +4,29 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.2 (2026-09-24)
+
+The first half of the encoding packages.
+
+### Added
+
+- `encoding`, the six marshaler interfaces and the calls that find them on a value (#191).
+- `encoding/hex`, including `Dump`, `Dumper` and the streaming encoder and decoder (#192).
+- `encoding/base64`, all four standard encodings, custom alphabets and padding, and the streaming forms (#193).
+- `encoding/base32`, with the standard and hex alphabets (#194).
+- `encoding/ascii85` (#195).
+- `encoding/binary`, all three byte orders, varints, and Read, Write, Size, Encode, Decode and Append over type descriptors. Structs and arrays compile to a cached plan and run several times faster than Go (#196).
+- `IoByteReader`, with adapters for `BytesReader`, `BytesBuffer` and `StringsReader` (#196).
+
+### Changed
+
+- `slice_sub` and `slice_sub3` are inline now, so reslicing in a hot loop no longer costs a call (#196).
+
+### Not yet
+
+- The single value Append calls in `encoding/binary` are about 3 times slower than Go's, because a Slice comes back from a call through memory (#196).
+- Symlinks come back as regular files under Wine (#176).
+
 ## v0.1.1 (2026-09-24)
 
 The first P1 packages: strings and bytes in full, and the pieces they stand on.

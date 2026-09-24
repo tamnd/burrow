@@ -186,7 +186,8 @@ Int strings_index(Str s, Str substr) {
              * positives. */
             Int r = burrow__bytealg_index_string(tail_at(s, i), substr);
             return r >= 0 ? r + i : -1;
-        } else if (n > BURROW__BYTEALG_MAX_LEN && fails >= 4 + (i >> 4) && i < t) {
+        }
+        if (n > BURROW__BYTEALG_MAX_LEN && fails >= 4 + (i >> 4) && i < t) {
             Int j = burrow__bytealg_index_rabin_karp(tail_at(s, i), substr);
             return j < 0 ? -1 : i + j;
         }
@@ -870,7 +871,7 @@ Str strings_repeat(Alloc *a, Str s, Int count) {
     /* Past a certain chunk size it is counterproductive to use larger chunks
      * as the source of the write, as when the source is too large we are
      * basically just thrashing the CPU D-cache. */
-    const Int chunk_limit = 8 * 1024;
+    const Int chunk_limit = (Int)8 * 1024;
     Int chunk_max = n;
     if (n > chunk_limit) {
         chunk_max = chunk_limit / s.len * s.len;

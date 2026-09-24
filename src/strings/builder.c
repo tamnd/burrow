@@ -77,7 +77,7 @@ static bool builder_grow(StringsBuilder *b, Int n) {
         nbuf = (Byte *)mem_alloc_nozero(b->a, (size_t)ncap, 1);
         if (nbuf == NULL)
             return false;
-        if (b->len > 0)
+        if (b->len > 0 && b->buf != NULL)
             memcpy(nbuf, b->buf, (size_t)b->len);
     }
     b->buf = nbuf;

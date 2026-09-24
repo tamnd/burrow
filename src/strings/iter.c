@@ -37,10 +37,10 @@ static StringsSeqState *seq_state(Alloc *a, Str s) {
     return st;
 }
 
-static IterSeq seq_of(void (*run)(void *, IterYield), StringsSeqState *st) {
+static IterSeq seq_of(void (*body)(void *, IterYield), StringsSeqState *st) {
     IterSeq seq = {NULL, NULL};
     if (st != NULL) {
-        seq.f = run;
+        seq.f = body;
         seq.env = st;
     }
     return seq;

@@ -171,10 +171,9 @@ struct StringsReplacer {
 };
 
 static void *replacer_alloc(StringsReplacer *r, size_t size) {
-    size_t hdr = (sizeof(ReplacerBlock) + _Alignof(max_align_t) - 1) &
-                 ~(size_t)(_Alignof(max_align_t) - 1);
-    ReplacerBlock *b =
-        (ReplacerBlock *)mem_alloc(r->a, hdr + size, _Alignof(max_align_t));
+    size_t hdr = (sizeof(ReplacerBlock) + BURROW_ALIGN_MAX - 1) &
+                 ~(size_t)(BURROW_ALIGN_MAX - 1);
+    ReplacerBlock *b = (ReplacerBlock *)mem_alloc(r->a, hdr + size, BURROW_ALIGN_MAX);
     if (b == NULL) {
         r->failed = true;
         return NULL;
@@ -417,7 +416,7 @@ void strings_replacer_free(StringsReplacer *r) {
     Alloc *a = r->a;
     for (ReplacerBlock *b = r->blocks; b != NULL;) {
         ReplacerBlock *next = b->next;
-        mem_free(a, b, b->size, _Alignof(max_align_t));
+        mem_free(a, b, b->size, BURROW_ALIGN_MAX);
         b = next;
     }
     if (r->oldnew != NULL)

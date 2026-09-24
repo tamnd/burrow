@@ -243,7 +243,7 @@ static Int ascii85_encoder_write(void *self, Slice p, Error *err) {
 
     /* Whole groups, a buffer at a time. */
     while (left >= 4) {
-        Int nn = ASCII85_OUT_SIZE / 5 * 4;
+        Int nn = (Int)ASCII85_OUT_SIZE / 5 * 4;
         if (nn > left)
             nn = left;
         nn -= nn % 4;

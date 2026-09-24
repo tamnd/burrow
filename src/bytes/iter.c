@@ -39,10 +39,10 @@ static BytesSeqState *bseq_state(Alloc *a, Slice s) {
     return st;
 }
 
-static IterSeq bseq_of(void (*run)(void *, IterYield), BytesSeqState *st) {
+static IterSeq bseq_of(void (*body)(void *, IterYield), BytesSeqState *st) {
     IterSeq seq = {NULL, NULL};
     if (st != NULL) {
-        seq.f = run;
+        seq.f = body;
         seq.env = st;
     }
     return seq;

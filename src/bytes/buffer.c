@@ -481,7 +481,8 @@ Slice bytes_buffer_read_bytes(BytesBuffer *b, Alloc *a, Byte delim, Error *err) 
         BURROW_OUT(err, burrow_err_out_of_memory);
         return slice_nil(TYPE_BYTE);
     }
-    memcpy(p, line.p, (size_t)line.len);
+    if (line.len > 0)
+        memcpy(p, line.p, (size_t)line.len);
     BURROW_OUT(err, e);
     return slice_from(p, line.len, line.len, TYPE_BYTE);
 }

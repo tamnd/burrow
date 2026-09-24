@@ -1528,29 +1528,29 @@ static void ExampleNeverRun(void) {
 
 /* ------------------------------------------------------------- fuzz targets */
 
-/* The text of the panic the last guarded call raised, or nothing. */
-static char caught_text[200];
+/* The text of the panic a guarded call raised, or nothing. Each caller has its
+ * own buffer because the seeds of a fuzz target run in parallel. */
+#define CAUGHT_MAX 200
 
-static void keep_caught_text(Any p) {
+static void keep_caught_text(Any p, char *caught_text) {
     caught_text[0] = '\0';
     if (p.t != TYPE_STRING)
         return;
     Str s = *(const Str *)p.data;
-    size_t n =
-        s.len < (Int)sizeof caught_text - 1 ? (size_t)s.len : sizeof caught_text - 1;
+    size_t n = s.len < (Int)CAUGHT_MAX - 1 ? (size_t)s.len : CAUGHT_MAX - 1;
     memcpy(caught_text, s.p, n);
     caught_text[n] = '\0';
 }
 
 /* Calls fn and keeps the text of the panic it raises. The calls are
  * functions of their own so that nothing the setjmp can clobber lives here. */
-static void guard(void (*fn)(void *), void *env) {
+static void guard(void (*fn)(void *), void *env, char *caught_text) {
     caught_text[0] = '\0';
     BURROW_TRY {
         fn(env);
     }
     BURROW_CATCH(p) {
-        keep_caught_text(p);
+        keep_caught_text(p, caught_text);
     }
     BURROW_TRY_END;
 }
@@ -1601,18 +1601,19 @@ static int32_t fuzz_seeds_run;
 /* Every type a fuzz function can take, two seeds of them, the second all
  * zeroes. The seeds go parallel, which keeps the F alive past its target. */
 static void fuzz_types_fn(void *env, TestingT *t, Slice args) {
+    char caught_text[CAUGHT_MAX];
     TestingF *f = (TestingF *)env;
-    guard(call_f_fail, f);
+    guard(call_f_fail, f, caught_text);
     if (strcmp(
             caught_text,
             "testing: f.Fail was called inside the fuzz target, use t.Fail instead") !=
         0)
         testing_t_errorf_v(t, "f.Fail inside: %q", caught_text);
-    guard(call_f_skipped, f);
+    guard(call_f_skipped, f, caught_text);
     if (strcmp(caught_text, "testing: f.Skipped was called inside the fuzz target, use "
                             "t.Skipped instead") != 0)
         testing_t_errorf_v(t, "f.Skipped inside: %q", caught_text);
-    guard(call_f_context, f);
+    guard(call_f_context, f, caught_text);
     if (strcmp(caught_text, "testing: f.Context was called inside the fuzz target, use "
                             "t.Context instead") != 0)
         testing_t_errorf_v(t, "f.Context inside: %q", caught_text);
@@ -1646,10 +1647,10 @@ static void fuzz_types_fn(void *env, TestingT *t, Slice args) {
         testing_t_error_v(t, "second seed is not all zeroes");
     }
 
-    guard(call_arg_wrong_type, &args);
+    guard(call_arg_wrong_type, &args, caught_text);
     if (strcmp(caught_text, "testing: fuzz argument 0 is string, not int") != 0)
         testing_t_errorf_v(t, "asking for the wrong type: %q", caught_text);
-    guard(call_arg_past_end, &args);
+    guard(call_arg_past_end, &args, caught_text);
     if (strcmp(caught_text, "testing: fuzz argument 15 out of range with 15 values") !=
         0)
         testing_t_errorf_v(t, "asking past the end: %q", caught_text);
@@ -1690,21 +1691,23 @@ static void FuzzTypes(TestingF *f) {
 
 /* The misuse Go stops with a panic, each with its message. */
 static void FuzzMisuse(TestingF *f) {
-    guard(call_add_uintptr, f);
+    char caught_text[CAUGHT_MAX];
+    guard(call_add_uintptr, f, caught_text);
     if (strcmp(caught_text, "testing: unsupported type to Add uintptr") != 0)
         testing_f_errorf_v(f, "adding a uintptr: %q", caught_text);
-    guard(call_fuzz_no_types, f);
+    guard(call_fuzz_no_types, f, caught_text);
     if (strcmp(caught_text,
                "testing: fuzz target must receive at least two arguments, where "
                "the first argument is a *T") != 0)
         testing_f_errorf_v(f, "no types: %q", caught_text);
-    guard(call_fuzz_int, f);
+    guard(call_fuzz_int, f, caught_text);
     if (strcmp(caught_text, "testing: F.Fuzz called more than once") != 0)
         testing_f_errorf_v(f, "a second call: %q", caught_text);
 }
 
 static void FuzzUnsupported(TestingF *f) {
-    guard(call_fuzz_uintptr, f);
+    char caught_text[CAUGHT_MAX];
+    guard(call_fuzz_uintptr, f, caught_text);
     if (strcmp(caught_text, "testing: unsupported type for fuzzing uintptr") != 0)
         testing_f_errorf_v(f, "a uintptr: %q", caught_text);
 }

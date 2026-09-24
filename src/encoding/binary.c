@@ -33,7 +33,7 @@
 
 #define BINARY_ORDER_DESC(sym, gname, tag)                                             \
     static const Type sym = {                                                          \
-        {(const Byte *)gname, (Int)(sizeof gname - 1)},                                \
+        {(const Byte *)(gname), (Int)(sizeof(gname) - 1)},                             \
         {(const Byte *)"encoding/binary", 15},                                         \
         KIND_STRUCT,                                                                   \
         0,                                                                             \
@@ -136,13 +136,14 @@ static Byte *binary_grow(Alloc *a, Slice *b, Int n) {
         (void)self;                                                                    \
         return binary_##name##_append_uint64(a, b, v);                                 \
     }                                                                                  \
-    static const BinaryByteOrderVT vt = {&desc,         name##_m16,    name##_m32,     \
+    static const BinaryByteOrderVT vt = {&(desc),       name##_m16,    name##_m32,     \
                                          name##_m64,    name##_mput16, name##_mput32,  \
                                          name##_mput64, name##_mstring};               \
-    static const BinaryAppendByteOrderVT avt = {                                       \
-        &desc, name##_mappend16, name##_mappend32, name##_mappend64, name##_mstring};  \
-    const BinaryByteOrder binary_##name = {&vt, NULL};                                 \
-    const BinaryAppendByteOrder binary_##name##_append = {&avt, NULL}
+    static const BinaryAppendByteOrderVT avt = {&(desc), name##_mappend16,             \
+                                                name##_mappend32, name##_mappend64,    \
+                                                name##_mstring};                       \
+    const BinaryByteOrder binary_##name = {&(vt), NULL};                               \
+    const BinaryAppendByteOrder binary_##name##_append = {&(avt), NULL}
 
 BINARY_ORDER(little_endian, binary_le_desc, binary_little_endian_vt,
              binary_little_endian_avt);
@@ -385,7 +386,8 @@ static int binary_target(Any data, BinaryTarget *tg) {
         binary_nil_panic();
     if (t->kind == KIND_POINTER) {
         t = t->elem;
-        p = *(Byte **)(void *)p;
+        void *pv = p;
+        p = (Byte *)*(void **)pv;
         if (p == NULL) {
             if (binary_fast_kind(t)) {
                 tg->size = binary_type_size(t);
@@ -395,7 +397,8 @@ static int binary_target(Any data, BinaryTarget *tg) {
         }
     }
     if (t->kind == KIND_SLICE) {
-        Slice s = *(const Slice *)(const void *)p;
+        const void *sv = p;
+        Slice s = *(const Slice *)sv;
         tg->t = t->elem;
         tg->p = (Byte *)s.p;
         tg->n = s.len;
@@ -881,7 +884,7 @@ static Byte *binary_run_encode(const BinaryPlan *pl, BinaryByteOrder order, Byte
         case BINARY_OP_SWAP2:
             for (uint32_t j = 0; j < n; j++, dst += 2) {
                 uint16_t v;
-                memcpy(&v, s + 2 * j, 2);
+                memcpy(&v, s + (size_t)j * 2, 2);
                 v = bits_reverse_bytes16(v);
                 memcpy(dst, &v, 2);
             }
@@ -889,7 +892,7 @@ static Byte *binary_run_encode(const BinaryPlan *pl, BinaryByteOrder order, Byte
         case BINARY_OP_SWAP4:
             for (uint32_t j = 0; j < n; j++, dst += 4) {
                 uint32_t v;
-                memcpy(&v, s + 4 * j, 4);
+                memcpy(&v, s + (size_t)j * 4, 4);
                 v = bits_reverse_bytes32(v);
                 memcpy(dst, &v, 4);
             }
@@ -897,7 +900,7 @@ static Byte *binary_run_encode(const BinaryPlan *pl, BinaryByteOrder order, Byte
         case BINARY_OP_SWAP8:
             for (uint32_t j = 0; j < n; j++, dst += 8) {
                 uint64_t v;
-                memcpy(&v, s + 8 * j, 8);
+                memcpy(&v, s + (size_t)j * 8, 8);
                 v = bits_reverse_bytes64(v);
                 memcpy(dst, &v, 8);
             }
@@ -906,7 +909,7 @@ static Byte *binary_run_encode(const BinaryPlan *pl, BinaryByteOrder order, Byte
             binary_check_nil(order);
             for (uint32_t j = 0; j < n; j++, dst += 2) {
                 uint16_t v;
-                memcpy(&v, s + 2 * j, 2);
+                memcpy(&v, s + (size_t)j * 2, 2);
                 order.vt->put_uint16(order.data, (Slice){dst, 2, 2, TYPE_BYTE}, v);
             }
             break;
@@ -914,7 +917,7 @@ static Byte *binary_run_encode(const BinaryPlan *pl, BinaryByteOrder order, Byte
             binary_check_nil(order);
             for (uint32_t j = 0; j < n; j++, dst += 4) {
                 uint32_t v;
-                memcpy(&v, s + 4 * j, 4);
+                memcpy(&v, s + (size_t)j * 4, 4);
                 order.vt->put_uint32(order.data, (Slice){dst, 4, 4, TYPE_BYTE}, v);
             }
             break;
@@ -922,7 +925,7 @@ static Byte *binary_run_encode(const BinaryPlan *pl, BinaryByteOrder order, Byte
             binary_check_nil(order);
             for (uint32_t j = 0; j < n; j++, dst += 8) {
                 uint64_t v;
-                memcpy(&v, s + 8 * j, 8);
+                memcpy(&v, s + (size_t)j * 8, 8);
                 order.vt->put_uint64(order.data, (Slice){dst, 8, 8, TYPE_BYTE}, v);
             }
             break;
@@ -958,7 +961,7 @@ static const Byte *binary_run_decode(const BinaryPlan *pl, BinaryByteOrder order
                 uint16_t v;
                 memcpy(&v, src, 2);
                 v = bits_reverse_bytes16(v);
-                memcpy(d + 2 * j, &v, 2);
+                memcpy(d + (size_t)j * 2, &v, 2);
             }
             break;
         case BINARY_OP_SWAP4:
@@ -966,7 +969,7 @@ static const Byte *binary_run_decode(const BinaryPlan *pl, BinaryByteOrder order
                 uint32_t v;
                 memcpy(&v, src, 4);
                 v = bits_reverse_bytes32(v);
-                memcpy(d + 4 * j, &v, 4);
+                memcpy(d + (size_t)j * 4, &v, 4);
             }
             break;
         case BINARY_OP_SWAP8:
@@ -974,7 +977,7 @@ static const Byte *binary_run_decode(const BinaryPlan *pl, BinaryByteOrder order
                 uint64_t v;
                 memcpy(&v, src, 8);
                 v = bits_reverse_bytes64(v);
-                memcpy(d + 8 * j, &v, 8);
+                memcpy(d + (size_t)j * 8, &v, 8);
             }
             break;
         case BINARY_OP_CALL2:
@@ -982,7 +985,7 @@ static const Byte *binary_run_decode(const BinaryPlan *pl, BinaryByteOrder order
             for (uint32_t j = 0; j < n; j++, src += 2) {
                 uint16_t v = order.vt->uint16(
                     order.data, (Slice){(Byte *)(uintptr_t)src, 2, 2, TYPE_BYTE});
-                memcpy(d + 2 * j, &v, 2);
+                memcpy(d + (size_t)j * 2, &v, 2);
             }
             break;
         case BINARY_OP_CALL4:
@@ -990,7 +993,7 @@ static const Byte *binary_run_decode(const BinaryPlan *pl, BinaryByteOrder order
             for (uint32_t j = 0; j < n; j++, src += 4) {
                 uint32_t v = order.vt->uint32(
                     order.data, (Slice){(Byte *)(uintptr_t)src, 4, 4, TYPE_BYTE});
-                memcpy(d + 4 * j, &v, 4);
+                memcpy(d + (size_t)j * 4, &v, 4);
             }
             break;
         case BINARY_OP_CALL8:
@@ -998,7 +1001,7 @@ static const Byte *binary_run_decode(const BinaryPlan *pl, BinaryByteOrder order
             for (uint32_t j = 0; j < n; j++, src += 8) {
                 uint64_t v = order.vt->uint64(
                     order.data, (Slice){(Byte *)(uintptr_t)src, 8, 8, TYPE_BYTE});
-                memcpy(d + 8 * j, &v, 8);
+                memcpy(d + (size_t)j * 8, &v, 8);
             }
             break;
         case BINARY_OP_SKIP:
@@ -1072,7 +1075,7 @@ static void binary_decode_target(BinaryByteOrder order, Byte *buf,
 Int binary_size(Any data) {
     if (data.t == NULL || data.data == NULL)
         return -1;
-    BinaryTarget tg;
+    BinaryTarget tg = {NULL, NULL, 0, 0};
     return binary_target(data, &tg) == BINARY_TARGET_OK ? tg.size : -1;
 }
 
@@ -1081,7 +1084,7 @@ Int binary_size(Any data) {
 #define BINARY_STACK 256
 
 Error binary_read(Alloc *a, IoReader r, BinaryByteOrder order, Any data) {
-    BinaryTarget tg;
+    BinaryTarget tg = {NULL, NULL, 0, 0};
     int k = binary_target(data, &tg);
     if (k == BINARY_TARGET_INVALID)
         return fmt_errorf_v("binary.Read: invalid type %T", data);
@@ -1106,7 +1109,7 @@ Error binary_read(Alloc *a, IoReader r, BinaryByteOrder order, Any data) {
 }
 
 Error binary_write(Alloc *a, IoWriter w, BinaryByteOrder order, Any data) {
-    BinaryTarget tg;
+    BinaryTarget tg = {NULL, NULL, 0, 0};
     int k = binary_target(data, &tg);
     if (k == BINARY_TARGET_NIL)
         binary_nil_panic();
@@ -1136,7 +1139,7 @@ Error binary_write(Alloc *a, IoWriter w, BinaryByteOrder order, Any data) {
 }
 
 Int binary_decode(Slice buf, BinaryByteOrder order, Any data, Error *err) {
-    BinaryTarget tg;
+    BinaryTarget tg = {NULL, NULL, 0, 0};
     int k = binary_target(data, &tg);
     if (k == BINARY_TARGET_INVALID) {
         BURROW_OUT(err, fmt_errorf_v("binary.Decode: invalid type %T", data));
@@ -1154,7 +1157,7 @@ Int binary_decode(Slice buf, BinaryByteOrder order, Any data, Error *err) {
 }
 
 Int binary_encode(Slice buf, BinaryByteOrder order, Any data, Error *err) {
-    BinaryTarget tg;
+    BinaryTarget tg = {NULL, NULL, 0, 0};
     int k = binary_target(data, &tg);
     if (k == BINARY_TARGET_INVALID) {
         BURROW_OUT(err, fmt_errorf_v(
@@ -1174,7 +1177,7 @@ Int binary_encode(Slice buf, BinaryByteOrder order, Any data, Error *err) {
 }
 
 Slice binary_append(Alloc *a, Slice buf, BinaryByteOrder order, Any data, Error *err) {
-    BinaryTarget tg;
+    BinaryTarget tg = {NULL, NULL, 0, 0};
     int k = binary_target(data, &tg);
     if (k == BINARY_TARGET_INVALID) {
         BURROW_OUT(err, fmt_errorf_v(

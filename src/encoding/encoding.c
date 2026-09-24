@@ -221,7 +221,7 @@ static Slice encoding_do_marshal(Alloc *a, Any v, const EncodingWant *w, Error *
     } else {
         EncodingAllocArg aa = a;
         EncodingErrorArg ea = &e;
-        void *args[2] = {&aa, &ea};
+        void *args[2] = {(void *)&aa, (void *)&ea};
         void *rets[1] = {&out};
         method_call(f.m, f.recv, args, rets);
     }
@@ -247,7 +247,7 @@ static Slice encoding_do_append(Alloc *a, Any v, const EncodingWant *w, Slice b,
     } else {
         EncodingAllocArg aa = a;
         EncodingErrorArg ea = &e;
-        void *args[3] = {&aa, &b, &ea};
+        void *args[3] = {(void *)&aa, &b, (void *)&ea};
         void *rets[1] = {&out};
         method_call(f.m, f.recv, args, rets);
     }
@@ -268,7 +268,7 @@ static Error encoding_do_unmarshal(Alloc *a, Any v, const EncodingWant *w, Slice
     }
     Error out = BURROW_NO_ERROR;
     EncodingAllocArg aa = a;
-    void *args[2] = {&aa, &data};
+    void *args[2] = {(void *)&aa, &data};
     void *rets[1] = {&out};
     method_call(f.m, f.recv, args, rets);
     return out;

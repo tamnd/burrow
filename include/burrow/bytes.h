@@ -314,8 +314,8 @@ typedef struct BytesReader {
     Int prev_rune; /* where the last ReadRune started, or -1 */
 } BytesReader;
 
-BURROW_OWNS(ret) BytesReader *bytes_new_reader(Alloc *a, Slice b);
-void bytes_reader_reset(BytesReader *r, Slice b);
+BURROW_OWNS(ret) BytesReader *bytes_new_reader(Alloc *a, Slice s);
+void bytes_reader_reset(BytesReader *r, Slice s);
 
 /* The bytes not yet read, and the length of the whole slice. */
 Int bytes_reader_len(BytesReader *r);

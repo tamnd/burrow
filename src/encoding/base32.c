@@ -616,7 +616,7 @@ static Int base32_encoder_write(void *self, Slice p, Error *err) {
 
     /* Whole blocks, a buffer at a time. */
     while (left >= 5) {
-        Int nn = BASE32_OUT_SIZE / 8 * 5;
+        Int nn = (Int)BASE32_OUT_SIZE / 8 * 5;
         if (nn > left) {
             nn = left;
             nn -= nn % 5;

@@ -610,7 +610,7 @@ static Int base64_encoder_write(void *self, Slice p, Error *err) {
 
     /* Whole blocks, a buffer at a time. */
     while (left >= 3) {
-        Int nn = BASE64_OUT_SIZE / 4 * 3;
+        Int nn = (Int)BASE64_OUT_SIZE / 4 * 3;
         if (nn > left) {
             nn = left;
             nn -= nn % 3;

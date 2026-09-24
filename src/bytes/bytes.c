@@ -713,7 +713,7 @@ Slice bytes_repeat(Alloc *a, Slice b, Int count) {
     /* Past a certain chunk size it is counterproductive to use larger chunks
      * as the source of the write, as when the source is too large we are
      * basically just thrashing the CPU D-cache. */
-    const Int chunk_limit = 8 * 1024;
+    const Int chunk_limit = (Int)8 * 1024;
     Int chunk_max = n;
     if (chunk_max > chunk_limit) {
         chunk_max = chunk_limit / b.len * b.len;

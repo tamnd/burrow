@@ -15,11 +15,11 @@
  *         return true;
  *     }
  *
- *     BURROW_CALLF(strings_lines(text), BURROW_FN(IterYield, print_line, NULL));
+ *     BURROW_CALLF(strings_lines(a, text), BURROW_FN(IterYield, print_line, NULL));
  *
  * Or write a loop, which reads like Go and runs the sequence on a coroutine:
  *
- *     BURROW_RANGE(Str, line, strings_lines(text)) {
+ *     BURROW_RANGE(Str, line, strings_lines(a, text)) {
  *         printf(BURROW_STR_FMT, BURROW_STR_ARG(line));
  *     }
  *

@@ -99,6 +99,11 @@ BURROW_FUNC0(Func, void);
  * as Func: Go writes the type out at every use and never names it. */
 BURROW_FUNC(RuneFunc, bool, Rune r);
 
+/* Go's func(rune) rune, which is what strings_map and bytes_map take and what
+ * the case mappings in unicode have the shape of. A negative result means drop
+ * the rune. */
+BURROW_FUNC(RuneMapFunc, Rune, Rune r);
+
 /* Build one. The type comes first because C needs it to know what the compound
  * literal is.
  *

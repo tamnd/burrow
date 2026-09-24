@@ -20,3 +20,4 @@ hash/crc64
 hash/fnv
 unicode
 iter
+strings

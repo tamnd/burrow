@@ -562,6 +562,13 @@ def header_files(paths):
 
 # What a Go builtin may be spelled as in C. The manifest has already turned
 # byte into uint8 and rune into int32, so both spellings of those are right.
+# Go's func types that burrow names once and uses everywhere, from
+# burrow/func.h.
+FUNC_TYPES = {
+    "func(int32) bool": {"RuneFunc"},
+    "func(int32) int32": {"RuneMapFunc"},
+}
+
 BUILTIN = {
     "bool": {"bool"},
     "string": {"Str"},
@@ -637,6 +644,8 @@ class GoTypes:
             return {"Map"}
         if re.match(r"^(<-)?chan\b", t):
             return {"Chan", "Chan *"}
+        if t in FUNC_TYPES:
+            return FUNC_TYPES[t]
         if t.startswith("func("):
             return {"Func", "(*)"}
         if t in BUILTIN:

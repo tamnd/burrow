@@ -7,6 +7,7 @@
 #     burrow-gen amalgamate   the whole library as one burrow.c and one burrow.h
 #     burrow-gen doc          the code in docs/ checked against real programs
 #     burrow-gen collisions   burrow's link names against other libraries' symbols
+#     burrow-gen tests        the mechanical half of porting one of Go's test files
 #
 # REFLECT
 #
@@ -140,6 +141,28 @@
 # is harmless goes in tools/collision-waivers.txt with the reason.
 # tools/check-collisions.sh is the list of libraries make check and CI use.
 #
+# TESTS
+#
+#     burrow-gen tests $(go env GOROOT)/src/strconv/quote_test.go -o tests/strconv_quote_test.c
+#
+# Most of Go's tests are a table and a loop over it, and the table is the part
+# that is tedious and easy to get wrong by hand: every string has to keep its
+# exact bytes through C's escaping rules, every constant has to fold to the same
+# number, and there can be hundreds of rows. This writes the tables, the struct
+# types behind them and every Test function, with the loop over the table in C
+# and its body left in a comment as Go. Each test ends in a skip that says what
+# is left, so a generated file compiles, runs, and reports every test it has not
+# ported yet instead of dropping it. Porting a test is replacing the comment and
+# deleting the skip.
+#
+# The Go side is tools/gen-tests, which type checks the file together with its
+# package, so a field's type and a constant's value are what the Go compiler
+# says rather than a guess from the source. It is built into build/ the first
+# time and needs a Go toolchain. Package names in the output, strconv.ErrSyntax
+# and the like, get their C names from the rules in tools/burrow-coverage. A
+# value it cannot translate compiles as the zero value with the Go in a comment
+# starting "by hand:".
+#
 # Copyright 2026 The burrow Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style licence that can be found
 # in the LICENSE file.
@@ -152,6 +175,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -1265,8 +1289,8 @@ def coll_libraries(paths):
     return uniq
 
 
-def coll_planned(root, api_dir):
-    """Every func, method and var in Go's API, under the C name it will have."""
+def load_coverage(root):
+    """tools/burrow-coverage as a module, for its naming rules."""
     import importlib.machinery
     import importlib.util
 
@@ -1275,6 +1299,12 @@ def coll_planned(root, api_dir):
     spec = importlib.util.spec_from_loader("burrow_coverage", loader)
     cov = importlib.util.module_from_spec(spec)
     loader.exec_module(cov)
+    return cov
+
+
+def coll_planned(root, api_dir):
+    """Every func, method and var in Go's API, under the C name it will have."""
+    cov = load_coverage(root)
     if api_dir is None:
         api_dir = os.path.join(cov.goroot(), "api")
     out = {}
@@ -1304,6 +1334,68 @@ def coll_waivers(path):
                 raise Error("%s:%d: a waiver is a name, a library pattern and a reason" % (path, n))
             out.append((parts[0], parts[1]))
     return out
+
+
+def run_tests(args):
+    """burrow-gen tests: build tools/gen-tests if needed, run it, and name things."""
+    root = args.root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = os.path.join(root, "tools", "gen-tests", "main.go")
+    exe = os.path.join(root, "build", "gen-tests" + (".exe" if os.name == "nt" else ""))
+    if not os.path.exists(exe) or os.path.getmtime(exe) < os.path.getmtime(src):
+        os.makedirs(os.path.dirname(exe), exist_ok=True)
+        try:
+            subprocess.run(["go", "build", "-o", exe, src], check=True)
+        except OSError:
+            raise Error("burrow-gen tests needs a Go toolchain on PATH")
+        except subprocess.CalledProcessError:
+            raise Error("could not build %s" % src)
+    r = subprocess.run([exe, args.file], capture_output=True)
+    sys.stderr.write(r.stderr.decode("utf-8", "replace"))
+    if r.returncode != 0:
+        return r.returncode
+    text = r.stdout.decode("utf-8")
+
+    cov = load_coverage(root)
+    missing = set()
+
+    def name(m):
+        kind, path, go_name = m.group(1), m.group(2), m.group(3)
+        if kind == "field":
+            # A struct field, as Type.Field, which is a member in C.
+            tname, field = go_name.split(".", 1)
+            d = cov.Decl(path, "type %s struct, %s" % (tname, field))
+            cov.map_decl(d)
+            if d.member is None:
+                missing.add("%s.%s" % (path, go_name))
+                return field
+            return d.member
+        d = cov.Decl(path, "%s %s" % (kind, go_name))
+        cov.map_decl(d)
+        if d.cname is None:
+            missing.add("%s.%s" % (path, go_name))
+            return go_name
+        return d.cname
+
+    text = re.sub(r"\u27ea(\w+) (\S+) ([\w.]+)\u27eb", name, text)
+    if missing:
+        raise Error("no C name for %s" % ", ".join(sorted(missing)))
+
+    fmt = None if args.no_format else shutil.which("clang-format")
+    if fmt:
+        r = subprocess.run(
+            [fmt, "--assume-filename=" + os.path.join(root, "tests", "x_test.c")],
+            input=text.encode("utf-8"),
+            capture_output=True,
+        )
+        if r.returncode == 0:
+            text = r.stdout.decode("utf-8")
+
+    if args.output == "-":
+        sys.stdout.write(text)
+    else:
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(text)
+    return 0
 
 
 def run_collisions(args):
@@ -1445,7 +1537,20 @@ def main():
     c.add_argument("--waivers", metavar="FILE", help="default tools/collision-waivers.txt")
     c.add_argument("--root", metavar="DIR", help="the burrow tree to read, default the one this script is in")
 
+    t = sub.add_parser("tests", help="the tables and loops of one of Go's test files, in C")
+    t.add_argument("file", help="the _test.go file to read")
+    t.add_argument("-o", "--output", default="-", help="where to write, - for stdout")
+    t.add_argument("--no-format", action="store_true", help="leave the output as it comes, without clang-format")
+    t.add_argument("--root", metavar="DIR", help="the burrow tree to read, default the one this script is in")
+
     args = p.parse_args()
+
+    if args.command == "tests":
+        try:
+            return run_tests(args)
+        except Error as e:
+            sys.stderr.write("%s: %s\n" % (PROG, e))
+            return 1
 
     if args.command == "collisions":
         try:

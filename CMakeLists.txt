@@ -234,6 +234,10 @@ endforeach()
 if(BURROW_BUILD_TESTS)
     enable_testing()
     file(GLOB BURROW_TEST_SOURCES CONFIGURE_DEPENDS tests/*_test.c)
+    # What burrow-gen tests writes for its fixture, built and run with the rest
+    # so the C the generator writes is known to compile on every compiler.
+    list(APPEND BURROW_TEST_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen-tests/testdata/strconv/gen_tests_fixture_test.c)
 
     # Type descriptors that tools/burrow-gen produced from the annotated structs
     # in tests/gen. They are checked in rather than generated here, because

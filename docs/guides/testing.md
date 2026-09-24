@@ -514,6 +514,37 @@ An input that reaches new code is shrunk before it is kept, as in Go, down to th
 
 Some things to know. burrow defines the functions the compiler calls into, so it cannot be linked with libFuzzer, which defines the same ones. The trace-pc counters are a table of 16384 entries picked by a hash of where each call came from, so two edges can share an entry, which costs a little guidance and nothing else. Both kinds only count code in the program itself, and a shared library loaded at a different address in each worker would not line up, so link the code under test statically. MSVC's `/fsanitize-coverage` is not supported yet.
 
+## Porting a test from Go
+
+Most of Go's tests are tables of cases and a loop over them, and the tables are the tedious part to copy by hand. `tools/burrow-gen tests` does that part. Give it one of Go's test files and it writes a C test file with every table translated, the structs they are made of declared, and every `Test` function stubbed out with its Go left in a comment:
+
+```
+$ tools/burrow-gen tests $(go env GOROOT)/src/strconv/quote_test.go -o tests/strconv_quote_test.c
+gen-tests: 6 tables, 9 loops, 11 tests to translate by hand, 0 values to fill in by hand
+```
+
+The loop over a table is written out, with the case bound to the name Go gave it, and the body is left as Go for you to port:
+
+```
+static void TestQuote(TestingT *t) {
+    for (size_t i = 0; i < sizeof quotetests / sizeof quotetests[0]; i++) {
+        const QuoteTest *tt = &quotetests[i];
+        (void)tt;
+        /* Go, with tt as a pointer now:
+         *     if out := Quote(tt.in); out != tt.out {
+         *         t.Errorf("Quote(%s) = %s, want %s", tt.in, out, tt.out)
+         *     }
+         ...
+         */
+    }
+    testing_t_skip_v(t, "burrow-gen tests: the loop body is still Go");
+}
+```
+
+The file compiles and runs as it comes out, with every test skipping, so you can port one test at a time and delete its skip when it is done. Package names are resolved to burrow's C names through the same tables `tools/burrow-coverage` uses, so `ErrSyntax` becomes `&strconv_err_syntax` and `Quote` becomes `strconv_quote`. A value the tool cannot translate, like a call to a function or an interface holding something, compiles as a zero with a `/* by hand: ... */` comment next to it, and the count on the last line of the output says how many there are. It needs Go, since it reads the file with Go's own parser and type checker, and it runs `clang-format` over what it writes when there is one on the path.
+
+`tools/gen-tests/testdata/strconv/fixture_test.go` has one of every shape the tool knows, and what the tool writes for it is checked in beside it. `make check` regenerates it to make sure it has not drifted, and `make test` builds and runs it with the rest.
+
 ## What is not there yet
 
 The flags for profiles, coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.

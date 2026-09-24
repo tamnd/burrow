@@ -170,6 +170,12 @@ endif
 TEST_SRCS := $(wildcard tests/*_test.c)
 TEST_BINS := $(patsubst tests/%.c,$(BUILD)/tests/%,$(TEST_SRCS))
 
+# What burrow-gen tests writes for the fixture in tools/gen-tests/testdata. It
+# is checked in, tools/check-gen.sh keeps it current, and it is built and run
+# with the tests so the C the generator writes is known to compile everywhere.
+GEN_TESTS_FIXTURE := tools/gen-tests/testdata/strconv/gen_tests_fixture_test.c
+TEST_BINS += $(BUILD)/tests/gen_tests_fixture_test
+
 # Descriptors that tools/burrow-gen produced from the annotated structs in
 # tests/gen. They are checked in and every test binary links them, because
 # generating them needs libclang and building burrow must never need libclang.
@@ -227,6 +233,10 @@ $(BUILD)/obj/%.o: src/%.c
 $(BUILD)/tests/%: tests/%.c $(TEST_GEN) $(LIB)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(TEST_EXTRA) $(THREADS) $(DEPFLAGS) -MF $@.d -Itests $< $(TEST_GEN) $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
+
+$(BUILD)/tests/gen_tests_fixture_test: $(GEN_TESTS_FIXTURE) $(TEST_GEN) $(LIB)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(THREADS) $(DEPFLAGS) -MF $@.d -Itests $< $(TEST_GEN) $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
 
 $(BUILD)/tests/testing_cover_test: TEST_EXTRA = $(COVERFLAGS)
 

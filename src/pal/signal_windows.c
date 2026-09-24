@@ -1,9 +1,12 @@
 /* Handlers on Windows, which has no signals at all.
  *
- * One of the group works here and it is the one that matters today. A bad
- * memory access raises a structured exception rather than a signal, and a
- * vectored exception handler is what sees it first, so PAL_SIGFAULT is that and
- * the rest say PAL_ENOTSUP rather than pretending.
+ * Three of the group work here. A bad memory access raises a structured
+ * exception rather than a signal, and a vectored exception handler is what sees
+ * it first, so PAL_SIGFAULT is that. Ctrl-C and the other console events go to
+ * a console control handler, and they are mapped the way Go's os/signal maps
+ * them: Ctrl-C and Ctrl-Break are PAL_SIGINT, and closing the console, logging
+ * off and shutting down are PAL_SIGTERM. The rest say PAL_ENOTSUP rather than
+ * pretending.
  *
  * This was the Windows half of src/runtime/stack.c until the platform layer
  * existed, and the reasoning in the comments came with it.
@@ -53,6 +56,62 @@ static Handler fault_handler;
  * replaces the handler rather than stacking a second one in front of it. */
 static void *veh;
 
+/* The PAL_SIGINT and PAL_SIGTERM handlers, published the same way. */
+static Handler int_handler;
+static Handler term_handler;
+
+/* Whether SetConsoleCtrlHandler has been called, so that installing twice
+ * does not put a second copy of on_console in the list. */
+static uint32_t console_armed;
+
+/* Runs on a thread the system starts for the event, not on one of the
+ * program's, which is the main way a console event is not a signal. True from
+ * the handler means it was dealt with. False passes it on down the list, which
+ * ends at the default handler and ExitProcess, as an unclaimed SIGINT ends a
+ * POSIX process. For the close, logoff and shutdown events the system ends
+ * the process a few seconds after the handler returns anyway. */
+static BOOL WINAPI on_console(DWORD event) {
+    int32_t sig = 0;
+    Handler h;
+    h.object = NULL;
+    switch (event) {
+    case CTRL_C_EVENT:
+    case CTRL_BREAK_EVENT:
+        sig = PAL_SIGINT;
+        h.object = burrow__atomic_load_acquire_ptr(&int_handler.object);
+        break;
+    case CTRL_CLOSE_EVENT:
+    case CTRL_LOGOFF_EVENT:
+    case CTRL_SHUTDOWN_EVENT:
+        sig = PAL_SIGTERM;
+        h.object = burrow__atomic_load_acquire_ptr(&term_handler.object);
+        break;
+    default:
+        return FALSE;
+    }
+    if (h.fn == NULL)
+        return FALSE;
+    return h.fn(sig, NULL, NULL) ? TRUE : FALSE;
+}
+
+static bool install_console(int32_t sig, PalSignalHandler handler, PalErrno *err) {
+    Handler h;
+    h.object = NULL;
+    h.fn = handler;
+    burrow__atomic_store_release_ptr(
+        sig == PAL_SIGINT ? &int_handler.object : &term_handler.object, h.object);
+
+    uint32_t want = 0;
+    if (!burrow__atomic_cas_u32(&console_armed, &want, 1))
+        return true;
+    if (!SetConsoleCtrlHandler(on_console, TRUE)) {
+        burrow__atomic_store_u32(&console_armed, 0);
+        BURROW_OUT(err, PAL_EOTHER);
+        return false;
+    }
+    return true;
+}
+
 static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info) {
     if (info == NULL || info->ExceptionRecord == NULL)
         return EXCEPTION_CONTINUE_SEARCH;
@@ -82,12 +141,8 @@ bool pal_signal_install(int32_t sig, PalSignalHandler handler, PalErrno *err) {
         return false;
     }
 
-    /* Mapping PAL_SIGINT and PAL_SIGTERM onto SetConsoleCtrlHandler is what
-     * this will grow when os/signal arrives and there is a real caller to
-     * design it against. A console control handler runs on a thread of its own
-     * and gets a few seconds before the system kills the process anyway, which
-     * is different enough from a signal that guessing at the shape now would
-     * only mean rewriting it then. */
+    if (sig == PAL_SIGINT || sig == PAL_SIGTERM)
+        return install_console(sig, handler, err);
     if (sig != PAL_SIGFAULT) {
         BURROW_OUT(err, PAL_ENOTSUP);
         return false;

@@ -828,11 +828,12 @@ typedef bool (*PalSignalHandler)(int32_t sig, void *info, void *ctx);
  * kept for the forwarding above is the one that was there before the first
  * install, so a caller cannot lose the program's own handler by arming twice.
  *
- * Windows has no signals. PAL_SIGFAULT is a vectored exception handler there
- * and works. The rest report PAL_ENOTSUP for now: mapping PAL_SIGINT and
- * PAL_SIGTERM onto a console control handler is os/signal's to design against,
- * and a handler written with no caller in front of it is a handler nobody has
- * ever run. */
+ * Windows has no signals. PAL_SIGFAULT is a vectored exception handler there.
+ * PAL_SIGINT is Ctrl-C and Ctrl-Break, and PAL_SIGTERM is closing the console,
+ * logging off and shutting down, both through a console control handler, as
+ * in Go's os/signal. That handler runs on a thread the system starts for it,
+ * so info and ctx are NULL, and it has to be safe to run beside every other
+ * thread. The rest report PAL_ENOTSUP. */
 bool pal_signal_install(int32_t sig, PalSignalHandler handler, PalErrno *err);
 
 /* Block or unblock a signal for the calling thread only. PAL_ENOTSUP on

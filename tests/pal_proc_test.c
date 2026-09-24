@@ -12,6 +12,7 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "burrow/atomic.h"
 #include "burrow/pal.h"
 #include "burrow/testing.h"
 
@@ -26,6 +27,15 @@
 static const char *self_path;
 
 /* ------------------------------------------------------------ the children */
+
+static uint32_t interrupted;
+
+static bool on_interrupt(int32_t sig, void *info, void *ctx) {
+    (void)info;
+    (void)ctx;
+    burrow__atomic_store_u32(&interrupted, (uint32_t)sig);
+    return true;
+}
 
 static int child(int argc, char **argv) {
     const char *mode = argv[2];
@@ -89,6 +99,18 @@ static int child(int argc, char **argv) {
         const char msg[] = "three\n";
         return pal_write(3, msg, sizeof msg - 1, NULL) == (int64_t)(sizeof msg - 1) ? 0
                                                                                     : 4;
+    }
+    if (strcmp(mode, "interrupt") == 0) {
+        /* Says it is ready once the handler is in, then waits up to ten
+         * seconds for the parent's interrupt to reach it. */
+        if (!pal_signal_install(PAL_SIGINT, on_interrupt, NULL))
+            return 2;
+        printf("ready\n");
+        fflush(stdout);
+        for (int i = 0; i < 1000 && burrow__atomic_load_u32(&interrupted) == 0; i++)
+            pal_nanosleep(10000000);
+        printf("caught %u\n", burrow__atomic_load_u32(&interrupted));
+        return burrow__atomic_load_u32(&interrupted) == PAL_SIGINT ? 0 : 3;
     }
     if (strcmp(mode, "exit-now") == 0) {
         printf("buffered and never flushed");
@@ -356,6 +378,76 @@ static void TestWaitSignal(TestingT *t) {
 #endif
 }
 
+/* A handler for PAL_SIGINT sees the interrupt and the process carries on,
+ * which is what -test.fuzz needs to stop cleanly on Ctrl-C. On Windows the
+ * interrupt is a Ctrl-Break sent to a child in a process group of its own,
+ * because Ctrl-C to the whole console would reach the test runner too. */
+static void TestInterruptReachesTheHandler(TestingT *t) {
+#if defined(_WIN32)
+    /* Wine ends a process on Ctrl-Break even when a handler has claimed it. */
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (ntdll != NULL && GetProcAddress(ntdll, "wine_get_version") != NULL)
+        testing_t_skip_v(t,
+                         "Wine ends a process on Ctrl-Break whatever its handler says");
+#endif
+    PalErrno err = PAL_OK;
+    int64_t p[2];
+    if (!pal_pipe(p, 0, &err))
+        testing_t_fatalf_v(t, "pipe: %s", pal_errno_string(err));
+    const char *argv[] = {self_path, "child", "interrupt", NULL};
+    int64_t fds[3] = {PAL_INVALID_HANDLE, p[1], p[1]};
+    PalSpawn req = {self_path, argv, NULL, NULL, fds, 3, PAL_SPAWN_SETPGID};
+    int64_t pid = pal_spawn(&req, &err);
+    pal_close(p[1], NULL);
+    if (pid < 0) {
+        pal_close(p[0], NULL);
+        testing_t_fatalf_v(t, "spawn: %s", pal_errno_string(err));
+    }
+
+    char out[256];
+    int64_t n = 0;
+    while (n < (int64_t)sizeof out - 1 && (n == 0 || out[n - 1] != '\n')) {
+        int64_t got = pal_read(p[0], out + n, 1, &err);
+        if (got <= 0)
+            break;
+        n += got;
+    }
+    out[n] = 0;
+
+    bool sent;
+#if defined(_WIN32)
+    /* No console to send it through, as under a service, is not what this is
+     * about. */
+    sent = GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT,
+                                    GetProcessId((HANDLE)(intptr_t)pid)) != 0;
+    if (!sent) {
+        pal_kill(pid, PAL_SIGKILL, NULL);
+        int32_t ignored;
+        pal_wait(pid, &ignored, 0, NULL);
+        pal_close(p[0], NULL);
+        testing_t_skip_v(t, "no console to send Ctrl-Break through");
+    }
+#else
+    sent = pal_kill(pid, PAL_SIGINT, &err);
+    if (!sent)
+        testing_t_errorf_v(t, "kill: %s", pal_errno_string(err));
+#endif
+
+    while (n < (int64_t)sizeof out - 1) {
+        int64_t got = pal_read(p[0], out + n, (int64_t)sizeof out - 1 - n, &err);
+        if (got <= 0)
+            break;
+        n += got;
+    }
+    out[n] = 0;
+    pal_close(p[0], NULL);
+    int32_t status = -1;
+    if (pal_wait(pid, &status, 0, &err) != pid)
+        testing_t_errorf_v(t, "wait: %s", pal_errno_string(err));
+    if (status != 0 || strstr(out, "ready") == NULL || strstr(out, "caught 2") == NULL)
+        testing_t_errorf_v(t, "child exited %d, output\n%s", status, out);
+}
+
 static void TestStdHandle(TestingT *t) {
     for (int i = 0; i < 3; i++)
         if (pal_std_handle(i) == PAL_INVALID_HANDLE)
@@ -515,6 +607,7 @@ static void TestMapShared(TestingT *t) {
     X(TestMissingProgram)                                                              \
     X(TestWaitNoHangAndKill)                                                           \
     X(TestWaitSignal)                                                                  \
+    X(TestInterruptReachesTheHandler)                                                  \
     X(TestStdHandle)                                                                   \
     X(TestDescriptorTable)                                                             \
     X(TestGetpid)                                                                      \

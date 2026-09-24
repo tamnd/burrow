@@ -480,7 +480,7 @@ FAIL
 
 That file is a seed from then on, so a plain run of the program fails on it until the bug is fixed. A panic in the fuzz function fails the input with the panic and its stack, as Go reports it. A worker that exits or crashes fails the input it was running, and that input is written out as it was, since the worker is gone and cannot shrink it.
 
-Ctrl-C stops fuzzing the way it does in Go. The workers finish the input they are on, the program prints a last stats line and PASS, and it exits 0, since nothing failed. If a failing input was being shrunk when you pressed it, shrinking stops, the input is written out as it was found, and the run fails, as it does in Go. On Windows, Ctrl-C still ends the program at once, as burrow does not catch console events yet.
+Ctrl-C stops fuzzing the way it does in Go. The workers finish the input they are on, the program prints a last stats line and PASS, and it exits 0, since nothing failed. If a failing input was being shrunk when you pressed it, shrinking stops, the input is written out as it was found, and the run fails, as it does in Go. On Windows, Ctrl-C and Ctrl-Break both do this.
 
 ### Coverage guidance
 

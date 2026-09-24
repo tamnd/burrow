@@ -230,6 +230,53 @@ enc.vt->closer.close(enc.data);
 
 `out` now holds `MTIgYXBwbGVz`. `base64_new_decoder` goes the other way, as an `IoReader`.
 
+## Ascii85
+
+`burrow/encoding/ascii85.h` is Go's `encoding/ascii85`, the encoding PostScript and PDF use. Four bytes become five characters, and a group of four zero bytes becomes a single `z`. There is only one alphabet and no padding, so there is no encoding value to pass around, just functions:
+
+<!-- example: ../examples/encoding/ascii85.c#encode -->
+```c
+Slice src = BURROW_B("Hello, world");
+Int max = ascii85_max_encoded_len(src.len);
+Slice dst = slice_make(a, TYPE_BYTE, max, max);
+Int n = ascii85_encode(dst, src);
+```
+
+`max` is 15 and the text is `87cURD_*#TDfTZ)`. `ascii85_max_encoded_len` is an upper bound because of the `z` groups, so use the count `ascii85_encode` returns. It writes a whole group into `dst` before it knows how many of the characters it keeps, the same as Go, so `dst` needs room for that group even at the end.
+
+`ascii85_decode` returns how many bytes it wrote and, through `nsrc`, how many bytes of input it used. Pass `NULL` if you don't need that count. It skips spaces, newlines and the other control bytes, and it stops early, without an error, once `dst` has less than four bytes of room. With `flush` false it leaves a group it can't finish for the next call. With `flush` true it decodes that group as the end of the input:
+
+<!-- example: ../examples/encoding/ascii85.c#decode -->
+```c
+Slice in = BURROW_B("87cURD]i,\"Ebo80");
+Slice out = slice_make(a, TYPE_BYTE, 4 * in.len, 4 * in.len);
+Int nsrc;
+Error err = BURROW_NO_ERROR;
+Int ndst = ascii85_decode(out, in, true, &nsrc, &err);
+```
+
+That gives `Hello World!`, 12 bytes from all 15 characters. The `<~` and `~>` markers that Adobe puts around the text are not part of the encoding, so strip them first, as Go leaves that to you too. A byte out of range is an `Ascii85CorruptInputError` holding its offset, and nothing that came before it is returned:
+
+<!-- example: ../examples/encoding/ascii85.c#bad -->
+```c
+ascii85_decode(out, BURROW_B("87cUR~>"), true, NULL, &err);
+const Ascii85CorruptInputError *off =
+    errors_as(err, TYPE_ASCII85_CORRUPT_INPUT_ERROR);
+```
+
+`*off` is 5 and the error reads `illegal ascii85 data at input byte 5`. `ascii85_new_encoder` and `ascii85_new_decoder` do the same over a writer and a reader. The encoder needs a Close at the end to write a short last group, and the decoder takes care of groups split across reads:
+
+<!-- example: ../examples/encoding/ascii85.c#stream -->
+```c
+StringsReader sr;
+strings_reader_reset(&sr, BURROW_S("87cURD]i,\n\"Ebo80"));
+IoReader dec = ascii85_new_decoder(a, strings_reader_as_io_reader(&sr));
+BytesBuffer got = BYTES_BUFFER(a);
+io_copy(a, bytes_buffer_as_io_writer(&got), dec, &err);
+```
+
+`got` holds `Hello World!`.
+
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/base32`, `encoding/base64` or `encoding/hex` is missing.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64` or `encoding/hex` is missing.

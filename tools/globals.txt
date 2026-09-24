@@ -150,3 +150,5 @@ global	src/hash/crc32.c	castagnoli_once	tables	A SyncOnce, which is the synchron
 global	src/hash/crc64.c	slicing8_table_iso	tables	Filled inside build_slicing8_tables_once and only read after it.
 global	src/hash/crc64.c	slicing8_table_ecma	tables	Filled inside build_slicing8_tables_once and only read after it.
 global	src/hash/crc64.c	build_slicing8_tables_once	tables	A SyncOnce, which is the synchronisation for the two tables above.
+global	src/unicode/tables.c	unicode_graphic_ranges_entries	package-vars	The array behind unicode.GraphicRanges. Never written by burrow, and writable only because a Slice holds a plain pointer. Go exposes the same slice as a variable.
+global	src/unicode/tables.c	unicode_print_ranges_entries	package-vars	The array behind unicode.PrintRanges, the same as unicode_graphic_ranges_entries.

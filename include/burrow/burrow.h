@@ -74,6 +74,7 @@
 #include "burrow/testing.h"
 #include "burrow/time.h"
 #include "burrow/type.h"
+#include "burrow/unicode.h"
 #include "burrow/unicode/utf16.h"
 #include "burrow/utf8.h"
 

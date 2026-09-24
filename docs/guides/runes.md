@@ -184,6 +184,6 @@ Rune r = utf16_decode_rune(hi, lo); /* 0x1F600 again */
 
 Like the UTF-8 side, nothing fails. A rune that cannot be encoded becomes U+FFFD, and so does a surrogate half without its partner when you decode. `utf16_append_rune` appends to a slice you are building, and `utf16_rune_len` tells you 1, 2, or -1 for a rune UTF-16 cannot hold.
 
-## What is not here yet
+## Beyond encoding
 
-`unicode` itself, with the character class tables, is a larger job and is scheduled with the rest of the pure packages.
+Once you have a rune, [Character classes and case](unicode.md) covers what kind of character it is and what its other cases are.

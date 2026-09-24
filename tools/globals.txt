@@ -40,6 +40,7 @@ category	clock	The conversion factor between what the machine's counter counts a
 category	machine	What the machine is: the page size and how many cores the process may run on. Both are fixed for the life of the process, so both are asked for once.
 category	coverage	The compiler's coverage counters. The compiler lays them out once per module and calls in to register them before main, so there is one set per process by construction.
 category	symbol-table	The sorted copy of the table of function names, which is one per process because the addresses in it are one per process.
+category	tables	Lookup tables too big to write out as constants, built the first time something needs them. Go keeps the same ones as package level variables behind a sync.Once.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -142,3 +143,10 @@ global	src/testing/fuzz.c	fuzz_interrupt	signal-table	Whether SIGINT stops fuzzi
 global	src/pal/proc_posix.c	fork_lock	package-vars	This is the synchronisation, and a lock is what it is. Go has the same one as syscall.ForkLock: pal_spawn holds the write side across a fork, and anything that has a descriptor open without close on exec holds the read side until it is marked.
 global	src/pal/proc_windows.c	env_once	package-vars	Windows only. InitOnceExecuteOnce, which is the synchronisation for env_list below.
 global	src/pal/proc_windows.c	env_list	package-vars	Windows only. Written once inside env_once and only read after it, so every reader sees the finished list.
+global	src/hash/crc32.c	ieee_table8	tables	Filled inside ieee_once and only read after it.
+global	src/hash/crc32.c	ieee_once	tables	A SyncOnce, which is the synchronisation for ieee_table8.
+global	src/hash/crc32.c	castagnoli_table8	tables	Filled inside castagnoli_once and only read after it.
+global	src/hash/crc32.c	castagnoli_once	tables	A SyncOnce, which is the synchronisation for castagnoli_table8.
+global	src/hash/crc64.c	slicing8_table_iso	tables	Filled inside build_slicing8_tables_once and only read after it.
+global	src/hash/crc64.c	slicing8_table_ecma	tables	Filled inside build_slicing8_tables_once and only read after it.
+global	src/hash/crc64.c	build_slicing8_tables_once	tables	A SyncOnce, which is the synchronisation for the two tables above.

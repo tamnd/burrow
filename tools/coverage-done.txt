@@ -13,3 +13,8 @@ math/bits
 strconv
 fmt
 unicode/utf16
+hash
+hash/adler32
+hash/crc32
+hash/crc64
+hash/fnv

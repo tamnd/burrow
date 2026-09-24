@@ -394,6 +394,7 @@ class Headers:
     def __init__(self, files):
         self.tokens = set()
         self.members = {}
+        self.embeds = {}
         self.protos = {}
         for f in files:
             with open(f) as fh:
@@ -448,7 +449,9 @@ class Headers:
         # members being the last identifier of each declaration inside, or the
         # name inside (*name) for a function pointer. BURROW_FUNC and friends
         # are macros, so a member declared through one is found by its name
-        # appearing at all, which is what the fallback below does.
+        # appearing at all, which is what the fallback below does. A vtable
+        # member whose type is another vtable is Go's embedded interface, and
+        # the methods of that one count as members of this one too.
         for m in re.finditer(r"\b(?:struct|union)\s+(\w+)?\s*\{", code):
             depth = 1
             i = m.end()
@@ -462,11 +465,15 @@ class Headers:
             tail = re.match(r"\s*(\w+)\s*;", code[i:])
             names = [x for x in (m.group(1), tail.group(1) if tail else None) if x]
             members = set()
+            embeds = set()
             for part in re.split(r";", re.sub(r"\{[^{}]*\}", " ", body)):
                 fp = re.search(r"\(\s*\*\s*(\w+)\s*\)", part)
                 if fp:
                     members.add(fp.group(1))
                     continue
+                em = re.match(r"\s*(\w+VT)\s+\w+\s*$", part)
+                if em:
+                    embeds.add(em.group(1))
                 ids = TOKEN.findall(re.sub(r"\[[^\]]*\]|:\s*\w+", " ", part))
                 if ids:
                     members.add(ids[-1])
@@ -475,12 +482,19 @@ class Headers:
                     members.add(extra)
             for name in names:
                 self.members.setdefault(name, set()).update(members)
+                self.embeds.setdefault(name, set()).update(embeds)
 
     def has(self, name):
         return name in self.tokens
 
-    def has_member(self, owner, member):
-        return member in self.members.get(owner, ())
+    def has_member(self, owner, member, seen=None):
+        if member in self.members.get(owner, ()):
+            return True
+        seen = seen or set()
+        seen.add(owner)
+        return any(
+            self.has_member(e, member, seen) for e in self.embeds.get(owner, ()) if e not in seen
+        )
 
     def proto(self, name):
         return self.protos.get(name)

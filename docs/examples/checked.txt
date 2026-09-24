@@ -30,3 +30,4 @@ README.md
 docs/guides/strconv.md
 docs/guides/fmt.md
 docs/guides/testing.md
+docs/guides/hashing.md

@@ -96,6 +96,19 @@ Slice utf16_encode(Alloc *a, Slice s) {
 Slice utf16_append_rune(Alloc *a, Slice p, Rune r) {
     uint16_t buf[2];
     Int n = encode_units(buf, r);
+
+    /* Go inlines this function and the append in it, so appending into spare
+     * capacity costs a store. Writing the units directly when they fit is the
+     * nearest thing here, and slice_append takes everything else, including
+     * the growth and a slice of the wrong element type. */
+    if (p.elem == TYPE_UINT16 && p.p != NULL && p.len <= p.cap - n) {
+        uint16_t *u = (uint16_t *)p.p + p.len;
+        u[0] = buf[0];
+        if (n == 2)
+            u[1] = buf[1];
+        p.len += n;
+        return p;
+    }
     if (p.elem == NULL)
         p = slice_nil(TYPE_UINT16);
     return slice_append(a, p, buf, n);

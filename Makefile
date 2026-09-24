@@ -232,8 +232,13 @@ $(BUILD)/tests/testing_cover_test: TEST_EXTRA = $(COVERFLAGS)
 
 -include $(DEPS)
 
+# One line for each binary, the way go test prints a package, and the whole of
+# what it wrote only when it failed.
 test: $(TEST_BINS)
-	@fail=0; for t in $(TEST_BINS); do ./$$t || fail=1; done; exit $$fail
+	@fail=0; for t in $(TEST_BINS); do \
+		if ./$$t > $$t.out 2>&1; then printf 'ok\t%s\n' "$${t##*/}"; \
+		else cat $$t.out; printf 'FAIL\t%s\n' "$${t##*/}"; fail=1; fi; \
+	done; exit $$fail
 
 # What CI runs on a pull request, in the order that fails fastest first.
 check:

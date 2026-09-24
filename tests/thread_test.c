@@ -26,7 +26,7 @@
 #include "burrow/atomic.h"
 #include "burrow/platform.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -47,7 +47,7 @@ static void set_ran(void *arg) {
 
 static burrow__Thread one;
 
-TEST(a_thread_runs_and_gets_its_argument) {
+static void TestAThreadRunsAndGetsItsArgument(TestingT *t) {
     int marker = 42;
 
     ran = 0;
@@ -67,7 +67,7 @@ TEST(a_thread_runs_and_gets_its_argument) {
     CHECK(!burrow__thread_join(&one));
 }
 
-TEST(a_stack_size_is_a_request_the_system_takes) {
+static void TestAStackSizeIsARequestTheSystemTakes(TestingT *t) {
     /* Two megabytes, which every system accepts, then the sizes that are the
      * reason the clamp exists at all.
      *
@@ -103,7 +103,7 @@ TEST(a_stack_size_is_a_request_the_system_takes) {
     CHECK(burrow__atomic_load_acquire_u32(&ran) == 1);
 }
 
-TEST(a_handle_that_was_never_started_is_not_joinable) {
+static void TestAHandleThatWasNeverStartedIsNotJoinable(TestingT *t) {
     burrow__Thread never;
     memset(&never, 0, sizeof never);
 
@@ -131,7 +131,7 @@ static void record_id(void *arg) {
     ids[i] = first == second ? first : 0;
 }
 
-TEST(every_running_thread_has_its_own_identity) {
+static void TestEveryRunningThreadHasItsOwnIdentity(TestingT *t) {
     uint64_t mine = burrow__thread_self();
     CHECK(mine == burrow__thread_self());
 
@@ -165,7 +165,7 @@ static void count_up(void *arg) {
     }
 }
 
-TEST(eight_threads_adding_to_one_counter_lose_nothing) {
+static void TestEightThreadsAddingToOneCounterLoseNothing(TestingT *t) {
     counter32 = 0;
     counter64 = 0;
 
@@ -188,7 +188,7 @@ static void finish(void *arg) {
     burrow__atomic_store_release_u32(&detached_done, 1);
 }
 
-TEST(a_detached_thread_still_runs) {
+static void TestADetachedThreadStillRuns(TestingT *t) {
     detached_done = 0;
 
     CHECK(burrow__thread_start(&detached, finish, NULL, 0));
@@ -206,7 +206,7 @@ TEST(a_detached_thread_still_runs) {
     CHECK(!burrow__thread_detach(&detached));
 }
 
-TEST(there_is_at_least_one_processor) {
+static void TestThereIsAtLeastOneProcessor(TestingT *t) {
     int n = burrow__thread_ncpu();
 
     CHECK(n >= 1);
@@ -229,7 +229,7 @@ TEST(there_is_at_least_one_processor) {
  * Narrowing the mask to one processor here rather than trusting the caller to
  * have run the test under taskset, so that it proves something when somebody
  * runs the binary by hand. */
-TEST(the_processor_count_is_the_ones_this_process_may_use) {
+static void TestTheProcessorCountIsTheOnesThisProcessMayUse(TestingT *t) {
     cpu_set_t before;
     if (sched_getaffinity(0, sizeof(before), &before) != 0)
         return; /* Blocked by a sandbox or a seccomp filter. Nothing to prove. */
@@ -261,16 +261,20 @@ TEST(the_processor_count_is_the_ones_this_process_may_use) {
 
 #endif
 
-int main(void) {
-    RUN(a_thread_runs_and_gets_its_argument);
-    RUN(a_stack_size_is_a_request_the_system_takes);
-    RUN(a_handle_that_was_never_started_is_not_joinable);
-    RUN(every_running_thread_has_its_own_identity);
-    RUN(eight_threads_adding_to_one_counter_lose_nothing);
-    RUN(a_detached_thread_still_runs);
-    RUN(there_is_at_least_one_processor);
 #if defined(BURROW_OS_LINUX)
-    RUN(the_processor_count_is_the_ones_this_process_may_use);
+#define TESTS_1(X) X(TestTheProcessorCountIsTheOnesThisProcessMayUse)
+#else
+#define TESTS_1(X)
 #endif
-    return harness_report("thread");
-}
+
+#define TESTS(X)                                                                       \
+    X(TestAThreadRunsAndGetsItsArgument)                                               \
+    X(TestAStackSizeIsARequestTheSystemTakes)                                          \
+    X(TestAHandleThatWasNeverStartedIsNotJoinable)                                     \
+    X(TestEveryRunningThreadHasItsOwnIdentity)                                         \
+    X(TestEightThreadsAddingToOneCounterLoseNothing)                                   \
+    X(TestADetachedThreadStillRuns)                                                    \
+    X(TestThereIsAtLeastOneProcessor)                                                  \
+    TESTS_1(X)
+
+TESTING_MAIN(TESTS)

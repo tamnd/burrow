@@ -10,7 +10,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 static Arena ar;
 static Alloc *a;
@@ -123,7 +123,7 @@ static Slice three_lines(void) {
 
 /* -------------------------------------------------------------------- nil */
 
-TEST(a_zeroed_function_value_is_nil) {
+static void TestAZeroedFunctionValueIsNil(TestingT *t) {
     Filter f = {NULL, NULL};
     Func done = {NULL, NULL};
 
@@ -131,7 +131,7 @@ TEST(a_zeroed_function_value_is_nil) {
     CHECK(BURROW_FUNC_IS_NIL(done));
 }
 
-TEST(a_struct_field_of_function_type_starts_out_nil) {
+static void TestAStructFieldOfFunctionTypeStartsOutNil(TestingT *t) {
     struct Holder {
         Int n;
         Filter keep;
@@ -145,7 +145,7 @@ TEST(a_struct_field_of_function_type_starts_out_nil) {
     CHECK_INT_EQ(h->n, 0);
 }
 
-TEST(a_value_with_a_function_and_no_env_is_not_nil) {
+static void TestAValueWithAFunctionAndNoEnvIsNotNil(TestingT *t) {
     Filter f = BURROW_FN(Filter, always_true, NULL);
 
     CHECK(!BURROW_FUNC_IS_NIL(f));
@@ -154,7 +154,7 @@ TEST(a_value_with_a_function_and_no_env_is_not_nil) {
 
 /* ------------------------------------------------------------------ calling */
 
-TEST(a_call_reaches_the_function_it_was_built_with) {
+static void TestACallReachesTheFunctionItWasBuiltWith(TestingT *t) {
     Filter yes = BURROW_FN(Filter, always_true, NULL);
     Filter empty = BURROW_FN(Filter, is_empty, NULL);
 
@@ -163,7 +163,7 @@ TEST(a_call_reaches_the_function_it_was_built_with) {
     CHECK(BURROW_CALLF(empty, BURROW_S("")));
 }
 
-TEST(a_call_passes_the_env_first_and_the_arguments_after) {
+static void TestACallPassesTheEnvFirstAndTheArgumentsAfter(TestingT *t) {
     ScaleEnv e = {10};
     BinOp plus = BURROW_FN(BinOp, add, NULL);
     BinOp times = BURROW_FN(BinOp, multiply, NULL);
@@ -174,7 +174,7 @@ TEST(a_call_passes_the_env_first_and_the_arguments_after) {
     CHECK_INT_EQ(BURROW_CALLF(scaled, 2, 3), 50);
 }
 
-TEST(a_call_with_no_arguments_needs_the_other_macro) {
+static void TestACallWithNoArgumentsNeedsTheOtherMacro(TestingT *t) {
     CountEnv e = {0, 0};
     Func on_done = BURROW_FN(Func, bump, &e);
 
@@ -190,7 +190,7 @@ TEST(a_call_with_no_arguments_needs_the_other_macro) {
 
 /* ------------------------------------------------------------------ the env */
 
-TEST(the_env_is_what_a_captured_variable_becomes) {
+static void TestTheEnvIsWhatACapturedVariableBecomes(TestingT *t) {
     PrefixEnv e = {BURROW_S("go")};
     Filter f = BURROW_FN(Filter, has_prefix, &e);
 
@@ -200,7 +200,7 @@ TEST(the_env_is_what_a_captured_variable_becomes) {
     CHECK(!BURROW_CALLF(f, BURROW_S("g")));
 }
 
-TEST(changing_the_env_changes_what_the_value_does) {
+static void TestChangingTheEnvChangesWhatTheValueDoes(TestingT *t) {
     PrefixEnv e = {BURROW_S("go")};
     Filter f = BURROW_FN(Filter, has_prefix, &e);
 
@@ -210,7 +210,7 @@ TEST(changing_the_env_changes_what_the_value_does) {
     CHECK(BURROW_CALLF(f, BURROW_S("rust")));
 }
 
-TEST(writes_to_the_env_are_visible_after_the_call) {
+static void TestWritesToTheEnvAreVisibleAfterTheCall(TestingT *t) {
     CountEnv e = {0, 0};
     Filter f = BURROW_FN(Filter, counts_what_it_saw, &e);
 
@@ -221,7 +221,7 @@ TEST(writes_to_the_env_are_visible_after_the_call) {
     CHECK_INT_EQ(e.matched, 2);
 }
 
-TEST(two_values_sharing_one_env_see_each_others_writes) {
+static void TestTwoValuesSharingOneEnvSeeEachOthersWrites(TestingT *t) {
     CountEnv e = {0, 0};
     Filter one = BURROW_FN(Filter, counts_what_it_saw, &e);
     Filter two = BURROW_FN(Filter, counts_what_it_saw, &e);
@@ -231,7 +231,7 @@ TEST(two_values_sharing_one_env_see_each_others_writes) {
     CHECK_INT_EQ(e.calls, 2);
 }
 
-TEST(two_values_with_their_own_envs_do_not) {
+static void TestTwoValuesWithTheirOwnEnvsDoNot(TestingT *t) {
     CountEnv first = {0, 0};
     CountEnv second = {0, 0};
     Filter one = BURROW_FN(Filter, counts_what_it_saw, &first);
@@ -244,7 +244,7 @@ TEST(two_values_with_their_own_envs_do_not) {
     CHECK_INT_EQ(second.calls, 1);
 }
 
-TEST(an_env_in_an_allocator_outlives_the_frame_that_made_it) {
+static void TestAnEnvInAnAllocatorOutlivesTheFrameThatMadeIt(TestingT *t) {
     Filter f;
 
     {
@@ -260,7 +260,7 @@ TEST(an_env_in_an_allocator_outlives_the_frame_that_made_it) {
 
 /* --------------------------------------------------------------- passing one */
 
-TEST(a_function_value_passed_to_something_else_works_there) {
+static void TestAFunctionValuePassedToSomethingElseWorksThere(TestingT *t) {
     Slice lines = three_lines();
     PrefixEnv e = {BURROW_S("go")};
 
@@ -269,7 +269,7 @@ TEST(a_function_value_passed_to_something_else_works_there) {
     CHECK_INT_EQ(count_if(lines, BURROW_FN(Filter, has_prefix, &e)), 2);
 }
 
-TEST(a_literal_at_the_call_site_lives_long_enough_for_the_call) {
+static void TestALiteralAtTheCallSiteLivesLongEnoughForTheCall(TestingT *t) {
     Slice lines = three_lines();
     PrefixEnv e = {BURROW_S("gop")};
 
@@ -278,7 +278,7 @@ TEST(a_literal_at_the_call_site_lives_long_enough_for_the_call) {
     CHECK_INT_EQ(count_if(lines, BURROW_FN(Filter, has_prefix, &e)), 1);
 }
 
-TEST(a_table_of_function_values_dispatches_on_an_index) {
+static void TestATableOfFunctionValuesDispatchesOnAnIndex(TestingT *t) {
     BinOp ops[2];
     Int i;
     Int got[2];
@@ -293,7 +293,7 @@ TEST(a_table_of_function_values_dispatches_on_an_index) {
     CHECK_INT_EQ(got[1], 12);
 }
 
-TEST(a_function_value_stored_in_a_struct_survives_the_round_trip) {
+static void TestAFunctionValueStoredInAStructSurvivesTheRoundTrip(TestingT *t) {
     struct Holder {
         Filter keep;
         Int calls;
@@ -335,7 +335,7 @@ static Int read_chunk(void *env, Slice p, Error *err) {
     return n;
 }
 
-TEST(an_out_parameter_survives_the_trip_through_a_function_value) {
+static void TestAnOutParameterSurvivesTheTripThroughAFunctionValue(TestingT *t) {
     ChunkEnv e = {BURROW_S("gopher"), 0};
     ReadFn read = BURROW_FN(ReadFn, read_chunk, &e);
     Slice buf = slice_make(a, TYPE_BYTE, 4, 4);
@@ -362,7 +362,7 @@ TEST(an_out_parameter_survives_the_trip_through_a_function_value) {
  * is why a zeroed value is nil, and the first is what makes passing one cheap
  * enough that no package needs to take a bare function pointer instead. */
 
-TEST(a_function_value_is_two_words_with_the_function_first) {
+static void TestAFunctionValueIsTwoWordsWithTheFunctionFirst(TestingT *t) {
     Filter f = BURROW_FN(Filter, always_true, NULL);
 
     CHECK(sizeof(Filter) == 2 * sizeof(void *));
@@ -370,26 +370,31 @@ TEST(a_function_value_is_two_words_with_the_function_first) {
     CHECK((const void *)&f == (const void *)&f.f);
 }
 
-int main(void) {
+#define TESTS(X)                                                                       \
+    X(TestAZeroedFunctionValueIsNil)                                                   \
+    X(TestAStructFieldOfFunctionTypeStartsOutNil)                                      \
+    X(TestAValueWithAFunctionAndNoEnvIsNotNil)                                         \
+    X(TestACallReachesTheFunctionItWasBuiltWith)                                       \
+    X(TestACallPassesTheEnvFirstAndTheArgumentsAfter)                                  \
+    X(TestACallWithNoArgumentsNeedsTheOtherMacro)                                      \
+    X(TestTheEnvIsWhatACapturedVariableBecomes)                                        \
+    X(TestChangingTheEnvChangesWhatTheValueDoes)                                       \
+    X(TestWritesToTheEnvAreVisibleAfterTheCall)                                        \
+    X(TestTwoValuesSharingOneEnvSeeEachOthersWrites)                                   \
+    X(TestTwoValuesWithTheirOwnEnvsDoNot)                                              \
+    X(TestAnEnvInAnAllocatorOutlivesTheFrameThatMadeIt)                                \
+    X(TestAFunctionValuePassedToSomethingElseWorksThere)                               \
+    X(TestALiteralAtTheCallSiteLivesLongEnoughForTheCall)                              \
+    X(TestATableOfFunctionValuesDispatchesOnAnIndex)                                   \
+    X(TestAFunctionValueStoredInAStructSurvivesTheRoundTrip)                           \
+    X(TestAnOutParameterSurvivesTheTripThroughAFunctionValue)                          \
+    X(TestAFunctionValueIsTwoWordsWithTheFunctionFirst)
+
+static int TestMain(TestingM *m) {
     setup();
-    RUN(a_zeroed_function_value_is_nil);
-    RUN(a_struct_field_of_function_type_starts_out_nil);
-    RUN(a_value_with_a_function_and_no_env_is_not_nil);
-    RUN(a_call_reaches_the_function_it_was_built_with);
-    RUN(a_call_passes_the_env_first_and_the_arguments_after);
-    RUN(a_call_with_no_arguments_needs_the_other_macro);
-    RUN(the_env_is_what_a_captured_variable_becomes);
-    RUN(changing_the_env_changes_what_the_value_does);
-    RUN(writes_to_the_env_are_visible_after_the_call);
-    RUN(two_values_sharing_one_env_see_each_others_writes);
-    RUN(two_values_with_their_own_envs_do_not);
-    RUN(an_env_in_an_allocator_outlives_the_frame_that_made_it);
-    RUN(a_function_value_passed_to_something_else_works_there);
-    RUN(a_literal_at_the_call_site_lives_long_enough_for_the_call);
-    RUN(a_table_of_function_values_dispatches_on_an_index);
-    RUN(a_function_value_stored_in_a_struct_survives_the_round_trip);
-    RUN(an_out_parameter_survives_the_trip_through_a_function_value);
-    RUN(a_function_value_is_two_words_with_the_function_first);
+    int code = testing_m_run(m);
     teardown();
-    return harness_report("func");
+    return code;
 }
+
+TESTING_MAIN_WITH(TestMain, TESTS)

@@ -22,7 +22,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <math.h>
 #include <string.h>
@@ -39,7 +39,7 @@ static void teardown(void) {
     arena_free(&ar);
 }
 
-/* A Str as a C string for the harness, in a buffer that lasts until the next
+/* A Str as a C string for CHECK_STR_EQ, in a buffer that lasts until the next
  * call. Output with a NUL in it is checked some other way. */
 static const char *cs(Str s) {
     static char buf[4096];
@@ -143,7 +143,7 @@ BURROW_STRUCT_DEFINE_METHODS(Panicky, PANICKY_FIELDS, PANICKY_METHODS);
 
 /* ------------------------------------------------------------------ basics */
 
-TEST(integers) {
+static void TestIntegers(TestingT *t) {
     CHECK_STR_EQ(SP("%d", 12345), "12345");
     CHECK_STR_EQ(SP("%v", -12345), "-12345");
     CHECK_STR_EQ(SP("%5d", 12), "   12");
@@ -169,7 +169,7 @@ TEST(integers) {
     CHECK_STR_EQ(SP("%#v", 255), "255");
 }
 
-TEST(floats) {
+static void TestFloats(TestingT *t) {
     CHECK_STR_EQ(SP("%v", 1.0), "1");
     CHECK_STR_EQ(SP("%v", 0.1f), "0.1");
     CHECK_STR_EQ(SP("%v", 1e21), "1e+21");
@@ -192,7 +192,7 @@ TEST(floats) {
     CHECK_STR_EQ(SP("%v", c3), "(0.1+0i)");
 }
 
-TEST(strings_and_bools) {
+static void TestStringsAndBools(TestingT *t) {
     CHECK_STR_EQ(SP("%s", "abc"), "abc");
     CHECK_STR_EQ(SP("%v", BURROW_S("abc")), "abc");
     CHECK_STR_EQ(SP("%q", "abc"), "\"abc\"");
@@ -209,7 +209,7 @@ TEST(strings_and_bools) {
     CHECK_STR_EQ(SP("plain"), "plain");
 }
 
-TEST(bad_formats) {
+static void TestBadFormats(TestingT *t) {
     CHECK_STR_EQ(SP("%d"), "%!d(MISSING)");
     CHECK_STR_EQ(SP("%d", "hi"), "%!d(string=hi)");
     CHECK_STR_EQ(SP("%z", 3), "%!z(int=3)");
@@ -234,7 +234,7 @@ TEST(bad_formats) {
 
 /* ------------------------------------------------------------ composites */
 
-TEST(slices_and_bytes) {
+static void TestSlicesAndBytes(TestingT *t) {
     Int xs[] = {1, 2, 3};
     Slice s = slice_from(xs, 3, 3, TYPE_INT);
     CHECK_STR_EQ(SP("%v", s), "[1 2 3]");
@@ -258,7 +258,7 @@ TEST(slices_and_bytes) {
     CHECK_STR_EQ(SP("%T", slice_from(strs, 2, 2, TYPE_STRING)), "[]string");
 }
 
-TEST(structs) {
+static void TestStructs(TestingT *t) {
     Point p = {1, 2};
     Any v = BURROW_ANY(TYPE_OF(Point), &p);
     CHECK_STR_EQ(SP("%v", v), "{1 2}");
@@ -281,7 +281,7 @@ TEST(structs) {
     CHECK_STR_EQ(SP("%T", BURROW_ANY(TYPE_OF(PointPtr), &pp)), "*Point");
 }
 
-TEST(maps) {
+static void TestMaps(TestingT *t) {
     Map *m = map_make(a, TYPE_STRING, TYPE_INT, 0);
     Str k1 = BURROW_S("b"), k2 = BURROW_S("a"), k3 = BURROW_S("c");
     Int v1 = 2, v2 = 1, v3 = 3;
@@ -302,7 +302,7 @@ TEST(maps) {
 
 /* ---------------------------------------------------------------- methods */
 
-TEST(stringers) {
+static void TestStringers(TestingT *t) {
     Named one = {1}, two = {2};
     CHECK_STR_EQ(SP("%v", BURROW_ANY(TYPE_OF(Named), &one)), "one");
     CHECK_STR_EQ(SP("%s", BURROW_ANY(TYPE_OF(Named), &two)), "many");
@@ -323,7 +323,7 @@ TEST(stringers) {
     CHECK_STR_EQ(SP("%#v", BURROW_ANY(TYPE_OF(Gos), &g)), "GoString(Gos)");
 }
 
-TEST(formatters) {
+static void TestFormatters(TestingT *t) {
     Fmtr f = {5};
     Any v = BURROW_ANY(TYPE_OF(Fmtr), &f);
     CHECK_STR_EQ(SP("%v", v), "<v=F(5)>");
@@ -347,7 +347,7 @@ static void flags_format(Flags *f, FmtState s, Rune verb) {
 #define FLAGS_METHODS(M, T) M(T, Format, flags_format, FMTR_SIG_Format)
 BURROW_STRUCT_DEFINE_METHODS(Flags, FLAGS_FIELDS, FLAGS_METHODS);
 
-TEST(format_string_rebuilds_the_directive) {
+static void TestFormatStringRebuildsTheDirective(TestingT *t) {
     Flags f = {0};
     Any v = BURROW_ANY(TYPE_OF(Flags), &f);
     CHECK_STR_EQ(SP("%v", v), "%v");
@@ -357,7 +357,7 @@ TEST(format_string_rebuilds_the_directive) {
     CHECK_STR_EQ(SP("%3.x", v), "%3.0x");
 }
 
-TEST(panics_in_methods) {
+static void TestPanicsInMethods(TestingT *t) {
     Panicky p = {0};
     CHECK_STR_EQ(SP("%s", BURROW_ANY(TYPE_OF(Panicky), &p)),
                  "%!s(PANIC=String method: oops)");
@@ -369,7 +369,7 @@ TEST(panics_in_methods) {
 
 BURROW_SENTINEL_ERROR(test_err_eof, "EOF");
 
-TEST(errors_print_their_text) {
+static void TestErrorsPrintTheirText(TestingT *t) {
     Error e = errors_new(a, BURROW_S("boom"));
     CHECK_STR_EQ(SP("%v", e), "boom");
     CHECK_STR_EQ(SP("%s", e), "boom");
@@ -380,7 +380,7 @@ TEST(errors_print_their_text) {
     CHECK_STR_EQ(SP("%v", BURROW_NO_ERROR), "<nil>");
 }
 
-TEST(errorf_wraps) {
+static void TestErrorfWraps(TestingT *t) {
     Error inner = errors_new(a, BURROW_S("inner"));
     Error e = fmt_errorf_v("outer: %w", inner);
     CHECK_STR_EQ(cs(error_text(e)), "outer: inner");
@@ -410,7 +410,7 @@ TEST(errorf_wraps) {
 
 /* ---------------------------------------------------------------- pointers */
 
-TEST(pointers) {
+static void TestPointers(TestingT *t) {
     Int x = 1;
     Int *px = &x;
     Str got = fmt_sprintf_v(a, "%v", BURROW_ANY(TYPE_OF(IntPtr), &px));
@@ -429,7 +429,7 @@ TEST(pointers) {
 
 /* ---------------------------------------------------------- print, println */
 
-TEST(sprint_and_sprintln) {
+static void TestSprintAndSprintln(TestingT *t) {
     CHECK_STR_EQ(cs(fmt_sprint_v(a, 1, 2)), "1 2");
     CHECK_STR_EQ(cs(fmt_sprint_v(a, "a", 1, 2, "b")), "a1 2b");
     CHECK_STR_EQ(cs(fmt_sprint_v(a, "a", "b")), "ab");
@@ -455,7 +455,7 @@ static Int sink_write(void *self, Slice p, Error *err) {
 
 static const IoWriterVT sink_vt = {NULL, sink_write};
 
-TEST(append_and_fprint) {
+static void TestAppendAndFprint(TestingT *t) {
     Slice b = fmt_appendf_v(a, slice_nil(TYPE_BYTE), "x=%d", 7);
     b = fmt_append_v(a, b, " ", (bool)true);
     b = fmt_appendln_v(a, b, " done");
@@ -473,7 +473,7 @@ TEST(append_and_fprint) {
     CHECK_STR_EQ(cs((Str){sink.b, sink.n}), "a-12.5\n");
 }
 
-TEST(long_output_grows_the_buffer) {
+static void TestLongOutputGrowsTheBuffer(TestingT *t) {
     Byte big[3000];
     memset(big, 'z', sizeof big);
     Str s = {big, (Int)sizeof big};
@@ -628,20 +628,7 @@ static Any operand_any(const FmtOperand *op, FcValue *v) {
     }
 }
 
-/* A string as Go's %q would show it, for a failure message. */
-static void print_quoted(const char *label, Str s) {
-    fprintf(stderr, " %s \"", label);
-    for (Int i = 0; i < s.len; i++) {
-        Byte c = s.p[i];
-        if (c >= 0x20 && c < 0x7f && c != '"' && c != '\\')
-            fputc(c, stderr);
-        else
-            fprintf(stderr, "\\x%02x", c);
-    }
-    fputc('"', stderr);
-}
-
-TEST(go_fmt_tests) {
+static void TestGoFmtTests(TestingT *t) {
     enum { MAXOPS = 16 };
     Int skipped = 0;
     for (size_t k = 0; k < sizeof fmt_cases / sizeof fmt_cases[0]; k++) {
@@ -656,39 +643,38 @@ TEST(go_fmt_tests) {
         for (int i = 0; i < c->n && i < MAXOPS; i++)
             args[i] = operand_any(&fmt_operands[c->first + i], &vals[i]);
         Str got = fmt_sprintf(a, c->format, slice_from(args, c->n, c->n, TYPE_ANY));
-        harness_checks++;
-        if (!str_eq(got, c->out)) {
-            harness_failures++;
-            fprintf(stderr, "%s:%d: go_fmt_tests[%zu]:", __FILE__, __LINE__, k);
-            print_quoted("format", c->format);
-            print_quoted("got", got);
-            print_quoted("want", c->out);
-            fputc('\n', stderr);
-        }
+        if (!str_eq(got, c->out))
+            testing_t_errorf_v(t, "go_fmt_tests[%d]: Sprintf(%q) = %q, want %q", (Int)k,
+                               c->format, got, c->out);
     }
     (void)skipped;
 }
 
-int main(void) {
+#define TESTS(X)                                                                       \
+    X(TestIntegers)                                                                    \
+    X(TestFloats)                                                                      \
+    X(TestStringsAndBools)                                                             \
+    X(TestBadFormats)                                                                  \
+    X(TestSlicesAndBytes)                                                              \
+    X(TestStructs)                                                                     \
+    X(TestMaps)                                                                        \
+    X(TestStringers)                                                                   \
+    X(TestFormatters)                                                                  \
+    X(TestFormatStringRebuildsTheDirective)                                            \
+    X(TestPanicsInMethods)                                                             \
+    X(TestErrorsPrintTheirText)                                                        \
+    X(TestErrorfWraps)                                                                 \
+    X(TestPointers)                                                                    \
+    X(TestSprintAndSprintln)                                                           \
+    X(TestAppendAndFprint)                                                             \
+    X(TestLongOutputGrowsTheBuffer)                                                    \
+    X(TestGoFmtTests)
+
+static int TestMain(TestingM *m) {
     setup();
-    RUN(integers);
-    RUN(floats);
-    RUN(strings_and_bools);
-    RUN(bad_formats);
-    RUN(slices_and_bytes);
-    RUN(structs);
-    RUN(maps);
-    RUN(stringers);
-    RUN(formatters);
-    RUN(format_string_rebuilds_the_directive);
-    RUN(panics_in_methods);
-    RUN(errors_print_their_text);
-    RUN(errorf_wraps);
-    RUN(pointers);
-    RUN(sprint_and_sprintln);
-    RUN(append_and_fprint);
-    RUN(long_output_grows_the_buffer);
-    RUN(go_fmt_tests);
+    int code = testing_m_run(m);
     teardown();
-    return harness_report("fmt");
+    return code;
 }
+
+TESTING_MAIN_WITH(TestMain, TESTS)

@@ -25,7 +25,7 @@
 
 #include "burrow/thread.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdint.h>
 
@@ -43,7 +43,7 @@
 
 static burrow__Thread threads[THREADS];
 
-static void run_all(burrow__ThreadFn fn) {
+static void run_all(TestingT *t, burrow__ThreadFn fn) {
     for (size_t i = 0; i < THREADS; i++)
         CHECK(burrow__thread_start(&threads[i], fn, (void *)(uintptr_t)i, 0));
     for (size_t i = 0; i < THREADS; i++)
@@ -65,12 +65,12 @@ static void add_everything(void *arg) {
     }
 }
 
-TEST(nothing_is_lost_when_every_width_is_counted_at_once) {
+static void TestNothingIsLostWhenEveryWidthIsCountedAtOnce(TestingT *t) {
     count32 = 0;
     count64 = 0;
     countptr = 0;
 
-    run_all(add_everything);
+    run_all(t, add_everything);
 
     CHECK(burrow__atomic_load_u32(&count32) == (uint32_t)(THREADS * ROUNDS));
     CHECK(burrow__atomic_load_u64(&count64) == (uint64_t)(THREADS * ROUNDS));
@@ -90,13 +90,13 @@ static void take_tickets(void *arg) {
         seen[me][i] = burrow__atomic_add_u32(&tickets, 1);
 }
 
-TEST(no_two_threads_are_handed_the_same_old_value) {
+static void TestNoTwoThreadsAreHandedTheSameOldValue(TestingT *t) {
     tickets = 0;
     for (size_t i = 0; i < THREADS; i++)
         for (size_t j = 0; j < 64; j++)
             seen[i][j] = UINT32_MAX;
 
-    run_all(take_tickets);
+    run_all(t, take_tickets);
 
     CHECK(burrow__atomic_load_u32(&tickets) == THREADS * 64);
 
@@ -107,10 +107,10 @@ TEST(no_two_threads_are_handed_the_same_old_value) {
 
     for (size_t i = 0; i < THREADS; i++) {
         for (size_t j = 0; j < 64; j++) {
-            uint32_t t = seen[i][j];
-            CHECK(t < THREADS * 64);
-            if (t < THREADS * 64)
-                handed[t]++;
+            uint32_t ticket = seen[i][j];
+            CHECK(ticket < THREADS * 64);
+            if (ticket < THREADS * 64)
+                handed[ticket]++;
         }
     }
     for (size_t i = 0; i < sizeof handed; i++)
@@ -134,10 +134,10 @@ static void flip_my_bit(void *arg) {
     (void)burrow__atomic_or_u64(&mask, bit);
 }
 
-TEST(or_and_and_do_not_lose_a_neighbours_bit) {
+static void TestOrAndAndDoNotLoseANeighboursBit(TestingT *t) {
     mask = 0;
 
-    run_all(flip_my_bit);
+    run_all(t, flip_my_bit);
 
     /* Every thread's last act was to set its own bit, and none of them may have
      * cleared anybody else's on the way. */
@@ -160,10 +160,10 @@ static void add_through_cas(void *arg) {
     }
 }
 
-TEST(a_compare_and_swap_loop_converges_under_contention) {
+static void TestACompareAndSwapLoopConvergesUnderContention(TestingT *t) {
     cas_total = 0;
 
-    run_all(add_through_cas);
+    run_all(t, add_through_cas);
 
     CHECK(burrow__atomic_load_u64(&cas_total) == (uint64_t)(THREADS * ROUNDS));
 }
@@ -183,10 +183,10 @@ static void add_through_weak_cas(void *arg) {
     }
 }
 
-TEST(the_weak_compare_and_swap_gets_there_too) {
+static void TestTheWeakCompareAndSwapGetsThereToo(TestingT *t) {
     weak_total = 0;
 
-    run_all(add_through_weak_cas);
+    run_all(t, add_through_weak_cas);
 
     CHECK(burrow__atomic_load_u32(&weak_total) == (uint32_t)(THREADS * ROUNDS));
 }
@@ -228,11 +228,11 @@ static void publish_and_consume(void *arg) {
     }
 }
 
-TEST(a_published_pointer_is_never_seen_half_written) {
+static void TestAPublishedPointerIsNeverSeenHalfWritten(TestingT *t) {
     published = NULL;
     torn = 0;
 
-    run_all(publish_and_consume);
+    run_all(t, publish_and_consume);
 
     CHECK(burrow__atomic_load_u32(&torn) == 0);
 
@@ -240,12 +240,12 @@ TEST(a_published_pointer_is_never_seen_half_written) {
     CHECK(last == (void *)&left || last == (void *)&right);
 }
 
-int main(void) {
-    RUN(nothing_is_lost_when_every_width_is_counted_at_once);
-    RUN(no_two_threads_are_handed_the_same_old_value);
-    RUN(or_and_and_do_not_lose_a_neighbours_bit);
-    RUN(a_compare_and_swap_loop_converges_under_contention);
-    RUN(the_weak_compare_and_swap_gets_there_too);
-    RUN(a_published_pointer_is_never_seen_half_written);
-    return harness_report(CONCURRENT_SUITE);
-}
+#define TESTS(X)                                                                       \
+    X(TestNothingIsLostWhenEveryWidthIsCountedAtOnce)                                  \
+    X(TestNoTwoThreadsAreHandedTheSameOldValue)                                        \
+    X(TestOrAndAndDoNotLoseANeighboursBit)                                             \
+    X(TestACompareAndSwapLoopConvergesUnderContention)                                 \
+    X(TestTheWeakCompareAndSwapGetsThereToo)                                           \
+    X(TestAPublishedPointerIsNeverSeenHalfWritten)
+
+TESTING_MAIN(TESTS)

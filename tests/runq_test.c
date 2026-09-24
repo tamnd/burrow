@@ -29,7 +29,7 @@
 #include "burrow/clock.h"
 #include "burrow/thread.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -59,7 +59,7 @@ static void reset_p(burrow__P *p, int32_t id) {
 /* Every put in the single threaded tests goes through this, because a put that
  * silently overflowed would otherwise look like a put that worked and the test
  * after it would be checking the wrong queue. */
-static bool put(burrow__P *p, burrow__G *g, bool next) {
+static bool put(TestingT *t, burrow__P *p, burrow__G *g, bool next) {
     burrow__G *overflow = NULL;
     bool ok = burrow__runq_put(p, g, next, &overflow);
     if (!ok)
@@ -76,7 +76,7 @@ static burrow__P p2;
 
 /* ------------------------------------------------------------------- the ring */
 
-TEST(an_empty_queue_has_nothing_in_it) {
+static void TestAnEmptyQueueHasNothingInIt(TestingT *t) {
     reset_p(&p1, 1);
 
     CHECK(burrow__runq_get(&p1) == NULL);
@@ -88,11 +88,11 @@ TEST(an_empty_queue_has_nothing_in_it) {
     CHECK(burrow__runq_len(&p1) == 0);
 }
 
-TEST(goroutines_come_off_the_ring_in_the_order_they_went_on) {
+static void TestGoroutinesComeOffTheRingInTheOrderTheyWentOn(TestingT *t) {
     reset_p(&p1, 1);
 
     for (uint64_t i = 1; i <= 8; i++)
-        CHECK(put(&p1, fresh(i), false));
+        CHECK(put(t, &p1, fresh(i), false));
 
     CHECK(burrow__runq_len(&p1) == 8);
 
@@ -103,13 +103,13 @@ TEST(goroutines_come_off_the_ring_in_the_order_they_went_on) {
     CHECK(burrow__runq_get(&p1) == NULL);
 }
 
-TEST(runnext_jumps_the_queue) {
+static void TestRunnextJumpsTheQueue(TestingT *t) {
     reset_p(&p1, 1);
 
     for (uint64_t i = 1; i <= 3; i++)
-        CHECK(put(&p1, fresh(i), false));
+        CHECK(put(t, &p1, fresh(i), false));
 
-    CHECK(put(&p1, fresh(99), true));
+    CHECK(put(t, &p1, fresh(99), true));
     CHECK(burrow__runq_len(&p1) == 4);
 
     /* The one that asked to go next goes next, and the three that were already
@@ -121,12 +121,12 @@ TEST(runnext_jumps_the_queue) {
     CHECK(burrow__runq_get(&p1) == NULL);
 }
 
-TEST(a_second_runnext_pushes_the_first_one_to_the_back) {
+static void TestASecondRunnextPushesTheFirstOneToTheBack(TestingT *t) {
     reset_p(&p1, 1);
 
-    CHECK(put(&p1, fresh(1), false));
-    CHECK(put(&p1, fresh(50), true));
-    CHECK(put(&p1, fresh(51), true));
+    CHECK(put(t, &p1, fresh(1), false));
+    CHECK(put(t, &p1, fresh(50), true));
+    CHECK(put(t, &p1, fresh(51), true));
 
     CHECK(burrow__runq_len(&p1) == 3);
 
@@ -139,11 +139,11 @@ TEST(a_second_runnext_pushes_the_first_one_to_the_back) {
     CHECK(burrow__runq_get(&p1) == NULL);
 }
 
-TEST(runnext_on_its_own_is_found_and_counted) {
+static void TestRunnextOnItsOwnIsFoundAndCounted(TestingT *t) {
     reset_p(&p1, 1);
 
     CHECK(burrow__runq_len(&p1) == 0);
-    CHECK(put(&p1, fresh(7), true));
+    CHECK(put(t, &p1, fresh(7), true));
     CHECK(burrow__runq_len(&p1) == 1);
 
     CHECK_INT_EQ(id_of(burrow__runq_get(&p1)), 7);
@@ -151,11 +151,11 @@ TEST(runnext_on_its_own_is_found_and_counted) {
     CHECK(burrow__runq_get(&p1) == NULL);
 }
 
-TEST(the_ring_holds_exactly_its_size_and_then_says_so) {
+static void TestTheRingHoldsExactlyItsSizeAndThenSaysSo(TestingT *t) {
     reset_p(&p1, 1);
 
     for (uint64_t i = 1; i <= BURROW_RUNQ_SIZE; i++)
-        CHECK(put(&p1, fresh(i), false));
+        CHECK(put(t, &p1, fresh(i), false));
 
     CHECK(burrow__runq_len(&p1) == BURROW_RUNQ_SIZE);
 
@@ -170,11 +170,11 @@ TEST(the_ring_holds_exactly_its_size_and_then_says_so) {
     CHECK_INT_EQ(id_of(burrow__runq_get(&p1)), 1);
 }
 
-TEST(a_full_ring_still_takes_a_runnext_and_hands_back_the_old_one) {
+static void TestAFullRingStillTakesARunnextAndHandsBackTheOldOne(TestingT *t) {
     reset_p(&p1, 1);
 
     for (uint64_t i = 1; i <= BURROW_RUNQ_SIZE; i++)
-        CHECK(put(&p1, fresh(i), false));
+        CHECK(put(t, &p1, fresh(i), false));
 
     /* The slot is empty, so this one lands in it and the full ring never comes
      * into it. */
@@ -198,7 +198,7 @@ TEST(a_full_ring_still_takes_a_runnext_and_hands_back_the_old_one) {
     CHECK_INT_EQ(id_of(burrow__runq_get(&p1)), 301);
 }
 
-TEST(the_indices_keep_working_after_the_ring_has_wrapped) {
+static void TestTheIndicesKeepWorkingAfterTheRingHasWrapped(TestingT *t) {
     reset_p(&p1, 1);
 
     /* Four times round, one goroutine at a time, so that head and tail walk
@@ -206,7 +206,7 @@ TEST(the_indices_keep_working_after_the_ring_has_wrapped) {
      * keeping them honest. */
     for (uint64_t round = 0; round < 4; round++) {
         for (uint64_t i = 1; i <= BURROW_RUNQ_SIZE; i++) {
-            CHECK(put(&p1, fresh(i), false));
+            CHECK(put(t, &p1, fresh(i), false));
             CHECK_INT_EQ(id_of(burrow__runq_get(&p1)), i);
         }
     }
@@ -216,7 +216,7 @@ TEST(the_indices_keep_working_after_the_ring_has_wrapped) {
 
 /* ------------------------------------------------------------ the global queue */
 
-TEST(a_global_queue_is_first_in_first_out) {
+static void TestAGlobalQueueIsFirstInFirstOut(TestingT *t) {
     burrow__GQueue q;
     memset(&q, 0, sizeof(q));
 
@@ -241,7 +241,7 @@ TEST(a_global_queue_is_first_in_first_out) {
     CHECK(q.len == 0);
 }
 
-TEST(pushing_to_the_head_puts_a_goroutine_back_where_it_was) {
+static void TestPushingToTheHeadPutsAGoroutineBackWhereItWas(TestingT *t) {
     burrow__GQueue q;
     memset(&q, 0, sizeof(q));
 
@@ -260,7 +260,7 @@ TEST(pushing_to_the_head_puts_a_goroutine_back_where_it_was) {
     CHECK(burrow__gqueue_pop(&q) == NULL);
 }
 
-TEST(one_queue_can_be_poured_onto_the_end_of_another) {
+static void TestOneQueueCanBePouredOntoTheEndOfAnother(TestingT *t) {
     burrow__GQueue dst;
     burrow__GQueue src;
     memset(&dst, 0, sizeof(dst));
@@ -294,14 +294,14 @@ TEST(one_queue_can_be_poured_onto_the_end_of_another) {
     CHECK(burrow__gqueue_pop(&dst) == NULL);
 }
 
-TEST(a_full_ring_gives_up_half_of_itself_and_the_new_goroutine) {
+static void TestAFullRingGivesUpHalfOfItselfAndTheNewGoroutine(TestingT *t) {
     reset_p(&p1, 1);
 
     burrow__GQueue batch;
     memset(&batch, 0, sizeof(batch));
 
     for (uint64_t i = 1; i <= BURROW_RUNQ_SIZE; i++)
-        CHECK(put(&p1, fresh(i), false));
+        CHECK(put(t, &p1, fresh(i), false));
 
     burrow__G *extra = fresh(BURROW_RUNQ_SIZE + 1);
     CHECK(burrow__runq_put_slow(&p1, extra, &batch));
@@ -324,10 +324,10 @@ TEST(a_full_ring_gives_up_half_of_itself_and_the_new_goroutine) {
     CHECK_INT_EQ(id_of(burrow__runq_get(&p1)), BURROW_RUNQ_SIZE / 2 + 1);
 
     /* And the put that was retried after all this now fits. */
-    CHECK(put(&p1, fresh(BURROW_RUNQ_SIZE + 2), false));
+    CHECK(put(t, &p1, fresh(BURROW_RUNQ_SIZE + 2), false));
 }
 
-TEST(the_slow_path_says_no_when_there_is_nothing_to_move) {
+static void TestTheSlowPathSaysNoWhenThereIsNothingToMove(TestingT *t) {
     reset_p(&p1, 1);
 
     burrow__GQueue batch;
@@ -339,7 +339,7 @@ TEST(the_slow_path_says_no_when_there_is_nothing_to_move) {
     CHECK(!burrow__runq_put_slow(&p1, fresh(1), &batch));
     CHECK(batch.len == 0);
 
-    CHECK(put(&p1, fresh(2), false));
+    CHECK(put(t, &p1, fresh(2), false));
     CHECK(!burrow__runq_put_slow(&p1, fresh(3), &batch));
     CHECK(batch.len == 0);
     CHECK_INT_EQ(burrow__runq_len(&p1), 1);
@@ -347,7 +347,7 @@ TEST(the_slow_path_says_no_when_there_is_nothing_to_move) {
 
 /* ---------------------------------------------------------------- the stealing */
 
-TEST(stealing_from_an_empty_p_takes_nothing) {
+static void TestStealingFromAnEmptyPTakesNothing(TestingT *t) {
     reset_p(&p1, 1);
     reset_p(&p2, 2);
 
@@ -356,12 +356,12 @@ TEST(stealing_from_an_empty_p_takes_nothing) {
     CHECK(burrow__runq_len(&p2) == 0);
 }
 
-TEST(a_thief_takes_half_of_the_queue) {
+static void TestAThiefTakesHalfOfTheQueue(TestingT *t) {
     reset_p(&p1, 1);
     reset_p(&p2, 2);
 
     for (uint64_t i = 1; i <= 8; i++)
-        CHECK(put(&p2, fresh(i), false));
+        CHECK(put(t, &p2, fresh(i), false));
 
     burrow__G *g = burrow__runq_steal(&p1, &p2, false);
 
@@ -381,11 +381,11 @@ TEST(a_thief_takes_half_of_the_queue) {
         CHECK_INT_EQ(id_of(burrow__runq_get(&p2)), i);
 }
 
-TEST(a_queue_of_one_is_worth_stealing) {
+static void TestAQueueOfOneIsWorthStealing(TestingT *t) {
     reset_p(&p1, 1);
     reset_p(&p2, 2);
 
-    CHECK(put(&p2, fresh(1), false));
+    CHECK(put(t, &p2, fresh(1), false));
 
     /* Half of one rounded down is nothing, which would make work stealing do
      * nothing at all on a program with one goroutine per P to spare. Rounding
@@ -395,11 +395,11 @@ TEST(a_queue_of_one_is_worth_stealing) {
     CHECK(burrow__runq_len(&p2) == 0);
 }
 
-TEST(runnext_is_only_taken_when_the_thief_asks_for_it) {
+static void TestRunnextIsOnlyTakenWhenTheThiefAsksForIt(TestingT *t) {
     reset_p(&p1, 1);
     reset_p(&p2, 2);
 
-    CHECK(put(&p2, fresh(5), true));
+    CHECK(put(t, &p2, fresh(5), true));
 
     /* A thief that has other places left to look leaves the slot alone, because
      * that goroutine is the one the victim is about to run and moving it to
@@ -416,13 +416,13 @@ TEST(runnext_is_only_taken_when_the_thief_asks_for_it) {
     CHECK(burrow__runq_get(&p2) == NULL);
 }
 
-TEST(the_ring_is_emptied_before_the_slot_is_touched) {
+static void TestTheRingIsEmptiedBeforeTheSlotIsTouched(TestingT *t) {
     reset_p(&p1, 1);
     reset_p(&p2, 2);
 
-    CHECK(put(&p2, fresh(1), false));
-    CHECK(put(&p2, fresh(2), false));
-    CHECK(put(&p2, fresh(9), true));
+    CHECK(put(t, &p2, fresh(1), false));
+    CHECK(put(t, &p2, fresh(2), false));
+    CHECK(put(t, &p2, fresh(9), true));
 
     /* Two on the ring and one in the slot. Asking for the slot does not mean
      * taking the slot: it is the last resort and the ring comes first. */
@@ -431,12 +431,12 @@ TEST(the_ring_is_emptied_before_the_slot_is_touched) {
     CHECK_INT_EQ(id_of(burrow__runq_get(&p2)), 9);
 }
 
-TEST(a_thief_can_steal_a_full_ring_without_overflowing_its_own) {
+static void TestAThiefCanStealAFullRingWithoutOverflowingItsOwn(TestingT *t) {
     reset_p(&p1, 1);
     reset_p(&p2, 2);
 
     for (uint64_t i = 1; i <= BURROW_RUNQ_SIZE; i++)
-        CHECK(put(&p2, fresh(i), false));
+        CHECK(put(t, &p2, fresh(i), false));
 
     /* The largest steal there is: half of a full ring is 128, which is the most
      * that can land in a thief's ring in one go. The check in the steal that
@@ -542,7 +542,7 @@ static void steal_loop(void *arg) {
  *
  * Answering false means a thread would not start, and the caller gives up rather
  * than waiting for a thief that is never going to arrive. */
-static bool start_thieves(void) {
+static bool start_thieves(TestingT *t) {
     stress_stop = 0;
     thieves_running = 0;
 
@@ -566,14 +566,14 @@ static bool start_thieves(void) {
     return true;
 }
 
-TEST(nothing_is_lost_or_duplicated_while_thieves_are_running) {
+static void TestNothingIsLostOrDuplicatedWhileThievesAreRunning(TestingT *t) {
     reset_p(&p1, 1);
     memset(seen, 0, sizeof(seen));
 
     for (uint64_t i = 1; i <= POOL; i++)
         (void)fresh(i);
 
-    if (!start_thieves())
+    if (!start_thieves(t))
         return;
 
     /* The owner fills and drains its own queue over and over while the thieves
@@ -688,14 +688,14 @@ static void let_a_thief_in(void) {
  * races with the owner taking that same goroutine, and the runnext slot is
  * contended by two threads doing a compare and swap on one pointer rather than
  * being quietly ignored because the ring always has something better in it. */
-TEST(one_goroutine_at_a_time_is_never_handed_to_two_threads) {
+static void TestOneGoroutineAtATimeIsNeverHandedToTwoThreads(TestingT *t) {
     reset_p(&p1, 1);
     memset(seen, 0, sizeof(seen));
 
     for (uint64_t i = 1; i <= POOL; i++)
         (void)fresh(i);
 
-    if (!start_thieves())
+    if (!start_thieves(t))
         return;
 
     uint32_t owner_total = 0;
@@ -801,30 +801,27 @@ TEST(one_goroutine_at_a_time_is_never_handed_to_two_threads) {
     CHECK(thief_total >= taken_from_me);
 }
 
-int main(void) {
-    RUN(an_empty_queue_has_nothing_in_it);
-    RUN(goroutines_come_off_the_ring_in_the_order_they_went_on);
-    RUN(runnext_jumps_the_queue);
-    RUN(a_second_runnext_pushes_the_first_one_to_the_back);
-    RUN(runnext_on_its_own_is_found_and_counted);
-    RUN(the_ring_holds_exactly_its_size_and_then_says_so);
-    RUN(a_full_ring_still_takes_a_runnext_and_hands_back_the_old_one);
-    RUN(the_indices_keep_working_after_the_ring_has_wrapped);
+#define TESTS(X)                                                                       \
+    X(TestAnEmptyQueueHasNothingInIt)                                                  \
+    X(TestGoroutinesComeOffTheRingInTheOrderTheyWentOn)                                \
+    X(TestRunnextJumpsTheQueue)                                                        \
+    X(TestASecondRunnextPushesTheFirstOneToTheBack)                                    \
+    X(TestRunnextOnItsOwnIsFoundAndCounted)                                            \
+    X(TestTheRingHoldsExactlyItsSizeAndThenSaysSo)                                     \
+    X(TestAFullRingStillTakesARunnextAndHandsBackTheOldOne)                            \
+    X(TestTheIndicesKeepWorkingAfterTheRingHasWrapped)                                 \
+    X(TestAGlobalQueueIsFirstInFirstOut)                                               \
+    X(TestPushingToTheHeadPutsAGoroutineBackWhereItWas)                                \
+    X(TestOneQueueCanBePouredOntoTheEndOfAnother)                                      \
+    X(TestAFullRingGivesUpHalfOfItselfAndTheNewGoroutine)                              \
+    X(TestTheSlowPathSaysNoWhenThereIsNothingToMove)                                   \
+    X(TestStealingFromAnEmptyPTakesNothing)                                            \
+    X(TestAThiefTakesHalfOfTheQueue)                                                   \
+    X(TestAQueueOfOneIsWorthStealing)                                                  \
+    X(TestRunnextIsOnlyTakenWhenTheThiefAsksForIt)                                     \
+    X(TestTheRingIsEmptiedBeforeTheSlotIsTouched)                                      \
+    X(TestAThiefCanStealAFullRingWithoutOverflowingItsOwn)                             \
+    X(TestNothingIsLostOrDuplicatedWhileThievesAreRunning)                             \
+    X(TestOneGoroutineAtATimeIsNeverHandedToTwoThreads)
 
-    RUN(a_global_queue_is_first_in_first_out);
-    RUN(pushing_to_the_head_puts_a_goroutine_back_where_it_was);
-    RUN(one_queue_can_be_poured_onto_the_end_of_another);
-    RUN(a_full_ring_gives_up_half_of_itself_and_the_new_goroutine);
-    RUN(the_slow_path_says_no_when_there_is_nothing_to_move);
-
-    RUN(stealing_from_an_empty_p_takes_nothing);
-    RUN(a_thief_takes_half_of_the_queue);
-    RUN(a_queue_of_one_is_worth_stealing);
-    RUN(runnext_is_only_taken_when_the_thief_asks_for_it);
-    RUN(the_ring_is_emptied_before_the_slot_is_touched);
-    RUN(a_thief_can_steal_a_full_ring_without_overflowing_its_own);
-
-    RUN(nothing_is_lost_or_duplicated_while_thieves_are_running);
-    RUN(one_goroutine_at_a_time_is_never_handed_to_two_threads);
-    return harness_report("runq");
-}
+TESTING_MAIN(TESTS)

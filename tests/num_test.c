@@ -10,8 +10,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 #include "burrow/num.h"
 
@@ -26,7 +26,7 @@ static double nan_value(void) {
 
 /* ------------------------------------------------------------------ wrapping */
 
-TEST(signed_overflow_wraps_the_way_go_says) {
+static void TestSignedOverflowWrapsTheWayGoSays(TestingT *t) {
     /* The one that matters. C calls this undefined and deletes the code that
      * depends on it, Go calls it the answer, and hash/fnv wraps on every byte
      * it hashes. */
@@ -42,7 +42,7 @@ TEST(signed_overflow_wraps_the_way_go_says) {
     CHECK_INT_EQ(int64_neg(7), -7);
 }
 
-TEST(the_narrow_widths_wrap_at_their_own_width) {
+static void TestTheNarrowWidthsWrapAtTheirOwnWidth(TestingT *t) {
     /* This is what the promotion rules get wrong if you write a + b and cast
      * the result. int8 arithmetic in C happens in int, so the overflow has to
      * be put back by hand. */
@@ -67,7 +67,7 @@ TEST(the_narrow_widths_wrap_at_their_own_width) {
     CHECK(uint64_neg(1) == UINT64_MAX);
 }
 
-TEST(int_is_its_own_type_and_follows_the_platform) {
+static void TestIntIsItsOwnTypeAndFollowsThePlatform(TestingT *t) {
     CHECK(int_add(BURROW_INT_MAX, 1) == BURROW_INT_MIN);
     CHECK(int_sub(BURROW_INT_MIN, 1) == BURROW_INT_MAX);
     CHECK(int_neg(BURROW_INT_MIN) == BURROW_INT_MIN);
@@ -87,7 +87,7 @@ TEST(int_is_its_own_type_and_follows_the_platform) {
 
 /* ------------------------------------------------------------------ division */
 
-TEST(division_truncates_towards_zero_like_go) {
+static void TestDivisionTruncatesTowardsZeroLikeGo(TestingT *t) {
     /* C99 and Go already agree here. The test is here because an earlier C
      * rounded towards minus infinity and somebody reading this will want to
      * know which one they are getting. */
@@ -108,7 +108,7 @@ TEST(division_truncates_towards_zero_like_go) {
     CHECK_INT_EQ(int8_mod(-100, 3), -1);
 }
 
-TEST(the_smallest_value_divided_by_minus_one) {
+static void TestTheSmallestValueDividedByMinusOne(TestingT *t) {
     /* The answer does not fit in the type, so it wraps, which is what Go
      * prints. The x86 division instruction faults on this one, so the check is
      * not optional even on the platform where the divisor test looks free. */
@@ -123,7 +123,7 @@ TEST(the_smallest_value_divided_by_minus_one) {
     CHECK_INT_EQ(int64_mod(42, -1), 0);
 }
 
-TEST(dividing_by_zero_stops_with_gos_message) {
+static void TestDividingByZeroStopsWithGosMessage(TestingT *t) {
     CHECK_FATAL(int64_div(1, 0), "runtime error: integer divide by zero");
     CHECK_FATAL(int64_mod(1, 0), "runtime error: integer divide by zero");
     CHECK_FATAL(uint64_div(1, 0), "runtime error: integer divide by zero");
@@ -137,7 +137,7 @@ TEST(dividing_by_zero_stops_with_gos_message) {
 
 /* -------------------------------------------------------------------- shifts */
 
-TEST(shifting_past_the_width_is_defined) {
+static void TestShiftingPastTheWidthIsDefined(TestingT *t) {
     /* Go gives the answer the arithmetic implies once every bit has gone. C
      * calls the same expression undefined, and on x86 the hardware quietly uses
      * the low six bits of the count, so 1 << 64 comes out as 1. */
@@ -160,7 +160,7 @@ TEST(shifting_past_the_width_is_defined) {
     CHECK_INT_EQ(uint8_shr(255, 8), 0);
 }
 
-TEST(shifting_within_the_width_is_the_operator) {
+static void TestShiftingWithinTheWidthIsTheOperator(TestingT *t) {
     CHECK(int64_shl(1, 63) == INT64_MIN);
     CHECK_INT_EQ(int64_shl(1, 10), 1024);
     CHECK_INT_EQ(int64_shr(1024, 10), 1);
@@ -178,7 +178,7 @@ TEST(shifting_within_the_width_is_the_operator) {
     CHECK(uint_shr(256, 4) == 16);
 }
 
-TEST(a_negative_shift_count_stops) {
+static void TestANegativeShiftCountStops(TestingT *t) {
     /* Go's count is a count and not a direction, so a negative one is a bug in
      * the caller. The message carries no number because Go's does not. */
     CHECK_FATAL(int64_shl(1, -1), "runtime error: negative shift amount");
@@ -190,7 +190,7 @@ TEST(a_negative_shift_count_stops) {
 
 /* ------------------------------------------------------------- float to int */
 
-TEST(a_float_that_fits_truncates_towards_zero) {
+static void TestAFloatThatFitsTruncatesTowardsZero(TestingT *t) {
     CHECK_INT_EQ(int64_from_float64(2.7), 2);
     CHECK_INT_EQ(int64_from_float64(-2.7), -2);
     CHECK_INT_EQ(int64_from_float64(0.9), 0);
@@ -205,7 +205,7 @@ TEST(a_float_that_fits_truncates_towards_zero) {
     CHECK_INT_EQ(uint8_from_float64(-0.9), 0);
 }
 
-TEST(a_float_that_does_not_fit_saturates) {
+static void TestAFloatThatDoesNotFitSaturates(TestingT *t) {
     /* Go leaves this to the platform and the platforms differ: the same
      * program prints -9223372036854775808 on amd64 and 9223372036854775807 on
      * arm64. burrow picks the nearest value that fits, everywhere, which is
@@ -234,7 +234,7 @@ TEST(a_float_that_does_not_fit_saturates) {
     CHECK_INT_EQ(int8_from_float64(-129.0), INT8_MIN);
 }
 
-TEST(nan_converts_to_zero) {
+static void TestNanConvertsToZero(TestingT *t) {
     /* The other half of what Go leaves to the platform. amd64 gives the
      * smallest int64 and arm64 gives zero. Zero is the one that does not look
      * like a real number further down the program. */
@@ -248,7 +248,7 @@ TEST(nan_converts_to_zero) {
     CHECK(int_from_float64(nan) == 0);
 }
 
-TEST(a_float_widens_to_a_double_without_losing_anything) {
+static void TestAFloatWidensToADoubleWithoutLosingAnything(TestingT *t) {
     /* Which is why there is no _from_float32 set to keep in step with this
      * one. */
     float f = 2.7f;
@@ -259,7 +259,7 @@ TEST(a_float_widens_to_a_double_without_losing_anything) {
 
 /* ------------------------------------------------------------ generic forms */
 
-TEST(the_generic_macros_pick_by_the_type_of_the_first_argument) {
+static void TestTheGenericMacrosPickByTheTypeOfTheFirstArgument(TestingT *t) {
     int8_t a8 = INT8_MAX;
     int32_t a32 = INT32_MAX;
     uint16_t u16 = 65535;
@@ -293,7 +293,7 @@ TEST(the_generic_macros_pick_by_the_type_of_the_first_argument) {
  * Not a test of an answer, a test that the things this header promises about
  * itself are true. */
 
-TEST(nothing_here_reads_or_writes_anything) {
+static void TestNothingHereReadsOrWritesAnything(TestingT *t) {
     /* Every operation is a pure function of its arguments, so a call with the
      * same arguments in a loop gives the same value and none of them can be
      * holding state between calls. A compiler that folded one of these away
@@ -308,21 +308,21 @@ TEST(nothing_here_reads_or_writes_anything) {
     CHECK_INT_EQ(total, 2999);
 }
 
-int main(void) {
-    RUN(signed_overflow_wraps_the_way_go_says);
-    RUN(the_narrow_widths_wrap_at_their_own_width);
-    RUN(int_is_its_own_type_and_follows_the_platform);
-    RUN(division_truncates_towards_zero_like_go);
-    RUN(the_smallest_value_divided_by_minus_one);
-    RUN(dividing_by_zero_stops_with_gos_message);
-    RUN(shifting_past_the_width_is_defined);
-    RUN(shifting_within_the_width_is_the_operator);
-    RUN(a_negative_shift_count_stops);
-    RUN(a_float_that_fits_truncates_towards_zero);
-    RUN(a_float_that_does_not_fit_saturates);
-    RUN(nan_converts_to_zero);
-    RUN(a_float_widens_to_a_double_without_losing_anything);
-    RUN(the_generic_macros_pick_by_the_type_of_the_first_argument);
-    RUN(nothing_here_reads_or_writes_anything);
-    return harness_report("num");
-}
+#define TESTS(X)                                                                       \
+    X(TestSignedOverflowWrapsTheWayGoSays)                                             \
+    X(TestTheNarrowWidthsWrapAtTheirOwnWidth)                                          \
+    X(TestIntIsItsOwnTypeAndFollowsThePlatform)                                        \
+    X(TestDivisionTruncatesTowardsZeroLikeGo)                                          \
+    X(TestTheSmallestValueDividedByMinusOne)                                           \
+    X(TestDividingByZeroStopsWithGosMessage)                                           \
+    X(TestShiftingPastTheWidthIsDefined)                                               \
+    X(TestShiftingWithinTheWidthIsTheOperator)                                         \
+    X(TestANegativeShiftCountStops)                                                    \
+    X(TestAFloatThatFitsTruncatesTowardsZero)                                          \
+    X(TestAFloatThatDoesNotFitSaturates)                                               \
+    X(TestNanConvertsToZero)                                                           \
+    X(TestAFloatWidensToADoubleWithoutLosingAnything)                                  \
+    X(TestTheGenericMacrosPickByTheTypeOfTheFirstArgument)                             \
+    X(TestNothingHereReadsOrWritesAnything)
+
+TESTING_MAIN(TESTS)

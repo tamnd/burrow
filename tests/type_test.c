@@ -4,7 +4,7 @@
 
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdlib.h>
 
@@ -19,7 +19,7 @@ static bool str_is(Str got, const char *want) {
  * table is indexed by the enum, so a kind inserted in the middle without a name
  * inserted alongside it shows up here as a shifted answer rather than as a
  * crash, which is the only reason this walks all of them. */
-TEST(every_kind_has_gos_name) {
+static void TestEveryKindHasGosName(TestingT *t) {
     CHECK(str_is(kind_name(KIND_INVALID), "invalid"));
     CHECK(str_is(kind_name(KIND_BOOL), "bool"));
     CHECK(str_is(kind_name(KIND_INT), "int"));
@@ -50,13 +50,13 @@ TEST(every_kind_has_gos_name) {
     CHECK(str_is(kind_name(KIND_UNSAFE_POINTER), "unsafe.Pointer"));
 }
 
-TEST(a_kind_off_the_end_does_not_read_off_the_end) {
+static void TestAKindOffTheEndDoesNotReadOffTheEnd(TestingT *t) {
     CHECK(str_is(kind_name(KIND_MAX), "invalid"));
     CHECK(str_is(kind_name((Kind)9999), "invalid"));
     CHECK(str_is(kind_name((Kind)-1), "invalid"));
 }
 
-TEST(the_builtins_have_the_size_c_says_they_have) {
+static void TestTheBuiltinsHaveTheSizeCSaysTheyHave(TestingT *t) {
     CHECK_INT_EQ(TYPE_BOOL->size, sizeof(bool));
     CHECK_INT_EQ(TYPE_INT8->size, 1);
     CHECK_INT_EQ(TYPE_INT16->size, 2);
@@ -78,7 +78,7 @@ TEST(the_builtins_have_the_size_c_says_they_have) {
     CHECK_INT_EQ(TYPE_UINTPTR->size, sizeof(void *));
 }
 
-TEST(the_builtins_name_themselves_the_way_go_does) {
+static void TestTheBuiltinsNameThemselvesTheWayGoDoes(TestingT *t) {
     CHECK(str_is(type_name(TYPE_INT), "int"));
     CHECK(str_is(type_name(TYPE_STRING), "string"));
     CHECK(str_is(type_name(TYPE_UNSAFE_POINTER), "unsafe.Pointer"));
@@ -91,14 +91,14 @@ TEST(the_builtins_name_themselves_the_way_go_does) {
 /* byte and rune are aliases in Go, not distinct types, and reflect reports them
  * as uint8 and int32. Anything else would be a nicer library and a less
  * faithful one. */
-TEST(byte_and_rune_are_aliases_and_not_types) {
+static void TestByteAndRuneAreAliasesAndNotTypes(TestingT *t) {
     CHECK(TYPE_BYTE == TYPE_UINT8);
     CHECK(TYPE_RUNE == TYPE_INT32);
     CHECK(str_is(type_name(TYPE_BYTE), "uint8"));
     CHECK(str_is(type_name(TYPE_RUNE), "int32"));
 }
 
-TEST(no_two_builtins_share_a_hash) {
+static void TestNoTwoBuiltinsShareAHash(TestingT *t) {
     const Type *all[] = {
         TYPE_BOOL,       TYPE_INT,     TYPE_INT8,
         TYPE_INT16,      TYPE_INT32,   TYPE_INT64,
@@ -114,7 +114,7 @@ TEST(no_two_builtins_share_a_hash) {
     }
 }
 
-TEST(the_kind_predicates_group_things_the_way_reflect_does) {
+static void TestTheKindPredicatesGroupThingsTheWayReflectDoes(TestingT *t) {
     CHECK(kind_is_signed(KIND_INT));
     CHECK(kind_is_signed(KIND_INT8));
     CHECK(kind_is_signed(KIND_INT64));
@@ -138,7 +138,7 @@ TEST(the_kind_predicates_group_things_the_way_reflect_does) {
  * reason the ops table exists. Two Str values pointing at different buffers
  * holding the same text are one value in Go, and memcmp on the struct would say
  * they are two. */
-TEST(a_string_compares_by_its_bytes_not_by_its_pointer) {
+static void TestAStringComparesByItsBytesNotByItsPointer(TestingT *t) {
     char a[] = "hello";
     char b[] = "hello";
     /* Two buffers, or the rest of this proves nothing. Spelled with the
@@ -156,14 +156,14 @@ TEST(a_string_compares_by_its_bytes_not_by_its_pointer) {
     CHECK(!type_equal(TYPE_STRING, &sa, &sc));
 }
 
-TEST(a_plain_type_compares_by_its_bytes) {
+static void TestAPlainTypeComparesByItsBytes(TestingT *t) {
     int64_t x = 42, y = 42, z = 43;
     CHECK(type_equal(TYPE_INT64, &x, &y));
     CHECK(!type_equal(TYPE_INT64, &x, &z));
     CHECK(type_hash(TYPE_INT64, &x, 0) == type_hash(TYPE_INT64, &y, 0));
 }
 
-TEST(the_seed_changes_the_hash) {
+static void TestTheSeedChangesTheHash(TestingT *t) {
     Str s = BURROW_S("burrow");
     CHECK(type_hash(TYPE_STRING, &s, 1) != type_hash(TYPE_STRING, &s, 2));
 
@@ -182,7 +182,7 @@ TEST(the_seed_changes_the_hash) {
  * fifty fifty lands inside a tenth of a half about always, and the bound is
  * loose enough that this does not turn into a flaky test on some future
  * platform. A broken hash misses it by much more than that. */
-TEST(one_flipped_key_bit_moves_half_the_hash) {
+static void TestOneFlippedKeyBitMovesHalfTheHash(TestingT *t) {
     for (int bit = 0; bit < 64; bit++) {
         for (int out = 0; out < 64; out++) {
             int flips = 0;
@@ -212,7 +212,7 @@ TEST(one_flipped_key_bit_moves_half_the_hash) {
  * this would fail on a different seed. What this catches is the real failure,
  * which is a hash that leaves whole buckets empty because some input bits never
  * reach the bucket index. */
-static void check_spread(const uint64_t *h, int n) {
+static void check_spread(TestingT *t, const uint64_t *h, int n) {
     int groups[128] = {0};
     int ctrl[128] = {0};
     int gempty = 0, cempty = 0, gmax = 0, cmax = 0;
@@ -238,7 +238,7 @@ static void check_spread(const uint64_t *h, int n) {
     CHECK(cempty <= 8);
 }
 
-TEST(the_hash_spreads_the_keys_a_map_actually_gets) {
+static void TestTheHashSpreadsTheKeysAMapActuallyGets(TestingT *t) {
     enum { N = 1024 };
     static uint64_t h[N];
     char buf[32];
@@ -249,14 +249,14 @@ TEST(the_hash_spreads_the_keys_a_map_actually_gets) {
         Int k = i;
         h[i] = type_hash(TYPE_INT, &k, 7);
     }
-    check_spread(h, N);
+    check_spread(t, h, N);
 
     /* Multiples of sixteen, which is what a map keyed by a pointer holds. */
     for (int i = 0; i < N; i++) {
         Int k = (Int)i * 16;
         h[i] = type_hash(TYPE_INT, &k, 7);
     }
-    check_spread(h, N);
+    check_spread(t, h, N);
 
     /* Keys that differ only in their last few bytes, which is every table
      * keyed by a name with a common prefix. */
@@ -265,7 +265,7 @@ TEST(the_hash_spreads_the_keys_a_map_actually_gets) {
         Str s = str_from_cstr(buf);
         h[i] = type_hash(TYPE_STRING, &s, 7);
     }
-    check_spread(h, N);
+    check_spread(t, h, N);
 
     /* Short strings, where there is the least input to work with. */
     for (int i = 0; i < N; i++) {
@@ -273,14 +273,14 @@ TEST(the_hash_spreads_the_keys_a_map_actually_gets) {
         Str s = str_from_cstr(buf);
         h[i] = type_hash(TYPE_STRING, &s, 7);
     }
-    check_spread(h, N);
+    check_spread(t, h, N);
 
     /* Floats, which go through their own hash on the way to the same mixer. */
     for (int i = 0; i < N; i++) {
         double d = (double)i;
         h[i] = type_hash(TYPE_FLOAT64, &d, 7);
     }
-    check_spread(h, N);
+    check_spread(t, h, N);
 }
 
 /* Every length up to a bit past the sixteen byte boundary, because the short
@@ -288,7 +288,7 @@ TEST(the_hash_spreads_the_keys_a_map_actually_gets) {
  * in any of them shows up as two different lengths hashing the same or as a
  * read outside the key. The second half is what the sanitiser build is for, and
  * this is what gives it something to look at. */
-TEST(every_short_length_hashes_to_its_own_number) {
+static void TestEveryShortLengthHashesToItsOwnNumber(TestingT *t) {
     unsigned char buf[40];
     uint64_t seen[40];
 
@@ -315,7 +315,7 @@ TEST(every_short_length_hashes_to_its_own_number) {
     }
 }
 
-TEST(copy_and_zero_go_through_the_type) {
+static void TestCopyAndZeroGoThroughTheType(TestingT *t) {
     int32_t src = 0x11223344;
     int32_t dst = 0;
     type_copy(TYPE_INT32, &dst, &src);
@@ -334,7 +334,7 @@ TEST(copy_and_zero_go_through_the_type) {
 /* Comparability is a compile time question in Go and a runtime one here,
  * because a map with a slice key has to fail somewhere and this is where it
  * finds out. */
-TEST(comparability_matches_the_language) {
+static void TestComparabilityMatchesTheLanguage(TestingT *t) {
     CHECK(type_is_comparable(TYPE_INT));
     CHECK(type_is_comparable(TYPE_STRING));
     CHECK(type_is_comparable(TYPE_FLOAT64));
@@ -407,7 +407,7 @@ static const Type point_type = {
     NULL,
 };
 
-TEST(fields_are_found_by_name) {
+static void TestFieldsAreFoundByName(TestingT *t) {
     const Field *f = type_field_by_name(&point_type, BURROW_S("Y"));
     CHECK(f != NULL);
     if (f != NULL) {
@@ -426,7 +426,7 @@ TEST(fields_are_found_by_name) {
     CHECK(type_field_by_name(NULL, BURROW_S("Y")) == NULL);
 }
 
-TEST(methods_are_found_by_name) {
+static void TestMethodsAreFoundByName(TestingT *t) {
     /* Every one of them, because a binary search that only works for the middle
      * element is a binary search that passes a one case test. */
     const Method *first = type_method_by_name(&point_type, BURROW_S("Add"));
@@ -450,7 +450,7 @@ TEST(methods_are_found_by_name) {
     CHECK(type_method_by_name(TYPE_INT, BURROW_S("Add")) == NULL);
 }
 
-TEST(a_struct_names_itself_and_its_package) {
+static void TestAStructNamesItselfAndItsPackage(TestingT *t) {
     CHECK(str_is(type_name(&point_type), "Point"));
     CHECK(str_is(point_type.pkg_path, "image"));
     CHECK_INT_EQ(point_type.kind, KIND_STRUCT);
@@ -460,29 +460,29 @@ TEST(a_struct_names_itself_and_its_package) {
 
 /* A struct is comparable when every field is, and the fields here have NULL
  * types, which is a malformed descriptor and has to answer no. */
-TEST(a_struct_with_broken_fields_is_not_comparable) {
+static void TestAStructWithBrokenFieldsIsNotComparable(TestingT *t) {
     CHECK(!type_is_comparable(&point_type));
 }
 
-int main(void) {
-    RUN(every_kind_has_gos_name);
-    RUN(a_kind_off_the_end_does_not_read_off_the_end);
-    RUN(the_builtins_have_the_size_c_says_they_have);
-    RUN(the_builtins_name_themselves_the_way_go_does);
-    RUN(byte_and_rune_are_aliases_and_not_types);
-    RUN(no_two_builtins_share_a_hash);
-    RUN(the_kind_predicates_group_things_the_way_reflect_does);
-    RUN(a_string_compares_by_its_bytes_not_by_its_pointer);
-    RUN(a_plain_type_compares_by_its_bytes);
-    RUN(the_seed_changes_the_hash);
-    RUN(one_flipped_key_bit_moves_half_the_hash);
-    RUN(the_hash_spreads_the_keys_a_map_actually_gets);
-    RUN(every_short_length_hashes_to_its_own_number);
-    RUN(copy_and_zero_go_through_the_type);
-    RUN(comparability_matches_the_language);
-    RUN(fields_are_found_by_name);
-    RUN(methods_are_found_by_name);
-    RUN(a_struct_names_itself_and_its_package);
-    RUN(a_struct_with_broken_fields_is_not_comparable);
-    return harness_report("type");
-}
+#define TESTS(X)                                                                       \
+    X(TestEveryKindHasGosName)                                                         \
+    X(TestAKindOffTheEndDoesNotReadOffTheEnd)                                          \
+    X(TestTheBuiltinsHaveTheSizeCSaysTheyHave)                                         \
+    X(TestTheBuiltinsNameThemselvesTheWayGoDoes)                                       \
+    X(TestByteAndRuneAreAliasesAndNotTypes)                                            \
+    X(TestNoTwoBuiltinsShareAHash)                                                     \
+    X(TestTheKindPredicatesGroupThingsTheWayReflectDoes)                               \
+    X(TestAStringComparesByItsBytesNotByItsPointer)                                    \
+    X(TestAPlainTypeComparesByItsBytes)                                                \
+    X(TestTheSeedChangesTheHash)                                                       \
+    X(TestOneFlippedKeyBitMovesHalfTheHash)                                            \
+    X(TestTheHashSpreadsTheKeysAMapActuallyGets)                                       \
+    X(TestEveryShortLengthHashesToItsOwnNumber)                                        \
+    X(TestCopyAndZeroGoThroughTheType)                                                 \
+    X(TestComparabilityMatchesTheLanguage)                                             \
+    X(TestFieldsAreFoundByName)                                                        \
+    X(TestMethodsAreFoundByName)                                                       \
+    X(TestAStructNamesItselfAndItsPackage)                                             \
+    X(TestAStructWithBrokenFieldsIsNotComparable)
+
+TESTING_MAIN(TESTS)

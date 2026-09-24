@@ -7,8 +7,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 #include "burrow/error.h"
 #include "burrow/mem/arena.h"
@@ -121,7 +121,7 @@ static bool num_error_is(Error err, const char *func, Str in, Want want) {
     return str_eq(error_text(err), strconv_num_error_error(a, &expect));
 }
 
-static void check_atof(const AtofCase *tt) {
+static void check_atof(TestingT *t, const AtofCase *tt) {
     Error err = BURROW_NO_ERROR;
     double f = strconv_parse_float(tt->in, 64, &err);
     if (!same64(f, tt->out64))
@@ -141,12 +141,12 @@ static void check_atof(const AtofCase *tt) {
     CHECK(num_error_is(err, "ParseFloat", tt->in, tt->err32));
 }
 
-TEST(parse_float) {
+static void TestParseFloat(TestingT *t) {
     for (Int i = 0; i < COUNT(atof_tests); i++)
-        check_atof(&atof_tests[i]);
+        check_atof(t, &atof_tests[i]);
 }
 
-TEST(parse_long_float) {
+static void TestParseLongFloat(TestingT *t) {
     for (Int i = 0; i < COUNT(long_atof_tests); i++) {
         const LongAtofCase *lt = &long_atof_tests[i];
         Int n = lt->prefix.len + lt->n + lt->suffix.len;
@@ -157,14 +157,14 @@ TEST(parse_long_float) {
 
         AtofCase tt = lt->want;
         tt.in = str_from_bytes(p, n);
-        check_atof(&tt);
+        check_atof(t, &tt);
     }
 }
 
 /* Issue 42297: bit sizes other than 32 mean 64, because too much code passes 0
  * or 10 for Go to start refusing them. The comparisons are of bits because x87
  * evaluates a literal like 1.5e308 in long double. */
-TEST(parse_float_other_bit_sizes) {
+static void TestParseFloatOtherBitSizes(TestingT *t) {
     static const Int sizes[] = {0, 10, 100, 128};
     for (Int i = 0; i < COUNT(sizes); i++) {
         Error err = BURROW_NO_ERROR;
@@ -174,7 +174,7 @@ TEST(parse_float_other_bit_sizes) {
     }
 }
 
-TEST(parse_float_without_an_error) {
+static void TestParseFloatWithoutAnError(TestingT *t) {
     CHECK(strconv_parse_float(S("2.5"), 64, NULL) == 2.5);
     CHECK(strconv_parse_float(S("x"), 64, NULL) == 0);
     CHECK(isinf(strconv_parse_float(S("1e400"), 64, NULL)));
@@ -191,7 +191,7 @@ static Str with_abc(Str s) {
     return str_from_bytes(p, s.len + 3);
 }
 
-TEST(format_float) {
+static void TestFormatFloat(TestingT *t) {
     for (Int i = 0; i < COUNT(ftoa_tests); i++) {
         const FtoaCase *tt = &ftoa_tests[i];
         double f = from_bits64(tt->in);
@@ -208,13 +208,13 @@ TEST(format_float) {
     }
 }
 
-TEST(append_float_to_nothing) {
+static void TestAppendFloatToNothing(TestingT *t) {
     Slice s = strconv_append_float(a, (Slice){0}, 0.1, 'g', -1, 64);
     CHECK(appended(s, S("0.1")));
     CHECK(s.elem != NULL);
 }
 
-TEST(format_float_bit_size) {
+static void TestFormatFloatBitSize(TestingT *t) {
     CHECK_PANIC((void)strconv_format_float(a, 3.14, 'g', -1, 100),
                 "strconv: illegal FormatFloat bitSize");
     CHECK_PANIC((void)strconv_append_float(a, (Slice){0}, 3.14, 'g', -1, 0),
@@ -222,7 +222,7 @@ TEST(format_float_bit_size) {
 }
 
 /* Every power of two a double or a float can hold reads back as itself. */
-TEST(powers_of_two_round_trip) {
+static void TestPowersOfTwoRoundTrip(TestingT *t) {
     for (int exp = -2048; exp <= 2048; exp++) {
         ArenaMark m = arena_mark(&ar);
         double f = ldexp(1, exp);
@@ -249,7 +249,7 @@ static uint64_t next(void) {
 }
 
 /* The shortest form of any double reads back as exactly that double. */
-TEST(random_round_trip) {
+static void TestRandomRoundTrip(TestingT *t) {
     for (int i = 0; i < 200000; i++) {
         ArenaMark m = arena_mark(&ar);
         double f = from_bits64(next());
@@ -265,7 +265,7 @@ TEST(random_round_trip) {
 }
 
 /* A sample of every finite float, positive and negative. */
-TEST(float32_round_trip) {
+static void TestFloat32RoundTrip(TestingT *t) {
     for (uint32_t i = 0; i < 0xFFU << 23; i += 997) {
         ArenaMark m = arena_mark(&ar);
         float f = from_bits32(i);
@@ -281,33 +281,33 @@ TEST(float32_round_trip) {
     }
 }
 
-TEST(format_float_huge_precision) {
+static void TestFormatFloatHugePrecision(TestingT *t) {
     Track tr;
     track_init(&tr, heap_allocator());
-    Alloc *t = track_allocator(&tr);
+    Alloc *ta = track_allocator(&tr);
 
     /* Too long for an Int, so nothing is allocated and the result is empty. */
-    CHECK(strconv_format_float(t, 1, 'f', BURROW_INT_MAX, 64).len == 0);
-    CHECK(strconv_format_float(t, 1, 'e', BURROW_INT_MAX, 64).len == 0);
-    CHECK(strconv_format_float(t, 1, 'x', BURROW_INT_MAX, 64).len == 0);
-    CHECK(strconv_append_float(t, (Slice){0}, 1, 'f', BURROW_INT_MAX, 64).len == 0);
+    CHECK(strconv_format_float(ta, 1, 'f', BURROW_INT_MAX, 64).len == 0);
+    CHECK(strconv_format_float(ta, 1, 'e', BURROW_INT_MAX, 64).len == 0);
+    CHECK(strconv_format_float(ta, 1, 'x', BURROW_INT_MAX, 64).len == 0);
+    CHECK(strconv_append_float(ta, (Slice){0}, 1, 'f', BURROW_INT_MAX, 64).len == 0);
     CHECK(track_check(&tr) == 0);
 
     /* Long but possible, and exactly its length. */
-    Str s = strconv_format_float(t, 0.5, 'f', 100000, 64);
+    Str s = strconv_format_float(ta, 0.5, 'f', 100000, 64);
     CHECK(s.len == 100002);
     CHECK(s.p[0] == '0' && s.p[1] == '.' && s.p[2] == '5' && s.p[100001] == '0');
-    mem_free(t, (void *)(Uintptr)s.p, (size_t)s.len, 1);
+    mem_free(ta, (void *)(Uintptr)s.p, (size_t)s.len, 1);
 
-    s = strconv_format_float(t, 1, 'x', 5000, 64);
+    s = strconv_format_float(ta, 1, 'x', 5000, 64);
     CHECK(s.len == 5000 + 8);
-    mem_free(t, (void *)(Uintptr)s.p, (size_t)s.len, 1);
+    mem_free(ta, (void *)(Uintptr)s.p, (size_t)s.len, 1);
 
     CHECK(track_check(&tr) == 0);
     track_free(&tr);
 }
 
-TEST(parse_complex) {
+static void TestParseComplex(TestingT *t) {
     for (Int i = 0; i < COUNT(atoc_tests); i++) {
         const AtocCase *tt = &atoc_tests[i];
         Error err = BURROW_NO_ERROR;
@@ -323,7 +323,7 @@ TEST(parse_complex) {
 }
 
 /* Issue 42297 again, for ParseComplex. */
-TEST(parse_complex_other_bit_sizes) {
+static void TestParseComplexOtherBitSizes(TestingT *t) {
     static const Int sizes[] = {0, 10, 100, 256};
     for (Int i = 0; i < COUNT(sizes); i++) {
         Error err = BURROW_NO_ERROR;
@@ -372,7 +372,7 @@ static const CtoaCase ctoa_tests[] = {
     {{0, -0.0}, 'g', -1, 128, BURROW_S_INIT("(0-0i)")},
 };
 
-TEST(format_complex) {
+static void TestFormatComplex(TestingT *t) {
     for (Int i = 0; i < COUNT(ctoa_tests); i++) {
         const CtoaCase *tt = &ctoa_tests[i];
         Str got = strconv_format_complex(a, tt->c, tt->fmt, tt->prec, tt->bit_size);
@@ -380,31 +380,34 @@ TEST(format_complex) {
     }
 }
 
-TEST(format_complex_bit_size) {
+static void TestFormatComplexBitSize(TestingT *t) {
     CHECK_PANIC((void)strconv_format_complex(a, (Complex128){1, 2}, 'g', -1, 100),
                 "invalid bitSize");
 }
 
-int main(void) {
+#define TESTS(X)                                                                       \
+    X(TestParseFloat)                                                                  \
+    X(TestParseLongFloat)                                                              \
+    X(TestParseFloatOtherBitSizes)                                                     \
+    X(TestParseFloatWithoutAnError)                                                    \
+    X(TestFormatFloat)                                                                 \
+    X(TestAppendFloatToNothing)                                                        \
+    X(TestFormatFloatBitSize)                                                          \
+    X(TestPowersOfTwoRoundTrip)                                                        \
+    X(TestRandomRoundTrip)                                                             \
+    X(TestFloat32RoundTrip)                                                            \
+    X(TestFormatFloatHugePrecision)                                                    \
+    X(TestParseComplex)                                                                \
+    X(TestParseComplexOtherBitSizes)                                                   \
+    X(TestFormatComplex)                                                               \
+    X(TestFormatComplexBitSize)
+
+static int TestMain(TestingM *m) {
     arena_init(&ar, NULL, 0);
     a = arena_allocator(&ar);
-
-    RUN(parse_float);
-    RUN(parse_long_float);
-    RUN(parse_float_other_bit_sizes);
-    RUN(parse_float_without_an_error);
-    RUN(format_float);
-    RUN(append_float_to_nothing);
-    RUN(format_float_bit_size);
-    RUN(powers_of_two_round_trip);
-    RUN(random_round_trip);
-    RUN(float32_round_trip);
-    RUN(format_float_huge_precision);
-    RUN(parse_complex);
-    RUN(parse_complex_other_bit_sizes);
-    RUN(format_complex);
-    RUN(format_complex_bit_size);
-
+    int code = testing_m_run(m);
     arena_free(&ar);
-    return harness_report("strconv float");
+    return code;
 }
+
+TESTING_MAIN_WITH(TestMain, TESTS)

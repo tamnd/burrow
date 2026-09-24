@@ -26,7 +26,7 @@
 #include "burrow/runtime.h"
 #include "burrow/thread.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -55,7 +55,7 @@ static size_t usable(const burrow__Stack *s) {
     return (size_t)((unsigned char *)s->hi - (unsigned char *)s->lo);
 }
 
-TEST(a_stack_is_at_least_the_size_that_was_asked_for) {
+static void TestAStackIsAtLeastTheSizeThatWasAskedFor(TestingT *t) {
     /* Every one of these is a different case. 0 and 1 are below the minimum,
      * BURROW_STACK_MIN - 1 is just below it, 100000 is not a multiple of any
      * page size, and a megabyte is an ordinary request. */
@@ -91,7 +91,7 @@ TEST(a_stack_is_at_least_the_size_that_was_asked_for) {
     }
 }
 
-TEST(a_freed_stack_looks_like_one_that_was_never_allocated) {
+static void TestAFreedStackLooksLikeOneThatWasNeverAllocated(TestingT *t) {
     burrow__Stack s;
     CHECK(burrow__stack_alloc(&s, 64u * 1024u));
     burrow__stack_free(&s);
@@ -116,7 +116,7 @@ TEST(a_freed_stack_looks_like_one_that_was_never_allocated) {
     CHECK(!burrow__stack_alloc(NULL, 64u * 1024u));
 }
 
-TEST(every_byte_between_lo_and_hi_can_be_written_and_read_back) {
+static void TestEveryByteBetweenLoAndHiCanBeWrittenAndReadBack(TestingT *t) {
     burrow__Stack s;
     CHECK(burrow__stack_alloc(&s, 256u * 1024u));
 
@@ -138,7 +138,7 @@ TEST(every_byte_between_lo_and_hi_can_be_written_and_read_back) {
     burrow__stack_free(&s);
 }
 
-TEST(two_stacks_are_two_separate_pieces_of_memory) {
+static void TestTwoStacksAreTwoSeparatePiecesOfMemory(TestingT *t) {
     burrow__Stack a;
     burrow__Stack b;
     CHECK(burrow__stack_alloc(&a, 64u * 1024u));
@@ -164,7 +164,7 @@ TEST(two_stacks_are_two_separate_pieces_of_memory) {
 
 /* ----------------------------------------------------------- current stack */
 
-TEST(the_current_stack_starts_as_nothing_and_nests) {
+static void TestTheCurrentStackStartsAsNothingAndNests(TestingT *t) {
     CHECK(burrow__stack_current() == NULL);
 
     burrow__Stack outer;
@@ -198,15 +198,15 @@ static void look_at_current(void *arg) {
     (void)burrow__stack_set_current(&other_thread_saw_this);
 }
 
-TEST(the_current_stack_belongs_to_one_thread) {
+static void TestTheCurrentStackBelongsToOneThread(TestingT *t) {
     burrow__Stack mine;
     memset(&mine, 0, sizeof mine);
     (void)burrow__stack_set_current(&mine);
 
-    static burrow__Thread t;
+    static burrow__Thread th;
     other_thread_saw_null = false;
-    CHECK(burrow__thread_start(&t, look_at_current, NULL, 0));
-    CHECK(burrow__thread_join(&t));
+    CHECK(burrow__thread_start(&th, look_at_current, NULL, 0));
+    CHECK(burrow__thread_join(&th));
 
     /* The new thread saw nothing rather than this thread's stack, and setting
      * its own did not touch this one. */
@@ -237,7 +237,7 @@ static void note_where_i_am(void *arg) {
     (void)local;
 }
 
-TEST(a_context_runs_on_a_stack_this_file_allocated) {
+static void TestAContextRunsOnAStackThisFileAllocated(TestingT *t) {
     burrow__Stack s;
     CHECK(burrow__stack_alloc(&s, 64u * 1024u));
 
@@ -344,13 +344,13 @@ static void touch_the_guard(void *arg) {
     burrow__stack_guard_disarm_thread();
 }
 
-TEST(a_write_into_the_guard_is_a_stack_overflow) {
+static void TestAWriteIntoTheGuardIsAStackOverflow(TestingT *t) {
     CHECK(burrow__stack_guard_arm());
 
-    static burrow__Thread t;
+    static burrow__Thread th;
     touching_the_guard_said_so = false;
-    CHECK(burrow__thread_start(&t, touch_the_guard, NULL, 0));
-    CHECK(burrow__thread_join(&t));
+    CHECK(burrow__thread_start(&th, touch_the_guard, NULL, 0));
+    CHECK(burrow__thread_join(&th));
     CHECK(touching_the_guard_said_so);
 }
 
@@ -457,13 +457,13 @@ static void run_off_the_bottom(void *arg) {
     burrow__stack_guard_disarm_thread();
 }
 
-TEST(running_off_the_bottom_of_a_stack_is_a_stack_overflow) {
+static void TestRunningOffTheBottomOfAStackIsAStackOverflow(TestingT *t) {
     CHECK(burrow__stack_guard_arm());
 
-    static burrow__Thread t;
+    static burrow__Thread th;
     overflowing_said_so = false;
-    CHECK(burrow__thread_start(&t, run_off_the_bottom, NULL, 0));
-    CHECK(burrow__thread_join(&t));
+    CHECK(burrow__thread_start(&th, run_off_the_bottom, NULL, 0));
+    CHECK(burrow__thread_join(&th));
     CHECK(overflowing_said_so);
 }
 
@@ -471,19 +471,27 @@ TEST(running_off_the_bottom_of_a_stack_is_a_stack_overflow) {
 
 #endif /* !SANITIZED */
 
-int main(void) {
-    RUN(a_stack_is_at_least_the_size_that_was_asked_for);
-    RUN(a_freed_stack_looks_like_one_that_was_never_allocated);
-    RUN(every_byte_between_lo_and_hi_can_be_written_and_read_back);
-    RUN(two_stacks_are_two_separate_pieces_of_memory);
-    RUN(the_current_stack_starts_as_nothing_and_nests);
-    RUN(the_current_stack_belongs_to_one_thread);
-    RUN(a_context_runs_on_a_stack_this_file_allocated);
 #if !defined(SANITIZED)
-    RUN(a_write_into_the_guard_is_a_stack_overflow);
-#if !defined(BURROW_MCONTEXT_FIBERS)
-    RUN(running_off_the_bottom_of_a_stack_is_a_stack_overflow);
+#define TESTS_1(X) X(TestAWriteIntoTheGuardIsAStackOverflow)
+#else
+#define TESTS_1(X)
 #endif
+
+#if !defined(SANITIZED) && !defined(BURROW_MCONTEXT_FIBERS)
+#define TESTS_2(X) X(TestRunningOffTheBottomOfAStackIsAStackOverflow)
+#else
+#define TESTS_2(X)
 #endif
-    return harness_report("stack");
-}
+
+#define TESTS(X)                                                                       \
+    X(TestAStackIsAtLeastTheSizeThatWasAskedFor)                                       \
+    X(TestAFreedStackLooksLikeOneThatWasNeverAllocated)                                \
+    X(TestEveryByteBetweenLoAndHiCanBeWrittenAndReadBack)                              \
+    X(TestTwoStacksAreTwoSeparatePiecesOfMemory)                                       \
+    X(TestTheCurrentStackStartsAsNothingAndNests)                                      \
+    X(TestTheCurrentStackBelongsToOneThread)                                           \
+    X(TestAContextRunsOnAStackThisFileAllocated)                                       \
+    TESTS_1(X)                                                                         \
+    TESTS_2(X)
+
+TESTING_MAIN_BARE(TESTS)

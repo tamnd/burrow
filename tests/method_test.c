@@ -14,7 +14,7 @@
 #include "burrow/declare.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdint.h>
 
@@ -126,23 +126,23 @@ static const Type jumbled_type = {
 /* ------------------------------------------------------------------- the data
  */
 
-TEST(a_type_knows_how_many_methods_it_has) {
+static void TestATypeKnowsHowManyMethodsItHas(TestingT *t) {
     CHECK_INT_EQ(TYPE_OF(Point)->nmethod, 4);
     CHECK_INT_EQ(TYPE_OF(Counter)->nmethod, 2);
     CHECK_INT_EQ(TYPE_OF(Plain)->nmethod, 0);
     CHECK(TYPE_OF(Plain)->methods == NULL);
 }
 
-TEST(the_methods_are_in_the_order_they_were_listed) {
-    const Type *t = TYPE_OF(Point);
+static void TestTheMethodsAreInTheOrderTheyWereListed(TestingT *t) {
+    const Type *ty = TYPE_OF(Point);
 
-    CHECK(str_eq(t->methods[0].name, BURROW_S("Label")));
-    CHECK(str_eq(t->methods[1].name, BURROW_S("Move")));
-    CHECK(str_eq(t->methods[2].name, BURROW_S("Reset")));
-    CHECK(str_eq(t->methods[3].name, BURROW_S("Sum")));
+    CHECK(str_eq(ty->methods[0].name, BURROW_S("Label")));
+    CHECK(str_eq(ty->methods[1].name, BURROW_S("Move")));
+    CHECK(str_eq(ty->methods[2].name, BURROW_S("Reset")));
+    CHECK(str_eq(ty->methods[3].name, BURROW_S("Sum")));
 }
 
-TEST(a_list_written_in_name_order_says_so) {
+static void TestAListWrittenInNameOrderSaysSo(TestingT *t) {
     CHECK(type_methods_sorted(TYPE_OF(Point)));
     CHECK(type_methods_sorted(TYPE_OF(Counter)));
 
@@ -153,16 +153,16 @@ TEST(a_list_written_in_name_order_says_so) {
     CHECK(!type_methods_sorted(&jumbled_type));
 }
 
-TEST(a_method_is_found_by_name) {
-    const Type *t = TYPE_OF(Point);
+static void TestAMethodIsFoundByName(TestingT *t) {
+    const Type *ty = TYPE_OF(Point);
 
-    CHECK(type_method_by_name(t, BURROW_S("Label")) == &t->methods[0]);
-    CHECK(type_method_by_name(t, BURROW_S("Move")) == &t->methods[1]);
-    CHECK(type_method_by_name(t, BURROW_S("Reset")) == &t->methods[2]);
-    CHECK(type_method_by_name(t, BURROW_S("Sum")) == &t->methods[3]);
+    CHECK(type_method_by_name(ty, BURROW_S("Label")) == &ty->methods[0]);
+    CHECK(type_method_by_name(ty, BURROW_S("Move")) == &ty->methods[1]);
+    CHECK(type_method_by_name(ty, BURROW_S("Reset")) == &ty->methods[2]);
+    CHECK(type_method_by_name(ty, BURROW_S("Sum")) == &ty->methods[3]);
 }
 
-TEST(a_method_that_is_not_there_is_not_found) {
+static void TestAMethodThatIsNotThereIsNotFound(TestingT *t) {
     CHECK(type_method_by_name(TYPE_OF(Point), BURROW_S("Nope")) == NULL);
     CHECK(type_method_by_name(TYPE_OF(Plain), BURROW_S("Sum")) == NULL);
     CHECK(type_method_by_name(NULL, BURROW_S("Sum")) == NULL);
@@ -175,7 +175,7 @@ TEST(a_method_that_is_not_there_is_not_found) {
 
 /* The reason the lookup stopped being a binary search. Every one of these is
  * found; a binary search over this array finds Mike and misses both others. */
-TEST(an_unsorted_list_is_still_searched_correctly) {
+static void TestAnUnsortedListIsStillSearchedCorrectly(TestingT *t) {
     CHECK(type_method_by_name(&jumbled_type, BURROW_S("Zulu")) == &jumbled_methods[0]);
     CHECK(type_method_by_name(&jumbled_type, BURROW_S("Alpha")) == &jumbled_methods[1]);
     CHECK(type_method_by_name(&jumbled_type, BURROW_S("Mike")) == &jumbled_methods[2]);
@@ -185,26 +185,26 @@ TEST(an_unsorted_list_is_still_searched_correctly) {
 /* ------------------------------------------------------------- the signature
  */
 
-TEST(a_signature_counts_its_parameters_and_its_result) {
-    const Type *t = TYPE_OF(Point);
+static void TestASignatureCountsItsParametersAndItsResult(TestingT *t) {
+    const Type *ty = TYPE_OF(Point);
 
-    CHECK_INT_EQ(type_num_in(type_method_by_name(t, BURROW_S("Reset"))->ftype), 0);
-    CHECK_INT_EQ(type_num_out(type_method_by_name(t, BURROW_S("Reset"))->ftype), 0);
+    CHECK_INT_EQ(type_num_in(type_method_by_name(ty, BURROW_S("Reset"))->ftype), 0);
+    CHECK_INT_EQ(type_num_out(type_method_by_name(ty, BURROW_S("Reset"))->ftype), 0);
 
-    CHECK_INT_EQ(type_num_in(type_method_by_name(t, BURROW_S("Move"))->ftype), 2);
-    CHECK_INT_EQ(type_num_out(type_method_by_name(t, BURROW_S("Move"))->ftype), 0);
+    CHECK_INT_EQ(type_num_in(type_method_by_name(ty, BURROW_S("Move"))->ftype), 2);
+    CHECK_INT_EQ(type_num_out(type_method_by_name(ty, BURROW_S("Move"))->ftype), 0);
 
-    CHECK_INT_EQ(type_num_in(type_method_by_name(t, BURROW_S("Sum"))->ftype), 0);
-    CHECK_INT_EQ(type_num_out(type_method_by_name(t, BURROW_S("Sum"))->ftype), 1);
+    CHECK_INT_EQ(type_num_in(type_method_by_name(ty, BURROW_S("Sum"))->ftype), 0);
+    CHECK_INT_EQ(type_num_out(type_method_by_name(ty, BURROW_S("Sum"))->ftype), 1);
 
-    CHECK_INT_EQ(type_num_in(type_method_by_name(t, BURROW_S("Label"))->ftype), 1);
-    CHECK_INT_EQ(type_num_out(type_method_by_name(t, BURROW_S("Label"))->ftype), 1);
+    CHECK_INT_EQ(type_num_in(type_method_by_name(ty, BURROW_S("Label"))->ftype), 1);
+    CHECK_INT_EQ(type_num_out(type_method_by_name(ty, BURROW_S("Label"))->ftype), 1);
 }
 
-TEST(a_signature_names_the_types) {
-    const Type *t = TYPE_OF(Point);
-    const Type *move = type_method_by_name(t, BURROW_S("Move"))->ftype;
-    const Type *label = type_method_by_name(t, BURROW_S("Label"))->ftype;
+static void TestASignatureNamesTheTypes(TestingT *t) {
+    const Type *ty = TYPE_OF(Point);
+    const Type *move = type_method_by_name(ty, BURROW_S("Move"))->ftype;
+    const Type *label = type_method_by_name(ty, BURROW_S("Label"))->ftype;
 
     CHECK(type_in(move, 0) == TYPE_OF(Int));
     CHECK(type_in(move, 1) == TYPE_OF(Int));
@@ -212,10 +212,10 @@ TEST(a_signature_names_the_types) {
     CHECK(type_in(label, 0) == TYPE_OF(Str));
     CHECK(type_out(label, 0) == TYPE_OF(Str));
 
-    CHECK(type_out(type_method_by_name(t, BURROW_S("Sum"))->ftype, 0) == TYPE_OF(Int));
+    CHECK(type_out(type_method_by_name(ty, BURROW_S("Sum"))->ftype, 0) == TYPE_OF(Int));
 }
 
-TEST(a_signature_is_a_function_type) {
+static void TestASignatureIsAFunctionType(TestingT *t) {
     const Type *sum = type_method_by_name(TYPE_OF(Point), BURROW_S("Sum"))->ftype;
 
     CHECK(sum->kind == KIND_FUNC);
@@ -229,14 +229,14 @@ TEST(a_signature_is_a_function_type) {
 
 /* The one thing in the list that is written twice, so it is the one thing worth
  * checking against itself. */
-TEST(the_parameter_positions_are_the_ones_that_were_written) {
+static void TestTheParameterPositionsAreTheOnesThatWereWritten(TestingT *t) {
     const Type *move = type_method_by_name(TYPE_OF(Point), BURROW_S("Move"))->ftype;
 
     for (Int i = 0; i < type_num_in(move); i++)
         CHECK_INT_EQ((Int)move->fields[i].offset, i);
 }
 
-TEST(asking_a_type_that_is_not_a_function_gives_nothing) {
+static void TestAskingATypeThatIsNotAFunctionGivesNothing(TestingT *t) {
     CHECK_INT_EQ(type_num_in(TYPE_OF(Point)), 0);
     CHECK_INT_EQ(type_num_out(TYPE_OF(Point)), 0);
     CHECK(type_in(TYPE_OF(Point), 0) == NULL);
@@ -248,7 +248,7 @@ TEST(asking_a_type_that_is_not_a_function_gives_nothing) {
     CHECK(type_out(NULL, 0) == NULL);
 }
 
-TEST(a_position_off_either_end_gives_nothing) {
+static void TestAPositionOffEitherEndGivesNothing(TestingT *t) {
     const Type *move = type_method_by_name(TYPE_OF(Point), BURROW_S("Move"))->ftype;
 
     CHECK(type_in(move, -1) == NULL);
@@ -259,7 +259,7 @@ TEST(a_position_off_either_end_gives_nothing) {
 /* --------------------------------------------------------------- the calling
  */
 
-TEST(a_method_with_nothing_either_side_is_called) {
+static void TestAMethodWithNothingEitherSideIsCalled(TestingT *t) {
     Point p = {3, 4};
 
     CHECK(method_call(type_method_by_name(TYPE_OF(Point), BURROW_S("Reset")), &p, NULL,
@@ -268,7 +268,7 @@ TEST(a_method_with_nothing_either_side_is_called) {
     CHECK_INT_EQ(p.Y, 0);
 }
 
-TEST(a_method_with_arguments_gets_them_in_order) {
+static void TestAMethodWithArgumentsGetsThemInOrder(TestingT *t) {
     Point p = {0, 0};
     Int dx = 3;
     Int dy = 40;
@@ -288,7 +288,7 @@ TEST(a_method_with_arguments_gets_them_in_order) {
     CHECK_INT_EQ(p.Y, 240);
 }
 
-TEST(a_method_with_a_result_writes_it_where_it_was_told) {
+static void TestAMethodWithAResultWritesItWhereItWasTold(TestingT *t) {
     Point p = {7, 5};
     Int got = -1;
     void *rets[] = {&got};
@@ -298,7 +298,7 @@ TEST(a_method_with_a_result_writes_it_where_it_was_told) {
     CHECK_INT_EQ(got, 12);
 }
 
-TEST(a_method_with_both_is_called) {
+static void TestAMethodWithBothIsCalled(TestingT *t) {
     Point origin = {0, 0};
     Point elsewhere = {1, 1};
     Str fallback = BURROW_S("origin");
@@ -314,7 +314,7 @@ TEST(a_method_with_both_is_called) {
     CHECK(str_eq(got, BURROW_S("somewhere")));
 }
 
-TEST(the_second_types_methods_are_its_own) {
+static void TestTheSecondTypesMethodsAreItsOwn(TestingT *t) {
     Counter c = {0};
     Int n = 5;
     Int got = -1;
@@ -331,7 +331,7 @@ TEST(the_second_types_methods_are_its_own) {
     CHECK_INT_EQ(c.N, 10);
 }
 
-TEST(calling_nothing_says_so_rather_than_crashing) {
+static void TestCallingNothingSaysSoRatherThanCrashing(TestingT *t) {
     Point p = {1, 2};
 
     CHECK(!method_call(NULL, &p, NULL, NULL));
@@ -344,13 +344,13 @@ TEST(calling_nothing_says_so_rather_than_crashing) {
 
 /* The whole point of the exercise, with nothing in hand but two names. This is
  * the shape of what net/rpc does with a call that arrived over a socket. */
-TEST(a_name_and_a_method_name_are_enough_to_make_the_call) {
+static void TestANameAndAMethodNameAreEnoughToMakeTheCall(TestingT *t) {
     Point p = {8, 9};
     Int got = -1;
     void *rets[] = {&got};
 
-    const Type *t = TYPE_OF(Point);
-    const Method *m = type_method_by_name(t, BURROW_S("Sum"));
+    const Type *ty = TYPE_OF(Point);
+    const Method *m = type_method_by_name(ty, BURROW_S("Sum"));
 
     CHECK(m != NULL);
     CHECK_INT_EQ(type_num_in(m->ftype), 0);
@@ -360,28 +360,25 @@ TEST(a_name_and_a_method_name_are_enough_to_make_the_call) {
     CHECK_INT_EQ(got, 17);
 }
 
-int main(void) {
-    RUN(a_type_knows_how_many_methods_it_has);
-    RUN(the_methods_are_in_the_order_they_were_listed);
-    RUN(a_list_written_in_name_order_says_so);
-    RUN(a_method_is_found_by_name);
-    RUN(a_method_that_is_not_there_is_not_found);
-    RUN(an_unsorted_list_is_still_searched_correctly);
+#define TESTS(X)                                                                       \
+    X(TestATypeKnowsHowManyMethodsItHas)                                               \
+    X(TestTheMethodsAreInTheOrderTheyWereListed)                                       \
+    X(TestAListWrittenInNameOrderSaysSo)                                               \
+    X(TestAMethodIsFoundByName)                                                        \
+    X(TestAMethodThatIsNotThereIsNotFound)                                             \
+    X(TestAnUnsortedListIsStillSearchedCorrectly)                                      \
+    X(TestASignatureCountsItsParametersAndItsResult)                                   \
+    X(TestASignatureNamesTheTypes)                                                     \
+    X(TestASignatureIsAFunctionType)                                                   \
+    X(TestTheParameterPositionsAreTheOnesThatWereWritten)                              \
+    X(TestAskingATypeThatIsNotAFunctionGivesNothing)                                   \
+    X(TestAPositionOffEitherEndGivesNothing)                                           \
+    X(TestAMethodWithNothingEitherSideIsCalled)                                        \
+    X(TestAMethodWithArgumentsGetsThemInOrder)                                         \
+    X(TestAMethodWithAResultWritesItWhereItWasTold)                                    \
+    X(TestAMethodWithBothIsCalled)                                                     \
+    X(TestTheSecondTypesMethodsAreItsOwn)                                              \
+    X(TestCallingNothingSaysSoRatherThanCrashing)                                      \
+    X(TestANameAndAMethodNameAreEnoughToMakeTheCall)
 
-    RUN(a_signature_counts_its_parameters_and_its_result);
-    RUN(a_signature_names_the_types);
-    RUN(a_signature_is_a_function_type);
-    RUN(the_parameter_positions_are_the_ones_that_were_written);
-    RUN(asking_a_type_that_is_not_a_function_gives_nothing);
-    RUN(a_position_off_either_end_gives_nothing);
-
-    RUN(a_method_with_nothing_either_side_is_called);
-    RUN(a_method_with_arguments_gets_them_in_order);
-    RUN(a_method_with_a_result_writes_it_where_it_was_told);
-    RUN(a_method_with_both_is_called);
-    RUN(the_second_types_methods_are_its_own);
-    RUN(calling_nothing_says_so_rather_than_crashing);
-    RUN(a_name_and_a_method_name_are_enough_to_make_the_call);
-
-    return harness_report("method");
-}
+TESTING_MAIN(TESTS)

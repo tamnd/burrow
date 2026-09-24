@@ -6,7 +6,7 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
-#include "harness.h"
+#include "check.h"
 
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
@@ -31,7 +31,7 @@ static Alloc *a;
 #define GRAPHIC_COUNT 159629
 #define GRAPHIC_HASH 0x27a72dae2a8fb0a4ULL
 
-TEST(is_print) {
+static void TestIsPrint(TestingT *t) {
     uint64_t h = 0xcbf29ce484222325ULL;
     Int n = 0;
 
@@ -44,7 +44,7 @@ TEST(is_print) {
     CHECK(h == PRINT_HASH);
 }
 
-TEST(is_graphic) {
+static void TestIsGraphic(TestingT *t) {
     uint64_t h = 0xcbf29ce484222325ULL;
     Int n = 0;
 
@@ -57,7 +57,7 @@ TEST(is_graphic) {
     CHECK(h == GRAPHIC_HASH);
 }
 
-TEST(is_print_outside_the_range) {
+static void TestIsPrintOutsideTheRange(TestingT *t) {
     CHECK(!strconv_is_print(-1));
     CHECK(!strconv_is_print(0x110000));
     CHECK(!strconv_is_graphic(-1));
@@ -100,7 +100,7 @@ static Slice abc(void) {
     return slice_from_str(a, S("abc"));
 }
 
-TEST(quote) {
+static void TestQuote(TestingT *t) {
     for (int i = 0; i < NQUOTE; i++) {
         const QuoteTest *tt = &quotetests[i];
         CHECK(str_eq(strconv_quote(a, tt->in), tt->out));
@@ -108,7 +108,7 @@ TEST(quote) {
     }
 }
 
-TEST(quote_to_ascii) {
+static void TestQuoteToAscii(TestingT *t) {
     for (int i = 0; i < NQUOTE; i++) {
         const QuoteTest *tt = &quotetests[i];
         CHECK(str_eq(strconv_quote_to_ascii(a, tt->in), tt->ascii));
@@ -116,7 +116,7 @@ TEST(quote_to_ascii) {
     }
 }
 
-TEST(quote_to_graphic) {
+static void TestQuoteToGraphic(TestingT *t) {
     for (int i = 0; i < NQUOTE; i++) {
         const QuoteTest *tt = &quotetests[i];
         CHECK(str_eq(strconv_quote_to_graphic(a, tt->in), tt->graphic));
@@ -148,7 +148,7 @@ static const QuoteRuneTest quoterunetests[] = {
 
 #define NQUOTERUNE ((int)(sizeof quoterunetests / sizeof quoterunetests[0]))
 
-TEST(quote_rune) {
+static void TestQuoteRune(TestingT *t) {
     for (int i = 0; i < NQUOTERUNE; i++) {
         const QuoteRuneTest *tt = &quoterunetests[i];
         CHECK(str_eq(strconv_quote_rune(a, tt->in), tt->out));
@@ -156,7 +156,7 @@ TEST(quote_rune) {
     }
 }
 
-TEST(quote_rune_to_ascii) {
+static void TestQuoteRuneToAscii(TestingT *t) {
     for (int i = 0; i < NQUOTERUNE; i++) {
         const QuoteRuneTest *tt = &quoterunetests[i];
         CHECK(str_eq(strconv_quote_rune_to_ascii(a, tt->in), tt->ascii));
@@ -165,7 +165,7 @@ TEST(quote_rune_to_ascii) {
     }
 }
 
-TEST(quote_rune_to_graphic) {
+static void TestQuoteRuneToGraphic(TestingT *t) {
     for (int i = 0; i < NQUOTERUNE; i++) {
         const QuoteRuneTest *tt = &quoterunetests[i];
         CHECK(str_eq(strconv_quote_rune_to_graphic(a, tt->in), tt->graphic));
@@ -174,7 +174,7 @@ TEST(quote_rune_to_graphic) {
     }
 }
 
-TEST(append_to_nothing_and_in_place) {
+static void TestAppendToNothingAndInPlace(TestingT *t) {
     /* A zero Slice is Go's nil []byte. */
     Slice got = strconv_append_quote(a, (Slice){0}, S("x"));
     CHECK(got.elem == TYPE_BYTE);
@@ -187,67 +187,67 @@ TEST(append_to_nothing_and_in_place) {
     CHECK(out.len == 3 && memcmp(out.p, "'q'", 3) == 0);
 }
 
-TEST(results_own_exactly_their_length) {
+static void TestResultsOwnExactlyTheirLength(TestingT *t) {
     /* The counting run and the writing run agree, so each result can be freed
      * with its own length. The tracking allocator checks the size on every free
      * and reports anything left over. */
     Track tr;
     track_init(&tr, heap_allocator());
-    Alloc *t = track_allocator(&tr);
+    Alloc *ta = track_allocator(&tr);
 
-    Str q = strconv_quote(t, S("tab\there ☺ \xff"));
+    Str q = strconv_quote(ta, S("tab\there ☺ \xff"));
     CHECK(str_eq(q, S("\"tab\\there ☺ \\xff\"")));
-    mem_free(t, (void *)(Uintptr)q.p, (size_t)q.len, 1);
+    mem_free(ta, (void *)(Uintptr)q.p, (size_t)q.len, 1);
 
-    q = strconv_quote_rune_to_ascii(t, 0x10ffff);
+    q = strconv_quote_rune_to_ascii(ta, 0x10ffff);
     CHECK(str_eq(q, S("'\\U0010ffff'")));
-    mem_free(t, (void *)(Uintptr)q.p, (size_t)q.len, 1);
+    mem_free(ta, (void *)(Uintptr)q.p, (size_t)q.len, 1);
 
-    q = strconv_unquote(t, S("\"a\\tb\\u263a\""), NULL);
+    q = strconv_unquote(ta, S("\"a\\tb\\u263a\""), NULL);
     CHECK(str_eq(q, S("a\tb☺")));
-    mem_free(t, (void *)(Uintptr)q.p, (size_t)q.len, 1);
+    mem_free(ta, (void *)(Uintptr)q.p, (size_t)q.len, 1);
 
-    q = strconv_unquote(t, S("`a\rb\r`"), NULL);
+    q = strconv_unquote(ta, S("`a\rb\r`"), NULL);
     CHECK(str_eq(q, S("ab")));
-    mem_free(t, (void *)(Uintptr)q.p, (size_t)q.len, 1);
+    mem_free(ta, (void *)(Uintptr)q.p, (size_t)q.len, 1);
 
     CHECK(track_check(&tr) == 0);
     track_free(&tr);
 }
 
-TEST(results_longer_than_the_stack_buffer) {
+static void TestResultsLongerThanTheStackBuffer(TestingT *t) {
     /* 200 copies of a tab, a smiley and a stray byte quote to 1802 bytes, far
      * past what fits on the stack, so the writing is done a second time into
      * the result. Unquoting it is long too, and has to give back the input. */
     Track tr;
     track_init(&tr, heap_allocator());
-    Alloc *t = track_allocator(&tr);
+    Alloc *ta = track_allocator(&tr);
 
     Byte in[200 * 5];
     for (int i = 0; i < 200; i++)
         memcpy(in + i * 5, "\t\xe2\x98\xba\xff", 5);
     Str s = str_from_bytes(in, (Int)sizeof in);
 
-    Str q = strconv_quote(t, s);
+    Str q = strconv_quote(ta, s);
     CHECK(q.len == 2 + 200 * 9);
     CHECK(q.p[0] == '"' && q.p[q.len - 1] == '"');
     CHECK(memcmp(q.p + 1, "\\t\xe2\x98\xba\\xff\\t", 11) == 0);
 
-    Slice buf = slice_make(t, TYPE_BYTE, 1, 4);
+    Slice buf = slice_make(ta, TYPE_BYTE, 1, 4);
     ((Byte *)buf.p)[0] = '>';
-    Slice ap = strconv_append_quote(t, buf, s);
+    Slice ap = strconv_append_quote(ta, buf, s);
     CHECK(ap.len == 1 + q.len && ((Byte *)ap.p)[0] == '>');
     CHECK(memcmp((Byte *)ap.p + 1, q.p, (size_t)q.len) == 0);
 
     Error err;
-    Str u = strconv_unquote(t, q, &err);
+    Str u = strconv_unquote(ta, q, &err);
     CHECK(BURROW_OK(err));
     CHECK(str_eq(u, s));
 
-    mem_free(t, (void *)(Uintptr)u.p, (size_t)u.len, 1);
-    mem_free(t, ap.p, (size_t)ap.cap, 1);
-    mem_free(t, buf.p, (size_t)buf.cap, 1);
-    mem_free(t, (void *)(Uintptr)q.p, (size_t)q.len, 1);
+    mem_free(ta, (void *)(Uintptr)u.p, (size_t)u.len, 1);
+    mem_free(ta, ap.p, (size_t)ap.cap, 1);
+    mem_free(ta, buf.p, (size_t)buf.cap, 1);
+    mem_free(ta, (void *)(Uintptr)q.p, (size_t)q.len, 1);
     CHECK(track_check(&tr) == 0);
     track_free(&tr);
 }
@@ -305,7 +305,7 @@ static const CanBackquoteTest canbackquotetests[] = {
     {SI("a\xef\xbb\xbfz"), false},
 };
 
-TEST(can_backquote) {
+static void TestCanBackquote(TestingT *t) {
     for (size_t i = 0; i < sizeof canbackquotetests / sizeof canbackquotetests[0]; i++)
         CHECK(strconv_can_backquote(canbackquotetests[i].in) ==
               canbackquotetests[i].out);
@@ -371,7 +371,7 @@ static bool same_error(Error got, Error want) {
 }
 
 /* Go's testUnquote, which also checks QuotedPrefix with some junk on the end. */
-static void check_unquote(Str in, Str want, Error want_err) {
+static void check_unquote(TestingT *t, Str in, Str want, Error want_err) {
     Error err;
     Str got = strconv_unquote(a, in, &err);
     CHECK(str_eq(got, want));
@@ -405,25 +405,25 @@ static void check_unquote(Str in, Str want, Error want_err) {
     CHECK(same_error(err, want_err));
 }
 
-TEST(unquote) {
+static void TestUnquote(TestingT *t) {
     for (size_t i = 0; i < sizeof unquotetests / sizeof unquotetests[0]; i++)
-        check_unquote(unquotetests[i].in, unquotetests[i].out, BURROW_NO_ERROR);
+        check_unquote(t, unquotetests[i].in, unquotetests[i].out, BURROW_NO_ERROR);
     for (int i = 0; i < NQUOTE; i++)
-        check_unquote(quotetests[i].out, quotetests[i].in, BURROW_NO_ERROR);
+        check_unquote(t, quotetests[i].out, quotetests[i].in, BURROW_NO_ERROR);
     for (size_t i = 0; i < sizeof misquoted / sizeof misquoted[0]; i++)
-        check_unquote(misquoted[i], S(""), strconv_err_syntax);
+        check_unquote(t, misquoted[i], S(""), strconv_err_syntax);
 }
 
 /* Issue 23685: invalid UTF-8 must not take the fast path. */
-TEST(unquote_invalid_utf8) {
-    check_unquote(S("\"foo\""), S("foo"), BURROW_NO_ERROR);
-    check_unquote(S("\"foo"), S(""), strconv_err_syntax);
-    check_unquote(S("\"\xc0\""), S("\xef\xbf\xbd"), BURROW_NO_ERROR);
-    check_unquote(S("\"a\xc0\""), S("a\xef\xbf\xbd"), BURROW_NO_ERROR);
-    check_unquote(S("\"\\t\xc0\""), S("\t\xef\xbf\xbd"), BURROW_NO_ERROR);
+static void TestUnquoteInvalidUtf8(TestingT *t) {
+    check_unquote(t, S("\"foo\""), S("foo"), BURROW_NO_ERROR);
+    check_unquote(t, S("\"foo"), S(""), strconv_err_syntax);
+    check_unquote(t, S("\"\xc0\""), S("\xef\xbf\xbd"), BURROW_NO_ERROR);
+    check_unquote(t, S("\"a\xc0\""), S("a\xef\xbf\xbd"), BURROW_NO_ERROR);
+    check_unquote(t, S("\"\\t\xc0\""), S("\t\xef\xbf\xbd"), BURROW_NO_ERROR);
 }
 
-TEST(unquote_borrows_when_it_can) {
+static void TestUnquoteBorrowsWhenItCan(TestingT *t) {
     Str in = S("\"plain\"");
     Str got = strconv_unquote(a, in, NULL);
     CHECK(got.p == in.p + 1);
@@ -438,7 +438,7 @@ TEST(unquote_borrows_when_it_can) {
     CHECK(got.p < in.p || got.p >= in.p + in.len);
 }
 
-TEST(unquote_char) {
+static void TestUnquoteChar(TestingT *t) {
     bool mb = true;
     Str tail = S("junk");
     Error err;
@@ -466,34 +466,37 @@ TEST(unquote_char) {
     CHECK(strconv_unquote_char(S("x"), 0, NULL, NULL, NULL) == 'x');
 }
 
-TEST(errors_read_like_go) {
+static void TestErrorsReadLikeGo(TestingT *t) {
     CHECK(str_eq(error_text(strconv_err_syntax), S("invalid syntax")));
     CHECK(str_eq(error_text(strconv_err_range), S("value out of range")));
 }
 
-int main(void) {
+#define TESTS(X)                                                                       \
+    X(TestIsPrint)                                                                     \
+    X(TestIsGraphic)                                                                   \
+    X(TestIsPrintOutsideTheRange)                                                      \
+    X(TestQuote)                                                                       \
+    X(TestQuoteToAscii)                                                                \
+    X(TestQuoteToGraphic)                                                              \
+    X(TestQuoteRune)                                                                   \
+    X(TestQuoteRuneToAscii)                                                            \
+    X(TestQuoteRuneToGraphic)                                                          \
+    X(TestAppendToNothingAndInPlace)                                                   \
+    X(TestResultsOwnExactlyTheirLength)                                                \
+    X(TestResultsLongerThanTheStackBuffer)                                             \
+    X(TestCanBackquote)                                                                \
+    X(TestUnquote)                                                                     \
+    X(TestUnquoteInvalidUtf8)                                                          \
+    X(TestUnquoteBorrowsWhenItCan)                                                     \
+    X(TestUnquoteChar)                                                                 \
+    X(TestErrorsReadLikeGo)
+
+static int TestMain(TestingM *m) {
     arena_init(&ar, NULL, 0);
     a = arena_allocator(&ar);
-
-    RUN(is_print);
-    RUN(is_graphic);
-    RUN(is_print_outside_the_range);
-    RUN(quote);
-    RUN(quote_to_ascii);
-    RUN(quote_to_graphic);
-    RUN(quote_rune);
-    RUN(quote_rune_to_ascii);
-    RUN(quote_rune_to_graphic);
-    RUN(append_to_nothing_and_in_place);
-    RUN(results_own_exactly_their_length);
-    RUN(results_longer_than_the_stack_buffer);
-    RUN(can_backquote);
-    RUN(unquote);
-    RUN(unquote_invalid_utf8);
-    RUN(unquote_borrows_when_it_can);
-    RUN(unquote_char);
-    RUN(errors_read_like_go);
-
+    int code = testing_m_run(m);
     arena_free(&ar);
-    return harness_report("strconv quote");
+    return code;
 }
+
+TESTING_MAIN_WITH(TestMain, TESTS)

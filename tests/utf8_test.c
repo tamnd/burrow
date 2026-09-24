@@ -6,7 +6,7 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
-#include "harness.h"
+#include "check.h"
 
 #include "burrow/burrow.h"
 
@@ -98,7 +98,7 @@ static Slice bytes_of(Byte *buf, Str s) {
 
 /* ------------------------------------------------------------------ decoding */
 
-TEST(decode_walks_the_whole_table) {
+static void TestDecodeWalksTheWholeTable(TestingT *t) {
     Int i;
 
     for (i = 0; i < COUNT(utf8map); i++) {
@@ -126,7 +126,7 @@ TEST(decode_walks_the_whole_table) {
     }
 }
 
-TEST(decode_of_a_truncated_sequence) {
+static void TestDecodeOfATruncatedSequence(TestingT *t) {
     Int i;
 
     for (i = 0; i < COUNT(utf8map); i++) {
@@ -150,7 +150,7 @@ TEST(decode_of_a_truncated_sequence) {
     }
 }
 
-TEST(decode_of_a_broken_sequence) {
+static void TestDecodeOfABrokenSequence(TestingT *t) {
     Int i;
 
     for (i = 0; i < COUNT(utf8map); i++) {
@@ -180,7 +180,7 @@ TEST(decode_of_a_broken_sequence) {
     }
 }
 
-TEST(decode_rejects_surrogate_halves) {
+static void TestDecodeRejectsSurrogateHalves(TestingT *t) {
     Int i;
 
     for (i = 0; i < COUNT(surrogate_map); i++) {
@@ -234,7 +234,7 @@ static const Utf8Map invalid_sequences[] = {
     M(0, "\xF4\x8F\xC0\x80"), M(0, "\xF4\x90\x80\x80"), /* above the maximum rune */
 };
 
-TEST(decode_rejects_every_invalid_sequence) {
+static void TestDecodeRejectsEveryInvalidSequence(TestingT *t) {
     Int i;
 
     for (i = 0; i < COUNT(invalid_sequences); i++) {
@@ -258,7 +258,7 @@ TEST(decode_rejects_every_invalid_sequence) {
     }
 }
 
-TEST(full_rune_knows_when_to_wait) {
+static void TestFullRuneKnowsWhenToWait(TestingT *t) {
     Int i;
 
     for (i = 0; i < COUNT(utf8map); i++) {
@@ -290,7 +290,7 @@ TEST(full_rune_knows_when_to_wait) {
 
 /* ------------------------------------------------------------------ encoding */
 
-TEST(encode_round_trips_the_whole_table) {
+static void TestEncodeRoundTripsTheWholeTable(TestingT *t) {
     Int i;
 
     for (i = 0; i < COUNT(utf8map); i++) {
@@ -306,7 +306,7 @@ TEST(encode_round_trips_the_whole_table) {
     }
 }
 
-TEST(encode_of_a_rune_that_cannot_be_encoded) {
+static void TestEncodeOfARuneThatCannotBeEncoded(TestingT *t) {
     Byte buf[UTF8_UTF_MAX] = {0};
     Byte want_buf[UTF8_UTF_MAX] = {0};
     Slice out = slice_from(buf, UTF8_UTF_MAX, UTF8_UTF_MAX, TYPE_BYTE);
@@ -329,7 +329,7 @@ TEST(encode_of_a_rune_that_cannot_be_encoded) {
     }
 }
 
-TEST(append_rune_builds_a_slice) {
+static void TestAppendRuneBuildsASlice(TestingT *t) {
     Arena ar;
     Alloc *a;
     Int i;
@@ -364,7 +364,7 @@ TEST(append_rune_builds_a_slice) {
 
 /* ------------------------------------------------------------------ counting */
 
-TEST(rune_count_matches_a_decode_loop) {
+static void TestRuneCountMatchesADecodeLoop(TestingT *t) {
     static const struct {
         const char *in;
         Int len;
@@ -397,7 +397,7 @@ TEST(rune_count_matches_a_decode_loop) {
     }
 }
 
-TEST(rune_len_covers_every_width) {
+static void TestRuneLenCoversEveryWidth(TestingT *t) {
     CHECK_INT_EQ(utf8_rune_len(0), 1);
     CHECK_INT_EQ(utf8_rune_len('e'), 1);
     CHECK_INT_EQ(utf8_rune_len(0x00E9), 2); /* e acute */
@@ -410,7 +410,7 @@ TEST(rune_len_covers_every_width) {
     CHECK_INT_EQ(utf8_rune_len(-1), -1);
 }
 
-TEST(rune_start_finds_a_boundary) {
+static void TestRuneStartFindsABoundary(TestingT *t) {
     Byte b;
 
     /* Continuation bytes are 0x80 to 0xBF and nothing else is, which is the
@@ -427,7 +427,7 @@ TEST(rune_start_finds_a_boundary) {
 
 /* ------------------------------------------------------------------ validity */
 
-TEST(valid_says_yes_to_utf8_and_no_to_everything_else) {
+static void TestValidSaysYesToUtf8AndNoToEverythingElse(TestingT *t) {
     static const struct {
         const char *in;
         Int len;
@@ -469,7 +469,7 @@ TEST(valid_says_yes_to_utf8_and_no_to_everything_else) {
  * leading and trailing ASCII, which is what shakes out an off by one in a fast
  * path that consumes ASCII in blocks. There is no such fast path here yet and
  * this is the test that will catch it when there is. */
-TEST(valid_at_every_alignment) {
+static void TestValidAtEveryAlignment(TestingT *t) {
     Byte buf[256];
     Int i;
 
@@ -509,7 +509,7 @@ TEST(valid_at_every_alignment) {
     }
 }
 
-TEST(valid_rune_knows_the_range) {
+static void TestValidRuneKnowsTheRange(TestingT *t) {
     CHECK(utf8_valid_rune(0));
     CHECK(utf8_valid_rune('e'));
     CHECK(utf8_valid_rune(0x00E9));
@@ -538,7 +538,7 @@ typedef struct Visit {
     Rune r;
 } Visit;
 
-static void check_sequence(Str s) {
+static void check_sequence(TestingT *t, Str s) {
     Visit seen[512];
     Byte buf[512];
     Slice b;
@@ -583,7 +583,7 @@ static void check_sequence(Str s) {
     CHECK_INT_EQ(si, 0);
 }
 
-TEST(forwards_and_backwards_visit_the_same_runes) {
+static void TestForwardsAndBackwardsVisitTheSameRunes(TestingT *t) {
     Int i, k;
 
     for (i = 0; i < COUNT(test_strings); i++) {
@@ -600,24 +600,24 @@ TEST(forwards_and_backwards_visit_the_same_runes) {
             n = ts.len + m.len;
             joined.p = buf;
             joined.len = n;
-            check_sequence(joined);
+            check_sequence(t, joined);
 
             /* m + ts */
             memcpy(buf, m.p, (size_t)m.len);
             memcpy(buf + m.len, ts.p, (size_t)ts.len);
-            check_sequence(joined);
+            check_sequence(t, joined);
 
             /* ts + m + ts */
             memcpy(buf, ts.p, (size_t)ts.len);
             memcpy(buf + ts.len, m.p, (size_t)m.len);
             memcpy(buf + ts.len + m.len, ts.p, (size_t)ts.len);
             joined.len = n + ts.len;
-            check_sequence(joined);
+            check_sequence(t, joined);
         }
     }
 }
 
-TEST(decode_last_rune_of_nothing) {
+static void TestDecodeLastRuneOfNothing(TestingT *t) {
     Int size = -1;
     Str empty = BURROW_STR_EMPTY;
 
@@ -645,7 +645,7 @@ TEST(decode_last_rune_of_nothing) {
 
 /* --------------------------------------------------------------- the rune loop */
 
-TEST(the_rune_loop_is_gos_range_over_a_string) {
+static void TestTheRuneLoopIsGosRangeOverAString(TestingT *t) {
     Str s = BURROW_S("a\xe2\x98\xba"
                      "b");
     Int index;
@@ -684,7 +684,7 @@ TEST(the_rune_loop_is_gos_range_over_a_string) {
     }
 }
 
-TEST(the_rune_loop_terminates_on_rubbish) {
+static void TestTheRuneLoopTerminatesOnRubbish(TestingT *t) {
     Byte junk[64];
     Str s = {junk, 64};
     Int i, n = 0;
@@ -702,25 +702,25 @@ TEST(the_rune_loop_terminates_on_rubbish) {
     CHECK_INT_EQ(n, 64);
 }
 
-int main(void) {
-    RUN(decode_walks_the_whole_table);
-    RUN(decode_of_a_truncated_sequence);
-    RUN(decode_of_a_broken_sequence);
-    RUN(decode_rejects_surrogate_halves);
-    RUN(decode_rejects_every_invalid_sequence);
-    RUN(full_rune_knows_when_to_wait);
-    RUN(encode_round_trips_the_whole_table);
-    RUN(encode_of_a_rune_that_cannot_be_encoded);
-    RUN(append_rune_builds_a_slice);
-    RUN(rune_count_matches_a_decode_loop);
-    RUN(rune_len_covers_every_width);
-    RUN(rune_start_finds_a_boundary);
-    RUN(valid_says_yes_to_utf8_and_no_to_everything_else);
-    RUN(valid_at_every_alignment);
-    RUN(valid_rune_knows_the_range);
-    RUN(forwards_and_backwards_visit_the_same_runes);
-    RUN(decode_last_rune_of_nothing);
-    RUN(the_rune_loop_is_gos_range_over_a_string);
-    RUN(the_rune_loop_terminates_on_rubbish);
-    return harness_report("utf8");
-}
+#define TESTS(X)                                                                       \
+    X(TestDecodeWalksTheWholeTable)                                                    \
+    X(TestDecodeOfATruncatedSequence)                                                  \
+    X(TestDecodeOfABrokenSequence)                                                     \
+    X(TestDecodeRejectsSurrogateHalves)                                                \
+    X(TestDecodeRejectsEveryInvalidSequence)                                           \
+    X(TestFullRuneKnowsWhenToWait)                                                     \
+    X(TestEncodeRoundTripsTheWholeTable)                                               \
+    X(TestEncodeOfARuneThatCannotBeEncoded)                                            \
+    X(TestAppendRuneBuildsASlice)                                                      \
+    X(TestRuneCountMatchesADecodeLoop)                                                 \
+    X(TestRuneLenCoversEveryWidth)                                                     \
+    X(TestRuneStartFindsABoundary)                                                     \
+    X(TestValidSaysYesToUtf8AndNoToEverythingElse)                                     \
+    X(TestValidAtEveryAlignment)                                                       \
+    X(TestValidRuneKnowsTheRange)                                                      \
+    X(TestForwardsAndBackwardsVisitTheSameRunes)                                       \
+    X(TestDecodeLastRuneOfNothing)                                                     \
+    X(TestTheRuneLoopIsGosRangeOverAString)                                            \
+    X(TestTheRuneLoopTerminatesOnRubbish)
+
+TESTING_MAIN(TESTS)

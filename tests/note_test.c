@@ -24,7 +24,7 @@
 #include "burrow/clock.h"
 #include "burrow/thread.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -51,7 +51,7 @@ static void fill_with_rubbish(burrow__Note *n) {
         p[i] = 0xff;
 }
 
-TEST(a_fresh_note_is_closed_and_a_wake_opens_it) {
+static void TestAFreshNoteIsClosedAndAWakeOpensIt(TestingT *t) {
     burrow__Note n;
 
     fill_with_rubbish(&n);
@@ -72,7 +72,7 @@ TEST(a_fresh_note_is_closed_and_a_wake_opens_it) {
     burrow__note_free(&n);
 }
 
-TEST(sleeping_on_a_note_that_is_already_open_returns_at_once) {
+static void TestSleepingOnANoteThatIsAlreadyOpenReturnsAtOnce(TestingT *t) {
     burrow__Note n;
 
     CHECK(burrow__note_init(&n));
@@ -102,7 +102,7 @@ static void sleep_on_gate(void *arg) {
     burrow__atomic_store_release_u32(&left, 1);
 }
 
-TEST(a_sleeper_waits_until_somebody_else_wakes_it) {
+static void TestASleeperWaitsUntilSomebodyElseWakesIt(TestingT *t) {
     CHECK(burrow__note_init(&gate));
     entered = 0;
     left = 0;
@@ -136,7 +136,7 @@ static void sleep_after_the_wake(void *arg) {
     burrow__atomic_store_release_u32(&early_done, 1);
 }
 
-TEST(a_wake_that_lands_before_the_sleep_is_not_lost) {
+static void TestAWakeThatLandsBeforeTheSleepIsNotLost(TestingT *t) {
     CHECK(burrow__note_init(&early));
     early_done = 0;
 
@@ -167,7 +167,7 @@ static void join_the_crowd(void *arg) {
     (void)burrow__atomic_add_u32(&released, 1);
 }
 
-TEST(one_wake_releases_every_sleeper) {
+static void TestOneWakeReleasesEverySleeper(TestingT *t) {
     CHECK(burrow__note_init(&crowd));
     arrived = 0;
     released = 0;
@@ -199,7 +199,7 @@ TEST(one_wake_releases_every_sleeper) {
  * the count up to eight and back to zero sixteen times to give it the chance. */
 #define CROWD_ROUNDS 16
 
-TEST(a_crowd_can_go_to_sleep_round_after_round) {
+static void TestACrowdCanGoToSleepRoundAfterRound(TestingT *t) {
     CHECK(burrow__note_init(&crowd));
 
     for (uint32_t round = 0; round < CROWD_ROUNDS; round++) {
@@ -238,7 +238,7 @@ static void one_round(void *arg) {
     (void)burrow__atomic_add_u32(&rounds_seen, 1);
 }
 
-TEST(a_note_can_be_closed_again_and_used_for_the_next_round) {
+static void TestANoteCanBeClosedAgainAndUsedForTheNextRound(TestingT *t) {
     CHECK(burrow__note_init(&reused));
     rounds_seen = 0;
 
@@ -286,7 +286,7 @@ static void pong(void *arg) {
     }
 }
 
-TEST(two_threads_pass_a_turn_back_and_forth) {
+static void TestTwoThreadsPassATurnBackAndForth(TestingT *t) {
     CHECK(burrow__note_init(&to_worker));
     CHECK(burrow__note_init(&to_main));
     turn_counter = 0;
@@ -370,7 +370,7 @@ static bool one_handoff(void) {
     return true;
 }
 
-TEST(a_note_on_a_stack_can_be_freed_the_moment_the_sleep_returns) {
+static void TestANoteOnAStackCanBeFreedTheMomentTheSleepReturns(TestingT *t) {
     CHECK(burrow__note_init(&handoff_go));
     burrow__note_clear(&handoff_go);
     handoffs_seen = 0;
@@ -395,7 +395,7 @@ TEST(a_note_on_a_stack_can_be_freed_the_moment_the_sleep_returns) {
  * still finishes quickly. */
 #define SHORT_NS 500000
 
-TEST(a_timed_sleep_on_an_open_note_returns_true_without_waiting) {
+static void TestATimedSleepOnAnOpenNoteReturnsTrueWithoutWaiting(TestingT *t) {
     burrow__Note n;
 
     CHECK(burrow__note_init(&n));
@@ -411,7 +411,7 @@ TEST(a_timed_sleep_on_an_open_note_returns_true_without_waiting) {
     burrow__note_free(&n);
 }
 
-TEST(a_timed_sleep_with_no_time_left_is_a_poll) {
+static void TestATimedSleepWithNoTimeLeftIsAPoll(TestingT *t) {
     burrow__Note n;
 
     CHECK(burrow__note_init(&n));
@@ -429,7 +429,7 @@ TEST(a_timed_sleep_with_no_time_left_is_a_poll) {
     burrow__note_free(&n);
 }
 
-TEST(a_timed_sleep_that_nobody_wakes_times_out_and_says_so) {
+static void TestATimedSleepThatNobodyWakesTimesOutAndSaysSo(TestingT *t) {
     burrow__Note n;
 
     CHECK(burrow__note_init(&n));
@@ -449,7 +449,7 @@ TEST(a_timed_sleep_that_nobody_wakes_times_out_and_says_so) {
 
 #define TIMEOUT_ROUNDS 20
 
-TEST(the_same_short_timeout_used_again_does_not_grow) {
+static void TestTheSameShortTimeoutUsedAgainDoesNotGrow(TestingT *t) {
     burrow__Note n;
 
     CHECK(burrow__note_init(&n));
@@ -490,7 +490,7 @@ static void wake_after_a_moment(void *arg) {
     burrow__note_wake(&timed);
 }
 
-TEST(a_wake_that_arrives_before_the_timeout_wins) {
+static void TestAWakeThatArrivesBeforeTheTimeoutWins(TestingT *t) {
     CHECK(burrow__note_init(&timed));
 
     CHECK(burrow__thread_start(&timed_waker, wake_after_a_moment, NULL, 0));
@@ -524,7 +524,7 @@ static void wake_forever(void *arg) {
     burrow__note_wake(&forever);
 }
 
-TEST(a_timeout_at_the_end_of_the_clock_is_a_sleep_with_no_end) {
+static void TestATimeoutAtTheEndOfTheClockIsASleepWithNoEnd(TestingT *t) {
     CHECK(burrow__note_init(&forever));
 
     CHECK(burrow__thread_start(&forever_waker, wake_forever, NULL, 0));
@@ -562,7 +562,7 @@ static void wait_with_a_deadline(void *arg) {
         (void)burrow__atomic_add_u32(&timed_timedout, 1);
 }
 
-TEST(one_wake_releases_every_timed_sleeper_too) {
+static void TestOneWakeReleasesEveryTimedSleeperToo(TestingT *t) {
     CHECK(burrow__note_init(&timed_crowd));
     arrived = 0;
     timed_released = 0;
@@ -585,22 +585,22 @@ TEST(one_wake_releases_every_timed_sleeper_too) {
     burrow__note_free(&timed_crowd);
 }
 
-int main(void) {
-    RUN(a_fresh_note_is_closed_and_a_wake_opens_it);
-    RUN(sleeping_on_a_note_that_is_already_open_returns_at_once);
-    RUN(a_sleeper_waits_until_somebody_else_wakes_it);
-    RUN(a_wake_that_lands_before_the_sleep_is_not_lost);
-    RUN(one_wake_releases_every_sleeper);
-    RUN(a_crowd_can_go_to_sleep_round_after_round);
-    RUN(a_note_can_be_closed_again_and_used_for_the_next_round);
-    RUN(two_threads_pass_a_turn_back_and_forth);
-    RUN(a_note_on_a_stack_can_be_freed_the_moment_the_sleep_returns);
-    RUN(a_timed_sleep_on_an_open_note_returns_true_without_waiting);
-    RUN(a_timed_sleep_with_no_time_left_is_a_poll);
-    RUN(a_timed_sleep_that_nobody_wakes_times_out_and_says_so);
-    RUN(the_same_short_timeout_used_again_does_not_grow);
-    RUN(a_wake_that_arrives_before_the_timeout_wins);
-    RUN(a_timeout_at_the_end_of_the_clock_is_a_sleep_with_no_end);
-    RUN(one_wake_releases_every_timed_sleeper_too);
-    return harness_report("note");
-}
+#define TESTS(X)                                                                       \
+    X(TestAFreshNoteIsClosedAndAWakeOpensIt)                                           \
+    X(TestSleepingOnANoteThatIsAlreadyOpenReturnsAtOnce)                               \
+    X(TestASleeperWaitsUntilSomebodyElseWakesIt)                                       \
+    X(TestAWakeThatLandsBeforeTheSleepIsNotLost)                                       \
+    X(TestOneWakeReleasesEverySleeper)                                                 \
+    X(TestACrowdCanGoToSleepRoundAfterRound)                                           \
+    X(TestANoteCanBeClosedAgainAndUsedForTheNextRound)                                 \
+    X(TestTwoThreadsPassATurnBackAndForth)                                             \
+    X(TestANoteOnAStackCanBeFreedTheMomentTheSleepReturns)                             \
+    X(TestATimedSleepOnAnOpenNoteReturnsTrueWithoutWaiting)                            \
+    X(TestATimedSleepWithNoTimeLeftIsAPoll)                                            \
+    X(TestATimedSleepThatNobodyWakesTimesOutAndSaysSo)                                 \
+    X(TestTheSameShortTimeoutUsedAgainDoesNotGrow)                                     \
+    X(TestAWakeThatArrivesBeforeTheTimeoutWins)                                        \
+    X(TestATimeoutAtTheEndOfTheClockIsASleepWithNoEnd)                                 \
+    X(TestOneWakeReleasesEveryTimedSleeperToo)
+
+TESTING_MAIN(TESTS)

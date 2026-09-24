@@ -22,7 +22,7 @@
 #include "burrow/slice.h"
 #include "burrow/trace.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -39,7 +39,7 @@ static Uintptr known_entry(void) {
     return (Uintptr)runtime_callers;
 }
 
-TEST(a_build_with_a_table_has_names_in_it) {
+static void TestABuildWithATableHasNamesInIt(TestingT *t) {
     /* Not a fixed number, because the count is however many global functions
      * burrow has today and that goes up every week. What is worth asserting is
      * that a default build has a table rather than the empty one. */
@@ -50,7 +50,7 @@ TEST(a_build_with_a_table_has_names_in_it) {
     CHECK(n > 100);
 }
 
-TEST(a_function_resolves_to_its_own_name) {
+static void TestAFunctionResolvesToItsOwnName(TestingT *t) {
     if (!have_table())
         return;
 
@@ -60,7 +60,7 @@ TEST(a_function_resolves_to_its_own_name) {
     CHECK(f.entry == known_entry());
 }
 
-TEST(an_address_inside_a_function_resolves_to_that_function) {
+static void TestAnAddressInsideAFunctionResolvesToThatFunction(TestingT *t) {
     if (!have_table())
         return;
 
@@ -73,7 +73,7 @@ TEST(an_address_inside_a_function_resolves_to_that_function) {
     CHECK(f.entry == known_entry());
 }
 
-TEST(the_entry_is_never_above_the_address_asked_about) {
+static void TestTheEntryIsNeverAboveTheAddressAskedAbout(TestingT *t) {
     if (!have_table())
         return;
 
@@ -87,7 +87,7 @@ TEST(the_entry_is_never_above_the_address_asked_about) {
     }
 }
 
-TEST(an_address_nowhere_near_the_library_has_no_name) {
+static void TestAnAddressNowhereNearTheLibraryHasNoName(TestingT *t) {
     burrow__Frame f;
 
     /* A quarter of a megabyte is the furthest a hit is allowed to be from the
@@ -98,7 +98,7 @@ TEST(an_address_nowhere_near_the_library_has_no_name) {
     CHECK(f.entry == 0);
 }
 
-TEST(a_low_address_has_no_name) {
+static void TestALowAddressHasNoName(TestingT *t) {
     burrow__Frame f;
 
     /* Below every mapping on every system burrow runs on, so there is nothing
@@ -107,7 +107,7 @@ TEST(a_low_address_has_no_name) {
     CHECK(f.name.len == 0);
 }
 
-TEST(zero_is_not_an_address) {
+static void TestZeroIsNotAnAddress(TestingT *t) {
     burrow__Frame f;
 
     CHECK(!burrow__symbolise(0, &f));
@@ -115,13 +115,13 @@ TEST(zero_is_not_an_address) {
     CHECK(f.entry == 0);
 }
 
-TEST(asking_with_nowhere_to_put_the_answer_says_no) {
+static void TestAskingWithNowhereToPutTheAnswerSaysNo(TestingT *t) {
     /* The panic path calls this, so refusing beats writing through a null
      * pointer while the program is already on its way out. */
     CHECK(!burrow__symbolise(known_entry(), NULL));
 }
 
-TEST(two_different_functions_get_two_different_names) {
+static void TestTwoDifferentFunctionsGetTwoDifferentNames(TestingT *t) {
     if (!have_table())
         return;
 
@@ -135,7 +135,7 @@ TEST(two_different_functions_get_two_different_names) {
     CHECK(a.entry != b.entry);
 }
 
-TEST(the_same_question_twice_gets_the_same_answer) {
+static void TestTheSameQuestionTwiceGetsTheSameAnswer(TestingT *t) {
     if (!have_table())
         return;
 
@@ -159,7 +159,7 @@ BURROW_NOINLINE static Int collect(void) {
     return runtime_callers(0, s);
 }
 
-TEST(the_frames_a_walk_collects_have_names) {
+static void TestTheFramesAWalkCollectsHaveNames(TestingT *t) {
     if (!have_table())
         return;
 
@@ -191,18 +191,17 @@ TEST(the_frames_a_walk_collects_have_names) {
     CHECK(named > 0);
 }
 
-int main(void) {
-    RUN(a_build_with_a_table_has_names_in_it);
-    RUN(a_function_resolves_to_its_own_name);
-    RUN(an_address_inside_a_function_resolves_to_that_function);
-    RUN(the_entry_is_never_above_the_address_asked_about);
-    RUN(an_address_nowhere_near_the_library_has_no_name);
-    RUN(a_low_address_has_no_name);
-    RUN(zero_is_not_an_address);
-    RUN(asking_with_nowhere_to_put_the_answer_says_no);
-    RUN(two_different_functions_get_two_different_names);
-    RUN(the_same_question_twice_gets_the_same_answer);
-    RUN(the_frames_a_walk_collects_have_names);
+#define TESTS(X)                                                                       \
+    X(TestABuildWithATableHasNamesInIt)                                                \
+    X(TestAFunctionResolvesToItsOwnName)                                               \
+    X(TestAnAddressInsideAFunctionResolvesToThatFunction)                              \
+    X(TestTheEntryIsNeverAboveTheAddressAskedAbout)                                    \
+    X(TestAnAddressNowhereNearTheLibraryHasNoName)                                     \
+    X(TestALowAddressHasNoName)                                                        \
+    X(TestZeroIsNotAnAddress)                                                          \
+    X(TestAskingWithNowhereToPutTheAnswerSaysNo)                                       \
+    X(TestTwoDifferentFunctionsGetTwoDifferentNames)                                   \
+    X(TestTheSameQuestionTwiceGetsTheSameAnswer)                                       \
+    X(TestTheFramesAWalkCollectsHaveNames)
 
-    return harness_report("symtab");
-}
+TESTING_MAIN(TESTS)

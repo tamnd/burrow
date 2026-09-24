@@ -10,8 +10,8 @@
 #include "burrow/panic.h"
 #include "burrow/runtime.h"
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 static Arena ar;
 static Alloc *a;
@@ -34,7 +34,7 @@ static bool str_is(Str got, const char *want) {
 
 /* ------------------------------------------------------------------- make */
 
-TEST(make_gives_the_length_and_capacity_asked_for) {
+static void TestMakeGivesTheLengthAndCapacityAskedFor(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 3, 10);
     CHECK_INT_EQ(s.len, 3);
     CHECK_INT_EQ(s.cap, 10);
@@ -44,13 +44,13 @@ TEST(make_gives_the_length_and_capacity_asked_for) {
 
 /* Go's zero value rule is the language and not a convention, so make gives back
  * zeroes and code ported from Go is allowed to rely on it without asking. */
-TEST(make_zeroes_what_it_hands_back) {
+static void TestMakeZeroesWhatItHandsBack(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 64, 64);
     for (Int i = 0; i < s.len; i++)
         CHECK_INT_EQ(BURROW_AT(Int, s, i), 0);
 }
 
-TEST(a_capacity_bigger_than_the_length_is_allowed_and_is_not_readable) {
+static void TestACapacityBiggerThanTheLengthIsAllowedAndIsNotReadable(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 2, 8);
     CHECK_INT_EQ(s.len, 2);
     CHECK_INT_EQ(s.cap, 8);
@@ -65,7 +65,7 @@ TEST(a_capacity_bigger_than_the_length_is_allowed_and_is_not_readable) {
 /* nil and empty are different values in Go and the difference is observable:
  * a nil slice marshals to null and an empty one to []. Keeping them apart here
  * is what lets encoding/json be faithful later. */
-TEST(nil_and_empty_are_not_the_same_thing) {
+static void TestNilAndEmptyAreNotTheSameThing(TestingT *t) {
     Slice n = slice_nil(TYPE_INT);
     CHECK(slice_is_nil(n));
     CHECK_INT_EQ(n.len, 0);
@@ -78,7 +78,7 @@ TEST(nil_and_empty_are_not_the_same_thing) {
     CHECK_INT_EQ(e.cap, 0);
 }
 
-TEST(from_wraps_memory_without_copying_it) {
+static void TestFromWrapsMemoryWithoutCopyingIt(TestingT *t) {
     Int backing[4] = {10, 20, 30, 40};
     Slice s = slice_from(backing, 4, 4, TYPE_INT);
     CHECK(s.p == backing);
@@ -92,7 +92,7 @@ TEST(from_wraps_memory_without_copying_it) {
 
 /* ------------------------------------------------------------------ index */
 
-TEST(index_reads_and_writes_the_element) {
+static void TestIndexReadsAndWritesTheElement(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 4, 4);
     for (Int i = 0; i < 4; i++)
         BURROW_AT(Int, s, i) = i * i;
@@ -106,7 +106,7 @@ TEST(index_reads_and_writes_the_element) {
     CHECK(slice_at(s, 1) == (Byte *)s.p + sizeof(Int));
 }
 
-TEST(index_works_on_a_slice_of_strings) {
+static void TestIndexWorksOnASliceOfStrings(TestingT *t) {
     Slice s = slice_make(a, TYPE_STRING, 2, 2);
     BURROW_AT(Str, s, 0) = BURROW_S("alpha");
     BURROW_AT(Str, s, 1) = BURROW_S("beta");
@@ -116,7 +116,7 @@ TEST(index_works_on_a_slice_of_strings) {
 
 /* ------------------------------------------------------------- reslicing */
 
-TEST(sub_is_gos_two_index_slice_expression) {
+static void TestSubIsGosTwoIndexSliceExpression(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 10, 16);
     for (Int i = 0; i < 10; i++)
         BURROW_AT(Int, s, i) = i;
@@ -130,14 +130,14 @@ TEST(sub_is_gos_two_index_slice_expression) {
     CHECK(m.elem == s.elem);
 }
 
-TEST(sub_does_not_copy) {
+static void TestSubDoesNotCopy(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 8, 8);
     Slice m = slice_sub(s, 4, 8);
     BURROW_AT(Int, m, 0) = 1234;
     CHECK_INT_EQ(BURROW_AT(Int, s, 4), 1234);
 }
 
-TEST(sub_can_reach_past_the_length_up_to_the_capacity) {
+static void TestSubCanReachPastTheLengthUpToTheCapacity(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 2, 8);
     /* Bounds are checked against cap and not len, which is exactly what Go
      * does and is what makes s = s[:cap(s)] legal. */
@@ -146,7 +146,7 @@ TEST(sub_can_reach_past_the_length_up_to_the_capacity) {
     CHECK_INT_EQ(g.cap, 8);
 }
 
-TEST(sub3_caps_the_result) {
+static void TestSub3CapsTheResult(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 10, 16);
     Slice m = slice_sub3(s, 2, 5, 6);
     CHECK_INT_EQ(m.len, 3);
@@ -160,7 +160,7 @@ TEST(sub3_caps_the_result) {
     CHECK_INT_EQ(BURROW_AT(Int, s, 6), 777);
 }
 
-TEST(an_empty_slice_of_an_empty_slice_is_fine) {
+static void TestAnEmptySliceOfAnEmptySliceIsFine(TestingT *t) {
     Slice n = slice_nil(TYPE_INT);
     Slice m = slice_sub(n, 0, 0);
     CHECK_INT_EQ(m.len, 0);
@@ -172,7 +172,7 @@ TEST(an_empty_slice_of_an_empty_slice_is_fine) {
 
 /* ----------------------------------------------------------------- append */
 
-TEST(append_to_nil_starts_a_slice) {
+static void TestAppendToNilStartsASlice(TestingT *t) {
     Slice s = slice_nil(TYPE_INT);
     s = BURROW_APPEND(Int, a, s, 42);
     CHECK_INT_EQ(s.len, 1);
@@ -181,7 +181,7 @@ TEST(append_to_nil_starts_a_slice) {
     CHECK(s.elem == TYPE_INT);
 }
 
-TEST(append_of_nothing_returns_the_slice_unchanged) {
+static void TestAppendOfNothingReturnsTheSliceUnchanged(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 3, 5);
     Slice r = slice_append(a, s, NULL, 0);
     CHECK(r.p == s.p);
@@ -202,7 +202,7 @@ TEST(append_of_nothing_returns_the_slice_unchanged) {
  * agree with Go for element sizes where the rounding is a no-op and diverge
  * where it is not. docs/guides/slices.md has the long version and the measured
  * numbers from go1.27.1. */
-TEST(the_growth_sequence_is_gos) {
+static void TestTheGrowthSequenceIsGos(TestingT *t) {
     Slice s = slice_nil(TYPE_INT);
     const Int want[] = {1, 2, 4, 4, 8, 8, 8, 8, 16, 16, 16, 16, 16, 16, 16, 16};
     for (Int i = 0; i < 16; i++) {
@@ -213,7 +213,7 @@ TEST(the_growth_sequence_is_gos) {
         CHECK_INT_EQ(BURROW_AT(Int, s, i), i);
 }
 
-TEST(growth_switches_off_doubling_at_two_hundred_and_fifty_six) {
+static void TestGrowthSwitchesOffDoublingAtTwoHundredAndFiftySix(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 256, 256);
 
     /* Below the threshold it would have doubled to 512, and here it does too,
@@ -224,16 +224,16 @@ TEST(growth_switches_off_doubling_at_two_hundred_and_fifty_six) {
 
     /* The next one is where the two rules visibly part company: doubling would
      * give 1024 and the formula gives 832. */
-    Slice t = slice_make(a, TYPE_INT, 512, 512);
-    t = BURROW_APPEND(Int, a, t, 0);
-    CHECK_INT_EQ(t.cap, 832);
+    Slice sl = slice_make(a, TYPE_INT, 512, 512);
+    sl = BURROW_APPEND(Int, a, sl, 0);
+    CHECK_INT_EQ(sl.cap, 832);
 
     Slice u = slice_make(a, TYPE_INT, 832, 832);
     u = BURROW_APPEND(Int, a, u, 0);
     CHECK_INT_EQ(u.cap, 1232);
 }
 
-TEST(appending_more_than_double_takes_exactly_what_is_needed) {
+static void TestAppendingMoreThanDoubleTakesExactlyWhatIsNeeded(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 4, 4);
     const Int more[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
     s = slice_append(a, s, more, 12);
@@ -247,7 +247,7 @@ TEST(appending_more_than_double_takes_exactly_what_is_needed) {
  * array that other slices are still looking at. Go does this, Go's tests depend
  * on it, and a version of burrow that quietly always copied would be a nicer
  * library that runs ported Go code incorrectly. */
-TEST(append_within_capacity_is_visible_through_the_other_slice) {
+static void TestAppendWithinCapacityIsVisibleThroughTheOtherSlice(TestingT *t) {
     Slice base = slice_make(a, TYPE_INT, 8, 8);
     for (Int i = 0; i < 8; i++)
         BURROW_AT(Int, base, i) = 100 + i;
@@ -261,7 +261,7 @@ TEST(append_within_capacity_is_visible_through_the_other_slice) {
     CHECK_INT_EQ(BURROW_AT(Int, base, 3), 999);
 }
 
-TEST(append_past_capacity_stops_sharing) {
+static void TestAppendPastCapacityStopsSharing(TestingT *t) {
     Slice base = slice_make(a, TYPE_INT, 4, 4);
     for (Int i = 0; i < 4; i++)
         BURROW_AT(Int, base, i) = 100 + i;
@@ -278,7 +278,7 @@ TEST(append_past_capacity_stops_sharing) {
 
 /* append(s, s...), which works because the copy happens after the allocation
  * and the old array is still there while it does. */
-TEST(a_slice_can_be_appended_to_itself) {
+static void TestASliceCanBeAppendedToItself(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 3, 3);
     for (Int i = 0; i < 3; i++)
         BURROW_AT(Int, s, i) = i + 1;
@@ -297,7 +297,7 @@ TEST(a_slice_can_be_appended_to_itself) {
  * somebody does is reslice up to the capacity and read a zero value out of it.
  * The allocation here is deliberately not zeroed, so this is checking that the
  * memset actually happens rather than that the arena happened to be clean. */
-TEST(the_spare_capacity_after_a_grow_is_zeroed) {
+static void TestTheSpareCapacityAfterAGrowIsZeroed(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 4, 4);
     for (Int i = 0; i < 4; i++)
         BURROW_AT(Int, s, i) = -1;
@@ -311,7 +311,7 @@ TEST(the_spare_capacity_after_a_grow_is_zeroed) {
         CHECK_INT_EQ(BURROW_AT(Int, all, i), 0);
 }
 
-TEST(append_slice_moves_every_element) {
+static void TestAppendSliceMovesEveryElement(TestingT *t) {
     Slice dst = slice_make(a, TYPE_STRING, 1, 1);
     BURROW_AT(Str, dst, 0) = BURROW_S("first");
 
@@ -328,7 +328,7 @@ TEST(append_slice_moves_every_element) {
 
 /* ------------------------------------------------------------------- copy */
 
-TEST(copy_takes_the_shorter_of_the_two_lengths) {
+static void TestCopyTakesTheShorterOfTheTwoLengths(TestingT *t) {
     Slice dst = slice_make(a, TYPE_INT, 2, 8);
     Slice src = slice_make(a, TYPE_INT, 5, 5);
     for (Int i = 0; i < 5; i++)
@@ -347,7 +347,7 @@ TEST(copy_takes_the_shorter_of_the_two_lengths) {
 
 /* copy(s, s[1:]) is how you delete an element, so overlap is not an edge case,
  * it is the common case, and Go's copy promises it works. */
-TEST(copy_handles_overlap) {
+static void TestCopyHandlesOverlap(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 5, 5);
     for (Int i = 0; i < 5; i++)
         BURROW_AT(Int, s, i) = i;
@@ -360,7 +360,7 @@ TEST(copy_handles_overlap) {
     CHECK_INT_EQ(BURROW_AT(Int, s, 3), 4);
 }
 
-TEST(copy_from_a_string_fills_a_byte_slice) {
+static void TestCopyFromAStringFillsAByteSlice(TestingT *t) {
     Slice b = slice_make(a, TYPE_BYTE, 3, 3);
     CHECK_INT_EQ(slice_copy_str(b, BURROW_S("hello")), 3);
     CHECK_INT_EQ(BURROW_AT(Byte, b, 0), 'h');
@@ -373,7 +373,7 @@ TEST(copy_from_a_string_fills_a_byte_slice) {
 
 /* ------------------------------------------------------------ conversions */
 
-TEST(a_string_converts_to_bytes_and_back) {
+static void TestAStringConvertsToBytesAndBack(TestingT *t) {
     Str s = BURROW_S("with a \0 in it");
     Slice b = slice_from_str(a, s);
     CHECK_INT_EQ(b.len, 14);
@@ -385,13 +385,13 @@ TEST(a_string_converts_to_bytes_and_back) {
     CHECK(back.p != s.p);
 }
 
-TEST(converting_an_empty_string_gives_an_empty_slice_not_a_nil_one) {
+static void TestConvertingAnEmptyStringGivesAnEmptySliceNotANilOne(TestingT *t) {
     Slice b = slice_from_str(a, BURROW_STR_EMPTY);
     CHECK_INT_EQ(b.len, 0);
     CHECK(!slice_is_nil(b));
 }
 
-TEST(a_conversion_copies_so_the_two_stop_sharing) {
+static void TestAConversionCopiesSoTheTwoStopSharing(TestingT *t) {
     Byte buf[3] = {'a', 'b', 'c'};
     Str s = str_from_bytes(buf, 3);
     Slice b = slice_from_str(a, s);
@@ -421,7 +421,7 @@ static const Type empty_struct = {
     NULL,
 };
 
-TEST(a_slice_of_zero_sized_elements_never_allocates) {
+static void TestASliceOfZeroSizedElementsNeverAllocates(TestingT *t) {
     AllocStats before = mem_stats(a);
 
     Slice s = slice_make(a, &empty_struct, 4, 4);
@@ -448,7 +448,7 @@ TEST(a_slice_of_zero_sized_elements_never_allocates) {
  * that what they do is what slice_at and slice_append do, element for element,
  * including when the size they are handed is the wrong one. */
 
-TEST(the_fast_index_agrees_with_the_slow_one) {
+static void TestTheFastIndexAgreesWithTheSlowOne(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 5, 5);
     for (Int i = 0; i < 5; i++)
         *(Int *)slice_at(s, i) = i * 11;
@@ -474,7 +474,7 @@ TEST(the_fast_index_agrees_with_the_slow_one) {
 
 static Slice checked;
 
-TEST(indexing_past_the_end_panics) {
+static void TestIndexingPastTheEndPanics(TestingT *t) {
     checked = slice_make(a, TYPE_INT, 3, 8);
 
     CHECK_RUNTIME_ERROR((void)slice_at(checked, 3),
@@ -489,7 +489,7 @@ TEST(indexing_past_the_end_panics) {
                         "runtime error: index out of range [-1] with length 3");
 }
 
-TEST(a_slice_expression_past_the_capacity_panics) {
+static void TestASliceExpressionPastTheCapacityPanics(TestingT *t) {
     checked = slice_make(a, TYPE_INT, 3, 8);
 
     CHECK_RUNTIME_ERROR(
@@ -505,7 +505,7 @@ TEST(a_slice_expression_past_the_capacity_panics) {
         "runtime error: slice bounds out of range [-1:2] with capacity 8");
 }
 
-TEST(an_impossible_length_panics) {
+static void TestAnImpossibleLengthPanics(TestingT *t) {
     CHECK_RUNTIME_ERROR((void)slice_make(a, TYPE_INT, -1, 0),
                         "runtime error: makeslice: len out of range");
 
@@ -519,7 +519,7 @@ TEST(an_impossible_length_panics) {
                         "runtime error: slice_from: len out of range");
 }
 
-TEST(the_fast_index_still_bounds_checks) {
+static void TestTheFastIndexStillBoundsChecks(TestingT *t) {
     /* The fast path is a range test and a size test and nothing else, so an
      * index it rejects has to end up in slice_at, which is where the failure
      * lives. Both halves are checked: an index inside the length takes the fast
@@ -539,7 +539,7 @@ TEST(the_fast_index_still_bounds_checks) {
                         "runtime error: index out of range [3] with length 3");
 }
 
-TEST(the_fast_append_agrees_with_the_slow_one) {
+static void TestTheFastAppendAgreesWithTheSlowOne(TestingT *t) {
     /* Two slices built the same way by the two paths, compared at every step,
      * across the point where the capacity runs out and the backing array
      * moves. */
@@ -558,7 +558,7 @@ TEST(the_fast_append_agrees_with_the_slow_one) {
     }
 }
 
-TEST(the_fast_append_falls_back_when_the_size_does_not_match) {
+static void TestTheFastAppendFallsBackWhenTheSizeDoesNotMatch(TestingT *t) {
     /* Eight bytes of room, one byte per element. Appending with the size of an
      * Int has to write one byte and not eight, because the descriptor is what
      * says how wide an element is and the size passed in is only a hint that
@@ -588,7 +588,7 @@ TEST(the_fast_append_falls_back_when_the_size_does_not_match) {
         CHECK_INT_EQ(((Byte *)s.p)[i], 0xEE);
 }
 
-TEST(the_fast_append_grows_a_nil_slice) {
+static void TestTheFastAppendGrowsANilSlice(TestingT *t) {
     /* A nil slice has no pointer, so the fast path cannot take it and the
      * general one has to do the allocating. */
     Slice s = slice_nil(TYPE_INT);
@@ -599,7 +599,7 @@ TEST(the_fast_append_grows_a_nil_slice) {
     CHECK_INT_EQ(BURROW_AT(Int, s, 0), 7);
 }
 
-TEST(the_fast_append_keeps_the_sharing_within_capacity) {
+static void TestTheFastAppendKeepsTheSharingWithinCapacity(TestingT *t) {
     Slice s = slice_make(a, TYPE_INT, 1, 4);
     Slice other = s;
     s = BURROW_APPEND(Int, a, s, 99);
@@ -610,46 +610,51 @@ TEST(the_fast_append_keeps_the_sharing_within_capacity) {
     CHECK_INT_EQ(((Int *)other.p)[1], 99);
 }
 
-int main(void) {
+#define TESTS(X)                                                                       \
+    X(TestMakeGivesTheLengthAndCapacityAskedFor)                                       \
+    X(TestMakeZeroesWhatItHandsBack)                                                   \
+    X(TestACapacityBiggerThanTheLengthIsAllowedAndIsNotReadable)                       \
+    X(TestNilAndEmptyAreNotTheSameThing)                                               \
+    X(TestFromWrapsMemoryWithoutCopyingIt)                                             \
+    X(TestIndexReadsAndWritesTheElement)                                               \
+    X(TestIndexWorksOnASliceOfStrings)                                                 \
+    X(TestSubIsGosTwoIndexSliceExpression)                                             \
+    X(TestSubDoesNotCopy)                                                              \
+    X(TestSubCanReachPastTheLengthUpToTheCapacity)                                     \
+    X(TestSub3CapsTheResult)                                                           \
+    X(TestAnEmptySliceOfAnEmptySliceIsFine)                                            \
+    X(TestAppendToNilStartsASlice)                                                     \
+    X(TestAppendOfNothingReturnsTheSliceUnchanged)                                     \
+    X(TestTheGrowthSequenceIsGos)                                                      \
+    X(TestGrowthSwitchesOffDoublingAtTwoHundredAndFiftySix)                            \
+    X(TestAppendingMoreThanDoubleTakesExactlyWhatIsNeeded)                             \
+    X(TestAppendWithinCapacityIsVisibleThroughTheOtherSlice)                           \
+    X(TestAppendPastCapacityStopsSharing)                                              \
+    X(TestASliceCanBeAppendedToItself)                                                 \
+    X(TestTheSpareCapacityAfterAGrowIsZeroed)                                          \
+    X(TestAppendSliceMovesEveryElement)                                                \
+    X(TestCopyTakesTheShorterOfTheTwoLengths)                                          \
+    X(TestCopyHandlesOverlap)                                                          \
+    X(TestCopyFromAStringFillsAByteSlice)                                              \
+    X(TestAStringConvertsToBytesAndBack)                                               \
+    X(TestConvertingAnEmptyStringGivesAnEmptySliceNotANilOne)                          \
+    X(TestAConversionCopiesSoTheTwoStopSharing)                                        \
+    X(TestASliceOfZeroSizedElementsNeverAllocates)                                     \
+    X(TestTheFastIndexAgreesWithTheSlowOne)                                            \
+    X(TestIndexingPastTheEndPanics)                                                    \
+    X(TestASliceExpressionPastTheCapacityPanics)                                       \
+    X(TestAnImpossibleLengthPanics)                                                    \
+    X(TestTheFastIndexStillBoundsChecks)                                               \
+    X(TestTheFastAppendAgreesWithTheSlowOne)                                           \
+    X(TestTheFastAppendFallsBackWhenTheSizeDoesNotMatch)                               \
+    X(TestTheFastAppendGrowsANilSlice)                                                 \
+    X(TestTheFastAppendKeepsTheSharingWithinCapacity)
+
+static int TestMain(TestingM *m) {
     setup();
-    RUN(make_gives_the_length_and_capacity_asked_for);
-    RUN(make_zeroes_what_it_hands_back);
-    RUN(a_capacity_bigger_than_the_length_is_allowed_and_is_not_readable);
-    RUN(nil_and_empty_are_not_the_same_thing);
-    RUN(from_wraps_memory_without_copying_it);
-    RUN(index_reads_and_writes_the_element);
-    RUN(index_works_on_a_slice_of_strings);
-    RUN(sub_is_gos_two_index_slice_expression);
-    RUN(sub_does_not_copy);
-    RUN(sub_can_reach_past_the_length_up_to_the_capacity);
-    RUN(sub3_caps_the_result);
-    RUN(an_empty_slice_of_an_empty_slice_is_fine);
-    RUN(append_to_nil_starts_a_slice);
-    RUN(append_of_nothing_returns_the_slice_unchanged);
-    RUN(the_growth_sequence_is_gos);
-    RUN(growth_switches_off_doubling_at_two_hundred_and_fifty_six);
-    RUN(appending_more_than_double_takes_exactly_what_is_needed);
-    RUN(append_within_capacity_is_visible_through_the_other_slice);
-    RUN(append_past_capacity_stops_sharing);
-    RUN(a_slice_can_be_appended_to_itself);
-    RUN(the_spare_capacity_after_a_grow_is_zeroed);
-    RUN(append_slice_moves_every_element);
-    RUN(copy_takes_the_shorter_of_the_two_lengths);
-    RUN(copy_handles_overlap);
-    RUN(copy_from_a_string_fills_a_byte_slice);
-    RUN(a_string_converts_to_bytes_and_back);
-    RUN(converting_an_empty_string_gives_an_empty_slice_not_a_nil_one);
-    RUN(a_conversion_copies_so_the_two_stop_sharing);
-    RUN(a_slice_of_zero_sized_elements_never_allocates);
-    RUN(the_fast_index_agrees_with_the_slow_one);
-    RUN(indexing_past_the_end_panics);
-    RUN(a_slice_expression_past_the_capacity_panics);
-    RUN(an_impossible_length_panics);
-    RUN(the_fast_index_still_bounds_checks);
-    RUN(the_fast_append_agrees_with_the_slow_one);
-    RUN(the_fast_append_falls_back_when_the_size_does_not_match);
-    RUN(the_fast_append_grows_a_nil_slice);
-    RUN(the_fast_append_keeps_the_sharing_within_capacity);
+    int code = testing_m_run(m);
     teardown();
-    return harness_report("slice");
+    return code;
 }
+
+TESTING_MAIN_WITH(TestMain, TESTS)

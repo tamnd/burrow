@@ -9,8 +9,8 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 static Arena ar;
 static Alloc *a;
@@ -181,7 +181,7 @@ static const Type slice_of_int = {
 
 /* ------------------------------------------------------------ the interface */
 
-TEST(a_zeroed_interface_value_is_nil) {
+static void TestAZeroedInterfaceValueIsNil(TestingT *t) {
     Stringer s = {NULL, NULL};
     Stringer z;
     memset(&z, 0, sizeof z);
@@ -191,7 +191,7 @@ TEST(a_zeroed_interface_value_is_nil) {
     CHECK(iface_type(BURROW_IFACE(s)) == NULL);
 }
 
-TEST(a_struct_field_of_interface_type_starts_out_nil) {
+static void TestAStructFieldOfInterfaceTypeStartsOutNil(TestingT *t) {
     /* The reason the vtable pointer is the first member. A struct that is
      * zeroed, which is every struct out of an allocator, has nil interfaces in
      * it without anybody writing a line to say so. */
@@ -207,57 +207,58 @@ TEST(a_struct_field_of_interface_type_starts_out_nil) {
         CHECK(BURROW_IFACE_IS_NIL(h->s));
 }
 
-TEST(a_call_goes_to_the_implementation_behind_the_value) {
+static void TestACallGoesToTheImplementationBehindTheValue(TestingT *t) {
     Label l = {{(const Byte *)"label", 5}};
-    Tally t = {0, {(const Byte *)"tally", 5}};
+    Tally tally = {0, {(const Byte *)"tally", 5}};
     Stringer from_label = label_as_stringer(&l);
-    Stringer from_tally = both_as_stringer(tally_as_both(&t));
+    Stringer from_tally = both_as_stringer(tally_as_both(&tally));
 
     CHECK(str_eq(BURROW_CALL0(from_label, string), str_from_cstr("label")));
     CHECK(str_eq(BURROW_CALL0(from_tally, string), str_from_cstr("tally")));
 }
 
-TEST(a_call_with_arguments_passes_the_receiver_first) {
-    Tally t = {0, {(const Byte *)"tally", 5}};
-    Counter c = both_as_counter(tally_as_both(&t));
+static void TestACallWithArgumentsPassesTheReceiverFirst(TestingT *t) {
+    Tally tally = {0, {(const Byte *)"tally", 5}};
+    Counter c = both_as_counter(tally_as_both(&tally));
 
     CHECK_INT_EQ(BURROW_CALL(c, add, 3), 3);
     CHECK_INT_EQ(BURROW_CALL(c, add, 4), 7);
-    CHECK_INT_EQ(t.n, 7);
+    CHECK_INT_EQ(tally.n, 7);
 }
 
-TEST(an_embedded_interface_is_reached_by_the_address_of_a_member) {
-    Tally t = {0, {(const Byte *)"tally", 5}};
-    Both b = tally_as_both(&t);
+static void TestAnEmbeddedInterfaceIsReachedByTheAddressOfAMember(TestingT *t) {
+    Tally tally = {0, {(const Byte *)"tally", 5}};
+    Both b = tally_as_both(&tally);
     Stringer s = both_as_stringer(b);
     Counter c = both_as_counter(b);
 
     /* Both narrow values point at the same object and at their own part of the
      * one vtable. The second of the two is the case a pointer cast would get
      * wrong, which is the whole argument for doing it this way. */
-    CHECK(s.data == &t);
-    CHECK(c.data == &t);
+    CHECK(s.data == &tally);
+    CHECK(c.data == &tally);
     CHECK((const void *)s.vt == (const void *)&tally_both_vt.stringer);
     CHECK((const void *)c.vt == (const void *)&tally_both_vt.counter);
     CHECK((const void *)c.vt != (const void *)&tally_both_vt);
 }
 
-TEST(narrowing_a_nil_value_gives_a_nil_value) {
+static void TestNarrowingANilValueGivesANilValue(TestingT *t) {
     Both b = {NULL, NULL};
 
     CHECK(BURROW_IFACE_IS_NIL(both_as_stringer(b)));
     CHECK(BURROW_IFACE_IS_NIL(both_as_counter(b)));
 }
 
-TEST(the_dynamic_type_survives_the_conversion_to_an_interface) {
+static void TestTheDynamicTypeSurvivesTheConversionToAnInterface(TestingT *t) {
     Label l = {{(const Byte *)"label", 5}};
-    Tally t = {0, {(const Byte *)"tally", 5}};
+    Tally tally = {0, {(const Byte *)"tally", 5}};
 
     CHECK(iface_type(BURROW_IFACE(label_as_stringer(&l))) == &label_type);
-    CHECK(iface_type(BURROW_IFACE(both_as_counter(tally_as_both(&t)))) == &tally_type);
+    CHECK(iface_type(BURROW_IFACE(both_as_counter(tally_as_both(&tally)))) ==
+          &tally_type);
 }
 
-TEST(an_assertion_to_the_right_type_gives_the_value_back) {
+static void TestAnAssertionToTheRightTypeGivesTheValueBack(TestingT *t) {
     Label l = {{(const Byte *)"label", 5}};
     Stringer s = label_as_stringer(&l);
     void *got = iface_assert(BURROW_IFACE(s), &label_type);
@@ -265,7 +266,7 @@ TEST(an_assertion_to_the_right_type_gives_the_value_back) {
     CHECK(got == &l);
 }
 
-TEST(an_assertion_to_the_wrong_type_gives_null) {
+static void TestAnAssertionToTheWrongTypeGivesNull(TestingT *t) {
     Label l = {{(const Byte *)"label", 5}};
     Stringer s = label_as_stringer(&l);
 
@@ -274,13 +275,13 @@ TEST(an_assertion_to_the_wrong_type_gives_null) {
     CHECK(iface_assert(BURROW_IFACE(s), NULL) == NULL);
 }
 
-TEST(an_assertion_on_a_nil_value_gives_null_rather_than_stopping) {
+static void TestAnAssertionOnANilValueGivesNullRatherThanStopping(TestingT *t) {
     Stringer s = {NULL, NULL};
 
     CHECK(iface_assert(BURROW_IFACE(s), &label_type) == NULL);
 }
 
-TEST(a_vtable_that_declines_to_say_its_type_is_never_asserted_to) {
+static void TestAVtableThatDeclinesToSayItsTypeIsNeverAssertedTo(TestingT *t) {
     Label l = {{(const Byte *)"anonymous", 9}};
     Stringer s = {&anonymous_stringer_vt, &l};
 
@@ -290,7 +291,7 @@ TEST(a_vtable_that_declines_to_say_its_type_is_never_asserted_to) {
     CHECK(str_eq(BURROW_CALL0(s, string), str_from_cstr("anonymous")));
 }
 
-TEST(two_types_with_the_same_name_are_still_two_types) {
+static void TestTwoTypesWithTheSameNameAreStillTwoTypes(TestingT *t) {
     /* Pointer identity on the descriptor and not a comparison of names, which
      * is what Go's PkgPath exists to make sure of. */
     static const Type other_label_type = {
@@ -317,14 +318,14 @@ TEST(two_types_with_the_same_name_are_still_two_types) {
 
 /* -------------------------------------------------------------------- any */
 
-TEST(a_zeroed_any_is_nil) {
+static void TestAZeroedAnyIsNil(TestingT *t) {
     Any v = {NULL, NULL};
 
     CHECK(BURROW_ANY_IS_NIL(v));
     CHECK(any_assert(v, TYPE_INT) == NULL);
 }
 
-TEST(an_any_from_a_pointer_points_at_what_it_was_given) {
+static void TestAnAnyFromAPointerPointsAtWhatItWasGiven(TestingT *t) {
     Int n = 42;
     Any v = BURROW_ANY(TYPE_INT, &n);
     Int *got = (Int *)any_assert(v, TYPE_INT);
@@ -335,7 +336,7 @@ TEST(an_any_from_a_pointer_points_at_what_it_was_given) {
         CHECK_INT_EQ(*got, 42);
 }
 
-TEST(an_any_from_a_value_carries_a_copy_of_it) {
+static void TestAnAnyFromAValueCarriesACopyOfIt(TestingT *t) {
     Any v = BURROW_ANY_VAL(TYPE_INT, Int, 7);
     Int *got = (Int *)any_assert(v, TYPE_INT);
 
@@ -344,7 +345,7 @@ TEST(an_any_from_a_value_carries_a_copy_of_it) {
         CHECK_INT_EQ(*got, 7);
 }
 
-TEST(an_assertion_on_an_any_answers_for_the_dynamic_type_only) {
+static void TestAnAssertionOnAnAnyAnswersForTheDynamicTypeOnly(TestingT *t) {
     Int n = 1;
     Any v = BURROW_ANY(TYPE_INT, &n);
 
@@ -354,7 +355,7 @@ TEST(an_assertion_on_an_any_answers_for_the_dynamic_type_only) {
     CHECK(any_assert(v, NULL) == NULL);
 }
 
-TEST(boxing_copies_the_value_out_of_the_callers_frame) {
+static void TestBoxingCopiesTheValueOutOfTheCallersFrame(TestingT *t) {
     Any boxed;
     {
         Int n = 99;
@@ -370,7 +371,7 @@ TEST(boxing_copies_the_value_out_of_the_callers_frame) {
         CHECK_INT_EQ(*(Int *)boxed.data, 99);
 }
 
-TEST(boxing_goes_through_the_descriptor_so_a_str_stays_equal) {
+static void TestBoxingGoesThroughTheDescriptorSoAStrStaysEqual(TestingT *t) {
     Str s = str_from_cstr("hello");
     Any v = BURROW_ANY(TYPE_STRING, &s);
     Any boxed = any_box(a, v);
@@ -382,7 +383,7 @@ TEST(boxing_goes_through_the_descriptor_so_a_str_stays_equal) {
     CHECK(any_equal(v, boxed));
 }
 
-TEST(boxing_nothing_gives_nothing) {
+static void TestBoxingNothingGivesNothing(TestingT *t) {
     Any nil = {NULL, NULL};
     Any no_data = {TYPE_INT, NULL};
 
@@ -390,7 +391,7 @@ TEST(boxing_nothing_gives_nothing) {
     CHECK(BURROW_ANY_IS_NIL(any_box(a, no_data)));
 }
 
-TEST(boxing_reports_an_allocator_that_says_no) {
+static void TestBoxingReportsAnAllocatorThatSaysNo(TestingT *t) {
     /* A fixed allocator with nothing in it, which is the honest way to ask what
      * happens when the memory is not there. */
     Fixed fx;
@@ -407,7 +408,7 @@ TEST(boxing_reports_an_allocator_that_says_no) {
     CHECK(BURROW_ANY_IS_NIL(any_box(small, v)));
 }
 
-TEST(two_anys_holding_the_same_value_are_equal) {
+static void TestTwoAnysHoldingTheSameValueAreEqual(TestingT *t) {
     Int x = 3, y = 3;
     Any a1 = BURROW_ANY(TYPE_INT, &x);
     Any a2 = BURROW_ANY(TYPE_INT, &y);
@@ -416,7 +417,7 @@ TEST(two_anys_holding_the_same_value_are_equal) {
     CHECK(any_equal(a1, a1));
 }
 
-TEST(two_anys_of_different_types_are_never_equal) {
+static void TestTwoAnysOfDifferentTypesAreNeverEqual(TestingT *t) {
     Int i = 3;
     int64_t j = 3;
     Any a1 = BURROW_ANY(TYPE_INT, &i);
@@ -428,7 +429,7 @@ TEST(two_anys_of_different_types_are_never_equal) {
     CHECK(!any_equal(a1, a2));
 }
 
-TEST(nil_anys_are_equal_to_each_other_and_to_nothing_else) {
+static void TestNilAnysAreEqualToEachOtherAndToNothingElse(TestingT *t) {
     Int n = 0;
     Any nil1 = {NULL, NULL};
     Any nil2 = {NULL, NULL};
@@ -439,7 +440,7 @@ TEST(nil_anys_are_equal_to_each_other_and_to_nothing_else) {
     CHECK(!any_equal(some, nil2));
 }
 
-TEST(comparing_uncomparable_values_stops_the_program_the_way_go_does) {
+static void TestComparingUncomparableValuesStopsTheProgramTheWayGoDoes(TestingT *t) {
     Slice s1 = slice_make(a, TYPE_INT, 2, 2);
     Slice s2 = slice_make(a, TYPE_INT, 2, 2);
     Any a1 = BURROW_ANY(&slice_of_int, &s1);
@@ -449,7 +450,7 @@ TEST(comparing_uncomparable_values_stops_the_program_the_way_go_does) {
                         "runtime error: comparing uncomparable type []int");
 }
 
-TEST(the_any_descriptor_describes_an_interface) {
+static void TestTheAnyDescriptorDescribesAnInterface(TestingT *t) {
     CHECK(TYPE_ANY != NULL);
     CHECK_INT_EQ(TYPE_ANY->kind, KIND_INTERFACE);
     CHECK_INT_EQ(TYPE_ANY->size, (uint32_t)sizeof(Any));
@@ -457,7 +458,7 @@ TEST(the_any_descriptor_describes_an_interface) {
     CHECK(type_is_comparable(TYPE_ANY));
 }
 
-TEST(the_any_descriptor_compares_with_the_same_rules_any_equal_does) {
+static void TestTheAnyDescriptorComparesWithTheSameRulesAnyEqualDoes(TestingT *t) {
     Int x = 3;
     int64_t y = 3;
     Any a1 = BURROW_ANY(TYPE_INT, &x);
@@ -468,7 +469,7 @@ TEST(the_any_descriptor_compares_with_the_same_rules_any_equal_does) {
     CHECK(!type_equal(TYPE_ANY, &a1, &a3));
 }
 
-TEST(the_any_descriptor_hashes_the_type_along_with_the_value) {
+static void TestTheAnyDescriptorHashesTheTypeAlongWithTheValue(TestingT *t) {
     Int x = 3;
     int64_t y = 3;
     Any as_int = BURROW_ANY(TYPE_INT, &x);
@@ -480,35 +481,40 @@ TEST(the_any_descriptor_hashes_the_type_along_with_the_value) {
     CHECK(type_hash(TYPE_ANY, &nil, 1) == 1);
 }
 
-int main(void) {
+#define TESTS(X)                                                                       \
+    X(TestAZeroedInterfaceValueIsNil)                                                  \
+    X(TestAStructFieldOfInterfaceTypeStartsOutNil)                                     \
+    X(TestACallGoesToTheImplementationBehindTheValue)                                  \
+    X(TestACallWithArgumentsPassesTheReceiverFirst)                                    \
+    X(TestAnEmbeddedInterfaceIsReachedByTheAddressOfAMember)                           \
+    X(TestNarrowingANilValueGivesANilValue)                                            \
+    X(TestTheDynamicTypeSurvivesTheConversionToAnInterface)                            \
+    X(TestAnAssertionToTheRightTypeGivesTheValueBack)                                  \
+    X(TestAnAssertionToTheWrongTypeGivesNull)                                          \
+    X(TestAnAssertionOnANilValueGivesNullRatherThanStopping)                           \
+    X(TestAVtableThatDeclinesToSayItsTypeIsNeverAssertedTo)                            \
+    X(TestTwoTypesWithTheSameNameAreStillTwoTypes)                                     \
+    X(TestAZeroedAnyIsNil)                                                             \
+    X(TestAnAnyFromAPointerPointsAtWhatItWasGiven)                                     \
+    X(TestAnAnyFromAValueCarriesACopyOfIt)                                             \
+    X(TestAnAssertionOnAnAnyAnswersForTheDynamicTypeOnly)                              \
+    X(TestBoxingCopiesTheValueOutOfTheCallersFrame)                                    \
+    X(TestBoxingGoesThroughTheDescriptorSoAStrStaysEqual)                              \
+    X(TestBoxingNothingGivesNothing)                                                   \
+    X(TestBoxingReportsAnAllocatorThatSaysNo)                                          \
+    X(TestTwoAnysHoldingTheSameValueAreEqual)                                          \
+    X(TestTwoAnysOfDifferentTypesAreNeverEqual)                                        \
+    X(TestNilAnysAreEqualToEachOtherAndToNothingElse)                                  \
+    X(TestComparingUncomparableValuesStopsTheProgramTheWayGoDoes)                      \
+    X(TestTheAnyDescriptorDescribesAnInterface)                                        \
+    X(TestTheAnyDescriptorComparesWithTheSameRulesAnyEqualDoes)                        \
+    X(TestTheAnyDescriptorHashesTheTypeAlongWithTheValue)
+
+static int TestMain(TestingM *m) {
     setup();
-    RUN(a_zeroed_interface_value_is_nil);
-    RUN(a_struct_field_of_interface_type_starts_out_nil);
-    RUN(a_call_goes_to_the_implementation_behind_the_value);
-    RUN(a_call_with_arguments_passes_the_receiver_first);
-    RUN(an_embedded_interface_is_reached_by_the_address_of_a_member);
-    RUN(narrowing_a_nil_value_gives_a_nil_value);
-    RUN(the_dynamic_type_survives_the_conversion_to_an_interface);
-    RUN(an_assertion_to_the_right_type_gives_the_value_back);
-    RUN(an_assertion_to_the_wrong_type_gives_null);
-    RUN(an_assertion_on_a_nil_value_gives_null_rather_than_stopping);
-    RUN(a_vtable_that_declines_to_say_its_type_is_never_asserted_to);
-    RUN(two_types_with_the_same_name_are_still_two_types);
-    RUN(a_zeroed_any_is_nil);
-    RUN(an_any_from_a_pointer_points_at_what_it_was_given);
-    RUN(an_any_from_a_value_carries_a_copy_of_it);
-    RUN(an_assertion_on_an_any_answers_for_the_dynamic_type_only);
-    RUN(boxing_copies_the_value_out_of_the_callers_frame);
-    RUN(boxing_goes_through_the_descriptor_so_a_str_stays_equal);
-    RUN(boxing_nothing_gives_nothing);
-    RUN(boxing_reports_an_allocator_that_says_no);
-    RUN(two_anys_holding_the_same_value_are_equal);
-    RUN(two_anys_of_different_types_are_never_equal);
-    RUN(nil_anys_are_equal_to_each_other_and_to_nothing_else);
-    RUN(comparing_uncomparable_values_stops_the_program_the_way_go_does);
-    RUN(the_any_descriptor_describes_an_interface);
-    RUN(the_any_descriptor_compares_with_the_same_rules_any_equal_does);
-    RUN(the_any_descriptor_hashes_the_type_along_with_the_value);
+    int code = testing_m_run(m);
     teardown();
-    return harness_report("iface");
+    return code;
 }
+
+TESTING_MAIN_WITH(TestMain, TESTS)

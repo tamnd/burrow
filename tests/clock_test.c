@@ -21,21 +21,21 @@
 #include "burrow/atomic.h"
 #include "burrow/thread.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdbool.h>
 #include <stdint.h>
 
 /* ------------------------------------------------------------ it runs at all */
 
-TEST(the_clock_returns_something_other_than_zero) {
+static void TestTheClockReturnsSomethingOtherThanZero(TestingT *t) {
     /* Zero is what every failure path in clock.c returns, and a machine whose
      * monotonic clock genuinely reads zero has been up for under a nanosecond.
      * So this is the test for the clock being wired up at all. */
     CHECK(burrow__nanotime() != 0);
 }
 
-TEST(two_readings_in_a_row_do_not_go_backwards) {
+static void TestTwoReadingsInARowDoNotGoBackwards(TestingT *t) {
     int64_t a = burrow__nanotime();
     int64_t b = burrow__nanotime();
 
@@ -46,7 +46,7 @@ TEST(two_readings_in_a_row_do_not_go_backwards) {
 
 #define SAMPLES 100000
 
-TEST(a_hundred_thousand_readings_never_go_backwards) {
+static void TestAHundredThousandReadingsNeverGoBackwards(TestingT *t) {
     int64_t prev = burrow__nanotime();
     int64_t first = prev;
 
@@ -61,7 +61,7 @@ TEST(a_hundred_thousand_readings_never_go_backwards) {
     CHECK(prev > first);
 }
 
-TEST(the_clock_moves_forward_while_a_loop_spins) {
+static void TestTheClockMovesForwardWhileALoopSpins(TestingT *t) {
     int64_t start = burrow__nanotime();
 
     /* Spun rather than slept, so this does not depend on a timer existing yet
@@ -75,7 +75,7 @@ TEST(the_clock_moves_forward_while_a_loop_spins) {
 
 /* -------------------------------------------------------------- the units */
 
-TEST(a_measured_millisecond_is_a_millisecond_and_not_a_tick) {
+static void TestAMeasuredMillisecondIsAMillisecondAndNotATick(TestingT *t) {
     /* The point of this one is the scale and not the accuracy. If the
      * conversion factor were missing, or applied upside down, or the clock
      * counted microseconds, then a loop that runs until a million of these have
@@ -94,7 +94,7 @@ TEST(a_measured_millisecond_is_a_millisecond_and_not_a_tick) {
     CHECK(taken < 20000000);
 }
 
-TEST(the_clock_can_tell_two_points_less_than_a_microsecond_apart) {
+static void TestTheClockCanTellTwoPointsLessThanAMicrosecondApart(TestingT *t) {
     /* Resolution. A clock that only ticks every millisecond is no use for a
      * timer, and this is the test that would catch one.
      *
@@ -175,7 +175,7 @@ static void read_the_clock(void *arg) {
     }
 }
 
-TEST(four_threads_read_one_clock_and_agree_about_it) {
+static void TestFourThreadsReadOneClockAndAgreeAboutIt(TestingT *t) {
     backwards = 0;
     highest = 0;
 
@@ -192,13 +192,13 @@ TEST(four_threads_read_one_clock_and_agree_about_it) {
     CHECK(burrow__atomic_load_u64(&highest) > 0);
 }
 
-int main(void) {
-    RUN(the_clock_returns_something_other_than_zero);
-    RUN(two_readings_in_a_row_do_not_go_backwards);
-    RUN(a_hundred_thousand_readings_never_go_backwards);
-    RUN(the_clock_moves_forward_while_a_loop_spins);
-    RUN(a_measured_millisecond_is_a_millisecond_and_not_a_tick);
-    RUN(the_clock_can_tell_two_points_less_than_a_microsecond_apart);
-    RUN(four_threads_read_one_clock_and_agree_about_it);
-    return harness_report("clock");
-}
+#define TESTS(X)                                                                       \
+    X(TestTheClockReturnsSomethingOtherThanZero)                                       \
+    X(TestTwoReadingsInARowDoNotGoBackwards)                                           \
+    X(TestAHundredThousandReadingsNeverGoBackwards)                                    \
+    X(TestTheClockMovesForwardWhileALoopSpins)                                         \
+    X(TestAMeasuredMillisecondIsAMillisecondAndNotATick)                               \
+    X(TestTheClockCanTellTwoPointsLessThanAMicrosecondApart)                           \
+    X(TestFourThreadsReadOneClockAndAgreeAboutIt)
+
+TESTING_MAIN(TESTS)

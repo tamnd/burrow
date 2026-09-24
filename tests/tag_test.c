@@ -15,7 +15,7 @@
 #include "burrow/mem/arena.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdint.h>
 
@@ -47,11 +47,11 @@ static bool has_no(Str tag, const char *key) {
 /* ------------------------------------------------------------- the ordinary
  */
 
-TEST(one_key_is_found) {
+static void TestOneKeyIsFound(TestingT *t) {
     CHECK(lookup_is(BURROW_S("json:\"id\""), "json", "id"));
 }
 
-TEST(one_key_among_several_is_found) {
+static void TestOneKeyAmongSeveralIsFound(TestingT *t) {
     Str tag = BURROW_S("json:\"id,omitempty\" xml:\"id,attr\" db:\"user_id\"");
 
     CHECK(lookup_is(tag, "json", "id,omitempty"));
@@ -61,12 +61,12 @@ TEST(one_key_among_several_is_found) {
 
 /* The options after the comma come back with the value. What they mean is the
  * asking package's business, which is the position Go takes too. */
-TEST(the_value_is_not_split_on_commas) {
+static void TestTheValueIsNotSplitOnCommas(TestingT *t) {
     CHECK(lookup_is(BURROW_S("json:\"a,b,c\""), "json", "a,b,c"));
     CHECK(lookup_is(BURROW_S("json:\",omitempty\""), "json", ",omitempty"));
 }
 
-TEST(a_key_that_is_not_there_is_not_found) {
+static void TestAKeyThatIsNotThereIsNotFound(TestingT *t) {
     CHECK(has_no(BURROW_S("json:\"id\""), "xml"));
     CHECK(has_no(BURROW_S("json:\"id\""), "jso"));
     CHECK(has_no(BURROW_S("json:\"id\""), "jsonn"));
@@ -76,23 +76,23 @@ TEST(a_key_that_is_not_there_is_not_found) {
 
 /* Present and empty is not absent, and this is the one thing tag_get cannot
  * tell you, which is why tag_lookup exists. */
-TEST(an_empty_value_is_still_a_key_that_is_there) {
+static void TestAnEmptyValueIsStillAKeyThatIsThere(TestingT *t) {
     Str got = BURROW_S("untouched");
 
     CHECK(tag_lookup(a, BURROW_S("json:\"\""), BURROW_S("json"), &got));
     CHECK_INT_EQ(got.len, 0);
 }
 
-TEST(the_first_of_two_identical_keys_wins) {
+static void TestTheFirstOfTwoIdenticalKeysWins(TestingT *t) {
     CHECK(lookup_is(BURROW_S("json:\"first\" json:\"second\""), "json", "first"));
 }
 
-TEST(a_caller_that_does_not_want_the_value_can_say_so) {
+static void TestACallerThatDoesNotWantTheValueCanSaySo(TestingT *t) {
     CHECK(tag_lookup(a, BURROW_S("json:\"id\""), BURROW_S("json"), NULL));
     CHECK(!tag_lookup(a, BURROW_S("json:\"id\""), BURROW_S("xml"), NULL));
 }
 
-TEST(tag_get_gives_the_value_or_nothing) {
+static void TestTagGetGivesTheValueOrNothing(TestingT *t) {
     CHECK(
         str_eq(tag_get(a, BURROW_S("json:\"id\""), BURROW_S("json")), BURROW_S("id")));
     CHECK_INT_EQ(tag_get(a, BURROW_S("json:\"id\""), BURROW_S("xml")).len, 0);
@@ -101,7 +101,7 @@ TEST(tag_get_gives_the_value_or_nothing) {
 /* ------------------------------------------------------------------ spacing
  */
 
-TEST(extra_spaces_between_pairs_are_allowed) {
+static void TestExtraSpacesBetweenPairsAreAllowed(TestingT *t) {
     CHECK(lookup_is(BURROW_S("  json:\"id\"   xml:\"x\"  "), "json", "id"));
     CHECK(lookup_is(BURROW_S("  json:\"id\"   xml:\"x\"  "), "xml", "x"));
 }
@@ -109,7 +109,7 @@ TEST(extra_spaces_between_pairs_are_allowed) {
 /* Go separates pairs on a space and on nothing else, so a tab ends the scan and
  * everything after it is invisible. This is a real Go behaviour that surprises
  * people, and copying it is the point. */
-TEST(a_tab_between_pairs_ends_the_scan) {
+static void TestATabBetweenPairsEndsTheScan(TestingT *t) {
     Str tag = BURROW_S("json:\"id\"\txml:\"x\"");
 
     CHECK(lookup_is(tag, "json", "id"));
@@ -119,7 +119,7 @@ TEST(a_tab_between_pairs_ends_the_scan) {
 /* ---------------------------------------------------------------- malformed
  */
 
-TEST(a_tag_that_is_not_in_the_format_has_no_keys) {
+static void TestATagThatIsNotInTheFormatHasNoKeys(TestingT *t) {
     /* No colon. */
     CHECK(has_no(BURROW_S("json"), "json"));
     /* Colon and no quote. */
@@ -138,7 +138,7 @@ TEST(a_tag_that_is_not_in_the_format_has_no_keys) {
 /* A pair that does not parse stops the scan, so a good pair behind a bad one is
  * not reachable. Go does the same and it is worth having a test say so, because
  * the alternative reading is that the parser skips the bad pair. */
-TEST(a_broken_pair_hides_everything_after_it) {
+static void TestABrokenPairHidesEverythingAfterIt(TestingT *t) {
     CHECK(lookup_is(BURROW_S("json:\"id\" broken xml:\"x\""), "json", "id"));
     CHECK(has_no(BURROW_S("json:\"id\" broken xml:\"x\""), "xml"));
 }
@@ -146,12 +146,12 @@ TEST(a_broken_pair_hides_everything_after_it) {
 /* ----------------------------------------------------------------- escapes
  */
 
-TEST(a_quote_inside_the_value_does_not_end_it) {
+static void TestAQuoteInsideTheValueDoesNotEndIt(TestingT *t) {
     CHECK(lookup_is(BURROW_S("json:\"a\\\"b\""), "json", "a\"b"));
     CHECK(lookup_is(BURROW_S("json:\"a\\\"b\" xml:\"x\""), "xml", "x"));
 }
 
-TEST(the_simple_escapes_are_undone) {
+static void TestTheSimpleEscapesAreUndone(TestingT *t) {
     CHECK(lookup_is(BURROW_S("k:\"a\\nb\""), "k", "a\nb"));
     CHECK(lookup_is(BURROW_S("k:\"a\\tb\""), "k", "a\tb"));
     CHECK(lookup_is(BURROW_S("k:\"a\\rb\""), "k", "a\rb"));
@@ -159,19 +159,19 @@ TEST(the_simple_escapes_are_undone) {
     CHECK(lookup_is(BURROW_S("k:\"\\a\\b\\f\\v\""), "k", "\a\b\f\v"));
 }
 
-TEST(a_hex_escape_is_a_byte) {
+static void TestAHexEscapeIsAByte(TestingT *t) {
     CHECK(lookup_is(BURROW_S("k:\"a\\x41b\""), "k", "aAb"));
     CHECK(lookup_is(BURROW_S("k:\"\\x7f\""), "k", "\x7f"));
 }
 
-TEST(an_octal_escape_is_a_byte) {
+static void TestAnOctalEscapeIsAByte(TestingT *t) {
     CHECK(lookup_is(BURROW_S("k:\"a\\101b\""), "k", "aAb"));
 }
 
 /* A Str is a pointer and a length, so a NUL in the middle of a value is a byte
  * like any other and the value is one byte long, not none. This is checked by
  * hand because there is no C string literal that says it. */
-TEST(a_nul_in_the_value_is_a_byte_and_not_the_end) {
+static void TestANulInTheValueIsAByteAndNotTheEnd(TestingT *t) {
     Str got = BURROW_STR_EMPTY;
 
     CHECK(tag_lookup(a, BURROW_S("k:\"\\000\""), BURROW_S("k"), &got));
@@ -183,18 +183,18 @@ TEST(a_nul_in_the_value_is_a_byte_and_not_the_end) {
     CHECK_INT_EQ(got.p[1], 0);
 }
 
-TEST(a_unicode_escape_becomes_utf8) {
+static void TestAUnicodeEscapeBecomesUtf8(TestingT *t) {
     /* Two bytes, three bytes and four bytes, which is every length above one. */
     CHECK(lookup_is(BURROW_S("k:\"\\u00e9\""), "k", "\xc3\xa9"));
     CHECK(lookup_is(BURROW_S("k:\"\\u4e16\""), "k", "\xe4\xb8\x96"));
     CHECK(lookup_is(BURROW_S("k:\"\\U0001F600\""), "k", "\xf0\x9f\x98\x80"));
 }
 
-TEST(utf8_already_in_the_tag_comes_back_unchanged) {
+static void TestUtf8AlreadyInTheTagComesBackUnchanged(TestingT *t) {
     CHECK(lookup_is(BURROW_S("k:\"caf\xc3\xa9\""), "k", "caf\xc3\xa9"));
 }
 
-TEST(an_escape_that_is_not_one_is_a_tag_with_no_keys) {
+static void TestAnEscapeThatIsNotOneIsATagWithNoKeys(TestingT *t) {
     /* No such escape. */
     CHECK(has_no(BURROW_S("k:\"a\\qb\""), "k"));
     /* Too few hex digits. */
@@ -213,7 +213,7 @@ TEST(an_escape_that_is_not_one_is_a_tag_with_no_keys) {
 /* A byte that is not part of any rune becomes U+FFFD, which is what Go's
  * unquoting does and is three bytes where there was one. The two pass sizing in
  * the implementation exists for exactly this case. */
-TEST(a_byte_that_is_not_utf8_becomes_the_replacement_rune) {
+static void TestAByteThatIsNotUtf8BecomesTheReplacementRune(TestingT *t) {
     /* The literals are split so that the b after the escape is a b and not one
      * more hex digit, which is a thing C does and Go does not. */
     CHECK(lookup_is(BURROW_S("k:\"a\xff"
@@ -233,57 +233,56 @@ TEST(a_byte_that_is_not_utf8_becomes_the_replacement_rune) {
 
 BURROW_STRUCT(Tagged, TAGGED_FIELDS);
 
-TEST(a_declared_fields_tag_is_the_one_that_was_written) {
-    const Type *t = TYPE_OF(Tagged);
+static void TestADeclaredFieldsTagIsTheOneThatWasWritten(TestingT *t) {
+    const Type *ty = TYPE_OF(Tagged);
 
-    CHECK(lookup_is(t->fields[0].tag, "json", "id,omitempty"));
-    CHECK(lookup_is(t->fields[0].tag, "db", "user_id"));
-    CHECK(lookup_is(t->fields[1].tag, "json", "name"));
+    CHECK(lookup_is(ty->fields[0].tag, "json", "id,omitempty"));
+    CHECK(lookup_is(ty->fields[0].tag, "db", "user_id"));
+    CHECK(lookup_is(ty->fields[1].tag, "json", "name"));
 
-    CHECK(has_no(t->fields[1].tag, "db"));
-    CHECK(has_no(t->fields[2].tag, "json"));
+    CHECK(has_no(ty->fields[1].tag, "db"));
+    CHECK(has_no(ty->fields[2].tag, "json"));
 }
 
-TEST(a_field_found_by_name_carries_its_tag) {
+static void TestAFieldFoundByNameCarriesItsTag(TestingT *t) {
     const Field *f = type_field_by_name(TYPE_OF(Tagged), BURROW_S("Name"));
 
     CHECK(f != NULL);
     CHECK(str_eq(tag_get(a, f->tag, BURROW_S("json")), BURROW_S("name")));
 }
 
-int main(void) {
+#define TESTS(X)                                                                       \
+    X(TestOneKeyIsFound)                                                               \
+    X(TestOneKeyAmongSeveralIsFound)                                                   \
+    X(TestTheValueIsNotSplitOnCommas)                                                  \
+    X(TestAKeyThatIsNotThereIsNotFound)                                                \
+    X(TestAnEmptyValueIsStillAKeyThatIsThere)                                          \
+    X(TestTheFirstOfTwoIdenticalKeysWins)                                              \
+    X(TestACallerThatDoesNotWantTheValueCanSaySo)                                      \
+    X(TestTagGetGivesTheValueOrNothing)                                                \
+    X(TestExtraSpacesBetweenPairsAreAllowed)                                           \
+    X(TestATabBetweenPairsEndsTheScan)                                                 \
+    X(TestATagThatIsNotInTheFormatHasNoKeys)                                           \
+    X(TestABrokenPairHidesEverythingAfterIt)                                           \
+    X(TestAQuoteInsideTheValueDoesNotEndIt)                                            \
+    X(TestTheSimpleEscapesAreUndone)                                                   \
+    X(TestAHexEscapeIsAByte)                                                           \
+    X(TestAnOctalEscapeIsAByte)                                                        \
+    X(TestANulInTheValueIsAByteAndNotTheEnd)                                           \
+    X(TestAUnicodeEscapeBecomesUtf8)                                                   \
+    X(TestUtf8AlreadyInTheTagComesBackUnchanged)                                       \
+    X(TestAnEscapeThatIsNotOneIsATagWithNoKeys)                                        \
+    X(TestAByteThatIsNotUtf8BecomesTheReplacementRune)                                 \
+    X(TestADeclaredFieldsTagIsTheOneThatWasWritten)                                    \
+    X(TestAFieldFoundByNameCarriesItsTag)
+
+static int TestMain(TestingM *m) {
     Arena arena;
     arena_init(&arena, NULL, 0);
     a = arena_allocator(&arena);
-
-    RUN(one_key_is_found);
-    RUN(one_key_among_several_is_found);
-    RUN(the_value_is_not_split_on_commas);
-    RUN(a_key_that_is_not_there_is_not_found);
-    RUN(an_empty_value_is_still_a_key_that_is_there);
-    RUN(the_first_of_two_identical_keys_wins);
-    RUN(a_caller_that_does_not_want_the_value_can_say_so);
-    RUN(tag_get_gives_the_value_or_nothing);
-
-    RUN(extra_spaces_between_pairs_are_allowed);
-    RUN(a_tab_between_pairs_ends_the_scan);
-
-    RUN(a_tag_that_is_not_in_the_format_has_no_keys);
-    RUN(a_broken_pair_hides_everything_after_it);
-
-    RUN(a_quote_inside_the_value_does_not_end_it);
-    RUN(the_simple_escapes_are_undone);
-    RUN(a_hex_escape_is_a_byte);
-    RUN(an_octal_escape_is_a_byte);
-    RUN(a_nul_in_the_value_is_a_byte_and_not_the_end);
-    RUN(a_unicode_escape_becomes_utf8);
-    RUN(utf8_already_in_the_tag_comes_back_unchanged);
-    RUN(an_escape_that_is_not_one_is_a_tag_with_no_keys);
-    RUN(a_byte_that_is_not_utf8_becomes_the_replacement_rune);
-
-    RUN(a_declared_fields_tag_is_the_one_that_was_written);
-    RUN(a_field_found_by_name_carries_its_tag);
-
+    int code = testing_m_run(m);
     arena_free(&arena);
-    return harness_report("tag");
+    return code;
 }
+
+TESTING_MAIN_WITH(TestMain, TESTS)

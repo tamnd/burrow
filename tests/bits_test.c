@@ -10,8 +10,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 #include "burrow/math/bits.h"
 
@@ -66,11 +66,11 @@ static void init_tab(void) {
     }
 }
 
-TEST(uint_size) {
+static void TestUintSize(TestingT *t) {
     CHECK_INT_EQ(BITS_UINT_SIZE, (Int)sizeof(Uint) * 8);
 }
 
-TEST(leading_zeros) {
+static void TestLeadingZeros(TestingT *t) {
     for (int i = 0; i < 256; i++) {
         Int nlz = tab[i].nlz;
         for (int k = 0; k < 64 - 8; k++) {
@@ -96,7 +96,7 @@ TEST(leading_zeros) {
     }
 }
 
-TEST(trailing_zeros) {
+static void TestTrailingZeros(TestingT *t) {
     for (int i = 0; i < 256; i++) {
         Int ntz = tab[i].ntz;
         for (int k = 0; k < 64 - 8; k++) {
@@ -120,7 +120,7 @@ TEST(trailing_zeros) {
     }
 }
 
-static void check_ones_count(uint64_t x, Int want) {
+static void check_ones_count(TestingT *t, uint64_t x, Int want) {
     if (x <= 0xff)
         CHECK_INT_EQ(bits_ones_count8((uint8_t)x), want);
     if (x <= 0xffff)
@@ -137,22 +137,22 @@ static void check_ones_count(uint64_t x, Int want) {
 #endif
 }
 
-TEST(ones_count) {
+static void TestOnesCount(TestingT *t) {
     uint64_t x = 0;
     for (int i = 0; i <= 64; i++) {
-        check_ones_count(x, i);
+        check_ones_count(t, x, i);
         x = x << 1 | 1;
     }
     for (int i = 64; i >= 0; i--) {
-        check_ones_count(x, i);
+        check_ones_count(t, x, i);
         x = x << 1;
     }
     for (int i = 0; i < 256; i++)
         for (int k = 0; k < 64 - 8; k++)
-            check_ones_count((uint64_t)i << k, tab[i].pop);
+            check_ones_count(t, (uint64_t)i << k, tab[i].pop);
 }
 
-TEST(rotate_left) {
+static void TestRotateLeft(TestingT *t) {
     uint64_t m = DE_BRUIJN64;
 
     for (unsigned k = 0; k < 128; k++) {
@@ -184,7 +184,7 @@ TEST(rotate_left) {
     }
 }
 
-static void check_reverse(uint64_t x64, uint64_t want64) {
+static void check_reverse(TestingT *t, uint64_t x64, uint64_t want64) {
     CHECK_INT_EQ(bits_reverse8((uint8_t)x64), (uint8_t)(want64 >> 56));
     CHECK_INT_EQ(bits_reverse16((uint16_t)x64), (uint16_t)(want64 >> 48));
     CHECK_INT_EQ(bits_reverse32((uint32_t)x64), (uint32_t)(want64 >> 32));
@@ -196,9 +196,9 @@ static void check_reverse(uint64_t x64, uint64_t want64) {
 #endif
 }
 
-TEST(reverse) {
+static void TestReverse(TestingT *t) {
     for (unsigned i = 0; i < 64; i++)
-        check_reverse((uint64_t)1 << i, (uint64_t)1 << (63 - i));
+        check_reverse(t, (uint64_t)1 << i, (uint64_t)1 << (63 - i));
 
     static const struct {
         uint64_t x, r;
@@ -223,12 +223,12 @@ TEST(reverse) {
         {0x0123456789abcdefull, 0xf7b3d591e6a2c480ull},
     };
     for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
-        check_reverse(tests[i].x, tests[i].r);
-        check_reverse(tests[i].r, tests[i].x);
+        check_reverse(t, tests[i].x, tests[i].r);
+        check_reverse(t, tests[i].r, tests[i].x);
     }
 }
 
-static void check_reverse_bytes(uint64_t x64, uint64_t want64) {
+static void check_reverse_bytes(TestingT *t, uint64_t x64, uint64_t want64) {
     CHECK_INT_EQ(bits_reverse_bytes16((uint16_t)x64), (uint16_t)(want64 >> 48));
     CHECK_INT_EQ(bits_reverse_bytes32((uint32_t)x64), (uint32_t)(want64 >> 32));
     CHECK(bits_reverse_bytes64(x64) == want64);
@@ -239,7 +239,7 @@ static void check_reverse_bytes(uint64_t x64, uint64_t want64) {
 #endif
 }
 
-TEST(reverse_bytes) {
+static void TestReverseBytes(TestingT *t) {
     static const struct {
         uint64_t x, r;
     } tests[] = {
@@ -254,12 +254,12 @@ TEST(reverse_bytes) {
         {0x0123456789abcdefull, 0xefcdab8967452301ull},
     };
     for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
-        check_reverse_bytes(tests[i].x, tests[i].r);
-        check_reverse_bytes(tests[i].r, tests[i].x);
+        check_reverse_bytes(t, tests[i].x, tests[i].r);
+        check_reverse_bytes(t, tests[i].r, tests[i].x);
     }
 }
 
-TEST(len) {
+static void TestLen(TestingT *t) {
     for (int i = 0; i < 256; i++) {
         Int len = 8 - tab[i].nlz;
         for (int k = 0; k < 64 - 8; k++) {
@@ -289,7 +289,7 @@ typedef struct AddCase {
         {12345, 67890, 0, 80235, 0}, {12345, 67890, 1, 80236, 0}, {M, 1, 0, 0, 1},     \
         {M, 0, 1, 0, 1}, {M, 1, 1, 1, 1}, {M, M, 0, M - 1, 1}, {M, M, 1, M, 1}
 
-TEST(add_sub_uint) {
+static void TestAddSubUint(TestingT *t) {
     static const AddCase cases[] = {ADD_CASES(MU)};
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         Uint x = (Uint)cases[i].x, y = (Uint)cases[i].y, c = (Uint)cases[i].c;
@@ -301,7 +301,7 @@ TEST(add_sub_uint) {
     }
 }
 
-TEST(add_sub_uint32) {
+static void TestAddSubUint32(TestingT *t) {
     static const AddCase cases[] = {ADD_CASES(M32)};
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         uint32_t x = (uint32_t)cases[i].x, y = (uint32_t)cases[i].y;
@@ -314,7 +314,7 @@ TEST(add_sub_uint32) {
     }
 }
 
-TEST(add_sub_uint64) {
+static void TestAddSubUint64(TestingT *t) {
     static const AddCase cases[] = {ADD_CASES(M64)};
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         const AddCase *a = &cases[i];
@@ -326,7 +326,7 @@ TEST(add_sub_uint64) {
     }
 }
 
-TEST(the_second_result_can_be_thrown_away) {
+static void TestTheSecondResultCanBeThrownAway(TestingT *t) {
     CHECK(bits_add64(M64, 1, 0, NULL) == 0);
     CHECK(bits_sub64(0, 1, 0, NULL) == M64);
     CHECK(bits_mul64(M64, M64, NULL) == M64 - 1);
@@ -340,7 +340,7 @@ typedef struct MulCase {
     uint64_t x, y, hi, lo, r;
 } MulCase;
 
-TEST(mul_div) {
+static void TestMulDiv(TestingT *t) {
     static const MulCase cases[] = {
         {(uint64_t)1 << (BITS_UINT_SIZE - 1), 2, 1, 0, 1},
         {MU, MU, MU - 1, 1, 42},
@@ -355,7 +355,7 @@ TEST(mul_div) {
     }
 }
 
-TEST(mul_div32) {
+static void TestMulDiv32(TestingT *t) {
     static const MulCase cases[] = {
         {(uint64_t)1 << 31, 2, 1, 0, 1},
         {0xc47dfa8c, 50911, 0x98a4, 0x998587f4, 13},
@@ -372,7 +372,7 @@ TEST(mul_div32) {
     }
 }
 
-TEST(mul_div64) {
+static void TestMulDiv64(TestingT *t) {
     static const MulCase cases[] = {
         {(uint64_t)1 << 63, 2, 1, 0, 1},
         {0x3626229738a3b9ull, 0xd8988a9f1cc4a61ull, 0x2dd0712657fe8ull,
@@ -393,7 +393,7 @@ TEST(mul_div64) {
  * and fold the call into something else. */
 static volatile uint64_t one = 1, zero = 0;
 
-TEST(div_panics_on_overflow) {
+static void TestDivPanicsOnOverflow(TestingT *t) {
     CHECK_FATAL(bits_div((Uint)one, 0, (Uint)one, NULL),
                 "runtime error: integer overflow");
     CHECK_FATAL(bits_div32((uint32_t)one, 0, (uint32_t)one, NULL),
@@ -401,7 +401,7 @@ TEST(div_panics_on_overflow) {
     CHECK_FATAL(bits_div64(one, 0, one, NULL), "runtime error: integer overflow");
 }
 
-TEST(div_panics_on_zero) {
+static void TestDivPanicsOnZero(TestingT *t) {
     CHECK_FATAL(bits_div((Uint)one, (Uint)one, (Uint)zero, NULL),
                 "runtime error: integer divide by zero");
     CHECK_FATAL(bits_div32((uint32_t)one, (uint32_t)one, (uint32_t)zero, NULL),
@@ -410,7 +410,7 @@ TEST(div_panics_on_zero) {
                 "runtime error: integer divide by zero");
 }
 
-TEST(rem_panics_on_zero_and_only_on_zero) {
+static void TestRemPanicsOnZeroAndOnlyOnZero(TestingT *t) {
     CHECK_FATAL(bits_rem((Uint)one, (Uint)one, (Uint)zero),
                 "runtime error: integer divide by zero");
     CHECK_FATAL(bits_rem32((uint32_t)one, (uint32_t)one, (uint32_t)zero),
@@ -418,7 +418,7 @@ TEST(rem_panics_on_zero_and_only_on_zero) {
     CHECK_FATAL(bits_rem64(one, one, zero), "runtime error: integer divide by zero");
 }
 
-TEST(rem32) {
+static void TestRem32(TestingT *t) {
     uint32_t hi = 510510, lo = 9699690, y = 510510 + 1;
     for (int i = 0; i < 1000; i++) {
         uint32_t r2;
@@ -428,7 +428,7 @@ TEST(rem32) {
     }
 }
 
-TEST(rem32_overflow) {
+static void TestRem32Overflow(TestingT *t) {
     uint32_t hi = 510510, lo = 9699690, y = 7;
     for (int i = 0; i < 1000; i++) {
         uint64_t r2;
@@ -438,7 +438,7 @@ TEST(rem32_overflow) {
     }
 }
 
-TEST(rem64) {
+static void TestRem64(TestingT *t) {
     uint64_t hi = 510510, lo = 9699690, y = 510510 + 1;
     for (int i = 0; i < 1000; i++) {
         uint64_t r2;
@@ -448,7 +448,7 @@ TEST(rem64) {
     }
 }
 
-TEST(rem64_overflow) {
+static void TestRem64Overflow(TestingT *t) {
     static const struct {
         uint64_t hi, lo, y, rem;
     } tests[] = {
@@ -470,7 +470,7 @@ TEST(rem64_overflow) {
  * control flow in it, so it gets a sweep against the 128 bit answer where the
  * compiler has one, including divisors with the high bit set and without,
  * which take different amounts of normalising. */
-TEST(div64_agrees_with_128_bit_division) {
+static void TestDiv64AgreesWith128BitDivision(TestingT *t) {
 #if defined(__SIZEOF_INT128__)
     __extension__ typedef unsigned __int128 U128;
     uint64_t s = 0x9e3779b97f4a7c15ull;
@@ -492,30 +492,35 @@ TEST(div64_agrees_with_128_bit_division) {
 #endif
 }
 
-int main(void) {
+#define TESTS(X)                                                                       \
+    X(TestUintSize)                                                                    \
+    X(TestLeadingZeros)                                                                \
+    X(TestTrailingZeros)                                                               \
+    X(TestOnesCount)                                                                   \
+    X(TestRotateLeft)                                                                  \
+    X(TestReverse)                                                                     \
+    X(TestReverseBytes)                                                                \
+    X(TestLen)                                                                         \
+    X(TestAddSubUint)                                                                  \
+    X(TestAddSubUint32)                                                                \
+    X(TestAddSubUint64)                                                                \
+    X(TestTheSecondResultCanBeThrownAway)                                              \
+    X(TestMulDiv)                                                                      \
+    X(TestMulDiv32)                                                                    \
+    X(TestMulDiv64)                                                                    \
+    X(TestDivPanicsOnOverflow)                                                         \
+    X(TestDivPanicsOnZero)                                                             \
+    X(TestRemPanicsOnZeroAndOnlyOnZero)                                                \
+    X(TestRem32)                                                                       \
+    X(TestRem32Overflow)                                                               \
+    X(TestRem64)                                                                       \
+    X(TestRem64Overflow)                                                               \
+    X(TestDiv64AgreesWith128BitDivision)
+
+static int TestMain(TestingM *m) {
     init_tab();
-    RUN(uint_size);
-    RUN(leading_zeros);
-    RUN(trailing_zeros);
-    RUN(ones_count);
-    RUN(rotate_left);
-    RUN(reverse);
-    RUN(reverse_bytes);
-    RUN(len);
-    RUN(add_sub_uint);
-    RUN(add_sub_uint32);
-    RUN(add_sub_uint64);
-    RUN(the_second_result_can_be_thrown_away);
-    RUN(mul_div);
-    RUN(mul_div32);
-    RUN(mul_div64);
-    RUN(div_panics_on_overflow);
-    RUN(div_panics_on_zero);
-    RUN(rem_panics_on_zero_and_only_on_zero);
-    RUN(rem32);
-    RUN(rem32_overflow);
-    RUN(rem64);
-    RUN(rem64_overflow);
-    RUN(div64_agrees_with_128_bit_division);
-    return harness_report(BITS_SUITE);
+    int code = testing_m_run(m);
+    return code;
 }
+
+TESTING_MAIN_WITH(TestMain, TESTS)

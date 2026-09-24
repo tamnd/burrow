@@ -2,11 +2,11 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
-#include "harness.h"
+#include "check.h"
 
 #include "burrow/burrow.h"
 
-TEST(str_literals_carry_their_own_length) {
+static void TestStrLiteralsCarryTheirOwnLength(TestingT *t) {
     Str empty = BURROW_S("");
     CHECK_INT_EQ(empty.len, 0);
     CHECK(str_is_empty(empty));
@@ -24,7 +24,7 @@ TEST(str_literals_carry_their_own_length) {
     CHECK(!str_has_nul(hello));
 }
 
-TEST(str_at_the_c_string_boundary) {
+static void TestStrAtTheCStringBoundary(TestingT *t) {
     Str s = str_from_cstr("hello");
     CHECK_INT_EQ(s.len, 5);
     CHECK(str_eq(s, BURROW_S("hello")));
@@ -40,7 +40,7 @@ TEST(str_at_the_c_string_boundary) {
     CHECK((const char *)b.p == src);
 }
 
-TEST(str_from_bytes_takes_anything) {
+static void TestStrFromBytesTakesAnything(TestingT *t) {
     Byte raw[4] = {0xDE, 0xAD, 0x00, 0xBE};
     Str s = str_from_bytes(raw, 4);
     CHECK_INT_EQ(s.len, 4);
@@ -52,7 +52,7 @@ TEST(str_from_bytes_takes_anything) {
     CHECK(str_is_empty(str_from_bytes(raw, -1)));
 }
 
-TEST(str_to_cstr_allocates_and_terminates) {
+static void TestStrToCstrAllocatesAndTerminates(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
@@ -83,7 +83,7 @@ TEST(str_to_cstr_allocates_and_terminates) {
     arena_free(&ar);
 }
 
-TEST(str_compares_by_byte) {
+static void TestStrComparesByByte(TestingT *t) {
     CHECK(str_eq(BURROW_S("abc"), BURROW_S("abc")));
     CHECK(!str_eq(BURROW_S("abc"), BURROW_S("abd")));
     CHECK(!str_eq(BURROW_S("abc"), BURROW_S("abcd")));
@@ -113,7 +113,7 @@ TEST(str_compares_by_byte) {
     CHECK(str_cmp(BURROW_S("A"), BURROW_S("a")) < 0);
 }
 
-TEST(str_clone_outlives_what_it_came_from) {
+static void TestStrCloneOutlivesWhatItCameFrom(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
@@ -137,7 +137,7 @@ TEST(str_clone_outlives_what_it_came_from) {
     arena_free(&ar);
 }
 
-TEST(str_prints_with_printf) {
+static void TestStrPrintsWithPrintf(TestingT *t) {
     /* Not a check of our code so much as a check that the macro pair is
      * spelled in a way that compiles under -Wformat=2, which is the thing that
      * will actually break. */
@@ -147,7 +147,7 @@ TEST(str_prints_with_printf) {
     CHECK_STR_EQ(out, "hi");
 }
 
-TEST(numbers_are_the_width_go_says) {
+static void TestNumbersAreTheWidthGoSays(TestingT *t) {
     /* Int follows the pointer, because Go's int does, and because the overflow
      * behaviour of a 32 bit int is visible in Go's own tests. */
     CHECK_INT_EQ(sizeof(Int), BURROW_PTR_BITS / 8);
@@ -169,7 +169,7 @@ TEST(numbers_are_the_width_go_says) {
     CHECK(z.re == 1.0 && z.im == -2.0);
 }
 
-TEST(the_platform_knows_what_it_is) {
+static void TestThePlatformKnowsWhatItIs(TestingT *t) {
     const char *os = burrow_os_name();
     const char *arch = burrow_arch_name();
     CHECK(os != NULL && os[0] != 0);
@@ -197,7 +197,7 @@ TEST(the_platform_knows_what_it_is) {
  * check is this test and it grows by a few lines every time a public type
  * arrives. */
 
-TEST(the_zero_value_of_every_type_is_the_useful_one) {
+static void TestTheZeroValueOfEveryTypeIsTheUsefulOne(TestingT *t) {
     /* A zeroed Str is the empty string, which is why nothing in the library
      * tests a Str pointer for NULL before reading its length. */
     Str s = BURROW_ZERO(Str);
@@ -260,7 +260,7 @@ static Int divide(Int a, Int b, bool *ok, Error *err) {
     return a / b;
 }
 
-TEST(an_out_parameter_may_be_null) {
+static void TestAnOutParameterMayBeNull(TestingT *t) {
     bool ok = false;
     Error err = BURROW_NO_ERROR;
 
@@ -284,17 +284,17 @@ TEST(an_out_parameter_may_be_null) {
     CHECK(BURROW_FAILED(err));
 }
 
-int main(void) {
-    RUN(str_literals_carry_their_own_length);
-    RUN(str_at_the_c_string_boundary);
-    RUN(str_from_bytes_takes_anything);
-    RUN(str_to_cstr_allocates_and_terminates);
-    RUN(str_compares_by_byte);
-    RUN(str_clone_outlives_what_it_came_from);
-    RUN(str_prints_with_printf);
-    RUN(numbers_are_the_width_go_says);
-    RUN(the_platform_knows_what_it_is);
-    RUN(the_zero_value_of_every_type_is_the_useful_one);
-    RUN(an_out_parameter_may_be_null);
-    return harness_report("core");
-}
+#define TESTS(X)                                                                       \
+    X(TestStrLiteralsCarryTheirOwnLength)                                              \
+    X(TestStrAtTheCStringBoundary)                                                     \
+    X(TestStrFromBytesTakesAnything)                                                   \
+    X(TestStrToCstrAllocatesAndTerminates)                                             \
+    X(TestStrComparesByByte)                                                           \
+    X(TestStrCloneOutlivesWhatItCameFrom)                                              \
+    X(TestStrPrintsWithPrintf)                                                         \
+    X(TestNumbersAreTheWidthGoSays)                                                    \
+    X(TestThePlatformKnowsWhatItIs)                                                    \
+    X(TestTheZeroValueOfEveryTypeIsTheUsefulOne)                                       \
+    X(TestAnOutParameterMayBeNull)
+
+TESTING_MAIN(TESTS)

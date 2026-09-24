@@ -7,8 +7,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 #include "burrow/error.h"
 #include "burrow/mem/arena.h"
@@ -410,7 +410,7 @@ static bool num_error_is(Error err, const char *func, Str in, Want want) {
     return str_eq(error_text(err), strconv_num_error_error(a, &expect));
 }
 
-TEST(parse_uint64) {
+static void TestParseUint64(TestingT *t) {
     for (Int i = 0; i < COUNT(parse_uint64_tests); i++) {
         const Uint64Case *tt = &parse_uint64_tests[i];
         Error err = BURROW_NO_ERROR;
@@ -420,7 +420,7 @@ TEST(parse_uint64) {
     }
 }
 
-TEST(parse_uint64_base) {
+static void TestParseUint64Base(TestingT *t) {
     for (Int i = 0; i < COUNT(parse_uint64_base_tests); i++) {
         const Uint64Case *tt = &parse_uint64_base_tests[i];
         Error err = BURROW_NO_ERROR;
@@ -430,7 +430,7 @@ TEST(parse_uint64_base) {
     }
 }
 
-TEST(parse_int64) {
+static void TestParseInt64(TestingT *t) {
     for (Int i = 0; i < COUNT(parse_int64_tests); i++) {
         const Int64Case *tt = &parse_int64_tests[i];
         Error err = BURROW_NO_ERROR;
@@ -440,7 +440,7 @@ TEST(parse_int64) {
     }
 }
 
-TEST(parse_int64_base) {
+static void TestParseInt64Base(TestingT *t) {
     for (Int i = 0; i < COUNT(parse_int64_base_tests); i++) {
         const Int64Case *tt = &parse_int64_base_tests[i];
         Error err = BURROW_NO_ERROR;
@@ -450,7 +450,7 @@ TEST(parse_int64_base) {
     }
 }
 
-TEST(parse_uint32) {
+static void TestParseUint32(TestingT *t) {
     for (Int i = 0; i < COUNT(parse_uint32_tests); i++) {
         const Uint64Case *tt = &parse_uint32_tests[i];
         Error err = BURROW_NO_ERROR;
@@ -460,7 +460,7 @@ TEST(parse_uint32) {
     }
 }
 
-TEST(parse_int32) {
+static void TestParseInt32(TestingT *t) {
     for (Int i = 0; i < COUNT(parse_int32_tests); i++) {
         const Int64Case *tt = &parse_int32_tests[i];
         Error err = BURROW_NO_ERROR;
@@ -472,7 +472,7 @@ TEST(parse_int32) {
 
 /* Bit size 0 is Int, so which table applies depends on the platform, the same
  * as Go's switch on IntSize. */
-TEST(parse_int_size) {
+static void TestParseIntSize(TestingT *t) {
     const Uint64Case *ut =
         STRCONV_INT_SIZE == 32 ? parse_uint32_tests : parse_uint64_tests;
     Int un =
@@ -501,7 +501,7 @@ TEST(parse_int_size) {
     }
 }
 
-TEST(atoi_without_an_error) {
+static void TestAtoiWithoutAnError(TestingT *t) {
     CHECK(strconv_atoi(S("-42"), NULL) == -42);
     CHECK(strconv_atoi(S("x"), NULL) == 0);
     CHECK(strconv_parse_int(S("99999999999999999999"), 10, 64, NULL) == INT64_MAX);
@@ -538,7 +538,7 @@ static bool arg_error_is(Error err, const char *func, const char *reason) {
            str_eq(error_text(ne->err), str_from_cstr(reason));
 }
 
-TEST(parse_bit_size) {
+static void TestParseBitSize(TestingT *t) {
     for (Int i = 0; i < COUNT(bit_size_tests); i++) {
         const ArgCase *tt = &bit_size_tests[i];
         Error err = BURROW_NO_ERROR;
@@ -550,7 +550,7 @@ TEST(parse_bit_size) {
     }
 }
 
-TEST(parse_base) {
+static void TestParseBase(TestingT *t) {
     for (Int i = 0; i < COUNT(base_tests); i++) {
         const ArgCase *tt = &base_tests[i];
         Error err = BURROW_NO_ERROR;
@@ -577,7 +577,7 @@ static Str with_abc(Str s) {
     return str_from_bytes(p, s.len + 3);
 }
 
-TEST(itoa) {
+static void TestItoa(TestingT *t) {
     for (Int i = 0; i < COUNT(itob64_tests); i++) {
         const FormatCase *tt = &itob64_tests[i];
         CHECK(str_eq(strconv_format_int(a, tt->in, tt->base), tt->out));
@@ -595,7 +595,7 @@ TEST(itoa) {
     }
 }
 
-TEST(uitoa) {
+static void TestUitoa(TestingT *t) {
     for (Int i = 0; i < COUNT(uitob64_tests); i++) {
         const UformatCase *tt = &uitob64_tests[i];
         CHECK(str_eq(strconv_format_uint(a, tt->in, tt->base), tt->out));
@@ -604,7 +604,7 @@ TEST(uitoa) {
     }
 }
 
-TEST(format_uint_varlen) {
+static void TestFormatUintVarlen(TestingT *t) {
     for (Int i = 0; i < COUNT(varlen_uints); i++)
         CHECK(str_eq(strconv_format_uint(a, varlen_uints[i].in, 10),
                      varlen_uints[i].out));
@@ -612,7 +612,7 @@ TEST(format_uint_varlen) {
 
 /* Every base and a spread of values, against a plain digit by digit loop. The
  * fast paths for 10 and the powers of two are the ones worth checking. */
-TEST(format_every_base) {
+static void TestFormatEveryBase(TestingT *t) {
     static const char dig[] = "0123456789abcdefghijklmnopqrstuvwxyz";
     uint64_t v = 1;
     for (Int n = 0; n < 2000; n++) {
@@ -636,14 +636,14 @@ TEST(format_every_base) {
     }
 }
 
-TEST(format_illegal_base) {
+static void TestFormatIllegalBase(TestingT *t) {
     CHECK_PANIC((void)strconv_format_uint(a, 12345678, 1),
                 "strconv: illegal AppendInt/FormatInt base");
     CHECK_PANIC((void)strconv_append_int(a, (Slice){0}, -1, 37),
                 "strconv: illegal AppendInt/FormatInt base");
 }
 
-TEST(parse_bool) {
+static void TestParseBool(TestingT *t) {
     for (Int i = 0; i < COUNT(atob_tests); i++) {
         const BoolCase *tt = &atob_tests[i];
         Error err = BURROW_NO_ERROR;
@@ -652,12 +652,12 @@ TEST(parse_bool) {
     }
 }
 
-TEST(format_bool) {
+static void TestFormatBool(TestingT *t) {
     CHECK(str_eq(strconv_format_bool(true), S("true")));
     CHECK(str_eq(strconv_format_bool(false), S("false")));
 }
 
-TEST(append_bool) {
+static void TestAppendBool(TestingT *t) {
     CHECK(appended(strconv_append_bool(a, slice_from_str(a, S("foo ")), true),
                    S("foo true")));
     CHECK(appended(strconv_append_bool(a, slice_from_str(a, S("foo ")), false),
@@ -678,7 +678,7 @@ static const NumErrorCase num_error_tests[] = {
     {SI("1\x00.2"), SI("strconv.ParseFloat: parsing \"1\\x00.2\": failed")},
 };
 
-TEST(num_error) {
+static void TestNumError(TestingT *t) {
     for (Int i = 0; i < COUNT(num_error_tests); i++) {
         const NumErrorCase *tt = &num_error_tests[i];
         StrconvNumError e = {S("ParseFloat"), tt->num, failed};
@@ -690,7 +690,7 @@ TEST(num_error) {
     }
 }
 
-TEST(num_error_unwrap) {
+static void TestNumErrorUnwrap(TestingT *t) {
     StrconvNumError e = {S("ParseInt"), S("x"), strconv_err_syntax};
     CHECK(errors_is(strconv_num_error_as_error(a, &e), strconv_err_syntax));
     CHECK(errors_is(strconv_num_error_unwrap(&e), strconv_err_syntax));
@@ -703,7 +703,7 @@ TEST(num_error_unwrap) {
 /* An error from a Parse function lives in the error arena. error_retain has to
  * give back one that is still a NumError after the arena lets go, including
  * the reason inside it when that was made in the arena too. */
-TEST(num_error_survives_retain) {
+static void TestNumErrorSurvivesRetain(TestingT *t) {
     ArenaMark m = error_mark();
     Error err = BURROW_NO_ERROR;
     (void)strconv_parse_int(S("12"), 99, 0, &err);
@@ -721,55 +721,58 @@ TEST(num_error_survives_retain) {
                  S("strconv.ParseInt: parsing \"12\": invalid base 99")));
 }
 
-TEST(results_own_exactly_their_length) {
+static void TestResultsOwnExactlyTheirLength(TestingT *t) {
     Track tr;
     track_init(&tr, heap_allocator());
-    Alloc *t = track_allocator(&tr);
+    Alloc *ta = track_allocator(&tr);
 
-    Str s = strconv_format_int(t, INT64_MIN, 2);
+    Str s = strconv_format_int(ta, INT64_MIN, 2);
     CHECK(s.len == 65);
-    mem_free(t, (void *)(Uintptr)s.p, (size_t)s.len, 1);
+    mem_free(ta, (void *)(Uintptr)s.p, (size_t)s.len, 1);
 
-    s = strconv_itoa(t, 7);
+    s = strconv_itoa(ta, 7);
     CHECK(str_eq(s, S("7")));
-    mem_free(t, (void *)(Uintptr)s.p, (size_t)s.len, 1);
+    mem_free(ta, (void *)(Uintptr)s.p, (size_t)s.len, 1);
 
     StrconvNumError e = {S("Atoi"), S("\xff"), strconv_err_syntax};
-    s = strconv_num_error_error(t, &e);
+    s = strconv_num_error_error(ta, &e);
     CHECK(str_eq(s, S("strconv.Atoi: parsing \"\\xff\": invalid syntax")));
-    mem_free(t, (void *)(Uintptr)s.p, (size_t)s.len, 1);
+    mem_free(ta, (void *)(Uintptr)s.p, (size_t)s.len, 1);
 
     CHECK(track_check(&tr) == 0);
     track_free(&tr);
 }
 
-int main(void) {
+#define TESTS(X)                                                                       \
+    X(TestParseUint64)                                                                 \
+    X(TestParseUint64Base)                                                             \
+    X(TestParseInt64)                                                                  \
+    X(TestParseInt64Base)                                                              \
+    X(TestParseUint32)                                                                 \
+    X(TestParseInt32)                                                                  \
+    X(TestParseIntSize)                                                                \
+    X(TestAtoiWithoutAnError)                                                          \
+    X(TestParseBitSize)                                                                \
+    X(TestParseBase)                                                                   \
+    X(TestItoa)                                                                        \
+    X(TestUitoa)                                                                       \
+    X(TestFormatUintVarlen)                                                            \
+    X(TestFormatEveryBase)                                                             \
+    X(TestFormatIllegalBase)                                                           \
+    X(TestParseBool)                                                                   \
+    X(TestFormatBool)                                                                  \
+    X(TestAppendBool)                                                                  \
+    X(TestNumError)                                                                    \
+    X(TestNumErrorUnwrap)                                                              \
+    X(TestNumErrorSurvivesRetain)                                                      \
+    X(TestResultsOwnExactlyTheirLength)
+
+static int TestMain(TestingM *m) {
     arena_init(&ar, NULL, 0);
     a = arena_allocator(&ar);
-
-    RUN(parse_uint64);
-    RUN(parse_uint64_base);
-    RUN(parse_int64);
-    RUN(parse_int64_base);
-    RUN(parse_uint32);
-    RUN(parse_int32);
-    RUN(parse_int_size);
-    RUN(atoi_without_an_error);
-    RUN(parse_bit_size);
-    RUN(parse_base);
-    RUN(itoa);
-    RUN(uitoa);
-    RUN(format_uint_varlen);
-    RUN(format_every_base);
-    RUN(format_illegal_base);
-    RUN(parse_bool);
-    RUN(format_bool);
-    RUN(append_bool);
-    RUN(num_error);
-    RUN(num_error_unwrap);
-    RUN(num_error_survives_retain);
-    RUN(results_own_exactly_their_length);
-
+    int code = testing_m_run(m);
     arena_free(&ar);
-    return harness_report("strconv number");
+    return code;
 }
+
+TESTING_MAIN_WITH(TestMain, TESTS)

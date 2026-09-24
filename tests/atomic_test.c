@@ -21,7 +21,7 @@
 
 #include "burrow/atomic.h"
 
-#include "harness.h"
+#include "check.h"
 
 #ifndef ATOMIC_SUITE
 #define ATOMIC_SUITE "atomic"
@@ -32,12 +32,12 @@
 #define U32_ODD 0x8f1e2d3cu
 #define U64_ODD UINT64_C(0x8f1e2d3c4b5a6978)
 
-TEST(exactly_one_backend_is_selected) {
+static void TestExactlyOneBackendIsSelected(TestingT *t) {
     int n = BURROW__ATOMIC_BUILTIN + BURROW__ATOMIC_MSVC + BURROW__ATOMIC_C11;
     CHECK_INT_EQ(n, 1);
 }
 
-TEST(u32_round_trips_through_every_order) {
+static void TestU32RoundTripsThroughEveryOrder(TestingT *t) {
     uint32_t x = 0;
 
     burrow__atomic_store_relaxed_u32(&x, U32_ODD);
@@ -52,7 +52,7 @@ TEST(u32_round_trips_through_every_order) {
     CHECK_INT_EQ(burrow__atomic_load_relaxed_u32(&x), 1u);
 }
 
-TEST(u32_read_modify_write_returns_the_old_value) {
+static void TestU32ReadModifyWriteReturnsTheOldValue(TestingT *t) {
     uint32_t x = 100;
 
     CHECK_INT_EQ(burrow__atomic_add_u32(&x, 5u), 100u);
@@ -75,13 +75,13 @@ TEST(u32_read_modify_write_returns_the_old_value) {
     CHECK_INT_EQ(x, U32_ODD);
 }
 
-TEST(u32_add_wraps_where_the_type_wraps) {
+static void TestU32AddWrapsWhereTheTypeWraps(TestingT *t) {
     uint32_t x = 0xffffffffu;
     CHECK_INT_EQ(burrow__atomic_add_u32(&x, 1u), 0xffffffffu);
     CHECK_INT_EQ(x, 0u);
 }
 
-TEST(u32_cas_reports_what_it_actually_saw) {
+static void TestU32CasReportsWhatItActuallySaw(TestingT *t) {
     uint32_t x = U32_ODD;
     uint32_t expected = U32_ODD;
 
@@ -107,7 +107,7 @@ TEST(u32_cas_reports_what_it_actually_saw) {
     CHECK_INT_EQ(expected, 44u);
 }
 
-TEST(u32_cas_weak_converges_in_a_loop) {
+static void TestU32CasWeakConvergesInALoop(TestingT *t) {
     uint32_t x = 10;
     uint32_t seen = burrow__atomic_load_relaxed_u32(&x);
 
@@ -123,7 +123,7 @@ TEST(u32_cas_weak_converges_in_a_loop) {
     CHECK_INT_EQ(x, 20u);
 }
 
-TEST(u64_round_trips_through_every_order) {
+static void TestU64RoundTripsThroughEveryOrder(TestingT *t) {
     uint64_t x = 0;
 
     burrow__atomic_store_relaxed_u64(&x, U64_ODD);
@@ -140,7 +140,7 @@ TEST(u64_round_trips_through_every_order) {
     CHECK(burrow__atomic_load_relaxed_u64(&x) == UINT64_C(1) << 63);
 }
 
-TEST(u64_read_modify_write_returns_the_old_value) {
+static void TestU64ReadModifyWriteReturnsTheOldValue(TestingT *t) {
     uint64_t x = UINT64_C(1) << 40;
 
     CHECK(burrow__atomic_add_u64(&x, UINT64_C(1) << 40) == UINT64_C(1) << 40);
@@ -159,7 +159,7 @@ TEST(u64_read_modify_write_returns_the_old_value) {
     CHECK(x == U64_ODD);
 }
 
-TEST(u64_cas_reports_what_it_actually_saw) {
+static void TestU64CasReportsWhatItActuallySaw(TestingT *t) {
     uint64_t x = U64_ODD;
     uint64_t expected = U64_ODD;
 
@@ -185,7 +185,7 @@ TEST(u64_cas_reports_what_it_actually_saw) {
 /* The table hashes on the address, so two counters in the same array are the
  * interesting case: either they collide in a slot, which has to still be
  * correct, or they do not, which also has to be correct. */
-TEST(u64_counters_side_by_side_do_not_interfere) {
+static void TestU64CountersSideBySideDoNotInterfere(TestingT *t) {
     uint64_t c[8];
     for (int i = 0; i < 8; i++)
         c[i] = 0;
@@ -196,7 +196,7 @@ TEST(u64_counters_side_by_side_do_not_interfere) {
         CHECK(c[i] == (uint64_t)(i + 1) * 100);
 }
 
-TEST(uptr_round_trips_and_counts) {
+static void TestUptrRoundTripsAndCounts(TestingT *t) {
     uintptr_t x = 0;
     uintptr_t odd = (uintptr_t)~(uintptr_t)0 ^ (uintptr_t)0x5a5a;
 
@@ -220,7 +220,7 @@ TEST(uptr_round_trips_and_counts) {
     CHECK(expected == 0);
 }
 
-TEST(ptr_round_trips) {
+static void TestPtrRoundTrips(TestingT *t) {
     int a = 1, b = 2;
     void *p = NULL;
 
@@ -239,7 +239,7 @@ TEST(ptr_round_trips) {
     CHECK(p == &a);
 }
 
-TEST(ptr_cas_reports_what_it_actually_saw) {
+static void TestPtrCasReportsWhatItActuallySaw(TestingT *t) {
     int a = 1, b = 2;
     void *p = &a;
     void *expected = &a;
@@ -275,7 +275,7 @@ TEST(ptr_cas_reports_what_it_actually_saw) {
  * lower bar than the rest of this file and it is still worth having, because
  * the MSVC fence is hand written and the failure mode is a build error on a
  * machine none of us has in front of us. */
-TEST(the_fences_and_the_spin_hint_are_callable) {
+static void TestTheFencesAndTheSpinHintAreCallable(TestingT *t) {
     uint32_t x = 0;
     burrow__atomic_store_relaxed_u32(&x, 1);
     burrow__atomic_fence_release();
@@ -288,7 +288,7 @@ TEST(the_fences_and_the_spin_hint_are_callable) {
 /* Reached through the header's own inline wrappers above on a 32 bit machine or
  * under the forced build, and called directly here so that the entry points
  * themselves are exercised everywhere. */
-TEST(the_lock_table_is_a_correct_implementation_on_its_own) {
+static void TestTheLockTableIsACorrectImplementationOnItsOwn(TestingT *t) {
     uint64_t x = 0;
 
     burrow__atomic64_store(&x, U64_ODD);
@@ -308,21 +308,21 @@ TEST(the_lock_table_is_a_correct_implementation_on_its_own) {
     CHECK(expected == 6);
 }
 
-int main(void) {
-    RUN(exactly_one_backend_is_selected);
-    RUN(u32_round_trips_through_every_order);
-    RUN(u32_read_modify_write_returns_the_old_value);
-    RUN(u32_add_wraps_where_the_type_wraps);
-    RUN(u32_cas_reports_what_it_actually_saw);
-    RUN(u32_cas_weak_converges_in_a_loop);
-    RUN(u64_round_trips_through_every_order);
-    RUN(u64_read_modify_write_returns_the_old_value);
-    RUN(u64_cas_reports_what_it_actually_saw);
-    RUN(u64_counters_side_by_side_do_not_interfere);
-    RUN(uptr_round_trips_and_counts);
-    RUN(ptr_round_trips);
-    RUN(ptr_cas_reports_what_it_actually_saw);
-    RUN(the_fences_and_the_spin_hint_are_callable);
-    RUN(the_lock_table_is_a_correct_implementation_on_its_own);
-    return harness_report(ATOMIC_SUITE);
-}
+#define TESTS(X)                                                                       \
+    X(TestExactlyOneBackendIsSelected)                                                 \
+    X(TestU32RoundTripsThroughEveryOrder)                                              \
+    X(TestU32ReadModifyWriteReturnsTheOldValue)                                        \
+    X(TestU32AddWrapsWhereTheTypeWraps)                                                \
+    X(TestU32CasReportsWhatItActuallySaw)                                              \
+    X(TestU32CasWeakConvergesInALoop)                                                  \
+    X(TestU64RoundTripsThroughEveryOrder)                                              \
+    X(TestU64ReadModifyWriteReturnsTheOldValue)                                        \
+    X(TestU64CasReportsWhatItActuallySaw)                                              \
+    X(TestU64CountersSideBySideDoNotInterfere)                                         \
+    X(TestUptrRoundTripsAndCounts)                                                     \
+    X(TestPtrRoundTrips)                                                               \
+    X(TestPtrCasReportsWhatItActuallySaw)                                              \
+    X(TestTheFencesAndTheSpinHintAreCallable)                                          \
+    X(TestTheLockTableIsACorrectImplementationOnItsOwn)
+
+TESTING_MAIN(TESTS)

@@ -10,7 +10,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 static Arena ar;
 static Alloc *a;
@@ -232,7 +232,7 @@ static Str src_text(void) {
 
 /* ----------------------------------------------------------- read_full */
 
-TEST(read_full_fills_the_buffer_however_small_the_reads_are) {
+static void TestReadFullFillsTheBufferHoweverSmallTheReadsAre(TestingT *t) {
     Chunks c = {{NULL, 0}, 0, 3, false, BURROW_NO_ERROR, 0};
     Byte got[19];
     Slice buf = slice_from(got, (Int)sizeof got, (Int)sizeof got, TYPE_BYTE);
@@ -249,7 +249,7 @@ TEST(read_full_fills_the_buffer_however_small_the_reads_are) {
     CHECK(c.reads > 1);
 }
 
-TEST(read_full_of_an_empty_input_is_the_end_and_not_a_failure) {
+static void TestReadFullOfAnEmptyInputIsTheEndAndNotAFailure(TestingT *t) {
     Chunks c = {{(const Byte *)"", 0}, 0, 8, false, BURROW_NO_ERROR, 0};
     Byte got[4];
     Slice buf = slice_from(got, (Int)sizeof got, (Int)sizeof got, TYPE_BYTE);
@@ -260,7 +260,7 @@ TEST(read_full_of_an_empty_input_is_the_end_and_not_a_failure) {
     CHECK(errors_is(err, io_eof));
 }
 
-TEST(read_full_of_a_truncated_input_says_unexpected) {
+static void TestReadFullOfATruncatedInputSaysUnexpected(TestingT *t) {
     /* The distinction the function exists for. Nothing at all means there was
      * no next record, and half of one means the file is cut short. */
     Chunks c = {{(const Byte *)"abc", 3}, 0, 8, false, BURROW_NO_ERROR, 0};
@@ -274,7 +274,7 @@ TEST(read_full_of_a_truncated_input_says_unexpected) {
     CHECK(!errors_is(err, io_eof));
 }
 
-TEST(read_full_succeeds_when_the_end_arrives_with_the_last_bytes) {
+static void TestReadFullSucceedsWhenTheEndArrivesWithTheLastBytes(TestingT *t) {
     /* A reader is allowed to report the end in the same call that hands over
      * the last of the data, and that has to be a success. */
     Chunks c = {{(const Byte *)"abcd", 4}, 0, 8, true, BURROW_NO_ERROR, 0};
@@ -288,7 +288,7 @@ TEST(read_full_succeeds_when_the_end_arrives_with_the_last_bytes) {
     CHECK_INT_EQ(c.reads, 1);
 }
 
-TEST(read_full_passes_a_real_error_through) {
+static void TestReadFullPassesARealErrorThrough(TestingT *t) {
     Chunks c = {{(const Byte *)"ab", 2}, 0, 8, false, errors_err_unsupported, 0};
     Byte got[8];
     Slice buf = slice_from(got, (Int)sizeof got, (Int)sizeof got, TYPE_BYTE);
@@ -299,7 +299,7 @@ TEST(read_full_passes_a_real_error_through) {
     CHECK(errors_is(err, errors_err_unsupported));
 }
 
-TEST(read_full_takes_null_for_the_error) {
+static void TestReadFullTakesNullForTheError(TestingT *t) {
     Chunks c = {{(const Byte *)"abcd", 4}, 0, 8, false, BURROW_NO_ERROR, 0};
     Byte got[4];
     Slice buf = slice_from(got, (Int)sizeof got, (Int)sizeof got, TYPE_BYTE);
@@ -309,7 +309,7 @@ TEST(read_full_takes_null_for_the_error) {
 
 /* --------------------------------------------------------- read_at_least */
 
-TEST(read_at_least_stops_once_it_has_the_minimum) {
+static void TestReadAtLeastStopsOnceItHasTheMinimum(TestingT *t) {
     Chunks c = {{NULL, 0}, 0, 4, false, BURROW_NO_ERROR, 0};
     Byte got[19];
     Slice buf = slice_from(got, (Int)sizeof got, (Int)sizeof got, TYPE_BYTE);
@@ -327,7 +327,7 @@ TEST(read_at_least_stops_once_it_has_the_minimum) {
     CHECK(n <= 8);
 }
 
-TEST(read_at_least_of_more_than_the_buffer_holds_is_a_short_buffer) {
+static void TestReadAtLeastOfMoreThanTheBufferHoldsIsAShortBuffer(TestingT *t) {
     Chunks c = {{NULL, 0}, 0, 8, false, BURROW_NO_ERROR, 0};
     Byte got[4];
     Slice buf = slice_from(got, (Int)sizeof got, (Int)sizeof got, TYPE_BYTE);
@@ -343,7 +343,7 @@ TEST(read_at_least_of_more_than_the_buffer_holds_is_a_short_buffer) {
     CHECK_INT_EQ(c.reads, 0);
 }
 
-TEST(read_at_least_of_nothing_reads_nothing) {
+static void TestReadAtLeastOfNothingReadsNothing(TestingT *t) {
     Chunks c = {{NULL, 0}, 0, 8, false, BURROW_NO_ERROR, 0};
     Byte got[4];
     Slice buf = slice_from(got, (Int)sizeof got, (Int)sizeof got, TYPE_BYTE);
@@ -360,7 +360,7 @@ TEST(read_at_least_of_nothing_reads_nothing) {
 
 /* ---------------------------------------------------------------- copy */
 
-TEST(copy_moves_everything_and_counts_it) {
+static void TestCopyMovesEverythingAndCountsIt(TestingT *t) {
     Chunks c = {{NULL, 0}, 0, 5, false, BURROW_NO_ERROR, 0};
     Sink s = {{0}, 0, 0, 0, BURROW_NO_ERROR, 0};
     Error err = BURROW_NO_ERROR;
@@ -374,7 +374,7 @@ TEST(copy_moves_everything_and_counts_it) {
     CHECK(sink_holds(&s, "the quick brown fox"));
 }
 
-TEST(copy_of_an_empty_source_is_a_success_that_copies_nothing) {
+static void TestCopyOfAnEmptySourceIsASuccessThatCopiesNothing(TestingT *t) {
     Chunks c = {{(const Byte *)"", 0}, 0, 8, false, BURROW_NO_ERROR, 0};
     Sink s = {{0}, 0, 0, 0, BURROW_NO_ERROR, 0};
     Error err = BURROW_NO_ERROR;
@@ -388,7 +388,7 @@ TEST(copy_of_an_empty_source_is_a_success_that_copies_nothing) {
     CHECK_INT_EQ(s.writes, 0);
 }
 
-TEST(copy_does_not_report_the_end_of_the_input_as_an_error) {
+static void TestCopyDoesNotReportTheEndOfTheInputAsAnError(TestingT *t) {
     /* The one rule that makes io.Copy usable: the end is where it stops, not
      * something that went wrong. Both shapes of reader, to be sure. */
     Chunks together = {{(const Byte *)"abc", 3}, 0, 8, true, BURROW_NO_ERROR, 0};
@@ -407,7 +407,7 @@ TEST(copy_does_not_report_the_end_of_the_input_as_an_error) {
     CHECK(sink_holds(&s2, "abc"));
 }
 
-TEST(copy_treats_a_wrapped_end_as_the_failure_it_is) {
+static void TestCopyTreatsAWrappedEndAsTheFailureItIs(TestingT *t) {
     /* Go compares against EOF with == here and this does the same. A reader
      * that wraps the end has taken the one value meaning nothing went wrong and
      * dressed it up as something that did, and believing it would turn a
@@ -425,7 +425,7 @@ TEST(copy_treats_a_wrapped_end_as_the_failure_it_is) {
     CHECK(errors_is(err, io_eof));
 }
 
-TEST(copy_stops_at_a_read_error_and_keeps_what_it_already_wrote) {
+static void TestCopyStopsAtAReadErrorAndKeepsWhatItAlreadyWrote(TestingT *t) {
     Chunks c = {{(const Byte *)"abcdef", 6}, 0, 3, false, errors_err_unsupported, 0};
     Sink s = {{0}, 0, 0, 0, BURROW_NO_ERROR, 0};
     Error err = BURROW_NO_ERROR;
@@ -436,7 +436,7 @@ TEST(copy_stops_at_a_read_error_and_keeps_what_it_already_wrote) {
     CHECK(sink_holds(&s, "abcdef"));
 }
 
-TEST(copy_stops_at_a_write_error) {
+static void TestCopyStopsAtAWriteError(TestingT *t) {
     Chunks c = {{NULL, 0}, 0, 4, false, BURROW_NO_ERROR, 0};
     Sink s = {{0}, 0, 0, 0, errors_err_unsupported, 0};
     Error err = BURROW_NO_ERROR;
@@ -450,7 +450,7 @@ TEST(copy_stops_at_a_write_error) {
     CHECK_INT_EQ(s.writes, 1);
 }
 
-TEST(copy_catches_a_writer_that_writes_less_than_it_was_given) {
+static void TestCopyCatchesAWriterThatWritesLessThanItWasGiven(TestingT *t) {
     Chunks c = {{(const Byte *)"abcdef", 6}, 0, 6, false, BURROW_NO_ERROR, 0};
     Sink s = {{0}, 0, 2, 0, BURROW_NO_ERROR, 0}; /* two bytes a call, no error */
     Error err = BURROW_NO_ERROR;
@@ -461,7 +461,7 @@ TEST(copy_catches_a_writer_that_writes_less_than_it_was_given) {
     CHECK(sink_holds(&s, "ab"));
 }
 
-TEST(copy_catches_a_writer_that_claims_more_than_it_was_given) {
+static void TestCopyCatchesAWriterThatClaimsMoreThanItWasGiven(TestingT *t) {
     /* A Writer that has lost count. Believing the number would mean reporting a
      * copy longer than the input, so the count is thrown away and the message
      * says whose fault it is. */
@@ -475,7 +475,7 @@ TEST(copy_catches_a_writer_that_claims_more_than_it_was_given) {
     CHECK(str_eq(error_text(err), str_from_cstr("invalid write result")));
 }
 
-TEST(copy_through_a_buffer_uses_the_buffer_it_was_given) {
+static void TestCopyThroughABufferUsesTheBufferItWasGiven(TestingT *t) {
     Chunks c = {{NULL, 0}, 0, 64, false, BURROW_NO_ERROR, 0};
     Sink s = {{0}, 0, 0, 0, BURROW_NO_ERROR, 0};
     Byte small[4];
@@ -494,7 +494,7 @@ TEST(copy_through_a_buffer_uses_the_buffer_it_was_given) {
     CHECK_INT_EQ(s.writes, 5);
 }
 
-TEST(copy_through_an_empty_buffer_is_a_short_buffer_and_not_a_hang) {
+static void TestCopyThroughAnEmptyBufferIsAShortBufferAndNotAHang(TestingT *t) {
     Chunks c = {{NULL, 0}, 0, 8, false, BURROW_NO_ERROR, 0};
     Sink s = {{0}, 0, 0, 0, BURROW_NO_ERROR, 0};
     Slice empty = slice_nil(TYPE_BYTE);
@@ -509,7 +509,7 @@ TEST(copy_through_an_empty_buffer_is_a_short_buffer_and_not_a_hang) {
     CHECK_INT_EQ(c.reads, 0);
 }
 
-TEST(copy_reports_an_allocator_that_cannot_give_it_a_buffer) {
+static void TestCopyReportsAnAllocatorThatCannotGiveItABuffer(TestingT *t) {
     Chunks c = {{NULL, 0}, 0, 8, false, BURROW_NO_ERROR, 0};
     Sink s = {{0}, 0, 0, 0, BURROW_NO_ERROR, 0};
     Fixed fx;
@@ -528,7 +528,7 @@ TEST(copy_reports_an_allocator_that_cannot_give_it_a_buffer) {
     CHECK_INT_EQ(c.reads, 0);
 }
 
-TEST(copy_gives_the_buffer_back_when_it_is_done) {
+static void TestCopyGivesTheBufferBackWhenItIsDone(TestingT *t) {
     /* Twice through an arena that can hold one buffer and not two. The second
      * copy proves the first one freed what it borrowed. */
     Chunks c1 = {{(const Byte *)"abc", 3}, 0, 8, false, BURROW_NO_ERROR, 0};
@@ -553,7 +553,7 @@ TEST(copy_gives_the_buffer_back_when_it_is_done) {
 
 /* ---------------------------------------------------------- the conversions */
 
-TEST(a_read_writer_narrows_to_a_reader_and_to_a_writer) {
+static void TestAReadWriterNarrowsToAReaderAndToAWriter(TestingT *t) {
     Pipe p;
     IoReadWriter rw;
     IoReader r;
@@ -584,7 +584,7 @@ TEST(a_read_writer_narrows_to_a_reader_and_to_a_writer) {
     CHECK(sink_holds(&p.out, "abc"));
 }
 
-TEST(narrowing_a_nil_value_gives_a_nil_value) {
+static void TestNarrowingANilValueGivesANilValue(TestingT *t) {
     IoReadWriter rw = {NULL, NULL};
     IoReadCloser rc = {NULL, NULL};
     IoWriteCloser wc = {NULL, NULL};
@@ -601,7 +601,7 @@ TEST(narrowing_a_nil_value_gives_a_nil_value) {
     CHECK(BURROW_IFACE_IS_NIL(io_read_write_closer_as_io_closer(rwc)));
 }
 
-TEST(a_reader_keeps_its_type_through_an_interface) {
+static void TestAReaderKeepsItsTypeThroughAnInterface(TestingT *t) {
     Chunks c = {{(const Byte *)"abc", 3}, 0, 8, false, BURROW_NO_ERROR, 0};
     IoReader r = chunks_as_io_reader(&c);
 
@@ -612,7 +612,7 @@ TEST(a_reader_keeps_its_type_through_an_interface) {
 
 /* ---------------------------------------------------------------- sentinels */
 
-TEST(the_sentinels_carry_gos_messages) {
+static void TestTheSentinelsCarryGosMessages(TestingT *t) {
     CHECK(str_eq(error_text(io_eof), str_from_cstr("EOF")));
     CHECK(str_eq(error_text(io_err_unexpected_eof), str_from_cstr("unexpected EOF")));
     CHECK(str_eq(error_text(io_err_short_write), str_from_cstr("short write")));
@@ -621,40 +621,45 @@ TEST(the_sentinels_carry_gos_messages) {
                  str_from_cstr("multiple Read calls return no data or error")));
 }
 
-TEST(the_sentinels_are_distinct_from_each_other) {
+static void TestTheSentinelsAreDistinctFromEachOther(TestingT *t) {
     CHECK(!errors_is(io_eof, io_err_unexpected_eof));
     CHECK(!errors_is(io_err_short_write, io_err_short_buffer));
     CHECK(errors_is(io_eof, io_eof));
 }
 
-int main(void) {
+#define TESTS(X)                                                                       \
+    X(TestReadFullFillsTheBufferHoweverSmallTheReadsAre)                               \
+    X(TestReadFullOfAnEmptyInputIsTheEndAndNotAFailure)                                \
+    X(TestReadFullOfATruncatedInputSaysUnexpected)                                     \
+    X(TestReadFullSucceedsWhenTheEndArrivesWithTheLastBytes)                           \
+    X(TestReadFullPassesARealErrorThrough)                                             \
+    X(TestReadFullTakesNullForTheError)                                                \
+    X(TestReadAtLeastStopsOnceItHasTheMinimum)                                         \
+    X(TestReadAtLeastOfMoreThanTheBufferHoldsIsAShortBuffer)                           \
+    X(TestReadAtLeastOfNothingReadsNothing)                                            \
+    X(TestCopyMovesEverythingAndCountsIt)                                              \
+    X(TestCopyOfAnEmptySourceIsASuccessThatCopiesNothing)                              \
+    X(TestCopyDoesNotReportTheEndOfTheInputAsAnError)                                  \
+    X(TestCopyTreatsAWrappedEndAsTheFailureItIs)                                       \
+    X(TestCopyStopsAtAReadErrorAndKeepsWhatItAlreadyWrote)                             \
+    X(TestCopyStopsAtAWriteError)                                                      \
+    X(TestCopyCatchesAWriterThatWritesLessThanItWasGiven)                              \
+    X(TestCopyCatchesAWriterThatClaimsMoreThanItWasGiven)                              \
+    X(TestCopyThroughABufferUsesTheBufferItWasGiven)                                   \
+    X(TestCopyThroughAnEmptyBufferIsAShortBufferAndNotAHang)                           \
+    X(TestCopyReportsAnAllocatorThatCannotGiveItABuffer)                               \
+    X(TestCopyGivesTheBufferBackWhenItIsDone)                                          \
+    X(TestAReadWriterNarrowsToAReaderAndToAWriter)                                     \
+    X(TestNarrowingANilValueGivesANilValue)                                            \
+    X(TestAReaderKeepsItsTypeThroughAnInterface)                                       \
+    X(TestTheSentinelsCarryGosMessages)                                                \
+    X(TestTheSentinelsAreDistinctFromEachOther)
+
+static int TestMain(TestingM *m) {
     setup();
-    RUN(read_full_fills_the_buffer_however_small_the_reads_are);
-    RUN(read_full_of_an_empty_input_is_the_end_and_not_a_failure);
-    RUN(read_full_of_a_truncated_input_says_unexpected);
-    RUN(read_full_succeeds_when_the_end_arrives_with_the_last_bytes);
-    RUN(read_full_passes_a_real_error_through);
-    RUN(read_full_takes_null_for_the_error);
-    RUN(read_at_least_stops_once_it_has_the_minimum);
-    RUN(read_at_least_of_more_than_the_buffer_holds_is_a_short_buffer);
-    RUN(read_at_least_of_nothing_reads_nothing);
-    RUN(copy_moves_everything_and_counts_it);
-    RUN(copy_of_an_empty_source_is_a_success_that_copies_nothing);
-    RUN(copy_does_not_report_the_end_of_the_input_as_an_error);
-    RUN(copy_treats_a_wrapped_end_as_the_failure_it_is);
-    RUN(copy_stops_at_a_read_error_and_keeps_what_it_already_wrote);
-    RUN(copy_stops_at_a_write_error);
-    RUN(copy_catches_a_writer_that_writes_less_than_it_was_given);
-    RUN(copy_catches_a_writer_that_claims_more_than_it_was_given);
-    RUN(copy_through_a_buffer_uses_the_buffer_it_was_given);
-    RUN(copy_through_an_empty_buffer_is_a_short_buffer_and_not_a_hang);
-    RUN(copy_reports_an_allocator_that_cannot_give_it_a_buffer);
-    RUN(copy_gives_the_buffer_back_when_it_is_done);
-    RUN(a_read_writer_narrows_to_a_reader_and_to_a_writer);
-    RUN(narrowing_a_nil_value_gives_a_nil_value);
-    RUN(a_reader_keeps_its_type_through_an_interface);
-    RUN(the_sentinels_carry_gos_messages);
-    RUN(the_sentinels_are_distinct_from_each_other);
+    int code = testing_m_run(m);
     teardown();
-    return harness_report("io");
+    return code;
 }
+
+TESTING_MAIN_WITH(TestMain, TESTS)

@@ -21,7 +21,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -117,7 +117,7 @@ static Int one_byte_read(void *self, Slice p, Error *err) {
     return 1;
 }
 
-/* A Str as a C string for the harness, in a buffer that lasts until the next
+/* A Str as a C string for CHECK_STR_EQ, in a buffer that lasts until the next
  * call. */
 static const char *cs(Str s) {
     static char buf[4][256];
@@ -281,18 +281,6 @@ static Str show(const ScanTarget *t, ScanValue *v) {
     }
 }
 
-static void print_quoted(const char *label, Str s) {
-    fprintf(stderr, " %s \"", label);
-    for (Int i = 0; i < s.len; i++) {
-        Byte c = s.p[i];
-        if (c >= 0x20 && c < 0x7f && c != '"' && c != '\\')
-            fputc(c, stderr);
-        else
-            fprintf(stderr, "\\x%02x", c);
-    }
-    fputc('"', stderr);
-}
-
 static const char *mode_name(ScanMode m) {
     switch (m) {
     case SM_SCAN:
@@ -308,16 +296,16 @@ static const char *mode_name(ScanMode m) {
 
 enum { MAXOPS = 4 };
 
-static void run_case(size_t k, const ScanCase *c, bool reader) {
+static void run_case(TestingT *t, size_t k, const ScanCase *c, bool reader) {
     ScanValue vals[MAXOPS];
     Type renamed[MAXOPS];
     Any args[MAXOPS];
     memset(vals, 0, sizeof vals);
     CHECK(c->n <= MAXOPS);
     for (int i = 0; i < c->n && i < MAXOPS; i++) {
-        const ScanTarget *t = &scan_targets[c->first + i];
-        const Type *ty = kind_type(t->kind);
-        if (t->renamed) {
+        const ScanTarget *st = &scan_targets[c->first + i];
+        const Type *ty = kind_type(st->kind);
+        if (st->renamed) {
             renamed[i] = *ty;
             ty = &renamed[i];
         }
@@ -348,35 +336,27 @@ static void run_case(size_t k, const ScanCase *c, bool reader) {
         got[i] = show(&scan_targets[c->first + i], &vals[i]);
         ok = ok && str_eq(got[i], scan_targets[c->first + i].want);
     }
-    harness_checks++;
     if (ok)
         return;
-    harness_failures++;
-    fprintf(stderr, "case %zu %s%s:", k, mode_name(c->mode), reader ? " (reader)" : "");
-    print_quoted("format", c->format);
-    print_quoted("text", c->text);
-    fprintf(stderr, "\n    n %lld want %lld", (long long)n, (long long)c->count);
-    print_quoted("err", etext);
-    print_quoted("want", c->err);
-    fputc('\n', stderr);
-    for (int i = 0; i < c->n && i < MAXOPS; i++) {
-        fprintf(stderr, "   ");
-        print_quoted("got", got[i]);
-        print_quoted("want", scan_targets[c->first + i].want);
-        fputc('\n', stderr);
-    }
+    testing_t_errorf_v(t,
+                       "case %d %s%s: format %q, text %q: n %d want %d, err %q want %q",
+                       (Int)k, mode_name(c->mode), reader ? " (reader)" : "", c->format,
+                       c->text, n, c->count, etext, c->err);
+    for (int i = 0; i < c->n && i < MAXOPS; i++)
+        testing_t_logf_v(t, "    got %q want %q", got[i],
+                         scan_targets[c->first + i].want);
 }
 
-TEST(go_scan_tests) {
+static void TestGoScanTests(TestingT *t) {
     for (size_t k = 0; k < sizeof scan_cases / sizeof scan_cases[0]; k++) {
-        run_case(k, &scan_cases[k], false);
-        run_case(k, &scan_cases[k], true);
+        run_case(t, k, &scan_cases[k], false);
+        run_case(t, k, &scan_cases[k], true);
     }
 }
 
 /* ------------------------------------------------------- by hand */
 
-TEST(nan_and_inf) {
+static void TestNanAndInf(TestingT *t) {
     static const char *const nans[] = {"nan", "NAN", "NaN"};
     for (size_t i = 0; i < sizeof nans / sizeof nans[0]; i++) {
         float f32 = 0;
@@ -405,7 +385,7 @@ TEST(nan_and_inf) {
     }
 }
 
-TEST(variadic_macros) {
+static void TestVariadicMacros(TestingT *t) {
     Int i = 0;
     Str s = {0};
     double f = 0;
@@ -441,7 +421,7 @@ TEST(variadic_macros) {
     CHECK_INT_EQ(q, 42);
 }
 
-TEST(errors) {
+static void TestErrors(TestingT *t) {
     Int i = 0;
     Error err = BURROW_NO_ERROR;
     Any nil[] = {{NULL, NULL}};
@@ -460,7 +440,7 @@ TEST(errors) {
 }
 
 /* An input longer than any buffer the scanner starts with. */
-TEST(long_tokens) {
+static void TestLongTokens(TestingT *t) {
     enum { N = 10000 };
     static char text[N + 1];
     memset(text, 'z', N);
@@ -471,13 +451,18 @@ TEST(long_tokens) {
     CHECK(s.len == N && s.p[N - 1] == 'z');
 }
 
-int main(void) {
+#define TESTS(X)                                                                       \
+    X(TestGoScanTests)                                                                 \
+    X(TestNanAndInf)                                                                   \
+    X(TestVariadicMacros)                                                              \
+    X(TestErrors)                                                                      \
+    X(TestLongTokens)
+
+static int TestMain(TestingM *m) {
     setup();
-    RUN(go_scan_tests);
-    RUN(nan_and_inf);
-    RUN(variadic_macros);
-    RUN(errors);
-    RUN(long_tokens);
+    int code = testing_m_run(m);
     teardown();
-    return harness_report("scan");
+    return code;
 }
+
+TESTING_MAIN_WITH(TestMain, TESTS)

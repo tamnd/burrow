@@ -25,7 +25,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -41,7 +41,7 @@
 
 BURROW_STRUCT(Point, POINT_FIELDS);
 
-TEST(a_declared_struct_is_the_struct_you_wrote) {
+static void TestADeclaredStructIsTheStructYouWrote(TestingT *t) {
     Point p = {3, 4, BURROW_S("origin")};
 
     CHECK_INT_EQ((int)p.X, 3);
@@ -49,44 +49,44 @@ TEST(a_declared_struct_is_the_struct_you_wrote) {
     CHECK(str_eq(p.Label, BURROW_S("origin")));
 }
 
-TEST(a_declared_struct_describes_itself) {
-    const Type *t = TYPE_OF(Point);
+static void TestADeclaredStructDescribesItself(TestingT *t) {
+    const Type *ty = TYPE_OF(Point);
 
-    CHECK(t != NULL);
-    CHECK(str_eq(t->name, BURROW_S("Point")));
-    CHECK(t->kind == KIND_STRUCT);
-    CHECK_INT_EQ((int)t->size, (int)sizeof(Point));
-    CHECK_INT_EQ((int)t->align, (int)_Alignof(Point));
-    CHECK_INT_EQ((int)t->nfield, 3);
+    CHECK(ty != NULL);
+    CHECK(str_eq(ty->name, BURROW_S("Point")));
+    CHECK(ty->kind == KIND_STRUCT);
+    CHECK_INT_EQ((int)ty->size, (int)sizeof(Point));
+    CHECK_INT_EQ((int)ty->align, (int)_Alignof(Point));
+    CHECK_INT_EQ((int)ty->nfield, 3);
 }
 
-TEST(the_offsets_are_the_compilers_offsets) {
-    const Type *t = TYPE_OF(Point);
+static void TestTheOffsetsAreTheCompilersOffsets(TestingT *t) {
+    const Type *ty = TYPE_OF(Point);
 
     /* The whole point of the DSL in one check. These are not compared against
      * numbers, they are compared against what the compiler laid out, so this
      * says the same thing on a machine that pads differently. */
-    CHECK_INT_EQ((int)t->fields[0].offset, (int)offsetof(Point, X));
-    CHECK_INT_EQ((int)t->fields[1].offset, (int)offsetof(Point, Y));
-    CHECK_INT_EQ((int)t->fields[2].offset, (int)offsetof(Point, Label));
+    CHECK_INT_EQ((int)ty->fields[0].offset, (int)offsetof(Point, X));
+    CHECK_INT_EQ((int)ty->fields[1].offset, (int)offsetof(Point, Y));
+    CHECK_INT_EQ((int)ty->fields[2].offset, (int)offsetof(Point, Label));
 
-    CHECK(str_eq(t->fields[0].name, BURROW_S("X")));
-    CHECK(str_eq(t->fields[2].name, BURROW_S("Label")));
+    CHECK(str_eq(ty->fields[0].name, BURROW_S("X")));
+    CHECK(str_eq(ty->fields[2].name, BURROW_S("Label")));
 
-    CHECK(t->fields[0].type == TYPE_INT);
-    CHECK(t->fields[2].type == TYPE_STRING);
+    CHECK(ty->fields[0].type == TYPE_INT);
+    CHECK(ty->fields[2].type == TYPE_STRING);
 }
 
-TEST(the_tags_come_through_exactly_as_written) {
-    const Type *t = TYPE_OF(Point);
+static void TestTheTagsComeThroughExactlyAsWritten(TestingT *t) {
+    const Type *ty = TYPE_OF(Point);
 
     /* Unparsed, because encoding/json and encoding/xml and database/sql each
      * read it their own way and Go does not centralise that either. */
-    CHECK(str_eq(t->fields[0].tag, BURROW_S("json:\"x\"")));
-    CHECK(str_eq(t->fields[2].tag, BURROW_S("json:\"label,omitempty\"")));
+    CHECK(str_eq(ty->fields[0].tag, BURROW_S("json:\"x\"")));
+    CHECK(str_eq(ty->fields[2].tag, BURROW_S("json:\"label,omitempty\"")));
 }
 
-TEST(a_field_is_found_by_name) {
+static void TestAFieldIsFoundByName(TestingT *t) {
     const Field *f = type_field_by_name(TYPE_OF(Point), BURROW_S("Label"));
 
     CHECK(f != NULL);
@@ -132,7 +132,7 @@ static void fill_padding(const Type *t, void *value, Byte with) {
     }
 }
 
-TEST(two_structs_that_differ_only_in_their_padding_are_equal) {
+static void TestTwoStructsThatDifferOnlyInTheirPaddingAreEqual(TestingT *t) {
     Gappy a;
     Gappy b;
 
@@ -154,7 +154,7 @@ TEST(two_structs_that_differ_only_in_their_padding_are_equal) {
     CHECK(type_equal(TYPE_OF(Gappy), &a, &b));
 }
 
-TEST(two_structs_that_compare_equal_hash_the_same) {
+static void TestTwoStructsThatCompareEqualHashTheSame(TestingT *t) {
     Gappy a;
     Gappy b;
 
@@ -175,7 +175,7 @@ TEST(two_structs_that_compare_equal_hash_the_same) {
     CHECK(type_hash(TYPE_OF(Gappy), &a, 0) == type_hash(TYPE_OF(Gappy), &b, 0));
 }
 
-TEST(different_values_still_differ) {
+static void TestDifferentValuesStillDiffer(TestingT *t) {
     Gappy a = {1, 2};
     Gappy b = {1, 3};
 
@@ -189,7 +189,7 @@ TEST(different_values_still_differ) {
  * Str values with different pointers and the same bytes are one string in Go.
  * Comparing the enclosing struct as bytes would compare the pointers. */
 
-TEST(a_string_field_compares_by_its_bytes) {
+static void TestAStringFieldComparesByItsBytes(TestingT *t) {
     char first[] = "origin";
     char second[] = "origin";
     Point a = {1, 2, {(const Byte *)first, 6}};
@@ -200,7 +200,7 @@ TEST(a_string_field_compares_by_its_bytes) {
     CHECK(type_hash(TYPE_OF(Point), &a, 0) == type_hash(TYPE_OF(Point), &b, 0));
 }
 
-TEST(a_declared_struct_works_as_a_map_key) {
+static void TestADeclaredStructWorksAsAMapKey(TestingT *t) {
     /* The payoff for all of the above, and the place a padding bug would show
      * up as a lookup that misses for no visible reason. */
     Map *m = map_make(heap_allocator(), TYPE_OF(Point), TYPE_INT, 0);
@@ -241,16 +241,16 @@ TEST(a_declared_struct_works_as_a_map_key) {
 
 BURROW_STRUCT(Line, LINE_FIELDS);
 
-TEST(a_struct_field_carries_its_own_descriptor) {
-    const Type *t = TYPE_OF(Line);
+static void TestAStructFieldCarriesItsOwnDescriptor(TestingT *t) {
+    const Type *ty = TYPE_OF(Line);
 
-    CHECK_INT_EQ((int)t->nfield, 2);
-    CHECK(t->fields[0].type == TYPE_OF(Point));
-    CHECK_INT_EQ((int)t->fields[1].offset, (int)offsetof(Line, To));
-    CHECK_INT_EQ((int)t->fields[0].type->nfield, 3);
+    CHECK_INT_EQ((int)ty->nfield, 2);
+    CHECK(ty->fields[0].type == TYPE_OF(Point));
+    CHECK_INT_EQ((int)ty->fields[1].offset, (int)offsetof(Line, To));
+    CHECK_INT_EQ((int)ty->fields[0].type->nfield, 3);
 }
 
-TEST(equality_recurses_into_a_nested_struct) {
+static void TestEqualityRecursesIntoANestedStruct(TestingT *t) {
     char one[] = "a";
     char two[] = "a";
     Line a = {{1, 2, {(const Byte *)one, 1}}, {3, 4, BURROW_STR_EMPTY}};
@@ -284,19 +284,19 @@ BURROW_MAP_TYPE(StrIntMap, Str, Int);
 
 BURROW_STRUCT(Mixed, MIXED_FIELDS);
 
-TEST(exportedness_follows_gos_rule) {
-    const Type *t = TYPE_OF(Mixed);
+static void TestExportednessFollowsGosRule(TestingT *t) {
+    const Type *ty = TYPE_OF(Mixed);
 
-    CHECK(field_is_exported(&t->fields[0]));
-    CHECK(!field_is_exported(&t->fields[1]));
+    CHECK(field_is_exported(&ty->fields[0]));
+    CHECK(!field_is_exported(&ty->fields[1]));
     CHECK(!field_is_exported(NULL));
 }
 
-TEST(an_embedded_field_is_one_named_after_its_type) {
-    const Type *t = TYPE_OF(Mixed);
+static void TestAnEmbeddedFieldIsOneNamedAfterItsType(TestingT *t) {
+    const Type *ty = TYPE_OF(Mixed);
 
-    CHECK(!field_is_embedded(&t->fields[0]));
-    CHECK(field_is_embedded(&t->fields[2]));
+    CHECK(!field_is_embedded(&ty->fields[0]));
+    CHECK(field_is_embedded(&ty->fields[2]));
     CHECK(!field_is_embedded(NULL));
 
     /* An unnamed type cannot be embedded, and the check must not fall back to
@@ -305,49 +305,49 @@ TEST(an_embedded_field_is_one_named_after_its_type) {
     CHECK(!field_is_embedded(&fake));
 }
 
-TEST(a_slice_descriptor_describes_the_header_and_the_element) {
-    const Type *t = TYPE_OF(IntSlice);
+static void TestASliceDescriptorDescribesTheHeaderAndTheElement(TestingT *t) {
+    const Type *ty = TYPE_OF(IntSlice);
 
-    CHECK(t->kind == KIND_SLICE);
-    CHECK(t->elem == TYPE_INT);
+    CHECK(ty->kind == KIND_SLICE);
+    CHECK(ty->elem == TYPE_INT);
     /* The size of a slice value, which is the header. The elements live
      * somewhere else and there may be any number of them. */
-    CHECK_INT_EQ((int)t->size, (int)sizeof(Slice));
-    CHECK(!type_is_comparable(t));
+    CHECK_INT_EQ((int)ty->size, (int)sizeof(Slice));
+    CHECK(!type_is_comparable(ty));
 }
 
-TEST(a_pointer_descriptor_points_at_something) {
-    const Type *t = TYPE_OF(PointPtr);
+static void TestAPointerDescriptorPointsAtSomething(TestingT *t) {
+    const Type *ty = TYPE_OF(PointPtr);
 
-    CHECK(t->kind == KIND_POINTER);
-    CHECK(t->elem == TYPE_OF(Point));
-    CHECK_INT_EQ((int)t->size, (int)sizeof(void *));
-    CHECK(type_is_comparable(t));
+    CHECK(ty->kind == KIND_POINTER);
+    CHECK(ty->elem == TYPE_OF(Point));
+    CHECK_INT_EQ((int)ty->size, (int)sizeof(void *));
+    CHECK(type_is_comparable(ty));
 }
 
-TEST(an_array_descriptor_is_its_elements) {
-    const Type *t = TYPE_OF(Int4);
+static void TestAnArrayDescriptorIsItsElements(TestingT *t) {
+    const Type *ty = TYPE_OF(Int4);
 
-    CHECK(t->kind == KIND_ARRAY);
-    CHECK(t->elem == TYPE_INT);
-    CHECK_INT_EQ((int)t->len, 4);
+    CHECK(ty->kind == KIND_ARRAY);
+    CHECK(ty->elem == TYPE_INT);
+    CHECK_INT_EQ((int)ty->len, 4);
     /* Unlike a slice, an array is the elements, so it is four of them. */
-    CHECK_INT_EQ((int)t->size, (int)(4 * sizeof(Int)));
+    CHECK_INT_EQ((int)ty->size, (int)(4 * sizeof(Int)));
 
     Int4 a = {{1, 2, 3, 4}};
     Int4 b = {{1, 2, 3, 4}};
-    CHECK(type_equal(t, &a, &b));
+    CHECK(type_equal(ty, &a, &b));
     b.v[3] = 5;
-    CHECK(!type_equal(t, &a, &b));
+    CHECK(!type_equal(ty, &a, &b));
 }
 
-TEST(a_map_descriptor_carries_both_halves) {
-    const Type *t = TYPE_OF(StrIntMap);
+static void TestAMapDescriptorCarriesBothHalves(TestingT *t) {
+    const Type *ty = TYPE_OF(StrIntMap);
 
-    CHECK(t->kind == KIND_MAP);
-    CHECK(t->key == TYPE_STRING);
-    CHECK(t->elem == TYPE_INT);
-    CHECK(!type_is_comparable(t));
+    CHECK(ty->kind == KIND_MAP);
+    CHECK(ty->key == TYPE_STRING);
+    CHECK(ty->elem == TYPE_INT);
+    CHECK(!type_is_comparable(ty));
 }
 
 /* ------------------------------------------------------------ the builtins
@@ -356,7 +356,7 @@ TEST(a_map_descriptor_carries_both_halves) {
  * have to be the same descriptor or a field list and the rest of the library
  * would be describing different types. */
 
-TEST(the_c_spelling_and_the_go_spelling_agree) {
+static void TestTheCSpellingAndTheGoSpellingAgree(TestingT *t) {
     CHECK(TYPE_OF(Int) == TYPE_INT);
     CHECK(TYPE_OF(Str) == TYPE_STRING);
     CHECK(TYPE_OF(bool) == TYPE_BOOL);
@@ -370,7 +370,7 @@ TEST(the_c_spelling_and_the_go_spelling_agree) {
     CHECK(TYPE_OF(Rune) == TYPE_INT32);
 }
 
-TEST(the_same_c_type_under_two_names_stays_two_types) {
+static void TestTheSameCTypeUnderTwoNamesStaysTwoTypes(TestingT *t) {
     /* Int is int64_t on a 64 bit machine, and Go's int and int64 are still
      * different types. The descriptor is keyed on the spelling for exactly this
      * reason: a struct with an int field does not marshal like one with an
@@ -410,24 +410,24 @@ typedef struct vendor_rect VendorRect;
 
 BURROW_STRUCT_DEFINE(VendorRect, VENDOR_RECT_FIELDS);
 
-TEST(a_struct_nobody_declared_here_can_still_be_described) {
-    const Type *t = TYPE_OF(VendorRect);
+static void TestAStructNobodyDeclaredHereCanStillBeDescribed(TestingT *t) {
+    const Type *ty = TYPE_OF(VendorRect);
 
-    CHECK_INT_EQ(t->kind, KIND_STRUCT);
-    CHECK_INT_EQ(t->nfield, 3);
-    CHECK_INT_EQ(t->size, (uint32_t)sizeof(VendorRect));
-    CHECK_INT_EQ(t->align, (uint16_t)_Alignof(VendorRect));
+    CHECK_INT_EQ(ty->kind, KIND_STRUCT);
+    CHECK_INT_EQ(ty->nfield, 3);
+    CHECK_INT_EQ(ty->size, (uint32_t)sizeof(VendorRect));
+    CHECK_INT_EQ(ty->align, (uint16_t)_Alignof(VendorRect));
 
     /* The name is the typedef's, which is the name a lookup would use. */
-    CHECK(str_eq(t->name, BURROW_S("VendorRect")));
+    CHECK(str_eq(ty->name, BURROW_S("VendorRect")));
 
-    CHECK_INT_EQ(t->fields[0].offset, (uint32_t)offsetof(VendorRect, w));
-    CHECK_INT_EQ(t->fields[2].offset, (uint32_t)offsetof(VendorRect, area));
-    CHECK(str_eq(t->fields[0].tag, BURROW_S("json:\"width\"")));
+    CHECK_INT_EQ(ty->fields[0].offset, (uint32_t)offsetof(VendorRect, w));
+    CHECK_INT_EQ(ty->fields[2].offset, (uint32_t)offsetof(VendorRect, area));
+    CHECK(str_eq(ty->fields[0].tag, BURROW_S("json:\"width\"")));
 }
 
-TEST(a_described_foreign_struct_behaves_like_a_declared_one) {
-    const Type *t = TYPE_OF(VendorRect);
+static void TestADescribedForeignStructBehavesLikeADeclaredOne(TestingT *t) {
+    const Type *ty = TYPE_OF(VendorRect);
 
     /* Built by hand, byte for byte, the way a vendor library would hand one
      * over. Padding deliberately left as it fell, which is the case equality
@@ -440,36 +440,35 @@ TEST(a_described_foreign_struct_behaves_like_a_declared_one) {
     a.h = b.h = 4;
     a.area = b.area = 12.0;
 
-    CHECK(type_equal(t, &a, &b));
-    CHECK_INT_EQ((int)(type_hash(t, &a, 0) == type_hash(t, &b, 0)), 1);
+    CHECK(type_equal(ty, &a, &b));
+    CHECK_INT_EQ((int)(type_hash(ty, &a, 0) == type_hash(ty, &b, 0)), 1);
 
     b.h = 5;
-    CHECK(!type_equal(t, &a, &b));
+    CHECK(!type_equal(ty, &a, &b));
 }
 
-int main(void) {
-    RUN(a_declared_struct_is_the_struct_you_wrote);
-    RUN(a_declared_struct_describes_itself);
-    RUN(the_offsets_are_the_compilers_offsets);
-    RUN(the_tags_come_through_exactly_as_written);
-    RUN(a_field_is_found_by_name);
-    RUN(two_structs_that_differ_only_in_their_padding_are_equal);
-    RUN(two_structs_that_compare_equal_hash_the_same);
-    RUN(different_values_still_differ);
-    RUN(a_string_field_compares_by_its_bytes);
-    RUN(a_declared_struct_works_as_a_map_key);
-    RUN(a_struct_field_carries_its_own_descriptor);
-    RUN(equality_recurses_into_a_nested_struct);
-    RUN(exportedness_follows_gos_rule);
-    RUN(an_embedded_field_is_one_named_after_its_type);
-    RUN(a_slice_descriptor_describes_the_header_and_the_element);
-    RUN(a_pointer_descriptor_points_at_something);
-    RUN(an_array_descriptor_is_its_elements);
-    RUN(a_map_descriptor_carries_both_halves);
-    RUN(the_c_spelling_and_the_go_spelling_agree);
-    RUN(the_same_c_type_under_two_names_stays_two_types);
-    RUN(a_struct_nobody_declared_here_can_still_be_described);
-    RUN(a_described_foreign_struct_behaves_like_a_declared_one);
+#define TESTS(X)                                                                       \
+    X(TestADeclaredStructIsTheStructYouWrote)                                          \
+    X(TestADeclaredStructDescribesItself)                                              \
+    X(TestTheOffsetsAreTheCompilersOffsets)                                            \
+    X(TestTheTagsComeThroughExactlyAsWritten)                                          \
+    X(TestAFieldIsFoundByName)                                                         \
+    X(TestTwoStructsThatDifferOnlyInTheirPaddingAreEqual)                              \
+    X(TestTwoStructsThatCompareEqualHashTheSame)                                       \
+    X(TestDifferentValuesStillDiffer)                                                  \
+    X(TestAStringFieldComparesByItsBytes)                                              \
+    X(TestADeclaredStructWorksAsAMapKey)                                               \
+    X(TestAStructFieldCarriesItsOwnDescriptor)                                         \
+    X(TestEqualityRecursesIntoANestedStruct)                                           \
+    X(TestExportednessFollowsGosRule)                                                  \
+    X(TestAnEmbeddedFieldIsOneNamedAfterItsType)                                       \
+    X(TestASliceDescriptorDescribesTheHeaderAndTheElement)                             \
+    X(TestAPointerDescriptorPointsAtSomething)                                         \
+    X(TestAnArrayDescriptorIsItsElements)                                              \
+    X(TestAMapDescriptorCarriesBothHalves)                                             \
+    X(TestTheCSpellingAndTheGoSpellingAgree)                                           \
+    X(TestTheSameCTypeUnderTwoNamesStaysTwoTypes)                                      \
+    X(TestAStructNobodyDeclaredHereCanStillBeDescribed)                                \
+    X(TestADescribedForeignStructBehavesLikeADeclaredOne)
 
-    return harness_report("declare");
-}
+TESTING_MAIN(TESTS)

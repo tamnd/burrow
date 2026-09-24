@@ -2,7 +2,7 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
-#include "harness.h"
+#include "check.h"
 
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
@@ -38,7 +38,7 @@ static void start(Track *tr, Log *log) {
 /* The happy path first, because a checker that reports faults on correct code is
  * worse than no checker at all. Nobody keeps running one that cries wolf. */
 
-TEST(track_is_quiet_when_nothing_is_wrong) {
+static void TestTrackIsQuietWhenNothingIsWrong(TestingT *t) {
     Track tr;
     Log log;
     start(&tr, &log);
@@ -64,7 +64,7 @@ TEST(track_is_quiet_when_nothing_is_wrong) {
  * that only implements alloc and not alloc_zeroed silently stops arenas from
  * skipping the memset. */
 
-TEST(track_passes_the_interface_through) {
+static void TestTrackPassesTheInterfaceThrough(TestingT *t) {
     Track tr;
     Log log;
     start(&tr, &log);
@@ -90,7 +90,7 @@ TEST(track_passes_the_interface_through) {
     track_free(&tr);
 }
 
-TEST(track_reports_a_leak) {
+static void TestTrackReportsALeak(TestingT *t) {
     Track tr;
     Log log;
     start(&tr, &log);
@@ -119,7 +119,7 @@ TEST(track_reports_a_leak) {
     track_free(&tr);
 }
 
-TEST(track_reports_a_double_free) {
+static void TestTrackReportsADoubleFree(TestingT *t) {
     Track tr;
     Log log;
     start(&tr, &log);
@@ -136,7 +136,7 @@ TEST(track_reports_a_double_free) {
     track_free(&tr);
 }
 
-TEST(track_reports_a_wild_free) {
+static void TestTrackReportsAWildFree(TestingT *t) {
     Track tr;
     Log log;
     start(&tr, &log);
@@ -162,7 +162,7 @@ TEST(track_reports_a_wild_free) {
  * platform functions to call from it, so a wrong one is a real bug that happens
  * to work under malloc and corrupts an arena. */
 
-TEST(track_reports_a_size_mismatch) {
+static void TestTrackReportsASizeMismatch(TestingT *t) {
     Track tr;
     Log log;
     start(&tr, &log);
@@ -183,7 +183,7 @@ TEST(track_reports_a_size_mismatch) {
     track_free(&tr);
 }
 
-TEST(track_reports_an_align_mismatch) {
+static void TestTrackReportsAnAlignMismatch(TestingT *t) {
     Track tr;
     Log log;
     start(&tr, &log);
@@ -204,7 +204,7 @@ TEST(track_reports_an_align_mismatch) {
  * happens, only later, when the block leaves the quarantine and the poison it
  * was filled with turns out to have a hole in it. */
 
-TEST(track_reports_a_write_after_free) {
+static void TestTrackReportsAWriteAfterFree(TestingT *t) {
     Track tr;
     Log log;
     start(&tr, &log);
@@ -236,7 +236,7 @@ TEST(track_reports_a_write_after_free) {
  * program under this allocator should be able to trade the check for the memory
  * back. */
 
-TEST(track_without_a_quarantine_frees_straight_away) {
+static void TestTrackWithoutAQuarantineFreesStraightAway(TestingT *t) {
     Track tr;
     Log log;
     start(&tr, &log);
@@ -258,7 +258,7 @@ TEST(track_without_a_quarantine_frees_straight_away) {
  * deliberate: it means the old pointer becomes poisoned and held, so code that
  * kept it gets caught the same way any other write after free does. */
 
-TEST(track_realloc_retires_the_old_pointer) {
+static void TestTrackReallocRetiresTheOldPointer(TestingT *t) {
     Track tr;
     Log log;
     start(&tr, &log);
@@ -278,8 +278,8 @@ TEST(track_realloc_retires_the_old_pointer) {
      * would use it. */
     p[0] = 0x01;
     for (int i = 0; i < 80; i++) {
-        void *t = mem_alloc(a, 64, 8);
-        mem_free(a, t, 64, 8);
+        void *blk = mem_alloc(a, 64, 8);
+        mem_free(a, blk, 64, 8);
     }
     CHECK_INT_EQ(log.n, 1);
     CHECK_INT_EQ(log.last.fault, TRACK_WRITE_AFTER_FREE);
@@ -288,7 +288,7 @@ TEST(track_realloc_retires_the_old_pointer) {
     track_free(&tr);
 }
 
-TEST(track_realloc_checks_the_old_size) {
+static void TestTrackReallocChecksTheOldSize(TestingT *t) {
     Track tr;
     Log log;
     start(&tr, &log);
@@ -311,7 +311,7 @@ TEST(track_realloc_checks_the_old_size) {
  * heap it has to say it cannot, because claiming a reset that does nothing
  * would turn a real leak into silence. */
 
-TEST(track_follows_the_allocator_underneath_on_reset) {
+static void TestTrackFollowsTheAllocatorUnderneathOnReset(TestingT *t) {
     Track heap_tr;
     Log heap_log;
     start(&heap_tr, &heap_log);
@@ -347,7 +347,7 @@ TEST(track_follows_the_allocator_underneath_on_reset) {
  * mishandled the lookups quietly become a linear scan or, worse, stop finding
  * blocks that are there and start calling correct frees wild. */
 
-TEST(track_survives_a_long_run_of_churn) {
+static void TestTrackSurvivesALongRunOfChurn(TestingT *t) {
     Track tr;
     Log log;
     start(&tr, &log);
@@ -377,7 +377,7 @@ TEST(track_survives_a_long_run_of_churn) {
 /* And the other shape, where the live count keeps climbing, which is what makes
  * the table grow and rehash rather than recycle tombstones. */
 
-TEST(track_handles_many_live_blocks) {
+static void TestTrackHandlesManyLiveBlocks(TestingT *t) {
     Track tr;
     Log log;
     start(&tr, &log);
@@ -407,7 +407,7 @@ TEST(track_handles_many_live_blocks) {
  * which is the only reason a Track over an arena can tell you how much of the
  * arena you are actually using. */
 
-TEST(track_counts_bytes) {
+static void TestTrackCountsBytes(TestingT *t) {
     Track tr;
     Log log;
     start(&tr, &log);
@@ -437,7 +437,7 @@ TEST(track_counts_bytes) {
  * cannot be left in code that runs both ways, and code that has to be edited
  * before it can be checked does not get checked. */
 
-TEST(track_here_does_nothing_to_a_plain_allocator) {
+static void TestTrackHereDoesNothingToAPlainAllocator(TestingT *t) {
     Alloc *a = heap_allocator();
     CHECK(TRACK_HERE(a) == a);
     void *p = mem_alloc(TRACK_HERE(a), 16, 8);
@@ -449,7 +449,7 @@ TEST(track_here_does_nothing_to_a_plain_allocator) {
 /* Faults are counted whether or not anybody is listening, so a test that only
  * wants a number does not have to write a callback. */
 
-TEST(track_counts_faults_without_a_reporter) {
+static void TestTrackCountsFaultsWithoutAReporter(TestingT *t) {
     Track tr;
     track_init(&tr, heap_allocator());
     Alloc *a = track_allocator(&tr);
@@ -462,23 +462,23 @@ TEST(track_counts_faults_without_a_reporter) {
     track_free(&tr);
 }
 
-int main(void) {
-    RUN(track_is_quiet_when_nothing_is_wrong);
-    RUN(track_passes_the_interface_through);
-    RUN(track_reports_a_leak);
-    RUN(track_reports_a_double_free);
-    RUN(track_reports_a_wild_free);
-    RUN(track_reports_a_size_mismatch);
-    RUN(track_reports_an_align_mismatch);
-    RUN(track_reports_a_write_after_free);
-    RUN(track_without_a_quarantine_frees_straight_away);
-    RUN(track_realloc_retires_the_old_pointer);
-    RUN(track_realloc_checks_the_old_size);
-    RUN(track_follows_the_allocator_underneath_on_reset);
-    RUN(track_survives_a_long_run_of_churn);
-    RUN(track_handles_many_live_blocks);
-    RUN(track_counts_bytes);
-    RUN(track_here_does_nothing_to_a_plain_allocator);
-    RUN(track_counts_faults_without_a_reporter);
-    return harness_report("track");
-}
+#define TESTS(X)                                                                       \
+    X(TestTrackIsQuietWhenNothingIsWrong)                                              \
+    X(TestTrackPassesTheInterfaceThrough)                                              \
+    X(TestTrackReportsALeak)                                                           \
+    X(TestTrackReportsADoubleFree)                                                     \
+    X(TestTrackReportsAWildFree)                                                       \
+    X(TestTrackReportsASizeMismatch)                                                   \
+    X(TestTrackReportsAnAlignMismatch)                                                 \
+    X(TestTrackReportsAWriteAfterFree)                                                 \
+    X(TestTrackWithoutAQuarantineFreesStraightAway)                                    \
+    X(TestTrackReallocRetiresTheOldPointer)                                            \
+    X(TestTrackReallocChecksTheOldSize)                                                \
+    X(TestTrackFollowsTheAllocatorUnderneathOnReset)                                   \
+    X(TestTrackSurvivesALongRunOfChurn)                                                \
+    X(TestTrackHandlesManyLiveBlocks)                                                  \
+    X(TestTrackCountsBytes)                                                            \
+    X(TestTrackHereDoesNothingToAPlainAllocator)                                       \
+    X(TestTrackCountsFaultsWithoutAReporter)
+
+TESTING_MAIN(TESTS)

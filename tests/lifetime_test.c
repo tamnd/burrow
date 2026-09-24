@@ -2,7 +2,7 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
-#include "harness.h"
+#include "check.h"
 
 #include "burrow/core.h"
 #include "burrow/error.h"
@@ -108,7 +108,7 @@ static bool str_inside(Str s, const void *base, size_t n) {
 
 /* --------------------------------------------------------------- OWNS */
 
-TEST(owns_str_clone_allocates_and_does_not_alias) {
+static void TestOwnsStrCloneAllocatesAndDoesNotAlias(TestingT *t) {
     Counted c;
     counted_start(&c);
     Str src = BURROW_S("the quick brown fox");
@@ -124,7 +124,7 @@ TEST(owns_str_clone_allocates_and_does_not_alias) {
     counted_end(&c);
 }
 
-TEST(owns_str_to_cstr_allocates) {
+static void TestOwnsStrToCstrAllocates(TestingT *t) {
     Counted c;
     counted_start(&c);
     Str src = BURROW_S("hello");
@@ -142,7 +142,7 @@ TEST(owns_str_to_cstr_allocates) {
     counted_end(&c);
 }
 
-TEST(owns_slice_make_allocates) {
+static void TestOwnsSliceMakeAllocates(TestingT *t) {
     Counted c;
     counted_start(&c);
 
@@ -158,7 +158,7 @@ TEST(owns_slice_make_allocates) {
 /* A zero length slice with a real capacity still allocates, because Go's
  * make([]T, 0, 8) does and code ported from Go relies on the capacity being
  * there. A zero capacity one is allowed not to. */
-TEST(owns_slice_make_allocates_for_capacity_alone) {
+static void TestOwnsSliceMakeAllocatesForCapacityAlone(TestingT *t) {
     Counted c;
     counted_start(&c);
 
@@ -171,7 +171,7 @@ TEST(owns_slice_make_allocates_for_capacity_alone) {
     counted_end(&c);
 }
 
-TEST(owns_str_and_slice_conversions_copy) {
+static void TestOwnsStrAndSliceConversionsCopy(TestingT *t) {
     Counted c;
     counted_start(&c);
     Str src = BURROW_S("abcdef");
@@ -191,7 +191,7 @@ TEST(owns_str_and_slice_conversions_copy) {
     counted_end(&c);
 }
 
-TEST(owns_errors_new_allocates_and_copies_the_text) {
+static void TestOwnsErrorsNewAllocatesAndCopiesTheText(TestingT *t) {
     Counted c;
     counted_start(&c);
     Str text = BURROW_S("something went wrong");
@@ -209,7 +209,7 @@ TEST(owns_errors_new_allocates_and_copies_the_text) {
     counted_end(&c);
 }
 
-TEST(owns_map_make_allocates) {
+static void TestOwnsMapMakeAllocates(TestingT *t) {
     Counted c;
     counted_start(&c);
 
@@ -223,7 +223,7 @@ TEST(owns_map_make_allocates) {
     counted_end(&c);
 }
 
-TEST(owns_any_box_copies_the_value) {
+static void TestOwnsAnyBoxCopiesTheValue(TestingT *t) {
     Counted c;
     counted_start(&c);
     Int v = 42;
@@ -248,7 +248,7 @@ TEST(owns_any_box_copies_the_value) {
     counted_end(&c);
 }
 
-TEST(owns_mem_alloc_family_allocates) {
+static void TestOwnsMemAllocFamilyAllocates(TestingT *t) {
     Counted c;
     counted_start(&c);
 
@@ -267,7 +267,7 @@ TEST(owns_mem_alloc_family_allocates) {
 
 /* --------------------------------------------------------------- BORROWS */
 
-TEST(borrows_str_from_cstr_points_at_the_input) {
+static void TestBorrowsStrFromCstrPointsAtTheInput(TestingT *t) {
     Counted c;
     counted_start(&c);
     const char *src = "borrowed";
@@ -282,7 +282,7 @@ TEST(borrows_str_from_cstr_points_at_the_input) {
     counted_end(&c);
 }
 
-TEST(borrows_str_from_bytes_points_at_the_input) {
+static void TestBorrowsStrFromBytesPointsAtTheInput(TestingT *t) {
     Counted c;
     counted_start(&c);
     Byte buf[6] = {'a', 'b', 'c', 'd', 'e', 'f'};
@@ -296,7 +296,7 @@ TEST(borrows_str_from_bytes_points_at_the_input) {
     counted_end(&c);
 }
 
-TEST(borrows_slice_from_points_at_the_input) {
+static void TestBorrowsSliceFromPointsAtTheInput(TestingT *t) {
     Counted c;
     counted_start(&c);
     Int buf[4] = {1, 2, 3, 4};
@@ -310,7 +310,7 @@ TEST(borrows_slice_from_points_at_the_input) {
     counted_end(&c);
 }
 
-TEST(borrows_slice_at_points_into_the_slice) {
+static void TestBorrowsSliceAtPointsIntoTheSlice(TestingT *t) {
     Counted c;
     counted_start(&c);
     Int buf[4] = {10, 20, 30, 40};
@@ -334,7 +334,7 @@ TEST(borrows_slice_at_points_into_the_slice) {
     counted_end(&c);
 }
 
-TEST(borrows_slice_sub_shares_the_backing_array) {
+static void TestBorrowsSliceSubSharesTheBackingArray(TestingT *t) {
     Counted c;
     counted_start(&c);
     Int buf[8] = {0, 1, 2, 3, 4, 5, 6, 7};
@@ -361,7 +361,7 @@ TEST(borrows_slice_sub_shares_the_backing_array) {
     counted_end(&c);
 }
 
-TEST(borrows_map_get_points_into_the_table) {
+static void TestBorrowsMapGetPointsIntoTheTable(TestingT *t) {
     Counted c;
     counted_start(&c);
     Map *m = map_make(c.a, TYPE_INT, TYPE_INT, 0);
@@ -389,7 +389,7 @@ TEST(borrows_map_get_points_into_the_table) {
     counted_end(&c);
 }
 
-TEST(borrows_error_message_points_into_the_error) {
+static void TestBorrowsErrorMessagePointsIntoTheError(TestingT *t) {
     Counted c;
     counted_start(&c);
     Error err = errors_new(c.a, BURROW_S("disk on fire"));
@@ -403,7 +403,7 @@ TEST(borrows_error_message_points_into_the_error) {
     counted_end(&c);
 }
 
-TEST(borrows_any_assert_hands_back_the_stored_pointer) {
+static void TestBorrowsAnyAssertHandsBackTheStoredPointer(TestingT *t) {
     Counted c;
     counted_start(&c);
     Int v = 5;
@@ -419,7 +419,7 @@ TEST(borrows_any_assert_hands_back_the_stored_pointer) {
     counted_end(&c);
 }
 
-TEST(borrows_type_name_does_not_allocate) {
+static void TestBorrowsTypeNameDoesNotAllocate(TestingT *t) {
     Counted c;
     counted_start(&c);
 
@@ -440,7 +440,7 @@ TEST(borrows_type_name_does_not_allocate) {
  * of these ever returned a pointer to something else, copying an Arena would
  * start working and then stop working, which is the worst way for a rule to be
  * enforced. */
-TEST(borrows_allocator_accessors_point_into_their_struct) {
+static void TestBorrowsAllocatorAccessorsPointIntoTheirStruct(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     CHECK(inside(arena_allocator(&ar), &ar, sizeof ar));
@@ -465,7 +465,7 @@ TEST(borrows_allocator_accessors_point_into_their_struct) {
 
 /* Two calls, one pointer, and it is still readable after every allocator in the
  * test has gone away. That is the whole claim BURROW_STATIC makes. */
-TEST(static_version_strings_are_not_allocated) {
+static void TestStaticVersionStringsAreNotAllocated(TestingT *t) {
     Counted c;
     counted_start(&c);
 
@@ -492,7 +492,7 @@ TEST(static_version_strings_are_not_allocated) {
     CHECK(lic[0] != '\0');
 }
 
-TEST(static_platform_names_are_not_allocated) {
+static void TestStaticPlatformNamesAreNotAllocated(TestingT *t) {
     Counted c;
     counted_start(&c);
 
@@ -510,7 +510,7 @@ TEST(static_platform_names_are_not_allocated) {
     CHECK(strcmp(arch, BURROW_ARCH_NAME) == 0);
 }
 
-TEST(static_heap_allocator_is_one_object) {
+static void TestStaticHeapAllocatorIsOneObject(TestingT *t) {
     Counted c;
     counted_start(&c);
 
@@ -530,7 +530,7 @@ TEST(static_heap_allocator_is_one_object) {
     mem_free(heap_allocator(), p, 16, 8);
 }
 
-TEST(static_kind_name_returns_the_same_bytes_every_time) {
+static void TestStaticKindNameReturnsTheSameBytesEveryTime(TestingT *t) {
     Counted c;
     counted_start(&c);
 
@@ -546,7 +546,7 @@ TEST(static_kind_name_returns_the_same_bytes_every_time) {
     CHECK(str_eq(n, BURROW_S("int")));
 }
 
-TEST(static_type_accessors_outlive_the_map) {
+static void TestStaticTypeAccessorsOutliveTheMap(TestingT *t) {
     Counted c;
     counted_start(&c);
     Map *m = map_make(c.a, TYPE_STRING, TYPE_INT, 0);
@@ -568,7 +568,7 @@ TEST(static_type_accessors_outlive_the_map) {
     CHECK(str_eq(type_name(v), BURROW_S("int")));
 }
 
-TEST(static_slice_nil_owns_nothing) {
+static void TestStaticSliceNilOwnsNothing(TestingT *t) {
     Counted c;
     counted_start(&c);
 
@@ -594,7 +594,7 @@ TEST(static_slice_nil_owns_nothing) {
  * Without room it allocates. A caller cannot tell which happened, so both are
  * true of the declaration and both have to be true of the function. */
 
-TEST(append_borrows_when_there_is_capacity) {
+static void TestAppendBorrowsWhenThereIsCapacity(TestingT *t) {
     Counted c;
     counted_start(&c);
     Slice s = slice_make(c.a, TYPE_INT, 1, 8);
@@ -613,7 +613,7 @@ TEST(append_borrows_when_there_is_capacity) {
     counted_end(&c);
 }
 
-TEST(append_owns_when_it_has_to_grow) {
+static void TestAppendOwnsWhenItHasToGrow(TestingT *t) {
     Counted c;
     counted_start(&c);
     Slice s = slice_make(c.a, TYPE_INT, 2, 2);
@@ -646,7 +646,7 @@ TEST(append_owns_when_it_has_to_grow) {
     counted_end(&c);
 }
 
-TEST(append_slice_borrows_then_owns) {
+static void TestAppendSliceBorrowsThenOwns(TestingT *t) {
     Counted c;
     counted_start(&c);
     Slice src = slice_make(c.a, TYPE_INT, 2, 2);
@@ -670,7 +670,7 @@ TEST(append_slice_borrows_then_owns) {
     counted_end(&c);
 }
 
-TEST(append_fast_keeps_the_same_promise) {
+static void TestAppendFastKeepsTheSamePromise(TestingT *t) {
     Counted c;
     counted_start(&c);
     Slice s = slice_make(c.a, TYPE_INT, 0, 4);
@@ -693,7 +693,7 @@ TEST(append_fast_keeps_the_same_promise) {
     counted_end(&c);
 }
 
-TEST(utf8_append_rune_borrows_then_owns) {
+static void TestUtf8AppendRuneBorrowsThenOwns(TestingT *t) {
     Counted c;
     counted_start(&c);
     Slice p = slice_make(c.a, TYPE_BYTE, 0, 8);
@@ -717,39 +717,36 @@ TEST(utf8_append_rune_borrows_then_owns) {
     counted_end(&c);
 }
 
-int main(void) {
-    RUN(owns_str_clone_allocates_and_does_not_alias);
-    RUN(owns_str_to_cstr_allocates);
-    RUN(owns_slice_make_allocates);
-    RUN(owns_slice_make_allocates_for_capacity_alone);
-    RUN(owns_str_and_slice_conversions_copy);
-    RUN(owns_errors_new_allocates_and_copies_the_text);
-    RUN(owns_map_make_allocates);
-    RUN(owns_any_box_copies_the_value);
-    RUN(owns_mem_alloc_family_allocates);
+#define TESTS(X)                                                                       \
+    X(TestOwnsStrCloneAllocatesAndDoesNotAlias)                                        \
+    X(TestOwnsStrToCstrAllocates)                                                      \
+    X(TestOwnsSliceMakeAllocates)                                                      \
+    X(TestOwnsSliceMakeAllocatesForCapacityAlone)                                      \
+    X(TestOwnsStrAndSliceConversionsCopy)                                              \
+    X(TestOwnsErrorsNewAllocatesAndCopiesTheText)                                      \
+    X(TestOwnsMapMakeAllocates)                                                        \
+    X(TestOwnsAnyBoxCopiesTheValue)                                                    \
+    X(TestOwnsMemAllocFamilyAllocates)                                                 \
+    X(TestBorrowsStrFromCstrPointsAtTheInput)                                          \
+    X(TestBorrowsStrFromBytesPointsAtTheInput)                                         \
+    X(TestBorrowsSliceFromPointsAtTheInput)                                            \
+    X(TestBorrowsSliceAtPointsIntoTheSlice)                                            \
+    X(TestBorrowsSliceSubSharesTheBackingArray)                                        \
+    X(TestBorrowsMapGetPointsIntoTheTable)                                             \
+    X(TestBorrowsErrorMessagePointsIntoTheError)                                       \
+    X(TestBorrowsAnyAssertHandsBackTheStoredPointer)                                   \
+    X(TestBorrowsTypeNameDoesNotAllocate)                                              \
+    X(TestBorrowsAllocatorAccessorsPointIntoTheirStruct)                               \
+    X(TestStaticVersionStringsAreNotAllocated)                                         \
+    X(TestStaticPlatformNamesAreNotAllocated)                                          \
+    X(TestStaticHeapAllocatorIsOneObject)                                              \
+    X(TestStaticKindNameReturnsTheSameBytesEveryTime)                                  \
+    X(TestStaticTypeAccessorsOutliveTheMap)                                            \
+    X(TestStaticSliceNilOwnsNothing)                                                   \
+    X(TestAppendBorrowsWhenThereIsCapacity)                                            \
+    X(TestAppendOwnsWhenItHasToGrow)                                                   \
+    X(TestAppendSliceBorrowsThenOwns)                                                  \
+    X(TestAppendFastKeepsTheSamePromise)                                               \
+    X(TestUtf8AppendRuneBorrowsThenOwns)
 
-    RUN(borrows_str_from_cstr_points_at_the_input);
-    RUN(borrows_str_from_bytes_points_at_the_input);
-    RUN(borrows_slice_from_points_at_the_input);
-    RUN(borrows_slice_at_points_into_the_slice);
-    RUN(borrows_slice_sub_shares_the_backing_array);
-    RUN(borrows_map_get_points_into_the_table);
-    RUN(borrows_error_message_points_into_the_error);
-    RUN(borrows_any_assert_hands_back_the_stored_pointer);
-    RUN(borrows_type_name_does_not_allocate);
-    RUN(borrows_allocator_accessors_point_into_their_struct);
-
-    RUN(static_version_strings_are_not_allocated);
-    RUN(static_platform_names_are_not_allocated);
-    RUN(static_heap_allocator_is_one_object);
-    RUN(static_kind_name_returns_the_same_bytes_every_time);
-    RUN(static_type_accessors_outlive_the_map);
-    RUN(static_slice_nil_owns_nothing);
-
-    RUN(append_borrows_when_there_is_capacity);
-    RUN(append_owns_when_it_has_to_grow);
-    RUN(append_slice_borrows_then_owns);
-    RUN(append_fast_keeps_the_same_promise);
-    RUN(utf8_append_rune_borrows_then_owns);
-    return harness_report("lifetime");
-}
+TESTING_MAIN(TESTS)

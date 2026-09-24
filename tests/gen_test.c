@@ -17,8 +17,8 @@
 #include "burrow/declare.h"
 #include "burrow/type.h"
 
+#include "check.h"
 #include "gen/shapes_gen.h"
-#include "harness.h"
 
 #include <stdint.h>
 
@@ -64,31 +64,31 @@ static bool same_shape(const Type *gen, const Type *dsl) {
     return true;
 }
 
-TEST(a_generated_descriptor_matches_the_dsl) {
+static void TestAGeneratedDescriptorMatchesTheDsl(TestingT *t) {
     CHECK(same_shape(TYPE_OF(GenPoint), TYPE_OF(DslPoint)));
     CHECK(same_shape(TYPE_OF(GenSpan), TYPE_OF(DslSpan)));
 }
 
 /* The name is the one thing that does differ, and it is the type's own name
  * rather than anything the generator invented. */
-TEST(a_generated_descriptor_is_named_after_its_type) {
+static void TestAGeneratedDescriptorIsNamedAfterItsType(TestingT *t) {
     CHECK(str_eq(TYPE_OF(GenPoint)->name, BURROW_S("GenPoint")));
     CHECK(str_eq(TYPE_OF(GenSpan)->name, BURROW_S("GenSpan")));
     CHECK_INT_EQ(TYPE_OF(GenPoint)->pkg_path.len, 0);
 }
 
-TEST(the_fields_are_the_ones_that_were_declared) {
-    const Type *t = TYPE_OF(GenPoint);
+static void TestTheFieldsAreTheOnesThatWereDeclared(TestingT *t) {
+    const Type *ty = TYPE_OF(GenPoint);
 
-    CHECK_INT_EQ(t->nfield, 3);
-    CHECK(str_eq(t->fields[0].name, BURROW_S("X")));
-    CHECK(str_eq(t->fields[1].name, BURROW_S("Y")));
-    CHECK(str_eq(t->fields[2].name, BURROW_S("Label")));
+    CHECK_INT_EQ(ty->nfield, 3);
+    CHECK(str_eq(ty->fields[0].name, BURROW_S("X")));
+    CHECK(str_eq(ty->fields[1].name, BURROW_S("Y")));
+    CHECK(str_eq(ty->fields[2].name, BURROW_S("Label")));
 }
 
 /* A field with no BURROW_TAG gets an empty tag rather than a NULL one, so that
  * tag_lookup can be handed it without a NULL check first. */
-TEST(a_field_with_no_tag_has_an_empty_tag) {
+static void TestAFieldWithNoTagHasAnEmptyTag(TestingT *t) {
     const Field *f = type_field_by_name(TYPE_OF(GenSpan), BURROW_S("Flag"));
 
     CHECK(f != NULL);
@@ -99,29 +99,29 @@ TEST(a_field_with_no_tag_has_an_empty_tag) {
 /* The tags survive the trip through the annotation intact, quotes and commas
  * and all, which is the thing most likely to be mangled by a generator that
  * re-escapes a string one time too many or one too few. */
-TEST(the_tags_survive_the_round_trip) {
-    const Type *t = TYPE_OF(GenPoint);
+static void TestTheTagsSurviveTheRoundTrip(TestingT *t) {
+    const Type *ty = TYPE_OF(GenPoint);
 
-    CHECK(str_eq(t->fields[0].tag, BURROW_S("json:\"x\"")));
-    CHECK(str_eq(t->fields[2].tag, BURROW_S("json:\"label,omitempty\"")));
+    CHECK(str_eq(ty->fields[0].tag, BURROW_S("json:\"x\"")));
+    CHECK(str_eq(ty->fields[2].tag, BURROW_S("json:\"label,omitempty\"")));
 }
 
 /* Offsets come from offsetof in the generated file, so they are the compiler's
  * answer for this target and not the generator's guess. Checking them against
  * offsetof here is checking that the right field got the right one. */
-TEST(the_offsets_are_this_targets_offsets) {
-    const Type *t = TYPE_OF(GenSpan);
+static void TestTheOffsetsAreThisTargetsOffsets(TestingT *t) {
+    const Type *ty = TYPE_OF(GenSpan);
 
-    CHECK_INT_EQ(t->fields[0].offset, (uint32_t)offsetof(GenSpan, Small));
-    CHECK_INT_EQ(t->fields[1].offset, (uint32_t)offsetof(GenSpan, Big));
-    CHECK_INT_EQ(t->fields[2].offset, (uint32_t)offsetof(GenSpan, Flag));
+    CHECK_INT_EQ(ty->fields[0].offset, (uint32_t)offsetof(GenSpan, Small));
+    CHECK_INT_EQ(ty->fields[1].offset, (uint32_t)offsetof(GenSpan, Big));
+    CHECK_INT_EQ(ty->fields[2].offset, (uint32_t)offsetof(GenSpan, Flag));
 
     /* And the padding is real, so this is not a test that passes because every
      * offset happens to be the sum of the sizes before it. */
-    CHECK(t->fields[1].offset > t->fields[0].offset + 1);
+    CHECK(ty->fields[1].offset > ty->fields[0].offset + 1);
 }
 
-TEST(a_generated_type_is_a_struct_of_the_right_size) {
+static void TestAGeneratedTypeIsAStructOfTheRightSize(TestingT *t) {
     CHECK_INT_EQ(TYPE_OF(GenSpan)->kind, KIND_STRUCT);
     CHECK_INT_EQ(TYPE_OF(GenSpan)->size, (uint32_t)sizeof(GenSpan));
     CHECK_INT_EQ(TYPE_OF(GenSpan)->align, (uint16_t)_Alignof(GenSpan));
@@ -131,21 +131,20 @@ TEST(a_generated_type_is_a_struct_of_the_right_size) {
  * assert the absence of a symbol from inside C, so what this asserts is the
  * consequence: the type still exists and is still usable, it just has no
  * descriptor, and the build proves the second half by linking at all. */
-TEST(an_unmarked_struct_is_left_alone) {
+static void TestAnUnmarkedStructIsLeftAlone(TestingT *t) {
     GenIgnored g = {'x'};
 
     CHECK_INT_EQ(g.whatever, 'x');
 }
 
-int main(void) {
-    RUN(a_generated_descriptor_matches_the_dsl);
-    RUN(a_generated_descriptor_is_named_after_its_type);
-    RUN(the_fields_are_the_ones_that_were_declared);
-    RUN(a_field_with_no_tag_has_an_empty_tag);
-    RUN(the_tags_survive_the_round_trip);
-    RUN(the_offsets_are_this_targets_offsets);
-    RUN(a_generated_type_is_a_struct_of_the_right_size);
-    RUN(an_unmarked_struct_is_left_alone);
+#define TESTS(X)                                                                       \
+    X(TestAGeneratedDescriptorMatchesTheDsl)                                           \
+    X(TestAGeneratedDescriptorIsNamedAfterItsType)                                     \
+    X(TestTheFieldsAreTheOnesThatWereDeclared)                                         \
+    X(TestAFieldWithNoTagHasAnEmptyTag)                                                \
+    X(TestTheTagsSurviveTheRoundTrip)                                                  \
+    X(TestTheOffsetsAreThisTargetsOffsets)                                             \
+    X(TestAGeneratedTypeIsAStructOfTheRightSize)                                       \
+    X(TestAnUnmarkedStructIsLeftAlone)
 
-    return harness_report("gen");
-}
+TESTING_MAIN(TESTS)

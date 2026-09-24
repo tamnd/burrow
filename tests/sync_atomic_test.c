@@ -22,7 +22,7 @@
 #include "burrow/panic.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdint.h>
 
@@ -47,7 +47,7 @@
 
 /* ------------------------------------------------------------------- add */
 
-TEST(add_returns_the_new_value) {
+static void TestAddReturnsTheNewValue(TestingT *t) {
     int32_t i32 = 40;
     int64_t i64 = 40;
     uint32_t u32 = 40;
@@ -66,7 +66,7 @@ TEST(add_returns_the_new_value) {
     CHECK(up == 42);
 }
 
-TEST(add_counts_down_as_well) {
+static void TestAddCountsDownAsWell(TestingT *t) {
     int32_t i32 = 10;
     int64_t i64 = 10;
     uint32_t u32 = 10;
@@ -81,7 +81,7 @@ TEST(add_counts_down_as_well) {
     CHECK(sync_atomic_add_uint64(&u64, ~(uint64_t)0) == 9);
 }
 
-TEST(add_wraps_where_the_type_wraps) {
+static void TestAddWrapsWhereTheTypeWraps(TestingT *t) {
     int32_t i32 = INT32_MAX;
     int64_t i64 = INT64_MAX;
     uint32_t u32 = UINT32_MAX;
@@ -95,7 +95,7 @@ TEST(add_wraps_where_the_type_wraps) {
 
 /* ------------------------------------------------------------ and, and or */
 
-TEST(and_and_or_return_the_old_value) {
+static void TestAndAndOrReturnTheOldValue(TestingT *t) {
     int32_t i32 = -1;
     int64_t i64 = -1;
     uint32_t u32 = U32_ODD;
@@ -131,7 +131,7 @@ TEST(and_and_or_return_the_old_value) {
 
 /* And keeps its sign, which is the one thing a mask on a signed type can get
  * wrong: the conversion out and back has to leave the top bit where it was. */
-TEST(and_of_a_negative_stays_negative) {
+static void TestAndOfANegativeStaysNegative(TestingT *t) {
     int32_t i32 = I32_ODD;
     int64_t i64 = I64_ODD;
 
@@ -143,7 +143,7 @@ TEST(and_of_a_negative_stays_negative) {
 
 /* ------------------------------------------------------ load, store, swap */
 
-TEST(load_and_store_round_trip_the_awkward_values) {
+static void TestLoadAndStoreRoundTripTheAwkwardValues(TestingT *t) {
     int32_t i32 = 0;
     int64_t i64 = 0;
     uint32_t u32 = 0;
@@ -170,7 +170,7 @@ TEST(load_and_store_round_trip_the_awkward_values) {
     CHECK(sync_atomic_load_uintptr(&up) == UINTPTR_MAX);
 }
 
-TEST(swap_returns_what_was_there) {
+static void TestSwapReturnsWhatWasThere(TestingT *t) {
     int32_t i32 = I32_ODD;
     int64_t i64 = I64_ODD;
     uint32_t u32 = U32_ODD;
@@ -189,7 +189,7 @@ TEST(swap_returns_what_was_there) {
     CHECK(up == 1);
 }
 
-TEST(compare_and_swap_stores_only_on_a_match) {
+static void TestCompareAndSwapStoresOnlyOnAMatch(TestingT *t) {
     int32_t i32 = I32_ODD;
     int64_t i64 = I64_ODD;
     uint32_t u32 = U32_ODD;
@@ -221,7 +221,7 @@ TEST(compare_and_swap_stores_only_on_a_match) {
 
 /* A retry loop is the shape every caller writes, and it has to terminate on the
  * first turn when nobody else is here. */
-TEST(a_compare_and_swap_loop_terminates_on_its_own) {
+static void TestACompareAndSwapLoopTerminatesOnItsOwn(TestingT *t) {
     int64_t n = 21;
     int turns = 0;
 
@@ -238,7 +238,7 @@ TEST(a_compare_and_swap_loop_terminates_on_its_own) {
 
 /* -------------------------------------------------------------- pointers */
 
-TEST(the_pointer_functions_round_trip) {
+static void TestThePointerFunctionsRoundTrip(TestingT *t) {
     int left = 1;
     int right = 2;
     void *p = NULL;
@@ -258,7 +258,7 @@ TEST(the_pointer_functions_round_trip) {
 
 /* ----------------------------------------------------------- the structs */
 
-TEST(the_zero_value_of_every_type_is_ready_to_use) {
+static void TestTheZeroValueOfEveryTypeIsReadyToUse(TestingT *t) {
     SyncAtomicBool b = {0};
     SyncAtomicInt32 i32 = {0};
     SyncAtomicInt64 i64 = {0};
@@ -278,7 +278,7 @@ TEST(the_zero_value_of_every_type_is_ready_to_use) {
     CHECK(BURROW_ANY_IS_NIL(sync_atomic_value_load(&v)));
 }
 
-TEST(the_bool_type_has_the_four_operations) {
+static void TestTheBoolTypeHasTheFourOperations(TestingT *t) {
     SyncAtomicBool b = {0};
 
     sync_atomic_bool_store(&b, true);
@@ -296,7 +296,7 @@ TEST(the_bool_type_has_the_four_operations) {
  * checks is that each one got handed the right field and the right operand. A
  * copy and paste error between two of these is invisible to a compiler and
  * obvious here. */
-TEST(the_integer_types_have_the_seven_operations) {
+static void TestTheIntegerTypesHaveTheSevenOperations(TestingT *t) {
     SyncAtomicInt32 i32 = {0};
     SyncAtomicInt64 i64 = {0};
     SyncAtomicUint32 u32 = {0};
@@ -356,7 +356,7 @@ TEST(the_integer_types_have_the_seven_operations) {
     CHECK(sync_atomic_uintptr_load(&up) == 5);
 }
 
-TEST(the_pointer_type_has_the_four_operations) {
+static void TestThePointerTypeHasTheFourOperations(TestingT *t) {
     SyncAtomicPointer p = {0};
     int left = 1;
     int right = 2;
@@ -374,7 +374,7 @@ TEST(the_pointer_type_has_the_four_operations) {
 static Int value_n = 7;
 static Int value_m = 9;
 
-TEST(a_value_loads_what_was_stored) {
+static void TestAValueLoadsWhatWasStored(TestingT *t) {
     SyncAtomicValue v = {0, 0};
     Any got;
 
@@ -390,7 +390,7 @@ TEST(a_value_loads_what_was_stored) {
     CHECK(*(Int *)sync_atomic_value_load(&v).data == 9);
 }
 
-TEST(a_value_swap_returns_the_one_before_it) {
+static void TestAValueSwapReturnsTheOneBeforeIt(TestingT *t) {
     SyncAtomicValue v = {0, 0};
     Any old;
 
@@ -408,7 +408,7 @@ TEST(a_value_swap_returns_the_one_before_it) {
 /* The comparison is Go's ==, which goes through the type descriptor, so a value
  * equal to the stored one but held somewhere else still matches. That is the
  * one thing Value can do that a compare and swap on a word cannot. */
-TEST(a_value_compares_by_value_and_not_by_address) {
+static void TestAValueComparesByValueAndNotByAddress(TestingT *t) {
     SyncAtomicValue v = {0, 0};
     Int same = 7;
     Int other = 8;
@@ -443,7 +443,7 @@ static void remember(Any p) {
     message[n] = '\0';
 }
 
-TEST(storing_nil_into_a_value_panics) {
+static void TestStoringNilIntoAValuePanics(TestingT *t) {
     caught = 0;
     panicking = (SyncAtomicValue){0, 0};
 
@@ -459,7 +459,7 @@ TEST(storing_nil_into_a_value_panics) {
     CHECK_STR_EQ(message, "sync/atomic: store of nil value into Value");
 }
 
-TEST(storing_a_second_type_into_a_value_panics) {
+static void TestStoringASecondTypeIntoAValuePanics(TestingT *t) {
     caught = 0;
     panicking = (SyncAtomicValue){0, 0};
     sync_atomic_value_store(&panicking, BURROW_ANY(TYPE_INT, &value_n));
@@ -477,7 +477,7 @@ TEST(storing_a_second_type_into_a_value_panics) {
                  "sync/atomic: store of inconsistently typed value into Value");
 }
 
-TEST(swap_and_compare_and_swap_refuse_the_same_two_things) {
+static void TestSwapAndCompareAndSwapRefuseTheSameTwoThings(TestingT *t) {
     caught = 0;
     panicking = (SyncAtomicValue){0, 0};
 
@@ -540,26 +540,26 @@ TEST(swap_and_compare_and_swap_refuse_the_same_two_things) {
     CHECK_INT_EQ(caught, 5);
 }
 
-int main(void) {
-    RUN(add_returns_the_new_value);
-    RUN(add_counts_down_as_well);
-    RUN(add_wraps_where_the_type_wraps);
-    RUN(and_and_or_return_the_old_value);
-    RUN(and_of_a_negative_stays_negative);
-    RUN(load_and_store_round_trip_the_awkward_values);
-    RUN(swap_returns_what_was_there);
-    RUN(compare_and_swap_stores_only_on_a_match);
-    RUN(a_compare_and_swap_loop_terminates_on_its_own);
-    RUN(the_pointer_functions_round_trip);
-    RUN(the_zero_value_of_every_type_is_ready_to_use);
-    RUN(the_bool_type_has_the_four_operations);
-    RUN(the_integer_types_have_the_seven_operations);
-    RUN(the_pointer_type_has_the_four_operations);
-    RUN(a_value_loads_what_was_stored);
-    RUN(a_value_swap_returns_the_one_before_it);
-    RUN(a_value_compares_by_value_and_not_by_address);
-    RUN(storing_nil_into_a_value_panics);
-    RUN(storing_a_second_type_into_a_value_panics);
-    RUN(swap_and_compare_and_swap_refuse_the_same_two_things);
-    return harness_report(SYNC_ATOMIC_SUITE);
-}
+#define TESTS(X)                                                                       \
+    X(TestAddReturnsTheNewValue)                                                       \
+    X(TestAddCountsDownAsWell)                                                         \
+    X(TestAddWrapsWhereTheTypeWraps)                                                   \
+    X(TestAndAndOrReturnTheOldValue)                                                   \
+    X(TestAndOfANegativeStaysNegative)                                                 \
+    X(TestLoadAndStoreRoundTripTheAwkwardValues)                                       \
+    X(TestSwapReturnsWhatWasThere)                                                     \
+    X(TestCompareAndSwapStoresOnlyOnAMatch)                                            \
+    X(TestACompareAndSwapLoopTerminatesOnItsOwn)                                       \
+    X(TestThePointerFunctionsRoundTrip)                                                \
+    X(TestTheZeroValueOfEveryTypeIsReadyToUse)                                         \
+    X(TestTheBoolTypeHasTheFourOperations)                                             \
+    X(TestTheIntegerTypesHaveTheSevenOperations)                                       \
+    X(TestThePointerTypeHasTheFourOperations)                                          \
+    X(TestAValueLoadsWhatWasStored)                                                    \
+    X(TestAValueSwapReturnsTheOneBeforeIt)                                             \
+    X(TestAValueComparesByValueAndNotByAddress)                                        \
+    X(TestStoringNilIntoAValuePanics)                                                  \
+    X(TestStoringASecondTypeIntoAValuePanics)                                          \
+    X(TestSwapAndCompareAndSwapRefuseTheSameTwoThings)
+
+TESTING_MAIN(TESTS)

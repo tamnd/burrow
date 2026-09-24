@@ -23,7 +23,7 @@
 #include "burrow/thread.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -41,7 +41,7 @@
 
 static burrow__Thread threads[THREADS];
 
-static void run_all(burrow__ThreadFn fn) {
+static void run_all(TestingT *t, burrow__ThreadFn fn) {
     for (size_t i = 0; i < THREADS; i++)
         CHECK(burrow__thread_start(&threads[i], fn, (void *)(uintptr_t)i, 0));
     for (size_t i = 0; i < THREADS; i++)
@@ -66,12 +66,12 @@ static void count_everything(void *arg) {
     (void)sync_atomic_uint32_or(&bits, 1u << me);
 }
 
-TEST(nothing_is_lost_when_every_shape_counts_at_once) {
+static void TestNothingIsLostWhenEveryShapeCountsAtOnce(TestingT *t) {
     plain = 0;
     typed = (SyncAtomicInt64){0};
     bits = (SyncAtomicUint32){0};
 
-    run_all(count_everything);
+    run_all(t, count_everything);
 
     CHECK(sync_atomic_load_int64(&plain) == (int64_t)THREADS * ROUNDS);
     CHECK(sync_atomic_int64_load(&typed) == (int64_t)THREADS * ROUNDS);
@@ -124,10 +124,10 @@ static void store_and_read(void *arg) {
     }
 }
 
-TEST(a_value_is_never_seen_half_stored) {
+static void TestAValueIsNeverSeenHalfStored(TestingT *t) {
     reset_values();
 
-    run_all(store_and_read);
+    run_all(t, store_and_read);
 
     CHECK_INT_EQ(sync_atomic_uint32_load(&wrong), 0);
     for (int i = 0; i < VALUES; i++)
@@ -150,12 +150,12 @@ static void swap_and_count(void *arg) {
     }
 }
 
-TEST(exactly_one_swap_per_value_finds_it_empty) {
+static void TestExactlyOneSwapPerValueFindsItEmpty(TestingT *t) {
     int32_t total = 0;
 
     reset_values();
 
-    run_all(swap_and_count);
+    run_all(t, swap_and_count);
 
     for (size_t i = 0; i < THREADS; i++)
         total += nils[i];
@@ -179,12 +179,12 @@ static void race_to_claim(void *arg) {
     }
 }
 
-TEST(exactly_one_compare_and_swap_per_value_claims_it) {
+static void TestExactlyOneCompareAndSwapPerValueClaimsIt(TestingT *t) {
     int32_t total = 0;
 
     reset_values();
 
-    run_all(race_to_claim);
+    run_all(t, race_to_claim);
 
     for (size_t i = 0; i < THREADS; i++)
         total += wins[i];
@@ -192,13 +192,17 @@ TEST(exactly_one_compare_and_swap_per_value_claims_it) {
     CHECK_INT_EQ(sync_atomic_uint32_load(&wrong), 0);
 }
 
-int main(void) {
+#define TESTS(X)                                                                       \
+    X(TestNothingIsLostWhenEveryShapeCountsAtOnce)                                     \
+    X(TestAValueIsNeverSeenHalfStored)                                                 \
+    X(TestExactlyOneSwapPerValueFindsItEmpty)                                          \
+    X(TestExactlyOneCompareAndSwapPerValueClaimsIt)
+
+static int TestMain(TestingM *m) {
     for (size_t i = 0; i < THREADS; i++)
         cells[i] = (Int)i;
-
-    RUN(nothing_is_lost_when_every_shape_counts_at_once);
-    RUN(a_value_is_never_seen_half_stored);
-    RUN(exactly_one_swap_per_value_finds_it_empty);
-    RUN(exactly_one_compare_and_swap_per_value_claims_it);
-    return harness_report("sync/atomic/concurrent");
+    int code = testing_m_run(m);
+    return code;
 }
+
+TESTING_MAIN_WITH(TestMain, TESTS)

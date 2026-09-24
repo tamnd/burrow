@@ -44,8 +44,6 @@
 #include "burrow/panic.h"
 #include "burrow/runtime.h"
 
-#include "harness.h"
-
 /* gcc's -Wclobbered fires on every local a test builds before EXPECT_FATAL and
  * then hands to the statement inside it, because the local is live across the
  * setjmp inside BURROW_TRY and gcc cannot prove it is never written to

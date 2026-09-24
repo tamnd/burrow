@@ -21,7 +21,7 @@
 
 #include "burrow/mcontext.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdint.h>
 
@@ -45,7 +45,7 @@ static void note_that_it_ran(void *arg) {
     ran_arg = arg;
 }
 
-TEST(a_context_runs_its_entry_and_returns_to_its_link) {
+static void TestAContextRunsItsEntryAndReturnsToItsLink(TestingT *t) {
     int marker = 7;
 
     CHECK(burrow__mcontext_attach(&main_ctx));
@@ -91,7 +91,7 @@ static void three_steps(void *arg) {
     step_stage = mine + 3;
 }
 
-TEST(a_context_carries_on_where_it_stopped) {
+static void TestAContextCarriesOnWhereItStopped(TestingT *t) {
     CHECK(burrow__mcontext_attach(&main_ctx));
     step_stage = 0;
 
@@ -153,13 +153,13 @@ static void scribble_over_everything(void *arg) {
              v == fp_seed * 17.0 && w == fp_seed * 18.0;
 }
 
-TEST(everything_the_abi_promised_survives_a_switch) {
+static void TestEverythingTheAbiPromisedSurvivesASwitch(TestingT *t) {
     uint64_t a = int_seed + 1U, b = int_seed + 2U, c = int_seed + 3U;
     uint64_t d = int_seed + 4U, e = int_seed + 5U, f = int_seed + 6U;
     uint64_t g = int_seed + 7U, h = int_seed + 8U;
 
     double p = fp_seed + 1.0, q = fp_seed + 2.0, r = fp_seed + 3.0;
-    double s = fp_seed + 4.0, t = fp_seed + 5.0, u = fp_seed + 6.0;
+    double s = fp_seed + 4.0, t5 = fp_seed + 5.0, u = fp_seed + 6.0;
     double v = fp_seed + 7.0, w = fp_seed + 8.0;
 
     CHECK(burrow__mcontext_attach(&main_ctx));
@@ -185,7 +185,7 @@ TEST(everything_the_abi_promised_survives_a_switch) {
     CHECK(q == fp_seed + 2.0);
     CHECK(r == fp_seed + 3.0);
     CHECK(s == fp_seed + 4.0);
-    CHECK(t == fp_seed + 5.0);
+    CHECK(t5 == fp_seed + 5.0);
     CHECK(u == fp_seed + 6.0);
     CHECK(v == fp_seed + 7.0);
     CHECK(w == fp_seed + 8.0);
@@ -217,7 +217,7 @@ static void pong(void *arg) {
     }
 }
 
-TEST(two_contexts_pass_control_back_and_forth) {
+static void TestTwoContextsPassControlBackAndForth(TestingT *t) {
     CHECK(burrow__mcontext_attach(&main_ctx));
     volleys_seen = 0;
 
@@ -269,7 +269,7 @@ static void outer_body(void *arg) {
     leave_a_mark(6);
 }
 
-TEST(three_contexts_hand_control_around) {
+static void TestThreeContextsHandControlAround(TestingT *t) {
     CHECK(burrow__mcontext_attach(&main_ctx));
     trail_len = 0;
 
@@ -314,7 +314,7 @@ static void crew_body(void *arg) {
 
 static int crew_ids[CREW];
 
-TEST(a_round_robin_over_sixteen_contexts) {
+static void TestARoundRobinOverSixteenContexts(TestingT *t) {
     CHECK(burrow__mcontext_attach(&main_ctx));
 
     for (int i = 0; i < CREW; i++) {
@@ -345,7 +345,7 @@ static void never_runs(void *arg) {
     (void)arg;
 }
 
-TEST(make_refuses_what_it_cannot_honour) {
+static void TestMakeRefusesWhatItCannotHonour(TestingT *t) {
     /* Below the floor. A stack this small would not hold a signal frame on the
      * fallback paths, never mind anything the caller wants to do. */
     CHECK(!burrow__mcontext_make(&reject_ctx, reject_stack, 128, never_runs, NULL,
@@ -364,13 +364,13 @@ TEST(make_refuses_what_it_cannot_honour) {
     burrow__mcontext_free(&reject_ctx);
 }
 
-int main(void) {
-    RUN(a_context_runs_its_entry_and_returns_to_its_link);
-    RUN(a_context_carries_on_where_it_stopped);
-    RUN(everything_the_abi_promised_survives_a_switch);
-    RUN(two_contexts_pass_control_back_and_forth);
-    RUN(three_contexts_hand_control_around);
-    RUN(a_round_robin_over_sixteen_contexts);
-    RUN(make_refuses_what_it_cannot_honour);
-    return harness_report("mcontext");
-}
+#define TESTS(X)                                                                       \
+    X(TestAContextRunsItsEntryAndReturnsToItsLink)                                     \
+    X(TestAContextCarriesOnWhereItStopped)                                             \
+    X(TestEverythingTheAbiPromisedSurvivesASwitch)                                     \
+    X(TestTwoContextsPassControlBackAndForth)                                          \
+    X(TestThreeContextsHandControlAround)                                              \
+    X(TestARoundRobinOverSixteenContexts)                                              \
+    X(TestMakeRefusesWhatItCannotHonour)
+
+TESTING_MAIN(TESTS)

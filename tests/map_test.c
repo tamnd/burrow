@@ -10,8 +10,8 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 static Arena ar;
 static Alloc *a;
@@ -82,7 +82,7 @@ static bool is_negative_zero(double d) {
 
 /* ------------------------------------------------------------------- basics */
 
-TEST(a_new_map_is_empty) {
+static void TestANewMapIsEmpty(TestingT *t) {
     Map *m = map_make(a, TYPE_STRING, TYPE_INT, 0);
     CHECK(m != NULL);
     CHECK_INT_EQ(map_len(m), 0);
@@ -94,7 +94,7 @@ TEST(a_new_map_is_empty) {
 /* A nil map in Go is readable and empty, and only writing to one is a problem.
  * Code ported from Go leans on this, since the zero value of a map field is a
  * map you are allowed to read. */
-TEST(a_nil_map_reads_as_empty) {
+static void TestANilMapReadsAsEmpty(TestingT *t) {
     const void *k = NULL;
     void *v = NULL;
     MapIter it;
@@ -115,7 +115,7 @@ TEST(a_nil_map_reads_as_empty) {
     CHECK(!map_next(&it, &k, &v));
 }
 
-TEST(set_then_get) {
+static void TestSetThenGet(TestingT *t) {
     Map *m = map_make(a, TYPE_INT, TYPE_INT, 0);
     Int *v;
 
@@ -134,7 +134,7 @@ TEST(set_then_get) {
 
 /* m[k] = v twice is one entry, and the pointer that comes back is into the
  * table, so writing through it is m[k] = v as well. */
-TEST(setting_the_same_key_twice_replaces_the_value) {
+static void TestSettingTheSameKeyTwiceReplacesTheValue(TestingT *t) {
     Map *m = map_make(a, TYPE_INT, TYPE_INT, 0);
     Int *v;
 
@@ -154,7 +154,7 @@ TEST(setting_the_same_key_twice_replaces_the_value) {
         CHECK_INT_EQ(*v, 21);
 }
 
-TEST(get2_reports_presence_and_zeroes_on_a_miss) {
+static void TestGet2ReportsPresenceAndZeroesOnAMiss(TestingT *t) {
     Map *m = map_make(a, TYPE_INT, TYPE_INT, 0);
     Int key = 5;
     Int got = 999;
@@ -172,7 +172,7 @@ TEST(get2_reports_presence_and_zeroes_on_a_miss) {
 
 /* The reason TypeOps exists. Two Str values with different pointers and the
  * same bytes are one string in Go, so they have to be one key. */
-TEST(string_keys_compare_by_their_bytes) {
+static void TestStringKeysCompareByTheirBytes(TestingT *t) {
     Map *m = map_make(a, TYPE_STRING, TYPE_INT, 0);
     char buf[] = {'k', 'e', 'y'};
     Str same = str_from_bytes(buf, 3);
@@ -195,7 +195,7 @@ TEST(string_keys_compare_by_their_bytes) {
 
 /* --------------------------------------------------------------- the growing */
 
-TEST(a_thousand_keys_all_come_back) {
+static void TestAThousandKeysAllComeBack(TestingT *t) {
     Map *m = map_make(a, TYPE_INT, TYPE_INT, 0);
     Int i;
 
@@ -221,7 +221,7 @@ TEST(a_thousand_keys_all_come_back) {
 /* A hint is a promise that filling the map to that many entries will not
  * rehash, and a rehash is observable from outside: the arena never hands out
  * the same address twice, so a table that moved is a pointer that changed. */
-TEST(a_hint_means_no_rehash_while_filling_to_it) {
+static void TestAHintMeansNoRehashWhileFillingToIt(TestingT *t) {
     Map *m = map_make(a, TYPE_INT, TYPE_INT, 100);
     Int *p;
     Int i;
@@ -239,7 +239,7 @@ TEST(a_hint_means_no_rehash_while_filling_to_it) {
 
 /* -------------------------------------------------------------- the deleting */
 
-TEST(len_tracks_inserts_and_deletes) {
+static void TestLenTracksInsertsAndDeletes(TestingT *t) {
     Map *m = map_make(a, TYPE_INT, TYPE_INT, 0);
     Int i;
 
@@ -262,7 +262,7 @@ TEST(len_tracks_inserts_and_deletes) {
     CHECK(BURROW_MAP_HAS(Int, m, 0));
 }
 
-TEST(deleting_a_key_that_is_not_there_does_nothing) {
+static void TestDeletingAKeyThatIsNotThereDoesNothing(TestingT *t) {
     Map *m = map_make(a, TYPE_INT, TYPE_INT, 0);
 
     BURROW_MAP_DEL(Int, m, 1); /* on an empty map, which has no table yet */
@@ -281,7 +281,7 @@ TEST(deleting_a_key_that_is_not_there_does_nothing) {
  * ever, which makes bytes_total the exact number of bytes this map has ever
  * asked for. Once the churn reaches a steady state that number has to stop
  * moving. */
-TEST(filling_and_emptying_a_map_reaches_a_steady_state) {
+static void TestFillingAndEmptyingAMapReachesASteadyState(TestingT *t) {
     Arena churn;
     Alloc *ca;
     Map *m;
@@ -313,7 +313,7 @@ TEST(filling_and_emptying_a_map_reaches_a_steady_state) {
     arena_free(&churn);
 }
 
-TEST(clear_empties_the_map_and_keeps_it_usable) {
+static void TestClearEmptiesTheMapAndKeepsItUsable(TestingT *t) {
     Map *m = map_make(a, TYPE_INT, TYPE_INT, 0);
     Int i;
 
@@ -340,7 +340,7 @@ TEST(clear_empties_the_map_and_keeps_it_usable) {
 
 /* ------------------------------------------------------------- the iteration */
 
-TEST(iteration_visits_every_entry_exactly_once) {
+static void TestIterationVisitsEveryEntryExactlyOnce(TestingT *t) {
     Map *m = map_make(a, TYPE_INT, TYPE_INT, 0);
     bool seen[200];
     const void *k;
@@ -371,7 +371,7 @@ TEST(iteration_visits_every_entry_exactly_once) {
     CHECK(!map_next(&it, &k, &v));
 }
 
-TEST(iteration_over_an_empty_map_produces_nothing) {
+static void TestIterationOverAnEmptyMapProducesNothing(TestingT *t) {
     Map *fresh = map_make(a, TYPE_INT, TYPE_INT, 0);
     Map *emptied = map_make(a, TYPE_INT, TYPE_INT, 8);
     MapIter it;
@@ -390,7 +390,7 @@ TEST(iteration_over_an_empty_map_produces_nothing) {
  * though the test is a statistical one. Sixteen iterators over a map of 64
  * entries agreeing on the first key by chance is somewhere around one in a
  * hundred billion. */
-TEST(two_iterators_disagree_about_the_order) {
+static void TestTwoIteratorsDisagreeAboutTheOrder(TestingT *t) {
     Map *m = map_make(a, TYPE_INT, TYPE_INT, 0);
     Int firsts[16];
     bool all_same = true;
@@ -411,7 +411,7 @@ TEST(two_iterators_disagree_about_the_order) {
     CHECK(!all_same);
 }
 
-TEST(deleting_during_iteration_is_allowed) {
+static void TestDeletingDuringIterationIsAllowed(TestingT *t) {
     Map *m = map_make(a, TYPE_INT, TYPE_INT, 0);
     const void *k;
     MapIter it;
@@ -448,7 +448,7 @@ TEST(deleting_during_iteration_is_allowed) {
 /* IEEE 754 says a negative zero and a positive zero are equal, so Go's map
  * says they are one key. Go also keeps the key that arrived first, which is
  * observable here because the two have different bits. */
-TEST(a_negative_zero_and_a_positive_zero_are_one_key) {
+static void TestANegativeZeroAndAPositiveZeroAreOneKey(TestingT *t) {
     Map *m = map_make(a, TYPE_FLOAT64, TYPE_INT, 0);
     const void *k = NULL;
     MapIter it;
@@ -474,7 +474,7 @@ TEST(a_negative_zero_and_a_positive_zero_are_one_key) {
 /* A NaN is not equal to itself, so a NaN key goes in and can never be found
  * again, and two of them are two entries. Go behaves exactly this way and it
  * catches everybody out once. */
-TEST(every_nan_key_is_a_different_key) {
+static void TestEveryNanKeyIsADifferentKey(TestingT *t) {
     Map *m = map_make(a, TYPE_FLOAT64, TYPE_INT, 0);
     double nan = make_nan();
     Int one = 1;
@@ -501,7 +501,7 @@ TEST(every_nan_key_is_a_different_key) {
     CHECK(BURROW_MAP_HAS(double, m, -1.5));
 }
 
-TEST(float32_keys_follow_the_same_two_rules) {
+static void TestFloat32KeysFollowTheSameTwoRules(TestingT *t) {
     Map *m = map_make(a, TYPE_FLOAT32, TYPE_INT, 0);
     float nan = (float)make_nan();
     Int one = 1;
@@ -518,7 +518,7 @@ TEST(float32_keys_follow_the_same_two_rules) {
 
 /* Go defines complex equality componentwise, so both float rules apply to both
  * halves. A complex with a NaN in it is never equal to anything. */
-TEST(complex_keys_compare_componentwise) {
+static void TestComplexKeysCompareComponentwise(TestingT *t) {
     Map *m = map_make(a, TYPE_COMPLEX128, TYPE_INT, 0);
     Complex128 signed_zeros = {0.0, -0.0};
     Complex128 plain_zeros = {0.0, 0.0};
@@ -542,7 +542,7 @@ TEST(complex_keys_compare_componentwise) {
 /* map[K]struct{} is how Go spells a set, so the value type has size zero and
  * has to keep working. A value pointer that came back NULL would read as a
  * missing key, so it is a real address into the slot instead. */
-TEST(a_zero_sized_value_makes_a_set) {
+static void TestAZeroSizedValueMakesASet(TestingT *t) {
     Map *m = map_make(a, TYPE_INT, &empty_struct, 0);
     Int i;
 
@@ -558,7 +558,7 @@ TEST(a_zero_sized_value_makes_a_set) {
 
 /* And a zero sized key, which Go allows and which holds exactly one entry,
  * since every key of that type is equal to every other. */
-TEST(a_zero_sized_key_holds_one_entry) {
+static void TestAZeroSizedKeyHoldsOneEntry(TestingT *t) {
     Map *m = map_make(a, &empty_struct, TYPE_INT, 0);
     char nothing = 0;
     Int v = 1;
@@ -578,7 +578,7 @@ TEST(a_zero_sized_key_holds_one_entry) {
 /* A key type with an alignment bigger than the control bytes, to make sure the
  * slots inside a group stay aligned. UndefinedBehaviorSanitizer is what
  * actually checks this, and it runs over this test in CI. */
-TEST(a_wide_key_stays_aligned) {
+static void TestAWideKeyStaysAligned(TestingT *t) {
     Map *m = map_make(a, TYPE_COMPLEX128, TYPE_COMPLEX128, 0);
     Int i;
 
@@ -603,7 +603,7 @@ TEST(a_wide_key_stays_aligned) {
 /* Go's assignment cannot fail because Go stops the world instead. A library in
  * C has to hand the decision back, so map_set returns a bool and the map is
  * untouched when it says false. */
-TEST(an_insert_that_cannot_allocate_says_so) {
+static void TestAnInsertThatCannotAllocateSaysSo(TestingT *t) {
     unsigned char buf[2048];
     Fixed fx;
     Alloc *fa;
@@ -629,7 +629,7 @@ TEST(an_insert_that_cannot_allocate_says_so) {
     CHECK(BURROW_MAP_HAS(Int, m, i - 2));
 }
 
-TEST(a_map_that_cannot_be_made_returns_null) {
+static void TestAMapThatCannotBeMadeReturnsNull(TestingT *t) {
     unsigned char buf[64];
     Fixed fx;
     Alloc *fa;
@@ -644,7 +644,7 @@ TEST(a_map_that_cannot_be_made_returns_null) {
 /* The heap allocator frees what it is given, so this is where map_free gets
  * checked. AddressSanitizer and LeakSanitizer run this test in CI and they are
  * the ones holding the assertion. */
-TEST(a_map_on_the_heap_can_be_freed) {
+static void TestAMapOnTheHeapCanBeFreed(TestingT *t) {
     Alloc *h = heap_allocator();
     Map *m = map_make(h, TYPE_INT, TYPE_INT, 0);
     Int i;
@@ -657,12 +657,12 @@ TEST(a_map_on_the_heap_can_be_freed) {
 
 /* ---------------------------------------------------------- the fatal errors */
 
-TEST(assigning_to_a_nil_map_panics) {
+static void TestAssigningToANilMapPanics(TestingT *t) {
     Int k = 1, v = 1;
     CHECK_RUNTIME_ERROR((void)map_set(NULL, &k, &v), "assignment to entry in nil map");
 }
 
-TEST(a_map_keyed_by_an_uncomparable_type_stops_the_program) {
+static void TestAMapKeyedByAnUncomparableTypeStopsTheProgram(TestingT *t) {
     CHECK_FATAL((void)map_make(a, &slice_of_int, TYPE_INT, 0),
                 "runtime error: makemap: invalid map key type");
 
@@ -670,7 +670,7 @@ TEST(a_map_keyed_by_an_uncomparable_type_stops_the_program) {
     CHECK(map_make(a, TYPE_INT, &slice_of_int, 0) != NULL);
 }
 
-TEST(an_absurd_hint_panics) {
+static void TestAnAbsurdHintPanics(TestingT *t) {
     CHECK_RUNTIME_ERROR((void)map_make(a, TYPE_INT, TYPE_INT, -1),
                         "runtime error: makemap: size out of range");
 }
@@ -680,7 +680,7 @@ TEST(an_absurd_hint_panics) {
  * keeps the old table alive for the iterator and can afford to because it has a
  * collector. This stops instead, which is the honest version of the same
  * unspecified program. */
-TEST(growing_during_iteration_stops_the_program) {
+static void TestGrowingDuringIterationStopsTheProgram(TestingT *t) {
     static Map *m;
     static MapIter it;
     Int i;
@@ -698,38 +698,43 @@ TEST(growing_during_iteration_stops_the_program) {
     CHECK_FATAL((void)map_next(&it, NULL, NULL), "map grew during iteration");
 }
 
-int main(void) {
+#define TESTS(X)                                                                       \
+    X(TestANewMapIsEmpty)                                                              \
+    X(TestANilMapReadsAsEmpty)                                                         \
+    X(TestSetThenGet)                                                                  \
+    X(TestSettingTheSameKeyTwiceReplacesTheValue)                                      \
+    X(TestGet2ReportsPresenceAndZeroesOnAMiss)                                         \
+    X(TestStringKeysCompareByTheirBytes)                                               \
+    X(TestAThousandKeysAllComeBack)                                                    \
+    X(TestAHintMeansNoRehashWhileFillingToIt)                                          \
+    X(TestLenTracksInsertsAndDeletes)                                                  \
+    X(TestDeletingAKeyThatIsNotThereDoesNothing)                                       \
+    X(TestFillingAndEmptyingAMapReachesASteadyState)                                   \
+    X(TestClearEmptiesTheMapAndKeepsItUsable)                                          \
+    X(TestIterationVisitsEveryEntryExactlyOnce)                                        \
+    X(TestIterationOverAnEmptyMapProducesNothing)                                      \
+    X(TestTwoIteratorsDisagreeAboutTheOrder)                                           \
+    X(TestDeletingDuringIterationIsAllowed)                                            \
+    X(TestANegativeZeroAndAPositiveZeroAreOneKey)                                      \
+    X(TestEveryNanKeyIsADifferentKey)                                                  \
+    X(TestFloat32KeysFollowTheSameTwoRules)                                            \
+    X(TestComplexKeysCompareComponentwise)                                             \
+    X(TestAZeroSizedValueMakesASet)                                                    \
+    X(TestAZeroSizedKeyHoldsOneEntry)                                                  \
+    X(TestAWideKeyStaysAligned)                                                        \
+    X(TestAnInsertThatCannotAllocateSaysSo)                                            \
+    X(TestAMapThatCannotBeMadeReturnsNull)                                             \
+    X(TestAMapOnTheHeapCanBeFreed)                                                     \
+    X(TestAssigningToANilMapPanics)                                                    \
+    X(TestAMapKeyedByAnUncomparableTypeStopsTheProgram)                                \
+    X(TestAnAbsurdHintPanics)                                                          \
+    X(TestGrowingDuringIterationStopsTheProgram)
+
+static int TestMain(TestingM *m) {
     setup();
-    RUN(a_new_map_is_empty);
-    RUN(a_nil_map_reads_as_empty);
-    RUN(set_then_get);
-    RUN(setting_the_same_key_twice_replaces_the_value);
-    RUN(get2_reports_presence_and_zeroes_on_a_miss);
-    RUN(string_keys_compare_by_their_bytes);
-    RUN(a_thousand_keys_all_come_back);
-    RUN(a_hint_means_no_rehash_while_filling_to_it);
-    RUN(len_tracks_inserts_and_deletes);
-    RUN(deleting_a_key_that_is_not_there_does_nothing);
-    RUN(filling_and_emptying_a_map_reaches_a_steady_state);
-    RUN(clear_empties_the_map_and_keeps_it_usable);
-    RUN(iteration_visits_every_entry_exactly_once);
-    RUN(iteration_over_an_empty_map_produces_nothing);
-    RUN(two_iterators_disagree_about_the_order);
-    RUN(deleting_during_iteration_is_allowed);
-    RUN(a_negative_zero_and_a_positive_zero_are_one_key);
-    RUN(every_nan_key_is_a_different_key);
-    RUN(float32_keys_follow_the_same_two_rules);
-    RUN(complex_keys_compare_componentwise);
-    RUN(a_zero_sized_value_makes_a_set);
-    RUN(a_zero_sized_key_holds_one_entry);
-    RUN(a_wide_key_stays_aligned);
-    RUN(an_insert_that_cannot_allocate_says_so);
-    RUN(a_map_that_cannot_be_made_returns_null);
-    RUN(a_map_on_the_heap_can_be_freed);
-    RUN(assigning_to_a_nil_map_panics);
-    RUN(a_map_keyed_by_an_uncomparable_type_stops_the_program);
-    RUN(an_absurd_hint_panics);
-    RUN(growing_during_iteration_stops_the_program);
+    int code = testing_m_run(m);
     teardown();
-    return harness_report("map");
+    return code;
 }
+
+TESTING_MAIN_WITH(TestMain, TESTS)

@@ -2,7 +2,7 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
-#include "harness.h"
+#include "check.h"
 
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
@@ -28,7 +28,7 @@ static bool aligned_to(const void *p, size_t align) {
 /* The rules that belong to the interface rather than to any one backend, so
  * they are checked against every backend rather than against a favourite. */
 
-TEST(interface_rejects_nonsense) {
+static void TestInterfaceRejectsNonsense(TestingT *t) {
     Alloc *a = heap_allocator();
     CHECK(mem_alloc(NULL, 8, 1) == NULL);
     CHECK(mem_alloc(a, 0, 1) == NULL);
@@ -50,7 +50,7 @@ TEST(interface_rejects_nonsense) {
     mem_free(NULL, NULL, 0, 1);
 }
 
-TEST(interface_zeroes) {
+static void TestInterfaceZeroes(TestingT *t) {
     Alloc *a = heap_allocator();
     /* Sizes chosen to land in a few different size classes, since a fresh
      * malloc often happens to return zeroed memory and we want the case where
@@ -68,7 +68,7 @@ TEST(interface_zeroes) {
     }
 }
 
-TEST(interface_realloc_zeroes_the_new_tail) {
+static void TestInterfaceReallocZeroesTheNewTail(TestingT *t) {
     Alloc *a = heap_allocator();
     unsigned char *p = (unsigned char *)mem_alloc(a, 16, 1);
     CHECK(p != NULL);
@@ -88,7 +88,7 @@ TEST(interface_realloc_zeroes_the_new_tail) {
     CHECK(mem_realloc(a, p, 64, 0, 1) == NULL);
 }
 
-TEST(heap_basics) {
+static void TestHeapBasics(TestingT *t) {
     Alloc *a = heap_allocator();
     CHECK(a == heap_allocator());
     CHECK(!mem_can_reset(a));
@@ -101,7 +101,7 @@ TEST(heap_basics) {
     CHECK_INT_EQ(s.allocs, 0); /* the heap does not count, by design */
 }
 
-TEST(heap_over_alignment) {
+static void TestHeapOverAlignment(TestingT *t) {
     Alloc *a = heap_allocator();
     size_t aligns[] = {32, 64, 128, 4096};
     for (size_t i = 0; i < sizeof(aligns) / sizeof(aligns[0]); i++) {
@@ -127,7 +127,7 @@ TEST(heap_over_alignment) {
     }
 }
 
-TEST(arena_hands_out_zeroed_memory) {
+static void TestArenaHandsOutZeroedMemory(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
@@ -149,7 +149,7 @@ TEST(arena_hands_out_zeroed_memory) {
     arena_free(&ar);
 }
 
-TEST(arena_alignment_and_separation) {
+static void TestArenaAlignmentAndSeparation(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
@@ -177,7 +177,7 @@ TEST(arena_alignment_and_separation) {
     arena_free(&ar);
 }
 
-TEST(arena_reset_keeps_its_chunks) {
+static void TestArenaResetKeepsItsChunks(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 4096);
     Alloc *a = arena_allocator(&ar);
@@ -202,7 +202,7 @@ TEST(arena_reset_keeps_its_chunks) {
     CHECK_INT_EQ(mem_stats(a).blocks, 0);
 }
 
-TEST(arena_release_goes_back_to_the_mark) {
+static void TestArenaReleaseGoesBackToTheMark(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 4096);
     Alloc *a = arena_allocator(&ar);
@@ -234,7 +234,7 @@ TEST(arena_release_goes_back_to_the_mark) {
     arena_free(&ar);
 }
 
-TEST(arena_marks_nest_and_go_stale_safely) {
+static void TestArenaMarksNestAndGoStaleSafely(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 1024);
     Alloc *a = arena_allocator(&ar);
@@ -259,7 +259,7 @@ TEST(arena_marks_nest_and_go_stale_safely) {
     arena_free(&ar);
 }
 
-TEST(arena_grows_the_last_allocation_in_place) {
+static void TestArenaGrowsTheLastAllocationInPlace(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
@@ -300,7 +300,7 @@ TEST(arena_grows_the_last_allocation_in_place) {
     arena_free(&ar);
 }
 
-TEST(arena_takes_allocations_larger_than_a_chunk) {
+static void TestArenaTakesAllocationsLargerThanAChunk(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 1024);
     Alloc *a = arena_allocator(&ar);
@@ -318,7 +318,7 @@ TEST(arena_takes_allocations_larger_than_a_chunk) {
     arena_free(&ar);
 }
 
-TEST(arena_nests) {
+static void TestArenaNests(TestingT *t) {
     Arena outer;
     arena_init(&outer, NULL, 0);
 
@@ -338,7 +338,7 @@ TEST(arena_nests) {
     arena_free(&outer);
 }
 
-TEST(arena_free_is_safe_twice_and_when_unused) {
+static void TestArenaFreeIsSafeTwiceAndWhenUnused(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     arena_free(&ar);
@@ -354,7 +354,7 @@ TEST(arena_free_is_safe_twice_and_when_unused) {
     arena_free(&ar);
 }
 
-TEST(fixed_stays_inside_the_budget) {
+static void TestFixedStaysInsideTheBudget(TestingT *t) {
     unsigned char buf[512];
     memset(buf, 0xFF, sizeof(buf)); /* nothing here is zero to begin with */
 
@@ -385,7 +385,7 @@ TEST(fixed_stays_inside_the_budget) {
     CHECK(s.bytes_peak >= 400);
 }
 
-TEST(fixed_handles_an_empty_buffer) {
+static void TestFixedHandlesAnEmptyBuffer(TestingT *t) {
     Fixed fx;
     fixed_init(&fx, NULL, 0);
     Alloc *a = fixed_allocator(&fx);
@@ -418,7 +418,7 @@ static bool oom_spy(void *ctx, size_t size, size_t align) {
     return s->answer;
 }
 
-TEST(oom_handler_fires_and_is_told_what_was_asked_for) {
+static void TestOomHandlerFiresAndIsToldWhatWasAskedFor(TestingT *t) {
     unsigned char buf[64];
     Fixed fx;
     fixed_init(&fx, buf, sizeof buf);
@@ -433,7 +433,7 @@ TEST(oom_handler_fires_and_is_told_what_was_asked_for) {
     CHECK_INT_EQ(spy.align, 16);
 }
 
-TEST(oom_handler_saying_no_lets_the_null_through) {
+static void TestOomHandlerSayingNoLetsTheNullThrough(TestingT *t) {
     unsigned char buf[64];
     Fixed fx;
     fixed_init(&fx, buf, sizeof buf);
@@ -447,7 +447,7 @@ TEST(oom_handler_saying_no_lets_the_null_through) {
     CHECK_INT_EQ(spy.calls, 2);
 }
 
-TEST(oom_handler_that_makes_room_gets_the_allocation_through) {
+static void TestOomHandlerThatMakesRoomGetsTheAllocationThrough(TestingT *t) {
     unsigned char buf[64];
     Fixed fx;
     fixed_init(&fx, buf, sizeof buf);
@@ -465,7 +465,7 @@ TEST(oom_handler_that_makes_room_gets_the_allocation_through) {
     CHECK(all_zero(p, 48));
 }
 
-TEST(oom_handler_is_asked_once_and_not_in_a_loop) {
+static void TestOomHandlerIsAskedOnceAndNotInALoop(TestingT *t) {
     unsigned char buf[64];
     Fixed fx;
     fixed_init(&fx, buf, sizeof buf);
@@ -480,7 +480,7 @@ TEST(oom_handler_is_asked_once_and_not_in_a_loop) {
     CHECK_INT_EQ(spy.calls, 1);
 }
 
-TEST(oom_handler_ignores_requests_no_allocator_could_have_met) {
+static void TestOomHandlerIgnoresRequestsNoAllocatorCouldHaveMet(TestingT *t) {
     unsigned char buf[64];
     Fixed fx;
     fixed_init(&fx, buf, sizeof buf);
@@ -499,7 +499,7 @@ TEST(oom_handler_ignores_requests_no_allocator_could_have_met) {
     CHECK_INT_EQ(spy.calls, 0);
 }
 
-TEST(oom_handler_covers_realloc) {
+static void TestOomHandlerCoversRealloc(TestingT *t) {
     unsigned char buf[64];
     Fixed fx;
     fixed_init(&fx, buf, sizeof buf);
@@ -516,7 +516,7 @@ TEST(oom_handler_covers_realloc) {
     CHECK_INT_EQ(spy.size, 4096);
 }
 
-TEST(oom_handler_can_be_removed_and_belongs_to_one_allocator) {
+static void TestOomHandlerCanBeRemovedAndBelongsToOneAllocator(TestingT *t) {
     unsigned char buf_a[64];
     unsigned char buf_b[64];
     Fixed fa;
@@ -541,7 +541,7 @@ TEST(oom_handler_can_be_removed_and_belongs_to_one_allocator) {
 
 /* An allocator with no handler behaves the way it always did, which is the
  * thing that must not have changed. */
-TEST(oom_without_a_handler_is_still_just_null) {
+static void TestOomWithoutAHandlerIsStillJustNull(TestingT *t) {
     unsigned char buf[64];
     Fixed fx;
     fixed_init(&fx, buf, sizeof buf);
@@ -566,7 +566,7 @@ TEST(oom_without_a_handler_is_still_just_null) {
  * Nothing here calls mem_free expecting memory back, because not giving it back
  * is what this backend is. */
 
-TEST(gc_says_whether_this_build_has_it) {
+static void TestGcSaysWhetherThisBuildHasIt(TestingT *t) {
     if (gc_available()) {
         Alloc *a = gc_allocator();
         CHECK(a != NULL);
@@ -589,7 +589,7 @@ TEST(gc_says_whether_this_build_has_it) {
     gc_collect();
 }
 
-TEST(gc_hands_out_zeroed_memory) {
+static void TestGcHandsOutZeroedMemory(TestingT *t) {
     Alloc *a = gc_allocator();
     if (a == NULL)
         return;
@@ -608,7 +608,7 @@ TEST(gc_hands_out_zeroed_memory) {
     }
 }
 
-TEST(gc_respects_alignment_it_does_not_get_for_free) {
+static void TestGcRespectsAlignmentItDoesNotGetForFree(TestingT *t) {
     Alloc *a = gc_allocator();
     if (a == NULL)
         return;
@@ -625,7 +625,7 @@ TEST(gc_respects_alignment_it_does_not_get_for_free) {
     }
 }
 
-TEST(gc_realloc_keeps_what_was_there) {
+static void TestGcReallocKeepsWhatWasThere(TestingT *t) {
     Alloc *a = gc_allocator();
     if (a == NULL)
         return;
@@ -663,7 +663,7 @@ TEST(gc_realloc_keeps_what_was_there) {
     }
 }
 
-TEST(gc_free_does_nothing_and_reset_is_not_offered) {
+static void TestGcFreeDoesNothingAndResetIsNotOffered(TestingT *t) {
     Alloc *a = gc_allocator();
     if (a == NULL)
         return;
@@ -690,7 +690,7 @@ TEST(gc_free_does_nothing_and_reset_is_not_offered) {
     CHECK_INT_EQ(p[0], 0x5A);
 }
 
-TEST(gc_collects_and_reports_the_collector_numbers) {
+static void TestGcCollectsAndReportsTheCollectorNumbers(TestingT *t) {
     Alloc *a = gc_allocator();
     if (a == NULL)
         return;
@@ -721,36 +721,36 @@ TEST(gc_collects_and_reports_the_collector_numbers) {
     CHECK(after.bytes_peak == 0);
 }
 
-int main(void) {
-    RUN(interface_rejects_nonsense);
-    RUN(interface_zeroes);
-    RUN(interface_realloc_zeroes_the_new_tail);
-    RUN(heap_basics);
-    RUN(heap_over_alignment);
-    RUN(arena_hands_out_zeroed_memory);
-    RUN(arena_alignment_and_separation);
-    RUN(arena_reset_keeps_its_chunks);
-    RUN(arena_release_goes_back_to_the_mark);
-    RUN(arena_marks_nest_and_go_stale_safely);
-    RUN(arena_grows_the_last_allocation_in_place);
-    RUN(arena_takes_allocations_larger_than_a_chunk);
-    RUN(arena_nests);
-    RUN(arena_free_is_safe_twice_and_when_unused);
-    RUN(fixed_stays_inside_the_budget);
-    RUN(fixed_handles_an_empty_buffer);
-    RUN(oom_handler_fires_and_is_told_what_was_asked_for);
-    RUN(oom_handler_saying_no_lets_the_null_through);
-    RUN(oom_handler_that_makes_room_gets_the_allocation_through);
-    RUN(oom_handler_is_asked_once_and_not_in_a_loop);
-    RUN(oom_handler_ignores_requests_no_allocator_could_have_met);
-    RUN(oom_handler_covers_realloc);
-    RUN(oom_handler_can_be_removed_and_belongs_to_one_allocator);
-    RUN(oom_without_a_handler_is_still_just_null);
-    RUN(gc_says_whether_this_build_has_it);
-    RUN(gc_hands_out_zeroed_memory);
-    RUN(gc_respects_alignment_it_does_not_get_for_free);
-    RUN(gc_realloc_keeps_what_was_there);
-    RUN(gc_free_does_nothing_and_reset_is_not_offered);
-    RUN(gc_collects_and_reports_the_collector_numbers);
-    return harness_report("mem");
-}
+#define TESTS(X)                                                                       \
+    X(TestInterfaceRejectsNonsense)                                                    \
+    X(TestInterfaceZeroes)                                                             \
+    X(TestInterfaceReallocZeroesTheNewTail)                                            \
+    X(TestHeapBasics)                                                                  \
+    X(TestHeapOverAlignment)                                                           \
+    X(TestArenaHandsOutZeroedMemory)                                                   \
+    X(TestArenaAlignmentAndSeparation)                                                 \
+    X(TestArenaResetKeepsItsChunks)                                                    \
+    X(TestArenaReleaseGoesBackToTheMark)                                               \
+    X(TestArenaMarksNestAndGoStaleSafely)                                              \
+    X(TestArenaGrowsTheLastAllocationInPlace)                                          \
+    X(TestArenaTakesAllocationsLargerThanAChunk)                                       \
+    X(TestArenaNests)                                                                  \
+    X(TestArenaFreeIsSafeTwiceAndWhenUnused)                                           \
+    X(TestFixedStaysInsideTheBudget)                                                   \
+    X(TestFixedHandlesAnEmptyBuffer)                                                   \
+    X(TestOomHandlerFiresAndIsToldWhatWasAskedFor)                                     \
+    X(TestOomHandlerSayingNoLetsTheNullThrough)                                        \
+    X(TestOomHandlerThatMakesRoomGetsTheAllocationThrough)                             \
+    X(TestOomHandlerIsAskedOnceAndNotInALoop)                                          \
+    X(TestOomHandlerIgnoresRequestsNoAllocatorCouldHaveMet)                            \
+    X(TestOomHandlerCoversRealloc)                                                     \
+    X(TestOomHandlerCanBeRemovedAndBelongsToOneAllocator)                              \
+    X(TestOomWithoutAHandlerIsStillJustNull)                                           \
+    X(TestGcSaysWhetherThisBuildHasIt)                                                 \
+    X(TestGcHandsOutZeroedMemory)                                                      \
+    X(TestGcRespectsAlignmentItDoesNotGetForFree)                                      \
+    X(TestGcReallocKeepsWhatWasThere)                                                  \
+    X(TestGcFreeDoesNothingAndResetIsNotOffered)                                       \
+    X(TestGcCollectsAndReportsTheCollectorNumbers)
+
+TESTING_MAIN(TESTS)

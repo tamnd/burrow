@@ -18,13 +18,13 @@
 #include "burrow/atomic.h"
 #include "burrow/thread.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <string.h>
 
 /* ---------------------------------------------------------------- the codes */
 
-TEST(every_code_has_a_message) {
+static void TestEveryCodeHasAMessage(TestingT *t) {
     /* The static assert in src/pal/errno.c already ties the table's length to
      * the enum. This checks the other half, which is that no entry is empty and
      * no two of them are the same string, since a copied line in a table of
@@ -40,7 +40,7 @@ TEST(every_code_has_a_message) {
     }
 }
 
-TEST(success_and_nonsense_are_not_the_same_answer) {
+static void TestSuccessAndNonsenseAreNotTheSameAnswer(TestingT *t) {
     CHECK(strcmp(pal_errno_string(PAL_OK), "no error") == 0);
     CHECK(strcmp(pal_errno_string(PAL_EOTHER), "unknown error") == 0);
 
@@ -53,7 +53,7 @@ TEST(success_and_nonsense_are_not_the_same_answer) {
 
 /* --------------------------------------------------------------- the clocks */
 
-TEST(the_monotonic_clock_only_goes_forwards) {
+static void TestTheMonotonicClockOnlyGoesForwards(TestingT *t) {
     int64_t first = pal_clock_monotonic();
     CHECK(first > 0);
 
@@ -68,7 +68,7 @@ TEST(the_monotonic_clock_only_goes_forwards) {
     CHECK(last > first);
 }
 
-TEST(the_wall_clock_says_it_is_after_the_time_this_was_written) {
+static void TestTheWallClockSaysItIsAfterTheTimeThisWasWritten(TestingT *t) {
     /* 2026-01-01T00:00:00Z in nanoseconds. A machine whose clock is before that
      * is a machine with no battery and no network, and the test is here to
      * catch a backend that returns an offset from the wrong epoch, which is the
@@ -83,7 +83,7 @@ TEST(the_wall_clock_says_it_is_after_the_time_this_was_written) {
     CHECK(now < 7258118400LL * 1000000000LL);
 }
 
-TEST(the_two_clocks_are_not_the_same_clock) {
+static void TestTheTwoClocksAreNotTheSameClock(TestingT *t) {
     /* The monotonic one counts from an arbitrary point, usually boot, and the
      * wall clock counts from 1970. A backend that wired one to the other would
      * pass every test above and fail this. */
@@ -92,7 +92,7 @@ TEST(the_two_clocks_are_not_the_same_clock) {
     CHECK(wall - mono > 0);
 }
 
-TEST(a_sleep_takes_at_least_as_long_as_it_was_asked_for) {
+static void TestASleepTakesAtLeastAsLongAsItWasAskedFor(TestingT *t) {
     const int64_t want = 2 * 1000 * 1000; /* two milliseconds */
 
     int64_t before = pal_clock_monotonic();
@@ -107,7 +107,7 @@ TEST(a_sleep_takes_at_least_as_long_as_it_was_asked_for) {
     CHECK(took < want * 100);
 }
 
-TEST(a_sleep_of_nothing_returns) {
+static void TestASleepOfNothingReturns(TestingT *t) {
     /* Zero and negative both mean give up the processor and come back, so the
      * only thing to check is that neither hangs and neither takes long. */
     int64_t before = pal_clock_monotonic();
@@ -121,7 +121,7 @@ TEST(a_sleep_of_nothing_returns) {
 
 /* -------------------------------------------------------------- the machine */
 
-TEST(the_page_size_is_a_power_of_two) {
+static void TestThePageSizeIsAPowerOfTwo(TestingT *t) {
     int64_t page = pal_page_size();
 
     CHECK(page >= 512);
@@ -129,7 +129,7 @@ TEST(the_page_size_is_a_power_of_two) {
     CHECK((page & (page - 1)) == 0);
 }
 
-TEST(the_page_size_is_the_same_every_time) {
+static void TestThePageSizeIsTheSameEveryTime(TestingT *t) {
     /* It is cached after the first call, and a cache that answers differently
      * once it is warm is worse than no cache. */
     int64_t first = pal_page_size();
@@ -137,7 +137,7 @@ TEST(the_page_size_is_the_same_every_time) {
         CHECK(pal_page_size() == first);
 }
 
-TEST(there_is_at_least_one_processor) {
+static void TestThereIsAtLeastOneProcessor(TestingT *t) {
     int64_t n = pal_cpu_count();
 
     CHECK(n >= 1);
@@ -152,7 +152,7 @@ TEST(there_is_at_least_one_processor) {
 
 /* --------------------------------------------------------------- the memory */
 
-TEST(a_reservation_can_be_committed_and_written_and_given_back) {
+static void TestAReservationCanBeCommittedAndWrittenAndGivenBack(TestingT *t) {
     int64_t page = pal_page_size();
     PalErrno err = PAL_EOTHER;
 
@@ -182,7 +182,7 @@ TEST(a_reservation_can_be_committed_and_written_and_given_back) {
     CHECK(err == PAL_OK);
 }
 
-TEST(committing_twice_is_not_an_error) {
+static void TestCommittingTwiceIsNotAnError(TestingT *t) {
     int64_t page = pal_page_size();
 
     void *p = pal_vm_reserve(page * 4, NULL);
@@ -202,7 +202,7 @@ TEST(committing_twice_is_not_an_error) {
     CHECK(pal_vm_release(p, page * 4, NULL));
 }
 
-TEST(a_guard_can_be_put_on_a_committed_page) {
+static void TestAGuardCanBePutOnACommittedPage(TestingT *t) {
     int64_t page = pal_page_size();
 
     void *p = pal_vm_reserve(page * 2, NULL);
@@ -224,7 +224,7 @@ TEST(a_guard_can_be_put_on_a_committed_page) {
     CHECK(pal_vm_release(p, page * 2, NULL));
 }
 
-TEST(memory_that_is_not_page_aligned_is_refused) {
+static void TestMemoryThatIsNotPageAlignedIsRefused(TestingT *t) {
     int64_t page = pal_page_size();
 
     PalErrno err = PAL_OK;
@@ -267,7 +267,7 @@ TEST(memory_that_is_not_page_aligned_is_refused) {
     CHECK(pal_vm_release(p, page * 2, NULL));
 }
 
-TEST(a_large_reservation_costs_address_space_and_not_memory) {
+static void TestALargeReservationCostsAddressSpaceAndNotMemory(TestingT *t) {
     int64_t page = pal_page_size();
 
     /* A gigabyte, reserved and never committed. This is what a goroutine stack
@@ -291,7 +291,7 @@ TEST(a_large_reservation_costs_address_space_and_not_memory) {
 
 /* --------------------------------------------------------------- the random */
 
-TEST(random_bytes_fills_the_buffer) {
+static void TestRandomBytesFillsTheBuffer(TestingT *t) {
     unsigned char buf[64];
     memset(buf, 0, sizeof buf);
 
@@ -323,7 +323,7 @@ TEST(random_bytes_fills_the_buffer) {
     CHECK(same < (int)sizeof buf - 1);
 }
 
-TEST(two_asks_do_not_give_the_same_answer) {
+static void TestTwoAsksDoNotGiveTheSameAnswer(TestingT *t) {
     unsigned char a[32];
     unsigned char b[32];
 
@@ -334,7 +334,7 @@ TEST(two_asks_do_not_give_the_same_answer) {
     CHECK(memcmp(a, b, sizeof a) != 0);
 }
 
-TEST(random_writes_exactly_as_many_bytes_as_it_was_asked_for) {
+static void TestRandomWritesExactlyAsManyBytesAsItWasAskedFor(TestingT *t) {
     /* A guard byte on each side, because a loop that goes one past the end is
      * the mistake a chunked backend makes, and both the BSD and the Windows
      * ones are chunked. */
@@ -351,7 +351,7 @@ TEST(random_writes_exactly_as_many_bytes_as_it_was_asked_for) {
     }
 }
 
-TEST(asking_for_nothing_is_not_a_failure) {
+static void TestAskingForNothingIsNotAFailure(TestingT *t) {
     unsigned char buf[1] = {0x5a};
 
     PalErrno err = PAL_EOTHER;
@@ -376,7 +376,7 @@ TEST(asking_for_nothing_is_not_a_failure) {
 
 /* ------------------------------------------------------------- the out slot */
 
-TEST(the_error_is_optional_like_every_other_out_parameter) {
+static void TestTheErrorIsOptionalLikeEveryOtherOutParameter(TestingT *t) {
     /* Every entry point takes the error last and every one of them has to
      * accept NULL there, because a caller that only wants to know whether it
      * worked should not have to declare a variable to throw away. */
@@ -424,7 +424,7 @@ static void open_pipe(int *rd, int *wr) {
     *wr = fds[1];
 }
 
-TEST(there_is_one_poller_and_a_second_ask_is_refused) {
+static void TestThereIsOnePollerAndASecondAskIsRefused(TestingT *t) {
     PalErrno err = PAL_OK;
 
     poller = pal_poll_create(&err);
@@ -438,7 +438,7 @@ TEST(there_is_one_poller_and_a_second_ask_is_refused) {
     CHECK_INT_EQ(err, PAL_EBUSY);
 }
 
-TEST(a_descriptor_with_something_on_it_comes_back_ready) {
+static void TestADescriptorWithSomethingOnItComesBackReady(TestingT *t) {
     int rd, wr;
     open_pipe(&rd, &wr);
 
@@ -466,7 +466,7 @@ TEST(a_descriptor_with_something_on_it_comes_back_ready) {
     (void)close(wr);
 }
 
-TEST(a_look_with_nothing_to_see_comes_back_empty) {
+static void TestALookWithNothingToSeeComesBackEmpty(TestingT *t) {
     PalPollEvent events[8];
     PalErrno err = PAL_ETIMEDOUT;
 
@@ -476,7 +476,7 @@ TEST(a_look_with_nothing_to_see_comes_back_empty) {
     CHECK_INT_EQ(err, PAL_OK);
 }
 
-TEST(a_break_ends_a_wait_and_is_never_reported_as_an_event) {
+static void TestABreakEndsAWaitAndIsNeverReportedAsAnEvent(TestingT *t) {
     PalPollEvent events[8];
     PalErrno err = PAL_OK;
 
@@ -511,7 +511,7 @@ TEST(a_break_ends_a_wait_and_is_never_reported_as_an_event) {
     CHECK(pal_clock_monotonic() - start < 500000000);
 }
 
-TEST(many_breaks_at_once_cost_one_wakeup) {
+static void TestManyBreaksAtOnceCostOneWakeup(TestingT *t) {
     PalPollEvent events[8];
     PalErrno err = PAL_OK;
 
@@ -530,7 +530,7 @@ TEST(many_breaks_at_once_cost_one_wakeup) {
     CHECK(pal_clock_monotonic() - start >= 40000000);
 }
 
-TEST(a_handle_that_is_not_the_poller_is_refused) {
+static void TestAHandleThatIsNotThePollerIsRefused(TestingT *t) {
     PalPollEvent events[8];
     PalErrno err = PAL_OK;
 
@@ -549,7 +549,7 @@ TEST(a_handle_that_is_not_the_poller_is_refused) {
     CHECK_INT_EQ(err, PAL_EINVAL);
 }
 
-TEST(the_wakeups_own_tag_cannot_be_used_as_a_user_pointer) {
+static void TestTheWakeupsOwnTagCannotBeUsedAsAUserPointer(TestingT *t) {
     int rd, wr;
     open_pipe(&rd, &wr);
 
@@ -565,7 +565,7 @@ TEST(the_wakeups_own_tag_cannot_be_used_as_a_user_pointer) {
     (void)close(wr);
 }
 
-TEST(a_wait_with_nowhere_to_put_the_answer_is_refused) {
+static void TestAWaitWithNowhereToPutTheAnswerIsRefused(TestingT *t) {
     PalPollEvent events[8];
     PalErrno err = PAL_OK;
 
@@ -579,7 +579,7 @@ TEST(a_wait_with_nowhere_to_put_the_answer_is_refused) {
     CHECK_INT_EQ(err, PAL_EINVAL);
 }
 
-TEST(the_poller_takes_a_null_error_like_everything_else) {
+static void TestThePollerTakesANullErrorLikeEverythingElse(TestingT *t) {
     PalPollEvent events[8];
 
     CHECK_INT_EQ(pal_poll_wait(poller, events, 8, 0, NULL), 0);
@@ -621,7 +621,7 @@ static void futex_sleeper(void *arg) {
     (void)burrow__atomic_add_u32(&p->woke, 1);
 }
 
-TEST(a_word_that_already_differs_does_not_wait) {
+static void TestAWordThatAlreadyDiffersDoesNotWait(TestingT *t) {
     uint32_t word = 7;
     PalErrno err = PAL_ENOSYS;
 
@@ -631,7 +631,7 @@ TEST(a_word_that_already_differs_does_not_wait) {
     CHECK_INT_EQ(err, PAL_OK);
 }
 
-TEST(a_wait_with_no_time_and_no_change_times_out) {
+static void TestAWaitWithNoTimeAndNoChangeTimesOut(TestingT *t) {
     uint32_t word = 0;
     PalErrno err = PAL_OK;
 
@@ -639,7 +639,7 @@ TEST(a_wait_with_no_time_and_no_change_times_out) {
     CHECK_INT_EQ(err, PAL_ETIMEDOUT);
 }
 
-TEST(a_wait_with_a_deadline_waits_at_least_that_long) {
+static void TestAWaitWithADeadlineWaitsAtLeastThatLong(TestingT *t) {
     uint32_t word = 0;
     PalErrno err = PAL_OK;
 
@@ -654,11 +654,11 @@ TEST(a_wait_with_a_deadline_waits_at_least_that_long) {
     CHECK(pal_clock_monotonic() - start >= 15000000);
 }
 
-TEST(a_sleeper_is_woken_by_a_wake) {
+static void TestASleeperIsWokenByAWake(TestingT *t) {
     FutexParty p = {0, 0, 0, -1};
-    burrow__Thread t;
+    burrow__Thread th;
 
-    CHECK(burrow__thread_start(&t, futex_sleeper, &p, 0));
+    CHECK(burrow__thread_start(&th, futex_sleeper, &p, 0));
 
     /* The store is what the wait is really waiting for, and the wake is only
      * what tells the kernel to go and look. Ordered this way round because the
@@ -669,25 +669,25 @@ TEST(a_sleeper_is_woken_by_a_wake) {
     CHECK(pal_futex_wake(&p.word, INT64_MAX, &err) >= 0);
     CHECK_INT_EQ(err, PAL_OK);
 
-    CHECK(burrow__thread_join(&t));
+    CHECK(burrow__thread_join(&th));
     CHECK_INT_EQ(p.woke, 1);
     CHECK_INT_EQ(p.timedout, 0);
 }
 
-TEST(everybody_waiting_can_be_released_at_once) {
+static void TestEverybodyWaitingCanBeReleasedAtOnce(TestingT *t) {
     enum { SLEEPERS = 8 };
 
     FutexParty p = {0, 0, 0, -1};
-    burrow__Thread t[SLEEPERS];
+    burrow__Thread th[SLEEPERS];
 
     for (int i = 0; i < SLEEPERS; i++)
-        CHECK(burrow__thread_start(&t[i], futex_sleeper, &p, 0));
+        CHECK(burrow__thread_start(&th[i], futex_sleeper, &p, 0));
 
     burrow__atomic_store_u32(&p.word, 1);
     CHECK(pal_futex_wake(&p.word, INT64_MAX, NULL) >= 0);
 
     for (int i = 0; i < SLEEPERS; i++)
-        CHECK(burrow__thread_join(&t[i]));
+        CHECK(burrow__thread_join(&th[i]));
 
     /* Every one of them, and none of them by a timeout, since they were started
      * without one. A backend that woke only the first would hang here instead,
@@ -696,12 +696,12 @@ TEST(everybody_waiting_can_be_released_at_once) {
     CHECK_INT_EQ(p.timedout, 0);
 }
 
-TEST(a_sleeper_on_one_word_is_not_released_by_a_wake_on_another) {
+static void TestASleeperOnOneWordIsNotReleasedByAWakeOnAnother(TestingT *t) {
     FutexParty mine = {0, 0, 0, -1};
     uint32_t other = 0;
-    burrow__Thread t;
+    burrow__Thread th;
 
-    CHECK(burrow__thread_start(&t, futex_sleeper, &mine, 0));
+    CHECK(burrow__thread_start(&th, futex_sleeper, &mine, 0));
 
     /* A wake on a word nobody is waiting on. It may share a bucket with the one
      * that does have a sleeper on it, which is allowed to wake that sleeper
@@ -712,11 +712,11 @@ TEST(a_sleeper_on_one_word_is_not_released_by_a_wake_on_another) {
     burrow__atomic_store_u32(&mine.word, 1);
     CHECK(pal_futex_wake(&mine.word, INT64_MAX, NULL) >= 0);
 
-    CHECK(burrow__thread_join(&t));
+    CHECK(burrow__thread_join(&th));
     CHECK_INT_EQ(mine.woke, 1);
 }
 
-TEST(a_wake_with_nobody_waiting_is_free_and_not_an_error) {
+static void TestAWakeWithNobodyWaitingIsFreeAndNotAnError(TestingT *t) {
     uint32_t word = 0;
     PalErrno err = PAL_ENOSYS;
 
@@ -727,18 +727,18 @@ TEST(a_wake_with_nobody_waiting_is_free_and_not_an_error) {
     CHECK_INT_EQ(pal_futex_wake(&word, 0, NULL), 0);
 }
 
-TEST(a_sleeper_with_a_deadline_gives_up_when_nobody_comes) {
+static void TestASleeperWithADeadlineGivesUpWhenNobodyComes(TestingT *t) {
     FutexParty p = {0, 0, 0, 20000000};
-    burrow__Thread t;
+    burrow__Thread th;
 
-    CHECK(burrow__thread_start(&t, futex_sleeper, &p, 0));
-    CHECK(burrow__thread_join(&t));
+    CHECK(burrow__thread_start(&th, futex_sleeper, &p, 0));
+    CHECK(burrow__thread_join(&th));
 
     CHECK_INT_EQ(p.timedout, 1);
     CHECK_INT_EQ(p.woke, 0);
 }
 
-TEST(a_wait_or_wake_on_nothing_is_refused) {
+static void TestAWaitOrWakeOnNothingIsRefused(TestingT *t) {
     PalErrno err = PAL_OK;
 
     CHECK(!pal_futex_wait(NULL, 0, 0, &err));
@@ -752,7 +752,7 @@ TEST(a_wait_or_wake_on_nothing_is_refused) {
     CHECK_INT_EQ(err, PAL_EINVAL);
 }
 
-TEST(the_futex_takes_a_null_error_like_everything_else) {
+static void TestTheFutexTakesANullErrorLikeEverythingElse(TestingT *t) {
     uint32_t word = 3;
 
     CHECK(pal_futex_wait(&word, 0, -1, NULL));
@@ -803,7 +803,7 @@ static void thread_marker(void *arg) {
     (void)pal_futex_wake(&p->done, INT64_MAX, NULL);
 }
 
-TEST(a_thread_runs_the_function_it_was_given) {
+static void TestAThreadRunsTheFunctionItWasGiven(TestingT *t) {
     ThreadParty p = {0, NULL, 0, 0};
     PalErrno err = PAL_EOTHER;
 
@@ -818,7 +818,7 @@ TEST(a_thread_runs_the_function_it_was_given) {
     CHECK_INT_EQ(burrow__atomic_load_u32(&p.ran), 1);
 }
 
-TEST(the_argument_arrives_at_the_new_thread_unchanged) {
+static void TestTheArgumentArrivesAtTheNewThreadUnchanged(TestingT *t) {
     ThreadParty p = {0, NULL, 0, 0};
 
     int64_t h = pal_thread_create(thread_marker, &p, 0, NULL);
@@ -828,7 +828,7 @@ TEST(the_argument_arrives_at_the_new_thread_unchanged) {
     CHECK(p.arg_seen == &p);
 }
 
-TEST(a_stack_smaller_than_the_system_allows_is_raised_and_not_refused) {
+static void TestAStackSmallerThanTheSystemAllowsIsRaisedAndNotRefused(TestingT *t) {
     ThreadParty p = {0, NULL, 0, 0};
 
     /* A kilobyte is below every platform's minimum. The layer raises it to the
@@ -841,7 +841,7 @@ TEST(a_stack_smaller_than_the_system_allows_is_raised_and_not_refused) {
     CHECK_INT_EQ(burrow__atomic_load_u32(&p.ran), 1);
 }
 
-TEST(a_stack_bigger_than_the_default_is_taken) {
+static void TestAStackBiggerThanTheDefaultIsTaken(TestingT *t) {
     ThreadParty p = {0, NULL, 0, 0};
 
     int64_t h = pal_thread_create(thread_marker, &p, 2 * 1024 * 1024, NULL);
@@ -851,7 +851,7 @@ TEST(a_stack_bigger_than_the_default_is_taken) {
     CHECK_INT_EQ(burrow__atomic_load_u32(&p.ran), 1);
 }
 
-TEST(a_thread_can_be_detached_instead_of_joined) {
+static void TestAThreadCanBeDetachedInsteadOfJoined(TestingT *t) {
     static ThreadParty p;
 
     /* Static rather than on this frame, because a detached thread is still
@@ -873,7 +873,7 @@ TEST(a_thread_can_be_detached_instead_of_joined) {
     CHECK_INT_EQ(burrow__atomic_load_u32(&p.ran), 1);
 }
 
-TEST(sixteen_threads_all_start_and_all_finish) {
+static void TestSixteenThreadsAllStartAndAllFinish(TestingT *t) {
     ThreadParty parties[THREAD_PARTY];
     int64_t handles[THREAD_PARTY];
 
@@ -896,7 +896,7 @@ TEST(sixteen_threads_all_start_and_all_finish) {
     }
 }
 
-TEST(every_thread_running_at_once_has_its_own_identity) {
+static void TestEveryThreadRunningAtOnceHasItsOwnIdentity(TestingT *t) {
     ThreadParty parties[THREAD_PARTY];
     int64_t handles[THREAD_PARTY];
     int64_t mine = pal_thread_self();
@@ -926,11 +926,11 @@ TEST(every_thread_running_at_once_has_its_own_identity) {
     }
 }
 
-TEST(my_own_identity_is_the_same_every_time_i_ask) {
+static void TestMyOwnIdentityIsTheSameEveryTimeIAsk(TestingT *t) {
     CHECK_INT_EQ(pal_thread_self(), pal_thread_self());
 }
 
-TEST(the_stack_bounds_hold_a_variable_that_is_on_the_stack) {
+static void TestTheStackBoundsHoldAVariableThatIsOnTheStack(TestingT *t) {
     void *lo = NULL;
     void *hi = NULL;
     /* Its address is taken below, which is what keeps it on the stack rather
@@ -954,7 +954,7 @@ TEST(the_stack_bounds_hold_a_variable_that_is_on_the_stack) {
 #endif
 }
 
-TEST(yielding_is_allowed_as_often_as_you_like) {
+static void TestYieldingIsAllowedAsOftenAsYouLike(TestingT *t) {
     for (int i = 0; i < 1000; i++)
         pal_thread_yield();
 
@@ -964,7 +964,7 @@ TEST(yielding_is_allowed_as_often_as_you_like) {
     CHECK(true);
 }
 
-TEST(starting_or_joining_nothing_is_refused) {
+static void TestStartingOrJoiningNothingIsRefused(TestingT *t) {
     PalErrno err = PAL_OK;
 
     CHECK_INT_EQ(pal_thread_create(NULL, NULL, 0, &err), PAL_INVALID_HANDLE);
@@ -983,7 +983,7 @@ TEST(starting_or_joining_nothing_is_refused) {
     CHECK_INT_EQ(err, PAL_EINVAL);
 }
 
-TEST(the_threads_take_a_null_error_like_everything_else) {
+static void TestTheThreadsTakeANullErrorLikeEverythingElse(TestingT *t) {
     ThreadParty p = {0, NULL, 0, 0};
 
     CHECK_INT_EQ(pal_thread_create(NULL, NULL, 0, NULL), PAL_INVALID_HANDLE);
@@ -1021,7 +1021,7 @@ static bool count_signal(int32_t sig, void *info, void *ctx) {
     return true;
 }
 
-TEST(a_signal_stack_can_be_installed_and_given_back) {
+static void TestASignalStackCanBeInstalledAndGivenBack(TestingT *t) {
     PalErrno err = PAL_EOTHER;
 
     CHECK(pal_signal_stack_install(&err));
@@ -1035,7 +1035,7 @@ TEST(a_signal_stack_can_be_installed_and_given_back) {
     /* And removing one that has already gone is not an error either. */
     pal_signal_stack_remove();
 
-    /* Back again afterwards, because the tests below and the harness itself
+    /* Back again afterwards, because the tests below and the testing package
      * share this thread and a thread with no signal stack is a thread with no
      * overflow message. */
     CHECK(pal_signal_stack_install(NULL));
@@ -1049,7 +1049,7 @@ static void signal_stack_on_a_thread(void *arg) {
     pal_signal_stack_remove();
 }
 
-TEST(every_thread_installs_its_own_signal_stack) {
+static void TestEveryThreadInstallsItsOwnSignalStack(TestingT *t) {
     uint32_t ok = 0;
 
     int64_t h = pal_thread_create(signal_stack_on_a_thread, &ok, 0, NULL);
@@ -1062,14 +1062,14 @@ TEST(every_thread_installs_its_own_signal_stack) {
     CHECK(pal_signal_stack_install(NULL));
 }
 
-TEST(a_handler_that_is_not_there_is_refused) {
+static void TestAHandlerThatIsNotThereIsRefused(TestingT *t) {
     PalErrno err = PAL_OK;
 
     CHECK(!pal_signal_install(PAL_SIGFAULT, NULL, &err));
     CHECK_INT_EQ(err, PAL_EINVAL);
 }
 
-TEST(a_number_that_is_not_a_signal_is_refused) {
+static void TestANumberThatIsNotASignalIsRefused(TestingT *t) {
     PalErrno err = PAL_OK;
 
     CHECK(!pal_signal_install(4242, count_signal, &err));
@@ -1093,13 +1093,13 @@ TEST(a_number_that_is_not_a_signal_is_refused) {
 #endif
 }
 
-TEST(a_fault_address_needs_a_fault_to_read_it_from) {
+static void TestAFaultAddressNeedsAFaultToReadItFrom(TestingT *t) {
     CHECK(pal_signal_fault_addr(NULL) == NULL);
 }
 
 #if !defined(_WIN32)
 
-TEST(a_handler_runs_when_the_signal_arrives) {
+static void TestAHandlerRunsWhenTheSignalArrives(TestingT *t) {
     PalErrno err = PAL_EOTHER;
 
     signal_hits = 0;
@@ -1121,7 +1121,7 @@ TEST(a_handler_runs_when_the_signal_arrives) {
     CHECK_INT_EQ(signal_seen, PAL_SIGPREEMPT);
 }
 
-TEST(a_blocked_signal_waits_and_arrives_when_it_is_let_through) {
+static void TestABlockedSignalWaitsAndArrivesWhenItIsLetThrough(TestingT *t) {
     signal_hits = 0;
 
     CHECK(pal_signal_install(PAL_SIGPREEMPT, count_signal, NULL));
@@ -1141,7 +1141,8 @@ TEST(a_blocked_signal_waits_and_arrives_when_it_is_let_through) {
     CHECK_INT_EQ(burrow__atomic_load_u32(&signal_hits), 1);
 }
 
-TEST(installing_twice_replaces_the_handler_and_keeps_what_was_there_first) {
+static void
+TestInstallingTwiceReplacesTheHandlerAndKeepsWhatWasThereFirst(TestingT *t) {
     signal_hits = 0;
 
     /* Two installs and one raise. A second install that stacked rather than
@@ -1156,7 +1157,7 @@ TEST(installing_twice_replaces_the_handler_and_keeps_what_was_there_first) {
 
 #endif /* !_WIN32 */
 
-TEST(the_signals_take_a_null_error_like_everything_else) {
+static void TestTheSignalsTakeANullErrorLikeEverythingElse(TestingT *t) {
     CHECK(!pal_signal_install(PAL_SIGFAULT, NULL, NULL));
     CHECK(!pal_signal_install(4242, count_signal, NULL));
     CHECK(pal_signal_stack_install(NULL));
@@ -1169,80 +1170,80 @@ TEST(the_signals_take_a_null_error_like_everything_else) {
 #endif
 }
 
-int main(void) {
-    RUN(every_code_has_a_message);
-    RUN(success_and_nonsense_are_not_the_same_answer);
-
-    RUN(the_monotonic_clock_only_goes_forwards);
-    RUN(the_wall_clock_says_it_is_after_the_time_this_was_written);
-    RUN(the_two_clocks_are_not_the_same_clock);
-    RUN(a_sleep_takes_at_least_as_long_as_it_was_asked_for);
-    RUN(a_sleep_of_nothing_returns);
-
-    RUN(the_page_size_is_a_power_of_two);
-    RUN(the_page_size_is_the_same_every_time);
-    RUN(there_is_at_least_one_processor);
-
-    RUN(a_reservation_can_be_committed_and_written_and_given_back);
-    RUN(committing_twice_is_not_an_error);
-    RUN(a_guard_can_be_put_on_a_committed_page);
-    RUN(memory_that_is_not_page_aligned_is_refused);
-    RUN(a_large_reservation_costs_address_space_and_not_memory);
-
-    RUN(random_bytes_fills_the_buffer);
-    RUN(two_asks_do_not_give_the_same_answer);
-    RUN(random_writes_exactly_as_many_bytes_as_it_was_asked_for);
-    RUN(asking_for_nothing_is_not_a_failure);
-
-    RUN(the_error_is_optional_like_every_other_out_parameter);
-
 #if defined(BURROW_NETPOLL_READINESS)
-    RUN(there_is_one_poller_and_a_second_ask_is_refused);
-    RUN(a_descriptor_with_something_on_it_comes_back_ready);
-    RUN(a_look_with_nothing_to_see_comes_back_empty);
-    RUN(a_break_ends_a_wait_and_is_never_reported_as_an_event);
-    RUN(many_breaks_at_once_cost_one_wakeup);
-    RUN(a_handle_that_is_not_the_poller_is_refused);
-    RUN(the_wakeups_own_tag_cannot_be_used_as_a_user_pointer);
-    RUN(a_wait_with_nowhere_to_put_the_answer_is_refused);
-    RUN(the_poller_takes_a_null_error_like_everything_else);
+#define TESTS_1(X)                                                                     \
+    X(TestThereIsOnePollerAndASecondAskIsRefused)                                      \
+    X(TestADescriptorWithSomethingOnItComesBackReady)                                  \
+    X(TestALookWithNothingToSeeComesBackEmpty)                                         \
+    X(TestABreakEndsAWaitAndIsNeverReportedAsAnEvent)                                  \
+    X(TestManyBreaksAtOnceCostOneWakeup)                                               \
+    X(TestAHandleThatIsNotThePollerIsRefused)                                          \
+    X(TestTheWakeupsOwnTagCannotBeUsedAsAUserPointer)                                  \
+    X(TestAWaitWithNowhereToPutTheAnswerIsRefused)                                     \
+    X(TestThePollerTakesANullErrorLikeEverythingElse)
+#else
+#define TESTS_1(X)
 #endif
 
-    RUN(a_word_that_already_differs_does_not_wait);
-    RUN(a_wait_with_no_time_and_no_change_times_out);
-    RUN(a_wait_with_a_deadline_waits_at_least_that_long);
-    RUN(a_sleeper_is_woken_by_a_wake);
-    RUN(everybody_waiting_can_be_released_at_once);
-    RUN(a_sleeper_on_one_word_is_not_released_by_a_wake_on_another);
-    RUN(a_wake_with_nobody_waiting_is_free_and_not_an_error);
-    RUN(a_sleeper_with_a_deadline_gives_up_when_nobody_comes);
-    RUN(a_wait_or_wake_on_nothing_is_refused);
-    RUN(the_futex_takes_a_null_error_like_everything_else);
-
-    RUN(a_thread_runs_the_function_it_was_given);
-    RUN(the_argument_arrives_at_the_new_thread_unchanged);
-    RUN(a_stack_smaller_than_the_system_allows_is_raised_and_not_refused);
-    RUN(a_stack_bigger_than_the_default_is_taken);
-    RUN(a_thread_can_be_detached_instead_of_joined);
-    RUN(sixteen_threads_all_start_and_all_finish);
-    RUN(every_thread_running_at_once_has_its_own_identity);
-    RUN(my_own_identity_is_the_same_every_time_i_ask);
-    RUN(the_stack_bounds_hold_a_variable_that_is_on_the_stack);
-    RUN(yielding_is_allowed_as_often_as_you_like);
-    RUN(starting_or_joining_nothing_is_refused);
-    RUN(the_threads_take_a_null_error_like_everything_else);
-
-    RUN(a_signal_stack_can_be_installed_and_given_back);
-    RUN(every_thread_installs_its_own_signal_stack);
-    RUN(a_handler_that_is_not_there_is_refused);
-    RUN(a_number_that_is_not_a_signal_is_refused);
-    RUN(a_fault_address_needs_a_fault_to_read_it_from);
 #if !defined(_WIN32)
-    RUN(a_handler_runs_when_the_signal_arrives);
-    RUN(a_blocked_signal_waits_and_arrives_when_it_is_let_through);
-    RUN(installing_twice_replaces_the_handler_and_keeps_what_was_there_first);
+#define TESTS_2(X)                                                                     \
+    X(TestAHandlerRunsWhenTheSignalArrives)                                            \
+    X(TestABlockedSignalWaitsAndArrivesWhenItIsLetThrough)                             \
+    X(TestInstallingTwiceReplacesTheHandlerAndKeepsWhatWasThereFirst)
+#else
+#define TESTS_2(X)
 #endif
-    RUN(the_signals_take_a_null_error_like_everything_else);
 
-    return harness_report("pal");
-}
+#define TESTS(X)                                                                       \
+    X(TestEveryCodeHasAMessage)                                                        \
+    X(TestSuccessAndNonsenseAreNotTheSameAnswer)                                       \
+    X(TestTheMonotonicClockOnlyGoesForwards)                                           \
+    X(TestTheWallClockSaysItIsAfterTheTimeThisWasWritten)                              \
+    X(TestTheTwoClocksAreNotTheSameClock)                                              \
+    X(TestASleepTakesAtLeastAsLongAsItWasAskedFor)                                     \
+    X(TestASleepOfNothingReturns)                                                      \
+    X(TestThePageSizeIsAPowerOfTwo)                                                    \
+    X(TestThePageSizeIsTheSameEveryTime)                                               \
+    X(TestThereIsAtLeastOneProcessor)                                                  \
+    X(TestAReservationCanBeCommittedAndWrittenAndGivenBack)                            \
+    X(TestCommittingTwiceIsNotAnError)                                                 \
+    X(TestAGuardCanBePutOnACommittedPage)                                              \
+    X(TestMemoryThatIsNotPageAlignedIsRefused)                                         \
+    X(TestALargeReservationCostsAddressSpaceAndNotMemory)                              \
+    X(TestRandomBytesFillsTheBuffer)                                                   \
+    X(TestTwoAsksDoNotGiveTheSameAnswer)                                               \
+    X(TestRandomWritesExactlyAsManyBytesAsItWasAskedFor)                               \
+    X(TestAskingForNothingIsNotAFailure)                                               \
+    X(TestTheErrorIsOptionalLikeEveryOtherOutParameter)                                \
+    X(TestAWordThatAlreadyDiffersDoesNotWait)                                          \
+    X(TestAWaitWithNoTimeAndNoChangeTimesOut)                                          \
+    X(TestAWaitWithADeadlineWaitsAtLeastThatLong)                                      \
+    X(TestASleeperIsWokenByAWake)                                                      \
+    X(TestEverybodyWaitingCanBeReleasedAtOnce)                                         \
+    X(TestASleeperOnOneWordIsNotReleasedByAWakeOnAnother)                              \
+    X(TestAWakeWithNobodyWaitingIsFreeAndNotAnError)                                   \
+    X(TestASleeperWithADeadlineGivesUpWhenNobodyComes)                                 \
+    X(TestAWaitOrWakeOnNothingIsRefused)                                               \
+    X(TestTheFutexTakesANullErrorLikeEverythingElse)                                   \
+    X(TestAThreadRunsTheFunctionItWasGiven)                                            \
+    X(TestTheArgumentArrivesAtTheNewThreadUnchanged)                                   \
+    X(TestAStackSmallerThanTheSystemAllowsIsRaisedAndNotRefused)                       \
+    X(TestAStackBiggerThanTheDefaultIsTaken)                                           \
+    X(TestAThreadCanBeDetachedInsteadOfJoined)                                         \
+    X(TestSixteenThreadsAllStartAndAllFinish)                                          \
+    X(TestEveryThreadRunningAtOnceHasItsOwnIdentity)                                   \
+    X(TestMyOwnIdentityIsTheSameEveryTimeIAsk)                                         \
+    X(TestTheStackBoundsHoldAVariableThatIsOnTheStack)                                 \
+    X(TestYieldingIsAllowedAsOftenAsYouLike)                                           \
+    X(TestStartingOrJoiningNothingIsRefused)                                           \
+    X(TestTheThreadsTakeANullErrorLikeEverythingElse)                                  \
+    X(TestASignalStackCanBeInstalledAndGivenBack)                                      \
+    X(TestEveryThreadInstallsItsOwnSignalStack)                                        \
+    X(TestAHandlerThatIsNotThereIsRefused)                                             \
+    X(TestANumberThatIsNotASignalIsRefused)                                            \
+    X(TestAFaultAddressNeedsAFaultToReadItFrom)                                        \
+    X(TestTheSignalsTakeANullErrorLikeEverythingElse)                                  \
+    TESTS_1(X)                                                                         \
+    TESTS_2(X)
+
+TESTING_MAIN_BARE(TESTS)

@@ -9,10 +9,10 @@
 #include "burrow/error.h"
 #include "burrow/panic.h"
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
-TEST(throw_carries_the_message_through) {
+static void TestThrowCarriesTheMessageThrough(TestingT *t) {
     CHECK_FATAL(runtime_throw(BURROW_S("something is wrong")), "something is wrong");
 
     /* An empty message still stops. The alternative is a program that carries
@@ -28,7 +28,7 @@ TEST(throw_carries_the_message_through) {
     CHECK_STR_EQ(fatal_caught, "stop");
 }
 
-TEST(the_messages_are_the_ones_go_prints) {
+static void TestTheMessagesAreTheOnesGoPrints(TestingT *t) {
     /* Byte for byte. These strings are in Go's own tests and they are the first
      * thing somebody pastes into a search box, so a paraphrase here would be a
      * small lie that costs somebody an afternoon. */
@@ -43,7 +43,7 @@ TEST(the_messages_are_the_ones_go_prints) {
         "runtime error: slice bounds out of range [0:5] with capacity 3");
 }
 
-TEST(the_numbers_in_them_survive_the_edges) {
+static void TestTheNumbersInThemSurviveTheEdges(TestingT *t) {
     /* The message is built by hand rather than by snprintf, so the three cases
      * a hand written decimal conversion gets wrong are worth a test each. Zero
      * is the one a loop that divides until nothing is left prints as nothing at
@@ -64,7 +64,7 @@ TEST(the_numbers_in_them_survive_the_edges) {
 #endif
 }
 
-TEST(str_at_checks_both_ends) {
+static void TestStrAtChecksBothEnds(TestingT *t) {
     Str s = BURROW_S("hello");
 
     CHECK_INT_EQ(str_at(s, 0), 'h');
@@ -89,7 +89,7 @@ TEST(str_at_checks_both_ends) {
                         "runtime error: index out of range [0] with length 0");
 }
 
-TEST(an_absurd_number_truncates_rather_than_overflowing) {
+static void TestAnAbsurdNumberTruncatesRatherThanOverflowing(TestingT *t) {
     /* The formatting buffer is fixed and nothing on this path allocates, since
      * running out of memory is one of the things that will eventually arrive
      * here. So the only question is what the widest possible numbers do. */
@@ -115,7 +115,7 @@ static bool says(Str got, const char *want) {
     return str_eq(got, str_from_cstr(want));
 }
 
-TEST(a_bounds_check_is_a_panic_the_program_can_catch) {
+static void TestABoundsCheckIsAPanicTheProgramCanCatch(TestingT *t) {
     Str s = BURROW_S("hello");
 
     caught = false;
@@ -162,7 +162,7 @@ TEST(a_bounds_check_is_a_panic_the_program_can_catch) {
     CHECK(cleaned_up);
 }
 
-TEST(a_panic_that_is_not_the_runtimes_says_so) {
+static void TestAPanicThatIsNotTheRuntimesSaysSo(TestingT *t) {
     caught = false;
 
     BURROW_TRY {
@@ -196,7 +196,7 @@ TEST(a_panic_that_is_not_the_runtimes_says_so) {
     CHECK(runtime_error_from((Any){NULL, NULL}) == NULL);
 }
 
-TEST(the_message_is_borrowed_and_a_copy_is_yours) {
+static void TestTheMessageIsBorrowedAndACopyIsYours(TestingT *t) {
     caught = false;
     memset(kept, 0, sizeof(kept));
 
@@ -231,7 +231,7 @@ TEST(the_message_is_borrowed_and_a_copy_is_yours) {
     CHECK_STR_EQ(kept, "runtime error: index out of range [1] with length 0");
 }
 
-TEST(the_type_says_which_package_it_came_from) {
+static void TestTheTypeSaysWhichPackageItCameFrom(TestingT *t) {
     /* It prints as runtime.Error, which is the name of the thing in Go, and it
      * is a distinct descriptor from error itself so that errors_as can tell a
      * runtime error from any other one. */
@@ -241,7 +241,7 @@ TEST(the_type_says_which_package_it_came_from) {
     CHECK(TYPE_RUNTIME_ERROR->size == (uint32_t)sizeof(RuntimeError));
 }
 
-TEST(runtime_panic_is_open_for_business) {
+static void TestRuntimePanicIsOpenForBusiness(TestingT *t) {
     /* Anybody writing their own container writes their own bounds check, and
      * this is how it says so in the same voice the library uses. */
     caught = false;
@@ -277,16 +277,16 @@ TEST(runtime_panic_is_open_for_business) {
     CHECK(caught);
 }
 
-int main(void) {
-    RUN(throw_carries_the_message_through);
-    RUN(the_messages_are_the_ones_go_prints);
-    RUN(the_numbers_in_them_survive_the_edges);
-    RUN(str_at_checks_both_ends);
-    RUN(an_absurd_number_truncates_rather_than_overflowing);
-    RUN(a_bounds_check_is_a_panic_the_program_can_catch);
-    RUN(a_panic_that_is_not_the_runtimes_says_so);
-    RUN(the_message_is_borrowed_and_a_copy_is_yours);
-    RUN(the_type_says_which_package_it_came_from);
-    RUN(runtime_panic_is_open_for_business);
-    return harness_report("runtime");
-}
+#define TESTS(X)                                                                       \
+    X(TestThrowCarriesTheMessageThrough)                                               \
+    X(TestTheMessagesAreTheOnesGoPrints)                                               \
+    X(TestTheNumbersInThemSurviveTheEdges)                                             \
+    X(TestStrAtChecksBothEnds)                                                         \
+    X(TestAnAbsurdNumberTruncatesRatherThanOverflowing)                                \
+    X(TestABoundsCheckIsAPanicTheProgramCanCatch)                                      \
+    X(TestAPanicThatIsNotTheRuntimesSaysSo)                                            \
+    X(TestTheMessageIsBorrowedAndACopyIsYours)                                         \
+    X(TestTheTypeSaysWhichPackageItCameFrom)                                           \
+    X(TestRuntimePanicIsOpenForBusiness)
+
+TESTING_MAIN(TESTS)

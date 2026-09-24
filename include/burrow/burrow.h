@@ -45,6 +45,7 @@
 #include "burrow/declare.h"
 #include "burrow/defer.h"
 #include "burrow/encoding.h"
+#include "burrow/encoding/hex.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
 #include "burrow/func.h"

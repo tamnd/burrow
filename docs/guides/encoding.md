@@ -81,6 +81,54 @@ encoding_marshal_text(a, iv, &err);
 
 `EncodingTextMarshaler` and the other five are ordinary vtable interfaces, for code that wants to take one as a parameter or keep one in a struct, as described in [Interfaces](interfaces.md). An `Any` holding one of them, with `TYPE_OF(EncodingTextMarshaler)` as its type, works with the calls above, which go straight through the vtable.
 
+## Hex
+
+`burrow/encoding/hex.h` is Go's `encoding/hex`. Each byte becomes two lowercase digits, and decoding takes either case:
+
+<!-- example: ../examples/encoding/hex.c#oneshot -->
+```c
+Str s = hex_encode_to_string(a, BURROW_B("Hello"));
+
+Error err = BURROW_NO_ERROR;
+Slice b = hex_decode_string(a, BURROW_S("48656C6C6F"), &err);
+```
+
+`s` is `48656c6c6f` and `b` is `Hello`. When `hex_encode` and `hex_decode` write into a slice you already have, `hex_encoded_len` and `hex_decoded_len` tell you how big it needs to be. The `hex_append_` forms grow the slice for you.
+
+Bad input gives back the bytes that decoded before the problem. The error is `hex_err_length` for a lone digit at the end, or a `HexInvalidByteError` for the first byte that is not a digit:
+
+<!-- example: ../examples/encoding/hex.c#bad -->
+```c
+Slice part = hex_decode_string(a, BURROW_S("4865zz"), &err);
+const HexInvalidByteError *bad = errors_as(err, TYPE_HEX_INVALID_BYTE_ERROR);
+```
+
+`part` is `He`, `*bad` is `z`, and the error reads `encoding/hex: invalid byte: U+007A 'z'`. Each of the 256 possible byte errors is a single static value, so two for the same byte are `errors_is` each other the way Go's compare equal, and none of them needs `error_retain`.
+
+`hex_dump` lays bytes out the way `hexdump -C` does:
+
+<!-- example: ../examples/encoding/hex.c#dump -->
+```c
+Str d = hex_dump(a, BURROW_B("Go is an open source programming language."));
+```
+
+```text
+00000000  47 6f 20 69 73 20 61 6e  20 6f 70 65 6e 20 73 6f  |Go is an open so|
+00000010  75 72 63 65 20 70 72 6f  67 72 61 6d 6d 69 6e 67  |urce programming|
+00000020  20 6c 61 6e 67 75 61 67  65 2e                    | language.|
+```
+
+To work on a stream, wrap it. `hex_new_encoder` gives an `IoWriter` that encodes into another one, `hex_new_decoder` gives an `IoReader` that decodes, and `hex_dumper` gives an `IoWriteCloser` that writes a dump and finishes the last line on Close:
+
+<!-- example: ../examples/encoding/hex.c#stream -->
+```c
+StringsBuilder out = STRINGS_BUILDER(a);
+IoWriter enc = hex_new_encoder(a, strings_builder_as_io_writer(&out));
+fmt_fprintf_v(enc, "%d apples", 12);
+```
+
+`out` now holds `3132206170706c6573`. As in Go, the decoder reports a lone digit at the end as `io_err_unexpected_eof`, since a stream that stops in the middle of a byte has been cut short.
+
 ## What is not here
 
-Nothing from Go's `encoding` package is missing.
+Nothing from Go's `encoding` or `encoding/hex` is missing.

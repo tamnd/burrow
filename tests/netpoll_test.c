@@ -468,10 +468,12 @@ static void read_deadline_passes(void *env) {
     if (burrow__poll_open(shared.rd, &shared_pd) != 0)
         return;
 
-    dl_set = burrow__poll_set_deadline(
-        shared_pd, burrow__nanotime() + 40 * TIME_MILLISECOND, BURROW_POLL_READ);
-
+    /* The clock is read before the deadline is set, so a thread that is
+     * descheduled in between cannot make the wait look shorter than it was. */
     int64_t start = burrow__nanotime();
+    dl_set = burrow__poll_set_deadline(shared_pd, start + 40 * TIME_MILLISECOND,
+                                       BURROW_POLL_READ);
+
     dl_first = burrow__poll_wait(shared_pd, BURROW_POLL_READ);
     dl_elapsed = burrow__nanotime() - start;
 
@@ -628,10 +630,11 @@ static void write_deadline_passes(void *env) {
     if (!fill_socket(sock[0]))
         return;
 
-    dl_set = burrow__poll_set_deadline(
-        sock_pd, burrow__nanotime() + 40 * TIME_MILLISECOND, BURROW_POLL_WRITE);
-
+    /* The clock is read first, for the same reason as in the read test. */
     int64_t start = burrow__nanotime();
+    dl_set = burrow__poll_set_deadline(sock_pd, start + 40 * TIME_MILLISECOND,
+                                       BURROW_POLL_WRITE);
+
     dl_first = burrow__poll_wait(sock_pd, BURROW_POLL_WRITE);
     dl_elapsed = burrow__nanotime() - start;
 }

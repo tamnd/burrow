@@ -171,7 +171,7 @@ static CorpusTok corpus_lookup(Str w) {
 /* -------------------------------------------------------- files and errors */
 
 void *burrow__testing_corpus_alloc(Alloc *a, size_t size) {
-    void *p = mem_alloc(a, size, alignof(max_align_t));
+    void *p = mem_alloc(a, size, BURROW_ALIGN_MAX);
     if (p == NULL)
         panic_str(BURROW_S("testing: out of memory"));
     memset(p, 0, size);

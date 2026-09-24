@@ -33,6 +33,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
+
 typedef struct CorpusParser {
     CorpusFile *file;
     Alloc *a;
@@ -179,6 +183,8 @@ static void corpus_error(CorpusParser *p, Int pos, Str msg);
 static uintptr_t corpus_stack_here(void) {
 #if defined(__GNUC__) || defined(__clang__)
     return (uintptr_t)__builtin_frame_address(0);
+#elif defined(_MSC_VER)
+    return (uintptr_t)_AddressOfReturnAddress();
 #else
     volatile char probe = 0;
     return (uintptr_t)&probe;

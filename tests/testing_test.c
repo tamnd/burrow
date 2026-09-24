@@ -869,6 +869,21 @@ static void normalise(Buf *out, const char *s) {
 
 /* Runs this binary on a scenario, with the flags in front. */
 static int run_cmd(const char *cmd, Buf *out) {
+#ifdef __COSMOPOLITAN__
+    /* Cosmopolitan's popen runs its own small shell, which has no # in a word
+     * and no for loop, so the command goes to /bin/sh in a file instead. */
+    char script[1100];
+    snprintf(script, sizeof script, "%s.sh", self_path);
+    FILE *sf = fopen(script, "w");
+    if (sf == NULL)
+        return -1;
+    fputs(cmd, sf);
+    fputs("\n", sf);
+    fclose(sf);
+    char wrapped[1200];
+    snprintf(wrapped, sizeof wrapped, "/bin/sh '%s'", script);
+    cmd = wrapped;
+#endif
     FILE *f = popen(cmd, "r");
     if (f == NULL)
         return -1;

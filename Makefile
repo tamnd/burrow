@@ -300,14 +300,15 @@ $(FUZZ_ORACLE): $(wildcard fuzz/oracle/*.go) fuzz/oracle/go.mod
 
 # burrow itself is built again with coverage instrumentation, so that libFuzzer
 # can see which branches of burrow an input reached and not only which
-# branches of the driver.
+# branches of the driver. libFuzzer brings its own coverage hooks, so burrow's
+# are left out of this build.
 #
 # It is a phony target rather than a rule for the archive, because inside the
 # child make the archive is $(LIB), and a rule for it here would match there
 # and start the child again.
 fuzz-lib:
 	@$(MAKE) --no-print-directory BUILD=$(FUZZ_BUILD)/burrow CC=$(FUZZ_CC) \
-		OPT="-O1 -g" HARDENING="-fno-common -fsanitize=address,fuzzer-no-link" lib
+		OPT="-O1 -g" HARDENING="-fno-common -fsanitize=address,fuzzer-no-link -DBURROW_NO_FUZZ_HOOKS" lib
 
 # The replay rule comes first, because the make that ships with macOS takes
 # the first pattern that matches rather than the most specific one.

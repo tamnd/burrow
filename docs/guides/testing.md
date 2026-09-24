@@ -512,7 +512,7 @@ FAIL
 
 An input that reaches new code is shrunk before it is kept, as in Go, down to the smallest input that still reaches it. A longer run prints `new interesting: N (total: M)` on each stats line, where the total counts the baseline inputs too.
 
-Some things to know. burrow defines the functions the compiler calls into, so it cannot be linked with libFuzzer, which defines the same ones. The trace-pc counters are a table of 16384 entries picked by a hash of where each call came from, so two edges can share an entry, which costs a little guidance and nothing else. Both kinds only count code in the program itself, and a shared library loaded at a different address in each worker would not line up, so link the code under test statically. MSVC's `/fsanitize-coverage` is not supported yet.
+Some things to know. burrow defines the functions the compiler calls into, and so does libFuzzer. To link burrow into a libFuzzer binary, build burrow with `-DBURROW_NO_FUZZ_HOOKS`, and `-test.fuzz` in that program runs without guidance. The trace-pc counters are a table of 16384 entries picked by a hash of where each call came from, so two edges can share an entry, which costs a little guidance and nothing else. Both kinds only count code in the program itself, and a shared library loaded at a different address in each worker would not line up, so link the code under test statically. MSVC's `/fsanitize-coverage` is not supported yet.
 
 ## Porting a test from Go
 

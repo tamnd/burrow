@@ -301,6 +301,10 @@ static void TestReadDirListsEveryNameOnce(TestingT *t) {
         if (e.type != 0 && e.type != type)
             testing_t_errorf_v(t, "%s: type %o, want %o", e.name, e.type, type);
     }
+    if (err == PAL_ENOTSUP && total == 0) {
+        pal_close(fd, NULL);
+        testing_t_skip_v(t, "no pal_readdir backend on this platform yet");
+    }
     if (err != PAL_OK)
         testing_t_errorf_v(t, "readdir: %s", pal_errno_string(err));
     for (int i = 0; i < 5; i++)

@@ -1865,9 +1865,8 @@ static void runner_finish(TestingT *t) {
         Byte stack[16384];
         Int n = runtime_stack(
             slice_from(stack, (Int)sizeof stack, (Int)sizeof stack, TYPE_BYTE), false);
-        testing_t_errorf_v(t, "%s%v\n%s\n",
-                           nil_panic ? BURROW_S("") : BURROW_S("panic: "), err,
-                           str_from_bytes(stack, n));
+        Str prefix = nil_panic ? BURROW_S("") : BURROW_S("panic: ");
+        testing_t_errorf_v(t, "%s%v\n%s\n", prefix, err, str_from_bytes(stack, n));
         sync_mutex_lock(&t->mu);
         t->finished = true;
         sync_mutex_unlock(&t->mu);

@@ -180,7 +180,7 @@ static int proc_spawn_child(const PalSpawn *req, char *const *envp, int errfd,
  * getrlimit is not on the list of calls a child may make. */
 static int proc_fd_limit(void) {
     struct rlimit rl;
-    if (getrlimit(RLIMIT_NOFILE, &rl) != 0 || rl.rlim_cur == RLIM_INFINITY ||
+    if (getrlimit((int)RLIMIT_NOFILE, &rl) != 0 || rl.rlim_cur == RLIM_INFINITY ||
         rl.rlim_cur > 65536)
         return 65536;
     return (int)rl.rlim_cur;

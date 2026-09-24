@@ -230,6 +230,11 @@ static FuzzCov fuzz_cov;
 #define FUZZ_NO_COVERAGE
 #endif
 
+/* libFuzzer defines both of these too, so a program that links burrow into a
+ * libFuzzer binary, as the differential fuzzer does, builds burrow with
+ * BURROW_NO_FUZZ_HOOKS and gets libFuzzer's. -test.fuzz in such a program
+ * finds no counters and runs without guidance. */
+#ifndef BURROW_NO_FUZZ_HOOKS
 FUZZ_NO_COVERAGE void __sanitizer_cov_8bit_counters_init(
     char *start,
     char *stop) { /* NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
@@ -255,6 +260,7 @@ FUZZ_NO_COVERAGE void __sanitizer_cov_trace_pc(
     fuzz_cov.pc_used = 1;
 }
 #endif
+#endif /* BURROW_NO_FUZZ_HOOKS */
 
 Int burrow__fuzz_coverage_len(void) {
     Int n = 0;
@@ -2724,9 +2730,9 @@ static Str fuzz_worker_coordinate(FuzzWorker *w, Arena *ar) {
                     fuzz_centry_free(&out);
                     return err;
                 }
+                Str why = st == 0 ? BURROW_S("<nil>") : fuzz_wait_string(st, a);
                 crasher = fmt_sprintf_v(
-                    a, "fuzzing process hung or terminated unexpectedly: %s",
-                    st == 0 ? BURROW_S("<nil>") : fuzz_wait_string(st, a));
+                    a, "fuzzing process hung or terminated unexpectedly: %s", why);
                 can_minimize = false;
             } else {
                 crasher = resp.err;
@@ -2958,10 +2964,9 @@ static void fuzz_log_stats(FuzzCoord *c) {
     char buf[32];
     Str el = burrow__testing_duration_string(fuzz_elapsed(c), buf);
     if (fuzz_warmup_run(c)) {
-        fuzz_log(fmt_sprintf_v(a, "fuzz: elapsed: %s, %s: %d/%d completed\n", el,
-                               c->cov_mask != NULL
-                                   ? BURROW_S("gathering baseline coverage")
-                                   : BURROW_S("testing seed corpus"),
+        Str what = c->cov_mask != NULL ? BURROW_S("gathering baseline coverage")
+                                       : BURROW_S("testing seed corpus");
+        fuzz_log(fmt_sprintf_v(a, "fuzz: elapsed: %s, %s: %d/%d completed\n", el, what,
                                c->warmup_count - c->warmup_left, c->warmup_count));
     } else if (c->crash_minimizing != NULL) {
         fuzz_log(fmt_sprintf_v(a, "fuzz: elapsed: %s, minimizing\n", el));

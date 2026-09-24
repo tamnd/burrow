@@ -77,34 +77,37 @@ static bool count_ok(const void *buf, int64_t n, PalErrno *err) {
 }
 
 static int open_flags(uint32_t flags) {
-    int o = O_CLOEXEC;
+    /* The casts are for cosmopolitan, whose O_ constants are unsigned
+     * variables filled in at startup for whichever system it finds itself
+     * on. */
+    int o = (int)O_CLOEXEC;
     switch (flags & PAL_O_ACCMODE) {
     case PAL_O_WRONLY:
-        o |= O_WRONLY;
+        o |= (int)O_WRONLY;
         break;
     case PAL_O_RDWR:
-        o |= O_RDWR;
+        o |= (int)O_RDWR;
         break;
     default:
-        o |= O_RDONLY;
+        o |= (int)O_RDONLY;
         break;
     }
     if (flags & PAL_O_APPEND)
-        o |= O_APPEND;
+        o |= (int)O_APPEND;
     if (flags & PAL_O_CREATE)
-        o |= O_CREAT;
+        o |= (int)O_CREAT;
     if (flags & PAL_O_EXCL)
-        o |= O_EXCL;
+        o |= (int)O_EXCL;
     if (flags & PAL_O_TRUNC)
-        o |= O_TRUNC;
+        o |= (int)O_TRUNC;
     if (flags & PAL_O_SYNC)
-        o |= O_SYNC;
+        o |= (int)O_SYNC;
     if (flags & PAL_O_NONBLOCK)
-        o |= O_NONBLOCK;
+        o |= (int)O_NONBLOCK;
     if (flags & PAL_O_DIRECTORY)
-        o |= O_DIRECTORY;
+        o |= (int)O_DIRECTORY;
     if (flags & PAL_O_NOFOLLOW)
-        o |= O_NOFOLLOW;
+        o |= (int)O_NOFOLLOW;
     return o;
 }
 
@@ -555,7 +558,7 @@ bool pal_pipe(int64_t out[2], uint32_t flags, PalErrno *err) {
     for (int i = 0; i < 2; i++) {
         bool ok = set_fd_flag(p[i], F_GETFD, F_SETFD, FD_CLOEXEC);
         if (ok && (flags & PAL_O_NONBLOCK))
-            ok = set_fd_flag(p[i], F_GETFL, F_SETFL, O_NONBLOCK);
+            ok = set_fd_flag(p[i], F_GETFL, F_SETFL, (int)O_NONBLOCK);
         if (!ok) {
             PalErrno e = burrow__pal_errno(errno);
             close(p[0]);

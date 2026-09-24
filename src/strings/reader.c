@@ -9,6 +9,7 @@
 #include "burrow/strings.h"
 
 #include "burrow/core.h"
+#include "burrow/declare.h"
 #include "burrow/error.h"
 #include "burrow/io.h"
 #include "burrow/mem.h"
@@ -22,6 +23,12 @@
 #include <stdint.h>
 #include <string.h>
 
+/* The methods io asks for by name: io_copy looks for WriteTo and ReadFrom,
+ * and io_write_string for WriteString. */
+#define STRINGS_READER_METHODS(M, T)                                                   \
+    M(T, WriteTo, strings_reader_write_to, IO_SIG_WRITE_TO)
+BURROW_METHODS_DEFINE(StringsReader, STRINGS_READER_METHODS);
+
 static const Type reader_desc = {
     {(const Byte *)"Reader", 6},
     {(const Byte *)"strings", 7},
@@ -29,9 +36,10 @@ static const Type reader_desc = {
     (uint32_t)sizeof(StringsReader),
     (uint16_t)_Alignof(StringsReader),
     0,
-    0,
+    (uint16_t)(sizeof burrow__methods_StringsReader /
+               sizeof burrow__methods_StringsReader[0]),
     NULL,
-    NULL,
+    burrow__methods_StringsReader,
     NULL,
     NULL,
     0,
@@ -249,4 +257,16 @@ static const IoByteReaderVT strings_reader_byte_reader_vt = {
 IoByteReader strings_reader_as_io_byte_reader(StringsReader *r) {
     IoByteReader br = {&strings_reader_byte_reader_vt, r};
     return br;
+}
+
+static Int strings_reader_io_read_at(void *self, Slice p, int64_t off, Error *err) {
+    return strings_reader_read_at((StringsReader *)self, p, off, err);
+}
+
+static const IoReaderAtVT strings_reader_reader_at_vt = {&reader_desc,
+                                                         strings_reader_io_read_at};
+
+IoReaderAt strings_reader_as_io_reader_at(StringsReader *r) {
+    IoReaderAt ra = {&strings_reader_reader_at_vt, r};
+    return ra;
 }

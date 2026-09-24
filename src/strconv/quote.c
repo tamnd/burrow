@@ -191,7 +191,7 @@ typedef struct QuoteJob {
     bool graphic_only;
 } QuoteJob;
 
-static void run(QuoteOut *o, const QuoteJob *j) {
+static void quote_run(QuoteOut *o, const QuoteJob *j) {
     if (j->is_rune)
         quoted_rune(o, j->r, j->quote, j->ascii_only, j->graphic_only);
     else
@@ -201,7 +201,7 @@ static void run(QuoteOut *o, const QuoteJob *j) {
 static Str quote_str(Alloc *a, QuoteJob j) {
     Byte tmp[QUOTE_STACK];
     QuoteOut o = {tmp, 0, QUOTE_STACK};
-    run(&o, &j);
+    quote_run(&o, &j);
 
     /* Never empty, since the quotes are always there. */
     Byte *p = (Byte *)mem_alloc_nozero(a, (size_t)o.n, 1);
@@ -212,7 +212,7 @@ static Str quote_str(Alloc *a, QuoteJob j) {
         memcpy(p, tmp, (size_t)o.n);
     } else {
         QuoteOut w = {p, 0, o.n};
-        run(&w, &j);
+        quote_run(&w, &j);
     }
     return str_from_bytes(p, o.n);
 }
@@ -233,7 +233,7 @@ static Slice quote_append(Alloc *a, Slice dst, QuoteJob j) {
     bool in_place = dst.p != NULL && spare >= least;
     QuoteOut o = {in_place ? (Byte *)dst.p + dst.len : tmp, 0,
                   in_place ? spare : QUOTE_STACK};
-    run(&o, &j);
+    quote_run(&o, &j);
 
     if (o.n <= o.cap) {
         if (!in_place)
@@ -250,7 +250,7 @@ static Slice quote_append(Alloc *a, Slice dst, QuoteJob j) {
         return out;
 
     QuoteOut w = {(Byte *)out.p + old, 0, o.n};
-    run(&w, &j);
+    quote_run(&w, &j);
     return out;
 }
 
@@ -268,7 +268,7 @@ Int burrow__strconv_quote_into(Byte *dst, Str s) {
     QuoteJob j = str_job(s, false, false);
     /* NULL only counts. */
     QuoteOut o = {dst, 0, dst == NULL ? 0 : BURROW_INT_MAX};
-    run(&o, &j);
+    quote_run(&o, &j);
     return o.n;
 }
 

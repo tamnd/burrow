@@ -16,6 +16,7 @@
 #include "burrow/strings.h"
 
 #include "burrow/core.h"
+#include "burrow/declare.h"
 #include "burrow/error.h"
 #include "burrow/io.h"
 #include "burrow/mem.h"
@@ -26,6 +27,12 @@
 
 #include <string.h>
 
+/* The methods io asks for by name: io_copy looks for WriteTo and ReadFrom,
+ * and io_write_string for WriteString. */
+#define STRINGS_BUILDER_METHODS(M, T)                                                  \
+    M(T, WriteString, strings_builder_write_string, IO_SIG_WRITE_STRING)
+BURROW_METHODS_DEFINE(StringsBuilder, STRINGS_BUILDER_METHODS);
+
 static const Type builder_desc = {
     {(const Byte *)"Builder", 7},
     {(const Byte *)"strings", 7},
@@ -33,9 +40,10 @@ static const Type builder_desc = {
     (uint32_t)sizeof(StringsBuilder),
     (uint16_t)_Alignof(StringsBuilder),
     0,
-    0,
+    (uint16_t)(sizeof burrow__methods_StringsBuilder /
+               sizeof burrow__methods_StringsBuilder[0]),
     NULL,
-    NULL,
+    burrow__methods_StringsBuilder,
     NULL,
     NULL,
     0,

@@ -295,6 +295,7 @@ int64_t strings_reader_write_to(StringsReader *r, IoWriter w, Error *err);
 IoReader strings_reader_as_io_reader(StringsReader *r);
 IoSeeker strings_reader_as_io_seeker(StringsReader *r);
 IoByteReader strings_reader_as_io_byte_reader(StringsReader *r);
+IoReaderAt strings_reader_as_io_reader_at(StringsReader *r);
 
 extern const Type *const TYPE_STRINGS_READER;
 

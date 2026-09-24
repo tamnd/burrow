@@ -35,3 +35,4 @@ docs/guides/unicode.md
 docs/guides/iter.md
 docs/guides/bytes.md
 docs/guides/encoding.md
+docs/guides/io.md

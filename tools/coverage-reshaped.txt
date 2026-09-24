@@ -55,3 +55,19 @@ encoding/base64: method (Encoding) Strict: returns the Encoding by value
 # value.
 encoding/base32: func NewEncoding: returns the Encoding by value
 encoding/base32: method (Encoding) WithPadding: returns the Encoding by value
+
+# include/burrow/io.h: the small wrappers Go returns as an interface or a
+# pointer to a fresh value come back as the struct itself, so they can live on
+# the stack with nothing to free. The _as_ functions make the interface from
+# its address.
+io: func LimitReader: returns the IoLimitedReader value, io_limited_reader_as_io_reader makes the Reader
+io: func TeeReader: returns the IoTeeReader value, io_tee_reader_as_io_reader makes the Reader
+io: func NopCloser: returns the IoNopCloser value, io_nop_closer_as_io_read_closer makes the ReadCloser
+io: func NewSectionReader: returns the IoSectionReader value rather than a pointer to a new one
+io: func NewOffsetWriter: returns the IoOffsetWriter value rather than a pointer to a new one
+
+# include/burrow/io.h: these have to allocate, so they take an allocator, and a
+# variadic list in C is a pointer and a count.
+io: func MultiReader: takes an allocator and the readers as a pointer and a count
+io: func MultiWriter: takes an allocator and the writers as a pointer and a count
+io: func Pipe: takes an allocator and returns both ends through out parameters

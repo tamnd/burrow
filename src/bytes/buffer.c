@@ -14,6 +14,7 @@
 #include "burrow/bytes.h"
 
 #include "burrow/core.h"
+#include "burrow/declare.h"
 #include "burrow/error.h"
 #include "burrow/iface.h"
 #include "burrow/io.h"
@@ -26,6 +27,14 @@
 #include <stdint.h>
 #include <string.h>
 
+/* The methods io asks for by name: io_copy looks for WriteTo and ReadFrom,
+ * and io_write_string for WriteString. */
+#define BYTES_BUFFER_METHODS(M, T)                                                     \
+    M(T, ReadFrom, bytes_buffer_read_from, IO_SIG_READ_FROM)                           \
+    M(T, WriteString, bytes_buffer_write_string, IO_SIG_WRITE_STRING)                  \
+    M(T, WriteTo, bytes_buffer_write_to, IO_SIG_WRITE_TO)
+BURROW_METHODS_DEFINE(BytesBuffer, BYTES_BUFFER_METHODS);
+
 static const Type bytes_buffer_desc = {
     {(const Byte *)"Buffer", 6},
     {(const Byte *)"bytes", 5},
@@ -33,9 +42,10 @@ static const Type bytes_buffer_desc = {
     (uint32_t)sizeof(BytesBuffer),
     (uint16_t)_Alignof(BytesBuffer),
     0,
-    0,
+    (uint16_t)(sizeof burrow__methods_BytesBuffer /
+               sizeof burrow__methods_BytesBuffer[0]),
     NULL,
-    NULL,
+    burrow__methods_BytesBuffer,
     NULL,
     NULL,
     0,
@@ -460,7 +470,7 @@ static Str buffer_read_slice(BytesBuffer *b, Byte delim, Error *err) {
 Slice bytes_buffer_read_bytes(BytesBuffer *b, Alloc *a, Byte delim, Error *err) {
     Error e;
     Str line = buffer_read_slice(b, delim, &e);
-    if (line.len == 0) {
+    if (line.len == 0 || line.p == NULL) {
         /* append([]byte(nil), empty...) is nil. */
         BURROW_OUT(err, e);
         return slice_nil(TYPE_BYTE);

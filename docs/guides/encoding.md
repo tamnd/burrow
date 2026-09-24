@@ -129,6 +129,58 @@ fmt_fprintf_v(enc, "%d apples", 12);
 
 `out` now holds `3132206170706c6573`. As in Go, the decoder reports a lone digit at the end as `io_err_unexpected_eof`, since a stream that stops in the middle of a byte has been cut short.
 
+## Base64
+
+`burrow/encoding/base64.h` is Go's `encoding/base64`. The four encodings in common use are ready made: `base64_std_encoding`, `base64_url_encoding` with `-` and `_` in place of `+` and `/`, and the raw forms of both, which leave the `=` padding off. Each call takes the encoding first, then the allocator:
+
+<!-- example: ../examples/encoding/base64.c#oneshot -->
+```c
+Str s = base64_encoding_encode_to_string(base64_std_encoding, a,
+                                         BURROW_B("any carnal pleas"));
+
+Error err = BURROW_NO_ERROR;
+Slice b = base64_encoding_decode_string(base64_url_encoding, a,
+                                        BURROW_S("PDw_Pz8-Pg=="), &err);
+```
+
+`s` is `YW55IGNhcm5hbCBwbGVhcw==` and `b` is `<<???>>`. Decoding skips `\r` and `\n` wherever they turn up, since MIME wraps base64 into lines. As with hex, `base64_encoding_encode` and `base64_encoding_decode` work into a slice you already have, sized with `base64_encoding_encoded_len` and `base64_encoding_decoded_len`, and the `append_` forms grow one for you.
+
+Any other alphabet or padding is a `Base64Encoding` you make. Go hands these out as pointers, but one holds no pointers of its own, so here the calls return it by value and you keep it on the stack, in a struct or in a static:
+
+<!-- example: ../examples/encoding/base64.c#raw -->
+```c
+Base64Encoding raw =
+    base64_encoding_with_padding(base64_url_encoding, BASE64_NO_PADDING);
+Slice c = base64_encoding_decode_string(&raw, a, BURROW_S("PDw_Pz8-Pg"), &err);
+```
+
+`base64_new_encoding` takes a 64 byte alphabet and `base64_encoding_strict` gives a copy that rejects input whose unused bits at the end are not zero. A bad alphabet or padding character panics with Go's message, as it does in Go.
+
+Bad input gives back what decoded before it, and a `Base64CorruptInputError` holding the offset of the byte that was wrong:
+
+<!-- example: ../examples/encoding/base64.c#bad -->
+```c
+Slice part = base64_encoding_decode_string(base64_std_encoding, a,
+                                           BURROW_S("aGVsbG8*"), &err);
+const Base64CorruptInputError *off =
+    errors_as(err, TYPE_BASE64_CORRUPT_INPUT_ERROR);
+```
+
+`part` is `hel`, `*off` is 7, and the error reads `illegal base64 data at input byte 7`. The error lives in the goroutine's error arena, like the errors strconv returns, so `error_retain` it to keep it past the end of the goroutine.
+
+`base64_new_encoder` gives an `IoWriteCloser` that encodes into another writer. It holds back up to two bytes until it has a whole group of three, so Close it at the end to write those and the padding:
+
+<!-- example: ../examples/encoding/base64.c#stream -->
+```c
+StringsBuilder out = STRINGS_BUILDER(a);
+IoWriteCloser enc =
+    base64_new_encoder(a, base64_std_encoding, strings_builder_as_io_writer(&out));
+fmt_fprintf_v(io_write_closer_as_io_writer(enc), "%d apples", 12);
+enc.vt->closer.close(enc.data);
+```
+
+`out` now holds `MTIgYXBwbGVz`. `base64_new_decoder` goes the other way, as an `IoReader`.
+
 ## What is not here
 
-Nothing from Go's `encoding` or `encoding/hex` is missing.
+Nothing from Go's `encoding`, `encoding/base64` or `encoding/hex` is missing.

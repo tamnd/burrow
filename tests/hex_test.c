@@ -439,28 +439,32 @@ static void decode_short(void *arg) {
     hex_decode(slice_from(dst, 1, 1, TYPE_BYTE), *(Slice *)arg, NULL);
 }
 
-static Any recovered(Func f) {
-    volatile Any got = {NULL, NULL};
+/* The text of the panic f raises, copied out while the catch block still has
+ * it, since the value is gone once the block ends. */
+static char panic_buf[256];
+
+static Str recovered(Func f) {
+    volatile Int n = 0;
     BURROW_TRY {
         BURROW_CALLF0(f);
     }
     BURROW_CATCH(r) {
-        got = r;
+        Str s = panic_text(r);
+        n = s.len < (Int)sizeof panic_buf ? s.len : (Int)sizeof panic_buf;
+        memcpy(panic_buf, s.p, (size_t)n);
     }
     BURROW_TRY_END;
-    return got;
+    return str_from_bytes((const Byte *)panic_buf, n);
 }
 
 /* Go indexes past the end of dst and the runtime says where. */
 static void TestShortDst(TestingT *t) {
     Slice src = BS("ab");
-    Any v = recovered(BURROW_FN(Func, encode_short, &src));
-    CHECK(str_eq(panic_text(v),
-                 BURROW_S("runtime error: index out of range [3] with length 3")));
+    Str v = recovered(BURROW_FN(Func, encode_short, &src));
+    CHECK(str_eq(v, BURROW_S("runtime error: index out of range [3] with length 3")));
     Slice digits = BS("0a0b");
     v = recovered(BURROW_FN(Func, decode_short, &digits));
-    CHECK(str_eq(panic_text(v),
-                 BURROW_S("runtime error: index out of range [1] with length 1")));
+    CHECK(str_eq(v, BURROW_S("runtime error: index out of range [1] with length 1")));
 }
 
 /* A writer that takes limit bytes and then fails. */

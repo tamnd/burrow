@@ -415,14 +415,28 @@ static void call_read_from(void *env) {
     bytes_buffer_read_from(c->b, c->r, NULL);
 }
 
-/* The value a call panicked with, or no type if it returned. */
-static Any recovered(Func f) {
-    volatile Any got = {NULL, NULL};
+/* What a call panicked with. The value belongs to the panic and is gone once
+ * the catch block ends, so an Error is copied out and anything else leaves
+ * just its type and text. */
+typedef struct Recovered {
+    const Type *t; /* NULL if it returned */
+    Error err;
+    char text[256];
+} Recovered;
+
+static Recovered recovered(Func f) {
+    static Recovered got;
+    memset(&got, 0, sizeof got);
     BURROW_TRY {
         BURROW_CALLF0(f);
     }
     BURROW_CATCH(r) {
-        got = r;
+        got.t = r.t;
+        if (r.t == TYPE_ERROR)
+            got.err = *(const Error *)r.data;
+        Str s = panic_text(r);
+        size_t n = s.len < (Int)sizeof got.text ? (size_t)s.len : sizeof got.text - 1;
+        memcpy(got.text, s.p, n);
     }
     BURROW_TRY_END;
     return got;
@@ -466,17 +480,17 @@ static void TestReadFromNegativeReader(TestingT *t) {
     Alloc *a = begin();
     BytesBuffer b = BYTES_BUFFER(a);
     ReadFromCall c = {&b, {&negative_reader_vt, NULL}};
-    Any r = recovered(BURROW_FN(Func, call_read_from, &c));
+    Recovered r = recovered(BURROW_FN(Func, call_read_from, &c));
     if (r.t == NULL) {
         testing_t_fatal_v(t, "bytes.Buffer.ReadFrom didn't panic");
     } else if (r.t == TYPE_ERROR) {
         /* this is the error string of errNegativeRead */
         Str want_error = S("bytes.Buffer: reader returned negative count from Read");
-        Str got = error_text(*(const Error *)r.data);
+        Str got = error_text(r.err);
         if (!str_eq(got, want_error))
             testing_t_fatalf_v(t, "recovered panic: got %v, want %v", got, want_error);
     } else {
-        testing_t_fatalf_v(t, "unexpected panic value: %s", panic_text(r));
+        testing_t_fatalf_v(t, "unexpected panic value: %s", str_from_cstr(r.text));
     }
     bytes_buffer_free(&b);
     end(t);

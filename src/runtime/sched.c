@@ -898,6 +898,21 @@ static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
     gp->arg = NULL;
     count_goroutine(m->p, -1);
 
+    /* A coroutine that has finished gives its thread to whoever is waiting in
+     * it, which is what the switch that ends a coroutine looks like. That one
+     * counts in the bubble again before this one stops counting, so the bubble
+     * never sees a moment with neither. */
+    burrow__G *coronext = NULL;
+    if (gp->coro != NULL) {
+        coronext = gp->coro->gp;
+        gp->coro->gp = NULL;
+        gp->coro = NULL;
+        if (coronext == NULL)
+            runtime_throw(BURROW_S("coroexit with nobody waiting"));
+        burrow__bubble_unblock(coronext);
+        set_status(coronext, BURROW_GRUNNABLE);
+    }
+
     bool was_main = gp == sched.maing;
 
     /* Taken off the goroutine before it goes on a free list, so that the next
@@ -917,6 +932,13 @@ static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
     }
     burrow__atomic_store_release_u32(&gp->bubbleblocked, 0);
 
+    /* A goroutine that called runtime_goexit from inside a BURROW_TRY never
+     * left the block, so the recovery point is still on its chain and points
+     * into a stack that is about to be somebody else's. The deferred calls
+     * have all run by now, and nothing else is left to unwind. */
+    gp->panic.recovers = NULL;
+    gp->panic.panics = NULL;
+
     gfput(m->p, gp);
 
     /* Last, so that by the time runtime_main wakes up, the goroutine it was
@@ -933,7 +955,7 @@ static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
      * down for its own body goroutine and never follows it. */
     if (bubble != NULL)
         burrow__bubble_exit(bubble, gp);
-    return NULL;
+    return coronext;
 }
 
 static burrow__G *gosched0(burrow__M *m, burrow__G *gp) {
@@ -2034,6 +2056,7 @@ static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble, bool b
     newg->entry = fn.f;
     newg->arg = fn.env;
     newg->next = NULL;
+    newg->coro = NULL;
     newg->bubble = bubble;
     burrow__atomic_store_release_u32(&newg->bubbleblocked, 0);
 
@@ -2105,6 +2128,88 @@ bool burrow__go_bubble(Func fn, burrow__Bubble *b) {
         runtime_throw(BURROW_S("burrow__go_bubble: no bubble"));
 
     return go_start(fn, 0, b, true);
+}
+
+/* ---------------------------------------------------------------- coroutines */
+
+static void corostart(void *arg) {
+    burrow__Coro *c = (burrow__Coro *)arg;
+    c->f(c, c->env);
+}
+
+bool burrow__newcoro(burrow__Coro *c, void (*f)(burrow__Coro *c, void *env),
+                     void *env) {
+    burrow__M *m = getm();
+    if (m == NULL || m->curg == NULL)
+        runtime_throw(BURROW_S("newcoro: not on a goroutine"));
+
+    burrow__G *newg = gfget(m->p, BURROW_GOROUTINE_STACK);
+    if (newg == NULL)
+        return false;
+
+    newg->entry = corostart;
+    newg->arg = c;
+    newg->next = NULL;
+    newg->coro = c;
+    newg->bubble = m->curg->bubble;
+    burrow__atomic_store_release_u32(&newg->bubbleblocked, 0);
+
+    if (!make_context(newg, BURROW_GOROUTINE_STACK)) {
+        gfput(m->p, newg);
+        return false;
+    }
+
+    c->gp = newg;
+    c->f = f;
+    c->env = env;
+
+    /* Joined and then blocked at once, which leaves the bubble's count of
+     * goroutines that can move where it was. Nobody can wake newg in between,
+     * since the only way in is a switch from this goroutine. */
+    if (newg->bubble != NULL) {
+        burrow__bubble_join(newg->bubble);
+        burrow__bubble_blocking(newg);
+    }
+
+    set_status_release(newg, BURROW_GWAITING);
+    count_goroutine(m->p, 1);
+    return true;
+}
+
+/* Straight from one goroutine's stack to the other's, without stopping on the
+ * thread's stack in between the way mcall does. Everything execute would do on
+ * the way in is done here instead, on the way out: the M's current goroutine,
+ * the stack an overflow is measured against, and the two statuses. None of it
+ * needs the scheduler, because both goroutines belong to this M for the length
+ * of the switch and nobody else can start either of them.
+ *
+ * Release stores for the statuses, since the full barrier into waiting is for a
+ * waker that CASes the status after setting a flag, and the only way to wake a
+ * goroutine waiting here is another switch. The bubble counts the one that is
+ * about to run before it stops counting this one, so it never sees neither. */
+void burrow__coroswitch(burrow__Coro *c) {
+    burrow__M *m = getm();
+    if (m == NULL || m->curg == NULL)
+        runtime_throw(BURROW_S("coroswitch: not on a goroutine"));
+    burrow__G *gp = m->curg;
+
+    burrow__G *next = c->gp;
+    if (next == NULL)
+        runtime_throw(BURROW_S("coroswitch on an exited coro"));
+    if (next->bubble != gp->bubble)
+        runtime_throw(BURROW_S("coroswitch across synctest bubble boundary"));
+    c->gp = gp;
+
+    if (gp->bubble != NULL) {
+        burrow__bubble_unblock(next);
+        burrow__bubble_blocking(gp);
+    }
+
+    set_status_release(gp, BURROW_GWAITING);
+    burrow__atomic_store_release_ptr((void **)&m->curg, next);
+    set_status_release(next, BURROW_GRUNNING);
+    burrow__stack_set_current(&next->stack);
+    burrow__mcontext_switch(&gp->ctx, &next->ctx);
 }
 
 /* ------------------------------------------------------------ park and ready */

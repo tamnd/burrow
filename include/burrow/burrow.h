@@ -53,6 +53,7 @@
 #include "burrow/hash/fnv.h"
 #include "burrow/iface.h"
 #include "burrow/io.h"
+#include "burrow/iter.h"
 #include "burrow/map.h"
 #include "burrow/math/bits.h"
 #include "burrow/mem.h"

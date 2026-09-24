@@ -87,6 +87,7 @@ typedef struct burrow__G burrow__G;
 typedef struct burrow__P burrow__P;
 typedef struct burrow__M burrow__M;
 typedef struct burrow__Bubble burrow__Bubble;
+typedef struct burrow__Coro burrow__Coro;
 
 /* What a goroutine is doing. Go's names and Go's meanings.
  *
@@ -230,6 +231,12 @@ struct burrow__G {
      *
      * Cleared by the goroutine itself, at the safe point where it gives way. */
     uint32_t preempt;
+
+    /* The coroutine this goroutine was made for by burrow__newcoro, or NULL for
+     * an ordinary goroutine. When one of these exits it hands its thread
+     * straight to whoever is waiting in the coroutine, the way it would have
+     * with a switch, rather than going back to the scheduler. */
+    BURROW_BORROWS(1) burrow__Coro *coro;
 
     /* Every G ever created, in one list under the scheduler lock. Go calls it
      * allgs and keeps it for the same two reasons: a traceback has to be able to
@@ -726,6 +733,37 @@ bool burrow__preempt_one(burrow__P *p);
  * Every one after it inherits the bubble from its parent in the ordinary way.
  * Answers what go answers. */
 bool burrow__go_bubble(Func fn, burrow__Bubble *b);
+
+/* ---------------------------------------------------------------- coroutines
+ *
+ * Go's runtime coro, which is what iter.Pull runs on. A coroutine is a
+ * goroutine that never goes near a run queue. Exactly one of it and the
+ * goroutine that made it is running at any time, and burrow__coroswitch hands
+ * the thread from one to the other directly, the way a channel handoff would if
+ * the scheduler were not involved. Being a real goroutine is what gives the
+ * body its own defer chain and its own panics, so a panic in an iterator can be
+ * caught on its side and carried across.
+ *
+ * The coroutine counts as a goroutine from burrow__newcoro until its function
+ * returns, and it has finished exiting by the time the switch that ended it
+ * comes back. In a synctest bubble, the one of the two that is not running
+ * counts as durably blocked. */
+struct burrow__Coro {
+    /* Whichever of the two goroutines is waiting, or NULL once the coroutine
+     * has exited. */
+    burrow__G *gp;
+    void (*f)(burrow__Coro *c, void *env);
+    void *env;
+};
+
+/* Makes a coroutine that will run f(c, env) the first time somebody switches
+ * to it, and fills in *c, which has to stay where it is until the coroutine has
+ * exited. Answers false if there was no memory for a goroutine. */
+bool burrow__newcoro(burrow__Coro *c, void (*f)(burrow__Coro *c, void *env), void *env);
+
+/* Stops the caller and runs the other side of c until it switches back or, if
+ * it is the coroutine, exits. Called from either side. */
+void burrow__coroswitch(burrow__Coro *c);
 
 /* The bubble the caller is in, or NULL for a goroutine outside every bubble and
  * for a thread that is not running a goroutine at all.

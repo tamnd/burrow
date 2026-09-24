@@ -19,3 +19,4 @@ hash/crc32
 hash/crc64
 hash/fnv
 unicode
+iter

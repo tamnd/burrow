@@ -28,10 +28,8 @@ enum {
     MaxRune = 0x10FFFF,
 };
 
-/* Go's tables, with each slice as a C array and its length. */
-#define ARRAY(T, ...) (T[]){__VA_ARGS__}, (Int)(sizeof((T[]){__VA_ARGS__}) / sizeof(T))
-#define RUNES(...) ARRAY(Rune, __VA_ARGS__)
-#define UNITS(...) ARRAY(uint16_t, __VA_ARGS__)
+/* Go's tables. Each slice is a named array, and E gives it with its length. */
+#define E(x) x, (Int)(sizeof(x) / sizeof((x)[0]))
 
 typedef struct EncodeTest {
     Rune *in;
@@ -40,12 +38,18 @@ typedef struct EncodeTest {
     Int out_len;
 } EncodeTest;
 
+static Rune enc_in0[] = {1, 2, 3, 4};
+static uint16_t enc_out0[] = {1, 2, 3, 4};
+static Rune enc_in1[] = {0xffff, 0x10000, 0x10001, 0x12345, 0x10ffff};
+static uint16_t enc_out1[] = {0xffff, 0xd800, 0xdc00, 0xd800, 0xdc01,
+                              0xd808, 0xdf45, 0xdbff, 0xdfff};
+static Rune enc_in2[] = {'a', 'b', 0xd7ff, 0xd800, 0xdfff, 0xe000, 0x110000, -1};
+static uint16_t enc_out2[] = {'a', 'b', 0xd7ff, 0xfffd, 0xfffd, 0xe000, 0xfffd, 0xfffd};
+
 static EncodeTest encodeTests[] = {
-    {RUNES(1, 2, 3, 4), UNITS(1, 2, 3, 4)},
-    {RUNES(0xffff, 0x10000, 0x10001, 0x12345, 0x10ffff),
-     UNITS(0xffff, 0xd800, 0xdc00, 0xd800, 0xdc01, 0xd808, 0xdf45, 0xdbff, 0xdfff)},
-    {RUNES('a', 'b', 0xd7ff, 0xd800, 0xdfff, 0xe000, 0x110000, -1),
-     UNITS('a', 'b', 0xd7ff, 0xfffd, 0xfffd, 0xe000, 0xfffd, 0xfffd)},
+    {E(enc_in0), E(enc_out0)},
+    {E(enc_in1), E(enc_out1)},
+    {E(enc_in2), E(enc_out2)},
 };
 
 typedef struct DecodeTest {
@@ -55,12 +59,21 @@ typedef struct DecodeTest {
     Int out_len;
 } DecodeTest;
 
+static uint16_t dec_in0[] = {1, 2, 3, 4};
+static Rune dec_out0[] = {1, 2, 3, 4};
+static uint16_t dec_in1[] = {0xffff, 0xd800, 0xdc00, 0xd800, 0xdc01,
+                             0xd808, 0xdf45, 0xdbff, 0xdfff};
+static Rune dec_out1[] = {0xffff, 0x10000, 0x10001, 0x12345, 0x10ffff};
+static uint16_t dec_in2[] = {0xd800, 'a'};
+static Rune dec_out2[] = {0xfffd, 'a'};
+static uint16_t dec_in3[] = {0xdfff};
+static Rune dec_out3[] = {0xfffd};
+
 static DecodeTest decodeTests[] = {
-    {UNITS(1, 2, 3, 4), RUNES(1, 2, 3, 4)},
-    {UNITS(0xffff, 0xd800, 0xdc00, 0xd800, 0xdc01, 0xd808, 0xdf45, 0xdbff, 0xdfff),
-     RUNES(0xffff, 0x10000, 0x10001, 0x12345, 0x10ffff)},
-    {UNITS(0xd800, 'a'), RUNES(0xfffd, 'a')},
-    {UNITS(0xdfff), RUNES(0xfffd)},
+    {E(dec_in0), E(dec_out0)},
+    {E(dec_in1), E(dec_out1)},
+    {E(dec_in2), E(dec_out2)},
+    {E(dec_in3), E(dec_out3)},
 };
 
 #define COUNT(a) ((Int)(sizeof(a) / sizeof((a)[0])))

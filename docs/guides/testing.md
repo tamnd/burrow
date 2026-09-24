@@ -471,7 +471,7 @@ fuzz: elapsed: 0s, minimizing
 --- FAIL: FuzzReverse (0.37s)
     --- FAIL: FuzzReverse (0.00s)
         fuzz.c:22: reverse("ɳ") = "\xb3\xc9", not valid UTF-8
-    
+
     Failing input written to testdata/fuzz/FuzzReverse/4532eca23d537359
     To re-run:
     ./fuzz_test -test.run=FuzzReverse/4532eca23d537359
@@ -503,7 +503,7 @@ fuzz: elapsed: 0s, minimizing
 --- FAIL: FuzzDeep (0.16s)
     --- FAIL: FuzzDeep (0.00s)
         testing_cover_test.c:72: found it
-    
+
     Failing input written to testdata/fuzz/FuzzDeep/10a65938dce505e4
     To re-run:
     ./cover_test -test.run=FuzzDeep/10a65938dce505e4

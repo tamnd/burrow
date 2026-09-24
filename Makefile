@@ -253,6 +253,8 @@ test: $(TEST_BINS)
 # What CI runs on a pull request, in the order that fails fastest first.
 check:
 	@$(CLANG_FORMAT) --dry-run --Werror $(shell $(GIT_FILES) '*.c' '*.h')
+	@! git grep -nIP '[ \t]+$$' -- '*.c' '*.h' '*.md' '*.yml' || \
+		{ echo "trailing whitespace above" >&2; exit 1; }
 	@tools/check-banned.sh
 	@tools/check-headers.sh
 	@tools/check-annotations.sh

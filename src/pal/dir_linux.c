@@ -61,9 +61,9 @@ bool pal_readdir(PalDir *d, PalDirEntry *out, PalErrno *err) {
             d->len = (int32_t)n;
         }
 
-        const struct linux_dirent64 *e =
-            (const struct linux_dirent64 *)(const void *)((const char *)d->buf +
-                                                          d->pos);
+        /* The kernel aligns every record, and d->buf is aligned for it. */
+        const void *rec = (const char *)d->buf + d->pos;
+        const struct linux_dirent64 *e = rec;
         d->pos += e->d_reclen;
 
         const char *name = e->d_name;

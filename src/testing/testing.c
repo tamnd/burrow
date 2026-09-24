@@ -4591,9 +4591,7 @@ int testing_m_run(TestingM *m) {
     if (!str_eq(pkg.flags[F_SHUFFLE].s, BURROW_S("off"))) {
         int64_t n;
         if (str_eq(pkg.flags[F_SHUFFLE].s, BURROW_S("on"))) {
-            struct timespec ts;
-            timespec_get(&ts, TIME_UTC);
-            n = (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+            n = pal_clock_realtime();
         } else {
             Error err = {0};
             n = strconv_parse_int(pkg.flags[F_SHUFFLE].s, 10, 64, &err);

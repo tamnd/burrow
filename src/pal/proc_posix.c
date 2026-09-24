@@ -161,7 +161,7 @@ static int proc_spawn_child(const PalSpawn *req, char *const *envp, int errfd,
     if (errfd > nfds &&
         syscall(SYS_close_range, (unsigned)nfds, (unsigned)errfd - 1, 0) != 0)
         ranged = false;
-    if (ranged && syscall(SYS_close_range, (unsigned)errfd + 1, ~0u, 0) != 0)
+    if (ranged && syscall(SYS_close_range, (unsigned)errfd + 1, ~0U, 0) != 0)
         ranged = false;
     if (!ranged)
 #endif

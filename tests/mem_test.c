@@ -753,4 +753,7 @@ static void TestGcCollectsAndReportsTheCollectorNumbers(TestingT *t) {
     X(TestGcFreeDoesNothingAndResetIsNotOffered)                                       \
     X(TestGcCollectsAndReportsTheCollectorNumbers)
 
-TESTING_MAIN(TESTS)
+/* Bare, because the gc backend has to be used from the thread that started
+ * the collector, or one registered with it, and a goroutine runs on a thread
+ * Boehm has never heard of. See the gc section of docs/guides/allocators.md. */
+TESTING_MAIN_BARE(TESTS)

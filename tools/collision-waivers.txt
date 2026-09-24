@@ -31,3 +31,10 @@ mem_alloc   libreiserfscore.*   reiserfsprogs internals, linked only by the reis
 # dropped. It parses RFC 822 dates for itself, and a mail client built on it
 # has no reason to also want net/mail, or can build with a prefix if it does.
 mail_parse_date   libc-client.*   UW IMAP c-client internals, linked by old mail tools and PHP imap
+# The sanitizer runtimes define the coverage callbacks as weak placeholders, so
+# that a program built with -fsanitize-coverage links whether or not something
+# wants the counters. burrow's fuzz engine is that something, and a program's
+# own definition takes precedence over a shared library's. A program linking
+# libFuzzer, which defines them strongly, builds burrow with
+# BURROW_NO_FUZZ_HOOKS.
+__sanitizer_cov_8bit_counters_init   lib*san.so*   weak placeholder in the sanitizer runtimes, burrow's fuzz engine is meant to replace it

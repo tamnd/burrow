@@ -12,8 +12,8 @@
  * waiting is the interesting part and there is no way to test waiting without
  * something to wait for. Those tests follow the rule tests/sched_test.c sets
  * out: only the main goroutine calls CHECK, and everything a child goroutine
- * finds out it says through an atomic, because the harness counts checks in
- * two plain ints and a second thread touching those is a race in the test.
+ * finds out it says through an atomic, so that no check can land after the
+ * test it belongs to has finished.
  *
  * There is a third thing in here which Go has no equivalent of, which is a host
  * thread that is not running a goroutine blocking on a channel. burrow is a
@@ -23,7 +23,7 @@
  *
  * The three mistakes that used to be untestable are tested here now. A send on
  * a closed channel, a double close and a close of NULL were fatal errors, and a
- * harness that ends the process has failed, so there was nothing to write. They
+ * test binary that ends the process has failed, so there was nothing to write. They
  * panic today, so the test is a BURROW_TRY around each one and a look at what
  * came out.
  *
@@ -44,8 +44,8 @@
 #include "burrow/panic.h"
 #include "burrow/runtime.h"
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -54,7 +54,7 @@
 
 /* ----------------------------------------------------- without a scheduler */
 
-TEST(a_buffered_channel_is_a_queue) {
+static void TestABufferedChannelIsAQueue(TestingT *t) {
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 4);
     CHECK(c != NULL);
 
@@ -80,7 +80,7 @@ TEST(a_buffered_channel_is_a_queue) {
 /* Sends and receives alternately for long enough that both indices go round
  * several times, which is the arithmetic that a queue written with one spare
  * slot instead of a count gets wrong. */
-TEST(the_ring_wraps_without_losing_its_place) {
+static void TestTheRingWrapsWithoutLosingItsPlace(TestingT *t) {
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 3);
     CHECK(c != NULL);
 
@@ -107,7 +107,7 @@ TEST(the_ring_wraps_without_losing_its_place) {
     chan_free(c);
 }
 
-TEST(an_unbuffered_channel_holds_nothing) {
+static void TestAnUnbufferedChannelHoldsNothing(TestingT *t) {
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 0);
     CHECK(c != NULL);
 
@@ -123,7 +123,7 @@ TEST(an_unbuffered_channel_holds_nothing) {
     chan_free(c);
 }
 
-TEST(the_non_blocking_calls_answer_instead_of_waiting) {
+static void TestTheNonBlockingCallsAnswerInsteadOfWaiting(TestingT *t) {
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 2);
     CHECK(c != NULL);
 
@@ -155,7 +155,7 @@ TEST(the_non_blocking_calls_answer_instead_of_waiting) {
     chan_free(c);
 }
 
-TEST(a_closed_channel_drains_and_then_answers_false) {
+static void TestAClosedChannelDrainsAndThenAnswersFalse(TestingT *t) {
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 4);
     CHECK(c != NULL);
 
@@ -189,7 +189,7 @@ TEST(a_closed_channel_drains_and_then_answers_false) {
     chan_free(c);
 }
 
-TEST(a_closed_unbuffered_channel_answers_a_receive_at_once) {
+static void TestAClosedUnbufferedChannelAnswersAReceiveAtOnce(TestingT *t) {
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 0);
     CHECK(c != NULL);
 
@@ -202,7 +202,7 @@ TEST(a_closed_unbuffered_channel_answers_a_receive_at_once) {
     chan_free(c);
 }
 
-TEST(a_receive_that_does_not_want_the_value_still_takes_it) {
+static void TestAReceiveThatDoesNotWantTheValueStillTakesIt(TestingT *t) {
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 2);
     CHECK(c != NULL);
 
@@ -224,7 +224,7 @@ TEST(a_receive_that_does_not_want_the_value_still_takes_it) {
 /* A Str is two words and the type descriptor knows how to copy one, which is
  * why the channel calls type_copy rather than memcpy. This is the test that
  * would notice if it stopped. */
-TEST(a_channel_carries_whatever_its_type_says) {
+static void TestAChannelCarriesWhateverItsTypeSays(TestingT *t) {
     Chan *c = chan_make(heap_allocator(), TYPE_STRING, 2);
     CHECK(c != NULL);
 
@@ -246,7 +246,7 @@ TEST(a_channel_carries_whatever_its_type_says) {
     chan_free(c);
 }
 
-TEST(a_nil_channel_is_empty_and_never_ready) {
+static void TestANilChannelIsEmptyAndNeverReady(TestingT *t) {
     CHECK_INT_EQ(chan_len(NULL), 0);
     CHECK_INT_EQ(chan_cap(NULL), 0);
     CHECK(chan_elem(NULL) == NULL);
@@ -262,7 +262,7 @@ TEST(a_nil_channel_is_empty_and_never_ready) {
 
 /* The header and the buffer are one allocation and chan_free gives all of it
  * back. A Track over the heap is the cheapest way to say so. */
-TEST(a_channel_gives_back_everything_it_took) {
+static void TestAChannelGivesBackEverythingItTook(TestingT *t) {
     Track tr;
     track_init(&tr, heap_allocator());
     track_set_quarantine(&tr, 0);
@@ -290,7 +290,7 @@ TEST(a_channel_gives_back_everything_it_took) {
 
 static Chan *doomed;
 
-TEST(a_send_on_a_closed_channel_panics) {
+static void TestASendOnAClosedChannelPanics(TestingT *t) {
     doomed = chan_make(heap_allocator(), TYPE_INT, 1);
     CHECK(doomed != NULL);
 
@@ -313,7 +313,7 @@ TEST(a_send_on_a_closed_channel_panics) {
     doomed = NULL;
 }
 
-TEST(closing_twice_panics) {
+static void TestClosingTwicePanics(TestingT *t) {
     doomed = chan_make(heap_allocator(), TYPE_INT, 0);
     CHECK(doomed != NULL);
 
@@ -325,11 +325,11 @@ TEST(closing_twice_panics) {
     doomed = NULL;
 }
 
-TEST(closing_nothing_panics) {
+static void TestClosingNothingPanics(TestingT *t) {
     CHECK_RUNTIME_ERROR(chan_close(NULL), "close of nil channel");
 }
 
-TEST(an_absurd_capacity_panics) {
+static void TestAnAbsurdCapacityPanics(TestingT *t) {
     CHECK_RUNTIME_ERROR((void)chan_make(heap_allocator(), TYPE_INT, -1),
                         "makechan: size out of range");
 }
@@ -392,7 +392,7 @@ static void handoff_body(void *arg) {
     burrow__atomic_store_u32(&sent, burrow__atomic_load_acquire_u32(&received));
 }
 
-TEST(an_unbuffered_send_does_not_return_until_somebody_has_the_value) {
+static void TestAnUnbufferedSendDoesNotReturnUntilSomebodyHasTheValue(TestingT *t) {
     reset();
     (void)runtime_gomaxprocs(1);
     runtime_main(BURROW_FN(Func, handoff_body, NULL));
@@ -438,7 +438,7 @@ static void pipeline_body(void *arg) {
     burrow__atomic_store_u32(&order_ok, ordered ? 1u : 0u);
 }
 
-TEST(everything_sent_arrives_in_order_and_the_close_ends_the_loop) {
+static void TestEverythingSentArrivesInOrderAndTheCloseEndsTheLoop(TestingT *t) {
     reset();
     (void)runtime_gomaxprocs(2);
     runtime_main(BURROW_FN(Func, pipeline_body, NULL));
@@ -508,7 +508,7 @@ static void many_body(void *arg) {
     burrow__atomic_store_u32(&sent, 1);
 }
 
-TEST(several_senders_and_several_receivers_move_every_value_once) {
+static void TestSeveralSendersAndSeveralReceiversMoveEveryValueOnce(TestingT *t) {
     reset();
     (void)runtime_gomaxprocs(4);
     runtime_main(BURROW_FN(Func, many_body, NULL));
@@ -533,7 +533,7 @@ TEST(several_senders_and_several_receivers_move_every_value_once) {
  * Several goroutines blocked on an empty channel, one close, and all of them
  * come back with false. A condition variable signalled once instead of
  * broadcast would leave all but one of them parked and this test would hang
- * rather than fail, which is why the harness bounds the wait. */
+ * rather than fail, which is why the test bounds the wait. */
 
 static void sleeper(void *arg) {
     (void)arg;
@@ -569,7 +569,7 @@ static void broadcast_body(void *arg) {
         runtime_gosched();
 }
 
-TEST(closing_wakes_every_receiver_that_is_waiting) {
+static void TestClosingWakesEveryReceiverThatIsWaiting(TestingT *t) {
     reset();
     (void)runtime_gomaxprocs(2);
     runtime_main(BURROW_FN(Func, broadcast_body, NULL));
@@ -623,7 +623,7 @@ static void backlog_body(void *arg) {
     burrow__atomic_store_u32(&order_ok, ordered ? 1u : 0u);
 }
 
-TEST(a_full_buffer_with_a_sender_behind_it_still_comes_out_in_order) {
+static void TestAFullBufferWithASenderBehindItStillComesOutInOrder(TestingT *t) {
     reset();
     (void)runtime_gomaxprocs(1);
     runtime_main(BURROW_FN(Func, backlog_body, NULL));
@@ -678,7 +678,7 @@ static void outside_body(void *arg) {
     burrow__atomic_store_u32(&order_ok, ordered ? 1u : 0u);
 }
 
-TEST(a_thread_that_is_not_a_goroutine_can_block_on_a_channel) {
+static void TestAThreadThatIsNotAGoroutineCanBlockOnAChannel(TestingT *t) {
     reset();
     (void)runtime_gomaxprocs(1);
     runtime_main(BURROW_FN(Func, outside_body, NULL));
@@ -726,7 +726,7 @@ static void outside_recv_body(void *arg) {
     (void)burrow__thread_join(&t);
 }
 
-TEST(a_goroutine_can_hand_a_value_to_a_thread_that_is_not_one) {
+static void TestAGoroutineCanHandAValueToAThreadThatIsNotOne(TestingT *t) {
     reset();
     (void)runtime_gomaxprocs(1);
     runtime_main(BURROW_FN(Func, outside_recv_body, NULL));
@@ -798,7 +798,7 @@ static void pingpong_body(void *arg) {
     (void)burrow__thread_join(&t);
 }
 
-TEST(a_thread_and_a_goroutine_can_keep_handing_a_value_back_and_forth) {
+static void TestAThreadAndAGoroutineCanKeepHandingAValueBackAndForth(TestingT *t) {
     reset();
     (void)runtime_gomaxprocs(1);
     runtime_main(BURROW_FN(Func, pingpong_body, NULL));
@@ -810,31 +810,28 @@ TEST(a_thread_and_a_goroutine_can_keep_handing_a_value_back_and_forth) {
     (void)runtime_gomaxprocs(0);
 }
 
-int main(void) {
-    RUN(a_buffered_channel_is_a_queue);
-    RUN(the_ring_wraps_without_losing_its_place);
-    RUN(an_unbuffered_channel_holds_nothing);
-    RUN(the_non_blocking_calls_answer_instead_of_waiting);
-    RUN(a_closed_channel_drains_and_then_answers_false);
-    RUN(a_closed_unbuffered_channel_answers_a_receive_at_once);
-    RUN(a_receive_that_does_not_want_the_value_still_takes_it);
-    RUN(a_channel_carries_whatever_its_type_says);
-    RUN(a_nil_channel_is_empty_and_never_ready);
-    RUN(a_channel_gives_back_everything_it_took);
+#define TESTS(X)                                                                       \
+    X(TestABufferedChannelIsAQueue)                                                    \
+    X(TestTheRingWrapsWithoutLosingItsPlace)                                           \
+    X(TestAnUnbufferedChannelHoldsNothing)                                             \
+    X(TestTheNonBlockingCallsAnswerInsteadOfWaiting)                                   \
+    X(TestAClosedChannelDrainsAndThenAnswersFalse)                                     \
+    X(TestAClosedUnbufferedChannelAnswersAReceiveAtOnce)                               \
+    X(TestAReceiveThatDoesNotWantTheValueStillTakesIt)                                 \
+    X(TestAChannelCarriesWhateverItsTypeSays)                                          \
+    X(TestANilChannelIsEmptyAndNeverReady)                                             \
+    X(TestAChannelGivesBackEverythingItTook)                                           \
+    X(TestASendOnAClosedChannelPanics)                                                 \
+    X(TestClosingTwicePanics)                                                          \
+    X(TestClosingNothingPanics)                                                        \
+    X(TestAnAbsurdCapacityPanics)                                                      \
+    X(TestAnUnbufferedSendDoesNotReturnUntilSomebodyHasTheValue)                       \
+    X(TestEverythingSentArrivesInOrderAndTheCloseEndsTheLoop)                          \
+    X(TestSeveralSendersAndSeveralReceiversMoveEveryValueOnce)                         \
+    X(TestClosingWakesEveryReceiverThatIsWaiting)                                      \
+    X(TestAFullBufferWithASenderBehindItStillComesOutInOrder)                          \
+    X(TestAThreadThatIsNotAGoroutineCanBlockOnAChannel)                                \
+    X(TestAGoroutineCanHandAValueToAThreadThatIsNotOne)                                \
+    X(TestAThreadAndAGoroutineCanKeepHandingAValueBackAndForth)
 
-    RUN(a_send_on_a_closed_channel_panics);
-    RUN(closing_twice_panics);
-    RUN(closing_nothing_panics);
-    RUN(an_absurd_capacity_panics);
-
-    RUN(an_unbuffered_send_does_not_return_until_somebody_has_the_value);
-    RUN(everything_sent_arrives_in_order_and_the_close_ends_the_loop);
-    RUN(several_senders_and_several_receivers_move_every_value_once);
-    RUN(closing_wakes_every_receiver_that_is_waiting);
-    RUN(a_full_buffer_with_a_sender_behind_it_still_comes_out_in_order);
-    RUN(a_thread_that_is_not_a_goroutine_can_block_on_a_channel);
-    RUN(a_goroutine_can_hand_a_value_to_a_thread_that_is_not_one);
-    RUN(a_thread_and_a_goroutine_can_keep_handing_a_value_back_and_forth);
-
-    return harness_report("chan");
-}
+TESTING_MAIN_BARE(TESTS)

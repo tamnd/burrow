@@ -12,7 +12,7 @@
  * is the interesting half and a queue with nobody in it is not a queue. Those
  * tests follow the rule tests/sched_test.c sets out: only the main goroutine
  * calls CHECK, and anything a child goroutine finds out it says through an
- * atomic, since the harness counts its checks in two plain ints.
+ * atomic.
  *
  * The third part uses host threads that are not goroutines, which Go has no
  * equivalent of and burrow has to support: burrow is a library inside somebody
@@ -42,8 +42,8 @@
 #include "burrow/panic.h"
 #include "burrow/runtime.h"
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -52,7 +52,7 @@
 
 /* ----------------------------------------------------- without a scheduler */
 
-TEST(a_zero_mutex_is_an_unlocked_one) {
+static void TestAZeroMutexIsAnUnlockedOne(TestingT *t) {
     SyncMutex m;
     memset(&m, 0, sizeof(m));
 
@@ -69,7 +69,7 @@ TEST(a_zero_mutex_is_an_unlocked_one) {
     sync_mutex_unlock(&m);
 }
 
-TEST(a_zero_rw_mutex_is_an_unlocked_one) {
+static void TestAZeroRwMutexIsAnUnlockedOne(TestingT *t) {
     SyncRWMutex rw;
     memset(&rw, 0, sizeof(rw));
 
@@ -82,7 +82,7 @@ TEST(a_zero_rw_mutex_is_an_unlocked_one) {
     sync_rw_mutex_r_unlock(&rw);
 }
 
-TEST(readers_do_not_keep_each_other_out) {
+static void TestReadersDoNotKeepEachOtherOut(TestingT *t) {
     SyncRWMutex rw;
     memset(&rw, 0, sizeof(rw));
 
@@ -103,7 +103,7 @@ TEST(readers_do_not_keep_each_other_out) {
     sync_rw_mutex_unlock(&rw);
 }
 
-TEST(a_locker_is_whichever_lock_it_came_from) {
+static void TestALockerIsWhicheverLockItCameFrom(TestingT *t) {
     SyncMutex m;
     SyncRWMutex rw;
     memset(&m, 0, sizeof(m));
@@ -137,7 +137,7 @@ TEST(a_locker_is_whichever_lock_it_came_from) {
     sync_rw_mutex_unlock(&rw);
 }
 
-TEST(unlocking_something_that_is_not_locked_stops_the_program) {
+static void TestUnlockingSomethingThatIsNotLockedStopsTheProgram(TestingT *t) {
     SyncMutex m;
     SyncRWMutex rw1;
     SyncRWMutex rw2;
@@ -150,7 +150,7 @@ TEST(unlocking_something_that_is_not_locked_stops_the_program) {
     CHECK_FATAL(sync_rw_mutex_r_unlock(&rw2), "sync: r_unlock of unlocked RWMutex");
 }
 
-TEST(a_nil_locker_panics_rather_than_stopping_the_program) {
+static void TestANilLockerPanicsRatherThanStoppingTheProgram(TestingT *t) {
     SyncLocker nothing;
     memset(&nothing, 0, sizeof(nothing));
 
@@ -176,8 +176,8 @@ static SyncRWMutex rw;
 static int64_t counter;
 static int32_t inside;
 
-/* Everything a worker reports, which has to be atomic because the harness's own
- * counters are not. */
+/* Everything a worker reports, which has to be atomic because the workers run
+ * on several threads at once. */
 static SyncAtomicUint32 finished;
 static SyncAtomicUint32 overlaps;
 static SyncAtomicInt32 readers_now;
@@ -231,7 +231,7 @@ static void count_main(void *env) {
     wait_for(WORKERS);
 }
 
-TEST(every_increment_under_the_mutex_is_kept) {
+static void TestEveryIncrementUnderTheMutexIsKept(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, count_main, NULL));
 
@@ -240,7 +240,7 @@ TEST(every_increment_under_the_mutex_is_kept) {
     CHECK_INT_EQ(sync_atomic_uint32_load(&finished), WORKERS);
 }
 
-TEST(the_same_is_true_with_one_processor) {
+static void TestTheSameIsTrueWithOneProcessor(TestingT *t) {
     reset();
     (void)runtime_gomaxprocs(1);
     runtime_main(BURROW_FN(Func, count_main, NULL));
@@ -299,7 +299,7 @@ static void starve_main(void *env) {
     wait_for(4);
 }
 
-TEST(a_lock_held_past_the_threshold_still_lets_everybody_through) {
+static void TestALockHeldPastTheThresholdStillLetsEverybodyThrough(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, starve_main, NULL));
 
@@ -363,7 +363,7 @@ static void rw_main(void *env) {
     wait_for(8);
 }
 
-TEST(a_writer_is_never_inside_with_anybody_else) {
+static void TestAWriterIsNeverInsideWithAnybodyElse(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, rw_main, NULL));
 
@@ -402,7 +402,7 @@ static void thread_count_body(void *env) {
     sync_atomic_uint32_add(&finished, 1);
 }
 
-TEST(threads_that_are_not_goroutines_can_share_a_mutex) {
+static void TestThreadsThatAreNotGoroutinesCanShareAMutex(TestingT *t) {
     reset();
 
     for (size_t i = 0; i < WORKERS; i++)
@@ -449,7 +449,7 @@ static void thread_writer_body(void *env) {
     sync_atomic_uint32_add(&finished, 1);
 }
 
-TEST(threads_that_are_not_goroutines_can_share_an_rw_mutex) {
+static void TestThreadsThatAreNotGoroutinesCanShareAnRwMutex(TestingT *t) {
     reset();
 
     for (size_t i = 0; i < 6; i++)
@@ -482,7 +482,7 @@ static void mixed_main(void *env) {
     wait_for(4 + 4);
 }
 
-TEST(a_goroutine_and_a_thread_can_queue_on_the_same_mutex) {
+static void TestAGoroutineAndAThreadCanQueueOnTheSameMutex(TestingT *t) {
     reset();
 
     for (size_t i = 0; i < 4; i++)
@@ -498,22 +498,19 @@ TEST(a_goroutine_and_a_thread_can_queue_on_the_same_mutex) {
     CHECK_INT_EQ(sync_atomic_uint32_load(&finished), 8);
 }
 
-int main(void) {
-    RUN(a_zero_mutex_is_an_unlocked_one);
-    RUN(a_zero_rw_mutex_is_an_unlocked_one);
-    RUN(readers_do_not_keep_each_other_out);
-    RUN(a_locker_is_whichever_lock_it_came_from);
-    RUN(unlocking_something_that_is_not_locked_stops_the_program);
-    RUN(a_nil_locker_panics_rather_than_stopping_the_program);
+#define TESTS(X)                                                                       \
+    X(TestAZeroMutexIsAnUnlockedOne)                                                   \
+    X(TestAZeroRwMutexIsAnUnlockedOne)                                                 \
+    X(TestReadersDoNotKeepEachOtherOut)                                                \
+    X(TestALockerIsWhicheverLockItCameFrom)                                            \
+    X(TestUnlockingSomethingThatIsNotLockedStopsTheProgram)                            \
+    X(TestANilLockerPanicsRatherThanStoppingTheProgram)                                \
+    X(TestEveryIncrementUnderTheMutexIsKept)                                           \
+    X(TestTheSameIsTrueWithOneProcessor)                                               \
+    X(TestALockHeldPastTheThresholdStillLetsEverybodyThrough)                          \
+    X(TestAWriterIsNeverInsideWithAnybodyElse)                                         \
+    X(TestThreadsThatAreNotGoroutinesCanShareAMutex)                                   \
+    X(TestThreadsThatAreNotGoroutinesCanShareAnRwMutex)                                \
+    X(TestAGoroutineAndAThreadCanQueueOnTheSameMutex)
 
-    RUN(every_increment_under_the_mutex_is_kept);
-    RUN(the_same_is_true_with_one_processor);
-    RUN(a_lock_held_past_the_threshold_still_lets_everybody_through);
-    RUN(a_writer_is_never_inside_with_anybody_else);
-
-    RUN(threads_that_are_not_goroutines_can_share_a_mutex);
-    RUN(threads_that_are_not_goroutines_can_share_an_rw_mutex);
-    RUN(a_goroutine_and_a_thread_can_queue_on_the_same_mutex);
-
-    return harness_report("sync");
-}
+TESTING_MAIN_BARE(TESTS)

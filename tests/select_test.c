@@ -28,7 +28,7 @@
  * that was left behind.
  *
  * The one case that used to be untestable is a send arm on a closed channel.
- * That was a fatal error, and a harness that ends the process has failed, so
+ * That was a fatal error, and a test binary that ends the process has failed, so
  * there was nothing to write. It panics today and there is a test for it below.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -48,8 +48,8 @@
 #include "burrow/panic.h"
 #include "burrow/runtime.h"
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -59,7 +59,7 @@
 
 /* ----------------------------------------------------- without a scheduler */
 
-TEST(a_default_arm_answers_when_nothing_is_ready) {
+static void TestADefaultArmAnswersWhenNothingIsReady(TestingT *t) {
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 1);
     CHECK(c != NULL);
 
@@ -75,7 +75,7 @@ TEST(a_default_arm_answers_when_nothing_is_ready) {
     chan_free(c);
 }
 
-TEST(a_ready_case_beats_the_default) {
+static void TestAReadyCaseBeatsTheDefault(TestingT *t) {
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 1);
     CHECK(c != NULL);
 
@@ -100,7 +100,7 @@ TEST(a_ready_case_beats_the_default) {
 /* A send arm on a channel with room is ready, and a send arm on a full one is
  * not. Both halves in one test because the second is only interesting next to
  * the first. */
-TEST(a_send_arm_is_ready_while_there_is_room) {
+static void TestASendArmIsReadyWhileThereIsRoom(TestingT *t) {
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 2);
     CHECK(c != NULL);
 
@@ -142,7 +142,7 @@ static void select_send_on_shut(void) {
     (void)chan_select(cases, 2);
 }
 
-TEST(a_send_arm_on_a_closed_channel_panics) {
+static void TestASendArmOnAClosedChannelPanics(TestingT *t) {
     shut = chan_make(heap_allocator(), TYPE_INT, 1);
     CHECK(shut != NULL);
     outgoing = 1;
@@ -160,7 +160,7 @@ TEST(a_send_arm_on_a_closed_channel_panics) {
 /* A receive arm on a closed channel is ready at once, hands over whatever is
  * still in the buffer, and then keeps answering with the zero value and a
  * false. That is chan_recv's behaviour and a select arm has to agree with it. */
-TEST(a_closed_channel_makes_its_arm_ready_forever) {
+static void TestAClosedChannelMakesItsArmReadyForever(TestingT *t) {
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 2);
     CHECK(c != NULL);
 
@@ -193,7 +193,7 @@ TEST(a_closed_channel_makes_its_arm_ready_forever) {
 /* The idiom for turning an arm off. A NULL channel is never ready, so the arm
  * is there in the list and cannot be chosen, and the case numbering does not
  * shift about as arms come and go. */
-TEST(an_arm_on_a_nil_channel_never_fires) {
+static void TestAnArmOnANilChannelNeverFires(TestingT *t) {
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 1);
     CHECK(c != NULL);
 
@@ -224,7 +224,7 @@ TEST(an_arm_on_a_nil_channel_never_fires) {
  * without touching anything, and it does it without needing a channel to ask
  * for scratch space from, which is the reason the implementation takes this
  * shape first. */
-TEST(a_select_with_nothing_but_nil_arms_takes_the_default) {
+static void TestASelectWithNothingButNilArmsTakesTheDefault(TestingT *t) {
     Int v = 0;
     SelectCase cases[] = {
         BURROW_RECV(NULL, &v),
@@ -235,7 +235,7 @@ TEST(a_select_with_nothing_but_nil_arms_takes_the_default) {
     CHECK_INT_EQ(chan_select(cases, 3), 2);
 }
 
-TEST(a_receive_arm_that_does_not_want_the_value_still_takes_it) {
+static void TestAReceiveArmThatDoesNotWantTheValueStillTakesIt(TestingT *t) {
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 2);
     CHECK(c != NULL);
 
@@ -262,7 +262,7 @@ TEST(a_receive_arm_that_does_not_want_the_value_still_takes_it) {
 /* The same channel in several arms, which Go allows and which the address
  * ordered locking has to survive: it locks each distinct channel once, and a
  * second lock of a channel it already holds would stop the program here. */
-TEST(the_same_channel_can_appear_in_several_arms) {
+static void TestTheSameChannelCanAppearInSeveralArms(TestingT *t) {
     Chan *c = chan_make(heap_allocator(), TYPE_INT, 1);
     CHECK(c != NULL);
 
@@ -296,7 +296,7 @@ TEST(the_same_channel_can_appear_in_several_arms) {
  * unfair one has to be very nearly fair to get inside it. */
 #define FAIRNESS_ROUNDS 2000
 
-TEST(the_ready_arm_that_runs_is_chosen_at_random) {
+static void TestTheReadyArmThatRunsIsChosenAtRandom(TestingT *t) {
     Alloc *a = heap_allocator();
     Chan *c1 = chan_make(a, TYPE_INT, 1);
     Chan *c2 = chan_make(a, TYPE_INT, 1);
@@ -351,7 +351,7 @@ TEST(the_ready_arm_that_runs_is_chosen_at_random) {
  * says the allocation came back. */
 #define MANY 40
 
-TEST(a_select_with_more_arms_than_fit_still_works_and_gives_the_memory_back) {
+static void TestASelectWithMoreArmsThanFitStillWorksAndGivesTheMemoryBack(TestingT *t) {
     Track tr;
     track_init(&tr, heap_allocator());
     track_set_quarantine(&tr, 0);
@@ -405,7 +405,7 @@ static int by_address_descending(const void *x, const void *y) {
     return a < b ? 1 : 0;
 }
 
-TEST(a_wide_select_with_its_arms_in_descending_order_still_works) {
+static void TestAWideSelectWithItsArmsInDescendingOrderStillWorks(TestingT *t) {
     Chan *chans[MANY];
     for (int i = 0; i < MANY; i++) {
         chans[i] = chan_make(heap_allocator(), TYPE_INT, 1);
@@ -501,7 +501,7 @@ static void waits_body(void *arg) {
         burrow__atomic_store_u32(&value_ok, 1);
 }
 
-TEST(a_select_with_no_default_waits_for_one_of_its_channels) {
+static void TestASelectWithNoDefaultWaitsForOneOfItsChannels(TestingT *t) {
     reset();
     (void)runtime_gomaxprocs(1);
     runtime_main(BURROW_FN(Func, waits_body, NULL));
@@ -548,7 +548,7 @@ static void closes_body(void *arg) {
         burrow__atomic_store_u32(&closed_seen, 1);
 }
 
-TEST(a_close_wakes_a_waiting_select_and_says_so) {
+static void TestACloseWakesAWaitingSelectAndSaysSo(TestingT *t) {
     reset();
     (void)runtime_gomaxprocs(1);
     runtime_main(BURROW_FN(Func, closes_body, NULL));
@@ -595,7 +595,7 @@ static void sendarm_body(void *arg) {
     burrow__atomic_store_u32(&took, (uint32_t)(chan_select(cases, 2) + 1));
 }
 
-TEST(a_send_arm_waits_for_a_receiver_and_then_hands_the_value_over) {
+static void TestASendArmWaitsForAReceiverAndThenHandsTheValueOver(TestingT *t) {
     reset();
     (void)runtime_gomaxprocs(1);
     runtime_main(BURROW_FN(Func, sendarm_body, NULL));
@@ -678,7 +678,7 @@ static void cross_body(void *arg) {
     (void)chan_recv(fin, &over);
 }
 
-TEST(two_selects_listing_the_same_channels_the_other_way_round_agree) {
+static void TestTwoSelectsListingTheSameChannelsTheOtherWayRoundAgree(TestingT *t) {
     reset();
     (void)runtime_gomaxprocs(2);
     runtime_main(BURROW_FN(Func, cross_body, NULL));
@@ -759,7 +759,7 @@ static void drain_body(void *arg) {
     burrow__atomic_store_u32(&value_ok, total);
 }
 
-TEST(a_select_loop_drains_two_producers_and_notices_both_closes) {
+static void TestASelectLoopDrainsTwoProducersAndNoticesBothCloses(TestingT *t) {
     reset();
     (void)runtime_gomaxprocs(2);
     runtime_main(BURROW_FN(Func, drain_body, NULL));
@@ -809,7 +809,7 @@ static void host_body(void *arg) {
     chan_send(c2, &v);
 }
 
-TEST(a_thread_that_is_not_a_goroutine_can_select) {
+static void TestAThreadThatIsNotAGoroutineCanSelect(TestingT *t) {
     reset();
     (void)runtime_gomaxprocs(2);
 
@@ -818,11 +818,11 @@ TEST(a_thread_that_is_not_a_goroutine_can_select) {
     CHECK(c1 != NULL);
     CHECK(c2 != NULL);
 
-    burrow__Thread t;
-    CHECK(burrow__thread_start(&t, host_thread, NULL, 0));
+    burrow__Thread th;
+    CHECK(burrow__thread_start(&th, host_thread, NULL, 0));
 
     runtime_main(BURROW_FN(Func, host_body, NULL));
-    CHECK(burrow__thread_join(&t));
+    CHECK(burrow__thread_join(&th));
 
     CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&value_ok), 1);
     CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&child_done), 1);
@@ -832,26 +832,24 @@ TEST(a_thread_that_is_not_a_goroutine_can_select) {
     (void)runtime_gomaxprocs(0);
 }
 
-int main(void) {
-    RUN(a_default_arm_answers_when_nothing_is_ready);
-    RUN(a_ready_case_beats_the_default);
-    RUN(a_send_arm_is_ready_while_there_is_room);
-    RUN(a_send_arm_on_a_closed_channel_panics);
-    RUN(a_closed_channel_makes_its_arm_ready_forever);
-    RUN(an_arm_on_a_nil_channel_never_fires);
-    RUN(a_select_with_nothing_but_nil_arms_takes_the_default);
-    RUN(a_receive_arm_that_does_not_want_the_value_still_takes_it);
-    RUN(the_same_channel_can_appear_in_several_arms);
-    RUN(the_ready_arm_that_runs_is_chosen_at_random);
-    RUN(a_select_with_more_arms_than_fit_still_works_and_gives_the_memory_back);
-    RUN(a_wide_select_with_its_arms_in_descending_order_still_works);
+#define TESTS(X)                                                                       \
+    X(TestADefaultArmAnswersWhenNothingIsReady)                                        \
+    X(TestAReadyCaseBeatsTheDefault)                                                   \
+    X(TestASendArmIsReadyWhileThereIsRoom)                                             \
+    X(TestASendArmOnAClosedChannelPanics)                                              \
+    X(TestAClosedChannelMakesItsArmReadyForever)                                       \
+    X(TestAnArmOnANilChannelNeverFires)                                                \
+    X(TestASelectWithNothingButNilArmsTakesTheDefault)                                 \
+    X(TestAReceiveArmThatDoesNotWantTheValueStillTakesIt)                              \
+    X(TestTheSameChannelCanAppearInSeveralArms)                                        \
+    X(TestTheReadyArmThatRunsIsChosenAtRandom)                                         \
+    X(TestASelectWithMoreArmsThanFitStillWorksAndGivesTheMemoryBack)                   \
+    X(TestAWideSelectWithItsArmsInDescendingOrderStillWorks)                           \
+    X(TestASelectWithNoDefaultWaitsForOneOfItsChannels)                                \
+    X(TestACloseWakesAWaitingSelectAndSaysSo)                                          \
+    X(TestASendArmWaitsForAReceiverAndThenHandsTheValueOver)                           \
+    X(TestTwoSelectsListingTheSameChannelsTheOtherWayRoundAgree)                       \
+    X(TestASelectLoopDrainsTwoProducersAndNoticesBothCloses)                           \
+    X(TestAThreadThatIsNotAGoroutineCanSelect)
 
-    RUN(a_select_with_no_default_waits_for_one_of_its_channels);
-    RUN(a_close_wakes_a_waiting_select_and_says_so);
-    RUN(a_send_arm_waits_for_a_receiver_and_then_hands_the_value_over);
-    RUN(two_selects_listing_the_same_channels_the_other_way_round_agree);
-    RUN(a_select_loop_drains_two_producers_and_notices_both_closes);
-    RUN(a_thread_that_is_not_a_goroutine_can_select);
-
-    return harness_report("select");
-}
+TESTING_MAIN_BARE(TESTS)

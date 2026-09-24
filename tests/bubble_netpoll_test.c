@@ -30,14 +30,15 @@
 
 #if !defined(BURROW_NETPOLL_READINESS) || defined(BURROW_NETPOLL_NONE)
 
-/* Not harness.h, because everything in it is static and a build with
- * -Wunused-function counts a harness nothing calls as a mistake. */
-#include <stdio.h>
+#include "burrow/testing.h"
 
-int main(void) {
-    printf("ok\tbubble/netpoll\t0 checks (not a readiness backend)\n");
-    return 0;
+static void TestNotAReadinessBackend(TestingT *t) {
+    testing_t_skip_v(t, "this platform does not have a readiness backend");
 }
+
+#define TESTS(X) X(TestNotAReadinessBackend)
+
+TESTING_MAIN(TESTS)
 
 #else
 
@@ -51,7 +52,7 @@ int main(void) {
 #include "burrow/time.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -205,7 +206,7 @@ static void reading_top(void *env) {
     chan_free(handshake);
 }
 
-TEST(a_socket_read_in_a_bubble_is_not_a_durable_wait) {
+static void TestASocketReadInABubbleIsNotADurableWait(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, reading_top, NULL));
 
@@ -280,7 +281,7 @@ static void ready_top(void *env) {
     chan_free(inside);
 }
 
-TEST(a_read_that_finds_its_byte_in_a_bubble_never_parks) {
+static void TestAReadThatFindsItsByteInABubbleNeverParks(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, ready_top, NULL));
 
@@ -289,11 +290,10 @@ TEST(a_read_that_finds_its_byte_in_a_bubble_never_parks) {
     CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&total), 7);
 }
 
-int main(void) {
-    RUN(a_socket_read_in_a_bubble_is_not_a_durable_wait);
-    RUN(a_read_that_finds_its_byte_in_a_bubble_never_parks);
+#define TESTS(X)                                                                       \
+    X(TestASocketReadInABubbleIsNotADurableWait)                                       \
+    X(TestAReadThatFindsItsByteInABubbleNeverParks)
 
-    return harness_report("bubble/netpoll");
-}
+TESTING_MAIN_BARE(TESTS)
 
 #endif /* readiness backend */

@@ -26,8 +26,8 @@
 #include "burrow/thread.h"
 #include "burrow/type.h"
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -78,7 +78,7 @@ static void go_main(void *env) {
     (void)sync_atomic_uint32_add(&wait_returned, 1);
 }
 
-TEST(wait_returns_only_after_every_goroutine_has_finished) {
+static void TestWaitReturnsOnlyAfterEveryGoroutineHasFinished(TestingT *t) {
     reset();
 
     runtime_main(BURROW_FN(Func, go_main, NULL));
@@ -115,7 +115,7 @@ static void add_done_main(void *env) {
     (void)sync_atomic_uint32_add(&wait_returned, 1);
 }
 
-TEST(add_and_done_work_the_way_go_calls_them) {
+static void TestAddAndDoneWorkTheWayGoCallsThem(TestingT *t) {
     reset();
 
     runtime_main(BURROW_FN(Func, add_done_main, NULL));
@@ -164,7 +164,7 @@ static void many_waiters_main(void *env) {
         runtime_gosched();
 }
 
-TEST(every_waiter_is_woken_and_not_just_the_first) {
+static void TestEveryWaiterIsWokenAndNotJustTheFirst(TestingT *t) {
     reset();
 
     runtime_main(BURROW_FN(Func, many_waiters_main, NULL));
@@ -173,7 +173,7 @@ TEST(every_waiter_is_woken_and_not_just_the_first) {
     CHECK_INT_EQ(sync_atomic_uint32_load(&saw_unfinished), 0);
 }
 
-TEST(a_group_with_nothing_in_it_does_not_wait) {
+static void TestAGroupWithNothingInItDoesNotWait(TestingT *t) {
     SyncWaitGroup empty;
     memset(&empty, 0, sizeof(empty));
 
@@ -195,7 +195,7 @@ TEST(a_group_with_nothing_in_it_does_not_wait) {
     CHECK(true);
 }
 
-TEST(a_counter_below_zero_panics) {
+static void TestACounterBelowZeroPanics(TestingT *t) {
     SyncWaitGroup bad;
     memset(&bad, 0, sizeof(bad));
 
@@ -251,7 +251,7 @@ static void once_main(void *env) {
         runtime_gosched();
 }
 
-TEST(once_runs_one_thing_one_time_however_many_ask_at_once) {
+static void TestOnceRunsOneThingOneTimeHoweverManyAskAtOnce(TestingT *t) {
     memset(&once, 0, sizeof(once));
     sync_atomic_int64_store(&ran, 0);
     sync_atomic_int64_store(&callers_through, 0);
@@ -280,7 +280,7 @@ static void bump_second(void *env) {
     second_count++;
 }
 
-TEST(a_different_function_on_a_later_call_is_not_run) {
+static void TestADifferentFunctionOnALaterCallIsNotRun(TestingT *t) {
     SyncOnce o;
     memset(&o, 0, sizeof(o));
     first_count = 0;
@@ -299,7 +299,7 @@ static void blow_up(void *env) {
     panic_str(BURROW_S("boom"));
 }
 
-TEST(a_once_whose_function_panics_counts_as_done) {
+static void TestAOnceWhoseFunctionPanicsCountsAsDone(TestingT *t) {
     SyncOnce o;
     memset(&o, 0, sizeof(o));
     first_count = 0;
@@ -314,7 +314,7 @@ TEST(a_once_whose_function_panics_counts_as_done) {
 
 /* ------------------------------------------------------------- OnceFunc */
 
-TEST(a_once_func_runs_one_time) {
+static void TestAOnceFuncRunsOneTime(TestingT *t) {
     first_count = 0;
     SyncOnceFunc of = SYNC_ONCE_FUNC(BURROW_FN(Func, bump_first, NULL));
 
@@ -330,7 +330,7 @@ TEST(a_once_func_runs_one_time) {
     CHECK_INT_EQ(first_count, 1);
 }
 
-TEST(a_once_func_that_panics_panics_again_every_time) {
+static void TestAOnceFuncThatPanicsPanicsAgainEveryTime(TestingT *t) {
     SyncOnceFunc of = SYNC_ONCE_FUNC(BURROW_FN(Func, blow_up, NULL));
 
     /* This is the whole difference from a bare Once. There, the second caller
@@ -360,7 +360,7 @@ static Any compute_blows_up(void *env) {
     panic_str(BURROW_S("boom"));
 }
 
-TEST(a_once_value_computes_one_time_and_keeps_the_answer) {
+static void TestAOnceValueComputesOneTimeAndKeepsTheAnswer(TestingT *t) {
     computations = 0;
     SyncOnceValue ov = SYNC_ONCE_VALUE(BURROW_FN(AnyFunc, compute, NULL));
 
@@ -377,7 +377,7 @@ TEST(a_once_value_computes_one_time_and_keeps_the_answer) {
     CHECK_INT_EQ(*n, 42);
 }
 
-TEST(a_once_value_that_panics_panics_again_every_time) {
+static void TestAOnceValueThatPanicsPanicsAgainEveryTime(TestingT *t) {
     SyncOnceValue ov = SYNC_ONCE_VALUE(BURROW_FN(AnyFunc, compute_blows_up, NULL));
 
     CHECK_PANIC((void)sync_once_value_get(&ov), "boom");
@@ -408,7 +408,7 @@ static void compute_pair_blows_up(void *env, Any *a, Any *b) {
     panic_str(BURROW_S("boom"));
 }
 
-TEST(a_once_values_gives_back_both_results_every_time) {
+static void TestAOnceValuesGivesBackBothResultsEveryTime(TestingT *t) {
     computations = 0;
     SyncOnceValues ov =
         SYNC_ONCE_VALUES(BURROW_FN(SyncOnceValuesFn, compute_pair, NULL));
@@ -437,7 +437,7 @@ TEST(a_once_values_gives_back_both_results_every_time) {
     CHECK_INT_EQ(computations, 1);
 }
 
-TEST(a_once_values_that_panics_panics_again_every_time) {
+static void TestAOnceValuesThatPanicsPanicsAgainEveryTime(TestingT *t) {
     SyncOnceValues ov =
         SYNC_ONCE_VALUES(BURROW_FN(SyncOnceValuesFn, compute_pair_blows_up, NULL));
 
@@ -466,7 +466,7 @@ static void thread_use_it(void *env) {
     sync_wait_group_done(&thread_wg);
 }
 
-TEST(threads_that_are_not_goroutines_share_a_once_and_a_wait_group) {
+static void TestThreadsThatAreNotGoroutinesShareAOnceAndAWaitGroup(TestingT *t) {
     memset(&once, 0, sizeof(once));
     memset(&thread_wg, 0, sizeof(thread_wg));
     sync_atomic_int64_store(&ran, 0);
@@ -491,25 +491,21 @@ TEST(threads_that_are_not_goroutines_share_a_once_and_a_wait_group) {
         CHECK(burrow__thread_join(&threads[i]));
 }
 
-int main(void) {
-    RUN(a_group_with_nothing_in_it_does_not_wait);
-    RUN(a_counter_below_zero_panics);
-    RUN(wait_returns_only_after_every_goroutine_has_finished);
-    RUN(add_and_done_work_the_way_go_calls_them);
-    RUN(every_waiter_is_woken_and_not_just_the_first);
+#define TESTS(X)                                                                       \
+    X(TestAGroupWithNothingInItDoesNotWait)                                            \
+    X(TestACounterBelowZeroPanics)                                                     \
+    X(TestWaitReturnsOnlyAfterEveryGoroutineHasFinished)                               \
+    X(TestAddAndDoneWorkTheWayGoCallsThem)                                             \
+    X(TestEveryWaiterIsWokenAndNotJustTheFirst)                                        \
+    X(TestADifferentFunctionOnALaterCallIsNotRun)                                      \
+    X(TestAOnceWhoseFunctionPanicsCountsAsDone)                                        \
+    X(TestOnceRunsOneThingOneTimeHoweverManyAskAtOnce)                                 \
+    X(TestAOnceFuncRunsOneTime)                                                        \
+    X(TestAOnceFuncThatPanicsPanicsAgainEveryTime)                                     \
+    X(TestAOnceValueComputesOneTimeAndKeepsTheAnswer)                                  \
+    X(TestAOnceValueThatPanicsPanicsAgainEveryTime)                                    \
+    X(TestAOnceValuesGivesBackBothResultsEveryTime)                                    \
+    X(TestAOnceValuesThatPanicsPanicsAgainEveryTime)                                   \
+    X(TestThreadsThatAreNotGoroutinesShareAOnceAndAWaitGroup)
 
-    RUN(a_different_function_on_a_later_call_is_not_run);
-    RUN(a_once_whose_function_panics_counts_as_done);
-    RUN(once_runs_one_thing_one_time_however_many_ask_at_once);
-
-    RUN(a_once_func_runs_one_time);
-    RUN(a_once_func_that_panics_panics_again_every_time);
-    RUN(a_once_value_computes_one_time_and_keeps_the_answer);
-    RUN(a_once_value_that_panics_panics_again_every_time);
-    RUN(a_once_values_gives_back_both_results_every_time);
-    RUN(a_once_values_that_panics_panics_again_every_time);
-
-    RUN(threads_that_are_not_goroutines_share_a_once_and_a_wait_group);
-
-    return harness_report("sync_once");
-}
+TESTING_MAIN_BARE(TESTS)

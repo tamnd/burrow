@@ -41,7 +41,7 @@
 #include "burrow/mem/heap.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -112,7 +112,7 @@ static void explicit_body(void *env) {
         burrow__atomic_store_release_u32(&spinner_saw, 1);
 }
 
-TEST(a_loop_with_an_explicit_safe_point_in_it_gives_way) {
+static void TestALoopWithAnExplicitSafePointInItGivesWay(TestingT *t) {
     reset();
 
     int old = runtime_gomaxprocs(1);
@@ -157,7 +157,7 @@ static void chan_body(void *env) {
         burrow__atomic_store_release_u32(&spinner_saw, 1);
 }
 
-TEST(a_loop_of_channel_operations_gives_way) {
+static void TestALoopOfChannelOperationsGivesWay(TestingT *t) {
     reset();
 
     empty = chan_make(heap_allocator(), TYPE_INT, 1);
@@ -199,7 +199,7 @@ static void select_body(void *env) {
         burrow__atomic_store_release_u32(&spinner_saw, 1);
 }
 
-TEST(a_loop_of_selects_with_a_default_gives_way) {
+static void TestALoopOfSelectsWithADefaultGivesWay(TestingT *t) {
     reset();
 
     empty = chan_make(heap_allocator(), TYPE_INT, 1);
@@ -283,7 +283,7 @@ static void share_top(void *env) {
         runtime_preempt_point();
 }
 
-TEST(several_spinners_on_one_processor_all_make_progress) {
+static void TestSeveralSpinnersOnOneProcessorAllMakeProgress(TestingT *t) {
     burrow__atomic_store_u32(&claimed, 0);
     burrow__atomic_store_u32(&checked_in, 0);
     for (int i = 0; i < SPINNERS; i++)
@@ -310,7 +310,7 @@ TEST(several_spinners_on_one_processor_all_make_progress) {
  * which it is. The alternative would be an assertion, and an assertion here
  * would make the call unusable in exactly the library code that wants it. */
 
-TEST(a_safe_point_off_a_goroutine_does_nothing) {
+static void TestASafePointOffAGoroutineDoesNothing(TestingT *t) {
     for (int i = 0; i < 1000; i++)
         runtime_preempt_point();
 
@@ -320,12 +320,11 @@ TEST(a_safe_point_off_a_goroutine_does_nothing) {
     CHECK(true);
 }
 
-int main(void) {
-    RUN(a_loop_with_an_explicit_safe_point_in_it_gives_way);
-    RUN(a_loop_of_channel_operations_gives_way);
-    RUN(a_loop_of_selects_with_a_default_gives_way);
-    RUN(several_spinners_on_one_processor_all_make_progress);
-    RUN(a_safe_point_off_a_goroutine_does_nothing);
+#define TESTS(X)                                                                       \
+    X(TestALoopWithAnExplicitSafePointInItGivesWay)                                    \
+    X(TestALoopOfChannelOperationsGivesWay)                                            \
+    X(TestALoopOfSelectsWithADefaultGivesWay)                                          \
+    X(TestSeveralSpinnersOnOneProcessorAllMakeProgress)                                \
+    X(TestASafePointOffAGoroutineDoesNothing)
 
-    return harness_report("preempt");
-}
+TESTING_MAIN_BARE(TESTS)

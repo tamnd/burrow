@@ -26,18 +26,19 @@
 
 #if !defined(BURROW_NETPOLL_COMPLETION)
 
-/* Not harness.h, because everything in it is static and a build with
- * -Wunused-function counts a harness nothing calls as a mistake. */
-#include <stdio.h>
+#include "burrow/testing.h"
 
-int main(void) {
-    printf("ok\tnetpoll_iocp\t0 checks (not a completion backend)\n");
-    return 0;
+static void TestNotACompletionBackend(TestingT *t) {
+    testing_t_skip_v(t, "this platform does not have a completion backend");
 }
+
+#define TESTS(X) X(TestNotACompletionBackend)
+
+TESTING_MAIN(TESTS)
 
 #else
 
-#include "harness.h"
+#include "check.h"
 
 #include "burrow/atomic.h"
 #include "burrow/clock.h"
@@ -221,7 +222,7 @@ static void open_and_close(void *env) {
     pair_shut(&p);
 }
 
-TEST(a_socket_can_be_attached_to_the_port_and_given_back) {
+static void TestASocketCanBeAttachedToThePortAndGivenBack(TestingT *t) {
     open_ok = false;
     open_err = -1;
     (void)runtime_gomaxprocs(2);
@@ -269,7 +270,7 @@ static void one_each_way(void *env) {
     (void)wait_for(&done, 2);
 }
 
-TEST(a_submitted_read_is_finished_by_a_write_from_the_other_side) {
+static void TestASubmittedReadIsFinishedByAWriteFromTheOtherSide(TestingT *t) {
     why = BURROW_POLL_CLOSED;
     got_n = -2;
     done = 0;
@@ -310,7 +311,7 @@ static void read_what_is_already_there(void *env) {
     burrow__atomic_add_u32(&done, 1);
 }
 
-TEST(a_read_submitted_after_the_bytes_arrived_finishes_too) {
+static void TestAReadSubmittedAfterTheBytesArrivedFinishesToo(TestingT *t) {
     why = BURROW_POLL_CLOSED;
     got_n = -2;
     done = 0;
@@ -351,7 +352,7 @@ static void read_until_the_far_end_goes(void *env) {
     burrow__atomic_add_u32(&done, 1);
 }
 
-TEST(a_read_on_a_closed_connection_finishes_with_nothing) {
+static void TestAReadOnAClosedConnectionFinishesWithNothing(TestingT *t) {
     why = BURROW_POLL_CLOSED;
     got_n = -2;
     done = 0;
@@ -396,7 +397,7 @@ static void read_with_a_deadline(void *env) {
     burrow__atomic_add_u32(&done, 1);
 }
 
-TEST(a_deadline_wakes_a_goroutine_parked_on_an_operation) {
+static void TestADeadlineWakesAGoroutineParkedOnAnOperation(TestingT *t) {
     why = BURROW_POLL_READY;
     got_n = -2;
     done = 0;
@@ -459,7 +460,7 @@ static void sleep_in_the_port(void *env) {
     (void)burrow__thread_join(&outsider);
 }
 
-TEST(the_last_thread_sleeps_inside_the_port) {
+static void TestTheLastThreadSleepsInsideThePort(TestingT *t) {
     got_n = -2;
     pd_a = NULL;
     outsider_started = false;
@@ -481,7 +482,7 @@ TEST(the_last_thread_sleeps_inside_the_port) {
 
 /* Again, because the interesting bugs in this area are in teardown and they
  * only show up on the run after the one that made them. */
-TEST(the_last_thread_sleeps_inside_the_port_again) {
+static void TestTheLastThreadSleepsInsideThePortAgain(TestingT *t) {
     got_n = -2;
     pd_a = NULL;
     outsider_started = false;
@@ -501,24 +502,26 @@ TEST(the_last_thread_sleeps_inside_the_port_again) {
     pair_shut(&shared);
 }
 
-int main(void) {
+#define TESTS(X)                                                                       \
+    X(TestASocketCanBeAttachedToThePortAndGivenBack)                                   \
+    X(TestASubmittedReadIsFinishedByAWriteFromTheOtherSide)                            \
+    X(TestAReadSubmittedAfterTheBytesArrivedFinishesToo)                               \
+    X(TestAReadOnAClosedConnectionFinishesWithNothing)                                 \
+    X(TestADeadlineWakesAGoroutineParkedOnAnOperation)                                 \
+    X(TestTheLastThreadSleepsInsideThePort)                                            \
+    X(TestTheLastThreadSleepsInsideThePortAgain)
+
+static int TestMain(TestingM *m) {
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        printf("FAIL\tnetpoll_iocp\tWSAStartup failed\n");
+        fprintf(stderr, "WSAStartup failed\n");
         return 1;
     }
-
-    RUN(a_socket_can_be_attached_to_the_port_and_given_back);
-    RUN(a_submitted_read_is_finished_by_a_write_from_the_other_side);
-    RUN(a_read_submitted_after_the_bytes_arrived_finishes_too);
-    RUN(a_read_on_a_closed_connection_finishes_with_nothing);
-    RUN(a_deadline_wakes_a_goroutine_parked_on_an_operation);
-    RUN(the_last_thread_sleeps_inside_the_port);
-    RUN(the_last_thread_sleeps_inside_the_port_again);
-
-    int rc = harness_report("netpoll_iocp");
+    int code = testing_m_run(m);
     (void)WSACleanup();
-    return rc;
+    return code;
 }
+
+TESTING_MAIN_BARE_WITH(TestMain, TESTS)
 
 #endif /* BURROW_NETPOLL_COMPLETION */

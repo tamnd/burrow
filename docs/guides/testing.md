@@ -251,7 +251,7 @@ PASS
 */
 ```
 
-A test of the scheduler itself cannot run inside a goroutine, because it needs to start and stop `runtime_main` on its own. `TESTING_MAIN_BARE` runs the tests on the calling thread instead. Subtests run inline there, and `testing_t_parallel` does nothing.
+A test of the scheduler itself cannot run inside a goroutine, because it needs to start and stop `runtime_main` on its own. `TESTING_MAIN_BARE` runs the tests on the calling thread instead. Subtests run inline there, and `testing_t_parallel` does nothing. `TESTING_MAIN_BARE_WITH` is the same thing with a TestMain.
 
 ## Benchmarks
 

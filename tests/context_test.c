@@ -37,8 +37,8 @@
 #include "burrow/time.h"
 #include "burrow/type.h"
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 /* ------------------------------------------------------------------- keys
  *
@@ -169,7 +169,7 @@ static bool is(Error e, Error want) {
 
 /* ------------------------------------------------------------------ the root */
 
-TEST(the_root_is_never_cancelled_and_carries_nothing) {
+static void TestTheRootIsNeverCancelledAndCarriesNothing(TestingT *t) {
     Context c = context_background();
     int64_t when = 1234;
 
@@ -185,22 +185,22 @@ TEST(the_root_is_never_cancelled_and_carries_nothing) {
     context_release(c);
 }
 
-TEST(background_and_todo_are_not_the_same_context) {
+static void TestBackgroundAndTodoAreNotTheSameContext(TestingT *t) {
     Context b = context_background();
-    Context t = context_todo();
+    Context todo = context_todo();
 
-    CHECK(b.vt != t.vt);
+    CHECK(b.vt != todo.vt);
     CHECK(any_equal(BURROW_ANY(TYPE_CONTEXT, &b), BURROW_ANY(TYPE_CONTEXT, &b)));
-    CHECK(!any_equal(BURROW_ANY(TYPE_CONTEXT, &b), BURROW_ANY(TYPE_CONTEXT, &t)));
+    CHECK(!any_equal(BURROW_ANY(TYPE_CONTEXT, &b), BURROW_ANY(TYPE_CONTEXT, &todo)));
 
     /* TODO behaves exactly like Background, which is the point of it. */
-    CHECK(context_done(t) == NULL);
-    CHECK(BURROW_OK(context_err(t)));
+    CHECK(context_done(todo) == NULL);
+    CHECK(BURROW_OK(context_err(todo)));
 }
 
 /* ---------------------------------------------------------------- WithCancel */
 
-TEST(a_cancel_closes_the_done_channel_and_sets_the_error) {
+static void TestACancelClosesTheDoneChannelAndSetsTheError(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelFunc cancel;
     Context c = context_with_cancel(a, context_background(), &cancel);
@@ -223,7 +223,7 @@ TEST(a_cancel_closes_the_done_channel_and_sets_the_error) {
     context_release(c);
 }
 
-TEST(cancelling_twice_changes_nothing) {
+static void TestCancellingTwiceChangesNothing(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelFunc cancel;
     Context c = context_with_cancel(a, context_background(), &cancel);
@@ -239,7 +239,7 @@ TEST(cancelling_twice_changes_nothing) {
     context_release(c);
 }
 
-TEST(cancelling_a_parent_cancels_every_child) {
+static void TestCancellingAParentCancelsEveryChild(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelFunc cancel_top;
     ContextCancelFunc cancel_left;
@@ -269,7 +269,7 @@ TEST(cancelling_a_parent_cancels_every_child) {
     context_release(top);
 }
 
-TEST(cancelling_a_child_leaves_the_parent_alone) {
+static void TestCancellingAChildLeavesTheParentAlone(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelFunc cancel_top;
     ContextCancelFunc cancel_child;
@@ -294,7 +294,7 @@ TEST(cancelling_a_child_leaves_the_parent_alone) {
     context_release(top);
 }
 
-TEST(a_child_of_something_already_cancelled_starts_cancelled) {
+static void TestAChildOfSomethingAlreadyCancelledStartsCancelled(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelFunc cancel_top;
     ContextCancelFunc cancel_child;
@@ -314,7 +314,7 @@ TEST(a_child_of_something_already_cancelled_starts_cancelled) {
 
 /* ------------------------------------------------------- WithCancelCause, Cause */
 
-TEST(a_cause_says_why_where_the_error_only_says_that) {
+static void TestACauseSaysWhyWhereTheErrorOnlySaysThat(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelCauseFunc cancel;
     Context c = context_with_cancel_cause(a, context_background(), &cancel);
@@ -336,7 +336,7 @@ TEST(a_cause_says_why_where_the_error_only_says_that) {
     context_release(c);
 }
 
-TEST(a_cancel_with_no_reason_leaves_the_cause_equal_to_the_error) {
+static void TestACancelWithNoReasonLeavesTheCauseEqualToTheError(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelCauseFunc cancel;
     Context c = context_with_cancel_cause(a, context_background(), &cancel);
@@ -352,7 +352,7 @@ TEST(a_cancel_with_no_reason_leaves_the_cause_equal_to_the_error) {
     context_release(c);
 }
 
-TEST(the_first_reason_is_the_one_that_sticks) {
+static void TestTheFirstReasonIsTheOneThatSticks(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelCauseFunc cancel;
     Context c = context_with_cancel_cause(a, context_background(), &cancel);
@@ -366,7 +366,7 @@ TEST(the_first_reason_is_the_one_that_sticks) {
     context_release(c);
 }
 
-TEST(a_live_context_has_no_cause) {
+static void TestALiveContextHasNoCause(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelCauseFunc cancel;
     Context c = context_with_cancel_cause(a, context_background(), &cancel);
@@ -379,7 +379,7 @@ TEST(a_live_context_has_no_cause) {
     context_release(c);
 }
 
-TEST(a_reason_given_at_the_top_is_the_answer_at_the_bottom) {
+static void TestAReasonGivenAtTheTopIsTheAnswerAtTheBottom(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelCauseFunc cancel_top;
     ContextCancelFunc cancel_leaf;
@@ -404,7 +404,7 @@ TEST(a_reason_given_at_the_top_is_the_answer_at_the_bottom) {
     context_release(top);
 }
 
-TEST(a_cause_given_below_stays_below) {
+static void TestACauseGivenBelowStaysBelow(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelCauseFunc cancel_top;
     ContextCancelCauseFunc cancel_leaf;
@@ -427,7 +427,7 @@ TEST(a_cause_given_below_stays_below) {
     context_release(top);
 }
 
-TEST(a_child_of_something_cancelled_with_a_reason_starts_with_it) {
+static void TestAChildOfSomethingCancelledWithAReasonStartsWithIt(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelCauseFunc cancel_top;
     ContextCancelFunc cancel_child;
@@ -444,7 +444,7 @@ TEST(a_child_of_something_cancelled_with_a_reason_starts_with_it) {
     context_release(top);
 }
 
-TEST(a_plain_cancel_context_still_has_a_cause) {
+static void TestAPlainCancelContextStillHasACause(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelFunc cancel;
     Context c = context_with_cancel(a, context_background(), &cancel);
@@ -459,7 +459,7 @@ TEST(a_plain_cancel_context_still_has_a_cause) {
     context_release(c);
 }
 
-TEST(a_context_that_cannot_be_cancelled_has_no_cause) {
+static void TestAContextThatCannotBeCancelledHasNoCause(TestingT *t) {
     Alloc *a = heap_allocator();
     Fake f = {0};
     Int id = 8;
@@ -475,7 +475,7 @@ TEST(a_context_that_cannot_be_cancelled_has_no_cause) {
 
 /* ------------------------------------------------------------- WithoutCancel */
 
-TEST(work_that_outlives_its_request_keeps_the_values) {
+static void TestWorkThatOutlivesItsRequestKeepsTheValues(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelFunc cancel;
     Int id = 11;
@@ -503,7 +503,7 @@ TEST(work_that_outlives_its_request_keeps_the_values) {
     context_release(req);
 }
 
-TEST(nothing_under_a_without_cancel_is_reached_by_the_parent) {
+static void TestNothingUnderAWithoutCancelIsReachedByTheParent(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelFunc cancel_req;
     ContextCancelFunc cancel_task;
@@ -527,7 +527,7 @@ TEST(nothing_under_a_without_cancel_is_reached_by_the_parent) {
     context_release(req);
 }
 
-TEST(a_without_cancel_has_no_deadline_and_no_cause) {
+static void TestAWithoutCancelHasNoDeadlineAndNoCause(TestingT *t) {
     Alloc *a = heap_allocator();
     Fake f = {0};
     ContextCancelCauseFunc cancel;
@@ -551,7 +551,7 @@ TEST(a_without_cancel_has_no_deadline_and_no_cause) {
     context_release(req);
 }
 
-TEST(a_detached_context_is_given_back_to_the_allocator) {
+static void TestADetachedContextIsGivenBackToTheAllocator(TestingT *t) {
     Track tr;
     track_init(&tr, heap_allocator());
     track_set_quarantine(&tr, 0);
@@ -587,7 +587,7 @@ static void count_a_run(void *env) {
     (void)burrow__atomic_add_u32(&after_ran, 1);
 }
 
-TEST(a_stopped_after_func_never_runs) {
+static void TestAStoppedAfterFuncNeverRuns(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelFunc cancel;
     StopFunc stop;
@@ -612,7 +612,7 @@ TEST(a_stopped_after_func_never_runs) {
     context_release(req);
 }
 
-TEST(only_one_stop_ever_answers_true) {
+static void TestOnlyOneStopEverAnswersTrue(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelFunc cancel;
     StopFunc stop;
@@ -633,7 +633,7 @@ TEST(only_one_stop_ever_answers_true) {
     context_release(req);
 }
 
-TEST(freeing_a_registration_is_not_a_reason_to_run_it) {
+static void TestFreeingARegistrationIsNotAReasonToRunIt(TestingT *t) {
     Alloc *a = heap_allocator();
     ContextCancelFunc cancel;
     StopFunc stop;
@@ -654,7 +654,7 @@ TEST(freeing_a_registration_is_not_a_reason_to_run_it) {
     context_release(req);
 }
 
-TEST(a_registration_answers_the_four_questions_like_anything_else) {
+static void TestARegistrationAnswersTheFourQuestionsLikeAnythingElse(TestingT *t) {
     Alloc *a = heap_allocator();
     Fake f = {0};
     ContextCancelFunc cancel;
@@ -694,7 +694,7 @@ TEST(a_registration_answers_the_four_questions_like_anything_else) {
     context_release(req);
 }
 
-TEST(a_registration_is_given_back_to_the_allocator) {
+static void TestARegistrationIsGivenBackToTheAllocator(TestingT *t) {
     Track tr;
     track_init(&tr, heap_allocator());
     track_set_quarantine(&tr, 0);
@@ -719,7 +719,7 @@ TEST(a_registration_is_given_back_to_the_allocator) {
 
 /* ----------------------------------------------------------------- WithValue */
 
-TEST(a_value_is_found_through_everything_above_it) {
+static void TestAValueIsFoundThroughEverythingAboveIt(TestingT *t) {
     Alloc *a = heap_allocator();
     Int id = 99;
     Str name = BURROW_S("gopher");
@@ -748,7 +748,7 @@ TEST(a_value_is_found_through_everything_above_it) {
     context_release(with);
 }
 
-TEST(an_unknown_key_answers_nothing) {
+static void TestAnUnknownKeyAnswersNothing(TestingT *t) {
     Alloc *a = heap_allocator();
     Int id = 1;
     Context with = context_with_value(a, context_background(), REQUEST_ID_KEY,
@@ -763,7 +763,7 @@ TEST(an_unknown_key_answers_nothing) {
     context_release(with);
 }
 
-TEST(a_later_value_shadows_an_earlier_one_with_the_same_key) {
+static void TestALaterValueShadowsAnEarlierOneWithTheSameKey(TestingT *t) {
     Alloc *a = heap_allocator();
     Int first = 1;
     Int second = 2;
@@ -782,7 +782,7 @@ TEST(a_later_value_shadows_an_earlier_one_with_the_same_key) {
 
 /* -------------------------------------------------------------- the stranger */
 
-TEST(a_deadline_is_whatever_the_parent_says) {
+static void TestADeadlineIsWhateverTheParentSays(TestingT *t) {
     Alloc *a = heap_allocator();
     Fake f = {0};
     Int id = 7;
@@ -808,7 +808,7 @@ TEST(a_deadline_is_whatever_the_parent_says) {
     context_release(with);
 }
 
-TEST(a_value_walk_goes_through_a_stranger_and_comes_back) {
+static void TestAValueWalkGoesThroughAStrangerAndComesBack(TestingT *t) {
     Alloc *a = heap_allocator();
     Fake f = {0};
     Int outer_val = 5;
@@ -832,7 +832,7 @@ TEST(a_value_walk_goes_through_a_stranger_and_comes_back) {
     context_release(bottom);
 }
 
-TEST(a_stranger_that_is_never_cancelled_needs_no_watching) {
+static void TestAStrangerThatIsNeverCancelledNeedsNoWatching(TestingT *t) {
     Alloc *a = heap_allocator();
     Fake f = {0};
     ContextCancelFunc cancel;
@@ -853,7 +853,7 @@ TEST(a_stranger_that_is_never_cancelled_needs_no_watching) {
 
 /* --------------------------------------------------------------- the memory */
 
-TEST(everything_is_given_back_to_the_allocator) {
+static void TestEverythingIsGivenBackToTheAllocator(TestingT *t) {
     Track tr;
     track_init(&tr, heap_allocator());
     track_set_quarantine(&tr, 0);
@@ -882,7 +882,7 @@ TEST(everything_is_given_back_to_the_allocator) {
     track_free(&tr);
 }
 
-TEST(a_context_nobody_cancelled_is_still_freed) {
+static void TestAContextNobodyCancelledIsStillFreed(TestingT *t) {
     Track tr;
     track_init(&tr, heap_allocator());
     track_set_quarantine(&tr, 0);
@@ -904,7 +904,7 @@ TEST(a_context_nobody_cancelled_is_still_freed) {
 
 /* ----------------------------------------------------------------- the clock */
 
-TEST(the_monotonic_clock_only_goes_forwards) {
+static void TestTheMonotonicClockOnlyGoesForwards(TestingT *t) {
     int64_t first = burrow_nanotime();
     int64_t last = first;
 
@@ -933,7 +933,7 @@ static void panic_never_runs(void *env) {
     (void)env;
 }
 
-TEST(a_nil_parent_panics) {
+static void TestANilParentPanics(TestingT *t) {
     Context none = {NULL, NULL};
     ContextCancelFunc cancel;
     Int id = 1;
@@ -976,7 +976,7 @@ TEST(a_nil_parent_panics) {
                 "cannot create context from nil parent");
 }
 
-TEST(a_bad_key_panics) {
+static void TestABadKeyPanics(TestingT *t) {
     Any none = {NULL, NULL};
     Slice s = {NULL, 0, 0, NULL};
     Int id = 1;
@@ -993,7 +993,7 @@ TEST(a_bad_key_panics) {
                 "key is not comparable");
 }
 
-TEST(a_nil_context_has_no_methods) {
+static void TestANilContextHasNoMethods(TestingT *t) {
     Context none = {NULL, NULL};
 
     panic_parent = none;
@@ -1012,7 +1012,7 @@ TEST(a_nil_context_has_no_methods) {
 /* Here rather than with the other deadline tests, because the whole point of it
  * is that there is no runtime running. A P is where the timer heap lives, and a
  * thread the runtime did not start has no P to put one on. */
-TEST(a_deadline_off_a_goroutine_stops_the_program) {
+static void TestADeadlineOffAGoroutineStopsTheProgram(TestingT *t) {
     panic_alloc = heap_allocator();
     panic_parent = context_background();
 
@@ -1031,7 +1031,7 @@ TEST(a_deadline_off_a_goroutine_stops_the_program) {
 
 static Fake foreign;
 
-TEST(freeing_a_context_this_package_did_not_make_stops_the_program) {
+static void TestFreeingAContextThisPackageDidNotMakeStopsTheProgram(TestingT *t) {
     panic_parent = fake_context(&foreign);
 
     CHECK_FATAL(context_release(panic_parent),
@@ -1041,8 +1041,8 @@ TEST(freeing_a_context_this_package_did_not_make_stops_the_program) {
 /* ------------------------------------------------------------- with a runtime
  *
  * Everything below here needs goroutines. The results come back through
- * atomics, because the harness counts checks in two plain ints and a second
- * thread touching those is a race in the test rather than in the package. */
+ * atomics and the test checks them once runtime_main has returned, so that no
+ * check can land after the test it belongs to has finished. */
 
 static Alloc *rt_alloc;
 static Context rt_ctx;
@@ -1097,7 +1097,7 @@ static void waiter_body(void *env) {
         time_sleep(TIME_MILLISECOND);
 }
 
-TEST(a_goroutine_parked_on_done_wakes_up_when_somebody_cancels) {
+static void TestAGoroutineParkedOnDoneWakesUpWhenSomebodyCancels(TestingT *t) {
     reset();
     rt_alloc = heap_allocator();
 
@@ -1142,7 +1142,7 @@ static void stranger_body(void *env) {
         burrow__atomic_store_release_u32(&rt_err_was_canceled, 1);
 }
 
-TEST(a_parent_from_outside_the_package_still_cancels_what_is_under_it) {
+static void TestAParentFromOutsideThePackageStillCancelsWhatIsUnderIt(TestingT *t) {
     reset();
     rt_alloc = heap_allocator();
 
@@ -1203,7 +1203,7 @@ static void wrapper_body(void *env) {
         burrow__atomic_store_release_u32(&rt_err_was_canceled, 1);
 }
 
-TEST(a_wrapper_that_replaces_done_is_not_mistaken_for_what_it_wraps) {
+static void TestAWrapperThatReplacesDoneIsNotMistakenForWhatItWraps(TestingT *t) {
     reset();
     rt_alloc = heap_allocator();
 
@@ -1251,7 +1251,7 @@ static void early_free_body(void *env) {
     time_sleep(100 * TIME_MILLISECOND);
 }
 
-TEST(a_context_with_a_watcher_can_be_freed_before_the_watcher_wakes) {
+static void TestAContextWithAWatcherCanBeFreedBeforeTheWatcherWakes(TestingT *t) {
     reset();
     track_init(&rt_track, heap_allocator());
     track_set_quarantine(&rt_track, 0);
@@ -1353,7 +1353,7 @@ static void future_body(void *env) {
     context_release(c);
 }
 
-TEST(a_deadline_an_hour_away_leaves_the_cancel_to_win) {
+static void TestADeadlineAnHourAwayLeavesTheCancelToWin(TestingT *t) {
     dl_reset();
     rt_alloc = heap_allocator();
 
@@ -1407,7 +1407,7 @@ static void past_body(void *env) {
     context_release(d);
 }
 
-TEST(a_deadline_that_has_gone_by_comes_back_already_cancelled) {
+static void TestADeadlineThatHasGoneByComesBackAlreadyCancelled(TestingT *t) {
     dl_reset();
     rt_alloc = heap_allocator();
 
@@ -1457,7 +1457,7 @@ static void fires_body(void *env) {
     context_release(c);
 }
 
-TEST(a_timeout_fires_and_says_the_deadline_went_by) {
+static void TestATimeoutFiresAndSaysTheDeadlineWentBy(TestingT *t) {
     dl_reset();
     rt_alloc = heap_allocator();
 
@@ -1512,7 +1512,7 @@ static void parent_sooner_body(void *env) {
     context_release(p);
 }
 
-TEST(a_parent_that_gives_up_sooner_keeps_the_deadline) {
+static void TestAParentThatGivesUpSoonerKeepsTheDeadline(TestingT *t) {
     dl_reset();
     rt_alloc = heap_allocator();
 
@@ -1557,7 +1557,7 @@ static void child_sooner_body(void *env) {
     context_release(p);
 }
 
-TEST(a_child_with_a_sooner_deadline_fires_on_its_own) {
+static void TestAChildWithASoonerDeadlineFiresOnItsOwn(TestingT *t) {
     dl_reset();
     rt_alloc = heap_allocator();
 
@@ -1619,7 +1619,7 @@ static void deadline_downwards_body(void *env) {
     context_release(p);
 }
 
-TEST(a_deadline_reaches_everything_underneath_it) {
+static void TestADeadlineReachesEverythingUnderneathIt(TestingT *t) {
     dl_reset();
     rt_alloc = heap_allocator();
 
@@ -1679,7 +1679,7 @@ static void cancel_won_body(void *env) {
     dl_memory(false);
 }
 
-TEST(everything_is_given_back_when_the_deadline_wins) {
+static void TestEverythingIsGivenBackWhenTheDeadlineWins(TestingT *t) {
     dl_reset();
     track_init(&rt_track, heap_allocator());
     track_set_quarantine(&rt_track, 0);
@@ -1695,7 +1695,7 @@ TEST(everything_is_given_back_when_the_deadline_wins) {
     track_free(&rt_track);
 }
 
-TEST(everything_is_given_back_when_the_cancel_wins) {
+static void TestEverythingIsGivenBackWhenTheCancelWins(TestingT *t) {
     dl_reset();
     track_init(&rt_track, heap_allocator());
     track_set_quarantine(&rt_track, 0);
@@ -1727,7 +1727,7 @@ static void early_deadline_free_body(void *env) {
     time_sleep(DL_SOON + 100 * TIME_MILLISECOND);
 }
 
-TEST(a_context_freed_before_its_deadline_takes_the_timer_with_it) {
+static void TestAContextFreedBeforeItsDeadlineTakesTheTimerWithIt(TestingT *t) {
     dl_reset();
     track_init(&rt_track, heap_allocator());
     track_set_quarantine(&rt_track, 0);
@@ -1780,7 +1780,7 @@ static void deadline_waiter_body(void *env) {
     dl.made = true;
 }
 
-TEST(a_goroutine_parked_on_done_wakes_up_when_the_deadline_goes_by) {
+static void TestAGoroutineParkedOnDoneWakesUpWhenTheDeadlineGoesBy(TestingT *t) {
     dl_reset();
     reset();
     rt_err_was_deadline = 0;
@@ -1815,7 +1815,7 @@ static void far_future_body(void *env) {
     context_release(c);
 }
 
-TEST(a_timeout_too_big_to_add_lands_at_the_end_of_the_clock) {
+static void TestATimeoutTooBigToAddLandsAtTheEndOfTheClock(TestingT *t) {
     dl_reset();
     rt_alloc = heap_allocator();
 
@@ -1854,7 +1854,7 @@ static void deadline_cause_body(void *env) {
     context_release(c);
 }
 
-TEST(a_deadline_that_fires_says_what_it_was_waiting_for) {
+static void TestADeadlineThatFiresSaysWhatItWasWaitingFor(TestingT *t) {
     dl_reset();
     rt_alloc = heap_allocator();
 
@@ -1892,7 +1892,7 @@ static void cancel_beats_cause_body(void *env) {
     context_release(c);
 }
 
-TEST(a_cancel_before_the_deadline_leaves_the_deadline_cause_alone) {
+static void TestACancelBeforeTheDeadlineLeavesTheDeadlineCauseAlone(TestingT *t) {
     dl_reset();
     rt_alloc = heap_allocator();
 
@@ -1919,7 +1919,7 @@ static void past_cause_body(void *env) {
     context_release(c);
 }
 
-TEST(a_deadline_already_gone_by_still_carries_its_reason) {
+static void TestADeadlineAlreadyGoneByStillCarriesItsReason(TestingT *t) {
     dl_reset();
     rt_alloc = heap_allocator();
 
@@ -1995,7 +1995,7 @@ static void af_cancel_body(void *env) {
     context_release(req);
 }
 
-TEST(a_cancel_runs_the_function_on_a_goroutine_of_its_own) {
+static void TestACancelRunsTheFunctionOnAGoroutineOfItsOwn(TestingT *t) {
     af_reset();
     rt_alloc = heap_allocator();
 
@@ -2030,7 +2030,7 @@ static void af_already_body(void *env) {
     context_release(req);
 }
 
-TEST(a_context_that_is_already_over_starts_the_function_at_once) {
+static void TestAContextThatIsAlreadyOverStartsTheFunctionAtOnce(TestingT *t) {
     af_reset();
     rt_alloc = heap_allocator();
 
@@ -2065,7 +2065,7 @@ static void af_deadline_body(void *env) {
     context_release(req);
 }
 
-TEST(a_deadline_running_out_runs_the_function_too) {
+static void TestADeadlineRunningOutRunsTheFunctionToo(TestingT *t) {
     af_reset();
     rt_alloc = heap_allocator();
 
@@ -2102,7 +2102,7 @@ static void af_once_body(void *env) {
     time_sleep(20 * TIME_MILLISECOND);
 }
 
-TEST(the_function_runs_once_however_many_things_cancel) {
+static void TestTheFunctionRunsOnceHoweverManyThingsCancel(TestingT *t) {
     af_reset();
     rt_alloc = heap_allocator();
 
@@ -2142,7 +2142,7 @@ static void af_memory_body(void *env) {
     time_sleep(20 * TIME_MILLISECOND);
 }
 
-TEST(a_registration_whose_function_has_run_is_still_given_back) {
+static void TestARegistrationWhoseFunctionHasRunIsStillGivenBack(TestingT *t) {
     af_reset();
     track_init(&af_track, heap_allocator());
     track_set_quarantine(&af_track, 0);
@@ -2157,82 +2157,68 @@ TEST(a_registration_whose_function_has_run_is_still_given_back) {
     track_free(&af_track);
 }
 
-int main(void) {
-    RUN(the_root_is_never_cancelled_and_carries_nothing);
-    RUN(background_and_todo_are_not_the_same_context);
+#define TESTS(X)                                                                       \
+    X(TestTheRootIsNeverCancelledAndCarriesNothing)                                    \
+    X(TestBackgroundAndTodoAreNotTheSameContext)                                       \
+    X(TestACancelClosesTheDoneChannelAndSetsTheError)                                  \
+    X(TestCancellingTwiceChangesNothing)                                               \
+    X(TestCancellingAParentCancelsEveryChild)                                          \
+    X(TestCancellingAChildLeavesTheParentAlone)                                        \
+    X(TestAChildOfSomethingAlreadyCancelledStartsCancelled)                            \
+    X(TestACauseSaysWhyWhereTheErrorOnlySaysThat)                                      \
+    X(TestACancelWithNoReasonLeavesTheCauseEqualToTheError)                            \
+    X(TestTheFirstReasonIsTheOneThatSticks)                                            \
+    X(TestALiveContextHasNoCause)                                                      \
+    X(TestAReasonGivenAtTheTopIsTheAnswerAtTheBottom)                                  \
+    X(TestACauseGivenBelowStaysBelow)                                                  \
+    X(TestAChildOfSomethingCancelledWithAReasonStartsWithIt)                           \
+    X(TestAPlainCancelContextStillHasACause)                                           \
+    X(TestAContextThatCannotBeCancelledHasNoCause)                                     \
+    X(TestAStoppedAfterFuncNeverRuns)                                                  \
+    X(TestOnlyOneStopEverAnswersTrue)                                                  \
+    X(TestFreeingARegistrationIsNotAReasonToRunIt)                                     \
+    X(TestARegistrationAnswersTheFourQuestionsLikeAnythingElse)                        \
+    X(TestARegistrationIsGivenBackToTheAllocator)                                      \
+    X(TestWorkThatOutlivesItsRequestKeepsTheValues)                                    \
+    X(TestNothingUnderAWithoutCancelIsReachedByTheParent)                              \
+    X(TestAWithoutCancelHasNoDeadlineAndNoCause)                                       \
+    X(TestADetachedContextIsGivenBackToTheAllocator)                                   \
+    X(TestAValueIsFoundThroughEverythingAboveIt)                                       \
+    X(TestAnUnknownKeyAnswersNothing)                                                  \
+    X(TestALaterValueShadowsAnEarlierOneWithTheSameKey)                                \
+    X(TestADeadlineIsWhateverTheParentSays)                                            \
+    X(TestAValueWalkGoesThroughAStrangerAndComesBack)                                  \
+    X(TestAStrangerThatIsNeverCancelledNeedsNoWatching)                                \
+    X(TestEverythingIsGivenBackToTheAllocator)                                         \
+    X(TestAContextNobodyCancelledIsStillFreed)                                         \
+    X(TestTheMonotonicClockOnlyGoesForwards)                                           \
+    X(TestANilParentPanics)                                                            \
+    X(TestABadKeyPanics)                                                               \
+    X(TestANilContextHasNoMethods)                                                     \
+    X(TestADeadlineOffAGoroutineStopsTheProgram)                                       \
+    X(TestFreeingAContextThisPackageDidNotMakeStopsTheProgram)                         \
+    X(TestAGoroutineParkedOnDoneWakesUpWhenSomebodyCancels)                            \
+    X(TestAParentFromOutsideThePackageStillCancelsWhatIsUnderIt)                       \
+    X(TestAWrapperThatReplacesDoneIsNotMistakenForWhatItWraps)                         \
+    X(TestAContextWithAWatcherCanBeFreedBeforeTheWatcherWakes)                         \
+    X(TestADeadlineAnHourAwayLeavesTheCancelToWin)                                     \
+    X(TestADeadlineThatHasGoneByComesBackAlreadyCancelled)                             \
+    X(TestATimeoutFiresAndSaysTheDeadlineWentBy)                                       \
+    X(TestAParentThatGivesUpSoonerKeepsTheDeadline)                                    \
+    X(TestAChildWithASoonerDeadlineFiresOnItsOwn)                                      \
+    X(TestADeadlineReachesEverythingUnderneathIt)                                      \
+    X(TestEverythingIsGivenBackWhenTheDeadlineWins)                                    \
+    X(TestEverythingIsGivenBackWhenTheCancelWins)                                      \
+    X(TestAContextFreedBeforeItsDeadlineTakesTheTimerWithIt)                           \
+    X(TestAGoroutineParkedOnDoneWakesUpWhenTheDeadlineGoesBy)                          \
+    X(TestATimeoutTooBigToAddLandsAtTheEndOfTheClock)                                  \
+    X(TestADeadlineThatFiresSaysWhatItWasWaitingFor)                                   \
+    X(TestACancelBeforeTheDeadlineLeavesTheDeadlineCauseAlone)                         \
+    X(TestADeadlineAlreadyGoneByStillCarriesItsReason)                                 \
+    X(TestACancelRunsTheFunctionOnAGoroutineOfItsOwn)                                  \
+    X(TestAContextThatIsAlreadyOverStartsTheFunctionAtOnce)                            \
+    X(TestADeadlineRunningOutRunsTheFunctionToo)                                       \
+    X(TestTheFunctionRunsOnceHoweverManyThingsCancel)                                  \
+    X(TestARegistrationWhoseFunctionHasRunIsStillGivenBack)
 
-    RUN(a_cancel_closes_the_done_channel_and_sets_the_error);
-    RUN(cancelling_twice_changes_nothing);
-    RUN(cancelling_a_parent_cancels_every_child);
-    RUN(cancelling_a_child_leaves_the_parent_alone);
-    RUN(a_child_of_something_already_cancelled_starts_cancelled);
-
-    RUN(a_cause_says_why_where_the_error_only_says_that);
-    RUN(a_cancel_with_no_reason_leaves_the_cause_equal_to_the_error);
-    RUN(the_first_reason_is_the_one_that_sticks);
-    RUN(a_live_context_has_no_cause);
-    RUN(a_reason_given_at_the_top_is_the_answer_at_the_bottom);
-    RUN(a_cause_given_below_stays_below);
-    RUN(a_child_of_something_cancelled_with_a_reason_starts_with_it);
-    RUN(a_plain_cancel_context_still_has_a_cause);
-    RUN(a_context_that_cannot_be_cancelled_has_no_cause);
-
-    RUN(a_stopped_after_func_never_runs);
-    RUN(only_one_stop_ever_answers_true);
-    RUN(freeing_a_registration_is_not_a_reason_to_run_it);
-    RUN(a_registration_answers_the_four_questions_like_anything_else);
-    RUN(a_registration_is_given_back_to_the_allocator);
-
-    RUN(work_that_outlives_its_request_keeps_the_values);
-    RUN(nothing_under_a_without_cancel_is_reached_by_the_parent);
-    RUN(a_without_cancel_has_no_deadline_and_no_cause);
-    RUN(a_detached_context_is_given_back_to_the_allocator);
-
-    RUN(a_value_is_found_through_everything_above_it);
-    RUN(an_unknown_key_answers_nothing);
-    RUN(a_later_value_shadows_an_earlier_one_with_the_same_key);
-
-    RUN(a_deadline_is_whatever_the_parent_says);
-    RUN(a_value_walk_goes_through_a_stranger_and_comes_back);
-    RUN(a_stranger_that_is_never_cancelled_needs_no_watching);
-
-    RUN(everything_is_given_back_to_the_allocator);
-    RUN(a_context_nobody_cancelled_is_still_freed);
-
-    RUN(the_monotonic_clock_only_goes_forwards);
-
-    RUN(a_nil_parent_panics);
-    RUN(a_bad_key_panics);
-    RUN(a_nil_context_has_no_methods);
-    RUN(a_deadline_off_a_goroutine_stops_the_program);
-    RUN(freeing_a_context_this_package_did_not_make_stops_the_program);
-
-    RUN(a_goroutine_parked_on_done_wakes_up_when_somebody_cancels);
-    RUN(a_parent_from_outside_the_package_still_cancels_what_is_under_it);
-    RUN(a_wrapper_that_replaces_done_is_not_mistaken_for_what_it_wraps);
-    RUN(a_context_with_a_watcher_can_be_freed_before_the_watcher_wakes);
-
-    RUN(a_deadline_an_hour_away_leaves_the_cancel_to_win);
-    RUN(a_deadline_that_has_gone_by_comes_back_already_cancelled);
-    RUN(a_timeout_fires_and_says_the_deadline_went_by);
-    RUN(a_parent_that_gives_up_sooner_keeps_the_deadline);
-    RUN(a_child_with_a_sooner_deadline_fires_on_its_own);
-    RUN(a_deadline_reaches_everything_underneath_it);
-    RUN(everything_is_given_back_when_the_deadline_wins);
-    RUN(everything_is_given_back_when_the_cancel_wins);
-    RUN(a_context_freed_before_its_deadline_takes_the_timer_with_it);
-    RUN(a_goroutine_parked_on_done_wakes_up_when_the_deadline_goes_by);
-    RUN(a_timeout_too_big_to_add_lands_at_the_end_of_the_clock);
-
-    RUN(a_deadline_that_fires_says_what_it_was_waiting_for);
-    RUN(a_cancel_before_the_deadline_leaves_the_deadline_cause_alone);
-    RUN(a_deadline_already_gone_by_still_carries_its_reason);
-
-    RUN(a_cancel_runs_the_function_on_a_goroutine_of_its_own);
-    RUN(a_context_that_is_already_over_starts_the_function_at_once);
-    RUN(a_deadline_running_out_runs_the_function_too);
-    RUN(the_function_runs_once_however_many_things_cancel);
-    RUN(a_registration_whose_function_has_run_is_still_given_back);
-
-    return harness_report("context");
-}
+TESTING_MAIN_BARE(TESTS)

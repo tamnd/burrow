@@ -48,8 +48,8 @@
 #include "burrow/time.h"
 #include "burrow/type.h"
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -140,7 +140,7 @@ static void crowd_top(void *env) {
         chan_free(gate);
 }
 
-TEST(five_hundred_goroutines_in_a_bubble_are_all_waited_for) {
+static void TestFiveHundredGoroutinesInABubbleAreAllWaitedFor(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, crowd_top, NULL));
 
@@ -201,7 +201,7 @@ static void spin_top(void *env) {
         chan_free(gate);
 }
 
-TEST(a_goroutine_that_is_only_yielding_still_counts_as_running) {
+static void TestAGoroutineThatIsOnlyYieldingStillCountsAsRunning(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, spin_top, NULL));
 
@@ -264,7 +264,7 @@ static void deep_top(void *env) {
         chan_free(gate);
 }
 
-TEST(a_goroutine_three_removes_from_the_body_is_still_in_the_bubble) {
+static void TestAGoroutineThreeRemovesFromTheBodyIsStillInTheBubble(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, deep_top, NULL));
 
@@ -315,7 +315,7 @@ static void stopped_top(void *env) {
     (void)synctest_run(BURROW_FN(Func, stopped_body, NULL));
 }
 
-TEST(a_stopped_timer_in_a_bubble_does_not_run_when_the_clock_goes_past_it) {
+static void TestAStoppedTimerInABubbleDoesNotRunWhenTheClockGoesPastIt(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, stopped_top, NULL));
 
@@ -365,7 +365,7 @@ static void reset_top(void *env) {
     (void)synctest_run(BURROW_FN(Func, reset_body, NULL));
 }
 
-TEST(a_timer_reset_in_a_bubble_lands_on_the_bubble_clock) {
+static void TestATimerResetInABubbleLandsOnTheBubbleClock(TestingT *t) {
     reset();
     fired_at = 0;
     runtime_main(BURROW_FN(Func, reset_top, NULL));
@@ -428,7 +428,7 @@ static void chain_top(void *env) {
         time_timer_free(chain[i]);
 }
 
-TEST(a_timer_that_arms_a_timer_in_a_bubble_stays_on_the_bubble_clock) {
+static void TestATimerThatArmsATimerInABubbleStaysOnTheBubbleClock(TestingT *t) {
     reset();
     for (int i = 0; i < LINKS; i++) {
         chain[i] = NULL;
@@ -497,7 +497,7 @@ static void select_top(void *env) {
     }
 }
 
-TEST(a_select_over_bubbled_channels_is_a_durable_wait) {
+static void TestASelectOverBubbledChannelsIsADurableWait(TestingT *t) {
     reset();
     other = NULL;
     runtime_main(BURROW_FN(Func, select_top, NULL));
@@ -577,7 +577,7 @@ static void mixed_top(void *env) {
     chan_free(outside_chan);
 }
 
-TEST(a_select_with_a_case_from_outside_the_bubble_is_not_durable) {
+static void TestASelectWithACaseFromOutsideTheBubbleIsNotDurable(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, mixed_top, NULL));
 
@@ -617,7 +617,7 @@ static void default_top(void *env) {
         chan_free(gate);
 }
 
-TEST(a_select_with_a_default_never_parks_in_a_bubble) {
+static void TestASelectWithADefaultNeverParksInABubble(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, default_top, NULL));
 
@@ -704,7 +704,7 @@ static void pipeline_top(void *env) {
     }
 }
 
-TEST(a_pipeline_of_two_thousand_handoffs_runs_through_a_bubble) {
+static void TestAPipelineOfTwoThousandHandoffsRunsThroughABubble(TestingT *t) {
     reset();
     stage_one = NULL;
     stage_two = NULL;
@@ -783,7 +783,7 @@ static void panic_top(void *env) {
     }
 }
 
-TEST(a_panic_and_a_recover_in_a_bubble_leave_the_goroutine_counted) {
+static void TestAPanicAndARecoverInABubbleLeaveTheGoroutineCounted(TestingT *t) {
     reset();
     other = NULL;
     runtime_main(BURROW_FN(Func, panic_top, NULL));
@@ -884,7 +884,7 @@ static void defer_top(void *env) {
     }
 }
 
-TEST(a_deferred_call_that_parks_in_a_bubble_is_still_waited_for) {
+static void TestADeferredCallThatParksInABubbleIsStillWaitedFor(TestingT *t) {
     reset();
     other = NULL;
     order_len = 0;
@@ -966,7 +966,7 @@ static void mutex_top(void *env) {
     (void)synctest_run(BURROW_FN(Func, mutex_body, NULL));
 }
 
-TEST(sixty_four_goroutines_can_contend_for_a_mutex_in_a_bubble) {
+static void TestSixtyFourGoroutinesCanContendForAMutexInABubble(TestingT *t) {
     reset();
     guarded = 0;
     memset(&wg, 0, sizeof(wg));
@@ -1050,7 +1050,7 @@ static void not_durable_top(void *env) {
     chan_free(handshake);
 }
 
-TEST(a_mutex_wait_in_a_bubble_is_not_durable) {
+static void TestAMutexWaitInABubbleIsNotDurable(TestingT *t) {
     reset();
     released = 0;
     memset(&mu, 0, sizeof(mu));
@@ -1123,7 +1123,7 @@ static void rw_top(void *env) {
     (void)synctest_run(BURROW_FN(Func, rw_body, NULL));
 }
 
-TEST(readers_and_writers_share_a_lock_in_a_bubble) {
+static void TestReadersAndWritersShareALockInABubble(TestingT *t) {
     reset();
     shared = 0;
     memset(&wg, 0, sizeof(wg));
@@ -1174,7 +1174,7 @@ static void once_top(void *env) {
     (void)synctest_run(BURROW_FN(Func, once_body, NULL));
 }
 
-TEST(a_once_in_a_bubble_runs_its_function_once) {
+static void TestAOnceInABubbleRunsItsFunctionOnce(TestingT *t) {
     reset();
     memset(&wg, 0, sizeof(wg));
     memset(&once, 0, sizeof(once));
@@ -1239,7 +1239,7 @@ static void cond_top(void *env) {
     (void)synctest_run(BURROW_FN(Func, cond_body, NULL));
 }
 
-TEST(a_broadcast_in_a_bubble_wakes_every_waiter) {
+static void TestABroadcastInABubbleWakesEveryWaiter(TestingT *t) {
     reset();
     memset(&cond_mu, 0, sizeof(cond_mu));
     memset(&cond, 0, sizeof(cond));
@@ -1311,7 +1311,7 @@ static void map_top(void *env) {
     (void)synctest_run(BURROW_FN(Func, map_body, NULL));
 }
 
-TEST(a_sync_map_in_a_bubble_keeps_every_write) {
+static void TestASyncMapInABubbleKeepsEveryWrite(TestingT *t) {
     reset();
     memset(&wg, 0, sizeof(wg));
 
@@ -1321,25 +1321,24 @@ TEST(a_sync_map_in_a_bubble_keeps_every_write) {
     CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&got), POSTERS * PER_POSTER);
 }
 
-int main(void) {
-    RUN(five_hundred_goroutines_in_a_bubble_are_all_waited_for);
-    RUN(a_goroutine_that_is_only_yielding_still_counts_as_running);
-    RUN(a_goroutine_three_removes_from_the_body_is_still_in_the_bubble);
-    RUN(a_stopped_timer_in_a_bubble_does_not_run_when_the_clock_goes_past_it);
-    RUN(a_timer_reset_in_a_bubble_lands_on_the_bubble_clock);
-    RUN(a_timer_that_arms_a_timer_in_a_bubble_stays_on_the_bubble_clock);
-    RUN(a_select_over_bubbled_channels_is_a_durable_wait);
-    RUN(a_select_with_a_case_from_outside_the_bubble_is_not_durable);
-    RUN(a_select_with_a_default_never_parks_in_a_bubble);
-    RUN(a_pipeline_of_two_thousand_handoffs_runs_through_a_bubble);
-    RUN(a_panic_and_a_recover_in_a_bubble_leave_the_goroutine_counted);
-    RUN(a_deferred_call_that_parks_in_a_bubble_is_still_waited_for);
-    RUN(sixty_four_goroutines_can_contend_for_a_mutex_in_a_bubble);
-    RUN(a_mutex_wait_in_a_bubble_is_not_durable);
-    RUN(readers_and_writers_share_a_lock_in_a_bubble);
-    RUN(a_once_in_a_bubble_runs_its_function_once);
-    RUN(a_broadcast_in_a_bubble_wakes_every_waiter);
-    RUN(a_sync_map_in_a_bubble_keeps_every_write);
+#define TESTS(X)                                                                       \
+    X(TestFiveHundredGoroutinesInABubbleAreAllWaitedFor)                               \
+    X(TestAGoroutineThatIsOnlyYieldingStillCountsAsRunning)                            \
+    X(TestAGoroutineThreeRemovesFromTheBodyIsStillInTheBubble)                         \
+    X(TestAStoppedTimerInABubbleDoesNotRunWhenTheClockGoesPastIt)                      \
+    X(TestATimerResetInABubbleLandsOnTheBubbleClock)                                   \
+    X(TestATimerThatArmsATimerInABubbleStaysOnTheBubbleClock)                          \
+    X(TestASelectOverBubbledChannelsIsADurableWait)                                    \
+    X(TestASelectWithACaseFromOutsideTheBubbleIsNotDurable)                            \
+    X(TestASelectWithADefaultNeverParksInABubble)                                      \
+    X(TestAPipelineOfTwoThousandHandoffsRunsThroughABubble)                            \
+    X(TestAPanicAndARecoverInABubbleLeaveTheGoroutineCounted)                          \
+    X(TestADeferredCallThatParksInABubbleIsStillWaitedFor)                             \
+    X(TestSixtyFourGoroutinesCanContendForAMutexInABubble)                             \
+    X(TestAMutexWaitInABubbleIsNotDurable)                                             \
+    X(TestReadersAndWritersShareALockInABubble)                                        \
+    X(TestAOnceInABubbleRunsItsFunctionOnce)                                           \
+    X(TestABroadcastInABubbleWakesEveryWaiter)                                         \
+    X(TestASyncMapInABubbleKeepsEveryWrite)
 
-    return harness_report("bubble");
-}
+TESTING_MAIN_BARE(TESTS)

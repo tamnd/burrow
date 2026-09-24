@@ -37,7 +37,7 @@
 #include "burrow/thread.h"
 #include "burrow/time.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -57,7 +57,7 @@ static void bump(void *env) {
     (void)burrow__atomic_add_u32(&runs, 1);
 }
 
-TEST(the_runtime_starts_and_stops_with_a_monitor_thread_in_it) {
+static void TestTheRuntimeStartsAndStopsWithAMonitorThreadInIt(TestingT *t) {
     burrow__atomic_store_u32(&runs, 0);
 
     int old = runtime_gomaxprocs(2);
@@ -125,7 +125,7 @@ static void park_until_an_outsider_says_so(void *env) {
     burrow__atomic_store_release_u32(&woke, 1);
 }
 
-TEST(a_goroutine_readied_from_outside_gets_the_program_moving_again) {
+static void TestAGoroutineReadiedFromOutsideGetsTheProgramMovingAgain(TestingT *t) {
     burrow__atomic_store_u32(&parked, 0);
     burrow__atomic_store_u32(&woke, 0);
     sleeper = NULL;
@@ -167,7 +167,7 @@ static void sleep_and_measure(void *env) {
  * a wrong answer. This is the check that says so: the sleeps below run on a
  * runtime with the monitor going, at the three widths where its wake times scan
  * has nothing, one thing and several things to look at. */
-TEST(a_sleep_is_still_a_sleep_with_the_monitor_running) {
+static void TestASleepIsStillASleepWithTheMonitorRunning(TestingT *t) {
     static const int procs[] = {1, 2, 4};
 
     for (size_t i = 0; i < sizeof(procs) / sizeof(procs[0]); i++) {
@@ -186,9 +186,9 @@ TEST(a_sleep_is_still_a_sleep_with_the_monitor_running) {
     }
 }
 
-int main(void) {
-    RUN(the_runtime_starts_and_stops_with_a_monitor_thread_in_it);
-    RUN(a_goroutine_readied_from_outside_gets_the_program_moving_again);
-    RUN(a_sleep_is_still_a_sleep_with_the_monitor_running);
-    return harness_report("sysmon");
-}
+#define TESTS(X)                                                                       \
+    X(TestTheRuntimeStartsAndStopsWithAMonitorThreadInIt)                              \
+    X(TestAGoroutineReadiedFromOutsideGetsTheProgramMovingAgain)                       \
+    X(TestASleepIsStillASleepWithTheMonitorRunning)
+
+TESTING_MAIN_BARE(TESTS)

@@ -25,7 +25,7 @@
 #include "burrow/proc.h"
 #include "burrow/thread.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -36,9 +36,15 @@
 static char trace[64];
 static size_t traced;
 
+/* What was on the chain when the test began: the testing package's own scope
+ * on the thread a test runs on, and nothing on a goroutine. A test that is over
+ * has put it back to that. */
+static burrow__DeferScope *outer;
+
 static void reset(void) {
     memset(trace, 0, sizeof(trace));
     traced = 0;
+    outer = *burrow__defer_chain();
 }
 
 /* The deferred function for most of this file. The argument is the character to
@@ -54,19 +60,19 @@ static void mark(void *env) {
 
 /* --------------------------------------------------- without a scheduler */
 
-TEST(a_scope_with_nothing_in_it_leaves_the_chain_as_it_found_it) {
+static void TestAScopeWithNothingInItLeavesTheChainAsItFoundIt(TestingT *t) {
     burrow__DeferScope **chain = burrow__defer_chain();
-    CHECK(*chain == NULL);
+    burrow__DeferScope *before = *chain;
 
     BURROW_SCOPE {
-        CHECK(*chain != NULL);
+        CHECK(*chain != before);
     }
     BURROW_SCOPE_END;
 
-    CHECK(*chain == NULL);
+    CHECK(*chain == before);
 }
 
-TEST(a_deferred_call_runs_at_the_end_of_the_scope_and_not_before) {
+static void TestADeferredCallRunsAtTheEndOfTheScopeAndNotBefore(TestingT *t) {
     reset();
 
     BURROW_SCOPE {
@@ -78,7 +84,7 @@ TEST(a_deferred_call_runs_at_the_end_of_the_scope_and_not_before) {
     CHECK_STR_EQ(trace, "a");
 }
 
-TEST(deferred_calls_run_last_in_first_out) {
+static void TestDeferredCallsRunLastInFirstOut(TestingT *t) {
     reset();
 
     BURROW_SCOPE {
@@ -103,13 +109,13 @@ static void returns_from_inside_a_scope(void) {
     BURROW_SCOPE_END;
 }
 
-TEST(a_return_from_inside_a_scope_still_runs_the_calls) {
+static void TestAReturnFromInsideAScopeStillRunsTheCalls(TestingT *t) {
     reset();
     returns_from_inside_a_scope();
     CHECK_STR_EQ(trace, "a");
 }
 
-TEST(a_break_out_of_the_loop_the_scope_is_in_still_runs_the_calls) {
+static void TestABreakOutOfTheLoopTheScopeIsInStillRunsTheCalls(TestingT *t) {
     reset();
 
     for (int i = 0; i < 4; i++) {
@@ -124,7 +130,7 @@ TEST(a_break_out_of_the_loop_the_scope_is_in_still_runs_the_calls) {
     CHECK_STR_EQ(trace, "01");
 }
 
-TEST(a_goto_out_of_a_scope_still_runs_the_calls) {
+static void TestAGotoOutOfAScopeStillRunsTheCalls(TestingT *t) {
     reset();
 
     BURROW_SCOPE {
@@ -137,7 +143,7 @@ out:
     CHECK_STR_EQ(trace, "a");
 }
 
-TEST(an_inner_scope_finishes_before_the_outer_one) {
+static void TestAnInnerScopeFinishesBeforeTheOuterOne(TestingT *t) {
     reset();
 
     BURROW_SCOPE {
@@ -160,7 +166,7 @@ TEST(an_inner_scope_finishes_before_the_outer_one) {
 /* Go's defer would hold all four to the end of the function. This one runs on
  * every turn, which is the difference burrow/defer.h is explicit about and the
  * reason a file handle opened in a loop is safe here. */
-TEST(a_scope_inside_a_loop_runs_its_calls_every_turn) {
+static void TestAScopeInsideALoopRunsItsCallsEveryTurn(TestingT *t) {
     reset();
 
     for (int i = 0; i < 4; i++) {
@@ -176,7 +182,7 @@ TEST(a_scope_inside_a_loop_runs_its_calls_every_turn) {
 /* Go evaluates a deferred call's arguments where the defer is written, and so
  * does this, because the record holds the value rather than a way of getting it
  * again later. */
-TEST(the_argument_is_the_one_the_defer_was_written_with) {
+static void TestTheArgumentIsTheOneTheDeferWasWrittenWith(TestingT *t) {
     reset();
 
     char c = 'a';
@@ -201,7 +207,7 @@ static void defers_something_of_its_own(void *env) {
     mark((void *)(size_t)'b');
 }
 
-TEST(a_deferred_call_can_open_scopes_and_defer_things_of_its_own) {
+static void TestADeferredCallCanOpenScopesAndDeferThingsOfItsOwn(TestingT *t) {
     reset();
 
     BURROW_SCOPE {
@@ -211,14 +217,14 @@ TEST(a_deferred_call_can_open_scopes_and_defer_things_of_its_own) {
     BURROW_SCOPE_END;
 
     CHECK_STR_EQ(trace, "cba");
-    CHECK(*burrow__defer_chain() == NULL);
+    CHECK(*burrow__defer_chain() == outer);
 }
 
 /* Go's rule for a defer in a loop, which burrow has too whenever the scope is
  * outside the loop: the calls pile up and run at the end of the scope. Worth a
  * test because the calls past the fourth live somewhere else, and because this
  * is the shape that used to hang. */
-TEST(a_defer_in_a_loop_piles_up_until_the_end_of_the_scope) {
+static void TestADeferInALoopPilesUpUntilTheEndOfTheScope(TestingT *t) {
     reset();
 
     BURROW_SCOPE {
@@ -234,7 +240,7 @@ TEST(a_defer_in_a_loop_piles_up_until_the_end_of_the_scope) {
 
 /* Enough to fill the scope's own room for calls and grow what holds the rest
  * three times, since the growth is the part with arithmetic in it. */
-TEST(a_scope_holds_as_many_calls_as_it_is_given) {
+static void TestAScopeHoldsAsManyCallsAsItIsGiven(TestingT *t) {
     reset();
 
     BURROW_SCOPE {
@@ -244,13 +250,13 @@ TEST(a_scope_holds_as_many_calls_as_it_is_given) {
     BURROW_SCOPE_END;
 
     CHECK_STR_EQ(trace, "zyxwvutsrqponmlkjihgfedcba");
-    CHECK(*burrow__defer_chain() == NULL);
+    CHECK(*burrow__defer_chain() == outer);
 }
 
 /* A BURROW_DEFER is one statement and nothing else, so it goes where a
  * statement goes. It was a declaration once, which meant a loop body or an if
  * without braces did not compile, and that was a worse trade than it looked. */
-TEST(a_defer_is_an_ordinary_statement) {
+static void TestADeferIsAnOrdinaryStatement(TestingT *t) {
     reset();
 
     BURROW_SCOPE {
@@ -325,7 +331,7 @@ static void main_with_a_goroutine(void *env) {
     BURROW_SCOPE_END;
 }
 
-TEST(a_goroutine_runs_its_own_defers_and_not_anybody_elses) {
+static void TestAGoroutineRunsItsOwnDefersAndNotAnybodyElses(TestingT *t) {
     start_run();
     runtime_gomaxprocs(1);
     runtime_main(BURROW_FN(Func, main_with_a_goroutine, NULL));
@@ -371,7 +377,7 @@ static void main_that_goexits(void *env) {
     wait_for_done();
 }
 
-TEST(goexit_runs_the_calls_of_every_scope_the_goroutine_is_inside) {
+static void TestGoexitRunsTheCallsOfEveryScopeTheGoroutineIsInside(TestingT *t) {
     start_run();
     runtime_gomaxprocs(1);
     runtime_main(BURROW_FN(Func, main_that_goexits, NULL));
@@ -410,7 +416,7 @@ static void main_that_hands_over(void *env) {
     wait_for_done();
 }
 
-TEST(a_goroutine_that_parks_inside_a_scope_still_has_its_calls_afterwards) {
+static void TestAGoroutineThatParksInsideAScopeStillHasItsCallsAfterwards(TestingT *t) {
     start_run();
     runtime_gomaxprocs(4);
 
@@ -449,41 +455,39 @@ static void on_a_bare_thread(void *env) {
         thread_ran = 1;
 }
 
-TEST(a_thread_that_is_not_a_goroutine_has_a_chain_of_its_own) {
+static void TestAThreadThatIsNotAGoroutineHasAChainOfItsOwn(TestingT *t) {
     reset();
     thread_ran = 0;
 
-    burrow__Thread t;
-    CHECK(burrow__thread_start(&t, on_a_bare_thread, NULL, 0));
-    burrow__thread_join(&t);
+    burrow__Thread th;
+    CHECK(burrow__thread_start(&th, on_a_bare_thread, NULL, 0));
+    burrow__thread_join(&th);
 
     CHECK_INT_EQ(thread_ran, 1);
     CHECK_STR_EQ(trace, "t");
 
     /* This thread's chain is its own and the one that just ran did not touch
      * it. */
-    CHECK(*burrow__defer_chain() == NULL);
+    CHECK(*burrow__defer_chain() == outer);
 }
 
-int main(void) {
-    RUN(a_scope_with_nothing_in_it_leaves_the_chain_as_it_found_it);
-    RUN(a_deferred_call_runs_at_the_end_of_the_scope_and_not_before);
-    RUN(deferred_calls_run_last_in_first_out);
-    RUN(a_return_from_inside_a_scope_still_runs_the_calls);
-    RUN(a_break_out_of_the_loop_the_scope_is_in_still_runs_the_calls);
-    RUN(a_goto_out_of_a_scope_still_runs_the_calls);
-    RUN(an_inner_scope_finishes_before_the_outer_one);
-    RUN(a_scope_inside_a_loop_runs_its_calls_every_turn);
-    RUN(the_argument_is_the_one_the_defer_was_written_with);
-    RUN(a_deferred_call_can_open_scopes_and_defer_things_of_its_own);
-    RUN(a_defer_in_a_loop_piles_up_until_the_end_of_the_scope);
-    RUN(a_scope_holds_as_many_calls_as_it_is_given);
-    RUN(a_defer_is_an_ordinary_statement);
+#define TESTS(X)                                                                       \
+    X(TestAScopeWithNothingInItLeavesTheChainAsItFoundIt)                              \
+    X(TestADeferredCallRunsAtTheEndOfTheScopeAndNotBefore)                             \
+    X(TestDeferredCallsRunLastInFirstOut)                                              \
+    X(TestAReturnFromInsideAScopeStillRunsTheCalls)                                    \
+    X(TestABreakOutOfTheLoopTheScopeIsInStillRunsTheCalls)                             \
+    X(TestAGotoOutOfAScopeStillRunsTheCalls)                                           \
+    X(TestAnInnerScopeFinishesBeforeTheOuterOne)                                       \
+    X(TestAScopeInsideALoopRunsItsCallsEveryTurn)                                      \
+    X(TestTheArgumentIsTheOneTheDeferWasWrittenWith)                                   \
+    X(TestADeferredCallCanOpenScopesAndDeferThingsOfItsOwn)                            \
+    X(TestADeferInALoopPilesUpUntilTheEndOfTheScope)                                   \
+    X(TestAScopeHoldsAsManyCallsAsItIsGiven)                                           \
+    X(TestADeferIsAnOrdinaryStatement)                                                 \
+    X(TestAGoroutineRunsItsOwnDefersAndNotAnybodyElses)                                \
+    X(TestGoexitRunsTheCallsOfEveryScopeTheGoroutineIsInside)                          \
+    X(TestAGoroutineThatParksInsideAScopeStillHasItsCallsAfterwards)                   \
+    X(TestAThreadThatIsNotAGoroutineHasAChainOfItsOwn)
 
-    RUN(a_goroutine_runs_its_own_defers_and_not_anybody_elses);
-    RUN(goexit_runs_the_calls_of_every_scope_the_goroutine_is_inside);
-    RUN(a_goroutine_that_parks_inside_a_scope_still_has_its_calls_afterwards);
-
-    RUN(a_thread_that_is_not_a_goroutine_has_a_chain_of_its_own);
-    return harness_report("defer");
-}
+TESTING_MAIN_BARE(TESTS)

@@ -30,7 +30,7 @@
 #include "burrow/thread.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -95,7 +95,7 @@ static bool walks(void) {
     return walk(1, buf, PCS_MAX) > 0;
 }
 
-TEST(the_architectures_burrow_claims_can_walk) {
+static void TestTheArchitecturesBurrowClaimsCanWalk(TestingT *t) {
 #if defined(BURROW_ARCH_AMD64) || defined(BURROW_ARCH_ARM64) || defined(BURROW_ARCH_386)
     CHECK(walks());
 #else
@@ -105,7 +105,7 @@ TEST(the_architectures_burrow_claims_can_walk) {
 #endif
 }
 
-TEST(three_functions_deep_reports_three_functions) {
+static void TestThreeFunctionsDeepReportsThreeFunctions(TestingT *t) {
     Uintptr buf[PCS_MAX];
     Int n;
 
@@ -114,8 +114,8 @@ TEST(three_functions_deep_reports_three_functions) {
 
     n = walk(1, buf, PCS_MAX);
 
-    /* The three helpers, the test function and whatever the harness and the C
-     * runtime put under it. Four is the part this file is responsible for. */
+    /* The three helpers, the test function and whatever the testing package and
+     * the C runtime put under it. Four is the part this file is responsible for. */
     CHECK(n >= 4);
 
     /* Three different call sites, so three different addresses. A walker that
@@ -128,7 +128,7 @@ TEST(three_functions_deep_reports_three_functions) {
         CHECK(buf[i] != 0);
 }
 
-TEST(skip_takes_one_frame_off_the_front) {
+static void TestSkipTakesOneFrameOffTheFront(TestingT *t) {
     Uintptr one[PCS_MAX];
     Uintptr two[PCS_MAX];
     Int n1;
@@ -149,7 +149,7 @@ TEST(skip_takes_one_frame_off_the_front) {
     CHECK(one[2] == two[1]);
 }
 
-TEST(skip_zero_is_the_frame_for_callers_itself) {
+static void TestSkipZeroIsTheFrameForCallersItself(TestingT *t) {
     Uintptr zero[PCS_MAX];
     Uintptr one[PCS_MAX];
     Int n0;
@@ -173,7 +173,7 @@ TEST(skip_zero_is_the_frame_for_callers_itself) {
     CHECK_INT_EQ(walk(-4, zero, PCS_MAX), n0);
 }
 
-TEST(a_short_buffer_gets_a_short_answer) {
+static void TestAShortBufferGetsAShortAnswer(TestingT *t) {
     Uintptr one[1];
     Uintptr none[1];
 
@@ -189,7 +189,7 @@ TEST(a_short_buffer_gets_a_short_answer) {
     CHECK_INT_EQ(level_one(1, slice_nil(TYPE_UINTPTR)), 0);
 }
 
-TEST(skipping_past_the_bottom_of_the_stack_is_not_a_fault) {
+static void TestSkippingPastTheBottomOfTheStackIsNotAFault(TestingT *t) {
     Uintptr buf[PCS_MAX];
 
     CHECK_INT_EQ(walk(1000000, buf, PCS_MAX), 0);
@@ -217,7 +217,7 @@ static BURROW_NOINLINE Int public_walk(Uintptr *buf, Int max) {
     return n;
 }
 
-TEST(the_internal_walk_and_the_public_one_see_the_same_stack) {
+static void TestTheInternalWalkAndThePublicOneSeeTheSameStack(TestingT *t) {
     Uintptr inner[PCS_MAX];
     Uintptr outer[PCS_MAX];
     Int ni;
@@ -250,7 +250,7 @@ static void goroutine_body(void *unused) {
     goroutine_frames = walk(1, buf, PCS_MAX);
 }
 
-TEST(a_goroutine_stack_walks_too) {
+static void TestAGoroutineStackWalksToo(TestingT *t) {
     if (!walks())
         return;
 
@@ -273,19 +273,19 @@ static void thread_body(void *unused) {
     thread_frames = walk(1, buf, PCS_MAX);
 }
 
-TEST(a_plain_thread_walks_too) {
-    burrow__Thread t;
+static void TestAPlainThreadWalksToo(TestingT *t) {
+    burrow__Thread th;
 
     if (!walks())
         return;
 
     thread_frames = -1;
-    CHECK(burrow__thread_start(&t, thread_body, NULL, 0));
-    CHECK(burrow__thread_join(&t));
+    CHECK(burrow__thread_start(&th, thread_body, NULL, 0));
+    CHECK(burrow__thread_join(&th));
     CHECK(thread_frames >= 4);
 }
 
-TEST(a_thread_knows_where_its_own_stack_is) {
+static void TestAThreadKnowsWhereItsOwnStackIs(TestingT *t) {
     void *lo = NULL;
     void *hi = NULL;
     char here;
@@ -306,16 +306,16 @@ TEST(a_thread_knows_where_its_own_stack_is) {
     CHECK(&here < (char *)hi);
 }
 
-int main(void) {
-    RUN(the_architectures_burrow_claims_can_walk);
-    RUN(three_functions_deep_reports_three_functions);
-    RUN(skip_takes_one_frame_off_the_front);
-    RUN(skip_zero_is_the_frame_for_callers_itself);
-    RUN(a_short_buffer_gets_a_short_answer);
-    RUN(skipping_past_the_bottom_of_the_stack_is_not_a_fault);
-    RUN(the_internal_walk_and_the_public_one_see_the_same_stack);
-    RUN(a_goroutine_stack_walks_too);
-    RUN(a_plain_thread_walks_too);
-    RUN(a_thread_knows_where_its_own_stack_is);
-    return harness_report("trace");
-}
+#define TESTS(X)                                                                       \
+    X(TestTheArchitecturesBurrowClaimsCanWalk)                                         \
+    X(TestThreeFunctionsDeepReportsThreeFunctions)                                     \
+    X(TestSkipTakesOneFrameOffTheFront)                                                \
+    X(TestSkipZeroIsTheFrameForCallersItself)                                          \
+    X(TestAShortBufferGetsAShortAnswer)                                                \
+    X(TestSkippingPastTheBottomOfTheStackIsNotAFault)                                  \
+    X(TestTheInternalWalkAndThePublicOneSeeTheSameStack)                               \
+    X(TestAGoroutineStackWalksToo)                                                     \
+    X(TestAPlainThreadWalksToo)                                                        \
+    X(TestAThreadKnowsWhereItsOwnStackIs)
+
+TESTING_MAIN_BARE(TESTS)

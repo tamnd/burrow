@@ -35,7 +35,7 @@
 #include "burrow/sync/atomic.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -61,7 +61,7 @@ static bool load(SyncMap *m, int64_t k, int64_t *out) {
 
 /* ------------------------------------------------------------ one at a time */
 
-TEST(a_key_that_was_stored_comes_back) {
+static void TestAKeyThatWasStoredComesBack(TestingT *t) {
     SyncMap m = new_map();
 
     int64_t got = -1;
@@ -80,7 +80,7 @@ TEST(a_key_that_was_stored_comes_back) {
     sync_map_free(&m);
 }
 
-TEST(a_second_store_replaces_the_first) {
+static void TestASecondStoreReplacesTheFirst(TestingT *t) {
     SyncMap m = new_map();
 
     CHECK(store(&m, 1, 100));
@@ -93,7 +93,7 @@ TEST(a_second_store_replaces_the_first) {
     sync_map_free(&m);
 }
 
-TEST(swap_hands_back_what_was_there) {
+static void TestSwapHandsBackWhatWasThere(TestingT *t) {
     SyncMap m = new_map();
 
     int64_t prev = -1;
@@ -115,7 +115,7 @@ TEST(swap_hands_back_what_was_there) {
     sync_map_free(&m);
 }
 
-TEST(load_or_store_only_stores_when_the_key_is_missing) {
+static void TestLoadOrStoreOnlyStoresWhenTheKeyIsMissing(TestingT *t) {
     SyncMap m = new_map();
 
     int64_t actual = 0;
@@ -135,7 +135,7 @@ TEST(load_or_store_only_stores_when_the_key_is_missing) {
     sync_map_free(&m);
 }
 
-TEST(compare_and_swap_only_swaps_when_the_value_matches) {
+static void TestCompareAndSwapOnlySwapsWhenTheValueMatches(TestingT *t) {
     SyncMap m = new_map();
 
     bool swapped = true;
@@ -164,7 +164,7 @@ TEST(compare_and_swap_only_swaps_when_the_value_matches) {
     sync_map_free(&m);
 }
 
-TEST(delete_removes_and_hands_the_value_back) {
+static void TestDeleteRemovesAndHandsTheValueBack(TestingT *t) {
     SyncMap m = new_map();
 
     CHECK(store(&m, 1, 100));
@@ -185,7 +185,7 @@ TEST(delete_removes_and_hands_the_value_back) {
     sync_map_free(&m);
 }
 
-TEST(compare_and_delete_only_deletes_when_the_value_matches) {
+static void TestCompareAndDeleteOnlyDeletesWhenTheValueMatches(TestingT *t) {
     SyncMap m = new_map();
 
     CHECK(store(&m, 1, 100));
@@ -203,7 +203,7 @@ TEST(compare_and_delete_only_deletes_when_the_value_matches) {
 
 /* ------------------------------------------------------------- a real trie */
 
-TEST(a_few_thousand_keys_all_come_back) {
+static void TestAFewThousandKeysAllComeBack(TestingT *t) {
     SyncMap m = new_map();
 
     for (int64_t i = 0; i < KEYS; i++)
@@ -273,7 +273,7 @@ static const Type clash_desc = {
     &clash_ops,
 };
 
-TEST(keys_with_the_same_hash_all_fit) {
+static void TestKeysWithTheSameHashAllFit(TestingT *t) {
     const int n = 64;
     SyncMap m = SYNC_MAP(heap_allocator(), &clash_desc, TYPE_INT64);
 
@@ -333,7 +333,7 @@ static bool see(const void *key, const void *val, void *arg) {
     return s->stop_after == 0 || s->n < s->stop_after;
 }
 
-TEST(range_sees_every_key_once) {
+static void TestRangeSeesEveryKeyOnce(TestingT *t) {
     SyncMap m = new_map();
 
     const int64_t n = 200;
@@ -353,7 +353,7 @@ TEST(range_sees_every_key_once) {
     sync_map_free(&m);
 }
 
-TEST(range_stops_when_the_callback_says_so) {
+static void TestRangeStopsWhenTheCallbackSaysSo(TestingT *t) {
     SyncMap m = new_map();
 
     for (int64_t i = 0; i < 200; i++)
@@ -368,7 +368,7 @@ TEST(range_stops_when_the_callback_says_so) {
     sync_map_free(&m);
 }
 
-TEST(range_over_an_untouched_map_does_nothing) {
+static void TestRangeOverAnUntouchedMapDoesNothing(TestingT *t) {
     SyncMap m = new_map();
 
     Seen s = {0, 0, 0, false};
@@ -380,7 +380,7 @@ TEST(range_over_an_untouched_map_does_nothing) {
 
 /* ------------------------------------------------------------------- clear */
 
-TEST(clear_empties_the_map_and_leaves_it_usable) {
+static void TestClearEmptiesTheMapAndLeavesItUsable(TestingT *t) {
     SyncMap m = new_map();
 
     for (int64_t i = 0; i < 500; i++)
@@ -511,7 +511,7 @@ static void stress_main(void *arg) {
         runtime_gosched();
 }
 
-TEST(readers_never_see_a_value_that_was_never_stored) {
+static void TestReadersNeverSeeAValueThatWasNeverStored(TestingT *t) {
     shared = new_map();
     sync_atomic_int64_store(&wrong, 0);
     sync_atomic_int64_store(&refused, 0);
@@ -576,7 +576,7 @@ static void clear_main(void *arg) {
         runtime_gosched();
 }
 
-TEST(a_clear_under_readers_frees_the_old_tree_and_nothing_else) {
+static void TestAClearUnderReadersFreesTheOldTreeAndNothingElse(TestingT *t) {
     shared = new_map();
     sync_atomic_int64_store(&wrong, 0);
     sync_atomic_int64_store(&refused, 0);
@@ -590,22 +590,21 @@ TEST(a_clear_under_readers_frees_the_old_tree_and_nothing_else) {
     sync_map_free(&shared);
 }
 
-int main(void) {
-    RUN(a_key_that_was_stored_comes_back);
-    RUN(a_second_store_replaces_the_first);
-    RUN(swap_hands_back_what_was_there);
-    RUN(load_or_store_only_stores_when_the_key_is_missing);
-    RUN(compare_and_swap_only_swaps_when_the_value_matches);
-    RUN(delete_removes_and_hands_the_value_back);
-    RUN(compare_and_delete_only_deletes_when_the_value_matches);
-    RUN(a_few_thousand_keys_all_come_back);
-    RUN(keys_with_the_same_hash_all_fit);
-    RUN(range_sees_every_key_once);
-    RUN(range_stops_when_the_callback_says_so);
-    RUN(range_over_an_untouched_map_does_nothing);
-    RUN(clear_empties_the_map_and_leaves_it_usable);
-    RUN(readers_never_see_a_value_that_was_never_stored);
-    RUN(a_clear_under_readers_frees_the_old_tree_and_nothing_else);
+#define TESTS(X)                                                                       \
+    X(TestAKeyThatWasStoredComesBack)                                                  \
+    X(TestASecondStoreReplacesTheFirst)                                                \
+    X(TestSwapHandsBackWhatWasThere)                                                   \
+    X(TestLoadOrStoreOnlyStoresWhenTheKeyIsMissing)                                    \
+    X(TestCompareAndSwapOnlySwapsWhenTheValueMatches)                                  \
+    X(TestDeleteRemovesAndHandsTheValueBack)                                           \
+    X(TestCompareAndDeleteOnlyDeletesWhenTheValueMatches)                              \
+    X(TestAFewThousandKeysAllComeBack)                                                 \
+    X(TestKeysWithTheSameHashAllFit)                                                   \
+    X(TestRangeSeesEveryKeyOnce)                                                       \
+    X(TestRangeStopsWhenTheCallbackSaysSo)                                             \
+    X(TestRangeOverAnUntouchedMapDoesNothing)                                          \
+    X(TestClearEmptiesTheMapAndLeavesItUsable)                                         \
+    X(TestReadersNeverSeeAValueThatWasNeverStored)                                     \
+    X(TestAClearUnderReadersFreesTheOldTreeAndNothingElse)
 
-    return harness_report("sync_map");
-}
+TESTING_MAIN_BARE(TESTS)

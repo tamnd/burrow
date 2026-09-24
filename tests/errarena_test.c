@@ -6,7 +6,7 @@
 
 #include "burrow/burrow.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdint.h>
 
@@ -57,7 +57,7 @@ static Error wrap(Alloc *a, const char *text, Error inner) {
 
 /* -------------------------------------------------- without the runtime */
 
-TEST(a_thread_has_an_error_allocator_before_the_runtime_starts) {
+static void TestAThreadHasAnErrorAllocatorBeforeTheRuntimeStarts(TestingT *t) {
     Alloc *a = error_allocator();
     CHECK(a != NULL);
     CHECK(a == error_allocator());
@@ -66,7 +66,7 @@ TEST(a_thread_has_an_error_allocator_before_the_runtime_starts) {
     CHECK(str_eq(error_text(err), BURROW_S("made on a plain thread")));
 }
 
-TEST(releasing_a_mark_gives_the_memory_back) {
+static void TestReleasingAMarkGivesTheMemoryBack(TestingT *t) {
     Alloc *a = error_allocator();
     ArenaMark m = error_mark();
     uint64_t live = mem_stats(a).bytes_live;
@@ -85,13 +85,13 @@ TEST(releasing_a_mark_gives_the_memory_back) {
     error_release(m);
 }
 
-TEST(retaining_a_sentinel_gives_back_the_sentinel) {
+static void TestRetainingASentinelGivesBackTheSentinel(TestingT *t) {
     Error e = error_retain(heap_allocator(), test_err_deep);
     CHECK(e.vt == test_err_deep.vt && e.data == test_err_deep.data);
     CHECK(BURROW_OK(error_retain(heap_allocator(), BURROW_NO_ERROR)));
 }
 
-TEST(retaining_copies_the_text_out_of_the_arena) {
+static void TestRetainingCopiesTheTextOutOfTheArena(TestingT *t) {
     Arena keep;
     arena_init(&keep, NULL, 0);
 
@@ -109,7 +109,7 @@ TEST(retaining_copies_the_text_out_of_the_arena) {
     arena_free(&keep);
 }
 
-TEST(retaining_keeps_errors_is_through_a_chain_and_a_join) {
+static void TestRetainingKeepsErrorsIsThroughAChainAndAJoin(TestingT *t) {
     Arena keep;
     arena_init(&keep, NULL, 0);
     Alloc *ea = error_allocator();
@@ -136,7 +136,7 @@ TEST(retaining_keeps_errors_is_through_a_chain_and_a_join) {
 /* Static so that the longjmp out of the panic cannot clobber them. */
 static Error caught, kept;
 
-TEST(retaining_a_runtime_error_keeps_its_type) {
+static void TestRetainingARuntimeErrorKeepsItsType(TestingT *t) {
     volatile Int zero = 0;
 
     BURROW_TRY {
@@ -189,7 +189,7 @@ static void goroutine_body(void *arg) {
     sync_wait_group_wait(&wg);
 }
 
-TEST(each_goroutine_has_its_own_arena_and_a_retained_error_outlives_it) {
+static void TestEachGoroutineHasItsOwnArenaAndARetainedErrorOutlivesIt(TestingT *t) {
     Alloc *thread = error_allocator();
 
     runtime_main(BURROW_FN(Func, goroutine_body, NULL));
@@ -204,13 +204,13 @@ TEST(each_goroutine_has_its_own_arena_and_a_retained_error_outlives_it) {
     arena_free(&parent_keep);
 }
 
-int main(void) {
-    RUN(a_thread_has_an_error_allocator_before_the_runtime_starts);
-    RUN(releasing_a_mark_gives_the_memory_back);
-    RUN(retaining_a_sentinel_gives_back_the_sentinel);
-    RUN(retaining_copies_the_text_out_of_the_arena);
-    RUN(retaining_keeps_errors_is_through_a_chain_and_a_join);
-    RUN(retaining_a_runtime_error_keeps_its_type);
-    RUN(each_goroutine_has_its_own_arena_and_a_retained_error_outlives_it);
-    return harness_report("errarena");
-}
+#define TESTS(X)                                                                       \
+    X(TestAThreadHasAnErrorAllocatorBeforeTheRuntimeStarts)                            \
+    X(TestReleasingAMarkGivesTheMemoryBack)                                            \
+    X(TestRetainingASentinelGivesBackTheSentinel)                                      \
+    X(TestRetainingCopiesTheTextOutOfTheArena)                                         \
+    X(TestRetainingKeepsErrorsIsThroughAChainAndAJoin)                                 \
+    X(TestRetainingARuntimeErrorKeepsItsType)                                          \
+    X(TestEachGoroutineHasItsOwnArenaAndARetainedErrorOutlivesIt)
+
+TESTING_MAIN_BARE(TESTS)

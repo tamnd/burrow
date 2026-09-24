@@ -35,7 +35,7 @@
 #include "burrow/thread.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -129,7 +129,7 @@ static void give(SyncPool *p, Item *it) {
 /* ------------------------------------------------------- the plain behaviour
  */
 
-TEST(a_get_from_an_empty_pool_calls_new) {
+static void TestAGetFromAnEmptyPoolCallsNew(TestingT *t) {
     reset_counts();
     SyncPool p = new_pool();
 
@@ -142,7 +142,7 @@ TEST(a_get_from_an_empty_pool_calls_new) {
     CHECK_INT_EQ(sync_atomic_int64_load(&freed), 1);
 }
 
-TEST(a_get_from_an_empty_pool_with_no_new_returns_nothing) {
+static void TestAGetFromAnEmptyPoolWithNoNewReturnsNothing(TestingT *t) {
     SyncPoolNewFunc no_new = {NULL, NULL};
     SyncPoolFreeFunc no_free = {NULL, NULL};
     SyncPool p = SYNC_POOL(heap_allocator(), no_new, no_free);
@@ -153,7 +153,7 @@ TEST(a_get_from_an_empty_pool_with_no_new_returns_nothing) {
     sync_pool_free(&p);
 }
 
-TEST(what_went_in_comes_back_out) {
+static void TestWhatWentInComesBackOut(TestingT *t) {
     reset_counts();
     SyncPool p = new_pool();
 
@@ -171,7 +171,7 @@ TEST(what_went_in_comes_back_out) {
     sync_pool_free(&p);
 }
 
-TEST(putting_nothing_back_is_ignored) {
+static void TestPuttingNothingBackIsIgnored(TestingT *t) {
     reset_counts();
     SyncPool p = new_pool();
 
@@ -191,7 +191,7 @@ TEST(putting_nothing_back_is_ignored) {
  * one more, so anything past nine is a second ring. */
 #define MANY 200
 
-TEST(more_than_one_ring_holds_all_come_back) {
+static void TestMoreThanOneRingHoldsAllComeBack(TestingT *t) {
     reset_counts();
     SyncPool p = new_pool();
 
@@ -226,7 +226,7 @@ TEST(more_than_one_ring_holds_all_come_back) {
     CHECK_INT_EQ(sync_atomic_int64_load(&lost), 0);
 }
 
-TEST(free_hands_everything_back_and_leaves_the_pool_usable) {
+static void TestFreeHandsEverythingBackAndLeavesThePoolUsable(TestingT *t) {
     reset_counts();
     SyncPool p = new_pool();
 
@@ -248,7 +248,7 @@ TEST(free_hands_everything_back_and_leaves_the_pool_usable) {
     CHECK_INT_EQ(sync_atomic_int64_load(&freed), 17);
 }
 
-TEST(free_on_a_pool_nobody_used_does_nothing) {
+static void TestFreeOnAPoolNobodyUsedDoesNothing(TestingT *t) {
     reset_counts();
     SyncPool p = new_pool();
 
@@ -263,7 +263,7 @@ TEST(free_on_a_pool_nobody_used_does_nothing) {
  * sweep and not two. The objects go into the chains rather than the private
  * slot, so more than one of them goes in, and the chains are what a sweep
  * empties. */
-TEST(one_sweep_keeps_what_was_put_and_two_do_not) {
+static void TestOneSweepKeepsWhatWasPutAndTwoDoNot(TestingT *t) {
     reset_counts();
     SyncPool p = new_pool();
 
@@ -293,7 +293,7 @@ TEST(one_sweep_keeps_what_was_put_and_two_do_not) {
     CHECK_INT_EQ(sync_atomic_int64_load(&lost), 0);
 }
 
-TEST(a_sweep_leaves_the_pool_usable) {
+static void TestASweepLeavesThePoolUsable(TestingT *t) {
     reset_counts();
     SyncPool p = new_pool();
 
@@ -314,7 +314,7 @@ TEST(a_sweep_leaves_the_pool_usable) {
     CHECK_INT_EQ(sync_atomic_int64_load(&lost), 0);
 }
 
-TEST(a_sweep_with_no_pools_at_all_is_harmless) {
+static void TestASweepWithNoPoolsAtAllIsHarmless(TestingT *t) {
     burrow__pool_sweep();
     CHECK(true);
 }
@@ -396,7 +396,7 @@ static void load_main(void *arg) {
         runtime_gosched();
 }
 
-TEST(many_goroutines_and_a_sweeper_never_share_an_object) {
+static void TestManyGoroutinesAndASweeperNeverShareAnObject(TestingT *t) {
     reset_counts();
     shared = new_pool();
     sync_atomic_uint32_store(&stop, 0);
@@ -464,7 +464,7 @@ static void steal_main(void *arg) {
         runtime_gosched();
 }
 
-TEST(a_goroutine_takes_what_another_one_left) {
+static void TestAGoroutineTakesWhatAnotherOneLeft(TestingT *t) {
     reset_counts();
     shared = new_pool();
     sync_atomic_int64_store(&taken, 0);
@@ -495,18 +495,18 @@ static void foreign(void *arg) {
     }
 }
 
-TEST(a_thread_that_is_not_a_goroutine_can_use_a_pool) {
+static void TestAThreadThatIsNotAGoroutineCanUseAPool(TestingT *t) {
     reset_counts();
     SyncPool p = new_pool();
 
-    burrow__Thread t[3];
+    burrow__Thread th[3];
     int started = 0;
     for (int i = 0; i < 3; i++) {
-        if (burrow__thread_start(&t[i], foreign, &p, 0))
+        if (burrow__thread_start(&th[i], foreign, &p, 0))
             started++;
     }
     for (int i = 0; i < started; i++)
-        burrow__thread_join(&t[i]);
+        burrow__thread_join(&th[i]);
 
     CHECK_INT_EQ(started, 3);
     CHECK_INT_EQ(sync_atomic_int64_load(&doubled), 0);
@@ -516,20 +516,19 @@ TEST(a_thread_that_is_not_a_goroutine_can_use_a_pool) {
     CHECK_INT_EQ(sync_atomic_int64_load(&freed), sync_atomic_int64_load(&made));
 }
 
-int main(void) {
-    RUN(a_get_from_an_empty_pool_calls_new);
-    RUN(a_get_from_an_empty_pool_with_no_new_returns_nothing);
-    RUN(what_went_in_comes_back_out);
-    RUN(putting_nothing_back_is_ignored);
-    RUN(more_than_one_ring_holds_all_come_back);
-    RUN(free_hands_everything_back_and_leaves_the_pool_usable);
-    RUN(free_on_a_pool_nobody_used_does_nothing);
-    RUN(one_sweep_keeps_what_was_put_and_two_do_not);
-    RUN(a_sweep_leaves_the_pool_usable);
-    RUN(a_sweep_with_no_pools_at_all_is_harmless);
-    RUN(many_goroutines_and_a_sweeper_never_share_an_object);
-    RUN(a_goroutine_takes_what_another_one_left);
-    RUN(a_thread_that_is_not_a_goroutine_can_use_a_pool);
+#define TESTS(X)                                                                       \
+    X(TestAGetFromAnEmptyPoolCallsNew)                                                 \
+    X(TestAGetFromAnEmptyPoolWithNoNewReturnsNothing)                                  \
+    X(TestWhatWentInComesBackOut)                                                      \
+    X(TestPuttingNothingBackIsIgnored)                                                 \
+    X(TestMoreThanOneRingHoldsAllComeBack)                                             \
+    X(TestFreeHandsEverythingBackAndLeavesThePoolUsable)                               \
+    X(TestFreeOnAPoolNobodyUsedDoesNothing)                                            \
+    X(TestOneSweepKeepsWhatWasPutAndTwoDoNot)                                          \
+    X(TestASweepLeavesThePoolUsable)                                                   \
+    X(TestASweepWithNoPoolsAtAllIsHarmless)                                            \
+    X(TestManyGoroutinesAndASweeperNeverShareAnObject)                                 \
+    X(TestAGoroutineTakesWhatAnotherOneLeft)                                           \
+    X(TestAThreadThatIsNotAGoroutineCanUseAPool)
 
-    return harness_report("sync_pool");
-}
+TESTING_MAIN_BARE(TESTS)

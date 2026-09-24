@@ -31,7 +31,7 @@
 #include "burrow/sched.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -55,11 +55,21 @@ static size_t traced;
 static char caught[64];
 static int catches;
 
+/* What the testing package has open around the test on the thread it runs on,
+ * which is where that thread's chains have to be back to when it is over. A
+ * goroutine starts with nothing, so for one of those it is nothing. */
+static burrow__DeferScope *outer_scopes;
+static burrow__Recover *outer_recovers;
+
 static void reset(void) {
     memset(trace, 0, sizeof(trace));
     traced = 0;
     memset(caught, 0, sizeof(caught));
     catches = 0;
+    if (burrow__curg() == NULL) {
+        outer_scopes = *burrow__defer_chain();
+        outer_recovers = burrow__panic_state()->recovers;
+    }
 }
 
 static void mark(void *env) {
@@ -82,19 +92,21 @@ static void record(Any p) {
     catches++;
 }
 
-/* Nothing on either chain and no panic in flight, which is what every one of
- * these tests should be able to say about itself when it is over. */
-static void check_clean(void) {
+/* Nothing on either chain but what was there before, and no panic in flight,
+ * which is what every one of these tests should be able to say about itself
+ * when it is over. */
+static void check_clean(TestingT *t) {
     burrow__PanicState *st = burrow__panic_state();
+    bool on_g = burrow__curg() != NULL;
 
-    CHECK(*burrow__defer_chain() == NULL);
-    CHECK(st->recovers == NULL);
+    CHECK(*burrow__defer_chain() == (on_g ? NULL : outer_scopes));
+    CHECK(st->recovers == (on_g ? NULL : outer_recovers));
     CHECK(st->panics == NULL);
 }
 
 /* ------------------------------------------------------------ the block */
 
-TEST(a_block_that_does_not_panic_never_reaches_the_catch) {
+static void TestABlockThatDoesNotPanicNeverReachesTheCatch(TestingT *t) {
     reset();
 
     BURROW_TRY {
@@ -107,10 +119,10 @@ TEST(a_block_that_does_not_panic_never_reaches_the_catch) {
 
     CHECK_STR_EQ(trace, "a");
     CHECK_INT_EQ(catches, 0);
-    check_clean();
+    check_clean(t);
 }
 
-TEST(a_panic_lands_in_the_catch_block) {
+static void TestAPanicLandsInTheCatchBlock(TestingT *t) {
     reset();
 
     BURROW_TRY {
@@ -123,10 +135,10 @@ TEST(a_panic_lands_in_the_catch_block) {
 
     CHECK_INT_EQ(catches, 1);
     CHECK_STR_EQ(caught, "boom");
-    check_clean();
+    check_clean(t);
 }
 
-TEST(the_deferred_calls_run_on_the_way_out) {
+static void TestTheDeferredCallsRunOnTheWayOut(TestingT *t) {
     reset();
 
     BURROW_TRY {
@@ -147,10 +159,10 @@ TEST(the_deferred_calls_run_on_the_way_out) {
     BURROW_TRY_END;
 
     CHECK_INT_EQ(catches, 1);
-    check_clean();
+    check_clean(t);
 }
 
-TEST(the_innermost_scope_runs_its_calls_first) {
+static void TestTheInnermostScopeRunsItsCallsFirst(TestingT *t) {
     reset();
 
     BURROW_TRY {
@@ -170,10 +182,10 @@ TEST(the_innermost_scope_runs_its_calls_first) {
     BURROW_TRY_END;
 
     CHECK_STR_EQ(trace, "ba");
-    check_clean();
+    check_clean(t);
 }
 
-TEST(a_scope_outside_the_try_keeps_its_calls_for_later) {
+static void TestAScopeOutsideTheTryKeepsItsCallsForLater(TestingT *t) {
     reset();
 
     BURROW_SCOPE {
@@ -199,7 +211,7 @@ TEST(a_scope_outside_the_try_keeps_its_calls_for_later) {
     BURROW_SCOPE_END;
 
     CHECK_STR_EQ(trace, "io");
-    check_clean();
+    check_clean(t);
 }
 
 /* ------------------------------------------------------------- the value */
@@ -210,7 +222,7 @@ static void panics_with_an_int(void) {
     panic(BURROW_ANY(TYPE_INT, &n));
 }
 
-TEST(the_value_outlives_the_frame_it_was_made_in) {
+static void TestTheValueOutlivesTheFrameItWasMadeIn(TestingT *t) {
     reset();
 
     BURROW_TRY {
@@ -224,10 +236,10 @@ TEST(the_value_outlives_the_frame_it_was_made_in) {
     BURROW_TRY_END;
 
     CHECK_STR_EQ(caught, "42");
-    check_clean();
+    check_clean(t);
 }
 
-TEST(panicking_with_nothing_still_gives_the_catch_block_something) {
+static void TestPanickingWithNothingStillGivesTheCatchBlockSomething(TestingT *t) {
     reset();
 
     BURROW_TRY {
@@ -242,7 +254,7 @@ TEST(panicking_with_nothing_still_gives_the_catch_block_something) {
     BURROW_TRY_END;
 
     CHECK_STR_EQ(caught, "panic called with nil argument");
-    check_clean();
+    check_clean(t);
 }
 
 BURROW_SENTINEL_ERROR(a_test_error, "a test error");
@@ -254,7 +266,7 @@ static bool text_is(Any v, const char *want) {
     return s.len == (Int)n && (n == 0 || memcmp(s.p, want, n) == 0);
 }
 
-TEST(panic_text_reads_the_kinds_it_knows) {
+static void TestPanicTextReadsTheKindsItKnows(TestingT *t) {
     Str s = BURROW_S("some text");
     Error e = a_test_error;
     Int i = -7;
@@ -281,7 +293,7 @@ static void note_whether_a_panic_is_running(void *env) {
     mark((void *)(size_t)(BURROW_ANY_IS_NIL(v) ? 'n' : 'p'));
 }
 
-TEST(a_deferred_call_can_ask_whether_it_is_running_because_of_a_panic) {
+static void TestADeferredCallCanAskWhetherItIsRunningBecauseOfAPanic(TestingT *t) {
     reset();
 
     BURROW_SCOPE {
@@ -309,7 +321,7 @@ TEST(a_deferred_call_can_ask_whether_it_is_running_because_of_a_panic) {
 
     /* And nothing is unwinding once the catch block has it. */
     CHECK(BURROW_ANY_IS_NIL(panic_value()));
-    check_clean();
+    check_clean(t);
 }
 
 static void panics_again(void *env) {
@@ -318,7 +330,7 @@ static void panics_again(void *env) {
     panic_str(BURROW_S("second"));
 }
 
-TEST(a_panic_from_a_deferred_call_replaces_the_one_that_was_unwinding) {
+static void TestAPanicFromADeferredCallReplacesTheOneThatWasUnwinding(TestingT *t) {
     reset();
 
     BURROW_TRY {
@@ -339,12 +351,12 @@ TEST(a_panic_from_a_deferred_call_replaces_the_one_that_was_unwinding) {
      * ran, which is also Go's rule. */
     CHECK_STR_EQ(caught, "second");
     CHECK_STR_EQ(trace, "a");
-    check_clean();
+    check_clean(t);
 }
 
 /* -------------------------------------------------------- blocks in blocks */
 
-TEST(the_innermost_block_catches) {
+static void TestTheInnermostBlockCatches(TestingT *t) {
     reset();
 
     BURROW_TRY {
@@ -369,10 +381,10 @@ TEST(the_innermost_block_catches) {
     /* The block carried on where it left off rather than ending with the panic
      * it caught. */
     CHECK_STR_EQ(trace, "a");
-    check_clean();
+    check_clean(t);
 }
 
-TEST(a_panic_from_a_catch_block_goes_outward) {
+static void TestAPanicFromACatchBlockGoesOutward(TestingT *t) {
     reset();
 
     BURROW_TRY {
@@ -392,7 +404,7 @@ TEST(a_panic_from_a_catch_block_goes_outward) {
 
     CHECK_INT_EQ(catches, 2);
     CHECK_STR_EQ(caught, "second");
-    check_clean();
+    check_clean(t);
 }
 
 /* The same thing again, with the blocks in frames of their own.
@@ -425,7 +437,7 @@ static void middle(void) {
     BURROW_TRY_END;
 }
 
-TEST(a_panic_from_a_catch_block_in_a_called_function_goes_outward) {
+static void TestAPanicFromACatchBlockInACalledFunctionGoesOutward(TestingT *t) {
     reset();
 
     BURROW_TRY {
@@ -441,7 +453,7 @@ TEST(a_panic_from_a_catch_block_in_a_called_function_goes_outward) {
      * up here as the wrong count or the wrong text. */
     CHECK_INT_EQ(catches, 3);
     CHECK_STR_EQ(caught, "third");
-    check_clean();
+    check_clean(t);
 }
 
 static void returns_from_inside_a_try(void) {
@@ -454,11 +466,11 @@ static void returns_from_inside_a_try(void) {
     BURROW_TRY_END;
 }
 
-TEST(a_return_out_of_a_try_block_leaves_nothing_behind) {
+static void TestAReturnOutOfATryBlockLeavesNothingBehind(TestingT *t) {
     reset();
 
     returns_from_inside_a_try();
-    check_clean();
+    check_clean(t);
 
     /* The real check is that the next panic finds the block it should rather
      * than the one that has gone home. */
@@ -472,7 +484,7 @@ TEST(a_return_out_of_a_try_block_leaves_nothing_behind) {
 
     CHECK_INT_EQ(catches, 1);
     CHECK_STR_EQ(caught, "after");
-    check_clean();
+    check_clean(t);
 }
 
 /* ------------------------------------------------------------ goroutines */
@@ -524,7 +536,7 @@ static void main_with_a_panicking_goroutine(void *env) {
     BURROW_TRY_END;
 }
 
-TEST(a_panic_stays_on_the_goroutine_that_raised_it) {
+static void TestAPanicStaysOnTheGoroutineThatRaisedIt(TestingT *t) {
     reset();
     done = chan_make(heap_allocator(), TYPE_INT, 0);
     runtime_gomaxprocs(1);
@@ -536,7 +548,7 @@ TEST(a_panic_stays_on_the_goroutine_that_raised_it) {
     CHECK_INT_EQ(catches, 1);
     CHECK_STR_EQ(caught, "child");
     CHECK_STR_EQ(trace, "cm");
-    check_clean();
+    check_clean(t);
 }
 
 static void parks_inside_a_try(void *env) {
@@ -570,7 +582,7 @@ static void main_that_hands_over(void *env) {
     wait_for_done();
 }
 
-TEST(a_goroutine_that_parks_inside_a_block_still_has_it_afterwards) {
+static void TestAGoroutineThatParksInsideABlockStillHasItAfterwards(TestingT *t) {
     reset();
     done = chan_make(heap_allocator(), TYPE_INT, 0);
     handoff = chan_make(heap_allocator(), TYPE_INT, 0);
@@ -589,29 +601,25 @@ TEST(a_goroutine_that_parks_inside_a_block_still_has_it_afterwards) {
     CHECK_INT_EQ(catches, 1);
     CHECK_STR_EQ(caught, "woke up");
     CHECK_STR_EQ(trace, "c");
-    check_clean();
+    check_clean(t);
 }
 
-int main(void) {
-    RUN(a_block_that_does_not_panic_never_reaches_the_catch);
-    RUN(a_panic_lands_in_the_catch_block);
-    RUN(the_deferred_calls_run_on_the_way_out);
-    RUN(the_innermost_scope_runs_its_calls_first);
-    RUN(a_scope_outside_the_try_keeps_its_calls_for_later);
+#define TESTS(X)                                                                       \
+    X(TestABlockThatDoesNotPanicNeverReachesTheCatch)                                  \
+    X(TestAPanicLandsInTheCatchBlock)                                                  \
+    X(TestTheDeferredCallsRunOnTheWayOut)                                              \
+    X(TestTheInnermostScopeRunsItsCallsFirst)                                          \
+    X(TestAScopeOutsideTheTryKeepsItsCallsForLater)                                    \
+    X(TestTheValueOutlivesTheFrameItWasMadeIn)                                         \
+    X(TestPanickingWithNothingStillGivesTheCatchBlockSomething)                        \
+    X(TestPanicTextReadsTheKindsItKnows)                                               \
+    X(TestADeferredCallCanAskWhetherItIsRunningBecauseOfAPanic)                        \
+    X(TestAPanicFromADeferredCallReplacesTheOneThatWasUnwinding)                       \
+    X(TestTheInnermostBlockCatches)                                                    \
+    X(TestAPanicFromACatchBlockGoesOutward)                                            \
+    X(TestAPanicFromACatchBlockInACalledFunctionGoesOutward)                           \
+    X(TestAReturnOutOfATryBlockLeavesNothingBehind)                                    \
+    X(TestAPanicStaysOnTheGoroutineThatRaisedIt)                                       \
+    X(TestAGoroutineThatParksInsideABlockStillHasItAfterwards)
 
-    RUN(the_value_outlives_the_frame_it_was_made_in);
-    RUN(panicking_with_nothing_still_gives_the_catch_block_something);
-    RUN(panic_text_reads_the_kinds_it_knows);
-
-    RUN(a_deferred_call_can_ask_whether_it_is_running_because_of_a_panic);
-    RUN(a_panic_from_a_deferred_call_replaces_the_one_that_was_unwinding);
-
-    RUN(the_innermost_block_catches);
-    RUN(a_panic_from_a_catch_block_goes_outward);
-    RUN(a_panic_from_a_catch_block_in_a_called_function_goes_outward);
-    RUN(a_return_out_of_a_try_block_leaves_nothing_behind);
-
-    RUN(a_panic_stays_on_the_goroutine_that_raised_it);
-    RUN(a_goroutine_that_parks_inside_a_block_still_has_it_afterwards);
-    return harness_report("panic");
-}
+TESTING_MAIN_BARE(TESTS)

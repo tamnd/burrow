@@ -35,7 +35,7 @@
 #include "burrow/slice.h"
 #include "burrow/symtab.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -60,7 +60,7 @@ static bool have_walk(void) {
 
 /* ------------------------------------------------------------- FuncForPC */
 
-TEST(a_library_function_knows_its_own_name) {
+static void TestALibraryFunctionKnowsItsOwnName(TestingT *t) {
     RuntimeFunc fn;
 
     if (!have_table())
@@ -71,7 +71,7 @@ TEST(a_library_function_knows_its_own_name) {
     CHECK(fn.entry == (Uintptr)runtime_callers);
 }
 
-TEST(an_address_inside_a_function_gets_the_same_name) {
+static void TestAnAddressInsideAFunctionGetsTheSameName(TestingT *t) {
     RuntimeFunc at;
     RuntimeFunc inside;
 
@@ -84,7 +84,7 @@ TEST(an_address_inside_a_function_gets_the_same_name) {
     CHECK(at.entry == inside.entry);
 }
 
-TEST(an_address_that_is_nobodys_gets_nothing) {
+static void TestAnAddressThatIsNobodysGetsNothing(TestingT *t) {
     RuntimeFunc fn;
 
     /* Zero is never a function and the top of the address space is never inside
@@ -98,7 +98,7 @@ TEST(an_address_that_is_nobodys_gets_nothing) {
     CHECK(fn.entry == 0);
 }
 
-TEST(func_for_pc_survives_a_null_answer) {
+static void TestFuncForPcSurvivesANullAnswer(TestingT *t) {
     CHECK(!runtime_func_for_pc((Uintptr)runtime_callers, NULL));
 }
 
@@ -127,7 +127,7 @@ BURROW_NOINLINE static void ask_both_ways(Uintptr *by_callers, Uintptr *by_calle
     (void)runtime_caller(1, by_caller, NULL, NULL);
 }
 
-TEST(caller_and_callers_are_one_apart_in_exactly_the_documented_way) {
+static void TestCallerAndCallersAreOneApartInExactlyTheDocumentedWay(TestingT *t) {
     Uintptr by_callers = 0;
     Uintptr by_caller = 0;
 
@@ -140,7 +140,7 @@ TEST(caller_and_callers_are_one_apart_in_exactly_the_documented_way) {
     CHECK(by_caller == by_callers);
 }
 
-TEST(caller_leaves_file_and_line_alone_for_now) {
+static void TestCallerLeavesFileAndLineAloneForNow(TestingT *t) {
     Uintptr pc = 0;
     Str file = BURROW_S_INIT("untouched");
     Int line = -1;
@@ -156,21 +156,21 @@ TEST(caller_leaves_file_and_line_alone_for_now) {
     CHECK_INT_EQ(line, 0);
 }
 
-TEST(caller_takes_null_for_anything_it_is_not_asked_for) {
+static void TestCallerTakesNullForAnythingItIsNotAskedFor(TestingT *t) {
     /* All three outputs dropped is a legal way to ask whether a frame exists. */
     if (!runtime_caller(0, NULL, NULL, NULL))
         return;
     CHECK(true);
 }
 
-TEST(skipping_past_the_bottom_is_false_rather_than_a_fault) {
+static void TestSkippingPastTheBottomIsFalseRatherThanAFault(TestingT *t) {
     Uintptr pc = 12345;
 
     CHECK(!runtime_caller(1 << 20, &pc, NULL, NULL));
     CHECK(pc == 12345); /* an output left alone is left alone */
 }
 
-TEST(a_negative_skip_is_treated_as_none) {
+static void TestANegativeSkipIsTreatedAsNone(TestingT *t) {
     Uintptr negative = 0;
     Uintptr zero = 0;
 
@@ -186,7 +186,7 @@ TEST(a_negative_skip_is_treated_as_none) {
 
 /* --------------------------------------------------------- CallersFrames */
 
-TEST(every_address_put_in_comes_back_as_a_frame) {
+static void TestEveryAddressPutInComesBackAsAFrame(TestingT *t) {
     Uintptr buf[16];
     Slice s = {buf, 16, 16, NULL};
     Int n = runtime_callers(0, s);
@@ -204,7 +204,7 @@ TEST(every_address_put_in_comes_back_as_a_frame) {
     CHECK_INT_EQ(seen, n);
 }
 
-TEST(the_first_frame_is_the_walk_itself) {
+static void TestTheFirstFrameIsTheWalkItself(TestingT *t) {
     Uintptr buf[16];
     Slice s = {buf, 16, 16, NULL};
     Int n = runtime_callers(0, s);
@@ -229,7 +229,7 @@ TEST(the_first_frame_is_the_walk_itself) {
     CHECK(f.pc != f.entry);
 }
 
-TEST(a_frame_with_no_name_is_still_a_frame) {
+static void TestAFrameWithNoNameIsStillAFrame(TestingT *t) {
     Uintptr buf[2] = {0, 0};
     Slice s = {buf, 2, 2, NULL};
     RuntimeFrames it = runtime_callers_frames(s);
@@ -244,7 +244,7 @@ TEST(a_frame_with_no_name_is_still_a_frame) {
     CHECK_INT_EQ(seen, 2);
 }
 
-TEST(an_empty_slice_gives_no_frames) {
+static void TestAnEmptySliceGivesNoFrames(TestingT *t) {
     Slice none = {NULL, 0, 0, NULL};
     RuntimeFrames it = runtime_callers_frames(none);
     RuntimeFrame f;
@@ -256,7 +256,7 @@ TEST(an_empty_slice_gives_no_frames) {
     CHECK_INT_EQ(f.line, 0);
 }
 
-TEST(frames_next_survives_a_null_of_either_kind) {
+static void TestFramesNextSurvivesANullOfEitherKind(TestingT *t) {
     Uintptr buf[1] = {0};
     Slice s = {buf, 1, 1, NULL};
     RuntimeFrames it = runtime_callers_frames(s);
@@ -279,7 +279,7 @@ static Slice whole_buf(void) {
     return s;
 }
 
-TEST(a_stack_starts_with_a_header_and_has_frames_under_it) {
+static void TestAStackStartsWithAHeaderAndHasFramesUnderIt(TestingT *t) {
     Slice s = whole_buf();
     Int n;
 
@@ -302,7 +302,7 @@ TEST(a_stack_starts_with_a_header_and_has_frames_under_it) {
         CHECK(n == 18);
 }
 
-TEST(a_stack_names_the_function_that_asked_for_it) {
+static void TestAStackNamesTheFunctionThatAskedForIt(TestingT *t) {
     Slice s = whole_buf();
     Int n;
 
@@ -313,8 +313,8 @@ TEST(a_stack_names_the_function_that_asked_for_it) {
     n = runtime_stack(s, false);
     CHECK(n > 0);
 
-    /* harness_report is in the test binary and not in the table, and so is this
-     * function, so the names in here belong to whatever called into the library
+    /* The testing package's runner is in the library, but this function is a
+     * static in the test binary and not in the table, so the names in here belong to whatever called into the library
      * further down. On a walk that works there is always at least one, because
      * main is reached through the C runtime and the C runtime is not burrow's
      * either. What can be checked without naming a frame is that nothing in the
@@ -322,7 +322,7 @@ TEST(a_stack_names_the_function_that_asked_for_it) {
     CHECK(stack_buf[n - 1] == '\n');
 }
 
-TEST(a_buffer_too_small_for_a_line_gets_nothing_rather_than_half_of_one) {
+static void TestABufferTooSmallForALineGetsNothingRatherThanHalfOfOne(TestingT *t) {
     Byte small[9000];
     Slice s;
     Int n;
@@ -344,7 +344,7 @@ TEST(a_buffer_too_small_for_a_line_gets_nothing_rather_than_half_of_one) {
     CHECK(small[5] == 0xAB);
 }
 
-TEST(a_buffer_that_fits_the_header_and_not_the_frames_gets_the_header) {
+static void TestABufferThatFitsTheHeaderAndNotTheFramesGetsTheHeader(TestingT *t) {
     Byte medium[64];
     Slice s = {medium, 24, 24, NULL};
     Int n;
@@ -357,7 +357,7 @@ TEST(a_buffer_that_fits_the_header_and_not_the_frames_gets_the_header) {
     CHECK(medium[24] == 0xCD);
 }
 
-TEST(no_buffer_at_all_is_not_a_fault) {
+static void TestNoBufferAtAllIsNotAFault(TestingT *t) {
     Slice none = {NULL, 0, 0, NULL};
     Slice empty = {stack_buf, 0, 0, NULL};
 
@@ -380,7 +380,7 @@ static void all_child(void *env) {
 }
 
 static void all_body(void *env) {
-    (void)env;
+    TestingT *t = env;
 
     CHECK(go(BURROW_FN(Func, all_child, NULL)));
 
@@ -408,13 +408,13 @@ static int count_in_stack(Int n, const char *needle) {
     return found;
 }
 
-TEST(all_goroutines_lists_the_others_by_number) {
+static void TestAllGoroutinesListsTheOthersByNumber(TestingT *t) {
     all_child_up = 0;
     all_child_go = 0;
     all_n = 0;
 
     (void)runtime_gomaxprocs(2);
-    runtime_main(BURROW_FN(Func, all_body, NULL));
+    runtime_main(BURROW_FN(Func, all_body, t));
 
     CHECK(all_n > 0);
 
@@ -429,7 +429,7 @@ TEST(all_goroutines_lists_the_others_by_number) {
     CHECK(count_in_stack(all_n, "[running]:") >= 1);
 }
 
-TEST(one_goroutine_is_the_default_and_leaves_the_others_out) {
+static void TestOneGoroutineIsTheDefaultAndLeavesTheOthersOut(TestingT *t) {
     Slice s = whole_buf();
     Int n;
 
@@ -440,27 +440,27 @@ TEST(one_goroutine_is_the_default_and_leaves_the_others_out) {
     CHECK_INT_EQ(count_in_stack(n, "stack not walked"), 0);
 }
 
-int main(void) {
-    RUN(a_library_function_knows_its_own_name);
-    RUN(an_address_inside_a_function_gets_the_same_name);
-    RUN(an_address_that_is_nobodys_gets_nothing);
-    RUN(func_for_pc_survives_a_null_answer);
-    RUN(caller_and_callers_are_one_apart_in_exactly_the_documented_way);
-    RUN(caller_leaves_file_and_line_alone_for_now);
-    RUN(caller_takes_null_for_anything_it_is_not_asked_for);
-    RUN(skipping_past_the_bottom_is_false_rather_than_a_fault);
-    RUN(a_negative_skip_is_treated_as_none);
-    RUN(every_address_put_in_comes_back_as_a_frame);
-    RUN(the_first_frame_is_the_walk_itself);
-    RUN(a_frame_with_no_name_is_still_a_frame);
-    RUN(an_empty_slice_gives_no_frames);
-    RUN(frames_next_survives_a_null_of_either_kind);
-    RUN(a_stack_starts_with_a_header_and_has_frames_under_it);
-    RUN(a_stack_names_the_function_that_asked_for_it);
-    RUN(a_buffer_too_small_for_a_line_gets_nothing_rather_than_half_of_one);
-    RUN(a_buffer_that_fits_the_header_and_not_the_frames_gets_the_header);
-    RUN(no_buffer_at_all_is_not_a_fault);
-    RUN(one_goroutine_is_the_default_and_leaves_the_others_out);
-    RUN(all_goroutines_lists_the_others_by_number);
-    return harness_report("frames");
-}
+#define TESTS(X)                                                                       \
+    X(TestALibraryFunctionKnowsItsOwnName)                                             \
+    X(TestAnAddressInsideAFunctionGetsTheSameName)                                     \
+    X(TestAnAddressThatIsNobodysGetsNothing)                                           \
+    X(TestFuncForPcSurvivesANullAnswer)                                                \
+    X(TestCallerAndCallersAreOneApartInExactlyTheDocumentedWay)                        \
+    X(TestCallerLeavesFileAndLineAloneForNow)                                          \
+    X(TestCallerTakesNullForAnythingItIsNotAskedFor)                                   \
+    X(TestSkippingPastTheBottomIsFalseRatherThanAFault)                                \
+    X(TestANegativeSkipIsTreatedAsNone)                                                \
+    X(TestEveryAddressPutInComesBackAsAFrame)                                          \
+    X(TestTheFirstFrameIsTheWalkItself)                                                \
+    X(TestAFrameWithNoNameIsStillAFrame)                                               \
+    X(TestAnEmptySliceGivesNoFrames)                                                   \
+    X(TestFramesNextSurvivesANullOfEitherKind)                                         \
+    X(TestAStackStartsWithAHeaderAndHasFramesUnderIt)                                  \
+    X(TestAStackNamesTheFunctionThatAskedForIt)                                        \
+    X(TestABufferTooSmallForALineGetsNothingRatherThanHalfOfOne)                       \
+    X(TestABufferThatFitsTheHeaderAndNotTheFramesGetsTheHeader)                        \
+    X(TestNoBufferAtAllIsNotAFault)                                                    \
+    X(TestOneGoroutineIsTheDefaultAndLeavesTheOthersOut)                               \
+    X(TestAllGoroutinesListsTheOthersByNumber)
+
+TESTING_MAIN_BARE(TESTS)

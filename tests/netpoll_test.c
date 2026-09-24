@@ -29,18 +29,19 @@
 
 #if !defined(BURROW_NETPOLL_READINESS) || defined(BURROW_NETPOLL_NONE)
 
-/* Not harness.h, because everything in it is static and a build with
- * -Wunused-function counts a harness nothing calls as a mistake. */
-#include <stdio.h>
+#include "burrow/testing.h"
 
-int main(void) {
-    printf("ok\tnetpoll\t0 checks (not a readiness backend)\n");
-    return 0;
+static void TestNotAReadinessBackend(TestingT *t) {
+    testing_t_skip_v(t, "this platform does not have a readiness backend");
 }
+
+#define TESTS(X) X(TestNotAReadinessBackend)
+
+TESTING_MAIN(TESTS)
 
 #else
 
-#include "harness.h"
+#include "check.h"
 
 #include "burrow/atomic.h"
 #include "burrow/clock.h"
@@ -159,7 +160,7 @@ static void open_and_close(void *env) {
     pipe_shut(&p);
 }
 
-TEST(a_descriptor_can_be_taken_in_and_given_back) {
+static void TestADescriptorCanBeTakenInAndGivenBack(TestingT *t) {
     open_ok = false;
     open_err = -1;
     (void)runtime_gomaxprocs(2);
@@ -199,7 +200,7 @@ static void wait_then_write(void *env) {
 }
 
 static void one_reader_one_writer(void *env) {
-    (void)env;
+    TestingT *t = env;
 
     if (!pipe_open(&shared))
         return;
@@ -211,7 +212,7 @@ static void one_reader_one_writer(void *env) {
     CHECK(wait_for(&done, 1));
 }
 
-TEST(a_goroutine_parked_on_a_read_is_woken_by_a_write) {
+static void TestAGoroutineParkedOnAReadIsWokenByAWrite(TestingT *t) {
     shared = (Pipe){-1, -1};
     shared_pd = NULL;
     read_got = false;
@@ -219,7 +220,7 @@ TEST(a_goroutine_parked_on_a_read_is_woken_by_a_write) {
     done = 0;
     (void)runtime_gomaxprocs(2);
 
-    runtime_main(BURROW_FN(Func, one_reader_one_writer, NULL));
+    runtime_main(BURROW_FN(Func, one_reader_one_writer, t));
 
     CHECK(wrote);
     CHECK(read_got);
@@ -251,7 +252,7 @@ static void wait_to_write(void *env) {
     write_status = burrow__poll_wait(shared_pd, BURROW_POLL_WRITE);
 }
 
-TEST(a_wait_to_write_on_an_empty_pipe_comes_straight_back) {
+static void TestAWaitToWriteOnAnEmptyPipeComesStraightBack(TestingT *t) {
     shared = (Pipe){-1, -1};
     shared_pd = NULL;
     write_status = BURROW_POLL_UNPOLLABLE;
@@ -289,7 +290,7 @@ static void write_the_socket(void *env) {
 }
 
 static void two_directions(void *env) {
-    (void)env;
+    TestingT *t = env;
 
     /* A socket pair rather than a pipe, because a pipe end is one direction
      * only and this is about a reader and a writer on the same descriptor
@@ -307,7 +308,7 @@ static void two_directions(void *env) {
     CHECK(wait_for(&done, 2));
 }
 
-TEST(a_reader_and_a_writer_share_one_descriptor) {
+static void TestAReaderAndAWriterShareOneDescriptor(TestingT *t) {
     sock[0] = -1;
     sock[1] = -1;
     sock_pd = NULL;
@@ -316,7 +317,7 @@ TEST(a_reader_and_a_writer_share_one_descriptor) {
     done = 0;
     (void)runtime_gomaxprocs(4);
 
-    runtime_main(BURROW_FN(Func, two_directions, NULL));
+    runtime_main(BURROW_FN(Func, two_directions, t));
 
     CHECK(both_wrote);
     CHECK(both_read);
@@ -343,7 +344,7 @@ static void park_forever(void *env) {
 }
 
 static void unblock_it(void *env) {
-    (void)env;
+    TestingT *t = env;
 
     if (!pipe_open(&shared))
         return;
@@ -361,7 +362,7 @@ static void unblock_it(void *env) {
     after_status = burrow__poll_wait(shared_pd, BURROW_POLL_READ);
 }
 
-TEST(unblocking_wakes_the_waiter_and_stays_closed) {
+static void TestUnblockingWakesTheWaiterAndStaysClosed(TestingT *t) {
     shared = (Pipe){-1, -1};
     shared_pd = NULL;
     closed_status = BURROW_POLL_UNPOLLABLE;
@@ -369,7 +370,7 @@ TEST(unblocking_wakes_the_waiter_and_stays_closed) {
     done = 0;
     (void)runtime_gomaxprocs(2);
 
-    runtime_main(BURROW_FN(Func, unblock_it, NULL));
+    runtime_main(BURROW_FN(Func, unblock_it, t));
 
     CHECK_INT_EQ(closed_status, BURROW_POLL_CLOSED);
     CHECK_INT_EQ(after_status, BURROW_POLL_CLOSED);
@@ -395,7 +396,7 @@ static void read_one(void *env) {
 }
 
 static void many_readers(void *env) {
-    (void)env;
+    TestingT *t = env;
 
     for (int i = 0; i < MANY; i++) {
         many_pipe[i] = (Pipe){-1, -1};
@@ -419,12 +420,12 @@ static void many_readers(void *env) {
     CHECK(wait_for(&many_read, many_opened));
 }
 
-TEST(many_descriptors_and_many_waiters_at_once) {
+static void TestManyDescriptorsAndManyWaitersAtOnce(TestingT *t) {
     many_read = 0;
     many_opened = 0;
     (void)runtime_gomaxprocs(4);
 
-    runtime_main(BURROW_FN(Func, many_readers, NULL));
+    runtime_main(BURROW_FN(Func, many_readers, t));
 
     CHECK_INT_EQ(many_opened, MANY);
     CHECK_INT_EQ(many_read, many_opened);
@@ -460,7 +461,7 @@ static burrow__PollStatus dl_third;
 static bool dl_set;
 
 static void read_deadline_passes(void *env) {
-    (void)env;
+    TestingT *t = env;
 
     if (!pipe_open(&shared))
         return;
@@ -485,7 +486,7 @@ static void read_deadline_passes(void *env) {
     dl_third = burrow__poll_wait(shared_pd, BURROW_POLL_READ);
 }
 
-TEST(a_read_deadline_that_passes_wakes_the_waiter) {
+static void TestAReadDeadlineThatPassesWakesTheWaiter(TestingT *t) {
     shared = (Pipe){-1, -1};
     shared_pd = NULL;
     dl_set = false;
@@ -495,7 +496,7 @@ TEST(a_read_deadline_that_passes_wakes_the_waiter) {
     dl_third = BURROW_POLL_UNPOLLABLE;
     (void)runtime_gomaxprocs(2);
 
-    runtime_main(BURROW_FN(Func, read_deadline_passes, NULL));
+    runtime_main(BURROW_FN(Func, read_deadline_passes, t));
 
     CHECK(dl_set);
     CHECK_INT_EQ(dl_first, BURROW_POLL_TIMEOUT);
@@ -536,7 +537,7 @@ static void deadline_already_past(void *env) {
     dl_second = burrow__poll_wait(sock_pd, BURROW_POLL_WRITE);
 }
 
-TEST(a_deadline_already_past_times_out_without_parking) {
+static void TestADeadlineAlreadyPastTimesOutWithoutParking(TestingT *t) {
     sock[0] = -1;
     sock[1] = -1;
     sock_pd = NULL;
@@ -571,7 +572,7 @@ static void write_after_a_pause(void *env) {
 }
 
 static void deadline_moves(void *env) {
-    (void)env;
+    TestingT *t = env;
 
     if (!pipe_open(&shared))
         return;
@@ -595,7 +596,7 @@ static void deadline_moves(void *env) {
     CHECK(wait_for(&done, 1));
 }
 
-TEST(a_deadline_moved_out_does_not_fire_on_the_old_one) {
+static void TestADeadlineMovedOutDoesNotFireOnTheOldOne(TestingT *t) {
     shared = (Pipe){-1, -1};
     shared_pd = NULL;
     wrote = false;
@@ -604,7 +605,7 @@ TEST(a_deadline_moved_out_does_not_fire_on_the_old_one) {
     dl_first = BURROW_POLL_UNPOLLABLE;
     (void)runtime_gomaxprocs(2);
 
-    runtime_main(BURROW_FN(Func, deadline_moves, NULL));
+    runtime_main(BURROW_FN(Func, deadline_moves, t));
 
     CHECK(wrote);
     CHECK_INT_EQ(dl_first, BURROW_POLL_READY);
@@ -635,7 +636,7 @@ static void write_deadline_passes(void *env) {
     dl_elapsed = burrow__nanotime() - start;
 }
 
-TEST(a_write_deadline_that_passes_wakes_the_waiter) {
+static void TestAWriteDeadlineThatPassesWakesTheWaiter(TestingT *t) {
     sock[0] = -1;
     sock[1] = -1;
     sock_pd = NULL;
@@ -668,7 +669,7 @@ static void both_directions_time_out(void *env) {
 }
 
 static void one_deadline_both_ways(void *env) {
-    (void)env;
+    TestingT *t = env;
 
     if (!socket_pair(sock))
         return;
@@ -693,7 +694,7 @@ static void one_deadline_both_ways(void *env) {
     dl_second = burrow__poll_wait(sock_pd, BURROW_POLL_WRITE);
 }
 
-TEST(one_deadline_covers_both_directions) {
+static void TestOneDeadlineCoversBothDirections(TestingT *t) {
     sock[0] = -1;
     sock[1] = -1;
     sock_pd = NULL;
@@ -704,7 +705,7 @@ TEST(one_deadline_covers_both_directions) {
     dl_third = BURROW_POLL_UNPOLLABLE;
     (void)runtime_gomaxprocs(2);
 
-    runtime_main(BURROW_FN(Func, one_deadline_both_ways, NULL));
+    runtime_main(BURROW_FN(Func, one_deadline_both_ways, t));
 
     CHECK(dl_set);
     CHECK_INT_EQ(dl_first, BURROW_POLL_TIMEOUT);
@@ -758,7 +759,7 @@ static void sleep_in_the_poller(void *env) {
     (void)burrow__thread_join(&outsider);
 }
 
-TEST(the_last_thread_sleeps_inside_the_poller) {
+static void TestTheLastThreadSleepsInsideThePoller(TestingT *t) {
     shared = (Pipe){-1, -1};
     shared_pd = NULL;
     outsider_started = false;
@@ -783,7 +784,7 @@ TEST(the_last_thread_sleeps_inside_the_poller) {
 
 /* Again, because the interesting bugs in this area are in teardown and they
  * only show up on the run after the one that made them. */
-TEST(the_last_thread_sleeps_inside_the_poller_again) {
+static void TestTheLastThreadSleepsInsideThePollerAgain(TestingT *t) {
     shared = (Pipe){-1, -1};
     shared_pd = NULL;
     outsider_started = false;
@@ -802,21 +803,21 @@ TEST(the_last_thread_sleeps_inside_the_poller_again) {
     pipe_shut(&shared);
 }
 
-int main(void) {
-    RUN(a_descriptor_can_be_taken_in_and_given_back);
-    RUN(a_goroutine_parked_on_a_read_is_woken_by_a_write);
-    RUN(a_wait_to_write_on_an_empty_pipe_comes_straight_back);
-    RUN(a_reader_and_a_writer_share_one_descriptor);
-    RUN(unblocking_wakes_the_waiter_and_stays_closed);
-    RUN(many_descriptors_and_many_waiters_at_once);
-    RUN(a_read_deadline_that_passes_wakes_the_waiter);
-    RUN(a_deadline_already_past_times_out_without_parking);
-    RUN(a_deadline_moved_out_does_not_fire_on_the_old_one);
-    RUN(a_write_deadline_that_passes_wakes_the_waiter);
-    RUN(one_deadline_covers_both_directions);
-    RUN(the_last_thread_sleeps_inside_the_poller);
-    RUN(the_last_thread_sleeps_inside_the_poller_again);
-    return harness_report("netpoll");
-}
+#define TESTS(X)                                                                       \
+    X(TestADescriptorCanBeTakenInAndGivenBack)                                         \
+    X(TestAGoroutineParkedOnAReadIsWokenByAWrite)                                      \
+    X(TestAWaitToWriteOnAnEmptyPipeComesStraightBack)                                  \
+    X(TestAReaderAndAWriterShareOneDescriptor)                                         \
+    X(TestUnblockingWakesTheWaiterAndStaysClosed)                                      \
+    X(TestManyDescriptorsAndManyWaitersAtOnce)                                         \
+    X(TestAReadDeadlineThatPassesWakesTheWaiter)                                       \
+    X(TestADeadlineAlreadyPastTimesOutWithoutParking)                                  \
+    X(TestADeadlineMovedOutDoesNotFireOnTheOldOne)                                     \
+    X(TestAWriteDeadlineThatPassesWakesTheWaiter)                                      \
+    X(TestOneDeadlineCoversBothDirections)                                             \
+    X(TestTheLastThreadSleepsInsideThePoller)                                          \
+    X(TestTheLastThreadSleepsInsideThePollerAgain)
+
+TESTING_MAIN_BARE(TESTS)
 
 #endif /* BURROW_NETPOLL_READINESS */

@@ -16,11 +16,11 @@
  * goroutine between threads without losing it.
  *
  * The rule for the multi threaded ones is that only the main goroutine calls
- * CHECK. The harness counts checks in two plain ints, and a goroutine on another
- * thread touching those is a data race in the test rather than in the thing
- * being tested, which is the most annoying kind to chase. So the goroutines
- * write into atomics and arrays, and the checking happens after runtime_main has
- * returned and joined every thread.
+ * CHECK, through the t it is handed as its argument. A check in some other
+ * goroutine could land after the test it belongs to has finished, which Go
+ * calls a panic and which is the most annoying kind of failure to chase. So the
+ * goroutines write into atomics and arrays, and the checking happens in the main
+ * goroutine or after runtime_main has returned and joined every thread.
  *
  * runtime_main gets called many times here, once per test, which Go cannot do
  * and which is worth having: it means every test starts from a scheduler that
@@ -37,7 +37,7 @@
 #include "burrow/sched.h"
 #include "burrow/thread.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -121,7 +121,7 @@ static void main_body(void *env) {
     count_at_start = runtime_numgoroutine();
 }
 
-TEST(the_function_handed_to_runtime_main_runs) {
+static void TestTheFunctionHandedToRuntimeMainRuns(TestingT *t) {
     main_ran = 0;
     main_g = NULL;
     count_at_start = -1;
@@ -140,7 +140,7 @@ TEST(the_function_handed_to_runtime_main_runs) {
     CHECK_INT_EQ(runtime_numgoroutine(), 0);
 }
 
-TEST(runtime_main_can_be_called_twice) {
+static void TestRuntimeMainCanBeCalledTwice(TestingT *t) {
     main_ran = 0;
     runtime_main(BURROW_FN(Func, main_body, NULL));
     CHECK_INT_EQ(main_ran, 1);
@@ -162,20 +162,20 @@ static void one_child(void *env) {
 }
 
 static void one_body(void *env) {
-    (void)env;
+    TestingT *t = env;
     one_main_g = sched_current();
     CHECK(go(BURROW_FN(Func, one_child, NULL)));
     one_arrived = wait_for(&one_ran, 1);
 }
 
-TEST(a_goroutine_runs) {
+static void TestAGoroutineRuns(TestingT *t) {
     one_ran = 0;
     one_g = NULL;
     one_main_g = NULL;
     one_arrived = false;
 
     (void)runtime_gomaxprocs(1);
-    runtime_main(BURROW_FN(Func, one_body, NULL));
+    runtime_main(BURROW_FN(Func, one_body, t));
 
     CHECK(one_arrived);
     CHECK_INT_EQ(one_ran, 1);
@@ -208,7 +208,7 @@ static void order_child(void *env) {
 }
 
 static void order_body(void *env) {
-    (void)env;
+    TestingT *t = env;
     for (int i = 0; i < ORDERED; i++)
         CHECK(go(BURROW_FN(Func, order_child, (void *)(intptr_t)(i + 1))));
 
@@ -224,7 +224,7 @@ static void order_body(void *env) {
     order_done = true;
 }
 
-TEST(the_newest_goroutine_runs_first_and_the_rest_run_oldest_first) {
+static void TestTheNewestGoroutineRunsFirstAndTheRestRunOldestFirst(TestingT *t) {
     /* Ten goes at a run nobody preempted, which is a lot more than a quiet
      * machine needs and enough that a failure here means the order is wrong.
      * The processor count is set every time because the runtime forgets it on
@@ -234,7 +234,7 @@ TEST(the_newest_goroutine_runs_first_and_the_rest_run_oldest_first) {
         memset(order_log, 0, sizeof order_log);
         order_len = 0;
         order_done = false;
-        runtime_main(BURROW_FN(Func, order_body, NULL));
+        runtime_main(BURROW_FN(Func, order_body, t));
         if (order_early == 0)
             break;
     }
@@ -259,7 +259,7 @@ static void yield_child(void *env) {
 }
 
 static void yield_body(void *env) {
-    (void)env;
+    TestingT *t = env;
     CHECK(go(BURROW_FN(Func, yield_child, NULL)));
     while (burrow__atomic_load_acquire_u32(&yield_flag) == 0 &&
            yield_turns < YIELD_LIMIT) {
@@ -269,13 +269,13 @@ static void yield_body(void *env) {
     yield_saw_it = burrow__atomic_load_acquire_u32(&yield_flag) != 0;
 }
 
-TEST(gosched_lets_another_goroutine_have_the_thread) {
+static void TestGoschedLetsAnotherGoroutineHaveTheThread(TestingT *t) {
     yield_flag = 0;
     yield_turns = 0;
     yield_saw_it = false;
 
     (void)runtime_gomaxprocs(1);
-    runtime_main(BURROW_FN(Func, yield_body, NULL));
+    runtime_main(BURROW_FN(Func, yield_body, t));
 
     CHECK(yield_saw_it);
 
@@ -315,27 +315,27 @@ static void fair_yielder(void *env) {
 }
 
 static void fair_body(void *env) {
-    (void)env;
+    TestingT *t = env;
     CHECK(go(BURROW_FN(Func, fair_yielder, NULL)));
     CHECK(go(BURROW_FN(Func, fair_yielder, NULL)));
 
-    burrow__Thread t;
-    CHECK(burrow__thread_start(&t, fair_outsider, NULL, 0));
+    burrow__Thread th;
+    CHECK(burrow__thread_start(&th, fair_outsider, NULL, 0));
     while (burrow__atomic_load_acquire_u32(&fair_flag) == 0 &&
            fair_turns < YIELD_LIMIT) {
         fair_turns++;
         runtime_gosched();
     }
-    CHECK(burrow__thread_join(&t));
+    CHECK(burrow__thread_join(&th));
 }
 
-TEST(gosched_does_not_starve_the_global_queue) {
+static void TestGoschedDoesNotStarveTheGlobalQueue(TestingT *t) {
     fair_flag = 0;
     fair_started = 0;
     fair_turns = 0;
 
     (void)runtime_gomaxprocs(1);
-    runtime_main(BURROW_FN(Func, fair_body, NULL));
+    runtime_main(BURROW_FN(Func, fair_body, t));
 
     CHECK_INT_EQ(fair_started, 1);
     CHECK_INT_EQ(fair_flag, 1);
@@ -353,7 +353,7 @@ static void exit_child(void *env) {
 }
 
 static void exit_body(void *env) {
-    (void)env;
+    TestingT *t = env;
     CHECK(go(BURROW_FN(Func, exit_child, NULL)));
     CHECK(wait_for(&exit_before, 1));
 
@@ -363,12 +363,12 @@ static void exit_body(void *env) {
         runtime_gosched();
 }
 
-TEST(goexit_ends_the_goroutine_where_it_stands) {
+static void TestGoexitEndsTheGoroutineWhereItStands(TestingT *t) {
     exit_before = 0;
     exit_after = 0;
 
     (void)runtime_gomaxprocs(1);
-    runtime_main(BURROW_FN(Func, exit_body, NULL));
+    runtime_main(BURROW_FN(Func, exit_body, t));
 
     CHECK_INT_EQ(exit_before, 1);
     CHECK_INT_EQ(exit_after, 0);
@@ -388,7 +388,7 @@ static void hold_child(void *env) {
 }
 
 static void count_body(void *env) {
-    (void)env;
+    TestingT *t = env;
     for (int i = 0; i < 3; i++)
         CHECK(go(BURROW_FN(Func, hold_child, NULL)));
 
@@ -402,20 +402,20 @@ static void count_body(void *env) {
     count_after = runtime_numgoroutine();
 }
 
-TEST(numgoroutine_counts_parked_goroutines_too) {
+static void TestNumgoroutineCountsParkedGoroutinesToo(TestingT *t) {
     memset(&hold_gate, 0, sizeof hold_gate);
     hold_parked = 0;
     count_with_parked = -1;
     count_after = -1;
 
     (void)runtime_gomaxprocs(1);
-    runtime_main(BURROW_FN(Func, count_body, NULL));
+    runtime_main(BURROW_FN(Func, count_body, t));
 
     CHECK_INT_EQ(count_with_parked, 4);
     CHECK_INT_EQ(count_after, 3);
 }
 
-TEST(gomaxprocs_reports_and_sets_before_the_scheduler_starts) {
+static void TestGomaxprocsReportsAndSetsBeforeTheSchedulerStarts(TestingT *t) {
     int cpus = runtime_numcpu();
     CHECK(cpus >= 1);
 
@@ -444,7 +444,7 @@ static void procs_body(void *env) {
     procs_inside = runtime_gomaxprocs(0);
 }
 
-TEST(gomaxprocs_does_not_change_while_the_scheduler_is_running) {
+static void TestGomaxprocsDoesNotChangeWhileTheSchedulerIsRunning(TestingT *t) {
     (void)runtime_gomaxprocs(3);
     procs_inside = -1;
     procs_changed = -1;
@@ -480,19 +480,19 @@ static void deep_child(void *env) {
 }
 
 static void deep_body(void *env) {
-    (void)env;
+    TestingT *t = env;
     deep_started = go_stack(BURROW_FN(Func, deep_child, NULL), 1024 * 1024);
     CHECK(deep_started);
     for (int i = 0; i < 8; i++)
         runtime_gosched();
 }
 
-TEST(a_goroutine_can_ask_for_a_bigger_stack_and_use_it) {
+static void TestAGoroutineCanAskForABiggerStackAndUseIt(TestingT *t) {
     deep_result = 0;
     deep_started = false;
 
     (void)runtime_gomaxprocs(1);
-    runtime_main(BURROW_FN(Func, deep_body, NULL));
+    runtime_main(BURROW_FN(Func, deep_body, t));
 
     CHECK(deep_started);
 
@@ -513,7 +513,7 @@ static void reuse_child(void *env) {
 }
 
 static void reuse_body(void *env) {
-    (void)env;
+    TestingT *t = env;
     CHECK(go(BURROW_FN(Func, reuse_child, NULL)));
     CHECK(wait_for(&reuse_ran, 1));
 
@@ -525,13 +525,13 @@ static void reuse_body(void *env) {
     CHECK(wait_for(&reuse_ran, 2));
 }
 
-TEST(a_dead_goroutine_is_kept_and_handed_out_again) {
+static void TestADeadGoroutineIsKeptAndHandedOutAgain(TestingT *t) {
     gfree_after_death = -1;
     gfree_after_reuse = -1;
     reuse_ran = 0;
 
     (void)runtime_gomaxprocs(1);
-    runtime_main(BURROW_FN(Func, reuse_body, NULL));
+    runtime_main(BURROW_FN(Func, reuse_body, t));
 
     CHECK_INT_EQ(gfree_after_death, 1);
     CHECK_INT_EQ(gfree_after_reuse, 0);
@@ -555,7 +555,7 @@ static void handoff_child(void *env) {
 }
 
 static void handoff_body(void *env) {
-    (void)env;
+    TestingT *t = env;
     handoff_value = 20;
     CHECK(go(BURROW_FN(Func, handoff_child, NULL)));
     gate_signal(&handoff_there);
@@ -567,7 +567,7 @@ static void handoff_body(void *env) {
     CHECK(wait_for(&handoff_done, 1));
 }
 
-TEST(a_value_can_be_handed_between_two_goroutines_through_a_park) {
+static void TestAValueCanBeHandedBetweenTwoGoroutinesThroughAPark(TestingT *t) {
     memset(&handoff_there, 0, sizeof handoff_there);
     memset(&handoff_back, 0, sizeof handoff_back);
     handoff_value = 0;
@@ -575,7 +575,7 @@ TEST(a_value_can_be_handed_between_two_goroutines_through_a_park) {
     handoff_finished = false;
 
     (void)runtime_gomaxprocs(2);
-    runtime_main(BURROW_FN(Func, handoff_body, NULL));
+    runtime_main(BURROW_FN(Func, handoff_body, t));
 
     CHECK(handoff_finished);
     CHECK_INT_EQ(handoff_value, 41);
@@ -594,19 +594,19 @@ static void early_child(void *env) {
 }
 
 static void early_body(void *env) {
-    (void)env;
+    TestingT *t = env;
     gate_signal(&early_gate);
     CHECK(go(BURROW_FN(Func, early_child, NULL)));
     CHECK(wait_for(&early_done, 1));
 }
 
-TEST(a_signal_that_arrives_before_the_wait_is_not_lost) {
+static void TestASignalThatArrivesBeforeTheWaitIsNotLost(TestingT *t) {
     memset(&early_gate, 0, sizeof early_gate);
     early_done = 0;
     early_waited = false;
 
     (void)runtime_gomaxprocs(1);
-    runtime_main(BURROW_FN(Func, early_body, NULL));
+    runtime_main(BURROW_FN(Func, early_body, t));
 
     CHECK(early_waited);
 }
@@ -633,7 +633,7 @@ static void many_body(void *env) {
     many_all_ran = wait_for(&many_done, MANY);
 }
 
-TEST(every_goroutine_runs_exactly_once_however_many_there_are) {
+static void TestEveryGoroutineRunsExactlyOnceHoweverManyThereAre(TestingT *t) {
     memset(many_seen, 0, sizeof many_seen);
     many_done = 0;
     many_started = 0;
@@ -672,18 +672,18 @@ static void nested_child(void *env) {
 }
 
 static void nested_body(void *env) {
-    (void)env;
+    TestingT *t = env;
     for (int i = 0; i < 8; i++)
         CHECK(go(BURROW_FN(Func, nested_child, NULL)));
     nested_all_ran = wait_for(&nested_done, 8 + 8 * 8);
 }
 
-TEST(a_goroutine_can_start_goroutines) {
+static void TestAGoroutineCanStartGoroutines(TestingT *t) {
     nested_done = 0;
     nested_all_ran = false;
 
     (void)runtime_gomaxprocs(4);
-    runtime_main(BURROW_FN(Func, nested_body, NULL));
+    runtime_main(BURROW_FN(Func, nested_body, t));
 
     CHECK(nested_all_ran);
     CHECK_INT_EQ(nested_done, 8 + 8 * 8);
@@ -725,13 +725,13 @@ static void spread_child(void *env) {
 }
 
 static void spread_body(void *env) {
-    (void)env;
+    TestingT *t = env;
     for (int i = 0; i < SPREAD; i++)
         CHECK(go(BURROW_FN(Func, spread_child, &spread_m[i])));
     gate_wait(&spread_gate);
 }
 
-TEST(work_started_on_one_processor_is_picked_up_by_the_others) {
+static void TestWorkStartedOnOneProcessorIsPickedUpByTheOthers(TestingT *t) {
     memset(&spread_gate, 0, sizeof spread_gate);
     spread_arrived = 0;
     spread_finished = 0;
@@ -740,7 +740,7 @@ TEST(work_started_on_one_processor_is_picked_up_by_the_others) {
         spread_m[i] = -2;
 
     (void)runtime_gomaxprocs(SPREAD);
-    runtime_main(BURROW_FN(Func, spread_body, NULL));
+    runtime_main(BURROW_FN(Func, spread_body, t));
 
     CHECK_INT_EQ(spread_arrived, SPREAD);
     CHECK_INT_EQ(spread_stuck, 0);
@@ -802,7 +802,7 @@ static void pair_pong(void *env) {
 }
 
 static void pairs_body(void *env) {
-    (void)env;
+    TestingT *t = env;
     for (int i = 0; i < PAIRS; i++) {
         CHECK(go(BURROW_FN(Func, pair_pong, &pairs[i])));
         CHECK(go(BURROW_FN(Func, pair_ping, &pairs[i])));
@@ -810,14 +810,14 @@ static void pairs_body(void *env) {
     pairs_all_ran = wait_for(&pairs_done, 2 * PAIRS);
 }
 
-TEST(nothing_is_lost_while_goroutines_park_and_ready_each_other) {
+static void TestNothingIsLostWhileGoroutinesParkAndReadyEachOther(TestingT *t) {
     memset(pairs, 0, sizeof pairs);
     pairs_done = 0;
     pairs_all_ran = false;
 
     int cpus = runtime_numcpu();
     (void)runtime_gomaxprocs(cpus < 4 ? 4 : cpus);
-    runtime_main(BURROW_FN(Func, pairs_body, NULL));
+    runtime_main(BURROW_FN(Func, pairs_body, t));
 
     CHECK(pairs_all_ran);
     CHECK_INT_EQ(pairs_done, 2 * PAIRS);
@@ -832,29 +832,24 @@ TEST(nothing_is_lost_while_goroutines_park_and_ready_each_other) {
     CHECK_INT_EQ(wrong, 0);
 }
 
-int main(void) {
-    RUN(the_function_handed_to_runtime_main_runs);
-    RUN(runtime_main_can_be_called_twice);
-    RUN(a_goroutine_runs);
+#define TESTS(X)                                                                       \
+    X(TestTheFunctionHandedToRuntimeMainRuns)                                          \
+    X(TestRuntimeMainCanBeCalledTwice)                                                 \
+    X(TestAGoroutineRuns)                                                              \
+    X(TestTheNewestGoroutineRunsFirstAndTheRestRunOldestFirst)                         \
+    X(TestGoschedLetsAnotherGoroutineHaveTheThread)                                    \
+    X(TestGoschedDoesNotStarveTheGlobalQueue)                                          \
+    X(TestGoexitEndsTheGoroutineWhereItStands)                                         \
+    X(TestNumgoroutineCountsParkedGoroutinesToo)                                       \
+    X(TestGomaxprocsReportsAndSetsBeforeTheSchedulerStarts)                            \
+    X(TestGomaxprocsDoesNotChangeWhileTheSchedulerIsRunning)                           \
+    X(TestAGoroutineCanAskForABiggerStackAndUseIt)                                     \
+    X(TestADeadGoroutineIsKeptAndHandedOutAgain)                                       \
+    X(TestAValueCanBeHandedBetweenTwoGoroutinesThroughAPark)                           \
+    X(TestASignalThatArrivesBeforeTheWaitIsNotLost)                                    \
+    X(TestEveryGoroutineRunsExactlyOnceHoweverManyThereAre)                            \
+    X(TestAGoroutineCanStartGoroutines)                                                \
+    X(TestWorkStartedOnOneProcessorIsPickedUpByTheOthers)                              \
+    X(TestNothingIsLostWhileGoroutinesParkAndReadyEachOther)
 
-    RUN(the_newest_goroutine_runs_first_and_the_rest_run_oldest_first);
-    RUN(gosched_lets_another_goroutine_have_the_thread);
-    RUN(gosched_does_not_starve_the_global_queue);
-    RUN(goexit_ends_the_goroutine_where_it_stands);
-
-    RUN(numgoroutine_counts_parked_goroutines_too);
-    RUN(gomaxprocs_reports_and_sets_before_the_scheduler_starts);
-    RUN(gomaxprocs_does_not_change_while_the_scheduler_is_running);
-
-    RUN(a_goroutine_can_ask_for_a_bigger_stack_and_use_it);
-    RUN(a_dead_goroutine_is_kept_and_handed_out_again);
-
-    RUN(a_value_can_be_handed_between_two_goroutines_through_a_park);
-    RUN(a_signal_that_arrives_before_the_wait_is_not_lost);
-
-    RUN(every_goroutine_runs_exactly_once_however_many_there_are);
-    RUN(a_goroutine_can_start_goroutines);
-    RUN(work_started_on_one_processor_is_picked_up_by_the_others);
-    RUN(nothing_is_lost_while_goroutines_park_and_ready_each_other);
-    return harness_report("sched");
-}
+TESTING_MAIN_BARE(TESTS)

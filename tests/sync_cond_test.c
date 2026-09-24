@@ -21,8 +21,8 @@
 #include "burrow/sync/atomic.h"
 #include "burrow/thread.h"
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -52,7 +52,7 @@ static void reset(void) {
 
 /* ------------------------------------------------------- nobody is waiting */
 
-TEST(signalling_an_empty_cond_does_nothing) {
+static void TestSignallingAnEmptyCondDoesNothing(TestingT *t) {
     reset();
 
     /* Neither of these has anybody to wake, and neither of them may leave
@@ -116,7 +116,7 @@ static void signal_main(void *env) {
         runtime_gosched();
 }
 
-TEST(a_signal_wakes_a_waiter) {
+static void TestASignalWakesAWaiter(TestingT *t) {
     reset();
 
     runtime_main(BURROW_FN(Func, signal_main, NULL));
@@ -151,7 +151,7 @@ static void broadcast_main(void *env) {
         runtime_gosched();
 }
 
-TEST(a_broadcast_wakes_everybody) {
+static void TestABroadcastWakesEverybody(TestingT *t) {
     reset();
 
     runtime_main(BURROW_FN(Func, broadcast_main, NULL));
@@ -211,7 +211,7 @@ static void one_at_a_time_main(void *env) {
     }
 }
 
-TEST(a_signal_hands_over_one_at_a_time) {
+static void TestASignalHandsOverOneAtATime(TestingT *t) {
     reset();
     tokens = 0;
 
@@ -271,7 +271,7 @@ static void ping_pong_main(void *env) {
         runtime_gosched();
 }
 
-TEST(a_signal_in_the_window_before_the_sleep_is_not_lost) {
+static void TestASignalInTheWindowBeforeTheSleepIsNotLost(TestingT *t) {
     reset();
 
     runtime_main(BURROW_FN(Func, ping_pong_main, NULL));
@@ -328,7 +328,7 @@ static void rw_main(void *env) {
         runtime_gosched();
 }
 
-TEST(a_cond_works_on_the_read_side_of_an_rw_mutex) {
+static void TestACondWorksOnTheReadSideOfAnRwMutex(TestingT *t) {
     reset();
     memset(&rw, 0, sizeof(rw));
     memset(&rw_cond, 0, sizeof(rw_cond));
@@ -365,7 +365,7 @@ static void thread_waiter(void *env) {
     (void)sync_atomic_int64_add(&woken, 1);
 }
 
-TEST(threads_that_are_not_goroutines_can_wait_on_a_cond) {
+static void TestThreadsThatAreNotGoroutinesCanWaitOnACond(TestingT *t) {
     reset();
 
     for (size_t i = 0; i < WAITERS; i++)
@@ -388,7 +388,7 @@ TEST(threads_that_are_not_goroutines_can_wait_on_a_cond) {
 
 /* ------------------------------------------------------------- misuse */
 
-TEST(a_copied_cond_is_caught) {
+static void TestACopiedCondIsCaught(TestingT *t) {
     SyncMutex m;
     memset(&m, 0, sizeof(m));
 
@@ -408,15 +408,14 @@ TEST(a_copied_cond_is_caught) {
     CHECK(true);
 }
 
-int main(void) {
-    RUN(signalling_an_empty_cond_does_nothing);
-    RUN(a_signal_wakes_a_waiter);
-    RUN(a_broadcast_wakes_everybody);
-    RUN(a_signal_hands_over_one_at_a_time);
-    RUN(a_signal_in_the_window_before_the_sleep_is_not_lost);
-    RUN(a_cond_works_on_the_read_side_of_an_rw_mutex);
-    RUN(threads_that_are_not_goroutines_can_wait_on_a_cond);
-    RUN(a_copied_cond_is_caught);
+#define TESTS(X)                                                                       \
+    X(TestSignallingAnEmptyCondDoesNothing)                                            \
+    X(TestASignalWakesAWaiter)                                                         \
+    X(TestABroadcastWakesEverybody)                                                    \
+    X(TestASignalHandsOverOneAtATime)                                                  \
+    X(TestASignalInTheWindowBeforeTheSleepIsNotLost)                                   \
+    X(TestACondWorksOnTheReadSideOfAnRwMutex)                                          \
+    X(TestThreadsThatAreNotGoroutinesCanWaitOnACond)                                   \
+    X(TestACopiedCondIsCaught)
 
-    return harness_report("sync_cond");
-}
+TESTING_MAIN_BARE(TESTS)

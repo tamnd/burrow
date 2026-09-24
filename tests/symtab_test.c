@@ -179,7 +179,8 @@ static void TestTheFramesAWalkCollectsHaveNames(TestingT *t) {
     CHECK(burrow__symbolise(collected[0] - 1, &f));
     CHECK(str_eq(f.name, BURROW_S("runtime_callers")));
 
-    /* The rest are return addresses into this file and into the harness, and
+    /* The rest are return addresses into this file and into the testing
+     * package, and
      * what matters is that a walk of real frames produces names rather than a
      * column of nothing. Not all of them: a static function is not in the table
      * and this file is full of them. */

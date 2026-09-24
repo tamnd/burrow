@@ -18,7 +18,7 @@
 #include "burrow/sync/atomic.h"
 #include "burrow/type.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdint.h>
 
@@ -65,30 +65,30 @@ const Type burrow_type_Circle = {
 
 BURROW_REGISTER_TYPE(Circle);
 
-TEST(a_registered_type_is_found_by_name) {
-    const Type *t = type_by_name(BURROW_S("RegPoint"), NULL);
+static void TestARegisteredTypeIsFoundByName(TestingT *t) {
+    const Type *ty = type_by_name(BURROW_S("RegPoint"), NULL);
 
-    CHECK(t == TYPE_OF(RegPoint));
-    if (t != NULL)
-        CHECK(str_eq(t->name, BURROW_S("RegPoint")));
+    CHECK(ty == TYPE_OF(RegPoint));
+    if (ty != NULL)
+        CHECK(str_eq(ty->name, BURROW_S("RegPoint")));
 }
 
-TEST(a_type_that_was_not_registered_is_not_found) {
+static void TestATypeThatWasNotRegisteredIsNotFound(TestingT *t) {
     /* It still has a descriptor and reflection on a value of it still works.
      * Registration is only about finding it from a name. */
     CHECK(type_by_name(BURROW_S("QuietPoint"), NULL) == NULL);
     CHECK(TYPE_OF(QuietPoint) != NULL);
 }
 
-TEST(a_name_nothing_registered_gives_null) {
+static void TestANameNothingRegisteredGivesNull(TestingT *t) {
     CHECK(type_by_name(BURROW_S("NoSuchType"), NULL) == NULL);
     CHECK(type_by_name(BURROW_S("a.b.c.NoSuchType"), NULL) == NULL);
     CHECK(type_by_name(BURROW_STR_EMPTY, NULL) == NULL);
 }
 
-TEST(the_package_path_is_part_of_the_name) {
-    const Type *t = type_by_name(BURROW_S("github.com/tamnd/shapes.v2.Circle"), NULL);
-    CHECK(t == &burrow_type_Circle);
+static void TestThePackagePathIsPartOfTheName(TestingT *t) {
+    const Type *ty = type_by_name(BURROW_S("github.com/tamnd/shapes.v2.Circle"), NULL);
+    CHECK(ty == &burrow_type_Circle);
 
     /* The bare name is not the qualified name, and a type in a package is not
      * reachable without it. Two packages are allowed to have a Circle. */
@@ -98,7 +98,7 @@ TEST(the_package_path_is_part_of_the_name) {
     CHECK(type_by_name(BURROW_S("shapes.v2.Circle"), NULL) == NULL);
 }
 
-TEST(a_qualified_name_can_be_written_out) {
+static void TestAQualifiedNameCanBeWrittenOut(TestingT *t) {
     Byte buf[64];
 
     Str q = type_qualified_name(&burrow_type_Circle, buf, (Int)sizeof buf);
@@ -113,7 +113,7 @@ TEST(a_qualified_name_can_be_written_out) {
     CHECK(type_by_name(p, NULL) == TYPE_OF(RegPoint));
 }
 
-TEST(a_name_too_long_for_the_buffer_is_not_written_at_all) {
+static void TestANameTooLongForTheBufferIsNotWrittenAtAll(TestingT *t) {
     Byte buf[8];
 
     /* "github.c" would be a perfectly well formed qualified name and a lookup
@@ -141,7 +141,7 @@ TEST(a_name_too_long_for_the_buffer_is_not_written_at_all) {
  * corrupt stream from a peer built against a newer version of the schema, and
  * those two get handled by different people. */
 
-TEST(an_unregistered_name_says_it_is_unregistered) {
+static void TestAnUnregisteredNameSaysItIsUnregistered(TestingT *t) {
     Error err = BURROW_NO_ERROR;
 
     CHECK(type_by_name(BURROW_S("NoSuchType"), &err) == NULL);
@@ -154,7 +154,7 @@ TEST(an_unregistered_name_says_it_is_unregistered) {
     CHECK(errors_is(err, type_err_not_registered));
 }
 
-TEST(a_name_that_is_not_a_name_says_so_instead) {
+static void TestANameThatIsNotANameSaysSoInstead(TestingT *t) {
     Error err = BURROW_NO_ERROR;
 
     CHECK(type_by_name(BURROW_STR_EMPTY, &err) == NULL);
@@ -177,7 +177,7 @@ TEST(a_name_that_is_not_a_name_says_so_instead) {
     CHECK(errors_is(err, type_err_not_registered));
 }
 
-TEST(a_name_that_is_found_leaves_no_error_behind) {
+static void TestANameThatIsFoundLeavesNoErrorBehind(TestingT *t) {
     /* Set to something first, because a caller reuses one err across a loop and
      * a function that only ever writes on failure leaves the last failure
      * sitting there to be read as this call's answer. */
@@ -187,7 +187,7 @@ TEST(a_name_that_is_found_leaves_no_error_behind) {
     CHECK(BURROW_OK(err));
 }
 
-TEST(the_error_is_optional_like_every_other_out_parameter) {
+static void TestTheErrorIsOptionalLikeEveryOtherOutParameter(TestingT *t) {
     /* Already how the rest of this file calls it, so this is the test that says
      * it is deliberate rather than tolerated. */
     CHECK(type_by_name(BURROW_S("NoSuchType"), NULL) == NULL);
@@ -212,7 +212,7 @@ static const Type late_type = {
     NULL,
 };
 
-TEST(a_type_can_be_registered_while_the_program_runs) {
+static void TestATypeCanBeRegisteredWhileTheProgramRuns(TestingT *t) {
     CHECK(type_by_name(BURROW_S("plugin.Late"), NULL) == NULL);
 
     Int before = type_registry_len();
@@ -222,7 +222,7 @@ TEST(a_type_can_be_registered_while_the_program_runs) {
     CHECK(type_by_name(BURROW_S("plugin.Late"), NULL) == &late_type);
 }
 
-TEST(registering_the_same_type_twice_changes_nothing) {
+static void TestRegisteringTheSameTypeTwiceChangesNothing(TestingT *t) {
     CHECK(type_register(&late_type, NULL));
 
     Int before = type_registry_len();
@@ -270,7 +270,7 @@ static const Type late_impostor = {
     NULL,
 };
 
-TEST(a_second_copy_of_one_type_is_accepted) {
+static void TestASecondCopyOfOneTypeIsAccepted(TestingT *t) {
     CHECK(type_register(&late_type, NULL));
 
     Int before = type_registry_len();
@@ -282,7 +282,7 @@ TEST(a_second_copy_of_one_type_is_accepted) {
     CHECK(type_by_name(BURROW_S("plugin.Late"), NULL) == &late_type);
 }
 
-TEST(a_different_type_under_a_taken_name_is_refused) {
+static void TestADifferentTypeUnderATakenNameIsRefused(TestingT *t) {
     CHECK(type_register(&late_type, NULL));
 
     Error err = BURROW_NO_ERROR;
@@ -314,7 +314,7 @@ static const Type nameless = {
     NULL,
 };
 
-TEST(a_descriptor_with_nothing_to_register_it_under_is_refused) {
+static void TestADescriptorWithNothingToRegisterItUnderIsRefused(TestingT *t) {
     Error err = BURROW_NO_ERROR;
 
     CHECK(type_register(&nameless, &err) == false);
@@ -329,7 +329,7 @@ TEST(a_descriptor_with_nothing_to_register_it_under_is_refused) {
     CHECK(errors_is(err, type_err_name_invalid));
 }
 
-TEST(a_registration_that_worked_leaves_no_error_behind) {
+static void TestARegistrationThatWorkedLeavesNoErrorBehind(TestingT *t) {
     Error err = type_err_conflict;
 
     CHECK(type_register(&late_type, &err));
@@ -338,7 +338,7 @@ TEST(a_registration_that_worked_leaves_no_error_behind) {
 
 /* The three of them are distinct, which is the only property the whole thing
  * rests on: a caller that cannot tell them apart is back to holding a bool. */
-TEST(the_three_answers_are_three_different_answers) {
+static void TestTheThreeAnswersAreThreeDifferentAnswers(TestingT *t) {
     CHECK(!errors_is(type_err_not_registered, type_err_name_invalid));
     CHECK(!errors_is(type_err_not_registered, type_err_conflict));
     CHECK(!errors_is(type_err_name_invalid, type_err_conflict));
@@ -353,7 +353,7 @@ TEST(the_three_answers_are_three_different_answers) {
     CHECK(error_text(type_err_conflict).len > 0);
 }
 
-TEST(identity_is_the_address_when_there_is_one) {
+static void TestIdentityIsTheAddressWhenThereIsOne(TestingT *t) {
     CHECK(type_same(TYPE_OF(RegPoint), TYPE_OF(RegPoint)));
     CHECK(type_same(TYPE_INT, TYPE_OF(Int)));
     CHECK(!type_same(TYPE_OF(RegPoint), TYPE_OF(QuietPoint)));
@@ -361,7 +361,7 @@ TEST(identity_is_the_address_when_there_is_one) {
     CHECK(type_same(NULL, NULL));
 }
 
-TEST(identity_falls_back_to_the_name) {
+static void TestIdentityFallsBackToTheName(TestingT *t) {
     /* Two descriptors, one type. This is the shared library case and the only
      * reason type_same is a function rather than a comparison. */
     CHECK(&late_type != &late_again);
@@ -373,7 +373,7 @@ TEST(identity_falls_back_to_the_name) {
     CHECK(!type_same(&late_type, &late_impostor));
 }
 
-TEST(an_unnamed_type_has_no_identity_beyond_its_address) {
+static void TestAnUnnamedTypeHasNoIdentityBeyondItsAddress(TestingT *t) {
     /* []int has no name, so two descriptors for it cannot be shown to be the
      * same type from here. Saying no is the honest answer: saying yes would
      * make every unnamed slice descriptor equal to every other. */
@@ -385,7 +385,7 @@ TEST(an_unnamed_type_has_no_identity_beyond_its_address) {
     CHECK(type_same(a, a));
 }
 
-TEST(the_registry_holds_what_was_put_in_it) {
+static void TestTheRegistryHoldsWhatWasPutInIt(TestingT *t) {
     /* Both of the file scope registrations, and nothing that was not
      * registered. The count is not checked against a number because the section
      * holds whatever the whole program registered, and this file is linked with
@@ -467,7 +467,7 @@ static void race_main(void *arg) {
         runtime_gosched();
 }
 
-TEST(lookups_keep_working_while_the_table_grows_underneath_them) {
+static void TestLookupsKeepWorkingWhileTheTableGrowsUnderneathThem(TestingT *t) {
     /* Built here rather than at file scope because each needs a name of its
      * own and C has no way to generate sixty four of those in a static
      * initialiser. Written once, before any of the goroutines exist, and only
@@ -502,29 +502,28 @@ TEST(lookups_keep_working_while_the_table_grows_underneath_them) {
     }
 }
 
-int main(void) {
-    RUN(a_registered_type_is_found_by_name);
-    RUN(a_type_that_was_not_registered_is_not_found);
-    RUN(a_name_nothing_registered_gives_null);
-    RUN(the_package_path_is_part_of_the_name);
-    RUN(a_qualified_name_can_be_written_out);
-    RUN(a_name_too_long_for_the_buffer_is_not_written_at_all);
-    RUN(an_unregistered_name_says_it_is_unregistered);
-    RUN(a_name_that_is_not_a_name_says_so_instead);
-    RUN(a_name_that_is_found_leaves_no_error_behind);
-    RUN(the_error_is_optional_like_every_other_out_parameter);
-    RUN(a_type_can_be_registered_while_the_program_runs);
-    RUN(registering_the_same_type_twice_changes_nothing);
-    RUN(a_second_copy_of_one_type_is_accepted);
-    RUN(a_different_type_under_a_taken_name_is_refused);
-    RUN(a_descriptor_with_nothing_to_register_it_under_is_refused);
-    RUN(a_registration_that_worked_leaves_no_error_behind);
-    RUN(the_three_answers_are_three_different_answers);
-    RUN(identity_is_the_address_when_there_is_one);
-    RUN(identity_falls_back_to_the_name);
-    RUN(an_unnamed_type_has_no_identity_beyond_its_address);
-    RUN(the_registry_holds_what_was_put_in_it);
-    RUN(lookups_keep_working_while_the_table_grows_underneath_them);
+#define TESTS(X)                                                                       \
+    X(TestARegisteredTypeIsFoundByName)                                                \
+    X(TestATypeThatWasNotRegisteredIsNotFound)                                         \
+    X(TestANameNothingRegisteredGivesNull)                                             \
+    X(TestThePackagePathIsPartOfTheName)                                               \
+    X(TestAQualifiedNameCanBeWrittenOut)                                               \
+    X(TestANameTooLongForTheBufferIsNotWrittenAtAll)                                   \
+    X(TestAnUnregisteredNameSaysItIsUnregistered)                                      \
+    X(TestANameThatIsNotANameSaysSoInstead)                                            \
+    X(TestANameThatIsFoundLeavesNoErrorBehind)                                         \
+    X(TestTheErrorIsOptionalLikeEveryOtherOutParameter)                                \
+    X(TestATypeCanBeRegisteredWhileTheProgramRuns)                                     \
+    X(TestRegisteringTheSameTypeTwiceChangesNothing)                                   \
+    X(TestASecondCopyOfOneTypeIsAccepted)                                              \
+    X(TestADifferentTypeUnderATakenNameIsRefused)                                      \
+    X(TestADescriptorWithNothingToRegisterItUnderIsRefused)                            \
+    X(TestARegistrationThatWorkedLeavesNoErrorBehind)                                  \
+    X(TestTheThreeAnswersAreThreeDifferentAnswers)                                     \
+    X(TestIdentityIsTheAddressWhenThereIsOne)                                          \
+    X(TestIdentityFallsBackToTheName)                                                  \
+    X(TestAnUnnamedTypeHasNoIdentityBeyondItsAddress)                                  \
+    X(TestTheRegistryHoldsWhatWasPutInIt)                                              \
+    X(TestLookupsKeepWorkingWhileTheTableGrowsUnderneathThem)
 
-    return harness_report("registry");
-}
+TESTING_MAIN_BARE(TESTS)

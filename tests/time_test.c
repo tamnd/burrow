@@ -31,7 +31,7 @@
 #include "burrow/sched.h"
 #include "burrow/timer.h"
 
-#include "harness.h"
+#include "check.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -86,7 +86,7 @@ static void gate_signal(Gate *gt) {
 
 /* --------------------------------------------------------------- off the runtime */
 
-TEST(a_sleep_on_a_plain_thread_still_waits) {
+static void TestASleepOnAPlainThreadStillWaits(TestingT *t) {
     /* Nothing has been started, so this thread is not a goroutine and there is
      * nothing to park. The sleep has to happen anyway, because setup code and
      * tests call it before the runtime exists and a call that quietly does
@@ -96,7 +96,7 @@ TEST(a_sleep_on_a_plain_thread_still_waits) {
     CHECK(burrow__nanotime() - start >= WAIT);
 }
 
-TEST(a_sleep_of_nothing_is_not_a_sleep) {
+static void TestASleepOfNothingIsNotASleep(TestingT *t) {
     int64_t start = burrow__nanotime();
     time_sleep(0);
     time_sleep(-5 * TIME_SECOND);
@@ -120,7 +120,7 @@ static void sleep_once(void *env) {
     slept = burrow__nanotime() - start;
 }
 
-TEST(a_sleep_lasts_at_least_as_long_as_it_was_asked_to) {
+static void TestASleepLastsAtLeastAsLongAsItWasAskedTo(TestingT *t) {
     slept = 0;
     (void)runtime_gomaxprocs(1);
 
@@ -145,7 +145,7 @@ static void sleep_while_another_runs(void *env) {
     helper_ran_first = burrow__atomic_load_acquire_u32(&helper_ran) != 0;
 }
 
-TEST(a_sleeping_goroutine_gives_up_its_thread) {
+static void TestASleepingGoroutineGivesUpItsThread(TestingT *t) {
     helper_ran = 0;
     helper_ran_first = false;
     helper_started = false;
@@ -223,7 +223,7 @@ static void start_three_sleepers(void *env) {
     gate_wait(&all_done);
 }
 
-TEST(sleeps_of_different_lengths_each_wait_their_own) {
+static void TestSleepsOfDifferentLengthsEachWaitTheirOwn(TestingT *t) {
     woke_count = 0;
     waited[0] = waited[1] = waited[2] = 0;
     helper_started = false;
@@ -273,7 +273,7 @@ static void arm_and_wait(void *env) {
     the_timer = NULL;
 }
 
-TEST(after_func_runs_what_it_was_given) {
+static void TestAfterFuncRunsWhatItWasGiven(TestingT *t) {
     callback_runs = 0;
     callback_env = NULL;
     the_timer = NULL;
@@ -285,7 +285,7 @@ TEST(after_func_runs_what_it_was_given) {
     CHECK(callback_env == &env_marker);
 }
 
-TEST(after_func_runs_it_on_a_goroutine_of_its_own) {
+static void TestAfterFuncRunsItOnAGoroutineOfItsOwn(TestingT *t) {
     callback_runs = 0;
     callback_g = NULL;
     arming_g = NULL;
@@ -326,7 +326,7 @@ static void arm_then_stop(void *env) {
     the_timer = NULL;
 }
 
-TEST(a_stopped_timer_never_runs) {
+static void TestAStoppedTimerNeverRuns(TestingT *t) {
     callback_runs = 0;
     stopped = false;
     pending = true;
@@ -354,7 +354,7 @@ static void arm_wait_then_stop(void *env) {
     the_timer = NULL;
 }
 
-TEST(stopping_a_timer_that_has_already_run_says_so) {
+static void TestStoppingATimerThatHasAlreadyRunSaysSo(TestingT *t) {
     callback_runs = 0;
     stopped = true;
     (void)runtime_gomaxprocs(2);
@@ -380,7 +380,7 @@ static void arm_far_out_then_pull_it_in(void *env) {
     the_timer = NULL;
 }
 
-TEST(a_timer_can_be_moved_earlier) {
+static void TestATimerCanBeMovedEarlier(TestingT *t) {
     callback_runs = 0;
     reset_ok = false;
     pending = false;
@@ -417,7 +417,7 @@ static void arm_wait_and_arm_again(void *env) {
     the_timer = NULL;
 }
 
-TEST(a_timer_that_has_run_can_be_started_again) {
+static void TestATimerThatHasRunCanBeStartedAgain(TestingT *t) {
     callback_runs = 0;
     reset_ok = false;
     pending = true;
@@ -463,7 +463,7 @@ static void arm_one_and_free_it(void *env) {
     the_timer = NULL;
 }
 
-TEST(freeing_a_timer_takes_it_out_of_the_heap) {
+static void TestFreeingATimerTakesItOutOfTheHeap(TestingT *t) {
     callback_runs = 0;
     len_before = 0;
     len_after = 99;
@@ -476,18 +476,18 @@ TEST(freeing_a_timer_takes_it_out_of_the_heap) {
     CHECK_INT_EQ(callback_runs, 1);
 }
 
-int main(void) {
-    RUN(a_sleep_on_a_plain_thread_still_waits);
-    RUN(a_sleep_of_nothing_is_not_a_sleep);
-    RUN(a_sleep_lasts_at_least_as_long_as_it_was_asked_to);
-    RUN(a_sleeping_goroutine_gives_up_its_thread);
-    RUN(sleeps_of_different_lengths_each_wait_their_own);
-    RUN(after_func_runs_what_it_was_given);
-    RUN(after_func_runs_it_on_a_goroutine_of_its_own);
-    RUN(a_stopped_timer_never_runs);
-    RUN(stopping_a_timer_that_has_already_run_says_so);
-    RUN(a_timer_can_be_moved_earlier);
-    RUN(a_timer_that_has_run_can_be_started_again);
-    RUN(freeing_a_timer_takes_it_out_of_the_heap);
-    return harness_report("time");
-}
+#define TESTS(X)                                                                       \
+    X(TestASleepOnAPlainThreadStillWaits)                                              \
+    X(TestASleepOfNothingIsNotASleep)                                                  \
+    X(TestASleepLastsAtLeastAsLongAsItWasAskedTo)                                      \
+    X(TestASleepingGoroutineGivesUpItsThread)                                          \
+    X(TestSleepsOfDifferentLengthsEachWaitTheirOwn)                                    \
+    X(TestAfterFuncRunsWhatItWasGiven)                                                 \
+    X(TestAfterFuncRunsItOnAGoroutineOfItsOwn)                                         \
+    X(TestAStoppedTimerNeverRuns)                                                      \
+    X(TestStoppingATimerThatHasAlreadyRunSaysSo)                                       \
+    X(TestATimerCanBeMovedEarlier)                                                     \
+    X(TestATimerThatHasRunCanBeStartedAgain)                                           \
+    X(TestFreeingATimerTakesItOutOfTheHeap)
+
+TESTING_MAIN_BARE(TESTS)

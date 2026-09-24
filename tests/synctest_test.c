@@ -13,9 +13,7 @@
  * synctest_wait that returned early would fail it every time.
  *
  * Everything a goroutine finds out it says through an atomic, and only the test
- * function itself calls CHECK, which is the rule tests/sched_test.c sets out:
- * the harness counts its checks in two plain ints and a second thread touching
- * those is a race in the test.
+ * function itself calls CHECK, which is the rule tests/sched_test.c sets out.
  *
  * The one thing not tested here is the deadlock. A bubble with nothing left
  * that can run stops the program, and it does it from the scheduler's own stack
@@ -43,8 +41,8 @@
 #include "burrow/time.h"
 #include "burrow/type.h"
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -135,7 +133,7 @@ static void plain_top(void *env) {
         (void)burrow__atomic_add_u32(&children_done, 1);
 }
 
-TEST(the_run_calls_the_body) {
+static void TestTheRunCallsTheBody(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, plain_top, NULL));
 
@@ -189,7 +187,7 @@ static void counting_top(void *env) {
     chan_free(bubbled_chan);
 }
 
-TEST(the_run_waits_for_the_goroutines_the_body_started) {
+static void TestTheRunWaitsForTheGoroutinesTheBodyStarted(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, counting_top, NULL));
 
@@ -231,7 +229,7 @@ static void wait_top(void *env) {
         chan_free(bubbled_chan);
 }
 
-TEST(the_wait_returns_once_the_others_are_blocked) {
+static void TestTheWaitReturnsOnceTheOthersAreBlocked(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, wait_top, NULL));
 
@@ -254,7 +252,7 @@ static void lonely_top(void *env) {
     (void)synctest_run(BURROW_FN(Func, lonely_body, NULL));
 }
 
-TEST(a_wait_with_nothing_else_in_the_bubble_returns) {
+static void TestAWaitWithNothingElseInTheBubbleReturns(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, lonely_top, NULL));
 
@@ -323,7 +321,7 @@ static void outside_top(void *env) {
     chan_free(outside_chan);
 }
 
-TEST(a_wait_on_a_channel_from_outside_the_bubble_is_not_durable) {
+static void TestAWaitOnAChannelFromOutsideTheBubbleIsNotDurable(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, outside_top, NULL));
 
@@ -395,7 +393,7 @@ static void wg_top(void *env) {
         chan_free(bubbled_chan);
 }
 
-TEST(a_wait_group_wait_inside_the_bubble_is_durable) {
+static void TestAWaitGroupWaitInsideTheBubbleIsDurable(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, wg_top, NULL));
 
@@ -437,7 +435,7 @@ static void cond_top(void *env) {
     (void)synctest_run(BURROW_FN(Func, cond_body, NULL));
 }
 
-TEST(a_cond_wait_inside_the_bubble_is_durable) {
+static void TestACondWaitInsideTheBubbleIsDurable(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, cond_top, NULL));
 
@@ -461,7 +459,7 @@ static void nested_top(void *env) {
     (void)synctest_run(BURROW_FN(Func, nested_body, NULL));
 }
 
-TEST(bubbles_do_not_nest) {
+static void TestBubblesDoNotNest(TestingT *t) {
     reset();
     runtime_set_fatal_handler(fatal_handler);
     runtime_main(BURROW_FN(Func, nested_top, NULL));
@@ -523,7 +521,7 @@ static void misuse_top(void *env) {
     chan_free(release);
 }
 
-TEST(a_channel_made_in_a_bubble_cannot_be_used_from_outside_it) {
+static void TestAChannelMadeInABubbleCannotBeUsedFromOutsideIt(TestingT *t) {
     reset();
     runtime_set_fatal_handler(fatal_handler);
     runtime_main(BURROW_FN(Func, misuse_top, NULL));
@@ -583,7 +581,7 @@ static void wg_misuse_top(void *env) {
     chan_free(release);
 }
 
-TEST(a_wait_group_cannot_be_added_to_from_inside_and_outside_a_bubble) {
+static void TestAWaitGroupCannotBeAddedToFromInsideAndOutsideABubble(TestingT *t) {
     reset();
     runtime_set_fatal_handler(fatal_handler);
     runtime_main(BURROW_FN(Func, wg_misuse_top, NULL));
@@ -629,7 +627,7 @@ static void sleep_top(void *env) {
         (void)burrow__atomic_add_u32(&children_done, 1);
 }
 
-TEST(a_sleep_inside_a_bubble_costs_no_real_time) {
+static void TestASleepInsideABubbleCostsNoRealTime(TestingT *t) {
     reset();
 
     int64_t before = burrow__nanotime();
@@ -688,7 +686,7 @@ static void order_top(void *env) {
         (void)burrow__atomic_add_u32(&children_done, 1);
 }
 
-TEST(sleeps_in_a_bubble_finish_in_the_order_their_durations_say) {
+static void TestSleepsInABubbleFinishInTheOrderTheirDurationsSay(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, order_top, NULL));
 
@@ -732,7 +730,7 @@ static void settle_top(void *env) {
         (void)burrow__atomic_add_u32(&children_done, 1);
 }
 
-TEST(a_synctest_sleep_returns_after_the_others_have_settled) {
+static void TestASynctestSleepReturnsAfterTheOthersHaveSettled(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, settle_top, NULL));
 
@@ -779,7 +777,7 @@ static void after_top(void *env) {
         (void)burrow__atomic_add_u32(&children_done, 1);
 }
 
-TEST(an_after_func_in_a_bubble_runs_on_the_bubble_clock) {
+static void TestAnAfterFuncInABubbleRunsOnTheBubbleClock(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, after_top, NULL));
 
@@ -831,7 +829,7 @@ static void deadline_top(void *env) {
         (void)burrow__atomic_add_u32(&children_done, 1);
 }
 
-TEST(a_context_deadline_in_a_bubble_is_on_the_bubble_clock) {
+static void TestAContextDeadlineInABubbleIsOnTheBubbleClock(TestingT *t) {
     reset();
     runtime_main(BURROW_FN(Func, deadline_top, NULL));
 
@@ -842,35 +840,34 @@ TEST(a_context_deadline_in_a_bubble_is_on_the_bubble_clock) {
 
 /* --- the two that need no runtime at all */
 
-TEST(a_wait_outside_a_bubble_stops_the_program) {
+static void TestAWaitOutsideABubbleStopsTheProgram(TestingT *t) {
     reset();
     CHECK_FATAL(synctest_wait(), "synctest_wait: not inside a bubble");
 }
 
-TEST(a_run_outside_a_goroutine_stops_the_program) {
+static void TestARunOutsideAGoroutineStopsTheProgram(TestingT *t) {
     reset();
     CHECK_FATAL((void)synctest_run(BURROW_FN(Func, plain_body, NULL)),
                 "synctest_run: not on a goroutine");
 }
 
-int main(void) {
-    RUN(the_run_calls_the_body);
-    RUN(the_run_waits_for_the_goroutines_the_body_started);
-    RUN(the_wait_returns_once_the_others_are_blocked);
-    RUN(a_wait_with_nothing_else_in_the_bubble_returns);
-    RUN(a_wait_on_a_channel_from_outside_the_bubble_is_not_durable);
-    RUN(bubbles_do_not_nest);
-    RUN(a_wait_group_wait_inside_the_bubble_is_durable);
-    RUN(a_cond_wait_inside_the_bubble_is_durable);
-    RUN(a_channel_made_in_a_bubble_cannot_be_used_from_outside_it);
-    RUN(a_wait_group_cannot_be_added_to_from_inside_and_outside_a_bubble);
-    RUN(a_sleep_inside_a_bubble_costs_no_real_time);
-    RUN(sleeps_in_a_bubble_finish_in_the_order_their_durations_say);
-    RUN(a_synctest_sleep_returns_after_the_others_have_settled);
-    RUN(an_after_func_in_a_bubble_runs_on_the_bubble_clock);
-    RUN(a_context_deadline_in_a_bubble_is_on_the_bubble_clock);
-    RUN(a_wait_outside_a_bubble_stops_the_program);
-    RUN(a_run_outside_a_goroutine_stops_the_program);
+#define TESTS(X)                                                                       \
+    X(TestTheRunCallsTheBody)                                                          \
+    X(TestTheRunWaitsForTheGoroutinesTheBodyStarted)                                   \
+    X(TestTheWaitReturnsOnceTheOthersAreBlocked)                                       \
+    X(TestAWaitWithNothingElseInTheBubbleReturns)                                      \
+    X(TestAWaitOnAChannelFromOutsideTheBubbleIsNotDurable)                             \
+    X(TestBubblesDoNotNest)                                                            \
+    X(TestAWaitGroupWaitInsideTheBubbleIsDurable)                                      \
+    X(TestACondWaitInsideTheBubbleIsDurable)                                           \
+    X(TestAChannelMadeInABubbleCannotBeUsedFromOutsideIt)                              \
+    X(TestAWaitGroupCannotBeAddedToFromInsideAndOutsideABubble)                        \
+    X(TestASleepInsideABubbleCostsNoRealTime)                                          \
+    X(TestSleepsInABubbleFinishInTheOrderTheirDurationsSay)                            \
+    X(TestASynctestSleepReturnsAfterTheOthersHaveSettled)                              \
+    X(TestAnAfterFuncInABubbleRunsOnTheBubbleClock)                                    \
+    X(TestAContextDeadlineInABubbleIsOnTheBubbleClock)                                 \
+    X(TestAWaitOutsideABubbleStopsTheProgram)                                          \
+    X(TestARunOutsideAGoroutineStopsTheProgram)
 
-    return harness_report("synctest");
-}
+TESTING_MAIN_BARE(TESTS)

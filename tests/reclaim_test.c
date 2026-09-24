@@ -31,8 +31,8 @@
 #include "burrow/sync/atomic.h"
 #include "burrow/thread.h"
 
+#include "check.h"
 #include "fatal.h"
-#include "harness.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -84,7 +84,7 @@ static void reset(void) {
 
 /* --------------------------------------------------- nobody is reading at all */
 
-TEST(an_object_nobody_is_reading_is_freed) {
+static void TestAnObjectNobodyIsReadingIsFreed(TestingT *t) {
     reset();
 
     Box *b = box_new();
@@ -104,7 +104,7 @@ TEST(an_object_nobody_is_reading_is_freed) {
     CHECK_INT_EQ(burrow__reclaim_pending(), 0);
 }
 
-TEST(a_batch_is_freed_without_anybody_asking) {
+static void TestABatchIsFreedWithoutAnybodyAsking(TestingT *t) {
     reset();
 
     /* One more than the batch size, so the retire that crosses it pushes and
@@ -141,7 +141,7 @@ TEST(a_batch_is_freed_without_anybody_asking) {
 
 /* ------------------------------------------------------- somebody is reading */
 
-TEST(a_pinned_thread_holds_the_object_back) {
+static void TestAPinnedThreadHoldsTheObjectBack(TestingT *t) {
     reset();
 
     Box *b = box_new();
@@ -162,7 +162,7 @@ TEST(a_pinned_thread_holds_the_object_back) {
     CHECK_INT_EQ(sync_atomic_int64_load(&frees), 1);
 }
 
-TEST(a_nested_pin_is_only_released_by_the_outer_unpin) {
+static void TestANestedPinIsOnlyReleasedByTheOuterUnpin(TestingT *t) {
     reset();
 
     Box *b = box_new();
@@ -186,7 +186,7 @@ TEST(a_nested_pin_is_only_released_by_the_outer_unpin) {
     CHECK_INT_EQ(sync_atomic_int64_load(&frees), 1);
 }
 
-TEST(an_unpin_without_a_pin_is_caught) {
+static void TestAnUnpinWithoutAPinIsCaught(TestingT *t) {
     reset();
 
     CHECK_FATAL(burrow__unpin(), "reclaim: unpin without a pin");
@@ -215,14 +215,14 @@ static void foreign_reader(void *arg) {
     sync_atomic_uint32_store(&reader_done, 1);
 }
 
-TEST(a_thread_that_is_not_a_goroutine_holds_the_epoch_too) {
+static void TestAThreadThatIsNotAGoroutineHoldsTheEpochToo(TestingT *t) {
     reset();
     sync_atomic_uint32_store(&reader_pinned, 0);
     sync_atomic_uint32_store(&reader_release, 0);
     sync_atomic_uint32_store(&reader_done, 0);
 
-    burrow__Thread t;
-    CHECK(burrow__thread_start(&t, foreign_reader, NULL, 0));
+    burrow__Thread th;
+    CHECK(burrow__thread_start(&th, foreign_reader, NULL, 0));
 
     while (sync_atomic_uint32_load(&reader_pinned) == 0)
         burrow__thread_yield();
@@ -241,7 +241,7 @@ TEST(a_thread_that_is_not_a_goroutine_holds_the_epoch_too) {
     flush_a_few();
     CHECK_INT_EQ(sync_atomic_int64_load(&frees), 1);
 
-    CHECK(burrow__thread_join(&t));
+    CHECK(burrow__thread_join(&th));
 }
 
 /* ------------------------------------------------------------- under real load
@@ -307,7 +307,7 @@ static void stress_main(void *arg) {
         runtime_gosched();
 }
 
-TEST(readers_never_see_an_object_that_was_freed) {
+static void TestReadersNeverSeeAnObjectThatWasFreed(TestingT *t) {
     reset();
     cell = NULL;
     sync_atomic_uint32_store(&stop, 0);
@@ -335,7 +335,7 @@ TEST(readers_never_see_an_object_that_was_freed) {
 
 /* ---------------------------------------------------------------- shutting down */
 
-TEST(a_drain_frees_what_the_epoch_has_not_got_to_yet) {
+static void TestADrainFreesWhatTheEpochHasNotGotToYet(TestingT *t) {
     reset();
 
     for (int i = 0; i < 5; i++) {
@@ -355,15 +355,14 @@ TEST(a_drain_frees_what_the_epoch_has_not_got_to_yet) {
     CHECK_INT_EQ(burrow__reclaim_pending(), 0);
 }
 
-int main(void) {
-    RUN(an_object_nobody_is_reading_is_freed);
-    RUN(a_batch_is_freed_without_anybody_asking);
-    RUN(a_pinned_thread_holds_the_object_back);
-    RUN(a_nested_pin_is_only_released_by_the_outer_unpin);
-    RUN(an_unpin_without_a_pin_is_caught);
-    RUN(a_thread_that_is_not_a_goroutine_holds_the_epoch_too);
-    RUN(readers_never_see_an_object_that_was_freed);
-    RUN(a_drain_frees_what_the_epoch_has_not_got_to_yet);
+#define TESTS(X)                                                                       \
+    X(TestAnObjectNobodyIsReadingIsFreed)                                              \
+    X(TestABatchIsFreedWithoutAnybodyAsking)                                           \
+    X(TestAPinnedThreadHoldsTheObjectBack)                                             \
+    X(TestANestedPinIsOnlyReleasedByTheOuterUnpin)                                     \
+    X(TestAnUnpinWithoutAPinIsCaught)                                                  \
+    X(TestAThreadThatIsNotAGoroutineHoldsTheEpochToo)                                  \
+    X(TestReadersNeverSeeAnObjectThatWasFreed)                                         \
+    X(TestADrainFreesWhatTheEpochHasNotGotToYet)
 
-    return harness_report("reclaim");
-}
+TESTING_MAIN_BARE(TESTS)

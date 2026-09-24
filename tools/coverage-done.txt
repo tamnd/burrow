@@ -21,3 +21,4 @@ hash/fnv
 unicode
 iter
 strings
+bytes

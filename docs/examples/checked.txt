@@ -33,3 +33,4 @@ docs/guides/testing.md
 docs/guides/hashing.md
 docs/guides/unicode.md
 docs/guides/iter.md
+docs/guides/bytes.md

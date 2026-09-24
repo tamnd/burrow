@@ -38,6 +38,7 @@
 #include "burrow/platform.h"
 #include "burrow/version.h"
 
+#include "burrow/bytes.h"
 #include "burrow/chan.h"
 #include "burrow/context.h"
 #include "burrow/core.h"

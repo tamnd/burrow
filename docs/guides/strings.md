@@ -311,4 +311,4 @@ It reads bytes, runes, or a range at an offset, and ends with `io_eof` the way e
 
 ## What is not here
 
-Nothing from Go's `strings` package is missing. `core.h` keeps only the handful of things with no Go equivalent, which is everything to do with C strings, since Go has no C string to convert to. The byte slice versions of all of this belong to the `bytes` package, which is next.
+Nothing from Go's `strings` package is missing. `core.h` keeps only the handful of things with no Go equivalent, which is everything to do with C strings, since Go has no C string to convert to. The byte slice versions of all of this are the `bytes` package, in [Bytes](bytes.md).

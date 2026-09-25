@@ -30,12 +30,12 @@ static void arena_done(void) {
 }
 
 /* A splitmix64 generator standing in for math/rand until that is ported. */
-static uint64_t rng_state = 0x9e3779b97f4a7c15u;
+static uint64_t rng_state = 0x9e3779b97f4a7c15U;
 
 static Int rng_intn(Int n) {
-    uint64_t z = (rng_state += 0x9e3779b97f4a7c15u);
-    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9u;
-    z = (z ^ (z >> 27)) * 0x94d049bb133111ebu;
+    uint64_t z = (rng_state += 0x9e3779b97f4a7c15U);
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9U;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebU;
     return (Int)((z ^ (z >> 31)) % (uint64_t)n);
 }
 
@@ -678,7 +678,7 @@ static const Type int_ptr_type = {
 };
 
 static Slice ptrs(IntPtr *p, Int len, Int cap) {
-    return slice_from(p, len, cap, &int_ptr_type);
+    return slice_from((void *)p, len, cap, &int_ptr_type);
 }
 
 static void TestDeleteClearTail(TestingT *t) {
@@ -896,7 +896,7 @@ static void TestReplaceGrow(TestingT *t) {
     Int a = 1, b = 2, c = 3, d = 4, e = 5, f = 6;
     IntPtr mem[6] = {&a, &b, &c, &d, &e, &f};
     IntPtr memcopy[6];
-    memcpy(memcopy, mem, sizeof mem);
+    memcpy((void *)memcopy, (const void *)mem, sizeof mem);
     Slice s = ptrs(mem, 5, 6);
     Slice copy = slices_clone(A, s);
     Slice original = s;
@@ -904,7 +904,7 @@ static void TestReplaceGrow(TestingT *t) {
     /* The new elements do not fit within cap(s), so Replace allocates. */
     Int z = 99;
     IntPtr zs[] = {&z, &z, &z, &z};
-    s = slices_replace(A, s, 1, 3, zs, 4);
+    s = slices_replace(A, s, 1, 3, (const void *)zs, 4);
 
     IntPtr want[] = {&a, &z, &z, &z, &z, &d, &e};
     CHECK(slices_equal(s, ptrs(want, 7, 7)));
@@ -919,7 +919,7 @@ static void TestReplaceClearTail(TestingT *t) {
     IntPtr mem[6] = {&a, &b, &c, &d, &e, &f};
     Int y = 8, z = 9;
     IntPtr yz[] = {&y, &z};
-    Slice s = slices_replace(A, ptrs(mem, 5, 6), 1, 4, yz, 2);
+    Slice s = slices_replace(A, ptrs(mem, 5, 6), 1, 4, (const void *)yz, 2);
     IntPtr want[] = {&a, &y, &z, &e};
     CHECK(slices_equal(s, ptrs(want, 4, 4)));
     CHECK(mem[4] == NULL);
@@ -1273,7 +1273,7 @@ static void TestSortWidths(TestingT *t) {
     uint16_t u16[] = {300, 1, 65535};
     int32_t i32[] = {-7, 7, 0};
     uint64_t u64[] = {UINT64_MAX, 0, 1};
-    float f32[] = {1.5f, (float)NAN, -2.0f};
+    float f32[] = {1.5F, (float)NAN, -2.0F};
     slices_sort(slice_from(i8, 3, 3, TYPE_INT8));
     slices_sort(slice_from(u16, 3, 3, TYPE_UINT16));
     slices_sort(slice_from(i32, 3, 3, TYPE_INT32));
@@ -1283,7 +1283,7 @@ static void TestSortWidths(TestingT *t) {
     CHECK(u16[0] == 1 && u16[2] == 65535);
     CHECK(i32[0] == -7 && i32[2] == 7);
     CHECK(u64[0] == 0 && u64[2] == UINT64_MAX);
-    CHECK(f32[0] != f32[0] && f32[1] == -2.0f && f32[2] == 1.5f);
+    CHECK(f32[0] != f32[0] && f32[1] == -2.0F && f32[2] == 1.5F);
     /* A type with no order panics, where Go would not compile. */
     IntPtr p[1] = {NULL};
     CHECK(call_panics(call_sort, (PanicCall){ptrs(p, 1, 1), 0, 0, INIL()}));

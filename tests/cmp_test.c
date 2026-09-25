@@ -56,7 +56,7 @@ static void setup(void) {
     };
     memcpy(float_cases, f, sizeof f);
     static double target;
-    Uintptr nonnil = (Uintptr)(void *)&target;
+    Uintptr nonnil = (Uintptr)&target;
     PtrCase p[] = {{0, nonnil, -1}, {nonnil, 0, 1}, {nonnil, nonnil, 0}};
     memcpy(ptr_cases, p, sizeof p);
 }
@@ -117,14 +117,14 @@ static void TestCompareWidths(TestingT *t) {
     CHECK_INT_EQ(cmp_compare((int64_t)-1, (int64_t)1), -1);
     CHECK_INT_EQ(cmp_compare((uint8_t)255, (uint8_t)1), +1);
     CHECK_INT_EQ(cmp_compare((uint16_t)65535, (uint16_t)1), +1);
-    CHECK_INT_EQ(cmp_compare((uint32_t)4294967295u, (uint32_t)1), +1);
+    CHECK_INT_EQ(cmp_compare((uint32_t)4294967295U, (uint32_t)1), +1);
     CHECK_INT_EQ(cmp_compare((uint64_t)UINT64_MAX, (uint64_t)1), +1);
     CHECK_INT_EQ(cmp_compare((long)-1, (long)1), -1);
     CHECK_INT_EQ(cmp_compare((unsigned long)2, (unsigned long)1), +1);
     CHECK_INT_EQ(cmp_compare((long long)-1, (long long)1), -1);
     CHECK_INT_EQ(cmp_compare((unsigned long long)1, (unsigned long long)1), 0);
     CHECK(cmp_less((Uint)1, (Uint)2));
-    CHECK(!cmp_less(2.0f, 1.0f));
+    CHECK(!cmp_less(2.0F, 1.0F));
     CHECK(cmp_less((float)NAN, -INFINITY));
 }
 

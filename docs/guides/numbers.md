@@ -149,6 +149,42 @@ The functions that return two results in Go, `Add`, `Sub`, `Mul` and `Div`, retu
 
 Everything in the header is a `static inline` over the compiler's builtin where there is one, so `bits_len64` is a `clz` and `bits_mul64` is one widening multiply. Where there is no builtin the header falls back to Go's own portable code, and the tests run a second time against that fallback so that it is not left untested until someone brings an unusual compiler.
 
+## Floating point
+
+`burrow/math.h` is Go's `math` package. `math.Hypot` is `math_hypot`, `math.RoundToEven` is `math_round_to_even`, and the constants are macros with the package in front, so `math.Pi` is `MATH_PI` and `math.MaxInt64` is `MATH_MAX_INT64`.
+
+<!-- example: ../examples/numbers/math.c#basic -->
+```c
+double h = math_hypot(3, 4);        /* 5 */
+double r = math_round(-2.5);        /* -3, half away from zero */
+double e = math_round_to_even(2.5); /* 2 */
+double p = math_pow(2, 0.5);        /* the square root of 2 */
+```
+
+The functions that give back two results in Go return the first and write the second through a pointer at the end, and the pointer can be `NULL`. `Frexp`, `Modf`, `Sincos` and `Lgamma` are the four:
+
+<!-- example: ../examples/numbers/math.c#two -->
+```c
+Int exp;
+double frac = math_frexp(48, &exp); /* 0.75 and 6, since 48 is 0.75 * 2^6 */
+double c;
+double s = math_sincos(MATH_PI / 6, &c);
+double whole = math_modf(-3.25, NULL); /* -3, the fraction is not wanted */
+```
+
+The special cases are Go's too. A square root of a negative number is NaN, the log of zero is minus infinity, and `math_is_nan` and `math_is_inf` are how you ask:
+
+<!-- example: ../examples/numbers/math.c#special -->
+```c
+double nan = math_sqrt(-1);
+bool isnan = math_is_nan(nan);
+bool inf = math_is_inf(math_log(0), -1); /* log(0) is -Inf */
+```
+
+None of this calls the C library. Go carries its own implementations, most of them from FDLIBM, and the answers they give differ in the last bit from glibc's, musl's, Apple's and Microsoft's, which also differ from each other. Every function here is Go's code ported, so `math_sin(x)` gives the bits Go's `math.Sin(x)` gives, on every platform, and the library does not link against libm. The tests check that directly: besides Go's own tests, every function runs over sixteen thousand inputs and the bits are compared with what Go returned for the same inputs.
+
+That only holds if the compiler rounds every multiply and every add the way Go does. Some compilers fuse `a * b + c` into one instruction that rounds once, which changes the last bit, so the source turns that off for itself with the pragmas GCC, Clang and MSVC understand. `math_sqrt` and `math_fma` are the two where the hardware gives the one correctly rounded answer Go's code also gives, so they use it where every machine of the kind has it: the square root instruction on x86-64 and arm64, and the fused multiply and add on arm64. Everywhere else they run Go's software versions.
+
 ## What it costs
 
 Nothing, on the arithmetic, and a compare on the rest.
@@ -161,5 +197,6 @@ Every function in the header is a `static inline`, and the wrapping is free beca
 
 - [zero values and multiple results](conventions.md), the two rules that shape every signature in the library
 - `include/burrow/num.h`, which carries the reasoning next to the code
+- `include/burrow/math.h`, and `tests/math_test.c`, which is Go's `all_test.go` with the tables generated from Go's by `tools/gen-math-tests.sh`
 - `include/burrow/math/bits.h`, and `tests/bits_test.c`, which is Go's `bits_test.go` ported line for line
 - `tests/num_test.c`, where every answer came from running a Go program on two architectures rather than from reading the C standard

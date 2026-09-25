@@ -67,6 +67,7 @@
 #include "burrow/map.h"
 #include "burrow/math.h"
 #include "burrow/math/bits.h"
+#include "burrow/math/cmplx.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/fixed.h"

@@ -71,3 +71,7 @@ io: func NewOffsetWriter: returns the IoOffsetWriter value rather than a pointer
 io: func MultiReader: takes an allocator and the readers as a pointer and a count
 io: func MultiWriter: takes an allocator and the writers as a pointer and a count
 io: func Pipe: takes an allocator and returns both ends through out parameters
+
+# include/burrow/bufio.h: a ReadWriter is two pointers and nothing to
+# allocate, so it comes back by value.
+bufio: func NewReadWriter: returns the struct by value, since it holds only the two pointers

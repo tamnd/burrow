@@ -29,3 +29,4 @@ encoding/base64
 encoding/hex
 encoding/binary
 io
+bufio

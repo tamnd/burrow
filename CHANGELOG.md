@@ -4,6 +4,23 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.5 (2026-09-25)
+
+Paths and the first hashes from crypto.
+
+### Added
+
+- `path`, all nine functions. The ones that only split a path return views into their input, and `path_clean` returns a clean path unchanged without allocating (#207).
+- `crypto/md5`, `crypto/sha1`, `crypto/sha256` and `crypto/sha512` with every variant Go has. Each one is a `Hash` built from the caller's allocator, and the one shot sums return the digest by value (#209).
+- `crypto/sha3`, SHA3-224 through SHA3-512, SHAKE128 and SHAKE256, and cSHAKE (#212).
+- Hardware SHA-1 and SHA-256 on x86 (SHA-NI) and on arm64, and hardware SHA-512 on arm64, chosen at run time. With them, SHA-1 and SHA-256 run about as fast as Go (#213).
+- `pal_cpu_features`, which says which instruction set extensions the processor has and respects `GODEBUG=cpu.X=off` the way Go does (#213).
+
+### Fixed
+
+- The amalgamation with gcc 13 and `-Werror`, where `-Wclobbered` flagged a value built inside the setjmp frame in iter (#211).
+- A flaky goroutine count in the iter range tests on loaded machines (#208).
+
 ## v0.1.4 (2026-09-25)
 
 Floating point and complex numbers.

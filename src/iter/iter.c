@@ -65,6 +65,13 @@ static void iter_pull_finish(void *env) {
     p->done = true; /* Invalidate iterator */
 }
 
+/* Runs the sequence. This is its own function so the yield value is built
+ * outside the frame that holds the setjmp, where gcc warns it might be
+ * clobbered. */
+static void iter_pull_run(IterPull *p) {
+    BURROW_CALLF(p->seq, BURROW_FN(IterYield, iter_pull_yield, p));
+}
+
 static void iter_pull_body(burrow__Coro *c, void *env) {
     (void)c;
     IterPull *p = (IterPull *)env;
@@ -73,7 +80,7 @@ static void iter_pull_body(burrow__Coro *c, void *env) {
     BURROW_SCOPE {
         BURROW_DEFER(iter_pull_finish, p);
         BURROW_TRY {
-            BURROW_CALLF(p->seq, BURROW_FN(IterYield, iter_pull_yield, p));
+            iter_pull_run(p);
             p->v = NULL;
             p->ok = false;
             p->seq_done = true;
@@ -140,6 +147,13 @@ static void iter_pull2_finish(void *env) {
     p->done = true; /* Invalidate iterator. */
 }
 
+/* Runs the sequence. This is its own function so the yield value is built
+ * outside the frame that holds the setjmp, where gcc warns it might be
+ * clobbered. */
+static void iter_pull2_run(IterPull2 *p) {
+    BURROW_CALLF(p->seq, BURROW_FN(IterYield2, iter_pull2_yield, p));
+}
+
 static void iter_pull2_body(burrow__Coro *c, void *env) {
     (void)c;
     IterPull2 *p = (IterPull2 *)env;
@@ -148,7 +162,7 @@ static void iter_pull2_body(burrow__Coro *c, void *env) {
     BURROW_SCOPE {
         BURROW_DEFER(iter_pull2_finish, p);
         BURROW_TRY {
-            BURROW_CALLF(p->seq, BURROW_FN(IterYield2, iter_pull2_yield, p));
+            iter_pull2_run(p);
             p->k = NULL;
             p->v = NULL;
             p->ok = false;

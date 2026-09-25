@@ -42,3 +42,5 @@ crypto/sha512
 crypto/sha3
 container/list
 container/ring
+sort
+container/heap

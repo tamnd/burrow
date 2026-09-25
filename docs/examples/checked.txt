@@ -39,3 +39,4 @@ docs/guides/io.md
 docs/guides/bufio.md
 docs/guides/paths.md
 docs/guides/containers.md
+docs/guides/sorting.md

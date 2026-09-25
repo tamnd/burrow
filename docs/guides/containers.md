@@ -1,6 +1,6 @@
 # Containers
 
-`burrow/container/list.h` and `burrow/container/ring.h` are Go's `container/list` and `container/ring`: a doubly linked list and a circular list, each holding values of any type. `container/heap` comes with `sort`, because a heap is defined by `sort.Interface`.
+`burrow/container/list.h`, `burrow/container/ring.h` and `burrow/container/heap.h` are Go's `container/list`, `container/ring` and `container/heap`: a doubly linked list and a circular list, each holding values of any type, and a priority queue over a slice you own.
 
 The names follow the usual rule. `list.List` is `List` and `ring.Ring` is `Ring`, since the type has the same name as its package, and the methods are functions with the type in front: `l.PushBack(v)` is `list_push_back(&l, v)` and `e.Next()` is `list_element_next(e)`.
 
@@ -61,3 +61,30 @@ Unlike a list, a ring never copies or even looks at its values, which is Go's "f
 
 - [interfaces.md](interfaces.md), for `Any` and `any_box`.
 - [allocators.md](allocators.md), for arenas and the heap.
+
+## Heaps
+
+A heap is not a type of its own. It is any `HeapInterface`, which is a `SortInterface` with `push` and `pop` added, and the functions in `burrow/container/heap.h` keep it in heap order so that the smallest element as `less` sees it is at index 0. This is Go's priority queue example, where `less` compares with greater than so the highest priority comes out first:
+
+<!-- example: ../examples/container/container.c#heap -->
+```c
+Item banana = {"banana", 3, 0}, apple = {"apple", 2, 1}, pear = {"pear", 4, 2};
+Queue q = {{&banana, &apple, &pear}, 3};
+HeapInterface h = {&queue_vt, &q};
+heap_init(h);
+
+Item orange = {"orange", 1, 0};
+heap_push(h, BURROW_ANY(&item_type, &orange));
+orange.priority = 5;
+heap_fix(h, orange.index);
+
+while (q.n > 0) {
+    Item *item = any_assert(heap_pop(h), &item_type);
+    printf("%.2lld:%s%s", (long long)item->priority, item->value,
+           q.n > 0 ? " " : "\n");
+} /* 05:orange 04:pear 03:banana 02:apple */
+```
+
+`push` appends at index `len` and `pop` removes the element at `len - 1`. They are how the heap grows and shrinks, and the heap functions call them at the right moment, so call `heap_push` and `heap_pop` yourself and never the methods. `heap_remove` takes out any element by index and `heap_fix` puts one back in order after its value has changed, which is why the example keeps each item's index up to date in `swap`.
+
+The `Any` that `pop` returns has to stay valid after the slot is gone. Here the queue holds pointers to items the caller owns, which is the usual way, and a queue of plain values can return a pointer to the slot it just gave up, as long as the caller reads it before the next push.

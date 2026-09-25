@@ -570,6 +570,9 @@ FUNC_TYPES = {
     "func(int32) bool": {"RuneFunc"},
     "func(int32) int32": {"RuneMapFunc"},
     "func(interface{})": {"RingDoFunc"},
+    "func(int, int) bool": {"SortLessFunc"},
+    "func(int) bool": {"SortSearchFunc"},
+    "func(int) int": {"SortFindFunc"},
 }
 
 BUILTIN = {

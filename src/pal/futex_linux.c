@@ -33,6 +33,10 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#if BURROW_TSAN
+#include <signal.h>
+#endif
+
 /* FUTEX_WAIT and FUTEX_WAKE are 0 and 1, and the PRIVATE flag is 128, which
  * says the futex is never shared between processes and lets the kernel skip
  * looking the page up in the shared mapping table.
@@ -77,6 +81,18 @@ typedef struct FutexTimespec {
  * rather than something that usually does not. */
 #define FUTEX_MAX_WAIT_NS 1000000000000LL
 
+/* ThreadSanitizer catches every signal itself and only runs the program's
+ * handler once the thread it landed on next goes through one of its
+ * interceptors. A raw futex system call is not one, and the handlers are
+ * installed with SA_RESTART, so a thread parked here with no deadline would
+ * swallow a SIGINT for good. That was the fuzzing test hanging under tsan. In
+ * those builds a wait is cut into short slices, and sigpending, which tsan does
+ * intercept, runs after each one to let a queued handler through. Callers
+ * already treat an early return as a spurious wakeup and look again. */
+#if BURROW_TSAN
+#define FUTEX_TSAN_SLICE_NS 20000000LL
+#endif
+
 bool pal_futex_wait(uint32_t *addr, uint32_t expect, int64_t timeout_ns,
                     PalErrno *err) {
     if (addr == NULL) {
@@ -86,6 +102,12 @@ bool pal_futex_wait(uint32_t *addr, uint32_t expect, int64_t timeout_ns,
 
     FutexTimespec ts;
     FutexTimespec *tp = NULL;
+
+#if BURROW_TSAN
+    bool sliced = timeout_ns < 0 || timeout_ns > FUTEX_TSAN_SLICE_NS;
+    if (sliced)
+        timeout_ns = FUTEX_TSAN_SLICE_NS;
+#endif
 
     if (timeout_ns >= 0) {
         int64_t ns = timeout_ns > FUTEX_MAX_WAIT_NS ? FUTEX_MAX_WAIT_NS : timeout_ns;
@@ -98,12 +120,24 @@ bool pal_futex_wait(uint32_t *addr, uint32_t expect, int64_t timeout_ns,
         tp = &ts;
     }
 
-    if (syscall(PAL_SYS_FUTEX, addr, FUTEX_WAIT_PRIVATE, expect, tp, NULL, 0) == 0) {
+    long rc = syscall(PAL_SYS_FUTEX, addr, FUTEX_WAIT_PRIVATE, expect, tp, NULL, 0);
+    int e = errno;
+
+#if BURROW_TSAN
+    sigset_t pending;
+    (void)sigpending(&pending);
+    if (sliced && rc != 0 && e == ETIMEDOUT) {
+        BURROW_OUT(err, PAL_OK);
+        return true;
+    }
+#endif
+
+    if (rc == 0) {
         BURROW_OUT(err, PAL_OK);
         return true;
     }
 
-    switch (errno) {
+    switch (e) {
     case EAGAIN:
         /* The word already differed, which is not a failure. See pal.h. */
         BURROW_OUT(err, PAL_OK);
@@ -115,7 +149,7 @@ bool pal_futex_wait(uint32_t *addr, uint32_t expect, int64_t timeout_ns,
         BURROW_OUT(err, PAL_EINTR);
         return false;
     default:
-        BURROW_OUT(err, burrow__pal_errno(errno));
+        BURROW_OUT(err, burrow__pal_errno(e));
         return false;
     }
 }

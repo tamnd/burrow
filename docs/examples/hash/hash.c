@@ -94,6 +94,30 @@ static void crypto(Alloc *a) {
     // doc: end
 }
 
+static void sha3(Alloc *a) {
+    Slice data = slice_from_str(a, BURROW_S("hello, world"));
+    // doc: sha3
+    Sha3 h = {0};
+    sha3_write(&h, data, NULL);
+    Slice sum = sha3_sum(&h, a, slice_nil(TYPE_BYTE));
+    // doc: end
+    Str hex = hex_encode_to_string(a, sum);
+    printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(hex));
+
+    // doc: shake
+    Sha3SHAKE x = {0};
+    sha3_shake_write(&x, data, NULL);
+    Byte out[16];
+    sha3_shake_read(&x, slice_from(out, 16, 16, TYPE_BYTE), NULL);
+    // doc: end
+    hex = hex_encode_to_string(a, slice_from(out, 16, 16, TYPE_BYTE));
+    printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(hex));
+
+    // doc: sha3generic
+    print_sum(a, BURROW_S("sha3-224"), sha3_as_hash(sha3_new224(a)), data);
+    // doc: end
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, heap_allocator(), 0);
@@ -102,6 +126,7 @@ int main(void) {
     streaming(a);
     fnv(a);
     crypto(a);
+    sha3(a);
     arena_free(&ar);
     return 0;
 }
@@ -120,4 +145,7 @@ fnv128a: 4f 2e a2 0c f7 3d cc 0f f0 d6 a3 62 4c d2 66 05
 11f2c88c04f0a9c3d0970894ad2472505e0bc6e8c7ec46b5211cd1fa3e253e62
 md5: e4 d7 f1 b4 ed 2e 42 d1 58 98 f4 b2 7b 01 9d a4
 sha1: b7 e2 3e c2 9a f2 2b 0b 4e 41 da 31 e8 68 d5 72 26 12 1c 84
+bfb3959527d7a3f2f09def2f6915452d55a8f122df9e164d6f31c7fcf6093e14
+7c9896ea84a2a1b80b2183a3f2b4e43c
+sha3-224: 92 7b 36 2e af 84 a7 57 85 bb ec 33 70 d1 c9 71 13 49 e9 3f 11 04 ed a0 60 78 42 21
 */

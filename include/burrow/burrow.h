@@ -46,6 +46,7 @@
 #include "burrow/crypto/md5.h"
 #include "burrow/crypto/sha1.h"
 #include "burrow/crypto/sha256.h"
+#include "burrow/crypto/sha3.h"
 #include "burrow/crypto/sha512.h"
 #include "burrow/declare.h"
 #include "burrow/defer.h"

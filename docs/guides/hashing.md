@@ -143,10 +143,48 @@ sha1: b7 e2 3e c2 9a f2 2b 0b 4e 41 da 31 e8 68 d5 72 26 12 1c 84
 
 MD5 and SHA-1 are broken for anything where an attacker picks the input. They are here because file formats and protocols still name them. Use SHA-256 or SHA-512 for new work.
 
+## SHA-3 and SHAKE
+
+`crypto/sha3` works a little differently, because Go's `sha3.SHA3` and `sha3.SHAKE` are concrete types whose zero value works. Here they are plain structs, `Sha3` and `Sha3SHAKE`, so one can sit on the stack with nothing allocated. A zero `Sha3` is SHA3-256:
+
+<!-- example: ../examples/hash/hash.c#sha3 -->
+```c
+Sha3 h = {0};
+sha3_write(&h, data, NULL);
+Slice sum = sha3_sum(&h, a, slice_nil(TYPE_BYTE));
+```
+
+That prints `bfb3959527d7a3f2f09def2f6915452d55a8f122df9e164d6f31c7fcf6093e14`. `sha3_new224`, `sha3_new256`, `sha3_new384` and `sha3_new512` allocate one of a given size, and `sha3_sum224` and the rest are the one call versions, returned by value like the others above.
+
+SHAKE128 and SHAKE256 are extendable output functions. You write the input and then read as many bytes of output as you want, in as many reads as you like. A zero `Sha3SHAKE` is SHAKE256:
+
+<!-- example: ../examples/hash/hash.c#shake -->
+```c
+Sha3SHAKE x = {0};
+sha3_shake_write(&x, data, NULL);
+Byte out[16];
+sha3_shake_read(&x, slice_from(out, 16, 16, TYPE_BYTE), NULL);
+```
+
+The 16 bytes are `7c9896ea84a2a1b80b2183a3f2b4e43c`, and reading 16 more carries on from there. `sha3_new_cshake128` and `sha3_new_cshake256` take a function name and a customisation string, which is cSHAKE from SP 800-185. Writing after the first read panics with Go's message, `sha3: Write after Read`.
+
+To pass one to code that takes a `Hash`, `sha3_as_hash` wraps a pointer to it, and `sha3_shake_as_xof` gives a `HashXOF`:
+
+<!-- example: ../examples/hash/hash.c#sha3generic -->
+```c
+print_sum(a, BURROW_S("sha3-224"), sha3_as_hash(sha3_new224(a)), data);
+```
+
+```text
+sha3-224: 92 7b 36 2e af 84 a7 57 85 bb ec 33 70 d1 c9 71 13 49 e9 3f 11 04 ed a0 60 78 42 21
+```
+
+Unlike the older hashes, both types already have `MarshalBinary`, `AppendBinary` and `UnmarshalBinary`, as `sha3_marshal_binary` and so on, and `sha3_clone` returns a `HashCloner`. The saved state is byte for byte what Go saves, so a state written by a Go program can be picked up here and the other way round.
+
 ## Memory
 
 A hash made by one of the `_new` functions comes from the allocator you pass and holds no other memory, so it goes away with the arena. The IEEE and Castagnoli tables and their faster variants are built once, the first time they are used, from whichever thread gets there first. Nothing else is shared, and a single hash is not safe to write from two threads at once, the same as in Go.
 
 ## What is not here yet
 
-Go's hashes can save their state with `MarshalBinary` and pick it up again with `UnmarshalBinary`, and the newer ones can `Clone` themselves. Those need a way to ask a `Hash` whether it also implements another interface, which comes with the `encoding` package (#185). CRC-32 in Go uses the SSE 4.2 and ARMv8 CRC instructions when it can, and burrow uses slicing by 8 tables for now, which is what Go falls back to on machines without them. The same goes for SHA-1, SHA-256 and SHA-512, which Go runs on the SHA instructions of recent x86 and ARM chips. burrow has the portable code only, which is a little faster than Go's own portable code but a long way behind the instructions.
+Apart from SHA-3, Go's hashes can save their state with `MarshalBinary` and pick it up again with `UnmarshalBinary`, and the newer ones can `Clone` themselves. Those need a way to ask a `Hash` whether it also implements another interface, which comes with the `encoding` package (#185). CRC-32 in Go uses the SSE 4.2 and ARMv8 CRC instructions when it can, and burrow uses slicing by 8 tables for now, which is what Go falls back to on machines without them. The same goes for SHA-1, SHA-256 and SHA-512, which Go runs on the SHA instructions of recent x86 and ARM chips. burrow has the portable code only, which is a little faster than Go's own portable code but a long way behind the instructions. SHA-3 is the exception that is close: its portable code runs at about 90% of the speed Go gets from the SHA-3 instructions on Apple chips, and at about twice the speed of Go's portable code.

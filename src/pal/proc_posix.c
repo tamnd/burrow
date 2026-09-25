@@ -288,6 +288,11 @@ int64_t pal_std_handle(int i) {
 }
 
 void pal_exit(int32_t code) {
+#if BURROW_TSAN && defined(BURROW_OS_LINUX)
+    /* tsan's _exit runs its finalizer first, and that flushes stdio, which
+     * _exit must not do. The system call underneath skips all of it. */
+    syscall(SYS_exit_group, (int)code);
+#endif
     _exit((int)code);
 }
 

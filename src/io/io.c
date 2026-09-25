@@ -463,7 +463,9 @@ int64_t io_copy_buffer(IoWriter dst, IoReader src, Slice buf, Error *err) {
     return copy_loop(dst, src, buf, err);
 }
 
-static const IoReaderVT limited_reader_vt;
+/* The limited reader's table, defined further down. A forward declaration of
+ * the const object itself is a tentative definition, which MSVC warns about. */
+static const IoReaderVT *limited_reader_table(void);
 
 int64_t io_copy(Alloc *a, IoWriter dst, IoReader src, Error *err) {
     int64_t n = 0;
@@ -477,7 +479,7 @@ int64_t io_copy(Alloc *a, IoWriter dst, IoReader src, Error *err) {
      * small enough to come out of an allocator without anybody noticing. A
      * limited reader with less than that left gets a buffer its own size. */
     Int size = (Int)32 * 1024;
-    if (src.vt == &limited_reader_vt) {
+    if (src.vt == limited_reader_table()) {
         const IoLimitedReader *l = (const IoLimitedReader *)src.data;
         if ((int64_t)size > l->n)
             size = l->n < 1 ? 1 : (Int)l->n;
@@ -612,6 +614,10 @@ static Int limited_io_read(void *self, Slice p, Error *err) {
 }
 
 static const IoReaderVT limited_reader_vt = {&limited_reader_desc, limited_io_read};
+
+static const IoReaderVT *limited_reader_table(void) {
+    return &limited_reader_vt;
+}
 
 IoReader io_limited_reader_as_io_reader(IoLimitedReader *l) {
     IoReader r = {&limited_reader_vt, l};

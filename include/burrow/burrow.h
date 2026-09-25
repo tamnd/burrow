@@ -50,6 +50,7 @@
 #include "burrow/encoding/base32.h"
 #include "burrow/encoding/base64.h"
 #include "burrow/encoding/binary.h"
+#include "burrow/encoding/csv.h"
 #include "burrow/encoding/hex.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"

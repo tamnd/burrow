@@ -354,6 +354,65 @@ err = binary_write(a, bytes_buffer_as_io_writer(&w), binary_little_endian,
 
 The error reads `binary.Write: some values are not fixed-sized in type []int`.
 
+## CSV
+
+`burrow/encoding/csv.h` is Go's `encoding/csv`, comma separated values as RFC 4180 describes them. A `CsvReader` hands you one record at a time as a `Slice` of `Str`, and `csv_reader_field_pos` says where each field started, which is handy for error messages of your own:
+
+<!-- example: ../examples/encoding/csv.c#read -->
+```c
+StringsReader sr;
+strings_reader_reset(&sr, BURROW_S("name,city\n"
+                                   "\"Pike, Rob\",Sydney\n"
+                                   "Ken,\"New\nJersey\"\n"));
+CsvReader *r = csv_new_reader(a, strings_reader_as_io_reader(&sr));
+for (;;) {
+    Error err = BURROW_NO_ERROR;
+    Slice rec = csv_reader_read(r, a, &err);
+    if (errors_is(err, io_eof))
+        break;
+    Int col;
+    Int line = csv_reader_field_pos(r, 1, &col);
+    fmt_printf_v("%q at %d:%d\n", rec, line, col);
+}
+csv_reader_free(r);
+```
+
+That prints `["name" "city"] at 1:6`, then `["Pike, Rob" "Sydney"] at 2:13` and `["Ken" "New\nJersey"] at 3:5`. A quoted field keeps its commas and line breaks, and the `\r\n` inside one becomes `\n`, as in Go.
+
+Each record is one block from the allocator you pass, the `Str` array and the text together. With an arena there is nothing to free. With any other allocator give each record back with `csv_record_free`, or set `reuse_record` and the reader hands you its own block every time, good until the next read. The options Go has on its `Reader`, such as `comma`, `comment`, `fields_per_record` and `lazy_quotes`, are fields of the same names on `CsvReader`, set after `csv_new_reader` and before the first read.
+
+A malformed record gives a `CsvParseError` with the line and column, and `errors_is` sees through it to the reason:
+
+<!-- example: ../examples/encoding/csv.c#bad -->
+```c
+strings_reader_reset(&sr, BURROW_S("a,b\nc,d,e\n"));
+r = csv_new_reader(a, strings_reader_as_io_reader(&sr));
+Error err = BURROW_NO_ERROR;
+Slice all = csv_reader_read_all(r, a, &err);
+const CsvParseError *pe = errors_as(err, TYPE_CSV_PARSE_ERROR);
+```
+
+`all` is the nil slice, `pe` says line 2, column 1, and the error reads `record on line 2: wrong number of fields`. `csv_reader_read` on its own would have returned the three field record along with that error, which is what Go does, so you can decide to keep it.
+
+Writing quotes only the fields that need it:
+
+<!-- example: ../examples/encoding/csv.c#write -->
+```c
+BytesBuffer out = BYTES_BUFFER(a);
+CsvWriter *w = csv_new_writer(a, bytes_buffer_as_io_writer(&out));
+Str row1[] = {BURROW_S("id"), BURROW_S("quote")};
+Str row2[] = {BURROW_S("1"), BURROW_S("say \"hi\", then go")};
+csv_writer_write(w, slice_from(row1, 2, 2, TYPE_STRING));
+csv_writer_write(w, slice_from(row2, 2, 2, TYPE_STRING));
+csv_writer_flush(w);
+err = csv_writer_error(w);
+csv_writer_free(w);
+```
+
+The buffer holds `id,quote` and `1,"say ""hi"", then go`. The writer is buffered, so nothing reaches the underlying writer until it fills up or you flush, and `csv_writer_error` is where a failed write shows up. Set `use_crlf` for `\r\n` line endings.
+
+`CsvParseError` has one difference from Go. Its `Error` method, `csv_parse_error_error`, takes the allocator to build the text in when you made the struct yourself. An error that came out of the reader already has its text, and `error_text` gives it to you.
+
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary` or `encoding/hex` is missing.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv` or `encoding/hex` is missing.

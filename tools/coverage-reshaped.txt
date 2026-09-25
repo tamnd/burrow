@@ -75,3 +75,8 @@ io: func Pipe: takes an allocator and returns both ends through out parameters
 # include/burrow/bufio.h: a ReadWriter is two pointers and nothing to
 # allocate, so it comes back by value.
 bufio: func NewReadWriter: returns the struct by value, since it holds only the two pointers
+
+# include/burrow/encoding/csv.h: the Error method of a ParseError built by hand
+# has to put its message somewhere, so it takes the allocator, as NumError's
+# does. An error from the reader already carries its text.
+encoding/csv: method (*ParseError) Error: takes the allocator the message is built in

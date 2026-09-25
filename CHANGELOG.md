@@ -4,6 +4,20 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.4 (2026-09-25)
+
+Floating point and complex numbers.
+
+### Added
+
+- `math`, every function and constant, ported from Go's portable code with no libm. Results match Go bit for bit, which a new test checks by hashing each function over 16k inputs against Go (#204).
+- `math/cmplx`, all 27 functions, plus `cmplx_add`, `cmplx_sub`, `cmplx_mul`, `cmplx_div`, `cmplx_neg` and `cmplx_eq` for the operators Go has in the language. Division is Go's runtime routine, with C99's rules for infinities (#205).
+- `tools/gen-math-tests.sh` and `tools/gen-cmplx-tests.sh`, which generate the test tables and the reference hashes from Go's own source (#204, #205).
+
+### Fixed
+
+- Test binaries now rebuild when a header they include changes, because the test source is recorded in its dependency file (#204).
+
 ## v0.1.3 (2026-09-25)
 
 The text encodings, and CI back to green.

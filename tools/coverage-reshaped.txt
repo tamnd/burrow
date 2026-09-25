@@ -80,3 +80,15 @@ bufio: func NewReadWriter: returns the struct by value, since it holds only the 
 # has to put its message somewhere, so it takes the allocator, as NumError's
 # does. An error from the reader already carries its text.
 encoding/csv: method (*ParseError) Error: takes the allocator the message is built in
+
+# include/burrow/sort.h: Go's Reverse allocates a reverse and returns it as an
+# Interface. Here the SortReverse comes back by value so nothing is allocated,
+# and sort_reverse_as_sort_interface makes the SortInterface from it.
+sort: func Reverse: returns the SortReverse by value, and sort_reverse_as_sort_interface makes the Interface
+
+# include/burrow/sort.h: Go's Slice functions take any and panic when it is not
+# a slice. C has the Slice type, so they take that and the mistake cannot
+# compile.
+sort: func Slice: takes a Slice where Go takes any
+sort: func SliceStable: takes a Slice where Go takes any
+sort: func SliceIsSorted: takes a Slice where Go takes any

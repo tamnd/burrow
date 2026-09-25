@@ -135,7 +135,8 @@ BURROW_BORROWS(ret, s) static inline Slice slice_sub(Slice s, Int lo, Int hi) {
  *
  * elems points at n contiguous elements of s.elem's type. It may point into s
  * itself, which is append(s, s...) and which works here for the same reason it
- * works in Go: the copy happens after the allocation.
+ * works in Go: the copy happens after the allocation. A NULL elems appends n
+ * zero values, which is append(s, make([]T, n)...).
  *
  * n <= 0 returns s unchanged, which is append(s) with nothing to add. */
 BURROW_OWNS(ret) BURROW_BORROWS(ret, s) Slice slice_append(Alloc *a, Slice s,

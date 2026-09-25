@@ -83,7 +83,7 @@ static Slice view(void *p, Int n, const Type *elem) {
     return slice_from(p, n, n, elem);
 }
 
-static bool slices_equal(Slice x, Slice y) {
+static bool equal_slices(Slice x, Slice y) {
     if (x.len != y.len || x.elem != y.elem)
         return false;
     return x.len == 0 || memcmp(x.p, y.p, (size_t)x.len * x.elem->size) == 0;
@@ -114,7 +114,7 @@ static void TestEncode(TestingT *t) {
         Slice in = view(tt->in, tt->in_len, TYPE_RUNE);
         Slice want = view(tt->out, tt->out_len, TYPE_UINT16);
         Slice out = utf16_encode(a, in);
-        if (!slices_equal(out, want))
+        if (!equal_slices(out, want))
             testing_t_errorf_v(t, "Encode(%x) = %x; want %x", in, out, want);
     }
     arena_free(&ar);
@@ -130,7 +130,7 @@ static void TestAppendRune(TestingT *t) {
         for (Int j = 0; j < tt->in_len; j++)
             out = utf16_append_rune(a, out, tt->in[j]);
         Slice want = view(tt->out, tt->out_len, TYPE_UINT16);
-        if (!slices_equal(out, want))
+        if (!equal_slices(out, want))
             testing_t_errorf_v(t, "AppendRune(%x) = %x; want %x",
                                view(tt->in, tt->in_len, TYPE_RUNE), out, want);
     }
@@ -185,7 +185,7 @@ static void TestDecode(TestingT *t) {
         Slice in = view(tt->in, tt->in_len, TYPE_UINT16);
         Slice want = view(tt->out, tt->out_len, TYPE_RUNE);
         Slice out = utf16_decode(a, in);
-        if (!slices_equal(out, want))
+        if (!equal_slices(out, want))
             testing_t_errorf_v(t, "Decode(%x) = %x; want %x", in, out, want);
     }
     arena_free(&ar);

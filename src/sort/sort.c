@@ -18,8 +18,8 @@
 
 #include "burrow/sort.h"
 
+#include "../slices/pdqsort.h"
 #include "internal.h"
-#include "pdqsort.h"
 
 #include "burrow/core.h"
 #include "burrow/type.h"

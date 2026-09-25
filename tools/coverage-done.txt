@@ -34,3 +34,4 @@ encoding/csv
 encoding/pem
 math
 math/cmplx
+path

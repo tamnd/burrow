@@ -379,7 +379,7 @@ bool pal_fstat(int64_t fd, PalStat *out, PalErrno *err) {
     return true;
 }
 
-static bool path_ok(const char *path, PalErrno *err) {
+static bool posix_path_ok(const char *path, PalErrno *err) {
     if (path == NULL) {
         BURROW_OUT(err, PAL_EINVAL);
         return false;
@@ -389,35 +389,35 @@ static bool path_ok(const char *path, PalErrno *err) {
 
 bool pal_unlink(const char *path, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
-    if (!path_ok(path, err))
+    if (!posix_path_ok(path, err))
         return false;
     return unlink(path) == 0 || file_fail(err);
 }
 
 bool pal_rename(const char *from, const char *to, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
-    if (!path_ok(from, err) || !path_ok(to, err))
+    if (!posix_path_ok(from, err) || !posix_path_ok(to, err))
         return false;
     return rename(from, to) == 0 || file_fail(err);
 }
 
 bool pal_mkdir(const char *path, uint32_t mode, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
-    if (!path_ok(path, err))
+    if (!posix_path_ok(path, err))
         return false;
     return mkdir(path, (mode_t)(mode & 07777)) == 0 || file_fail(err);
 }
 
 bool pal_rmdir(const char *path, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
-    if (!path_ok(path, err))
+    if (!posix_path_ok(path, err))
         return false;
     return rmdir(path) == 0 || file_fail(err);
 }
 
 bool pal_chdir(const char *path, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
-    if (!path_ok(path, err))
+    if (!posix_path_ok(path, err))
         return false;
     return chdir(path) == 0 || file_fail(err);
 }
@@ -440,7 +440,7 @@ int64_t pal_getcwd(char *buf, int64_t cap, PalErrno *err) {
 
 bool pal_link(const char *from, const char *to, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
-    if (!path_ok(from, err) || !path_ok(to, err))
+    if (!posix_path_ok(from, err) || !posix_path_ok(to, err))
         return false;
     /* linkat with no flags rather than link, because link follows a symlink
      * named by from on some systems and not on others, and linkat without
@@ -450,14 +450,14 @@ bool pal_link(const char *from, const char *to, PalErrno *err) {
 
 bool pal_symlink(const char *target, const char *path, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
-    if (!path_ok(target, err) || !path_ok(path, err))
+    if (!posix_path_ok(target, err) || !posix_path_ok(path, err))
         return false;
     return symlink(target, path) == 0 || file_fail(err);
 }
 
 int64_t pal_readlink(const char *path, char *buf, int64_t cap, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
-    if (!path_ok(path, err) || !count_ok(buf, cap, err))
+    if (!posix_path_ok(path, err) || !count_ok(buf, cap, err))
         return -1;
 
     ssize_t n = readlink(path, buf, (size_t)cap);
@@ -474,14 +474,14 @@ int64_t pal_readlink(const char *path, char *buf, int64_t cap, PalErrno *err) {
 
 bool pal_chmod(const char *path, uint32_t mode, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
-    if (!path_ok(path, err))
+    if (!posix_path_ok(path, err))
         return false;
     return chmod(path, (mode_t)(mode & 07777)) == 0 || file_fail(err);
 }
 
 bool pal_chown(const char *path, int64_t uid, int64_t gid, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
-    if (!path_ok(path, err))
+    if (!posix_path_ok(path, err))
         return false;
     uid_t u = uid < 0 ? (uid_t)-1 : (uid_t)uid;
     gid_t g = gid < 0 ? (gid_t)-1 : (gid_t)gid;
@@ -503,7 +503,7 @@ static struct timespec timespec_from_ns(int64_t ns) {
 
 bool pal_utimes(const char *path, int64_t atime_ns, int64_t mtime_ns, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
-    if (!path_ok(path, err))
+    if (!posix_path_ok(path, err))
         return false;
     struct timespec ts[2] = {timespec_from_ns(atime_ns), timespec_from_ns(mtime_ns)};
     return utimensat(AT_FDCWD, path, ts, 0) == 0 || file_fail(err);

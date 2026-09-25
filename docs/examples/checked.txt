@@ -37,3 +37,4 @@ docs/guides/bytes.md
 docs/guides/encoding.md
 docs/guides/io.md
 docs/guides/bufio.md
+docs/guides/paths.md

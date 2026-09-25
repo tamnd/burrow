@@ -2230,14 +2230,14 @@ static Str check_corpus(Alloc *a, const FuzzEntry *e, const Type *const *types,
 }
 
 /* A path for the PAL, which wants it NUL terminated. */
-static char *path_cstr(Str s) {
+static char *fs_cstr(Str s) {
     char *p = (char *)must_alloc(heap_allocator(), (size_t)s.len + 1, 1);
     memcpy(p, s.p, (size_t)s.len);
     p[s.len] = '\0';
     return p;
 }
 
-static void path_cstr_free(char *p) {
+static void fs_cstr_free(char *p) {
     mem_free(heap_allocator(), p, strlen(p) + 1, 1);
 }
 
@@ -2294,11 +2294,11 @@ static bool read_dir_names(const char *dir, Str **names, Int *n, PalErrno *err) 
             /* The filesystem did not say, so ask, which is what DirEntry's
              * IsDir does on such a filesystem. */
             Str full = fmt_sprintf_v(error_allocator(), "%s" FUZZ_SEP "%s", dir, name);
-            char *p = path_cstr(full);
+            char *p = fs_cstr(full);
             PalStat st;
             if (pal_lstat(p, &st, NULL))
                 type = st.mode & PAL_S_IFMT;
-            path_cstr_free(p);
+            fs_cstr_free(p);
         }
         if (type == PAL_S_IFDIR)
             continue;
@@ -2345,12 +2345,12 @@ static Str read_corpus(TestingF *f, Str dir, const Type *const *types, Int ntype
     Alloc *a = error_allocator();
     Alloc *h = heap_allocator();
     *malformed = false;
-    char *cdir = path_cstr(dir);
+    char *cdir = fs_cstr(dir);
     Str *names;
     Int n;
     PalErrno err;
     bool ok = read_dir_names(cdir, &names, &n, &err);
-    path_cstr_free(cdir);
+    fs_cstr_free(cdir);
     if (!ok) {
         if (err == PAL_ENOENT)
             return BURROW_S("");
@@ -2362,11 +2362,11 @@ static Str read_corpus(TestingF *f, Str dir, const Type *const *types, Int ntype
     Str fail = BURROW_S("");
     for (Int i = 0; i < n; i++) {
         Str path = fmt_sprintf_v(a, "%s" FUZZ_SEP "%s", dir, names[i]);
-        char *cpath = path_cstr(path);
+        char *cpath = fs_cstr(path);
         Buf data = {0};
         const char *op;
         bool read = read_whole_file(cpath, &data, &err, &op);
-        path_cstr_free(cpath);
+        fs_cstr_free(cpath);
         if (!read) {
             buf_free(&data);
             fail = fmt_sprintf_v(a, "failed to read corpus file: %s %s: %s", op, path,
@@ -2412,7 +2412,7 @@ static Str read_corpus(TestingF *f, Str dir, const Type *const *types, Int ntype
 }
 
 /* filepath.Base, for the name a corpus entry's subtest runs under. */
-static Str path_base(Str p) {
+static Str fs_base(Str p) {
     Int i = p.len;
     while (i > 0 && p.p[i - 1] != '/' && p.p[i - 1] != '\\')
         i--;
@@ -2601,7 +2601,7 @@ static void fuzz_coordinate(TestingF *f, const Type *const *types, Int ntypes) {
             const char *prog = pkg.argc > 0 && pkg.argv != NULL ? pkg.argv[0] : "";
             buf_str(&b, fmt_sprintf_v(a, "Failing input written to %s\n", crash));
             buf_str(&b, fmt_sprintf_v(a, "To re-run:\n%s -test.run=%s/%s\n", prog, name,
-                                      path_base(crash)));
+                                      fs_base(crash)));
         }
         sync_mutex_lock(&f->common->mu);
         write_w(f->common, buf_view(&b));
@@ -2684,7 +2684,7 @@ void burrow__testing_f_fuzz(TestingF *f, const char *file, int line, TestingFuzz
     for (Int i = 0; i < f->nseeds; i++) {
         f->seeds[i] = (FuzzSeed){f, i};
         f->common->in_fuzz_fn = true;
-        testing_t_run(f->common, path_base(f->corpus[i].path),
+        testing_t_run(f->common, fs_base(f->corpus[i].path),
                       BURROW_FN(TestingTFunc, seed_body, &f->seeds[i]));
         f->common->in_fuzz_fn = false;
     }

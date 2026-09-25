@@ -77,6 +77,7 @@
 #include "burrow/num.h"
 #include "burrow/own.h"
 #include "burrow/panic.h"
+#include "burrow/path.h"
 #include "burrow/proc.h"
 #include "burrow/runtime.h"
 #include "burrow/slice.h"

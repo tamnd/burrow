@@ -288,6 +288,27 @@ int64_t pal_cpu_count(void);
  * when neither the processor nor the system will say. */
 int64_t pal_cpu_name(char *buf, int64_t cap);
 
+/* Instruction set extensions the crypto code can use, as bits of
+ * pal_cpu_features. They are the fields of Go's internal/cpu that its hashes
+ * check, X86.HasSHA and the rest, and a bit is only ever set on the machine it
+ * names. */
+#define PAL_CPU_X86_SSSE3 (UINT32_C(1) << 0)
+#define PAL_CPU_X86_SSE41 (UINT32_C(1) << 1)
+#define PAL_CPU_X86_SHA (UINT32_C(1) << 2)
+#define PAL_CPU_ARM64_SHA1 (UINT32_C(1) << 8)
+#define PAL_CPU_ARM64_SHA2 (UINT32_C(1) << 9)
+#define PAL_CPU_ARM64_SHA512 (UINT32_C(1) << 10)
+#define PAL_CPU_ARM64_SHA3 (UINT32_C(1) << 11)
+
+/* The PAL_CPU_ bits this processor has, found on the first call and kept.
+ *
+ * GODEBUG turns them off the way it does in Go, so GODEBUG=cpu.sha2=off runs
+ * the portable SHA-256 on an arm64 machine and cpu.all=off runs the portable
+ * code for everything. The names are Go's: ssse3, sse41 and sha on x86, and
+ * sha1, sha2, sha512 and sha3 on arm64. The variable is read once, with the
+ * features, so setting it after the first call does nothing. */
+uint32_t pal_cpu_features(void);
+
 /* The machine's name into buf, NUL terminated, returning its length or -1.
  * A buffer too small is PAL_ERANGE. Not implemented yet, it arrives with os. */
 int64_t pal_hostname(char *buf, int64_t cap, PalErrno *err);

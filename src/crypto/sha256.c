@@ -16,6 +16,8 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "internal.h"
+
 #include <string.h>
 
 typedef struct Sha256Digest {
@@ -75,7 +77,7 @@ static inline void sha256_put_be64(Byte *b, uint64_t v) {
     } while (0)
 
 /* Hashes n bytes of p, which is a whole number of blocks. */
-static void sha256_block(Sha256Digest *dig, const Byte *p, Int n) {
+static void sha256_block_generic(Sha256Digest *dig, const Byte *p, Int n) {
     uint32_t w[64];
     uint32_t h0 = dig->h[0], h1 = dig->h[1], h2 = dig->h[2], h3 = dig->h[3];
     uint32_t h4 = dig->h[4], h5 = dig->h[5], h6 = dig->h[6], h7 = dig->h[7];
@@ -120,6 +122,229 @@ static void sha256_block(Sha256Digest *dig, const Byte *p, Int n) {
     dig->h[5] = h5;
     dig->h[6] = h6;
     dig->h[7] = h7;
+}
+
+#if defined(CRYPTO_X86_SHA)
+/* sha256block_amd64.s's SHA-NI path, written with intrinsics. The eight words
+ * of state are kept as ABEF and CDGH, the order sha256rnds2 wants, and each
+ * sha256rnds2 does two rounds. */
+CRYPTO_TARGET_X86_SHA static void sha256_block_x86(uint32_t h[8], const Byte *p,
+                                                   Int n) {
+    const __m128i swap =
+        _mm_set_epi8(12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3);
+    __m128i t = _mm_shuffle_epi32(crypto_x86_load(h), 0xB1);
+    __m128i s1 = _mm_shuffle_epi32(crypto_x86_load(h + 4), 0x1B);
+    __m128i s0 = _mm_alignr_epi8(t, s1, 8);
+    s1 = _mm_blend_epi16(s1, t, 0xF0);
+    for (; n >= SHA256_BLOCK_SIZE; p += SHA256_BLOCK_SIZE, n -= SHA256_BLOCK_SIZE) {
+        __m128i save0 = s0;
+        __m128i save1 = s1;
+        __m128i m0 = _mm_shuffle_epi8(crypto_x86_load(p), swap);
+        __m128i m1 = _mm_shuffle_epi8(crypto_x86_load(p + 16), swap);
+        __m128i m2 = _mm_shuffle_epi8(crypto_x86_load(p + 32), swap);
+        __m128i m3 = _mm_shuffle_epi8(crypto_x86_load(p + 48), swap);
+        __m128i k;
+        k = _mm_add_epi32(m0, crypto_x86_load(sha256_k + 0));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        k = _mm_add_epi32(m1, crypto_x86_load(sha256_k + 4));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        m0 = _mm_sha256msg1_epu32(m0, m1);
+        k = _mm_add_epi32(m2, crypto_x86_load(sha256_k + 8));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        m1 = _mm_sha256msg1_epu32(m1, m2);
+        k = _mm_add_epi32(m3, crypto_x86_load(sha256_k + 12));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        m0 = _mm_sha256msg2_epu32(_mm_add_epi32(m0, _mm_alignr_epi8(m3, m2, 4)), m3);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        m2 = _mm_sha256msg1_epu32(m2, m3);
+        k = _mm_add_epi32(m0, crypto_x86_load(sha256_k + 16));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        m1 = _mm_sha256msg2_epu32(_mm_add_epi32(m1, _mm_alignr_epi8(m0, m3, 4)), m0);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        m3 = _mm_sha256msg1_epu32(m3, m0);
+        k = _mm_add_epi32(m1, crypto_x86_load(sha256_k + 20));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        m2 = _mm_sha256msg2_epu32(_mm_add_epi32(m2, _mm_alignr_epi8(m1, m0, 4)), m1);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        m0 = _mm_sha256msg1_epu32(m0, m1);
+        k = _mm_add_epi32(m2, crypto_x86_load(sha256_k + 24));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        m3 = _mm_sha256msg2_epu32(_mm_add_epi32(m3, _mm_alignr_epi8(m2, m1, 4)), m2);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        m1 = _mm_sha256msg1_epu32(m1, m2);
+        k = _mm_add_epi32(m3, crypto_x86_load(sha256_k + 28));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        m0 = _mm_sha256msg2_epu32(_mm_add_epi32(m0, _mm_alignr_epi8(m3, m2, 4)), m3);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        m2 = _mm_sha256msg1_epu32(m2, m3);
+        k = _mm_add_epi32(m0, crypto_x86_load(sha256_k + 32));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        m1 = _mm_sha256msg2_epu32(_mm_add_epi32(m1, _mm_alignr_epi8(m0, m3, 4)), m0);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        m3 = _mm_sha256msg1_epu32(m3, m0);
+        k = _mm_add_epi32(m1, crypto_x86_load(sha256_k + 36));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        m2 = _mm_sha256msg2_epu32(_mm_add_epi32(m2, _mm_alignr_epi8(m1, m0, 4)), m1);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        m0 = _mm_sha256msg1_epu32(m0, m1);
+        k = _mm_add_epi32(m2, crypto_x86_load(sha256_k + 40));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        m3 = _mm_sha256msg2_epu32(_mm_add_epi32(m3, _mm_alignr_epi8(m2, m1, 4)), m2);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        m1 = _mm_sha256msg1_epu32(m1, m2);
+        k = _mm_add_epi32(m3, crypto_x86_load(sha256_k + 44));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        m0 = _mm_sha256msg2_epu32(_mm_add_epi32(m0, _mm_alignr_epi8(m3, m2, 4)), m3);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        m2 = _mm_sha256msg1_epu32(m2, m3);
+        k = _mm_add_epi32(m0, crypto_x86_load(sha256_k + 48));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        m1 = _mm_sha256msg2_epu32(_mm_add_epi32(m1, _mm_alignr_epi8(m0, m3, 4)), m0);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        m3 = _mm_sha256msg1_epu32(m3, m0);
+        k = _mm_add_epi32(m1, crypto_x86_load(sha256_k + 52));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        m2 = _mm_sha256msg2_epu32(_mm_add_epi32(m2, _mm_alignr_epi8(m1, m0, 4)), m1);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        k = _mm_add_epi32(m2, crypto_x86_load(sha256_k + 56));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        m3 = _mm_sha256msg2_epu32(_mm_add_epi32(m3, _mm_alignr_epi8(m2, m1, 4)), m2);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        k = _mm_add_epi32(m3, crypto_x86_load(sha256_k + 60));
+        s1 = _mm_sha256rnds2_epu32(s1, s0, k);
+        s0 = _mm_sha256rnds2_epu32(s0, s1, _mm_shuffle_epi32(k, 0x0E));
+        s0 = _mm_add_epi32(s0, save0);
+        s1 = _mm_add_epi32(s1, save1);
+    }
+    t = _mm_shuffle_epi32(s0, 0x1B);
+    s1 = _mm_shuffle_epi32(s1, 0xB1);
+    s0 = _mm_blend_epi16(t, s1, 0xF0);
+    s1 = _mm_alignr_epi8(s1, t, 8);
+    crypto_x86_store(h, s0);
+    crypto_x86_store(h + 4, s1);
+}
+#endif
+
+#if defined(CRYPTO_ARM64_SHA2)
+/* sha256block_arm64.s, written with intrinsics. Each sha256h and sha256h2 pair
+ * does four rounds, and the schedule for four rounds on is worked out as the
+ * current four go through. */
+CRYPTO_TARGET_ARM64_SHA2 static void sha256_block_arm64(uint32_t h[8], const Byte *p,
+                                                        Int n) {
+    uint32x4_t s0 = vld1q_u32(h);
+    uint32x4_t s1 = vld1q_u32(h + 4);
+    for (; n >= SHA256_BLOCK_SIZE; p += SHA256_BLOCK_SIZE, n -= SHA256_BLOCK_SIZE) {
+        uint32x4_t save0 = s0;
+        uint32x4_t save1 = s1;
+        uint32x4_t m0 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(p)));
+        uint32x4_t m1 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(p + 16)));
+        uint32x4_t m2 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(p + 32)));
+        uint32x4_t m3 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(p + 48)));
+        uint32x4_t k;
+        uint32x4_t t;
+        k = vaddq_u32(m0, vld1q_u32(sha256_k + 0));
+        m0 = vsha256su1q_u32(vsha256su0q_u32(m0, m1), m2, m3);
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        k = vaddq_u32(m1, vld1q_u32(sha256_k + 4));
+        m1 = vsha256su1q_u32(vsha256su0q_u32(m1, m2), m3, m0);
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        k = vaddq_u32(m2, vld1q_u32(sha256_k + 8));
+        m2 = vsha256su1q_u32(vsha256su0q_u32(m2, m3), m0, m1);
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        k = vaddq_u32(m3, vld1q_u32(sha256_k + 12));
+        m3 = vsha256su1q_u32(vsha256su0q_u32(m3, m0), m1, m2);
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        k = vaddq_u32(m0, vld1q_u32(sha256_k + 16));
+        m0 = vsha256su1q_u32(vsha256su0q_u32(m0, m1), m2, m3);
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        k = vaddq_u32(m1, vld1q_u32(sha256_k + 20));
+        m1 = vsha256su1q_u32(vsha256su0q_u32(m1, m2), m3, m0);
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        k = vaddq_u32(m2, vld1q_u32(sha256_k + 24));
+        m2 = vsha256su1q_u32(vsha256su0q_u32(m2, m3), m0, m1);
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        k = vaddq_u32(m3, vld1q_u32(sha256_k + 28));
+        m3 = vsha256su1q_u32(vsha256su0q_u32(m3, m0), m1, m2);
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        k = vaddq_u32(m0, vld1q_u32(sha256_k + 32));
+        m0 = vsha256su1q_u32(vsha256su0q_u32(m0, m1), m2, m3);
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        k = vaddq_u32(m1, vld1q_u32(sha256_k + 36));
+        m1 = vsha256su1q_u32(vsha256su0q_u32(m1, m2), m3, m0);
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        k = vaddq_u32(m2, vld1q_u32(sha256_k + 40));
+        m2 = vsha256su1q_u32(vsha256su0q_u32(m2, m3), m0, m1);
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        k = vaddq_u32(m3, vld1q_u32(sha256_k + 44));
+        m3 = vsha256su1q_u32(vsha256su0q_u32(m3, m0), m1, m2);
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        k = vaddq_u32(m0, vld1q_u32(sha256_k + 48));
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        k = vaddq_u32(m1, vld1q_u32(sha256_k + 52));
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        k = vaddq_u32(m2, vld1q_u32(sha256_k + 56));
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        k = vaddq_u32(m3, vld1q_u32(sha256_k + 60));
+        t = s0;
+        s0 = vsha256hq_u32(s0, s1, k);
+        s1 = vsha256h2q_u32(s1, t, k);
+        s0 = vaddq_u32(s0, save0);
+        s1 = vaddq_u32(s1, save1);
+    }
+    vst1q_u32(h, s0);
+    vst1q_u32(h + 4, s1);
+}
+#endif
+
+/* The hardware path when there is one, as Go's blockSHA2 and blockSHANI
+ * choose, and the portable code otherwise. */
+static void sha256_block(Sha256Digest *dig, const Byte *p, Int n) {
+#if defined(CRYPTO_X86_SHA)
+    if ((pal_cpu_features() & CRYPTO_X86_SHA_NEEDS) == CRYPTO_X86_SHA_NEEDS) {
+        sha256_block_x86(dig->h, p, n);
+        return;
+    }
+#endif
+#if defined(CRYPTO_ARM64_SHA2)
+    if ((pal_cpu_features() & PAL_CPU_ARM64_SHA2) != 0) {
+        sha256_block_arm64(dig->h, p, n);
+        return;
+    }
+#endif
+    sha256_block_generic(dig, p, n);
 }
 
 static void sha256_reset(void *self) {

@@ -16,6 +16,8 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "internal.h"
+
 #include <string.h>
 
 typedef struct Sha512Digest {
@@ -86,7 +88,7 @@ static inline void sha512_put_be64(Byte *b, uint64_t v) {
     } while (0)
 
 /* Hashes n bytes of p, which is a whole number of blocks. */
-static void sha512_block(Sha512Digest *dig, const Byte *p, Int n) {
+static void sha512_block_generic(Sha512Digest *dig, const Byte *p, Int n) {
     uint64_t w[80];
     uint64_t h0 = dig->h[0], h1 = dig->h[1], h2 = dig->h[2], h3 = dig->h[3];
     uint64_t h4 = dig->h[4], h5 = dig->h[5], h6 = dig->h[6], h7 = dig->h[7];
@@ -131,6 +133,288 @@ static void sha512_block(Sha512Digest *dig, const Byte *p, Int n) {
     dig->h[5] = h5;
     dig->h[6] = h6;
     dig->h[7] = h7;
+}
+
+#if defined(CRYPTO_ARM64_SHA512)
+/* sha512block_arm64.s, written with intrinsics. The state is four pairs, AB,
+ * CD, EF and GH, with the first of each in the low lane, and each sha512h and
+ * sha512h2 pair does two rounds. After them the new AB and EF are in the
+ * registers that held CD and GH, so the four swap roles every two rounds and
+ * are back where they started after four. */
+CRYPTO_TARGET_ARM64_SHA512 static void sha512_block_arm64(uint64_t h[8], const Byte *p,
+                                                          Int n) {
+    uint64x2_t s0 = vld1q_u64(h);
+    uint64x2_t s1 = vld1q_u64(h + 2);
+    uint64x2_t s2 = vld1q_u64(h + 4);
+    uint64x2_t s3 = vld1q_u64(h + 6);
+    for (; n >= SHA512_BLOCK_SIZE; p += SHA512_BLOCK_SIZE, n -= SHA512_BLOCK_SIZE) {
+        uint64x2_t save0 = s0;
+        uint64x2_t save1 = s1;
+        uint64x2_t save2 = s2;
+        uint64x2_t save3 = s3;
+        uint64x2_t m0 = vreinterpretq_u64_u8(vrev64q_u8(vld1q_u8(p)));
+        uint64x2_t m1 = vreinterpretq_u64_u8(vrev64q_u8(vld1q_u8(p + 16)));
+        uint64x2_t m2 = vreinterpretq_u64_u8(vrev64q_u8(vld1q_u8(p + 32)));
+        uint64x2_t m3 = vreinterpretq_u64_u8(vrev64q_u8(vld1q_u8(p + 48)));
+        uint64x2_t m4 = vreinterpretq_u64_u8(vrev64q_u8(vld1q_u8(p + 64)));
+        uint64x2_t m5 = vreinterpretq_u64_u8(vrev64q_u8(vld1q_u8(p + 80)));
+        uint64x2_t m6 = vreinterpretq_u64_u8(vrev64q_u8(vld1q_u8(p + 96)));
+        uint64x2_t m7 = vreinterpretq_u64_u8(vrev64q_u8(vld1q_u8(p + 112)));
+        uint64x2_t k;
+        uint64x2_t t;
+        k = vaddq_u64(m0, vld1q_u64(sha512_k + 0));
+        m0 = vsha512su1q_u64(vsha512su0q_u64(m0, m1), m7, vextq_u64(m4, m5, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m1, vld1q_u64(sha512_k + 2));
+        m1 = vsha512su1q_u64(vsha512su0q_u64(m1, m2), m0, vextq_u64(m5, m6, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m2, vld1q_u64(sha512_k + 4));
+        m2 = vsha512su1q_u64(vsha512su0q_u64(m2, m3), m1, vextq_u64(m6, m7, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m3, vld1q_u64(sha512_k + 6));
+        m3 = vsha512su1q_u64(vsha512su0q_u64(m3, m4), m2, vextq_u64(m7, m0, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m4, vld1q_u64(sha512_k + 8));
+        m4 = vsha512su1q_u64(vsha512su0q_u64(m4, m5), m3, vextq_u64(m0, m1, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m5, vld1q_u64(sha512_k + 10));
+        m5 = vsha512su1q_u64(vsha512su0q_u64(m5, m6), m4, vextq_u64(m1, m2, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m6, vld1q_u64(sha512_k + 12));
+        m6 = vsha512su1q_u64(vsha512su0q_u64(m6, m7), m5, vextq_u64(m2, m3, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m7, vld1q_u64(sha512_k + 14));
+        m7 = vsha512su1q_u64(vsha512su0q_u64(m7, m0), m6, vextq_u64(m3, m4, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m0, vld1q_u64(sha512_k + 16));
+        m0 = vsha512su1q_u64(vsha512su0q_u64(m0, m1), m7, vextq_u64(m4, m5, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m1, vld1q_u64(sha512_k + 18));
+        m1 = vsha512su1q_u64(vsha512su0q_u64(m1, m2), m0, vextq_u64(m5, m6, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m2, vld1q_u64(sha512_k + 20));
+        m2 = vsha512su1q_u64(vsha512su0q_u64(m2, m3), m1, vextq_u64(m6, m7, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m3, vld1q_u64(sha512_k + 22));
+        m3 = vsha512su1q_u64(vsha512su0q_u64(m3, m4), m2, vextq_u64(m7, m0, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m4, vld1q_u64(sha512_k + 24));
+        m4 = vsha512su1q_u64(vsha512su0q_u64(m4, m5), m3, vextq_u64(m0, m1, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m5, vld1q_u64(sha512_k + 26));
+        m5 = vsha512su1q_u64(vsha512su0q_u64(m5, m6), m4, vextq_u64(m1, m2, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m6, vld1q_u64(sha512_k + 28));
+        m6 = vsha512su1q_u64(vsha512su0q_u64(m6, m7), m5, vextq_u64(m2, m3, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m7, vld1q_u64(sha512_k + 30));
+        m7 = vsha512su1q_u64(vsha512su0q_u64(m7, m0), m6, vextq_u64(m3, m4, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m0, vld1q_u64(sha512_k + 32));
+        m0 = vsha512su1q_u64(vsha512su0q_u64(m0, m1), m7, vextq_u64(m4, m5, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m1, vld1q_u64(sha512_k + 34));
+        m1 = vsha512su1q_u64(vsha512su0q_u64(m1, m2), m0, vextq_u64(m5, m6, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m2, vld1q_u64(sha512_k + 36));
+        m2 = vsha512su1q_u64(vsha512su0q_u64(m2, m3), m1, vextq_u64(m6, m7, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m3, vld1q_u64(sha512_k + 38));
+        m3 = vsha512su1q_u64(vsha512su0q_u64(m3, m4), m2, vextq_u64(m7, m0, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m4, vld1q_u64(sha512_k + 40));
+        m4 = vsha512su1q_u64(vsha512su0q_u64(m4, m5), m3, vextq_u64(m0, m1, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m5, vld1q_u64(sha512_k + 42));
+        m5 = vsha512su1q_u64(vsha512su0q_u64(m5, m6), m4, vextq_u64(m1, m2, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m6, vld1q_u64(sha512_k + 44));
+        m6 = vsha512su1q_u64(vsha512su0q_u64(m6, m7), m5, vextq_u64(m2, m3, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m7, vld1q_u64(sha512_k + 46));
+        m7 = vsha512su1q_u64(vsha512su0q_u64(m7, m0), m6, vextq_u64(m3, m4, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m0, vld1q_u64(sha512_k + 48));
+        m0 = vsha512su1q_u64(vsha512su0q_u64(m0, m1), m7, vextq_u64(m4, m5, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m1, vld1q_u64(sha512_k + 50));
+        m1 = vsha512su1q_u64(vsha512su0q_u64(m1, m2), m0, vextq_u64(m5, m6, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m2, vld1q_u64(sha512_k + 52));
+        m2 = vsha512su1q_u64(vsha512su0q_u64(m2, m3), m1, vextq_u64(m6, m7, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m3, vld1q_u64(sha512_k + 54));
+        m3 = vsha512su1q_u64(vsha512su0q_u64(m3, m4), m2, vextq_u64(m7, m0, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m4, vld1q_u64(sha512_k + 56));
+        m4 = vsha512su1q_u64(vsha512su0q_u64(m4, m5), m3, vextq_u64(m0, m1, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m5, vld1q_u64(sha512_k + 58));
+        m5 = vsha512su1q_u64(vsha512su0q_u64(m5, m6), m4, vextq_u64(m1, m2, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m6, vld1q_u64(sha512_k + 60));
+        m6 = vsha512su1q_u64(vsha512su0q_u64(m6, m7), m5, vextq_u64(m2, m3, 1));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m7, vld1q_u64(sha512_k + 62));
+        m7 = vsha512su1q_u64(vsha512su0q_u64(m7, m0), m6, vextq_u64(m3, m4, 1));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m0, vld1q_u64(sha512_k + 64));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m1, vld1q_u64(sha512_k + 66));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m2, vld1q_u64(sha512_k + 68));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m3, vld1q_u64(sha512_k + 70));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m4, vld1q_u64(sha512_k + 72));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m5, vld1q_u64(sha512_k + 74));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        k = vaddq_u64(m6, vld1q_u64(sha512_k + 76));
+        k = vaddq_u64(s3, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s2, s3, 1), vextq_u64(s1, s2, 1));
+        s3 = vaddq_u64(s1, t);
+        s1 = vsha512h2q_u64(t, s1, s0);
+        k = vaddq_u64(m7, vld1q_u64(sha512_k + 78));
+        k = vaddq_u64(s2, vextq_u64(k, k, 1));
+        t = vsha512hq_u64(k, vextq_u64(s3, s2, 1), vextq_u64(s0, s3, 1));
+        s2 = vaddq_u64(s0, t);
+        s0 = vsha512h2q_u64(t, s0, s1);
+        s0 = vaddq_u64(s0, save0);
+        s1 = vaddq_u64(s1, save1);
+        s2 = vaddq_u64(s2, save2);
+        s3 = vaddq_u64(s3, save3);
+    }
+    vst1q_u64(h, s0);
+    vst1q_u64(h + 2, s1);
+    vst1q_u64(h + 4, s2);
+    vst1q_u64(h + 6, s3);
+}
+#endif
+
+/* The hardware path when there is one, and the portable code otherwise. */
+static void sha512_block(Sha512Digest *dig, const Byte *p, Int n) {
+#if defined(CRYPTO_ARM64_SHA512)
+    if ((pal_cpu_features() & PAL_CPU_ARM64_SHA512) != 0) {
+        sha512_block_arm64(dig->h, p, n);
+        return;
+    }
+#endif
+    sha512_block_generic(dig, p, n);
 }
 
 static void sha512_reset(void *self) {

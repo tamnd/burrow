@@ -244,10 +244,19 @@ $(BUILD)/tests/testing_cover_test: TEST_EXTRA = $(COVERFLAGS)
 
 # One line for each binary, the way go test prints a package, and the whole of
 # what it wrote only when it failed.
+# The hashes with a hardware path run a second time with it turned off, so the
+# portable code is tested on the machines that have the instructions too. The
+# PAL test checks that turning them off works.
+CPU_TESTS := $(patsubst %,$(BUILD)/tests/%_test,pal sha1 sha256 sha512)
+
 test: $(TEST_BINS)
 	@fail=0; for t in $(TEST_BINS); do \
 		if ./$$t > $$t.out 2>&1; then printf 'ok\t%s\n' "$${t##*/}"; \
 		else cat $$t.out; printf 'FAIL\t%s\n' "$${t##*/}"; fail=1; fi; \
+	done; \
+	for t in $(CPU_TESTS); do \
+		if GODEBUG=cpu.all=off ./$$t > $$t.out 2>&1; then printf 'ok\t%s cpu.all=off\n' "$${t##*/}"; \
+		else cat $$t.out; printf 'FAIL\t%s cpu.all=off\n' "$${t##*/}"; fail=1; fi; \
 	done; exit $$fail
 
 # What CI runs on a pull request, in the order that fails fastest first.

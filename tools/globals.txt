@@ -133,6 +133,7 @@ global	src/runtime/registry.c	registry_cap	type-registry	How many slots there ar
 global	src/runtime/registry.c	registry_len	type-registry	How many of the slots are taken. Same lock, same reason.
 global	src/pal/machine_posix.c	cached_page	machine	Relaxed atomic, and the race is benign by construction. Two threads arriving together both ask the system, both get the same number, and both write it. There is nothing published alongside it, so there is nothing for a release store to order.
 global	src/pal/machine_windows.c	cached_page	machine	The Windows half of cached_page above, with the same reasoning.
+global	src/pal/cpu.c	cached_features	machine	Relaxed atomic, like cached_page. The processor and GODEBUG give every thread the same answer, so two threads that both work it out write the same value.
 global	src/runtime/symtab.c	symtab_once	symbol-table	A Once, which is what makes the sort happen exactly once however many threads panic at the same moment.
 global	src/runtime/symtab.c	symtab_sorted	symbol-table	Written once inside the Once and read after it, so the Once is the ordering. Null afterwards means the allocation failed and the lookup walks the unsorted table instead, which is why it is read into a local before it is used.
 global	src/runtime/symtab.c	symtab_sorted_len	symbol-table	How long symtab_sorted is, written beside it under the same Once.

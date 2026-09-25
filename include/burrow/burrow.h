@@ -65,6 +65,7 @@
 #include "burrow/io.h"
 #include "burrow/iter.h"
 #include "burrow/map.h"
+#include "burrow/math.h"
 #include "burrow/math/bits.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"

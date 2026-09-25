@@ -232,11 +232,11 @@ $(BUILD)/obj/%.o: src/%.c
 
 $(BUILD)/tests/%: tests/%.c $(TEST_GEN) $(LIB)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(TEST_EXTRA) $(THREADS) $(DEPFLAGS) -MF $@.d -Itests $< $(TEST_GEN) $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_EXTRA) $(THREADS) $(DEPFLAGS) -MF $@.d -Itests $(TEST_GEN) $< $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
 
 $(BUILD)/tests/gen_tests_fixture_test: $(GEN_TESTS_FIXTURE) $(TEST_GEN) $(LIB)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(THREADS) $(DEPFLAGS) -MF $@.d -Itests $< $(TEST_GEN) $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(THREADS) $(DEPFLAGS) -MF $@.d -Itests $(TEST_GEN) $< $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
 
 $(BUILD)/tests/testing_cover_test: TEST_EXTRA = $(COVERFLAGS)
 

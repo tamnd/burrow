@@ -143,6 +143,8 @@ def segment(path):
 
 def words(name):
     """R2: split a Go identifier into the words its snake case is made of."""
+    # NaN is one word, so IsNaN is is_nan and not is_na_n.
+    name = name.replace("NaN", "Nan")
     out = []
     for part in name.split("_"):
         i = 0

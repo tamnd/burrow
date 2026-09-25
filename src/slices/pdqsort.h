@@ -30,10 +30,10 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
-#ifndef BURROW_SRC_SORT_PDQSORT_H
-#define BURROW_SRC_SORT_PDQSORT_H
+#ifndef BURROW_SRC_SLICES_PDQSORT_H
+#define BURROW_SRC_SLICES_PDQSORT_H
 
-#include "burrow/sort.h"
+#include "burrow/slices.h"
 
 #include "burrow/core.h"
 #include "burrow/math/bits.h"
@@ -511,4 +511,4 @@ static inline Int sort_pdq_limit(Int n) {
     }
 /* NOLINTEND(bugprone-macro-parentheses) */
 
-#endif /* BURROW_SRC_SORT_PDQSORT_H */
+#endif /* BURROW_SRC_SLICES_PDQSORT_H */

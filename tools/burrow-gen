@@ -174,6 +174,7 @@ import hashlib
 import json
 import os
 import platform
+import posixpath
 import re
 import shutil
 import subprocess
@@ -568,7 +569,7 @@ def run_reflect(args):
 # too. burrow.h checks the combination up front, so leaving out a package that a
 # kept one needs is an #error that says which, rather than a link error later.
 
-AMALG_INCLUDE = re.compile(r'^\s*#\s*include\s+"(burrow/[^"]+|[a-z0-9_]+\.h)"')
+AMALG_INCLUDE = re.compile(r'^\s*#\s*include\s+"(burrow/[^"]+|(?:\.\./[a-z0-9_]+/)?[a-z0-9_]+\.h)"')
 AMALG_DEFINE = re.compile(r"^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)")
 AMALG_ANY_INCLUDE = re.compile(r"^\s*#\s*include\b")
 AMALG_DIRECTIVE = re.compile(r"^\s*#")
@@ -602,9 +603,12 @@ class Amalgamation:
 def amalg_header_path(name, includer):
     """Where an #include points. A name with no directory is a header private to
     the directory of the file that includes it, as src/fmt/format.h is to the
-    files in src/fmt."""
+    files in src/fmt. One that starts with ../ is another package's private
+    header, as src/slices/pdqsort.h is to src/sort/sort.c."""
     if "/" not in name:
         return os.path.dirname(includer) + "/" + name
+    if name.startswith("../"):
+        return posixpath.normpath(posixpath.dirname(includer) + "/" + name)
     return "include/" + name
 
 

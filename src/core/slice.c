@@ -203,7 +203,10 @@ Slice slice_append(Alloc *a, Slice s, const void *elems, Int n) {
      * depend on it, so quietly copying instead would be a nicer library that
      * ports Go code incorrectly. */
     if (new_len <= s.cap) {
-        slice_copy_bytes((Byte *)s.p + (size_t)s.len * sz, elems, (size_t)n * sz);
+        if (elems == NULL)
+            zero_bytes((Byte *)s.p + (size_t)s.len * sz, (size_t)n * sz);
+        else /* elems may be in the same array, past len, as Go allows */
+            move_bytes((Byte *)s.p + (size_t)s.len * sz, elems, (size_t)n * sz);
         Slice out = {s.p, new_len, s.cap, s.elem};
         return out;
     }
@@ -228,8 +231,12 @@ Slice slice_append(Alloc *a, Slice s, const void *elems, Int n) {
      * append(s, s...) work: elems may point into the old array and the old
      * array is still there. */
     slice_copy_bytes(p, s.p, old_bytes);
-    slice_copy_bytes(p + old_bytes, elems, new_bytes);
-    zero_bytes(p + old_bytes + new_bytes, total - old_bytes - new_bytes);
+    if (elems == NULL) {
+        zero_bytes(p + old_bytes, total - old_bytes);
+    } else {
+        slice_copy_bytes(p + old_bytes, elems, new_bytes);
+        zero_bytes(p + old_bytes + new_bytes, total - old_bytes - new_bytes);
+    }
 
     Slice out = {p, new_len, new_cap, s.elem};
     return out;

@@ -1,8 +1,8 @@
 # Hashing and checksums
 
-`burrow/hash.h` is Go's `hash`: the interfaces that every hash function speaks. Four packages implement them so far. `hash/crc32` and `hash/crc64` are cyclic redundancy checks, `hash/adler32` is the checksum zlib uses, and `hash/fnv` is the Fowler, Noll and Vo family of non-cryptographic hashes. The cryptographic hashes under `crypto` will implement the same interfaces when they land, so code written against `Hash` today will take a SHA-256 later without changes.
+`burrow/hash.h` is Go's `hash`: the interfaces that every hash function speaks. `hash/crc32` and `hash/crc64` are cyclic redundancy checks, `hash/adler32` is the checksum zlib uses, and `hash/fnv` is the Fowler, Noll and Vo family of non-cryptographic hashes. The cryptographic hashes `crypto/md5`, `crypto/sha1`, `crypto/sha256` and `crypto/sha512` implement the same interfaces, so code written against `Hash` takes any of them.
 
-None of these are safe against someone choosing the input on purpose. They are for catching accidental corruption and for spreading keys across buckets.
+The checksums and FNV are not safe against someone choosing the input on purpose. They are for catching accidental corruption and for spreading keys across buckets. For that you want SHA-256 or SHA-512, which are covered [further down](#cryptographic-hashes).
 
 ## One call
 
@@ -102,10 +102,51 @@ fnv64a: 17 a1 a4 f2 67 be 63 3d
 fnv128a: 4f 2e a2 0c f7 3d cc 0f f0 d6 a3 62 4c d2 66 05
 ```
 
+## Cryptographic hashes
+
+Each package has a one call function that returns the digest as a fixed size array wrapped in a struct, the way Go returns `[32]byte`. It is returned by value and nothing is allocated:
+
+<!-- example: ../examples/hash/hash.c#sha256 -->
+```c
+Slice data = slice_from_str(a, BURROW_S("hello, world"));
+Sha256Sum256Ret sum = sha256_sum256(data);
+Str hex =
+    hex_encode_to_string(a, slice_from(sum.a, SHA256_SIZE, SHA256_SIZE, TYPE_BYTE));
+```
+
+That is `09ca7e4eaa6e8ae9c7d261167129184883644d07dfba7cbfbc4c8a2e08360d5b`, the same as `sha256sum` prints.
+
+The names follow Go's. `sha256_sum256` and `sha256_sum224` are SHA-256 and SHA-224. `sha512_sum512`, `sha512_sum384`, `sha512_sum512224` and `sha512_sum512256` are SHA-512, SHA-384, SHA-512/224 and SHA-512/256. `md5_sum` and `sha1_sum` are the old ones. Each size has a constant, `SHA256_SIZE`, `SHA512_SIZE384` and so on, and the block sizes are `MD5_BLOCK_SIZE`, `SHA1_BLOCK_SIZE`, `SHA256_BLOCK_SIZE` and `SHA512_BLOCK_SIZE`.
+
+The streaming versions are a plain `Hash`, made from the allocator you pass:
+
+<!-- example: ../examples/hash/hash.c#cryptostream -->
+```c
+Hash h = sha512_new512256(a);
+hash_write(h, slice_from_str(a, BURROW_S("hello, ")), NULL);
+hash_write(h, slice_from_str(a, BURROW_S("world")), NULL);
+Slice digest = hash_sum(a, h, slice_nil(TYPE_BYTE));
+```
+
+And they go through the same generic code as the checksums above:
+
+<!-- example: ../examples/hash/hash.c#cryptogeneric -->
+```c
+print_sum(a, BURROW_S("md5"), md5_new(a), data);
+print_sum(a, BURROW_S("sha1"), sha1_new(a), data);
+```
+
+```text
+md5: e4 d7 f1 b4 ed 2e 42 d1 58 98 f4 b2 7b 01 9d a4
+sha1: b7 e2 3e c2 9a f2 2b 0b 4e 41 da 31 e8 68 d5 72 26 12 1c 84
+```
+
+MD5 and SHA-1 are broken for anything where an attacker picks the input. They are here because file formats and protocols still name them. Use SHA-256 or SHA-512 for new work.
+
 ## Memory
 
 A hash made by one of the `_new` functions comes from the allocator you pass and holds no other memory, so it goes away with the arena. The IEEE and Castagnoli tables and their faster variants are built once, the first time they are used, from whichever thread gets there first. Nothing else is shared, and a single hash is not safe to write from two threads at once, the same as in Go.
 
 ## What is not here yet
 
-Go's hashes can save their state with `MarshalBinary` and pick it up again with `UnmarshalBinary`, and the newer ones can `Clone` themselves. Those need a way to ask a `Hash` whether it also implements another interface, which comes with the `encoding` package (#185). CRC-32 in Go uses the SSE 4.2 and ARMv8 CRC instructions when it can, and burrow uses slicing by 8 tables for now, which is what Go falls back to on machines without them.
+Go's hashes can save their state with `MarshalBinary` and pick it up again with `UnmarshalBinary`, and the newer ones can `Clone` themselves. Those need a way to ask a `Hash` whether it also implements another interface, which comes with the `encoding` package (#185). CRC-32 in Go uses the SSE 4.2 and ARMv8 CRC instructions when it can, and burrow uses slicing by 8 tables for now, which is what Go falls back to on machines without them. The same goes for SHA-1, SHA-256 and SHA-512, which Go runs on the SHA instructions of recent x86 and ARM chips. burrow has the portable code only, which is a little faster than Go's own portable code but a long way behind the instructions.

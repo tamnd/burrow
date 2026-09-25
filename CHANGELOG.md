@@ -4,6 +4,25 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.3 (2026-09-25)
+
+The text encodings, and CI back to green.
+
+### Added
+
+- `encoding/csv`, the reader and writer with every option Go has, `FieldPos` and `InputOffset` (#201).
+- `encoding/pem`, decode and encode, checked against Go over 35k inputs (#202).
+
+### Fixed
+
+- base64 decode no longer offsets a nil destination, which was undefined behaviour ubsan caught (#202).
+- The tsan job, where a futex wait with no timeout kept signals from being delivered. Waits are sliced under tsan now, and `pal_exit` leaves without tsan flushing stdio (#198).
+- The MSVC builds: no `max_align_t` in C mode, and a forward declared const table in `io.c` (#198).
+- The amalgamation, where a parameter in strings/iter.c shadowed a static in strconv/quote.c (#198).
+- A data race in `FuzzTypes`, where two seeds shared one buffer for the panic text (#198).
+- Netpoll tests that could fail on a slow runner because the deadline was set before the clock was read (#198).
+- Every clang-tidy finding from the encoding ports (#198).
+
 ## v0.1.2 (2026-09-24)
 
 The first half of the encoding packages.

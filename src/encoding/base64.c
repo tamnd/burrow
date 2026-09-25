@@ -512,7 +512,8 @@ static Int base64_decode_raw(const Base64Encoding *enc, Byte *dst, Int cap,
     }
 
     while (si < len) {
-        n += base64_decode_quantum(enc, dst + n, cap - n, src, len, si, &si, &e);
+        n += base64_decode_quantum(enc, dst == NULL ? NULL : dst + n, cap - n, src, len,
+                                   si, &si, &e);
         if (BURROW_FAILED(e))
             goto out;
     }
@@ -610,7 +611,7 @@ static Int base64_encoder_write(void *self, Slice p, Error *err) {
 
     /* Whole blocks, a buffer at a time. */
     while (left >= 3) {
-        Int nn = BASE64_OUT_SIZE / 4 * 3;
+        Int nn = (Int)BASE64_OUT_SIZE / 4 * 3;
         if (nn > left) {
             nn = left;
             nn -= nn % 3;

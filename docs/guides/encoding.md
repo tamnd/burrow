@@ -413,6 +413,53 @@ The buffer holds `id,quote` and `1,"say ""hi"", then go`. The writer is buffered
 
 `CsvParseError` has one difference from Go. Its `Error` method, `csv_parse_error_error`, takes the allocator to build the text in when you made the struct yourself. An error that came out of the reader already has its text, and `error_text` gives it to you.
 
+## PEM
+
+`burrow/encoding/pem.h` is Go's `encoding/pem`, the text wrapping that keys and certificates come in, the kind that starts with `-----BEGIN CERTIFICATE-----`. `pem_decode` finds the next block, skipping anything before it, and points `rest` at what follows:
+
+<!-- example: ../examples/encoding/pem.c#decode -->
+```c
+Slice rest = BURROW_B("Some text before the block\n"
+                      "-----BEGIN MESSAGE-----\n"
+                      "Proc-Type: 4,ENCRYPTED\n"
+                      "Comment: hello there\n"
+                      "\n"
+                      "aGVsbG8sIHdvcmxk\n"
+                      "-----END MESSAGE-----\n"
+                      "and some after\n");
+PemBlock *b = pem_decode(a, rest, &rest);
+const Str *comment = BURROW_MAP_GET(Str, Str, b->headers, BURROW_S("Comment"));
+```
+
+`b->type` is `MESSAGE`, the two headers are in `b->headers`, a `map[string]string`, and `b->bytes` holds `hello, world`, already decoded from base64. `rest` is `and some after`. With no block to find you get NULL and `rest` stays all of the input, so calling it in a loop until NULL reads every block in a file.
+
+The block owns everything in it, so the input can go away while it lives. The block and its text are a single allocation, the bytes are a second and the map a third. `pem_block_free` gives all of them back, and an arena needs nothing.
+
+Encoding writes the headers with `Proc-Type` first and the rest sorted, then the data in base64 lines of 64:
+
+<!-- example: ../examples/encoding/pem.c#encode -->
+```c
+Map *h = map_make(a, TYPE_STRING, TYPE_STRING, 2);
+BURROW_MAP_SET(Str, Str, h, BURROW_S("Name"), BURROW_S("demo"));
+BURROW_MAP_SET(Str, Str, h, BURROW_S("Proc-Type"), BURROW_S("4,ENCRYPTED"));
+PemBlock out = {
+    .type = BURROW_S("MESSAGE"), .headers = h, .bytes = BURROW_B("hello, world")};
+Slice text = pem_encode_to_memory(a, &out);
+```
+
+That gives
+
+```text
+-----BEGIN MESSAGE-----
+Proc-Type: 4,ENCRYPTED
+Name: demo
+
+aGVsbG8sIHdvcmxk
+-----END MESSAGE-----
+```
+
+`headers` can be NULL when there are none. `pem_encode` writes to any `IoWriter` without allocating, and a header key with a colon in it is an error before anything is written.
+
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv` or `encoding/hex` is missing.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex` or `encoding/pem` is missing.

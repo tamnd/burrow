@@ -31,3 +31,4 @@ encoding/binary
 io
 bufio
 encoding/csv
+encoding/pem

@@ -92,12 +92,12 @@ static Any any_of_slot(PoolSlot s) {
  * is touching the pool. The reason it has to exist at all is that a chain drops
  * rings off its own tail as they drain and nils the link back to them, so by
  * the end the chain no longer knows about most of what it allocated. */
-typedef struct Ring Ring;
-struct Ring {
+typedef struct PoolRing PoolRing;
+struct PoolRing {
     uint64_t headtail;
-    Ring *next;
-    Ring *prev;
-    Ring *allnext;
+    PoolRing *next;
+    PoolRing *prev;
+    PoolRing *allnext;
     uint32_t n;
     PoolSlot vals[];
 };
@@ -111,9 +111,9 @@ struct Ring {
  * a chain on its own forgets the rings it has drained, because draining one is
  * what nils the link back to it. */
 typedef struct Chain {
-    Ring *head;
-    Ring *tail;
-    Ring *first;
+    PoolRing *head;
+    PoolRing *tail;
+    PoolRing *first;
 } Chain;
 
 /* What one P gets. The private slot is the fast path and the chain is the
@@ -187,9 +187,9 @@ static uint32_t ht_tail(uint64_t ht) {
     return (uint32_t)(ht & HT_MASK);
 }
 
-static Ring *ring_new(Alloc *a, uint32_t n) {
-    Ring *r = (Ring *)mem_alloc(a, sizeof(Ring) + (size_t)n * sizeof(PoolSlot),
-                                _Alignof(Ring));
+static PoolRing *pool_ring_new(Alloc *a, uint32_t n) {
+    PoolRing *r = (PoolRing *)mem_alloc(
+        a, sizeof(PoolRing) + (size_t)n * sizeof(PoolSlot), _Alignof(PoolRing));
     if (r == NULL)
         return NULL;
     r->n = n;
@@ -203,7 +203,7 @@ static Ring *ring_new(Alloc *a, uint32_t n) {
  * second is a slot whose type word is still set, which means a thief took the
  * value out of it and has not yet said so, and for a moment longer the ring is
  * still full. Go checks both and so does this. */
-static bool ring_push(Ring *r, Any v) {
+static bool pool_ring_push(PoolRing *r, Any v) {
     uint64_t ht = burrow__atomic_load_u64(&r->headtail);
     uint32_t head = ht_head(ht);
     uint32_t tail = ht_tail(ht);
@@ -228,10 +228,10 @@ static bool ring_push(Ring *r, Any v) {
 /* Pop at the head, which is the most recently pushed value and so the one most
  * likely to still be in this core's cache. Only the owner calls this.
  *
- * The slot is cleared outright rather than released the way ring_steal does,
+ * The slot is cleared outright rather than released the way pool_ring_steal does,
  * because the owner is the only one who can push into it and the owner is here.
  * Go makes the same distinction between its popHead and its popTail. */
-static bool ring_pop(Ring *r, Any *out) {
+static bool pool_ring_pop(PoolRing *r, Any *out) {
     uint64_t ht = burrow__atomic_load_u64(&r->headtail);
 
     for (;;) {
@@ -258,7 +258,7 @@ static bool ring_pop(Ring *r, Any *out) {
  * back to the owner, and it has to come after the value has been copied out.
  * Doing it the other way round lets the owner push a new value into a slot this
  * thread has not finished reading. */
-static bool ring_steal(Ring *r, Any *out) {
+static bool pool_ring_steal(PoolRing *r, Any *out) {
     uint64_t ht = burrow__atomic_load_u64(&r->headtail);
 
     for (;;) {
@@ -283,10 +283,10 @@ static bool ring_steal(Ring *r, Any *out) {
  * than dropping the value, and a ring that drains falls off the back. */
 
 static void chain_push(Chain *c, Alloc *a, Any v, SyncPoolFreeFunc free_fn) {
-    Ring *d = c->head;
+    PoolRing *d = c->head;
 
     if (d == NULL) {
-        d = ring_new(a, RING_INIT);
+        d = pool_ring_new(a, RING_INIT);
         if (d == NULL) {
             if (free_fn.f != NULL)
                 BURROW_CALLF(free_fn, v);
@@ -297,14 +297,14 @@ static void chain_push(Chain *c, Alloc *a, Any v, SyncPoolFreeFunc free_fn) {
         burrow__atomic_store_release_ptr((void **)&c->tail, d);
     }
 
-    if (ring_push(d, v))
+    if (pool_ring_push(d, v))
         return;
 
     uint32_t n = d->n * 2;
     if (n >= RING_LIMIT)
         n = RING_LIMIT;
 
-    Ring *d2 = ring_new(a, n);
+    PoolRing *d2 = pool_ring_new(a, n);
     if (d2 == NULL) {
         /* Out of memory is not a reason to lose an object the caller is trying
          * to give back, and there is nowhere left to put it, so it goes where
@@ -319,20 +319,20 @@ static void chain_push(Chain *c, Alloc *a, Any v, SyncPoolFreeFunc free_fn) {
     c->first = d2;
     c->head = d2;
     burrow__atomic_store_release_ptr((void **)&d->next, d2);
-    (void)ring_push(d2, v);
+    (void)pool_ring_push(d2, v);
 }
 
 static bool chain_pop(Chain *c, Any *out) {
-    for (Ring *d = c->head; d != NULL;
-         d = (Ring *)burrow__atomic_load_acquire_ptr((void *const *)&d->prev)) {
-        if (ring_pop(d, out))
+    for (PoolRing *d = c->head; d != NULL;
+         d = (PoolRing *)burrow__atomic_load_acquire_ptr((void *const *)&d->prev)) {
+        if (pool_ring_pop(d, out))
             return true;
     }
     return false;
 }
 
 static bool chain_steal(Chain *c, Any *out) {
-    Ring *d = (Ring *)burrow__atomic_load_acquire_ptr((void *const *)&c->tail);
+    PoolRing *d = (PoolRing *)burrow__atomic_load_acquire_ptr((void *const *)&c->tail);
     if (d == NULL)
         return false;
 
@@ -342,9 +342,10 @@ static bool chain_steal(Chain *c, Any *out) {
          * next that is still nil and give up, with the value it wanted sitting
          * in the ring that was about to be linked on. Go's comment says the
          * same thing in fewer words. */
-        Ring *d2 = (Ring *)burrow__atomic_load_acquire_ptr((void *const *)&d->next);
+        PoolRing *d2 =
+            (PoolRing *)burrow__atomic_load_acquire_ptr((void *const *)&d->next);
 
-        if (ring_steal(d, out))
+        if (pool_ring_steal(d, out))
             return true;
         if (d2 == NULL)
             return false;
@@ -353,7 +354,7 @@ static bool chain_steal(Chain *c, Any *out) {
          * along. Losing the race is fine: whoever won moved it to the same
          * place. Nilling the back link is what stops chain_pop walking over
          * rings that will never hold anything again. */
-        Ring *expect = d;
+        PoolRing *expect = d;
         if (burrow__atomic_cas_release_ptr((void **)&c->tail, (void **)&expect, d2))
             burrow__atomic_store_release_ptr((void **)&d2->prev, NULL);
 
@@ -659,11 +660,11 @@ static void shard_free(Alloc *a, Shard *s, SyncPoolFreeFunc free_fn) {
     }
 
     for (uint32_t i = 0; i < s->n; i++) {
-        Ring *r = s->locals[i].shared.first;
+        PoolRing *r = s->locals[i].shared.first;
         while (r != NULL) {
-            Ring *next = r->allnext;
-            mem_free(a, r, sizeof(Ring) + (size_t)r->n * sizeof(PoolSlot),
-                     _Alignof(Ring));
+            PoolRing *next = r->allnext;
+            mem_free(a, r, sizeof(PoolRing) + (size_t)r->n * sizeof(PoolSlot),
+                     _Alignof(PoolRing));
             r = next;
         }
     }

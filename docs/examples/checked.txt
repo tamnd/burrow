@@ -38,3 +38,4 @@ docs/guides/encoding.md
 docs/guides/io.md
 docs/guides/bufio.md
 docs/guides/paths.md
+docs/guides/containers.md

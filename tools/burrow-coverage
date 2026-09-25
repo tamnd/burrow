@@ -569,6 +569,7 @@ def header_files(paths):
 FUNC_TYPES = {
     "func(int32) bool": {"RuneFunc"},
     "func(int32) int32": {"RuneMapFunc"},
+    "func(interface{})": {"RingDoFunc"},
 }
 
 BUILTIN = {

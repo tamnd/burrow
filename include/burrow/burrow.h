@@ -41,6 +41,8 @@
 #include "burrow/bufio.h"
 #include "burrow/bytes.h"
 #include "burrow/chan.h"
+#include "burrow/container/list.h"
+#include "burrow/container/ring.h"
 #include "burrow/context.h"
 #include "burrow/core.h"
 #include "burrow/crypto/md5.h"

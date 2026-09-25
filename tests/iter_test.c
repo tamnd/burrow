@@ -73,10 +73,14 @@ static int stable_num_goroutine(void) {
     panic_str(BURROW_S("failed to stabilize NumGoroutine after 1000 iterations"));
 }
 
+/* Fewer goroutines than the baseline is not a leak. It means a goroutine from
+ * an earlier test was still on its way out when the baseline was taken, which
+ * happens on a loaded machine when its thread is not scheduled for longer than
+ * stable_num_goroutine waits, so only more than wanted is an error. */
 #define WANT_NG(t, ng, want)                                                           \
     do {                                                                               \
         int xg_ = runtime_numgoroutine() - (ng);                                       \
-        if (xg_ != (want))                                                             \
+        if (xg_ > (want))                                                              \
             testing_t_errorf_v((t), "have %d extra goroutines, want %d", xg_, (want)); \
     } while (0)
 

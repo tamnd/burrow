@@ -62,7 +62,7 @@ static bool tolerance(double a, double b, double e) {
     return d < e;
 }
 
-static bool close(double a, double b) {
+static bool close_enough(double a, double b) {
     return tolerance(a, b, 1e-14);
 }
 static bool veryclose(double a, double b) {
@@ -119,7 +119,7 @@ static void TestAcos(TestingT *t) {
     for (Int i = 0; i < LEN(t_vf); i++) {
         double a = F(t_vf[i]) / 10;
         double f = math_acos(a);
-        if (!close(F(t_acos[i]), f))
+        if (!close_enough(F(t_acos[i]), f))
             testing_t_errorf_v(t, "Acos(%g) = %g, want %g", a, f, F(t_acos[i]));
     }
     check_sc(t, "Acos", math_acos, t_vfacosSC, t_acosSC, LEN(t_vfacosSC));
@@ -238,7 +238,7 @@ static void TestCos(TestingT *t) {
 static void TestCosh(TestingT *t) {
     for (Int i = 0; i < LEN(t_vf); i++) {
         double f = math_cosh(F(t_vf[i]));
-        if (!close(F(t_cosh[i]), f))
+        if (!close_enough(F(t_cosh[i]), f))
             testing_t_errorf_v(t, "Cosh(%g) = %g, want %g", F(t_vf[i]), f,
                                F(t_cosh[i]));
     }
@@ -276,13 +276,13 @@ static void TestErfinv(TestingT *t) {
     for (int k = 0; k <= 180; k++) {
         double x = -0.9 + k * 1e-2;
         double f = math_erf(math_erfinv(x));
-        if (!close(x, f))
+        if (!close_enough(x, f))
             testing_t_errorf_v(t, "Erf(Erfinv(%g)) = %g, want %g", x, f, x);
     }
     for (int k = 0; k <= 180; k++) {
         double x = -0.9 + k * 1e-2;
         double f = math_erfinv(math_erf(x));
-        if (!close(x, f))
+        if (!close_enough(x, f))
             testing_t_errorf_v(t, "Erfinv(Erf(%g)) = %g, want %g", x, f, x);
     }
 }
@@ -299,13 +299,13 @@ static void TestErfcinv(TestingT *t) {
     for (int k = 0; k <= 180; k++) {
         double x = 0.1 + k * 1e-2;
         double f = math_erfc(math_erfcinv(x));
-        if (!close(x, f))
+        if (!close_enough(x, f))
             testing_t_errorf_v(t, "Erfc(Erfcinv(%g)) = %g, want %g", x, f, x);
     }
     for (int k = 0; k <= 180; k++) {
         double x = 0.1 + k * 1e-2;
         double f = math_erfcinv(math_erfc(x));
-        if (!close(x, f))
+        if (!close_enough(x, f))
             testing_t_errorf_v(t, "Erfcinv(Erfc(%g)) = %g, want %g", x, f, x);
     }
 }
@@ -331,7 +331,7 @@ static void TestExpm1(TestingT *t) {
     for (Int i = 0; i < LEN(t_vf); i++) {
         double a = F(t_vf[i]) * 10;
         double f = math_expm1(a);
-        if (!close(F(t_expm1Large[i]), f))
+        if (!close_enough(F(t_expm1Large[i]), f))
             testing_t_errorf_v(t, "Expm1(%g) = %g, want %g", a, f, F(t_expm1Large[i]));
     }
     check_sc(t, "Expm1", math_expm1, t_vfexpm1SC, t_expm1SC, LEN(t_vfexpm1SC));
@@ -340,7 +340,7 @@ static void TestExpm1(TestingT *t) {
 static void TestExp2(TestingT *t) {
     for (Int i = 0; i < LEN(t_vf); i++) {
         double f = math_exp2(F(t_vf[i]));
-        if (!close(F(t_exp2[i]), f))
+        if (!close_enough(F(t_exp2[i]), f))
             testing_t_errorf_v(t, "Exp2(%g) = %g, want %g", F(t_vf[i]), f,
                                F(t_exp2[i]));
     }
@@ -445,7 +445,7 @@ static void TestFrexp(TestingT *t) {
 static void TestGamma(TestingT *t) {
     for (Int i = 0; i < LEN(t_vf); i++) {
         double f = math_gamma(F(t_vf[i]));
-        if (!close(F(t_gamma[i]), f))
+        if (!close_enough(F(t_gamma[i]), f))
             testing_t_errorf_v(t, "Gamma(%g) = %g, want %g", F(t_vf[i]), f,
                                F(t_gamma[i]));
     }
@@ -458,7 +458,7 @@ static void TestGamma(TestingT *t) {
         else if (x > -50 && x <= 171)
             ok = veryclose(want, f);
         else
-            ok = close(want, f);
+            ok = close_enough(want, f);
         if (!ok)
             testing_t_errorf_v(t, "Gamma(%g) = %g, want %g", x, f, want);
     }
@@ -509,7 +509,7 @@ static void TestJ0(TestingT *t) {
 static void TestJ1(TestingT *t) {
     for (Int i = 0; i < LEN(t_vf); i++) {
         double f = math_j1(F(t_vf[i]));
-        if (!close(F(t_j1[i]), f))
+        if (!close_enough(F(t_j1[i]), f))
             testing_t_errorf_v(t, "J1(%g) = %g, want %g", F(t_vf[i]), f, F(t_j1[i]));
     }
     check_sc(t, "J1", math_j1, t_vfj0SC, t_j1SC, LEN(t_vfj0SC));
@@ -518,10 +518,10 @@ static void TestJ1(TestingT *t) {
 static void TestJn(TestingT *t) {
     for (Int i = 0; i < LEN(t_vf); i++) {
         double f = math_jn(2, F(t_vf[i]));
-        if (!close(F(t_j2[i]), f))
+        if (!close_enough(F(t_j2[i]), f))
             testing_t_errorf_v(t, "Jn(2, %g) = %g, want %g", F(t_vf[i]), f, F(t_j2[i]));
         f = math_jn(-3, F(t_vf[i]));
-        if (!close(F(t_jM3[i]), f))
+        if (!close_enough(F(t_jM3[i]), f))
             testing_t_errorf_v(t, "Jn(-3, %g) = %g, want %g", F(t_vf[i]), f,
                                F(t_jM3[i]));
     }
@@ -565,7 +565,7 @@ static void TestLgamma(TestingT *t) {
     for (Int i = 0; i < LEN(t_vf); i++) {
         Int s;
         double f = math_lgamma(F(t_vf[i]), &s);
-        if (!close(F(t_lgamma[i].f), f) || t_lgamma[i].i != s)
+        if (!close_enough(F(t_lgamma[i].f), f) || t_lgamma[i].i != s)
             testing_t_errorf_v(t, "Lgamma(%g) = %g, %d, want %g, %d", F(t_vf[i]), f, s,
                                F(t_lgamma[i].f), t_lgamma[i].i);
     }
@@ -701,7 +701,7 @@ static void TestNextafter64(TestingT *t) {
 static void TestPow(TestingT *t) {
     for (Int i = 0; i < LEN(t_vf); i++) {
         double f = math_pow(10, F(t_vf[i]));
-        if (!close(F(t_pow[i]), f))
+        if (!close_enough(F(t_pow[i]), f))
             testing_t_errorf_v(t, "Pow(10, %g) = %g, want %g", F(t_vf[i]), f,
                                F(t_pow[i]));
     }
@@ -825,7 +825,7 @@ static void TestSincos(TestingT *t) {
 static void TestSinh(TestingT *t) {
     for (Int i = 0; i < LEN(t_vf); i++) {
         double f = math_sinh(F(t_vf[i]));
-        if (!close(F(t_sinh[i]), f))
+        if (!close_enough(F(t_sinh[i]), f))
             testing_t_errorf_v(t, "Sinh(%g) = %g, want %g", F(t_vf[i]), f,
                                F(t_sinh[i]));
     }
@@ -876,7 +876,7 @@ static void TestY0(TestingT *t) {
     for (Int i = 0; i < LEN(t_vf); i++) {
         double a = math_abs(F(t_vf[i]));
         double f = math_y0(a);
-        if (!close(F(t_y0[i]), f))
+        if (!close_enough(F(t_y0[i]), f))
             testing_t_errorf_v(t, "Y0(%g) = %g, want %g", a, f, F(t_y0[i]));
     }
     check_sc(t, "Y0", math_y0, t_vfy0SC, t_y0SC, LEN(t_vfy0SC));
@@ -896,10 +896,10 @@ static void TestYn(TestingT *t) {
     for (Int i = 0; i < LEN(t_vf); i++) {
         double a = math_abs(F(t_vf[i]));
         double f = math_yn(2, a);
-        if (!close(F(t_y2[i]), f))
+        if (!close_enough(F(t_y2[i]), f))
             testing_t_errorf_v(t, "Yn(2, %g) = %g, want %g", a, f, F(t_y2[i]));
         f = math_yn(-3, a);
-        if (!close(F(t_yM3[i]), f))
+        if (!close_enough(F(t_yM3[i]), f))
             testing_t_errorf_v(t, "Yn(-3, %g) = %g, want %g", a, f, F(t_yM3[i]));
     }
     for (Int i = 0; i < LEN(t_vfy0SC); i++) {
@@ -963,7 +963,7 @@ static void TestLargeCos(TestingT *t) {
     for (Int i = 0; i < LEN(t_vf); i++) {
         double f1 = F(t_cosLarge[i]);
         double f2 = math_cos(F(t_vf[i]) + large);
-        if (!close(f1, f2))
+        if (!close_enough(f1, f2))
             testing_t_errorf_v(t, "Cos(%g) = %g, want %g", F(t_vf[i]) + large, f2, f1);
     }
 }
@@ -972,7 +972,7 @@ static void TestLargeSin(TestingT *t) {
     for (Int i = 0; i < LEN(t_vf); i++) {
         double f1 = F(t_sinLarge[i]);
         double f2 = math_sin(F(t_vf[i]) + large);
-        if (!close(f1, f2))
+        if (!close_enough(f1, f2))
             testing_t_errorf_v(t, "Sin(%g) = %g, want %g", F(t_vf[i]) + large, f2, f1);
     }
 }
@@ -982,7 +982,7 @@ static void TestLargeSincos(TestingT *t) {
         double f1 = F(t_sinLarge[i]), g1 = F(t_cosLarge[i]);
         double g2;
         double f2 = math_sincos(F(t_vf[i]) + large, &g2);
-        if (!close(f1, f2) || !close(g1, g2))
+        if (!close_enough(f1, f2) || !close_enough(g1, g2))
             testing_t_errorf_v(t, "Sincos(%g) = %g, %g, want %g, %g",
                                F(t_vf[i]) + large, f2, g2, f1, g1);
     }
@@ -992,7 +992,7 @@ static void TestLargeTan(TestingT *t) {
     for (Int i = 0; i < LEN(t_vf); i++) {
         double f1 = F(t_tanLarge[i]);
         double f2 = math_tan(F(t_vf[i]) + large);
-        if (!close(f1, f2))
+        if (!close_enough(f1, f2))
             testing_t_errorf_v(t, "Tan(%g) = %g, want %g", F(t_vf[i]) + large, f2, f1);
     }
 }
@@ -1004,10 +1004,10 @@ static void TestHugeCos(TestingT *t) {
     for (Int i = 0; i < LEN(t_trigHuge); i++) {
         double x = F(t_trigHuge[i]), f1 = F(t_cosHuge[i]);
         double f2 = math_cos(x);
-        if (!close(f1, f2))
+        if (!close_enough(f1, f2))
             testing_t_errorf_v(t, "Cos(%g) = %g, want %g", x, f2, f1);
         double f3 = math_cos(-x);
-        if (!close(f1, f3))
+        if (!close_enough(f1, f3))
             testing_t_errorf_v(t, "Cos(%g) = %g, want %g", -x, f3, f1);
     }
 }
@@ -1016,10 +1016,10 @@ static void TestHugeSin(TestingT *t) {
     for (Int i = 0; i < LEN(t_trigHuge); i++) {
         double x = F(t_trigHuge[i]), f1 = F(t_sinHuge[i]);
         double f2 = math_sin(x);
-        if (!close(f1, f2))
+        if (!close_enough(f1, f2))
             testing_t_errorf_v(t, "Sin(%g) = %g, want %g", x, f2, f1);
         double f3 = math_sin(-x);
-        if (!close(-f1, f3))
+        if (!close_enough(-f1, f3))
             testing_t_errorf_v(t, "Sin(%g) = %g, want %g", -x, f3, -f1);
     }
 }
@@ -1029,11 +1029,11 @@ static void TestHugeSinCos(TestingT *t) {
         double x = F(t_trigHuge[i]), f1 = F(t_sinHuge[i]), g1 = F(t_cosHuge[i]);
         double g2, g3;
         double f2 = math_sincos(x, &g2);
-        if (!close(f1, f2) || !close(g1, g2))
+        if (!close_enough(f1, f2) || !close_enough(g1, g2))
             testing_t_errorf_v(t, "Sincos(%g) = %g, %g, want %g, %g", x, f2, g2, f1,
                                g1);
         double f3 = math_sincos(-x, &g3);
-        if (!close(-f1, f3) || !close(g1, g3))
+        if (!close_enough(-f1, f3) || !close_enough(g1, g3))
             testing_t_errorf_v(t, "Sincos(%g) = %g, %g, want %g, %g", -x, f3, g3, -f1,
                                g1);
     }
@@ -1043,10 +1043,10 @@ static void TestHugeTan(TestingT *t) {
     for (Int i = 0; i < LEN(t_trigHuge); i++) {
         double x = F(t_trigHuge[i]), f1 = F(t_tanHuge[i]);
         double f2 = math_tan(x);
-        if (!close(f1, f2))
+        if (!close_enough(f1, f2))
             testing_t_errorf_v(t, "Tan(%g) = %g, want %g", x, f2, f1);
         double f3 = math_tan(-x);
-        if (!close(-f1, f3))
+        if (!close_enough(-f1, f3))
             testing_t_errorf_v(t, "Tan(%g) = %g, want %g", -x, f3, -f1);
     }
 }

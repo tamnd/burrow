@@ -40,6 +40,15 @@ static inline bool slices_less_uint(uint64_t a, uint64_t b) {
 /* x != x is isNaN, as in Go, which needs no math library. */
 #define SLICES_NAN(x) ((x) != (x))
 
+/* signbit, done on the bits. mingw's signbit is a macro with a float branch,
+ * which warns about a double argument under -Wfloat-conversion. A float
+ * widens to a double with its sign, so one function covers both. */
+static bool slices_signbit(double x) {
+    uint64_t b;
+    memcpy(&b, &x, sizeof b);
+    return b >> 63 != 0;
+}
+
 /* NOLINTBEGIN(misc-redundant-expression) */
 static inline bool slices_less_float32(float a, float b) {
     return (SLICES_NAN(a) && !SLICES_NAN(b)) || a < b;
@@ -217,7 +226,8 @@ SLICES_ORDERED(SLICES_DEFINE)
         Int m = 0;                                                                     \
         for (Int i = 1; i < n && !SLICES_NAN(x[m]); i++) {                             \
             if (SLICES_NAN(x[i]) || x[i] < x[m] ||                                     \
-                (x[i] == x[m] && signbit(x[i]) && !signbit(x[m])))                     \
+                (x[i] == x[m] && slices_signbit((double)x[i]) &&                       \
+                 !slices_signbit((double)x[m])))                                       \
                 m = i;                                                                 \
         }                                                                              \
         return m;                                                                      \
@@ -226,7 +236,8 @@ SLICES_ORDERED(SLICES_DEFINE)
         Int m = 0;                                                                     \
         for (Int i = 1; i < n && !SLICES_NAN(x[m]); i++) {                             \
             if (SLICES_NAN(x[i]) || x[i] > x[m] ||                                     \
-                (x[i] == x[m] && !signbit(x[i]) && signbit(x[m])))                     \
+                (x[i] == x[m] && !slices_signbit((double)x[i]) &&                      \
+                 slices_signbit((double)x[m])))                                        \
                 m = i;                                                                 \
         }                                                                              \
         return m;                                                                      \

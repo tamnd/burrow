@@ -181,7 +181,9 @@ jobs:
   bigendian:
     name: linux-s390x-gcc (big endian)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Under qemu the build alone takes close to 30 minutes, and the tests run
+    # after that, so 30 was not enough.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v3

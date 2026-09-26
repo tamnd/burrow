@@ -11,6 +11,7 @@
 #include "fatal.h"
 
 #include "burrow/error.h"
+#include "burrow/math.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
 #include "burrow/mem/track.h"
@@ -94,15 +95,15 @@ static float from_bits32(uint32_t b) {
  * conversion depend on the machine and Go does not promise them. */
 static bool same64(double got, uint64_t want) {
     double w = from_bits64(want);
-    if (isnan(w))
-        return isnan(got);
+    if (math_is_nan((double)w))
+        return math_is_nan((double)got);
     return bits64(got) == want;
 }
 
 static bool same32(float got, uint32_t want) {
     float w = from_bits32(want);
-    if (isnan(w))
-        return isnan(got);
+    if (math_is_nan((double)w))
+        return math_is_nan((double)got);
     return bits32(got) == want;
 }
 
@@ -133,7 +134,7 @@ static void check_atof(TestingT *t, const AtofCase *tt) {
     err = BURROW_NO_ERROR;
     f = strconv_parse_float(tt->in, 32, &err);
     /* A 32 bit result is always a float, widened. */
-    CHECK(isnan(f) || (double)(float)f == f);
+    CHECK(math_is_nan((double)f) || (double)(float)f == f);
     if (!same32((float)f, tt->out32))
         fprintf(stderr, "ParseFloat(%.*s, 32) = %08lx\n", (int)tt->in.len,
                 (const char *)tt->in.p, (unsigned long)bits32((float)f));
@@ -177,7 +178,7 @@ static void TestParseFloatOtherBitSizes(TestingT *t) {
 static void TestParseFloatWithoutAnError(TestingT *t) {
     CHECK(strconv_parse_float(S("2.5"), 64, NULL) == 2.5);
     CHECK(strconv_parse_float(S("x"), 64, NULL) == 0);
-    CHECK(isinf(strconv_parse_float(S("1e400"), 64, NULL)));
+    CHECK(math_is_inf((double)(strconv_parse_float(S("1e400"), 64, NULL)), 0));
 }
 
 static bool appended(Slice got, Str want) {
@@ -226,12 +227,12 @@ static void TestPowersOfTwoRoundTrip(TestingT *t) {
     for (int exp = -2048; exp <= 2048; exp++) {
         ArenaMark m = arena_mark(&ar);
         double f = ldexp(1, exp);
-        if (!isinf(f)) {
+        if (!math_is_inf((double)f, 0)) {
             Str s = strconv_format_float(a, f, 'e', -1, 64);
             CHECK(strconv_parse_float(s, 64, NULL) == f);
         }
         float f32 = (float)f;
-        if (!isinf(f32)) {
+        if (!math_is_inf((double)f32, 0)) {
             Str s = strconv_format_float(a, (double)f32, 'e', -1, 32);
             CHECK((float)strconv_parse_float(s, 32, NULL) == f32);
         }
@@ -253,12 +254,12 @@ static void TestRandomRoundTrip(TestingT *t) {
     for (int i = 0; i < 200000; i++) {
         ArenaMark m = arena_mark(&ar);
         double f = from_bits64(next());
-        if (!isnan(f)) {
+        if (!math_is_nan((double)f)) {
             Str s = strconv_format_float(a, f, 'g', -1, 64);
             Error err = BURROW_NO_ERROR;
             double back = strconv_parse_float(s, 64, &err);
             CHECK(bits64(back) == bits64(f));
-            CHECK(BURROW_OK(err) || isinf(f));
+            CHECK(BURROW_OK(err) || math_is_inf((double)f, 0));
         }
         arena_release(&ar, m);
     }

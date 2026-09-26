@@ -792,7 +792,7 @@ static void sha3_bytepad_write(Sha3SHAKE *s, Slice data, Int rate) {
     sha3_absorb(&s->d, (const Byte *)data.p, data.len);
     Int padlen = rate - (n + data.len) % rate;
     if (padlen < rate) {
-        static const Byte zeros[SHA3_RATE_K256];
+        static const Byte zeros[SHA3_RATE_K256] = {0};
         sha3_absorb(&s->d, zeros, padlen);
     }
 }

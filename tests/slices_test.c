@@ -9,6 +9,7 @@
 #include "check.h"
 
 #include "burrow/burrow.h"
+#include "burrow/math.h"
 #include "burrow/mem/arena.h"
 #include "burrow/slices.h"
 #include "burrow/strings.h"
@@ -1458,8 +1459,9 @@ static void TestMinMaxNaNs(TestingT *t) {
     }
     /* -0.0 is smaller than 0.0, as with Go's min and max. */
     double z[] = {0.0, copysign(0, -1)};
-    CHECK(signbit(*(const double *)slices_min(slice_from(z, 2, 2, TYPE_FLOAT64))));
-    CHECK(!signbit(*(const double *)slices_max(slice_from(z, 2, 2, TYPE_FLOAT64))));
+    CHECK(math_signbit(*(const double *)slices_min(slice_from(z, 2, 2, TYPE_FLOAT64))));
+    CHECK(
+        !math_signbit(*(const double *)slices_max(slice_from(z, 2, 2, TYPE_FLOAT64))));
     arena_done();
 }
 

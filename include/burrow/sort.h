@@ -76,7 +76,8 @@ bool sort_is_sorted(SortInterface data);
  * decreasing order. It holds only data, and sort_reverse_as_sort_interface
  * makes the SortInterface that uses it. */
 typedef struct SortReverse {
-    SortInterface interface;
+    SortInterface
+        iface; /* not "interface", which the Windows headers define as a macro */
 } SortReverse;
 
 /* Go's Reverse. Go returns a pointer to a new value, and this returns the

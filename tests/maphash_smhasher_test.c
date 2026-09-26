@@ -340,13 +340,13 @@ static void avalanche_test1(TestingT *t, int nbytes) {
 
     /* The bound Go works out: how many standard deviations make every one of
      * the n*64 cells land inside with probability .9999, times 11 for slack. */
-    double big_n = (double)n * HASH_SIZE;
+    double big_n = (double)n * (double)HASH_SIZE;
     int tenths = 0;
     while (math_pow(math_erf(tenths * .1 / math_sqrt(2)), big_n) < .9999)
         tenths++;
     double c = tenths * .1 * 11.0;
-    double mean = .5 * REP;
-    double stddev = .5 * math_sqrt(REP);
+    double mean = .5 * (double)REP;
+    double stddev = .5 * math_sqrt((double)REP);
     Int low = (Int)(mean - c * stddev);
     Int high = (Int)(mean + c * stddev);
     for (int i = 0; i < n; i++) {

@@ -17,6 +17,7 @@
 #include "burrow/func.h"
 #include "burrow/iface.h"
 #include "burrow/io.h"
+#include "burrow/math.h"
 #include "burrow/mem/arena.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
@@ -365,9 +366,9 @@ static void TestNanAndInf(TestingT *t) {
         Str in = str_from_cstr(nans[i]);
         CHECK_INT_EQ(fmt_sscan_v(a, &err, in, &f32), 1);
         CHECK(BURROW_OK(err));
-        CHECK(isnan(f32));
+        CHECK(math_is_nan((double)f32));
         CHECK_INT_EQ(fmt_sscan_v(a, &err, in, &f64), 1);
-        CHECK(isnan(f64));
+        CHECK(math_is_nan((double)f64));
     }
     static const char *const infs[] = {"inf",  "+inf", "-inf", "INF", "-INF",
                                        "+INF", "Inf",  "-Inf", "+Inf"};
@@ -378,9 +379,9 @@ static void TestNanAndInf(TestingT *t) {
         Str in = str_from_cstr(infs[i]);
         CHECK_INT_EQ(fmt_sscan_v(a, &err, in, &f32), 1);
         CHECK(BURROW_OK(err));
-        CHECK(isinf(f32));
+        CHECK(math_is_inf((double)f32, 0));
         CHECK_INT_EQ(fmt_sscan_v(a, &err, in, &f64), 1);
-        CHECK(isinf(f64));
+        CHECK(math_is_inf((double)f64, 0));
         CHECK((infs[i][0] == '-') == (f64 < 0));
     }
 }

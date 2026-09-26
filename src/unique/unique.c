@@ -69,7 +69,7 @@ static Arena uq_arena;
 static bool uq_ready;
 
 /* Go's zero, the one address every zero sized value gets. */
-static const uintptr_t uq_zero;
+static const uintptr_t uq_zero = 0;
 
 static const Str uq_oom = {(const Byte *)"unique: out of memory", 21};
 

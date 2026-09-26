@@ -54,7 +54,7 @@ static Slice bytes_of(Str s) {
     return slice_from((void *)(uintptr_t)s.p, s.len, s.len, TYPE_BYTE);
 }
 
-static void write(TestingT *t, Str testname, TabwriterWriter *w, Str src) {
+static void write_str(TestingT *t, Str testname, TabwriterWriter *w, Str src) {
     Error err = BURROW_NO_ERROR;
     Int written = io_write_string(tabwriter_writer_as_io_writer(w), src, &err);
     if (BURROW_FAILED(err))
@@ -100,21 +100,21 @@ static void check(TestingT *t, Alloc *a, const Case *e) {
     /* write all at once */
     Str title = fmt_sprintf_v(a, "%s (written all at once)", name);
     b.n = 0;
-    write(t, title, &w, src);
+    write_str(t, title, &w, src);
     verify(t, title, &w, &b, src, e->expected);
 
     /* write byte-by-byte */
     title = fmt_sprintf_v(a, "%s (written byte-by-byte)", name);
     b.n = 0;
     for (Int i = 0; i < src.len; i++)
-        write(t, title, &w, str_from_bytes(src.p + i, 1));
+        write_str(t, title, &w, str_from_bytes(src.p + i, 1));
     verify(t, title, &w, &b, src, e->expected);
 
     /* write using Fibonacci slice sizes */
     title = fmt_sprintf_v(a, "%s (written in fibonacci slices)", name);
     b.n = 0;
     for (Int i = 0, d = 0; i < src.len;) {
-        write(t, title, &w, str_from_bytes(src.p + i, d));
+        write_str(t, title, &w, str_from_bytes(src.p + i, d));
         i = i + d;
         d = d + 1;
         if (i + d > src.len)

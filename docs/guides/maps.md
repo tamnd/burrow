@@ -207,7 +207,7 @@ static bool is_odd(void *env, const void *k, const void *v) {
 <!-- example: ../examples/mapspkg/mapspkg.c#delete -->
 ```c
 maps_delete_func(c, BURROW_FN(MapsPredFunc, is_odd, NULL));
-print_map(a, c); /* four:4 two:2 */
+print_map(c); /* four:4 two:2 */
 ```
 
 `maps_copy` sets every entry of one map in another, and `maps_insert` does the same from a sequence. Both return false when the map needed to grow and the allocator said no, which is the answer `map_set` gives, where Go's versions cannot fail.
@@ -215,7 +215,7 @@ print_map(a, c); /* four:4 two:2 */
 <!-- example: ../examples/mapspkg/mapspkg.c#copy -->
 ```c
 maps_copy(c, m);
-print_map(a, c); /* four:4 one:1 three:3 two:2 */
+print_map(c); /* four:4 one:1 three:3 two:2 */
 ```
 
 `maps_all`, `maps_keys` and `maps_values` are the three sequences, in the map's random order, and `maps_collect` builds a new map from a sequence of pairs. The sequences hold only the map and allocate nothing. Sorting the keys is `slices_sorted` over `maps_keys`, which is how the examples here print a map in a stable order.
@@ -223,7 +223,7 @@ print_map(a, c); /* four:4 one:1 three:3 two:2 */
 <!-- example: ../examples/mapspkg/mapspkg.c#iter -->
 ```c
 Map *d = maps_collect(a, TYPE_STRING, TYPE_INT, maps_all(m));
-print_map(a, d); /* one:1 three:3 two:2 */
+print_map(d); /* one:1 three:3 two:2 */
 ```
 
 ## Canonical values with unique

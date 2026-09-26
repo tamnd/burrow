@@ -133,11 +133,9 @@ NetipAddr netip_addr_from16(const Byte addr[16]) {
 NetipAddr netip_addr_from_slice(Slice slice, bool *ok) {
     NetipAddr ip = {0, 0, {NULL}};
     bool good = true;
-    if (slice.p == NULL)
-        good = false;
-    else if (slice.len == 4)
+    if (slice.p != NULL && slice.len == 4)
         ip = netip_addr_from4((const Byte *)slice.p);
-    else if (slice.len == 16)
+    else if (slice.p != NULL && slice.len == 16)
         ip = netip_addr_from16((const Byte *)slice.p);
     else
         good = false;
@@ -1076,7 +1074,7 @@ Slice netip_addr_port_marshal_binary(NetipAddrPort p, Alloc *a, Error *err) {
 Error netip_addr_port_unmarshal_binary(NetipAddrPort *p, Slice b) {
     if (b.len < 2)
         return nip_errors_new("unexpected slice size");
-    NetipAddr addr;
+    NetipAddr addr = {0};
     Error err = netip_addr_unmarshal_binary(&addr, slice_sub(b, 0, b.len - 2));
     if (BURROW_FAILED(err))
         return err;
@@ -1321,7 +1319,7 @@ Slice netip_prefix_marshal_binary(NetipPrefix p, Alloc *a, Error *err) {
 Error netip_prefix_unmarshal_binary(NetipPrefix *p, Slice b) {
     if (b.len < 1)
         return nip_errors_new("unexpected slice size");
-    NetipAddr addr;
+    NetipAddr addr = {0};
     Error err = netip_addr_unmarshal_binary(&addr, slice_sub(b, 0, b.len - 1));
     if (BURROW_FAILED(err))
         return err;

@@ -4,6 +4,27 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.7 (2026-09-26)
+
+Text scanning, the network packages that are pure computation, and a round of CI fixes.
+
+### Added
+
+- `text/scanner`, Go's tokenizer for Go-like source (#222).
+- `unique`, canonical handles for comparable values, so two equal values give the same handle and comparing handles is a pointer compare (#223).
+- `structs`, whose one member `HostLayout` is an empty marker here, since every C struct already has the platform layout (#224).
+- `net/netip`, addresses, ports and prefixes as values with no allocation. Parsing is faster than Go on every input in Go's own benchmarks (#225).
+- `net/url`, all of Go's API. A parsed `Url` is one allocation that holds every string in it (#228).
+- `net/textproto`, the reader, writer, pipeline, conn and MIME header under HTTP and SMTP. Common header keys cost no allocation. `Dial` waits for `net` (#229).
+
+### Changed
+
+- The field of `SortReverse` that holds the wrapped `SortInterface` is now called `iface`, since `interface` is a macro in the Windows headers. Code that read `r.interface` needs to read `r.iface` (#227).
+
+### Fixed
+
+- Build failures that CI found on main: gcc -O3 in `pem.c`, uninitialised const statics under MSVC in sha3 and unique, mingw's `interface`, `signbit` and `isnan` macros, cosmopolitan's `close` and `write` clashing with test helpers, gcc 15's unterminated string check, clang's enum-float check, a tidy warning in netip, and a leak in the maps docs example (#227).
+
 ## v0.1.6 (2026-09-26)
 
 Containers, sorting, and the generic helpers.

@@ -480,12 +480,23 @@ static inline uint64_t pcg_next(Mathrand2PCG *p) {
     const uint64_t inc_hi = 6364136223846793005U;
     const uint64_t inc_lo = 1442695040888963407U;
 
+#if BURROW__BITS_INT128
+    /* One 128 bit multiply and add, which the compiler turns into an add with
+     * carry. Built from bits_add64 the carry comes out of bit tricks that sit
+     * on the state's dependency chain. */
+    __extension__ typedef unsigned __int128 U128;
+    U128 st = ((U128)p->hi << 64 | p->lo) * ((U128)mul_hi << 64 | mul_lo) +
+              ((U128)inc_hi << 64 | inc_lo);
+    uint64_t lo = (uint64_t)st;
+    uint64_t hi = (uint64_t)(st >> 64);
+#else
     uint64_t lo;
     uint64_t hi = bits_mul64(p->lo, mul_lo, &lo);
     hi += p->hi * mul_lo + p->lo * mul_hi;
     uint64_t c;
     lo = bits_add64(lo, inc_lo, 0, &c);
     hi = hi + inc_hi + c;
+#endif
     p->lo = lo;
     p->hi = hi;
 
@@ -1352,10 +1363,13 @@ void mathrand2_shuffle(Int n, SwapFunc swap) {
  * a state seeded through Park and Miller's minimal standard generator and
  * mixed with the cooked table. The words are uint64_t here so the addition
  * can wrap, where Go's are int64 and wrap anyway. */
+/* feed is kept away from tap on purpose. Side by side, Clang turns the two
+ * decrements in rng_uint64 into one vector operation and then has to move each
+ * lane back to use it as an index, which made Int63 about a third slower. */
 typedef struct RngSource {
     int tap;
-    int feed;
     uint64_t vec[RNG_LEN];
+    int feed;
 } RngSource;
 
 static int32_t rng_seedrand(int32_t x) {
@@ -1678,12 +1692,19 @@ Int math_rand_rand_intn(MathRandRand *r, Int n) {
     return (Int)math_rand_rand_int63n(r, (int64_t)n);
 }
 
+static double r1_float64(MathRandRand *r);
+
+/* The draw that rounds up to 1 is rare enough that the retry lives out of
+ * line, which keeps the common path free of a loop around the source call. */
+static BURROW_NOINLINE double r1_float64_again(MathRandRand *r) {
+    return r1_float64(r);
+}
+
 static double r1_float64(MathRandRand *r) {
-    for (;;) {
-        double f = (double)r1_int63(r) / 9223372036854775808.0;
-        if (f != 1)
-            return f;
-    }
+    double f = (double)r1_int63(r) / 9223372036854775808.0;
+    if (BURROW_UNLIKELY(f == 1))
+        return r1_float64_again(r);
+    return f;
 }
 
 static double r1_float64_any(void *r) {

@@ -53,3 +53,4 @@ text/scanner
 unique
 structs
 net/netip
+net/url

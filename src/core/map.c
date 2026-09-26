@@ -477,6 +477,10 @@ const Type *map_val_type(const Map *m) {
     return m == NULL ? NULL : m->val;
 }
 
+Alloc *burrow__map_allocator(const Map *m) {
+    return m == NULL ? NULL : m->a;
+}
+
 void *map_get(Map *m, const void *key) {
     Loc l;
     if (m == NULL || m->groups == NULL || m->used == 0)

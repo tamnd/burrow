@@ -128,6 +128,12 @@ RENAMED = {
     # these with other signatures, and burrow-gen collisions says so.
     ("uuid", "func Parse"): "uuid_parse_str",
     ("uuid", "method (UUID) Compare"): "uuid_cmp",
+    # include/burrow/net/url.h: url_parse is the package level Parse, so the
+    # method that parses relative to a URL takes the name of what it does.
+    ("net/url", "method (*URL) Parse"): "url_parse_ref",
+    # url_join_path is the method, which drops the error the way Go's does,
+    # and the package level JoinPath that returns one is the _str form.
+    ("net/url", "func JoinPath"): "url_join_path_str",
 }
 
 

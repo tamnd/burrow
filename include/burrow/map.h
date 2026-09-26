@@ -88,6 +88,10 @@ Int map_len(const Map *m);
 BURROW_STATIC(ret) const Type *map_key_type(const Map *m);
 BURROW_STATIC(ret) const Type *map_val_type(const Map *m);
 
+/* Not API. The allocator m was made with, for a package such as net/url whose
+ * map type grows its values from the same place. */
+BURROW_BORROWS(ret) Alloc *burrow__map_allocator(const Map *m);
+
 /* m[key], as a pointer to the value in the table, or NULL when the key is not
  * there. Reading through a NULL map gives NULL, since a nil map in Go reads as
  * empty rather than panicking.

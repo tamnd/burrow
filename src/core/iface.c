@@ -114,6 +114,8 @@ static uint64_t any_ops_hash(const void *p, uint64_t seed) {
 
     if (v->t == NULL)
         return seed;
+    if (!type_is_comparable(v->t))
+        runtime_panic_unhashable(v->t);
 
     /* The dynamic type goes into the seed rather than into the value, so an Any
      * holding an Int 1 and an Any holding an Int8 1 are different keys. They are

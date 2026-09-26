@@ -70,6 +70,7 @@
 #include "burrow/hash/crc32.h"
 #include "burrow/hash/crc64.h"
 #include "burrow/hash/fnv.h"
+#include "burrow/hash/maphash.h"
 #include "burrow/iface.h"
 #include "burrow/io.h"
 #include "burrow/iter.h"

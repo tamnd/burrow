@@ -181,6 +181,121 @@ sha3-224: 92 7b 36 2e af 84 a7 57 85 bb ec 33 70 d1 c9 71 13 49 e9 3f 11 04 ed a
 
 Unlike the older hashes, both types already have `MarshalBinary`, `AppendBinary` and `UnmarshalBinary`, as `sha3_marshal_binary` and so on, and `sha3_clone` returns a `HashCloner`. The saved state is byte for byte what Go saves, so a state written by a Go program can be picked up here and the other way round.
 
+## maphash
+
+`burrow/hash/maphash.h` is Go's `hash/maphash`: the hash the map itself uses, for building your own hash tables, Bloom filters and the like. It is fast and well mixed, and it is not stable. Every seed gives different hashes, a seed comes from `maphash_make_seed`, and nothing about the result survives the process, so never write one to disk or send it anywhere.
+
+For a single string or byte slice, `maphash_string` and `maphash_bytes` take the seed and the data:
+
+<!-- example: ../examples/maphash/maphash.c#oneshot -->
+```c
+MaphashSeed seed = maphash_make_seed();
+uint64_t a = maphash_string(seed, BURROW_S("hello"));
+uint64_t b = maphash_string(seed, BURROW_S("hello"));
+uint64_t c = maphash_string(maphash_make_seed(), BURROW_S("hello"));
+printf("same seed: %s\n", a == b ? "equal" : "different");
+printf("new seed: %s\n", a == c ? "equal" : "different");
+```
+
+A zero `MaphashHash` is ready to use and picks a random seed the first time it needs one. Writing in pieces gives the same hash as writing everything at once, and `maphash_hash_seed` tells you which seed it picked, so you can hash other things the same way:
+
+<!-- example: ../examples/maphash/maphash.c#stream -->
+```c
+MaphashHash h = {0};
+maphash_hash_write_string(&h, BURROW_S("hello, "), NULL);
+maphash_hash_write_string(&h, BURROW_S("world"), NULL);
+uint64_t sum = maphash_hash_sum64(&h);
+
+uint64_t whole = maphash_string(maphash_hash_seed(&h), BURROW_S("hello, world"));
+printf("pieces and whole: %s\n", sum == whole ? "equal" : "different");
+```
+
+`MaphashHash` is also a `Hash`, a `HashHash64` and a `HashCloner` through `maphash_hash_as_hash`, `maphash_hash_as_hash64` and `maphash_hash_as_cloner`. It never fails to write, so the error out parameter can be `NULL`.
+
+`maphash_comparable` is Go's `Comparable`. It takes a type descriptor and a pointer to a value, and two values that compare equal get the same hash even when their bytes differ: two strings with the same contents at different addresses, `0.0` and `-0.0`, a struct with padding. `maphash_write_comparable` does the same into a running `MaphashHash`.
+
+<!-- example: ../examples/maphash/maphash.c#comparable -->
+```c
+MaphashSeed seed = maphash_make_seed();
+Str x = BURROW_S("key");
+Byte copy[3] = {'k', 'e', 'y'};
+Str y = {copy, 3};
+uint64_t hx = maphash_comparable(seed, TYPE_STRING, &x);
+uint64_t hy = maphash_comparable(seed, TYPE_STRING, &y);
+printf("equal strings: %s\n", hx == hy ? "equal" : "different");
+```
+
+Go 1.27 adds `Hasher`, the interface between a hash based container and its elements: a way to hash a value into a `MaphashHash` and a way to say whether two values are equal. It is how you key a container by something that cannot be a map key, or by a looser idea of equal, such as strings compared without case. Here it is `MaphashHasher`, a vtable with `hash` and `equal`, called through `maphash_hasher_hash` and `maphash_hasher_equal`. `MaphashComparableHasher` is the one whose equal is `==`, for a type given by its descriptor.
+
+Go's package documentation shows it off with a Bloom filter that works for any element type, and here is the same filter. The filter only knows its elements through the hasher:
+
+<!-- example: ../examples/maphash/bloom.c#filter -->
+```c
+typedef struct BloomFilter {
+    MaphashHasher hasher;
+    MaphashSeed *seeds; // each seed picks a hash function
+    Int nseeds;
+    Byte *bytes; // the bit vector
+    Int nbytes;
+} BloomFilter;
+
+// reduce maps hash into [0, n), the way Lemire suggests instead of a modulo.
+static uint64_t reduce(uint64_t hash, uint64_t n) {
+    return (hash >> 32) * n >> 32;
+}
+
+static void locate(const BloomFilter *f, MaphashSeed seed, const void *v,
+                   uint64_t *index, Byte *mask) {
+    MaphashHash h = {0};
+    maphash_hash_set_seed(&h, seed);
+    maphash_hasher_hash(f->hasher, &h, v);
+    uint64_t hash = maphash_hash_sum64(&h);
+    *index = reduce(hash, (uint64_t)f->nbytes);
+    *mask = (Byte)(1U << (hash % 8));
+}
+
+static void bloom_insert(BloomFilter *f, const void *v) {
+    for (Int i = 0; i < f->nseeds; i++) {
+        uint64_t index;
+        Byte bit;
+        locate(f, f->seeds[i], v, &index, &bit);
+        f->bytes[index] |= bit;
+    }
+}
+
+static bool bloom_contains(const BloomFilter *f, const void *v) {
+    for (Int i = 0; i < f->nseeds; i++) {
+        uint64_t index;
+        Byte bit;
+        locate(f, f->seeds[i], v, &index, &bit);
+        if ((f->bytes[index] & bit) == 0)
+            return false;
+    }
+    return true;
+}
+```
+
+<!-- example: ../examples/maphash/bloom.c#use -->
+```c
+// A filter for 2 strings with a one in a billion false positive rate.
+MaphashComparableHasher strs = {TYPE_STRING};
+BloomFilter f = bloom_new(a, maphash_comparable_hasher_as_hasher(&strs), 2, 1e-9);
+
+Str apple = BURROW_S("apple"), banana = BURROW_S("banana");
+bloom_insert(&f, &apple);
+bloom_insert(&f, &banana);
+
+Str fruits[] = {BURROW_S("apple"), BURROW_S("banana"), BURROW_S("cherry")};
+for (int i = 0; i < 3; i++)
+    printf("Contains(\"%.*s\") = %s\n", (int)fruits[i].len,
+           (const char *)fruits[i].p,
+           bloom_contains(&f, &fruits[i]) ? "true" : "false");
+```
+
+A type Go cannot compare, such as a slice, panics with Go's message, `runtime error: hash of unhashable type []uint8`, and so does an `Any` holding one. A zero `MaphashSeed` is not a seed, and handing one in panics with `maphash: use of uninitialized Seed`.
+
+The hash is burrow's runtime hash and not Go's, so the numbers differ from a Go program's, the same as they would between two runs of either. Its quality is checked by Go's smhasher tests, which look at collisions over sparse, cyclic, permuted and windowed keys and at how well each input bit flips each output bit. All of them pass.
+
 ## Memory
 
 A hash made by one of the `_new` functions comes from the allocator you pass and holds no other memory, so it goes away with the arena. The IEEE and Castagnoli tables and their faster variants are built once, the first time they are used, from whichever thread gets there first. Nothing else is shared, and a single hash is not safe to write from two threads at once, the same as in Go.

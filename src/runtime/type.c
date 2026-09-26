@@ -390,6 +390,85 @@ static uint64_t array_hash(const Type *t, const void *p, uint64_t seed) {
     return seed;
 }
 
+/* Go's spelling of a type, enough of it for a panic message. A named type is its
+ * package's last path element and its name, and the composites are built from
+ * their parts. What does not fit is cut off, which is fine for a message. */
+typedef struct Spell {
+    Byte *buf;
+    Int cap, n;
+} Spell;
+
+static void spell_str(Spell *s, Str x) {
+    for (Int i = 0; i < x.len && s->n < s->cap; i++)
+        s->buf[s->n++] = x.p[i];
+}
+
+static void spell_type(Spell *s, const Type *t, int depth) {
+    if (t == NULL || depth > 16) {
+        spell_str(s, BURROW_S("?"));
+        return;
+    }
+    if (t->name.len > 0) {
+        if (t->pkg_path.len > 0) {
+            Int i = t->pkg_path.len;
+            while (i > 0 && t->pkg_path.p[i - 1] != '/')
+                i--;
+            spell_str(s, (Str){t->pkg_path.p + i, t->pkg_path.len - i});
+            spell_str(s, BURROW_S("."));
+        }
+        spell_str(s, t->name);
+        return;
+    }
+    switch ((int)t->kind) {
+    case KIND_SLICE:
+        spell_str(s, BURROW_S("[]"));
+        spell_type(s, t->elem, depth + 1);
+        return;
+    case KIND_ARRAY: {
+        Byte num[12];
+        Int n = (Int)sizeof num;
+        uint32_t len = t->len;
+        do {
+            num[--n] = (Byte)('0' + len % 10);
+            len /= 10;
+        } while (len > 0);
+        spell_str(s, BURROW_S("["));
+        spell_str(s, (Str){num + n, (Int)sizeof num - n});
+        spell_str(s, BURROW_S("]"));
+        spell_type(s, t->elem, depth + 1);
+        return;
+    }
+    case KIND_POINTER:
+        spell_str(s, BURROW_S("*"));
+        spell_type(s, t->elem, depth + 1);
+        return;
+    case KIND_MAP:
+        spell_str(s, BURROW_S("map["));
+        spell_type(s, t->key, depth + 1);
+        spell_str(s, BURROW_S("]"));
+        spell_type(s, t->elem, depth + 1);
+        return;
+    default:
+        spell_str(s, kind_name(t->kind));
+        return;
+    }
+}
+
+void runtime_panic_unhashable(const Type *t) {
+    Byte buf[256];
+    Spell s = {buf, (Int)sizeof buf, 0};
+    spell_str(&s, BURROW_S("runtime error: hash of unhashable type "));
+    spell_type(&s, t, 0);
+    /* runtime_panic copies the message, so a stack buffer is fine. */
+    runtime_panic((Str){buf, s.n});
+}
+
+uint64_t runtime_memhash(const void *p, size_t n, uint64_t seed) {
+    if (n == 0)
+        p = "";
+    return hash_bytes(p, n, seed);
+}
+
 uint64_t type_hash(const Type *t, const void *p, uint64_t seed) {
     if (t == NULL || p == NULL)
         return seed;

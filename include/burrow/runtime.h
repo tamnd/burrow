@@ -379,6 +379,18 @@ Int runtime_stack(Slice buf, bool all);
  * streams, which is what Go's per-m generator gives as well. */
 uint64_t runtime_rand64(void);
 
+/* The hash the map uses for n bytes at p, mixed with seed. It is the same
+ * function type_hash uses for a type that is just its bytes, which is what
+ * hash/maphash is built on. Like the map, it is only stable within one run
+ * and one machine. */
+uint64_t runtime_memhash(const void *p, size_t n, uint64_t seed);
+
+/* Panic the way Go does when something asks for the hash of a value whose type
+ * has none: "runtime error: hash of unhashable type []uint8". A map keyed by
+ * any reaches this when handed a slice, and so does maphash_comparable. The
+ * type is spelled the way Go spells it, so []uint8 and not slice. */
+BURROW_NORETURN void runtime_panic_unhashable(const Type *t);
+
 #ifdef __cplusplus
 }
 #endif

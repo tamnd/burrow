@@ -171,12 +171,57 @@ Go's table is a directory of fixed size tables and it grows by splitting one of 
 
 Amortised that is the same work, and it is what Abseil does. What you get instead is a pause on the insert that grows, proportional to the size of the map. What you also get is the iterator rule above, since an entry that moved is an iterator that cannot be kept.
 
-The other difference is the hash. Go's is AES accelerated where the chip has the instruction, and burrow's is FNV-1a for now, which is a byte at a time. Nothing observable depends on which hash it is and the faster one is a later change with a benchmark attached.
+The other difference is the hash. Go's is AES accelerated where the chip has the instruction, and burrow's is a multiply and fold hash in the style of wyhash that costs two multiplies for any key up to sixteen bytes. Nothing observable depends on which hash it is.
 
 Each map gets its own seed from the runtime's random generator, so two maps holding the same keys have different layouts, and so a program cannot be fed keys that all land in one group. That generator is the reason `runtime_rand64` exists and the reason the map is the first type in the library that needs a source of entropy at startup.
 
-## What is not here yet
+## The maps package
 
-`maps` and `maps/iter`, the packages with `maps_keys`, `maps_values`, `maps_clone` and `maps_equal` in them. Those are a port of a Go package and they belong under their package name rather than on the core type.
+Go's `maps` package is here as `maps_*`, in `burrow/maps.h`. Go's functions are generic over the key and value types and these read both from the `Map`, so one function serves every map. A NULL map reads as empty in all of them, the way a nil map does.
 
-Iteration that yields keys in sorted order, which is not a thing Go has either.
+<!-- example: ../examples/mapspkg/mapspkg.c#clone -->
+```c
+Map *m = map_make(a, TYPE_STRING, TYPE_INT, 0);
+BURROW_MAP_SET(Str, Int, m, BURROW_S("one"), 1);
+BURROW_MAP_SET(Str, Int, m, BURROW_S("two"), 2);
+BURROW_MAP_SET(Str, Int, m, BURROW_S("three"), 3);
+
+Map *c = maps_clone(a, m);
+printf("%d\n", maps_equal(m, c)); /* 1 */
+BURROW_MAP_SET(Str, Int, c, BURROW_S("four"), 4);
+printf("%d\n", maps_equal(m, c)); /* 0 */
+```
+
+`maps_clone` copies the table as it stands rather than inserting each entry again, which is what Go's runtime does too. It is also on the core type as `map_clone`. `maps_equal` compares values with `type_equal`, so a map holding a NaN is not equal to itself, as in Go. `maps_equal_func` takes the comparison as a function, and the two value types may differ.
+
+The functions that take a function take a closure, the same `BURROW_FUNC` shape the rest of the library uses. The key and the value come in by pointer:
+
+<!-- example: ../examples/mapspkg/mapspkg.c#pred -->
+```c
+/* Go's func(k string, v int) bool, true for the odd values. */
+static bool is_odd(void *env, const void *k, const void *v) {
+    return *(const Int *)v % 2 != 0;
+}
+```
+
+<!-- example: ../examples/mapspkg/mapspkg.c#delete -->
+```c
+maps_delete_func(c, BURROW_FN(MapsPredFunc, is_odd, NULL));
+print_map(a, c); /* four:4 two:2 */
+```
+
+`maps_copy` sets every entry of one map in another, and `maps_insert` does the same from a sequence. Both return false when the map needed to grow and the allocator said no, which is the answer `map_set` gives, where Go's versions cannot fail.
+
+<!-- example: ../examples/mapspkg/mapspkg.c#copy -->
+```c
+maps_copy(c, m);
+print_map(a, c); /* four:4 one:1 three:3 two:2 */
+```
+
+`maps_all`, `maps_keys` and `maps_values` are the three sequences, in the map's random order, and `maps_collect` builds a new map from a sequence of pairs. The sequences hold only the map and allocate nothing. Sorting the keys is `slices_sorted` over `maps_keys`, which is how the examples here print a map in a stable order.
+
+<!-- example: ../examples/mapspkg/mapspkg.c#iter -->
+```c
+Map *d = maps_collect(a, TYPE_STRING, TYPE_INT, maps_all(m));
+print_map(a, d); /* one:1 three:3 two:2 */
+```

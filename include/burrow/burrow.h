@@ -74,6 +74,7 @@
 #include "burrow/io.h"
 #include "burrow/iter.h"
 #include "burrow/map.h"
+#include "burrow/maps.h"
 #include "burrow/math.h"
 #include "burrow/math/bits.h"
 #include "burrow/math/cmplx.h"

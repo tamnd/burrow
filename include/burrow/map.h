@@ -73,6 +73,13 @@ typedef struct Map Map;
  * can a struct containing one. */
 BURROW_OWNS(ret) Map *map_make(Alloc *a, const Type *key, const Type *val, Int hint);
 
+/* A copy of m made with a, holding the same entries. A NULL map clones to
+ * NULL, the way maps.Clone of a nil map is nil. The keys and values are
+ * copied as values, so a map of Str shares the string bytes with the original
+ * the same as a Go map of string does. Returns NULL as well if the allocator
+ * says no. */
+BURROW_OWNS(ret) Map *map_clone(Alloc *a, const Map *m);
+
 /* len(m). A NULL map has no entries, the way a nil map in Go has none. */
 Int map_len(const Map *m);
 

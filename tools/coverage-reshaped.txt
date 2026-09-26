@@ -92,3 +92,7 @@ sort: func Reverse: returns the SortReverse by value, and sort_reverse_as_sort_i
 sort: func Slice: takes a Slice where Go takes any
 sort: func SliceStable: takes a Slice where Go takes any
 sort: func SliceIsSorted: takes a Slice where Go takes any
+
+# include/burrow/text/scanner.h: Go's String has a value receiver, and the
+# Scanner holds a buffer of over a kilobyte, so the C method takes a pointer.
+text/scanner: method (Scanner) String: takes a const pointer since the struct holds a 1KB buffer

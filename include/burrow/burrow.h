@@ -100,6 +100,7 @@
 #include "burrow/sync/atomic.h"
 #include "burrow/synctest.h"
 #include "burrow/testing.h"
+#include "burrow/text/scanner.h"
 #include "burrow/text/tabwriter.h"
 #include "burrow/time.h"
 #include "burrow/type.h"

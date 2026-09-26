@@ -186,7 +186,7 @@ jobs:
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         with:
           platforms: s390x
       # The byte order is checked before the build rather than assumed. A

@@ -106,6 +106,7 @@
 #include "burrow/type.h"
 #include "burrow/unicode.h"
 #include "burrow/unicode/utf16.h"
+#include "burrow/unique.h"
 #include "burrow/utf8.h"
 
 /* The rest of the library arrives here as it is written. The order is the

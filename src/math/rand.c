@@ -1307,28 +1307,56 @@ Uint mathrand2_uint(void) {
     return (Uint)runtime_rand64();
 }
 
+/* r2_uint64n with the source fixed to the runtime generator, which is what
+ * the global Rand always draws from, so the draw needs no check of the
+ * source's type. */
+static inline uint64_t r2_global_uint64n(uint64_t n) {
+    if ((n & (n - 1)) == 0)
+        return runtime_rand64() & (n - 1);
+    uint64_t lo;
+    uint64_t hi = bits_mul64(runtime_rand64(), n, &lo);
+    if (lo < n) {
+        uint64_t thresh = (0 - n) % n;
+        while (lo < thresh)
+            hi = bits_mul64(runtime_rand64(), n, &lo);
+    }
+    return hi;
+}
+
 int64_t mathrand2_int64_n(int64_t n) {
-    return mathrand2_rand_int64_n(R2_GLOBAL, n);
+    if (n <= 0)
+        panic_str(BURROW_S("invalid argument to Int64N"));
+    return (int64_t)r2_global_uint64n((uint64_t)n);
 }
 
 int32_t mathrand2_int32_n(int32_t n) {
-    return mathrand2_rand_int32_n(R2_GLOBAL, n);
+    if (n <= 0)
+        panic_str(BURROW_S("invalid argument to Int32N"));
+    return (int32_t)r2_global_uint64n((uint64_t)n);
 }
 
 Int mathrand2_int_n(Int n) {
-    return mathrand2_rand_int_n(R2_GLOBAL, n);
+    if (n <= 0)
+        panic_str(BURROW_S("invalid argument to IntN"));
+    return (Int)r2_global_uint64n((uint64_t)n);
 }
 
 uint64_t mathrand2_uint64_n(uint64_t n) {
-    return mathrand2_rand_uint64_n(R2_GLOBAL, n);
+    if (n == 0)
+        panic_str(BURROW_S("invalid argument to Uint64N"));
+    return r2_global_uint64n(n);
 }
 
 uint32_t mathrand2_uint32_n(uint32_t n) {
-    return mathrand2_rand_uint32_n(R2_GLOBAL, n);
+    if (n == 0)
+        panic_str(BURROW_S("invalid argument to Uint32N"));
+    return (uint32_t)r2_global_uint64n((uint64_t)n);
 }
 
 Uint mathrand2_uint_n(Uint n) {
-    return mathrand2_rand_uint_n(R2_GLOBAL, n);
+    if (n == 0)
+        panic_str(BURROW_S("invalid argument to UintN"));
+    return (Uint)r2_global_uint64n((uint64_t)n);
 }
 
 double mathrand2_float64(void) {

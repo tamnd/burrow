@@ -52,3 +52,4 @@ text/tabwriter
 text/scanner
 unique
 structs
+net/netip

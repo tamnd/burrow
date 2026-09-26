@@ -42,6 +42,7 @@ category	coverage	The compiler's coverage counters. The compiler lays them out o
 category	symbol-table	The sorted copy of the table of function names, which is one per process because the addresses in it are one per process.
 category	tables	Lookup tables too big to write out as constants, built the first time something needs them. Go keeps the same ones as package level variables behind a sync.Once.
 category	sink	Bytes that are written and never read, so racing writers cannot change anything anyone sees.
+category	intern	unique's canonical values, which are process wide by definition, as Go's are.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -155,3 +156,8 @@ global	src/hash/crc64.c	build_slicing8_tables_once	tables	A SyncOnce, which is t
 global	src/unicode/tables.c	unicode_graphic_ranges_entries	package-vars	The array behind unicode.GraphicRanges. Never written by burrow, and writable only because a Slice holds a plain pointer. Go exposes the same slice as a variable.
 global	src/unicode/tables.c	unicode_print_ranges_entries	package-vars	The array behind unicode.PrintRanges, the same as unicode_graphic_ranges_entries.
 global	src/io/io.c	discard_black_hole	sink	io.Discard reads into it and throws the bytes away. Concurrent writes race on the contents, which nobody reads, the same as Go's blackhole pool buffer.
+global	src/unique/unique.c	uq_lock	intern	The lock itself. It covers every write to the globals below.
+global	src/unique/unique.c	uq_types	intern	Written under uq_lock with a release store, read without the lock with an acquire load.
+global	src/unique/unique.c	uq_seed	intern	Written once under uq_lock before the first type is published, and only read after a reader has seen one.
+global	src/unique/unique.c	uq_arena	intern	Only touched under uq_lock.
+global	src/unique/unique.c	uq_ready	intern	Only touched under uq_lock.

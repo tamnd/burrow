@@ -225,3 +225,48 @@ print_map(a, c); /* four:4 one:1 three:3 two:2 */
 Map *d = maps_collect(a, TYPE_STRING, TYPE_INT, maps_all(m));
 print_map(a, d); /* one:1 three:3 two:2 */
 ```
+
+## Canonical values with unique
+
+Go's `unique` package is `burrow/unique.h`. `unique_make` takes a comparable value and gives back a `UniqueHandle`, and two handles are equal exactly when the values they were made from are equal. Comparing handles compares one pointer, however large the value is, so a handle is a cheap stand in for a string or a struct that gets compared a lot. `net/netip` keeps an address's IPv6 zone this way. `UNIQUE_MAKE` and `UNIQUE_VALUE` spell the type once, the way Go's type parameter does:
+
+<!-- example: ../examples/unique/unique.c#str -->
+```c
+char buf[] = "eth0";
+Str zone = str_from_bytes((const Byte *)buf, 4);
+UniqueHandle h = UNIQUE_MAKE(Str, &zone);
+buf[3] = '1'; /* the handle has its own copy of the bytes */
+
+Str again = BURROW_S("eth0");
+UniqueHandle g = UNIQUE_MAKE(Str, &again);
+Str back = UNIQUE_VALUE(Str, h);
+printf("%d %.*s\n", unique_handle_eq(h, g), (int)back.len, back.p); /* 1 eth0 */
+```
+
+The value goes in by pointer, and it is hashed and compared the way a `Map` key of the same type is. Strings inside it are copied, whether they are at the top level, in struct fields or in array elements, so the value you passed can go away or change. Anything the value points to through a pointer is not copied, which matches Go. A struct needs a descriptor, which `BURROW_STRUCT` gives it:
+
+<!-- example: ../examples/unique/unique.c#decl -->
+```c
+#define ENDPOINT_FIELDS(F, T)                                                          \
+    F(T, Str, host, "")                                                                \
+    F(T, Int, port, "")
+BURROW_STRUCT(Endpoint, ENDPOINT_FIELDS);
+```
+
+<!-- example: ../examples/unique/unique.c#struct -->
+```c
+Endpoint e1 = {BURROW_S("example.com"), 443};
+Endpoint e2 = {BURROW_S("example.com"), 443};
+Endpoint e3 = {BURROW_S("example.com"), 80};
+UniqueHandle h1 = UNIQUE_MAKE(Endpoint, &e1);
+UniqueHandle h2 = UNIQUE_MAKE(Endpoint, &e2);
+UniqueHandle h3 = UNIQUE_MAKE(Endpoint, &e3);
+printf("%d %d\n", unique_handle_eq(h1, h2), unique_handle_eq(h1, h3)); /* 1 0 */
+printf("%lld\n", (long long)UNIQUE_VALUE(Endpoint, h3).port);          /* 80 */
+```
+
+Handles of values that already have one are found without taking a lock, so `unique_make` can be called from many threads at once and stays fast. A value seen for the first time takes a lock to be added.
+
+### Where this differs from Go
+
+Go frees a canonical value once no handle to it is left. C cannot tell when that is, so here every canonical value lives until the process exits. Make handles for values from a bounded set, such as zone names, header names or enum like strings, and not for arbitrary input from the network, since a stream of distinct values would grow the tables without limit. `UniqueHandle` is not generic, so a handle does not remember its type. `UNIQUE_VALUE` with the wrong type reads the wrong bytes, the way any cast does.

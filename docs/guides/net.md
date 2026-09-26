@@ -94,4 +94,4 @@ A zone such as `eth0` in `fe80::1%eth0` goes through `unique_make`, so each dist
 
 ## Speed
 
-Parsing, and printing addresses and address and port pairs, are faster than Go on the benchmarks Go ships with, from about 1.3 times for parsing IPv4 to more than 3 times for printing IPv6. Printing a prefix to a new string is the one that is slower, and more than half of its time is the allocation. `netip_prefix_append_to` into a buffer you already have takes about 8 ns. The numbers are in the pull request that added the package and in [burrow-bench](https://github.com/tamnd/burrow-bench).
+Parsing is faster than Go on every input in Go's own benchmarks, by 1.3 to 1.5 times. Printing to a new heap string is faster for the long IPv6 forms and a few nanoseconds slower for the short ones, IPv4 and prefixes among them, where most of the time is the allocation. Take the string from an arena, or use the `append_to` functions with a buffer you already have, and printing is ahead of Go on every input. The numbers are in the pull request that added the package and in [burrow-bench](https://github.com/tamnd/burrow-bench).

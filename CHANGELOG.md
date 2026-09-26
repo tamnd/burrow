@@ -4,6 +4,19 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.6 (2026-09-26)
+
+Containers, sorting, and the generic helpers.
+
+### Added
+
+- `container/list` and `container/ring`. Values are `Any` and live in the same allocation as their element, so a push is one allocation (#215).
+- `sort` and `container/heap`. `sort` is Go's pdqsort line for line, so an unstable sort leaves equal elements where Go leaves them (#216).
+- `cmp` and `slices`. `cmp` has a function per ordered type plus a `_Generic` macro, and `slices` covers Go's whole API over `Slice` (#217).
+- `maps`, plus `map_clone` for copying a whole `Map` (#218).
+- `hash/maphash`, including Go 1.27's `Hasher` and `ComparableHasher`. It uses the runtime's map hash, now exported as `runtime_memhash` (#219).
+- `text/tabwriter`, and a new text guide (#220).
+
 ## v0.1.5 (2026-09-25)
 
 Paths and the first hashes from crypto.

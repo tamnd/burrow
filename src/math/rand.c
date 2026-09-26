@@ -604,6 +604,81 @@ enum {
     CHACHA_RESEED = 4, /* and the last four of every 16th block are the new key */
 };
 
+/* Four ChaCha8 blocks at counters counter to counter+3, interleaved the way
+ * Go's generic block interleaves them: word w of block k is at w*4+k, and
+ * each output uint64 is two neighbouring words, low word first. That order is
+ * what makes the output match the assembly versions, and it is the order Go
+ * documents in its C2SP specification. Only the key words get the input added
+ * back, which is Go's variation on ChaCha and is fine for a generator whose
+ * output is never used as a keystream against known plaintext. */
+#if defined(__GNUC__) || defined(__clang__)
+
+/* With vector types the four blocks run side by side, one lane each, which is
+ * what Go's assembly does and what the interleaved order is made for. Word w of
+ * every block sits in v[w], so storing v[0] to v[15] in turn is already the
+ * output order. */
+typedef uint32_t ChachaV4 __attribute__((vector_size(16)));
+
+#define CHACHA_ROTV(x, k) (((x) << (k)) | ((x) >> (32 - (k))))
+
+#define CHACHA_QRV(a, b, c, d)                                                         \
+    do {                                                                               \
+        a += b;                                                                        \
+        d ^= a;                                                                        \
+        d = CHACHA_ROTV(d, 16);                                                        \
+        c += d;                                                                        \
+        b ^= c;                                                                        \
+        b = CHACHA_ROTV(b, 12);                                                        \
+        a += b;                                                                        \
+        d ^= a;                                                                        \
+        d = CHACHA_ROTV(d, 8);                                                         \
+        c += d;                                                                        \
+        b ^= c;                                                                        \
+        b = CHACHA_ROTV(b, 7);                                                         \
+    } while (0)
+
+static void chacha_block(const uint64_t seed[4], uint64_t buf[32], uint32_t counter) {
+    ChachaV4 k[8];
+    for (int m = 0; m < 4; m++) {
+        uint32_t lo = (uint32_t)seed[m];
+        uint32_t hi = (uint32_t)(seed[m] >> 32);
+        k[2 * m] = (ChachaV4){lo, lo, lo, lo};
+        k[2 * m + 1] = (ChachaV4){hi, hi, hi, hi};
+    }
+    ChachaV4 x0 = {0x61707865U, 0x61707865U, 0x61707865U, 0x61707865U};
+    ChachaV4 x1 = {0x3320646eU, 0x3320646eU, 0x3320646eU, 0x3320646eU};
+    ChachaV4 x2 = {0x79622d32U, 0x79622d32U, 0x79622d32U, 0x79622d32U};
+    ChachaV4 x3 = {0x6b206574U, 0x6b206574U, 0x6b206574U, 0x6b206574U};
+    ChachaV4 x4 = k[0], x5 = k[1], x6 = k[2], x7 = k[3];
+    ChachaV4 x8 = k[4], x9 = k[5], x10 = k[6], x11 = k[7];
+    ChachaV4 x12 = {counter, counter + 1, counter + 2, counter + 3};
+    ChachaV4 x13 = {0, 0, 0, 0}, x14 = {0, 0, 0, 0}, x15 = {0, 0, 0, 0};
+    for (int round = 0; round < 4; round++) {
+        CHACHA_QRV(x0, x4, x8, x12);
+        CHACHA_QRV(x1, x5, x9, x13);
+        CHACHA_QRV(x2, x6, x10, x14);
+        CHACHA_QRV(x3, x7, x11, x15);
+        CHACHA_QRV(x0, x5, x10, x15);
+        CHACHA_QRV(x1, x6, x11, x12);
+        CHACHA_QRV(x2, x7, x8, x13);
+        CHACHA_QRV(x3, x4, x9, x14);
+    }
+    ChachaV4 v[16] = {x0,        x1,        x2,         x3,
+                      x4 + k[0], x5 + k[1], x6 + k[2],  x7 + k[3],
+                      x8 + k[4], x9 + k[5], x10 + k[6], x11 + k[7],
+                      x12,       x13,       x14,        x15};
+#if BURROW_LITTLE_ENDIAN
+    memcpy(buf, v, sizeof v);
+#else
+    uint32_t w[64];
+    memcpy(w, v, sizeof w);
+    for (int i = 0; i < 32; i++)
+        buf[i] = (uint64_t)w[2 * i] | (uint64_t)w[2 * i + 1] << 32;
+#endif
+}
+
+#else
+
 static inline uint32_t chacha_rotl(uint32_t x, int k) {
     return (x << k) | (x >> (32 - k));
 }
@@ -624,13 +699,6 @@ static inline uint32_t chacha_rotl(uint32_t x, int k) {
         b = chacha_rotl(b, 7);                                                         \
     } while (0)
 
-/* Four ChaCha8 blocks at counters counter to counter+3, interleaved the way
- * Go's generic block interleaves them: word w of block k is at w*4+k, and
- * each output uint64 is two neighbouring words, low word first. That order is
- * what makes the output match the assembly versions, and it is the order Go
- * documents in its C2SP specification. Only the key words get the input added
- * back, which is Go's variation on ChaCha and is fine for a generator whose
- * output is never used as a keystream against known plaintext. */
 static void chacha_block(const uint64_t seed[4], uint64_t buf[32], uint32_t counter) {
     uint32_t b[16][4];
     for (int k = 0; k < 4; k++) {
@@ -683,6 +751,8 @@ static void chacha_block(const uint64_t seed[4], uint64_t buf[32], uint32_t coun
     for (int i = 0; i < 32; i++)
         buf[i] = (uint64_t)w[2 * i] | (uint64_t)w[2 * i + 1] << 32;
 }
+
+#endif
 
 static void chacha_init64(Mathrand2ChaCha8 *c, const uint64_t seed[4]) {
     memcpy(c->seed, seed, sizeof c->seed);

@@ -152,8 +152,10 @@ double math_round_to_even(double x) {
 double math_dim(double x, double y) {
     double v = x - y;
     if (v <= 0)
-        return 0;
-    return v;
+        v = 0;
+    /* The MSVC Release build gave back -0 for Dim(-0, 0) with a plain return.
+     * Adding +0 turns -0 into +0 and leaves every other result alone. */
+    return v + 0.0;
 }
 
 double math_max(double x, double y) {

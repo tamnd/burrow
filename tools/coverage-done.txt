@@ -51,3 +51,4 @@ hash/maphash
 text/tabwriter
 text/scanner
 unique
+structs

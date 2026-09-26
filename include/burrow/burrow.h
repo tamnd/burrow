@@ -96,6 +96,7 @@
 #include "burrow/sort.h"
 #include "burrow/strconv.h"
 #include "burrow/strings.h"
+#include "burrow/structs.h"
 #include "burrow/sync.h"
 #include "burrow/sync/atomic.h"
 #include "burrow/synctest.h"

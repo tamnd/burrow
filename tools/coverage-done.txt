@@ -47,3 +47,4 @@ container/heap
 cmp
 slices
 maps
+hash/maphash

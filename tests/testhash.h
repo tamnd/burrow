@@ -2,9 +2,9 @@
  * Go source: go1.27.1.
  *
  * The checks every hash in the standard library has to pass, shared by the
- * hash tests the way Go shares them through internal/testhash. This is
- * TestHashWithoutClone. The Clone half waits on hash.Cloner, which none of the
- * hashes here implement yet.
+ * hash tests the way Go shares them through internal/testhash.
+ * testhash_without_clone is TestHashWithoutClone, and testhash_with_clone is
+ * TestHash, which adds the Clone check for a hash that is a hash.Cloner.
  *
  * The last two helpers are not from Go. Go's golden tables spell a long input
  * as strings.Repeat(rep, count) + tail, and testhash_repeat builds one of those
@@ -248,6 +248,72 @@ static inline void testhash_without_clone(TestingT *t, TesthashMake mh) {
                   BURROW_FN(TestingTFunc, testhash_out_of_bounds_read, &env));
     testing_t_run(t, BURROW_S("StatefulWrite"),
                   BURROW_FN(TestingTFunc, testhash_stateful_write, &env));
+}
+
+typedef HashCloner (*TesthashMakeCloner)(Alloc *a);
+
+typedef struct TesthashClonerEnv {
+    TesthashMakeCloner mh;
+} TesthashClonerEnv;
+
+static inline bool testhash_do_clone(TestingT *t, Alloc *a, HashCloner h,
+                                     HashCloner *out) {
+    Error err = BURROW_NO_ERROR;
+    *out = hash_cloner_clone(a, h, &err);
+    if (BURROW_FAILED(err) || out->vt == NULL) {
+        testing_t_fatalf_v(t, "Clone failed: %v", err);
+        return false;
+    }
+    return true;
+}
+
+/* Whether the results after cloning are consistent. */
+static inline void testhash_clone_consistent(void *env, TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    HashCloner h = ((TesthashClonerEnv *)env)->mh(a);
+    HashCloner h2, h3;
+    Slice none = slice_nil(TYPE_BYTE);
+    Byte pre[3] = {'t', 'm', 'p'};
+    Byte suf[4] = {'t', 'm', 'p', '2'};
+    Byte both[7] = {'t', 'm', 'p', 't', 'm', 'p', '2'};
+    Slice prefix = slice_from(pre, 3, 3, TYPE_BYTE);
+    Slice suffix = slice_from(suf, 4, 4, TYPE_BYTE);
+
+    if (h.vt == NULL || !testhash_do_clone(t, a, h, &h3))
+        goto done;
+    Hash hh = {&h.vt->hash, h.data};
+    Hash hh3 = {&h3.vt->hash, h3.data};
+    testhash_write(t, a, hh, prefix);
+    if (!testhash_do_clone(t, a, h, &h2))
+        goto done;
+    Hash hh2 = {&h2.vt->hash, h2.data};
+    Slice prefix_sum = hash_sum(a, hh, none);
+    if (!testhash_equal(prefix_sum, hash_sum(a, hh2, none)))
+        testing_t_fatalf_v(t, "Clone results are inconsistent");
+    testhash_write(t, a, hh, suffix);
+    testhash_write(t, a, hh3, slice_from(both, 7, 7, TYPE_BYTE));
+    Slice composite_sum = hash_sum(a, hh3, none);
+    if (!testhash_equal(hash_sum(a, hh, none), composite_sum))
+        testing_t_fatalf_v(t, "Clone results are inconsistent");
+    if (!testhash_equal(hash_sum(a, hh2, none), prefix_sum))
+        testing_t_fatalf_v(t, "Clone results are inconsistent");
+    testhash_write(t, a, hh2, suffix);
+    if (!testhash_equal(hash_sum(a, hh, none), composite_sum))
+        testing_t_fatalf_v(t, "Clone results are inconsistent");
+    if (!testhash_equal(hash_sum(a, hh2, none), composite_sum))
+        testing_t_fatalf_v(t, "Clone results are inconsistent");
+done:
+    arena_free(&ar);
+}
+
+static inline void testhash_with_clone(TestingT *t, TesthashMake mh,
+                                       TesthashMakeCloner mc) {
+    testhash_without_clone(t, mh);
+    TesthashClonerEnv env = {mc};
+    testing_t_run(t, BURROW_S("Clone"),
+                  BURROW_FN(TestingTFunc, testhash_clone_consistent, &env));
 }
 
 #endif /* BURROW_TESTS_TESTHASH_H */

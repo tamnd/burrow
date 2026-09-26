@@ -48,3 +48,4 @@ cmp
 slices
 maps
 hash/maphash
+text/tabwriter

@@ -133,11 +133,9 @@ NetipAddr netip_addr_from16(const Byte addr[16]) {
 NetipAddr netip_addr_from_slice(Slice slice, bool *ok) {
     NetipAddr ip = {0, 0, {NULL}};
     bool good = true;
-    if (slice.p == NULL)
-        good = false;
-    else if (slice.len == 4)
+    if (slice.p != NULL && slice.len == 4)
         ip = netip_addr_from4((const Byte *)slice.p);
-    else if (slice.len == 16)
+    else if (slice.p != NULL && slice.len == 16)
         ip = netip_addr_from16((const Byte *)slice.p);
     else
         good = false;

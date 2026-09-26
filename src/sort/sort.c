@@ -91,17 +91,17 @@ void burrow__sort_reverse_range(SortInterface data, Int a, Int b) {
 
 static Int sort_reverse_len(void *self) {
     SortReverse *r = self;
-    return r->interface.vt->len(r->interface.data);
+    return r->iface.vt->len(r->iface.data);
 }
 
 static bool sort_reverse_less(void *self, Int i, Int j) {
     SortReverse *r = self;
-    return r->interface.vt->less(r->interface.data, j, i);
+    return r->iface.vt->less(r->iface.data, j, i);
 }
 
 static void sort_reverse_swap(void *self, Int i, Int j) {
     SortReverse *r = self;
-    r->interface.vt->swap(r->interface.data, i, j);
+    r->iface.vt->swap(r->iface.data, i, j);
 }
 
 #define SORT_TYPE(var, gonm, ctype)                                                    \

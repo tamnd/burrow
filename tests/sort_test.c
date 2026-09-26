@@ -93,7 +93,7 @@ static void TestSortFloat64sCompareSlicesSort(TestingT *t) {
     sort_float64s(float64_slice(slice2, NELEM(slice2)));
 
     for (Int i = 0; i < NELEM(slice1); i++) {
-        bool both_nan = isnan(slice1[i]) && isnan(slice2[i]);
+        bool both_nan = math_is_nan(slice1[i]) && math_is_nan(slice2[i]);
         if (!both_nan && slice1[i] != slice2[i])
             testing_t_errorf_v(t,
                                "mismatch between Sort and slices.Sort at %d: %g and %g",
@@ -952,10 +952,10 @@ static void TestFloat64sZeroOrderMatchesGo(TestingT *t) {
     sort_sort(sort_float64_slice_as_sort_interface(&gs));
     for (Int i = 0; i < 100; i++) {
         char want = go_float64s_signs[i];
-        if ((signbit(f[i]) ? '1' : '0') != want)
+        if ((math_signbit(f[i]) ? '1' : '0') != want)
             testing_t_fatalf_v(t, "sort_float64s: sign of element %d differs from Go",
                                i);
-        if ((signbit(g[i]) ? '1' : '0') != want)
+        if ((math_signbit(g[i]) ? '1' : '0') != want)
             testing_t_fatalf_v(t, "sort_sort: sign of element %d differs from Go", i);
     }
 }

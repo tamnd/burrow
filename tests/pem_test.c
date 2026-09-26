@@ -413,7 +413,7 @@ static void fuzz_roundtrip(void *env, TestingT *t, Slice args) {
 }
 
 static void FuzzRoundtrip(TestingF *f) {
-    static const char seeds[][40] = {
+    static const char seeds[][48] = {
         "EMPTY\0\0\0",
         "RSA PRIVATE KEY\0Proc-Type\0"
         "4,ENCRYPTED\0\x01\x02",

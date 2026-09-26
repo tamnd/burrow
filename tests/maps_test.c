@@ -10,6 +10,7 @@
 
 #include "burrow/burrow.h"
 #include "burrow/maps.h"
+#include "burrow/math.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
 
@@ -105,7 +106,7 @@ static bool eq_float(void *env, const void *a, const void *b) {
 static bool eq_nan(void *env, const void *a, const void *b) {
     double x = *(const double *)a, y = *(const double *)b;
     (void)env;
-    return x == y || (isnan(x) && isnan(y));
+    return x == y || (math_is_nan(x) && math_is_nan(y));
 }
 
 static bool eq_int_str(void *env, const void *a, const void *b) {
@@ -278,7 +279,7 @@ static void TestCloneLarge(TestingT *t) {
         const void *k;
         void *v;
         for (MapIter it = map_iter(c); map_next(&it, &k, &v);) {
-            if (signbit(((const Big *)k)->f[0]))
+            if (math_signbit(((const Big *)k)->f[0]))
                 testing_t_errorf_v(t, "tst%d: sign bit of key changed", tst);
             if (!type_equal(&big_type, v, &v1))
                 testing_t_errorf_v(t, "tst%d: value changed", tst);

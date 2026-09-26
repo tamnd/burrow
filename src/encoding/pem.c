@@ -227,7 +227,7 @@ PemBlock *pem_decode(Alloc *a, Slice data, Slice *rest_out) {
             }
             Int ll;
             Int c = pem_get_line(rest, rlen, &ll);
-            if (ll == 0 || memchr(rest, ':', (size_t)ll) == NULL)
+            if (ll <= 0 || memchr(rest, ':', (size_t)ll) == NULL)
                 break;
             hdr_count++;
             rest += c;

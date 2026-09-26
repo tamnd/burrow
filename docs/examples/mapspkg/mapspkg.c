@@ -3,16 +3,20 @@
 #include "burrow/burrow.h"
 #include "burrow/mem/heap.h"
 
-/* Prints a map[string]int in key order, since the map's own order is random. */
-static void print_map(Alloc *a, Map *m) {
-    Slice keys = slices_sorted(a, TYPE_STRING, maps_keys(m));
+/* Prints a map[string]int in key order, since the map's own order is random.
+ * The keys come from an arena, because collecting them grows the slice and
+ * each growth leaves the old array behind, as append does in Go. */
+static void print_map(Map *m) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Slice keys = slices_sorted(arena_allocator(&ar), TYPE_STRING, maps_keys(m));
     for (Int i = 0; i < keys.len; i++) {
         Str k = BURROW_AT(Str, keys, i);
         printf(i == 0 ? "%.*s:%lld" : " %.*s:%lld", (int)k.len, k.p,
                (long long)*BURROW_MAP_GET(Str, Int, m, k));
     }
     printf("\n");
-    mem_free(a, keys.p, (size_t)keys.cap * sizeof(Str), _Alignof(Str));
+    arena_free(&ar);
 }
 
 // doc: pred
@@ -39,17 +43,17 @@ int main(void) {
 
     // doc: delete
     maps_delete_func(c, BURROW_FN(MapsPredFunc, is_odd, NULL));
-    print_map(a, c); /* four:4 two:2 */
+    print_map(c); /* four:4 two:2 */
     // doc: end
 
     // doc: copy
     maps_copy(c, m);
-    print_map(a, c); /* four:4 one:1 three:3 two:2 */
+    print_map(c); /* four:4 one:1 three:3 two:2 */
     // doc: end
 
     // doc: iter
     Map *d = maps_collect(a, TYPE_STRING, TYPE_INT, maps_all(m));
-    print_map(a, d); /* one:1 three:3 two:2 */
+    print_map(d); /* one:1 three:3 two:2 */
     // doc: end
 
     map_free(d);

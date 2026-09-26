@@ -86,6 +86,7 @@
 #include "burrow/mem/heap.h"
 #include "burrow/mem/track.h"
 #include "burrow/net/netip.h"
+#include "burrow/net/url.h"
 #include "burrow/num.h"
 #include "burrow/own.h"
 #include "burrow/panic.h"

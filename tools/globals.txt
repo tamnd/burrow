@@ -43,6 +43,7 @@ category	symbol-table	The sorted copy of the table of function names, which is o
 category	tables	Lookup tables too big to write out as constants, built the first time something needs them. Go keeps the same ones as package level variables behind a sync.Once.
 category	sink	Bytes that are written and never read, so racing writers cannot change anything anyone sees.
 category	intern	unique's canonical values, which are process wide by definition, as Go's are.
+category	godebug	Settings read from the GODEBUG environment variable the first time they are needed. Go reads the same ones once per process through internal/godebug.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -161,3 +162,5 @@ global	src/unique/unique.c	uq_types	intern	Written under uq_lock with a release 
 global	src/unique/unique.c	uq_seed	intern	Written once under uq_lock before the first type is published, and only read after a reader has seen one.
 global	src/unique/unique.c	uq_arena	intern	Only touched under uq_lock.
 global	src/unique/unique.c	uq_ready	intern	Only touched under uq_lock.
+global	src/net/url.c	url_debug_flags	godebug	The urlstrictcolons and urlmaxqueryparams settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
+global	src/net/url.c	url_debug_max	godebug	The urlmaxqueryparams number, stored atomically before url_debug_flags says it is there.

@@ -421,6 +421,50 @@ void map_free(Map *m) {
 
 /* ------------------------------------------------------------ the questions */
 
+/* The table is copied as it stands, tombstones and all, rather than rebuilt
+ * by inserting each entry. The seed comes along with it, which is what makes
+ * that valid: every entry hashes to the same group in the copy as in the
+ * original. Go's runtime clones a map the same way. */
+Map *map_clone(Alloc *a, const Map *m) {
+    Map *c;
+    if (m == NULL)
+        return NULL;
+    c = BURROW_NEW(a, Map);
+    if (c == NULL)
+        return NULL;
+    *c = *m;
+    c->a = a;
+    c->gen = 0;
+    if (m->groups == NULL)
+        return c;
+
+    c->groups = mem_alloc_array(a, m->ngroups, m->group_size, m->group_align);
+    if (c->groups == NULL) {
+        mem_free(a, c, sizeof(Map), _Alignof(Map));
+        return NULL;
+    }
+    if (m->key->ops == NULL && m->val->ops == NULL) {
+        memcpy(c->groups, m->groups, (size_t)m->ngroups * m->group_size);
+        return c;
+    }
+    for (Uint i = 0; i < m->ngroups; i++) {
+        const Byte *g = group_at(m, i);
+        Byte *d = group_at(c, i);
+        memcpy(d, g, SLOTS);
+        for (unsigned s = 0; s < SLOTS; s++) {
+            const Byte *from;
+            Byte *to;
+            if (g[s] == CTRL_EMPTY || g[s] == CTRL_DELETED)
+                continue;
+            from = g + m->slot_off + (size_t)s * m->slot_size;
+            to = d + m->slot_off + (size_t)s * m->slot_size;
+            type_copy(m->key, to, from);
+            type_copy(m->val, to + m->val_off, from + m->val_off);
+        }
+    }
+    return c;
+}
+
 Int map_len(const Map *m) {
     return m == NULL ? 0 : m->used;
 }

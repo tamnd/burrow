@@ -172,3 +172,81 @@ a%20b%2Fc
 A `UrlValues` is many small allocations, and its strings may point into the query they came from, so an arena is the easy way to hold one. `url_query_escape` and `url_path_escape` return their input unchanged, with no allocation, when there is nothing to escape.
 
 Two of Go's GODEBUG settings apply. `urlstrictcolons=0` lets an http or https host have more than one colon, and `urlmaxqueryparams=N` changes the cap of 10000 parameters that `url_parse_query` puts on a query, with 0 for no cap.
+
+## Text protocols
+
+`net/textproto` is the line-based request and response layer under HTTP, SMTP, NNTP and FTP, and it follows Go's `net/textproto`. A `TextprotoReader` sits on a `BufioReader` and reads lines, continued lines, numbered replies, dot-terminated blocks and MIME headers. `textproto_reader_read_mime_header` returns a `TextprotoMIMEHeader`, a `Map` from each canonical key to its values, and the `textproto_mime_header_` functions look keys up the same way Go's `MIMEHeader` methods do:
+
+<!-- example: ../examples/net/textproto.c#header -->
+```c
+StringsReader *sr = strings_new_reader(
+    a, BURROW_S("content-type: text/plain\r\nX-Tag: a\r\nx-tag: b\r\n\r\nbody"));
+TextprotoReader *r =
+    textproto_new_reader(a, bufio_new_reader(a, strings_reader_as_io_reader(sr)));
+Error err;
+TextprotoMIMEHeader h = textproto_reader_read_mime_header(r, a, &err);
+printf("%.*s\n", P(textproto_mime_header_get(h, BURROW_S("Content-Type"))));
+Slice tags = textproto_mime_header_values(h, BURROW_S("x-tag"));
+printf("%d tags, first %.*s\n", (int)tags.len, P(((const Str *)tags.p)[0]));
+printf("%.*s\n",
+       P(textproto_canonical_mime_header_key(a, BURROW_S("x-forwarded-for"))));
+```
+
+That prints:
+
+```
+text/plain
+2 tags, first a
+X-Forwarded-For
+```
+
+A key that is one of the common headers comes back from a table with no allocation, and `textproto_canonical_mime_header_key` only allocates for a key it has to change that is not in that table.
+
+`textproto_reader_read_response` reads a reply that may run over several lines, the way SMTP and FTP send them, and `textproto_reader_read_code_line` reads one line. When the code is not the one expected, the error is a `TextprotoError` with the code and message, and a reply that does not parse gives a `TextprotoProtocolError`. `errors_as` with `TYPE_TEXTPROTO_ERROR` or `TYPE_TEXTPROTO_PROTOCOL_ERROR` gets at them:
+
+<!-- example: ../examples/net/textproto.c#codes -->
+```c
+StringsReader *sr = strings_new_reader(
+    a, BURROW_S("250-mail.example.com\r\n250-SIZE 35882577\r\n250 HELP\r\n"
+                "550 no such user\r\n"));
+TextprotoReader *r =
+    textproto_new_reader(a, bufio_new_reader(a, strings_reader_as_io_reader(sr)));
+Error err;
+Str msg;
+Int code = textproto_reader_read_response(r, a, 250, &msg, &err);
+printf("%d %.*s\n", (int)code, P(msg));
+textproto_reader_read_code_line(r, a, 250, &msg, &err);
+fmt_printf_v("%v\n", err);
+```
+
+That prints:
+
+```
+250 mail.example.com
+SIZE 35882577
+HELP
+550 "no such user"
+```
+
+A `TextprotoWriter` writes lines with `textproto_writer_printf_line`, which takes the same format as `fmt_printf`, and `textproto_writer_dot_writer` returns an `IoWriteCloser` that escapes leading dots, turns `\n` into `\r\n` and writes the closing `.` line when it is closed:
+
+<!-- example: ../examples/net/textproto.c#dot -->
+```c
+BytesBuffer out = BYTES_BUFFER(a);
+TextprotoWriter *w =
+    textproto_new_writer(a, bufio_new_writer(a, bytes_buffer_as_io_writer(&out)));
+textproto_writer_printf_line_v(w, "DATA");
+IoWriteCloser d = textproto_writer_dot_writer(w);
+io_write_string(io_write_closer_as_io_writer(d), BURROW_S("line one\n.hidden\n"),
+                NULL);
+d.vt->closer.close(d.data);
+fmt_printf_v("%q\n", bytes_buffer_string(&out, a));
+```
+
+That prints:
+
+```
+"DATA\r\nline one\r\n..hidden\r\n.\r\n"
+```
+
+A reader or writer holds one dot reader or writer, and asking for another, or reading or writing a line, finishes the one before it. Go does the same, except that there the old reader or writer is a separate value that goes stale; here it is the same one starting over. `TextprotoConn` puts a reader, a writer and a `TextprotoPipeline` over one connection. The `textproto_conn_` functions are the methods Go promotes from those three, and `textproto_conn_cmd` sends a command and returns its id for the pipeline. Go's `Dial` is not here yet, because it needs the `net` package; `textproto_new_conn` takes any `IoReadWriteCloser` in the meantime.

@@ -104,6 +104,11 @@ BURROW_FUNC(RuneFunc, bool, Rune r);
  * the rune. */
 BURROW_FUNC(RuneMapFunc, Rune, Rune r);
 
+/* Go's func(i, j int), which swaps the elements at i and j of whatever the
+ * caller is shuffling. It is what math/rand's Shuffle takes, in both versions,
+ * and it has no name in Go either. */
+BURROW_FUNC(SwapFunc, void, Int i, Int j);
+
 /* Build one. The type comes first because C needs it to know what the compound
  * literal is.
  *

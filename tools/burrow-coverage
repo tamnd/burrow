@@ -110,6 +110,11 @@ RENAMED = {
     # language level type in practice, and TimeDuration at every call site
     # would be noise.
     ("time", "type Duration"): "Duration",
+    # include/burrow/math/rand.h: the usual collapse would call v1's Rand
+    # MathRand, and its methods would then be math_rand_intn and the rest,
+    # which are the package level functions. The type keeps its package's
+    # full name so the methods are math_rand_rand_intn.
+    ("math/rand", "type Rand"): "MathRandRand",
     # include/burrow/sync.h: Go's three Once wrappers return closures that the
     # collector frees. Here the state is a struct you declare and the macro
     # fills in, so each Go function becomes an initialiser.
@@ -579,6 +584,7 @@ FUNC_TYPES = {
     "func(int, int) bool": {"SortLessFunc"},
     "func(int) bool": {"SortSearchFunc"},
     "func(int) int": {"SortFindFunc"},
+    "func(int, int)": {"SwapFunc"},
 }
 
 BUILTIN = {

@@ -164,3 +164,10 @@ global	src/unique/unique.c	uq_arena	intern	Only touched under uq_lock.
 global	src/unique/unique.c	uq_ready	intern	Only touched under uq_lock.
 global	src/net/url.c	url_debug_flags	godebug	The urlstrictcolons and urlmaxqueryparams settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/net/url.c	url_debug_max	godebug	The urlmaxqueryparams number, stored atomically before url_debug_flags says it is there.
+global	src/math/rand.c	rand_debug_flags	godebug	The randautoseed and randseednop settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
+global	src/math/rand.c	rand_global	package-vars	The shared Rand behind math/rand's package level functions. Loaded with an acquire load, and only ever stored under rand_global_lock with a release store, after the Rand it points at is set up.
+global	src/math/rand.c	rand_global_lock	package-vars	The lock itself. It serializes setting up and switching the shared Rand.
+global	src/math/rand.c	rand_runtime_rand	package-vars	Set up under rand_global_lock before rand_global points at it. After that only its read position changes, under rand_runtime_lock.
+global	src/math/rand.c	rand_runtime_lock	package-vars	The lock itself. It covers the read position of rand_runtime_rand, as the mutex in Go's runtimeSource does.
+global	src/math/rand.c	rand_locked_rand	package-vars	Set up under rand_global_lock. Its read position and its source's state change only under rand_locked_source's own lock, which is Go's lockedSource.
+global	src/math/rand.c	rand_locked_source	package-vars	Its generator state is only touched with its lock held.

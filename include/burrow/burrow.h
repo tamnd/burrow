@@ -79,6 +79,8 @@
 #include "burrow/math.h"
 #include "burrow/math/bits.h"
 #include "burrow/math/cmplx.h"
+#include "burrow/math/rand.h"
+#include "burrow/math/rand/v2.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/fixed.h"

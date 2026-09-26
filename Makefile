@@ -148,7 +148,7 @@ LIB  := $(BUILD)/libburrow.a
 # the table burrow.c carries for itself is turned off here.
 AMALG_DIR  := $(BUILD)/amalgamation
 AMALG_SRCS := $(AMALG_DIR)/burrow.c $(AMALG_DIR)/burrow.h
-AMALG_DEPS := $(SRCS) $(wildcard include/burrow/*.h) $(wildcard include/burrow/*/*.h) \
+AMALG_DEPS := $(SRCS) $(wildcard include/burrow/*.h) $(wildcard include/burrow/*/*.h) $(wildcard include/burrow/*/*/*.h) \
 	$(wildcard src/*/*.h) tools/burrow-gen
 ifeq ($(AMALGAMATION),1)
   OBJS := $(BUILD)/obj/burrow.o

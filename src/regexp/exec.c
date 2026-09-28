@@ -47,10 +47,9 @@ RxFlag rx_context(const RxInput *in, Int pos) {
     Rune r1 = RX_EOT, r2 = RX_EOT;
     Int w;
     if ((Uint)(pos - 1) < (Uint)in->len)
-        r1 = utf8_decode_last_rune_in_string(str_from_bytes(in->p, pos), &w);
+        r1 = utf8_decode_last_rune_in_string(rx_str(in->p, pos), &w);
     if ((Uint)pos < (Uint)in->len)
-        r2 = utf8_decode_rune_in_string(
-            str_from_bytes(rx_at(in->p, pos), in->len - pos), &w);
+        r2 = utf8_decode_rune_in_string(rx_str(rx_at(in->p, pos), in->len - pos), &w);
     return rx_flag(r1, r2);
 }
 
@@ -426,8 +425,8 @@ static bool rx_machine_match(RxMachine *m, RxInput *in, Int pos) {
                 break; /* have match; finished exploring alternatives */
             if (p->prefix.len > 0 && r1 != p->prefix_rune && in->r == NULL) {
                 /* Match requires literal prefix; fast search for it. */
-                Int advance = strings_index(
-                    str_from_bytes(rx_at(in->p, pos), in->len - pos), p->prefix);
+                Int advance =
+                    strings_index(rx_str(rx_at(in->p, pos), in->len - pos), p->prefix);
                 if (advance < 0)
                     break;
                 pos += advance;
@@ -490,7 +489,7 @@ bool rx_onepass(const Regexp *re, RxInput *in, Int pos, Int ncap, Int *cap) {
     if (pos == 0 && rx_flag_match(flag, (SyntaxEmptyOp)inst->i.arg) &&
         p->prefix.len > 0 && in->r == NULL) {
         /* Match requires literal prefix; fast search for it. */
-        if (!strings_has_prefix(str_from_bytes(in->p, in->len), p->prefix))
+        if (!strings_has_prefix(rx_str(in->p, in->len), p->prefix))
             return false;
         pos += p->prefix.len;
         r = rx_step(in, pos, &width);

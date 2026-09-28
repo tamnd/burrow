@@ -154,11 +154,13 @@ Int strings_last_index_byte(Str s, Byte c) {
 
 Int strings_index(Str s, Str substr) {
     Int n = substr.len;
-    if (n == 0 || str_eq(substr, s))
+    if (n == 0)
         return 0;
     if (n == 1)
         return strings_index_byte(s, substr.p[0]);
-    if (n >= s.len)
+    if (n == s.len)
+        return str_eq(substr, s) ? 0 : -1;
+    if (n > s.len)
         return -1;
     if (n <= BURROW__BYTEALG_MAX_LEN && s.len <= BURROW__BYTEALG_MAX_BRUTE_FORCE)
         /* Use brute force when s and substr both are small */

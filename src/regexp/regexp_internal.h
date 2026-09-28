@@ -33,6 +33,13 @@ static inline const Byte *rx_at(const Byte *p, Int off) {
     return p == NULL ? p : p + off;
 }
 
+/* The n bytes at p as a Str, without the call str_from_bytes costs. p may
+ * be NULL when n is 0. */
+static inline Str rx_str(const Byte *p, Int n) {
+    Str s = {p, n};
+    return s;
+}
+
 Rune rx_step_reader(RxInput *in, Int pos, Int *width);
 
 /* input.step: the rune at pos and its width, or RX_EOT and 0. */
@@ -45,8 +52,7 @@ static inline Rune rx_step(RxInput *in, Int pos, Int *width) {
             *width = 1;
             return c;
         }
-        return utf8_decode_rune_in_string(str_from_bytes(in->p + pos, in->len - pos),
-                                          width);
+        return utf8_decode_rune_in_string(rx_str(in->p + pos, in->len - pos), width);
     }
     *width = 0;
     return RX_EOT;

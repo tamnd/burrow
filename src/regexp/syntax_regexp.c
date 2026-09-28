@@ -23,7 +23,7 @@ static const Str syn_scratch_unwind = {(const Byte *)"regexp/syntax: out of memo
                                        28};
 
 void syn_scratch_init(SynScratch *s, Alloc *parent) {
-    arena_init(&s->arena, parent, 0);
+    arena_init(&s->arena, parent, SYN_ARENA_CHUNK);
     s->a = arena_allocator(&s->arena);
     s->oom = false;
 }

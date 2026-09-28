@@ -2300,7 +2300,7 @@ SyntaxRegexp *syntax_parse(Alloc *a, Str s, SyntaxFlags flags, Error *err) {
     if (err != NULL)
         *err = BURROW_NO_ERROR;
     Arena scratch;
-    arena_init(&scratch, a, 0);
+    arena_init(&scratch, a, SYN_ARENA_CHUNK);
     SynParser p;
     memset(&p, 0, sizeof p);
     p.flags = flags;

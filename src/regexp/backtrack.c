@@ -311,8 +311,8 @@ bool rx_backtrack(const Regexp *re, RxInput *in, Int pos, Int ncap, Int *cap) {
         for (; pos <= end && width != 0; pos += width) {
             if (p->prefix.len > 0) {
                 /* Match requires literal prefix; fast search for it. */
-                Int advance = strings_index(
-                    str_from_bytes(rx_at(in->p, pos), in->len - pos), p->prefix);
+                Int advance =
+                    strings_index(rx_str(rx_at(in->p, pos), in->len - pos), p->prefix);
                 if (advance < 0) {
                     rx_bitstate_put(p, b);
                     return false;

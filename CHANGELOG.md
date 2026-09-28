@@ -4,6 +4,23 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.10 (2026-09-28)
+
+Regular expressions and big integers.
+
+### Added
+
+- `regexp/syntax`, Go's parser, printer, `Simplify` and compiler, checked against 4006 cases generated from Go's own package (#242).
+- `regexp`, with all three of Go's matchers (one pass, backtracking and the Pike VM) and the whole exported API, checked against 16049 generated cases in each engine setup (#243).
+- `compress/bzip2`, the reader (#241).
+- `math/big`'s `Int`, with every method Go gives it, fmt printing and scanning, and the JSON, text and gob encodings, checked against 8227 cases generated from Go's `math/big`. `Rat` and `Float` are still to come (#245).
+- `pal_thread_on_exit`, a hook that runs when the calling thread exits, for memory a library keeps per thread (#245).
+
+### Changed
+
+- regexp compiles faster and matches short inputs faster: its arenas start at 1 KB instead of 64 KB, and a match checks the input against the minimum match length first (#244).
+- `strings_index` checks its cases in the same order as Go's `strings.Index`, so a one byte needle goes straight to the byte search (#244).
+
 ## v0.1.9 (2026-09-28)
 
 Two more compression formats.

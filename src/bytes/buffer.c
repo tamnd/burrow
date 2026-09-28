@@ -27,9 +27,10 @@
 #include <stdint.h>
 #include <string.h>
 
-/* The methods io asks for by name: io_copy looks for WriteTo and ReadFrom,
- * and io_write_string for WriteString. */
+/* The methods asked for by name: io_copy looks for WriteTo and ReadFrom,
+ * io_write_string for WriteString, and compress/flate for ReadByte. */
 #define BYTES_BUFFER_METHODS(M, T)                                                     \
+    M(T, ReadByte, bytes_buffer_read_byte, IO_SIG_READ_BYTE)                           \
     M(T, ReadFrom, bytes_buffer_read_from, IO_SIG_READ_FROM)                           \
     M(T, WriteString, bytes_buffer_write_string, IO_SIG_WRITE_STRING)                  \
     M(T, WriteTo, bytes_buffer_write_to, IO_SIG_WRITE_TO)

@@ -21,9 +21,11 @@
 #include <stdint.h>
 #include <string.h>
 
-/* The methods io asks for by name: io_copy looks for WriteTo and ReadFrom,
- * and io_write_string for WriteString. */
-#define BYTES_READER_METHODS(M, T) M(T, WriteTo, bytes_reader_write_to, IO_SIG_WRITE_TO)
+/* The methods asked for by name: io_copy looks for WriteTo and ReadFrom,
+ * io_write_string for WriteString, and compress/flate for ReadByte. */
+#define BYTES_READER_METHODS(M, T)                                                     \
+    M(T, ReadByte, bytes_reader_read_byte, IO_SIG_READ_BYTE)                           \
+    M(T, WriteTo, bytes_reader_write_to, IO_SIG_WRITE_TO)
 BURROW_METHODS_DEFINE(BytesReader, BYTES_READER_METHODS);
 
 static const Type bytes_reader_desc = {

@@ -730,6 +730,7 @@ extern const Type burrow_type_IoErrorArg;
 #define IO_SIG_WRITE_TO(IN, OUT) IN(0, IoWriter) IN(1, IoErrorArg) OUT(int64_t)
 #define IO_SIG_READ_FROM(IN, OUT) IN(0, IoReader) IN(1, IoErrorArg) OUT(int64_t)
 #define IO_SIG_WRITE_STRING(IN, OUT) IN(0, Str) IN(1, IoErrorArg) OUT(Int)
+#define IO_SIG_READ_BYTE(IN, OUT) IN(0, IoErrorArg) OUT(Byte)
 
 /* The assertions themselves, for packages like bufio that make the same
  * choice io_copy does. Each one calls the method and returns true when the
@@ -737,6 +738,12 @@ extern const Type burrow_type_IoErrorArg;
 bool burrow__io_try_write_to(IoReader src, IoWriter dst, int64_t *n, Error *err);
 bool burrow__io_try_read_from(IoWriter dst, IoReader src, int64_t *n, Error *err);
 bool burrow__io_try_write_string(IoWriter w, Str s, Int *n, Error *err);
+
+/* The ReadByte method on the reader's type, for a package like compress/flate
+ * that asks whether its reader is also an io.ByteReader, or NULL when it has
+ * none with the right shape. The caller keeps the Method and calls it with
+ * method_call as often as it likes. */
+BURROW_STATIC(ret) const Method *burrow__io_read_byte_method(IoReader r);
 
 #if defined(BURROW_SHORT) && BURROW_SHORT
 #define IO_SEEK_START BURROW_IO_SEEK_START

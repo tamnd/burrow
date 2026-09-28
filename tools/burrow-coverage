@@ -667,7 +667,7 @@ class GoTypes:
                 return None
             return {e + "*" if e.endswith("*") else e + " *" for e in inner}
         if t.startswith("map["):
-            return {"Map"}
+            return {"Map *"}
         if re.match(r"^(<-)?chan\b", t):
             return {"Chan", "Chan *"}
         if t in FUNC_TYPES:

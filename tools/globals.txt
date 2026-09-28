@@ -173,3 +173,7 @@ global	src/math/rand.c	rand_locked_rand	package-vars	Set up under rand_global_lo
 global	src/math/rand.c	rand_locked_source	package-vars	Its generator state is only touched with its lock held.
 global	src/compress/flate.c	flate_fixed	tables	The fixed Huffman decoder, built once under flate_fixed_once and only read after that.
 global	src/compress/flate.c	flate_fixed_once	tables	A SyncOnce, which is the synchronisation for flate_fixed.
+global	src/compress/deflate.c	defl_fixed_lit_enc	tables	The fixed literal and length encoder, built once under defl_fixed_once and only read after that.
+global	src/compress/deflate.c	defl_fixed_off_enc	tables	The fixed offset encoder, built once under defl_fixed_once and only read after that.
+global	src/compress/deflate.c	defl_huff_off_enc	tables	The offset encoder huffman-only blocks use, built once under defl_fixed_once and only read after that.
+global	src/compress/deflate.c	defl_fixed_once	tables	A SyncOnce, which is the synchronisation for the three encoders above.

@@ -189,19 +189,19 @@ static bool syn_map_grow(SynMap *m) {
 bool syn_map_put(SynMap *m, const void *k, int64_t v) {
     if (m->cap > 0) {
         size_t mask = (size_t)m->cap - 1;
-        size_t tomb = SIZE_MAX;
+        size_t free_slot = SIZE_MAX;
         for (size_t i = syn_hash(k) & mask;; i = (i + 1) & mask) {
             const void *q = m->keys[i];
             if (q == k) {
                 m->vals[i] = v;
                 return true;
             }
-            if (q == SYN_TOMB && tomb == SIZE_MAX)
-                tomb = i;
+            if (q == SYN_TOMB && free_slot == SIZE_MAX)
+                free_slot = i;
             if (q == NULL) {
-                if (tomb != SIZE_MAX) {
-                    m->keys[tomb] = k;
-                    m->vals[tomb] = v;
+                if (free_slot != SIZE_MAX) {
+                    m->keys[free_slot] = k;
+                    m->vals[free_slot] = v;
                     return true;
                 }
                 break;

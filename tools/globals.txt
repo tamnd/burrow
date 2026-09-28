@@ -44,6 +44,7 @@ category	tables	Lookup tables too big to write out as constants, built the first
 category	sink	Bytes that are written and never read, so racing writers cannot change anything anyone sees.
 category	intern	unique's canonical values, which are process wide by definition, as Go's are.
 category	godebug	Settings read from the GODEBUG environment variable the first time they are needed. Go reads the same ones once per process through internal/godebug.
+category	thread-exit	The hook that runs code as a thread exits. The platform has one per process and every library that keeps memory per thread shares it.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -177,3 +178,11 @@ global	src/compress/deflate.c	defl_fixed_lit_enc	tables	The fixed literal and le
 global	src/compress/deflate.c	defl_fixed_off_enc	tables	The fixed offset encoder, built once under defl_fixed_once and only read after that.
 global	src/compress/deflate.c	defl_huff_off_enc	tables	The offset encoder huffman-only blocks use, built once under defl_fixed_once and only read after that.
 global	src/compress/deflate.c	defl_fixed_once	tables	A SyncOnce, which is the synchronisation for the three encoders above.
+global	src/math/big_nat.c	big_tls	allocator	Thread local. The scratch arenas math/big works in, one set per thread, so a calculation on one thread never waits on another. Go gets the same effect from sync.Pool.
+global	src/math/big_natconv.c	big_cache10_mu	tables	This is the lock over the table below, held while the table is extended and while a conversion reads it.
+global	src/math/big_natconv.c	big_cache10	tables	The powers of ten that decimal conversion of very long numbers divides by, built as far as the longest number seen so far. Go keeps the same table as cacheBase10 behind a mutex.
+global	src/pal/thread_posix.c	thread_exit_key	thread-exit	The one pthread key whose destructor runs what pal_thread_on_exit registered. Written once under thread_exit_once below and only read after it.
+global	src/pal/thread_posix.c	thread_exit_once	thread-exit	This is the synchronisation for the key above and the flag below.
+global	src/pal/thread_posix.c	thread_exit_ok	thread-exit	Whether the key could be made. Written once under thread_exit_once and only read after it.
+global	src/pal/thread_windows.c	thread_exit_fls	thread-exit	Windows only. The fiber local slot whose callback runs what pal_thread_on_exit registered. Written once under thread_exit_init_once below and only read after it.
+global	src/pal/thread_windows.c	thread_exit_init_once	thread-exit	Windows only. This is the synchronisation for the slot above.

@@ -393,10 +393,10 @@ double math_gamma(double x) {
         /* Note: x is negative but (checked above) not a negative integer, so
          * x must be small enough to be in range for conversion to int64. If
          * |x| were >= 2⁶³ it would have to be an integer. */
-        Int signgam = 1;
+        Int sgn = 1;
         int64_t ip = (int64_t)p;
         if ((ip & 1) == 0)
-            signgam = -1;
+            sgn = -1;
         double z = q - p;
         if (z > 0.5) {
             p = p + 1;
@@ -404,7 +404,7 @@ double math_gamma(double x) {
         }
         z = q * math_sin(MATH_PI * z);
         if (z == 0)
-            return math_inf(signgam);
+            return math_inf(sgn);
         double sq2;
         double sq1 = special_stirling(q, &sq2);
         double absz = math_abs(z);
@@ -413,7 +413,7 @@ double math_gamma(double x) {
             z = MATH_PI / absz / sq1 / sq2;
         else
             z = MATH_PI / d;
-        return (double)signgam * z;
+        return (double)sgn * z;
     }
 
     /* Reduce argument */

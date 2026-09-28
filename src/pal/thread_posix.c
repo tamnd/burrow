@@ -359,4 +359,32 @@ bool pal_thread_stack_bounds(void **lo, void **hi) {
 
 #endif
 
+/* One key for the whole process, with a destructor that runs the list the
+ * thread built. pthreads calls a key's destructor at thread exit with the value
+ * the thread last set, as long as that is not NULL, and clears the value first,
+ * so a node that registers again from its own fn gets another pass. */
+static pthread_key_t thread_exit_key;
+static pthread_once_t thread_exit_once = PTHREAD_ONCE_INIT;
+static bool thread_exit_ok;
+
+static void thread_exit_run(void *v) {
+    PalThreadExit *n = v;
+    while (n != NULL) {
+        PalThreadExit *next = n->next;
+        n->fn(n->arg);
+        n = next;
+    }
+}
+
+static void thread_exit_init(void) {
+    thread_exit_ok = pthread_key_create(&thread_exit_key, thread_exit_run) == 0;
+}
+
+bool pal_thread_on_exit(PalThreadExit *node) {
+    if (pthread_once(&thread_exit_once, thread_exit_init) != 0 || !thread_exit_ok)
+        return false;
+    node->next = pthread_getspecific(thread_exit_key);
+    return pthread_setspecific(thread_exit_key, node) == 0;
+}
+
 #endif /* !BURROW_OS_WINDOWS */

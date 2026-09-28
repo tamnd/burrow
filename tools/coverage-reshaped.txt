@@ -104,3 +104,10 @@ text/scanner: method (Scanner) String: takes a const pointer since the struct ho
 # come from lzw_reader_as_io_read_closer and lzw_writer_as_io_write_closer.
 compress/lzw: func NewReader: returns the concrete LzwReader, which has the IoReadCloser view
 compress/lzw: func NewWriter: returns the concrete LzwWriter, which has the IoWriteCloser view
+
+# include/burrow/math/big.h: Go's second result is the r or m that was passed
+# in, set, so there is nothing to hand back through a pointer that the caller
+# does not already have.
+math/big: method (*Int) QuoRem: the remainder is the r passed in, so only z is returned
+math/big: method (*Int) DivMod: the modulus is the m passed in, so only z is returned
+math/big: method (*Int) Divide: the remainder is the r passed in, so only z is returned

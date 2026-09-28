@@ -147,6 +147,38 @@ void pal_thread_yield(void) {
     (void)SwitchToThread();
 }
 
+/* Fiber local storage rather than thread local, because FlsAlloc takes a
+ * callback and TlsAlloc does not. A thread that never becomes a fiber has
+ * exactly one, so the callback runs when the thread exits, with the value the
+ * thread last set, as long as that is not NULL. */
+static DWORD thread_exit_fls = FLS_OUT_OF_INDEXES;
+static INIT_ONCE thread_exit_init_once = INIT_ONCE_STATIC_INIT;
+
+static VOID WINAPI thread_exit_run(PVOID v) {
+    PalThreadExit *n = v;
+    while (n != NULL) {
+        PalThreadExit *next = n->next;
+        n->fn(n->arg);
+        n = next;
+    }
+}
+
+static BOOL CALLBACK thread_exit_init(PINIT_ONCE once, PVOID param, PVOID *ctx) {
+    (void)once;
+    (void)param;
+    (void)ctx;
+    thread_exit_fls = FlsAlloc(thread_exit_run);
+    return TRUE;
+}
+
+bool pal_thread_on_exit(PalThreadExit *node) {
+    if (!InitOnceExecuteOnce(&thread_exit_init_once, thread_exit_init, NULL, NULL) ||
+        thread_exit_fls == FLS_OUT_OF_INDEXES)
+        return false;
+    node->next = FlsGetValue(thread_exit_fls);
+    return FlsSetValue(thread_exit_fls, node) != 0;
+}
+
 /* A warning about the mingw header rather than about anything here.
  *
  * NtCurrentTeb is a read through the gs segment at a fixed offset, which the

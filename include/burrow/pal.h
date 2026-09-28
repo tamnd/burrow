@@ -383,6 +383,28 @@ void pal_thread_yield(void);
  * the only caller and it does less rather than guessing. */
 bool pal_thread_stack_bounds(void **lo, void **hi);
 
+/* Something to run when the calling thread exits, for memory a library keeps
+ * per thread. The caller owns the node and it has to stay where it is until
+ * fn has run. It cannot be a thread local variable, because a platform may free
+ * thread local storage before the hooks run, as macOS does. Put it in memory
+ * the caller allocates for the thread and let fn free that. fn gets arg, the
+ * nodes run newest first, and a node is registered once per thread:
+ * registering it again before the thread exits is a mistake nobody checks for.
+ *
+ * It runs for a thread that returns from its entry point or calls the
+ * platform's thread exit. It does not run for the thread that ends the process,
+ * which is the one case where the system takes everything back anyway.
+ *
+ * False means the platform could not set it up, and the memory will leak at
+ * thread exit rather than anything going wrong now. */
+typedef struct PalThreadExit {
+    void (*fn)(void *arg);
+    void *arg;
+    struct PalThreadExit *next;
+} PalThreadExit;
+
+bool pal_thread_on_exit(PalThreadExit *node);
+
 /* Sleep until the 32 bit word at addr stops being expect, or until somebody
  * wakes it, or until timeout_ns passes. A negative timeout waits forever and a
  * zero one does not wait at all.

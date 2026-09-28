@@ -90,7 +90,8 @@ bool burrow__mime_needs_encoding(Str s) {
 }
 
 static Str mime_sub(Str s, Int from, Int to) {
-    Str r = {s.p + from, to - from};
+    /* s.p is NULL for the empty string, and NULL + 0 is undefined. */
+    Str r = {s.p == NULL ? s.p : s.p + from, to - from};
     return r;
 }
 

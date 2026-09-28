@@ -1,6 +1,6 @@
 # Compression
 
-`burrow/compress/flate.h` is Go's `compress/flate`, the DEFLATE format of RFC 1951. It is the compression inside gzip, zlib, zip and PNG, without any of their headers or checksums around it. It reads and writes DEFLATE, and the writer's output is the same as Go's byte for byte at every level. `burrow/compress/zlib.h` puts the zlib header and checksum on top of it, and `compress/gzip` will follow.
+`burrow/compress/flate.h` is Go's `compress/flate`, the DEFLATE format of RFC 1951. It is the compression inside gzip, zlib, zip and PNG, without any of their headers or checksums around it. It reads and writes DEFLATE, and the writer's output is the same as Go's byte for byte at every level. `burrow/compress/zlib.h` puts the zlib header and checksum on top of it, and `compress/gzip` will follow. `burrow/compress/lzw.h` is the older LZW format of GIF and PDF, which has nothing to do with DEFLATE.
 
 ## Reading
 
@@ -142,3 +142,54 @@ zlib_reader_free(rc);
 That prints `zlib: invalid dictionary` and then `hello, hello`. `zlib_reader_as_resetter` gives a `ZlibResetter`, which points a reader at a new stream and dictionary without allocating again.
 
 The writer makes the same bytes as Go's at every level, with and without a dictionary, with one exception. At levels 7 to 9 with a dictionary, when the first block does not compress and ends up stored, Go 1.27 writes the dictionary into that stored block as if it were data, so the stream does not read back as what was written, even with Go's own reader. burrow makes the same choices Go does and leaves the dictionary out of that block, so its stream is the dictionary's length shorter than Go's and reads back correctly. The same goes for `flate_new_writer_dict`.
+
+## lzw
+
+`burrow/compress/lzw.h` is Go's `compress/lzw`. LZW has no header, so both sides have to agree on two things up front: the bit order, `LZW_LSB` for GIF and `LZW_MSB` for PDF, and the width of a literal, which is 8 for bytes and can go down to 2 when every byte is known to be small. The writer's output is the same as Go's byte for byte:
+
+<!-- example: ../examples/compress/lzw.c#write -->
+```c
+BytesBuffer out = BYTES_BUFFER(a);
+LzwWriter *zw = lzw_new_writer(a, bytes_buffer_as_io_writer(&out), LZW_LSB, 8);
+if (zw == NULL)
+    return 1;
+lzw_writer_write(
+    zw, slice_from((char[]){"TOBEORNOTTOBEORTOBEORNOT"}, 24, 24, TYPE_BYTE), &err);
+err = lzw_writer_close(zw);
+lzw_writer_free(zw);
+printf("%d bytes\n", (int)bytes_buffer_len(&out));
+```
+
+That prints `21 bytes`. Reading works like the other readers here, and takes bytes one at a time from an input with `ReadByte` so it stops at the end code:
+
+<!-- example: ../examples/compress/lzw.c#read -->
+```c
+BytesReader in;
+bytes_reader_reset(&in, bytes_buffer_bytes(&out));
+LzwReader *zr = lzw_new_reader(a, bytes_reader_as_io_reader(&in), LZW_LSB, 8);
+if (zr == NULL)
+    return 1;
+Slice text = io_read_all(a, lzw_reader_as_io_reader(zr), &err);
+```
+
+A stream that stops early gives `io_err_unexpected_eof` after the bytes that did decode, and a code the table does not have yet gives `lzw: invalid code`. An order or width out of range is not reported by `lzw_new_reader` or `lzw_new_writer`, which only return NULL when the allocator refuses. It comes back from the first read, write or close instead, the way Go does it:
+
+<!-- example: ../examples/compress/lzw.c#errors -->
+```c
+bytes_reader_reset(&in, slice_from(tobe, 11, 11, TYPE_BYTE));
+lzw_reader_reset(zr, bytes_reader_as_io_reader(&in), LZW_LSB, 8);
+text = io_read_all(a, lzw_reader_as_io_reader(zr), &err);
+if (errors_is(err, io_err_unexpected_eof))
+    printf("%.*s after %d bytes\n", (int)error_text(err).len,
+           (const char *)error_text(err).p, (int)text.len);
+
+bytes_reader_reset(&in, bytes_buffer_bytes(&out));
+lzw_reader_reset(zr, bytes_reader_as_io_reader(&in), LZW_LSB, 9);
+text = io_read_all(a, lzw_reader_as_io_reader(zr), &err);
+printf("%.*s\n", (int)error_text(err).len, (const char *)error_text(err).p);
+lzw_reader_free(zr);
+```
+
+That prints `unexpected EOF after 8 bytes` and then `lzw: litWidth 9 out of range`. `lzw_reader_reset` and `lzw_writer_reset` start a new stream without allocating again.
+
+TIFF writes LZW with the code width changing one code early. This package does not read or write that variant, and neither does Go's.

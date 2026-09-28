@@ -57,4 +57,5 @@ net/url
 math/rand
 math/rand/v2
 compress/flate
+compress/lzw
 compress/zlib

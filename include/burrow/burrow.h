@@ -99,6 +99,7 @@
 #include "burrow/panic.h"
 #include "burrow/path.h"
 #include "burrow/proc.h"
+#include "burrow/regexp/syntax.h"
 #include "burrow/runtime.h"
 #include "burrow/slice.h"
 #include "burrow/slices.h"

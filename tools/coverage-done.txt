@@ -61,3 +61,4 @@ compress/flate
 compress/lzw
 compress/zlib
 regexp/syntax
+regexp

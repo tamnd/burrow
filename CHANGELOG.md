@@ -4,6 +4,19 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.9 (2026-09-28)
+
+Two more compression formats.
+
+### Added
+
+- `compress/zlib`, the zlib header and Adler-32 checksum around `compress/flate`, with preset dictionaries (#238).
+- `compress/lzw`, the LZW of GIF and PDF, in both bit orders and every literal width from 2 to 8. The writer's output matches Go's byte for byte (#239).
+
+### Fixed
+
+- `flate_new_writer_dict` at levels 7 to 9 no longer writes the dictionary into the first block when that block ends up stored. Go 1.27 does this, and the stream then does not read back as what was written. burrow now leaves the dictionary out of that block, so its output reads back correctly and is shorter than Go's by the dictionary's length (#238).
+
 ## v0.1.8 (2026-09-28)
 
 Random numbers and DEFLATE.

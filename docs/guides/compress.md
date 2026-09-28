@@ -1,6 +1,6 @@
 # Compression
 
-`burrow/compress/flate.h` is Go's `compress/flate`, the DEFLATE format of RFC 1951. It is the compression inside gzip, zlib, zip and PNG, without any of their headers or checksums around it. It reads and writes DEFLATE, and the writer's output is the same as Go's byte for byte at every level. `burrow/compress/zlib.h` puts the zlib header and checksum on top of it, and `compress/gzip` will follow. `burrow/compress/lzw.h` is the older LZW format of GIF and PDF, which has nothing to do with DEFLATE.
+`burrow/compress/flate.h` is Go's `compress/flate`, the DEFLATE format of RFC 1951. It is the compression inside gzip, zlib, zip and PNG, without any of their headers or checksums around it. It reads and writes DEFLATE, and the writer's output is the same as Go's byte for byte at every level. `burrow/compress/zlib.h` puts the zlib header and checksum on top of it, and `compress/gzip` will follow. `burrow/compress/lzw.h` is the older LZW format of GIF and PDF, and `burrow/compress/bzip2.h` reads bzip2 files. Neither has anything to do with DEFLATE.
 
 ## Reading
 
@@ -193,3 +193,39 @@ lzw_reader_free(zr);
 That prints `unexpected EOF after 8 bytes` and then `lzw: litWidth 9 out of range`. `lzw_reader_reset` and `lzw_writer_reset` start a new stream without allocating again.
 
 TIFF writes LZW with the code width changing one code early. This package does not read or write that variant, and neither does Go's.
+
+## bzip2
+
+`burrow/compress/bzip2.h` is Go's `compress/bzip2`. Like Go's, it only reads. `bzip2_new_reader` gives back a plain `IoReader`, and `bzip2_reader_free` releases it:
+
+<!-- example: ../examples/compress/bzip2.c#read -->
+```c
+BytesReader in;
+bytes_reader_reset(&in, slice_from(hello, sizeof hello, sizeof hello, TYPE_BYTE));
+IoReader zr = bzip2_new_reader(a, bytes_reader_as_io_reader(&in));
+if (zr.vt == NULL)
+    return 1;
+Slice text = io_read_all(a, zr, &err);
+bzip2_reader_free(zr);
+```
+
+`hello` holds the 52 bytes that `bzip2 -9` wrote for `"hello world\n"`. The reader allocates its block buffer on the first read rather than in `bzip2_new_reader`, because only the header says how big it has to be: 400 KB for each step of the level, so 3.6 MB for `-9`. If the allocator refuses that, the read gives `burrow_err_out_of_memory`. Several bzip2 files one after another, which is what `pbzip2` writes and what `cat a.bz2 b.bz2` makes, read back as one stream.
+
+As with the other readers, an input with `ReadByte` is read a byte at a time and left positioned right after the last file, and any other input gets a `BufioReader` in front of it. A stream that stops early gives `io_err_unexpected_eof`, and anything else wrong gives a `Bzip2StructuralError`, whose message starts with `bzip2 data invalid: `. `errors_as` gives the text after that. Checksums are checked once a block has been read out, so the bytes of a damaged block come out before the error:
+
+<!-- example: ../examples/compress/bzip2.c#errors -->
+```c
+hello[sizeof hello - 3] ^= 0x01;
+bytes_reader_reset(&in, slice_from(hello, sizeof hello, sizeof hello, TYPE_BYTE));
+zr = bzip2_new_reader(a, bytes_reader_as_io_reader(&in));
+if (zr.vt == NULL)
+    return 1;
+text = io_read_all(a, zr, &err);
+bzip2_reader_free(zr);
+const Bzip2StructuralError *se = errors_as(err, TYPE_BZIP2_STRUCTURAL_ERROR);
+if (se != NULL)
+    printf("%d bytes, then %.*s\n", (int)text.len, (int)se->len,
+           (const char *)se->p);
+```
+
+That flips one bit of the checksum over the whole file and prints `12 bytes, then file checksum mismatch`.

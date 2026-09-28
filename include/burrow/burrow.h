@@ -42,6 +42,7 @@
 #include "burrow/bytes.h"
 #include "burrow/chan.h"
 #include "burrow/cmp.h"
+#include "burrow/compress/bzip2.h"
 #include "burrow/compress/flate.h"
 #include "burrow/compress/lzw.h"
 #include "burrow/compress/zlib.h"

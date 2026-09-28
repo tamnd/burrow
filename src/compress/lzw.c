@@ -320,11 +320,14 @@ static void lzw_reader_init(LzwReader *r, IoReader src, LzwOrder order, Int lit_
     }
 
     r->r = src;
-    if (src.vt != NULL && src.vt->self_type == TYPE_BUFIO_READER) {
+    r->direct = NULL;
+    r->read_byte = NULL;
+    if (src.vt != NULL && src.vt->self_type == TYPE_BUFIO_READER)
         r->direct = (BufioReader *)src.data;
-    } else if ((r->read_byte = burrow__io_read_byte_method(src)) != NULL) {
-        /* r->r is used through read_byte. */
-    } else if (src.vt != NULL) {
+    else
+        r->read_byte = burrow__io_read_byte_method(src);
+    /* With read_byte set, r->r is used through it. */
+    if (r->direct == NULL && r->read_byte == NULL && src.vt != NULL) {
         if (r->rbuf != NULL) {
             bufio_reader_reset(r->rbuf, src);
         } else {

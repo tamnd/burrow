@@ -47,9 +47,10 @@ int main(void) {
     // doc: all
     Slice all = regexp_find_all_string(re, a, text, -1);
     show_strs("all", all);
-    Slice words = regexp_split(regexp_must_compile(a, BURROW_S(" *, *")), a,
-                               BURROW_S("a, b ,c,  d"), -1);
+    Regexp *comma = regexp_must_compile(a, BURROW_S(" *, *"));
+    Slice words = regexp_split(comma, a, BURROW_S("a, b ,c,  d"), -1);
     show_strs("split", words);
+    regexp_free(comma);
     // doc: end
 
     // doc: replace
@@ -60,6 +61,7 @@ int main(void) {
          regexp_replace_all_literal_string(named, a, text, BURROW_S("$user")));
     show("func",
          regexp_replace_all_string_func(named, a, text, BURROW_FN(StrFunc, shout, a)));
+    regexp_free(named);
     // doc: end
 
     // doc: errors
@@ -68,6 +70,9 @@ int main(void) {
         show("error", error_text(err));
     // doc: end
 
+    // Searches keep working memory on the heap, so free a Regexp even when
+    // its allocator is an arena.
+    regexp_free(re);
     arena_free(&ar);
     return 0;
 }

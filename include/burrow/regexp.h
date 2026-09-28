@@ -70,7 +70,8 @@ BURROW_FUNC(BytesFunc, Slice, Slice b);
 /* regexp.Compile: parses expr and gets it ready to match, with leftmost first
  * semantics, the ones Perl and Python have. NULL and the error, a SyntaxError
  * that errors_as finds, when expr does not parse. Everything the Regexp holds
- * comes from a, and regexp_free gives it back. err may be NULL. */
+ * comes from a, apart from the search memory above, and regexp_free gives all
+ * of it back, so call it even when a is an arena. err may be NULL. */
 BURROW_OWNS(ret) Regexp *regexp_compile(Alloc *a, Str expr, Error *err);
 
 /* regexp.CompilePOSIX: the POSIX egrep syntax, and leftmost longest matches:

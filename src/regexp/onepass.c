@@ -180,11 +180,7 @@ static bool rx_merge_rune_sets(RxBuild *b, const RxRunes *left, const RxRunes *r
         const RxRunes *arr;
         Int *low;
         uint32_t pc;
-        if (rx >= right_len) {
-            arr = left, low = &lx, pc = left_pc;
-        } else if (lx >= left_len) {
-            arr = right, low = &rx, pc = right_pc;
-        } else if (right->p[rx] < left->p[lx]) {
+        if (rx < right_len && (lx >= left_len || right->p[rx] < left->p[lx])) {
             arr = right, low = &rx, pc = right_pc;
         } else {
             arr = left, low = &lx, pc = left_pc;

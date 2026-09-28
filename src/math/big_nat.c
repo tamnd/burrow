@@ -68,9 +68,14 @@ void big_oom(void) {
     panic_str(BURROW_S("math/big: out of memory"));
 }
 
+/* What an empty Nat points at. Nothing is ever read or written through it,
+ * since its length and capacity are 0, but a pointer that is never NULL lets gcc
+ * see that the words a caller indexes are always there. */
+static BigWord big_no_words[1];
+
 static BigWord *big_words(Arena *ar, BigScratch *s, Int n) {
     if (n <= 0)
-        return NULL;
+        return big_no_words;
     size_t size = (size_t)n * sizeof(BigWord);
     if ((size_t)n > SIZE_MAX / sizeof(BigWord))
         big_oom();
@@ -550,7 +555,9 @@ Nat nat_xor(Nat z, Nat x, Nat y) {
 /* random: a number in [0, limit), n the bit length of limit. */
 Nat nat_random(Nat z, MathRandRand *rnd, Nat limit, Int n) {
     if (nat_alias(z, limit))
-        z = NAT_NIL; /* z is an alias for limit, cannot reuse */
+        z = NAT_NIL;    /* z is an alias for limit, cannot reuse */
+    if (limit.len == 0) /* Go never asks for a number below 0 */
+        return nat_to(z, 0);
     z = nat_make(z, limit.len);
     Uint msw = (Uint)(n % (Int)BIG_W);
     if (msw == 0)
@@ -558,13 +565,18 @@ Nat nat_random(Nat z, MathRandRand *rnd, Nat limit, Int n) {
     BigWord mask = msw == BIG_W ? BIG_M : ((BigWord)1 << msw) - 1;
     for (;;) {
 #if BURROW_PTR_BITS == 64
-        for (Int i = 0; i < z.len; i++)
-            z.p[i] = (BigWord)math_rand_rand_uint32(rnd) |
-                     (BigWord)math_rand_rand_uint32(rnd) << 32;
+        for (Int i = 0; i < z.len; i++) {
+            /* Two statements, since C leaves the order of the operands of |
+             * open and MSVC draws the high half first. */
+            BigWord lo = (BigWord)math_rand_rand_uint32(rnd);
+            z.p[i] = lo | (BigWord)math_rand_rand_uint32(rnd) << 32;
+        }
 #else
         for (Int i = 0; i < z.len; i++)
             z.p[i] = (BigWord)math_rand_rand_uint32(rnd);
 #endif
+        /* z has limit.len words and limit is not 0. */
+        /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
         z.p[limit.len - 1] &= mask;
         if (nat_cmp(z, limit) < 0)
             break;
@@ -824,7 +836,7 @@ static Nat nat_exp_nn_montgomery(Nat z, Nat x, Nat y, Nat m) {
         t *= t;
         k0 *= (t + 1);
     }
-    k0 = -k0;
+    k0 = 0 - k0;
 
     /* RR = 2**(2*_W*len(m)) mod m */
     Nat rr = nat_set_word(NAT_NIL, 1);
@@ -993,6 +1005,8 @@ Nat nat_sub_mod_2n(Nat z, Nat x, Nat y, Uint n) {
             nat_copy(t, z);
             z = t;
         }
+        /* cap > len, so there is memory. */
+        /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
         z.p[len] = 0;
     }
     for (Int i = 0; i < z.len; i++)

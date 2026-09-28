@@ -102,12 +102,15 @@ Str bzip2_structural_error_error(Bzip2StructuralError e, Alloc *a) {
     return str_from_bytes(p, plen + e.len);
 }
 
-/* The StructuralErrors the reader gives, in read only memory. */
+/* The StructuralErrors the reader gives, in read only memory. text is pasted
+ * onto the prefix, so it cannot have parentheses around it. */
+/* NOLINTBEGIN(bugprone-macro-parentheses) */
 #define BZIP2_ERROR(name, text)                                                        \
     static const Bzip2StructuralBox name##__box = {                                    \
         {(const Byte *)BZIP2_PREFIX text + sizeof BZIP2_PREFIX - 1, sizeof text - 1},  \
         {(const Byte *)BZIP2_PREFIX text, sizeof BZIP2_PREFIX text - 1}};              \
     static const Error name = {&bzip2_structural_vt, &name##__box}
+/* NOLINTEND(bugprone-macro-parentheses) */
 
 BZIP2_ERROR(bzip2_err_bad_magic, "bad magic value");
 BZIP2_ERROR(bzip2_err_non_huffman, "non-Huffman entropy encoding");
@@ -374,7 +377,7 @@ static Error bzip2_build_node(Bzip2Tree *t, const Bzip2Code *codes, int ncodes,
 static Error bzip2_new_tree(Bzip2Tree *t, const uint8_t *lengths, int n) {
     /* First sort the symbols by ascending code length, using the symbol value
      * to break ties. Every key is different, so any sort gives Go's order. */
-    uint16_t pairs[BZIP2_MAX_SYMBOLS];
+    uint16_t pairs[BZIP2_MAX_SYMBOLS] = {0};
     for (int i = 0; i < n; i++) {
         uint16_t v = (uint16_t)i;
         int j = i;
@@ -438,7 +441,7 @@ static Error bzip2_setup(Bzip2Reader *z, bool need_magic) {
         return bzip2_err_level;
 
     z->file_crc = 0;
-    z->block_size = 100 * 1000 * (Int)(level - '0');
+    z->block_size = (Int)100 * 1000 * (level - '0');
     if (z->block_size > z->tt_len) {
         uint32_t *tt = (uint32_t *)mem_alloc_nozero(
             z->a, sizeof(uint32_t) * (size_t)z->block_size, _Alignof(uint32_t));
@@ -709,7 +712,7 @@ static Error bzip2_read_block(Bzip2Reader *z) {
             repeat_power <<= 1;
             /* This limit of 2 million comes from the bzip2 source code. It
              * keeps repeat from overflowing. */
-            if (repeat > 2 * 1024 * 1024)
+            if (repeat > (Int)2 * 1024 * 1024)
                 return bzip2_err_repeat;
             continue;
         }
@@ -868,11 +871,12 @@ IoReader bzip2_new_reader(Alloc *a, IoReader r) {
         return (IoReader){NULL, NULL};
     z->a = a;
     z->r = r;
-    if (r.vt != NULL && r.vt->self_type == TYPE_BUFIO_READER) {
+    if (r.vt != NULL && r.vt->self_type == TYPE_BUFIO_READER)
         z->direct = (BufioReader *)r.data;
-    } else if ((z->read_byte = burrow__io_read_byte_method(r)) != NULL) {
-        /* z->r is used through read_byte. */
-    } else if (r.vt != NULL) {
+    else
+        z->read_byte = burrow__io_read_byte_method(r);
+    /* With read_byte set, z->r is used through it. */
+    if (z->direct == NULL && z->read_byte == NULL && r.vt != NULL) {
         z->rbuf = bufio_new_reader(a, r);
         if (z->rbuf == NULL) {
             mem_free(a, z, sizeof *z, _Alignof(Bzip2Reader));

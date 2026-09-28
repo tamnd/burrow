@@ -288,6 +288,8 @@ BigWord big_add_mul_vvww(Nat z, Nat x, Nat y, BigWord m, BigWord a) {
 BigWord big_div_ww(BigWord x1, BigWord x0, BigWord y, BigWord m, BigWord *r) {
     Uint s = big_nlz(y);
     if (s != 0) {
+        /* y is not 0, so s is less than _W. */
+        /* NOLINTNEXTLINE(clang-analyzer-core.BitwiseShift) */
         x1 = x1 << s | x0 >> (BIG_W - s);
         x0 <<= s;
         y <<= s;

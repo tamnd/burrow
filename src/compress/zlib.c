@@ -14,6 +14,7 @@
 
 #include "burrow/bufio.h"
 #include "burrow/compress/flate.h"
+#include "burrow/panic.h"
 
 #include "../hash/internal.h"
 
@@ -185,8 +186,10 @@ static Error zlib_reset(void *self, IoReader r, Slice dict) {
     } else {
         /* As in Go, a reused decompressor gets dict whether or not the header
          * asked for one. */
-        Error e =
-            flate_resetter_reset(flate_reader_as_resetter(z->decompressor), z->r, dict);
+        FlateResetter rs = flate_reader_as_resetter(z->decompressor);
+        if (rs.vt == NULL) /* Go's type assertion, which cannot fail here */
+            panic_str(BURROW_S("zlib: decompressor is not a flate.Resetter"));
+        Error e = flate_resetter_reset(rs, z->r, dict);
         if (BURROW_FAILED(e)) {
             z->err = e;
             return e;

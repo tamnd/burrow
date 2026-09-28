@@ -193,7 +193,7 @@ static void syn_out_rune(SynOut *o, Rune r) {
 /* strconv.QuoteToASCII(string(runes)). */
 static void syn_out_quoted_runes(SynOut *o, Slice rune) {
     Int start = o->len;
-    for (Int j = 0; j < rune.len; j++)
+    for (Int j = 0; rune.p != NULL && j < rune.len; j++)
         syn_out_rune(o, ((const Rune *)rune.p)[j]);
     Str q =
         strconv_quote_to_ascii(o->s.a, str_from_bytes(o->buf + start, o->len - start));

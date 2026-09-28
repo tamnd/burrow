@@ -451,7 +451,7 @@ static int flate_huff_init(FlateHuff *h, Alloc *a, const int *lengths, int nleng
         size_t num_links = (size_t)1 << shift;
         int link = nextcode[HUFF_CHUNK_BITS + 1] >> 1;
         size_t need = (size_t)(HUFF_NUM_CHUNKS - link) << shift;
-        if (h->links_cap < need) {
+        if (h->links == NULL || h->links_cap < need) {
             uint32_t *p = a == NULL
                               ? NULL
                               : (uint32_t *)mem_alloc_nozero(a, need * sizeof(uint32_t),
@@ -480,7 +480,7 @@ static int flate_huff_init(FlateHuff *h, Alloc *a, const int *lengths, int nleng
 
     for (int i = 0; i < nlengths; i++) {
         int n = lengths[i];
-        if (n == 0)
+        if (n <= 0)
             continue;
         int c = nextcode[n];
         nextcode[n]++;
@@ -496,8 +496,12 @@ static int flate_huff_init(FlateHuff *h, Alloc *a, const int *lengths, int nleng
             uint32_t *linktab = h->links + ((size_t)value << h->link_shift);
             int width = (int)h->link_mask + 1;
             reverse >>= HUFF_CHUNK_BITS;
+            /* n is past HUFF_CHUNK_BITS on this side of the if. */
+            /* links was sized for every link chunk before this loop. */
+            /* NOLINTBEGIN(clang-analyzer-core.BitwiseShift,clang-analyzer-core.NullDereference) */
             for (int off = reverse; off < width; off += 1 << (n - HUFF_CHUNK_BITS))
                 linktab[off] = chunk;
+            /* NOLINTEND(clang-analyzer-core.BitwiseShift,clang-analyzer-core.NullDereference) */
         }
     }
     return HUFF_OK;
@@ -567,7 +571,7 @@ typedef struct FlateDecompressor {
     bool final;
     Error err;
     Slice to_read;
-    const FlateHuff *hl, *hd;
+    const FlateHuff *hlit, *hdist;
     Int copy_len;
     Int copy_dist;
 } FlateDecompressor;
@@ -801,8 +805,8 @@ static void flate_finish_block(FlateDecompressor *f) {
     f->step = STEP_NEXT_BLOCK;
 }
 
-/* Decode a single Huffman block from f. hl and hd are the Huffman states for
- * the lit/length values and the distance values, respectively. If hd is NULL,
+/* Decode a single Huffman block from f. hlit and hdist are the Huffman states for
+ * the lit/length values and the distance values, respectively. If hdist is NULL,
  * using the fixed distance encoding associated with fixed Huffman blocks. */
 static void flate_huffman_block(FlateDecompressor *f) {
     enum { STATE_INIT, STATE_DICT };
@@ -815,7 +819,7 @@ read_literal:
     /* Read literal and/or (length, distance) according to RFC section
      * 3.2.3. */
     {
-        int v = flate_huff_sym(f, f->hl, &err);
+        int v = flate_huff_sym(f, f->hlit, &err);
         if (v < 0) {
             f->err = err;
             return;
@@ -873,7 +877,7 @@ read_literal:
         }
 
         int dist;
-        if (f->hd == NULL) {
+        if (f->hdist == NULL) {
             while (f->nb < 5) {
                 if (!flate_more_bits(f, &err)) {
                     f->err = err;
@@ -884,7 +888,7 @@ read_literal:
             f->b >>= 5;
             f->nb -= 5;
         } else {
-            dist = flate_huff_sym(f, f->hd, &err);
+            dist = flate_huff_sym(f, f->hdist, &err);
             if (dist < 0) {
                 f->err = err;
                 return;
@@ -1017,8 +1021,8 @@ static void flate_next_block(FlateDecompressor *f) {
         break;
     case 1:
         /* compressed, fixed Huffman tables */
-        f->hl = &flate_fixed;
-        f->hd = NULL;
+        f->hlit = &flate_fixed;
+        f->hdist = NULL;
         flate_huffman_block(f);
         break;
     case 2:
@@ -1026,8 +1030,8 @@ static void flate_next_block(FlateDecompressor *f) {
         f->err = flate_read_huffman(f);
         if (BURROW_FAILED(f->err))
             break;
-        f->hl = &f->h1;
-        f->hd = &f->h2;
+        f->hlit = &f->h1;
+        f->hdist = &f->h2;
         flate_huffman_block(f);
         break;
     default:
@@ -1125,8 +1129,8 @@ static void flate_clear_state(FlateDecompressor *f) {
     f->final = false;
     f->err = BURROW_NO_ERROR;
     f->to_read = (Slice){NULL, 0, 0, NULL};
-    f->hl = NULL;
-    f->hd = NULL;
+    f->hlit = NULL;
+    f->hdist = NULL;
     f->copy_len = 0;
     f->copy_dist = 0;
 }

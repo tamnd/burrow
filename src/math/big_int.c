@@ -43,7 +43,7 @@ void bi_set_int64(BigInt *z, int64_t x) {
     uint64_t u = (uint64_t)x;
     if (x < 0) {
         neg = true;
-        u = -u;
+        u = 0 - u;
     }
     z->abs = nat_set_uint64(z->abs, u);
     z->neg = neg;
@@ -402,6 +402,8 @@ static void big_lehmer_simulate(const BigInt *A, const BigInt *B, BigWord *pu0,
 
     /* extract the top Word of bits from A and B */
     Uint h = big_nlz(A->abs.p[n - 1]);
+    /* A is normalised, so its top word is not 0 and h is less than _W. */
+    /* NOLINTNEXTLINE(clang-analyzer-core.BitwiseShift) */
     a1 = A->abs.p[n - 1] << h | (h == 0 ? 0 : A->abs.p[n - 2] >> (BIG_W - h));
     /* B may have implicit zero words in the high bits if the lengths differ */
     if (n == m)
@@ -1210,8 +1212,7 @@ static bool big_probably_prime_lucas(Nat n) {
         }
         u1 = nat_sub(u1, u1, u2);
         Nat t3 = vk1; /* steal vk1, no longer needed below */
-        vk1 = NAT_NIL;
-        u2 = nat_div(u2, t3, u1, n, &t3);
+        (void)nat_div(u2, t3, u1, n, &t3);
         if (t3.len == 0)
             return true;
     }
@@ -1520,7 +1521,7 @@ Int big_int_cmp_abs(const BigInt *x, const BigInt *y) {
 int64_t big_int_int64(const BigInt *x) {
     uint64_t v = big_low64(x->abs);
     if (x->neg)
-        v = -v;
+        v = 0 - v;
     return (int64_t)v;
 }
 
@@ -1577,7 +1578,7 @@ Slice big_int_bytes(const BigInt *x, Alloc *a) {
     Int i = nat_bytes(x->abs, buf);
     /* buf[i:], moved to the front so that the slice starts where its memory
      * does. */
-    if (i > 0)
+    if (i > 0 && buf.p != NULL)
         memmove(buf.p, (Byte *)buf.p + i, (size_t)(n - i));
     buf.len = n - i;
     return buf;
@@ -1957,7 +1958,7 @@ Slice big_int_gob_encode(const BigInt *x, Alloc *a, Error *err) {
     if (x->neg)
         b |= 1;
     ((Byte *)buf.p)[i] = b;
-    if (i > 0)
+    if (i > 0 && buf.p != NULL)
         memmove(buf.p, (Byte *)buf.p + i, (size_t)(n - i));
     buf.len = n - i;
     return buf;

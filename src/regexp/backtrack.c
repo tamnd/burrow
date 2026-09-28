@@ -29,8 +29,8 @@ typedef struct RxBtJob {
 } RxBtJob;
 
 #define RX_VISITED_BITS 32
-#define RX_MAX_BACKTRACK_PROG 500            /* len(prog.Inst) <= max */
-#define RX_MAX_BACKTRACK_VECTOR (256 * 1024) /* bit vector size <= max (bits) */
+#define RX_MAX_BACKTRACK_PROG 500                 /* len(prog.Inst) <= max */
+#define RX_MAX_BACKTRACK_VECTOR ((Int)256 * 1024) /* bit vector size <= max (bits) */
 #define RX_VISITED_WORDS (RX_MAX_BACKTRACK_VECTOR / RX_VISITED_BITS)
 
 struct RxBitState {

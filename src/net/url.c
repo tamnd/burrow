@@ -1794,9 +1794,9 @@ static Int url_clean(Byte *dst, Str src) {
         dotdot = 1;
     }
     while (r < n) {
-        if (src.p[r] == '/') {
-            r++;
-        } else if (src.p[r] == '.' && (r + 1 == n || src.p[r + 1] == '/')) {
+        if (src.p[r] == '/' ||
+            (src.p[r] == '.' && (r + 1 == n || src.p[r + 1] == '/'))) {
+            /* empty path element, or . */
             r++;
         } else if (src.p[r] == '.' && src.p[r + 1] == '.' &&
                    (r + 2 == n || src.p[r + 2] == '/')) {

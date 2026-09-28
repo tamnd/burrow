@@ -754,7 +754,7 @@ static const Rune syn_code16[] = {0x30, 0x39, 0x41, 0x5a, 0x5f, 0x5f, /* word */
                                   0x61, 0x7a};
 static const Rune syn_code17[] = {0x30, 0x39, 0x41, 0x46, 0x61, 0x66}; /* xdigit */
 
-#define SYN_GROUP(n, s, c) {n, s, c, (Int)(sizeof c / sizeof(Rune))}
+#define SYN_GROUP(n, s, c) {n, s, c, (Int)(sizeof(c) / sizeof(Rune))}
 
 static const SynGroup syn_perl_groups[] = {
     SYN_GROUP("\\d", +1, syn_code1), SYN_GROUP("\\D", -1, syn_code1),

@@ -18,7 +18,10 @@ Checks: >
   performance-*,
   portability-*,
   readability-*,
+  -bugprone-casting-through-void,
   -bugprone-easily-swappable-parameters,
+  -bugprone-multi-level-implicit-pointer-conversion,
+  -bugprone-not-null-terminated-result,
   -cert-err33-c,
   -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
   -misc-include-cleaner,
@@ -38,10 +41,25 @@ Checks: >
 
 # Why each of those is off:
 #
+#   bugprone-casting-through-void
+#     It wants reinterpret_cast, which C does not have. Going through void * is
+#     how C carves one block of memory into the structs and arrays that live in
+#     it, and it is what keeps -Wcast-align quiet about a pointer whose
+#     alignment was worked out by hand a line earlier.
+#
 #   bugprone-easily-swappable-parameters
 #     str_eq(Str a, Str b) is not a design flaw, it is a comparison. Go's
 #     signatures come across as they are and most of them have two parameters of
 #     the same type because the operation has two operands.
+#
+#   bugprone-multi-level-implicit-pointer-conversion
+#     It flags memcpy and memmove on arrays of pointers, which is how C moves
+#     a slice of them, and a cast to void * at every call would say nothing
+#     the call does not already say.
+#
+#   bugprone-not-null-terminated-result
+#     It assumes a memcpy of bytes is building a C string. A Str is a pointer
+#     and a length, as in Go, and has no terminator to forget.
 #
 #   cert-err33-c
 #     The fatal error path writes its message with fputs and does not look at

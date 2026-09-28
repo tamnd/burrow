@@ -242,10 +242,10 @@ static float defl_fast_log2(float val) {
     ux &= -0x7f800001;
     ux += 127 << 23;
     float uval = math_float32frombits((uint32_t)ux);
-    float t = -0.34484843f * uval;
-    t = t + 2.02466578f;
+    float t = -0.34484843F * uval;
+    t = t + 2.02466578F;
     t = t * uval;
-    t = t - 0.67487759f;
+    t = t - 0.67487759F;
     log2 += t;
     return log2;
 }
@@ -268,7 +268,7 @@ static Int defl_tokens_estimated_bits(const DeflTokens *t) {
     Int n_matches = 0;
     Int total = (Int)t->n + t->n_filled;
     if (total > 0) {
-        float inv_total = 1.0f / (float)total;
+        float inv_total = 1.0F / (float)total;
         for (int i = 0; i < 256; i++) {
             uint16_t v = t->lit_hist[i];
             if (v > 0)
@@ -286,7 +286,7 @@ static Int defl_tokens_estimated_bits(const DeflTokens *t) {
         }
     }
     if (n_matches > 0) {
-        float inv_total = 1.0f / (float)n_matches;
+        float inv_total = 1.0F / (float)n_matches;
         for (int i = 0; i < DEFL_OFFSET_CODE_COUNT; i++) {
             uint16_t v = t->off_hist[i];
             if (v > 0) {
@@ -428,7 +428,7 @@ static void defl_generate(DeflHuffEnc *h, const uint16_t *freq, Int nfreq,
 static void defl_init_fixed(void *arg) {
     (void)arg;
     /* The fixed literal table of RFC 1951 3.2.6. */
-    for (uint16_t ch = 0; ch < DEFL_LITERAL_COUNT; ch++) {
+    for (int ch = 0; ch < DEFL_LITERAL_COUNT; ch++) {
         uint16_t bits;
         uint8_t size;
         if (ch < 144) {
@@ -448,8 +448,9 @@ static void defl_init_fixed(void *arg) {
             defl_new_hcode(defl_reverse_bits(bits, size), size);
     }
     /* The fixed offset table: five bits each. */
-    for (uint16_t ch = 0; ch < DEFL_OFFSET_CODE_COUNT; ch++)
-        defl_fixed_off_enc.codes[ch] = defl_new_hcode(defl_reverse_bits(ch, 5), 5);
+    for (int ch = 0; ch < DEFL_OFFSET_CODE_COUNT; ch++)
+        defl_fixed_off_enc.codes[ch] =
+            defl_new_hcode(defl_reverse_bits((uint16_t)ch, 5), 5);
     /* The offset table huffman-only blocks send, with only offset 0 in it. */
     uint16_t off_freq[DEFL_OFFSET_CODE_COUNT] = {1};
     defl_generate(&defl_huff_off_enc, off_freq, DEFL_OFFSET_CODE_COUNT, 15);
@@ -1442,7 +1443,7 @@ static void defl_bw_write_block_huff(DeflBitWriter *w, bool eof, const Byte *inp
 
     /* Add everything as literals. We have to estimate the header size.
      * Assume header is around 70 bytes. */
-    const Int guess_header_size_bits = 70 * 8;
+    const Int guess_header_size_bits = (Int)70 * 8;
     defl_histogram(input, input_len, w->literal_freq);
     bool storable;
     Int ssize = defl_bw_stored_size(input, input_len, &storable);
@@ -1778,7 +1779,7 @@ static void defl_encode_l1(DeflFast *e, DeflTokens *dst, const Byte *in, Int in_
     for (;;) {
         enum { SKIP_LOG = 5, DO_EVERY = 2 };
 
-        int32_t next_s = s;
+        int32_t next_s;
         int32_t candidate;
         int32_t t;
         for (;;) {
@@ -2079,14 +2080,13 @@ static void defl_encode_l3(DeflFast *e, DeflTokens *dst, const Byte *in, Int in_
                 if (l2 > l1)
                     candidate = candidates.prev;
                 break;
-            } else {
-                /* We only check if value mismatches. Offset will always be
-                 * invalid in other cases. */
-                candidate = candidates.prev;
-                if (candidate > min_offset &&
-                    (uint32_t)cv == defl_load_le32(src, candidate - e->cur))
-                    break;
             }
+            /* We only check if value mismatches. Offset will always be
+             * invalid in other cases. */
+            candidate = candidates.prev;
+            if (candidate > min_offset &&
+                (uint32_t)cv == defl_load_le32(src, candidate - e->cur))
+                break;
             cv = now;
         }
 
@@ -3705,7 +3705,7 @@ static Error defl_init(FlateWriter *d, IoWriter w, int level) {
             if (d->h == NULL)
                 return burrow_err_out_of_memory;
         }
-        d->window_len = 2 * DEFL_WINDOW_SIZE;
+        d->window_len = (Int)2 * DEFL_WINDOW_SIZE;
         defl_init_deflate(d);
         d->fill_deflate = true;
         d->step = DEFL_STEP_LAZY;

@@ -78,14 +78,17 @@ static Slice gen_bytes(Alloc *a, const char *const *lines) {
     return out;
 }
 
+/* By hand, since cosmopolitan's sscanf does not count a leading 0 toward
+ * the width of %2x. */
+static unsigned nibble(char c) {
+    return c <= '9' ? (unsigned)(c - '0') : (unsigned)((c | 0x20) - 'a' + 10);
+}
+
 static Slice hex_bytes(Alloc *a, const char *hex) {
     Int n = (Int)strlen(hex) / 2;
     Byte *p = (Byte *)mem_alloc(a, (size_t)n + 1, 1);
-    for (Int i = 0; i < n; i++) {
-        unsigned v;
-        sscanf(hex + 2 * i, "%2x", &v);
-        p[i] = (Byte)v;
-    }
+    for (Int i = 0; i < n; i++)
+        p[i] = (Byte)(nibble(hex[2 * i]) << 4 | nibble(hex[2 * i + 1]));
     return slice_from(p, n, n, TYPE_BYTE);
 }
 

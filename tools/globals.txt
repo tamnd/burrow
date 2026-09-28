@@ -178,6 +178,7 @@ global	src/compress/deflate.c	defl_fixed_lit_enc	tables	The fixed literal and le
 global	src/compress/deflate.c	defl_fixed_off_enc	tables	The fixed offset encoder, built once under defl_fixed_once and only read after that.
 global	src/compress/deflate.c	defl_huff_off_enc	tables	The offset encoder huffman-only blocks use, built once under defl_fixed_once and only read after that.
 global	src/compress/deflate.c	defl_fixed_once	tables	A SyncOnce, which is the synchronisation for the three encoders above.
+global	src/math/big_nat.c	big_no_words	marker	What an empty Nat points at, so the pointer is never NULL. Its length and capacity are 0, so nothing reads or writes through it.
 global	src/math/big_nat.c	big_tls	allocator	Thread local. The scratch arenas math/big works in, one set per thread, so a calculation on one thread never waits on another. Go gets the same effect from sync.Pool.
 global	src/math/big_natconv.c	big_cache10_mu	tables	This is the lock over the table below, held while the table is extended and while a conversion reads it.
 global	src/math/big_natconv.c	big_cache10	tables	The powers of ten that decimal conversion of very long numbers divides by, built as far as the longest number seen so far. Go keeps the same table as cacheBase10 behind a mutex.

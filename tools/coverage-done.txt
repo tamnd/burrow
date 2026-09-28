@@ -62,3 +62,4 @@ compress/lzw
 compress/zlib
 regexp/syntax
 regexp
+mime/quotedprintable

@@ -1,6 +1,6 @@
 # Compression
 
-`burrow/compress/flate.h` is Go's `compress/flate`, the DEFLATE format of RFC 1951. It is the compression inside gzip, zlib, zip and PNG, without any of their headers or checksums around it. It reads and writes DEFLATE, and the writer's output is the same as Go's byte for byte at every level. `compress/gzip` and `compress/zlib` will sit on top of both.
+`burrow/compress/flate.h` is Go's `compress/flate`, the DEFLATE format of RFC 1951. It is the compression inside gzip, zlib, zip and PNG, without any of their headers or checksums around it. It reads and writes DEFLATE, and the writer's output is the same as Go's byte for byte at every level. `burrow/compress/zlib.h` puts the zlib header and checksum on top of it, and `compress/gzip` will follow.
 
 ## Reading
 
@@ -76,3 +76,69 @@ printf("%d bytes in, %d out\n", (int)line.len, (int)bytes_buffer_len(&out));
 That prints `27 bytes in, 13 out`, and the 13 bytes are the same `hello` the reading example started from, because the writer makes exactly what Go's does. Closing does not close the `IoWriter` underneath. `flate_writer_flush` writes out everything so far followed by an empty stored block, so the other end can decode all of it before the stream ends, which is what network protocols want. It costs a few bytes each time.
 
 A writer holds between about 400 KiB and 1 MiB depending on the level, so reuse one with `flate_writer_reset` rather than making a new one per stream. `flate_new_writer_dict` takes a preset dictionary, which helps a lot on short inputs that look like the dictionary, and the stream can then only be read with `flate_new_reader_dict` and the same bytes. Once a write to the underlying writer fails, every later call gives that same error until the writer is reset.
+
+## zlib
+
+`burrow/compress/zlib.h` is Go's `compress/zlib`, the format of RFC 1950. It is DEFLATE with a two byte header in front and an Adler-32 checksum of the uncompressed data at the end, and it is what PNG uses inside its image data and what HTTP calls `deflate`. The writer works like the flate one:
+
+<!-- example: ../examples/compress/zlib.c#write -->
+```c
+BytesBuffer out = BYTES_BUFFER(a);
+ZlibWriter *zw = zlib_new_writer(a, bytes_buffer_as_io_writer(&out));
+if (zw == NULL)
+    return 1;
+zlib_writer_write(zw, slice_from((char[]){"hello, world\n"}, 13, 13, TYPE_BYTE),
+                  &err);
+err = zlib_writer_close(zw);
+zlib_writer_free(zw);
+printf("%d bytes\n", (int)bytes_buffer_len(&out));
+```
+
+That prints `26 bytes`, the same 26 that Go's `ExampleNewWriter` shows. A line this short does not compress, so most of it is a stored block. `zlib_new_writer` uses the default level, `zlib_new_writer_level` takes one from -2 to 9 as flate does, and a level outside that gives `zlib: invalid compression level: 10`. The compressor is only allocated on the first write, flush or close, and `zlib_writer_reset` keeps it for the next stream.
+
+Reading checks the header when the reader is made, so a bad one comes back from `zlib_new_reader` straight away as `zlib_err_header`:
+
+<!-- example: ../examples/compress/zlib.c#read -->
+```c
+BytesReader in;
+bytes_reader_reset(&in, bytes_buffer_bytes(&out));
+IoReadCloser rc = zlib_new_reader(a, bytes_reader_as_io_reader(&in), &err);
+if (BURROW_FAILED(err))
+    return 1;
+Slice text = io_read_all(a, io_read_closer_as_io_reader(rc), &err);
+zlib_reader_free(rc);
+```
+
+That prints `hello, world`. The checksum is checked when the compressed data runs out, and a mismatch gives `zlib_err_checksum` instead of `io_eof`. As with flate, the reader never reads past the checksum when its input has `ReadByte`.
+
+A stream written with a preset dictionary says so in its header, along with the dictionary's checksum. Reading one without the dictionary, or with the wrong one, fails when the reader is made:
+
+<!-- example: ../examples/compress/zlib.c#dict -->
+```c
+Slice dict = slice_from((char[]){"hello, "}, 7, 7, TYPE_BYTE);
+bytes_buffer_reset(&out);
+zw = zlib_new_writer_level_dict(a, bytes_buffer_as_io_writer(&out),
+                                ZLIB_BEST_COMPRESSION, dict, &err);
+if (zw == NULL)
+    return 1;
+zlib_writer_write(zw, slice_from((char[]){"hello, hello\n"}, 13, 13, TYPE_BYTE),
+                  &err);
+err = zlib_writer_close(zw);
+zlib_writer_free(zw);
+
+bytes_reader_reset(&in, bytes_buffer_bytes(&out));
+rc = zlib_new_reader(a, bytes_reader_as_io_reader(&in), &err);
+if (errors_is(err, zlib_err_dictionary))
+    printf("%.*s\n", (int)error_text(err).len, (const char *)error_text(err).p);
+
+bytes_reader_reset(&in, bytes_buffer_bytes(&out));
+rc = zlib_new_reader_dict(a, bytes_reader_as_io_reader(&in), dict, &err);
+if (BURROW_FAILED(err))
+    return 1;
+text = io_read_all(a, io_read_closer_as_io_reader(rc), &err);
+zlib_reader_free(rc);
+```
+
+That prints `zlib: invalid dictionary` and then `hello, hello`. `zlib_reader_as_resetter` gives a `ZlibResetter`, which points a reader at a new stream and dictionary without allocating again.
+
+The writer makes the same bytes as Go's at every level, with and without a dictionary, with one exception. At levels 7 to 9 with a dictionary, when the first block does not compress and ends up stored, Go 1.27 writes the dictionary into that stored block as if it were data, so the stream does not read back as what was written, even with Go's own reader. burrow makes the same choices Go does and leaves the dictionary out of that block, so its stream is the dictionary's length shorter than Go's and reads back correctly. The same goes for `flate_new_writer_dict`.

@@ -13,6 +13,8 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "internal.h"
+
 enum {
     /* adler_mod is the largest prime that is less than 65536. */
     adler_mod = 65521,
@@ -28,7 +30,7 @@ typedef struct Adler32Digest {
 } Adler32Digest;
 
 /* Add p to the running checksum d. */
-static uint32_t adler32_update(uint32_t d, const Byte *p, Int n) {
+uint32_t burrow__adler32_update(uint32_t d, const Byte *p, Int n) {
     uint32_t s1 = d & 0xffff, s2 = d >> 16;
     while (n > 0) {
         Int m = n > adler_nmax ? adler_nmax : n;
@@ -56,7 +58,7 @@ static uint32_t adler32_update(uint32_t d, const Byte *p, Int n) {
 
 static Int adler32_write(void *self, Slice p, Error *err) {
     Adler32Digest *d = self;
-    d->d = adler32_update(d->d, (const Byte *)p.p, p.len);
+    d->d = burrow__adler32_update(d->d, (const Byte *)p.p, p.len);
     BURROW_OUT(err, BURROW_NO_ERROR);
     return p.len;
 }
@@ -106,5 +108,5 @@ HashHash32 adler32_new(Alloc *a) {
 }
 
 uint32_t adler32_checksum(Slice data) {
-    return adler32_update(1, (const Byte *)data.p, data.len);
+    return burrow__adler32_update(1, (const Byte *)data.p, data.len);
 }

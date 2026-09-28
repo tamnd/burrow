@@ -44,6 +44,7 @@ category	tables	Lookup tables too big to write out as constants, built the first
 category	sink	Bytes that are written and never read, so racing writers cannot change anything anyone sees.
 category	intern	unique's canonical values, which are process wide by definition, as Go's are.
 category	godebug	Settings read from the GODEBUG environment variable the first time they are needed. Go reads the same ones once per process through internal/godebug.
+category	mime-types	mime's table of file extensions and media types. Go keeps it as package level maps behind a sync.Once and a lock, and it is process wide because AddExtensionType changes what every caller of TypeByExtension sees.
 category	thread-exit	The hook that runs code as a thread exits. The platform has one per process and every library that keeps memory per thread shares it.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
@@ -187,3 +188,13 @@ global	src/pal/thread_posix.c	thread_exit_once	thread-exit	This is the synchroni
 global	src/pal/thread_posix.c	thread_exit_ok	thread-exit	Whether the key could be made. Written once under thread_exit_once and only read after it.
 global	src/pal/thread_windows.c	thread_exit_fls	thread-exit	Windows only. The fiber local slot whose callback runs what pal_thread_on_exit registered. Written once under thread_exit_init_once below and only read after it.
 global	src/pal/thread_windows.c	thread_exit_init_once	thread-exit	Windows only. This is the synchronisation for the slot above.
+global	src/mime/type.c	mt_mu	mime-types	The lock over everything below. Lookups take it for reading and changes take it for writing.
+global	src/mime/type.c	mt_once	mime-types	This is the synchronisation for filling the table from the system on first use.
+global	src/mime/type.c	mt_ready	mime-types	Whether the table was set up. Written under mt_mu and read under it.
+global	src/mime/type.c	mt_arena	mime-types	Where the table's strings live. Only written under mt_mu, and nothing in it is ever freed, which is why a borrowed result lasts as long as the program.
+global	src/mime/type.c	mt_types	mime-types	Extension to media type. Only touched under mt_mu.
+global	src/mime/type.c	mt_lower	mime-types	The same map with the extensions in lower case. Only touched under mt_mu.
+global	src/mime/type.c	mt_exts	mime-types	Media type to the head of its list of extensions in mt_list. Only touched under mt_mu.
+global	src/mime/type.c	mt_list	mime-types	The extension lists, linked through indexes. Only touched under mt_mu.
+global	src/mime/type.c	mt_list_len	mime-types	How much of mt_list is used. Only touched under mt_mu.
+global	src/mime/type.c	mt_list_cap	mime-types	How big mt_list is. Only touched under mt_mu.

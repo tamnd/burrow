@@ -44,3 +44,4 @@ docs/guides/text.md
 docs/guides/net.md
 docs/guides/compress.md
 docs/guides/big.md
+docs/guides/mime.md

@@ -96,3 +96,11 @@ sort: func SliceIsSorted: takes a Slice where Go takes any
 # include/burrow/text/scanner.h: Go's String has a value receiver, and the
 # Scanner holds a buffer of over a kilobyte, so the C method takes a pointer.
 text/scanner: method (Scanner) String: takes a const pointer since the struct holds a 1KB buffer
+
+# include/burrow/compress/lzw.h: Go's NewReader and NewWriter return interfaces
+# whose values are always a *Reader and a *Writer, and code that wants Reset has
+# to type assert to get them back. Here they return the concrete type, which is
+# also what lzw_reader_free and lzw_writer_free take, and the interface views
+# come from lzw_reader_as_io_read_closer and lzw_writer_as_io_write_closer.
+compress/lzw: func NewReader: returns the concrete LzwReader, which has the IoReadCloser view
+compress/lzw: func NewWriter: returns the concrete LzwWriter, which has the IoWriteCloser view

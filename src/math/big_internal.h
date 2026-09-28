@@ -140,7 +140,12 @@ extern const BigWord big_nat_ten_w[1];
 /* ----------------------------------------------------------- word arithmetic */
 
 static inline BigWord big_mul_ww(BigWord x, BigWord y, BigWord *lo) {
-    return bits_mul(x, y, lo);
+    /* Through a local, because bits_mul tests lo for NULL, and passing it
+     * &z.p[i] straight in lets gcc conclude z.p may be NULL. */
+    BigWord l;
+    BigWord h = bits_mul(x, y, &l);
+    *lo = l;
+    return h;
 }
 
 static inline Uint big_nlz(BigWord x) {

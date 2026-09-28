@@ -45,7 +45,7 @@ void *syn_stack_push(SynScratch *s, SynStack *k) {
     if (k->len == k->cap) {
         Int ncap = k->cap < 16 ? 16 : k->cap * 2;
         Byte *q =
-            (Byte *)syn_scratch_alloc(s, (size_t)ncap * k->elem, _Alignof(max_align_t));
+            (Byte *)syn_scratch_alloc(s, (size_t)ncap * k->elem, BURROW_ALIGN_MAX);
         if (k->len > 0)
             memcpy(q, k->p, (size_t)k->len * k->elem);
         k->p = q;

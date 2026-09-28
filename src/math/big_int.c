@@ -43,7 +43,7 @@ void bi_set_int64(BigInt *z, int64_t x) {
     uint64_t u = (uint64_t)x;
     if (x < 0) {
         neg = true;
-        u = -u;
+        u = 0 - u;
     }
     z->abs = nat_set_uint64(z->abs, u);
     z->neg = neg;
@@ -1520,7 +1520,7 @@ Int big_int_cmp_abs(const BigInt *x, const BigInt *y) {
 int64_t big_int_int64(const BigInt *x) {
     uint64_t v = big_low64(x->abs);
     if (x->neg)
-        v = -v;
+        v = 0 - v;
     return (int64_t)v;
 }
 

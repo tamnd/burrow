@@ -68,9 +68,14 @@ void big_oom(void) {
     panic_str(BURROW_S("math/big: out of memory"));
 }
 
+/* What an empty Nat points at. Nothing is ever read or written through it,
+ * since its length and capacity are 0, but a pointer that is never NULL lets gcc
+ * see that the words a caller indexes are always there. */
+static BigWord big_no_words[1];
+
 static BigWord *big_words(Arena *ar, BigScratch *s, Int n) {
     if (n <= 0)
-        return NULL;
+        return big_no_words;
     size_t size = (size_t)n * sizeof(BigWord);
     if ((size_t)n > SIZE_MAX / sizeof(BigWord))
         big_oom();
@@ -824,7 +829,7 @@ static Nat nat_exp_nn_montgomery(Nat z, Nat x, Nat y, Nat m) {
         t *= t;
         k0 *= (t + 1);
     }
-    k0 = -k0;
+    k0 = 0 - k0;
 
     /* RR = 2**(2*_W*len(m)) mod m */
     Nat rr = nat_set_word(NAT_NIL, 1);

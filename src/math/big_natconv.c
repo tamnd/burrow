@@ -413,7 +413,7 @@ Str nat_itoa(Nat x, bool neg, int base) {
     Byte *s = (Byte *)big_alloc((slen + BIG_S - 1) / BIG_S);
 
     BigWord b = (BigWord)base;
-    if (b == (b & -b)) {
+    if (b == (b & (0 - b))) {
         /* A power of two: the digits are groups of bits. */
         Uint shift = (Uint)bits_trailing_zeros(b); /* shift > 0 because b >= 2 */
         BigWord mask = ((BigWord)1 << shift) - 1;

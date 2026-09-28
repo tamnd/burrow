@@ -4,6 +4,21 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.8 (2026-09-28)
+
+Random numbers and DEFLATE.
+
+### Added
+
+- `math/rand` and `math/rand/v2`, with the same numbers as Go for the same seed, method for method, including Go's lagged Fibonacci source, PCG, ChaCha8 and `Zipf` (#231).
+- `compress/flate`, the decompressor (#235) and the compressor (#236). The compressor's output matches Go's byte for byte at every level from -2 to 9, which the tests check against 840 streams Go wrote.
+
+### Changed
+
+- ChaCha8 now runs its four blocks in vector lanes, as Go's assembly does (#232).
+- The PCG step and the v1 source compile to tighter code on arm64 (#233).
+- The package level bounded functions in `math/rand/v2` draw from the runtime generator directly instead of checking the source on every call (#234).
+
 ## v0.1.7 (2026-09-26)
 
 Text scanning, the network packages that are pure computation, and a round of CI fixes.

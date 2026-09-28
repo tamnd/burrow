@@ -54,7 +54,9 @@ static Slice bufio_bytes_of(Byte *p, Int len) {
 
 /* ------------------------------------------------------------------ Reader */
 
-#define BUFIO_READER_METHODS(M, T) M(T, WriteTo, bufio_reader_write_to, IO_SIG_WRITE_TO)
+#define BUFIO_READER_METHODS(M, T)                                                     \
+    M(T, ReadByte, bufio_reader_read_byte, IO_SIG_READ_BYTE)                           \
+    M(T, WriteTo, bufio_reader_write_to, IO_SIG_WRITE_TO)
 BURROW_METHODS_DEFINE(BufioReader, BUFIO_READER_METHODS);
 
 static const Type bufio_reader_desc = {

@@ -42,3 +42,4 @@ docs/guides/containers.md
 docs/guides/sorting.md
 docs/guides/text.md
 docs/guides/net.md
+docs/guides/compress.md

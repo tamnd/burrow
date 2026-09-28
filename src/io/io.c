@@ -301,6 +301,7 @@ const Type burrow_type_IoErrorArg = {
 static const Str io_name_write_to = {(const Byte *)"WriteTo", 7};
 static const Str io_name_read_from = {(const Byte *)"ReadFrom", 8};
 static const Str io_name_write_string = {(const Byte *)"WriteString", 11};
+static const Str io_name_read_byte = {(const Byte *)"ReadByte", 8};
 
 /* The method called name on t, if it has one and it has the shape of the
  * interface being asked about: one argument of type in0, the error pointer,
@@ -375,6 +376,20 @@ bool burrow__io_try_write_string(IoWriter w, Str s, Int *n, Error *err) {
     BURROW_OUT(n, out);
     BURROW_OUT(err, e);
     return true;
+}
+
+const Method *burrow__io_read_byte_method(IoReader r) {
+    if (r.vt == NULL || r.vt->self_type == NULL)
+        return NULL;
+    const Method *m = type_method_by_name(r.vt->self_type, io_name_read_byte);
+    if (m == NULL || m->ftype == NULL || m->thunk == NULL)
+        return NULL;
+    const Type *f = m->ftype;
+    if (type_num_in(f) != 1 || type_num_out(f) != 1)
+        return NULL;
+    if (type_in(f, 0) != &burrow_type_IoErrorArg || type_out(f, 0) != TYPE_OF(Byte))
+        return NULL;
+    return m;
 }
 
 /* ---------------------------------------------------------------- functions */

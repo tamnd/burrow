@@ -171,3 +171,5 @@ global	src/math/rand.c	rand_runtime_rand	package-vars	Set up under rand_global_l
 global	src/math/rand.c	rand_runtime_lock	package-vars	The lock itself. It covers the read position of rand_runtime_rand, as the mutex in Go's runtimeSource does.
 global	src/math/rand.c	rand_locked_rand	package-vars	Set up under rand_global_lock. Its read position and its source's state change only under rand_locked_source's own lock, which is Go's lockedSource.
 global	src/math/rand.c	rand_locked_source	package-vars	Its generator state is only touched with its lock held.
+global	src/compress/flate.c	flate_fixed	tables	The fixed Huffman decoder, built once under flate_fixed_once and only read after that.
+global	src/compress/flate.c	flate_fixed_once	tables	A SyncOnce, which is the synchronisation for flate_fixed.

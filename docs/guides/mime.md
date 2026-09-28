@@ -1,10 +1,10 @@
 # MIME
 
-Go's `mime` packages are coming over one at a time. `burrow/mime/quotedprintable.h` is done, and so is the part of `burrow/mime.h` that deals with media types and the encoded words of mail headers. The extension table of `mime` (`TypeByExtension` and friends) and `mime/multipart` will follow.
+Go's `mime` packages are coming over one at a time. `burrow/mime.h` and `burrow/mime/quotedprintable.h` are done, and `mime/multipart` will follow.
 
 ## mime
 
-`burrow/mime.h` is Go's `mime` package, minus the extension table for now.
+`burrow/mime.h` is Go's `mime` package: media types, the table that maps file extensions to them, and the encoded words of mail headers.
 
 ### Media types
 
@@ -47,6 +47,40 @@ fmt_printf_v("%s\n", mime_format_media_type(a, BURROW_S("attachment"), m));
 ```
 
 That prints `attachment; size=1024; filename*=utf-8''r%C3%A9sum%C3%A9.pdf`. The parameters are sorted by name as given, so `Size` sorts before `filename`, and then the names are lower-cased. A value that is not ASCII is written the RFC 2231 way. A type or a name that is not a valid token gives the empty string.
+
+### Extensions
+
+`mime_type_by_extension` gives the media type for a file extension, and `mime_extensions_by_type` goes the other way:
+
+<!-- example: ../examples/mime/mime.c#extensions -->
+```c
+fmt_printf_v("%s\n", mime_type_by_extension(BURROW_S(".HTML")));
+
+mime_add_extension_type(BURROW_S(".bw"), BURROW_S("application/x-burrow"));
+mime_add_extension_type(BURROW_S(".burrow"), BURROW_S("application/x-burrow"));
+mime_add_extension_type(BURROW_S(".note"), BURROW_S("text/x-note"));
+fmt_printf_v("%s\n", mime_type_by_extension(BURROW_S(".note")));
+Slice exts = mime_extensions_by_type(a, BURROW_S("application/x-burrow"), &err);
+for (Int i = 0; i < exts.len; i++)
+    fmt_printf_v("%s\n", ((const Str *)exts.p)[i]);
+
+err = mime_add_extension_type(BURROW_S("bw"), BURROW_S("application/x-burrow"));
+fmt_printf_v("error: %v\n", err);
+```
+
+That prints:
+
+```
+text/html; charset=utf-8
+text/x-note; charset=utf-8
+.burrow
+.bw
+error: mime: extension "bw" missing leading dot
+```
+
+The table starts as Go's built in one, and on first use it adds what the system knows. On Linux and the BSDs that is the shared MIME database's `globs2` file when there is one, and the `mime.types` files of Apache and friends when there is not. On macOS it is the `mime.types` files. On Windows it is the `Content Type` values under `HKEY_CLASSES_ROOT`, read through `advapi32.dll`, which is loaded when the table is first used rather than linked. So what you get for less common extensions depends on the machine, the same as in Go.
+
+A text type without a charset gets `charset=utf-8`. An exact match on the extension wins, and after that the case does not matter. The media types that come back are borrowed from the table and live as long as the program, so there is nothing to free, and the lookup takes a read lock and allocates nothing for an ASCII extension up to 64 bytes. `mime_add_extension_type` takes the write lock and keeps copies of what it is given. The slice from `mime_extensions_by_type` comes from the allocator you pass, and the strings in it belong to the table.
 
 ### Encoded words
 
@@ -164,3 +198,5 @@ The reader reads through a `bufio` reader, and reuses the one it is given when i
 The tests check the reader against what Go's reader makes of Go's own test table and of more edge cases, both read all at once and read one byte at a time. They also check it against a digest of what Go makes of every string of up to six bytes from `0A \r\n=\t`, 137,257 inputs in all. The writer is checked against Go on Go's test table and on 40 random inputs, as text and as binary, written whole and three bytes at a time. `tools/gen-quotedprintable-tests.sh` makes the expected results from the Go toolchain it finds.
 
 The `mime` tests check the parser, the formatter, the encoder and the decoder against what Go makes of Go's own test tables, errors included. Past that they check digests of what Go makes of 20,000 random media types, 20,000 random headers and 5,000 random strings to encode, each built from pieces that hit the hard cases: RFC 2231 continuations, quoting, bad escapes, odd charsets and words split across white space. `tools/gen-mime-tests.sh` makes the expected results.
+
+The extension table is tested with a script of 16,017 steps from `tools/gen-mime-type-tests.sh`. Each step empties the table or puts the built in one back, loads a `globs2` or `mime.types` file, adds a type, or asks for one, and the test replays them and checks every answer against what Go gave at the same point. The script has Go's own tests in it, every built in extension and type in both cases, and 200 files of each format built at random from pieces such as comments, CRLF line ends, glob patterns Go skips, bad types and non-ASCII extensions. Another test adds and looks up types from eight threads at once. The Windows registry reader is not covered by the script, since Go's test for it needs a real registry too.

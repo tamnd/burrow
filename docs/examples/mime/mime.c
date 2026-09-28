@@ -83,6 +83,21 @@ int main(void) {
     fmt_printf_v("error: %v\n", err);
     // doc: end
 
+    // doc: extensions
+    fmt_printf_v("%s\n", mime_type_by_extension(BURROW_S(".HTML")));
+
+    mime_add_extension_type(BURROW_S(".bw"), BURROW_S("application/x-burrow"));
+    mime_add_extension_type(BURROW_S(".burrow"), BURROW_S("application/x-burrow"));
+    mime_add_extension_type(BURROW_S(".note"), BURROW_S("text/x-note"));
+    fmt_printf_v("%s\n", mime_type_by_extension(BURROW_S(".note")));
+    Slice exts = mime_extensions_by_type(a, BURROW_S("application/x-burrow"), &err);
+    for (Int i = 0; i < exts.len; i++)
+        fmt_printf_v("%s\n", ((const Str *)exts.p)[i]);
+
+    err = mime_add_extension_type(BURROW_S("bw"), BURROW_S("application/x-burrow"));
+    fmt_printf_v("error: %v\n", err);
+    // doc: end
+
     arena_free(&ar);
     return 0;
 }
@@ -96,4 +111,9 @@ attachment; size=1024; filename*=utf-8''r%C3%A9sum%C3%A9.pdf
 Re: Caféau lait
 Price: € 5
 error: no reader for "koi8-r"
+text/html; charset=utf-8
+text/x-note; charset=utf-8
+.burrow
+.bw
+error: mime: extension "bw" missing leading dot
 */

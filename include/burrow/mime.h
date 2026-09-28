@@ -34,6 +34,7 @@
 #include "burrow/io.h"
 #include "burrow/map.h"
 #include "burrow/mem.h"
+#include "burrow/slice.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -67,6 +68,40 @@ BURROW_OWNS(ret) Str mime_format_media_type(Alloc *a, Str t, Map *param);
 BURROW_OWNS(ret) BURROW_BORROWS(ret, v) Str mime_parse_media_type(Alloc *a, Str v,
                                                                   Map **params,
                                                                   Error *err);
+
+/* ------------------------------------------------------------ extensions */
+
+/* mime.TypeByExtension. The media type for a file extension, such as
+ * "text/html; charset=utf-8" for ".html", or the empty string when the
+ * extension is not known. ext has its leading dot. An exact match wins, and
+ * after that the case does not matter.
+ *
+ * The table starts as Go's built in one and has what the system knows added on
+ * first use. On Windows that comes from the registry. Everywhere else it is
+ * the first of /usr/local/share/mime/globs2 and /usr/share/mime/globs2 that
+ * exists, or when neither does, /etc/mime.types, /etc/apache2/mime.types,
+ * /etc/apache/mime.types and /etc/httpd/conf/mime.types, and on the BSDs
+ * /usr/local/etc/mime.types after them. A text type without a charset gets
+ * charset=utf-8.
+ *
+ * The result is borrowed from the table and lasts as long as the program. It
+ * is safe to call from any number of threads, and a lookup allocates nothing
+ * unless ext is over 64 bytes or is not ASCII. */
+BURROW_STATIC(ret) Str mime_type_by_extension(Str ext);
+
+/* mime.ExtensionsByType. The extensions the table has for the media type typ,
+ * in lower case and sorted, in a slice of Str from a. Parameters on typ are
+ * ignored. A type the table does not know gives an empty slice and no error,
+ * and a typ that does not parse gives the error mime_parse_media_type gives.
+ * The strings in the slice belong to the table and last as long as the
+ * program. */
+BURROW_OWNS(ret) Slice mime_extensions_by_type(Alloc *a, Str typ, Error *err);
+
+/* mime.AddExtensionType. Maps ext, which has to start with a dot, to the media
+ * type typ, replacing what was there, and adds ext to the extensions of typ.
+ * As with the system's types, a text type without a charset gets
+ * charset=utf-8. The table keeps copies of both strings. */
+BURROW_BORROWS(ret) Error mime_add_extension_type(Str ext, Str typ);
 
 /* ---------------------------------------------------------- encoded words */
 

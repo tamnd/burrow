@@ -325,6 +325,24 @@ int64_t pal_hostname(char *buf, int64_t cap, PalErrno *err);
  * a layer that quietly substitutes one is how a key ends up predictable. */
 bool pal_random_bytes(void *buf, int64_t n, PalErrno *err);
 
+/* ------------------------------------------------------------ content types
+ *
+ * The content types Windows knows file extensions by, which mime adds to its
+ * table on first use. They are the "Content Type" values of the keys under
+ * HKEY_CLASSES_ROOT whose names start with a dot, and fn gets each one as
+ * UTF-8, the extension with its dot, in the order the registry lists them. A
+ * key without the value, or with a value that is not a string, is skipped, as
+ * Go's registry reader skips it. An unpaired surrogate becomes U+FFFD, which is
+ * what Go's conversion does.
+ *
+ * The registry functions live in advapi32, which burrow does not link, so it is
+ * loaded when this is first called. Returns false when there is no registry to
+ * read, which is every system but Windows. On those, mime reads the mime.types
+ * files itself, through pal_open. */
+typedef void (*PalContentTypeFn)(void *env, const char *ext, int64_t ext_len,
+                                 const char *type, int64_t type_len);
+bool pal_registry_content_types(PalContentTypeFn fn, void *env, PalErrno *err);
+
 /* ------------------------------------------------------------------ threads
  *
  * OS threads, which in Go's terms is an M. Goroutines are not here: they are

@@ -14,6 +14,13 @@
 #include <stdint.h>
 
 /* The smallest and largest runes that case fold to anything but themselves. */
+/* The first chunk of every arena the package makes. Most patterns are short
+ * and their arenas never fill a kilobyte, while the arena default is 64 KB
+ * that the parent zeroes, which cost more than the rest of compiling a short
+ * pattern put together. Chunks double from here, so a big pattern pays a few
+ * more parent calls and nothing else. */
+#define SYN_ARENA_CHUNK ((size_t)1024)
+
 #define SYN_MIN_FOLD ((Rune)0x0041)
 #define SYN_MAX_FOLD ((Rune)0x1e943)
 

@@ -16,6 +16,7 @@
 #include "burrow/utf8.h"
 
 #include "regexp_internal.h"
+#include "syntax_internal.h"
 
 #include <string.h>
 
@@ -266,7 +267,7 @@ static RxProg *rx_prog_new(Alloc *a, Str expr, SyntaxFlags mode, Error *err) {
     if (p == NULL)
         return rx_prog_oom(NULL, re, err);
     p->parent = a;
-    arena_init(&p->arena, a, 0);
+    arena_init(&p->arena, a, SYN_ARENA_CHUNK);
     Alloc *pa = arena_allocator(&p->arena);
     p->mode = mode;
     p->expr = str_clone(pa, expr);
@@ -428,34 +429,18 @@ Str regexp_literal_prefix(const Regexp *re, bool *complete) {
     return re->p->prefix;
 }
 
-/* special: whether QuoteMeta escapes c. */
-static bool rx_special(Byte c) {
-    switch (c) {
-    case '\\':
-    case '.':
-    case '+':
-    case '*':
-    case '?':
-    case '(':
-    case ')':
-    case '|':
-    case '[':
-    case ']':
-    case '{':
-    case '}':
-    case '^':
-    case '$':
-        return true;
-    default:
-        return false;
-    }
-}
+/* special, as a table: a load a byte instead of a chain of compares. */
+static const bool rx_special[256] = {
+    ['\\'] = true, ['.'] = true, ['+'] = true, ['*'] = true, ['?'] = true,
+    ['('] = true,  [')'] = true, ['|'] = true, ['['] = true, [']'] = true,
+    ['{'] = true,  ['}'] = true, ['^'] = true, ['$'] = true,
+};
 
 Str regexp_quote_meta(Alloc *a, Str s) {
     /* A byte loop is correct because all metacharacters are ASCII. */
     Int n = 0;
     for (Int i = 0; i < s.len; i++)
-        n += rx_special(s.p[i]);
+        n += rx_special[s.p[i]];
     /* No meta characters found, so return original string. */
     if (n == 0)
         return s;
@@ -464,7 +449,7 @@ Str regexp_quote_meta(Alloc *a, Str s) {
         return BURROW_STR_EMPTY;
     Int j = 0;
     for (Int i = 0; i < s.len; i++) {
-        if (rx_special(s.p[i]))
+        if (rx_special[s.p[i]])
             b[j++] = '\\';
         b[j++] = s.p[i];
     }
@@ -487,12 +472,18 @@ static const Byte *rx_bp(Slice b) {
     return (const Byte *)b.p;
 }
 
+/* The length check is rx_find's too, done here first because most of what
+ * a short input that cannot match costs is getting to it. */
 bool regexp_match(const Regexp *re, Slice b) {
+    if (b.len < re->p->min_input_len)
+        return false;
     RxInput in = rx_bytes(rx_bp(b), b.len);
     return rx_find(re, &in, 0, 0, NULL);
 }
 
 bool regexp_match_string(const Regexp *re, Str s) {
+    if (s.len < re->p->min_input_len)
+        return false;
     RxInput in = rx_bytes(s.p, s.len);
     return rx_find(re, &in, 0, 0, NULL);
 }

@@ -136,6 +136,12 @@ RENAMED = {
     # include/burrow/net/url.h: url_parse is the package level Parse, so the
     # method that parses relative to a URL takes the name of what it does.
     ("net/url", "method (*URL) Parse"): "url_parse_ref",
+    # include/burrow/regexp.h: the methods have the short names, being what
+    # gets called in a loop, and the package level forms that compile the
+    # pattern each time say so.
+    ("regexp", "func Match"): "regexp_match_pattern",
+    ("regexp", "func MatchString"): "regexp_match_string_pattern",
+    ("regexp", "func MatchReader"): "regexp_match_reader_pattern",
     # url_join_path is the method, which drops the error the way Go's does,
     # and the package level JoinPath that returns one is the _str form.
     ("net/url", "func JoinPath"): "url_join_path_str",
@@ -585,6 +591,8 @@ FUNC_TYPES = {
     "func(int) bool": {"SortSearchFunc"},
     "func(int) int": {"SortFindFunc"},
     "func(int, int)": {"SwapFunc"},
+    "func(string) string": {"StrFunc"},
+    "func([]uint8) []uint8": {"BytesFunc"},
 }
 
 BUILTIN = {

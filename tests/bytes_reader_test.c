@@ -426,6 +426,28 @@ static void TestReaderSeeker(TestingT *t) {
     CHECK(rd.vt->self_type == TYPE_BYTES_READER);
 }
 
+/* The reader as an io.RuneReader and io.RuneScanner, which is what
+ * regexp_match_reader and the rest take. */
+static void TestReaderRuneScanner(TestingT *t) {
+    BytesReader r;
+    bytes_reader_reset(&r, BURROW_B("h\xc3\xa9"));
+    IoRuneScanner rs = bytes_reader_as_io_rune_scanner(&r);
+    IoRuneReader rr = bytes_reader_as_io_rune_reader(&r);
+    CHECK(rr.vt->self_type == TYPE_BYTES_READER);
+    CHECK(rs.vt->rune_reader.self_type == TYPE_BYTES_READER);
+    Error err;
+    Int size;
+    CHECK(BURROW_CALL(rr, read_rune, &size, &err) == 'h' && size == 1 &&
+          BURROW_OK(err));
+    CHECK(BURROW_CALL(rr, read_rune, &size, &err) == 0xe9 && size == 2 &&
+          BURROW_OK(err));
+    CHECK(BURROW_OK(BURROW_CALL0(rs, unread_rune)));
+    CHECK(BURROW_CALL(rr, read_rune, &size, &err) == 0xe9 && size == 2);
+    CHECK(BURROW_CALL(rr, read_rune, &size, &err) == 0 && size == 0);
+    CHECK(errors_is(err, io_eof));
+    CHECK(BURROW_FAILED(BURROW_CALL0(rs, unread_rune)));
+}
+
 static void TestNewReader(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -454,6 +476,7 @@ static void TestNewReader(TestingT *t) {
     X(TestReaderReset)                                                                 \
     X(TestReaderZero)                                                                  \
     X(TestReaderSeeker)                                                                \
+    X(TestReaderRuneScanner)                                                           \
     X(TestNewReader)
 
 TESTING_MAIN(TESTS)

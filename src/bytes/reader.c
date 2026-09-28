@@ -262,6 +262,27 @@ IoByteReader bytes_reader_as_io_byte_reader(BytesReader *r) {
     return br;
 }
 
+static Rune bytes_reader_io_read_rune(void *self, Int *size, Error *err) {
+    return bytes_reader_read_rune((BytesReader *)self, size, err);
+}
+
+static Error bytes_reader_io_unread_rune(void *self) {
+    return bytes_reader_unread_rune((BytesReader *)self);
+}
+
+static const IoRuneScannerVT bytes_reader_rune_scanner_vt = {
+    {&bytes_reader_desc, bytes_reader_io_read_rune}, bytes_reader_io_unread_rune};
+
+IoRuneReader bytes_reader_as_io_rune_reader(BytesReader *r) {
+    IoRuneReader rr = {&bytes_reader_rune_scanner_vt.rune_reader, r};
+    return rr;
+}
+
+IoRuneScanner bytes_reader_as_io_rune_scanner(BytesReader *r) {
+    IoRuneScanner rs = {&bytes_reader_rune_scanner_vt, r};
+    return rs;
+}
+
 static Int bytes_reader_io_read_at(void *self, Slice p, int64_t off, Error *err) {
     return bytes_reader_read_at((BytesReader *)self, p, off, err);
 }

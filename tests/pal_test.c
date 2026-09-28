@@ -698,6 +698,46 @@ static void TestASleeperIsWokenByAWake(TestingT *t) {
     CHECK_INT_EQ(p.timedout, 0);
 }
 
+/* ------------------------------------------------------- thread exit */
+
+typedef struct ExitLog {
+    uint32_t order[4];
+    uint32_t n;
+} ExitLog;
+
+typedef struct ExitNode {
+    PalThreadExit node;
+    ExitLog *log;
+    uint32_t id;
+} ExitNode;
+
+static void exit_note(void *arg) {
+    ExitNode *e = arg;
+    e->log->order[e->log->n++] = e->id;
+}
+
+static void exit_registrar(void *arg) {
+    ExitNode *nodes = arg;
+    for (int i = 0; i < 2; i++) {
+        nodes[i].node.fn = exit_note;
+        nodes[i].node.arg = &nodes[i];
+        if (!pal_thread_on_exit(&nodes[i].node))
+            nodes[i].log->n = 99;
+    }
+}
+
+static void TestExitHooksRunNewestFirstWhenTheThreadEnds(TestingT *t) {
+    ExitLog log = {{0}, 0};
+    ExitNode nodes[2] = {{{NULL, NULL, NULL}, &log, 1}, {{NULL, NULL, NULL}, &log, 2}};
+    burrow__Thread th;
+
+    CHECK(burrow__thread_start(&th, exit_registrar, nodes, 0));
+    CHECK(burrow__thread_join(&th));
+    CHECK_INT_EQ(log.n, 2);
+    CHECK_INT_EQ(log.order[0], 2);
+    CHECK_INT_EQ(log.order[1], 1);
+}
+
 static void TestEverybodyWaitingCanBeReleasedAtOnce(TestingT *t) {
     enum { SLEEPERS = 8 };
 
@@ -1244,6 +1284,7 @@ static void TestTheSignalsTakeANullErrorLikeEverythingElse(TestingT *t) {
     X(TestAWaitWithNoTimeAndNoChangeTimesOut)                                          \
     X(TestAWaitWithADeadlineWaitsAtLeastThatLong)                                      \
     X(TestASleeperIsWokenByAWake)                                                      \
+    X(TestExitHooksRunNewestFirstWhenTheThreadEnds)                                    \
     X(TestEverybodyWaitingCanBeReleasedAtOnce)                                         \
     X(TestASleeperOnOneWordIsNotReleasedByAWakeOnAnother)                              \
     X(TestAWakeWithNobodyWaitingIsFreeAndNotAnError)                                   \

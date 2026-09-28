@@ -81,6 +81,7 @@
 #include "burrow/map.h"
 #include "burrow/maps.h"
 #include "burrow/math.h"
+#include "burrow/math/big.h"
 #include "burrow/math/bits.h"
 #include "burrow/math/cmplx.h"
 #include "burrow/math/rand.h"

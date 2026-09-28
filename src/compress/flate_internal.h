@@ -190,4 +190,56 @@ Int burrow__flate_avail_write(IoReadCloser rc);
  * given, for TestReaderReusesReaderBuffer. */
 IoReader burrow__flate_source(IoReadCloser rc);
 
+/* The error Close leaves behind, Go's errWriterClosed. */
+Error burrow__flate_err_writer_closed(void);
+
+/* Go's bulkHash4 and hash4, for TestBulkHash4. */
+void burrow__flate_bulk_hash4(const Byte *b, Int n, uint32_t *dst);
+uint32_t burrow__flate_hash4(const Byte *b);
+
+/* Go's reverseBits, for TestReverseBits. */
+uint16_t burrow__flate_reverse_bits(uint16_t x, uint8_t b);
+
+/* A huffmanBitWriter writing to w, for the huffman_bit_writer tests, and the
+ * three ways it writes a block. tokens are Go's token values, which the block
+ * functions index the way indexTokens does. input NULL is Go's nil. */
+typedef struct BurrowFlateBitWriter BurrowFlateBitWriter;
+BURROW_OWNS(ret) BurrowFlateBitWriter *burrow__flate_bw_new(IoWriter w);
+void burrow__flate_bw_free(BurrowFlateBitWriter *bw);
+void burrow__flate_bw_write_block(BurrowFlateBitWriter *bw, const uint32_t *tokens,
+                                  Int n, bool eof, const Byte *input, Int input_len);
+void burrow__flate_bw_write_block_dynamic(BurrowFlateBitWriter *bw,
+                                          const uint32_t *tokens, Int n, bool eof,
+                                          const Byte *input, Int input_len, bool sync);
+void burrow__flate_bw_write_block_huff(BurrowFlateBitWriter *bw, bool eof,
+                                       const Byte *input, Int input_len, bool sync);
+void burrow__flate_bw_flush(BurrowFlateBitWriter *bw);
+BURROW_STATIC(ret) Error burrow__flate_bw_err(BurrowFlateBitWriter *bw);
+
+/* A fast encoder of level, 1 to 6, on its own, for TestBestSpeedMatch and
+ * TestBestSpeedShiftOffsets. encode gives the tokens it made in out, up to cap
+ * of them, and how many. drop_hist is Go's e.hist = nil. */
+typedef struct BurrowFlateFast BurrowFlateFast;
+BURROW_OWNS(ret) BurrowFlateFast *burrow__flate_fast_new(int level);
+void burrow__flate_fast_free(BurrowFlateFast *f);
+Int burrow__flate_fast_encode(BurrowFlateFast *f, const Byte *src, Int n, uint32_t *out,
+                              Int cap);
+int32_t burrow__flate_fast_add_block(BurrowFlateFast *f, const Byte *src, Int n);
+int32_t burrow__flate_fast_match_len_limited(BurrowFlateFast *f, int32_t s, int32_t t);
+int32_t burrow__flate_fast_cur(BurrowFlateFast *f);
+void burrow__flate_fast_set_cur(BurrowFlateFast *f, int32_t cur);
+Int burrow__flate_fast_hist_len(BurrowFlateFast *f);
+void burrow__flate_fast_drop_hist(BurrowFlateFast *f);
+int32_t burrow__flate_fast_buffer_reset(void);
+
+/* Go's w.d.fast.reset(), false for a writer with no fast encoder, and
+ * w.d.reset(nil), for the wraparound tests. */
+bool burrow__flate_writer_fast_reset(FlateWriter *w);
+void burrow__flate_writer_reset_nil(FlateWriter *w);
+
+/* Whether a writer is back where flate_new_writer left it, apart from the
+ * window's bytes, for TestWriterReset. Compares against a fresh writer of the
+ * same level and dict. */
+bool burrow__flate_writer_state_eq(FlateWriter *a, FlateWriter *b);
+
 #endif /* BURROW_SRC_COMPRESS_FLATE_INTERNAL_H */

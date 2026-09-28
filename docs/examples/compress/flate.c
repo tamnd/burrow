@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 
 #include "burrow/burrow.h"
 #include "burrow/compress/flate.h"
@@ -49,6 +50,23 @@ int main(void) {
     if (off != NULL)
         printf("%.*s\n", (int)error_text(err).len, (const char *)error_text(err).p);
     // doc: end
+
+    // doc: write
+    BytesBuffer out = BYTES_BUFFER(a);
+    FlateWriter *fw = flate_new_writer(a, bytes_buffer_as_io_writer(&out),
+                                       FLATE_BEST_COMPRESSION, &err);
+    if (fw == NULL)
+        return 1;
+    Slice line =
+        slice_from((char[]){"hello, hello, hello, hello\n"}, 27, 27, TYPE_BYTE);
+    flate_writer_write(fw, line, &err);
+    err = flate_writer_close(fw);
+    flate_writer_free(fw);
+    printf("%d bytes in, %d out\n", (int)line.len, (int)bytes_buffer_len(&out));
+    // doc: end
+    if (BURROW_FAILED(err) || bytes_buffer_len(&out) != (Int)sizeof hello ||
+        memcmp(bytes_buffer_bytes(&out).p, hello, sizeof hello) != 0)
+        return 1;
 
     flate_reader_free(rc);
     arena_free(&ar);

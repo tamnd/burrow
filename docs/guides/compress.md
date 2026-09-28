@@ -1,6 +1,6 @@
 # Compression
 
-`burrow/compress/flate.h` is Go's `compress/flate`, the DEFLATE format of RFC 1951. It is the compression inside gzip, zlib, zip and PNG, without any of their headers or checksums around it. This first part of the package reads DEFLATE. The writer is still being ported, and `compress/gzip` and `compress/zlib` will sit on top of both.
+`burrow/compress/flate.h` is Go's `compress/flate`, the DEFLATE format of RFC 1951. It is the compression inside gzip, zlib, zip and PNG, without any of their headers or checksums around it. It reads and writes DEFLATE, and the writer's output is the same as Go's byte for byte at every level. `compress/gzip` and `compress/zlib` will sit on top of both.
 
 ## Reading
 
@@ -53,3 +53,26 @@ if (off != NULL)
 ```
 
 That prints `flate: corrupt input before offset 1`. Input that ends before the final block does gives `io_err_unexpected_eof`, after the bytes that could be decoded have been handed out. The reader keeps returning the same error once it has one, until it is reset.
+
+## Writing
+
+`flate_new_writer` compresses into any `IoWriter` at a level from -2 to 9. Level 1 (`FLATE_BEST_SPEED`) is the fastest, 9 (`FLATE_BEST_COMPRESSION`) packs the smallest, 0 stores the input as it is, -1 is the default of 6, and -2 only Huffman codes the input with no matching. Write as much as you like, then close the writer to end the stream:
+
+<!-- example: ../examples/compress/flate.c#write -->
+```c
+BytesBuffer out = BYTES_BUFFER(a);
+FlateWriter *fw = flate_new_writer(a, bytes_buffer_as_io_writer(&out),
+                                   FLATE_BEST_COMPRESSION, &err);
+if (fw == NULL)
+    return 1;
+Slice line =
+    slice_from((char[]){"hello, hello, hello, hello\n"}, 27, 27, TYPE_BYTE);
+flate_writer_write(fw, line, &err);
+err = flate_writer_close(fw);
+flate_writer_free(fw);
+printf("%d bytes in, %d out\n", (int)line.len, (int)bytes_buffer_len(&out));
+```
+
+That prints `27 bytes in, 13 out`, and the 13 bytes are the same `hello` the reading example started from, because the writer makes exactly what Go's does. Closing does not close the `IoWriter` underneath. `flate_writer_flush` writes out everything so far followed by an empty stored block, so the other end can decode all of it before the stream ends, which is what network protocols want. It costs a few bytes each time.
+
+A writer holds between about 400 KiB and 1 MiB depending on the level, so reuse one with `flate_writer_reset` rather than making a new one per stream. `flate_new_writer_dict` takes a preset dictionary, which helps a lot on short inputs that look like the dictionary, and the stream can then only be read with `flate_new_reader_dict` and the same bytes. Once a write to the underlying writer fails, every later call gives that same error until the writer is reset.

@@ -4,6 +4,11 @@
  * the raw format with no framing around it: compress/gzip and compress/zlib
  * put their headers and checksums on top.
  *
+ *     FlateWriter *fw = flate_new_writer(a, out, FLATE_BEST_SPEED, &err);
+ *     flate_writer_write(fw, data, &err);
+ *     err = flate_writer_close(fw);
+ *     flate_writer_free(fw);
+ *
  *     IoReadCloser rc = flate_new_reader(a, compressed);
  *     int64_t n = io_copy(a, out, io_read_closer_as_io_reader(rc), &err);
  *     flate_reader_free(rc);
@@ -145,6 +150,70 @@ FlateResetter flate_reader_as_resetter(IoReadCloser rc);
  * allocator. A nil IoReadCloser is fine, and anything else not from
  * flate_new_reader is left alone. */
 void flate_reader_free(IoReadCloser rc);
+
+/* ---------------------------------------------------------------- compress */
+
+/* The compression levels, from Go. Anything from -2 to 9 is a level: 1 is the
+ * fastest, 9 packs the smallest, and 0 stores the input as it is. -1 is the
+ * default, which is level 6. -2 only Huffman codes the input, with no matching,
+ * which is fast and does well on data with no repeats, such as already
+ * compressed images. */
+enum {
+    FLATE_NO_COMPRESSION = 0,
+    FLATE_BEST_SPEED = 1,
+    FLATE_BEST_COMPRESSION = 9,
+    FLATE_DEFAULT_COMPRESSION = -1,
+    FLATE_HUFFMAN_ONLY = -2,
+};
+
+/* flate.Writer: compresses what is written to it and writes the result to
+ * another writer. The output is the same as Go's, byte for byte, at every
+ * level. */
+typedef struct FlateWriter FlateWriter;
+
+extern const Type *const TYPE_FLATE_WRITER;
+
+/* flate.NewWriter. A writer that compresses into w at level, from a. A level
+ * outside [-2, 9] gives NULL and Go's error, "flate: invalid compression level
+ * 10: want value in range [-2, 9]", and running out of memory gives NULL and
+ * burrow_err_out_of_memory. The writer takes between about 400 KiB and 1 MiB
+ * depending on the level, all of it allocated here. */
+BURROW_OWNS(ret) FlateWriter *flate_new_writer(Alloc *a, IoWriter w, Int level,
+                                               Error *err);
+
+/* flate.NewWriterDict: the same, with a preset dictionary. The output can
+ * only be read with flate_new_reader_dict and the same dictionary. The writer
+ * keeps its own copy of dict, and flate_writer_reset primes it again. */
+BURROW_OWNS(ret) FlateWriter *flate_new_writer_dict(Alloc *a, IoWriter w, Int level,
+                                                    Slice dict, Error *err);
+
+/* Writer.Write. Compresses data, and gives len(data) or, once writing to the
+ * underlying writer has failed, 0 and that error. Most of what is written is
+ * held back until there is a block's worth. */
+Int flate_writer_write(FlateWriter *w, Slice data, Error *err);
+
+/* Writer.Flush: writes out everything written so far, then an empty stored
+ * block, so that a reader can decode all of it without the stream ending.
+ * Useful for network protocols; it costs a few bytes and some compression
+ * each time. */
+BURROW_STATIC(ret) Error flate_writer_flush(FlateWriter *w);
+
+/* Writer.Close: writes out what is left and ends the stream. It does not
+ * close the underlying writer. Writing or flushing after it gives the error
+ * "flate: closed writer", and closing again gives no error. */
+BURROW_STATIC(ret) Error flate_writer_close(FlateWriter *w);
+
+/* Writer.Reset: forgets the state and any error, and starts a new stream into
+ * dst at the same level, with the same dictionary, without allocating. */
+void flate_writer_reset(FlateWriter *w, IoWriter dst);
+
+/* The writer as an IoWriter and an IoWriteCloser, borrowing w. */
+IoWriter flate_writer_as_io_writer(FlateWriter *w);
+IoWriteCloser flate_writer_as_io_write_closer(FlateWriter *w);
+
+/* Gives the writer and everything it holds back to its allocator. NULL is
+ * fine. It does not close the writer first. */
+void flate_writer_free(FlateWriter *w);
 
 #ifdef __cplusplus
 }

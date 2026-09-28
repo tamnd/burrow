@@ -1327,7 +1327,7 @@ void bi_scan(BigInt *z, BigScanner *r, int base, int *b, Error *err) {
 
 /* setFromScanner: z from all of r, false when r holds anything more than a
  * number. */
-static bool bi_set_from_scanner(BigInt *z, BigScanner *r, int base) {
+bool bi_set_from_scanner(BigInt *z, BigScanner *r, int base) {
     int b;
     Error err;
     bi_scan(z, r, base, &b, &err);
@@ -1752,7 +1752,7 @@ Str big_int_string(const BigInt *x, Alloc *a) {
 }
 
 /* append(buf, s...) for a byte slice that may still be the zero Slice. */
-static Slice big_append_str(Alloc *a, Slice buf, Str s) {
+Slice big_append_str(Alloc *a, Slice buf, Str s) {
     if (buf.elem == NULL)
         buf.elem = TYPE_BYTE;
     Slice r = slice_append(a, buf, s.p, s.len);

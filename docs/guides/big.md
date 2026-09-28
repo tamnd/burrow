@@ -1,6 +1,6 @@
 # Big numbers
 
-`burrow/math/big.h` is Go's `math/big`. So far it has `Int`, a signed integer of any size, with every method Go gives it. `Rat` and `Float` are next.
+`burrow/math/big.h` is Go's `math/big`. So far it has `Int`, a signed integer of any size, and `Rat`, an exact fraction of two of them, each with every method Go gives it. `Float` is next.
 
 The names follow the usual rule: `Int.Add` is `big_int_add`, `Int.ProbablyPrime` is `big_int_probably_prime` and `big.NewInt` is `big_new_int`. As in Go, the receiver comes first and is where the result goes, and a function that sets its receiver returns it, so calls can be chained. The operands and the receiver may be the same Int in any combination, so `big_int_add(&x, &x, &x)` doubles x.
 
@@ -127,9 +127,97 @@ if (BURROW_FAILED(err))
 
 `big_int_bytes` and `big_int_set_bytes` give the absolute value as big-endian bytes and read it back, and `big_int_fill_bytes` writes it into a buffer you already have, padded with zeros at the front.
 
+## Fractions
+
+A `BigRat` is a fraction kept in lowest terms, with a numerator and a denominator that are both `BigInt`s. `{0}` is 0 on the heap and `BIG_RAT(a)` is 0 on an allocator, the same as for an Int, and `big_rat_free` gives the heap memory back. The functions are named the same way, so `Rat.SetFrac64` is `big_rat_set_frac64` and `big.NewRat` is `big_new_rat`:
+
+<!-- example: ../examples/big/rat.c#basics -->
+```c
+BigRat x = BIG_RAT(a), y = BIG_RAT(a), z = BIG_RAT(a);
+big_rat_set_frac64(&x, 1, 3);
+big_rat_set_string(&y, BURROW_S("0.25"), NULL);
+big_rat_add(&z, &x, &y);
+show("1/3 + 0.25", big_rat_string(&z, a));
+big_rat_mul(&z, &z, &z);
+show("squared", big_rat_string(&z, a));
+show("to 10 places", big_rat_float_string(&z, a, 10));
+```
+
+The result of an addition or a multiplication is reduced by the GCD every time, so a long sum stays as small as it can be. Here is the 20th harmonic number:
+
+<!-- example: ../examples/big/rat.c#harmonic -->
+```c
+BigRat h = BIG_RAT(a), term = BIG_RAT(a);
+for (int64_t k = 1; k <= 20; k++)
+    big_rat_add(&h, &h, big_rat_set_frac64(&term, 1, k));
+show("H(20)", big_rat_string(&h, a));
+printf("num bits: %d, is int: %s\n", (int)big_int_bit_len(big_rat_num(&h)),
+       big_rat_is_int(&h) ? "true" : "false");
+```
+
+`big_rat_num` and `big_rat_denom` give the two halves as `BigInt`s you can read and change. Go's `Denom` gives a new Int holding 1 for a zero Rat that has never been set, and burrow's writes the 1 into the Rat instead and returns its own denominator, because a C function cannot hand back a new Int without an allocator to put it in. The value of the Rat is the same either way.
+
+A Rat holds any float64 exactly, and the conversion back rounds to the nearest float. Go returns a second result that says whether that was exact, and here it is a `bool *` at the end, which may be NULL:
+
+<!-- example: ../examples/big/rat.c#float -->
+```c
+BigRat t = BIG_RAT(a);
+big_rat_set_float64(&t, 0.1);
+show("0.1 exactly", big_rat_string(&t, a));
+big_rat_set_string(&t, BURROW_S("1/10"), NULL);
+bool exact;
+double f = big_rat_float64(&t, &exact);
+printf("1/10 as float64: %g, exact: %s\n", f, exact ? "true" : "false");
+```
+
+`big_rat_set_float64` returns NULL for an infinity or a NaN, as Go returns nil. `big_rat_float_prec` tells you how many digits after the point a decimal needs to show a fraction exactly, and whether it can at all:
+
+<!-- example: ../examples/big/rat.c#prec -->
+```c
+bool finite;
+big_rat_set_string(&t, BURROW_S("7/40"), NULL);
+Int n = big_rat_float_prec(&t, &finite);
+printf("7/40 needs %d digits, finite: %s\n", (int)n, finite ? "true" : "false");
+big_rat_set_frac64(&t, 1, 7);
+n = big_rat_float_prec(&t, &finite);
+printf("1/7 needs %d digits, finite: %s\n", (int)n, finite ? "true" : "false");
+```
+
+`big_rat_string` always writes the denominator and `big_rat_rat_string` leaves it out when it is 1. fmt prints a Rat through `TYPE_BIG_RAT` with `%v` or `%s`, and scans one the same way:
+
+<!-- example: ../examples/big/rat.c#fmt -->
+```c
+big_rat_set_frac64(&t, -6, 4);
+show("fmt", fmt_sprintf_v(a, "%v %s", BURROW_ANY(TYPE_BIG_RAT, &t),
+                          BURROW_ANY(TYPE_BIG_RAT, &t)));
+show("RatString", big_rat_rat_string(&t, a));
+big_rat_set_int64(&t, 4);
+show("String of 4", big_rat_string(&t, a));
+show("RatString of 4", big_rat_rat_string(&t, a));
+```
+
+`big_rat_set_string` takes a fraction written as `a/b`, or a number with a decimal point, an exponent or a `0x`, `0b` or `0o` prefix, as Go's does. The `bool *` says whether the text was a number:
+
+<!-- example: ../examples/big/rat.c#parse -->
+```c
+const char *inputs[] = {"3/-6", "1e-3", "0x1p-2", "1_000.5", "1/0", "abc"};
+for (size_t i = 0; i < sizeof inputs / sizeof inputs[0]; i++) {
+    bool ok;
+    big_rat_set_string(&t, str_from_cstr(inputs[i]), &ok);
+    if (ok)
+        show(inputs[i], big_rat_string(&t, a));
+    else
+        printf("%s: not a number\n", inputs[i]);
+}
+```
+
+A Rat also has the text and gob encodings, through `big_rat_marshal_text`, `big_rat_unmarshal_text`, `big_rat_gob_encode` and `big_rat_gob_decode`. Dividing by zero panics, from `big_rat_quo`, `big_rat_inv`, `big_rat_set_frac` and `big_rat_set_frac64` alike.
+
 ## How close it is to Go
 
 The tests run a little over 8000 cases generated by Go's own `math/big`, from tools/gen-math-big-tests.sh, on random numbers of every size where the code changes strategy: one word, a few words, sizes past the Karatsuba threshold for multiplication and past the recursive threshold for division. Every case checks every result against Go's, and each one that sets a receiver is run again with the receiver being one of its own operands and again with it on an arena. The operations cover arithmetic, the three kinds of division, bit operations on negative numbers, square roots, exponentiation with and without a modulus, GCD with both cofactors, modular inverses and square roots, primality, conversion to and from text in every base, fmt printing and scanning, and every encoding.
+
+The Rat tests do the same with about 10,000 cases from tools/gen-math-big-rat-tests.sh. They run every string literal in Go's rat tests through SetString, with and without a sign and an exponent, and take each number that parses through the float conversions and every text form. Random fractions go through the arithmetic, and floats near the edges of the denormal and overflow ranges go through the conversion both ways.
 
 ## See also
 

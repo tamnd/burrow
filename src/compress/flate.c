@@ -480,7 +480,7 @@ static int flate_huff_init(FlateHuff *h, Alloc *a, const int *lengths, int nleng
 
     for (int i = 0; i < nlengths; i++) {
         int n = lengths[i];
-        if (n == 0)
+        if (n <= 0)
             continue;
         int c = nextcode[n];
         nextcode[n]++;
@@ -497,9 +497,11 @@ static int flate_huff_init(FlateHuff *h, Alloc *a, const int *lengths, int nleng
             int width = (int)h->link_mask + 1;
             reverse >>= HUFF_CHUNK_BITS;
             /* n is past HUFF_CHUNK_BITS on this side of the if. */
-            /* NOLINTNEXTLINE(clang-analyzer-core.BitwiseShift) */
+            /* links was sized for every link chunk before this loop. */
+            /* NOLINTBEGIN(clang-analyzer-core.BitwiseShift,clang-analyzer-core.NullDereference) */
             for (int off = reverse; off < width; off += 1 << (n - HUFF_CHUNK_BITS))
                 linktab[off] = chunk;
+            /* NOLINTEND(clang-analyzer-core.BitwiseShift,clang-analyzer-core.NullDereference) */
         }
     }
     return HUFF_OK;

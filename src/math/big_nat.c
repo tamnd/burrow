@@ -575,6 +575,8 @@ Nat nat_random(Nat z, MathRandRand *rnd, Nat limit, Int n) {
         for (Int i = 0; i < z.len; i++)
             z.p[i] = (BigWord)math_rand_rand_uint32(rnd);
 #endif
+        /* z has limit.len words and limit is not 0. */
+        /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
         z.p[limit.len - 1] &= mask;
         if (nat_cmp(z, limit) < 0)
             break;

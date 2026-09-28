@@ -52,6 +52,7 @@ import (
 	"embed"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -166,18 +167,35 @@ const numInputs = 11
 
 var smallDict = []byte(strings.Repeat("we are the world - how are you?", 3))
 
+// The preset dictionary a pattern writes after, or nil.
+func dictFor(pattern int) []byte {
+	switch pattern {
+	case 4:
+		return words(34000)
+	case 5:
+		return smallDict
+	}
+	return nil
+}
+
+// Whether Go's reader gives back in from what Go's writer made of it. Go
+// 1.27.1 sends the dictionary out as data at levels 7 to 9 when a block of
+// input that does not compress follows it, and those vectors are marked so
+// that the C test checks it reads back instead of matching it.
+func readsBack(z, dict, in []byte) bool {
+	got, err := io.ReadAll(flate.NewReaderDict(bytes.NewReader(z), dict))
+	return err == nil && bytes.Equal(got, in)
+}
+
 // Writes in to a new writer at level the way pattern says, as the C test's
 // flate_pattern does, and gives what came out.
 func run(level, pattern int, in []byte) []byte {
 	var buf bytes.Buffer
 	var fw *flate.Writer
 	var err error
-	switch pattern {
-	case 4:
-		fw, err = flate.NewWriterDict(&buf, level, words(34000))
-	case 5:
-		fw, err = flate.NewWriterDict(&buf, level, smallDict)
-	default:
+	if d := dictFor(pattern); d != nil {
+		fw, err = flate.NewWriterDict(&buf, level, d)
+	} else {
 		fw, err = flate.NewWriter(&buf, level)
 	}
 	if err != nil {
@@ -221,7 +239,7 @@ func main() {
  * in the LICENSE file. */
 
 `)
-	w.WriteString("typedef struct FlateVector {\n    int input;\n    int level;\n    int pattern;\n    Int len;\n    const char *sha256;\n} FlateVector;\n\n")
+	w.WriteString("typedef struct FlateVector {\n    int input;\n    int level;\n    int pattern;\n    Int len;\n    const char *sha256;\n    bool go_bug; /* Go's output does not read back */\n} FlateVector;\n\n")
 	w.WriteString("static const FlateVector flate_vectors[] = {\n")
 	for id := 0; id < numInputs; id++ {
 		in := input(id)
@@ -231,7 +249,8 @@ func main() {
 			}
 			for level := -2; level <= 9; level++ {
 				got := run(level, pattern, in)
-				fmt.Fprintf(w, "    {%d, %d, %d, %d, \"%s\"},\n", id, level, pattern, len(got), sum(got))
+				bug := !readsBack(got, dictFor(pattern), in)
+				fmt.Fprintf(w, "    {%d, %d, %d, %d, \"%s\", %t},\n", id, level, pattern, len(got), sum(got), bug)
 			}
 		}
 	}

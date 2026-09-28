@@ -1502,13 +1502,16 @@ static void TestGoStreamsExact(TestingT *t) {
 
 /* Every generated vector: what Go's writer made of each input at each level,
  * written in one go, in small and large pieces, with flushes, after a
- * dictionary, and a byte at a time. */
+ * dictionary, and a byte at a time. Each one also has to read back. One that
+ * the generator marks as a Go bug, whose output Go's own reader does not
+ * give the input back from, has to differ from Go's instead of matching it. */
 static void TestGoVectors(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
     int last = -1;
     Slice in = no_dict;
+    Slice words = flate_words(a, 34000);
     for (size_t i = 0; i < sizeof flate_vectors / sizeof flate_vectors[0]; i++) {
         const FlateVector *v = &flate_vectors[i];
         if (v->input != last) {
@@ -1516,10 +1519,18 @@ static void TestGoVectors(TestingT *t) {
             last = v->input;
         }
         Slice got = flate_pattern(a, v->level, v->pattern, in);
-        if (!matches(got, v->len, v->sha256))
+        if (matches(got, v->len, v->sha256) == v->go_bug)
             testing_t_errorf_v(
                 t, "input %d, level %d, pattern %d: got %d bytes, Go made %d", v->input,
                 v->level, v->pattern, (int)got.len, (int)v->len);
+        Slice dict = v->pattern == 4   ? words
+                     : v->pattern == 5 ? BS(small_dict_text)
+                                       : no_dict;
+        Error err;
+        Slice back = inflate_dict(a, got, dict, &err);
+        if (BURROW_FAILED(err) || !bytes_eq(back, in))
+            testing_t_errorf_v(t, "input %d, level %d, pattern %d: does not read back",
+                               v->input, v->level, v->pattern);
     }
     arena_free(&ar);
 }
@@ -1563,6 +1574,42 @@ static void TestWriterInterfaces(TestingT *t) {
     CHECK(flate_writer_as_io_writer(w).data == w);
     flate_writer_free(w);
     flate_writer_free(NULL);
+    arena_free(&ar);
+}
+
+/* Go 1.27.1 at levels 7 to 9 sends a short dictionary out as data when the
+ * block after it is stored, which is what happens to input that does not
+ * compress: Go's writer makes 70028 bytes of this, 11 of them the dictionary,
+ * and its reader gives back the dictionary and then the input. Here the
+ * dictionary stays out, before and after a Reset. See dict_end in deflate.c. */
+static void TestDictStoredBlock(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Slice in = noise(a, 70000, 7, 0xff);
+    Slice dict = BS("0123456789.");
+    for (int level = 7; level <= 9; level++) {
+        BytesBuffer out = BYTES_BUFFER(a);
+        Error err;
+        FlateWriter *w = flate_new_writer_dict(a, bytes_buffer_as_io_writer(&out),
+                                               level, dict, &err);
+        for (int round = 0; round < 2; round++) {
+            if (round == 1) {
+                bytes_buffer_reset(&out);
+                flate_writer_reset(w, bytes_buffer_as_io_writer(&out));
+            }
+            flate_writer_write(w, in, &err);
+            CHECK(BURROW_OK(err));
+            CHECK(BURROW_OK(flate_writer_close(w)));
+            Slice z = bytes_buffer_bytes(&out);
+            CHECK_INT_EQ((int)z.len, 70028 - 11);
+            Slice back = inflate_dict(a, z, dict, &err);
+            if (BURROW_FAILED(err) || !bytes_eq(back, in))
+                testing_t_errorf_v(t, "level %d, round %d: got %d bytes back", level,
+                                   round, (int)back.len);
+        }
+        flate_writer_free(w);
+    }
     arena_free(&ar);
 }
 
@@ -1614,6 +1661,7 @@ static void TestWriterNoMemory(TestingT *t) {
     X(TestGoVectors)                                                                   \
     X(TestInvalidLevel)                                                                \
     X(TestWriterInterfaces)                                                            \
-    X(TestWriterNoMemory)
+    X(TestWriterNoMemory)                                                              \
+    X(TestDictStoredBlock)
 
 TESTING_MAIN(TESTS)

@@ -694,6 +694,8 @@ typedef struct DeflBitWriter {
     Error err;
     Int prev_header;
     unsigned log_new_table_penalty;
+    Int stored_skip; /* bytes at the front of a stored block's input that are
+                        not data, see dict_end */
     Byte bytes[256 + 8];
     uint16_t literal_freq[DEFL_LENGTH_CODES_START + 32];
     uint16_t offset_freq[32];
@@ -1206,6 +1208,15 @@ static void defl_bw_write_tokens(DeflBitWriter *w, const DeflToken *tokens, Int 
         defl_bw_write_code(w, len_codes[DEFL_END_BLOCK_MARKER]);
 }
 
+/* A stored block of input, without the w->stored_skip bytes of dictionary at
+ * the front of it that Go would send too. */
+static void defl_bw_write_stored(DeflBitWriter *w, const Byte *input, Int input_len,
+                                 bool eof) {
+    Int skip = w->stored_skip < input_len ? w->stored_skip : input_len;
+    defl_bw_write_stored_header(w, input_len - skip, eof);
+    defl_bw_write_bytes(w, input + skip, input_len - skip);
+}
+
 /* Writes a block of tokens with the smallest of the fixed codes, codes of
  * its own and storing input, when input is not NULL. */
 static void defl_bw_write_block(DeflBitWriter *w, DeflTokens *tokens, bool eof,
@@ -1255,8 +1266,7 @@ static void defl_bw_write_block(DeflBitWriter *w, DeflTokens *tokens, bool eof,
 
     /* Stored bytes? */
     if (storable && stored_size <= size) {
-        defl_bw_write_stored_header(w, input_len, eof);
-        defl_bw_write_bytes(w, input, input_len);
+        defl_bw_write_stored(w, input, input_len, eof);
         return;
     }
 
@@ -1342,8 +1352,7 @@ static void defl_bw_write_block_dynamic(DeflBitWriter *w, DeflTokens *tokens, bo
             if (pre_size < size) {
                 /* Check if we get a reasonable size decrease. */
                 if (storable && ssize <= size) {
-                    defl_bw_write_stored_header(w, input_len, eof);
-                    defl_bw_write_bytes(w, input, input_len);
+                    defl_bw_write_stored(w, input, input_len, eof);
                     return;
                 }
                 defl_bw_write_fixed_header(w, eof);
@@ -1358,8 +1367,7 @@ static void defl_bw_write_block_dynamic(DeflBitWriter *w, DeflTokens *tokens, bo
 
         /* Check if we get a reasonable size decrease. */
         if (storable && ssize <= size) {
-            defl_bw_write_stored_header(w, input_len, eof);
-            defl_bw_write_bytes(w, input, input_len);
+            defl_bw_write_stored(w, input, input_len, eof);
             return;
         }
     }
@@ -1385,8 +1393,7 @@ static void defl_bw_write_block_dynamic(DeflBitWriter *w, DeflTokens *tokens, bo
             if (pre_size <= size) {
                 /* Store bytes, if we don't get an improvement. */
                 if (storable && ssize <= pre_size) {
-                    defl_bw_write_stored_header(w, input_len, eof);
-                    defl_bw_write_bytes(w, input, input_len);
+                    defl_bw_write_stored(w, input, input_len, eof);
                     return;
                 }
                 defl_bw_write_fixed_header(w, eof);
@@ -1401,8 +1408,7 @@ static void defl_bw_write_block_dynamic(DeflBitWriter *w, DeflTokens *tokens, bo
 
         if (storable && ssize <= size) {
             /* Store bytes, if we don't get an improvement. */
-            defl_bw_write_stored_header(w, input_len, eof);
-            defl_bw_write_bytes(w, input, input_len);
+            defl_bw_write_stored(w, input, input_len, eof);
             return;
         }
 
@@ -1454,8 +1460,7 @@ static void defl_bw_write_block_huff(DeflBitWriter *w, bool eof, const Byte *inp
         }
         if (abs < max) {
             /* No chance we can compress this... */
-            defl_bw_write_stored_header(w, input_len, eof);
-            defl_bw_write_bytes(w, input, input_len);
+            defl_bw_write_stored(w, input, input_len, eof);
             return;
         }
     }
@@ -1472,8 +1477,7 @@ static void defl_bw_write_block_huff(DeflBitWriter *w, bool eof, const Byte *inp
 
     /* Store bytes, if we don't get a reasonable improvement. */
     if (storable && ssize <= est_bits) {
-        defl_bw_write_stored_header(w, input_len, eof);
-        defl_bw_write_bytes(w, input, input_len);
+        defl_bw_write_stored(w, input, input_len, eof);
         return;
     }
 
@@ -2859,6 +2863,17 @@ struct FlateWriter {
     int32_t block_start; /* window index where current tokens start */
     Error err;           /* stateful error */
 
+    /* Where the preset dictionary ends in the window, until the first block
+     * after it is written. Go's fillWindow leaves block_start at 0, so the
+     * input the first block is sized against starts with the dictionary, and
+     * when the bit writer picks a stored block for it Go writes the dictionary
+     * out as data and the stream decodes wrong. That happens at levels 7 to 9
+     * in Go 1.27.1 when what follows a short dictionary does not compress.
+     * The block is sized the same way here, so the choice between stored,
+     * fixed and dynamic is always Go's, and only a stored block leaves the
+     * dictionary out. Everything Go gets right comes out the same. */
+    int32_t dict_end;
+
     DeflTokens *tokens;  /* tokens store for each block */
     DeflFast *fast;      /* encoder to use for blocks of levels 1 to 6 */
     DeflAdvanced *state; /* chained encoder for levels 7 to 9 */
@@ -2936,7 +2951,10 @@ static Error defl_write_block(FlateWriter *d, DeflTokens *tok, int32_t index,
             n = index - d->block_start;
         }
         d->block_start = index;
+        d->w.stored_skip = window != NULL ? d->dict_end : 0;
+        d->dict_end = 0;
         defl_bw_write_block_dynamic(&d->w, tok, eof, window, n, d->sync);
+        d->w.stored_skip = 0;
         return d->w.err;
     }
     return BURROW_NO_ERROR;
@@ -3021,6 +3039,9 @@ static void defl_fill_window(FlateWriter *d, const Byte *b, Int n) {
     /* Update window information. */
     d->window_end += c;
     s->index = c;
+    /* The dictionary is in the window but is not data. Go leaves it at the
+     * front of the first block, see dict_end. */
+    d->dict_end = c;
 }
 
 /* Tries to find a match starting at pos whose length is greater than the
@@ -3501,6 +3522,7 @@ static void defl_reset(FlateWriter *d, IoWriter w) {
     s->hash_offset = 1;
     s->index = 0;
     d->block_start = 0;
+    d->dict_end = 0;
     d->byte_available = false;
     defl_tokens_reset(d->tokens);
     s->length = DEFL_MIN_MATCH_LENGTH - 1;

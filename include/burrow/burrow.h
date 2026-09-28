@@ -43,6 +43,7 @@
 #include "burrow/chan.h"
 #include "burrow/cmp.h"
 #include "burrow/compress/flate.h"
+#include "burrow/compress/zlib.h"
 #include "burrow/container/heap.h"
 #include "burrow/container/list.h"
 #include "burrow/container/ring.h"

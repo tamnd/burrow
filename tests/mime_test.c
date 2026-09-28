@@ -236,7 +236,7 @@ static void TestCharsetDecoder(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
-    CharsetCheck c = {t, 0, charsets, content, {0}, a};
+    CharsetCheck c = {.t = t, .charsets = charsets, .content = content, .a = a};
     MimeWordDecoder dec = {BURROW_FN(MimeCharsetReader, check_charset, &c)};
     Error err;
     Str got = mime_word_decoder_decode_header(

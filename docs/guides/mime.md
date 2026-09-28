@@ -87,7 +87,7 @@ UTF-8, ISO-8859-1 and US-ASCII are built in. For anything else, set `charset_rea
 
 <!-- example: ../examples/mime/mime.c#charset -->
 ```c
-Converter cv = {a, {0}};
+Converter cv = {.a = a};
 MimeWordDecoder custom = {BURROW_FN(MimeCharsetReader, cp1252, &cv)};
 h = mime_word_decoder_decode_header(
     &custom, a, BURROW_S("Price: =?Windows-1252?q?=80_5?="), &err);

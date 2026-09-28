@@ -555,7 +555,9 @@ Nat nat_xor(Nat z, Nat x, Nat y) {
 /* random: a number in [0, limit), n the bit length of limit. */
 Nat nat_random(Nat z, MathRandRand *rnd, Nat limit, Int n) {
     if (nat_alias(z, limit))
-        z = NAT_NIL; /* z is an alias for limit, cannot reuse */
+        z = NAT_NIL;    /* z is an alias for limit, cannot reuse */
+    if (limit.len == 0) /* Go never asks for a number below 0 */
+        return nat_to(z, 0);
     z = nat_make(z, limit.len);
     Uint msw = (Uint)(n % (Int)BIG_W);
     if (msw == 0)
@@ -563,9 +565,12 @@ Nat nat_random(Nat z, MathRandRand *rnd, Nat limit, Int n) {
     BigWord mask = msw == BIG_W ? BIG_M : ((BigWord)1 << msw) - 1;
     for (;;) {
 #if BURROW_PTR_BITS == 64
-        for (Int i = 0; i < z.len; i++)
-            z.p[i] = (BigWord)math_rand_rand_uint32(rnd) |
-                     (BigWord)math_rand_rand_uint32(rnd) << 32;
+        for (Int i = 0; i < z.len; i++) {
+            /* Two statements, since C leaves the order of the operands of |
+             * open and MSVC draws the high half first. */
+            BigWord lo = (BigWord)math_rand_rand_uint32(rnd);
+            z.p[i] = lo | (BigWord)math_rand_rand_uint32(rnd) << 32;
+        }
 #else
         for (Int i = 0; i < z.len; i++)
             z.p[i] = (BigWord)math_rand_rand_uint32(rnd);
@@ -998,6 +1003,8 @@ Nat nat_sub_mod_2n(Nat z, Nat x, Nat y, Uint n) {
             nat_copy(t, z);
             z = t;
         }
+        /* cap > len, so there is memory. */
+        /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
         z.p[len] = 0;
     }
     for (Int i = 0; i < z.len; i++)

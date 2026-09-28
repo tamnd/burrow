@@ -99,8 +99,11 @@ static inline Nat nat_view(const BigWord *p, Int n) {
     return r;
 }
 
+/* A Nat with a length has memory behind it, which the analyser cannot see
+ * through every caller, so nat_clear and nat_norm say so. */
 static inline void nat_clear(Nat z) {
     if (z.len > 0)
+        /* NOLINTNEXTLINE(clang-analyzer-core.NonNullParamChecker) */
         memset(z.p, 0, (size_t)z.len * sizeof(BigWord));
 }
 
@@ -112,6 +115,7 @@ static inline void nat_copy(Nat z, Nat x) {
 
 static inline Nat nat_norm(Nat z) {
     Int i = z.len;
+    /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
     while (i > 0 && z.p[i - 1] == 0)
         i--;
     z.len = i;
@@ -226,10 +230,10 @@ extern const Error big_err_no_digits;
 extern const Error big_err_inval_sep;
 
 /* scan: the digits of a number in base (0 for a prefix), with a fraction if
- * frac_ok. *b is the base found, *count the digits, or the negative of the
- * digits after the point when there is one. */
-Nat nat_scan(Nat z, BigScanner *r, int base, bool frac_ok, int *b, Int *count,
-             Error *err);
+ * frac_ok. *res_base is the base found, *res_count the digits, or the
+ * negative of the digits after the point when there is one. */
+Nat nat_scan(Nat z, BigScanner *r, int base, bool frac_ok, int *res_base,
+             Int *res_count, Error *res_err);
 
 /* itoa: the digits, in scratch memory, with '-' in front when neg. */
 Str nat_itoa(Nat x, bool neg, int base);

@@ -183,13 +183,13 @@ Str textproto_protocol_error_error(TextprotoProtocolError p) {
     return p;
 }
 
-Error textproto_protocol_error_as_error(TextprotoProtocolError s, Alloc *a) {
-    Str *b = (Str *)mem_alloc_nozero(a, sizeof(Str) + (size_t)s.len, _Alignof(Str));
+Error textproto_protocol_error_as_error(TextprotoProtocolError p, Alloc *a) {
+    Str *b = (Str *)mem_alloc_nozero(a, sizeof(Str) + (size_t)p.len, _Alignof(Str));
     if (b == NULL)
         return burrow_err_out_of_memory;
-    Byte *p = (Byte *)(b + 1);
-    tp_put(p, s.p, s.len);
-    *b = str_from_bytes(p, s.len);
+    Byte *text = (Byte *)(b + 1);
+    tp_put(text, p.p, p.len);
+    *b = str_from_bytes(text, p.len);
     return (Error){&tp_protocol_error_vt, b};
 }
 
@@ -360,8 +360,8 @@ static int tp_canonical_pass(const Byte *src, Byte *dst, Int n) {
     for (Int i = 0; i < n; i++) {
         Byte c = src[i];
         unsigned upper = i == 0 || src[i - 1] == '-';
-        unsigned lower_letter = (unsigned)(c - 'a') < 26u;
-        unsigned upper_letter = (unsigned)(c - 'A') < 26u;
+        unsigned lower_letter = (unsigned)(c - 'a') < 26U;
+        unsigned upper_letter = (unsigned)(c - 'A') < 26U;
         unsigned flip = upper ? lower_letter : upper_letter;
         bad |= !tp_header_field_byte[c] & (c != ' ');
         space |= c == ' ';

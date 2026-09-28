@@ -196,7 +196,7 @@ Nat nat_scan(Nat z, BigScanner *r, int base, bool frac_ok, int *res_base,
             if ('0' <= ch && ch <= '9')
                 d1 = (BigWord)(ch - '0');
             else if ('a' <= ch && ch <= 'z')
-                d1 = (BigWord)(ch - 'a' + 10);
+                d1 = (BigWord)(ch - 'a') + 10;
             else if ('A' <= ch && ch <= 'Z')
                 d1 = b <= BIG_MAX_BASE_SMALL ? (BigWord)(ch - 'A' + 10)
                                              : (BigWord)(ch - 'A' + BIG_MAX_BASE_SMALL);

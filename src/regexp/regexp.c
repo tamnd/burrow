@@ -1032,15 +1032,18 @@ static bool rx_extract(Str str, Str *name, Int *num, Str *rest) {
     }
     /* Parse number. */
     Int n = 0;
+    bool lead0 = false;
     for (Int k = 0; k < name->len; k++) {
         if (name->p[k] < '0' || '9' < name->p[k] || n >= 100000000) {
             n = -1;
             break;
         }
+        if (k == 0 && name->p[k] == '0')
+            lead0 = true;
         n = n * 10 + (Int)(name->p[k] - '0');
     }
     /* Disallow leading zeros. */
-    if (name->p[0] == '0' && name->len > 1)
+    if (lead0 && name->len > 1)
         n = -1;
     *num = n;
     *rest = str_from_bytes(rx_at(str.p, i), str.len - i);

@@ -460,6 +460,85 @@ aGVsbG8sIHdvcmxk
 
 `headers` can be NULL when there are none. `pem_encode` writes to any `IoWriter` without allocating, and a header key with a colon in it is an error before anything is written.
 
+## JSON text
+
+`burrow/encoding/json/jsontext.h` is Go's `encoding/json/jsontext`, the lower half of json v2. It reads and writes JSON as tokens and whole values and checks the grammar as it goes, and it knows nothing about structs or maps. A `JsontextDecoder` hands out one token at a time, and `jsontext_decoder_stack_pointer` says where in the document it is:
+
+<!-- example: ../examples/encoding/jsontext.c#read -->
+```c
+StringsReader sr;
+strings_reader_reset(&sr,
+                     BURROW_S("{\"name\": \"gopher\", \"tags\": [\"go\", 1.5e3]}"));
+JsontextDecoder *d = jsontext_new_decoder_v(a, strings_reader_as_io_reader(&sr), 0);
+for (;;) {
+    Error err = BURROW_NO_ERROR;
+    JsontextToken tok = jsontext_decoder_read_token(d, &err);
+    if (errors_is(err, io_eof))
+        break;
+    JsontextPointer at = jsontext_decoder_stack_pointer(d, a);
+    Str kind = jsontext_kind_string(jsontext_token_kind(tok));
+    fmt_printf_v("%-8s %-10s %s\n", kind, at, jsontext_token_string(tok, a));
+}
+jsontext_decoder_free(d);
+```
+
+The kind comes first, then the JSON pointer, then the token. The `{` sits at the top, so its pointer is empty, and a member name and its value share one pointer. Numbers come back as they were written, `1.5e3` here, until you ask for them with `jsontext_token_float` or `jsontext_token_int`. A token from the decoder points into its buffer and is good until the next read. `jsontext_token_clone` makes one that lasts.
+
+Anything that breaks the grammar is a `JsontextSyntacticError` with the byte offset and the pointer, and `errors_is` sees through it to the reason:
+
+<!-- example: ../examples/encoding/jsontext.c#bad -->
+```c
+strings_reader_reset(&sr, BURROW_S("{\"a\": 1, \"a\": 2}"));
+d = jsontext_new_decoder_v(a, strings_reader_as_io_reader(&sr), 0);
+Error err = BURROW_NO_ERROR;
+jsontext_decoder_read_value(d, &err);
+const JsontextSyntacticError *se = errors_as(err, TYPE_JSONTEXT_SYNTACTIC_ERROR);
+```
+
+The offset is 9, the pointer is `/a` and the error reads `jsontext: duplicate object member name "a"`. Duplicate names are rejected by default, as in Go, and `jsontext_allow_duplicate_names(true)` lets them through. Invalid UTF-8 is the same, with `jsontext_allow_invalid_utf8`.
+
+An encoder writes tokens and whole values and checks them the same way, so it cannot produce broken JSON. Options are values you pass when you make one:
+
+<!-- example: ../examples/encoding/jsontext.c#write -->
+```c
+BytesBuffer out = BYTES_BUFFER(a);
+JsontextEncoder *e = jsontext_new_encoder_v(a, bytes_buffer_as_io_writer(&out), 1,
+                                            jsontext_with_indent(BURROW_S("  ")));
+jsontext_encoder_write_token(e, jsontext_begin_object);
+jsontext_encoder_write_token(e, jsontext_string(BURROW_S("name")));
+jsontext_encoder_write_token(e, jsontext_string(BURROW_S("<gopher>")));
+jsontext_encoder_write_token(e, jsontext_string(BURROW_S("sizes")));
+jsontext_encoder_write_value(e, BURROW_B("[1, 2.50, 1e3]"));
+err = jsontext_encoder_write_token(e, jsontext_end_object);
+jsontext_encoder_free(e);
+```
+
+That writes
+
+```text
+{
+  "name": "<gopher>",
+  "sizes": [
+    1,
+    2.50,
+    1e3
+  ]
+}
+```
+
+The value keeps its numbers as written and only gets indented. `<` is not escaped unless you ask for `jsontext_escape_for_html`. The encoder writes to the underlying writer as each top-level value completes, so there is no flush.
+
+A `JsontextValue` is a `Slice` of JSON text with methods to check and reformat it. `jsontext_value_canonicalize` gives the RFC 8785 form, which is what you want before hashing or signing JSON:
+
+<!-- example: ../examples/encoding/jsontext.c#value -->
+```c
+JsontextValue v = jsontext_value_clone(
+    BURROW_B("{\"b\": 2.0, \"a\": [true, 1E2], \"\\u00e9\": \"x\"}"), a);
+Error cerr = jsontext_value_canonicalize_v(&v, a, 0);
+```
+
+The result is `{"a":[true,100],"b":2,"é":"x"}`: members sorted, numbers printed as float64s, escapes that were not needed undone. These functions rewrite the value in place when there is room, as Go's do, so they need memory they can write to. A `BURROW_B` literal points at read-only text, which is why the example clones it first.
+
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex` or `encoding/pem` is missing.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. `encoding/json` itself, both the v1 API and v2's marshalling, is still to come.

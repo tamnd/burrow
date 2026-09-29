@@ -420,6 +420,208 @@ BURROW_BORROWS(ret) Error big_rat_gob_decode(BigRat *z, Slice buf);
 extern const Type burrow_type_BigRat;
 extern const Type *const TYPE_BIG_RAT;
 
+/* ----------------------------------------------------------------- Float */
+
+/* big.MaxExp, MinExp and MaxPrec: the largest and smallest exponent a Float
+ * can have, and the largest precision, which memory will limit first. */
+#define BIG_MAX_EXP INT32_MAX
+#define BIG_MIN_EXP INT32_MIN
+#define BIG_MAX_PREC UINT32_MAX
+
+/* big.ErrNaN: what a Float operation panics with when IEEE 754 would give a
+ * NaN, such as the sum of two infinities of opposite sign. The panic value is
+ * an Error, TYPE_ERROR, whose text is the message, and errors_as with
+ * TYPE_BIG_ERR_NAN gets the BigErrNaN out of it. */
+typedef struct BigErrNaN {
+    Str msg;
+} BigErrNaN;
+
+/* ErrNaN.Error: the message. */
+BURROW_BORROWS(ret, err) Str big_err_nan_error(BigErrNaN err);
+
+extern const Type burrow_type_BigErrNaN;
+extern const Type *const TYPE_BIG_ERR_NAN;
+
+/* big.Float: a binary floating point number with a precision of up to
+ * BIG_MAX_PREC bits, a rounding mode, and an exponent in [BIG_MIN_EXP,
+ * BIG_MAX_EXP]. Besides finite numbers there are -0, +0, -Inf and +Inf, and
+ * no NaN: an operation that would give one panics with a BigErrNaN.
+ *
+ * A zero BigFloat is +0 with a precision of 0 and ready to use. A precision
+ * of 0 means the first operation to set the Float picks one, as Go
+ * describes for each method. The memory works the way an Int's does: the
+ * mantissa lives in memory from a, NULL for the heap, and BIG_FLOAT(a) is a
+ * zero Float on a. Read the value through the functions below and leave the
+ * fields alone, except a, which you may set while the Float is zero. */
+typedef struct BigFloat {
+    Alloc *a; /* where the mantissa lives, NULL for the heap */
+    uint32_t prec;
+    BigRoundingMode mode;
+    BigAccuracy acc;
+    uint8_t form; /* 0 for zero, 1 for finite, 2 for infinite */
+    bool neg;
+    int32_t exp;
+    burrow__BigNat mant;
+} BigFloat;
+
+/* A zero BigFloat whose mantissa will come from a. */
+#define BIG_FLOAT(alloc)                                                               \
+    ((BigFloat){(alloc), 0, BIG_TO_NEAREST_EVEN, BIG_EXACT, 0, false, 0, {NULL, 0, 0}})
+
+/* Gives the mantissa back to the allocator and leaves x +0, with its
+ * precision and mode kept. NULL is fine. */
+void big_float_free(BigFloat *x);
+
+/* big.NewFloat: a new Float set to x with a precision of 53, the struct and
+ * its mantissa both from a. A NaN x panics with a BigErrNaN. */
+BURROW_OWNS(ret) BigFloat *big_new_float(Alloc *a, double x);
+
+/* big.ParseFloat: big_float_parse on a new Float from a, with the precision
+ * and mode given. */
+BURROW_OWNS(ret) BigFloat *big_parse_float(Alloc *a, Str s, Int base, Uint prec,
+                                           BigRoundingMode mode, Int *b, Error *err);
+
+/* Float.SetPrec: sets the precision, rounding x when it shrinks. 0 makes a
+ * finite value a zero of the same sign. A precision above BIG_MAX_PREC is
+ * BIG_MAX_PREC. */
+BURROW_BORROWS(ret, z) BigFloat *big_float_set_prec(BigFloat *z, Uint prec);
+
+/* Float.SetMode: sets the rounding mode, and the accuracy to exact. */
+BURROW_BORROWS(ret, z) BigFloat *big_float_set_mode(BigFloat *z, BigRoundingMode mode);
+
+/* Float.Prec, MinPrec, Mode and Acc. MinPrec is how many bits it takes to
+ * hold x exactly, 0 for a zero or an infinity. */
+Uint big_float_prec(const BigFloat *x);
+Uint big_float_min_prec(const BigFloat *x);
+BigRoundingMode big_float_mode(const BigFloat *x);
+BigAccuracy big_float_acc(const BigFloat *x);
+
+/* Float.Sign: -1, 0 or +1, where both zeros are 0. */
+Int big_float_sign(const BigFloat *x);
+
+/* Float.MantExp: the exponent of x with its mantissa in [0.5, 1), and when
+ * mant is not NULL, mant set to that mantissa with x's precision and mode. */
+Int big_float_mant_exp(const BigFloat *x, BigFloat *mant);
+
+/* Float.SetMantExp: z = mant * 2**exp, rounded to z's precision. */
+BURROW_BORROWS(ret, z) BigFloat *big_float_set_mant_exp(BigFloat *z,
+                                                        const BigFloat *mant, Int exp);
+
+/* Float.Signbit, IsInf and IsInt. -0 has its sign bit set. */
+bool big_float_signbit(const BigFloat *x);
+bool big_float_is_inf(const BigFloat *x);
+bool big_float_is_int(const BigFloat *x);
+
+/* Float.SetUint64, SetInt64, SetFloat64, SetInt and SetRat: z = x, rounded
+ * to z's precision. A precision of 0 becomes 64, 64, 53, the larger of 64 and
+ * x's bit length, and the larger of the two halves' precisions. A NaN panics
+ * with a BigErrNaN. */
+BURROW_BORROWS(ret, z) BigFloat *big_float_set_uint64(BigFloat *z, uint64_t x);
+BURROW_BORROWS(ret, z) BigFloat *big_float_set_int64(BigFloat *z, int64_t x);
+BURROW_BORROWS(ret, z) BigFloat *big_float_set_float64(BigFloat *z, double x);
+BURROW_BORROWS(ret, z) BigFloat *big_float_set_int(BigFloat *z, const BigInt *x);
+BURROW_BORROWS(ret, z) BigFloat *big_float_set_rat(BigFloat *z, const BigRat *x);
+
+/* Float.SetInf: z = -Inf when signbit is set and +Inf when it is not. */
+BURROW_BORROWS(ret, z) BigFloat *big_float_set_inf(BigFloat *z, bool signbit);
+
+/* Float.Set: z = x, rounded to z's precision, which becomes x's when it is
+ * 0. Copy sets z to x exactly, precision, mode and accuracy included. */
+BURROW_BORROWS(ret, z) BigFloat *big_float_set(BigFloat *z, const BigFloat *x);
+BURROW_BORROWS(ret, z) BigFloat *big_float_copy(BigFloat *z, const BigFloat *x);
+
+/* Float.Uint64, Int64, Float32 and Float64: x rounded, or truncated for the
+ * integers, to the type, and in *acc how that compares with x. Values out of
+ * range saturate, to the largest integer or to an infinity. acc may be
+ * NULL. */
+uint64_t big_float_uint64(const BigFloat *x, BigAccuracy *acc);
+int64_t big_float_int64(const BigFloat *x, BigAccuracy *acc);
+float big_float_float32(const BigFloat *x, BigAccuracy *acc);
+double big_float_float64(const BigFloat *x, BigAccuracy *acc);
+
+/* Float.Int: z = x truncated toward zero, and in *acc how that compares
+ * with x. An infinity gives NULL and leaves z alone. Go allocates a new Int
+ * when z is nil; here z must not be NULL. */
+BURROW_BORROWS(ret, z) BigInt *big_float_int(const BigFloat *x, BigInt *z,
+                                             BigAccuracy *acc);
+
+/* Float.Rat: z = x exactly. An infinity gives NULL and leaves z alone. z
+ * must not be NULL. */
+BURROW_BORROWS(ret, z) BigRat *big_float_rat(const BigFloat *x, BigRat *z,
+                                             BigAccuracy *acc);
+
+/* Float.Abs and Neg: z = |x| and z = -x, rounded to z's precision. */
+BURROW_BORROWS(ret, z) BigFloat *big_float_abs(BigFloat *z, const BigFloat *x);
+BURROW_BORROWS(ret, z) BigFloat *big_float_neg(BigFloat *z, const BigFloat *x);
+
+/* Float.Add, Sub, Mul and Quo: z = the rounded result, in z's precision and
+ * mode, the larger of x's and y's precisions when z's is 0. The IEEE 754
+ * cases that give NaN panic with a BigErrNaN. */
+BURROW_BORROWS(ret, z) BigFloat *big_float_add(BigFloat *z, const BigFloat *x,
+                                               const BigFloat *y);
+BURROW_BORROWS(ret, z) BigFloat *big_float_sub(BigFloat *z, const BigFloat *x,
+                                               const BigFloat *y);
+BURROW_BORROWS(ret, z) BigFloat *big_float_mul(BigFloat *z, const BigFloat *x,
+                                               const BigFloat *y);
+BURROW_BORROWS(ret, z) BigFloat *big_float_quo(BigFloat *z, const BigFloat *x,
+                                               const BigFloat *y);
+
+/* Float.Sqrt: z = the rounded square root of x. A negative x panics with a
+ * BigErrNaN. The accuracy is not computed. */
+BURROW_BORROWS(ret, z) BigFloat *big_float_sqrt(BigFloat *z, const BigFloat *x);
+
+/* Float.Cmp: -1, 0 or +1 as x is less than, equal to or greater than y,
+ * where -0 equals +0. */
+Int big_float_cmp(const BigFloat *x, const BigFloat *y);
+
+/* Float.Parse: z = the number in s, with a mantissa in base 0, 2, 8, 10 or
+ * 16 and a decimal or, after p, binary exponent, or "Inf" with an optional
+ * sign. Base 0 reads a 0b, 0o or 0x prefix and allows underscores. A
+ * precision of 0 becomes 64. The base found goes in *b, which may be NULL.
+ * Returns z, or NULL with the reason in *err. */
+BURROW_BORROWS(ret, z) BigFloat *big_float_parse(BigFloat *z, Str s, Int base, Int *b,
+                                                 Error *err);
+
+/* Float.SetString: big_float_parse with base 0, reporting only whether it
+ * worked, in *ok, which may be NULL. */
+BURROW_BORROWS(ret, z) BigFloat *big_float_set_string(BigFloat *z, Str s, bool *ok);
+
+/* Float.Text: x in format 'e', 'E', 'f', 'g', 'G', 'x', 'p' or 'b', the
+ * way strconv formats a float64, with prec digits, or the fewest that
+ * identify x when prec is negative. Any other format gives "%" and the
+ * format. String is Text with 'g' and 10. */
+BURROW_OWNS(ret) Str big_float_text(const BigFloat *x, Alloc *a, Byte format, Int prec);
+BURROW_OWNS(ret) Str big_float_string(const BigFloat *x, Alloc *a);
+
+/* Float.Append: buf with big_float_text's result on the end. */
+BURROW_OWNS(ret) Slice big_float_append(const BigFloat *x, Alloc *a, Slice buf,
+                                        Byte format, Int prec);
+
+/* Float.Format: what fmt calls for %b, %e, %E, %f, %F, %g, %G, %x, %p and
+ * %v, with Go's flags, width and precision. */
+void big_float_format(const BigFloat *x, FmtState s, Rune ch);
+
+/* Float.Scan: what fmt's scanning calls to read a Float. Infinities are
+ * not read. */
+BURROW_BORROWS(ret) Error big_float_scan(BigFloat *z, FmtScanState s, Rune ch);
+
+/* Float.GobEncode and GobDecode: Go's gob form, which keeps the precision,
+ * mode and accuracy. Decoding rounds to z's precision unless it is 0. */
+BURROW_OWNS(ret) Slice big_float_gob_encode(const BigFloat *x, Alloc *a, Error *err);
+BURROW_BORROWS(ret) Error big_float_gob_decode(BigFloat *z, Slice buf);
+
+/* Float.AppendText, MarshalText and UnmarshalText: the shortest 'g' form,
+ * and what big_float_parse reads with base 0. */
+BURROW_OWNS(ret) Slice big_float_append_text(const BigFloat *x, Alloc *a, Slice b,
+                                             Error *err);
+BURROW_OWNS(ret) Slice big_float_marshal_text(const BigFloat *x, Alloc *a, Error *err);
+BURROW_BORROWS(ret) Error big_float_unmarshal_text(BigFloat *z, Slice text);
+
+/* The type descriptor for *Float, with the Format, Scan, String and
+ * marshaling methods on it, for BURROW_ANY. */
+extern const Type burrow_type_BigFloat;
+extern const Type *const TYPE_BIG_FLOAT;
+
 #ifdef __cplusplus
 }
 #endif

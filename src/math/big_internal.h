@@ -273,8 +273,14 @@ double bi_float64(const BigInt *x, BigAccuracy *acc);
  * number. */
 bool bi_set_from_scanner(BigInt *z, BigScanner *r, int base);
 
+/* Rat's norm, which Float.Rat needs as well. */
+void br_norm(BigRat *z);
+
 /* append(buf, s...) for a byte slice that may still be the zero Slice. */
 Slice big_append_str(Alloc *a, Slice buf, Str s);
+
+/* writeMultiple: text count times, into s. */
+void big_write_multiple(FmtState s, Str text, Int count);
 
 /* scanExponent: an exponent, e or E for a decimal one and p or P for a binary
  * one when base2ok, with separators when sep_ok. No exponent is 0 in base 10.

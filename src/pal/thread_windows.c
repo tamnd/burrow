@@ -150,12 +150,37 @@ void pal_thread_yield(void) {
 /* Fiber local storage rather than thread local, because FlsAlloc takes a
  * callback and TlsAlloc does not. A thread that never becomes a fiber has
  * exactly one, so the callback runs when the thread exits, with the value the
- * thread last set, as long as that is not NULL. */
+ * thread last set, as long as that is not NULL.
+ *
+ * A thread that runs goroutines is a fiber, and so is each goroutine, and
+ * DeleteFiber runs the callback for the fiber it deletes, from whichever fiber
+ * called it. A hook registered by code on a goroutine would then run when the
+ * goroutine ends and free memory its thread still points at. So each node keeps
+ * the fiber it was registered on, and the callback only runs the list when that
+ * is the fiber it is running on, which is the thread exiting. The hooks a
+ * deleted goroutine registered never run, and what they would have freed leaks
+ * when the thread exits, which is the documented cost of a hook that cannot be
+ * set up. */
 static DWORD thread_exit_fls = FLS_OUT_OF_INDEXES;
 static INIT_ONCE thread_exit_init_once = INIT_ONCE_STATIC_INIT;
 
+/* GetCurrentFiber is a read through the gs segment, which gcc's array bounds
+ * pass takes for a load from address zero. See pal_thread_stack_bounds. */
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#endif
+static void *thread_exit_fiber(void) {
+    return GetCurrentFiber();
+}
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+
 static VOID WINAPI thread_exit_run(PVOID v) {
     PalThreadExit *n = v;
+    if (n != NULL && n->fiber != thread_exit_fiber())
+        return;
     while (n != NULL) {
         PalThreadExit *next = n->next;
         n->fn(n->arg);
@@ -176,6 +201,7 @@ bool pal_thread_on_exit(PalThreadExit *node) {
         thread_exit_fls == FLS_OUT_OF_INDEXES)
         return false;
     node->next = FlsGetValue(thread_exit_fls);
+    node->fiber = thread_exit_fiber();
     return FlsSetValue(thread_exit_fls, node) != 0;
 }
 

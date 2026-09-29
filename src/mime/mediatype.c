@@ -247,6 +247,10 @@ static Error mime_check_media_type_disposition(Str s);
 /* consumeToken: the token at the start of v and what follows it, or an empty
  * token and v. */
 static Str mime_consume_token(Str v, Str *rest) {
+    if (v.p == NULL) {
+        *rest = v;
+        return v;
+    }
     for (Int i = 0; i < v.len; i++) {
         if (!mime_is_token_char(v.p[i])) {
             *rest = mime_sub(v, i, v.len);
@@ -262,7 +266,7 @@ static Str mime_consume_token(Str v, Str *rest) {
 static Str mime_consume_value(Alloc *sa, Str v, Str *rest, bool *oom) {
     Str none = {NULL, 0};
     *rest = v;
-    if (v.len == 0)
+    if (v.len == 0 || v.p == NULL)
         return none;
     if (v.p[0] != '"')
         return mime_consume_token(v, rest);

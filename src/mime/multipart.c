@@ -138,7 +138,7 @@ static int64_t mp_max_mime_headers(void) {
 
 #define MP_DESC(var, name, T, hash)                                                    \
     static const Type var = {                                                          \
-        {(const Byte *)name, (Int)(sizeof name - 1)},                                  \
+        {(const Byte *)(name), (Int)(sizeof(name) - 1)},                               \
         {(const Byte *)"mime/multipart", 14},                                          \
         KIND_STRUCT,                                                                   \
         (uint32_t)sizeof(T),                                                           \
@@ -887,13 +887,13 @@ static bool mp_create_temp(Alloc *a, const char *dir, MpTemp *t, Error *err) {
         dir = tmp;
     }
     size_t dl = strlen(dir);
-    bool sep = dl > 0 && mp_is_sep((Byte)dir[dl - 1]);
+    Str sep = dl > 0 && mp_is_sep((Byte)dir[dl - 1]) ? BURROW_S("") : BURROW_S(MP_SEP);
     PalErrno e = PAL_OK;
     for (int try_ = 0; try_ < 10000; try_++) {
         uint32_t r = 0;
         pal_random_bytes(&r, sizeof r, NULL);
-        Str name = fmt_sprintf_v(a, "%s%smultipart-%d", str_from_cstr(dir),
-                                 sep ? BURROW_S("") : BURROW_S(MP_SEP), (uint64_t)r);
+        Str name =
+            fmt_sprintf_v(a, "%s%smultipart-%d", str_from_cstr(dir), sep, (uint64_t)r);
         if (name.p == NULL) {
             *err = burrow__mime_err_no_memory;
             return false;
@@ -916,8 +916,7 @@ static bool mp_create_temp(Alloc *a, const char *dir, MpTemp *t, Error *err) {
         if (e != PAL_EEXIST)
             break;
     }
-    *err = fmt_errorf_v("open %s%smultipart-*: %s", str_from_cstr(dir),
-                        str_from_cstr(sep ? "" : MP_SEP),
+    *err = fmt_errorf_v("open %s%smultipart-*: %s", str_from_cstr(dir), sep,
                         str_from_cstr(pal_errno_string(e)));
     return false;
 }
@@ -1439,7 +1438,7 @@ MultipartWriter *multipart_new_writer(Alloc *a, IoWriter w) {
     if (!pal_random_bytes(buf, (int64_t)sizeof buf, &e))
         runtime_panic(str_from_cstr(pal_errno_string(e)));
     static const char hex[] = "0123456789abcdef";
-    for (int i = 0; i < 30; i++) {
+    for (size_t i = 0; i < 30; i++) {
         z->boundary[2 * i] = (Byte)hex[buf[i] >> 4];
         z->boundary[2 * i + 1] = (Byte)hex[buf[i] & 15];
     }
@@ -1666,7 +1665,7 @@ IoWriter multipart_writer_create_form_field(MultipartWriter *w, Str fieldname,
 Error multipart_writer_write_field(MultipartWriter *w, Str fieldname, Str value) {
     Error err = BURROW_NO_ERROR;
     IoWriter p = multipart_writer_create_form_field(w, fieldname, &err);
-    if (BURROW_FAILED(err))
+    if (BURROW_FAILED(err) || p.vt == NULL)
         return err;
     (void)p.vt->write(p.data, mp_slice(value.p, value.len), &err);
     return err;

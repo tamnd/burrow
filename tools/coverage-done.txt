@@ -66,6 +66,7 @@ mime/multipart
 image/color
 image/color/palette
 image
+image/draw
 mime/quotedprintable
 mime
 math/big

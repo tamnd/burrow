@@ -1,6 +1,6 @@
 # Images
 
-Go's image packages are coming over one at a time. `burrow/image.h`, `burrow/image/color.h` and `burrow/image/color/palette.h` are done. `image/draw` and the PNG, GIF and JPEG codecs come next.
+Go's image packages are coming over one at a time. `burrow/image.h`, `burrow/image/color.h`, `burrow/image/color/palette.h` and `burrow/image/draw.h` are done. The PNG, GIF and JPEG codecs come next.
 
 ## image/color
 
@@ -230,3 +230,89 @@ The input is wrapped in a `bufio` reader unless it is one already, as in Go, so 
 Every function, type and variable in the package is here. The tests compare against transcripts of Go's package: hundreds of random points and rectangles through every method, each image type on random rectangles with its pixels, reads, sub-images and `Opaque`, every Y'CbCr subsample ratio including the rectangles where Go panics and the message it panics with, the constructors' panics on bad sizes, and what `fmt` prints for each type.
 
 The differences in shape are small. `SubImage` returns the concrete type rather than an `Image`, `Uniform`'s `RGBA` returns one struct like the color types do, and `RegisterFormat` takes its decoders as function values that can carry state.
+
+## image/draw
+
+`burrow/image/draw.h` is Go's `image/draw`: drawing one image onto another, with an optional mask, using the Porter-Duff Src and Over operators.
+
+### Draw and DrawMask
+
+`draw_draw` lines up `r.min` in the destination with `sp` in the source and draws the source over the rectangle `r`. With `DRAW_SRC` the source replaces what was there, and with `DRAW_OVER` it is blended on top. The destination is an `Image` whose `set` slot is filled in, which every image type in `image` has:
+
+<!-- example: ../examples/image/draw.c#draw -->
+```c
+ImageRGBA *dst = image_new_rgba(a, image_rect(0, 0, 4, 1));
+draw_draw(image_rgba_as_image(dst), image_rgba_bounds(dst),
+          image_uniform_as_image(image_white), image_zp, DRAW_SRC);
+ImageUniform *red =
+    image_new_uniform(a, color_nrgba_as_color((ColorNRGBA){0xff, 0, 0, 0x80}));
+draw_draw(image_rgba_as_image(dst), image_rect(1, 0, 3, 1),
+          image_uniform_as_image(red), image_zp, DRAW_OVER);
+for (Int x = 0; x < 4; x++) {
+    ColorRGBA c = image_rgba_rgba_at(dst, x, 0);
+    fmt_printf_v(x < 3 ? "%v " : "%v\n", BURROW_ANY(TYPE_OF(ColorRGBA), &c));
+}
+```
+
+That prints:
+
+```
+{255 255 255 255} {255 127 127 255} {255 127 127 255} {255 255 255 255}
+```
+
+`draw_draw_mask` takes a mask as well, lined up at `mp`, and scales the source by the mask's alpha. A mask of `(Image){0}` is Go's nil mask and lets everything through:
+
+<!-- example: ../examples/image/draw.c#mask -->
+```c
+ImageAlpha *mask = image_new_alpha(a, image_rect(0, 0, 4, 1));
+for (Int x = 0; x < 4; x++)
+    image_alpha_set_alpha(mask, x, 0, (ColorAlpha){(uint8_t)(x * 0x55)});
+draw_draw_mask(image_rgba_as_image(dst), image_rgba_bounds(dst),
+               image_uniform_as_image(image_black), image_zp,
+               image_alpha_as_image(mask), image_zp, DRAW_OVER);
+for (Int x = 0; x < 4; x++) {
+    ColorRGBA c = image_rgba_rgba_at(dst, x, 0);
+    fmt_printf_v(x < 3 ? "%v " : "%v\n", BURROW_ANY(TYPE_OF(ColorRGBA), &c));
+}
+image_alpha_free(mask, a);
+```
+
+That prints:
+
+```
+{255 255 255 255} {170 84 84 255} {85 42 42 255} {0 0 0 255}
+```
+
+### Drawers
+
+`DrawDrawer` is Go's `Drawer` interface, and `draw_drawer_draw` calls it. `draw_op_as_drawer` makes one from a `DrawOp`, and `draw_floyd_steinberg` is Go's `FloydSteinberg`, which draws with error diffusion. Onto a paletted image it picks the nearest palette entry for each pixel and carries the error forward, so a gray ramp drawn onto black and white comes out dithered:
+
+<!-- example: ../examples/image/draw.c#dither -->
+```c
+ImageGray *ramp = image_new_gray(a, image_rect(0, 0, 8, 1));
+for (Int x = 0; x < 8; x++)
+    image_gray_set_gray(ramp, x, 0, (ColorGray){(uint8_t)(x * 32)});
+Color bw[2] = {color_gray16_as_color(color_black),
+               color_gray16_as_color(color_white)};
+ImagePaletted *p = image_new_paletted(a, image_rect(0, 0, 8, 1),
+                                      slice_from(bw, 2, 2, TYPE_OF(Color)));
+draw_drawer_draw(draw_floyd_steinberg, image_paletted_as_image(p),
+                 image_paletted_bounds(p), image_gray_as_image(ramp), image_zp);
+for (Int x = 0; x < 8; x++)
+    fmt_printf_v("%d", image_paletted_color_index_at(p, x, 0));
+fmt_printf_v("\n");
+image_paletted_free(p, a);
+image_gray_free(ramp, a);
+```
+
+That prints:
+
+```
+00010111
+```
+
+### How close it is to Go
+
+Every function, type and variable in the package is here. The fast paths for each pair of image types are Go's, with Go's integer arithmetic, and the tests run ten thousand random draws against a transcript of Go's package: every destination type, every source type including Y'CbCr at each subsample ratio, uniforms and images that have only the three `Image` methods, every mask type, both operators, random rectangles and points that clip in every direction, and `FloydSteinberg` onto random palettes. The pixels come out byte for byte the same, and the one case where Go panics panics with the same message.
+
+`Quantizer` is here as `DrawQuantizer` for code that takes one, as in Go, where nothing in the standard library implements it.

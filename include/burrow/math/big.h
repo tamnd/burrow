@@ -309,6 +309,117 @@ BURROW_BORROWS(ret) Error big_int_gob_decode(BigInt *z, Slice buf);
 extern const Type burrow_type_BigInt;
 extern const Type *const TYPE_BIG_INT;
 
+/* ------------------------------------------------------------------- Rat */
+
+/* big.Rat: a quotient a/b of any precision, kept in lowest terms with b > 0.
+ * A zero BigRat is 0 and ready to use. Its memory works the way an Int's does:
+ * the numerator and the denominator keep their words in memory from their own
+ * a fields, NULL for the heap, and BIG_RAT(a) is a zero Rat on a. Read the
+ * value through the functions below. A denominator with no words means 1. */
+typedef struct BigRat {
+    BigInt a; /* the numerator, which carries the sign */
+    BigInt b; /* the denominator, never negative */
+} BigRat;
+
+/* A zero BigRat whose words will come from a. */
+#define BIG_RAT(alloc) ((BigRat){BIG_INT(alloc), BIG_INT(alloc)})
+
+/* Gives the words of both halves back and leaves x zero. NULL is fine. */
+void big_rat_free(BigRat *x);
+
+/* big.NewRat: a new Rat set to num/den, the struct and its words both from a.
+ * A zero den panics. */
+BURROW_OWNS(ret) BigRat *big_new_rat(Alloc *a, int64_t num, int64_t den);
+
+/* Rat.SetFloat64: z = f exactly. NULL, with z left alone, when f is not
+ * finite. */
+BURROW_BORROWS(ret, z) BigRat *big_rat_set_float64(BigRat *z, double f);
+
+/* Rat.Float32 and Float64: the nearest float to x, ties to even, and in
+ * *exact whether it is x itself. A value too big is an infinity. exact may be
+ * NULL. */
+float big_rat_float32(const BigRat *x, bool *exact);
+double big_rat_float64(const BigRat *x, bool *exact);
+
+/* Rat.SetFrac and SetFrac64: z = a/b, reduced. A zero b panics. */
+BURROW_BORROWS(ret, z) BigRat *big_rat_set_frac(BigRat *z, const BigInt *a,
+                                                const BigInt *b);
+BURROW_BORROWS(ret, z) BigRat *big_rat_set_frac64(BigRat *z, int64_t a, int64_t b);
+
+/* Rat.SetInt, SetInt64, SetUint64 and Set: z = x. */
+BURROW_BORROWS(ret, z) BigRat *big_rat_set_int(BigRat *z, const BigInt *x);
+BURROW_BORROWS(ret, z) BigRat *big_rat_set_int64(BigRat *z, int64_t x);
+BURROW_BORROWS(ret, z) BigRat *big_rat_set_uint64(BigRat *z, uint64_t x);
+BURROW_BORROWS(ret, z) BigRat *big_rat_set(BigRat *z, const BigRat *x);
+
+/* Rat.Abs, Neg and Inv: z = |x|, -x and 1/x. Inv of zero panics. */
+BURROW_BORROWS(ret, z) BigRat *big_rat_abs(BigRat *z, const BigRat *x);
+BURROW_BORROWS(ret, z) BigRat *big_rat_neg(BigRat *z, const BigRat *x);
+BURROW_BORROWS(ret, z) BigRat *big_rat_inv(BigRat *z, const BigRat *x);
+
+/* Rat.Sign: -1, 0 or +1. */
+Int big_rat_sign(const BigRat *x);
+
+/* Rat.IsInt: whether the denominator is 1. */
+bool big_rat_is_int(const BigRat *x);
+
+/* Rat.Num and Denom: the numerator, which may be negative, and the
+ * denominator, which is always positive. Both are x's own Ints, so changing
+ * one changes x, and setting x changes them. Go's Denom hands back a new Int
+ * for a Rat whose denominator has no words yet. This stores a 1 in x instead,
+ * so on a zero Rat it is a write. */
+BURROW_BORROWS(ret, x) BigInt *big_rat_num(BigRat *x);
+BURROW_BORROWS(ret, x) BigInt *big_rat_denom(BigRat *x);
+
+/* Rat.Cmp: -1, 0 or +1 as x is less than, equal to or greater than y. */
+Int big_rat_cmp(const BigRat *x, const BigRat *y);
+
+/* Rat.Add, Sub, Mul and Quo. Quo by zero panics. */
+BURROW_BORROWS(ret, z) BigRat *big_rat_add(BigRat *z, const BigRat *x, const BigRat *y);
+BURROW_BORROWS(ret, z) BigRat *big_rat_sub(BigRat *z, const BigRat *x, const BigRat *y);
+BURROW_BORROWS(ret, z) BigRat *big_rat_mul(BigRat *z, const BigRat *x, const BigRat *y);
+BURROW_BORROWS(ret, z) BigRat *big_rat_quo(BigRat *z, const BigRat *x, const BigRat *y);
+
+/* Rat.SetString: z = the number in s, a fraction "a/b" or a floating point
+ * number with an optional exponent. A fraction's parts, and a number without
+ * a fraction or an exponent, may have a base prefix. Returns z, or NULL when s
+ * is not all a number, and says the same in *ok, which may be NULL. */
+BURROW_BORROWS(ret, z) BigRat *big_rat_set_string(BigRat *z, Str s, bool *ok);
+
+/* Rat.String: "a/b", with the /1 kept. RatString leaves it off when x is an
+ * integer. */
+BURROW_OWNS(ret) Str big_rat_string(const BigRat *x, Alloc *a);
+BURROW_OWNS(ret) Str big_rat_rat_string(const BigRat *x, Alloc *a);
+
+/* Rat.FloatString: x in decimal with prec digits after the point, the last
+ * one rounded half away from zero. */
+BURROW_OWNS(ret) Str big_rat_float_string(const BigRat *x, Alloc *a, Int prec);
+
+/* Rat.FloatPrec: how many digits after the point x takes in decimal, and in
+ * *exact whether that many is enough, which is when the denominator has no
+ * prime factors but 2 and 5. exact may be NULL. */
+Int big_rat_float_prec(const BigRat *x, bool *exact);
+
+/* Rat.Scan: what fmt's scanning calls to read a Rat, for the verbs e, E, f,
+ * F, g, G and v. */
+BURROW_BORROWS(ret) Error big_rat_scan(BigRat *z, FmtScanState s, Rune ch);
+
+/* Rat.AppendText, MarshalText and UnmarshalText: the RatString form. */
+BURROW_OWNS(ret) Slice big_rat_append_text(const BigRat *x, Alloc *a, Slice b,
+                                           Error *err);
+BURROW_OWNS(ret) Slice big_rat_marshal_text(const BigRat *x, Alloc *a, Error *err);
+BURROW_BORROWS(ret) Error big_rat_unmarshal_text(BigRat *z, Slice text);
+
+/* Rat.GobEncode and GobDecode: Go's gob form, a version and sign byte, the
+ * numerator's length in four bytes, and both halves as big endian bytes. */
+BURROW_OWNS(ret) Slice big_rat_gob_encode(const BigRat *x, Alloc *a, Error *err);
+BURROW_BORROWS(ret) Error big_rat_gob_decode(BigRat *z, Slice buf);
+
+/* The type descriptor for *Rat, with the Scan, String and marshaling methods
+ * on it, for BURROW_ANY. */
+extern const Type burrow_type_BigRat;
+extern const Type *const TYPE_BIG_RAT;
+
 #ifdef __cplusplus
 }
 #endif

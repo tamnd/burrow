@@ -269,4 +269,17 @@ void bi_scan(BigInt *z, BigScanner *r, int base, int *b, Error *err);
 Error bi_scan_sign(BigScanner *r, bool *neg);
 double bi_float64(const BigInt *x, BigAccuracy *acc);
 
+/* setFromScanner: z from all of r, false when r holds anything more than a
+ * number. */
+bool bi_set_from_scanner(BigInt *z, BigScanner *r, int base);
+
+/* append(buf, s...) for a byte slice that may still be the zero Slice. */
+Slice big_append_str(Alloc *a, Slice buf, Str s);
+
+/* scanExponent: an exponent, e or E for a decimal one and p or P for a binary
+ * one when base2ok, with separators when sep_ok. No exponent is 0 in base 10.
+ * *base is 10 or 2. */
+Error big_scan_exponent(BigScanner *r, bool base2ok, bool sep_ok, int64_t *exp,
+                        int *base);
+
 #endif /* BURROW_MATH_BIG_INTERNAL_H */

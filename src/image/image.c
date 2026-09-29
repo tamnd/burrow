@@ -97,6 +97,19 @@ static void im_unmake(Alloc *a, Slice s) {
         mem_free(a, s.p, (size_t)s.cap, 1);
 }
 
+/* A struct of size bytes with n bytes of pixels in the Slice at offset off, or
+ * NULL with nothing allocated. */
+static void *im_new(Alloc *a, size_t size, size_t align, size_t off, Int n) {
+    void *p = mem_alloc(a, size, align);
+    if (p == NULL)
+        return NULL;
+    if (!im_make(a, n, (Slice *)(void *)((char *)p + off))) {
+        mem_free(a, p, size, align);
+        return NULL;
+    }
+    return p;
+}
+
 static ColorRGBA64 im_rgba64(ColorRGBAValue v) {
     ColorRGBA64 c = {(uint16_t)v.r, (uint16_t)v.g, (uint16_t)v.b, (uint16_t)v.a};
     return c;
@@ -160,7 +173,8 @@ ImagePoint image_point_div(ImagePoint p, Int k) {
         runtime_panic(BURROW_S("runtime error: integer divide by zero"));
     /* The one quotient that overflows, which Go defines as wrapping. */
     if (k == -1)
-        return image_pt((Int)((uint64_t)0 - (uint64_t)p.x), (Int)((uint64_t)0 - (uint64_t)p.y));
+        return image_pt((Int)((uint64_t)0 - (uint64_t)p.x),
+                        (Int)((uint64_t)0 - (uint64_t)p.y));
     return image_pt(p.x / k, p.y / k);
 }
 
@@ -293,8 +307,9 @@ bool image_rectangle_eq(ImageRectangle r, ImageRectangle s) {
 }
 
 bool image_rectangle_overlaps(ImageRectangle r, ImageRectangle s) {
-    return !image_rectangle_empty(r) && !image_rectangle_empty(s) && r.min.x < s.max.x &&
-           s.min.x < r.max.x && r.min.y < s.max.y && s.min.y < r.max.y;
+    return !image_rectangle_empty(r) && !image_rectangle_empty(s) &&
+           r.min.x < s.max.x && s.min.x < r.max.x && r.min.y < s.max.y &&
+           s.min.y < r.max.y;
 }
 
 bool image_rectangle_in(ImageRectangle r, ImageRectangle s) {
@@ -346,8 +361,7 @@ ColorModel image_rectangle_color_model(ImageRectangle r) {
  * their String methods, and the images as structs of their fields. */
 
 #define IM_STR(s) {(const Byte *)(s), (Int)sizeof(s) - 1}
-#define IM_FIELD(T, go, c, ft)                                                         \
-    {IM_STR(go), {NULL, 0}, &(ft), (uint32_t)offsetof(T, c)}
+#define IM_FIELD(T, go, c, ft) {IM_STR(go), {NULL, 0}, &(ft), (uint32_t)offsetof(T, c)}
 #define IM_COUNT(arr) (uint16_t)(sizeof(arr) / sizeof((arr)[0]))
 
 #define IM_TYPE(T, go, kind, fields, nfields, methods, nmethods, tag)                  \
@@ -490,30 +504,30 @@ IM_TYPE(ImageRectangle, "Rectangle", KIND_STRUCT, im_rectangle_fields,
 IM_TYPE(ImageYCbCrSubsampleRatio, "YCbCrSubsampleRatio", KIND_INT, NULL, 0,
         burrow__methods_ImageYCbCrSubsampleRatio,
         IM_COUNT(burrow__methods_ImageYCbCrSubsampleRatio), 0x696d3033U);
-IM_TYPE(ImageConfig, "Config", KIND_STRUCT, im_config_fields, IM_COUNT(im_config_fields),
-        NULL, 0, 0x696d3034U);
-IM_TYPE(ImageRGBA, "RGBA", KIND_STRUCT, im_rgba_fields, IM_COUNT(im_rgba_fields), NULL, 0,
-        0x696d3035U);
-IM_TYPE(ImageRGBA64, "RGBA64", KIND_STRUCT, im_rgba64_fields, IM_COUNT(im_rgba64_fields),
-        NULL, 0, 0x696d3036U);
-IM_TYPE(ImageNRGBA, "NRGBA", KIND_STRUCT, im_nrgba_fields, IM_COUNT(im_nrgba_fields), NULL,
-        0, 0x696d3037U);
+IM_TYPE(ImageConfig, "Config", KIND_STRUCT, im_config_fields,
+        IM_COUNT(im_config_fields), NULL, 0, 0x696d3034U);
+IM_TYPE(ImageRGBA, "RGBA", KIND_STRUCT, im_rgba_fields, IM_COUNT(im_rgba_fields), NULL,
+        0, 0x696d3035U);
+IM_TYPE(ImageRGBA64, "RGBA64", KIND_STRUCT, im_rgba64_fields,
+        IM_COUNT(im_rgba64_fields), NULL, 0, 0x696d3036U);
+IM_TYPE(ImageNRGBA, "NRGBA", KIND_STRUCT, im_nrgba_fields, IM_COUNT(im_nrgba_fields),
+        NULL, 0, 0x696d3037U);
 IM_TYPE(ImageNRGBA64, "NRGBA64", KIND_STRUCT, im_nrgba64_fields,
         IM_COUNT(im_nrgba64_fields), NULL, 0, 0x696d3038U);
-IM_TYPE(ImageAlpha, "Alpha", KIND_STRUCT, im_alpha_fields, IM_COUNT(im_alpha_fields), NULL,
-        0, 0x696d3039U);
+IM_TYPE(ImageAlpha, "Alpha", KIND_STRUCT, im_alpha_fields, IM_COUNT(im_alpha_fields),
+        NULL, 0, 0x696d3039U);
 IM_TYPE(ImageAlpha16, "Alpha16", KIND_STRUCT, im_alpha16_fields,
         IM_COUNT(im_alpha16_fields), NULL, 0, 0x696d3130U);
-IM_TYPE(ImageGray, "Gray", KIND_STRUCT, im_gray_fields, IM_COUNT(im_gray_fields), NULL, 0,
-        0x696d3131U);
-IM_TYPE(ImageGray16, "Gray16", KIND_STRUCT, im_gray16_fields, IM_COUNT(im_gray16_fields),
-        NULL, 0, 0x696d3132U);
-IM_TYPE(ImageCMYK, "CMYK", KIND_STRUCT, im_cmyk_fields, IM_COUNT(im_cmyk_fields), NULL, 0,
-        0x696d3133U);
+IM_TYPE(ImageGray, "Gray", KIND_STRUCT, im_gray_fields, IM_COUNT(im_gray_fields), NULL,
+        0, 0x696d3131U);
+IM_TYPE(ImageGray16, "Gray16", KIND_STRUCT, im_gray16_fields,
+        IM_COUNT(im_gray16_fields), NULL, 0, 0x696d3132U);
+IM_TYPE(ImageCMYK, "CMYK", KIND_STRUCT, im_cmyk_fields, IM_COUNT(im_cmyk_fields), NULL,
+        0, 0x696d3133U);
 IM_TYPE(ImagePaletted, "Paletted", KIND_STRUCT, im_paletted_fields,
         IM_COUNT(im_paletted_fields), NULL, 0, 0x696d3134U);
-IM_TYPE(ImageYCbCr, "YCbCr", KIND_STRUCT, im_y_cb_cr_fields, IM_COUNT(im_y_cb_cr_fields),
-        NULL, 0, 0x696d3135U);
+IM_TYPE(ImageYCbCr, "YCbCr", KIND_STRUCT, im_y_cb_cr_fields,
+        IM_COUNT(im_y_cb_cr_fields), NULL, 0, 0x696d3135U);
 IM_TYPE(ImageNYCbCrA, "NYCbCrA", KIND_STRUCT, im_ny_cb_cr_a_fields,
         IM_COUNT(im_ny_cb_cr_a_fields), NULL, 0, 0x696d3136U);
 IM_TYPE(ImageUniform, "Uniform", KIND_STRUCT, im_uniform_fields,
@@ -528,16 +542,11 @@ IM_TYPE(Image, "Image", KIND_INTERFACE, NULL, 0, NULL, 0, 0x696d3138U);
 
 #define IM_COMMON(T, pre, bpp, goname, model)                                          \
     T *image_new_##pre(Alloc *a, ImageRectangle r) {                                   \
-        Int n = im_buffer_length(bpp, r,                                               \
-                                 "image: New" goname                                   \
-                                 " Rectangle has huge or negative dimensions");        \
-        T *p = (T *)mem_alloc(a, sizeof(T), _Alignof(T));                              \
+        Int n = im_buffer_length(                                                      \
+            bpp, r, "image: New" goname " Rectangle has huge or negative dimensions"); \
+        T *p = (T *)im_new(a, sizeof(T), _Alignof(T), offsetof(T, pix), n);            \
         if (p == NULL)                                                                 \
             return NULL;                                                               \
-        if (!im_make(a, n, &p->pix)) {                                                 \
-            mem_free(a, p, sizeof(T), _Alignof(T));                                    \
-            return NULL;                                                               \
-        }                                                                              \
         p->stride = (bpp) * (r.max.x - r.min.x);                                       \
         p->rect = r;                                                                   \
         return p;                                                                      \
@@ -597,11 +606,9 @@ IM_TYPE(Image, "Image", KIND_INTERFACE, NULL, 0, NULL, 0, 0x696d3138U);
         return image_##pre##_opaque((const T *)self);                                  \
     }                                                                                  \
     static const ImageVT im_##pre##_vt = {                                             \
-        &burrow_type_##T,         im_##pre##_vt_color_model,                           \
-        im_##pre##_vt_bounds,     im_##pre##_vt_at,                                    \
-        im_##pre##_vt_rgba64_at,  cidx,                                                \
-        im_##pre##_vt_set,        im_##pre##_vt_set_rgba64,                            \
-        im_##pre##_vt_opaque,                                                          \
+        &burrow_type_##T,  im_##pre##_vt_color_model, im_##pre##_vt_bounds,            \
+        im_##pre##_vt_at,  im_##pre##_vt_rgba64_at,   cidx,                            \
+        im_##pre##_vt_set, im_##pre##_vt_set_rgba64,  im_##pre##_vt_opaque,            \
     };                                                                                 \
     Image image_##pre##_as_image(T *p) {                                               \
         Image m = {&im_##pre##_vt, p};                                                 \
@@ -795,7 +802,8 @@ void image_nrgba_set(ImageNRGBA *p, Int x, Int y, Color c) {
 }
 
 /* Un-premultiply, as SetRGBA64 on the two NRGBA types does. */
-static void im_unpremul(ColorRGBA64 c, uint32_t *r, uint32_t *g, uint32_t *b, uint32_t *a) {
+static void im_unpremul(ColorRGBA64 c, uint32_t *r, uint32_t *g, uint32_t *b,
+                        uint32_t *a) {
     *r = c.r;
     *g = c.g;
     *b = c.b;
@@ -1160,8 +1168,10 @@ IM_COMMON(ImageCMYK, cmyk, 4, "CMYK", color_cmyk_model)
 /* --------------------------------------------------------------- Paletted */
 
 ImagePaletted *image_new_paletted(Alloc *a, ImageRectangle r, ColorPalette pal) {
-    Int n = im_buffer_length(1, r, "image: NewPaletted Rectangle has huge or negative dimensions");
-    ImagePaletted *p = (ImagePaletted *)mem_alloc(a, sizeof *p, _Alignof(ImagePaletted));
+    Int n = im_buffer_length(
+        1, r, "image: NewPaletted Rectangle has huge or negative dimensions");
+    ImagePaletted *p =
+        (ImagePaletted *)mem_alloc(a, sizeof *p, _Alignof(ImagePaletted));
     if (p == NULL)
         return NULL;
     if (!im_make(a, n, &p->pix)) {
@@ -1205,7 +1215,8 @@ Color image_paletted_at(const ImagePaletted *p, Int x, Int y) {
     }
     if (!im_in(x, y, p->rect))
         return im_palette_entry(p->palette, 0);
-    return im_palette_entry(p->palette, *im_byte(p->pix, image_paletted_pix_offset(p, x, y)));
+    return im_palette_entry(p->palette,
+                            *im_byte(p->pix, image_paletted_pix_offset(p, x, y)));
 }
 
 ColorRGBA64 image_paletted_rgba64_at(const ImagePaletted *p, Int x, Int y) {
@@ -1227,7 +1238,8 @@ void image_paletted_set_rgba64(ImagePaletted *p, Int x, Int y, ColorRGBA64 c) {
     if (!im_in(x, y, p->rect))
         return;
     Int i = image_paletted_pix_offset(p, x, y);
-    *im_byte(p->pix, i) = (Byte)color_palette_index(p->palette, color_rgba64_as_color(c));
+    *im_byte(p->pix, i) =
+        (Byte)color_palette_index(p->palette, color_rgba64_as_color(c));
 }
 
 uint8_t image_paletted_color_index_at(const ImagePaletted *p, Int x, Int y) {
@@ -1384,8 +1396,8 @@ bool image_y_cb_cr_opaque(const ImageYCbCr *p) {
 }
 
 /* yCbCrSize: the size of the luma plane and of each chroma plane. */
-static void im_y_cb_cr_size(ImageRectangle r, ImageYCbCrSubsampleRatio ratio, Int *w, Int *h,
-                            Int *cw, Int *ch) {
+static void im_y_cb_cr_size(ImageRectangle r, ImageYCbCrSubsampleRatio ratio, Int *w,
+                            Int *h, Int *cw, Int *ch) {
     *w = r.max.x - r.min.x;
     *h = r.max.y - r.min.y;
     switch (ratio) {
@@ -1424,7 +1436,8 @@ static void im_planes(Slice b, ImageYCbCr *p, Int i0, Int i1, Int i2) {
     p->cr = slice_sub3(b, i1, i2, i2);
 }
 
-ImageYCbCr *image_new_y_cb_cr(Alloc *a, ImageRectangle r, ImageYCbCrSubsampleRatio ratio) {
+ImageYCbCr *image_new_y_cb_cr(Alloc *a, ImageRectangle r,
+                              ImageYCbCrSubsampleRatio ratio) {
     Int w, h, cw, ch;
     im_y_cb_cr_size(r, ratio, &w, &h, &cw, &ch);
     if (im_add2(im_mul3(1, w, h), im_mul3(2, cw, ch)) < 0)
@@ -1474,9 +1487,15 @@ static bool im_y_cb_cr_vt_opaque(void *self) {
 }
 
 static const ImageVT im_y_cb_cr_vt = {
-    &burrow_type_ImageYCbCr, im_y_cb_cr_vt_color_model, im_y_cb_cr_vt_bounds,
-    im_y_cb_cr_vt_at,        im_y_cb_cr_vt_rgba64_at,   NULL,
-    NULL,                    NULL,                      im_y_cb_cr_vt_opaque,
+    &burrow_type_ImageYCbCr,
+    im_y_cb_cr_vt_color_model,
+    im_y_cb_cr_vt_bounds,
+    im_y_cb_cr_vt_at,
+    im_y_cb_cr_vt_rgba64_at,
+    NULL,
+    NULL,
+    NULL,
+    im_y_cb_cr_vt_opaque,
 };
 
 Image image_y_cb_cr_as_image(ImageYCbCr *p) {
@@ -1566,12 +1585,14 @@ bool image_ny_cb_cr_a_opaque(const ImageNYCbCrA *p) {
     return true;
 }
 
-ImageNYCbCrA *image_new_ny_cb_cr_a(Alloc *a, ImageRectangle r, ImageYCbCrSubsampleRatio ratio) {
+ImageNYCbCrA *image_new_ny_cb_cr_a(Alloc *a, ImageRectangle r,
+                                   ImageYCbCrSubsampleRatio ratio) {
     Int w, h, cw, ch;
     im_y_cb_cr_size(r, ratio, &w, &h, &cw, &ch);
     if (im_add2(im_mul3(2, w, h), im_mul3(2, cw, ch)) < 0)
         im_huge("image: NewNYCbCrA Rectangle has huge or negative dimension");
-    Int i0 = w * h, i1 = w * h + cw * ch, i2 = w * h + 2 * cw * ch, i3 = 2 * w * h + 2 * cw * ch;
+    Int i0 = w * h, i1 = w * h + cw * ch, i2 = w * h + 2 * cw * ch,
+        i3 = 2 * w * h + 2 * cw * ch;
     ImageNYCbCrA *p = (ImageNYCbCrA *)mem_alloc(a, sizeof *p, _Alignof(ImageNYCbCrA));
     if (p == NULL)
         return NULL;
@@ -1618,10 +1639,14 @@ static bool im_ny_cb_cr_a_vt_opaque(void *self) {
 }
 
 static const ImageVT im_ny_cb_cr_a_vt = {
-    &burrow_type_ImageNYCbCrA,  im_ny_cb_cr_a_vt_color_model,
-    im_ny_cb_cr_a_vt_bounds,    im_ny_cb_cr_a_vt_at,
-    im_ny_cb_cr_a_vt_rgba64_at, NULL,
-    NULL,                       NULL,
+    &burrow_type_ImageNYCbCrA,
+    im_ny_cb_cr_a_vt_color_model,
+    im_ny_cb_cr_a_vt_bounds,
+    im_ny_cb_cr_a_vt_at,
+    im_ny_cb_cr_a_vt_rgba64_at,
+    NULL,
+    NULL,
+    NULL,
     im_ny_cb_cr_a_vt_opaque,
 };
 
@@ -1724,7 +1749,8 @@ static ColorRGBAValue im_uniform_color_rgba(const ColorData *self) {
     return image_uniform_rgba((const ImageUniform *)self->ptr);
 }
 
-static const ColorVT im_uniform_color_vt = {&burrow_type_ImageUniform, im_uniform_color_rgba};
+static const ColorVT im_uniform_color_vt = {&burrow_type_ImageUniform,
+                                            im_uniform_color_rgba};
 
 Color image_uniform_as_color(ImageUniform *u) {
     Color c;
@@ -1751,9 +1777,15 @@ static bool im_uniform_vt_opaque(void *self) {
 }
 
 static const ImageVT im_uniform_vt = {
-    &burrow_type_ImageUniform, im_uniform_vt_color_model, im_uniform_vt_bounds,
-    im_uniform_vt_at,          im_uniform_vt_rgba64_at,   NULL,
-    NULL,                      NULL,                      im_uniform_vt_opaque,
+    &burrow_type_ImageUniform,
+    im_uniform_vt_color_model,
+    im_uniform_vt_bounds,
+    im_uniform_vt_at,
+    im_uniform_vt_rgba64_at,
+    NULL,
+    NULL,
+    NULL,
+    im_uniform_vt_opaque,
 };
 
 Image image_uniform_as_image(ImageUniform *u) {
@@ -1798,7 +1830,8 @@ static ImFormat *im_formats;
 
 void image_register_format(Str name, Str magic, ImageDecodeFunc decode,
                            ImageDecodeConfigFunc decode_config) {
-    ImFormat *f = (ImFormat *)mem_alloc(heap_allocator(), sizeof *f, _Alignof(ImFormat));
+    ImFormat *f =
+        (ImFormat *)mem_alloc(heap_allocator(), sizeof *f, _Alignof(ImFormat));
     if (f == NULL)
         runtime_panic(BURROW_S("image: RegisterFormat: out of memory"));
     f->name = name;
@@ -1889,7 +1922,8 @@ ImageConfig image_decode_config(Alloc *a, IoReader r, Str *name, Error *err) {
         BURROW_OUT(err, image_err_format);
     } else {
         Error e = BURROW_NO_ERROR;
-        c = f->decode_config.f(f->decode_config.env, a, bufio_reader_as_io_reader(br), &e);
+        c = f->decode_config.f(f->decode_config.env, a, bufio_reader_as_io_reader(br),
+                               &e);
         BURROW_OUT(name, f->name);
         BURROW_OUT(err, e);
     }

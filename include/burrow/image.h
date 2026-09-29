@@ -32,12 +32,6 @@
  * ImageRGBA64Image and ImagePalettedImage are the same type as Image, named
  * for what the vtable promises.
  *
- * SUB-IMAGES
- *
- * SubImage returns the concrete type by value rather than an Image, since the
- * result shares its pixels with the original and there is nothing new to
- * allocate. Take its address to make an Image of it.
- *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -233,7 +227,11 @@ BURROW_BORROWS(ret, r) Image image_rectangle_as_image(const ImageRectangle *r);
  * should not be called on a sub-image or on a struct you filled in yourself.
  *
  * Reading a pixel outside rect gives the zero color, and writing one does
- * nothing. A pix too short for rect panics the way indexing it does in Go. */
+ * nothing. A pix too short for rect panics the way indexing it does in Go.
+ *
+ * SubImage returns the concrete type by value rather than an Image, since the
+ * result shares its pixels with the original and there is nothing new to
+ * allocate. Take its address to make an Image of it. */
 
 /* image.RGBA: 4 bytes a pixel, R, G, B, A, alpha-premultiplied. */
 typedef struct ImageRGBA {
@@ -442,7 +440,8 @@ typedef struct ImagePaletted {
 extern const Type burrow_type_ImagePaletted;
 
 /* image.NewPaletted. The image shares p, which has to outlive it. */
-BURROW_OWNS(ret) ImagePaletted *image_new_paletted(Alloc *a, ImageRectangle r, ColorPalette p);
+BURROW_OWNS(ret) ImagePaletted *image_new_paletted(Alloc *a, ImageRectangle r,
+                                                   ColorPalette p);
 void image_paletted_free(ImagePaletted *p, Alloc *a);
 
 /* Paletted.ColorModel: the palette as a Model. It points at p->palette. */
@@ -502,8 +501,8 @@ extern const Type burrow_type_ImageYCbCr;
 
 /* image.NewYCbCr: the three planes are one allocation, which
  * image_y_cb_cr_free gives back. */
-BURROW_OWNS(ret) ImageYCbCr *image_new_y_cb_cr(Alloc *a, ImageRectangle r,
-                                               ImageYCbCrSubsampleRatio subsample_ratio);
+BURROW_OWNS(ret) ImageYCbCr *
+image_new_y_cb_cr(Alloc *a, ImageRectangle r, ImageYCbCrSubsampleRatio subsample_ratio);
 void image_y_cb_cr_free(ImageYCbCr *p, Alloc *a);
 ColorModel image_y_cb_cr_color_model(const ImageYCbCr *p);
 ImageRectangle image_y_cb_cr_bounds(const ImageYCbCr *p);
@@ -525,8 +524,9 @@ typedef struct ImageNYCbCrA {
 } ImageNYCbCrA;
 extern const Type burrow_type_ImageNYCbCrA;
 
-BURROW_OWNS(ret) ImageNYCbCrA *image_new_ny_cb_cr_a(Alloc *a, ImageRectangle r,
-                                                    ImageYCbCrSubsampleRatio subsample_ratio);
+BURROW_OWNS(ret) ImageNYCbCrA *
+image_new_ny_cb_cr_a(Alloc *a, ImageRectangle r,
+                     ImageYCbCrSubsampleRatio subsample_ratio);
 void image_ny_cb_cr_a_free(ImageNYCbCrA *p, Alloc *a);
 ColorModel image_ny_cb_cr_a_color_model(const ImageNYCbCrA *p);
 ImageRectangle image_ny_cb_cr_a_bounds(const ImageNYCbCrA *p);

@@ -121,24 +121,25 @@ static void TestRectangle(TestingT *t) {
         ImagePoint p = image_pt(tc->p[0], tc->p[1]);
         ColorRGBA64 at64 = image_rectangle_rgba64_at(r, p.x, p.y);
         Color at = image_rectangle_at(r, p.x, p.y);
-        bool ok = rect_is(image_rectangle_intersect(r, s), tc->inter) &&
-                  rect_is(image_rectangle_union(r, s), tc->uni) &&
-                  rect_is(image_rectangle_inset(r, tc->n), tc->inset) &&
-                  rect_is(image_rectangle_canon(r), tc->canon) &&
-                  rect_is(image_rectangle_add(r, p), tc->add) &&
-                  rect_is(image_rectangle_sub(r, p), tc->sub) &&
-                  pt_is(image_rectangle_size(r), tc->size) &&
-                  image_rectangle_dx(r) == tc->dx && image_rectangle_dy(r) == tc->dy &&
-                  image_rectangle_empty(r) == tc->empty &&
-                  image_rectangle_eq(r, s) == tc->eq &&
-                  image_rectangle_overlaps(r, s) == tc->overlaps &&
-                  image_rectangle_in(r, s) == tc->in && image_point_in(p, r) == tc->pin &&
-                  at.vt->self_type == TYPE_OF(ColorAlpha16) &&
-                  at.data.alpha16.a == tc->at_a && at64.r == tc->at_a &&
-                  at64.a == tc->at_a &&
-                  str_eq(image_rectangle_string(r, a), str_from_cstr(tc->str));
+        bool ok =
+            rect_is(image_rectangle_intersect(r, s), tc->inter) &&
+            rect_is(image_rectangle_union(r, s), tc->uni) &&
+            rect_is(image_rectangle_inset(r, tc->n), tc->inset) &&
+            rect_is(image_rectangle_canon(r), tc->canon) &&
+            rect_is(image_rectangle_add(r, p), tc->add) &&
+            rect_is(image_rectangle_sub(r, p), tc->sub) &&
+            pt_is(image_rectangle_size(r), tc->size) &&
+            image_rectangle_dx(r) == tc->dx && image_rectangle_dy(r) == tc->dy &&
+            image_rectangle_empty(r) == tc->empty &&
+            image_rectangle_eq(r, s) == tc->eq &&
+            image_rectangle_overlaps(r, s) == tc->overlaps &&
+            image_rectangle_in(r, s) == tc->in && image_point_in(p, r) == tc->pin &&
+            at.vt->self_type == TYPE_OF(ColorAlpha16) &&
+            at.data.alpha16.a == tc->at_a && at64.r == tc->at_a && at64.a == tc->at_a &&
+            str_eq(image_rectangle_string(r, a), str_from_cstr(tc->str));
         if (!ok)
-            testing_t_errorf_v(t, "rectangle case %d, %s: wrong result", (int)i, tc->str);
+            testing_t_errorf_v(t, "rectangle case %d, %s: wrong result", (int)i,
+                               tc->str);
     }
 
     /* Rect puts the corners in order, and a Rectangle is an Image. */
@@ -185,7 +186,8 @@ static Color xcolor(Xs *r, int k) {
         return color_rgba64_as_color(
             (ColorRGBA64){U16(v[0]), U16(v[1]), U16(v[2]), U16(v[3])});
     case 2:
-        return color_nrgba_as_color((ColorNRGBA){U8(v[0]), U8(v[1]), U8(v[2]), U8(v[3])});
+        return color_nrgba_as_color(
+            (ColorNRGBA){U8(v[0]), U8(v[1]), U8(v[2]), U8(v[3])});
     case 3:
         return color_nrgba64_as_color(
             (ColorNRGBA64){U16(v[0]), U16(v[1]), U16(v[2]), U16(v[3])});
@@ -265,7 +267,8 @@ static void fnv_color(Fnv *f, Color c) {
         v[0] = d->nrgba.r, v[1] = d->nrgba.g, v[2] = d->nrgba.b, v[3] = d->nrgba.a;
         break;
     case 3:
-        v[0] = d->nrgba64.r, v[1] = d->nrgba64.g, v[2] = d->nrgba64.b, v[3] = d->nrgba64.a;
+        v[0] = d->nrgba64.r, v[1] = d->nrgba64.g, v[2] = d->nrgba64.b,
+        v[3] = d->nrgba64.a;
         break;
     case 4:
         v[0] = d->alpha.a;
@@ -482,27 +485,29 @@ static void typed_at(Fnv *f, ImPix x, Int px, Int py) {
         fnv_color(f, color_rgba_as_color(image_rgba_rgba_at(&x.p->rgba, px, py)));
         break;
     case 1:
-        fnv_color(f, color_rgba64_as_color(image_rgba64_rgba64_at(&x.p->rgba64, px, py)));
+        fnv_color(f,
+                  color_rgba64_as_color(image_rgba64_rgba64_at(&x.p->rgba64, px, py)));
         break;
     case 2:
         fnv_color(f, color_nrgba_as_color(image_nrgba_nrgba_at(&x.p->nrgba, px, py)));
         break;
     case 3:
-        fnv_color(f,
-                  color_nrgba64_as_color(image_nrgba64_nrgba64_at(&x.p->nrgba64, px, py)));
+        fnv_color(
+            f, color_nrgba64_as_color(image_nrgba64_nrgba64_at(&x.p->nrgba64, px, py)));
         break;
     case 4:
         fnv_color(f, color_alpha_as_color(image_alpha_alpha_at(&x.p->alpha, px, py)));
         break;
     case 5:
-        fnv_color(f,
-                  color_alpha16_as_color(image_alpha16_alpha16_at(&x.p->alpha16, px, py)));
+        fnv_color(
+            f, color_alpha16_as_color(image_alpha16_alpha16_at(&x.p->alpha16, px, py)));
         break;
     case 6:
         fnv_color(f, color_gray_as_color(image_gray_gray_at(&x.p->gray, px, py)));
         break;
     case 7:
-        fnv_color(f, color_gray16_as_color(image_gray16_gray16_at(&x.p->gray16, px, py)));
+        fnv_color(f,
+                  color_gray16_as_color(image_gray16_gray16_at(&x.p->gray16, px, py)));
         break;
     case 8:
         fnv_color(f, color_cmyk_as_color(image_cmyk_cmyk_at(&x.p->cmyk, px, py)));
@@ -624,8 +629,8 @@ static void TestImage(TestingT *t) {
         }
         if (pix_of(x).len != tc->pix_len || stride_of(x) != tc->stride)
             testing_t_errorf_v(t, "case %d, kind %d: pix %d stride %d, want %d and %d",
-                               (int)i, tc->kind, pix_of(x).len, stride_of(x), tc->pix_len,
-                               tc->stride);
+                               (int)i, tc->kind, pix_of(x).len, stride_of(x),
+                               tc->pix_len, tc->stride);
         if (pix_digest(x) != tc->pix)
             testing_t_errorf_v(t, "case %d, kind %d, mode %d: wrong pixels", (int)i,
                                tc->kind, tc->mode);
@@ -697,18 +702,20 @@ static void run_y_reads(void *env) {
     YRun *run = env;
     const ImageYCbCr *y = run->y;
     const ImageNYCbCrA *n = run->n;
-    Image m = n != NULL ? image_ny_cb_cr_a_as_image(run->n) : image_y_cb_cr_as_image(run->y);
+    Image m =
+        n != NULL ? image_ny_cb_cr_a_as_image(run->n) : image_y_cb_cr_as_image(run->y);
     ImageRectangle b = image_bounds(m);
     for (Int py = b.min.y - 1; py < b.max.y + 1; py++) {
         for (Int px = b.min.x - 1; px < b.max.x + 1; px++) {
             fnv_color(&y_digest, image_at(m, px, py));
             fnv_rgba64(&y_digest, m.vt->rgba64_at(m.data, px, py));
-            fnv_color(&y_digest, color_y_cb_cr_as_color(image_y_cb_cr_y_cb_cr_at(y, px, py)));
+            fnv_color(&y_digest,
+                      color_y_cb_cr_as_color(image_y_cb_cr_y_cb_cr_at(y, px, py)));
             fnv_u64(&y_digest, (uint64_t)image_y_cb_cr_y_offset(y, px, py));
             fnv_u64(&y_digest, (uint64_t)image_y_cb_cr_c_offset(y, px, py));
             if (n != NULL) {
-                fnv_color(&y_digest,
-                          color_ny_cb_cr_a_as_color(image_ny_cb_cr_a_ny_cb_cr_a_at(n, px, py)));
+                fnv_color(&y_digest, color_ny_cb_cr_a_as_color(
+                                         image_ny_cb_cr_a_ny_cb_cr_a_at(n, px, py)));
                 fnv_u64(&y_digest, (uint64_t)image_ny_cb_cr_a_a_offset(n, px, py));
             }
         }
@@ -741,7 +748,7 @@ static void fill(Slice s, int mul, int add) {
 }
 
 static const Int im_y_rects[][4] = {
-    {0, 0, 8, 6}, {1, 1, 9, 7}, {-3, -1, 4, 5}, {0, 0, 1, 1},
+    {0, 0, 8, 6}, {1, 1, 9, 7},     {-3, -1, 4, 5}, {0, 0, 1, 1},
     {3, 2, 3, 5}, {-5, -5, -1, -2}, {-7, 3, 0, 4},
 };
 
@@ -769,7 +776,7 @@ static void TestYCbCr(TestingT *t) {
         if (run.n != NULL) {
             if (tc->alpha == 1)
                 fill(run.n->a, 17, 7);
-            else
+            else if (run.n->a.len > 0)
                 memset(run.n->a.p, 0xff, (size_t)run.n->a.len);
             lens[3] = run.n->a.len, caps[3] = run.n->a.cap, a_stride = run.n->a_stride;
         }
@@ -789,8 +796,8 @@ static void TestYCbCr(TestingT *t) {
         Str p;
         uint64_t h = y_reads(run, &p);
         if (h != tc->reads || !str_eq(p, str_from_cstr(tc->reads_panic)))
-            testing_t_errorf_v(t, "case %d, ratio %d, rect %d: wrong reads, panic %q", (int)i,
-                               tc->ratio, tc->rect, p);
+            testing_t_errorf_v(t, "case %d, ratio %d, rect %d: wrong reads, panic %q",
+                               (int)i, tc->ratio, tc->rect, p);
         Image m = run.n != NULL ? image_ny_cb_cr_a_as_image(run.n)
                                 : image_y_cb_cr_as_image(run.y);
         if (m.vt->opaque(m.data) != tc->opaque)
@@ -823,11 +830,13 @@ static void TestYCbCr(TestingT *t) {
                                tc->ratio, tc->rect);
         h = y_reads(sub, &p);
         if (h != tc->sub_reads || !str_eq(p, str_from_cstr(tc->sub_reads_panic)))
-            testing_t_errorf_v(t, "case %d: wrong reads of SubImage, panic %q", (int)i, p);
+            testing_t_errorf_v(t, "case %d: wrong reads of SubImage, panic %q", (int)i,
+                               p);
         Image sm = sub.n != NULL ? image_ny_cb_cr_a_as_image(sub.n)
                                  : image_y_cb_cr_as_image(sub.y);
         if (sm.vt->opaque(sm.data) != tc->sub_opaque)
-            testing_t_errorf_v(t, "case %d: SubImage Opaque is %t", (int)i, (bool)!tc->sub_opaque);
+            testing_t_errorf_v(t, "case %d: SubImage Opaque is %t", (int)i,
+                               (bool)!tc->sub_opaque);
     }
     arena_free(&ar);
 }
@@ -886,15 +895,16 @@ static void TestBadRectangle(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
-    const ImageRectangle rs[2] = {{{0, 0}, {-1, 5}}, {{0, 0}, {(Int)1 << 40, (Int)1 << 40}}};
+    const ImageRectangle rs[2] = {{{0, 0}, {-1, 5}},
+                                  {{0, 0}, {(Int)1 << 40, (Int)1 << 40}}};
     for (int w = 0; w < (int)COUNT(im_ctor_panics); w++) {
         for (int k = 0; k < 2; k++) {
             ctor_which = w;
             ctor_rect = rs[k];
             Str got = recovered(BURROW_FN(Func, run_ctor, a));
             if (!str_eq(got, str_from_cstr(im_ctor_panics[w][k])))
-                testing_t_errorf_v(t, "constructor %d, rectangle %d: panic %q, want %q", w,
-                                   k, got, str_from_cstr(im_ctor_panics[w][k]));
+                testing_t_errorf_v(t, "constructor %d, rectangle %d: panic %q, want %q",
+                                   w, k, got, str_from_cstr(im_ctor_panics[w][k]));
         }
     }
     arena_free(&ar);
@@ -931,13 +941,16 @@ static void TestUniform(TestingT *t) {
     CHECK(v.r == 0xffff && v.g == 0 && v.a == 0xffff);
     CHECK(uc.vt->self_type == TYPE_OF(ImageUniform));
 
-    ImageUniform *h = image_new_uniform(a, color_nrgba_as_color((ColorNRGBA){1, 2, 3, 4}));
+    ImageUniform *h =
+        image_new_uniform(a, color_nrgba_as_color((ColorNRGBA){1, 2, 3, 4}));
     CHECK(!image_uniform_opaque(h));
 
-    CHECK(image_uniform_rgba(image_black).a == 0xffff && image_uniform_rgba(image_black).r == 0);
+    CHECK(image_uniform_rgba(image_black).a == 0xffff &&
+          image_uniform_rgba(image_black).r == 0);
     CHECK(image_uniform_rgba(image_white).r == 0xffff);
     CHECK(image_uniform_rgba(image_transparent).a == 0);
-    CHECK(image_uniform_opaque(image_opaque) && !image_uniform_opaque(image_transparent));
+    CHECK(image_uniform_opaque(image_opaque) &&
+          !image_uniform_opaque(image_transparent));
     CHECK(image_black->c.vt->self_type == TYPE_OF(ColorGray16));
     CHECK(image_opaque->c.vt->self_type == TYPE_OF(ColorAlpha16));
     image_uniform_free(u, a);
@@ -1033,7 +1046,8 @@ static void TestFormats(TestingT *t) {
     image_register_format(BURROW_S("fake"), BURROW_S("F?KE"),
                           (ImageDecodeFunc){fake_decode, &fake},
                           (ImageDecodeConfigFunc){fake_config, &fake});
-    image_register_format(BURROW_S("fake2"), BURROW_S("F"), (ImageDecodeFunc){NULL, NULL},
+    image_register_format(BURROW_S("fake2"), BURROW_S("F"),
+                          (ImageDecodeFunc){NULL, NULL},
                           (ImageDecodeConfigFunc){fake_config, &fake});
 
     err = BURROW_NO_ERROR;

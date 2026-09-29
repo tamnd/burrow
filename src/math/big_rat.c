@@ -31,7 +31,7 @@ static void br_division_by_zero(void) {
 /* --------------------------------------------------------------- rat.go */
 
 /* norm: z in lowest terms, with a denominator of 1 for an integer. */
-static void br_norm(BigRat *z) {
+void br_norm(BigRat *z) {
     /* Go only ever reads the denominator's magnitude; keeping its sign clear
        here means the C side, which prints and compares the whole Int, agrees. */
     z->b.neg = false;

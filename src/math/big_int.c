@@ -1771,7 +1771,7 @@ Slice big_int_append(const BigInt *x, Alloc *a, Slice buf, Int base) {
 }
 
 /* writeMultiple: text count times, into s. */
-static void big_write_multiple(FmtState s, Str text, Int count) {
+void big_write_multiple(FmtState s, Str text, Int count) {
     if (text.len <= 0 || count <= 0)
         return;
     Slice b = slice_from((void *)(uintptr_t)text.p, text.len, text.len, TYPE_BYTE);

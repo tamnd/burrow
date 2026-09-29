@@ -762,8 +762,10 @@ static void TestYCbCr(TestingT *t) {
             run.n = image_new_ny_cb_cr_a(a, b, ratio);
             run.y = run.n != NULL ? &run.n->y_cb_cr : NULL;
         }
-        if (run.y == NULL)
+        if (run.y == NULL) {
             testing_t_fatalf_v(t, "case %d: out of memory", (int)i);
+            return;
+        }
         if (run.n != NULL) {
             if (tc->alpha == 1)
                 fill(run.n->a, 17, 7);

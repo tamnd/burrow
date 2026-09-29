@@ -28,7 +28,9 @@ static const Str im_no_name = {NULL, 0};
 
 /* Go's p.Pix[i : i+n : i+n]. */
 static inline Byte *im_run(Slice pix, Int i, Int n) {
-    return (Byte *)slice_sub3(pix, i, i + n, i + n).p;
+    if (i < 0 || i > pix.cap - n)
+        (void)slice_sub3(pix, i, i + n, i + n); /* panics the way Go does */
+    return (Byte *)pix.p + i;
 }
 
 /* Go's p.Pix[i]. Out of range goes through slice_at for Go's panic. */

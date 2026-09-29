@@ -81,6 +81,7 @@
 #include "burrow/image/color/palette.h"
 #include "burrow/image/draw.h"
 #include "burrow/image/gif.h"
+#include "burrow/image/jpeg.h"
 #include "burrow/image/png.h"
 #include "burrow/io.h"
 #include "burrow/iter.h"

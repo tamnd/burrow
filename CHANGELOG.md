@@ -4,6 +4,26 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.11 (2026-09-29)
+
+MIME, the rest of `math/big`, and the first three image packages. v0.1.10 was tagged, but its release build failed on the gcc and MSVC builds of `math/big` and nothing was published, so everything in it ships here too.
+
+### Added
+
+- `mime/quotedprintable`, the reader and writer (#249).
+- `mime`, with media types, encoded words and the extension table, which reads the system's table on first use the way Go does (#250, #251).
+- `mime/multipart`, the reader, `ReadForm` and the writer (#252).
+- `math/big`'s `Rat` (#253) and `Float` (#254), which finish the package at 190 of 190 declarations. The Float tests are 27,615 cases generated from Go's `math/big`.
+- `image/color` and `image/color/palette`, checked against 14,251 cases from Go and digests of the Y'CbCr and CMYK conversions over every 24 bit input (#256).
+- `image`, with points, rectangles, all twelve in-memory image types, `Uniform` and the format registry (#257).
+- `image/draw`, with all of Go's fast paths and Floyd-Steinberg dithering, matching Go's pixels on 10,000 random draws (#258).
+
+### Fixed
+
+- The gcc and MSVC builds of `math/big` and `regexp`, which broke the v0.1.10 release (#247).
+- `math/big`'s Float no longer needs libm at link time, and a few null and narrowing cases that clang-tidy and gcc found in it and in `mime` are handled (#255).
+- On Windows, a thread exit hook registered from a goroutine no longer runs when that goroutine's fiber is deleted (#255).
+
 ## v0.1.10 (2026-09-28)
 
 Regular expressions and big integers.

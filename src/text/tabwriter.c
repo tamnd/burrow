@@ -366,6 +366,15 @@ static void tw_flush_no_defers(TabwriterWriter *b) {
  * the error. Anything else is passed on with the operation named, and the
  * text is kept in the writer, so it lives until the writer is freed or panics
  * again. */
+/* The catch blocks below call these instead of building an Any or a Str
+ * themselves. A compound literal in the function that called setjmp is a
+ * local gcc warns may be clobbered by the jump. */
+static void tw_panic_err(TabwriterWriter *b) {
+    Error e = b->err;
+    b->err = BURROW_NO_ERROR;
+    panic(BURROW_ANY(TYPE_ERROR, &e));
+}
+
 static Error tw_handle_panic(TabwriterWriter *b, Any r, Str op) {
     Error e = b->err;
     b->err = BURROW_NO_ERROR;
@@ -376,6 +385,14 @@ static Error tw_handle_panic(TabwriterWriter *b, Any r, Str op) {
         mem_free(b->a, (void *)(uintptr_t)b->panic_msg.p, (size_t)b->panic_msg.len, 1);
     b->panic_msg = msg;
     panic_str(msg);
+}
+
+static Error tw_flush_panic(TabwriterWriter *b, Any r) {
+    return tw_handle_panic(b, r, BURROW_S("Flush"));
+}
+
+static Error tw_write_panic(TabwriterWriter *b, Any r) {
+    return tw_handle_panic(b, r, BURROW_S("Write"));
 }
 
 /* ------------------------------------------------------------------ the API */
@@ -406,9 +423,7 @@ TabwriterWriter *tabwriter_writer_init(TabwriterWriter *b, IoWriter output,
     }
     BURROW_CATCH(r) {
         (void)r;
-        Error e = b->err;
-        b->err = BURROW_NO_ERROR;
-        panic(BURROW_ANY(TYPE_ERROR, &e));
+        tw_panic_err(b);
     }
     BURROW_TRY_END;
 
@@ -482,7 +497,7 @@ static void tw_flush_catch(TabwriterWriter *b, Error *e) {
         b->lines_len = 1;
         b->lines[0].len = 0;
         b->widths_len = 0;
-        *e = tw_handle_panic(b, r, BURROW_S("Flush"));
+        *e = tw_flush_panic(b, r);
     }
     BURROW_TRY_END;
 }
@@ -587,7 +602,7 @@ static void tw_write_catch(TabwriterWriter *b, Slice buf, volatile Int *n, Error
         tw_write(b, (const Byte *)buf.p, buf.len, n);
     }
     BURROW_CATCH(r) {
-        *e = tw_handle_panic(b, r, BURROW_S("Write"));
+        *e = tw_write_panic(b, r);
     }
     BURROW_TRY_END;
 }

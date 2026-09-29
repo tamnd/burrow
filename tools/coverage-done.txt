@@ -68,6 +68,7 @@ image/color/palette
 image
 image/draw
 image/gif
+image/jpeg
 image/png
 mime/quotedprintable
 mime

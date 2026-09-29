@@ -1,6 +1,6 @@
 # Images
 
-Go's image packages are coming over one at a time. `burrow/image.h`, `burrow/image/color.h`, `burrow/image/color/palette.h` and `burrow/image/draw.h` are done. The PNG, GIF and JPEG codecs come next.
+All of Go's image packages are here: `burrow/image.h`, `burrow/image/color.h`, `burrow/image/color/palette.h`, `burrow/image/draw.h`, and the codecs in `burrow/image/gif.h`, `burrow/image/jpeg.h` and `burrow/image/png.h`.
 
 ## image/color
 
@@ -451,6 +451,124 @@ gif: reading color table: unexpected EOF
 ### How close it is to Go
 
 Every function, type and constant in the package is here. The encoder's palettes, graphic control blocks and LZW codes are Go's, so the tests encode 1,500 random images of every type through `gif_encode`, with random color counts, drawers and a quantizer, and 1,500 random animations through `gif_encode_all`, some with wrong arguments on purpose. The files and error messages come out byte for byte the same as Go's. They also decode Go's GIF test files and two made to use every extension and interlacing, plus 59 damaged copies of each with bytes flipped or the end cut off, both in one read and one byte at a time, and what `gif_decode`, `gif_decode_all` and `gif_decode_config` give matches Go's.
+
+## image/jpeg
+
+`burrow/image/jpeg.h` is Go's `image/jpeg`: it reads baseline and progressive JPEG files and writes baseline ones.
+
+### Encoding
+
+`jpeg_encode` writes any image as a baseline JPEG with 4:2:0 chroma subsampling, or as a grayscale one when the image is an `ImageGray`. `JpegOptions` holds the quality, from 1 to 100, and a NULL one means `JPEG_DEFAULT_QUALITY`, which is 75. Alpha is dropped:
+
+<!-- example: ../examples/image/jpeg.c#encode -->
+```c
+ImageRGBA *m = image_new_rgba(a, image_rect(0, 0, 64, 48));
+for (Int y = 0; y < 48; y++)
+    for (Int x = 0; x < 64; x++)
+        image_rgba_set_rgba(
+            m, x, y, (ColorRGBA){(uint8_t)(x * 4), (uint8_t)(y * 5), 200, 255});
+BytesBuffer out = BYTES_BUFFER(a);
+for (Int q = 25; q <= 100; q += 25) {
+    JpegOptions o = {.quality = q};
+    bytes_buffer_reset(&out);
+    Error err =
+        jpeg_encode(a, bytes_buffer_as_io_writer(&out), image_rgba_as_image(m), &o);
+    if (BURROW_FAILED(err))
+        return 1;
+    fmt_printf_v("quality %d: %d bytes\n", q, bytes_buffer_len(&out));
+}
+```
+
+That prints:
+
+```
+quality 25: 741 bytes
+quality 50: 774 bytes
+quality 75: 870 bytes
+quality 100: 1662 bytes
+```
+
+### Decoding
+
+`jpeg_decode` gives an `ImageGray` for a grayscale file, an `ImageYCbCr` for a color one with its subsampling kept, an `ImageRGBA` for the rare file stored as RGB, and an `ImageCMYK` for a CMYK or YCbCrK one, as Adobe tools write. Give it back with `image_decoded_free`:
+
+<!-- example: ../examples/image/jpeg.c#decode -->
+```c
+BytesReader r;
+bytes_reader_reset(&r, bytes_buffer_bytes(&out));
+Error err = BURROW_NO_ERROR;
+Image back = jpeg_decode(a, bytes_reader_as_io_reader(&r), &err);
+if (BURROW_FAILED(err))
+    return 1;
+ImageYCbCr *ycc = (ImageYCbCr *)back.data;
+ColorRGBAValue c = color_rgba(image_at(back, 40, 20));
+ImageRectangle b = image_bounds(back);
+fmt_printf_v("(%d,%d)-(%d,%d), subsampling %s\n", b.min.x, b.min.y, b.max.x,
+             b.max.y, image_y_cb_cr_subsample_ratio_string(ycc->subsample_ratio));
+fmt_printf_v("pixel (40, 20) is %d %d %d, was 160 100 200\n", c.r >> 8, c.g >> 8,
+             c.b >> 8);
+image_decoded_free(back, a);
+image_rgba_free(m, a);
+```
+
+That prints:
+
+```
+(0,0)-(64,48), subsampling YCbCrSubsampleRatio420
+pixel (40, 20) is 160 100 198, was 160 100 200
+```
+
+JPEG is lossy, so even at quality 100 a pixel comes back a little off.
+
+`jpeg_decode_config` reads only as far as the frame header and gives the size and color model. After `jpeg_register`, `image_decode` and `image_decode_config` recognise JPEG:
+
+<!-- example: ../examples/image/jpeg.c#config -->
+```c
+jpeg_register();
+bytes_reader_reset(&r, bytes_buffer_bytes(&out));
+Str format;
+ImageConfig cfg =
+    image_decode_config(a, bytes_reader_as_io_reader(&r), &format, &err);
+if (BURROW_FAILED(err))
+    return 1;
+fmt_printf_v("%s, %dx%d\n", format, cfg.width, cfg.height);
+```
+
+That prints:
+
+```
+jpeg, 64x48
+```
+
+A JPEG of a few hundred bytes can claim to be 65535 by 65535 pixels, and `jpeg_decode` allocates the whole image before it reads any of the scan data. When the input comes from someone else, look at the size `jpeg_decode_config` gives first.
+
+### Errors
+
+A file that is broken gives a `JpegFormatError` and one that uses something the decoder does not have, such as 12-bit samples or arithmetic coding, gives a `JpegUnsupportedError`. `errors_as` gives the text of either. A file that stops short gives `io_err_unexpected_eof` as it is:
+
+<!-- example: ../examples/image/jpeg.c#errors -->
+```c
+bytes_reader_reset(&r, slice_sub(bytes_buffer_bytes(&out), 2, 40));
+back = jpeg_decode(a, bytes_reader_as_io_reader(&r), &err);
+fmt_printf_v("%v\n", err);
+const JpegFormatError *fe = errors_as(err, TYPE_JPEG_FORMAT_ERROR);
+fmt_printf_v("format error: %s\n", *fe);
+bytes_reader_reset(&r, slice_sub(bytes_buffer_bytes(&out), 0, 300));
+back = jpeg_decode(a, bytes_reader_as_io_reader(&r), &err);
+fmt_printf_v("%v\n", err);
+```
+
+That prints:
+
+```
+invalid JPEG format: missing SOI marker
+format error: missing SOI marker
+unexpected EOF
+```
+
+### How close it is to Go
+
+Every function, type and constant in the package is here. The forward and inverse DCT, the quantization tables, the Huffman coding and the color conversion are Go's, including its 32-bit integer overflow, so the tests encode 1,500 random images of every type at random qualities, some outside 1 to 100, and the files come out byte for byte the same as Go's, as does what `jpeg_decode` makes of them. They also decode all 30 of Go's JPEG test files, which cover every subsampling Go reads, progressive files, restart markers, and grayscale, RGB and CMYK files, plus three CMYK files with the Adobe marker changed or removed. Each file also gets 39 damaged copies with bytes flipped or the end cut off, and each is read both in one read and one byte at a time. Every pixel of every plane, and every error `jpeg_decode` and `jpeg_decode_config` give, matches Go's.
 
 ## image/png
 

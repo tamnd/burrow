@@ -295,6 +295,10 @@ Int color_palette_index(ColorPalette p, Color c);
 /* A palette as a Model. It points at p, which has to outlive it. */
 BURROW_BORROWS(ret, p) ColorModel color_palette_as_model(const ColorPalette *p);
 
+/* m.(color.Palette): whether m is a palette made a Model by
+ * color_palette_as_model, and if it is, a pointer to the palette in *p. */
+bool color_model_as_palette(ColorModel m, const ColorPalette **p);
+
 #ifdef __cplusplus
 }
 #endif

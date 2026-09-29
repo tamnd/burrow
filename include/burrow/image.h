@@ -591,7 +591,7 @@ BURROW_FUNC(ImageDecodeConfigFunc, ImageConfig, Alloc *a, IoReader r, Error *err
  * image_decode_config to recognise. magic is the prefix that identifies it, in
  * which '?' matches any byte. name and magic are kept, not copied, so they
  * should be string constants. A codec package registers itself this way;
- * image/png's is image_png_register. Safe to call from any thread. */
+ * image/png's is png_register. Safe to call from any thread. */
 void image_register_format(Str name, Str magic, ImageDecodeFunc decode,
                            ImageDecodeConfigFunc decode_config);
 
@@ -605,6 +605,17 @@ Image image_decode(Alloc *a, IoReader r, Str *name, Error *err);
 /* image.DecodeConfig: the same, reading only as far as the size and the color
  * model. */
 ImageConfig image_decode_config(Alloc *a, IoReader r, Str *name, Error *err);
+
+/* Gives back an image that image_decode or a codec's decode function made in
+ * a: the struct, its pixels, and for an ImagePaletted the palette, which a
+ * decoder allocates along with the image. Not for an image you made yourself,
+ * whose palette the decoder did not allocate. A nil Image is fine. */
+void image_decoded_free(Image m, Alloc *a);
+
+/* Gives back what image_decode_config or a codec's decode_config function
+ * made in a, which is the palette when the color model is one, and nothing
+ * otherwise. */
+void image_config_free(ImageConfig c, Alloc *a);
 
 #ifdef __cplusplus
 }

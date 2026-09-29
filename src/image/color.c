@@ -547,3 +547,11 @@ static const ColorModelVT cl_palette_vt = {NULL, cl_palette_convert};
 ColorModel color_palette_as_model(const ColorPalette *p) {
     return (ColorModel){&cl_palette_vt, (void *)(uintptr_t)p};
 }
+
+bool color_model_as_palette(ColorModel m, const ColorPalette **p) {
+    if (m.vt != &cl_palette_vt)
+        return false;
+    if (p != NULL)
+        *p = (const ColorPalette *)m.data;
+    return true;
+}

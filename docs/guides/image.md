@@ -316,3 +316,88 @@ That prints:
 Every function, type and variable in the package is here. The fast paths for each pair of image types are Go's, with Go's integer arithmetic, and the tests run ten thousand random draws against a transcript of Go's package: every destination type, every source type including Y'CbCr at each subsample ratio, uniforms and images that have only the three `Image` methods, every mask type, both operators, random rectangles and points that clip in every direction, and `FloydSteinberg` onto random palettes. The pixels come out byte for byte the same, and the one case where Go panics panics with the same message.
 
 `Quantizer` is here as `DrawQuantizer` for code that takes one, as in Go, where nothing in the standard library implements it.
+
+## image/png
+
+`burrow/image/png.h` is Go's `image/png`: it reads and writes PNG files.
+
+### Encoding
+
+`png_encode` writes any `Image` to an `IoWriter`. It picks the smallest PNG color type that holds the image without loss, so an `ImageGray` is written as 8-bit grayscale, an opaque `ImageRGBA` as truecolor with no alpha, and an image whose color model is a palette as a paletted PNG with a bit depth of 1, 2, 4 or 8:
+
+<!-- example: ../examples/image/png.c#encode -->
+```c
+ImageGray *g = image_new_gray(a, image_rect(0, 0, 16, 16));
+for (Int y = 0; y < 16; y++)
+    for (Int x = 0; x < 16; x++)
+        image_gray_set_gray(g, x, y, (ColorGray){(uint8_t)(x * 16 + y)});
+BytesBuffer out = BYTES_BUFFER(a);
+Error err = png_encode(a, bytes_buffer_as_io_writer(&out), image_gray_as_image(g));
+if (BURROW_FAILED(err))
+    return 1;
+Slice png = bytes_buffer_bytes(&out);
+fmt_printf_v("%d bytes, starting % x\n", png.len, slice_sub(png, 0, 8));
+image_gray_free(g, a);
+```
+
+That prints:
+
+```
+77 bytes, starting 89 50 4e 47 0d 0a 1a 0a
+```
+
+`PngEncoder` holds a compression level, one of `PNG_DEFAULT_COMPRESSION`, `PNG_NO_COMPRESSION`, `PNG_BEST_SPEED` and `PNG_BEST_COMPRESSION`, and an optional `PngEncoderBufferPool`. Give it a pool when you encode many images and the buffers and the compressor are kept between calls instead of being allocated every time. `png_encoder_encode` uses both.
+
+### Decoding
+
+`png_decode` reads a PNG and gives back the image type Go gives: `ImageGray` or `ImageGray16` for grayscale, `ImageNRGBA` or `ImageNRGBA64` for color with alpha or a transparent color, `ImageRGBA` or `ImageRGBA64` for opaque color, and `ImagePaletted` for a palette. Interlaced files and every bit depth the format allows are read. C has nothing that runs when a package is imported, so call `png_register` once and `image_decode` will recognise PNG from its first bytes:
+
+<!-- example: ../examples/image/png.c#decode -->
+```c
+png_register();
+BytesReader r;
+bytes_reader_reset(&r, png);
+Str format;
+Image m = image_decode(a, bytes_reader_as_io_reader(&r), &format, &err);
+if (BURROW_FAILED(err))
+    return 1;
+ImageGray *back = (ImageGray *)m.data;
+ImageRectangle b = image_gray_bounds(back);
+fmt_printf_v("%s %v, pixel (3, 5) is %d\n", format,
+             BURROW_ANY(TYPE_OF(ImageRectangle), &b),
+             image_gray_gray_at(back, 3, 5).y);
+image_decoded_free(m, a);
+```
+
+That prints:
+
+```
+png (0,0)-(16,16), pixel (3, 5) is 53
+```
+
+The image comes from the allocator you pass, and `image_decoded_free` gives it back, palette and all. `png_decode_config` reads only as far as the size and color model, and for a paletted file the model is the palette, which `image_config_free` gives back.
+
+### Errors
+
+A file that is not valid PNG gives a `PngFormatError`, and a valid one that uses something this decoder does not have gives a `PngUnsupportedError`, with the same messages as Go. A file that stops short gives `io_err_unexpected_eof`. `errors_as` tells them apart:
+
+<!-- example: ../examples/image/png.c#errors -->
+```c
+((Byte *)png.p)[20] ^= 1;
+bytes_reader_reset(&r, png);
+m = png_decode(a, bytes_reader_as_io_reader(&r), &err);
+fmt_printf_v("%v\n", err);
+if (errors_as(err, TYPE_PNG_FORMAT_ERROR) != NULL)
+    fmt_printf_v("the file is broken\n");
+```
+
+That prints:
+
+```
+png: invalid format: invalid checksum
+the file is broken
+```
+
+### How close it is to Go
+
+Every function, type and constant in the package is here. The encoder's filter choice, the zlib stream and the chunk layout are Go's, so the tests encode three thousand random images of every type, at every size from empty up to 39 by 39, at every compression level, and the files come out byte for byte the same as Go's. They also decode every file in PngSuite and Go's other PNG test files, plus 24 damaged copies of each with bytes flipped, checksums fixed up or the end cut off, less the few whose damaged header asks for gigabytes, both in one read and one byte at a time, and the pixels, palettes and error messages all match Go's.

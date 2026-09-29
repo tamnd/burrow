@@ -11,6 +11,7 @@
 
 #include "burrow/image.h"
 
+#include "burrow/atomic.h"
 #include "burrow/bufio.h"
 #include "burrow/declare.h"
 #include "burrow/mem/heap.h"
@@ -1826,7 +1827,8 @@ typedef struct ImFormat {
 } ImFormat;
 
 static SyncMutex im_formats_mu;
-static ImFormat *im_formats;
+/* An ImFormat *, as a void * for the atomics. */
+static void *im_formats;
 
 void image_register_format(Str name, Str magic, ImageDecodeFunc decode,
                            ImageDecodeConfigFunc decode_config) {
@@ -1839,10 +1841,10 @@ void image_register_format(Str name, Str magic, ImageDecodeFunc decode,
     f->decode = decode;
     f->decode_config = decode_config;
     sync_mutex_lock(&im_formats_mu);
-    ImFormat *head = __atomic_load_n(&im_formats, __ATOMIC_ACQUIRE);
+    ImFormat *head = (ImFormat *)burrow__atomic_load_acquire_ptr(&im_formats);
     f->next = head;
     f->index = head == NULL ? 0 : head->index + 1;
-    __atomic_store_n(&im_formats, f, __ATOMIC_RELEASE);
+    burrow__atomic_store_release_ptr(&im_formats, f);
     sync_mutex_unlock(&im_formats_mu);
 }
 
@@ -1858,7 +1860,7 @@ static bool im_match(Str magic, Slice b) {
 
 /* sniff: the first registered format whose magic matches, or NULL. */
 static const ImFormat *im_sniff(BufioReader *r) {
-    const ImFormat *head = __atomic_load_n(&im_formats, __ATOMIC_ACQUIRE);
+    const ImFormat *head = (ImFormat *)burrow__atomic_load_acquire_ptr(&im_formats);
     if (head == NULL)
         return NULL;
     for (Int want = 0; want <= head->index; want++) {
@@ -1930,4 +1932,51 @@ ImageConfig image_decode_config(Alloc *a, IoReader r, Str *name, Error *err) {
     if (owned)
         bufio_reader_free(br);
     return c;
+}
+
+/* A palette a decoder allocated: the array behind it, cap entries long. */
+static void im_palette_unmake(Alloc *a, ColorPalette p) {
+    if (p.p != NULL && p.cap > 0)
+        mem_free(a, p.p, (size_t)p.cap * sizeof(Color), _Alignof(Color));
+}
+
+void image_decoded_free(Image m, Alloc *a) {
+    if (m.vt == NULL || m.data == NULL)
+        return;
+    const Type *t = m.vt->self_type;
+    if (t == TYPE_OF(ImageRGBA))
+        image_rgba_free((ImageRGBA *)m.data, a);
+    else if (t == TYPE_OF(ImageRGBA64))
+        image_rgba64_free((ImageRGBA64 *)m.data, a);
+    else if (t == TYPE_OF(ImageNRGBA))
+        image_nrgba_free((ImageNRGBA *)m.data, a);
+    else if (t == TYPE_OF(ImageNRGBA64))
+        image_nrgba64_free((ImageNRGBA64 *)m.data, a);
+    else if (t == TYPE_OF(ImageAlpha))
+        image_alpha_free((ImageAlpha *)m.data, a);
+    else if (t == TYPE_OF(ImageAlpha16))
+        image_alpha16_free((ImageAlpha16 *)m.data, a);
+    else if (t == TYPE_OF(ImageGray))
+        image_gray_free((ImageGray *)m.data, a);
+    else if (t == TYPE_OF(ImageGray16))
+        image_gray16_free((ImageGray16 *)m.data, a);
+    else if (t == TYPE_OF(ImageCMYK))
+        image_cmyk_free((ImageCMYK *)m.data, a);
+    else if (t == TYPE_OF(ImageYCbCr))
+        image_y_cb_cr_free((ImageYCbCr *)m.data, a);
+    else if (t == TYPE_OF(ImageNYCbCrA))
+        image_ny_cb_cr_a_free((ImageNYCbCrA *)m.data, a);
+    else if (t == TYPE_OF(ImagePaletted)) {
+        ImagePaletted *p = (ImagePaletted *)m.data;
+        im_palette_unmake(a, p->palette);
+        image_paletted_free(p, a);
+    }
+}
+
+void image_config_free(ImageConfig c, Alloc *a) {
+    const ColorPalette *p;
+    if (!color_model_as_palette(c.color_model, &p) || p == NULL)
+        return;
+    im_palette_unmake(a, *p);
+    mem_free(a, (void *)(uintptr_t)p, sizeof *p, _Alignof(ColorPalette));
 }

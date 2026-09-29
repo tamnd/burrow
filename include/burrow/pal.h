@@ -840,6 +840,12 @@ bool pal_chdir(const char *path, PalErrno *err);
  * with PAL_ERANGE when it does not fit. */
 int64_t pal_getcwd(char *buf, int64_t cap, PalErrno *err);
 
+/* The directory for temporary files into buf, NUL terminated, as Go's
+ * os.TempDir finds it: $TMPDIR or /tmp on Unix, and GetTempPath2W, or
+ * GetTempPathW before Windows 11, on Windows, without the trailing backslash.
+ * Returns its length, or -1, with PAL_ERANGE when it does not fit. */
+int64_t pal_temp_dir(char *buf, int64_t cap, PalErrno *err);
+
 /* Resolve a program name against the search path, writing the full path to buf.
  * Returns its length, or -1. This is a PAL call rather than portable code over
  * PATH because Windows searches differently, applies PATHEXT, and looks in the

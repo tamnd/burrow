@@ -720,6 +720,41 @@ int64_t pal_getcwd(char *buf, int64_t cap, PalErrno *err) {
     return len;
 }
 
+typedef DWORD(WINAPI *TempPathFn)(DWORD, LPWSTR);
+
+int64_t pal_temp_dir(char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    /* GetTempPath2W is Windows 11's, and gives SYSTEM its own directory. */
+    TempPathFn fn = NULL;
+    HMODULE k = GetModuleHandleW(L"kernel32.dll");
+    if (k != NULL) {
+        FARPROC p = GetProcAddress(k, "GetTempPath2W");
+        memcpy(&fn, &p, sizeof fn);
+    }
+    if (fn == NULL)
+        fn = GetTempPathW;
+    wchar_t w[PAL_WPATH_MAX];
+    DWORD n = fn(PAL_WPATH_MAX, w);
+    if (n == 0) {
+        file_fail(err);
+        return -1;
+    }
+    if (n >= PAL_WPATH_MAX) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    if (n > 3 && w[n - 1] == L'\\' && w[n - 2] != L':')
+        n--;
+    int64_t len =
+        buf == NULL || cap <= 0 ? -1 : burrow__pal_narrow(w, n, buf, (size_t)cap - 1);
+    if (len < 0) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    buf[len] = 0;
+    return len;
+}
+
 bool pal_link(const char *from, const char *to, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     wchar_t wf[PAL_WPATH_MAX], wt[PAL_WPATH_MAX];

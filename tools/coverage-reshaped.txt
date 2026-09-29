@@ -117,3 +117,26 @@ math/big: method (*Int) Divide: the remainder is the r passed in, so only z is r
 # either, and multipart_file_as_io_read_seek_closer and the other _as_ calls
 # give the io interfaces.
 mime/multipart: method (*FileHeader) Open: File is one opaque type rather than an interface
+
+# include/burrow/image/color.h: Go's RGBA and the conversion functions have
+# three or four results, and C has one. Each comes back as one struct instead of
+# the first result and pointers for the rest, since every caller wants all of
+# them and a struct of four uint32_t is returned in registers. ModelFunc keeps a
+# pointer to the function value, because a Model is two words and has nowhere
+# else to keep it.
+image/color: method (Alpha) RGBA: the four results come back as one ColorRGBAValue
+image/color: method (Alpha16) RGBA: the four results come back as one ColorRGBAValue
+image/color: method (CMYK) RGBA: the four results come back as one ColorRGBAValue
+image/color: method (Gray) RGBA: the four results come back as one ColorRGBAValue
+image/color: method (Gray16) RGBA: the four results come back as one ColorRGBAValue
+image/color: method (NRGBA) RGBA: the four results come back as one ColorRGBAValue
+image/color: method (NRGBA64) RGBA: the four results come back as one ColorRGBAValue
+image/color: method (NYCbCrA) RGBA: the four results come back as one ColorRGBAValue
+image/color: method (RGBA) RGBA: the four results come back as one ColorRGBAValue
+image/color: method (RGBA64) RGBA: the four results come back as one ColorRGBAValue
+image/color: method (YCbCr) RGBA: the four results come back as one ColorRGBAValue
+image/color: func CMYKToRGB: the results come back as one ColorRGBA
+image/color: func RGBToCMYK: the results come back as one ColorCMYK
+image/color: func RGBToYCbCr: the results come back as one ColorYCbCr
+image/color: func YCbCrToRGB: the results come back as one ColorRGBA
+image/color: func ModelFunc: takes the function value by pointer, which the Model keeps

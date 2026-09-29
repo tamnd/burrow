@@ -89,7 +89,9 @@ typedef struct IfaceVT {
  *
  * Every interface value in the library is a vtable pointer followed by a data
  * pointer, so every one of them converts to this and back without copying
- * anything. It is what the helpers below take, so that there is one type
+ * anything. The one exception is image/color's Color, which holds its value
+ * inline after the vtable, and fmt tells it apart by its descriptor being
+ * bigger than an Iface. It is what the helpers below take, so that there is one type
  * assertion in the library rather than one per interface. */
 typedef struct Iface {
     const IfaceVT *vt;

@@ -396,7 +396,12 @@ static void unwrap(const Type **tp, void **dp) {
                 *tp = NULL;
             } else if (v.vt->self_type != NULL) {
                 *tp = v.vt->self_type;
-                *dp = v.data;
+                /* An interface bigger than two words, image/color's Color
+                 * being the one, holds its value inline after the vtable. */
+                if (t->size > sizeof(Iface))
+                    *dp = (Byte *)*dp + sizeof(void *);
+                else
+                    *dp = v.data;
             }
         }
         return;

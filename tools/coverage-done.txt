@@ -63,6 +63,8 @@ compress/zlib
 regexp/syntax
 regexp
 mime/multipart
+image/color
+image/color/palette
 mime/quotedprintable
 mime
 math/big

@@ -500,8 +500,11 @@ class Headers:
                 ids = TOKEN.findall(re.sub(r"\[[^\]]*\]|:\s*\w+", " ", part))
                 if ids:
                     members.add(ids[-1])
-                # Several declarators on one line: Int a, b;
+                # Several declarators on one line: Int a, b; which makes a
+                # member of the name before each comma as well as after it.
                 for extra in re.findall(r",\s*\**\s*(\w+)", part):
+                    members.add(extra)
+                for extra in re.findall(r"(\w+)\s*,", part):
                     members.add(extra)
             for name in names:
                 self.members.setdefault(name, set()).update(members)

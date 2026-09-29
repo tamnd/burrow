@@ -439,6 +439,10 @@ typedef struct ImagePaletted {
 } ImagePaletted;
 extern const Type burrow_type_ImagePaletted;
 
+/* *image.Paletted, for a slice of them such as the frames of a GIF. */
+typedef ImagePaletted *ImagePalettedPtr;
+extern const Type burrow_type_ImagePalettedPtr;
+
 /* image.NewPaletted. The image shares p, which has to outlive it. */
 BURROW_OWNS(ret) ImagePaletted *image_new_paletted(Alloc *a, ImageRectangle r,
                                                    ColorPalette p);

@@ -79,6 +79,7 @@
 #include "burrow/image.h"
 #include "burrow/image/color.h"
 #include "burrow/image/color/palette.h"
+#include "burrow/image/draw.h"
 #include "burrow/io.h"
 #include "burrow/iter.h"
 #include "burrow/map.h"

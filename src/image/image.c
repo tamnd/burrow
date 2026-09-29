@@ -527,6 +527,25 @@ IM_TYPE(ImageCMYK, "CMYK", KIND_STRUCT, im_cmyk_fields, IM_COUNT(im_cmyk_fields)
         0, 0x696d3133U);
 IM_TYPE(ImagePaletted, "Paletted", KIND_STRUCT, im_paletted_fields,
         IM_COUNT(im_paletted_fields), NULL, 0, 0x696d3134U);
+
+/* BURROW_PTR_TYPE without its declaration, which image.h has. */
+const Type burrow_type_ImagePalettedPtr = {
+    {NULL, 0},
+    {NULL, 0},
+    KIND_POINTER,
+    (uint32_t)sizeof(void *),
+    (uint16_t)_Alignof(void *),
+    0,
+    0,
+    NULL,
+    NULL,
+    TYPE_OF(ImagePaletted),
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
 IM_TYPE(ImageYCbCr, "YCbCr", KIND_STRUCT, im_y_cb_cr_fields,
         IM_COUNT(im_y_cb_cr_fields), NULL, 0, 0x696d3135U);
 IM_TYPE(ImageNYCbCrA, "NYCbCrA", KIND_STRUCT, im_ny_cb_cr_a_fields,

@@ -317,6 +317,141 @@ Every function, type and variable in the package is here. The fast paths for eac
 
 `Quantizer` is here as `DrawQuantizer` for code that takes one, as in Go, where nothing in the standard library implements it.
 
+## image/gif
+
+`burrow/image/gif.h` is Go's `image/gif`: it reads and writes GIF files, animated ones included.
+
+### Writing an animation
+
+A `Gif` holds the frames, each an `ImagePaletted`, with a delay in hundredths of a second for each, a loop count and the global palette and size in `config`. `gif_encode_all` writes it. A frame whose palette is the global one is written without a palette of its own:
+
+<!-- example: ../examples/image/gif.c#encode-all -->
+```c
+Color colors[3] = {
+    color_rgba_as_color((ColorRGBA){0, 0, 0, 255}),
+    color_rgba_as_color((ColorRGBA){255, 0, 0, 255}),
+    color_rgba_as_color((ColorRGBA){0, 0, 255, 255}),
+};
+ColorPalette pal = {colors, 3, 3, TYPE_OF(Color)};
+ImagePalettedPtr frames[3];
+Int delays[3];
+for (Int f = 0; f < 3; f++) {
+    frames[f] = image_new_paletted(a, image_rect(0, 0, 8, 8), pal);
+    for (Int y = 0; y < 8; y++)
+        image_paletted_set_color_index(frames[f], (y + f) % 8, y,
+                                       1 + (uint8_t)(f % 2));
+    delays[f] = 50;
+}
+Gif g = {
+    .image = slice_from(frames, 3, 3, TYPE_OF(ImagePalettedPtr)),
+    .delay = slice_from(delays, 3, 3, TYPE_INT),
+    .loop_count = 0,
+    .disposal = slice_nil(TYPE_BYTE),
+    .config = {color_palette_as_model(&pal), 8, 8},
+};
+BytesBuffer out = BYTES_BUFFER(a);
+Error err = gif_encode_all(a, bytes_buffer_as_io_writer(&out), &g);
+if (BURROW_FAILED(err))
+    return 1;
+Slice data = bytes_buffer_bytes(&out);
+fmt_printf_v("%d bytes, starting %q\n", data.len, str_from_bytes(data.p, 6));
+for (Int f = 0; f < 3; f++)
+    image_paletted_free(frames[f], a);
+```
+
+That prints:
+
+```
+144 bytes, starting "GIF89a"
+```
+
+A loop count of 0 means the animation plays forever, -1 that it plays once, and any other number how many more times it plays after the first. `disposal` is a slice of `Byte` with one of the `GIF_DISPOSAL_*` values for each frame, and a nil one means none for all of them.
+
+### Reading one
+
+`gif_decode_all` reads every frame, and `gif_free` gives back the `Gif`, its frames and their palettes:
+
+<!-- example: ../examples/image/gif.c#decode-all -->
+```c
+BytesReader r;
+bytes_reader_reset(&r, data);
+Gif *back = gif_decode_all(a, bytes_reader_as_io_reader(&r), &err);
+if (BURROW_FAILED(err))
+    return 1;
+fmt_printf_v("%d frames of %dx%d, loop count %d\n", back->image.len,
+             back->config.width, back->config.height, back->loop_count);
+ImagePaletted *second = ((ImagePaletted **)back->image.p)[1];
+fmt_printf_v("frame 1 waits %d/100 s, pixel (1, 0) is index %d\n",
+             ((Int *)back->delay.p)[1],
+             image_paletted_color_index_at(second, 1, 0));
+gif_free(back, a);
+```
+
+That prints:
+
+```
+3 frames of 8x8, loop count 0
+frame 1 waits 50/100 s, pixel (1, 0) is index 2
+```
+
+`gif_decode` reads only the first frame, whose bounds are where it sits on the screen and need not start at (0, 0), and `gif_decode_config` reads only the size and the global palette.
+
+### Writing any image
+
+`gif_encode` writes a single frame. An `ImagePaletted` is written as it is. Any other image is drawn onto a palette of at most `num_colors` colors, 256 when `GifOptions` is NULL, with Floyd-Steinberg dithering unless you give another `DrawDrawer`. The palette is the start of Plan 9's unless you give a `DrawQuantizer`. After `gif_register`, `image_decode` recognises GIF:
+
+<!-- example: ../examples/image/gif.c#encode -->
+```c
+ImageRGBA *m = image_new_rgba(a, image_rect(0, 0, 32, 32));
+for (Int y = 0; y < 32; y++)
+    for (Int x = 0; x < 32; x++)
+        image_rgba_set_rgba(
+            m, x, y, (ColorRGBA){(uint8_t)(x * 8), (uint8_t)(y * 8), 128, 255});
+GifOptions o = {.num_colors = 16};
+bytes_buffer_reset(&out);
+err = gif_encode(a, bytes_buffer_as_io_writer(&out), image_rgba_as_image(m), &o);
+if (BURROW_FAILED(err))
+    return 1;
+image_rgba_free(m, a);
+
+gif_register();
+bytes_reader_reset(&r, bytes_buffer_bytes(&out));
+Str format;
+Image img = image_decode(a, bytes_reader_as_io_reader(&r), &format, &err);
+if (BURROW_FAILED(err))
+    return 1;
+ImagePaletted *p = (ImagePaletted *)img.data;
+fmt_printf_v("%s, %d colors\n", format, p->palette.len);
+image_decoded_free(img, a);
+```
+
+That prints:
+
+```
+gif, 16 colors
+```
+
+### Errors
+
+The errors have Go's messages. A file that stops short says where it stopped:
+
+<!-- example: ../examples/image/gif.c#errors -->
+```c
+bytes_reader_reset(&r, slice_sub(bytes_buffer_bytes(&out), 0, 40));
+img = gif_decode(a, bytes_reader_as_io_reader(&r), &err);
+fmt_printf_v("%v\n", err);
+```
+
+That prints:
+
+```
+gif: reading color table: unexpected EOF
+```
+
+### How close it is to Go
+
+Every function, type and constant in the package is here. The encoder's palettes, graphic control blocks and LZW codes are Go's, so the tests encode 1,500 random images of every type through `gif_encode`, with random color counts, drawers and a quantizer, and 1,500 random animations through `gif_encode_all`, some with wrong arguments on purpose. The files and error messages come out byte for byte the same as Go's. They also decode Go's GIF test files and two made to use every extension and interlacing, plus 59 damaged copies of each with bytes flipped or the end cut off, both in one read and one byte at a time, and what `gif_decode`, `gif_decode_all` and `gif_decode_config` give matches Go's.
+
 ## image/png
 
 `burrow/image/png.h` is Go's `image/png`: it reads and writes PNG files.

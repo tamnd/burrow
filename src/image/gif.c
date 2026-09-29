@@ -402,7 +402,8 @@ static Error gif_block_close(GifBlockReader *b) {
         /* A clean block-sequence terminator was encountered while
          * reading. */
         return BURROW_NO_ERROR;
-    } else if (BURROW_FAILED(b->err)) {
+    }
+    if (BURROW_FAILED(b->err)) {
         /* Some other error was encountered while reading. */
         return b->err;
     }
@@ -413,9 +414,9 @@ static Error gif_block_close(GifBlockReader *b) {
         gif_block_fill(b);
         if (gif_is_eof(b->err))
             return BURROW_NO_ERROR;
-        else if (BURROW_FAILED(b->err))
+        if (BURROW_FAILED(b->err))
             return b->err;
-        else if (b->j > 1)
+        if (b->j > 1)
             return gif_err_too_much;
     }
 
@@ -424,7 +425,7 @@ static Error gif_block_close(GifBlockReader *b) {
     gif_block_fill(b);
     if (gif_is_eof(b->err))
         return BURROW_NO_ERROR;
-    else if (BURROW_FAILED(b->err))
+    if (BURROW_FAILED(b->err))
         return b->err;
 
     return gif_err_too_much;
@@ -677,6 +678,8 @@ static Error gif_read_image_descriptor(GifDecoder *d, bool keep_all_frames) {
     Error err = gif_new_image_from_descriptor(d, &m);
     if (BURROW_FAILED(err))
         return err;
+    if (m == NULL) /* Never, but the analyser cannot see that. */
+        return burrow_err_out_of_memory;
     ColorPalette global = d->global_color_table;
     bool use_local_color_table = (d->image_fields & GIF_F_COLOR_TABLE) != 0;
     if (use_local_color_table) {

@@ -241,11 +241,12 @@ bool color_equal(Color a, Color b) {
     if (t != b.vt->self_type)
         return false;
     if (t == NULL)
-        return a.vt == b.vt && memcmp(&a.data, &b.data, sizeof a.data) == 0;
+        return a.vt == b.vt &&
+               memcmp(a.data.bytes, b.data.bytes, sizeof a.data.bytes) == 0;
     if (t->ops != NULL && t->ops->equal != NULL)
         return t->ops->equal(&a.data, &b.data);
     size_t n = t->size < sizeof a.data ? t->size : sizeof a.data;
-    return memcmp(&a.data, &b.data, n) == 0;
+    return memcmp(a.data.bytes, b.data.bytes, n) == 0;
 }
 
 const ColorGray16 color_black = {0};

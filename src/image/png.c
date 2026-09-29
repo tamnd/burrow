@@ -32,6 +32,7 @@ typedef struct PngErrorBox {
     Str message;
 } PngErrorBox;
 
+/* NOLINTBEGIN(bugprone-macro-parentheses) */
 #define PNG_ERROR_TYPE(desc, name, tag)                                                \
     static const Type desc = {                                                         \
         {(const Byte *)name, sizeof name - 1},                                         \
@@ -49,6 +50,7 @@ typedef struct PngErrorBox {
         tag,                                                                           \
         NULL,                                                                          \
     }
+/* NOLINTEND(bugprone-macro-parentheses) */
 
 PNG_ERROR_TYPE(png_format_desc, "FormatError", 0x706e6665U);           /* "pnfe" */
 PNG_ERROR_TYPE(png_unsupported_desc, "UnsupportedError", 0x706e7565U); /* "pnue" */
@@ -632,6 +634,7 @@ typedef struct PngPix {
 static PngPix png_pix_of(Image m) {
     PngPix p = {NULL, 0, 0};
     const Type *t = m.vt->self_type;
+/* NOLINTBEGIN(bugprone-macro-parentheses) */
 #define PNG_PIX(T, n)                                                                  \
     if (t == TYPE_OF(T)) {                                                             \
         T *q = (T *)m.data;                                                            \
@@ -640,6 +643,7 @@ static PngPix png_pix_of(Image m) {
         p.bpp = (n);                                                                   \
         return p;                                                                      \
     }
+    /* NOLINTEND(bugprone-macro-parentheses) */
     PNG_PIX(ImageGray, 1)
     PNG_PIX(ImageGray16, 2)
     PNG_PIX(ImageNRGBA, 4)
@@ -1067,6 +1071,8 @@ static Error png_read_image_pass(PngDecoder *d, IoReader r, int pass,
 static void png_merge_pass_into(Image dst, Image src, int pass) {
     PngInterlaceScan p = png_interlacing[pass];
     PngPix s = png_pix_of(src), t = png_pix_of(dst);
+    if (s.pix == NULL || t.pix == NULL) /* Only the types png_pix_of knows. */
+        return;
     if (dst.vt->self_type == TYPE_OF(ImagePaletted)) {
         ImagePaletted *target = (ImagePaletted *)dst.data;
         const ImagePaletted *source = (const ImagePaletted *)src.data;
@@ -1163,12 +1169,14 @@ static Error png_parse_chunk(PngDecoder *d, bool config_only) {
             return png_err_chunk_order;
         d->stage = DS_SEEN_IHDR;
         return png_parse_ihdr(d, length);
-    } else if (memcmp(t, "PLTE", 4) == 0) {
+    }
+    if (memcmp(t, "PLTE", 4) == 0) {
         if (d->stage != DS_SEEN_IHDR)
             return png_err_chunk_order;
         d->stage = DS_SEEN_PLTE;
         return png_parse_plte(d, length);
-    } else if (memcmp(t, "tRNS", 4) == 0) {
+    }
+    if (memcmp(t, "tRNS", 4) == 0) {
         if (png_cb_paletted(d->cb)) {
             if (d->stage != DS_SEEN_PLTE)
                 return png_err_chunk_order;
@@ -1180,7 +1188,8 @@ static Error png_parse_chunk(PngDecoder *d, bool config_only) {
         }
         d->stage = DS_SEEN_TRNS;
         return png_parse_trns(d, length);
-    } else if (memcmp(t, "IDAT", 4) == 0) {
+    }
+    if (memcmp(t, "IDAT", 4) == 0) {
         if (d->stage < DS_SEEN_IHDR || d->stage > DS_SEEN_IDAT ||
             (d->stage == DS_SEEN_IHDR && png_cb_paletted(d->cb)))
             return png_err_chunk_order;
@@ -1192,7 +1201,8 @@ static Error png_parse_chunk(PngDecoder *d, bool config_only) {
         }
         /* An IDAT after the ones decode read, which is ignored like any
          * other chunk. */
-    } else if (memcmp(t, "IEND", 4) == 0) {
+    }
+    if (memcmp(t, "IEND", 4) == 0) {
         if (d->stage != DS_SEEN_IDAT)
             return png_err_chunk_order;
         d->stage = DS_SEEN_IEND;
@@ -1521,11 +1531,11 @@ static void png_write_plte_and_trns(PngEncoderBuffer *e, ColorPalette p) {
         e->tmp[3 * i + 2] = c1.b;
         if (c1.a != 0xff)
             last = i;
-        e->tmp[3 * 256 + i] = c1.a;
+        e->tmp[(Int)3 * 256 + i] = c1.a;
     }
     png_write_chunk(e, e->tmp, 3 * p.len, "PLTE");
     if (last != -1)
-        png_write_chunk(e, e->tmp + 3 * 256, 1 + last, "tRNS");
+        png_write_chunk(e, e->tmp + (Int)3 * 256, 1 + last, "tRNS");
 }
 
 /* Write: the IDAT writer, which puts each buffer it is given in a chunk of

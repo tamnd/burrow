@@ -560,6 +560,7 @@ IM_TYPE(Image, "Image", KIND_INTERFACE, NULL, 0, NULL, 0, 0x696d3138U);
  * the constructor and free, Bounds, PixOffset, SubImage, and the vtable. Each
  * type then has its own reading and writing, which is where they differ. */
 
+/* NOLINTBEGIN(bugprone-macro-parentheses) */
 #define IM_COMMON(T, pre, bpp, goname, model)                                          \
     T *image_new_##pre(Alloc *a, ImageRectangle r) {                                   \
         Int n = im_buffer_length(                                                      \
@@ -600,9 +601,11 @@ IM_TYPE(Image, "Image", KIND_INTERFACE, NULL, 0, NULL, 0, 0x696d3138U);
         return s;                                                                      \
     }                                                                                  \
     IM_VTABLE(T, pre, NULL)
+/* NOLINTEND(bugprone-macro-parentheses) */
 
 /* The vtable, through thunks that take void *. cidx is the ColorIndexAt slot,
  * which only Paletted fills in. */
+/* NOLINTBEGIN(bugprone-macro-parentheses) */
 #define IM_VTABLE(T, pre, cidx)                                                        \
     static ColorModel im_##pre##_vt_color_model(void *self) {                          \
         return image_##pre##_color_model((const T *)self);                             \
@@ -634,6 +637,7 @@ IM_TYPE(Image, "Image", KIND_INTERFACE, NULL, 0, NULL, 0, 0x696d3138U);
         Image m = {&im_##pre##_vt, p};                                                 \
         return m;                                                                      \
     }
+/* NOLINTEND(bugprone-macro-parentheses) */
 
 /* Opaque for the types that have alpha: every alpha sample, of n bytes at
  * offset off in each pixel of bpp bytes, is all ones. */
@@ -1057,7 +1061,7 @@ void image_gray_set(ImageGray *p, Int x, Int y, Color c) {
 
 /* The luma weights color.grayModel uses, before the final shift. */
 static inline uint32_t im_luma(ColorRGBA64 c) {
-    return 19595u * c.r + 38470u * c.g + 7471u * c.b + (1u << 15);
+    return 19595U * c.r + 38470U * c.g + 7471U * c.b + (1U << 15);
 }
 
 void image_gray_set_rgba64(ImageGray *p, Int x, Int y, ColorRGBA64 c) {
@@ -1295,6 +1299,7 @@ bool image_paletted_opaque(const ImagePaletted *p) {
         Slice row = slice_sub(p->pix, i0, i1);
         const Byte *b = (const Byte *)row.p;
         for (Int i = 0; i < row.len; i++)
+            /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
             present[b[i]] = true;
         i0 += p->stride;
         i1 += p->stride;
@@ -1597,6 +1602,7 @@ bool image_ny_cb_cr_a_opaque(const ImageNYCbCrA *p) {
         Slice row = slice_sub(p->a, i0, i1);
         const Byte *b = (const Byte *)row.p;
         for (Int i = 0; i < row.len; i++)
+            /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
             if (b[i] != 0xff)
                 return false;
         i0 += p->a_stride;

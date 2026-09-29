@@ -45,3 +45,4 @@ docs/guides/net.md
 docs/guides/compress.md
 docs/guides/big.md
 docs/guides/mime.md
+docs/guides/image.md

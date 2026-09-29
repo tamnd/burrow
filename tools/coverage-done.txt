@@ -65,6 +65,7 @@ regexp
 mime/multipart
 image/color
 image/color/palette
+image
 mime/quotedprintable
 mime
 math/big

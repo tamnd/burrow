@@ -76,6 +76,7 @@
 #include "burrow/hash/fnv.h"
 #include "burrow/hash/maphash.h"
 #include "burrow/iface.h"
+#include "burrow/image.h"
 #include "burrow/image/color.h"
 #include "burrow/image/color/palette.h"
 #include "burrow/io.h"

@@ -140,3 +140,24 @@ image/color: func RGBToCMYK: the results come back as one ColorCMYK
 image/color: func RGBToYCbCr: the results come back as one ColorYCbCr
 image/color: func YCbCrToRGB: the results come back as one ColorRGBA
 image/color: func ModelFunc: takes the function value by pointer, which the Model keeps
+
+# include/burrow/image.h: Go's SubImage methods return the Image interface, and
+# the caller type-asserts back to the concrete type almost every time. Here each
+# one returns the concrete image by value, which shares pixels with the parent,
+# and the _as_image call gives the interface when that is what you want.
+# RegisterFormat takes the decoders as BURROW_FUNC values so they can carry
+# state, and Uniform's RGBA returns one struct like the color types do.
+image: method (*Alpha) SubImage: returns the concrete ImageAlpha, and image_alpha_as_image gives the interface
+image: method (*Alpha16) SubImage: returns the concrete ImageAlpha16, and image_alpha16_as_image gives the interface
+image: method (*CMYK) SubImage: returns the concrete ImageCMYK, and image_cmyk_as_image gives the interface
+image: method (*Gray) SubImage: returns the concrete ImageGray, and image_gray_as_image gives the interface
+image: method (*Gray16) SubImage: returns the concrete ImageGray16, and image_gray16_as_image gives the interface
+image: method (*NRGBA) SubImage: returns the concrete ImageNRGBA, and image_nrgba_as_image gives the interface
+image: method (*NRGBA64) SubImage: returns the concrete ImageNRGBA64, and image_nrgba64_as_image gives the interface
+image: method (*NYCbCrA) SubImage: returns the concrete ImageNYCbCrA, and image_ny_cb_cr_a_as_image gives the interface
+image: method (*Paletted) SubImage: returns the concrete ImagePaletted, and image_paletted_as_image gives the interface
+image: method (*RGBA) SubImage: returns the concrete ImageRGBA, and image_rgba_as_image gives the interface
+image: method (*RGBA64) SubImage: returns the concrete ImageRGBA64, and image_rgba64_as_image gives the interface
+image: method (*YCbCr) SubImage: returns the concrete ImageYCbCr, and image_y_cb_cr_as_image gives the interface
+image: method (*Uniform) RGBA: the four results come back as one ColorRGBAValue
+image: func RegisterFormat: decode and decodeConfig are BURROW_FUNC values that can carry state

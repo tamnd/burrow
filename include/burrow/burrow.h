@@ -92,6 +92,7 @@
 #include "burrow/mem/gc.h"
 #include "burrow/mem/heap.h"
 #include "burrow/mem/track.h"
+#include "burrow/mime/quotedprintable.h"
 #include "burrow/net/netip.h"
 #include "burrow/net/textproto.h"
 #include "burrow/net/url.h"

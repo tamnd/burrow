@@ -728,7 +728,8 @@ static void exit_registrar(void *arg) {
 
 static void TestExitHooksRunNewestFirstWhenTheThreadEnds(TestingT *t) {
     ExitLog log = {{0}, 0};
-    ExitNode nodes[2] = {{{NULL, NULL, NULL}, &log, 1}, {{NULL, NULL, NULL}, &log, 2}};
+    ExitNode nodes[2] = {{{NULL, NULL, NULL, NULL}, &log, 1},
+                         {{NULL, NULL, NULL, NULL}, &log, 2}};
     burrow__Thread th;
 
     CHECK(burrow__thread_start(&th, exit_registrar, nodes, 0));

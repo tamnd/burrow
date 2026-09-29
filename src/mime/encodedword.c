@@ -429,7 +429,7 @@ Str mime_word_decoder_decode_header(const MimeWordDecoder *d, Alloc *a, Str head
         Str charset = mw_sub(header, cur, cur + j);
         cur += j + 1;
 
-        if (header.len < cur + 4) /* "Q??=" */
+        if (header.len < cur + 4 || header.p == NULL) /* "Q??=" */
             break;
         Byte encoding = header.p[cur];
         cur++;

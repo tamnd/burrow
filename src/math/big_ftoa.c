@@ -160,7 +160,8 @@ static void bf_dec_init(BfDecimal *x, Nat m, Int shift) {
         n--;
     x->len = 0;
     bf_dec_reserve(x, n);
-    memcpy(x->mant, s.p, (size_t)n);
+    if (n > 0)
+        memcpy(x->mant, s.p, (size_t)n);
     x->len = n;
 
     /* Do any (remaining) shift right in decimal representation. */
@@ -176,6 +177,8 @@ static void bf_dec_init(BfDecimal *x, Nat m, Int shift) {
 /* shouldRoundUp reports if x should be rounded up if shortened to n digits.
  * n must be a valid index for x.mant. */
 static bool bf_dec_should_round_up(const BfDecimal *x, Int n) {
+    if (x->mant == NULL)
+        return false;
     if (x->mant[n] == '5' && n + 1 == x->len) {
         /* exactly halfway - round to even */
         return n > 0 && ((x->mant[n - 1] - '0') & 1) != 0;
@@ -690,9 +693,9 @@ Str big_float_string(const BigFloat *x, Alloc *a) {
     return big_float_text(x, a, 'g', 10);
 }
 
-Slice big_float_append(const BigFloat *x, Alloc *a, Slice buf, Byte fmt, Int prec) {
+Slice big_float_append(const BigFloat *x, Alloc *a, Slice buf, Byte format, Int prec) {
     big_enter();
-    Slice r = bf_append(x, a, buf, fmt, prec);
+    Slice r = bf_append(x, a, buf, format, prec);
     big_leave();
     return r;
 }

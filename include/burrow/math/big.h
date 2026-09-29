@@ -599,7 +599,7 @@ BURROW_OWNS(ret) Slice big_float_append(const BigFloat *x, Alloc *a, Slice buf,
 
 /* Float.Format: what fmt calls for %b, %e, %E, %f, %F, %g, %G, %x, %p and
  * %v, with Go's flags, width and precision. */
-void big_float_format(const BigFloat *x, FmtState s, Rune ch);
+void big_float_format(const BigFloat *x, FmtState s, Rune format);
 
 /* Float.Scan: what fmt's scanning calls to read a Float. Infinities are
  * not read. */

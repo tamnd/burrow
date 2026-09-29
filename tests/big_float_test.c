@@ -137,14 +137,15 @@ static const char *hexbytes(Slice b) {
     return s;
 }
 
+static int nibble(char c) {
+    return c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10;
+}
+
 static Slice unhex(const char *s) {
     Int n = (Int)strlen(s) / 2;
     Slice b = slice_make(a, TYPE_BYTE, n, n);
-    for (Int i = 0; i < n; i++) {
-        unsigned v;
-        sscanf(s + 2 * i, "%2x", &v);
-        ((Byte *)b.p)[i] = (Byte)v;
-    }
+    for (Int i = 0; i < n; i++)
+        ((Byte *)b.p)[i] = (Byte)(nibble(s[2 * i]) << 4 | nibble(s[2 * i + 1]));
     return b;
 }
 

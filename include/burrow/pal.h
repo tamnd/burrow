@@ -419,6 +419,7 @@ typedef struct PalThreadExit {
     void (*fn)(void *arg);
     void *arg;
     struct PalThreadExit *next;
+    void *fiber; /* pal_thread_on_exit's, for Windows */
 } PalThreadExit;
 
 bool pal_thread_on_exit(PalThreadExit *node);

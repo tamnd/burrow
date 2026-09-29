@@ -17,6 +17,7 @@
 #include "burrow/declare.h"
 #include "burrow/encoding.h"
 #include "burrow/io.h"
+#include "burrow/math.h"
 #include "burrow/mem/heap.h"
 #include "burrow/panic.h"
 
@@ -346,15 +347,15 @@ void bf_set_int64(BigFloat *z, int64_t x) {
 void bf_set_float64(BigFloat *z, double x) {
     if (z->prec == 0)
         z->prec = 53;
-    if (isnan(x))
+    if (math_is_nan(x))
         bf_nan(&bf_nan_set_float64);
     z->acc = BIG_EXACT;
-    z->neg = signbit(x) != 0; /* handle -0, -Inf correctly */
+    z->neg = math_signbit(x); /* handle -0, -Inf correctly */
     if (x == 0) {
         z->form = BF_ZERO;
         return;
     }
-    if (isinf(x)) {
+    if (math_is_inf(x, 0)) {
         z->form = BF_INF;
         return;
     }
@@ -373,6 +374,8 @@ void bf_set_float64(BigFloat *z, double x) {
  * of the most-significant word (msw) is 1. It returns the shift amount. It
  * assumes that len(m) != 0. */
 int64_t bf_fnorm(Nat m) {
+    if (m.len == 0)
+        return 0;
     Uint s = big_nlz(m.p[m.len - 1]);
     if (s > 0)
         big_lsh_vu(m, m, s);
@@ -530,7 +533,9 @@ static int64_t bf_int64(const BigFloat *x, BigAccuracy *acc) {
             int64_t i = (int64_t)(bf_msb64(x->mant) >> (64 - (uint32_t)x->exp));
             if (x->neg)
                 i = -i;
-            *acc = bf_min_prec(x) <= (Uint)x->exp ? BIG_EXACT : a; /* x truncated */
+            *acc = a; /* x truncated */
+            if (bf_min_prec(x) <= (Uint)x->exp)
+                *acc = BIG_EXACT;
             return i;
         }
         if (x->neg) {
@@ -613,10 +618,10 @@ static float bf_float32(const BigFloat *x, BigAccuracy *acc) {
                 /* underflow to ±0 */
                 if (x->neg) {
                     *acc = BIG_ABOVE;
-                    return -0.0f;
+                    return -0.0F;
                 }
                 *acc = BIG_BELOW;
-                return 0.0f;
+                return 0.0F;
             }
             /* otherwise, round up
              * We handle p == 0 explicitly because it's easy and because
@@ -679,7 +684,7 @@ static float bf_float32(const BigFloat *x, BigAccuracy *acc) {
     }
     case BF_ZERO:
         *acc = BIG_EXACT;
-        return x->neg ? -0.0f : 0.0f;
+        return x->neg ? -0.0F : 0.0F;
     case BF_INF:
         *acc = BIG_EXACT;
         return x->neg ? -(float)INFINITY : (float)INFINITY;
@@ -1346,7 +1351,7 @@ static void bf_sqrt_inverse(BigFloat *z, const BigFloat *x) {
     BigAccuracy acc;
     double xf = bf_float64(x, &acc);
     BigFloat sqi = BIG_FLOAT(NULL);
-    bf_set_float64(&sqi, 1 / sqrt(xf));
+    bf_set_float64(&sqi, 1 / math_sqrt(xf));
     for (uint32_t prec = z->prec + 32; sqi.prec < prec;) {
         sqi.prec *= 2;
         /* ng */
@@ -1671,7 +1676,7 @@ void big_float_free(BigFloat *x) {
 }
 
 BigFloat *big_new_float(Alloc *a, double x) {
-    if (isnan(x))
+    if (math_is_nan(x))
         bf_nan(&bf_nan_new_float);
     BigFloat *z = mem_alloc(a != NULL ? a : heap_allocator(), sizeof(BigFloat),
                             _Alignof(BigFloat));
@@ -1759,7 +1764,7 @@ BigFloat *big_float_set_int64(BigFloat *z, int64_t x) {
 }
 
 BigFloat *big_float_set_float64(BigFloat *z, double x) {
-    if (isnan(x))
+    if (math_is_nan(x))
         bf_nan(&bf_nan_set_float64);
     BF_OP(z, bf_set_float64(z, x));
 }
@@ -2005,7 +2010,7 @@ Error big_float_gob_decode(BigFloat *z, Slice buf) {
 
     Byte b = p[1];
     z->mode = (BigRoundingMode)((b >> 5) & 7);
-    z->acc = (BigAccuracy)((b >> 3) & 3) - 1;
+    z->acc = (BigAccuracy)(((b >> 3) & 3) - 1);
     z->form = (uint8_t)((b >> 1) & 3);
     z->neg = (b & 1) != 0;
     z->prec = bf_get32(p + 2);

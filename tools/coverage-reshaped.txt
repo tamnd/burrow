@@ -111,3 +111,9 @@ compress/lzw: func NewWriter: returns the concrete LzwWriter, which has the IoWr
 math/big: method (*Int) QuoRem: the remainder is the r passed in, so only z is returned
 math/big: method (*Int) DivMod: the modulus is the m passed in, so only z is returned
 math/big: method (*Int) Divide: the remainder is the r passed in, so only z is returned
+
+# include/burrow/mime/multipart.h: Go's File is an interface that the file on
+# disk and the one in memory both satisfy. Here it is one opaque type that does
+# either, and multipart_file_as_io_read_seek_closer and the other _as_ calls
+# give the io interfaces.
+mime/multipart: method (*FileHeader) Open: File is one opaque type rather than an interface

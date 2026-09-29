@@ -40,6 +40,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -436,6 +437,23 @@ int64_t pal_getcwd(char *buf, int64_t cap, PalErrno *err) {
     while (buf[n] != 0)
         n++;
     return n;
+}
+
+int64_t pal_temp_dir(char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    const char *d = NULL;
+    for (const char *const *env = pal_environ(); env != NULL && *env != NULL; env++)
+        if (strncmp(*env, "TMPDIR=", 7) == 0)
+            d = *env + 7;
+    if (d == NULL || *d == 0)
+        d = "/tmp";
+    size_t n = strlen(d);
+    if (buf == NULL || cap <= 0 || n >= (size_t)cap) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    memcpy(buf, d, n + 1);
+    return (int64_t)n;
 }
 
 bool pal_link(const char *from, const char *to, PalErrno *err) {

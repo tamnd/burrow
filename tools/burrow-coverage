@@ -260,6 +260,7 @@ class Decl:
         self.cname = None
         self.owner = None  # the C struct or vtable a member has to be in
         self.member = None
+        self.getter = False
         self.alternative = None
         self.status = None
         self.renamed = False
@@ -322,6 +323,9 @@ def map_by_rule(d):
         if kind == "struct":
             d.owner = owner
             d.member = snake(fm.group(1))
+            # An opaque struct shows the field through a function instead.
+            d.alternative = type_snake(path, tname) + "_" + snake(fm.group(1))
+            d.getter = True
         else:
             d.owner = owner + "VT"
             d.member = snake(fm.group(1))
@@ -505,6 +509,10 @@ class Headers:
 
     def has(self, name):
         return name in self.tokens
+
+    def opaque(self, name):
+        """Declared, with the struct's body out of sight."""
+        return name in self.tokens and name not in self.members
 
     def has_member(self, owner, member, seen=None):
         if member in self.members.get(owner, ()):
@@ -793,7 +801,7 @@ def classify(d, headers, waivers, reshaped, gotypes):
     if d.owner is not None:
         if headers.has_member(d.owner, d.member):
             return "renamed" if d.renamed else "present"
-        if d.alternative and headers.has(d.alternative):
+        if d.alternative and headers.has(d.alternative) and (not d.getter or headers.opaque(d.owner)):
             return "present"
         return "missing"
     if not headers.has(d.cname):
@@ -807,7 +815,7 @@ def classify(d, headers, waivers, reshaped, gotypes):
 def c_spelling(d):
     if d.owner is not None:
         s = "%s.%s" % (d.owner, d.member)
-        if d.alternative:
+        if d.alternative and not d.getter:
             s += " or " + d.alternative
         return s
     return d.cname

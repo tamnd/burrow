@@ -1,6 +1,6 @@
 # MIME
 
-Go's `mime` packages are coming over one at a time. `burrow/mime.h` and `burrow/mime/quotedprintable.h` are done, and `mime/multipart` will follow.
+Go's three `mime` packages are all here: `burrow/mime.h`, `burrow/mime/multipart.h` and `burrow/mime/quotedprintable.h`.
 
 ## mime
 
@@ -193,6 +193,90 @@ That prints `before the error: "finebad"` and then `error: quotedprintable: inva
 
 The reader reads through a `bufio` reader, and reuses the one it is given when it is already a `bufio` reader with a buffer of 4096 bytes or more. It hands out the decoded bytes straight out of that buffer, so it does not copy a line before decoding it.
 
+## multipart
+
+`burrow/mime/multipart.h` is Go's `mime/multipart`, the multipart bodies of RFC 2046. A multipart body is a list of parts, each with its own headers, with a boundary line between them. HTML forms send file uploads this way as `multipart/form-data`, and mail uses the same format for attachments.
+
+`MultipartWriter` writes a body. It picks a random boundary of 60 hex digits, and `multipart_writer_set_boundary` swaps it for one of your own before the first part. Each part gets a writer for its body, which stays good until the next part starts:
+
+<!-- example: ../examples/mime/multipart.c#write -->
+```c
+BytesBuffer body = BYTES_BUFFER(a);
+MultipartWriter *w = multipart_new_writer(a, bytes_buffer_as_io_writer(&body));
+err = multipart_writer_set_boundary(w, BURROW_S("xyz"));
+err = multipart_writer_write_field(w, BURROW_S("name"), BURROW_S("gopher"));
+IoWriter f = multipart_writer_create_form_file(w, BURROW_S("notes"),
+                                               BURROW_S("todo.txt"), &err);
+io_write_string(f, BURROW_S("feed the gopher\n"), &err);
+err = multipart_writer_close(w);
+fmt_printf_v("Content-Type: %s\n", multipart_writer_form_data_content_type(w, a));
+Slice out = bytes_buffer_bytes(&body);
+Str s = {(const Byte *)out.p, out.len};
+fmt_printf_v("%q\n", s);
+multipart_writer_free(w);
+```
+
+That prints:
+
+```
+Content-Type: multipart/form-data; boundary=xyz
+"--xyz\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\ngopher\r\n--xyz\r\nContent-Disposition: form-data; name=\"notes\"; filename=\"todo.txt\"\r\nContent-Type: application/octet-stream\r\n\r\nfeed the gopher\n\r\n--xyz--\r\n"
+```
+
+The headers of a part come out sorted by key, as in Go, so the same calls always give the same bytes. `multipart_writer_close` writes the closing boundary. It does not close the writer underneath.
+
+`MultipartReader` goes the other way, one part at a time. The boundary comes from the `boundary` parameter of the Content-Type, which `mime_parse_media_type` gets out for you:
+
+<!-- example: ../examples/mime/multipart.c#read -->
+```c
+BytesReader src;
+bytes_reader_reset(&src, out);
+MultipartReader *r =
+    multipart_new_reader(a, bytes_reader_as_io_reader(&src), BURROW_S("xyz"));
+for (;;) {
+    MultipartPart *p = multipart_reader_next_part(r, &err);
+    if (p == NULL)
+        break;
+    Slice data = io_read_all(a, multipart_part_as_io_reader(p), &err);
+    s = (Str){(const Byte *)data.p, data.len};
+    fmt_printf_v("part %q file %q: %q\n", multipart_part_form_name(p),
+                 multipart_part_file_name(p), s);
+}
+fmt_printf_v("end: %v\n", err);
+multipart_reader_free(r);
+```
+
+That prints each part and then `end: EOF`. A part belongs to the reader and is only good until the next call to `multipart_reader_next_part`, which reads and throws away whatever was left of it, so copy out what you want to keep. A part with `Content-Transfer-Encoding: quoted-printable` is decoded as it is read, and the header is taken out. `multipart_reader_next_raw_part` leaves both alone.
+
+For a form there is `multipart_reader_read_form`, which reads the whole body at once. Fields go in `value` and files in `file`. File bodies stay in memory while they fit in the limit you give, and the rest go to temporary files, all of them in one file unless `GODEBUG=multipartfiles=distinct` is set:
+
+<!-- example: ../examples/mime/multipart.c#form -->
+```c
+bytes_reader_reset(&src, out);
+r = multipart_new_reader(a, bytes_reader_as_io_reader(&src), BURROW_S("xyz"));
+MultipartForm *form = multipart_reader_read_form(r, 1 << 20, &err);
+Str key = BURROW_S("name");
+Slice names = *(Slice *)map_get(form->value, &key);
+fmt_printf_v("name = %q\n", ((Str *)names.p)[0]);
+key = BURROW_S("notes");
+Slice files = *(Slice *)map_get(form->file, &key);
+MultipartFileHeader *fh = ((MultipartFileHeader **)files.p)[0];
+fmt_printf_v("notes: %q, %d bytes, %s\n", fh->filename, fh->size,
+             textproto_mime_header_get(fh->header, BURROW_S("Content-Type")));
+MultipartFile *file = multipart_file_header_open(fh, a, &err);
+Slice text = io_read_all(a, multipart_file_as_io_reader(file), &err);
+s = (Str){(const Byte *)text.p, text.len};
+fmt_printf_v("contents: %q\n", s);
+multipart_file_close(file);
+err = multipart_form_remove_all(form);
+multipart_form_free(form);
+multipart_reader_free(r);
+```
+
+That prints `name = "gopher"`, then `notes: "todo.txt", 16 bytes, application/octet-stream` and `contents: "feed the gopher\n"`. A `MultipartFile` reads, reads at an offset and seeks, whether it is in memory or on disk. Call `multipart_form_remove_all` before `multipart_form_free`, or the temporary files stay behind.
+
+The limits are Go's. A part may have at most 10,000 headers, and a form at most 1,000 parts and 10,000 headers across its files, with 10 MB set aside for fields on top of the memory limit. Going over any of them gives `multipart_err_message_too_large`. `GODEBUG=multipartmaxheaders=N` and `multipartmaxparts=N` change them.
+
 ## How close it is to Go
 
 The tests check the reader against what Go's reader makes of Go's own test table and of more edge cases, both read all at once and read one byte at a time. They also check it against a digest of what Go makes of every string of up to six bytes from `0A \r\n=\t`, 137,257 inputs in all. The writer is checked against Go on Go's test table and on 40 random inputs, as text and as binary, written whole and three bytes at a time. `tools/gen-quotedprintable-tests.sh` makes the expected results from the Go toolchain it finds.
@@ -200,3 +284,7 @@ The tests check the reader against what Go's reader makes of Go's own test table
 The `mime` tests check the parser, the formatter, the encoder and the decoder against what Go makes of Go's own test tables, errors included. Past that they check digests of what Go makes of 20,000 random media types, 20,000 random headers and 5,000 random strings to encode, each built from pieces that hit the hard cases: RFC 2231 continuations, quoting, bad escapes, odd charsets and words split across white space. `tools/gen-mime-tests.sh` makes the expected results.
 
 The extension table is tested with a script of 16,017 steps from `tools/gen-mime-type-tests.sh`. Each step empties the table or puts the built in one back, loads a `globs2` or `mime.types` file, adds a type, or asks for one, and the test replays them and checks every answer against what Go gave at the same point. The script has Go's own tests in it, every built in extension and type in both cases, and 200 files of each format built at random from pieces such as comments, CRLF line ends, glob patterns Go skips, bad types and non-ASCII extensions. Another test adds and looks up types from eight threads at once. The Windows registry reader is not covered by the script, since Go's test for it needs a real registry too.
+
+The `multipart` tests replay 433 bodies through the reader three ways, reading each part whole, reading with the raw reader and reading only the first seven bytes, and once more feeding the input one byte at a time, and compare every header, name, body and error with a transcript of what Go did. The bodies are Go's own test cases, some edge cases of our own and 360 random ones from `tools/gen-mime-multipart-tests.sh`. The same script records what Go's `ReadForm` makes of Go's form messages and 200 random forms, 246 cases in all, with different memory limits and GODEBUG settings, down to which files went to disk and what reading, seeking and reading at an offset gave, and what Go's writer made of 171 runs of calls, most of them random. Go's tests that need a special reader or a very large body are ported by hand: the line limit, reading ahead, nested bodies, every size of body up to 5 KiB, the metadata limits and the endless header line.
+
+On Windows, `FileName` does what Go's does there: `filepath.Base` splits on backslashes too and drops a drive letter or UNC volume, so `..\evil` comes out as `evil`. The script records that answer as well wherever it differs, for 39 reader cases and 18 form cases, and the test checks it on Windows.

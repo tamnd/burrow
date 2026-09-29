@@ -4,6 +4,21 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.12 (2026-09-30)
+
+PNG, GIF, and a working Windows release. v0.1.11 was tagged, but its release build failed on MSVC and nothing was published, so everything in it ships here too.
+
+### Added
+
+- `image/png`, the decoder and encoder with Go's compression levels, buffer pool and error types. It matches Go byte for byte on 3000 random encodes and decodes PngSuite and Go's other PNG test files, damaged copies included, the same way Go does (#260).
+- `image/gif`, the decoder for single and animated files and the encoder with Go's quantizer and drawer options. It matches Go on every frame, delay and disposal of Go's GIF test files and their damaged copies, and on the bytes of random encodes (#262).
+- `image_decoded_free` and `image_config_free` in `image`, and `color_model_as_palette` in `image/color`, for what a decoder hands back (#260).
+
+### Fixed
+
+- `image`'s format registry used GCC's atomic builtins, which MSVC does not have. It now uses `burrow/atomic.h`, and this is what broke the v0.1.11 release (#260).
+- The clang-tidy findings in the image packages, which had the CI job failing since #260 (#263).
+
 ## v0.1.11 (2026-09-29)
 
 MIME, the rest of `math/big`, and the first three image packages. v0.1.10 was tagged, but its release build failed on the gcc and MSVC builds of `math/big` and nothing was published, so everything in it ships here too.

@@ -509,6 +509,11 @@ class Headers:
             for name in names:
                 self.members.setdefault(name, set()).update(members)
                 self.embeds.setdefault(name, set()).update(embeds)
+        # typedef ImageVT ImageRGBA64ImageVT; an interface that C spells the
+        # same as another, because the extra methods are optional slots in the
+        # one vtable. The alias has everything the original has.
+        for m in re.finditer(r"\btypedef\s+(\w+)\s+(\w+)\s*;", code):
+            self.embeds.setdefault(m.group(2), set()).add(m.group(1))
 
     def has(self, name):
         return name in self.tokens

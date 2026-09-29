@@ -46,6 +46,7 @@ category	intern	unique's canonical values, which are process wide by definition,
 category	godebug	Settings read from the GODEBUG environment variable the first time they are needed. Go reads the same ones once per process through internal/godebug.
 category	mime-types	mime's table of file extensions and media types. Go keeps it as package level maps behind a sync.Once and a lock, and it is process wide because AddExtensionType changes what every caller of TypeByExtension sees.
 category	thread-exit	The hook that runs code as a thread exits. The platform has one per process and every library that keeps memory per thread shares it.
+category	image-formats	image's list of registered formats. Go keeps it in an atomic.Value that RegisterFormat replaces under a lock, and it is process wide because a format registered anywhere is one Decode can find everywhere.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -172,6 +173,12 @@ global	src/mime/multipart.c	mp_debug_max_headers	godebug	The multipartmaxheaders
 global	src/mime/multipart.c	mp_debug_max_parts	godebug	The multipartmaxparts number, stored atomically before mp_debug_flags says it is there.
 global	src/image/palette.c	pal_plan9_colors	package-vars	The colors behind palette.Plan9, which is a package variable in Go too. burrow never writes to them, and a program that does is doing what it could do in Go, where it would be just as unsynchronised.
 global	src/image/palette.c	pal_web_safe_colors	package-vars	The colors behind palette.WebSafe, the same as pal_plan9_colors.
+global	src/image/image.c	im_black	package-vars	The Uniform behind image.Black, which is a package variable in Go too. burrow never writes to it, and a program that does is doing what it could do in Go, where it would be just as unsynchronised.
+global	src/image/image.c	im_white	package-vars	The Uniform behind image.White, the same as im_black.
+global	src/image/image.c	im_transparent	package-vars	The Uniform behind image.Transparent, the same as im_black.
+global	src/image/image.c	im_opaque	package-vars	The Uniform behind image.Opaque, the same as im_black.
+global	src/image/image.c	im_formats_mu	image-formats	The lock that keeps two RegisterFormat calls from pushing at once. Readers do not take it.
+global	src/image/image.c	im_formats	image-formats	The head of the list of formats. Pushed with a release store under im_formats_mu and read with an acquire load, and a node never changes once it is on the list.
 global	src/math/rand.c	rand_global	package-vars	The shared Rand behind math/rand's package level functions. Loaded with an acquire load, and only ever stored under rand_global_lock with a release store, after the Rand it points at is set up.
 global	src/math/rand.c	rand_global_lock	package-vars	The lock itself. It serializes setting up and switching the shared Rand.
 global	src/math/rand.c	rand_runtime_rand	package-vars	Set up under rand_global_lock before rand_global points at it. After that only its read position changes, under rand_runtime_lock.

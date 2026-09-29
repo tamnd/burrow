@@ -57,7 +57,7 @@ static inline Slice dr_from(Slice s, Int lo) {
 /* Go's copy(dst[lo:hi], src[lo2:hi2]) where the caller has sliced both. */
 static void dr_copy(Slice dst, Slice src) {
     Int n = dst.len < src.len ? dst.len : src.len;
-    if (n > 0)
+    if (n > 0 && dst.p != NULL && src.p != NULL)
         memmove(dst.p, src.p, (size_t)n);
 }
 

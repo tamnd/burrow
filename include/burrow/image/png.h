@@ -111,7 +111,7 @@ typedef struct PngEncoderBuffer PngEncoderBuffer;
 
 /* Gives a buffer back to the allocator it was made from. A pool calls this for
  * the buffers it drops. NULL is fine. */
-void png_encoder_buffer_free(PngEncoderBuffer *b);
+void png_encoder_buffer_free(PngEncoderBuffer *e);
 
 /* png.EncoderBufferPool: where an encoder gets its buffer and puts it back.
  * get may return NULL, and the encoder then makes a new one. After put the

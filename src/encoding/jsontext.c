@@ -810,53 +810,6 @@ void jsontext_pointer_tokens_free(IterSeq seq, Alloc *a) {
 
 /* -------------------------------------------------------------------- state */
 
-#define JT_TYPE_MASK ((uint64_t)0x8000000000000000U)
-#define JT_TYPE_OBJECT ((uint64_t)0x8000000000000000U)
-#define JT_TYPE_ARRAY ((uint64_t)0)
-#define JT_DISABLE_NAMESPACE ((uint64_t)0x4000000000000000U)
-#define JT_INVALID_NAMESPACE ((uint64_t)0x2000000000000000U)
-#define JT_COUNT_MASK ((uint64_t)0x1fffffffffffffffU)
-
-static inline int64_t jt_e_len(uint64_t e) {
-    return (int64_t)(e & JT_COUNT_MASK);
-}
-
-static inline bool jt_e_is_object(uint64_t e) {
-    return (e & JT_TYPE_MASK) == JT_TYPE_OBJECT;
-}
-
-static inline bool jt_e_is_array(uint64_t e) {
-    return (e & JT_TYPE_MASK) == JT_TYPE_ARRAY;
-}
-
-static inline bool jt_e_need_name(uint64_t e) {
-    return (e & (JT_TYPE_MASK | 1)) == JT_TYPE_OBJECT;
-}
-
-static inline bool jt_e_need_value(uint64_t e) {
-    return (e & (JT_TYPE_MASK | 1)) == (JT_TYPE_OBJECT | 1);
-}
-
-static inline bool jt_e_need_comma(uint64_t e, JsontextKind next) {
-    return !jt_e_need_value(e) && jt_e_len(e) > 0 && next != '}' && next != ']';
-}
-
-static inline bool jt_e_active_ns(uint64_t e) {
-    return (e & JT_DISABLE_NAMESPACE) == 0;
-}
-
-static inline bool jt_e_valid_ns(uint64_t e) {
-    return (e & JT_INVALID_NAMESPACE) == 0;
-}
-
-static inline Int jt_depth(const JsonState *s) {
-    return s->stack_len + 1;
-}
-
-static inline uint64_t jt_index(const JsonState *s, Int i) {
-    return i == s->stack_len ? s->last : s->stack[i];
-}
-
 /* Room for one more element in an array of elem-sized things from a. */
 static bool jt_grow_array(Alloc *a, void **p, Int *cap, Int len, size_t elem,
                           size_t align) {
@@ -928,27 +881,6 @@ static Error jt_pop_array(JsonState *s) {
     return BURROW_NO_ERROR;
 }
 
-static Int jt_need_indent(const JsonState *s, JsontextKind next) {
-    bool will_end = next == '}' || next == ']';
-    if (jt_depth(s) == 1)
-        return 0;
-    if (jt_e_len(s->last) == 0 && will_end)
-        return 0;
-    if (jt_e_len(s->last) == 0 || jt_e_need_comma(s->last, next))
-        return jt_depth(s);
-    if (will_end)
-        return jt_depth(s) - 1;
-    return 0;
-}
-
-static Byte jt_need_delim(const JsonState *s, JsontextKind next) {
-    if (jt_e_need_value(s->last))
-        return ':';
-    if (jt_e_need_comma(s->last, next) && s->stack_len != 0)
-        return ',';
-    return 0;
-}
-
 /* objectNameStack. offsets holds, for each open object, where its current
  * name ends in unquoted, or the bitwise complement of where the quoted name
  * starts in the coder's buffer until it has been copied, or the invalid
@@ -963,10 +895,6 @@ static bool jt_names_push(JsonState *s) {
     s->offsets = (Int *)p;
     s->offsets[s->offsets_len++] = JT_INVALID_OFFSET;
     return true;
-}
-
-static inline void jt_names_replace_last_quoted(JsonState *s, Int pos) {
-    s->offsets[s->offsets_len - 1] = ~pos;
 }
 
 static inline void jt_names_clear_last(JsonState *s) {
@@ -3491,6 +3419,9 @@ static void jt_encoder_init(JsontextEncoder *e, Alloc *a) {
 }
 
 static void jt_encoder_release(JsontextEncoder *e) {
+    if (e->seen != NULL)
+        mem_free(e->a, e->seen, (size_t)e->seen_cap * sizeof(JsonSeen),
+                 _Alignof(JsonSeen));
     burrow__jsonbuf_free(&e->buf);
     burrow__jsonbuf_free(&e->avail);
     jt_frames_free(e->a, &e->frames, &e->frames_cap);
@@ -4047,6 +3978,139 @@ Slice burrow__jsontext_previous_token_or_value(const JsontextDecoder *d) {
     }
     Slice r = {(void *)(uintptr_t)b, n, n, TYPE_BYTE};
     return r;
+}
+
+/* Setting coders up without the checks Reset does, for json v2's own
+ * encoders and decoders. has_wr false means the encoder only buffers, and
+ * has_rd false means the decoder reads the len bytes at b. */
+void burrow__jsontext_encoder_init(JsontextEncoder *e, Alloc *a) {
+    jt_encoder_init(e, a);
+}
+
+void burrow__jsontext_encoder_setup(JsontextEncoder *e, IoWriter w, bool has_wr,
+                                    const JsontextOptions *opts) {
+    jt_encoder_setup(e, w, has_wr, opts);
+}
+
+void burrow__jsontext_encoder_release(JsontextEncoder *e) {
+    jt_encoder_release(e);
+}
+
+void burrow__jsontext_decoder_init(JsontextDecoder *d, Alloc *a) {
+    jt_decoder_init(d, a);
+}
+
+void burrow__jsontext_decoder_setup(JsontextDecoder *d, IoReader r, bool has_rd,
+                                    const Byte *b, Int len,
+                                    const JsontextOptions *opts) {
+    jt_decoder_setup(d, r, has_rd, (Byte *)(uintptr_t)b, len, opts);
+}
+
+void burrow__jsontext_decoder_release(JsontextDecoder *d) {
+    jt_decoder_release(d);
+}
+
+/* decoderState.ReadValue with the value flags. */
+Slice burrow__jsontext_read_value(JsontextDecoder *d, unsigned *flags, Error *err) {
+    return jt_read_value(d, flags, err);
+}
+
+/* encoderState.AppendStackPointer and decoderState.AppendStackPointer. */
+void burrow__jsontext_encoder_append_stack_pointer(JsontextEncoder *e, JsonBuf *b,
+                                                   int where) {
+    jt_names_copy_quoted(&e->st, e->buf.p, e->buf.len);
+    jt_append_stack_pointer(&e->st, b, where);
+}
+
+void burrow__jsontext_decoder_append_stack_pointer(JsontextDecoder *d, JsonBuf *b,
+                                                   int where) {
+    jt_names_copy_quoted(&d->st, d->db.buf, d->db.len);
+    jt_append_stack_pointer(&d->st, b, where);
+}
+
+/* encoderState.CountNextDelimWhitespace. */
+Int burrow__jsontext_encoder_count_next_delim_whitespace(const JsontextEncoder *e) {
+    const JsontextKind next = '"';
+    Byte delim = jt_need_delim(&e->st, next);
+    Int n = 0;
+    if (delim > 0)
+        n++;
+    if (delim == ':') {
+        if (jsonflags_get(&e->opts, JSONFLAG_SPACE_AFTER_COLON))
+            n++;
+    } else {
+        if (delim == ',' && jsonflags_get(&e->opts, JSONFLAG_SPACE_AFTER_COMMA))
+            n++;
+        if (jsonflags_get(&e->opts, JSONFLAG_MULTILINE)) {
+            Int m = jt_need_indent(&e->st, next);
+            if (m > 0)
+                n += 1 + e->opts.indent_prefix.len + (m - 1) * e->opts.indent.len;
+        }
+    }
+    return n;
+}
+
+/* decoderState.CountNextDelimWhitespace. */
+Int burrow__jsontext_decoder_count_next_delim_whitespace(JsontextDecoder *d) {
+    (void)jsontext_decoder_peek_kind(d);
+    const Byte *b = d->db.buf + d->db.prev_end;
+    Int n = d->db.len - d->db.prev_end;
+    Int i = 0;
+    while (i < n && (b[i] == ',' || b[i] == ':' || b[i] == ' ' || b[i] == '\n' ||
+                     b[i] == '\r' || b[i] == '\t'))
+        i++;
+    return i;
+}
+
+/* decoderState.SkipValueRemainder. */
+Error burrow__jsontext_skip_value_remainder(JsontextDecoder *d) {
+    if (jt_depth(&d->st) - 1 > 0 && jt_e_len(d->st.last) == 0) {
+        for (Int n = jt_depth(&d->st); jt_depth(&d->st) >= n;) {
+            Error err = BURROW_NO_ERROR;
+            (void)jsontext_decoder_read_token(d, &err);
+            if (BURROW_FAILED(err))
+                return err;
+        }
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* decoderState.CheckNextValue. */
+Error burrow__jsontext_check_next_value(JsontextDecoder *d, bool last) {
+    (void)jsontext_decoder_peek_kind(d);
+    Int pos = d->peek_pos;
+    Error err = d->peek_err;
+    d->peek_pos = 0;
+    d->peek_err = BURROW_NO_ERROR;
+    if (BURROW_FAILED(err))
+        return err;
+    unsigned flags = 0;
+    err = jt_consume_value(d, &flags, &pos, jt_depth(&d->st));
+    if (BURROW_FAILED(err))
+        return jt_dwrap(d, err, pos, 1);
+    if (last)
+        return jt_check_eof(d, pos);
+    return BURROW_NO_ERROR;
+}
+
+/* objectNamespace.InsertUnquoted on the innermost object the decoder is in:
+ * 1 when name is new, 0 when it is a duplicate, -1 when memory ran out. */
+int burrow__jsontext_insert_unquoted(JsontextDecoder *d, Str name) {
+    return jt_ns_insert(jt_spaces_last(&d->st), d->st.a, name.p, name.len, false);
+}
+
+int burrow__jsontext_encoder_insert_unquoted(JsontextEncoder *e, Str name) {
+    return jt_ns_insert(jt_spaces_last(&e->st), e->st.a, name.p, name.len, false);
+}
+
+/* A SyntacticError in the error arena, the way the coders make them. */
+Error burrow__jsontext_syntactic_new(int64_t offset, Str pointer, Error err) {
+    return jt_syntactic_new(offset, pointer, err);
+}
+
+/* strconv.AppendQuote. */
+void burrow__jsontext_put_go_quote(JsonBuf *b, Str s) {
+    jt_put_go_quote(b, s);
 }
 
 /* ------------------------------------------------------------------- values */

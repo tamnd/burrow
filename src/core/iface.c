@@ -131,7 +131,7 @@ static const TypeOps any_ops = {
 
 /* "interface {}" is what Go's reflect prints for the empty interface, since any
  * is an alias for it rather than a type of its own. */
-static const Type any_type = {
+const Type burrow_type_Any = {
     {(const Byte *)"interface {}", 12},
     {NULL, 0},
     KIND_INTERFACE,
@@ -148,7 +148,7 @@ static const Type any_type = {
     &any_ops,
 };
 
-const Type *const TYPE_ANY = &any_type;
+const Type *const TYPE_ANY = &burrow_type_Any;
 
 /* ------------------------------------------------------------ any from a value
  *

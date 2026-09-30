@@ -66,6 +66,7 @@
 #include "burrow/encoding/csv.h"
 #include "burrow/encoding/hex.h"
 #include "burrow/encoding/json/jsontext.h"
+#include "burrow/encoding/json/v2.h"
 #include "burrow/encoding/pem.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"

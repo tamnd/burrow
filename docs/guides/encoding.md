@@ -539,6 +539,90 @@ Error cerr = jsontext_value_canonicalize_v(&v, a, 0);
 
 The result is `{"a":[true,100],"b":2,"é":"x"}`: members sorted, numbers printed as float64s, escapes that were not needed undone. These functions rewrite the value in place when there is room, as Go's do, so they need memory they can write to. A `BURROW_B` literal points at read-only text, which is why the example clones it first.
 
+## JSON values
+
+`burrow/encoding/json/v2.h` is the upper half of Go's json v2. It turns C values into JSON and back, and the type descriptor is what tells it how. A struct declared with `BURROW_STRUCT` carries its field names and tags, so it behaves the way the same struct does in Go:
+
+<!-- example: ../examples/encoding/jsonv2.c#types -->
+```c
+#define ITEM_FIELDS(F, T)                                                              \
+    F(T, Str, Name, "json:\"name\"")                                                   \
+    F(T, double, Price, "json:\"price,string\"")                                       \
+    F(T, Strs, Tags, "json:\"tags,omitempty\"")                                        \
+    F(T, bool, Hidden, "json:\"-\"")                                                   \
+    F(T, Int, Stock, "json:\"stock,omitzero\"")
+BURROW_STRUCT(Item, ITEM_FIELDS);
+```
+
+The tags mean what they mean in Go: `string` writes the number as a JSON string, `omitempty` drops an empty slice, `omitzero` drops a zero value, and `-` leaves the field out altogether. Marshalling takes an `Any`, which is a type and a pointer to a value of it:
+
+<!-- example: ../examples/encoding/jsonv2.c#marshal -->
+```c
+Str tags[] = {BURROW_S("tea"), BURROW_S("green")};
+Item it = {BURROW_S("sencha"), 12.5, {tags, 2, 2, TYPE_OF(Str)}, true, 0};
+Error err = BURROW_NO_ERROR;
+Slice out = jsonv2_marshal_v(a, BURROW_ANY(TYPE_OF(Item), &it), &err, 0);
+```
+
+That gives `{"name":"sencha","price":"12.5","tags":["tea","green"]}`. `Hidden` is gone because of its tag, and `Stock` because it is zero. Unmarshalling takes an `Any` pointing at the value to fill in, which plays the part of the pointer you would hand to Go's `Unmarshal`:
+
+<!-- example: ../examples/encoding/jsonv2.c#unmarshal -->
+```c
+Item back = {0};
+err = jsonv2_unmarshal_v(
+    a, BURROW_B("{\"name\":\"matcha\",\"price\":\"30\",\"stock\":4}"),
+    BURROW_ANY(TYPE_OF(Item), &back), 0);
+```
+
+`back` ends up as matcha, 30 and 4. Whatever the value needs, strings, slices, maps and the things pointers point at, comes from the allocator you pass, and nothing the value held before is freed, so an arena is the natural thing to use.
+
+An `Any` holding nothing is Go's `any`. A JSON object becomes a `Map *` of type `TYPE_JSONV2_MAP_STRING_ANY`, an array a `Slice` of type `TYPE_JSONV2_SLICE_ANY`, a number a `double`, and so on down:
+
+<!-- example: ../examples/encoding/jsonv2.c#any -->
+```c
+Any v = {NULL, NULL};
+err = jsonv2_unmarshal_v(a, BURROW_B("{\"b\":[1,\"two\",null],\"a\":true}"),
+                         BURROW_ANY(TYPE_ANY, &v), 0);
+Map *obj = *(Map **)v.data;
+Str key = BURROW_S("b");
+const Any *b = map_get(obj, &key);
+Slice again = jsonv2_marshal_v(a, v, &err, 1, jsonv2_deterministic(true));
+```
+
+Maps come out in whatever order the map iterates in, as in Go. `jsonv2_deterministic(true)` sorts them, and `again` is `{"a":true,"b":[1,"two",null]}`.
+
+When the JSON and the C value do not line up, the error is a `Jsonv2SemanticError` saying where and why, and `errors_as` with `TYPE_JSONV2_SEMANTIC_ERROR` gets the struct out:
+
+<!-- example: ../examples/encoding/jsonv2.c#errors -->
+```c
+int8_t small = 0;
+err =
+    jsonv2_unmarshal_v(a, BURROW_B("300"), BURROW_ANY(TYPE_OF(int8_t), &small), 0);
+```
+
+The text is `json: cannot unmarshal JSON number 300 into Go int8: value out of range`, which is Go's word for word. A struct type names itself without the package, so where Go says `main.Item` burrow says `Item`. Unknown member names are skipped unless you pass `jsonv2_reject_unknown_members(true)`, and then the error wraps `jsonv2_err_unknown_name`.
+
+A struct can keep the members it has no field for in an embedded map with string keys:
+
+<!-- example: ../examples/encoding/jsonv2.c#fallback -->
+```c
+#define LOOSE_FIELDS(F, T)                                                             \
+    F(T, Str, ID, "json:\"id\"")                                                       \
+    F(T, Extra, Rest, "json:\",embed\"")
+BURROW_STRUCT(Loose, LOOSE_FIELDS);
+```
+
+<!-- example: ../examples/encoding/jsonv2.c#loose -->
+```c
+Loose l = {0};
+err = jsonv2_unmarshal_v(a, BURROW_B("{\"id\":\"7\",\"size\":2,\"hot\":true}"),
+                         BURROW_ANY(TYPE_OF(Loose), &l), 0);
+Slice loose = jsonv2_marshal_v(a, BURROW_ANY(TYPE_OF(Loose), &l), &err, 1,
+                               jsonv2_deterministic(true));
+```
+
+`size` and `hot` land in `Rest`, and marshalling writes them back after `id`.
+
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. `encoding/json` itself, both the v1 API and v2's marshalling, is still to come.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/json/v2`, the `MarshalJSON` style methods, the `WithMarshalers` family of caller supplied functions, `time.Time` and `jsontext.Value` as a field are still to come, and so is the v1 API of `encoding/json`.

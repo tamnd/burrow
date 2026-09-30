@@ -2,6 +2,7 @@
 
 #include "burrow/burrow.h"
 #include "burrow/declare.h"
+#include "burrow/encoding/json/jsontext.h"
 #include "burrow/encoding/json/v2.h"
 #include "burrow/mem/arena.h"
 
@@ -23,6 +24,13 @@ BURROW_STRUCT(Item, ITEM_FIELDS);
     F(T, Str, ID, "json:\"id\"")                                                       \
     F(T, Extra, Rest, "json:\",embed\"")
 BURROW_STRUCT(Loose, LOOSE_FIELDS);
+// doc: end
+
+// doc: event
+#define EVENT_FIELDS(F, T)                                                             \
+    F(T, Str, Kind, "json:\"kind\"")                                                   \
+    F(T, JsontextValue, Data, "json:\"data\"")
+BURROW_STRUCT(Event, EVENT_FIELDS);
 // doc: end
 
 // doc: yesno
@@ -180,6 +188,16 @@ int main(void) {
     // doc: end
     show("words", words);
     printf("maybe: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
+
+    // doc: raw
+    Event ev = {0};
+    err = jsonv2_unmarshal_v(
+        a, BURROW_B("{\"kind\":\"click\", \"data\": {\"x\": 1, \"y\": 2}}"),
+        BURROW_ANY(TYPE_OF(Event), &ev), 0);
+    Slice evb = jsonv2_marshal_v(a, BURROW_ANY(TYPE_OF(Event), &ev), &err, 0);
+    // doc: end
+    show("data", ev.Data);
+    show("event", evb);
 
     arena_free(&ar);
     return 0;

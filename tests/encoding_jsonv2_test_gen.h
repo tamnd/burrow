@@ -27,7 +27,7 @@ typedef struct JvCase {
     int canonicalize;
 } JvCase;
 
-/* 610 cases, 340 left out. */
+/* 663 cases, 287 left out. */
 
 static Type gt0;
 static Type gt1;
@@ -201,6 +201,11 @@ static Type gt168;
 static Type gt169;
 static Type gt170;
 static Type gt171;
+static Type gt172;
+static Type gt173;
+static Type gt174;
+static Type gt175;
+static Type gt176;
 
 typedef Slice G0;
 typedef Slice G1;
@@ -503,171 +508,192 @@ typedef struct G98 {
     G99 f0;
     G99 f1;
 } G98;
-typedef Map *G102;
 typedef struct G101 {
     Int f0;
-    G102 f1;
+    JsontextValue f1;
     Int f2;
 } G101;
-typedef void *G104;
+typedef void *G103;
+typedef struct G104 {
+    Int f0;
+    JsontextValue f1;
+} G104;
+typedef struct G102 {
+    G103 f0;
+} G102;
+typedef Map *G106;
 typedef struct G105 {
     Int f0;
-    G102 f1;
+    G106 f1;
+    Int f2;
 } G105;
-typedef struct G103 {
-    G104 f0;
-} G103;
-typedef void *G107;
-typedef struct G106 {
-    Int f0;
-    G107 f1;
-    Int f2;
-} G106;
+typedef void *G108;
 typedef struct G109 {
-    G107 f0;
-} G109;
-typedef struct G108 {
-    G109 f0;
-} G108;
-typedef struct G110 {
-    G35 f0;
-} G110;
-typedef Map *G112;
-typedef struct G111 {
-    G112 f0;
-} G111;
-typedef Map *G114;
-typedef struct G113 {
     Int f0;
-    G114 f1;
+    G106 f1;
+} G109;
+typedef struct G107 {
+    G108 f0;
+} G107;
+typedef void *G111;
+typedef struct G110 {
+    Int f0;
+    G111 f1;
     Int f2;
+} G110;
+typedef struct G113 {
+    G111 f0;
 } G113;
+typedef struct G112 {
+    G113 f0;
+} G112;
+typedef struct G114 {
+    G35 f0;
+} G114;
+typedef Map *G116;
 typedef struct G115 {
+    G116 f0;
+} G115;
+typedef Map *G118;
+typedef struct G117 {
+    Int f0;
+    G118 f1;
+    Int f2;
+} G117;
+typedef struct G119 {
     Str f0;
     Str f1;
     Str f2;
     Str f3;
-    G102 f4;
-} G115;
-typedef struct G116 {
+    Str f4;
+    JsontextValue f5;
+} G119;
+typedef struct G120 {
     Str f0;
     Str f1;
-} G116;
-typedef struct G117 {
-    Str f0;
-} G117;
-typedef struct G118 {
-    Str f0;
-} G118;
-typedef struct G119 {
-    Str f0;
-} G119;
-typedef Str G121;
-typedef struct G120 {
-    G121 f0;
+    Str f2;
+    Str f3;
+    G106 f4;
 } G120;
+typedef struct G121 {
+    Str f0;
+    Str f1;
+} G121;
 typedef struct G122 {
-    G121 f0;
+    Str f0;
 } G122;
 typedef struct G123 {
-    G5 f0;
+    Str f0;
 } G123;
 typedef struct G124 {
-    G5 f0;
+    Str f0;
 } G124;
+typedef Str G126;
 typedef struct G125 {
-    char pad_;
+    G126 f0;
 } G125;
-typedef Slice G126;
-typedef Slice G127;
+typedef struct G127 {
+    G126 f0;
+} G127;
 typedef struct G128 {
-    G125 v[1];
+    G5 f0;
 } G128;
 typedef struct G129 {
-    bool v[2];
+    G5 f0;
 } G129;
 typedef struct G130 {
-    Str v[2];
+    char pad_;
 } G130;
-typedef struct G131 {
-    G7 v[2];
-} G131;
-typedef struct G132 {
-    int64_t v[2];
-} G132;
+typedef Slice G131;
+typedef Slice G132;
 typedef struct G133 {
-    uint64_t v[2];
+    G130 v[1];
 } G133;
 typedef struct G134 {
-    double v[2];
+    bool v[2];
 } G134;
-typedef void *G135;
+typedef struct G135 {
+    Str v[2];
+} G135;
 typedef struct G136 {
-    G24 v[1];
+    G7 v[2];
 } G136;
-typedef void *G137;
-typedef void *G138;
-typedef void *G139;
+typedef struct G137 {
+    int64_t v[2];
+} G137;
+typedef struct G138 {
+    uint64_t v[2];
+} G138;
+typedef struct G139 {
+    double v[2];
+} G139;
 typedef void *G140;
-typedef void *G141;
+typedef struct G141 {
+    G24 v[1];
+} G141;
 typedef void *G142;
 typedef void *G143;
 typedef void *G144;
-typedef struct G145 {
-    G144 f0;
-} G145;
-typedef struct G146 {
-    Any v[1];
-} G146;
-typedef struct G147 {
-    Any f0;
-} G147;
-typedef struct G148 {
-    uint8_t v[8];
-} G148;
-typedef Map *G149;
+typedef void *G145;
+typedef void *G146;
+typedef void *G147;
+typedef void *G148;
+typedef void *G149;
 typedef struct G150 {
-    uint8_t v[1];
+    G149 f0;
 } G150;
 typedef struct G151 {
-    uint8_t v[1];
+    Any v[1];
 } G151;
 typedef struct G152 {
-    uint8_t v[2];
+    Any f0;
 } G152;
 typedef struct G153 {
-    uint8_t v[3];
+    uint8_t v[8];
 } G153;
 typedef Map *G154;
-typedef Map *G155;
-typedef Map *G156;
-typedef Map *G157;
-typedef Map *G158;
+typedef struct G155 {
+    uint8_t v[1];
+} G155;
+typedef struct G156 {
+    uint8_t v[1];
+} G156;
+typedef struct G157 {
+    uint8_t v[2];
+} G157;
+typedef struct G158 {
+    uint8_t v[3];
+} G158;
 typedef Map *G159;
 typedef Map *G160;
 typedef Map *G161;
-typedef Slice G162;
-typedef struct G163 {
-    Str f0;
-} G163;
-typedef Slice G164;
-typedef Slice G165;
-typedef Slice G166;
-typedef struct G167 {
-    Int v[5];
-} G167;
+typedef Map *G162;
+typedef Map *G163;
+typedef Map *G164;
+typedef Map *G165;
+typedef Map *G166;
+typedef Slice G167;
 typedef struct G168 {
-    Uint v[5];
+    Str f0;
 } G168;
-typedef struct G169 {
+typedef Slice G169;
+typedef Slice G170;
+typedef Slice G171;
+typedef struct G172 {
+    Int v[5];
+} G172;
+typedef struct G173 {
+    Uint v[5];
+} G173;
+typedef struct G174 {
     G33 v[2];
-} G169;
-typedef struct G170 {
+} G174;
+typedef struct G175 {
     G22 f0;
-} G170;
-typedef struct G171 {
+} G175;
+typedef struct G176 {
     Int v[4];
-} G171;
+} G176;
 
 static Type gt0 = {{(const Byte *)"", 0},
                    {(const Byte *)"", 0},
@@ -2771,20 +2797,6 @@ static Type gt98 = {{(const Byte *)"cyclicA", 7},
                     0,
                     0,
                     NULL};
-static Type gt102 = {{(const Byte *)"", 0},
-                     {(const Byte *)"", 0},
-                     KIND_MAP,
-                     (uint32_t)sizeof(G102),
-                     (uint16_t)_Alignof(G102),
-                     0,
-                     0,
-                     NULL,
-                     NULL,
-                     &burrow_type_Any,
-                     &burrow_type_Str,
-                     0,
-                     0,
-                     NULL};
 static const Field gf101[] = {
     {{(const Byte *)"A", 1},
      {(const Byte *)"json:\",omitzero\"", 16},
@@ -2792,14 +2804,14 @@ static const Field gf101[] = {
      (uint32_t)offsetof(G101, f0)},
     {{(const Byte *)"X", 1},
      {(const Byte *)"json:\",embed\"", 13},
-     &gt102,
+     &burrow_type_JsontextValue,
      (uint32_t)offsetof(G101, f1)},
     {{(const Byte *)"B", 1},
      {(const Byte *)"json:\",omitzero\"", 16},
      &burrow_type_Int,
      (uint32_t)offsetof(G101, f2)},
 };
-static Type gt101 = {{(const Byte *)"structEmbedMapStringAny", 23},
+static Type gt101 = {{(const Byte *)"structEmbedTextValue", 20},
                      {(const Byte *)"encoding/json", 13},
                      KIND_STRUCT,
                      (uint32_t)sizeof(G101),
@@ -2813,22 +2825,98 @@ static Type gt101 = {{(const Byte *)"structEmbedMapStringAny", 23},
                      0,
                      0,
                      NULL};
-static const Field gf105[] = {
+static const Field gf104[] = {
     {{(const Byte *)"A", 1},
      {(const Byte *)"", 0},
+     &burrow_type_Int,
+     (uint32_t)offsetof(G104, f0)},
+    {{(const Byte *)"X", 1},
+     {(const Byte *)"json:\",embed\"", 13},
+     &burrow_type_JsontextValue,
+     (uint32_t)offsetof(G104, f1)},
+};
+static Type gt104 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_STRUCT,
+                     (uint32_t)sizeof(G104),
+                     (uint16_t)_Alignof(G104),
+                     2,
+                     0,
+                     gf104,
+                     NULL,
+                     NULL,
+                     NULL,
+                     0,
+                     0,
+                     NULL};
+static Type gt103 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_POINTER,
+                     (uint32_t)sizeof(G103),
+                     (uint16_t)_Alignof(G103),
+                     0,
+                     0,
+                     NULL,
+                     NULL,
+                     &gt104,
+                     NULL,
+                     0,
+                     0,
+                     NULL};
+static const Field gf102[] = {
+    {{(const Byte *)"X", 1},
+     {(const Byte *)"json:\",embed\"", 13},
+     &gt103,
+     (uint32_t)offsetof(G102, f0)},
+};
+static Type gt102 = {{(const Byte *)"structEmbedPointerEmbedTextValue", 32},
+                     {(const Byte *)"encoding/json", 13},
+                     KIND_STRUCT,
+                     (uint32_t)sizeof(G102),
+                     (uint16_t)_Alignof(G102),
+                     1,
+                     0,
+                     gf102,
+                     NULL,
+                     NULL,
+                     NULL,
+                     0,
+                     0,
+                     NULL};
+static Type gt106 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_MAP,
+                     (uint32_t)sizeof(G106),
+                     (uint16_t)_Alignof(G106),
+                     0,
+                     0,
+                     NULL,
+                     NULL,
+                     &burrow_type_Any,
+                     &burrow_type_Str,
+                     0,
+                     0,
+                     NULL};
+static const Field gf105[] = {
+    {{(const Byte *)"A", 1},
+     {(const Byte *)"json:\",omitzero\"", 16},
      &burrow_type_Int,
      (uint32_t)offsetof(G105, f0)},
     {{(const Byte *)"X", 1},
      {(const Byte *)"json:\",embed\"", 13},
-     &gt102,
+     &gt106,
      (uint32_t)offsetof(G105, f1)},
+    {{(const Byte *)"B", 1},
+     {(const Byte *)"json:\",omitzero\"", 16},
+     &burrow_type_Int,
+     (uint32_t)offsetof(G105, f2)},
 };
-static Type gt105 = {{(const Byte *)"", 0},
-                     {(const Byte *)"", 0},
+static Type gt105 = {{(const Byte *)"structEmbedMapStringAny", 23},
+                     {(const Byte *)"encoding/json", 13},
                      KIND_STRUCT,
                      (uint32_t)sizeof(G105),
                      (uint16_t)_Alignof(G105),
-                     2,
+                     3,
                      0,
                      gf105,
                      NULL,
@@ -2837,94 +2925,22 @@ static Type gt105 = {{(const Byte *)"", 0},
                      0,
                      0,
                      NULL};
-static Type gt104 = {{(const Byte *)"", 0},
-                     {(const Byte *)"", 0},
-                     KIND_POINTER,
-                     (uint32_t)sizeof(G104),
-                     (uint16_t)_Alignof(G104),
-                     0,
-                     0,
-                     NULL,
-                     NULL,
-                     &gt105,
-                     NULL,
-                     0,
-                     0,
-                     NULL};
-static const Field gf103[] = {
-    {{(const Byte *)"X", 1},
-     {(const Byte *)"json:\",embed\"", 13},
-     &gt104,
-     (uint32_t)offsetof(G103, f0)},
-};
-static Type gt103 = {{(const Byte *)"structEmbedPointerEmbedMapStringAny", 35},
-                     {(const Byte *)"encoding/json", 13},
-                     KIND_STRUCT,
-                     (uint32_t)sizeof(G103),
-                     (uint16_t)_Alignof(G103),
-                     1,
-                     0,
-                     gf103,
-                     NULL,
-                     NULL,
-                     NULL,
-                     0,
-                     0,
-                     NULL};
-static Type gt107 = {{(const Byte *)"", 0},
-                     {(const Byte *)"", 0},
-                     KIND_POINTER,
-                     (uint32_t)sizeof(G107),
-                     (uint16_t)_Alignof(G107),
-                     0,
-                     0,
-                     NULL,
-                     NULL,
-                     &gt102,
-                     NULL,
-                     0,
-                     0,
-                     NULL};
-static const Field gf106[] = {
-    {{(const Byte *)"A", 1},
-     {(const Byte *)"json:\",omitzero\"", 16},
-     &burrow_type_Int,
-     (uint32_t)offsetof(G106, f0)},
-    {{(const Byte *)"X", 1},
-     {(const Byte *)"json:\",embed\"", 13},
-     &gt107,
-     (uint32_t)offsetof(G106, f1)},
-    {{(const Byte *)"B", 1},
-     {(const Byte *)"json:\",omitzero\"", 16},
-     &burrow_type_Int,
-     (uint32_t)offsetof(G106, f2)},
-};
-static Type gt106 = {{(const Byte *)"structEmbedPointerMapStringAny", 30},
-                     {(const Byte *)"encoding/json", 13},
-                     KIND_STRUCT,
-                     (uint32_t)sizeof(G106),
-                     (uint16_t)_Alignof(G106),
-                     3,
-                     0,
-                     gf106,
-                     NULL,
-                     NULL,
-                     NULL,
-                     0,
-                     0,
-                     NULL};
 static const Field gf109[] = {
+    {{(const Byte *)"A", 1},
+     {(const Byte *)"", 0},
+     &burrow_type_Int,
+     (uint32_t)offsetof(G109, f0)},
     {{(const Byte *)"X", 1},
      {(const Byte *)"json:\",embed\"", 13},
-     &gt107,
-     (uint32_t)offsetof(G109, f0)},
+     &gt106,
+     (uint32_t)offsetof(G109, f1)},
 };
 static Type gt109 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
                      KIND_STRUCT,
                      (uint32_t)sizeof(G109),
                      (uint16_t)_Alignof(G109),
-                     1,
+                     2,
                      0,
                      gf109,
                      NULL,
@@ -2933,38 +2949,74 @@ static Type gt109 = {{(const Byte *)"", 0},
                      0,
                      0,
                      NULL};
-static const Field gf108[] = {
-    {{(const Byte *)"X", 1},
-     {(const Byte *)"json:\",embed\"", 13},
-     &gt109,
-     (uint32_t)offsetof(G108, f0)},
-};
-static Type gt108 = {{(const Byte *)"structEmbedEmbedPointerMapStringAny", 35},
-                     {(const Byte *)"encoding/json", 13},
-                     KIND_STRUCT,
+static Type gt108 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_POINTER,
                      (uint32_t)sizeof(G108),
                      (uint16_t)_Alignof(G108),
+                     0,
+                     0,
+                     NULL,
+                     NULL,
+                     &gt109,
+                     NULL,
+                     0,
+                     0,
+                     NULL};
+static const Field gf107[] = {
+    {{(const Byte *)"X", 1},
+     {(const Byte *)"json:\",embed\"", 13},
+     &gt108,
+     (uint32_t)offsetof(G107, f0)},
+};
+static Type gt107 = {{(const Byte *)"structEmbedPointerEmbedMapStringAny", 35},
+                     {(const Byte *)"encoding/json", 13},
+                     KIND_STRUCT,
+                     (uint32_t)sizeof(G107),
+                     (uint16_t)_Alignof(G107),
                      1,
                      0,
-                     gf108,
+                     gf107,
                      NULL,
                      NULL,
                      NULL,
                      0,
                      0,
                      NULL};
+static Type gt111 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_POINTER,
+                     (uint32_t)sizeof(G111),
+                     (uint16_t)_Alignof(G111),
+                     0,
+                     0,
+                     NULL,
+                     NULL,
+                     &gt106,
+                     NULL,
+                     0,
+                     0,
+                     NULL};
 static const Field gf110[] = {
+    {{(const Byte *)"A", 1},
+     {(const Byte *)"json:\",omitzero\"", 16},
+     &burrow_type_Int,
+     (uint32_t)offsetof(G110, f0)},
     {{(const Byte *)"X", 1},
      {(const Byte *)"json:\",embed\"", 13},
-     &gt35,
-     (uint32_t)offsetof(G110, f0)},
+     &gt111,
+     (uint32_t)offsetof(G110, f1)},
+    {{(const Byte *)"B", 1},
+     {(const Byte *)"json:\",omitzero\"", 16},
+     &burrow_type_Int,
+     (uint32_t)offsetof(G110, f2)},
 };
-static Type gt110 = {{(const Byte *)"structEmbedMapStringInt", 23},
+static Type gt110 = {{(const Byte *)"structEmbedPointerMapStringAny", 30},
                      {(const Byte *)"encoding/json", 13},
                      KIND_STRUCT,
                      (uint32_t)sizeof(G110),
                      (uint16_t)_Alignof(G110),
-                     1,
+                     3,
                      0,
                      gf110,
                      NULL,
@@ -2973,11 +3025,71 @@ static Type gt110 = {{(const Byte *)"structEmbedMapStringInt", 23},
                      0,
                      0,
                      NULL};
-static Type gt112 = {{(const Byte *)"", 0},
+static const Field gf113[] = {
+    {{(const Byte *)"X", 1},
+     {(const Byte *)"json:\",embed\"", 13},
+     &gt111,
+     (uint32_t)offsetof(G113, f0)},
+};
+static Type gt113 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
-                     KIND_MAP,
+                     KIND_STRUCT,
+                     (uint32_t)sizeof(G113),
+                     (uint16_t)_Alignof(G113),
+                     1,
+                     0,
+                     gf113,
+                     NULL,
+                     NULL,
+                     NULL,
+                     0,
+                     0,
+                     NULL};
+static const Field gf112[] = {
+    {{(const Byte *)"X", 1},
+     {(const Byte *)"json:\",embed\"", 13},
+     &gt113,
+     (uint32_t)offsetof(G112, f0)},
+};
+static Type gt112 = {{(const Byte *)"structEmbedEmbedPointerMapStringAny", 35},
+                     {(const Byte *)"encoding/json", 13},
+                     KIND_STRUCT,
                      (uint32_t)sizeof(G112),
                      (uint16_t)_Alignof(G112),
+                     1,
+                     0,
+                     gf112,
+                     NULL,
+                     NULL,
+                     NULL,
+                     0,
+                     0,
+                     NULL};
+static const Field gf114[] = {
+    {{(const Byte *)"X", 1},
+     {(const Byte *)"json:\",embed\"", 13},
+     &gt35,
+     (uint32_t)offsetof(G114, f0)},
+};
+static Type gt114 = {{(const Byte *)"structEmbedMapStringInt", 23},
+                     {(const Byte *)"encoding/json", 13},
+                     KIND_STRUCT,
+                     (uint32_t)sizeof(G114),
+                     (uint16_t)_Alignof(G114),
+                     1,
+                     0,
+                     gf114,
+                     NULL,
+                     NULL,
+                     NULL,
+                     0,
+                     0,
+                     NULL};
+static Type gt116 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_MAP,
+                     (uint32_t)sizeof(G116),
+                     (uint16_t)_Alignof(G116),
                      0,
                      0,
                      NULL,
@@ -2987,31 +3099,31 @@ static Type gt112 = {{(const Byte *)"", 0},
                      0,
                      0,
                      NULL};
-static const Field gf111[] = {
+static const Field gf115[] = {
     {{(const Byte *)"X", 1},
      {(const Byte *)"json:\",embed\"", 13},
-     &gt112,
-     (uint32_t)offsetof(G111, f0)},
+     &gt116,
+     (uint32_t)offsetof(G115, f0)},
 };
-static Type gt111 = {{(const Byte *)"structEmbedMapNamedStringInt", 28},
+static Type gt115 = {{(const Byte *)"structEmbedMapNamedStringInt", 28},
                      {(const Byte *)"encoding/json", 13},
                      KIND_STRUCT,
-                     (uint32_t)sizeof(G111),
-                     (uint16_t)_Alignof(G111),
+                     (uint32_t)sizeof(G115),
+                     (uint16_t)_Alignof(G115),
                      1,
                      0,
-                     gf111,
+                     gf115,
                      NULL,
                      NULL,
                      NULL,
                      0,
                      0,
                      NULL};
-static Type gt114 = {{(const Byte *)"", 0},
+static Type gt118 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
                      KIND_MAP,
-                     (uint32_t)sizeof(G114),
-                     (uint16_t)_Alignof(G114),
+                     (uint32_t)sizeof(G118),
+                     (uint16_t)_Alignof(G118),
                      0,
                      0,
                      NULL,
@@ -3021,106 +3133,26 @@ static Type gt114 = {{(const Byte *)"", 0},
                      0,
                      0,
                      NULL};
-static const Field gf113[] = {
-    {{(const Byte *)"A", 1},
-     {(const Byte *)"json:\",omitzero\"", 16},
-     &burrow_type_Int,
-     (uint32_t)offsetof(G113, f0)},
-    {{(const Byte *)"X", 1},
-     {(const Byte *)"json:\",embed\"", 13},
-     &gt114,
-     (uint32_t)offsetof(G113, f1)},
-    {{(const Byte *)"B", 1},
-     {(const Byte *)"json:\",omitzero\"", 16},
-     &burrow_type_Int,
-     (uint32_t)offsetof(G113, f2)},
-};
-static Type gt113 = {{(const Byte *)"structEmbedMapNamedStringAny", 28},
-                     {(const Byte *)"encoding/json", 13},
-                     KIND_STRUCT,
-                     (uint32_t)sizeof(G113),
-                     (uint16_t)_Alignof(G113),
-                     3,
-                     0,
-                     gf113,
-                     NULL,
-                     NULL,
-                     NULL,
-                     0,
-                     0,
-                     NULL};
-static const Field gf115[] = {
-    {{(const Byte *)"AAA", 3},
-     {(const Byte *)"json:\",omitempty\"", 17},
-     &burrow_type_Str,
-     (uint32_t)offsetof(G115, f0)},
-    {{(const Byte *)"AaA", 3},
-     {(const Byte *)"json:\",omitempty,case:ignore\"", 29},
-     &burrow_type_Str,
-     (uint32_t)offsetof(G115, f1)},
-    {{(const Byte *)"AAa", 3},
-     {(const Byte *)"json:\",omitempty,case:ignore\"", 29},
-     &burrow_type_Str,
-     (uint32_t)offsetof(G115, f2)},
-    {{(const Byte *)"Aaa", 3},
-     {(const Byte *)"json:\",omitempty\"", 17},
-     &burrow_type_Str,
-     (uint32_t)offsetof(G115, f3)},
-    {{(const Byte *)"X", 1},
-     {(const Byte *)"json:\",embed\"", 13},
-     &gt102,
-     (uint32_t)offsetof(G115, f4)},
-};
-static Type gt115 = {{(const Byte *)"structNoCaseEmbedMapStringAny", 29},
-                     {(const Byte *)"encoding/json", 13},
-                     KIND_STRUCT,
-                     (uint32_t)sizeof(G115),
-                     (uint16_t)_Alignof(G115),
-                     5,
-                     0,
-                     gf115,
-                     NULL,
-                     NULL,
-                     NULL,
-                     0,
-                     0,
-                     NULL};
-static const Field gf116[] = {
-    {{(const Byte *)"A", 1},
-     {(const Byte *)"json:\"conflict\"", 15},
-     &burrow_type_Str,
-     (uint32_t)offsetof(G116, f0)},
-    {{(const Byte *)"B", 1},
-     {(const Byte *)"json:\"conflict\"", 15},
-     &burrow_type_Str,
-     (uint32_t)offsetof(G116, f1)},
-};
-static Type gt116 = {{(const Byte *)"structConflicting", 17},
-                     {(const Byte *)"encoding/json", 13},
-                     KIND_STRUCT,
-                     (uint32_t)sizeof(G116),
-                     (uint16_t)_Alignof(G116),
-                     2,
-                     0,
-                     gf116,
-                     NULL,
-                     NULL,
-                     NULL,
-                     0,
-                     0,
-                     NULL};
 static const Field gf117[] = {
-    {{(const Byte *)"unexported", 10},
-     {(const Byte *)"", 0},
-     &burrow_type_Str,
+    {{(const Byte *)"A", 1},
+     {(const Byte *)"json:\",omitzero\"", 16},
+     &burrow_type_Int,
      (uint32_t)offsetof(G117, f0)},
+    {{(const Byte *)"X", 1},
+     {(const Byte *)"json:\",embed\"", 13},
+     &gt118,
+     (uint32_t)offsetof(G117, f1)},
+    {{(const Byte *)"B", 1},
+     {(const Byte *)"json:\",omitzero\"", 16},
+     &burrow_type_Int,
+     (uint32_t)offsetof(G117, f2)},
 };
-static Type gt117 = {{(const Byte *)"structNoneExported", 18},
+static Type gt117 = {{(const Byte *)"structEmbedMapNamedStringAny", 28},
                      {(const Byte *)"encoding/json", 13},
                      KIND_STRUCT,
                      (uint32_t)sizeof(G117),
                      (uint16_t)_Alignof(G117),
-                     1,
+                     3,
                      0,
                      gf117,
                      NULL,
@@ -3129,38 +3161,38 @@ static Type gt117 = {{(const Byte *)"structNoneExported", 18},
                      0,
                      0,
                      NULL};
-static const Field gf118[] = {
-    {{(const Byte *)"Malformed", 9},
-     {(const Byte *)"json:\"\\\"\"", 9},
-     &burrow_type_Str,
-     (uint32_t)offsetof(G118, f0)},
-};
-static Type gt118 = {{(const Byte *)"structMalformedTag", 18},
-                     {(const Byte *)"encoding/json", 13},
-                     KIND_STRUCT,
-                     (uint32_t)sizeof(G118),
-                     (uint16_t)_Alignof(G118),
-                     1,
-                     0,
-                     gf118,
-                     NULL,
-                     NULL,
-                     NULL,
-                     0,
-                     0,
-                     NULL};
 static const Field gf119[] = {
-    {{(const Byte *)"unexported", 10},
-     {(const Byte *)"json:\"name\"", 11},
+    {{(const Byte *)"AAA", 3},
+     {(const Byte *)"json:\",omitempty,case:strict\"", 29},
      &burrow_type_Str,
      (uint32_t)offsetof(G119, f0)},
+    {{(const Byte *)"AA_b", 4},
+     {(const Byte *)"json:\",omitempty\"", 17},
+     &burrow_type_Str,
+     (uint32_t)offsetof(G119, f1)},
+    {{(const Byte *)"AaA", 3},
+     {(const Byte *)"json:\",omitempty,case:ignore\"", 29},
+     &burrow_type_Str,
+     (uint32_t)offsetof(G119, f2)},
+    {{(const Byte *)"AAa", 3},
+     {(const Byte *)"json:\",omitempty,case:ignore\"", 29},
+     &burrow_type_Str,
+     (uint32_t)offsetof(G119, f3)},
+    {{(const Byte *)"Aaa", 3},
+     {(const Byte *)"json:\",omitempty\"", 17},
+     &burrow_type_Str,
+     (uint32_t)offsetof(G119, f4)},
+    {{(const Byte *)"X", 1},
+     {(const Byte *)"json:\",embed\"", 13},
+     &burrow_type_JsontextValue,
+     (uint32_t)offsetof(G119, f5)},
 };
-static Type gt119 = {{(const Byte *)"structUnexportedTag", 19},
+static Type gt119 = {{(const Byte *)"structNoCaseEmbedTextValue", 26},
                      {(const Byte *)"encoding/json", 13},
                      KIND_STRUCT,
                      (uint32_t)sizeof(G119),
                      (uint16_t)_Alignof(G119),
-                     1,
+                     6,
                      0,
                      gf119,
                      NULL,
@@ -3169,32 +3201,34 @@ static Type gt119 = {{(const Byte *)"structUnexportedTag", 19},
                      0,
                      0,
                      NULL};
-static Type gt121 = {{(const Byte *)"NamedString", 11},
-                     {(const Byte *)"encoding/json", 13},
-                     KIND_STRING,
-                     (uint32_t)sizeof(G121),
-                     (uint16_t)_Alignof(G121),
-                     0,
-                     0,
-                     NULL,
-                     NULL,
-                     NULL,
-                     NULL,
-                     0,
-                     0,
-                     NULL};
 static const Field gf120[] = {
-    {{(const Byte *)"NamedString", 11},
-     {(const Byte *)"", 0},
-     &gt121,
+    {{(const Byte *)"AAA", 3},
+     {(const Byte *)"json:\",omitempty\"", 17},
+     &burrow_type_Str,
      (uint32_t)offsetof(G120, f0)},
+    {{(const Byte *)"AaA", 3},
+     {(const Byte *)"json:\",omitempty,case:ignore\"", 29},
+     &burrow_type_Str,
+     (uint32_t)offsetof(G120, f1)},
+    {{(const Byte *)"AAa", 3},
+     {(const Byte *)"json:\",omitempty,case:ignore\"", 29},
+     &burrow_type_Str,
+     (uint32_t)offsetof(G120, f2)},
+    {{(const Byte *)"Aaa", 3},
+     {(const Byte *)"json:\",omitempty\"", 17},
+     &burrow_type_Str,
+     (uint32_t)offsetof(G120, f3)},
+    {{(const Byte *)"X", 1},
+     {(const Byte *)"json:\",embed\"", 13},
+     &gt106,
+     (uint32_t)offsetof(G120, f4)},
 };
-static Type gt120 = {{(const Byte *)"structExportedEmbedded", 22},
+static Type gt120 = {{(const Byte *)"structNoCaseEmbedMapStringAny", 29},
                      {(const Byte *)"encoding/json", 13},
                      KIND_STRUCT,
                      (uint32_t)sizeof(G120),
                      (uint16_t)_Alignof(G120),
-                     1,
+                     5,
                      0,
                      gf120,
                      NULL,
@@ -3203,13 +3237,37 @@ static Type gt120 = {{(const Byte *)"structExportedEmbedded", 22},
                      0,
                      0,
                      NULL};
+static const Field gf121[] = {
+    {{(const Byte *)"A", 1},
+     {(const Byte *)"json:\"conflict\"", 15},
+     &burrow_type_Str,
+     (uint32_t)offsetof(G121, f0)},
+    {{(const Byte *)"B", 1},
+     {(const Byte *)"json:\"conflict\"", 15},
+     &burrow_type_Str,
+     (uint32_t)offsetof(G121, f1)},
+};
+static Type gt121 = {{(const Byte *)"structConflicting", 17},
+                     {(const Byte *)"encoding/json", 13},
+                     KIND_STRUCT,
+                     (uint32_t)sizeof(G121),
+                     (uint16_t)_Alignof(G121),
+                     2,
+                     0,
+                     gf121,
+                     NULL,
+                     NULL,
+                     NULL,
+                     0,
+                     0,
+                     NULL};
 static const Field gf122[] = {
-    {{(const Byte *)"NamedString", 11},
-     {(const Byte *)"json:\"name\"", 11},
-     &gt121,
+    {{(const Byte *)"unexported", 10},
+     {(const Byte *)"", 0},
+     &burrow_type_Str,
      (uint32_t)offsetof(G122, f0)},
 };
-static Type gt122 = {{(const Byte *)"structExportedEmbeddedTag", 25},
+static Type gt122 = {{(const Byte *)"structNoneExported", 18},
                      {(const Byte *)"encoding/json", 13},
                      KIND_STRUCT,
                      (uint32_t)sizeof(G122),
@@ -3224,12 +3282,12 @@ static Type gt122 = {{(const Byte *)"structExportedEmbeddedTag", 25},
                      0,
                      NULL};
 static const Field gf123[] = {
-    {{(const Byte *)"namedString", 11},
-     {(const Byte *)"", 0},
-     &gt5,
+    {{(const Byte *)"Malformed", 9},
+     {(const Byte *)"json:\"\\\"\"", 9},
+     &burrow_type_Str,
      (uint32_t)offsetof(G123, f0)},
 };
-static Type gt123 = {{(const Byte *)"structUnexportedEmbedded", 24},
+static Type gt123 = {{(const Byte *)"structMalformedTag", 18},
                      {(const Byte *)"encoding/json", 13},
                      KIND_STRUCT,
                      (uint32_t)sizeof(G123),
@@ -3244,12 +3302,12 @@ static Type gt123 = {{(const Byte *)"structUnexportedEmbedded", 24},
                      0,
                      NULL};
 static const Field gf124[] = {
-    {{(const Byte *)"namedString", 11},
+    {{(const Byte *)"unexported", 10},
      {(const Byte *)"json:\"name\"", 11},
-     &gt5,
+     &burrow_type_Str,
      (uint32_t)offsetof(G124, f0)},
 };
-static Type gt124 = {{(const Byte *)"structUnexportedEmbeddedTag", 27},
+static Type gt124 = {{(const Byte *)"structUnexportedTag", 19},
                      {(const Byte *)"encoding/json", 13},
                      KIND_STRUCT,
                      (uint32_t)sizeof(G124),
@@ -3263,11 +3321,11 @@ static Type gt124 = {{(const Byte *)"structUnexportedEmbeddedTag", 27},
                      0,
                      0,
                      NULL};
-static Type gt125 = {{(const Byte *)"", 0},
-                     {(const Byte *)"", 0},
-                     KIND_STRUCT,
-                     (uint32_t)sizeof(G125),
-                     (uint16_t)_Alignof(G125),
+static Type gt126 = {{(const Byte *)"NamedString", 11},
+                     {(const Byte *)"encoding/json", 13},
+                     KIND_STRING,
+                     (uint32_t)sizeof(G126),
+                     (uint16_t)_Alignof(G126),
                      0,
                      0,
                      NULL,
@@ -3277,11 +3335,105 @@ static Type gt125 = {{(const Byte *)"", 0},
                      0,
                      0,
                      NULL};
-static Type gt126 = {{(const Byte *)"", 0},
+static const Field gf125[] = {
+    {{(const Byte *)"NamedString", 11},
+     {(const Byte *)"", 0},
+     &gt126,
+     (uint32_t)offsetof(G125, f0)},
+};
+static Type gt125 = {{(const Byte *)"structExportedEmbedded", 22},
+                     {(const Byte *)"encoding/json", 13},
+                     KIND_STRUCT,
+                     (uint32_t)sizeof(G125),
+                     (uint16_t)_Alignof(G125),
+                     1,
+                     0,
+                     gf125,
+                     NULL,
+                     NULL,
+                     NULL,
+                     0,
+                     0,
+                     NULL};
+static const Field gf127[] = {
+    {{(const Byte *)"NamedString", 11},
+     {(const Byte *)"json:\"name\"", 11},
+     &gt126,
+     (uint32_t)offsetof(G127, f0)},
+};
+static Type gt127 = {{(const Byte *)"structExportedEmbeddedTag", 25},
+                     {(const Byte *)"encoding/json", 13},
+                     KIND_STRUCT,
+                     (uint32_t)sizeof(G127),
+                     (uint16_t)_Alignof(G127),
+                     1,
+                     0,
+                     gf127,
+                     NULL,
+                     NULL,
+                     NULL,
+                     0,
+                     0,
+                     NULL};
+static const Field gf128[] = {
+    {{(const Byte *)"namedString", 11},
+     {(const Byte *)"", 0},
+     &gt5,
+     (uint32_t)offsetof(G128, f0)},
+};
+static Type gt128 = {{(const Byte *)"structUnexportedEmbedded", 24},
+                     {(const Byte *)"encoding/json", 13},
+                     KIND_STRUCT,
+                     (uint32_t)sizeof(G128),
+                     (uint16_t)_Alignof(G128),
+                     1,
+                     0,
+                     gf128,
+                     NULL,
+                     NULL,
+                     NULL,
+                     0,
+                     0,
+                     NULL};
+static const Field gf129[] = {
+    {{(const Byte *)"namedString", 11},
+     {(const Byte *)"json:\"name\"", 11},
+     &gt5,
+     (uint32_t)offsetof(G129, f0)},
+};
+static Type gt129 = {{(const Byte *)"structUnexportedEmbeddedTag", 27},
+                     {(const Byte *)"encoding/json", 13},
+                     KIND_STRUCT,
+                     (uint32_t)sizeof(G129),
+                     (uint16_t)_Alignof(G129),
+                     1,
+                     0,
+                     gf129,
+                     NULL,
+                     NULL,
+                     NULL,
+                     0,
+                     0,
+                     NULL};
+static Type gt130 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_STRUCT,
+                     (uint32_t)sizeof(G130),
+                     (uint16_t)_Alignof(G130),
+                     0,
+                     0,
+                     NULL,
+                     NULL,
+                     NULL,
+                     NULL,
+                     0,
+                     0,
+                     NULL};
+static Type gt131 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
                      KIND_SLICE,
-                     (uint32_t)sizeof(G126),
-                     (uint16_t)_Alignof(G126),
+                     (uint32_t)sizeof(G131),
+                     (uint16_t)_Alignof(G131),
                      0,
                      0,
                      NULL,
@@ -3291,88 +3443,18 @@ static Type gt126 = {{(const Byte *)"", 0},
                      0,
                      0,
                      NULL};
-static Type gt127 = {{(const Byte *)"recursiveSlice", 14},
+static Type gt132 = {{(const Byte *)"recursiveSlice", 14},
                      {(const Byte *)"encoding/json", 13},
                      KIND_SLICE,
-                     (uint32_t)sizeof(G127),
-                     (uint16_t)_Alignof(G127),
-                     0,
-                     0,
-                     NULL,
-                     NULL,
-                     &gt127,
-                     NULL,
-                     0,
-                     0,
-                     NULL};
-static Type gt128 = {{(const Byte *)"", 0},
-                     {(const Byte *)"", 0},
-                     KIND_ARRAY,
-                     (uint32_t)sizeof(G128),
-                     (uint16_t)_Alignof(G128),
-                     0,
-                     0,
-                     NULL,
-                     NULL,
-                     &gt125,
-                     NULL,
-                     0,
-                     0,
-                     NULL};
-static Type gt129 = {{(const Byte *)"", 0},
-                     {(const Byte *)"", 0},
-                     KIND_ARRAY,
-                     (uint32_t)sizeof(G129),
-                     (uint16_t)_Alignof(G129),
-                     0,
-                     0,
-                     NULL,
-                     NULL,
-                     &burrow_type_bool,
-                     NULL,
-                     2,
-                     0,
-                     NULL};
-static Type gt130 = {{(const Byte *)"", 0},
-                     {(const Byte *)"", 0},
-                     KIND_ARRAY,
-                     (uint32_t)sizeof(G130),
-                     (uint16_t)_Alignof(G130),
-                     0,
-                     0,
-                     NULL,
-                     NULL,
-                     &burrow_type_Str,
-                     NULL,
-                     2,
-                     0,
-                     NULL};
-static Type gt131 = {{(const Byte *)"", 0},
-                     {(const Byte *)"", 0},
-                     KIND_ARRAY,
-                     (uint32_t)sizeof(G131),
-                     (uint16_t)_Alignof(G131),
-                     0,
-                     0,
-                     NULL,
-                     NULL,
-                     &gt7,
-                     NULL,
-                     2,
-                     0,
-                     NULL};
-static Type gt132 = {{(const Byte *)"", 0},
-                     {(const Byte *)"", 0},
-                     KIND_ARRAY,
                      (uint32_t)sizeof(G132),
                      (uint16_t)_Alignof(G132),
                      0,
                      0,
                      NULL,
                      NULL,
-                     &burrow_type_int64_t,
+                     &gt132,
                      NULL,
-                     2,
+                     0,
                      0,
                      NULL};
 static Type gt133 = {{(const Byte *)"", 0},
@@ -3384,9 +3466,9 @@ static Type gt133 = {{(const Byte *)"", 0},
                      0,
                      NULL,
                      NULL,
-                     &burrow_type_uint64_t,
+                     &gt130,
                      NULL,
-                     2,
+                     0,
                      0,
                      NULL};
 static Type gt134 = {{(const Byte *)"", 0},
@@ -3398,7 +3480,21 @@ static Type gt134 = {{(const Byte *)"", 0},
                      0,
                      NULL,
                      NULL,
-                     &burrow_type_double,
+                     &burrow_type_bool,
+                     NULL,
+                     2,
+                     0,
+                     NULL};
+static Type gt135 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_ARRAY,
+                     (uint32_t)sizeof(G135),
+                     (uint16_t)_Alignof(G135),
+                     0,
+                     0,
+                     NULL,
+                     NULL,
+                     &burrow_type_Str,
                      NULL,
                      2,
                      0,
@@ -3412,51 +3508,65 @@ static Type gt136 = {{(const Byte *)"", 0},
                      0,
                      NULL,
                      NULL,
-                     &gt24,
+                     &gt7,
                      NULL,
-                     1,
-                     0,
-                     NULL};
-static Type gt135 = {{(const Byte *)"", 0},
-                     {(const Byte *)"", 0},
-                     KIND_POINTER,
-                     (uint32_t)sizeof(G135),
-                     (uint16_t)_Alignof(G135),
-                     0,
-                     0,
-                     NULL,
-                     NULL,
-                     &gt136,
-                     NULL,
-                     0,
+                     2,
                      0,
                      NULL};
 static Type gt137 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
-                     KIND_POINTER,
+                     KIND_ARRAY,
                      (uint32_t)sizeof(G137),
                      (uint16_t)_Alignof(G137),
                      0,
                      0,
                      NULL,
                      NULL,
-                     &gt60,
+                     &burrow_type_int64_t,
                      NULL,
-                     0,
+                     2,
                      0,
                      NULL};
 static Type gt138 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
-                     KIND_POINTER,
+                     KIND_ARRAY,
                      (uint32_t)sizeof(G138),
                      (uint16_t)_Alignof(G138),
                      0,
                      0,
                      NULL,
                      NULL,
-                     &gt61,
+                     &burrow_type_uint64_t,
                      NULL,
+                     2,
                      0,
+                     NULL};
+static Type gt139 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_ARRAY,
+                     (uint32_t)sizeof(G139),
+                     (uint16_t)_Alignof(G139),
+                     0,
+                     0,
+                     NULL,
+                     NULL,
+                     &burrow_type_double,
+                     NULL,
+                     2,
+                     0,
+                     NULL};
+static Type gt141 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_ARRAY,
+                     (uint32_t)sizeof(G141),
+                     (uint16_t)_Alignof(G141),
+                     0,
+                     0,
+                     NULL,
+                     NULL,
+                     &gt24,
+                     NULL,
+                     1,
                      0,
                      NULL};
 static Type gt140 = {{(const Byte *)"", 0},
@@ -3468,21 +3578,7 @@ static Type gt140 = {{(const Byte *)"", 0},
                      0,
                      NULL,
                      NULL,
-                     &gt7,
-                     NULL,
-                     0,
-                     0,
-                     NULL};
-static Type gt139 = {{(const Byte *)"", 0},
-                     {(const Byte *)"", 0},
-                     KIND_POINTER,
-                     (uint32_t)sizeof(G139),
-                     (uint16_t)_Alignof(G139),
-                     0,
-                     0,
-                     NULL,
-                     NULL,
-                     &gt140,
+                     &gt141,
                      NULL,
                      0,
                      0,
@@ -3496,21 +3592,7 @@ static Type gt142 = {{(const Byte *)"", 0},
                      0,
                      NULL,
                      NULL,
-                     &burrow_type_Uint,
-                     NULL,
-                     0,
-                     0,
-                     NULL};
-static Type gt141 = {{(const Byte *)"", 0},
-                     {(const Byte *)"", 0},
-                     KIND_POINTER,
-                     (uint32_t)sizeof(G141),
-                     (uint16_t)_Alignof(G141),
-                     0,
-                     0,
-                     NULL,
-                     NULL,
-                     &gt142,
+                     &gt60,
                      NULL,
                      0,
                      0,
@@ -3524,27 +3606,21 @@ static Type gt143 = {{(const Byte *)"", 0},
                      0,
                      NULL,
                      NULL,
-                     &gt58,
+                     &gt61,
                      NULL,
                      0,
                      0,
                      NULL};
-static const Field gf145[] = {
-    {{(const Byte *)"P", 1},
-     {(const Byte *)"", 0},
-     &gt144,
-     (uint32_t)offsetof(G145, f0)},
-};
-static Type gt145 = {{(const Byte *)"recursivePointer", 16},
-                     {(const Byte *)"encoding/json", 13},
-                     KIND_STRUCT,
+static Type gt145 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_POINTER,
                      (uint32_t)sizeof(G145),
                      (uint16_t)_Alignof(G145),
-                     1,
                      0,
-                     gf145,
+                     0,
                      NULL,
                      NULL,
+                     &gt7,
                      NULL,
                      0,
                      0,
@@ -3563,78 +3639,78 @@ static Type gt144 = {{(const Byte *)"", 0},
                      0,
                      0,
                      NULL};
+static Type gt147 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_POINTER,
+                     (uint32_t)sizeof(G147),
+                     (uint16_t)_Alignof(G147),
+                     0,
+                     0,
+                     NULL,
+                     NULL,
+                     &burrow_type_Uint,
+                     NULL,
+                     0,
+                     0,
+                     NULL};
 static Type gt146 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
-                     KIND_ARRAY,
+                     KIND_POINTER,
                      (uint32_t)sizeof(G146),
                      (uint16_t)_Alignof(G146),
                      0,
                      0,
                      NULL,
                      NULL,
-                     &burrow_type_Any,
-                     NULL,
-                     1,
-                     0,
-                     NULL};
-static const Field gf147[] = {
-    {{(const Byte *)"X", 1},
-     {(const Byte *)"", 0},
-     &burrow_type_Any,
-     (uint32_t)offsetof(G147, f0)},
-};
-static Type gt147 = {{(const Byte *)"", 0},
-                     {(const Byte *)"", 0},
-                     KIND_STRUCT,
-                     (uint32_t)sizeof(G147),
-                     (uint16_t)_Alignof(G147),
-                     1,
-                     0,
-                     gf147,
-                     NULL,
-                     NULL,
+                     &gt147,
                      NULL,
                      0,
                      0,
                      NULL};
 static Type gt148 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
-                     KIND_ARRAY,
+                     KIND_POINTER,
                      (uint32_t)sizeof(G148),
                      (uint16_t)_Alignof(G148),
                      0,
                      0,
                      NULL,
                      NULL,
-                     &burrow_type_uint8_t,
+                     &gt58,
                      NULL,
-                     8,
+                     0,
+                     0,
+                     NULL};
+static const Field gf150[] = {
+    {{(const Byte *)"P", 1},
+     {(const Byte *)"", 0},
+     &gt149,
+     (uint32_t)offsetof(G150, f0)},
+};
+static Type gt150 = {{(const Byte *)"recursivePointer", 16},
+                     {(const Byte *)"encoding/json", 13},
+                     KIND_STRUCT,
+                     (uint32_t)sizeof(G150),
+                     (uint16_t)_Alignof(G150),
+                     1,
+                     0,
+                     gf150,
+                     NULL,
+                     NULL,
+                     NULL,
+                     0,
                      0,
                      NULL};
 static Type gt149 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
-                     KIND_MAP,
+                     KIND_POINTER,
                      (uint32_t)sizeof(G149),
                      (uint16_t)_Alignof(G149),
                      0,
                      0,
                      NULL,
                      NULL,
-                     &burrow_type_Str,
-                     &burrow_type_Any,
-                     0,
-                     0,
-                     NULL};
-static Type gt150 = {{(const Byte *)"", 0},
-                     {(const Byte *)"", 0},
-                     KIND_ARRAY,
-                     (uint32_t)sizeof(G150),
-                     (uint16_t)_Alignof(G150),
-                     0,
-                     0,
-                     NULL,
-                     NULL,
-                     &burrow_type_uint8_t,
+                     &gt150,
                      NULL,
                      0,
                      0,
@@ -3648,23 +3724,29 @@ static Type gt151 = {{(const Byte *)"", 0},
                      0,
                      NULL,
                      NULL,
-                     &burrow_type_uint8_t,
+                     &burrow_type_Any,
                      NULL,
                      1,
                      0,
                      NULL};
+static const Field gf152[] = {
+    {{(const Byte *)"X", 1},
+     {(const Byte *)"", 0},
+     &burrow_type_Any,
+     (uint32_t)offsetof(G152, f0)},
+};
 static Type gt152 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
-                     KIND_ARRAY,
+                     KIND_STRUCT,
                      (uint32_t)sizeof(G152),
                      (uint16_t)_Alignof(G152),
+                     1,
                      0,
+                     gf152,
+                     NULL,
+                     NULL,
+                     NULL,
                      0,
-                     NULL,
-                     NULL,
-                     &burrow_type_uint8_t,
-                     NULL,
-                     2,
                      0,
                      NULL};
 static Type gt153 = {{(const Byte *)"", 0},
@@ -3678,7 +3760,7 @@ static Type gt153 = {{(const Byte *)"", 0},
                      NULL,
                      &burrow_type_uint8_t,
                      NULL,
-                     3,
+                     8,
                      0,
                      NULL};
 static Type gt154 = {{(const Byte *)"", 0},
@@ -3690,65 +3772,65 @@ static Type gt154 = {{(const Byte *)"", 0},
                      0,
                      NULL,
                      NULL,
-                     &burrow_type_bool,
-                     &burrow_type_bool,
+                     &burrow_type_Str,
+                     &burrow_type_Any,
                      0,
                      0,
                      NULL};
 static Type gt155 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
-                     KIND_MAP,
+                     KIND_ARRAY,
                      (uint32_t)sizeof(G155),
                      (uint16_t)_Alignof(G155),
                      0,
                      0,
                      NULL,
                      NULL,
-                     &burrow_type_bool,
-                     &gt2,
+                     &burrow_type_uint8_t,
+                     NULL,
                      0,
                      0,
                      NULL};
 static Type gt156 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
-                     KIND_MAP,
+                     KIND_ARRAY,
                      (uint32_t)sizeof(G156),
                      (uint16_t)_Alignof(G156),
                      0,
                      0,
                      NULL,
                      NULL,
-                     &burrow_type_Int,
-                     &burrow_type_Int,
-                     0,
+                     &burrow_type_uint8_t,
+                     NULL,
+                     1,
                      0,
                      NULL};
 static Type gt157 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
-                     KIND_MAP,
+                     KIND_ARRAY,
                      (uint32_t)sizeof(G157),
                      (uint16_t)_Alignof(G157),
                      0,
                      0,
                      NULL,
                      NULL,
-                     &burrow_type_Int,
-                     &gt16,
-                     0,
+                     &burrow_type_uint8_t,
+                     NULL,
+                     2,
                      0,
                      NULL};
 static Type gt158 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
-                     KIND_MAP,
+                     KIND_ARRAY,
                      (uint32_t)sizeof(G158),
                      (uint16_t)_Alignof(G158),
                      0,
                      0,
                      NULL,
                      NULL,
-                     &burrow_type_Uint,
-                     &burrow_type_Uint,
-                     0,
+                     &burrow_type_uint8_t,
+                     NULL,
+                     3,
                      0,
                      NULL};
 static Type gt159 = {{(const Byte *)"", 0},
@@ -3760,8 +3842,8 @@ static Type gt159 = {{(const Byte *)"", 0},
                      0,
                      NULL,
                      NULL,
-                     &burrow_type_Uint,
-                     &gt17,
+                     &burrow_type_bool,
+                     &burrow_type_bool,
                      0,
                      0,
                      NULL};
@@ -3774,8 +3856,8 @@ static Type gt160 = {{(const Byte *)"", 0},
                      0,
                      NULL,
                      NULL,
-                     &burrow_type_double,
-                     &burrow_type_double,
+                     &burrow_type_bool,
+                     &gt2,
                      0,
                      0,
                      NULL};
@@ -3788,16 +3870,86 @@ static Type gt161 = {{(const Byte *)"", 0},
                      0,
                      NULL,
                      NULL,
-                     &gt33,
-                     &burrow_type_Str,
+                     &burrow_type_Int,
+                     &burrow_type_Int,
                      0,
                      0,
                      NULL};
 static Type gt162 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
-                     KIND_SLICE,
+                     KIND_MAP,
                      (uint32_t)sizeof(G162),
                      (uint16_t)_Alignof(G162),
+                     0,
+                     0,
+                     NULL,
+                     NULL,
+                     &burrow_type_Int,
+                     &gt16,
+                     0,
+                     0,
+                     NULL};
+static Type gt163 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_MAP,
+                     (uint32_t)sizeof(G163),
+                     (uint16_t)_Alignof(G163),
+                     0,
+                     0,
+                     NULL,
+                     NULL,
+                     &burrow_type_Uint,
+                     &burrow_type_Uint,
+                     0,
+                     0,
+                     NULL};
+static Type gt164 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_MAP,
+                     (uint32_t)sizeof(G164),
+                     (uint16_t)_Alignof(G164),
+                     0,
+                     0,
+                     NULL,
+                     NULL,
+                     &burrow_type_Uint,
+                     &gt17,
+                     0,
+                     0,
+                     NULL};
+static Type gt165 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_MAP,
+                     (uint32_t)sizeof(G165),
+                     (uint16_t)_Alignof(G165),
+                     0,
+                     0,
+                     NULL,
+                     NULL,
+                     &burrow_type_double,
+                     &burrow_type_double,
+                     0,
+                     0,
+                     NULL};
+static Type gt166 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_MAP,
+                     (uint32_t)sizeof(G166),
+                     (uint16_t)_Alignof(G166),
+                     0,
+                     0,
+                     NULL,
+                     NULL,
+                     &gt33,
+                     &burrow_type_Str,
+                     0,
+                     0,
+                     NULL};
+static Type gt167 = {{(const Byte *)"", 0},
+                     {(const Byte *)"", 0},
+                     KIND_SLICE,
+                     (uint32_t)sizeof(G167),
+                     (uint16_t)_Alignof(G167),
                      0,
                      0,
                      NULL,
@@ -3807,31 +3959,31 @@ static Type gt162 = {{(const Byte *)"", 0},
                      0,
                      0,
                      NULL};
-static const Field gf163[] = {
+static const Field gf168[] = {
     {{(const Byte *)"Field", 5},
      {(const Byte *)"", 0},
      &burrow_type_Str,
-     (uint32_t)offsetof(G163, f0)},
+     (uint32_t)offsetof(G168, f0)},
 };
-static Type gt163 = {{(const Byte *)"", 0},
+static Type gt168 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
                      KIND_STRUCT,
-                     (uint32_t)sizeof(G163),
-                     (uint16_t)_Alignof(G163),
+                     (uint32_t)sizeof(G168),
+                     (uint16_t)_Alignof(G168),
                      1,
                      0,
-                     gf163,
+                     gf168,
                      NULL,
                      NULL,
                      NULL,
                      0,
                      0,
                      NULL};
-static Type gt164 = {{(const Byte *)"", 0},
+static Type gt169 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
                      KIND_SLICE,
-                     (uint32_t)sizeof(G164),
-                     (uint16_t)_Alignof(G164),
+                     (uint32_t)sizeof(G169),
+                     (uint16_t)_Alignof(G169),
                      0,
                      0,
                      NULL,
@@ -3841,11 +3993,11 @@ static Type gt164 = {{(const Byte *)"", 0},
                      0,
                      0,
                      NULL};
-static Type gt165 = {{(const Byte *)"", 0},
+static Type gt170 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
                      KIND_SLICE,
-                     (uint32_t)sizeof(G165),
-                     (uint16_t)_Alignof(G165),
+                     (uint32_t)sizeof(G170),
+                     (uint16_t)_Alignof(G170),
                      0,
                      0,
                      NULL,
@@ -3855,11 +4007,11 @@ static Type gt165 = {{(const Byte *)"", 0},
                      0,
                      0,
                      NULL};
-static Type gt166 = {{(const Byte *)"", 0},
+static Type gt171 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
                      KIND_SLICE,
-                     (uint32_t)sizeof(G166),
-                     (uint16_t)_Alignof(G166),
+                     (uint32_t)sizeof(G171),
+                     (uint16_t)_Alignof(G171),
                      0,
                      0,
                      NULL,
@@ -3869,11 +4021,11 @@ static Type gt166 = {{(const Byte *)"", 0},
                      0,
                      0,
                      NULL};
-static Type gt167 = {{(const Byte *)"", 0},
+static Type gt172 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
                      KIND_ARRAY,
-                     (uint32_t)sizeof(G167),
-                     (uint16_t)_Alignof(G167),
+                     (uint32_t)sizeof(G172),
+                     (uint16_t)_Alignof(G172),
                      0,
                      0,
                      NULL,
@@ -3883,11 +4035,11 @@ static Type gt167 = {{(const Byte *)"", 0},
                      5,
                      0,
                      NULL};
-static Type gt168 = {{(const Byte *)"", 0},
+static Type gt173 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
                      KIND_ARRAY,
-                     (uint32_t)sizeof(G168),
-                     (uint16_t)_Alignof(G168),
+                     (uint32_t)sizeof(G173),
+                     (uint16_t)_Alignof(G173),
                      0,
                      0,
                      NULL,
@@ -3897,11 +4049,11 @@ static Type gt168 = {{(const Byte *)"", 0},
                      5,
                      0,
                      NULL};
-static Type gt169 = {{(const Byte *)"", 0},
+static Type gt174 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
                      KIND_ARRAY,
-                     (uint32_t)sizeof(G169),
-                     (uint16_t)_Alignof(G169),
+                     (uint32_t)sizeof(G174),
+                     (uint16_t)_Alignof(G174),
                      0,
                      0,
                      NULL,
@@ -3911,31 +4063,31 @@ static Type gt169 = {{(const Byte *)"", 0},
                      2,
                      0,
                      NULL};
-static const Field gf170[] = {
+static const Field gf175[] = {
     {{(const Byte *)"F", 1},
      {(const Byte *)"", 0},
      &gt22,
-     (uint32_t)offsetof(G170, f0)},
+     (uint32_t)offsetof(G175, f0)},
 };
-static Type gt170 = {{(const Byte *)"", 0},
+static Type gt175 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
                      KIND_STRUCT,
-                     (uint32_t)sizeof(G170),
-                     (uint16_t)_Alignof(G170),
+                     (uint32_t)sizeof(G175),
+                     (uint16_t)_Alignof(G175),
                      1,
                      0,
-                     gf170,
+                     gf175,
                      NULL,
                      NULL,
                      NULL,
                      0,
                      0,
                      NULL};
-static Type gt171 = {{(const Byte *)"", 0},
+static Type gt176 = {{(const Byte *)"", 0},
                      {(const Byte *)"", 0},
                      KIND_ARRAY,
-                     (uint32_t)sizeof(G171),
-                     (uint16_t)_Alignof(G171),
+                     (uint32_t)sizeof(G176),
+                     (uint16_t)_Alignof(G176),
                      0,
                      0,
                      NULL,
@@ -3953,7 +4105,7 @@ static void gen_init(void) {
     gt16.ops = burrow_type_int64_t.ops;
     gt17.ops = burrow_type_uint64_t.ops;
     gt18.ops = burrow_type_double.ops;
-    gt121.ops = burrow_type_Str.ops;
+    gt126.ops = burrow_type_Str.ops;
 }
 
 static void mk1(Alloc *a, void *out) {
@@ -4787,9 +4939,9 @@ static void mk36(Alloc *a, void *out) {
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
             P[0] = gen_alloc(a, &burrow_type_int64_t);
-            (*(int64_t *)P[0]) = (int64_t)(int64_t)UINT64_C(9223372036854775808);
+            (*(int64_t *)P[0]) = (int64_t)(int64_t)UINT64_C(9223372036854775807);
             v2 = P[0];
-            v3 = (Str){(const Byte *)"MinInt64", 8};
+            v3 = (Str){(const Byte *)"MaxInt64", 8};
             map_set(v1, &v2, &v3);
         }
         {
@@ -4798,8 +4950,9 @@ static void mk36(Alloc *a, void *out) {
             memset(&v4, 0, sizeof(v4));
             memset(&v5, 0, sizeof(v5));
             P[1] = gen_alloc(a, &burrow_type_int64_t);
+            (*(int64_t *)P[1]) = (int64_t)(int64_t)UINT64_C(9223372036854775808);
             v4 = P[1];
-            v5 = (Str){(const Byte *)"Zero", 4};
+            v5 = (Str){(const Byte *)"MinInt64", 8};
             map_set(v1, &v4, &v5);
         }
         {
@@ -4808,9 +4961,8 @@ static void mk36(Alloc *a, void *out) {
             memset(&v6, 0, sizeof(v6));
             memset(&v7, 0, sizeof(v7));
             P[2] = gen_alloc(a, &burrow_type_int64_t);
-            (*(int64_t *)P[2]) = (int64_t)(int64_t)UINT64_C(9223372036854775807);
             v6 = P[2];
-            v7 = (Str){(const Byte *)"MaxInt64", 8};
+            v7 = (Str){(const Byte *)"Zero", 4};
             map_set(v1, &v6, &v7);
         }
         (*o) = v1;
@@ -5010,15 +5162,15 @@ static void mk43(Alloc *a, void *out) {
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
             {
-                G17 *v4 = (G17 *)gen_alloc(a, &gt17);
-                (*v4) = (G17)UINT64_C(64);
-                v2.t = &gt17;
+                Str *v4 = (Str *)gen_alloc(a, &burrow_type_Str);
+                (*v4) = (Str){(const Byte *)"key", 3};
+                v2.t = &burrow_type_Str;
                 v2.data = v4;
             }
             {
-                uint32_t *v5 = (uint32_t *)gen_alloc(a, &burrow_type_uint32_t);
-                (*v5) = (uint32_t)UINT64_C(32);
-                v3.t = &burrow_type_uint32_t;
+                Str *v5 = (Str *)gen_alloc(a, &burrow_type_Str);
+                (*v5) = (Str){(const Byte *)"key", 3};
+                v3.t = &burrow_type_Str;
                 v3.data = v5;
             }
             map_set(v1, &v2, &v3);
@@ -5029,15 +5181,15 @@ static void mk43(Alloc *a, void *out) {
             memset(&v6, 0, sizeof(v6));
             memset(&v7, 0, sizeof(v7));
             {
-                G18 *v8 = (G18 *)gen_alloc(a, &gt18);
-                (*v8) = (G18)0x1.028f5c28f5c29p+06;
-                v6.t = &gt18;
+                G16 *v8 = (G16 *)gen_alloc(a, &gt16);
+                (*v8) = (G16)(int64_t)UINT64_C(18446744073709551552);
+                v6.t = &gt16;
                 v6.data = v8;
             }
             {
-                float *v9 = (float *)gen_alloc(a, &burrow_type_float);
-                (*v9) = (float)0x1.028f5cp+05;
-                v7.t = &burrow_type_float;
+                int32_t *v9 = (int32_t *)gen_alloc(a, &burrow_type_int32_t);
+                (*v9) = (int32_t)(int64_t)UINT64_C(18446744073709551584);
+                v7.t = &burrow_type_int32_t;
                 v7.data = v9;
             }
             map_set(v1, &v6, &v7);
@@ -5048,15 +5200,15 @@ static void mk43(Alloc *a, void *out) {
             memset(&v10, 0, sizeof(v10));
             memset(&v11, 0, sizeof(v11));
             {
-                Str *v12 = (Str *)gen_alloc(a, &burrow_type_Str);
-                (*v12) = (Str){(const Byte *)"key", 3};
-                v10.t = &burrow_type_Str;
+                G17 *v12 = (G17 *)gen_alloc(a, &gt17);
+                (*v12) = (G17)UINT64_C(64);
+                v10.t = &gt17;
                 v10.data = v12;
             }
             {
-                Str *v13 = (Str *)gen_alloc(a, &burrow_type_Str);
-                (*v13) = (Str){(const Byte *)"key", 3};
-                v11.t = &burrow_type_Str;
+                uint32_t *v13 = (uint32_t *)gen_alloc(a, &burrow_type_uint32_t);
+                (*v13) = (uint32_t)UINT64_C(32);
+                v11.t = &burrow_type_uint32_t;
                 v11.data = v13;
             }
             map_set(v1, &v10, &v11);
@@ -5067,15 +5219,15 @@ static void mk43(Alloc *a, void *out) {
             memset(&v14, 0, sizeof(v14));
             memset(&v15, 0, sizeof(v15));
             {
-                G16 *v16 = (G16 *)gen_alloc(a, &gt16);
-                (*v16) = (G16)(int64_t)UINT64_C(18446744073709551552);
-                v14.t = &gt16;
+                G18 *v16 = (G18 *)gen_alloc(a, &gt18);
+                (*v16) = (G18)0x1.028f5c28f5c29p+06;
+                v14.t = &gt18;
                 v14.data = v16;
             }
             {
-                int32_t *v17 = (int32_t *)gen_alloc(a, &burrow_type_int32_t);
-                (*v17) = (int32_t)(int64_t)UINT64_C(18446744073709551584);
-                v15.t = &burrow_type_int32_t;
+                float *v17 = (float *)gen_alloc(a, &burrow_type_float);
+                (*v17) = (float)0x1.028f5cp+05;
+                v15.t = &burrow_type_float;
                 v15.data = v17;
             }
             map_set(v1, &v14, &v15);
@@ -5097,7 +5249,7 @@ static void mk44(Alloc *a, void *out) {
             Str v3;
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
-            v2 = (Str){(const Byte *)"\200", 1};
+            v2 = (Str){(const Byte *)"\201", 1};
             map_set(v1, &v2, &v3);
         }
         {
@@ -5105,7 +5257,7 @@ static void mk44(Alloc *a, void *out) {
             Str v5;
             memset(&v4, 0, sizeof(v4));
             memset(&v5, 0, sizeof(v5));
-            v4 = (Str){(const Byte *)"\201", 1};
+            v4 = (Str){(const Byte *)"\200", 1};
             map_set(v1, &v4, &v5);
         }
         (*o) = v1;
@@ -5211,8 +5363,7 @@ static void mk48(Alloc *a, void *out) {
             Int v3;
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
-            v2 = (Str){(const Byte *)"\376", 1};
-            v3 = (Int)(int64_t)UINT64_C(1);
+            v2 = (Str){(const Byte *)"\377", 1};
             map_set(v1, &v2, &v3);
         }
         {
@@ -5220,7 +5371,8 @@ static void mk48(Alloc *a, void *out) {
             Int v5;
             memset(&v4, 0, sizeof(v4));
             memset(&v5, 0, sizeof(v5));
-            v4 = (Str){(const Byte *)"\377", 1};
+            v4 = (Str){(const Byte *)"\376", 1};
+            v5 = (Int)(int64_t)UINT64_C(1);
             map_set(v1, &v4, &v5);
         }
         (*o) = v1;
@@ -5269,40 +5421,40 @@ static void mk50(Alloc *a, void *out) {
             G36 v3;
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
-            v2 = (Str){(const Byte *)"fizz", 4};
+            v2 = (Str){(const Byte *)"buzz", 4};
+            map_set(v1, &v2, &v3);
+        }
+        {
+            Str v4;
+            G36 v5;
+            memset(&v4, 0, sizeof(v4));
+            memset(&v5, 0, sizeof(v5));
+            v4 = (Str){(const Byte *)"fizz", 4};
             {
-                Map *v4 = map_make(a, &burrow_type_Str, &gt36, 0);
-                {
-                    Str v5;
-                    G36 v6;
-                    memset(&v5, 0, sizeof(v5));
-                    memset(&v6, 0, sizeof(v6));
-                    v5 = (Str){(const Byte *)"bar", 3};
-                    map_set(v4, &v5, &v6);
-                }
+                Map *v6 = map_make(a, &burrow_type_Str, &gt36, 0);
                 {
                     Str v7;
                     G36 v8;
                     memset(&v7, 0, sizeof(v7));
                     memset(&v8, 0, sizeof(v8));
-                    v7 = (Str){(const Byte *)"foo", 3};
-                    {
-                        Map *v9 = map_make(a, &burrow_type_Str, &gt36, 0);
-                        v8 = v9;
-                    }
-                    map_set(v4, &v7, &v8);
+                    v7 = (Str){(const Byte *)"bar", 3};
+                    map_set(v6, &v7, &v8);
                 }
-                v3 = v4;
+                {
+                    Str v9;
+                    G36 v10;
+                    memset(&v9, 0, sizeof(v9));
+                    memset(&v10, 0, sizeof(v10));
+                    v9 = (Str){(const Byte *)"foo", 3};
+                    {
+                        Map *v11 = map_make(a, &burrow_type_Str, &gt36, 0);
+                        v10 = v11;
+                    }
+                    map_set(v6, &v9, &v10);
+                }
+                v5 = v6;
             }
-            map_set(v1, &v2, &v3);
-        }
-        {
-            Str v10;
-            G36 v11;
-            memset(&v10, 0, sizeof(v10));
-            memset(&v11, 0, sizeof(v11));
-            v10 = (Str){(const Byte *)"buzz", 4};
-            map_set(v1, &v10, &v11);
+            map_set(v1, &v4, &v5);
         }
         (*o) = v1;
     }
@@ -7479,13 +7631,446 @@ static void mk132(Alloc *a, void *out) {
     (void)o;
     (void)P;
     {
-        Map *v1 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 0, 0);
         (*o).f1 = v1;
     }
 }
 
 static void mk133(Alloc *a, void *out) {
     G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 21, 21);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(102);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(105);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(98);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[16] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[17] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[18] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[19] = (uint8_t)UINT64_C(125);
+        ((uint8_t *)v1.p)[20] = (uint8_t)UINT64_C(32);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk134(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 37, 37);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(102);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(105);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(98);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[16] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[17] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[18] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[19] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[20] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[21] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[22] = (uint8_t)UINT64_C(102);
+        ((uint8_t *)v1.p)[23] = (uint8_t)UINT64_C(111);
+        ((uint8_t *)v1.p)[24] = (uint8_t)UINT64_C(111);
+        ((uint8_t *)v1.p)[25] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[26] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[27] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[28] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[29] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[30] = (uint8_t)UINT64_C(98);
+        ((uint8_t *)v1.p)[31] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[32] = (uint8_t)UINT64_C(114);
+        ((uint8_t *)v1.p)[33] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[34] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[35] = (uint8_t)UINT64_C(125);
+        ((uint8_t *)v1.p)[36] = (uint8_t)UINT64_C(32);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk135(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o).f0 = (Int)(int64_t)UINT64_C(1);
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 37, 37);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(102);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(105);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(98);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[16] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[17] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[18] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[19] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[20] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[21] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[22] = (uint8_t)UINT64_C(102);
+        ((uint8_t *)v1.p)[23] = (uint8_t)UINT64_C(111);
+        ((uint8_t *)v1.p)[24] = (uint8_t)UINT64_C(111);
+        ((uint8_t *)v1.p)[25] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[26] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[27] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[28] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[29] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[30] = (uint8_t)UINT64_C(98);
+        ((uint8_t *)v1.p)[31] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[32] = (uint8_t)UINT64_C(114);
+        ((uint8_t *)v1.p)[33] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[34] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[35] = (uint8_t)UINT64_C(125);
+        ((uint8_t *)v1.p)[36] = (uint8_t)UINT64_C(32);
+        (*o).f1 = v1;
+    }
+    (*o).f2 = (Int)(int64_t)UINT64_C(2);
+}
+
+static void mk136(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 39, 39);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(102);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(105);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(98);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[16] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[17] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[18] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[19] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[20] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[21] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[22] = (uint8_t)UINT64_C(102);
+        ((uint8_t *)v1.p)[23] = (uint8_t)UINT64_C(105);
+        ((uint8_t *)v1.p)[24] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[25] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[26] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[27] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[28] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[29] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[30] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[31] = (uint8_t)UINT64_C(98);
+        ((uint8_t *)v1.p)[32] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[33] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[34] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[35] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[36] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[37] = (uint8_t)UINT64_C(125);
+        ((uint8_t *)v1.p)[38] = (uint8_t)UINT64_C(32);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk137(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 39, 39);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(102);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(105);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(98);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[16] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[17] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[18] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[19] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[20] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[21] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[22] = (uint8_t)UINT64_C(102);
+        ((uint8_t *)v1.p)[23] = (uint8_t)UINT64_C(105);
+        ((uint8_t *)v1.p)[24] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[25] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[26] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[27] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[28] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[29] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[30] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[31] = (uint8_t)UINT64_C(98);
+        ((uint8_t *)v1.p)[32] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[33] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[34] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[35] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[36] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[37] = (uint8_t)UINT64_C(125);
+        ((uint8_t *)v1.p)[38] = (uint8_t)UINT64_C(32);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk138(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 16, 16);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(222);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(173);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(190);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(239);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(118);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(108);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(101);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(125);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk139(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 16, 16);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(222);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(173);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(190);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(239);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(118);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(108);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(101);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(125);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk140(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 4, 4);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(10);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(13);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(9);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(32);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk141(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 6, 6);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(116);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(114);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(101);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(32);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk142(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 18, 18);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(116);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(114);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(101);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(102);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(108);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(115);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(101);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[16] = (uint8_t)UINT64_C(125);
+        ((uint8_t *)v1.p)[17] = (uint8_t)UINT64_C(32);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk143(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 22, 22);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(109);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(101);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(102);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(108);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(115);
+        ((uint8_t *)v1.p)[16] = (uint8_t)UINT64_C(101);
+        ((uint8_t *)v1.p)[17] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[18] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[19] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[20] = (uint8_t)UINT64_C(125);
+        ((uint8_t *)v1.p)[21] = (uint8_t)UINT64_C(32);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk144(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 4, 4);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(125);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(125);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk145(Alloc *a, void *out) {
+    G102 *o = (G102 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk146(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk147(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Map *v1 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk148(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7504,8 +8089,8 @@ static void mk133(Alloc *a, void *out) {
     }
 }
 
-static void mk134(Alloc *a, void *out) {
-    G101 *o = (G101 *)out;
+static void mk149(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7526,8 +8111,8 @@ static void mk134(Alloc *a, void *out) {
     (*o).f2 = (Int)(int64_t)UINT64_C(2);
 }
 
-static void mk135(Alloc *a, void *out) {
-    G101 *o = (G101 *)out;
+static void mk150(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7546,8 +8131,8 @@ static void mk135(Alloc *a, void *out) {
     }
 }
 
-static void mk136(Alloc *a, void *out) {
-    G101 *o = (G101 *)out;
+static void mk151(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7566,29 +8151,29 @@ static void mk136(Alloc *a, void *out) {
     }
 }
 
-static void mk137(Alloc *a, void *out) {
-    G103 *o = (G103 *)out;
+static void mk152(Alloc *a, void *out) {
+    G107 *o = (G107 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk138(Alloc *a, void *out) {
-    G106 *o = (G106 *)out;
+static void mk153(Alloc *a, void *out) {
+    G110 *o = (G110 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk139(Alloc *a, void *out) {
-    G106 *o = (G106 *)out;
+static void mk154(Alloc *a, void *out) {
+    G110 *o = (G110 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    P[0] = gen_alloc(a, &gt102);
+    P[0] = gen_alloc(a, &gt106);
     {
         Map *v1 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
         {
@@ -7605,21 +8190,59 @@ static void mk139(Alloc *a, void *out) {
             }
             map_set(v1, &v2, &v3);
         }
-        (*(G102 *)P[0]) = v1;
+        (*(G106 *)P[0]) = v1;
     }
     (*o).f1 = P[0];
 }
 
-static void mk140(Alloc *a, void *out) {
-    G108 *o = (G108 *)out;
+static void mk155(Alloc *a, void *out) {
+    G112 *o = (G112 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk141(Alloc *a, void *out) {
-    G110 *o = (G110 *)out;
+static void mk156(Alloc *a, void *out) {
+    G114 *o = (G114 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Map *v1 = map_make(a, &burrow_type_Str, &burrow_type_Int, 0);
+        {
+            Str v2;
+            Int v3;
+            memset(&v2, 0, sizeof(v2));
+            memset(&v3, 0, sizeof(v3));
+            v2 = (Str){(const Byte *)"one", 3};
+            v3 = (Int)(int64_t)UINT64_C(1);
+            map_set(v1, &v2, &v3);
+        }
+        {
+            Str v4;
+            Int v5;
+            memset(&v4, 0, sizeof(v4));
+            memset(&v5, 0, sizeof(v5));
+            v4 = (Str){(const Byte *)"two", 3};
+            v5 = (Int)(int64_t)UINT64_C(2);
+            map_set(v1, &v4, &v5);
+        }
+        {
+            Str v6;
+            Int v7;
+            memset(&v6, 0, sizeof(v6));
+            memset(&v7, 0, sizeof(v7));
+            v6 = (Str){(const Byte *)"zero", 4};
+            map_set(v1, &v6, &v7);
+        }
+        (*o).f0 = v1;
+    }
+}
+
+static void mk157(Alloc *a, void *out) {
+    G114 *o = (G114 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7656,46 +8279,8 @@ static void mk141(Alloc *a, void *out) {
     }
 }
 
-static void mk142(Alloc *a, void *out) {
-    G110 *o = (G110 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-    {
-        Map *v1 = map_make(a, &burrow_type_Str, &burrow_type_Int, 0);
-        {
-            Str v2;
-            Int v3;
-            memset(&v2, 0, sizeof(v2));
-            memset(&v3, 0, sizeof(v3));
-            v2 = (Str){(const Byte *)"zero", 4};
-            map_set(v1, &v2, &v3);
-        }
-        {
-            Str v4;
-            Int v5;
-            memset(&v4, 0, sizeof(v4));
-            memset(&v5, 0, sizeof(v5));
-            v4 = (Str){(const Byte *)"one", 3};
-            v5 = (Int)(int64_t)UINT64_C(1);
-            map_set(v1, &v4, &v5);
-        }
-        {
-            Str v6;
-            Int v7;
-            memset(&v6, 0, sizeof(v6));
-            memset(&v7, 0, sizeof(v7));
-            v6 = (Str){(const Byte *)"two", 3};
-            v7 = (Int)(int64_t)UINT64_C(2);
-            map_set(v1, &v6, &v7);
-        }
-        (*o).f0 = v1;
-    }
-}
-
-static void mk143(Alloc *a, void *out) {
-    G110 *o = (G110 *)out;
+static void mk158(Alloc *a, void *out) {
+    G114 *o = (G114 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7723,8 +8308,8 @@ static void mk143(Alloc *a, void *out) {
     }
 }
 
-static void mk144(Alloc *a, void *out) {
-    G110 *o = (G110 *)out;
+static void mk159(Alloc *a, void *out) {
+    G114 *o = (G114 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7736,7 +8321,8 @@ static void mk144(Alloc *a, void *out) {
             Int v3;
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
-            v2 = (Str){(const Byte *)"\377", 1};
+            v2 = (Str){(const Byte *)"\376", 1};
+            v3 = (Int)(int64_t)UINT64_C(1);
             map_set(v1, &v2, &v3);
         }
         {
@@ -7744,16 +8330,15 @@ static void mk144(Alloc *a, void *out) {
             Int v5;
             memset(&v4, 0, sizeof(v4));
             memset(&v5, 0, sizeof(v5));
-            v4 = (Str){(const Byte *)"\376", 1};
-            v5 = (Int)(int64_t)UINT64_C(1);
+            v4 = (Str){(const Byte *)"\377", 1};
             map_set(v1, &v4, &v5);
         }
         (*o).f0 = v1;
     }
 }
 
-static void mk145(Alloc *a, void *out) {
-    G110 *o = (G110 *)out;
+static void mk160(Alloc *a, void *out) {
+    G114 *o = (G114 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7790,8 +8375,8 @@ static void mk145(Alloc *a, void *out) {
     }
 }
 
-static void mk146(Alloc *a, void *out) {
-    G111 *o = (G111 *)out;
+static void mk161(Alloc *a, void *out) {
+    G115 *o = (G115 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7828,8 +8413,8 @@ static void mk146(Alloc *a, void *out) {
     }
 }
 
-static void mk147(Alloc *a, void *out) {
-    G111 *o = (G111 *)out;
+static void mk162(Alloc *a, void *out) {
+    G115 *o = (G115 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7866,16 +8451,16 @@ static void mk147(Alloc *a, void *out) {
     }
 }
 
-static void mk148(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
+static void mk163(Alloc *a, void *out) {
+    G117 *o = (G117 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk149(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
+static void mk164(Alloc *a, void *out) {
+    G117 *o = (G117 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7886,8 +8471,8 @@ static void mk149(Alloc *a, void *out) {
     }
 }
 
-static void mk150(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
+static void mk165(Alloc *a, void *out) {
+    G117 *o = (G117 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7906,8 +8491,8 @@ static void mk150(Alloc *a, void *out) {
     }
 }
 
-static void mk151(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
+static void mk166(Alloc *a, void *out) {
+    G117 *o = (G117 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7928,8 +8513,8 @@ static void mk151(Alloc *a, void *out) {
     (*o).f2 = (Int)(int64_t)UINT64_C(2);
 }
 
-static void mk152(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
+static void mk167(Alloc *a, void *out) {
+    G117 *o = (G117 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7948,8 +8533,8 @@ static void mk152(Alloc *a, void *out) {
     }
 }
 
-static void mk153(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
+static void mk168(Alloc *a, void *out) {
+    G117 *o = (G117 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7968,8 +8553,466 @@ static void mk153(Alloc *a, void *out) {
     }
 }
 
-static void mk154(Alloc *a, void *out) {
-    G115 *o = (G115 *)out;
+static void mk169(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 21, 21);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(100);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(112);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(101);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(100);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(112);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(101);
+        ((uint8_t *)v1.p)[16] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[17] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[18] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[19] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[20] = (uint8_t)UINT64_C(125);
+        (*o).f5 = v1;
+    }
+}
+
+static void mk170(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 24, 24);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(100);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(112);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(101);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(100);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[16] = (uint8_t)UINT64_C(112);
+        ((uint8_t *)v1.p)[17] = (uint8_t)UINT64_C(101);
+        ((uint8_t *)v1.p)[18] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[19] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[20] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[21] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[22] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[23] = (uint8_t)UINT64_C(125);
+        (*o).f5 = v1;
+    }
+}
+
+static void mk171(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 44, 44);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[16] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[17] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[18] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[19] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[20] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[21] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[22] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[23] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[24] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[25] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[26] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[27] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[28] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[29] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[30] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[31] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[32] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[33] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[34] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[35] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[36] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[37] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[38] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[39] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[40] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[41] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[42] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[43] = (uint8_t)UINT64_C(125);
+        (*o).f5 = v1;
+    }
+}
+
+static void mk172(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 22, 22);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[16] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[17] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[18] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[19] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[20] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[21] = (uint8_t)UINT64_C(125);
+        (*o).f5 = v1;
+    }
+}
+
+static void mk173(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 22, 22);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[16] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[17] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[18] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[19] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[20] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[21] = (uint8_t)UINT64_C(125);
+        (*o).f5 = v1;
+    }
+}
+
+static void mk174(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 33, 33);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[16] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[17] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[18] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[19] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[20] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[21] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[22] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[23] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[24] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[25] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[26] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[27] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[28] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[29] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[30] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[31] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[32] = (uint8_t)UINT64_C(125);
+        (*o).f5 = v1;
+    }
+}
+
+static void mk175(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 33, 33);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[16] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[17] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[18] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[19] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[20] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[21] = (uint8_t)UINT64_C(44);
+        ((uint8_t *)v1.p)[22] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[23] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[24] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[25] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[26] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[27] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[28] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[29] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[30] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[31] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[32] = (uint8_t)UINT64_C(125);
+        (*o).f5 = v1;
+    }
+}
+
+static void mk176(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o).f0 = (Str){(const Byte *)"x", 1};
+    (*o).f2 = (Str){(const Byte *)"x", 1};
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 11, 11);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(125);
+        (*o).f5 = v1;
+    }
+}
+
+static void mk177(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o).f0 = (Str){(const Byte *)"x", 1};
+    (*o).f2 = (Str){(const Byte *)"x", 1};
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 11, 11);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(65);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(125);
+        (*o).f5 = v1;
+    }
+}
+
+static void mk178(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o).f0 = (Str){(const Byte *)"x", 1};
+    (*o).f2 = (Str){(const Byte *)"x", 1};
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 11, 11);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(125);
+        (*o).f5 = v1;
+    }
+}
+
+static void mk179(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o).f2 = (Str){(const Byte *)"x", 1};
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 12, 12);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(95);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(125);
+        (*o).f5 = v1;
+    }
+}
+
+static void mk180(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o).f2 = (Str){(const Byte *)"x", 1};
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 12, 12);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(95);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(125);
+        (*o).f5 = v1;
+    }
+}
+
+static void mk181(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o).f2 = (Str){(const Byte *)"x", 1};
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 12, 12);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(95);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(125);
+        (*o).f5 = v1;
+    }
+}
+
+static void mk182(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o).f1 = (Str){(const Byte *)"x", 1};
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 12, 12);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(95);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(98);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(125);
+        (*o).f5 = v1;
+    }
+}
+
+static void mk183(Alloc *a, void *out) {
+    G120 *o = (G120 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -7981,7 +9024,7 @@ static void mk154(Alloc *a, void *out) {
             Any v3;
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
-            v2 = (Str){(const Byte *)"Aaa", 3};
+            v2 = (Str){(const Byte *)"AaA", 3};
             {
                 Str *v4 = (Str *)gen_alloc(a, &burrow_type_Str);
                 v3.t = &burrow_type_Str;
@@ -7994,7 +9037,7 @@ static void mk154(Alloc *a, void *out) {
             Any v6;
             memset(&v5, 0, sizeof(v5));
             memset(&v6, 0, sizeof(v6));
-            v5 = (Str){(const Byte *)"AaA", 3};
+            v5 = (Str){(const Byte *)"AAa", 3};
             {
                 Str *v7 = (Str *)gen_alloc(a, &burrow_type_Str);
                 v6.t = &burrow_type_Str;
@@ -8007,7 +9050,7 @@ static void mk154(Alloc *a, void *out) {
             Any v9;
             memset(&v8, 0, sizeof(v8));
             memset(&v9, 0, sizeof(v9));
-            v8 = (Str){(const Byte *)"AAa", 3};
+            v8 = (Str){(const Byte *)"AAA", 3};
             {
                 Str *v10 = (Str *)gen_alloc(a, &burrow_type_Str);
                 v9.t = &burrow_type_Str;
@@ -8020,7 +9063,7 @@ static void mk154(Alloc *a, void *out) {
             Any v12;
             memset(&v11, 0, sizeof(v11));
             memset(&v12, 0, sizeof(v12));
-            v11 = (Str){(const Byte *)"AAA", 3};
+            v11 = (Str){(const Byte *)"Aaa", 3};
             {
                 Str *v13 = (Str *)gen_alloc(a, &burrow_type_Str);
                 v12.t = &burrow_type_Str;
@@ -8032,8 +9075,8 @@ static void mk154(Alloc *a, void *out) {
     }
 }
 
-static void mk155(Alloc *a, void *out) {
-    G115 *o = (G115 *)out;
+static void mk184(Alloc *a, void *out) {
+    G120 *o = (G120 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -8059,8 +9102,8 @@ static void mk155(Alloc *a, void *out) {
     }
 }
 
-static void mk156(Alloc *a, void *out) {
-    G115 *o = (G115 *)out;
+static void mk185(Alloc *a, void *out) {
+    G120 *o = (G120 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -8086,8 +9129,8 @@ static void mk156(Alloc *a, void *out) {
     }
 }
 
-static void mk157(Alloc *a, void *out) {
-    G115 *o = (G115 *)out;
+static void mk186(Alloc *a, void *out) {
+    G120 *o = (G120 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -8113,66 +9156,23 @@ static void mk157(Alloc *a, void *out) {
     }
 }
 
-static void mk158(Alloc *a, void *out) {
-    G116 *o = (G116 *)out;
+static void mk187(Alloc *a, void *out) {
+    G121 *o = (G121 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk159(Alloc *a, void *out) {
-    G117 *o = (G117 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk160(Alloc *a, void *out) {
-    G118 *o = (G118 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk161(Alloc *a, void *out) {
-    G119 *o = (G119 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk162(Alloc *a, void *out) {
-    G120 *o = (G120 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-    (*o).f0 = (Str){(const Byte *)"hello", 5};
-}
-
-static void mk163(Alloc *a, void *out) {
-    G120 *o = (G120 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-    (*o).f0 = (Str){(const Byte *)"hello", 5};
-}
-
-static void mk164(Alloc *a, void *out) {
+static void mk188(Alloc *a, void *out) {
     G122 *o = (G122 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o).f0 = (Str){(const Byte *)"hello", 5};
 }
 
-static void mk165(Alloc *a, void *out) {
+static void mk189(Alloc *a, void *out) {
     G123 *o = (G123 *)out;
     void *P[1];
     (void)a;
@@ -8180,15 +9180,7 @@ static void mk165(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk166(Alloc *a, void *out) {
-    G123 *o = (G123 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk167(Alloc *a, void *out) {
+static void mk190(Alloc *a, void *out) {
     G124 *o = (G124 *)out;
     void *P[1];
     (void)a;
@@ -8196,23 +9188,74 @@ static void mk167(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk168(Alloc *a, void *out) {
-    G124 *o = (G124 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk169(Alloc *a, void *out) {
+static void mk191(Alloc *a, void *out) {
     G125 *o = (G125 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
+    (*o).f0 = (Str){(const Byte *)"hello", 5};
 }
 
-static void mk170(Alloc *a, void *out) {
+static void mk192(Alloc *a, void *out) {
+    G125 *o = (G125 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o).f0 = (Str){(const Byte *)"hello", 5};
+}
+
+static void mk193(Alloc *a, void *out) {
+    G127 *o = (G127 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o).f0 = (Str){(const Byte *)"hello", 5};
+}
+
+static void mk194(Alloc *a, void *out) {
+    G128 *o = (G128 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk195(Alloc *a, void *out) {
+    G128 *o = (G128 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk196(Alloc *a, void *out) {
+    G129 *o = (G129 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk197(Alloc *a, void *out) {
+    G129 *o = (G129 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk198(Alloc *a, void *out) {
+    G130 *o = (G130 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk199(Alloc *a, void *out) {
     G15 *o = (G15 *)out;
     void *P[1];
     (void)a;
@@ -8291,8 +9334,8 @@ static void mk170(Alloc *a, void *out) {
     }
 }
 
-static void mk171(Alloc *a, void *out) {
-    G126 *o = (G126 *)out;
+static void mk200(Alloc *a, void *out) {
+    G131 *o = (G131 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -8303,35 +9346,35 @@ static void mk171(Alloc *a, void *out) {
     }
 }
 
-static void mk172(Alloc *a, void *out) {
-    G127 *o = (G127 *)out;
+static void mk201(Alloc *a, void *out) {
+    G132 *o = (G132 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
     {
-        Slice v1 = slice_make(a, &gt127, 4, 4);
+        Slice v1 = slice_make(a, &gt132, 4, 4);
         {
-            Slice v2 = slice_make(a, &gt127, 0, 0);
-            ((G127 *)v1.p)[1] = v2;
+            Slice v2 = slice_make(a, &gt132, 0, 0);
+            ((G132 *)v1.p)[1] = v2;
         }
         {
-            Slice v3 = slice_make(a, &gt127, 1, 1);
-            ((G127 *)v1.p)[2] = v3;
+            Slice v3 = slice_make(a, &gt132, 1, 1);
+            ((G132 *)v1.p)[2] = v3;
         }
         {
-            Slice v4 = slice_make(a, &gt127, 2, 2);
+            Slice v4 = slice_make(a, &gt132, 2, 2);
             {
-                Slice v5 = slice_make(a, &gt127, 0, 0);
-                ((G127 *)v4.p)[1] = v5;
+                Slice v5 = slice_make(a, &gt132, 0, 0);
+                ((G132 *)v4.p)[1] = v5;
             }
-            ((G127 *)v1.p)[3] = v4;
+            ((G132 *)v1.p)[3] = v4;
         }
         (*o) = v1;
     }
 }
 
-static void mk173(Alloc *a, void *out) {
+static void mk202(Alloc *a, void *out) {
     G3 *o = (G3 *)out;
     void *P[1];
     (void)a;
@@ -8345,16 +9388,16 @@ static void mk173(Alloc *a, void *out) {
     }
 }
 
-static void mk174(Alloc *a, void *out) {
-    G128 *o = (G128 *)out;
+static void mk203(Alloc *a, void *out) {
+    G133 *o = (G133 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk175(Alloc *a, void *out) {
-    G129 *o = (G129 *)out;
+static void mk204(Alloc *a, void *out) {
+    G134 *o = (G134 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -8362,8 +9405,8 @@ static void mk175(Alloc *a, void *out) {
     (*o).v[1] = true;
 }
 
-static void mk176(Alloc *a, void *out) {
-    G130 *o = (G130 *)out;
+static void mk205(Alloc *a, void *out) {
+    G135 *o = (G135 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -8372,8 +9415,8 @@ static void mk176(Alloc *a, void *out) {
     (*o).v[1] = (Str){(const Byte *)"goodbye", 7};
 }
 
-static void mk177(Alloc *a, void *out) {
-    G131 *o = (G131 *)out;
+static void mk206(Alloc *a, void *out) {
+    G136 *o = (G136 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -8400,8 +9443,8 @@ static void mk177(Alloc *a, void *out) {
     }
 }
 
-static void mk178(Alloc *a, void *out) {
-    G132 *o = (G132 *)out;
+static void mk207(Alloc *a, void *out) {
+    G137 *o = (G137 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -8410,8 +9453,8 @@ static void mk178(Alloc *a, void *out) {
     (*o).v[1] = (int64_t)(int64_t)UINT64_C(9223372036854775807);
 }
 
-static void mk179(Alloc *a, void *out) {
-    G133 *o = (G133 *)out;
+static void mk208(Alloc *a, void *out) {
+    G138 *o = (G138 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -8419,8 +9462,8 @@ static void mk179(Alloc *a, void *out) {
     (*o).v[1] = (uint64_t)UINT64_C(18446744073709551615);
 }
 
-static void mk180(Alloc *a, void *out) {
-    G134 *o = (G134 *)out;
+static void mk209(Alloc *a, void *out) {
+    G139 *o = (G139 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -8429,18 +9472,18 @@ static void mk180(Alloc *a, void *out) {
     (*o).v[1] = (double)0x1.fffffffffffffp+1023;
 }
 
-static void mk181(Alloc *a, void *out) {
-    G135 *o = (G135 *)out;
+static void mk210(Alloc *a, void *out) {
+    G140 *o = (G140 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    P[0] = gen_alloc(a, &gt136);
+    P[0] = gen_alloc(a, &gt141);
     (*o) = P[0];
 }
 
-static void mk182(Alloc *a, void *out) {
-    G130 *o = (G130 *)out;
+static void mk211(Alloc *a, void *out) {
+    G135 *o = (G135 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -8449,7 +9492,7 @@ static void mk182(Alloc *a, void *out) {
     (*o).v[1] = (Str){(const Byte *)"goodbye", 7};
 }
 
-static void mk183(Alloc *a, void *out) {
+static void mk212(Alloc *a, void *out) {
     G72 *o = (G72 *)out;
     void *P[1];
     (void)a;
@@ -8457,7 +9500,7 @@ static void mk183(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk184(Alloc *a, void *out) {
+static void mk213(Alloc *a, void *out) {
     G71 *o = (G71 *)out;
     void *P[1];
     (void)a;
@@ -8467,8 +9510,8 @@ static void mk184(Alloc *a, void *out) {
     (*o) = P[0];
 }
 
-static void mk185(Alloc *a, void *out) {
-    G137 *o = (G137 *)out;
+static void mk214(Alloc *a, void *out) {
+    G142 *o = (G142 *)out;
     void *P[2];
     (void)a;
     (void)o;
@@ -8480,8 +9523,8 @@ static void mk185(Alloc *a, void *out) {
     (*o) = P[0];
 }
 
-static void mk186(Alloc *a, void *out) {
-    G138 *o = (G138 *)out;
+static void mk215(Alloc *a, void *out) {
+    G143 *o = (G143 *)out;
     void *P[2];
     (void)a;
     (void)o;
@@ -8493,13 +9536,13 @@ static void mk186(Alloc *a, void *out) {
     (*o) = P[0];
 }
 
-static void mk187(Alloc *a, void *out) {
-    G139 *o = (G139 *)out;
+static void mk216(Alloc *a, void *out) {
+    G144 *o = (G144 *)out;
     void *P[2];
     (void)a;
     (void)o;
     (void)P;
-    P[0] = gen_alloc(a, &gt140);
+    P[0] = gen_alloc(a, &gt145);
     P[1] = gen_alloc(a, &gt7);
     {
         Slice v1 = slice_make(a, &burrow_type_uint8_t, 5, 5);
@@ -8510,11 +9553,11 @@ static void mk187(Alloc *a, void *out) {
         ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(115);
         (*(G7 *)P[1]) = v1;
     }
-    (*(G140 *)P[0]) = P[1];
+    (*(G145 *)P[0]) = P[1];
     (*o) = P[0];
 }
 
-static void mk188(Alloc *a, void *out) {
+static void mk217(Alloc *a, void *out) {
     G71 *o = (G71 *)out;
     void *P[2];
     (void)a;
@@ -8527,21 +9570,21 @@ static void mk188(Alloc *a, void *out) {
     (*o) = P[0];
 }
 
-static void mk189(Alloc *a, void *out) {
-    G141 *o = (G141 *)out;
+static void mk218(Alloc *a, void *out) {
+    G146 *o = (G146 *)out;
     void *P[2];
     (void)a;
     (void)o;
     (void)P;
-    P[0] = gen_alloc(a, &gt142);
+    P[0] = gen_alloc(a, &gt147);
     P[1] = gen_alloc(a, &burrow_type_Uint);
     (*(Uint *)P[1]) = (Uint)UINT64_C(100);
-    (*(G142 *)P[0]) = P[1];
+    (*(G147 *)P[0]) = P[1];
     (*o) = P[0];
 }
 
-static void mk190(Alloc *a, void *out) {
-    G143 *o = (G143 *)out;
+static void mk219(Alloc *a, void *out) {
+    G148 *o = (G148 *)out;
     void *P[2];
     (void)a;
     (void)o;
@@ -8553,19 +9596,19 @@ static void mk190(Alloc *a, void *out) {
     (*o) = P[0];
 }
 
-static void mk191(Alloc *a, void *out) {
-    G144 *o = (G144 *)out;
+static void mk220(Alloc *a, void *out) {
+    G149 *o = (G149 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    P[0] = gen_alloc(a, &gt145);
-    (*(G145 *)P[0]).f0 = P[0];
+    P[0] = gen_alloc(a, &gt150);
+    (*(G150 *)P[0]).f0 = P[0];
     (*o) = P[0];
 }
 
-static void mk192(Alloc *a, void *out) {
-    G137 *o = (G137 *)out;
+static void mk221(Alloc *a, void *out) {
+    G142 *o = (G142 *)out;
     void *P[2];
     (void)a;
     (void)o;
@@ -8577,16 +9620,16 @@ static void mk192(Alloc *a, void *out) {
     (*o) = P[0];
 }
 
-static void mk193(Alloc *a, void *out) {
-    G146 *o = (G146 *)out;
+static void mk222(Alloc *a, void *out) {
+    G151 *o = (G151 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk194(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk223(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -8611,12 +9654,12 @@ static void mk194(Alloc *a, void *out) {
                 ((Any *)v2.p)[3].data = v5;
             }
             {
-                G102 *v6 = (G102 *)gen_alloc(a, &gt102);
+                G106 *v6 = (G106 *)gen_alloc(a, &gt106);
                 {
                     Map *v7 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
                     (*v6) = v7;
                 }
-                ((Any *)v2.p)[4].t = &gt102;
+                ((Any *)v2.p)[4].t = &gt106;
                 ((Any *)v2.p)[4].data = v6;
             }
             {
@@ -8629,8 +9672,8 @@ static void mk194(Alloc *a, void *out) {
                 ((Any *)v2.p)[5].data = v8;
             }
             {
-                G148 *v10 = (G148 *)gen_alloc(a, &gt148);
-                ((Any *)v2.p)[6].t = &gt148;
+                G153 *v10 = (G153 *)gen_alloc(a, &gt153);
+                ((Any *)v2.p)[6].t = &gt153;
                 ((Any *)v2.p)[6].data = v10;
             }
             (*v1) = v2;
@@ -8640,8 +9683,8 @@ static void mk194(Alloc *a, void *out) {
     }
 }
 
-static void mk195(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk224(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -8653,8 +9696,8 @@ static void mk195(Alloc *a, void *out) {
     }
 }
 
-static void mk196(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk225(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -8667,74 +9710,74 @@ static void mk196(Alloc *a, void *out) {
     }
 }
 
-static void mk197(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk226(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
     {
-        G102 *v1 = (G102 *)gen_alloc(a, &gt102);
-        (*o).f0.t = &gt102;
+        G106 *v1 = (G106 *)gen_alloc(a, &gt106);
+        (*o).f0.t = &gt106;
         (*o).f0.data = v1;
     }
 }
 
-static void mk198(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk227(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
     {
-        G102 *v1 = (G102 *)gen_alloc(a, &gt102);
-        (*o).f0.t = &gt102;
+        G106 *v1 = (G106 *)gen_alloc(a, &gt106);
+        (*o).f0.t = &gt106;
         (*o).f0.data = v1;
     }
 }
 
-static void mk199(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk228(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
     {
-        G102 *v1 = (G102 *)gen_alloc(a, &gt102);
+        G106 *v1 = (G106 *)gen_alloc(a, &gt106);
         {
             Map *v2 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
             (*v1) = v2;
         }
-        (*o).f0.t = &gt102;
+        (*o).f0.t = &gt106;
         (*o).f0.data = v1;
     }
 }
 
-static void mk200(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk229(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
     {
-        G102 *v1 = (G102 *)gen_alloc(a, &gt102);
+        G106 *v1 = (G106 *)gen_alloc(a, &gt106);
         {
             Map *v2 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
             (*v1) = v2;
         }
-        (*o).f0.t = &gt102;
+        (*o).f0.t = &gt106;
         (*o).f0.data = v1;
     }
 }
 
-static void mk201(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk230(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
     {
-        G102 *v1 = (G102 *)gen_alloc(a, &gt102);
+        G106 *v1 = (G106 *)gen_alloc(a, &gt106);
         {
             Map *v2 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
             {
@@ -8753,19 +9796,19 @@ static void mk201(Alloc *a, void *out) {
             }
             (*v1) = v2;
         }
-        (*o).f0.t = &gt102;
+        (*o).f0.t = &gt106;
         (*o).f0.data = v1;
     }
 }
 
-static void mk202(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk231(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
     {
-        G102 *v1 = (G102 *)gen_alloc(a, &gt102);
+        G106 *v1 = (G106 *)gen_alloc(a, &gt106);
         {
             Map *v2 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
             {
@@ -8773,7 +9816,7 @@ static void mk202(Alloc *a, void *out) {
                 Any v4;
                 memset(&v3, 0, sizeof(v3));
                 memset(&v4, 0, sizeof(v4));
-                v3 = (Str){(const Byte *)"alpha", 5};
+                v3 = (Str){(const Byte *)"bravo", 5};
                 {
                     Str *v5 = (Str *)gen_alloc(a, &burrow_type_Str);
                     v4.t = &burrow_type_Str;
@@ -8786,7 +9829,7 @@ static void mk202(Alloc *a, void *out) {
                 Any v7;
                 memset(&v6, 0, sizeof(v6));
                 memset(&v7, 0, sizeof(v7));
-                v6 = (Str){(const Byte *)"bravo", 5};
+                v6 = (Str){(const Byte *)"alpha", 5};
                 {
                     Str *v8 = (Str *)gen_alloc(a, &burrow_type_Str);
                     v7.t = &burrow_type_Str;
@@ -8796,19 +9839,19 @@ static void mk202(Alloc *a, void *out) {
             }
             (*v1) = v2;
         }
-        (*o).f0.t = &gt102;
+        (*o).f0.t = &gt106;
         (*o).f0.data = v1;
     }
 }
 
-static void mk203(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk232(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
     {
-        G102 *v1 = (G102 *)gen_alloc(a, &gt102);
+        G106 *v1 = (G106 *)gen_alloc(a, &gt106);
         {
             Map *v2 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
             {
@@ -8839,19 +9882,19 @@ static void mk203(Alloc *a, void *out) {
             }
             (*v1) = v2;
         }
-        (*o).f0.t = &gt102;
+        (*o).f0.t = &gt106;
         (*o).f0.data = v1;
     }
 }
 
-static void mk204(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk233(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
     {
-        G102 *v1 = (G102 *)gen_alloc(a, &gt102);
+        G106 *v1 = (G106 *)gen_alloc(a, &gt106);
         {
             Map *v2 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
             {
@@ -8884,19 +9927,19 @@ static void mk204(Alloc *a, void *out) {
             }
             (*v1) = v2;
         }
-        (*o).f0.t = &gt102;
+        (*o).f0.t = &gt106;
         (*o).f0.data = v1;
     }
 }
 
-static void mk205(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk234(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
     {
-        G102 *v1 = (G102 *)gen_alloc(a, &gt102);
+        G106 *v1 = (G106 *)gen_alloc(a, &gt106);
         {
             Map *v2 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
             {
@@ -8927,62 +9970,19 @@ static void mk205(Alloc *a, void *out) {
             }
             (*v1) = v2;
         }
-        (*o).f0.t = &gt102;
+        (*o).f0.t = &gt106;
         (*o).f0.data = v1;
     }
 }
 
-static void mk206(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk235(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
     {
-        G102 *v1 = (G102 *)gen_alloc(a, &gt102);
-        {
-            Map *v2 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
-            {
-                Str v3;
-                Any v4;
-                memset(&v3, 0, sizeof(v3));
-                memset(&v4, 0, sizeof(v4));
-                v3 = (Str){(const Byte *)"\376", 1};
-                {
-                    Str *v5 = (Str *)gen_alloc(a, &burrow_type_Str);
-                    v4.t = &burrow_type_Str;
-                    v4.data = v5;
-                }
-                map_set(v2, &v3, &v4);
-            }
-            {
-                Str v6;
-                Any v7;
-                memset(&v6, 0, sizeof(v6));
-                memset(&v7, 0, sizeof(v7));
-                v6 = (Str){(const Byte *)"\377", 1};
-                {
-                    Str *v8 = (Str *)gen_alloc(a, &burrow_type_Str);
-                    v7.t = &burrow_type_Str;
-                    v7.data = v8;
-                }
-                map_set(v2, &v6, &v7);
-            }
-            (*v1) = v2;
-        }
-        (*o).f0.t = &gt102;
-        (*o).f0.data = v1;
-    }
-}
-
-static void mk207(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-    {
-        G102 *v1 = (G102 *)gen_alloc(a, &gt102);
+        G106 *v1 = (G106 *)gen_alloc(a, &gt106);
         {
             Map *v2 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
             {
@@ -9013,13 +10013,56 @@ static void mk207(Alloc *a, void *out) {
             }
             (*v1) = v2;
         }
-        (*o).f0.t = &gt102;
+        (*o).f0.t = &gt106;
         (*o).f0.data = v1;
     }
 }
 
-static void mk208(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk236(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        G106 *v1 = (G106 *)gen_alloc(a, &gt106);
+        {
+            Map *v2 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
+            {
+                Str v3;
+                Any v4;
+                memset(&v3, 0, sizeof(v3));
+                memset(&v4, 0, sizeof(v4));
+                v3 = (Str){(const Byte *)"\377", 1};
+                {
+                    Str *v5 = (Str *)gen_alloc(a, &burrow_type_Str);
+                    v4.t = &burrow_type_Str;
+                    v4.data = v5;
+                }
+                map_set(v2, &v3, &v4);
+            }
+            {
+                Str v6;
+                Any v7;
+                memset(&v6, 0, sizeof(v6));
+                memset(&v7, 0, sizeof(v7));
+                v6 = (Str){(const Byte *)"\376", 1};
+                {
+                    Str *v8 = (Str *)gen_alloc(a, &burrow_type_Str);
+                    v7.t = &burrow_type_Str;
+                    v7.data = v8;
+                }
+                map_set(v2, &v6, &v7);
+            }
+            (*v1) = v2;
+        }
+        (*o).f0.t = &gt106;
+        (*o).f0.data = v1;
+    }
+}
+
+static void mk237(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9031,8 +10074,8 @@ static void mk208(Alloc *a, void *out) {
     }
 }
 
-static void mk209(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk238(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9044,8 +10087,8 @@ static void mk209(Alloc *a, void *out) {
     }
 }
 
-static void mk210(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk239(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9061,8 +10104,8 @@ static void mk210(Alloc *a, void *out) {
     }
 }
 
-static void mk211(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk240(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9078,8 +10121,8 @@ static void mk211(Alloc *a, void *out) {
     }
 }
 
-static void mk212(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk241(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9107,7 +10150,7 @@ static void mk212(Alloc *a, void *out) {
     }
 }
 
-static void mk213(Alloc *a, void *out) {
+static void mk242(Alloc *a, void *out) {
     bool *o = (bool *)out;
     void *P[1];
     (void)a;
@@ -9116,7 +10159,7 @@ static void mk213(Alloc *a, void *out) {
     (*o) = true;
 }
 
-static void mk214(Alloc *a, void *out) {
+static void mk243(Alloc *a, void *out) {
     bool *o = (bool *)out;
     void *P[1];
     (void)a;
@@ -9125,7 +10168,7 @@ static void mk214(Alloc *a, void *out) {
     (*o) = true;
 }
 
-static void mk215(Alloc *a, void *out) {
+static void mk244(Alloc *a, void *out) {
     G0 *o = (G0 *)out;
     void *P[1];
     (void)a;
@@ -9133,7 +10176,7 @@ static void mk215(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk216(Alloc *a, void *out) {
+static void mk245(Alloc *a, void *out) {
     G1 *o = (G1 *)out;
     void *P[1];
     (void)a;
@@ -9141,7 +10184,7 @@ static void mk216(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk217(Alloc *a, void *out) {
+static void mk246(Alloc *a, void *out) {
     bool *o = (bool *)out;
     void *P[1];
     (void)a;
@@ -9150,7 +10193,7 @@ static void mk217(Alloc *a, void *out) {
     (*o) = true;
 }
 
-static void mk218(Alloc *a, void *out) {
+static void mk247(Alloc *a, void *out) {
     bool *o = (bool *)out;
     void *P[1];
     (void)a;
@@ -9159,7 +10202,7 @@ static void mk218(Alloc *a, void *out) {
     (*o) = true;
 }
 
-static void mk219(Alloc *a, void *out) {
+static void mk248(Alloc *a, void *out) {
     bool *o = (bool *)out;
     void *P[1];
     (void)a;
@@ -9167,16 +10210,7 @@ static void mk219(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk220(Alloc *a, void *out) {
-    bool *o = (bool *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-    (*o) = true;
-}
-
-static void mk221(Alloc *a, void *out) {
+static void mk249(Alloc *a, void *out) {
     bool *o = (bool *)out;
     void *P[1];
     (void)a;
@@ -9185,7 +10219,7 @@ static void mk221(Alloc *a, void *out) {
     (*o) = true;
 }
 
-static void mk222(Alloc *a, void *out) {
+static void mk250(Alloc *a, void *out) {
     bool *o = (bool *)out;
     void *P[1];
     (void)a;
@@ -9194,7 +10228,7 @@ static void mk222(Alloc *a, void *out) {
     (*o) = true;
 }
 
-static void mk223(Alloc *a, void *out) {
+static void mk251(Alloc *a, void *out) {
     bool *o = (bool *)out;
     void *P[1];
     (void)a;
@@ -9203,7 +10237,7 @@ static void mk223(Alloc *a, void *out) {
     (*o) = true;
 }
 
-static void mk224(Alloc *a, void *out) {
+static void mk252(Alloc *a, void *out) {
     bool *o = (bool *)out;
     void *P[1];
     (void)a;
@@ -9212,7 +10246,7 @@ static void mk224(Alloc *a, void *out) {
     (*o) = true;
 }
 
-static void mk225(Alloc *a, void *out) {
+static void mk253(Alloc *a, void *out) {
     bool *o = (bool *)out;
     void *P[1];
     (void)a;
@@ -9221,7 +10255,7 @@ static void mk225(Alloc *a, void *out) {
     (*o) = true;
 }
 
-static void mk226(Alloc *a, void *out) {
+static void mk254(Alloc *a, void *out) {
     bool *o = (bool *)out;
     void *P[1];
     (void)a;
@@ -9230,7 +10264,7 @@ static void mk226(Alloc *a, void *out) {
     (*o) = true;
 }
 
-static void mk227(Alloc *a, void *out) {
+static void mk255(Alloc *a, void *out) {
     bool *o = (bool *)out;
     void *P[1];
     (void)a;
@@ -9239,7 +10273,16 @@ static void mk227(Alloc *a, void *out) {
     (*o) = true;
 }
 
-static void mk228(Alloc *a, void *out) {
+static void mk256(Alloc *a, void *out) {
+    bool *o = (bool *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = true;
+}
+
+static void mk257(Alloc *a, void *out) {
     Str *o = (Str *)out;
     void *P[1];
     (void)a;
@@ -9248,7 +10291,7 @@ static void mk228(Alloc *a, void *out) {
     (*o) = (Str){(const Byte *)"something", 9};
 }
 
-static void mk229(Alloc *a, void *out) {
+static void mk258(Alloc *a, void *out) {
     G3 *o = (G3 *)out;
     void *P[1];
     (void)a;
@@ -9256,7 +10299,7 @@ static void mk229(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk230(Alloc *a, void *out) {
+static void mk259(Alloc *a, void *out) {
     G3 *o = (G3 *)out;
     void *P[1];
     (void)a;
@@ -9264,7 +10307,7 @@ static void mk230(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk231(Alloc *a, void *out) {
+static void mk260(Alloc *a, void *out) {
     G4 *o = (G4 *)out;
     void *P[1];
     (void)a;
@@ -9272,7 +10315,7 @@ static void mk231(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk232(Alloc *a, void *out) {
+static void mk261(Alloc *a, void *out) {
     Str *o = (Str *)out;
     void *P[1];
     (void)a;
@@ -9281,7 +10324,7 @@ static void mk232(Alloc *a, void *out) {
     (*o) = (Str){(const Byte *)"nochange", 8};
 }
 
-static void mk233(Alloc *a, void *out) {
+static void mk262(Alloc *a, void *out) {
     Str *o = (Str *)out;
     void *P[1];
     (void)a;
@@ -9290,7 +10333,7 @@ static void mk233(Alloc *a, void *out) {
     (*o) = (Str){(const Byte *)"nochange", 8};
 }
 
-static void mk234(Alloc *a, void *out) {
+static void mk263(Alloc *a, void *out) {
     Str *o = (Str *)out;
     void *P[1];
     (void)a;
@@ -9299,7 +10342,7 @@ static void mk234(Alloc *a, void *out) {
     (*o) = (Str){(const Byte *)"nochange", 8};
 }
 
-static void mk235(Alloc *a, void *out) {
+static void mk264(Alloc *a, void *out) {
     Str *o = (Str *)out;
     void *P[1];
     (void)a;
@@ -9308,7 +10351,7 @@ static void mk235(Alloc *a, void *out) {
     (*o) = (Str){(const Byte *)"nochange", 8};
 }
 
-static void mk236(Alloc *a, void *out) {
+static void mk265(Alloc *a, void *out) {
     Str *o = (Str *)out;
     void *P[1];
     (void)a;
@@ -9317,7 +10360,7 @@ static void mk236(Alloc *a, void *out) {
     (*o) = (Str){(const Byte *)"goodbye", 7};
 }
 
-static void mk237(Alloc *a, void *out) {
+static void mk266(Alloc *a, void *out) {
     Str *o = (Str *)out;
     void *P[1];
     (void)a;
@@ -9325,7 +10368,7 @@ static void mk237(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk238(Alloc *a, void *out) {
+static void mk267(Alloc *a, void *out) {
     Str *o = (Str *)out;
     void *P[1];
     (void)a;
@@ -9333,7 +10376,7 @@ static void mk238(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk239(Alloc *a, void *out) {
+static void mk268(Alloc *a, void *out) {
     Str *o = (Str *)out;
     void *P[1];
     (void)a;
@@ -9341,7 +10384,7 @@ static void mk239(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk240(Alloc *a, void *out) {
+static void mk269(Alloc *a, void *out) {
     G7 *o = (G7 *)out;
     void *P[1];
     (void)a;
@@ -9362,254 +10405,8 @@ static void mk240(Alloc *a, void *out) {
     }
 }
 
-static void mk241(Alloc *a, void *out) {
-    G6 *o = (G6 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk242(Alloc *a, void *out) {
-    G7 *o = (G7 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk243(Alloc *a, void *out) {
-    G7 *o = (G7 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-    {
-        Slice v1 = slice_make(a, &burrow_type_uint8_t, 7, 7);
-        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(99);
-        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(104);
-        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(97);
-        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(110);
-        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(103);
-        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(101);
-        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(100);
-        (*o) = v1;
-    }
-}
-
-static void mk244(Alloc *a, void *out) {
-    G6 *o = (G6 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk245(Alloc *a, void *out) {
-    G8 *o = (G8 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk246(Alloc *a, void *out) {
-    G6 *o = (G6 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk247(Alloc *a, void *out) {
-    G10 *o = (G10 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk248(Alloc *a, void *out) {
-    G13 *o = (G13 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk249(Alloc *a, void *out) {
-    G150 *o = (G150 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk250(Alloc *a, void *out) {
-    G150 *o = (G150 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk251(Alloc *a, void *out) {
-    G150 *o = (G150 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk252(Alloc *a, void *out) {
-    G151 *o = (G151 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk253(Alloc *a, void *out) {
-    G151 *o = (G151 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk254(Alloc *a, void *out) {
-    G151 *o = (G151 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk255(Alloc *a, void *out) {
-    G151 *o = (G151 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk256(Alloc *a, void *out) {
-    G152 *o = (G152 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk257(Alloc *a, void *out) {
-    G152 *o = (G152 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk258(Alloc *a, void *out) {
-    G152 *o = (G152 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk259(Alloc *a, void *out) {
-    G152 *o = (G152 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk260(Alloc *a, void *out) {
-    G152 *o = (G152 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk261(Alloc *a, void *out) {
-    G152 *o = (G152 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk262(Alloc *a, void *out) {
-    G153 *o = (G153 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk263(Alloc *a, void *out) {
-    G153 *o = (G153 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk264(Alloc *a, void *out) {
-    G153 *o = (G153 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-    (*o).v[0] = (uint8_t)UINT64_C(255);
-    (*o).v[1] = (uint8_t)UINT64_C(255);
-    (*o).v[2] = (uint8_t)UINT64_C(255);
-}
-
-static void mk265(Alloc *a, void *out) {
-    G153 *o = (G153 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk266(Alloc *a, void *out) {
-    G81 *o = (G81 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk267(Alloc *a, void *out) {
-    G81 *o = (G81 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk268(Alloc *a, void *out) {
-    G81 *o = (G81 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk269(Alloc *a, void *out) {
-    G81 *o = (G81 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
 static void mk270(Alloc *a, void *out) {
-    G14 *o = (G14 *)out;
+    G6 *o = (G6 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9631,141 +10428,68 @@ static void mk272(Alloc *a, void *out) {
     (void)o;
     (void)P;
     {
-        Slice v1 = slice_make(a, &burrow_type_uint8_t, 8, 8);
-        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(110);
-        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(111);
-        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(99);
-        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(104);
-        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
-        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(110);
-        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(103);
-        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(101);
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 7, 7);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(99);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(104);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(103);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(101);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(100);
         (*o) = v1;
     }
 }
 
 static void mk273(Alloc *a, void *out) {
-    G7 *o = (G7 *)out;
+    G6 *o = (G6 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    {
-        Slice v1 = slice_make(a, &burrow_type_uint8_t, 8, 8);
-        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(110);
-        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(111);
-        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(99);
-        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(104);
-        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
-        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(110);
-        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(103);
-        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(101);
-        (*o) = v1;
-    }
 }
 
 static void mk274(Alloc *a, void *out) {
-    G7 *o = (G7 *)out;
+    G8 *o = (G8 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    {
-        Slice v1 = slice_make(a, &burrow_type_uint8_t, 8, 8);
-        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(110);
-        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(111);
-        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(99);
-        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(104);
-        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
-        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(110);
-        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(103);
-        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(101);
-        (*o) = v1;
-    }
 }
 
 static void mk275(Alloc *a, void *out) {
-    G7 *o = (G7 *)out;
+    G6 *o = (G6 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    {
-        Slice v1 = slice_make(a, &burrow_type_uint8_t, 8, 8);
-        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(110);
-        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(111);
-        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(99);
-        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(104);
-        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
-        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(110);
-        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(103);
-        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(101);
-        (*o) = v1;
-    }
 }
 
 static void mk276(Alloc *a, void *out) {
-    G7 *o = (G7 *)out;
+    G10 *o = (G10 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    {
-        Slice v1 = slice_make(a, &burrow_type_uint8_t, 8, 8);
-        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(110);
-        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(111);
-        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(99);
-        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(104);
-        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
-        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(110);
-        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(103);
-        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(101);
-        (*o) = v1;
-    }
 }
 
 static void mk277(Alloc *a, void *out) {
-    G7 *o = (G7 *)out;
+    G13 *o = (G13 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    {
-        Slice v1 = slice_make(a, &burrow_type_uint8_t, 8, 8);
-        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(110);
-        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(111);
-        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(99);
-        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(104);
-        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
-        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(110);
-        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(103);
-        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(101);
-        (*o) = v1;
-    }
 }
 
 static void mk278(Alloc *a, void *out) {
-    G7 *o = (G7 *)out;
+    G155 *o = (G155 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    {
-        Slice v1 = slice_make(a, &burrow_type_uint8_t, 8, 8);
-        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(110);
-        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(111);
-        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(99);
-        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(104);
-        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
-        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(110);
-        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(103);
-        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(101);
-        (*o) = v1;
-    }
 }
 
 static void mk279(Alloc *a, void *out) {
-    G7 *o = (G7 *)out;
+    G155 *o = (G155 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9773,16 +10497,15 @@ static void mk279(Alloc *a, void *out) {
 }
 
 static void mk280(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    G155 *o = (G155 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Int)(int64_t)UINT64_C(1);
 }
 
 static void mk281(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    G156 *o = (G156 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9790,16 +10513,15 @@ static void mk281(Alloc *a, void *out) {
 }
 
 static void mk282(Alloc *a, void *out) {
-    int8_t *o = (int8_t *)out;
+    G156 *o = (G156 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (int8_t)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk283(Alloc *a, void *out) {
-    int8_t *o = (int8_t *)out;
+    G156 *o = (G156 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9807,7 +10529,7 @@ static void mk283(Alloc *a, void *out) {
 }
 
 static void mk284(Alloc *a, void *out) {
-    int8_t *o = (int8_t *)out;
+    G156 *o = (G156 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9815,25 +10537,23 @@ static void mk284(Alloc *a, void *out) {
 }
 
 static void mk285(Alloc *a, void *out) {
-    int8_t *o = (int8_t *)out;
+    G157 *o = (G157 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (int8_t)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk286(Alloc *a, void *out) {
-    int16_t *o = (int16_t *)out;
+    G157 *o = (G157 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (int16_t)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk287(Alloc *a, void *out) {
-    int16_t *o = (int16_t *)out;
+    G157 *o = (G157 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9841,7 +10561,7 @@ static void mk287(Alloc *a, void *out) {
 }
 
 static void mk288(Alloc *a, void *out) {
-    int16_t *o = (int16_t *)out;
+    G157 *o = (G157 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9849,25 +10569,23 @@ static void mk288(Alloc *a, void *out) {
 }
 
 static void mk289(Alloc *a, void *out) {
-    int16_t *o = (int16_t *)out;
+    G157 *o = (G157 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (int16_t)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk290(Alloc *a, void *out) {
-    int32_t *o = (int32_t *)out;
+    G157 *o = (G157 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (int32_t)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk291(Alloc *a, void *out) {
-    int32_t *o = (int32_t *)out;
+    G158 *o = (G158 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9875,7 +10593,7 @@ static void mk291(Alloc *a, void *out) {
 }
 
 static void mk292(Alloc *a, void *out) {
-    int32_t *o = (int32_t *)out;
+    G158 *o = (G158 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9883,25 +10601,26 @@ static void mk292(Alloc *a, void *out) {
 }
 
 static void mk293(Alloc *a, void *out) {
-    int32_t *o = (int32_t *)out;
+    G158 *o = (G158 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (int32_t)(int64_t)UINT64_C(18446744073709551615);
+    (*o).v[0] = (uint8_t)UINT64_C(255);
+    (*o).v[1] = (uint8_t)UINT64_C(255);
+    (*o).v[2] = (uint8_t)UINT64_C(255);
 }
 
 static void mk294(Alloc *a, void *out) {
-    int64_t *o = (int64_t *)out;
+    G158 *o = (G158 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (int64_t)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk295(Alloc *a, void *out) {
-    int64_t *o = (int64_t *)out;
+    G81 *o = (G81 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9909,7 +10628,7 @@ static void mk295(Alloc *a, void *out) {
 }
 
 static void mk296(Alloc *a, void *out) {
-    int64_t *o = (int64_t *)out;
+    G81 *o = (G81 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9917,16 +10636,15 @@ static void mk296(Alloc *a, void *out) {
 }
 
 static void mk297(Alloc *a, void *out) {
-    int64_t *o = (int64_t *)out;
+    G81 *o = (G81 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (int64_t)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk298(Alloc *a, void *out) {
-    G16 *o = (G16 *)out;
+    G81 *o = (G81 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9934,7 +10652,7 @@ static void mk298(Alloc *a, void *out) {
 }
 
 static void mk299(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    G14 *o = (G14 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9942,7 +10660,7 @@ static void mk299(Alloc *a, void *out) {
 }
 
 static void mk300(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    G7 *o = (G7 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -9950,74 +10668,151 @@ static void mk300(Alloc *a, void *out) {
 }
 
 static void mk301(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    G7 *o = (G7 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 8, 8);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(111);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(99);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(104);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(103);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(101);
+        (*o) = v1;
+    }
 }
 
 static void mk302(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    G7 *o = (G7 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 8, 8);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(111);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(99);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(104);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(103);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(101);
+        (*o) = v1;
+    }
 }
 
 static void mk303(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    G7 *o = (G7 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Int)(int64_t)UINT64_C(1);
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 8, 8);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(111);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(99);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(104);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(103);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(101);
+        (*o) = v1;
+    }
 }
 
 static void mk304(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    G7 *o = (G7 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 8, 8);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(111);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(99);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(104);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(103);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(101);
+        (*o) = v1;
+    }
 }
 
 static void mk305(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    G7 *o = (G7 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 8, 8);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(111);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(99);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(104);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(103);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(101);
+        (*o) = v1;
+    }
 }
 
 static void mk306(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    G7 *o = (G7 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 8, 8);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(111);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(99);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(104);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(103);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(101);
+        (*o) = v1;
+    }
 }
 
 static void mk307(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    G7 *o = (G7 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 8, 8);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(111);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(99);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(104);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(97);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(103);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(101);
+        (*o) = v1;
+    }
 }
 
 static void mk308(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    G7 *o = (G7 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk309(Alloc *a, void *out) {
@@ -10026,7 +10821,7 @@ static void mk309(Alloc *a, void *out) {
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
+    (*o) = (Int)(int64_t)UINT64_C(1);
 }
 
 static void mk310(Alloc *a, void *out) {
@@ -10035,64 +10830,61 @@ static void mk310(Alloc *a, void *out) {
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk311(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    int8_t *o = (int8_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
+    (*o) = (int8_t)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk312(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    int8_t *o = (int8_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk313(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    int8_t *o = (int8_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk314(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    int8_t *o = (int8_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
+    (*o) = (int8_t)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk315(Alloc *a, void *out) {
-    Int *o = (Int *)out;
+    int16_t *o = (int16_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
+    (*o) = (int16_t)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk316(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    int16_t *o = (int16_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Uint)UINT64_C(1);
 }
 
 static void mk317(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    int16_t *o = (int16_t *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -10100,68 +10892,67 @@ static void mk317(Alloc *a, void *out) {
 }
 
 static void mk318(Alloc *a, void *out) {
-    uint8_t *o = (uint8_t *)out;
+    int16_t *o = (int16_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (uint8_t)UINT64_C(1);
+    (*o) = (int16_t)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk319(Alloc *a, void *out) {
-    uint8_t *o = (uint8_t *)out;
+    int32_t *o = (int32_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
+    (*o) = (int32_t)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk320(Alloc *a, void *out) {
-    uint8_t *o = (uint8_t *)out;
+    int32_t *o = (int32_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (uint8_t)UINT64_C(1);
 }
 
 static void mk321(Alloc *a, void *out) {
-    uint16_t *o = (uint16_t *)out;
+    int32_t *o = (int32_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (uint16_t)UINT64_C(1);
 }
 
 static void mk322(Alloc *a, void *out) {
-    uint16_t *o = (uint16_t *)out;
+    int32_t *o = (int32_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
+    (*o) = (int32_t)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk323(Alloc *a, void *out) {
-    uint16_t *o = (uint16_t *)out;
+    int64_t *o = (int64_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (uint16_t)UINT64_C(1);
+    (*o) = (int64_t)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk324(Alloc *a, void *out) {
-    uint32_t *o = (uint32_t *)out;
+    int64_t *o = (int64_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (uint32_t)UINT64_C(1);
 }
 
 static void mk325(Alloc *a, void *out) {
-    uint32_t *o = (uint32_t *)out;
+    int64_t *o = (int64_t *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -10169,25 +10960,24 @@ static void mk325(Alloc *a, void *out) {
 }
 
 static void mk326(Alloc *a, void *out) {
-    uint32_t *o = (uint32_t *)out;
+    int64_t *o = (int64_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (uint32_t)UINT64_C(1);
+    (*o) = (int64_t)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk327(Alloc *a, void *out) {
-    uint64_t *o = (uint64_t *)out;
+    G16 *o = (G16 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (uint64_t)UINT64_C(1);
 }
 
 static void mk328(Alloc *a, void *out) {
-    uint64_t *o = (uint64_t *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -10195,24 +10985,24 @@ static void mk328(Alloc *a, void *out) {
 }
 
 static void mk329(Alloc *a, void *out) {
-    uint64_t *o = (uint64_t *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (uint64_t)UINT64_C(1);
 }
 
 static void mk330(Alloc *a, void *out) {
-    Uintptr *o = (Uintptr *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
+    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk331(Alloc *a, void *out) {
-    G17 *o = (G17 *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -10220,117 +11010,119 @@ static void mk331(Alloc *a, void *out) {
 }
 
 static void mk332(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
+    (*o) = (Int)(int64_t)UINT64_C(1);
 }
 
 static void mk333(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
+    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk334(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Uint)UINT64_C(1);
+    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk335(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
+    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk336(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Uint)UINT64_C(1);
+    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk337(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Uint)UINT64_C(1);
+    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk338(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Uint)UINT64_C(10);
+    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk339(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Uint)UINT64_C(10);
+    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk340(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Uint)UINT64_C(10);
+    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk341(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Uint)UINT64_C(10);
+    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk342(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Uint)UINT64_C(1);
+    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk343(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Uint)UINT64_C(1);
+    (*o) = (Int)(int64_t)UINT64_C(18446744073709551615);
 }
 
 static void mk344(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    Int *o = (Int *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Uint)UINT64_C(1);
 }
 
 static void mk345(Alloc *a, void *out) {
@@ -10348,100 +11140,97 @@ static void mk346(Alloc *a, void *out) {
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Uint)UINT64_C(1);
 }
 
 static void mk347(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    uint8_t *o = (uint8_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Uint)UINT64_C(1);
+    (*o) = (uint8_t)UINT64_C(1);
 }
 
 static void mk348(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    uint8_t *o = (uint8_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (Uint)UINT64_C(1);
 }
 
 static void mk349(Alloc *a, void *out) {
-    Uint *o = (Uint *)out;
+    uint8_t *o = (uint8_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
+    (*o) = (uint8_t)UINT64_C(1);
 }
 
 static void mk350(Alloc *a, void *out) {
-    double *o = (double *)out;
+    uint16_t *o = (uint16_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (double)0x1.028f5c28f5c29p+06;
+    (*o) = (uint16_t)UINT64_C(1);
 }
 
 static void mk351(Alloc *a, void *out) {
-    float *o = (float *)out;
+    uint16_t *o = (uint16_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (float)0x1.028f5cp+05;
 }
 
 static void mk352(Alloc *a, void *out) {
-    float *o = (float *)out;
+    uint16_t *o = (uint16_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (float)0x1.028f5cp+05;
+    (*o) = (uint16_t)UINT64_C(1);
 }
 
 static void mk353(Alloc *a, void *out) {
-    float *o = (float *)out;
+    uint32_t *o = (uint32_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (float)0x1.028f5cp+05;
+    (*o) = (uint32_t)UINT64_C(1);
 }
 
 static void mk354(Alloc *a, void *out) {
-    double *o = (double *)out;
+    uint32_t *o = (uint32_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (double)0x1.028f5c28f5c29p+06;
 }
 
 static void mk355(Alloc *a, void *out) {
-    double *o = (double *)out;
+    uint32_t *o = (uint32_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (double)0x1.028f5c28f5c29p+06;
+    (*o) = (uint32_t)UINT64_C(1);
 }
 
 static void mk356(Alloc *a, void *out) {
-    double *o = (double *)out;
+    uint64_t *o = (uint64_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (double)0x1.028f5c28f5c29p+06;
+    (*o) = (uint64_t)UINT64_C(1);
 }
 
 static void mk357(Alloc *a, void *out) {
-    Any *o = (Any *)out;
+    uint64_t *o = (uint64_t *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -10449,15 +11238,16 @@ static void mk357(Alloc *a, void *out) {
 }
 
 static void mk358(Alloc *a, void *out) {
-    G18 *o = (G18 *)out;
+    uint64_t *o = (uint64_t *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
+    (*o) = (uint64_t)UINT64_C(1);
 }
 
 static void mk359(Alloc *a, void *out) {
-    double *o = (double *)out;
+    Uintptr *o = (Uintptr *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -10465,7 +11255,7 @@ static void mk359(Alloc *a, void *out) {
 }
 
 static void mk360(Alloc *a, void *out) {
-    double *o = (double *)out;
+    G17 *o = (G17 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -10473,7 +11263,7 @@ static void mk360(Alloc *a, void *out) {
 }
 
 static void mk361(Alloc *a, void *out) {
-    double *o = (double *)out;
+    Uint *o = (Uint *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -10481,69 +11271,156 @@ static void mk361(Alloc *a, void *out) {
 }
 
 static void mk362(Alloc *a, void *out) {
-    double *o = (double *)out;
+    Uint *o = (Uint *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (double)0x1.028f5c28f5c29p+06;
 }
 
 static void mk363(Alloc *a, void *out) {
-    double *o = (double *)out;
+    Uint *o = (Uint *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (double)0x1.028f5c28f5c29p+06;
+    (*o) = (Uint)UINT64_C(1);
 }
 
 static void mk364(Alloc *a, void *out) {
-    double *o = (double *)out;
+    Uint *o = (Uint *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (double)0x1.028f5c28f5c29p+06;
 }
 
 static void mk365(Alloc *a, void *out) {
-    double *o = (double *)out;
+    Uint *o = (Uint *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (double)0x1.028f5c28f5c29p+06;
+    (*o) = (Uint)UINT64_C(1);
 }
 
 static void mk366(Alloc *a, void *out) {
-    double *o = (double *)out;
+    Uint *o = (Uint *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (double)0x1.028f5c28f5c29p+06;
+    (*o) = (Uint)UINT64_C(1);
 }
 
 static void mk367(Alloc *a, void *out) {
-    double *o = (double *)out;
+    Uint *o = (Uint *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (double)0x1.028f5c28f5c29p+06;
+    (*o) = (Uint)UINT64_C(10);
 }
 
 static void mk368(Alloc *a, void *out) {
-    double *o = (double *)out;
+    Uint *o = (Uint *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    (*o) = (double)0x1.028f5c28f5c29p+06;
+    (*o) = (Uint)UINT64_C(10);
 }
 
 static void mk369(Alloc *a, void *out) {
+    Uint *o = (Uint *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (Uint)UINT64_C(10);
+}
+
+static void mk370(Alloc *a, void *out) {
+    Uint *o = (Uint *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (Uint)UINT64_C(10);
+}
+
+static void mk371(Alloc *a, void *out) {
+    Uint *o = (Uint *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (Uint)UINT64_C(1);
+}
+
+static void mk372(Alloc *a, void *out) {
+    Uint *o = (Uint *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (Uint)UINT64_C(1);
+}
+
+static void mk373(Alloc *a, void *out) {
+    Uint *o = (Uint *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (Uint)UINT64_C(1);
+}
+
+static void mk374(Alloc *a, void *out) {
+    Uint *o = (Uint *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (Uint)UINT64_C(1);
+}
+
+static void mk375(Alloc *a, void *out) {
+    Uint *o = (Uint *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (Uint)UINT64_C(1);
+}
+
+static void mk376(Alloc *a, void *out) {
+    Uint *o = (Uint *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (Uint)UINT64_C(1);
+}
+
+static void mk377(Alloc *a, void *out) {
+    Uint *o = (Uint *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (Uint)UINT64_C(1);
+}
+
+static void mk378(Alloc *a, void *out) {
+    Uint *o = (Uint *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk379(Alloc *a, void *out) {
     double *o = (double *)out;
     void *P[1];
     (void)a;
@@ -10552,7 +11429,77 @@ static void mk369(Alloc *a, void *out) {
     (*o) = (double)0x1.028f5c28f5c29p+06;
 }
 
-static void mk370(Alloc *a, void *out) {
+static void mk380(Alloc *a, void *out) {
+    float *o = (float *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (float)0x1.028f5cp+05;
+}
+
+static void mk381(Alloc *a, void *out) {
+    float *o = (float *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (float)0x1.028f5cp+05;
+}
+
+static void mk382(Alloc *a, void *out) {
+    float *o = (float *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (float)0x1.028f5cp+05;
+}
+
+static void mk383(Alloc *a, void *out) {
+    double *o = (double *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (double)0x1.028f5c28f5c29p+06;
+}
+
+static void mk384(Alloc *a, void *out) {
+    double *o = (double *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (double)0x1.028f5c28f5c29p+06;
+}
+
+static void mk385(Alloc *a, void *out) {
+    double *o = (double *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (double)0x1.028f5c28f5c29p+06;
+}
+
+static void mk386(Alloc *a, void *out) {
+    Any *o = (Any *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk387(Alloc *a, void *out) {
+    G18 *o = (G18 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk388(Alloc *a, void *out) {
     double *o = (double *)out;
     void *P[1];
     (void)a;
@@ -10560,7 +11507,103 @@ static void mk370(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk371(Alloc *a, void *out) {
+static void mk389(Alloc *a, void *out) {
+    double *o = (double *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk390(Alloc *a, void *out) {
+    double *o = (double *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk391(Alloc *a, void *out) {
+    double *o = (double *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (double)0x1.028f5c28f5c29p+06;
+}
+
+static void mk392(Alloc *a, void *out) {
+    double *o = (double *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (double)0x1.028f5c28f5c29p+06;
+}
+
+static void mk393(Alloc *a, void *out) {
+    double *o = (double *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (double)0x1.028f5c28f5c29p+06;
+}
+
+static void mk394(Alloc *a, void *out) {
+    double *o = (double *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (double)0x1.028f5c28f5c29p+06;
+}
+
+static void mk395(Alloc *a, void *out) {
+    double *o = (double *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (double)0x1.028f5c28f5c29p+06;
+}
+
+static void mk396(Alloc *a, void *out) {
+    double *o = (double *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (double)0x1.028f5c28f5c29p+06;
+}
+
+static void mk397(Alloc *a, void *out) {
+    double *o = (double *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (double)0x1.028f5c28f5c29p+06;
+}
+
+static void mk398(Alloc *a, void *out) {
+    double *o = (double *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o) = (double)0x1.028f5c28f5c29p+06;
+}
+
+static void mk399(Alloc *a, void *out) {
+    double *o = (double *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk400(Alloc *a, void *out) {
     G33 *o = (G33 *)out;
     void *P[1];
     (void)a;
@@ -10581,63 +11624,7 @@ static void mk371(Alloc *a, void *out) {
     }
 }
 
-static void mk372(Alloc *a, void *out) {
-    G154 *o = (G154 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk373(Alloc *a, void *out) {
-    G155 *o = (G155 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk374(Alloc *a, void *out) {
-    G21 *o = (G21 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk375(Alloc *a, void *out) {
-    G23 *o = (G23 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk376(Alloc *a, void *out) {
-    G156 *o = (G156 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk377(Alloc *a, void *out) {
-    G157 *o = (G157 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk378(Alloc *a, void *out) {
-    G158 *o = (G158 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk379(Alloc *a, void *out) {
+static void mk401(Alloc *a, void *out) {
     G159 *o = (G159 *)out;
     void *P[1];
     (void)a;
@@ -10645,7 +11632,7 @@ static void mk379(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk380(Alloc *a, void *out) {
+static void mk402(Alloc *a, void *out) {
     G160 *o = (G160 *)out;
     void *P[1];
     (void)a;
@@ -10653,32 +11640,88 @@ static void mk380(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk381(Alloc *a, void *out) {
-    G156 *o = (G156 *)out;
+static void mk403(Alloc *a, void *out) {
+    G21 *o = (G21 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk382(Alloc *a, void *out) {
-    G156 *o = (G156 *)out;
+static void mk404(Alloc *a, void *out) {
+    G23 *o = (G23 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk383(Alloc *a, void *out) {
-    G156 *o = (G156 *)out;
+static void mk405(Alloc *a, void *out) {
+    G161 *o = (G161 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk384(Alloc *a, void *out) {
-    G156 *o = (G156 *)out;
+static void mk406(Alloc *a, void *out) {
+    G162 *o = (G162 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk407(Alloc *a, void *out) {
+    G163 *o = (G163 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk408(Alloc *a, void *out) {
+    G164 *o = (G164 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk409(Alloc *a, void *out) {
+    G165 *o = (G165 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk410(Alloc *a, void *out) {
+    G161 *o = (G161 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk411(Alloc *a, void *out) {
+    G161 *o = (G161 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk412(Alloc *a, void *out) {
+    G161 *o = (G161 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk413(Alloc *a, void *out) {
+    G161 *o = (G161 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -10697,7 +11740,7 @@ static void mk384(Alloc *a, void *out) {
     }
 }
 
-static void mk385(Alloc *a, void *out) {
+static void mk414(Alloc *a, void *out) {
     G31 *o = (G31 *)out;
     void *P[1];
     (void)a;
@@ -10705,7 +11748,7 @@ static void mk385(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk386(Alloc *a, void *out) {
+static void mk415(Alloc *a, void *out) {
     G31 *o = (G31 *)out;
     void *P[1];
     (void)a;
@@ -10713,7 +11756,7 @@ static void mk386(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk387(Alloc *a, void *out) {
+static void mk416(Alloc *a, void *out) {
     G31 *o = (G31 *)out;
     void *P[1];
     (void)a;
@@ -10734,15 +11777,15 @@ static void mk387(Alloc *a, void *out) {
     }
 }
 
-static void mk388(Alloc *a, void *out) {
-    G149 *o = (G149 *)out;
+static void mk417(Alloc *a, void *out) {
+    G154 *o = (G154 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk389(Alloc *a, void *out) {
+static void mk418(Alloc *a, void *out) {
     G34 *o = (G34 *)out;
     void *P[1];
     (void)a;
@@ -10750,7 +11793,7 @@ static void mk389(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk390(Alloc *a, void *out) {
+static void mk419(Alloc *a, void *out) {
     G36 *o = (G36 *)out;
     void *P[1];
     (void)a;
@@ -10758,8 +11801,8 @@ static void mk390(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk391(Alloc *a, void *out) {
-    G161 *o = (G161 *)out;
+static void mk420(Alloc *a, void *out) {
+    G166 *o = (G166 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -10791,7 +11834,7 @@ static void mk391(Alloc *a, void *out) {
     }
 }
 
-static void mk392(Alloc *a, void *out) {
+static void mk421(Alloc *a, void *out) {
     G33 *o = (G33 *)out;
     void *P[1];
     (void)a;
@@ -10812,7 +11855,7 @@ static void mk392(Alloc *a, void *out) {
     }
 }
 
-static void mk393(Alloc *a, void *out) {
+static void mk422(Alloc *a, void *out) {
     G33 *o = (G33 *)out;
     void *P[1];
     (void)a;
@@ -10833,7 +11876,7 @@ static void mk393(Alloc *a, void *out) {
     }
 }
 
-static void mk394(Alloc *a, void *out) {
+static void mk423(Alloc *a, void *out) {
     G33 *o = (G33 *)out;
     void *P[1];
     (void)a;
@@ -10854,7 +11897,7 @@ static void mk394(Alloc *a, void *out) {
     }
 }
 
-static void mk395(Alloc *a, void *out) {
+static void mk424(Alloc *a, void *out) {
     G33 *o = (G33 *)out;
     void *P[1];
     (void)a;
@@ -10875,7 +11918,7 @@ static void mk395(Alloc *a, void *out) {
     }
 }
 
-static void mk396(Alloc *a, void *out) {
+static void mk425(Alloc *a, void *out) {
     G33 *o = (G33 *)out;
     void *P[1];
     (void)a;
@@ -10887,7 +11930,7 @@ static void mk396(Alloc *a, void *out) {
     }
 }
 
-static void mk397(Alloc *a, void *out) {
+static void mk426(Alloc *a, void *out) {
     G41 *o = (G41 *)out;
     void *P[1];
     (void)a;
@@ -10896,7 +11939,7 @@ static void mk397(Alloc *a, void *out) {
     (*o).f1 = (Str){(const Byte *)"something", 9};
 }
 
-static void mk398(Alloc *a, void *out) {
+static void mk427(Alloc *a, void *out) {
     G41 *o = (G41 *)out;
     void *P[1];
     (void)a;
@@ -10913,7 +11956,7 @@ static void mk398(Alloc *a, void *out) {
     }
 }
 
-static void mk399(Alloc *a, void *out) {
+static void mk428(Alloc *a, void *out) {
     G41 *o = (G41 *)out;
     void *P[1];
     (void)a;
@@ -10921,7 +11964,7 @@ static void mk399(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk400(Alloc *a, void *out) {
+static void mk429(Alloc *a, void *out) {
     G41 *o = (G41 *)out;
     void *P[1];
     (void)a;
@@ -11062,240 +12105,8 @@ static void mk400(Alloc *a, void *out) {
     }
 }
 
-static void mk401(Alloc *a, void *out) {
-    G56 *o = (G56 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk402(Alloc *a, void *out) {
-    G56 *o = (G56 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk403(Alloc *a, void *out) {
-    G62 *o = (G62 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk404(Alloc *a, void *out) {
-    G62 *o = (G62 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk405(Alloc *a, void *out) {
-    G63 *o = (G63 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk406(Alloc *a, void *out) {
-    G63 *o = (G63 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk407(Alloc *a, void *out) {
-    G64 *o = (G64 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk408(Alloc *a, void *out) {
-    G64 *o = (G64 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk409(Alloc *a, void *out) {
-    G65 *o = (G65 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk410(Alloc *a, void *out) {
-    G65 *o = (G65 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk411(Alloc *a, void *out) {
-    G66 *o = (G66 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk412(Alloc *a, void *out) {
-    G66 *o = (G66 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk413(Alloc *a, void *out) {
-    G67 *o = (G67 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk414(Alloc *a, void *out) {
-    G67 *o = (G67 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk415(Alloc *a, void *out) {
-    G68 *o = (G68 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk416(Alloc *a, void *out) {
-    G68 *o = (G68 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk417(Alloc *a, void *out) {
-    G69 *o = (G69 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk418(Alloc *a, void *out) {
-    G69 *o = (G69 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk419(Alloc *a, void *out) {
-    G70 *o = (G70 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk420(Alloc *a, void *out) {
-    G73 *o = (G73 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk421(Alloc *a, void *out) {
-    G73 *o = (G73 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk422(Alloc *a, void *out) {
-    G59 *o = (G59 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk423(Alloc *a, void *out) {
-    G59 *o = (G59 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk424(Alloc *a, void *out) {
-    G59 *o = (G59 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk425(Alloc *a, void *out) {
-    G59 *o = (G59 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk426(Alloc *a, void *out) {
-    G64 *o = (G64 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk427(Alloc *a, void *out) {
-    G64 *o = (G64 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk428(Alloc *a, void *out) {
-    G65 *o = (G65 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk429(Alloc *a, void *out) {
-    G65 *o = (G65 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
 static void mk430(Alloc *a, void *out) {
-    G66 *o = (G66 *)out;
+    G56 *o = (G56 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11303,7 +12114,7 @@ static void mk430(Alloc *a, void *out) {
 }
 
 static void mk431(Alloc *a, void *out) {
-    G66 *o = (G66 *)out;
+    G56 *o = (G56 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11311,7 +12122,7 @@ static void mk431(Alloc *a, void *out) {
 }
 
 static void mk432(Alloc *a, void *out) {
-    G67 *o = (G67 *)out;
+    G62 *o = (G62 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11319,7 +12130,7 @@ static void mk432(Alloc *a, void *out) {
 }
 
 static void mk433(Alloc *a, void *out) {
-    G67 *o = (G67 *)out;
+    G62 *o = (G62 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11327,7 +12138,7 @@ static void mk433(Alloc *a, void *out) {
 }
 
 static void mk434(Alloc *a, void *out) {
-    G68 *o = (G68 *)out;
+    G63 *o = (G63 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11335,7 +12146,7 @@ static void mk434(Alloc *a, void *out) {
 }
 
 static void mk435(Alloc *a, void *out) {
-    G68 *o = (G68 *)out;
+    G63 *o = (G63 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11343,7 +12154,7 @@ static void mk435(Alloc *a, void *out) {
 }
 
 static void mk436(Alloc *a, void *out) {
-    G69 *o = (G69 *)out;
+    G64 *o = (G64 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11351,7 +12162,7 @@ static void mk436(Alloc *a, void *out) {
 }
 
 static void mk437(Alloc *a, void *out) {
-    G69 *o = (G69 *)out;
+    G64 *o = (G64 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11359,7 +12170,7 @@ static void mk437(Alloc *a, void *out) {
 }
 
 static void mk438(Alloc *a, void *out) {
-    G70 *o = (G70 *)out;
+    G65 *o = (G65 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11367,7 +12178,7 @@ static void mk438(Alloc *a, void *out) {
 }
 
 static void mk439(Alloc *a, void *out) {
-    G70 *o = (G70 *)out;
+    G65 *o = (G65 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11375,7 +12186,7 @@ static void mk439(Alloc *a, void *out) {
 }
 
 static void mk440(Alloc *a, void *out) {
-    G73 *o = (G73 *)out;
+    G66 *o = (G66 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11383,7 +12194,7 @@ static void mk440(Alloc *a, void *out) {
 }
 
 static void mk441(Alloc *a, void *out) {
-    G73 *o = (G73 *)out;
+    G66 *o = (G66 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11391,7 +12202,7 @@ static void mk441(Alloc *a, void *out) {
 }
 
 static void mk442(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G67 *o = (G67 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11399,7 +12210,7 @@ static void mk442(Alloc *a, void *out) {
 }
 
 static void mk443(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G67 *o = (G67 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11407,7 +12218,7 @@ static void mk443(Alloc *a, void *out) {
 }
 
 static void mk444(Alloc *a, void *out) {
-    G80 *o = (G80 *)out;
+    G68 *o = (G68 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11415,7 +12226,7 @@ static void mk444(Alloc *a, void *out) {
 }
 
 static void mk445(Alloc *a, void *out) {
-    G80 *o = (G80 *)out;
+    G68 *o = (G68 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11423,7 +12234,7 @@ static void mk445(Alloc *a, void *out) {
 }
 
 static void mk446(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G69 *o = (G69 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11431,7 +12242,7 @@ static void mk446(Alloc *a, void *out) {
 }
 
 static void mk447(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G69 *o = (G69 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11439,7 +12250,7 @@ static void mk447(Alloc *a, void *out) {
 }
 
 static void mk448(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G70 *o = (G70 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11447,7 +12258,7 @@ static void mk448(Alloc *a, void *out) {
 }
 
 static void mk449(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G73 *o = (G73 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11455,7 +12266,7 @@ static void mk449(Alloc *a, void *out) {
 }
 
 static void mk450(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G73 *o = (G73 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11463,7 +12274,7 @@ static void mk450(Alloc *a, void *out) {
 }
 
 static void mk451(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G59 *o = (G59 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11471,7 +12282,7 @@ static void mk451(Alloc *a, void *out) {
 }
 
 static void mk452(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G59 *o = (G59 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11479,7 +12290,7 @@ static void mk452(Alloc *a, void *out) {
 }
 
 static void mk453(Alloc *a, void *out) {
-    G162 *o = (G162 *)out;
+    G59 *o = (G59 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11487,7 +12298,7 @@ static void mk453(Alloc *a, void *out) {
 }
 
 static void mk454(Alloc *a, void *out) {
-    G162 *o = (G162 *)out;
+    G59 *o = (G59 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11495,7 +12306,7 @@ static void mk454(Alloc *a, void *out) {
 }
 
 static void mk455(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G64 *o = (G64 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11503,7 +12314,7 @@ static void mk455(Alloc *a, void *out) {
 }
 
 static void mk456(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G64 *o = (G64 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11511,7 +12322,7 @@ static void mk456(Alloc *a, void *out) {
 }
 
 static void mk457(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G65 *o = (G65 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11519,7 +12330,7 @@ static void mk457(Alloc *a, void *out) {
 }
 
 static void mk458(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G65 *o = (G65 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11527,7 +12338,7 @@ static void mk458(Alloc *a, void *out) {
 }
 
 static void mk459(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G66 *o = (G66 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11535,7 +12346,7 @@ static void mk459(Alloc *a, void *out) {
 }
 
 static void mk460(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G66 *o = (G66 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11543,7 +12354,7 @@ static void mk460(Alloc *a, void *out) {
 }
 
 static void mk461(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G67 *o = (G67 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11551,7 +12362,7 @@ static void mk461(Alloc *a, void *out) {
 }
 
 static void mk462(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G67 *o = (G67 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11559,7 +12370,7 @@ static void mk462(Alloc *a, void *out) {
 }
 
 static void mk463(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G68 *o = (G68 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11567,7 +12378,7 @@ static void mk463(Alloc *a, void *out) {
 }
 
 static void mk464(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G68 *o = (G68 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11575,7 +12386,7 @@ static void mk464(Alloc *a, void *out) {
 }
 
 static void mk465(Alloc *a, void *out) {
-    G79 *o = (G79 *)out;
+    G69 *o = (G69 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11583,7 +12394,7 @@ static void mk465(Alloc *a, void *out) {
 }
 
 static void mk466(Alloc *a, void *out) {
-    G82 *o = (G82 *)out;
+    G69 *o = (G69 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11591,7 +12402,7 @@ static void mk466(Alloc *a, void *out) {
 }
 
 static void mk467(Alloc *a, void *out) {
-    G83 *o = (G83 *)out;
+    G70 *o = (G70 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11599,7 +12410,7 @@ static void mk467(Alloc *a, void *out) {
 }
 
 static void mk468(Alloc *a, void *out) {
-    G83 *o = (G83 *)out;
+    G70 *o = (G70 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11607,7 +12418,7 @@ static void mk468(Alloc *a, void *out) {
 }
 
 static void mk469(Alloc *a, void *out) {
-    G83 *o = (G83 *)out;
+    G73 *o = (G73 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11615,7 +12426,7 @@ static void mk469(Alloc *a, void *out) {
 }
 
 static void mk470(Alloc *a, void *out) {
-    G83 *o = (G83 *)out;
+    G73 *o = (G73 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11623,7 +12434,7 @@ static void mk470(Alloc *a, void *out) {
 }
 
 static void mk471(Alloc *a, void *out) {
-    G84 *o = (G84 *)out;
+    G79 *o = (G79 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11631,7 +12442,7 @@ static void mk471(Alloc *a, void *out) {
 }
 
 static void mk472(Alloc *a, void *out) {
-    G87 *o = (G87 *)out;
+    G79 *o = (G79 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11639,7 +12450,7 @@ static void mk472(Alloc *a, void *out) {
 }
 
 static void mk473(Alloc *a, void *out) {
-    G90 *o = (G90 *)out;
+    G80 *o = (G80 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11647,7 +12458,7 @@ static void mk473(Alloc *a, void *out) {
 }
 
 static void mk474(Alloc *a, void *out) {
-    G90 *o = (G90 *)out;
+    G80 *o = (G80 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11655,7 +12466,7 @@ static void mk474(Alloc *a, void *out) {
 }
 
 static void mk475(Alloc *a, void *out) {
-    G90 *o = (G90 *)out;
+    G79 *o = (G79 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11663,7 +12474,7 @@ static void mk475(Alloc *a, void *out) {
 }
 
 static void mk476(Alloc *a, void *out) {
-    G90 *o = (G90 *)out;
+    G79 *o = (G79 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11671,7 +12482,7 @@ static void mk476(Alloc *a, void *out) {
 }
 
 static void mk477(Alloc *a, void *out) {
-    G90 *o = (G90 *)out;
+    G79 *o = (G79 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11679,7 +12490,7 @@ static void mk477(Alloc *a, void *out) {
 }
 
 static void mk478(Alloc *a, void *out) {
-    G90 *o = (G90 *)out;
+    G79 *o = (G79 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11687,7 +12498,7 @@ static void mk478(Alloc *a, void *out) {
 }
 
 static void mk479(Alloc *a, void *out) {
-    G90 *o = (G90 *)out;
+    G79 *o = (G79 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11695,7 +12506,7 @@ static void mk479(Alloc *a, void *out) {
 }
 
 static void mk480(Alloc *a, void *out) {
-    G90 *o = (G90 *)out;
+    G79 *o = (G79 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11703,7 +12514,7 @@ static void mk480(Alloc *a, void *out) {
 }
 
 static void mk481(Alloc *a, void *out) {
-    G90 *o = (G90 *)out;
+    G79 *o = (G79 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11711,7 +12522,7 @@ static void mk481(Alloc *a, void *out) {
 }
 
 static void mk482(Alloc *a, void *out) {
-    G90 *o = (G90 *)out;
+    G167 *o = (G167 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11719,7 +12530,7 @@ static void mk482(Alloc *a, void *out) {
 }
 
 static void mk483(Alloc *a, void *out) {
-    G90 *o = (G90 *)out;
+    G167 *o = (G167 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11727,7 +12538,7 @@ static void mk483(Alloc *a, void *out) {
 }
 
 static void mk484(Alloc *a, void *out) {
-    G91 *o = (G91 *)out;
+    G79 *o = (G79 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11735,7 +12546,7 @@ static void mk484(Alloc *a, void *out) {
 }
 
 static void mk485(Alloc *a, void *out) {
-    G91 *o = (G91 *)out;
+    G79 *o = (G79 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11743,7 +12554,7 @@ static void mk485(Alloc *a, void *out) {
 }
 
 static void mk486(Alloc *a, void *out) {
-    G91 *o = (G91 *)out;
+    G79 *o = (G79 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11751,6 +12562,238 @@ static void mk486(Alloc *a, void *out) {
 }
 
 static void mk487(Alloc *a, void *out) {
+    G79 *o = (G79 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk488(Alloc *a, void *out) {
+    G79 *o = (G79 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk489(Alloc *a, void *out) {
+    G79 *o = (G79 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk490(Alloc *a, void *out) {
+    G79 *o = (G79 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk491(Alloc *a, void *out) {
+    G79 *o = (G79 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk492(Alloc *a, void *out) {
+    G79 *o = (G79 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk493(Alloc *a, void *out) {
+    G79 *o = (G79 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk494(Alloc *a, void *out) {
+    G79 *o = (G79 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk495(Alloc *a, void *out) {
+    G82 *o = (G82 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk496(Alloc *a, void *out) {
+    G83 *o = (G83 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk497(Alloc *a, void *out) {
+    G83 *o = (G83 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk498(Alloc *a, void *out) {
+    G83 *o = (G83 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk499(Alloc *a, void *out) {
+    G83 *o = (G83 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk500(Alloc *a, void *out) {
+    G84 *o = (G84 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk501(Alloc *a, void *out) {
+    G87 *o = (G87 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk502(Alloc *a, void *out) {
+    G90 *o = (G90 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk503(Alloc *a, void *out) {
+    G90 *o = (G90 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk504(Alloc *a, void *out) {
+    G90 *o = (G90 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk505(Alloc *a, void *out) {
+    G90 *o = (G90 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk506(Alloc *a, void *out) {
+    G90 *o = (G90 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk507(Alloc *a, void *out) {
+    G90 *o = (G90 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk508(Alloc *a, void *out) {
+    G90 *o = (G90 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk509(Alloc *a, void *out) {
+    G90 *o = (G90 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk510(Alloc *a, void *out) {
+    G90 *o = (G90 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk511(Alloc *a, void *out) {
+    G90 *o = (G90 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk512(Alloc *a, void *out) {
+    G90 *o = (G90 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk513(Alloc *a, void *out) {
+    G91 *o = (G91 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk514(Alloc *a, void *out) {
+    G91 *o = (G91 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk515(Alloc *a, void *out) {
+    G91 *o = (G91 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk516(Alloc *a, void *out) {
     G91 *o = (G91 *)out;
     void *P[2];
     (void)a;
@@ -11768,7 +12811,7 @@ static void mk487(Alloc *a, void *out) {
     (*o).f1 = P[1];
 }
 
-static void mk488(Alloc *a, void *out) {
+static void mk517(Alloc *a, void *out) {
     G101 *o = (G101 *)out;
     void *P[1];
     (void)a;
@@ -11776,7 +12819,7 @@ static void mk488(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk489(Alloc *a, void *out) {
+static void mk518(Alloc *a, void *out) {
     G101 *o = (G101 *)out;
     void *P[1];
     (void)a;
@@ -11784,8 +12827,192 @@ static void mk489(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk490(Alloc *a, void *out) {
+static void mk519(Alloc *a, void *out) {
     G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 0, 0);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk520(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 4, 4);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(10);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(13);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(9);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(32);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk521(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 4, 4);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(108);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(108);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk522(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 5, 5);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(125);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(32);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk523(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 21, 21);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(102);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(105);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(98);
+        ((uint8_t *)v1.p)[14] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[15] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[16] = (uint8_t)UINT64_C(122);
+        ((uint8_t *)v1.p)[17] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[18] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[19] = (uint8_t)UINT64_C(125);
+        ((uint8_t *)v1.p)[20] = (uint8_t)UINT64_C(32);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk524(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 3, 3);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(32);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(125);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(32);
+        (*o).f1 = v1;
+    }
+}
+
+static void mk525(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk526(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk527(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk528(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk529(Alloc *a, void *out) {
+    G102 *o = (G102 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk530(Alloc *a, void *out) {
+    G102 *o = (G102 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk531(Alloc *a, void *out) {
+    G102 *o = (G102 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    P[0] = gen_alloc(a, &gt104);
+    (*(G104 *)P[0]).f0 = (Int)(int64_t)UINT64_C(1);
+    (*o).f0 = P[0];
+}
+
+static void mk532(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk533(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk534(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11796,8 +13023,8 @@ static void mk490(Alloc *a, void *out) {
     }
 }
 
-static void mk491(Alloc *a, void *out) {
-    G101 *o = (G101 *)out;
+static void mk535(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11811,7 +13038,7 @@ static void mk491(Alloc *a, void *out) {
             memset(&v3, 0, sizeof(v3));
             v2 = (Str){(const Byte *)"fizz", 4};
             {
-                G102 *v4 = (G102 *)gen_alloc(a, &gt102);
+                G106 *v4 = (G106 *)gen_alloc(a, &gt106);
                 {
                     Map *v5 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
                     {
@@ -11844,7 +13071,7 @@ static void mk491(Alloc *a, void *out) {
                     }
                     (*v4) = v5;
                 }
-                v3.t = &gt102;
+                v3.t = &gt106;
                 v3.data = v4;
             }
             map_set(v1, &v2, &v3);
@@ -11853,8 +13080,8 @@ static void mk491(Alloc *a, void *out) {
     }
 }
 
-static void mk492(Alloc *a, void *out) {
-    G101 *o = (G101 *)out;
+static void mk536(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11879,16 +13106,16 @@ static void mk492(Alloc *a, void *out) {
     }
 }
 
-static void mk493(Alloc *a, void *out) {
-    G101 *o = (G101 *)out;
+static void mk537(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk494(Alloc *a, void *out) {
-    G101 *o = (G101 *)out;
+static void mk538(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -11914,80 +13141,80 @@ static void mk494(Alloc *a, void *out) {
     }
 }
 
-static void mk495(Alloc *a, void *out) {
-    G101 *o = (G101 *)out;
+static void mk539(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk496(Alloc *a, void *out) {
-    G101 *o = (G101 *)out;
+static void mk540(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk497(Alloc *a, void *out) {
-    G101 *o = (G101 *)out;
+static void mk541(Alloc *a, void *out) {
+    G105 *o = (G105 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk498(Alloc *a, void *out) {
-    G103 *o = (G103 *)out;
+static void mk542(Alloc *a, void *out) {
+    G107 *o = (G107 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk499(Alloc *a, void *out) {
-    G103 *o = (G103 *)out;
+static void mk543(Alloc *a, void *out) {
+    G107 *o = (G107 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk500(Alloc *a, void *out) {
-    G103 *o = (G103 *)out;
+static void mk544(Alloc *a, void *out) {
+    G107 *o = (G107 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    P[0] = gen_alloc(a, &gt105);
-    (*(G105 *)P[0]).f0 = (Int)(int64_t)UINT64_C(1);
+    P[0] = gen_alloc(a, &gt109);
+    (*(G109 *)P[0]).f0 = (Int)(int64_t)UINT64_C(1);
     (*o).f0 = P[0];
 }
 
-static void mk501(Alloc *a, void *out) {
-    G106 *o = (G106 *)out;
+static void mk545(Alloc *a, void *out) {
+    G110 *o = (G110 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk502(Alloc *a, void *out) {
-    G106 *o = (G106 *)out;
+static void mk546(Alloc *a, void *out) {
+    G110 *o = (G110 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk503(Alloc *a, void *out) {
-    G106 *o = (G106 *)out;
+static void mk547(Alloc *a, void *out) {
+    G110 *o = (G110 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
-    P[0] = gen_alloc(a, &gt102);
+    P[0] = gen_alloc(a, &gt106);
     {
         Map *v1 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
         {
@@ -12004,101 +13231,101 @@ static void mk503(Alloc *a, void *out) {
             }
             map_set(v1, &v2, &v3);
         }
-        (*(G102 *)P[0]) = v1;
+        (*(G106 *)P[0]) = v1;
     }
     (*o).f1 = P[0];
 }
 
-static void mk504(Alloc *a, void *out) {
-    G108 *o = (G108 *)out;
+static void mk548(Alloc *a, void *out) {
+    G112 *o = (G112 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk505(Alloc *a, void *out) {
-    G110 *o = (G110 *)out;
+static void mk549(Alloc *a, void *out) {
+    G114 *o = (G114 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk506(Alloc *a, void *out) {
-    G110 *o = (G110 *)out;
+static void mk550(Alloc *a, void *out) {
+    G114 *o = (G114 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk507(Alloc *a, void *out) {
-    G110 *o = (G110 *)out;
+static void mk551(Alloc *a, void *out) {
+    G114 *o = (G114 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk508(Alloc *a, void *out) {
-    G110 *o = (G110 *)out;
+static void mk552(Alloc *a, void *out) {
+    G114 *o = (G114 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk509(Alloc *a, void *out) {
-    G111 *o = (G111 *)out;
+static void mk553(Alloc *a, void *out) {
+    G115 *o = (G115 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk510(Alloc *a, void *out) {
-    G111 *o = (G111 *)out;
+static void mk554(Alloc *a, void *out) {
+    G115 *o = (G115 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk511(Alloc *a, void *out) {
-    G111 *o = (G111 *)out;
+static void mk555(Alloc *a, void *out) {
+    G115 *o = (G115 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk512(Alloc *a, void *out) {
-    G111 *o = (G111 *)out;
+static void mk556(Alloc *a, void *out) {
+    G115 *o = (G115 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk513(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
+static void mk557(Alloc *a, void *out) {
+    G117 *o = (G117 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk514(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
+static void mk558(Alloc *a, void *out) {
+    G117 *o = (G117 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk515(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
+static void mk559(Alloc *a, void *out) {
+    G117 *o = (G117 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -12109,8 +13336,8 @@ static void mk515(Alloc *a, void *out) {
     }
 }
 
-static void mk516(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
+static void mk560(Alloc *a, void *out) {
+    G117 *o = (G117 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -12124,7 +13351,7 @@ static void mk516(Alloc *a, void *out) {
             memset(&v3, 0, sizeof(v3));
             v2 = (Str){(const Byte *)"fizz", 4};
             {
-                G102 *v4 = (G102 *)gen_alloc(a, &gt102);
+                G106 *v4 = (G106 *)gen_alloc(a, &gt106);
                 {
                     Map *v5 = map_make(a, &burrow_type_Str, &burrow_type_Any, 0);
                     {
@@ -12157,7 +13384,7 @@ static void mk516(Alloc *a, void *out) {
                     }
                     (*v4) = v5;
                 }
-                v3.t = &gt102;
+                v3.t = &gt106;
                 v3.data = v4;
             }
             map_set(v1, &v2, &v3);
@@ -12166,8 +13393,8 @@ static void mk516(Alloc *a, void *out) {
     }
 }
 
-static void mk517(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
+static void mk561(Alloc *a, void *out) {
+    G117 *o = (G117 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -12192,16 +13419,16 @@ static void mk517(Alloc *a, void *out) {
     }
 }
 
-static void mk518(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
+static void mk562(Alloc *a, void *out) {
+    G117 *o = (G117 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk519(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
+static void mk563(Alloc *a, void *out) {
+    G117 *o = (G117 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -12227,167 +13454,7 @@ static void mk519(Alloc *a, void *out) {
     }
 }
 
-static void mk520(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk521(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk522(Alloc *a, void *out) {
-    G113 *o = (G113 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk523(Alloc *a, void *out) {
-    G41 *o = (G41 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk524(Alloc *a, void *out) {
-    G41 *o = (G41 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk525(Alloc *a, void *out) {
-    G38 *o = (G38 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk526(Alloc *a, void *out) {
-    G39 *o = (G39 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk527(Alloc *a, void *out) {
-    G40 *o = (G40 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk528(Alloc *a, void *out) {
-    G40 *o = (G40 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk529(Alloc *a, void *out) {
-    G40 *o = (G40 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk530(Alloc *a, void *out) {
-    G40 *o = (G40 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk531(Alloc *a, void *out) {
-    G40 *o = (G40 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk532(Alloc *a, void *out) {
-    G40 *o = (G40 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk533(Alloc *a, void *out) {
-    G40 *o = (G40 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk534(Alloc *a, void *out) {
-    G40 *o = (G40 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk535(Alloc *a, void *out) {
-    G42 *o = (G42 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk536(Alloc *a, void *out) {
-    G41 *o = (G41 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk537(Alloc *a, void *out) {
-    G41 *o = (G41 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk538(Alloc *a, void *out) {
-    G41 *o = (G41 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk539(Alloc *a, void *out) {
-    G116 *o = (G116 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk540(Alloc *a, void *out) {
+static void mk564(Alloc *a, void *out) {
     G117 *o = (G117 *)out;
     void *P[1];
     (void)a;
@@ -12395,15 +13462,135 @@ static void mk540(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk541(Alloc *a, void *out) {
-    G118 *o = (G118 *)out;
+static void mk565(Alloc *a, void *out) {
+    G117 *o = (G117 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk542(Alloc *a, void *out) {
+static void mk566(Alloc *a, void *out) {
+    G117 *o = (G117 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk567(Alloc *a, void *out) {
+    G101 *o = (G101 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk568(Alloc *a, void *out) {
+    G41 *o = (G41 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk569(Alloc *a, void *out) {
+    G41 *o = (G41 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk570(Alloc *a, void *out) {
+    G38 *o = (G38 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk571(Alloc *a, void *out) {
+    G39 *o = (G39 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk572(Alloc *a, void *out) {
+    G40 *o = (G40 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk573(Alloc *a, void *out) {
+    G40 *o = (G40 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk574(Alloc *a, void *out) {
+    G40 *o = (G40 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk575(Alloc *a, void *out) {
+    G40 *o = (G40 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk576(Alloc *a, void *out) {
+    G40 *o = (G40 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk577(Alloc *a, void *out) {
+    G40 *o = (G40 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk578(Alloc *a, void *out) {
+    G40 *o = (G40 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk579(Alloc *a, void *out) {
+    G40 *o = (G40 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk580(Alloc *a, void *out) {
+    G42 *o = (G42 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk581(Alloc *a, void *out) {
     G119 *o = (G119 *)out;
     void *P[1];
     (void)a;
@@ -12411,23 +13598,114 @@ static void mk542(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk543(Alloc *a, void *out) {
-    G120 *o = (G120 *)out;
+static void mk582(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk544(Alloc *a, void *out) {
-    G120 *o = (G120 *)out;
+static void mk583(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o).f0 = (Str){(const Byte *)"before", 6};
+}
+
+static void mk584(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk545(Alloc *a, void *out) {
+static void mk585(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk586(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    {
+        Slice v1 = slice_make(a, &burrow_type_uint8_t, 14, 14);
+        ((uint8_t *)v1.p)[0] = (uint8_t)UINT64_C(123);
+        ((uint8_t *)v1.p)[1] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[2] = (uint8_t)UINT64_C(117);
+        ((uint8_t *)v1.p)[3] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[4] = (uint8_t)UINT64_C(107);
+        ((uint8_t *)v1.p)[5] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[6] = (uint8_t)UINT64_C(111);
+        ((uint8_t *)v1.p)[7] = (uint8_t)UINT64_C(119);
+        ((uint8_t *)v1.p)[8] = (uint8_t)UINT64_C(110);
+        ((uint8_t *)v1.p)[9] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[10] = (uint8_t)UINT64_C(58);
+        ((uint8_t *)v1.p)[11] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[12] = (uint8_t)UINT64_C(34);
+        ((uint8_t *)v1.p)[13] = (uint8_t)UINT64_C(125);
+        (*o).f5 = v1;
+    }
+}
+
+static void mk587(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk588(Alloc *a, void *out) {
+    G119 *o = (G119 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk589(Alloc *a, void *out) {
+    G41 *o = (G41 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk590(Alloc *a, void *out) {
+    G41 *o = (G41 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk591(Alloc *a, void *out) {
+    G41 *o = (G41 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk592(Alloc *a, void *out) {
+    G121 *o = (G121 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk593(Alloc *a, void *out) {
     G122 *o = (G122 *)out;
     void *P[1];
     (void)a;
@@ -12435,7 +13713,7 @@ static void mk545(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk546(Alloc *a, void *out) {
+static void mk594(Alloc *a, void *out) {
     G123 *o = (G123 *)out;
     void *P[1];
     (void)a;
@@ -12443,7 +13721,15 @@ static void mk546(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk547(Alloc *a, void *out) {
+static void mk595(Alloc *a, void *out) {
+    G124 *o = (G124 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk596(Alloc *a, void *out) {
     G125 *o = (G125 *)out;
     void *P[1];
     (void)a;
@@ -12451,15 +13737,47 @@ static void mk547(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk548(Alloc *a, void *out) {
-    G163 *o = (G163 *)out;
+static void mk597(Alloc *a, void *out) {
+    G125 *o = (G125 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk549(Alloc *a, void *out) {
+static void mk598(Alloc *a, void *out) {
+    G127 *o = (G127 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk599(Alloc *a, void *out) {
+    G128 *o = (G128 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk600(Alloc *a, void *out) {
+    G130 *o = (G130 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk601(Alloc *a, void *out) {
+    G168 *o = (G168 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk602(Alloc *a, void *out) {
     G3 *o = (G3 *)out;
     void *P[1];
     (void)a;
@@ -12472,7 +13790,7 @@ static void mk549(Alloc *a, void *out) {
     }
 }
 
-static void mk550(Alloc *a, void *out) {
+static void mk603(Alloc *a, void *out) {
     G0 *o = (G0 *)out;
     void *P[1];
     (void)a;
@@ -12480,7 +13798,7 @@ static void mk550(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk551(Alloc *a, void *out) {
+static void mk604(Alloc *a, void *out) {
     G3 *o = (G3 *)out;
     void *P[1];
     (void)a;
@@ -12488,7 +13806,7 @@ static void mk551(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk552(Alloc *a, void *out) {
+static void mk605(Alloc *a, void *out) {
     G6 *o = (G6 *)out;
     void *P[1];
     (void)a;
@@ -12496,23 +13814,23 @@ static void mk552(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk553(Alloc *a, void *out) {
-    G164 *o = (G164 *)out;
+static void mk606(Alloc *a, void *out) {
+    G169 *o = (G169 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk554(Alloc *a, void *out) {
-    G165 *o = (G165 *)out;
+static void mk607(Alloc *a, void *out) {
+    G170 *o = (G170 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk555(Alloc *a, void *out) {
+static void mk608(Alloc *a, void *out) {
     G52 *o = (G52 *)out;
     void *P[1];
     (void)a;
@@ -12520,8 +13838,8 @@ static void mk555(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk556(Alloc *a, void *out) {
-    G166 *o = (G166 *)out;
+static void mk609(Alloc *a, void *out) {
+    G171 *o = (G171 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -12545,23 +13863,23 @@ static void mk556(Alloc *a, void *out) {
     }
 }
 
-static void mk557(Alloc *a, void *out) {
-    G126 *o = (G126 *)out;
+static void mk610(Alloc *a, void *out) {
+    G131 *o = (G131 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk558(Alloc *a, void *out) {
-    G127 *o = (G127 *)out;
+static void mk611(Alloc *a, void *out) {
+    G132 *o = (G132 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk559(Alloc *a, void *out) {
+static void mk612(Alloc *a, void *out) {
     G3 *o = (G3 *)out;
     void *P[1];
     (void)a;
@@ -12574,7 +13892,7 @@ static void mk559(Alloc *a, void *out) {
     }
 }
 
-static void mk560(Alloc *a, void *out) {
+static void mk613(Alloc *a, void *out) {
     G3 *o = (G3 *)out;
     void *P[1];
     (void)a;
@@ -12587,7 +13905,7 @@ static void mk560(Alloc *a, void *out) {
     }
 }
 
-static void mk561(Alloc *a, void *out) {
+static void mk614(Alloc *a, void *out) {
     G3 *o = (G3 *)out;
     void *P[1];
     (void)a;
@@ -12600,7 +13918,7 @@ static void mk561(Alloc *a, void *out) {
     }
 }
 
-static void mk562(Alloc *a, void *out) {
+static void mk615(Alloc *a, void *out) {
     G3 *o = (G3 *)out;
     void *P[1];
     (void)a;
@@ -12613,7 +13931,7 @@ static void mk562(Alloc *a, void *out) {
     }
 }
 
-static void mk563(Alloc *a, void *out) {
+static void mk616(Alloc *a, void *out) {
     G0 *o = (G0 *)out;
     void *P[1];
     (void)a;
@@ -12626,7 +13944,7 @@ static void mk563(Alloc *a, void *out) {
     }
 }
 
-static void mk564(Alloc *a, void *out) {
+static void mk617(Alloc *a, void *out) {
     G22 *o = (G22 *)out;
     void *P[1];
     (void)a;
@@ -12635,47 +13953,7 @@ static void mk564(Alloc *a, void *out) {
     (*o).v[0] = (Str){(const Byte *)"something", 9};
 }
 
-static void mk565(Alloc *a, void *out) {
-    G129 *o = (G129 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk566(Alloc *a, void *out) {
-    G130 *o = (G130 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk567(Alloc *a, void *out) {
-    G131 *o = (G131 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk568(Alloc *a, void *out) {
-    G167 *o = (G167 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk569(Alloc *a, void *out) {
-    G168 *o = (G168 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk570(Alloc *a, void *out) {
+static void mk618(Alloc *a, void *out) {
     G134 *o = (G134 *)out;
     void *P[1];
     (void)a;
@@ -12683,8 +13961,48 @@ static void mk570(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk571(Alloc *a, void *out) {
-    G169 *o = (G169 *)out;
+static void mk619(Alloc *a, void *out) {
+    G135 *o = (G135 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk620(Alloc *a, void *out) {
+    G136 *o = (G136 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk621(Alloc *a, void *out) {
+    G172 *o = (G172 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk622(Alloc *a, void *out) {
+    G173 *o = (G173 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk623(Alloc *a, void *out) {
+    G139 *o = (G139 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk624(Alloc *a, void *out) {
+    G174 *o = (G174 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -12717,44 +14035,24 @@ static void mk571(Alloc *a, void *out) {
     }
 }
 
-static void mk572(Alloc *a, void *out) {
-    G136 *o = (G136 *)out;
+static void mk625(Alloc *a, void *out) {
+    G141 *o = (G141 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk573(Alloc *a, void *out) {
-    G170 *o = (G170 *)out;
+static void mk626(Alloc *a, void *out) {
+    G175 *o = (G175 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk574(Alloc *a, void *out) {
-    G171 *o = (G171 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-    (*o).v[0] = (Int)(int64_t)UINT64_C(1);
-    (*o).v[1] = (Int)(int64_t)UINT64_C(2);
-    (*o).v[2] = (Int)(int64_t)UINT64_C(3);
-    (*o).v[3] = (Int)(int64_t)UINT64_C(4);
-}
-
-static void mk575(Alloc *a, void *out) {
-    G22 *o = (G22 *)out;
-    void *P[1];
-    (void)a;
-    (void)o;
-    (void)P;
-}
-
-static void mk576(Alloc *a, void *out) {
-    G171 *o = (G171 *)out;
+static void mk627(Alloc *a, void *out) {
+    G176 *o = (G176 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -12765,7 +14063,27 @@ static void mk576(Alloc *a, void *out) {
     (*o).v[3] = (Int)(int64_t)UINT64_C(4);
 }
 
-static void mk577(Alloc *a, void *out) {
+static void mk628(Alloc *a, void *out) {
+    G22 *o = (G22 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+}
+
+static void mk629(Alloc *a, void *out) {
+    G176 *o = (G176 *)out;
+    void *P[1];
+    (void)a;
+    (void)o;
+    (void)P;
+    (*o).v[0] = (Int)(int64_t)UINT64_C(1);
+    (*o).v[1] = (Int)(int64_t)UINT64_C(2);
+    (*o).v[2] = (Int)(int64_t)UINT64_C(3);
+    (*o).v[3] = (Int)(int64_t)UINT64_C(4);
+}
+
+static void mk630(Alloc *a, void *out) {
     G22 *o = (G22 *)out;
     void *P[1];
     (void)a;
@@ -12774,7 +14092,7 @@ static void mk577(Alloc *a, void *out) {
     (*o).v[0] = (Str){(const Byte *)"nochange", 8};
 }
 
-static void mk578(Alloc *a, void *out) {
+static void mk631(Alloc *a, void *out) {
     G22 *o = (G22 *)out;
     void *P[1];
     (void)a;
@@ -12783,7 +14101,7 @@ static void mk578(Alloc *a, void *out) {
     (*o).v[0] = (Str){(const Byte *)"nochange", 8};
 }
 
-static void mk579(Alloc *a, void *out) {
+static void mk632(Alloc *a, void *out) {
     G22 *o = (G22 *)out;
     void *P[1];
     (void)a;
@@ -12792,7 +14110,7 @@ static void mk579(Alloc *a, void *out) {
     (*o).v[0] = (Str){(const Byte *)"nochange", 8};
 }
 
-static void mk580(Alloc *a, void *out) {
+static void mk633(Alloc *a, void *out) {
     G22 *o = (G22 *)out;
     void *P[1];
     (void)a;
@@ -12801,8 +14119,8 @@ static void mk580(Alloc *a, void *out) {
     (*o).v[0] = (Str){(const Byte *)"nochange", 8};
 }
 
-static void mk581(Alloc *a, void *out) {
-    G129 *o = (G129 *)out;
+static void mk634(Alloc *a, void *out) {
+    G134 *o = (G134 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -12810,7 +14128,7 @@ static void mk581(Alloc *a, void *out) {
     (*o).v[0] = true;
 }
 
-static void mk582(Alloc *a, void *out) {
+static void mk635(Alloc *a, void *out) {
     G61 *o = (G61 *)out;
     void *P[1];
     (void)a;
@@ -12818,8 +14136,8 @@ static void mk582(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk583(Alloc *a, void *out) {
-    G138 *o = (G138 *)out;
+static void mk636(Alloc *a, void *out) {
+    G143 *o = (G143 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -12828,7 +14146,7 @@ static void mk583(Alloc *a, void *out) {
     (*o) = P[0];
 }
 
-static void mk584(Alloc *a, void *out) {
+static void mk637(Alloc *a, void *out) {
     G60 *o = (G60 *)out;
     void *P[1];
     (void)a;
@@ -12838,7 +14156,7 @@ static void mk584(Alloc *a, void *out) {
     (*o) = P[0];
 }
 
-static void mk585(Alloc *a, void *out) {
+static void mk638(Alloc *a, void *out) {
     G61 *o = (G61 *)out;
     void *P[1];
     (void)a;
@@ -12848,8 +14166,8 @@ static void mk585(Alloc *a, void *out) {
     (*o) = P[0];
 }
 
-static void mk586(Alloc *a, void *out) {
-    G140 *o = (G140 *)out;
+static void mk639(Alloc *a, void *out) {
+    G145 *o = (G145 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -12858,7 +14176,7 @@ static void mk586(Alloc *a, void *out) {
     (*o) = P[0];
 }
 
-static void mk587(Alloc *a, void *out) {
+static void mk640(Alloc *a, void *out) {
     G72 *o = (G72 *)out;
     void *P[1];
     (void)a;
@@ -12868,7 +14186,7 @@ static void mk587(Alloc *a, void *out) {
     (*o) = P[0];
 }
 
-static void mk588(Alloc *a, void *out) {
+static void mk641(Alloc *a, void *out) {
     G72 *o = (G72 *)out;
     void *P[1];
     (void)a;
@@ -12878,7 +14196,7 @@ static void mk588(Alloc *a, void *out) {
     (*o) = P[0];
 }
 
-static void mk589(Alloc *a, void *out) {
+static void mk642(Alloc *a, void *out) {
     G58 *o = (G58 *)out;
     void *P[1];
     (void)a;
@@ -12888,7 +14206,7 @@ static void mk589(Alloc *a, void *out) {
     (*o) = P[0];
 }
 
-static void mk590(Alloc *a, void *out) {
+static void mk643(Alloc *a, void *out) {
     G61 *o = (G61 *)out;
     void *P[1];
     (void)a;
@@ -12896,7 +14214,7 @@ static void mk590(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk591(Alloc *a, void *out) {
+static void mk644(Alloc *a, void *out) {
     G60 *o = (G60 *)out;
     void *P[1];
     (void)a;
@@ -12906,7 +14224,7 @@ static void mk591(Alloc *a, void *out) {
     (*o) = P[0];
 }
 
-static void mk592(Alloc *a, void *out) {
+static void mk645(Alloc *a, void *out) {
     Any *o = (Any *)out;
     void *P[1];
     (void)a;
@@ -12914,7 +14232,7 @@ static void mk592(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk593(Alloc *a, void *out) {
+static void mk646(Alloc *a, void *out) {
     Any *o = (Any *)out;
     void *P[1];
     (void)a;
@@ -12922,7 +14240,7 @@ static void mk593(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk594(Alloc *a, void *out) {
+static void mk647(Alloc *a, void *out) {
     Any *o = (Any *)out;
     void *P[1];
     (void)a;
@@ -12930,7 +14248,7 @@ static void mk594(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk595(Alloc *a, void *out) {
+static void mk648(Alloc *a, void *out) {
     Any *o = (Any *)out;
     void *P[1];
     (void)a;
@@ -12938,7 +14256,7 @@ static void mk595(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk596(Alloc *a, void *out) {
+static void mk649(Alloc *a, void *out) {
     Any *o = (Any *)out;
     void *P[1];
     (void)a;
@@ -12946,7 +14264,7 @@ static void mk596(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk597(Alloc *a, void *out) {
+static void mk650(Alloc *a, void *out) {
     Any *o = (Any *)out;
     void *P[1];
     (void)a;
@@ -12954,7 +14272,7 @@ static void mk597(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk598(Alloc *a, void *out) {
+static void mk651(Alloc *a, void *out) {
     Any *o = (Any *)out;
     void *P[1];
     (void)a;
@@ -12962,7 +14280,7 @@ static void mk598(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk599(Alloc *a, void *out) {
+static void mk652(Alloc *a, void *out) {
     Any *o = (Any *)out;
     void *P[1];
     (void)a;
@@ -12970,7 +14288,7 @@ static void mk599(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk600(Alloc *a, void *out) {
+static void mk653(Alloc *a, void *out) {
     Any *o = (Any *)out;
     void *P[1];
     (void)a;
@@ -12996,7 +14314,7 @@ static void mk600(Alloc *a, void *out) {
     }
 }
 
-static void mk601(Alloc *a, void *out) {
+static void mk654(Alloc *a, void *out) {
     Any *o = (Any *)out;
     void *P[1];
     (void)a;
@@ -13010,7 +14328,7 @@ static void mk601(Alloc *a, void *out) {
     }
 }
 
-static void mk602(Alloc *a, void *out) {
+static void mk655(Alloc *a, void *out) {
     Any *o = (Any *)out;
     void *P[1];
     (void)a;
@@ -13024,7 +14342,7 @@ static void mk602(Alloc *a, void *out) {
     }
 }
 
-static void mk603(Alloc *a, void *out) {
+static void mk656(Alloc *a, void *out) {
     Any *o = (Any *)out;
     void *P[1];
     (void)a;
@@ -13032,48 +14350,48 @@ static void mk603(Alloc *a, void *out) {
     (void)P;
 }
 
-static void mk604(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk657(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk605(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk658(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk606(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk659(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk607(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk660(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk608(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk661(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
     (void)P;
 }
 
-static void mk609(Alloc *a, void *out) {
-    G147 *o = (G147 *)out;
+static void mk662(Alloc *a, void *out) {
+    G152 *o = (G152 *)out;
     void *P[1];
     (void)a;
     (void)o;
@@ -14608,7 +15926,7 @@ static const JvCase jv_cases[] = {
      NULL,
      NULL,
      0},
-    {"Structs/EmbeddedFallback/MapStringAny/Nil",
+    {"Structs/EmbeddedFallback/TextValue/Nil",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt101,
@@ -14618,7 +15936,7 @@ static const JvCase jv_cases[] = {
      NULL,
      NULL,
      0},
-    {"Structs/EmbeddedFallback/MapStringAny/Empty",
+    {"Structs/EmbeddedFallback/TextValue/Empty",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt101,
@@ -14628,11 +15946,165 @@ static const JvCase jv_cases[] = {
      NULL,
      NULL,
      0},
-    {"Structs/EmbeddedFallback/MapStringAny/NonEmptyN1",
+    {"Structs/EmbeddedFallback/TextValue/NonEmptyN1",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt101,
      mk133,
+     QS(""),
+     QS("{\"fizz\":\"buzz\"}"),
+     NULL,
+     NULL,
+     0},
+    {"Structs/EmbeddedFallback/TextValue/NonEmptyN2",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk134,
+     QS(""),
+     QS("{\"fizz\":\"buzz\",\"foo\":\"bar\"}"),
+     NULL,
+     NULL,
+     0},
+    {"Structs/EmbeddedFallback/TextValue/NonEmptyWithOthers",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk135,
+     QS(""),
+     QS("{\"A\":1,\"B\":2,\"fizz\":\"buzz\",\"foo\":\"bar\"}"),
+     NULL,
+     NULL,
+     0},
+    {"Structs/EmbeddedFallback/TextValue/RejectDuplicateNames",
+     1,
+     {0x2ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk136,
+     QS(""),
+     QS("{\"fizz\":\"buzz\""),
+     "jsontext: duplicate object member name \"fizz\"",
+     NULL,
+     0},
+    {"Structs/EmbeddedFallback/TextValue/AllowDuplicateNames",
+     1,
+     {0x2ULL, 0x2ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk137,
+     QS(""),
+     QS("{\"fizz\":\"buzz\",\"fizz\":\"buzz\"}"),
+     NULL,
+     NULL,
+     0},
+    {"Structs/EmbeddedFallback/TextValue/RejectInvalidUTF8",
+     1,
+     {0x4ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk138,
+     QS(""),
+     QS("{"),
+     "jsontext: invalid UTF-8 after offset 4",
+     NULL,
+     0},
+    {"Structs/EmbeddedFallback/TextValue/AllowInvalidUTF8",
+     1,
+     {0x4ULL, 0x4ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk139,
+     QS(""),
+     QS("{\"\336\255\357\277\275\357\277\275\":\"value\"}"),
+     NULL,
+     NULL,
+     0},
+    {"Structs/EmbeddedFallback/TextValue/InvalidWhitespace",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk140,
+     QS(""),
+     QS("{"),
+     "json: cannot marshal from Go jsontext.Value after offset 1: unexpected EOF",
+     NULL,
+     0},
+    {"Structs/EmbeddedFallback/TextValue/InvalidObject",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk141,
+     QS(""),
+     QS("{"),
+     "json: cannot marshal from Go jsontext.Value after offset 1: embedded raw value "
+     "must be a JSON object",
+     NULL,
+     0},
+    {"Structs/EmbeddedFallback/TextValue/InvalidObjectName",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk142,
+     QS(""),
+     QS("{"),
+     "json: cannot marshal from Go jsontext.Value: object member name must be a string "
+     "after offset 3",
+     NULL,
+     0},
+    {"Structs/EmbeddedFallback/TextValue/InvalidEndObject",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk143,
+     QS(""),
+     QS("{\"name\":false"),
+     "json: cannot marshal from Go jsontext.Value: invalid character ',' at start of "
+     "value after offset 18",
+     NULL,
+     0},
+    {"Structs/EmbeddedFallback/TextValue/InvalidDualObject",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk144,
+     QS(""),
+     QS("{"),
+     "json: cannot marshal from Go jsontext.Value: invalid character '{' after "
+     "top-level value after offset 2",
+     NULL,
+     0},
+    {"Structs/EmbeddedFallback/TextValue/Nested/Nil",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt102,
+     mk145,
+     QS(""),
+     QS("{}"),
+     NULL,
+     NULL,
+     0},
+    {"Structs/EmbeddedFallback/MapStringAny/Nil",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt105,
+     mk146,
+     QS(""),
+     QS("{}"),
+     NULL,
+     NULL,
+     0},
+    {"Structs/EmbeddedFallback/MapStringAny/Empty",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt105,
+     mk147,
+     QS(""),
+     QS("{}"),
+     NULL,
+     NULL,
+     0},
+    {"Structs/EmbeddedFallback/MapStringAny/NonEmptyN1",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt105,
+     mk148,
      QS(""),
      QS("{\"fizz\":null}"),
      NULL,
@@ -14641,8 +16113,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/NonEmptyWithOthers",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt101,
-     mk134,
+     &gt105,
+     mk149,
      QS(""),
      QS("{\"A\":1,\"B\":2,\"fizz\":null}"),
      NULL,
@@ -14651,8 +16123,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/RejectInvalidUTF8",
      1,
      {0x4ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt101,
-     mk135,
+     &gt105,
+     mk150,
      QS(""),
      QS("{"),
      "json: cannot marshal from Go string after offset 1: invalid UTF-8",
@@ -14661,8 +16133,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/AllowInvalidUTF8",
      1,
      {0x4ULL, 0x4ULL, QS(""), QS(""), 0, 0},
-     &gt101,
-     mk136,
+     &gt105,
+     mk151,
      QS(""),
      QS("{\"\336\255\357\277\275\357\277\275\":null}"),
      NULL,
@@ -14671,8 +16143,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/Nested/Nil",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt103,
-     mk137,
+     &gt107,
+     mk152,
      QS(""),
      QS("{}"),
      NULL,
@@ -14681,8 +16153,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/PointerMapStringAny/Nil",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt106,
-     mk138,
+     &gt110,
+     mk153,
      QS(""),
      QS("{}"),
      NULL,
@@ -14691,8 +16163,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/PointerMapStringAny/NonEmpty",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt106,
-     mk139,
+     &gt110,
+     mk154,
      QS(""),
      QS("{\"name\":\"value\"}"),
      NULL,
@@ -14701,8 +16173,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/PointerMapStringAny/Nested/Nil",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt108,
-     mk140,
+     &gt112,
+     mk155,
      QS(""),
      QS("{}"),
      NULL,
@@ -14711,8 +16183,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringInt",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt110,
-     mk141,
+     &gt114,
+     mk156,
      QS(""),
      QS("{\"one\":1,\"two\":2,\"zero\":0}"),
      NULL,
@@ -14721,8 +16193,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringInt/Deterministic",
      1,
      {0x80000ULL, 0x80000ULL, QS(""), QS(""), 0, 0},
-     &gt110,
-     mk142,
+     &gt114,
+     mk157,
      QS(""),
      QS("{\"one\":1,\"two\":2,\"zero\":0}"),
      NULL,
@@ -14732,8 +16204,8 @@ static const JvCase jv_cases[] = {
      "Deterministic+AllowInvalidUTF8+RejectDuplicateNames",
      1,
      {0x80006ULL, 0x80004ULL, QS(""), QS(""), 0, 0},
-     &gt110,
-     mk143,
+     &gt114,
+     mk158,
      QS(""),
      QS("{\"\357\277\275\":1"),
      "jsontext: duplicate object member name \"\357\277\275\"",
@@ -14743,8 +16215,8 @@ static const JvCase jv_cases[] = {
      "Deterministic+AllowInvalidUTF8+AllowDuplicateNames",
      1,
      {0x80006ULL, 0x80006ULL, QS(""), QS(""), 0, 0},
-     &gt110,
-     mk144,
+     &gt114,
+     mk159,
      QS(""),
      QS("{\"\357\277\275\":1,\"\357\277\275\":0}"),
      NULL,
@@ -14753,8 +16225,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringInt/StringifiedNumbers",
      1,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
-     &gt110,
-     mk145,
+     &gt114,
+     mk160,
      QS(""),
      QS("{\"one\":\"1\",\"two\":\"2\",\"zero\":\"0\"}"),
      NULL,
@@ -14763,8 +16235,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringInt",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt111,
-     mk146,
+     &gt115,
+     mk161,
      QS(""),
      QS("{\"one\":1,\"two\":2,\"zero\":0}"),
      NULL,
@@ -14773,8 +16245,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringInt/Deterministic",
      1,
      {0x80000ULL, 0x80000ULL, QS(""), QS(""), 0, 0},
-     &gt111,
-     mk147,
+     &gt115,
+     mk162,
      QS(""),
      QS("{\"one\":1,\"two\":2,\"zero\":0}"),
      NULL,
@@ -14783,8 +16255,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/Nil",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk148,
+     &gt117,
+     mk163,
      QS(""),
      QS("{}"),
      NULL,
@@ -14793,8 +16265,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/Empty",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk149,
+     &gt117,
+     mk164,
      QS(""),
      QS("{}"),
      NULL,
@@ -14803,8 +16275,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/NonEmptyN1",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk150,
+     &gt117,
+     mk165,
      QS(""),
      QS("{\"fizz\":null}"),
      NULL,
@@ -14813,8 +16285,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/NonEmptyWithOthers",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk151,
+     &gt117,
+     mk166,
      QS(""),
      QS("{\"A\":1,\"B\":2,\"fizz\":null}"),
      NULL,
@@ -14823,8 +16295,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/RejectInvalidUTF8",
      1,
      {0x4ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk152,
+     &gt117,
+     mk167,
      QS(""),
      QS("{"),
      "json: cannot marshal from Go json.namedString after offset 1: invalid UTF-8",
@@ -14833,18 +16305,158 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/AllowInvalidUTF8",
      1,
      {0x4ULL, 0x4ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk153,
+     &gt117,
+     mk168,
      QS(""),
      QS("{\"\336\255\357\277\275\357\277\275\":null}"),
      NULL,
      NULL,
      0},
+    {"Structs/DuplicateName/NoCaseEmbedTextValue/Other",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk169,
+     QS(""),
+     QS("{\"dupe\":\"\""),
+     "jsontext: duplicate object member name \"dupe\"",
+     NULL,
+     0},
+    {"Structs/DuplicateName/NoCaseEmbedTextValue/Other/AllowDuplicateNames",
+     1,
+     {0x2ULL, 0x2ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk170,
+     QS(""),
+     QS("{\"dupe\":\"\",\"dupe\":\"\"}"),
+     NULL,
+     NULL,
+     0},
+    {"Structs/DuplicateName/NoCaseEmbedTextValue/ExactDifferent",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk171,
+     QS(""),
+     QS("{\"Aaa\":\"\",\"AaA\":\"\",\"AAa\":\"\",\"AAA\":\"\"}"),
+     NULL,
+     NULL,
+     0},
+    {"Structs/DuplicateName/NoCaseEmbedTextValue/ExactConflict",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk172,
+     QS(""),
+     QS("{\"Aaa\":\"\""),
+     "jsontext: duplicate object member name \"Aaa\"",
+     NULL,
+     0},
+    {"Structs/DuplicateName/NoCaseEmbedTextValue/ExactConflict/AllowDuplicateNames",
+     1,
+     {0x2ULL, 0x2ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk173,
+     QS(""),
+     QS("{\"Aaa\":\"\",\"Aaa\":\"\"}"),
+     NULL,
+     NULL,
+     0},
+    {"Structs/DuplicateName/NoCaseEmbedTextValue/NoCaseConflict",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk174,
+     QS(""),
+     QS("{\"Aaa\":\"\",\"AaA\":\"\""),
+     "jsontext: duplicate object member name \"aaa\"",
+     NULL,
+     0},
+    {"Structs/DuplicateName/NoCaseEmbedTextValue/NoCaseConflict/AllowDuplicateNames",
+     1,
+     {0x2ULL, 0x2ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk175,
+     QS(""),
+     QS("{\"Aaa\":\"\",\"AaA\":\"\",\"aaa\":\"\"}"),
+     NULL,
+     NULL,
+     0},
+    {"Structs/DuplicateName/NoCaseEmbedTextValue/ExactDifferentWithField",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk176,
+     QS(""),
+     QS("{\"AAA\":\"x\",\"AaA\":\"x\",\"Aaa\":\"\"}"),
+     NULL,
+     NULL,
+     0},
+    {"Structs/DuplicateName/NoCaseEmbedTextValue/ExactConflictWithField",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk177,
+     QS(""),
+     QS("{\"AAA\":\"x\",\"AaA\":\"x\""),
+     "jsontext: duplicate object member name \"AAA\"",
+     NULL,
+     0},
+    {"Structs/DuplicateName/NoCaseEmbedTextValue/NoCaseConflictWithField",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk178,
+     QS(""),
+     QS("{\"AAA\":\"x\",\"AaA\":\"x\""),
+     "jsontext: duplicate object member name \"aaa\"",
+     NULL,
+     0},
+    {"Structs/DuplicateName/MatchCaseInsensitiveDelimiter",
+     1,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk179,
+     QS(""),
+     QS("{\"AaA\":\"x\""),
+     "jsontext: duplicate object member name \"aa_a\"",
+     NULL,
+     0},
+    {"Structs/DuplicateName/MatchCaseSensitiveDelimiter",
+     1,
+     {0x400000000ULL, 0x400000000ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk180,
+     QS(""),
+     QS("{\"AaA\":\"x\",\"aa_a\":\"\"}"),
+     NULL,
+     NULL,
+     0},
+    {"Structs/DuplicateName/MatchCaseInsensitiveNames+MatchCaseSensitiveDelimiter",
+     1,
+     {0x400800000ULL, 0x400800000ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk181,
+     QS(""),
+     QS("{\"AaA\":\"x\",\"aa_a\":\"\"}"),
+     NULL,
+     NULL,
+     0},
+    {"Structs/DuplicateName/MatchCaseInsensitiveNames+MatchCaseSensitiveDelimiter",
+     1,
+     {0x400800000ULL, 0x400800000ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk182,
+     QS(""),
+     QS("{\"AA_b\":\"x\""),
+     "jsontext: duplicate object member name \"aa_b\"",
+     NULL,
+     0},
     {"Structs/DuplicateName/NoCaseEmbedMapStringAny/ExactDifferent",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt115,
-     mk154,
+     &gt120,
+     mk183,
      QS(""),
      QS("{\"AAA\":\"\",\"AAa\":\"\",\"AaA\":\"\",\"Aaa\":\"\"}"),
      NULL,
@@ -14853,8 +16465,8 @@ static const JvCase jv_cases[] = {
     {"Structs/DuplicateName/NoCaseEmbedMapStringAny/ExactDifferentWithField",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt115,
-     mk155,
+     &gt120,
+     mk184,
      QS(""),
      QS("{\"AAA\":\"x\",\"AaA\":\"x\",\"Aaa\":\"\"}"),
      NULL,
@@ -14863,8 +16475,8 @@ static const JvCase jv_cases[] = {
     {"Structs/DuplicateName/NoCaseEmbedMapStringAny/ExactConflictWithField",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt115,
-     mk156,
+     &gt120,
+     mk185,
      QS(""),
      QS("{\"AAA\":\"x\",\"AaA\":\"x\""),
      "jsontext: duplicate object member name \"AAA\"",
@@ -14873,8 +16485,8 @@ static const JvCase jv_cases[] = {
     {"Structs/DuplicateName/NoCaseEmbedMapStringAny/NoCaseConflictWithField",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt115,
-     mk157,
+     &gt120,
+     mk186,
      QS(""),
      QS("{\"AAA\":\"x\",\"AaA\":\"x\""),
      "jsontext: duplicate object member name \"aaa\"",
@@ -14883,8 +16495,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Invalid/Conflicting",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt116,
-     mk158,
+     &gt121,
+     mk187,
      QS(""),
      QS(""),
      "json: cannot marshal from Go json.structConflicting: Go struct fields A and B "
@@ -14894,8 +16506,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Invalid/NoneExported",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt117,
-     mk159,
+     &gt122,
+     mk188,
      QS(""),
      QS(""),
      "json: cannot marshal from Go json.structNoneExported: Go struct has no exported "
@@ -14905,8 +16517,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Invalid/MalformedTag",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt118,
-     mk160,
+     &gt123,
+     mk189,
      QS(""),
      QS(""),
      "json: cannot marshal from Go json.structMalformedTag: Go struct field Malformed "
@@ -14917,8 +16529,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Invalid/UnexportedTag",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt119,
-     mk161,
+     &gt124,
+     mk190,
      QS(""),
      QS(""),
      "json: cannot marshal from Go json.structUnexportedTag: unexported Go struct "
@@ -14928,8 +16540,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Invalid/ExportedEmbedded",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt120,
-     mk162,
+     &gt125,
+     mk191,
      QS(""),
      QS(""),
      "json: cannot marshal from Go json.structExportedEmbedded: embedded Go struct "
@@ -14939,8 +16551,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Valid/ExportedEmbedded",
      1,
      {0x8000000000ULL, 0x8000000000ULL, QS(""), QS(""), 0, 0},
-     &gt120,
-     mk163,
+     &gt125,
+     mk192,
      QS(""),
      QS("{\"NamedString\":\"hello\"}"),
      NULL,
@@ -14949,8 +16561,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Valid/ExportedEmbeddedTag",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt122,
-     mk164,
+     &gt127,
+     mk193,
      QS(""),
      QS("{\"name\":\"hello\"}"),
      NULL,
@@ -14959,8 +16571,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Invalid/UnexportedEmbedded",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt123,
-     mk165,
+     &gt128,
+     mk194,
      QS(""),
      QS(""),
      "json: cannot marshal from Go json.structUnexportedEmbedded: embedded Go struct "
@@ -14970,8 +16582,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Valid/UnexportedEmbedded",
      1,
      {0x8000000000ULL, 0x8000000000ULL, QS(""), QS(""), 0, 0},
-     &gt123,
-     mk166,
+     &gt128,
+     mk195,
      QS(""),
      QS("{}"),
      NULL,
@@ -14980,8 +16592,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Invalid/UnexportedEmbeddedTag",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt124,
-     mk167,
+     &gt129,
+     mk196,
      QS(""),
      QS(""),
      "json: cannot marshal from Go json.structUnexportedEmbeddedTag: Go struct field "
@@ -14991,8 +16603,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Valid/UnexportedEmbeddedTag",
      1,
      {0x8000000000ULL, 0x8000000000ULL, QS(""), QS(""), 0, 0},
-     &gt124,
-     mk168,
+     &gt129,
+     mk197,
      QS(""),
      QS("{}"),
      NULL,
@@ -15001,8 +16613,8 @@ static const JvCase jv_cases[] = {
     {"Structs/IgnoreInvalidFormat",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt125,
-     mk169,
+     &gt130,
+     mk198,
      QS(""),
      QS("{}"),
      NULL,
@@ -15012,7 +16624,7 @@ static const JvCase jv_cases[] = {
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt15,
-     mk170,
+     mk199,
      QS(""),
      QS("[false,true,\"hello\",\"d29ybGQ=\",-32,-64,32,64,32.32,64.64]"),
      NULL,
@@ -15021,8 +16633,8 @@ static const JvCase jv_cases[] = {
     {"Slices/Invalid/Channel",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt126,
-     mk171,
+     &gt131,
+     mk200,
      QS(""),
      QS("["),
      "json: cannot marshal from Go chan string within \"/0\"",
@@ -15031,8 +16643,8 @@ static const JvCase jv_cases[] = {
     {"Slices/RecursiveSlice",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt127,
-     mk172,
+     &gt132,
+     mk201,
      QS(""),
      QS("[[],[],[[]],[[],[]]]"),
      NULL,
@@ -15042,7 +16654,7 @@ static const JvCase jv_cases[] = {
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt3,
-     mk173,
+     mk202,
      QS(""),
      QS("[\"hello\",\"goodbye\"]"),
      NULL,
@@ -15051,8 +16663,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Empty",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt128,
-     mk174,
+     &gt133,
+     mk203,
      QS(""),
      QS("[]"),
      NULL,
@@ -15061,8 +16673,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Bool",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt129,
-     mk175,
+     &gt134,
+     mk204,
      QS(""),
      QS("[false,true]"),
      NULL,
@@ -15071,8 +16683,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/String",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt130,
-     mk176,
+     &gt135,
+     mk205,
      QS(""),
      QS("[\"hello\",\"goodbye\"]"),
      NULL,
@@ -15081,8 +16693,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Bytes",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt131,
-     mk177,
+     &gt136,
+     mk206,
      QS(""),
      QS("[\"aGVsbG8=\",\"Z29vZGJ5ZQ==\"]"),
      NULL,
@@ -15091,8 +16703,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Int",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt132,
-     mk178,
+     &gt137,
+     mk207,
      QS(""),
      QS("[-9223372036854775808,9223372036854775807]"),
      NULL,
@@ -15101,8 +16713,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Uint",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt133,
-     mk179,
+     &gt138,
+     mk208,
      QS(""),
      QS("[0,18446744073709551615]"),
      NULL,
@@ -15111,8 +16723,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Float",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt134,
-     mk180,
+     &gt139,
+     mk209,
      QS(""),
      QS("[-1.7976931348623157e+308,1.7976931348623157e+308]"),
      NULL,
@@ -15121,8 +16733,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Invalid/Channel",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt135,
-     mk181,
+     &gt140,
+     mk210,
      QS(""),
      QS("["),
      "json: cannot marshal from Go chan string within \"/0\"",
@@ -15131,8 +16743,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/IgnoreInvalidFormat",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt130,
-     mk182,
+     &gt135,
+     mk211,
      QS(""),
      QS("[\"hello\",\"goodbye\"]"),
      NULL,
@@ -15142,7 +16754,7 @@ static const JvCase jv_cases[] = {
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt72,
-     mk183,
+     mk212,
      QS(""),
      QS("null"),
      NULL,
@@ -15152,7 +16764,7 @@ static const JvCase jv_cases[] = {
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt71,
-     mk184,
+     mk213,
      QS(""),
      QS("null"),
      NULL,
@@ -15161,8 +16773,8 @@ static const JvCase jv_cases[] = {
     {"Pointers/Bool",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt137,
-     mk185,
+     &gt142,
+     mk214,
      QS(""),
      QS("true"),
      NULL,
@@ -15171,8 +16783,8 @@ static const JvCase jv_cases[] = {
     {"Pointers/String",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt138,
-     mk186,
+     &gt143,
+     mk215,
      QS(""),
      QS("\"string\""),
      NULL,
@@ -15181,8 +16793,8 @@ static const JvCase jv_cases[] = {
     {"Pointers/Bytes",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt139,
-     mk187,
+     &gt144,
+     mk216,
      QS(""),
      QS("\"Ynl0ZXM=\""),
      NULL,
@@ -15192,7 +16804,7 @@ static const JvCase jv_cases[] = {
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt71,
-     mk188,
+     mk217,
      QS(""),
      QS("-100"),
      NULL,
@@ -15201,8 +16813,8 @@ static const JvCase jv_cases[] = {
     {"Pointers/Uint",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt141,
-     mk189,
+     &gt146,
+     mk218,
      QS(""),
      QS("100"),
      NULL,
@@ -15211,8 +16823,8 @@ static const JvCase jv_cases[] = {
     {"Pointers/Float",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt143,
-     mk190,
+     &gt148,
+     mk219,
      QS(""),
      QS("3.14159"),
      NULL,
@@ -15221,8 +16833,8 @@ static const JvCase jv_cases[] = {
     {"Pointers/CyclicPointer",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt144,
-     mk191,
+     &gt149,
+     mk220,
      QS(""),
      QS("{\"P\":{\"P\":{\"P\":{\"P\":{\"P\":{\"P\":{\"P\":{\"P\":{\"P\":{\"P\":{\"P\":{"
         "\"P\":{\"P\":{\"P\":{\"P\":{\"P\":{\"P\":{\"P\":{\"P\":{\"P\":{\"P\":{\"P\":{"
@@ -15323,8 +16935,8 @@ static const JvCase jv_cases[] = {
     {"Pointers/IgnoreInvalidFormat",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt137,
-     mk192,
+     &gt142,
+     mk221,
      QS(""),
      QS("true"),
      NULL,
@@ -15333,8 +16945,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Nil/Empty",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt146,
-     mk193,
+     &gt151,
+     mk222,
      QS(""),
      QS("[null]"),
      NULL,
@@ -15343,8 +16955,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk194,
+     &gt152,
+     mk223,
      QS(""),
      QS("{\"X\":[null,false,\"\",0,{},[],\"AAAAAAAAAAA=\"]}"),
      NULL,
@@ -15353,8 +16965,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Stringified",
      1,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk195,
+     &gt152,
+     mk224,
      QS(""),
      QS("{\"X\":\"0\"}"),
      NULL,
@@ -15363,8 +16975,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Float/NaN",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk196,
+     &gt152,
+     mk225,
      QS(""),
      QS("{\"X\""),
      "json: cannot marshal from Go float64 within \"/X\": unsupported value: NaN",
@@ -15373,8 +16985,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Maps/Nil",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk197,
+     &gt152,
+     mk226,
      QS(""),
      QS("{\"X\":{}}"),
      NULL,
@@ -15383,8 +16995,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Maps/Nil/FormatNilMapAsNull",
      1,
      {0x100000ULL, 0x100000ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk198,
+     &gt152,
+     mk227,
      QS(""),
      QS("{\"X\":null}"),
      NULL,
@@ -15393,8 +17005,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Maps/Empty",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk199,
+     &gt152,
+     mk228,
      QS(""),
      QS("{\"X\":{}}"),
      NULL,
@@ -15403,8 +17015,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Maps/Empty/Multiline",
      1,
      {0x4800ULL, 0x4800ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk200,
+     &gt152,
+     mk229,
      QS(""),
      QS("{\012\"X\": {}\012}"),
      NULL,
@@ -15413,8 +17025,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Maps/NonEmpty",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk201,
+     &gt152,
+     mk230,
      QS(""),
      QS("{\"X\":{\"fizz\":\"buzz\"}}"),
      NULL,
@@ -15423,8 +17035,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Maps/Deterministic",
      1,
      {0x80000ULL, 0x80000ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk202,
+     &gt152,
+     mk231,
      QS(""),
      QS("{\"X\":{\"alpha\":\"\",\"bravo\":\"\"}}"),
      NULL,
@@ -15433,8 +17045,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Maps/Deterministic+AllowInvalidUTF8+RejectDuplicateNames",
      1,
      {0x80006ULL, 0x80004ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk203,
+     &gt152,
+     mk232,
      QS(""),
      QS("{\"X\":{\"\357\277\275\":\"\""),
      "jsontext: duplicate object member name \"\357\277\275\" within \"/X\"",
@@ -15443,8 +17055,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Maps/Deterministic+AllowInvalidUTF8+AllowDuplicateNames",
      1,
      {0x80006ULL, 0x80006ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk204,
+     &gt152,
+     mk233,
      QS(""),
      QS("{\"X\":{\"\357\277\275\":\"bravo\",\"\357\277\275\":\"alpha\"}}"),
      NULL,
@@ -15453,8 +17065,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Maps/RejectInvalidUTF8",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk205,
+     &gt152,
+     mk234,
      QS(""),
      QS("{\"X\":{"),
      "jsontext: invalid UTF-8 within \"/X\" after offset 6",
@@ -15463,8 +17075,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Maps/AllowInvalidUTF8+RejectDuplicateNames",
      1,
      {0x4ULL, 0x4ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk206,
+     &gt152,
+     mk235,
      QS(""),
      QS("{\"X\":{\"\357\277\275\":\"\""),
      "jsontext: duplicate object member name \"\357\277\275\" within \"/X\"",
@@ -15473,8 +17085,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Maps/AllowInvalidUTF8+AllowDuplicateNames",
      1,
      {0x6ULL, 0x6ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk207,
+     &gt152,
+     mk236,
      QS(""),
      QS("{\"X\":{\"\357\277\275\":\"\",\"\357\277\275\":\"\"}}"),
      NULL,
@@ -15483,8 +17095,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Slices/Nil",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk208,
+     &gt152,
+     mk237,
      QS(""),
      QS("{\"X\":[]}"),
      NULL,
@@ -15493,8 +17105,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Slices/Nil/FormatNilSliceAsNull",
      1,
      {0x200000ULL, 0x200000ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk209,
+     &gt152,
+     mk238,
      QS(""),
      QS("{\"X\":null}"),
      NULL,
@@ -15503,8 +17115,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Slices/Empty",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk210,
+     &gt152,
+     mk239,
      QS(""),
      QS("{\"X\":[]}"),
      NULL,
@@ -15513,8 +17125,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Slices/Empty/Multiline",
      1,
      {0x4800ULL, 0x4800ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk211,
+     &gt152,
+     mk240,
      QS(""),
      QS("{\012\"X\": []\012}"),
      NULL,
@@ -15523,8 +17135,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Slices/NonEmpty",
      1,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk212,
+     &gt152,
+     mk241,
      QS(""),
      QS("{\"X\":[\"fizz\",\"buzz\"]}"),
      NULL,
@@ -15534,7 +17146,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_bool,
-     mk213,
+     mk242,
      QS("falsetrue"),
      QS(""),
      "jsontext: invalid character 't' after top-level value after offset 5",
@@ -15544,7 +17156,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_bool,
-     mk214,
+     mk243,
      QS("null"),
      QS(""),
      NULL,
@@ -15554,7 +17166,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt0,
-     mk215,
+     mk244,
      QS("[null,false,true]"),
      QS(""),
      NULL,
@@ -15564,7 +17176,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt1,
-     mk216,
+     mk245,
      QS("[null,false,true]"),
      QS(""),
      NULL,
@@ -15574,7 +17186,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_bool,
-     mk217,
+     mk246,
      QS("\"false\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go bool",
@@ -15584,7 +17196,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_bool,
-     mk218,
+     mk247,
      QS("\"true\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go bool",
@@ -15594,7 +17206,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10008000000ULL, 0x10008000000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_bool,
-     mk219,
+     mk248,
      QS("\"true\""),
      QS(""),
      NULL,
@@ -15604,7 +17216,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10008000000ULL, 0x10008000000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_bool,
-     mk220,
+     mk249,
      QS("\"false\""),
      QS(""),
      NULL,
@@ -15614,7 +17226,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10008000000ULL, 0x10008000000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_bool,
-     mk221,
+     mk250,
      QS("\"false \""),
      QS(""),
      "json: cannot unmarshal JSON string \"false \" into Go bool: invalid syntax",
@@ -15624,7 +17236,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10008000000ULL, 0x10008000000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_bool,
-     mk222,
+     mk251,
      QS("false"),
      QS(""),
      "json: cannot unmarshal JSON boolean into Go bool",
@@ -15634,7 +17246,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_bool,
-     mk223,
+     mk252,
      QS("0"),
      QS(""),
      "json: cannot unmarshal JSON number into Go bool",
@@ -15644,7 +17256,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_bool,
-     mk224,
+     mk253,
      QS("\"\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go bool",
@@ -15654,7 +17266,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_bool,
-     mk225,
+     mk254,
      QS("{}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go bool",
@@ -15664,7 +17276,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_bool,
-     mk226,
+     mk255,
      QS("[]"),
      QS(""),
      "json: cannot unmarshal JSON array into Go bool",
@@ -15674,7 +17286,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_bool,
-     mk227,
+     mk256,
      QS("false"),
      QS(""),
      NULL,
@@ -15684,7 +17296,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Str,
-     mk228,
+     mk257,
      QS("null"),
      QS(""),
      NULL,
@@ -15694,7 +17306,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt3,
-     mk229,
+     mk258,
      QS("[null,\"\",\"hello\",\"\344\270\226\347\225\214\"]"),
      QS(""),
      NULL,
@@ -15704,7 +17316,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt3,
-     mk230,
+     mk259,
      QS("[null,\"\",\"\\u0068\\u0065\\u006c\\u006c\\u006f\",\"\\u4e16\\u754c\"]"),
      QS(""),
      NULL,
@@ -15714,7 +17326,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt4,
-     mk231,
+     mk260,
      QS("[null,\"\",\"hello\",\"\344\270\226\347\225\214\"]"),
      QS(""),
      NULL,
@@ -15724,7 +17336,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Str,
-     mk232,
+     mk261,
      QS("false"),
      QS(""),
      "json: cannot unmarshal JSON boolean into Go string",
@@ -15734,7 +17346,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Str,
-     mk233,
+     mk262,
      QS("true"),
      QS(""),
      "json: cannot unmarshal JSON boolean into Go string",
@@ -15744,7 +17356,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Str,
-     mk234,
+     mk263,
      QS("{}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go string",
@@ -15754,7 +17366,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Str,
-     mk235,
+     mk264,
      QS("[]"),
      QS(""),
      "json: cannot unmarshal JSON array into Go string",
@@ -15764,7 +17376,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Str,
-     mk236,
+     mk265,
      QS("\"hello\""),
      QS(""),
      NULL,
@@ -15774,7 +17386,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10008000000ULL, 0x10008000000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Str,
-     mk237,
+     mk266,
      QS("\"\\\"foo\\\"\""),
      QS(""),
      NULL,
@@ -15784,7 +17396,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10008000000ULL, 0x10008000000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Str,
-     mk238,
+     mk267,
      QS("\"\\\"foo\\\" \""),
      QS(""),
      "json: cannot unmarshal JSON string into Go string: invalid character ' ' after "
@@ -15795,7 +17407,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10008000000ULL, 0x10008000000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Str,
-     mk239,
+     mk268,
      QS("\"\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go string: unexpected EOF",
@@ -15805,7 +17417,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt7,
-     mk240,
+     mk269,
      QS("null"),
      QS(""),
      NULL,
@@ -15815,7 +17427,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt6,
-     mk241,
+     mk270,
      QS("[null,\"\",\"AQ==\",\"AQI=\",\"AQID\"]"),
      QS(""),
      NULL,
@@ -15825,7 +17437,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt7,
-     mk242,
+     mk271,
      QS("\"dGhlIHF1aWNrIGJyb3duIGZveCBqdW1wZWQgb3ZlciB0aGUgbGF6eSBkb2cgYW5kIGF0ZSB0aGUg"
         "aG9tZXdvcmsgdGhhdCBJIHNwZW50IHNvIG11Y2ggdGltZSBvbi4=\""),
      QS(""),
@@ -15840,7 +17452,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt7,
-     mk243,
+     mk272,
      QS("\"AQID\""),
      QS(""),
      NULL,
@@ -15850,7 +17462,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt6,
-     mk244,
+     mk273,
      QS("[null,\"\",\"\\u0041\\u0051\\u003d\\u003d\",\"\\u0041\\u0051\\u0049\\u003d\","
         "\"\\u0041\\u0051\\u0049\\u0044\"]"),
      QS(""),
@@ -15861,7 +17473,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt8,
-     mk245,
+     mk274,
      QS("[null,\"\",\"AQ==\",\"AQI=\",\"AQID\"]"),
      QS(""),
      NULL,
@@ -15871,7 +17483,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &gt6,
-     mk246,
+     mk275,
      QS("[null,\"\",\"AQ==\",\"AQI=\",\"AQID\"]"),
      QS(""),
      NULL,
@@ -15881,7 +17493,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt10,
-     mk247,
+     mk276,
      QS("[null,[],[1],[1,2],[1,2,3]]"),
      QS(""),
      NULL,
@@ -15891,7 +17503,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt13,
-     mk248,
+     mk277,
      QS("\"aGVsbG8=\""),
      QS(""),
      NULL,
@@ -15900,8 +17512,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray0/Valid",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt150,
-     mk249,
+     &gt155,
+     mk278,
      QS("\"\""),
      QS(""),
      NULL,
@@ -15910,8 +17522,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray0/Invalid",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt150,
-     mk250,
+     &gt155,
+     mk279,
      QS("\"A\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go [0]uint8: illegal base64 data at "
@@ -15921,8 +17533,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray0/Overflow",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt150,
-     mk251,
+     &gt155,
+     mk280,
      QS("\"AA==\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go [0]uint8: decoded length of 1 "
@@ -15932,8 +17544,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray1/Valid",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt151,
-     mk252,
+     &gt156,
+     mk281,
      QS("\"AQ==\""),
      QS(""),
      NULL,
@@ -15942,8 +17554,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray1/Invalid",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt151,
-     mk253,
+     &gt156,
+     mk282,
      QS("\"$$==\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go [1]uint8: illegal base64 data at "
@@ -15953,8 +17565,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray1/Underflow",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt151,
-     mk254,
+     &gt156,
+     mk283,
      QS("\"\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go [1]uint8: decoded length of 0 "
@@ -15964,8 +17576,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray1/Overflow",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt151,
-     mk255,
+     &gt156,
+     mk284,
      QS("\"AQI=\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go [1]uint8: decoded length of 2 "
@@ -15975,8 +17587,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray2/Valid",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt152,
-     mk256,
+     &gt157,
+     mk285,
      QS("\"AQI=\""),
      QS(""),
      NULL,
@@ -15985,8 +17597,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray2/Invalid",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt152,
-     mk257,
+     &gt157,
+     mk286,
      QS("\"$$$=\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go [2]uint8: illegal base64 data at "
@@ -15996,8 +17608,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray2/Underflow",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt152,
-     mk258,
+     &gt157,
+     mk287,
      QS("\"AQ==\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go [2]uint8: decoded length of 1 "
@@ -16007,8 +17619,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray2/Underflow/Allowed",
      0,
      {0x40000000000ULL, 0x40000000000ULL, QS(""), QS(""), 0, 0},
-     &gt152,
-     mk259,
+     &gt157,
+     mk288,
      QS("\"AQ==\""),
      QS(""),
      NULL,
@@ -16017,8 +17629,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray2/Overflow",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt152,
-     mk260,
+     &gt157,
+     mk289,
      QS("\"AQID\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go [2]uint8: decoded length of 3 "
@@ -16028,8 +17640,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray2/Overflow/Allowed",
      0,
      {0x40000000000ULL, 0x40000000000ULL, QS(""), QS(""), 0, 0},
-     &gt152,
-     mk261,
+     &gt157,
+     mk290,
      QS("\"AQID\""),
      QS(""),
      NULL,
@@ -16038,8 +17650,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray3/Valid",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt153,
-     mk262,
+     &gt158,
+     mk291,
      QS("\"AQID\""),
      QS(""),
      NULL,
@@ -16048,8 +17660,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray3/Invalid",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt153,
-     mk263,
+     &gt158,
+     mk292,
      QS("\"$$$$\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go [3]uint8: illegal base64 data at "
@@ -16059,8 +17671,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray3/Underflow",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt153,
-     mk264,
+     &gt158,
+     mk293,
      QS("\"AQI=\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go [3]uint8: decoded length of 2 "
@@ -16070,8 +17682,8 @@ static const JvCase jv_cases[] = {
     {"Bytes/ByteArray3/Overflow",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt153,
-     mk265,
+     &gt158,
+     mk294,
      QS("\"AQIDAQ==\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go [3]uint8: decoded length of 4 "
@@ -16082,7 +17694,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt81,
-     mk266,
+     mk295,
      QS("\"AQIDBA==\""),
      QS(""),
      NULL,
@@ -16092,7 +17704,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt81,
-     mk267,
+     mk296,
      QS("\"$$$$$$==\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go [4]uint8: illegal base64 data at "
@@ -16103,7 +17715,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt81,
-     mk268,
+     mk297,
      QS("\"AQID\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go [4]uint8: decoded length of 3 "
@@ -16114,7 +17726,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt81,
-     mk269,
+     mk298,
      QS("\"AQIDBAU=\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go [4]uint8: decoded length of 5 "
@@ -16125,7 +17737,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt14,
-     mk270,
+     mk299,
      QS("[104,101,108,108,111]"),
      QS(""),
      NULL,
@@ -16135,7 +17747,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt7,
-     mk271,
+     mk300,
      QS("\"AR==\""),
      QS(""),
      NULL,
@@ -16145,7 +17757,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt7,
-     mk272,
+     mk301,
      QS("\"AQ=\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8: illegal base64 data at input "
@@ -16156,7 +17768,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt7,
-     mk273,
+     mk302,
      QS("\"AQ\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8: illegal base64 data at input "
@@ -16167,7 +17779,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt7,
-     mk274,
+     mk303,
      QS("\"@@@@\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8: illegal base64 data at input "
@@ -16178,7 +17790,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt7,
-     mk275,
+     mk304,
      QS("true"),
      QS(""),
      "json: cannot unmarshal JSON boolean into Go []uint8",
@@ -16188,7 +17800,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt7,
-     mk276,
+     mk305,
      QS("0"),
      QS(""),
      "json: cannot unmarshal JSON number into Go []uint8",
@@ -16198,7 +17810,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt7,
-     mk277,
+     mk306,
      QS("{}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go []uint8",
@@ -16208,7 +17820,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt7,
-     mk278,
+     mk307,
      QS("[]"),
      QS(""),
      "json: cannot unmarshal JSON array into Go []uint8",
@@ -16218,7 +17830,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt7,
-     mk279,
+     mk308,
      QS("\"aGVsbG8=\""),
      QS(""),
      NULL,
@@ -16228,7 +17840,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk280,
+     mk309,
      QS("null"),
      QS(""),
      NULL,
@@ -16238,7 +17850,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk281,
+     mk310,
      QS("1"),
      QS(""),
      NULL,
@@ -16248,7 +17860,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int8_t,
-     mk282,
+     mk311,
      QS("-129"),
      QS(""),
      "json: cannot unmarshal JSON number -129 into Go int8: value out of range",
@@ -16258,7 +17870,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int8_t,
-     mk283,
+     mk312,
      QS("-128"),
      QS(""),
      NULL,
@@ -16268,7 +17880,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int8_t,
-     mk284,
+     mk313,
      QS("127"),
      QS(""),
      NULL,
@@ -16278,7 +17890,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int8_t,
-     mk285,
+     mk314,
      QS("128"),
      QS(""),
      "json: cannot unmarshal JSON number 128 into Go int8: value out of range",
@@ -16288,7 +17900,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int16_t,
-     mk286,
+     mk315,
      QS("-32769"),
      QS(""),
      "json: cannot unmarshal JSON number -32769 into Go int16: value out of range",
@@ -16298,7 +17910,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int16_t,
-     mk287,
+     mk316,
      QS("-32768"),
      QS(""),
      NULL,
@@ -16308,7 +17920,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int16_t,
-     mk288,
+     mk317,
      QS("32767"),
      QS(""),
      NULL,
@@ -16318,7 +17930,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int16_t,
-     mk289,
+     mk318,
      QS("32768"),
      QS(""),
      "json: cannot unmarshal JSON number 32768 into Go int16: value out of range",
@@ -16328,7 +17940,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int32_t,
-     mk290,
+     mk319,
      QS("-2147483649"),
      QS(""),
      "json: cannot unmarshal JSON number -2147483649 into Go int32: value out of range",
@@ -16338,7 +17950,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int32_t,
-     mk291,
+     mk320,
      QS("-2147483648"),
      QS(""),
      NULL,
@@ -16348,7 +17960,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int32_t,
-     mk292,
+     mk321,
      QS("2147483647"),
      QS(""),
      NULL,
@@ -16358,7 +17970,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int32_t,
-     mk293,
+     mk322,
      QS("2147483648"),
      QS(""),
      "json: cannot unmarshal JSON number 2147483648 into Go int32: value out of range",
@@ -16368,7 +17980,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int64_t,
-     mk294,
+     mk323,
      QS("-9223372036854775809"),
      QS(""),
      "json: cannot unmarshal JSON number -9223372036854775809 into Go int64: value out "
@@ -16379,7 +17991,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int64_t,
-     mk295,
+     mk324,
      QS("-9223372036854775808"),
      QS(""),
      NULL,
@@ -16389,7 +18001,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int64_t,
-     mk296,
+     mk325,
      QS("9223372036854775807"),
      QS(""),
      NULL,
@@ -16399,7 +18011,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_int64_t,
-     mk297,
+     mk326,
      QS("9223372036854775808"),
      QS(""),
      "json: cannot unmarshal JSON number 9223372036854775808 into Go int64: value out "
@@ -16410,7 +18022,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt16,
-     mk298,
+     mk327,
      QS("-6464"),
      QS(""),
      NULL,
@@ -16420,7 +18032,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk299,
+     mk328,
      QS("\"-6464\""),
      QS(""),
      NULL,
@@ -16430,7 +18042,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk300,
+     mk329,
      QS("-6464"),
      QS(""),
      "json: cannot unmarshal JSON number into Go int",
@@ -16440,7 +18052,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk301,
+     mk330,
      QS("\"00\""),
      QS(""),
      "json: cannot unmarshal JSON string \"00\" into Go int: invalid syntax",
@@ -16450,7 +18062,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk302,
+     mk331,
      QS("\"\\u002d\\u0036\\u0034\\u0036\\u0034\""),
      QS(""),
      NULL,
@@ -16460,7 +18072,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk303,
+     mk332,
      QS("-0"),
      QS(""),
      NULL,
@@ -16470,7 +18082,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk304,
+     mk333,
      QS("1.0"),
      QS(""),
      "json: cannot unmarshal JSON number 1.0 into Go int: invalid syntax",
@@ -16480,7 +18092,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk305,
+     mk334,
      QS("1e0"),
      QS(""),
      "json: cannot unmarshal JSON number 1e0 into Go int: invalid syntax",
@@ -16490,7 +18102,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk306,
+     mk335,
      QS("\"1.0\""),
      QS(""),
      "json: cannot unmarshal JSON string \"1.0\" into Go int: invalid syntax",
@@ -16500,7 +18112,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk307,
+     mk336,
      QS("\"1e0\""),
      QS(""),
      "json: cannot unmarshal JSON string \"1e0\" into Go int: invalid syntax",
@@ -16510,7 +18122,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk308,
+     mk337,
      QS("100000000000000000000000000000"),
      QS(""),
      "json: cannot unmarshal JSON number 100000000000000000000000000000 into Go int: "
@@ -16521,7 +18133,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk309,
+     mk338,
      QS("\"100000000000000000000000000000x\""),
      QS(""),
      "json: cannot unmarshal JSON string \"100000000000000000000000000000x\" into Go "
@@ -16532,7 +18144,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk310,
+     mk339,
      QS("\"0 \""),
      QS(""),
      "json: cannot unmarshal JSON string \"0 \" into Go int: invalid syntax",
@@ -16542,7 +18154,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk311,
+     mk340,
      QS("true"),
      QS(""),
      "json: cannot unmarshal JSON boolean into Go int",
@@ -16552,7 +18164,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk312,
+     mk341,
      QS("\"0\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go int",
@@ -16562,7 +18174,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk313,
+     mk342,
      QS("{}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go int",
@@ -16572,7 +18184,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk314,
+     mk343,
      QS("[]"),
      QS(""),
      "json: cannot unmarshal JSON array into Go int",
@@ -16582,7 +18194,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Int,
-     mk315,
+     mk344,
      QS("1"),
      QS(""),
      NULL,
@@ -16592,7 +18204,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk316,
+     mk345,
      QS("null"),
      QS(""),
      NULL,
@@ -16602,7 +18214,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk317,
+     mk346,
      QS("1"),
      QS(""),
      NULL,
@@ -16612,7 +18224,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_uint8_t,
-     mk318,
+     mk347,
      QS("0"),
      QS(""),
      NULL,
@@ -16622,7 +18234,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_uint8_t,
-     mk319,
+     mk348,
      QS("255"),
      QS(""),
      NULL,
@@ -16632,7 +18244,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_uint8_t,
-     mk320,
+     mk349,
      QS("256"),
      QS(""),
      "json: cannot unmarshal JSON number 256 into Go uint8: value out of range",
@@ -16642,7 +18254,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_uint16_t,
-     mk321,
+     mk350,
      QS("0"),
      QS(""),
      NULL,
@@ -16652,7 +18264,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_uint16_t,
-     mk322,
+     mk351,
      QS("65535"),
      QS(""),
      NULL,
@@ -16662,7 +18274,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_uint16_t,
-     mk323,
+     mk352,
      QS("65536"),
      QS(""),
      "json: cannot unmarshal JSON number 65536 into Go uint16: value out of range",
@@ -16672,7 +18284,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_uint32_t,
-     mk324,
+     mk353,
      QS("0"),
      QS(""),
      NULL,
@@ -16682,7 +18294,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_uint32_t,
-     mk325,
+     mk354,
      QS("4294967295"),
      QS(""),
      NULL,
@@ -16692,7 +18304,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_uint32_t,
-     mk326,
+     mk355,
      QS("4294967296"),
      QS(""),
      "json: cannot unmarshal JSON number 4294967296 into Go uint32: value out of range",
@@ -16702,7 +18314,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_uint64_t,
-     mk327,
+     mk356,
      QS("0"),
      QS(""),
      NULL,
@@ -16712,7 +18324,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_uint64_t,
-     mk328,
+     mk357,
      QS("18446744073709551615"),
      QS(""),
      NULL,
@@ -16722,7 +18334,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_uint64_t,
-     mk329,
+     mk358,
      QS("18446744073709551616"),
      QS(""),
      "json: cannot unmarshal JSON number 18446744073709551616 into Go uint64: value "
@@ -16733,7 +18345,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uintptr,
-     mk330,
+     mk359,
      QS("1"),
      QS(""),
      NULL,
@@ -16743,7 +18355,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt17,
-     mk331,
+     mk360,
      QS("6464"),
      QS(""),
      NULL,
@@ -16753,7 +18365,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk332,
+     mk361,
      QS("\"6464\""),
      QS(""),
      NULL,
@@ -16763,7 +18375,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk333,
+     mk362,
      QS("6464"),
      QS(""),
      "json: cannot unmarshal JSON number into Go uint",
@@ -16773,7 +18385,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk334,
+     mk363,
      QS("\"00\""),
      QS(""),
      "json: cannot unmarshal JSON string \"00\" into Go uint: invalid syntax",
@@ -16783,7 +18395,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk335,
+     mk364,
      QS("\"\\u0036\\u0034\\u0036\\u0034\""),
      QS(""),
      NULL,
@@ -16793,7 +18405,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk336,
+     mk365,
      QS("-1"),
      QS(""),
      "json: cannot unmarshal JSON number -1 into Go uint: invalid syntax",
@@ -16803,7 +18415,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk337,
+     mk366,
      QS("-0"),
      QS(""),
      "json: cannot unmarshal JSON number -0 into Go uint: invalid syntax",
@@ -16813,7 +18425,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk338,
+     mk367,
      QS("1.0"),
      QS(""),
      "json: cannot unmarshal JSON number 1.0 into Go uint: invalid syntax",
@@ -16823,7 +18435,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk339,
+     mk368,
      QS("1e0"),
      QS(""),
      "json: cannot unmarshal JSON number 1e0 into Go uint: invalid syntax",
@@ -16833,7 +18445,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk340,
+     mk369,
      QS("\"1.0\""),
      QS(""),
      "json: cannot unmarshal JSON string \"1.0\" into Go uint: invalid syntax",
@@ -16843,7 +18455,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk341,
+     mk370,
      QS("\"1e0\""),
      QS(""),
      "json: cannot unmarshal JSON string \"1e0\" into Go uint: invalid syntax",
@@ -16853,7 +18465,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk342,
+     mk371,
      QS("100000000000000000000000000000"),
      QS(""),
      "json: cannot unmarshal JSON number 100000000000000000000000000000 into Go uint: "
@@ -16864,7 +18476,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk343,
+     mk372,
      QS("\"100000000000000000000000000000x\""),
      QS(""),
      "json: cannot unmarshal JSON string \"100000000000000000000000000000x\" into Go "
@@ -16875,7 +18487,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk344,
+     mk373,
      QS("\"0 \""),
      QS(""),
      "json: cannot unmarshal JSON string \"0 \" into Go uint: invalid syntax",
@@ -16885,7 +18497,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk345,
+     mk374,
      QS("true"),
      QS(""),
      "json: cannot unmarshal JSON boolean into Go uint",
@@ -16895,7 +18507,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk346,
+     mk375,
      QS("\"0\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go uint",
@@ -16905,7 +18517,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk347,
+     mk376,
      QS("{}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go uint",
@@ -16915,7 +18527,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk348,
+     mk377,
      QS("[]"),
      QS(""),
      "json: cannot unmarshal JSON array into Go uint",
@@ -16925,7 +18537,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Uint,
-     mk349,
+     mk378,
      QS("1"),
      QS(""),
      NULL,
@@ -16935,7 +18547,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk350,
+     mk379,
      QS("null"),
      QS(""),
      NULL,
@@ -16945,7 +18557,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_float,
-     mk351,
+     mk380,
      QS("3.14159265358979323846264338327950288419716939937510582097494459"),
      QS(""),
      NULL,
@@ -16955,7 +18567,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_float,
-     mk352,
+     mk381,
      QS("1e-1000"),
      QS(""),
      NULL,
@@ -16965,7 +18577,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_float,
-     mk353,
+     mk382,
      QS("-1e1000"),
      QS(""),
      "json: cannot unmarshal JSON number -1e1000 into Go float32: value out of range",
@@ -16975,7 +18587,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk354,
+     mk383,
      QS("3.14159265358979323846264338327950288419716939937510582097494459"),
      QS(""),
      NULL,
@@ -16985,7 +18597,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk355,
+     mk384,
      QS("1e-1000"),
      QS(""),
      NULL,
@@ -16995,7 +18607,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk356,
+     mk385,
      QS("-1e1000"),
      QS(""),
      "json: cannot unmarshal JSON number -1e1000 into Go float64: value out of range",
@@ -17005,7 +18617,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Any,
-     mk357,
+     mk386,
      QS("1e1000"),
      QS(""),
      "json: cannot unmarshal JSON number 1e1000 into Go float64: value out of range",
@@ -17015,7 +18627,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt18,
-     mk358,
+     mk387,
      QS("64.64"),
      QS(""),
      NULL,
@@ -17025,7 +18637,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk359,
+     mk388,
      QS("\"64.64\""),
      QS(""),
      NULL,
@@ -17035,7 +18647,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk360,
+     mk389,
      QS("64.64"),
      QS(""),
      "json: cannot unmarshal JSON number into Go float64",
@@ -17045,7 +18657,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk361,
+     mk390,
      QS("\"\\u0036\\u0034\\u002e\\u0036\\u0034\""),
      QS(""),
      NULL,
@@ -17055,7 +18667,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk362,
+     mk391,
      QS("\"NaN\""),
      QS(""),
      "json: cannot unmarshal JSON string \"NaN\" into Go float64: invalid syntax",
@@ -17065,7 +18677,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk363,
+     mk392,
      QS("\"Infinity\""),
      QS(""),
      "json: cannot unmarshal JSON string \"Infinity\" into Go float64: invalid syntax",
@@ -17075,7 +18687,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk364,
+     mk393,
      QS("\"1 \""),
      QS(""),
      "json: cannot unmarshal JSON string \"1 \" into Go float64: invalid syntax",
@@ -17085,7 +18697,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk365,
+     mk394,
      QS("\"1p-2\""),
      QS(""),
      "json: cannot unmarshal JSON string \"1p-2\" into Go float64: invalid syntax",
@@ -17095,7 +18707,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk366,
+     mk395,
      QS("true"),
      QS(""),
      "json: cannot unmarshal JSON boolean into Go float64",
@@ -17105,7 +18717,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk367,
+     mk396,
      QS("\"0\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go float64",
@@ -17115,7 +18727,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk368,
+     mk397,
      QS("{}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go float64",
@@ -17125,7 +18737,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk369,
+     mk398,
      QS("[]"),
      QS(""),
      "json: cannot unmarshal JSON array into Go float64",
@@ -17135,7 +18747,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_double,
-     mk370,
+     mk399,
      QS("1"),
      QS(""),
      NULL,
@@ -17145,7 +18757,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt33,
-     mk371,
+     mk400,
      QS("null"),
      QS(""),
      NULL,
@@ -17154,8 +18766,8 @@ static const JvCase jv_cases[] = {
     {"Maps/InvalidKey/Bool",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt154,
-     mk372,
+     &gt159,
+     mk401,
      QS("{\"true\":\"false\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go bool within \"/true\"",
@@ -17164,8 +18776,8 @@ static const JvCase jv_cases[] = {
     {"Maps/InvalidKey/NamedBool",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt155,
-     mk373,
+     &gt160,
+     mk402,
      QS("{\"true\":\"false\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go json.namedBool within \"/true\"",
@@ -17175,7 +18787,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt21,
-     mk374,
+     mk403,
      QS("{\"key\":\"value\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go [1]string within \"/key\"",
@@ -17185,7 +18797,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt23,
-     mk375,
+     mk404,
      QS("{\"key\":\"value\"}"),
      QS(""),
      "json: cannot unmarshal into Go chan string after offset 1",
@@ -17194,8 +18806,8 @@ static const JvCase jv_cases[] = {
     {"Maps/ValidKey/Int",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt156,
-     mk376,
+     &gt161,
+     mk405,
      QS("{\"0\":0,\"-1\":1,\"2\":2,\"-3\":3}"),
      QS(""),
      NULL,
@@ -17204,8 +18816,8 @@ static const JvCase jv_cases[] = {
     {"Maps/ValidKey/NamedInt",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt157,
-     mk377,
+     &gt162,
+     mk406,
      QS("{\"0\":0,\"-1\":1,\"2\":2,\"-3\":3}"),
      QS(""),
      NULL,
@@ -17214,8 +18826,8 @@ static const JvCase jv_cases[] = {
     {"Maps/ValidKey/Uint",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt158,
-     mk378,
+     &gt163,
+     mk407,
      QS("{\"0\":0,\"1\":1,\"2\":2,\"3\":3}"),
      QS(""),
      NULL,
@@ -17224,8 +18836,8 @@ static const JvCase jv_cases[] = {
     {"Maps/ValidKey/NamedUint",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt159,
-     mk379,
+     &gt164,
+     mk408,
      QS("{\"0\":0,\"1\":1,\"2\":2,\"3\":3}"),
      QS(""),
      NULL,
@@ -17234,8 +18846,8 @@ static const JvCase jv_cases[] = {
     {"Maps/ValidKey/Float",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt160,
-     mk380,
+     &gt165,
+     mk409,
      QS("{\"1.234\":1.234,\"12.34\":12.34,\"123.4\":123.4}"),
      QS(""),
      NULL,
@@ -17245,8 +18857,8 @@ static const JvCase jv_cases[] = {
     {"Maps/DuplicateName/Int",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt156,
-     mk381,
+     &gt161,
+     mk410,
      QS("{\"0\":1,\"-0\":-1}"),
      QS(""),
      "jsontext: duplicate object member name \"-0\"",
@@ -17255,8 +18867,8 @@ static const JvCase jv_cases[] = {
     {"Maps/DuplicateName/Int/MergeWithLegacySemantics",
      0,
      {0x800000000ULL, 0x800000000ULL, QS(""), QS(""), 0, 0},
-     &gt156,
-     mk382,
+     &gt161,
+     mk411,
      QS("{\"0\":1,\"-0\":-1}"),
      QS(""),
      "jsontext: duplicate object member name \"-0\"",
@@ -17265,8 +18877,8 @@ static const JvCase jv_cases[] = {
     {"Maps/DuplicateName/Int/AllowDuplicateNames",
      0,
      {0x2ULL, 0x2ULL, QS(""), QS(""), 0, 0},
-     &gt156,
-     mk383,
+     &gt161,
+     mk412,
      QS("{\"0\":1,\"-0\":-1}"),
      QS(""),
      NULL,
@@ -17275,8 +18887,8 @@ static const JvCase jv_cases[] = {
     {"Maps/DuplicateName/Int/OverwriteExisting",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt156,
-     mk384,
+     &gt161,
+     mk413,
      QS("{\"-0\":-1}"),
      QS(""),
      NULL,
@@ -17286,7 +18898,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt31,
-     mk385,
+     mk414,
      QS("{\"1.0\":\"1.0\",\"1\":\"1\",\"1e0\":\"1e0\"}"),
      QS(""),
      "jsontext: duplicate object member name \"1\"",
@@ -17296,7 +18908,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x2ULL, 0x2ULL, QS(""), QS(""), 0, 0},
      &gt31,
-     mk386,
+     mk415,
      QS("{\"1.0\":\"1.0\",\"1\":\"1\",\"1e0\":\"1e0\"}"),
      QS(""),
      NULL,
@@ -17306,7 +18918,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt31,
-     mk387,
+     mk416,
      QS("{\"1.0\":\"1.0\"}"),
      QS(""),
      NULL,
@@ -17315,8 +18927,8 @@ static const JvCase jv_cases[] = {
     {"Maps/ValidKey/Interface",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt149,
-     mk388,
+     &gt154,
+     mk417,
      QS("{\"false\":\"false\",\"true\":\"true\",\"string\":\"string\",\"0\":\"0\",\"[]"
         "\":\"[]\",\"{}\":\"{}\"}"),
      QS(""),
@@ -17328,7 +18940,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt34,
-     mk389,
+     mk418,
      QS("{\"key\":\"value\"}"),
      QS(""),
      "json: cannot unmarshal into Go chan string within \"/key\"",
@@ -17338,7 +18950,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt36,
-     mk390,
+     mk419,
      QS("{\"buzz\":{},\"fizz\":{\"bar\":{},\"foo\":{}}}"),
      QS(""),
      NULL,
@@ -17347,8 +18959,8 @@ static const JvCase jv_cases[] = {
     {"Maps/Merge",
      0,
      {0x2ULL, 0x2ULL, QS(""), QS(""), 0, 0},
-     &gt161,
-     mk391,
+     &gt166,
+     mk420,
      QS("{\"k1\":{\"k2\":\"v2\"},\"k2\":{\"k1\":\"v1\"},\"k2\":{\"k2\":\"v2\"}}"),
      QS(""),
      NULL,
@@ -17358,7 +18970,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt33,
-     mk392,
+     mk421,
      QS("true"),
      QS(""),
      "json: cannot unmarshal JSON boolean into Go map[string]string",
@@ -17368,7 +18980,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt33,
-     mk393,
+     mk422,
      QS("\"\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go map[string]string",
@@ -17378,7 +18990,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt33,
-     mk394,
+     mk423,
      QS("0"),
      QS(""),
      "json: cannot unmarshal JSON number into Go map[string]string",
@@ -17388,7 +19000,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt33,
-     mk395,
+     mk424,
      QS("[]"),
      QS(""),
      "json: cannot unmarshal JSON array into Go map[string]string",
@@ -17398,7 +19010,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt33,
-     mk396,
+     mk425,
      QS("{\"hello\":\"goodbye\"}"),
      QS(""),
      NULL,
@@ -17408,7 +19020,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt41,
-     mk397,
+     mk426,
      QS("null"),
      QS(""),
      NULL,
@@ -17424,7 +19036,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt41,
-     mk398,
+     mk427,
      QS("{}"),
      QS(""),
      NULL,
@@ -17440,7 +19052,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt41,
-     mk399,
+     mk428,
      QS("{\012\011\"Bool\": true,\012\011\"String\": \"hello\",\012\011\"Bytes\": "
         "\"AQID\",\012\011\"Int\": -64,\012\011\"Uint\": 64,\012\011\"Float\": "
         "3.14159,\012\011\"Map\": {\"key\": \"value\"},\012\011\"StructScalars\": "
@@ -17479,7 +19091,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt41,
-     mk400,
+     mk429,
      QS("{\012\011\"Bool\": false,\012\011\"String\": \"goodbye\",\012\011\"Int\": "
         "-64,\012\011\"Float\": 3.14159,\012\011\"Map\": {\"k2\": "
         "\"v2\"},\012\011\"StructScalars\": {\012\011\011\"Bool\": "
@@ -17517,7 +19129,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt56,
-     mk401,
+     mk430,
      QS("{\012\011\"Int\": \"-64\",\012\011\"Uint\": \"64\",\012\011\"Float\": "
         "\"3.14159\",\012\011\"PointerInt\": \"-64\",\012\011\"PointerUint\": "
         "\"64\",\012\011\"PointerFloat\": \"3.14159\"\012}"),
@@ -17530,7 +19142,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt56,
-     mk402,
+     mk431,
      QS("{\"Int\":\"\"}"),
      QS(""),
      "json: cannot unmarshal JSON string \"\" into Go int64 within \"/Int\": invalid "
@@ -17542,7 +19154,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt62,
-     mk403,
+     mk432,
      QS("{\"Bool\": \"true\"}"),
      QS(""),
      "json: cannot unmarshal into Go bool within \"/Bool\": invalid use of `string` "
@@ -17553,7 +19165,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x8000000000ULL, 0x8000000000ULL, QS(""), QS(""), 0, 0},
      &gt62,
-     mk404,
+     mk433,
      QS("{\"Bool\": true}"),
      QS(""),
      NULL,
@@ -17563,7 +19175,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt63,
-     mk405,
+     mk434,
      QS("{\"String\": \"\\\"hello\\\"\"}"),
      QS(""),
      "json: cannot unmarshal into Go string within \"/String\": invalid use of "
@@ -17574,7 +19186,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x8000000000ULL, 0x8000000000ULL, QS(""), QS(""), 0, 0},
      &gt63,
-     mk406,
+     mk435,
      QS("{\"String\": \"\\\"hello\\\"\"}"),
      QS(""),
      NULL,
@@ -17584,7 +19196,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt64,
-     mk407,
+     mk436,
      QS("{\"Bytes\": \"AQID\"}"),
      QS(""),
      "json: cannot unmarshal into Go []uint8 within \"/Bytes\": invalid use of "
@@ -17595,7 +19207,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x8000000000ULL, 0x8000000000ULL, QS(""), QS(""), 0, 0},
      &gt64,
-     mk408,
+     mk437,
      QS("{\"Bytes\": \"AQID\"}"),
      QS(""),
      NULL,
@@ -17605,7 +19217,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt65,
-     mk409,
+     mk438,
      QS("{\"Map\": {\"Key\": \"Value\"}}"),
      QS(""),
      "json: cannot unmarshal into Go map[string]string within \"/Map\": invalid use of "
@@ -17616,7 +19228,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x8000000000ULL, 0x8000000000ULL, QS(""), QS(""), 0, 0},
      &gt65,
-     mk410,
+     mk439,
      QS("{\"Map\": {\"Key\": \"Value\"}}"),
      QS(""),
      NULL,
@@ -17626,7 +19238,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt66,
-     mk411,
+     mk440,
      QS("{\"Slice\": [\"hello\"]}"),
      QS(""),
      "json: cannot unmarshal into Go []string within \"/Slice\": invalid use of "
@@ -17637,7 +19249,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x8000000000ULL, 0x8000000000ULL, QS(""), QS(""), 0, 0},
      &gt66,
-     mk412,
+     mk441,
      QS("{\"Slice\": [\"hello\"]}"),
      QS(""),
      NULL,
@@ -17647,7 +19259,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt67,
-     mk413,
+     mk442,
      QS("{\"Array\": [\"hello\"]}"),
      QS(""),
      "json: cannot unmarshal into Go [1]string within \"/Array\": invalid use of "
@@ -17658,7 +19270,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x8000000000ULL, 0x8000000000ULL, QS(""), QS(""), 0, 0},
      &gt67,
-     mk414,
+     mk443,
      QS("{\"Array\": [\"hello\"]}"),
      QS(""),
      NULL,
@@ -17668,7 +19280,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt68,
-     mk415,
+     mk444,
      QS("{\"Struct\": {\"Bool\": true}}"),
      QS(""),
      "json: cannot unmarshal into Go json.structAll within \"/Struct\": invalid use of "
@@ -17685,7 +19297,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x8000000000ULL, 0x8000000000ULL, QS(""), QS(""), 0, 0},
      &gt68,
-     mk416,
+     mk445,
      QS("{\"Struct\": {\"Bool\": true}}"),
      QS(""),
      NULL,
@@ -17701,7 +19313,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt69,
-     mk417,
+     mk446,
      QS("{\"Pointer\": {\"Bool\": true}}"),
      QS(""),
      "json: cannot unmarshal into Go json.structAll within \"/Pointer\": invalid use "
@@ -17718,7 +19330,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x8000000000ULL, 0x8000000000ULL, QS(""), QS(""), 0, 0},
      &gt69,
-     mk418,
+     mk447,
      QS("{\"Pointer\": {\"Bool\": true}}"),
      QS(""),
      NULL,
@@ -17734,7 +19346,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt70,
-     mk419,
+     mk448,
      QS("{\"Pointer\": \"5\"}"),
      QS(""),
      NULL,
@@ -17744,7 +19356,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt73,
-     mk420,
+     mk449,
      QS("{\"Interface\": null}"),
      QS(""),
      "json: cannot unmarshal into Go interface {} within \"/Interface\": invalid use "
@@ -17755,7 +19367,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x8000000000ULL, 0x8000000000ULL, QS(""), QS(""), 0, 0},
      &gt73,
-     mk421,
+     mk450,
      QS("{\"Interface\": null}"),
      QS(""),
      NULL,
@@ -17765,7 +19377,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10000000000ULL, 0x10000000000ULL, QS(""), QS(""), 0, 0},
      &gt59,
-     mk422,
+     mk451,
      QS("{\012\011\"Bool\": \"true\",\012\011\"String\": "
         "\"\\\"hello\\\"\",\012\011\"Int\": \"-64\",\012\011\"Uint\": "
         "\"64\",\012\011\"Float\": \"3.14159\",\012\011\"PointerBool\": "
@@ -17782,7 +19394,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10000000000ULL, 0x10000000000ULL, QS(""), QS(""), 0, 0},
      &gt59,
-     mk423,
+     mk452,
      QS("{\"Int\":\"\"}"),
      QS(""),
      "json: cannot unmarshal JSON string \"\" into Go int64 within \"/Int\": invalid "
@@ -17794,7 +19406,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10000000000ULL, 0x10000000000ULL, QS(""), QS(""), 0, 0},
      &gt59,
-     mk424,
+     mk453,
      QS("{\"Bool\": true}"),
      QS(""),
      "json: cannot unmarshal JSON boolean into Go bool within \"/Bool\"",
@@ -17805,7 +19417,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10000000000ULL, 0x10000000000ULL, QS(""), QS(""), 0, 0},
      &gt59,
-     mk425,
+     mk454,
      QS("{\"String\": \"string\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go string within \"/String\": invalid "
@@ -17817,7 +19429,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10000000000ULL, 0x10000000000ULL, QS(""), QS(""), 0, 0},
      &gt64,
-     mk426,
+     mk455,
      QS("{\"Bytes\": \"AQID\"}"),
      QS(""),
      "json: cannot unmarshal into Go []uint8 within \"/Bytes\": invalid use of "
@@ -17828,7 +19440,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x18000000000ULL, 0x18000000000ULL, QS(""), QS(""), 0, 0},
      &gt64,
-     mk427,
+     mk456,
      QS("{\"Bytes\": \"AQID\"}"),
      QS(""),
      NULL,
@@ -17838,7 +19450,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10000000000ULL, 0x10000000000ULL, QS(""), QS(""), 0, 0},
      &gt65,
-     mk428,
+     mk457,
      QS("{\"Map\": {\"Key\": \"Value\"}}"),
      QS(""),
      "json: cannot unmarshal into Go map[string]string within \"/Map\": invalid use of "
@@ -17849,7 +19461,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x18000000000ULL, 0x18000000000ULL, QS(""), QS(""), 0, 0},
      &gt65,
-     mk429,
+     mk458,
      QS("{\"Map\": {\"Key\": \"Value\"}}"),
      QS(""),
      NULL,
@@ -17859,7 +19471,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10000000000ULL, 0x10000000000ULL, QS(""), QS(""), 0, 0},
      &gt66,
-     mk430,
+     mk459,
      QS("{\"Slice\": [\"hello\"]}"),
      QS(""),
      "json: cannot unmarshal into Go []string within \"/Slice\": invalid use of "
@@ -17870,7 +19482,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x18000000000ULL, 0x18000000000ULL, QS(""), QS(""), 0, 0},
      &gt66,
-     mk431,
+     mk460,
      QS("{\"Slice\": [\"hello\"]}"),
      QS(""),
      NULL,
@@ -17880,7 +19492,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10000000000ULL, 0x10000000000ULL, QS(""), QS(""), 0, 0},
      &gt67,
-     mk432,
+     mk461,
      QS("{\"Array\": [\"hello\"]}"),
      QS(""),
      "json: cannot unmarshal into Go [1]string within \"/Array\": invalid use of "
@@ -17891,7 +19503,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x18000000000ULL, 0x18000000000ULL, QS(""), QS(""), 0, 0},
      &gt67,
-     mk433,
+     mk462,
      QS("{\"Array\": [\"hello\"]}"),
      QS(""),
      NULL,
@@ -17901,7 +19513,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10000000000ULL, 0x10000000000ULL, QS(""), QS(""), 0, 0},
      &gt68,
-     mk434,
+     mk463,
      QS("{\"Struct\": {\"Bool\": true}}"),
      QS(""),
      "json: cannot unmarshal into Go json.structAll within \"/Struct\": invalid use of "
@@ -17918,7 +19530,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x18000000000ULL, 0x18000000000ULL, QS(""), QS(""), 0, 0},
      &gt68,
-     mk435,
+     mk464,
      QS("{\"Struct\": {\"Bool\": true}}"),
      QS(""),
      NULL,
@@ -17934,7 +19546,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10000000000ULL, 0x10000000000ULL, QS(""), QS(""), 0, 0},
      &gt69,
-     mk436,
+     mk465,
      QS("{\"Pointer\": {\"Bool\": true}}"),
      QS(""),
      "json: cannot unmarshal into Go json.structAll within \"/Pointer\": invalid use "
@@ -17951,7 +19563,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x18000000000ULL, 0x18000000000ULL, QS(""), QS(""), 0, 0},
      &gt69,
-     mk437,
+     mk466,
      QS("{\"Pointer\": {\"Bool\": true}}"),
      QS(""),
      NULL,
@@ -17967,7 +19579,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10000000000ULL, 0x10000000000ULL, QS(""), QS(""), 0, 0},
      &gt70,
-     mk438,
+     mk467,
      QS("{\"Pointer\": 5}"),
      QS(""),
      "json: cannot unmarshal into Go **int within \"/Pointer\": invalid use of "
@@ -17978,7 +19590,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x18000000000ULL, 0x18000000000ULL, QS(""), QS(""), 0, 0},
      &gt70,
-     mk439,
+     mk468,
      QS("{\"Pointer\": 5}"),
      QS(""),
      NULL,
@@ -17988,7 +19600,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x10000000000ULL, 0x10000000000ULL, QS(""), QS(""), 0, 0},
      &gt73,
-     mk440,
+     mk469,
      QS("{\"Interface\": null}"),
      QS(""),
      "json: cannot unmarshal into Go interface {} within \"/Interface\": invalid use "
@@ -17999,7 +19611,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x18000000000ULL, 0x18000000000ULL, QS(""), QS(""), 0, 0},
      &gt73,
-     mk441,
+     mk470,
      QS("{\"Interface\": null}"),
      QS(""),
      NULL,
@@ -18009,7 +19621,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk442,
+     mk471,
      QS("{}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go json.structFormatBytes: Go struct "
@@ -18020,7 +19632,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk443,
+     mk472,
      QS("{\012\011\"Base16\": \"0123456789abcdef\",\012\011\"Base32\": "
         "\"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567\",\012\011\"Base32Hex\": "
         "\"0123456789ABCDEFGHIJKLMNOPQRSTUV\",\012\011\"Base64\": "
@@ -18043,7 +19655,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt80,
-     mk444,
+     mk473,
      QS("{\012\011\"Base16\": \"01020304\",\012\011\"Base32\": "
         "\"AEBAGBA=\",\012\011\"Base32Hex\": \"0410610=\",\012\011\"Base64\": "
         "\"AQIDBA==\",\012\011\"Base64URL\": \"AQIDBA==\",\012\011\"Array\": [1, 2, 3, "
@@ -18057,7 +19669,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x120000000ULL, 0x120000000ULL, QS(""), QS(""), 0, 0},
      &gt80,
-     mk445,
+     mk474,
      QS("{\012\011\"Base16\": \"01020304\",\012\011\"Base32\": "
         "\"AEBAGBA=\",\012\011\"Base32Hex\": \"0410610=\",\012\011\"Base64\": "
         "\"AQIDBA==\",\012\011\"Base64URL\": \"AQIDBA==\",\012\011\"Array\": [1, 2, 3, "
@@ -18071,7 +19683,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk446,
+     mk475,
      QS("{\"Base16\": [1,2,3,4]}"),
      QS(""),
      "json: cannot unmarshal JSON array into Go []uint8 within \"/Base16\"",
@@ -18081,7 +19693,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk447,
+     mk476,
      QS("{\"Base16\": \"====\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8 within \"/Base16\": "
@@ -18092,7 +19704,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk448,
+     mk477,
      QS("{\"Base16\": \"0123456789abcdef=\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8 within \"/Base16\": "
@@ -18103,7 +19715,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk449,
+     mk478,
      QS("{\"Base16\": \"0123456789abcdef0=\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8 within \"/Base16\": "
@@ -18114,7 +19726,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk450,
+     mk479,
      QS("{\"Base16\": \"aa\\naa\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8 within \"/Base16\": "
@@ -18125,7 +19737,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk451,
+     mk480,
      QS("{\"Base16\": \"aa\\raa\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8 within \"/Base16\": "
@@ -18136,7 +19748,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk452,
+     mk481,
      QS("{\"Base16\": \"aa aa\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8 within \"/Base16\": "
@@ -18146,8 +19758,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Format/Bytes/Invalid/Base32/Padding",
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
-     &gt162,
-     mk453,
+     &gt167,
+     mk482,
      QS("[\012\011\011\011{\"Base32\": \"NA======\"},\012\011\011\011{\"Base32\": "
         "\"NBSQ====\"},\012\011\011\011{\"Base32\": "
         "\"NBSWY===\"},\012\011\011\011{\"Base32\": "
@@ -18164,8 +19776,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Format/Bytes/Invalid/Base32/Invalid/NoPadding",
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
-     &gt162,
-     mk454,
+     &gt167,
+     mk483,
      QS("[\012\011\011\011\011{\"Base32\": \"NA\"},\012\011\011\011\011{\"Base32\": "
         "\"NBSQ\"},\012\011\011\011\011{\"Base32\": "
         "\"NBSWY\"},\012\011\011\011\011{\"Base32\": "
@@ -18179,7 +19791,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk455,
+     mk484,
      QS("{\"Base32\": \"0123456789ABCDEFGHIJKLMNOPQRSTUV\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8 within \"/Base32\": illegal "
@@ -18190,7 +19802,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk456,
+     mk485,
      QS("{\"Base32Hex\": \"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8 within \"/Base32Hex\": "
@@ -18201,7 +19813,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk457,
+     mk486,
      QS("{\"Base32\": \"AAAA\\nAAAA\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8 within \"/Base32\": illegal "
@@ -18212,7 +19824,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk458,
+     mk487,
      QS("{\"Base32\": \"AAAA\\rAAAA\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8 within \"/Base32\": illegal "
@@ -18223,7 +19835,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk459,
+     mk488,
      QS("{\"Base32\": \"AAAA AAAA\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8 within \"/Base32\": illegal "
@@ -18234,7 +19846,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk460,
+     mk489,
      QS("{\"Base64\": "
         "\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_\"}"),
      QS(""),
@@ -18246,7 +19858,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk461,
+     mk490,
      QS("{\"Base64URL\": "
         "\"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"}"),
      QS(""),
@@ -18258,7 +19870,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk462,
+     mk491,
      QS("{\"Base64\": \"aa=\\n=\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8 within \"/Base64\": illegal "
@@ -18269,7 +19881,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk463,
+     mk492,
      QS("{\"Base64\": \"aa=\\r=\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8 within \"/Base64\": illegal "
@@ -18280,7 +19892,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x2020000000ULL, 0x2020000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk464,
+     mk493,
      QS("{\"Base64\": \"aa=\\r\\n=\"}"),
      QS(""),
      NULL,
@@ -18290,7 +19902,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt79,
-     mk465,
+     mk494,
      QS("{\"Base64\": \"aa= =\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go []uint8 within \"/Base64\": illegal "
@@ -18301,7 +19913,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt82,
-     mk466,
+     mk495,
      QS("[\012\011{\"NonFinite\": 3.141592653589793, \"PointerNonFinite\": "
         "3.141592653589793},\012\011{\"NonFinite\": \"-Infinity\", "
         "\"PointerNonFinite\": \"-Infinity\"},\012\011{\"NonFinite\": \"Infinity\", "
@@ -18316,7 +19928,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt83,
-     mk467,
+     mk496,
      QS("{\"NonFinite\": \"NaN\"}"),
      QS(""),
      NULL,
@@ -18326,7 +19938,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt83,
-     mk468,
+     mk497,
      QS("{\"NonFinite\": \"nan\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go float64 within \"/NonFinite\"",
@@ -18336,7 +19948,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt83,
-     mk469,
+     mk498,
      QS("{\"NonFinite\": \"+Infinity\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go float64 within \"/NonFinite\"",
@@ -18346,7 +19958,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt83,
-     mk470,
+     mk499,
      QS("{\"NonFinite\": \"-Infinity \"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go float64 within \"/NonFinite\"",
@@ -18356,7 +19968,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt84,
-     mk471,
+     mk500,
      QS("[\012\011{\"EmitNull\": null, \"PointerEmitNull\": null, \"EmitEmpty\": null, "
         "\"PointerEmitEmpty\": null, \"EmitDefault\": null, \"PointerEmitDefault\": "
         "null},\012\011{\"EmitNull\": {}, \"PointerEmitNull\": {}, \"EmitEmpty\": {}, "
@@ -18378,7 +19990,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt87,
-     mk472,
+     mk501,
      QS("[\012\011{\"EmitNull\": null, \"PointerEmitNull\": null, \"EmitEmpty\": null, "
         "\"PointerEmitEmpty\": null, \"EmitDefault\": null, \"PointerEmitDefault\": "
         "null},\012\011{\"EmitNull\": [], \"PointerEmitNull\": [], \"EmitEmpty\": [], "
@@ -18398,7 +20010,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt90,
-     mk473,
+     mk502,
      QS("{\"Bool\":true}"),
      QS(""),
      "json: cannot unmarshal into Go bool within \"/Bool\": invalid format flag "
@@ -18416,7 +20028,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt90,
-     mk474,
+     mk503,
      QS("{\"String\": \"string\"}"),
      QS(""),
      "json: cannot unmarshal into Go string within \"/String\": invalid format flag "
@@ -18434,7 +20046,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt90,
-     mk475,
+     mk504,
      QS("{\"Bytes\": \"bytes\"}"),
      QS(""),
      "json: cannot unmarshal into Go []uint8 within \"/Bytes\": invalid format flag "
@@ -18452,7 +20064,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt90,
-     mk476,
+     mk505,
      QS("{\"Int\":   1}"),
      QS(""),
      "json: cannot unmarshal into Go int64 within \"/Int\": invalid format flag "
@@ -18470,7 +20082,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt90,
-     mk477,
+     mk506,
      QS("{\"Uint\": 1}"),
      QS(""),
      "json: cannot unmarshal into Go uint64 within \"/Uint\": invalid format flag "
@@ -18488,7 +20100,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt90,
-     mk478,
+     mk507,
      QS("{\"Float\" : 1}"),
      QS(""),
      "json: cannot unmarshal into Go float64 within \"/Float\": invalid format flag "
@@ -18506,7 +20118,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt90,
-     mk479,
+     mk508,
      QS("{\"Map\":{}}"),
      QS(""),
      "json: cannot unmarshal into Go map[string]string within \"/Map\": invalid format "
@@ -18524,7 +20136,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt90,
-     mk480,
+     mk509,
      QS("{\"Struct\": {}}"),
      QS(""),
      "json: cannot unmarshal into Go json.structAll within \"/Struct\": invalid format "
@@ -18542,7 +20154,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt90,
-     mk481,
+     mk510,
      QS("{\"Slice\": {}}"),
      QS(""),
      "json: cannot unmarshal into Go []string within \"/Slice\": invalid format flag "
@@ -18560,7 +20172,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt90,
-     mk482,
+     mk511,
      QS("{\"Array\": []}"),
      QS(""),
      "json: cannot unmarshal into Go [1]string within \"/Array\": invalid format flag "
@@ -18578,7 +20190,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x20000000ULL, 0x20000000ULL, QS(""), QS(""), 0, 0},
      &gt90,
-     mk483,
+     mk512,
      QS("{\"Interface\": \"anything\"}"),
      QS(""),
      "json: cannot unmarshal into Go interface {} within \"/Interface\": invalid "
@@ -18596,7 +20208,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt91,
-     mk484,
+     mk513,
      QS("{\"D\":\"\"}"),
      QS(""),
      NULL,
@@ -18606,7 +20218,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt91,
-     mk485,
+     mk514,
      QS("{\"E\":\"\",\"F\":\"\",\"G\":\"\",\"A\":\"\",\"B\":\"\",\"D\":\"\"}"),
      QS(""),
      NULL,
@@ -18616,7 +20228,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt91,
-     mk486,
+     mk515,
      QS("{\"E\":\"E3\",\"F\":\"F3\",\"G\":\"G3\",\"A\":\"A1\",\"B\":\"B1\",\"D\":"
         "\"D2\"}"),
      QS(""),
@@ -18628,7 +20240,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt91,
-     mk487,
+     mk516,
      QS("{\"E\":\"E3\",\"F\":\"F3\",\"G\":\"G3\",\"A\":\"A1\",\"B\":\"B1\",\"D\":"
         "\"D2\"}"),
      QS(""),
@@ -18636,11 +20248,168 @@ static const JvCase jv_cases[] = {
      "{X:{X:&{A:s4131,B:s4231,C:s4331},StructEmbed1:{C:s4332,D:s4432,E:s4532}},"
      "StructEmbed2:&{E:s4533,F:s4633,G:s4733}}",
      0},
-    {"Structs/EmbeddedFallback/MapStringAny/Noop",
+    {"Structs/EmbeddedFallback/TextValue/Noop",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt101,
-     mk488,
+     mk517,
+     QS("{\"A\":1,\"B\":2}"),
+     QS(""),
+     NULL,
+     "{A:1,X:nil,B:2}",
+     0},
+    {"Structs/EmbeddedFallback/TextValue/MergeN1/Nil",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk518,
+     QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2}"),
+     QS(""),
+     NULL,
+     "{A:1,X:[123,34,102,105,122,122,34,58,34,98,117,122,122,34,125],B:2}",
+     0},
+    {"Structs/EmbeddedFallback/TextValue/MergeN1/Empty",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk519,
+     QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2}"),
+     QS(""),
+     NULL,
+     "{A:1,X:[123,34,102,105,122,122,34,58,34,98,117,122,122,34,125],B:2}",
+     0},
+    {"Structs/EmbeddedFallback/TextValue/MergeN1/Whitespace",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk520,
+     QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2}"),
+     QS(""),
+     "json: cannot unmarshal JSON string into Go jsontext.Value within \"/fizz\": "
+     "embedded raw value must be a JSON object",
+     "{A:1,X:[],B:0}",
+     0},
+    {"Structs/EmbeddedFallback/TextValue/MergeN1/Null",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk521,
+     QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2}"),
+     QS(""),
+     "json: cannot unmarshal JSON string into Go jsontext.Value within \"/fizz\": "
+     "embedded raw value must be a JSON object",
+     "{A:1,X:[110,117,108,108],B:0}",
+     0},
+    {"Structs/EmbeddedFallback/TextValue/MergeN1/ObjectN0",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk522,
+     QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2}"),
+     QS(""),
+     NULL,
+     "{A:1,X:[32,123,34,102,105,122,122,34,58,34,98,117,122,122,34,125],B:2}",
+     0},
+    {"Structs/EmbeddedFallback/TextValue/MergeN2/ObjectN1",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk523,
+     QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2,\"foo\": [ 1 , 2 , 3 ]}"),
+     QS(""),
+     NULL,
+     "{A:1,X:[32,123,32,34,102,105,122,122,34,32,58,32,34,98,117,122,122,34,44,34,102,"
+     "105,122,122,34,58,34,98,117,122,122,34,44,34,102,111,111,34,58,91,32,49,32,44,32,"
+     "50,32,44,32,51,32,93,125],B:2}",
+     0},
+    {"Structs/EmbeddedFallback/TextValue/Merge/EndObject",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk524,
+     QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2}"),
+     QS(""),
+     NULL,
+     "{A:1,X:[44,34,102,105,122,122,34,58,34,98,117,122,122,34,125],B:2}",
+     0},
+    {"Structs/EmbeddedFallback/TextValue/MergeInvalidValue",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk525,
+     QS("{\"A\":1,\"fizz\":nil,\"B\":2}"),
+     QS(""),
+     "jsontext: invalid character 'i' in literal null (expecting 'u') within \"/fizz\" "
+     "after offset 15",
+     "{A:1,X:[123,34,102,105,122,122,34,58],B:0}",
+     0},
+    {"Structs/EmbeddedFallback/TextValue/CaseSensitive",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk526,
+     QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2,\"a\":3}"),
+     QS(""),
+     NULL,
+     "{A:1,X:[123,34,102,105,122,122,34,58,34,98,117,122,122,34,44,34,97,34,58,51,125],"
+     "B:2}",
+     0},
+    {"Structs/EmbeddedFallback/TextValue/RejectDuplicateNames",
+     0,
+     {0x2ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk527,
+     QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2,\"fizz\":\"buzz\"}"),
+     QS(""),
+     "jsontext: duplicate object member name \"fizz\"",
+     "{A:1,X:[123,34,102,105,122,122,34,58,34,98,117,122,122,34,125],B:2}",
+     0},
+    {"Structs/EmbeddedFallback/TextValue/AllowDuplicateNames",
+     0,
+     {0x2ULL, 0x2ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk528,
+     QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2,\"fizz\":\"buzz\"}"),
+     QS(""),
+     NULL,
+     "{A:1,X:[123,34,102,105,122,122,34,58,34,98,117,122,122,34,44,34,102,105,122,122,"
+     "34,58,34,98,117,122,122,34,125],B:2}",
+     0},
+    {"Structs/EmbeddedFallback/TextValue/Nested/Noop",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt102,
+     mk529,
+     QS("{}"),
+     QS(""),
+     NULL,
+     "{X:nil}",
+     0},
+    {"Structs/EmbeddedFallback/TextValue/Nested/Alloc",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt102,
+     mk530,
+     QS("{\"A\":1,\"fizz\":\"buzz\"}"),
+     QS(""),
+     NULL,
+     "{X:&{A:1,X:[123,34,102,105,122,122,34,58,34,98,117,122,122,34,125]}}",
+     0},
+    {"Structs/EmbeddedFallback/TextValue/Nested/Merge",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt102,
+     mk531,
+     QS("{\"fizz\":\"buzz\"}"),
+     QS(""),
+     NULL,
+     "{X:&{A:1,X:[123,34,102,105,122,122,34,58,34,98,117,122,122,34,125]}}",
+     0},
+    {"Structs/EmbeddedFallback/MapStringAny/Noop",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt105,
+     mk532,
      QS("{\"A\":1,\"B\":2}"),
      QS(""),
      NULL,
@@ -18649,8 +20418,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/MergeN1/Nil",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt101,
-     mk489,
+     &gt105,
+     mk533,
      QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2}"),
      QS(""),
      NULL,
@@ -18659,8 +20428,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/MergeN1/Empty",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt101,
-     mk490,
+     &gt105,
+     mk534,
      QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2}"),
      QS(""),
      NULL,
@@ -18669,8 +20438,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/MergeN1/ObjectN1",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt101,
-     mk491,
+     &gt105,
+     mk535,
      QS("{\"A\":1,\"fizz\":{\"charlie\":\"DELTA\",\"echo\":\"foxtrot\"},\"B\":2}"),
      QS(""),
      NULL,
@@ -18681,8 +20450,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/MergeN2/ObjectN1",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt101,
-     mk492,
+     &gt105,
+     mk536,
      QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2,\"foo\": [ 1 , 2 , 3 ]}"),
      QS(""),
      NULL,
@@ -18693,8 +20462,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/MergeInvalidValue",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt101,
-     mk493,
+     &gt105,
+     mk537,
      QS("{\"A\":1,\"fizz\":nil,\"B\":2}"),
      QS(""),
      "jsontext: invalid character 'i' in literal null (expecting 'u') within \"/fizz\" "
@@ -18704,8 +20473,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/MergeInvalidValue/Existing",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt101,
-     mk494,
+     &gt105,
+     mk538,
      QS("{\"A\":1,\"fizz\":nil,\"B\":2}"),
      QS(""),
      "jsontext: invalid character 'i' in literal null (expecting 'u') within \"/fizz\" "
@@ -18715,8 +20484,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/CaseSensitive",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt101,
-     mk495,
+     &gt105,
+     mk539,
      QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2,\"a\":3}"),
      QS(""),
      NULL,
@@ -18725,8 +20494,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/RejectDuplicateNames",
      0,
      {0x2ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt101,
-     mk496,
+     &gt105,
+     mk540,
      QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2,\"fizz\":\"buzz\"}"),
      QS(""),
      "jsontext: duplicate object member name \"fizz\"",
@@ -18735,8 +20504,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/AllowDuplicateNames",
      0,
      {0x2ULL, 0x2ULL, QS(""), QS(""), 0, 0},
-     &gt101,
-     mk497,
+     &gt105,
+     mk541,
      QS("{\"A\":1,\"fizz\":{\"one\":1,\"two\":-2},\"B\":2,\"fizz\":{\"two\":2,"
         "\"three\":3}}"),
      QS(""),
@@ -18748,8 +20517,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/Nested/Noop",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt103,
-     mk498,
+     &gt107,
+     mk542,
      QS("{}"),
      QS(""),
      NULL,
@@ -18758,8 +20527,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/Nested/Alloc",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt103,
-     mk499,
+     &gt107,
+     mk543,
      QS("{\"A\":1,\"fizz\":\"buzz\"}"),
      QS(""),
      NULL,
@@ -18768,8 +20537,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringAny/Nested/Merge",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt103,
-     mk500,
+     &gt107,
+     mk544,
      QS("{\"fizz\":\"buzz\"}"),
      QS(""),
      NULL,
@@ -18778,8 +20547,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/PointerMapStringAny/Noop",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt106,
-     mk501,
+     &gt110,
+     mk545,
      QS("{\"A\":1,\"B\":2}"),
      QS(""),
      NULL,
@@ -18788,8 +20557,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/PointerMapStringAny/Alloc",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt106,
-     mk502,
+     &gt110,
+     mk546,
      QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2}"),
      QS(""),
      NULL,
@@ -18798,8 +20567,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/PointerMapStringAny/Merge",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt106,
-     mk503,
+     &gt110,
+     mk547,
      QS("{\"A\":1,\"fizz\":\"wuzz\",\"B\":2}"),
      QS(""),
      NULL,
@@ -18808,8 +20577,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/PointerMapStringAny/Nested/Nil",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt108,
-     mk504,
+     &gt112,
+     mk548,
      QS("{\"fizz\":\"buzz\"}"),
      QS(""),
      NULL,
@@ -18818,8 +20587,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringInt",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt110,
-     mk505,
+     &gt114,
+     mk549,
      QS("{\"zero\": 0, \"one\": 1, \"two\": 2}"),
      QS(""),
      NULL,
@@ -18828,8 +20597,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringInt/Null",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt110,
-     mk506,
+     &gt114,
+     mk550,
      QS("{\"zero\": 0, \"one\": null, \"two\": 2}"),
      QS(""),
      NULL,
@@ -18838,8 +20607,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringInt/Invalid",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt110,
-     mk507,
+     &gt114,
+     mk551,
      QS("{\"zero\": 0, \"one\": {}, \"two\": 2}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go int within \"/one\"",
@@ -18848,8 +20617,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapStringInt/StringifiedNumbers",
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
-     &gt110,
-     mk508,
+     &gt114,
+     mk552,
      QS("{\"zero\": \"0\", \"one\": \"1\", \"two\": \"2\"}"),
      QS(""),
      NULL,
@@ -18858,8 +20627,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringInt",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt111,
-     mk509,
+     &gt115,
+     mk553,
      QS("{\"zero\": 0, \"one\": 1, \"two\": 2}"),
      QS(""),
      NULL,
@@ -18868,8 +20637,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringInt/Null",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt111,
-     mk510,
+     &gt115,
+     mk554,
      QS("{\"zero\": 0, \"one\": null, \"two\": 2}"),
      QS(""),
      NULL,
@@ -18878,8 +20647,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringInt/Invalid",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt111,
-     mk511,
+     &gt115,
+     mk555,
      QS("{\"zero\": 0, \"one\": {}, \"two\": 2}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go int within \"/one\"",
@@ -18888,8 +20657,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringInt/StringifiedNumbers",
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
-     &gt111,
-     mk512,
+     &gt115,
+     mk556,
      QS("{\"zero\": \"0\", \"one\": 1, \"two\": \"2\"}"),
      QS(""),
      "json: cannot unmarshal JSON number into Go int within \"/one\"",
@@ -18898,8 +20667,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/Noop",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk513,
+     &gt117,
+     mk557,
      QS("{\"A\":1,\"B\":2}"),
      QS(""),
      NULL,
@@ -18908,8 +20677,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/MergeN1/Nil",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk514,
+     &gt117,
+     mk558,
      QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2}"),
      QS(""),
      NULL,
@@ -18918,8 +20687,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/MergeN1/Empty",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk515,
+     &gt117,
+     mk559,
      QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2}"),
      QS(""),
      NULL,
@@ -18928,8 +20697,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/MergeN1/ObjectN1",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk516,
+     &gt117,
+     mk560,
      QS("{\"A\":1,\"fizz\":{\"charlie\":\"DELTA\",\"echo\":\"foxtrot\"},\"B\":2}"),
      QS(""),
      NULL,
@@ -18940,8 +20709,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/MergeN2/ObjectN1",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk517,
+     &gt117,
+     mk561,
      QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2,\"foo\": [ 1 , 2 , 3 ]}"),
      QS(""),
      NULL,
@@ -18952,8 +20721,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/MergeInvalidValue",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk518,
+     &gt117,
+     mk562,
      QS("{\"A\":1,\"fizz\":nil,\"B\":2}"),
      QS(""),
      "jsontext: invalid character 'i' in literal null (expecting 'u') within \"/fizz\" "
@@ -18963,8 +20732,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/MergeInvalidValue/Existing",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk519,
+     &gt117,
+     mk563,
      QS("{\"A\":1,\"fizz\":nil,\"B\":2}"),
      QS(""),
      "jsontext: invalid character 'i' in literal null (expecting 'u') within \"/fizz\" "
@@ -18974,8 +20743,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/CaseSensitive",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk520,
+     &gt117,
+     mk564,
      QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2,\"a\":3}"),
      QS(""),
      NULL,
@@ -18984,8 +20753,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/RejectDuplicateNames",
      0,
      {0x2ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk521,
+     &gt117,
+     mk565,
      QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2,\"fizz\":\"buzz\"}"),
      QS(""),
      "jsontext: duplicate object member name \"fizz\"",
@@ -18994,8 +20763,8 @@ static const JvCase jv_cases[] = {
     {"Structs/EmbeddedFallback/MapNamedStringAny/AllowDuplicateNames",
      0,
      {0x2ULL, 0x2ULL, QS(""), QS(""), 0, 0},
-     &gt113,
-     mk522,
+     &gt117,
+     mk566,
      QS("{\"A\":1,\"fizz\":{\"one\":1,\"two\":-2},\"B\":2,\"fizz\":{\"two\":2,"
         "\"three\":3}}"),
      QS(""),
@@ -19004,11 +20773,21 @@ static const JvCase jv_cases[] = {
      "{})map[s6f6e65:(float64)d3ff0000000000000,s7468726565:(float64)d4008000000000000,"
      "s74776f:(float64)d4000000000000000]],B:2}",
      0},
+    {"Structs/EmbeddedFallback/RejectUnknownMembers",
+     0,
+     {0x1000000ULL, 0x1000000ULL, QS(""), QS(""), 0, 0},
+     &gt101,
+     mk567,
+     QS("{\"A\":1,\"fizz\":\"buzz\",\"B\":2}"),
+     QS(""),
+     NULL,
+     "{A:1,X:[123,34,102,105,122,122,34,58,34,98,117,122,122,34,125],B:2}",
+     0},
     {"Structs/UnknownIgnored",
      0,
      {0x1000000ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt41,
-     mk523,
+     mk568,
      QS("{\"unknown\":\"fizzbuzz\"}"),
      QS(""),
      NULL,
@@ -19024,7 +20803,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x1000000ULL, 0x1000000ULL, QS(""), QS(""), 0, 0},
      &gt41,
-     mk524,
+     mk569,
      QS("{\"unknown\":\"fizzbuzz\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go json.structAll: unknown object member "
@@ -19041,7 +20820,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt38,
-     mk525,
+     mk570,
      QS("{\"ignored\":\"unused\"}"),
      QS(""),
      NULL,
@@ -19051,7 +20830,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt39,
-     mk526,
+     mk571,
      QS("{\"namedString\":\"unused\"}"),
      QS(""),
      NULL,
@@ -19061,7 +20840,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt40,
-     mk527,
+     mk572,
      QS("{\"Aaa\":\"Aaa\",\"AA_A\":\"AA_A\",\"AaA\":\"AaA\",\"AAa\":\"AAa\",\"AAA\":"
         "\"AAA\"}"),
      QS(""),
@@ -19072,7 +20851,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x8000000000ULL, 0x8000000000ULL, QS(""), QS(""), 0, 0},
      &gt40,
-     mk528,
+     mk573,
      QS("{\"aa_a\":\"aa_a\"}"),
      QS(""),
      NULL,
@@ -19082,7 +20861,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt40,
-     mk529,
+     mk574,
      QS("{\"aa_a\":\"aa_a\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go json.structNoCase: ambiguous object "
@@ -19093,7 +20872,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x400000000ULL, 0x400000000ULL, QS(""), QS(""), 0, 0},
      &gt40,
-     mk530,
+     mk575,
      QS("{\"aa_a\":\"aa_a\"}"),
      QS(""),
      NULL,
@@ -19103,7 +20882,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x400800000ULL, 0x400800000ULL, QS(""), QS(""), 0, 0},
      &gt40,
-     mk531,
+     mk576,
      QS("{\"aa_a\":\"aa_a\"}"),
      QS(""),
      NULL,
@@ -19113,7 +20892,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x8000000002ULL, 0x8000000002ULL, QS(""), QS(""), 0, 0},
      &gt40,
-     mk532,
+     mk577,
      QS("{\"AaA\":\"AaA\",\"aaa\":\"aaa\",\"aAa\":\"aAa\"}"),
      QS(""),
      NULL,
@@ -19123,7 +20902,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x2ULL, 0x2ULL, QS(""), QS(""), 0, 0},
      &gt40,
-     mk533,
+     mk578,
      QS("{\"AaA\":\"AaA\",\"aaa\":\"aaa\",\"aAa\":\"aAa\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go json.structNoCase: ambiguous object "
@@ -19134,7 +20913,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x2ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt40,
-     mk534,
+     mk579,
      QS("{\"AaA\":\"AaA\",\"aaa\":\"aaa\"}"),
      QS(""),
      "json: cannot unmarshal JSON string into Go json.structNoCase: ambiguous object "
@@ -19145,7 +20924,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt42,
-     mk535,
+     mk580,
      QS("{\"BOOL\": true, \"STRING\": \"hello\", \"BYTES\": \"AQID\", \"INT\": -64, "
         "\"UINT\": 64, \"FLOAT\": 3.14159}"),
      QS(""),
@@ -19153,11 +20932,95 @@ static const JvCase jv_cases[] = {
      "{unexported:false,Ignored:false,Bool:false,String:s,Bytes:nil,Int:0,Uint:0,Float:"
      "d0000000000000000}",
      0},
+    {"Structs/DuplicateName/NoCase/ExactDifferent",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk581,
+     QS("{\"AAA\":\"AAA\",\"AaA\":\"AaA\",\"AAa\":\"AAa\",\"Aaa\":\"Aaa\"}"),
+     QS(""),
+     NULL,
+     "{AAA:s414141,AA_b:s,AaA:s416141,AAa:s414161,Aaa:s416161,X:nil}",
+     0},
+    {"Structs/DuplicateName/NoCase/ExactConflict",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk582,
+     QS("{\"AAA\":\"AAA\",\"AAA\":\"AAA\"}"),
+     QS(""),
+     "jsontext: duplicate object member name \"AAA\"",
+     "{AAA:s414141,AA_b:s,AaA:s,AAa:s,Aaa:s,X:nil}",
+     0},
+    {"Structs/DuplicateName/NoCase/OverwriteExact",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk583,
+     QS("{\"AAA\":\"after\"}"),
+     QS(""),
+     NULL,
+     "{AAA:s6166746572,AA_b:s,AaA:s,AAa:s,Aaa:s,X:nil}",
+     0},
+    {"Structs/AmbiguousName/NoCase",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk584,
+     QS("{\"aaa\":\"aaa\"}"),
+     QS(""),
+     "json: cannot unmarshal JSON string into Go json.structNoCaseEmbedTextValue: "
+     "ambiguous object member name \"aaa\"",
+     "{AAA:s,AA_b:s,AaA:s,AAa:s,Aaa:s,X:nil}",
+     0},
+    {"Structs/DuplicateName/Embed/Unknown",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk585,
+     QS("{\"unknown\":\"\"}"),
+     QS(""),
+     NULL,
+     "{AAA:s,AA_b:s,AaA:s,AAa:s,Aaa:s,X:[123,34,117,110,107,110,111,119,110,34,58,34,"
+     "34,125]}",
+     0},
+    {"Structs/DuplicateName/Embed/UnknownMerge",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk586,
+     QS("{\"unknown\":\"\"}"),
+     QS(""),
+     NULL,
+     "{AAA:s,AA_b:s,AaA:s,AAa:s,Aaa:s,X:[123,34,117,110,107,110,111,119,110,34,58,34,"
+     "34,44,34,117,110,107,110,111,119,110,34,58,34,34,125]}",
+     0},
+    {"Structs/DuplicateName/Embed/NoCaseOkay",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk587,
+     QS("{\"b\":\"\",\"B\":\"\"}"),
+     QS(""),
+     NULL,
+     "{AAA:s,AA_b:s,AaA:s,AAa:s,Aaa:s,X:[123,34,98,34,58,34,34,44,34,66,34,58,34,34,"
+     "125]}",
+     0},
+    {"Structs/DuplicateName/Embed/ExactConflict",
+     0,
+     {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
+     &gt119,
+     mk588,
+     QS("{\"b\":\"\",\"b\":\"\"}"),
+     QS(""),
+     "jsontext: duplicate object member name \"b\"",
+     "{AAA:s,AA_b:s,AaA:s,AAa:s,Aaa:s,X:[123,34,98,34,58,34,34,125]}",
+     0},
     {"Structs/Invalid/ErrUnexpectedEOF",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt41,
-     mk536,
+     mk589,
      QS(""),
      QS(""),
      "jsontext: unexpected EOF",
@@ -19173,7 +21036,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt41,
-     mk537,
+     mk590,
      QS(" \012\015\011"),
      QS(""),
      "jsontext: unexpected EOF after offset 4",
@@ -19189,7 +21052,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt41,
-     mk538,
+     mk591,
      QS("{\"Pointer\":"),
      QS(""),
      "jsontext: unexpected EOF within \"/Pointer\" after offset 11",
@@ -19210,8 +21073,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Invalid/Conflicting",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt116,
-     mk539,
+     &gt121,
+     mk592,
      QS("{}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go json.structConflicting: Go struct "
@@ -19221,8 +21084,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Invalid/NoneExported",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt117,
-     mk540,
+     &gt122,
+     mk593,
      QS(" {}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go json.structNoneExported after offset "
@@ -19232,8 +21095,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Invalid/MalformedTag",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt118,
-     mk541,
+     &gt123,
+     mk594,
      QS("{}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go json.structMalformedTag: Go struct "
@@ -19244,8 +21107,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Invalid/UnexportedTag",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt119,
-     mk542,
+     &gt124,
+     mk595,
      QS("{}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go json.structUnexportedTag: unexported "
@@ -19255,8 +21118,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Invalid/ExportedEmbedded",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt120,
-     mk543,
+     &gt125,
+     mk596,
      QS("{\"NamedString\":\"hello\"}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go json.structExportedEmbedded: embedded "
@@ -19267,8 +21130,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Valid/ExportedEmbedded",
      0,
      {0x8000000000ULL, 0x8000000000ULL, QS(""), QS(""), 0, 0},
-     &gt120,
-     mk544,
+     &gt125,
+     mk597,
      QS("{\"NamedString\":\"hello\"}"),
      QS(""),
      NULL,
@@ -19277,8 +21140,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Valid/ExportedEmbeddedTag",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt122,
-     mk545,
+     &gt127,
+     mk598,
      QS("{\"name\":\"hello\"}"),
      QS(""),
      NULL,
@@ -19287,8 +21150,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Invalid/UnexportedEmbedded",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt123,
-     mk546,
+     &gt128,
+     mk599,
      QS("{}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go json.structUnexportedEmbedded: "
@@ -19299,8 +21162,8 @@ static const JvCase jv_cases[] = {
     {"Structs/Unknown",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt125,
-     mk547,
+     &gt130,
+     mk600,
      QS("{\012\011\"object0\": {},\012\011\"object1\": {\"key1\": "
         "\"value\"},\012\011\"object2\": {\"key1\": \"value\", \"key2\": "
         "\"value\"},\012\011\"objects\": {\"\":{\"\":{\"\":{}}}},\012\011\"array0\": "
@@ -19314,8 +21177,8 @@ static const JvCase jv_cases[] = {
     {"Structs/IgnoreInvalidFormat",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt163,
-     mk548,
+     &gt168,
+     mk601,
      QS("{\"Field\":\"Value\"}"),
      QS(""),
      NULL,
@@ -19325,7 +21188,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt3,
-     mk549,
+     mk602,
      QS("null"),
      QS(""),
      NULL,
@@ -19335,7 +21198,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt0,
-     mk550,
+     mk603,
      QS("[true,false]"),
      QS(""),
      NULL,
@@ -19345,7 +21208,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt3,
-     mk551,
+     mk604,
      QS("[\"hello\",\"goodbye\"]"),
      QS(""),
      NULL,
@@ -19355,7 +21218,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt6,
-     mk552,
+     mk605,
      QS("[\"aGVsbG8=\",\"Z29vZGJ5ZQ==\"]"),
      QS(""),
      NULL,
@@ -19364,8 +21227,8 @@ static const JvCase jv_cases[] = {
     {"Slices/Int",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt164,
-     mk553,
+     &gt169,
+     mk606,
      QS("[-2,-1,0,1,2]"),
      QS(""),
      NULL,
@@ -19374,8 +21237,8 @@ static const JvCase jv_cases[] = {
     {"Slices/Uint",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt165,
-     mk554,
+     &gt170,
+     mk607,
      QS("[0,1,2,3,4]"),
      QS(""),
      NULL,
@@ -19385,7 +21248,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt52,
-     mk555,
+     mk608,
      QS("[3.14159,12.34]"),
      QS(""),
      NULL,
@@ -19394,8 +21257,8 @@ static const JvCase jv_cases[] = {
     {"Slices/Merge",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt166,
-     mk556,
+     &gt171,
+     mk609,
      QS("[{\"k3\":\"v3\"},{\"k4\":\"v4\"}]"),
      QS(""),
      NULL,
@@ -19404,8 +21267,8 @@ static const JvCase jv_cases[] = {
     {"Slices/Invalid/Channel",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt126,
-     mk557,
+     &gt131,
+     mk610,
      QS("[\"hello\"]"),
      QS(""),
      "json: cannot unmarshal into Go chan string within \"/0\"",
@@ -19414,8 +21277,8 @@ static const JvCase jv_cases[] = {
     {"Slices/RecursiveSlice",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt127,
-     mk558,
+     &gt132,
+     mk611,
      QS("[[],[],[[]],[[],[]]]"),
      QS(""),
      NULL,
@@ -19425,7 +21288,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt3,
-     mk559,
+     mk612,
      QS("true"),
      QS(""),
      "json: cannot unmarshal JSON boolean into Go []string",
@@ -19435,7 +21298,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt3,
-     mk560,
+     mk613,
      QS("\"\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go []string",
@@ -19445,7 +21308,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt3,
-     mk561,
+     mk614,
      QS("0"),
      QS(""),
      "json: cannot unmarshal JSON number into Go []string",
@@ -19455,7 +21318,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt3,
-     mk562,
+     mk615,
      QS("{}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go []string",
@@ -19465,7 +21328,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt0,
-     mk563,
+     mk616,
      QS("[false,true]"),
      QS(""),
      NULL,
@@ -19475,7 +21338,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt22,
-     mk564,
+     mk617,
      QS("null"),
      QS(""),
      NULL,
@@ -19484,8 +21347,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Bool",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt129,
-     mk565,
+     &gt134,
+     mk618,
      QS("[true,false]"),
      QS(""),
      NULL,
@@ -19494,8 +21357,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/String",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt130,
-     mk566,
+     &gt135,
+     mk619,
      QS("[\"hello\",\"goodbye\"]"),
      QS(""),
      NULL,
@@ -19504,8 +21367,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Bytes",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt131,
-     mk567,
+     &gt136,
+     mk620,
      QS("[\"aGVsbG8=\",\"Z29vZGJ5ZQ==\"]"),
      QS(""),
      NULL,
@@ -19514,8 +21377,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Int",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt167,
-     mk568,
+     &gt172,
+     mk621,
      QS("[-2,-1,0,1,2]"),
      QS(""),
      NULL,
@@ -19524,8 +21387,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Uint",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt168,
-     mk569,
+     &gt173,
+     mk622,
      QS("[0,1,2,3,4]"),
      QS(""),
      NULL,
@@ -19534,8 +21397,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Float",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt134,
-     mk570,
+     &gt139,
+     mk623,
      QS("[3.14159,12.34]"),
      QS(""),
      NULL,
@@ -19544,8 +21407,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Merge",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt169,
-     mk571,
+     &gt174,
+     mk624,
      QS("[{\"k3\":\"v3\"},{\"k4\":\"v4\"}]"),
      QS(""),
      NULL,
@@ -19554,8 +21417,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Invalid/Channel",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt136,
-     mk572,
+     &gt141,
+     mk625,
      QS("[\"hello\"]"),
      QS(""),
      "json: cannot unmarshal into Go chan string within \"/0\"",
@@ -19564,8 +21427,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Invalid/Underflow",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt170,
-     mk573,
+     &gt175,
+     mk626,
      QS("{\"F\":[   ]}"),
      QS(""),
      "json: cannot unmarshal JSON array into Go [1]string within \"/F\": too few array "
@@ -19575,8 +21438,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Invalid/Underflow/UnmarshalArrayFromAnyLength",
      0,
      {0x40000000000ULL, 0x40000000000ULL, QS(""), QS(""), 0, 0},
-     &gt171,
-     mk574,
+     &gt176,
+     mk627,
      QS("[-1,-2]"),
      QS(""),
      NULL,
@@ -19586,7 +21449,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt22,
-     mk575,
+     mk628,
      QS("[\"1\",\"2\"]"),
      QS(""),
      "json: cannot unmarshal JSON array into Go [1]string after offset 8: too many "
@@ -19596,8 +21459,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/Invalid/Overflow/UnmarshalArrayFromAnyLength",
      0,
      {0x40000000000ULL, 0x40000000000ULL, QS(""), QS(""), 0, 0},
-     &gt171,
-     mk576,
+     &gt176,
+     mk629,
      QS("[-1,-2,-3,-4,-5,-6]"),
      QS(""),
      NULL,
@@ -19607,7 +21470,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt22,
-     mk577,
+     mk630,
      QS("true"),
      QS(""),
      "json: cannot unmarshal JSON boolean into Go [1]string",
@@ -19617,7 +21480,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt22,
-     mk578,
+     mk631,
      QS("\"\""),
      QS(""),
      "json: cannot unmarshal JSON string into Go [1]string",
@@ -19627,7 +21490,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt22,
-     mk579,
+     mk632,
      QS("0"),
      QS(""),
      "json: cannot unmarshal JSON number into Go [1]string",
@@ -19637,7 +21500,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt22,
-     mk580,
+     mk633,
      QS("{}"),
      QS(""),
      "json: cannot unmarshal JSON object into Go [1]string",
@@ -19646,8 +21509,8 @@ static const JvCase jv_cases[] = {
     {"Arrays/IgnoreInvalidFormat",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt129,
-     mk581,
+     &gt134,
+     mk634,
      QS("[false,true]"),
      QS(""),
      NULL,
@@ -19657,7 +21520,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt61,
-     mk582,
+     mk635,
      QS("null"),
      QS(""),
      NULL,
@@ -19666,8 +21529,8 @@ static const JvCase jv_cases[] = {
     {"Pointers/NullL1",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt138,
-     mk583,
+     &gt143,
+     mk636,
      QS("null"),
      QS(""),
      NULL,
@@ -19677,7 +21540,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt60,
-     mk584,
+     mk637,
      QS("true"),
      QS(""),
      NULL,
@@ -19687,7 +21550,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt61,
-     mk585,
+     mk638,
      QS("\"hello\""),
      QS(""),
      NULL,
@@ -19696,8 +21559,8 @@ static const JvCase jv_cases[] = {
     {"Pointers/Bytes",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt140,
-     mk586,
+     &gt145,
+     mk639,
      QS("\"aGVsbG8=\""),
      QS(""),
      NULL,
@@ -19707,7 +21570,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt72,
-     mk587,
+     mk640,
      QS("-123"),
      QS(""),
      NULL,
@@ -19717,7 +21580,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt72,
-     mk588,
+     mk641,
      QS("123"),
      QS(""),
      NULL,
@@ -19727,7 +21590,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt58,
-     mk589,
+     mk642,
      QS("123.456"),
      QS(""),
      NULL,
@@ -19737,7 +21600,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt61,
-     mk590,
+     mk643,
      QS("\"hello\""),
      QS(""),
      NULL,
@@ -19747,7 +21610,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &gt60,
-     mk591,
+     mk644,
      QS("true"),
      QS(""),
      NULL,
@@ -19757,7 +21620,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Any,
-     mk592,
+     mk645,
      QS("null"),
      QS(""),
      NULL,
@@ -19767,7 +21630,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Any,
-     mk593,
+     mk646,
      QS("false"),
      QS(""),
      NULL,
@@ -19777,7 +21640,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Any,
-     mk594,
+     mk647,
      QS("true"),
      QS(""),
      NULL,
@@ -19787,7 +21650,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Any,
-     mk595,
+     mk648,
      QS("\"string\""),
      QS(""),
      NULL,
@@ -19797,7 +21660,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Any,
-     mk596,
+     mk649,
      QS("3.14159"),
      QS(""),
      NULL,
@@ -19807,7 +21670,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Any,
-     mk597,
+     mk650,
      QS("{\"k\":\"v\"}"),
      QS(""),
      NULL,
@@ -19817,7 +21680,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Any,
-     mk598,
+     mk651,
      QS("[\"v\"]"),
      QS(""),
      NULL,
@@ -19827,7 +21690,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Any,
-     mk599,
+     mk652,
      QS("]"),
      QS(""),
      "jsontext: invalid character ']' at start of value",
@@ -19837,7 +21700,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Any,
-     mk600,
+     mk653,
      QS("{\"k2\":\"v2\"}"),
      QS(""),
      NULL,
@@ -19847,7 +21710,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Any,
-     mk601,
+     mk654,
      QS("{\"Array\":[\"goodbye\"]}"),
      QS(""),
      NULL,
@@ -19863,7 +21726,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Any,
-     mk602,
+     mk655,
      QS("64"),
      QS(""),
      NULL,
@@ -19873,7 +21736,7 @@ static const JvCase jv_cases[] = {
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
      &burrow_type_Any,
-     mk603,
+     mk656,
      QS("true"),
      QS(""),
      NULL,
@@ -19882,8 +21745,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk604,
+     &gt152,
+     mk657,
      QS("{\"X\":[null,false,true,\"\",0,{},[]]}"),
      QS(""),
      NULL,
@@ -19894,8 +21757,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Stringified",
      0,
      {0x40000ULL, 0x40000ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk605,
+     &gt152,
+     mk658,
      QS("{\"X\":\"0\"}"),
      QS(""),
      NULL,
@@ -19904,8 +21767,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Maps/NonEmpty",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk606,
+     &gt152,
+     mk659,
      QS("{\"X\":{\"fizz\":\"buzz\"}}"),
      QS(""),
      NULL,
@@ -19914,8 +21777,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Maps/RejectDuplicateNames",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk607,
+     &gt152,
+     mk660,
      QS("{\"X\":{\"fizz\":\"buzz\",\"fizz\":true}}"),
      QS(""),
      "jsontext: duplicate object member name \"fizz\" within \"/X\"",
@@ -19924,8 +21787,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Maps/AllowDuplicateNames",
      0,
      {0x2ULL, 0x2ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk608,
+     &gt152,
+     mk661,
      QS("{\"X\":{\"fizz\":\"buzz\",\"fizz\":true}}"),
      QS(""),
      "json: cannot unmarshal JSON boolean into Go string within \"/X/fizz\"",
@@ -19934,8 +21797,8 @@ static const JvCase jv_cases[] = {
     {"Interfaces/Any/Slices/NonEmpty",
      0,
      {0x0ULL, 0x0ULL, QS(""), QS(""), 0, 0},
-     &gt147,
-     mk609,
+     &gt152,
+     mk662,
      QS("{\"X\":[\"fizz\",\"buzz\"]}"),
      QS(""),
      NULL,

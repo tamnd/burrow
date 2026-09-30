@@ -17,6 +17,8 @@
 #include "json_internal.h"
 
 #include "burrow/bytes.h"
+#include "burrow/declare.h"
+#include "burrow/encoding.h"
 #include "burrow/encoding/json/jsontext.h"
 #include "burrow/math.h"
 #include "burrow/mem/heap.h"
@@ -4136,6 +4138,36 @@ JsontextValue jsontext_value_clone(JsontextValue v, Alloc *a) {
     return out;
 }
 
+/* The methods on jsontext.Value's descriptor, which is what json v2 calls
+ * for a field of this type. */
+static Slice jt_value_marshal_json_m(JsontextValue *v, Alloc *a, Error *err) {
+    (void)a;
+    return jsontext_value_marshal_json(*v, err);
+}
+
+#define JT_VALUE_METHODS(M, T)                                                         \
+    M(T, MarshalJSON, jt_value_marshal_json_m, ENCODING_SIG_MARSHAL_BINARY)            \
+    M(T, UnmarshalJSON, jsontext_value_unmarshal_json, ENCODING_SIG_UNMARSHAL_BINARY)
+BURROW_METHODS_DEFINE(JsontextValue, JT_VALUE_METHODS);
+
+const Type burrow_type_JsontextValue = {
+    {(const Byte *)"Value", 5},
+    {(const Byte *)"encoding/json/jsontext", 22},
+    KIND_SLICE,
+    (uint32_t)sizeof(JsontextValue),
+    (uint16_t)_Alignof(JsontextValue),
+    0,
+    (uint16_t)(sizeof burrow__methods_JsontextValue /
+               sizeof burrow__methods_JsontextValue[0]),
+    NULL,
+    burrow__methods_JsontextValue,
+    &burrow_type_Byte,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
 Str jsontext_value_string(JsontextValue v) {
     if (v.p == NULL)
         return JT_LIT("null");
@@ -4185,6 +4217,7 @@ static Error jt_value_assign(JsontextValue *v, Alloc *a, const Byte *p, Int n) {
     if (n > 0)
         memmove(v->p, p, (size_t)n);
     v->len = n;
+    v->elem = TYPE_BYTE;
     return BURROW_NO_ERROR;
 }
 

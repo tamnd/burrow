@@ -143,6 +143,8 @@ BURROW_SENTINEL_ERROR(burrow__jsonv2_err_invalid_string_tag,
                       "invalid use of `string` tag option");
 BURROW_SENTINEL_ERROR(burrow__jsonv2_err_nil_field,
                       "cannot set embedded pointer to unexported struct type");
+BURROW_SENTINEL_ERROR(burrow__jsonv2_err_raw_embed_not_object,
+                      "embedded raw value must be a JSON object");
 BURROW_SENTINEL_ERROR(burrow__jsonv2_err_array_underflow, "too few array elements");
 BURROW_SENTINEL_ERROR(burrow__jsonv2_err_array_overflow, "too many array elements");
 BURROW_SENTINEL_ERROR(burrow__jsonv2_err_no_exported_fields,

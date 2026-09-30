@@ -74,3 +74,4 @@ mime/quotedprintable
 mime
 math/big
 encoding/json/jsontext
+uuid

@@ -72,6 +72,24 @@ static int child(int argc, char **argv) {
         return 0;
 #endif
     }
+    if (strcmp(mode, "pal-args") == 0) {
+        /* The same, from pal_args rather than from main, from the program
+         * name on, which main's argc and argv are here to check. */
+        static char buf[8192];
+        int64_t n = pal_args(buf, (int64_t)sizeof buf, NULL);
+        if (n < 0)
+            return 5;
+        int i = 0;
+        for (int64_t o = 0; o < n; o += (int64_t)strlen(buf + o) + 1, i++) {
+#if !defined(_WIN32)
+            if (i >= argc || strcmp(buf + o, argv[i]) != 0)
+                return 6;
+#endif
+            if (i >= 3)
+                printf("[%s]\n", buf + o);
+        }
+        return i == argc ? 0 : 7;
+    }
     if (strcmp(mode, "env") == 0) {
         const char *v = getenv(argv[3]);
         printf("%s\n", v != NULL ? v : "(unset)");
@@ -228,6 +246,53 @@ static void TestArgumentsArriveIntact(TestingT *t) {
         o += (size_t)snprintf(want + o, sizeof want - o, "[%s]\n", args[i]);
     if (r.status != 0 || strcmp(r.out, want) != 0)
         testing_t_errorf_v(t, "status %d, output\n%s\nwant\n%s", r.status, r.out, want);
+}
+
+/* pal_args, which is what Go's os.Args will be read from, sees the same
+ * arguments main does, quoting and all. */
+static void TestPalArgs(TestingT *t) {
+    const char *args[] = {"pal-args",
+                          "plain",
+                          "",
+                          "two words",
+                          "tab\there",
+                          "quote\"inside",
+                          "trailing\\",
+                          "back\\slash",
+                          "\\\\server\\share\\",
+                          "both \\\"x\\\"",
+                          "ends in space ",
+                          "héllo",
+                          NULL};
+    Run r;
+    if (!run(t, args, NULL, NULL, &r))
+        return;
+    char want[1024];
+    size_t o = 0;
+    for (int i = 1; args[i] != NULL; i++)
+        o += (size_t)snprintf(want + o, sizeof want - o, "[%s]\n", args[i]);
+    if (r.status != 0 || strcmp(r.out, want) != 0)
+        testing_t_errorf_v(t, "status %d, output\n%s\nwant\n%s", r.status, r.out, want);
+}
+
+/* A buffer too small is PAL_ERANGE, and one byte more than the answer is
+ * enough. */
+static void TestPalArgsBuffer(TestingT *t) {
+    static char buf[8192];
+    PalErrno err = PAL_OK;
+    int64_t n = pal_args(buf, (int64_t)sizeof buf, &err);
+    if (n <= 0) {
+        testing_t_errorf_v(t, "pal_args = %d, %s", (int)n, pal_errno_string(err));
+        return;
+    }
+    char small[8192];
+    err = PAL_OK;
+    if (pal_args(small, n - 1, &err) != -1 || err != PAL_ERANGE)
+        testing_t_errorf_v(t, "pal_args with %d bytes did not say PAL_ERANGE",
+                           (int)(n - 1));
+    if (pal_args(small, n, NULL) != n || memcmp(small, buf, (size_t)n) != 0)
+        testing_t_errorf_v(t, "pal_args with exactly %d bytes gave something else",
+                           (int)n);
 }
 
 static void TestEnvironment(TestingT *t) {
@@ -602,6 +667,8 @@ static void TestMapShared(TestingT *t) {
     X(TestExitStatus)                                                                  \
     X(TestExitSkipsBufferedOutput)                                                     \
     X(TestArgumentsArriveIntact)                                                       \
+    X(TestPalArgs)                                                                     \
+    X(TestPalArgsBuffer)                                                               \
     X(TestEnvironment)                                                                 \
     X(TestWorkingDirectory)                                                            \
     X(TestMissingProgram)                                                              \

@@ -52,13 +52,13 @@
 #include <sys/syscall.h>
 #endif
 
-#if defined(BURROW_OS_MACOS)
+#if defined(BURROW_OS_DARWIN)
 #include <crt_externs.h>
 #endif
 
 /* unistd.h declares it on Linux, where _GNU_SOURCE is set, and gcc calls a
  * second declaration redundant. */
-#if !defined(BURROW_OS_MACOS) && !defined(BURROW_OS_LINUX)
+#if !defined(BURROW_OS_DARWIN) && !defined(BURROW_OS_LINUX)
 extern char **environ;
 #endif
 
@@ -297,7 +297,7 @@ void pal_exit(int32_t code) {
 }
 
 const char *const *pal_environ(void) {
-#if defined(BURROW_OS_MACOS)
+#if defined(BURROW_OS_DARWIN)
     /* environ is only there for executables on macOS, and a shared library
      * has to ask for it. */
     return (const char *const *)(uintptr_t)*_NSGetEnviron();

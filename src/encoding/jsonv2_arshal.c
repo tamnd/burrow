@@ -765,7 +765,7 @@ static Error jv_marshal_bytes(JsontextEncoder *e, const Type *t, void *p,
                 return burrow__jsonv2_invalid_format_enc(e, t, mo);
         } else if ((JV_GET(mo, JSONFLAG_FORMAT_BYTE_ARRAY_AS_ARRAY) && is_array) ||
                    (JV_GET(mo, JSONFLAG_FORMAT_BYTES_WITH_LEGACY_SEMANTICS) &&
-                    burrow__jsonv2_implements_any(t->elem))) {
+                    burrow__jsonv2_implements(t->elem, JV_MASK_MARSHALERS))) {
             return jv_marshal_list(e, t, p, mo);
         }
         if (JV_GET(mo, JSONFLAG_FORMAT_NIL_SLICE_AS_NULL) && !is_array &&
@@ -1274,6 +1274,13 @@ static Error jv_map_key_error(JsontextEncoder *e, const Type *kt, Error err) {
     return err;
 }
 
+/* nonDefault: whether t is marshaled by a method rather than by its kind, which
+ * rules out the shortcuts that assume the kind's own form. */
+static bool jv_non_default(const Type *t) {
+    return t->nmethod > 0 && t->kind != KIND_POINTER && t->kind != KIND_INTERFACE &&
+           burrow__jsonv2_implements(t, JV_MASK_ARSHALERS);
+}
+
 static Error jv_marshal_map_body(JsontextEncoder *e, const Type *t, Map *m,
                                  JsontextOptions *mo) {
     Int n = map_len(m);
@@ -1282,7 +1289,9 @@ static Error jv_marshal_map_body(JsontextEncoder *e, const Type *t, Map *m,
         return err;
     if (n > 0) {
         const Type *kt = t->key, *vt = t->elem;
-        if (jv_unique_key(kt, JV_GET(mo, JSONFLAG_ALLOW_INVALID_UTF8)))
+        bool non_default_key = jv_non_default(kt);
+        if (!non_default_key &&
+            jv_unique_key(kt, JV_GET(mo, JSONFLAG_ALLOW_INVALID_UTF8)))
             jsonstate_disable_namespace(&e->st);
         if (!JV_GET(mo, JSONFLAG_DETERMINISTIC) || n <= 1) {
             MapIter it = map_iter(m);
@@ -1297,7 +1306,7 @@ static Error jv_marshal_map_body(JsontextEncoder *e, const Type *t, Map *m,
                     return err;
             }
         } else {
-            bool strings = kt->kind == KIND_STRING;
+            bool strings = !non_default_key && kt->kind == KIND_STRING;
             JvMember *members = (JvMember *)mem_alloc(
                 heap_allocator(), (size_t)n * 2 * sizeof(JvMember), _Alignof(JvMember));
             if (members == NULL)
@@ -1413,7 +1422,8 @@ static Error jv_unmarshal_map(JsontextDecoder *d, const Type *t, void *p,
         *(Map **)p = m;
     }
     const Type *kt = t->key, *vt = t->elem;
-    if (jv_unique_key(kt, JV_GET(uo, JSONFLAG_ALLOW_INVALID_UTF8)))
+    if (!jv_non_default(kt) &&
+        jv_unique_key(kt, JV_GET(uo, JSONFLAG_ALLOW_INVALID_UTF8)))
         jsonstate_disable_namespace(&d->st);
     Map *seen = NULL;
     if (!JV_GET(uo, JSONFLAG_ALLOW_DUPLICATE_NAMES) && map_len(m) > 0) {
@@ -1568,6 +1578,8 @@ static void *jv_field_ptr(const Type *t, void *p, const JvField *f, Alloc *alloc
         if (i > 0) {
             if (st->kind == KIND_POINTER) {
                 void **pp = (void **)p;
+                if (pp == NULL)
+                    return NULL;
                 if (*pp == NULL) {
                     if (alloc == NULL || !settable)
                         return NULL;
@@ -1585,6 +1597,39 @@ static void *jv_field_ptr(const Type *t, void *p, const JvField *f, Alloc *alloc
         st = sf->type;
     }
     return p;
+}
+
+static const Type *jv_iface_elem(const Type *t, void *p, void **vp);
+
+/* The zero test for omitzero, which is the type's IsZero method when it has
+ * one. A nil pointer or interface is zero without asking. */
+static bool jv_field_is_zero(const Type *t, void *v) {
+    const Type *mt = t;
+    void *recv = v;
+    if (t->kind == KIND_POINTER && t->nmethod == 0 && t->name.len == 0) {
+        mt = t->elem;
+        recv = *(void **)v;
+    }
+    if (mt == NULL || mt->nmethod == 0)
+        return jv_is_zero(t, v);
+    JvMethods ms;
+    burrow__jsonv2_methods(mt, &ms);
+    const Method *m = ms.m[JV_M_IS_ZERO];
+    if (m == NULL)
+        return jv_is_zero(t, v);
+    if (t->kind == KIND_INTERFACE) {
+        void *ev = NULL;
+        const Type *et = jv_iface_elem(t, v, &ev);
+        if (et == NULL)
+            return true;
+        burrow__jsonv2_methods(et, &ms);
+        if (ms.m[JV_M_IS_ZERO] == NULL)
+            return jv_is_zero(t, v);
+        return burrow__jsonv2_call_is_zero(ms.m[JV_M_IS_ZERO], ev);
+    }
+    if (t->kind == KIND_POINTER && *(void **)v == NULL)
+        return true;
+    return burrow__jsonv2_call_is_zero(m, recv);
 }
 
 static Error jv_marshal_struct_members(JsontextEncoder *e, const Type *t, void *p,
@@ -1641,12 +1686,13 @@ static Error jv_marshal_struct_members(JsontextEncoder *e, const Type *t, void *
         if (v == NULL)
             continue;
         if ((f->omitzero || JV_GET(mo, JSONFLAG_OMIT_ZERO_STRUCT_FIELDS)) &&
-            jv_is_zero(f->typ, v))
+            jv_field_is_zero(f->typ, v))
             continue;
         if (f->omitempty && JV_GET(mo, JSONFLAG_OMIT_EMPTY_WITH_LEGACY_SEMANTICS) &&
             jv_is_legacy_empty(f->typ, v))
             continue;
-        if (f->omitempty && !JV_GET(mo, JSONFLAG_OMIT_EMPTY_WITH_LEGACY_SEMANTICS)) {
+        if (f->omitempty && !JV_GET(mo, JSONFLAG_OMIT_EMPTY_WITH_LEGACY_SEMANTICS) &&
+            !jv_non_default(f->typ)) {
             bool has = false;
             if (jv_is_empty(f->typ, v, &has) && has)
                 continue;
@@ -2702,8 +2748,8 @@ static Error jv_unmarshal_invalid(JsontextDecoder *d, const Type *t) {
 
 /* ------------------------------------------------------------------ dispatch */
 
-Error burrow__jsonv2_marshal_value(JsontextEncoder *e, const Type *t, void *p,
-                                   JsontextOptions *mo) {
+Error burrow__jsonv2_marshal_default(JsontextEncoder *e, const Type *t, void *p,
+                                     JsontextOptions *mo) {
     switch ((int)t->kind) {
     case KIND_BOOL:
         return jv_marshal_bool(e, t, p, mo);
@@ -2743,8 +2789,8 @@ Error burrow__jsonv2_marshal_value(JsontextEncoder *e, const Type *t, void *p,
     }
 }
 
-Error burrow__jsonv2_unmarshal_value(JsontextDecoder *d, const Type *t, void *p,
-                                     JsontextOptions *uo) {
+Error burrow__jsonv2_unmarshal_default(JsontextDecoder *d, const Type *t, void *p,
+                                       JsontextOptions *uo) {
     switch ((int)t->kind) {
     case KIND_BOOL:
         return jv_unmarshal_bool(d, t, p, uo);
@@ -2782,4 +2828,26 @@ Error burrow__jsonv2_unmarshal_value(JsontextDecoder *d, const Type *t, void *p,
     default:
         return jv_unmarshal_invalid(d, t);
     }
+}
+
+/* Go skips methods on pointer and interface kinds, since those follow through
+ * to what they hold, which gets its own turn. */
+Error burrow__jsonv2_marshal_value(JsontextEncoder *e, const Type *t, void *p,
+                                   JsontextOptions *mo) {
+    if (t->nmethod > 0 && t->kind != KIND_POINTER && t->kind != KIND_INTERFACE) {
+        JvMethods ms;
+        burrow__jsonv2_methods(t, &ms);
+        return burrow__jsonv2_marshal_methods(e, t, p, mo, &ms);
+    }
+    return burrow__jsonv2_marshal_default(e, t, p, mo);
+}
+
+Error burrow__jsonv2_unmarshal_value(JsontextDecoder *d, const Type *t, void *p,
+                                     JsontextOptions *uo) {
+    if (t->nmethod > 0 && t->kind != KIND_POINTER && t->kind != KIND_INTERFACE) {
+        JvMethods ms;
+        burrow__jsonv2_methods(t, &ms);
+        return burrow__jsonv2_unmarshal_methods(d, t, p, uo, &ms);
+    }
+    return burrow__jsonv2_unmarshal_default(d, t, p, uo);
 }

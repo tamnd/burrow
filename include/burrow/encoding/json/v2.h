@@ -46,6 +46,7 @@
 #define BURROW_ENCODING_JSON_V2_H
 
 #include "burrow/core.h"
+#include "burrow/encoding.h"
 #include "burrow/encoding/json/jsontext.h"
 #include "burrow/error.h"
 #include "burrow/iface.h"
@@ -158,6 +159,113 @@ BURROW_OWNS(ret) Error jsonv2_semantic_error_as_error(const Jsonv2SemanticError 
  * (TYPE_FLOAT64), one of these two again, or nothing for null. */
 extern const Type *const TYPE_JSONV2_MAP_STRING_ANY;
 extern const Type *const TYPE_JSONV2_SLICE_ANY;
+
+/* ------------------------------------------------------------------ methods
+ *
+ * A type decides how it becomes JSON by listing one of Go's methods in its
+ * descriptor, the same way it takes part in the encoding package:
+ *
+ *     static Error celsius_marshal_json_to(Celsius *c, JsontextEncoder *enc) {
+ *         return jsontext_encoder_write_token(enc, jsontext_float(c->deg));
+ *     }
+ *
+ *     #define CELSIUS_METHODS(M, T) \
+ *         M(T, MarshalJSONTo, celsius_marshal_json_to, JSONV2_SIG_MARSHAL_JSON_TO)
+ *     BURROW_STRUCT_DEFINE_METHODS(Celsius, CELSIUS_FIELDS, CELSIUS_METHODS);
+ *
+ * Marshal looks for MarshalJSONTo, then MarshalJSON, then AppendText, then
+ * MarshalText, and uses the first one the type has. Unmarshal looks for
+ * UnmarshalJSONFrom, then UnmarshalJSON, then UnmarshalText. Text is written
+ * and read as a JSON string. The encoding package's signatures are the ones
+ * for the three text methods, ENCODING_SIG_APPEND_TEXT and the others.
+ *
+ * MarshalJSONTo and UnmarshalJSONFrom have to write or read exactly one JSON
+ * value. Either may return errors_err_unsupported without touching the coder,
+ * and the next method down the list is used instead, or the type's own rules
+ * when there is none. The other methods may not return it.
+ *
+ * Every burrow method takes its receiver as a pointer, so there is no split
+ * between the methods of T and those of *T here. A method is called on the
+ * value it belongs to, never on a nil pointer, and a pointer type is followed
+ * to the value first, as Go does. The same goes for IsZero, which omitzero
+ * asks when a field's type has it, as bool f(T *self).
+ *
+ * The Alloc an unmarshal method gets is the one Unmarshal was given, so what
+ * it keeps goes where the rest of the value goes. The bytes MarshalJSON and
+ * MarshalText return come from scratch space that is freed once they have
+ * been copied out. */
+
+/* JsontextEncoder * and JsontextDecoder * as one token each, for the
+ * signature lists. */
+typedef JsontextEncoder *Jsonv2EncoderArg;
+typedef JsontextDecoder *Jsonv2DecoderArg;
+extern const Type burrow_type_Jsonv2EncoderArg;
+extern const Type burrow_type_Jsonv2DecoderArg;
+
+/* Error marshal_json_to(T *self, JsontextEncoder *enc) */
+#define JSONV2_SIG_MARSHAL_JSON_TO(IN, OUT) IN(0, Jsonv2EncoderArg) OUT(Error)
+
+/* Slice marshal_json(T *self, Alloc *a, Error *err) */
+#define JSONV2_SIG_MARSHAL_JSON(IN, OUT) ENCODING_SIG_MARSHAL_BINARY(IN, OUT)
+
+/* Error unmarshal_json_from(T *self, Alloc *a, JsontextDecoder *dec) */
+#define JSONV2_SIG_UNMARSHAL_JSON_FROM(IN, OUT)                                        \
+    IN(0, EncodingAllocArg) IN(1, Jsonv2DecoderArg) OUT(Error)
+
+/* Error unmarshal_json(T *self, Alloc *a, Slice data) */
+#define JSONV2_SIG_UNMARSHAL_JSON(IN, OUT) ENCODING_SIG_UNMARSHAL_BINARY(IN, OUT)
+
+/* bool is_zero(T *self) */
+#define JSONV2_SIG_IS_ZERO(IN, OUT) OUT(bool)
+
+/* json.Marshaler, json.MarshalerTo, json.Unmarshaler and
+ * json.UnmarshalerFrom, for code that wants to hold one. Marshal and
+ * Unmarshal go by the methods the held value's own type lists, as they do for
+ * any other interface value, so the vtable is for your code and not theirs. */
+typedef struct Jsonv2MarshalerVT {
+    const Type *self_type;
+    Slice (*marshal_json)(void *self, Alloc *a, Error *err);
+} Jsonv2MarshalerVT;
+
+typedef struct Jsonv2Marshaler {
+    const Jsonv2MarshalerVT *vt;
+    void *data;
+} Jsonv2Marshaler;
+
+typedef struct Jsonv2MarshalerToVT {
+    const Type *self_type;
+    Error (*marshal_json_to)(void *self, JsontextEncoder *enc);
+} Jsonv2MarshalerToVT;
+
+typedef struct Jsonv2MarshalerTo {
+    const Jsonv2MarshalerToVT *vt;
+    void *data;
+} Jsonv2MarshalerTo;
+
+typedef struct Jsonv2UnmarshalerVT {
+    const Type *self_type;
+    Error (*unmarshal_json)(void *self, Alloc *a, Slice data);
+} Jsonv2UnmarshalerVT;
+
+typedef struct Jsonv2Unmarshaler {
+    const Jsonv2UnmarshalerVT *vt;
+    void *data;
+} Jsonv2Unmarshaler;
+
+typedef struct Jsonv2UnmarshalerFromVT {
+    const Type *self_type;
+    Error (*unmarshal_json_from)(void *self, Alloc *a, JsontextDecoder *dec);
+} Jsonv2UnmarshalerFromVT;
+
+typedef struct Jsonv2UnmarshalerFrom {
+    const Jsonv2UnmarshalerFromVT *vt;
+    void *data;
+} Jsonv2UnmarshalerFrom;
+
+extern const Type burrow_type_Jsonv2Marshaler;
+extern const Type burrow_type_Jsonv2MarshalerTo;
+extern const Type burrow_type_Jsonv2Unmarshaler;
+extern const Type burrow_type_Jsonv2UnmarshalerFrom;
 
 /* ---------------------------------------------------------------- marshal */
 

@@ -623,6 +623,60 @@ Slice loose = jsonv2_marshal_v(a, BURROW_ANY(TYPE_OF(Loose), &l), &err, 1,
 
 `size` and `hot` land in `Rest`, and marshalling writes them back after `id`.
 
+A type can take over its own encoding by listing Go's methods in its descriptor. Here a version goes out as a string like `"v0.2"` through `MarshalText` and comes back through `UnmarshalText`, which are the encoding package's methods:
+
+<!-- example: ../examples/encoding/jsonv2.c#methods -->
+```c
+#define VERSION_FIELDS(F, T)                                                           \
+    F(T, Int, Major, "")                                                               \
+    F(T, Int, Minor, "")
+BURROW_STRUCT_DECL(Version, VERSION_FIELDS);
+
+static Slice version_marshal_text(Version *v, Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    Str s = fmt_sprintf_v(a, "v%d.%d", v->Major, v->Minor);
+    return slice_append(a, slice_nil(TYPE_BYTE), s.p, s.len);
+}
+
+static Error version_unmarshal_text(Version *v, Alloc *a, Slice text) {
+    (void)a;
+    Str s = strings_trim_prefix(str_from_bytes(text.p, text.len), BURROW_S("v"));
+    Str minor;
+    bool found;
+    Str major = strings_cut(s, BURROW_S("."), &minor, &found);
+    Error err = BURROW_NO_ERROR;
+    if (found)
+        v->Major = strconv_atoi(major, &err);
+    if (found && BURROW_OK(err))
+        v->Minor = strconv_atoi(minor, &err);
+    if (!found || BURROW_FAILED(err))
+        return errors_new(error_allocator(), BURROW_S("not a version"));
+    return BURROW_NO_ERROR;
+}
+
+#define VERSION_METHODS(M, T)                                                          \
+    M(T, MarshalText, version_marshal_text, ENCODING_SIG_MARSHAL_TEXT)                 \
+    M(T, UnmarshalText, version_unmarshal_text, ENCODING_SIG_UNMARSHAL_TEXT)
+BURROW_STRUCT_DEFINE_METHODS(Version, VERSION_FIELDS, VERSION_METHODS);
+
+#define RELEASE_FIELDS(F, T)                                                           \
+    F(T, Str, Name, "json:\"name\"")                                                   \
+    F(T, Version, Version, "json:\"version\"")
+BURROW_STRUCT(Release, RELEASE_FIELDS);
+```
+
+<!-- example: ../examples/encoding/jsonv2.c#release -->
+```c
+Release r = {BURROW_S("burrow"), {0, 2}};
+Slice rel = jsonv2_marshal_v(a, BURROW_ANY(TYPE_OF(Release), &r), &err, 0);
+Release r2 = {0};
+err = jsonv2_unmarshal_v(a, rel, BURROW_ANY(TYPE_OF(Release), &r2), 0);
+```
+
+`rel` is `{"name":"burrow","version":"v0.2"}` and `r2.Version` is `{0 2}` again. When `UnmarshalText` fails, the error says where: `json: cannot unmarshal JSON string into Go Version within "/version": not a version`.
+
+Marshal tries `MarshalJSONTo`, `MarshalJSON`, `AppendText` and `MarshalText` in that order and uses the first one the type has. Unmarshal tries `UnmarshalJSONFrom`, `UnmarshalJSON` and `UnmarshalText`. The two that take a coder, `MarshalJSONTo` and `UnmarshalJSONFrom`, have to write or read exactly one value, and either can return `errors_err_unsupported` without touching the coder to hand over to the next method in the list. The signatures are `JSONV2_SIG_MARSHAL_JSON_TO`, `JSONV2_SIG_MARSHAL_JSON`, `JSONV2_SIG_UNMARSHAL_JSON_FROM` and `JSONV2_SIG_UNMARSHAL_JSON`, next to the encoding package's for the text methods. A field tagged `omitzero` whose type has an `IsZero` method, with `JSONV2_SIG_IS_ZERO`, is left out when the method says so.
+
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/json/v2`, the `MarshalJSON` style methods, the `WithMarshalers` family of caller supplied functions, `time.Time` and `jsontext.Value` as a field are still to come, and so is the v1 API of `encoding/json`.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/json/v2`, the `WithMarshalers` family of caller supplied functions, `time.Time` and `jsontext.Value` as a field are still to come, and so is the v1 API of `encoding/json`.

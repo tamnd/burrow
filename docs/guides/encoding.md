@@ -1098,6 +1098,138 @@ err = xml_unmarshal(a,
 
 Unmarshal recurses once for each element it reads into a value and stops with `exceeded max depth` past 10,000, Go's limit. Go's stack grows to fit and a goroutine's here does not, so to read documents nested thousands deep, read them on a goroutine started with `go_stack` and a few megabytes.
 
+## Gob
+
+`burrow/encoding/gob.h` is Go's `encoding/gob`, a stream of values where each type is described the first time it appears. The bytes are Go's, so a burrow program and a Go program can send each other values over a socket or a file. Types come from their descriptors, like everything else that takes an `Any`:
+
+<!-- example: ../examples/encoding/gob.c#declare -->
+```c
+BURROW_SLICE_TYPE(StrSlice, Str);
+
+#define ITEM_FIELDS(F, T)                                                              \
+    F(T, Str, Name, "")                                                                \
+    F(T, Int, Count, "")                                                               \
+    F(T, double, Price, "")                                                            \
+    F(T, StrSlice, Tags, "")
+BURROW_STRUCT(Item, ITEM_FIELDS);
+```
+
+An encoder writes to an `IoWriter`. The first value of a type carries the type's description, and the value follows:
+
+<!-- example: ../examples/encoding/gob.c#encode -->
+```c
+Str tags[2] = {BURROW_S("red"), BURROW_S("small")};
+Item it = {BURROW_S("widget"), 3, 2.5, slice_from(tags, 2, 2, TYPE_STRING)};
+BytesBuffer buf = BYTES_BUFFER(a);
+GobEncoder *enc = gob_new_encoder(a, bytes_buffer_as_io_writer(&buf));
+Error err = gob_encoder_encode(enc, BURROW_ANY(TYPE_OF(Item), &it));
+```
+
+That is 110 bytes, the same 110 Go's encoder writes for the same `Item`. A second value of the same type through the same encoder is only the value, which here is 30 bytes:
+
+<!-- example: ../examples/encoding/gob.c#second -->
+```c
+it.Count = 4;
+Int before = bytes_buffer_len(&buf);
+err = gob_encoder_encode(enc, BURROW_ANY(TYPE_OF(Item), &it));
+gob_encoder_free(enc);
+```
+
+A decoder reads from an `IoReader` and fills in the value an `Any` points at. Strings, slices, maps and pointers in it are allocated from the allocator the decoder was made with, so an arena is the easy choice:
+
+<!-- example: ../examples/encoding/gob.c#decode -->
+```c
+GobDecoder *dec = gob_new_decoder(a, bytes_buffer_as_io_reader(&buf));
+Item got = {0};
+err = gob_decoder_decode(dec, BURROW_ANY(TYPE_OF(Item), &got));
+```
+
+`got` is `widget`, count 3, price 2.5, with two tags. The two ends match fields by name, not by position or type identity, so the second value can be read into a different struct. Fields the stream has and the struct does not are skipped, and fields the struct has and the stream does not are left alone:
+
+<!-- example: ../examples/encoding/gob.c#subset -->
+```c
+#define LABEL_FIELDS(F, T)                                                             \
+    F(T, Str, Name, "")                                                                \
+    F(T, Int, Count, "")                                                               \
+    F(T, Str, Note, "")
+BURROW_STRUCT(Label, LABEL_FIELDS);
+```
+
+<!-- example: ../examples/encoding/gob.c#into -->
+```c
+Label l = {0};
+err = gob_decoder_decode(dec, BURROW_ANY(TYPE_OF(Label), &l));
+```
+
+`l` comes back with the name `widget`, count 4 and an empty `Note`. One more decode gives `io_eof`, and a stream cut off partway through a value gives `io_err_unexpected_eof`.
+
+A type can take over its own encoding with `GobEncode` and `GobDecode` methods, declared with `GOB_SIG_GOB_ENCODE` and `GOB_SIG_GOB_DECODE`. Without them, `MarshalBinary` and `UnmarshalBinary` from `encoding` are used, which is Go's order too:
+
+<!-- example: ../examples/encoding/gob.c#method -->
+```c
+#define VERSION_FIELDS(F, T)                                                           \
+    F(T, Int, Major, "")                                                               \
+    F(T, Int, Minor, "")
+BURROW_STRUCT_DECL(Version, VERSION_FIELDS);
+
+static Slice version_gob_encode(Version *v, Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    Byte two[2] = {(Byte)v->Major, (Byte)v->Minor};
+    return slice_append(a, slice_nil(TYPE_BYTE), two, 2);
+}
+
+static Error version_gob_decode(Version *v, Alloc *a, Slice b) {
+    (void)a;
+    if (b.len != 2)
+        return errors_new(error_allocator(), BURROW_S("version: want two bytes"));
+    v->Major = ((const Byte *)b.p)[0];
+    v->Minor = ((const Byte *)b.p)[1];
+    return BURROW_NO_ERROR;
+}
+
+#define VERSION_METHODS(M, T)                                                          \
+    M(T, GobDecode, version_gob_decode, GOB_SIG_GOB_DECODE)                            \
+    M(T, GobEncode, version_gob_encode, GOB_SIG_GOB_ENCODE)
+BURROW_STRUCT_DEFINE_METHODS(Version, VERSION_FIELDS, VERSION_METHODS);
+```
+
+A value inside an `Any` field travels with the name its type was registered under, so both ends call `gob_register` for it before the first one goes out. `gob_register_name` picks the name yourself, which is what you need to talk to a Go program that registered the type under its own package path:
+
+<!-- example: ../examples/encoding/gob.c#iface -->
+```c
+gob_register(BURROW_ANY(TYPE_OF(Version), NULL));
+Version v = {1, 22};
+Box box = {BURROW_ANY(TYPE_OF(Version), &v)};
+BytesBuffer vb = BYTES_BUFFER(a);
+enc = gob_new_encoder(a, bytes_buffer_as_io_writer(&vb));
+err = gob_encoder_encode(enc, BURROW_ANY(TYPE_OF(Box), &box));
+gob_encoder_free(enc);
+```
+
+<!-- example: ../examples/encoding/gob.c#iface-decode -->
+```c
+dec = gob_new_decoder(a, bytes_buffer_as_io_reader(&vb));
+Box out = {0};
+err = gob_decoder_decode(dec, BURROW_ANY(TYPE_OF(Box), &out));
+gob_decoder_free(dec);
+```
+
+`out.Value` holds a `Version` of 1.22, allocated by the decoder. The decoding end can only put such a value into an `Any`. C has no way to build a vtable for any other interface type at run time, so a value sent for one is an error.
+
+A value whose type does not fit the target is an error that names both types, in Go's words:
+
+<!-- example: ../examples/encoding/gob.c#bad -->
+```c
+Int n = 0;
+dec = gob_new_decoder(a, bytes_buffer_as_io_reader(&ib));
+err = gob_decoder_decode(dec, BURROW_ANY(TYPE_INT, &n));
+gob_decoder_free(dec);
+```
+
+The error reads `gob: decoding into local type *int, received remote type Item = struct { Name string; Count int; Price float; Tags []string; }`.
+
+Go's stack grows as deep as the value needs and a C stack does not. The encoder and the decoder stop with `nesting too deep` when the next level would leave less than 64 KB of stack. Decoding takes about 1.8 KB a level on arm64 at -O2, so the default 256 KB goroutine stack holds about a hundred levels of nesting. To send a long linked list, start the goroutine with `go_stack` and a bigger stack, or send a slice.
+
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext`, `encoding/pem` or `encoding/xml` is missing. From `encoding/json/v2`, `time.Time` and `time.Duration` wait on the calendar half of `time`.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/gob`, `encoding/hex`, `encoding/json/jsontext`, `encoding/pem` or `encoding/xml` is missing. From `encoding/json/v2`, `time.Time` and `time.Duration` wait on the calendar half of `time`.

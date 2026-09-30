@@ -861,7 +861,8 @@ for (;;) {
         break;
     if (tok.kind == XML_START_ELEMENT) {
         Str space = tok.start.name.space, local = tok.start.name.local;
-        fmt_printf_v("start %s in %s, %d attributes\n", local, space, tok.start.attr.len);
+        fmt_printf_v("start %s in %s, %d attributes\n", local, space,
+                     tok.start.attr.len);
     } else if (tok.kind == XML_CHAR_DATA) {
         Slice text = tok.char_data;
         fmt_printf_v("text %q\n", text);
@@ -922,9 +923,12 @@ XmlStartElement body = {{BURROW_S(""), BURROW_S("body")},
                         slice_from(lang, 1, 1, &burrow_type_XmlAttr)};
 xml_encoder_encode_token(e, (XmlToken){XML_START_ELEMENT, .start = note});
 xml_encoder_encode_token(e, (XmlToken){XML_START_ELEMENT, .start = body});
-xml_encoder_encode_token(e, (XmlToken){XML_CHAR_DATA, .char_data = BURROW_B("1 < 2")});
-xml_encoder_encode_token(e, (XmlToken){XML_END_ELEMENT, .end = xml_start_element_end(body)});
-xml_encoder_encode_token(e, (XmlToken){XML_END_ELEMENT, .end = xml_start_element_end(note)});
+xml_encoder_encode_token(e,
+                         (XmlToken){XML_CHAR_DATA, .char_data = BURROW_B("1 < 2")});
+xml_encoder_encode_token(
+    e, (XmlToken){XML_END_ELEMENT, .end = xml_start_element_end(body)});
+xml_encoder_encode_token(
+    e, (XmlToken){XML_END_ELEMENT, .end = xml_start_element_end(note)});
 err = xml_encoder_close(e);
 xml_encoder_free(e);
 ```

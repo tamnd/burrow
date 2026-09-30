@@ -835,6 +835,17 @@ BURROW_NORETURN void pal_exit(int32_t code);
  * again. */
 BURROW_BORROWS(ret) const char *const *pal_environ(void);
 
+/* The process's command line, which is what Go's os.Args starts from: every
+ * argument, the program name first, each followed by a NUL, one after another
+ * in buf. Returns the number of bytes, every NUL counted, or -1, with
+ * PAL_ERANGE when they do not fit, so a caller grows buf and asks again.
+ *
+ * C hands the arguments to main and to nobody else, so this goes back to the
+ * system for them: _NSGetArgv on macOS, /proc/self/cmdline on Linux, sysctl on
+ * the BSDs and GetCommandLineW on Windows, split there by Go's rules. On a
+ * system with nowhere to ask it returns 0, an empty command line. */
+int64_t pal_args(char *buf, int64_t cap, PalErrno *err);
+
 bool pal_chdir(const char *path, PalErrno *err);
 
 /* The working directory into buf, NUL terminated. Returns its length, or -1,

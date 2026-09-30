@@ -1,9 +1,10 @@
 /* Sleeping, and running a function later on.
  *
- * This is the half of Go's time package that needs a scheduler underneath it:
- * Duration and its constants, time.Sleep, and time.AfterFunc with the Stop and
- * Reset that go with it. The calendar half, the Time type with its wall clock
- * and its formatting and its timezones, is a separate job and is not here yet.
+ * Go's time package: Duration and its constants, the Time type with its wall
+ * clock and its monotonic reading, the calendar, locations and the zoneinfo
+ * database, time.Sleep, and time.AfterFunc with the Stop and Reset that go
+ * with it. Format and Parse are not here yet, and neither are the channel
+ * timers.
  *
  * A goroutine that sleeps here costs a timer and no thread. The thread it was
  * running on goes and finds other work, and one of the scheduler's threads wakes
@@ -28,6 +29,7 @@
 #include "burrow/mem.h"
 #include "burrow/own.h"
 #include "burrow/platform.h"
+#include "burrow/slice.h"
 #include "burrow/type.h"
 
 #include <stdbool.h>
@@ -94,6 +96,289 @@ Int duration_format(Duration d, Byte *buf);
 extern const Type burrow_type_Duration;
 #define TYPE_DURATION TYPE_OF(Duration)
 
+/* Go's Duration methods. Nanoseconds, Microseconds and Milliseconds are the
+ * count as an integer, truncated towards zero. Seconds, Minutes and Hours are
+ * a float64, worked out in two halves so that a long duration keeps its
+ * fraction. */
+int64_t duration_nanoseconds(Duration d);
+int64_t duration_microseconds(Duration d);
+int64_t duration_milliseconds(Duration d);
+double duration_seconds(Duration d);
+double duration_minutes(Duration d);
+double duration_hours(Duration d);
+
+/* d rounded towards zero to a multiple of m, and d rounded to the nearest
+ * multiple of m with halfway cases away from zero. An m of zero or less gives
+ * d back. A Round that would overflow gives the largest or smallest Duration
+ * instead, which is Go's rule. */
+Duration duration_truncate(Duration d, Duration m);
+Duration duration_round(Duration d, Duration m);
+
+/* The absolute value of d, with the smallest Duration, which has no positive
+ * twin, coming back as the largest. */
+Duration duration_abs(Duration d);
+
+/* ------------------------------------------------------------------ Time */
+
+/* A month of the year, January being 1. Go's time.Month. */
+typedef Int TimeMonth;
+
+#define TIME_JANUARY ((TimeMonth)1)
+#define TIME_FEBRUARY ((TimeMonth)2)
+#define TIME_MARCH ((TimeMonth)3)
+#define TIME_APRIL ((TimeMonth)4)
+#define TIME_MAY ((TimeMonth)5)
+#define TIME_JUNE ((TimeMonth)6)
+#define TIME_JULY ((TimeMonth)7)
+#define TIME_AUGUST ((TimeMonth)8)
+#define TIME_SEPTEMBER ((TimeMonth)9)
+#define TIME_OCTOBER ((TimeMonth)10)
+#define TIME_NOVEMBER ((TimeMonth)11)
+#define TIME_DECEMBER ((TimeMonth)12)
+
+/* A day of the week, Sunday being 0. Go's time.Weekday. */
+typedef Int TimeWeekday;
+
+#define TIME_SUNDAY ((TimeWeekday)0)
+#define TIME_MONDAY ((TimeWeekday)1)
+#define TIME_TUESDAY ((TimeWeekday)2)
+#define TIME_WEDNESDAY ((TimeWeekday)3)
+#define TIME_THURSDAY ((TimeWeekday)4)
+#define TIME_FRIDAY ((TimeWeekday)5)
+#define TIME_SATURDAY ((TimeWeekday)6)
+
+/* The English name, "January" or "Sunday". A value out of range comes out the
+ * way Go prints it, as "%!Month(13)", and only that case uses a, so a caller
+ * who knows the value is in range may pass NULL. */
+BURROW_OWNS(ret) Str time_month_string(TimeMonth m, Alloc *a);
+BURROW_OWNS(ret) Str time_weekday_string(TimeWeekday d, Alloc *a);
+
+extern const Type burrow_type_TimeMonth;
+extern const Type burrow_type_TimeWeekday;
+#define TYPE_TIME_MONTH TYPE_OF(TimeMonth)
+#define TYPE_TIME_WEEKDAY TYPE_OF(TimeWeekday)
+
+/* A time zone, or more exactly the rules for one place: the offsets it has
+ * used and when it changed between them. Go's time.Location.
+ *
+ * Opaque, as Go's is. A TimeLocation * from time_load_location, and the two
+ * below, live as long as the process and are never freed. One from
+ * time_fixed_zone or time_load_location_from_tz_data belongs to the caller,
+ * who gives it back with time_location_free once no Time uses it. */
+typedef struct TimeLocation TimeLocation;
+
+/* Go's time.UTC and time.Local. They are constants here rather than variables
+ * a program can point somewhere else, because a variable every thread reads
+ * and any thread may write is a race, which it is in Go as well. Local is what
+ * the TZ environment variable says, or /etc/localtime when it says nothing,
+ * and is loaded the first time something uses it. On Windows it is UTC for
+ * now, until the registry lookup lands. */
+extern TimeLocation *const time_utc_loc;
+extern TimeLocation *const time_local_loc;
+
+/* The name the location was loaded under, such as "Europe/Paris", "UTC" or
+ * "Local". Borrowed from the location. */
+BURROW_BORROWS(ret, l) Str time_location_string(TimeLocation *l);
+
+/* A location that is always offset seconds east of UTC and always calls
+ * itself name. Go's time.FixedZone. An unnamed zone at a whole number of
+ * hours between -12 and +14 comes from a table and costs nothing, and anything
+ * else comes from a, with a copy of name. NULL when a is out of memory. */
+BURROW_OWNS(ret) TimeLocation *time_fixed_zone(Alloc *a, Str name, Int offset);
+
+/* The location called name. Go's time.LoadLocation.
+ *
+ * "" and "UTC" are UTC and "Local" is Local. Anything else is a name in the
+ * IANA database, such as "America/New_York", looked for first under the
+ * directory or zip file $ZONEINFO names, then in the system's zoneinfo
+ * directory. A name with ".." in it, or that starts with a slash, is refused.
+ *
+ * Each name is read once and kept, so two loads of one name are the same
+ * pointer and neither needs freeing. On failure it returns NULL and sets *err
+ * to Go's error, such as unknown time zone Mars/Olympus_Mons. */
+BURROW_BORROWS(ret) TimeLocation *time_load_location(Str name, Error *err);
+
+/* A location made from the bytes of a TZif file, the format of the zoneinfo
+ * database. Go's time.LoadLocationFromTZData. The location copies what it
+ * needs from data and comes from a. On bad data it returns NULL with *err set
+ * to malformed time zone information. */
+BURROW_OWNS(ret) TimeLocation *time_load_location_from_tz_data(Alloc *a, Str name,
+                                                               Slice data, Error *err);
+
+/* Gives back a location from time_fixed_zone or
+ * time_load_location_from_tz_data. Any other location, and NULL, is left
+ * alone, so this is safe to call on whatever time_location returned. */
+void time_location_free(TimeLocation *l);
+
+/* An instant in time with nanosecond precision. Go's time.Time.
+ *
+ * A value type, passed and returned by value, and the zero value is January
+ * 1, year 1, 00:00:00 UTC, which time_is_zero recognises. The fields are Go's
+ * and are laid out the same way, and are not for touching: wall holds the
+ * nanosecond and, for a reading from time_now, the wall clock second as well
+ * as a flag saying ext is a monotonic reading; otherwise ext is the second
+ * since year 1. loc is NULL for UTC.
+ *
+ * A Time from time_now carries the monotonic clock with it, and time_sub,
+ * time_since, time_until and the comparisons use that reading when both sides
+ * have one, so an elapsed time is right even across somebody setting the
+ * system clock. Anything that makes a new instant rather than moving along the
+ * clock drops it: time_utc, time_in, time_truncate, time_round, time_add_date
+ * and time_date.
+ *
+ * Compare two Times with time_equal rather than memcmp. Two readings of one
+ * instant can differ in loc and in the monotonic reading. */
+typedef struct Time {
+    uint64_t wall;
+    int64_t ext;
+    TimeLocation *loc;
+} Time;
+
+/* The current local time, with a monotonic reading. Go's time.Now. Inside a
+ * synctest bubble this is the bubble's fake clock, which starts at midnight UTC
+ * on 2000-01-01. */
+Time time_now(void);
+
+/* The local Time for sec seconds and nsec nanoseconds since the unix epoch.
+ * nsec may be outside [0, 999999999], and carries into sec. Go's time.Unix.
+ * The name has from in it because time_unix is Go's Time.Unix, the other
+ * direction. */
+Time time_from_unix(int64_t sec, int64_t nsec);
+
+/* The same from milliseconds and from microseconds since the epoch. Go's
+ * time.UnixMilli and time.UnixMicro. */
+Time time_from_unix_milli(int64_t msec);
+Time time_from_unix_micro(int64_t usec);
+
+/* The Time that is year-month-day hour:min:sec + nsec nanoseconds in loc.
+ * Go's time.Date.
+ *
+ * Every field may be out of its range and carries into the next, so October
+ * 32 is November 1. A local time that happens twice, in the hour a clock goes
+ * back, comes out as the first; one that never happens, in the hour a clock
+ * goes forward, comes out an hour on. Both are what Go does, and Go does not
+ * promise which way the ambiguous ones fall.
+ *
+ *     Time t = time_date(2009, TIME_NOVEMBER, 10, 23, 0, 0, 0, time_utc_loc);
+ *
+ * A NULL loc panics, with Go's message. */
+Time time_date(Int year, TimeMonth month, Int day, Int hour, Int min, Int sec, Int nsec,
+               TimeLocation *loc);
+
+/* The time elapsed since t, and the time until t. Go's time.Since and
+ * time.Until, which use the monotonic reading when t has one. */
+Duration time_since(Time t);
+Duration time_until(Time t);
+
+/* t + d, keeping the monotonic reading moving with it. Go's Time.Add. */
+Time time_add(Time t, Duration d);
+
+/* t - u. A result too big for a Duration is the largest or smallest one.
+ * Go's Time.Sub. */
+Duration time_sub(Time t, Time u);
+
+/* The Time years, months and days after t, normalised the way time_date
+ * normalises, so October 31 plus a month is December 1. Go's Time.AddDate. */
+Time time_add_date(Time t, Int years, Int months, Int days);
+
+/* Whether t is after u, before u, or the same instant, and -1, 0 or +1 in
+ * the order of the two. Go's Time.After, Before, Equal and Compare. The
+ * location plays no part: 6:00 +0200 and 4:00 UTC are equal. */
+bool time_after(Time t, Time u);
+bool time_before(Time t, Time u);
+bool time_equal(Time t, Time u);
+Int time_compare(Time t, Time u);
+
+/* Whether t is the zero Time, January 1, year 1, 00:00:00 UTC. */
+bool time_is_zero(Time t);
+
+/* The pieces of t, in t's location. Go's Time.Date and Time.Clock, which
+ * return three things each. Date takes the name time_date_of because
+ * time_date is the function that builds a Time. */
+typedef struct TimeDateRet {
+    Int year;
+    TimeMonth month;
+    Int day;
+} TimeDateRet;
+TimeDateRet time_date_of(Time t);
+
+typedef struct TimeClockRet {
+    Int hour;
+    Int min;
+    Int sec;
+} TimeClockRet;
+TimeClockRet time_clock(Time t);
+
+Int time_year(Time t);
+TimeMonth time_month(Time t);
+Int time_day(Time t);
+TimeWeekday time_weekday(Time t);
+Int time_hour(Time t);
+Int time_minute(Time t);
+Int time_second(Time t);
+Int time_nanosecond(Time t);
+
+/* The day of the year, 1 to 365, or 366 in a leap year. */
+Int time_year_day(Time t);
+
+/* The ISO 8601 year and week number. Weeks start on Monday and week 1 is the
+ * one with the year's first Thursday in it, so January 1 to 3 can be in the
+ * last week of the year before and December 29 to 31 in week 1 of the next.
+ * week may be NULL. */
+Int time_iso_week(Time t, Int *week);
+
+/* t in UTC, in Local and in loc. The instant is the same and only what the
+ * accessors report changes. A NULL loc panics. */
+Time time_utc(Time t);
+Time time_local(Time t);
+Time time_in(Time t, TimeLocation *loc);
+
+/* t's location, which is never NULL: a UTC time answers time_utc_loc. */
+BURROW_BORROWS(ret) TimeLocation *time_location(Time t);
+
+/* The zone in effect at t, its abbreviation such as "CET" and its offset in
+ * seconds east of UTC. Go's Time.Zone. The name is borrowed from the
+ * location. offset may be NULL. */
+BURROW_BORROWS(ret) Str time_zone(Time t, Int *offset);
+
+/* When the zone in effect at t started and when it ends. Either is the zero
+ * Time when the zone runs off that end of the database. Go's Time.ZoneBounds.
+ * end may be NULL. */
+Time time_zone_bounds(Time t, Time *end);
+
+/* Whether the zone in effect at t is daylight saving time. */
+bool time_is_dst(Time t);
+
+/* t as seconds, milliseconds, microseconds and nanoseconds since the unix
+ * epoch. The nanosecond one is undefined, as in Go, for a time too far from
+ * 1970 to fit, which is before 1678 or after 2262. */
+int64_t time_unix(Time t);
+int64_t time_unix_milli(Time t);
+int64_t time_unix_micro(Time t);
+int64_t time_unix_nano(Time t);
+
+/* t rounded down, and rounded to the nearest, to a multiple of d since the
+ * zero Time. Go's Time.Truncate and Time.Round. They work on the absolute
+ * instant, so a d of an hour lands on the hour in a zone with a whole hour
+ * offset and not in one with a half hour offset. A d of zero or less gives t
+ * back without its monotonic reading. */
+Time time_truncate(Time t, Duration d);
+Time time_round(Time t, Duration d);
+
+/* The binary encoding, which is Go's byte for byte: a version, the second and
+ * nanosecond, and the zone offset in minutes, with a sixteenth byte in version
+ * 2 for an offset that is not a whole minute. Go's Time.AppendBinary and
+ * Time.MarshalBinary, and GobEncode, which is the same bytes.
+ *
+ * Only the offset survives, not the location's name: decoding gives UTC, Local
+ * when the offset matches Local's at that instant, and a fixed zone otherwise,
+ * which comes from a. A zone offset that does not fit is an error. */
+BURROW_OWNS(ret) Slice time_append_binary(Time t, Alloc *a, Slice b, Error *err);
+BURROW_OWNS(ret) Slice time_marshal_binary(Time t, Alloc *a, Error *err);
+BURROW_STATIC(ret) Error time_unmarshal_binary(Time *t, Alloc *a, Slice data);
+BURROW_OWNS(ret) Slice time_gob_encode(Time t, Alloc *a, Error *err);
+BURROW_STATIC(ret) Error time_gob_decode(Time *t, Alloc *a, Slice data);
+
 /* Nanoseconds on a clock that only goes forwards, measured from an arbitrary
  * point that means nothing on its own.
  *
@@ -103,10 +388,11 @@ extern const Type burrow_type_Duration;
  *
  * It says burrow rather than time because Go has no such function. Go's
  * time.Now carries a monotonic reading around inside it and time.Since pulls it
- * back out, so a Go program never names the clock directly. burrow has no Time
- * yet, and the parts that need a deadline need it now, so the reading is
- * exposed on its own: burrow/context.h measures a deadline on this clock, and
- * so does anything that has to know how long something took.
+ * back out, so a Go program never names the clock directly. time_now and
+ * time_since do the same here, and this is the reading on its own, for code
+ * that only wants an elapsed time and has no use for a date:
+ * burrow/context.h measures a deadline on this clock, and so does the
+ * runtime.
  *
  * Never goes backwards and never jumps, which is the point. The wall clock does
  * both whenever somebody sets the date or ntp corrects a drift, and a timeout

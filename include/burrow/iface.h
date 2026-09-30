@@ -204,7 +204,10 @@ bool any_equal(Any a, Any b);
  *
  * Its equality is any_equal and its hash mixes the dynamic type into the hash
  * of the value, so an Any holding an Int(1) and an Any holding an Int8(1) are
- * different keys, which is what Go does. */
+ * different keys, which is what Go does. The burrow_type_Any spelling is what
+ * TYPE_OF(Any) pastes together, so a struct field of type Any can be declared
+ * the way one of type Str is. */
+extern const Type burrow_type_Any;
 extern const Type *const TYPE_ANY;
 
 /* A function that produces one value of any type, which is Go's `func() any`.

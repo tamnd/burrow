@@ -386,6 +386,13 @@ typedef struct JsonState {
     JsonBuf rev;
 } JsonState;
 
+/* One entry of json v2's seenPointers: typedPointer. */
+typedef struct JsonSeen {
+    const Type *t;
+    const void *p;
+    Int len;
+} JsonSeen;
+
 struct JsontextEncoder {
     JsonState st;
     JsontextOptions opts;
@@ -400,6 +407,11 @@ struct JsontextEncoder {
     void *frames;
     Int frames_cap;
     Alloc *a;
+    /* json v2's seenPointers, kept as a stack since what is visited last is
+     * left first. Each entry is a type, a pointer and a slice length. */
+    void *seen;
+    Int seen_len;
+    Int seen_cap;
 };
 
 struct JsontextDecoder {
@@ -415,7 +427,87 @@ struct JsontextDecoder {
     void *frames;
     Int frames_cap;
     Alloc *a;
+    /* Where json v2 puts what it unmarshals: strings, slices, maps and the
+     * values pointers and interfaces point at. */
+    Alloc *out_alloc;
 };
+
+/* stateEntry: the top bit says object or array, the next two say the
+ * object's namespace is turned off or broken, and the rest count the names
+ * and values so far. */
+#define JT_TYPE_MASK ((uint64_t)0x8000000000000000U)
+#define JT_TYPE_OBJECT ((uint64_t)0x8000000000000000U)
+#define JT_TYPE_ARRAY ((uint64_t)0)
+#define JT_DISABLE_NAMESPACE ((uint64_t)0x4000000000000000U)
+#define JT_INVALID_NAMESPACE ((uint64_t)0x2000000000000000U)
+#define JT_COUNT_MASK ((uint64_t)0x1fffffffffffffffU)
+
+static inline int64_t jt_e_len(uint64_t e) {
+    return (int64_t)(e & JT_COUNT_MASK);
+}
+
+static inline bool jt_e_is_object(uint64_t e) {
+    return (e & JT_TYPE_MASK) == JT_TYPE_OBJECT;
+}
+
+static inline bool jt_e_is_array(uint64_t e) {
+    return (e & JT_TYPE_MASK) == JT_TYPE_ARRAY;
+}
+
+static inline bool jt_e_need_name(uint64_t e) {
+    return (e & (JT_TYPE_MASK | 1)) == JT_TYPE_OBJECT;
+}
+
+static inline bool jt_e_need_value(uint64_t e) {
+    return (e & (JT_TYPE_MASK | 1)) == (JT_TYPE_OBJECT | 1);
+}
+
+static inline bool jt_e_need_comma(uint64_t e, JsontextKind next) {
+    return !jt_e_need_value(e) && jt_e_len(e) > 0 && next != '}' && next != ']';
+}
+
+static inline bool jt_e_active_ns(uint64_t e) {
+    return (e & JT_DISABLE_NAMESPACE) == 0;
+}
+
+static inline bool jt_e_valid_ns(uint64_t e) {
+    return (e & JT_INVALID_NAMESPACE) == 0;
+}
+
+static inline Int jt_depth(const JsonState *s) {
+    return s->stack_len + 1;
+}
+
+static inline uint64_t jt_index(const JsonState *s, Int i) {
+    return i == s->stack_len ? s->last : s->stack[i];
+}
+
+static inline Int jt_need_indent(const JsonState *s, JsontextKind next) {
+    bool will_end = next == '}' || next == ']';
+    if (jt_depth(s) == 1)
+        return 0;
+    if (jt_e_len(s->last) == 0 && will_end)
+        return 0;
+    if (jt_e_len(s->last) == 0 || jt_e_need_comma(s->last, next))
+        return jt_depth(s);
+    if (will_end)
+        return jt_depth(s) - 1;
+    return 0;
+}
+
+static inline Byte jt_need_delim(const JsonState *s, JsontextKind next) {
+    if (jt_e_need_value(s->last))
+        return ':';
+    if (jt_e_need_comma(s->last, next) && s->stack_len != 0)
+        return ',';
+    return 0;
+}
+
+/* The name of the object member being written starts at pos in the
+ * encoder's buffer, still quoted. */
+static inline void jt_names_replace_last_quoted(JsonState *s, Int pos) {
+    s->offsets[s->offsets_len - 1] = ~pos;
+}
 
 /* What encoding/json/v2 reaches into jsontext for, the same things Go's
  * export.go hands it. */
@@ -431,5 +523,49 @@ Error burrow__jsontext_skip_until(JsontextDecoder *d, Int depth, int64_t length)
 bool burrow__jsontext_at_eof(JsontextDecoder *d);
 Error burrow__jsontext_check_eof(JsontextDecoder *d);
 Slice burrow__jsontext_previous_token_or_value(const JsontextDecoder *d);
+
+void burrow__jsontext_encoder_init(JsontextEncoder *e, Alloc *a);
+void burrow__jsontext_encoder_setup(JsontextEncoder *e, IoWriter w, bool has_wr,
+                                    const JsontextOptions *opts);
+void burrow__jsontext_encoder_release(JsontextEncoder *e);
+void burrow__jsontext_decoder_init(JsontextDecoder *d, Alloc *a);
+void burrow__jsontext_decoder_setup(JsontextDecoder *d, IoReader r, bool has_rd,
+                                    const Byte *b, Int len,
+                                    const JsontextOptions *opts);
+void burrow__jsontext_decoder_release(JsontextDecoder *d);
+Slice burrow__jsontext_read_value(JsontextDecoder *d, unsigned *flags, Error *err);
+void burrow__jsontext_encoder_append_stack_pointer(JsontextEncoder *e, JsonBuf *b,
+                                                   int where);
+void burrow__jsontext_decoder_append_stack_pointer(JsontextDecoder *d, JsonBuf *b,
+                                                   int where);
+Int burrow__jsontext_encoder_count_next_delim_whitespace(const JsontextEncoder *e);
+Int burrow__jsontext_decoder_count_next_delim_whitespace(JsontextDecoder *d);
+Error burrow__jsontext_skip_value_remainder(JsontextDecoder *d);
+Error burrow__jsontext_check_next_value(JsontextDecoder *d, bool last);
+int burrow__jsontext_insert_unquoted(JsontextDecoder *d, Str name);
+int burrow__jsontext_encoder_insert_unquoted(JsontextEncoder *e, Str name);
+Error burrow__jsontext_syntactic_new(int64_t offset, Str pointer, Error err);
+void burrow__jsontext_put_go_quote(JsonBuf *b, Str s);
+
+/* stateMachine.MayAppendDelim, DisableNamespace and
+ * InvalidateDisabledNamespaces. */
+static inline void jsonstate_may_append_delim(const JsonState *s, JsonBuf *b,
+                                              JsontextKind next) {
+    Byte delim = jt_need_delim(s, next);
+    if (delim != 0)
+        jsonbuf_byte(b, delim);
+}
+
+static inline void jsonstate_disable_namespace(JsonState *s) {
+    s->last |= JT_DISABLE_NAMESPACE;
+}
+
+static inline void jsonstate_invalidate_disabled_namespaces(JsonState *s) {
+    for (Int i = 0; i < jt_depth(s); i++) {
+        uint64_t *e = i == s->stack_len ? &s->last : &s->stack[i];
+        if (!jt_e_active_ns(*e))
+            *e |= JT_INVALID_NAMESPACE;
+    }
+}
 
 #endif /* BURROW_SRC_ENCODING_JSON_INTERNAL_H */

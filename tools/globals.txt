@@ -213,3 +213,8 @@ global	src/mime/type.c	mt_exts	mime-types	Media type to the head of its list of 
 global	src/mime/type.c	mt_list	mime-types	The extension lists, linked through indexes. Only touched under mt_mu.
 global	src/mime/type.c	mt_list_len	mime-types	How much of mt_list is used. Only touched under mt_mu.
 global	src/mime/type.c	mt_list_cap	mime-types	How big mt_list is. Only touched under mt_mu.
+global	src/encoding/jsonv2_fields.c	jv_cache_lock	type-registry	The lock over the three below. It is held while a struct type's fields are worked out, which happens once per type.
+global	src/encoding/jsonv2_fields.c	jv_cache	type-registry	json v2's fields for every struct type it has seen, built once and never freed, as Go keeps them in a sync.Map. Read and written only under jv_cache_lock.
+global	src/encoding/jsonv2_fields.c	jv_cache_cap	type-registry	The same as jv_cache.
+global	src/encoding/jsonv2_fields.c	jv_cache_len	type-registry	The same as jv_cache.
+global	src/encoding/jsonv2_fields.c	jv_build_alloc	type-registry	Set and cleared only while jv_cache_lock is held.

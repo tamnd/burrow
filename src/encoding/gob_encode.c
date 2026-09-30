@@ -18,6 +18,7 @@
 
 #include "burrow/fmt.h"
 #include "burrow/map.h"
+#include "burrow/math/bits.h"
 #include "burrow/mem/heap.h"
 #include "burrow/panic.h"
 #include "burrow/sync.h"
@@ -103,7 +104,7 @@ static bool gob_buf_grow(GobEncoder *e, GobEncBuf *b, Int n) {
 }
 
 static void gob_buf_write(GobEncoder *e, GobEncBuf *b, const void *p, Int n) {
-    if (n <= 0 || !gob_buf_grow(e, b, n))
+    if (n <= 0 || (b->cap - b->len < n && !gob_buf_grow(e, b, n)))
         return;
     memcpy(b->p + b->len, p, (size_t)n);
     b->len += n;
@@ -131,23 +132,25 @@ static Int gob_put_uint(Byte out[GOB_MAX_LENGTH], uint64_t x) {
         out[0] = (Byte)x;
         return 1;
     }
-    Byte tmp[8];
-    for (int i = 7; i >= 0; i--) {
-        tmp[i] = (Byte)x;
+    /* The byte count, negated, then the bytes big-endian. */
+    int n = 8 - (int)(bits_leading_zeros64(x) / 8);
+    out[0] = (Byte)(256 - n);
+    for (int i = n; i >= 1; i--) {
+        out[i] = (Byte)x;
         x >>= 8;
     }
-    int bc = 0;
-    while (tmp[bc] == 0)
-        bc++;
-    out[0] = (Byte)(bc - 8);
-    memcpy(out + 1, tmp + bc, (size_t)(8 - bc));
-    return 9 - bc;
+    return n + 1;
 }
 
 static void gob_enc_uint(GobEncState *st, uint64_t x) {
-    Byte buf[GOB_MAX_LENGTH];
-    Int n = gob_put_uint(buf, x);
-    gob_buf_write(st->e, st->b, buf, n);
+    GobEncBuf *b = st->b;
+    if (b->cap - b->len < GOB_MAX_LENGTH && !gob_buf_grow(st->e, b, GOB_MAX_LENGTH))
+        return;
+    if (x <= 0x7F) {
+        b->p[b->len++] = (Byte)x;
+        return;
+    }
+    b->len += gob_put_uint(b->p + b->len, x);
 }
 
 static void gob_enc_int(GobEncState *st, int64_t i) {
@@ -164,12 +167,7 @@ static void gob_enc_int(GobEncState *st, int64_t i) {
 static uint64_t gob_float_bits(double f) {
     uint64_t u;
     memcpy(&u, &f, sizeof u);
-    uint64_t v = 0;
-    for (int i = 0; i < 8; i++) {
-        v = (v << 8) | (u & 0xFF);
-        u >>= 8;
-    }
-    return v;
+    return bits_reverse_bytes64(u);
 }
 
 static void gob_update(GobEncState *st, int32_t field) {
@@ -513,10 +511,11 @@ static bool gob_is_zero(const Type *t, const void *p) {
     }
 }
 
-static void gob_encode_struct(GobEncoder *e, GobEncBuf *b, const Type *t, void *p);
+static void gob_encode_struct(GobEncoder *e, GobEncBuf *b, const GobUserType *sut,
+                              void *p);
 static void gob_encode_interface(GobEncoder *e, GobEncBuf *b, const Type *t, void *p);
-static void gob_encode_array(GobEncoder *e, GobEncBuf *b, const Type *elem, void *p,
-                             Int n);
+static void gob_encode_array(GobEncoder *e, GobEncBuf *b, const GobUserType *aut,
+                             void *p, Int n);
 static void gob_encode_map(GobEncoder *e, GobEncBuf *b, const Type *t, Map *m);
 
 static bool gob_enc_enter(GobEncoder *e) {
@@ -655,12 +654,12 @@ static void gob_op(GobEncState *st, int32_t field, const GobUserType *ut, GobVal
         if (!st->send_zero && s->len == 0)
             return;
         gob_update(st, field);
-        gob_encode_array(e, st->b, t->elem, s->p, s->len);
+        gob_encode_array(e, st->b, ut, s->p, s->len);
         return;
     }
     case KIND_ARRAY:
         gob_update(st, field);
-        gob_encode_array(e, st->b, t->elem, p, (Int)t->len);
+        gob_encode_array(e, st->b, ut, p, (Int)t->len);
         return;
     case KIND_MAP: {
         Map *m = *(Map **)p;
@@ -672,7 +671,7 @@ static void gob_op(GobEncState *st, int32_t field, const GobUserType *ut, GobVal
     }
     case KIND_STRUCT:
         gob_update(st, field);
-        gob_encode_struct(e, st->b, t, p);
+        gob_encode_struct(e, st->b, ut, p);
         return;
     case KIND_INTERFACE: {
         void *vp = NULL;
@@ -690,44 +689,42 @@ static void gob_op(GobEncState *st, int32_t field, const GobUserType *ut, GobVal
     }
 }
 
-static void gob_encode_struct(GobEncoder *e, GobEncBuf *b, const Type *t, void *p) {
+static void gob_encode_struct(GobEncoder *e, GobEncBuf *b, const GobUserType *sut,
+                              void *p) {
+    Error err = BURROW_NO_ERROR;
+    const GobEncPlan *plan = burrow__gob_enc_plan(sut, &err);
+    if (plan == NULL) {
+        gob_set_error(e, err);
+        return;
+    }
     if (!gob_enc_enter(e))
         return;
     GobEncState st = {e, b, false, -1};
-    int32_t wire = 0;
-    for (uint16_t i = 0; i < t->nfield && !gob_failed(e); i++) {
-        const Field *f = &t->fields[i];
-        if (!burrow__gob_is_sent(f))
-            continue;
-        int32_t field = wire++;
-        Error err = BURROW_NO_ERROR;
-        const GobUserType *ut = burrow__gob_user_type(f->type, &err);
-        if (ut == NULL) {
-            gob_set_error(e, err);
-            break;
-        }
+    for (Int i = 0; i < plan->n && !gob_failed(e); i++) {
+        const GobEncField *f = &plan->f[i];
         GobVal v = {f->type, (Byte *)p + f->offset};
-        int indir = gob_op_indir(ut);
+        int indir = gob_op_indir(f->ut);
         if (indir > 0) {
             v = gob_enc_indirect(v, indir);
             if (v.p == NULL)
                 continue;
         }
-        gob_op(&st, field, ut, v);
+        gob_op(&st, f->wire, f->ut, v);
     }
     if (!gob_failed(e))
         gob_enc_uint(&st, 0);
     e->depth--;
 }
 
-static void gob_encode_array(GobEncoder *e, GobEncBuf *b, const Type *elem, void *p,
-                             Int n) {
+static void gob_encode_array(GobEncoder *e, GobEncBuf *b, const GobUserType *aut,
+                             void *p, Int n) {
     if (!gob_enc_enter(e))
         return;
     GobEncState st = {e, b, true, -1};
     gob_enc_uint(&st, (uint64_t)n);
+    const Type *elem = aut->base->elem;
     Error err = BURROW_NO_ERROR;
-    const GobUserType *ut = burrow__gob_user_type(elem, &err);
+    const GobUserType *ut = burrow__gob_elem_ut(aut, &err);
     if (ut == NULL) {
         gob_set_error(e, err);
         e->depth--;
@@ -855,7 +852,7 @@ static void gob_encode(GobEncoder *e, GobEncBuf *b, GobVal v, const GobUserType 
     if (ut->external_enc == 0 && ut->base->kind == KIND_STRUCT) {
         if (v.p == NULL)
             panic_str(BURROW_S("reflect: call of reflect.Value.Type on zero Value"));
-        gob_encode_struct(e, b, ut->base, v.p);
+        gob_encode_struct(e, b, ut, v.p);
         return;
     }
     /* encodeSingle. */

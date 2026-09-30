@@ -10,6 +10,7 @@
 
 #include "gob_internal.h"
 
+#include "burrow/atomic.h"
 #include "burrow/fmt.h"
 #include "burrow/lock.h"
 #include "burrow/mem/heap.h"
@@ -360,19 +361,23 @@ static uintptr_t gob_stack_here(void) {
 }
 
 bool burrow__gob_stack_low(uintptr_t *floor, int depth) {
+    /* 0 is not looked at yet, 1 is bounds nobody would give, which falls
+     * back on a count, and 2 is an OS thread whose bounds are left until the
+     * nesting gets deep enough to be worth the call. */
     if (*floor == 0) {
         burrow__Stack *s = burrow__stack_current();
+        if (s != NULL)
+            *floor = s->lo == NULL ? 1 : (uintptr_t)s->lo + GOB_STACK_MARGIN;
+        else
+            *floor = 2;
+    }
+    if (*floor == 2) {
+        if (depth < GOB_THREAD_CHECK_AFTER)
+            return false;
         void *lo = NULL;
         void *hi = NULL;
-        if (s != NULL) {
-            lo = s->lo;
-        } else {
-            if (depth < GOB_THREAD_CHECK_AFTER)
-                return false;
-            if (!burrow__thread_stack_bounds(&lo, &hi))
-                lo = NULL;
-        }
-        /* 1 stands for bounds nobody would give, and falls back on a count. */
+        if (!burrow__thread_stack_bounds(&lo, &hi))
+            lo = NULL;
         *floor = lo == NULL ? 1 : (uintptr_t)lo + GOB_STACK_MARGIN;
     }
     if (*floor == 1)
@@ -827,6 +832,66 @@ const GobUserType *burrow__gob_user_type(const Type *t, Error *err) {
         *err = burrow_err_out_of_memory;
     burrow__unlock(&gob_lock);
     return ut;
+}
+
+static GobEncPlan *gob_enc_plan_l(const GobUserType *ut, Error *err) {
+    const Type *t = ut->base;
+    GobEncPlan *plan = (GobEncPlan *)mem_alloc(
+        heap_allocator(), sizeof(GobEncPlan) + (size_t)t->nfield * sizeof(GobEncField),
+        _Alignof(GobEncPlan));
+    if (plan == NULL) {
+        *err = burrow_err_out_of_memory;
+        return NULL;
+    }
+    plan->n = 0;
+    for (uint16_t i = 0; i < t->nfield; i++) {
+        const Field *f = &t->fields[i];
+        if (!burrow__gob_is_sent(f))
+            continue;
+        const GobUserType *fut = gob_user_type_l(f->type, err);
+        if (fut == NULL) {
+            mem_free(heap_allocator(), plan, 0, _Alignof(GobEncPlan));
+            return NULL;
+        }
+        GobEncField *ef = &plan->f[plan->n];
+        ef->type = f->type;
+        ef->ut = fut;
+        ef->offset = f->offset;
+        ef->wire = (int32_t)plan->n;
+        plan->n++;
+    }
+    return plan;
+}
+
+const GobEncPlan *burrow__gob_enc_plan(const GobUserType *ut, Error *err) {
+    GobUserType *m = (GobUserType *)(uintptr_t)ut;
+    const GobEncPlan *plan = burrow__atomic_load_acquire_ptr(&m->enc_plan);
+    if (plan != NULL)
+        return plan;
+    *err = BURROW_NO_ERROR;
+    burrow__lock(&gob_lock);
+    plan = m->enc_plan;
+    if (plan == NULL) {
+        GobEncPlan *np = gob_init_l() ? gob_enc_plan_l(ut, err) : NULL;
+        if (np == NULL && BURROW_OK(*err))
+            *err = burrow_err_out_of_memory;
+        if (np != NULL)
+            burrow__atomic_store_release_ptr(&m->enc_plan, np);
+        plan = np;
+    }
+    burrow__unlock(&gob_lock);
+    return plan;
+}
+
+const GobUserType *burrow__gob_elem_ut(const GobUserType *ut, Error *err) {
+    GobUserType *m = (GobUserType *)(uintptr_t)ut;
+    const GobUserType *eut = burrow__atomic_load_acquire_ptr(&m->elem_ut);
+    if (eut != NULL)
+        return eut;
+    eut = burrow__gob_user_type(ut->base->elem, err);
+    if (eut != NULL)
+        burrow__atomic_store_release_ptr(&m->elem_ut, (void *)(uintptr_t)eut);
+    return eut;
 }
 
 /* --------------------------------------------------------- newTypeObject */

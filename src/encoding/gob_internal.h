@@ -104,7 +104,29 @@ typedef struct GobUserType {
     int dec_indir;
     const Method *enc_method;
     const Method *dec_method;
+    /* The GobEncPlan of a struct base, built the first time it is encoded
+     * and read without the lock after that. */
+    void *enc_plan;
+    /* The GobUserType of the element of a slice or array base, the same
+     * way. */
+    void *elem_ut;
 } GobUserType;
+
+/* One field of a struct as the encoder sends it. */
+typedef struct GobEncField {
+    const Type *type;
+    const GobUserType *ut;
+    size_t offset;
+    int32_t wire;
+} GobEncField;
+
+/* The sent fields of a struct, in order, which is what Go's encEngine holds
+ * and what the encoder would otherwise look up field by field on every
+ * value. */
+typedef struct GobEncPlan {
+    Int n;
+    GobEncField f[];
+} GobEncPlan;
 
 /* typeInfo. */
 typedef struct GobTypeInfo {
@@ -136,6 +158,13 @@ const Type *burrow__gob_ptr_to(const Type *t);
 
 /* validUserType. NULL with *err set on failure. */
 const GobUserType *burrow__gob_user_type(const Type *t, Error *err);
+
+/* The plan for ut, whose base is a struct. NULL with *err set when a field
+ * type is one gob can't handle. */
+const GobEncPlan *burrow__gob_enc_plan(const GobUserType *ut, Error *err);
+
+/* The user type of the element of ut's base, a slice or array. */
+const GobUserType *burrow__gob_elem_ut(const GobUserType *ut, Error *err);
 
 /* getTypeInfo. */
 const GobTypeInfo *burrow__gob_type_info(const GobUserType *ut, Error *err);

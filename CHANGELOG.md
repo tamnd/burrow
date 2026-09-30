@@ -4,6 +4,27 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.17 (2026-09-30)
+
+flag, uuid, weak, and the first half of encoding/xml.
+
+### Added
+
+- `uuid`, the package Go 1.27 added to the standard library (#279).
+- `weak`, Go's weak pointers (#283).
+- `time.ParseDuration` and `Duration.String`, with Go's error text (#284).
+- `flag`, the whole package, including FlagSet, the typed flags, Func, BoolFunc, TextVar and Go's usage output (#285).
+- `encoding/xml`, the token layer: Decoder with RawToken, Token, Skip and InputPos, Encoder with EncodeToken, Indent, Flush and Close, CopyToken, Escape, EscapeText, NewTokenDecoder, and the HTML entity and auto-close tables for non-strict parsing. Marshal and Unmarshal are not in yet (#287).
+
+### Changed
+
+- On macOS and OpenBSD, random bytes now come from `arc4random_buf` (#280).
+- The platform layer can read the process's command line on every platform, so `flag` can find the arguments without a hook in `main` (#282).
+
+### Fixed
+
+- The JSON, flag and time packages build with MSVC again. The v0.1.16 tag failed its Windows job because of this and was never published, so its changes ship in this release (#286).
+
 ## v0.1.16 (2026-09-30)
 
 The v1 JSON API, on top of v2.

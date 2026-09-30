@@ -54,7 +54,8 @@ static void TestPointer(TestingT *t) {
         testing_t_fatalf_v(t, "weak pointer is not the same as strong pointer");
     /* bt is still allocated. */
     if (weak_pointer_value(wt) != bt)
-        testing_t_fatalf_v(t, "weak pointer is not the same as strong pointer after a while");
+        testing_t_fatalf_v(
+            t, "weak pointer is not the same as strong pointer after a while");
     free_t(a, bt);
     if (weak_pointer_value(wt) != NULL)
         testing_t_fatalf_v(t, "expected weak pointer to be nil");
@@ -82,13 +83,17 @@ static void TestPointerEquality(TestingT *t) {
             if (st != bt[i])
                 testing_t_fatalf_v(t, "weak pointer is not the same as strong pointer");
             if (!weak_pointer_eq(weak_make(st), wt[i]))
-                testing_t_fatalf_v(t, "new weak pointer not equal to existing weak pointer");
+                testing_t_fatalf_v(
+                    t, "new weak pointer not equal to existing weak pointer");
             if (!weak_pointer_eq(weak_make(&st->a), wo[i]))
-                testing_t_fatalf_v(t, "new weak pointer not equal to existing weak pointer");
+                testing_t_fatalf_v(
+                    t, "new weak pointer not equal to existing weak pointer");
             if (weak_pointer_eq(wt[i], wo[i]))
-                testing_t_fatalf_v(t, "pointers to two offsets in one object are equal");
+                testing_t_fatalf_v(t,
+                                   "pointers to two offsets in one object are equal");
             if (i > 0 && weak_pointer_eq(wt[i], wt[i - 1]))
-                testing_t_fatalf_v(t, "expected weak pointers to not be equal to each other");
+                testing_t_fatalf_v(
+                    t, "expected weak pointers to not be equal to each other");
         }
     }
     for (int i = 0; i < NEQ; i++)
@@ -97,15 +102,18 @@ static void TestPointerEquality(TestingT *t) {
         if (weak_pointer_value(wt[i]) != NULL)
             testing_t_fatalf_v(t, "expected weak pointer to be nil");
         if (weak_pointer_value(wo[i]) != NULL)
-            testing_t_fatalf_v(t, "expected weak pointer to an interior field to be nil");
+            testing_t_fatalf_v(t,
+                               "expected weak pointer to an interior field to be nil");
         if (i > 0 && weak_pointer_eq(wt[i], wt[i - 1]))
-            testing_t_fatalf_v(t, "expected weak pointers to not be equal to each other");
+            testing_t_fatalf_v(t,
+                               "expected weak pointers to not be equal to each other");
     }
 }
 
 static void TestPointerSize(TestingT *t) {
     if (sizeof(WeakPointer) != 8)
-        testing_t_errorf_v(t, "sizeof(WeakPointer) = %v, want 8", (Int)sizeof(WeakPointer));
+        testing_t_errorf_v(t, "sizeof(WeakPointer) = %v, want 8",
+                           (Int)sizeof(WeakPointer));
 }
 
 static void TestIssue70739(TestingT *t) {
@@ -117,7 +125,8 @@ static void TestIssue70739(TestingT *t) {
     WeakPointer wx1 = weak_make(&x[1 << 16]);
     WeakPointer wx2 = weak_make(&x[1 << 16]);
     if (!weak_pointer_eq(wx1, wx2))
-        testing_t_fatalf_v(t, "failed to look up special and made duplicate weak handle");
+        testing_t_fatalf_v(t,
+                           "failed to look up special and made duplicate weak handle");
     mem_free(a, x, n * sizeof(Int *), _Alignof(Int *));
     if (weak_pointer_value(wx1) != NULL)
         testing_t_fatalf_v(t, "weak pointer into a freed array is not nil");
@@ -132,7 +141,8 @@ static void TestImmortalPointer(TestingT *t) {
     WeakPointer w0a = weak_make(&immortal.a);
     WeakPointer w0b = weak_make(&immortal.b);
     if (weak_pointer_eq(w0a, w0b))
-        testing_t_errorf_v(t, "separate immortal pointers (same object) have the same pointer");
+        testing_t_errorf_v(
+            t, "separate immortal pointers (same object) have the same pointer");
 
     /* Other memory coming and going leaves them alone. */
     Arena ar;

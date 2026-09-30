@@ -48,7 +48,8 @@ WeakPointer w1 = weak_make(b);
 WeakPointer w2 = weak_make(b);
 WeakPointer wid = weak_make(&b->id);
 WeakPointer wsize = weak_make(&b->size);
-printf("%d %d\n", weak_pointer_eq(w1, w2), weak_pointer_eq(wid, wsize)); /* 1 0 */
+printf("%d %d\n", weak_pointer_eq(w1, w2),
+       weak_pointer_eq(wid, wsize)); /* 1 0 */
 mem_free(a, b, sizeof(Blob), _Alignof(Blob));
 ```
 

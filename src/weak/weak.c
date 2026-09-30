@@ -41,12 +41,12 @@
 #define WK_NONE UINT32_MAX
 
 typedef struct WkSlot {
-    uintptr_t key;  /* the address given to weak_make, stored inverted */
-    void *link;     /* the same, for the collector to clear, when linked */
-    uint32_t gen;   /* bumped each time the memory goes */
-    uint32_t next;  /* the next free slot, when this one is free */
-    bool live;      /* in the index */
-    bool linked;    /* a disappearing link is registered on link */
+    uintptr_t key; /* the address given to weak_make, stored inverted */
+    void *link;    /* the same, for the collector to clear, when linked */
+    uint32_t gen;  /* bumped each time the memory goes */
+    uint32_t next; /* the next free slot, when this one is free */
+    bool live;     /* in the index */
+    bool linked;   /* a disappearing link is registered on link */
 } WkSlot;
 
 static burrow__Lock wk_lock;
@@ -238,7 +238,8 @@ WeakPointer weak_make(const void *p) {
     if (burrow__gc_owns(p))
         s->linked = burrow__gc_link(&s->link, p);
     s->live = true;
-    memmove(wk_index + at + 1, wk_index + at, (size_t)(wk_len - at) * sizeof(*wk_index));
+    memmove(wk_index + at + 1, wk_index + at,
+            (size_t)(wk_len - at) * sizeof(*wk_index));
     wk_index[at] = i;
     wk_len++;
 
@@ -258,7 +259,7 @@ void *weak_pointer_value(WeakPointer w) {
         WkSlot *s = wk_slot((uint32_t)(n - 1));
         if (s->live && s->gen == gen)
             v = s->linked ? burrow__gc_read(&s->link)
-                         : (void *)~s->key; // NOLINT(performance-no-int-to-ptr)
+                          : (void *)~s->key; // NOLINT(performance-no-int-to-ptr)
     }
     burrow__unlock(&wk_lock);
     return v;

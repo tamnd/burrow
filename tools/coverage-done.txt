@@ -58,6 +58,7 @@ math/rand
 math/rand/v2
 compress/bzip2
 compress/flate
+compress/gzip
 compress/lzw
 compress/zlib
 regexp/syntax

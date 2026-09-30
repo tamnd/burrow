@@ -1,6 +1,6 @@
 # Compression
 
-`burrow/compress/flate.h` is Go's `compress/flate`, the DEFLATE format of RFC 1951. It is the compression inside gzip, zlib, zip and PNG, without any of their headers or checksums around it. It reads and writes DEFLATE, and the writer's output is the same as Go's byte for byte at every level. `burrow/compress/zlib.h` puts the zlib header and checksum on top of it, and `compress/gzip` will follow. `burrow/compress/lzw.h` is the older LZW format of GIF and PDF, and `burrow/compress/bzip2.h` reads bzip2 files. Neither has anything to do with DEFLATE.
+`burrow/compress/flate.h` is Go's `compress/flate`, the DEFLATE format of RFC 1951. It is the compression inside gzip, zlib, zip and PNG, without any of their headers or checksums around it. It reads and writes DEFLATE, and the writer's output is the same as Go's byte for byte at every level. `burrow/compress/zlib.h` and `burrow/compress/gzip.h` put the zlib and gzip headers and checksums on top of it. `burrow/compress/lzw.h` is the older LZW format of GIF and PDF, and `burrow/compress/bzip2.h` reads bzip2 files. Neither has anything to do with DEFLATE.
 
 ## Reading
 
@@ -142,6 +142,76 @@ zlib_reader_free(rc);
 That prints `zlib: invalid dictionary` and then `hello, hello`. `zlib_reader_as_resetter` gives a `ZlibResetter`, which points a reader at a new stream and dictionary without allocating again.
 
 The writer makes the same bytes as Go's at every level, with and without a dictionary, with one exception. At levels 7 to 9 with a dictionary, when the first block does not compress and ends up stored, Go 1.27 writes the dictionary into that stored block as if it were data, so the stream does not read back as what was written, even with Go's own reader. burrow makes the same choices Go does and leaves the dictionary out of that block, so its stream is the dictionary's length shorter than Go's and reads back correctly. The same goes for `flate_new_writer_dict`.
+
+## gzip
+
+`burrow/compress/gzip.h` is Go's `compress/gzip`, the format of RFC 1952 that `.gz` files and HTTP's `Content-Encoding: gzip` use. It is DEFLATE with a header that can name the file and carry a comment, a modification time and some extra bytes, and a CRC-32 and length at the end. The header is a plain struct on the writer, filled in before the first write:
+
+<!-- example: ../examples/compress/gzip.c#write -->
+```c
+BytesBuffer buf = BYTES_BUFFER(a);
+GzipWriter *zw = gzip_new_writer(a, bytes_buffer_as_io_writer(&buf));
+if (zw == NULL)
+    return 1;
+zw->header.name = BURROW_S("a-new-hope.txt");
+zw->header.comment = BURROW_S("an epic space opera by George Lucas");
+zw->header.mod_time = time_date(1977, TIME_MAY, 25, 0, 0, 0, 0, time_utc_loc);
+gzip_writer_write(zw, text("A long time ago in a galaxy far, far away..."), &err);
+err = gzip_writer_close(zw);
+gzip_writer_free(zw);
+printf("%d bytes\n", (int)bytes_buffer_len(&buf));
+```
+
+That prints `120 bytes`, which is what Go's `NewWriter` makes of the same header and text. The strings are UTF-8 in C and Latin-1 in the file, so a name or comment with a character past U+00FF, or with a NUL in it, fails the first write with `gzip.Write: non-Latin-1 header string`. A `mod_time` of the zero `Time` leaves the time out. `gzip_new_writer_level` takes the same levels as flate.
+
+The reader reads the header when it is made, and gives it back in `zr->header`:
+
+<!-- example: ../examples/compress/gzip.c#read -->
+```c
+GzipReader *zr = gzip_new_reader(a, bytes_buffer_as_io_reader(&buf), &err);
+if (zr == NULL)
+    return 1;
+Str when = time_string(time_utc(zr->header.mod_time), a);
+printf("Name: %.*s\nComment: %.*s\nModTime: %.*s\n\n", (int)zr->header.name.len,
+       (const char *)zr->header.name.p, (int)zr->header.comment.len,
+       (const char *)zr->header.comment.p, (int)when.len, (const char *)when.p);
+Slice data = io_read_all(a, gzip_reader_as_io_reader(zr), &err);
+gzip_reader_free(zr);
+```
+
+That prints the name, the comment and `ModTime: 1977-05-25 00:00:00 +0000 UTC`, then the text. The strings in the header belong to the reader and go away with `gzip_reader_free` or the next reset. The checksum and length are checked when the data runs out, and a mismatch gives `gzip_err_checksum` instead of `io_eof`, so the data is only known to be good once a read has given `io_eof`.
+
+A gzip file can hold several members one after the other, and by default they read as one stream. To see each member's header, turn that off with `gzip_reader_multistream`, read to the end of the member, and reset onto the same input for the next one. The reset gives `io_eof` when nothing is left:
+
+<!-- example: ../examples/compress/gzip.c#multistream -->
+```c
+bytes_buffer_reset(&buf);
+zw = gzip_new_writer(a, bytes_buffer_as_io_writer(&buf));
+if (zw == NULL)
+    return 1;
+zw->header.name = BURROW_S("file-1.txt");
+gzip_writer_write(zw, text("Hello Gophers - 1\n"), &err);
+err = gzip_writer_close(zw);
+gzip_writer_reset(zw, bytes_buffer_as_io_writer(&buf));
+zw->header.name = BURROW_S("file-2.txt");
+gzip_writer_write(zw, text("Hello Gophers - 2\n"), &err);
+err = gzip_writer_close(zw);
+gzip_writer_free(zw);
+
+zr = gzip_new_reader(a, bytes_buffer_as_io_reader(&buf), &err);
+if (zr == NULL)
+    return 1;
+do {
+    gzip_reader_multistream(zr, false);
+    data = io_read_all(a, gzip_reader_as_io_reader(zr), &err);
+    printf("%.*s: %.*s", (int)zr->header.name.len, (const char *)zr->header.name.p,
+           (int)data.len, (const char *)data.p);
+    err = gzip_reader_reset(zr, bytes_buffer_as_io_reader(&buf));
+} while (BURROW_OK(err));
+gzip_reader_free(zr);
+```
+
+That prints `file-1.txt: Hello Gophers - 1` and `file-2.txt: Hello Gophers - 2`. This only works when the input has `ReadByte`, as a `BytesBuffer` does, because otherwise the reader puts a `bufio.Reader` in front of it that reads ahead into the next member.
 
 ## lzw
 

@@ -375,16 +375,16 @@ enum {
     F_COUNT_OF_FLAGS
 };
 
-typedef struct FlagDef {
+typedef struct TestingFlagDef {
     const char *name;
     const char *def; /* NULL for the parallel default, which is computed */
     const char *usage;
     int kind;
     bool allow_zero;
-} FlagDef;
+} TestingFlagDef;
 
 /* Sorted by name, which is the order -h prints them in. */
-static const FlagDef flag_defs[F_COUNT_OF_FLAGS] = {
+static const TestingFlagDef testing_flag_defs[F_COUNT_OF_FLAGS] = {
     {"test.artifacts", "false", "store test artifacts in test.,outputdir", FK_BOOL,
      false},
     {"test.bench", "", "run only benchmarks matching `regexp`", FK_STRING, false},
@@ -450,7 +450,7 @@ static const FlagDef flag_defs[F_COUNT_OF_FLAGS] = {
     {"test.v", "false", "verbose: print additional output", FK_CHATTY, false},
 };
 
-typedef struct FlagValue {
+typedef struct TestingFlagValue {
     bool b;
     Str s;
     int64_t i;
@@ -458,7 +458,7 @@ typedef struct FlagValue {
     int64_t d;
     int64_t n; /* FK_DURCOUNT: the count, when it was given as Nx */
     bool json; /* FK_CHATTY */
-} FlagValue;
+} TestingFlagValue;
 
 /* ------------------------------------------------------------------ types */
 
@@ -567,7 +567,7 @@ typedef struct Package {
     bool init_ran;
     bool parsed;
     char parallel_def[24];
-    FlagValue flags[F_COUNT_OF_FLAGS];
+    TestingFlagValue flags[F_COUNT_OF_FLAGS];
 
     /* Every T of the run, for FailNow's question and the timeout message,
      * and so that they can all be freed at the end. */
@@ -616,14 +616,16 @@ static Str cstr(const char *s) {
     return str_from_cstr(s);
 }
 
-static Str flag_default(int i) {
-    return flag_defs[i].def != NULL ? cstr(flag_defs[i].def) : cstr(pkg.parallel_def);
+static Str testing_flag_default(int i) {
+    return testing_flag_defs[i].def != NULL ? cstr(testing_flag_defs[i].def)
+                                            : cstr(pkg.parallel_def);
 }
 
 /* What the flag's Set method says, or an empty string when it took. */
-static const char *flag_set(int i, Str v, FlagValue *fv, Alloc *a, Str *msg) {
+static const char *testing_flag_set(int i, Str v, TestingFlagValue *fv, Alloc *a,
+                                    Str *msg) {
     Error err = {0};
-    switch (flag_defs[i].kind) {
+    switch (testing_flag_defs[i].kind) {
     case FK_BOOL: {
         bool b = strconv_parse_bool(v, &err);
         if (err.vt != NULL)
@@ -660,14 +662,14 @@ static const char *flag_set(int i, Str v, FlagValue *fv, Alloc *a, Str *msg) {
     case FK_DURCOUNT: {
         if (v.len > 0 && v.p[v.len - 1] == 'x') {
             int64_t n = strconv_parse_int(str_from_bytes(v.p, v.len - 1), 10, 0, &err);
-            if (err.vt != NULL || n < 0 || (!flag_defs[i].allow_zero && n == 0))
+            if (err.vt != NULL || n < 0 || (!testing_flag_defs[i].allow_zero && n == 0))
                 return "invalid count";
             fv->d = 0;
             fv->n = n;
             return NULL;
         }
         int64_t d;
-        if (!dur_parse(v, &d) || d < 0 || (!flag_defs[i].allow_zero && d == 0))
+        if (!dur_parse(v, &d) || d < 0 || (!testing_flag_defs[i].allow_zero && d == 0))
             return "invalid duration";
         fv->d = d;
         fv->n = 0;
@@ -689,12 +691,13 @@ static const char *flag_set(int i, Str v, FlagValue *fv, Alloc *a, Str *msg) {
     }
 }
 
-static bool flag_is_bool(int i) {
-    return flag_defs[i].kind == FK_BOOL || flag_defs[i].kind == FK_CHATTY;
+static bool testing_flag_is_bool(int i) {
+    return testing_flag_defs[i].kind == FK_BOOL ||
+           testing_flag_defs[i].kind == FK_CHATTY;
 }
 
 /* The zero value's String, which decides whether -h shows the default. */
-static const char *flag_zero(int kind) {
+static const char *testing_flag_zero(int kind) {
     switch (kind) {
     case FK_BOOL:
     case FK_CHATTY:
@@ -709,8 +712,9 @@ static const char *flag_zero(int kind) {
     }
 }
 
-static int flag_cmp(const void *x, const void *y) {
-    return strcmp(flag_defs[*(const int *)x].name, flag_defs[*(const int *)y].name);
+static int testing_flag_cmp(const void *x, const void *y) {
+    return strcmp(testing_flag_defs[*(const int *)x].name,
+                  testing_flag_defs[*(const int *)y].name);
 }
 
 /* flag.PrintDefaults, and the Usage line in front of it. */
@@ -724,10 +728,10 @@ static void usage(void) {
     int order[F_COUNT_OF_FLAGS];
     for (int i = 0; i < F_COUNT_OF_FLAGS; i++)
         order[i] = i;
-    qsort(order, F_COUNT_OF_FLAGS, sizeof order[0], flag_cmp);
+    qsort(order, F_COUNT_OF_FLAGS, sizeof order[0], testing_flag_cmp);
     for (int k = 0; k < F_COUNT_OF_FLAGS; k++) {
         int i = order[k];
-        const FlagDef *f = &flag_defs[i];
+        const TestingFlagDef *f = &testing_flag_defs[i];
         buf_str(&b, BURROW_S("  -"));
         buf_str(&b, cstr(f->name));
 
@@ -787,8 +791,8 @@ static void usage(void) {
                 buf_append(&b, &plain.p[j], 1);
         }
         buf_free(&plain);
-        Str def = flag_default(i);
-        if (!str_eq(def, cstr(flag_zero(f->kind)))) {
+        Str def = testing_flag_default(i);
+        if (!str_eq(def, cstr(testing_flag_zero(f->kind)))) {
             if (f->kind == FK_STRING)
                 buf_str(&b, fmt_sprintf_v(a, " (default %q)", def));
             else
@@ -801,7 +805,7 @@ static void usage(void) {
     arena_free(&ar);
 }
 
-BURROW_NORETURN static void flag_fail(Str msg) {
+BURROW_NORETURN static void testing_flag_fail(Str msg) {
     Buf b = {0};
     buf_str(&b, msg);
     buf_str(&b, BURROW_S("\n"));
@@ -811,9 +815,9 @@ BURROW_NORETURN static void flag_fail(Str msg) {
     exit(2);
 }
 
-static int flag_lookup(Str name) {
+static int testing_flag_lookup(Str name) {
     for (int i = 0; i < F_COUNT_OF_FLAGS; i++) {
-        if (str_eq(name, cstr(flag_defs[i].name)))
+        if (str_eq(name, cstr(testing_flag_defs[i].name)))
             return i;
     }
     return -1;
@@ -824,8 +828,9 @@ static void flags_reset(void) {
     arena_init(&ar, NULL, 0);
     Str ignored;
     for (int i = 0; i < F_COUNT_OF_FLAGS; i++) {
-        pkg.flags[i] = (FlagValue){0};
-        flag_set(i, flag_default(i), &pkg.flags[i], arena_allocator(&ar), &ignored);
+        pkg.flags[i] = (TestingFlagValue){0};
+        testing_flag_set(i, testing_flag_default(i), &pkg.flags[i],
+                         arena_allocator(&ar), &ignored);
     }
     arena_free(&ar);
 }
@@ -849,7 +854,7 @@ static void flags_parse(void) {
         }
         Str name = str_from_bytes(s.p + minuses, s.len - minuses);
         if (name.len == 0 || name.p[0] == '-' || name.p[0] == '=')
-            flag_fail(fmt_sprintf_v(a, "bad flag syntax: %s", s));
+            testing_flag_fail(fmt_sprintf_v(a, "bad flag syntax: %s", s));
         bool has_value = false;
         Str value = BURROW_S("");
         for (Int j = 1; j < name.len; j++) {
@@ -860,30 +865,32 @@ static void flags_parse(void) {
                 break;
             }
         }
-        int i = flag_lookup(name);
+        int i = testing_flag_lookup(name);
         if (i < 0)
-            i = flag_lookup(fmt_sprintf_v(a, "test.%s", name));
+            i = testing_flag_lookup(fmt_sprintf_v(a, "test.%s", name));
         if (i < 0) {
             if (str_eq(name, BURROW_S("help")) || str_eq(name, BURROW_S("h"))) {
                 usage();
                 exit(0);
             }
-            flag_fail(fmt_sprintf_v(a, "flag provided but not defined: -%s", name));
+            testing_flag_fail(
+                fmt_sprintf_v(a, "flag provided but not defined: -%s", name));
         }
         Str msg = BURROW_S("");
         const char *why;
-        if (flag_is_bool(i)) {
+        if (testing_flag_is_bool(i)) {
             if (has_value) {
-                why = flag_set(i, value, &pkg.flags[i], a, &msg);
+                why = testing_flag_set(i, value, &pkg.flags[i], a, &msg);
                 if (why != NULL)
-                    flag_fail(fmt_sprintf_v(a, "invalid boolean value %q for -%s: %s",
-                                            value, name,
-                                            msg.len > 0 ? msg : cstr(why)));
+                    testing_flag_fail(
+                        fmt_sprintf_v(a, "invalid boolean value %q for -%s: %s", value,
+                                      name, msg.len > 0 ? msg : cstr(why)));
             } else {
-                why = flag_set(i, BURROW_S("true"), &pkg.flags[i], a, &msg);
+                why = testing_flag_set(i, BURROW_S("true"), &pkg.flags[i], a, &msg);
                 if (why != NULL)
-                    flag_fail(fmt_sprintf_v(a, "invalid boolean flag %s: %s", name,
-                                            msg.len > 0 ? msg : cstr(why)));
+                    testing_flag_fail(fmt_sprintf_v(a, "invalid boolean flag %s: %s",
+                                                    name,
+                                                    msg.len > 0 ? msg : cstr(why)));
             }
             continue;
         }
@@ -892,11 +899,12 @@ static void flags_parse(void) {
             value = cstr(pkg.argv[++k]);
         }
         if (!has_value)
-            flag_fail(fmt_sprintf_v(a, "flag needs an argument: -%s", name));
-        why = flag_set(i, value, &pkg.flags[i], a, &msg);
+            testing_flag_fail(fmt_sprintf_v(a, "flag needs an argument: -%s", name));
+        why = testing_flag_set(i, value, &pkg.flags[i], a, &msg);
         if (why != NULL)
-            flag_fail(fmt_sprintf_v(a, "invalid value %q for flag -%s: %s", value, name,
-                                    msg.len > 0 ? msg : cstr(why)));
+            testing_flag_fail(fmt_sprintf_v(a, "invalid value %q for flag -%s: %s",
+                                            value, name,
+                                            msg.len > 0 ? msg : cstr(why)));
     }
     arena_free(&ar);
 }

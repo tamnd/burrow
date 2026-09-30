@@ -410,6 +410,8 @@ static bool xi_add_field_info(XiBuild *b, const Type *typ, const XmlFieldInfo *n
         if (oldf->nidx == newf->nidx) {
             const Field *f1 = xi_field_by_index(typ, oldf->idx, oldf->nidx);
             const Field *f2 = xi_field_by_index(typ, newf->idx, newf->nidx);
+            if (f1 == NULL || f2 == NULL)
+                continue; /* both indexes came from typ, so this does not happen */
             XmlTagPathError e = {
                 typ,
                 f1->name,

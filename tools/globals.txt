@@ -228,6 +228,20 @@ global	src/encoding/jsonv2_fields.c	jv_cache	type-registry	json v2's fields for 
 global	src/encoding/jsonv2_fields.c	jv_cache_cap	type-registry	The same as jv_cache.
 global	src/encoding/jsonv2_fields.c	jv_cache_len	type-registry	The same as jv_cache.
 global	src/encoding/jsonv2_fields.c	jv_build_alloc	type-registry	Set and cleared only while jv_cache_lock is held.
+global	src/encoding/gob.c	gob_lock	type-registry	Go's typeLock and the locks inside its sync.Maps in one. Every global below is read and written only under it.
+global	src/encoding/gob.c	gob_inited	type-registry	Whether the tables below and the built in type ids have been set up, which happens once, under gob_lock, on first use.
+global	src/encoding/gob.c	gob_ids	type-registry	idToType: the wire type for each type id, which is a process wide numbering in Go as well, since an encoder hands the ids out.
+global	src/encoding/gob.c	gob_nids	type-registry	How many ids gob_ids holds. Go's nextId.
+global	src/encoding/gob.c	gob_capids	type-registry	The room in gob_ids. Grows with it under the same lock.
+global	src/encoding/gob.c	gob_builtin	type-registry	builtinIdToType: the ids below 64, copied once when they are made so that the decoder can check a stream's type ids against them.
+global	src/encoding/gob.c	gob_types	type-registry	Go's types map, from a type to its wire type. Built once per type and never freed, as in Go.
+global	src/encoding/gob.c	gob_uts	type-registry	userTypeCache, a sync.Map in Go: what gob worked out about each type's pointers and methods.
+global	src/encoding/gob.c	gob_infos	type-registry	typeInfoMap, also a sync.Map in Go: each type's id and wire description.
+global	src/encoding/gob.c	gob_name_to_type	type-registry	nameToConcreteType, which gob_register fills and the decoder reads to turn a name in the stream back into a type.
+global	src/encoding/gob.c	gob_type_to_name	type-registry	concreteTypeToName, the other direction, for the encoder.
+global	src/encoding/gob.c	gob_canon_ptr	type-registry	Which descriptor stands for a type when two descriptors describe the same one, so that Go's reflect.Type identity holds. Keyed by descriptor address.
+global	src/encoding/gob.c	gob_canon_key	type-registry	The same, keyed by the type written out, which is how two descriptors for one type are found to be the same.
+global	src/encoding/gob.c	gob_ptrs	type-registry	reflect.PointerTo for types that have no pointer descriptor of their own, made once and kept.
 global	src/encoding/xml_typeinfo.c	xi_lock	type-registry	The lock over the three below. It is held while a type's XML field info is worked out, which happens once per type.
 global	src/encoding/xml_typeinfo.c	xi_cache	type-registry	The XML field info for every type Marshal has seen, built once and never freed, as Go keeps it in a sync.Map. Read and written only under xi_lock.
 global	src/encoding/xml_typeinfo.c	xi_cache_cap	type-registry	The same as xi_cache.

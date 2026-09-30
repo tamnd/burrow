@@ -77,3 +77,4 @@ encoding/json/jsontext
 uuid
 weak
 flag
+encoding/gob

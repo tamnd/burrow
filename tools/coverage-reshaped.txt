@@ -168,3 +168,10 @@ image: func RegisterFormat: decode and decodeConfig are BURROW_FUNC values that 
 # nor the size. The methods are found through the type, as encoding does.
 flag: func TextVar: the variable and the default are Any values found by type, so the default can be copied in
 flag: method (*FlagSet) TextVar: the variable and the default are Any values found by type, so the default can be copied in
+
+# include/burrow/encoding/gob.h: burrow has no reflect.Value. An Any carries
+# the same two things one does here, a type and where the value is, and the
+# Any is the value itself, not a pointer to it, as in Go's EncodeValue and
+# DecodeValue.
+encoding/gob: method (*Encoder) EncodeValue: takes an Any, which holds the type and the address a reflect.Value would
+encoding/gob: method (*Decoder) DecodeValue: takes an Any, which holds the type and the address a reflect.Value would

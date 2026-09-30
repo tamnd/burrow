@@ -319,7 +319,11 @@ static Int search(Flag **list, Int n, Str name, bool *found) {
     Int hi = n;
     while (lo < hi) {
         Int mid = lo + (hi - lo) / 2;
-        int c = str_cmp(list[mid]->name, name);
+        Str m = list[mid]->name;
+        /* Names mostly differ in their first byte, which saves a call. */
+        int c = m.len > 0 && name.len > 0 && m.p[0] != name.p[0]
+                    ? (m.p[0] < name.p[0] ? -1 : 1)
+                    : str_cmp(m, name);
         if (c == 0) {
             *found = true;
             return mid;
@@ -923,7 +927,6 @@ static Str arg0(Slice args) {
  * one, and false with *err set when there was a mistake, or with no error when
  * the flags have ended. */
 static bool parse_one(FlagFlagSet *f, Error *err) {
-    Alloc *ea = error_allocator();
     *err = BURROW_NO_ERROR;
     if (f->args.len == 0)
         return false;
@@ -940,7 +943,7 @@ static bool parse_one(FlagFlagSet *f, Error *err) {
     }
     Str name = str_from_bytes(s.p + minuses, s.len - minuses);
     if (name.len == 0 || name.p[0] == '-' || name.p[0] == '=') {
-        *err = failf(f, fmt_sprintf_v(ea, "bad flag syntax: %s", s));
+        *err = failf(f, fmt_sprintf_v(error_allocator(), "bad flag syntax: %s", s));
         return false;
     }
 
@@ -965,7 +968,8 @@ static bool parse_one(FlagFlagSet *f, Error *err) {
             *err = flag_err_help;
             return false;
         }
-        *err = failf(f, fmt_sprintf_v(ea, "flag provided but not defined: -%s", name));
+        *err = failf(f, fmt_sprintf_v(error_allocator(),
+                                      "flag provided but not defined: -%s", name));
         return false;
     }
 
@@ -975,16 +979,16 @@ static bool parse_one(FlagFlagSet *f, Error *err) {
         if (has_value) {
             Error e = vt->set(fl->value.data, value);
             if (!BURROW_OK(e)) {
-                *err =
-                    failf(f, fmt_sprintf_v(ea, "invalid boolean value %q for -%s: %v",
-                                           value, name, e));
+                *err = failf(f, fmt_sprintf_v(error_allocator(),
+                                              "invalid boolean value %q for -%s: %v",
+                                              value, name, e));
                 return false;
             }
         } else {
             Error e = vt->set(fl->value.data, LIT("true"));
             if (!BURROW_OK(e)) {
-                *err =
-                    failf(f, fmt_sprintf_v(ea, "invalid boolean flag %s: %v", name, e));
+                *err = failf(f, fmt_sprintf_v(error_allocator(),
+                                              "invalid boolean flag %s: %v", name, e));
                 return false;
             }
         }
@@ -997,13 +1001,15 @@ static bool parse_one(FlagFlagSet *f, Error *err) {
             f->args = slice_sub(f->args, 1, f->args.len);
         }
         if (!has_value) {
-            *err = failf(f, fmt_sprintf_v(ea, "flag needs an argument: -%s", name));
+            *err = failf(f, fmt_sprintf_v(error_allocator(),
+                                          "flag needs an argument: -%s", name));
             return false;
         }
         Error e = vt->set(fl->value.data, value);
         if (!BURROW_OK(e)) {
-            *err = failf(f, fmt_sprintf_v(ea, "invalid value %q for flag -%s: %v",
-                                          value, name, e));
+            *err = failf(f, fmt_sprintf_v(error_allocator(),
+                                          "invalid value %q for flag -%s: %v", value,
+                                          name, e));
             return false;
         }
     }

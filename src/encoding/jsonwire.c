@@ -877,7 +877,7 @@ Int burrow__jsonwire_reformat_string(JsonBuf *dst, const Byte *src, Int slen,
 void burrow__jsonwire_append_float(JsonBuf *dst, double src, int bits) {
     if (bits == 32)
         src = (double)(float)src;
-    double abs = fabs(src);
+    double abs = src < 0 ? -src : src;
     Byte fmt = 'f';
     if (abs != 0) {
         if ((bits == 64 && (abs < 1e-6 || abs >= 1e21)) ||
@@ -938,9 +938,9 @@ Int burrow__jsonwire_reformat_number(JsonBuf *dst, const Byte *src, Int slen,
     double fv = strconv_parse_float(str_from_bytes(src, n), 64, &perr);
     if (fv == 0)
         fv = 0;
-    else if (isinf(fv) && fv > 0)
+    else if (burrow__json_isinf(fv) && fv > 0)
         fv = DBL_MAX;
-    else if (isinf(fv))
+    else if (burrow__json_isinf(fv))
         fv = -DBL_MAX;
     burrow__jsonwire_append_float(dst, fv, 64);
     return n;

@@ -372,18 +372,17 @@ Error burrow__jsonv2_marshal_funcs(JsontextEncoder *e, const Type *t, void *p,
         JvFuncCall c = {f, BURROW_ANY(t, p)};
         if (f->kind == JV_FN_MARSHAL_TO) {
             bool skip = false;
-            Error err =
-                burrow__jsonv2_call_to(e, f->typ, jv_marshal_to_call, &c, &skip);
+            Error err = burrow__jsonv2_call_to(e, f->typ, t, "MarshalToFunc",
+                                               jv_marshal_to_call, &c, &skip);
             if (skip)
                 continue;
             *done = true;
             return err;
         }
-        /* v1 wraps these errors in a MarshalerError, which comes with v1. */
         *done = true;
         return burrow__jsonv2_call_marshal(
-            e, f->typ, mo, "marshal function of type func(T) ([]byte, error)",
-            jv_marshal_call, &c);
+            e, f->typ, t, mo, "marshal function of type func(T) ([]byte, error)",
+            "MarshalFunc", jv_marshal_call, &c);
     }
     return BURROW_NO_ERROR;
 }

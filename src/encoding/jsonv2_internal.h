@@ -9,6 +9,7 @@
 #ifndef BURROW_SRC_ENCODING_JSONV2_INTERNAL_H
 #define BURROW_SRC_ENCODING_JSONV2_INTERNAL_H
 
+#include "burrow/encoding/json.h"
 #include "burrow/encoding/json/v2.h"
 
 #include "json_internal.h"
@@ -132,16 +133,19 @@ Error burrow__jsonv2_unmarshal_methods(JsontextDecoder *d, const Type *t, void *
 bool burrow__jsonv2_call_is_zero(const Method *m, void *p);
 
 /* The four ways of handing a value to code outside json, shared by the
- * methods and by WithMarshalers. t is the type errors name. */
+ * methods and by WithMarshalers. t is the type errors name, and on the
+ * marshal side vt is the type of the value itself and src the name v1 gives
+ * the call in a MarshalerError. */
 typedef Slice (*JvMarshalCall)(const void *ctx, Alloc *a, Error *err);
 typedef Error (*JvToCall)(const void *ctx, JsontextEncoder *e);
 typedef Error (*JvUnmarshalCall)(const void *ctx, Alloc *a, Slice data);
 typedef Error (*JvFromCall)(const void *ctx, Alloc *a, JsontextDecoder *d);
-Error burrow__jsonv2_call_marshal(JsontextEncoder *e, const Type *t,
+Error burrow__jsonv2_call_marshal(JsontextEncoder *e, const Type *t, const Type *vt,
                                   const JsontextOptions *mo, const char *what,
-                                  JvMarshalCall call, const void *ctx);
-Error burrow__jsonv2_call_to(JsontextEncoder *e, const Type *t, JvToCall call,
-                             const void *ctx, bool *skip);
+                                  const char *src, JvMarshalCall call, const void *ctx);
+Error burrow__jsonv2_call_to(JsontextEncoder *e, const Type *t, const Type *vt,
+                             const char *src, JvToCall call, const void *ctx,
+                             bool *skip);
 Error burrow__jsonv2_call_unmarshal(JsontextDecoder *d, const Type *t,
                                     const JsontextOptions *uo, const char *what,
                                     JvUnmarshalCall call, const void *ctx);
@@ -235,6 +239,15 @@ bool burrow__jsonv2_implements_any(const Type *t);
 /* A small fmt.Errorf into a: %s a Str, %q a Str quoted, %r a Rune quoted, %d
  * an int64_t, %T a const Type * and %e an Error's text. */
 Error burrow__jsonv2_errorf_in(Alloc *a, const char *fmt, ...);
+
+/* What Go's v1 package hands v2 through encoding/json/internal, which lives
+ * in json.c: the error transforms Marshal and Unmarshal apply under
+ * ReportErrorsWithLegacySemantics, with root being what Unmarshal was given,
+ * and the MarshalerError constructor, with t the type of the value the method
+ * was called on and src the name of what failed. */
+Error burrow__json_transform_marshal_error(Error err);
+Error burrow__json_transform_unmarshal_error(Any root, Error err);
+Error burrow__json_new_marshaler_error(const Type *t, Error err, const char *src);
 
 /* Go's type string for t, as reflect.Type.String gives it, into b. */
 void burrow__jsonv2_put_type(JsonBuf *b, const Type *t);

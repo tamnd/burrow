@@ -851,10 +851,12 @@ static Slice jv_marshal(Alloc *a, Any in, const JsontextOptions *o, Error *err) 
     burrow__jsontext_encoder_setup(&e, none, false, o);
     jsonflags_set(&e.opts, JSONFLAG_OMIT_TOP_LEVEL_NEWLINE | 1);
     Error r = jv_marshal_encode(&e, in, &e.opts);
+    bool legacy = jsonflags_get(&e.opts, JSONFLAG_REPORT_ERRORS_WITH_LEGACY_SEMANTICS);
+    if (BURROW_FAILED(r) && legacy)
+        r = burrow__json_transform_marshal_error(r);
     /* Go hands back what was written before the error along with it, and
      * nothing only when v1 is asking. */
-    if (BURROW_OK(r) ||
-        !jsonflags_get(&e.opts, JSONFLAG_REPORT_ERRORS_WITH_LEGACY_SEMANTICS)) {
+    if (BURROW_OK(r) || !legacy) {
         Byte *p =
             (Byte *)mem_alloc_nozero(a, (size_t)(e.buf.len > 0 ? e.buf.len : 1), 1);
         if (p == NULL) {
@@ -897,6 +899,9 @@ static Error jv_marshal_write(Alloc *a, IoWriter out, Any in,
     Error r = jv_marshal_encode(&e, in, &e.opts);
     if (BURROW_OK(r) && e.buf.len > 0)
         r = burrow__jsontext_flush(&e);
+    if (BURROW_FAILED(r) &&
+        jsonflags_get(&e.opts, JSONFLAG_REPORT_ERRORS_WITH_LEGACY_SEMANTICS))
+        r = burrow__json_transform_marshal_error(r);
     burrow__jsontext_encoder_release(&e);
     return r;
 }
@@ -927,10 +932,18 @@ static bool jv_changed_whitespace(const JsontextOptions *s1,
              !str_eq(s1->indent_prefix, s2->indent_prefix)));
 }
 
+static Error jv_marshal_encode_legacy(JsontextEncoder *out, Any in) {
+    Error err = jv_marshal_encode(out, in, &out->opts);
+    if (BURROW_FAILED(err) &&
+        jsonflags_get(&out->opts, JSONFLAG_REPORT_ERRORS_WITH_LEGACY_SEMANTICS))
+        err = burrow__json_transform_marshal_error(err);
+    return err;
+}
+
 static Error jv_marshal_encode_opts(JsontextEncoder *out, Any in,
                                     const JsontextOptions *add, bool has) {
     if (!has)
-        return jv_marshal_encode(out, in, &out->opts);
+        return jv_marshal_encode_legacy(out, in);
     JsontextOptions orig = out->opts;
     burrow__jsonopts_join(&out->opts, add);
     Error err = BURROW_NO_ERROR;
@@ -957,7 +970,7 @@ static Error jv_marshal_encode_opts(JsontextEncoder *out, Any in,
             goto done;
         }
     }
-    err = jv_marshal_encode(out, in, &out->opts);
+    err = jv_marshal_encode_legacy(out, in);
 done:
     out->opts = orig;
     return err;
@@ -1023,6 +1036,9 @@ static Error jv_unmarshal(Alloc *a, IoReader r, bool has_rd, Slice in, Any out,
     burrow__jsontext_decoder_setup(&d, r, has_rd, (const Byte *)in.p, in.len, o);
     d.out_alloc = a;
     Error err = jv_unmarshal_decode(&d, out, &d.opts, true);
+    if (BURROW_FAILED(err) &&
+        jsonflags_get(&d.opts, JSONFLAG_REPORT_ERRORS_WITH_LEGACY_SEMANTICS))
+        err = burrow__json_transform_unmarshal_error(out, err);
     burrow__jsontext_decoder_release(&d);
     return err;
 }
@@ -1083,6 +1099,9 @@ static Error jv_unmarshal_decode_opts(Alloc *a, JsontextDecoder *in, Any out,
         }
     }
     err = jv_unmarshal_decode(in, out, &in->opts, false);
+    if (BURROW_FAILED(err) &&
+        jsonflags_get(&in->opts, JSONFLAG_REPORT_ERRORS_WITH_LEGACY_SEMANTICS))
+        err = burrow__json_transform_unmarshal_error(out, err);
 done:
     if (has)
         in->opts = orig;

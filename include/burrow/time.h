@@ -22,6 +22,8 @@
 #ifndef BURROW_TIME_H
 #define BURROW_TIME_H
 
+#include "burrow/core.h"
+#include "burrow/error.h"
 #include "burrow/func.h"
 #include "burrow/mem.h"
 #include "burrow/own.h"
@@ -60,6 +62,29 @@ typedef int64_t Duration;
 #define TIME_SECOND (1000 * TIME_MILLISECOND)
 #define TIME_MINUTE (60 * TIME_SECOND)
 #define TIME_HOUR (60 * TIME_MINUTE)
+
+/* time.ParseDuration. A duration string is an optional sign and then one or
+ * more numbers, each with an optional fraction and a unit, such as "300ms",
+ * "-1.5h" or "2h45m". The units are "ns", "us" (or "µs"), "ms", "s", "m" and
+ * "h". A bare "0" is fine without a unit.
+ *
+ *     Duration d = time_parse_duration(BURROW_S("1h15m30.918273645s"), &err);
+ *
+ * On failure it returns 0 and sets *err to an error whose text is Go's, such
+ * as time: invalid duration "1d". The error lives in the calling goroutine's
+ * error arena. err may be NULL. */
+Duration time_parse_duration(Str s, Error *err);
+
+/* time.Duration.String. The shortest form that reads back to the same value,
+ * such as "72h3m0.5s". Anything under a second uses a smaller unit, so 1.5ms
+ * comes out as "1.5ms", and zero is "0s". The longest result is 25 bytes. */
+BURROW_OWNS(ret) Str duration_string(Duration d, Alloc *a);
+
+/* The same text written into buf, which needs room for
+ * DURATION_STRING_MAX bytes. Returns the length, and allocates
+ * nothing. */
+enum { DURATION_STRING_MAX = 32 };
+Int duration_format(Duration d, Byte *buf);
 
 /* Nanoseconds on a clock that only goes forwards, measured from an arbitrary
  * point that means nothing on its own.

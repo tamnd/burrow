@@ -180,3 +180,8 @@ encoding/gob: method (*Decoder) DecodeValue: takes an Any, which holds the type 
 # put its message somewhere, so it takes the allocator, as NumError's does. An
 # error from time_parse already carries its text.
 time: method (*ParseError) Error: takes the allocator the message is built in
+
+# include/burrow/time.h: arming a timer that has already fired can need the P's
+# heap to grow, and that can fail here where Go would panic, so the return
+# value says whether it worked and Go's answer comes back through a pointer.
+time: method (*Timer) Reset: the result says whether the timer is armed, and Go's pending answer comes back through a pointer

@@ -334,6 +334,24 @@ typedef struct SelectCase {
  * reading an allocation profile rather than as something to design around. */
 Int chan_select(SelectCase *cases, Int n);
 
+/* For package time and nothing else. A timer channel is an ordinary buffered
+ * channel of one with three differences, and these are them.
+ *
+ * burrow__chan_set_timer marks c as a timer's channel, so that chan_len and
+ * chan_cap say zero, and gives chan_free something to call first. `release` may
+ * be NULL. Call it before anybody else can see the channel.
+ *
+ * burrow__chan_timer_send is the send a firing timer does. It never blocks and
+ * answers whether the value went anywhere. A ticker nobody is reading drops its
+ * ticks this way, as Go's does.
+ *
+ * burrow__chan_timer_drain throws away whatever is buffered and answers whether
+ * there was anything, which is how Stop and Reset make sure a receive after
+ * them never sees a value from before them. */
+void burrow__chan_set_timer(Chan *c, void (*release)(void *arg), void *arg);
+bool burrow__chan_timer_send(Chan *c, const void *v);
+bool burrow__chan_timer_drain(Chan *c);
+
 #ifdef __cplusplus
 }
 #endif

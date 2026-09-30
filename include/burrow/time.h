@@ -2,8 +2,8 @@
  *
  * Go's time package: Duration and its constants, the Time type with its wall
  * clock and its monotonic reading, the calendar, locations and the zoneinfo
- * database, time.Sleep, and time.AfterFunc with the Stop and Reset that go
- * with it, and Format and Parse. The channel timers are not here yet.
+ * database, Format and Parse, time.Sleep, and the timers: AfterFunc, NewTimer,
+ * After, NewTicker and Tick, with the Stop and Reset that go with them.
  *
  * A goroutine that sleeps here costs a timer and no thread. The thread it was
  * running on goes and finds other work, and one of the scheduler's threads wakes
@@ -22,6 +22,7 @@
 #ifndef BURROW_TIME_H
 #define BURROW_TIME_H
 
+#include "burrow/chan.h"
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/func.h"
@@ -552,9 +553,10 @@ void time_sleep(Duration d);
  * mapping with exceptions in it, which costs more than the stutter does.
  *
  * Opaque, because the only thing the Go type has that you can reach is its
- * channel, and there are no channels yet. When there are, the channel arrives
- * as an accessor rather than a field, and nothing written against this header
- * has to change. */
+ * channel, and that is time_timer_c. One type covers both kinds Go has: the
+ * one from time_after_func, which runs a function and has no channel, and the
+ * one from time_new_timer, which sends on its channel. Stop, Reset and free
+ * work on either. */
 typedef struct TimeTimer TimeTimer;
 
 /* Runs f in its own goroutine once d has gone by, and hands back the timer so
@@ -609,7 +611,15 @@ bool time_timer_stop(TimeTimer *t);
  * Go's advice about Reset applies here unchanged: resetting a timer whose
  * callback is already running does not unrun it, and a program that needs to
  * know which of the two happened needs to say so itself, with a flag under a
- * lock the callback takes as well. */
+ * lock the callback takes as well.
+ *
+ * On a timer from time_new_timer, Stop and Reset keep Go 1.23's promise: once
+ * the call has returned, a receive on the channel only ever sees a value from
+ * after it. A value that was already sitting in the channel is thrown away,
+ * and a firing that was on its way is called off, and either one counts as the
+ * timer having been pending. So the drain dance older Go code does,
+ * `if !t.Stop() { <-t.C }`, is not needed, and it is harmless if it is there
+ * with a non-blocking receive. */
 bool time_timer_reset(TimeTimer *t, Duration d, bool *pending);
 
 /* Hands the timer's memory back to the allocator it came from, and leaves the
@@ -629,8 +639,86 @@ bool time_timer_reset(TimeTimer *t, Duration d, bool *pending);
  * its own goroutine and does not touch the timer, but it is on its own for
  * anything else that goroutine is holding.
  *
+ * A timer from time_new_timer takes its channel with it, and no goroutine may
+ * still be blocked on that channel, for the same reason as in chan_free.
+ *
  * NULL is fine and does nothing. */
 void time_timer_free(TimeTimer *t);
+
+/* A timer that sends the time on its channel once d has gone by. Go's
+ * time.NewTimer.
+ *
+ *     TimeTimer *t = time_new_timer(a, 2 * TIME_SECOND);
+ *     Time fired;
+ *     chan_recv(time_timer_c(t), &fired);
+ *     time_timer_free(t);
+ *
+ * The channel carries Time values and is made from a along with the timer. It
+ * reports a length and a capacity of zero, like Go 1.23's, though underneath it
+ * has room for one value so that the timer never waits to send. A select with
+ * a case on it is the usual way to put a deadline on something else.
+ *
+ * NULL means the allocator or the timer heap would not give out memory. Has to
+ * be called from a goroutine, for the reason in time_after_func. */
+BURROW_OWNS(ret) TimeTimer *time_new_timer(Alloc *a, Duration d);
+
+/* The timer's channel, Go's t.C. NULL for a timer from time_after_func, which
+ * has none, as in Go. The timer owns it, so it goes when the timer does. */
+BURROW_BORROWS(ret, t) Chan *time_timer_c(const TimeTimer *t);
+
+/* A channel that receives the time once d has gone by. Go's time.After, which
+ * is time_new_timer with only the channel handed back. The name has chan in
+ * it because time_after is Go's Time.After, the comparison.
+ *
+ * Go lets the collector have the timer once nobody can reach the channel.
+ * There is no collector here, so the channel is the handle for both:
+ * chan_free on it also stops the timer and frees it. Nothing needs doing with
+ * an arena, which frees everything at once anyway. NULL means out of memory. */
+BURROW_OWNS(ret) Chan *time_after_chan(Alloc *a, Duration d);
+
+/* A ticker, which sends the time on its channel every d. Go's time.Ticker.
+ *
+ * Its own type because Go's is, with the same four things to do to it:
+ * read the channel, stop it, reset it to a new period, and here, free it. */
+typedef struct TimeTicker TimeTicker;
+
+/* Starts a ticker with a period of d. Go's time.NewTicker.
+ *
+ * Ticks that nobody reads are dropped rather than queued, and a ticker that
+ * falls behind skips the ticks it missed rather than sending them all at once
+ * when it catches up. Each value is the time the tick was due, not the time it
+ * was sent. All of that is Go's.
+ *
+ * A d of zero or less panics with Go's message, "non-positive interval for
+ * NewTicker". NULL means out of memory. Has to be called from a goroutine. */
+BURROW_OWNS(ret) TimeTicker *time_new_ticker(Alloc *a, Duration d);
+
+/* The ticker's channel, Go's t.C. */
+BURROW_BORROWS(ret, t) Chan *time_ticker_c(const TimeTicker *t);
+
+/* Stops the ticker. No more ticks are sent, and one that was waiting in the
+ * channel is thrown away. The channel is not closed, as in Go, so a goroutine
+ * blocked on it stays blocked. NULL does nothing. */
+void time_ticker_stop(TimeTicker *t);
+
+/* Stops the ticker and starts it again with a period of d, with the first tick
+ * d from now. Go's Ticker.Reset. Answers false only when the timer heap would
+ * not grow, and then the ticker is stopped.
+ *
+ * A d of zero or less panics, "non-positive interval for Ticker.Reset", and so
+ * does a NULL ticker, with Go's message for a Ticker that was never made. */
+bool time_ticker_reset(TimeTicker *t, Duration d);
+
+/* Stops the ticker and gives it and its channel back to the allocator. NULL is
+ * fine and does nothing. */
+void time_ticker_free(TimeTicker *t);
+
+/* A channel that ticks every d, for the loop that runs until the program ends.
+ * Go's time.Tick, which is time_new_ticker with only the channel handed back.
+ *
+ * NULL for a d of zero or less, which is Go's answer too, and for out of
+ * memory. chan_free on the channel stops the ticker and frees it. */
+BURROW_OWNS(ret) Chan *time_tick(Alloc *a, Duration d);
 
 #ifdef __cplusplus
 }

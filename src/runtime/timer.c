@@ -41,6 +41,7 @@
 #include "burrow/mem/heap.h"
 #include "burrow/platform.h"
 #include "burrow/runtime.h"
+#include "burrow/thread.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -498,6 +499,11 @@ void burrow__timer_init(burrow__Timer *t, burrow__TimerFn f, void *arg) {
     t->arg = arg;
 }
 
+void burrow__timer_init_chan(burrow__Timer *t, burrow__TimerFn f, void *arg) {
+    burrow__timer_init(t, f, arg);
+    t->is_chan = true;
+}
+
 /* Whether this timer wants to be in a heap and is not. The timer's lock is
  * held. */
 static bool needs_add(burrow__Timer *t) {
@@ -555,8 +561,21 @@ bool burrow__timer_stop(burrow__Timer *t) {
 
     bool pending = t->when > 0;
     t->when = 0;
+    if (t->is_chan) {
+        /* Any run that has been picked and has not sent yet now never will,
+         * so a one-shot one of those is a timer this stop caught in time. */
+        t->seq++;
+        if (t->period == 0 && burrow__atomic_load_u32(&t->is_sending) > 0)
+            pending = true;
+    }
     timer_unlock(t);
     return pending;
+}
+
+/* Waits out a run of this timer that has already let go of the locks. */
+static void wait_running(burrow__Timer *t) {
+    while (burrow__atomic_load_acquire_u32(&t->running) != 0)
+        burrow__thread_yield();
 }
 
 void burrow__timer_drop(burrow__Timer *t) {
@@ -569,7 +588,10 @@ void burrow__timer_drop(burrow__Timer *t) {
             t->when = 0;
             t->period = 0;
             t->ts = NULL;
+            if (t->is_chan)
+                t->seq++;
             timer_unlock(t);
+            wait_running(t);
             return;
         }
 
@@ -604,10 +626,13 @@ void burrow__timer_drop(burrow__Timer *t) {
         t->state = 0;
         t->when = 0;
         t->period = 0;
+        if (t->is_chan)
+            t->seq++;
 
         delete_at(ts, at);
         timer_unlock(t);
         timers_unlock(ts);
+        wait_running(t);
         return;
     }
 }
@@ -624,6 +649,13 @@ bool burrow__timer_reset_on(burrow__Timers *ts, burrow__Timer *t, int64_t when,
 
     bool was_pending = t->when > 0;
     bool wake = false;
+    if (t->is_chan) {
+        /* The same as in a stop: a send that was on its way is now stale. The
+         * period that counts is the one it was picked under. */
+        t->seq++;
+        if (t->period == 0 && burrow__atomic_load_u32(&t->is_sending) > 0)
+            was_pending = true;
+    }
     t->when = when;
     t->period = period;
     if (f != NULL) {
@@ -697,6 +729,15 @@ static void unlock_and_run(burrow__Timer *t, int64_t now) {
     void *arg = t->arg;
     int64_t delay = now - t->when;
     int64_t next = 0;
+    bool is_chan = t->is_chan;
+    bool once = t->period == 0;
+    uint32_t seq = t->seq;
+
+    /* Both taken while mu is still held, so that a stop or a drop that comes
+     * after the unlock sees them. */
+    burrow__atomic_add_u32(&t->running, 1);
+    if (is_chan && once)
+        burrow__atomic_add_u32(&t->is_sending, 1);
 
     if (t->period > 0) {
         /* Stays in the heap with the next firing worked out from when it was
@@ -723,8 +764,26 @@ static void unlock_and_run(burrow__Timer *t, int64_t now) {
     timer_unlock(t);
     timers_unlock(ts);
 
+    if (is_chan) {
+        /* A stop or a reset may have happened since the unlock above. Both
+         * bump seq with the send lock held, so once the lock is ours a seq that
+         * still matches means nothing has, and nothing can until the send is
+         * done. Go's unlockAndRun does the same dance. */
+        burrow__lock(&t->send_lock);
+        if (once)
+            burrow__atomic_add_u32(&t->is_sending, 0U - 1U);
+        if (t->seq != seq)
+            f = NULL;
+    }
+
     if (f != NULL)
         f(arg, delay);
+
+    if (is_chan)
+        burrow__unlock(&t->send_lock);
+
+    /* The last touch. After this the timer may be freed under us. */
+    burrow__atomic_add_u32(&t->running, 0U - 1U);
 
     timers_lock(ts);
 }

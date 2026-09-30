@@ -1097,6 +1097,11 @@ def doc_check(root, sync):
         with open(md) as f:
             lines = f.read().split("\n")
         changed = False
+        # A marker with no fence under it shows nothing and sync cannot fill
+        # it, so the guide ships a heading with no code under it.
+        for n, l in enumerate(lines):
+            if DOC_MARK.match(l) and (n + 1 == len(lines) or not DOC_FENCE.match(lines[n + 1])):
+                problems.append("%s:%d: an example comment with no ``` block under it" % (rel, n + 1))
         # Walk backwards so a rewrite does not move the blocks still to come.
         for b in reversed(doc_blocks(rel, lines)):
             if b.lang == "c" and b.info:

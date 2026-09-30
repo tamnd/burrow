@@ -197,6 +197,63 @@ What it does not do is wait for a callback that is already running, for the reas
 
 An arena user can skip all of this. `arena_free` takes the whole region at once and the timers in it go with everything else. [guides/allocators.md](allocators.md) has the rest.
 
+## Timers with a channel
+
+<!-- example: ../examples/time/channels.c#deadline -->
+```c
+TimeTimer *t = time_new_timer(a, 2 * TIME_SECOND);
+Int v;
+Time fired;
+SelectCase cases[] = {BURROW_RECV(answer, &v),
+                      BURROW_RECV(time_timer_c(t), &fired)};
+if (chan_select(cases, 2) == 1)
+    print_time("gave up at", fired);
+time_timer_free(t);
+```
+
+`time_new_timer` is `time.NewTimer`. It sends the time on its channel once, when the duration is up, and `time_timer_c` is its `C`. The value is a `Time` and it is the time the timer was due, not the time somebody got round to sending it. A select with a case on it is the usual way to put a deadline on something else.
+
+The channel behaves like Go 1.23's. It reports a length and a capacity of zero, and once `time_timer_stop` or `time_timer_reset` has returned, a receive never sees a value from before the call. A value that was already sitting in the channel is thrown away and counts as the timer having been pending, and a firing that was already on its way on another thread is called off. So the old drain dance, `if !t.Stop() { <-t.C }`, is not needed.
+
+<!-- example: ../examples/time/channels.c#stop -->
+```c
+TimeTimer *t = time_new_timer(a, TIME_SECOND);
+time_sleep(2 * TIME_SECOND);
+
+// It fired a second ago and nobody read the value. Stop throws it away and
+// says the timer was stopped in time.
+bool stopped = time_timer_stop(t);
+Time left;
+bool got = chan_try_recv(time_timer_c(t), &left, NULL);
+```
+
+`time_timer_free` takes the channel with it, so no goroutine may still be waiting on it.
+
+<!-- example: ../examples/time/channels.c#ticker -->
+```c
+TimeTicker *tk = time_new_ticker(a, TIME_SECOND);
+for (int i = 0; i < 3; i++) {
+    Time tick;
+    chan_recv(time_ticker_c(tk), &tick);
+    print_time("tick", tick);
+}
+time_ticker_free(tk);
+```
+
+`time_new_ticker` is `time.NewTicker`. A tick nobody has read yet stays in the channel, and the ones that come due while it is sitting there are dropped rather than queued. A ticker that falls behind skips what it missed and stays on its original schedule. `time_ticker_stop` stops it without closing the channel, `time_ticker_reset` starts it again with a new period, and `time_ticker_free` gives it back. A period of zero or less panics with Go's message.
+
+<!-- example: ../examples/time/channels.c#after -->
+```c
+Time fired;
+Chan *c = time_after_chan(a, TIME_MINUTE);
+chan_recv(c, &fired);
+chan_free(c);
+```
+
+`time_after_chan` and `time_tick` are `time.After` and `time.Tick`, which hand back only the channel. Go lets the collector have the timer once the channel is unreachable. Here the channel is the handle for both, so `chan_free` on it stops the timer and frees it too. The name has `chan` in it because `time_after` is `Time.After`, the comparison.
+
+All of these have to be called from a goroutine, like `time_after_func`, and answer `NULL` when out of memory.
+
 ## Fake time
 
 Inside a [synctest](synctest.md) bubble, everything on this page runs on the bubble's clock rather than the machine's.
@@ -230,6 +287,13 @@ A thread with nothing to run reads two published words per P to work out how lon
 ## Formatting and parsing
 
 <!-- example: ../examples/time/format.c#format -->
+```c
+TimeLocation *ist = time_fixed_zone(a, BURROW_S("IST"), 5 * 60 * 60 + 30 * 60);
+Time t = time_date(2009, TIME_NOVEMBER, 10, 23, 4, 5, 123456789, time_utc_loc);
+Str rfc = time_format(t, a, TIME_RFC3339);
+Str there = time_format(time_in(t, ist), a, TIME_RFC1123);
+Str own = time_format(t, a, BURROW_S("Mon Jan _2 3:04PM, .000 seconds"));
+```
 
 A layout is Go's: the reference time, Mon Jan 2 15:04:05 MST 2006, written the way the output should look. Every number in it is different on purpose, 1 for the month, 2 for the day, 3 or 15 for the hour, 4 for the minute, 5 for the second, 6 or 2006 for the year and -7 for the zone, so a layout reads as a sample of its own output. The pieces are these:
 
@@ -253,26 +317,36 @@ Anything else is copied as it is. `TIME_RFC3339`, `TIME_RFC1123`, `TIME_KITCHEN`
 `time_format` returns memory from the allocator you pass, and `time_append_format` appends to a byte slice the way Go's `AppendFormat` does. Both write into a buffer on the stack first, so a result of up to 128 bytes costs one allocation.
 
 <!-- example: ../examples/time/format.c#parse -->
+```c
+Error err = BURROW_NO_ERROR;
+Time p = time_parse(a, TIME_RFC3339, BURROW_S("2006-01-02T15:04:05+07:00"), &err);
+Int off = 0;
+(void)time_zone(p, &off);
+```
 
 `time_parse` reads a value laid out the way the layout says. Parts it leaves out are zero, or 1 for the month and day, and a value with no zone in it is UTC. `time_parse_in_location` is `ParseInLocation`: a value with no zone is in the location you give, and a zone offset or name is matched against that location instead of Local.
 
 A zone offset that Local has at that instant gives back Local. Any other offset gives a fixed zone with no name, which comes from the allocator you pass and lives as long as it does. A whole hour offset comes from a table and allocates nothing. A zone name alone, such as `PST` with no offset next to it, only means something when Local has a zone of that name at the time. Otherwise Go records the name with an offset of zero, and so does this, so parse names only with a layout that carries an offset too.
 
 <!-- example: ../examples/time/format.c#parse-error -->
+```c
+(void)time_parse(a, TIME_DATE_ONLY, BURROW_S("2024-02-30"), &err);
+```
 
 The error is a `TimeParseError` with Go's five fields, and `errors_as` with `TYPE_TIME_PARSE_ERROR` finds it. Its text is Go's to the byte, which matters when something upstream compares it. Errors live in the goroutine's error arena, like every other error here, so a loop that parses many values and throws the errors away should take an `error_mark` and release it.
 
 <!-- example: ../examples/time/format.c#json -->
+```c
+Slice j = time_marshal_json(t, a, &err);
+Time back = {0, 0, NULL};
+err = time_unmarshal_json(&back, a, j);
+```
 
 The text and JSON encodings are RFC 3339 with as many fraction digits as the time needs. A year outside 0 to 9999 or an offset of 24 hours or more is an error, since RFC 3339 cannot write them. An offset that is not a whole minute loses its seconds, in Go as here. `Time` has a descriptor, `TYPE_TIME`, with these as its methods, so `json_marshal` and `fmt` handle a `Time` without being told.
 
 ## What Go has that this does not, yet
 
-`time.After`, `time.Tick`, `time.NewTimer` and `time.NewTicker` all hand back a channel. Channels are in `burrow/chan.h` now, and these four are the next thing to build on them. When they arrive, `TimeTimer` grows an accessor for its channel rather than changing shape, so nothing written against this header has to be rewritten.
-
-Repeating timers are in the runtime underneath already, since `burrow__timer_reset` takes a period. Nothing up here uses it until `Ticker` exists.
-
-After those comes the copy of the timezone database that Go can embed, and the Windows registry lookup for Local.
+The copy of the timezone database that Go can embed, and the Windows registry lookup for Local.
 
 ## See also
 

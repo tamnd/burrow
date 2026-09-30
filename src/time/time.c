@@ -11,10 +11,12 @@
 
 #include "burrow/time.h"
 
+#include "burrow/chan.h"
 #include "burrow/clock.h"
 #include "burrow/core.h"
 #include "burrow/mem.h"
 #include "burrow/note.h"
+#include "burrow/panic.h"
 #include "burrow/proc.h"
 #include "burrow/runtime.h"
 #include "burrow/sched.h"
@@ -216,11 +218,27 @@ void time_sleep(Duration d) {
 struct TimeTimer {
     burrow__Timer t;
 
-    /* What to run, and where the memory came from. The allocator is kept for the
-     * same reason Map keeps one: this is an opaque type, so nothing outside this
-     * file can name the pointer or the size to hand back. */
+    /* What to run, for an AfterFunc timer, and where the memory came from. The
+     * allocator is kept for the same reason Map keeps one: this is an opaque
+     * type, so nothing outside this file can name the pointer or the size to
+     * hand back. */
     Func f;
     Alloc *a;
+
+    /* The channel, for every kind of timer but AfterFunc, which has none, the
+     * same as Go's. */
+    Chan *c;
+
+    /* Whether this is the inside of a TimeTicker, which is only about how big
+     * the block is when it goes back. */
+    bool ticker;
+};
+
+/* A ticker is a timer with a period. Go spells it as a separate type with the
+ * same layout and converts between the two with unsafe.Pointer, and this is the
+ * C way of saying the same thing. */
+struct TimeTicker {
+    TimeTimer timer;
 };
 
 /* What the runtime calls when an AfterFunc timer is due.
@@ -252,6 +270,7 @@ TimeTimer *time_after_func(Alloc *a, Duration d, Func f) {
     if (tt == NULL)
         return NULL;
 
+    *tt = (TimeTimer){0};
     tt->f = f;
     tt->a = a;
     burrow__timer_init(&tt->t, run_after, tt);
@@ -263,11 +282,178 @@ TimeTimer *time_after_func(Alloc *a, Duration d, Func f) {
     return tt;
 }
 
+/* ------------------------------------------------------------ channel timers */
+
+/* What the runtime calls when a channel timer is due. Go's sendTime.
+ *
+ * The value is when the timer was due and not when somebody got round to it,
+ * which only differs for a ticker that fell behind. The send never waits: a
+ * timer's channel has room for one value and a ticker whose last tick nobody
+ * has read yet drops this one, which is Go's rule too. */
+static void send_time(void *arg, int64_t delay) {
+    TimeTimer *tt = (TimeTimer *)arg;
+    Time now = time_add(time_now(), (Duration)-delay);
+
+    (void)burrow__chan_timer_send(tt->c, &now);
+}
+
+static void free_timer_block(TimeTimer *tt) {
+    if (tt->ticker)
+        mem_free(tt->a, (TimeTicker *)tt, sizeof(TimeTicker), _Alignof(TimeTicker));
+    else
+        mem_free(tt->a, tt, sizeof(TimeTimer), _Alignof(TimeTimer));
+}
+
+/* What chan_free calls on a channel from time_after_chan or time_tick, since the
+ * channel is the only handle the program was given. The channel itself is
+ * chan_free's to give back. */
+static void release_by_chan(void *arg) {
+    TimeTimer *tt = (TimeTimer *)arg;
+
+    burrow__timer_drop(&tt->t);
+    free_timer_block(tt);
+}
+
+/* What every constructor checks first. Takes the two messages whole rather
+ * than a name to build them from, because a throw is the wrong moment to be
+ * allocating. */
+static void check_new(Alloc *a, Str no_alloc, Str off_goroutine) {
+    if (a == NULL)
+        runtime_throw(no_alloc);
+    if (burrow__timers_local() == NULL)
+        runtime_throw(off_goroutine);
+}
+
+/* The one constructor behind the four public ones. `by_chan` says the program
+ * only ever sees the channel, which is After and Tick. */
+static TimeTimer *new_chan_timer(Alloc *a, Duration d, Duration period, bool ticker,
+                                 bool by_chan) {
+    TimeTimer *tt;
+    if (ticker) {
+        TimeTicker *tk = BURROW_NEW(a, TimeTicker);
+        tt = tk != NULL ? &tk->timer : NULL;
+    } else {
+        tt = BURROW_NEW(a, TimeTimer);
+    }
+    if (tt == NULL)
+        return NULL;
+    *tt = (TimeTimer){0};
+    tt->a = a;
+    tt->ticker = ticker;
+
+    Chan *c = chan_make(a, TYPE_TIME, 1);
+    if (c == NULL) {
+        free_timer_block(tt);
+        return NULL;
+    }
+    burrow__chan_set_timer(c, by_chan ? release_by_chan : NULL, tt);
+    tt->c = c;
+    burrow__timer_init_chan(&tt->t, send_time, tt);
+
+    burrow__lock(&tt->t.send_lock);
+    bool ok = burrow__timer_reset(&tt->t, deadline(d), period, NULL, NULL, NULL);
+    burrow__unlock(&tt->t.send_lock);
+    if (!ok) {
+        burrow__chan_set_timer(c, NULL, NULL);
+        chan_free(c);
+        free_timer_block(tt);
+        return NULL;
+    }
+    return tt;
+}
+
+TimeTimer *time_new_timer(Alloc *a, Duration d) {
+    check_new(a, BURROW_S("time_new_timer: no allocator"),
+              BURROW_S("time_new_timer: not on a goroutine"));
+    return new_chan_timer(a, d, 0, false, false);
+}
+
+Chan *time_timer_c(const TimeTimer *t) {
+    if (t == NULL)
+        runtime_throw(BURROW_S("time_timer_c: nil timer"));
+
+    return t->c;
+}
+
+Chan *time_after_chan(Alloc *a, Duration d) {
+    check_new(a, BURROW_S("time_after_chan: no allocator"),
+              BURROW_S("time_after_chan: not on a goroutine"));
+    TimeTimer *tt = new_chan_timer(a, d, 0, false, true);
+
+    return tt != NULL ? tt->c : NULL;
+}
+
+TimeTicker *time_new_ticker(Alloc *a, Duration d) {
+    if (d <= 0)
+        panic_str(BURROW_S("non-positive interval for NewTicker"));
+
+    check_new(a, BURROW_S("time_new_ticker: no allocator"),
+              BURROW_S("time_new_ticker: not on a goroutine"));
+    TimeTimer *tt = new_chan_timer(a, d, d, true, false);
+    return tt != NULL ? (TimeTicker *)tt : NULL;
+}
+
+Chan *time_ticker_c(const TimeTicker *t) {
+    if (t == NULL)
+        runtime_throw(BURROW_S("time_ticker_c: nil ticker"));
+
+    return t->timer.c;
+}
+
+Chan *time_tick(Alloc *a, Duration d) {
+    if (d <= 0)
+        return NULL;
+
+    check_new(a, BURROW_S("time_tick: no allocator"),
+              BURROW_S("time_tick: not on a goroutine"));
+    TimeTimer *tt = new_chan_timer(a, d, d, true, true);
+    return tt != NULL ? tt->c : NULL;
+}
+
+/* Stop and Reset for every kind of timer, which is what Go's stopTimer and
+ * resetTimer are. A channel timer takes its send lock around the runtime's
+ * part and then empties the channel, and that pair is the whole of the Go 1.23
+ * promise that no value from before the call is received after it. */
+static bool stop_timer(TimeTimer *tt) {
+    if (tt->c == NULL)
+        return burrow__timer_stop(&tt->t);
+
+    burrow__lock(&tt->t.send_lock);
+    bool pending = burrow__timer_stop(&tt->t);
+    burrow__unlock(&tt->t.send_lock);
+
+    /* After the unlock, because the timer is disarmed and nothing can send on
+     * the channel until somebody arms it again. */
+    if (burrow__chan_timer_drain(tt->c))
+        pending = true;
+    return pending;
+}
+
+static bool reset_timer(TimeTimer *tt, Duration d, Duration period, bool *pending) {
+    if (tt->c == NULL)
+        return burrow__timer_reset(&tt->t, deadline(d), period, NULL, NULL, pending);
+
+    bool was = false;
+    burrow__lock(&tt->t.send_lock);
+    bool ok = burrow__timer_reset(&tt->t, deadline(d), period, NULL, NULL, &was);
+
+    /* Before the unlock this time. The timer is armed again and may already be
+     * due, and a send for the new time has to wait for the lock, so what the
+     * drain finds is only ever the old value. */
+    if (burrow__chan_timer_drain(tt->c))
+        was = true;
+    burrow__unlock(&tt->t.send_lock);
+
+    if (pending != NULL)
+        *pending = was;
+    return ok;
+}
+
 bool time_timer_stop(TimeTimer *t) {
     if (t == NULL)
         runtime_throw(BURROW_S("time_timer_stop: nil timer"));
 
-    return burrow__timer_stop(&t->t);
+    return stop_timer(t);
 }
 
 bool time_timer_reset(TimeTimer *t, Duration d, bool *pending) {
@@ -276,15 +462,44 @@ bool time_timer_reset(TimeTimer *t, Duration d, bool *pending) {
     if (burrow__timers_local() == NULL)
         runtime_throw(BURROW_S("time_timer_reset: not on a goroutine"));
 
-    return burrow__timer_reset(&t->t, deadline(d), 0, NULL, NULL, pending);
+    return reset_timer(t, d, 0, pending);
+}
+
+void time_ticker_stop(TimeTicker *t) {
+    if (t == NULL)
+        return;
+
+    (void)stop_timer(&t->timer);
+}
+
+bool time_ticker_reset(TimeTicker *t, Duration d) {
+    if (d <= 0)
+        panic_str(BURROW_S("non-positive interval for Ticker.Reset"));
+    if (t == NULL)
+        panic_str(BURROW_S("time: Reset called on uninitialized Ticker"));
+    if (burrow__timers_local() == NULL)
+        runtime_throw(BURROW_S("time_ticker_reset: not on a goroutine"));
+
+    return reset_timer(&t->timer, d, d, NULL);
 }
 
 void time_timer_free(TimeTimer *t) {
     if (t == NULL)
         return;
 
-    Alloc *a = t->a;
-
+    /* The timer first, because the drop waits for a send that is already on
+     * its way, and that send is about to use the channel. */
     burrow__timer_drop(&t->t);
-    mem_free(a, t, sizeof(TimeTimer), _Alignof(TimeTimer));
+    if (t->c != NULL) {
+        burrow__chan_set_timer(t->c, NULL, NULL);
+        chan_free(t->c);
+    }
+    free_timer_block(t);
+}
+
+void time_ticker_free(TimeTicker *t) {
+    if (t == NULL)
+        return;
+
+    time_timer_free(&t->timer);
 }

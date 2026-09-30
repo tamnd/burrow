@@ -30,11 +30,10 @@
  * the machine's, and `fake` below is the one thing that set does differently.
  * burrow/synctest.h is what that is for.
  *
- * What Go has here that this does not, yet. Timer channels, which need channels,
- * and the sequence numbers that go with them. And the netpoller wakeup, which is
- * how Go tells a sleeping thread that its deadline moved. A thread with nothing
- * to do here is asleep on its own note with a deadline on it, and
- * burrow__timers_wake below is what cuts that short.
+ * Timer channels get Go 1.23's seq and send lock, below. What Go has that this
+ * does not, yet, is the netpoller wakeup, which is how Go tells a sleeping
+ * thread that its deadline moved. A thread with nothing to do here is asleep on
+ * its own note with a deadline on it, and burrow__timers_wake cuts that short.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -118,6 +117,33 @@ struct burrow__Timer {
     /* The heap this is in, or NULL. Borrowed: a P owns its own timer set. Under
      * mu, and only meaningful while HEAPED is set. */
     BURROW_BORROWS(1) burrow__Timers *ts;
+
+    /* How many runs of this timer have let go of the locks and not finished
+     * yet. Atomic. burrow__timer_drop waits for it to reach zero, because the
+     * memory under a timer is about to be given back and a run in flight still
+     * reads `f`, `arg` and the send lock. Go has no need for it, since its
+     * collector will not free a timer anybody is still looking at. */
+    uint32_t running;
+
+    /* The rest is for timers whose function sends on a channel, and is left
+     * alone on every other kind. */
+
+    /* Set by burrow__timer_init_chan and never changed. */
+    bool is_chan;
+
+    /* Bumped by every stop and reset. A run notes it under mu and sends only if
+     * it has not moved by the time the send lock is taken. Written with both mu
+     * and send_lock held, so either one is enough to read it. */
+    uint32_t seq;
+
+    /* How many one-shot runs have been picked but have not taken the send lock
+     * yet. Atomic. A stop that sees one counts the timer as still pending,
+     * because the seq bump means that value is never going to be sent. */
+    uint32_t is_sending;
+
+    /* Held across the send, and by the caller around a stop or a reset of a
+     * channel timer. It comes before mu and before the set's lock. */
+    burrow__Lock send_lock;
 };
 
 /* A timer and a copy of its `when`, which is what the heap is made of.
@@ -189,6 +215,16 @@ struct burrow__Timers {
  * supplied later by burrow__timer_reset. */
 void burrow__timer_init(burrow__Timer *t, burrow__TimerFn f, void *arg);
 
+/* The same, for a timer whose function sends on a channel.
+ *
+ * Such a timer has one extra rule for its callers. burrow__timer_stop and
+ * burrow__timer_reset on it have to be called with t->send_lock held, and the
+ * caller drains the channel before letting go of it. The runtime does not know
+ * which channel it is, and holding the lock across the drain is what stops a
+ * value the reset has just made due from being thrown away with the stale
+ * one. */
+void burrow__timer_init_chan(burrow__Timer *t, burrow__TimerFn f, void *arg);
+
 /* Arms a timer, or moves one that is already armed.
  *
  * `when` is a burrow__nanotime reading and has to be positive. `period` is zero
@@ -197,7 +233,9 @@ void burrow__timer_init(burrow__Timer *t, burrow__TimerFn f, void *arg);
  * which case both are left alone.
  *
  * `pending`, when it is not NULL, is set to whether the timer was armed and had
- * not yet fired, which is what time.Timer.Reset reports.
+ * not yet fired, which is what time.Timer.Reset reports. For a channel timer a
+ * one-shot run that had been picked but had not sent yet counts as not fired,
+ * because this call means it never will.
  *
  * Answers false only when the P's heap needed to grow and the allocator said no,
  * in which case the timer is not armed and will never fire. Go cannot fail here
@@ -237,6 +275,10 @@ bool burrow__timer_stop(burrow__Timer *t);
  * back index and paying for one on every sift would slow the hot path down to
  * make this rare call faster. A timer that has already fired, or that was never
  * armed, is not in a heap and costs nothing.
+ *
+ * Also waits for a run that has already started to finish, so that nothing is
+ * still reading the timer when this returns. That run is a few instructions of
+ * runtime code and never blocks, so the wait is a spin.
  *
  * The timer is left the way burrow__timer_init leaves one, so it can be armed
  * again rather than freed if that is what the caller wants. */

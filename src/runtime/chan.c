@@ -305,6 +305,20 @@ struct Chan {
      * bubble can only be reached from inside it, so a wait on one is a wait on
      * another goroutine in the bubble and nothing else. */
     burrow__Bubble *bubble;
+
+    /* Set for the channel that belongs to a time.Timer or a time.Ticker, which
+     * reports a length and a capacity of zero the way Go 1.23's does. It has a
+     * buffer of one underneath so that the timer can send without waiting, and
+     * package time drains that buffer on every Stop and Reset, so from the
+     * outside it behaves like an unbuffered channel. Set once, before the
+     * channel is handed out. */
+    bool timer;
+
+    /* What chan_free calls first, for the channel time_after_chan and time_tick hand
+     * out, which is the only handle a program has on the timer behind it. NULL
+     * everywhere else. */
+    void (*release)(void *arg);
+    void *release_arg;
 };
 
 /* Whether a wait on this channel is one a bubble should count as durable, and
@@ -607,6 +621,8 @@ void chan_free(Chan *c) {
     if (busy)
         runtime_throw(BURROW_S("chan_free: goroutines are still blocked on it"));
 
+    if (c->release != NULL)
+        c->release(c->release_arg);
     mem_free(c->a, c, c->alloc_size, c->alloc_align);
 }
 
@@ -1347,6 +1363,9 @@ Int chan_len(const Chan *c) {
     if (c == NULL)
         return 0;
 
+    if (c->timer)
+        return 0;
+
     /* Deliberately without the lock, because this is a snapshot either way and
      * a lock would only make it a snapshot that cost more. Go reads the field
      * unsynchronised here too. */
@@ -1354,7 +1373,7 @@ Int chan_len(const Chan *c) {
 }
 
 Int chan_cap(const Chan *c) {
-    if (c == NULL)
+    if (c == NULL || c->timer)
         return 0;
 
     return (Int)c->dataqsiz;
@@ -1365,4 +1384,47 @@ const Type *chan_elem(const Chan *c) {
         return NULL;
 
     return c->elem;
+}
+
+/* ------------------------------------------------------------ timer channels */
+
+void burrow__chan_set_timer(Chan *c, void (*release)(void *arg), void *arg) {
+    c->timer = true;
+    c->release = release;
+    c->release_arg = arg;
+}
+
+bool burrow__chan_timer_send(Chan *c, const void *v) {
+    /* No bubble check and no preemption point, because this runs from a timer,
+     * on the scheduler's stack or on a bubble's root goroutine, and neither is
+     * a goroutine using the channel in the sense those two are about. */
+    burrow__lock(&c->lock);
+
+    ChanWaiter *w = waitq_pop(&c->recvq);
+    if (w != NULL) {
+        give_to_receiver(c, w, v);
+        Parked *p = w->p;
+
+        burrow__unlock(&c->lock);
+        parked_wake(p);
+        return true;
+    }
+
+    bool sent = c->qcount < c->dataqsiz;
+    if (sent)
+        put_in_buffer(c, v);
+    burrow__unlock(&c->lock);
+    return sent;
+}
+
+bool burrow__chan_timer_drain(Chan *c) {
+    if (burrow__atomic_load_acquire_u32(&c->qcount) == 0)
+        return false;
+
+    burrow__lock(&c->lock);
+    bool any = c->qcount > 0;
+    while (c->qcount > 0)
+        take_from_buffer(c, NULL);
+    burrow__unlock(&c->lock);
+    return any;
 }

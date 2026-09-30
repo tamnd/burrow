@@ -266,5 +266,6 @@ global	src/time/calendar.c	tm_start_nano	clock	The wall clock reading of the pro
 global	src/time/zoneinfo.c	tz_utc_loc	time-zone-cache	Never written. It is not const only because a Time holds its location through a pointer that is not const.
 global	src/time/zoneinfo.c	tz_local_loc	time-zone-cache	Written once inside tz_local_once and only read after it, which is Go's localOnce.
 global	src/time/zoneinfo.c	tz_local_once	time-zone-cache	A SyncOnce over tz_local_loc.
+global	src/time/zoneinfo.c	tz_displaced_loc	time-zone-cache	Test only. burrow__time_force_local parks the replaced Local here so its zone data stays reachable.
 global	src/time/zoneinfo.c	tz_cache	time-zone-cache	The locations LoadLocation has read, as a list. Only touched under tz_cache_mu, and a location on it is never written or freed once it is there.
 global	src/time/zoneinfo.c	tz_cache_mu	time-zone-cache	The mutex over tz_cache.

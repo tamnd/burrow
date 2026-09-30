@@ -3,8 +3,7 @@
  * Go's time package: Duration and its constants, the Time type with its wall
  * clock and its monotonic reading, the calendar, locations and the zoneinfo
  * database, time.Sleep, and time.AfterFunc with the Stop and Reset that go
- * with it. Format and Parse are not here yet, and neither are the channel
- * timers.
+ * with it, and Format and Parse. The channel timers are not here yet.
  *
  * A goroutine that sleeps here costs a timer and no thread. The thread it was
  * running on goes and finds other work, and one of the scheduler's threads wakes
@@ -378,6 +377,113 @@ BURROW_OWNS(ret) Slice time_marshal_binary(Time t, Alloc *a, Error *err);
 BURROW_STATIC(ret) Error time_unmarshal_binary(Time *t, Alloc *a, Slice data);
 BURROW_OWNS(ret) Slice time_gob_encode(Time t, Alloc *a, Error *err);
 BURROW_STATIC(ret) Error time_gob_decode(Time *t, Alloc *a, Slice data);
+
+/* Layouts for time_format and time_parse, Go's constants of the same names.
+ *
+ * A layout is the reference time, Mon Jan 2 15:04:05 MST 2006, written the way
+ * the text should look: 01/02 03:04:05PM '06 -0700 in numbers. "Jan" becomes
+ * the month's short name, "2006" the four digit year, "15" the hour on a 24
+ * hour clock, ".000" three digits of fraction, "-07:00" the zone offset and
+ * "Z07:00" the same with Z for UTC. Anything that is not part of the reference
+ * time is copied as it is. The whole list is in the time guide. */
+#define TIME_LAYOUT BURROW_S("01/02 03:04:05PM '06 -0700")
+#define TIME_ANSIC BURROW_S("Mon Jan _2 15:04:05 2006")
+#define TIME_UNIX_DATE BURROW_S("Mon Jan _2 15:04:05 MST 2006")
+#define TIME_RUBY_DATE BURROW_S("Mon Jan 02 15:04:05 -0700 2006")
+#define TIME_RFC822 BURROW_S("02 Jan 06 15:04 MST")
+#define TIME_RFC822_Z BURROW_S("02 Jan 06 15:04 -0700")
+#define TIME_RFC850 BURROW_S("Monday, 02-Jan-06 15:04:05 MST")
+#define TIME_RFC1123 BURROW_S("Mon, 02 Jan 2006 15:04:05 MST")
+#define TIME_RFC1123_Z BURROW_S("Mon, 02 Jan 2006 15:04:05 -0700")
+#define TIME_RFC3339 BURROW_S("2006-01-02T15:04:05Z07:00")
+#define TIME_RFC3339_NANO BURROW_S("2006-01-02T15:04:05.999999999Z07:00")
+#define TIME_KITCHEN BURROW_S("3:04PM")
+#define TIME_STAMP BURROW_S("Jan _2 15:04:05")
+#define TIME_STAMP_MILLI BURROW_S("Jan _2 15:04:05.000")
+#define TIME_STAMP_MICRO BURROW_S("Jan _2 15:04:05.000000")
+#define TIME_STAMP_NANO BURROW_S("Jan _2 15:04:05.000000000")
+#define TIME_DATE_TIME BURROW_S("2006-01-02 15:04:05")
+#define TIME_DATE_ONLY BURROW_S("2006-01-02")
+#define TIME_TIME_ONLY BURROW_S("15:04:05")
+
+/* t written out the way layout says, in t's location. Go's Time.Format.
+ *
+ *     Time t = time_date(2009, TIME_NOVEMBER, 10, 23, 0, 0, 0, time_utc_loc);
+ *     Str s = time_format(t, a, TIME_RFC1123);
+ *     // "Tue, 10 Nov 2009 23:00:00 UTC"
+ */
+BURROW_OWNS(ret) Str time_format(Time t, Alloc *a, Str layout);
+
+/* time_format's text appended to b. Go's Time.AppendFormat. */
+BURROW_OWNS(ret) Slice time_append_format(Time t, Alloc *a, Slice b, Str layout);
+
+/* t as "2006-01-02 15:04:05.999999999 -0700 MST", and " m=+1.000000001" after
+ * it when t has a monotonic reading. For people reading logs, not for parsing.
+ * Go's Time.String. */
+BURROW_OWNS(ret) Str time_string(Time t, Alloc *a);
+
+/* t as the Go that would make it, such as time.Date(2009, time.November, 10,
+ * 23, 0, 0, 0, time.UTC). Go's Time.GoString, which is what %#v prints. */
+BURROW_OWNS(ret) Str time_go_string(Time t, Alloc *a);
+
+/* Why time_parse gave up. Go's ParseError: the layout and the value, the
+ * elements of each that did not match, and a message that replaces the usual
+ * "cannot parse" sentence when there is one. errors_as with
+ * TYPE_TIME_PARSE_ERROR finds it. */
+typedef struct TimeParseError {
+    Str layout;
+    Str value;
+    Str layout_elem;
+    Str value_elem;
+    Str message;
+} TimeParseError;
+
+extern const Type *const TYPE_TIME_PARSE_ERROR;
+
+/* The error's text, from a. Go's ParseError.Error. */
+BURROW_OWNS(ret) Str time_parse_error_error(Alloc *a, const TimeParseError *e);
+
+/* e as an Error that owns copies of its strings, from a. */
+BURROW_OWNS(ret) Error time_parse_error_as_error(Alloc *a, const TimeParseError *e);
+
+/* The time that value, written the way layout says, stands for. Go's
+ * time.Parse.
+ *
+ *     Error err;
+ *     Time t = time_parse(a, TIME_RFC3339, BURROW_S("2006-01-02T15:04:05+07:00"), &err);
+ *
+ * Parts the layout leaves out are zero, or 1 for the month and day, and a time
+ * with no zone in it is UTC. A zone offset or name that Local has at that
+ * instant gives Local; any other gives a fixed zone made from a, which lives
+ * as long as a does. An unknown name such as "XYZ" gets an offset of zero, as
+ * in Go. The error is a TimeParseError. */
+Time time_parse(Alloc *a, Str layout, Str value, Error *err);
+
+/* time_parse with loc where time_parse uses UTC and Local: a time with no zone
+ * is in loc, and an offset or name is matched against loc. Go's
+ * time.ParseInLocation. */
+Time time_parse_in_location(Alloc *a, Str layout, Str value, TimeLocation *loc,
+                            Error *err);
+
+/* The text encoding, RFC3339 with as many fraction digits as t needs. Go's
+ * Time.AppendText and Time.MarshalText. A year outside 0 to 9999 or a zone
+ * offset of 24 hours or more is an error, since RFC 3339 can not write them. */
+BURROW_OWNS(ret) Slice time_append_text(Time t, Alloc *a, Slice b, Error *err);
+BURROW_OWNS(ret) Slice time_marshal_text(Time t, Alloc *a, Error *err);
+
+/* Reads what time_marshal_text writes, and any RFC3339 time. Go's
+ * Time.UnmarshalText. *t is the zero Time on error. */
+BURROW_STATIC(ret) Error time_unmarshal_text(Time *t, Alloc *a, Slice data);
+
+/* The JSON encoding, the text encoding in double quotes. Go's
+ * Time.MarshalJSON and Time.UnmarshalJSON, where null leaves *t alone. */
+BURROW_OWNS(ret) Slice time_marshal_json(Time t, Alloc *a, Error *err);
+BURROW_STATIC(ret) Error time_unmarshal_json(Time *t, Alloc *a, Slice data);
+
+/* Time's descriptor, with the methods above, so fmt prints a Time with its
+ * String and the encoders find its text, JSON, binary and gob forms. */
+extern const Type burrow_type_Time;
+#define TYPE_TIME TYPE_OF(Time)
 
 /* Nanoseconds on a clock that only goes forwards, measured from an arbitrary
  * point that means nothing on its own.

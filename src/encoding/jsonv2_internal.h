@@ -30,6 +30,12 @@ extern const Error burrow__jsonv2_err_changing_duplicate_names;
 extern const Error burrow__jsonv2_err_changing_invalid_utf8;
 extern const Error burrow__jsonv2_err_changing_whitespace;
 
+/* errNonSingularValue and errUnsupportedMutation from arshal_funcs.go, and
+ * errNonStringValue from arshal_methods.go. */
+extern const Error burrow__jsonv2_err_non_singular_value;
+extern const Error burrow__jsonv2_err_unsupported_mutation;
+extern const Error burrow__jsonv2_err_non_string_value;
+
 /* A SemanticError with its message built, in the error arena. The pointer
  * and the value are copied, so they may point anywhere. When the arena
  * refuses, err alone, and burrow_err_out_of_memory without one. */
@@ -67,9 +73,67 @@ Error burrow__jsonv2_duplicate_name_error(JsontextDecoder *d, int64_t offset);
 /* The same for a name the encoder was about to write, given quoted. */
 Error burrow__jsonv2_duplicate_name_error_enc(JsontextEncoder *e, Slice quoted);
 
+/* isSemanticError and isSyntacticError. */
+bool burrow__jsonv2_is_semantic(Error err);
+bool burrow__jsonv2_is_syntactic(Error err);
+
+/* wrapErrUnsupported: what, followed by " may not return
+ * errors.ErrUnsupported", when err is or wraps errors_err_unsupported. */
+Error burrow__jsonv2_wrap_unsupported(Error err, const char *what);
+
+/* newSemanticErrorWithPosition, for an error a method or a function returned
+ * after the coder had prev_depth and prev_len at the start of the call. */
+Error burrow__jsonv2_error_with_position_enc(JsontextEncoder *e, const Type *t,
+                                             Int prev_depth, int64_t prev_len,
+                                             Error err);
+Error burrow__jsonv2_error_with_position_dec(JsontextDecoder *d, const Type *t,
+                                             Int prev_depth, int64_t prev_len,
+                                             Error err);
+
+/* collapseSemanticErrors. */
+Error burrow__jsonv2_collapse_semantic(Error err);
+
 /* The arshaler for t on the value at p, which is lookupArshaler(t) and a
  * call, with the options in o and changed by the callee for the length of
  * the call the way Go's do. */
+/* The methods json looks for, in the order they are tried. */
+enum {
+    JV_M_MARSHAL_JSON_TO,
+    JV_M_MARSHAL_JSON,
+    JV_M_APPEND_TEXT,
+    JV_M_MARSHAL_TEXT,
+    JV_M_UNMARSHAL_JSON_FROM,
+    JV_M_UNMARSHAL_JSON,
+    JV_M_UNMARSHAL_TEXT,
+    JV_M_IS_ZERO,
+    JV_M_COUNT
+};
+
+#define JV_MASK_MARSHALERS                                                             \
+    ((1U << JV_M_MARSHAL_JSON_TO) | (1U << JV_M_MARSHAL_JSON) |                        \
+     (1U << JV_M_APPEND_TEXT) | (1U << JV_M_MARSHAL_TEXT))
+#define JV_MASK_UNMARSHALERS                                                           \
+    ((1U << JV_M_UNMARSHAL_JSON_FROM) | (1U << JV_M_UNMARSHAL_JSON) |                  \
+     (1U << JV_M_UNMARSHAL_TEXT))
+#define JV_MASK_ARSHALERS (JV_MASK_MARSHALERS | JV_MASK_UNMARSHALERS)
+
+/* The methods of one type that have the right shape, NULL where it has none. */
+typedef struct JvMethods {
+    const Method *m[JV_M_COUNT];
+} JvMethods;
+
+void burrow__jsonv2_methods(const Type *t, JvMethods *out);
+bool burrow__jsonv2_implements(const Type *t, unsigned mask);
+Error burrow__jsonv2_marshal_methods(JsontextEncoder *e, const Type *t, void *p,
+                                     JsontextOptions *mo, const JvMethods *ms);
+Error burrow__jsonv2_unmarshal_methods(JsontextDecoder *d, const Type *t, void *p,
+                                       JsontextOptions *uo, const JvMethods *ms);
+bool burrow__jsonv2_call_is_zero(const Method *m, void *p);
+Error burrow__jsonv2_marshal_default(JsontextEncoder *e, const Type *t, void *p,
+                                     JsontextOptions *mo);
+Error burrow__jsonv2_unmarshal_default(JsontextDecoder *d, const Type *t, void *p,
+                                       JsontextOptions *uo);
+
 Error burrow__jsonv2_marshal_value(JsontextEncoder *e, const Type *t, void *p,
                                    JsontextOptions *mo);
 Error burrow__jsonv2_unmarshal_value(JsontextDecoder *d, const Type *t, void *p,

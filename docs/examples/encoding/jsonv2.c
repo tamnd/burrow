@@ -25,6 +25,45 @@ BURROW_STRUCT(Item, ITEM_FIELDS);
 BURROW_STRUCT(Loose, LOOSE_FIELDS);
 // doc: end
 
+// doc: methods
+#define VERSION_FIELDS(F, T)                                                           \
+    F(T, Int, Major, "")                                                               \
+    F(T, Int, Minor, "")
+BURROW_STRUCT_DECL(Version, VERSION_FIELDS);
+
+static Slice version_marshal_text(Version *v, Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    Str s = fmt_sprintf_v(a, "v%d.%d", v->Major, v->Minor);
+    return slice_append(a, slice_nil(TYPE_BYTE), s.p, s.len);
+}
+
+static Error version_unmarshal_text(Version *v, Alloc *a, Slice text) {
+    (void)a;
+    Str s = strings_trim_prefix(str_from_bytes(text.p, text.len), BURROW_S("v"));
+    Str minor;
+    bool found;
+    Str major = strings_cut(s, BURROW_S("."), &minor, &found);
+    Error err = BURROW_NO_ERROR;
+    if (found)
+        v->Major = strconv_atoi(major, &err);
+    if (found && BURROW_OK(err))
+        v->Minor = strconv_atoi(minor, &err);
+    if (!found || BURROW_FAILED(err))
+        return errors_new(error_allocator(), BURROW_S("not a version"));
+    return BURROW_NO_ERROR;
+}
+
+#define VERSION_METHODS(M, T)                                                          \
+    M(T, MarshalText, version_marshal_text, ENCODING_SIG_MARSHAL_TEXT)                 \
+    M(T, UnmarshalText, version_unmarshal_text, ENCODING_SIG_UNMARSHAL_TEXT)
+BURROW_STRUCT_DEFINE_METHODS(Version, VERSION_FIELDS, VERSION_METHODS);
+
+#define RELEASE_FIELDS(F, T)                                                           \
+    F(T, Str, Name, "json:\"name\"")                                                   \
+    F(T, Version, Version, "json:\"version\"")
+BURROW_STRUCT(Release, RELEASE_FIELDS);
+// doc: end
+
 static void show(const char *what, Slice s) {
     printf("%s: %.*s\n", what, (int)s.len, (const char *)s.p);
 }
@@ -89,6 +128,19 @@ int main(void) {
     // doc: end
     printf("loose: %d extra\n", (int)map_len(l.Rest));
     show("loose", loose);
+
+    // doc: release
+    Release r = {BURROW_S("burrow"), {0, 2}};
+    Slice rel = jsonv2_marshal_v(a, BURROW_ANY(TYPE_OF(Release), &r), &err, 0);
+    Release r2 = {0};
+    err = jsonv2_unmarshal_v(a, rel, BURROW_ANY(TYPE_OF(Release), &r2), 0);
+    // doc: end
+    show("release", rel);
+    printf("version: %d.%d, err %d\n", (int)r2.Version.Major, (int)r2.Version.Minor,
+           BURROW_FAILED(err));
+    err = jsonv2_unmarshal_v(a, BURROW_B("{\"version\":\"two\"}"),
+                             BURROW_ANY(TYPE_OF(Release), &r2), 0);
+    printf("bad version: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
 
     arena_free(&ar);
     return 0;

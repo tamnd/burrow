@@ -157,6 +157,13 @@ BURROW_SENTINEL_ERROR(
     burrow__jsonv2_err_changing_whitespace,
     "cannot change whitespace formatting within a MarshalEncode call");
 
+BURROW_SENTINEL_ERROR(burrow__jsonv2_err_non_singular_value,
+                      "must read or write exactly one value");
+BURROW_SENTINEL_ERROR(burrow__jsonv2_err_unsupported_mutation,
+                      "unsupported calls must not read or write any tokens");
+BURROW_SENTINEL_ERROR(burrow__jsonv2_err_non_string_value,
+                      "JSON value must be string type");
+
 static bool jv_same(Error a, Error b) {
     return a.vt == b.vt && a.data == b.data;
 }
@@ -172,6 +179,10 @@ Error burrow__jsonv2_to_unexpected_eof(Error err) {
 
 static bool jv_is_syntactic(Error err) {
     return err.vt != NULL && err.vt->self_type == TYPE_JSONTEXT_SYNTACTIC_ERROR;
+}
+
+bool burrow__jsonv2_is_syntactic(Error err) {
+    return jv_is_syntactic(err);
 }
 
 bool burrow__jsonv2_is_fatal(Error err, const JsontextOptions *o) {
@@ -642,6 +653,110 @@ Error burrow__jsonv2_unmarshal_error_after_skipping(JsontextDecoder *d, const Ty
             return err2;
     }
     return err;
+}
+
+bool burrow__jsonv2_is_semantic(Error err) {
+    return err.vt == &jv_semantic_vt;
+}
+
+Error burrow__jsonv2_wrap_unsupported(Error err, const char *what) {
+    if (!errors_is(err, errors_err_unsupported))
+        return err;
+    JsonBuf b = jv_heap_buf();
+    jsonbuf_str(&b, str_from_bytes(what, (Int)strlen(what)));
+    jsonbuf_str(&b, JV_LIT(" may not return errors.ErrUnsupported"));
+    Error r = b.failed ? burrow_err_out_of_memory
+                       : burrow__jsonv2_errorf(str_from_bytes(b.p, b.len));
+    burrow__jsonbuf_free(&b);
+    return r;
+}
+
+/* Where newSemanticErrorWithPosition points when the error does not say:
+ * at the member just written or read when the call wrote or read exactly
+ * one, before the next one when it touched nothing, and at the parent
+ * otherwise, since there is no telling. */
+static int jv_position_where(Int prev_depth, int64_t prev_len, Int depth, int64_t len) {
+    if (prev_depth == depth && prev_len == len)
+        return +1;
+    if (prev_depth == depth && prev_len + 1 == len)
+        return -1;
+    return 0;
+}
+
+/* The shared half of newSemanticErrorWithPosition. Go fills in the fields of
+ * the SemanticError it was handed that are still zero. Errors here do not
+ * change once made, so this makes a new one with the fields filled in. */
+static Error jv_with_position(Error err, const Type *t, Str action, int64_t offset,
+                              const JsonBuf *ptr) {
+    const Jsonv2SemanticError *in = burrow__jsonv2_as_semantic(err);
+    Jsonv2SemanticError s = jv_semantic_zero();
+    if (in != NULL)
+        s = *in;
+    else
+        s.err = err;
+    s.err = burrow__jsonv2_to_unexpected_eof(s.err);
+    if (s.action.len == 0)
+        s.action = action;
+    if (s.byte_offset == 0)
+        s.byte_offset = offset;
+    if (s.json_pointer.len == 0)
+        s.json_pointer = str_from_bytes(ptr->p, ptr->len);
+    if (s.go_type == NULL)
+        s.go_type = t;
+    return burrow__jsonv2_semantic_new(&s);
+}
+
+Error burrow__jsonv2_error_with_position_enc(JsontextEncoder *e, const Type *t,
+                                             Int prev_depth, int64_t prev_len,
+                                             Error err) {
+    Int depth = jt_depth(&e->st);
+    int64_t len = jt_e_len(e->st.last);
+    int64_t offset = jsontext_encoder_output_offset(e) +
+                     (int64_t)burrow__jsontext_encoder_count_next_delim_whitespace(e);
+    JsonBuf ptr =
+        jv_enc_pointer(e, jv_position_where(prev_depth, prev_len, depth, len));
+    Error r = jv_with_position(err, t, JV_LIT("marshal"), offset, &ptr);
+    burrow__jsonbuf_free(&ptr);
+    return r;
+}
+
+Error burrow__jsonv2_error_with_position_dec(JsontextDecoder *d, const Type *t,
+                                             Int prev_depth, int64_t prev_len,
+                                             Error err) {
+    Int depth = jt_depth(&d->st);
+    int64_t len = jt_e_len(d->st.last);
+    Slice tok = burrow__jsontext_previous_token_or_value(d);
+    int64_t offset = jsontext_decoder_input_offset(d) - (int64_t)tok.len;
+    if ((prev_depth == depth && prev_len == len) || tok.len == 0)
+        offset = jsontext_decoder_input_offset(d) +
+                 (int64_t)burrow__jsontext_decoder_count_next_delim_whitespace(d);
+    JsonBuf ptr =
+        jv_dec_pointer(d, jv_position_where(prev_depth, prev_len, depth, len));
+    Error r = jv_with_position(err, t, JV_LIT("unmarshal"), offset, &ptr);
+    burrow__jsonbuf_free(&ptr);
+    return r;
+}
+
+Error burrow__jsonv2_collapse_semantic(Error err) {
+    const Jsonv2SemanticError *outer = burrow__jsonv2_as_semantic(err);
+    if (outer == NULL)
+        return err;
+    const Jsonv2SemanticError *inner = burrow__jsonv2_as_semantic(outer->err);
+    if (inner == NULL)
+        return err;
+    Jsonv2SemanticError s = *inner;
+    s.byte_offset = outer->byte_offset + inner->byte_offset;
+    JsonBuf ptr = jv_heap_buf();
+    jsonbuf_str(&ptr, outer->json_pointer);
+    jsonbuf_str(&ptr, inner->json_pointer);
+    if (ptr.failed) {
+        burrow__jsonbuf_free(&ptr);
+        return burrow_err_out_of_memory;
+    }
+    s.json_pointer = str_from_bytes(ptr.p, ptr.len);
+    Error r = burrow__jsonv2_semantic_new(&s);
+    burrow__jsonbuf_free(&ptr);
+    return r;
 }
 
 /* fmt.Errorf("invalid format flag %q", format). */

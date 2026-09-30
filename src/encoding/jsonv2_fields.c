@@ -556,19 +556,9 @@ static const Type *jv_indirect_type(const Type *t) {
     return t;
 }
 
-/* Whether t has any of the methods json v2 would call, which this port does
- * not call yet but still has to know about to reject what Go rejects. */
+/* Whether t has any of the methods json v2 would call. */
 bool burrow__jsonv2_implements_any(const Type *t) {
-    static const char *const names[] = {
-        "MarshalJSONTo",     "MarshalJSON",   "AppendText",   "MarshalText",
-        "UnmarshalJSONFrom", "UnmarshalJSON", "UnmarshalText"};
-    if (t == NULL || t->nmethod == 0)
-        return false;
-    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
-        if (type_method_by_name(t, str_from_bytes(names[i], (Int)strlen(names[i]))) !=
-            NULL)
-            return true;
-    return false;
+    return burrow__jsonv2_implements(t, JV_MASK_ARSHALERS);
 }
 
 typedef struct JvQueue {
@@ -880,7 +870,9 @@ static const JvFields *jv_fields_build(const Type *root) {
                                       sf->name));
                         continue;
                     }
-                    if (burrow__jsonv2_implements_any(tf)) {
+                    if (burrow__jsonv2_implements_any(tf) ||
+                        (f.omitzero &&
+                         burrow__jsonv2_implements(tf, 1U << JV_M_IS_ZERO))) {
                         jv_or_err(
                             &serr, &serr_t, t,
                             burrow__jsonv2_errorf_in(

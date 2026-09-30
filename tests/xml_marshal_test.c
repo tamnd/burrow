@@ -35,6 +35,8 @@ static void *gen_alloc(Alloc *a, const Type *t) {
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Woverlength-strings"
+/* A value left out of the table can leave its type's descriptor unused. */
+#pragma GCC diagnostic ignored "-Wunused-variable"
 #endif
 #include "encoding_xml_test_gen.h"
 #if defined(__GNUC__)

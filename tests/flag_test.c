@@ -822,6 +822,7 @@ static int child(int argc, char **argv) {
     }
     Str arg = str_from_cstr(argv[2]);
     (void)flag_flag_set_parse(fs, ARGS(arg));
+    flag_flag_set_free(fs);
     return MAGIC;
 }
 

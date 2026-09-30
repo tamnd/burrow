@@ -776,10 +776,9 @@ static Str say(FlagFlagSet *f, Str msg) {
     return msg;
 }
 
-/* Go's FlagSet.Var, with the storage the set made for the value, if any, which
- * the set frees with the flag. */
-static void define(FlagFlagSet *f, FlagValue value, Str name, Str usage, void *store,
-                   size_t store_size, size_t store_align) {
+/* The checks at the top of Go's FlagSet.Var, made before any storage for the
+ * value is allocated, so a panic here leaks nothing. */
+static void check_name(FlagFlagSet *f, Str name) {
     Alloc *ea = error_allocator();
     /* Flag must not begin "-" or contain "=". */
     if (strings_has_prefix(name, LIT("-")))
@@ -799,7 +798,12 @@ static void define(FlagFlagSet *f, FlagValue value, Str name, Str usage, void *s
         if (str_eq(f->undef[2 * i], name))
             panic_str(fmt_sprintf_v(ea, "flag %s set at %s before being defined", name,
                                     f->undef[2 * i + 1]));
+}
 
+/* The rest of Go's FlagSet.Var, after check_name, with the storage the set made
+ * for the value, if any, which the set frees with the flag. */
+static void define(FlagFlagSet *f, FlagValue value, Str name, Str usage, void *store,
+                   size_t store_size, size_t store_align) {
     Arena ar;
     arena_init(&ar, NULL, 256);
     Str def = value.vt->string(value.data, arena_allocator(&ar));
@@ -808,9 +812,12 @@ static void define(FlagFlagSet *f, FlagValue value, Str name, Str usage, void *s
         sizeof(FlagNode) + (size_t)name.len + (size_t)usage.len + (size_t)def.len;
     FlagNode *n = alloc_or_panic(f, size, _Alignof(FlagNode));
     Byte *text = (Byte *)(n + 1);
-    memcpy(text, name.p, (size_t)name.len);
-    memcpy(text + name.len, usage.p, (size_t)usage.len);
-    memcpy(text + name.len + usage.len, def.p, (size_t)def.len);
+    if (name.len > 0)
+        memcpy(text, name.p, (size_t)name.len);
+    if (usage.len > 0)
+        memcpy(text + name.len, usage.p, (size_t)usage.len);
+    if (def.len > 0)
+        memcpy(text + name.len + usage.len, def.p, (size_t)def.len);
     arena_free(&ar);
 
     n->size = size;
@@ -825,6 +832,7 @@ static void define(FlagFlagSet *f, FlagValue value, Str name, Str usage, void *s
 }
 
 void flag_flag_set_var(FlagFlagSet *f, FlagValue value, Str name, Str usage) {
+    check_name(f, name);
     define(f, value, name, usage, NULL, 0, 0);
 }
 
@@ -835,9 +843,11 @@ void flag_flag_set_var(FlagFlagSet *f, FlagValue value, Str name, Str usage) {
     void flag_flag_set_##fname##_var(FlagFlagSet *f, T *p, Str name, T value,          \
                                      Str usage) {                                      \
         *p = value;                                                                    \
+        check_name(f, name);                                                           \
         define(f, (FlagValue){&(vt), p}, name, usage, NULL, 0, 0);                     \
     }                                                                                  \
     T *flag_flag_set_##fname(FlagFlagSet *f, Str name, T value, Str usage) {           \
+        check_name(f, name);                                                           \
         T *p = alloc_or_panic(f, sizeof(T), _Alignof(T));                              \
         *p = value;                                                                    \
         define(f, (FlagValue){&(vt), p}, name, usage, p, sizeof(T), _Alignof(T));      \
@@ -873,6 +883,7 @@ void flag_flag_set_text_var(FlagFlagSet *f, Any p, Str name, Any value, Str usag
             value.t ? type_text(ea, value.t) : LIT("<nil>"), type_text(ea, p.t)));
     if (value.data != p.data)
         memmove(p.data, value.data, p.t->size);
+    check_name(f, name);
     TextBox *b = alloc_or_panic(f, sizeof *b, _Alignof(TextBox));
     b->p = p;
     b->a = set_alloc(f);
@@ -881,6 +892,7 @@ void flag_flag_set_text_var(FlagFlagSet *f, Any p, Str name, Any value, Str usag
 
 static void define_func(FlagFlagSet *f, const FlagValueVT *vt, Str name, Str usage,
                         FlagFunc fn) {
+    check_name(f, name);
     FlagFunc *box = alloc_or_panic(f, sizeof *box, _Alignof(FlagFunc));
     *box = fn;
     define(f, (FlagValue){vt, box}, name, usage, box, sizeof *box, _Alignof(FlagFunc));

@@ -175,7 +175,7 @@ BURROW_NORETURN static void gob_error_text(const char *msg) {
     gob_error_(errors_new(error_allocator(), str_from_cstr(msg)));
 }
 
-BURROW_NORETURN static void gob_oom(void) {
+BURROW_NORETURN static void gob_dec_oom(void) {
     gob_error_(burrow_err_out_of_memory);
 }
 
@@ -219,7 +219,7 @@ static const GobUserType *gob_user_type(const Type *t) {
 static void *gob_calloc(Alloc *a, size_t size, size_t align) {
     void *p = mem_alloc(a, size == 0 ? 1 : size, align == 0 ? 1 : align);
     if (p == NULL)
-        gob_oom();
+        gob_dec_oom();
     return p;
 }
 
@@ -228,7 +228,7 @@ static Str gob_copy_str(Alloc *a, const Byte *p, Int n) {
         return (Str){NULL, 0};
     Byte *q = (Byte *)mem_alloc_nozero(a, (size_t)n, 1);
     if (q == NULL)
-        gob_oom();
+        gob_dec_oom();
     memcpy(q, p, (size_t)n);
     return (Str){q, n};
 }
@@ -237,7 +237,7 @@ static Str gob_prefix(GobDecoder *d, const char *pre, Str s) {
     Int pn = (Int)strlen(pre);
     Byte *q = (Byte *)mem_alloc_nozero(d->ca, (size_t)(pn + s.len), 1);
     if (q == NULL)
-        gob_oom();
+        gob_dec_oom();
     memcpy(q, pre, (size_t)pn);
     if (s.len > 0)
         memcpy(q + pn, s.p, (size_t)s.len);
@@ -700,7 +700,7 @@ static void gob_wire_top(GobDecoder *d, void *ctx, Int field) {
 static void gob_decode_wire_type(GobDecoder *d, GobWireType *w) {
     int saved = d->depth;
     Error err = BURROW_NO_ERROR;
-    bool failed = false;
+    volatile bool failed = false;
     BURROW_TRY {
         gob_wire_struct(d, GOB_W_COUNT, gob_wire_top, w);
     }
@@ -1004,7 +1004,7 @@ static void gob_decode_map(GobDecoder *d, const GobDecOp *op, Map **mp) {
             safe = 1;
         *mp = map_make(d->a, mt->key, mt->elem, safe);
         if (*mp == NULL)
-            gob_oom();
+            gob_dec_oom();
     }
     bool key_ptr = mt->key->kind == KIND_POINTER;
     bool elem_ptr = mt->elem->kind == KIND_POINTER;
@@ -1014,7 +1014,7 @@ static void gob_decode_map(GobDecoder *d, const GobDecOp *op, Map **mp) {
         gob_run(d, op->key, op->ovfl, key_ptr ? gob_dec_alloc(d, mt->key, kp) : kp);
         gob_run(d, op->elem, op->ovfl, elem_ptr ? gob_dec_alloc(d, mt->elem, ep) : ep);
         if (!map_set(*mp, kp, ep))
-            gob_oom();
+            gob_dec_oom();
         memset(kp, 0, mt->key->size);
         memset(ep, 0, mt->elem->size);
     }
@@ -1795,7 +1795,7 @@ static Error gob_compile_dec(GobDecoder *d, int32_t remote, const GobUserType *u
     int saved = d->ignore_depth;
     Error err = BURROW_NO_ERROR;
     Error caught = BURROW_NO_ERROR;
-    bool failed = false;
+    volatile bool failed = false;
     BURROW_TRY {
         err = gob_compile_dec_l(d, remote, ut, out);
     }
@@ -1815,11 +1815,11 @@ static Map *gob_cache_for(GobDecoder *d, const Type *t) {
         return (Map *)*v;
     Map *m = map_make(d->a, TYPE_INT32, TYPE_UINTPTR, 4);
     if (m == NULL)
-        gob_oom();
+        gob_dec_oom();
     Uintptr mv = (Uintptr)m;
     if (!map_set(d->cache, &k, &mv)) {
         map_free(m);
-        gob_oom();
+        gob_dec_oom();
     }
     return m;
 }
@@ -1836,7 +1836,7 @@ static Error gob_get_dec_engine_ptr(GobDecoder *d, int32_t remote,
     GobEngine **ep = (GobEngine **)gob_calloc(d->ca, sizeof *ep, _Alignof(GobEngine *));
     Uintptr ev = (Uintptr)ep;
     if (!map_set(m, &remote, &ev))
-        gob_oom();
+        gob_dec_oom();
     *out = ep;
     Error err = gob_compile_dec(d, remote, ut, ep);
     if (BURROW_FAILED(err))
@@ -1854,7 +1854,7 @@ static Error gob_get_ignore_engine_ptr(GobDecoder *d, int32_t id, GobEngine ***o
     GobEngine **ep = (GobEngine **)gob_calloc(d->ca, sizeof *ep, _Alignof(GobEngine *));
     Uintptr ev = (Uintptr)ep;
     if (!map_set(d->ignorer, &id, &ev))
-        gob_oom();
+        gob_dec_oom();
     *out = ep;
     Error err = BURROW_NO_ERROR;
     const GobWireType *w = gob_wire(d, id);
@@ -1920,7 +1920,7 @@ static void gob_decode_value(GobDecoder *d, int32_t wire_id, const Type *vt, voi
     int saved_depth = d->depth;
     int saved_ignore = d->ignore_depth;
     Error caught = BURROW_NO_ERROR;
-    bool failed = false;
+    volatile bool failed = false;
     BURROW_TRY {
         gob_decode_value_l(d, wire_id, vt, p);
     }

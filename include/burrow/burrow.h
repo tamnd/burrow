@@ -64,6 +64,7 @@
 #include "burrow/encoding/base64.h"
 #include "burrow/encoding/binary.h"
 #include "burrow/encoding/csv.h"
+#include "burrow/encoding/gob.h"
 #include "burrow/encoding/hex.h"
 #include "burrow/encoding/json.h"
 #include "burrow/encoding/json/jsontext.h"

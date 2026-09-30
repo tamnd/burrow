@@ -1,4 +1,10 @@
-/* The system generator on macOS, the BSDs and Cosmopolitan: getentropy.
+/* The system generator on macOS, the BSDs and Cosmopolitan: arc4random_buf on
+ * macOS, iOS and OpenBSD, and getentropy everywhere else.
+ *
+ * arc4random_buf is what Go's crypto/rand reads on macOS and OpenBSD. It never
+ * fails, it takes any length, and it only goes to the kernel now and then to
+ * reseed, as the macOS manual page puts it. getentropy goes to the kernel on
+ * every call.
  *
  * It needs no loop, which is the difference from Linux's getrandom: getentropy
  * either fills the whole buffer or fails, and it cannot be cut short by a
@@ -6,8 +12,7 @@
  * the contract rather than an implementation detail, so the loop that is here is
  * over chunks and not over short answers.
  *
- * The header it lives in differs. macOS and most of the BSDs put it in
- * sys/random.h, OpenBSD puts it in unistd.h, and both are the same function.
+ * getentropy is in sys/random.h on every system left that uses it here.
  *
  * Cosmopolitan is here rather than with Linux because one of its binaries runs
  * on all of these, and getentropy is the call its libc answers on every one of
@@ -31,8 +36,9 @@
 #include <errno.h>
 #include <stddef.h>
 
-#if defined(BURROW_OS_OPENBSD)
-#include <unistd.h>
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS) || defined(BURROW_OS_OPENBSD)
+#define BURROW__PAL_ARC4RANDOM 1
+#include <stdlib.h>
 #else
 #include <sys/random.h>
 #endif
@@ -51,6 +57,10 @@ bool pal_random_bytes(void *buf, int64_t n, PalErrno *err) {
     if (n == 0)
         return true;
 
+#if defined(BURROW__PAL_ARC4RANDOM)
+    arc4random_buf(buf, (size_t)n);
+    return true;
+#else
     unsigned char *p = (unsigned char *)buf;
     size_t want = (size_t)n;
 
@@ -67,6 +77,7 @@ bool pal_random_bytes(void *buf, int64_t n, PalErrno *err) {
     }
 
     return true;
+#endif
 }
 
 #endif /* darwin, the bsds and cosmopolitan */

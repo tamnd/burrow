@@ -44,6 +44,7 @@
 #include "burrow/cmp.h"
 #include "burrow/compress/bzip2.h"
 #include "burrow/compress/flate.h"
+#include "burrow/compress/gzip.h"
 #include "burrow/compress/lzw.h"
 #include "burrow/compress/zlib.h"
 #include "burrow/container/heap.h"

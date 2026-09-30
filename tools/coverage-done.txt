@@ -79,3 +79,4 @@ uuid
 weak
 flag
 encoding/gob
+io/fs

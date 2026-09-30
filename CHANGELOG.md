@@ -4,6 +4,20 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.16 (2026-09-30)
+
+The v1 JSON API, on top of v2.
+
+### Added
+
+- `encoding/json`, Go's v1 package as a layer over v2: Marshal, MarshalIndent, Unmarshal, Valid, Compact, Indent, HTMLEscape, Number, RawMessage and the v1 error types with Go's error text (#274).
+- `encoding/json` Decoder and Encoder, with UseNumber, DisallowUnknownFields, Buffered, InputOffset, SetIndent and SetEscapeHTML, and the Token, More and Delim streaming API (#275).
+
+### Changed
+
+- The v1 package is checked against Go's own TestUnmarshal table. 123 cases pass. The rest are listed by type in `tests/encoding_json_test_gen.h` (#276).
+- The json test generators now share their Go code, and regenerating the v2 table is stable from run to run (#276).
+
 ## v0.1.15 (2026-09-30)
 
 JSON v2 learns to call user code.

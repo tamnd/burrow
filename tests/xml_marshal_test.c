@@ -11,6 +11,8 @@
 
 #include "burrow/encoding/xml.h"
 
+#include "../src/encoding/jsonv2_internal.h"
+
 #include "burrow/burrow.h"
 #include "burrow/bytes.h"
 #include "burrow/declare.h"
@@ -55,6 +57,8 @@ static Str err_str(Error err) {
     return BURROW_FAILED(err) ? error_text(err) : S("<nil>");
 }
 
+#include "json_dump.h"
+
 static bool err_matches(Error err, const char *want) {
     if (want == NULL)
         return BURROW_OK(err);
@@ -89,6 +93,49 @@ static void TestMarshalGenerated(TestingT *t) {
         if (!err_matches(err, c->err))
             testing_t_errorf_v(t, "%s: error = %q, want %q", c->name, err_str(err),
                                cstr(c->err == NULL ? "<nil>" : c->err));
+        arena_free(&ar);
+    }
+}
+
+/* Go's TestUnmarshal: each value's XML read back into a new value of its
+ * type, compared with what Go's Unmarshal made of it by the dump the json
+ * tests use. */
+static void TestUnmarshalGenerated(TestingT *t) {
+    gen_init();
+    for (size_t i = 0; i < LEN(u_cases); i++) {
+        const UCase *c = &u_cases[i];
+        if (getenv("XML_TRACE") != NULL)
+            fprintf(stderr, "%s\n", c->name);
+        Arena ar;
+        arena_init(&ar, NULL, 0);
+        Alloc *a = arena_allocator(&ar);
+        void *v = gen_alloc(a, c->type);
+        if (c->make != NULL)
+            c->make(a, v);
+        Slice in = {(void *)(uintptr_t)c->in.p, (Int)c->in.n, (Int)c->in.n, TYPE_BYTE};
+        Error err;
+        if (c->ns.n > 0) {
+            BytesReader r;
+            bytes_reader_reset(&r, in);
+            XmlDecoder *d = xml_new_decoder(a, bytes_reader_as_io_reader(&r));
+            d->default_space = (Str){(const Byte *)c->ns.p, (Int)c->ns.n};
+            err = xml_decoder_decode(d, BURROW_ANY(c->type, v));
+            xml_decoder_free(d);
+        } else {
+            err = xml_unmarshal(a, in, BURROW_ANY(c->type, v));
+        }
+        if (!err_matches(err, c->err))
+            testing_t_errorf_v(t, "%s: error = %q, want %q", c->name, err_str(err),
+                               cstr(c->err == NULL ? "<nil>" : c->err));
+        JsonBuf b = {NULL, 0, 0, heap_allocator(), true, false};
+        DumpPath path;
+        path.n = 0;
+        dump(&b, c->type, v, &path);
+        Str got = {b.p, b.len};
+        if (!str_eq(got, cstr(c->dump)))
+            testing_t_errorf_v(t, "%s: value = %s, want %s", c->name, got,
+                               cstr(c->dump));
+        burrow__jsonbuf_free(&b);
         arena_free(&ar);
     }
 }
@@ -574,6 +621,7 @@ static void TestEncodeXMLNS(TestingT *t) {
 
 #define TESTS(X)                                                                       \
     X(TestMarshalGenerated)                                                            \
+    X(TestUnmarshalGenerated)                                                          \
     X(TestMarshalMethods)                                                              \
     X(TestMarshalService)                                                              \
     X(TestMarshalNilEmbedded)                                                          \

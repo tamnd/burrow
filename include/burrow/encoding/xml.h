@@ -292,6 +292,16 @@ typedef struct XmlDecoder {
     int64_t linestart;
     int64_t offset;
     bool oom; /* an allocation failed during the current call */
+    /* What Unmarshal keeps. inner is Go's d.saved, every byte read while
+     * keep_inner is on, for innerxml fields. scratch holds the start tags
+     * and text it needs across tokens and is emptied when the outermost
+     * Decode returns. */
+    bool in_unmarshal_xml;
+    bool keep_inner;
+    Byte *inner;
+    Int ninner, capinner;
+    Arena scratch;
+    Int unmarshal_depth;
 } XmlDecoder;
 
 extern const Type *const TYPE_XML_DECODER;
@@ -462,6 +472,98 @@ BURROW_BORROWS(ret) Error xml_encoder_encode(XmlEncoder *e, Any v);
  * given. */
 BURROW_BORROWS(ret) Error xml_encoder_encode_element(XmlEncoder *e, Any v,
                                                      XmlStartElement start);
+
+/* ------------------------------------------------------------ unmarshaling
+ *
+ * Unmarshal is Marshal run backwards. It reads one element into the value v
+ * points at, with the same tag rules: a struct field gets the attribute, the
+ * text, the comments, the inner XML or the child elements its tag names, a
+ * slice field gets one more element for each match, a nil pointer is
+ * allocated, and an XMLName field is checked against the element's name and
+ * set to it. Anything the value has no place for is skipped. With the Person
+ * above,
+ *
+ *     Person p = {0};
+ *     Error err = xml_unmarshal(a, data, BURROW_ANY(TYPE_OF(Person), &p));
+ *
+ * fills in p from data. Every string, slice and pointer Unmarshal stores is
+ * allocated from a, so an arena is the natural thing to give it. For
+ * xml_decoder_decode it is the decoder's allocator.
+ *
+ * A type can read itself with an UnmarshalXML method, declared with
+ * XML_SIG_UNMARSHAL_XML, an attribute with UnmarshalXMLAttr, declared with
+ * XML_SIG_UNMARSHAL_XML_ATTR, and text with encoding's UnmarshalText. As with
+ * marshaling, a method is found on T for a T and a *T alike.
+ *
+ * Unmarshal recurses once for each element it reads into a value, and stops
+ * with "exceeded max depth" past 10,000, which is Go's limit. Go's stack grows
+ * to fit and a goroutine's here does not, so a program that reads documents
+ * nested thousands deep should read them on a goroutine started with
+ * go_stack and a few megabytes. Elements that are skipped cost no stack. */
+
+typedef XmlDecoder *XmlDecoderArg;
+extern const Type burrow_type_XmlDecoderArg;
+
+/* Error unmarshal_xml(T *self, XmlDecoder *d, XmlStartElement start). It
+ * reads exactly one element, the one start opened, with xml_decoder_token or
+ * xml_decoder_decode_element, and must not use xml_decoder_raw_token. Anything
+ * it keeps has to be allocated, from d->a or elsewhere, since start and the
+ * tokens are only good until it returns. */
+#define XML_SIG_UNMARSHAL_XML(IN, OUT)                                                 \
+    IN(0, XmlDecoderArg) IN(1, XmlStartElement) OUT(Error)
+
+/* Error unmarshal_xml_attr(T *self, Alloc *a, XmlAttr attr). attr is only
+ * good until it returns, so it copies what it keeps, from a. */
+#define XML_SIG_UNMARSHAL_XML_ATTR(IN, OUT)                                            \
+    IN(0, EncodingAllocArg) IN(1, XmlAttr) OUT(Error)
+
+/* xml.Unmarshaler and xml.UnmarshalerAttr, for code that wants to hold one.
+ * Like the marshaling ones, Unmarshal goes by the methods a type lists. */
+typedef struct XmlUnmarshalerVT {
+    const Type *self_type;
+    Error (*unmarshal_xml)(void *self, XmlDecoder *d, XmlStartElement start);
+} XmlUnmarshalerVT;
+
+typedef struct XmlUnmarshaler {
+    const XmlUnmarshalerVT *vt;
+    void *data;
+} XmlUnmarshaler;
+
+typedef struct XmlUnmarshalerAttrVT {
+    const Type *self_type;
+    Error (*unmarshal_xml_attr)(void *self, Alloc *a, XmlAttr attr);
+} XmlUnmarshalerAttrVT;
+
+typedef struct XmlUnmarshalerAttr {
+    const XmlUnmarshalerAttrVT *vt;
+    void *data;
+} XmlUnmarshalerAttr;
+
+extern const Type burrow_type_XmlUnmarshaler;
+extern const Type burrow_type_XmlUnmarshalerAttr;
+
+/* xml.UnmarshalError, which is a string in Go: an element that did not
+ * match the XMLName field of the struct it was read into. */
+typedef Str XmlUnmarshalError;
+
+extern const Type *const TYPE_XML_UNMARSHAL_ERROR;
+
+/* The message, which is e itself, copied into a. */
+BURROW_OWNS(ret) Str xml_unmarshal_error_error(XmlUnmarshalError e, Alloc *a);
+
+/* xml.Unmarshal. Reads the first element in data into the value v points
+ * at. An Any with no type is Go's non-pointer case and one with a type and
+ * no data its nil pointer; both are errors. */
+BURROW_OWNS(v) BURROW_STATIC(ret) Error xml_unmarshal(Alloc *a, Slice data, Any v);
+
+/* Decoder.Decode. Reads tokens up to the next start element and unmarshals
+ * that element into v, allocating from d->a. */
+BURROW_OWNS(v) BURROW_STATIC(ret) Error xml_decoder_decode(XmlDecoder *d, Any v);
+
+/* Decoder.DecodeElement. Unmarshals the element start opened, which the
+ * caller has already read, into v. A NULL start is xml_decoder_decode. */
+BURROW_OWNS(v) BURROW_STATIC(ret) Error
+xml_decoder_decode_element(XmlDecoder *d, Any v, const XmlStartElement *start);
 
 /* ---------------------------------------------------------------- escaping */
 

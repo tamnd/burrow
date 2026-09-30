@@ -25,6 +25,11 @@ bool burrow__xml_is_valid_directive(Slice dir);
 /* Go's isName. */
 bool burrow__xml_is_name(Str s);
 
+/* pushEOF and popEOF, which fence off the element an UnmarshalXML method
+ * is given. */
+bool burrow__xml_dec_push_eof(XmlDecoder *d);
+bool burrow__xml_dec_pop_eof(XmlDecoder *d);
+
 /* ---------------------------------------------------------------- encoding */
 
 /* Where escaped text goes: an IoWriter for EscapeText, the encoder's buffer
@@ -146,5 +151,13 @@ const XmlTypeInfo *burrow__xml_type_info(const Type *t, Error *err);
  * struct is on the way. */
 void *burrow__xml_field_value(const XmlFieldInfo *f, const Type *t, void *p,
                               const Type **ft);
+
+/* ---------------------------------------------------------------- unmarshal */
+
+/* Go's errUnmarshalDepth: exceeded max depth. */
+extern const Error burrow__xml_err_unmarshal_depth;
+
+/* What xml_decoder_raw_token returns inside an UnmarshalXML method. */
+extern const Error burrow__xml_err_raw_token;
 
 #endif /* BURROW_SRC_ENCODING_XML_INTERNAL_H */

@@ -534,8 +534,8 @@ static void gob_encode_gob_encoder(GobEncoder *e, GobEncBuf *b, const GobUserTyp
         void *q = *(void **)v.p;
         if (q == NULL)
             panic_str(fmt_sprintf_v(
-                heap_allocator(), "value method %s called using nil %s pointer",
-                ut->enc_method->name, burrow__gob_type_string(heap_allocator(), v.t)));
+                error_allocator(), "value method %s called using nil %s pointer",
+                ut->enc_method->name, burrow__gob_type_string(error_allocator(), v.t)));
         v.t = v.t->elem;
         v.p = q;
     }
@@ -905,9 +905,9 @@ Error gob_encoder_encode_value(GobEncoder *e, Any v) {
     if (v.t == NULL || v.data == NULL)
         return errors_new(error_allocator(), BURROW_S("gob: cannot encode nil value"));
     if (v.t->kind == KIND_POINTER && *(void **)v.data == NULL)
-        panic_str(fmt_sprintf_v(heap_allocator(),
+        panic_str(fmt_sprintf_v(error_allocator(),
                                 "gob: cannot encode nil pointer of type %s",
-                                burrow__gob_type_string(heap_allocator(), v.t)));
+                                burrow__gob_type_string(error_allocator(), v.t)));
     sync_mutex_lock(&e->mu);
     e->nw = 1;
     Error err = BURROW_NO_ERROR;

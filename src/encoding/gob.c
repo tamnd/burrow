@@ -938,9 +938,12 @@ static GobType *gob_new_type_object_l(Str name, const GobUserType *ut, const Typ
             if (fut == NULL)
                 return NULL;
             Str tname = burrow__gob_type_name(fut->base);
-            if (tname.len == 0)
+            bool owned = tname.len == 0;
+            if (owned)
                 tname = burrow__gob_type_string(heap_allocator(), fut->base);
             GobType *gt = gob_get_base_type_l(tname, f->type, err);
+            if (owned && tname.p != NULL)
+                mem_free(heap_allocator(), (void *)(uintptr_t)tname.p, (size_t)tname.len, 1);
             if (gt == NULL)
                 return NULL;
             if (!gob_set_type_id(gt) || !gob_add_field(st, f->name, gt->id))
@@ -1206,9 +1209,9 @@ static void gob_register_name_l(Str name, const Type *t) {
             gob_panicf_unlock(error_text(burrow_err_out_of_memory));
     } else if (have != ut->user) {
         gob_panicf_unlock(fmt_sprintf_v(
-            heap_allocator(), "gob: registering duplicate types for %q: %s != %s", name,
-            burrow__gob_type_string(heap_allocator(), have),
-            burrow__gob_type_string(heap_allocator(), ut->user)));
+            error_allocator(), "gob: registering duplicate types for %q: %s != %s", name,
+            burrow__gob_type_string(error_allocator(), have),
+            burrow__gob_type_string(error_allocator(), ut->user)));
     }
     Str *n = (Str *)gob_pget(gob_type_to_name, ut->base);
     if (n == NULL) {
@@ -1221,19 +1224,20 @@ static void gob_register_name_l(Str name, const Type *t) {
     } else if (!str_eq(*n, name)) {
         map_del(gob_name_to_type, &name);
         gob_panicf_unlock(fmt_sprintf_v(
-            heap_allocator(), "gob: registering duplicate names for %s: %q != %q",
-            burrow__gob_type_string(heap_allocator(), ut->user), *n, name));
+            error_allocator(), "gob: registering duplicate names for %s: %q != %q",
+            burrow__gob_type_string(error_allocator(), ut->user), *n, name));
     }
 }
 
-/* Register's choice of name. */
+/* Register's choice of name. It comes from the error allocator, which
+ * keeps it, since a panic out of registering would leak a heap copy. */
 static Str gob_register_name_for(const Type *t) {
     Str name = burrow__gob_type_name(t);
     if (name.len == 0)
-        return burrow__gob_type_string(heap_allocator(), t);
+        return burrow__gob_type_string(error_allocator(), t);
     if (t->pkg_path.len == 0)
         return name;
-    return fmt_sprintf_v(heap_allocator(), "%s.%s", t->pkg_path, name);
+    return fmt_sprintf_v(error_allocator(), "%s.%s", t->pkg_path, name);
 }
 
 void gob_register_name(Str name, Any v) {

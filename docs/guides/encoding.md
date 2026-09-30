@@ -741,6 +741,62 @@ Slice evb = jsonv2_marshal_v(a, BURROW_ANY(TYPE_OF(Event), &ev), &err, 0);
 
 `ev.Data` is `{"x": 1, "y": 2}`, spaces and all, and `evb` is `{"kind":"click","data":{"x":1,"y":2}}`. Tagged `json:",embed"`, a `JsontextValue` field is the fallback for members no other field claims, like the map in `Loose` above, except that it collects them as one JSON object.
 
+## JSON, the v1 API
+
+`burrow/encoding/json.h` is Go's `encoding/json`. In Go 1.25 and later that package is a thin layer over v2, and here it is the same: `json_marshal` and `json_unmarshal` call the v2 code with v1's defaults switched on. Those defaults are the old behaviour people already rely on. Map keys come out sorted, `<`, `>` and `&` are escaped, and member names match field names without regard to case.
+
+<!-- example: ../examples/encoding/json.c#types -->
+```c
+#define PLAYER_FIELDS(F, T)                                                            \
+    F(T, Str, Name, "")                                                                \
+    F(T, Int, Level, "json:\"level\"")                                                 \
+    F(T, Scores, Scores, "json:\"scores\"")
+BURROW_STRUCT(Player, PLAYER_FIELDS);
+```
+
+<!-- example: ../examples/encoding/json.c#marshal -->
+```c
+Player p = {BURROW_S("ada <admin>"), 3, map_make(a, TYPE_OF(Str), TYPE_INT, 2)};
+BURROW_MAP_SET(Str, Int, p.Scores, BURROW_S("b"), 20);
+BURROW_MAP_SET(Str, Int, p.Scores, BURROW_S("a"), 10);
+Error err = BURROW_NO_ERROR;
+Slice out = json_marshal(a, BURROW_ANY(TYPE_OF(Player), &p), &err);
+```
+
+`out` is `{"Name":"ada \u003cadmin\u003e","level":3,"scores":{"a":10,"b":20}}`, the same bytes Go writes for the same struct. Going the other way, `LEVEL` in the input still finds the `level` field:
+
+<!-- example: ../examples/encoding/json.c#unmarshal -->
+```c
+Player q = {0};
+err = json_unmarshal(a, BURROW_B("{\"name\":\"grace\",\"LEVEL\":7}"),
+                     BURROW_ANY(TYPE_OF(Player), &q));
+```
+
+The errors are v1's errors, with v1's wording. A wrong type gives a `JsonUnmarshalTypeError`, and bad JSON gives a `JsonSyntaxError`:
+
+<!-- example: ../examples/encoding/json.c#errors -->
+```c
+err = json_unmarshal(a, BURROW_B("{\"level\":\"high\"}"),
+                     BURROW_ANY(TYPE_OF(Player), &q));
+const JsonUnmarshalTypeError *te = errors_as(err, TYPE_JSON_UNMARSHAL_TYPE_ERROR);
+```
+
+The message is `json: cannot unmarshal string into Go struct field Player.level of type int`, `te->value` is `string` and `te->offset` is 15. The "Go struct" wording is kept on purpose, so that code matching on Go's messages works unchanged. Cutting the input off after `"level":` gives `unexpected end of JSON input`, and the target is left as it was.
+
+The functions that work on JSON text without a type are here too:
+
+<!-- example: ../examples/encoding/json.c#indent -->
+```c
+BytesBuffer buf = BYTES_BUFFER(a);
+Slice src = BURROW_B("{\"a\": [1, 2], \"b\": {}}");
+bool ok = json_valid(src);
+err = json_indent(&buf, src, BURROW_S(""), BURROW_S("  "));
+```
+
+`json_valid` returns true, and the buffer ends up holding the value spread over several lines with two spaces per level, the way `json.Indent` lays it out. `json_compact` and `json_html_escape` work the same way.
+
+Each v1 behaviour also has its own option, such as `json_format_byte_array_as_array` or `json_match_case_sensitive_delimiter`, for code that calls v2's functions but wants only some of the old rules. `json_default_options_v1` turns all of them on at once.
+
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/json/v2`, `time.Time` and `time.Duration` wait on the calendar half of `time`, and the v1 API of `encoding/json` is still to come.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/json/v2`, `time.Time` and `time.Duration` wait on the calendar half of `time`. From `encoding/json`, `Encoder`, `Decoder` and the token API are still to come.

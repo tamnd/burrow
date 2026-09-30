@@ -217,7 +217,9 @@ static Error jv_marshal_text(JsontextEncoder *e, const Type *t, void *p,
         return err;
     err = burrow__jsonv2_wrap_unsupported(err, append ? "AppendText method"
                                                       : "MarshalText method");
-    /* v1 wraps the error in a MarshalerError here, which comes with v1. */
+    if (jsonflags_get(&e->opts, JSONFLAG_REPORT_ERRORS_WITH_LEGACY_SEMANTICS))
+        return burrow__json_new_marshaler_error(t, err,
+                                                append ? "AppendText" : "MarshalText");
     if (!burrow__jsonv2_is_semantic(err) && !burrow__jsontext_is_io_error(err))
         err = burrow__jsonv2_marshal_error_before(e, t, err);
     return err;
@@ -230,9 +232,10 @@ typedef struct JvMethodCall {
 } JvMethodCall;
 
 /* MarshalJSON, or a MarshalFunc: bytes that must be one JSON value. */
-Error burrow__jsonv2_call_marshal(JsontextEncoder *e, const Type *t,
+Error burrow__jsonv2_call_marshal(JsontextEncoder *e, const Type *t, const Type *vt,
                                   const JsontextOptions *mo, const char *what,
-                                  JvMarshalCall call, const void *ctx) {
+                                  const char *src, JvMarshalCall call,
+                                  const void *ctx) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Error err = BURROW_NO_ERROR;
@@ -240,17 +243,20 @@ Error burrow__jsonv2_call_marshal(JsontextEncoder *e, const Type *t,
     if (BURROW_FAILED(err)) {
         arena_free(&ar);
         err = burrow__jsonv2_wrap_unsupported(err, what);
+        /* Always wrapped, where unmarshal never is. */
         if (jsonflags_get(mo, JSONFLAG_REPORT_ERRORS_WITH_LEGACY_SEMANTICS))
-            return err;
+            return burrow__json_new_marshaler_error(vt, err, src);
         return burrow__jsonv2_collapse_semantic(
             burrow__jsonv2_marshal_error_before(e, t, err));
     }
     err = jsontext_encoder_write_value(e, val);
     arena_free(&ar);
-    if (BURROW_FAILED(err) &&
-        !jsonflags_get(mo, JSONFLAG_REPORT_ERRORS_WITH_LEGACY_SEMANTICS) &&
-        burrow__jsonv2_is_syntactic(err))
-        err = burrow__jsonv2_marshal_error_before(e, t, err);
+    if (BURROW_FAILED(err)) {
+        if (jsonflags_get(mo, JSONFLAG_REPORT_ERRORS_WITH_LEGACY_SEMANTICS))
+            return burrow__json_new_marshaler_error(vt, err, src);
+        if (burrow__jsonv2_is_syntactic(err))
+            err = burrow__jsonv2_marshal_error_before(e, t, err);
+    }
     return err;
 }
 
@@ -267,8 +273,9 @@ static Slice jv_marshal_json_call(const void *ctx, Alloc *a, Error *err) {
 
 /* MarshalJSONTo, or a MarshalToFunc. Sets *skip when the call stepped aside
  * without writing anything, so the next one down gets its turn. */
-Error burrow__jsonv2_call_to(JsontextEncoder *e, const Type *t, JvToCall call,
-                             const void *ctx, bool *skip) {
+Error burrow__jsonv2_call_to(JsontextEncoder *e, const Type *t, const Type *vt,
+                             const char *src, JvToCall call, const void *ctx,
+                             bool *skip) {
     Int prev_depth = jt_depth(&e->st);
     int64_t prev_len = jt_e_len(e->st.last);
     jsonflags_set(&e->opts, JSONFLAG_WITHIN_ARSHAL_CALL | 1);
@@ -287,6 +294,8 @@ Error burrow__jsonv2_call_to(JsontextEncoder *e, const Type *t, JvToCall call,
         }
         err = burrow__jsonv2_err_unsupported_mutation;
     }
+    if (jsonflags_get(&e->opts, JSONFLAG_REPORT_ERRORS_WITH_LEGACY_SEMANTICS))
+        return burrow__json_new_marshaler_error(vt, err, src);
     if (!burrow__jsontext_is_io_error(err))
         err = burrow__jsonv2_error_with_position_enc(e, t, prev_depth, prev_len, err);
     return err;
@@ -315,8 +324,8 @@ Error burrow__jsonv2_marshal_methods(JsontextEncoder *e, const Type *t, void *p,
                 continue;
             bool skip = false;
             JvMethodCall c = {m, p};
-            Error err =
-                burrow__jsonv2_call_to(e, t, jv_marshal_json_to_call, &c, &skip);
+            Error err = burrow__jsonv2_call_to(e, t, t, "MarshalJSONTo",
+                                               jv_marshal_json_to_call, &c, &skip);
             if (skip)
                 continue;
             return err;
@@ -326,8 +335,9 @@ Error burrow__jsonv2_marshal_methods(JsontextEncoder *e, const Type *t, void *p,
                 continue;
             {
                 JvMethodCall c = {m, p};
-                return burrow__jsonv2_call_marshal(e, t, mo, "MarshalJSON method",
-                                                   jv_marshal_json_call, &c);
+                return burrow__jsonv2_call_marshal(e, t, t, mo, "MarshalJSON method",
+                                                   "MarshalJSON", jv_marshal_json_call,
+                                                   &c);
             }
         case JV_M_APPEND_TEXT:
             return jv_marshal_text(e, t, p, m, true);

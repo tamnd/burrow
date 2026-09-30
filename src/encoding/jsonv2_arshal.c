@@ -2726,6 +2726,13 @@ static Error jv_unmarshal_any_value(JsontextDecoder *d, JsontextOptions *uo, Any
         return BURROW_NO_ERROR;
     }
     default: {
+        if (JV_GET(uo, JSONFLAG_UNMARSHAL_ANY_WITH_RAW_NUMBER)) {
+            bool oom = false;
+            JsonNumber n = jv_keep_str(d, str_from_bytes(val.p, val.len), &oom);
+            if (oom || !jv_box(d, TYPE_JSON_NUMBER, &n, out))
+                return burrow_err_out_of_memory;
+            return BURROW_NO_ERROR;
+        }
         Error perr = BURROW_NO_ERROR;
         double fv = strconv_parse_float(str_from_bytes(val.p, val.len), 64, &perr);
         if (!jv_box(d, TYPE_FLOAT64, &fv, out))
@@ -2813,7 +2820,8 @@ static Error jv_unmarshal_interface(JsontextDecoder *d, const Type *t, void *p,
             vt = TYPE_STRING;
             break;
         case '0':
-            vt = TYPE_FLOAT64;
+            vt = JV_GET(uo, JSONFLAG_UNMARSHAL_ANY_WITH_RAW_NUMBER) ? TYPE_JSON_NUMBER
+                                                                    : TYPE_FLOAT64;
             break;
         case '{':
             vt = TYPE_JSONV2_MAP_STRING_ANY;

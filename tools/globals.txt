@@ -242,3 +242,5 @@ global	src/weak/weak.c	wk_cap	weak	Only touched under wk_lock.
 global	src/weak/weak.c	wk_sweep_at	weak	Only touched under wk_lock.
 global	src/weak/weak.c	wk_hooked	weak	Only touched under wk_lock.
 global	src/weak/weak.c	wk_live	weak	Written under wk_lock with a release store, read without it with an acquire load, as the comment on it says.
+global	src/encoding/xml.c	xml_html_entity_once	tables	A SyncOnce, so the map is built once however many decoders ask for it at the same moment.
+global	src/encoding/xml.c	xml_html_entity_map	tables	Written once inside xml_html_entity_once and only read after it. Go builds HTMLEntity at package init, which C has no place for.

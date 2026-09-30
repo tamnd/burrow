@@ -12,7 +12,9 @@
 # TZif file cut short or with a byte flipped.
 #
 # The generator is a test file laid over the package with go test -overlay, so
-# it can call tzset and loadTzinfoFromZip by name.
+# it can call tzset and its pieces through Go's export_test.go. It runs with
+# TZ=UTC, because the binary decoding picks Local when the offset matches, and
+# the test allows for the Local of whatever machine it runs on.
 #
 # Copyright 2026 The burrow Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style licence that can be found
@@ -415,7 +417,7 @@ func TestZZGen(t *testing.T) {
 GO
 
 printf '{"Replace":{"%s/zz_gen_test.go":"%s/zz_gen_test.go"}}' "$pkg" "$tmp" > "$tmp/overlay.json"
-GEN_ZIP="$goroot/lib/time/zoneinfo.zip" go test -overlay "$tmp/overlay.json" -run '^TestZZGen$' -count=1 -v time > "$tmp/out.txt" ||
+TZ=UTC GEN_ZIP="$goroot/lib/time/zoneinfo.zip" go test -overlay "$tmp/overlay.json" -run '^TestZZGen$' -count=1 -v time > "$tmp/out.txt" ||
     { grep -m1 -B2 -A30 "^panic\|^fatal\|FAIL\|cannot\|undefined\|zz_gen" "$tmp/out.txt" >&2; exit 1; }
 sed -n '/^\/\* What Go/,$p' "$tmp/out.txt" | sed '/^--- PASS/,$d' > "$out"
 if command -v clang-format >/dev/null 2>&1; then

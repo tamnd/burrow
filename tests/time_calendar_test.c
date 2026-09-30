@@ -16,6 +16,7 @@
 #include "../src/time/time_internal.h"
 
 #include "burrow/error.h"
+#include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
 #include "burrow/slice.h"
 #include "burrow/time.h"
@@ -416,14 +417,17 @@ static void TestDurationMethods(TestingT *t) {
 }
 
 static void TestMonthWeekdayString(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
     for (size_t i = 0; i < LEN(g_months); i++) {
-        Str s = time_month_string(g_months[i].v, heap_allocator());
+        Str s = time_month_string(g_months[i].v, arena_allocator(&ar));
         CHECK(str_eq(s, cstr(g_months[i].want)));
     }
     for (size_t i = 0; i < LEN(g_weekdays); i++) {
-        Str s = time_weekday_string(g_weekdays[i].v, heap_allocator());
+        Str s = time_weekday_string(g_weekdays[i].v, arena_allocator(&ar));
         CHECK(str_eq(s, cstr(g_weekdays[i].want)));
     }
+    arena_free(&ar);
 }
 
 static void TestUnmarshalBinaryBad(TestingT *t) {
@@ -439,8 +443,18 @@ static void TestUnmarshalBinaryBad(TestingT *t) {
         }
         Int off = 0;
         Str zn = time_zone(tm, &off);
+        /* The generator runs with TZ=UTC. Where this machine's Local has the
+         * offset at that instant, the decoding picks Local, which is Go's rule,
+         * and the zone is Local's. */
+        Str wz = cstr(c->zone);
+        Int loff = 0;
+        Str lz = time_zone(time_in(time_from_unix(c->unix, 0), time_local_loc), &loff);
+        if (c->err == NULL && wz.len == 0 && loff == c->offset) {
+            wz = lz;
+            CHECK(time_location(tm) == time_local_loc);
+        }
         if (time_unix(tm) != c->unix || time_nanosecond(tm) != c->nsec ||
-            !str_eq(zn, cstr(c->zone)) || off != c->offset)
+            !str_eq(zn, wz) || off != c->offset)
             testing_t_errorf_v(t, "case %d: got %d.%d %q %d, want %d.%d %q %d", (Int)i,
                                time_unix(tm), time_nanosecond(tm), zn, off, c->unix,
                                c->nsec, c->zone, c->offset);

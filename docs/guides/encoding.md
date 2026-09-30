@@ -795,8 +795,51 @@ err = json_indent(&buf, src, BURROW_S(""), BURROW_S("  "));
 
 `json_valid` returns true, and the buffer ends up holding the value spread over several lines with two spaces per level, the way `json.Indent` lays it out. `json_compact` and `json_html_escape` work the same way.
 
+A `JsonDecoder` reads one value after another from a reader, and a `JsonEncoder` writes each value it is given on a line of its own. Both keep the `Alloc` they were made with and put everything they hand out there, so an arena that outlives the stream is the easy choice:
+
+<!-- example: ../examples/encoding/json.c#stream -->
+```c
+BytesReader in;
+bytes_reader_reset(&in, BURROW_B("{\"Name\":\"a\"} {\"Name\":\"b\"}"));
+BytesBuffer lines = BYTES_BUFFER(a);
+JsonDecoder *dec = json_new_decoder(a, bytes_reader_as_io_reader(&in));
+JsonEncoder *enc = json_new_encoder(a, bytes_buffer_as_io_writer(&lines));
+for (;;) {
+    Player each = {0};
+    err = json_decoder_decode(dec, BURROW_ANY(TYPE_OF(Player), &each));
+    if (BURROW_FAILED(err))
+        break;
+    each.Level = 1;
+    err = json_encoder_encode(enc, BURROW_ANY(TYPE_OF(Player), &each));
+}
+```
+
+The loop stops when `json_decoder_decode` returns `io_eof`, and `lines` holds `{"Name":"a","level":1,"scores":null}` and `{"Name":"b","level":1,"scores":null}`, one per line. A nil map is `null` in v1. Input that stops in the middle of a value gives `io_err_unexpected_eof` instead. That error sticks, and so does a syntax error: as in Go, the decoder returns it again from every later call.
+
+For input too big to decode in one go, `json_decoder_token` reads it a token at a time. A token is a `JsonToken`, which is an `Any`. Its type says what came back: a `JsonDelim` for a bracket or brace, a `Str`, a `double`, a `bool`, or nothing for `null`:
+
+<!-- example: ../examples/encoding/json.c#tokens -->
+```c
+bytes_reader_reset(&in, BURROW_B("[\"x\", 2]"));
+dec = json_new_decoder(a, bytes_reader_as_io_reader(&in));
+for (;;) {
+    JsonToken tok = json_decoder_token(dec, &err);
+    if (BURROW_FAILED(err))
+        break;
+    if (tok.t == TYPE_JSON_DELIM)
+        printf("delim %c\n", (char)*(const JsonDelim *)tok.data);
+    else if (tok.t == TYPE_OF(Str))
+        printf("string " BURROW_STR_FMT "\n",
+               BURROW_STR_ARG(*(const Str *)tok.data));
+    else if (tok.t == TYPE_FLOAT64)
+        printf("number %g\n", *(const double *)tok.data);
+}
+```
+
+This prints `delim [`, `string x`, `number 2` and `delim ]`. Commas and colons never show up as tokens. `json_decoder_more` says whether the array or object being read has another element, and `json_decoder_use_number` makes numbers come back as `JsonNumber` text instead of doubles.
+
 Each v1 behaviour also has its own option, such as `json_format_byte_array_as_array` or `json_match_case_sensitive_delimiter`, for code that calls v2's functions but wants only some of the old rules. `json_default_options_v1` turns all of them on at once.
 
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/json/v2`, `time.Time` and `time.Duration` wait on the calendar half of `time`. From `encoding/json`, `Encoder`, `Decoder` and the token API are still to come.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/json/v2`, `time.Time` and `time.Duration` wait on the calendar half of `time`.

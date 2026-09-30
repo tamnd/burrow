@@ -63,6 +63,41 @@ int main(void) {
     printf("valid: %d, err %d\n", ok, BURROW_FAILED(err));
     show("indent", bytes_buffer_bytes(&buf));
 
+    // doc: stream
+    BytesReader in;
+    bytes_reader_reset(&in, BURROW_B("{\"Name\":\"a\"} {\"Name\":\"b\"}"));
+    BytesBuffer lines = BYTES_BUFFER(a);
+    JsonDecoder *dec = json_new_decoder(a, bytes_reader_as_io_reader(&in));
+    JsonEncoder *enc = json_new_encoder(a, bytes_buffer_as_io_writer(&lines));
+    for (;;) {
+        Player each = {0};
+        err = json_decoder_decode(dec, BURROW_ANY(TYPE_OF(Player), &each));
+        if (BURROW_FAILED(err))
+            break;
+        each.Level = 1;
+        err = json_encoder_encode(enc, BURROW_ANY(TYPE_OF(Player), &each));
+    }
+    // doc: end
+    printf("stream: eof %d\n", errors_is(err, io_eof));
+    show("lines", bytes_buffer_bytes(&lines));
+
+    // doc: tokens
+    bytes_reader_reset(&in, BURROW_B("[\"x\", 2]"));
+    dec = json_new_decoder(a, bytes_reader_as_io_reader(&in));
+    for (;;) {
+        JsonToken tok = json_decoder_token(dec, &err);
+        if (BURROW_FAILED(err))
+            break;
+        if (tok.t == TYPE_JSON_DELIM)
+            printf("delim %c\n", (char)*(const JsonDelim *)tok.data);
+        else if (tok.t == TYPE_OF(Str))
+            printf("string " BURROW_STR_FMT "\n",
+                   BURROW_STR_ARG(*(const Str *)tok.data));
+        else if (tok.t == TYPE_FLOAT64)
+            printf("number %g\n", *(const double *)tok.data);
+    }
+    // doc: end
+
     arena_free(&ar);
     return 0;
 }

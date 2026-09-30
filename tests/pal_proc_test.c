@@ -285,12 +285,12 @@ static void TestPalArgsBuffer(TestingT *t) {
         testing_t_errorf_v(t, "pal_args = %d, %s", (int)n, pal_errno_string(err));
         return;
     }
-    char small[8192];
+    char short_buf[8192];
     err = PAL_OK;
-    if (pal_args(small, n - 1, &err) != -1 || err != PAL_ERANGE)
+    if (pal_args(short_buf, n - 1, &err) != -1 || err != PAL_ERANGE)
         testing_t_errorf_v(t, "pal_args with %d bytes did not say PAL_ERANGE",
                            (int)(n - 1));
-    if (pal_args(small, n, NULL) != n || memcmp(small, buf, (size_t)n) != 0)
+    if (pal_args(short_buf, n, NULL) != n || memcmp(short_buf, buf, (size_t)n) != 0)
         testing_t_errorf_v(t, "pal_args with exactly %d bytes gave something else",
                            (int)n);
 }

@@ -4,6 +4,15 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.15 (2026-09-30)
+
+JSON v2 learns to call user code.
+
+### Added
+
+- `encoding/json/v2` calls the methods a type implements: MarshalJSON, MarshalJSONTo, UnmarshalJSON, UnmarshalJSONFrom, and the text and binary marshalers from `encoding`, with Go's order of preference and its error wrapping (#270).
+- `encoding/json/v2` WithMarshalers and WithUnmarshalers, with the four function constructors and the joins. Caller functions take priority over a type's methods, and can be registered for a concrete type, a pointer type or an interface (#271).
+
 ## v0.1.14 (2026-09-30)
 
 The second half of JSON v2's core.

@@ -816,10 +816,9 @@ enum { MAGIC = 123 };
  * called handle when there is one. */
 static int child(int argc, char **argv) {
     FlagFlagSet *fs = flag_new_flag_set(NULL, S("test"), FLAG_EXIT_ON_ERROR);
-    if (argc > 3) {
-        bool b;
+    bool b; /* outlives the parse, which sets it */
+    if (argc > 3)
         flag_flag_set_bool_var(fs, &b, str_from_cstr(argv[3]), false, S(""));
-    }
     Str arg = str_from_cstr(argv[2]);
     (void)flag_flag_set_parse(fs, ARGS(arg));
     flag_flag_set_free(fs);

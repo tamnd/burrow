@@ -1289,7 +1289,8 @@ static Error jv_marshal_map_body(JsontextEncoder *e, const Type *t, Map *m,
         return err;
     if (n > 0) {
         const Type *kt = t->key, *vt = t->elem;
-        bool non_default_key = jv_non_default(kt);
+        bool non_default_key =
+            jv_non_default(kt) || burrow__jsonv2_has_func(mo->marshalers, kt);
         if (!non_default_key &&
             jv_unique_key(kt, JV_GET(mo, JSONFLAG_ALLOW_INVALID_UTF8)))
             jsonstate_disable_namespace(&e->st);
@@ -1422,7 +1423,7 @@ static Error jv_unmarshal_map(JsontextDecoder *d, const Type *t, void *p,
         *(Map **)p = m;
     }
     const Type *kt = t->key, *vt = t->elem;
-    if (!jv_non_default(kt) &&
+    if (!jv_non_default(kt) && !burrow__jsonv2_has_func(uo->unmarshalers, kt) &&
         jv_unique_key(kt, JV_GET(uo, JSONFLAG_ALLOW_INVALID_UTF8)))
         jsonstate_disable_namespace(&d->st);
     Map *seen = NULL;
@@ -1692,7 +1693,8 @@ static Error jv_marshal_struct_members(JsontextEncoder *e, const Type *t, void *
             jv_is_legacy_empty(f->typ, v))
             continue;
         if (f->omitempty && !JV_GET(mo, JSONFLAG_OMIT_EMPTY_WITH_LEGACY_SEMANTICS) &&
-            !jv_non_default(f->typ)) {
+            !jv_non_default(f->typ) &&
+            !burrow__jsonv2_has_func(mo->marshalers, f->typ)) {
             bool has = false;
             if (jv_is_empty(f->typ, v, &has) && has)
                 continue;
@@ -2483,7 +2485,8 @@ static Error jv_marshal_interface(JsontextEncoder *e, const Type *t, void *p,
     const Type *et = jv_iface_elem(t, p, &v);
     if (et == NULL)
         return burrow__jsonv2_marshal_error_before(e, t, BURROW_NO_ERROR);
-    if (t == TYPE_ANY && !JV_GET(mo, JSONFLAG_STRINGIFY_NUMBERS | JSONFLAG_TAG_FLAGS))
+    if (t == TYPE_ANY && !JV_GET(mo, JSONFLAG_STRINGIFY_NUMBERS | JSONFLAG_TAG_FLAGS) &&
+        !burrow__jsonv2_from_any(mo->marshalers))
         return jv_marshal_any_value(e, et, v, mo);
     return burrow__jsonv2_marshal_value(e, et, v, mo);
 }
@@ -2673,7 +2676,8 @@ static Error jv_unmarshal_interface(JsontextDecoder *d, const Type *t, void *p,
     void *v;
     if (jv_is_zero(t, p)) {
         if (t == TYPE_ANY &&
-            !JV_GET(uo, JSONFLAG_ALLOW_DUPLICATE_NAMES | JSONFLAG_FORMAT_TAG)) {
+            !JV_GET(uo, JSONFLAG_ALLOW_DUPLICATE_NAMES | JSONFLAG_FORMAT_TAG) &&
+            !burrow__jsonv2_from_any(uo->unmarshalers)) {
             Any out = {NULL, NULL};
             err = jv_unmarshal_any_value(d, uo, &out);
             if (out.t != NULL)
@@ -2830,10 +2834,17 @@ Error burrow__jsonv2_unmarshal_default(JsontextDecoder *d, const Type *t, void *
     }
 }
 
-/* Go skips methods on pointer and interface kinds, since those follow through
- * to what they hold, which gets its own turn. */
+/* A WithMarshalers function comes first, for every kind. Go skips methods on
+ * pointer and interface kinds, since those follow through to what they hold,
+ * which gets its own turn. */
 Error burrow__jsonv2_marshal_value(JsontextEncoder *e, const Type *t, void *p,
                                    JsontextOptions *mo) {
+    if (mo->marshalers != NULL) {
+        bool done = false;
+        Error err = burrow__jsonv2_marshal_funcs(e, t, p, mo, &done);
+        if (done)
+            return err;
+    }
     if (t->nmethod > 0 && t->kind != KIND_POINTER && t->kind != KIND_INTERFACE) {
         JvMethods ms;
         burrow__jsonv2_methods(t, &ms);
@@ -2844,6 +2855,12 @@ Error burrow__jsonv2_marshal_value(JsontextEncoder *e, const Type *t, void *p,
 
 Error burrow__jsonv2_unmarshal_value(JsontextDecoder *d, const Type *t, void *p,
                                      JsontextOptions *uo) {
+    if (uo->unmarshalers != NULL) {
+        bool done = false;
+        Error err = burrow__jsonv2_unmarshal_funcs(d, t, p, uo, &done);
+        if (done)
+            return err;
+    }
     if (t->nmethod > 0 && t->kind != KIND_POINTER && t->kind != KIND_INTERFACE) {
         JvMethods ms;
         burrow__jsonv2_methods(t, &ms);

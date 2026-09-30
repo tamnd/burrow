@@ -223,20 +223,23 @@ static Error jv_marshal_text(JsontextEncoder *e, const Type *t, void *p,
     return err;
 }
 
-static Error jv_marshal_json(JsontextEncoder *e, const Type *t, void *p,
-                             const Method *m, const JsontextOptions *mo) {
+/* A method and the value it is called on, as the ctx of the calls below. */
+typedef struct JvMethodCall {
+    const Method *m;
+    void *recv;
+} JvMethodCall;
+
+/* MarshalJSON, or a MarshalFunc: bytes that must be one JSON value. */
+Error burrow__jsonv2_call_marshal(JsontextEncoder *e, const Type *t,
+                                  const JsontextOptions *mo, const char *what,
+                                  JvMarshalCall call, const void *ctx) {
     Arena ar;
     arena_init(&ar, NULL, 0);
-    EncodingAllocArg aa = arena_allocator(&ar);
     Error err = BURROW_NO_ERROR;
-    EncodingErrorArg ea = &err;
-    Slice val = {NULL, 0, 0, TYPE_BYTE};
-    void *args[2] = {(void *)&aa, (void *)&ea};
-    void *rets[1] = {&val};
-    method_call(m, p, args, rets);
+    Slice val = call(ctx, arena_allocator(&ar), &err);
     if (BURROW_FAILED(err)) {
         arena_free(&ar);
-        err = burrow__jsonv2_wrap_unsupported(err, "MarshalJSON method");
+        err = burrow__jsonv2_wrap_unsupported(err, what);
         if (jsonflags_get(mo, JSONFLAG_REPORT_ERRORS_WITH_LEGACY_SEMANTICS))
             return err;
         return burrow__jsonv2_collapse_semantic(
@@ -251,18 +254,25 @@ static Error jv_marshal_json(JsontextEncoder *e, const Type *t, void *p,
     return err;
 }
 
-/* MarshalJSONTo. Sets *skip when the method stepped aside without writing
- * anything, so the next one down gets its turn. */
-static Error jv_marshal_json_to(JsontextEncoder *e, const Type *t, void *p,
-                                const Method *m, bool *skip) {
+static Slice jv_marshal_json_call(const void *ctx, Alloc *a, Error *err) {
+    const JvMethodCall *c = (const JvMethodCall *)ctx;
+    EncodingAllocArg aa = a;
+    EncodingErrorArg ea = err;
+    Slice val = {NULL, 0, 0, TYPE_BYTE};
+    void *args[2] = {(void *)&aa, (void *)&ea};
+    void *rets[1] = {&val};
+    method_call(c->m, c->recv, args, rets);
+    return val;
+}
+
+/* MarshalJSONTo, or a MarshalToFunc. Sets *skip when the call stepped aside
+ * without writing anything, so the next one down gets its turn. */
+Error burrow__jsonv2_call_to(JsontextEncoder *e, const Type *t, JvToCall call,
+                             const void *ctx, bool *skip) {
     Int prev_depth = jt_depth(&e->st);
     int64_t prev_len = jt_e_len(e->st.last);
     jsonflags_set(&e->opts, JSONFLAG_WITHIN_ARSHAL_CALL | 1);
-    Error err = BURROW_NO_ERROR;
-    Jsonv2EncoderArg ep = e;
-    void *args[1] = {(void *)&ep};
-    void *rets[1] = {&err};
-    method_call(m, p, args, rets);
+    Error err = call(ctx, e);
     jsonflags_set(&e->opts, JSONFLAG_WITHIN_ARSHAL_CALL | 0);
     Int depth = jt_depth(&e->st);
     int64_t len = jt_e_len(e->st.last);
@@ -282,6 +292,16 @@ static Error jv_marshal_json_to(JsontextEncoder *e, const Type *t, void *p,
     return err;
 }
 
+static Error jv_marshal_json_to_call(const void *ctx, JsontextEncoder *e) {
+    const JvMethodCall *c = (const JvMethodCall *)ctx;
+    Error err = BURROW_NO_ERROR;
+    Jsonv2EncoderArg ep = e;
+    void *args[1] = {(void *)&ep};
+    void *rets[1] = {&err};
+    method_call(c->m, c->recv, args, rets);
+    return err;
+}
+
 Error burrow__jsonv2_marshal_methods(JsontextEncoder *e, const Type *t, void *p,
                                      JsontextOptions *mo, const JvMethods *ms) {
     bool legacy = jsonflags_get(mo, JSONFLAG_CALL_METHODS_WITH_LEGACY_SEMANTICS);
@@ -294,7 +314,9 @@ Error burrow__jsonv2_marshal_methods(JsontextEncoder *e, const Type *t, void *p,
             if (legacy && jt_e_need_name(e->st.last))
                 continue;
             bool skip = false;
-            Error err = jv_marshal_json_to(e, t, p, m, &skip);
+            JvMethodCall c = {m, p};
+            Error err =
+                burrow__jsonv2_call_to(e, t, jv_marshal_json_to_call, &c, &skip);
             if (skip)
                 continue;
             return err;
@@ -302,7 +324,11 @@ Error burrow__jsonv2_marshal_methods(JsontextEncoder *e, const Type *t, void *p,
         case JV_M_MARSHAL_JSON:
             if (legacy && jt_e_need_name(e->st.last))
                 continue;
-            return jv_marshal_json(e, t, p, m, mo);
+            {
+                JvMethodCall c = {m, p};
+                return burrow__jsonv2_call_marshal(e, t, mo, "MarshalJSON method",
+                                                   jv_marshal_json_call, &c);
+            }
         case JV_M_APPEND_TEXT:
             return jv_marshal_text(e, t, p, m, true);
         default:
@@ -356,40 +382,46 @@ static Error jv_unmarshal_text(JsontextDecoder *d, const Type *t, void *p,
     return err;
 }
 
-static Error jv_unmarshal_json(JsontextDecoder *d, const Type *t, void *p,
-                               const Method *m, const JsontextOptions *uo) {
+/* UnmarshalJSON, or an UnmarshalFunc: the next value as bytes. */
+Error burrow__jsonv2_call_unmarshal(JsontextDecoder *d, const Type *t,
+                                    const JsontextOptions *uo, const char *what,
+                                    JvUnmarshalCall call, const void *ctx) {
     Error err = BURROW_NO_ERROR;
     Slice val = jsontext_decoder_read_value(d, &err);
     if (BURROW_FAILED(err))
         return err;
-    EncodingAllocArg aa = d->out_alloc;
-    void *args[2] = {(void *)&aa, &val};
-    void *rets[1] = {&err};
-    method_call(m, p, args, rets);
+    err = call(ctx, d->out_alloc, val);
     if (BURROW_OK(err))
         return err;
-    err = burrow__jsonv2_wrap_unsupported(err, "UnmarshalJSON method");
+    err = burrow__jsonv2_wrap_unsupported(err, what);
     if (jsonflags_get(uo, JSONFLAG_REPORT_ERRORS_WITH_LEGACY_SEMANTICS))
         return err;
     return burrow__jsonv2_collapse_semantic(
         burrow__jsonv2_unmarshal_error_after(d, t, err));
 }
 
-static Error jv_unmarshal_json_from(JsontextDecoder *d, const Type *t, void *p,
-                                    const Method *m, const JsontextOptions *uo,
-                                    bool *skip) {
+static Error jv_unmarshal_json_call(const void *ctx, Alloc *a, Slice data) {
+    const JvMethodCall *c = (const JvMethodCall *)ctx;
+    Error err = BURROW_NO_ERROR;
+    EncodingAllocArg aa = a;
+    void *args[2] = {(void *)&aa, &data};
+    void *rets[1] = {&err};
+    method_call(c->m, c->recv, args, rets);
+    return err;
+}
+
+/* UnmarshalJSONFrom, or an UnmarshalFromFunc, with *skip as for the marshal
+ * side. */
+Error burrow__jsonv2_call_from(JsontextDecoder *d, const Type *t,
+                               const JsontextOptions *uo, JvFromCall call,
+                               const void *ctx, bool *skip) {
     Int prev_depth = jt_depth(&d->st);
     int64_t prev_len = jt_e_len(d->st.last);
-    /* Checked first so the method never sees an EOF of its own to report. */
+    /* Checked first so the call never sees an EOF of its own to report. */
     if (prev_depth == 1 && burrow__jsontext_at_eof(d))
         return io_eof;
     jsonflags_set(&d->opts, JSONFLAG_WITHIN_ARSHAL_CALL | 1);
-    Error err = BURROW_NO_ERROR;
-    EncodingAllocArg aa = d->out_alloc;
-    Jsonv2DecoderArg dp = d;
-    void *args[2] = {(void *)&aa, (void *)&dp};
-    void *rets[1] = {&err};
-    method_call(m, p, args, rets);
+    Error err = call(ctx, d->out_alloc, d);
     jsonflags_set(&d->opts, JSONFLAG_WITHIN_ARSHAL_CALL | 0);
     Int depth = jt_depth(&d->st);
     int64_t len = jt_e_len(d->st.last);
@@ -413,6 +445,18 @@ static Error jv_unmarshal_json_from(JsontextDecoder *d, const Type *t, void *p,
     return err;
 }
 
+static Error jv_unmarshal_json_from_call(const void *ctx, Alloc *a,
+                                         JsontextDecoder *d) {
+    const JvMethodCall *c = (const JvMethodCall *)ctx;
+    Error err = BURROW_NO_ERROR;
+    EncodingAllocArg aa = a;
+    Jsonv2DecoderArg dp = d;
+    void *args[2] = {(void *)&aa, (void *)&dp};
+    void *rets[1] = {&err};
+    method_call(c->m, c->recv, args, rets);
+    return err;
+}
+
 Error burrow__jsonv2_unmarshal_methods(JsontextDecoder *d, const Type *t, void *p,
                                        JsontextOptions *uo, const JvMethods *ms) {
     bool legacy = jsonflags_get(uo, JSONFLAG_CALL_METHODS_WITH_LEGACY_SEMANTICS);
@@ -425,7 +469,9 @@ Error burrow__jsonv2_unmarshal_methods(JsontextDecoder *d, const Type *t, void *
             if (legacy && jt_e_need_name(d->st.last))
                 continue;
             bool skip = false;
-            Error err = jv_unmarshal_json_from(d, t, p, m, uo, &skip);
+            JvMethodCall c = {m, p};
+            Error err = burrow__jsonv2_call_from(d, t, uo, jv_unmarshal_json_from_call,
+                                                 &c, &skip);
             if (skip)
                 continue;
             return err;
@@ -433,7 +479,11 @@ Error burrow__jsonv2_unmarshal_methods(JsontextDecoder *d, const Type *t, void *
         case JV_M_UNMARSHAL_JSON:
             if (legacy && jt_e_need_name(d->st.last))
                 continue;
-            return jv_unmarshal_json(d, t, p, m, uo);
+            {
+                JvMethodCall c = {m, p};
+                return burrow__jsonv2_call_unmarshal(d, t, uo, "UnmarshalJSON method",
+                                                     jv_unmarshal_json_call, &c);
+            }
         default:
             return jv_unmarshal_text(d, t, p, m, uo);
         }

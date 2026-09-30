@@ -677,6 +677,49 @@ err = jsonv2_unmarshal_v(a, rel, BURROW_ANY(TYPE_OF(Release), &r2), 0);
 
 Marshal tries `MarshalJSONTo`, `MarshalJSON`, `AppendText` and `MarshalText` in that order and uses the first one the type has. Unmarshal tries `UnmarshalJSONFrom`, `UnmarshalJSON` and `UnmarshalText`. The two that take a coder, `MarshalJSONTo` and `UnmarshalJSONFrom`, have to write or read exactly one value, and either can return `errors_err_unsupported` without touching the coder to hand over to the next method in the list. The signatures are `JSONV2_SIG_MARSHAL_JSON_TO`, `JSONV2_SIG_MARSHAL_JSON`, `JSONV2_SIG_UNMARSHAL_JSON_FROM` and `JSONV2_SIG_UNMARSHAL_JSON`, next to the encoding package's for the text methods. A field tagged `omitzero` whose type has an `IsZero` method, with `JSONV2_SIG_IS_ZERO`, is left out when the method says so.
 
+A type can only list methods for itself. To change how some other type is written, or to change it for one call and not the next, hand Marshal a function for it with `jsonv2_with_marshalers`, and Unmarshal one with `jsonv2_with_unmarshalers`. These write every bool as `"yes"` or `"no"` and read it back the same way:
+
+<!-- example: ../examples/encoding/jsonv2.c#yesno -->
+```c
+static Slice yes_no(void *ctx, Alloc *a, Any v, Error *err) {
+    (void)ctx;
+    (void)a;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    Str s = *(const bool *)v.data ? BURROW_S("\"yes\"") : BURROW_S("\"no\"");
+    return (Slice){(void *)(uintptr_t)s.p, s.len, s.len, TYPE_BYTE};
+}
+
+static Error parse_yes_no(void *ctx, Alloc *a, Slice data, Any v) {
+    (void)ctx;
+    (void)a;
+    Str s = str_from_bytes(data.p, data.len);
+    if (!str_eq(s, BURROW_S("\"yes\"")) && !str_eq(s, BURROW_S("\"no\"")))
+        return errors_new(error_allocator(), BURROW_S("want yes or no"));
+    *(bool *)v.data = str_eq(s, BURROW_S("\"yes\""));
+    return BURROW_NO_ERROR;
+}
+
+BURROW_PTR_TYPE(BoolPtr, bool);
+BURROW_SLICE_TYPE(Bools, bool);
+```
+
+<!-- example: ../examples/encoding/jsonv2.c#funcs -->
+```c
+Jsonv2Marshalers *ms = jsonv2_marshal_func(a, TYPE_BOOL, yes_no, NULL);
+Jsonv2Unmarshalers *us =
+    jsonv2_unmarshal_func(a, TYPE_OF(BoolPtr), parse_yes_no, NULL);
+bool flags[] = {true, false};
+Slice fl = {flags, 2, 2, TYPE_BOOL};
+Slice words = jsonv2_marshal_v(a, BURROW_ANY(TYPE_OF(Bools), &fl), &err, 1,
+                               jsonv2_with_marshalers(ms));
+Slice fl2 = slice_nil(TYPE_BOOL);
+err = jsonv2_unmarshal_v(a, BURROW_B("[\"no\",\"maybe\"]"),
+                         BURROW_ANY(TYPE_OF(Bools), &fl2), 1,
+                         jsonv2_with_unmarshalers(us));
+```
+
+`words` is `["yes","no"]`, and the second element fails with `json: cannot unmarshal JSON string into Go *bool within "/1": want yes or no`. The type a function is for says which values it gets. A plain type like `TYPE_BOOL` means values of exactly that type, an unnamed pointer to T means values of T, which is what an unmarshal function has to be set up with since it fills the value in, and an interface means values whose type has its methods. The function is asked about every value on the way down, fields, elements, map keys and what pointers and interfaces hold, and it comes before the type's own methods. `jsonv2_marshal_to_func` and `jsonv2_unmarshal_from_func` work on the coder instead of on bytes and may return `errors_err_unsupported` to hand the value on, and `jsonv2_join_marshalers` puts several sets into one, with the earlier ones asked first.
+
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/json/v2`, the `WithMarshalers` family of caller supplied functions, `time.Time` and `jsontext.Value` as a field are still to come, and so is the v1 API of `encoding/json`.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/json/v2`, `time.Time` and `jsontext.Value` as a field are still to come, and so is the v1 API of `encoding/json`.

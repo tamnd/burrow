@@ -161,3 +161,10 @@ image: method (*RGBA64) SubImage: returns the concrete ImageRGBA64, and image_rg
 image: method (*YCbCr) SubImage: returns the concrete ImageYCbCr, and image_y_cb_cr_as_image gives the interface
 image: method (*Uniform) RGBA: the four results come back as one ColorRGBAValue
 image: func RegisterFormat: decode and decodeConfig are BURROW_FUNC values that can carry state
+
+# include/burrow/flag.h: TextVar's variable and default are Any values of the
+# same type, because the set has to copy the default into the variable and
+# compare the two types, and an EncodingTextUnmarshaler carries neither the type
+# nor the size. The methods are found through the type, as encoding does.
+flag: func TextVar: the variable and the default are Any values found by type, so the default can be copied in
+flag: method (*FlagSet) TextVar: the variable and the default are Any values found by type, so the default can be copied in

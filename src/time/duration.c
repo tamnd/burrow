@@ -15,8 +15,10 @@
 #include "burrow/time.h"
 
 #include "burrow/core.h"
+#include "burrow/declare.h"
 #include "burrow/error.h"
 #include "burrow/mem.h"
+#include "burrow/type.h"
 #include "burrow/utf8.h"
 
 #include <stdbool.h>
@@ -386,3 +388,30 @@ Duration time_parse_duration(Str s, Error *err) {
         return INVALID(orig);
     return (Duration)d;
 }
+
+/* The descriptor. */
+static Str duration_m_string(Duration *self) {
+    return duration_string(*self, error_allocator());
+}
+
+#define DURATION_SIG_STRING(IN, OUT) OUT(Str)
+#define DURATION_METHODS(M, T) M(T, String, duration_m_string, DURATION_SIG_STRING)
+
+BURROW_METHODS_DEFINE(Duration, DURATION_METHODS);
+
+const Type burrow_type_Duration = {
+    {(const Byte *)"Duration", 8},
+    {(const Byte *)"time", 4},
+    KIND_INT64,
+    (uint32_t)sizeof(Duration),
+    (uint16_t)_Alignof(Duration),
+    0,
+    (uint16_t)(sizeof(burrow__methods_Duration) / sizeof(burrow__methods_Duration[0])),
+    NULL,
+    burrow__methods_Duration,
+    NULL,
+    NULL,
+    0,
+    0x74647572U, /* "tdur" */
+    NULL,
+};

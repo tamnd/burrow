@@ -4,6 +4,19 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.18 (2026-09-30)
+
+The rest of encoding/xml.
+
+### Added
+
+- `encoding/xml` Marshal: `xml_marshal`, `xml_marshal_indent`, `xml_encoder_encode` and `xml_encoder_encode_element`, the Marshaler and MarshalerAttr interfaces, TagPathError and UnsupportedTypeError (#289).
+- `encoding/xml` Unmarshal: `xml_unmarshal`, `xml_decoder_decode` and `xml_decoder_decode_element`, the Unmarshaler and UnmarshalerAttr interfaces, UnmarshalError, and Go's 10,000 element depth limit (#290).
+
+### Fixed
+
+- The `encoding` helpers such as `encoding_is_text_marshaler` no longer crash on an `Any` whose static type is `any` (#289).
+
 ## v0.1.17 (2026-09-30)
 
 flag, uuid, weak, and the first half of encoding/xml.

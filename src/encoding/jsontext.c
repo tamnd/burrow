@@ -1394,15 +1394,15 @@ static float jt_f32_from_bits(uint32_t u) {
 JsontextToken jsontext_float(double n) {
     if (jt_f64_bits(n) == 0)
         return jt_raw_token(&jt_raw_zero_number);
-    if (isnan(n))
+    if (burrow__json_isnan(n))
         return jsontext_string(JT_LIT("NaN"));
-    if (isinf(n))
+    if (burrow__json_isinf(n))
         return jsontext_string(n > 0 ? JT_LIT("Infinity") : JT_LIT("-Infinity"));
     return jt_num_token(JT_LIT("f"), jt_f64_bits(n));
 }
 
 JsontextToken jsontext_float32(float n) {
-    if (n != 0 && !isnan(n) && !isinf(n))
+    if (n != 0 && !burrow__json_isnan((double)n) && !burrow__json_isinf((double)n))
         return jt_num_token(JT_LIT("F"), jt_f32_bits(n));
     return jsontext_float((double)n);
 }
@@ -1612,7 +1612,7 @@ static inline void jt_set_err(Error *err, Error e) {
 }
 
 static int64_t jt_f64toi64(double f) {
-    if (isnan(f))
+    if (burrow__json_isnan(f))
         return 0;
     if (f >= 9223372036854775808.0)
         return INT64_MAX;
@@ -1622,7 +1622,7 @@ static int64_t jt_f64toi64(double f) {
 }
 
 static uint64_t jt_f64tou64(double f) {
-    if (isnan(f))
+    if (burrow__json_isnan(f))
         return 0;
     if (f >= 18446744073709551616.0)
         return UINT64_MAX;
@@ -1648,7 +1648,8 @@ static double jt_token_float_bits(JsontextToken t, int bits, Error *err) {
             return (double)jt_f32_from_bits((uint32_t)t.num);
         case 'f': {
             double f = jt_f64_from_bits(t.num);
-            if (bits == 32 && !isinf(f) && isinf((double)(float)f))
+            if (bits == 32 && !burrow__json_isinf(f) &&
+                burrow__json_isinf((double)(float)f))
                 jt_set_err(err, jt_num_error(t, JT_LIT("Float"), strconv_err_range));
             return f;
         }
@@ -1732,7 +1733,7 @@ int64_t jsontext_token_int(JsontextToken t, Error *err) {
             double f = t.str.p[0] == 'F' ? (double)jt_f32_from_bits((uint32_t)t.num)
                                          : jt_f64_from_bits(t.num);
             int64_t i = jt_f64toi64(f);
-            if (isnan(f) || trunc(f) != f)
+            if (!burrow__json_is_integral(f))
                 jt_set_err(err, jt_num_error(t, JT_LIT("Int"), strconv_err_syntax));
             else if ((i == INT64_MIN && f < -9223372036854775808.0) ||
                      (i == INT64_MAX && f > 9223372036854775807.0))
@@ -1778,7 +1779,7 @@ uint64_t jsontext_token_uint(JsontextToken t, Error *err) {
             double f = t.str.p[0] == 'F' ? (double)jt_f32_from_bits((uint32_t)t.num)
                                          : jt_f64_from_bits(t.num);
             uint64_t u = jt_f64tou64(f);
-            if (isnan(f) || trunc(f) != f || signbit(f))
+            if (!burrow__json_is_integral(f) || (jt_f64_bits(f) >> 63) != 0)
                 jt_set_err(err, jt_num_error(t, JT_LIT("Uint"), strconv_err_syntax));
             else if ((u == 0 && f < 0) ||
                      (u == UINT64_MAX && f > 18446744073709551615.0))
@@ -1927,7 +1928,7 @@ static Error jt_dwrap(JsontextDecoder *d, Error err, Int pos, int where) {
 /* What an empty decoder buffer points at. It stands in for NULL because the
  * scanning code does buf + pos arithmetic even when len is 0. Nothing writes
  * through it: the decoder only writes a buffer it owns. */
-static const Byte jt_no_bytes[1];
+static const Byte jt_no_bytes[1] = {0};
 #define JT_NO_BUF ((Byte *)(uintptr_t)jt_no_bytes)
 
 static void jt_decoder_drop_buf(JsontextDecoder *d) {

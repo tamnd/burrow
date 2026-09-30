@@ -1466,7 +1466,7 @@ static void TestTokenAccessors(TestingT *t) {
             testing_t_errorf_v(t, "%q: Kind = %c, want %c", name,
                                jsontext_token_kind(tok), c->kind);
 
-        bool b = false;
+        volatile bool b = false;
         EXPECT_PANIC(b = jsontext_token_bool(tok));
         if (!panicked_with(c->bool_panic) ||
             (!fatal_did_catch && b != (c->bool_value != 0)))
@@ -1474,10 +1474,11 @@ static void TestTokenAccessors(TestingT *t) {
                                fatal_caught, c->bool_value != 0, c->bool_panic);
 
         Error err = BURROW_NO_ERROR;
-        float f32 = 0;
+        volatile float f32 = 0;
         EXPECT_PANIC(f32 = jsontext_token_float32(tok, &err));
         uint32_t f32b;
-        memcpy(&f32b, &f32, sizeof f32b);
+        float f32v = f32;
+        memcpy(&f32b, &f32v, sizeof f32b);
         if (!panicked_with(c->f32_panic) ||
             (!fatal_did_catch && (f32b != c->f32 || !err_is_text(err, c->f32_err))))
             testing_t_errorf_v(
@@ -1485,10 +1486,11 @@ static void TestTokenAccessors(TestingT *t) {
                 f32b, err, fatal_caught, c->f32, c->f32_err, c->f32_panic);
 
         err = BURROW_NO_ERROR;
-        double f64 = 0;
+        volatile double f64 = 0;
         EXPECT_PANIC(f64 = jsontext_token_float(tok, &err));
         uint64_t f64b;
-        memcpy(&f64b, &f64, sizeof f64b);
+        double f64v = f64;
+        memcpy(&f64b, &f64v, sizeof f64b);
         if (!panicked_with(c->f64_panic) ||
             (!fatal_did_catch && (f64b != c->f64 || !err_is_text(err, c->f64_err))))
             testing_t_errorf_v(
@@ -1496,7 +1498,7 @@ static void TestTokenAccessors(TestingT *t) {
                 err, fatal_caught, c->f64, c->f64_err, c->f64_panic);
 
         err = BURROW_NO_ERROR;
-        int64_t i64 = 0;
+        volatile int64_t i64 = 0;
         EXPECT_PANIC(i64 = jsontext_token_int(tok, &err));
         if (!panicked_with(c->i64_panic) ||
             (!fatal_did_catch &&
@@ -1506,7 +1508,7 @@ static void TestTokenAccessors(TestingT *t) {
                                c->i64_err, c->i64_panic);
 
         err = BURROW_NO_ERROR;
-        uint64_t u64 = 0;
+        volatile uint64_t u64 = 0;
         EXPECT_PANIC(u64 = jsontext_token_uint(tok, &err));
         if (!panicked_with(c->u64_panic) ||
             (!fatal_did_catch && (u64 != c->u64 || !err_is_text(err, c->u64_err))))

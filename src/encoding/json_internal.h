@@ -21,6 +21,7 @@
 #include "burrow/io.h"
 #include "burrow/mem.h"
 
+#include <float.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -101,6 +102,26 @@
      JSONFLAG_REPORT_ERRORS_WITH_LEGACY_SEMANTICS |                                    \
      JSONFLAG_STRINGIFY_WITH_LEGACY_SEMANTICS |                                        \
      JSONFLAG_UNMARSHAL_ARRAY_FROM_ANY_LENGTH)
+
+/* isnan and isinf without the <math.h> macros, whose float branch on mingw
+ * warns about a double argument under -Wfloat-conversion. */
+static inline bool burrow__json_isnan(double f) {
+    return f != f;
+}
+
+static inline bool burrow__json_isinf(double f) {
+    return f > DBL_MAX || f < -DBL_MAX;
+}
+
+/* Whether f has no fractional part, which is trunc(f) == f without libm.
+ * Every double of magnitude 2^52 or more is a whole number. */
+static inline bool burrow__json_is_integral(double f) {
+    if (burrow__json_isnan(f))
+        return false;
+    if (f >= 4503599627370496.0 || f <= -4503599627370496.0)
+        return true;
+    return (double)(int64_t)f == f;
+}
 
 /* Flags.Get, Flags.Has, Flags.Set, Flags.Clear and Flags.Join. */
 static inline bool jsonflags_get(const JsontextOptions *o, uint64_t f) {

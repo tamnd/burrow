@@ -943,7 +943,8 @@ static GobType *gob_new_type_object_l(Str name, const GobUserType *ut, const Typ
                 tname = burrow__gob_type_string(heap_allocator(), fut->base);
             GobType *gt = gob_get_base_type_l(tname, f->type, err);
             if (owned && tname.p != NULL)
-                mem_free(heap_allocator(), (void *)(uintptr_t)tname.p, (size_t)tname.len, 1);
+                mem_free(heap_allocator(), (void *)(uintptr_t)tname.p,
+                         (size_t)tname.len, 1);
             if (gt == NULL)
                 return NULL;
             if (!gob_set_type_id(gt) || !gob_add_field(st, f->name, gt->id))
@@ -1212,8 +1213,8 @@ static void gob_register_name_l(Str name, const Type *t) {
             gob_panicf_unlock(error_text(burrow_err_out_of_memory));
     } else if (have != NULL && have != ut->user) {
         gob_panicf_unlock(fmt_sprintf_v(
-            error_allocator(), "gob: registering duplicate types for %q: %s != %s", name,
-            burrow__gob_type_string(error_allocator(), have),
+            error_allocator(), "gob: registering duplicate types for %q: %s != %s",
+            name, burrow__gob_type_string(error_allocator(), have),
             burrow__gob_type_string(error_allocator(), ut->user)));
     }
     if (n == NULL) {

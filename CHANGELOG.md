@@ -4,6 +4,24 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.19 (2026-10-01)
+
+encoding/gob, the calendar half of time, and compress/gzip.
+
+### Added
+
+- `encoding/gob`, Go's encoder and decoder (#292).
+- `time.Time`: the calendar, `time_date`, `time_now` with the monotonic reading, the arithmetic and comparisons, locations, and zoneinfo loading from the system and from `ZONEINFO` (#294).
+- `time` Format and Parse with Go's layouts, and the text, JSON and binary encodings of Time (#295).
+- `time_new_timer`, `time_after`, `time_new_ticker` and `time_tick` on channels, with Go 1.23 semantics (#296).
+- `compress/gzip`, the reader and writer. The writer's output matches Go's byte for byte (#297).
+
+### Fixed
+
+- `encoding/xml` builds with MSVC (#293).
+- The Release build no longer fails on gcc 13, so tags publish again. v0.1.16, v0.1.17 and v0.1.18 have no GitHub release because of it (#298).
+- TestAStoppedTimerNeverRuns no longer fails on a heavily loaded machine (#298).
+
 ## v0.1.18 (2026-09-30)
 
 The rest of encoding/xml.

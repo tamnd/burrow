@@ -1204,16 +1204,18 @@ static void gob_register_name_l(Str name, const Type *t) {
     if (ut == NULL)
         gob_panicf_unlock(error_text(err));
     const Type *have = (const Type *)gob_sget(gob_name_to_type, name);
-    if (have == NULL) {
+    Str *n = (Str *)gob_pget(gob_type_to_name, ut->base);
+    /* Go stores the name and deletes it again when the type already has
+     * another one. Not storing it comes to the same thing. */
+    if (have == NULL && (n == NULL || str_eq(*n, name))) {
         if (!gob_sset(gob_name_to_type, name, ut->user))
             gob_panicf_unlock(error_text(burrow_err_out_of_memory));
-    } else if (have != ut->user) {
+    } else if (have != NULL && have != ut->user) {
         gob_panicf_unlock(fmt_sprintf_v(
             error_allocator(), "gob: registering duplicate types for %q: %s != %s", name,
             burrow__gob_type_string(error_allocator(), have),
             burrow__gob_type_string(error_allocator(), ut->user)));
     }
-    Str *n = (Str *)gob_pget(gob_type_to_name, ut->base);
     if (n == NULL) {
         Str *copy = BURROW_NEW(heap_allocator(), Str);
         if (copy == NULL)
@@ -1222,7 +1224,6 @@ static void gob_register_name_l(Str name, const Type *t) {
         if (!gob_pset(gob_type_to_name, ut->base, copy))
             gob_panicf_unlock(error_text(burrow_err_out_of_memory));
     } else if (!str_eq(*n, name)) {
-        map_del(gob_name_to_type, &name);
         gob_panicf_unlock(fmt_sprintf_v(
             error_allocator(), "gob: registering duplicate names for %s: %q != %q",
             burrow__gob_type_string(error_allocator(), ut->user), *n, name));

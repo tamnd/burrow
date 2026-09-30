@@ -16,6 +16,7 @@
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/fixed.h"
+#include "burrow/mem/gc.h"
 #include "burrow/mem/heap.h"
 #include "burrow/proc.h"
 #include "burrow/sync.h"
@@ -265,6 +266,39 @@ static void TestNeighbours(TestingT *t) {
     mem_free(a, blk, 64, 1);
 }
 
+/* Under the gc allocator the collector decides, as in Go, and mem_free does
+ * nothing. The collector scans the stack conservatively, so a stale copy of
+ * one pointer can keep its object alive, which is why this makes many and
+ * only asks that most go. */
+enum { GC_N = 256 };
+
+static BURROW_NOINLINE void gc_make(Alloc *g, WeakPointer *w) {
+    for (int i = 0; i < GC_N; i++)
+        w[i] = weak_make(new_t(g));
+}
+
+static void TestGC(TestingT *t) {
+    if (!gc_available())
+        testing_t_skipf_v(t, "built without the collector");
+    Alloc *g = gc_allocator();
+    T *p = new_t(g);
+    WeakPointer w = weak_make(p);
+    free_t(g, p);
+    if (weak_pointer_value(w) != p)
+        testing_t_errorf_v(t, "mem_free on the gc allocator cleared a weak pointer");
+
+    static WeakPointer ws[GC_N];
+    gc_make(g, ws);
+    for (int i = 0; i < 3; i++)
+        gc_collect();
+    int left = 0;
+    for (int i = 0; i < GC_N; i++)
+        if (weak_pointer_value(ws[i]) != NULL)
+            left++;
+    if (left > GC_N / 2)
+        testing_t_errorf_v(t, "%v of %v weak pointers survived collection", left, GC_N);
+}
+
 enum { CONC_WORKERS = 8, CONC_ROUNDS = 2000 };
 
 typedef struct ConcEnv {
@@ -351,6 +385,7 @@ static void BenchmarkFree(TestingB *b) {
     X(TestFixedReset)                                                                  \
     X(TestRealloc)                                                                     \
     X(TestNeighbours)                                                                  \
+    X(TestGC)                                                                          \
     X(TestConcurrent)                                                                  \
     X(BenchmarkMake)                                                                   \
     X(BenchmarkValue)                                                                  \

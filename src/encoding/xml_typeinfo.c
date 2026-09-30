@@ -502,6 +502,7 @@ static bool xi_build(XiBuild *b, const Type *typ, Error *err) {
 typedef struct XiEntry {
     const Type *t;
     const XmlTypeInfo *ti;
+    Arena *arena; /* where ti lives, kept so it stays reachable */
 } XiEntry;
 
 static burrow__Lock xi_lock;
@@ -529,7 +530,7 @@ static const XmlTypeInfo *xi_cache_find(const Type *t) {
     }
 }
 
-static bool xi_cache_put(const Type *t, const XmlTypeInfo *ti) {
+static bool xi_cache_put(const Type *t, const XmlTypeInfo *ti, Arena *arena) {
     if ((xi_cache_len + 1) * 2 > xi_cache_cap) {
         Int nc = xi_cache_cap == 0 ? 64 : xi_cache_cap * 2;
         XiEntry *nv = (XiEntry *)mem_alloc(
@@ -555,6 +556,7 @@ static bool xi_cache_put(const Type *t, const XmlTypeInfo *ti) {
         h = (h + 1) & m;
     xi_cache[h].t = t;
     xi_cache[h].ti = ti;
+    xi_cache[h].arena = arena;
     xi_cache_len++;
     return true;
 }
@@ -572,7 +574,7 @@ static const XmlTypeInfo *xi_get_locked(const Type *t, Error *err) {
     arena_init(ar, NULL, 0);
     XiBuild b = {arena_allocator(ar), NULL, 0};
     b.ti = (XmlTypeInfo *)mem_alloc(b.a, sizeof(XmlTypeInfo), _Alignof(XmlTypeInfo));
-    if (b.ti != NULL && xi_build(&b, t, err) && xi_cache_put(t, b.ti))
+    if (b.ti != NULL && xi_build(&b, t, err) && xi_cache_put(t, b.ti, ar))
         return b.ti;
     /* Out of memory unless xi_build said what went wrong. */
     if (b.ti == NULL || BURROW_OK(*err))

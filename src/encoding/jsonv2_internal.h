@@ -129,6 +129,35 @@ Error burrow__jsonv2_marshal_methods(JsontextEncoder *e, const Type *t, void *p,
 Error burrow__jsonv2_unmarshal_methods(JsontextDecoder *d, const Type *t, void *p,
                                        JsontextOptions *uo, const JvMethods *ms);
 bool burrow__jsonv2_call_is_zero(const Method *m, void *p);
+
+/* The four ways of handing a value to code outside json, shared by the
+ * methods and by WithMarshalers. t is the type errors name. */
+typedef Slice (*JvMarshalCall)(const void *ctx, Alloc *a, Error *err);
+typedef Error (*JvToCall)(const void *ctx, JsontextEncoder *e);
+typedef Error (*JvUnmarshalCall)(const void *ctx, Alloc *a, Slice data);
+typedef Error (*JvFromCall)(const void *ctx, Alloc *a, JsontextDecoder *d);
+Error burrow__jsonv2_call_marshal(JsontextEncoder *e, const Type *t,
+                                  const JsontextOptions *mo, const char *what,
+                                  JvMarshalCall call, const void *ctx);
+Error burrow__jsonv2_call_to(JsontextEncoder *e, const Type *t, JvToCall call,
+                             const void *ctx, bool *skip);
+Error burrow__jsonv2_call_unmarshal(JsontextDecoder *d, const Type *t,
+                                    const JsontextOptions *uo, const char *what,
+                                    JvUnmarshalCall call, const void *ctx);
+Error burrow__jsonv2_call_from(JsontextDecoder *d, const Type *t,
+                               const JsontextOptions *uo, JvFromCall call,
+                               const void *ctx, bool *skip);
+
+/* WithMarshalers and WithUnmarshalers. The calls set *done when a function
+ * took the value, and leave it false for the methods and the defaults to
+ * have their turn. has_func is lookup's ok, and from_any says whether a
+ * function could want what the any fast paths would skip over. */
+Error burrow__jsonv2_marshal_funcs(JsontextEncoder *e, const Type *t, void *p,
+                                   JsontextOptions *mo, bool *done);
+Error burrow__jsonv2_unmarshal_funcs(JsontextDecoder *d, const Type *t, void *p,
+                                     JsontextOptions *uo, bool *done);
+bool burrow__jsonv2_has_func(const void *fs, const Type *t);
+bool burrow__jsonv2_from_any(const void *fs);
 Error burrow__jsonv2_marshal_default(JsontextEncoder *e, const Type *t, void *p,
                                      JsontextOptions *mo);
 Error burrow__jsonv2_unmarshal_default(JsontextDecoder *d, const Type *t, void *p,

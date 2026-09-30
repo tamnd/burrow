@@ -25,6 +25,29 @@ BURROW_STRUCT(Item, ITEM_FIELDS);
 BURROW_STRUCT(Loose, LOOSE_FIELDS);
 // doc: end
 
+// doc: yesno
+static Slice yes_no(void *ctx, Alloc *a, Any v, Error *err) {
+    (void)ctx;
+    (void)a;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    Str s = *(const bool *)v.data ? BURROW_S("\"yes\"") : BURROW_S("\"no\"");
+    return (Slice){(void *)(uintptr_t)s.p, s.len, s.len, TYPE_BYTE};
+}
+
+static Error parse_yes_no(void *ctx, Alloc *a, Slice data, Any v) {
+    (void)ctx;
+    (void)a;
+    Str s = str_from_bytes(data.p, data.len);
+    if (!str_eq(s, BURROW_S("\"yes\"")) && !str_eq(s, BURROW_S("\"no\"")))
+        return errors_new(error_allocator(), BURROW_S("want yes or no"));
+    *(bool *)v.data = str_eq(s, BURROW_S("\"yes\""));
+    return BURROW_NO_ERROR;
+}
+
+BURROW_PTR_TYPE(BoolPtr, bool);
+BURROW_SLICE_TYPE(Bools, bool);
+// doc: end
+
 // doc: methods
 #define VERSION_FIELDS(F, T)                                                           \
     F(T, Int, Major, "")                                                               \
@@ -141,6 +164,22 @@ int main(void) {
     err = jsonv2_unmarshal_v(a, BURROW_B("{\"version\":\"two\"}"),
                              BURROW_ANY(TYPE_OF(Release), &r2), 0);
     printf("bad version: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
+
+    // doc: funcs
+    Jsonv2Marshalers *ms = jsonv2_marshal_func(a, TYPE_BOOL, yes_no, NULL);
+    Jsonv2Unmarshalers *us =
+        jsonv2_unmarshal_func(a, TYPE_OF(BoolPtr), parse_yes_no, NULL);
+    bool flags[] = {true, false};
+    Slice fl = {flags, 2, 2, TYPE_BOOL};
+    Slice words = jsonv2_marshal_v(a, BURROW_ANY(TYPE_OF(Bools), &fl), &err, 1,
+                                   jsonv2_with_marshalers(ms));
+    Slice fl2 = slice_nil(TYPE_BOOL);
+    err = jsonv2_unmarshal_v(a, BURROW_B("[\"no\",\"maybe\"]"),
+                             BURROW_ANY(TYPE_OF(Bools), &fl2), 1,
+                             jsonv2_with_unmarshalers(us));
+    // doc: end
+    show("words", words);
+    printf("maybe: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
 
     arena_free(&ar);
     return 0;

@@ -267,6 +267,113 @@ extern const Type burrow_type_Jsonv2MarshalerTo;
 extern const Type burrow_type_Jsonv2Unmarshaler;
 extern const Type burrow_type_Jsonv2UnmarshalerFrom;
 
+/* ------------------------------------------------------------- functions
+ *
+ * json.MarshalFunc and the rest: code of yours that takes over for a type,
+ * set up by the caller rather than by the type, and handed to Marshal with
+ * jsonv2_with_marshalers. It is how a type you cannot add methods to gets
+ * its own form, and how one call writes a type differently from the next:
+ *
+ *     static Slice yes_no(void *ctx, Alloc *a, Any v, Error *err) {
+ *         (void)ctx;
+ *         BURROW_OUT(err, BURROW_NO_ERROR);
+ *         Str s = *(bool *)v.data ? BURROW_S("\"yes\"") : BURROW_S("\"no\"");
+ *         return slice_from((void *)(uintptr_t)s.p, s.len, s.len, TYPE_BYTE);
+ *     }
+ *
+ *     Jsonv2Marshalers *m = jsonv2_marshal_func(a, TYPE_BOOL, yes_no, NULL);
+ *     out = jsonv2_marshal_v(a, in, &err, 1, jsonv2_with_marshalers(m));
+ *
+ * The function is asked about every value on the way down, not only the top
+ * one: struct fields, slice and array elements, map keys and values, what a
+ * pointer points at and what an interface holds.
+ *
+ * t says which values a function is for, the way Go's type parameter does:
+ *
+ *   - A type that is not a pointer or an interface takes values of exactly
+ *     that type.
+ *   - An unnamed pointer to T, one from BURROW_PTR_TYPE, takes values of T.
+ *     This is how a function that fills a value in has to be set up, so the
+ *     unmarshal side takes only this and interfaces.
+ *   - An interface takes values whose type has its methods. TYPE_ANY takes
+ *     everything. json's four interfaces, the six in encoding and error are
+ *     known by the methods Go gives them, and an interface of your own lists
+ *     its methods in its descriptor, where only the names are compared.
+ *
+ * Anything else, a named pointer or a non-pointer on the unmarshal side,
+ * panics, as it does in Go.
+ *
+ * The function gets the value as an Any, with v.t the value's own type and
+ * v.data where it lives, whichever of the three t was. A marshal function
+ * should leave it alone. An unmarshal function fills it in, and anything it
+ * allocates for it comes from the Alloc it is given, which is the one
+ * Unmarshal was given. The bytes a marshal function returns may come from
+ * its Alloc, which is scratch space freed once they have been copied out.
+ *
+ * The rules for what the functions return are the methods' rules. A
+ * function that writes to the encoder or reads from the decoder must write or
+ * read exactly one value, and may return errors_err_unsupported without
+ * touching it to step aside. The value then goes to the next function that
+ * takes it, then to the type's methods, then to its default form. The other
+ * two may not step aside, and the first of them that takes a value ends the
+ * search.
+ *
+ * Every constructor allocates from a and returns NULL when it runs out of
+ * memory. A NULL set is no functions at all. None of it is freed by json;
+ * free it with a, once no options that name it are left in use. */
+typedef struct Jsonv2Marshalers Jsonv2Marshalers;
+typedef struct Jsonv2Unmarshalers Jsonv2Unmarshalers;
+
+/* func(T) ([]byte, error): the JSON for v, which must be one valid value. */
+typedef Slice (*Jsonv2MarshalFn)(void *ctx, Alloc *a, Any v, Error *err);
+
+/* func(*jsontext.Encoder, T) error: write v to enc. */
+typedef Error (*Jsonv2MarshalToFn)(void *ctx, JsontextEncoder *enc, Any v);
+
+/* func([]byte, T) error: fill in v from data, the next JSON value whole. */
+typedef Error (*Jsonv2UnmarshalFn)(void *ctx, Alloc *a, Slice data, Any v);
+
+/* func(*jsontext.Decoder, T) error: fill in v by reading from dec. */
+typedef Error (*Jsonv2UnmarshalFromFn)(void *ctx, Alloc *a, JsontextDecoder *dec,
+                                       Any v);
+
+/* json.MarshalFunc. ctx is passed to fn untouched on every call. */
+BURROW_OWNS(ret) Jsonv2Marshalers *jsonv2_marshal_func(Alloc *a, const Type *t,
+                                                       Jsonv2MarshalFn fn, void *ctx);
+
+/* json.MarshalToFunc. */
+BURROW_OWNS(ret) Jsonv2Marshalers *
+jsonv2_marshal_to_func(Alloc *a, const Type *t, Jsonv2MarshalToFn fn, void *ctx);
+
+/* json.UnmarshalFunc. */
+BURROW_OWNS(ret) Jsonv2Unmarshalers *
+jsonv2_unmarshal_func(Alloc *a, const Type *t, Jsonv2UnmarshalFn fn, void *ctx);
+
+/* json.UnmarshalFromFunc. */
+BURROW_OWNS(ret) Jsonv2Unmarshalers *
+jsonv2_unmarshal_from_func(Alloc *a, const Type *t, Jsonv2UnmarshalFromFn fn,
+                           void *ctx);
+
+/* json.JoinMarshalers. The functions of each set in ms, a Slice of
+ * Jsonv2Marshalers *, in order, so an earlier one gets the first say. NULL
+ * entries are skipped, and NULL comes back when there are no functions. */
+BURROW_OWNS(ret) Jsonv2Marshalers *jsonv2_join_marshalers(Alloc *a, Slice ms);
+BURROW_OWNS(ret) Jsonv2Marshalers *jsonv2_join_marshalers_v(Alloc *a, int n, ...);
+
+/* json.JoinUnmarshalers, the same for the unmarshal side. */
+BURROW_OWNS(ret) Jsonv2Unmarshalers *jsonv2_join_unmarshalers(Alloc *a, Slice us);
+BURROW_OWNS(ret) Jsonv2Unmarshalers *jsonv2_join_unmarshalers_v(Alloc *a, int n, ...);
+
+/* json.WithMarshalers and json.WithUnmarshalers. The option holds the
+ * pointer, not a copy, and each is ignored by the other side. */
+JsontextOptions jsonv2_with_marshalers(const Jsonv2Marshalers *m);
+JsontextOptions jsonv2_with_unmarshalers(const Jsonv2Unmarshalers *u);
+
+/* json.GetOption for the two above. Whether opts says anything about them,
+ * and in *value what it says. value may be NULL. */
+bool jsonv2_get_marshalers(JsontextOptions opts, const Jsonv2Marshalers **value);
+bool jsonv2_get_unmarshalers(JsontextOptions opts, const Jsonv2Unmarshalers **value);
+
 /* ---------------------------------------------------------------- marshal */
 
 /* json.Marshal. in as JSON, in a new array from a. A nil Any, or one holding

@@ -5,6 +5,9 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+/* __argc and __argv are declared only under _COSMO_SOURCE. */
+#define _COSMO_SOURCE 1
+
 #include "burrow/platform.h"
 
 #if defined(BURROW_OS_COSMO)

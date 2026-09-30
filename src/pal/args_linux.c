@@ -10,6 +10,11 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#if !defined(_WIN32)
+#define _DEFAULT_SOURCE 1
+#define _XOPEN_SOURCE 700
+#endif
+
 #include "burrow/platform.h"
 
 #if defined(BURROW_OS_LINUX)

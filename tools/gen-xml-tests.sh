@@ -158,6 +158,135 @@ func genCase(name string, v any, indent bool, prefix, ind string) {
 	genKept++
 }
 
+// What Unmarshal makes of some XML, into a new value or, with keep, into v as
+// it is: the error text and a dump of the value. With ns set it decodes with
+// that DefaultSpace, as TestUnmarshalNS does.
+var unmarshalCases strings.Builder
+var unmarshalKept, unmarshalSkipped int
+
+func genUnmarshalCase(name string, v any, in, ns string, keep bool) {
+	rv := reflect.ValueOf(v)
+	t := rv.Type().Elem()
+	if renamed[t] || !supported(t, map[reflect.Type]bool{}) {
+		leftOutU[t.String()]++
+		unmarshalSkipped++
+		return
+	}
+	_, typ := ctype(t)
+	mk := "NULL"
+	if keep {
+		// builderFor names its function after genKept, the marshal case count.
+		kept := genKept
+		genKept = 100000 + unmarshalKept
+		f, ok := builderFor(rv.Elem())
+		genKept = kept
+		if !ok {
+			leftOutU[t.String()]++
+			unmarshalSkipped++
+			return
+		}
+		mk = f
+	}
+	var err error
+	if ns != "" {
+		d := NewDecoder(strings.NewReader(in))
+		d.DefaultSpace = ns
+		err = d.Decode(v)
+	} else {
+		err = Unmarshal([]byte(in), v)
+	}
+	var ud strings.Builder
+	dump(&ud, rv.Elem(), map[uintptr]bool{})
+	fmt.Fprintf(&unmarshalCases, "    {%s, %s, %s, %s, %s, %s, %s},\n",
+		lit(name), typ, mk, qs(in), qs(ns), errText(err), lit(ud.String()))
+	unmarshalKept++
+}
+
+// Types that read_test.go declares inside its test functions.
+type ParamVal struct {
+	Int int `xml:"int,attr"`
+}
+
+type ParamPtr struct {
+	Int *int `xml:"int,attr"`
+}
+
+type ParamStringPtr struct {
+	Int *string `xml:"int,attr"`
+}
+
+type IntoNilT struct {
+	A int `xml:"A"`
+}
+
+// The populated Parent of TestUnmarshalEmptyValues.
+func populatedParent() *Parent {
+	vBytes0, vInt0, vStr0, vFloat0, vBool0 := []byte("x"), 1, "x", float32(1), true
+	vBytes1, vInt1, vStr1, vFloat1, vBool1 := []byte("x"), 1, "x", float32(1), true
+	vInt2, vStr2, vFloat2, vBool2 := 1, "x", float32(1), true
+	return &Parent{
+		I:            vInt0,
+		IPtr:         &vInt1,
+		Is:           []int{vInt0},
+		IPtrs:        []*int{&vInt2},
+		F:            vFloat0,
+		FPtr:         &vFloat1,
+		Fs:           []float32{vFloat0},
+		FPtrs:        []*float32{&vFloat2},
+		B:            vBool0,
+		BPtr:         &vBool1,
+		Bs:           []bool{vBool0},
+		BPtrs:        []*bool{&vBool2},
+		Bytes:        vBytes0,
+		BytesPtr:     &vBytes1,
+		S:            vStr0,
+		SPtr:         &vStr1,
+		Ss:           []string{vStr0},
+		SPtrs:        []*string{&vStr2},
+		MyI:          MyInt(vInt0),
+		Child:        Child{G: struct{ I int }{I: vInt0}},
+		Children:     []Child{{G: struct{ I int }{I: vInt0}}},
+		ChildPtr:     &Child{G: struct{ I int }{I: vInt0}},
+		ChildToEmbed: ChildToEmbed{X: vBool0},
+	}
+}
+
+// The read_test.go tables and one-off values whose types have no methods.
+func genReadCases() {
+	for i, pt := range pathTests {
+		genUnmarshalCase(fmt.Sprintf("pathTests[%d]", i), reflect.New(reflect.TypeOf(pt).Elem()).Interface(), pathTestString, "", false)
+	}
+	for i, tt := range badPathTests {
+		genUnmarshalCase(fmt.Sprintf("badPathTests[%d]", i), tt.v, pathTestString, "", false)
+	}
+	genUnmarshalCase("TestUnmarshalWithoutNameType", new(TestThree), withoutNameTypeData, "", false)
+	for _, v := range []any{new(ParamPtr), new(ParamVal), new(ParamStringPtr)} {
+		genUnmarshalCase("TestUnmarshalAttr "+reflect.TypeOf(v).Elem().Name(), v, `<Param int="1" />`, "", false)
+	}
+	for i, tt := range tables {
+		genUnmarshalCase(fmt.Sprintf("tables[%d]", i), new(Tables), tt.xml, tt.ns, false)
+	}
+	for i, tt := range tableAttrs {
+		genUnmarshalCase(fmt.Sprintf("tableAttrs[%d]", i), new(TableAttrs), tt.xml, tt.ns, false)
+	}
+	for i, s := range []string{
+		"<X><!-- a---></X>",
+		"<X><!-- -- --></X>",
+		"<X><!-- a--b --></X>",
+		"<X><!------></X>",
+	} {
+		genUnmarshalCase(fmt.Sprintf("TestMalformedComment[%d]", i), new(X), s, "", false)
+	}
+	genUnmarshalCase("TestInvalidInnerXMLType", new(IXField), `<tag><five>5</five><innertag/></tag>`, "", false)
+	genUnmarshalCase("TestUnmarshalEmptyValues zero", new(Parent), emptyXML, "", false)
+	genUnmarshalCase("TestUnmarshalEmptyValues populated", populatedParent(), emptyXML, "", true)
+	genUnmarshalCase("TestUnmarshalWhitespaceValues", new(WhitespaceValuesParent), whitespaceValuesXML, "", false)
+	genUnmarshalCase("TestUnmarshalWhitespaceAttrs", new(WhitespaceAttrsParent), whitespaceAttrsXML, "", false)
+	genUnmarshalCase("TestUnmarshalIntoInterface empty", new(Pod), `<Pod><Pea><Cotelydon>Green stuff</Cotelydon></Pea></Pod>`, "", false)
+}
+
+var leftOutU = map[string]int{}
+
 func b01(b bool) int {
 	if b {
 		return 1
@@ -176,12 +305,22 @@ func TestZZGen(t *testing.T) {
 	for _, tt := range marshalIndentTests {
 		markRenames(reflect.TypeOf(tt.Value), seen)
 	}
+	for _, v := range []any{new(TableAttrs), new(Parent)} {
+		markRenames(reflect.TypeOf(v), seen)
+	}
 	for i, tt := range marshalTests {
 		if tt.UnmarshalOnly {
 			continue
 		}
 		genCase(fmt.Sprintf("marshalTests[%d]", i), tt.Value, false, "", "")
 	}
+	for i, tt := range marshalTests {
+		if tt.MarshalOnly {
+			continue
+		}
+		genUnmarshalCase(fmt.Sprintf("marshalTests[%d]", i), reflect.New(reflect.TypeOf(tt.Value).Elem()).Interface(), tt.ExpectXML, "", false)
+	}
+	genReadCases()
 	for i, tt := range marshalErrorTests {
 		genCase(fmt.Sprintf("marshalErrorTests[%d]", i), tt.Value, false, "", "")
 	}
@@ -191,7 +330,8 @@ func TestZZGen(t *testing.T) {
 
 	var w strings.Builder
 	w.WriteString(`/* What Go's encoding/xml writes for the values in its own marshalTests,
- * marshalErrorTests and marshalIndentTests, go1.27.1. Generated by
+ * marshalErrorTests and marshalIndentTests, and what Unmarshal makes of the
+ * XML in marshalTests and read_test.go, go1.27.1. Generated by
  * tools/gen-xml-tests.sh; do not edit. */
 
 typedef struct QStr {
@@ -200,6 +340,16 @@ typedef struct QStr {
 } QStr;
 
 #define QS(x) {x, (long long)sizeof(x) - 1}
+
+typedef struct UCase {
+    const char *name;
+    const Type *type;
+    void (*make)(Alloc *a, void *out);
+    QStr in;
+    QStr ns;
+    const char *err;
+    const char *dump;
+} UCase;
 
 typedef struct XCase {
     const char *name;
@@ -223,6 +373,16 @@ typedef struct XCase {
 		fmt.Fprintf(&w, " *   %s (%d)\n", n, leftOut[n])
 	}
 	w.WriteString(" */\n\n")
+	fmt.Fprintf(&w, "/* What Unmarshal makes of the XML of the marshalTests values and of the\n * read_test.go cases: %d values, %d left out, of these types:\n *\n", unmarshalKept, unmarshalSkipped)
+	names = names[:0]
+	for n := range leftOutU {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		fmt.Fprintf(&w, " *   %s (%d)\n", n, leftOutU[n])
+	}
+	w.WriteString(" */\n\n")
 	for i := range genTypeOrder {
 		fmt.Fprintf(&w, "static Type gt%d;\n", i)
 	}
@@ -236,6 +396,8 @@ typedef struct XCase {
 	w.WriteString(genFuncs.String())
 	w.WriteString("static const XCase x_cases[] = {\n")
 	w.WriteString(genCases.String())
+	w.WriteString("};\n\nstatic const UCase u_cases[] = {\n")
+	w.WriteString(unmarshalCases.String())
 	w.WriteString("};\n")
 	os.Stdout.WriteString(w.String())
 }

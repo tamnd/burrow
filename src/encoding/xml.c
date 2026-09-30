@@ -645,6 +645,41 @@ static XmlStack *xml_pop(XmlDecoder *d) {
     return s;
 }
 
+/* pushEOF: a record under the element being read, after the namespace
+ * records that go with it, where Token stops as at the end of the input. */
+bool burrow__xml_dec_push_eof(XmlDecoder *d) {
+    XmlStack *start = d->stk;
+    while (start->kind != STK_START)
+        start = start->next;
+    while (start->next != NULL && start->next->kind == STK_NS)
+        start = start->next;
+    XmlStack *s = d->free;
+    if (s != NULL) {
+        d->free = s->next;
+        if (s->kind == STK_NS && s->ok)
+            xml_heap_str_free(d, s->name.space);
+    } else {
+        s = (XmlStack *)mem_alloc(d->a, sizeof *s, _Alignof(XmlStack));
+        if (s == NULL)
+            return false;
+    }
+    s->kind = STK_EOF;
+    s->ok = false;
+    s->name = (XmlName){{NULL, 0}, {NULL, 0}};
+    s->next = start->next;
+    start->next = s;
+    return true;
+}
+
+/* popEOF: false when the record is not on top, because what was under it
+ * was left open. */
+bool burrow__xml_dec_pop_eof(XmlDecoder *d) {
+    if (d->stk == NULL || d->stk->kind != STK_EOF)
+        return false;
+    xml_pop(d);
+    return true;
+}
+
 static void xml_push_element(XmlDecoder *d, XmlName name) {
     Int need = name.space.len + name.local.len;
     XmlStack *s = xml_push(d, STK_START);
@@ -793,6 +828,7 @@ static XmlDecoder *xml_decoder_alloc(Alloc *a) {
     arena_init(&d->saved[0], a, 1024);
     arena_init(&d->saved[1], a, 1024);
     arena_init(&d->names, a, 512);
+    arena_init(&d->scratch, a, 0);
     return d;
 }
 
@@ -856,6 +892,9 @@ void xml_decoder_free(XmlDecoder *d) {
     arena_free(&d->saved[0]);
     arena_free(&d->saved[1]);
     arena_free(&d->names);
+    arena_free(&d->scratch);
+    if (d->capinner > 0)
+        mem_free(a, d->inner, (size_t)d->capinner, 1);
     mem_free(a, d, sizeof *d, _Alignof(XmlDecoder));
 }
 
@@ -1014,6 +1053,21 @@ static void xml_save_next(XmlDecoder *d, XmlToken t) {
 
 /* ------------------------------------------------------------- byte input */
 
+static void xml_keep_inner(XmlDecoder *d, Byte b) {
+    if (d->ninner == d->capinner) {
+        Int cap = d->capinner == 0 ? 256 : d->capinner * 2;
+        Byte *p =
+            (Byte *)mem_realloc(d->a, d->inner, (size_t)d->capinner, (size_t)cap, 1);
+        if (p == NULL) {
+            xml_oom(d);
+            return;
+        }
+        d->inner = p;
+        d->capinner = cap;
+    }
+    d->inner[d->ninner++] = b;
+}
+
 static bool xml_getc(XmlDecoder *d, Byte *out) {
     if (BURROW_FAILED(d->err))
         return false;
@@ -1058,6 +1112,8 @@ static bool xml_getc(XmlDecoder *d, Byte *out) {
                 return false;
             }
         }
+        if (d->keep_inner)
+            xml_keep_inner(d, b);
     }
     if (b == '\n') {
         d->line++;
@@ -2363,7 +2419,14 @@ static XmlToken xml_check_oom(XmlDecoder *d, XmlToken t, Error *err) {
     return t;
 }
 
+BURROW_SENTINEL_ERROR(burrow__xml_err_raw_token,
+                      "xml: cannot use RawToken from UnmarshalXML method");
+
 XmlToken xml_decoder_raw_token(XmlDecoder *d, Error *err) {
+    if (d->in_unmarshal_xml) {
+        *err = burrow__xml_err_raw_token;
+        return (XmlToken){0};
+    }
     arena_reset(&d->tok);
     XmlToken t = xml_raw_token(d, err);
     return xml_check_oom(d, t, err);

@@ -842,7 +842,7 @@ Each v1 behaviour also has its own option, such as `json_format_byte_array_as_ar
 
 ## XML
 
-`burrow/encoding/xml.h` is Go's `encoding/xml`: a decoder that reads a document one token at a time, an encoder that writes tokens back out, and `xml_marshal`, which writes a value as XML by its type's descriptor. `xml_unmarshal`, which goes the other way, comes in a later release.
+`burrow/encoding/xml.h` is Go's `encoding/xml`: a decoder that reads a document one token at a time, an encoder that writes tokens back out, and `xml_marshal` and `xml_unmarshal`, which write a value as XML and read it back by its type's descriptor.
 
 A token is an `XmlToken`, a tagged union with a member for each of Go's six token types. A zeroed one is Go's nil. `xml_decoder_token` resolves namespace prefixes and checks that the tags nest:
 
@@ -1024,6 +1024,80 @@ The error reads `xml: unsupported type: map[string]int` and `ue->type` is the ma
 
 Go allows a field named after its type without embedding it, `Port Port`. In C a field of type `T` or `T *` named `T` is how embedding is spelled, so give the C type another name when you mean an ordinary field.
 
+### Unmarshal
+
+`xml_unmarshal` reads the first element of a document into a value, by the same descriptor and the same tags. Reading back the person from above:
+
+<!-- example: ../examples/encoding/xml.c#unmarshal -->
+```c
+Person q = {0};
+err = xml_unmarshal(a, doc, BURROW_ANY(TYPE_OF(Person), &q));
+```
+
+That fills in all of `q`: the id from the attribute, the names from inside `<name>`, one email per `<email>` element and the note from the comment. Every string and slice it stores is allocated from `a`, so an arena is the easy thing to hand it. A nil pointer field gets a new value, a slice field grows by one for each element that matches it, and anything in the document the value has no place for is skipped. `xml_decoder_decode` does the same from a decoder, allocating from the decoder's allocator, and reads one element per call.
+
+An `XMLName` field with a name in its tag is a check. The element has to have that name, or the call fails with an `XmlUnmarshalError`:
+
+<!-- example: ../examples/encoding/xml.c#unmarshal-name -->
+```c
+err = xml_unmarshal(a, BURROW_B("<people><first>Ann</first></people>"),
+                    BURROW_ANY(TYPE_OF(Person), &q));
+```
+
+The error reads `expected element type <person> but have <people>`.
+
+A type that wants to read itself has an `UnmarshalXML` method, declared with `XML_SIG_UNMARSHAL_XML`. It gets the decoder and the start element, reads tokens up to the matching end, and gets `io_eof` there, since the decoder won't let it read past. Here one collects the names of the elements inside it:
+
+<!-- example: ../examples/encoding/xml.c#unmarshal-method -->
+```c
+#define TAGS_FIELDS(F, T) F(T, Str, joined, "")
+BURROW_STRUCT_DECL(TagList, TAGS_FIELDS);
+
+static Error tags_unmarshal_xml(TagList *t, XmlDecoder *d, XmlStartElement start) {
+    (void)start;
+    StringsBuilder b = STRINGS_BUILDER(d->a);
+    for (;;) {
+        Error err = BURROW_NO_ERROR;
+        XmlToken tok = xml_decoder_token(d, &err);
+        if (errors_is(err, io_eof))
+            break;
+        if (BURROW_FAILED(err))
+            return err;
+        if (tok.kind != XML_START_ELEMENT)
+            continue;
+        if (strings_builder_len(&b) > 0)
+            err = strings_builder_write_byte(&b, ',');
+        if (BURROW_OK(err))
+            strings_builder_write_string(&b, tok.start.name.local, &err);
+        if (BURROW_FAILED(err))
+            return err;
+    }
+    t->joined = strings_builder_string(&b);
+    return BURROW_NO_ERROR;
+}
+
+#define TAGS_METHODS(M, T) M(T, UnmarshalXML, tags_unmarshal_xml, XML_SIG_UNMARSHAL_XML)
+BURROW_STRUCT_DEFINE_METHODS(TagList, TAGS_FIELDS, TAGS_METHODS);
+
+#define POST_FIELDS(F, T)                                                              \
+    F(T, Str, Title, "xml:\"title\"")                                                  \
+    F(T, TagList, Tags, "xml:\"tags\"")
+BURROW_STRUCT(Post, POST_FIELDS);
+```
+
+<!-- example: ../examples/encoding/xml.c#unmarshal-post -->
+```c
+Post post = {0};
+err = xml_unmarshal(a,
+                    BURROW_B("<post><title>Hello</title>"
+                             "<tags><c/><xml/><go/></tags></post>"),
+                    BURROW_ANY(TYPE_OF(Post), &post));
+```
+
+`post.Tags.joined` is `c,xml,go`. The start element and the tokens are only good until the method returns, so what it keeps it allocates, here from `d->a`. A method that returns before the end of its element fails the call with `xml: (*T).UnmarshalXML did not consume entire <tags> element`, and one that calls `xml_decoder_raw_token` gets an error back. `xml_decoder_decode_element` reads the element a method was given into another value, which is how a method hands the work back. `UnmarshalXMLAttr`, declared with `XML_SIG_UNMARSHAL_XML_ATTR`, does the same for an attribute, and `encoding`'s `UnmarshalText` reads a type from the element's text or an attribute's value.
+
+Unmarshal recurses once for each element it reads into a value and stops with `exceeded max depth` past 10,000, Go's limit. Go's stack grows to fit and a goroutine's here does not, so to read documents nested thousands deep, read them on a goroutine started with `go_stack` and a few megabytes.
+
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/xml`, `Unmarshal`, `Decoder.Decode` and the `Unmarshaler` interfaces are still to come. From `encoding/json/v2`, `time.Time` and `time.Duration` wait on the calendar half of `time`.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext`, `encoding/pem` or `encoding/xml` is missing. From `encoding/json/v2`, `time.Time` and `time.Duration` wait on the calendar half of `time`.

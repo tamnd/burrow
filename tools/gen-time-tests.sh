@@ -418,4 +418,7 @@ printf '{"Replace":{"%s/zz_gen_test.go":"%s/zz_gen_test.go"}}' "$pkg" "$tmp" > "
 GEN_ZIP="$goroot/lib/time/zoneinfo.zip" go test -overlay "$tmp/overlay.json" -run '^TestZZGen$' -count=1 -v time > "$tmp/out.txt" ||
     { grep -m1 -B2 -A30 "^panic\|^fatal\|FAIL\|cannot\|undefined\|zz_gen" "$tmp/out.txt" >&2; exit 1; }
 sed -n '/^\/\* What Go/,$p' "$tmp/out.txt" | sed '/^--- PASS/,$d' > "$out"
+if command -v clang-format >/dev/null 2>&1; then
+    clang-format -i "$out"
+fi
 echo "wrote $out"

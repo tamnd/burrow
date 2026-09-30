@@ -411,7 +411,7 @@ static Int gob_read_full(GobDecoder *d, bool from_buf, Byte *p, Int n, Error *er
 
 /* decodeUintReader. */
 static uint64_t gob_decode_uint_reader(GobDecoder *d, bool from_buf, Error *err) {
-    Byte tmp[8];
+    Byte tmp[8] = {0};
     Int n = gob_read_full(d, from_buf, tmp, 1, err);
     if (n == 0)
         return 0;

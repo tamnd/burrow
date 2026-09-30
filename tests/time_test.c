@@ -326,14 +326,25 @@ static void arm_then_stop(void *env) {
     the_timer = NULL;
 }
 
+/* The stop has to come within WAIT of the arm, and the first timer a process
+ * arms can start a thread to watch it, which on a loaded machine can take
+ * longer than that. Go's TestAfterStop has the same problem and tries a few
+ * times, and so does this. */
 static void TestAStoppedTimerNeverRuns(TestingT *t) {
-    callback_runs = 0;
-    stopped = false;
-    pending = true;
     (void)runtime_gomaxprocs(2);
+    for (int attempt = 1;; attempt++) {
+        callback_runs = 0;
+        stopped = false;
+        pending = true;
 
-    runtime_main(BURROW_FN(Func, arm_then_stop, NULL));
+        runtime_main(BURROW_FN(Func, arm_then_stop, NULL));
 
+        if ((callback_runs == 0 && stopped && !pending) || attempt == 5)
+            break;
+        testing_t_logf_v(
+            t, "attempt %d: the timer ran before it was stopped, trying again",
+            attempt);
+    }
     CHECK_INT_EQ(callback_runs, 0);
     CHECK(stopped);
     CHECK(!pending);

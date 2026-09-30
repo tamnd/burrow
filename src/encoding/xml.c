@@ -2125,7 +2125,7 @@ static XmlToken xml_raw_token(XmlDecoder *d, Error *err) {
                 }
                 if (newr.vt == NULL) {
                     Str msg = fmt_sprintf_v(
-                        heap_allocator(),
+                        error_allocator(),
                         "CharsetReader returned a nil Reader for charset %s", enc);
                     panic_str(msg);
                 }

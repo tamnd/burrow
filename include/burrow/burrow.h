@@ -69,6 +69,7 @@
 #include "burrow/encoding/json/jsontext.h"
 #include "burrow/encoding/json/v2.h"
 #include "burrow/encoding/pem.h"
+#include "burrow/encoding/xml.h"
 #include "burrow/error.h"
 #include "burrow/flag.h"
 #include "burrow/fmt.h"

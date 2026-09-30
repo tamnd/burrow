@@ -4,6 +4,15 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.14 (2026-09-30)
+
+The second half of JSON v2's core.
+
+### Added
+
+- `encoding/json/v2`, marshal and unmarshal for every kind: struct tags, omitempty and omitzero, case folding, embedded structs, the map fallback for unknown members, the v2 options and SemanticError. All 610 of Go's TestMarshal and TestUnmarshal cases that the test generator brings across pass. Methods such as MarshalJSON, the WithMarshalers family and time.Time are not in yet (#268).
+- `burrow_type_Any`, so a struct field of type `Any` can be declared with `TYPE_OF(Any)` like any other field (#268).
+
 ## v0.1.13 (2026-09-30)
 
 JPEG and the first half of JSON v2.

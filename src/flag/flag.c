@@ -694,8 +694,10 @@ void flag_flag_set_print_defaults(FlagFlagSet *f) {
             /* Four spaces before the tab triggers good alignment for both 4-
              * and 8-space tab stops. */
             line = fmt_sprintf_v(a, "%s\n    \t", line);
-        line = fmt_sprintf_v(a, "%s%s", line,
-                             strings_replace_all(a, usage, LIT("\n"), LIT("\n    \t")));
+        /* A local rather than a call in the arguments, which MSVC warns about
+         * once for every type the argument macro could have picked. */
+        Str indented = strings_replace_all(a, usage, LIT("\n"), LIT("\n    \t"));
+        line = fmt_sprintf_v(a, "%s%s", line, indented);
 
         /* Print the default value only if it differs from the zero value. */
         Str errmsg = BURROW_STR_EMPTY;
@@ -881,10 +883,12 @@ void flag_flag_set_text_var(FlagFlagSet *f, Any p, Str name, Any value, Str usag
     Alloc *ea = error_allocator();
     if (p.t == NULL || p.data == NULL)
         panic_str(LIT("variable value type must be a pointer"));
-    if (value.t != p.t)
+    if (value.t != p.t) {
+        Str have = value.t ? type_text(ea, value.t) : LIT("<nil>");
+        Str want = type_text(ea, p.t);
         panic_str(fmt_sprintf_v(
-            ea, "default type does not match variable type: %s != %s",
-            value.t ? type_text(ea, value.t) : LIT("<nil>"), type_text(ea, p.t)));
+            ea, "default type does not match variable type: %s != %s", have, want));
+    }
     if (value.data != p.data)
         memmove(p.data, value.data, p.t->size);
     check_name(f, name);

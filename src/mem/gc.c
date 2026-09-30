@@ -137,13 +137,13 @@ bool burrow__gc_is(const Alloc *a) {
 /* Nothing can be the collector's before it has started, and GC_base before
  * GC_INIT is not something the collector promises to answer. */
 bool burrow__gc_owns(const void *p) {
-    return gc_started && GC_base((void *)p) != NULL;
+    return gc_started && GC_base((void *)(uintptr_t)p) != NULL;
 }
 
 /* The collector wants the start of the object, and p may be inside it. What
  * goes in *link is p itself, hidden, which is what weak gives back. */
 bool burrow__gc_link(void **link, const void *p) {
-    void *base = GC_base((void *)p);
+    void *base = GC_base((void *)(uintptr_t)p);
     if (base == NULL)
         return false;
     *(GC_hidden_pointer *)link = GC_HIDE_POINTER(p);

@@ -347,8 +347,9 @@ bool field_is_blank(const Field *f);
  * Go's rule is that an embedded field has no name of its own and takes the
  * name of its type, so that is what is checked: the field's name and its
  * type's name are the same string. A field called Point of type Point is
- * embedded and there is no way to write one that is not, which is exactly the
- * situation in Go. */
+ * taken as embedded. Go can also declare Point Point as an ordinary named
+ * field, which this cannot express yet, so such a field reads as embedded
+ * here. */
 bool field_is_embedded(const Field *f);
 
 /* --------------------------------------------------------------- struct tags

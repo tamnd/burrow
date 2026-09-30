@@ -48,6 +48,7 @@ category	mime-types	mime's table of file extensions and media types. Go keeps it
 category	thread-exit	The hook that runs code as a thread exits. The platform has one per process and every library that keeps memory per thread shares it.
 category	image-formats	image's list of registered formats. Go keeps it in an atomic.Value that RegisterFormat replaces under a lock, and it is process wide because a format registered anywhere is one Decode can find everywhere.
 category	uuid-v7	uuid.NewV7's last timestamp. Go keeps it in package level variables behind a mutex, and it is process wide because a v7 UUID has to sort after every earlier one the process made, not only the ones its own thread made.
+category	weak	weak's table of slots. Go hangs a weak handle off the object and its collector clears it, and here the allocators tell one table when memory goes, which has to be process wide because memory freed on one thread may have had a WeakPointer made on another.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -57,6 +58,8 @@ global	src/mem/heap.c	heap_count_allocs	allocator	Atomic adds, and only ever goe
 global	src/mem/heap.c	heap_count_bytes	allocator	The same as heap_count_allocs.
 global	src/mem/gc.c	gc_singleton	allocator	The same as heap_singleton. One collector in a process means one object.
 global	src/mem/gc.c	gc_started	allocator	Written once by the first gc_allocator call, which the header requires to come from the main thread before any others exist.
+global	src/mem/mem.c	mem_forget_fn	weak	Written once by the first weak_make, under weak's lock, before mem_forget_on is set with a release store. Only read after an acquire load of mem_forget_on sees it set.
+global	src/mem/mem.c	mem_forget_on	weak	Release store once, acquire loads on every free.
 global	src/runtime/mcontext.c	resuming	scheduler	Thread local, and it only exists on the ucontext path. Written by a switch and read by the trampoline on the other side of that same switch, on the same thread, with nothing in between.
 global	src/runtime/mcontext.c	annotate_prev	scheduler	Thread local, and it only exists in a build with the address sanitizer on. Written on the old stack and read on the new one, on the same thread, with nothing in between, the same as resuming above.
 global	src/runtime/mcontext.c	tsan_pool_lock	scheduler	This is the synchronisation for the three below, and it only exists in a build with the thread sanitizer on. Held for the handful of instructions that move a fiber into or out of the pool, never across the call that makes one.
@@ -222,3 +225,13 @@ global	src/encoding/jsonv2_fields.c	jv_build_alloc	type-registry	Set and cleared
 global	src/uuid/uuid.c	v7mu	uuid-v7	The lock itself. It covers the two below.
 global	src/uuid/uuid.c	v7last_secs	uuid-v7	Only touched under v7mu.
 global	src/uuid/uuid.c	v7last_timestamp	uuid-v7	Only touched under v7mu.
+global	src/weak/weak.c	wk_lock	weak	The lock itself. It covers every global below.
+global	src/weak/weak.c	wk_blocks	weak	Only touched under wk_lock.
+global	src/weak/weak.c	wk_nblocks	weak	Only touched under wk_lock.
+global	src/weak/weak.c	wk_nslots	weak	Only touched under wk_lock.
+global	src/weak/weak.c	wk_free	weak	Only touched under wk_lock.
+global	src/weak/weak.c	wk_index	weak	Only touched under wk_lock.
+global	src/weak/weak.c	wk_len	weak	Only touched under wk_lock.
+global	src/weak/weak.c	wk_cap	weak	Only touched under wk_lock.
+global	src/weak/weak.c	wk_sweep_at	weak	Only touched under wk_lock.
+global	src/weak/weak.c	wk_hooked	weak	Only touched under wk_lock.

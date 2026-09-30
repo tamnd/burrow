@@ -182,6 +182,17 @@ AllocStats mem_stats(Alloc *a);
  * backend is an object you made and the handler belongs to that object. */
 void mem_set_oom(Alloc *a, OomFunc fn, void *ctx);
 
+/* Internal. weak needs to hear when memory goes back, and weak is built on top
+ * of this, so it installs a function here rather than the allocators calling
+ * it by name. mem_free and mem_realloc call it for the block they are about to
+ * give back, arena_reset, arena_release and fixed_reset for the bytes they
+ * drop, before any of it can be handed out again. The collector frees memory
+ * without telling anyone and does its own clearing, so mem_free and
+ * mem_realloc on the gc allocator do not call it. Set once, never cleared. */
+typedef void (*burrow__MemForget)(const void *p, size_t n);
+void burrow__mem_set_forget(burrow__MemForget fn);
+void burrow__mem_forget(const void *p, size_t n);
+
 /* The declarations above and everywhere else in burrow carry BURROW_OWNS,
  * BURROW_BORROWS, BURROW_STATIC and BURROW_RETAINS. Those say whether a result
  * is fresh memory or a view into an argument, which is the one lifetime

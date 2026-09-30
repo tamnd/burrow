@@ -4,6 +4,9 @@
 
 #include "burrow/mem.h"
 
+#include "burrow/atomic.h"
+#include "burrow/mem/gc.h"
+
 #include <string.h>
 
 /* Everything here is a thin dispatch through the vtable plus the two policies
@@ -26,6 +29,30 @@ static bool oom_retry(Alloc *a, size_t size, size_t align) {
     if (a->oom == NULL)
         return false;
     return a->oom(a->oom_ctx, size, align);
+}
+
+/* The function weak installs, and whether it has. Read on every free, so the
+ * common case with no weak pointers anywhere is one load and a branch. */
+static burrow__MemForget mem_forget_fn;
+static uint32_t mem_forget_on;
+
+void burrow__mem_set_forget(burrow__MemForget fn) {
+    mem_forget_fn = fn;
+    burrow__atomic_store_release_u32(&mem_forget_on, 1);
+}
+
+void burrow__mem_forget(const void *p, size_t n) {
+    if (n != 0 && burrow__atomic_load_acquire_u32(&mem_forget_on) != 0)
+        mem_forget_fn(p, n);
+}
+
+/* What mem_free and mem_realloc tell weak about. Nothing for the collector,
+ * whose free does nothing and whose memory weak watches another way. A zero
+ * sized block still has an address somebody may have made a WeakPointer from,
+ * so it counts as one byte. */
+static void mem_gone(Alloc *a, const void *p, size_t n) {
+    if (burrow__atomic_load_acquire_u32(&mem_forget_on) != 0 && !burrow__gc_is(a))
+        mem_forget_fn(p, n != 0 ? n : 1);
 }
 
 void *mem_alloc(Alloc *a, size_t size, size_t align) {
@@ -69,6 +96,7 @@ void *mem_realloc(Alloc *a, void *p, size_t old, size_t nsz, size_t align) {
         return NULL;
     if (p == NULL)
         return mem_alloc(a, nsz, align);
+    mem_gone(a, p, old);
     if (nsz == 0) {
         a->vt->free(a->self, p, old, align);
         return NULL;
@@ -86,6 +114,7 @@ void *mem_realloc(Alloc *a, void *p, size_t old, size_t nsz, size_t align) {
 void mem_free(Alloc *a, void *p, size_t size, size_t align) {
     if (a == NULL || a->vt == NULL || p == NULL)
         return;
+    mem_gone(a, p, size);
     a->vt->free(a->self, p, size, align);
 }
 

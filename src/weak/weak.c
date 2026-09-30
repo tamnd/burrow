@@ -28,6 +28,7 @@
 
 #include "burrow/weak.h"
 
+#include "burrow/atomic.h"
 #include "burrow/lock.h"
 #include "burrow/mem.h"
 #include "burrow/mem/gc.h"
@@ -59,6 +60,16 @@ static uint32_t wk_len;
 static uint32_t wk_cap;
 static uint32_t wk_sweep_at; /* wk_len at which to look for cleared links */
 static bool wk_hooked;
+/* wk_len, published for burrow__mem_forget to read without the lock. A
+ * program that has made no WeakPointer, or whose WeakPointers have all gone,
+ * pays one load per free and does not touch wk_lock. A free racing a
+ * weak_make on the same memory is already a use after free, so a stale answer
+ * here cannot be wrong for a program that has none. */
+static uint32_t wk_live;
+
+static void wk_publish(void) {
+    burrow__atomic_store_release_u32(&wk_live, wk_len);
+}
 
 /* The table's own memory comes straight from the heap's vtable. Through
  * mem_realloc it would call burrow__mem_forget, which takes wk_lock, which is
@@ -124,10 +135,13 @@ static void wk_sweep(void) {
             wk_index[n++] = i;
     }
     wk_len = n;
+    wk_publish();
     wk_sweep_at = 2 * wk_len > 64 ? 2 * wk_len : 64;
 }
 
 static void wk_forget(const void *p, size_t n) {
+    if (burrow__atomic_load_acquire_u32(&wk_live) == 0)
+        return;
     uintptr_t lo = (uintptr_t)p;
     uintptr_t hi = lo + (n - 1);
     if (hi < lo)
@@ -141,6 +155,7 @@ static void wk_forget(const void *p, size_t n) {
     if (b > a) {
         memmove(wk_index + a, wk_index + b, (size_t)(wk_len - b) * sizeof(*wk_index));
         wk_len -= b - a;
+        wk_publish();
     }
     burrow__unlock(&wk_lock);
 }
@@ -207,6 +222,7 @@ WeakPointer weak_make(const void *p) {
         memmove(wk_index + at, wk_index + at + 1,
                 (size_t)(wk_len - at - 1) * sizeof(*wk_index));
         wk_len--;
+        wk_publish();
     }
 
     if (wk_len >= wk_sweep_at) {
@@ -242,6 +258,7 @@ WeakPointer weak_make(const void *p) {
             (size_t)(wk_len - at) * sizeof(*wk_index));
     wk_index[at] = i;
     wk_len++;
+    wk_publish();
 
     WeakPointer w = wk_handle(i);
     burrow__unlock(&wk_lock);

@@ -235,3 +235,4 @@ global	src/weak/weak.c	wk_len	weak	Only touched under wk_lock.
 global	src/weak/weak.c	wk_cap	weak	Only touched under wk_lock.
 global	src/weak/weak.c	wk_sweep_at	weak	Only touched under wk_lock.
 global	src/weak/weak.c	wk_hooked	weak	Only touched under wk_lock.
+global	src/weak/weak.c	wk_live	weak	Written under wk_lock with a release store, read without it with an acquire load, as the comment on it says.

@@ -9,11 +9,12 @@
 # value is written down as a dump both sides know how to make, so the C test
 # can compare values without either side knowing the other's layout.
 #
-# A case is left out when its types have methods, since the port does not call
-# them yet, or when it needs something C has no spelling for here: a complex
-# number, a non-nil channel or func, an interface other than any, or a field
-# that would look embedded in C without being embedded in Go. The generated
-# header says how many cases went in and how many were left out.
+# A case is left out when its types have methods other than jsontext.Value's,
+# since the generator cannot write C for those, or when it needs something C
+# has no spelling for here: a complex number, a non-nil channel or func, an
+# interface other than any, or a field that would look embedded in C without
+# being embedded in Go. The generated header says how many cases went in and
+# how many were left out.
 #
 # Copyright 2026 The burrow Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style licence that can be found
@@ -134,6 +135,9 @@ func supported(t reflect.Type, seen map[reflect.Type]bool) bool {
 		return true
 	}
 	seen[t] = true
+	if t == jsontextValueType {
+		return true
+	}
 	if t.Kind() != reflect.Interface && (t.NumMethod() > 0 || reflect.PointerTo(t).NumMethod() > 0) {
 		return false
 	}
@@ -170,6 +174,9 @@ func supported(t reflect.Type, seen map[reflect.Type]bool) bool {
 func ctype(t reflect.Type) (string, string) {
 	if t == anyType {
 		return "Any", "&burrow_type_Any"
+	}
+	if t == jsontextValueType {
+		return "JsontextValue", "&burrow_type_JsontextValue"
 	}
 	if b, ok := builtins[t.Kind()]; ok && t.PkgPath() == "" && t.Name() != "" {
 		return b[0], "&burrow_type_" + b[1]

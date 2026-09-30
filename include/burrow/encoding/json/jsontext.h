@@ -270,8 +270,20 @@ uint64_t jsontext_token_uint(JsontextToken t, Error *err);
 
 /* ------------------------------------------------------------------- values */
 
-/* jsontext.Value, the raw text of one JSON value, a []byte. */
+/* jsontext.Value, the raw text of one JSON value, a []byte.
+ *
+ * It has its own descriptor, so a struct field can be a JsontextValue and
+ * json v2 keeps the member's text as it is rather than decoding it:
+ *
+ *     #define EVENT_FIELDS(F, T)                                              \
+ *         F(T, Str, Kind, "json:\"kind\"")                                    \
+ *         F(T, JsontextValue, Data, "json:\"data\"")
+ *
+ * Embedded with `json:",embed"`, it collects every member no other field
+ * claimed, as one JSON object. */
 typedef Slice JsontextValue;
+
+extern const Type burrow_type_JsontextValue;
 
 /* Value.Clone, a copy in a. */
 BURROW_OWNS(ret) JsontextValue jsontext_value_clone(JsontextValue v, Alloc *a);

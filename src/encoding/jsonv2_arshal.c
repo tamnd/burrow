@@ -1746,8 +1746,81 @@ static int jv_fallback_name_ok(JsontextEncoder *e, const JvFields *fs, JvIdSet *
     return burrow__jsontext_encoder_insert_unquoted(e, name);
 }
 
-/* marshalEmbeddedFallbackAll, for a Go map of string key. jsontext.Value
- * comes with methods. */
+/* marshalEmbeddedFallbackAll, for a jsontext.Value: the members of the
+ * object it holds, copied across one by one so each name can be checked
+ * against the fields already written. */
+static Error jv_marshal_fallback_value(JsontextEncoder *e, const Type *t,
+                                       JsontextValue b, JsontextOptions *mo,
+                                       const JvFields *fs, JvIdSet *seen) {
+    if (b.len == 0)
+        return BURROW_NO_ERROR;
+    JsontextOptions o;
+    memset(&o, 0, sizeof(o));
+    o.presence = o.values =
+        JSONFLAG_ALLOW_DUPLICATE_NAMES | JSONFLAG_ALLOW_INVALID_UTF8;
+    JsontextDecoder d;
+    burrow__jsontext_decoder_init(&d, heap_allocator());
+    IoReader none;
+    memset(&none, 0, sizeof(none));
+    burrow__jsontext_decoder_setup(&d, none, false, (const Byte *)b.p, b.len, &o);
+    Error err = BURROW_NO_ERROR;
+    JsontextToken tok = jsontext_decoder_read_token(&d, &err);
+    if (BURROW_FAILED(err)) {
+        err = burrow__jsonv2_marshal_error_before(
+            e, t, burrow__jsonv2_to_unexpected_eof(err));
+        goto done;
+    }
+    if (jsontext_token_kind(tok) != '{') {
+        err = burrow__jsonv2_marshal_error_before(
+            e, t, burrow__jsonv2_err_raw_embed_not_object);
+        goto done;
+    }
+    while (jsontext_decoder_peek_kind(&d) != '}') {
+        unsigned flags = 0;
+        Slice val = burrow__jsontext_read_value(&d, &flags, &err);
+        if (BURROW_FAILED(err)) {
+            err = burrow__jsonv2_marshal_error_before(e, t, err);
+            goto done;
+        }
+        if (seen != NULL) {
+            JV_SCRATCH(scratch);
+            Str name = burrow__jsonwire_unquote_may_copy(
+                (const Byte *)val.p, val.len,
+                (flags & JSONWIRE_STRING_NON_VERBATIM) == 0, &scratch);
+            int ok = scratch.failed ? -1 : jv_fallback_name_ok(e, fs, seen, name, mo);
+            burrow__jsonbuf_free(&scratch);
+            if (ok < 0) {
+                err = burrow_err_out_of_memory;
+                goto done;
+            }
+            if (ok == 0) {
+                err = burrow__jsonv2_duplicate_name_error_enc(e, val);
+                goto done;
+            }
+        }
+        err = jsontext_encoder_write_value(e, val);
+        if (BURROW_FAILED(err))
+            goto done;
+        val = burrow__jsontext_read_value(&d, &flags, &err);
+        if (BURROW_FAILED(err)) {
+            err = burrow__jsonv2_marshal_error_before(e, t, err);
+            goto done;
+        }
+        err = jsontext_encoder_write_value(e, val);
+        if (BURROW_FAILED(err))
+            goto done;
+    }
+    (void)jsontext_decoder_read_token(&d, &err);
+    if (BURROW_OK(err))
+        err = burrow__jsontext_check_eof(&d);
+    if (BURROW_FAILED(err))
+        err = burrow__jsonv2_marshal_error_before(e, t, err);
+done:
+    burrow__jsontext_decoder_release(&d);
+    return err;
+}
+
+/* marshalEmbeddedFallbackAll, for a Go map of string key. */
 static Error jv_marshal_fallback(JsontextEncoder *e, const Type *t, void *p,
                                  JsontextOptions *mo, const JvFields *fs,
                                  JvIdSet *seen) {
@@ -1762,6 +1835,9 @@ static Error jv_marshal_fallback(JsontextEncoder *e, const Type *t, void *p,
             return BURROW_NO_ERROR;
         mt = mt->elem;
     }
+    if (mt == &burrow_type_JsontextValue)
+        return jv_marshal_fallback_value(e, mt, *(const JsontextValue *)v, mo, fs,
+                                         seen);
     Map *m = *(Map **)v;
     Int n = m == NULL ? 0 : map_len(m);
     if (n == 0)
@@ -1839,11 +1915,49 @@ static Error jv_skip(JsontextDecoder *d) {
     return jsontext_decoder_skip_value(d);
 }
 
+/* unmarshalEmbeddedFallbackNext, for a jsontext.Value: the member goes on
+ * the end of the object it holds, which starts as {} when it is empty. */
+static Error jv_unmarshal_fallback_value(JsontextDecoder *d, const Type *t,
+                                         JsontextValue *v, Slice quoted) {
+    Alloc *a = d->out_alloc;
+    Slice b = {v->p, v->len, v->cap, TYPE_BYTE};
+    if (b.len == 0) {
+        b = slice_append(a, b, "{", 1);
+    } else {
+        /* Trimmed in place, so a value that is not an object is left without
+         * its trailing white space, as Go leaves it. */
+        b.len = burrow__jsonwire_trim_suffix_whitespace((const Byte *)b.p, b.len);
+        v->len = b.len;
+        if (b.len == 0 || ((const Byte *)b.p)[b.len - 1] != '}')
+            return burrow__jsonv2_unmarshal_error_after_skipping(
+                d, t, burrow__jsonv2_err_raw_embed_not_object);
+        b.len = burrow__jsonwire_trim_suffix_whitespace((const Byte *)b.p, b.len - 1);
+        Byte last = b.len > 0 ? ((const Byte *)b.p)[b.len - 1] : 0;
+        if (last != ',' && last != '{')
+            b = slice_append(a, b, ",", 1);
+    }
+    b = slice_append(a, b, quoted.p, quoted.len);
+    b = slice_append(a, b, ":", 1);
+    *v = b;
+    Error err = BURROW_NO_ERROR;
+    unsigned flags = 0;
+    Slice val = burrow__jsontext_read_value(d, &flags, &err);
+    if (BURROW_FAILED(err))
+        return err;
+    b = slice_append(a, b, val.p, val.len);
+    b = slice_append(a, b, "}", 1);
+    if (b.p == NULL)
+        return burrow_err_out_of_memory;
+    *v = b;
+    return BURROW_NO_ERROR;
+}
+
 /* unmarshalEmbeddedFallbackNext, for a Go map of string key: the member
  * named name goes into the map, made if it is nil, on top of whatever the map
  * already held for it. */
 static Error jv_unmarshal_fallback(JsontextDecoder *d, const Type *t, void *p,
-                                   JsontextOptions *uo, const JvFields *fs, Str name) {
+                                   JsontextOptions *uo, const JvFields *fs,
+                                   Slice quoted, Str name) {
     const JvField *f = &fs->fallback;
     void *v = jv_field_ptr(t, p, f, d->out_alloc);
     if (v == NULL) {
@@ -1863,6 +1977,8 @@ static Error jv_unmarshal_fallback(JsontextDecoder *d, const Type *t, void *p,
         v = *pp;
         mt = mt->elem;
     }
+    if (mt == &burrow_type_JsontextValue)
+        return jv_unmarshal_fallback_value(d, mt, (JsontextValue *)v, quoted);
     Map *m = *(Map **)v;
     if (m == NULL) {
         m = map_make(d->out_alloc, mt->key, mt->elem, 0);
@@ -1987,7 +2103,7 @@ static Error jv_unmarshal_struct(JsontextDecoder *d, const Type *t, void *p,
                         goto done;
                     }
                 } else {
-                    Error ferr = jv_unmarshal_fallback(d, t, p, uo, fs, name);
+                    Error ferr = jv_unmarshal_fallback(d, t, p, uo, fs, val, name);
                     if (BURROW_FAILED(ferr)) {
                         if (burrow__jsonv2_is_fatal(ferr, uo)) {
                             r = ferr;

@@ -720,6 +720,27 @@ err = jsonv2_unmarshal_v(a, BURROW_B("[\"no\",\"maybe\"]"),
 
 `words` is `["yes","no"]`, and the second element fails with `json: cannot unmarshal JSON string into Go *bool within "/1": want yes or no`. The type a function is for says which values it gets. A plain type like `TYPE_BOOL` means values of exactly that type, an unnamed pointer to T means values of T, which is what an unmarshal function has to be set up with since it fills the value in, and an interface means values whose type has its methods. The function is asked about every value on the way down, fields, elements, map keys and what pointers and interfaces hold, and it comes before the type's own methods. `jsonv2_marshal_to_func` and `jsonv2_unmarshal_from_func` work on the coder instead of on bytes and may return `errors_err_unsupported` to hand the value on, and `jsonv2_join_marshalers` puts several sets into one, with the earlier ones asked first.
 
+A field of type `JsontextValue` is left as JSON text. Unmarshal copies the member's text into it without decoding it, and Marshal writes the text back out, checked and compacted like everything else it writes. That is the way to hold on to a payload whose shape depends on another field:
+
+<!-- example: ../examples/encoding/jsonv2.c#event -->
+```c
+#define EVENT_FIELDS(F, T)                                                             \
+    F(T, Str, Kind, "json:\"kind\"")                                                   \
+    F(T, JsontextValue, Data, "json:\"data\"")
+BURROW_STRUCT(Event, EVENT_FIELDS);
+```
+
+<!-- example: ../examples/encoding/jsonv2.c#raw -->
+```c
+Event ev = {0};
+err = jsonv2_unmarshal_v(
+    a, BURROW_B("{\"kind\":\"click\", \"data\": {\"x\": 1, \"y\": 2}}"),
+    BURROW_ANY(TYPE_OF(Event), &ev), 0);
+Slice evb = jsonv2_marshal_v(a, BURROW_ANY(TYPE_OF(Event), &ev), &err, 0);
+```
+
+`ev.Data` is `{"x": 1, "y": 2}`, spaces and all, and `evb` is `{"kind":"click","data":{"x":1,"y":2}}`. Tagged `json:",embed"`, a `JsontextValue` field is the fallback for members no other field claims, like the map in `Loose` above, except that it collects them as one JSON object.
+
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/json/v2`, `time.Time` and `jsontext.Value` as a field are still to come, and so is the v1 API of `encoding/json`.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/json/v2`, `time.Time` and `time.Duration` wait on the calendar half of `time`, and the v1 API of `encoding/json` is still to come.

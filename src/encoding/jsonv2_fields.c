@@ -798,7 +798,8 @@ static const JvFields *jv_fields_build(const Type *root) {
                 }
                 if (!handled) {
                     const Type *tf = jv_indirect_type(f.typ);
-                    if (burrow__jsonv2_implements_any(tf))
+                    if (burrow__jsonv2_implements_any(tf) &&
+                        tf != &burrow_type_JsontextValue)
                         jv_or_err(&serr, &serr_t, t,
                                   burrow__jsonv2_errorf_in(
                                       JV_HEAP,
@@ -820,8 +821,10 @@ static const JvFields *jv_fields_build(const Type *root) {
                                       sf->name));
                         continue;
                     }
-                    if (tf->kind == KIND_MAP && tf->key != NULL &&
-                        tf->key->kind == KIND_STRING) {
+                    if (tf == &burrow_type_JsontextValue) {
+                        /* Handled by the fallback code in jsonv2_arshal.c. */
+                    } else if (tf->kind == KIND_MAP && tf->key != NULL &&
+                               tf->key->kind == KIND_STRING) {
                         if (burrow__jsonv2_implements_any(tf->key)) {
                             jv_or_err(
                                 &serr, &serr_t, t,

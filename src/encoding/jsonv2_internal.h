@@ -23,6 +23,7 @@ extern const Error burrow__jsonv2_err_nil_interface;
 extern const Error burrow__jsonv2_err_ambiguous_name;
 extern const Error burrow__jsonv2_err_invalid_string_tag;
 extern const Error burrow__jsonv2_err_nil_field;
+extern const Error burrow__jsonv2_err_raw_embed_not_object;
 extern const Error burrow__jsonv2_err_array_underflow;
 extern const Error burrow__jsonv2_err_array_overflow;
 extern const Error burrow__jsonv2_err_no_exported_fields;

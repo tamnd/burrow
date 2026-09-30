@@ -155,6 +155,15 @@ static bool encoding_find(Any v, const EncodingWant *w, EncodingFound *out) {
     void *d = v.data;
     if (t == NULL || d == NULL)
         return false;
+    /* An Any is a type and a data pointer, not a vtable, so it is looked
+     * through first. */
+    if (t == TYPE_ANY) {
+        const Any *in = (const Any *)d;
+        t = in->t;
+        d = in->data;
+        if (t == NULL || d == NULL)
+            return false;
+    }
     if (t->kind == KIND_INTERFACE) {
         /* Every interface value is a vtable and a data pointer, and every
          * vtable starts with self_type. */

@@ -3,9 +3,9 @@
 // The half of the json test generators that both tools/gen-jsonv2-tests.sh
 // and tools/gen-json-tests.sh share. Each script lays this file over the
 // package it generates for, next to its own file, which has to define
-// knownType. It walks Go types and values with reflect and writes the C
-// types, Type descriptors and builder functions for them, and the dumps both
-// sides compare values by.
+// knownType, knownValue and typeName. It walks Go types and values with
+// reflect and writes the C types, Type descriptors and builder functions for
+// them, and the dumps both sides compare values by.
 //
 // Copyright 2026 The burrow Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style licence that can be found
@@ -119,8 +119,8 @@ func supported(t reflect.Type, seen map[reflect.Type]bool) bool {
 	case reflect.Struct:
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
-			looks := f.Type.Name() == f.Name ||
-				(f.Type.Kind() == reflect.Pointer && f.Type.Name() == "" && f.Type.Elem().Name() == f.Name)
+			looks := typeName(f.Type) == f.Name ||
+				(f.Type.Kind() == reflect.Pointer && f.Type.Name() == "" && typeName(f.Type.Elem()) == f.Name)
 			if looks != f.Anonymous {
 				return false
 			}
@@ -159,7 +159,7 @@ func ctype(t reflect.Type) (string, string) {
 func defineType(t reflect.Type, id int) {
 	name, pkg := "", ""
 	if t.Name() != "" {
-		name = t.Name()
+		name = typeName(t)
 		pkg = t.PkgPath()
 		if pkg == "encoding/json/v2" {
 			pkg = "encoding/json"
@@ -244,6 +244,9 @@ func (g *builder) value(v reflect.Value, lv string) {
 	if v.IsZero() && !(t.Kind() == reflect.Float32 || t.Kind() == reflect.Float64) {
 		return
 	}
+	if knownValue(g, v, lv) {
+		return
+	}
 	switch t.Kind() {
 	case reflect.Bool:
 		fmt.Fprintf(&g.b, "%s = true;\n", lv)
@@ -302,18 +305,24 @@ func (g *builder) value(v reflect.Value, lv string) {
 		m := g.tmp()
 		fmt.Fprintf(&g.b, "{\nMap *%s = map_make(a, %s, %s, 0);\n", m, kd, vd)
 		// In key order, so that the output does not change from run to run.
-		keys := v.MapKeys()
-		sort.Slice(keys, func(i, j int) bool {
-			var a, b strings.Builder
-			dump(&a, keys[i], map[uintptr]bool{})
-			dump(&b, keys[j], map[uintptr]bool{})
-			return a.String() < b.String()
-		})
-		for _, key := range keys {
+		// Pairs from MapRange rather than MapIndex on each key, which finds
+		// nothing for a NaN key.
+		type pair struct {
+			k, v reflect.Value
+			d    string
+		}
+		var pairs []pair
+		for it := v.MapRange(); it.Next(); {
+			var d strings.Builder
+			dump(&d, it.Key(), map[uintptr]bool{})
+			pairs = append(pairs, pair{it.Key(), it.Value(), d.String()})
+		}
+		sort.SliceStable(pairs, func(i, j int) bool { return pairs[i].d < pairs[j].d })
+		for _, p := range pairs {
 			k, e := g.tmp(), g.tmp()
 			fmt.Fprintf(&g.b, "{\n%s %s;\n%s %s;\nmemset(&%s, 0, sizeof(%s));\nmemset(&%s, 0, sizeof(%s));\n", kc, k, vc, e, k, k, e, e)
-			g.value(key, k)
-			g.value(v.MapIndex(key), e)
+			g.value(p.k, k)
+			g.value(p.v, e)
 			fmt.Fprintf(&g.b, "map_set(%s, &%s, &%s);\n}\n", m, k, e)
 		}
 		fmt.Fprintf(&g.b, "%s = %s;\n}\n", lv, m)

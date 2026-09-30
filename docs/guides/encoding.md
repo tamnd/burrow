@@ -842,7 +842,7 @@ Each v1 behaviour also has its own option, such as `json_format_byte_array_as_ar
 
 ## XML
 
-`burrow/encoding/xml.h` is the token layer of Go's `encoding/xml`: a decoder that reads a document one token at a time and an encoder that writes tokens back out. `xml_marshal` and `xml_unmarshal`, which map XML onto structs, come in a later release.
+`burrow/encoding/xml.h` is Go's `encoding/xml`: a decoder that reads a document one token at a time, an encoder that writes tokens back out, and `xml_marshal`, which writes a value as XML by its type's descriptor. `xml_unmarshal`, which goes the other way, comes in a later release.
 
 A token is an `XmlToken`, a tagged union with a member for each of Go's six token types. A zeroed one is Go's nil. `xml_decoder_token` resolves namespace prefixes and checks that the tags nest:
 
@@ -937,6 +937,93 @@ The buffer holds `<note>`, then `  <body lang="en">1 &lt; 2</body>` and `</note>
 
 The tokens and their names are copied into the encoder as they are written, so the ones you pass need only last the call. `XmlSyntaxError`'s `Error` method, `xml_syntax_error_error`, takes an allocator for its text. An error that came out of the decoder already has the text, and `error_text` gives it to you.
 
+### Marshal
+
+`xml_marshal` takes any value with a descriptor and writes it the way Go's reflection would. A struct's fields say where they go with an `xml` tag, and the tag rules are Go's: `attr`, `chardata`, `cdata`, `innerxml`, `comment`, `omitempty`, `a>b>c` for nesting and a namespace before the name. The element's name comes from an `XMLName` field, or else the type's name:
+
+<!-- example: ../examples/encoding/xml.c#types -->
+```c
+BURROW_SLICE_TYPE(Emails, Str);
+
+#define PERSON_FIELDS(F, T)                                                            \
+    F(T, XmlName, XMLName, "xml:\"person\"")                                           \
+    F(T, Int, Id, "xml:\"id,attr\"")                                                   \
+    F(T, Str, First, "xml:\"name>first\"")                                             \
+    F(T, Str, Last, "xml:\"name>last\"")                                               \
+    F(T, Emails, Email, "xml:\"email\"")                                               \
+    F(T, Str, Nickname, "xml:\"nickname,omitempty\"")                                  \
+    F(T, Str, Note, "xml:\",comment\"")
+BURROW_STRUCT(Person, PERSON_FIELDS);
+BURROW_MAP_TYPE(Scores, Str, Int);
+```
+
+<!-- example: ../examples/encoding/xml.c#marshal -->
+```c
+Str emails[] = {BURROW_S("jd@example.com"), BURROW_S("john@work.example")};
+Person p = {.Id = 13,
+            .First = BURROW_S("John"),
+            .Last = BURROW_S("Doe"),
+            .Email = slice_from(emails, 2, 2, TYPE_STRING),
+            .Note = BURROW_S(" Need more details. ")};
+Slice doc = xml_marshal_indent(a, BURROW_ANY(TYPE_OF(Person), &p), BURROW_S(""),
+                               BURROW_S("  "), &err);
+```
+
+That gives:
+
+```
+<person id="13">
+  <name>
+    <first>John</first>
+    <last>Doe</last>
+  </name>
+  <email>jd@example.com</email>
+  <email>john@work.example</email>
+  <!-- Need more details. -->
+</person>
+```
+
+The empty nickname is left out because of `omitempty`. `xml_marshal_indent` is `xml_marshal` with the encoder's indent set, and `xml_encoder_encode` writes a value to an encoder you already have.
+
+A type that wants to write itself has a `MarshalXML` method, declared with `XML_SIG_MARSHAL_XML`. It gets the encoder and the start element Marshal would have used, and it can change the element before it writes:
+
+<!-- example: ../examples/encoding/xml.c#method -->
+```c
+#define TEMP_FIELDS(F, T) F(T, double, Celsius, "")
+BURROW_STRUCT_DECL(Temp, TEMP_FIELDS);
+
+static Error temp_marshal_xml(Temp *t, XmlEncoder *e, XmlStartElement start) {
+    XmlAttr unit[] = {{{BURROW_S(""), BURROW_S("unit")}, BURROW_S("F")}};
+    start.attr = slice_from(unit, 1, 1, &burrow_type_XmlAttr);
+    double f = t->Celsius * 9 / 5 + 32;
+    return xml_encoder_encode_element(e, BURROW_ANY(TYPE_OF(double), &f), start);
+}
+
+#define TEMP_METHODS(M, T) M(T, MarshalXML, temp_marshal_xml, XML_SIG_MARSHAL_XML)
+BURROW_STRUCT_DEFINE_METHODS(Temp, TEMP_FIELDS, TEMP_METHODS);
+```
+
+<!-- example: ../examples/encoding/xml.c#marshal-method -->
+```c
+Temp t = {21.5};
+Slice temp = xml_marshal(a, BURROW_ANY(TYPE_OF(Temp), &t), &err);
+```
+
+`temp` holds `<Temp unit="F">70.7</Temp>`. A `MarshalXMLAttr` method, declared with `XML_SIG_MARSHAL_XML_ATTR`, does the same for a field marshaled as an attribute, and a type with `encoding`'s `MarshalText` is written as its text. Every C method takes a pointer receiver, so a method is found on a `T` as well as on a `*T`. Go only finds a pointer method on a value it can take the address of, so a value Go would write field by field may be written by its method here.
+
+A method that leaves an element open fails the whole call with `xml: (*T).MarshalXML wrote invalid XML: <T> not closed`. Maps, channels and functions have no XML form, and marshaling one fails with an `XmlUnsupportedTypeError`:
+
+<!-- example: ../examples/encoding/xml.c#marshal-error -->
+```c
+Scores m = map_make(a, TYPE_STRING, TYPE_OF(Int), 0);
+xml_marshal(a, BURROW_ANY(TYPE_OF(Scores), &m), &err);
+const XmlUnsupportedTypeError *ue = errors_as(err, TYPE_XML_UNSUPPORTED_TYPE_ERROR);
+```
+
+The error reads `xml: unsupported type: map[string]int` and `ue->type` is the map's descriptor. Two fields that want the same path fail with an `XmlTagPathError`, which names both.
+
+Go allows a field named after its type without embedding it, `Port Port`. In C a field of type `T` or `T *` named `T` is how embedding is spelled, so give the C type another name when you mean an ordinary field.
+
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/xml`, `Marshal`, `Unmarshal` and the interfaces and errors that go with them are still to come. From `encoding/json/v2`, `time.Time` and `time.Duration` wait on the calendar half of `time`.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/xml`, `Unmarshal`, `Decoder.Decode` and the `Unmarshaler` interfaces are still to come. From `encoding/json/v2`, `time.Time` and `time.Duration` wait on the calendar half of `time`.

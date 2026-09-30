@@ -228,6 +228,10 @@ global	src/encoding/jsonv2_fields.c	jv_cache	type-registry	json v2's fields for 
 global	src/encoding/jsonv2_fields.c	jv_cache_cap	type-registry	The same as jv_cache.
 global	src/encoding/jsonv2_fields.c	jv_cache_len	type-registry	The same as jv_cache.
 global	src/encoding/jsonv2_fields.c	jv_build_alloc	type-registry	Set and cleared only while jv_cache_lock is held.
+global	src/encoding/xml_typeinfo.c	xi_lock	type-registry	The lock over the three below. It is held while a type's XML field info is worked out, which happens once per type.
+global	src/encoding/xml_typeinfo.c	xi_cache	type-registry	The XML field info for every type Marshal has seen, built once and never freed, as Go keeps it in a sync.Map. Read and written only under xi_lock.
+global	src/encoding/xml_typeinfo.c	xi_cache_cap	type-registry	The same as xi_cache.
+global	src/encoding/xml_typeinfo.c	xi_cache_len	type-registry	The same as xi_cache.
 global	src/uuid/uuid.c	v7mu	uuid-v7	The lock itself. It covers the two below.
 global	src/uuid/uuid.c	v7last_secs	uuid-v7	Only touched under v7mu.
 global	src/uuid/uuid.c	v7last_timestamp	uuid-v7	Only touched under v7mu.

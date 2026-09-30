@@ -4,6 +4,36 @@
 #include "burrow/encoding/xml.h"
 #include "burrow/mem/arena.h"
 
+// doc: types
+BURROW_SLICE_TYPE(Emails, Str);
+
+#define PERSON_FIELDS(F, T)                                                            \
+    F(T, XmlName, XMLName, "xml:\"person\"")                                           \
+    F(T, Int, Id, "xml:\"id,attr\"")                                                   \
+    F(T, Str, First, "xml:\"name>first\"")                                             \
+    F(T, Str, Last, "xml:\"name>last\"")                                               \
+    F(T, Emails, Email, "xml:\"email\"")                                               \
+    F(T, Str, Nickname, "xml:\"nickname,omitempty\"")                                  \
+    F(T, Str, Note, "xml:\",comment\"")
+BURROW_STRUCT(Person, PERSON_FIELDS);
+BURROW_MAP_TYPE(Scores, Str, Int);
+// doc: end
+
+// doc: method
+#define TEMP_FIELDS(F, T) F(T, double, Celsius, "")
+BURROW_STRUCT_DECL(Temp, TEMP_FIELDS);
+
+static Error temp_marshal_xml(Temp *t, XmlEncoder *e, XmlStartElement start) {
+    XmlAttr unit[] = {{{BURROW_S(""), BURROW_S("unit")}, BURROW_S("F")}};
+    start.attr = slice_from(unit, 1, 1, &burrow_type_XmlAttr);
+    double f = t->Celsius * 9 / 5 + 32;
+    return xml_encoder_encode_element(e, BURROW_ANY(TYPE_OF(double), &f), start);
+}
+
+#define TEMP_METHODS(M, T) M(T, MarshalXML, temp_marshal_xml, XML_SIG_MARSHAL_XML)
+BURROW_STRUCT_DEFINE_METHODS(Temp, TEMP_FIELDS, TEMP_METHODS);
+// doc: end
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -84,6 +114,33 @@ int main(void) {
     printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(text));
     printf("err: %d\n", BURROW_FAILED(err));
 
+    // doc: marshal
+    Str emails[] = {BURROW_S("jd@example.com"), BURROW_S("john@work.example")};
+    Person p = {.Id = 13,
+                .First = BURROW_S("John"),
+                .Last = BURROW_S("Doe"),
+                .Email = slice_from(emails, 2, 2, TYPE_STRING),
+                .Note = BURROW_S(" Need more details. ")};
+    Slice doc = xml_marshal_indent(a, BURROW_ANY(TYPE_OF(Person), &p), BURROW_S(""),
+                                   BURROW_S("  "), &err);
+    // doc: end
+    printf("%.*s\n", (int)doc.len, (const char *)doc.p);
+
+    // doc: marshal-method
+    Temp t = {21.5};
+    Slice temp = xml_marshal(a, BURROW_ANY(TYPE_OF(Temp), &t), &err);
+    // doc: end
+    printf("%.*s\n", (int)temp.len, (const char *)temp.p);
+
+    // doc: marshal-error
+    Scores m = map_make(a, TYPE_STRING, TYPE_OF(Int), 0);
+    xml_marshal(a, BURROW_ANY(TYPE_OF(Scores), &m), &err);
+    const XmlUnsupportedTypeError *ue = errors_as(err, TYPE_XML_UNSUPPORTED_TYPE_ERROR);
+    // doc: end
+    printf("err: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
+    Str kind = kind_name(ue->type->kind);
+    printf("kind: " BURROW_STR_FMT "\n", BURROW_STR_ARG(kind));
+
     arena_free(&ar);
     return 0;
 }
@@ -103,4 +160,16 @@ err: XML syntax error on line 2: element <b> closed by </a>
   <body lang="en">1 &lt; 2</body>
 </note>
 err: 0
+<person id="13">
+  <name>
+    <first>John</first>
+    <last>Doe</last>
+  </name>
+  <email>jd@example.com</email>
+  <email>john@work.example</email>
+  <!-- Need more details. -->
+</person>
+<Temp unit="F">70.7</Temp>
+err: xml: unsupported type: map[string]int
+kind: map
 */

@@ -28,6 +28,7 @@
 #include "burrow/mem.h"
 #include "burrow/own.h"
 #include "burrow/platform.h"
+#include "burrow/type.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -85,6 +86,13 @@ BURROW_OWNS(ret) Str duration_string(Duration d, Alloc *a);
  * nothing. */
 enum { DURATION_STRING_MAX = 32 };
 Int duration_format(Duration d, Byte *buf);
+
+/* The descriptor for Duration, a named int64 in package time with a String
+ * method, which is what lets fmt's %v print "1.5s" rather than 1500000000 and
+ * flag tell a duration flag from an int64 one. String has no allocator to
+ * take, so it puts its text in the calling goroutine's error arena. */
+extern const Type burrow_type_Duration;
+#define TYPE_DURATION TYPE_OF(Duration)
 
 /* Nanoseconds on a clock that only goes forwards, measured from an arbitrary
  * point that means nothing on its own.

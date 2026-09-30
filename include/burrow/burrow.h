@@ -70,6 +70,7 @@
 #include "burrow/encoding/json/v2.h"
 #include "burrow/encoding/pem.h"
 #include "burrow/error.h"
+#include "burrow/flag.h"
 #include "burrow/fmt.h"
 #include "burrow/func.h"
 #include "burrow/hash.h"

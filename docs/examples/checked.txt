@@ -48,3 +48,4 @@ docs/guides/mime.md
 docs/guides/image.md
 docs/guides/uuid.md
 docs/guides/weak.md
+docs/guides/flag.md

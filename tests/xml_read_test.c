@@ -220,11 +220,13 @@ static void on_big_stack(TestingT *t, void (*fn)(TestingT *t)) {
 
 /* ------------------------------------------------------------ depth limits */
 
-typedef struct Nested Nested;
-extern const Type burrow_type_Nested;
-BURROW_PTR_TYPE(NestedPtr, Nested);
+/* A type that refers to itself: the pointer's name comes first, the struct,
+ * then the pointer's descriptor, which needs the struct's. */
+typedef struct Nested *NestedPtr;
 #define NESTED_FIELDS(F, T) F(T, NestedPtr, Parent, "xml:\",any\"")
-BURROW_STRUCT(Nested, NESTED_FIELDS);
+BURROW_STRUCT_DECL(Nested, NESTED_FIELDS);
+BURROW_PTR_TYPE(NestedPtr, Nested);
+BURROW_STRUCT_DEFINE(Nested, NESTED_FIELDS);
 
 static void TestCVE202228131_body(TestingT *t) {
     Arena ar;
@@ -266,14 +268,13 @@ static void TestCVE202230633(TestingT *t) {
 }
 
 /* recursiveNode, whose UnmarshalXML decodes into an alias without the method. */
-typedef struct RecursiveNode RecursiveNode;
-extern const Type burrow_type_RecursiveNode;
-BURROW_SLICE_TYPE(RecursiveNodeSlice, RecursiveNode);
+typedef Slice RecursiveNodeSlice;
 
 #define RECURSIVE_NODE_FIELDS(F, T)                                                    \
     F(T, XmlName, XMLName, "")                                                         \
     F(T, RecursiveNodeSlice, Children, "xml:\",any\"")
 BURROW_STRUCT_DECL(RecursiveNode, RECURSIVE_NODE_FIELDS);
+BURROW_SLICE_TYPE(RecursiveNodeSlice, RecursiveNode);
 BURROW_STRUCT(RecursiveAlias, RECURSIVE_NODE_FIELDS);
 
 static Error recursive_node_unmarshal_xml(RecursiveNode *n, XmlDecoder *d,
@@ -321,20 +322,19 @@ static void TestDecodeElementRecursion(TestingT *t) {
 }
 
 /* standardNode and customUnmarshalerNode. */
-typedef struct StandardNode StandardNode;
-typedef struct CustomNode CustomNode;
-extern const Type burrow_type_StandardNode;
-extern const Type burrow_type_CustomNode;
-BURROW_PTR_TYPE(StandardNodePtr, StandardNode);
-BURROW_PTR_TYPE(CustomNodePtr, CustomNode);
+typedef struct StandardNode *StandardNodePtr;
+typedef struct CustomNode *CustomNodePtr;
 
 #define STANDARD_NODE_FIELDS(F, T)                                                     \
     F(T, StandardNodePtr, Sub, "xml:\"section\"")                                      \
     F(T, CustomNodePtr, Custom, "xml:\"extension\"")
-BURROW_STRUCT(StandardNode, STANDARD_NODE_FIELDS);
+BURROW_STRUCT_DECL(StandardNode, STANDARD_NODE_FIELDS);
 
 #define CUSTOM_NODE_FIELDS(F, T) F(T, StandardNode, Body, "")
 BURROW_STRUCT_DECL(CustomNode, CUSTOM_NODE_FIELDS);
+BURROW_PTR_TYPE(StandardNodePtr, StandardNode);
+BURROW_PTR_TYPE(CustomNodePtr, CustomNode);
+BURROW_STRUCT_DEFINE(StandardNode, STANDARD_NODE_FIELDS);
 
 static Error custom_node_unmarshal_xml(CustomNode *e, XmlDecoder *d,
                                        XmlStartElement start) {
@@ -390,11 +390,10 @@ static void TestDecodeElementDepthBypass(TestingT *t) {
 }
 
 /* manualNode, whose UnmarshalXML reads tokens and decodes each child. */
-typedef struct ManualNode ManualNode;
-extern const Type burrow_type_ManualNode;
-BURROW_PTR_TYPE(ManualNodePtr, ManualNode);
+typedef struct ManualNode *ManualNodePtr;
 #define MANUAL_NODE_FIELDS(F, T) F(T, ManualNodePtr, Child, "")
 BURROW_STRUCT_DECL(ManualNode, MANUAL_NODE_FIELDS);
+BURROW_PTR_TYPE(ManualNodePtr, ManualNode);
 
 static Error manual_node_unmarshal_xml(ManualNode *m, XmlDecoder *d,
                                        XmlStartElement start) {

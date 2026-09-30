@@ -3,6 +3,7 @@
 #include "burrow/burrow.h"
 #include "burrow/encoding/xml.h"
 #include "burrow/mem/arena.h"
+#include "burrow/strings.h"
 
 // doc: types
 BURROW_SLICE_TYPE(Emails, Str);
@@ -32,6 +33,42 @@ static Error temp_marshal_xml(Temp *t, XmlEncoder *e, XmlStartElement start) {
 
 #define TEMP_METHODS(M, T) M(T, MarshalXML, temp_marshal_xml, XML_SIG_MARSHAL_XML)
 BURROW_STRUCT_DEFINE_METHODS(Temp, TEMP_FIELDS, TEMP_METHODS);
+// doc: end
+
+// doc: unmarshal-method
+#define TAGS_FIELDS(F, T) F(T, Str, joined, "")
+BURROW_STRUCT_DECL(TagList, TAGS_FIELDS);
+
+static Error tags_unmarshal_xml(TagList *t, XmlDecoder *d, XmlStartElement start) {
+    (void)start;
+    StringsBuilder b = STRINGS_BUILDER(d->a);
+    for (;;) {
+        Error err = BURROW_NO_ERROR;
+        XmlToken tok = xml_decoder_token(d, &err);
+        if (errors_is(err, io_eof))
+            break;
+        if (BURROW_FAILED(err))
+            return err;
+        if (tok.kind != XML_START_ELEMENT)
+            continue;
+        if (strings_builder_len(&b) > 0)
+            err = strings_builder_write_byte(&b, ',');
+        if (BURROW_OK(err))
+            strings_builder_write_string(&b, tok.start.name.local, &err);
+        if (BURROW_FAILED(err))
+            return err;
+    }
+    t->joined = strings_builder_string(&b);
+    return BURROW_NO_ERROR;
+}
+
+#define TAGS_METHODS(M, T) M(T, UnmarshalXML, tags_unmarshal_xml, XML_SIG_UNMARSHAL_XML)
+BURROW_STRUCT_DEFINE_METHODS(TagList, TAGS_FIELDS, TAGS_METHODS);
+
+#define POST_FIELDS(F, T)                                                              \
+    F(T, Str, Title, "xml:\"title\"")                                                  \
+    F(T, TagList, Tags, "xml:\"tags\"")
+BURROW_STRUCT(Post, POST_FIELDS);
 // doc: end
 
 int main(void) {
@@ -141,6 +178,29 @@ int main(void) {
     Str kind = kind_name(ue->type->kind);
     printf("kind: " BURROW_STR_FMT "\n", BURROW_STR_ARG(kind));
 
+    // doc: unmarshal
+    Person q = {0};
+    err = xml_unmarshal(a, doc, BURROW_ANY(TYPE_OF(Person), &q));
+    // doc: end
+    Str first = q.First, last = q.Last, email1 = ((Str *)q.Email.p)[1];
+    fmt_printf_v("%d %s %s, %d emails, the second %s, note %q, err %v\n", q.Id, first,
+                 last, q.Email.len, email1, q.Note, err);
+
+    // doc: unmarshal-name
+    err = xml_unmarshal(a, BURROW_B("<people><first>Ann</first></people>"),
+                        BURROW_ANY(TYPE_OF(Person), &q));
+    // doc: end
+    printf("err: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
+
+    // doc: unmarshal-post
+    Post post = {0};
+    err = xml_unmarshal(a,
+                        BURROW_B("<post><title>Hello</title>"
+                                 "<tags><c/><xml/><go/></tags></post>"),
+                        BURROW_ANY(TYPE_OF(Post), &post));
+    // doc: end
+    fmt_printf_v("%s: %s\n", post.Title, post.Tags.joined);
+
     arena_free(&ar);
     return 0;
 }
@@ -172,4 +232,7 @@ err: 0
 <Temp unit="F">70.7</Temp>
 err: xml: unsupported type: map[string]int
 kind: map
+13 John Doe, 2 emails, the second john@work.example, note " Need more details. ", err <nil>
+err: expected element type <person> but have <people>
+Hello: c,xml,go
 */

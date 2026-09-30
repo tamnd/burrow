@@ -730,9 +730,21 @@ XmlToken xml_token_reader_token(XmlTokenReader r, Error *err) {
 static bool xml_switch_to_reader(XmlDecoder *d, IoReader r) {
     d->src = r;
     d->direct = NULL;
+    d->bytes_src = NULL;
+    d->str_src = NULL;
     d->read_byte = NULL;
     if (r.vt != NULL && r.vt->self_type == TYPE_BUFIO_READER) {
         d->direct = (BufioReader *)r.data;
+        return true;
+    }
+    /* The two in-memory readers are read in place, which is what their
+     * ReadByte would do, without a call through the method table per byte. */
+    if (r.vt != NULL && r.vt->self_type == TYPE_BYTES_READER) {
+        d->bytes_src = (BytesReader *)r.data;
+        return true;
+    }
+    if (r.vt != NULL && r.vt->self_type == TYPE_STRINGS_READER) {
+        d->str_src = (StringsReader *)r.data;
         return true;
     }
     const Method *m = burrow__io_read_byte_method(r);
@@ -1019,6 +1031,22 @@ static bool xml_getc(XmlDecoder *d, Byte *out) {
             Error e = BURROW_NO_ERROR;
             if (br != NULL) {
                 b = bufio_reader_read_byte(br, &e);
+            } else if (d->bytes_src != NULL || d->str_src != NULL) {
+                BytesReader *mb = d->bytes_src;
+                StringsReader *ms = d->str_src;
+                const Byte *p = mb != NULL ? (const Byte *)mb->s.p : ms->s.p;
+                Int n = mb != NULL ? mb->s.len : ms->s.len;
+                int64_t *at = mb != NULL ? &mb->i : &ms->i;
+                if (mb != NULL)
+                    mb->prev_rune = -1;
+                else
+                    ms->prev_rune = -1;
+                if (*at >= (int64_t)n) {
+                    e = io_eof;
+                    b = 0;
+                } else {
+                    b = p[(*at)++];
+                }
             } else {
                 IoErrorArg ea = &e;
                 void *args[1] = {(void *)(uintptr_t)&ea};
@@ -2512,6 +2540,14 @@ static Error xml_escape_to(XmlPut put, void *ctx, const Byte *s, Int len,
     Str esc;
     Int last = 0;
     for (Int i = 0; i < len;) {
+        /* Most text is ASCII that needs nothing, so step over that a byte at
+         * a time without decoding. Control characters, the five that have
+         * entities and anything past ASCII stop the scan. */
+        while (i < len && s[i] >= 0x20 && s[i] < 0x80 && s[i] != '"' && s[i] != '\'' &&
+               s[i] != '&' && s[i] != '<' && s[i] != '>')
+            i++;
+        if (i == len)
+            break;
         Int width;
         Rune r;
         if (s[i] < 0x80) {
@@ -2593,6 +2629,12 @@ typedef struct XmlPrefix {
     Str url;
 } XmlPrefix;
 
+typedef struct XmlTag {
+    Int off;
+    Int space_len;
+    Int local_len;
+} XmlTag;
+
 struct XmlEncoder {
     Alloc *a;
     BufioWriter *w;
@@ -2606,8 +2648,12 @@ struct XmlEncoder {
     Map *attr_prefix; /* URL to prefix */
     XmlPrefix *prefixes;
     Int nprefixes, capprefixes;
-    XmlName *tags; /* each in a block of its own */
+    /* The open tags, a stack of offsets into tag_bytes, where each one's
+     * space and then its local name are kept. */
+    XmlTag *tags;
     Int ntags, captags;
+    Byte *tag_bytes;
+    Int ntag_bytes, captag_bytes;
     bool closed;
     Error err;
 };
@@ -2651,13 +2697,11 @@ static void xml_enc_str_free(XmlEncoder *e, Str s) {
         mem_free(e->a, (void *)(uintptr_t)s.p, (size_t)s.len, 1);
 }
 
-static void xml_enc_name_free(XmlEncoder *e, XmlName n) {
-    size_t size = (size_t)n.space.len + (size_t)n.local.len;
-    if (size > 0)
-        mem_free(e->a,
-                 n.space.len > 0 ? (void *)(uintptr_t)n.space.p
-                                 : (void *)(uintptr_t)n.local.p,
-                 size, 1);
+/* Open tag i, pointing into tag_bytes, so good until the next push. */
+static XmlName xml_enc_tag(const XmlEncoder *e, Int i) {
+    XmlTag t = e->tags[i];
+    const Byte *p = e->tag_bytes + t.off;
+    return (XmlName){{p, t.space_len}, {p + t.space_len, t.local_len}};
 }
 
 static void xml_enc_prefix_free(XmlEncoder *e, XmlPrefix p) {
@@ -2677,10 +2721,10 @@ void xml_encoder_free(XmlEncoder *e) {
     if (e->capprefixes > 0)
         mem_free(a, e->prefixes, (size_t)e->capprefixes * sizeof(XmlPrefix),
                  _Alignof(XmlPrefix));
-    for (Int i = 0; i < e->ntags; i++)
-        xml_enc_name_free(e, e->tags[i]);
     if (e->captags > 0)
-        mem_free(a, e->tags, (size_t)e->captags * sizeof(XmlName), _Alignof(XmlName));
+        mem_free(a, e->tags, (size_t)e->captags * sizeof(XmlTag), _Alignof(XmlTag));
+    if (e->captag_bytes > 0)
+        mem_free(a, e->tag_bytes, (size_t)e->captag_bytes, 1);
     map_free(e->attr_ns);
     map_free(e->attr_prefix);
     mem_free(a, e, sizeof *e, _Alignof(XmlEncoder));
@@ -2914,22 +2958,32 @@ static Error xml_enc_write_start(XmlEncoder *e, const XmlStartElement *start) {
 
     if (e->ntags == e->captags) {
         Int cap = e->captags == 0 ? 8 : e->captags * 2;
-        XmlName *nt =
-            (XmlName *)mem_realloc(e->a, e->tags, (size_t)e->captags * sizeof(XmlName),
-                                   (size_t)cap * sizeof(XmlName), _Alignof(XmlName));
+        XmlTag *nt =
+            (XmlTag *)mem_realloc(e->a, e->tags, (size_t)e->captags * sizeof(XmlTag),
+                                  (size_t)cap * sizeof(XmlTag), _Alignof(XmlTag));
         if (nt == NULL)
             return burrow_err_out_of_memory;
         e->tags = nt;
         e->captags = cap;
     }
-    XmlName copy = {{NULL, 0}, {NULL, 0}};
-    size_t size = (size_t)start->name.space.len + (size_t)start->name.local.len;
-    Byte *p = (Byte *)mem_alloc_nozero(e->a, size, 1);
-    if (p == NULL)
-        return burrow_err_out_of_memory;
-    copy.space = xml_put_str(&p, start->name.space);
-    copy.local = xml_put_str(&p, start->name.local);
-    e->tags[e->ntags++] = copy;
+    Int need = e->ntag_bytes + start->name.space.len + start->name.local.len;
+    if (need > e->captag_bytes) {
+        Int cap = e->captag_bytes == 0 ? 256 : e->captag_bytes * 2;
+        while (cap < need)
+            cap *= 2;
+        Byte *nb = (Byte *)mem_realloc(e->a, e->tag_bytes, (size_t)e->captag_bytes,
+                                       (size_t)cap, 1);
+        if (nb == NULL)
+            return burrow_err_out_of_memory;
+        e->tag_bytes = nb;
+        e->captag_bytes = cap;
+    }
+    Byte *p = e->tag_bytes + e->ntag_bytes;
+    xml_put_str(&p, start->name.space);
+    xml_put_str(&p, start->name.local);
+    e->tags[e->ntags++] =
+        (XmlTag){e->ntag_bytes, start->name.space.len, start->name.local.len};
+    e->ntag_bytes = need;
     xml_enc_mark_prefix(e);
 
     xml_enc_write_indent(e, 1);
@@ -2966,9 +3020,9 @@ static Error xml_enc_write_start(XmlEncoder *e, const XmlStartElement *start) {
 static Error xml_enc_write_end(XmlEncoder *e, XmlName name) {
     if (name.local.len == 0)
         return errors_new(error_allocator(), BURROW_S("xml: end tag with no name"));
-    if (e->ntags == 0 || e->tags[e->ntags - 1].local.len == 0)
+    if (e->ntags == 0)
         return fmt_errorf_v("xml: end tag </%s> without start tag", name.local);
-    XmlName top = e->tags[e->ntags - 1];
+    XmlName top = xml_enc_tag(e, e->ntags - 1);
     if (!str_eq(top.local, name.local) || !str_eq(top.space, name.space)) {
         if (!str_eq(top.local, name.local))
             return fmt_errorf_v("xml: end tag </%s> does not match start tag <%s>",
@@ -2978,6 +3032,7 @@ static Error xml_enc_write_end(XmlEncoder *e, XmlName name) {
                             name.local, name.space, top.local, top.space);
     }
     e->ntags--;
+    e->ntag_bytes = e->tags[e->ntags].off;
 
     xml_enc_write_indent(e, -1);
     xml_enc_write_byte(e, '<');
@@ -2985,7 +3040,6 @@ static Error xml_enc_write_end(XmlEncoder *e, XmlName name) {
     xml_enc_write_str(e, name.local);
     xml_enc_write_byte(e, '>');
     xml_enc_pop_prefix(e);
-    xml_enc_name_free(e, top);
     return BURROW_NO_ERROR;
 }
 
@@ -3109,7 +3163,7 @@ Error xml_encoder_close(XmlEncoder *e) {
     if (BURROW_FAILED(err))
         return err;
     if (e->ntags > 0) {
-        Str local = e->tags[e->ntags - 1].local;
+        Str local = xml_enc_tag(e, e->ntags - 1).local;
         return fmt_errorf_v("unclosed tag <%s>", local);
     }
     return BURROW_NO_ERROR;

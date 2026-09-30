@@ -233,10 +233,12 @@ typedef struct XmlDecoder {
     Str default_space;
 
     Alloc *a;
-    IoReader src;            /* what charset_reader is handed */
-    BufioReader *direct;     /* bytes come from here, */
-    const Method *read_byte; /* or from src's ReadByte */
-    BufioReader **owned;     /* the readers made for sources without one */
+    IoReader src;                  /* what charset_reader is handed */
+    BufioReader *direct;           /* bytes come from here, */
+    struct BytesReader *bytes_src; /* or here, */
+    struct StringsReader *str_src; /* or here, */
+    const Method *read_byte;       /* or from src's ReadByte */
+    BufioReader **owned;           /* the readers made for sources without one */
     Int nowned, capowned;
     XmlTokenReader t;
     Byte *buf; /* Go's d.buf */

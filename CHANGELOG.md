@@ -4,6 +4,19 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.13 (2026-09-30)
+
+JPEG and the first half of JSON v2.
+
+### Added
+
+- `image/jpeg`, the baseline and progressive decoder and the baseline encoder with Go's quality scaling, matching Go's pixels and bytes on its JPEG test files and on random encodes (#264).
+- `encoding/json/jsontext`, the syntax layer of Go's JSON v2: the streaming encoder and decoder, tokens, values, quoting, formatting options and syntax errors with JSON pointers (#265).
+
+### Fixed
+
+- `encoding/json/jsontext` built only with clang on Unix. It no longer needs libm, and it builds with mingw and MSVC (#266).
+
 ## v0.1.12 (2026-09-30)
 
 PNG, GIF, and a working Windows release. v0.1.11 was tagged, but its release build failed on MSVC and nothing was published, so everything in it ships here too.

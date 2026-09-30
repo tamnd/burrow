@@ -318,12 +318,12 @@ static Str jx_box_message(const JxKind *k, const void *self) {
 static Error jx_build(Alloc *a, const JxKind *k, const void *e);
 
 #define JX_KIND_FUNCS(name)                                                            \
-    static const JxKind name##_kind;                                                   \
+    static const JxKind *name##_kind_get(void);                                        \
     static Str name##_message(const void *self) {                                      \
-        return jx_box_message(&name##_kind, self);                                     \
+        return jx_box_message(name##_kind_get(), self);                                \
     }                                                                                  \
     static Error name##_clone(const void *self, Alloc *a) {                            \
-        return jx_clone(&name##_kind, self, a);                                        \
+        return jx_clone(name##_kind_get(), self, a);                                   \
     }
 
 static Error jx_clone(const JxKind *k, const void *self, Alloc *a);
@@ -424,6 +424,23 @@ static const JxKind jx_marshaler_kind = {
     offsetof(JsonMarshalerError, err),
 };
 
+/* The kinds refer to the vtables and the vtables' functions to the kinds, so
+ * the functions reach them through these. MSVC won't take a forward
+ * declaration of a static const object. */
+#define JX_KIND_GET(name)                                                              \
+    static const JxKind *name##_kind_get(void) {                                       \
+        return &name##_kind;                                                           \
+    }
+JX_KIND_GET(jx_syntax)
+JX_KIND_GET(jx_unmarshal_type)
+JX_KIND_GET(jx_unmarshal_field)
+JX_KIND_GET(jx_invalid_unmarshal)
+JX_KIND_GET(jx_unsupported_type)
+JX_KIND_GET(jx_unsupported_value)
+JX_KIND_GET(jx_invalid_utf8)
+JX_KIND_GET(jx_marshaler)
+#undef JX_KIND_GET
+
 /* UnmarshalTypeError has a third Str, struct_name, which the table above has
  * no room for. It is always a type's name, which lives as long as the type,
  * so it is left pointing where it points. */
@@ -444,7 +461,7 @@ static Error jx_build(Alloc *a, const JxKind *k, const void *e) {
         memcpy(&in[i], (const Byte *)e + k->strs[i], sizeof(Str));
         extra += (size_t)in[i].len;
     }
-    Byte *box = (Byte *)mem_alloc_nozero(a, head + extra, _Alignof(max_align_t));
+    Byte *box = (Byte *)mem_alloc_nozero(a, head + extra, BURROW_ALIGN_MAX);
     if (box == NULL) {
         burrow__jsonbuf_free(&msg);
         return BURROW_NO_ERROR;

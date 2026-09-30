@@ -262,3 +262,9 @@ global	src/weak/weak.c	wk_hooked	weak	Only touched under wk_lock.
 global	src/weak/weak.c	wk_live	weak	Written under wk_lock with a release store, read without it with an acquire load, as the comment on it says.
 global	src/encoding/xml.c	xml_html_entity_once	tables	A SyncOnce, so the map is built once however many decoders ask for it at the same moment.
 global	src/encoding/xml.c	xml_html_entity_map	tables	Written once inside xml_html_entity_once and only read after it. Go builds HTMLEntity at package init, which C has no place for.
+global	src/time/calendar.c	tm_start_nano	clock	The wall clock reading of the process's first time_now, set once with a compare and swap and read with an acquire load. Go sets it at package init.
+global	src/time/zoneinfo.c	tz_utc_loc	time-zone-cache	Never written. It is not const only because a Time holds its location through a pointer that is not const.
+global	src/time/zoneinfo.c	tz_local_loc	time-zone-cache	Written once inside tz_local_once and only read after it, which is Go's localOnce.
+global	src/time/zoneinfo.c	tz_local_once	time-zone-cache	A SyncOnce over tz_local_loc.
+global	src/time/zoneinfo.c	tz_cache	time-zone-cache	The locations LoadLocation has read, as a list. Only touched under tz_cache_mu, and a location on it is never written or freed once it is there.
+global	src/time/zoneinfo.c	tz_cache_mu	time-zone-cache	The mutex over tz_cache.

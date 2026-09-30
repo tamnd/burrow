@@ -147,6 +147,20 @@ RENAMED = {
     # url_join_path is the method, which drops the error the way Go's does,
     # and the package level JoinPath that returns one is the _str form.
     ("net/url", "func JoinPath"): "url_join_path_str",
+    # include/burrow/time.h: time_unix and friends are the methods that read a
+    # Time, so the functions that build one from a count say which way they
+    # go. Date the method is time_date_of because time_date builds a Time,
+    # and After the function is the channel one, since time_after is the
+    # comparison.
+    ("time", "func Unix"): "time_from_unix",
+    ("time", "func UnixMilli"): "time_from_unix_milli",
+    ("time", "func UnixMicro"): "time_from_unix_micro",
+    ("time", "method (Time) Date"): "time_date_of",
+    ("time", "func After"): "time_after_chan",
+    # The two locations are variables holding pointers, and time_utc and
+    # time_local are the methods that move a Time into them.
+    ("time", "var UTC"): "time_utc_loc",
+    ("time", "var Local"): "time_local_loc",
 }
 
 

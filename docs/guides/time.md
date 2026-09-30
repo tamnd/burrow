@@ -1,8 +1,8 @@
 # Time
 
-Sleeping, and running a function later on. This is `burrow/time.h`, and it is the half of Go's `time` package that needs a scheduler underneath it: `Duration` and its units, `time.Sleep`, and `time.AfterFunc` with the `Stop` and `Reset` that go with it.
+Durations, instants, the calendar and time zones, sleeping, and running a function later on. This is `burrow/time.h`: `Duration` and its units, `Time` with its dates and zones, `time.Sleep`, and `time.AfterFunc` with the `Stop` and `Reset` that go with it.
 
-The calendar half, the `Time` type with its wall clock and its formatting and its timezones, is a separate job and is not here yet. It does not need the runtime, so it can be built alongside anything.
+Formatting and parsing, `Format`, `Parse` and the layouts, are not here yet, and neither are the timers that hand back a channel. The end of this page says what is missing.
 
 ## Durations
 
@@ -29,13 +29,82 @@ Duration took = burrow_nanotime() - start;
 
 `burrow_nanotime` is nanoseconds on a clock that only goes forwards, measured from an arbitrary point that means nothing on its own. Subtract two readings and the answer is a `Duration`.
 
-It says `burrow` rather than `time` because Go has no such function, which is what rule R11a in [design/08-naming-abi.md](../design/08-naming-abi.md) asks for. Go's `time.Now` carries a monotonic reading around inside it and `time.Since` pulls it back out, so a Go program never names the clock directly. burrow has no `Time` yet and the parts that need a deadline need one now, so the reading is exposed on its own. `burrow/context.h` measures a deadline on this clock, and so does anything that has to know how long something took.
+It says `burrow` rather than `time` because Go has no such function, which is what rule R11a in [design/08-naming-abi.md](../design/08-naming-abi.md) asks for. Go's `time.Now` carries a monotonic reading around inside it and `time.Since` pulls it back out, so a Go program never names the clock directly. `time_now` and `time_since` do the same here, and the section on elapsed time below shows them. This is the reading on its own, for code that wants an elapsed time and has no use for a date. `burrow/context.h` measures a deadline on this clock, and so does the runtime.
 
 Never backwards and never a jump, which is the point of it. The wall clock does both whenever somebody sets the date or ntp corrects a drift, and a timeout measured on the wall clock either waits an hour or fires twice.
 
 Callable from any thread, including one the runtime knows nothing about, and it costs a few nanoseconds everywhere, because every platform answers this out of the vdso or its equivalent rather than from a system call.
 
 Inside a synctest bubble this reads the bubble's clock instead. See the section on fake time below.
+
+## Dates
+
+<!-- example: ../examples/time/calendar.c#date -->
+```c
+Time t = time_date(2009, TIME_NOVEMBER, 10, 23, 0, 0, 0, time_utc_loc);
+TimeDateRet d = time_date_of(t);
+TimeClockRet c = time_clock(t);
+```
+
+`Time` is Go's `time.Time`, a value you pass and return by copy. It is three words, the same three Go has: the nanosecond and some flags, the seconds, and a pointer to the location. A `Time` with every field zero is January 1 of year 1 in UTC, which `time_is_zero` recognises, so a struct with a `Time` in it that nobody set reads as "not set" the way it does in Go.
+
+`time_date` builds one and `time_date_of` takes it apart. The names differ because Go has a function `Date` and a method `Date` that do opposite things, and C only gets one of them. The same goes for `time_from_unix`, which builds a `Time` from a unix second, and `time_unix`, which reads one back. Everything that returns more than one value in Go returns a small struct here, so `time_clock` gives the hour, minute and second together.
+
+The pieces have accessors of their own too: `time_year`, `time_month`, `time_day`, `time_weekday`, `time_year_day`, `time_iso_week` and the rest. `TimeMonth` and `TimeWeekday` are plain integers with Go's constants, and `time_month_string` and `time_weekday_string` give the English names. The allocator there is only used for a value out of range, and `NULL` is fine when you know it is in range.
+
+<!-- example: ../examples/time/calendar.c#normalise -->
+```c
+Time n = time_date(2024, TIME_OCTOBER, 32, 0, 0, 0, 0, time_utc_loc);
+Time m = time_add_date(time_date(2024, TIME_JANUARY, 31, 0, 0, 0, 0, time_utc_loc),
+                       0, 1, 0);
+```
+
+Every field may be out of its range and carries into the next, which is Go's rule. October 32 is November 1, and January 31 plus one month is February 31, which is March 2 in a leap year. That surprises people in every language that does it, and the fix is the same in all of them: add months to the first of the month.
+
+## Zones
+
+<!-- example: ../examples/time/calendar.c#zones -->
+```c
+Error err = BURROW_NO_ERROR;
+TimeLocation *ny = time_load_location(BURROW_S("America/New_York"), &err);
+if (ny == NULL)
+    ny = time_fixed_zone(heap_allocator(), BURROW_S("EST"), -5 * 60 * 60);
+Time there = time_in(t, ny);
+```
+
+`time_load_location` is `time.LoadLocation`. It looks under `$ZONEINFO` first, which may name a directory or a zip file laid out like Go's `lib/time/zoneinfo.zip`, and then in the system's zoneinfo directory, and it reads the same TZif files Go reads with the same parser, including the TZ string at the end that says what happens after the last transition in the file. Each name is read once and kept for the life of the process, so the pointer never needs freeing and a second load of the name costs a lock and a string compare.
+
+`time_utc_loc` and `time_local_loc` are Go's `time.UTC` and `time.Local`. Local follows `$TZ` the way Go's does on Unix: unset means `/etc/localtime`, empty means UTC, and anything else is a name to load.
+
+Windows has no zoneinfo directory, so there `time_load_location` fails for every name and Local is UTC. The program above falls back to a fixed zone for that reason. Go reads the registry for Local and carries a copy of the database for the rest, and both are coming.
+
+`time_fixed_zone` is `time.FixedZone`, and it takes an allocator because a named zone needs somewhere to keep its name. Give it back with `time_location_free`, which does nothing for a location it does not own, so it is safe on anything. An unnamed zone at a whole number of hours comes from a table and costs nothing, and passing `NULL` for the allocator is fine then. `time_load_location_from_tz_data` makes a location from the bytes of a TZif file, and is freed the same way.
+
+`time_in` moves a `Time` into a location without changing the instant, so `there` and `t` compare equal with `time_equal`. Use `time_equal` rather than `memcmp` or `==` on the fields, because two readings of one instant can differ in their location and in whether they carry a monotonic reading.
+
+## Arithmetic
+
+<!-- example: ../examples/time/calendar.c#arithmetic -->
+```c
+Time later = time_add(t, 90 * TIME_MINUTE);
+Duration gap = time_sub(later, t);
+Time hour = time_truncate(later, TIME_HOUR);
+```
+
+`time_add` and `time_sub` are Go's `Add` and `Sub`. A difference too big for a `Duration`, which tops out at about 292 years, comes back as the largest or smallest one rather than wrapping. `time_truncate` and `time_round` work from the zero time and not from the location, so truncating to a day gives midnight UTC and not local midnight, which is Go's rule and catches people out in Go too.
+
+`Duration` has Go's methods as functions: `duration_hours`, `duration_minutes` and `duration_seconds` as a `double`, `duration_truncate`, `duration_round` and `duration_abs`.
+
+## Elapsed time
+
+<!-- example: ../examples/time/calendar.c#elapsed -->
+```c
+Time start = time_now();
+time_sleep(2 * TIME_MILLISECOND);
+Duration took = time_since(start);
+```
+
+`time_now` reads the wall clock and the monotonic clock together and keeps both, and `time_since`, `time_until` and `time_sub` between two such readings use the monotonic one. So an elapsed time is right even when somebody sets the system date in the middle of it. Anything that makes a new instant rather than moving along the clock, like `time_in`, `time_truncate` or `time_add_date`, drops the monotonic reading, exactly as Go does.
 
 ## Sleeping
 
@@ -164,7 +233,7 @@ A thread with nothing to run reads two published words per P to work out how lon
 
 Repeating timers are in the runtime underneath already, since `burrow__timer_reset` takes a period. Nothing up here uses it until `Ticker` exists.
 
-The calendar half is the larger piece and none of it is here: `Time`, `time.Now`, parsing, formatting, `Location` and the timezone database.
+Formatting and parsing are the larger piece: `Format`, `Parse`, `ParseInLocation`, the layout constants and the JSON and text encodings that use RFC 3339. Then the copy of the timezone database that Go can embed, and the Windows registry lookup for Local.
 
 ## See also
 

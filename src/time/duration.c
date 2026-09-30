@@ -389,6 +389,84 @@ Duration time_parse_duration(Str s, Error *err) {
     return (Duration)d;
 }
 
+/* The Duration methods, Go's time.go. */
+int64_t duration_nanoseconds(Duration d) {
+    return d;
+}
+
+int64_t duration_microseconds(Duration d) {
+    return d / 1000;
+}
+
+int64_t duration_milliseconds(Duration d) {
+    return d / 1000000;
+}
+
+/* Split into whole units and a remainder so the result is as exact as a
+ * double can be, the way Go does it. */
+double duration_seconds(Duration d) {
+    Duration sec = d / TIME_SECOND;
+    Duration nsec = d % TIME_SECOND;
+    return (double)sec + (double)nsec / 1e9;
+}
+
+double duration_minutes(Duration d) {
+    Duration min = d / TIME_MINUTE;
+    Duration nsec = d % TIME_MINUTE;
+    return (double)min + (double)nsec / (60 * 1e9);
+}
+
+double duration_hours(Duration d) {
+    Duration hour = d / TIME_HOUR;
+    Duration nsec = d % TIME_HOUR;
+    return (double)hour + (double)nsec / (60 * 60 * 1e9);
+}
+
+Duration duration_truncate(Duration d, Duration m) {
+    if (m <= 0)
+        return d;
+    return d - d % m;
+}
+
+/* Whether x+x < y, without x+x overflowing. */
+static bool less_than_half(Duration x, Duration y) {
+    return (uint64_t)x + (uint64_t)x < (uint64_t)y;
+}
+
+#define DUR_MIN INT64_MIN
+#define DUR_MAX INT64_MAX
+#define DUR_ADD(a, b) ((Duration)((uint64_t)(a) + (uint64_t)(b)))
+#define DUR_SUB(a, b) ((Duration)((uint64_t)(a) - (uint64_t)(b)))
+
+Duration duration_round(Duration d, Duration m) {
+    if (m <= 0)
+        return d;
+    Duration r = d % m;
+    if (d < 0) {
+        r = -r;
+        if (less_than_half(r, m))
+            return d + r;
+        Duration d1 = DUR_ADD(DUR_SUB(d, m), r);
+        if (d1 < d)
+            return d1;
+        return DUR_MIN; /* overflow */
+    }
+    if (less_than_half(r, m))
+        return d - r;
+    Duration d1 = DUR_SUB(DUR_ADD(d, m), r);
+    if (d1 > d)
+        return d1;
+    return DUR_MAX; /* overflow */
+}
+
+Duration duration_abs(Duration d) {
+    if (d >= 0)
+        return d;
+    if (d == DUR_MIN)
+        return DUR_MAX;
+    return -d;
+}
+
 /* The descriptor. */
 static Str duration_m_string(Duration *self) {
     return duration_string(*self, error_allocator());

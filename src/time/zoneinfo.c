@@ -1326,6 +1326,18 @@ static void tz_set_local(TimeLocation *z, Str name) {
         tz_local_loc.cache_zone = &tz_local_loc.cache_own;
     tz_local_loc.name = name;
     tz_local_loc.next = NULL;
+    tz_local_loc.a = NULL;
+}
+
+/* The Local that force_local replaces. Its zones still live in the block
+ * tz_load_sources allocated, and this keeps that block reachable. */
+static TimeLocation tz_displaced_loc;
+
+void burrow__time_force_local(TimeLocation *l) {
+    (void)burrow__time_loc_get(time_local_loc);
+    if (tz_displaced_loc.name.p == NULL)
+        tz_displaced_loc = tz_local_loc;
+    tz_set_local(l, BURROW_S("Local"));
 }
 
 #if defined(BURROW_OS_WINDOWS)

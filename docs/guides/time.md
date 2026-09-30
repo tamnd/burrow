@@ -227,13 +227,52 @@ A thread with nothing to run reads two published words per P to work out how lon
 
 [design/06-runtime.md](../design/06-runtime.md) has the rest of it, including the three state bits a timer carries and why there are two published minimums rather than one.
 
+## Formatting and parsing
+
+<!-- example: ../examples/time/format.c#format -->
+
+A layout is Go's: the reference time, Mon Jan 2 15:04:05 MST 2006, written the way the output should look. Every number in it is different on purpose, 1 for the month, 2 for the day, 3 or 15 for the hour, 4 for the minute, 5 for the second, 6 or 2006 for the year and -7 for the zone, so a layout reads as a sample of its own output. The pieces are these:
+
+| Element | Means |
+|---|---|
+| `2006`, `06` | year, four digits or two |
+| `January`, `Jan`, `1`, `01` | month by name, short name, number, two digit number |
+| `Monday`, `Mon` | weekday |
+| `2`, `_2`, `02` | day of the month, space padded or zero padded |
+| `__2`, `002` | day of the year |
+| `15`, `3`, `03` | hour on a 24 hour clock, on a 12 hour clock, zero padded |
+| `4`, `04`, `5`, `05` | minute and second |
+| `PM`, `pm` | AM or PM |
+| `.000`, `,000`, `.999` | fraction of a second, a fixed number of digits, or with trailing zeros dropped |
+| `MST` | zone abbreviation |
+| `-0700`, `-07:00`, `-07`, `-070000`, `-07:00:00` | zone offset |
+| `Z0700`, `Z07:00`, `Z07`, `Z070000`, `Z07:00:00` | the same, with `Z` for UTC |
+
+Anything else is copied as it is. `TIME_RFC3339`, `TIME_RFC1123`, `TIME_KITCHEN`, `TIME_DATE_ONLY` and the rest are Go's constants under Go's names, and RFC 3339 takes a faster path that skips the layout altogether, as it does in Go. `time_string` is Go's `String`, which is for people reading logs and not for parsing back, and `time_go_string` is what `%#v` prints.
+
+`time_format` returns memory from the allocator you pass, and `time_append_format` appends to a byte slice the way Go's `AppendFormat` does. Both write into a buffer on the stack first, so a result of up to 128 bytes costs one allocation.
+
+<!-- example: ../examples/time/format.c#parse -->
+
+`time_parse` reads a value laid out the way the layout says. Parts it leaves out are zero, or 1 for the month and day, and a value with no zone in it is UTC. `time_parse_in_location` is `ParseInLocation`: a value with no zone is in the location you give, and a zone offset or name is matched against that location instead of Local.
+
+A zone offset that Local has at that instant gives back Local. Any other offset gives a fixed zone with no name, which comes from the allocator you pass and lives as long as it does. A whole hour offset comes from a table and allocates nothing. A zone name alone, such as `PST` with no offset next to it, only means something when Local has a zone of that name at the time. Otherwise Go records the name with an offset of zero, and so does this, so parse names only with a layout that carries an offset too.
+
+<!-- example: ../examples/time/format.c#parse-error -->
+
+The error is a `TimeParseError` with Go's five fields, and `errors_as` with `TYPE_TIME_PARSE_ERROR` finds it. Its text is Go's to the byte, which matters when something upstream compares it. Errors live in the goroutine's error arena, like every other error here, so a loop that parses many values and throws the errors away should take an `error_mark` and release it.
+
+<!-- example: ../examples/time/format.c#json -->
+
+The text and JSON encodings are RFC 3339 with as many fraction digits as the time needs. A year outside 0 to 9999 or an offset of 24 hours or more is an error, since RFC 3339 cannot write them. An offset that is not a whole minute loses its seconds, in Go as here. `Time` has a descriptor, `TYPE_TIME`, with these as its methods, so `json_marshal` and `fmt` handle a `Time` without being told.
+
 ## What Go has that this does not, yet
 
 `time.After`, `time.Tick`, `time.NewTimer` and `time.NewTicker` all hand back a channel. Channels are in `burrow/chan.h` now, and these four are the next thing to build on them. When they arrive, `TimeTimer` grows an accessor for its channel rather than changing shape, so nothing written against this header has to be rewritten.
 
 Repeating timers are in the runtime underneath already, since `burrow__timer_reset` takes a period. Nothing up here uses it until `Ticker` exists.
 
-Formatting and parsing are the larger piece: `Format`, `Parse`, `ParseInLocation`, the layout constants and the JSON and text encodings that use RFC 3339. Then the copy of the timezone database that Go can embed, and the Windows registry lookup for Local.
+After those comes the copy of the timezone database that Go can embed, and the Windows registry lookup for Local.
 
 ## See also
 

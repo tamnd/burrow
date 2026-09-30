@@ -142,9 +142,24 @@ int64_t burrow__time_sec(const Time *t);
 int32_t burrow__time_nsec(const Time *t);
 int64_t burrow__time_unix_sec(const Time *t);
 
-/* Go's unixTime, and Time.setLoc. */
+/* Go's unixTime, Time.setLoc and Time.addSec. */
 Time burrow__time_unix_time(int64_t sec, int32_t nsec);
 void burrow__time_set_loc(Time *t, TimeLocation *loc);
+void burrow__time_add_sec(Time *t, int64_t d);
+
+/* Go's time.quote, which is not strconv.Quote: anything outside printable
+ * ASCII comes out as \x escapes, byte by byte. Returns the length, and writes
+ * only when out is not NULL, so it can be called once to measure and once to
+ * fill. */
+Int burrow__time_quote(Str s, Byte *out);
+
+/* Go's parseTimeZone, exported for the tests the way export_test.go does. */
+bool burrow__time_parse_time_zone(Str value, Int *length);
+
+/* Go's ForceUSPacificForTesting, more or less: makes l the Local location,
+ * under the name "Local", for a test that needs Local to be one place on every
+ * machine. l has to outlive every use of Local. */
+void burrow__time_force_local(TimeLocation *l);
 
 /* Go's FixedZone for a caller that can not be handed NULL, such as the
  * binary decoding: the unnamed whole hour zones come from a table and the rest

@@ -76,7 +76,7 @@ static void tm_strip_mono(Time *t) {
     }
 }
 
-static void tm_add_sec(Time *t, int64_t d) {
+void burrow__time_add_sec(Time *t, int64_t d) {
     if ((t->wall & TM_HAS_MONOTONIC) != 0) {
         int64_t sec = (int64_t)(t->wall << 1 >> (TM_NSEC_SHIFT + 1));
         int64_t dsec = TW_ADD(sec, d);
@@ -398,7 +398,7 @@ Time time_add(Time t, Duration d) {
         nsec += 1000000000;
     }
     t.wall = (t.wall & ~TM_NSEC_MASK) | (uint64_t)nsec;
-    tm_add_sec(&t, dsec);
+    burrow__time_add_sec(&t, dsec);
     if ((t.wall & TM_HAS_MONOTONIC) != 0) {
         int64_t te = TW_ADD(t.ext, d);
         if ((d < 0 && te > t.ext) || (d > 0 && te < t.ext))

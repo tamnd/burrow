@@ -21,6 +21,8 @@
 #include "burrow/type.h"
 #include "burrow/utf8.h"
 
+#include "time_internal.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -209,7 +211,7 @@ static uint64_t unit_of(Str u) {
  * ASCII comes out as \x escapes, byte by byte, and a quote or a backslash gets
  * a backslash. Returns the length, and writes only when out is not NULL, so it
  * can be called once to measure and once to fill. */
-static Int quote(Str s, Byte *out) {
+Int burrow__time_quote(Str s, Byte *out) {
     static const char hex[] = "0123456789abcdef";
     Int n = 0;
 #define PUT(c)                                                                         \
@@ -271,8 +273,9 @@ static Error dur_error(const char *msg, Str unit, const char *tail, Str orig) {
     Byte *buf = small;
     Alloc *a = error_allocator();
     if (most > (Int)sizeof small) {
-        Int total = 6 + (Int)ml + (tail ? quote(unit, NULL) + (Int)tl : 0) + 1 +
-                    quote(orig, NULL);
+        Int total = 6 + (Int)ml +
+                    (tail ? burrow__time_quote(unit, NULL) + (Int)tl : 0) + 1 +
+                    burrow__time_quote(orig, NULL);
         buf = mem_alloc(a, (size_t)total, 1);
         if (buf == NULL)
             return burrow_err_out_of_memory;
@@ -283,12 +286,12 @@ static Error dur_error(const char *msg, Str unit, const char *tail, Str orig) {
     memcpy(buf + n, msg, ml);
     n += (Int)ml;
     if (tail) {
-        n += quote(unit, buf + n);
+        n += burrow__time_quote(unit, buf + n);
         memcpy(buf + n, tail, tl);
         n += (Int)tl;
     }
     buf[n++] = ' ';
-    n += quote(orig, buf + n);
+    n += burrow__time_quote(orig, buf + n);
     Error e = errors_new(a, str_from_bytes(buf, n));
     if (buf != small)
         mem_free(a, buf, (size_t)n, 1);

@@ -156,12 +156,16 @@ FNR == 1 {
 
     if (line !~ /^static([^A-Za-z0-9_]|$)/) next
 
-    # The declarator ends at the first paren for a function, and otherwise at
-    # the first bracket, equals sign or semicolon. The name is the identifier
+    # The declarator ends at an equals sign that comes before any paren, since
+    # an initializer can call a macro, then at the first paren for a function,
+    # and otherwise at the first bracket or semicolon. The name is the identifier
     # just before that.
     lhs = line
     p = index(lhs, "(")
-    if (p > 0) {
+    e = index(lhs, "=")
+    if (e > 0 && (p == 0 || e < p)) {
+        lhs = substr(lhs, 1, e - 1)
+    } else if (p > 0) {
         lhs = substr(lhs, 1, p - 1)
     } else {
         sub(/[\[=;].*$/, "", lhs)

@@ -840,6 +840,99 @@ This prints `delim [`, `string x`, `number 2` and `delim ]`. Commas and colons n
 
 Each v1 behaviour also has its own option, such as `json_format_byte_array_as_array` or `json_match_case_sensitive_delimiter`, for code that calls v2's functions but wants only some of the old rules. `json_default_options_v1` turns all of them on at once.
 
+## XML
+
+`burrow/encoding/xml.h` is the token layer of Go's `encoding/xml`: a decoder that reads a document one token at a time and an encoder that writes tokens back out. `xml_marshal` and `xml_unmarshal`, which map XML onto structs, come in a later release.
+
+A token is an `XmlToken`, a tagged union with a member for each of Go's six token types. A zeroed one is Go's nil. `xml_decoder_token` resolves namespace prefixes and checks that the tags nest:
+
+<!-- example: ../examples/encoding/xml.c#read -->
+```c
+StringsReader sr;
+strings_reader_reset(&sr, BURROW_S("<feed xmlns=\"http://www.w3.org/2005/Atom\">"
+                                   "<title>Burrow &amp; friends</title>"
+                                   "<link href=\"https://example.com/\"/>"
+                                   "</feed>"));
+XmlDecoder *d = xml_new_decoder(a, strings_reader_as_io_reader(&sr));
+for (;;) {
+    Error err = BURROW_NO_ERROR;
+    XmlToken tok = xml_decoder_token(d, &err);
+    if (errors_is(err, io_eof))
+        break;
+    if (tok.kind == XML_START_ELEMENT) {
+        Str space = tok.start.name.space, local = tok.start.name.local;
+        fmt_printf_v("start %s in %s, %d attributes\n", local, space, tok.start.attr.len);
+    } else if (tok.kind == XML_CHAR_DATA) {
+        Slice text = tok.char_data;
+        fmt_printf_v("text %q\n", text);
+    } else if (tok.kind == XML_END_ELEMENT) {
+        Str local = tok.end.name.local;
+        fmt_printf_v("end %s\n", local);
+    }
+}
+xml_decoder_free(d);
+```
+
+That prints `start feed in http://www.w3.org/2005/Atom, 1 attributes`, then the title's start, its text `"Burrow & friends"` and the rest. The `xmlns` attribute stays in the start tag's list, as in Go. `xml_decoder_raw_token` is the same without the namespaces and the nesting check.
+
+A token points into the decoder and is good until the next call that reads from it. Go's tokens have the same rule for their bytes, but Go's names are strings and outlive the call, so this is the place a port is most likely to go wrong. To keep one, `xml_copy_token` makes a copy that is one block from the allocator you pass, and `xml_token_free` gives it back.
+
+The decoder's options are fields, as in Go, set after `xml_new_decoder` and before the first read. For HTML that isn't well formed, turn off `strict` and give it Go's lists of elements that close themselves and of entities:
+
+<!-- example: ../examples/encoding/xml.c#html -->
+```c
+strings_reader_reset(&sr, BURROW_S("<p>caf&eacute;<br>menu</p>"));
+d = xml_new_decoder(a, strings_reader_as_io_reader(&sr));
+d->strict = false;
+d->auto_close = xml_html_auto_close;
+d->entity = xml_html_entity();
+Error err = BURROW_NO_ERROR;
+Int n = 0;
+for (xml_decoder_token(d, &err); BURROW_OK(err); xml_decoder_token(d, &err))
+    n++;
+xml_decoder_free(d);
+```
+
+That reads six tokens. The `<br>` gets an end tag it never had, and `&eacute;` turns into `é`. `xml_html_entity` builds its map the first time it is called and shares it after that, so don't change or free it.
+
+A document that is not well formed gives an `XmlSyntaxError` with the line it went wrong on:
+
+<!-- example: ../examples/encoding/xml.c#bad -->
+```c
+strings_reader_reset(&sr, BURROW_S("<a>\n<b></a>"));
+d = xml_new_decoder(a, strings_reader_as_io_reader(&sr));
+for (xml_decoder_token(d, &err); BURROW_OK(err); xml_decoder_token(d, &err)) {
+}
+const XmlSyntaxError *se = errors_as(err, TYPE_XML_SYNTAX_ERROR);
+xml_decoder_free(d);
+```
+
+`se->line` is 2 and the error reads `XML syntax error on line 2: element <b> closed by </a>`.
+
+The encoder checks the same things as it writes, escapes text and attribute values, and declares the namespaces the names need. `xml_encoder_indent` sets a prefix and an indent, which is what Go's `MarshalIndent` uses:
+
+<!-- example: ../examples/encoding/xml.c#write -->
+```c
+BytesBuffer out = BYTES_BUFFER(a);
+XmlEncoder *e = xml_new_encoder(a, bytes_buffer_as_io_writer(&out));
+xml_encoder_indent(e, BURROW_S(""), BURROW_S("  "));
+XmlAttr lang[] = {{{BURROW_S(""), BURROW_S("lang")}, BURROW_S("en")}};
+XmlStartElement note = {{BURROW_S(""), BURROW_S("note")}, {0}};
+XmlStartElement body = {{BURROW_S(""), BURROW_S("body")},
+                        slice_from(lang, 1, 1, &burrow_type_XmlAttr)};
+xml_encoder_encode_token(e, (XmlToken){XML_START_ELEMENT, .start = note});
+xml_encoder_encode_token(e, (XmlToken){XML_START_ELEMENT, .start = body});
+xml_encoder_encode_token(e, (XmlToken){XML_CHAR_DATA, .char_data = BURROW_B("1 < 2")});
+xml_encoder_encode_token(e, (XmlToken){XML_END_ELEMENT, .end = xml_start_element_end(body)});
+xml_encoder_encode_token(e, (XmlToken){XML_END_ELEMENT, .end = xml_start_element_end(note)});
+err = xml_encoder_close(e);
+xml_encoder_free(e);
+```
+
+The buffer holds `<note>`, then `  <body lang="en">1 &lt; 2</body>` and `</note>` on lines of their own. The encoder is buffered like Go's. `xml_encoder_flush` writes what it has, and `xml_encoder_close` flushes and fails with `unclosed tag <...>` when an element is still open.
+
+The tokens and their names are copied into the encoder as they are written, so the ones you pass need only last the call. `XmlSyntaxError`'s `Error` method, `xml_syntax_error_error`, takes an allocator for its text. An error that came out of the decoder already has the text, and `error_text` gives it to you.
+
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/json/v2`, `time.Time` and `time.Duration` wait on the calendar half of `time`.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/hex`, `encoding/json/jsontext` or `encoding/pem` is missing. From `encoding/xml`, `Marshal`, `Unmarshal` and the interfaces and errors that go with them are still to come. From `encoding/json/v2`, `time.Time` and `time.Duration` wait on the calendar half of `time`.

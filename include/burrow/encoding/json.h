@@ -50,6 +50,7 @@
 #include "burrow/encoding/json/jsontext.h"
 #include "burrow/encoding/json/v2.h"
 #include "burrow/error.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/own.h"
 #include "burrow/slice.h"
@@ -333,6 +334,92 @@ BURROW_OWNS(ret) Str json_marshaler_error_error(const JsonMarshalerError *e, All
 
 /* e->err. */
 BURROW_BORROWS(ret, e) Error json_marshaler_error_unwrap(const JsonMarshalerError *e);
+
+/* ----------------------------------------------------------------- streams
+ *
+ * A Decoder reads JSON values one after another from a reader, and an Encoder
+ * writes them one per line to a writer. Both keep the Alloc they were made
+ * with and use it for everything they hand out: the values Decode fills in,
+ * the strings and numbers Token returns, and their own buffers. An arena that
+ * outlives the stream is the easy choice. */
+
+typedef struct JsonDecoder JsonDecoder;
+typedef struct JsonEncoder JsonEncoder;
+
+/* json.NewDecoder. A decoder reading from r with the v1 defaults. NULL when
+ * a refuses. */
+BURROW_OWNS(ret) JsonDecoder *json_new_decoder(Alloc *a, IoReader r);
+
+/* Gives the decoder back. NULL is fine. */
+void json_decoder_free(JsonDecoder *d);
+
+/* Decoder.UseNumber. A number decoded into an Any becomes a JsonNumber
+ * instead of a double. */
+void json_decoder_use_number(JsonDecoder *d);
+
+/* Decoder.DisallowUnknownFields. A member that no field of the target struct
+ * matches is an error instead of being skipped. */
+void json_decoder_disallow_unknown_fields(JsonDecoder *d);
+
+/* Decoder.Decode. Reads the next value and unmarshals it into v the way
+ * json_unmarshal does. At the end of the input it returns io_eof, and input
+ * cut off in the middle of a value gives io_err_unexpected_eof. A syntax error
+ * or a read error sticks: every later call returns it again. */
+BURROW_STATIC(ret) Error json_decoder_decode(JsonDecoder *d, Any v);
+
+/* Decoder.Buffered. A reader over the bytes the decoder has read from r but
+ * not used yet. It reads from the decoder's buffer, so it is good until the
+ * next call on d. */
+IoReader json_decoder_buffered(JsonDecoder *d);
+
+/* json.Token, which is one of: nothing (t is NULL) for null, a bool, a Str, a
+ * double, a JsonNumber when use_number is on, or a JsonDelim for one of
+ * { } [ ]. */
+typedef Any JsonToken;
+
+/* json.Delim, a bracket or brace as a token. */
+typedef Rune JsonDelim;
+
+extern const Type burrow_type_JsonDelim;
+
+#define TYPE_JSON_DELIM TYPE_OF(JsonDelim)
+
+/* Delim.String, the character itself, built in a. */
+BURROW_OWNS(ret) Str json_delim_string(JsonDelim d, Alloc *a);
+
+/* Decoder.Token. The next token in the input. Commas and colons are skipped,
+ * as in Go. At the end of the input, or when the input stops at a point where
+ * a value could have ended, it returns io_eof. When it stops in the middle of
+ * a token it returns io_err_unexpected_eof. A number too big for a double is a
+ * JsonUnmarshalTypeError. */
+JsonToken json_decoder_token(JsonDecoder *d, Error *err);
+
+/* Decoder.More. Whether there is another element in the array or object
+ * being read. */
+bool json_decoder_more(JsonDecoder *d);
+
+/* Decoder.InputOffset. How far into the input the decoder is: the end of the
+ * last token, or the start of the next one after json_decoder_more. */
+int64_t json_decoder_input_offset(const JsonDecoder *d);
+
+/* json.NewEncoder. An encoder writing to w with the v1 defaults. NULL when a
+ * refuses. */
+BURROW_OWNS(ret) JsonEncoder *json_new_encoder(Alloc *a, IoWriter w);
+
+/* Gives the encoder back. NULL is fine. */
+void json_encoder_free(JsonEncoder *e);
+
+/* Encoder.Encode. Writes v as JSON followed by a newline. An error from the
+ * writer sticks: every later call returns it again. */
+BURROW_STATIC(ret) Error json_encoder_encode(JsonEncoder *e, Any v);
+
+/* Encoder.SetIndent. Every value after this is laid out the way json_indent
+ * does it. Both strings are copied. */
+void json_encoder_set_indent(JsonEncoder *e, Str prefix, Str indent);
+
+/* Encoder.SetEscapeHTML. Whether <, > and & in strings are escaped, which
+ * they are unless this turns it off. */
+void json_encoder_set_escape_html(JsonEncoder *e, bool on);
 
 #ifdef __cplusplus
 }

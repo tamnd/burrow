@@ -20,7 +20,9 @@
 #include "burrow/fmt.h"
 #include "burrow/io.h"
 #include "burrow/mem/heap.h"
+#include "burrow/panic.h"
 #include "burrow/strconv.h"
+#include "burrow/utf8.h"
 
 #include "json_internal.h"
 #include "jsonv2_internal.h"
@@ -771,11 +773,15 @@ static Slice jx_append_indent(Alloc *a, Slice dst, Str src, Str prefix, Str inde
     if (n < src.len) {
         Slice tail = {(void *)(uintptr_t)(src.p + n), src.len - n, src.len - n,
                       TYPE_BYTE};
-        out = slice_append_slice(a, out, tail);
-        if (out.p == NULL && tail.len > 0) {
+        Slice grown = slice_append_slice(a, out, tail);
+        /* A copy leaves the old buffer to us, unless it was dst's. */
+        if (grown.p != out.p && out.p != dst.p)
+            mem_free(a, out.p, (size_t)out.cap, 1);
+        if (grown.p == NULL) {
             *err = burrow_err_out_of_memory;
             return dst;
         }
+        out = grown;
     }
     *err = BURROW_NO_ERROR;
     return out;
@@ -1044,3 +1050,348 @@ const Type burrow_type_JsonNumber = {
     0x6a786e75U, /* "jxnu" */
     NULL,
 };
+
+/* ------------------------------------------------------------------ Delim */
+
+Str json_delim_string(JsonDelim d, Alloc *a) {
+    Slice b = utf8_append_rune(a, slice_nil(TYPE_BYTE), d);
+    return str_from_bytes(b.p, b.len);
+}
+
+static Str jx_delim_m_string(JsonDelim *self) {
+    return json_delim_string(*self, error_allocator());
+}
+
+#define JX_DELIM_SIG_STRING(IN, OUT) OUT(Str)
+
+#define JX_DELIM_METHODS(M, T) M(T, String, jx_delim_m_string, JX_DELIM_SIG_STRING)
+BURROW_METHODS_DEFINE(JsonDelim, JX_DELIM_METHODS);
+
+const Type burrow_type_JsonDelim = {
+    {(const Byte *)"Delim", 5},
+    {(const Byte *)"encoding/json", 13},
+    KIND_INT32,
+    (uint32_t)sizeof(JsonDelim),
+    (uint16_t)_Alignof(JsonDelim),
+    0,
+    (uint16_t)(sizeof burrow__methods_JsonDelim / sizeof burrow__methods_JsonDelim[0]),
+    NULL,
+    burrow__methods_JsonDelim,
+    NULL,
+    NULL,
+    0,
+    0x6a78646cU, /* "jxdl" */
+    NULL,
+};
+
+/* ---------------------------------------------------------------- Decoder */
+
+struct JsonDecoder {
+    JsontextDecoder *dec;
+    JsontextOptions opts;
+    Error err;
+    /* Whether More was called, and whether Token hit the end, since the last
+     * Decode or Token. */
+    bool had_peeked;
+    bool had_eof;
+    Alloc *a;
+    BytesReader buffered;
+};
+
+JsonDecoder *json_new_decoder(Alloc *a, IoReader r) {
+    JsonDecoder *d =
+        (JsonDecoder *)mem_alloc(a, sizeof(JsonDecoder), _Alignof(JsonDecoder));
+    if (d == NULL)
+        return NULL;
+    d->a = a;
+    d->opts = json_default_options_v1();
+    d->dec = jsontext_new_decoder_v(a, r, 1, d->opts);
+    if (d->dec == NULL) {
+        mem_free(a, d, sizeof(JsonDecoder), _Alignof(JsonDecoder));
+        return NULL;
+    }
+    return d;
+}
+
+void json_decoder_free(JsonDecoder *d) {
+    if (d == NULL)
+        return;
+    jsontext_decoder_free(d->dec);
+    mem_free(d->a, d, sizeof(JsonDecoder), _Alignof(JsonDecoder));
+}
+
+void json_decoder_use_number(JsonDecoder *d) {
+    jsonflags_set(&d->opts, JSONFLAG_UNMARSHAL_ANY_WITH_RAW_NUMBER | 1);
+}
+
+void json_decoder_disallow_unknown_fields(JsonDecoder *d) {
+    d->opts = jsonv2_join_options_v(2, d->opts, jsonv2_reject_unknown_members(true));
+}
+
+/* Keeps err as the decoder's sticky error and returns it. */
+static Error jx_decoder_fail(JsonDecoder *d, Error err) {
+    d->err = error_retain(d->a, err);
+    return d->err;
+}
+
+Error json_decoder_decode(JsonDecoder *d, Any v) {
+    if (BURROW_FAILED(d->err))
+        return d->err;
+    Error err = BURROW_NO_ERROR;
+    JsontextValue b = jsontext_decoder_read_value(d->dec, &err);
+    if (BURROW_FAILED(err)) {
+        err = jx_transform_syntactic(err);
+        /* Decode has always said this differently from Unmarshal. */
+        if (str_eq(error_text(err), JV_LIT("unexpected end of JSON input")))
+            err = io_err_unexpected_eof;
+        return jx_decoder_fail(d, err);
+    }
+    d->had_peeked = false;
+    d->had_eof = false;
+    Slice in = {(void *)(uintptr_t)b.p, b.len, b.len, TYPE_BYTE};
+    return jsonv2_unmarshal_v(d->a, in, v, 1, d->opts);
+}
+
+IoReader json_decoder_buffered(JsonDecoder *d) {
+    bytes_reader_reset(&d->buffered, jsontext_decoder_unread_buffer(d->dec));
+    return bytes_reader_as_io_reader(&d->buffered);
+}
+
+/* Whether s is nothing but whitespace, commas and colons. */
+static bool jx_only_separators(Slice s) {
+    const Byte *p = (const Byte *)s.p;
+    for (Int i = 0; i < s.len; i++)
+        if (p[i] != ' ' && p[i] != '\r' && p[i] != '\n' && p[i] != '\t' &&
+            p[i] != ',' && p[i] != ':')
+            return false;
+    return true;
+}
+
+/* A copy of the n bytes at p in d's allocator, as the data of an Any. */
+static JsonToken jx_token_copy(JsonDecoder *d, const Type *t, const void *p, size_t n,
+                               size_t align, Error *err) {
+    JsonToken tok = {NULL, NULL};
+    void *q = mem_alloc(d->a, n, align);
+    if (q == NULL) {
+        *err = burrow_err_out_of_memory;
+        return tok;
+    }
+    memcpy(q, p, n);
+    tok.t = t;
+    tok.data = q;
+    return tok;
+}
+
+static const bool jx_false = false;
+static const bool jx_true = true;
+static const JsonDelim jx_delims[] = {'{', '}', '[', ']'};
+
+JsonToken json_decoder_token(JsonDecoder *d, Error *err) {
+    JsonToken none = {NULL, NULL};
+    Error e = BURROW_NO_ERROR;
+    BURROW_OUT(err, e);
+    if (BURROW_FAILED(d->err)) {
+        BURROW_OUT(err, d->err);
+        return none;
+    }
+    JsontextToken tok = jsontext_decoder_read_token(d->dec, &e);
+    if (BURROW_FAILED(e)) {
+        /* v1 reports io_eof when the input stops where a value could have
+         * ended, and io_err_unexpected_eof, unwrapped, when it stops inside a
+         * token. An io_err_unexpected_eof from the reader itself is passed on
+         * as it is. */
+        if (errors_is(e, io_err_unexpected_eof) && !burrow__jsontext_is_io_error(e)) {
+            if (jx_only_separators(jsontext_decoder_unread_buffer(d->dec))) {
+                d->had_eof = true;
+                BURROW_OUT(err, io_eof);
+                return none;
+            }
+            BURROW_OUT(err, io_err_unexpected_eof);
+            return none;
+        }
+        BURROW_OUT(err, jx_transform_syntactic(e));
+        return none;
+    }
+    d->had_peeked = false;
+    d->had_eof = false;
+    JsontextKind k = jsontext_token_kind(tok);
+    if (k == JSONTEXT_KIND_NULL)
+        return none;
+    if (k == JSONTEXT_KIND_FALSE || k == JSONTEXT_KIND_TRUE) {
+        JsonToken b = {
+            TYPE_BOOL,
+            (void *)(uintptr_t)(k == JSONTEXT_KIND_TRUE ? &jx_true : &jx_false)};
+        return b;
+    }
+    if (k == JSONTEXT_KIND_STRING) {
+        Str s = jsontext_token_string(tok, d->a);
+        JsonToken r = jx_token_copy(d, TYPE_OF(Str), &s, sizeof(s), _Alignof(Str), &e);
+        BURROW_OUT(err, e);
+        return r;
+    }
+    if (k == JSONTEXT_KIND_NUMBER) {
+        if (jsonflags_get(&d->opts, JSONFLAG_UNMARSHAL_ANY_WITH_RAW_NUMBER)) {
+            JsonNumber n = jsontext_token_string(tok, d->a);
+            JsonToken r = jx_token_copy(d, TYPE_JSON_NUMBER, &n, sizeof(n),
+                                        _Alignof(JsonNumber), &e);
+            BURROW_OUT(err, e);
+            return r;
+        }
+        Error fe = BURROW_NO_ERROR;
+        double f = jsontext_token_float(tok, &fe);
+        if (BURROW_FAILED(fe)) {
+            JsonBuf value = jx_heap_buf();
+            jsonbuf_str(&value, JV_LIT("number "));
+            Str text = jsontext_token_string(tok, heap_allocator());
+            jsonbuf_str(&value, text);
+            mem_free(heap_allocator(), (void *)(uintptr_t)text.p, (size_t)text.len, 1);
+            JsonUnmarshalTypeError ute;
+            memset(&ute, 0, sizeof(ute));
+            ute.value = str_from_bytes(value.p, value.len);
+            ute.type = TYPE_FLOAT64;
+            ute.offset = json_decoder_input_offset(d);
+            e = value.failed ? burrow_err_out_of_memory
+                             : jx_new(&jx_unmarshal_type_kind, &ute);
+            burrow__jsonbuf_free(&value);
+            BURROW_OUT(err, e);
+            return none;
+        }
+        JsonToken r =
+            jx_token_copy(d, TYPE_FLOAT64, &f, sizeof(f), _Alignof(double), &e);
+        BURROW_OUT(err, e);
+        return r;
+    }
+    for (size_t i = 0; i < sizeof jx_delims / sizeof jx_delims[0]; i++) {
+        if (jx_delims[i] == (JsonDelim)k) {
+            JsonToken r = {TYPE_JSON_DELIM, (void *)(uintptr_t)&jx_delims[i]};
+            return r;
+        }
+    }
+    panic_str(JV_LIT("json: unreachable"));
+}
+
+bool json_decoder_more(JsonDecoder *d) {
+    d->had_peeked = true;
+    JsontextKind k = jsontext_decoder_peek_kind(d->dec);
+    if (k == JSONTEXT_KIND_INVALID) {
+        if (BURROW_OK(d->err)) {
+            /* PeekKind does not say whether it hit the end or an error, so
+             * read the next token to find out. */
+            Error e = BURROW_NO_ERROR;
+            (void)jsontext_decoder_read_token(d->dec, &e);
+            if (BURROW_OK(e))
+                e = errors_new(error_allocator(),
+                               JV_LIT("json: successful read after failed peek"));
+            (void)jx_decoder_fail(d, jx_transform_syntactic(e));
+        }
+        return !jx_same(d->err, io_eof);
+    }
+    return k != JSONTEXT_KIND_END_ARRAY && k != JSONTEXT_KIND_END_OBJECT;
+}
+
+int64_t json_decoder_input_offset(const JsonDecoder *d) {
+    int64_t offset = jsontext_decoder_input_offset(d->dec);
+    if (d->had_peeked || d->had_eof) {
+        /* v1 reported the end of the last token returned, unless More was
+         * called, in which case it reported the start of the next one. */
+        Slice unread = jsontext_decoder_unread_buffer(d->dec);
+        const Byte *p = (const Byte *)unread.p;
+        Int ws = 0;
+        while (ws < unread.len &&
+               (p[ws] == ' ' || p[ws] == '\n' || p[ws] == '\r' || p[ws] == '\t'))
+            ws++;
+        if (ws < unread.len) {
+            offset += ws;
+            /* After Token hit the end, also the comma or colon that follows. */
+            if (d->had_eof && (p[ws] == ',' || p[ws] == ':'))
+                offset++;
+        }
+    }
+    return offset;
+}
+
+/* ---------------------------------------------------------------- Encoder */
+
+struct JsonEncoder {
+    IoWriter w;
+    JsontextOptions opts;
+    Error err;
+    Str prefix;
+    Str indent;
+    Alloc *a;
+};
+
+JsonEncoder *json_new_encoder(Alloc *a, IoWriter w) {
+    JsonEncoder *e =
+        (JsonEncoder *)mem_alloc(a, sizeof(JsonEncoder), _Alignof(JsonEncoder));
+    if (e == NULL)
+        return NULL;
+    e->a = a;
+    e->w = w;
+    e->opts = json_default_options_v1();
+    return e;
+}
+
+static void jx_free_str(Alloc *a, Str s) {
+    if (s.len > 0)
+        mem_free(a, (void *)(uintptr_t)s.p, (size_t)s.len, 1);
+}
+
+void json_encoder_free(JsonEncoder *e) {
+    if (e == NULL)
+        return;
+    jx_free_str(e->a, e->prefix);
+    jx_free_str(e->a, e->indent);
+    mem_free(e->a, e, sizeof(JsonEncoder), _Alignof(JsonEncoder));
+}
+
+Error json_encoder_encode(JsonEncoder *e, Any v) {
+    if (BURROW_FAILED(e->err))
+        return e->err;
+    Alloc *h = heap_allocator();
+    Error err = BURROW_NO_ERROR;
+    Slice b = jsonv2_marshal_v(h, v, &err, 1, e->opts);
+    if (BURROW_FAILED(err)) {
+        mem_free(h, b.p, (size_t)b.cap, 1);
+        return err;
+    }
+    if (e->prefix.len + e->indent.len > 0) {
+        Slice out =
+            jx_append_indent(h, slice_nil(TYPE_BYTE), str_from_bytes(b.p, b.len),
+                             e->prefix, e->indent, &err);
+        mem_free(h, b.p, (size_t)b.cap, 1);
+        b = out;
+        if (BURROW_FAILED(err)) {
+            mem_free(h, b.p, (size_t)b.cap, 1);
+            return err;
+        }
+    }
+    static const Byte nl = '\n';
+    Slice tail = {(void *)(uintptr_t)&nl, 1, 1, TYPE_BYTE};
+    Slice line = slice_append_slice(h, b, tail);
+    /* The append copies b when it has no room left, and leaves b to us. */
+    if (line.p != b.p)
+        mem_free(h, b.p, (size_t)b.cap, 1);
+    if (line.p == NULL)
+        return burrow_err_out_of_memory;
+    (void)io_write_string(e->w, str_from_bytes(line.p, line.len), &err);
+    mem_free(h, line.p, (size_t)line.cap, 1);
+    if (BURROW_FAILED(err)) {
+        e->err = error_retain(e->a, err);
+        return e->err;
+    }
+    return BURROW_NO_ERROR;
+}
+
+void json_encoder_set_indent(JsonEncoder *e, Str prefix, Str indent) {
+    /* Not jsontext's indent options, since v1's Indent has old bugs that it
+     * has to keep. */
+    jx_free_str(e->a, e->prefix);
+    jx_free_str(e->a, e->indent);
+    e->prefix = str_clone(e->a, prefix);
+    e->indent = str_clone(e->a, indent);
+}
+
+void json_encoder_set_escape_html(JsonEncoder *e, bool on) {
+    e->opts = jsonv2_join_options_v(2, e->opts, jsontext_escape_for_html(on));
+}

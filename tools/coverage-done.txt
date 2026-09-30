@@ -75,3 +75,4 @@ mime
 math/big
 encoding/json/jsontext
 uuid
+weak

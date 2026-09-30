@@ -123,6 +123,7 @@ Alloc *fixed_allocator(Fixed *fx) {
 void fixed_reset(Fixed *fx) {
     if (fx == NULL)
         return;
+    burrow__mem_forget(fx->base, fx->used);
     fx->used = 0;
 }
 

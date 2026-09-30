@@ -76,6 +76,20 @@ BURROW_STATIC(ret) Alloc *gc_allocator(void);
  * Does nothing in a build without the collector. */
 void gc_collect(void);
 
+/* Internal, for mem.c and weak. burrow__gc_is says whether a is the gc
+ * allocator. burrow__gc_owns says whether p points into memory the collector
+ * handed out. burrow__gc_link stores p in *link, hidden from the collector,
+ * and asks it to clear *link when the object p points into goes, and
+ * burrow__gc_unlink takes that back. burrow__gc_read reads *link under the
+ * collector's lock, so the answer is not torn by a collection running at the
+ * same time. Without the collector nothing is owned, nothing links, and
+ * burrow__gc_read is a plain read. */
+bool burrow__gc_is(const Alloc *a);
+bool burrow__gc_owns(const void *p);
+bool burrow__gc_link(void **link, const void *p);
+void burrow__gc_unlink(void **link);
+BURROW_BORROWS(ret) void *burrow__gc_read(void **link);
+
 #ifdef __cplusplus
 }
 #endif

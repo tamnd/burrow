@@ -271,6 +271,7 @@ void arena_reset(Arena *ar) {
         return;
     while (ar->live != NULL) {
         ArenaChunk *next = ar->live->next;
+        burrow__mem_forget(ar->live->data, ar->live->used);
         ar->live->used = 0;
         ar->live->next = ar->spare;
         ar->spare = ar->live;
@@ -308,6 +309,7 @@ void arena_release(Arena *ar, ArenaMark m) {
     while (n > m.chunks) {
         ArenaChunk *c = ar->live;
         ar->live = c->next;
+        burrow__mem_forget(c->data, c->used);
         c->used = 0;
         c->next = ar->spare;
         ar->spare = c;
@@ -316,8 +318,10 @@ void arena_release(Arena *ar, ArenaMark m) {
 
     /* A mark taken on an empty arena has no chunk to rewind into, and the loop
      * above has already emptied it. */
-    if (ar->live != NULL && ar->live->used > m.used)
+    if (ar->live != NULL && ar->live->used > m.used) {
+        burrow__mem_forget(ar->live->data + m.used, ar->live->used - m.used);
         ar->live->used = m.used;
+    }
 
     /* Put back rather than worked out, because what the chunks used includes
      * alignment padding that was never counted as allocated. Frees since the

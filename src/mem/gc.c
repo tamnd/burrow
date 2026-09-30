@@ -130,6 +130,43 @@ void gc_collect(void) {
     GC_gcollect();
 }
 
+bool burrow__gc_is(const Alloc *a) {
+    return a != NULL && a->vt == &gc_vt;
+}
+
+/* Nothing can be the collector's before it has started, and GC_base before
+ * GC_INIT is not something the collector promises to answer. */
+bool burrow__gc_owns(const void *p) {
+    return gc_started && GC_base((void *)(uintptr_t)p) != NULL;
+}
+
+/* The collector wants the start of the object, and p may be inside it. What
+ * goes in *link is p itself, hidden, which is what weak gives back. */
+bool burrow__gc_link(void **link, const void *p) {
+    void *base = GC_base((void *)(uintptr_t)p);
+    if (base == NULL)
+        return false;
+    *(GC_hidden_pointer *)link = GC_HIDE_POINTER(p);
+    if (GC_general_register_disappearing_link(link, base) != GC_SUCCESS) {
+        *link = NULL;
+        return false;
+    }
+    return true;
+}
+
+void burrow__gc_unlink(void **link) {
+    (void)GC_unregister_disappearing_link(link);
+}
+
+static void *gc_read_locked(void *link) {
+    GC_hidden_pointer h = *(GC_hidden_pointer *)link;
+    return h == 0 ? NULL : GC_REVEAL_POINTER(h);
+}
+
+void *burrow__gc_read(void **link) {
+    return GC_call_with_alloc_lock(gc_read_locked, link);
+}
+
 #else
 
 bool gc_available(void) {
@@ -141,5 +178,29 @@ Alloc *gc_allocator(void) {
 }
 
 void gc_collect(void) {}
+
+bool burrow__gc_is(const Alloc *a) {
+    (void)a;
+    return false;
+}
+
+bool burrow__gc_owns(const void *p) {
+    (void)p;
+    return false;
+}
+
+bool burrow__gc_link(void **link, const void *p) {
+    (void)link;
+    (void)p;
+    return false;
+}
+
+void burrow__gc_unlink(void **link) {
+    (void)link;
+}
+
+void *burrow__gc_read(void **link) {
+    return *link;
+}
 
 #endif /* BURROW_ENABLE_BOEHM */

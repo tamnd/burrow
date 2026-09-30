@@ -64,6 +64,11 @@ import (
 // v2 has no types of its own that the C side spells differently.
 func knownType(reflect.Type) (string, string, bool) { return "", "", false }
 
+func knownValue(*builder, reflect.Value, string) bool { return false }
+
+// The C descriptor has the Go name.
+func typeName(t reflect.Type) string { return t.Name() }
+
 // The options as the C test spells them, and whether it can.
 func optsLit(opts []Options) (string, bool) {
 	var s jsonopts.Struct

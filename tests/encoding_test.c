@@ -308,7 +308,34 @@ static void TestInsideAnInterface(TestingT *t) {
     arena_free(&ar);
 }
 
+/* An any holds a type and a data pointer. The methods belong to the type it
+ * holds. */
+static void TestInsideAnAny(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Point p = {5, 6};
+    Any inner = BURROW_ANY(TYPE_OF(Point), &p);
+    Any v = BURROW_ANY(TYPE_ANY, &inner);
+    CHECK(encoding_is_text_marshaler(v));
+    Error err = BURROW_NO_ERROR;
+    Slice text = encoding_marshal_text(a, v, &err);
+    if (BURROW_FAILED(err) || !str_eq(q(text), BURROW_S("5,6")))
+        testing_t_errorf_v(t, "MarshalText = %q, want \"5,6\"", q(text));
+
+    Str s = BURROW_S("plain");
+    Any plain = BURROW_ANY(TYPE_STRING, &s);
+    Any pv = BURROW_ANY(TYPE_ANY, &plain);
+    CHECK(!encoding_is_text_marshaler(pv));
+
+    Any empty = {NULL, NULL};
+    Any ev = BURROW_ANY(TYPE_ANY, &empty);
+    CHECK(!encoding_is_text_marshaler(ev));
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
+    X(TestInsideAnAny)                                                                 \
     X(TestMarshalThroughDescriptor)                                                    \
     X(TestPointerFindsMethods)                                                         \
     X(TestWrongSignature)                                                              \

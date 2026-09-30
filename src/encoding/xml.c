@@ -1688,7 +1688,7 @@ static bool xml_is_name_byte(Byte c) {
            c == '_' || c == ':' || c == '.' || c == '-';
 }
 
-static bool xml_is_name(Str s) {
+bool burrow__xml_is_name(Str s) {
     if (s.len == 0)
         return false;
     Int n;
@@ -1741,7 +1741,7 @@ static bool xml_name(XmlDecoder *d, Str *out) {
     if (!xml_read_name(d))
         return false;
     Str b = {d->buf, d->blen};
-    if (!xml_is_name(b)) {
+    if (!burrow__xml_is_name(b)) {
         d->err = xml_syntax_error4(d, BURROW_S("invalid XML name: "), b, BURROW_S(""),
                                    BURROW_S(""));
         return false;
@@ -1889,7 +1889,7 @@ static bool xml_text(XmlDecoder *d, int quote, bool cdata, Slice *out) {
                     Int nlen = d->blen - (before + 1);
                     xml_buf_put(d, ';');
                     Str name = {d->buf + before + 1, nlen};
-                    if (xml_is_name(name)) {
+                    if (burrow__xml_is_name(name)) {
                         Byte r;
                         if (xml_builtin_entity(name, &r)) {
                             one[0] = r;
@@ -2519,10 +2519,6 @@ const Slice xml_html_auto_close = {(void *)(uintptr_t)xml_html_auto_close_names,
 
 /* ---------------------------------------------------------------- escaping */
 
-/* Where escaped text goes: an IoWriter for EscapeText, the encoder's buffer
- * for the encoder. */
-typedef Error (*XmlPut)(void *ctx, const Byte *p, Int n);
-
 static const Str esc_quot = BURROW_S_INIT("&#34;"); /* shorter than "&quot;" */
 static const Str esc_apos = BURROW_S_INIT("&#39;"); /* shorter than "&apos;" */
 static const Str esc_amp = BURROW_S_INIT("&amp;");
@@ -2535,8 +2531,8 @@ static const Str esc_fffd =
     BURROW_S_INIT("\xef\xbf\xbd"); /* Unicode replacement character */
 
 /* escapeText, which EscapeString is too, with escape_newline true. */
-static Error xml_escape_to(XmlPut put, void *ctx, const Byte *s, Int len,
-                           bool escape_newline) {
+Error burrow__xml_escape_to(XmlPut put, void *ctx, const Byte *s, Int len,
+                            bool escape_newline) {
     Str esc;
     Int last = 0;
     for (Int i = 0; i < len;) {
@@ -2612,7 +2608,7 @@ static Error xml_put_writer(void *ctx, const Byte *p, Int n) {
 }
 
 Error xml_escape_text(IoWriter w, Slice s) {
-    return xml_escape_to(xml_put_writer, &w, (const Byte *)s.p, s.len, true);
+    return burrow__xml_escape_to(xml_put_writer, &w, (const Byte *)s.p, s.len, true);
 }
 
 void xml_escape(IoWriter w, Slice s) {
@@ -2620,43 +2616,6 @@ void xml_escape(IoWriter w, Slice s) {
 }
 
 /* ---------------------------------------------------------------- encoding */
-
-/* A prefix createAttrPrefix made, and the URL it stands for, in one block.
- * An entry with no block is markPrefix's mark. */
-typedef struct XmlPrefix {
-    Byte *block;
-    Str prefix;
-    Str url;
-} XmlPrefix;
-
-typedef struct XmlTag {
-    Int off;
-    Int space_len;
-    Int local_len;
-} XmlTag;
-
-struct XmlEncoder {
-    Alloc *a;
-    BufioWriter *w;
-    Int seq;
-    Str indent;
-    Str prefix;
-    Int depth;
-    bool indented_in;
-    bool put_newline;
-    Map *attr_ns;     /* prefix to URL */
-    Map *attr_prefix; /* URL to prefix */
-    XmlPrefix *prefixes;
-    Int nprefixes, capprefixes;
-    /* The open tags, a stack of offsets into tag_bytes, where each one's
-     * space and then its local name are kept. */
-    XmlTag *tags;
-    Int ntags, captags;
-    Byte *tag_bytes;
-    Int ntag_bytes, captag_bytes;
-    bool closed;
-    Error err;
-};
 
 static const Type xml_encoder_desc = {
     {(const Byte *)"Encoder", 7},
@@ -2684,6 +2643,7 @@ XmlEncoder *xml_new_encoder(Alloc *a, IoWriter w) {
     if (e == NULL)
         return NULL;
     e->a = a;
+    arena_init(&e->scratch, a, 0);
     e->w = bufio_new_writer(a, w);
     if (e->w == NULL) {
         mem_free(a, e, sizeof *e, _Alignof(XmlEncoder));
@@ -2697,8 +2657,7 @@ static void xml_enc_str_free(XmlEncoder *e, Str s) {
         mem_free(e->a, (void *)(uintptr_t)s.p, (size_t)s.len, 1);
 }
 
-/* Open tag i, pointing into tag_bytes, so good until the next push. */
-static XmlName xml_enc_tag(const XmlEncoder *e, Int i) {
+XmlName burrow__xml_enc_tag(const XmlEncoder *e, Int i) {
     XmlTag t = e->tags[i];
     const Byte *p = e->tag_bytes + t.off;
     return (XmlName){{p, t.space_len}, {p + t.space_len, t.local_len}};
@@ -2727,6 +2686,7 @@ void xml_encoder_free(XmlEncoder *e) {
         mem_free(a, e->tag_bytes, (size_t)e->captag_bytes, 1);
     map_free(e->attr_ns);
     map_free(e->attr_prefix);
+    arena_free(&e->scratch);
     mem_free(a, e, sizeof *e, _Alignof(XmlEncoder));
 }
 
@@ -2755,39 +2715,39 @@ static bool xml_enc_live(XmlEncoder *e) {
     return BURROW_OK(e->err);
 }
 
-static void xml_enc_write(XmlEncoder *e, const Byte *p, Int n) {
+void burrow__xml_enc_write(XmlEncoder *e, const Byte *p, Int n) {
     if (xml_enc_live(e))
         bufio_writer_write(e->w, (Slice){(void *)(uintptr_t)p, n, n, TYPE_BYTE},
                            &e->err);
 }
 
-static void xml_enc_write_str(XmlEncoder *e, Str s) {
+void burrow__xml_enc_write_str(XmlEncoder *e, Str s) {
     if (xml_enc_live(e))
         bufio_writer_write_string(e->w, s, &e->err);
 }
 
-static void xml_enc_write_byte(XmlEncoder *e, Byte c) {
+void burrow__xml_enc_write_byte(XmlEncoder *e, Byte c) {
     if (xml_enc_live(e))
         e->err = bufio_writer_write_byte(e->w, c);
 }
 
-static Error xml_enc_cached_write_error(XmlEncoder *e) {
+Error burrow__xml_enc_cached_write_error(XmlEncoder *e) {
     xml_enc_live(e);
     return e->err;
 }
 
-static Error xml_put_encoder(void *ctx, const Byte *p, Int n) {
+Error burrow__xml_put_encoder(void *ctx, const Byte *p, Int n) {
     XmlEncoder *e = (XmlEncoder *)ctx;
-    xml_enc_write(e, p, n);
+    burrow__xml_enc_write(e, p, n);
     return e->err;
 }
 
 /* EscapeString. */
-static void xml_enc_escape_string(XmlEncoder *e, Str s) {
-    (void)xml_escape_to(xml_put_encoder, e, s.p, s.len, true);
+void burrow__xml_enc_escape_string(XmlEncoder *e, Str s) {
+    (void)burrow__xml_escape_to(burrow__xml_put_encoder, e, s.p, s.len, true);
 }
 
-static void xml_enc_write_indent(XmlEncoder *e, int depth_delta) {
+void burrow__xml_enc_write_indent(XmlEncoder *e, int depth_delta) {
     if (e->prefix.len == 0 && e->indent.len == 0)
         return;
     if (depth_delta < 0) {
@@ -2799,14 +2759,14 @@ static void xml_enc_write_indent(XmlEncoder *e, int depth_delta) {
         e->indented_in = false;
     }
     if (e->put_newline)
-        xml_enc_write_byte(e, '\n');
+        burrow__xml_enc_write_byte(e, '\n');
     else
         e->put_newline = true;
     if (e->prefix.len > 0)
-        xml_enc_write_str(e, e->prefix);
+        burrow__xml_enc_write_str(e, e->prefix);
     if (e->indent.len > 0)
         for (Int i = 0; i < e->depth; i++)
-            xml_enc_write_str(e, e->indent);
+            burrow__xml_enc_write_str(e, e->indent);
     if (depth_delta > 0) {
         e->depth++;
         e->indented_in = true;
@@ -2863,7 +2823,8 @@ static Str xml_enc_create_attr_prefix(XmlEncoder *e, Str url) {
     if (i >= 0)
         prefix = (Str){prefix.p + i + 1, prefix.len - i - 1};
     bool underscore = false;
-    if (prefix.len == 0 || !xml_is_name(prefix) || strings_index_byte(prefix, ':') >= 0)
+    if (prefix.len == 0 || !burrow__xml_is_name(prefix) ||
+        strings_index_byte(prefix, ':') >= 0)
         prefix = BURROW_S("_");
     /* xmlanything is reserved and any variant of it regardless of case should
      * be matched, so:
@@ -2920,11 +2881,11 @@ static Str xml_enc_create_attr_prefix(XmlEncoder *e, Str url) {
         return p.prefix;
     }
 
-    xml_enc_write_str(e, BURROW_S("xmlns:"));
-    xml_enc_write_str(e, p.prefix);
-    xml_enc_write_str(e, BURROW_S("=\""));
-    (void)xml_escape_to(xml_put_encoder, e, p.url.p, p.url.len, true);
-    xml_enc_write_str(e, BURROW_S("\" "));
+    burrow__xml_enc_write_str(e, BURROW_S("xmlns:"));
+    burrow__xml_enc_write_str(e, p.prefix);
+    burrow__xml_enc_write_str(e, BURROW_S("=\""));
+    (void)burrow__xml_escape_to(burrow__xml_put_encoder, e, p.url.p, p.url.len, true);
+    burrow__xml_enc_write_str(e, BURROW_S("\" "));
 
     return p.prefix;
 }
@@ -2951,11 +2912,8 @@ static void xml_enc_pop_prefix(XmlEncoder *e) {
     }
 }
 
-/* writeStart. */
-static Error xml_enc_write_start(XmlEncoder *e, const XmlStartElement *start) {
-    if (start->name.local.len == 0)
-        return errors_new(error_allocator(), BURROW_S("xml: start tag with no name"));
-
+/* Pushes name onto the stack of open tags. */
+static Error xml_enc_push_tag(XmlEncoder *e, XmlName name) {
     if (e->ntags == e->captags) {
         Int cap = e->captags == 0 ? 8 : e->captags * 2;
         XmlTag *nt =
@@ -2966,7 +2924,7 @@ static Error xml_enc_write_start(XmlEncoder *e, const XmlStartElement *start) {
         e->tags = nt;
         e->captags = cap;
     }
-    Int need = e->ntag_bytes + start->name.space.len + start->name.local.len;
+    Int need = e->ntag_bytes + name.space.len + name.local.len;
     if (need > e->captag_bytes) {
         Int cap = e->captag_bytes == 0 ? 256 : e->captag_bytes * 2;
         while (cap < need)
@@ -2979,21 +2937,35 @@ static Error xml_enc_write_start(XmlEncoder *e, const XmlStartElement *start) {
         e->captag_bytes = cap;
     }
     Byte *p = e->tag_bytes + e->ntag_bytes;
-    xml_put_str(&p, start->name.space);
-    xml_put_str(&p, start->name.local);
-    e->tags[e->ntags++] =
-        (XmlTag){e->ntag_bytes, start->name.space.len, start->name.local.len};
+    xml_put_str(&p, name.space);
+    xml_put_str(&p, name.local);
+    e->tags[e->ntags++] = (XmlTag){e->ntag_bytes, name.space.len, name.local.len};
     e->ntag_bytes = need;
+    return BURROW_NO_ERROR;
+}
+
+Error burrow__xml_enc_push_mark(XmlEncoder *e) {
+    return xml_enc_push_tag(e, (XmlName){{NULL, 0}, {NULL, 0}});
+}
+
+/* writeStart. */
+Error burrow__xml_enc_write_start(XmlEncoder *e, const XmlStartElement *start) {
+    if (start->name.local.len == 0)
+        return errors_new(error_allocator(), BURROW_S("xml: start tag with no name"));
+
+    Error err = xml_enc_push_tag(e, start->name);
+    if (BURROW_FAILED(err))
+        return err;
     xml_enc_mark_prefix(e);
 
-    xml_enc_write_indent(e, 1);
-    xml_enc_write_byte(e, '<');
-    xml_enc_write_str(e, start->name.local);
+    burrow__xml_enc_write_indent(e, 1);
+    burrow__xml_enc_write_byte(e, '<');
+    burrow__xml_enc_write_str(e, start->name.local);
 
     if (start->name.space.len > 0) {
-        xml_enc_write_str(e, BURROW_S(" xmlns=\""));
-        xml_enc_escape_string(e, start->name.space);
-        xml_enc_write_byte(e, '"');
+        burrow__xml_enc_write_str(e, BURROW_S(" xmlns=\""));
+        burrow__xml_enc_escape_string(e, start->name.space);
+        burrow__xml_enc_write_byte(e, '"');
     }
 
     /* Attributes */
@@ -3002,27 +2974,27 @@ static Error xml_enc_write_start(XmlEncoder *e, const XmlStartElement *start) {
         XmlName name = at[i].name;
         if (name.local.len == 0)
             continue;
-        xml_enc_write_byte(e, ' ');
+        burrow__xml_enc_write_byte(e, ' ');
         if (name.space.len > 0) {
-            xml_enc_write_str(e, xml_enc_create_attr_prefix(e, name.space));
-            xml_enc_write_byte(e, ':');
+            burrow__xml_enc_write_str(e, xml_enc_create_attr_prefix(e, name.space));
+            burrow__xml_enc_write_byte(e, ':');
         }
-        xml_enc_write_str(e, name.local);
-        xml_enc_write_str(e, BURROW_S("=\""));
-        xml_enc_escape_string(e, at[i].value);
-        xml_enc_write_byte(e, '"');
+        burrow__xml_enc_write_str(e, name.local);
+        burrow__xml_enc_write_str(e, BURROW_S("=\""));
+        burrow__xml_enc_escape_string(e, at[i].value);
+        burrow__xml_enc_write_byte(e, '"');
     }
-    xml_enc_write_byte(e, '>');
+    burrow__xml_enc_write_byte(e, '>');
     return BURROW_NO_ERROR;
 }
 
 /* writeEnd. */
-static Error xml_enc_write_end(XmlEncoder *e, XmlName name) {
+Error burrow__xml_enc_write_end(XmlEncoder *e, XmlName name) {
     if (name.local.len == 0)
         return errors_new(error_allocator(), BURROW_S("xml: end tag with no name"));
-    if (e->ntags == 0)
+    if (e->ntags == 0 || e->tags[e->ntags - 1].local_len == 0)
         return fmt_errorf_v("xml: end tag </%s> without start tag", name.local);
-    XmlName top = xml_enc_tag(e, e->ntags - 1);
+    XmlName top = burrow__xml_enc_tag(e, e->ntags - 1);
     if (!str_eq(top.local, name.local) || !str_eq(top.space, name.space)) {
         if (!str_eq(top.local, name.local))
             return fmt_errorf_v("xml: end tag </%s> does not match start tag <%s>",
@@ -3034,11 +3006,11 @@ static Error xml_enc_write_end(XmlEncoder *e, XmlName name) {
     e->ntags--;
     e->ntag_bytes = e->tags[e->ntags].off;
 
-    xml_enc_write_indent(e, -1);
-    xml_enc_write_byte(e, '<');
-    xml_enc_write_byte(e, '/');
-    xml_enc_write_str(e, name.local);
-    xml_enc_write_byte(e, '>');
+    burrow__xml_enc_write_indent(e, -1);
+    burrow__xml_enc_write_byte(e, '<');
+    burrow__xml_enc_write_byte(e, '/');
+    burrow__xml_enc_write_str(e, name.local);
+    burrow__xml_enc_write_byte(e, '>');
     xml_enc_pop_prefix(e);
     return BURROW_NO_ERROR;
 }
@@ -3086,28 +3058,29 @@ Error xml_encoder_encode_token(XmlEncoder *e, XmlToken t) {
     Error err;
     switch (t.kind) {
     case XML_START_ELEMENT:
-        err = xml_enc_write_start(e, &t.start);
+        err = burrow__xml_enc_write_start(e, &t.start);
         if (BURROW_FAILED(err))
             return err;
         break;
     case XML_END_ELEMENT:
-        err = xml_enc_write_end(e, t.end.name);
+        err = burrow__xml_enc_write_end(e, t.end.name);
         if (BURROW_FAILED(err))
             return err;
         break;
     case XML_CHAR_DATA:
-        (void)xml_escape_to(xml_put_encoder, e, (const Byte *)t.char_data.p,
-                            t.char_data.len, false);
+        (void)burrow__xml_escape_to(burrow__xml_put_encoder, e,
+                                    (const Byte *)t.char_data.p, t.char_data.len,
+                                    false);
         break;
     case XML_COMMENT:
         if (bytes_contains(t.comment, xml_lit(BURROW_S("-->"))))
             return errors_new(
                 error_allocator(),
                 BURROW_S("xml: EncodeToken of Comment containing --> marker"));
-        xml_enc_write_str(e, BURROW_S("<!--"));
-        xml_enc_write(e, (const Byte *)t.comment.p, t.comment.len);
-        xml_enc_write_str(e, BURROW_S("-->"));
-        return xml_enc_cached_write_error(e);
+        burrow__xml_enc_write_str(e, BURROW_S("<!--"));
+        burrow__xml_enc_write(e, (const Byte *)t.comment.p, t.comment.len);
+        burrow__xml_enc_write_str(e, BURROW_S("-->"));
+        return burrow__xml_enc_cached_write_error(e);
     case XML_PROC_INST:
         /* First token to be encoded which is also a ProcInst with target of
          * xml is the xml declaration. The only ProcInst where target of xml
@@ -3117,7 +3090,7 @@ Error xml_encoder_encode_token(XmlEncoder *e, XmlToken t) {
                 error_allocator(),
                 BURROW_S("xml: EncodeToken of ProcInst xml target only valid for "
                          "xml declaration, first token encoded"));
-        if (!xml_is_name(t.proc_inst.target))
+        if (!burrow__xml_is_name(t.proc_inst.target))
             return errors_new(
                 error_allocator(),
                 BURROW_S("xml: EncodeToken of ProcInst with invalid Target"));
@@ -3125,13 +3098,14 @@ Error xml_encoder_encode_token(XmlEncoder *e, XmlToken t) {
             return errors_new(
                 error_allocator(),
                 BURROW_S("xml: EncodeToken of ProcInst containing ?> marker"));
-        xml_enc_write_str(e, BURROW_S("<?"));
-        xml_enc_write_str(e, t.proc_inst.target);
+        burrow__xml_enc_write_str(e, BURROW_S("<?"));
+        burrow__xml_enc_write_str(e, t.proc_inst.target);
         if (t.proc_inst.inst.len > 0) {
-            xml_enc_write_byte(e, ' ');
-            xml_enc_write(e, (const Byte *)t.proc_inst.inst.p, t.proc_inst.inst.len);
+            burrow__xml_enc_write_byte(e, ' ');
+            burrow__xml_enc_write(e, (const Byte *)t.proc_inst.inst.p,
+                                  t.proc_inst.inst.len);
         }
-        xml_enc_write_str(e, BURROW_S("?>"));
+        burrow__xml_enc_write_str(e, BURROW_S("?>"));
         break;
     case XML_DIRECTIVE:
         if (!burrow__xml_is_valid_directive(t.directive))
@@ -3139,16 +3113,16 @@ Error xml_encoder_encode_token(XmlEncoder *e, XmlToken t) {
                 error_allocator(),
                 BURROW_S(
                     "xml: EncodeToken of Directive containing wrong < or > markers"));
-        xml_enc_write_str(e, BURROW_S("<!"));
-        xml_enc_write(e, (const Byte *)t.directive.p, t.directive.len);
-        xml_enc_write_str(e, BURROW_S(">"));
+        burrow__xml_enc_write_str(e, BURROW_S("<!"));
+        burrow__xml_enc_write(e, (const Byte *)t.directive.p, t.directive.len);
+        burrow__xml_enc_write_str(e, BURROW_S(">"));
         break;
     case XML_TOKEN_NONE:
     default:
         return errors_new(error_allocator(),
                           BURROW_S("xml: EncodeToken of invalid token type"));
     }
-    return xml_enc_cached_write_error(e);
+    return burrow__xml_enc_cached_write_error(e);
 }
 
 Error xml_encoder_flush(XmlEncoder *e) {
@@ -3163,7 +3137,7 @@ Error xml_encoder_close(XmlEncoder *e) {
     if (BURROW_FAILED(err))
         return err;
     if (e->ntags > 0) {
-        Str local = xml_enc_tag(e, e->ntags - 1).local;
+        Str local = burrow__xml_enc_tag(e, e->ntags - 1).local;
         return fmt_errorf_v("unclosed tag <%s>", local);
     }
     return BURROW_NO_ERROR;

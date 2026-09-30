@@ -49,6 +49,7 @@
 
 #include "burrow/bufio.h"
 #include "burrow/core.h"
+#include "burrow/encoding.h"
 #include "burrow/error.h"
 #include "burrow/func.h"
 #include "burrow/io.h"
@@ -182,6 +183,32 @@ BURROW_OWNS(ret) Str xml_syntax_error_error(const XmlSyntaxError *e, Alloc *a);
 /* e as an Error, with its msg copied, built in a. errors_as with
  * TYPE_XML_SYNTAX_ERROR hands back the XmlSyntaxError. */
 BURROW_OWNS(ret) Error xml_syntax_error_as_error(Alloc *a, const XmlSyntaxError *e);
+
+/* xml.TagPathError: two fields of a struct whose tags put them at the same
+ * path. */
+typedef struct XmlTagPathError {
+    const Type *struct_type;
+    Str field1, tag1;
+    Str field2, tag2;
+} XmlTagPathError;
+
+extern const Type *const TYPE_XML_TAG_PATH_ERROR;
+
+/* Go's message, built in a: xml.S field "A" with tag "x>y" conflicts with
+ * field "B" with tag "x" */
+BURROW_OWNS(ret) Str xml_tag_path_error_error(const XmlTagPathError *e, Alloc *a);
+
+/* xml.UnsupportedTypeError: a value marshal has no way to write, such as a
+ * map or a channel. */
+typedef struct XmlUnsupportedTypeError {
+    const Type *type;
+} XmlUnsupportedTypeError;
+
+extern const Type *const TYPE_XML_UNSUPPORTED_TYPE_ERROR;
+
+/* Go's message, built in a: xml: unsupported type: map[string]string */
+BURROW_OWNS(ret) Str xml_unsupported_type_error_error(const XmlUnsupportedTypeError *e,
+                                                      Alloc *a);
 
 /* --------------------------------------------------------------- decoding */
 
@@ -347,6 +374,94 @@ BURROW_BORROWS(ret) Error xml_encoder_flush(XmlEncoder *e);
 /* Encoder.Close. Flushes, and reports an element left open. Anything written
  * after it is an error. */
 BURROW_BORROWS(ret) Error xml_encoder_close(XmlEncoder *e);
+
+/* -------------------------------------------------------------- marshaling
+ *
+ * Marshal writes a value as XML by its type's descriptor, the way Go's
+ * reflection does it. A struct is an element named by its XMLName field, or
+ * by the name it is marshaled under, or else by its type's name, and each
+ * exported field goes inside it, as an attribute, as text, as a comment or as
+ * an element of its own, as the field's xml tag says:
+ *
+ *     BURROW_SLICE_TYPE(Strs, Str);
+ *
+ *     #define PERSON_FIELDS(F, T)                              \
+ *         F(T, XmlName, XMLName, "xml:\"person\"")             \
+ *         F(T, Int, Id, "xml:\"id,attr\"")                     \
+ *         F(T, Str, FirstName, "xml:\"name>first\"")           \
+ *         F(T, Str, LastName, "xml:\"name>last\"")             \
+ *         F(T, Strs, Email, "xml:\"email\"")
+ *     BURROW_STRUCT(Person, PERSON_FIELDS);
+ *
+ * gives <person id="13"><name><first>John</first><last>Doe</last></name>
+ * <email>a@example.com</email></person>, in one line. The tag rules, the
+ * omitempty flag, the handling of pointers and interfaces and the errors are
+ * all Go's.
+ *
+ * A type can write itself with a MarshalXML method, declared with
+ * XML_SIG_MARSHAL_XML, an attribute with a MarshalXMLAttr method declared
+ * with XML_SIG_MARSHAL_XML_ATTR, and text with encoding's MarshalText. Every
+ * method here takes a pointer receiver, so a method on T is found for a T and
+ * for a *T alike, where Go would only find one with a pointer receiver on a
+ * value it could take the address of. */
+
+/* The argument types in the signatures below. */
+typedef XmlEncoder *XmlEncoderArg;
+extern const Type burrow_type_XmlEncoderArg;
+
+/* Error marshal_xml(T *self, XmlEncoder *e, XmlStartElement start). It writes
+ * itself with xml_encoder_encode_token and xml_encoder_encode_element, and
+ * has to close every element it opens. */
+#define XML_SIG_MARSHAL_XML(IN, OUT)                                                   \
+    IN(0, XmlEncoderArg) IN(1, XmlStartElement) OUT(Error)
+
+/* XmlAttr marshal_xml_attr(T *self, Alloc *a, XmlName name, Error *err). An
+ * attribute with an empty local name is left out. */
+#define XML_SIG_MARSHAL_XML_ATTR(IN, OUT)                                              \
+    IN(0, EncodingAllocArg) IN(1, XmlName) IN(2, EncodingErrorArg) OUT(XmlAttr)
+
+/* xml.Marshaler and xml.MarshalerAttr, for code that wants to hold one.
+ * Marshal goes by the methods the value's type lists, so the vtables are for
+ * your code and not for it. */
+typedef struct XmlMarshalerVT {
+    const Type *self_type;
+    Error (*marshal_xml)(void *self, XmlEncoder *e, XmlStartElement start);
+} XmlMarshalerVT;
+
+typedef struct XmlMarshaler {
+    const XmlMarshalerVT *vt;
+    void *data;
+} XmlMarshaler;
+
+typedef struct XmlMarshalerAttrVT {
+    const Type *self_type;
+    XmlAttr (*marshal_xml_attr)(void *self, Alloc *a, XmlName name, Error *err);
+} XmlMarshalerAttrVT;
+
+typedef struct XmlMarshalerAttr {
+    const XmlMarshalerAttrVT *vt;
+    void *data;
+} XmlMarshalerAttr;
+
+extern const Type burrow_type_XmlMarshaler;
+extern const Type burrow_type_XmlMarshalerAttr;
+
+/* xml.Marshal. The XML for v, in a, or the nil slice and an error. */
+BURROW_OWNS(ret) Slice xml_marshal(Alloc *a, Any v, Error *err);
+
+/* xml.MarshalIndent: xml_marshal with each element on its own line, after
+ * prefix and one indent for each element it is inside. */
+BURROW_OWNS(ret) Slice xml_marshal_indent(Alloc *a, Any v, Str prefix, Str indent,
+                                          Error *err);
+
+/* Encoder.Encode. Writes v as xml_marshal does, then flushes. */
+BURROW_BORROWS(ret) Error xml_encoder_encode(XmlEncoder *e, Any v);
+
+/* Encoder.EncodeElement. Writes v with start as its outermost element, which
+ * is how a MarshalXML method writes a value inside the element it was
+ * given. */
+BURROW_BORROWS(ret) Error xml_encoder_encode_element(XmlEncoder *e, Any v,
+                                                     XmlStartElement start);
 
 /* ---------------------------------------------------------------- escaping */
 

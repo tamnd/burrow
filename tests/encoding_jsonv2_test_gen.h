@@ -4900,8 +4900,8 @@ static void mk35(Alloc *a, void *out) {
             Str v3;
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
-            v2 = (int64_t)(int64_t)UINT64_C(9223372036854775807);
-            v3 = (Str){(const Byte *)"MaxInt64", 8};
+            v2 = (int64_t)(int64_t)UINT64_C(9223372036854775808);
+            v3 = (Str){(const Byte *)"MinInt64", 8};
             map_set(v1, &v2, &v3);
         }
         {
@@ -4909,8 +4909,7 @@ static void mk35(Alloc *a, void *out) {
             Str v5;
             memset(&v4, 0, sizeof(v4));
             memset(&v5, 0, sizeof(v5));
-            v4 = (int64_t)(int64_t)UINT64_C(9223372036854775808);
-            v5 = (Str){(const Byte *)"MinInt64", 8};
+            v5 = (Str){(const Byte *)"Zero", 4};
             map_set(v1, &v4, &v5);
         }
         {
@@ -4918,7 +4917,8 @@ static void mk35(Alloc *a, void *out) {
             Str v7;
             memset(&v6, 0, sizeof(v6));
             memset(&v7, 0, sizeof(v7));
-            v7 = (Str){(const Byte *)"Zero", 4};
+            v6 = (int64_t)(int64_t)UINT64_C(9223372036854775807);
+            v7 = (Str){(const Byte *)"MaxInt64", 8};
             map_set(v1, &v6, &v7);
         }
         (*o) = v1;
@@ -5162,15 +5162,15 @@ static void mk43(Alloc *a, void *out) {
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
             {
-                Str *v4 = (Str *)gen_alloc(a, &burrow_type_Str);
-                (*v4) = (Str){(const Byte *)"key", 3};
-                v2.t = &burrow_type_Str;
+                G18 *v4 = (G18 *)gen_alloc(a, &gt18);
+                (*v4) = (G18)0x1.028f5c28f5c29p+06;
+                v2.t = &gt18;
                 v2.data = v4;
             }
             {
-                Str *v5 = (Str *)gen_alloc(a, &burrow_type_Str);
-                (*v5) = (Str){(const Byte *)"key", 3};
-                v3.t = &burrow_type_Str;
+                float *v5 = (float *)gen_alloc(a, &burrow_type_float);
+                (*v5) = (float)0x1.028f5cp+05;
+                v3.t = &burrow_type_float;
                 v3.data = v5;
             }
             map_set(v1, &v2, &v3);
@@ -5219,15 +5219,15 @@ static void mk43(Alloc *a, void *out) {
             memset(&v14, 0, sizeof(v14));
             memset(&v15, 0, sizeof(v15));
             {
-                G18 *v16 = (G18 *)gen_alloc(a, &gt18);
-                (*v16) = (G18)0x1.028f5c28f5c29p+06;
-                v14.t = &gt18;
+                Str *v16 = (Str *)gen_alloc(a, &burrow_type_Str);
+                (*v16) = (Str){(const Byte *)"key", 3};
+                v14.t = &burrow_type_Str;
                 v14.data = v16;
             }
             {
-                float *v17 = (float *)gen_alloc(a, &burrow_type_float);
-                (*v17) = (float)0x1.028f5cp+05;
-                v15.t = &burrow_type_float;
+                Str *v17 = (Str *)gen_alloc(a, &burrow_type_Str);
+                (*v17) = (Str){(const Byte *)"key", 3};
+                v15.t = &burrow_type_Str;
                 v15.data = v17;
             }
             map_set(v1, &v14, &v15);
@@ -5277,7 +5277,7 @@ static void mk45(Alloc *a, void *out) {
             Str v3;
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
-            v2 = (Str){(const Byte *)"\201", 1};
+            v2 = (Str){(const Byte *)"\200", 1};
             map_set(v1, &v2, &v3);
         }
         {
@@ -5285,7 +5285,7 @@ static void mk45(Alloc *a, void *out) {
             Str v5;
             memset(&v4, 0, sizeof(v4));
             memset(&v5, 0, sizeof(v5));
-            v4 = (Str){(const Byte *)"\200", 1};
+            v4 = (Str){(const Byte *)"\201", 1};
             map_set(v1, &v4, &v5);
         }
         (*o) = v1;
@@ -5363,7 +5363,8 @@ static void mk48(Alloc *a, void *out) {
             Int v3;
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
-            v2 = (Str){(const Byte *)"\377", 1};
+            v2 = (Str){(const Byte *)"\376", 1};
+            v3 = (Int)(int64_t)UINT64_C(1);
             map_set(v1, &v2, &v3);
         }
         {
@@ -5371,8 +5372,7 @@ static void mk48(Alloc *a, void *out) {
             Int v5;
             memset(&v4, 0, sizeof(v4));
             memset(&v5, 0, sizeof(v5));
-            v4 = (Str){(const Byte *)"\376", 1};
-            v5 = (Int)(int64_t)UINT64_C(1);
+            v4 = (Str){(const Byte *)"\377", 1};
             map_set(v1, &v4, &v5);
         }
         (*o) = v1;
@@ -5392,7 +5392,8 @@ static void mk49(Alloc *a, void *out) {
             Int v3;
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
-            v2 = (Str){(const Byte *)"\377", 1};
+            v2 = (Str){(const Byte *)"\376", 1};
+            v3 = (Int)(int64_t)UINT64_C(1);
             map_set(v1, &v2, &v3);
         }
         {
@@ -5400,8 +5401,7 @@ static void mk49(Alloc *a, void *out) {
             Int v5;
             memset(&v4, 0, sizeof(v4));
             memset(&v5, 0, sizeof(v5));
-            v4 = (Str){(const Byte *)"\376", 1};
-            v5 = (Int)(int64_t)UINT64_C(1);
+            v4 = (Str){(const Byte *)"\377", 1};
             map_set(v1, &v4, &v5);
         }
         (*o) = v1;
@@ -8254,7 +8254,8 @@ static void mk157(Alloc *a, void *out) {
             Int v3;
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
-            v2 = (Str){(const Byte *)"zero", 4};
+            v2 = (Str){(const Byte *)"one", 3};
+            v3 = (Int)(int64_t)UINT64_C(1);
             map_set(v1, &v2, &v3);
         }
         {
@@ -8262,8 +8263,8 @@ static void mk157(Alloc *a, void *out) {
             Int v5;
             memset(&v4, 0, sizeof(v4));
             memset(&v5, 0, sizeof(v5));
-            v4 = (Str){(const Byte *)"one", 3};
-            v5 = (Int)(int64_t)UINT64_C(1);
+            v4 = (Str){(const Byte *)"two", 3};
+            v5 = (Int)(int64_t)UINT64_C(2);
             map_set(v1, &v4, &v5);
         }
         {
@@ -8271,8 +8272,7 @@ static void mk157(Alloc *a, void *out) {
             Int v7;
             memset(&v6, 0, sizeof(v6));
             memset(&v7, 0, sizeof(v7));
-            v6 = (Str){(const Byte *)"two", 3};
-            v7 = (Int)(int64_t)UINT64_C(2);
+            v6 = (Str){(const Byte *)"zero", 4};
             map_set(v1, &v6, &v7);
         }
         (*o).f0 = v1;
@@ -8321,7 +8321,8 @@ static void mk159(Alloc *a, void *out) {
             Int v3;
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
-            v2 = (Str){(const Byte *)"\377", 1};
+            v2 = (Str){(const Byte *)"\376", 1};
+            v3 = (Int)(int64_t)UINT64_C(1);
             map_set(v1, &v2, &v3);
         }
         {
@@ -8329,8 +8330,7 @@ static void mk159(Alloc *a, void *out) {
             Int v5;
             memset(&v4, 0, sizeof(v4));
             memset(&v5, 0, sizeof(v5));
-            v4 = (Str){(const Byte *)"\376", 1};
-            v5 = (Int)(int64_t)UINT64_C(1);
+            v4 = (Str){(const Byte *)"\377", 1};
             map_set(v1, &v4, &v5);
         }
         (*o).f0 = v1;
@@ -8350,7 +8350,8 @@ static void mk160(Alloc *a, void *out) {
             Int v3;
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
-            v2 = (Str){(const Byte *)"zero", 4};
+            v2 = (Str){(const Byte *)"one", 3};
+            v3 = (Int)(int64_t)UINT64_C(1);
             map_set(v1, &v2, &v3);
         }
         {
@@ -8358,8 +8359,8 @@ static void mk160(Alloc *a, void *out) {
             Int v5;
             memset(&v4, 0, sizeof(v4));
             memset(&v5, 0, sizeof(v5));
-            v4 = (Str){(const Byte *)"one", 3};
-            v5 = (Int)(int64_t)UINT64_C(1);
+            v4 = (Str){(const Byte *)"two", 3};
+            v5 = (Int)(int64_t)UINT64_C(2);
             map_set(v1, &v4, &v5);
         }
         {
@@ -8367,8 +8368,7 @@ static void mk160(Alloc *a, void *out) {
             Int v7;
             memset(&v6, 0, sizeof(v6));
             memset(&v7, 0, sizeof(v7));
-            v6 = (Str){(const Byte *)"two", 3};
-            v7 = (Int)(int64_t)UINT64_C(2);
+            v6 = (Str){(const Byte *)"zero", 4};
             map_set(v1, &v6, &v7);
         }
         (*o).f0 = v1;
@@ -8388,7 +8388,8 @@ static void mk161(Alloc *a, void *out) {
             Int v3;
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
-            v2 = (Str){(const Byte *)"zero", 4};
+            v2 = (Str){(const Byte *)"one", 3};
+            v3 = (Int)(int64_t)UINT64_C(1);
             map_set(v1, &v2, &v3);
         }
         {
@@ -8396,8 +8397,8 @@ static void mk161(Alloc *a, void *out) {
             Int v5;
             memset(&v4, 0, sizeof(v4));
             memset(&v5, 0, sizeof(v5));
-            v4 = (Str){(const Byte *)"one", 3};
-            v5 = (Int)(int64_t)UINT64_C(1);
+            v4 = (Str){(const Byte *)"two", 3};
+            v5 = (Int)(int64_t)UINT64_C(2);
             map_set(v1, &v4, &v5);
         }
         {
@@ -8405,8 +8406,7 @@ static void mk161(Alloc *a, void *out) {
             Int v7;
             memset(&v6, 0, sizeof(v6));
             memset(&v7, 0, sizeof(v7));
-            v6 = (Str){(const Byte *)"two", 3};
-            v7 = (Int)(int64_t)UINT64_C(2);
+            v6 = (Str){(const Byte *)"zero", 4};
             map_set(v1, &v6, &v7);
         }
         (*o).f0 = v1;
@@ -8426,7 +8426,8 @@ static void mk162(Alloc *a, void *out) {
             Int v3;
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
-            v2 = (Str){(const Byte *)"zero", 4};
+            v2 = (Str){(const Byte *)"one", 3};
+            v3 = (Int)(int64_t)UINT64_C(1);
             map_set(v1, &v2, &v3);
         }
         {
@@ -8434,8 +8435,8 @@ static void mk162(Alloc *a, void *out) {
             Int v5;
             memset(&v4, 0, sizeof(v4));
             memset(&v5, 0, sizeof(v5));
-            v4 = (Str){(const Byte *)"one", 3};
-            v5 = (Int)(int64_t)UINT64_C(1);
+            v4 = (Str){(const Byte *)"two", 3};
+            v5 = (Int)(int64_t)UINT64_C(2);
             map_set(v1, &v4, &v5);
         }
         {
@@ -8443,8 +8444,7 @@ static void mk162(Alloc *a, void *out) {
             Int v7;
             memset(&v6, 0, sizeof(v6));
             memset(&v7, 0, sizeof(v7));
-            v6 = (Str){(const Byte *)"two", 3};
-            v7 = (Int)(int64_t)UINT64_C(2);
+            v6 = (Str){(const Byte *)"zero", 4};
             map_set(v1, &v6, &v7);
         }
         (*o).f0 = v1;
@@ -9024,7 +9024,7 @@ static void mk183(Alloc *a, void *out) {
             Any v3;
             memset(&v2, 0, sizeof(v2));
             memset(&v3, 0, sizeof(v3));
-            v2 = (Str){(const Byte *)"AaA", 3};
+            v2 = (Str){(const Byte *)"AAA", 3};
             {
                 Str *v4 = (Str *)gen_alloc(a, &burrow_type_Str);
                 v3.t = &burrow_type_Str;
@@ -9050,7 +9050,7 @@ static void mk183(Alloc *a, void *out) {
             Any v9;
             memset(&v8, 0, sizeof(v8));
             memset(&v9, 0, sizeof(v9));
-            v8 = (Str){(const Byte *)"AAA", 3};
+            v8 = (Str){(const Byte *)"AaA", 3};
             {
                 Str *v10 = (Str *)gen_alloc(a, &burrow_type_Str);
                 v9.t = &burrow_type_Str;
@@ -9902,10 +9902,10 @@ static void mk233(Alloc *a, void *out) {
                 Any v4;
                 memset(&v3, 0, sizeof(v3));
                 memset(&v4, 0, sizeof(v4));
-                v3 = (Str){(const Byte *)"\377", 1};
+                v3 = (Str){(const Byte *)"\376", 1};
                 {
                     Str *v5 = (Str *)gen_alloc(a, &burrow_type_Str);
-                    (*v5) = (Str){(const Byte *)"alpha", 5};
+                    (*v5) = (Str){(const Byte *)"bravo", 5};
                     v4.t = &burrow_type_Str;
                     v4.data = v5;
                 }
@@ -9916,10 +9916,10 @@ static void mk233(Alloc *a, void *out) {
                 Any v7;
                 memset(&v6, 0, sizeof(v6));
                 memset(&v7, 0, sizeof(v7));
-                v6 = (Str){(const Byte *)"\376", 1};
+                v6 = (Str){(const Byte *)"\377", 1};
                 {
                     Str *v8 = (Str *)gen_alloc(a, &burrow_type_Str);
-                    (*v8) = (Str){(const Byte *)"bravo", 5};
+                    (*v8) = (Str){(const Byte *)"alpha", 5};
                     v7.t = &burrow_type_Str;
                     v7.data = v8;
                 }
@@ -9947,7 +9947,7 @@ static void mk234(Alloc *a, void *out) {
                 Any v4;
                 memset(&v3, 0, sizeof(v3));
                 memset(&v4, 0, sizeof(v4));
-                v3 = (Str){(const Byte *)"\377", 1};
+                v3 = (Str){(const Byte *)"\376", 1};
                 {
                     Str *v5 = (Str *)gen_alloc(a, &burrow_type_Str);
                     v4.t = &burrow_type_Str;
@@ -9960,7 +9960,7 @@ static void mk234(Alloc *a, void *out) {
                 Any v7;
                 memset(&v6, 0, sizeof(v6));
                 memset(&v7, 0, sizeof(v7));
-                v6 = (Str){(const Byte *)"\376", 1};
+                v6 = (Str){(const Byte *)"\377", 1};
                 {
                     Str *v8 = (Str *)gen_alloc(a, &burrow_type_Str);
                     v7.t = &burrow_type_Str;
@@ -9990,7 +9990,7 @@ static void mk235(Alloc *a, void *out) {
                 Any v4;
                 memset(&v3, 0, sizeof(v3));
                 memset(&v4, 0, sizeof(v4));
-                v3 = (Str){(const Byte *)"\377", 1};
+                v3 = (Str){(const Byte *)"\376", 1};
                 {
                     Str *v5 = (Str *)gen_alloc(a, &burrow_type_Str);
                     v4.t = &burrow_type_Str;
@@ -10003,7 +10003,7 @@ static void mk235(Alloc *a, void *out) {
                 Any v7;
                 memset(&v6, 0, sizeof(v6));
                 memset(&v7, 0, sizeof(v7));
-                v6 = (Str){(const Byte *)"\376", 1};
+                v6 = (Str){(const Byte *)"\377", 1};
                 {
                     Str *v8 = (Str *)gen_alloc(a, &burrow_type_Str);
                     v7.t = &burrow_type_Str;
@@ -10033,7 +10033,7 @@ static void mk236(Alloc *a, void *out) {
                 Any v4;
                 memset(&v3, 0, sizeof(v3));
                 memset(&v4, 0, sizeof(v4));
-                v3 = (Str){(const Byte *)"\377", 1};
+                v3 = (Str){(const Byte *)"\376", 1};
                 {
                     Str *v5 = (Str *)gen_alloc(a, &burrow_type_Str);
                     v4.t = &burrow_type_Str;
@@ -10046,7 +10046,7 @@ static void mk236(Alloc *a, void *out) {
                 Any v7;
                 memset(&v6, 0, sizeof(v6));
                 memset(&v7, 0, sizeof(v7));
-                v6 = (Str){(const Byte *)"\376", 1};
+                v6 = (Str){(const Byte *)"\377", 1};
                 {
                     Str *v8 = (Str *)gen_alloc(a, &burrow_type_Str);
                     v7.t = &burrow_type_Str;

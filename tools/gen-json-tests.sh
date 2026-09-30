@@ -64,6 +64,12 @@ func knownType(t reflect.Type) (string, string, bool) {
 	return "", "", false
 }
 
+// A Number is a Str, which the common builder already writes.
+func knownValue(*builder, reflect.Value, string) bool { return false }
+
+// The C descriptor has the Go name.
+func typeName(t reflect.Type) string { return t.Name() }
+
 // How many cases each left-out type accounts for.
 var leftOut = map[string]int{}
 

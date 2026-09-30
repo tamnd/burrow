@@ -65,7 +65,7 @@ static Int dur_format(Duration d, Byte *buf) {
     uint64_t u = (uint64_t)d;
     bool neg = d < 0;
     if (neg)
-        u = -u;
+        u = 0 - u;
 
     if (u < (uint64_t)TIME_SECOND) {
         /* Under a second the unit gets smaller instead, as in 1.2ms. */

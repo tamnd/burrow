@@ -40,8 +40,6 @@ static bool xml_same_error(Error a, Error b) {
 
 /* ------------------------------------------------------------------- types */
 
-static const Type xml_attr_slice_desc;
-
 static const Field xml_name_fields[] = {
     {{(const Byte *)"Space", 5},
      {NULL, 0},
@@ -735,8 +733,6 @@ static void xml_declare(XmlDecoder *d, Str prefix, Str value) {
 
 /* ---------------------------------------------------------------- decoding */
 
-static const XmlTokenReaderVT xml_decoder_token_reader_vt;
-
 static const Type xml_decoder_desc = {
     {(const Byte *)"Decoder", 7},
     {(const Byte *)"xml", 3},
@@ -755,6 +751,13 @@ static const Type xml_decoder_desc = {
 };
 
 const Type *const TYPE_XML_DECODER = &xml_decoder_desc;
+
+static XmlToken xml_decoder_token_thunk(void *self, Error *err) {
+    return xml_decoder_token((XmlDecoder *)self, err);
+}
+
+static const XmlTokenReaderVT xml_decoder_token_reader_vt = {&xml_decoder_desc,
+                                                             xml_decoder_token_thunk};
 
 XmlToken xml_token_reader_token(XmlTokenReader r, Error *err) {
     return r.vt->token(r.data, err);
@@ -897,13 +900,6 @@ void xml_decoder_free(XmlDecoder *d) {
         mem_free(a, d->inner, (size_t)d->capinner, 1);
     mem_free(a, d, sizeof *d, _Alignof(XmlDecoder));
 }
-
-static XmlToken xml_decoder_token_thunk(void *self, Error *err) {
-    return xml_decoder_token((XmlDecoder *)self, err);
-}
-
-static const XmlTokenReaderVT xml_decoder_token_reader_vt = {&xml_decoder_desc,
-                                                             xml_decoder_token_thunk};
 
 XmlTokenReader xml_decoder_as_token_reader(XmlDecoder *d) {
     return (XmlTokenReader){&xml_decoder_token_reader_vt, d};

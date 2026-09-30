@@ -126,6 +126,80 @@ io_pipe_free(pr);
 
 Closing the writer is what lets the reader see the end. `io_pipe_writer_close_with_error` makes the reader see an error of your choosing instead, and closing the reader makes further writes fail with `io_err_closed_pipe`. Free the pipe once neither end is in use, which here is after the wait.
 
+## File systems
+
+`io/fs` is the interface for a tree of files, and `testing/fstest` has a map in memory that implements it, which is what the examples here use. A `FstestMapFS` only needs the files. The directories they are in exist without being listed:
+
+<!-- example: ../examples/io/fs.c#mapfs -->
+```c
+FstestMapFile readme = {.data = slice_from_str(a, BURROW_S("read me first\n"))};
+FstestMapFile main_go = {.data = slice_from_str(a, BURROW_S("package main\n")),
+                         .mode = 0644};
+FstestMapFile util_go = {.data = slice_from_str(a, BURROW_S("package util\n")),
+                         .mode = 0644};
+FstestMapFS files = fstest_map_fs_make(a);
+fstest_map_fs_set(files, BURROW_S("README"), &readme);
+fstest_map_fs_set(files, BURROW_S("cmd/main.go"), &main_go);
+fstest_map_fs_set(files, BURROW_S("internal/util/util.go"), &util_go);
+Fs fsys = fstest_map_fs_as_fs(files);
+```
+
+The helpers take the FS and a slash separated path relative to its root, with no leading slash and no `..`. `fs_valid_path` says whether a name is one of those. Each helper uses the FS's own method when it has one and falls back to `open` when it does not, so an FS only has to fill in `open` and leaves the rest of its vtable NULL:
+
+<!-- example: ../examples/io/fs.c#readfile -->
+```c
+Slice data = fs_read_file(a, fsys, BURROW_S("README"), &err);
+```
+
+Failures are an `FsPathError` naming the operation and the path, and wrapping one of the sentinels, so `errors_is` sees through it:
+
+<!-- example: ../examples/io/fs.c#missing -->
+```c
+fs_read_file(a, fsys, BURROW_S("LICENSE"), &err);
+if (errors_is(err, fs_err_not_exist))
+    printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
+```
+
+`fs_walk_dir` visits the tree in lexical order, calling the function for each file and directory:
+
+<!-- example: ../examples/io/fs.c#walker -->
+```c
+static Error print_path(void *env, Str path, FsDirEntry d, Error err) {
+    (void)env;
+    if (BURROW_FAILED(err))
+        return err;
+    printf(BURROW_STR_FMT "%s\n", BURROW_STR_ARG(path),
+           d.vt->is_dir(d.data) ? "/" : "");
+    return BURROW_NO_ERROR;
+}
+```
+
+<!-- example: ../examples/io/fs.c#walk -->
+```c
+err =
+    fs_walk_dir(a, fsys, BURROW_S("."), BURROW_FN(FsWalkDirFunc, print_path, NULL));
+```
+
+Returning `fs_skip_dir` skips the directory, or the rest of the directory a file is in, and `fs_skip_all` stops the walk. Either way `fs_walk_dir` returns no error. `fs_glob` matches a pattern against the names, using the syntax of `path_match`:
+
+<!-- example: ../examples/io/fs.c#glob -->
+```c
+Slice matches = fs_glob(a, fsys, BURROW_S("*/*.go"), &err);
+```
+
+`fs_sub` gives the FS rooted at one of its directories, and `fs_format_file_info` gives the one line `ls -l` style description that Go's `fs.FormatFileInfo` does:
+
+<!-- example: ../examples/io/fs.c#sub -->
+```c
+Fs internal = fs_sub(a, fsys, BURROW_S("internal"), &err);
+Slice entries = fs_read_dir(a, internal, BURROW_S("util"), &err);
+for (Int i = 0; i < entries.len; i++) {
+    FsDirEntry *e = (FsDirEntry *)slice_at(entries, i);
+    FsFileInfo info = e->vt->info(e->data, a, &err);
+    printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(fs_format_file_info(a, info)));
+}
+```
+
 ## Differences from Go
 
-`io_copy_buffer` with a nil buffer is `io_err_short_buffer`, where Go would allocate one. Use `io_copy` when you want the allocation. The constructors that Go makes return pointers return values here, as described above, and the ones that have to allocate take an allocator and have a free function to match. `io/ioutil` comes with `os`, since nearly all of it is files.
+`io_copy_buffer` with a nil buffer is `io_err_short_buffer`, where Go would allocate one. Use `io_copy` when you want the allocation. The constructors that Go makes return pointers return values here, as described above, and the ones that have to allocate take an allocator and have a free function to match. `io/ioutil` comes with `os`, since nearly all of it is files. In `io/fs` the optional interfaces, such as `ReadDirFS` and `StatFS`, are optional slots in the one `FsVT`, and `FsFile`'s `read_dir` is optional in the same way, so there is no type assertion to write. Walking a tree with `fs_walk_dir` recurses once per directory level, and `fs_glob` does not recurse at all. Every function that returns something takes the allocator it comes from. A `FstestMapFS` file can be read and stat'ed but not seeked, since `Seek` and `ReadAt` are not in `FsFileVT`. `fstest.TestFS` is not ported yet.

@@ -59,7 +59,7 @@ XU_IFACE_TYPE(XmlUnmarshalerAttr, "UnmarshalerAttr");
 
 /* A value for fmt's %T, which reads the type and never the data. */
 static Any xu_type_arg(const Type *t) {
-    static const uint64_t dummy[2];
+    static const uint64_t dummy[2] = {0, 0};
     return (Any){t, (void *)(uintptr_t)dummy};
 }
 
@@ -67,9 +67,10 @@ static Any xu_type_arg(const Type *t) {
  * would look inside an interface for what it holds, so an interface type
  * is spelled out here. */
 static Error xu_type_error(const char *msg, const Type *t) {
-    if (t->kind == KIND_INTERFACE)
-        return fmt_errorf_v("%s%s", str_from_cstr(msg),
-                            t->name.len > 0 ? t->name : BURROW_S("interface {}"));
+    if (t->kind == KIND_INTERFACE) {
+        Str name = t->name.len > 0 ? t->name : BURROW_S("interface {}");
+        return fmt_errorf_v("%s%s", str_from_cstr(msg), name);
+    }
     return fmt_errorf_v("%s%T", str_from_cstr(msg), xu_type_arg(t));
 }
 

@@ -80,7 +80,7 @@ static const Type xm_error_string_desc = {
 /* A value for fmt's %T, which reads the type and never the data for the
  * kinds that get here. */
 static Any xm_type_arg(const Type *t) {
-    static const uint64_t dummy[2];
+    static const uint64_t dummy[2] = {0, 0};
     return (Any){t, (void *)(uintptr_t)dummy};
 }
 

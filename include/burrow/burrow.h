@@ -134,6 +134,7 @@
 #include "burrow/unicode/utf16.h"
 #include "burrow/unique.h"
 #include "burrow/utf8.h"
+#include "burrow/uuid.h"
 
 /* The rest of the library arrives here as it is written. The order is the
  * construction order from docs/design/06-runtime.md section 12, because the

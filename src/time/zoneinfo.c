@@ -618,8 +618,10 @@ static const Byte *tz_read(TzData *d, Int n) {
         return NULL;
     }
     const Byte *p = d->p;
-    d->p += n;
-    d->n -= n;
+    if (n > 0) {
+        d->p += n;
+        d->n -= n;
+    }
     return p;
 }
 

@@ -231,8 +231,10 @@ extern "C" {
     typedef Slice Name;                                                                \
     extern const Type burrow_type_##Name
 
-#define BURROW_SLICE_TYPE(Name, T)                                                     \
-    BURROW_SLICE_TYPE_DECL(Name, T);                                                   \
+/* The descriptor alone, for a slice declared earlier in the same file. That is
+ * how a struct gets a field that is a slice of itself: declare the slice, then
+ * the struct, then define the slice, which needs the struct to be complete. */
+#define BURROW_SLICE_TYPE_DEFINE(Name, T)                                              \
     const Type burrow_type_##Name = {                                                  \
         {NULL, 0},                                                                     \
         {NULL, 0},                                                                     \
@@ -249,6 +251,10 @@ extern "C" {
         0,                                                                             \
         NULL,                                                                          \
     }
+
+#define BURROW_SLICE_TYPE(Name, T)                                                     \
+    BURROW_SLICE_TYPE_DECL(Name, T);                                                   \
+    BURROW_SLICE_TYPE_DEFINE(Name, T)
 
 /* The same with a name, the one Go's type Name []T would have. The slices
  * above are unnamed like Go's []T, and most code cannot tell the difference,

@@ -119,7 +119,7 @@ TestReader TestPartialRead TestMergePAX TestParsePAX TestReadOldGNUSparseMap
 TestReadGNUSparsePAXHeaders TestFileReader TestSparseEntries
 TestHeaderRoundTrip TestHeaderAllowedFormats TestWriter TestSplitUSTARPath
 TestFileWriter"
-TESTS=$(echo $tests) perl -i -ne '
+TESTS=$(printf '%s' "$tests" | tr '\n' ' ') perl -i -ne '
 	BEGIN { %want = map { $_ => 1 } split / /, $ENV{TESTS}; }
 	if (/^func (Test\w+)\(/) { $fn = $1; }
 	if ($want{$fn} && /^\tfor (_|i), v := range vectors \{/) {

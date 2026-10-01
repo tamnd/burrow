@@ -587,7 +587,7 @@ static Error gzip_write_header(GzipWriter *z) {
     return BURROW_NO_ERROR;
 }
 
-Int gzip_writer_write(GzipWriter *z, Slice p, Error *err) {
+Int gzip_writer_write(GzipWriter *z, Slice data, Error *err) {
     if (BURROW_FAILED(z->err)) {
         BURROW_OUT(err, z->err);
         return 0;
@@ -600,10 +600,10 @@ Int gzip_writer_write(GzipWriter *z, Slice p, Error *err) {
             return 0;
         }
     }
-    z->size += (uint32_t)p.len;
-    z->digest = gzip_crc(z->digest, (const Byte *)p.p, p.len);
+    z->size += (uint32_t)data.len;
+    z->digest = gzip_crc(z->digest, (const Byte *)data.p, data.len);
     Error e = BURROW_NO_ERROR;
-    Int n = flate_writer_write(z->compressor, p, &e);
+    Int n = flate_writer_write(z->compressor, data, &e);
     z->err = e;
     BURROW_OUT(err, e);
     return n;

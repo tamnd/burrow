@@ -1789,6 +1789,13 @@ static Error gob_compile_dec_l(GobDecoder *d, int32_t remote, const GobUserType 
     return BURROW_NO_ERROR;
 }
 
+/* gob_compile_dec_l with the result through a pointer, so that the err below
+ * lives in memory and not in a register gcc warns the longjmp may clobber. */
+static void gob_compile_dec_into(GobDecoder *d, int32_t remote, const GobUserType *ut,
+                                 GobEngine **out, Error *err) {
+    *err = gob_compile_dec_l(d, remote, ut, out);
+}
+
 static Error gob_compile_dec(GobDecoder *d, int32_t remote, const GobUserType *ut,
                              GobEngine **out) {
     int saved = d->ignore_depth;
@@ -1796,7 +1803,7 @@ static Error gob_compile_dec(GobDecoder *d, int32_t remote, const GobUserType *u
     Error caught = BURROW_NO_ERROR;
     volatile bool failed = false;
     BURROW_TRY {
-        err = gob_compile_dec_l(d, remote, ut, out);
+        gob_compile_dec_into(d, remote, ut, out, &err);
     }
     BURROW_CATCH(p) {
         d->ignore_depth = saved;

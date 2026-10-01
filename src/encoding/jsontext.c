@@ -113,7 +113,8 @@ static Str jt_trim_space_tab(Str s) {
         i++;
     while (j > i && (s.p[j - 1] == ' ' || s.p[j - 1] == '\t'))
         j--;
-    return str_from_bytes(s.p + i, j - i);
+    /* s.p is NULL for an empty s, and NULL + 0 is undefined. */
+    return str_from_bytes(j > i ? s.p + i : s.p, j - i);
 }
 
 static void jt_check_indent(Str s, Str where) {

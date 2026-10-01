@@ -82,7 +82,7 @@ enum {
     TAR_C_ISSOCK = 0140000,
 };
 
-static const Byte tar_zero_block[TAR_BLOCK_SIZE];
+static const Byte tar_zero_block[TAR_BLOCK_SIZE] = {0};
 
 /* What an empty string that came from an allocator points at, so that no Str
  * this package hands out has a NULL pointer. */
@@ -2858,7 +2858,7 @@ TarHeader *tar_reader_next(TarReader *tr, Error *err) {
     Error e = BURROW_NO_ERROR;
     TarHeader *hdr = tar_next(tr, &e);
     tr->err = e;
-    if (BURROW_OK(e) && !burrow__tar_is_local(hdr->name) &&
+    if (BURROW_OK(e) && hdr != NULL && !burrow__tar_is_local(hdr->name) &&
         (tar_debug_load() & TAR_DEBUG_INSECURE_OFF) != 0)
         e = tar_err_insecure_path;
     BURROW_OUT(err, e);
@@ -3048,7 +3048,7 @@ static bool tar_pax_header_name(Alloc *a, Str real, TarBuf *out) {
     Int n = path.len;
     const Byte *s = path.p;
     Byte *w = j.p;
-    bool rooted = s[0] == '/';
+    bool rooted = n > 0 && s[0] == '/';
     Int r = 0;
     Int wl = 0;
     Int dotdot = 0;

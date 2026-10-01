@@ -362,7 +362,7 @@ bool fs_valid_path(Str name) {
         while (i < name.len && name.p[i] != '/')
             i++;
         Int n = i - start;
-        const Byte *e = name.p + start;
+        const Byte *e = n > 0 ? name.p + start : name.p;
         if (n == 0 || (n == 1 && e[0] == '.') || (n == 2 && e[0] == '.' && e[1] == '.'))
             return false;
         if (i == name.len)

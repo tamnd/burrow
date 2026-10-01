@@ -425,7 +425,11 @@ jobs:
       # MODE=debug drops the optimisation level and with it _FORTIFY_SOURCE,
       # which needs optimisation to do anything and argues with the sanitisers
       # when it is on.
-      - run: make CC=clang MODE=debug CFLAGS="-std=c11 -O1 -g -Iinclude -DBURROW_SOURCE_ID=\\\"ci\\\" ${{ matrix.flags }}" test
+      #
+      # Short mode, because since archive/zip landed tsan and msan have both
+      # hit the timeout with zip_test still running. Its ZIP64 tests are the
+      # ones Go skips in short mode, and the other jobs still run them.
+      - run: make CC=clang MODE=debug CFLAGS="-std=c11 -O1 -g -Iinclude -DBURROW_SOURCE_ID=\\\"ci\\\" ${{ matrix.flags }}" TESTFLAGS=-test.short test
         env:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1

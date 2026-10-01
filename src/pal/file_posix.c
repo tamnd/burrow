@@ -456,6 +456,13 @@ int64_t pal_temp_dir(char *buf, int64_t cap, PalErrno *err) {
     return (int64_t)n;
 }
 
+/* There are no DOS devices outside Windows. */
+bool pal_is_dos_device_name(const char *name, int64_t n) {
+    (void)name;
+    (void)n;
+    return false;
+}
+
 bool pal_link(const char *from, const char *to, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (!posix_path_ok(from, err) || !posix_path_ok(to, err))

@@ -858,6 +858,13 @@ int64_t pal_getcwd(char *buf, int64_t cap, PalErrno *err);
  * Returns its length, or -1, with PAL_ERANGE when it does not fit. */
 int64_t pal_temp_dir(char *buf, int64_t cap, PalErrno *err);
 
+/* Whether Windows reads name, n bytes of UTF-8 with no NUL in it, as a DOS
+ * device such as NUL or COM1, by asking RtlIsDosDeviceName_U the way Go's
+ * filepath does for a reserved name with an extension. Which of those count
+ * changed in Windows 11, so only Windows can answer. Everywhere else this is
+ * false, and so is a name that is too long or holds a NUL. */
+bool pal_is_dos_device_name(const char *name, int64_t n);
+
 /* Resolve a program name against the search path, writing the full path to buf.
  * Returns its length, or -1. This is a PAL call rather than portable code over
  * PATH because Windows searches differently, applies PATHEXT, and looks in the

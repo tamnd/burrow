@@ -120,6 +120,7 @@
 #include "burrow/own.h"
 #include "burrow/panic.h"
 #include "burrow/path.h"
+#include "burrow/path/filepath.h"
 #include "burrow/proc.h"
 #include "burrow/regexp.h"
 #include "burrow/regexp/syntax.h"

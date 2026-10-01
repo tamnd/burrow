@@ -755,6 +755,26 @@ int64_t pal_temp_dir(char *buf, int64_t cap, PalErrno *err) {
     return len;
 }
 
+typedef ULONG(NTAPI *DosDeviceNameFn)(PCWSTR);
+
+bool pal_is_dos_device_name(const char *name, int64_t n) {
+    char nb[PAL_WPATH_MAX];
+    if (n < 0 || n >= PAL_WPATH_MAX || memchr(name, 0, (size_t)n) != NULL)
+        return false;
+    memcpy(nb, name, (size_t)n);
+    nb[n] = 0;
+    wchar_t w[PAL_WPATH_MAX];
+    if (!burrow__pal_widen(nb, w, PAL_WPATH_MAX, NULL))
+        return false;
+    DosDeviceNameFn fn = NULL;
+    HMODULE nt = GetModuleHandleW(L"ntdll.dll");
+    if (nt != NULL) {
+        FARPROC p = GetProcAddress(nt, "RtlIsDosDeviceName_U");
+        memcpy(&fn, &p, sizeof fn);
+    }
+    return fn != NULL && fn(w) > 0;
+}
+
 bool pal_link(const char *from, const char *to, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     wchar_t wf[PAL_WPATH_MAX], wt[PAL_WPATH_MAX];

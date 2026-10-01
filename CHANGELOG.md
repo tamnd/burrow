@@ -4,6 +4,22 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.21 (2026-10-01)
+
+archive/zip and encoding/asn1.
+
+### Added
+
+- `archive/zip`, the reader and writer, with ZIP64, the compressor and decompressor registries, `AddFS`, `Copy`, `CreateRaw`, `OpenRaw` and the `fs.FS` view of a reader (#304).
+- `encoding/asn1`, DER marshalling and unmarshalling over type descriptors with Go's struct tags (#305).
+- `BURROW_NAMED_SLICE_TYPE`, for a slice type with a name like Go's `type Name []T` (#305).
+- A `TESTFLAGS` make variable, passed to every test binary by `make test` (#304).
+
+### Fixed
+
+- `testing_test` no longer fails when it is run with `-test.short` (#304).
+- `time_parse` no longer adds an offset to a NULL pointer when the layout or the value runs out, which UBSan reported (#305).
+
 ## v0.1.20 (2026-10-01)
 
 io/fs and archive/tar.

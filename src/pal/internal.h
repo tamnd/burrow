@@ -30,6 +30,10 @@
 extern "C" {
 #endif
 
+/* Remembers native and what it was translated into, for pal_errno_native. The
+ * translations below call it, so a backend never has to. */
+void burrow__pal_errno_note(int64_t native, PalErrno e);
+
 #if defined(BURROW_OS_WINDOWS)
 
 /* A Win32 error, which is what GetLastError answers, into one of ours.

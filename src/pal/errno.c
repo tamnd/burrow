@@ -83,6 +83,41 @@ _Static_assert((int)(sizeof errno_names / sizeof errno_names[0]) ==
                    PAL_EOTHER - PAL_EPERM + 1,
                "errno_names and the PalErrno enum have drifted apart");
 
+/* The platform's code behind the last failure this thread translated, and what
+ * it became, for pal_errno_native. */
+static BURROW_THREAD_LOCAL int64_t last_native;
+static BURROW_THREAD_LOCAL PalErrno last_errno;
+
+void burrow__pal_errno_note(int64_t native, PalErrno e) {
+    last_native = native;
+    last_errno = e;
+}
+
+int64_t pal_errno_native(PalErrno e) {
+#if defined(BURROW_OS_COSMO)
+    /* Cosmopolitan's errno numbers are the host's, decided at run time, and no
+     * one table names them, so the caller falls back to its own. */
+    (void)e;
+    return 0;
+#else
+    if (e == PAL_OK || e != last_errno)
+        return 0;
+    return last_native;
+#endif
+}
+
+#if !defined(BURROW_OS_WINDOWS)
+
+int64_t pal_errno_message(int64_t native, char *buf, int64_t cap, PalErrno *err) {
+    (void)native;
+    (void)buf;
+    (void)cap;
+    BURROW_OUT(err, PAL_ENOTSUP);
+    return -1;
+}
+
+#endif
+
 const char *pal_errno_string(PalErrno e) {
     if (e == PAL_OK)
         return "no error";
@@ -100,7 +135,7 @@ const char *pal_errno_string(PalErrno e) {
  * EOPNOTSUPP are equal on Linux and different on macOS, so both pairs are
  * written as one case with a guard rather than as two cases that fail to
  * compile on whichever platform happens to join them. */
-PalErrno burrow__pal_errno(int native) {
+static PalErrno errno_map(int native) {
     switch (native) {
     case EPERM:
         return PAL_EPERM;
@@ -215,6 +250,12 @@ PalErrno burrow__pal_errno(int native) {
     default:
         return PAL_EOTHER;
     }
+}
+
+PalErrno burrow__pal_errno(int native) {
+    PalErrno e = errno_map(native);
+    burrow__pal_errno_note(native, e);
+    return e;
 }
 
 #endif /* !BURROW_OS_WINDOWS */

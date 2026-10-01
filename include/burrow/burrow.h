@@ -134,6 +134,7 @@
 #include "burrow/sync.h"
 #include "burrow/sync/atomic.h"
 #include "burrow/synctest.h"
+#include "burrow/syscall.h"
 #include "burrow/testing.h"
 #include "burrow/testing/fstest.h"
 #include "burrow/text/scanner.h"

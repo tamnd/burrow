@@ -331,28 +331,164 @@ int64_t pal_wait(int64_t pid, int32_t *status, uint32_t flags, PalErrno *err) {
     return pid;
 }
 
-/* Go's Process.Kill is TerminateProcess with an exit code of 1, and nothing
- * else a POSIX signal does has a Windows equivalent that works on an arbitrary
- * process. Zero asks whether it is still running. */
-bool pal_kill(int64_t pid, int32_t sig, PalErrno *err) {
+/* Go's Process.Kill: TerminateProcess with an exit code of 1, through a
+ * duplicate that asks for PROCESS_TERMINATE, since a handle from
+ * pal_process_open does not have it. Nothing else a POSIX signal does has a
+ * Windows equivalent that works on an arbitrary process. */
+static bool proc_terminate(HANDLE h, PalErrno *err) {
+    HANDLE t = NULL;
+    if (!DuplicateHandle(GetCurrentProcess(), h, GetCurrentProcess(), &t,
+                         PROCESS_TERMINATE, FALSE, 0))
+        return proc_fail(err);
+    BOOL ok = TerminateProcess(t, 1);
+    DWORD e = GetLastError();
+    CloseHandle(t);
+    if (!ok) {
+        BURROW_OUT(err, burrow__pal_errno_win(e));
+        return false;
+    }
+    return true;
+}
+
+/* Kill the process, or with probe, ask whether it is still running, which is
+ * what signal 0 does. */
+static bool proc_signal(int64_t pid, bool kill, bool probe, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (pid <= 0) {
         BURROW_OUT(err, PAL_EINVAL);
         return false;
     }
     HANDLE h = (HANDLE)(intptr_t)pid;
-    if (sig == 0) {
+    if (probe) {
         if (WaitForSingleObject(h, 0) == WAIT_OBJECT_0) {
             BURROW_OUT(err, PAL_ESRCH);
             return false;
         }
         return true;
     }
-    if (sig != PAL_SIGKILL) {
+    if (!kill) {
         BURROW_OUT(err, PAL_ENOTSUP);
         return false;
     }
-    return TerminateProcess(h, 1) || proc_fail(err);
+    return proc_terminate(h, err);
+}
+
+bool pal_kill(int64_t pid, int32_t sig, PalErrno *err) {
+    return proc_signal(pid, sig == PAL_SIGKILL, sig == 0, err);
+}
+
+/* Go's syscall.SIGKILL on Windows is 9, the same number as PAL_SIGKILL. */
+bool pal_kill_native(int64_t pid, int32_t sig, PalErrno *err) {
+    return proc_signal(pid, sig == 9, sig == 0, err);
+}
+
+static int64_t proc_filetime(const FILETIME *ft) {
+    return (int64_t)(((uint64_t)ft->dwHighDateTime << 32) | ft->dwLowDateTime);
+}
+
+int64_t pal_wait4(int64_t pid, uint32_t *status, int32_t options, PalRusage *ru,
+                  PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (pid <= 0 || options != 0) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return -1;
+    }
+    HANDLE h = (HANDLE)(intptr_t)pid;
+    if (WaitForSingleObject(h, INFINITE) != WAIT_OBJECT_0) {
+        proc_fail(err);
+        return -1;
+    }
+    DWORD code = 0;
+    if (!GetExitCodeProcess(h, &code)) {
+        proc_fail(err);
+        return -1;
+    }
+    FILETIME c, x, k, u;
+    if (!GetProcessTimes(h, &c, &x, &k, &u)) {
+        proc_fail(err);
+        return -1;
+    }
+    BURROW_OUT(status, (uint32_t)code);
+    if (ru != NULL) {
+        memset(ru, 0, sizeof *ru);
+        ru->creation_time = proc_filetime(&c);
+        ru->exit_time = proc_filetime(&x);
+        ru->kernel_time = proc_filetime(&k);
+        ru->user_time = proc_filetime(&u);
+    }
+    return pid;
+}
+
+bool pal_wait_ready(int64_t pid, PalErrno *err) {
+    (void)pid;
+    BURROW_OUT(err, PAL_ENOTSUP);
+    return false;
+}
+
+int64_t pal_process_id(int64_t pid) {
+    if (pid <= 0)
+        return -1;
+    DWORD id = GetProcessId((HANDLE)(intptr_t)pid);
+    return id == 0 ? -1 : (int64_t)id;
+}
+
+int64_t pal_process_open(int64_t id, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (id < 0 || id > (int64_t)UINT32_MAX) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return -1;
+    }
+    HANDLE h =
+        OpenProcess(STANDARD_RIGHTS_READ | PROCESS_QUERY_INFORMATION | SYNCHRONIZE,
+                    FALSE, (DWORD)id);
+    if (h == NULL) {
+        proc_fail(err);
+        return -1;
+    }
+    return (int64_t)(intptr_t)h;
+}
+
+void pal_process_close(int64_t pid) {
+    if (pid > 0)
+        CloseHandle((HANDLE)(intptr_t)pid);
+}
+
+/* Go's getModuleFileName, which grows the buffer until the path fits. */
+int64_t pal_executable(char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    DWORD n = 1024;
+    wchar_t *w = NULL;
+    DWORD got = 0;
+    for (;;) {
+        w = (wchar_t *)proc_alloc((size_t)n * sizeof(wchar_t));
+        if (w == NULL) {
+            BURROW_OUT(err, PAL_ENOMEM);
+            return -1;
+        }
+        got = GetModuleFileNameW(NULL, w, n);
+        if (got == 0) {
+            proc_fail(err);
+            proc_free(w);
+            return -1;
+        }
+        if (got < n)
+            break;
+        proc_free(w);
+        if (n > 32768) {
+            BURROW_OUT(err, PAL_ERANGE);
+            return -1;
+        }
+        n += 1024;
+    }
+    int64_t len =
+        buf == NULL || cap <= 0 ? -1 : burrow__pal_narrow(w, got, buf, (size_t)cap - 1);
+    proc_free(w);
+    if (len < 0) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    buf[len] = 0;
+    return len;
 }
 
 int64_t pal_getpid(void) {

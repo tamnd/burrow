@@ -152,6 +152,42 @@ Int n = os_file_read(r, slice_from(buf, 32, 32, TYPE_BYTE), &err);
 
 `os_args`, `os_getpid`, `os_getppid`, `os_getuid` and the rest of the ids, `os_hostname`, `os_user_home_dir`, `os_user_cache_dir` and `os_user_config_dir` are there too, with the same answers and the same error texts as Go.
 
+## Processes
+
+`os_start_process` is Go's `StartProcess`, the low level way to run a program. It takes the program's path, the whole argument list with the name first, and an `OsProcAttr` with the directory, the environment and the files the child gets. A NULL `env` gives the child ours, and `files` is the child's descriptor table, so leaving it empty starts the child with nothing open. Most programs want os/exec, which finds the program on `PATH` and wires up the pipes, once that package is here.
+
+`os_process_wait` waits for the child to finish and gives an `OsProcessState`, which says how it went:
+
+<!-- example: ../examples/os/proc.c#start -->
+```c
+Error err = BURROW_NO_ERROR;
+Str exe = os_executable(a, &err); /* the path of this program */
+Str argv[] = {exe};
+Str env[] = {BURROW_S("EXAMPLE_CHILD=1")};
+OsProcAttr attr = {
+    .env = slice_from(env, 1, 1, NULL),
+    .files = {0}, /* nothing open in the child */
+};
+OsProcess *p = os_start_process(a, exe, slice_from(argv, 1, 1, NULL), &attr, &err);
+if (BURROW_FAILED(err))
+    return 1;
+OsProcessState *ps = os_process_wait(p, &err);
+Str how = os_process_state_string(ps, a);  /* "exit status 3" */
+Int code = os_process_state_exit_code(ps); /* 3 */
+bool ok = os_process_state_success(ps);    /* false */
+```
+
+`os_process_kill` and `os_process_signal` send a signal, and `os_interrupt` and `os_kill` are Go's two portable ones. `os_signal_from_syscall` wraps any other `SYSCALL_SIGx`. Windows can only kill. Once a process has been waited for, signalling it gives `os_err_process_done`, and after `os_process_release` it gives an error too, so a pid the system has handed to someone else is never signalled by mistake:
+
+<!-- example: ../examples/os/proc.c#kill -->
+```c
+OsProcess *self = os_find_process(a, os_getpid(), &err);
+Error rerr = os_process_release(self); /* self no longer refers to the process */
+Error kerr = os_process_kill(self);    /* "os: process already released" on Unix */
+```
+
+`os_find_process` gives a process from a pid, `os_executable` gives the path of the running program, and `os_process_state_user_time` and `os_process_state_system_time` give the CPU time the child used. `os_process_free` and `os_process_state_free` give the memory back.
+
 ## Errors
 
 A failure on a path is an `OsPathError`, which is io/fs's `PathError`, holding the operation, the path and the system's error number as a `SyscallErrno`. Rename, link and symlink fail with an `OsLinkError`, which has both names. The text is Go's:

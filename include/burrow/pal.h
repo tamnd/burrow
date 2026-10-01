@@ -860,6 +860,74 @@ enum {
 bool pal_kill(int64_t pid, int32_t sig, PalErrno *err);
 int64_t pal_getpid(void);
 
+/* kill(2) with the system's own signal number, which is what syscall.Kill
+ * takes, and with pid passed through as it is, so that 0 and the negative
+ * numbers reach a process group the way they do in C. On Windows pid is a
+ * process handle, 9 terminates it with exit code 1 as Go's Process.Kill does,
+ * 0 asks whether it is still running, and anything else is PAL_ENOTSUP. */
+bool pal_kill_native(int64_t pid, int32_t sig, PalErrno *err);
+
+/* What a child used, as wait4 reports it on POSIX. Windows has no wait4, and
+ * there pal_wait4 fills the last four, the FILETIMEs GetProcessTimes gives, in
+ * 100 nanosecond units, and leaves the rest 0. POSIX leaves those four 0. */
+typedef struct PalRusage {
+    int64_t utime_sec;
+    int64_t utime_usec;
+    int64_t stime_sec;
+    int64_t stime_usec;
+    int64_t maxrss;
+    int64_t ixrss;
+    int64_t idrss;
+    int64_t isrss;
+    int64_t minflt;
+    int64_t majflt;
+    int64_t nswap;
+    int64_t inblock;
+    int64_t oublock;
+    int64_t msgsnd;
+    int64_t msgrcv;
+    int64_t nsignals;
+    int64_t nvcsw;
+    int64_t nivcsw;
+    int64_t creation_time;
+    int64_t exit_time;
+    int64_t kernel_time;
+    int64_t user_time;
+} PalRusage;
+
+/* Wait for a child and report what the system says, unchanged, which is what
+ * syscall.Wait4 and os.Process.Wait need and pal_wait does not keep.
+ *
+ * On POSIX this is wait4: pid and options are the system's, status gets the
+ * raw wait status, and PAL_EINTR comes back rather than being retried, as it
+ * does from Go's Wait4. On Windows pid is a process handle and options must be
+ * 0. status gets the exit code, the handle stays open, and the return value is
+ * pid. ru may be NULL. */
+int64_t pal_wait4(int64_t pid, uint32_t *status, int32_t options, PalRusage *ru,
+                  PalErrno *err);
+
+/* Block until the child pid can be waited for, without reaping it, so that a
+ * caller can stop signalling it before the id is free to be reused. That is
+ * waitid with WNOWAIT on Linux and wait6 on FreeBSD, NetBSD and DragonFly,
+ * retried on EINTR. Elsewhere it is PAL_ENOTSUP straight away, and the caller
+ * goes on to wait the ordinary way, as Go does. */
+bool pal_wait_ready(int64_t pid, PalErrno *err);
+
+/* Turn a pid from pal_spawn into the number the system knows the process by.
+ * On POSIX they are the same. On Windows the pid is a handle and this is
+ * GetProcessId, or -1 when that fails. */
+int64_t pal_process_id(int64_t pid);
+
+/* The other way: a pid that pal_wait4, pal_kill and pal_process_close take,
+ * for the process with the system's id. On POSIX that is id itself. On Windows
+ * it is OpenProcess with the rights Go's FindProcess asks for, which are enough
+ * to wait for the process and read its exit code. */
+int64_t pal_process_open(int64_t id, PalErrno *err);
+
+/* Let go of a pid from pal_spawn or pal_process_open that nobody is going to
+ * pal_wait for. It closes the handle on Windows and does nothing on POSIX. */
+void pal_process_close(int64_t pid);
+
 /* The parent's process id. On Windows it is a number, as Go's Getppid gives,
  * found by walking a snapshot of the process list, and -1 when that fails. */
 int64_t pal_getppid(void);
@@ -950,6 +1018,16 @@ bool pal_is_dos_device_name(const char *name, int64_t n);
  * PATH because Windows searches differently, applies PATHEXT, and looks in the
  * application directory first. */
 int64_t pal_exec_lookup(const char *name, char *buf, int64_t cap, PalErrno *err);
+
+/* The path of the running program into buf, NUL terminated, returning its
+ * length, or -1 with PAL_ERANGE when it does not fit.
+ *
+ * It is the path as the system records it: GetModuleFileNameW on Windows,
+ * _NSGetExecutablePath on macOS, which can be relative to the directory the
+ * program started in, the KERN_PROC_PATHNAME sysctl on FreeBSD, NetBSD and
+ * DragonFly, and getexecname on Solaris. Linux, where Go reads
+ * /proc/self/exe, and the systems with no way to ask give PAL_ENOTSUP. */
+int64_t pal_executable(char *buf, int64_t cap, PalErrno *err);
 
 /* ------------------------------------------------------------------ signals
  *

@@ -11,3 +11,6 @@
 # same line for whatever you generate.
 tests/gen/*_gen.c
 tests/gen/*_gen.h
+src/xtext/norm_tables.c
+src/xtext/norm_tables.h
+tests/xtext_norm_test_gen.h

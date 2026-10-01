@@ -302,6 +302,7 @@ static const Str io_name_write_to = {(const Byte *)"WriteTo", 7};
 static const Str io_name_read_from = {(const Byte *)"ReadFrom", 8};
 static const Str io_name_write_string = {(const Byte *)"WriteString", 11};
 static const Str io_name_read_byte = {(const Byte *)"ReadByte", 8};
+static const Str io_name_seek = {(const Byte *)"Seek", 4};
 
 /* The method called name on t, if it has one and it has the shape of the
  * interface being asked about: one argument of type in0, the error pointer,
@@ -390,6 +391,33 @@ const Method *burrow__io_read_byte_method(IoReader r) {
     if (type_in(f, 0) != &burrow_type_IoErrorArg || type_out(f, 0) != TYPE_OF(Byte))
         return NULL;
     return m;
+}
+
+const Method *burrow__io_seek_method(const Type *t) {
+    if (t == NULL)
+        return NULL;
+    const Method *m = type_method_by_name(t, io_name_seek);
+    if (m == NULL || m->ftype == NULL || m->thunk == NULL)
+        return NULL;
+    const Type *f = m->ftype;
+    if (type_num_in(f) != 3 || type_num_out(f) != 1)
+        return NULL;
+    if (type_in(f, 0) != TYPE_OF(int64_t) || type_in(f, 1) != TYPE_INT ||
+        type_in(f, 2) != &burrow_type_IoErrorArg || type_out(f, 0) != TYPE_OF(int64_t))
+        return NULL;
+    return m;
+}
+
+int64_t burrow__io_seek(const Method *m, void *data, int64_t offset, Int whence,
+                        Error *err) {
+    Error e = BURROW_NO_ERROR;
+    IoErrorArg ea = &e;
+    int64_t out = 0;
+    void *args[3] = {&offset, &whence, (void *)&ea};
+    void *rets[1] = {&out};
+    method_call(m, data, args, rets);
+    BURROW_OUT(err, e);
+    return out;
 }
 
 /* ---------------------------------------------------------------- functions */

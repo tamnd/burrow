@@ -129,6 +129,7 @@ RENAMED = {
     ("errors", "func AsType"): "errors_as",
     # new is a keyword in C++, and burrow.h has to compile there.
     ("sync", "type Pool struct, New"): "SyncPool.new_fn",
+    ("os", "type LinkError struct, New"): "OsLinkError.new_",
     # struct is a keyword in C.
     ("encoding/xml", "type TagPathError struct, Struct"): "XmlTagPathError.struct_type",
     # class is a keyword in C++, and burrow.h has to compile there.
@@ -727,8 +728,26 @@ class GoTypes:
         return None
 
 
+# Go type aliases, which are the same type under either name. os declares
+# FileMode, FileInfo, DirEntry and PathError as aliases of io/fs's, and its own
+# sources use both spellings.
+GO_ALIASES = [
+    {"OsFileMode", "FsFileMode"},
+    {"OsFileInfo", "FsFileInfo"},
+    {"OsDirEntry", "FsDirEntry"},
+    {"OsPathError", "FsPathError"},
+]
+
+
 def fits(c, allowed):
-    return allowed is None or c in allowed
+    if allowed is None or c in allowed:
+        return True
+    for names in GO_ALIASES:
+        if any(a in names for a in allowed):
+            for n in names:
+                if c in (n, n + " *"):
+                    return True
+    return False
 
 
 def spelled(g, allowed):

@@ -657,6 +657,10 @@ int64_t pal_seek(int64_t fd, int64_t off, int32_t whence, PalErrno *err);
 bool pal_fsync(int64_t fd, PalErrno *err);
 bool pal_ftruncate(int64_t fd, int64_t size, PalErrno *err);
 
+/* ftruncate by name. Windows opens the file for writing to do it, which is
+ * what Go's os.Truncate does there. */
+bool pal_truncate(const char *path, int64_t size, PalErrno *err);
+
 bool pal_stat(const char *path, PalStat *out, PalErrno *err);
 bool pal_lstat(const char *path, PalStat *out, PalErrno *err);
 bool pal_fstat(int64_t fd, PalStat *out, PalErrno *err);
@@ -717,7 +721,9 @@ bool pal_chmod(const char *path, uint32_t mode, PalErrno *err);
  * reports PAL_ENOTSUP, which is what Go's os.Chown does there. */
 bool pal_chown(const char *path, int64_t uid, int64_t gid, PalErrno *err);
 
-/* Times in nanoseconds since the Unix epoch. */
+/* Times in nanoseconds since the Unix epoch. PAL_UTIME_OMIT for either leaves
+ * that one as it is, which is UTIME_OMIT on POSIX. */
+#define PAL_UTIME_OMIT INT64_MIN
 bool pal_utimes(const char *path, int64_t atime_ns, int64_t mtime_ns, PalErrno *err);
 
 int64_t pal_dup(int64_t fd, PalErrno *err);

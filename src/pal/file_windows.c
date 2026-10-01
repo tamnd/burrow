@@ -546,6 +546,16 @@ bool pal_ftruncate(int64_t fd, int64_t size, PalErrno *err) {
            file_fail(err);
 }
 
+bool pal_truncate(const char *path, int64_t size, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    int64_t fd = pal_open(path, PAL_O_WRONLY, 0666, err);
+    if (fd == PAL_INVALID_HANDLE)
+        return false;
+    bool ok = pal_ftruncate(fd, size, err);
+    pal_close(fd, NULL);
+    return ok;
+}
+
 /* ------------------------------------------------------------------ stat */
 
 /* What is left when a file cannot be opened even to read its attributes, which
@@ -973,7 +983,8 @@ bool pal_utimes(const char *path, int64_t atime_ns, int64_t mtime_ns, PalErrno *
         return file_fail(err);
     FILETIME a = filetime_from_ns(atime_ns);
     FILETIME m = filetime_from_ns(mtime_ns);
-    BOOL ok = SetFileTime(h, NULL, &a, &m);
+    BOOL ok = SetFileTime(h, NULL, atime_ns == PAL_UTIME_OMIT ? NULL : &a,
+                          mtime_ns == PAL_UTIME_OMIT ? NULL : &m);
     DWORD why = GetLastError();
     CloseHandle(h);
     if (!ok) {

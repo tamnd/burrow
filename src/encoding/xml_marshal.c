@@ -15,7 +15,7 @@
 #include "burrow/mem/heap.h"
 #include "burrow/strconv.h"
 
-#include <math.h>
+#include <stdint.h>
 #include <string.h>
 
 /* ------------------------------------------------------------- descriptors */
@@ -317,6 +317,15 @@ static Str xm_fmt_float(XmlEncoder *e, const Type *t, const void *p) {
 }
 
 /* isEmptyValue. */
+/* signbit, done on the bits. mingw's signbit is a macro with a float branch,
+ * which warns about a double argument under -Wfloat-conversion. A float
+ * widens to a double with its sign, so one function covers both. */
+static bool xm_signbit(double x) {
+    uint64_t b;
+    memcpy(&b, &x, sizeof b);
+    return b >> 63 != 0;
+}
+
 static bool xm_is_empty_value(const Type *t, const void *p) {
     switch ((int)t->kind) {
     case KIND_ARRAY:
@@ -330,9 +339,9 @@ static bool xm_is_empty_value(const Type *t, const void *p) {
     case KIND_BOOL:
         return !*(const bool *)p;
     case KIND_FLOAT32:
-        return *(const float *)p == 0 && !signbit(*(const float *)p);
+        return *(const float *)p == 0 && !xm_signbit((double)*(const float *)p);
     case KIND_FLOAT64:
-        return *(const double *)p == 0 && !signbit(*(const double *)p);
+        return *(const double *)p == 0 && !xm_signbit(*(const double *)p);
     case KIND_INTERFACE:
     case KIND_POINTER:
         return xm_is_nil(t, p);

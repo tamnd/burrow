@@ -2998,7 +2998,8 @@ static Error xml_enc_push_tag(XmlEncoder *e, XmlName name) {
         e->tag_bytes = nb;
         e->captag_bytes = cap;
     }
-    Byte *p = e->tag_bytes + e->ntag_bytes;
+    /* A mark has no bytes, and may come before anything was allocated. */
+    Byte *p = e->tag_bytes != NULL ? e->tag_bytes + e->ntag_bytes : NULL;
     xml_put_str(&p, name.space);
     xml_put_str(&p, name.local);
     e->tags[e->ntags++] = (XmlTag){e->ntag_bytes, name.space.len, name.local.len};

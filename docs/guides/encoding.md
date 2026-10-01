@@ -1230,6 +1230,76 @@ The error reads `gob: decoding into local type *int, received remote type Item =
 
 Go's stack grows as deep as the value needs and a C stack does not. The encoder and the decoder stop with `nesting too deep` when the next level would leave less than 64 KB of stack. Decoding takes about 1.8 KB a level on arm64 at -O2, so the default 256 KB goroutine stack holds about a hundred levels of nesting. To send a long linked list, start the goroutine with `go_stack` and a bigger stack, or send a slice.
 
+## ASN.1
+
+`burrow/encoding/asn1.h` is Go's `encoding/asn1`, the DER subset of ASN.1 that X.509 certificates and most of `crypto/x509` are written in. Like gob, it works from type descriptors, and the struct tags are Go's `asn1:"..."` tags word for word:
+
+<!-- example: ../examples/encoding/asn1.c#declare -->
+```c
+#define VALIDITY_FIELDS(F, T)                                                          \
+    F(T, Time, NotBefore, "")                                                          \
+    F(T, Time, NotAfter, "")
+BURROW_STRUCT(Validity, VALIDITY_FIELDS);
+
+#define RECORD_FIELDS(F, T)                                                            \
+    F(T, Int, Version, "asn1:\"optional,explicit,default:0,tag:0\"")                   \
+    F(T, Asn1ObjectIdentifier, Algorithm, "")                                          \
+    F(T, Str, Name, "asn1:\"utf8\"")                                                   \
+    F(T, Validity, Validity, "")
+BURROW_STRUCT(Record, RECORD_FIELDS);
+```
+
+A plain value marshals to its tag, its length and its contents. 128 needs a leading zero byte so that it does not read as negative, which gives `02020080`:
+
+<!-- example: ../examples/encoding/asn1.c#int -->
+```c
+Int n = 128;
+Slice der = asn1_marshal(a, BURROW_ANY(TYPE_INT, &n), &err);
+```
+
+A struct is a SEQUENCE of its fields in order. `Version` is left out because it equals its default, `Name` is a UTF8String because the tag says so, and the two times go out as UTCTime since they fall before 2050. The result is the same 53 bytes Go writes for the same struct:
+
+<!-- example: ../examples/encoding/asn1.c#marshal -->
+```c
+Record r = {
+    .Version = 0,
+    .Algorithm = ASN1_OID(1, 2, 840, 113549, 1, 1, 11),
+    .Name = BURROW_S("gopher"),
+    .Validity = {time_date(2026, TIME_JANUARY, 1, 0, 0, 0, 0, time_utc_loc),
+                 time_date(2027, TIME_JANUARY, 1, 0, 0, 0, 0, time_utc_loc)},
+};
+der = asn1_marshal(a, BURROW_ANY(TYPE_OF(Record), &r), &err);
+```
+
+Unmarshal fills in the value an `Any` points at and returns what is left of the input after the first value. Strings, slices and object identifiers in the result come from the allocator you pass, so an arena is the easy choice:
+
+<!-- example: ../examples/encoding/asn1.c#unmarshal -->
+```c
+Record got = {0};
+Slice rest = asn1_unmarshal(a, der, BURROW_ANY(TYPE_OF(Record), &got), &err);
+```
+
+`Asn1RawValue` takes any one element without looking inside it, and keeps its class, tag and the bytes of its contents. That is how `crypto/x509` holds on to parts it decodes later:
+
+<!-- example: ../examples/encoding/asn1.c#raw -->
+```c
+Asn1RawValue raw = {0};
+asn1_unmarshal(a, der, BURROW_ANY(TYPE_ASN1_RAW_VALUE, &raw), &err);
+```
+
+Bad input comes back as a `SyntaxError`, and input that is fine but does not fit the value comes back as a `StructuralError`. Both carry Go's messages, so the second one below prints the tag, length and field parameters the way Go's `%+v` does:
+
+<!-- example: ../examples/encoding/asn1.c#bad -->
+```c
+Str s = BURROW_S("x");
+Slice trunc = slice_sub(der, 0, 10);
+asn1_unmarshal(a, trunc, BURROW_ANY(TYPE_OF(Record), &got), &err);
+print_err("truncated", err);
+asn1_unmarshal(a, der, BURROW_ANY(TYPE_STRING, &s), &err);
+```
+
+Go's stack grows as deep as the value needs and a C stack does not. Unmarshal stops at Go's limit of ten thousand levels of nesting, and both directions also stop with `nesting depth exceeded` when the next level would leave too little of the stack. Ten thousand levels fit in a goroutine started with `go_stack` and 256 MB.
+
 ## What is not here
 
-Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/gob`, `encoding/hex`, `encoding/json/jsontext`, `encoding/pem` or `encoding/xml` is missing. From `encoding/json/v2`, `time.Time` and `time.Duration` wait on the calendar half of `time`.
+Nothing from Go's `encoding`, `encoding/ascii85`, `encoding/asn1`, `encoding/base32`, `encoding/base64`, `encoding/binary`, `encoding/csv`, `encoding/gob`, `encoding/hex`, `encoding/json/jsontext`, `encoding/pem` or `encoding/xml` is missing. From `encoding/json/v2`, `time.Time` and `time.Duration` wait on the calendar half of `time`.

@@ -63,6 +63,7 @@
 #include "burrow/defer.h"
 #include "burrow/encoding.h"
 #include "burrow/encoding/ascii85.h"
+#include "burrow/encoding/asn1.h"
 #include "burrow/encoding/base32.h"
 #include "burrow/encoding/base64.h"
 #include "burrow/encoding/binary.h"

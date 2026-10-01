@@ -236,7 +236,7 @@ static int tf_next_chunk(Str layout, Str *prefix, Str *suffix) {
     }
 #undef TF_CHUNK
     *prefix = layout;
-    *suffix = str_from_bytes(l + n, 0);
+    *suffix = BURROW_STR_EMPTY;
     return 0;
 }
 
@@ -923,6 +923,12 @@ static bool tf_lookup(const char *const *tab, Int ntab, Str *val, Int *idx) {
     return false;
 }
 
+static Str tf_sub(Str s, Int i, Int j) {
+    if (i == j)
+        return BURROW_STR_EMPTY;
+    return str_from_bytes(s.p + i, j - i);
+}
+
 /* Go's leadingInt. */
 static bool tf_leading_int(Str s, uint64_t *x, Str *rem) {
     Int i = 0;
@@ -937,7 +943,7 @@ static bool tf_leading_int(Str s, uint64_t *x, Str *rem) {
         if (*x > (uint64_t)1 << 63)
             return false;
     }
-    *rem = str_from_bytes(s.p + i, s.len - i);
+    *rem = tf_sub(s, i, s.len);
     return true;
 }
 
@@ -1134,10 +1140,6 @@ static Int tf_parse_uint(TfRfc *r, Str s, Int lo, Int hi) {
         return lo;
     }
     return x;
-}
-
-static Str tf_sub(Str s, Int i, Int j) {
-    return str_from_bytes(s.p + i, j - i);
 }
 
 static bool tf_parse_rfc3339(Str s, TimeLocation *local, Alloc *a, Time *out,

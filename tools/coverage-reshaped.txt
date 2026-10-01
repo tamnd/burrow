@@ -204,3 +204,4 @@ archive/zip: method (*File) SetMode: os.FileMode is fs.FileMode, spelled FsFileM
 archive/zip: method (*FileHeader) Mode: os.FileMode is fs.FileMode, spelled FsFileMode
 archive/zip: method (*FileHeader) SetMode: os.FileMode is fs.FileMode, spelled FsFileMode
 archive/zip: method (*File) OpenRaw: the io.Reader Go returns is an io.SectionReader, returned here by value
+encoding/asn1: func Unmarshal: the value is an Any, which is always a pointer, so Go's error for a value that is not one cannot happen

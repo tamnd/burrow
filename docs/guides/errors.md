@@ -200,6 +200,33 @@ The name says `burrow` rather than `errors` because it is not a Go symbol, and k
 
 The plan in [docs/design/05-memory.md](../design/05-memory.md) is for every allocator to hold a small reserved block so that this is unreachable in practice. That reserve is not built yet, so today a caller under memory pressure can see it.
 
+## Errors from the system
+
+When a system call fails, Go hands back a `syscall.Errno`, which is the system's own error number, usually wrapped in an `fs.PathError` that says what was being done and to which file. Here that number is a `SyscallErrno`, and `syscall_errno_as_error` turns one into an `Error`. Test for the kind of failure with `errors_is` and the `io/fs` errors, which is what Go recommends too, and use `errors_as` with `TYPE_SYSCALL_ERRNO` when you need the number itself:
+
+<!-- example: ../examples/syscall/errno.c#errno -->
+```c
+Error err = fs_path_error_new(a, BURROW_S("mkdir"), BURROW_S("/tmp/cache"),
+                              syscall_errno_as_error(SYSCALL_EEXIST, a));
+Str text = error_text(err);                 /* mkdir /tmp/cache: file exists */
+bool exists = errors_is(err, fs_err_exist); /* true */
+const SyscallErrno *e = (const SyscallErrno *)errors_as(err, TYPE_SYSCALL_ERRNO);
+bool same = e != NULL && *e == SYSCALL_EEXIST; /* true */
+```
+
+The `SYSCALL_E` constants are the numbers of the system you build for, so `SYSCALL_EAGAIN` is 11 on Linux and 35 on macOS, and the text is what Go prints on that system. On Windows the text comes from `FormatMessage`, and `SYSCALL_ENOENT` is `ERROR_FILE_NOT_FOUND`, as it is in Go.
+
+The PAL reports a portable `PalErrno`. `syscall_errno_from_pal` gives back the system's own number when you ask straight after the call that failed, which on Windows keeps the exact `ERROR_` code:
+
+<!-- example: ../examples/syscall/errno.c#pal -->
+```c
+PalErrno perr = PAL_OK;
+int64_t fd = pal_open("no/such/dir/file", PAL_O_RDONLY, 0, &perr);
+SyscallErrno code =
+    syscall_errno_from_pal(perr); /* ENOENT, or ERROR_PATH_NOT_FOUND on Windows */
+bool missing = syscall_errno_is(code, fs_err_not_exist); /* true */
+```
+
 ## What this does not have yet
 
 `fmt_errorf`, and with it `%w`, which is how Go wraps in practice. It arrives with `fmt`.

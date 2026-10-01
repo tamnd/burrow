@@ -4,6 +4,21 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.2.0 (2026-10-01)
+
+The end of P1, the pure packages from strings through regexp. Every item on its checklist (#3) is now merged, the last being the four x/text packages Go vendors.
+
+### Added
+
+- `golang.org/x/text/unicode/norm` and `golang.org/x/text/transform` at v0.37.0, the version Go 1.27.1 vendors, as internal packages for `idna` and `net/http` later (#310).
+- `golang.org/x/text/unicode/bidi` and `golang.org/x/text/secure/bidirule`, the same way (#311).
+- `src/runtime/growslice.h`, which grows a byte slice the way Go's growslice does, size classes included (#310).
+
+### Fixed
+
+- CI on main was red after #305 in 14 jobs. The causes were a duplicate descriptor in `asn1_test`, gcc and MSVC warnings in `archive/tar`, `archive/zip`, `encoding/gob` and `encoding/xml`, NULL plus zero offsets that UBSan reported, and the order of `winsock2.h` and `windows.h` in the amalgamation. `BURROW_SLICE_TYPE_DEFINE` is new as part of the fix (#307).
+- The amalgamation builds with gcc 13 again, which warned that a read buffer in `archive/zip` may be used uninitialized (#309).
+
 ## v0.1.21 (2026-10-01)
 
 archive/zip and encoding/asn1.

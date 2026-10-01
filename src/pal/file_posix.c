@@ -526,11 +526,32 @@ static struct timespec timespec_from_ns(int64_t ns) {
     return ts;
 }
 
+bool pal_truncate(const char *path, int64_t size, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!posix_path_ok(path, err))
+        return false;
+    if (size < 0) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+
+    for (;;) {
+        if (truncate(path, (off_t)size) == 0)
+            return true;
+        if (errno != EINTR)
+            return file_fail(err);
+    }
+}
+
 bool pal_utimes(const char *path, int64_t atime_ns, int64_t mtime_ns, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (!posix_path_ok(path, err))
         return false;
     struct timespec ts[2] = {timespec_from_ns(atime_ns), timespec_from_ns(mtime_ns)};
+    if (atime_ns == PAL_UTIME_OMIT)
+        ts[0] = (struct timespec){0, UTIME_OMIT};
+    if (mtime_ns == PAL_UTIME_OMIT)
+        ts[1] = (struct timespec){0, UTIME_OMIT};
     return utimensat(AT_FDCWD, path, ts, 0) == 0 || file_fail(err);
 }
 

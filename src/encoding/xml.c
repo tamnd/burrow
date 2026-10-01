@@ -919,7 +919,10 @@ Int xml_decoder_input_pos(const XmlDecoder *d, Int *column) {
  * when it is the end tag the last call made from it. */
 static void xml_set_to_close(XmlDecoder *d, XmlName name) {
     Byte *b = d->to_close_buf;
-    if (name.local.len > 0 && name.local.p >= b && name.local.p < b + d->to_close_cap) {
+    /* As integers, because b is NULL before the first call and NULL plus the
+     * capacity of 0 is undefined. */
+    if (name.local.len > 0 &&
+        (Uintptr)name.local.p - (Uintptr)b < (Uintptr)d->to_close_cap) {
         d->to_close = name;
         return;
     }
@@ -2449,7 +2452,7 @@ static XmlToken xml_token(XmlDecoder *d, Error *err) {
         }
     }
     if (!d->strict) {
-        XmlToken t1;
+        XmlToken t1 = {0};
         if (xml_auto_close(d, t, &t1)) {
             xml_save_next(d, t);
             t = t1;
@@ -2656,7 +2659,7 @@ Error burrow__xml_escape_to(XmlPut put, void *ctx, const Byte *s, Int len,
             return err;
         last = i;
     }
-    return put(ctx, s + last, len - last);
+    return put(ctx, last < len ? s + last : s, len - last);
 }
 
 static Error xml_put_writer(void *ctx, const Byte *p, Int n) {
@@ -2995,7 +2998,8 @@ static Error xml_enc_push_tag(XmlEncoder *e, XmlName name) {
         e->tag_bytes = nb;
         e->captag_bytes = cap;
     }
-    Byte *p = e->tag_bytes + e->ntag_bytes;
+    /* A mark has no bytes, and may come before anything was allocated. */
+    Byte *p = e->tag_bytes != NULL ? e->tag_bytes + e->ntag_bytes : NULL;
     xml_put_str(&p, name.space);
     xml_put_str(&p, name.local);
     e->tags[e->ntags++] = (XmlTag){e->ntag_bytes, name.space.len, name.local.len};

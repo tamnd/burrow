@@ -904,6 +904,14 @@ def run_amalgamate(args):
             c.append("")
         bodies.append((rel, body))
 
+    # winsock2.h has to come before windows.h, and mingw's says so with a
+    # #warning. src/pal/errno_windows.c puts them in that order, but in one file
+    # the PAL files before it have already brought in windows.h, so it goes
+    # here, after the feature macros and ahead of everything else.
+    c.append("#if defined(_WIN32)")
+    c.append("#include <winsock2.h>")
+    c.append("#endif")
+    c.append("")
     c.append("#ifndef BURROW_SOURCE_ID")
     c.append('#define BURROW_SOURCE_ID "%s"' % c_string(args.source_id)[1:-1])
     c.append("#endif")

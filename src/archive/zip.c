@@ -2622,7 +2622,7 @@ static IoWriter zip_create_header(ZipWriter *w, ZipFileHeader *fh, Error *err) {
     burrow__zip_detect_utf8(fh->name, &valid1, &require1);
     burrow__zip_detect_utf8(fh->comment, &valid2, &require2);
     if (fh->non_utf8)
-        fh->flags &= (uint16_t)~0x800U;
+        fh->flags = (uint16_t)(fh->flags & ~0x800U);
     else if ((require1 || require2) && valid1 && valid2)
         fh->flags |= 0x800;
 
@@ -2648,7 +2648,7 @@ static IoWriter zip_create_header(ZipWriter *w, ZipFileHeader *fh, Error *err) {
     ZipCompressor comp = {NULL, NULL};
     if (is_dir) {
         fh->method = ZIP_STORE;
-        fh->flags &= (uint16_t)~0x8U; /* no data descriptor */
+        fh->flags = (uint16_t)(fh->flags & ~0x8U); /* no data descriptor */
         fh->compressed_size = 0;
         fh->compressed_size64 = 0;
         fh->uncompressed_size = 0;

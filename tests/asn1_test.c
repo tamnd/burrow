@@ -378,7 +378,7 @@ BURROW_SLICE_TYPE_DECL(RecursiveStructSlice, RecursiveStruct);
 #define RECURSIVE_STRUCT_FIELDS(F, T)                                                  \
     F(T, RecursiveStructSlice, Next, "asn1:\"optional\"")
 BURROW_STRUCT(RecursiveStruct, RECURSIVE_STRUCT_FIELDS);
-BURROW_SLICE_TYPE(RecursiveStructSlice, RecursiveStruct);
+BURROW_SLICE_TYPE_DEFINE(RecursiveStructSlice, RecursiveStruct);
 
 /* ------------------------------------------------------------ the parsers */
 

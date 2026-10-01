@@ -758,7 +758,8 @@ static void zip_file_mem_free(Alloc *a, ZipFileMem *m) {
 static Error zip_read_directory_header(Alloc *a, ZipFileMem *m, IoReader r) {
     ZipFile *f = &m->f;
     ZipFileHeader *h = &f->file_header;
-    Byte buf[ZIP_DIRECTORY_HEADER_LEN];
+    /* Zeroed only for gcc, which cannot see that io_read_full writes it. */
+    Byte buf[ZIP_DIRECTORY_HEADER_LEN] = {0};
     Error e = BURROW_NO_ERROR;
     io_read_full(r, zip_bytes(buf, (Int)sizeof buf), &e);
     if (BURROW_FAILED(e))
@@ -1458,7 +1459,8 @@ ZIP_DESC(zip_checksum_reader_desc, "checksumReader", ZipChecksumReader, 0x7a6372
 
 /* readDataDescriptor. */
 static Error zip_read_data_descriptor(IoReader r, ZipFile *f) {
-    Byte buf[ZIP_DATA_DESCRIPTOR_LEN];
+    /* Zeroed only for gcc, which cannot see that io_read_full writes it. */
+    Byte buf[ZIP_DATA_DESCRIPTOR_LEN] = {0};
     Error e = BURROW_NO_ERROR;
     /* The signature is optional, so read its four bytes first and keep them
      * when they are not it. */

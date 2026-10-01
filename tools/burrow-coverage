@@ -131,6 +131,8 @@ RENAMED = {
     ("sync", "type Pool struct, New"): "SyncPool.new_fn",
     # struct is a keyword in C.
     ("encoding/xml", "type TagPathError struct, Struct"): "XmlTagPathError.struct_type",
+    # class is a keyword in C++, and burrow.h has to compile there.
+    ("encoding/asn1", "type RawValue struct, Class"): "Asn1RawValue.cls",
     # 08-naming-abi.md section 0: libuuid and macOS's libc define both of
     # these with other signatures, and burrow-gen collisions says so.
     ("uuid", "func Parse"): "uuid_parse_str",

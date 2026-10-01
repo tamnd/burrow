@@ -250,6 +250,33 @@ extern "C" {
         NULL,                                                                          \
     }
 
+/* The same with a name, the one Go's type Name []T would have. The slices
+ * above are unnamed like Go's []T, and most code cannot tell the difference,
+ * but a package that looks at the name can, such as encoding/asn1 with a slice
+ * whose name ends in SET. */
+#define BURROW_NAMED_SLICE_TYPE_DECL(Name, T)                                          \
+    typedef Slice Name;                                                                \
+    extern const Type burrow_type_##Name
+
+#define BURROW_NAMED_SLICE_TYPE(Name, T)                                               \
+    BURROW_NAMED_SLICE_TYPE_DECL(Name, T);                                             \
+    const Type burrow_type_##Name = {                                                  \
+        BURROW_S_INIT(#Name),                                                          \
+        {NULL, 0},                                                                     \
+        KIND_SLICE,                                                                    \
+        (uint32_t)sizeof(Slice),                                                       \
+        (uint16_t)_Alignof(Slice),                                                     \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        TYPE_OF(T),                                                                    \
+        NULL,                                                                          \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+    }
+
 /* An array of N of them, which unlike a slice is its elements and is therefore
  * N times the size. The typedef is a struct with the array inside it rather
  * than a bare array, so that the name can be used as a field type, passed by

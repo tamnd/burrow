@@ -50,6 +50,7 @@ category	image-formats	image's list of registered formats. Go keeps it in an ato
 category	uuid-v7	uuid.NewV7's last timestamp. Go keeps it in package level variables behind a mutex, and it is process wide because a v7 UUID has to sort after every earlier one the process made, not only the ones its own thread made.
 category	weak	weak's table of slots. Go hangs a weak handle off the object and its collector clears it, and here the allocators tell one table when memory goes, which has to be process wide because memory freed on one thread may have had a WeakPointer made on another.
 category	zip-registry	archive/zip's registered compressors and decompressors. Go keeps them in sync.Maps at package level, and they are process wide because a method registered anywhere is one every Reader and Writer can use.
+category	last-error	The platform's code for the last failure each thread saw, which is per thread the way errno and GetLastError are.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -76,6 +77,8 @@ global	src/runtime/sema.c	semtable	sema-table	251 roots, each with its own lock 
 global	src/runtime/sched.c	sched	scheduler	The scheduler itself, which is one per process because a second one would be a second set of threads fighting the first over the same cores. Every field is either under sched.lock or an atomic, and the comment on each one says which.
 global	src/runtime/sched.c	allp	scheduler	The Ps, a fixed array rather than an allocation so that the scheduler has nothing underneath it that can fail. A P is owned by at most one M at a time and that ownership is what makes its ring safe to touch.
 global	src/runtime/sched.c	allm	scheduler	The Ms, the same fixed array for the same reason. An entry is handed out once by newm under sched.lock and belongs to that thread until the run is over.
+global	src/pal/errno.c	last_native	last-error	Thread local. The native code behind the last failure this thread translated, which only that thread ever asks about.
+global	src/pal/errno.c	last_errno	last-error	Thread local, written with last_native. pal_errno_native compares against it so that a stale code is never handed out for a different failure.
 global	src/pal/time_windows.c	qpc_ready	clock	Windows only. Written with a release once the two halves below hold the tick rate, and read with an acquire, so a thread that sees it set also sees them. Two threads racing here ask the kernel twice and write the same number twice, which costs a duplicate call and nothing else.
 global	src/pal/time_windows.c	qpc_lo	clock	Windows only. The low 32 bits of the tick rate, in two halves because a 64 bit atomic on a 32 bit machine takes a lock and this is read on every clock reading.
 global	src/pal/time_windows.c	qpc_hi	clock	Windows only. The high 32 bits, published by the same release store as the low ones.

@@ -33,7 +33,7 @@
 
 #include <windows.h>
 
-PalErrno burrow__pal_errno_win(unsigned long native) {
+static PalErrno win_map(unsigned long native) {
     switch (native) {
     case ERROR_SUCCESS:
         return PAL_EOTHER; /* nothing failed, so nobody should be asking */
@@ -117,7 +117,7 @@ PalErrno burrow__pal_errno_win(unsigned long native) {
     }
 }
 
-PalErrno burrow__pal_errno_wsa(int native) {
+static PalErrno wsa_map(int native) {
     switch (native) {
     case WSAEINTR:
         return PAL_EINTR;
@@ -184,6 +184,45 @@ PalErrno burrow__pal_errno_wsa(int native) {
     default:
         return PAL_EOTHER;
     }
+}
+
+PalErrno burrow__pal_errno_win(unsigned long native) {
+    PalErrno e = win_map(native);
+    burrow__pal_errno_note((int64_t)native, e);
+    return e;
+}
+
+PalErrno burrow__pal_errno_wsa(int native) {
+    PalErrno e = wsa_map(native);
+    burrow__pal_errno_note(native, e);
+    return e;
+}
+
+/* Go's Errno.Error: the system's message in US English, or in the user's
+ * language when there is no English one, without the line break at the end. */
+int64_t pal_errno_message(int64_t native, char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (buf == NULL || cap < 0) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return -1;
+    }
+    const DWORD flags = FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ARGUMENT_ARRAY |
+                        FORMAT_MESSAGE_IGNORE_INSERTS;
+    wchar_t w[300];
+    DWORD n = FormatMessageW(flags, NULL, (DWORD)native,
+                             MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), w, 300, NULL);
+    if (n == 0)
+        n = FormatMessageW(flags, NULL, (DWORD)native, 0, w, 300, NULL);
+    if (n == 0) {
+        BURROW_OUT(err, burrow__pal_errno_win(GetLastError()));
+        return -1;
+    }
+    while (n > 0 && (w[n - 1] == L'\n' || w[n - 1] == L'\r'))
+        n--;
+    int64_t len = burrow__pal_narrow(w, n, buf, (size_t)cap);
+    if (len < 0)
+        BURROW_OUT(err, PAL_ERANGE);
+    return len;
 }
 
 #endif /* BURROW_OS_WINDOWS */

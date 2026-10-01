@@ -150,6 +150,27 @@ enum {
  * error" rather than an empty string. */
 BURROW_STATIC(ret) const char *pal_errno_string(PalErrno e);
 
+/* The platform's own code behind e: the errno on POSIX, and on Windows the
+ * ERROR_ or WSA code the system gave. A PalErrno is what the runtime wants, but
+ * Go's syscall.Errno is the platform's number, and on Windows its message is
+ * the system's, so the os package needs the number too.
+ *
+ * It is the code from this thread's last failed PAL call, so ask straight after
+ * the call, before anything else can fail. It is 0 when that failure was not e,
+ * which is the case for a PAL_EINVAL a backend decided on without asking the
+ * system, and the caller then picks the platform's usual code for e itself.
+ * Cosmopolitan always says 0, because its numbers are the host's and are only
+ * known at run time. */
+int64_t pal_errno_native(PalErrno e);
+
+/* Windows' message for a native code, from FormatMessageW, in US English when
+ * the system has one and in the user's language otherwise, without the line
+ * break at the end. That is what Go's syscall.Errno.Error says. Returns the
+ * length in bytes of UTF-8, not NUL terminated, or -1, with PAL_ERANGE when it
+ * does not fit. Everywhere else it is -1 with PAL_ENOTSUP, because Go's
+ * message there comes from its own table and not from the system. */
+int64_t pal_errno_message(int64_t native, char *buf, int64_t cap, PalErrno *err);
+
 /* The invalid handle, which is what a failed open gives back. It is -1 on both
  * families: POSIX says so, and Win32's INVALID_HANDLE_VALUE is (HANDLE)-1,
  * which is the same bits once it is an int64_t. */

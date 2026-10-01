@@ -581,7 +581,7 @@ static Str gob_wire_name(GobDecoder *d) {
     GobDecBuf *b = &d->buf;
     Int n = 0;
     if (!gob_get_length(b, &n))
-        gob_errorf("bad %s slice length: %d", BURROW_S("string"), n);
+        gob_errorf("bad string slice length: %d", n);
     Str s = gob_copy_str(d->ca, b->data + b->off, n);
     gob_drop(b, n);
     return s;
@@ -617,8 +617,7 @@ static void gob_wire_fields(GobDecoder *d, GobType *t) {
     uint64_t size = sizeof(GobFieldType);
     uint64_t nbytes = u * size;
     if (u > (uint64_t)INTPTR_MAX || nbytes > GOB_TOO_BIG || nbytes / size != u)
-        gob_errorf("%s slice too big: %d elements of %d bytes",
-                   BURROW_S("gob.fieldType"), u, size);
+        gob_errorf("gob.fieldType slice too big: %d elements of %d bytes", u, size);
     Int n = (Int)u;
     if (t->capfield < n) {
         Int safe = gob_safe_cap(size, u);

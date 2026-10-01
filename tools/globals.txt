@@ -199,9 +199,7 @@ global	src/math/rand.c	rand_locked_source	package-vars	Its generator state is on
 global	src/flag/flag.c	flag_command_line	package-vars	flag.CommandLine. Not synchronised, as in Go: a program assigns it, and defines and parses flags, on one thread before it starts others.
 global	src/flag/flag.c	command_line	package-vars	The set flag_command_line starts out pointing at. The same rule as flag_command_line, except for its name, which is written once inside args_once.
 global	src/flag/flag.c	flag_usage	package-vars	flag.Usage. Not synchronised, as in Go: assigned before parsing, on the thread that parses.
-global	src/flag/flag.c	args_once	package-vars	A SyncOnce, which is the synchronisation for os_args, os_nargs and command_line's name.
-global	src/flag/flag.c	os_args	package-vars	os.Args, until there is an os package to own it. Written once inside args_once and only read after it.
-global	src/flag/flag.c	os_nargs	package-vars	The length of os_args, under the same once.
+global	src/flag/flag.c	args_once	package-vars	A SyncOnce, which is the synchronisation for command_line's name, set from os.Args[0] the first time it is needed.
 global	src/compress/flate.c	flate_fixed	tables	The fixed Huffman decoder, built once under flate_fixed_once and only read after that.
 global	src/compress/flate.c	flate_fixed_once	tables	A SyncOnce, which is the synchronisation for flate_fixed.
 global	src/compress/deflate.c	defl_fixed_lit_enc	tables	The fixed literal and length encoder, built once under defl_fixed_once and only read after that.

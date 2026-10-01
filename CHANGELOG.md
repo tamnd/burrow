@@ -4,6 +4,20 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.1.20 (2026-10-01)
+
+io/fs and archive/tar.
+
+### Added
+
+- `io/fs`, with `testing/fstest`'s `MapFS` (#300).
+- `archive/tar`, the reader and writer, including the GNU sparse formats, `AddFS` and `FileInfoHeader`. The writer's output matches Go's golden archives byte for byte (#302).
+
+### Fixed
+
+- The Release build no longer fails on MSVC because of a warning in `encoding/gob`. v0.1.19 has no GitHub release because of it (#301).
+- A signed overflow in `time`'s TZ rule lookup for times near the end of the int64 range (#302).
+
 ## v0.1.19 (2026-10-01)
 
 encoding/gob, the calendar half of time, and compress/gzip.

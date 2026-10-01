@@ -24,9 +24,11 @@
 #include <string.h>
 
 /* The methods asked for by name: io_copy looks for WriteTo and ReadFrom,
- * io_write_string for WriteString, and compress/flate for ReadByte. */
+ * io_write_string for WriteString, compress/flate for ReadByte and archive/tar
+ * for Seek. */
 #define STRINGS_READER_METHODS(M, T)                                                   \
     M(T, ReadByte, strings_reader_read_byte, IO_SIG_READ_BYTE)                         \
+    M(T, Seek, strings_reader_seek, IO_SIG_SEEK)                                       \
     M(T, WriteTo, strings_reader_write_to, IO_SIG_WRITE_TO)
 BURROW_METHODS_DEFINE(StringsReader, STRINGS_READER_METHODS);
 

@@ -731,6 +731,7 @@ extern const Type burrow_type_IoErrorArg;
 #define IO_SIG_READ_FROM(IN, OUT) IN(0, IoReader) IN(1, IoErrorArg) OUT(int64_t)
 #define IO_SIG_WRITE_STRING(IN, OUT) IN(0, Str) IN(1, IoErrorArg) OUT(Int)
 #define IO_SIG_READ_BYTE(IN, OUT) IN(0, IoErrorArg) OUT(Byte)
+#define IO_SIG_SEEK(IN, OUT) IN(0, int64_t) IN(1, Int) IN(2, IoErrorArg) OUT(int64_t)
 
 /* The assertions themselves, for packages like bufio that make the same
  * choice io_copy does. Each one calls the method and returns true when the
@@ -744,6 +745,13 @@ bool burrow__io_try_write_string(IoWriter w, Str s, Int *n, Error *err);
  * none with the right shape. The caller keeps the Method and calls it with
  * method_call as often as it likes. */
 BURROW_STATIC(ret) const Method *burrow__io_read_byte_method(IoReader r);
+
+/* The Seek method on t, or NULL when it has none with the right shape, for a
+ * package like archive/tar that asks whether its reader or writer is also an
+ * io.Seeker. burrow__io_seek calls one found that way on data. */
+BURROW_STATIC(ret) const Method *burrow__io_seek_method(const Type *t);
+int64_t burrow__io_seek(const Method *m, void *data, int64_t offset, Int whence,
+                        Error *err);
 
 #if defined(BURROW_SHORT) && BURROW_SHORT
 #define IO_SEEK_START BURROW_IO_SEEK_START

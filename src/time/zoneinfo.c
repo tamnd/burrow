@@ -565,7 +565,7 @@ bool burrow__time_tzset(Str s, int64_t last_tx_sec, int64_t sec, TzLookup *out) 
     int64_t ysec = (yday - 1) * TZ_SECONDS_PER_DAY + sec % TZ_SECONDS_PER_DAY;
 
     /* The second the year starts, in UTC. */
-    int64_t ystart = sec - ysec;
+    int64_t ystart = TZ_SUB(sec, ysec);
 
     int64_t start_sec = tz_rule_time(year, start_rule, std_offset);
     int64_t end_sec = tz_rule_time(year, end_rule, dst_offset);
@@ -590,13 +590,15 @@ bool burrow__time_tzset(Str s, int64_t last_tx_sec, int64_t sec, TzLookup *out) 
     /* The start and end values that come back are accurate close to a
      * daylight saving time transition, and less so away from one. */
     if (ysec < start_sec)
-        *out = (TzLookup){std_name, std_offset, ystart, start_sec + ystart, std_is_dst};
+        *out = (TzLookup){std_name, std_offset, ystart, TZ_ADD(start_sec, ystart),
+                          std_is_dst};
     else if (ysec >= end_sec)
-        *out = (TzLookup){std_name, std_offset, end_sec + ystart,
-                          ystart + (int64_t)365 * TZ_SECONDS_PER_DAY, std_is_dst};
+        *out =
+            (TzLookup){std_name, std_offset, TZ_ADD(end_sec, ystart),
+                       TZ_ADD(ystart, (int64_t)365 * TZ_SECONDS_PER_DAY), std_is_dst};
     else
-        *out = (TzLookup){dst_name, dst_offset, start_sec + ystart, end_sec + ystart,
-                          dst_is_dst};
+        *out = (TzLookup){dst_name, dst_offset, TZ_ADD(start_sec, ystart),
+                          TZ_ADD(end_sec, ystart), dst_is_dst};
     return true;
 }
 

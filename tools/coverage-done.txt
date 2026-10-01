@@ -80,3 +80,4 @@ weak
 flag
 encoding/gob
 io/fs
+archive/tar

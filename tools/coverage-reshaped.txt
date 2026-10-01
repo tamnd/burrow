@@ -185,3 +185,9 @@ time: method (*ParseError) Error: takes the allocator the message is built in
 # heap to grow, and that can fail here where Go would panic, so the return
 # value says whether it worked and Go's answer comes back through a pointer.
 time: method (*Timer) Reset: the result says whether the timer is armed, and Go's pending answer comes back through a pointer
+
+# include/burrow/archive/tar.h: os.FileInfo is an alias for fs.FileInfo in Go,
+# so these are the same type there. burrow has no os package yet and spells it
+# FsFileInfo, which is what an OsFileInfo would be an alias of.
+archive/tar: func FileInfoHeader: os.FileInfo is fs.FileInfo, spelled FsFileInfo
+archive/tar: method (*Header) FileInfo: os.FileInfo is fs.FileInfo, spelled FsFileInfo

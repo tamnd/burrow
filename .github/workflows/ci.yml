@@ -189,6 +189,10 @@ jobs:
       - uses: docker/setup-qemu-action@v3
         with:
           platforms: s390x
+      # The tests run in short mode here. A few of them write and read back
+      # archives of 4 GiB and more, which take a minute or two each on real
+      # hardware and would not finish under emulation.
+      #
       # The byte order is checked before the build rather than assumed. A
       # container that quietly came up on the host architecture would run the
       # suite, pass, and report a big endian job that never saw a big endian
@@ -197,7 +201,7 @@ jobs:
         run: |
           docker run --rm --platform linux/s390x \
             -v "$PWD":/src -w /src gcc:15 \
-            sh -c 'cc -dM -E - </dev/null | grep -q "__BYTE_ORDER__ __ORDER_BIG_ENDIAN__" || { echo "this is not a big endian compiler" >&2; exit 1; }; make test'
+            sh -c 'cc -dM -E - </dev/null | grep -q "__BYTE_ORDER__ __ORDER_BIG_ENDIAN__" || { echo "this is not a big endian compiler" >&2; exit 1; }; make test TESTFLAGS=-test.short'
 
   # musl, which is the other Linux libc and the one that disagrees with glibc
   # about what a strict C11 build is allowed to see. Most of the standard

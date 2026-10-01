@@ -81,3 +81,4 @@ flag
 encoding/gob
 io/fs
 archive/tar
+archive/zip

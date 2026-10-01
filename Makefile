@@ -249,13 +249,17 @@ $(BUILD)/tests/testing_cover_test: TEST_EXTRA = $(COVERFLAGS)
 # PAL test checks that turning them off works.
 CPU_TESTS := $(patsubst %,$(BUILD)/tests/%_test,pal sha1 sha256 sha512)
 
+# Flags for every test binary, such as TESTFLAGS=-test.short to leave out the
+# tests that take minutes on their own.
+TESTFLAGS ?=
+
 test: $(TEST_BINS)
 	@fail=0; for t in $(TEST_BINS); do \
-		if ./$$t > $$t.out 2>&1; then printf 'ok\t%s\n' "$${t##*/}"; \
+		if ./$$t $(TESTFLAGS) > $$t.out 2>&1; then printf 'ok\t%s\n' "$${t##*/}"; \
 		else cat $$t.out; printf 'FAIL\t%s\n' "$${t##*/}"; fail=1; fi; \
 	done; \
 	for t in $(CPU_TESTS); do \
-		if GODEBUG=cpu.all=off ./$$t > $$t.out 2>&1; then printf 'ok\t%s cpu.all=off\n' "$${t##*/}"; \
+		if GODEBUG=cpu.all=off ./$$t $(TESTFLAGS) > $$t.out 2>&1; then printf 'ok\t%s cpu.all=off\n' "$${t##*/}"; \
 		else cat $$t.out; printf 'FAIL\t%s cpu.all=off\n' "$${t##*/}"; fail=1; fi; \
 	done; exit $$fail
 

@@ -37,6 +37,7 @@ docs/guides/bytes.md
 docs/guides/encoding.md
 docs/guides/io.md
 docs/guides/bufio.md
+docs/guides/os.md
 docs/guides/paths.md
 docs/guides/containers.md
 docs/guides/sorting.md

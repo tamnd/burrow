@@ -1,6 +1,6 @@
 # Paths
 
-`burrow/path.h` is Go's `path`: cleaning, joining and taking apart paths that use forward slashes, like the ones in URLs, in tar and zip archives and in `io/fs`. It never touches the file system and it does not know about backslashes or drive letters, so it gives the same answer on Linux, macOS and Windows. The paths of the operating system you are running on are the job of `path/filepath`, which comes later in the same milestone.
+`burrow/path.h` is Go's `path`: cleaning, joining and taking apart paths that use forward slashes, like the ones in URLs, in tar and zip archives and in `io/fs`. It never touches the file system and it does not know about backslashes or drive letters, so it gives the same answer on Linux, macOS and Windows. The paths of the operating system you are running on are the job of `burrow/path/filepath.h`, Go's `path/filepath`, which is the second half of this guide.
 
 The names are Go's with the package in front: `path.Clean` is `path_clean` and `path.IsAbs` is `path_is_abs`.
 
@@ -51,6 +51,44 @@ if (BURROW_FAILED(err))
 ```
 
 A malformed pattern gives `path_err_bad_pattern`, which prints as `syntax error in pattern`. Go only checks the part of the pattern it did not get to when the match fails, so a pattern can match before it reaches its broken part and report no error, and burrow does the same so that the two agree on every input.
+
+## The operating system's paths
+
+`filepath` has the same functions as `path` and a few more, with the rules of the system the program runs on. On Linux and macOS that changes almost nothing. On Windows the separator is a backslash, a forward slash counts as one too, and a path can start with a volume name: a drive letter such as `C:`, or a share such as `\\host\share`. `FILEPATH_SEPARATOR` and `FILEPATH_LIST_SEPARATOR` are the two characters, and every result uses the first:
+
+<!-- example: ../examples/path/filepath.c#join -->
+```c
+Str dir = filepath_join_v(a, 3, BURROW_S("build"), BURROW_S("tests/../lib"),
+                          BURROW_S("libburrow.a")); /* build/lib/libburrow.a */
+Str ext = filepath_ext(dir);                        /* ".a" */
+Str up = filepath_dir(a, dir);                      /* build/lib */
+```
+
+On Windows `dir` comes back as `build\lib\libburrow.a`. `filepath_to_slash` and `filepath_from_slash` convert between the two forms, and do nothing outside Windows.
+
+`filepath_rel` has no counterpart in `path`. It finds the relative path that leads from one directory to another, and fails when there is none, for example when one path is absolute and the other is not:
+
+<!-- example: ../examples/path/filepath.c#rel -->
+```c
+Error err;
+Str rel =
+    filepath_rel(a, BURROW_S("/srv/www"), BURROW_S("/srv/www/static/site.css"),
+                 &err); /* static/site.css */
+Str out = filepath_rel(a, BURROW_S("/srv/www"), BURROW_S("www"), &err);
+if (BURROW_FAILED(err))
+    printf("%.*s\n", (int)error_text(err).len, (const char *)error_text(err).p);
+```
+
+When a path comes from someone else, such as a name in an archive or part of a URL, `filepath_is_local` tells you whether it stays inside the directory you will open it in: it is not empty, not absolute, does not climb out with `..`, and on Windows does not name a device such as `NUL` or `COM1`. `filepath_localize` goes the other way, turning a slash separated name of the kind `io/fs` uses into one for this system, and fails on a name that cannot be said here:
+
+<!-- example: ../examples/path/filepath.c#local -->
+```c
+bool inside = filepath_is_local(BURROW_S("uploads/a.png")); /* true */
+bool escapes = filepath_is_local(BURROW_S("a/../../etc"));  /* false */
+Str name = filepath_localize(a, BURROW_S("uploads/a.png"), &err);
+```
+
+Both are lexical, like everything in this guide, so a symbolic link inside the directory can still lead out of it. `filepath_match` is `path_match` with the system's separator, and on Windows a backslash in a pattern is a separator rather than a quote. It has its own error, `filepath_err_bad_pattern`, as Go's has. Go's `Abs`, `EvalSymlinks`, `Glob`, `Walk` and `WalkDir` look at the file system and come with `os`.
 
 ## See also
 

@@ -2,7 +2,7 @@
 
 `burrow/os.h` is Go's `os` package, or the part of it that deals with files and paths: opening, reading, writing and closing files, looking at them with `Stat`, and renaming, linking and removing them. The names are Go's with `os_` in front, so `os.ReadFile` is `os_read_file` and the methods of `*os.File` are `os_file_read`, `os_file_close` and so on.
 
-Reading directories, `MkdirAll` and `RemoveAll`, temporary files, the environment and processes come in later pull requests in the same milestone.
+The environment, processes and the rest of `os` come in later pull requests in the same milestone.
 
 ## Whole files
 
@@ -57,6 +57,60 @@ bool is_dir = fi.vt->is_dir(fi.data); /* false */
 ```
 
 The name is the last element of the path you asked about. `os_same_file` tells you whether two `FileInfo`s are the same file, by device and inode on Unix and by volume and file index on Windows. `Sys` gives a nil `Any` for now, where Go gives a `*syscall.Stat_t`.
+
+## Directories
+
+`os_mkdir_temp` makes a new directory with a name nobody else has, and `os_create_temp` does the same for a file. The last `*` in the pattern is where the random part goes, and an empty directory means `os_temp_dir`, which is `$TMPDIR` or `/tmp` on Unix and `GetTempPath` on Windows:
+
+<!-- example: ../examples/os/dir.c#temp -->
+```c
+Str dir = os_mkdir_temp(a, BURROW_S(""), BURROW_S("example-*"), &err);
+if (BURROW_FAILED(err))
+    return 1;
+/* dir is something like /tmp/example-2851094712 */
+```
+
+`os_mkdir_all` makes a directory and any parents it needs, and does nothing if the directory is already there. If a file is in the way you get an error that says so:
+
+<!-- example: ../examples/os/dir.c#mkdirall -->
+```c
+Str deep = fmt_sprintf_v(a, "%s%ca%cb%cc", dir, (Int)OS_PATH_SEPARATOR,
+                         (Int)OS_PATH_SEPARATOR, (Int)OS_PATH_SEPARATOR);
+err = os_mkdir_all(deep, 0755);         /* makes a, a/b and a/b/c */
+Error again = os_mkdir_all(deep, 0755); /* nil, it is already there */
+```
+
+`os_read_dir` gives the entries of a directory sorted by name, as a slice of io/fs `FsDirEntry`. On an open directory, `os_file_read_dir`, `os_file_readdir` and `os_file_readdirnames` read it in batches the way Go's methods do: with n above zero you get at most n entries and `io_eof` at the end, and with n at zero or below you get the rest in one go. The entries, and the names in them, come from the allocator you pass, so an arena is the easy choice:
+
+<!-- example: ../examples/os/dir.c#readdir -->
+```c
+Slice entries = os_read_dir(a, dir, &err);
+for (Int i = 0; i < entries.len; i++) {
+    FsDirEntry *e = (FsDirEntry *)slice_at(entries, i);
+    Str entry = fs_format_dir_entry(a, *e); /* "d a/", then "- notes.txt" */
+    printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(entry));
+}
+```
+
+`os_dir_fs` turns a directory into an `Fs`, so the io/fs functions work on the real file system. Names are slash-separated and checked the way io/fs wants, so `..` and absolute paths are refused instead of escaping the directory:
+
+<!-- example: ../examples/os/dir.c#dirfs -->
+```c
+Fs fsys = os_dir_fs(a, dir);
+Slice data = fs_read_file(a, fsys, BURROW_S("notes.txt"), &err); /* "hello\n" */
+Error out = BURROW_NO_ERROR;
+fs_read_file(a, fsys, BURROW_S("../notes.txt"), &out);
+/* readfile ../notes.txt: invalid argument */
+```
+
+As in Go, this does not stop a symbolic link inside the directory from pointing outside it.
+
+`os_remove_all` removes a path and everything under it. A path that is not there is not an error:
+
+<!-- example: ../examples/os/dir.c#removeall -->
+```c
+err = os_remove_all(dir); /* dir and everything under it */
+```
 
 ## Errors
 

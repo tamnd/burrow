@@ -1029,7 +1029,8 @@ bool pal_pipe(int64_t out[2], uint32_t flags, PalErrno *err) {
 
 enum {
     DIR_FULL_INFO = 1u << 0, /* the filesystem refused FileIdBothDirectoryInfo */
-    DIR_HAVE = 1u << 1       /* buf holds records from pos on */
+    DIR_HAVE = 1u << 1,      /* buf holds records from pos on */
+    DIR_STARTED = 1u << 2    /* the first batch has been asked for */
 };
 
 bool pal_readdir(PalDir *d, PalDirEntry *out, PalErrno *err) {
@@ -1043,13 +1044,25 @@ bool pal_readdir(PalDir *d, PalDirEntry *out, PalErrno *err) {
 
     for (;;) {
         if ((d->state & DIR_HAVE) == 0) {
-            FILE_INFO_BY_HANDLE_CLASS cls = (d->state & DIR_FULL_INFO)
-                                                ? FileFullDirectoryInfo
-                                                : FileIdBothDirectoryInfo;
+            /* The first batch uses the restart classes, which start from the
+             * top of the directory wherever the handle had got to. That is
+             * what lets a PalDir zeroed again read the directory again, as
+             * Go's does after a Seek. */
+            bool restart = (d->state & DIR_STARTED) == 0;
+            FILE_INFO_BY_HANDLE_CLASS cls;
+            if (d->state & DIR_FULL_INFO)
+                cls = restart ? FileFullDirectoryRestartInfo : FileFullDirectoryInfo;
+            else
+                cls =
+                    restart ? FileIdBothDirectoryRestartInfo : FileIdBothDirectoryInfo;
             if (!GetFileInformationByHandleEx(as_handle(d->fd), cls, d->buf,
                                               sizeof d->buf)) {
                 DWORD why = GetLastError();
                 if (why == ERROR_NO_MORE_FILES)
+                    return false;
+                /* A restart on an empty root directory says there is no such
+                 * file rather than no more files, as Go notes. */
+                if (restart && why == ERROR_FILE_NOT_FOUND)
                     return false;
                 if ((d->state & DIR_FULL_INFO) == 0 &&
                     (why == ERROR_INVALID_PARAMETER || why == ERROR_NOT_SUPPORTED ||
@@ -1061,7 +1074,7 @@ bool pal_readdir(PalDir *d, PalDirEntry *out, PalErrno *err) {
                 return false;
             }
             d->pos = 0;
-            d->state |= DIR_HAVE;
+            d->state |= DIR_HAVE | DIR_STARTED;
         }
 
         const unsigned char *rec = (const unsigned char *)d->buf + d->pos;

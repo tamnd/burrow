@@ -362,3 +362,21 @@ Error os_write_file(Str name, Slice data, OsFileMode perm) {
         e = ce;
     return e;
 }
+
+Str burrow__os_cat3(Alloc *a, Str x, Str y, Str z) {
+    Int n = x.len + y.len + z.len;
+    Byte *b = (Byte *)mem_alloc_nozero(a, (size_t)n + 1, 1);
+    if (b == NULL)
+        return (Str){NULL, 0};
+    Byte *p = b;
+    if (x.len > 0)
+        memcpy(p, x.p, (size_t)x.len);
+    p += x.len;
+    if (y.len > 0)
+        memcpy(p, y.p, (size_t)y.len);
+    p += y.len;
+    if (z.len > 0)
+        memcpy(p, z.p, (size_t)z.len);
+    b[n] = 0;
+    return str_from_bytes(b, n);
+}

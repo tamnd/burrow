@@ -6,20 +6,16 @@
 #include "burrow/fmt.h"
 #include "burrow/mem/arena.h"
 #include "burrow/os.h"
-#include "burrow/pal.h"
 
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
 
-    /* A directory of our own to work in. burrow has no MkdirTemp yet. */
-    char tmp[512];
-    if (pal_temp_dir(tmp, (int64_t)sizeof tmp, NULL) < 0)
-        return 1;
-    Str dir = fmt_sprintf_v(a, "%s%cburrow-os-example-%d", str_from_cstr(tmp),
-                            (Int)OS_PATH_SEPARATOR, (Int)pal_getpid());
-    if (BURROW_FAILED(os_mkdir(dir, 0700)))
+    /* A directory of our own to work in. */
+    Error derr = BURROW_NO_ERROR;
+    Str dir = os_mkdir_temp(a, BURROW_S(""), BURROW_S("burrow-os-example-*"), &derr);
+    if (BURROW_FAILED(derr))
         return 1;
     Str name = fmt_sprintf_v(a, "%s%cnotes.txt", dir, (Int)OS_PATH_SEPARATOR);
 

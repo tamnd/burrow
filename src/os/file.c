@@ -98,19 +98,23 @@ static Error os_destroy(OsFile *f) {
     if (!pal_close(f->fd, &pe))
         e = burrow__os_errno(pe);
     f->fd = PAL_INVALID_HANDLE;
+    burrow__os_dirinfo_free(f);
     burrow__sema_release(&f->csema, false);
     return e;
 }
 
-static bool os_incref(OsFile *f) {
+bool burrow__os_incref(OsFile *f) {
     return burrow__fdmu_incref(&f->mu);
 }
 
-static Error os_decref(OsFile *f) {
+Error burrow__os_decref(OsFile *f) {
     if (burrow__fdmu_decref(&f->mu))
         return os_destroy(f);
     return BURROW_NO_ERROR;
 }
+
+#define os_incref burrow__os_incref
+#define os_decref burrow__os_decref
 
 static bool os_lock(OsFile *f, bool read) {
     return burrow__fdmu_rwlock(&f->mu, read, true);
@@ -531,6 +535,8 @@ int64_t os_file_seek(OsFile *f, int64_t offset, Int whence, Error *err) {
         BURROW_OUT(err, os_wrap(f, OS_LIT("seek"), burrow__os_err_file_closing));
         return 0;
     }
+    /* Reading the directory again after a seek starts from the top. */
+    burrow__os_dirinfo_reset(f);
     PalErrno pe = PAL_OK;
     int64_t r = pal_seek(f->fd, offset, (int32_t)whence, &pe);
     Error e = BURROW_NO_ERROR;
@@ -736,10 +742,14 @@ static const IoReadWriteSeekerVT os_read_write_seeker_vt = {
     {&os_file_desc, os_vt_write},
     {&os_file_desc, os_vt_seek},
 };
+static Slice os_vt_read_dir(void *self, Alloc *a, Int n, Error *err) {
+    return os_file_read_dir((OsFile *)self, a, n, err);
+}
+
 static const FsFileVT os_fs_file_vt = {
     {{&os_file_desc, os_vt_read}, {&os_file_desc, os_vt_close}},
     os_vt_stat,
-    NULL,
+    os_vt_read_dir,
 };
 
 IoReader os_file_as_io_reader(OsFile *f) {

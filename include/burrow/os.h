@@ -23,9 +23,8 @@
  * Paths are Str and go to the system as they are, so "/" and, on Windows, "\"
  * both work. A name with a NUL byte in it fails with EINVAL, as Go's does.
  *
- * Not here yet: reading directories, MkdirAll and RemoveAll, temporary files,
- * DirFS, the environment, processes, File.Chmod, Chown and Chdir, Lchown,
- * Pipe and Root. FileInfo.Sys gives a nil Any for now, where Go gives a
+ * Not here yet: the environment, processes, File.Chmod, Chown and Chdir,
+ * Lchown, Pipe, CopyFS and Root. FileInfo.Sys gives a nil Any for now, where Go gives a
  * *syscall.Stat_t.
  *
  * Derived from Go's src/os/file.go.
@@ -380,6 +379,63 @@ BURROW_STATIC(ret) Error os_chtimes(Str name, Time atime, Time mtime);
 
 /* os.Truncate: makes name size bytes long. */
 BURROW_STATIC(ret) Error os_truncate(Str name, int64_t size);
+
+/* ------------------------------------------------------------- directories */
+
+/* File.ReadDir: up to n entries of the directory f has open, a Slice of
+ * OsDirEntry from a, in the order the directory has them. Each call carries on
+ * from the last. With n > 0 there is at least one entry or an error, which at
+ * the end of the directory is io_eof. With n <= 0 it is everything left and no
+ * error at the end. An entry knows its name and type without a stat, and its
+ * info slot does an os_lstat. A file that goes away between the read and a
+ * stat that had to be done is left out. */
+BURROW_OWNS(ret) Slice os_file_read_dir(OsFile *f, Alloc *a, Int n, Error *err);
+
+/* File.Readdir: os_file_read_dir with an os_lstat of each entry, a Slice of
+ * OsFileInfo. */
+BURROW_OWNS(ret) Slice os_file_readdir(OsFile *f, Alloc *a, Int n, Error *err);
+
+/* File.Readdirnames: os_file_read_dir with only the names, a Slice of Str,
+ * which needs no stat at all. */
+BURROW_OWNS(ret) Slice os_file_readdirnames(OsFile *f, Alloc *a, Int n, Error *err);
+
+/* os.ReadDir: every entry of the directory name, sorted by name. What was read
+ * before an error comes back with it. */
+BURROW_OWNS(ret) Slice os_read_dir(Alloc *a, Str name, Error *err);
+
+/* os.MkdirAll: name and any parents it needs, each with perm less the umask.
+ * Nothing to do and no error when name is a directory already. */
+BURROW_STATIC(ret) Error os_mkdir_all(Str name, OsFileMode perm);
+
+/* os.RemoveAll: name and everything under it. Nothing there is not an error,
+ * and neither is an empty name. A name ending in "." is EINVAL. */
+BURROW_STATIC(ret) Error os_remove_all(Str name);
+
+/* os.TempDir: the directory for temporary files, from a. $TMPDIR or /tmp on
+ * Unix, and what GetTempPath2 says on Windows, without the trailing
+ * backslash. */
+BURROW_OWNS(ret) Str os_temp_dir(Alloc *a);
+
+/* os.CreateTemp: a new file in dir, or os_temp_dir when dir is empty, open
+ * for reading and writing with mode 0600. Its name is pattern with a random
+ * number put in place of the last "*", or added at the end when there is no
+ * "*". A pattern with a separator in it is an error. Remove the file when you
+ * are done with it, since nothing else will. */
+BURROW_OWNS(ret) OsFile *os_create_temp(Alloc *a, Str dir, Str pattern, Error *err);
+
+/* os.MkdirTemp: os_create_temp for a directory, made with mode 0700, and its
+ * name from a. */
+BURROW_OWNS(ret) Str os_mkdir_temp(Alloc *a, Str dir, Str pattern, Error *err);
+
+/* os.DirFS: the tree under dir as an Fs. The names it takes are io/fs's, with
+ * "/" between elements on every system. It has the stat, read_file, read_dir,
+ * read_link and lstat slots. dir is copied into a, and when a refuses the Fs
+ * is nil, with a NULL vt.
+ *
+ * Files it opens are OsFiles from the Alloc given to open. Closing one through
+ * the FsFile closes the descriptor but cannot give the OsFile back, so use an
+ * arena with it as with everything else an Fs hands out. */
+BURROW_OWNS(ret) Fs os_dir_fs(Alloc *a, Str dir);
 
 #ifdef __cplusplus
 }

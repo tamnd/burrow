@@ -96,7 +96,7 @@ static Str os_basename(Str name) {
     return name;
 }
 
-static FsFileMode os_mode_of(uint32_t m) {
+FsFileMode burrow__os_mode_of(uint32_t m) {
     FsFileMode mode = (FsFileMode)(m & 0777);
     switch (m & PAL_S_IFMT) {
     case PAL_S_IFBLK:
@@ -150,7 +150,7 @@ OsFileInfo burrow__os_file_info(Alloc *a, Str name, const PalStat *st, Error *er
         memcpy(p, base.p, (size_t)base.len);
     fs->name = str_from_bytes(p, base.len);
     fs->size = st->size;
-    fs->mode = os_mode_of(st->mode);
+    fs->mode = burrow__os_mode_of(st->mode);
     fs->mod_time = time_from_unix(st->mtime_sec, st->mtime_nsec);
     fs->dev = st->dev;
     fs->ino = st->ino;

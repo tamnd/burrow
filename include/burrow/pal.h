@@ -687,6 +687,10 @@ bool pal_rmdir(const char *path, PalErrno *err);
  *     if (err != PAL_OK)
  *         fail(err);
  *
+ * To read the directory again from the top, seek the descriptor to 0 and
+ * zero everything but fd again. Windows ignores the seek and starts over
+ * because of the zeroing, and the others need the seek.
+ *
  * It is eight kilobytes, which is fine in a goroutine and is why it is not
  * inside PalDirEntry. Closing the descriptor is the caller's, with pal_close,
  * and nothing else needs undoing. */

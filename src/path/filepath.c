@@ -45,8 +45,13 @@ static Str fp_str(const Byte *p, Int n) {
     return s;
 }
 
+/* s[i:j]. The empty string can have a NULL p, and NULL + 0 is undefined. */
+static Str fp_sub(Str s, Int i, Int j) {
+    return fp_str(s.p == NULL ? NULL : s.p + i, j - i);
+}
+
 static Str fp_tail(Str s, Int i) {
-    return fp_str(s.p + i, s.len - i);
+    return fp_sub(s, i, s.len);
 }
 
 static Byte fp_sep(bool win) {
@@ -636,7 +641,7 @@ Str burrow__filepath_dir(Alloc *a, Str path, bool win) {
     while (i >= vol && !fp_is_sep(path.p[i], win))
         i--;
     FpOwn own;
-    Str dir = fp_clean_own(a, fp_str(path.p + vol, i + 1 - vol), win, &own);
+    Str dir = fp_clean_own(a, fp_sub(path, vol, i + 1), win, &own);
     if (vol == 0)
         return dir;
     FpOwn vown;
@@ -837,8 +842,7 @@ Str burrow__filepath_rel(Alloc *a, Str base_path, Str targ_path, bool win, Error
             bi++;
         while (ti < tl && targ.p[ti] != sep)
             ti++;
-        if (!fp_same_word(fp_str(targ.p + t0, ti - t0), fp_str(base.p + b0, bi - b0),
-                          win))
+        if (!fp_same_word(fp_sub(targ, t0, ti), fp_sub(base, b0, bi), win))
             break;
         if (bi < bl)
             bi++;
@@ -847,14 +851,14 @@ Str burrow__filepath_rel(Alloc *a, Str base_path, Str targ_path, bool win, Error
         b0 = bi;
         t0 = ti;
     }
-    if (fp_eq(fp_str(base.p + b0, bi - b0), "..")) {
+    if (fp_eq(fp_sub(base, b0, bi), "..")) {
         BURROW_OUT(err, fp_rel_error(a, targ_path, base_path));
         goto done;
     }
     if (b0 != bl) {
         /* Base elements left over. Climb up out of each, then down into
          * targ's. */
-        Int seps = fp_count_byte(fp_str(base.p + b0, bl - b0), sep);
+        Int seps = fp_count_byte(fp_sub(base, b0, bl), sep);
         Int size = 2 + seps * 3;
         if (tl != t0)
             size += 1 + tl - t0;

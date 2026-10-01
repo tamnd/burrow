@@ -1172,6 +1172,43 @@ static void TestHasPrefix(TestingT *t) {
     CHECK(filepath_has_prefix(S("abc"), S("ab")));
 }
 
+/* BURROW_STR_EMPTY has a NULL p, and every function has to take it. */
+static void TestNullEmptyString(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Str e = BURROW_STR_EMPTY;
+    for (int w = 0; w < 2; w++) {
+        bool win = w == 1;
+        Error err;
+        Str file;
+        CHECK(str_eq(burrow__filepath_clean(a, e, win), S(".")));
+        CHECK(!burrow__filepath_is_local(e, win));
+        CHECK(str_eq(burrow__filepath_localize(a, e, win, &err), S("")));
+        CHECK(BURROW_FAILED(err));
+        CHECK(str_eq(burrow__filepath_to_slash(a, e, win), S("")));
+        CHECK(str_eq(burrow__filepath_from_slash(a, e, win), S("")));
+        CHECK(burrow__filepath_split_list(a, e, win).len == 0);
+        CHECK(str_eq(burrow__filepath_split(e, &file, win), S("")));
+        CHECK(str_eq(file, S("")));
+        CHECK(str_eq(burrow__filepath_ext(e, win), S("")));
+        CHECK(str_eq(burrow__filepath_base(e, win), S(".")));
+        CHECK(str_eq(burrow__filepath_dir(a, e, win), S(".")));
+        CHECK(!burrow__filepath_is_abs(e, win));
+        CHECK(str_eq(burrow__filepath_volume_name(a, e, win), S("")));
+        CHECK(str_eq(burrow__filepath_rel(a, e, e, win, &err), S(".")));
+        CHECK(str_eq(burrow__filepath_rel(a, e, S("a"), win, &err), S("a")));
+        CHECK(str_eq(burrow__filepath_rel(a, S("a"), e, win, &err), S("..")));
+        CHECK(burrow__filepath_match(e, e, win, &err));
+        CHECK(!burrow__filepath_match(S("a"), e, win, &err));
+        CHECK(burrow__filepath_has_prefix(e, e, win));
+        Str two[2] = {e, e};
+        CHECK(str_eq(burrow__filepath_join(a, slice_from(two, 2, 2, TYPE_STRING), win),
+                     S("")));
+    }
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestClean)                                                                       \
     X(TestIsLocal)                                                                     \
@@ -1194,6 +1231,7 @@ static void TestHasPrefix(TestingT *t) {
     X(TestResultsBorrowTheInput)                                                       \
     X(TestMatchStopsAtTheFirstAnswer)                                                  \
     X(TestRelErrorText)                                                                \
-    X(TestHasPrefix)
+    X(TestHasPrefix)                                                                   \
+    X(TestNullEmptyString)
 
 TESTING_MAIN(TESTS)

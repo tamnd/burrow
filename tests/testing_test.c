@@ -47,6 +47,10 @@
 
 static const char *self_path;
 
+/* Whether this run was given -test.short, as make test does with
+ * TESTFLAGS=-test.short, so TestHelpers knows what Short should say. */
+static bool short_given;
+
 /* ------------------------------------------------------------------ regexp */
 
 typedef struct MatchCase {
@@ -1715,8 +1719,9 @@ static void FuzzUnsupported(TestingF *f) {
 static void TestHelpers(TestingT *t) {
     if (!testing_testing())
         testing_t_error_v(t, "Testing() is false inside a test");
-    if (testing_short())
-        testing_t_error_v(t, "Short() is true without -test.short");
+    if (testing_short() != short_given)
+        testing_t_errorf_v(t, "Short() is %v, and -test.short given is %v",
+                           testing_short(), short_given);
     if (!str_eq(testing_cover_mode(), BURROW_S("")))
         testing_t_error_v(t, "CoverMode() is not empty");
     int64_t when;
@@ -1750,6 +1755,9 @@ int main(int argc, char **argv) {
         testing_init(argc, argv);
         return run_child(argv[argc - 1]);
     }
+    for (int i = 1; i < argc; i++)
+        short_given = short_given || strcmp(argv[i], "-test.short") == 0 ||
+                      strcmp(argv[i], "-test.short=true") == 0;
     static const burrow__TestingEntry entries[] = {TESTS(BURROW__TESTING_ENTRY)};
     return burrow__testing_main(argc, argv, entries,
                                 (Int)(sizeof entries / sizeof entries[0]), false,

@@ -49,6 +49,7 @@ category	thread-exit	The hook that runs code as a thread exits. The platform has
 category	image-formats	image's list of registered formats. Go keeps it in an atomic.Value that RegisterFormat replaces under a lock, and it is process wide because a format registered anywhere is one Decode can find everywhere.
 category	uuid-v7	uuid.NewV7's last timestamp. Go keeps it in package level variables behind a mutex, and it is process wide because a v7 UUID has to sort after every earlier one the process made, not only the ones its own thread made.
 category	weak	weak's table of slots. Go hangs a weak handle off the object and its collector clears it, and here the allocators tell one table when memory goes, which has to be process wide because memory freed on one thread may have had a WeakPointer made on another.
+category	zip-registry	archive/zip's registered compressors and decompressors. Go keeps them in sync.Maps at package level, and they are process wide because a method registered anywhere is one every Reader and Writer can use.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -270,3 +271,7 @@ global	src/time/zoneinfo.c	tz_displaced_loc	time-zone-cache	Test only. burrow__t
 global	src/time/zoneinfo.c	tz_cache	time-zone-cache	The locations LoadLocation has read, as a list. Only touched under tz_cache_mu, and a location on it is never written or freed once it is there.
 global	src/time/zoneinfo.c	tz_cache_mu	time-zone-cache	The mutex over tz_cache.
 global	src/archive/tar.c	tar_debug_flags	godebug	The tarinsecurepath setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
+global	src/archive/zip.c	zip_debug_flags	godebug	The zipinsecurepath setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
+global	src/archive/zip.c	zip_registry_mu	zip-registry	The lock that keeps two RegisterCompressor or RegisterDecompressor calls from pushing at once. Readers do not take it.
+global	src/archive/zip.c	zip_compressors	zip-registry	The head of the list of registered compressors. Store and Deflate are not on it and are looked for after it. Pushed with a release store under zip_registry_mu and read with an acquire load, and a node never changes once it is on the list.
+global	src/archive/zip.c	zip_decompressors	zip-registry	The head of the list of registered decompressors, the same way as zip_compressors.

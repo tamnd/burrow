@@ -39,6 +39,7 @@
 #include "burrow/version.h"
 
 #include "burrow/archive/tar.h"
+#include "burrow/archive/zip.h"
 #include "burrow/bufio.h"
 #include "burrow/bytes.h"
 #include "burrow/chan.h"

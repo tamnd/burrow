@@ -191,3 +191,16 @@ time: method (*Timer) Reset: the result says whether the timer is armed, and Go'
 # FsFileInfo, which is what an OsFileInfo would be an alias of.
 archive/tar: func FileInfoHeader: os.FileInfo is fs.FileInfo, spelled FsFileInfo
 archive/tar: method (*Header) FileInfo: os.FileInfo is fs.FileInfo, spelled FsFileInfo
+
+# include/burrow/archive/zip.h: os.FileInfo and os.FileMode are aliases for the
+# fs types in Go, the same as for archive/tar. OpenRaw's io.Reader is always an
+# *io.SectionReader in Go, and here it is that SectionReader by value, so that
+# reading a file raw needs no allocation and nothing to free.
+archive/zip: func FileInfoHeader: os.FileInfo is fs.FileInfo, spelled FsFileInfo
+archive/zip: method (*File) FileInfo: os.FileInfo is fs.FileInfo, spelled FsFileInfo
+archive/zip: method (*FileHeader) FileInfo: os.FileInfo is fs.FileInfo, spelled FsFileInfo
+archive/zip: method (*File) Mode: os.FileMode is fs.FileMode, spelled FsFileMode
+archive/zip: method (*File) SetMode: os.FileMode is fs.FileMode, spelled FsFileMode
+archive/zip: method (*FileHeader) Mode: os.FileMode is fs.FileMode, spelled FsFileMode
+archive/zip: method (*FileHeader) SetMode: os.FileMode is fs.FileMode, spelled FsFileMode
+archive/zip: method (*File) OpenRaw: the io.Reader Go returns is an io.SectionReader, returned here by value

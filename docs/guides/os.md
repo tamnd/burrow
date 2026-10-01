@@ -2,7 +2,7 @@
 
 `burrow/os.h` is Go's `os` package, or the part of it that deals with files and paths: opening, reading, writing and closing files, looking at them with `Stat`, and renaming, linking and removing them. The names are Go's with `os_` in front, so `os.ReadFile` is `os_read_file` and the methods of `*os.File` are `os_file_read`, `os_file_close` and so on.
 
-The environment, processes and the rest of `os` come in later pull requests in the same milestone.
+It also has the environment, the working directory, the process and user ids, the user's home, cache and config directories, and pipes. Starting and waiting for other processes comes in a later pull request in the same milestone.
 
 ## Whole files
 
@@ -111,6 +111,46 @@ As in Go, this does not stop a symbolic link inside the directory from pointing 
 ```c
 err = os_remove_all(dir); /* dir and everything under it */
 ```
+
+## The environment and the process
+
+`os_getenv`, `os_lookup_env`, `os_setenv` and `os_unsetenv` work on the environment the way Go's do. On Unix the environment is copied once, the first time you ask, and changes go to that copy and to the C library's, so C code in the same program sees them too. `os_expand_env` replaces `$NAME` and `${NAME}` with their values:
+
+<!-- example: ../examples/os/env.c#env -->
+```c
+Error err = os_setenv(BURROW_S("GREETING"), BURROW_S("hello"));
+bool found = false;
+Str g = os_lookup_env(a, BURROW_S("GREETING"), &found); /* "hello", true */
+Str msg = os_expand_env(a, BURROW_S("$GREETING, ${USER_NAME}!"));
+/* "hello, !" since USER_NAME is not set */
+err = os_unsetenv(BURROW_S("GREETING"));
+```
+
+`os_getwd` and `os_chdir` get and set the working directory, and `os_file_chdir` moves into a directory you have open:
+
+<!-- example: ../examples/os/env.c#wd -->
+```c
+Str wd = os_getwd(a, &err);
+Str tmp = os_temp_dir(a);
+err = os_chdir(tmp); /* relative names now start from tmp */
+Error back = os_chdir(wd);
+```
+
+`os_pipe` gives two connected files. It returns the reading end and puts the writing end in `w`. What goes into `w` comes out of the reader, and once `w` is closed the reader gets `io_eof`:
+
+<!-- example: ../examples/os/env.c#pipe -->
+```c
+OsFile *w = NULL;
+OsFile *r = os_pipe(a, &w, &err);
+if (BURROW_FAILED(err))
+    return 1;
+os_file_write_string(w, BURROW_S("through the pipe"), &err);
+Error cerr = os_file_close(w); /* the reader sees EOF after the data */
+Byte buf[32];
+Int n = os_file_read(r, slice_from(buf, 32, 32, TYPE_BYTE), &err);
+```
+
+`os_args`, `os_getpid`, `os_getppid`, `os_getuid` and the rest of the ids, `os_hostname`, `os_user_home_dir`, `os_user_cache_dir` and `os_user_config_dir` are there too, with the same answers and the same error texts as Go.
 
 ## Errors
 

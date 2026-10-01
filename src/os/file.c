@@ -604,6 +604,84 @@ Error os_file_truncate(OsFile *f, int64_t size) {
     return os_wrap(f, OS_LIT("truncate"), e);
 }
 
+Error os_file_chmod(OsFile *f, OsFileMode mode) {
+    if (f == NULL)
+        return fs_err_invalid;
+    if (!os_incref(f))
+        return os_wrap(f, OS_LIT("chmod"), burrow__os_err_file_closing);
+    PalErrno pe = PAL_OK;
+    Error e = BURROW_NO_ERROR;
+    if (!pal_fchmod(f->fd, os_syscall_mode(mode), &pe))
+        e = burrow__os_errno(pe);
+    os_decref(f);
+    return os_wrap(f, OS_LIT("chmod"), e);
+}
+
+Error os_file_chown(OsFile *f, Int uid, Int gid) {
+    if (f == NULL)
+        return fs_err_invalid;
+    if (!os_incref(f))
+        return os_wrap(f, OS_LIT("chown"), burrow__os_err_file_closing);
+    Error e = BURROW_NO_ERROR;
+#if defined(BURROW_OS_WINDOWS)
+    (void)uid;
+    (void)gid;
+    e = burrow__os_errno_value(SYSCALL_EWINDOWS);
+#else
+    PalErrno pe = PAL_OK;
+    if (!pal_fchown(f->fd, (int64_t)uid, (int64_t)gid, &pe))
+        e = burrow__os_errno(pe);
+#endif
+    os_decref(f);
+    return os_wrap(f, OS_LIT("chown"), e);
+}
+
+Error os_file_chdir(OsFile *f) {
+    if (f == NULL)
+        return fs_err_invalid;
+    if (!os_incref(f))
+        return os_wrap(f, OS_LIT("chdir"), burrow__os_err_file_closing);
+    PalErrno pe = PAL_OK;
+    Error e = BURROW_NO_ERROR;
+    if (!pal_fchdir(f->fd, &pe))
+        e = burrow__os_errno(pe);
+    os_decref(f);
+    return os_wrap(f, OS_LIT("chdir"), e);
+}
+
+/* os.Pipe. The ends are called "|0" and "|1", as in Go. */
+OsFile *os_pipe(Alloc *a, OsFile **w, Error *err) {
+    BURROW_OUT(w, NULL);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    int64_t p[2];
+    PalErrno pe = PAL_OK;
+    if (!pal_pipe(p, 0, &pe)) {
+#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_FREEBSD) ||                          \
+    defined(BURROW_OS_NETBSD) || defined(BURROW_OS_OPENBSD) ||                         \
+    defined(BURROW_OS_DRAGONFLY)
+        Str op = OS_LIT("pipe2");
+#else
+        Str op = OS_LIT("pipe");
+#endif
+        BURROW_OUT(err,
+                   os_new_syscall_error(error_allocator(), op, burrow__os_errno(pe)));
+        return NULL;
+    }
+    OsFile *rf = os_new(a, p[0], OS_LIT("|0"));
+    OsFile *wf = rf == NULL ? NULL : os_new(a, p[1], OS_LIT("|1"));
+    if (wf == NULL) {
+        if (rf != NULL)
+            os_file_free(rf);
+        else
+            pal_close(p[0], NULL);
+        pal_close(p[1], NULL);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    BURROW_OUT(w, wf);
+    return rf;
+}
+
 /* poll.FD.SetDeadline on something that is not on the poller. The closing
  * error comes back as it is, without the wrapping, as it does in Go. */
 static Error os_no_deadline(OsFile *f) {

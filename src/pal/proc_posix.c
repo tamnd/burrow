@@ -42,6 +42,7 @@
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -283,6 +284,33 @@ int64_t pal_getpid(void) {
     return (int64_t)getpid();
 }
 
+int64_t pal_getppid(void) {
+    return (int64_t)getppid();
+}
+
+void pal_ids(PalIds *out) {
+    out->uid = (int64_t)getuid();
+    out->euid = (int64_t)geteuid();
+    out->gid = (int64_t)getgid();
+    out->egid = (int64_t)getegid();
+}
+
+_Static_assert(sizeof(gid_t) == sizeof(uint32_t), "gid_t is 32 bits");
+
+int64_t pal_getgroups(uint32_t *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (cap < 0 || (cap > 0 && buf == NULL) || cap > INT32_MAX) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return -1;
+    }
+    int n = getgroups((int)cap, (gid_t *)(void *)buf);
+    if (n < 0) {
+        BURROW_OUT(err, burrow__pal_errno(errno));
+        return -1;
+    }
+    return (int64_t)n;
+}
+
 int64_t pal_std_handle(int i) {
     return i >= 0 && i <= 2 ? (int64_t)i : PAL_INVALID_HANDLE;
 }
@@ -304,6 +332,60 @@ const char *const *pal_environ(void) {
 #else
     return (const char *const *)(uintptr_t)environ;
 #endif
+}
+
+int64_t pal_getenv(const char *key, char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (key == NULL || cap < 0 || (cap > 0 && buf == NULL)) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return -1;
+    }
+    const char *v = getenv(key);
+    if (v == NULL) {
+        BURROW_OUT(err, PAL_ENOENT);
+        return -1;
+    }
+    size_t n = strlen(v);
+    if (n > (size_t)cap) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    if (n > 0)
+        memcpy(buf, v, n);
+    return (int64_t)n;
+}
+
+bool pal_setenv(const char *key, const char *value, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (key == NULL) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+    int r = value == NULL ? unsetenv(key) : setenv(key, value, 1);
+    if (r != 0) {
+        BURROW_OUT(err, burrow__pal_errno(errno));
+        return false;
+    }
+    return true;
+}
+
+int64_t pal_environ_read(char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (cap < 0 || (cap > 0 && buf == NULL)) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return -1;
+    }
+    int64_t used = 0;
+    for (const char *const *env = pal_environ(); env != NULL && *env != NULL; env++) {
+        size_t n = strlen(*env) + 1;
+        if ((int64_t)n > cap - used) {
+            BURROW_OUT(err, PAL_ERANGE);
+            return -1;
+        }
+        memcpy(buf + used, *env, n);
+        used += (int64_t)n;
+    }
+    return used;
 }
 
 /* ------------------------------------------------------------ exec lookup */

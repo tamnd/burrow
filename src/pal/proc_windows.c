@@ -35,6 +35,8 @@
 
 #include <windows.h>
 
+#include <tlhelp32.h>
+
 static bool proc_fail(PalErrno *err) {
     BURROW_OUT(err, burrow__pal_errno_win(GetLastError()));
     return false;
@@ -357,6 +359,41 @@ int64_t pal_getpid(void) {
     return (int64_t)GetCurrentProcessId();
 }
 
+/* Go's Getppid on Windows: find ourselves in a snapshot of every process and
+ * read the parent off the entry. */
+int64_t pal_getppid(void) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return -1;
+    DWORD self = GetCurrentProcessId();
+    PROCESSENTRY32W pe;
+    memset(&pe, 0, sizeof pe);
+    pe.dwSize = sizeof pe;
+    int64_t ppid = -1;
+    for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe)) {
+        if (pe.th32ProcessID == self) {
+            ppid = (int64_t)pe.th32ParentProcessID;
+            break;
+        }
+    }
+    CloseHandle(snap);
+    return ppid;
+}
+
+void pal_ids(PalIds *out) {
+    out->uid = -1;
+    out->euid = -1;
+    out->gid = -1;
+    out->egid = -1;
+}
+
+int64_t pal_getgroups(uint32_t *buf, int64_t cap, PalErrno *err) {
+    (void)buf;
+    (void)cap;
+    BURROW_OUT(err, PAL_ENOTSUP);
+    return -1;
+}
+
 int64_t pal_std_handle(int i) {
     static const DWORD which[3] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
                                    STD_ERROR_HANDLE};
@@ -431,6 +468,118 @@ static BOOL CALLBACK env_build(PINIT_ONCE once, PVOID param, PVOID *ctx) {
 const char *const *pal_environ(void) {
     InitOnceExecuteOnce(&env_once, env_build, NULL, NULL);
     return env_list;
+}
+
+/* s widened onto the process heap, or NULL with err set. */
+static wchar_t *env_widen(const char *s, PalErrno *err) {
+    size_t n = strlen(s) + 1;
+    wchar_t *w = proc_alloc(n * sizeof *w);
+    if (w == NULL) {
+        BURROW_OUT(err, PAL_ENOMEM);
+        return NULL;
+    }
+    if (!burrow__pal_widen(s, w, n, err)) {
+        proc_free(w);
+        return NULL;
+    }
+    return w;
+}
+
+int64_t pal_getenv(const char *key, char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (key == NULL || cap < 0 || (cap > 0 && buf == NULL)) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return -1;
+    }
+    wchar_t *k = env_widen(key, err);
+    if (k == NULL)
+        return -1;
+    int64_t out = -1;
+    DWORD size = 128;
+    for (;;) {
+        wchar_t *w = proc_alloc(size * sizeof *w);
+        if (w == NULL) {
+            BURROW_OUT(err, PAL_ENOMEM);
+            break;
+        }
+        /* An empty value is a zero with no error, which only shows if the last
+         * error was cleared first. */
+        SetLastError(0);
+        DWORD n = GetEnvironmentVariableW(k, w, size);
+        DWORD why = GetLastError();
+        if (n == 0 && why == ERROR_ENVVAR_NOT_FOUND) {
+            proc_free(w);
+            BURROW_OUT(err, PAL_ENOENT);
+            break;
+        }
+        if (n < size) {
+            int64_t len = buf == NULL ? -1 : burrow__pal_narrow(w, n, buf, (size_t)cap);
+            proc_free(w);
+            if (len < 0 && n > 0)
+                BURROW_OUT(err, PAL_ERANGE);
+            else
+                out = len < 0 ? 0 : len;
+            break;
+        }
+        proc_free(w);
+        size = n;
+    }
+    proc_free(k);
+    return out;
+}
+
+bool pal_setenv(const char *key, const char *value, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (key == NULL) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+    wchar_t *k = env_widen(key, err);
+    if (k == NULL)
+        return false;
+    wchar_t *v = NULL;
+    if (value != NULL && (v = env_widen(value, err)) == NULL) {
+        proc_free(k);
+        return false;
+    }
+    BOOL ok = SetEnvironmentVariableW(k, v);
+    DWORD why = GetLastError();
+    proc_free(k);
+    proc_free(v);
+    if (!ok) {
+        BURROW_OUT(err, burrow__pal_errno_win(why));
+        return false;
+    }
+    return true;
+}
+
+int64_t pal_environ_read(char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (cap < 0 || (cap > 0 && buf == NULL)) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return -1;
+    }
+    wchar_t *block = GetEnvironmentStringsW();
+    if (block == NULL) {
+        BURROW_OUT(err, burrow__pal_errno_win(GetLastError()));
+        return -1;
+    }
+    int64_t used = 0;
+    for (const wchar_t *p = block; *p != 0; p += wcslen(p) + 1) {
+        size_t n = wcslen(p);
+        int64_t got = used >= cap
+                          ? -1
+                          : burrow__pal_narrow(p, n, buf + used, (size_t)(cap - used));
+        if (got < 0 || used + got >= cap) {
+            FreeEnvironmentStringsW(block);
+            BURROW_OUT(err, PAL_ERANGE);
+            return -1;
+        }
+        buf[used + got] = 0;
+        used += got + 1;
+    }
+    FreeEnvironmentStringsW(block);
+    return used;
 }
 
 /* ------------------------------------------------------------ exec lookup */

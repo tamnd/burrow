@@ -278,3 +278,12 @@ global	src/archive/zip.c	zip_debug_flags	godebug	The zipinsecurepath setting, re
 global	src/archive/zip.c	zip_registry_mu	zip-registry	The lock that keeps two RegisterCompressor or RegisterDecompressor calls from pushing at once. Readers do not take it.
 global	src/archive/zip.c	zip_compressors	zip-registry	The head of the list of registered compressors. Store and Deflate are not on it and are looked for after it. Pushed with a release store under zip_registry_mu and read with an acquire load, and a node never changes once it is on the list.
 global	src/archive/zip.c	zip_decompressors	zip-registry	The head of the list of registered decompressors, the same way as zip_compressors.
+global	src/os/proc.c	os_args_slice	package-vars	os.Args, built from the command line once under os_args_once and never written again.
+global	src/os/proc.c	os_getwd_mu	package-vars	Go's getwdCache lock, which keeps two Getwd calls from walking up the tree at once.
+global	src/os/proc.c	os_getwd_cache	package-vars	Go's getwdCache.dir, the last directory the slow Getwd found. Read and written under os_getwd_mu.
+global	src/os/env.c	os_envs	package-vars	syscall's copy of the environment, filled once under os_env_once, then read under os_env_mu and written with it held for writing.
+global	src/os/env.c	os_envs_len	package-vars	How many entries os_envs has, under os_env_mu as os_envs is.
+global	src/os/env.c	os_envs_cap	package-vars	How many entries os_envs has room for, under os_env_mu as os_envs is.
+global	src/os/proc.c	os_args_once	package-vars	Makes os_args_slice the first time os_args is called.
+global	src/os/env.c	os_env_once	package-vars	Copies the environment into os_envs the first time any of the environment calls needs it, as syscall's envOnce does.
+global	src/os/env.c	os_env_mu	package-vars	syscall's envLock, over os_envs and its length and room.

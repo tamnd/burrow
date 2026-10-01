@@ -67,4 +67,29 @@ int64_t pal_cpu_count(void) {
     return (int64_t)n;
 }
 
+/* Go's hostname on Windows: the physical DNS name, so that two machines in a
+ * cluster do not answer with the same NetBIOS name. */
+int64_t pal_hostname(char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (buf == NULL || cap <= 0) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    wchar_t w[1024];
+    DWORD n = (DWORD)(sizeof w / sizeof w[0]);
+    if (!GetComputerNameExW(ComputerNamePhysicalDnsHostname, w, &n)) {
+        DWORD why = GetLastError();
+        BURROW_OUT(err,
+                   why == ERROR_MORE_DATA ? PAL_ERANGE : burrow__pal_errno_win(why));
+        return -1;
+    }
+    int64_t len = burrow__pal_narrow(w, n, buf, (size_t)cap - 1);
+    if (len < 0) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    buf[len] = 0;
+    return len;
+}
+
 #endif /* BURROW_OS_WINDOWS */

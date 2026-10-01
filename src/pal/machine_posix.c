@@ -34,10 +34,14 @@
 
 #include "internal.h"
 
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
 #include <unistd.h>
 
 #if defined(__linux__)
 #include <sched.h>
+#include <sys/utsname.h>
 #endif
 
 /* Zero until somebody has asked. A page size of zero is impossible, so zero can
@@ -92,6 +96,64 @@ int64_t pal_cpu_count(void) {
     if (n <= 0)
         n = 1;
 
+    return (int64_t)n;
+}
+
+/* Go's hostname: uname on Linux, with /proc for a name uname may have cut
+ * short, and kern.hostname everywhere else, which is what gethostname asks. */
+int64_t pal_hostname(char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (buf == NULL || cap <= 0) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    char tmp[1025];
+    size_t n = 0;
+#if defined(__linux__)
+    struct utsname un;
+    if (uname(&un) == 0) {
+        n = strnlen(un.nodename, sizeof un.nodename);
+        memcpy(tmp, un.nodename, n);
+    }
+    /* The node name is 65 bytes, so 64 or more may be the front of a longer
+     * one. */
+    if (n == 0 || n >= 64) {
+        int fd;
+        do
+            fd = open("/proc/sys/kernel/hostname", O_RDONLY | O_CLOEXEC);
+        while (fd < 0 && errno == EINTR);
+        if (fd < 0) {
+            BURROW_OUT(err, burrow__pal_errno(errno));
+            return -1;
+        }
+        ssize_t r;
+        do
+            r = read(fd, tmp, 512);
+        while (r < 0 && errno == EINTR);
+        int why = errno;
+        close(fd);
+        if (r < 0) {
+            BURROW_OUT(err, burrow__pal_errno(why));
+            return -1;
+        }
+        n = (size_t)r;
+        if (n > 0 && tmp[n - 1] == '\n')
+            n--;
+    }
+#else
+    if (gethostname(tmp, sizeof tmp - 1) != 0) {
+        BURROW_OUT(err, burrow__pal_errno(errno));
+        return -1;
+    }
+    tmp[sizeof tmp - 1] = 0;
+    n = strlen(tmp);
+#endif
+    if ((int64_t)n >= cap) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    memcpy(buf, tmp, n);
+    buf[n] = 0;
     return (int64_t)n;
 }
 

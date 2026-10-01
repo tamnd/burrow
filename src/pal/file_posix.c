@@ -423,6 +423,13 @@ bool pal_chdir(const char *path, PalErrno *err) {
     return chdir(path) == 0 || file_fail(err);
 }
 
+bool pal_fchdir(int64_t fd, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!fd_ok(fd, err))
+        return false;
+    return fchdir((int)fd) == 0 || file_fail(err);
+}
+
 int64_t pal_getcwd(char *buf, int64_t cap, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (buf == NULL || cap <= 0) {
@@ -511,6 +518,46 @@ bool pal_chown(const char *path, int64_t uid, int64_t gid, PalErrno *err) {
     uid_t u = uid < 0 ? (uid_t)-1 : (uid_t)uid;
     gid_t g = gid < 0 ? (gid_t)-1 : (gid_t)gid;
     return chown(path, u, g) == 0 || file_fail(err);
+}
+
+bool pal_lchown(const char *path, int64_t uid, int64_t gid, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!posix_path_ok(path, err))
+        return false;
+    uid_t u = uid < 0 ? (uid_t)-1 : (uid_t)uid;
+    gid_t g = gid < 0 ? (gid_t)-1 : (gid_t)gid;
+    for (;;) {
+        if (lchown(path, u, g) == 0)
+            return true;
+        if (errno != EINTR)
+            return file_fail(err);
+    }
+}
+
+bool pal_fchmod(int64_t fd, uint32_t mode, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!fd_ok(fd, err))
+        return false;
+    for (;;) {
+        if (fchmod((int)fd, (mode_t)(mode & 07777)) == 0)
+            return true;
+        if (errno != EINTR)
+            return file_fail(err);
+    }
+}
+
+bool pal_fchown(int64_t fd, int64_t uid, int64_t gid, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!fd_ok(fd, err))
+        return false;
+    uid_t u = uid < 0 ? (uid_t)-1 : (uid_t)uid;
+    gid_t g = gid < 0 ? (gid_t)-1 : (gid_t)gid;
+    for (;;) {
+        if (fchown((int)fd, u, g) == 0)
+            return true;
+        if (errno != EINTR)
+            return file_fail(err);
+    }
 }
 
 static struct timespec timespec_from_ns(int64_t ns) {

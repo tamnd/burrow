@@ -23,8 +23,8 @@
  * Paths are Str and go to the system as they are, so "/" and, on Windows, "\"
  * both work. A name with a NUL byte in it fails with EINVAL, as Go's does.
  *
- * Not here yet: the environment, processes, File.Chmod, Chown and Chdir,
- * Lchown, Pipe, CopyFS and Root. FileInfo.Sys gives a nil Any for now, where Go gives a
+ * Not here yet: starting and waiting for processes, CopyFS and Root.
+ * FileInfo.Sys gives a nil Any for now, where Go gives a
  * *syscall.Stat_t.
  *
  * Derived from Go's src/os/file.go.
@@ -42,6 +42,7 @@
 
 #include "burrow/core.h"
 #include "burrow/error.h"
+#include "burrow/func.h"
 #include "burrow/io.h"
 #include "burrow/io/fs.h"
 #include "burrow/mem.h"
@@ -282,6 +283,21 @@ BURROW_STATIC(ret) Error os_file_sync(OsFile *f);
 /* File.Truncate: makes the file size bytes long, without moving the offset. */
 BURROW_STATIC(ret) Error os_file_truncate(OsFile *f, int64_t size);
 
+/* File.Chmod: os_chmod on the open file. */
+BURROW_STATIC(ret) Error os_file_chmod(OsFile *f, OsFileMode mode);
+
+/* File.Chown: os_chown on the open file. Windows says EWINDOWS. */
+BURROW_STATIC(ret) Error os_file_chown(OsFile *f, Int uid, Int gid);
+
+/* File.Chdir: makes the open file, which has to be a directory, the working
+ * directory. */
+BURROW_STATIC(ret) Error os_file_chdir(OsFile *f);
+
+/* os.Pipe: a connected pair of files, called "|0" and "|1". What is written to
+ * *w can be read from the one returned. Both come from a, and the caller
+ * closes and frees both. On failure both are NULL. */
+BURROW_OWNS(ret) OsFile *os_pipe(Alloc *a, OsFile **w, Error *err);
+
 /* File.SetDeadline, SetReadDeadline and SetWriteDeadline. Go supports them on
  * pipes and the like, which go through its poller. burrow does not put files
  * on the poller yet, so they give os_err_no_deadline, which is what Go gives
@@ -373,6 +389,10 @@ BURROW_STATIC(ret) Error os_chmod(Str name, OsFileMode mode);
  * links are followed. Windows does not have it and says EWINDOWS. */
 BURROW_STATIC(ret) Error os_chown(Str name, Int uid, Int gid);
 
+/* os.Lchown: os_chown on a symbolic link itself, not what it points to.
+ * Windows says EWINDOWS. */
+BURROW_STATIC(ret) Error os_lchown(Str name, Int uid, Int gid);
+
 /* os.Chtimes: sets the access and modification times. A zero Time leaves that
  * one as it is. */
 BURROW_STATIC(ret) Error os_chtimes(Str name, Time atime, Time mtime);
@@ -436,6 +456,81 @@ BURROW_OWNS(ret) Str os_mkdir_temp(Alloc *a, Str dir, Str pattern, Error *err);
  * the FsFile closes the descriptor but cannot give the OsFile back, so use an
  * arena with it as with everything else an Fs hands out. */
 BURROW_OWNS(ret) Fs os_dir_fs(Alloc *a, Str dir);
+
+/* --------------------------------------------------------- environment */
+
+/* os.LookupEnv: the value of key, copied into a. *found says whether it was
+ * set at all, since a set but empty variable also gives an empty Str. found
+ * can be NULL. On Unix the environment is read once, as in Go, and later
+ * changes go through os_setenv, os_unsetenv and os_clearenv. */
+BURROW_OWNS(ret) Str os_lookup_env(Alloc *a, Str key, bool *found);
+
+/* os.Getenv: os_lookup_env without found. */
+BURROW_OWNS(ret) Str os_getenv(Alloc *a, Str key);
+
+/* os.Setenv. A key or value with NUL in it gives a SyscallError "setenv"
+ * with EINVAL, and on Unix so does a key that is empty or has '=' in it. */
+BURROW_STATIC(ret) Error os_setenv(Str key, Str value);
+
+/* os.Unsetenv. */
+BURROW_STATIC(ret) Error os_unsetenv(Str key);
+
+/* os.Clearenv: unsets every variable. */
+void os_clearenv(void);
+
+/* os.Environ: a Slice of Str, each "key=value", all copied into a. */
+BURROW_OWNS(ret) Slice os_environ(Alloc *a);
+
+/* os.Expand: s with each $var or ${var} replaced by what mapping gives for
+ * it. What mapping gives is copied, so it may borrow, and the result is a
+ * copy in a even when nothing changed. */
+BURROW_OWNS(ret) Str os_expand(Alloc *a, Str s, StrFunc mapping);
+
+/* os.ExpandEnv: os_expand with os_getenv as the mapping. */
+BURROW_OWNS(ret) Str os_expand_env(Alloc *a, Str s);
+
+/* ------------------------------------------------------------- process */
+
+/* os.Args: the command line, a Slice of Str that lives as long as the
+ * program. Do not change it. */
+BURROW_BORROWS(ret) Slice os_args(void);
+
+/* os.Getuid, Geteuid, Getgid and Getegid. Windows gives -1 for all four. */
+Int os_getuid(void);
+Int os_geteuid(void);
+Int os_getgid(void);
+Int os_getegid(void);
+
+/* os.Getgroups: the supplementary group ids, a Slice of Int from a. Windows
+ * gives a SyscallError "getgroups" with EWINDOWS. */
+BURROW_OWNS(ret) Slice os_getgroups(Alloc *a, Error *err);
+
+/* os.Getpid, Getppid and Getpagesize. */
+Int os_getpid(void);
+Int os_getppid(void);
+Int os_getpagesize(void);
+
+/* os.Exit: ends the program now with code. Deferred work, buffered output
+ * that was not flushed and atexit handlers are skipped, as in Go. */
+void os_exit(Int code);
+
+/* os.Hostname: the name the kernel has for this machine. */
+BURROW_OWNS(ret) Str os_hostname(Alloc *a, Error *err);
+
+/* os.Getwd: a rooted path for the working directory. When $PWD names the same
+ * directory it is what you get, as in Go. */
+BURROW_OWNS(ret) Str os_getwd(Alloc *a, Error *err);
+
+/* os.Chdir: makes dir the working directory. */
+BURROW_STATIC(ret) Error os_chdir(Str dir);
+
+/* os.UserHomeDir, UserCacheDir and UserConfigDir, by Go's rules for each
+ * system: $HOME, %USERPROFILE%, $XDG_CACHE_HOME, %LocalAppData%,
+ * ~/Library/Caches and so on. When the variable they need is not set the
+ * error says so in Go's words. */
+BURROW_OWNS(ret) Str os_user_home_dir(Alloc *a, Error *err);
+BURROW_OWNS(ret) Str os_user_cache_dir(Alloc *a, Error *err);
+BURROW_OWNS(ret) Str os_user_config_dir(Alloc *a, Error *err);
 
 #ifdef __cplusplus
 }

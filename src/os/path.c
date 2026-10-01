@@ -238,6 +238,27 @@ Error os_chown(Str name, Int uid, Int gid) {
 #endif
 }
 
+Error os_lchown(Str name, Int uid, Int gid) {
+#if defined(BURROW_OS_WINDOWS)
+    (void)uid;
+    (void)gid;
+    return os_path_error(OS_LIT("lchown"), name,
+                         burrow__os_errno_value(SYSCALL_EWINDOWS));
+#else
+    Error e = BURROW_NO_ERROR;
+    OsCPath c;
+    if (!burrow__os_cpath(&c, name, &e))
+        return os_path_error(OS_LIT("lchown"), name, e);
+    PalErrno pe = PAL_OK;
+    if (!pal_lchown(c.p, (int64_t)uid, (int64_t)gid, &pe))
+        e = burrow__os_errno(pe);
+    burrow__os_cpath_free(&c);
+    if (BURROW_FAILED(e))
+        return os_path_error(OS_LIT("lchown"), name, e);
+    return BURROW_NO_ERROR;
+#endif
+}
+
 /* A zero Time leaves that time as it is. */
 Error os_chtimes(Str name, Time atime, Time mtime) {
     Error e = BURROW_NO_ERROR;

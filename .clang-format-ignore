@@ -14,3 +14,7 @@ tests/gen/*_gen.h
 src/xtext/norm_tables.c
 src/xtext/norm_tables.h
 tests/xtext_norm_test_gen.h
+src/xtext/bidi_tables.c
+src/xtext/bidi_tables.h
+tests/xtext_bidi_test_gen.h
+tests/xtext_bidirule_test_gen.h

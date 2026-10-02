@@ -630,42 +630,16 @@ static void close_testdata(Opened *o) {
     remove_temp(o->path);
 }
 
-/* What there is of fstest.TestFS until burrow has it: every file the test
- * names opens, reads the same as through the archive, and is found walking the
- * tree, and every file the walk finds stats as the same kind of thing. */
-typedef struct FsCheckEnv {
-    TestingT *t;
-    Alloc *a;
-    Fs fsys;
-    Str *seen;
-    Int nseen;
-} FsCheckEnv;
-
-static Error fs_check_visit(void *env, Str path, FsDirEntry d, Error err) {
-    FsCheckEnv *e = (FsCheckEnv *)env;
-    if (BURROW_FAILED(err)) {
-        testing_t_errorf_v(e->t, "%q: %v", path, err);
-        return err;
-    }
-    Error serr;
-    FsFileInfo fi = fs_stat(e->a, e->fsys, path, &serr);
-    if (BURROW_FAILED(serr))
-        testing_t_errorf_v(e->t, "stat %q: %v", path, serr);
-    else if (fi.vt->is_dir(fi.data) != d.vt->is_dir(d.data))
-        testing_t_errorf_v(e->t, "%q: stat and dir entry disagree on IsDir", path);
-    if (e->nseen < 64)
-        e->seen[e->nseen++] = path;
-    return BURROW_NO_ERROR;
-}
-
 static void TestFS(TestingT *t) {
     static const struct {
         const char *file;
-        const char *want[3];
-        int nwant;
+        Str want[3];
+        Int nwant;
     } tests[] = {
-        {"testdata/unix.zip", {"hello", "dir/bar", "readonly"}, 3},
-        {"testdata/subdir.zip", {"a/b/c"}, 1},
+        {"testdata/unix.zip",
+         {BURROW_S_INIT("hello"), BURROW_S_INIT("dir/bar"), BURROW_S_INIT("readonly")},
+         3},
+        {"testdata/subdir.zip", {BURROW_S_INIT("a/b/c")}, 1},
     };
     for (size_t ti = 0; ti < sizeof tests / sizeof tests[0]; ti++) {
         Arena ar;
@@ -673,37 +647,11 @@ static void TestFS(TestingT *t) {
         Alloc *a = arena_allocator(&ar);
         Opened o;
         open_testdata(t, a, &o, tests[ti].file);
-        Fs fsys = zip_reader_as_fs(&o.rc->reader);
-        Str seen[64];
-        FsCheckEnv env = {t, a, fsys, seen, 0};
-        Error err = fs_walk_dir(a, fsys, BURROW_S("."),
-                                BURROW_FN(FsWalkDirFunc, fs_check_visit, &env));
+        Slice want = slice_from((void *)(uintptr_t)tests[ti].want, tests[ti].nwant,
+                                tests[ti].nwant, TYPE_STRING);
+        Error err = fstest_test_fs(zip_reader_as_fs(&o.rc->reader), want);
         if (BURROW_FAILED(err))
-            testing_t_errorf_v(t, "%s: walk: %v", tests[ti].file, err);
-        for (int wi = 0; wi < tests[ti].nwant; wi++) {
-            Str name = str_from_cstr(tests[ti].want[wi]);
-            bool found = false;
-            for (Int k = 0; k < env.nseen; k++)
-                found = found || str_eq(seen[k], name);
-            if (!found)
-                testing_t_errorf_v(t, "%s: walk did not find %q", tests[ti].file, name);
-            Slice data = fs_read_file(a, fsys, name, &err);
-            if (BURROW_FAILED(err)) {
-                testing_t_errorf_v(t, "%s: ReadFile %q: %v", tests[ti].file, name, err);
-                continue;
-            }
-            for (Int k = 0; k < o.rc->reader.file.len; k++) {
-                ZipFile *f = zfile(&o.rc->reader, k);
-                if (!str_eq(f->file_header.name, name))
-                    continue;
-                IoReadCloser rc = zip_file_open(f, a, &err);
-                Slice want = io_read_all(a, rc_reader(rc), &err);
-                (void)rc_close(rc);
-                if (!same_bytes(want, data))
-                    testing_t_errorf_v(t, "%s: %q reads differently through the FS",
-                                       tests[ti].file, name);
-            }
-        }
+            testing_t_errorf_v(t, "%s: %v", tests[ti].file, err);
         close_testdata(&o);
         arena_free(&ar);
     }

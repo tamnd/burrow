@@ -471,6 +471,10 @@ static void TestDirFS(TestingT *t) {
     CHECK(fsys.vt != NULL);
     Error e = BURROW_NO_ERROR;
 
+    e = fstest_test_fs_v(fsys, S("top.txt"), S("sub/a"), S("sub/b"), S("sub/deeper"));
+    if (BURROW_FAILED(e))
+        testing_t_errorf_v(t, "TestFS: %v", e);
+
     Slice data = fs_read_file(a, fsys, S("sub/b"), &e);
     CHECK(BURROW_OK(e));
     CHECK(str_eq(str_from_bytes((const Byte *)data.p, data.len), S("bee")));

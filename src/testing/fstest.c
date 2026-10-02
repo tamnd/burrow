@@ -7,6 +7,7 @@
 
 #include "burrow/testing/fstest.h"
 
+#include "burrow/declare.h"
 #include "burrow/io.h"
 #include "burrow/path.h"
 #include "burrow/slices.h"
@@ -158,7 +159,35 @@ typedef struct FstestOpenFile {
     int64_t offset;
 } FstestOpenFile;
 
-FSTEST_TYPE(fstest_open_desc, "openMapFile", FstestOpenFile, 0x66746f66U);
+static int64_t fstest_open_seek(FstestOpenFile *f, int64_t offset, Int whence,
+                                Error *err);
+static Int fstest_open_read_at(FstestOpenFile *f, Slice b, int64_t offset, Error *err);
+
+/* Seek and ReadAt are only reached through the method set, the way Go's
+ * io.Seeker and io.ReaderAt assertions find them, and testing/iotest is what
+ * asks. */
+#define FSTEST_OPEN_METHODS(M, T)                                                      \
+    M(T, ReadAt, fstest_open_read_at, IO_SIG_READ_AT)                                  \
+    M(T, Seek, fstest_open_seek, IO_SIG_SEEK)
+BURROW_METHODS_DEFINE(FstestOpenFile, FSTEST_OPEN_METHODS);
+
+static const Type fstest_open_desc = {
+    {(const Byte *)"openMapFile", 11},
+    {(const Byte *)"testing/fstest", 14},
+    KIND_STRUCT,
+    (uint32_t)sizeof(FstestOpenFile),
+    (uint16_t)_Alignof(FstestOpenFile),
+    0,
+    (uint16_t)(sizeof burrow__methods_FstestOpenFile /
+               sizeof burrow__methods_FstestOpenFile[0]),
+    NULL,
+    burrow__methods_FstestOpenFile,
+    NULL,
+    NULL,
+    0,
+    0x66746f66U,
+    NULL,
+};
 
 static Int fstest_open_read(void *self, Slice b, Error *err) {
     FstestOpenFile *f = (FstestOpenFile *)self;
@@ -174,6 +203,47 @@ static Int fstest_open_read(void *self, Slice b, Error *err) {
         memcpy(b.p, (const Byte *)data.p + f->offset, (size_t)n);
     f->offset += n;
     *err = BURROW_NO_ERROR;
+    return n;
+}
+
+static int64_t fstest_open_seek(FstestOpenFile *f, int64_t offset, Int whence,
+                                Error *err) {
+    int64_t size = (int64_t)f->info.f->data.len;
+    switch (whence) {
+    case 0:
+        break;
+    case 1:
+        offset += f->offset;
+        break;
+    case 2:
+        offset += size;
+        break;
+    default:
+        break;
+    }
+    if (offset < 0 || offset > size) {
+        *err = fs_path_error_new(error_allocator(), FSTEST_LIT("seek"), f->path,
+                                 fs_err_invalid);
+        return 0;
+    }
+    f->offset = offset;
+    *err = BURROW_NO_ERROR;
+    return offset;
+}
+
+static Int fstest_open_read_at(FstestOpenFile *f, Slice b, int64_t offset, Error *err) {
+    Slice data = f->info.f->data;
+    if (offset < 0 || offset > (int64_t)data.len) {
+        *err = fs_path_error_new(error_allocator(), FSTEST_LIT("read"), f->path,
+                                 fs_err_invalid);
+        return 0;
+    }
+    Int n = data.len - (Int)offset;
+    if (n > b.len)
+        n = b.len;
+    if (n > 0)
+        memcpy(b.p, (const Byte *)data.p + offset, (size_t)n);
+    *err = n < b.len ? io_eof : BURROW_NO_ERROR;
     return n;
 }
 

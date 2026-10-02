@@ -1,4 +1,4 @@
-/* testing/fstest, an FS in memory for tests.
+/* testing/fstest, an FS in memory for tests, and a check for any FS.
  *
  * A MapFS is a map from names to files. Only the files need to be in it: the
  * directories they are in exist without being listed, the way the directories
@@ -15,7 +15,11 @@
  * to outlive it. Opening a file does not copy it either, so a file changed
  * while it is open reads as changed.
  *
- * TestFS, the checker for FS implementations, is not here yet.
+ * fstest_test_fs checks an FS implementation, any FS and not only a MapFS:
+ *
+ *     Error err = fstest_test_fs_v(os_dir_fs(a, dir), BURROW_S("hello.txt"));
+ *     if (BURROW_FAILED(err))
+ *         testing_t_fatal_v(t, err);
  *
  * Copyright 2020 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -84,6 +88,27 @@ BURROW_OWNS(ret) Str fstest_map_fs_read_link(FstestMapFS fsys, Alloc *a, Str nam
                                              Error *err);
 BURROW_OWNS(ret) FsFileInfo fstest_map_fs_lstat(FstestMapFS fsys, Alloc *a, Str name,
                                                 Error *err);
+
+/* fstest.TestFS. Walks every file and directory in fsys and checks that each
+ * behaves the way the fs package says it should, through every extension
+ * method fsys has. Symbolic links are not followed, but when fsys has
+ * read_link and lstat, their Lstat is checked. It also checks that fsys holds
+ * at least the names in expected, a Slice of Str. With none, fsys has to be
+ * empty.
+ *
+ * The error is nil when nothing was wrong. Otherwise it starts "TestFS found
+ * errors:" and wraps every problem found, one to a line or more, and
+ * errors_is and errors_as look through it. fsys must not change while this
+ * runs. */
+BURROW_STATIC(ret) Error fstest_test_fs(Fs fsys, Slice expected); /* of Str */
+
+/* The same with the names listed in the call. */
+#define fstest_test_fs_v(fsys, ...)                                                    \
+    fstest_test_fs((fsys),                                                             \
+                   slice_from((Str[]){__VA_ARGS__},                                    \
+                              (Int)(sizeof((Str[]){__VA_ARGS__}) / sizeof(Str)),       \
+                              (Int)(sizeof((Str[]){__VA_ARGS__}) / sizeof(Str)),       \
+                              TYPE_STRING))
 
 #ifdef __cplusplus
 }

@@ -1052,6 +1052,10 @@ static void TestRootFS(TestingT *t) {
     testing_t_cleanup(t, BURROW_FN(Func, root_free_fn, r));
     Fs fsys = os_root_fs(r);
 
+    e = fstest_test_fs_v(fsys, S("b"), S("a/x"), S("c/d"), S("link"));
+    if (BURROW_FAILED(e))
+        testing_t_errorf_v(t, "TestFS: %v", e);
+
     Slice b = fs_read_file(a, fsys, S("a/x"), &e);
     if (BURROW_FAILED(e) || !str_eq(str_of(b), S("a/x")))
         testing_t_errorf_v(t, "ReadFile(a/x) = %q, %s", str_of(b), error_text(e));

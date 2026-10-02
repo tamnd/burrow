@@ -7,8 +7,7 @@
  * Go's tests reach for os.DirFS in a few places, to glob the package's own
  * directory and to make a directory that cannot be read. burrow has no os yet,
  * so those use a MapFS laid out the same way, and TestIssue51617 uses an FS
- * that fails to read the one directory. TestMapFS runs fstest.TestFS, which is
- * not ported yet, and is left out.
+ * that fails to read the one directory.
  *
  * Copyright 2020 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -1350,6 +1349,22 @@ static Error modes_walk(void *env, Str path, FsDirEntry d, Error err) {
     return BURROW_NO_ERROR;
 }
 
+static void TestMapFS(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    const FileSpec spec[] = {
+        {"hello", "hello, world\n", 0},
+        {"fortune/k/ken.txt", "If a program is too slow, it must have a loop.\n", 0},
+    };
+    Fs m = fstest_map_fs_as_fs(map_of(a, spec, 2));
+    Error err = fstest_test_fs_v(m, BURROW_S("hello"), BURROW_S("fortune"),
+                                 BURROW_S("fortune/k"), BURROW_S("fortune/k/ken.txt"));
+    arena_free(&ar);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+}
+
 static void TestMapFSChmodDot(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -1410,7 +1425,10 @@ static void TestMapFSSymlink(TestingT *t) {
         {"ken.txt", "dirlink/ken.txt", FS_MODE_SYMLINK},
     };
     Fs m = fstest_map_fs_as_fs(map_of(a, spec, 4));
-    Error err;
+    Error err = fstest_test_fs_v(m, BURROW_S("fortune/k/ken.txt"), BURROW_S("dirlink"),
+                                 BURROW_S("ken.txt"), BURROW_S("linklink"));
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "%v", err);
 
     Slice got_data = fs_read_file(a, m, BURROW_S("ken.txt"), &err);
     if (!bytes_are(got_data, file_content) || BURROW_FAILED(err))
@@ -1535,6 +1553,7 @@ static void TestMapFSDirectory(TestingT *t) {
     X(TestPathError)                                                                   \
     X(TestExampleGlob)                                                                 \
     X(TestExampleReadFile)                                                             \
+    X(TestMapFS)                                                                       \
     X(TestMapFSChmodDot)                                                               \
     X(TestMapFSFileInfoName)                                                           \
     X(TestMapFSSymlink)                                                                \

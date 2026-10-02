@@ -2,9 +2,9 @@
  * writeto_linux_test.go and rawconn_test.go.
  * Go source: go1.27.1.
  *
- * CopyFS, File.ReadFrom and File.WriteTo, and File.SyscallConn. Go's CopyFS
- * tests copy out of a fstest.MapFS, which is not here yet, so these copy out
- * of a DirFS over a tree the test writes first.
+ * CopyFS, File.ReadFrom and File.WriteTo, and File.SyscallConn. Go's
+ * TestCopyFS copies out of testdata/dirfs and then out of a fstest.MapFS.
+ * Here the first copy is out of a DirFS over a tree the test writes first.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -100,6 +100,10 @@ static void TestCopyFS(TestingT *t) {
     if (BURROW_FAILED(e))
         testing_t_fatalf_v(t, "CopyFS: %s", error_text(e));
 
+    e = fstest_test_fs_v(os_dir_fs(a, dst), S("hello.txt"), S("dir/run.sh"),
+                         S("dir/nothing"), S("dir/empty"));
+    if (BURROW_FAILED(e))
+        testing_t_fatalf_v(t, "TestFS: %v", e);
     CHECK_S(read_file(t, join(dst, "hello.txt")), S("hello, world\n"));
     CHECK_S(read_file(t, join(dst, "dir/run.sh")), S("#!/bin/sh\n"));
     CHECK_S(read_file(t, join(dst, "dir/nothing")), S(""));
@@ -124,6 +128,46 @@ static void TestCopyFS(TestingT *t) {
 
     cleanup(t, src);
     cleanup(t, str_from_bytes(dst.p, dst.len - 5));
+}
+
+/* The second half of Go's TestCopyFS, out of a MapFS. */
+static void TestCopyFSMapFS(TestingT *t) {
+    static const char *const files[][2] = {{"william", "Shakespeare\n"},
+                                           {"carl", "Gauss\n"},
+                                           {"daVinci", "Leonardo\n"},
+                                           {"einstein", "Albert\n"},
+                                           {"dir/newton", "Sir Isaac\n"}};
+    static FstestMapFile mf[5];
+    FstestMapFS m = fstest_map_fs_make(a);
+    for (int i = 0; i < 5; i++) {
+        mf[i].data = bytes_of(str_from_cstr(files[i][1]));
+        fstest_map_fs_set(m, str_from_cstr(files[i][0]), &mf[i]);
+    }
+    Fs fsys = fstest_map_fs_as_fs(m);
+    Str tmp = temp_dir(t);
+    Error e = os_copy_fs(tmp, fsys);
+    if (BURROW_FAILED(e))
+        testing_t_fatalf_v(t, "CopyFS: %v", e);
+    Fs tmp_fsys = os_dir_fs(a, tmp);
+    e = fstest_test_fs_v(tmp_fsys, S("william"), S("carl"), S("daVinci"), S("einstein"),
+                         S("dir/newton"));
+    if (BURROW_FAILED(e))
+        testing_t_fatalf_v(t, "TestFS: %v", e);
+    for (int i = 0; i < 5; i++)
+        CHECK_S(read_file(t, join(tmp, files[i][0])), str_from_cstr(files[i][1]));
+
+    /* Test whether CopyFS disallows copying for memory filesystem when there
+     * is any existing file in the destination directory. */
+    e = os_copy_fs(tmp, fsys);
+    if (!errors_is(e, fs_err_exist))
+        testing_t_errorf_v(
+            t,
+            "CopyFS should have failed and returned error when there is any "
+            "existing file in the destination directory (in memory "
+            "filesystem), got: %v, expected any error that indicates <file "
+            "exists>",
+            e);
+    cleanup(t, tmp);
 }
 
 static void TestCopyFSMissing(TestingT *t) {
@@ -337,6 +381,7 @@ static void setup(void) {
 
 #define TESTS(X)                                                                       \
     X(TestCopyFS)                                                                      \
+    X(TestCopyFSMapFS)                                                                 \
     X(TestCopyFSMissing)                                                               \
     X(TestCopyFSWithSymlinks)                                                          \
     X(TestReadFrom)                                                                    \

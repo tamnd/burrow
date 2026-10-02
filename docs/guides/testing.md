@@ -558,6 +558,97 @@ static void TestReaderChecks(TestingT *t) {
 
 `iotest_truncate_writer` is the one writer: it passes the first n bytes through and drops the rest, while telling the caller every write went through. Go's `NewReadLogger` and `NewWriteLogger` are not here yet. They log through package `log`, and will come with it.
 
+## Checking a file system
+
+`fstest_test_fs` is `fstest.TestFS`. Give it an `Fs` you wrote and the names that should be in it, and it walks the whole tree. It opens every file and directory and reads each one in several ways: through `open`, through every optional slot the FS has, and through the `fs_` helpers that work without them. Then it checks that all of them agree. Files also go through `iotest_test_reader`. The error is nil when everything agrees, and otherwise lists every problem it found, each one starting with the path. When one of the names is in a subdirectory, it runs again on `fs_sub` of that directory.
+
+Here is an FS with a bug: it caches the last file `ReadFile` read and hands out the cached bytes themselves.
+
+<!-- example: ../examples/testing/testfs.c#cache -->
+```c
+/* The code under test: an FS over a MapFS that keeps the last file ReadFile
+ * read, and has a bug. It hands out the cached bytes themselves, so a caller
+ * that changes them changes the cache. */
+typedef struct CachingFS {
+    FstestMapFS files;
+    Alloc *a;
+    Str last_name;
+    Slice last_data;
+} CachingFS;
+
+static FsFile caching_open(void *self, Alloc *a, Str name, Error *err) {
+    return fstest_map_fs_open(((CachingFS *)self)->files, a, name, err);
+}
+
+static Slice caching_read_file(void *self, Alloc *a, Str name, Error *err) {
+    (void)a;
+    CachingFS *c = (CachingFS *)self;
+    if (c->last_data.p != NULL && str_eq(name, c->last_name)) {
+        *err = BURROW_NO_ERROR;
+        return c->last_data;
+    }
+    Slice data = fstest_map_fs_read_file(c->files, c->a, name, err);
+    if (BURROW_OK(*err)) {
+        c->last_name = str_clone(c->a, name);
+        c->last_data = data;
+    }
+    return data;
+}
+
+static const FsVT caching_fs_vt = {.open = caching_open,
+                                   .read_file = caching_read_file};
+```
+
+`fstest_test_fs` changes the bytes it gets back from `read_file`, as a caller is allowed to, and reads the file again:
+
+<!-- example: ../examples/testing/testfs.c#testfs -->
+```c
+static void TestMapFS(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Fs fsys = fstest_map_fs_as_fs(sample_files(arena_allocator(&ar)));
+    Error err = fstest_test_fs_v(fsys, BURROW_S("README"), BURROW_S("docs/hello.txt"));
+    arena_free(&ar);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    fmt_println_v("MapFS passes");
+}
+
+static void TestCachingFS(TestingT *t) {
+    (void)t;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    CachingFS c = {.files = sample_files(a), .a = a};
+    Fs fsys = {&caching_fs_vt, &c};
+    Error err = fstest_test_fs_v(fsys, BURROW_S("README"), BURROW_S("docs/hello.txt"));
+    fmt_println_v(err);
+    arena_free(&ar);
+}
+```
+
+It reports each file twice for the caching FS: once for the second `read_file` call and once for `fs_read_file`, which goes through the same slot.
+
+```
+TestFS found errors:
+README: Readall vs second fsys.ReadFile: different data returned
+	"read me\n"
+	"sfbe!nf\v"
+README: ReadAll vs fs.ReadFile: different data returned
+	"read me\n"
+	"sfbe!nf\v"
+docs/hello.txt: Readall vs second fsys.ReadFile: different data returned
+	"hi\n"
+	"ij\v"
+docs/hello.txt: ReadAll vs fs.ReadFile: different data returned
+	"hi\n"
+	"ij\v"
+```
+
+The messages are the ones Go's TestFS uses, down to the lower case "Readall" in one of them.
+
+The errors wrap what the FS returned, so `errors_is` finds `fs_err_permission` or whatever else is in there. Pass `slice_nil(TYPE_STRING)` for the names to check that an FS is empty.
+
 ## Porting a test from Go
 
 Most of Go's tests are tables of cases and a loop over them, and the tables are the tedious part to copy by hand. `tools/burrow-gen tests` does that part. Give it one of Go's test files and it writes a C test file with every table translated, the structs they are made of declared, and every `Test` function stubbed out with its Go left in a comment:

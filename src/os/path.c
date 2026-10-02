@@ -313,15 +313,25 @@ Error os_truncate(Str name, int64_t size) {
 
 Slice os_read_file(Alloc *a, Str name, Error *err) {
     BURROW_OUT(err, BURROW_NO_ERROR);
-    Slice data = {NULL, 0, 0, TYPE_BYTE};
     Error e = BURROW_NO_ERROR;
     OsFile *f = os_open(heap_allocator(), name, &e);
     if (f == NULL) {
         BURROW_OUT(err, e);
-        return data;
+        return (Slice){NULL, 0, 0, TYPE_BYTE};
     }
+    Slice data = burrow__os_read_all(f, a, &e);
+    os_file_close(f);
+    os_file_free(f);
+    BURROW_OUT(err, e);
+    return data;
+}
 
-    /* statOrZero, without allocating a FileInfo. Nothing else has f. */
+Slice burrow__os_read_all(OsFile *f, Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    Slice data = {NULL, 0, 0, TYPE_BYTE};
+    Error e = BURROW_NO_ERROR;
+
+    /* statOrZero, without allocating a FileInfo. */
     PalStat st;
     int64_t stat_size = 0;
     if (pal_fstat(f->fd, &st, NULL))
@@ -336,8 +346,6 @@ Slice os_read_file(Alloc *a, Str name, Error *err) {
 
     data.p = mem_alloc_nozero(a, (size_t)size, 1);
     if (data.p == NULL) {
-        os_file_close(f);
-        os_file_free(f);
         BURROW_OUT(err, burrow_err_out_of_memory);
         return data;
     }
@@ -364,8 +372,6 @@ Slice os_read_file(Alloc *a, Str name, Error *err) {
             data.cap = ncap;
         }
     }
-    os_file_close(f);
-    os_file_free(f);
     BURROW_OUT(err, e);
     return data;
 }

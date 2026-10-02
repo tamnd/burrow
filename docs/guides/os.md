@@ -105,7 +105,7 @@ fs_read_file(a, fsys, BURROW_S("../notes.txt"), &out);
 /* readfile ../notes.txt: invalid argument */
 ```
 
-As in Go, this does not stop a symbolic link inside the directory from pointing outside it.
+As in Go, this does not stop a symbolic link inside the directory from pointing outside it. When that matters, use a root, which is covered below.
 
 `os_copy_fs` goes the other way and copies everything in an `Fs` into a directory, which it makes if it has to. Files are created with `OS_O_EXCL`, so copying over files that are already there fails and leaves them alone. Symbolic links are copied as links:
 
@@ -124,6 +124,55 @@ Error twice = os_copy_fs(dst, os_dir_fs(a, dir));
 ```c
 err = os_remove_all(dir); /* dir and everything under it */
 ```
+
+## Roots
+
+`os_open_root` opens a directory as an `OsRoot`, and everything done through the root stays inside that directory. Names are relative to it, and a name that would leave it fails, whether it leaves through `..` or through a symbolic link that points outside. Links that stay inside are followed. The root's functions are the ones from the rest of this page with `os_root_` in front:
+
+<!-- example: ../examples/os/root.c#openroot -->
+```c
+OsRoot *root = os_open_root(a, dir, &err);
+err = os_root_mkdir_all(root, BURROW_S("logs/old"), 0755);
+err = os_root_write_file(root, BURROW_S("logs/today.txt"), BURROW_B("started\n"), 0644);
+Slice data = os_root_read_file(root, a, BURROW_S("logs/today.txt"), &err);
+/* "started\n" */
+```
+
+A name that escapes gets a PathError wrapping "path escapes from parent". That includes a name that goes down and then back up past the top, like `logs/../../x`:
+
+<!-- example: ../examples/os/root.c#escape -->
+```c
+Error out = BURROW_NO_ERROR, link_out = BURROW_NO_ERROR;
+OsFile *f = os_root_open(root, a, BURROW_S("../secret.txt"), &out);
+/* NULL, openat ../secret.txt: path escapes from parent */
+os_root_readlink(root, a, BURROW_S("logs/../../x"), &link_out);
+/* readlinkat logs/../../x: path escapes from parent */
+```
+
+`os_root_fs` gives the root as an `Fs`, with the same checks behind it. Unlike `os_dir_fs`, a link inside the directory cannot be used to read something outside it:
+
+<!-- example: ../examples/os/root.c#rootfs -->
+```c
+Fs fsys = os_root_fs(root);
+Slice entries = fs_read_dir(a, fsys, BURROW_S("logs"), &err);
+for (Int i = 0; i < entries.len; i++) {
+    FsDirEntry *e = (FsDirEntry *)slice_at(entries, i);
+    Str entry = fs_format_dir_entry(a, *e); /* "d old/", then "- today.txt" */
+    printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(entry));
+}
+```
+
+`os_open_in_root(a, dir, name, &err)` is the short way to open one file this way. It opens the root, opens the file and closes the root again.
+
+`os_root_close` closes the root. Calls that come after it fail with `os_err_closed`, and `os_root_free` gives the memory back, closing the root first if it is still open:
+
+<!-- example: ../examples/os/root.c#close -->
+```c
+err = os_root_close(root); /* later calls fail with "file already closed" */
+os_root_free(root);
+```
+
+On Linux, macOS and the BSDs every step goes through a directory descriptor with `openat` and its relatives, as Go does, so a directory that is renamed while you work on it cannot pull you out of the root. On Windows this first version works by name. It walks the name one component at a time, reads every link it meets and refuses anything that leaves, and then does the operation on the full path. That stops `..` and links that escape, but unlike Go's Windows version it does not hold handles open while it works, so a directory swapped for a link between the check and the operation is not caught. Go uses the same approach on the platforms that have no `openat`.
 
 ## The environment and the process
 

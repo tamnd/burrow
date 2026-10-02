@@ -741,6 +741,32 @@ bool pal_fchown(int64_t fd, int64_t uid, int64_t gid, PalErrno *err);
 #define PAL_UTIME_OMIT INT64_MIN
 bool pal_utimes(const char *path, int64_t atime_ns, int64_t mtime_ns, PalErrno *err);
 
+/* The same calls on a name relative to an open directory, which is what
+ * os.Root walks a path with. None of them follows a symbolic link in the last
+ * component of the name: openat wants PAL_O_NOFOLLOW for that, and the rest
+ * act on the link itself, as AT_SYMLINK_NOFOLLOW does. pal_unlinkat removes a
+ * directory when dir is true and anything else when it is false.
+ *
+ * Only the POSIX backend has these for now. Windows reports PAL_ENOTSUP from
+ * every one, and os does not call them there. */
+int64_t pal_openat(int64_t dirfd, const char *path, uint32_t flags, uint32_t mode,
+                   PalErrno *err);
+bool pal_lstatat(int64_t dirfd, const char *path, PalStat *out, PalErrno *err);
+bool pal_mkdirat(int64_t dirfd, const char *path, uint32_t mode, PalErrno *err);
+bool pal_unlinkat(int64_t dirfd, const char *path, bool dir, PalErrno *err);
+int64_t pal_readlinkat(int64_t dirfd, const char *path, char *buf, int64_t cap,
+                       PalErrno *err);
+bool pal_renameat(int64_t olddirfd, const char *from, int64_t newdirfd, const char *to,
+                  PalErrno *err);
+bool pal_linkat(int64_t olddirfd, const char *from, int64_t newdirfd, const char *to,
+                PalErrno *err);
+bool pal_symlinkat(const char *target, int64_t dirfd, const char *path, PalErrno *err);
+bool pal_fchmodat(int64_t dirfd, const char *path, uint32_t mode, PalErrno *err);
+bool pal_fchownat(int64_t dirfd, const char *path, int64_t uid, int64_t gid,
+                  PalErrno *err);
+bool pal_utimesat(int64_t dirfd, const char *path, int64_t atime_ns, int64_t mtime_ns,
+                  PalErrno *err);
+
 int64_t pal_dup(int64_t fd, PalErrno *err);
 
 /* out[0] is the read end and out[1] is the write end. flags takes

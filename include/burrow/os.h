@@ -23,7 +23,6 @@
  * Paths are Str and go to the system as they are, so "/" and, on Windows, "\"
  * both work. A name with a NUL byte in it fails with EINVAL, as Go's does.
  *
- * Not here yet: Root.
  * FileInfo.Sys gives a nil Any for now, where Go gives a
  * *syscall.Stat_t.
  *
@@ -703,6 +702,103 @@ void os_process_state_free(OsProcessState *ps);
  * system with no way to ask the error is "Executable not implemented for"
  * and its name. */
 BURROW_OWNS(ret) Str os_executable(Alloc *a, Error *err);
+
+/* ---------------------------------------------------------------- Root
+ *
+ * os.Root: a directory that names are looked up in and cannot leave.
+ *
+ *     OsRoot *r = os_open_root(a, BURROW_S("data"), &err);
+ *     OsFile *f = os_root_open(r, a, BURROW_S("sub/notes.txt"), &err);
+ *     os_root_open(r, a, BURROW_S("../secret"), &err);
+ *     // openat ../secret: path escapes from parent
+ *     Error cerr = os_root_close(r);
+ *     os_root_free(r);
+ *
+ * Every name is relative to the root. A name that is absolute, or that ".."
+ * or a symbolic link would take outside the root, fails with an OsPathError
+ * whose error is "path escapes from parent". Links inside the root are
+ * followed.
+ *
+ * On Unix a root holds a descriptor for the directory and walks each name
+ * one component at a time with openat and its relatives, the way Go does, so
+ * a root keeps working on its directory if the directory is moved, and a
+ * link swapped in during a walk cannot lead out. Root's Chmod, Chown and
+ * Chtimes have the same race on Unix that Go documents for them: if the file
+ * is replaced with a link between the check and the call, the call acts on
+ * the link. The link is inside the root, so this cannot escape it.
+ *
+ * On Windows a root is a name for now, and each call checks the name with
+ * Lstat and Readlink before using it, as Go does on js and plan9. That is
+ * open to a link being swapped in between the check and the use. Go's
+ * Windows version, which opens relative to a handle with NtCreateFile, is
+ * still to come.
+ *
+ * A root is safe to use from several threads at once. Closing it and freeing
+ * it are two calls, as for OsFile: a closed root fails every call with
+ * os_err_closed, and os_root_free gives the memory back. Nothing may be using
+ * the root by the time it is freed. */
+typedef struct OsRoot OsRoot;
+
+/* os.OpenRoot: the directory name as a root. It follows links in name. A name
+ * that is not a directory is an OsPathError "open" with "not a directory". */
+BURROW_OWNS(ret) OsRoot *os_open_root(Alloc *a, Str name, Error *err);
+
+/* os.OpenInRoot: os_open_root(dir), os_root_open(name), and the root closed
+ * again. The file stays open. */
+BURROW_OWNS(ret) OsFile *os_open_in_root(Alloc *a, Str dir, Str name, Error *err);
+
+/* Root.Name: the name the root was opened with. Fine after os_root_close. */
+BURROW_BORROWS(ret, r) Str os_root_name(const OsRoot *r);
+
+/* Root.Close: later calls on r fail with os_err_closed. Calls already under
+ * way finish first, and the descriptor goes when the last one does. */
+BURROW_STATIC(ret) Error os_root_close(OsRoot *r);
+
+/* The memory behind r, closed first if it is still open. */
+void os_root_free(OsRoot *r);
+
+/* Root.Open, Create and OpenFile: os_open, os_create and os_open_file on a
+ * name in the root. The file's name is the root's name joined to name. */
+BURROW_OWNS(ret) OsFile *os_root_open(OsRoot *r, Alloc *a, Str name, Error *err);
+BURROW_OWNS(ret) OsFile *os_root_create(OsRoot *r, Alloc *a, Str name, Error *err);
+BURROW_OWNS(ret) OsFile *os_root_open_file(OsRoot *r, Alloc *a, Str name, Int flag,
+                                           OsFileMode perm, Error *err);
+
+/* Root.OpenRoot: a directory in the root as a root of its own. */
+BURROW_OWNS(ret) OsRoot *os_root_open_root(OsRoot *r, Alloc *a, Str name, Error *err);
+
+/* Root's versions of os_chmod, os_mkdir, os_mkdir_all, os_chown, os_lchown,
+ * os_chtimes, os_remove, os_remove_all, os_rename, os_link and os_symlink.
+ * For os_root_symlink, oldname is what the link says and is not checked,
+ * since a link that points out of the root is harmless until the root is
+ * asked to follow it, and then it fails. */
+BURROW_STATIC(ret) Error os_root_chmod(OsRoot *r, Str name, OsFileMode mode);
+BURROW_STATIC(ret) Error os_root_mkdir(OsRoot *r, Str name, OsFileMode perm);
+BURROW_STATIC(ret) Error os_root_mkdir_all(OsRoot *r, Str name, OsFileMode perm);
+BURROW_STATIC(ret) Error os_root_chown(OsRoot *r, Str name, Int uid, Int gid);
+BURROW_STATIC(ret) Error os_root_lchown(OsRoot *r, Str name, Int uid, Int gid);
+BURROW_STATIC(ret) Error os_root_chtimes(OsRoot *r, Str name, Time atime, Time mtime);
+BURROW_STATIC(ret) Error os_root_remove(OsRoot *r, Str name);
+BURROW_STATIC(ret) Error os_root_remove_all(OsRoot *r, Str name);
+BURROW_STATIC(ret) Error os_root_rename(OsRoot *r, Str oldname, Str newname);
+BURROW_STATIC(ret) Error os_root_link(OsRoot *r, Str oldname, Str newname);
+BURROW_STATIC(ret) Error os_root_symlink(OsRoot *r, Str oldname, Str newname);
+
+/* Root.Stat, Lstat and Readlink. */
+BURROW_OWNS(ret) OsFileInfo os_root_stat(OsRoot *r, Alloc *a, Str name, Error *err);
+BURROW_OWNS(ret) OsFileInfo os_root_lstat(OsRoot *r, Alloc *a, Str name, Error *err);
+BURROW_OWNS(ret) Str os_root_readlink(OsRoot *r, Alloc *a, Str name, Error *err);
+
+/* Root.ReadFile and WriteFile. */
+BURROW_OWNS(ret) Slice os_root_read_file(OsRoot *r, Alloc *a, Str name, Error *err);
+BURROW_STATIC(ret) Error os_root_write_file(OsRoot *r, Str name, Slice data,
+                                            OsFileMode perm);
+
+/* Root.FS: the root as an Fs, with Stat, ReadFile, ReadDir and ReadLink.
+ * Names are io/fs names, so they are slash separated and "..", a leading "/"
+ * and, on Windows, a backslash are refused before the root sees them. The Fs
+ * borrows r. */
+BURROW_BORROWS(ret, r) Fs os_root_fs(OsRoot *r);
 
 #ifdef __cplusplus
 }

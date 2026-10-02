@@ -602,6 +602,167 @@ bool pal_utimes(const char *path, int64_t atime_ns, int64_t mtime_ns, PalErrno *
     return utimensat(AT_FDCWD, path, ts, 0) == 0 || file_fail(err);
 }
 
+/* ------------------------------------------------------------- the at calls */
+
+/* A directory descriptor as the at calls take it. */
+static bool dirfd_ok(int64_t fd, PalErrno *err) {
+    return fd_ok(fd, err);
+}
+
+int64_t pal_openat(int64_t dirfd, const char *path, uint32_t flags, uint32_t mode,
+                   PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!dirfd_ok(dirfd, err) || !posix_path_ok(path, err))
+        return PAL_INVALID_HANDLE;
+    int o = open_flags(flags);
+    for (;;) {
+        int fd = openat((int)dirfd, path, o, (mode_t)(mode & 07777));
+        if (fd >= 0)
+            return fd;
+        if (errno != EINTR)
+            return file_fail_n(err);
+    }
+}
+
+bool pal_lstatat(int64_t dirfd, const char *path, PalStat *out, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!dirfd_ok(dirfd, err) || !posix_path_ok(path, err))
+        return false;
+    if (out == NULL) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+    struct stat st;
+    for (;;) {
+        if (fstatat((int)dirfd, path, &st, AT_SYMLINK_NOFOLLOW) == 0)
+            break;
+        if (errno != EINTR)
+            return file_fail(err);
+    }
+    stat_from(&st, out);
+    return true;
+}
+
+bool pal_mkdirat(int64_t dirfd, const char *path, uint32_t mode, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!dirfd_ok(dirfd, err) || !posix_path_ok(path, err))
+        return false;
+    for (;;) {
+        if (mkdirat((int)dirfd, path, (mode_t)(mode & 07777)) == 0)
+            return true;
+        if (errno != EINTR)
+            return file_fail(err);
+    }
+}
+
+bool pal_unlinkat(int64_t dirfd, const char *path, bool dir, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!dirfd_ok(dirfd, err) || !posix_path_ok(path, err))
+        return false;
+    for (;;) {
+        if (unlinkat((int)dirfd, path, dir ? AT_REMOVEDIR : 0) == 0)
+            return true;
+        if (errno != EINTR)
+            return file_fail(err);
+    }
+}
+
+int64_t pal_readlinkat(int64_t dirfd, const char *path, char *buf, int64_t cap,
+                       PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!dirfd_ok(dirfd, err) || !posix_path_ok(path, err) || !count_ok(buf, cap, err))
+        return -1;
+    ssize_t n;
+    for (;;) {
+        n = readlinkat((int)dirfd, path, buf, (size_t)cap);
+        if (n >= 0)
+            break;
+        if (errno != EINTR)
+            return file_fail_n(err);
+    }
+    /* As for pal_readlink, a full buffer may be a truncated target. */
+    if ((int64_t)n >= cap) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    return (int64_t)n;
+}
+
+bool pal_renameat(int64_t olddirfd, const char *from, int64_t newdirfd, const char *to,
+                  PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!dirfd_ok(olddirfd, err) || !dirfd_ok(newdirfd, err) ||
+        !posix_path_ok(from, err) || !posix_path_ok(to, err))
+        return false;
+    return renameat((int)olddirfd, from, (int)newdirfd, to) == 0 || file_fail(err);
+}
+
+bool pal_linkat(int64_t olddirfd, const char *from, int64_t newdirfd, const char *to,
+                PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!dirfd_ok(olddirfd, err) || !dirfd_ok(newdirfd, err) ||
+        !posix_path_ok(from, err) || !posix_path_ok(to, err))
+        return false;
+    return linkat((int)olddirfd, from, (int)newdirfd, to, 0) == 0 || file_fail(err);
+}
+
+bool pal_symlinkat(const char *target, int64_t dirfd, const char *path, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!posix_path_ok(target, err) || !dirfd_ok(dirfd, err) ||
+        !posix_path_ok(path, err))
+        return false;
+    return symlinkat(target, (int)dirfd, path) == 0 || file_fail(err);
+}
+
+bool pal_fchmodat(int64_t dirfd, const char *path, uint32_t mode, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!dirfd_ok(dirfd, err) || !posix_path_ok(path, err))
+        return false;
+    /* The Linux system call ignores AT_SYMLINK_NOFOLLOW. glibc and musl go
+     * through fchmodat2, or an O_PATH descriptor on an older kernel, the same
+     * way Go does. */
+    for (;;) {
+        if (fchmodat((int)dirfd, path, (mode_t)(mode & 07777), AT_SYMLINK_NOFOLLOW) ==
+            0)
+            return true;
+        if (errno != EINTR)
+            return file_fail(err);
+    }
+}
+
+bool pal_fchownat(int64_t dirfd, const char *path, int64_t uid, int64_t gid,
+                  PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!dirfd_ok(dirfd, err) || !posix_path_ok(path, err))
+        return false;
+    uid_t u = uid < 0 ? (uid_t)-1 : (uid_t)uid;
+    gid_t g = gid < 0 ? (gid_t)-1 : (gid_t)gid;
+    for (;;) {
+        if (fchownat((int)dirfd, path, u, g, AT_SYMLINK_NOFOLLOW) == 0)
+            return true;
+        if (errno != EINTR)
+            return file_fail(err);
+    }
+}
+
+bool pal_utimesat(int64_t dirfd, const char *path, int64_t atime_ns, int64_t mtime_ns,
+                  PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!dirfd_ok(dirfd, err) || !posix_path_ok(path, err))
+        return false;
+    struct timespec ts[2] = {timespec_from_ns(atime_ns), timespec_from_ns(mtime_ns)};
+    if (atime_ns == PAL_UTIME_OMIT)
+        ts[0] = (struct timespec){0, UTIME_OMIT};
+    if (mtime_ns == PAL_UTIME_OMIT)
+        ts[1] = (struct timespec){0, UTIME_OMIT};
+    for (;;) {
+        if (utimensat((int)dirfd, path, ts, AT_SYMLINK_NOFOLLOW) == 0)
+            return true;
+        if (errno != EINTR)
+            return file_fail(err);
+    }
+}
+
 int64_t pal_dup(int64_t fd, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (!fd_ok(fd, err))

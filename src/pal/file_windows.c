@@ -708,6 +708,27 @@ bool pal_chdir(const char *path, PalErrno *err) {
     return SetCurrentDirectoryW(w) || file_fail(err);
 }
 
+/* Go's syscall.Fchdir: the handle's final path, without the \\?\ in front
+ * so that it does not leak into what Getwd says afterwards. */
+bool pal_fchdir(int64_t fd, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!handle_ok(fd, err))
+        return false;
+    wchar_t w[PAL_WPATH_MAX];
+    DWORD n =
+        GetFinalPathNameByHandleW(as_handle(fd), w, PAL_WPATH_MAX, VOLUME_NAME_DOS);
+    if (n == 0)
+        return file_fail(err);
+    if (n >= PAL_WPATH_MAX) {
+        BURROW_OUT(err, PAL_ENAMETOOLONG);
+        return false;
+    }
+    const wchar_t *p = w;
+    if (n >= 4 && w[0] == L'\\' && w[1] == L'\\' && w[2] == L'?' && w[3] == L'\\')
+        p += 4;
+    return SetCurrentDirectoryW(p) || file_fail(err);
+}
+
 int64_t pal_getcwd(char *buf, int64_t cap, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     wchar_t w[PAL_WPATH_MAX];
@@ -971,6 +992,39 @@ bool pal_chown(const char *path, int64_t uid, int64_t gid, PalErrno *err) {
     return false;
 }
 
+bool pal_lchown(const char *path, int64_t uid, int64_t gid, PalErrno *err) {
+    return pal_chown(path, uid, gid, err);
+}
+
+/* Go's syscall.Fchmod: the read-only attribute again, set through the handle.
+ * The times in a FILE_BASIC_INFO left at zero are left alone. */
+bool pal_fchmod(int64_t fd, uint32_t mode, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!handle_ok(fd, err))
+        return false;
+    BY_HANDLE_FILE_INFORMATION d;
+    if (!GetFileInformationByHandle(as_handle(fd), &d))
+        return file_fail(err);
+    DWORD want = (mode & 0200) ? (d.dwFileAttributes & ~(DWORD)FILE_ATTRIBUTE_READONLY)
+                               : (d.dwFileAttributes | FILE_ATTRIBUTE_READONLY);
+    if (want == d.dwFileAttributes)
+        return true;
+    FILE_BASIC_INFO basic;
+    memset(&basic, 0, sizeof basic);
+    basic.FileAttributes = want;
+    return SetFileInformationByHandle(as_handle(fd), FileBasicInfo, &basic,
+                                      sizeof basic) ||
+           file_fail(err);
+}
+
+bool pal_fchown(int64_t fd, int64_t uid, int64_t gid, PalErrno *err) {
+    (void)fd;
+    (void)uid;
+    (void)gid;
+    BURROW_OUT(err, PAL_ENOTSUP);
+    return false;
+}
+
 bool pal_utimes(const char *path, int64_t atime_ns, int64_t mtime_ns, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     wchar_t w[PAL_WPATH_MAX];
@@ -1029,7 +1083,8 @@ bool pal_pipe(int64_t out[2], uint32_t flags, PalErrno *err) {
 
 enum {
     DIR_FULL_INFO = 1u << 0, /* the filesystem refused FileIdBothDirectoryInfo */
-    DIR_HAVE = 1u << 1       /* buf holds records from pos on */
+    DIR_HAVE = 1u << 1,      /* buf holds records from pos on */
+    DIR_STARTED = 1u << 2    /* the first batch has been asked for */
 };
 
 bool pal_readdir(PalDir *d, PalDirEntry *out, PalErrno *err) {
@@ -1043,13 +1098,25 @@ bool pal_readdir(PalDir *d, PalDirEntry *out, PalErrno *err) {
 
     for (;;) {
         if ((d->state & DIR_HAVE) == 0) {
-            FILE_INFO_BY_HANDLE_CLASS cls = (d->state & DIR_FULL_INFO)
-                                                ? FileFullDirectoryInfo
-                                                : FileIdBothDirectoryInfo;
+            /* The first batch uses the restart classes, which start from the
+             * top of the directory wherever the handle had got to. That is
+             * what lets a PalDir zeroed again read the directory again, as
+             * Go's does after a Seek. */
+            bool restart = (d->state & DIR_STARTED) == 0;
+            FILE_INFO_BY_HANDLE_CLASS cls;
+            if (d->state & DIR_FULL_INFO)
+                cls = restart ? FileFullDirectoryRestartInfo : FileFullDirectoryInfo;
+            else
+                cls =
+                    restart ? FileIdBothDirectoryRestartInfo : FileIdBothDirectoryInfo;
             if (!GetFileInformationByHandleEx(as_handle(d->fd), cls, d->buf,
                                               sizeof d->buf)) {
                 DWORD why = GetLastError();
                 if (why == ERROR_NO_MORE_FILES)
+                    return false;
+                /* A restart on an empty root directory says there is no such
+                 * file rather than no more files, as Go notes. */
+                if (restart && why == ERROR_FILE_NOT_FOUND)
                     return false;
                 if ((d->state & DIR_FULL_INFO) == 0 &&
                     (why == ERROR_INVALID_PARAMETER || why == ERROR_NOT_SUPPORTED ||
@@ -1061,7 +1128,7 @@ bool pal_readdir(PalDir *d, PalDirEntry *out, PalErrno *err) {
                 return false;
             }
             d->pos = 0;
-            d->state |= DIR_HAVE;
+            d->state |= DIR_HAVE | DIR_STARTED;
         }
 
         const unsigned char *rec = (const unsigned char *)d->buf + d->pos;

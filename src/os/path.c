@@ -238,6 +238,27 @@ Error os_chown(Str name, Int uid, Int gid) {
 #endif
 }
 
+Error os_lchown(Str name, Int uid, Int gid) {
+#if defined(BURROW_OS_WINDOWS)
+    (void)uid;
+    (void)gid;
+    return os_path_error(OS_LIT("lchown"), name,
+                         burrow__os_errno_value(SYSCALL_EWINDOWS));
+#else
+    Error e = BURROW_NO_ERROR;
+    OsCPath c;
+    if (!burrow__os_cpath(&c, name, &e))
+        return os_path_error(OS_LIT("lchown"), name, e);
+    PalErrno pe = PAL_OK;
+    if (!pal_lchown(c.p, (int64_t)uid, (int64_t)gid, &pe))
+        e = burrow__os_errno(pe);
+    burrow__os_cpath_free(&c);
+    if (BURROW_FAILED(e))
+        return os_path_error(OS_LIT("lchown"), name, e);
+    return BURROW_NO_ERROR;
+#endif
+}
+
 /* A zero Time leaves that time as it is. */
 Error os_chtimes(Str name, Time atime, Time mtime) {
     Error e = BURROW_NO_ERROR;
@@ -361,4 +382,22 @@ Error os_write_file(Str name, Slice data, OsFileMode perm) {
     if (BURROW_FAILED(ce) && BURROW_OK(e))
         e = ce;
     return e;
+}
+
+Str burrow__os_cat3(Alloc *a, Str x, Str y, Str z) {
+    Int n = x.len + y.len + z.len;
+    Byte *b = (Byte *)mem_alloc_nozero(a, (size_t)n + 1, 1);
+    if (b == NULL)
+        return (Str){NULL, 0};
+    Byte *p = b;
+    if (x.len > 0)
+        memcpy(p, x.p, (size_t)x.len);
+    p += x.len;
+    if (y.len > 0)
+        memcpy(p, y.p, (size_t)y.len);
+    p += y.len;
+    if (z.len > 0)
+        memcpy(p, z.p, (size_t)z.len);
+    b[n] = 0;
+    return str_from_bytes(b, n);
 }

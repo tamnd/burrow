@@ -22,9 +22,23 @@ struct OsFile {
     int64_t fd;
     Str name;
     Alloc *a;
+    void *dirinfo; /* an OsDirInfo once the file is read as a directory */
     bool append_mode;
     bool stdio; /* one of the three os_stdin and the others hand out */
 };
+
+/* poll.FD's incref and decref. The decref that lets go of the last reference
+ * of a closed file closes the descriptor, and gives the close error. */
+bool burrow__os_incref(OsFile *f);
+Error burrow__os_decref(OsFile *f);
+
+/* poll.ErrFileClosing, which os mostly turns into os_err_closed. */
+extern const Error burrow__os_err_file_closing;
+
+/* The directory state of f, if it has any, back to the start, as Go's seek
+ * does, and freed, as Go's close does. */
+void burrow__os_dirinfo_reset(OsFile *f);
+void burrow__os_dirinfo_free(OsFile *f);
 
 /* A Str as a NUL terminated path for the PAL, on the stack when it fits and
  * from the heap when it does not. */
@@ -47,6 +61,12 @@ Error burrow__os_errno(PalErrno e);
 
 /* The Error for one SyscallErrno, from error_allocator. */
 Error burrow__os_errno_value(SyscallErrno e);
+
+/* x, y and z one after the other, from a, or an empty Str when a refuses. */
+Str burrow__os_cat3(Alloc *a, Str x, Str y, Str z);
+
+/* A PalStat mode as a FileMode. */
+FsFileMode burrow__os_mode_of(uint32_t m);
 
 /* The FileInfo for a PalStat, with the last element of name as its name. */
 OsFileInfo burrow__os_file_info(Alloc *a, Str name, const PalStat *st, Error *err);

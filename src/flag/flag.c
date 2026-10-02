@@ -20,6 +20,7 @@
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
+#include "burrow/os.h"
 #include "burrow/pal.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
@@ -379,53 +380,15 @@ static FlagFlagSet command_line = {
 
 FlagFlagSet *flag_command_line = &command_line;
 
-/* os.Args, which the os package will own once there is one. Read once, the
- * first time something needs it, and kept until the program ends. */
+/* Go's init gives CommandLine the program's name, os.Args[0]. Done the first
+ * time something needs it. */
 static SyncOnce args_once;
-static Str *os_args;
-static Int os_nargs;
 
 static void load_args(void *env) {
     (void)env;
-    Alloc *a = heap_allocator();
-    int64_t cap = 4096;
-    char *buf = NULL;
-    int64_t n = 0;
-    for (;;) {
-        buf = mem_alloc(a, (size_t)cap, 1);
-        if (buf == NULL)
-            return;
-        PalErrno e = 0;
-        n = pal_args(buf, cap, &e);
-        if (n >= 0)
-            break;
-        mem_free(a, buf, (size_t)cap, 1);
-        buf = NULL;
-        if (e != PAL_ERANGE)
-            return;
-        cap *= 2;
-    }
-    Int count = 0;
-    for (int64_t i = 0; i < n; i++)
-        if (buf[i] == '\0')
-            count++;
-    if (count == 0)
-        return;
-    Str *args = mem_alloc(a, (size_t)count * sizeof(Str), _Alignof(Str));
-    if (args == NULL)
-        return;
-    int64_t start = 0;
-    Int k = 0;
-    for (int64_t i = 0; i < n; i++) {
-        if (buf[i] == '\0') {
-            args[k++] = str_from_bytes(buf + start, (Int)(i - start));
-            start = i + 1;
-        }
-    }
-    os_args = args;
-    os_nargs = count;
-    /* Go's init gives CommandLine the program's name. */
-    command_line.name = str_clone(a, args[0]);
+    Slice args = os_args();
+    if (args.len > 0)
+        command_line.name = str_clone(heap_allocator(), *(Str *)slice_at(args, 0));
 }
 
 static void need_args(void) {
@@ -746,7 +709,8 @@ static void default_usage(FlagFlagSet *f) {
 static void usage_default(void *env) {
     (void)env;
     need_args();
-    Str prog = os_nargs > 0 ? os_args[0] : BURROW_STR_EMPTY;
+    Slice os_argv = os_args();
+    Str prog = os_argv.len > 0 ? *(Str *)slice_at(os_argv, 0) : BURROW_STR_EMPTY;
     Arena ar;
     arena_init(&ar, NULL, 256);
     out_str(flag_command_line,
@@ -1080,9 +1044,9 @@ Int flag_flag_set_n_flag(FlagFlagSet *f) {
 
 void flag_parse(void) {
     need_args();
-    Slice args = {NULL, 0, 0, TYPE_STRING};
-    if (os_nargs > 1)
-        args = slice_from(os_args + 1, os_nargs - 1, os_nargs - 1, TYPE_STRING);
+    Slice args = os_args();
+    if (args.len > 0)
+        args = slice_sub(args, 1, args.len);
     /* Ignore errors; CommandLine is set for ExitOnError. */
     (void)flag_flag_set_parse(flag_command_line, args);
 }

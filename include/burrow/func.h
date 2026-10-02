@@ -109,6 +109,11 @@ BURROW_FUNC(RuneMapFunc, Rune, Rune r);
  * and it has no name in Go either. */
 BURROW_FUNC(SwapFunc, void, Int i, Int j);
 
+/* Go's func(string) string, which is what regexp's ReplaceAllStringFunc and
+ * os.Expand take. Those copy what it returns, so it can live anywhere,
+ * including in memory the function reuses each call. */
+BURROW_FUNC(StrFunc, Str, Str s);
+
 /* Build one. The type comes first because C needs it to know what the compound
  * literal is.
  *

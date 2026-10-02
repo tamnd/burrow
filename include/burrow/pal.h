@@ -331,7 +331,9 @@ int64_t pal_cpu_name(char *buf, int64_t cap);
 uint32_t pal_cpu_features(void);
 
 /* The machine's name into buf, NUL terminated, returning its length or -1.
- * A buffer too small is PAL_ERANGE. Not implemented yet, it arrives with os. */
+ * A buffer too small is PAL_ERANGE. It is the name Go's os.Hostname gives:
+ * uname's node name on Linux, kern.hostname on the BSDs and macOS, and the
+ * physical DNS host name on Windows. */
 int64_t pal_hostname(char *buf, int64_t cap, PalErrno *err);
 
 /* ------------------------------------------------------------------- random
@@ -687,6 +689,10 @@ bool pal_rmdir(const char *path, PalErrno *err);
  *     if (err != PAL_OK)
  *         fail(err);
  *
+ * To read the directory again from the top, seek the descriptor to 0 and
+ * zero everything but fd again. Windows ignores the seek and starts over
+ * because of the zeroing, and the others need the seek.
+ *
  * It is eight kilobytes, which is fine in a goroutine and is why it is not
  * inside PalDirEntry. Closing the descriptor is the caller's, with pal_close,
  * and nothing else needs undoing. */
@@ -720,6 +726,15 @@ bool pal_chmod(const char *path, uint32_t mode, PalErrno *err);
 /* -1 for either id leaves it alone, which is how POSIX spells it. Windows
  * reports PAL_ENOTSUP, which is what Go's os.Chown does there. */
 bool pal_chown(const char *path, int64_t uid, int64_t gid, PalErrno *err);
+
+/* chown on a symbolic link itself rather than what it points at. Windows
+ * reports PAL_ENOTSUP, as for pal_chown. */
+bool pal_lchown(const char *path, int64_t uid, int64_t gid, PalErrno *err);
+
+/* chmod and chown on an open file. On Windows fchmod sets or clears the
+ * read-only attribute the way pal_chmod does, and fchown is PAL_ENOTSUP. */
+bool pal_fchmod(int64_t fd, uint32_t mode, PalErrno *err);
+bool pal_fchown(int64_t fd, int64_t uid, int64_t gid, PalErrno *err);
 
 /* Times in nanoseconds since the Unix epoch. PAL_UTIME_OMIT for either leaves
  * that one as it is, which is UTIME_OMIT on POSIX. */
@@ -845,6 +860,25 @@ enum {
 bool pal_kill(int64_t pid, int32_t sig, PalErrno *err);
 int64_t pal_getpid(void);
 
+/* The parent's process id. On Windows it is a number, as Go's Getppid gives,
+ * found by walking a snapshot of the process list, and -1 when that fails. */
+int64_t pal_getppid(void);
+
+/* The real and effective user and group ids. All four are -1 on Windows,
+ * which is what Go's Getuid and the rest return there. */
+typedef struct PalIds {
+    int64_t uid;
+    int64_t euid;
+    int64_t gid;
+    int64_t egid;
+} PalIds;
+void pal_ids(PalIds *out);
+
+/* The supplementary group ids into buf, returning how many there are. With
+ * cap 0 it only counts them. More than cap is PAL_EINVAL, as getgroups says,
+ * so a caller counts first and asks again. Windows reports PAL_ENOTSUP. */
+int64_t pal_getgroups(uint32_t *buf, int64_t cap, PalErrno *err);
+
 /* The handle behind standard input, output or error, for i 0, 1 or 2, which
  * is what a PalSpawn fds list wants when a child is to share ours. It is i
  * itself on POSIX and GetStdHandle on Windows. PAL_INVALID_HANDLE for any
@@ -862,6 +896,21 @@ BURROW_NORETURN void pal_exit(int32_t code);
  * again. */
 BURROW_BORROWS(ret) const char *const *pal_environ(void);
 
+/* The environment as it is now rather than as it started, for the os package,
+ * which on Windows reads it from the system every time the way Go does.
+ *
+ * pal_getenv copies key's value into buf, without a NUL, and returns its
+ * length, or -1 with PAL_ENOENT when key is not set and PAL_ERANGE when the
+ * value does not fit. pal_setenv sets key to value, or unsets it when value
+ * is NULL. pal_environ_read writes every "KEY=VALUE" into buf, each followed
+ * by a NUL, and returns the number of bytes, or -1 with PAL_ERANGE when they
+ * do not fit. On POSIX these are getenv, setenv, unsetenv and environ, which
+ * are not safe against a change on another thread, so the os package keeps
+ * its own copy there and only writes through. */
+int64_t pal_getenv(const char *key, char *buf, int64_t cap, PalErrno *err);
+bool pal_setenv(const char *key, const char *value, PalErrno *err);
+int64_t pal_environ_read(char *buf, int64_t cap, PalErrno *err);
+
 /* The process's command line, which is what Go's os.Args starts from: every
  * argument, the program name first, each followed by a NUL, one after another
  * in buf. Returns the number of bytes, every NUL counted, or -1, with
@@ -874,6 +923,10 @@ BURROW_BORROWS(ret) const char *const *pal_environ(void);
 int64_t pal_args(char *buf, int64_t cap, PalErrno *err);
 
 bool pal_chdir(const char *path, PalErrno *err);
+
+/* chdir to the directory open as fd. Windows asks for the handle's path and
+ * changes to that. */
+bool pal_fchdir(int64_t fd, PalErrno *err);
 
 /* The working directory into buf, NUL terminated. Returns its length, or -1,
  * with PAL_ERANGE when it does not fit. */

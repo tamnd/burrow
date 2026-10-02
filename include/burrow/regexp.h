@@ -59,10 +59,10 @@ extern "C" {
 /* regexp.Regexp: a compiled regular expression. */
 typedef struct Regexp Regexp;
 
-/* Go's func(string) string and func([]byte) []byte, which is what the
- * ReplaceAll Func forms take. What they return is copied into the result, so
- * it can live anywhere, including in memory the function reuses each call. */
-BURROW_FUNC(StrFunc, Str, Str s);
+/* Go's func([]byte) []byte, which is what the ReplaceAll Func forms take for
+ * bytes, beside StrFunc from burrow/func.h for strings. What it returns is
+ * copied into the result, so it can live anywhere, including in memory the
+ * function reuses each call. */
 BURROW_FUNC(BytesFunc, Slice, Slice b);
 
 /* ---------------------------------------------------------------- compiling */

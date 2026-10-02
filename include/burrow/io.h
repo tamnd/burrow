@@ -732,6 +732,7 @@ extern const Type burrow_type_IoErrorArg;
 #define IO_SIG_WRITE_STRING(IN, OUT) IN(0, Str) IN(1, IoErrorArg) OUT(Int)
 #define IO_SIG_READ_BYTE(IN, OUT) IN(0, IoErrorArg) OUT(Byte)
 #define IO_SIG_SEEK(IN, OUT) IN(0, int64_t) IN(1, Int) IN(2, IoErrorArg) OUT(int64_t)
+#define IO_SIG_READ_AT(IN, OUT) IN(0, Bytes) IN(1, int64_t) IN(2, IoErrorArg) OUT(Int)
 
 /* The assertions themselves, for packages like bufio that make the same
  * choice io_copy does. Each one calls the method and returns true when the
@@ -752,6 +753,10 @@ BURROW_STATIC(ret) const Method *burrow__io_read_byte_method(IoReader r);
 BURROW_STATIC(ret) const Method *burrow__io_seek_method(const Type *t);
 int64_t burrow__io_seek(const Method *m, void *data, int64_t offset, Int whence,
                         Error *err);
+
+/* The same for io.ReaderAt, which testing/iotest asks a reader for. */
+BURROW_STATIC(ret) const Method *burrow__io_read_at_method(const Type *t);
+Int burrow__io_read_at(const Method *m, void *data, Slice p, int64_t off, Error *err);
 
 #if defined(BURROW_SHORT) && BURROW_SHORT
 #define IO_SEEK_START BURROW_IO_SEEK_START

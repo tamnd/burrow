@@ -514,6 +514,50 @@ An input that reaches new code is shrunk before it is kept, as in Go, down to th
 
 Some things to know. burrow defines the functions the compiler calls into, and so does libFuzzer. To link burrow into a libFuzzer binary, build burrow with `-DBURROW_NO_FUZZ_HOOKS`, and `-test.fuzz` in that program runs without guidance. The trace-pc counters are a table of 16384 entries picked by a hash of where each call came from, so two edges can share an entry, which costs a little guidance and nothing else. Both kinds only count code in the program itself, and a shared library loaded at a different address in each worker would not line up, so link the code under test statically. MSVC's `/fsanitize-coverage` is not supported yet.
 
+## Readers that misbehave
+
+A reader is allowed to return fewer bytes than were asked for, and to return the end of the input together with the last of the data. Code that reads often only gets tested against readers that do neither. `testing/iotest` wraps a reader so that it does: `iotest_one_byte_reader` hands out one byte per read, `iotest_half_reader` half of what was asked for, and `iotest_data_err_reader` returns `io_eof` with the last bytes rather than from the read after. `iotest_timeout_reader` fails its second read with `iotest_err_timeout`, and `iotest_err_reader` fails every read with the error you give it.
+
+Each wrapper is one allocation from the allocator you pass, and `iotest_reader_free` gives it back. The reader it wraps is not freed and has to outlive it.
+
+<!-- example: ../examples/testing/iotest.c#timeout -->
+```c
+static void TestCountLinesTimeout(TestingT *t) {
+    StringsReader sr;
+    strings_reader_reset(&sr, BURROW_S("one\ntwo\nthree\nfour\nfive\n"));
+    IoReader r =
+        iotest_timeout_reader(heap_allocator(), strings_reader_as_io_reader(&sr));
+    Error err;
+    Int got = count_lines(r, &err);
+    fmt_printf_v("before the timeout: %d lines, %v\n", got, err);
+    if (!errors_is(err, iotest_err_timeout))
+        testing_t_errorf_v(t, "got %v, want the timeout", err);
+    iotest_reader_free(heap_allocator(), r);
+}
+```
+
+`iotest_test_reader` goes the other way and checks a reader you wrote. It reads it to the end in reads of 1, 2 and 3 bytes and compares what came out with what you say it holds. When the reader's type also has `Seek` or `ReadAt` in its method set, it checks those as well. The error says what was wrong:
+
+<!-- example: ../examples/testing/iotest.c#testreader -->
+```c
+static void TestReaderChecks(TestingT *t) {
+    Str text = BURROW_S("Now is the time");
+    StringsReader sr;
+    strings_reader_reset(&sr, text);
+    Slice want = slice_from((void *)(uintptr_t)text.p, text.len, text.len, TYPE_BYTE);
+    Error err = iotest_test_reader(strings_reader_as_io_reader(&sr), want);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+
+    /* Now one that is wrong about what it holds. */
+    strings_reader_reset(&sr, BURROW_S("Now is the tune"));
+    err = iotest_test_reader(strings_reader_as_io_reader(&sr), want);
+    fmt_println_v(err);
+}
+```
+
+`iotest_truncate_writer` is the one writer: it passes the first n bytes through and drops the rest, while telling the caller every write went through. Go's `NewReadLogger` and `NewWriteLogger` are not here yet. They log through package `log`, and will come with it.
+
 ## Porting a test from Go
 
 Most of Go's tests are tables of cases and a loop over them, and the tables are the tedious part to copy by hand. `tools/burrow-gen tests` does that part. Give it one of Go's test files and it writes a C test file with every table translated, the structs they are made of declared, and every `Test` function stubbed out with its Go left in a comment:

@@ -22,9 +22,10 @@
 #include <string.h>
 
 /* The methods asked for by name: io_copy looks for WriteTo and ReadFrom,
- * io_write_string for WriteString, compress/flate for ReadByte and archive/tar
- * for Seek. */
+ * io_write_string for WriteString, compress/flate for ReadByte, archive/tar
+ * for Seek and testing/iotest for ReadAt. */
 #define BYTES_READER_METHODS(M, T)                                                     \
+    M(T, ReadAt, bytes_reader_read_at, IO_SIG_READ_AT)                                 \
     M(T, ReadByte, bytes_reader_read_byte, IO_SIG_READ_BYTE)                           \
     M(T, Seek, bytes_reader_seek, IO_SIG_SEEK)                                         \
     M(T, WriteTo, bytes_reader_write_to, IO_SIG_WRITE_TO)

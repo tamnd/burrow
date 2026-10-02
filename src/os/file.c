@@ -39,9 +39,12 @@ _Static_assert(OS_O_TRUNC == PAL_O_TRUNC, "OS_O_TRUNC is the PAL's");
  * deadline setters, which hand it back as it is, as Go's do. */
 BURROW_SENTINEL_ERROR(burrow__os_err_file_closing, "use of closed file");
 
-/* The two methods io_copy asks a File for, in name order. */
+/* The methods asked for by name, in name order: io_copy wants ReadFrom and
+ * WriteTo, and testing/iotest ReadAt and Seek. */
 #define OS_FILE_METHODS(M, T)                                                          \
+    M(T, ReadAt, os_file_read_at, IO_SIG_READ_AT)                                      \
     M(T, ReadFrom, os_file_read_from, IO_SIG_READ_FROM)                                \
+    M(T, Seek, os_file_seek, IO_SIG_SEEK)                                              \
     M(T, WriteTo, os_file_write_to, IO_SIG_WRITE_TO)
 BURROW_METHODS_DEFINE(OsFile, OS_FILE_METHODS);
 

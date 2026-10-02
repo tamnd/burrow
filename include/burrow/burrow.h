@@ -138,6 +138,7 @@
 #include "burrow/syscall.h"
 #include "burrow/testing.h"
 #include "burrow/testing/fstest.h"
+#include "burrow/testing/iotest.h"
 #include "burrow/text/scanner.h"
 #include "burrow/text/tabwriter.h"
 #include "burrow/time.h"

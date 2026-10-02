@@ -23,7 +23,7 @@
  * Paths are Str and go to the system as they are, so "/" and, on Windows, "\"
  * both work. A name with a NUL byte in it fails with EINVAL, as Go's does.
  *
- * Not here yet: CopyFS and Root.
+ * Not here yet: Root.
  * FileInfo.Sys gives a nil Any for now, where Go gives a
  * *syscall.Stat_t.
  *
@@ -332,6 +332,24 @@ IoReadWriteSeeker os_file_as_io_read_write_seeker(OsFile *f);
 /* f as an fs.File, borrowing it. Its read_dir slot is NULL for now. */
 FsFile os_file_as_fs_file(OsFile *f);
 
+/* File.ReadFrom: everything r has, written to f, and how many bytes that was.
+ * Go hands some copies to copy_file_range, splice or sendfile on Linux and
+ * the BSDs. This always copies through a buffer, so the bytes and the errors
+ * are the same and only the speed differs. io_copy into an OsFile comes here. */
+int64_t os_file_read_from(OsFile *f, IoReader r, Error *err);
+
+/* File.WriteTo: everything left in f, written to w. io_copy from an OsFile
+ * comes here. */
+int64_t os_file_write_to(OsFile *f, IoWriter w, Error *err);
+
+/* File.SyscallConn: the descriptor under f as a SyscallRawConn, borrowing f.
+ * Files here are not on a poller, so a Read or Write callback that returns
+ * false gets "waiting for unsupported file type" on Unix, as a Go file that is
+ * not pollable does. On Windows a Write callback that returns false gives
+ * EWINDOWS and a Read callback WSAENOTSOCK, which is what Go's zero byte
+ * socket read gives on a file handle. */
+SyscallRawConn os_file_syscall_conn(OsFile *f, Error *err);
+
 /* os.Stdin, os.Stdout and os.Stderr, opened the first time you ask. */
 BURROW_STATIC(ret) OsFile *os_stdin_file(void);
 BURROW_STATIC(ret) OsFile *os_stdout_file(void);
@@ -458,6 +476,13 @@ BURROW_OWNS(ret) Str os_mkdir_temp(Alloc *a, Str dir, Str pattern, Error *err);
  * the FsFile closes the descriptor but cannot give the OsFile back, so use an
  * arena with it as with everything else an Fs hands out. */
 BURROW_OWNS(ret) Fs os_dir_fs(Alloc *a, Str dir);
+
+/* os.CopyFS: every file, directory and symbolic link in fsys, copied under
+ * dir. Directories get 0777 and files 0666 with fsys's execute bits, both
+ * less the umask. A file that is already there is an error, since files are
+ * created with OS_O_EXCL. Anything that is not a file, a directory or a link
+ * is an OsPathError of op "CopyFS". */
+BURROW_STATIC(ret) Error os_copy_fs(Str dir, Fs fsys);
 
 /* --------------------------------------------------------- environment */
 
@@ -613,9 +638,8 @@ typedef struct OsProcessState {
  * looked up in $PATH, which is what os/exec is for. A failure is a PathError
  * with op "fork/exec", or with op "chdir" when attr->dir is not a directory
  * that can be used. attr may be NULL. The OsProcess comes from a. */
-BURROW_OWNS(ret)
-OsProcess *os_start_process(Alloc *a, Str name, Slice argv, const OsProcAttr *attr,
-                            Error *err);
+BURROW_OWNS(ret) OsProcess *os_start_process(Alloc *a, Str name, Slice argv,
+                                             const OsProcAttr *attr, Error *err);
 
 /* os.FindProcess. On Unix this always works, whether or not there is such a
  * process, and Signal is how to find out, as in Go. On Windows it opens the
@@ -663,7 +687,8 @@ BURROW_OWNS(ret) Str os_process_state_string(const OsProcessState *ps, Alloc *a)
 
 /* ProcessState.Sys and SysUsage, typed, since C has no any to hand back. */
 SyscallWaitStatus os_process_state_sys(const OsProcessState *ps);
-BURROW_BORROWS(ret, ps) const SyscallRusage *os_process_state_sys_usage(const OsProcessState *ps);
+BURROW_BORROWS(ret, ps) const SyscallRusage *
+os_process_state_sys_usage(const OsProcessState *ps);
 
 /* ProcessState.UserTime and SystemTime: the CPU time the process and its
  * children it waited for used, in user mode and in the kernel. */

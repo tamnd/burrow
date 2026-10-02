@@ -9,14 +9,22 @@
  *     Str j = filepath_join_v(a, 2, BURROW_S("usr"), BURROW_S("lib"));
  *     Str r = filepath_rel(a, BURROW_S("/a"), BURROW_S("/a/b/c"), &err);   // "b/c"
  *
- * Everything here is lexical, the same as in path: nothing looks at the file
- * system. The functions that only cut a path up return views into the one you
+ * Nearly everything here is lexical, the same as in path: nothing looks at
+ * the file system. The functions that only cut a path up return views into the one you
  * gave them and never allocate. The ones that take an allocator hand back
  * their input when it is already what they would have built, so the result is
  * borrowed from both the allocator and the input. A failed allocation gives
  * the empty string.
  *
- * Go's Abs, EvalSymlinks, Glob, Walk and WalkDir need os, and come with it.
+ * The exceptions are at the end. filepath_abs, filepath_eval_symlinks,
+ * filepath_glob, filepath_walk and filepath_walk_dir ask the operating system,
+ * and everything they allocate, paths, file infos and directory entries, comes
+ * from the allocator you pass, so an arena is the easy way to call them:
+ *
+ *     Arena ar;
+ *     arena_init(&ar, NULL, 0);
+ *     Slice docs = filepath_glob(arena_allocator(&ar), BURROW_S("*.md"), &err);
+ *     arena_free(&ar);
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -30,6 +38,8 @@
 
 #include "burrow/core.h"
 #include "burrow/error.h"
+#include "burrow/func.h"
+#include "burrow/io/fs.h"
 #include "burrow/mem.h"
 #include "burrow/platform.h"
 #include "burrow/slice.h"
@@ -146,6 +156,60 @@ bool filepath_match(Str pattern, Str name, Error *err);
  * that ignores path boundaries, and on Windows compares again in lower case
  * if the first test fails. Deprecated, as it is in Go. */
 bool filepath_has_prefix(Str p, Str prefix);
+
+/* ------------------------------------------------- the file system as well */
+
+/* filepath.SkipDir and filepath.SkipAll, which are fs_skip_dir and
+ * fs_skip_all themselves, as they are in Go. */
+#define filepath_skip_dir fs_skip_dir
+#define filepath_skip_all fs_skip_all
+
+/* An absolute form of path. One that is already absolute is cleaned, and any
+ * other is joined onto os_getwd. On Windows it is GetFullPathNameW, which
+ * also knows the working directory of each drive, and the empty path means
+ * ".". Fails only when the working directory cannot be found, or on Windows
+ * when the system refuses path. */
+BURROW_OWNS(ret) Str filepath_abs(Alloc *a, Str path, Error *err);
+
+/* path with every symbolic link in it replaced by what it points to, and then
+ * cleaned. A relative path stays relative to the working directory unless a
+ * link in it is absolute. Every element has to exist, an element other than
+ * the last has to be a directory, and following more than 255 links is an
+ * error. On Windows each element also comes back in the case the file system
+ * stores it in, and the drive letter in upper case. */
+BURROW_OWNS(ret) Str filepath_eval_symlinks(Alloc *a, Str path, Error *err);
+
+/* The names of the files matching pattern, a Slice of Str in lexical order
+ * within each directory, or an empty Slice when nothing matches. The syntax
+ * is filepath_match's, and any element of the pattern can have meta
+ * characters, as in "cmd/?o/[a-m]ain.go". A pattern with
+ * none is returned as it is if the file exists. Errors reading directories
+ * are ignored: the only error is filepath_err_bad_pattern. */
+BURROW_OWNS(ret) Slice filepath_glob(Alloc *a, Str pattern, Error *err);
+
+/* filepath.WalkFunc, called by filepath_walk with each file or directory.
+ *
+ * path starts with the root filepath_walk was given, joined to the names
+ * below it with filepath_join, which may clean the root. info is the
+ * os_lstat of path. err is set in two cases. When the os_lstat fails, info is
+ * nil and err is its error. When a directory's names cannot be read, info is
+ * the directory's and err says why, and the walk does not go into it.
+ *
+ * Return filepath_skip_dir to skip a directory, or the rest of the directory
+ * a file is in, filepath_skip_all to stop, any other error to stop with that
+ * error, and no error to go on. */
+BURROW_FUNC(FilepathWalkFunc, Error, Str path, FsFileInfo info, Error err);
+
+/* filepath.Walk: calls fn for root and every file and directory under it, in
+ * lexical order, a directory before what is in it. Symbolic links are not
+ * followed. Each directory is read whole before any of it is visited, and
+ * each file gets an os_lstat, so filepath_walk_dir is cheaper. */
+BURROW_STATIC(ret) Error filepath_walk(Alloc *a, Str root, FilepathWalkFunc fn);
+
+/* filepath.WalkDir: fs_walk_dir over the operating system's files, with paths
+ * that use FILEPATH_SEPARATOR rather than a slash. fn is an FsWalkDirFunc and
+ * is called the way fs_walk_dir calls it. Symbolic links are not followed. */
+BURROW_STATIC(ret) Error filepath_walk_dir(Alloc *a, Str root, FsWalkDirFunc fn);
 
 #ifdef __cplusplus
 }

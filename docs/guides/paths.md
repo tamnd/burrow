@@ -88,7 +88,48 @@ bool escapes = filepath_is_local(BURROW_S("a/../../etc"));  /* false */
 Str name = filepath_localize(a, BURROW_S("uploads/a.png"), &err);
 ```
 
-Both are lexical, like everything in this guide, so a symbolic link inside the directory can still lead out of it. `filepath_match` is `path_match` with the system's separator, and on Windows a backslash in a pattern is a separator rather than a quote. It has its own error, `filepath_err_bad_pattern`, as Go's has. Go's `Abs`, `EvalSymlinks`, `Glob`, `Walk` and `WalkDir` look at the file system and come with `os`.
+Both are lexical, so a symbolic link inside the directory can still lead out of it. `filepath_match` is `path_match` with the system's separator, and on Windows a backslash in a pattern is a separator rather than a quote. It has its own error, `filepath_err_bad_pattern`, as Go's has.
+
+## Touching the file system
+
+Five functions look at the disk rather than the string. `filepath_walk_dir` visits every file and directory under a root in lexical order and hands each one to your callback as an `FsDirEntry`. Return `filepath_skip_dir` to leave a directory out, or `filepath_skip_all` to stop the walk early without it counting as an error:
+
+<!-- example: ../examples/path/filepath_walk.c#walk -->
+```c
+/* Prints each name under the root with slashes, and leaves out .git. */
+static Error list(void *env, Str path, FsDirEntry d, Error err) {
+    Lister *l = env;
+    if (BURROW_FAILED(err))
+        return err;
+    if (d.vt->is_dir(d.data) && str_eq(d.vt->name(d.data), BURROW_S(".git")))
+        return filepath_skip_dir;
+    Str rel = filepath_rel(l->a, l->root, path, &err);
+    Str s = filepath_to_slash(l->a, rel);
+    printf("%.*s\n", (int)s.len, (const char *)s.p);
+    return BURROW_NO_ERROR;
+}
+```
+
+`filepath_walk` is the older form that hands over an `FsFileInfo` instead, which costs an lstat for every name. Neither follows symbolic links. `filepath_glob` matches a pattern against the names on disk and returns them sorted, or nothing at all if none match:
+
+<!-- example: ../examples/path/filepath_walk.c#glob -->
+```c
+Slice md = filepath_glob(a, filepath_join_v(a, 2, root, BURROW_S("*.md")), &err);
+for (Int i = 0; i < md.len; i++) {
+    Str base = filepath_base(*(Str *)slice_at(md, i));
+    printf("%.*s\n", (int)base.len,
+           (const char *)base.p); /* CHANGES.md, README.md */
+}
+```
+
+`filepath_abs` joins a relative path onto the working directory and cleans the result, and `filepath_eval_symlinks` goes further and resolves every link along the way, so the path it returns names the same file with no links in it:
+
+<!-- example: ../examples/path/filepath_walk.c#abs -->
+```c
+Str abs = filepath_abs(a, BURROW_S("docs/../README.md"), &err);
+bool ok = BURROW_OK(err) && filepath_is_abs(abs); /* true, and abs is clean */
+Str real = filepath_eval_symlinks(a, root, &err); /* root with no links in it */
+```
 
 ## See also
 

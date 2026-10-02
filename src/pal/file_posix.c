@@ -470,6 +470,22 @@ bool pal_is_dos_device_name(const char *name, int64_t n) {
     return false;
 }
 
+int64_t pal_full_path(const char *path, char *buf, int64_t cap, PalErrno *err) {
+    (void)path;
+    (void)buf;
+    (void)cap;
+    BURROW_OUT(err, PAL_ENOTSUP);
+    return -1;
+}
+
+int64_t pal_find_name(const char *path, char *buf, int64_t cap, PalErrno *err) {
+    (void)path;
+    (void)buf;
+    (void)cap;
+    BURROW_OUT(err, PAL_ENOTSUP);
+    return -1;
+}
+
 bool pal_link(const char *from, const char *to, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (!posix_path_ok(from, err) || !posix_path_ok(to, err))

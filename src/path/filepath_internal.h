@@ -56,4 +56,7 @@ BURROW_OWNS(ret) Str burrow__filepath_rel(Alloc *a, Str base, Str targ, bool win
 bool burrow__filepath_match(Str pattern, Str name, bool win, Error *err);
 bool burrow__filepath_has_prefix(Str p, Str prefix, bool win);
 
+/* filepathlite.VolumeNameLen, which is 0 outside Windows. */
+Int burrow__filepath_volume_name_len(Str path, bool win);
+
 #endif /* BURROW_SRC_PATH_FILEPATH_INTERNAL_H */

@@ -544,3 +544,100 @@ Error os_remove_all(Str path) {
         err = err1;
     return err;
 }
+
+/* ------------------------------------------------------------------ CopyFS */
+
+typedef struct OsCopyFSEnv {
+    Str dir;
+    Fs fsys;
+} OsCopyFSEnv;
+
+/* A regular file from fsys copied to new_path, which must not exist yet. */
+static Error os_copy_fs_file(Fs fsys, Str path, Str new_path) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Error e = BURROW_NO_ERROR;
+    FsFile r = fsys.vt->open(fsys.data, a, path, &e);
+    if (BURROW_FAILED(e)) {
+        arena_free(&ar);
+        return e;
+    }
+    FsFileInfo info = r.vt->stat(r.data, a, &e);
+    OsFile *w = NULL;
+    if (BURROW_OK(e)) {
+        OsFileMode perm = 0666 | (info.vt->mode(info.data) & 0777);
+        w = os_open_file(a, new_path, OS_O_CREATE | OS_O_EXCL | OS_O_WRONLY, perm, &e);
+    }
+    if (BURROW_OK(e)) {
+        Error ce = BURROW_NO_ERROR;
+        io_copy(a, os_file_as_io_writer(w), fs_file_as_io_reader(r), &ce);
+        if (BURROW_FAILED(ce)) {
+            (void)os_file_close(w);
+            e = fs_path_error_new(error_allocator(), BURROW_S("Copy"), new_path, ce);
+        } else {
+            e = os_file_close(w);
+        }
+        os_file_free(w);
+    }
+    (void)r.vt->read_closer.closer.close(r.data);
+    arena_free(&ar);
+    return e;
+}
+
+static Error os_copy_fs_visit(void *env, Str path, FsDirEntry d, Error err) {
+    const OsCopyFSEnv *c = (const OsCopyFSEnv *)env;
+    if (BURROW_FAILED(err))
+        return err;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Error e = BURROW_NO_ERROR;
+    Str fpath = filepath_localize(a, path, &e);
+    if (BURROW_FAILED(e)) {
+        arena_free(&ar);
+        return e;
+    }
+    /* joinPath, which leaves out the separator when dir ends in one. */
+    Str new_path;
+    if (c->dir.len > 0 && os_is_path_separator(c->dir.p[c->dir.len - 1])) {
+        new_path = burrow__os_cat3(a, c->dir, fpath, (Str){NULL, 0});
+    } else {
+        Byte sep = (Byte)OS_PATH_SEPARATOR;
+        new_path = burrow__os_cat3(a, c->dir, str_from_bytes(&sep, 1), fpath);
+    }
+    if (new_path.p == NULL) {
+        arena_free(&ar);
+        return burrow_err_out_of_memory;
+    }
+    switch (d.vt->type(d.data)) {
+    case FS_MODE_DIR:
+        e = os_mkdir_all(new_path, 0777);
+        break;
+    case FS_MODE_SYMLINK: {
+        Str target = fs_read_link(a, c->fsys, path, &e);
+        if (BURROW_OK(e))
+            e = os_symlink(target, new_path);
+        break;
+    }
+    case 0:
+        e = os_copy_fs_file(c->fsys, path, new_path);
+        break;
+    default:
+        e = fs_path_error_new(error_allocator(), BURROW_S("CopyFS"), path,
+                              fs_err_invalid);
+        break;
+    }
+    arena_free(&ar);
+    return e;
+}
+
+Error os_copy_fs(Str dir, Fs fsys) {
+    OsCopyFSEnv env = {dir, fsys};
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Error e = fs_walk_dir(arena_allocator(&ar), fsys, BURROW_S("."),
+                          (FsWalkDirFunc){os_copy_fs_visit, &env});
+    arena_free(&ar);
+    return e;
+}

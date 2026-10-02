@@ -52,6 +52,21 @@ int main(void) {
     printf("%.*s" BURROW_STR_FMT "\n", (int)data.len, (const char *)data.p,
            BURROW_STR_ARG(error_text(out)));
 
+    // doc: copyfs
+    Str parent = os_mkdir_temp(a, BURROW_S(""), BURROW_S("example-*"), &err);
+    Str dst = fmt_sprintf_v(a, "%s%ccopy", parent, (Int)OS_PATH_SEPARATOR);
+    err = os_copy_fs(dst, os_dir_fs(a, dir)); /* dst/a/b/c and dst/notes.txt */
+    Error twice = os_copy_fs(dst, os_dir_fs(a, dir));
+    /* open .../copy/notes.txt: file exists */
+    // doc: end
+    if (BURROW_FAILED(err) || !os_is_exist(twice))
+        return 1;
+    Str copied = fmt_sprintf_v(a, "%s%cnotes.txt", dst, (Int)OS_PATH_SEPARATOR);
+    Slice again_data = os_read_file(a, copied, &err);
+    printf("%.*s", (int)again_data.len, (const char *)again_data.p);
+    if (BURROW_FAILED(err) || BURROW_FAILED(os_remove_all(parent)))
+        return 1;
+
     // doc: removeall
     err = os_remove_all(dir); /* dir and everything under it */
     // doc: end
@@ -65,4 +80,5 @@ d a/
 - notes.txt
 hello
 readfile ../notes.txt: invalid argument
+hello
 */

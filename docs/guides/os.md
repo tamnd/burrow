@@ -42,6 +42,8 @@ Closing and freeing are separate calls. `os_file_close` closes the descriptor an
 
 To pass a file to something that takes an interface, use `os_file_as_io_reader`, `os_file_as_io_writer`, `os_file_as_fs_file` and the rest. `os_stdin`, `os_stdout` and `os_stderr` are the three standard files. They are never freed, so `os_file_free` on one of them does nothing.
 
+An `OsFile` has Go's `ReadFrom` and `WriteTo` methods, so `io_copy` finds them when a file is on either end. `os_file_read_from` and `os_file_write_to` can also be called directly. Go hands some of these copies to `copy_file_range`, `splice` or `sendfile` on Linux. Here they always go through a buffer for now.
+
 ## Stat
 
 `os_stat` follows symbolic links and `os_lstat` does not. Both give an `OsFileInfo`, which is io/fs's `FileInfo`, so its methods are slots:
@@ -104,6 +106,17 @@ fs_read_file(a, fsys, BURROW_S("../notes.txt"), &out);
 ```
 
 As in Go, this does not stop a symbolic link inside the directory from pointing outside it.
+
+`os_copy_fs` goes the other way and copies everything in an `Fs` into a directory, which it makes if it has to. Files are created with `OS_O_EXCL`, so copying over files that are already there fails and leaves them alone. Symbolic links are copied as links:
+
+<!-- example: ../examples/os/dir.c#copyfs -->
+```c
+Str parent = os_mkdir_temp(a, BURROW_S(""), BURROW_S("example-*"), &err);
+Str dst = fmt_sprintf_v(a, "%s%ccopy", parent, (Int)OS_PATH_SEPARATOR);
+err = os_copy_fs(dst, os_dir_fs(a, dir)); /* dst/a/b/c and dst/notes.txt */
+Error twice = os_copy_fs(dst, os_dir_fs(a, dir));
+/* open .../copy/notes.txt: file exists */
+```
 
 `os_remove_all` removes a path and everything under it. A path that is not there is not an error:
 

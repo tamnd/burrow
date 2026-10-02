@@ -38,6 +38,7 @@
 
 #include "burrow/core.h"
 #include "burrow/error.h"
+#include "burrow/func.h"
 #include "burrow/mem.h"
 #include "burrow/pal.h"
 #include "burrow/platform.h"
@@ -160,7 +161,8 @@ SyscallSignal syscall_wait_status_signal(SyscallWaitStatus w); /* -1 unless Sign
 bool syscall_wait_status_core_dump(SyscallWaitStatus w);
 bool syscall_wait_status_stopped(SyscallWaitStatus w);
 bool syscall_wait_status_continued(SyscallWaitStatus w);
-SyscallSignal syscall_wait_status_stop_signal(SyscallWaitStatus w); /* -1 unless Stopped */
+SyscallSignal
+syscall_wait_status_stop_signal(SyscallWaitStatus w); /* -1 unless Stopped */
 /* The ptrace event of a process stopped at a SIGTRAP, on Linux. -1 elsewhere. */
 Int syscall_wait_status_trap_cause(SyscallWaitStatus w);
 
@@ -226,13 +228,34 @@ typedef struct SyscallRusage {
 /* wait4(2): wait for pid and give back its id. wstatus and rusage may be
  * NULL, and options are the system's own wait4 flags. A signal that arrives
  * first is EINTR, which Go returns rather than retries, and so does this. */
-Int syscall_wait4(Int pid, SyscallWaitStatus *wstatus, Int options, SyscallRusage *rusage,
-                  Error *err);
+Int syscall_wait4(Int pid, SyscallWaitStatus *wstatus, Int options,
+                  SyscallRusage *rusage, Error *err);
 #endif
 
 /* The Rusage for what pal_wait4 filled in, as syscall_errno_from_pal is the
  * Errno for a PalErrno. */
 SyscallRusage syscall_rusage_from_pal(const PalRusage *ru);
+
+/* ------------------------------------------------------------- RawConn */
+
+/* The callbacks syscall.RawConn takes: Control's gets the descriptor, or the
+ * HANDLE on Windows, and Read's and Write's say whether they are done. */
+BURROW_FUNC(SyscallFdFunc, void, Uintptr fd);
+BURROW_FUNC(SyscallFdDoneFunc, bool, Uintptr fd);
+
+/* syscall.RawConn: access to the descriptor under a file or connection, held
+ * open for as long as a callback runs and no longer. */
+typedef struct SyscallRawConnVT {
+    const Type *self_type;
+    Error (*control)(void *self, SyscallFdFunc f);
+    Error (*read)(void *self, SyscallFdDoneFunc f);
+    Error (*write)(void *self, SyscallFdDoneFunc f);
+} SyscallRawConnVT;
+
+typedef struct SyscallRawConn {
+    const SyscallRawConnVT *vt;
+    void *data;
+} SyscallRawConn;
 
 #ifdef __cplusplus
 }

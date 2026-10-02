@@ -14,6 +14,7 @@
 
 #include "burrow/os.h"
 
+#include "burrow/declare.h"
 #include "burrow/func.h"
 #include "burrow/mem/heap.h"
 #include "burrow/sema.h"
@@ -38,8 +39,33 @@ _Static_assert(OS_O_TRUNC == PAL_O_TRUNC, "OS_O_TRUNC is the PAL's");
  * deadline setters, which hand it back as it is, as Go's do. */
 BURROW_SENTINEL_ERROR(burrow__os_err_file_closing, "use of closed file");
 
+/* The two methods io_copy asks a File for, in name order. */
+#define OS_FILE_METHODS(M, T)                                                          \
+    M(T, ReadFrom, os_file_read_from, IO_SIG_READ_FROM)                                \
+    M(T, WriteTo, os_file_write_to, IO_SIG_WRITE_TO)
+BURROW_METHODS_DEFINE(OsFile, OS_FILE_METHODS);
+
 static const Type os_file_desc = {
     {(const Byte *)"File", 4},
+    {(const Byte *)"os", 2},
+    KIND_STRUCT,
+    (uint32_t)sizeof(OsFile),
+    (uint16_t)_Alignof(OsFile),
+    0,
+    (uint16_t)(sizeof burrow__methods_OsFile / sizeof burrow__methods_OsFile[0]),
+    NULL,
+    burrow__methods_OsFile,
+    NULL,
+    NULL,
+    0,
+    0x6f73666cU, /* "osfl" */
+    NULL,
+};
+
+/* Go's fileWithoutReadFrom and fileWithoutWriteTo: a File with neither
+ * method, for the generic copies to go through without coming back. */
+static const Type os_file_plain_desc = {
+    {(const Byte *)"fileWithoutReadFrom", 19},
     {(const Byte *)"os", 2},
     KIND_STRUCT,
     (uint32_t)sizeof(OsFile),
@@ -51,7 +77,7 @@ static const Type os_file_desc = {
     NULL,
     NULL,
     0,
-    0x6f73666cU, /* "osfl" */
+    0x6f736670U, /* "osfp" */
     NULL,
 };
 
@@ -864,4 +890,131 @@ IoReadWriteSeeker os_file_as_io_read_write_seeker(OsFile *f) {
 
 FsFile os_file_as_fs_file(OsFile *f) {
     return (FsFile){&os_fs_file_vt, f};
+}
+
+/* ------------------------------------------------- ReadFrom and WriteTo */
+
+static const IoReaderVT os_plain_reader_vt = {&os_file_plain_desc, os_vt_read};
+static const IoWriterVT os_plain_writer_vt = {&os_file_plain_desc, os_vt_write};
+
+int64_t os_file_read_from(OsFile *f, IoReader r, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    if (f == NULL) {
+        BURROW_OUT(err, fs_err_invalid);
+        return 0;
+    }
+    /* genericReadFrom, whose errors are not wrapped. */
+    return io_copy(heap_allocator(), (IoWriter){&os_plain_writer_vt, f}, r, err);
+}
+
+int64_t os_file_write_to(OsFile *f, IoWriter w, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    if (f == NULL) {
+        BURROW_OUT(err, fs_err_invalid);
+        return 0;
+    }
+    return io_copy(heap_allocator(), w, (IoReader){&os_plain_reader_vt, f}, err);
+}
+
+/* ----------------------------------------------------------- SyscallConn */
+
+static Error os_raw_control(void *self, SyscallFdFunc fn) {
+    OsFile *f = (OsFile *)self;
+    if (f == NULL)
+        return fs_err_invalid;
+    if (!os_incref(f))
+        return burrow__os_err_file_closing;
+    fn.f(fn.env, (Uintptr)f->fd);
+    return os_decref(f);
+}
+
+#if defined(BURROW_OS_WINDOWS)
+static Error os_raw_read(void *self, SyscallFdDoneFunc fn) {
+    OsFile *f = (OsFile *)self;
+    if (f == NULL)
+        return fs_err_invalid;
+    if (!os_read_lock(f))
+        return burrow__os_err_file_closing;
+    Error e = BURROW_NO_ERROR;
+    /* Go waits with a zero byte WSARecv on the handle, which a file is not. */
+    if (!fn.f(fn.env, (Uintptr)f->fd))
+        e = burrow__os_errno_value((SyscallErrno)10038); /* WSAENOTSOCK */
+    os_read_unlock(f);
+    return e;
+}
+
+static Error os_raw_write(void *self, SyscallFdDoneFunc fn) {
+    OsFile *f = (OsFile *)self;
+    if (f == NULL)
+        return fs_err_invalid;
+    if (!os_write_lock(f))
+        return burrow__os_err_file_closing;
+    Error e = BURROW_NO_ERROR;
+    if (!fn.f(fn.env, (Uintptr)f->fd))
+        e = burrow__os_errno_value(SYSCALL_EWINDOWS);
+    os_write_unlock(f);
+    return e;
+}
+#else
+BURROW_SENTINEL_ERROR(burrow__os_err_unsupported_wait,
+                      "waiting for unsupported file type");
+
+static Error os_raw_read(void *self, SyscallFdDoneFunc fn) {
+    OsFile *f = (OsFile *)self;
+    if (f == NULL)
+        return fs_err_invalid;
+    if (!os_read_lock(f))
+        return burrow__os_err_file_closing;
+    Error e = BURROW_NO_ERROR;
+    if (!fn.f(fn.env, (Uintptr)f->fd))
+        e = burrow__os_err_unsupported_wait;
+    os_read_unlock(f);
+    return e;
+}
+
+static Error os_raw_write(void *self, SyscallFdDoneFunc fn) {
+    OsFile *f = (OsFile *)self;
+    if (f == NULL)
+        return fs_err_invalid;
+    if (!os_write_lock(f))
+        return burrow__os_err_file_closing;
+    Error e = BURROW_NO_ERROR;
+    if (!fn.f(fn.env, (Uintptr)f->fd))
+        e = burrow__os_err_unsupported_wait;
+    os_write_unlock(f);
+    return e;
+}
+#endif
+
+static const Type os_raw_conn_desc = {
+    {(const Byte *)"rawConn", 7},
+    {(const Byte *)"os", 2},
+    KIND_STRUCT,
+    (uint32_t)sizeof(OsFile),
+    (uint16_t)_Alignof(OsFile),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x6f737263U, /* "osrc" */
+    NULL,
+};
+
+static const SyscallRawConnVT os_raw_conn_vt = {
+    &os_raw_conn_desc,
+    os_raw_control,
+    os_raw_read,
+    os_raw_write,
+};
+
+SyscallRawConn os_file_syscall_conn(OsFile *f, Error *err) {
+    if (f == NULL) {
+        BURROW_OUT(err, fs_err_invalid);
+        return (SyscallRawConn){NULL, NULL};
+    }
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return (SyscallRawConn){&os_raw_conn_vt, f};
 }

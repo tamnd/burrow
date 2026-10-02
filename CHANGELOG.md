@@ -4,6 +4,25 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.2.1 (2026-10-02)
+
+The first P2 work: path/filepath, syscall's errors, and most of os.
+
+### Added
+
+- `path/filepath`, Go's lexical path functions for the host system (#308).
+- `syscall.Errno`, with Go's numbers and texts for each system, generated from Go's own tables (#313).
+- `os`, files, `Stat` and the path functions, on a port of internal/poll's `fdMutex` (#314).
+- `os` directories, `MkdirAll`, `RemoveAll`, the temp file helpers and `DirFS`, then the environment, the process ids, `Getwd`, `Chdir`, `Pipe` and the user directories (#315).
+- `os` processes: `StartProcess`, `FindProcess`, `Process`, `ProcessState` and `Executable`, plus syscall's `Signal`, `WaitStatus`, `Rusage`, `Wait4` and `Kill` (#316).
+- New PAL calls behind these: `pal_truncate`, `pal_fchmod`, `pal_fchown`, `pal_lchown`, `pal_fchdir`, `pal_hostname`, `pal_wait4`, `pal_wait_ready`, `pal_kill_native` and `pal_executable`, among others (#314, #315, #316).
+
+### Changed
+
+- `flag` takes the program's arguments from `os_args` instead of keeping its own copy (#315).
+- `StrFunc` moved from `regexp.h` to `func.h` (#315).
+- `pal_utimes` can leave a time alone (#314).
+
 ## v0.2.0 (2026-10-01)
 
 The end of P1, the pure packages from strings through regexp. Every item on its checklist (#3) is now merged, the last being the four x/text packages Go vendors.

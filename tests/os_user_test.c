@@ -228,7 +228,7 @@ static IoReader reader(bool in, StringsReader *r) {
 }
 
 static void TestFindGroupName(TestingT *t) {
-    static const GroupTest tests[] = {
+    const GroupTest tests[] = {
         {true, S("nobody"), S("-2")},       {true, S("kmem"), S("2")},
         {true, S("notinthefile"), S("")},   {true, S("comment"), S("")},
         {true, S("plussign"), S("")},       {true, S("+plussign"), S("")},
@@ -276,7 +276,7 @@ static void TestFindGroupName(TestingT *t) {
 
 static void TestFindGroupId(TestingT *t) {
     /* name and gid swap roles: gid is the input, name the answer. */
-    static const GroupTest tests[] = {
+    const GroupTest tests[] = {
         {true, S("nobody"), S("-2")},     {true, S("kmem"), S("2")},
         {true, S(""), S("notinthefile")}, {true, S(""), S("comment")},
         {true, S("indented"), S("7")},    {true, S(""), S("4")},
@@ -364,7 +364,7 @@ static void TestInvalidUserId(TestingT *t) {
 }
 
 static void TestLookupUserId(TestingT *t) {
-    static const UserTest tests[] = {
+    const UserTest tests[] = {
         {true, S("negative"), S("-5")},
         {true, S("bin"), S("2")},
         {true, S(""), S("100")}, /* not in the file */
@@ -429,7 +429,7 @@ static void TestLookupUserPopulatesAllFields(TestingT *t) {
 }
 
 static void TestLookupUser(TestingT *t) {
-    static const UserTest tests[] = {
+    const UserTest tests[] = {
         {true, S("negative"), S("-5")},      {true, S("bin"), S("2")},
         {true, S("notinthefile"), S("")},    {true, S("indented"), S("3")},
         {true, S("plussign"), S("")},        {true, S("+plussign"), S("")},
@@ -504,7 +504,7 @@ static void check_same_ids(TestingT *t, Slice got, const char *want_list) {
 }
 
 static void TestListGroups(TestingT *t) {
-    static const ListGroupsTest tests[] = {
+    const ListGroupsTest tests[] = {
         {true, S("root"), S("0"), "0 1 2 7", false},
         {true, S("jill"), S("33"), "33 777", false},
         {true, S("jody"), S("34"), "34 777", false},

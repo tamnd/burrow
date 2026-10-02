@@ -71,4 +71,8 @@ FsFileMode burrow__os_mode_of(uint32_t m);
 /* The FileInfo for a PalStat, with the last element of name as its name. */
 OsFileInfo burrow__os_file_info(Alloc *a, Str name, const PalStat *st, Error *err);
 
+/* readFileContents with statOrZero: all of f from where it is to the end, in
+ * a. f stays open. */
+Slice burrow__os_read_all(OsFile *f, Alloc *a, Error *err);
+
 #endif /* BURROW_SRC_OS_INTERNAL_H */

@@ -1048,6 +1048,104 @@ bool pal_utimes(const char *path, int64_t atime_ns, int64_t mtime_ns, PalErrno *
     return true;
 }
 
+/* The at calls. os.Root on Windows works from names for now, so nothing calls
+ * these yet. Go's NtCreateFile versions are still to come. */
+static bool at_unsupported(PalErrno *err) {
+    BURROW_OUT(err, PAL_ENOTSUP);
+    return false;
+}
+
+int64_t pal_openat(int64_t dirfd, const char *path, uint32_t flags, uint32_t mode,
+                   PalErrno *err) {
+    (void)dirfd;
+    (void)path;
+    (void)flags;
+    (void)mode;
+    at_unsupported(err);
+    return PAL_INVALID_HANDLE;
+}
+
+bool pal_lstatat(int64_t dirfd, const char *path, PalStat *out, PalErrno *err) {
+    (void)dirfd;
+    (void)path;
+    (void)out;
+    return at_unsupported(err);
+}
+
+bool pal_mkdirat(int64_t dirfd, const char *path, uint32_t mode, PalErrno *err) {
+    (void)dirfd;
+    (void)path;
+    (void)mode;
+    return at_unsupported(err);
+}
+
+bool pal_unlinkat(int64_t dirfd, const char *path, bool dir, PalErrno *err) {
+    (void)dirfd;
+    (void)path;
+    (void)dir;
+    return at_unsupported(err);
+}
+
+int64_t pal_readlinkat(int64_t dirfd, const char *path, char *buf, int64_t cap,
+                       PalErrno *err) {
+    (void)dirfd;
+    (void)path;
+    (void)buf;
+    (void)cap;
+    at_unsupported(err);
+    return -1;
+}
+
+bool pal_renameat(int64_t olddirfd, const char *from, int64_t newdirfd, const char *to,
+                  PalErrno *err) {
+    (void)olddirfd;
+    (void)from;
+    (void)newdirfd;
+    (void)to;
+    return at_unsupported(err);
+}
+
+bool pal_linkat(int64_t olddirfd, const char *from, int64_t newdirfd, const char *to,
+                PalErrno *err) {
+    (void)olddirfd;
+    (void)from;
+    (void)newdirfd;
+    (void)to;
+    return at_unsupported(err);
+}
+
+bool pal_symlinkat(const char *target, int64_t dirfd, const char *path, PalErrno *err) {
+    (void)target;
+    (void)dirfd;
+    (void)path;
+    return at_unsupported(err);
+}
+
+bool pal_fchmodat(int64_t dirfd, const char *path, uint32_t mode, PalErrno *err) {
+    (void)dirfd;
+    (void)path;
+    (void)mode;
+    return at_unsupported(err);
+}
+
+bool pal_fchownat(int64_t dirfd, const char *path, int64_t uid, int64_t gid,
+                  PalErrno *err) {
+    (void)dirfd;
+    (void)path;
+    (void)uid;
+    (void)gid;
+    return at_unsupported(err);
+}
+
+bool pal_utimesat(int64_t dirfd, const char *path, int64_t atime_ns, int64_t mtime_ns,
+                  PalErrno *err) {
+    (void)dirfd;
+    (void)path;
+    (void)atime_ns;
+    (void)mtime_ns;
+    return at_unsupported(err);
+}
+
 int64_t pal_dup(int64_t fd, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (!handle_ok(fd, err))

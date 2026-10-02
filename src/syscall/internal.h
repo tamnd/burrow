@@ -19,4 +19,9 @@ extern const Uintptr burrow__syscall_errors_base;
 extern const char *const burrow__syscall_errors[];
 extern const Int burrow__syscall_nerrors;
 
+/* Go's signals table, entry i the name of signal i, and NULL or "" where Go
+ * has none. */
+extern const char *const burrow__syscall_signals[];
+extern const Int burrow__syscall_nsignals;
+
 #endif /* BURROW_SRC_SYSCALL_INTERNAL_H */

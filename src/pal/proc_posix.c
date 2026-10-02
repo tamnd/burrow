@@ -57,6 +57,15 @@
 #include <crt_externs.h>
 #endif
 
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+#include <mach-o/dyld.h>
+#endif
+
+#if defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_DRAGONFLY) ||                      \
+    defined(BURROW_OS_NETBSD)
+#include <sys/sysctl.h>
+#endif
+
 /* unistd.h declares it on Linux, where _GNU_SOURCE is set, and gcc calls a
  * second declaration redundant. */
 #if !defined(BURROW_OS_DARWIN) && !defined(BURROW_OS_LINUX)
@@ -280,6 +289,78 @@ int64_t pal_wait(int64_t pid, int32_t *status, uint32_t flags, PalErrno *err) {
     return (int64_t)got;
 }
 
+int64_t pal_wait4(int64_t pid, uint32_t *status, int32_t options, PalRusage *ru,
+                  PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    int st = 0;
+    struct rusage r;
+    memset(&r, 0, sizeof r);
+    pid_t got = wait4((pid_t)pid, &st, (int)options, &r);
+    if (got < 0)
+        return proc_fail_n(err);
+    BURROW_OUT(status, (uint32_t)st);
+    if (ru != NULL) {
+        memset(ru, 0, sizeof *ru);
+        ru->utime_sec = (int64_t)r.ru_utime.tv_sec;
+        ru->utime_usec = (int64_t)r.ru_utime.tv_usec;
+        ru->stime_sec = (int64_t)r.ru_stime.tv_sec;
+        ru->stime_usec = (int64_t)r.ru_stime.tv_usec;
+        ru->maxrss = (int64_t)r.ru_maxrss;
+        ru->ixrss = (int64_t)r.ru_ixrss;
+        ru->idrss = (int64_t)r.ru_idrss;
+        ru->isrss = (int64_t)r.ru_isrss;
+        ru->minflt = (int64_t)r.ru_minflt;
+        ru->majflt = (int64_t)r.ru_majflt;
+        ru->nswap = (int64_t)r.ru_nswap;
+        ru->inblock = (int64_t)r.ru_inblock;
+        ru->oublock = (int64_t)r.ru_oublock;
+        ru->msgsnd = (int64_t)r.ru_msgsnd;
+        ru->msgrcv = (int64_t)r.ru_msgrcv;
+        ru->nsignals = (int64_t)r.ru_nsignals;
+        ru->nvcsw = (int64_t)r.ru_nvcsw;
+        ru->nivcsw = (int64_t)r.ru_nivcsw;
+    }
+    return (int64_t)got;
+}
+
+bool pal_wait_ready(int64_t pid, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+#if defined(BURROW_OS_LINUX) && !defined(BURROW_OS_COSMO)
+    siginfo_t si;
+    memset(&si, 0, sizeof si);
+    int r;
+    do {
+        r = waitid(P_PID, (id_t)pid, &si, WEXITED | WNOWAIT);
+    } while (r != 0 && errno == EINTR);
+    return r == 0 || proc_fail(err);
+#elif defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_NETBSD) ||                       \
+    defined(BURROW_OS_DRAGONFLY)
+    int st = 0;
+    pid_t r;
+    do {
+        r = wait6(P_PID, (id_t)pid, &st, WEXITED | WNOWAIT, NULL, NULL);
+    } while (r < 0 && errno == EINTR);
+    return r >= 0 || proc_fail(err);
+#else
+    (void)pid;
+    BURROW_OUT(err, PAL_ENOTSUP);
+    return false;
+#endif
+}
+
+int64_t pal_process_id(int64_t pid) {
+    return pid;
+}
+
+int64_t pal_process_open(int64_t id, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    return id;
+}
+
+void pal_process_close(int64_t pid) {
+    (void)pid;
+}
+
 int64_t pal_getpid(void) {
     return (int64_t)getpid();
 }
@@ -470,6 +551,64 @@ int64_t pal_exec_lookup(const char *name, char *buf, int64_t cap, PalErrno *err)
     }
     BURROW_OUT(err, PAL_ENOENT);
     return -1;
+}
+
+/* -------------------------------------------------------------- executable */
+
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS) ||                             \
+    defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_DRAGONFLY) ||                      \
+    defined(BURROW_OS_NETBSD) || defined(BURROW_OS_SOLARIS)
+/* src into buf, NUL terminated, or PAL_ERANGE. */
+static int64_t proc_put_cstr(char *buf, int64_t cap, const char *src, size_t n,
+                             PalErrno *err) {
+    if (buf == NULL || cap < 0 || (int64_t)n >= cap) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    memcpy(buf, src, n);
+    buf[n] = 0;
+    return (int64_t)n;
+}
+#endif
+
+int64_t pal_executable(char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+    char small[PATH_MAX];
+    uint32_t n = (uint32_t)sizeof small;
+    if (_NSGetExecutablePath(small, &n) != 0) {
+        /* n is now the size it wants, and the path does not fit ours. */
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    return proc_put_cstr(buf, cap, small, strlen(small), err);
+#elif defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_DRAGONFLY) ||                    \
+    defined(BURROW_OS_NETBSD)
+#if defined(BURROW_OS_NETBSD)
+    int mib[4] = {CTL_KERN, KERN_PROC_ARGS, -1, KERN_PROC_PATHNAME};
+#else
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1};
+#endif
+    char small[PATH_MAX];
+    size_t n = sizeof small;
+    if (sysctl(mib, 4, small, &n, NULL, 0) != 0)
+        return proc_fail_n(err);
+    if (n == 0)
+        return proc_put_cstr(buf, cap, "", 0, err);
+    return proc_put_cstr(buf, cap, small, n - 1, err);
+#elif defined(BURROW_OS_SOLARIS)
+    const char *e = getexecname();
+    if (e == NULL) {
+        BURROW_OUT(err, PAL_ENOENT);
+        return -1;
+    }
+    return proc_put_cstr(buf, cap, e, strlen(e), err);
+#else
+    (void)buf;
+    (void)cap;
+    BURROW_OUT(err, PAL_ENOTSUP);
+    return -1;
+#endif
 }
 
 /* -------------------------------------------------------------------- mmap */

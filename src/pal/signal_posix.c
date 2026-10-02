@@ -190,6 +190,15 @@ bool pal_kill(int64_t pid, int32_t sig, PalErrno *err) {
     return true;
 }
 
+bool pal_kill_native(int64_t pid, int32_t sig, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (kill((pid_t)pid, (int)sig) != 0) {
+        BURROW_OUT(err, burrow__pal_errno(errno));
+        return false;
+    }
+    return true;
+}
+
 /* Hands the signal back to whoever had it and lets it happen again.
  *
  * A handler that returns from a fault it did not cause would fault again at the

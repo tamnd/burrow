@@ -205,3 +205,11 @@ archive/zip: method (*FileHeader) Mode: os.FileMode is fs.FileMode, spelled FsFi
 archive/zip: method (*FileHeader) SetMode: os.FileMode is fs.FileMode, spelled FsFileMode
 archive/zip: method (*File) OpenRaw: the io.Reader Go returns is an io.SectionReader, returned here by value
 encoding/asn1: func Unmarshal: the value is an Any, which is always a pointer, so Go's error for a value that is not one cannot happen
+
+# include/burrow/os.h: Go hands back an interface{} from Sys and SysUsage and
+# expects the caller to assert it to syscall.WaitStatus or *syscall.Rusage.
+# There is only ever the one type on a platform, so the C functions return it,
+# and WithHandle takes a closure type of its own for the handle.
+os: method (*ProcessState) Sys: returns the syscall.WaitStatus itself, the only type Go puts there
+os: method (*ProcessState) SysUsage: returns a pointer to the syscall.Rusage itself, the only type Go puts there
+os: method (*Process) WithHandle: the callback is an OsHandleFunc, a function pointer with a context argument

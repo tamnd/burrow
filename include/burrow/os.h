@@ -23,7 +23,7 @@
  * Paths are Str and go to the system as they are, so "/" and, on Windows, "\"
  * both work. A name with a NUL byte in it fails with EINVAL, as Go's does.
  *
- * Not here yet: starting and waiting for processes, CopyFS and Root.
+ * Not here yet: CopyFS and Root.
  * FileInfo.Sys gives a nil Any for now, where Go gives a
  * *syscall.Stat_t.
  *
@@ -48,6 +48,8 @@
 #include "burrow/mem.h"
 #include "burrow/platform.h"
 #include "burrow/slice.h"
+#include "burrow/sync.h"
+#include "burrow/syscall.h"
 #include "burrow/time.h"
 #include "burrow/type.h"
 
@@ -531,6 +533,151 @@ BURROW_STATIC(ret) Error os_chdir(Str dir);
 BURROW_OWNS(ret) Str os_user_home_dir(Alloc *a, Error *err);
 BURROW_OWNS(ret) Str os_user_cache_dir(Alloc *a, Error *err);
 BURROW_OWNS(ret) Str os_user_config_dir(Alloc *a, Error *err);
+
+/* ------------------------------------------------------------ processes */
+
+/* os.Signal: anything with String and Signal. The ones os sends are
+ * syscall.Signal values, which os_signal_from_syscall wraps. */
+typedef struct OsSignalVT {
+    const Type *self_type;
+    Str (*string)(void *self, Alloc *a);
+    void (*signal)(void *self);
+} OsSignalVT;
+
+typedef struct OsSignal {
+    const OsSignalVT *vt;
+    void *data;
+} OsSignal;
+
+/* s as an os.Signal, with nothing allocated. Its self_type is
+ * TYPE_SYSCALL_SIGNAL. A number outside 0 to 255, which no system uses, gives
+ * the zero OsSignal, and sending that is "os: unsupported signal type". */
+OsSignal os_signal_from_syscall(SyscallSignal s);
+
+/* The SyscallSignal inside sig, or -1 when sig is not one. */
+SyscallSignal os_signal_to_syscall(OsSignal sig);
+
+/* os.Interrupt and os.Kill: SIGINT and SIGKILL. On Windows only Kill can be
+ * sent to another process. */
+extern const OsSignal os_interrupt;
+extern const OsSignal os_kill;
+
+/* "os: process already finished", from Signal and Kill once Wait has
+ * returned, and from Wait a second time on Windows. */
+extern const Error os_err_process_done;
+
+/* "os: process handle unavailable", from os_process_with_handle when there
+ * is no handle, which is every process on Unix for now. */
+extern const Error os_err_no_handle;
+
+/* os.ProcAttr: how os_start_process sets up the child.
+ *
+ * dir is its working directory, and the empty Str leaves it ours. env is a
+ * slice of "key=value" Strs, and a nil slice gives it os_environ. files are
+ * the OsFile pointers that become its descriptors 0, 1, 2 and so on, and a
+ * NULL entry leaves that one closed. On Windows the first three become its
+ * standard handles and nothing else is passed down. sys may be NULL. */
+typedef struct OsProcAttr {
+    Str dir;
+    Slice env;   /* of Str */
+    Slice files; /* of OsFile * */
+    const SyscallSysProcAttr *sys;
+} OsProcAttr;
+
+/* os.Process, from os_start_process or os_find_process. pid is the system's
+ * id for it, and -1 after os_process_release on Unix. The rest belongs to
+ * the package. */
+typedef struct OsProcess {
+    Int pid;
+    Alloc *alloc;
+    SyncAtomicUint32 state;
+    SyncRWMutex sig_mu;
+    /* On Windows, the handle and how many are using it. Unix has none. */
+    bool has_handle;
+    int64_t handle;
+    SyncAtomicInt32 refs;
+} OsProcess;
+
+/* os.ProcessState: what os_process_wait found. A NULL one is Go's nil, which
+ * os_process_state_string calls "<nil>" and os_process_state_exit_code calls
+ * -1. */
+typedef struct OsProcessState {
+    Int pid;
+    SyscallWaitStatus status;
+    SyscallRusage rusage;
+    Alloc *alloc;
+} OsProcessState;
+
+/* os.StartProcess: starts name with argv, a slice of Str, as its arguments,
+ * the first of them being what the program sees as its own name. name is not
+ * looked up in $PATH, which is what os/exec is for. A failure is a PathError
+ * with op "fork/exec", or with op "chdir" when attr->dir is not a directory
+ * that can be used. attr may be NULL. The OsProcess comes from a. */
+BURROW_OWNS(ret)
+OsProcess *os_start_process(Alloc *a, Str name, Slice argv, const OsProcAttr *attr,
+                            Error *err);
+
+/* os.FindProcess. On Unix this always works, whether or not there is such a
+ * process, and Signal is how to find out, as in Go. On Windows it opens the
+ * process, and a failure is a SyscallError with op "OpenProcess". */
+BURROW_OWNS(ret) OsProcess *os_find_process(Alloc *a, Int pid, Error *err);
+
+/* Process.Release: gives up the process without waiting for it. Nothing can
+ * be done with p afterwards but os_process_free. On Unix it sets pid to -1.
+ * On Windows a second call is EINVAL. */
+BURROW_STATIC(ret) Error os_process_release(OsProcess *p);
+
+/* Process.Kill: os_process_signal with os_kill. */
+BURROW_STATIC(ret) Error os_process_kill(OsProcess *p);
+
+/* Process.Signal: sends sig. Once the process has been waited for this is
+ * os_err_process_done, and after os_process_release it is "os: process
+ * already released". On Windows anything but os_kill is "not supported by
+ * windows". */
+BURROW_STATIC(ret) Error os_process_signal(OsProcess *p, OsSignal sig);
+
+/* Process.Wait: waits for p to exit and reaps it. The state comes from the
+ * Alloc p was made with. A failure is a SyscallError with op "wait". */
+BURROW_OWNS(ret) OsProcessState *os_process_wait(OsProcess *p, Error *err);
+
+/* The function os_process_with_handle calls. */
+BURROW_FUNC(OsHandleFunc, void, Uintptr handle);
+
+/* Process.WithHandle: calls f with the process handle, which stays valid
+ * until f returns. Only Windows has one here, so on Unix this is
+ * os_err_no_handle. */
+BURROW_STATIC(ret) Error os_process_with_handle(OsProcess *p, OsHandleFunc f);
+
+/* Releases p if it has not been, and gives its memory back. */
+void os_process_free(OsProcess *p);
+
+/* The ProcessState methods. */
+Int os_process_state_pid(const OsProcessState *ps);
+bool os_process_state_exited(const OsProcessState *ps);
+bool os_process_state_success(const OsProcessState *ps);
+Int os_process_state_exit_code(const OsProcessState *ps);
+
+/* ProcessState.String: "exit status 1", "signal: killed", "signal:
+ * segmentation fault (core dumped)" and so on, as Go words them. */
+BURROW_OWNS(ret) Str os_process_state_string(const OsProcessState *ps, Alloc *a);
+
+/* ProcessState.Sys and SysUsage, typed, since C has no any to hand back. */
+SyscallWaitStatus os_process_state_sys(const OsProcessState *ps);
+BURROW_BORROWS(ret, ps) const SyscallRusage *os_process_state_sys_usage(const OsProcessState *ps);
+
+/* ProcessState.UserTime and SystemTime: the CPU time the process and its
+ * children it waited for used, in user mode and in the kernel. */
+Duration os_process_state_user_time(const OsProcessState *ps);
+Duration os_process_state_system_time(const OsProcessState *ps);
+
+void os_process_state_free(OsProcessState *ps);
+
+/* os.Executable: the path of the program that is running. It may be a
+ * symbolic link, as in Go. On Linux it is what /proc/self/exe says, on macOS
+ * and Solaris a relative path is joined to the working directory, and on a
+ * system with no way to ask the error is "Executable not implemented for"
+ * and its name. */
+BURROW_OWNS(ret) Str os_executable(Alloc *a, Error *err);
 
 #ifdef __cplusplus
 }

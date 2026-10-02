@@ -303,6 +303,7 @@ static const Str io_name_read_from = {(const Byte *)"ReadFrom", 8};
 static const Str io_name_write_string = {(const Byte *)"WriteString", 11};
 static const Str io_name_read_byte = {(const Byte *)"ReadByte", 8};
 static const Str io_name_seek = {(const Byte *)"Seek", 4};
+static const Str io_name_read_at = {(const Byte *)"ReadAt", 6};
 
 /* The method called name on t, if it has one and it has the shape of the
  * interface being asked about: one argument of type in0, the error pointer,
@@ -414,6 +415,32 @@ int64_t burrow__io_seek(const Method *m, void *data, int64_t offset, Int whence,
     IoErrorArg ea = &e;
     int64_t out = 0;
     void *args[3] = {&offset, &whence, (void *)&ea};
+    void *rets[1] = {&out};
+    method_call(m, data, args, rets);
+    BURROW_OUT(err, e);
+    return out;
+}
+
+const Method *burrow__io_read_at_method(const Type *t) {
+    if (t == NULL)
+        return NULL;
+    const Method *m = type_method_by_name(t, io_name_read_at);
+    if (m == NULL || m->ftype == NULL || m->thunk == NULL)
+        return NULL;
+    const Type *f = m->ftype;
+    if (type_num_in(f) != 3 || type_num_out(f) != 1)
+        return NULL;
+    if (type_in(f, 0) != TYPE_BYTES || type_in(f, 1) != TYPE_OF(int64_t) ||
+        type_in(f, 2) != &burrow_type_IoErrorArg || type_out(f, 0) != TYPE_INT)
+        return NULL;
+    return m;
+}
+
+Int burrow__io_read_at(const Method *m, void *data, Slice p, int64_t off, Error *err) {
+    Error e = BURROW_NO_ERROR;
+    IoErrorArg ea = &e;
+    Int out = 0;
+    void *args[3] = {&p, &off, (void *)&ea};
     void *rets[1] = {&out};
     method_call(m, data, args, rets);
     BURROW_OUT(err, e);

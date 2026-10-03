@@ -271,6 +271,8 @@ global	src/time/zoneinfo.c	tz_local_once	time-zone-cache	A SyncOnce over tz_loca
 global	src/time/zoneinfo.c	tz_displaced_loc	time-zone-cache	Test only. burrow__time_force_local parks the replaced Local here so its zone data stays reachable.
 global	src/time/zoneinfo.c	tz_cache	time-zone-cache	The locations LoadLocation has read, as a list. Only touched under tz_cache_mu, and a location on it is never written or freed once it is there.
 global	src/time/zoneinfo.c	tz_cache_mu	time-zone-cache	The mutex over tz_cache.
+global	src/time/zoneinfo.c	tz_embedded	time-zone-cache	The time/tzdata loader, set by tzdata_register. An atomic pointer to a const table, written with the same value however often it is set.
+global	src/time/zoneinfo.c	tz_no_platform	time-zone-cache	Test only, Go's DisablePlatformSources. An atomic bool.
 global	src/archive/tar.c	tar_debug_flags	godebug	The tarinsecurepath setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/archive/zip.c	zip_debug_flags	godebug	The zipinsecurepath setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/archive/zip.c	zip_registry_mu	zip-registry	The lock that keeps two RegisterCompressor or RegisterDecompressor calls from pushing at once. Readers do not take it.

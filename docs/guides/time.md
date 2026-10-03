@@ -76,7 +76,25 @@ Time there = time_in(t, ny);
 
 `time_utc_loc` and `time_local_loc` are Go's `time.UTC` and `time.Local`. Local follows `$TZ` the way Go's does on Unix: unset means `/etc/localtime`, empty means UTC, and anything else is a name to load.
 
-Windows has no zoneinfo directory, so there `time_load_location` fails for every name and Local is UTC. The program above falls back to a fixed zone for that reason. Go reads the registry for Local and carries a copy of the database for the rest, and both are coming.
+Windows has no zoneinfo directory, and neither do plenty of small containers, so there `time_load_location` fails for every name unless the program carries the database itself. The program above falls back to a fixed zone for that reason. Local is UTC on Windows for now, since Go reads it from the registry and that part is still to come.
+
+## Carrying the database
+
+<!-- example: ../examples/time/tzdata.c#register -->
+```c
+tzdata_register();
+
+Error err = BURROW_NO_ERROR;
+TimeLocation *tokyo = time_load_location(BURROW_S("Asia/Tokyo"), &err);
+if (tokyo == NULL) {
+    fprintf(stderr, BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
+    return 1;
+}
+```
+
+`tzdata_register`, from `burrow/time/tzdata.h`, is Go's `import _ "time/tzdata"`. It adds a copy of Go's `lib/time/zoneinfo.zip` as the last place `time_load_location` looks, after `$ZONEINFO` and the system's directory, so the system's own database still wins where there is one, as in Go. A name the copy does not have either is still `unknown time zone`. Call it before anything uses a zone, because Local is worked out once and a call after that does not change it.
+
+The copy is about 400 kB, so it is only in the program when asked for. With the static library it is linked in when the program calls `tzdata_register` and not otherwise. Building burrow with `BURROW_TIMETZDATA` defined is Go's `timetzdata` build tag: every program gets the database with nothing to call. The amalgamation leaves the package out of `burrow.c` unless `BURROW_TIMETZDATA` is defined when `burrow.c` is compiled, and then it is registered the same way.
 
 `time_fixed_zone` is `time.FixedZone`, and it takes an allocator because a named zone needs somewhere to keep its name. Give it back with `time_location_free`, which does nothing for a location it does not own, so it is safe on anything. An unnamed zone at a whole number of hours comes from a table and costs nothing, and passing `NULL` for the allocator is fine then. `time_load_location_from_tz_data` makes a location from the bytes of a TZif file, and is freed the same way.
 
@@ -346,7 +364,7 @@ The text and JSON encodings are RFC 3339 with as many fraction digits as the tim
 
 ## What Go has that this does not, yet
 
-The copy of the timezone database that Go can embed, and the Windows registry lookup for Local.
+The Windows registry lookup for Local.
 
 ## See also
 

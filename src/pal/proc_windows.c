@@ -158,6 +158,91 @@ static wchar_t *proc_environment_block(const char *const *envp, PalErrno *err) {
 
 /* ------------------------------------------------------------------ spawn */
 
+static bool proc_slash(wchar_t c) {
+    return c == L'\\' || c == L'/';
+}
+
+static wchar_t proc_vol_upper(wchar_t c) {
+    return c >= L'a' && c <= L'z' ? (wchar_t)(c - L'a' + L'A') : c;
+}
+
+/* GetFullPathNameW of in, into out, which holds PAL_WPATH_MAX. */
+static bool proc_full_path(const wchar_t *in, wchar_t *out, PalErrno *err) {
+    DWORD n = GetFullPathNameW(in, PAL_WPATH_MAX, out, NULL);
+    if (n == 0)
+        return proc_fail(err);
+    if (n >= PAL_WPATH_MAX) {
+        BURROW_OUT(err, PAL_ENAMETOOLONG);
+        return false;
+    }
+    return true;
+}
+
+/* Go's joinExeDirAndFName. CreateProcess looks for a relative program in the
+ * current directory and only then moves the child to dir, while StartProcess
+ * means the program relative to dir, so the path is made absolute against
+ * dir first. app is rewritten in place. tmp holds PAL_WPATH_MAX. */
+static bool proc_join_exe_dir(const wchar_t *dir, wchar_t *app, wchar_t *tmp,
+                              PalErrno *err) {
+    size_t plen = wcslen(app);
+    if (plen == 0) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+    if (plen > 2 && proc_slash(app[0]) && proc_slash(app[1]))
+        return true; /* \\server\share\path */
+    if (plen > 1 && app[1] == L':' && plen == 2) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+    if (plen > 1 && app[1] == L':' && proc_slash(app[2]))
+        return true;
+    /* normalizeDir */
+    wchar_t *d = proc_alloc(PAL_WPATH_MAX * sizeof(wchar_t));
+    if (d == NULL) {
+        BURROW_OUT(err, PAL_ENOMEM);
+        return false;
+    }
+    bool ok = proc_full_path(dir, d, err);
+    size_t dlen = ok ? wcslen(d) : 0;
+    if (ok && dlen > 2 && proc_slash(d[0]) && proc_slash(d[1])) {
+        BURROW_OUT(err, PAL_EINVAL);
+        ok = false;
+    }
+    if (ok) {
+        const wchar_t *rest = app;
+        size_t keep = dlen;
+        bool sep = true;
+        if (plen > 1 && app[1] == L':') {
+            if (proc_vol_upper(app[0]) == proc_vol_upper(d[0])) {
+                rest = app + 2;
+            } else {
+                keep = 0;
+                sep = false;
+            }
+        } else if (proc_slash(app[0])) {
+            keep = 2;
+            sep = false;
+        }
+        size_t rlen = wcslen(rest);
+        if (keep + (sep ? 1 : 0) + rlen >= PAL_WPATH_MAX) {
+            BURROW_OUT(err, PAL_ENAMETOOLONG);
+            ok = false;
+        } else {
+            size_t o = 0;
+            memcpy(tmp, d, keep * sizeof(wchar_t));
+            o = keep;
+            if (sep)
+                tmp[o++] = L'\\';
+            memcpy(tmp + o, rest, rlen * sizeof(wchar_t));
+            tmp[o + rlen] = 0;
+            ok = proc_full_path(tmp, app, err);
+        }
+    }
+    proc_free(d);
+    return ok;
+}
+
 int64_t pal_spawn(const PalSpawn *req, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (req == NULL || req->path == NULL || req->argv == NULL || req->nfds < 0 ||
@@ -187,6 +272,17 @@ int64_t pal_spawn(const PalSpawn *req, PalErrno *err) {
         goto out;
     if (dir != NULL && !burrow__pal_widen(req->dir, dir, PAL_WPATH_MAX, err))
         goto out;
+    if (dir != NULL && dir[0] != 0) {
+        wchar_t *tmp = proc_alloc(PAL_WPATH_MAX * sizeof(wchar_t));
+        if (tmp == NULL) {
+            BURROW_OUT(err, PAL_ENOMEM);
+            goto out;
+        }
+        bool joined = proc_join_exe_dir(dir, app, tmp, err);
+        proc_free(tmp);
+        if (!joined)
+            goto out;
+    }
     cmd = proc_command_line(req->argv, err);
     if (cmd == NULL)
         goto out;

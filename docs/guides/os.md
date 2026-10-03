@@ -247,7 +247,7 @@ if (errors_as(err, TYPE_USER_UNKNOWN_USER_ERROR) != NULL)
 
 ## Processes
 
-`os_start_process` is Go's `StartProcess`, the low level way to run a program. It takes the program's path, the whole argument list with the name first, and an `OsProcAttr` with the directory, the environment and the files the child gets. A NULL `env` gives the child ours, and `files` is the child's descriptor table, so leaving it empty starts the child with nothing open. Most programs want os/exec, which finds the program on `PATH` and wires up the pipes, once that package is here.
+`os_start_process` is Go's `StartProcess`, the low level way to run a program. It takes the program's path, the whole argument list with the name first, and an `OsProcAttr` with the directory, the environment and the files the child gets. A NULL `env` gives the child ours, and `files` is the child's descriptor table, so leaving it empty starts the child with nothing open. Most programs want os/exec, below, which finds the program on `PATH` and wires up the pipes.
 
 `os_process_wait` waits for the child to finish and gives an `OsProcessState`, which says how it went:
 
@@ -280,6 +280,79 @@ Error kerr = os_process_kill(self);    /* "os: process already released" on Unix
 ```
 
 `os_find_process` gives a process from a pid, `os_executable` gives the path of the running program, and `os_process_state_user_time` and `os_process_state_system_time` give the CPU time the child used. `os_process_free` and `os_process_state_free` give the memory back.
+
+## Running programs
+
+`burrow/os/exec.h` is Go's `os/exec`. `exec_command` makes an `ExecCmd` for a program and its arguments, looking the name up on `PATH` when it has no separator in it, and `exec_cmd_output` runs it and gives back what it wrote to its standard output. There is no shell in between, so nothing expands globs or variables:
+
+<!-- example: ../examples/os/exec.c#output -->
+```c
+ExecCmd *c = exec_command_v(a, exe, 1, BURROW_S("greet"));
+Slice out = exec_cmd_output(c, a, &err);
+if (BURROW_FAILED(err))
+    return fail(err);
+printf("%.*s", (int)out.len, (const char *)out.p); /* hello from the child */
+exec_cmd_free(c);
+```
+
+`stdin_`, `stdout_` and `stderr_` can be set to any reader or writer. A file is handed to the child as it is, and anything else is copied over a pipe. Go does that copying on goroutines, and burrow does it on threads of its own, so the reader and writers you give a Cmd are used from another thread until `exec_cmd_wait` returns. Don't give it a writer that allocates from an arena something else is using at the same time:
+
+<!-- example: ../examples/os/exec.c#stdin -->
+```c
+StringsReader in;
+strings_reader_reset(&in, BURROW_S("some input\n"));
+c = exec_command_v(a, exe, 1, BURROW_S("upper"));
+c->stdin_ = strings_reader_as_io_reader(&in); /* copied to the child on a pipe */
+out = exec_cmd_output(c, a, &err);
+if (BURROW_FAILED(err))
+    return fail(err);
+printf("%.*s", (int)out.len, (const char *)out.p); /* SOME INPUT */
+exec_cmd_free(c);
+```
+
+A program that exits with anything but 0 gives an `ExecExitError`. When `exec_cmd_output` was collecting the output and `stderr_` was not set, the error holds the start and the end of what the program wrote to its standard error, as Go's does:
+
+<!-- example: ../examples/os/exec.c#exit -->
+```c
+c = exec_command_v(a, exe, 1, BURROW_S("fail"));
+(void)exec_cmd_output(c, a, &err);
+const ExecExitError *ee = errors_as(err, TYPE_EXEC_EXIT_ERROR);
+if (ee != NULL) {
+    printf(BURROW_STR_FMT "\n",
+           BURROW_STR_ARG(error_text(err))); /* exit status 3 */
+    printf("code %d, stderr %.*s",
+           (int)os_process_state_exit_code(ee->process_state), (int)ee->stderr_.len,
+           (const char *)ee->stderr_.p);
+}
+exec_cmd_free(c);
+```
+
+`exec_command_context` ties the program to a context. When the context is done before the program has exited, the Cmd's `cancel` runs, which kills the program unless you set it to something else, and `wait_delay` bounds how long Wait then waits for the program and its pipes. A context with a deadline puts its timer on the runtime, so this part has to run under `runtime_main`:
+
+<!-- example: ../examples/os/exec.c#context -->
+```c
+ContextCancelFunc cancel;
+Context ctx =
+    context_with_timeout(a, context_background(), 100 * TIME_MILLISECOND, &cancel);
+ExecCmd *c = exec_command_context_v(a, ctx, exe, 1, BURROW_S("sleep"));
+Error err = exec_cmd_run(c); /* killed after a tenth of a second */
+if (BURROW_FAILED(err))
+    printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(context_err(ctx))));
+exec_cmd_free(c);
+BURROW_CALLF0(cancel);
+context_release(ctx);
+```
+
+`exec_look_path` is the lookup on its own. A name that isn't found gives an `ExecError` wrapping `exec_err_not_found`, and one found through a relative entry in `PATH`, `.` included, wraps `exec_err_dot` and is not run, which is what Go has done since 1.19:
+
+<!-- example: ../examples/os/exec.c#lookpath -->
+```c
+Str path = exec_look_path(a, BURROW_S("no-such-program"), &err);
+if (errors_is(err, exec_err_not_found))
+    printf("not found, path %d bytes\n", (int)path.len);
+```
+
+`exec_cmd_start` and `exec_cmd_wait` are the two halves of `exec_cmd_run`, and `exec_cmd_stdin_pipe`, `exec_cmd_stdout_pipe` and `exec_cmd_stderr_pipe` give the parent's end of a pipe to talk to the program while it runs. `exec_cmd_free` gives back everything the Cmd holds, and kills and waits for a program that was started and never waited for. Writing to a stdin pipe after the program has exited raises `SIGPIPE` on Unix, which ends the process unless it is ignored or handled, where Go's runtime turns it into an error.
 
 ## Errors
 

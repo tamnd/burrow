@@ -1504,10 +1504,21 @@ static OsFile *os_root_open_file_nolog(OsRoot *r, Alloc *a, Str name, Int flag,
     }
     OsFile *f = os_open_file(a, full, flag, perm, &e);
     os_root_str_free(full);
-    if (f == NULL)
+    if (f == NULL) {
         BURROW_OUT(err,
                    os_root_path_error(OS_LIT("openat"), name, os_root_underlying(e)));
-    return f;
+        return NULL;
+    }
+    /* full has the links replaced, and the file is named the way Go's is,
+     * with the name that was asked for. */
+    Str shown = os_root_join(heap_allocator(), r->name, name);
+    OsFile *g = shown.p == NULL ? NULL : burrow__os_file_renamed(f, shown);
+    os_root_str_free(shown);
+    if (g == NULL) {
+        os_file_free(f);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+    }
+    return g;
 }
 
 static OsFileInfo os_root_stat_op(OsRoot *r, Alloc *a, Str name, bool lstat,
@@ -1641,6 +1652,28 @@ static Error os_root_mkdir_all_impl(OsRoot *r, Str name, OsFileMode perm) {
         return os_root_path_error(OS_LIT("mkdirat"), name,
                                   burrow__os_errno_value(SYSCALL_ENOENT));
     }
+    /* A link as the last part is fine when it leads to a directory in the
+     * root, which is what the openat version's last step checks. */
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Error le = BURROW_NO_ERROR;
+    OsFileInfo li = os_root_lstat(r, arena_allocator(&ar), name, &le);
+    if (BURROW_OK(le) && li.vt != NULL &&
+        (li.vt->mode(li.data) & OS_MODE_SYMLINK) != 0) {
+        OsFileInfo fi = os_root_stat(r, arena_allocator(&ar), name, &le);
+        if (BURROW_OK(le) && fi.vt != NULL && fi.vt->is_dir(fi.data))
+            le = BURROW_NO_ERROR;
+        else if (BURROW_OK(le))
+            le = burrow__os_errno_value(SYSCALL_ENOTDIR);
+        else if (os_is_not_exist(le))
+            le = burrow__os_errno_value(SYSCALL_EEXIST);
+        else
+            le = os_root_underlying(le);
+        arena_free(&ar);
+        os_root_str_free(resolved);
+        return BURROW_OK(le) ? le : os_root_path_error(OS_LIT("mkdirat"), name, le);
+    }
+    arena_free(&ar);
     Byte sep = (Byte)OS_PATH_SEPARATOR;
     Str prefix = burrow__os_cat3(heap_allocator(), r->name, str_from_bytes(&sep, 1),
                                  (Str){NULL, 0});

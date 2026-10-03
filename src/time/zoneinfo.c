@@ -1192,9 +1192,50 @@ static const char *const tz_platform_sources[4] = {
 enum { TZ_NPLATFORM = 4 };
 #endif
 
+/* The time/tzdata loader, once tzdata_register has been called. It is a
+ * pointer to a TzEmbedded rather than the function itself because a function
+ * pointer does not fit in a SyncAtomicPointer everywhere C runs. */
+static SyncAtomicPointer tz_embedded;
+
+void burrow__time_register_embedded(const TzEmbedded *e) {
+    sync_atomic_pointer_store(&tz_embedded, (void *)(uintptr_t)e);
+}
+
+static const TzEmbedded *tz_embedded_get(void) {
+    const TzEmbedded *e = sync_atomic_pointer_load(&tz_embedded);
+#if defined(BURROW_TIMETZDATA)
+    /* Go's timetzdata build tag, which imports time/tzdata into time. */
+    if (e == NULL)
+        e = &burrow__tzdata_embedded;
+#endif
+    return e;
+}
+
+bool burrow__time_load_from_embedded(Str name, Str *data, Error *err) {
+    const TzEmbedded *e = tz_embedded_get();
+    if (e == NULL) {
+        BURROW_OUT(err, tz_err(BURROW_S("time/tzdata is not registered")));
+        return false;
+    }
+    return e->load(name, data, err);
+}
+
+/* Go's DisablePlatformSources, from export_test.go. */
+static SyncAtomicBool tz_no_platform;
+
+void burrow__time_disable_platform_sources(bool off) {
+    sync_atomic_bool_store(&tz_no_platform, off);
+}
+
+static Int tz_nplatform(void) {
+    return sync_atomic_bool_load(&tz_no_platform) ? 0 : TZ_NPLATFORM;
+}
+
 /* Go's loadLocation: name from each source in turn, the location from the
- * first that has it, and otherwise the first error that was not a missing
- * file. The location comes from the heap and is never freed. */
+ * first that has it, then from time/tzdata if it is registered, and otherwise
+ * the first error that was not a missing file. The location comes from the
+ * heap and is never freed. Go tries $GOROOT/lib/time/zoneinfo.zip last, and
+ * there is no GOROOT here. */
 static TimeLocation *tz_load_sources(Str name, const char *const *sources, Int n,
                                      Error *err) {
     Error first = BURROW_NO_ERROR;
@@ -1212,6 +1253,25 @@ static TimeLocation *tz_load_sources(Str name, const char *const *sources, Int n
             }
         }
         if (BURROW_OK(first) && !enoent)
+            first = e;
+    }
+    const TzEmbedded *emb = tz_embedded_get();
+    if (emb != NULL) {
+        Str data = {NULL, 0};
+        Error e = BURROW_NO_ERROR;
+        if (emb->load(name, &data, &e)) {
+            /* The bytes are the program's own, so unlike a file's there is
+             * nothing to free afterwards. */
+            TimeLocation *z = time_load_location_from_tz_data(
+                heap_allocator(), name,
+                (Slice){(Byte *)(uintptr_t)data.p, data.len, data.len, TYPE_BYTE}, &e);
+            if (z != NULL) {
+                z->a = NULL;
+                return z;
+            }
+        }
+        /* Not found comes back as false with no error, Go's ENOENT. */
+        if (BURROW_OK(first) && BURROW_FAILED(e))
             first = e;
     }
     if (BURROW_FAILED(first)) {
@@ -1270,7 +1330,7 @@ static TimeLocation *tz_load(Str name, Error *err) {
     }
 
     Error e = BURROW_NO_ERROR;
-    TimeLocation *z = tz_load_sources(name, tz_platform_sources, TZ_NPLATFORM, &e);
+    TimeLocation *z = tz_load_sources(name, tz_platform_sources, tz_nplatform(), &e);
     if (z != NULL)
         return z;
     BURROW_OUT(err, BURROW_FAILED(first) ? first : e);
@@ -1382,7 +1442,7 @@ static void tz_init_local(void *arg) {
             }
         } else if (tz.len > 0 && !str_eq(tz, BURROW_S("UTC"))) {
             TimeLocation *z =
-                tz_load_sources(tz, tz_platform_sources, TZ_NPLATFORM, NULL);
+                tz_load_sources(tz, tz_platform_sources, tz_nplatform(), NULL);
             if (z != NULL) {
                 tz_set_local(z, z->name);
                 return;

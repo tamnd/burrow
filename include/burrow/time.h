@@ -191,7 +191,9 @@ BURROW_OWNS(ret) TimeLocation *time_fixed_zone(Alloc *a, Str name, Int offset);
  * "" and "UTC" are UTC and "Local" is Local. Anything else is a name in the
  * IANA database, such as "America/New_York", looked for first under the
  * directory or zip file $ZONEINFO names, then in the system's zoneinfo
- * directory. A name with ".." in it, or that starts with a slash, is refused.
+ * directory, then in the built-in copy if burrow/time/tzdata.h's
+ * tzdata_register has been called. A name with ".." in it, or that starts with
+ * a slash, is refused.
  *
  * Each name is read once and kept, so two loads of one name are the same
  * pointer and neither needs freeing. On failure it returns NULL and sets *err

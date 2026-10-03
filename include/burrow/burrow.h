@@ -145,6 +145,7 @@
 #include "burrow/text/scanner.h"
 #include "burrow/text/tabwriter.h"
 #include "burrow/time.h"
+#include "burrow/time/tzdata.h"
 #include "burrow/type.h"
 #include "burrow/unicode.h"
 #include "burrow/unicode/utf16.h"

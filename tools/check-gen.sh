@@ -59,13 +59,23 @@ tools/burrow-gen embed tests/embed_test.c --dir tests/embedtest -o "$tmp/embed_t
 	cat "$tmp/err" >&2
 	exit 1
 }
-# The #embed lines name the files relative to where the output is, which here
-# is somewhere else, so they are left out of the comparison.
-grep -v '^#embed ' "$tmp/embed_test_embed.c" >"$tmp/embed.c"
-grep -v '^#embed ' tests/embedtest/embed_test_embed.c >"$tmp/embed_want.c"
+# The #embed and __has_embed lines name the files relative to where the output
+# is, which here is somewhere else, so they are left out of the comparison.
+grep -v -e '^#embed ' -e '^#if __has_embed(' "$tmp/embed_test_embed.c" >"$tmp/embed.c"
+grep -v -e '^#embed ' -e '^#if __has_embed(' tests/embedtest/embed_test_embed.c >"$tmp/embed_want.c"
 if ! diff -u "$tmp/embed_want.c" "$tmp/embed.c"; then
 	printf 'check-gen: tests/embedtest/embed_test_embed.c is not what burrow-gen embed writes now.\n' >&2
 	printf 'check-gen: regenerate with tools/burrow-gen embed tests/embed_test.c --dir tests/embedtest -o tests/embedtest/embed_test_embed.c\n' >&2
+	exit 1
+fi
+
+# The time zone database, src/time/zoneinfo.zip as C.
+tools/burrow-gen embed src/time/tzdata.c --include burrow/time/tzdata.h -o "$tmp/tzdata_zip.c" || exit 1
+grep -v -e '^#embed ' -e '^#if __has_embed(' "$tmp/tzdata_zip.c" >"$tmp/tz.c"
+grep -v -e '^#embed ' -e '^#if __has_embed(' src/time/tzdata_zip.c >"$tmp/tz_want.c"
+if ! cmp -s "$tmp/tz_want.c" "$tmp/tz.c"; then
+	printf 'check-gen: src/time/tzdata_zip.c is not what burrow-gen embed writes now.\n' >&2
+	printf 'check-gen: regenerate with tools/burrow-gen embed src/time/tzdata.c --include burrow/time/tzdata.h -o src/time/tzdata_zip.c\n' >&2
 	exit 1
 fi
 

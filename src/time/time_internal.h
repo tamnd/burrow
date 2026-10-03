@@ -12,6 +12,7 @@
 #include "burrow/time.h"
 
 #include "burrow/core.h"
+#include "burrow/error.h"
 #include "burrow/mem.h"
 
 #include <stdbool.h>
@@ -93,6 +94,23 @@ TimeLocation *burrow__time_loc_get(TimeLocation *l);
 
 /* The UTC location, which a Time spells as NULL. */
 TimeLocation *burrow__time_utc(void);
+
+/* What time/tzdata gives the loader, Go's loadFromEmbeddedTZData behind a
+ * pointer the way Go's registerLoadFromEmbeddedTZData takes a func. load
+ * returns false with no error when the name is not in the database. */
+typedef struct TzEmbedded {
+    bool (*load)(Str name, Str *data, Error *err);
+} TzEmbedded;
+void burrow__time_register_embedded(const TzEmbedded *e);
+
+/* tzdata's own TzEmbedded, which a build with BURROW_TIMETZDATA uses without
+ * being asked. */
+extern const TzEmbedded burrow__tzdata_embedded;
+
+/* For the tests, as Go's export_test.go has them: the embedded data for a
+ * name, and the platform sources turned off and back on. */
+bool burrow__time_load_from_embedded(Str name, Str *data, Error *err);
+void burrow__time_disable_platform_sources(bool off);
 
 /* Go's Location.lookup. */
 typedef struct TzLookup {

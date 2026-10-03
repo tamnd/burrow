@@ -222,9 +222,11 @@ $(AMALG_DIR)/burrow.h: $(AMALG_DIR)/burrow.c
 
 amalgamation: $(AMALG_SRCS)
 
+# time/tzdata is left out of burrow.c unless BURROW_TIMETZDATA is defined, and
+# it is defined here so that its tests have something to run against.
 $(BUILD)/obj/burrow.o: $(AMALG_DIR)/burrow.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(THREADS) -DBURROW_EXTERNAL_SYMTAB -c $< -o $@
+	$(CC) $(CFLAGS) $(THREADS) -DBURROW_EXTERNAL_SYMTAB -DBURROW_TIMETZDATA -c $< -o $@
 
 $(BUILD)/obj/%.o: src/%.c
 	@mkdir -p $(dir $@)

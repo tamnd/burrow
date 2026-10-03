@@ -5,6 +5,7 @@
 #include "burrow/encoding/json/jsontext.h"
 #include "burrow/encoding/json/v2.h"
 #include "burrow/mem/arena.h"
+#include "burrow/time.h"
 
 BURROW_SLICE_TYPE(Strs, Str);
 BURROW_MAP_TYPE(Extra, Str, Any);
@@ -31,6 +32,13 @@ BURROW_STRUCT(Loose, LOOSE_FIELDS);
     F(T, Str, Kind, "json:\"kind\"")                                                   \
     F(T, JsontextValue, Data, "json:\"data\"")
 BURROW_STRUCT(Event, EVENT_FIELDS);
+// doc: end
+
+// doc: slot
+#define SLOT_FIELDS(F, T)                                                              \
+    F(T, Str, Room, "json:\"room\"")                                                   \
+    F(T, Time, Start, "json:\"start\"")
+BURROW_STRUCT(Slot, SLOT_FIELDS);
 // doc: end
 
 // doc: yesno
@@ -198,6 +206,27 @@ int main(void) {
     // doc: end
     show("data", ev.Data);
     show("event", evb);
+
+    // doc: time
+    Slot slot = {BURROW_S("blue"),
+                 time_date(2026, TIME_OCTOBER, 3, 9, 30, 0, 0, time_utc_loc)};
+    Slice slotb = jsonv2_marshal_v(a, BURROW_ANY(TYPE_OF(Slot), &slot), &err, 0);
+    Slot booked = {0};
+    err = jsonv2_unmarshal_v(
+        a, BURROW_B("{\"room\":\"red\",\"start\":\"2026-10-03T18:30:00+09:00\"}"),
+        BURROW_ANY(TYPE_OF(Slot), &booked), 0);
+    // doc: end
+    show("slot", slotb);
+    printf("booked: %d %d\n", (int)time_unix(booked.Start),
+           time_equal(booked.Start, slot.Start));
+
+    // doc: duration
+    Duration wait = 90 * TIME_MINUTE;
+    Slice waitb = jsonv2_marshal_v(a, BURROW_ANY(TYPE_DURATION, &wait), &err, 0);
+    // doc: end
+    printf("duration: %d %.*s\n", BURROW_FAILED(err), (int)waitb.len,
+           (const char *)waitb.p);
+    printf("err: " BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
 
     arena_free(&ar);
     return 0;

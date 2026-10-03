@@ -117,9 +117,6 @@ static bool jv_is_slice_any(const Type *t) {
 
 /* ------------------------------------------------------------------ helpers */
 
-#define JV_GET(o, f) jsonflags_get((o), (f))
-#define JV_HAS(o, f) jsonflags_has((o), (f))
-
 static bool jv_arshal_same(Error a, Error b) {
     return a.vt == b.vt && a.data == b.data;
 }
@@ -1277,6 +1274,8 @@ static Error jv_map_key_error(JsontextEncoder *e, const Type *kt, Error err) {
 /* nonDefault: whether t is marshaled by a method rather than by its kind, which
  * rules out the shortcuts that assume the kind's own form. */
 static bool jv_non_default(const Type *t) {
+    if (burrow__jsonv2_is_time_type(t))
+        return true;
     return t->nmethod > 0 && t->kind != KIND_POINTER && t->kind != KIND_INTERFACE &&
            burrow__jsonv2_implements(t, JV_MASK_ARSHALERS);
 }
@@ -2958,9 +2957,9 @@ Error burrow__jsonv2_unmarshal_default(JsontextDecoder *d, const Type *t, void *
     }
 }
 
-/* A WithMarshalers function comes first, for every kind. Go skips methods on
- * pointer and interface kinds, since those follow through to what they hold,
- * which gets its own turn. */
+/* A WithMarshalers function comes first, for every kind, then Time and
+ * Duration's own arshalers. Go skips methods on pointer and interface kinds,
+ * since those follow through to what they hold, which gets its own turn. */
 Error burrow__jsonv2_marshal_value(JsontextEncoder *e, const Type *t, void *p,
                                    JsontextOptions *mo) {
     if (mo->marshalers != NULL) {
@@ -2969,6 +2968,8 @@ Error burrow__jsonv2_marshal_value(JsontextEncoder *e, const Type *t, void *p,
         if (done)
             return err;
     }
+    if (burrow__jsonv2_is_time_type(t))
+        return burrow__jsonv2_marshal_time(e, t, p, mo);
     if (t->nmethod > 0 && t->kind != KIND_POINTER && t->kind != KIND_INTERFACE) {
         JvMethods ms;
         burrow__jsonv2_methods(t, &ms);
@@ -2985,6 +2986,8 @@ Error burrow__jsonv2_unmarshal_value(JsontextDecoder *d, const Type *t, void *p,
         if (done)
             return err;
     }
+    if (burrow__jsonv2_is_time_type(t))
+        return burrow__jsonv2_unmarshal_time(d, t, p, uo);
     if (t->nmethod > 0 && t->kind != KIND_POINTER && t->kind != KIND_INTERFACE) {
         JvMethods ms;
         burrow__jsonv2_methods(t, &ms);

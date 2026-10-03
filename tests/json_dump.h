@@ -10,6 +10,8 @@
 #ifndef BURROW_TESTS_JSON_DUMP_H
 #define BURROW_TESTS_JSON_DUMP_H
 
+#include "burrow/time.h"
+
 static void put_hex(JsonBuf *b, uint64_t v, int digits) {
     static const char hexd[] = "0123456789abcdef";
     for (int i = digits - 1; i >= 0; i--)
@@ -46,6 +48,21 @@ static int cmp_str(const void *x, const void *y) {
 }
 
 static void dump(JsonBuf *b, const Type *t, const void *p, DumpPath *path) {
+    /* A Time is the instant and its offset, as common.go writes it. */
+    if (t == TYPE_TIME) {
+        Time tm = *(const Time *)p;
+        Int off = 0;
+        (void)time_zone(tm, &off);
+        int64_t sec = time_unix(tm);
+        jsonbuf_byte(b, 'T');
+        put_dec(b, sec < 0 ? (uint64_t)0 - (uint64_t)sec : (uint64_t)sec, sec < 0);
+        jsonbuf_byte(b, '.');
+        put_dec(b, (uint64_t)time_nanosecond(tm), false);
+        if (off >= 0)
+            jsonbuf_byte(b, '+');
+        put_dec(b, off < 0 ? (uint64_t)0 - (uint64_t)off : (uint64_t)off, off < 0);
+        return;
+    }
     switch ((int)t->kind) {
     case KIND_BOOL:
         jsonbuf_str(b, *(const bool *)p ? cstr("true") : cstr("false"));

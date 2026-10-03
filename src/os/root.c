@@ -6,10 +6,12 @@
  *
  * Off Windows a root holds a descriptor and every name is walked from it one
  * component at a time with the PAL's at calls, the same as Go on Unix. On
- * Windows a root is a name, and each call checks the name it is given with
- * lstat and readlink before handing the joined name to the ordinary call, the
- * way Go does on js and plan9. Go's Windows version opens relative to a handle
- * with NtCreateFile, and that is still to come here.
+ * Windows a root is a name. Each call cleans the name it is given the way
+ * Go's rootCleanPath does, walks it with lstat and readlink, following links
+ * itself the way Go does there, and hands the ordinary call the name with the
+ * links resolved. Go's Windows version opens relative to a handle with
+ * NtCreateFile, which closes the gap between the check and the call, and that
+ * is still to come here.
  *
  * Copyright 2024 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -46,8 +48,6 @@ BURROW_SENTINEL_ERROR(burrow__os_err_root_not_dir, "not a directory");
 BURROW_SENTINEL_ERROR(burrow__os_err_root_mode, "unsupported file mode");
 BURROW_SENTINEL_ERROR(burrow__os_err_root_empty, "empty path");
 #if OS_ROOT_BY_NAME
-BURROW_SENTINEL_ERROR(burrow__os_err_root_hard_link,
-                      "cannot create a hard link to a symlink");
 BURROW_SENTINEL_ERROR(burrow__os_err_root_symlinks, "too many symlinks");
 #endif
 
@@ -164,6 +164,66 @@ static const char *os_root_c(Str s) {
 }
 #endif
 
+#if OS_ROOT_BY_NAME
+/* rootCleanPath: prefix, s and suffix joined and cleaned the way Windows
+ * cleans a name before it opens it, so that a\..\b is b even when a is a link
+ * or is not there. GetFullPathName does the cleaning, on a name made absolute
+ * with a \\?\? in front, and a result that no longer starts with that went
+ * above the root. A "?" can't be in a Windows name, so refusing one keeps a
+ * ..\?\ from faking the prefix. */
+static Error os_root_clean(Alloc *t, Str *s, const Str *prefix, Int nprefix,
+                           const Str *suffix, Int nsuffix) {
+    if (memchr(s->p, '?', (size_t)s->len) != NULL)
+        return burrow__os_errno_value((SyscallErrno)123); /* ERROR_INVALID_NAME */
+    const char fixed[] = "\\\\?\\?";
+    Int fixed_len = (Int)sizeof fixed - 1;
+    Int n = fixed_len + 1 + s->len;
+    for (Int k = 0; k < nprefix; k++)
+        n += 1 + prefix[k].len;
+    for (Int k = 0; k < nsuffix; k++)
+        n += 1 + suffix[k].len;
+    Byte *in = (Byte *)mem_alloc_nozero(t, (size_t)n + 1, 1);
+    int64_t cap = PAL_WPATH_MAX * 3 + 1;
+    char *out = (char *)mem_alloc_nozero(t, (size_t)cap, 1);
+    if (in == NULL || out == NULL)
+        return burrow_err_out_of_memory;
+    Int w = 0;
+    memcpy(in, fixed, (size_t)fixed_len);
+    w = fixed_len;
+    for (Int k = 0; k < nprefix; k++) {
+        in[w++] = '\\';
+        if (prefix[k].len > 0)
+            memcpy(in + w, prefix[k].p, (size_t)prefix[k].len);
+        w += prefix[k].len;
+    }
+    in[w++] = '\\';
+    memcpy(in + w, s->p, (size_t)s->len);
+    w += s->len;
+    for (Int k = 0; k < nsuffix; k++) {
+        in[w++] = '\\';
+        if (suffix[k].len > 0)
+            memcpy(in + w, suffix[k].p, (size_t)suffix[k].len);
+        w += suffix[k].len;
+    }
+    in[w] = 0;
+    PalErrno pe = PAL_OK;
+    int64_t got = pal_full_path((const char *)in, out, cap, &pe);
+    if (got < 0)
+        return burrow__os_errno(pe);
+    if (got < fixed_len || memcmp(out, fixed, (size_t)fixed_len) != 0)
+        return burrow__os_err_path_escapes;
+    Str c = str_from_bytes((const Byte *)out + fixed_len, (Int)got - fixed_len);
+    if (c.len > 0 && c.p[0] == '\\')
+        c = str_from_bytes(c.p + 1, c.len - 1);
+    if (c.len == 0)
+        c = OS_LIT(".");
+    if (!filepath_is_local(c))
+        return burrow__os_err_path_escapes;
+    *s = c;
+    return BURROW_NO_ERROR;
+}
+#endif
+
 /* splitPathInRoot: s cut into its components, with prefix in front and
  * suffix behind. "." components go, except one that is the whole of it, and
  * ".." stays for the walk to deal with. ends_in_slash says s had a separator
@@ -178,9 +238,11 @@ static Error os_root_split(Alloc *t, Str s, const Str *prefix, Int nprefix,
     if (os_is_path_separator(s.p[0]))
         return burrow__os_err_path_escapes;
 #if OS_ROOT_BY_NAME
-    /* rootCleanPath refuses a "?" anywhere, since no Windows name has one. */
-    if (memchr(s.p, '?', (size_t)s.len) != NULL)
-        return burrow__os_errno_value((SyscallErrno)123); /* ERROR_INVALID_NAME */
+    Error ce = os_root_clean(t, &s, prefix, nprefix, suffix, nsuffix);
+    if (BURROW_FAILED(ce))
+        return ce;
+    nprefix = 0;
+    nsuffix = 0;
 #endif
     for (Int k = 0; k < nprefix; k++)
         if (!os_root_push(t, out, prefix[k]))
@@ -211,16 +273,6 @@ static Error os_root_split(Alloc *t, Str s, const Str *prefix, Int nprefix,
     for (Int k = 0; k < nsuffix; k++)
         if (!os_root_push(t, out, suffix[k]))
             return burrow_err_out_of_memory;
-#if OS_ROOT_BY_NAME
-    /* rootCleanPath ends with filepathlite.IsLocal, which also turns away a
-     * drive letter and the reserved names such as NUL and COM1. Done here a
-     * component at a time, since ".." is still the walk's to handle. */
-    for (Int k = nprefix; k < out->len - nsuffix; k++) {
-        Str c = out->p[k];
-        if (!os_root_is_dot(c) && !os_root_is_dotdot(c) && !filepath_is_local(c))
-            return burrow__os_err_path_escapes;
-    }
-#endif
     return BURROW_NO_ERROR;
 }
 
@@ -1272,8 +1324,17 @@ Error os_root_symlink(OsRoot *r, Str oldname, Str newname) {
 /* ============================================================== by name */
 
 /* checkPathEscapesInternal: whether name, walked from the root by its
- * name, stays inside it. lstat leaves a link in the last component alone. */
-static Error os_root_check_escapes(OsRoot *r, Str name, bool lstat) {
+ * name, stays inside it. lstat leaves a link in the last component alone.
+ *
+ * When resolved is not NULL it gets the name with every link on the way
+ * replaced by what it points to, from the heap. Go on Windows follows links
+ * itself rather than letting the system do it. The difference shows with a
+ * link made before its target existed, which Windows makes as a link to a file
+ * and then won't open as a directory. A name with no links left in it gets
+ * the same answer Go does. */
+static Error os_root_check_escapes_to(OsRoot *r, Str name, bool lstat, Str *resolved) {
+    if (resolved != NULL)
+        *resolved = (Str){NULL, 0};
     sync_mutex_lock(&r->mu);
     bool closed = r->closed;
     sync_mutex_unlock(&r->mu);
@@ -1348,20 +1409,31 @@ static Error os_root_check_escapes(OsRoot *r, Str name, bool lstat) {
             parts = np;
             continue;
         }
-        if ((st.mode & PAL_S_IFMT) != PAL_S_IFDIR && i < parts.len - 1) {
+        if ((st.mode & PAL_S_IFMT) != PAL_S_IFDIR &&
+            (i < parts.len - 1 || ends_in_slash)) {
             err = burrow__os_errno_value(SYSCALL_ENOTDIR);
             break;
         }
         base = next;
         i++;
     }
+    if (BURROW_OK(err) && resolved != NULL) {
+        Str full = base;
+        for (Int k = i; k < parts.len && full.p != NULL; k++)
+            full = os_root_join(t, full, parts.p[k]);
+        Byte sep = (Byte)OS_PATH_SEPARATOR;
+        Str tail = ends_in_slash ? str_from_bytes(&sep, 1) : (Str){NULL, 0};
+        if (full.p != NULL)
+            *resolved = burrow__os_cat3(heap_allocator(), full, tail, (Str){NULL, 0});
+        if (resolved->p == NULL)
+            err = burrow_err_out_of_memory;
+    }
     arena_free(&ar);
     return err;
 }
 
-/* The root's name and name joined, from the heap. */
-static Str os_root_full(OsRoot *r, Str name) {
-    return os_root_join(heap_allocator(), r->name, name);
+static Error os_root_check_escapes(OsRoot *r, Str name, bool lstat) {
+    return os_root_check_escapes_to(r, name, lstat, NULL);
 }
 
 static OsRoot *os_root_by_name(Alloc *a, Str name, Error *e) {
@@ -1401,14 +1473,10 @@ OsRoot *os_open_root(Alloc *a, Str name, Error *err) {
 
 OsRoot *os_root_open_root(OsRoot *r, Alloc *a, Str name, Error *err) {
     BURROW_OUT(err, BURROW_NO_ERROR);
-    Error e = os_root_check_escapes(r, name, false);
+    Str full;
+    Error e = os_root_check_escapes_to(r, name, false, &full);
     if (BURROW_FAILED(e)) {
         BURROW_OUT(err, os_root_path_error(OS_LIT("openat"), name, e));
-        return NULL;
-    }
-    Str full = os_root_full(r, name);
-    if (full.p == NULL) {
-        BURROW_OUT(err, burrow_err_out_of_memory);
         return NULL;
     }
     OsRoot *nr = os_root_by_name(a, full, &e);
@@ -1420,14 +1488,10 @@ OsRoot *os_root_open_root(OsRoot *r, Alloc *a, Str name, Error *err) {
 
 static OsFile *os_root_open_file_nolog(OsRoot *r, Alloc *a, Str name, Int flag,
                                        OsFileMode perm, Error *err) {
-    Error e = os_root_check_escapes(r, name, false);
+    Str full;
+    Error e = os_root_check_escapes_to(r, name, false, &full);
     if (BURROW_FAILED(e)) {
         BURROW_OUT(err, os_root_path_error(OS_LIT("openat"), name, e));
-        return NULL;
-    }
-    Str full = os_root_full(r, name);
-    if (full.p == NULL) {
-        BURROW_OUT(err, burrow_err_out_of_memory);
         return NULL;
     }
     OsFile *f = os_open_file(a, full, flag, perm, &e);
@@ -1442,13 +1506,10 @@ static OsFileInfo os_root_stat_op(OsRoot *r, Alloc *a, Str name, bool lstat,
                                   Error *err) {
     BURROW_OUT(err, BURROW_NO_ERROR);
     OsFileInfo fi = {NULL, NULL};
-    Error e = os_root_check_escapes(r, name, lstat);
+    Str full;
+    Error e = os_root_check_escapes_to(r, name, lstat, &full);
     if (BURROW_OK(e)) {
-        Str full = os_root_full(r, name);
-        if (full.p == NULL)
-            e = burrow_err_out_of_memory;
-        else
-            fi = lstat ? os_lstat(a, full, &e) : os_stat(a, full, &e);
+        fi = lstat ? os_lstat(a, full, &e) : os_stat(a, full, &e);
         os_root_str_free(full);
     }
     if (BURROW_FAILED(e)) {
@@ -1481,12 +1542,10 @@ typedef struct OsRootNameArgs {
 
 static Error os_root_by_name_op(OsRoot *r, Str name, OsRootNameOp op, Str op_name,
                                 bool lstat, const OsRootNameArgs *args) {
-    Error e = os_root_check_escapes(r, name, lstat);
+    Str full;
+    Error e = os_root_check_escapes_to(r, name, lstat, &full);
     if (BURROW_FAILED(e))
         return os_root_path_error(op_name, name, e);
-    Str full = os_root_full(r, name);
-    if (full.p == NULL)
-        return burrow_err_out_of_memory;
     switch (op) {
     case OS_ROOT_N_CHMOD:
         e = os_chmod(full, args->mode);
@@ -1551,18 +1610,28 @@ static Error os_root_mkdir_impl(OsRoot *r, Str name, OsFileMode perm) {
 }
 
 static Error os_root_mkdir_all_impl(OsRoot *r, Str name, OsFileMode perm) {
-    Error e = os_root_check_escapes(r, name, false);
+    Str resolved;
+    Error e = os_root_check_escapes_to(r, name, false, &resolved);
     if (os_root_same(e, burrow__os_err_path_escapes))
         return os_root_path_error(OS_LIT("mkdirat"), name, e);
-    if (name.len == 0)
+    if (name.len == 0) {
+        os_root_str_free(resolved);
         return os_root_path_error(OS_LIT("mkdirat"), name,
                                   burrow__os_errno_value(SYSCALL_ENOENT));
+    }
     Byte sep = (Byte)OS_PATH_SEPARATOR;
     Str prefix = burrow__os_cat3(heap_allocator(), r->name, str_from_bytes(&sep, 1),
                                  (Str){NULL, 0});
-    if (prefix.p == NULL)
+    if (prefix.p == NULL) {
+        os_root_str_free(resolved);
         return burrow_err_out_of_memory;
-    Str full = burrow__os_cat3(heap_allocator(), prefix, name, (Str){NULL, 0});
+    }
+    /* The name with its links followed when the check got through it, and as
+     * it was given when the check stopped short, so that MkdirAll's own error
+     * is the one that comes back. */
+    Str full = resolved.p != NULL
+                   ? resolved
+                   : burrow__os_cat3(heap_allocator(), prefix, name, (Str){NULL, 0});
     if (full.p == NULL) {
         os_root_str_free(prefix);
         return burrow_err_out_of_memory;
@@ -1620,14 +1689,10 @@ Error os_root_remove_all(OsRoot *r, Str name) {
 
 Str os_root_readlink(OsRoot *r, Alloc *a, Str name, Error *err) {
     BURROW_OUT(err, BURROW_NO_ERROR);
-    Error e = os_root_check_escapes(r, name, true);
+    Str full;
+    Error e = os_root_check_escapes_to(r, name, true, &full);
     if (BURROW_FAILED(e)) {
         BURROW_OUT(err, os_root_path_error(OS_LIT("readlinkat"), name, e));
-        return (Str){NULL, 0};
-    }
-    Str full = os_root_full(r, name);
-    if (full.p == NULL) {
-        BURROW_OUT(err, burrow_err_out_of_memory);
         return (Str){NULL, 0};
     }
     Str target = os_readlink(a, full, &e);
@@ -1640,16 +1705,39 @@ Str os_root_readlink(OsRoot *r, Alloc *a, Str name, Error *err) {
     return target;
 }
 
+/* Windows ignores separators at the end of the name being renamed or linked
+ * to, and Go's test says so. */
+static Str os_root_trim_new(Str name) {
+    Str t = name;
+    while (t.len > 1 && os_is_path_separator(t.p[t.len - 1]))
+        t.len--;
+    return t;
+}
+
+/* renameat: the source's name and the new one, links in either left alone at
+ * the end. The rename is Go's: POSIX semantics, so that it replaces a link to
+ * a directory the same as a link to a file. */
 Error os_root_rename(OsRoot *r, Str oldname, Str newname) {
-    Error e = os_root_check_escapes(r, oldname, true);
+    Str fo, fn = {NULL, 0};
+    Error e = os_root_check_escapes_to(r, oldname, true, &fo);
     if (BURROW_FAILED(e))
         return os_root_path_error(OS_LIT("renameat"), oldname, e);
-    e = os_root_check_escapes(r, newname, true);
-    if (BURROW_FAILED(e))
+    e = os_root_check_escapes_to(r, os_root_trim_new(newname), true, &fn);
+    if (BURROW_FAILED(e)) {
+        os_root_str_free(fo);
         return os_root_path_error(OS_LIT("renameat"), newname, e);
-    Str fo = os_root_full(r, oldname);
-    Str fn = os_root_full(r, newname);
-    e = fo.p == NULL || fn.p == NULL ? burrow_err_out_of_memory : os_rename(fo, fn);
+    }
+    OsCPath co, cn;
+    PalErrno pe = PAL_OK;
+    if (!burrow__os_cpath(&co, fo, &e)) {
+    } else if (!burrow__os_cpath(&cn, fn, &e)) {
+        burrow__os_cpath_free(&co);
+    } else {
+        if (!pal_rename_replace(co.p, cn.p, &pe))
+            e = burrow__os_errno(pe);
+        burrow__os_cpath_free(&co);
+        burrow__os_cpath_free(&cn);
+    }
     os_root_str_free(fo);
     os_root_str_free(fn);
     if (BURROW_FAILED(e))
@@ -1658,31 +1746,19 @@ Error os_root_rename(OsRoot *r, Str oldname, Str newname) {
     return BURROW_NO_ERROR;
 }
 
+/* linkat: a link to the source itself, so a link to a link makes another link
+ * to the same place, which is what CreateHardLink does with one. */
 Error os_root_link(OsRoot *r, Str oldname, Str newname) {
-    Error e = os_root_check_escapes(r, oldname, true);
+    Str fo, fn;
+    Error e = os_root_check_escapes_to(r, oldname, true, &fo);
     if (BURROW_FAILED(e))
         return os_root_path_error(OS_LIT("linkat"), oldname, e);
-    Str fo = os_root_full(r, oldname);
-    if (fo.p == NULL)
-        return burrow_err_out_of_memory;
-    OsCPath c;
-    PalStat st;
-    if (burrow__os_cpath(&c, fo, NULL)) {
-        bool link = pal_lstat(c.p, &st, NULL) && (st.mode & PAL_S_IFMT) == PAL_S_IFLNK;
-        burrow__os_cpath_free(&c);
-        if (link) {
-            os_root_str_free(fo);
-            return os_root_path_error(OS_LIT("linkat"), oldname,
-                                      burrow__os_err_root_hard_link);
-        }
-    }
-    e = os_root_check_escapes(r, newname, true);
+    e = os_root_check_escapes_to(r, os_root_trim_new(newname), true, &fn);
     if (BURROW_FAILED(e)) {
         os_root_str_free(fo);
         return os_root_path_error(OS_LIT("linkat"), newname, e);
     }
-    Str fn = os_root_full(r, newname);
-    e = fn.p == NULL ? burrow_err_out_of_memory : os_link(fo, fn);
+    e = os_link(fo, fn);
     os_root_str_free(fo);
     os_root_str_free(fn);
     if (BURROW_FAILED(e))
@@ -1692,12 +1768,10 @@ Error os_root_link(OsRoot *r, Str oldname, Str newname) {
 }
 
 Error os_root_symlink(OsRoot *r, Str oldname, Str newname) {
-    Error e = os_root_check_escapes(r, newname, true);
+    Str fn;
+    Error e = os_root_check_escapes_to(r, newname, true, &fn);
     if (BURROW_FAILED(e))
         return os_root_path_error(OS_LIT("symlinkat"), newname, e);
-    Str fn = os_root_full(r, newname);
-    if (fn.p == NULL)
-        return burrow_err_out_of_memory;
     e = os_symlink(oldname, fn);
     os_root_str_free(fn);
     if (BURROW_FAILED(e))

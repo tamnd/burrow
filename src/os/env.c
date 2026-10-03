@@ -387,6 +387,11 @@ static bool os_is_alpha_num(Byte c) {
 /* getShellName: the name after a '$' at the front of s, and how many bytes of
  * s it took. An empty name that took bytes is bad syntax, which Expand eats. */
 static Str os_get_shell_name(Str s, Int *w) {
+    /* Expand never passes an empty s, but the compiler can't see that. */
+    if (s.len == 0) {
+        *w = 0;
+        return s;
+    }
     if (s.p[0] == '{') {
         if (s.len > 2 && os_is_shell_special_var(s.p[1]) && s.p[2] == '}') {
             *w = 3;

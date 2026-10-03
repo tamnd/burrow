@@ -54,6 +54,17 @@
 #define HAS_CGO true
 #endif
 
+/* Not in Go: wine names groups it cannot look up again, and the accounts it
+ * says it made are not there, so the tests that need either skip under it. */
+static bool under_wine(void) {
+#if defined(BURROW_OS_WINDOWS)
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    return ntdll != NULL && GetProcAddress(ntdll, "wine_get_version") != NULL;
+#else
+    return false;
+#endif
+}
+
 static Arena ar;
 static Alloc *a;
 static bool has_user;
@@ -142,6 +153,8 @@ static void TestLookupGroup(TestingT *t) {
                            u->gid);
 
     UserGroup *g2 = user_lookup_group(a, g1->name, &e);
+    if (BURROW_FAILED(e) && under_wine())
+        testing_t_skipf_v(t, "wine cannot look up the group %q it named", g1->name);
     if (BURROW_FAILED(e))
         testing_t_fatalf_v(t, "LookupGroup(%q): %v", g1->name, e);
     if (!str_eq(g1->gid, g2->gid) || !str_eq(g1->name, g2->name))
@@ -716,6 +729,8 @@ static User *windows_test_account(TestingT *t, UserTestAccount *acc) {
         testing_t_fatalf_v(t, "LogonUser: error %d", (Int)GetLastError());
     Error e = BURROW_NO_ERROR;
     User *u = user_lookup(a, name, &e);
+    if (BURROW_FAILED(e) && under_wine())
+        testing_t_skipf_v(t, "wine did not make the account %q: %v", name, e);
     if (BURROW_FAILED(e))
         testing_t_fatalf_v(t, "%v", e);
     return u;
@@ -927,7 +942,8 @@ static void TestLookupGroupIdServiceAccount(TestingT *t) {
 static void TestWindowsErrors(TestingT *t) {
     Error e = BURROW_NO_ERROR;
     (void)user_lookup(a, str_from_bytes((const Byte *)"a\0b", 3), &e);
-    if (!errors_is(e, syscall_errno_as_error(SYSCALL_EINVAL, a)))
+    const SyscallErrno *en = (const SyscallErrno *)errors_as(e, TYPE_SYSCALL_ERRNO);
+    if (en == NULL || *en != SYSCALL_EINVAL)
         testing_t_errorf_v(t, "Lookup with a NUL: %v; want invalid argument", e);
     /* BUILTIN\Administrators is an alias, which is a group and not a user. */
     e = BURROW_NO_ERROR;

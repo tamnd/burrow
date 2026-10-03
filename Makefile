@@ -375,8 +375,13 @@ CLANG_TIDY   ?= clang-tidy
 fmt:
 	$(CLANG_FORMAT) -i $(shell $(GIT_FILES) '*.c' '*.h')
 
+# One clang-tidy per file, as many at once as there are CPUs. Run as one
+# process it takes close to a quarter of an hour on a CI runner.
+TIDY_JOBS ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+
 tidy:
-	$(CLANG_TIDY) $(shell $(GIT_FILES) 'src/*.c' 'src/**/*.c') -- $(CFLAGS)
+	$(GIT_FILES) 'src/*.c' 'src/**/*.c' | \
+		xargs -P $(TIDY_JOBS) -I{} $(CLANG_TIDY) --quiet {} -- $(CFLAGS)
 
 clean:
 	rm -rf $(BUILD)

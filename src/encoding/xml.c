@@ -2999,9 +2999,11 @@ static Error xml_enc_push_tag(XmlEncoder *e, XmlName name) {
         e->captag_bytes = cap;
     }
     /* A mark has no bytes, and may come before anything was allocated. */
-    Byte *p = e->tag_bytes != NULL ? e->tag_bytes + e->ntag_bytes : NULL;
-    xml_put_str(&p, name.space);
-    xml_put_str(&p, name.local);
+    if (need > e->ntag_bytes) {
+        Byte *p = e->tag_bytes + e->ntag_bytes;
+        xml_put_str(&p, name.space);
+        xml_put_str(&p, name.local);
+    }
     e->tags[e->ntags++] = (XmlTag){e->ntag_bytes, name.space.len, name.local.len};
     e->ntag_bytes = need;
     return BURROW_NO_ERROR;

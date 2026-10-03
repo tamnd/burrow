@@ -414,10 +414,11 @@ static Error iotest_test_read_at(IoReader r, const Method *read_at, Slice conten
     if (buf.p == NULL)
         return errors_new(error_allocator(), BURROW_S("iotest: out of memory"));
     Slice data = slice_sub(buf, 0, clen);
-    Byte *d = (Byte *)data.p;
+    Byte *d = (Byte *)buf.p;
     const Byte *c = (const Byte *)content.p;
 
-    memset(d, 0xfe, (size_t)clen);
+    if (clen > 0)
+        memset(d, 0xfe, (size_t)clen);
     n = burrow__io_read_at(read_at, r.data, data, 0, &e);
     if (n != clen || (!BURROW_OK(e) && !iotest_is_eof(e))) {
         ret = fmt_errorf_v("ReadAt(%d, 0) = %v, %v, want %d, nil or EOF", clen, n, e,
@@ -436,7 +437,8 @@ static Error iotest_test_read_at(IoReader r, const Method *read_at, Slice conten
         goto out;
     }
 
-    memset(d, 0xfe, (size_t)clen);
+    if (clen > 0)
+        memset(d, 0xfe, (size_t)clen);
     n = burrow__io_read_at(read_at, r.data, buf, 0, &e);
     if (n != clen || !iotest_is_eof(e)) {
         ret =
@@ -449,7 +451,8 @@ static Error iotest_test_read_at(IoReader r, const Method *read_at, Slice conten
         goto out;
     }
 
-    memset(d, 0xfe, (size_t)clen);
+    if (clen > 0)
+        memset(d, 0xfe, (size_t)clen);
     for (Int i = 0; i < clen; i++) {
         n = burrow__io_read_at(read_at, r.data, slice_sub(data, i, i + 1), (int64_t)i,
                                &e);

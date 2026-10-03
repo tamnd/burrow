@@ -359,6 +359,12 @@ bool pal_thread_stack_bounds(void **lo, void **hi) {
 
 #endif
 
+/* A POSIX stack is mapped whole, so its bottom is the limit. */
+bool pal_thread_stack_limit(void **lo) {
+    void *hi = NULL;
+    return pal_thread_stack_bounds(lo, &hi);
+}
+
 /* One key for the whole process, with a destructor that runs the list the
  * thread built. pthreads calls a key's destructor at thread exit with the value
  * the thread last set, as long as that is not NULL, and clears the value first,

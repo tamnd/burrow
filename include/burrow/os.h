@@ -444,11 +444,11 @@ BURROW_OWNS(ret) Slice os_read_dir(Alloc *a, Str name, Error *err);
 
 /* os.MkdirAll: name and any parents it needs, each with perm less the umask.
  * Nothing to do and no error when name is a directory already. */
-BURROW_STATIC(ret) Error os_mkdir_all(Str name, OsFileMode perm);
+BURROW_STATIC(ret) Error os_mkdir_all(Str path, OsFileMode perm);
 
 /* os.RemoveAll: name and everything under it. Nothing there is not an error,
  * and neither is an empty name. A name ending in "." is EINVAL. */
-BURROW_STATIC(ret) Error os_remove_all(Str name);
+BURROW_STATIC(ret) Error os_remove_all(Str path);
 
 /* os.TempDir: the directory for temporary files, from a. $TMPDIR or /tmp on
  * Unix, and what GetTempPath2 says on Windows, without the trailing

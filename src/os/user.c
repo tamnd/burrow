@@ -112,7 +112,7 @@ typedef struct UserStrErrorBox {
 
 #define USER_ERROR_TYPE(var, name, kind, T, tag)                                       \
     static const Type var = {                                                          \
-        {(const Byte *)name, (Int)sizeof(name) - 1},                                   \
+        {(const Byte *)(name), (Int)sizeof(name) - 1},                                 \
         {(const Byte *)"os/user", 7},                                                  \
         kind,                                                                          \
         (uint32_t)sizeof(T),                                                           \
@@ -808,8 +808,11 @@ static User *user_impl_lookup_uid(Alloc *a, Int uid, int64_t buf, Error *err) {
         *err = user_unknown_user_id_error_as_error(uid, error_allocator());
     else if (BURROW_FAILED(e))
         *err = fmt_errorf_v("user: lookup userid %d: %v", uid, e);
-    else if ((u = burrow__user_build(a, &c.pw)) == NULL)
-        *err = burrow_err_out_of_memory;
+    else {
+        u = burrow__user_build(a, &c.pw);
+        if (u == NULL)
+            *err = burrow_err_out_of_memory;
+    }
     arena_free(&scratch);
     return u;
 }
@@ -832,8 +835,11 @@ static User *user_impl_lookup(Alloc *a, Str username, Error *err) {
         *err = user_unknown_user_error_as_error(username, error_allocator());
     else if (BURROW_FAILED(e))
         *err = fmt_errorf_v("user: lookup username %s: %v", username, e);
-    else if ((u = burrow__user_build(a, &c.pw)) == NULL)
-        *err = burrow_err_out_of_memory;
+    else {
+        u = burrow__user_build(a, &c.pw);
+        if (u == NULL)
+            *err = burrow_err_out_of_memory;
+    }
     arena_free(&scratch);
     return u;
 }
@@ -862,8 +868,11 @@ static UserGroup *user_impl_lookup_group(Alloc *a, Str name, Error *err) {
         *err = user_unknown_group_error_as_error(name, error_allocator());
     else if (BURROW_FAILED(e))
         *err = fmt_errorf_v("user: lookup groupname %s: %v", name, e);
-    else if ((g = user_build_group(a, sa, &c.gr)) == NULL)
-        *err = burrow_err_out_of_memory;
+    else {
+        g = user_build_group(a, sa, &c.gr);
+        if (g == NULL)
+            *err = burrow_err_out_of_memory;
+    }
     arena_free(&scratch);
     return g;
 }
@@ -888,8 +897,11 @@ static UserGroup *user_impl_lookup_group_id(Alloc *a, Str gid, int64_t buf,
                                                     error_allocator());
     else if (BURROW_FAILED(e))
         *err = fmt_errorf_v("user: lookup groupid %d: %v", i, e);
-    else if ((g = user_build_group(a, sa, &c.gr)) == NULL)
-        *err = burrow_err_out_of_memory;
+    else {
+        g = user_build_group(a, sa, &c.gr);
+        if (g == NULL)
+            *err = burrow_err_out_of_memory;
+    }
     arena_free(&scratch);
     return g;
 }

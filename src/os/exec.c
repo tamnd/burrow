@@ -55,10 +55,10 @@ static const Error os_exec_uninit = {&burrow_sentinel_error_vt, &os_exec_uninit_
  * nothing is allocated. */
 #define OS_NSIG 256
 static const SyscallSignal os_signal_numbers[OS_NSIG] = {
-#define OS_SIG8(n) n, n + 1, n + 2, n + 3, n + 4, n + 5, n + 6, n + 7
+#define OS_SIG8(n) (n), (n) + 1, (n) + 2, (n) + 3, (n) + 4, (n) + 5, (n) + 6, (n) + 7
 #define OS_SIG64(n)                                                                    \
-    OS_SIG8(n), OS_SIG8(n + 8), OS_SIG8(n + 16), OS_SIG8(n + 24), OS_SIG8(n + 32),     \
-        OS_SIG8(n + 40), OS_SIG8(n + 48), OS_SIG8(n + 56)
+    OS_SIG8(n), OS_SIG8((n) + 8), OS_SIG8((n) + 16), OS_SIG8((n) + 24),                \
+        OS_SIG8((n) + 32), OS_SIG8((n) + 40), OS_SIG8((n) + 48), OS_SIG8((n) + 56)
     OS_SIG64(0),
     OS_SIG64(64),
     OS_SIG64(128),
@@ -615,7 +615,7 @@ static void os_ps_put(char *buf, Int *n, Str s) {
 static void os_ps_num(char *buf, Int *n, uint64_t v, bool neg, bool hex) {
     char digits[24];
     int nd = 0;
-    unsigned base = hex ? 16u : 10u;
+    unsigned base = hex ? 16U : 10U;
     do {
         digits[nd++] = "0123456789abcdef"[v % base];
         v /= base;

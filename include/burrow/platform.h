@@ -62,6 +62,13 @@
  * answering a question that does not have a compile time answer. */
 #define BURROW_OS_COSMO 1
 #define BURROW_OS_NAME "cosmo"
+/* Cosmopolitan's libc/calls/calls.h, which most of its headers include, does
+ * #define clone __clone, and that would rename the clone member of every vtable
+ * initialised after it. Including it first and dropping the macro means its
+ * include guard keeps the macro from coming back. It is the one header that
+ * defines it, and it reaches for nothing by being included. */
+#include <libc/calls/calls.h>
+#undef clone
 #elif defined(__wasi__)
 #define BURROW_OS_WASI 1
 #define BURROW_OS_NAME "wasip1"

@@ -285,3 +285,6 @@ global	src/os/env.c	os_envs_cap	package-vars	How many entries os_envs has room f
 global	src/os/proc.c	os_args_once	package-vars	Makes os_args_slice the first time os_args is called.
 global	src/os/env.c	os_env_once	package-vars	Copies the environment into os_envs the first time any of the environment calls needs it, as syscall's envOnce does.
 global	src/os/env.c	os_env_mu	package-vars	syscall's envLock, over os_envs and its length and room.
+global	src/os/user.c	user_cache_once	package-vars	Fills the Current cache the first time it is needed, as Go's cache.Do does.
+global	src/os/user.c	user_cache_u	package-vars	The user Current found, written once under user_cache_once and only read after that.
+global	src/os/user.c	user_cache_err	package-vars	The error Current got instead, written once under user_cache_once and only read after that.

@@ -973,6 +973,44 @@ void pal_ids(PalIds *out);
  * so a caller counts first and asks again. Windows reports PAL_ENOTSUP. */
 int64_t pal_getgroups(uint32_t *buf, int64_t cap, PalErrno *err);
 
+/* A row of the user database, as getpwnam_r and getpwuid_r give it. The
+ * strings are NUL terminated and point into the buffer the call was given. */
+typedef struct PalPasswd {
+    const char *name;
+    const char *gecos;
+    const char *dir;
+    uint32_t uid;
+    uint32_t gid;
+} PalPasswd;
+
+/* A row of the group database, as getgrnam_r and getgrgid_r give it. */
+typedef struct PalGroup {
+    const char *name;
+    uint32_t gid;
+} PalGroup;
+
+/* getpwnam_r, getpwuid_r, getgrnam_r and getgrgid_r, which is the libc user
+ * database and so everything NSS knows about, not only /etc/passwd. They
+ * return what the call did: PAL_OK with *found set to say whether there was a
+ * row, PAL_ERANGE when buf is too small, or another error. Some systems give
+ * PAL_ENOENT for no row, which the caller treats as not found. Windows has no
+ * such database and reports PAL_ENOTSUP. */
+PalErrno pal_getpwnam(const char *name, PalPasswd *pw, char *buf, int64_t cap, bool *found);
+PalErrno pal_getpwuid(uint32_t uid, PalPasswd *pw, char *buf, int64_t cap, bool *found);
+PalErrno pal_getgrnam(const char *name, PalGroup *gr, char *buf, int64_t cap, bool *found);
+PalErrno pal_getgrgid(uint32_t gid, PalGroup *gr, char *buf, int64_t cap, bool *found);
+
+/* sysconf(_SC_GETPW_R_SIZE_MAX), or _SC_GETGR_R_SIZE_MAX for group, the size
+ * the system suggests for the buffers above. -1 when it has no suggestion,
+ * which is FreeBSD, DragonFly, musl and Windows. */
+int64_t pal_user_buf_size(bool group);
+
+/* getgrouplist: the groups name is in, with gid among them, into gids, which
+ * has room for *n. Returns 0 and sets *n to the count, or -1 when there are
+ * more than *n. Most systems then set *n to how many there are, and macOS does
+ * not. Windows returns -1 with *n set to 0. */
+int pal_getgrouplist(const char *name, uint32_t gid, uint32_t *gids, int *n);
+
 /* The handle behind standard input, output or error, for i 0, 1 or 2, which
  * is what a PalSpawn fds list wants when a child is to share ours. It is i
  * itself on POSIX and GetStdHandle on Windows. PAL_INVALID_HANDLE for any

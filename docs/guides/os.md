@@ -214,6 +214,36 @@ Int n = os_file_read(r, slice_from(buf, 32, 32, TYPE_BYTE), &err);
 
 `os_args`, `os_getpid`, `os_getppid`, `os_getuid` and the rest of the ids, `os_hostname`, `os_user_home_dir`, `os_user_cache_dir` and `os_user_config_dir` are there too, with the same answers and the same error texts as Go.
 
+## Users and groups
+
+`burrow/os/user.h` is Go's `os/user`. `user_current`, `user_lookup` and `user_lookup_id` give a `User` with the uid, the primary gid, the login name, the full name and the home directory, all as strings, as Go has them. `user_lookup_group` and `user_lookup_group_id` give a `UserGroup`, and `user_group_ids` lists the groups a user is in:
+
+<!-- example: ../examples/os/user.c#lookup -->
+```c
+Error err = BURROW_NO_ERROR;
+User *root = user_lookup_id(a, BURROW_S("0"), &err);
+if (BURROW_FAILED(err))
+    return 1;
+printf(BURROW_STR_FMT " " BURROW_STR_FMT "\n", BURROW_STR_ARG(root->username),
+       BURROW_STR_ARG(root->uid)); /* root 0 */
+
+UserGroup *g = user_lookup_group_id(a, root->gid, &err);
+if (BURROW_FAILED(err))
+    return 1;
+printf("group " BURROW_STR_FMT "\n", BURROW_STR_ARG(g->gid));
+```
+
+On Unix the answers come from the C library, through `getpwnam_r` and the rest, so they see whatever the system is set up to use, LDAP and NIS included. Building with `BURROW_OSUSERGO` reads `/etc/passwd` and `/etc/group` instead, which is what Go does with the `osusergo` build tag. Windows is not done yet, and there every call returns an error. `user_current` asks once and keeps the answer, so ask again with `user_lookup_id` if the process changes its uid. Each result is one allocation, freed with `user_free` or `user_group_free`.
+
+A name or id that is not there gives one of four error types, which you can pick out with `errors_as`:
+
+<!-- example: ../examples/os/user.c#unknown -->
+```c
+(void)user_lookup(a, BURROW_S("no-such-user"), &err);
+if (errors_as(err, TYPE_USER_UNKNOWN_USER_ERROR) != NULL)
+    printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
+```
+
 ## Processes
 
 `os_start_process` is Go's `StartProcess`, the low level way to run a program. It takes the program's path, the whole argument list with the name first, and an `OsProcAttr` with the directory, the environment and the files the child gets. A NULL `env` gives the child ours, and `files` is the child's descriptor table, so leaving it empty starts the child with nothing open. Most programs want os/exec, which finds the program on `PATH` and wires up the pipes, once that package is here.

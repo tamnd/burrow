@@ -139,6 +139,12 @@ static const KnownDifference known_differences[] = {
     /* Go's arm64 table has amd64's value, which has amd64's O_DIRECTORY bit
      * in it. */
     {"O_TMPFILE", "amd64's value in Go's table"},
+#if !defined(__GLIBC__)
+    /* Go's come from glibc. musl counts O_PATH in O_ACCMODE, and its
+     * O_LARGEFILE is the kernel's bit where glibc has 0 on 64-bit systems. */
+    {"O_ACCMODE", "musl's own"},
+    {"O_LARGEFILE", "musl's own"},
+#endif
 #elif defined(BURROW_OS_DARWIN)
     /* The same for macOS: Go's tables come from an older SDK, and these are
      * counts and limits that went up since, or a default Apple changed. */

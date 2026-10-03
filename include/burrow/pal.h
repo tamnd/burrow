@@ -995,9 +995,11 @@ typedef struct PalGroup {
  * row, PAL_ERANGE when buf is too small, or another error. Some systems give
  * PAL_ENOENT for no row, which the caller treats as not found. Windows has no
  * such database and reports PAL_ENOTSUP. */
-PalErrno pal_getpwnam(const char *name, PalPasswd *pw, char *buf, int64_t cap, bool *found);
+PalErrno pal_getpwnam(const char *name, PalPasswd *pw, char *buf, int64_t cap,
+                      bool *found);
 PalErrno pal_getpwuid(uint32_t uid, PalPasswd *pw, char *buf, int64_t cap, bool *found);
-PalErrno pal_getgrnam(const char *name, PalGroup *gr, char *buf, int64_t cap, bool *found);
+PalErrno pal_getgrnam(const char *name, PalGroup *gr, char *buf, int64_t cap,
+                      bool *found);
 PalErrno pal_getgrgid(uint32_t gid, PalGroup *gr, char *buf, int64_t cap, bool *found);
 
 /* sysconf(_SC_GETPW_R_SIZE_MAX), or _SC_GETGR_R_SIZE_MAX for group, the size
@@ -1010,6 +1012,75 @@ int64_t pal_user_buf_size(bool group);
  * more than *n. Most systems then set *n to how many there are, and macOS does
  * not. Windows returns -1 with *n set to 0. */
 int pal_getgrouplist(const char *name, uint32_t gid, uint32_t *gids, int *n);
+
+/* The Windows account database, for os/user, which is Go's lookup_windows.go
+ * cut where it calls the system. Everywhere else these report PAL_ENOTSUP.
+ *
+ * Every string comes back as UTF-8 in buf, NUL terminated, and a call that
+ * gives more than one string puts them one after the other, each with its
+ * NUL. PAL_ERANGE means buf is too small, and the caller tries again with a
+ * bigger one. Any other error is the Win32 code, as pal_errno_native gives it.
+ *
+ * The account types are SID_NAME_USE's values. */
+enum {
+    PAL_SID_TYPE_USER = 1,
+    PAL_SID_TYPE_GROUP = 2,
+    PAL_SID_TYPE_DOMAIN = 3,
+    PAL_SID_TYPE_ALIAS = 4,
+    PAL_SID_TYPE_WELL_KNOWN_GROUP = 5,
+};
+
+/* The process owner from its token: the user SID, the primary group SID, the
+ * profile directory, the NameSamCompatible name and the NameDisplay name, in
+ * that order. When the system has no display name the account name is
+ * there twice, as Go uses it in that case. If the thread is impersonating
+ * someone, this drops that for the length of the call and takes it up again
+ * after, and a process that cannot take it up again is ended, since going on
+ * as the wrong user is worse. On an error *stage says where it happened: 0 in
+ * the lookup itself, 1 opening the thread or process token, 2 dropping the
+ * impersonation. */
+PalErrno pal_win_current_user(char *buf, int64_t cap, int *stage);
+
+/* The SIDs of every group in the process token, *n of them. Impersonation is
+ * dropped for the call as above, with *stage the same. */
+PalErrno pal_win_current_groups(char *buf, int64_t cap, int *n, int *stage);
+
+/* LookupAccountName: name's SID as a string into buf, with its account type
+ * and whether it is one of the service accounts LocalSystem, LocalService and
+ * NetworkService. */
+PalErrno pal_win_lookup_name(const char *name, char *buf, int64_t cap, uint32_t *type,
+                             bool *service);
+
+/* LookupAccountSid on a SID in string form: the account name, the domain and
+ * the SID in the form ConvertSidToStringSid gives, with the type and service
+ * flag as above. A string that is not a SID
+ * gives the error ConvertStringSidToSid gave. */
+PalErrno pal_win_lookup_sid(const char *sid, char *buf, int64_t cap, uint32_t *type,
+                            bool *service);
+
+/* NetGetJoinInformation: whether the machine is in a domain. */
+PalErrno pal_win_domain_joined(bool *joined);
+
+/* TranslateName from NameSamCompatible, "DOMAIN\user", to NameDisplay. */
+PalErrno pal_win_display_name(const char *account, char *buf, int64_t cap);
+
+/* NetUserGetInfo at level 10 and 4: the full name, and the RID of the primary
+ * group. server is the domain, as Go passes it. */
+PalErrno pal_win_user_full_name(const char *server, const char *user, char *buf,
+                                int64_t cap);
+PalErrno pal_win_user_primary_group(const char *server, const char *user,
+                                    uint32_t *rid);
+
+/* NetUserGetLocalGroups with LG_INCLUDE_INDIRECT: the names of the local
+ * groups user is in, *n of them. */
+PalErrno pal_win_user_local_groups(const char *user, char *buf, int64_t cap, int *n);
+
+/* The ProfileImagePath value of the ProfileList key for sid, under
+ * HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion, which is where a
+ * user's home is once they have logged in, and GetProfilesDirectory, the
+ * directory the homes are made in. */
+PalErrno pal_win_profile_path(const char *sid, char *buf, int64_t cap);
+PalErrno pal_win_profiles_dir(char *buf, int64_t cap);
 
 /* The handle behind standard input, output or error, for i 0, 1 or 2, which
  * is what a PalSpawn fds list wants when a child is to share ours. It is i

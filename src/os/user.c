@@ -952,46 +952,399 @@ done:
 
 #if defined(USER_IMPL_WINDOWS)
 
-static Error user_windows_error(void) {
-    return errors_new(error_allocator(),
-                      USER_LIT("user: lookups on windows are not implemented yet"));
+/* lookup_windows.go. Every question goes to the PAL, which hands its answers
+ * back as strings with a NUL after each one. */
+
+enum {
+    USER_WIN_CURRENT,
+    USER_WIN_GROUPS,
+    USER_WIN_NAME,
+    USER_WIN_SID,
+    USER_WIN_DISPLAY,
+    USER_WIN_FULL_NAME,
+    USER_WIN_LOCAL_GROUPS,
+    USER_WIN_PROFILE,
+    USER_WIN_PROFILES,
+};
+
+enum { USER_WIN_MAX_BUFFER = 1 << 20 };
+
+/* What one PAL call asks, so it can be made again with more room. */
+typedef struct UserWinCall {
+    int kind;
+    const char *x, *y;
+    int n, stage;
+    uint32_t type;
+    bool service;
+} UserWinCall;
+
+static PalErrno user_win_do(UserWinCall *c, char *buf, int64_t cap) {
+    switch (c->kind) {
+    case USER_WIN_CURRENT:
+        return pal_win_current_user(buf, cap, &c->stage);
+    case USER_WIN_GROUPS:
+        return pal_win_current_groups(buf, cap, &c->n, &c->stage);
+    case USER_WIN_NAME:
+        return pal_win_lookup_name(c->x, buf, cap, &c->type, &c->service);
+    case USER_WIN_SID:
+        return pal_win_lookup_sid(c->x, buf, cap, &c->type, &c->service);
+    case USER_WIN_DISPLAY:
+        return pal_win_display_name(c->x, buf, cap);
+    case USER_WIN_FULL_NAME:
+        return pal_win_user_full_name(c->x, c->y, buf, cap);
+    case USER_WIN_LOCAL_GROUPS:
+        return pal_win_user_local_groups(c->x, buf, cap, &c->n);
+    case USER_WIN_PROFILE:
+        return pal_win_profile_path(c->x, buf, cap);
+    default:
+        return pal_win_profiles_dir(buf, cap);
+    }
+}
+
+/* c, with twice the room each time the answer does not fit. The answer is in
+ * a buffer from sa, and NULL with *err set means the call failed. */
+static const char *user_win_call(Alloc *sa, UserWinCall *c, Error *err) {
+    for (int64_t size = 256;; size *= 2) {
+        char *buf = (char *)mem_alloc_nozero(sa, (size_t)size, 1);
+        if (buf == NULL) {
+            *err = burrow_err_out_of_memory;
+            return NULL;
+        }
+        PalErrno pe = user_win_do(c, buf, size);
+        if (pe == PAL_OK)
+            return buf;
+        if (pe != PAL_ERANGE || size >= USER_WIN_MAX_BUFFER) {
+            *err =
+                syscall_errno_as_error(syscall_errno_from_pal(pe), error_allocator());
+            return NULL;
+        }
+    }
+}
+
+/* The next string in an answer. */
+static Str user_win_next(const char **p) {
+    Str s = user_cstr_str(*p);
+    *p += s.len + 1;
+    return s;
+}
+
+/* s with a NUL on the end, or EINVAL when s has a NUL in it, as Go's
+ * UTF16PtrFromString says. */
+static const char *user_win_cstr(Alloc *sa, Str s, Error *err) {
+    if (s.len > 0 && memchr(s.p, 0, (size_t)s.len) != NULL) {
+        *err = syscall_errno_as_error(SYSCALL_EINVAL, error_allocator());
+        return NULL;
+    }
+    char *p = (char *)mem_alloc_nozero(sa, (size_t)s.len + 1, 1);
+    if (p == NULL) {
+        *err = burrow_err_out_of_memory;
+        return NULL;
+    }
+    if (s.len > 0)
+        memcpy(p, s.p, (size_t)s.len);
+    p[s.len] = 0;
+    return p;
+}
+
+/* The errors runAsProcessOwner wraps its own failures in. */
+static Error user_win_owner_error(int stage, Error e) {
+    if (stage == 1)
+        return fmt_errorf_v("os/user: failed to get current token: %w", e);
+    if (stage == 2)
+        return fmt_errorf_v("os/user: failed to revert to self: %w", e);
+    return e;
+}
+
+static bool user_win_is_user_type(uint32_t type, bool service) {
+    return type == PAL_SID_TYPE_USER ||
+           (type == PAL_SID_TYPE_WELL_KNOWN_GROUP && service);
+}
+
+static bool user_win_is_group_type(uint32_t type) {
+    return type == PAL_SID_TYPE_GROUP || type == PAL_SID_TYPE_WELL_KNOWN_GROUP ||
+           type == PAL_SID_TYPE_ALIAS;
+}
+
+/* isDomainJoined, where an error counts as no. */
+static bool user_win_joined(void) {
+    bool joined = false;
+    return pal_win_domain_joined(&joined) == PAL_OK && joined;
+}
+
+/* lookupUsernameAndDomain, plus the SID in its usual form. */
+static const char *user_win_account(Alloc *sa, const char *sid, Str *username,
+                                    Str *domain, uint32_t *type, Error *err) {
+    UserWinCall c = {USER_WIN_SID, sid, NULL, 0, 0, 0, false};
+    const char *p = user_win_call(sa, &c, err);
+    if (p == NULL)
+        return NULL;
+    if (!user_win_is_user_type(c.type, c.service)) {
+        *err = fmt_errorf_v("user: should be user account type, not %d", (Int)c.type);
+        return NULL;
+    }
+    *username = user_win_next(&p);
+    *domain = user_win_next(&p);
+    *type = c.type;
+    return p;
+}
+
+/* lookupGroupName: the SID of a group. */
+static Str user_win_group_sid(Alloc *sa, Str name, Error *err) {
+    const char *n = user_win_cstr(sa, name, err);
+    if (n == NULL)
+        return BURROW_STR_EMPTY;
+    UserWinCall c = {USER_WIN_NAME, n, NULL, 0, 0, 0, false};
+    const char *p = user_win_call(sa, &c, err);
+    if (p == NULL)
+        return BURROW_STR_EMPTY;
+    if (!user_win_is_group_type(c.type)) {
+        *err = fmt_errorf_v("lookupGroupName: should be group account type, not %d",
+                            (Int)c.type);
+        return BURROW_STR_EMPTY;
+    }
+    return user_cstr_str(p);
+}
+
+/* lookupFullName, which never fails: the display name from the domain, then
+ * the full name from NetUserGetInfo, then the username. */
+static Str user_win_full_name(Alloc *sa, const char *domain, const char *username,
+                              const char *domain_and_user) {
+    Error e = BURROW_NO_ERROR;
+    if (user_win_joined()) {
+        UserWinCall c = {USER_WIN_DISPLAY, domain_and_user, NULL, 0, 0, 0, false};
+        const char *p = user_win_call(sa, &c, &e);
+        if (p != NULL)
+            return user_cstr_str(p);
+    }
+    UserWinCall c = {USER_WIN_FULL_NAME, domain, username, 0, 0, 0, false};
+    const char *p = user_win_call(sa, &c, &e);
+    if (p != NULL)
+        return user_cstr_str(p);
+    return user_cstr_str(username);
+}
+
+/* lookupUserPrimaryGroup. */
+static Str user_win_primary_group(Alloc *sa, const char *username, const char *domain,
+                                  Error *err) {
+    UserWinCall c = {USER_WIN_NAME, domain, NULL, 0, 0, 0, false};
+    const char *p = user_win_call(sa, &c, err);
+    if (p == NULL)
+        return BURROW_STR_EMPTY;
+    if (c.type != PAL_SID_TYPE_DOMAIN) {
+        *err = fmt_errorf_v(
+            "lookupUserPrimaryGroup: should be domain account type, not %d",
+            (Int)c.type);
+        return BURROW_STR_EMPTY;
+    }
+    Str domain_rid = user_cstr_str(p);
+    if (user_win_joined())
+        return fmt_sprintf_v(sa, "%s-513", domain_rid);
+    uint32_t rid = 0;
+    PalErrno pe = pal_win_user_primary_group(domain, username, &rid);
+    if (pe != PAL_OK) {
+        *err = syscall_errno_as_error(syscall_errno_from_pal(pe), error_allocator());
+        return BURROW_STR_EMPTY;
+    }
+    return fmt_sprintf_v(sa, "%s-%d", domain_rid, (Int)rid);
+}
+
+/* newUserFromSid. */
+static User *user_win_from_sid(Alloc *a, Alloc *sa, const char *sid, Error *err) {
+    Str username, domain;
+    uint32_t type = 0;
+    const char *canon = user_win_account(sa, sid, &username, &domain, &type, err);
+    if (canon == NULL)
+        return NULL;
+    Str uid = user_cstr_str(canon);
+    const char *un = user_win_cstr(sa, username, err);
+    const char *dn = un == NULL ? NULL : user_win_cstr(sa, domain, err);
+    if (dn == NULL)
+        return NULL;
+    Str gid = uid;
+    if (type != PAL_SID_TYPE_WELL_KNOWN_GROUP) {
+        gid = user_win_primary_group(sa, un, dn, err);
+        if (BURROW_FAILED(*err))
+            return NULL;
+    }
+    Str dir;
+    Error e = BURROW_NO_ERROR;
+    UserWinCall pc = {USER_WIN_PROFILE, canon, NULL, 0, 0, 0, false};
+    const char *p = user_win_call(sa, &pc, &e);
+    if (p != NULL) {
+        dir = user_cstr_str(p);
+    } else {
+        UserWinCall dc = {USER_WIN_PROFILES, NULL, NULL, 0, 0, 0, false};
+        p = user_win_call(sa, &dc, err);
+        if (p == NULL)
+            return NULL;
+        dir = fmt_sprintf_v(sa, "%s\\%s", user_cstr_str(p), username);
+    }
+    /* newUser */
+    Str domain_and_user = fmt_sprintf_v(sa, "%s\\%s", domain, username);
+    const char *du = user_win_cstr(sa, domain_and_user, err);
+    if (du == NULL)
+        return NULL;
+    Str name = user_win_full_name(sa, dn, un, du);
+    User *u = user_make(a, uid, gid, domain_and_user, name, dir);
+    if (u == NULL)
+        *err = burrow_err_out_of_memory;
+    return u;
 }
 
 static User *user_impl_current(Alloc *a, int64_t buf, Error *err) {
-    (void)a, (void)buf;
-    *err = user_windows_error();
-    return NULL;
+    (void)buf;
+    Arena scratch;
+    arena_init(&scratch, NULL, 0);
+    Alloc *sa = arena_allocator(&scratch);
+    User *u = NULL;
+    Error e = BURROW_NO_ERROR;
+    UserWinCall c = {USER_WIN_CURRENT, NULL, NULL, 0, 0, 0, false};
+    const char *p = user_win_call(sa, &c, &e);
+    if (p == NULL) {
+        *err = user_win_owner_error(c.stage, e);
+    } else {
+        Str uid = user_win_next(&p);
+        Str gid = user_win_next(&p);
+        Str dir = user_win_next(&p);
+        Str username = user_win_next(&p);
+        Str display = user_win_next(&p);
+        if ((u = user_make(a, uid, gid, username, display, dir)) == NULL)
+            *err = burrow_err_out_of_memory;
+    }
+    arena_free(&scratch);
+    return u;
 }
 
+/* lookupUser. */
 static User *user_impl_lookup(Alloc *a, Str username, Error *err) {
-    (void)a, (void)username;
-    *err = user_windows_error();
-    return NULL;
+    Arena scratch;
+    arena_init(&scratch, NULL, 0);
+    Alloc *sa = arena_allocator(&scratch);
+    User *u = NULL;
+    const char *n = user_win_cstr(sa, username, err);
+    UserWinCall c = {USER_WIN_NAME, n, NULL, 0, 0, 0, false};
+    const char *sid = n == NULL ? NULL : user_win_call(sa, &c, err);
+    if (sid == NULL)
+        goto done;
+    if (!user_win_is_user_type(c.type, c.service)) {
+        *err = fmt_errorf_v("user: should be user account type, not %d", (Int)c.type);
+        goto done;
+    }
+    u = user_win_from_sid(a, sa, sid, err);
+done:
+    arena_free(&scratch);
+    return u;
 }
 
+/* lookupUserId. */
 static User *user_impl_lookup_id(Alloc *a, Str uid, Error *err) {
-    (void)a, (void)uid;
-    *err = user_windows_error();
-    return NULL;
+    Arena scratch;
+    arena_init(&scratch, NULL, 0);
+    Alloc *sa = arena_allocator(&scratch);
+    User *u = NULL;
+    const char *s = user_win_cstr(sa, uid, err);
+    if (s != NULL)
+        u = user_win_from_sid(a, sa, s, err);
+    arena_free(&scratch);
+    return u;
 }
 
+/* lookupGroup. */
 static UserGroup *user_impl_lookup_group(Alloc *a, Str name, Error *err) {
-    (void)a, (void)name;
-    *err = user_windows_error();
-    return NULL;
+    Arena scratch;
+    arena_init(&scratch, NULL, 0);
+    UserGroup *g = NULL;
+    Str sid = user_win_group_sid(arena_allocator(&scratch), name, err);
+    if (BURROW_OK(*err) && (g = user_group_make(a, sid, name)) == NULL)
+        *err = burrow_err_out_of_memory;
+    arena_free(&scratch);
+    return g;
 }
 
+/* lookupGroupId. */
 static UserGroup *user_impl_lookup_group_id(Alloc *a, Str gid, int64_t buf,
                                             Error *err) {
-    (void)a, (void)gid, (void)buf;
-    *err = user_windows_error();
-    return NULL;
+    (void)buf;
+    Arena scratch;
+    arena_init(&scratch, NULL, 0);
+    Alloc *sa = arena_allocator(&scratch);
+    UserGroup *g = NULL;
+    const char *s = user_win_cstr(sa, gid, err);
+    UserWinCall c = {USER_WIN_SID, s, NULL, 0, 0, 0, false};
+    const char *p = s == NULL ? NULL : user_win_call(sa, &c, err);
+    if (p == NULL)
+        goto done;
+    if (!user_win_is_group_type(c.type)) {
+        *err = fmt_errorf_v("lookupGroupId: should be group account type, not %d",
+                            (Int)c.type);
+        goto done;
+    }
+    if ((g = user_group_make(a, gid, user_cstr_str(p))) == NULL)
+        *err = burrow_err_out_of_memory;
+done:
+    arena_free(&scratch);
+    return g;
 }
 
+/* listGroups: the groups in the token for the current user, and
+ * NetUserGetLocalGroups for anyone else, with the primary group on the end
+ * when neither had it. */
 static Slice user_impl_list_groups(const User *u, Alloc *a, Error *err) {
-    (void)u, (void)a;
-    *err = user_windows_error();
-    return slice_nil(TYPE_STRING);
+    Slice sids = slice_nil(TYPE_STRING);
+    Arena scratch;
+    arena_init(&scratch, NULL, 0);
+    Alloc *sa = arena_allocator(&scratch);
+    Error ce = BURROW_NO_ERROR;
+    User *cur = user_current(sa, &ce);
+    if (BURROW_OK(ce) && str_eq(cur->uid, u->uid)) {
+        Error e = BURROW_NO_ERROR;
+        UserWinCall c = {USER_WIN_GROUPS, NULL, NULL, 0, 0, 0, false};
+        const char *p = user_win_call(sa, &c, &e);
+        if (p == NULL) {
+            *err = user_win_owner_error(c.stage, e);
+            goto done;
+        }
+        for (int i = 0; i < c.n; i++) {
+            sids = user_append_str(a, sids, user_win_next(&p), err);
+            if (BURROW_FAILED(*err))
+                goto done;
+        }
+    } else {
+        const char *s = user_win_cstr(sa, u->uid, err);
+        Str username, domain;
+        uint32_t type = 0;
+        if (s == NULL ||
+            user_win_account(sa, s, &username, &domain, &type, err) == NULL)
+            goto done;
+        /* listGroupsForUsernameAndDomain */
+        Str query = username;
+        if (user_win_joined() && domain.len != 0)
+            query = fmt_sprintf_v(sa, "%s\\%s", domain, username);
+        const char *q = user_win_cstr(sa, query, err);
+        UserWinCall c = {USER_WIN_LOCAL_GROUPS, q, NULL, 0, 0, 0, false};
+        const char *p = q == NULL ? NULL : user_win_call(sa, &c, err);
+        if (p == NULL)
+            goto done;
+        for (int i = 0; i < c.n; i++) {
+            Str sid = user_win_group_sid(sa, user_win_next(&p), err);
+            if (BURROW_FAILED(*err))
+                goto done;
+            sids = user_append_str(a, sids, sid, err);
+            if (BURROW_FAILED(*err))
+                goto done;
+        }
+    }
+    const Str *have = (const Str *)sids.p;
+    for (Int i = 0; i < sids.len; i++) {
+        if (str_eq(have[i], u->gid))
+            goto done;
+    }
+    sids = user_append_str(a, sids, u->gid, err);
+done:
+    if (BURROW_OK(ce))
+        user_free(sa, cur);
+    arena_free(&scratch);
+    return sids;
 }
 
 #endif /* USER_IMPL_WINDOWS */

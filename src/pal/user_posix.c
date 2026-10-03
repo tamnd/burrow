@@ -127,4 +127,74 @@ int pal_getgrouplist(const char *name, uint32_t gid, uint32_t *gids, int *n) {
 #endif
 }
 
+/* The Windows account calls, which have nothing to ask here. */
+
+PalErrno pal_win_current_user(char *buf, int64_t cap, int *stage) {
+    (void)buf, (void)cap;
+    *stage = 0;
+    return PAL_ENOTSUP;
+}
+
+PalErrno pal_win_current_groups(char *buf, int64_t cap, int *n, int *stage) {
+    (void)buf, (void)cap;
+    *n = 0;
+    *stage = 0;
+    return PAL_ENOTSUP;
+}
+
+PalErrno pal_win_lookup_name(const char *name, char *buf, int64_t cap, uint32_t *type,
+                             bool *service) {
+    (void)name, (void)buf, (void)cap;
+    *type = 0;
+    *service = false;
+    return PAL_ENOTSUP;
+}
+
+PalErrno pal_win_lookup_sid(const char *sid, char *buf, int64_t cap, uint32_t *type,
+                            bool *service) {
+    (void)sid, (void)buf, (void)cap;
+    *type = 0;
+    *service = false;
+    return PAL_ENOTSUP;
+}
+
+PalErrno pal_win_domain_joined(bool *joined) {
+    *joined = false;
+    return PAL_ENOTSUP;
+}
+
+PalErrno pal_win_display_name(const char *account, char *buf, int64_t cap) {
+    (void)account, (void)buf, (void)cap;
+    return PAL_ENOTSUP;
+}
+
+PalErrno pal_win_user_full_name(const char *server, const char *user, char *buf,
+                                int64_t cap) {
+    (void)server, (void)user, (void)buf, (void)cap;
+    return PAL_ENOTSUP;
+}
+
+PalErrno pal_win_user_primary_group(const char *server, const char *user,
+                                    uint32_t *rid) {
+    (void)server, (void)user;
+    *rid = 0;
+    return PAL_ENOTSUP;
+}
+
+PalErrno pal_win_user_local_groups(const char *user, char *buf, int64_t cap, int *n) {
+    (void)user, (void)buf, (void)cap;
+    *n = 0;
+    return PAL_ENOTSUP;
+}
+
+PalErrno pal_win_profile_path(const char *sid, char *buf, int64_t cap) {
+    (void)sid, (void)buf, (void)cap;
+    return PAL_ENOTSUP;
+}
+
+PalErrno pal_win_profiles_dir(char *buf, int64_t cap) {
+    (void)buf, (void)cap;
+    return PAL_ENOTSUP;
+}
+
 #endif /* !BURROW_OS_WINDOWS */

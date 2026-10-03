@@ -1,10 +1,12 @@
 /* Derived from Go's src/os/user/user_test.go, lookup_unix_test.go,
- * listgroups_unix_test.go and cgo_lookup_unix_test.go. Go source: go1.27.1.
+ * listgroups_unix_test.go, cgo_lookup_unix_test.go and
+ * user_windows_test.go. Go source: go1.27.1.
  *
  * Go runs lookup_unix_test.go and listgroups_unix_test.go only when it uses
  * the /etc parsers, but here the parsers are in every build, so their tests
  * run everywhere. TestNegativeUid needs the libc path, so it skips under
- * BURROW_OSUSERGO and on Windows. Go's userBuffer = 1 and groupBuffer = 1,
+ * BURROW_OSUSERGO and on Windows. The tests from user_windows_test.go are at
+ * the end, for Windows only. Go's userBuffer = 1 and groupBuffer = 1,
  * which make the first buffer too small so the retry runs, are the buf
  * arguments of burrow__user_current and burrow__user_lookup_group_id.
  *
@@ -27,10 +29,22 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(BURROW_OS_WINDOWS)
+#include "burrow/encoding/base64.h"
+#include "burrow/fmt.h"
+#include "burrow/math/rand.h"
+#include "burrow/strconv.h"
+#include "burrow/syscall.h"
+
+#include <windows.h>
+
+#include <lm.h>
+#endif
+
 #define S(lit) BURROW_S(lit)
 
 #if defined(BURROW_OS_WINDOWS)
-#define USER_IMPLEMENTED false
+#define USER_IMPLEMENTED true
 #define HAS_CGO false
 #elif defined(BURROW_OSUSERGO)
 #define USER_IMPLEMENTED true
@@ -590,6 +604,362 @@ static void setup(void) {
     make_test_group_file();
 }
 
+/* ------------------------------------------------- user_windows_test.go */
+
+#if defined(BURROW_OS_WINDOWS)
+
+typedef BOOL(WINAPI *UserTestImpersonateSelfFn)(SECURITY_IMPERSONATION_LEVEL);
+typedef BOOL(WINAPI *UserTestRevertToSelfFn)(void);
+typedef BOOL(WINAPI *UserTestImpersonateFn)(HANDLE);
+typedef BOOL(WINAPI *UserTestLogonUserFn)(LPCWSTR, LPCWSTR, LPCWSTR, DWORD, DWORD,
+                                          PHANDLE);
+typedef DWORD(WINAPI *UserTestNetUserAddFn)(LPCWSTR, DWORD, LPBYTE, LPDWORD);
+typedef DWORD(WINAPI *UserTestNetUserDelFn)(LPCWSTR, LPCWSTR);
+
+/* The function name from the library, or a fatal error. */
+static void *user_test_proc(TestingT *t, const wchar_t *lib, const char *name) {
+    HMODULE m = LoadLibraryW(lib);
+    void *f = m == NULL ? NULL : (void *)(void (*)(void))GetProcAddress(m, name);
+    if (f == NULL)
+        testing_t_fatalf_v(t, "%s: error %d", name, (Int)GetLastError());
+    return f;
+}
+
+/* s as UTF-16 from the test arena. */
+static wchar_t *user_test_wide(Str s) {
+    wchar_t *w = (wchar_t *)mem_alloc(a, (size_t)(s.len + 1) * sizeof(wchar_t),
+                                      _Alignof(wchar_t));
+    int n =
+        MultiByteToWideChar(CP_UTF8, 0, (const char *)s.p, (int)s.len, w, (int)s.len);
+    w[n] = 0;
+    return w;
+}
+
+typedef struct UserTestAccount {
+    wchar_t *name;
+    HANDLE token;
+} UserTestAccount;
+
+static void user_test_del_account(void *env) {
+    UserTestAccount *acc = (UserTestAccount *)env;
+    if (acc->token != NULL)
+        CloseHandle(acc->token);
+    HMODULE m = LoadLibraryW(L"netapi32.dll");
+    UserTestNetUserDelFn del =
+        (UserTestNetUserDelFn)(void (*)(void))GetProcAddress(m, "NetUserDel");
+    if (del != NULL)
+        (void)del(NULL, acc->name);
+}
+
+/* addUserAccount. Go takes the password and the name's suffix from
+ * crypto/rand; nothing here depends on them being unguessable beyond the
+ * test's own run, so math/rand is used. */
+static Str add_user_account(TestingT *t, UserTestAccount *acc, Str *password) {
+    Str pattern = testing_t_name(t);
+    Byte buf[16];
+    Int n = 0;
+    for (Int i = 0; i < pattern.len && i < 16; i++) {
+        Byte c = pattern.p[i];
+        if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))
+            buf[n++] = c;
+    }
+    Byte pwd[33];
+    for (int i = 0; i < 33; i++)
+        pwd[i] = (Byte)math_rand_uint64();
+    Str enc = base64_encoding_encode_to_string(base64_std_encoding, a,
+                                               slice_from(pwd, 33, 33, TYPE_BYTE));
+    *password = fmt_sprintf_v(a, "%s_-As@!%%*(1)4#2", enc);
+
+    UserTestNetUserAddFn add =
+        (UserTestNetUserAddFn)user_test_proc(t, L"netapi32.dll", "NetUserAdd");
+    for (int try = 0;; try++) {
+        char suffix[8];
+        snprintf(suffix, sizeof suffix, "%u", (unsigned)(math_rand_uint64() & 0xffff));
+        suffix[4] = 0;
+        Str name = fmt_sprintf_v(a, "%s%s", str_from_bytes(buf, n), S(suffix));
+        USER_INFO_1 info;
+        memset(&info, 0, sizeof info);
+        info.usri1_name = user_test_wide(name);
+        info.usri1_password = user_test_wide(*password);
+        info.usri1_priv = USER_PRIV_USER;
+        DWORD st = add(NULL, 1, (LPBYTE)&info, NULL);
+        if (st == ERROR_ACCESS_DENIED)
+            testing_t_skip_v(t, "skipping test; don't have permission to create user");
+        if (st == NERR_UserExists && try < 1000) {
+            testing_t_log_v(t,
+                            "user already exists, trying again with a different name");
+            continue;
+        }
+        if (st != NERR_Success)
+            testing_t_fatalf_v(t, "NetUserAdd failed: error %d", (Int)st);
+        acc->name = info.usri1_name;
+        testing_t_cleanup(t, BURROW_FN(Func, user_test_del_account, acc));
+        return name;
+    }
+}
+
+/* windowsTestAccount */
+static User *windows_test_account(TestingT *t, UserTestAccount *acc) {
+    if (os_getenv(a, S("GO_BUILDER_NAME")).len == 0)
+        testing_t_skip_v(t, "skipping non-hermetic test outside of Go builders");
+    Str password;
+    Str name = add_user_account(t, acc, &password);
+    UserTestLogonUserFn logon =
+        (UserTestLogonUserFn)user_test_proc(t, L"advapi32.dll", "LogonUserW");
+    if (!logon(user_test_wide(name), L".", user_test_wide(password),
+               2 /* LOGON32_LOGON_INTERACTIVE */, 0 /* LOGON32_PROVIDER_DEFAULT */,
+               &acc->token))
+        testing_t_fatalf_v(t, "LogonUser: error %d", (Int)GetLastError());
+    Error e = BURROW_NO_ERROR;
+    User *u = user_lookup(a, name, &e);
+    if (BURROW_FAILED(e))
+        testing_t_fatalf_v(t, "%v", e);
+    return u;
+}
+
+typedef struct UserTestLevel {
+    SECURITY_IMPERSONATION_LEVEL level;
+    const User *want;
+} UserTestLevel;
+
+static void impersonated_self_level(void *env, TestingT *t) {
+    UserTestLevel *l = (UserTestLevel *)env;
+    UserTestImpersonateSelfFn impersonate_self =
+        (UserTestImpersonateSelfFn)user_test_proc(t, L"advapi32.dll",
+                                                  "ImpersonateSelf");
+    UserTestRevertToSelfFn revert =
+        (UserTestRevertToSelfFn)user_test_proc(t, L"advapi32.dll", "RevertToSelf");
+    if (!impersonate_self(l->level))
+        testing_t_fatalf_v(t, "ImpersonateSelf: error %d", (Int)GetLastError());
+    Error e = BURROW_NO_ERROR;
+    User *got = burrow__user_current(a, 0, &e);
+    revert();
+    if (l->level == SecurityAnonymous) {
+        if (BURROW_OK(e))
+            testing_t_fatal_v(t, "expected error");
+        return;
+    }
+    if (BURROW_FAILED(e))
+        testing_t_fatalf_v(t, "%v", e);
+    compare(t, l->want, got);
+}
+
+/* Go locks the goroutine to its thread for this. Nothing between the
+ * impersonation and the lookup can yield, so they run on the same thread
+ * here too. */
+static void TestImpersonatedSelf(TestingT *t) {
+    Error e = BURROW_NO_ERROR;
+    User *want = burrow__user_current(a, 0, &e);
+    if (BURROW_FAILED(e))
+        testing_t_fatalf_v(t, "%v", e);
+    static const SECURITY_IMPERSONATION_LEVEL levels[] = {
+        SecurityAnonymous, SecurityIdentification, SecurityImpersonation,
+        SecurityDelegation};
+    for (int i = 0; i < 4; i++) {
+        UserTestLevel *l = BURROW_NEW(a, UserTestLevel);
+        l->level = levels[i];
+        l->want = want;
+        testing_t_run(t, strconv_itoa(a, (Int)levels[i]),
+                      BURROW_FN(TestingTFunc, impersonated_self_level, l));
+    }
+}
+
+static void TestImpersonated(TestingT *t) {
+    Error e = BURROW_NO_ERROR;
+    User *want = burrow__user_current(a, 0, &e);
+    if (BURROW_FAILED(e))
+        testing_t_fatalf_v(t, "%v", e);
+    UserTestAccount *acc = BURROW_NEW(a, UserTestAccount);
+    (void)windows_test_account(t, acc);
+    UserTestImpersonateFn impersonate = (UserTestImpersonateFn)user_test_proc(
+        t, L"advapi32.dll", "ImpersonateLoggedOnUser");
+    UserTestRevertToSelfFn revert =
+        (UserTestRevertToSelfFn)user_test_proc(t, L"advapi32.dll", "RevertToSelf");
+    if (!impersonate(acc->token))
+        testing_t_fatalf_v(t, "ImpersonateLoggedOnUser: error %d", (Int)GetLastError());
+    User *got = burrow__user_current(a, 0, &e);
+    if (!revert())
+        testing_t_fatalf_v(t, "RevertToSelf: error %d", (Int)GetLastError());
+    if (BURROW_FAILED(e))
+        testing_t_fatalf_v(t, "%v", e);
+    compare(t, want, got);
+}
+
+/* Go runs Current in a child process and checks netapi32.dll is not loaded
+ * after. Nothing else in this test loads it for good, since every lookup
+ * frees the libraries it loaded, so here it is checked in process. */
+static void TestCurrentNetapi32(TestingT *t) {
+    if (GetModuleHandleW(L"netapi32.dll") != NULL)
+        testing_t_skip_v(t, "netapi32.dll is loaded before the test");
+    Error e = BURROW_NO_ERROR;
+    HMODULE seen = NULL;
+    (void)burrow__user_current(a, 0, &e);
+    seen = GetModuleHandleW(L"netapi32.dll");
+    if (seen != NULL)
+        testing_t_fatal_v(t, "netapi32.dll is loaded");
+}
+
+static void TestGroupIdsTestUser(TestingT *t) {
+    UserTestAccount *acc = BURROW_NEW(a, UserTestAccount);
+    User *u = windows_test_account(t, acc);
+    Error e = BURROW_NO_ERROR;
+    Slice gids = user_group_ids(u, a, &e);
+    if (BURROW_FAILED(e))
+        testing_t_fatalf_v(t, "%v", e);
+    const Str *g = (const Str *)gids.p;
+    for (Int i = 0; i < gids.len; i++)
+        if (str_eq(g[i], u->gid))
+            return;
+    testing_t_errorf_v(t, "%s.GroupIds() has %d entries; does not contain user GID %s",
+                       u->username, gids.len, u->gid);
+}
+
+static bool is_system_default_lcid_english(void) {
+    LCID lcid = GetSystemDefaultLCID();
+    /* lcidLow is the primary language: LANG_NEUTRAL or LANG_ENGLISH. */
+    DWORD low = lcid & 0xff;
+    return low == 0x00 || low == 0x09;
+}
+
+typedef struct ServiceAccount {
+    const char *sid;
+    const char *name; /* on English Windows */
+} ServiceAccount;
+
+static const ServiceAccount service_accounts[] = {
+    {"S-1-5-18", "NT AUTHORITY\\SYSTEM"},
+    {"S-1-5-19", "NT AUTHORITY\\LOCAL SERVICE"},
+    {"S-1-5-20", "NT AUTHORITY\\NETWORK SERVICE"},
+};
+
+static void lookup_service_account(void *env, TestingT *t) {
+    const ServiceAccount *tt = (const ServiceAccount *)env;
+    Error e = BURROW_NO_ERROR;
+    User *u = user_lookup(a, S(tt->name), &e);
+    if (BURROW_FAILED(e)) {
+        testing_t_logf_v(t, "Lookup(%q): %v", S(tt->name), e);
+        if (!is_system_default_lcid_english())
+            testing_t_skipf_v(t, "test not supported on non-English Windows");
+        testing_t_fail(t);
+        return;
+    }
+    if (!str_eq(u->uid, S(tt->sid)))
+        testing_t_errorf_v(t, "unexpected uid for %q; got %q, want %q", u->name, u->uid,
+                           S(tt->sid));
+    testing_t_logf_v(t, "Lookup(%q): %q", S(tt->name), u->username);
+}
+
+/* Go marks the four service account tests parallel. They share the test's
+ * arena here, so they run one after another. */
+static void TestLookupServiceAccount(TestingT *t) {
+    for (int i = 0; i < 3; i++)
+        testing_t_run(t, S(service_accounts[i].name),
+                      BURROW_FN(TestingTFunc, lookup_service_account,
+                                (void *)&service_accounts[i]));
+}
+
+static void TestLookupIdServiceAccount(TestingT *t) {
+    for (int i = 0; i < 3; i++) {
+        const ServiceAccount *tt = &service_accounts[i];
+        Error e = BURROW_NO_ERROR;
+        User *u = user_lookup_id(a, S(tt->sid), &e);
+        if (BURROW_FAILED(e)) {
+            testing_t_errorf_v(t, "LookupId(%q): %v", S(tt->sid), e);
+            continue;
+        }
+        if (!str_eq(u->gid, S(tt->sid)))
+            testing_t_errorf_v(t, "unexpected gid for %q; got %q, want %q", u->name,
+                               u->gid, S(tt->sid));
+        if (!str_eq(u->username, S(tt->name))) {
+            if (is_system_default_lcid_english())
+                testing_t_errorf_v(t, "unexpected user name for %q; got %q, want %q",
+                                   u->gid, u->username, S(tt->name));
+            else
+                testing_t_logf_v(t, "user name for %q: %q", u->gid, u->username);
+        }
+    }
+}
+
+static void lookup_group_service_account(void *env, TestingT *t) {
+    const ServiceAccount *tt = (const ServiceAccount *)env;
+    Error e = BURROW_NO_ERROR;
+    UserGroup *g = user_lookup_group(a, S(tt->name), &e);
+    if (BURROW_FAILED(e)) {
+        testing_t_logf_v(t, "LookupGroup(%q): %v", S(tt->name), e);
+        if (!is_system_default_lcid_english())
+            testing_t_skipf_v(t, "test not supported on non-English Windows");
+        testing_t_fail(t);
+        return;
+    }
+    if (!str_eq(g->gid, S(tt->sid)))
+        testing_t_errorf_v(t, "unexpected gid for %q; got %q, want %q", g->name, g->gid,
+                           S(tt->sid));
+}
+
+static void TestLookupGroupServiceAccount(TestingT *t) {
+    for (int i = 0; i < 3; i++)
+        testing_t_run(t, S(service_accounts[i].name),
+                      BURROW_FN(TestingTFunc, lookup_group_service_account,
+                                (void *)&service_accounts[i]));
+}
+
+static void TestLookupGroupIdServiceAccount(TestingT *t) {
+    for (int i = 0; i < 3; i++) {
+        const ServiceAccount *tt = &service_accounts[i];
+        Error e = BURROW_NO_ERROR;
+        UserGroup *g = user_lookup_group_id(a, S(tt->sid), &e);
+        if (BURROW_FAILED(e)) {
+            testing_t_errorf_v(t, "LookupGroupId(%q): %v", S(tt->sid), e);
+            continue;
+        }
+        if (!str_eq(g->gid, S(tt->sid)))
+            testing_t_errorf_v(t, "unexpected gid for %q; got %q, want %q", g->name,
+                               g->gid, S(tt->sid));
+    }
+}
+
+/* Not in Go: a name with a NUL in it is EINVAL, as UTF16PtrFromString says,
+ * and the account type checks give Go's messages. */
+static void TestWindowsErrors(TestingT *t) {
+    Error e = BURROW_NO_ERROR;
+    (void)user_lookup(a, str_from_bytes((const Byte *)"a\0b", 3), &e);
+    if (!errors_is(e, syscall_errno_as_error(SYSCALL_EINVAL, a)))
+        testing_t_errorf_v(t, "Lookup with a NUL: %v; want invalid argument", e);
+    /* BUILTIN\Administrators is an alias, which is a group and not a user. */
+    e = BURROW_NO_ERROR;
+    (void)user_lookup_id(a, S("S-1-5-32-544"), &e);
+    if (BURROW_OK(e) ||
+        !str_eq(error_text(e), S("user: should be user account type, not 4")))
+        testing_t_errorf_v(t, "LookupId(S-1-5-32-544): %v", e);
+    e = BURROW_NO_ERROR;
+    UserGroup *g = user_lookup_group_id(a, S("S-1-5-32-544"), &e);
+    if (BURROW_FAILED(e))
+        testing_t_errorf_v(t, "LookupGroupId(S-1-5-32-544): %v", e);
+    else if (!str_eq(g->gid, S("S-1-5-32-544")))
+        testing_t_errorf_v(t, "LookupGroupId(S-1-5-32-544).Gid = %q", g->gid);
+    e = BURROW_NO_ERROR;
+    (void)user_lookup_id(a, S("not a sid"), &e);
+    if (BURROW_OK(e))
+        testing_t_errorf_v(t, "LookupId(\"not a sid\") gave no error");
+}
+
+#endif /* BURROW_OS_WINDOWS */
+
+#if defined(BURROW_OS_WINDOWS)
+#define WINDOWS_TESTS                                                                  \
+    X(TestImpersonatedSelf)                                                            \
+    X(TestImpersonated)                                                                \
+    X(TestCurrentNetapi32)                                                             \
+    X(TestGroupIdsTestUser)                                                            \
+    X(TestLookupServiceAccount)                                                        \
+    X(TestLookupIdServiceAccount)                                                      \
+    X(TestLookupGroupServiceAccount)                                                   \
+    X(TestLookupGroupIdServiceAccount)                                                 \
+    X(TestWindowsErrors)
+#else
+#define WINDOWS_TESTS
+#endif
+
 #define TESTS(X)                                                                       \
     X(TestCurrent)                                                                     \
     X(TestLookup)                                                                      \
@@ -605,7 +975,8 @@ static void setup(void) {
     X(TestLookupUser)                                                                  \
     X(TestListGroups)                                                                  \
     X(TestNegativeUid)                                                                 \
-    X(TestErrorValues)
+    X(TestErrorValues)                                                                 \
+    WINDOWS_TESTS
 
 static int os_user_main(TestingM *m) {
     setup();

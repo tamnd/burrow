@@ -34,6 +34,7 @@
 #include "internal.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
@@ -78,6 +79,21 @@ _Static_assert(sizeof(PalSignalHandler) == sizeof(void *),
 static Handler handlers[SIG_SLOTS];
 static int32_t pal_numbers[SIG_SLOTS];
 static struct sigaction previous[SIG_SLOTS];
+
+/* Whether previous has been filled in for a signal. Both installers below keep
+ * what was there before the first of them touched the signal and never again,
+ * so that neither of them can record the other's dispatcher as the thing to go
+ * back to. Written under install_mu. */
+static unsigned char saved[SIG_SLOTS];
+
+/* Serialises the installers, pal_signal_install and pal_signal_relay, which can
+ * be called from any thread. The handler never takes it. */
+static pthread_mutex_t install_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* What pal_signal_relay last asked for, read by the handler. RELAY_NONE until
+ * the first call. */
+enum { RELAY_NONE = 0, RELAY_CATCH = 1, RELAY_IGNORE = 2 };
+static uint32_t relay_state[SIG_SLOTS];
 
 /* SIGSEGV and SIGBUS are the two the table has to have room for, since
  * PAL_SIGFAULT is installed for both by number rather than by lookup.
@@ -229,6 +245,30 @@ static void forward(int native, siginfo_t *info, void *uc) {
     (void)sigaction(native, prev, NULL);
 }
 
+/* The function pal_signal_relay_init was given, behind the same kind of union
+ * as the handlers and for the same reason. */
+typedef union Relay {
+    void *object;
+    PalSignalRelay fn;
+} Relay;
+
+static Relay relay_send;
+
+static bool relay(int native) {
+    Relay r;
+
+    r.object = burrow__atomic_load_acquire_ptr(&relay_send.object);
+    if (r.fn == NULL)
+        return false;
+
+    /* The send function wakes a pipe, and a write that fails sets errno in the
+     * middle of whatever the interrupted code was doing with it. */
+    int e = errno;
+    bool took = r.fn((int32_t)native);
+    errno = e;
+    return took;
+}
+
 static void dispatch(int native, siginfo_t *info, void *uc) {
     if (native < 0 || native >= SIG_SLOTS)
         return;
@@ -237,7 +277,38 @@ static void dispatch(int native, siginfo_t *info, void *uc) {
     if (handler != NULL && handler(pal_numbers[native], info, uc))
         return;
 
+    uint32_t state = burrow__atomic_load_acquire_u32(&relay_state[native]);
+    if (state == RELAY_IGNORE)
+        return;
+    if (state == RELAY_CATCH && relay(native))
+        return;
+
     forward(native, info, uc);
+
+    /* A signal that is only here because os/signal asked for it once, and that
+     * nobody wants now. That is the moment between a Stop and the disposition
+     * going back, and Go's answer is that the signal either reaches a channel
+     * or does what it would have done without the program. forward has put the
+     * old disposition back, so sending the signal again lets it do that: it is
+     * blocked while this handler runs and arrives the moment it returns. A
+     * fault cannot get here, since relaying one is refused. */
+    if (handler == NULL && previous[native].sa_handler == SIG_DFL &&
+        (((unsigned int)previous[native].sa_flags & (unsigned int)SA_SIGINFO) == 0U))
+        (void)raise(native);
+}
+
+/* The sigaction that sends a signal to dispatch, for both installers.
+ *
+ * SA_ONSTACK is what sends the handler to the stack pal_signal_stack_install
+ * gave the thread, which is the only stack left when the ordinary one has
+ * overflowed. SA_SIGINFO is what makes the faulting address available at all.
+ * SA_RESTART so that a signal arriving during a read does not turn into an
+ * EINTR the caller above never asked to handle. */
+static void dispatch_action(struct sigaction *sa) {
+    memset(sa, 0, sizeof *sa);
+    sa->sa_sigaction = dispatch;
+    sa->sa_flags = SA_ONSTACK | SA_SIGINFO | SA_RESTART;
+    (void)sigemptyset(&sa->sa_mask);
 }
 
 /* Takes one native signal. The caller below is what turns one PAL number into
@@ -253,34 +324,30 @@ static bool install_one(int native, int32_t sig, PalSignalHandler handler,
      * arriving on another thread the instant sigaction returns finds a handler
      * rather than a NULL. The row is useless until sigaction has run, so
      * writing it early costs nothing. */
-    bool first = handler_of(native) == NULL;
-
     pal_numbers[native] = sig;
     set_handler(native, handler);
 
     struct sigaction sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sa_sigaction = dispatch;
-    /* SA_ONSTACK is what sends the handler to the stack pal_signal_stack_install
-     * gave the thread, which is the only stack left when the ordinary one has
-     * overflowed. SA_SIGINFO is what makes the faulting address available at
-     * all. SA_RESTART so that a signal arriving during a read does not turn
-     * into an EINTR the caller above never asked to handle. */
-    sa.sa_flags = SA_ONSTACK | SA_SIGINFO | SA_RESTART;
-    (void)sigemptyset(&sa.sa_mask);
+    dispatch_action(&sa);
 
     /* Only the first install keeps what was there, because the second one would
      * otherwise record our own dispatcher as the thing to forward to, and
      * forwarding to yourself is a loop with a signal in it. */
     struct sigaction was;
     memset(&was, 0, sizeof was);
+    (void)pthread_mutex_lock(&install_mu);
     if (sigaction(native, &sa, &was) != 0) {
+        int e = errno;
+        (void)pthread_mutex_unlock(&install_mu);
         set_handler(native, NULL);
-        BURROW_OUT(err, burrow__pal_errno(errno));
+        BURROW_OUT(err, burrow__pal_errno(e));
         return false;
     }
-    if (first)
+    if (!saved[native]) {
         previous[native] = was;
+        saved[native] = 1;
+    }
+    (void)pthread_mutex_unlock(&install_mu);
 
     BURROW_OUT(err, PAL_OK);
     return true;
@@ -455,6 +522,195 @@ const void *pal_signal_fault_addr(const void *info) {
      * says to only ask inside a PAL_SIGFAULT handler. */
     const siginfo_t *si = (const siginfo_t *)info;
     return si->si_addr;
+}
+
+/* ---------------------------------------------------------------- relaying */
+
+/* The note between the handler and os/signal's reader: a pipe, because write
+ * is safe in a handler and the futex this layer offers is not on the systems
+ * where it is a mutex and a condition variable underneath. Go uses a pipe on
+ * macOS for the same reason. */
+static int note_fds[2] = {-1, -1};
+
+static bool cloexec(int fd) {
+    int flags = fcntl(fd, F_GETFD);
+    return flags >= 0 && fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == 0;
+}
+
+bool pal_signal_relay_init(PalSignalRelay send, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+
+    (void)pthread_mutex_lock(&install_mu);
+    if (note_fds[0] < 0) {
+        int fds[2];
+        if (pipe(fds) != 0) {
+            int e = errno;
+            (void)pthread_mutex_unlock(&install_mu);
+            BURROW_OUT(err, burrow__pal_errno(e));
+            return false;
+        }
+
+        /* The write end does not block. A wake that finds the pipe full has
+         * nothing to add, and a handler that blocks is a program that stops. */
+        int fl = fcntl(fds[1], F_GETFL);
+        if (!cloexec(fds[0]) || !cloexec(fds[1]) || fl < 0 ||
+            fcntl(fds[1], F_SETFL, fl | O_NONBLOCK) != 0) {
+            int e = errno;
+            (void)close(fds[0]);
+            (void)close(fds[1]);
+            (void)pthread_mutex_unlock(&install_mu);
+            BURROW_OUT(err, burrow__pal_errno(e));
+            return false;
+        }
+        note_fds[0] = fds[0];
+        note_fds[1] = fds[1];
+    }
+
+    Relay r;
+    r.object = NULL;
+    r.fn = send;
+    burrow__atomic_store_release_ptr(&relay_send.object, r.object);
+    (void)pthread_mutex_unlock(&install_mu);
+    return true;
+}
+
+/* Go's sigtable says which signals os/signal may have, and this is that table
+ * written as the exceptions. The synchronous ones are the program's own faults,
+ * SIGPROF belongs to the profiler, and the real time signals below SIGRTMIN on
+ * Linux are the ones glibc and musl use to cancel threads and to change ids.
+ * Comparisons rather than a switch because Cosmopolitan's signal numbers are
+ * variables. */
+static bool relayable(int native) {
+    if (native <= 0 || native >= SIG_SLOTS)
+        return false;
+    if (native == SIGKILL || native == SIGSTOP || native == SIGSEGV ||
+        native == SIGBUS || native == SIGFPE || native == SIGILL || native == SIGTRAP ||
+        native == SIGSYS || native == SIGPROF)
+        return false;
+#if defined(SIGSTKFLT)
+    if (native == SIGSTKFLT)
+        return false;
+#endif
+#if defined(SIGEMT)
+    if (native == SIGEMT)
+        return false;
+#endif
+#if defined(SIGTHR)
+    if (native == SIGTHR)
+        return false;
+#endif
+#if defined(BURROW_OS_LINUX) && defined(SIGRTMIN)
+    if (native >= 32 && native < SIGRTMIN)
+        return false;
+#endif
+    return true;
+}
+
+bool pal_signal_relay(int32_t native, int32_t how, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+
+    if (!relayable((int)native) ||
+        (how != PAL_RELAY_CATCH && how != PAL_RELAY_DEFAULT &&
+         how != PAL_RELAY_IGNORE)) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+
+    int n = (int)native;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+
+    (void)pthread_mutex_lock(&install_mu);
+
+    /* Whatever happens next replaces the disposition, so this is the last
+     * chance to see the one the program started with. */
+    if (!saved[n]) {
+        if (sigaction(n, NULL, &previous[n]) != 0) {
+            int e = errno;
+            (void)pthread_mutex_unlock(&install_mu);
+            BURROW_OUT(err, burrow__pal_errno(e));
+            return false;
+        }
+        saved[n] = 1;
+    }
+
+    /* With a PAL handler on the signal too, dispatch stays where it is and the
+     * state is all that changes, so the handler keeps getting its turn first. */
+    bool shared = handler_of(n) != NULL;
+    uint32_t was = burrow__atomic_load_u32(&relay_state[n]);
+    int rc = 0;
+
+    switch (how) {
+    case PAL_RELAY_CATCH:
+        /* The state goes first, so that the signal arriving the instant
+         * sigaction returns is relayed rather than forwarded. */
+        burrow__atomic_store_release_u32(&relay_state[n], RELAY_CATCH);
+        dispatch_action(&sa);
+        rc = sigaction(n, &sa, NULL);
+        break;
+    case PAL_RELAY_DEFAULT:
+        if (was != RELAY_CATCH)
+            break;
+        /* The disposition goes first and the state after, so that a signal in
+         * between is still taken by dispatch, which forwards it. */
+        if (!shared)
+            rc = sigaction(n, &previous[n], NULL);
+        burrow__atomic_store_release_u32(&relay_state[n], RELAY_NONE);
+        break;
+    default:
+        burrow__atomic_store_release_u32(&relay_state[n], RELAY_IGNORE);
+        if (!shared) {
+            sa.sa_handler = SIG_IGN;
+            (void)sigemptyset(&sa.sa_mask);
+            rc = sigaction(n, &sa, NULL);
+        }
+        break;
+    }
+
+    int e = errno;
+    (void)pthread_mutex_unlock(&install_mu);
+    if (rc != 0) {
+        BURROW_OUT(err, burrow__pal_errno(e));
+        return false;
+    }
+    return true;
+}
+
+bool pal_signal_ignored(int32_t native) {
+    if (native <= 0 || native >= SIG_SLOTS)
+        return false;
+
+    struct sigaction cur;
+    memset(&cur, 0, sizeof cur);
+    if (sigaction((int)native, NULL, &cur) != 0)
+        return false;
+    return (((unsigned int)cur.sa_flags & (unsigned int)SA_SIGINFO) == 0U) &&
+           cur.sa_handler == SIG_IGN;
+}
+
+void pal_signal_note_wake(void) {
+    int fd = note_fds[1];
+    if (fd < 0)
+        return;
+
+    int e = errno;
+    char b = 0;
+    ssize_t n = write(fd, &b, 1);
+    (void)n;
+    errno = e;
+}
+
+void pal_signal_note_sleep(void) {
+    int fd = note_fds[0];
+    if (fd < 0)
+        return;
+
+    for (;;) {
+        char b;
+        ssize_t n = read(fd, &b, 1);
+        if (n == 1 || (n < 0 && errno != EINTR && errno != EAGAIN) || n == 0)
+            return;
+    }
 }
 
 #endif /* !BURROW_OS_WINDOWS */

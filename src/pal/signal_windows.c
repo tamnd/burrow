@@ -64,6 +64,32 @@ static Handler term_handler;
  * does not put a second copy of on_console in the list. */
 static uint32_t console_armed;
 
+/* The function pal_signal_relay_init was given, and whether os/signal wants
+ * SIGINT and SIGTERM, the only two numbers a console event becomes. */
+typedef union Relay {
+    void *object;
+    PalSignalRelay fn;
+} Relay;
+
+static Relay relay_send;
+static uint32_t relay_int;
+static uint32_t relay_term;
+
+/* The note between relay and os/signal's reader. An auto-reset event, which is
+ * what Go uses on Windows: a wake that finds it already set has nothing to add,
+ * and each sleep takes one. */
+static HANDLE note_event;
+
+static bool relay(int32_t native) {
+    uint32_t *state = native == 2 ? &relay_int : &relay_term;
+    if (burrow__atomic_load_acquire_u32(state) == 0)
+        return false;
+
+    Relay r;
+    r.object = burrow__atomic_load_acquire_ptr(&relay_send.object);
+    return r.fn != NULL && r.fn(native);
+}
+
 /* Runs on a thread the system starts for the event, not on one of the
  * program's, which is the main way a console event is not a signal. True from
  * the handler means it was dealt with. False passes it on down the list, which
@@ -89,18 +115,21 @@ static BOOL WINAPI on_console(DWORD event) {
     default:
         return FALSE;
     }
-    if (h.fn == NULL)
+    if (h.fn != NULL && h.fn(sig, NULL, NULL))
+        return TRUE;
+    if (!relay(sig == PAL_SIGINT ? 2 : 15))
         return FALSE;
-    return h.fn(sig, NULL, NULL) ? TRUE : FALSE;
+
+    /* Go's answer to the close, logoff and shutdown events, from its
+     * ctrlHandler: the process ends when this returns, so it does not return
+     * while the program might still be dealing with the signal, and the
+     * system's timeout ends it instead. */
+    if (sig == PAL_SIGTERM)
+        Sleep(INFINITE);
+    return TRUE;
 }
 
-static bool install_console(int32_t sig, PalSignalHandler handler, PalErrno *err) {
-    Handler h;
-    h.object = NULL;
-    h.fn = handler;
-    burrow__atomic_store_release_ptr(
-        sig == PAL_SIGINT ? &int_handler.object : &term_handler.object, h.object);
-
+static bool arm_console(PalErrno *err) {
     uint32_t want = 0;
     if (!burrow__atomic_cas_u32(&console_armed, &want, 1))
         return true;
@@ -110,6 +139,15 @@ static bool install_console(int32_t sig, PalSignalHandler handler, PalErrno *err
         return false;
     }
     return true;
+}
+
+static bool install_console(int32_t sig, PalSignalHandler handler, PalErrno *err) {
+    Handler h;
+    h.object = NULL;
+    h.fn = handler;
+    burrow__atomic_store_release_ptr(
+        sig == PAL_SIGINT ? &int_handler.object : &term_handler.object, h.object);
+    return arm_console(err);
 }
 
 static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info) {
@@ -205,6 +243,68 @@ const void *pal_signal_fault_addr(const void *info) {
         return NULL;
 
     return (const void *)rec->ExceptionInformation[1];
+}
+
+/* ---------------------------------------------------------------- relaying */
+
+bool pal_signal_relay_init(PalSignalRelay send, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+
+    if (burrow__atomic_load_acquire_ptr(&note_event) == NULL) {
+        HANDLE ev = CreateEventW(NULL, FALSE, FALSE, NULL);
+        if (ev == NULL) {
+            BURROW_OUT(err, PAL_EOTHER);
+            return false;
+        }
+        void *none = NULL;
+        if (!burrow__atomic_cas_ptr((void **)&note_event, &none, ev))
+            (void)CloseHandle(ev);
+    }
+
+    Relay r;
+    r.object = NULL;
+    r.fn = send;
+    burrow__atomic_store_release_ptr(&relay_send.object, r.object);
+    return true;
+}
+
+/* Go's Windows port has no signals to set dispositions on. Asking for SIGINT
+ * or SIGTERM arms the console handler and anything else is accepted and never
+ * arrives, and ignoring is os/signal's business alone. */
+bool pal_signal_relay(int32_t native, int32_t how, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+
+    if (native <= 0 || native >= 65 ||
+        (how != PAL_RELAY_CATCH && how != PAL_RELAY_DEFAULT &&
+         how != PAL_RELAY_IGNORE)) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+    if (native != 2 && native != 15)
+        return true;
+
+    uint32_t *state = native == 2 ? &relay_int : &relay_term;
+    burrow__atomic_store_release_u32(state, how == PAL_RELAY_CATCH ? 1U : 0U);
+    if (how == PAL_RELAY_CATCH)
+        return arm_console(err);
+    return true;
+}
+
+bool pal_signal_ignored(int32_t native) {
+    (void)native;
+    return false;
+}
+
+void pal_signal_note_wake(void) {
+    HANDLE ev = burrow__atomic_load_acquire_ptr(&note_event);
+    if (ev != NULL)
+        (void)SetEvent(ev);
+}
+
+void pal_signal_note_sleep(void) {
+    HANDLE ev = burrow__atomic_load_acquire_ptr(&note_event);
+    if (ev != NULL)
+        (void)WaitForSingleObject(ev, INFINITE);
 }
 
 #endif /* BURROW_OS_WINDOWS */

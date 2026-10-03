@@ -337,7 +337,7 @@ int64_t pal_spawn(const PalSpawn *req, PalErrno *err) {
     si.StartupInfo.hStdInput = std[0];
     si.StartupInfo.hStdOutput = std[1];
     si.StartupInfo.hStdError = std[2];
-    DWORD flags = CREATE_UNICODE_ENVIRONMENT;
+    DWORD flags = CREATE_UNICODE_ENVIRONMENT | (DWORD)req->creation_flags;
     if (nlist > 0) {
         SIZE_T size = 0;
         InitializeProcThreadAttributeList(NULL, 1, 0, &size);

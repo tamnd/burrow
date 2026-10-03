@@ -322,6 +322,8 @@ void os_file_free(OsFile *f);
 IoReader os_file_as_io_reader(OsFile *f);
 IoWriter os_file_as_io_writer(OsFile *f);
 IoCloser os_file_as_io_closer(OsFile *f);
+IoReadCloser os_file_as_io_read_closer(OsFile *f);
+IoWriteCloser os_file_as_io_write_closer(OsFile *f);
 IoSeeker os_file_as_io_seeker(OsFile *f);
 IoReaderAt os_file_as_io_reader_at(OsFile *f);
 IoWriterAt os_file_as_io_writer_at(OsFile *f);

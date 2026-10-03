@@ -118,6 +118,20 @@ bool pal_thread_join(int64_t thread, PalErrno *err) {
     return true;
 }
 
+bool pal_thread_cancel_io(int64_t thread, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (thread == PAL_INVALID_HANDLE || thread == 0) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+    /* ERROR_NOT_FOUND is a thread with nothing to cancel, which is fine. */
+    if (!CancelSynchronousIo((HANDLE)(uintptr_t)thread) && GetLastError() != ERROR_NOT_FOUND) {
+        BURROW_OUT(err, burrow__pal_errno_win(GetLastError()));
+        return false;
+    }
+    return true;
+}
+
 bool pal_thread_detach(int64_t thread, PalErrno *err) {
     if (thread == PAL_INVALID_HANDLE || thread == 0) {
         BURROW_OUT(err, PAL_EINVAL);

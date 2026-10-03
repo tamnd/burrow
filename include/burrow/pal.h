@@ -402,6 +402,13 @@ bool pal_thread_join(int64_t thread, PalErrno *err);
  * as soon as the thread returns. The handle is dead afterwards. */
 bool pal_thread_detach(int64_t thread, PalErrno *err);
 
+/* CancelSynchronousIo: makes a ReadFile or WriteFile the thread is blocked in
+ * right now give up, with PAL_ECANCELED. A thread that is not in one is not
+ * affected, so a caller that means it sets a flag the thread checks first and
+ * then calls this until the thread is gone. PAL_ENOSYS outside Windows, where
+ * pal_fd_wait is how to do the same thing. */
+bool pal_thread_cancel_io(int64_t thread, PalErrno *err);
+
 /* An identifier for the calling thread that is unique among the threads running
  * right now. It is not stable across a thread's death and another's birth, and
  * it is not the same number the debugger shows. Never fails. */
@@ -740,6 +747,14 @@ int64_t pal_readlink(const char *path, char *buf, int64_t cap, PalErrno *err);
 
 bool pal_chmod(const char *path, uint32_t mode, PalErrno *err);
 
+/* faccessat with AT_EACCESS: whether the effective user may do what mode asks,
+ * PAL_X_OK and the rest. PAL_ENOSYS where the system has no way to ask, which
+ * includes Windows. */
+#define PAL_R_OK 4
+#define PAL_W_OK 2
+#define PAL_X_OK 1
+bool pal_eaccess(const char *path, uint32_t mode, PalErrno *err);
+
 /* -1 for either id leaves it alone, which is how POSIX spells it. Windows
  * reports PAL_ENOTSUP, which is what Go's os.Chown does there. */
 bool pal_chown(const char *path, int64_t uid, int64_t gid, PalErrno *err);
@@ -789,6 +804,23 @@ int64_t pal_dup(int64_t fd, PalErrno *err);
 /* out[0] is the read end and out[1] is the write end. flags takes
  * PAL_O_NONBLOCK and nothing else. */
 bool pal_pipe(int64_t out[2], uint32_t flags, PalErrno *err);
+
+/* Waits until fd can be read without blocking, or written when write is true,
+ * or until cancel can be read, whichever comes first. 1 means fd, 0 means
+ * cancel and -1 is an error. Ready includes the other end having gone, since
+ * the read or the write that follows is what reports that. poll(2) on POSIX,
+ * and PAL_ENOSYS on Windows, where pal_thread_cancel_io is how to stop a
+ * blocked read. */
+int pal_fd_wait(int64_t fd, bool write, int64_t cancel, PalErrno *err);
+
+/* How much a write to a pipe pal_fd_wait has called writable takes without
+ * blocking, which is PIPE_BUF: 4096 on Linux, and 512, the least POSIX
+ * allows, everywhere else. */
+#if defined(BURROW_OS_LINUX)
+#define PAL_PIPE_BUF 4096
+#else
+#define PAL_PIPE_BUF 512
+#endif
 
 /* ------------------------------------------------------------------ process
  *

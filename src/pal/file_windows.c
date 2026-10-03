@@ -1083,6 +1083,21 @@ bool pal_chmod(const char *path, uint32_t mode, PalErrno *err) {
     return SetFileAttributesW(w, want) || file_fail(err);
 }
 
+int pal_fd_wait(int64_t fd, bool write, int64_t cancel, PalErrno *err) {
+    (void)fd;
+    (void)write;
+    (void)cancel;
+    BURROW_OUT(err, PAL_ENOSYS);
+    return -1;
+}
+
+bool pal_eaccess(const char *path, uint32_t mode, PalErrno *err) {
+    (void)path;
+    (void)mode;
+    BURROW_OUT(err, PAL_ENOSYS);
+    return false;
+}
+
 bool pal_chown(const char *path, int64_t uid, int64_t gid, PalErrno *err) {
     (void)path;
     (void)uid;

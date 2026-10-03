@@ -37,6 +37,11 @@ OsFile *burrow__os_file_renamed(OsFile *f, Str name);
 bool burrow__os_incref(OsFile *f);
 Error burrow__os_decref(OsFile *f);
 
+/* os_file_close without waiting for the descriptor to go, which is what Go's
+ * close does for a file in blocking mode. A read still blocked in f keeps the
+ * descriptor until it returns, and everything after the close fails. */
+Error burrow__os_file_close_nowait(OsFile *f);
+
 /* poll.ErrFileClosing, which os mostly turns into os_err_closed. */
 extern const Error burrow__os_err_file_closing;
 

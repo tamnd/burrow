@@ -74,3 +74,10 @@ ArenaMark error_mark(void) {
 void error_release(ArenaMark m) {
     arena_release(error_arena(), m);
 }
+
+void burrow__error_thread_exit(void) {
+    if (thread_errors_ready) {
+        arena_free(&thread_errors);
+        thread_errors_ready = false;
+    }
+}

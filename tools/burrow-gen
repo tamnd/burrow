@@ -2103,6 +2103,14 @@ def run_embed(args):
             "",
         ]
 
+    # The declaration ahead of each definition is for compilers that warn about
+    # a global with no earlier declaration. In burrow's own amalgamation the
+    # source that declared it with the macro is in the same file, and a second
+    # declaration there is what -Wredundant-decls warns about, so it is left
+    # out when burrow.h is the amalgamated one.
+    def extern_decl(out, decl):
+        out += ["#ifndef BURROW_AMALGAMATION_H", decl, "#endif"]
+
     shared = {}
     for kind, name, files in vars_:
         if kind == "BYTES":
@@ -2116,13 +2124,13 @@ def run_embed(args):
     for kind, name, files in vars_:
         if kind == "FILE":
             arr = shared[files[0]]
-            lines.append("extern const Str %s;" % name)
+            extern_decl(lines, "extern const Str %s;" % name)
             lines.append("const Str %s = {%s, (Int)sizeof %s - 1};" % (name, arr, arr))
         elif kind == "BYTES":
             arr = "embed_bytes_%s" % name
             embed_array(lines, arr, read(files[0]), args.mode, include(files[0]), True)
             lines.append("")
-            lines.append("extern Slice %s;" % name)
+            extern_decl(lines, "extern Slice %s;" % name)
             lines.append(
                 "Slice %s = {%s, (Int)sizeof %s - 1, (Int)sizeof %s - 1, TYPE_BYTE};" % (name, arr, arr, arr)
             )
@@ -2141,7 +2149,7 @@ def run_embed(args):
                 lines.append("     {%s}}," % ", ".join("0x%02x" % b for b in h))
             lines.append("};")
             lines.append("")
-            lines.append("extern const EmbedFS %s;" % name)
+            extern_decl(lines, "extern const EmbedFS %s;" % name)
             lines.append(
                 "const EmbedFS %s = {embed_files_%s, (Int)(sizeof embed_files_%s / sizeof embed_files_%s[0])};"
                 % (name, name, name, name)

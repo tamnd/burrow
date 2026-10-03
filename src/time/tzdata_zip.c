@@ -15358,5 +15358,7 @@ static const Byte embed_data_0[] = {
     0,
 };
 
+#ifndef BURROW_AMALGAMATION_H
 extern const Str burrow__tzdata_zip;
+#endif
 const Str burrow__tzdata_zip = {embed_data_0, (Int)sizeof embed_data_0 - 1};

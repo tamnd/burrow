@@ -274,10 +274,14 @@ static const EmbedFile embed_files_global[] = {
      {0x85, 0x3f, 0xf9, 0x37, 0x62, 0xa0, 0x6d, 0xdb, 0xf7, 0x22, 0xc4, 0xeb, 0xe9, 0xdd, 0xd6, 0x6d}},
 };
 
+#ifndef BURROW_AMALGAMATION_H
 extern const EmbedFS global;
+#endif
 const EmbedFS global = {embed_files_global, (Int)(sizeof embed_files_global / sizeof embed_files_global[0])};
 
+#ifndef BURROW_AMALGAMATION_H
 extern const Str concurrency;
+#endif
 const Str concurrency = {embed_data_0, (Int)sizeof embed_data_0 - 1};
 
 static Byte embed_bytes_glass[] = {
@@ -295,7 +299,9 @@ static Byte embed_bytes_glass[] = {
     0,
 };
 
+#ifndef BURROW_AMALGAMATION_H
 extern Slice glass;
+#endif
 Slice glass = {embed_bytes_glass, (Int)sizeof embed_bytes_glass - 1, (Int)sizeof embed_bytes_glass - 1, TYPE_BYTE};
 
 static const EmbedFile embed_files_test_dir_all[] = {
@@ -327,7 +333,9 @@ static const EmbedFile embed_files_test_dir_all[] = {
      {0x95, 0xf0, 0x62, 0xf4, 0xea, 0xf3, 0x7f, 0x95, 0x8e, 0xf9, 0xde, 0x86, 0x1d, 0x59, 0xb7, 0xec}},
 };
 
+#ifndef BURROW_AMALGAMATION_H
 extern const EmbedFS test_dir_all;
+#endif
 const EmbedFS test_dir_all = {embed_files_test_dir_all, (Int)(sizeof embed_files_test_dir_all / sizeof embed_files_test_dir_all[0])};
 
 static const EmbedFile embed_files_test_hidden_dir[] = {
@@ -359,7 +367,9 @@ static const EmbedFile embed_files_test_hidden_dir[] = {
      {0x95, 0xf0, 0x62, 0xf4, 0xea, 0xf3, 0x7f, 0x95, 0x8e, 0xf9, 0xde, 0x86, 0x1d, 0x59, 0xb7, 0xec}},
 };
 
+#ifndef BURROW_AMALGAMATION_H
 extern const EmbedFS test_hidden_dir;
+#endif
 const EmbedFS test_hidden_dir = {embed_files_test_hidden_dir, (Int)(sizeof embed_files_test_hidden_dir / sizeof embed_files_test_hidden_dir[0])};
 
 static const EmbedFile embed_files_test_hidden_star[] = {
@@ -403,7 +413,9 @@ static const EmbedFile embed_files_test_hidden_star[] = {
      {0x95, 0xf0, 0x62, 0xf4, 0xea, 0xf3, 0x7f, 0x95, 0x8e, 0xf9, 0xde, 0x86, 0x1d, 0x59, 0xb7, 0xec}},
 };
 
+#ifndef BURROW_AMALGAMATION_H
 extern const EmbedFS test_hidden_star;
+#endif
 const EmbedFS test_hidden_star = {embed_files_test_hidden_star, (Int)(sizeof embed_files_test_hidden_star / sizeof embed_files_test_hidden_star[0])};
 
 static Byte embed_bytes_hello_bytes[] = {
@@ -420,10 +432,14 @@ static Byte embed_bytes_hello_bytes[] = {
     0,
 };
 
+#ifndef BURROW_AMALGAMATION_H
 extern Slice hello_bytes;
+#endif
 Slice hello_bytes = {embed_bytes_hello_bytes, (Int)sizeof embed_bytes_hello_bytes - 1, (Int)sizeof embed_bytes_hello_bytes - 1, TYPE_BYTE};
 
+#ifndef BURROW_AMALGAMATION_H
 extern const Str hello_string;
+#endif
 const Str hello_string = {embed_data_2, (Int)sizeof embed_data_2 - 1};
 
 static const EmbedFile embed_files_xglobal[] = {
@@ -442,10 +458,14 @@ static const EmbedFile embed_files_xglobal[] = {
      {0xef, 0xe0, 0x10, 0xe2, 0x88, 0x9e, 0xe4, 0x87, 0x1e, 0xba, 0x75, 0xfb, 0xd6, 0x31, 0xb9, 0x50}},
 };
 
+#ifndef BURROW_AMALGAMATION_H
 extern const EmbedFS xglobal;
+#endif
 const EmbedFS xglobal = {embed_files_xglobal, (Int)(sizeof embed_files_xglobal / sizeof embed_files_xglobal[0])};
 
+#ifndef BURROW_AMALGAMATION_H
 extern const Str xconcurrency;
+#endif
 const Str xconcurrency = {embed_data_0, (Int)sizeof embed_data_0 - 1};
 
 static Byte embed_bytes_xglass[] = {
@@ -463,10 +483,14 @@ static Byte embed_bytes_xglass[] = {
     0,
 };
 
+#ifndef BURROW_AMALGAMATION_H
 extern Slice xglass;
+#endif
 Slice xglass = {embed_bytes_xglass, (Int)sizeof embed_bytes_xglass - 1, (Int)sizeof embed_bytes_xglass - 1, TYPE_BYTE};
 
+#ifndef BURROW_AMALGAMATION_H
 extern const Str sbig;
+#endif
 const Str sbig = {embed_data_3, (Int)sizeof embed_data_3 - 1};
 
 static Byte embed_bytes_bbig[] = {
@@ -570,5 +594,7 @@ static Byte embed_bytes_bbig[] = {
     0,
 };
 
+#ifndef BURROW_AMALGAMATION_H
 extern Slice bbig;
+#endif
 Slice bbig = {embed_bytes_bbig, (Int)sizeof embed_bytes_bbig - 1, (Int)sizeof embed_bytes_bbig - 1, TYPE_BYTE};

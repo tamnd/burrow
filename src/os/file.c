@@ -300,6 +300,15 @@ OsFile *os_open_file(Alloc *a, Str name, Int flag, OsFileMode perm, Error *err) 
     return f;
 }
 
+OsFile *burrow__os_file_renamed(OsFile *f, Str name) {
+    OsFile *g = os_new(f->a, f->fd, name);
+    if (g == NULL)
+        return NULL;
+    g->append_mode = f->append_mode;
+    mem_free(f->a, f, sizeof(OsFile) + (size_t)f->name.len, _Alignof(OsFile));
+    return g;
+}
+
 OsFile *os_open(Alloc *a, Str name, Error *err) {
     return os_open_file(a, name, OS_O_RDONLY, 0, err);
 }

@@ -32,6 +32,10 @@
 #include <stdarg.h>
 #include <string.h>
 
+/* The analyzer follows paths through this file where a Str has a length and
+ * no bytes, which nothing here builds, and reports the reads and copies on
+ * them. NOLINTBEGIN(clang-analyzer-core.NullDereference,clang-analyzer-core.NonNullParamChecker) */
+
 #if defined(BURROW_OS_WINDOWS)
 #define FP_HOST true
 #else
@@ -322,11 +326,9 @@ static Str fp_clean_own(Alloc *a, Str path, bool win, FpOwn *own) {
     }
 
     while (r < n && !out.oom) {
-        if (fp_is_sep(p[r], win)) {
-            /* An empty element. */
-            r++;
-        } else if (p[r] == '.' && (r + 1 == n || fp_is_sep(p[r + 1], win))) {
-            /* A . element. */
+        if (fp_is_sep(p[r], win) ||
+            (p[r] == '.' && (r + 1 == n || fp_is_sep(p[r + 1], win)))) {
+            /* An empty element, or a . element. */
             r++;
         } else if (p[r] == '.' && p[r + 1] == '.' &&
                    (r + 2 == n || fp_is_sep(p[r + 2], win))) {
@@ -727,8 +729,10 @@ Str burrow__filepath_join(Alloc *a, Slice elem, bool win) {
     Byte last = 0;
     for (Int i = 0; i < elem.len; i++) {
         Str s = e[i];
-        if (n == 0) {
-            /* The first element that is not empty goes in as it is. */
+        if (n == 0 || last == ':') {
+            /* The first element that is not empty goes in as it is. After a
+             * colon, stay relative to the drive's working directory and add
+             * nothing, so C: and f give C:f and C: and \f give C:\f. */
         } else if (fp_is_sep(last, true)) {
             /* After a separator, drop the element's leading ones, so that
              * elements that are not UNC do not make a UNC path between them.
@@ -743,9 +747,6 @@ Str burrow__filepath_join(Alloc *a, Slice elem, bool win) {
                 b[n++] = '.';
                 b[n++] = '\\';
             }
-        } else if (last == ':') {
-            /* After a colon, stay relative to the drive's working directory
-             * and add nothing, so C: and f give C:f and C: and \f give C:\f. */
         } else {
             b[n++] = '\\';
             last = '\\';
@@ -1196,3 +1197,5 @@ Int burrow__filepath_volume_name_len(Str path, bool win) {
 bool filepath_has_prefix(Str p, Str prefix) {
     return burrow__filepath_has_prefix(p, prefix, FP_HOST);
 }
+
+/* NOLINTEND(clang-analyzer-core.NullDereference,clang-analyzer-core.NonNullParamChecker) */

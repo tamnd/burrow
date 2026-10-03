@@ -118,10 +118,10 @@ Int syscall_wait_status_trap_cause(SyscallWaitStatus w) {
 
 #else
 
-#define WAIT_MASK 0x7Fu
-#define WAIT_CORE 0x80u
-#define WAIT_EXITED 0x00u
-#define WAIT_STOPPED 0x7Fu
+#define WAIT_MASK 0x7FU
+#define WAIT_CORE 0x80U
+#define WAIT_EXITED 0x00U
+#define WAIT_STOPPED 0x7FU
 #define WAIT_SHIFT 8
 
 bool syscall_wait_status_exited(SyscallWaitStatus w) {
@@ -149,21 +149,21 @@ SyscallSignal syscall_wait_status_signal(SyscallWaitStatus w) {
 Int syscall_wait_status_exit_status(SyscallWaitStatus w) {
     if (!syscall_wait_status_exited(w))
         return -1;
-    return (Int)((w >> WAIT_SHIFT) & 0xFFu);
+    return (Int)((w >> WAIT_SHIFT) & 0xFFU);
 }
 
 bool syscall_wait_status_stopped(SyscallWaitStatus w) {
-    return (w & 0xFFu) == WAIT_STOPPED;
+    return (w & 0xFFU) == WAIT_STOPPED;
 }
 
 bool syscall_wait_status_continued(SyscallWaitStatus w) {
-    return w == 0xFFFFu;
+    return w == 0xFFFFU;
 }
 
 SyscallSignal syscall_wait_status_stop_signal(SyscallWaitStatus w) {
     if (!syscall_wait_status_stopped(w))
         return -1;
-    return (SyscallSignal)((w >> WAIT_SHIFT) & 0xFFu);
+    return (SyscallSignal)((w >> WAIT_SHIFT) & 0xFFU);
 }
 
 Int syscall_wait_status_trap_cause(SyscallWaitStatus w) {
@@ -195,7 +195,7 @@ bool syscall_wait_status_continued(SyscallWaitStatus w) {
 SyscallSignal syscall_wait_status_stop_signal(SyscallWaitStatus w) {
     if (!syscall_wait_status_stopped(w))
         return -1;
-    return (SyscallSignal)((w >> WAIT_SHIFT) & 0xFFu);
+    return (SyscallSignal)((w >> WAIT_SHIFT) & 0xFFU);
 }
 
 Int syscall_wait_status_trap_cause(SyscallWaitStatus w) {
@@ -215,15 +215,15 @@ Int syscall_wait_status_trap_cause(SyscallWaitStatus w) {
 
 static SyscallFiletime filetime_of(int64_t v) {
     SyscallFiletime ft;
-    ft.low_date_time = (uint32_t)((uint64_t)v & 0xffffffffu);
-    ft.high_date_time = (uint32_t)(((uint64_t)v >> 32) & 0xffffffffu);
+    ft.low_date_time = (uint32_t)((uint64_t)v & 0xffffffffU);
+    ft.high_date_time = (uint32_t)(((uint64_t)v >> 32) & 0xffffffffU);
     return ft;
 }
 
 int64_t syscall_filetime_nanoseconds(const SyscallFiletime *ft) {
     uint64_t n = ((uint64_t)ft->high_date_time << 32) + (uint64_t)ft->low_date_time;
     n -= (uint64_t)FILETIME_EPOCH;
-    return (int64_t)(n * 100u);
+    return (int64_t)(n * 100U);
 }
 
 SyscallFiletime syscall_nsec_to_filetime(int64_t nsec) {
@@ -243,7 +243,7 @@ SyscallRusage syscall_rusage_from_pal(const PalRusage *ru) {
 #else
 
 int64_t syscall_timeval_nano(const SyscallTimeval *tv) {
-    return (int64_t)((uint64_t)tv->sec * 1000000000u + (uint64_t)tv->usec * 1000u);
+    return (int64_t)((uint64_t)tv->sec * 1000000000U + (uint64_t)tv->usec * 1000U);
 }
 
 int64_t syscall_timeval_to_nsec(SyscallTimeval tv) {
@@ -251,7 +251,7 @@ int64_t syscall_timeval_to_nsec(SyscallTimeval tv) {
 }
 
 SyscallTimeval syscall_nsec_to_timeval(int64_t nsec) {
-    nsec = (int64_t)((uint64_t)nsec + 999u); /* round up to a microsecond */
+    nsec = (int64_t)((uint64_t)nsec + 999U); /* round up to a microsecond */
     int64_t usec = nsec % 1000000000 / 1000;
     int64_t sec = nsec / 1000000000;
     if (usec < 0) {

@@ -366,8 +366,11 @@ bool burrow__gob_stack_low(uintptr_t *floor, int depth) {
      * nesting gets deep enough to be worth the call. */
     if (*floor == 0) {
         burrow__Stack *s = burrow__stack_current();
-        if (s != NULL)
-            *floor = s->lo == NULL ? 1 : (uintptr_t)s->lo + GOB_STACK_MARGIN;
+        /* A goroutine on a Windows fiber has no bounds of its own here, and
+         * the fiber's are the thread's while it runs, so it asks the same way
+         * a thread does. */
+        if (s != NULL && s->lo != NULL)
+            *floor = (uintptr_t)s->lo + GOB_STACK_MARGIN;
         else
             *floor = 2;
     }
@@ -375,8 +378,7 @@ bool burrow__gob_stack_low(uintptr_t *floor, int depth) {
         if (depth < GOB_THREAD_CHECK_AFTER)
             return false;
         void *lo = NULL;
-        void *hi = NULL;
-        if (!burrow__thread_stack_bounds(&lo, &hi))
+        if (!burrow__thread_stack_limit(&lo))
             lo = NULL;
         *floor = lo == NULL ? 1 : (uintptr_t)lo + GOB_STACK_MARGIN;
     }

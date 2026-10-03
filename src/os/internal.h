@@ -27,6 +27,11 @@ struct OsFile {
     bool stdio; /* one of the three os_stdin and the others hand out */
 };
 
+/* A file just opened, under another name: the same descriptor in a new
+ * OsFile, with f freed and not closed. NULL when out of memory, with f left as
+ * it was. */
+OsFile *burrow__os_file_renamed(OsFile *f, Str name);
+
 /* poll.FD's incref and decref. The decref that lets go of the last reference
  * of a closed file closes the descriptor, and gives the close error. */
 bool burrow__os_incref(OsFile *f);

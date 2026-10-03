@@ -1135,21 +1135,19 @@ static void TestIssue12417(TestingT *t) {
 
 /* The token half of TestIssue20396, which Go runs through Unmarshal. */
 static void TestIssue20396(TestingT *t) {
-    static const char *const attr_error =
-        "XML syntax error on line 1: expected attribute name in element";
-    static const char *const name_error =
-        "XML syntax error on line 1: expected element name after <";
+#define ATTR_ERROR "XML syntax error on line 1: expected attribute name in element"
+#define NAME_ERROR "XML syntax error on line 1: expected element name after <"
     static const struct {
         const char *s;
         const char *want;
     } cases[] = {
-        {"<a:te:st xmlns:a=\"abcd\"/>", name_error},
-        {"<a:te=st xmlns:a=\"abcd\"/>", attr_error},
-        {"<a:te&st xmlns:a=\"abcd\"/>", attr_error},
+        {"<a:te:st xmlns:a=\"abcd\"/>", NAME_ERROR},
+        {"<a:te=st xmlns:a=\"abcd\"/>", ATTR_ERROR},
+        {"<a:te&st xmlns:a=\"abcd\"/>", ATTR_ERROR},
         {"<a:test xmlns:a=\"abcd\"/>", NULL},
-        {"<a:te:st xmlns:a=\"abcd\">1</a:te:st>", name_error},
-        {"<a:te=st xmlns:a=\"abcd\">1</a:te=st>", attr_error},
-        {"<a:te&st xmlns:a=\"abcd\">1</a:te&st>", attr_error},
+        {"<a:te:st xmlns:a=\"abcd\">1</a:te:st>", NAME_ERROR},
+        {"<a:te=st xmlns:a=\"abcd\">1</a:te=st>", ATTR_ERROR},
+        {"<a:te&st xmlns:a=\"abcd\">1</a:te&st>", ATTR_ERROR},
         {"<a:test xmlns:a=\"abcd\">1</a:test>", NULL},
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
@@ -1170,6 +1168,8 @@ static void TestIssue20396(TestingT *t) {
         }
         xml_decoder_free(d);
     }
+#undef ATTR_ERROR
+#undef NAME_ERROR
 }
 
 static void TestIssue20685(TestingT *t) {

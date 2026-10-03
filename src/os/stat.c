@@ -167,6 +167,12 @@ static OsFileInfo os_stat_op(Alloc *a, Str name, bool follow, Error *err) {
         BURROW_OUT(err, fs_path_error_new(error_allocator(), op, name, e));
         return none;
     }
+#if defined(BURROW_OS_WINDOWS)
+    /* Lstat of a name ending in a separator follows a link in its last part,
+     * the way POSIX resolves one, as Go's does on Windows. */
+    if (!follow && name.len > 0 && os_is_path_separator(name.p[name.len - 1]))
+        follow = true;
+#endif
     PalStat st;
     PalErrno pe = PAL_OK;
     bool ok = follow ? pal_stat(c.p, &st, &pe) : pal_lstat(c.p, &st, &pe);

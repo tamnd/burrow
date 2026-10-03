@@ -518,6 +518,9 @@ static Error os_root_walk(OsRoot *r, OsRootWalk *w, Str name, unsigned flags,
             break;
         }
 
+        /* os_root_split fails for an empty name, so there is a part here,
+         * but the analyzer takes its error for a success on that path. */
+        /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
         if (os_root_is_dotdot(parts.p[i])) {
             /* Resolve one or more ".." by dropping them and the components
              * before them, and start again from the root. */
@@ -1018,7 +1021,7 @@ static Error os_root_mkdir_all_last(OsRootWalk *w, void *env, int64_t parent, St
                 Error e = BURROW_NO_ERROR;
                 OsFileInfo fi =
                     os_root_stat(m->r, arena_allocator(&ar), m->fullname, &e);
-                if (BURROW_OK(e) && fi.vt->is_dir(fi.data))
+                if (BURROW_OK(e) && fi.vt != NULL && fi.vt->is_dir(fi.data))
                     err = BURROW_NO_ERROR;
                 else if (BURROW_OK(e))
                     err = burrow__os_errno_value(SYSCALL_ENOTDIR);
@@ -1406,7 +1409,12 @@ static Error os_root_check_escapes_to(OsRoot *r, Str name, bool lstat, Str *reso
                 break;
             if (i == parts.len - 1 && new_ends_in_slash)
                 ends_in_slash = true;
+            /* The cleaning can take away parts before i, a\b\..\c with b a
+             * link to .. for one, so the walk starts again from the root the
+             * way Go's doInRoot does. */
             parts = np;
+            i = 0;
+            base = r->name;
             continue;
         }
         if ((st.mode & PAL_S_IFMT) != PAL_S_IFDIR &&
@@ -1496,10 +1504,21 @@ static OsFile *os_root_open_file_nolog(OsRoot *r, Alloc *a, Str name, Int flag,
     }
     OsFile *f = os_open_file(a, full, flag, perm, &e);
     os_root_str_free(full);
-    if (f == NULL)
+    if (f == NULL) {
         BURROW_OUT(err,
                    os_root_path_error(OS_LIT("openat"), name, os_root_underlying(e)));
-    return f;
+        return NULL;
+    }
+    /* full has the links replaced, and the file is named the way Go's is,
+     * with the name that was asked for. */
+    Str shown = os_root_join(heap_allocator(), r->name, name);
+    OsFile *g = shown.p == NULL ? NULL : burrow__os_file_renamed(f, shown);
+    os_root_str_free(shown);
+    if (g == NULL) {
+        os_file_free(f);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+    }
+    return g;
 }
 
 static OsFileInfo os_root_stat_op(OsRoot *r, Alloc *a, Str name, bool lstat,
@@ -1509,7 +1528,19 @@ static OsFileInfo os_root_stat_op(OsRoot *r, Alloc *a, Str name, bool lstat,
     Str full;
     Error e = os_root_check_escapes_to(r, name, lstat, &full);
     if (BURROW_OK(e)) {
-        fi = lstat ? os_lstat(a, full, &e) : os_stat(a, full, &e);
+        /* full has the links replaced, so the info is built here to take its
+         * name from the one asked for, the way Go's does. */
+        OsCPath c;
+        PalStat st;
+        PalErrno pe = PAL_OK;
+        if (burrow__os_cpath(&c, full, &e)) {
+            bool ok = lstat ? pal_lstat(c.p, &st, &pe) : pal_stat(c.p, &st, &pe);
+            burrow__os_cpath_free(&c);
+            if (ok)
+                fi = burrow__os_file_info(a, name, &st, &e);
+            else
+                e = burrow__os_errno(pe);
+        }
         os_root_str_free(full);
     }
     if (BURROW_FAILED(e)) {
@@ -1599,19 +1630,21 @@ Error os_root_chtimes(OsRoot *r, Str name, Time atime, Time mtime) {
 }
 
 static Error os_root_mkdir_impl(OsRoot *r, Str name, OsFileMode perm) {
-    Error e = os_root_check_escapes(r, name, false);
+    Error e = os_root_check_escapes(r, name, true);
     if (BURROW_FAILED(e))
         return os_root_path_error(OS_LIT("mkdirat"), name, e);
     if (name.len == 0)
         return os_root_path_error(OS_LIT("mkdirat"), name,
                                   burrow__os_errno_value(SYSCALL_ENOENT));
     OsRootNameArgs a = {.mode = perm};
-    return os_root_by_name_op(r, name, OS_ROOT_N_MKDIR, OS_LIT("mkdirat"), false, &a);
+    return os_root_by_name_op(r, name, OS_ROOT_N_MKDIR, OS_LIT("mkdirat"), true, &a);
 }
 
 static Error os_root_mkdir_all_impl(OsRoot *r, Str name, OsFileMode perm) {
+    /* A link as the last part is left for MkdirAll to find, which fails on it
+     * the way mkdirat does. */
     Str resolved;
-    Error e = os_root_check_escapes_to(r, name, false, &resolved);
+    Error e = os_root_check_escapes_to(r, name, true, &resolved);
     if (os_root_same(e, burrow__os_err_path_escapes))
         return os_root_path_error(OS_LIT("mkdirat"), name, e);
     if (name.len == 0) {
@@ -1619,6 +1652,28 @@ static Error os_root_mkdir_all_impl(OsRoot *r, Str name, OsFileMode perm) {
         return os_root_path_error(OS_LIT("mkdirat"), name,
                                   burrow__os_errno_value(SYSCALL_ENOENT));
     }
+    /* A link as the last part is fine when it leads to a directory in the
+     * root, which is what the openat version's last step checks. */
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Error le = BURROW_NO_ERROR;
+    OsFileInfo li = os_root_lstat(r, arena_allocator(&ar), name, &le);
+    if (BURROW_OK(le) && li.vt != NULL &&
+        (li.vt->mode(li.data) & OS_MODE_SYMLINK) != 0) {
+        OsFileInfo fi = os_root_stat(r, arena_allocator(&ar), name, &le);
+        if (BURROW_OK(le) && fi.vt != NULL && fi.vt->is_dir(fi.data))
+            le = BURROW_NO_ERROR;
+        else if (BURROW_OK(le))
+            le = burrow__os_errno_value(SYSCALL_ENOTDIR);
+        else if (os_is_not_exist(le))
+            le = burrow__os_errno_value(SYSCALL_EEXIST);
+        else
+            le = os_root_underlying(le);
+        arena_free(&ar);
+        os_root_str_free(resolved);
+        return BURROW_OK(le) ? le : os_root_path_error(OS_LIT("mkdirat"), name, le);
+    }
+    arena_free(&ar);
     Byte sep = (Byte)OS_PATH_SEPARATOR;
     Str prefix = burrow__os_cat3(heap_allocator(), r->name, str_from_bytes(&sep, 1),
                                  (Str){NULL, 0});

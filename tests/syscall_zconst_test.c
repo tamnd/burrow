@@ -40,6 +40,14 @@
 #elif defined(BURROW_OS_LINUX) && !defined(BURROW_OS_COSMO)
 #include <dirent.h>
 #include <fcntl.h>
+/* The kernel's own headers are a package of their own on some systems, such as
+ * linux-headers on Alpine, and the comparison does without them. */
+#if defined(__has_include)
+#if __has_include(<linux/netlink.h>)
+#define HAVE_LINUX_HEADERS 1
+#endif
+#endif
+#if defined(HAVE_LINUX_HEADERS)
 #include <linux/filter.h>
 #include <linux/icmpv6.h>
 #include <linux/if.h>
@@ -54,6 +62,7 @@
 #include <linux/sched.h>
 #include <linux/serial.h>
 #include <linux/wait.h>
+#endif
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -127,6 +136,19 @@ static const KnownDifference known_differences[] = {
     {"MS_RMT_MASK", "newer kernel"},
     /* 4096 since Linux 5.4. */
     {"SOMAXCONN", "newer kernel"},
+    /* Go's arm64 table has amd64's value, which has amd64's O_DIRECTORY bit
+     * in it. */
+    {"O_TMPFILE", "amd64's value in Go's table"},
+#elif defined(BURROW_OS_DARWIN)
+    /* The same for macOS: Go's tables come from an older SDK, and these are
+     * counts and limits that went up since, or a default Apple changed. */
+    {"AF_MAX", "newer SDK"},
+    {"EVFILT_SYSCOUNT", "newer SDK"},
+    {"EVFILT_THREADMARKER", "newer SDK"},
+    {"IPV6_FRAGTTL", "newer SDK"},
+    {"NET_RT_MAXID", "newer SDK"},
+    {"SYS_MAXSYSCALL", "newer SDK"},
+    {"TCP_MAX_SACK", "newer SDK"},
 #elif defined(BURROW_OS_WINDOWS)
     /* Go's are the numbers 0x80000000 and up. The SDK makes them pointers
      * from a 32-bit LONG, so on 64-bit Windows they are sign extended, and

@@ -61,6 +61,7 @@
 #include "burrow/crypto/sha512.h"
 #include "burrow/declare.h"
 #include "burrow/defer.h"
+#include "burrow/embed.h"
 #include "burrow/encoding.h"
 #include "burrow/encoding/ascii85.h"
 #include "burrow/encoding/asn1.h"

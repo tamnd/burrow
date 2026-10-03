@@ -616,10 +616,13 @@ typedef BOOL(WINAPI *UserTestLogonUserFn)(LPCWSTR, LPCWSTR, LPCWSTR, DWORD, DWOR
 typedef DWORD(WINAPI *UserTestNetUserAddFn)(LPCWSTR, DWORD, LPBYTE, LPDWORD);
 typedef DWORD(WINAPI *UserTestNetUserDelFn)(LPCWSTR, LPCWSTR);
 
+/* Any function pointer; callers cast it to the real type. */
+typedef void (*UserTestProc)(void);
+
 /* The function name from the library, or a fatal error. */
-static void *user_test_proc(TestingT *t, const wchar_t *lib, const char *name) {
+static UserTestProc user_test_proc(TestingT *t, const wchar_t *lib, const char *name) {
     HMODULE m = LoadLibraryW(lib);
-    void *f = m == NULL ? NULL : (void *)(void (*)(void))GetProcAddress(m, name);
+    UserTestProc f = m == NULL ? NULL : (UserTestProc)GetProcAddress(m, name);
     if (f == NULL)
         testing_t_fatalf_v(t, "%s: error %d", name, (Int)GetLastError());
     return f;
@@ -676,7 +679,8 @@ static Str add_user_account(TestingT *t, UserTestAccount *acc, Str *password) {
         char suffix[8];
         snprintf(suffix, sizeof suffix, "%u", (unsigned)(math_rand_uint64() & 0xffff));
         suffix[4] = 0;
-        Str name = fmt_sprintf_v(a, "%s%s", str_from_bytes(buf, n), S(suffix));
+        Str name =
+            fmt_sprintf_v(a, "%s%s", str_from_bytes(buf, n), str_from_cstr(suffix));
         USER_INFO_1 info;
         memset(&info, 0, sizeof info);
         info.usri1_name = user_test_wide(name);
@@ -835,18 +839,18 @@ static const ServiceAccount service_accounts[] = {
 static void lookup_service_account(void *env, TestingT *t) {
     const ServiceAccount *tt = (const ServiceAccount *)env;
     Error e = BURROW_NO_ERROR;
-    User *u = user_lookup(a, S(tt->name), &e);
+    User *u = user_lookup(a, str_from_cstr(tt->name), &e);
     if (BURROW_FAILED(e)) {
-        testing_t_logf_v(t, "Lookup(%q): %v", S(tt->name), e);
+        testing_t_logf_v(t, "Lookup(%q): %v", str_from_cstr(tt->name), e);
         if (!is_system_default_lcid_english())
             testing_t_skipf_v(t, "test not supported on non-English Windows");
         testing_t_fail(t);
         return;
     }
-    if (!str_eq(u->uid, S(tt->sid)))
+    if (!str_eq(u->uid, str_from_cstr(tt->sid)))
         testing_t_errorf_v(t, "unexpected uid for %q; got %q, want %q", u->name, u->uid,
-                           S(tt->sid));
-    testing_t_logf_v(t, "Lookup(%q): %q", S(tt->name), u->username);
+                           str_from_cstr(tt->sid));
+    testing_t_logf_v(t, "Lookup(%q): %q", str_from_cstr(tt->name), u->username);
 }
 
 /* Go marks the four service account tests parallel. They share the test's
@@ -862,18 +866,18 @@ static void TestLookupIdServiceAccount(TestingT *t) {
     for (int i = 0; i < 3; i++) {
         const ServiceAccount *tt = &service_accounts[i];
         Error e = BURROW_NO_ERROR;
-        User *u = user_lookup_id(a, S(tt->sid), &e);
+        User *u = user_lookup_id(a, str_from_cstr(tt->sid), &e);
         if (BURROW_FAILED(e)) {
-            testing_t_errorf_v(t, "LookupId(%q): %v", S(tt->sid), e);
+            testing_t_errorf_v(t, "LookupId(%q): %v", str_from_cstr(tt->sid), e);
             continue;
         }
-        if (!str_eq(u->gid, S(tt->sid)))
+        if (!str_eq(u->gid, str_from_cstr(tt->sid)))
             testing_t_errorf_v(t, "unexpected gid for %q; got %q, want %q", u->name,
-                               u->gid, S(tt->sid));
-        if (!str_eq(u->username, S(tt->name))) {
+                               u->gid, str_from_cstr(tt->sid));
+        if (!str_eq(u->username, str_from_cstr(tt->name))) {
             if (is_system_default_lcid_english())
                 testing_t_errorf_v(t, "unexpected user name for %q; got %q, want %q",
-                                   u->gid, u->username, S(tt->name));
+                                   u->gid, u->username, str_from_cstr(tt->name));
             else
                 testing_t_logf_v(t, "user name for %q: %q", u->gid, u->username);
         }
@@ -883,17 +887,17 @@ static void TestLookupIdServiceAccount(TestingT *t) {
 static void lookup_group_service_account(void *env, TestingT *t) {
     const ServiceAccount *tt = (const ServiceAccount *)env;
     Error e = BURROW_NO_ERROR;
-    UserGroup *g = user_lookup_group(a, S(tt->name), &e);
+    UserGroup *g = user_lookup_group(a, str_from_cstr(tt->name), &e);
     if (BURROW_FAILED(e)) {
-        testing_t_logf_v(t, "LookupGroup(%q): %v", S(tt->name), e);
+        testing_t_logf_v(t, "LookupGroup(%q): %v", str_from_cstr(tt->name), e);
         if (!is_system_default_lcid_english())
             testing_t_skipf_v(t, "test not supported on non-English Windows");
         testing_t_fail(t);
         return;
     }
-    if (!str_eq(g->gid, S(tt->sid)))
+    if (!str_eq(g->gid, str_from_cstr(tt->sid)))
         testing_t_errorf_v(t, "unexpected gid for %q; got %q, want %q", g->name, g->gid,
-                           S(tt->sid));
+                           str_from_cstr(tt->sid));
 }
 
 static void TestLookupGroupServiceAccount(TestingT *t) {
@@ -907,14 +911,14 @@ static void TestLookupGroupIdServiceAccount(TestingT *t) {
     for (int i = 0; i < 3; i++) {
         const ServiceAccount *tt = &service_accounts[i];
         Error e = BURROW_NO_ERROR;
-        UserGroup *g = user_lookup_group_id(a, S(tt->sid), &e);
+        UserGroup *g = user_lookup_group_id(a, str_from_cstr(tt->sid), &e);
         if (BURROW_FAILED(e)) {
-            testing_t_errorf_v(t, "LookupGroupId(%q): %v", S(tt->sid), e);
+            testing_t_errorf_v(t, "LookupGroupId(%q): %v", str_from_cstr(tt->sid), e);
             continue;
         }
-        if (!str_eq(g->gid, S(tt->sid)))
+        if (!str_eq(g->gid, str_from_cstr(tt->sid)))
             testing_t_errorf_v(t, "unexpected gid for %q; got %q, want %q", g->name,
-                               g->gid, S(tt->sid));
+                               g->gid, str_from_cstr(tt->sid));
     }
 }
 

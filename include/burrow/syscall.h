@@ -57,6 +57,7 @@ typedef Uintptr SyscallErrno;
 typedef Int SyscallSignal;
 
 #include "burrow/syscall/zerrors.h"
+#include "burrow/syscall/zconst.h"
 
 /* The descriptor of Errno, for errors_as. What errors_as hands back points at
  * a SyscallErrno. */

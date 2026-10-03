@@ -576,7 +576,8 @@ bool pal_eaccess(const char *path, uint32_t mode, PalErrno *err) {
     if (!posix_path_ok(path, err))
         return false;
 #if defined(AT_EACCESS)
-    return faccessat(AT_FDCWD, path, (int)(mode & 7), AT_EACCESS) == 0 || file_fail(err);
+    return faccessat(AT_FDCWD, path, (int)(mode & 7), AT_EACCESS) == 0 ||
+           file_fail(err);
 #else
     (void)mode;
     BURROW_OUT(err, PAL_ENOSYS);

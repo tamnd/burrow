@@ -125,7 +125,8 @@ bool pal_thread_cancel_io(int64_t thread, PalErrno *err) {
         return false;
     }
     /* ERROR_NOT_FOUND is a thread with nothing to cancel, which is fine. */
-    if (!CancelSynchronousIo((HANDLE)(uintptr_t)thread) && GetLastError() != ERROR_NOT_FOUND) {
+    if (!CancelSynchronousIo((HANDLE)(uintptr_t)thread) &&
+        GetLastError() != ERROR_NOT_FOUND) {
         BURROW_OUT(err, burrow__pal_errno_win(GetLastError()));
         return false;
     }

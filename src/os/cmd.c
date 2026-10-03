@@ -299,39 +299,38 @@ typedef struct CmdCopier {
 } CmdCopier;
 
 struct burrow__ExecState {
-    burrow__Lock mu;
-    Arena errs; /* the errors the threads hand over, under mu */
+    /* In the order that packs it best, which is why the parts are apart. */
+    int64_t cancel_r, cancel_w; /* on Unix, the pipe that wakes pal_fd_wait */
+    Chan *stop;                 /* the watch on the context */
+    int64_t res_deadline;
+    Error first_err; /* the first error a copier finished with, under mu */
+    burrow__Thread watch;
+    Error res_err;
+    Error late_err; /* the watch could not be started */
     Slice own_args;
-    bool own_cmd; /* by exec_command, which allocated the Cmd too */
 
     /* The child's ends, closed once Start is done with them, and ours. */
     OsFile *child_io[CMD_MAX_FILES];
-    int n_child_io;
     OsFile *parent_io[CMD_MAX_FILES];
+    OsFile *made[CMD_MAX_FILES * 2]; /* every OsFile this Cmd made, to free */
+
+    Arena errs; /* the errors the threads hand over, under mu */
+    CmdCopier cp[3];
+    burrow__Lock mu;
+    int n_child_io;
+    int n_parent_io;
+    int n_made;
+    int n_cp;
+    int running; /* copiers not finished, under mu */
+    SyncAtomicUint32 cancelled;
+    burrow__Note copiers_done;
+    burrow__Note arrive, result_ready;
+    bool own_cmd;  /* by exec_command, which allocated the Cmd too */
+    bool consumed; /* Go's goroutineErr = nil */
+    bool watching;
+    bool res_timer;
     bool parent_copier[CMD_MAX_FILES]; /* a copier owns it and closes it */
     bool parent_closed[CMD_MAX_FILES];
-    int n_parent_io;
-    OsFile *made[CMD_MAX_FILES * 2]; /* every OsFile this Cmd made, to free */
-    int n_made;
-
-    CmdCopier cp[3];
-    int n_cp;
-    int running;     /* copiers not finished, under mu */
-    Error first_err; /* the first error a copier finished with, under mu */
-    bool consumed;   /* Go's goroutineErr = nil */
-    burrow__Note copiers_done;
-    SyncAtomicUint32 cancelled;
-    int64_t cancel_r, cancel_w; /* on Unix, the pipe that wakes pal_fd_wait */
-
-    /* The watch on the context. */
-    bool watching;
-    burrow__Thread watch;
-    Chan *stop;
-    burrow__Note arrive, result_ready;
-    Error res_err;
-    bool res_timer;
-    int64_t res_deadline;
-    Error late_err; /* the watch could not be started */
 };
 
 static void cmd_add_made(burrow__ExecState *st, OsFile *f) {

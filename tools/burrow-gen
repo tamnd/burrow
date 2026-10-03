@@ -1002,6 +1002,7 @@ def run_amalgamate(args):
 DOC_MARK = re.compile(r"^<!--\s*(example|not compiled):\s*(.*?)\s*-->\s*$")
 DOC_FENCE = re.compile(r"^```(\S*)(.*)$")
 DOC_REGION = re.compile(r"^\s*//\s*doc:\s*(\S+)\s*$")
+TEST_ELAPSED = re.compile(r"\(\d+\.\d\ds\)")
 DOC_OUTPUT = re.compile(r"/\*\s*Output:\s*\n(.*?)\*/\s*$", re.S)
 
 
@@ -1217,6 +1218,10 @@ def doc_run(root, cc, sanitize):
                 got = [l.rstrip() for l in r.stdout.rstrip().split("\n")] if r.stdout.strip() else []
                 if want == [""]:
                     want = []
+                # A test's run time, as testing prints it, is whatever the
+                # machine took, so "(0.00s)" in the comment matches any.
+                want = [TEST_ELAPSED.sub("(TIME)", l) for l in want]
+                got = [TEST_ELAPSED.sub("(TIME)", l) for l in got]
                 if got != want:
                     problems.append(
                         "%s printed something else.\nwant:\n%s\ngot:\n%s" % (rel, "\n".join(want), "\n".join(got))

@@ -23,7 +23,9 @@
 #define OS_LIT(s) str_from_bytes((const Byte *)(s), (Int)(sizeof(s) - 1))
 
 static Str os_env_copy(Alloc *a, const Byte *p, Int n) {
-    if (n == 0)
+    /* n is never negative, but gcc can't see that through os_expand and warns
+     * about the memcpy below (-Wstringop-overflow), so the test says <=. */
+    if (n <= 0)
         return (Str){(const Byte *)"", 0};
     Byte *b = (Byte *)mem_alloc_nozero(a, (size_t)n, 1);
     if (b == NULL)

@@ -90,8 +90,9 @@ bool syscall_errno_temporary(SyscallErrno e);
 /* The Errno for a PAL failure. Straight after the PAL call that failed with e
  * it is the system's own code, which on Windows keeps the ERROR_ code Go would
  * show. Later, or for a PalErrno a backend chose itself, it is the E constant
- * for e. PAL_OK, and the PalErrno values with no errno behind them, which are
- * PAL_EHOSTNOTFOUND, PAL_ETRYAGAIN and PAL_EOTHER, give 0. */
+ * for e. PAL_OK gives 0, and so do the PalErrno values with no errno behind
+ * them, PAL_EHOSTNOTFOUND, PAL_ETRYAGAIN and PAL_EOTHER, unless they come
+ * straight from a failed call with a code of its own. */
 SyscallErrno syscall_errno_from_pal(PalErrno e);
 
 /* ------------------------------------------------------------------ signals */

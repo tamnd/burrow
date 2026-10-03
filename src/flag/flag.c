@@ -896,7 +896,7 @@ static Str arg0(Slice args) {
  * the flags have ended. */
 static bool parse_one(FlagFlagSet *f, Error *err) {
     *err = BURROW_NO_ERROR;
-    if (f->args.len == 0)
+    if (f->args.len == 0 || f->args.p == NULL)
         return false;
     Str s = arg0(f->args);
     if (s.len < 2 || s.p[0] != '-')

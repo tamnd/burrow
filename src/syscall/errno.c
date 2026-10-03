@@ -122,6 +122,8 @@ bool syscall_errno_is(SyscallErrno e, Error target) {
             e == SYSCALL_EWINDOWS)
             return true;
 #endif
+        /* ENOTSUP and EOPNOTSUPP are the same number on Linux. */
+        /* NOLINTNEXTLINE(misc-redundant-expression) */
         return e == SYSCALL_ENOSYS || e == SYSCALL_ENOTSUP || e == SYSCALL_EOPNOTSUPP;
     }
     return false;
@@ -167,11 +169,15 @@ _Static_assert(sizeof errno_from_pal / sizeof errno_from_pal[0] ==
                "one E constant for each PalErrno up to PAL_EHOSTNOTFOUND");
 
 SyscallErrno syscall_errno_from_pal(PalErrno e) {
-    if (e < PAL_EPERM || e >= PAL_EHOSTNOTFOUND)
+    if (e < PAL_EPERM || e > PAL_EOTHER)
         return 0;
+    /* The system's own code first. For PAL_EOTHER, a Windows error with no
+     * PalErrno of its own, it is the only answer there is. */
     int64_t native = pal_errno_native(e);
     if (native != 0)
         return (SyscallErrno)native;
+    if (e >= PAL_EHOSTNOTFOUND)
+        return 0;
     return errno_from_pal[e - PAL_EPERM];
 }
 

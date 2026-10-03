@@ -133,6 +133,7 @@ typedef struct UwApi {
 
 #define UW_GET(T, lib, name) ((T)(void (*)(void))GetProcAddress(lib, name))
 
+/* Frees what a uw_open that failed part way had loaded. */
 static void uw_close(UwApi *api) {
     if (api->advapi != NULL)
         FreeLibrary(api->advapi);
@@ -148,7 +149,10 @@ enum { UW_ADVAPI = 1, UW_NETAPI = 2, UW_SECUR = 4, UW_USERENV = 8 };
 
 /* Loads the libraries in libs and finds what this file uses from them. Go's
  * Current never loads netapi32, and a test checks that, so each call asks for
- * only the libraries it needs. */
+ * only the libraries it needs. They stay loaded after, as Go's lazy DLLs do.
+ * Loading one means opening its file, and a thread impersonating at the
+ * identification level can't, so a library freed after one call could not be
+ * loaded again by the next. */
 static PalErrno uw_open(UwApi *api, int libs) {
     memset(api, 0, sizeof *api);
     if ((libs & UW_ADVAPI) != 0 &&
@@ -489,7 +493,6 @@ PalErrno pal_win_current_user(char *buf, int64_t cap, int *stage) {
         return e;
     UwCurrent c = {{buf, cap, false}, 0};
     e = uw_as_owner(&api, uw_current_user, &c, stage);
-    uw_close(&api);
     return e;
 }
 
@@ -502,7 +505,6 @@ PalErrno pal_win_current_groups(char *buf, int64_t cap, int *n, int *stage) {
         return e;
     UwCurrent c = {{buf, cap, false}, 0};
     e = uw_as_owner(&api, uw_current_groups, &c, stage);
-    uw_close(&api);
     *n = c.count;
     return e;
 }
@@ -568,7 +570,6 @@ PalErrno pal_win_lookup_name(const char *name, char *buf, int64_t cap, uint32_t 
             dn = gdn;
     }
     uw_free(w);
-    uw_close(&api);
     return e;
 }
 
@@ -625,7 +626,6 @@ PalErrno pal_win_lookup_sid(const char *sid, char *buf, int64_t cap, uint32_t *t
     if (psid != NULL)
         LocalFree(psid);
     uw_free(w);
-    uw_close(&api);
     return e;
 }
 
@@ -644,7 +644,6 @@ PalErrno pal_win_domain_joined(bool *joined) {
         api.net_free(domain);
         *joined = status == NetSetupDomainName;
     }
-    uw_close(&api);
     return e;
 }
 
@@ -679,7 +678,6 @@ PalErrno pal_win_display_name(const char *account, char *buf, int64_t cap) {
         n = got;
     }
     uw_free(w);
-    uw_close(&api);
     return e;
 }
 
@@ -713,7 +711,6 @@ PalErrno pal_win_user_full_name(const char *server, const char *user, char *buf,
         e = uw_done(&o);
         api.net_free(p);
     }
-    uw_close(&api);
     return e;
 }
 
@@ -730,7 +727,6 @@ PalErrno pal_win_user_primary_group(const char *server, const char *user,
         *rid = (uint32_t)((USER_INFO_4 *)(void *)p)->usri4_primary_group_id;
         api.net_free(p);
     }
-    uw_close(&api);
     return e;
 }
 
@@ -763,7 +759,6 @@ PalErrno pal_win_user_local_groups(const char *user, char *buf, int64_t cap, int
         }
     }
     uw_free(u);
-    uw_close(&api);
     return e;
 }
 
@@ -827,7 +822,6 @@ PalErrno pal_win_profile_path(const char *sid, char *buf, int64_t cap) {
     }
     uw_free(w);
     uw_free(path);
-    uw_close(&api);
     return e;
 }
 
@@ -860,7 +854,6 @@ PalErrno pal_win_profiles_dir(char *buf, int64_t cap) {
         }
         n = got;
     }
-    uw_close(&api);
     return e;
 }
 

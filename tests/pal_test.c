@@ -1019,6 +1019,26 @@ static void TestTheStackBoundsHoldAVariableThatIsOnTheStack(TestingT *t) {
 #endif
 }
 
+static void TestTheStackLimitIsAtOrBelowTheStackBounds(TestingT *t) {
+    void *lo = NULL;
+    void *hi = NULL;
+    void *limit = NULL;
+    char here = 0;
+
+    if (!pal_thread_stack_limit(&limit)) {
+        CHECK(limit == NULL);
+        return;
+    }
+    CHECK(pal_thread_stack_bounds(&lo, &hi));
+    CHECK((char *)limit <= (char *)lo);
+
+#if !defined(SANITIZED)
+    CHECK((const char *)&here > (char *)limit);
+#else
+    (void)here;
+#endif
+}
+
 static void TestYieldingIsAllowedAsOftenAsYouLike(TestingT *t) {
     for (int i = 0; i < 1000; i++)
         pal_thread_yield();
@@ -1301,6 +1321,7 @@ static void TestTheSignalsTakeANullErrorLikeEverythingElse(TestingT *t) {
     X(TestEveryThreadRunningAtOnceHasItsOwnIdentity)                                   \
     X(TestMyOwnIdentityIsTheSameEveryTimeIAsk)                                         \
     X(TestTheStackBoundsHoldAVariableThatIsOnTheStack)                                 \
+    X(TestTheStackLimitIsAtOrBelowTheStackBounds)                                      \
     X(TestYieldingIsAllowedAsOftenAsYouLike)                                           \
     X(TestStartingOrJoiningNothingIsRefused)                                           \
     X(TestTheThreadsTakeANullErrorLikeEverythingElse)                                  \

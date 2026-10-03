@@ -77,6 +77,10 @@ bool burrow__thread_stack_bounds(void **lo, void **hi) {
     return pal_thread_stack_bounds(lo, hi);
 }
 
+bool burrow__thread_stack_limit(void **lo) {
+    return pal_thread_stack_limit(lo);
+}
+
 int burrow__thread_ncpu(void) {
     int64_t n = pal_cpu_count();
 

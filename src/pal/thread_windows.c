@@ -248,6 +248,24 @@ bool pal_thread_stack_bounds(void **lo, void **hi) {
     return true;
 }
 
+bool pal_thread_stack_limit(void **lo) {
+    /* The bottom of the reservation the stack lives in, which is where the
+     * region holding its top byte was allocated from. GetCurrentThreadStackLimits
+     * says the same from Windows 8 on and VirtualQuery says it everywhere. A
+     * fiber switch rewrites the block, so this is the running fiber's stack. */
+    const NT_TIB *tib = (const NT_TIB *)NtCurrentTeb();
+    MEMORY_BASIC_INFORMATION mbi;
+
+    if (tib == NULL || tib->StackBase == NULL)
+        return false;
+    if (VirtualQuery((const char *)tib->StackBase - 1, &mbi, sizeof mbi) == 0 ||
+        mbi.AllocationBase == NULL)
+        return false;
+
+    BURROW_OUT(lo, mbi.AllocationBase);
+    return true;
+}
+
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic pop
 #endif

@@ -424,6 +424,16 @@ void pal_thread_yield(void);
  * the only caller and it does less rather than guessing. */
 bool pal_thread_stack_bounds(void **lo, void **hi);
 
+/* The lowest address the calling thread's stack can grow down to, for code that
+ * wants to know how deep it can still go. It is the lo of pal_thread_stack_bounds
+ * everywhere but Windows, where that lo is the lowest page committed so far and
+ * the stack can grow past it to the bottom of its reservation. On Windows it is
+ * the stack of the fiber running now, which is what a goroutine runs on there.
+ *
+ * Only ever ask about the thread you are on, and false means the platform has
+ * no way to ask. */
+bool pal_thread_stack_limit(void **lo);
+
 /* Something to run when the calling thread exits, for memory a library keeps
  * per thread. The caller owns the node and it has to stay where it is until
  * fn has run. It cannot be a thread local variable, because a platform may free

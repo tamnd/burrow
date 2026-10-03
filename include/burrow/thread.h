@@ -131,6 +131,13 @@ void burrow__thread_yield(void);
  * caller asking about another thread is asking about a stack that is moving. */
 bool burrow__thread_stack_bounds(void **lo, void **hi);
 
+/* The lowest address the calling thread's stack can grow down to, for asking
+ * how much room is left. That is lo above on every system but Windows, where lo
+ * is only as far down as the stack has been so far. On Windows it answers for
+ * the fiber that is running, which is the goroutine's own stack. False means
+ * the system has no way to ask. */
+bool burrow__thread_stack_limit(void **lo);
+
 /* How many processors this process may run on, at least 1, never 0.
  *
  * The affinity mask where the platform can tell us one, so a container pinned

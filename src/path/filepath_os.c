@@ -34,9 +34,11 @@
 #if defined(BURROW_OS_WINDOWS)
 #define FPO_WIN true
 #define FPO_SEP "\\"
+#define FPO_META "*?["
 #else
 #define FPO_WIN false
 #define FPO_SEP "/"
+#define FPO_META "*?[\\"
 #endif
 
 #define FPO_LIT(s) ((Str){(const Byte *)(s), (Int)sizeof(s) - 1})
@@ -183,7 +185,7 @@ Error filepath_walk(Alloc *a, Str root, FilepathWalkFunc fn) {
 /* ------------------------------------------------------------------- Glob */
 
 static bool fpo_has_meta(Str path) {
-    return strings_contains_any(path, FPO_WIN ? FPO_LIT("*?[") : FPO_LIT("*?[\\"));
+    return strings_contains_any(path, FPO_LIT(FPO_META));
 }
 
 /* cleanGlobPath, or cleanGlobPathWindows there: dir as Split left it, made
@@ -410,6 +412,9 @@ typedef struct FpoBuf {
     Int cap;
 } FpoBuf;
 
+/* The analyzer follows paths here where a Str has a length and no bytes,
+ * which nothing in this file builds, and reports the reads and copies on them.
+ * NOLINTBEGIN(clang-analyzer-core.NullDereference,clang-analyzer-core.NonNullParamChecker) */
 static bool fpo_buf_append(FpoBuf *b, Str s) {
     if (b->len + s.len > b->cap) {
         Int ncap = b->cap * 2 > b->len + s.len ? b->cap * 2 : b->len + s.len + 32;
@@ -442,7 +447,7 @@ static Str fpo_walk_symlinks(Alloc *s, Str path, Error *err) {
     if (!fpo_buf_append(&dest, vol))
         goto oom;
     int links_walked = 0;
-    for (Int start = vol_len, end = vol_len; start < path.len; start = end) {
+    for (Int start = vol_len, end; start < path.len; start = end) {
         while (start < path.len && filepath_is_path_separator(path.p[start]))
             start++;
         end = start;
@@ -451,8 +456,10 @@ static Str fpo_walk_symlinks(Alloc *s, Str path, Error *err) {
 
         /* On Windows "." can be a symlink. It is looked up, and what it
          * points to used if that is absolute, and if not the answer is ".". */
-        Str after_vol = fpo_tail(path, burrow__filepath_volume_name_len(path, FPO_WIN));
-        bool is_windows_dot = FPO_WIN && str_eq(after_vol, FPO_LIT("."));
+        bool is_windows_dot =
+            FPO_WIN &&
+            str_eq(fpo_tail(path, burrow__filepath_volume_name_len(path, FPO_WIN)),
+                   FPO_LIT("."));
 
         Str elem = {path.p + start, end - start};
         if (end == start)
@@ -562,6 +569,7 @@ oom:
     *err = burrow_err_out_of_memory;
     return BURROW_STR_EMPTY;
 }
+/* NOLINTEND(clang-analyzer-core.NullDereference,clang-analyzer-core.NonNullParamChecker) */
 
 #if defined(BURROW_OS_WINDOWS)
 

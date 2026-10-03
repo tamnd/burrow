@@ -84,7 +84,7 @@ static struct sigaction previous[SIG_SLOTS];
  * what was there before the first of them touched the signal and never again,
  * so that neither of them can record the other's dispatcher as the thing to go
  * back to. Written under install_mu. */
-static unsigned char saved[SIG_SLOTS];
+static unsigned char previous_saved[SIG_SLOTS];
 
 /* Serialises the installers, pal_signal_install and pal_signal_relay, which can
  * be called from any thread. The handler never takes it. */
@@ -343,9 +343,9 @@ static bool install_one(int native, int32_t sig, PalSignalHandler handler,
         BURROW_OUT(err, burrow__pal_errno(e));
         return false;
     }
-    if (!saved[native]) {
+    if (!previous_saved[native]) {
         previous[native] = was;
-        saved[native] = 1;
+        previous_saved[native] = 1;
     }
     (void)pthread_mutex_unlock(&install_mu);
 
@@ -624,14 +624,14 @@ bool pal_signal_relay(int32_t native, int32_t how, PalErrno *err) {
 
     /* Whatever happens next replaces the disposition, so this is the last
      * chance to see the one the program started with. */
-    if (!saved[n]) {
+    if (!previous_saved[n]) {
         if (sigaction(n, NULL, &previous[n]) != 0) {
             int e = errno;
             (void)pthread_mutex_unlock(&install_mu);
             BURROW_OUT(err, burrow__pal_errno(e));
             return false;
         }
-        saved[n] = 1;
+        previous_saved[n] = 1;
     }
 
     /* With a PAL handler on the signal too, dispatch stays where it is and the

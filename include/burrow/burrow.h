@@ -118,6 +118,7 @@
 #include "burrow/net/url.h"
 #include "burrow/num.h"
 #include "burrow/os.h"
+#include "burrow/os/user.h"
 #include "burrow/own.h"
 #include "burrow/panic.h"
 #include "burrow/path.h"

@@ -289,7 +289,7 @@ static void tf_int(TfOut *o, Int x, Int width) {
     uint64_t u = (uint64_t)x;
     if (x < 0) {
         tf_putc(o, '-');
-        u = -u;
+        u = 0 - u;
     }
     Byte tmp[24];
     Int i = (Int)sizeof tmp;
@@ -658,7 +658,7 @@ static void tf_string(TfOut *o, Time t, Str layout) {
     Byte sign = '+';
     if (t.ext < 0) {
         sign = '-';
-        m2 = -m2;
+        m2 = 0 - m2;
     }
     uint64_t m1 = m2 / 1000000000;
     m2 %= 1000000000;

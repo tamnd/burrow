@@ -51,6 +51,55 @@ else
 	exit 1
 fi
 
+# The variables of tests/embed_test.c, which burrow-gen embed writes from the
+# files in tests/embedtest. Then the errors it gives for patterns go build
+# refuses, against a tree made here, since a tree with bad names in it is not
+# something to check in.
+tools/burrow-gen embed tests/embed_test.c --dir tests/embedtest -o "$tmp/embed_test_embed.c" 2>"$tmp/err" || {
+	cat "$tmp/err" >&2
+	exit 1
+}
+# The #embed lines name the files relative to where the output is, which here
+# is somewhere else, so they are left out of the comparison.
+grep -v '^#embed ' "$tmp/embed_test_embed.c" >"$tmp/embed.c"
+grep -v '^#embed ' tests/embedtest/embed_test_embed.c >"$tmp/embed_want.c"
+if ! diff -u "$tmp/embed_want.c" "$tmp/embed.c"; then
+	printf 'check-gen: tests/embedtest/embed_test_embed.c is not what burrow-gen embed writes now.\n' >&2
+	printf 'check-gen: regenerate with tools/burrow-gen embed tests/embed_test.c --dir tests/embedtest -o tests/embedtest/embed_test_embed.c\n' >&2
+	exit 1
+fi
+
+e="$tmp/embed"
+mkdir -p "$e/d/.dot" "$e/empty/_skip" "$e/bad"
+printf 'x\n' >"$e/a.txt"
+printf 'x\n' >"$e/b.txt"
+printf 'x\n' >"$e/d/.dot/f"
+printf 'x\n' >"$e/empty/_skip/f"
+printf 'x\n' >"$e/bad/aux.txt"
+embed_fails() {
+	printf '%s\n' "$1" >"$e/x.c"
+	if tools/burrow-gen embed "$e/x.c" -o "$e/x_embed.c" 2>"$e/err"; then
+		printf 'check-gen: burrow-gen embed took %s\n' "$1" >&2
+		exit 1
+	fi
+	got=$(sed "s|^burrow-gen: $e/x.c:1: ||" "$e/err")
+	if [ "$got" != "$2" ]; then
+		printf 'check-gen: burrow-gen embed on %s said\n%s\nwant\n%s\n' "$1" "$got" "$2" >&2
+		exit 1
+	fi
+}
+embed_fails 'BURROW_EMBED_FILE(s, "nope.txt");' 'pattern nope.txt: no matching files found'
+embed_fails 'BURROW_EMBED_FILE(s, "*.txt");' 'invalid go:embed: multiple files for type string'
+embed_fails 'BURROW_EMBED_BYTES(s, "a.txt b.txt");' 'invalid go:embed: multiple files for type []byte'
+embed_fails 'BURROW_EMBED_FS(s, "../a.txt");' 'pattern ../a.txt: invalid pattern syntax'
+embed_fails 'BURROW_EMBED_FS(s, "[");' 'pattern [: invalid pattern syntax'
+embed_fails 'BURROW_EMBED_FS(s, "empty");' 'pattern empty: cannot embed directory empty: contains no embeddable files'
+embed_fails 'BURROW_EMBED_FS(s, "bad");' 'pattern bad: cannot embed file bad/aux.txt: invalid name aux.txt'
+embed_fails 'BURROW_EMBED_FS(s, "\"a.txt");' 'invalid quoted string in //go:embed: "a.txt'
+embed_fails 'BURROW_EMBED_FS(s);' 'usage: BURROW_EMBED_FS(s, "pattern"...)'
+
+printf 'check-gen: burrow-gen embed output is up to date and its errors are go build'"'"'s\n'
+
 # The same for burrow-gen tests, whose output for the fixture is checked in and
 # built with the tests. The one line allowed to differ is the Go release it was
 # generated with, and without Go there is nothing to generate with.

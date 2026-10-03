@@ -1181,8 +1181,21 @@ def doc_run(root, cc, sanitize):
             os.makedirs(work)
             rel = os.path.relpath(ex, root)
             exe = os.path.join(tmp, "ex")
+            srcs = [ex]
+            with open(ex) as f:
+                embeds = EMBED_MACRO.search(f.read())
+            if embeds:
+                # A program with BURROW_EMBED_ in it gets its variables from
+                # burrow-gen embed, the way a build that uses it would.
+                gen = os.path.join(tmp, "ex_embed.c")
+                try:
+                    run_embed(argparse.Namespace(source=ex, output=gen, dir=None, mode="auto", deps=None))
+                except Error as e:
+                    problems.append("%s: burrow-gen embed failed: %s" % (rel, e))
+                    continue
+                srcs.append(gen)
             r = subprocess.run(
-                [cc] + flags + warn + ["-I" + inc, "-I" + tmp, ex, obj, "-lm", "-o", exe],
+                [cc] + flags + warn + ["-I" + inc, "-I" + tmp] + srcs + [obj, "-lm", "-o", exe],
                 capture_output=True,
                 text=True,
             )
@@ -1472,6 +1485,634 @@ def run_collisions(args):
     return 1 if found else 0
 
 
+# ------------------------------------------------------------------- embed
+#
+# The half of //go:embed that go build does: find the macros, resolve their
+# patterns against the files on disk with the rules of resolveEmbed in
+# cmd/go/internal/load/pkg.go, and write the variables the compiler would have
+# filled in, with the order and the parent directories of embedFileList in
+# cmd/compile/internal/staticdata/embed.go.
+
+EMBED_MACRO = re.compile(r"\bBURROW_EMBED_(FILE|BYTES|FS)\s*\(")
+EMBED_KINDS = {"FILE": "string", "BYTES": "[]byte", "FS": "embed.FS"}
+EMBED_BAD_WINDOWS = {
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+}
+EMBED_C_ESCAPES = {"n": 10, "t": 9, "r": 13, "a": 7, "b": 8, "f": 12, "v": 11, "\\": 92, "'": 39, '"': 34, "?": 63}
+
+
+class EmbedBadPattern(Exception):
+    pass
+
+
+def embed_strip_comments(text):
+    """The source with its comments blanked out and its line breaks kept, so
+    a macro in a comment is not seen and line numbers still count."""
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in "\"'":
+            j = i + 1
+            while j < n and text[j] != c and text[j] != "\n":
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i : j + 1])
+            i = j + 1
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append(re.sub(r"[^\n]", " ", text[i:j]))
+            i = j
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out.append(" " * (j - i))
+            i = j
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def embed_c_string(body):
+    """The bytes a C string literal's body stands for, decoded as UTF-8."""
+    b = bytearray()
+    i, n = 0, len(body)
+    while i < n:
+        c = body[i]
+        if c != "\\":
+            b += c.encode("utf-8")
+            i += 1
+            continue
+        i += 1
+        if i >= n:
+            raise Error("a string ends in a backslash")
+        c = body[i]
+        if c in EMBED_C_ESCAPES:
+            b.append(EMBED_C_ESCAPES[c])
+            i += 1
+        elif c in "01234567":
+            j = i
+            while j < n and j < i + 3 and body[j] in "01234567":
+                j += 1
+            b.append(int(body[i:j], 8) & 0xFF)
+            i = j
+        elif c == "x":
+            j = i + 1
+            while j < n and body[j] in "0123456789abcdefABCDEF":
+                j += 1
+            if j == i + 1:
+                raise Error("\\x with no digits in a string")
+            b.append(int(body[i + 1 : j], 16) & 0xFF)
+            i = j
+        elif c in "uU":
+            k = 4 if c == "u" else 8
+            b += chr(int(body[i + 1 : i + 1 + k], 16)).encode("utf-8")
+            i += 1 + k
+        else:
+            raise Error("unknown escape \\%s in a string" % c)
+    try:
+        return b.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Error("a pattern that is not UTF-8")
+
+
+def embed_scan(path):
+    """Every macro in the file: (line, kind, name, [directive strings])."""
+    with open(path, encoding="utf-8") as f:
+        text = embed_strip_comments(f.read())
+    found = []
+    for m in EMBED_MACRO.finditer(text):
+        line = text.count("\n", 0, m.start()) + 1
+        start = text.rfind("\n", 0, m.start()) + 1
+        if text[start : m.start()].lstrip().startswith("#"):
+            continue
+        where = "%s:%d" % (path, line)
+        rest = text[m.end() :]
+        nm = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*", rest)
+        if not nm:
+            raise Error("%s: BURROW_EMBED_%s needs a variable name first" % (where, m.group(1)))
+        pos = nm.end()
+        args = []
+        cur = None
+        while True:
+            s = re.match(r"\s*", rest[pos:])
+            pos += s.end()
+            if pos >= len(rest):
+                raise Error("%s: BURROW_EMBED_%s is not closed" % (where, m.group(1)))
+            c = rest[pos]
+            if c == ")":
+                if cur is not None:
+                    args.append(cur)
+                break
+            if c == ",":
+                if cur is not None:
+                    args.append(cur)
+                cur = ""
+                pos += 1
+                continue
+            lit = re.match(r'(?:u8)?"((?:[^"\\\n]|\\.)*)"', rest[pos:])
+            if not lit or cur is None:
+                raise Error("%s: the patterns of BURROW_EMBED_%s have to be string literals" % (where, m.group(1)))
+            cur += embed_c_string(lit.group(1))
+            pos += lit.end()
+        found.append((line, m.group(1), nm.group(1), args))
+    return found
+
+
+def embed_quoted_prefix(s):
+    """strconv.QuotedPrefix and Unquote for a Go string literal at the start
+    of s: (the literal's length, its value), or None."""
+    if s[0] == "`":
+        j = s.find("`", 1)
+        if j < 0:
+            return None
+        return j + 1, s[1:j].replace("\r", "")
+    out = bytearray()
+    i = 1
+    while i < len(s):
+        c = s[i]
+        if c == '"':
+            try:
+                return i + 1, out.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+        if c == "\n":
+            return None
+        if c != "\\":
+            out += c.encode("utf-8")
+            i += 1
+            continue
+        i += 1
+        if i >= len(s):
+            return None
+        c = s[i]
+        if c in 'abfnrtv\\"':
+            out.append(EMBED_C_ESCAPES[c])
+            i += 1
+        elif c in "01234567":
+            if not re.match(r"[0-7]{3}", s[i : i + 3]) or int(s[i : i + 3], 8) > 255:
+                return None
+            out.append(int(s[i : i + 3], 8))
+            i += 3
+        elif c in "xuU":
+            k = {"x": 2, "u": 4, "U": 8}[c]
+            h = s[i + 1 : i + 1 + k]
+            if len(h) != k or not re.match(r"^[0-9a-fA-F]+$", h):
+                return None
+            v = int(h, 16)
+            if c == "x":
+                out.append(v)
+            else:
+                if v > 0x10FFFF or 0xD800 <= v < 0xE000:
+                    return None
+                out += chr(v).encode("utf-8")
+            i += 1 + k
+        else:
+            return None
+    return None
+
+
+def embed_args(directive, where):
+    """ast.Directive.ParseArgs: the patterns in one directive's text."""
+    out = []
+    s = directive
+    while True:
+        s = s.lstrip()
+        if not s:
+            return out
+        if s[0] in '`"':
+            q = embed_quoted_prefix(s)
+            if q is None or (len(s) > q[0] and not s[q[0]].isspace()):
+                raise Error("%s: invalid quoted string in //go:embed: %s" % (where, s))
+            out.append(q[1])
+            s = s[q[0] :]
+        else:
+            j = 0
+            while j < len(s) and not s[j].isspace():
+                j += 1
+            out.append(s[:j])
+            s = s[j:]
+
+
+def embed_valid_path(name):
+    """fs.ValidPath."""
+    if name == ".":
+        return True
+    for elem in name.split("/"):
+        if elem in ("", ".", ".."):
+            return False
+    return True
+
+
+def embed_file_name_ok(r):
+    if ord(r) < 0x80:
+        return r.isalnum() or r in "!#$%&()+,-.=@[]^_{}~ "
+    import unicodedata
+
+    return unicodedata.category(r).startswith("L")
+
+
+def embed_is_bad_name(name):
+    """isBadEmbedName, with module.CheckFilePath's rules for one element."""
+    if name in ("", ".bzr", ".hg", ".git", ".svn"):
+        return True
+    try:
+        name.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    if name.count(".") == len(name) or name.endswith("."):
+        return True
+    if not all(embed_file_name_ok(r) for r in name):
+        return True
+    return name.split(".", 1)[0].upper() in EMBED_BAD_WINDOWS
+
+
+def embed_scan_chunk(pattern):
+    star = False
+    while pattern.startswith("*"):
+        pattern = pattern[1:]
+        star = True
+    inrange = False
+    i = 0
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "\\":
+            if i + 1 < len(pattern):
+                i += 1
+        elif c == "[":
+            inrange = True
+        elif c == "]":
+            inrange = False
+        elif c == "*" and not inrange:
+            return star, pattern[:i], pattern[i:]
+        i += 1
+    return star, pattern, ""
+
+
+def embed_get_esc(chunk):
+    if not chunk or chunk[0] in "-]":
+        raise EmbedBadPattern()
+    if chunk[0] == "\\":
+        chunk = chunk[1:]
+        if not chunk:
+            raise EmbedBadPattern()
+    r, chunk = chunk[0], chunk[1:]
+    if not chunk:
+        raise EmbedBadPattern()
+    return r, chunk
+
+
+def embed_match_chunk(chunk, s):
+    failed = False
+    while chunk:
+        failed = failed or not s
+        c = chunk[0]
+        if c == "[":
+            r = ""
+            if not failed:
+                r, s = s[0], s[1:]
+            chunk = chunk[1:]
+            negated = False
+            if chunk and chunk[0] == "^":
+                negated = True
+                chunk = chunk[1:]
+            match = False
+            nrange = 0
+            while True:
+                if chunk and chunk[0] == "]" and nrange > 0:
+                    chunk = chunk[1:]
+                    break
+                lo, chunk = embed_get_esc(chunk)
+                hi = lo
+                if chunk[0] == "-":
+                    hi, chunk = embed_get_esc(chunk[1:])
+                match = match or (r != "" and lo <= r <= hi)
+                nrange += 1
+            failed = failed or match == negated
+        elif c == "?":
+            if not failed:
+                failed = s[0] == "/"
+                s = s[1:]
+            chunk = chunk[1:]
+        else:
+            if c == "\\":
+                chunk = chunk[1:]
+                if not chunk:
+                    raise EmbedBadPattern()
+            if not failed:
+                failed = chunk[0] != s[0]
+                s = s[1:]
+            chunk = chunk[1:]
+    if failed:
+        return None
+    return s
+
+
+def embed_match(pattern, name):
+    """path.Match, raising EmbedBadPattern where Go returns ErrBadPattern."""
+    while pattern:
+        star, chunk, pattern = embed_scan_chunk(pattern)
+        if star and chunk == "":
+            return "/" not in name
+        t = embed_match_chunk(chunk, name)
+        if t is not None and (t == "" or pattern):
+            name = t
+            continue
+        if star:
+            matched = False
+            i = 0
+            while i < len(name) and name[i] != "/":
+                t = embed_match_chunk(chunk, name[i + 1 :])
+                if t is not None:
+                    if not pattern and t:
+                        i += 1
+                        continue
+                    name = t
+                    matched = True
+                    break
+                i += 1
+            if matched:
+                continue
+        while pattern:
+            _, chunk, pattern = embed_scan_chunk(pattern)
+            embed_match_chunk(chunk, "")
+        return False
+    return name == ""
+
+
+def embed_has_meta(s):
+    return any(c in s for c in "*?[\\")
+
+
+def embed_lstat(base, rel):
+    try:
+        return os.lstat(os.path.join(base, *rel.split("/")))
+    except OSError:
+        return None
+
+
+def embed_glob_in(base, d, pattern):
+    full = os.path.join(base, *d.split("/")) if d != "." else base
+    if not os.path.isdir(full):
+        return []
+    out = []
+    for n in sorted(os.listdir(full), key=lambda x: x.encode("utf-8", "surrogateescape")):
+        if embed_match(pattern, n):
+            out.append(n if d == "." else d + "/" + n)
+    return out
+
+
+def embed_glob(base, pattern):
+    """filepath.Glob under base, for a slash separated pattern."""
+    if not embed_has_meta(pattern):
+        return [pattern] if embed_lstat(base, pattern) is not None else []
+    d, f = posixpath.split(pattern)
+    d = d or "."
+    if not embed_has_meta(d):
+        return embed_glob_in(base, d, f)
+    out = []
+    for m in embed_glob(base, d):
+        out += embed_glob_in(base, m, f)
+    return out
+
+
+def embed_resolve(base, pattern):
+    """resolveEmbed for one pattern: the files it names, sorted."""
+    import stat
+
+    glob_, all_ = pattern, False
+    if glob_.startswith("all:"):
+        glob_, all_ = glob_[4:], True
+    try:
+        embed_match(glob_, "")
+        ok = glob_ != "." and embed_valid_path(glob_)
+    except EmbedBadPattern:
+        ok = False
+    if not ok:
+        raise Error("invalid pattern syntax")
+    have = set()
+    for rel in embed_glob(base, glob_):
+        info = embed_lstat(base, rel)
+        if info is None:
+            raise Error("lstat %s: no such file or directory" % rel)
+        what = "directory" if stat.S_ISDIR(info.st_mode) else "file"
+        parts = rel.split("/")
+        for k in range(len(parts), 0, -1):
+            d = "/".join(parts[:k])
+            if k < len(parts):
+                di = embed_lstat(base, d)
+                if di is not None and not stat.S_ISDIR(di.st_mode):
+                    raise Error("cannot embed %s %s: in non-directory %s" % (what, rel, d))
+            if embed_is_bad_name(parts[k - 1]):
+                if k == len(parts):
+                    raise Error("cannot embed %s %s: invalid name %s" % (what, rel, parts[k - 1]))
+                raise Error("cannot embed %s %s: in invalid directory %s" % (what, rel, parts[k - 1]))
+        if stat.S_ISREG(info.st_mode):
+            have.add(rel)
+        elif stat.S_ISDIR(info.st_mode):
+            # fs.WalkDir, lexical and depth first, so the first bad name it
+            # meets is the one Go would report.
+            def walk(d):
+                n_ = 0
+                for n in sorted(os.listdir(os.path.join(base, *d.split("/")))):
+                    p = d + "/" + n
+                    st = embed_lstat(base, p)
+                    if st is None:
+                        continue
+                    if embed_is_bad_name(n) or (n[0] in "._" and not all_):
+                        if stat.S_ISDIR(st.st_mode) or n[0] in "._":
+                            continue
+                        raise Error("cannot embed file %s: invalid name %s" % (p, n))
+                    if stat.S_ISDIR(st.st_mode):
+                        n_ += walk(p)
+                    elif stat.S_ISREG(st.st_mode):
+                        n_ += 1
+                        have.add(p)
+                return n_
+
+            count = walk(rel)
+            if count == 0:
+                raise Error("cannot embed directory %s: contains no embeddable files" % rel)
+        else:
+            raise Error("cannot embed irregular file %s" % rel)
+    if not have:
+        raise Error("no matching files found")
+    return sorted(have)
+
+
+def embed_split(name):
+    name = name[:-1] if name.endswith("/") else name
+    i = name.rfind("/")
+    if i < 0:
+        return ".", name
+    return name[:i], name[i + 1 :]
+
+
+def embed_list(base, kind, patterns, where):
+    """embedFileList: the files a variable gets, with an FS's directories."""
+    have = set()
+    out = []
+    for p in patterns:
+        try:
+            files = embed_resolve(base, p)
+        except Error as e:
+            raise Error("%s: pattern %s: %s" % (where, p, e))
+        for f in files:
+            if f not in have:
+                have.add(f)
+                out.append(f)
+            if kind == "FS":
+                d = posixpath.dirname(f)
+                while d not in ("", ".") and d not in have:
+                    have.add(d)
+                    out.append(d + "/")
+                    d = posixpath.dirname(d)
+    if kind != "FS" and len(out) > 1:
+        raise Error("%s: invalid go:embed: multiple files for type %s" % (where, EMBED_KINDS[kind]))
+    out.sort(key=lambda f: tuple(s.encode("utf-8") for s in embed_split(f)))
+    return out
+
+
+def embed_c_literal(s):
+    """A C string literal for s, with every byte that is not plain ASCII as an
+    octal escape, which cannot run into the character after it."""
+    out = []
+    for b in s.encode("utf-8"):
+        c = chr(b)
+        if c in '"\\?':
+            out.append("\\" + c)
+        elif 0x20 <= b < 0x7F:
+            out.append(c)
+        else:
+            out.append("\\%03o" % b)
+    return '"' + "".join(out) + '"'
+
+
+def embed_array(lines, name, data, mode, include, writable):
+    lines.append("static %sByte %s[] = {" % ("" if writable else "const ", name))
+    if mode in ("auto", "embed"):
+        if mode == "auto":
+            lines.append("#ifdef BURROW__EMBED_HAVE")
+        lines.append("#embed %s suffix(, )" % embed_c_literal(include))
+        if mode == "auto":
+            lines.append("#else")
+    if mode in ("auto", "array"):
+        for i in range(0, len(data), 12):
+            lines.append("    " + " ".join("0x%02x," % b for b in data[i : i + 12]))
+    if mode == "auto":
+        lines.append("#endif")
+    lines.append("    0,")
+    lines.append("};")
+
+
+def run_embed(args):
+    src = args.source
+    base = args.dir if args.dir is not None else (os.path.dirname(src) or ".")
+    out_dir = os.path.dirname(os.path.abspath(args.output)) if args.output != "-" else os.getcwd()
+    macros = embed_scan(src)
+    if not macros:
+        raise Error("%s has no BURROW_EMBED_FILE, BURROW_EMBED_BYTES or BURROW_EMBED_FS" % src)
+
+    vars_ = []
+    for line, kind, name, directives in macros:
+        where = "%s:%d" % (src, line)
+        patterns = []
+        for d in directives:
+            patterns += embed_args(d, where)
+        if not patterns:
+            raise Error('%s: usage: BURROW_EMBED_%s(%s, "pattern"...)' % (where, kind, name))
+        vars_.append((kind, name, embed_list(base, kind, patterns, where)))
+
+    contents = {}
+    deps = []
+
+    def read(rel):
+        if rel not in contents:
+            p = os.path.join(base, *rel.split("/"))
+            with open(p, "rb") as f:
+                contents[rel] = f.read()
+            deps.append(p)
+        return contents[rel]
+
+    def include(rel):
+        return os.path.relpath(os.path.join(base, *rel.split("/")), out_dir).replace(os.sep, "/")
+
+    lines = [
+        "/* Code generated by burrow-gen embed from %s. DO NOT EDIT. */" % os.path.basename(src),
+        "",
+        '#include "burrow/embed.h"',
+        '#include "burrow/type.h"',
+        "",
+    ]
+    if args.mode == "auto":
+        lines += [
+            "#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L && defined(__has_embed)",
+            "#define BURROW__EMBED_HAVE 1",
+            "#endif",
+            "",
+        ]
+
+    shared = {}
+    for kind, name, files in vars_:
+        if kind == "BYTES":
+            continue
+        for f in files:
+            if not f.endswith("/") and f not in shared:
+                shared[f] = "embed_data_%d" % len(shared)
+                embed_array(lines, shared[f], read(f), args.mode, include(f), False)
+                lines.append("")
+
+    for kind, name, files in vars_:
+        if kind == "FILE":
+            arr = shared[files[0]]
+            lines.append("extern const Str %s;" % name)
+            lines.append("const Str %s = {%s, (Int)sizeof %s - 1};" % (name, arr, arr))
+        elif kind == "BYTES":
+            arr = "embed_bytes_%s" % name
+            embed_array(lines, arr, read(files[0]), args.mode, include(files[0]), True)
+            lines.append("")
+            lines.append("extern Slice %s;" % name)
+            lines.append(
+                "Slice %s = {%s, (Int)sizeof %s - 1, (Int)sizeof %s - 1, TYPE_BYTE};" % (name, arr, arr, arr)
+            )
+        else:
+            lines.append("static const EmbedFile embed_files_%s[] = {" % name)
+            for f in files:
+                n = embed_c_literal(f)
+                ln = len(f.encode("utf-8"))
+                if f.endswith("/"):
+                    lines.append("    {{(const Byte *)%s, %d}, {NULL, 0}, {0}}," % (n, ln))
+                    continue
+                arr = shared[f]
+                h = hashlib.sha256(read(f)).digest()[:16]
+                lines.append("    {{(const Byte *)%s, %d}," % (n, ln))
+                lines.append("     {%s, (Int)sizeof %s - 1}," % (arr, arr))
+                lines.append("     {%s}}," % ", ".join("0x%02x" % b for b in h))
+            lines.append("};")
+            lines.append("")
+            lines.append("extern const EmbedFS %s;" % name)
+            lines.append(
+                "const EmbedFS %s = {embed_files_%s, (Int)(sizeof embed_files_%s / sizeof embed_files_%s[0])};"
+                % (name, name, name, name)
+            )
+        lines.append("")
+
+    text = "\n".join(lines).rstrip("\n") + "\n"
+    if args.output == "-":
+        sys.stdout.write(text)
+    else:
+        with open(args.output, "w") as f:
+            f.write(text)
+    if args.deps:
+        target = args.output if args.output != "-" else "-"
+        with open(args.deps, "w") as f:
+            f.write("%s: %s\n" % (target, " ".join([src] + sorted(set(deps)))))
+    return len(vars_)
+
+
 def main():
     p = argparse.ArgumentParser(
         prog=PROG,
@@ -1560,7 +2201,29 @@ def main():
     t.add_argument("--no-format", action="store_true", help="leave the output as it comes, without clang-format")
     t.add_argument("--root", metavar="DIR", help="the burrow tree to read, default the one this script is in")
 
+    e = sub.add_parser("embed", help="the variables of BURROW_EMBED_FILE, _BYTES and _FS in a C file")
+    e.add_argument("source", help="the C file with the macros in it")
+    e.add_argument("-o", "--output", default="-", help="where to write, - for stdout")
+    e.add_argument("--dir", metavar="DIR", help="what the patterns are relative to, default the source's directory")
+    e.add_argument(
+        "--mode",
+        choices=("auto", "array", "embed"),
+        default="auto",
+        help="the bytes as #embed where the compiler has it and an array where not, the default, or one of them",
+    )
+    e.add_argument("--deps", metavar="FILE", help="also write a make rule naming the files read")
+
     args = p.parse_args()
+
+    if args.command == "embed":
+        try:
+            n = run_embed(args)
+        except Error as e:
+            sys.stderr.write("%s: %s\n" % (PROG, e))
+            return 1
+        if args.output != "-":
+            sys.stderr.write("%s: %d variable%s to %s\n" % (PROG, n, "" if n == 1 else "s", args.output))
+        return 0
 
     if args.command == "tests":
         try:

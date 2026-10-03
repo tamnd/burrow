@@ -271,6 +271,11 @@ if(BURROW_BUILD_TESTS)
         add_test(NAME ${test_name} COMMAND ${test_name})
     endforeach()
 
+    # embed_test's variables are in a file burrow-gen embed writes, and the test
+    # reads one of the files it embedded from the tree to compare.
+    target_sources(embed_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests/embedtest/embed_test_embed.c)
+    set_tests_properties(embed_test PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
     # The one test that fuzzes with the compiler's coverage counters, as the
     # Makefile builds it: 8-bit counters where the compiler has them, trace-pc
     # where it does not, and neither under MSVC, whose counters need its own

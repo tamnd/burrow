@@ -240,6 +240,13 @@ $(BUILD)/tests/gen_tests_fixture_test: $(GEN_TESTS_FIXTURE) $(TEST_GEN) $(LIB)
 
 $(BUILD)/tests/testing_cover_test: TEST_EXTRA = $(COVERFLAGS)
 
+# The variables tests/embed_test.c declares, which burrow-gen embed writes. The
+# file is checked in, so building the tests needs no Python, and
+# tools/check-gen.sh keeps it up to date.
+EMBED_TEST_GEN := tests/embedtest/embed_test_embed.c
+$(BUILD)/tests/embed_test: TEST_EXTRA = $(EMBED_TEST_GEN)
+$(BUILD)/tests/embed_test: $(EMBED_TEST_GEN)
+
 -include $(DEPS)
 
 # One line for each binary, the way go test prints a package, and the whole of

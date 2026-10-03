@@ -233,7 +233,7 @@ if (BURROW_FAILED(err))
 printf("group " BURROW_STR_FMT "\n", BURROW_STR_ARG(g->gid));
 ```
 
-On Unix the answers come from the C library, through `getpwnam_r` and the rest, so they see whatever the system is set up to use, LDAP and NIS included. Building with `BURROW_OSUSERGO` reads `/etc/passwd` and `/etc/group` instead, which is what Go does with the `osusergo` build tag. Windows is not done yet, and there every call returns an error. `user_current` asks once and keeps the answer, so ask again with `user_lookup_id` if the process changes its uid. Each result is one allocation, freed with `user_free` or `user_group_free`.
+On Unix the answers come from the C library, through `getpwnam_r` and the rest, so they see whatever the system is set up to use, LDAP and NIS included. Building with `BURROW_OSUSERGO` reads `/etc/passwd` and `/etc/group` instead, which is what Go does with the `osusergo` build tag. On Windows ids are SIDs such as `S-1-5-18`, usernames look like `NT AUTHORITY\SYSTEM`, and the answers come from the process token, `LookupAccountName` and `NetUserGetInfo`, as in Go. An account that doesn't exist gives the system's error there, not `UnknownUserError`, which is what Go does too. `user_current` asks once and keeps the answer, so ask again with `user_lookup_id` if the process changes its uid. Each result is one allocation, freed with `user_free` or `user_group_free`.
 
 A name or id that is not there gives one of four error types, which you can pick out with `errors_as`:
 

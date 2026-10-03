@@ -36,7 +36,9 @@
 static PalErrno win_map(unsigned long native) {
     switch (native) {
     case ERROR_SUCCESS:
-        return PAL_EOTHER; /* nothing failed, so nobody should be asking */
+        /* A call that failed without setting an error, which wine does. Go's
+         * errnoErr makes that EINVAL. */
+        return PAL_EINVAL;
     case ERROR_FILE_NOT_FOUND:
     case ERROR_PATH_NOT_FOUND:
     case ERROR_INVALID_DRIVE:
@@ -209,8 +211,9 @@ int64_t pal_errno_message(int64_t native, char *buf, int64_t cap, PalErrno *err)
     const DWORD flags = FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ARGUMENT_ARRAY |
                         FORMAT_MESSAGE_IGNORE_INSERTS;
     wchar_t w[300];
-    DWORD n = FormatMessageW(flags, NULL, (DWORD)native,
-                             MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), w, 300, NULL);
+    DWORD n =
+        FormatMessageW(flags, NULL, (DWORD)native,
+                       MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), w, 300, NULL);
     if (n == 0)
         n = FormatMessageW(flags, NULL, (DWORD)native, 0, w, 300, NULL);
     if (n == 0) {

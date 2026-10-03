@@ -13,7 +13,11 @@
  * which is Go's osusergo build tag, and the answers come from parsing
  * /etc/passwd and /etc/group instead, which is what Go does without cgo.
  *
- * Windows is not done yet, and every lookup there returns an error saying so.
+ * On Windows a uid or gid is a SID such as "S-1-5-21-...-1001", a username is
+ * "DOMAIN\user", and the answers come from the process token, the account
+ * database and the registry, as in Go. Looking up an account that does not
+ * exist gives the system's error there rather than the Unknown errors below,
+ * which is also what Go does.
  *
  * A User or UserGroup is one allocation from a that holds every string in it,
  * and user_free or user_group_free gives it back. The Slice that

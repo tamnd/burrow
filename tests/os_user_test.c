@@ -857,9 +857,9 @@ static void lookup_service_account(void *env, TestingT *t) {
  * arena here, so they run one after another. */
 static void TestLookupServiceAccount(TestingT *t) {
     for (int i = 0; i < 3; i++)
-        testing_t_run(t, S(service_accounts[i].name),
+        testing_t_run(t, str_from_cstr(service_accounts[i].name),
                       BURROW_FN(TestingTFunc, lookup_service_account,
-                                (void *)&service_accounts[i]));
+                                (void *)(uintptr_t)&service_accounts[i]));
 }
 
 static void TestLookupIdServiceAccount(TestingT *t) {
@@ -902,9 +902,9 @@ static void lookup_group_service_account(void *env, TestingT *t) {
 
 static void TestLookupGroupServiceAccount(TestingT *t) {
     for (int i = 0; i < 3; i++)
-        testing_t_run(t, S(service_accounts[i].name),
+        testing_t_run(t, str_from_cstr(service_accounts[i].name),
                       BURROW_FN(TestingTFunc, lookup_group_service_account,
-                                (void *)&service_accounts[i]));
+                                (void *)(uintptr_t)&service_accounts[i]));
 }
 
 static void TestLookupGroupIdServiceAccount(TestingT *t) {
@@ -950,7 +950,7 @@ static void TestWindowsErrors(TestingT *t) {
 #endif /* BURROW_OS_WINDOWS */
 
 #if defined(BURROW_OS_WINDOWS)
-#define WINDOWS_TESTS                                                                  \
+#define WINDOWS_TESTS(X)                                                               \
     X(TestImpersonatedSelf)                                                            \
     X(TestImpersonated)                                                                \
     X(TestCurrentNetapi32)                                                             \
@@ -961,7 +961,7 @@ static void TestWindowsErrors(TestingT *t) {
     X(TestLookupGroupIdServiceAccount)                                                 \
     X(TestWindowsErrors)
 #else
-#define WINDOWS_TESTS
+#define WINDOWS_TESTS(X)
 #endif
 
 #define TESTS(X)                                                                       \
@@ -980,7 +980,7 @@ static void TestWindowsErrors(TestingT *t) {
     X(TestListGroups)                                                                  \
     X(TestNegativeUid)                                                                 \
     X(TestErrorValues)                                                                 \
-    WINDOWS_TESTS
+    WINDOWS_TESTS(X)
 
 static int os_user_main(TestingM *m) {
     setup();

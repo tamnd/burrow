@@ -208,6 +208,15 @@ static void big_stack_body(void *env) {
 }
 
 static void on_big_stack(TestingT *t, void (*fn)(TestingT *t)) {
+#if BURROW_TSAN
+    /* The thread sanitizer keeps its own copy of each thread's call stack in
+     * an array of 65536 entries and doesn't check for the end of it. These go
+     * up to ten thousand levels deep, and through an UnmarshalXML method that
+     * is seven calls a level, so the copy runs past the array into the
+     * sanitizer's own memory and it crashes later, somewhere else. Go's race
+     * detector grows that array and the C one can't. */
+    testing_t_skip_v(t, "too deep for the thread sanitizer's call stack");
+#endif
     static BigStack b;
     memset(&b, 0, sizeof b);
     b.t = t;

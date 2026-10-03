@@ -448,8 +448,9 @@ static void TestDescriptor(TestingT *t) {
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
     CHECK(type_methods_sorted(TYPE_TIME));
-    CHECK_INT_EQ(TYPE_TIME->nmethod, 12);
+    CHECK_INT_EQ(TYPE_TIME->nmethod, 13);
     CHECK(type_method_by_name(TYPE_TIME, BURROW_S("String")) != NULL);
+    CHECK(type_method_by_name(TYPE_TIME, BURROW_S("IsZero")) != NULL);
     CHECK(type_method_by_name(TYPE_TIME, BURROW_S("MarshalJSON")) != NULL);
     CHECK(type_method_by_name(TYPE_TIME, BURROW_S("Format")) == NULL);
 

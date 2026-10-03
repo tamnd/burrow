@@ -160,6 +160,10 @@ static bool jv_all_letters(Str s) {
     return jv_letters_len(s) == s.len;
 }
 
+bool burrow__jsonv2_all_letters(Str s) {
+    return jv_all_letters(s);
+}
+
 /* Persistent errors: what the cache keeps lives as long as the process. */
 /* Where everything a struct's fields need comes from while they are worked
  * out: an arena of the struct's own, which the result keeps and nothing ever
@@ -215,6 +219,10 @@ static Error jv_consume_tag_option(Str in, bool allow_quoted, Str *out, Int *n) 
                 }
                 Error uerr = BURROW_NO_ERROR;
                 Str u = strconv_unquote(JV_HEAP, str_from_bytes(b.p, b.len), &uerr);
+                /* With nothing to unescape, Unquote hands back a piece of
+                 * its input, which is about to go. */
+                if (BURROW_OK(uerr) && u.len > 0 && u.p >= b.p && u.p < b.p + b.len)
+                    u = str_clone(JV_HEAP, u);
                 burrow__jsonbuf_free(&b);
                 if (BURROW_FAILED(uerr))
                     return burrow__jsonv2_errorf_in(

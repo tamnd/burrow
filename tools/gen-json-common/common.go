@@ -20,7 +20,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
+
+var timeType = reflect.TypeFor[time.Time]()
 
 var (
 	genTypeIDs   = map[reflect.Type]int{}
@@ -349,6 +352,14 @@ func (g *builder) value(v reflect.Value, lv string) {
 // The dump of a value, which the C test makes the same way.
 func dump(b *strings.Builder, v reflect.Value, path map[uintptr]bool) {
 	t := v.Type()
+	// A time.Time is the instant and its offset. The zone's name is left out,
+	// since which zone a parse lands in can depend on the machine's Local.
+	if t == timeType && v.CanInterface() {
+		tm := v.Interface().(time.Time)
+		_, off := tm.Zone()
+		fmt.Fprintf(b, "T%d.%d%+d", tm.Unix(), tm.Nanosecond(), off)
+		return
+	}
 	switch t.Kind() {
 	case reflect.Bool:
 		fmt.Fprintf(b, "%t", v.Bool())

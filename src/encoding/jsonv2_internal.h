@@ -11,8 +11,12 @@
 
 #include "burrow/encoding/json.h"
 #include "burrow/encoding/json/v2.h"
+#include "burrow/time.h"
 
 #include "json_internal.h"
+
+#define JV_GET(o, f) jsonflags_get((o), (f))
+#define JV_HAS(o, f) jsonflags_has((o), (f))
 
 #define JV_LIT(s) ((Str){(const Byte *)("" s), (Int)(sizeof(s) - 1)})
 
@@ -248,6 +252,31 @@ Error burrow__jsonv2_errorf_in(Alloc *a, const char *fmt, ...);
 Error burrow__json_transform_marshal_error(Error err);
 Error burrow__json_transform_unmarshal_error(Any root, Error err);
 Error burrow__json_new_marshaler_error(const Type *t, Error err, const char *src);
+
+/* Whether s is all letters, digits and underscores, which is Go's
+ * strings.TrimFunc(s, isLetterOrDigit) == "". */
+bool burrow__jsonv2_all_letters(Str s);
+
+/* The arshalers arshal_time.go gives Time and Duration, which come before any
+ * methods the two have. */
+bool burrow__jsonv2_is_time_type(const Type *t);
+Error burrow__jsonv2_marshal_time(JsontextEncoder *e, const Type *t, void *p,
+                                  JsontextOptions *mo);
+Error burrow__jsonv2_unmarshal_time(JsontextDecoder *d, const Type *t, void *p,
+                                    JsontextOptions *uo);
+
+/* The pieces of the two that Go's arshal_time_test.go tests on their own.
+ * base and pow10 are as in Go: 0 for Duration's String or RFC 3339, 1, 1e3,
+ * 1e6 or 1e9 for a decimal count of a unit, and 8601 for ISO 8601. */
+extern const Error burrow__jsonv2_err_inaccurate_date_units;
+Error burrow__jsonv2_append_duration(JsonBuf *b, Duration td, uint64_t base);
+Duration burrow__jsonv2_parse_duration(Str b, uint64_t base, Error *err);
+void burrow__jsonv2_append_duration_base10(JsonBuf *b, Duration d, uint64_t pow10);
+Duration burrow__jsonv2_parse_duration_base10(Str b, uint64_t pow10, Error *err);
+void burrow__jsonv2_append_duration_iso8601(JsonBuf *b, Duration d);
+Duration burrow__jsonv2_parse_duration_iso8601(Str b, Error *err);
+void burrow__jsonv2_append_time_unix(JsonBuf *b, Time t, uint64_t pow10);
+Time burrow__jsonv2_parse_time_unix(Str b, uint64_t pow10, Error *err);
 
 /* Go's type string for t, as reflect.Type.String gives it, into b. */
 void burrow__jsonv2_put_type(JsonBuf *b, const Type *t);

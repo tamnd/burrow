@@ -1741,10 +1741,11 @@ Error time_unmarshal_json(Time *t, Alloc *a, Slice data) {
 
 /* ------------------------------------------------------------ descriptor */
 
-/* The methods a Time answers to, which is what lets fmt print one, and the
- * encoders find its text, JSON, binary and gob forms. They take the receiver
- * by pointer, as a descriptor wants, and String and GoString put their text in
- * the goroutine's error arena, having no allocator to take. */
+/* The methods a Time answers to, which is what lets fmt print one, the
+ * encoders find its text, JSON, binary and gob forms, and omitzero ask
+ * IsZero. They take the receiver by pointer, as a descriptor wants, and
+ * String and GoString put their text in the goroutine's error arena, having
+ * no allocator to take. */
 static Slice tf_m_append_binary(Time *self, Alloc *a, Slice b, Error *err) {
     return time_append_binary(*self, a, b, err);
 }
@@ -1759,6 +1760,9 @@ static Slice tf_m_gob_encode(Time *self, Alloc *a, Error *err) {
 }
 static Str tf_m_go_string(Time *self) {
     return time_go_string(*self, error_allocator());
+}
+static bool tf_m_is_zero(Time *self) {
+    return time_is_zero(*self);
 }
 static Slice tf_m_marshal_binary(Time *self, Alloc *a, Error *err) {
     return time_marshal_binary(*self, a, err);
@@ -1783,6 +1787,7 @@ static Error tf_m_unmarshal_text(Time *self, Alloc *a, Slice data) {
 }
 
 #define TF_SIG_STRING(IN, OUT) OUT(Str)
+#define TF_SIG_IS_ZERO(IN, OUT) OUT(bool)
 #define TF_SIG_GOB_ENCODE(IN, OUT) ENCODING_SIG_MARSHAL_BINARY(IN, OUT)
 #define TF_SIG_GOB_DECODE(IN, OUT) ENCODING_SIG_UNMARSHAL_BINARY(IN, OUT)
 #define TF_METHODS(M, T)                                                               \
@@ -1791,6 +1796,7 @@ static Error tf_m_unmarshal_text(Time *self, Alloc *a, Slice data) {
     M(T, GoString, tf_m_go_string, TF_SIG_STRING)                                      \
     M(T, GobDecode, tf_m_gob_decode, TF_SIG_GOB_DECODE)                                \
     M(T, GobEncode, tf_m_gob_encode, TF_SIG_GOB_ENCODE)                                \
+    M(T, IsZero, tf_m_is_zero, TF_SIG_IS_ZERO)                                         \
     M(T, MarshalBinary, tf_m_marshal_binary, ENCODING_SIG_MARSHAL_BINARY)              \
     M(T, MarshalJSON, tf_m_marshal_json, ENCODING_SIG_MARSHAL_BINARY)                  \
     M(T, MarshalText, tf_m_marshal_text, ENCODING_SIG_MARSHAL_TEXT)                    \

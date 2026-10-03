@@ -9,11 +9,11 @@
 # value is written down as a dump both sides know how to make, so the C test
 # can compare values without either side knowing the other's layout.
 #
-# A case is left out when its types have methods other than jsontext.Value's,
-# since the generator cannot write C for those, or when it needs something C
-# has no spelling for here: a complex number, a non-nil channel or func, an
-# interface other than any, or a field that would look embedded in C without
-# being embedded in Go. The generated header says how many cases went in and
+# A case is left out when its types have methods, other than jsontext.Value,
+# time.Time and time.Duration, since the generator cannot write C for those,
+# or when it needs something C has no spelling for here: a complex number, a
+# non-nil channel or func, an interface other than any, or a field that would
+# look embedded in C without being embedded in Go. The generated header says how many cases went in and
 # how many were left out. The reflect walking is shared with
 # tools/gen-json-tests.sh and lives in tools/gen-json-common/common.go.
 #
@@ -55,16 +55,48 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"encoding/json/internal/jsonflags"
 	"encoding/json/internal/jsonopts"
 	"encoding/json/jsontext"
 )
 
-// v2 has no types of its own that the C side spells differently.
-func knownType(reflect.Type) (string, string, bool) { return "", "", false }
+// time.Time and time.Duration have arshalers of their own in v2, which the C
+// side has too.
+func knownType(t reflect.Type) (string, string, bool) {
+	switch t {
+	case timeType:
+		return "Time", "&burrow_type_Time", true
+	case reflect.TypeFor[time.Duration]():
+		return "Duration", "&burrow_type_Duration", true
+	}
+	return "", "", false
+}
 
-func knownValue(*builder, reflect.Value, string) bool { return false }
+// A time.Time is built from its instant, then put in UTC or a fixed zone. A
+// Duration is an int64, which the common builder already writes.
+func knownValue(g *builder, v reflect.Value, lv string) bool {
+	if v.Type() != timeType {
+		return false
+	}
+	if !v.CanInterface() {
+		g.ok = false
+		return true
+	}
+	tm := v.Interface().(time.Time)
+	name, off := tm.Zone()
+	fmt.Fprintf(&g.b, "%s = time_from_unix((int64_t)UINT64_C(%d), %d);\n", lv, uint64(tm.Unix()), tm.Nanosecond())
+	switch tm.Location() {
+	case time.UTC:
+		fmt.Fprintf(&g.b, "%s = time_utc(%s);\n", lv, lv)
+	case time.Local:
+		g.ok = false
+	default:
+		fmt.Fprintf(&g.b, "%s = time_in(%s, time_fixed_zone(a, (Str)%s, %d));\n", lv, lv, strLit(name), off)
+	}
+	return true
+}
 
 // The C descriptor has the Go name.
 func typeName(t reflect.Type) string { return t.Name() }

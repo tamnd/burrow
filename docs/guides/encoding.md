@@ -741,6 +741,39 @@ Slice evb = jsonv2_marshal_v(a, BURROW_ANY(TYPE_OF(Event), &ev), &err, 0);
 
 `ev.Data` is `{"x": 1, "y": 2}`, spaces and all, and `evb` is `{"kind":"click","data":{"x":1,"y":2}}`. Tagged `json:",embed"`, a `JsontextValue` field is the fallback for members no other field claims, like the map in `Loose` above, except that it collects them as one JSON object.
 
+`Time` and `Duration` from `burrow/time.h` get the treatment Go's v2 gives `time.Time` and `time.Duration`, whatever struct or slice they sit in:
+
+<!-- example: ../examples/encoding/jsonv2.c#slot -->
+```c
+#define SLOT_FIELDS(F, T)                                                              \
+    F(T, Str, Room, "json:\"room\"")                                                   \
+    F(T, Time, Start, "json:\"start\"")
+BURROW_STRUCT(Slot, SLOT_FIELDS);
+```
+
+<!-- example: ../examples/encoding/jsonv2.c#time -->
+```c
+Slot slot = {BURROW_S("blue"),
+             time_date(2026, TIME_OCTOBER, 3, 9, 30, 0, 0, time_utc_loc)};
+Slice slotb = jsonv2_marshal_v(a, BURROW_ANY(TYPE_OF(Slot), &slot), &err, 0);
+Slot booked = {0};
+err = jsonv2_unmarshal_v(
+    a, BURROW_B("{\"room\":\"red\",\"start\":\"2026-10-03T18:30:00+09:00\"}"),
+    BURROW_ANY(TYPE_OF(Slot), &booked), 0);
+```
+
+`slotb` is `{"room":"blue","start":"2026-10-03T09:30:00Z"}`. A `Time` is written in RFC 3339 with as many fractional digits as it needs, and read back by RFC 3339's rules, which are stricter than `time_parse` with `TIME_RFC3339`: a year outside 0 to 9999, a single digit hour or a zone offset of 24 hours or more is an error. `booked.Start` is the same instant as `slot.Start`, in a zone 9 hours ahead, so `time_equal` says yes.
+
+A `Duration` has no default form, because Go hasn't settled on one yet (go.dev/issue/71631):
+
+<!-- example: ../examples/encoding/jsonv2.c#duration -->
+```c
+Duration wait = 90 * TIME_MINUTE;
+Slice waitb = jsonv2_marshal_v(a, BURROW_ANY(TYPE_DURATION, &wait), &err, 0);
+```
+
+That fails with `json: cannot marshal from Go time.Duration: no default representation`. The v1 API below writes a `Duration` as its count of nanoseconds, the way `encoding/json` always has, so `json_marshal` gives `5400000000000` here. For anything else, a marshal function from `jsonv2_marshal_func` can write it in whatever form you need.
+
 ## JSON, the v1 API
 
 `burrow/encoding/json.h` is Go's `encoding/json`. In Go 1.25 and later that package is a thin layer over v2, and here it is the same: `json_marshal` and `json_unmarshal` call the v2 code with v1's defaults switched on. Those defaults are the old behaviour people already rely on. Map keys come out sorted, `<`, `>` and `&` are escaped, and member names match field names without regard to case.

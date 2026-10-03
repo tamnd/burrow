@@ -69,7 +69,7 @@
 #define S6 0x04 /* accept range 0, four bytes */
 #define S7 0x44 /* accept range 4, four bytes */
 
-static const uint8_t first[256] = {
+static const uint8_t utf8_first[256] = {
     /*  1   2   3   4   5   6   7   8   9   A   B   C   D   E   F */
     AS, AS, AS, AS, AS, AS, AS, AS, AS, AS, AS, AS, AS, AS, AS, AS, /* 0x00-0x0F */
     AS, AS, AS, AS, AS, AS, AS, AS, AS, AS, AS, AS, AS, AS, AS, AS, /* 0x10-0x1F */
@@ -132,7 +132,7 @@ static Rune decode(const Byte *p, Int n, Int *size) {
     if (p[0] < (Byte)UTF8_RUNE_SELF)
         return ret((Rune)p[0], 1, size);
 
-    x = first[p[0]];
+    x = utf8_first[p[0]];
 
     /* AS and XX are the two values with the high nibble set, so one compare
      * separates the one byte cases from everything else. Go folds the two into
@@ -234,7 +234,7 @@ static bool full_rune(const Byte *p, Int n) {
     if (n == 0)
         return false;
 
-    x = first[p[0]];
+    x = utf8_first[p[0]];
     if (n >= (Int)(x & 7))
         return true; /* ASCII, invalid, or a complete sequence */
 
@@ -432,7 +432,7 @@ static bool valid(const Byte *p, Int n) {
             continue;
         }
 
-        x = first[p[i]];
+        x = utf8_first[p[i]];
         size = (Int)(x & 7);
         accept = accept_ranges[x >> 4];
 

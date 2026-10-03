@@ -683,6 +683,64 @@ bool pal_rename(const char *from, const char *to, PalErrno *err) {
     return MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING) || file_fail(err);
 }
 
+/* FILE_RENAME_INFO with the Flags member the newer headers put in a union with
+ * ReplaceIfExists, spelled out so that older ones build it too. */
+typedef struct PalRenameInfo {
+    DWORD flags;
+    HANDLE root;
+    DWORD name_len;
+    WCHAR name[PAL_WPATH_MAX];
+} PalRenameInfo;
+
+enum {
+    PAL_FILE_RENAME_INFO_EX = 22,     /* FileRenameInfoEx */
+    PAL_RENAME_REPLACE_IF_EXISTS = 1, /* FILE_RENAME_FLAG_REPLACE_IF_EXISTS */
+    PAL_RENAME_POSIX_SEMANTICS = 2    /* FILE_RENAME_FLAG_POSIX_SEMANTICS */
+};
+
+bool pal_rename_replace(const char *from, const char *to, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    wchar_t wf[PAL_WPATH_MAX];
+    PalRenameInfo *info = (PalRenameInfo *)HeapAlloc(GetProcessHeap(), 0, sizeof *info);
+    if (info == NULL) {
+        BURROW_OUT(err, PAL_ENOMEM);
+        return false;
+    }
+    if (!burrow__pal_widen(from, wf, PAL_WPATH_MAX, err) ||
+        !burrow__pal_widen(to, info->name, PAL_WPATH_MAX, err)) {
+        HeapFree(GetProcessHeap(), 0, info);
+        return false;
+    }
+    HANDLE h = CreateFileW(
+        wf, DELETE | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        HeapFree(GetProcessHeap(), 0, info);
+        return file_fail(err);
+    }
+    info->flags = PAL_RENAME_REPLACE_IF_EXISTS | PAL_RENAME_POSIX_SEMANTICS;
+    info->root = NULL;
+    info->name_len = (DWORD)(wcslen(info->name) * sizeof(WCHAR));
+    BOOL ok = SetFileInformationByHandle(
+        h, (FILE_INFO_BY_HANDLE_CLASS)PAL_FILE_RENAME_INFO_EX, info,
+        (DWORD)sizeof *info);
+    if (!ok) {
+        /* No POSIX renames here, as on FAT, or a Windows from before they
+         * came in. Go falls back the same way. */
+        info->flags = 1; /* ReplaceIfExists */
+        ok = SetFileInformationByHandle(h, FileRenameInfo, info, (DWORD)sizeof *info);
+    }
+    DWORD saved = GetLastError();
+    CloseHandle(h);
+    HeapFree(GetProcessHeap(), 0, info);
+    if (!ok) {
+        SetLastError(saved);
+        return file_fail(err);
+    }
+    return true;
+}
+
 bool pal_mkdir(const char *path, uint32_t mode, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     (void)mode; /* no permission bits to set, and Go ignores it here too */

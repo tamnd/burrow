@@ -370,6 +370,22 @@ bool pal_fstat(int64_t fd, PalStat *out, PalErrno *err) {
     }
 
     struct stat st;
+#if defined(BURROW_OS_LINUX) && defined(AT_EMPTY_PATH)
+    /* The same call through fstatat. Under qemu-user on s390x, fstat comes
+     * back without the nanoseconds and fstatat on the same descriptor has
+     * them, so a file's Stat would disagree with Stat on its name. A kernel too
+     * old for AT_EMPTY_PATH says ENOENT and gets plain fstat. */
+    for (;;) {
+        if (fstatat((int)fd, "", &st, AT_EMPTY_PATH) == 0) {
+            stat_from(&st, out);
+            return true;
+        }
+        if (errno != EINTR)
+            break;
+    }
+    if (errno != ENOENT && errno != EINVAL)
+        return file_fail(err);
+#endif
     for (;;) {
         if (fstat((int)fd, &st) == 0)
             break;
@@ -400,6 +416,10 @@ bool pal_rename(const char *from, const char *to, PalErrno *err) {
     if (!posix_path_ok(from, err) || !posix_path_ok(to, err))
         return false;
     return rename(from, to) == 0 || file_fail(err);
+}
+
+bool pal_rename_replace(const char *from, const char *to, PalErrno *err) {
+    return pal_rename(from, to, err);
 }
 
 bool pal_mkdir(const char *path, uint32_t mode, PalErrno *err) {

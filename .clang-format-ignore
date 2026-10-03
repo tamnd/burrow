@@ -19,3 +19,5 @@ src/xtext/bidi_tables.h
 tests/xtext_bidi_test_gen.h
 tests/xtext_bidirule_test_gen.h
 tests/embedtest/*_embed.c
+src/syscall/zerrors.c
+include/burrow/syscall/zerrors.h

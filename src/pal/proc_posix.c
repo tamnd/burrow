@@ -557,7 +557,14 @@ int64_t pal_exec_lookup(const char *name, char *buf, int64_t cap, PalErrno *err)
 
 #if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS) ||                             \
     defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_DRAGONFLY) ||                      \
-    defined(BURROW_OS_NETBSD) || defined(BURROW_OS_SOLARIS)
+    defined(BURROW_OS_NETBSD) || defined(BURROW_OS_SOLARIS) ||                         \
+    defined(BURROW_OS_COSMO)
+#if defined(BURROW_OS_COSMO)
+/* cosmo's libc declares this only under _COSMO_SOURCE, which this file leaves
+ * off. */
+char *GetProgramExecutableName(void);
+#endif
+
 /* src into buf, NUL terminated, or PAL_ERANGE. */
 static int64_t proc_put_cstr(char *buf, int64_t cap, const char *src, size_t n,
                              PalErrno *err) {
@@ -599,6 +606,15 @@ int64_t pal_executable(char *buf, int64_t cap, PalErrno *err) {
 #elif defined(BURROW_OS_SOLARIS)
     const char *e = getexecname();
     if (e == NULL) {
+        BURROW_OUT(err, PAL_ENOENT);
+        return -1;
+    }
+    return proc_put_cstr(buf, cap, e, strlen(e), err);
+#elif defined(BURROW_OS_COSMO)
+    /* The same binary runs on several systems, and cosmo works out where it was
+     * started from on each of them. */
+    const char *e = GetProgramExecutableName();
+    if (e == NULL || *e == 0) {
         BURROW_OUT(err, PAL_ENOENT);
         return -1;
     }

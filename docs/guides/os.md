@@ -133,7 +133,8 @@ err = os_remove_all(dir); /* dir and everything under it */
 ```c
 OsRoot *root = os_open_root(a, dir, &err);
 err = os_root_mkdir_all(root, BURROW_S("logs/old"), 0755);
-err = os_root_write_file(root, BURROW_S("logs/today.txt"), BURROW_B("started\n"), 0644);
+err = os_root_write_file(root, BURROW_S("logs/today.txt"), BURROW_B("started\n"),
+                         0644);
 Slice data = os_root_read_file(root, a, BURROW_S("logs/today.txt"), &err);
 /* "started\n" */
 ```

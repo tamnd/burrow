@@ -414,8 +414,8 @@ static void tfs_check_glob(FsTester *t, Str dir, Slice list) {
         return;
 
     if (!sort_strings_are_sorted(names)) {
-        TFS_ERRORF(t, "%s: Glob(%#q): unsorted output:\n%s", dir, glob,
-                   strings_join(t->a, names, TFS_LIT("\n")));
+        Str got = strings_join(t->a, names, TFS_LIT("\n"));
+        TFS_ERRORF(t, "%s: Glob(%#q): unsorted output:\n%s", dir, glob, got);
         sort_strings(names);
     }
 
@@ -437,8 +437,8 @@ static void tfs_check_glob(FsTester *t, Str dir, Slice list) {
             ni++;
         }
     }
-    TFS_ERRORF(t, "%s: Glob(%#q): wrong output:\n%s", dir, glob,
-               strings_join(t->a, problems, TFS_LIT("\n")));
+    Str msg = strings_join(t->a, problems, TFS_LIT("\n"));
+    TFS_ERRORF(t, "%s: Glob(%#q): wrong output:\n%s", dir, glob, msg);
 }
 
 /* checkStat checks that a direct stat of path matches entry, which was found
@@ -609,8 +609,8 @@ static void tfs_check_dir_list(FsTester *t, Str dir, Str desc, Slice list1,
         return;
 
     slices_sort_func(diffs, BURROW_FN(SlicesCmpFunc, tfs_diff_cmp, t));
-    TFS_ERRORF(t, "%s: diff %s:\n\t%s", dir, desc,
-               strings_join(t->a, diffs, TFS_LIT("\n\t")));
+    Str msg = strings_join(t->a, diffs, TFS_LIT("\n\t"));
+    TFS_ERRORF(t, "%s: diff %s:\n\t%s", dir, desc, msg);
 }
 
 static void tfs_check_file_read(FsTester *t, Str file, Str desc, Slice data1,
@@ -741,10 +741,11 @@ static void tfs_check_file(FsTester *t, Str file) {
         return;
     }
     err = iotest_test_reader(fs_file_as_io_reader(f), data);
-    if (BURROW_FAILED(err))
-        TFS_ERRORF(
-            t, "%s: failed TestReader:\n\t%s", file,
-            strings_replace_all(t->a, error_text(err), TFS_LIT("\n"), TFS_LIT("\n\t")));
+    if (BURROW_FAILED(err)) {
+        Str msg =
+            strings_replace_all(t->a, error_text(err), TFS_LIT("\n"), TFS_LIT("\n\t"));
+        TFS_ERRORF(t, "%s: failed TestReader:\n\t%s", file, msg);
+    }
     (void)tfs_close(f);
 }
 
@@ -781,8 +782,8 @@ static Error tfs_test_fs(Fs fsys, const Str *expected, Int n) {
             list =
                 BURROW_APPEND(Str, t->a, slice_sub3(list, 0, 10, 10), TFS_LIT("..."));
         }
-        TFS_ERRORF(t, "expected empty file system but found files:\n%s",
-                   strings_join(t->a, list, TFS_LIT("\n")));
+        Str msg = strings_join(t->a, list, TFS_LIT("\n"));
+        TFS_ERRORF(t, "expected empty file system but found files:\n%s", msg);
     }
     for (Int i = 0; i < n; i++) {
         Int j = sort_search_strings(found, expected[i]);

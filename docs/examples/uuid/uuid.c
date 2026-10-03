@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 #include "burrow/burrow.h"
+#include "burrow/mem/arena.h"
 
 // doc: decl
 #define ORDER_FIELDS(F, T)                                                             \
@@ -10,7 +11,9 @@ BURROW_STRUCT(Order, ORDER_FIELDS);
 // doc: end
 
 int main(void) {
-    Alloc *a = heap_allocator();
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
 
     {
         // doc: new
@@ -51,6 +54,7 @@ int main(void) {
         printf("%.*s\n", (int)out.len, (const char *)out.p);
         // doc: end
     }
+    arena_free(&ar);
     return 0;
 }
 

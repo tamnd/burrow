@@ -669,6 +669,13 @@ bool pal_fstat(int64_t fd, PalStat *out, PalErrno *err);
 
 bool pal_unlink(const char *path, PalErrno *err);
 bool pal_rename(const char *from, const char *to, PalErrno *err);
+
+/* rename the way Go's Root.Rename does it on Windows: through a handle on from
+ * that leaves a link alone, with POSIX semantics, so that whatever is at to
+ * goes, a link to a directory included, where MoveFileEx says access denied.
+ * A file system without POSIX renames gets the plain replacing one. Everywhere
+ * else this is pal_rename. */
+bool pal_rename_replace(const char *from, const char *to, PalErrno *err);
 bool pal_mkdir(const char *path, uint32_t mode, PalErrno *err);
 bool pal_rmdir(const char *path, PalErrno *err);
 

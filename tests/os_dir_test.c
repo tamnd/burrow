@@ -384,8 +384,17 @@ static void TestRemoveAllDot(TestingT *t) {
 static void TestTempDir(TestingT *t) {
     Str td = os_temp_dir(a);
     CHECK(td.len > 0);
-    if (td.len > 1)
+#if defined(BURROW_OS_WINDOWS)
+    /* Go trims the backslash GetTempPath2 ends with. */
+    if (td.len > 3)
         CHECK(!os_is_path_separator(td.p[td.len - 1]));
+#else
+    /* Go hands $TMPDIR back as it is, so on macOS it ends in a slash. */
+    bool found = false;
+    Str env = os_lookup_env(a, S("TMPDIR"), &found);
+    if (found && env.len > 0)
+        CHECK(str_eq(td, env));
+#endif
     Error e = BURROW_NO_ERROR;
     OsFileInfo fi = os_stat(a, td, &e);
     CHECK(BURROW_OK(e) && fi.vt->is_dir(fi.data));

@@ -222,6 +222,12 @@ bool pal_thread_join(int64_t thread, PalErrno *err) {
     return true;
 }
 
+bool pal_thread_cancel_io(int64_t thread, PalErrno *err) {
+    (void)thread;
+    BURROW_OUT(err, PAL_ENOSYS);
+    return false;
+}
+
 bool pal_thread_detach(int64_t thread, PalErrno *err) {
     if (thread == PAL_INVALID_HANDLE) {
         BURROW_OUT(err, PAL_EINVAL);

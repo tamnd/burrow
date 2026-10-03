@@ -755,6 +755,18 @@ Error os_file_close(OsFile *f) {
     return BURROW_NO_ERROR;
 }
 
+Error burrow__os_file_close_nowait(OsFile *f) {
+    if (f == NULL)
+        return fs_err_invalid;
+    if (!burrow__fdmu_incref_and_close(&f->mu))
+        return fs_path_error_new(error_allocator(), OS_LIT("close"), f->name,
+                                 fs_err_closed);
+    Error e = os_decref(f);
+    if (BURROW_FAILED(e))
+        return fs_path_error_new(error_allocator(), OS_LIT("close"), f->name, e);
+    return BURROW_NO_ERROR;
+}
+
 void os_file_free(OsFile *f) {
     if (f == NULL || f->stdio)
         return;
@@ -850,6 +862,14 @@ static const IoReadWriteSeekerVT os_read_write_seeker_vt = {
     {&os_file_desc, os_vt_write},
     {&os_file_desc, os_vt_seek},
 };
+static const IoReadCloserVT os_read_closer_vt = {
+    {&os_file_desc, os_vt_read},
+    {&os_file_desc, os_vt_close},
+};
+static const IoWriteCloserVT os_write_closer_vt = {
+    {&os_file_desc, os_vt_write},
+    {&os_file_desc, os_vt_close},
+};
 static Slice os_vt_read_dir(void *self, Alloc *a, Int n, Error *err) {
     return os_file_read_dir((OsFile *)self, a, n, err);
 }
@@ -870,6 +890,14 @@ IoWriter os_file_as_io_writer(OsFile *f) {
 
 IoCloser os_file_as_io_closer(OsFile *f) {
     return (IoCloser){&os_closer_vt, f};
+}
+
+IoReadCloser os_file_as_io_read_closer(OsFile *f) {
+    return (IoReadCloser){&os_read_closer_vt, f};
+}
+
+IoWriteCloser os_file_as_io_write_closer(OsFile *f) {
+    return (IoWriteCloser){&os_write_closer_vt, f};
 }
 
 IoSeeker os_file_as_io_seeker(OsFile *f) {

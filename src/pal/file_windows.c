@@ -806,6 +806,47 @@ bool pal_is_dos_device_name(const char *name, int64_t n) {
     return fn != NULL && fn(w) > 0;
 }
 
+/* n wide characters of w into buf as UTF-8 with a NUL after them. */
+static int64_t narrow_out(const wchar_t *w, size_t n, char *buf, int64_t cap,
+                          PalErrno *err) {
+    int64_t len =
+        buf == NULL || cap <= 0 ? -1 : burrow__pal_narrow(w, n, buf, (size_t)cap - 1);
+    if (len < 0) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    buf[len] = 0;
+    return len;
+}
+
+int64_t pal_full_path(const char *path, char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    wchar_t w[PAL_WPATH_MAX], full[PAL_WPATH_MAX];
+    if (!burrow__pal_widen(path, w, PAL_WPATH_MAX, err))
+        return -1;
+    DWORD n = GetFullPathNameW(w, PAL_WPATH_MAX, full, NULL);
+    if (n == 0)
+        return file_fail_n(err);
+    if (n >= PAL_WPATH_MAX) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    return narrow_out(full, n, buf, cap, err);
+}
+
+int64_t pal_find_name(const char *path, char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    wchar_t w[PAL_WPATH_MAX];
+    if (!burrow__pal_widen(path, w, PAL_WPATH_MAX, err))
+        return -1;
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(w, &fd);
+    if (h == INVALID_HANDLE_VALUE)
+        return file_fail_n(err);
+    FindClose(h);
+    return narrow_out(fd.cFileName, wcslen(fd.cFileName), buf, cap, err);
+}
+
 bool pal_link(const char *from, const char *to, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     wchar_t wf[PAL_WPATH_MAX], wt[PAL_WPATH_MAX];

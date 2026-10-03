@@ -416,7 +416,8 @@ static Int os_write_all(OsFile *f, const Byte *p, Int len, Error *e) {
     *e = BURROW_NO_ERROR;
     for (;;) {
         PalErrno pe = PAL_OK;
-        int64_t n = pal_write(f->fd, p + nn, len - nn, &pe);
+        /* An empty write may come with a null p, and null + 0 is undefined. */
+        int64_t n = pal_write(f->fd, nn == 0 ? p : p + nn, len - nn, &pe);
         Error we = BURROW_NO_ERROR;
         if (n < 0)
             we = burrow__os_errno(pe);
@@ -485,7 +486,7 @@ static Int os_pwrite(OsFile *f, const Byte *p, Int len, int64_t off, Error *e) {
     *e = BURROW_NO_ERROR;
     for (;;) {
         PalErrno pe = PAL_OK;
-        int64_t n = pal_pwrite(f->fd, p + nn, len - nn, off + nn, &pe);
+        int64_t n = pal_pwrite(f->fd, nn == 0 ? p : p + nn, len - nn, off + nn, &pe);
         Error we = BURROW_NO_ERROR;
         if (n < 0)
             we = burrow__os_errno(pe);

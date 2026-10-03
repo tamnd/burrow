@@ -6,7 +6,7 @@
  * once with the Unix rules and once with the Windows rules, through the
  * functions in src/path/filepath_internal.h, so both sets of tables run on
  * every machine. The tests that need os (Abs, EvalSymlinks, Glob and Walk) are
- * not here yet. The tests after TestIssue52476 are not from Go.
+ * in filepath_os_test.c. The tests after TestIssue52476 are not from Go.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.

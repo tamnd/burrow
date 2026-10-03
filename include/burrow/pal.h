@@ -1039,6 +1039,22 @@ int64_t pal_temp_dir(char *buf, int64_t cap, PalErrno *err);
  * false, and so is a name that is too long or holds a NUL. */
 bool pal_is_dos_device_name(const char *name, int64_t n);
 
+/* path made absolute the way Windows does it, by GetFullPathNameW, which is
+ * what Go's filepath.Abs asks there: against the working directory, or the
+ * one Windows keeps for the drive when path is "C:x". The result goes into
+ * buf, NUL terminated, and its length comes back, or -1, with PAL_ERANGE when
+ * it does not fit. PAL_WPATH_MAX * 3 + 1 bytes always fits. Everywhere else
+ * it is -1 with PAL_ENOTSUP, since Go's Abs is lexical there. */
+int64_t pal_full_path(const char *path, char *buf, int64_t cap, PalErrno *err);
+
+/* The last element of path as the file system stores it, which on Windows can
+ * differ in case from the one asked for. It is what FindFirstFileW finds,
+ * which is how Go's filepath.EvalSymlinks gets the case right there. Into
+ * buf, NUL terminated, returning the length, or -1, with PAL_ERANGE when it
+ * does not fit. PAL_WPATH_MAX * 3 + 1 bytes always fits. Everywhere else it
+ * is -1 with PAL_ENOTSUP. */
+int64_t pal_find_name(const char *path, char *buf, int64_t cap, PalErrno *err);
+
 /* Resolve a program name against the search path, writing the full path to buf.
  * Returns its length, or -1. This is a PAL call rather than portable code over
  * PATH because Windows searches differently, applies PATHEXT, and looks in the

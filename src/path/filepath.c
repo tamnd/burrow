@@ -3,9 +3,10 @@
  * path_windows.go and path_nonwindows.go, which is where most of filepath
  * lives now. Go source: go1.27.1.
  *
- * Abs, EvalSymlinks, Glob, Walk and WalkDir are not here yet, because they
- * need os. Everything else is, for both kinds of system: each function takes
- * win, and the public ones pass the host's. See filepath_internal.h.
+ * Abs, EvalSymlinks, Glob, Walk and WalkDir look at the file system, and are
+ * in filepath_os.c. Everything else is here, for both kinds of system: each
+ * function takes win, and the public ones pass the host's. See
+ * filepath_internal.h.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -1186,6 +1187,10 @@ Str filepath_rel(Alloc *a, Str base, Str targ, Error *err) {
 
 bool filepath_match(Str pattern, Str name, Error *err) {
     return burrow__filepath_match(pattern, name, FP_HOST, err);
+}
+
+Int burrow__filepath_volume_name_len(Str path, bool win) {
+    return fp_volume_name_len(path, win);
 }
 
 bool filepath_has_prefix(Str p, Str prefix) {

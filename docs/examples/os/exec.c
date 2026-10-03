@@ -6,6 +6,7 @@
 #include "burrow/mem/arena.h"
 #include "burrow/os.h"
 #include "burrow/os/exec.h"
+#include "burrow/proc.h"
 #include "burrow/strings.h"
 #include "burrow/time.h"
 
@@ -30,6 +31,29 @@ static int child(Alloc *a, Str what) {
     if (str_eq(what, BURROW_S("sleep")))
         time_sleep(10 * TIME_SECOND);
     return 0;
+}
+
+/* A context's timer needs the runtime, so this part runs under runtime_main. */
+static void with_timeout(void *env) {
+    Str exe = *(const Str *)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+
+    // doc: context
+    ContextCancelFunc cancel;
+    Context ctx =
+        context_with_timeout(a, context_background(), 100 * TIME_MILLISECOND, &cancel);
+    ExecCmd *c = exec_command_context_v(a, ctx, exe, 1, BURROW_S("sleep"));
+    Error err = exec_cmd_run(c); /* killed after a tenth of a second */
+    if (BURROW_FAILED(err))
+        printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(context_err(ctx))));
+    exec_cmd_free(c);
+    BURROW_CALLF0(cancel);
+    context_release(ctx);
+    // doc: end
+
+    arena_free(&ar);
 }
 
 int main(void) {
@@ -80,18 +104,7 @@ int main(void) {
     exec_cmd_free(c);
     // doc: end
 
-    // doc: context
-    ContextCancelFunc cancel;
-    Context ctx =
-        context_with_timeout(a, context_background(), 100 * TIME_MILLISECOND, &cancel);
-    c = exec_command_context_v(a, ctx, exe, 1, BURROW_S("sleep"));
-    err = exec_cmd_run(c); /* killed after a tenth of a second */
-    if (BURROW_FAILED(err))
-        printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(context_err(ctx))));
-    exec_cmd_free(c);
-    BURROW_CALLF0(cancel);
-    context_release(ctx);
-    // doc: end
+    runtime_main(BURROW_FN(Func, with_timeout, &exe));
 
     // doc: lookpath
     Str path = exec_look_path(a, BURROW_S("no-such-program"), &err);

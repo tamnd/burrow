@@ -327,15 +327,15 @@ if (ee != NULL) {
 exec_cmd_free(c);
 ```
 
-`exec_command_context` ties the program to a context. When the context is done before the program has exited, the Cmd's `cancel` runs, which kills the program unless you set it to something else, and `wait_delay` bounds how long Wait then waits for the program and its pipes:
+`exec_command_context` ties the program to a context. When the context is done before the program has exited, the Cmd's `cancel` runs, which kills the program unless you set it to something else, and `wait_delay` bounds how long Wait then waits for the program and its pipes. A context with a deadline puts its timer on the runtime, so this part has to run under `runtime_main`:
 
 <!-- example: ../examples/os/exec.c#context -->
 ```c
 ContextCancelFunc cancel;
 Context ctx =
     context_with_timeout(a, context_background(), 100 * TIME_MILLISECOND, &cancel);
-c = exec_command_context_v(a, ctx, exe, 1, BURROW_S("sleep"));
-err = exec_cmd_run(c); /* killed after a tenth of a second */
+ExecCmd *c = exec_command_context_v(a, ctx, exe, 1, BURROW_S("sleep"));
+Error err = exec_cmd_run(c); /* killed after a tenth of a second */
 if (BURROW_FAILED(err))
     printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(context_err(ctx))));
 exec_cmd_free(c);

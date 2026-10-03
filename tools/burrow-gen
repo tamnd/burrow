@@ -1209,7 +1209,7 @@ def doc_run(root, cc, sanitize):
                 # burrow-gen embed, the way a build that uses it would.
                 gen = os.path.join(tmp, "ex_embed.c")
                 try:
-                    run_embed(argparse.Namespace(source=ex, output=gen, dir=None, mode="auto", deps=None))
+                    run_embed(argparse.Namespace(source=ex, output=gen, dir=None, mode="auto", deps=None, include=None))
                 except Error as e:
                     problems.append("%s: burrow-gen embed failed: %s" % (rel, e))
                     continue

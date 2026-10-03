@@ -68,8 +68,11 @@ int main(void) {
     Alloc *a = arena_allocator(&ar);
 
     Slice args = os_args();
-    if (args.len > 1)
-        return child(a, BURROW_AT(Str, args, 1));
+    if (args.len > 1) {
+        int code = child(a, BURROW_AT(Str, args, 1));
+        arena_free(&ar);
+        return code;
+    }
     Error err = BURROW_NO_ERROR;
     Str exe = os_executable(a, &err);
     if (BURROW_FAILED(err))

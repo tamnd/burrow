@@ -112,6 +112,12 @@ extern const TzEmbedded burrow__tzdata_embedded;
 bool burrow__time_load_from_embedded(Str name, Str *data, Error *err);
 void burrow__time_disable_platform_sources(bool off);
 
+/* Go's initLocalFromTZI, as a location from a, named Local. It is how Windows
+ * gets Local, and it is here on every system so the tests that hand it Go's
+ * usPacific and aus run everywhere. NULL when a is out of memory. */
+struct PalTzInfo;
+TimeLocation *burrow__time_location_from_tzi(Alloc *a, const struct PalTzInfo *i);
+
 /* Go's Location.lookup. */
 typedef struct TzLookup {
     Str name;

@@ -366,6 +366,50 @@ typedef void (*PalContentTypeFn)(void *env, const char *ext, int64_t ext_len,
                                  const char *type, int64_t type_len);
 bool pal_registry_content_types(PalContentTypeFn fn, void *env, PalErrno *err);
 
+/* --------------------------------------------------------------- time zone
+ *
+ * Windows keeps the local time zone as a TIME_ZONE_INFORMATION rather than a
+ * name in the IANA database, and time builds Local from it the way Go's
+ * zoneinfo_windows.go does. The names are UTF-8 here, and a SYSTEMTIME is the
+ * six fields of it that say when a change happens. */
+#define PAL_TZ_NAME_MAX 768
+typedef struct PalTzDate {
+    uint16_t month;
+    uint16_t day_of_week;
+    uint16_t day;
+    uint16_t hour;
+    uint16_t minute;
+    uint16_t second;
+} PalTzDate;
+typedef struct PalTzInfo {
+    int32_t bias;
+    char standard_name[PAL_TZ_NAME_MAX];
+    int64_t standard_name_len;
+    PalTzDate standard_date;
+    int32_t standard_bias;
+    char daylight_name[PAL_TZ_NAME_MAX];
+    int64_t daylight_name_len;
+    PalTzDate daylight_date;
+    int32_t daylight_bias;
+} PalTzInfo;
+
+/* GetTimeZoneInformation. False on every system but Windows. */
+bool pal_tz_info(PalTzInfo *out, PalErrno *err);
+
+/* The standard and daylight names of the zone called key under
+ * HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Time Zones,
+ * which is Go's MUI_Std and MUI_Dlt, or Std and Dlt when either of those fails.
+ * std and dst hold PAL_TZ_NAME_MAX bytes. False on every system but Windows. */
+bool pal_tz_key_names(const char *key, int64_t key_len, char *std, int64_t *std_len,
+                      char *dst, int64_t *dst_len, PalErrno *err);
+
+/* Go's toEnglishName: the name of the first key under Time Zones whose names
+ * are std and dst, where a dst equal to std matches any daylight name. out
+ * holds PAL_TZ_NAME_MAX bytes. False when no key matches, and on every system
+ * but Windows. */
+bool pal_tz_english_name(const char *std, int64_t std_len, const char *dst,
+                         int64_t dst_len, char *out, int64_t *out_len, PalErrno *err);
+
 /* ------------------------------------------------------------------ threads
  *
  * OS threads, which in Go's terms is an M. Goroutines are not here: they are

@@ -171,8 +171,9 @@ typedef struct TimeLocation TimeLocation;
  * a program can point somewhere else, because a variable every thread reads
  * and any thread may write is a race, which it is in Go as well. Local is what
  * the TZ environment variable says, or /etc/localtime when it says nothing,
- * and is loaded the first time something uses it. On Windows it is UTC for
- * now, until the registry lookup lands. */
+ * and is loaded the first time something uses it. On Windows it is built from
+ * the system's time zone settings instead, as Go builds it, and TZ is not
+ * read. */
 extern TimeLocation *const time_utc_loc;
 extern TimeLocation *const time_local_loc;
 

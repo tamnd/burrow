@@ -33,6 +33,12 @@ static int child(Alloc *a, Str what) {
     return 0;
 }
 
+/* Says what went wrong, the way log.Fatal would. */
+static int fail(Error err) {
+    fprintf(stderr, BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
+    return 1;
+}
+
 /* A context's timer needs the runtime, so this part runs under runtime_main. */
 static void with_timeout(void *env) {
     Str exe = *(const Str *)env;
@@ -67,13 +73,13 @@ int main(void) {
     Error err = BURROW_NO_ERROR;
     Str exe = os_executable(a, &err);
     if (BURROW_FAILED(err))
-        return 1;
+        return fail(err);
 
     // doc: output
     ExecCmd *c = exec_command_v(a, exe, 1, BURROW_S("greet"));
     Slice out = exec_cmd_output(c, a, &err);
     if (BURROW_FAILED(err))
-        return 1;
+        return fail(err);
     printf("%.*s", (int)out.len, (const char *)out.p); /* hello from the child */
     exec_cmd_free(c);
     // doc: end
@@ -85,7 +91,7 @@ int main(void) {
     c->stdin_ = strings_reader_as_io_reader(&in); /* copied to the child on a pipe */
     out = exec_cmd_output(c, a, &err);
     if (BURROW_FAILED(err))
-        return 1;
+        return fail(err);
     printf("%.*s", (int)out.len, (const char *)out.p); /* SOME INPUT */
     exec_cmd_free(c);
     // doc: end

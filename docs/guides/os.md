@@ -290,7 +290,7 @@ Error kerr = os_process_kill(self);    /* "os: process already released" on Unix
 ExecCmd *c = exec_command_v(a, exe, 1, BURROW_S("greet"));
 Slice out = exec_cmd_output(c, a, &err);
 if (BURROW_FAILED(err))
-    return 1;
+    return fail(err);
 printf("%.*s", (int)out.len, (const char *)out.p); /* hello from the child */
 exec_cmd_free(c);
 ```
@@ -305,7 +305,7 @@ c = exec_command_v(a, exe, 1, BURROW_S("upper"));
 c->stdin_ = strings_reader_as_io_reader(&in); /* copied to the child on a pipe */
 out = exec_cmd_output(c, a, &err);
 if (BURROW_FAILED(err))
-    return 1;
+    return fail(err);
 printf("%.*s", (int)out.len, (const char *)out.p); /* SOME INPUT */
 exec_cmd_free(c);
 ```

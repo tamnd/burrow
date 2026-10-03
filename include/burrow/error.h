@@ -251,6 +251,11 @@ BURROW_BORROWS(ret) Alloc *error_allocator(void);
 ArenaMark error_mark(void);
 void error_release(ArenaMark m);
 
+/* Frees the calling thread's own error arena, for a thread of burrow's that is
+ * about to return and was never running a goroutine. The errors it made are
+ * gone afterwards, and the next one starts a new arena. */
+void burrow__error_thread_exit(void);
+
 /* A copy of err in a that does not depend on the error arena or on anything
  * else err pointed at. Sentinels come back as they are, since they are already
  * immortal and errors_is compares them by address. An error whose vtable has a

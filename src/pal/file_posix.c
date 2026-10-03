@@ -38,6 +38,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -545,6 +546,42 @@ bool pal_chmod(const char *path, uint32_t mode, PalErrno *err) {
     if (!posix_path_ok(path, err))
         return false;
     return chmod(path, (mode_t)(mode & 07777)) == 0 || file_fail(err);
+}
+
+int pal_fd_wait(int64_t fd, bool write, int64_t cancel, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    struct pollfd p[2];
+    p[0].fd = (int)fd;
+    p[0].events = write ? POLLOUT : POLLIN;
+    p[1].fd = (int)cancel;
+    p[1].events = POLLIN;
+    for (;;) {
+        p[0].revents = 0;
+        p[1].revents = 0;
+        if (poll(p, 2, -1) < 0) {
+            if (errno == EINTR)
+                continue;
+            BURROW_OUT(err, burrow__pal_errno(errno));
+            return -1;
+        }
+        if (p[1].revents != 0)
+            return 0;
+        if (p[0].revents != 0)
+            return 1;
+    }
+}
+
+bool pal_eaccess(const char *path, uint32_t mode, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!posix_path_ok(path, err))
+        return false;
+#if defined(AT_EACCESS)
+    return faccessat(AT_FDCWD, path, (int)(mode & 7), AT_EACCESS) == 0 || file_fail(err);
+#else
+    (void)mode;
+    BURROW_OUT(err, PAL_ENOSYS);
+    return false;
+#endif
 }
 
 bool pal_chown(const char *path, int64_t uid, int64_t gid, PalErrno *err) {

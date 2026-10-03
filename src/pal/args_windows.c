@@ -23,6 +23,7 @@
 
 #include "internal.h"
 
+#include <string.h>
 #include <wchar.h>
 
 #include <windows.h>
@@ -92,14 +93,27 @@ int64_t pal_args(char *buf, int64_t cap, PalErrno *err) {
         buf[m] = 0;
         return m + 1;
     }
-    /* One byte more than the line, for the NUL after the last argument, which
-     * is the only byte the split can add. */
-    int64_t m = cap > 0 ? burrow__pal_narrow(line, len, buf, (size_t)cap - 1) : -1;
-    if (m < 0) {
+    /* The split is done in a buffer of its own, since quotes make it shorter
+     * than the line, and a buf that holds what the split answers is enough.
+     * One byte more than the line is for the NUL after the last argument,
+     * which is the only byte the split can add, and a UTF-16 unit is at most
+     * three bytes of WTF-8. */
+    size_t room = len * 3 + 1;
+    char *tmp = HeapAlloc(GetProcessHeap(), 0, room);
+    if (tmp == NULL) {
+        BURROW_OUT(err, PAL_ENOMEM);
+        return -1;
+    }
+    int64_t m = burrow__pal_narrow(line, len, tmp, room - 1);
+    int64_t n = m < 0 ? -1 : args_split(tmp, m);
+    if (n < 0 || n > cap) {
+        HeapFree(GetProcessHeap(), 0, tmp);
         BURROW_OUT(err, PAL_ERANGE);
         return -1;
     }
-    return args_split(buf, m);
+    memcpy(buf, tmp, (size_t)n);
+    HeapFree(GetProcessHeap(), 0, tmp);
+    return n;
 }
 
 #endif /* BURROW_OS_WINDOWS */

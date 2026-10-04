@@ -26,6 +26,14 @@
 #elif defined(__linux__) && !defined(__COSMOPOLITAN__)
 #include <dirent.h>
 #include <fcntl.h>
+/* The kernel's own headers are a package of their own on some systems, such as
+ * linux-headers on Alpine, and the test does without them. */
+#if defined(__has_include)
+#if __has_include(<linux/netlink.h>)
+#define HAVE_LINUX_HEADERS 1
+#endif
+#endif
+#if defined(HAVE_LINUX_HEADERS)
 #include <linux/filter.h>
 #include <linux/icmpv6.h>
 #include <linux/if.h>
@@ -40,6 +48,7 @@
 #include <linux/sched.h>
 #include <linux/serial.h>
 #include <linux/wait.h>
+#endif
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>

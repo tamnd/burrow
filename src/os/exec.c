@@ -98,6 +98,50 @@ const OsSignal os_interrupt = {&os_signal_vt,
 const OsSignal os_kill = {&os_signal_vt,
                           (void *)(Uintptr)&os_signal_numbers[SYSCALL_SIGKILL]};
 
+/* The descriptor for os.Signal itself, an interface, so that a channel of them
+ * can be made for os/signal. Equality is Go's for an interface: the same
+ * vtable and the same receiver, which for the signals above is the same number,
+ * since each number has one slot to point at. */
+static bool os_signal_ops_equal(const void *a, const void *b) {
+    const OsSignal *x = (const OsSignal *)a;
+    const OsSignal *y = (const OsSignal *)b;
+    return x->vt == y->vt && x->data == y->data;
+}
+
+static uint64_t os_signal_ops_hash(const void *p, uint64_t seed) {
+    const OsSignal *s = (const OsSignal *)p;
+    uint64_t h = seed ^ 0x9e3779b97f4a7c15U;
+    h = (h ^ (uint64_t)(Uintptr)s->vt) * 0x100000001b3U;
+    h = (h ^ (uint64_t)(Uintptr)s->data) * 0x100000001b3U;
+    return h;
+}
+
+static const TypeOps os_signal_ops = {
+    os_signal_ops_equal,
+    os_signal_ops_hash,
+    NULL,
+    NULL,
+};
+
+static const Type os_signal_type = {
+    {(const Byte *)"Signal", 6},
+    {(const Byte *)"os", 2},
+    KIND_INTERFACE,
+    (uint32_t)sizeof(OsSignal),
+    (uint16_t)_Alignof(OsSignal),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x6f736967U, /* "osig" */
+    &os_signal_ops,
+};
+
+const Type *const TYPE_OS_SIGNAL = &os_signal_type;
+
 /* ------------------------------------------------------------ the process */
 
 enum { OS_STATUS_OK = 0, OS_STATUS_DONE = 1, OS_STATUS_RELEASED = 2 };
@@ -489,10 +533,10 @@ OsProcess *os_start_process(Alloc *a, Str name, Slice argv, const OsProcAttr *at
     }
 
     uint32_t flags = 0;
+    uint32_t creation_flags = 0;
     if (attr->sys != NULL) {
 #if defined(BURROW_OS_WINDOWS)
-        if (attr->sys->creation_flags != 0)
-            return os_start_fail(name, burrow__os_errno_value(SYSCALL_EWINDOWS), err);
+        creation_flags = attr->sys->creation_flags;
 #else
         if (attr->sys->setpgid && attr->sys->pgid != 0)
             return os_start_fail(name, burrow__os_errno_value(SYSCALL_ENOTSUP), err);
@@ -530,6 +574,7 @@ OsProcess *os_start_process(Alloc *a, Str name, Slice argv, const OsProcAttr *at
     req.fds = sa.fds;
     req.nfds = sa.nfds;
     req.flags = flags;
+    req.creation_flags = creation_flags;
     PalErrno pe = PAL_OK;
     int64_t pid = pal_spawn(&req, &pe);
     os_spawn_args_free(&sa);

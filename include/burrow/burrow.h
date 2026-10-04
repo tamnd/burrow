@@ -120,6 +120,7 @@
 #include "burrow/num.h"
 #include "burrow/os.h"
 #include "burrow/os/exec.h"
+#include "burrow/os/signal.h"
 #include "burrow/os/user.h"
 #include "burrow/own.h"
 #include "burrow/panic.h"

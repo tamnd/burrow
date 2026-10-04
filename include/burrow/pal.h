@@ -855,7 +855,10 @@ enum {
  * way, which is what Go does too. Nothing else is inherited.
  *
  * A relative path is taken relative to dir when dir is set, as it is in
- * Go. */
+ * Go.
+ *
+ * creation_flags is added to the flags Windows' CreateProcess is given, as
+ * Go's SysProcAttr.CreationFlags is, and is ignored everywhere else. */
 typedef struct PalSpawn {
     const char *path;
     const char *const *argv;
@@ -864,6 +867,7 @@ typedef struct PalSpawn {
     const int64_t *fds;
     int32_t nfds;
     uint32_t flags;
+    uint32_t creation_flags;
 } PalSpawn;
 
 /* Start the process and return its id, or -1.
@@ -1318,6 +1322,62 @@ void pal_signal_stack_remove(void);
  * Only meaningful inside a PAL_SIGFAULT handler and only for the info pointer
  * that handler was handed. */
 BURROW_BORROWS(ret) const void *pal_signal_fault_addr(const void *info);
+
+/* ------------------------------------------------------ relaying to os/signal
+ *
+ * What os/signal stands on. Everything above took our own signal numbers; these
+ * take the system's, which are what syscall.Signal holds and what a program
+ * asking for "every signal" means, real time ones included.
+ *
+ * The handler is this layer's. When a relayed signal arrives it calls the
+ * function given to pal_signal_relay_init with the signal's number, from the
+ * handler, on whatever thread the signal landed on. That function has to be
+ * safe there: atomics, and pal_signal_note_wake, and nothing else. It answers
+ * whether it took the signal. When it says no, the signal gets whatever the
+ * program would have done without us, which for most of them is to die.
+ *
+ * Windows has two of these, SIGINT and SIGTERM, from a console control
+ * handler, as in Go. The send function runs on the thread the system starts
+ * for the event. After a SIGTERM has been taken that thread is kept waiting
+ * rather than returned, because Windows ends the process when it returns, and
+ * the program needs the time to act on it. Every other number is accepted and
+ * never arrives. */
+typedef bool (*PalSignalRelay)(int32_t native);
+
+/* Once, before the first pal_signal_relay. Sets the send function and makes
+ * the note below: a pipe on POSIX and an event on Windows. A second call does
+ * nothing and answers true. */
+bool pal_signal_relay_init(PalSignalRelay send, PalErrno *err);
+
+enum {
+    /* Catch it and hand it to the send function. */
+    PAL_RELAY_CATCH = 0,
+    /* Put back what was there before the first catch. Does nothing to a signal
+     * that is not being caught, so a signal that was ignored stays ignored,
+     * which is Go's behaviour for Reset after Ignore. */
+    PAL_RELAY_DEFAULT = 1,
+    /* SIG_IGN. Windows does nothing, as Go does. */
+    PAL_RELAY_IGNORE = 2
+};
+
+/* Changes what one signal does. PAL_EINVAL for a number that cannot be caught
+ * or that something else owns: 0, SIGKILL and SIGSTOP, the ones a fault
+ * raises, SIGPROF, and the ones libc keeps for itself, which is 32 up to
+ * SIGRTMIN on Linux. Go refuses the same ones by leaving them out of its
+ * table. */
+bool pal_signal_relay(int32_t native, int32_t how, PalErrno *err);
+
+/* Whether the signal is ignored right now, which is how os/signal finds out
+ * that it was started under nohup. Always false on Windows. */
+bool pal_signal_ignored(int32_t native);
+
+/* A one place gate between the handler and the thread that reads what it
+ * caught. Wake is safe in a handler. Sleep waits for a wake and uses it up,
+ * and a wake with nobody asleep is kept for the next sleep. One sleeper at a
+ * time, and the caller makes sure there is never more than one wake pending,
+ * which is what Go's sigsend state machine is for. */
+void pal_signal_note_wake(void);
+void pal_signal_note_sleep(void);
 
 /* ------------------------------------------------------------ dynamic loading
  *

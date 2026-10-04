@@ -354,6 +354,48 @@ if (errors_is(err, exec_err_not_found))
 
 `exec_cmd_start` and `exec_cmd_wait` are the two halves of `exec_cmd_run`, and `exec_cmd_stdin_pipe`, `exec_cmd_stdout_pipe` and `exec_cmd_stderr_pipe` give the parent's end of a pipe to talk to the program while it runs. `exec_cmd_free` gives back everything the Cmd holds, and kills and waits for a program that was started and never waited for. Writing to a stdin pipe after the program has exited raises `SIGPIPE` on Unix, which ends the process unless it is ignored or handled, where Go's runtime turns it into an error.
 
+## Signals
+
+`burrow/os/signal.h` is Go's `os/signal`. Without it a signal does to a burrow program what it does to any C program, so Ctrl-C ends it. `signal_notify` takes signals over and sends them to a channel made with `TYPE_OS_SIGNAL` instead. The channel is sent to without blocking, so give it a buffer:
+
+<!-- example: ../examples/os/signal.c#notify -->
+```c
+Chan *c = chan_make(a, TYPE_OS_SIGNAL, 1);
+signal_notify_v(c, 2, os_interrupt, os_signal_from_syscall(SYSCALL_SIGTERM));
+interrupt_self(a); /* or Ctrl-C */
+OsSignal s;
+chan_recv(c, &s);
+Str name = s.vt->string(s.data, a);
+printf("got " BURROW_STR_FMT "\n", BURROW_STR_ARG(name)); /* got interrupt */
+signal_stop(c);
+```
+
+`signal_notify_context` is the same thing as a context, which is done when one of the signals arrives. Its cause says which one it was, and calling `stop` gives the signals back their old behaviour:
+
+<!-- example: ../examples/os/signal.c#context -->
+```c
+ContextCancelFunc stop;
+Context ctx =
+    signal_notify_context_v(a, context_background(), &stop, 1, os_interrupt);
+interrupt_self(a);
+chan_recv(context_done(ctx), NULL);
+Str why = error_text(context_cause(ctx));
+printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(why)); /* interrupt signal received */
+BURROW_CALLF0(stop);
+context_release(ctx);
+```
+
+`signal_ignore` has signals ignored, and `signal_reset` undoes `signal_notify` and `signal_ignore`, except that a signal that was ignored stays ignored, as it does in Go. `signal_ignored` is true for a signal that is ignored right now, which is how a program finds out that it is running under `nohup`:
+
+<!-- example: ../examples/os/signal.c#ignore -->
+```c
+signal_ignore_v(1, os_signal_from_syscall(SYSCALL_SIGHUP));
+bool ignored = signal_ignored(os_signal_from_syscall(SYSCALL_SIGHUP)); /* true */
+signal_reset_v(0); /* SIGHUP stays ignored, as in Go */
+```
+
+The signals arrive on a thread the package starts the first time it is used, so the channels are sent to and the contexts are cancelled from that thread. There are three differences from Go. Go's runtime catches every signal from the start, while here a signal nobody has asked for keeps its C default, so `SIGUSR1` sent before `signal_notify` or after `signal_stop` ends the program. The signals the runtime uses for panics, such as `SIGSEGV`, can be passed to `signal_notify` but never arrive. And contexts have no String, so the one from `signal_notify_context` cannot name its signals. On Windows, Ctrl-C and Ctrl-Break arrive as `os_interrupt`, and closing the console, logging off and shutting down arrive as `SIGTERM`.
+
 ## Errors
 
 A failure on a path is an `OsPathError`, which is io/fs's `PathError`, holding the operation, the path and the system's error number as a `SyscallErrno`. Rename, link and symlink fail with an `OsLinkError`, which has both names. The text is Go's:

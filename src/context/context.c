@@ -225,6 +225,10 @@ struct CancelCtx {
      * what cancelling does at the end and what freeing has to size. */
     bool after;
 
+    /* Whether this node is the first member of a HookCtx. Same padding, and it
+     * changes only what release does and how much it frees. */
+    bool hooked;
+
     SyncMutex mu;
 
     /* Set once, under mu, at the same moment done is closed. */
@@ -299,6 +303,17 @@ typedef struct AfterFuncCtx {
      * never touches this node and the node can be freed underneath it. */
     Func f;
 } AfterFuncCtx;
+
+/* A cancel node with a function context_release calls before anything else,
+ * for os/signal's NotifyContext. Go's signalCtx is a wrapper with its own stop
+ * method and a collector that frees it, and here the wrapper's memory has to go
+ * back when the context does, which is this file's business, so this file
+ * offers the one call that lets another package hear about it. Embedded the
+ * same way as the two above. */
+typedef struct HookCtx {
+    CancelCtx c;
+    Func hook;
+} HookCtx;
 
 typedef struct ValueCtx {
     Context parent;
@@ -713,6 +728,9 @@ static void cancel_ctx_release(CancelCtx *c) {
     } else if (c->after) {
         size = sizeof(AfterFuncCtx);
         align = _Alignof(AfterFuncCtx);
+    } else if (c->hooked) {
+        size = sizeof(HookCtx);
+        align = _Alignof(HookCtx);
     }
 
     chan_free(done);
@@ -910,6 +928,49 @@ Context context_with_cancel_cause(Alloc *a, Context parent,
     CancelCtx *c = new_cancel_ctx(a, parent);
     if (c == NULL)
         return none;
+
+    if (cancel != NULL)
+        *cancel = BURROW_FN(ContextCancelCauseFunc, cancel_cause_func, c);
+
+    Context out = {&cancel_vt, c};
+    return out;
+}
+
+Context burrow__context_with_cancel_hook(Alloc *a, Context parent,
+                                         ContextCancelCauseFunc *cancel, Func hook) {
+    Context none = {NULL, NULL};
+
+    if (BURROW_CONTEXT_IS_NIL(parent))
+        panic_str(BURROW_S("cannot create context from nil parent"));
+
+    if (cancel != NULL)
+        *cancel = BURROW_FN(ContextCancelCauseFunc, cancel_cause_nothing, NULL);
+
+    HookCtx *h = BURROW_NEW(a, HookCtx);
+    if (h == NULL)
+        return none;
+
+    Chan *done = chan_make(a, TYPE_UINT8, 0);
+    if (done == NULL) {
+        mem_free(a, h, sizeof(HookCtx), _Alignof(HookCtx));
+        return none;
+    }
+
+    CancelCtx *c = &h->c;
+
+    c->parent = parent;
+    c->a = a;
+    c->self = c;
+    c->done = done;
+    c->refs = 1;
+    c->hooked = true;
+    h->hook = hook;
+
+    if (!propagate_cancel(c, parent)) {
+        chan_free(done);
+        mem_free(a, h, sizeof(HookCtx), _Alignof(HookCtx));
+        return none;
+    }
 
     if (cancel != NULL)
         *cancel = BURROW_FN(ContextCancelCauseFunc, cancel_cause_func, c);
@@ -1312,6 +1373,14 @@ void context_release(Context c) {
          * the cancellation already got there. */
         if (cc->after)
             (void)after_func_stop(cc);
+
+        /* The hook goes first, while the node is whole and before the cancel,
+         * so that what it unregisters cannot cancel a node that is going. */
+        if (cc->hooked) {
+            Func hook = ((HookCtx *)cc)->hook;
+            if (hook.f != NULL)
+                BURROW_CALLF0(hook);
+        }
 
         /* Cancel first, so that the done channel is closed and anything parked
          * on it has been let go before the channel stops existing. */

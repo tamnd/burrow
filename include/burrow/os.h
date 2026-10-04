@@ -588,6 +588,10 @@ SyscallSignal os_signal_to_syscall(OsSignal sig);
 extern const OsSignal os_interrupt;
 extern const OsSignal os_kill;
 
+/* The descriptor for os.Signal, which is what a channel for os/signal is made
+ * with: chan_make(a, TYPE_OS_SIGNAL, 1). */
+extern const Type *const TYPE_OS_SIGNAL;
+
 /* "os: process already finished", from Signal and Kill once Wait has
  * returned, and from Wait a second time on Windows. */
 extern const Error os_err_process_done;

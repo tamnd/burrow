@@ -123,9 +123,9 @@ BURROW_OWNS(ret) Error syscall_kill(Int pid, SyscallSignal sig);
 /* ------------------------------------------------------------ process attr */
 
 #if defined(BURROW_OS_WINDOWS)
-/* syscall.SysProcAttr on Windows, with the one field so far. Only 0 works,
- * and anything else makes os_start_process fail with "not supported by
- * windows". */
+/* syscall.SysProcAttr on Windows, with the one field so far. creation_flags
+ * is added to the flags CreateProcess is given, so CREATE_NEW_PROCESS_GROUP
+ * works as it does in Go. */
 typedef struct SyscallSysProcAttr {
     uint32_t creation_flags;
 } SyscallSysProcAttr;

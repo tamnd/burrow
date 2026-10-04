@@ -474,6 +474,12 @@ BURROW_OWNS(ret) Context context_with_value(Alloc *a, Context parent, Any key, A
  * is freeing a pointer to something whose shape is unknown. */
 void context_release(Context c);
 
+/* Internal, for os/signal's NotifyContext. context_with_cancel_cause, and
+ * context_release calls hook before it cancels and frees, so that the package
+ * that made the context can let go of what it keeps alongside. */
+Context burrow__context_with_cancel_hook(Alloc *a, Context parent,
+                                         ContextCancelCauseFunc *cancel, Func hook);
+
 #ifdef __cplusplus
 }
 #endif

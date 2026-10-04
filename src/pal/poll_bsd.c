@@ -47,7 +47,7 @@
  * touch them and runs before anything else here can. Read without any
  * synchronisation afterwards, which is safe because nothing writes them again.
  */
-static int kq = -1;
+static int kqueue_fd = -1;
 static int breakrd = -1;
 static int breakwr = -1;
 
@@ -86,7 +86,7 @@ static bool set_pipe_flags(int fd) {
  * it makes this file the same shape as poll_linux.c rather than two files with
  * different rules. Two descriptors is what it costs. */
 int64_t pal_poll_create(PalErrno *err) {
-    if (kq >= 0) {
+    if (kqueue_fd >= 0) {
         BURROW_OUT(err, PAL_EBUSY);
         return PAL_INVALID_HANDLE;
     }
@@ -133,7 +133,7 @@ int64_t pal_poll_create(PalErrno *err) {
         return PAL_INVALID_HANDLE;
     }
 
-    kq = q;
+    kqueue_fd = q;
     breakrd = fds[0];
     breakwr = fds[1];
     BURROW_OUT(err, PAL_OK);
@@ -144,7 +144,7 @@ int64_t pal_poll_create(PalErrno *err) {
  * one is a caller bug rather than a system failure, so it is PAL_EINVAL and not
  * a guess at what was meant. */
 static bool is_poller(int64_t poll) {
-    return kq >= 0 && poll == (int64_t)kq;
+    return kqueue_fd >= 0 && poll == (int64_t)kqueue_fd;
 }
 
 bool pal_poll_add(int64_t poll, int64_t fd, void *user, PalErrno *err) {
@@ -157,7 +157,7 @@ bool pal_poll_add(int64_t poll, int64_t fd, void *user, PalErrno *err) {
     EV_SET(&ev[0], (uintptr_t)fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, user);
     EV_SET(&ev[1], (uintptr_t)fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, user);
 
-    if (kevent(kq, ev, 2, NULL, 0, NULL) != 0) {
+    if (kevent(kqueue_fd, ev, 2, NULL, 0, NULL) != 0) {
         BURROW_OUT(err, burrow__pal_errno(errno));
         return false;
     }
@@ -233,7 +233,7 @@ int64_t pal_poll_wait(int64_t poll, PalPollEvent *out, int64_t cap, int64_t time
 
     int n;
     for (;;) {
-        n = kevent(kq, NULL, 0, events, want, timeout);
+        n = kevent(kqueue_fd, NULL, 0, events, want, timeout);
         if (n >= 0)
             break;
 

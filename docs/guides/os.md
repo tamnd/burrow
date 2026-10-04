@@ -578,5 +578,27 @@ if (BURROW_OK(err) && msgs.len == 1) {
 (void)syscall_close(s.fd[1]);
 ```
 
-`ForkExec` and the rest of what Go writes by hand on Linux, and all of it on macOS, FreeBSD and Windows, are still to come.
+`syscall_fork_exec` starts a program the way Go's `ForkExec` does, and `syscall_start_process` is the same with a handle that is always 0 on Unix. `SyscallProcAttr` has the directory, the environment and the descriptors, where `files[i]` becomes descriptor `i` in the child and `~0` leaves it closed. A nil environment is an empty one, not ours. Descriptors you didn't list and didn't mark close on exec stay open in the child, as in Go, which is the difference from `os_start_process`: that one closes them. `SyscallSysProcAttr` has Go's fields, `setpgid`, `pgid`, `setsid`, `setctty`, `foreground`, `chroot`, `credential` and the rest, and on Linux the namespace ones too, `cloneflags`, `unshareflags`, `uid_mappings` and `gid_mappings`, `ambient_caps`, `use_cgroup_fd` and `pid_fd`:
+
+<!-- example: ../examples/syscall/exec.c#forkexec -->
+```c
+Str argv[2] = {BURROW_S("/bin/echo"), BURROW_S("hello from a child")};
+Uintptr files[3] = {0, 1, 2};
+SyscallSysProcAttr sys = {.setpgid = true};
+SyscallProcAttr attr = {
+    .env = slice_nil(TYPE_STRING),
+    .files = {files, 3, 3, TYPE_UINTPTR},
+    .sys = &sys,
+};
+Int pid = syscall_fork_exec(argv[0], (Slice){argv, 2, 2, TYPE_STRING}, &attr, &err);
+if (BURROW_OK(err)) {
+    SyscallWaitStatus ws;
+    (void)syscall_wait4(pid, &ws, 0, NULL, &err);
+    printf("exit status %d\n", (int)syscall_wait_status_exit_status(ws));
+}
+```
+
+`syscall_exec` replaces the running program. `syscall_fork_lock` is Go's `ForkLock`: hold it for reading while you make a descriptor and set close on exec in two steps, and no fork can see it in between. `syscall_setgroups` and on Linux `syscall_setuid` and the rest of the family change every thread, as they have since Go 1.16, and `syscall_all_threads_syscall` gives `ENOTSUP` as Go's does in a program that uses cgo, which a C program always is.
+
+The rest of what Go writes by hand on macOS, FreeBSD and Windows is still to come.
 

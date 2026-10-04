@@ -96,12 +96,20 @@ static void TestEnv(TestingT *t) {
     if (found)
         testing_t_errorf_v(t, "Getenv found TESTENV after Unsetenv");
 
+#if defined(BURROW_OS_WINDOWS)
+    /* SetEnvironmentVariable says ERROR_INVALID_PARAMETER, and Go passes it on. */
+    const SyscallErrno bad_key = 87;
+#else
+    const SyscallErrno bad_key = SYSCALL_EINVAL;
+#endif
     err = syscall_setenv(BURROW_S(""), BURROW_S("x"));
-    if (errno_of(err) != SYSCALL_EINVAL)
-        testing_t_errorf_v(t, "Setenv with no key = %v, want EINVAL", err);
+    if (errno_of(err) != bad_key)
+        testing_t_errorf_v(t, "Setenv with no key = %v, want errno %d", err,
+                           (int)bad_key);
     err = syscall_setenv(BURROW_S("A=B"), BURROW_S("x"));
-    if (errno_of(err) != SYSCALL_EINVAL)
-        testing_t_errorf_v(t, "Setenv with = in the key = %v, want EINVAL", err);
+    if (errno_of(err) != bad_key)
+        testing_t_errorf_v(t, "Setenv with = in the key = %v, want errno %d", err,
+                           (int)bad_key);
     ARENA_END;
 }
 

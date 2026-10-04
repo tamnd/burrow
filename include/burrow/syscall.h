@@ -50,14 +50,8 @@
 extern "C" {
 #endif
 
-/* syscall.Errno. 0 means no error. */
-typedef Uintptr SyscallErrno;
-
-/* syscall.Signal: a signal number, the system's own, so SYSCALL_SIGUSR1 is 10
- * on Linux and 30 on macOS. Windows has no signals, and its SIG constants are
- * the numbers Go gives them there. */
-typedef Int SyscallSignal;
-
+/* SyscallErrno and SyscallSignal. */
+#include "burrow/syscall/base.h"
 #include "burrow/syscall/zconst.h"
 #include "burrow/syscall/zerrors.h"
 #include "burrow/syscall/ztypes.h"

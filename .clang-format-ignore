@@ -24,4 +24,5 @@ include/burrow/syscall/zerrors.h
 src/syscall/zsyscall.c
 src/syscall/zsyscall.h
 include/burrow/syscall/zsyscall.h
+include/burrow/syscall/ztypes.h
 src/time/tzdata_zip.c

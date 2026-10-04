@@ -50,6 +50,10 @@ static Alloc *a;
 /* Go's settleTime, and fatalWaitingTime is with the Unix tests. */
 static Duration settle_time = 100 * TIME_MILLISECOND;
 
+/* Set by a child that returns with a context still registered, whose watcher
+ * may still be using memory from ar when the tests are over. */
+static bool keep_arena;
+
 static OsSignal sig_of(SyscallSignal n) {
     return os_signal_from_syscall(n);
 }
@@ -741,6 +745,7 @@ static void TestNotifyContextNotifications(TestingT *t) {
         /* Time for the other signals to get here. stop is not called, so
          * they have to be taken and dropped, not end the program. */
         time_sleep(settle_time);
+        keep_arena = true;
         return;
     }
 
@@ -1094,7 +1099,8 @@ static int os_signal_main(TestingM *m) {
     }
 
     int r = testing_m_run(m);
-    arena_free(&ar);
+    if (!keep_arena)
+        arena_free(&ar);
     return r;
 }
 

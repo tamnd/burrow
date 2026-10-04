@@ -129,6 +129,8 @@ static void TestUnameGetcwd(TestingT *t) {
     if (getcwd(cwd, sizeof cwd) == NULL)
         testing_t_fatal_v(t, "getcwd failed");
     Byte buf[4096];
+    /* MemorySanitizer can not see the kernel fill it. */
+    memset(buf, 0, sizeof buf);
     Slice b = {buf, sizeof buf, sizeof buf, TYPE_BYTE};
     Int got = syscall_getcwd(b, &err);
     if (BURROW_FAILED(err))

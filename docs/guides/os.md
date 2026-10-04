@@ -430,3 +430,28 @@ Int call = SYSCALL_SYS_GETPID; /* 39 on Linux on amd64, 172 on arm64, 20 on macO
 ```
 
 The values come from Go's tables, not from your system's headers. Go's `syscall` is frozen, so a few counts that newer kernels raised, such as `SYSCALL_SOMAXCONN`, are the older number, as they are in Go. `tests/syscall_zconst_test.c` compares every name that both sides define and lists the ones that differ, with the reason.
+
+## System types
+
+The structs Go's `syscall` passes to the system are in `burrow/syscall.h` too, with a `Syscall` prefix: `SyscallStat_t`, `SyscallTimespec`, `SyscallRawSockaddrInet6`, `SyscallMsghdr` and the rest, and on Windows `SyscallOverlapped`, `SyscallStartupInfo` and the others. Each is laid out as Go lays it out for the system and architecture you build for, which is the way the system's C compiler lays out its own struct, so you can hand one to the system where it wants that struct. A field is Go's name in lower case, with words split the same way as everywhere else, so `Family` is `family`, `XSize` is `x_size` and `Scope_id` is `scope_id`:
+
+<!-- example: ../examples/syscall/types.c#sockaddr -->
+```c
+SyscallRawSockaddrInet4 sa;
+memset(&sa, 0, sizeof sa);
+sa.family = SYSCALL_AF_INET;
+uint8_t *port = (uint8_t *)&sa.port; /* big endian, as the system wants it */
+port[0] = 8080 >> 8;
+port[1] = 8080 & 0xff;
+sa.addr[0] = 127;
+sa.addr[3] = 1;
+```
+
+The fields are the system's, so they differ between machines. The BSDs and macOS put a `len` byte before `family` in every socket address, and `SyscallStat_t` has different fields and a different size on each:
+
+<!-- example: ../examples/syscall/types.c#stat -->
+```c
+Int size = (Int)sizeof(SyscallStat_t); /* 144 on Linux on amd64, 128 on arm64 */
+```
+
+The types Go writes with a Go string, slice or func in them, such as `SysProcAttr`, `SockaddrUnix` and `NetlinkMessage`, are not here, since C has nothing to lay them out the same way. `tests/syscall_ztypes_test.c` checks every size and field offset against Go's numbers for the platform it runs on, and compares a few of the common ones with the system's own structs.

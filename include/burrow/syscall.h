@@ -129,15 +129,144 @@ typedef struct SyscallSysProcAttr {
     uint32_t creation_flags;
 } SyscallSysProcAttr;
 #else
-/* syscall.SysProcAttr, with the fields burrow can do so far. setsid gives the
- * child a session of its own. setpgid puts it in a new process group, and
- * pgid has to be 0, which is the new group, since joining another one is not
- * done yet and gives "not supported". */
+/* syscall.Credential: the user and groups the child runs as. groups is a
+ * slice of uint32_t, the supplementary groups, set before the group and the
+ * user unless no_set_groups is true. */
+typedef struct SyscallCredential {
+    uint32_t uid;
+    uint32_t gid;
+    Slice groups; /* of uint32_t */
+    bool no_set_groups;
+} SyscallCredential;
+
+/* syscall.SysProcAttr: what the child does between the fork and the exec, in
+ * the order the fields are listed, which is Go's order on every system.
+ *
+ * chroot, when not empty, is the child's new root. credential, when not NULL,
+ * is the user it runs as. ptrace has it call ptrace(PTRACE_TRACEME), so that
+ * it stops at the exec for the parent to trace.
+ *
+ * setsid gives it a session of its own. setpgid puts it in process group pgid,
+ * or in a new one of its own when pgid is 0. setctty makes descriptor ctty its
+ * controlling terminal, which only works with setsid, and ctty is a slot in
+ * ProcAttr.files there, so a number in the child. noctty detaches descriptor
+ * 0 from its terminal. foreground puts its group in the foreground of the
+ * terminal ctty, which is a descriptor of the parent's here, and implies
+ * setpgid. setctty and foreground together are an error, as they are in Go.
+ *
+ * The rest are Linux's, except pdeathsig, which FreeBSD has too, and jail,
+ * which is FreeBSD's alone. pdeathsig is the signal the child gets when the
+ * thread that started it exits. cloneflags are given to clone, though never
+ * CLONE_VM or CLONE_VFORK, since the child is a copy of the parent here as it
+ * is after fork, and unshareflags to unshare in the child. uid_mappings and
+ * gid_mappings are slices of SyscallSysProcIDMap, written to the child's
+ * uid_map and gid_map, and gid_mappings_enable_setgroups is whether a child
+ * with gid_mappings may call setgroups. ambient_caps, a slice of Uintptr, are
+ * raised in the child, which keeps them through the exec. use_cgroup_fd starts
+ * it in the cgroup cgroup_fd is open on. pid_fd, when not NULL, is set to a
+ * pidfd for it, or -1 when the system has none to give. */
 typedef struct SyscallSysProcAttr {
+    Str chroot;
+    const SyscallCredential *credential;
+    bool ptrace;
     bool setsid;
     bool setpgid;
+    bool setctty;
+    bool noctty;
+    Int ctty;
+    bool foreground;
     Int pgid;
+#if defined(BURROW_OS_LINUX)
+    SyscallSignal pdeathsig;
+    Uintptr cloneflags;
+    Uintptr unshareflags;
+    Slice uid_mappings; /* of SyscallSysProcIDMap */
+    Slice gid_mappings; /* of SyscallSysProcIDMap */
+    bool gid_mappings_enable_setgroups;
+    Slice ambient_caps; /* of Uintptr */
+    bool use_cgroup_fd;
+    Int cgroup_fd;
+    Int *pid_fd;
+#elif defined(BURROW_OS_FREEBSD)
+    SyscallSignal pdeathsig;
+    Int jail;
+#endif
 } SyscallSysProcAttr;
+
+/* syscall.ProcAttr: dir is the child's working directory, and the empty Str
+ * leaves it ours. env is a slice of "key=value" Strs, and nil is no
+ * environment at all, not ours, which is Go's rule here and not os's. files
+ * is a slice of Uintptr, the parent's descriptors that become the child's 0,
+ * 1, 2 and so on, with ~(Uintptr)0 leaving that one closed. sys may be NULL.
+ *
+ * Descriptors that are not in files and are not close on exec stay open in
+ * the child, as they do in Go, which opens everything close on exec. So does
+ * burrow, but a C program may not, and os_start_process closes them. */
+typedef struct SyscallProcAttr {
+    Str dir;
+    Slice env;   /* of Str */
+    Slice files; /* of Uintptr */
+    const SyscallSysProcAttr *sys;
+} SyscallProcAttr;
+
+/* syscall.ForkLock. A descriptor that is opened without close on exec and
+ * marked after is opened under the read lock, and every fork takes the write
+ * lock, syscall_fork_exec's and os_start_process's, so that the child never
+ * gets one of those halfway. */
+extern SyncRWMutex syscall_fork_lock;
+
+/* syscall.ForkExec: starts argv0 with argv, set up as attr says, which may be
+ * NULL, and gives its process id. A failed exec is reported here rather than
+ * by the child exiting, because the child sends back its errno over a pipe
+ * the exec closes. The error is an Errno, or the text Go gives for a
+ * SysProcAttr that cannot work, from error_allocator. */
+BURROW_OWNS(err) Int syscall_fork_exec(Str argv0, Slice argv,
+                                       const SyscallProcAttr *attr, Error *err);
+
+/* syscall.StartProcess: syscall_fork_exec for package os. handle is always 0
+ * here and may be NULL. */
+BURROW_OWNS(err) Int syscall_start_process(Str argv0, Slice argv,
+                                           const SyscallProcAttr *attr, Uintptr *handle,
+                                           Error *err);
+
+/* syscall.Exec: execve, which replaces this process with argv0 and so only
+ * returns when it fails. argv and envv are slices of Str, and envv is the
+ * whole environment the program gets. */
+BURROW_OWNS(ret) Error syscall_exec(Str argv0, Slice argv, Slice envv);
+
+/* syscall.Setgroups: the supplementary groups, a slice of Int. */
+BURROW_OWNS(ret) Error syscall_setgroups(Slice gids);
+
+#if defined(BURROW_OS_LINUX)
+/* syscall.Setuid and the rest of the family. Each one changes every thread of
+ * the process, as POSIX says it should, which is what Go does when it is
+ * linked with cgo, and burrow always is: the C library does it. */
+BURROW_OWNS(ret) Error syscall_setuid(Int uid);
+BURROW_OWNS(ret) Error syscall_setgid(Int gid);
+BURROW_OWNS(ret) Error syscall_seteuid(Int euid);
+BURROW_OWNS(ret) Error syscall_setegid(Int egid);
+BURROW_OWNS(ret) Error syscall_setreuid(Int ruid, Int euid);
+BURROW_OWNS(ret) Error syscall_setregid(Int rgid, Int egid);
+BURROW_OWNS(ret) Error syscall_setresuid(Int ruid, Int euid, Int suid);
+BURROW_OWNS(ret) Error syscall_setresgid(Int rgid, Int egid, Int sgid);
+
+/* syscall.AllThreadsSyscall and AllThreadsSyscall6, which run a system call
+ * on every thread. Go refuses them in a program linked with cgo, since it
+ * does not know about the C library's threads, and burrow is in the same
+ * place: they fail with ENOTSUP and make no call. */
+Uintptr syscall_all_threads_syscall(Uintptr trap, Uintptr a1, Uintptr a2, Uintptr a3,
+                                    Uintptr *r2, SyscallErrno *err);
+Uintptr syscall_all_threads_syscall6(Uintptr trap, Uintptr a1, Uintptr a2, Uintptr a3,
+                                     Uintptr a4, Uintptr a5, Uintptr a6, Uintptr *r2,
+                                     SyscallErrno *err);
+#endif
+
+/* What syscall_fork_exec and os_start_process both do with a SysProcAttr
+ * before the fork: Go's two checks against it, with nfiles the length of
+ * ProcAttr.files, and the attributes as pal_spawn takes them, in out and
+ * flags, with whatever they point at from a. Not the interface. */
+bool burrow__syscall_spawn_sys(const SyscallSysProcAttr *sys, Int nfiles, Alloc *a,
+                               PalSpawnSys *out, uint32_t *flags, Error *err);
 #endif
 
 /* ------------------------------------------------------------- wait status */

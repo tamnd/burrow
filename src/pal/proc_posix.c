@@ -37,12 +37,15 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <limits.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -55,6 +58,30 @@
 
 #if defined(BURROW_OS_DARWIN)
 #include <crt_externs.h>
+#endif
+
+/* The systems the child can ask to be traced on, with PT_TRACE_ME. */
+#if defined(BURROW_OS_DARWIN) || BURROW_BSD
+#define PROC_HAS_PT_TRACE_ME 1
+#include <sys/ptrace.h>
+#include <sys/types.h>
+#endif
+
+#if defined(BURROW_OS_FREEBSD)
+#include <sys/jail.h>
+#include <sys/procctl.h>
+#endif
+
+/* chroot left POSIX in 2001, so the headers hide it from a file that asks for
+ * POSIX 2008 as this one does, and the BSDs hide setgroups with it. Both are
+ * still in every C library. */
+#if (defined(BURROW_OS_DARWIN) && defined(_POSIX_C_SOURCE) &&                          \
+     _POSIX_C_SOURCE >= 200112L) ||                                                    \
+    (BURROW_BSD && defined(__BSD_VISIBLE) && !__BSD_VISIBLE)
+int chroot(const char *path);
+#endif
+#if BURROW_BSD && defined(__BSD_VISIBLE) && !__BSD_VISIBLE
+int setgroups(int n, const gid_t *groups);
 #endif
 
 #if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
@@ -98,14 +125,65 @@ static int64_t proc_fail_n(PalErrno *err) {
 
 /* ------------------------------------------------------------------ spawn */
 
-/* What the child does after the fork. Nothing in here may allocate, take a
- * lock, or touch anything but its arguments and the system calls. Answers
- * with the errno of whatever failed, having not returned at all if the exec
- * worked. */
-static int proc_spawn_child(const PalSpawn *req, char *const *envp, int errfd,
-                            int maxfd) {
-    /* Handlers first, while everything is still blocked. exec would reset
-     * them itself, but that is too late for a signal that arrives before it. */
+#if defined(BURROW_OS_LINUX)
+/* The numbers Go spells out as well, for prctl, mount, clone and capset,
+ * rather than take them from the kernel's headers. */
+#define PROC_PR_SET_PDEATHSIG 1
+#define PROC_PR_SET_KEEPCAPS 8
+#define PROC_PR_CAP_AMBIENT 0x2f
+#define PROC_PR_CAP_AMBIENT_RAISE 2
+#define PROC_PTRACE_TRACEME 0
+#define PROC_MS_REC 0x4000UL
+#define PROC_MS_PRIVATE 0x40000UL
+#define PROC_CLONE_NEWTIME 0x80ULL
+#define PROC_CLONE_PIDFD 0x1000ULL
+#define PROC_CLONE_VM 0x100ULL
+#define PROC_CLONE_VFORK 0x4000ULL
+#define PROC_CLONE_NEWNS 0x20000ULL
+#define PROC_CLONE_NEWUSER 0x10000000ULL
+#define PROC_CLONE_INTO_CGROUP 0x200000000ULL
+#define PROC_CAP_VERSION_3 0x20080522U
+#if !defined(SYS_clone3)
+#define SYS_clone3 435
+#endif
+
+/* The 32 bit systems have a second set of id calls that take 32 bit ids, and
+ * those are the ones Go uses. */
+#if defined(SYS_setgroups32)
+#define PROC_SYS_SETGROUPS SYS_setgroups32
+#define PROC_SYS_SETGID SYS_setgid32
+#define PROC_SYS_SETUID SYS_setuid32
+#else
+#define PROC_SYS_SETGROUPS SYS_setgroups
+#define PROC_SYS_SETGID SYS_setgid
+#define PROC_SYS_SETUID SYS_setuid
+#endif
+#endif
+
+/* What the child is handed, all of it worked out before the fork. */
+typedef struct ProcChild {
+    const PalSpawn *req;
+    const PalSpawnSys *sys;
+    char *const *envp;
+    int errfd;
+    /* Room for the child's copy of the descriptor table while it shuffles it,
+     * made before the fork since the child cannot allocate. */
+    int *scratch;
+    /* The read end of the pipe the parent says the id maps are written on, or
+     * -1 when there are none. Linux only. */
+    int mapfd;
+    int maxfd;
+    pid_t ppid;
+    size_t uid_map_len;
+    size_t gid_map_len;
+} ProcChild;
+
+static const PalSpawnSys proc_no_sys;
+
+/* Every handled signal back to its default, then nothing blocked. exec would
+ * reset the handlers itself, but that is too late for a signal that arrives
+ * before it. This is Go's runtime_AfterForkInChild. */
+static int proc_child_signals(void) {
     struct sigaction dfl;
     dfl.sa_handler = SIG_DFL;
     dfl.sa_flags = 0;
@@ -121,14 +199,215 @@ static int proc_spawn_child(const PalSpawn *req, char *const *envp, int errfd,
     sigemptyset(&none);
     if (pthread_sigmask(SIG_SETMASK, &none, NULL) != 0)
         return EINVAL;
+    return 0;
+}
+
+#if defined(BURROW_OS_LINUX)
+/* Writes n bytes of data to the file at path, for the id maps. Errno or 0. */
+static int proc_child_write(const char *path, const char *data, size_t n) {
+    int fd = open(path, O_WRONLY | O_CLOEXEC);
+    if (fd < 0)
+        return errno;
+    int e = write(fd, data, n) < 0 ? errno : 0;
+    if (close(fd) != 0 && e == 0)
+        e = errno;
+    return e;
+}
+
+/* unshare, and what Go does after it: the maps of a new user namespace, which
+ * only the child can write, and / made private in a new mount namespace. */
+static int proc_child_unshare(const ProcChild *c) {
+    const PalSpawnSys *sys = c->sys;
+    if (syscall(SYS_unshare, (unsigned long)sys->unshareflags) != 0)
+        return errno;
+    int e;
+    if ((sys->unshareflags & PROC_CLONE_NEWUSER) != 0 && sys->gid_map != NULL) {
+        static const char allow[] = "allow", deny[] = "deny";
+        if (sys->gid_map_setgroups)
+            e = proc_child_write("/proc/self/setgroups", allow, sizeof allow - 1);
+        else
+            e = proc_child_write("/proc/self/setgroups", deny, sizeof deny - 1);
+        if (e != 0)
+            return e;
+        e = proc_child_write("/proc/self/gid_map", sys->gid_map, c->gid_map_len);
+        if (e != 0)
+            return e;
+    }
+    if ((sys->unshareflags & PROC_CLONE_NEWUSER) != 0 && sys->uid_map != NULL) {
+        e = proc_child_write("/proc/self/uid_map", sys->uid_map, c->uid_map_len);
+        if (e != 0)
+            return e;
+    }
+    /* unshare leaves alone a mount that was mounted shared, and systemd mounts
+     * / that way, so the new namespace would still see the old one's mounts.
+     * Go makes it private, as the unshare command does. */
+    if ((sys->unshareflags & PROC_CLONE_NEWNS) != 0 &&
+        syscall(SYS_mount, "none", "/", NULL, PROC_MS_REC | PROC_MS_PRIVATE, NULL) != 0)
+        return errno;
+    return 0;
+}
+
+/* Raises the ambient capabilities, which have to be permitted and inheritable
+ * first. */
+static int proc_child_caps(const PalSpawnSys *sys) {
+    struct {
+        uint32_t version;
+        int32_t pid;
+    } hdr = {PROC_CAP_VERSION_3, 0};
+    struct {
+        uint32_t effective;
+        uint32_t permitted;
+        uint32_t inheritable;
+    } data[2];
+    memset(data, 0, sizeof data);
+    if (syscall(SYS_capget, &hdr, data) != 0)
+        return errno;
+    for (int64_t i = 0; i < sys->nambient_caps; i++) {
+        uint64_t cap = sys->ambient_caps[i];
+        if ((cap >> 5) >= 2)
+            return EINVAL;
+        data[cap >> 5].permitted |= 1U << (cap & 31);
+        data[cap >> 5].inheritable |= 1U << (cap & 31);
+    }
+    if (syscall(SYS_capset, &hdr, data) != 0)
+        return errno;
+    for (int64_t i = 0; i < sys->nambient_caps; i++) {
+        if (syscall(SYS_prctl, PROC_PR_CAP_AMBIENT, PROC_PR_CAP_AMBIENT_RAISE,
+                    (unsigned long)sys->ambient_caps[i], 0UL, 0UL) != 0)
+            return errno;
+    }
+    return 0;
+}
+#endif
+
+/* The user, group and supplementary groups. On Linux these are the system
+ * calls themselves, since the C library's would try to change every thread
+ * the parent had, and in the child they are gone. */
+static int proc_child_credential(const PalSpawnSys *sys) {
+#if defined(BURROW_OS_LINUX)
+    if (!(sys->gid_map != NULL && !sys->gid_map_setgroups && sys->ngroups == 0) &&
+        !sys->no_set_groups &&
+        syscall(PROC_SYS_SETGROUPS, (unsigned long)sys->ngroups, sys->groups) != 0)
+        return errno;
+    if (syscall(PROC_SYS_SETGID, (unsigned long)sys->gid) != 0)
+        return errno;
+    if (syscall(PROC_SYS_SETUID, (unsigned long)sys->uid) != 0)
+        return errno;
+#else
+    if (!sys->no_set_groups &&
+        setgroups((int)sys->ngroups, (const gid_t *)(const void *)sys->groups) != 0)
+        return errno;
+    if (setgid((gid_t)sys->gid) != 0)
+        return errno;
+    if (setuid((uid_t)sys->uid) != 0)
+        return errno;
+#endif
+    return 0;
+}
+
+/* The parent death signal, and the signal itself straight away when the
+ * parent died before it was set. */
+static int proc_child_pdeathsig(const ProcChild *c) {
+    int sig = c->sys->pdeathsig;
+#if defined(BURROW_OS_LINUX)
+    if (syscall(SYS_prctl, PROC_PR_SET_PDEATHSIG, (unsigned long)sig, 0UL, 0UL, 0UL) !=
+        0)
+        return errno;
+#elif defined(BURROW_OS_FREEBSD)
+    if (procctl(P_PID, 0, PROC_PDEATHSIG_CTL, &sig) != 0)
+        return errno;
+#endif
+    if (getppid() != c->ppid && kill(getpid(), sig) != 0)
+        return errno;
+    return 0;
+}
+
+/* What the child does after the fork, in the order Go's forkAndExecInChild
+ * does it on the system. Nothing in here may allocate, take a lock, or touch
+ * anything but its arguments and the system calls. Answers with the errno of
+ * whatever failed, having not returned at all if the exec worked. */
+static int proc_spawn_child(const ProcChild *c) {
+    const PalSpawn *req = c->req;
+    const PalSpawnSys *sys = c->sys;
+    bool setpgid_ = (req->flags & PAL_SPAWN_SETPGID) != 0 || sys->foreground;
+    int e;
+
+#if defined(BURROW_OS_FREEBSD)
+    if (sys->jail > 0 && jail_attach((int)sys->jail) != 0)
+        return errno;
+#endif
+#if defined(PROC_HAS_PT_TRACE_ME)
+    if (sys->ptrace && ptrace(PT_TRACE_ME, 0, 0, 0) != 0)
+        return errno;
+#endif
+#if defined(BURROW_OS_LINUX)
+    if (sys->nambient_caps > 0 &&
+        syscall(SYS_prctl, PROC_PR_SET_KEEPCAPS, 1UL, 0UL, 0UL, 0UL) != 0)
+        return errno;
+    /* The parent writes the maps of a user namespace clone made, and nothing
+     * here can go ahead until it has. */
+    if (c->mapfd >= 0) {
+        int32_t e2 = 0;
+        ssize_t n;
+        do {
+            n = read(c->mapfd, &e2, sizeof e2);
+        } while (n < 0 && errno == EINTR);
+        if (n < 0)
+            return errno;
+        if (n != (ssize_t)sizeof e2)
+            return EINVAL;
+        if (e2 != 0)
+            return e2;
+    }
+#endif
 
     if ((req->flags & PAL_SPAWN_SETSID) != 0 && setsid() < 0)
         return errno;
-    if ((req->flags & PAL_SPAWN_SETPGID) != 0 && setpgid(0, 0) != 0)
+    if (setpgid_ && setpgid(0, (pid_t)sys->pgid) != 0)
         return errno;
+    if (sys->foreground) {
+        pid_t pgrp = sys->pgid != 0 ? (pid_t)sys->pgid : getpid();
+        if (ioctl((int)sys->ctty, TIOCSPGRP, &pgrp) != 0)
+            return errno;
+    }
+
+    /* After TIOCSPGRP, which would otherwise stop the child with SIGTTOU. */
+    e = proc_child_signals();
+    if (e != 0)
+        return e;
+
+#if defined(BURROW_OS_LINUX)
+    if (sys->unshareflags != 0) {
+        e = proc_child_unshare(c);
+        if (e != 0)
+            return e;
+    }
+#endif
+    if (sys->chroot != NULL && chroot(sys->chroot) != 0)
+        return errno;
+    if (sys->credential) {
+        e = proc_child_credential(sys);
+        if (e != 0)
+            return e;
+    }
+#if defined(BURROW_OS_LINUX)
+    if (sys->nambient_caps > 0) {
+        e = proc_child_caps(sys);
+        if (e != 0)
+            return e;
+    }
+#endif
+    if (req->dir != NULL && chdir(req->dir) != 0)
+        return errno;
+    if (sys->pdeathsig != 0) {
+        e = proc_child_pdeathsig(c);
+        if (e != 0)
+            return e;
+    }
 
     /* The error pipe goes above every slot being filled, so that the dup2s
      * below cannot land on it. */
+    int errfd = c->errfd;
     int nfds = (int)req->nfds;
     if (errfd < nfds) {
         int moved = fcntl(errfd, F_DUPFD_CLOEXEC, nfds);
@@ -140,7 +419,7 @@ static int proc_spawn_child(const PalSpawn *req, char *const *envp, int errfd,
     /* Pass one: any source that sits in a slot about to be overwritten moves
      * up out of the way first. Pass two puts each one where it belongs. This
      * is Go's order, and the only one that handles fds = {1, 0}. */
-    int src[256];
+    int *src = c->scratch;
     for (int i = 0; i < nfds; i++) {
         src[i] = (int)req->fds[i];
         if (src[i] >= 0 && src[i] < nfds && src[i] != i) {
@@ -161,28 +440,47 @@ static int proc_spawn_child(const PalSpawn *req, char *const *envp, int errfd,
         }
     }
 
-    if (req->dir != NULL && chdir(req->dir) != 0)
-        return errno;
-
-    /* Everything above the table closes, bar the error pipe, which exec
-     * closes itself. */
+    if (sys->keep_fds) {
+        /* Go's convention: 0, 1 and 2 are not left to the child unless they
+         * were asked for. */
+        for (int fd = nfds; fd < 3; fd++)
+            close(fd);
+    } else {
+        /* Everything above the table closes, bar the error pipe, which exec
+         * closes itself. */
 #if defined(BURROW_OS_LINUX) && defined(SYS_close_range)
-    bool ranged = true;
-    if (errfd > nfds &&
-        syscall(SYS_close_range, (unsigned)nfds, (unsigned)errfd - 1, 0) != 0)
-        ranged = false;
-    if (ranged && syscall(SYS_close_range, (unsigned)errfd + 1, ~0U, 0) != 0)
-        ranged = false;
-    if (!ranged)
+        bool ranged = true;
+        if (errfd > nfds &&
+            syscall(SYS_close_range, (unsigned)nfds, (unsigned)errfd - 1, 0) != 0)
+            ranged = false;
+        if (ranged && syscall(SYS_close_range, (unsigned)errfd + 1, ~0U, 0) != 0)
+            ranged = false;
+        if (!ranged)
 #endif
-    {
-        for (int fd = nfds; fd < maxfd; fd++) {
-            if (fd != errfd)
-                close(fd);
+        {
+            for (int fd = nfds; fd < c->maxfd; fd++) {
+                if (fd != errfd)
+                    close(fd);
+            }
         }
     }
 
-    execve(req->path, (char *const *)(uintptr_t)req->argv, envp);
+#if defined(TIOCSCTTY) && defined(TIOCNOTTY)
+    if (sys->noctty && ioctl(0, TIOCNOTTY, 0) != 0)
+        return errno;
+#endif
+#if defined(BURROW_OS_LINUX)
+    if (sys->setctty && ioctl((int)sys->ctty, TIOCSCTTY, 1) != 0)
+        return errno;
+    /* Last, so that what the child does before the exec is not traced. */
+    if (sys->ptrace && syscall(SYS_ptrace, PROC_PTRACE_TRACEME, 0L, 0L, 0L) != 0)
+        return errno;
+#elif defined(TIOCSCTTY) && defined(TIOCNOTTY)
+    if (sys->setctty && ioctl((int)sys->ctty, TIOCSCTTY, 0) != 0)
+        return errno;
+#endif
+
+    execve(req->path, (char *const *)(uintptr_t)req->argv, c->envp);
     return errno;
 }
 
@@ -196,28 +494,205 @@ static int proc_fd_limit(void) {
     return (int)rl.rlim_cur;
 }
 
+/* Whether this system can do everything sys asks for. */
+static bool proc_sys_supported(const PalSpawnSys *sys) {
+#if !defined(BURROW_OS_LINUX)
+    if (sys->cloneflags != 0 || sys->unshareflags != 0 || sys->uid_map != NULL ||
+        sys->gid_map != NULL || sys->nambient_caps > 0 || sys->use_cgroup_fd ||
+        sys->pidfd != NULL)
+        return false;
+#endif
+#if !defined(BURROW_OS_LINUX) && !defined(BURROW_OS_FREEBSD)
+    if (sys->pdeathsig != 0)
+        return false;
+#endif
+#if !defined(BURROW_OS_FREEBSD)
+    if (sys->jail != 0)
+        return false;
+#endif
+#if !defined(BURROW_OS_LINUX) && !defined(PROC_HAS_PT_TRACE_ME)
+    if (sys->ptrace)
+        return false;
+#endif
+#if !defined(TIOCSCTTY) || !defined(TIOCNOTTY)
+    if (sys->setctty || sys->noctty)
+        return false;
+#endif
+    return true;
+}
+
+/* fork, or on Linux, when sys asks for something only clone does, clone
+ * itself. It is never CLONE_VM, which is how Go saves copying the parent: the
+ * child here is a copy, as fork makes it, so CLONE_VM and CLONE_VFORK in
+ * cloneflags are left out. */
+static pid_t proc_fork(const PalSpawnSys *sys, int32_t *pidfd) {
+#if defined(BURROW_OS_LINUX)
+    if (sys->cloneflags != 0 || sys->pidfd != NULL || sys->use_cgroup_fd) {
+        uint64_t flags = sys->cloneflags & ~(PROC_CLONE_VM | PROC_CLONE_VFORK);
+        if (sys->pidfd != NULL)
+            flags |= PROC_CLONE_PIDFD;
+        if (sys->use_cgroup_fd || (flags & PROC_CLONE_NEWTIME) != 0) {
+            struct {
+                uint64_t flags, pidfd, child_tid, parent_tid, exit_signal, stack,
+                    stack_size, tls, set_tid, set_tid_size, cgroup;
+            } args;
+            memset(&args, 0, sizeof args);
+            args.flags = flags;
+            args.exit_signal = SIGCHLD;
+            if (sys->use_cgroup_fd) {
+                args.flags |= PROC_CLONE_INTO_CGROUP;
+                args.cgroup = (uint64_t)sys->cgroup_fd;
+            }
+            if (sys->pidfd != NULL)
+                args.pidfd = (uint64_t)(uintptr_t)pidfd;
+            return (pid_t)syscall(SYS_clone3, &args, sizeof args);
+        }
+        flags |= SIGCHLD;
+#if defined(__s390x__) || defined(__s390__)
+        /* s390 has the first two the other way round. */
+        return (pid_t)syscall(SYS_clone, 0UL, (unsigned long)flags, pidfd, NULL, 0UL);
+#else
+        return (pid_t)syscall(SYS_clone, (unsigned long)flags, 0UL, pidfd, NULL, 0UL);
+#endif
+    }
+#else
+    (void)sys;
+    (void)pidfd;
+#endif
+    return fork();
+}
+
+#if defined(BURROW_OS_LINUX)
+/* Writes data to the file at path for the parent, the way Go's
+ * writeIDMappings does. Errno or 0. */
+static int proc_write_file(const char *path, const char *data, size_t n) {
+    int fd;
+    do {
+        fd = open(path, O_RDWR | O_CLOEXEC);
+    } while (fd < 0 && errno == EINTR);
+    if (fd < 0)
+        return errno;
+    int e = 0;
+    while (n > 0) {
+        ssize_t w = write(fd, data, n);
+        if (w < 0 && errno == EINTR)
+            continue;
+        if (w < 0) {
+            e = errno;
+            break;
+        }
+        data += w;
+        n -= (size_t)w;
+    }
+    if (close(fd) != 0 && e == 0)
+        e = errno;
+    return e;
+}
+
+/* The maps of the user namespace the child was cloned into, which have to be
+ * written from outside it. Go's writeUidGidMappings. */
+static int proc_write_maps(pid_t pid, const PalSpawnSys *sys) {
+    char path[64];
+    int e;
+    if (sys->uid_map != NULL) {
+        snprintf(path, sizeof path, "/proc/%ld/uid_map", (long)pid);
+        e = proc_write_file(path, sys->uid_map, strlen(sys->uid_map));
+        if (e != 0)
+            return e;
+    }
+    if (sys->gid_map != NULL) {
+        /* A kernel from before 3.19 has no setgroups file, and needs none. */
+        snprintf(path, sizeof path, "/proc/%ld/setgroups", (long)pid);
+        const char *sg = sys->gid_map_setgroups ? "allow" : "deny";
+        e = proc_write_file(path, sg, strlen(sg));
+        if (e != 0 && e != ENOENT)
+            return e;
+        snprintf(path, sizeof path, "/proc/%ld/gid_map", (long)pid);
+        e = proc_write_file(path, sys->gid_map, strlen(sys->gid_map));
+        if (e != 0)
+            return e;
+    }
+    return 0;
+}
+#endif
+
+static int64_t proc_spawn(const ProcChild *c, PalErrno *err);
+
 int64_t pal_spawn(const PalSpawn *req, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (req == NULL || req->path == NULL || req->argv == NULL || req->nfds < 0 ||
-        req->nfds > 256 || (req->nfds > 0 && req->fds == NULL)) {
+        (req->nfds > 0 && req->fds == NULL)) {
         BURROW_OUT(err, PAL_EINVAL);
         return -1;
     }
-    char *const *envp = req->envp != NULL ? (char *const *)(uintptr_t)req->envp
-                                          : (char *const *)(uintptr_t)pal_environ();
-    int maxfd = proc_fd_limit();
+    const PalSpawnSys *sys = req->sys != NULL ? req->sys : &proc_no_sys;
+    if (!proc_sys_supported(sys)) {
+        BURROW_OUT(err, PAL_ENOSYS);
+        return -1;
+    }
 
+    ProcChild c;
+    memset(&c, 0, sizeof c);
+    c.req = req;
+    c.sys = sys;
+    c.envp = req->envp != NULL ? (char *const *)(uintptr_t)req->envp
+                               : (char *const *)(uintptr_t)pal_environ();
+    c.maxfd = proc_fd_limit();
+    c.mapfd = -1;
+    c.ppid = sys->pdeathsig != 0 ? getpid() : 0;
+    c.uid_map_len = sys->uid_map != NULL ? strlen(sys->uid_map) : 0;
+    c.gid_map_len = sys->gid_map != NULL ? strlen(sys->gid_map) : 0;
+
+    /* Most spawns pass three, and the rest get pages of their own. */
+    int small[64];
+    size_t scratch_size = 0;
+    c.scratch = small;
+    if (req->nfds > (int32_t)(sizeof small / sizeof small[0])) {
+        scratch_size = (size_t)req->nfds * sizeof(int);
+        void *m = mmap(NULL, scratch_size, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (m == MAP_FAILED) {
+            (void)proc_fail(err);
+            return -1;
+        }
+        c.scratch = (int *)m;
+    }
+    int64_t pid = proc_spawn(&c, err);
+    if (scratch_size > 0)
+        munmap(c.scratch, scratch_size);
+    return pid;
+}
+
+/* The rest of pal_spawn, once c is ready. */
+static int64_t proc_spawn(const ProcChild *cc, PalErrno *err) {
+    ProcChild c = *cc;
+    const PalSpawnSys *sys = c.sys;
     int64_t p[2];
     if (!pal_pipe(p, 0, err))
         return -1;
+    c.errfd = (int)p[1];
 
+    /* The pipe the parent tells the child on that the maps are written. */
+    int64_t mp[2] = {-1, -1};
+    if (sys->uid_map != NULL || sys->gid_map != NULL) {
+        if (!pal_pipe(mp, 0, err)) {
+            pal_close(p[0], NULL);
+            pal_close(p[1], NULL);
+            return -1;
+        }
+        c.mapfd = (int)mp[0];
+    }
+
+    int32_t pidfd = -1;
     sigset_t all, old;
     sigfillset(&all);
     pthread_rwlock_wrlock(&fork_lock);
     pthread_sigmask(SIG_SETMASK, &all, &old);
-    pid_t pid = fork();
+    pid_t pid = proc_fork(sys, &pidfd);
     if (pid == 0) {
-        int e = proc_spawn_child(req, envp, (int)p[1], maxfd);
+        if (mp[1] >= 0)
+            close((int)mp[1]);
+        int e = proc_spawn_child(&c);
         ssize_t w;
         do {
             w = write((int)p[1], &e, sizeof e);
@@ -228,11 +703,30 @@ int64_t pal_spawn(const PalSpawn *req, PalErrno *err) {
     pthread_sigmask(SIG_SETMASK, &old, NULL);
     pthread_rwlock_unlock(&fork_lock);
     pal_close(p[1], NULL);
+    if (mp[0] >= 0)
+        pal_close(mp[0], NULL);
     if (pid < 0) {
         pal_close(p[0], NULL);
+        if (mp[1] >= 0)
+            pal_close(mp[1], NULL);
         BURROW_OUT(err, burrow__pal_errno(forked));
         return -1;
     }
+
+#if defined(BURROW_OS_LINUX)
+    /* A user namespace unshare made, the child maps itself. One clone made
+     * is mapped from out here. */
+    if (mp[1] >= 0) {
+        int32_t e2 = 0;
+        if ((sys->unshareflags & PROC_CLONE_NEWUSER) == 0)
+            e2 = proc_write_maps(pid, sys);
+        ssize_t w;
+        do {
+            w = write((int)mp[1], &e2, sizeof e2);
+        } while (w < 0 && errno == EINTR);
+        pal_close(mp[1], NULL);
+    }
+#endif
 
     int e = 0;
     ssize_t n;
@@ -240,16 +734,88 @@ int64_t pal_spawn(const PalSpawn *req, PalErrno *err) {
         n = read((int)p[0], &e, sizeof e);
     } while (n < 0 && errno == EINTR);
     pal_close(p[0], NULL);
-    if (n == 0)
+    if (n == 0) {
+        if (sys->pidfd != NULL)
+            *sys->pidfd = pidfd;
         return (int64_t)pid;
+    }
 
     /* The exec failed, and the child has exited or is about to. Reap it here,
      * since the caller was never told there was anything to wait for. */
     int status;
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
     }
-    BURROW_OUT(err, n == (ssize_t)sizeof e ? burrow__pal_errno(e) : PAL_EOTHER);
+    if (pidfd >= 0)
+        close(pidfd);
+    if (sys->pidfd != NULL)
+        *sys->pidfd = -1;
+    BURROW_OUT(err, burrow__pal_errno(n == (ssize_t)sizeof e ? e : EPIPE));
     return -1;
+}
+
+bool pal_set_ids(PalSetID which, uint32_t a, uint32_t b, uint32_t c, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    int r;
+    switch (which) {
+    case PAL_SETUID:
+        r = setuid((uid_t)a);
+        break;
+    case PAL_SETGID:
+        r = setgid((gid_t)a);
+        break;
+    case PAL_SETEUID:
+        r = seteuid((uid_t)a);
+        break;
+    case PAL_SETEGID:
+        r = setegid((gid_t)a);
+        break;
+    case PAL_SETREUID:
+        r = setreuid((uid_t)a, (uid_t)b);
+        break;
+    case PAL_SETREGID:
+        r = setregid((gid_t)a, (gid_t)b);
+        break;
+#if defined(BURROW_OS_LINUX)
+    case PAL_SETRESUID:
+        r = setresuid((uid_t)a, (uid_t)b, (uid_t)c);
+        break;
+    case PAL_SETRESGID:
+        r = setresgid((gid_t)a, (gid_t)b, (gid_t)c);
+        break;
+#else
+    case PAL_SETRESUID:
+    case PAL_SETRESGID:
+        BURROW_OUT(err, PAL_ENOSYS);
+        return false;
+#endif
+    default:
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+    (void)b;
+    (void)c;
+    if (r != 0)
+        return proc_fail(err);
+    return true;
+}
+
+bool pal_setgroups(const uint32_t *gids, int64_t n, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (n < 0 || n > INT_MAX) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+    /* gid_t is 32 bits unsigned on every system this runs on. */
+    _Static_assert(sizeof(gid_t) == sizeof(uint32_t), "gid_t is not 32 bits");
+    const gid_t *list = (const gid_t *)(const void *)gids;
+#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO)
+    int r = setgroups((size_t)n, list);
+#else
+    int r = setgroups((int)n, list);
+#endif
+    if (r != 0)
+        return proc_fail(err);
+    return true;
 }
 
 /* WCOREDUMP is not POSIX, though every system this runs on has it. */

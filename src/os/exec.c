@@ -534,25 +534,29 @@ OsProcess *os_start_process(Alloc *a, Str name, Slice argv, const OsProcAttr *at
 
     uint32_t flags = 0;
     uint32_t creation_flags = 0;
-    if (attr->sys != NULL) {
 #if defined(BURROW_OS_WINDOWS)
+    if (attr->sys != NULL)
         creation_flags = attr->sys->creation_flags;
-#else
-        if (attr->sys->setpgid && attr->sys->pgid != 0)
-            return os_start_fail(name, burrow__os_errno_value(SYSCALL_ENOTSUP), err);
-        if (attr->sys->setsid)
-            flags |= PAL_SPAWN_SETSID;
-        if (attr->sys->setpgid)
-            flags |= PAL_SPAWN_SETPGID;
-#endif
-    }
-#if defined(BURROW_OS_WINDOWS)
     if (name.len == 0)
         return os_start_fail(name, burrow__os_errno_value(SYSCALL_EWINDOWS), err);
 #endif
 
     Arena ar;
     arena_init(&ar, NULL, 0);
+#if !defined(BURROW_OS_WINDOWS)
+    /* What the child does before the exec, as syscall's StartProcess would
+     * take it, in memory that lasts until the spawn is done. */
+    Arena sysar;
+    arena_init(&sysar, NULL, 0);
+    PalSpawnSys sys;
+    Error se = BURROW_NO_ERROR;
+    if (!burrow__syscall_spawn_sys(attr->sys, attr->files.len, arena_allocator(&sysar),
+                                   &sys, &flags, &se)) {
+        arena_free(&sysar);
+        arena_free(&ar);
+        return os_start_fail(name, se, err);
+    }
+#endif
     Slice env = attr->env;
     if (env.p == NULL)
         env = os_environ(arena_allocator(&ar));
@@ -561,6 +565,9 @@ OsProcess *os_start_process(Alloc *a, Str name, Slice argv, const OsProcAttr *at
     Error e = BURROW_NO_ERROR;
     if (!os_spawn_args(&sa, name, argv, env, attr->dir, attr->files, &e)) {
         arena_free(&ar);
+#if !defined(BURROW_OS_WINDOWS)
+        arena_free(&sysar);
+#endif
         return os_start_fail(name, e, err);
     }
     arena_free(&ar);
@@ -576,7 +583,19 @@ OsProcess *os_start_process(Alloc *a, Str name, Slice argv, const OsProcAttr *at
     req.flags = flags;
     req.creation_flags = creation_flags;
     PalErrno pe = PAL_OK;
+#if defined(BURROW_OS_WINDOWS)
     int64_t pid = pal_spawn(&req, &pe);
+#else
+    req.sys = &sys;
+    sync_rw_mutex_lock(&syscall_fork_lock);
+    int64_t pid = pal_spawn(&req, &pe);
+    sync_rw_mutex_unlock(&syscall_fork_lock);
+#if defined(BURROW_OS_LINUX)
+    if (sys.pidfd != NULL)
+        *attr->sys->pid_fd = (Int)*sys.pidfd;
+#endif
+    arena_free(&sysar);
+#endif
     os_spawn_args_free(&sa);
     if (pid < 0)
         return os_start_fail(name, burrow__os_errno(pe), err);

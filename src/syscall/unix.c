@@ -11,11 +11,9 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
-#include "burrow/platform.h"
+#include "burrow/syscall.h"
 
 #if !defined(BURROW_OS_WINDOWS)
-
-#include "burrow/syscall.h"
 
 #include "burrow/mem/heap.h"
 #include "burrow/slice.h"

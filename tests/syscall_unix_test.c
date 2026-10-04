@@ -515,7 +515,7 @@ static void TestPrlimitSelf(TestingT *t) {
     if (getrlimit(RLIMIT_NOFILE, &c) != 0)
         testing_t_fatalf_v(t, "getrlimit failed");
     CHECK((uint64_t)lim.cur == (uint64_t)c.rlim_cur);
-    CHECK((uint64_t)lim.max == (uint64_t)c.rlim_max);
+    CHECK((uint64_t)lim.max_ == (uint64_t)c.rlim_max);
     err = syscall_setrlimit(SYSCALL_RLIMIT_NOFILE, &lim);
     if (BURROW_FAILED(err))
         testing_t_errorf_v(t, "Setrlimit with the same limit: %v", err);

@@ -293,12 +293,19 @@ global	src/archive/zip.c	zip_decompressors	zip-registry	The head of the list of 
 global	src/os/proc.c	os_args_slice	package-vars	os.Args, built from the command line once under os_args_once and never written again.
 global	src/os/proc.c	os_getwd_mu	package-vars	Go's getwdCache lock, which keeps two Getwd calls from walking up the tree at once.
 global	src/os/proc.c	os_getwd_cache	package-vars	Go's getwdCache.dir, the last directory the slow Getwd found. Read and written under os_getwd_mu.
-global	src/os/env.c	os_envs	package-vars	syscall's copy of the environment, filled once under os_env_once, then read under os_env_mu and written with it held for writing.
-global	src/os/env.c	os_envs_len	package-vars	How many entries os_envs has, under os_env_mu as os_envs is.
-global	src/os/env.c	os_envs_cap	package-vars	How many entries os_envs has room for, under os_env_mu as os_envs is.
+global	src/syscall/env.c	env_envs	package-vars	syscall's copy of the environment, Go's envs, filled once under syscall_env_once, then read under env_mu and written with it held for writing.
+global	src/syscall/env.c	env_envs_len	package-vars	How many entries env_envs has, under env_mu as env_envs is.
+global	src/syscall/env.c	env_envs_cap	package-vars	How many entries env_envs has room for, under env_mu as env_envs is.
 global	src/os/proc.c	os_args_once	package-vars	Makes os_args_slice the first time os_args is called.
-global	src/os/env.c	os_env_once	package-vars	Copies the environment into os_envs the first time any of the environment calls needs it, as syscall's envOnce does.
-global	src/os/env.c	os_env_mu	package-vars	syscall's envLock, over os_envs and its length and room.
+global	src/syscall/env.c	syscall_env_once	package-vars	Copies the environment into env_envs the first time any of the environment calls needs it, as Go's copyenv does.
+global	src/syscall/env.c	env_mu	package-vars	Go's envLock, over env_envs and its length and room.
+global	src/syscall/unix.c	syscall_stdin	package-vars	Go's syscall.Stdin, which is a variable there too. Nothing in burrow writes it, and a program that does is doing what a Go program that assigns it does.
+global	src/syscall/unix.c	syscall_stdout	package-vars	Go's syscall.Stdout, as syscall_stdin is.
+global	src/syscall/unix.c	syscall_stderr	package-vars	Go's syscall.Stderr, as syscall_stdin is.
+global	src/syscall/unix.c	unix_mmap_mu	package-vars	The lock in Go's mapper, held over each read and write of the table of mappings.
+global	src/syscall/unix.c	unix_mmap_active	package-vars	The mappings syscall_mmap made and syscall_munmap has not undone, Go's mapper.active, under unix_mmap_mu.
+global	src/syscall/unix.c	unix_mmap_len	package-vars	How many mappings unix_mmap_active has, under unix_mmap_mu.
+global	src/syscall/unix.c	unix_mmap_cap	package-vars	How many mappings unix_mmap_active has room for, under unix_mmap_mu.
 global	src/os/user.c	user_cache_once	package-vars	Fills the Current cache the first time it is needed, as Go's cache.Do does.
 global	src/os/user.c	user_cache_u	package-vars	The user Current found, written once under user_cache_once and only read after that.
 global	src/os/user.c	user_cache_err	package-vars	The error Current got instead, written once under user_cache_once and only read after that.

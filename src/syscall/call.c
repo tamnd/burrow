@@ -67,6 +67,28 @@ Slice syscall_byte_slice_from_string(Alloc *a, Str s, Error *err) {
     return b;
 }
 
+Slice syscall_string_byte_slice(Alloc *a, Str s) {
+    Error err = BURROW_NO_ERROR;
+    Slice b = syscall_byte_slice_from_string(a, s, &err);
+    if (BURROW_FAILED(err) && !errors_is(err, burrow_err_out_of_memory))
+        panic_str(BURROW_S("syscall: string with NUL passed to StringByteSlice"));
+    return b;
+}
+
+uint8_t *syscall_string_byte_ptr(Alloc *a, Str s) {
+    return (uint8_t *)syscall_string_byte_slice(a, s).p;
+}
+
+/* ------------------------------------------------------------ the process */
+
+Int syscall_getpagesize(void) {
+    return (Int)pal_page_size();
+}
+
+void syscall_exit(Int code) {
+    pal_exit((int32_t)code);
+}
+
 uint8_t *burrow__syscall_cstring(burrow__SyscallCString *h, Str s, Error *err) {
     h->heap = NULL;
     if (has_nul(s)) {

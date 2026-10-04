@@ -47,6 +47,7 @@ var callSystems = []struct{ goos, cond string }{
 	{"darwin", "defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)"},
 	{"freebsd", "defined(BURROW_OS_FREEBSD)"},
 	{"linux", "defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO) || defined(BURROW_OS_WASI)"},
+	{"windows", "defined(BURROW_OS_WINDOWS)"},
 }
 
 // The libSystem functions that are variadic, and how many parameters come
@@ -78,15 +79,22 @@ type cfunc struct {
 	proto string // the C declaration, with no semicolon
 	def   string // the C definition
 	libc  map[string]bool
+	procs map[string]bool // the Windows procedures it calls, by Go variable
 }
+
+// A Windows procedure: the variable Go keeps its LazyProc in, the DLL's
+// variable, and its name in the DLL.
+type winProc struct{ v, mod, name string }
 
 // callGen translates the zsyscall functions of one platform.
 type callGen struct {
-	p    *platform
-	tg   *typeGen
-	hand map[string]bool   // Go names of the types syscall.h writes
-	libc map[string]string // libc_X to the symbol, from cgo_import_dynamic
-	why  map[string]string
+	p     *platform
+	tg    *typeGen
+	hand  map[string]bool   // Go names of the types syscall.h writes
+	libc  map[string]string // libc_X to the symbol, from cgo_import_dynamic
+	mods  map[string]string // on Windows, modX to the DLL's name
+	procs map[string]winProc
+	why   map[string]string
 }
 
 var errorType = types.Universe.Lookup("error").Type()
@@ -113,7 +121,7 @@ func (g *callGen) ctype(t types.Type, name string) (string, string) {
 		return sp("Slice"), ""
 	case *types.Pointer:
 		if a, ok := types.Unalias(u.Elem()).(*types.Array); ok {
-			return g.ctype(types.NewPointer(a.Elem()), name)
+			return g.ctype(types.NewPointer(arrayPointers(a.Elem())), name)
 		}
 		if n, ok := types.Unalias(u.Elem()).(*types.Named); ok && g.hand[n.Obj().Name()] && n.Obj().Pkg() != nil && n.Obj().Pkg().Path() == "syscall" {
 			return "Syscall" + n.Obj().Name() + " *" + name, ""
@@ -133,6 +141,19 @@ func (g *callGen) ctype(t types.Type, name string) (string, string) {
 	return strings.TrimRight(d, " "), ""
 }
 
+// arrayPointers is t with each pointer to an array in it made a pointer to
+// the array's element, so Go's *[8192]*[8192]uint16 is C's uint16_t **.
+func arrayPointers(t types.Type) types.Type {
+	p, ok := types.Unalias(t).(*types.Pointer)
+	if !ok {
+		return t
+	}
+	if a, ok := types.Unalias(p.Elem()).(*types.Array); ok {
+		return types.NewPointer(arrayPointers(a.Elem()))
+	}
+	return t
+}
+
 // castType is the C type of t, for a cast.
 func (g *callGen) castType(t types.Type) (string, string) {
 	c, why := g.ctype(t, "")
@@ -150,6 +171,8 @@ type trans struct {
 	cstrs    []string
 	usesDone bool
 	libc     map[string]bool
+	procs    map[string]bool
+	results  []*types.Var // the function's results, in Go's order
 	why      string
 }
 
@@ -346,6 +369,14 @@ func (t *trans) call(e *ast.CallExpr, outs []string) string {
 				return "(Uintptr)" + libcEnum(fn)
 			}
 		}
+		// procX.Addr() is the LazyProc for X in the table zsyscall.c has,
+		// found the first time.
+		if x, ok := sel.X.(*ast.Ident); ok && sel.Sel.Name == "Addr" && len(e.Args) == 0 {
+			if _, ok := t.g.procs[x.Name]; ok {
+				t.procs[x.Name] = true
+				return "syscall_lazy_proc_addr(&burrow__syscall_procs[" + procEnum(x.Name) + "])"
+			}
+		}
 		return t.fail("call of %s", sel.Sel.Name)
 	}
 	id, ok := e.Fun.(*ast.Ident)
@@ -362,7 +393,17 @@ func (t *trans) call(e *ast.CallExpr, outs []string) string {
 	}
 	switch id.Name {
 	case "errnoErr":
-		return "syscall_errno_as_error(" + args[0] + ", error_allocator())"
+		return "burrow__syscall_errno_err(" + args[0] + ")"
+	case "SyscallN":
+		// The arguments go as an array, which C cannot have empty.
+		arr := "NULL"
+		if len(args) > 1 {
+			arr = "(const Uintptr[]){" + strings.Join(args[1:], ", ") + "}"
+		}
+		for len(outs) < 2 {
+			outs = append(outs, "NULL")
+		}
+		return fmt.Sprintf("burrow__syscall_n(%s, %s, %d, %s)", args[0], arr, len(args)-1, strings.Join(outs, ", "))
 	}
 	sig := fn.Type().(*types.Signature)
 	n := sig.Results().Len()
@@ -432,15 +473,20 @@ func (t *trans) stmt(s ast.Stmt, indent string, last bool) {
 				t.fail("tuple assignment")
 				return
 			}
-			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "BytePtrFromString" && len(s.Lhs) == 2 {
-				// A string becomes a C string in a buffer on the stack,
-				// or on the heap when it does not fit, freed at the end.
+			if id, ok := call.Fun.(*ast.Ident); ok && (id.Name == "BytePtrFromString" || id.Name == "UTF16PtrFromString") && len(s.Lhs) == 2 {
+				// A string becomes a C string, or a UTF-16 one on
+				// Windows, in a buffer on the stack, or on the heap when
+				// it does not fit, freed at the end.
+				kind, holder := "cstring", "burrow__SyscallCString "
+				if id.Name == "UTF16PtrFromString" {
+					kind, holder = "wstring", "burrow__SyscallWString "
+				}
 				p := t.expr(s.Lhs[0])
 				h := p + "s"
-				t.decls = append(t.decls, "burrow__SyscallCString "+h+";")
+				t.decls = append(t.decls, holder+h+";")
 				t.inits = append(t.inits, h+".heap = NULL;")
-				t.cstrs = append(t.cstrs, h)
-				t.line(indent, fmt.Sprintf("%s = burrow__syscall_cstring(&%s, %s, %s);", p, h, t.expr(call.Args[0]), t.out(s.Lhs[1], define)))
+				t.cstrs = append(t.cstrs, "burrow__syscall_"+kind+"_free(&"+h+");")
+				t.line(indent, fmt.Sprintf("%s = burrow__syscall_%s(&%s, %s, %s);", p, kind, h, t.expr(call.Args[0]), t.out(s.Lhs[1], define)))
 				return
 			}
 			var outs []string
@@ -462,7 +508,7 @@ func (t *trans) stmt(s ast.Stmt, indent string, last bool) {
 		}
 		for i := range s.Lhs {
 			l := strings.TrimPrefix(t.out(s.Lhs[i], define), "&")
-			t.line(indent, l+" = "+t.expr(s.Rhs[i])+";")
+			t.line(indent, l+" = "+t.asError(t.typeOf(s.Lhs[i]), s.Rhs[i])+";")
 		}
 	case *ast.ExprStmt:
 		call, ok := s.X.(*ast.CallExpr)
@@ -492,7 +538,24 @@ func (t *trans) stmt(s ast.Stmt, indent string, last bool) {
 		}
 		t.line(indent, "}")
 	case *ast.ReturnStmt:
-		if len(s.Results) != 0 {
+		switch {
+		case len(s.Results) == 1 && len(t.results) > 1:
+			// return f(...), with f's results the function's.
+			call, ok := s.Results[0].(*ast.CallExpr)
+			if !ok {
+				t.fail("return of a tuple")
+				return
+			}
+			var outs []string
+			for _, v := range t.results[1:] {
+				outs = append(outs, "&"+t.names[v])
+			}
+			t.line(indent, t.names[t.results[0]]+" = "+t.call(call, outs)+";")
+		case len(s.Results) == len(t.results):
+			for i, r := range s.Results {
+				t.line(indent, t.names[t.results[i]]+" = "+t.asError(t.results[i].Type(), r)+";")
+			}
+		case len(s.Results) != 0:
 			t.fail("return with results")
 			return
 		}
@@ -503,6 +566,23 @@ func (t *trans) stmt(s ast.Stmt, indent string, last bool) {
 	default:
 		t.fail("statement %T", s)
 	}
+}
+
+// asError writes e for a place of type to: an Errno where an error goes is
+// turned into one, as Go does when it assigns it to an interface.
+func (t *trans) asError(to types.Type, e ast.Expr) string {
+	x := t.expr(e)
+	if to == nil || !types.Identical(to, errorType) {
+		return x
+	}
+	from := t.typeOf(e)
+	if from == nil || types.Identical(from, errorType) || types.Identical(from, types.Typ[types.UntypedNil]) {
+		return x
+	}
+	if n, ok := types.Unalias(from).(*types.Named); ok && n.Obj().Name() == "Errno" {
+		return "syscall_errno_as_error(" + x + ", error_allocator())"
+	}
+	return t.fail("%s as an error", from)
 }
 
 // cond writes the condition of an if, without the parentheses a binary
@@ -522,7 +602,7 @@ func (g *callGen) translate(fd *ast.FuncDecl) (*cfunc, string) {
 		return nil, "no object"
 	}
 	sig := fn.Type().(*types.Signature)
-	t := &trans{g: g, names: map[types.Object]string{}, used: map[string]bool{}, libc: map[string]bool{}}
+	t := &trans{g: g, names: map[types.Object]string{}, used: map[string]bool{}, libc: map[string]bool{}, procs: map[string]bool{}}
 
 	var params []string
 	for i := 0; i < sig.Params().Len(); i++ {
@@ -540,6 +620,9 @@ func (g *callGen) translate(fd *ast.FuncDecl) (*cfunc, string) {
 	// The first result that is not the error is what the function returns,
 	// and the rest go out through pointers, the error last.
 	res := sig.Results()
+	for i := 0; i < res.Len(); i++ {
+		t.results = append(t.results, res.At(i))
+	}
 	var vals []*types.Var
 	var errv *types.Var
 	for i := 0; i < res.Len(); i++ {
@@ -605,8 +688,8 @@ func (g *callGen) translate(fd *ast.FuncDecl) (*cfunc, string) {
 	if t.usesDone {
 		b.WriteString("done:\n")
 	}
-	for _, h := range t.cstrs {
-		b.WriteString("    burrow__syscall_cstring_free(&" + h + ");\n")
+	for _, f := range t.cstrs {
+		b.WriteString("    " + f + "\n")
 	}
 	for i, v := range all {
 		if i == 0 {
@@ -624,23 +707,76 @@ func (g *callGen) translate(fd *ast.FuncDecl) (*cfunc, string) {
 	case ret == "Error", ret == "Str", ret == "Slice", strings.HasSuffix(ret, "*"):
 		decl = "BURROW_OWNS(ret) " + proto
 	}
-	return &cfunc{name: fd.Name.Name, proto: decl, def: b.String(), libc: t.libc}, ""
+	return &cfunc{name: fd.Name.Name, proto: decl, def: b.String(), libc: t.libc, procs: t.procs}, ""
 }
 
 func libcEnum(fn string) string {
 	return "BURROW__SYSCALL_" + strings.ToUpper(fn)
 }
 
+// The number of a Windows procedure in burrow__syscall_procs, from its Go
+// variable, BURROW__SYSCALL_PROC_CREATE_FILE_W for procCreateFileW.
+func procEnum(v string) string {
+	return "BURROW__SYSCALL_PROC_" + strings.ToUpper(strings.Join(words(strings.TrimPrefix(v, "proc")), "_"))
+}
+
+// The number of a DLL in burrow__syscall_mods, from its Go variable.
+func modEnum(v string) string {
+	return "BURROW__SYSCALL_MOD_" + strings.ToUpper(strings.TrimPrefix(v, "mod"))
+}
+
+// windowsDLLs reads the modX = NewLazyDLL(sysdll.Add("x.dll")) and
+// procY = modX.NewProc("Y") variables of a Windows zsyscall file.
+func windowsDLLs(f *ast.File, mods map[string]string, procs map[string]winProc) {
+	str := func(e ast.Expr) string {
+		if l, ok := e.(*ast.BasicLit); ok && l.Kind == token.STRING {
+			s, _ := strconv.Unquote(l.Value)
+			return s
+		}
+		return ""
+	}
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			continue
+		}
+		for _, sp := range gd.Specs {
+			vs := sp.(*ast.ValueSpec)
+			if len(vs.Names) != 1 || len(vs.Values) != 1 {
+				continue
+			}
+			call, ok := vs.Values[0].(*ast.CallExpr)
+			if !ok || len(call.Args) != 1 {
+				continue
+			}
+			v := vs.Names[0].Name
+			switch fun := call.Fun.(type) {
+			case *ast.Ident:
+				// NewLazyDLL(sysdll.Add("x.dll"))
+				if add, ok := call.Args[0].(*ast.CallExpr); ok && fun.Name == "NewLazyDLL" && len(add.Args) == 1 {
+					mods[v] = str(add.Args[0])
+				}
+			case *ast.SelectorExpr:
+				if m, ok := fun.X.(*ast.Ident); ok && fun.Sel.Name == "NewProc" {
+					procs[v] = winProc{v: v, mod: m.Name, name: str(call.Args[0])}
+				}
+			}
+		}
+	}
+}
+
 var importDynamic = regexp.MustCompile(`^//go:cgo_import_dynamic (libc_\w+) (\S+) `)
 
 // callsOf translates the zsyscall functions of one platform, by Go name.
-func callsOf(p *platform, hand map[string]bool, handFuncs map[string]bool) (map[string]*cfunc, map[string]string, map[string]string) {
+func callsOf(p *platform, hand map[string]bool, handFuncs map[string]bool) (map[string]*cfunc, map[string]string, map[string]string, map[string]string, map[string]winProc) {
 	g := &callGen{
-		p:    p,
-		tg:   &typeGen{p: p, skip: hand, done: map[string]*ctype{}, working: map[string]bool{}, why: map[string]string{}},
-		hand: hand,
-		libc: map[string]string{},
-		why:  map[string]string{},
+		p:     p,
+		tg:    &typeGen{p: p, skip: hand, done: map[string]*ctype{}, working: map[string]bool{}, why: map[string]string{}},
+		hand:  hand,
+		libc:  map[string]string{},
+		mods:  map[string]string{},
+		procs: map[string]winProc{},
+		why:   map[string]string{},
 	}
 	var zfiles []*ast.File
 	for _, f := range p.files {
@@ -649,6 +785,7 @@ func callsOf(p *platform, hand map[string]bool, handFuncs map[string]bool) (map[
 			continue
 		}
 		zfiles = append(zfiles, f)
+		windowsDLLs(f, g.mods, g.procs)
 		for _, cg := range f.Comments {
 			for _, c := range cg.List {
 				if m := importDynamic.FindStringSubmatch(c.Text); m != nil {
@@ -676,7 +813,7 @@ func callsOf(p *platform, hand map[string]bool, handFuncs map[string]bool) (map[
 			out[fd.Name.Name] = c
 		}
 	}
-	return out, g.why, g.libc
+	return out, g.why, g.libc, g.mods, g.procs
 }
 
 // The C names of the functions syscall.h declares by hand.
@@ -725,9 +862,11 @@ func newCallWriter(root, ver string, verbose bool) *callWriter {
  * A function with only an error returns it.
  *
  * Each makes the call the way Go's does on the system and architecture:
- * Linux and FreeBSD by number through syscall(2), macOS through libSystem. On
- * Cosmopolitan and wasip1 they are here, with Linux's names, and fail with
- * ENOSYS. A function only some architectures have is only declared there. */
+ * Linux and FreeBSD by number through syscall(2), macOS through libSystem, and
+ * Windows through the DLL Go names, which is loaded the first time one of its
+ * functions is called. On Cosmopolitan and wasip1 they are here, with Linux's
+ * names, and fail with ENOSYS. A function only some architectures have is
+ * only declared there. */
 
 #ifndef BURROW_SYSCALL_ZSYSCALL_H
 #define BURROW_SYSCALL_ZSYSCALL_H
@@ -738,7 +877,8 @@ func newCallWriter(root, ver string, verbose bool) *callWriter {
 /* The unexported functions of syscall's zsyscall files, burrow__syscall_ and
  * the Go name, which the hand-written functions call the way Go's do. On
  * macOS, also the numbers of the libSystem functions they reach, which
- * src/syscall/zsyscall.c has the names of. */
+ * src/syscall/zsyscall.c has the names of, and on Windows the DLLs and
+ * procedures. */
 
 #ifndef BURROW_SRC_SYSCALL_ZSYSCALL_H
 #define BURROW_SRC_SYSCALL_ZSYSCALL_H
@@ -774,8 +914,16 @@ func (w *callWriter) system(goos string, plats []*platform) {
 	all := map[string]map[string]*cfunc{}
 	libcs := map[string]map[string]string{}
 	names := map[string]bool{}
+	mods := map[string]string{}
+	procs := map[string]winProc{}
 	for _, p := range plats {
-		fs, why, libc := callsOf(p, w.hand, w.handFuncs)
+		fs, why, libc, ms, ps := callsOf(p, w.hand, w.handFuncs)
+		for k, v := range ms {
+			mods[k] = v
+		}
+		for k, v := range ps {
+			procs[k] = v
+		}
 		all[p.goarch] = fs
 		libcs[p.goarch] = libc
 		for n := range fs {
@@ -859,6 +1007,56 @@ extern void *burrow__syscall_libc_cache[BURROW__SYSCALL_NLIBC];
 		}, fallbackArch[goos])
 		writeVariants(&w.c, goos, plats, vs, fb, true)
 		w.c.WriteString("\n")
+	}
+
+	// Windows' DLLs and procedures, in two tables in the order Go has them,
+	// which is by DLL and then by name. Every DLL is in, since LoadDLL looks
+	// for the name among them, and so is every procedure, used or not.
+	if len(mods) > 0 {
+		var ms, ps []string
+		for m := range mods {
+			ms = append(ms, m)
+		}
+		sort.Strings(ms)
+		for v := range procs {
+			ps = append(ps, v)
+		}
+		sort.Slice(ps, func(i, j int) bool {
+			a, b := procs[ps[i]], procs[ps[j]]
+			if a.mod != b.mod {
+				return a.mod < b.mod
+			}
+			return a.name < b.name
+		})
+		w.priv.WriteString("enum {\n")
+		for _, m := range ms {
+			w.priv.WriteString("    " + modEnum(m) + ",\n")
+		}
+		w.priv.WriteString("    BURROW__SYSCALL_NMODS\n};\n\nenum {\n")
+		for _, v := range ps {
+			w.priv.WriteString("    " + procEnum(v) + ",\n")
+		}
+		w.priv.WriteString("    BURROW__SYSCALL_NPROCS\n};\n\n")
+		w.priv.WriteString(`/* The DLLs the functions call into, which are the DLLs LoadDLL only looks
+ * for in the system directory, and the procedures, each loaded and found the
+ * first time a function needs it, in src/syscall/zsyscall.c. */
+extern SyscallLazyDLL burrow__syscall_mods[BURROW__SYSCALL_NMODS];
+extern SyscallLazyProc burrow__syscall_procs[BURROW__SYSCALL_NPROCS];
+
+`)
+		lit := func(s string) string {
+			return fmt.Sprintf("{(const Byte *)%s, %d}", strconv.Quote(s), len(s))
+		}
+		w.c.WriteString("SyscallLazyDLL burrow__syscall_mods[BURROW__SYSCALL_NMODS] = {\n")
+		for _, m := range ms {
+			fmt.Fprintf(&w.c, "    [%s] = {.name = %s},\n", modEnum(m), lit(mods[m]))
+		}
+		w.c.WriteString("};\n\nSyscallLazyProc burrow__syscall_procs[BURROW__SYSCALL_NPROCS] = {\n")
+		for _, v := range ps {
+			pr := procs[v]
+			fmt.Fprintf(&w.c, "    [%s] = {.name = %s, .l = &burrow__syscall_mods[%s]},\n", procEnum(v), lit(pr.name), modEnum(pr.mod))
+		}
+		w.c.WriteString("};\n\n")
 	}
 
 	fallback := fallbackArch[goos]

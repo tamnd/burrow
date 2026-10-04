@@ -18,7 +18,1934 @@
 
 #include "internal.h"
 
-#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+#if defined(BURROW_OS_WINDOWS)
+
+/* windows */
+
+SyscallLazyDLL burrow__syscall_mods[BURROW__SYSCALL_NMODS] = {
+    [BURROW__SYSCALL_MOD_ADVAPI32] = {.name = {(const Byte *)"advapi32.dll", 12}},
+    [BURROW__SYSCALL_MOD_CRYPT32] = {.name = {(const Byte *)"crypt32.dll", 11}},
+    [BURROW__SYSCALL_MOD_DNSAPI] = {.name = {(const Byte *)"dnsapi.dll", 10}},
+    [BURROW__SYSCALL_MOD_IPHLPAPI] = {.name = {(const Byte *)"iphlpapi.dll", 12}},
+    [BURROW__SYSCALL_MOD_KERNEL32] = {.name = {(const Byte *)"kernel32.dll", 12}},
+    [BURROW__SYSCALL_MOD_MSWSOCK] = {.name = {(const Byte *)"mswsock.dll", 11}},
+    [BURROW__SYSCALL_MOD_NETAPI32] = {.name = {(const Byte *)"netapi32.dll", 12}},
+    [BURROW__SYSCALL_MOD_SECUR32] = {.name = {(const Byte *)"secur32.dll", 11}},
+    [BURROW__SYSCALL_MOD_SHELL32] = {.name = {(const Byte *)"shell32.dll", 11}},
+    [BURROW__SYSCALL_MOD_USERENV] = {.name = {(const Byte *)"userenv.dll", 11}},
+    [BURROW__SYSCALL_MOD_WS2_32] = {.name = {(const Byte *)"ws2_32.dll", 10}},
+};
+
+SyscallLazyProc burrow__syscall_procs[BURROW__SYSCALL_NPROCS] = {
+    [BURROW__SYSCALL_PROC_CONVERT_SID_TO_STRING_SID_W] = {.name = {(const Byte *)"ConvertSidToStringSidW", 22}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_CONVERT_STRING_SID_TO_SID_W] = {.name = {(const Byte *)"ConvertStringSidToSidW", 22}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_COPY_SID] = {.name = {(const Byte *)"CopySid", 7}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_CREATE_PROCESS_AS_USER_W] = {.name = {(const Byte *)"CreateProcessAsUserW", 20}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_CRYPT_ACQUIRE_CONTEXT_W] = {.name = {(const Byte *)"CryptAcquireContextW", 20}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_CRYPT_GEN_RANDOM] = {.name = {(const Byte *)"CryptGenRandom", 14}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_CRYPT_RELEASE_CONTEXT] = {.name = {(const Byte *)"CryptReleaseContext", 19}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_GET_LENGTH_SID] = {.name = {(const Byte *)"GetLengthSid", 12}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_GET_TOKEN_INFORMATION] = {.name = {(const Byte *)"GetTokenInformation", 19}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_LOOKUP_ACCOUNT_NAME_W] = {.name = {(const Byte *)"LookupAccountNameW", 18}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_LOOKUP_ACCOUNT_SID_W] = {.name = {(const Byte *)"LookupAccountSidW", 17}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_OPEN_PROCESS_TOKEN] = {.name = {(const Byte *)"OpenProcessToken", 16}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_REG_CLOSE_KEY] = {.name = {(const Byte *)"RegCloseKey", 11}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_REG_ENUM_KEY_EX_W] = {.name = {(const Byte *)"RegEnumKeyExW", 13}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_REG_OPEN_KEY_EX_W] = {.name = {(const Byte *)"RegOpenKeyExW", 13}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_REG_QUERY_INFO_KEY_W] = {.name = {(const Byte *)"RegQueryInfoKeyW", 16}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_REG_QUERY_VALUE_EX_W] = {.name = {(const Byte *)"RegQueryValueExW", 16}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_ADVAPI32]},
+    [BURROW__SYSCALL_PROC_CERT_ADD_CERTIFICATE_CONTEXT_TO_STORE] = {.name = {(const Byte *)"CertAddCertificateContextToStore", 32}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_CRYPT32]},
+    [BURROW__SYSCALL_PROC_CERT_CLOSE_STORE] = {.name = {(const Byte *)"CertCloseStore", 14}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_CRYPT32]},
+    [BURROW__SYSCALL_PROC_CERT_CREATE_CERTIFICATE_CONTEXT] = {.name = {(const Byte *)"CertCreateCertificateContext", 28}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_CRYPT32]},
+    [BURROW__SYSCALL_PROC_CERT_ENUM_CERTIFICATES_IN_STORE] = {.name = {(const Byte *)"CertEnumCertificatesInStore", 27}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_CRYPT32]},
+    [BURROW__SYSCALL_PROC_CERT_FREE_CERTIFICATE_CHAIN] = {.name = {(const Byte *)"CertFreeCertificateChain", 24}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_CRYPT32]},
+    [BURROW__SYSCALL_PROC_CERT_FREE_CERTIFICATE_CONTEXT] = {.name = {(const Byte *)"CertFreeCertificateContext", 26}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_CRYPT32]},
+    [BURROW__SYSCALL_PROC_CERT_GET_CERTIFICATE_CHAIN] = {.name = {(const Byte *)"CertGetCertificateChain", 23}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_CRYPT32]},
+    [BURROW__SYSCALL_PROC_CERT_OPEN_STORE] = {.name = {(const Byte *)"CertOpenStore", 13}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_CRYPT32]},
+    [BURROW__SYSCALL_PROC_CERT_OPEN_SYSTEM_STORE_W] = {.name = {(const Byte *)"CertOpenSystemStoreW", 20}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_CRYPT32]},
+    [BURROW__SYSCALL_PROC_CERT_VERIFY_CERTIFICATE_CHAIN_POLICY] = {.name = {(const Byte *)"CertVerifyCertificateChainPolicy", 32}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_CRYPT32]},
+    [BURROW__SYSCALL_PROC_DNS_NAME_COMPARE_W] = {.name = {(const Byte *)"DnsNameCompare_W", 16}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_DNSAPI]},
+    [BURROW__SYSCALL_PROC_DNS_QUERY_W] = {.name = {(const Byte *)"DnsQuery_W", 10}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_DNSAPI]},
+    [BURROW__SYSCALL_PROC_DNS_RECORD_LIST_FREE] = {.name = {(const Byte *)"DnsRecordListFree", 17}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_DNSAPI]},
+    [BURROW__SYSCALL_PROC_GET_ADAPTERS_INFO] = {.name = {(const Byte *)"GetAdaptersInfo", 15}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_IPHLPAPI]},
+    [BURROW__SYSCALL_PROC_GET_IF_ENTRY] = {.name = {(const Byte *)"GetIfEntry", 10}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_IPHLPAPI]},
+    [BURROW__SYSCALL_PROC_CANCEL_IO] = {.name = {(const Byte *)"CancelIo", 8}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_CANCEL_IO_EX] = {.name = {(const Byte *)"CancelIoEx", 10}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_CLOSE_HANDLE] = {.name = {(const Byte *)"CloseHandle", 11}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_CREATE_DIRECTORY_W] = {.name = {(const Byte *)"CreateDirectoryW", 16}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_CREATE_FILE_MAPPING_W] = {.name = {(const Byte *)"CreateFileMappingW", 18}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_CREATE_FILE_W] = {.name = {(const Byte *)"CreateFileW", 11}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_CREATE_HARD_LINK_W] = {.name = {(const Byte *)"CreateHardLinkW", 15}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_CREATE_IO_COMPLETION_PORT] = {.name = {(const Byte *)"CreateIoCompletionPort", 22}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_CREATE_PIPE] = {.name = {(const Byte *)"CreatePipe", 10}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_CREATE_PROCESS_W] = {.name = {(const Byte *)"CreateProcessW", 14}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_CREATE_SYMBOLIC_LINK_W] = {.name = {(const Byte *)"CreateSymbolicLinkW", 19}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_CREATE_TOOLHELP32_SNAPSHOT] = {.name = {(const Byte *)"CreateToolhelp32Snapshot", 24}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_DELETE_FILE_W] = {.name = {(const Byte *)"DeleteFileW", 11}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_DELETE_PROC_THREAD_ATTRIBUTE_LIST] = {.name = {(const Byte *)"DeleteProcThreadAttributeList", 29}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_DEVICE_IO_CONTROL] = {.name = {(const Byte *)"DeviceIoControl", 15}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_DUPLICATE_HANDLE] = {.name = {(const Byte *)"DuplicateHandle", 15}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_EXIT_PROCESS] = {.name = {(const Byte *)"ExitProcess", 11}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_FIND_CLOSE] = {.name = {(const Byte *)"FindClose", 9}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_FIND_FIRST_FILE_W] = {.name = {(const Byte *)"FindFirstFileW", 14}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_FIND_NEXT_FILE_W] = {.name = {(const Byte *)"FindNextFileW", 13}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_FLUSH_FILE_BUFFERS] = {.name = {(const Byte *)"FlushFileBuffers", 16}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_FLUSH_VIEW_OF_FILE] = {.name = {(const Byte *)"FlushViewOfFile", 15}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_FORMAT_MESSAGE_W] = {.name = {(const Byte *)"FormatMessageW", 14}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_FREE_ENVIRONMENT_STRINGS_W] = {.name = {(const Byte *)"FreeEnvironmentStringsW", 23}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_FREE_LIBRARY] = {.name = {(const Byte *)"FreeLibrary", 11}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_COMMAND_LINE_W] = {.name = {(const Byte *)"GetCommandLineW", 15}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_COMPUTER_NAME_W] = {.name = {(const Byte *)"GetComputerNameW", 16}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_CONSOLE_MODE] = {.name = {(const Byte *)"GetConsoleMode", 14}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_CURRENT_DIRECTORY_W] = {.name = {(const Byte *)"GetCurrentDirectoryW", 20}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_CURRENT_PROCESS] = {.name = {(const Byte *)"GetCurrentProcess", 17}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_CURRENT_PROCESS_ID] = {.name = {(const Byte *)"GetCurrentProcessId", 19}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_ENVIRONMENT_STRINGS_W] = {.name = {(const Byte *)"GetEnvironmentStringsW", 22}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_ENVIRONMENT_VARIABLE_W] = {.name = {(const Byte *)"GetEnvironmentVariableW", 23}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_EXIT_CODE_PROCESS] = {.name = {(const Byte *)"GetExitCodeProcess", 18}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_FILE_ATTRIBUTES_EX_W] = {.name = {(const Byte *)"GetFileAttributesExW", 20}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_FILE_ATTRIBUTES_W] = {.name = {(const Byte *)"GetFileAttributesW", 18}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_FILE_INFORMATION_BY_HANDLE] = {.name = {(const Byte *)"GetFileInformationByHandle", 26}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_FILE_TYPE] = {.name = {(const Byte *)"GetFileType", 11}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_FINAL_PATH_NAME_BY_HANDLE_W] = {.name = {(const Byte *)"GetFinalPathNameByHandleW", 25}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_FULL_PATH_NAME_W] = {.name = {(const Byte *)"GetFullPathNameW", 16}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_LAST_ERROR] = {.name = {(const Byte *)"GetLastError", 12}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_LONG_PATH_NAME_W] = {.name = {(const Byte *)"GetLongPathNameW", 16}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_PROC_ADDRESS] = {.name = {(const Byte *)"GetProcAddress", 14}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_PROCESS_TIMES] = {.name = {(const Byte *)"GetProcessTimes", 15}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_QUEUED_COMPLETION_STATUS] = {.name = {(const Byte *)"GetQueuedCompletionStatus", 25}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_SHORT_PATH_NAME_W] = {.name = {(const Byte *)"GetShortPathNameW", 17}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_STARTUP_INFO_W] = {.name = {(const Byte *)"GetStartupInfoW", 15}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_STD_HANDLE] = {.name = {(const Byte *)"GetStdHandle", 12}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_SYSTEM_TIME_AS_FILE_TIME] = {.name = {(const Byte *)"GetSystemTimeAsFileTime", 23}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_TEMP_PATH_W] = {.name = {(const Byte *)"GetTempPathW", 12}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_TIME_ZONE_INFORMATION] = {.name = {(const Byte *)"GetTimeZoneInformation", 22}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_GET_VERSION] = {.name = {(const Byte *)"GetVersion", 10}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_INITIALIZE_PROC_THREAD_ATTRIBUTE_LIST] = {.name = {(const Byte *)"InitializeProcThreadAttributeList", 33}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_LOAD_LIBRARY_W] = {.name = {(const Byte *)"LoadLibraryW", 12}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_LOCAL_ALLOC] = {.name = {(const Byte *)"LocalAlloc", 10}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_LOCAL_FREE] = {.name = {(const Byte *)"LocalFree", 9}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_MAP_VIEW_OF_FILE] = {.name = {(const Byte *)"MapViewOfFile", 13}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_MOVE_FILE_W] = {.name = {(const Byte *)"MoveFileW", 9}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_OPEN_PROCESS] = {.name = {(const Byte *)"OpenProcess", 11}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_POST_QUEUED_COMPLETION_STATUS] = {.name = {(const Byte *)"PostQueuedCompletionStatus", 26}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_PROCESS32_FIRST_W] = {.name = {(const Byte *)"Process32FirstW", 15}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_PROCESS32_NEXT_W] = {.name = {(const Byte *)"Process32NextW", 14}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_READ_CONSOLE_W] = {.name = {(const Byte *)"ReadConsoleW", 12}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_READ_DIRECTORY_CHANGES_W] = {.name = {(const Byte *)"ReadDirectoryChangesW", 21}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_READ_FILE] = {.name = {(const Byte *)"ReadFile", 8}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_REMOVE_DIRECTORY_W] = {.name = {(const Byte *)"RemoveDirectoryW", 16}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_SET_CURRENT_DIRECTORY_W] = {.name = {(const Byte *)"SetCurrentDirectoryW", 20}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_SET_END_OF_FILE] = {.name = {(const Byte *)"SetEndOfFile", 12}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_SET_ENVIRONMENT_VARIABLE_W] = {.name = {(const Byte *)"SetEnvironmentVariableW", 23}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_SET_FILE_ATTRIBUTES_W] = {.name = {(const Byte *)"SetFileAttributesW", 18}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_SET_FILE_COMPLETION_NOTIFICATION_MODES] = {.name = {(const Byte *)"SetFileCompletionNotificationModes", 34}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_SET_FILE_INFORMATION_BY_HANDLE] = {.name = {(const Byte *)"SetFileInformationByHandle", 26}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_SET_FILE_POINTER] = {.name = {(const Byte *)"SetFilePointer", 14}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_SET_FILE_TIME] = {.name = {(const Byte *)"SetFileTime", 11}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_SET_HANDLE_INFORMATION] = {.name = {(const Byte *)"SetHandleInformation", 20}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_TERMINATE_PROCESS] = {.name = {(const Byte *)"TerminateProcess", 16}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_UNMAP_VIEW_OF_FILE] = {.name = {(const Byte *)"UnmapViewOfFile", 15}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_UPDATE_PROC_THREAD_ATTRIBUTE] = {.name = {(const Byte *)"UpdateProcThreadAttribute", 25}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_VIRTUAL_LOCK] = {.name = {(const Byte *)"VirtualLock", 11}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_VIRTUAL_UNLOCK] = {.name = {(const Byte *)"VirtualUnlock", 13}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_WAIT_FOR_SINGLE_OBJECT] = {.name = {(const Byte *)"WaitForSingleObject", 19}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_WRITE_CONSOLE_W] = {.name = {(const Byte *)"WriteConsoleW", 13}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_WRITE_FILE] = {.name = {(const Byte *)"WriteFile", 9}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_KERNEL32]},
+    [BURROW__SYSCALL_PROC_ACCEPT_EX] = {.name = {(const Byte *)"AcceptEx", 8}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_MSWSOCK]},
+    [BURROW__SYSCALL_PROC_GET_ACCEPT_EX_SOCKADDRS] = {.name = {(const Byte *)"GetAcceptExSockaddrs", 20}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_MSWSOCK]},
+    [BURROW__SYSCALL_PROC_TRANSMIT_FILE] = {.name = {(const Byte *)"TransmitFile", 12}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_MSWSOCK]},
+    [BURROW__SYSCALL_PROC_NET_API_BUFFER_FREE] = {.name = {(const Byte *)"NetApiBufferFree", 16}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_NETAPI32]},
+    [BURROW__SYSCALL_PROC_NET_GET_JOIN_INFORMATION] = {.name = {(const Byte *)"NetGetJoinInformation", 21}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_NETAPI32]},
+    [BURROW__SYSCALL_PROC_NET_USER_GET_INFO] = {.name = {(const Byte *)"NetUserGetInfo", 14}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_NETAPI32]},
+    [BURROW__SYSCALL_PROC_GET_USER_NAME_EX_W] = {.name = {(const Byte *)"GetUserNameExW", 14}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_SECUR32]},
+    [BURROW__SYSCALL_PROC_TRANSLATE_NAME_W] = {.name = {(const Byte *)"TranslateNameW", 14}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_SECUR32]},
+    [BURROW__SYSCALL_PROC_COMMAND_LINE_TO_ARGV_W] = {.name = {(const Byte *)"CommandLineToArgvW", 18}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_SHELL32]},
+    [BURROW__SYSCALL_PROC_GET_USER_PROFILE_DIRECTORY_W] = {.name = {(const Byte *)"GetUserProfileDirectoryW", 24}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_USERENV]},
+    [BURROW__SYSCALL_PROC_FREE_ADDR_INFO_W] = {.name = {(const Byte *)"FreeAddrInfoW", 13}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_GET_ADDR_INFO_W] = {.name = {(const Byte *)"GetAddrInfoW", 12}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_WSA_CLEANUP] = {.name = {(const Byte *)"WSACleanup", 10}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_WSA_ENUM_PROTOCOLS_W] = {.name = {(const Byte *)"WSAEnumProtocolsW", 17}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_WSA_IOCTL] = {.name = {(const Byte *)"WSAIoctl", 8}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_WSA_RECV] = {.name = {(const Byte *)"WSARecv", 7}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_WSA_RECV_FROM] = {.name = {(const Byte *)"WSARecvFrom", 11}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_WSA_SEND] = {.name = {(const Byte *)"WSASend", 7}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_WSA_SEND_TO] = {.name = {(const Byte *)"WSASendTo", 9}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_WSA_STARTUP] = {.name = {(const Byte *)"WSAStartup", 10}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_BIND] = {.name = {(const Byte *)"bind", 4}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_CLOSESOCKET] = {.name = {(const Byte *)"closesocket", 11}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_CONNECT] = {.name = {(const Byte *)"connect", 7}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_GETHOSTBYNAME] = {.name = {(const Byte *)"gethostbyname", 13}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_GETPEERNAME] = {.name = {(const Byte *)"getpeername", 11}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_GETPROTOBYNAME] = {.name = {(const Byte *)"getprotobyname", 14}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_GETSERVBYNAME] = {.name = {(const Byte *)"getservbyname", 13}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_GETSOCKNAME] = {.name = {(const Byte *)"getsockname", 11}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_GETSOCKOPT] = {.name = {(const Byte *)"getsockopt", 10}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_LISTEN] = {.name = {(const Byte *)"listen", 6}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_NTOHS] = {.name = {(const Byte *)"ntohs", 5}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_SETSOCKOPT] = {.name = {(const Byte *)"setsockopt", 10}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_SHUTDOWN] = {.name = {(const Byte *)"shutdown", 8}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+    [BURROW__SYSCALL_PROC_SOCKET] = {.name = {(const Byte *)"socket", 6}, .l = &burrow__syscall_mods[BURROW__SYSCALL_MOD_WS2_32]},
+};
+
+Error syscall_accept_ex(SyscallHandle ls, SyscallHandle as, uint8_t *buf, uint32_t rxdatalen, uint32_t laddrlen, uint32_t raddrlen, uint32_t *recvd, SyscallOverlapped *overlapped) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_ACCEPT_EX]), (const Uintptr[]){(Uintptr)(ls), (Uintptr)(as), (Uintptr)((void *)(buf)), (Uintptr)(rxdatalen), (Uintptr)(laddrlen), (Uintptr)(raddrlen), (Uintptr)((void *)(recvd)), (Uintptr)((void *)(overlapped))}, 8, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_cancel_io(SyscallHandle s) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CANCEL_IO]), (const Uintptr[]){(Uintptr)(s)}, 1, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_cancel_io_ex(SyscallHandle s, SyscallOverlapped *o) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CANCEL_IO_EX]), (const Uintptr[]){(Uintptr)(s), (Uintptr)((void *)(o))}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_cert_add_certificate_context_to_store(SyscallHandle store, SyscallCertContext *certContext, uint32_t addDisposition, SyscallCertContext **storeContext) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CERT_ADD_CERTIFICATE_CONTEXT_TO_STORE]), (const Uintptr[]){(Uintptr)(store), (Uintptr)((void *)(certContext)), (Uintptr)(addDisposition), (Uintptr)((void *)(storeContext))}, 4, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_cert_close_store(SyscallHandle store, uint32_t flags) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CERT_CLOSE_STORE]), (const Uintptr[]){(Uintptr)(store), (Uintptr)(flags)}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+SyscallCertContext *syscall_cert_create_certificate_context(uint32_t certEncodingType, uint8_t *certEncoded, uint32_t encodedLen, Error *err) {
+    SyscallCertContext *context_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CERT_CREATE_CERTIFICATE_CONTEXT]), (const Uintptr[]){(Uintptr)(certEncodingType), (Uintptr)((void *)(certEncoded)), (Uintptr)(encodedLen)}, 3, NULL, &e1);
+    context_ = (SyscallCertContext *)((void *)(r0));
+    if (context_ == NULL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return context_;
+}
+
+SyscallCertContext *syscall_cert_enum_certificates_in_store(SyscallHandle store, SyscallCertContext *prevContext, Error *err) {
+    SyscallCertContext *context_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CERT_ENUM_CERTIFICATES_IN_STORE]), (const Uintptr[]){(Uintptr)(store), (Uintptr)((void *)(prevContext))}, 2, NULL, &e1);
+    context_ = (SyscallCertContext *)((void *)(r0));
+    if (context_ == NULL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return context_;
+}
+
+void syscall_cert_free_certificate_chain(SyscallCertChainContext *ctx) {
+    burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CERT_FREE_CERTIFICATE_CHAIN]), (const Uintptr[]){(Uintptr)((void *)(ctx))}, 1, NULL, NULL);
+}
+
+Error syscall_cert_free_certificate_context(SyscallCertContext *ctx) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CERT_FREE_CERTIFICATE_CONTEXT]), (const Uintptr[]){(Uintptr)((void *)(ctx))}, 1, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_cert_get_certificate_chain(SyscallHandle engine, SyscallCertContext *leaf, SyscallFiletime *time, SyscallHandle additionalStore, SyscallCertChainPara *para, uint32_t flags, Uintptr reserved, SyscallCertChainContext **chainCtx) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CERT_GET_CERTIFICATE_CHAIN]), (const Uintptr[]){(Uintptr)(engine), (Uintptr)((void *)(leaf)), (Uintptr)((void *)(time)), (Uintptr)(additionalStore), (Uintptr)((void *)(para)), (Uintptr)(flags), (Uintptr)(reserved), (Uintptr)((void *)(chainCtx))}, 8, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+SyscallHandle syscall_cert_open_store(Uintptr storeProvider, uint32_t msgAndCertEncodingType, Uintptr cryptProv, uint32_t flags, Uintptr para, Error *err) {
+    SyscallHandle handle_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CERT_OPEN_STORE]), (const Uintptr[]){(Uintptr)(storeProvider), (Uintptr)(msgAndCertEncodingType), (Uintptr)(cryptProv), (Uintptr)(flags), (Uintptr)(para)}, 5, NULL, &e1);
+    handle_ = (SyscallHandle)(r0);
+    if (handle_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return handle_;
+}
+
+SyscallHandle syscall_cert_open_system_store(SyscallHandle hprov, uint16_t *name, Error *err) {
+    SyscallHandle store_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CERT_OPEN_SYSTEM_STORE_W]), (const Uintptr[]){(Uintptr)(hprov), (Uintptr)((void *)(name))}, 2, NULL, &e1);
+    store_ = (SyscallHandle)(r0);
+    if (store_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return store_;
+}
+
+Error syscall_cert_verify_certificate_chain_policy(Uintptr policyOID, SyscallCertChainContext *chain, SyscallCertChainPolicyPara *para, SyscallCertChainPolicyStatus *status) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CERT_VERIFY_CERTIFICATE_CHAIN_POLICY]), (const Uintptr[]){(Uintptr)(policyOID), (Uintptr)((void *)(chain)), (Uintptr)((void *)(para)), (Uintptr)((void *)(status))}, 4, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_close_handle(SyscallHandle handle) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CLOSE_HANDLE]), (const Uintptr[]){(Uintptr)(handle)}, 1, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_closesocket(SyscallHandle s) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CLOSESOCKET]), (const Uintptr[]){(Uintptr)(s)}, 1, NULL, &e1);
+    if (r1 == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+uint16_t **syscall_command_line_to_argv(uint16_t *cmd, int32_t *argc, Error *err) {
+    uint16_t **argv_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_COMMAND_LINE_TO_ARGV_W]), (const Uintptr[]){(Uintptr)((void *)(cmd)), (Uintptr)((void *)(argc))}, 2, NULL, &e1);
+    argv_ = (uint16_t **)((void *)(r0));
+    if (argv_ == NULL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return argv_;
+}
+
+Error syscall_convert_sid_to_string_sid(SyscallSID *sid, uint16_t **stringSid) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CONVERT_SID_TO_STRING_SID_W]), (const Uintptr[]){(Uintptr)((void *)(sid)), (Uintptr)((void *)(stringSid))}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_convert_string_sid_to_sid(uint16_t *stringSid, SyscallSID **sid) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CONVERT_STRING_SID_TO_SID_W]), (const Uintptr[]){(Uintptr)((void *)(stringSid)), (Uintptr)((void *)(sid))}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_copy_sid(uint32_t destSidLen, SyscallSID *destSid, SyscallSID *srcSid) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_COPY_SID]), (const Uintptr[]){(Uintptr)(destSidLen), (Uintptr)((void *)(destSid)), (Uintptr)((void *)(srcSid))}, 3, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_create_directory(uint16_t *path, SyscallSecurityAttributes *sa) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CREATE_DIRECTORY_W]), (const Uintptr[]){(Uintptr)((void *)(path)), (Uintptr)((void *)(sa))}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+SyscallHandle syscall_create_file_mapping(SyscallHandle fhandle, SyscallSecurityAttributes *sa, uint32_t prot, uint32_t maxSizeHigh, uint32_t maxSizeLow, uint16_t *name, Error *err) {
+    SyscallHandle handle_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CREATE_FILE_MAPPING_W]), (const Uintptr[]){(Uintptr)(fhandle), (Uintptr)((void *)(sa)), (Uintptr)(prot), (Uintptr)(maxSizeHigh), (Uintptr)(maxSizeLow), (Uintptr)((void *)(name))}, 6, NULL, &e1);
+    handle_ = (SyscallHandle)(r0);
+    if (handle_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return handle_;
+}
+
+Error syscall_create_hard_link(uint16_t *filename, uint16_t *existingfilename, Uintptr reserved) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CREATE_HARD_LINK_W]), (const Uintptr[]){(Uintptr)((void *)(filename)), (Uintptr)((void *)(existingfilename)), (Uintptr)(reserved)}, 3, NULL, &e1);
+    if ((r1 & 255) == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_create_pipe(SyscallHandle *readhandle, SyscallHandle *writehandle, SyscallSecurityAttributes *sa, uint32_t size) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CREATE_PIPE]), (const Uintptr[]){(Uintptr)((void *)(readhandle)), (Uintptr)((void *)(writehandle)), (Uintptr)((void *)(sa)), (Uintptr)(size)}, 4, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_create_process(uint16_t *appName, uint16_t *commandLine, SyscallSecurityAttributes *procSecurity, SyscallSecurityAttributes *threadSecurity, bool inheritHandles, uint32_t creationFlags, uint16_t *env, uint16_t *currentDir, SyscallStartupInfo *startupInfo, SyscallProcessInformation *outProcInfo) {
+    Error err_ = BURROW_NO_ERROR;
+    uint32_t _p0 = 0;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    if (inheritHandles) {
+        _p0 = 1;
+    }
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CREATE_PROCESS_W]), (const Uintptr[]){(Uintptr)((void *)(appName)), (Uintptr)((void *)(commandLine)), (Uintptr)((void *)(procSecurity)), (Uintptr)((void *)(threadSecurity)), (Uintptr)(_p0), (Uintptr)(creationFlags), (Uintptr)((void *)(env)), (Uintptr)((void *)(currentDir)), (Uintptr)((void *)(startupInfo)), (Uintptr)((void *)(outProcInfo))}, 10, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_create_process_as_user(SyscallToken token, uint16_t *appName, uint16_t *commandLine, SyscallSecurityAttributes *procSecurity, SyscallSecurityAttributes *threadSecurity, bool inheritHandles, uint32_t creationFlags, uint16_t *env, uint16_t *currentDir, SyscallStartupInfo *startupInfo, SyscallProcessInformation *outProcInfo) {
+    Error err_ = BURROW_NO_ERROR;
+    uint32_t _p0 = 0;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    if (inheritHandles) {
+        _p0 = 1;
+    }
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CREATE_PROCESS_AS_USER_W]), (const Uintptr[]){(Uintptr)(token), (Uintptr)((void *)(appName)), (Uintptr)((void *)(commandLine)), (Uintptr)((void *)(procSecurity)), (Uintptr)((void *)(threadSecurity)), (Uintptr)(_p0), (Uintptr)(creationFlags), (Uintptr)((void *)(env)), (Uintptr)((void *)(currentDir)), (Uintptr)((void *)(startupInfo)), (Uintptr)((void *)(outProcInfo))}, 11, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_create_symbolic_link(uint16_t *symlinkfilename, uint16_t *targetfilename, uint32_t flags) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CREATE_SYMBOLIC_LINK_W]), (const Uintptr[]){(Uintptr)((void *)(symlinkfilename)), (Uintptr)((void *)(targetfilename)), (Uintptr)(flags)}, 3, NULL, &e1);
+    if ((r1 & 255) == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+SyscallHandle syscall_create_toolhelp32_snapshot(uint32_t flags, uint32_t processId, Error *err) {
+    SyscallHandle handle_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CREATE_TOOLHELP32_SNAPSHOT]), (const Uintptr[]){(Uintptr)(flags), (Uintptr)(processId)}, 2, NULL, &e1);
+    handle_ = (SyscallHandle)(r0);
+    if (handle_ == SYSCALL_INVALID_HANDLE) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return handle_;
+}
+
+Error syscall_crypt_acquire_context(SyscallHandle *provhandle, uint16_t *container, uint16_t *provider, uint32_t provtype, uint32_t flags) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CRYPT_ACQUIRE_CONTEXT_W]), (const Uintptr[]){(Uintptr)((void *)(provhandle)), (Uintptr)((void *)(container)), (Uintptr)((void *)(provider)), (Uintptr)(provtype), (Uintptr)(flags)}, 5, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_crypt_gen_random(SyscallHandle provhandle, uint32_t buflen, uint8_t *buf) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CRYPT_GEN_RANDOM]), (const Uintptr[]){(Uintptr)(provhandle), (Uintptr)(buflen), (Uintptr)((void *)(buf))}, 3, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_crypt_release_context(SyscallHandle provhandle, uint32_t flags) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CRYPT_RELEASE_CONTEXT]), (const Uintptr[]){(Uintptr)(provhandle), (Uintptr)(flags)}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_delete_file(uint16_t *path) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_DELETE_FILE_W]), (const Uintptr[]){(Uintptr)((void *)(path))}, 1, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_device_io_control(SyscallHandle handle, uint32_t ioControlCode, uint8_t *inBuffer, uint32_t inBufferSize, uint8_t *outBuffer, uint32_t outBufferSize, uint32_t *bytesReturned, SyscallOverlapped *overlapped) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_DEVICE_IO_CONTROL]), (const Uintptr[]){(Uintptr)(handle), (Uintptr)(ioControlCode), (Uintptr)((void *)(inBuffer)), (Uintptr)(inBufferSize), (Uintptr)((void *)(outBuffer)), (Uintptr)(outBufferSize), (Uintptr)((void *)(bytesReturned)), (Uintptr)((void *)(overlapped))}, 8, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+bool syscall_dns_name_compare(uint16_t *name1, uint16_t *name2) {
+    bool same_ = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_DNS_NAME_COMPARE_W]), (const Uintptr[]){(Uintptr)((void *)(name1)), (Uintptr)((void *)(name2))}, 2, NULL, NULL);
+    same_ = (r0 != 0);
+    return same_;
+}
+
+Error syscall_dns_query(Str name, uint16_t qtype, uint32_t options, uint8_t *extra, SyscallDNSRecord **qrs, uint8_t *pr) {
+    Error status_ = BURROW_NO_ERROR;
+    uint16_t *_p0 = NULL;
+    burrow__SyscallWString _p0s;
+    _p0s.heap = NULL;
+    _p0 = burrow__syscall_wstring(&_p0s, name, &status_);
+    if (BURROW_FAILED(status_)) {
+        goto done;
+    }
+    status_ = burrow__syscall_dns_query(_p0, qtype, options, extra, qrs, pr);
+done:
+    burrow__syscall_wstring_free(&_p0s);
+    return status_;
+}
+
+void syscall_dns_record_list_free(SyscallDNSRecord *rl, uint32_t freetype) {
+    burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_DNS_RECORD_LIST_FREE]), (const Uintptr[]){(Uintptr)((void *)(rl)), (Uintptr)(freetype)}, 2, NULL, NULL);
+}
+
+Error syscall_duplicate_handle(SyscallHandle hSourceProcessHandle, SyscallHandle hSourceHandle, SyscallHandle hTargetProcessHandle, SyscallHandle *lpTargetHandle, uint32_t dwDesiredAccess, bool bInheritHandle, uint32_t dwOptions) {
+    Error err_ = BURROW_NO_ERROR;
+    uint32_t _p0 = 0;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    if (bInheritHandle) {
+        _p0 = 1;
+    }
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_DUPLICATE_HANDLE]), (const Uintptr[]){(Uintptr)(hSourceProcessHandle), (Uintptr)(hSourceHandle), (Uintptr)(hTargetProcessHandle), (Uintptr)((void *)(lpTargetHandle)), (Uintptr)(dwDesiredAccess), (Uintptr)(_p0), (Uintptr)(dwOptions)}, 7, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+void syscall_exit_process(uint32_t exitcode) {
+    burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_EXIT_PROCESS]), (const Uintptr[]){(Uintptr)(exitcode)}, 1, NULL, NULL);
+}
+
+Error syscall_find_close(SyscallHandle handle) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_FIND_CLOSE]), (const Uintptr[]){(Uintptr)(handle)}, 1, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_flush_file_buffers(SyscallHandle handle) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_FLUSH_FILE_BUFFERS]), (const Uintptr[]){(Uintptr)(handle)}, 1, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_flush_view_of_file(Uintptr addr, Uintptr length) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_FLUSH_VIEW_OF_FILE]), (const Uintptr[]){(Uintptr)(addr), (Uintptr)(length)}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+void syscall_free_addr_info_w(SyscallAddrinfoW *addrinfo) {
+    burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_FREE_ADDR_INFO_W]), (const Uintptr[]){(Uintptr)((void *)(addrinfo))}, 1, NULL, NULL);
+}
+
+Error syscall_free_environment_strings(uint16_t *envs) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_FREE_ENVIRONMENT_STRINGS_W]), (const Uintptr[]){(Uintptr)((void *)(envs))}, 1, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_free_library(SyscallHandle handle) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_FREE_LIBRARY]), (const Uintptr[]){(Uintptr)(handle)}, 1, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+void syscall_get_accept_ex_sockaddrs(uint8_t *buf, uint32_t rxdatalen, uint32_t laddrlen, uint32_t raddrlen, SyscallRawSockaddrAny **lrsa, int32_t *lrsalen, SyscallRawSockaddrAny **rrsa, int32_t *rrsalen) {
+    burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_ACCEPT_EX_SOCKADDRS]), (const Uintptr[]){(Uintptr)((void *)(buf)), (Uintptr)(rxdatalen), (Uintptr)(laddrlen), (Uintptr)(raddrlen), (Uintptr)((void *)(lrsa)), (Uintptr)((void *)(lrsalen)), (Uintptr)((void *)(rrsa)), (Uintptr)((void *)(rrsalen))}, 8, NULL, NULL);
+}
+
+Error syscall_get_adapters_info(SyscallIpAdapterInfo *ai, uint32_t *ol) {
+    Error errcode_ = BURROW_NO_ERROR;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_ADAPTERS_INFO]), (const Uintptr[]){(Uintptr)((void *)(ai)), (Uintptr)((void *)(ol))}, 2, NULL, NULL);
+    if (r0 != 0) {
+        errcode_ = syscall_errno_as_error((SyscallErrno)(r0), error_allocator());
+    }
+    return errcode_;
+}
+
+Error syscall_get_addr_info_w(uint16_t *nodename, uint16_t *servicename, SyscallAddrinfoW *hints, SyscallAddrinfoW **result) {
+    Error sockerr_ = BURROW_NO_ERROR;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_ADDR_INFO_W]), (const Uintptr[]){(Uintptr)((void *)(nodename)), (Uintptr)((void *)(servicename)), (Uintptr)((void *)(hints)), (Uintptr)((void *)(result))}, 4, NULL, NULL);
+    if (r0 != 0) {
+        sockerr_ = syscall_errno_as_error((SyscallErrno)(r0), error_allocator());
+    }
+    return sockerr_;
+}
+
+uint16_t *syscall_get_command_line(void) {
+    uint16_t *cmd_ = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_COMMAND_LINE_W]), NULL, 0, NULL, NULL);
+    cmd_ = (uint16_t *)((void *)(r0));
+    return cmd_;
+}
+
+Error syscall_get_computer_name(uint16_t *buf, uint32_t *n) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_COMPUTER_NAME_W]), (const Uintptr[]){(Uintptr)((void *)(buf)), (Uintptr)((void *)(n))}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_get_console_mode(SyscallHandle console, uint32_t *mode) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_CONSOLE_MODE]), (const Uintptr[]){(Uintptr)(console), (Uintptr)((void *)(mode))}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+uint32_t syscall_get_current_directory(uint32_t buflen, uint16_t *buf, Error *err) {
+    uint32_t n_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_CURRENT_DIRECTORY_W]), (const Uintptr[]){(Uintptr)(buflen), (Uintptr)((void *)(buf))}, 2, NULL, &e1);
+    n_ = (uint32_t)(r0);
+    if (n_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return n_;
+}
+
+SyscallHandle syscall_get_current_process(Error *err) {
+    SyscallHandle pseudoHandle_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_CURRENT_PROCESS]), NULL, 0, NULL, &e1);
+    pseudoHandle_ = (SyscallHandle)(r0);
+    if (pseudoHandle_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return pseudoHandle_;
+}
+
+uint16_t *syscall_get_environment_strings(Error *err) {
+    uint16_t *envs_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_ENVIRONMENT_STRINGS_W]), NULL, 0, NULL, &e1);
+    envs_ = (uint16_t *)((void *)(r0));
+    if (envs_ == NULL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return envs_;
+}
+
+uint32_t syscall_get_environment_variable(uint16_t *name, uint16_t *buffer, uint32_t size, Error *err) {
+    uint32_t n_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_ENVIRONMENT_VARIABLE_W]), (const Uintptr[]){(Uintptr)((void *)(name)), (Uintptr)((void *)(buffer)), (Uintptr)(size)}, 3, NULL, &e1);
+    n_ = (uint32_t)(r0);
+    if (n_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return n_;
+}
+
+Error syscall_get_exit_code_process(SyscallHandle handle, uint32_t *exitcode) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_EXIT_CODE_PROCESS]), (const Uintptr[]){(Uintptr)(handle), (Uintptr)((void *)(exitcode))}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+uint32_t syscall_get_file_attributes(uint16_t *name, Error *err) {
+    uint32_t attrs_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_FILE_ATTRIBUTES_W]), (const Uintptr[]){(Uintptr)((void *)(name))}, 1, NULL, &e1);
+    attrs_ = (uint32_t)(r0);
+    if (attrs_ == SYSCALL_INVALID_FILE_ATTRIBUTES) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return attrs_;
+}
+
+Error syscall_get_file_attributes_ex(uint16_t *name, uint32_t level, uint8_t *info) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_FILE_ATTRIBUTES_EX_W]), (const Uintptr[]){(Uintptr)((void *)(name)), (Uintptr)(level), (Uintptr)((void *)(info))}, 3, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_get_file_information_by_handle(SyscallHandle handle, SyscallByHandleFileInformation *data) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_FILE_INFORMATION_BY_HANDLE]), (const Uintptr[]){(Uintptr)(handle), (Uintptr)((void *)(data))}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+uint32_t syscall_get_file_type(SyscallHandle filehandle, Error *err) {
+    uint32_t n_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_FILE_TYPE]), (const Uintptr[]){(Uintptr)(filehandle)}, 1, NULL, &e1);
+    n_ = (uint32_t)(r0);
+    if (n_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return n_;
+}
+
+uint32_t syscall_get_full_path_name(uint16_t *path, uint32_t buflen, uint16_t *buf, uint16_t **fname, Error *err) {
+    uint32_t n_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_FULL_PATH_NAME_W]), (const Uintptr[]){(Uintptr)((void *)(path)), (Uintptr)(buflen), (Uintptr)((void *)(buf)), (Uintptr)((void *)(fname))}, 4, NULL, &e1);
+    n_ = (uint32_t)(r0);
+    if (n_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return n_;
+}
+
+SyscallHostent *syscall_get_host_by_name(Str name, Error *err) {
+    SyscallHostent *h_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    uint8_t *_p0 = NULL;
+    burrow__SyscallCString _p0s;
+    _p0s.heap = NULL;
+    _p0 = burrow__syscall_cstring(&_p0s, name, &err_);
+    if (BURROW_FAILED(err_)) {
+        goto done;
+    }
+    h_ = burrow__syscall_get_host_by_name(_p0, &err_);
+done:
+    burrow__syscall_cstring_free(&_p0s);
+    BURROW_OUT(err, err_);
+    return h_;
+}
+
+Error syscall_get_if_entry(SyscallMibIfRow *pIfRow) {
+    Error errcode_ = BURROW_NO_ERROR;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_IF_ENTRY]), (const Uintptr[]){(Uintptr)((void *)(pIfRow))}, 1, NULL, NULL);
+    if (r0 != 0) {
+        errcode_ = syscall_errno_as_error((SyscallErrno)(r0), error_allocator());
+    }
+    return errcode_;
+}
+
+Error syscall_get_last_error(void) {
+    Error lasterr_ = BURROW_NO_ERROR;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_LAST_ERROR]), NULL, 0, NULL, NULL);
+    if (r0 != 0) {
+        lasterr_ = syscall_errno_as_error((SyscallErrno)(r0), error_allocator());
+    }
+    return lasterr_;
+}
+
+uint32_t syscall_get_length_sid(SyscallSID *sid) {
+    uint32_t len_ = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_LENGTH_SID]), (const Uintptr[]){(Uintptr)((void *)(sid))}, 1, NULL, NULL);
+    len_ = (uint32_t)(r0);
+    return len_;
+}
+
+uint32_t syscall_get_long_path_name(uint16_t *path, uint16_t *buf, uint32_t buflen, Error *err) {
+    uint32_t n_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_LONG_PATH_NAME_W]), (const Uintptr[]){(Uintptr)((void *)(path)), (Uintptr)((void *)(buf)), (Uintptr)(buflen)}, 3, NULL, &e1);
+    n_ = (uint32_t)(r0);
+    if (n_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return n_;
+}
+
+Uintptr syscall_get_proc_address(SyscallHandle module, Str procname, Error *err) {
+    Uintptr proc_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    uint8_t *_p0 = NULL;
+    burrow__SyscallCString _p0s;
+    _p0s.heap = NULL;
+    _p0 = burrow__syscall_cstring(&_p0s, procname, &err_);
+    if (BURROW_FAILED(err_)) {
+        goto done;
+    }
+    proc_ = burrow__syscall_get_proc_address(module, _p0, &err_);
+done:
+    burrow__syscall_cstring_free(&_p0s);
+    BURROW_OUT(err, err_);
+    return proc_;
+}
+
+Error syscall_get_process_times(SyscallHandle handle, SyscallFiletime *creationTime, SyscallFiletime *exitTime, SyscallFiletime *kernelTime, SyscallFiletime *userTime) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_PROCESS_TIMES]), (const Uintptr[]){(Uintptr)(handle), (Uintptr)((void *)(creationTime)), (Uintptr)((void *)(exitTime)), (Uintptr)((void *)(kernelTime)), (Uintptr)((void *)(userTime))}, 5, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+SyscallProtoent *syscall_get_proto_by_name(Str name, Error *err) {
+    SyscallProtoent *p_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    uint8_t *_p0 = NULL;
+    burrow__SyscallCString _p0s;
+    _p0s.heap = NULL;
+    _p0 = burrow__syscall_cstring(&_p0s, name, &err_);
+    if (BURROW_FAILED(err_)) {
+        goto done;
+    }
+    p_ = burrow__syscall_get_proto_by_name(_p0, &err_);
+done:
+    burrow__syscall_cstring_free(&_p0s);
+    BURROW_OUT(err, err_);
+    return p_;
+}
+
+SyscallServent *syscall_get_serv_by_name(Str name, Str proto, Error *err) {
+    SyscallServent *s_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    uint8_t *_p0 = NULL;
+    burrow__SyscallCString _p0s;
+    uint8_t *_p1 = NULL;
+    burrow__SyscallCString _p1s;
+    _p0s.heap = NULL;
+    _p1s.heap = NULL;
+    _p0 = burrow__syscall_cstring(&_p0s, name, &err_);
+    if (BURROW_FAILED(err_)) {
+        goto done;
+    }
+    _p1 = burrow__syscall_cstring(&_p1s, proto, &err_);
+    if (BURROW_FAILED(err_)) {
+        goto done;
+    }
+    s_ = burrow__syscall_get_serv_by_name(_p0, _p1, &err_);
+done:
+    burrow__syscall_cstring_free(&_p0s);
+    burrow__syscall_cstring_free(&_p1s);
+    BURROW_OUT(err, err_);
+    return s_;
+}
+
+uint32_t syscall_get_short_path_name(uint16_t *longpath, uint16_t *shortpath, uint32_t buflen, Error *err) {
+    uint32_t n_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_SHORT_PATH_NAME_W]), (const Uintptr[]){(Uintptr)((void *)(longpath)), (Uintptr)((void *)(shortpath)), (Uintptr)(buflen)}, 3, NULL, &e1);
+    n_ = (uint32_t)(r0);
+    if (n_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return n_;
+}
+
+SyscallHandle syscall_get_std_handle(Int stdhandle, Error *err) {
+    SyscallHandle handle_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_STD_HANDLE]), (const Uintptr[]){(Uintptr)(stdhandle)}, 1, NULL, &e1);
+    handle_ = (SyscallHandle)(r0);
+    if (handle_ == SYSCALL_INVALID_HANDLE) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return handle_;
+}
+
+void syscall_get_system_time_as_file_time(SyscallFiletime *time) {
+    burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_SYSTEM_TIME_AS_FILE_TIME]), (const Uintptr[]){(Uintptr)((void *)(time))}, 1, NULL, NULL);
+}
+
+uint32_t syscall_get_temp_path(uint32_t buflen, uint16_t *buf, Error *err) {
+    uint32_t n_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_TEMP_PATH_W]), (const Uintptr[]){(Uintptr)(buflen), (Uintptr)((void *)(buf))}, 2, NULL, &e1);
+    n_ = (uint32_t)(r0);
+    if (n_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return n_;
+}
+
+uint32_t syscall_get_time_zone_information(SyscallTimezoneinformation *tzi, Error *err) {
+    uint32_t rc_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_TIME_ZONE_INFORMATION]), (const Uintptr[]){(Uintptr)((void *)(tzi))}, 1, NULL, &e1);
+    rc_ = (uint32_t)(r0);
+    if (rc_ == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return rc_;
+}
+
+Error syscall_get_token_information(SyscallToken t, uint32_t infoClass, uint8_t *info, uint32_t infoLen, uint32_t *returnedLen) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_TOKEN_INFORMATION]), (const Uintptr[]){(Uintptr)(t), (Uintptr)(infoClass), (Uintptr)((void *)(info)), (Uintptr)(infoLen), (Uintptr)((void *)(returnedLen))}, 5, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_get_user_name_ex(uint32_t nameFormat, uint16_t *nameBuffre, uint32_t *nSize) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_USER_NAME_EX_W]), (const Uintptr[]){(Uintptr)(nameFormat), (Uintptr)((void *)(nameBuffre)), (Uintptr)((void *)(nSize))}, 3, NULL, &e1);
+    if ((r1 & 255) == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_get_user_profile_directory(SyscallToken t, uint16_t *dir, uint32_t *dirLen) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_USER_PROFILE_DIRECTORY_W]), (const Uintptr[]){(Uintptr)(t), (Uintptr)((void *)(dir)), (Uintptr)((void *)(dirLen))}, 3, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+uint32_t syscall_get_version(Error *err) {
+    uint32_t ver_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_VERSION]), NULL, 0, NULL, &e1);
+    ver_ = (uint32_t)(r0);
+    if (ver_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return ver_;
+}
+
+Error syscall_getsockopt(SyscallHandle s, int32_t level, int32_t optname, uint8_t *optval, int32_t *optlen) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GETSOCKOPT]), (const Uintptr[]){(Uintptr)(s), (Uintptr)(level), (Uintptr)(optname), (Uintptr)((void *)(optval)), (Uintptr)((void *)(optlen))}, 5, NULL, &e1);
+    if (r1 == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+SyscallHandle syscall_load_library(Str libname, Error *err) {
+    SyscallHandle handle_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    uint16_t *_p0 = NULL;
+    burrow__SyscallWString _p0s;
+    _p0s.heap = NULL;
+    _p0 = burrow__syscall_wstring(&_p0s, libname, &err_);
+    if (BURROW_FAILED(err_)) {
+        goto done;
+    }
+    handle_ = burrow__syscall_load_library(_p0, &err_);
+done:
+    burrow__syscall_wstring_free(&_p0s);
+    BURROW_OUT(err, err_);
+    return handle_;
+}
+
+SyscallHandle syscall_local_free(SyscallHandle hmem, Error *err) {
+    SyscallHandle handle_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_LOCAL_FREE]), (const Uintptr[]){(Uintptr)(hmem)}, 1, NULL, &e1);
+    handle_ = (SyscallHandle)(r0);
+    if (handle_ != 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return handle_;
+}
+
+Error syscall_lookup_account_name(uint16_t *systemName, uint16_t *accountName, SyscallSID *sid, uint32_t *sidLen, uint16_t *refdDomainName, uint32_t *refdDomainNameLen, uint32_t *use) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_LOOKUP_ACCOUNT_NAME_W]), (const Uintptr[]){(Uintptr)((void *)(systemName)), (Uintptr)((void *)(accountName)), (Uintptr)((void *)(sid)), (Uintptr)((void *)(sidLen)), (Uintptr)((void *)(refdDomainName)), (Uintptr)((void *)(refdDomainNameLen)), (Uintptr)((void *)(use))}, 7, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_lookup_account_sid(uint16_t *systemName, SyscallSID *sid, uint16_t *name, uint32_t *nameLen, uint16_t *refdDomainName, uint32_t *refdDomainNameLen, uint32_t *use) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_LOOKUP_ACCOUNT_SID_W]), (const Uintptr[]){(Uintptr)((void *)(systemName)), (Uintptr)((void *)(sid)), (Uintptr)((void *)(name)), (Uintptr)((void *)(nameLen)), (Uintptr)((void *)(refdDomainName)), (Uintptr)((void *)(refdDomainNameLen)), (Uintptr)((void *)(use))}, 7, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Uintptr syscall_map_view_of_file(SyscallHandle handle, uint32_t access, uint32_t offsetHigh, uint32_t offsetLow, Uintptr length, Error *err) {
+    Uintptr addr_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_MAP_VIEW_OF_FILE]), (const Uintptr[]){(Uintptr)(handle), (Uintptr)(access), (Uintptr)(offsetHigh), (Uintptr)(offsetLow), (Uintptr)(length)}, 5, NULL, &e1);
+    addr_ = (Uintptr)(r0);
+    if (addr_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return addr_;
+}
+
+Error syscall_move_file(uint16_t *from, uint16_t *to) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_MOVE_FILE_W]), (const Uintptr[]){(Uintptr)((void *)(from)), (Uintptr)((void *)(to))}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_net_api_buffer_free(uint8_t *buf) {
+    Error neterr_ = BURROW_NO_ERROR;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_NET_API_BUFFER_FREE]), (const Uintptr[]){(Uintptr)((void *)(buf))}, 1, NULL, NULL);
+    if (r0 != 0) {
+        neterr_ = syscall_errno_as_error((SyscallErrno)(r0), error_allocator());
+    }
+    return neterr_;
+}
+
+Error syscall_net_get_join_information(uint16_t *server, uint16_t **name, uint32_t *bufType) {
+    Error neterr_ = BURROW_NO_ERROR;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_NET_GET_JOIN_INFORMATION]), (const Uintptr[]){(Uintptr)((void *)(server)), (Uintptr)((void *)(name)), (Uintptr)((void *)(bufType))}, 3, NULL, NULL);
+    if (r0 != 0) {
+        neterr_ = syscall_errno_as_error((SyscallErrno)(r0), error_allocator());
+    }
+    return neterr_;
+}
+
+Error syscall_net_user_get_info(uint16_t *serverName, uint16_t *userName, uint32_t level, uint8_t **buf) {
+    Error neterr_ = BURROW_NO_ERROR;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_NET_USER_GET_INFO]), (const Uintptr[]){(Uintptr)((void *)(serverName)), (Uintptr)((void *)(userName)), (Uintptr)(level), (Uintptr)((void *)(buf))}, 4, NULL, NULL);
+    if (r0 != 0) {
+        neterr_ = syscall_errno_as_error((SyscallErrno)(r0), error_allocator());
+    }
+    return neterr_;
+}
+
+uint16_t syscall_ntohs(uint16_t netshort) {
+    uint16_t u_ = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_NTOHS]), (const Uintptr[]){(Uintptr)(netshort)}, 1, NULL, NULL);
+    u_ = (uint16_t)(r0);
+    return u_;
+}
+
+SyscallHandle syscall_open_process(uint32_t da, bool inheritHandle, uint32_t pid, Error *err) {
+    SyscallHandle handle_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    uint32_t _p0 = 0;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    if (inheritHandle) {
+        _p0 = 1;
+    }
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_OPEN_PROCESS]), (const Uintptr[]){(Uintptr)(da), (Uintptr)(_p0), (Uintptr)(pid)}, 3, NULL, &e1);
+    handle_ = (SyscallHandle)(r0);
+    if (handle_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return handle_;
+}
+
+Error syscall_open_process_token(SyscallHandle h, uint32_t access, SyscallToken *token) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_OPEN_PROCESS_TOKEN]), (const Uintptr[]){(Uintptr)(h), (Uintptr)(access), (Uintptr)((void *)(token))}, 3, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_process32_first(SyscallHandle snapshot, SyscallProcessEntry32 *procEntry) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_PROCESS32_FIRST_W]), (const Uintptr[]){(Uintptr)(snapshot), (Uintptr)((void *)(procEntry))}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_process32_next(SyscallHandle snapshot, SyscallProcessEntry32 *procEntry) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_PROCESS32_NEXT_W]), (const Uintptr[]){(Uintptr)(snapshot), (Uintptr)((void *)(procEntry))}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_read_console(SyscallHandle console, uint16_t *buf, uint32_t toread, uint32_t *read, uint8_t *inputControl) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_READ_CONSOLE_W]), (const Uintptr[]){(Uintptr)(console), (Uintptr)((void *)(buf)), (Uintptr)(toread), (Uintptr)((void *)(read)), (Uintptr)((void *)(inputControl))}, 5, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_read_directory_changes(SyscallHandle handle, uint8_t *buf, uint32_t buflen, bool watchSubTree, uint32_t mask, uint32_t *retlen, SyscallOverlapped *overlapped, Uintptr completionRoutine) {
+    Error err_ = BURROW_NO_ERROR;
+    uint32_t _p0 = 0;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    if (watchSubTree) {
+        _p0 = 1;
+    }
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_READ_DIRECTORY_CHANGES_W]), (const Uintptr[]){(Uintptr)(handle), (Uintptr)((void *)(buf)), (Uintptr)(buflen), (Uintptr)(_p0), (Uintptr)(mask), (Uintptr)((void *)(retlen)), (Uintptr)((void *)(overlapped)), (Uintptr)(completionRoutine)}, 8, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_reg_close_key(SyscallHandle key) {
+    Error regerrno_ = BURROW_NO_ERROR;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_REG_CLOSE_KEY]), (const Uintptr[]){(Uintptr)(key)}, 1, NULL, NULL);
+    if (r0 != 0) {
+        regerrno_ = syscall_errno_as_error((SyscallErrno)(r0), error_allocator());
+    }
+    return regerrno_;
+}
+
+Error syscall_reg_open_key_ex(SyscallHandle key, uint16_t *subkey, uint32_t options, uint32_t desiredAccess, SyscallHandle *result) {
+    Error regerrno_ = BURROW_NO_ERROR;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_REG_OPEN_KEY_EX_W]), (const Uintptr[]){(Uintptr)(key), (Uintptr)((void *)(subkey)), (Uintptr)(options), (Uintptr)(desiredAccess), (Uintptr)((void *)(result))}, 5, NULL, NULL);
+    if (r0 != 0) {
+        regerrno_ = syscall_errno_as_error((SyscallErrno)(r0), error_allocator());
+    }
+    return regerrno_;
+}
+
+Error syscall_reg_query_info_key(SyscallHandle key, uint16_t *class_, uint32_t *classLen, uint32_t *reserved, uint32_t *subkeysLen, uint32_t *maxSubkeyLen, uint32_t *maxClassLen, uint32_t *valuesLen, uint32_t *maxValueNameLen, uint32_t *maxValueLen, uint32_t *saLen, SyscallFiletime *lastWriteTime) {
+    Error regerrno_ = BURROW_NO_ERROR;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_REG_QUERY_INFO_KEY_W]), (const Uintptr[]){(Uintptr)(key), (Uintptr)((void *)(class_)), (Uintptr)((void *)(classLen)), (Uintptr)((void *)(reserved)), (Uintptr)((void *)(subkeysLen)), (Uintptr)((void *)(maxSubkeyLen)), (Uintptr)((void *)(maxClassLen)), (Uintptr)((void *)(valuesLen)), (Uintptr)((void *)(maxValueNameLen)), (Uintptr)((void *)(maxValueLen)), (Uintptr)((void *)(saLen)), (Uintptr)((void *)(lastWriteTime))}, 12, NULL, NULL);
+    if (r0 != 0) {
+        regerrno_ = syscall_errno_as_error((SyscallErrno)(r0), error_allocator());
+    }
+    return regerrno_;
+}
+
+Error syscall_reg_query_value_ex(SyscallHandle key, uint16_t *name, uint32_t *reserved, uint32_t *valtype, uint8_t *buf, uint32_t *buflen) {
+    Error regerrno_ = BURROW_NO_ERROR;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_REG_QUERY_VALUE_EX_W]), (const Uintptr[]){(Uintptr)(key), (Uintptr)((void *)(name)), (Uintptr)((void *)(reserved)), (Uintptr)((void *)(valtype)), (Uintptr)((void *)(buf)), (Uintptr)((void *)(buflen))}, 6, NULL, NULL);
+    if (r0 != 0) {
+        regerrno_ = syscall_errno_as_error((SyscallErrno)(r0), error_allocator());
+    }
+    return regerrno_;
+}
+
+Error syscall_remove_directory(uint16_t *path) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_REMOVE_DIRECTORY_W]), (const Uintptr[]){(Uintptr)((void *)(path))}, 1, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_set_current_directory(uint16_t *path) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_SET_CURRENT_DIRECTORY_W]), (const Uintptr[]){(Uintptr)((void *)(path))}, 1, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_set_end_of_file(SyscallHandle handle) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_SET_END_OF_FILE]), (const Uintptr[]){(Uintptr)(handle)}, 1, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_set_environment_variable(uint16_t *name, uint16_t *value) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_SET_ENVIRONMENT_VARIABLE_W]), (const Uintptr[]){(Uintptr)((void *)(name)), (Uintptr)((void *)(value))}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_set_file_attributes(uint16_t *name, uint32_t attrs) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_SET_FILE_ATTRIBUTES_W]), (const Uintptr[]){(Uintptr)((void *)(name)), (Uintptr)(attrs)}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_set_file_completion_notification_modes(SyscallHandle handle, uint8_t flags) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_SET_FILE_COMPLETION_NOTIFICATION_MODES]), (const Uintptr[]){(Uintptr)(handle), (Uintptr)(flags)}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+uint32_t syscall_set_file_pointer(SyscallHandle handle, int32_t lowoffset, int32_t *highoffsetptr, uint32_t whence, Error *err) {
+    uint32_t newlowoffset_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_SET_FILE_POINTER]), (const Uintptr[]){(Uintptr)(handle), (Uintptr)(lowoffset), (Uintptr)((void *)(highoffsetptr)), (Uintptr)(whence)}, 4, NULL, &e1);
+    newlowoffset_ = (uint32_t)(r0);
+    if (newlowoffset_ == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return newlowoffset_;
+}
+
+Error syscall_set_file_time(SyscallHandle handle, SyscallFiletime *ctime, SyscallFiletime *atime, SyscallFiletime *wtime) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_SET_FILE_TIME]), (const Uintptr[]){(Uintptr)(handle), (Uintptr)((void *)(ctime)), (Uintptr)((void *)(atime)), (Uintptr)((void *)(wtime))}, 4, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_set_handle_information(SyscallHandle handle, uint32_t mask, uint32_t flags) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_SET_HANDLE_INFORMATION]), (const Uintptr[]){(Uintptr)(handle), (Uintptr)(mask), (Uintptr)(flags)}, 3, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_setsockopt(SyscallHandle s, int32_t level, int32_t optname, uint8_t *optval, int32_t optlen) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_SETSOCKOPT]), (const Uintptr[]){(Uintptr)(s), (Uintptr)(level), (Uintptr)(optname), (Uintptr)((void *)(optval)), (Uintptr)(optlen)}, 5, NULL, &e1);
+    if (r1 == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_terminate_process(SyscallHandle handle, uint32_t exitcode) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_TERMINATE_PROCESS]), (const Uintptr[]){(Uintptr)(handle), (Uintptr)(exitcode)}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_translate_name(uint16_t *accName, uint32_t accNameFormat, uint32_t desiredNameFormat, uint16_t *translatedName, uint32_t *nSize) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_TRANSLATE_NAME_W]), (const Uintptr[]){(Uintptr)((void *)(accName)), (Uintptr)(accNameFormat), (Uintptr)(desiredNameFormat), (Uintptr)((void *)(translatedName)), (Uintptr)((void *)(nSize))}, 5, NULL, &e1);
+    if ((r1 & 255) == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_transmit_file(SyscallHandle s, SyscallHandle handle, uint32_t bytesToWrite, uint32_t bytsPerSend, SyscallOverlapped *overlapped, SyscallTransmitFileBuffers *transmitFileBuf, uint32_t flags) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_TRANSMIT_FILE]), (const Uintptr[]){(Uintptr)(s), (Uintptr)(handle), (Uintptr)(bytesToWrite), (Uintptr)(bytsPerSend), (Uintptr)((void *)(overlapped)), (Uintptr)((void *)(transmitFileBuf)), (Uintptr)(flags)}, 7, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_unmap_view_of_file(Uintptr addr) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_UNMAP_VIEW_OF_FILE]), (const Uintptr[]){(Uintptr)(addr)}, 1, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_virtual_lock(Uintptr addr, Uintptr length) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_VIRTUAL_LOCK]), (const Uintptr[]){(Uintptr)(addr), (Uintptr)(length)}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_virtual_unlock(Uintptr addr, Uintptr length) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_VIRTUAL_UNLOCK]), (const Uintptr[]){(Uintptr)(addr), (Uintptr)(length)}, 2, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_wsa_cleanup(void) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_WSA_CLEANUP]), NULL, 0, NULL, &e1);
+    if (r1 == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+int32_t syscall_wsa_enum_protocols(int32_t *protocols, SyscallWSAProtocolInfo *protocolBuffer, uint32_t *bufferLength, Error *err) {
+    int32_t n_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_WSA_ENUM_PROTOCOLS_W]), (const Uintptr[]){(Uintptr)((void *)(protocols)), (Uintptr)((void *)(protocolBuffer)), (Uintptr)((void *)(bufferLength))}, 3, NULL, &e1);
+    n_ = (int32_t)(r0);
+    if (n_ == -1) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return n_;
+}
+
+Error syscall_wsa_ioctl(SyscallHandle s, uint32_t iocc, uint8_t *inbuf, uint32_t cbif, uint8_t *outbuf, uint32_t cbob, uint32_t *cbbr, SyscallOverlapped *overlapped, Uintptr completionRoutine) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_WSA_IOCTL]), (const Uintptr[]){(Uintptr)(s), (Uintptr)(iocc), (Uintptr)((void *)(inbuf)), (Uintptr)(cbif), (Uintptr)((void *)(outbuf)), (Uintptr)(cbob), (Uintptr)((void *)(cbbr)), (Uintptr)((void *)(overlapped)), (Uintptr)(completionRoutine)}, 9, NULL, &e1);
+    if (r1 == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_wsa_recv(SyscallHandle s, SyscallWSABuf *bufs, uint32_t bufcnt, uint32_t *recvd, uint32_t *flags, SyscallOverlapped *overlapped, uint8_t *croutine) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_WSA_RECV]), (const Uintptr[]){(Uintptr)(s), (Uintptr)((void *)(bufs)), (Uintptr)(bufcnt), (Uintptr)((void *)(recvd)), (Uintptr)((void *)(flags)), (Uintptr)((void *)(overlapped)), (Uintptr)((void *)(croutine))}, 7, NULL, &e1);
+    if (r1 == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_wsa_recv_from(SyscallHandle s, SyscallWSABuf *bufs, uint32_t bufcnt, uint32_t *recvd, uint32_t *flags, SyscallRawSockaddrAny *from, int32_t *fromlen, SyscallOverlapped *overlapped, uint8_t *croutine) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_WSA_RECV_FROM]), (const Uintptr[]){(Uintptr)(s), (Uintptr)((void *)(bufs)), (Uintptr)(bufcnt), (Uintptr)((void *)(recvd)), (Uintptr)((void *)(flags)), (Uintptr)((void *)(from)), (Uintptr)((void *)(fromlen)), (Uintptr)((void *)(overlapped)), (Uintptr)((void *)(croutine))}, 9, NULL, &e1);
+    if (r1 == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_wsa_send(SyscallHandle s, SyscallWSABuf *bufs, uint32_t bufcnt, uint32_t *sent, uint32_t flags, SyscallOverlapped *overlapped, uint8_t *croutine) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_WSA_SEND]), (const Uintptr[]){(Uintptr)(s), (Uintptr)((void *)(bufs)), (Uintptr)(bufcnt), (Uintptr)((void *)(sent)), (Uintptr)(flags), (Uintptr)((void *)(overlapped)), (Uintptr)((void *)(croutine))}, 7, NULL, &e1);
+    if (r1 == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_wsa_send_to(SyscallHandle s, SyscallWSABuf *bufs, uint32_t bufcnt, uint32_t *sent, uint32_t flags, SyscallRawSockaddrAny *to, int32_t tolen, SyscallOverlapped *overlapped, uint8_t *croutine) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_WSA_SEND_TO]), (const Uintptr[]){(Uintptr)(s), (Uintptr)((void *)(bufs)), (Uintptr)(bufcnt), (Uintptr)((void *)(sent)), (Uintptr)(flags), (Uintptr)((void *)(to)), (Uintptr)(tolen), (Uintptr)((void *)(overlapped)), (Uintptr)((void *)(croutine))}, 9, NULL, &e1);
+    if (r1 == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error syscall_wsa_startup(uint32_t verreq, SyscallWSAData *data) {
+    Error sockerr_ = BURROW_NO_ERROR;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_WSA_STARTUP]), (const Uintptr[]){(Uintptr)(verreq), (Uintptr)((void *)(data))}, 2, NULL, NULL);
+    if (r0 != 0) {
+        sockerr_ = syscall_errno_as_error((SyscallErrno)(r0), error_allocator());
+    }
+    return sockerr_;
+}
+
+uint32_t syscall_wait_for_single_object(SyscallHandle handle, uint32_t waitMilliseconds, Error *err) {
+    uint32_t event_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_WAIT_FOR_SINGLE_OBJECT]), (const Uintptr[]){(Uintptr)(handle), (Uintptr)(waitMilliseconds)}, 2, NULL, &e1);
+    event_ = (uint32_t)(r0);
+    if (event_ == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return event_;
+}
+
+Error syscall_write_console(SyscallHandle console, uint16_t *buf, uint32_t towrite, uint32_t *written, uint8_t *reserved) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_WRITE_CONSOLE_W]), (const Uintptr[]){(Uintptr)(console), (Uintptr)((void *)(buf)), (Uintptr)(towrite), (Uintptr)((void *)(written)), (Uintptr)((void *)(reserved))}, 5, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error burrow__syscall_dns_query(uint16_t *name, uint16_t qtype, uint32_t options, uint8_t *extra, SyscallDNSRecord **qrs, uint8_t *pr) {
+    Error status_ = BURROW_NO_ERROR;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_DNS_QUERY_W]), (const Uintptr[]){(Uintptr)((void *)(name)), (Uintptr)(qtype), (Uintptr)(options), (Uintptr)((void *)(extra)), (Uintptr)((void *)(qrs)), (Uintptr)((void *)(pr))}, 6, NULL, NULL);
+    if (r0 != 0) {
+        status_ = syscall_errno_as_error((SyscallErrno)(r0), error_allocator());
+    }
+    return status_;
+}
+
+SyscallHostent *burrow__syscall_get_host_by_name(uint8_t *name, Error *err) {
+    SyscallHostent *h_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GETHOSTBYNAME]), (const Uintptr[]){(Uintptr)((void *)(name))}, 1, NULL, &e1);
+    h_ = (SyscallHostent *)((void *)(r0));
+    if (h_ == NULL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return h_;
+}
+
+Uintptr burrow__syscall_get_proc_address(SyscallHandle module, uint8_t *procname, Error *err) {
+    Uintptr proc_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_PROC_ADDRESS]), (const Uintptr[]){(Uintptr)(module), (Uintptr)((void *)(procname))}, 2, NULL, &e1);
+    proc_ = (Uintptr)(r0);
+    if (proc_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return proc_;
+}
+
+SyscallProtoent *burrow__syscall_get_proto_by_name(uint8_t *name, Error *err) {
+    SyscallProtoent *p_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GETPROTOBYNAME]), (const Uintptr[]){(Uintptr)((void *)(name))}, 1, NULL, &e1);
+    p_ = (SyscallProtoent *)((void *)(r0));
+    if (p_ == NULL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return p_;
+}
+
+SyscallServent *burrow__syscall_get_serv_by_name(uint8_t *name, uint8_t *proto, Error *err) {
+    SyscallServent *s_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GETSERVBYNAME]), (const Uintptr[]){(Uintptr)((void *)(name)), (Uintptr)((void *)(proto))}, 2, NULL, &e1);
+    s_ = (SyscallServent *)((void *)(r0));
+    if (s_ == NULL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return s_;
+}
+
+SyscallHandle burrow__syscall_load_library(uint16_t *libname, Error *err) {
+    SyscallHandle handle_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_LOAD_LIBRARY_W]), (const Uintptr[]){(Uintptr)((void *)(libname))}, 1, NULL, &e1);
+    handle_ = (SyscallHandle)(r0);
+    if (handle_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return handle_;
+}
+
+Error burrow__syscall_bind(SyscallHandle s, void *name, int32_t namelen) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_BIND]), (const Uintptr[]){(Uintptr)(s), (Uintptr)(name), (Uintptr)(namelen)}, 3, NULL, &e1);
+    if (r1 == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error burrow__syscall_connect(SyscallHandle s, void *name, int32_t namelen) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CONNECT]), (const Uintptr[]){(Uintptr)(s), (Uintptr)(name), (Uintptr)(namelen)}, 3, NULL, &e1);
+    if (r1 == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+SyscallHandle burrow__syscall_create_file(uint16_t *name, uint32_t access, uint32_t mode, SyscallSecurityAttributes *sa, uint32_t createmode, uint32_t attrs, int32_t templatefile, Error *err) {
+    SyscallHandle handle_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CREATE_FILE_W]), (const Uintptr[]){(Uintptr)((void *)(name)), (Uintptr)(access), (Uintptr)(mode), (Uintptr)((void *)(sa)), (Uintptr)(createmode), (Uintptr)(attrs), (Uintptr)(templatefile)}, 7, NULL, &e1);
+    handle_ = (SyscallHandle)(r0);
+    if ((handle_ == SYSCALL_INVALID_HANDLE) || (e1 == SYSCALL_ERROR_ALREADY_EXISTS)) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return handle_;
+}
+
+SyscallHandle burrow__syscall_create_io_completion_port(SyscallHandle filehandle, SyscallHandle cphandle, Uintptr key, uint32_t threadcnt, Error *err) {
+    SyscallHandle handle_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_CREATE_IO_COMPLETION_PORT]), (const Uintptr[]){(Uintptr)(filehandle), (Uintptr)(cphandle), (Uintptr)(key), (Uintptr)(threadcnt)}, 4, NULL, &e1);
+    handle_ = (SyscallHandle)(r0);
+    if (handle_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return handle_;
+}
+
+uint32_t burrow__syscall_format_message(uint32_t flags, Uintptr msgsrc, uint32_t msgid, uint32_t langid, Slice buf, uint8_t *args, Error *err) {
+    uint32_t n_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    uint16_t *_p0 = NULL;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    if (buf.len > 0) {
+        _p0 = &((uint16_t *)buf.p)[0];
+    }
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_FORMAT_MESSAGE_W]), (const Uintptr[]){(Uintptr)(flags), (Uintptr)(msgsrc), (Uintptr)(msgid), (Uintptr)(langid), (Uintptr)((void *)(_p0)), (Uintptr)(buf.len), (Uintptr)((void *)(args))}, 7, NULL, &e1);
+    n_ = (uint32_t)(r0);
+    if (n_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return n_;
+}
+
+uint32_t burrow__syscall_get_current_process_id(void) {
+    uint32_t pid_ = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_CURRENT_PROCESS_ID]), NULL, 0, NULL, NULL);
+    pid_ = (uint32_t)(r0);
+    return pid_;
+}
+
+uint32_t burrow__syscall_get_final_path_name_by_handle(SyscallHandle file, uint16_t *filePath, uint32_t filePathSize, uint32_t flags, Error *err) {
+    uint32_t n_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_FINAL_PATH_NAME_BY_HANDLE_W]), (const Uintptr[]){(Uintptr)(file), (Uintptr)((void *)(filePath)), (Uintptr)(filePathSize), (Uintptr)(flags)}, 4, NULL, &e1);
+    n_ = (uint32_t)(r0);
+    if ((n_ == 0) || (n_ >= filePathSize)) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return n_;
+}
+
+Error burrow__syscall_get_queued_completion_status(SyscallHandle cphandle, uint32_t *qty, Uintptr *key, SyscallOverlapped **overlapped, uint32_t timeout) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_QUEUED_COMPLETION_STATUS]), (const Uintptr[]){(Uintptr)(cphandle), (Uintptr)((void *)(qty)), (Uintptr)((void *)(key)), (Uintptr)((void *)(overlapped)), (Uintptr)(timeout)}, 5, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+void burrow__syscall_get_startup_info(SyscallStartupInfo *startupInfo) {
+    burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GET_STARTUP_INFO_W]), (const Uintptr[]){(Uintptr)((void *)(startupInfo))}, 1, NULL, NULL);
+}
+
+Error burrow__syscall_getpeername(SyscallHandle s, SyscallRawSockaddrAny *rsa, int32_t *addrlen) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GETPEERNAME]), (const Uintptr[]){(Uintptr)(s), (Uintptr)((void *)(rsa)), (Uintptr)((void *)(addrlen))}, 3, NULL, &e1);
+    if (r1 == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error burrow__syscall_getsockname(SyscallHandle s, SyscallRawSockaddrAny *rsa, int32_t *addrlen) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_GETSOCKNAME]), (const Uintptr[]){(Uintptr)(s), (Uintptr)((void *)(rsa)), (Uintptr)((void *)(addrlen))}, 3, NULL, &e1);
+    if (r1 == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error burrow__syscall_listen(SyscallHandle s, int32_t backlog) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_LISTEN]), (const Uintptr[]){(Uintptr)(s), (Uintptr)(backlog)}, 2, NULL, &e1);
+    if (r1 == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Uintptr burrow__syscall_local_alloc(uint32_t flags, uint32_t length, Error *err) {
+    Uintptr ptr_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_LOCAL_ALLOC]), (const Uintptr[]){(Uintptr)(flags), (Uintptr)(length)}, 2, NULL, &e1);
+    ptr_ = (Uintptr)(r0);
+    if (ptr_ == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return ptr_;
+}
+
+Error burrow__syscall_post_queued_completion_status(SyscallHandle cphandle, uint32_t qty, Uintptr key, SyscallOverlapped *overlapped) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_POST_QUEUED_COMPLETION_STATUS]), (const Uintptr[]){(Uintptr)(cphandle), (Uintptr)(qty), (Uintptr)(key), (Uintptr)((void *)(overlapped))}, 4, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error burrow__syscall_read_file(SyscallHandle handle, Slice buf, uint32_t *done, SyscallOverlapped *overlapped) {
+    Error err_ = BURROW_NO_ERROR;
+    uint8_t *_p0 = NULL;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    if (buf.len > 0) {
+        _p0 = &((uint8_t *)buf.p)[0];
+    }
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_READ_FILE]), (const Uintptr[]){(Uintptr)(handle), (Uintptr)((void *)(_p0)), (Uintptr)(buf.len), (Uintptr)((void *)(done)), (Uintptr)((void *)(overlapped))}, 5, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error burrow__syscall_reg_enum_key_ex(SyscallHandle key, uint32_t index, uint16_t *name, uint32_t *nameLen, uint32_t *reserved, uint16_t *class_, uint32_t *classLen, SyscallFiletime *lastWriteTime) {
+    Error regerrno_ = BURROW_NO_ERROR;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_REG_ENUM_KEY_EX_W]), (const Uintptr[]){(Uintptr)(key), (Uintptr)(index), (Uintptr)((void *)(name)), (Uintptr)((void *)(nameLen)), (Uintptr)((void *)(reserved)), (Uintptr)((void *)(class_)), (Uintptr)((void *)(classLen)), (Uintptr)((void *)(lastWriteTime))}, 8, NULL, NULL);
+    if (r0 != 0) {
+        regerrno_ = syscall_errno_as_error((SyscallErrno)(r0), error_allocator());
+    }
+    return regerrno_;
+}
+
+Error burrow__syscall_set_file_information_by_handle(SyscallHandle handle, uint32_t fileInformationClass, void *buf, uint32_t bufsize) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_SET_FILE_INFORMATION_BY_HANDLE]), (const Uintptr[]){(Uintptr)(handle), (Uintptr)(fileInformationClass), (Uintptr)(buf), (Uintptr)(bufsize)}, 4, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+Error burrow__syscall_shutdown(SyscallHandle s, int32_t how) {
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_SHUTDOWN]), (const Uintptr[]){(Uintptr)(s), (Uintptr)(how)}, 2, NULL, &e1);
+    if (r1 == 4294967295LL) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+SyscallHandle burrow__syscall_socket(int32_t af, int32_t typ, int32_t protocol, Error *err) {
+    SyscallHandle handle_ = 0;
+    Error err_ = BURROW_NO_ERROR;
+    SyscallErrno e1 = 0;
+    Uintptr r0 = 0;
+    r0 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_SOCKET]), (const Uintptr[]){(Uintptr)(af), (Uintptr)(typ), (Uintptr)(protocol)}, 3, NULL, &e1);
+    handle_ = (SyscallHandle)(r0);
+    if (handle_ == SYSCALL_INVALID_HANDLE) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    BURROW_OUT(err, err_);
+    return handle_;
+}
+
+Error burrow__syscall_write_file(SyscallHandle handle, Slice buf, uint32_t *done, SyscallOverlapped *overlapped) {
+    Error err_ = BURROW_NO_ERROR;
+    uint8_t *_p0 = NULL;
+    SyscallErrno e1 = 0;
+    Uintptr r1 = 0;
+    if (buf.len > 0) {
+        _p0 = &((uint8_t *)buf.p)[0];
+    }
+    r1 = burrow__syscall_n(syscall_lazy_proc_addr(&burrow__syscall_procs[BURROW__SYSCALL_PROC_WRITE_FILE]), (const Uintptr[]){(Uintptr)(handle), (Uintptr)((void *)(_p0)), (Uintptr)(buf.len), (Uintptr)((void *)(done)), (Uintptr)((void *)(overlapped))}, 5, NULL, &e1);
+    if (r1 == 0) {
+        err_ = burrow__syscall_errno_err(e1);
+    }
+    return err_;
+}
+
+#elif defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
 
 /* darwin */
 
@@ -166,7 +2093,7 @@ Error syscall_access(Str path, uint32_t mode) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_ACCESS, (Uintptr)((void *)(_p0)), (Uintptr)(mode), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -178,7 +2105,7 @@ Error syscall_adjtime(SyscallTimeval *delta, SyscallTimeval *olddelta) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_ADJTIME, (Uintptr)((void *)(delta)), (Uintptr)((void *)(olddelta)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -195,7 +2122,7 @@ Error syscall_chdir(Str path) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_CHDIR, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -214,7 +2141,7 @@ Error syscall_chflags(Str path, Int flags) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_CHFLAGS, (Uintptr)((void *)(_p0)), (Uintptr)(flags), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -233,7 +2160,7 @@ Error syscall_chmod(Str path, uint32_t mode) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_CHMOD, (Uintptr)((void *)(_p0)), (Uintptr)(mode), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -252,7 +2179,7 @@ Error syscall_chown(Str path, Int uid, Int gid) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_CHOWN, (Uintptr)((void *)(_p0)), (Uintptr)(uid), (Uintptr)(gid), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -271,7 +2198,7 @@ Error syscall_chroot(Str path) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_CHROOT, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -283,7 +2210,7 @@ Error syscall_close(Int fd) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_CLOSE, (Uintptr)(fd), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -296,7 +2223,7 @@ Int syscall_dup(Int fd, Error *err) {
     r0 = burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_DUP, (Uintptr)(fd), 0, 0, NULL, &e1);
     nfd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return nfd_;
@@ -307,7 +2234,7 @@ Error syscall_dup2(Int from, Int to) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_DUP2, (Uintptr)(from), (Uintptr)(to), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -331,7 +2258,7 @@ Error syscall_exchangedata(Str path1, Str path2, Int options) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_EXCHANGEDATA, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(_p1)), (Uintptr)(options), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -344,7 +2271,7 @@ Error syscall_fchdir(Int fd) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_FCHDIR, (Uintptr)(fd), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -354,7 +2281,7 @@ Error syscall_fchflags(Int fd, Int flags) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_FCHFLAGS, (Uintptr)(fd), (Uintptr)(flags), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -364,7 +2291,7 @@ Error syscall_fchmod(Int fd, uint32_t mode) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_FCHMOD, (Uintptr)(fd), (Uintptr)(mode), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -374,7 +2301,7 @@ Error syscall_fchown(Int fd, Int uid, Int gid) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_FCHOWN, (Uintptr)(fd), (Uintptr)(uid), (Uintptr)(gid), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -384,7 +2311,7 @@ Error syscall_flock(Int fd, Int how) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_FLOCK, (Uintptr)(fd), (Uintptr)(how), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -397,7 +2324,7 @@ Int syscall_fpathconf(Int fd, Int name, Error *err) {
     r0 = burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_FPATHCONF, (Uintptr)(fd), (Uintptr)(name), 0, NULL, &e1);
     val_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return val_;
@@ -409,7 +2336,7 @@ Error syscall_fstat(Int fd, SyscallStat_t *stat) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_FSTAT64, (Uintptr)(fd), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -419,7 +2346,7 @@ Error syscall_fstat(Int fd, SyscallStat_t *stat) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_FSTAT, (Uintptr)(fd), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -431,7 +2358,7 @@ Error syscall_fstatfs(Int fd, SyscallStatfs_t *stat) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_FSTATFS64, (Uintptr)(fd), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -441,7 +2368,7 @@ Error syscall_fstatfs(Int fd, SyscallStatfs_t *stat) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_FSTATFS, (Uintptr)(fd), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -452,7 +2379,7 @@ Error syscall_fsync(Int fd) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_FSYNC, (Uintptr)(fd), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -462,7 +2389,7 @@ Error syscall_ftruncate(Int fd, int64_t length) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_FTRUNCATE, (Uintptr)(fd), (Uintptr)(length), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -507,7 +2434,7 @@ Int syscall_getpgid(Int pid, Error *err) {
     r0 = burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_GETPGID, (Uintptr)(pid), 0, 0, NULL, &e1);
     pgid_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return pgid_;
@@ -545,7 +2472,7 @@ Int syscall_getpriority(Int which, Int who, Error *err) {
     r0 = burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_GETPRIORITY, (Uintptr)(which), (Uintptr)(who), 0, NULL, &e1);
     prio_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return prio_;
@@ -556,7 +2483,7 @@ Error syscall_getrlimit(Int which, SyscallRlimit *lim) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_GETRLIMIT, (Uintptr)(which), (Uintptr)((void *)(lim)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -566,7 +2493,7 @@ Error syscall_getrusage(Int who, SyscallRusage *rusage) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_GETRUSAGE, (Uintptr)(who), (Uintptr)((void *)(rusage)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -579,7 +2506,7 @@ Int syscall_getsid(Int pid, Error *err) {
     r0 = burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_GETSID, (Uintptr)(pid), 0, 0, NULL, &e1);
     sid_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return sid_;
@@ -590,7 +2517,7 @@ Error syscall_gettimeofday(SyscallTimeval *tp) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_GETTIMEOFDAY, (Uintptr)((void *)(tp)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -619,7 +2546,7 @@ Int syscall_kqueue(Error *err) {
     r0 = burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_KQUEUE, 0, 0, 0, NULL, &e1);
     fd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return fd_;
@@ -637,7 +2564,7 @@ Error syscall_lchown(Str path, Int uid, Int gid) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_LCHOWN, (Uintptr)((void *)(_p0)), (Uintptr)(uid), (Uintptr)(gid), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -663,7 +2590,7 @@ Error syscall_link(Str path, Str link) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_LINK, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(_p1)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -676,7 +2603,7 @@ Error syscall_listen(Int s, Int backlog) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_LISTEN, (Uintptr)(s), (Uintptr)(backlog), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -694,7 +2621,7 @@ Error syscall_lstat(Str path, SyscallStat_t *stat) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_LSTAT64, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -713,7 +2640,7 @@ Error syscall_lstat(Str path, SyscallStat_t *stat) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_LSTAT, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -733,7 +2660,7 @@ Error syscall_mkdir(Str path, uint32_t mode) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_MKDIR, (Uintptr)((void *)(_p0)), (Uintptr)(mode), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -752,7 +2679,7 @@ Error syscall_mkfifo(Str path, uint32_t mode) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_MKFIFO, (Uintptr)((void *)(_p0)), (Uintptr)(mode), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -771,7 +2698,7 @@ Error syscall_mknod(Str path, uint32_t mode, Int dev) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_MKNOD, (Uintptr)((void *)(_p0)), (Uintptr)(mode), (Uintptr)(dev), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -789,7 +2716,7 @@ Error syscall_mlock(Slice b) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_MLOCK, (Uintptr)(_p0), (Uintptr)(b.len), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -799,7 +2726,7 @@ Error syscall_mlockall(Int flags) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_MLOCKALL, (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -815,7 +2742,7 @@ Error syscall_mprotect(Slice b, Int prot) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_MPROTECT, (Uintptr)(_p0), (Uintptr)(b.len), (Uintptr)(prot), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -831,7 +2758,7 @@ Error syscall_munlock(Slice b) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_MUNLOCK, (Uintptr)(_p0), (Uintptr)(b.len), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -841,7 +2768,7 @@ Error syscall_munlockall(void) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_MUNLOCKALL, 0, 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -861,7 +2788,7 @@ Int syscall_open(Str path, Int mode, uint32_t perm, Error *err) {
     r0 = burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_OPEN, (Uintptr)((void *)(_p0)), (Uintptr)(mode), (Uintptr)(perm), NULL, &e1);
     fd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -884,7 +2811,7 @@ Int syscall_pathconf(Str path, Int name, Error *err) {
     r0 = burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_PATHCONF, (Uintptr)((void *)(_p0)), (Uintptr)(name), 0, NULL, &e1);
     val_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -913,7 +2840,7 @@ Int syscall_readlink(Str path, Slice buf, Error *err) {
     r0 = burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_READLINK, (Uintptr)((void *)(_p0)), (Uintptr)(_p1), (Uintptr)(buf.len), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -940,7 +2867,7 @@ Error syscall_rename(Str from, Str to) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_RENAME, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(_p1)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -960,7 +2887,7 @@ Error syscall_revoke(Str path) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_REVOKE, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -979,7 +2906,7 @@ Error syscall_rmdir(Str path) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_RMDIR, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -994,7 +2921,7 @@ int64_t syscall_seek(Int fd, int64_t offset, Int whence, Error *err) {
     r0 = burrow__syscall_syscall_x((Uintptr)BURROW__SYSCALL_LIBC_LSEEK, (Uintptr)(fd), (Uintptr)(offset), (Uintptr)(whence), NULL, &e1);
     newoffset_ = (int64_t)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return newoffset_;
@@ -1005,7 +2932,7 @@ Error syscall_select(Int n, SyscallFdSet *r, SyscallFdSet *w, SyscallFdSet *e, S
     SyscallErrno e1 = 0;
     burrow__syscall_syscall6((Uintptr)BURROW__SYSCALL_LIBC_SELECT, (Uintptr)(n), (Uintptr)((void *)(r)), (Uintptr)((void *)(w)), (Uintptr)((void *)(e)), (Uintptr)((void *)(timeout)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1015,7 +2942,7 @@ Error syscall_setegid(Int egid) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_SETEGID, (Uintptr)(egid), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1025,7 +2952,7 @@ Error syscall_seteuid(Int euid) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_SETEUID, (Uintptr)(euid), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1035,7 +2962,7 @@ Error syscall_setgid(Int gid) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_SETGID, (Uintptr)(gid), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1052,7 +2979,7 @@ Error syscall_setlogin(Str name) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_SETLOGIN, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1064,7 +2991,7 @@ Error syscall_setpgid(Int pid, Int pgid) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_SETPGID, (Uintptr)(pid), (Uintptr)(pgid), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1074,7 +3001,7 @@ Error syscall_setpriority(Int which, Int who, Int prio) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_SETPRIORITY, (Uintptr)(which), (Uintptr)(who), (Uintptr)(prio), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1084,7 +3011,7 @@ Error syscall_setprivexec(Int flag) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_SETPRIVEXEC, (Uintptr)(flag), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1094,7 +3021,7 @@ Error syscall_setregid(Int rgid, Int egid) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_SETREGID, (Uintptr)(rgid), (Uintptr)(egid), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1104,7 +3031,7 @@ Error syscall_setreuid(Int ruid, Int euid) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_SETREUID, (Uintptr)(ruid), (Uintptr)(euid), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1117,7 +3044,7 @@ Int syscall_setsid(Error *err) {
     r0 = burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_SETSID, 0, 0, 0, NULL, &e1);
     pid_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return pid_;
@@ -1128,7 +3055,7 @@ Error syscall_settimeofday(SyscallTimeval *tp) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_SETTIMEOFDAY, (Uintptr)((void *)(tp)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1138,7 +3065,7 @@ Error syscall_setuid(Int uid) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_SETUID, (Uintptr)(uid), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1148,7 +3075,7 @@ Error syscall_shutdown(Int s, Int how) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_SHUTDOWN, (Uintptr)(s), (Uintptr)(how), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1166,7 +3093,7 @@ Error syscall_stat(Str path, SyscallStat_t *stat) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_STAT64, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1185,7 +3112,7 @@ Error syscall_stat(Str path, SyscallStat_t *stat) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_STAT, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1206,7 +3133,7 @@ Error syscall_statfs(Str path, SyscallStatfs_t *stat) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_STATFS64, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1225,7 +3152,7 @@ Error syscall_statfs(Str path, SyscallStatfs_t *stat) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_STATFS, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1252,7 +3179,7 @@ Error syscall_symlink(Str path, Str link) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_SYMLINK, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(_p1)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1265,7 +3192,7 @@ Error syscall_sync(void) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_SYNC, 0, 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1282,7 +3209,7 @@ Error syscall_truncate(Str path, int64_t length) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_TRUNCATE, (Uintptr)((void *)(_p0)), (Uintptr)(length), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1309,7 +3236,7 @@ Error syscall_undelete(Str path) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_UNDELETE, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1328,7 +3255,7 @@ Error syscall_unlink(Str path) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_UNLINK, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1347,7 +3274,7 @@ Error syscall_unmount(Str path, Int flags) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_UNMOUNT, (Uintptr)((void *)(_p0)), (Uintptr)(flags), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1362,7 +3289,7 @@ Int burrow__syscall_accept(Int s, SyscallRawSockaddrAny *rsa, uint32_t *addrlen,
     r0 = burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_ACCEPT, (Uintptr)(s), (Uintptr)((void *)(rsa)), (Uintptr)((void *)(addrlen)), NULL, &e1);
     fd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return fd_;
@@ -1373,7 +3300,7 @@ Error burrow__syscall_bind(Int s, void *addr, uint32_t addrlen) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_BIND, (Uintptr)(s), (Uintptr)(addr), (Uintptr)(addrlen), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1383,7 +3310,7 @@ Error burrow__syscall_closedir(Uintptr dir) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_CLOSEDIR, dir, 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1393,7 +3320,7 @@ Error burrow__syscall_connect(Int s, void *addr, uint32_t addrlen) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_CONNECT, (Uintptr)(s), (Uintptr)(addr), (Uintptr)(addrlen), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1403,7 +3330,7 @@ Error burrow__syscall_execve(uint8_t *path, uint8_t **argv, uint8_t **envp) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_EXECVE, (Uintptr)((void *)(path)), (Uintptr)((void *)(argv)), (Uintptr)((void *)(envp)), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1413,7 +3340,7 @@ Error burrow__syscall_exit(Int res) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_EXIT, (Uintptr)(res), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1426,7 +3353,7 @@ Int burrow__syscall_fcntl(Int fd, Int cmd, Int arg, Error *err) {
     r0 = burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_FCNTL, (Uintptr)(fd), (Uintptr)(cmd), (Uintptr)(arg), NULL, &e1);
     val_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return val_;
@@ -1440,7 +3367,7 @@ Int burrow__syscall_fcntl_ptr(Int fd, Int cmd, void *arg, Error *err) {
     r0 = burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_FCNTL, (Uintptr)(fd), (Uintptr)(cmd), (Uintptr)(arg), NULL, &e1);
     val_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return val_;
@@ -1454,7 +3381,7 @@ Int burrow__syscall_fork(Error *err) {
     r0 = burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_FORK, 0, 0, 0, NULL, &e1);
     pid_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return pid_;
@@ -1473,7 +3400,7 @@ Error burrow__syscall_fstatat(Int fd, Str path, SyscallStat_t *stat, Int flags) 
     }
     burrow__syscall_syscall6((Uintptr)BURROW__SYSCALL_LIBC_FSTATAT64, (Uintptr)(fd), (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1492,7 +3419,7 @@ Error burrow__syscall_fstatat(Int fd, Str path, SyscallStat_t *stat, Int flags) 
     }
     burrow__syscall_syscall6((Uintptr)BURROW__SYSCALL_LIBC_FSTATAT, (Uintptr)(fd), (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1505,7 +3432,7 @@ Error burrow__syscall_futimes(Int fd, SyscallTimeval *timeval) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_FUTIMES, (Uintptr)(fd), (Uintptr)((void *)(timeval)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1524,7 +3451,7 @@ Int burrow__syscall_getcwd(Slice buf, Error *err) {
     r0 = burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_GETCWD, (Uintptr)(_p0), (Uintptr)(buf.len), 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -1538,7 +3465,7 @@ Int burrow__syscall_getgroups(Int ngid, uint32_t *gid, Error *err) {
     r0 = burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_GETGROUPS, (Uintptr)(ngid), (Uintptr)((void *)(gid)), 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -1549,7 +3476,7 @@ Error burrow__syscall_getpeername(Int fd, SyscallRawSockaddrAny *rsa, uint32_t *
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_GETPEERNAME, (Uintptr)(fd), (Uintptr)((void *)(rsa)), (Uintptr)((void *)(addrlen)), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1559,7 +3486,7 @@ Error burrow__syscall_getsockname(Int fd, SyscallRawSockaddrAny *rsa, uint32_t *
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_GETSOCKNAME, (Uintptr)(fd), (Uintptr)((void *)(rsa)), (Uintptr)((void *)(addrlen)), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1569,7 +3496,7 @@ Error burrow__syscall_getsockopt(Int s, Int level, Int name, void *val, uint32_t
     SyscallErrno e1 = 0;
     burrow__syscall_syscall6((Uintptr)BURROW__SYSCALL_LIBC_GETSOCKOPT, (Uintptr)(s), (Uintptr)(level), (Uintptr)(name), (Uintptr)(val), (Uintptr)((void *)(vallen)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1579,7 +3506,7 @@ Error burrow__syscall_ioctl(Int fd, Int req, Int arg) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_IOCTL, (Uintptr)(fd), (Uintptr)(req), (Uintptr)(arg), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1589,7 +3516,7 @@ Error burrow__syscall_ioctl_ptr(Int fd, Uint req, void *arg) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_IOCTL, (Uintptr)(fd), (Uintptr)(req), (Uintptr)(arg), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1602,7 +3529,7 @@ Int burrow__syscall_kevent(Int kq, void *change, Int nchange, void *event, Int n
     r0 = burrow__syscall_syscall6((Uintptr)BURROW__SYSCALL_LIBC_KEVENT, (Uintptr)(kq), (Uintptr)(change), (Uintptr)(nchange), (Uintptr)(event), (Uintptr)(nevent), (Uintptr)((void *)(timeout)), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -1613,7 +3540,7 @@ Error burrow__syscall_kill(Int pid, Int signum, Int posix) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_KILL, (Uintptr)(pid), (Uintptr)(signum), (Uintptr)(posix), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1626,7 +3553,7 @@ Uintptr burrow__syscall_mmap(Uintptr addr, Uintptr length, Int prot, Int flag, I
     r0 = burrow__syscall_syscall6_x((Uintptr)BURROW__SYSCALL_LIBC_MMAP, addr, length, (Uintptr)(prot), (Uintptr)(flag), (Uintptr)(fd), (Uintptr)(pos), NULL, &e1);
     ret_ = r0;
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return ret_;
@@ -1643,7 +3570,7 @@ Error burrow__syscall_msync(Slice b, Int flags) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_MSYNC, (Uintptr)(_p0), (Uintptr)(b.len), (Uintptr)(flags), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1653,7 +3580,7 @@ Error burrow__syscall_munmap(Uintptr addr, Uintptr length) {
     SyscallErrno e1 = 0;
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_MUNMAP, addr, length, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1673,7 +3600,7 @@ Int burrow__syscall_openat(Int fd, Str path, Int flags, uint32_t perm, Error *er
     r0 = burrow__syscall_syscall6((Uintptr)BURROW__SYSCALL_LIBC_OPENAT, (Uintptr)(fd), (Uintptr)((void *)(_p0)), (Uintptr)(flags), (Uintptr)(perm), 0, 0, NULL, &e1);
     fdret_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1686,7 +3613,7 @@ Error burrow__syscall_pipe(int32_t *p) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_PIPE, (Uintptr)((void *)(p)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1705,7 +3632,7 @@ Int burrow__syscall_pread(Int fd, Slice p, int64_t offset, Error *err) {
     r0 = burrow__syscall_syscall6((Uintptr)BURROW__SYSCALL_LIBC_PREAD, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), (Uintptr)(offset), 0, 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -1719,7 +3646,7 @@ Error burrow__syscall_ptrace(Int request, Int pid, Uintptr addr, Uintptr data) {
     }
     burrow__syscall_syscall6((Uintptr)BURROW__SYSCALL_LIBC_PTRACE, (Uintptr)(request), (Uintptr)(pid), addr, data, 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1738,7 +3665,7 @@ Int burrow__syscall_pwrite(Int fd, Slice p, int64_t offset, Error *err) {
     r0 = burrow__syscall_syscall6((Uintptr)BURROW__SYSCALL_LIBC_PWRITE, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), (Uintptr)(offset), 0, 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -1758,7 +3685,7 @@ Int burrow__syscall_read(Int fd, Slice p, Error *err) {
     r0 = burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_READ, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -1786,7 +3713,7 @@ Int burrow__syscall_recvfrom(Int fd, Slice p, Int flags, SyscallRawSockaddrAny *
     r0 = burrow__syscall_syscall6((Uintptr)BURROW__SYSCALL_LIBC_RECVFROM, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), (Uintptr)(flags), (Uintptr)((void *)(from)), (Uintptr)((void *)(fromlen)), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -1800,7 +3727,7 @@ Int burrow__syscall_recvmsg(Int s, SyscallMsghdr *msg, Int flags, Error *err) {
     r0 = burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_RECVMSG, (Uintptr)(s), (Uintptr)((void *)(msg)), (Uintptr)(flags), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -1814,7 +3741,7 @@ Int burrow__syscall_sendmsg(Int s, SyscallMsghdr *msg, Int flags, Error *err) {
     r0 = burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_SENDMSG, (Uintptr)(s), (Uintptr)((void *)(msg)), (Uintptr)(flags), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -1831,7 +3758,7 @@ Error burrow__syscall_sendto(Int s, Slice buf, Int flags, void *to, uint32_t add
     }
     burrow__syscall_syscall6((Uintptr)BURROW__SYSCALL_LIBC_SENDTO, (Uintptr)(s), (Uintptr)(_p0), (Uintptr)(buf.len), (Uintptr)(flags), (Uintptr)(to), (Uintptr)(addrlen), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1841,7 +3768,7 @@ Error burrow__syscall_setgroups(Int ngid, uint32_t *gid) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_SETGROUPS, (Uintptr)(ngid), (Uintptr)((void *)(gid)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1851,7 +3778,7 @@ Error burrow__syscall_setrlimit(Int which, SyscallRlimit *lim) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_SETRLIMIT, (Uintptr)(which), (Uintptr)((void *)(lim)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1861,7 +3788,7 @@ Error burrow__syscall_setsockopt(Int s, Int level, Int name, void *val, Uintptr 
     SyscallErrno e1 = 0;
     burrow__syscall_syscall6((Uintptr)BURROW__SYSCALL_LIBC_SETSOCKOPT, (Uintptr)(s), (Uintptr)(level), (Uintptr)(name), (Uintptr)(val), vallen, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1874,7 +3801,7 @@ Int burrow__syscall_socket(Int domain, Int typ, Int proto, Error *err) {
     r0 = burrow__syscall_raw_syscall((Uintptr)BURROW__SYSCALL_LIBC_SOCKET, (Uintptr)(domain), (Uintptr)(typ), (Uintptr)(proto), NULL, &e1);
     fd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return fd_;
@@ -1885,7 +3812,7 @@ Error burrow__syscall_socketpair(Int domain, Int typ, Int proto, int32_t *fd) {
     SyscallErrno e1 = 0;
     burrow__syscall_raw_syscall6((Uintptr)BURROW__SYSCALL_LIBC_SOCKETPAIR, (Uintptr)(domain), (Uintptr)(typ), (Uintptr)(proto), (Uintptr)((void *)(fd)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1901,7 +3828,7 @@ Error burrow__syscall_sysctl(Slice mib, uint8_t *old, Uintptr *oldlen, uint8_t *
     }
     burrow__syscall_syscall6((Uintptr)BURROW__SYSCALL_LIBC_SYSCTL, (Uintptr)(_p0), (Uintptr)(mib.len), (Uintptr)((void *)(old)), (Uintptr)((void *)(oldlen)), (Uintptr)((void *)(new_)), newlen, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -1918,7 +3845,7 @@ Error burrow__syscall_unlinkat(Int fd, Str path, Int flags) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_UNLINKAT, (Uintptr)(fd), (Uintptr)((void *)(_p0)), (Uintptr)(flags), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1937,7 +3864,7 @@ Error burrow__syscall_utimensat(Int dirfd, Str path, SyscallTimespec *times, Int
     }
     burrow__syscall_syscall6((Uintptr)BURROW__SYSCALL_LIBC_UTIMENSAT, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)((void *)(times)), (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1956,7 +3883,7 @@ Error burrow__syscall_utimes(Str path, SyscallTimeval *timeval) {
     }
     burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_UTIMES, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(timeval)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -1971,7 +3898,7 @@ Int burrow__syscall_wait4(Int pid, int32_t *wstatus, Int options, SyscallRusage 
     r0 = burrow__syscall_syscall6((Uintptr)BURROW__SYSCALL_LIBC_WAIT4, (Uintptr)(pid), (Uintptr)((void *)(wstatus)), (Uintptr)(options), (Uintptr)((void *)(rusage)), 0, 0, NULL, &e1);
     wpid_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return wpid_;
@@ -1991,7 +3918,7 @@ Int burrow__syscall_write(Int fd, Slice p, Error *err) {
     r0 = burrow__syscall_syscall((Uintptr)BURROW__SYSCALL_LIBC_WRITE, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -2011,7 +3938,7 @@ Uintptr burrow__syscall_writev(Int fd, Slice iovecs, Error *err) {
     r0 = burrow__syscall_syscall_x((Uintptr)BURROW__SYSCALL_LIBC_WRITEV, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(iovecs.len), NULL, &e1);
     cnt_ = r0;
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return cnt_;
@@ -2033,7 +3960,7 @@ Error syscall_access(Str path, uint32_t mode) {
     }
     syscall_syscall(SYSCALL_SYS_ACCESS, (Uintptr)((void *)(_p0)), (Uintptr)(mode), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2045,7 +3972,7 @@ Error syscall_adjtime(SyscallTimeval *delta, SyscallTimeval *olddelta) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_ADJTIME, (Uintptr)((void *)(delta)), (Uintptr)((void *)(olddelta)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2062,7 +3989,7 @@ Error syscall_chdir(Str path) {
     }
     syscall_syscall(SYSCALL_SYS_CHDIR, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2081,7 +4008,7 @@ Error syscall_chflags(Str path, Int flags) {
     }
     syscall_syscall(SYSCALL_SYS_CHFLAGS, (Uintptr)((void *)(_p0)), (Uintptr)(flags), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2100,7 +4027,7 @@ Error syscall_chmod(Str path, uint32_t mode) {
     }
     syscall_syscall(SYSCALL_SYS_CHMOD, (Uintptr)((void *)(_p0)), (Uintptr)(mode), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2119,7 +4046,7 @@ Error syscall_chown(Str path, Int uid, Int gid) {
     }
     syscall_syscall(SYSCALL_SYS_CHOWN, (Uintptr)((void *)(_p0)), (Uintptr)(uid), (Uintptr)(gid), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2138,7 +4065,7 @@ Error syscall_chroot(Str path) {
     }
     syscall_syscall(SYSCALL_SYS_CHROOT, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2150,7 +4077,7 @@ Error syscall_close(Int fd) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_CLOSE, (Uintptr)(fd), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2163,7 +4090,7 @@ Int syscall_dup(Int fd, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_DUP, (Uintptr)(fd), 0, 0, NULL, &e1);
     nfd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return nfd_;
@@ -2174,7 +4101,7 @@ Error syscall_dup2(Int from, Int to) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_DUP2, (Uintptr)(from), (Uintptr)(to), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2184,7 +4111,7 @@ Error syscall_fchdir(Int fd) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FCHDIR, (Uintptr)(fd), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2194,7 +4121,7 @@ Error syscall_fchflags(Int fd, Int flags) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FCHFLAGS, (Uintptr)(fd), (Uintptr)(flags), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2204,7 +4131,7 @@ Error syscall_fchmod(Int fd, uint32_t mode) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FCHMOD, (Uintptr)(fd), (Uintptr)(mode), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2214,7 +4141,7 @@ Error syscall_fchown(Int fd, Int uid, Int gid) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FCHOWN, (Uintptr)(fd), (Uintptr)(uid), (Uintptr)(gid), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2224,7 +4151,7 @@ Error syscall_flock(Int fd, Int how) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FLOCK, (Uintptr)(fd), (Uintptr)(how), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2237,7 +4164,7 @@ Int syscall_fpathconf(Int fd, Int name, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_FPATHCONF, (Uintptr)(fd), (Uintptr)(name), 0, NULL, &e1);
     val_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return val_;
@@ -2248,7 +4175,7 @@ Error syscall_fstat(Int fd, SyscallStat_t *stat) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FSTAT, (Uintptr)(fd), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2265,7 +4192,7 @@ Error syscall_fstatat(Int fd, Str path, SyscallStat_t *stat, Int flags) {
     }
     syscall_syscall6(SYSCALL_SYS_FSTATAT, (Uintptr)(fd), (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2277,7 +4204,7 @@ Error syscall_fstatfs(Int fd, SyscallStatfs_t *stat) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FSTATFS, (Uintptr)(fd), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2287,7 +4214,7 @@ Error syscall_fsync(Int fd) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FSYNC, (Uintptr)(fd), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2298,7 +4225,7 @@ Error syscall_ftruncate(Int fd, int64_t length) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FTRUNCATE, (Uintptr)(fd), (Uintptr)(length), (Uintptr)((length >> 32)), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2308,7 +4235,7 @@ Error syscall_ftruncate(Int fd, int64_t length) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FTRUNCATE, (Uintptr)(fd), (Uintptr)(length), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2318,7 +4245,7 @@ Error syscall_ftruncate(Int fd, int64_t length) {
     SyscallErrno e1 = 0;
     syscall_syscall6(SYSCALL_SYS_FTRUNCATE, (Uintptr)(fd), 0, (Uintptr)(length), (Uintptr)((length >> 32)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2364,7 +4291,7 @@ Int syscall_getpgid(Int pid, Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_GETPGID, (Uintptr)(pid), 0, 0, NULL, &e1);
     pgid_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return pgid_;
@@ -2402,7 +4329,7 @@ Int syscall_getpriority(Int which, Int who, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_GETPRIORITY, (Uintptr)(which), (Uintptr)(who), 0, NULL, &e1);
     prio_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return prio_;
@@ -2413,7 +4340,7 @@ Error syscall_getrlimit(Int which, SyscallRlimit *lim) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_GETRLIMIT, (Uintptr)(which), (Uintptr)((void *)(lim)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2423,7 +4350,7 @@ Error syscall_getrusage(Int who, SyscallRusage *rusage) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_GETRUSAGE, (Uintptr)(who), (Uintptr)((void *)(rusage)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2436,7 +4363,7 @@ Int syscall_getsid(Int pid, Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_GETSID, (Uintptr)(pid), 0, 0, NULL, &e1);
     sid_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return sid_;
@@ -2447,7 +4374,7 @@ Error syscall_gettimeofday(SyscallTimeval *tv) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_GETTIMEOFDAY, (Uintptr)((void *)(tv)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2476,7 +4403,7 @@ Int syscall_kqueue(Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_KQUEUE, 0, 0, 0, NULL, &e1);
     fd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return fd_;
@@ -2494,7 +4421,7 @@ Error syscall_lchown(Str path, Int uid, Int gid) {
     }
     syscall_syscall(SYSCALL_SYS_LCHOWN, (Uintptr)((void *)(_p0)), (Uintptr)(uid), (Uintptr)(gid), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2520,7 +4447,7 @@ Error syscall_link(Str path, Str link) {
     }
     syscall_syscall(SYSCALL_SYS_LINK, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(_p1)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2533,7 +4460,7 @@ Error syscall_listen(Int s, Int backlog) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_LISTEN, (Uintptr)(s), (Uintptr)(backlog), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2550,7 +4477,7 @@ Error syscall_mkdir(Str path, uint32_t mode) {
     }
     syscall_syscall(SYSCALL_SYS_MKDIR, (Uintptr)((void *)(_p0)), (Uintptr)(mode), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2569,7 +4496,7 @@ Error syscall_mkfifo(Str path, uint32_t mode) {
     }
     syscall_syscall(SYSCALL_SYS_MKFIFO, (Uintptr)((void *)(_p0)), (Uintptr)(mode), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2581,7 +4508,7 @@ Error syscall_nanosleep(SyscallTimespec *time, SyscallTimespec *leftover) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_NANOSLEEP, (Uintptr)((void *)(time)), (Uintptr)((void *)(leftover)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2601,7 +4528,7 @@ Int syscall_open(Str path, Int mode, uint32_t perm, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_OPEN, (Uintptr)((void *)(_p0)), (Uintptr)(mode), (Uintptr)(perm), NULL, &e1);
     fd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2624,7 +4551,7 @@ Int syscall_pathconf(Str path, Int name, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_PATHCONF, (Uintptr)((void *)(_p0)), (Uintptr)(name), 0, NULL, &e1);
     val_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2653,7 +4580,7 @@ Int syscall_readlink(Str path, Slice buf, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_READLINK, (Uintptr)((void *)(_p0)), (Uintptr)(_p1), (Uintptr)(buf.len), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2680,7 +4607,7 @@ Error syscall_rename(Str from, Str to) {
     }
     syscall_syscall(SYSCALL_SYS_RENAME, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(_p1)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2700,7 +4627,7 @@ Error syscall_revoke(Str path) {
     }
     syscall_syscall(SYSCALL_SYS_REVOKE, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2719,7 +4646,7 @@ Error syscall_rmdir(Str path) {
     }
     syscall_syscall(SYSCALL_SYS_RMDIR, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2736,7 +4663,7 @@ int64_t syscall_seek(Int fd, int64_t offset, Int whence, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_LSEEK, (Uintptr)(fd), (Uintptr)(offset), (Uintptr)((offset >> 32)), (Uintptr)(whence), 0, 0, &r1, &e1);
     newoffset_ = (((int64_t)(r1) << 32) | (int64_t)(r0));
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return newoffset_;
@@ -2750,7 +4677,7 @@ int64_t syscall_seek(Int fd, int64_t offset, Int whence, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_LSEEK, (Uintptr)(fd), (Uintptr)(offset), (Uintptr)(whence), NULL, &e1);
     newoffset_ = (int64_t)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return newoffset_;
@@ -2765,7 +4692,7 @@ int64_t syscall_seek(Int fd, int64_t offset, Int whence, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_LSEEK, (Uintptr)(fd), 0, (Uintptr)(offset), (Uintptr)((offset >> 32)), (Uintptr)(whence), 0, &r1, &e1);
     newoffset_ = (((int64_t)(r1) << 32) | (int64_t)(r0));
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return newoffset_;
@@ -2777,7 +4704,7 @@ Error syscall_select(Int n, SyscallFdSet *r, SyscallFdSet *w, SyscallFdSet *e, S
     SyscallErrno e1 = 0;
     syscall_syscall6(SYSCALL_SYS_SELECT, (Uintptr)(n), (Uintptr)((void *)(r)), (Uintptr)((void *)(w)), (Uintptr)((void *)(e)), (Uintptr)((void *)(timeout)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2787,7 +4714,7 @@ Error syscall_setegid(Int egid) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_SETEGID, (Uintptr)(egid), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2797,7 +4724,7 @@ Error syscall_seteuid(Int euid) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_SETEUID, (Uintptr)(euid), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2807,7 +4734,7 @@ Error syscall_setgid(Int gid) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_SETGID, (Uintptr)(gid), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2824,7 +4751,7 @@ Error syscall_setlogin(Str name) {
     }
     syscall_syscall(SYSCALL_SYS_SETLOGIN, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2836,7 +4763,7 @@ Error syscall_setpgid(Int pid, Int pgid) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_SETPGID, (Uintptr)(pid), (Uintptr)(pgid), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2846,7 +4773,7 @@ Error syscall_setpriority(Int which, Int who, Int prio) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_SETPRIORITY, (Uintptr)(which), (Uintptr)(who), (Uintptr)(prio), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2856,7 +4783,7 @@ Error syscall_setregid(Int rgid, Int egid) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_SETREGID, (Uintptr)(rgid), (Uintptr)(egid), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2866,7 +4793,7 @@ Error syscall_setreuid(Int ruid, Int euid) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_SETREUID, (Uintptr)(ruid), (Uintptr)(euid), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2879,7 +4806,7 @@ Int syscall_setsid(Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_SETSID, 0, 0, 0, NULL, &e1);
     pid_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return pid_;
@@ -2890,7 +4817,7 @@ Error syscall_settimeofday(SyscallTimeval *tp) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_SETTIMEOFDAY, (Uintptr)((void *)(tp)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2900,7 +4827,7 @@ Error syscall_setuid(Int uid) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_SETUID, (Uintptr)(uid), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2910,7 +4837,7 @@ Error syscall_shutdown(Int s, Int how) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_SHUTDOWN, (Uintptr)(s), (Uintptr)(how), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2927,7 +4854,7 @@ Error syscall_statfs(Str path, SyscallStatfs_t *stat) {
     }
     syscall_syscall(SYSCALL_SYS_STATFS, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2953,7 +4880,7 @@ Error syscall_symlink(Str path, Str link) {
     }
     syscall_syscall(SYSCALL_SYS_SYMLINK, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(_p1)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -2966,7 +4893,7 @@ Error syscall_sync(void) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_SYNC, 0, 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -2984,7 +4911,7 @@ Error syscall_truncate(Str path, int64_t length) {
     }
     syscall_syscall(SYSCALL_SYS_TRUNCATE, (Uintptr)((void *)(_p0)), (Uintptr)(length), (Uintptr)((length >> 32)), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -3003,7 +4930,7 @@ Error syscall_truncate(Str path, int64_t length) {
     }
     syscall_syscall(SYSCALL_SYS_TRUNCATE, (Uintptr)((void *)(_p0)), (Uintptr)(length), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -3022,7 +4949,7 @@ Error syscall_truncate(Str path, int64_t length) {
     }
     syscall_syscall6(SYSCALL_SYS_TRUNCATE, (Uintptr)((void *)(_p0)), 0, (Uintptr)(length), (Uintptr)((length >> 32)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -3050,7 +4977,7 @@ Error syscall_undelete(Str path) {
     }
     syscall_syscall(SYSCALL_SYS_UNDELETE, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -3069,7 +4996,7 @@ Error syscall_unlink(Str path) {
     }
     syscall_syscall(SYSCALL_SYS_UNLINK, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -3088,7 +5015,7 @@ Error syscall_unmount(Str path, Int flags) {
     }
     syscall_syscall(SYSCALL_SYS_UNMOUNT, (Uintptr)((void *)(_p0)), (Uintptr)(flags), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -3103,7 +5030,7 @@ Int burrow__syscall_accept(Int s, SyscallRawSockaddrAny *rsa, uint32_t *addrlen,
     r0 = syscall_syscall(SYSCALL_SYS_ACCEPT, (Uintptr)(s), (Uintptr)((void *)(rsa)), (Uintptr)((void *)(addrlen)), NULL, &e1);
     fd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return fd_;
@@ -3117,7 +5044,7 @@ Int burrow__syscall_accept4(Int fd, SyscallRawSockaddrAny *rsa, uint32_t *addrle
     r0 = syscall_syscall6(SYSCALL_SYS_ACCEPT4, (Uintptr)(fd), (Uintptr)((void *)(rsa)), (Uintptr)((void *)(addrlen)), (Uintptr)(flags), 0, 0, NULL, &e1);
     nfd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return nfd_;
@@ -3128,7 +5055,7 @@ Error burrow__syscall_bind(Int s, void *addr, uint32_t addrlen) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_BIND, (Uintptr)(s), (Uintptr)(addr), (Uintptr)(addrlen), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3138,7 +5065,7 @@ Error burrow__syscall_connect(Int s, void *addr, uint32_t addrlen) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_CONNECT, (Uintptr)(s), (Uintptr)(addr), (Uintptr)(addrlen), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3151,7 +5078,7 @@ Int burrow__syscall_fcntl(Int fd, Int cmd, Int arg, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_FCNTL, (Uintptr)(fd), (Uintptr)(cmd), (Uintptr)(arg), NULL, &e1);
     val_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return val_;
@@ -3165,7 +5092,7 @@ Int burrow__syscall_fcntl_ptr(Int fd, Int cmd, void *arg, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_FCNTL, (Uintptr)(fd), (Uintptr)(cmd), (Uintptr)(arg), NULL, &e1);
     val_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return val_;
@@ -3176,7 +5103,7 @@ Error burrow__syscall_futimes(Int fd, SyscallTimeval *timeval) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FUTIMES, (Uintptr)(fd), (Uintptr)((void *)(timeval)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3195,7 +5122,7 @@ Int burrow__syscall_getcwd(Slice buf, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS___GETCWD, (Uintptr)(_p0), (Uintptr)(buf.len), 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3215,7 +5142,7 @@ Int burrow__syscall_getdirentries(Int fd, Slice buf, uint64_t *basep, Error *err
     r0 = syscall_syscall6(SYSCALL_SYS_GETDIRENTRIES, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(buf.len), (Uintptr)((void *)(basep)), 0, 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3229,7 +5156,7 @@ Int burrow__syscall_getgroups(Int ngid, uint32_t *gid, Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_GETGROUPS, (Uintptr)(ngid), (Uintptr)((void *)(gid)), 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3240,7 +5167,7 @@ Error burrow__syscall_getpeername(Int fd, SyscallRawSockaddrAny *rsa, uint32_t *
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_GETPEERNAME, (Uintptr)(fd), (Uintptr)((void *)(rsa)), (Uintptr)((void *)(addrlen)), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3250,7 +5177,7 @@ Error burrow__syscall_getsockname(Int fd, SyscallRawSockaddrAny *rsa, uint32_t *
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_GETSOCKNAME, (Uintptr)(fd), (Uintptr)((void *)(rsa)), (Uintptr)((void *)(addrlen)), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3260,7 +5187,7 @@ Error burrow__syscall_getsockopt(Int s, Int level, Int name, void *val, uint32_t
     SyscallErrno e1 = 0;
     syscall_syscall6(SYSCALL_SYS_GETSOCKOPT, (Uintptr)(s), (Uintptr)(level), (Uintptr)(name), (Uintptr)(val), (Uintptr)((void *)(vallen)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3270,7 +5197,7 @@ Error burrow__syscall_ioctl(Int fd, Int req, Int arg) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_IOCTL, (Uintptr)(fd), (Uintptr)(req), (Uintptr)(arg), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3280,7 +5207,7 @@ Error burrow__syscall_ioctl_ptr(Int fd, Uint req, void *arg) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_IOCTL, (Uintptr)(fd), (Uintptr)(req), (Uintptr)(arg), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3293,7 +5220,7 @@ Int burrow__syscall_kevent(Int kq, void *change, Int nchange, void *event, Int n
     r0 = syscall_syscall6(SYSCALL_SYS_KEVENT, (Uintptr)(kq), (Uintptr)(change), (Uintptr)(nchange), (Uintptr)(event), (Uintptr)(nevent), (Uintptr)((void *)(timeout)), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3311,7 +5238,7 @@ Error burrow__syscall_mknodat(Int fd, Str path, uint32_t mode, uint64_t dev) {
     }
     syscall_syscall6(SYSCALL_SYS_MKNODAT, (Uintptr)(fd), (Uintptr)((void *)(_p0)), (Uintptr)(mode), (Uintptr)(dev), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -3327,7 +5254,7 @@ Uintptr burrow__syscall_mmap(Uintptr addr, Uintptr length, Int prot, Int flag, I
     r0 = syscall_syscall9(SYSCALL_SYS_MMAP, addr, length, (Uintptr)(prot), (Uintptr)(flag), (Uintptr)(fd), (Uintptr)(pos), (Uintptr)((pos >> 32)), 0, 0, NULL, &e1);
     ret_ = r0;
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return ret_;
@@ -3341,7 +5268,7 @@ Uintptr burrow__syscall_mmap(Uintptr addr, Uintptr length, Int prot, Int flag, I
     r0 = syscall_syscall6(SYSCALL_SYS_MMAP, addr, length, (Uintptr)(prot), (Uintptr)(flag), (Uintptr)(fd), (Uintptr)(pos), NULL, &e1);
     ret_ = r0;
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return ret_;
@@ -3355,7 +5282,7 @@ Uintptr burrow__syscall_mmap(Uintptr addr, Uintptr length, Int prot, Int flag, I
     r0 = syscall_syscall9(SYSCALL_SYS_MMAP, addr, length, (Uintptr)(prot), (Uintptr)(flag), (Uintptr)(fd), 0, (Uintptr)(pos), (Uintptr)((pos >> 32)), 0, NULL, &e1);
     ret_ = r0;
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return ret_;
@@ -3367,7 +5294,7 @@ Error burrow__syscall_munmap(Uintptr addr, Uintptr length) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_MUNMAP, addr, length, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3377,7 +5304,7 @@ Error burrow__syscall_pipe2(int32_t *p, Int flags) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_PIPE2, (Uintptr)((void *)(p)), (Uintptr)(flags), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3397,7 +5324,7 @@ Int burrow__syscall_pread(Int fd, Slice p, int64_t offset, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_PREAD, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), (Uintptr)(offset), (Uintptr)((offset >> 32)), 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3417,7 +5344,7 @@ Int burrow__syscall_pread(Int fd, Slice p, int64_t offset, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_PREAD, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), (Uintptr)(offset), 0, 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3437,7 +5364,7 @@ Int burrow__syscall_pread(Int fd, Slice p, int64_t offset, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_PREAD, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), 0, (Uintptr)(offset), (Uintptr)((offset >> 32)), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3459,7 +5386,7 @@ Int burrow__syscall_pwrite(Int fd, Slice p, int64_t offset, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_PWRITE, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), (Uintptr)(offset), (Uintptr)((offset >> 32)), 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3479,7 +5406,7 @@ Int burrow__syscall_pwrite(Int fd, Slice p, int64_t offset, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_PWRITE, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), (Uintptr)(offset), 0, 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3499,7 +5426,7 @@ Int burrow__syscall_pwrite(Int fd, Slice p, int64_t offset, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_PWRITE, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), 0, (Uintptr)(offset), (Uintptr)((offset >> 32)), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3520,7 +5447,7 @@ Int burrow__syscall_read(Int fd, Slice p, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_READ, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3534,7 +5461,7 @@ Int burrow__syscall_readlen(Int fd, uint8_t *buf, Int nbuf, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_READ, (Uintptr)(fd), (Uintptr)((void *)(buf)), (Uintptr)(nbuf), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3554,7 +5481,7 @@ Int burrow__syscall_recvfrom(Int fd, Slice p, Int flags, SyscallRawSockaddrAny *
     r0 = syscall_syscall6(SYSCALL_SYS_RECVFROM, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), (Uintptr)(flags), (Uintptr)((void *)(from)), (Uintptr)((void *)(fromlen)), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3568,7 +5495,7 @@ Int burrow__syscall_recvmsg(Int s, SyscallMsghdr *msg, Int flags, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_RECVMSG, (Uintptr)(s), (Uintptr)((void *)(msg)), (Uintptr)(flags), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3582,7 +5509,7 @@ Int burrow__syscall_sendmsg(Int s, SyscallMsghdr *msg, Int flags, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_SENDMSG, (Uintptr)(s), (Uintptr)((void *)(msg)), (Uintptr)(flags), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3599,7 +5526,7 @@ Error burrow__syscall_sendto(Int s, Slice buf, Int flags, void *to, uint32_t add
     }
     syscall_syscall6(SYSCALL_SYS_SENDTO, (Uintptr)(s), (Uintptr)(_p0), (Uintptr)(buf.len), (Uintptr)(flags), (Uintptr)(to), (Uintptr)(addrlen), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3609,7 +5536,7 @@ Error burrow__syscall_setgroups(Int ngid, uint32_t *gid) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_SETGROUPS, (Uintptr)(ngid), (Uintptr)((void *)(gid)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3619,7 +5546,7 @@ Error burrow__syscall_setrlimit(Int which, SyscallRlimit *lim) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_SETRLIMIT, (Uintptr)(which), (Uintptr)((void *)(lim)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3629,7 +5556,7 @@ Error burrow__syscall_setsockopt(Int s, Int level, Int name, void *val, Uintptr 
     SyscallErrno e1 = 0;
     syscall_syscall6(SYSCALL_SYS_SETSOCKOPT, (Uintptr)(s), (Uintptr)(level), (Uintptr)(name), (Uintptr)(val), vallen, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3642,7 +5569,7 @@ Int burrow__syscall_socket(Int domain, Int typ, Int proto, Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_SOCKET, (Uintptr)(domain), (Uintptr)(typ), (Uintptr)(proto), NULL, &e1);
     fd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return fd_;
@@ -3653,7 +5580,7 @@ Error burrow__syscall_socketpair(Int domain, Int typ, Int proto, int32_t *fd) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall6(SYSCALL_SYS_SOCKETPAIR, (Uintptr)(domain), (Uintptr)(typ), (Uintptr)(proto), (Uintptr)((void *)(fd)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3669,7 +5596,7 @@ Error burrow__syscall_sysctl(Slice mib, uint8_t *old, Uintptr *oldlen, uint8_t *
     }
     syscall_syscall6(SYSCALL_SYS___SYSCTL, (Uintptr)(_p0), (Uintptr)(mib.len), (Uintptr)((void *)(old)), (Uintptr)((void *)(oldlen)), (Uintptr)((void *)(new_)), newlen, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3686,7 +5613,7 @@ Error burrow__syscall_utimensat(Int dirfd, Str path, SyscallTimespec *times, Int
     }
     syscall_syscall6(SYSCALL_SYS_UTIMENSAT, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)((void *)(times)), (Uintptr)(flag), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -3705,7 +5632,7 @@ Error burrow__syscall_utimes(Str path, SyscallTimeval *timeval) {
     }
     syscall_syscall(SYSCALL_SYS_UTIMES, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(timeval)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -3720,7 +5647,7 @@ Int burrow__syscall_wait4(Int pid, int32_t *wstatus, Int options, SyscallRusage 
     r0 = syscall_syscall6(SYSCALL_SYS_WAIT4, (Uintptr)(pid), (Uintptr)((void *)(wstatus)), (Uintptr)(options), (Uintptr)((void *)(rusage)), 0, 0, NULL, &e1);
     wpid_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return wpid_;
@@ -3740,7 +5667,7 @@ Int burrow__syscall_write(Int fd, Slice p, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_WRITE, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3762,7 +5689,7 @@ Error syscall_acct(Str path) {
     }
     syscall_syscall(SYSCALL_SYS_ACCT, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -3777,7 +5704,7 @@ Int syscall_adjtimex(SyscallTimex *buf, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_ADJTIMEX, (Uintptr)((void *)(buf)), 0, 0, NULL, &e1);
     state_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return state_;
@@ -3795,7 +5722,7 @@ Error syscall_chdir(Str path) {
     }
     syscall_syscall(SYSCALL_SYS_CHDIR, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -3814,7 +5741,7 @@ Error syscall_chroot(Str path) {
     }
     syscall_syscall(SYSCALL_SYS_CHROOT, (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -3826,7 +5753,7 @@ Error syscall_close(Int fd) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_CLOSE, (Uintptr)(fd), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3839,7 +5766,7 @@ Int syscall_dup(Int oldfd, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_DUP, (Uintptr)(oldfd), 0, 0, NULL, &e1);
     fd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return fd_;
@@ -3851,7 +5778,7 @@ Error syscall_dup2(Int oldfd, Int newfd) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_DUP2, (Uintptr)(oldfd), (Uintptr)(newfd), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3862,7 +5789,7 @@ Error syscall_dup3(Int oldfd, Int newfd, Int flags) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_DUP3, (Uintptr)(oldfd), (Uintptr)(newfd), (Uintptr)(flags), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3875,7 +5802,7 @@ Int syscall_epoll_create1(Int flag, Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_EPOLL_CREATE1, (Uintptr)(flag), 0, 0, NULL, &e1);
     fd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return fd_;
@@ -3886,7 +5813,7 @@ Error syscall_epoll_ctl(Int epfd, Int op, Int fd, SyscallEpollEvent *event) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall6(SYSCALL_SYS_EPOLL_CTL, (Uintptr)(epfd), (Uintptr)(op), (Uintptr)(fd), (Uintptr)((void *)(event)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3906,7 +5833,7 @@ Int syscall_epoll_wait(Int epfd, Slice events, Int msec, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_EPOLL_WAIT, (Uintptr)(epfd), (Uintptr)(_p0), (Uintptr)(events.len), (Uintptr)(msec), 0, 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3926,7 +5853,7 @@ Int syscall_epoll_wait(Int epfd, Slice events, Int msec, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_EPOLL_PWAIT, (Uintptr)(epfd), (Uintptr)(_p0), (Uintptr)(events.len), (Uintptr)(msec), 0, 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -3939,7 +5866,7 @@ Error syscall_fallocate(Int fd, uint32_t mode, int64_t off, int64_t len) {
     SyscallErrno e1 = 0;
     syscall_syscall6(SYSCALL_SYS_FALLOCATE, (Uintptr)(fd), (Uintptr)(mode), (Uintptr)(off), (Uintptr)((off >> 32)), (Uintptr)(len), (Uintptr)((len >> 32)), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3949,7 +5876,7 @@ Error syscall_fallocate(Int fd, uint32_t mode, int64_t off, int64_t len) {
     SyscallErrno e1 = 0;
     syscall_syscall6(SYSCALL_SYS_FALLOCATE, (Uintptr)(fd), (Uintptr)(mode), (Uintptr)(off), (Uintptr)(len), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3960,7 +5887,7 @@ Error syscall_fchdir(Int fd) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FCHDIR, (Uintptr)(fd), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3970,7 +5897,7 @@ Error syscall_fchmod(Int fd, uint32_t mode) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FCHMOD, (Uintptr)(fd), (Uintptr)(mode), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3981,7 +5908,7 @@ Error syscall_fchown(Int fd, Int uid, Int gid) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FCHOWN32, (Uintptr)(fd), (Uintptr)(uid), (Uintptr)(gid), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -3991,7 +5918,7 @@ Error syscall_fchown(Int fd, Int uid, Int gid) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FCHOWN, (Uintptr)(fd), (Uintptr)(uid), (Uintptr)(gid), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4009,7 +5936,7 @@ Error syscall_fchownat(Int dirfd, Str path, Int uid, Int gid, Int flags) {
     }
     syscall_syscall6(SYSCALL_SYS_FCHOWNAT, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)(uid), (Uintptr)(gid), (Uintptr)(flags), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -4021,7 +5948,7 @@ Error syscall_fdatasync(Int fd) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FDATASYNC, (Uintptr)(fd), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4031,7 +5958,7 @@ Error syscall_flock(Int fd, Int how) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FLOCK, (Uintptr)(fd), (Uintptr)(how), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4042,7 +5969,7 @@ Error syscall_fstat(Int fd, SyscallStat_t *stat) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FSTAT64, (Uintptr)(fd), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4053,7 +5980,7 @@ Error syscall_fstat(Int fd, SyscallStat_t *stat) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FSTAT, (Uintptr)(fd), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4066,7 +5993,7 @@ Error syscall_fstatfs(Int fd, SyscallStatfs_t *buf) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FSTATFS, (Uintptr)(fd), (Uintptr)((void *)(buf)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4077,7 +6004,7 @@ Error syscall_fsync(Int fd) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FSYNC, (Uintptr)(fd), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4088,7 +6015,7 @@ Error syscall_ftruncate(Int fd, int64_t length) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FTRUNCATE64, (Uintptr)(fd), (Uintptr)(length), (Uintptr)((length >> 32)), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4098,7 +6025,7 @@ Error syscall_ftruncate(Int fd, int64_t length) {
     SyscallErrno e1 = 0;
     syscall_syscall6(SYSCALL_SYS_FTRUNCATE64, (Uintptr)(fd), 0, (Uintptr)(length), (Uintptr)((length >> 32)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4108,7 +6035,7 @@ Error syscall_ftruncate(Int fd, int64_t length) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_FTRUNCATE, (Uintptr)(fd), (Uintptr)(length), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4128,7 +6055,7 @@ Int syscall_getcwd(Slice buf, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_GETCWD, (Uintptr)(_p0), (Uintptr)(buf.len), 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -4148,7 +6075,7 @@ Int syscall_getdents(Int fd, Slice buf, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_GETDENTS64, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(buf.len), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -4216,7 +6143,7 @@ Int syscall_getpgid(Int pid, Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_GETPGID, (Uintptr)(pid), 0, 0, NULL, &e1);
     pgid_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return pgid_;
@@ -4246,7 +6173,7 @@ Int syscall_getpriority(Int which, Int who, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_GETPRIORITY, (Uintptr)(which), (Uintptr)(who), 0, NULL, &e1);
     prio_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return prio_;
@@ -4257,7 +6184,7 @@ Error syscall_getrusage(Int who, SyscallRusage *rusage) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_GETRUSAGE, (Uintptr)(who), (Uintptr)((void *)(rusage)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4277,7 +6204,7 @@ Error syscall_gettimeofday(SyscallTimeval *tv) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_GETTIMEOFDAY, (Uintptr)((void *)(tv)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4329,7 +6256,7 @@ Int syscall_getxattr(Str path, Str attr, Slice dest, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_GETXATTR, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(_p1)), (Uintptr)(_p2), (Uintptr)(dest.len), 0, 0, NULL, &e1);
     sz_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -4353,7 +6280,7 @@ Int syscall_inotify_add_watch(Int fd, Str pathname, uint32_t mask, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_INOTIFY_ADD_WATCH, (Uintptr)(fd), (Uintptr)((void *)(_p0)), (Uintptr)(mask), NULL, &e1);
     watchdesc_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -4370,7 +6297,7 @@ Int syscall_inotify_init(Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_INOTIFY_INIT, 0, 0, 0, NULL, &e1);
     fd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return fd_;
@@ -4385,7 +6312,7 @@ Int syscall_inotify_init1(Int flags, Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_INOTIFY_INIT1, (Uintptr)(flags), 0, 0, NULL, &e1);
     fd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return fd_;
@@ -4399,7 +6326,7 @@ Int syscall_inotify_rm_watch(Int fd, uint32_t watchdesc, Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_INOTIFY_RM_WATCH, (Uintptr)(fd), (Uintptr)(watchdesc), 0, NULL, &e1);
     success_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return success_;
@@ -4411,7 +6338,7 @@ Error syscall_ioperm(Int from, Int num, Int on) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_IOPERM, (Uintptr)(from), (Uintptr)(num), (Uintptr)(on), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4423,7 +6350,7 @@ Error syscall_iopl(Int level) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_IOPL, (Uintptr)(level), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4443,7 +6370,7 @@ Int syscall_klogctl(Int typ, Slice buf, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_SYSLOG, (Uintptr)(typ), (Uintptr)(_p0), (Uintptr)(buf.len), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -4462,7 +6389,7 @@ Error syscall_lchown(Str path, Int uid, Int gid) {
     }
     syscall_syscall(SYSCALL_SYS_LCHOWN, (Uintptr)((void *)(_p0)), (Uintptr)(uid), (Uintptr)(gid), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -4477,7 +6404,7 @@ Error syscall_listen(Int s, Int n) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_LISTEN, (Uintptr)(s), (Uintptr)(n), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4504,7 +6431,7 @@ Int syscall_listxattr(Str path, Slice dest, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_LISTXATTR, (Uintptr)((void *)(_p0)), (Uintptr)(_p1), (Uintptr)(dest.len), NULL, &e1);
     sz_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -4525,7 +6452,7 @@ Error syscall_lstat(Str path, SyscallStat_t *stat) {
     }
     syscall_syscall(SYSCALL_SYS_LSTAT, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -4544,7 +6471,7 @@ Error syscall_madvise(Slice b, Int advice) {
     }
     syscall_syscall(SYSCALL_SYS_MADVISE, (Uintptr)(_p0), (Uintptr)(b.len), (Uintptr)(advice), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4561,7 +6488,7 @@ Error syscall_mkdirat(Int dirfd, Str path, uint32_t mode) {
     }
     syscall_syscall(SYSCALL_SYS_MKDIRAT, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)(mode), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -4580,7 +6507,7 @@ Error syscall_mknodat(Int dirfd, Str path, uint32_t mode, Int dev) {
     }
     syscall_syscall6(SYSCALL_SYS_MKNODAT, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)(mode), (Uintptr)(dev), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -4598,7 +6525,7 @@ Error syscall_mlock(Slice b) {
     }
     syscall_syscall(SYSCALL_SYS_MLOCK, (Uintptr)(_p0), (Uintptr)(b.len), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4608,7 +6535,7 @@ Error syscall_mlockall(Int flags) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_MLOCKALL, (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4624,7 +6551,7 @@ Error syscall_mprotect(Slice b, Int prot) {
     }
     syscall_syscall(SYSCALL_SYS_MPROTECT, (Uintptr)(_p0), (Uintptr)(b.len), (Uintptr)(prot), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4640,7 +6567,7 @@ Error syscall_munlock(Slice b) {
     }
     syscall_syscall(SYSCALL_SYS_MUNLOCK, (Uintptr)(_p0), (Uintptr)(b.len), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4650,7 +6577,7 @@ Error syscall_munlockall(void) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_MUNLOCKALL, 0, 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4660,7 +6587,7 @@ Error syscall_nanosleep(SyscallTimespec *time, SyscallTimespec *leftover) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_NANOSLEEP, (Uintptr)((void *)(time)), (Uintptr)((void *)(leftover)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4671,7 +6598,7 @@ Error syscall_pause(void) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_PAUSE, 0, 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4696,7 +6623,7 @@ Error syscall_pivot_root(Str newroot, Str putold) {
     }
     syscall_syscall(SYSCALL_SYS_PIVOT_ROOT, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(_p1)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -4723,7 +6650,7 @@ Error syscall_removexattr(Str path, Str attr) {
     }
     syscall_syscall(SYSCALL_SYS_REMOVEXATTR, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(_p1)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -4751,7 +6678,7 @@ Error syscall_renameat(Int olddirfd, Str oldpath, Int newdirfd, Str newpath) {
     }
     syscall_syscall6(SYSCALL_SYS_RENAMEAT2, (Uintptr)(olddirfd), (Uintptr)((void *)(_p0)), (Uintptr)(newdirfd), (Uintptr)((void *)(_p1)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -4779,7 +6706,7 @@ Error syscall_renameat(Int olddirfd, Str oldpath, Int newdirfd, Str newpath) {
     }
     syscall_syscall6(SYSCALL_SYS_RENAMEAT, (Uintptr)(olddirfd), (Uintptr)((void *)(_p0)), (Uintptr)(newdirfd), (Uintptr)((void *)(_p1)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -4798,7 +6725,7 @@ int64_t syscall_seek(Int fd, int64_t offset, Int whence, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_LSEEK, (Uintptr)(fd), (Uintptr)(offset), (Uintptr)(whence), NULL, &e1);
     off_ = (int64_t)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return off_;
@@ -4814,7 +6741,7 @@ Int syscall_select(Int nfd, SyscallFdSet *r, SyscallFdSet *w, SyscallFdSet *e, S
     r0 = syscall_syscall6(SYSCALL_SYS__NEWSELECT, (Uintptr)(nfd), (Uintptr)((void *)(r)), (Uintptr)((void *)(w)), (Uintptr)((void *)(e)), (Uintptr)((void *)(timeout)), 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -4828,7 +6755,7 @@ Int syscall_select(Int nfd, SyscallFdSet *r, SyscallFdSet *w, SyscallFdSet *e, S
     r0 = syscall_syscall6(SYSCALL_SYS_SELECT, (Uintptr)(nfd), (Uintptr)((void *)(r)), (Uintptr)((void *)(w)), (Uintptr)((void *)(e)), (Uintptr)((void *)(timeout)), 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -4846,7 +6773,7 @@ Error syscall_setdomainname(Slice p) {
     }
     syscall_syscall(SYSCALL_SYS_SETDOMAINNAME, (Uintptr)(_p0), (Uintptr)(p.len), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4857,7 +6784,7 @@ Error syscall_setfsgid(Int gid) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_SETFSGID32, (Uintptr)(gid), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4867,7 +6794,7 @@ Error syscall_setfsgid(Int gid) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_SETFSGID, (Uintptr)(gid), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4879,7 +6806,7 @@ Error syscall_setfsuid(Int uid) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_SETFSUID32, (Uintptr)(uid), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4889,7 +6816,7 @@ Error syscall_setfsuid(Int uid) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_SETFSUID, (Uintptr)(uid), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4906,7 +6833,7 @@ Error syscall_sethostname(Slice p) {
     }
     syscall_syscall(SYSCALL_SYS_SETHOSTNAME, (Uintptr)(_p0), (Uintptr)(p.len), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4916,7 +6843,7 @@ Error syscall_setpgid(Int pid, Int pgid) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_SETPGID, (Uintptr)(pid), (Uintptr)(pgid), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4926,7 +6853,7 @@ Error syscall_setpriority(Int which, Int who, Int prio) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_SETPRIORITY, (Uintptr)(which), (Uintptr)(who), (Uintptr)(prio), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4939,7 +6866,7 @@ Int syscall_setsid(Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_SETSID, 0, 0, 0, NULL, &e1);
     pid_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return pid_;
@@ -4950,7 +6877,7 @@ Error syscall_settimeofday(SyscallTimeval *tv) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_SETTIMEOFDAY, (Uintptr)((void *)(tv)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -4980,7 +6907,7 @@ Error syscall_setxattr(Str path, Str attr, Slice data, Int flags) {
     }
     syscall_syscall6(SYSCALL_SYS_SETXATTR, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(_p1)), (Uintptr)(_p2), (Uintptr)(data.len), (Uintptr)(flags), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -4995,7 +6922,7 @@ Error syscall_shutdown(Int fd, Int how) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_SHUTDOWN, (Uintptr)(fd), (Uintptr)(how), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5010,7 +6937,7 @@ Int syscall_splice(Int rfd, int64_t *roff, Int wfd, int64_t *woff, Int len, Int 
     r0 = syscall_syscall6(SYSCALL_SYS_SPLICE, (Uintptr)(rfd), (Uintptr)((void *)(roff)), (Uintptr)(wfd), (Uintptr)((void *)(woff)), (Uintptr)(len), (Uintptr)(flags), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -5024,7 +6951,7 @@ int64_t syscall_splice(Int rfd, int64_t *roff, Int wfd, int64_t *woff, Int len, 
     r0 = syscall_syscall6(SYSCALL_SYS_SPLICE, (Uintptr)(rfd), (Uintptr)((void *)(roff)), (Uintptr)(wfd), (Uintptr)((void *)(woff)), (Uintptr)(len), (Uintptr)(flags), NULL, &e1);
     n_ = (int64_t)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -5044,7 +6971,7 @@ Error syscall_stat(Str path, SyscallStat_t *stat) {
     }
     syscall_syscall(SYSCALL_SYS_STAT, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5066,7 +6993,7 @@ Error syscall_statfs(Str path, SyscallStatfs_t *buf) {
     }
     syscall_syscall(SYSCALL_SYS_STATFS, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(buf)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5084,7 +7011,7 @@ Error syscall_sync_file_range(Int fd, int64_t off, int64_t n, Int flags) {
     SyscallErrno e1 = 0;
     syscall_syscall6(SYSCALL_SYS_SYNC_FILE_RANGE, (Uintptr)(fd), (Uintptr)(off), (Uintptr)((off >> 32)), (Uintptr)(n), (Uintptr)((n >> 32)), (Uintptr)(flags), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5094,7 +7021,7 @@ Error syscall_sync_file_range(Int fd, int64_t off, int64_t n, Int flags) {
     SyscallErrno e1 = 0;
     syscall_syscall6(SYSCALL_SYS_SYNC_FILE_RANGE, (Uintptr)(fd), (Uintptr)(off), (Uintptr)(n), (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5105,7 +7032,7 @@ Error syscall_sync_file_range(Int fd, int64_t off, int64_t n, Int flags) {
     SyscallErrno e1 = 0;
     syscall_syscall6(SYSCALL_SYS_SYNC_FILE_RANGE2, (Uintptr)(fd), (Uintptr)(off), (Uintptr)(n), (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5116,7 +7043,7 @@ Error syscall_sysinfo(SyscallSysinfo_t *info) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_SYSINFO, (Uintptr)((void *)(info)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5131,7 +7058,7 @@ int64_t syscall_tee(Int rfd, Int wfd, Int len, Int flags, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_TEE, (Uintptr)(rfd), (Uintptr)(wfd), (Uintptr)(len), (Uintptr)(flags), 0, 0, &r1, &e1);
     n_ = (((int64_t)(r1) << 32) | (int64_t)(r0));
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -5145,7 +7072,7 @@ int64_t syscall_tee(Int rfd, Int wfd, Int len, Int flags, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_TEE, (Uintptr)(rfd), (Uintptr)(wfd), (Uintptr)(len), (Uintptr)(flags), 0, 0, NULL, &e1);
     n_ = (int64_t)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -5157,7 +7084,7 @@ Error syscall_tgkill(Int tgid, Int tid, SyscallSignal sig) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_TGKILL, (Uintptr)(tgid), (Uintptr)(tid), (Uintptr)(sig), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5171,7 +7098,7 @@ SyscallTime_t syscall_time(SyscallTime_t *t, Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_TIME, (Uintptr)((void *)(t)), 0, 0, NULL, &e1);
     tt_ = (SyscallTime_t)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return tt_;
@@ -5186,7 +7113,7 @@ Uintptr syscall_times(SyscallTms *tms, Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_TIMES, (Uintptr)((void *)(tms)), 0, 0, NULL, &e1);
     ticks_ = r0;
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return ticks_;
@@ -5205,7 +7132,7 @@ Error syscall_truncate(Str path, int64_t length) {
     }
     syscall_syscall(SYSCALL_SYS_TRUNCATE64, (Uintptr)((void *)(_p0)), (Uintptr)(length), (Uintptr)((length >> 32)), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5224,7 +7151,7 @@ Error syscall_truncate(Str path, int64_t length) {
     }
     syscall_syscall6(SYSCALL_SYS_TRUNCATE64, (Uintptr)((void *)(_p0)), 0, (Uintptr)(length), (Uintptr)((length >> 32)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5243,7 +7170,7 @@ Error syscall_truncate(Str path, int64_t length) {
     }
     syscall_syscall(SYSCALL_SYS_TRUNCATE, (Uintptr)((void *)(_p0)), (Uintptr)(length), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5264,7 +7191,7 @@ Error syscall_uname(SyscallUtsname *buf) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_UNAME, (Uintptr)((void *)(buf)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5281,7 +7208,7 @@ Error syscall_unmount(Str target, Int flags) {
     }
     syscall_syscall(SYSCALL_SYS_UMOUNT2, (Uintptr)((void *)(_p0)), (Uintptr)(flags), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5293,7 +7220,7 @@ Error syscall_unshare(Int flags) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_UNSHARE, (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5304,7 +7231,7 @@ Error syscall_ustat(Int dev, SyscallUstat_t *ubuf) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_USTAT, (Uintptr)(dev), (Uintptr)((void *)(ubuf)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5323,7 +7250,7 @@ Error syscall_utime(Str path, SyscallUtimbuf *buf) {
     }
     syscall_syscall(SYSCALL_SYS_UTIME, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(buf)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5341,7 +7268,7 @@ Int burrow__syscall_accept4(Int s, SyscallRawSockaddrAny *rsa, uint32_t *addrlen
     r0 = syscall_syscall6(SYSCALL_SYS_ACCEPT4, (Uintptr)(s), (Uintptr)((void *)(rsa)), (Uintptr)((void *)(addrlen)), (Uintptr)(flags), 0, 0, NULL, &e1);
     fd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return fd_;
@@ -5355,7 +7282,7 @@ Error burrow__syscall_bind(Int s, void *addr, uint32_t addrlen) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_BIND, (Uintptr)(s), (Uintptr)(addr), (Uintptr)(addrlen), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5368,7 +7295,7 @@ Error burrow__syscall_connect(Int s, void *addr, uint32_t addrlen) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_CONNECT, (Uintptr)(s), (Uintptr)(addr), (Uintptr)(addrlen), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5379,7 +7306,7 @@ Error burrow__syscall_exit_thread(Int code) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_EXIT, (Uintptr)(code), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5396,7 +7323,7 @@ Error burrow__syscall_faccessat(Int dirfd, Str path, uint32_t mode) {
     }
     syscall_syscall(SYSCALL_SYS_FACCESSAT, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)(mode), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5416,7 +7343,7 @@ Error burrow__syscall_faccessat2(Int dirfd, Str path, uint32_t mode, Int flags) 
     }
     syscall_syscall6(5439, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)(mode), (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5435,7 +7362,7 @@ Error burrow__syscall_faccessat2(Int dirfd, Str path, uint32_t mode, Int flags) 
     }
     syscall_syscall6(439, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)(mode), (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5455,7 +7382,7 @@ Error burrow__syscall_fchmodat(Int dirfd, Str path, uint32_t mode) {
     }
     syscall_syscall(SYSCALL_SYS_FCHMODAT, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)(mode), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5475,7 +7402,7 @@ Error burrow__syscall_fchmodat2(Int dirfd, Str path, uint32_t mode, Int flags) {
     }
     syscall_syscall6(5452, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)(mode), (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5494,7 +7421,7 @@ Error burrow__syscall_fchmodat2(Int dirfd, Str path, uint32_t mode, Int flags) {
     }
     syscall_syscall6(452, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)(mode), (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5510,7 +7437,7 @@ Int burrow__syscall_fcntl(Int fd, Int cmd, Int arg, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_FCNTL, (Uintptr)(fd), (Uintptr)(cmd), (Uintptr)(arg), NULL, &e1);
     val_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return val_;
@@ -5529,7 +7456,7 @@ Error burrow__syscall_fstatat(Int dirfd, Str path, SyscallStat_t *stat, Int flag
     }
     syscall_syscall6(SYSCALL_SYS_FSTATAT64, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5548,7 +7475,7 @@ Error burrow__syscall_fstatat(Int fd, Str path, SyscallStat_t *stat, Int flags) 
     }
     syscall_syscall6(SYSCALL_SYS_NEWFSTATAT, (Uintptr)(fd), (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5567,7 +7494,7 @@ Error burrow__syscall_fstatat(Int dirfd, Str path, SyscallStat_t *stat, Int flag
     }
     syscall_syscall6(SYSCALL_SYS_NEWFSTATAT, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5587,7 +7514,7 @@ Error burrow__syscall_fstatat(Int dirfd, Str path, SyscallStat_t *stat, Int flag
     }
     syscall_syscall6(SYSCALL_SYS_FSTATAT, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)((void *)(stat)), (Uintptr)(flags), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5608,7 +7535,7 @@ Error burrow__syscall_futimesat(Int dirfd, Str path, SyscallTimeval *times) {
     }
     syscall_syscall(SYSCALL_SYS_FUTIMESAT, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)((void *)(times)), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5625,7 +7552,7 @@ Int burrow__syscall_getgroups(Int n, uint32_t *list, Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_GETGROUPS32, (Uintptr)(n), (Uintptr)((void *)(list)), 0, NULL, &e1);
     nn_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return nn_;
@@ -5639,7 +7566,7 @@ Int burrow__syscall_getgroups(Int n, uint32_t *list, Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_GETGROUPS, (Uintptr)(n), (Uintptr)((void *)(list)), 0, NULL, &e1);
     nn_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return nn_;
@@ -5653,7 +7580,7 @@ Error burrow__syscall_getpeername(Int fd, SyscallRawSockaddrAny *rsa, uint32_t *
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_GETPEERNAME, (Uintptr)(fd), (Uintptr)((void *)(rsa)), (Uintptr)((void *)(addrlen)), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5666,7 +7593,7 @@ Error burrow__syscall_getsockname(Int fd, SyscallRawSockaddrAny *rsa, uint32_t *
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_GETSOCKNAME, (Uintptr)(fd), (Uintptr)((void *)(rsa)), (Uintptr)((void *)(addrlen)), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5679,7 +7606,7 @@ Error burrow__syscall_getsockopt(Int s, Int level, Int name, void *val, uint32_t
     SyscallErrno e1 = 0;
     syscall_syscall6(SYSCALL_SYS_GETSOCKOPT, (Uintptr)(s), (Uintptr)(level), (Uintptr)(name), (Uintptr)(val), (Uintptr)((void *)(vallen)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5704,7 +7631,7 @@ Error burrow__syscall_linkat(Int olddirfd, Str oldpath, Int newdirfd, Str newpat
     }
     syscall_syscall6(SYSCALL_SYS_LINKAT, (Uintptr)(olddirfd), (Uintptr)((void *)(_p0)), (Uintptr)(newdirfd), (Uintptr)((void *)(_p1)), (Uintptr)(flags), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5722,7 +7649,7 @@ Uintptr burrow__syscall_mmap(Uintptr addr, Uintptr length, Int prot, Int flags, 
     r0 = syscall_syscall6(SYSCALL_SYS_MMAP, addr, length, (Uintptr)(prot), (Uintptr)(flags), (Uintptr)(fd), (Uintptr)(offset), NULL, &e1);
     xaddr_ = r0;
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return xaddr_;
@@ -5738,7 +7665,7 @@ Uintptr burrow__syscall_mmap2(Uintptr addr, Uintptr length, Int prot, Int flags,
     r0 = syscall_syscall6(SYSCALL_SYS_MMAP2, addr, length, (Uintptr)(prot), (Uintptr)(flags), (Uintptr)(fd), pageOffset, NULL, &e1);
     xaddr_ = r0;
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return xaddr_;
@@ -5771,7 +7698,7 @@ Error burrow__syscall_mount(Str source, Str target, Str fstype, Uintptr flags, u
     }
     syscall_syscall6(SYSCALL_SYS_MOUNT, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(_p1)), (Uintptr)((void *)(_p2)), flags, (Uintptr)((void *)(data)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5785,7 +7712,7 @@ Error burrow__syscall_munmap(Uintptr addr, Uintptr length) {
     SyscallErrno e1 = 0;
     syscall_syscall(SYSCALL_SYS_MUNMAP, addr, length, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5805,7 +7732,7 @@ Int burrow__syscall_openat(Int dirfd, Str path, Int flags, uint32_t mode, Error 
     r0 = syscall_syscall6(SYSCALL_SYS_OPENAT, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)(flags), (Uintptr)(mode), 0, 0, NULL, &e1);
     fd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -5818,7 +7745,7 @@ Error burrow__syscall_pipe2(int32_t *p, Int flags) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall(SYSCALL_SYS_PIPE2, (Uintptr)((void *)(p)), (Uintptr)(flags), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5838,7 +7765,7 @@ Int burrow__syscall_pread(Int fd, Slice p, int64_t offset, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_PREAD64, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), (Uintptr)(offset), (Uintptr)((offset >> 32)), 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -5858,7 +7785,7 @@ Int burrow__syscall_pread(Int fd, Slice p, int64_t offset, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_PREAD64, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), 0, (Uintptr)(offset), (Uintptr)((offset >> 32)), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -5878,7 +7805,7 @@ Int burrow__syscall_pread(Int fd, Slice p, int64_t offset, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_PREAD64, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), (Uintptr)(offset), 0, 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -5890,7 +7817,7 @@ Error burrow__syscall_prlimit1(Int pid, Int resource, SyscallRlimit *newlimit, S
     SyscallErrno e1 = 0;
     syscall_raw_syscall6(SYSCALL_SYS_PRLIMIT64, (Uintptr)(pid), (Uintptr)(resource), (Uintptr)((void *)(newlimit)), (Uintptr)((void *)(old)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5900,7 +7827,7 @@ Error burrow__syscall_ptrace(Int request, Int pid, Uintptr addr, Uintptr data) {
     SyscallErrno e1 = 0;
     syscall_syscall6(SYSCALL_SYS_PTRACE, (Uintptr)(request), (Uintptr)(pid), addr, data, 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5910,7 +7837,7 @@ Error burrow__syscall_ptrace_ptr(Int request, Int pid, Uintptr addr, void *data)
     SyscallErrno e1 = 0;
     syscall_syscall6(SYSCALL_SYS_PTRACE, (Uintptr)(request), (Uintptr)(pid), addr, (Uintptr)(data), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -5930,7 +7857,7 @@ Int burrow__syscall_pwrite(Int fd, Slice p, int64_t offset, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_PWRITE64, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), (Uintptr)(offset), (Uintptr)((offset >> 32)), 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -5950,7 +7877,7 @@ Int burrow__syscall_pwrite(Int fd, Slice p, int64_t offset, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_PWRITE64, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), 0, (Uintptr)(offset), (Uintptr)((offset >> 32)), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -5970,7 +7897,7 @@ Int burrow__syscall_pwrite(Int fd, Slice p, int64_t offset, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_PWRITE64, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), (Uintptr)(offset), 0, 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -5991,7 +7918,7 @@ Int burrow__syscall_read(Int fd, Slice p, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_READ, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -6005,7 +7932,7 @@ Int burrow__syscall_readlen(Int fd, uint8_t *p, Int np, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_READ, (Uintptr)(fd), (Uintptr)((void *)(p)), (Uintptr)(np), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -6032,7 +7959,7 @@ Int burrow__syscall_readlinkat(Int dirfd, Str path, Slice buf, Error *err) {
     r0 = syscall_syscall6(SYSCALL_SYS_READLINKAT, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)(_p1), (Uintptr)(buf.len), 0, 0, NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -6052,7 +7979,7 @@ Error burrow__syscall_reboot(Uint magic1, Uint magic2, Int cmd, Str arg) {
     }
     syscall_syscall6(SYSCALL_SYS_REBOOT, (Uintptr)(magic1), (Uintptr)(magic2), (Uintptr)(cmd), (Uintptr)((void *)(_p0)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -6075,7 +8002,7 @@ Int burrow__syscall_recvfrom(Int fd, Slice p, Int flags, SyscallRawSockaddrAny *
     r0 = syscall_syscall6(SYSCALL_SYS_RECVFROM, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), (Uintptr)(flags), (Uintptr)((void *)(from)), (Uintptr)((void *)(fromlen)), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -6092,7 +8019,7 @@ Int burrow__syscall_recvmsg(Int s, SyscallMsghdr *msg, Int flags, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_RECVMSG, (Uintptr)(s), (Uintptr)((void *)(msg)), (Uintptr)(flags), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -6119,7 +8046,7 @@ Error burrow__syscall_renameat2(Int olddirfd, Str oldpath, Int newdirfd, Str new
     }
     syscall_syscall6(SYSCALL_SYS_RENAMEAT2, (Uintptr)(olddirfd), (Uintptr)((void *)(_p0)), (Uintptr)(newdirfd), (Uintptr)((void *)(_p1)), (Uintptr)(flags), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -6137,7 +8064,7 @@ Int burrow__syscall_sendfile(Int outfd, Int infd, int64_t *offset, Int count, Er
     r0 = syscall_syscall6(SYSCALL_SYS_SENDFILE64, (Uintptr)(outfd), (Uintptr)(infd), (Uintptr)((void *)(offset)), (Uintptr)(count), 0, 0, NULL, &e1);
     written_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return written_;
@@ -6151,7 +8078,7 @@ Int burrow__syscall_sendfile(Int outfd, Int infd, int64_t *offset, Int count, Er
     r0 = syscall_syscall6(SYSCALL_SYS_SENDFILE, (Uintptr)(outfd), (Uintptr)(infd), (Uintptr)((void *)(offset)), (Uintptr)(count), 0, 0, NULL, &e1);
     written_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return written_;
@@ -6168,7 +8095,7 @@ Int burrow__syscall_sendmsg(Int s, SyscallMsghdr *msg, Int flags, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_SENDMSG, (Uintptr)(s), (Uintptr)((void *)(msg)), (Uintptr)(flags), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;
@@ -6188,7 +8115,7 @@ Error burrow__syscall_sendto(Int s, Slice buf, Int flags, void *to, uint32_t add
     }
     syscall_syscall6(SYSCALL_SYS_SENDTO, (Uintptr)(s), (Uintptr)(_p0), (Uintptr)(buf.len), (Uintptr)(flags), (Uintptr)(to), (Uintptr)(addrlen), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -6201,7 +8128,7 @@ Error burrow__syscall_setsockopt(Int s, Int level, Int name, void *val, Uintptr 
     SyscallErrno e1 = 0;
     syscall_syscall6(SYSCALL_SYS_SETSOCKOPT, (Uintptr)(s), (Uintptr)(level), (Uintptr)(name), (Uintptr)(val), vallen, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -6217,7 +8144,7 @@ Int burrow__syscall_socket(Int domain, Int typ, Int proto, Error *err) {
     r0 = syscall_raw_syscall(SYSCALL_SYS_SOCKET, (Uintptr)(domain), (Uintptr)(typ), (Uintptr)(proto), NULL, &e1);
     fd_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return fd_;
@@ -6230,7 +8157,7 @@ Error burrow__syscall_socketpair(Int domain, Int typ, Int flags, int32_t *fd) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall6(SYSCALL_SYS_SOCKETPAIR, (Uintptr)(domain), (Uintptr)(typ), (Uintptr)(flags), (Uintptr)((void *)(fd)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -6241,7 +8168,7 @@ Error burrow__syscall_socketpair(Int domain, Int typ, Int proto, int32_t *fd) {
     SyscallErrno e1 = 0;
     syscall_raw_syscall6(SYSCALL_SYS_SOCKETPAIR, (Uintptr)(domain), (Uintptr)(typ), (Uintptr)(proto), (Uintptr)((void *)(fd)), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -6266,7 +8193,7 @@ Error burrow__syscall_symlinkat(Str oldpath, Int newdirfd, Str newpath) {
     }
     syscall_syscall(SYSCALL_SYS_SYMLINKAT, (Uintptr)((void *)(_p0)), (Uintptr)(newdirfd), (Uintptr)((void *)(_p1)), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -6280,7 +8207,7 @@ Error burrow__syscall_sync_file_range2(Int fd, Int flags, int64_t off, int64_t n
     SyscallErrno e1 = 0;
     syscall_syscall6(SYSCALL_SYS_SYNC_FILE_RANGE2, (Uintptr)(fd), (Uintptr)(flags), (Uintptr)(off), (Uintptr)(n), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     return err_;
 }
@@ -6298,7 +8225,7 @@ Error burrow__syscall_unlinkat(Int dirfd, Str path, Int flags) {
     }
     syscall_syscall(SYSCALL_SYS_UNLINKAT, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)(flags), NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -6317,7 +8244,7 @@ Error burrow__syscall_utimensat(Int dirfd, Str path, SyscallTimespec *times, Int
     }
     syscall_syscall6(SYSCALL_SYS_UTIMENSAT, (Uintptr)(dirfd), (Uintptr)((void *)(_p0)), (Uintptr)((void *)(times)), (Uintptr)(flag), 0, 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -6337,7 +8264,7 @@ Error burrow__syscall_utimes(Str path, SyscallTimeval *times) {
     }
     syscall_syscall(SYSCALL_SYS_UTIMES, (Uintptr)((void *)(_p0)), (Uintptr)((void *)(times)), 0, NULL, &e1);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
 done:
     burrow__syscall_cstring_free(&_p0s);
@@ -6353,7 +8280,7 @@ Int burrow__syscall_wait4(Int pid, int32_t *wstatus, Int options, SyscallRusage 
     r0 = syscall_syscall6(SYSCALL_SYS_WAIT4, (Uintptr)(pid), (Uintptr)((void *)(wstatus)), (Uintptr)(options), (Uintptr)((void *)(rusage)), 0, 0, NULL, &e1);
     wpid_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return wpid_;
@@ -6373,7 +8300,7 @@ Int burrow__syscall_write(Int fd, Slice p, Error *err) {
     r0 = syscall_syscall(SYSCALL_SYS_WRITE, (Uintptr)(fd), (Uintptr)(_p0), (Uintptr)(p.len), NULL, &e1);
     n_ = (Int)(r0);
     if (e1 != 0) {
-        err_ = syscall_errno_as_error(e1, error_allocator());
+        err_ = burrow__syscall_errno_err(e1);
     }
     BURROW_OUT(err, err_);
     return n_;

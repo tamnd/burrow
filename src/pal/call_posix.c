@@ -196,6 +196,21 @@ void *pal_libc_symbol(const char *name) {
 #endif
 }
 
+/* Windows's, which syscall only declares there. */
+uintptr_t pal_load_library(const uint16_t *name, bool system, uintptr_t *errnum) {
+    (void)name;
+    (void)system;
+    BURROW_OUT(errnum, (uintptr_t)ENOSYS);
+    return 0;
+}
+
+void *pal_proc_address(uintptr_t module, const char *name, uintptr_t *errnum) {
+    (void)module;
+    (void)name;
+    BURROW_OUT(errnum, (uintptr_t)ENOSYS);
+    return NULL;
+}
+
 NO_SANITIZE_FUNCTION
 uintptr_t pal_syscall(uintptr_t trap, const uintptr_t *args, int32_t n,
                       uintptr_t *errnum) {

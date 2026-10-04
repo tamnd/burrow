@@ -22,14 +22,145 @@
  * A function with only an error returns it.
  *
  * Each makes the call the way Go's does on the system and architecture:
- * Linux and FreeBSD by number through syscall(2), macOS through libSystem. On
- * Cosmopolitan and wasip1 they are here, with Linux's names, and fail with
- * ENOSYS. A function only some architectures have is only declared there. */
+ * Linux and FreeBSD by number through syscall(2), macOS through libSystem, and
+ * Windows through the DLL Go names, which is loaded the first time one of its
+ * functions is called. On Cosmopolitan and wasip1 they are here, with Linux's
+ * names, and fail with ENOSYS. A function only some architectures have is
+ * only declared there. */
 
 #ifndef BURROW_SYSCALL_ZSYSCALL_H
 #define BURROW_SYSCALL_ZSYSCALL_H
 
-#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+#if defined(BURROW_OS_WINDOWS)
+
+/* windows */
+
+BURROW_OWNS(ret) Error syscall_accept_ex(SyscallHandle ls, SyscallHandle as, uint8_t *buf, uint32_t rxdatalen, uint32_t laddrlen, uint32_t raddrlen, uint32_t *recvd, SyscallOverlapped *overlapped);
+BURROW_OWNS(ret) Error syscall_cancel_io(SyscallHandle s);
+BURROW_OWNS(ret) Error syscall_cancel_io_ex(SyscallHandle s, SyscallOverlapped *o);
+BURROW_OWNS(ret) Error syscall_cert_add_certificate_context_to_store(SyscallHandle store, SyscallCertContext *certContext, uint32_t addDisposition, SyscallCertContext **storeContext);
+BURROW_OWNS(ret) Error syscall_cert_close_store(SyscallHandle store, uint32_t flags);
+BURROW_OWNS(ret) SyscallCertContext *syscall_cert_create_certificate_context(uint32_t certEncodingType, uint8_t *certEncoded, uint32_t encodedLen, Error *err);
+BURROW_OWNS(ret) SyscallCertContext *syscall_cert_enum_certificates_in_store(SyscallHandle store, SyscallCertContext *prevContext, Error *err);
+void syscall_cert_free_certificate_chain(SyscallCertChainContext *ctx);
+BURROW_OWNS(ret) Error syscall_cert_free_certificate_context(SyscallCertContext *ctx);
+BURROW_OWNS(ret) Error syscall_cert_get_certificate_chain(SyscallHandle engine, SyscallCertContext *leaf, SyscallFiletime *time, SyscallHandle additionalStore, SyscallCertChainPara *para, uint32_t flags, Uintptr reserved, SyscallCertChainContext **chainCtx);
+SyscallHandle syscall_cert_open_store(Uintptr storeProvider, uint32_t msgAndCertEncodingType, Uintptr cryptProv, uint32_t flags, Uintptr para, Error *err);
+SyscallHandle syscall_cert_open_system_store(SyscallHandle hprov, uint16_t *name, Error *err);
+BURROW_OWNS(ret) Error syscall_cert_verify_certificate_chain_policy(Uintptr policyOID, SyscallCertChainContext *chain, SyscallCertChainPolicyPara *para, SyscallCertChainPolicyStatus *status);
+BURROW_OWNS(ret) Error syscall_close_handle(SyscallHandle handle);
+BURROW_OWNS(ret) Error syscall_closesocket(SyscallHandle s);
+BURROW_OWNS(ret) uint16_t **syscall_command_line_to_argv(uint16_t *cmd, int32_t *argc, Error *err);
+BURROW_OWNS(ret) Error syscall_convert_sid_to_string_sid(SyscallSID *sid, uint16_t **stringSid);
+BURROW_OWNS(ret) Error syscall_convert_string_sid_to_sid(uint16_t *stringSid, SyscallSID **sid);
+BURROW_OWNS(ret) Error syscall_copy_sid(uint32_t destSidLen, SyscallSID *destSid, SyscallSID *srcSid);
+BURROW_OWNS(ret) Error syscall_create_directory(uint16_t *path, SyscallSecurityAttributes *sa);
+SyscallHandle syscall_create_file_mapping(SyscallHandle fhandle, SyscallSecurityAttributes *sa, uint32_t prot, uint32_t maxSizeHigh, uint32_t maxSizeLow, uint16_t *name, Error *err);
+BURROW_OWNS(ret) Error syscall_create_hard_link(uint16_t *filename, uint16_t *existingfilename, Uintptr reserved);
+BURROW_OWNS(ret) Error syscall_create_pipe(SyscallHandle *readhandle, SyscallHandle *writehandle, SyscallSecurityAttributes *sa, uint32_t size);
+BURROW_OWNS(ret) Error syscall_create_process(uint16_t *appName, uint16_t *commandLine, SyscallSecurityAttributes *procSecurity, SyscallSecurityAttributes *threadSecurity, bool inheritHandles, uint32_t creationFlags, uint16_t *env, uint16_t *currentDir, SyscallStartupInfo *startupInfo, SyscallProcessInformation *outProcInfo);
+BURROW_OWNS(ret) Error syscall_create_process_as_user(SyscallToken token, uint16_t *appName, uint16_t *commandLine, SyscallSecurityAttributes *procSecurity, SyscallSecurityAttributes *threadSecurity, bool inheritHandles, uint32_t creationFlags, uint16_t *env, uint16_t *currentDir, SyscallStartupInfo *startupInfo, SyscallProcessInformation *outProcInfo);
+BURROW_OWNS(ret) Error syscall_create_symbolic_link(uint16_t *symlinkfilename, uint16_t *targetfilename, uint32_t flags);
+SyscallHandle syscall_create_toolhelp32_snapshot(uint32_t flags, uint32_t processId, Error *err);
+BURROW_OWNS(ret) Error syscall_crypt_acquire_context(SyscallHandle *provhandle, uint16_t *container, uint16_t *provider, uint32_t provtype, uint32_t flags);
+BURROW_OWNS(ret) Error syscall_crypt_gen_random(SyscallHandle provhandle, uint32_t buflen, uint8_t *buf);
+BURROW_OWNS(ret) Error syscall_crypt_release_context(SyscallHandle provhandle, uint32_t flags);
+BURROW_OWNS(ret) Error syscall_delete_file(uint16_t *path);
+BURROW_OWNS(ret) Error syscall_device_io_control(SyscallHandle handle, uint32_t ioControlCode, uint8_t *inBuffer, uint32_t inBufferSize, uint8_t *outBuffer, uint32_t outBufferSize, uint32_t *bytesReturned, SyscallOverlapped *overlapped);
+bool syscall_dns_name_compare(uint16_t *name1, uint16_t *name2);
+BURROW_OWNS(ret) Error syscall_dns_query(Str name, uint16_t qtype, uint32_t options, uint8_t *extra, SyscallDNSRecord **qrs, uint8_t *pr);
+void syscall_dns_record_list_free(SyscallDNSRecord *rl, uint32_t freetype);
+BURROW_OWNS(ret) Error syscall_duplicate_handle(SyscallHandle hSourceProcessHandle, SyscallHandle hSourceHandle, SyscallHandle hTargetProcessHandle, SyscallHandle *lpTargetHandle, uint32_t dwDesiredAccess, bool bInheritHandle, uint32_t dwOptions);
+void syscall_exit_process(uint32_t exitcode);
+BURROW_OWNS(ret) Error syscall_find_close(SyscallHandle handle);
+BURROW_OWNS(ret) Error syscall_flush_file_buffers(SyscallHandle handle);
+BURROW_OWNS(ret) Error syscall_flush_view_of_file(Uintptr addr, Uintptr length);
+void syscall_free_addr_info_w(SyscallAddrinfoW *addrinfo);
+BURROW_OWNS(ret) Error syscall_free_environment_strings(uint16_t *envs);
+BURROW_OWNS(ret) Error syscall_free_library(SyscallHandle handle);
+void syscall_get_accept_ex_sockaddrs(uint8_t *buf, uint32_t rxdatalen, uint32_t laddrlen, uint32_t raddrlen, SyscallRawSockaddrAny **lrsa, int32_t *lrsalen, SyscallRawSockaddrAny **rrsa, int32_t *rrsalen);
+BURROW_OWNS(ret) Error syscall_get_adapters_info(SyscallIpAdapterInfo *ai, uint32_t *ol);
+BURROW_OWNS(ret) Error syscall_get_addr_info_w(uint16_t *nodename, uint16_t *servicename, SyscallAddrinfoW *hints, SyscallAddrinfoW **result);
+BURROW_OWNS(ret) uint16_t *syscall_get_command_line(void);
+BURROW_OWNS(ret) Error syscall_get_computer_name(uint16_t *buf, uint32_t *n);
+BURROW_OWNS(ret) Error syscall_get_console_mode(SyscallHandle console, uint32_t *mode);
+uint32_t syscall_get_current_directory(uint32_t buflen, uint16_t *buf, Error *err);
+SyscallHandle syscall_get_current_process(Error *err);
+BURROW_OWNS(ret) uint16_t *syscall_get_environment_strings(Error *err);
+uint32_t syscall_get_environment_variable(uint16_t *name, uint16_t *buffer, uint32_t size, Error *err);
+BURROW_OWNS(ret) Error syscall_get_exit_code_process(SyscallHandle handle, uint32_t *exitcode);
+uint32_t syscall_get_file_attributes(uint16_t *name, Error *err);
+BURROW_OWNS(ret) Error syscall_get_file_attributes_ex(uint16_t *name, uint32_t level, uint8_t *info);
+BURROW_OWNS(ret) Error syscall_get_file_information_by_handle(SyscallHandle handle, SyscallByHandleFileInformation *data);
+uint32_t syscall_get_file_type(SyscallHandle filehandle, Error *err);
+uint32_t syscall_get_full_path_name(uint16_t *path, uint32_t buflen, uint16_t *buf, uint16_t **fname, Error *err);
+BURROW_OWNS(ret) SyscallHostent *syscall_get_host_by_name(Str name, Error *err);
+BURROW_OWNS(ret) Error syscall_get_if_entry(SyscallMibIfRow *pIfRow);
+BURROW_OWNS(ret) Error syscall_get_last_error(void);
+uint32_t syscall_get_length_sid(SyscallSID *sid);
+uint32_t syscall_get_long_path_name(uint16_t *path, uint16_t *buf, uint32_t buflen, Error *err);
+Uintptr syscall_get_proc_address(SyscallHandle module, Str procname, Error *err);
+BURROW_OWNS(ret) Error syscall_get_process_times(SyscallHandle handle, SyscallFiletime *creationTime, SyscallFiletime *exitTime, SyscallFiletime *kernelTime, SyscallFiletime *userTime);
+BURROW_OWNS(ret) SyscallProtoent *syscall_get_proto_by_name(Str name, Error *err);
+BURROW_OWNS(ret) SyscallServent *syscall_get_serv_by_name(Str name, Str proto, Error *err);
+uint32_t syscall_get_short_path_name(uint16_t *longpath, uint16_t *shortpath, uint32_t buflen, Error *err);
+SyscallHandle syscall_get_std_handle(Int stdhandle, Error *err);
+void syscall_get_system_time_as_file_time(SyscallFiletime *time);
+uint32_t syscall_get_temp_path(uint32_t buflen, uint16_t *buf, Error *err);
+uint32_t syscall_get_time_zone_information(SyscallTimezoneinformation *tzi, Error *err);
+BURROW_OWNS(ret) Error syscall_get_token_information(SyscallToken t, uint32_t infoClass, uint8_t *info, uint32_t infoLen, uint32_t *returnedLen);
+BURROW_OWNS(ret) Error syscall_get_user_name_ex(uint32_t nameFormat, uint16_t *nameBuffre, uint32_t *nSize);
+BURROW_OWNS(ret) Error syscall_get_user_profile_directory(SyscallToken t, uint16_t *dir, uint32_t *dirLen);
+uint32_t syscall_get_version(Error *err);
+BURROW_OWNS(ret) Error syscall_getsockopt(SyscallHandle s, int32_t level, int32_t optname, uint8_t *optval, int32_t *optlen);
+SyscallHandle syscall_load_library(Str libname, Error *err);
+SyscallHandle syscall_local_free(SyscallHandle hmem, Error *err);
+BURROW_OWNS(ret) Error syscall_lookup_account_name(uint16_t *systemName, uint16_t *accountName, SyscallSID *sid, uint32_t *sidLen, uint16_t *refdDomainName, uint32_t *refdDomainNameLen, uint32_t *use);
+BURROW_OWNS(ret) Error syscall_lookup_account_sid(uint16_t *systemName, SyscallSID *sid, uint16_t *name, uint32_t *nameLen, uint16_t *refdDomainName, uint32_t *refdDomainNameLen, uint32_t *use);
+Uintptr syscall_map_view_of_file(SyscallHandle handle, uint32_t access, uint32_t offsetHigh, uint32_t offsetLow, Uintptr length, Error *err);
+BURROW_OWNS(ret) Error syscall_move_file(uint16_t *from, uint16_t *to);
+BURROW_OWNS(ret) Error syscall_net_api_buffer_free(uint8_t *buf);
+BURROW_OWNS(ret) Error syscall_net_get_join_information(uint16_t *server, uint16_t **name, uint32_t *bufType);
+BURROW_OWNS(ret) Error syscall_net_user_get_info(uint16_t *serverName, uint16_t *userName, uint32_t level, uint8_t **buf);
+uint16_t syscall_ntohs(uint16_t netshort);
+SyscallHandle syscall_open_process(uint32_t da, bool inheritHandle, uint32_t pid, Error *err);
+BURROW_OWNS(ret) Error syscall_open_process_token(SyscallHandle h, uint32_t access, SyscallToken *token);
+BURROW_OWNS(ret) Error syscall_process32_first(SyscallHandle snapshot, SyscallProcessEntry32 *procEntry);
+BURROW_OWNS(ret) Error syscall_process32_next(SyscallHandle snapshot, SyscallProcessEntry32 *procEntry);
+BURROW_OWNS(ret) Error syscall_read_console(SyscallHandle console, uint16_t *buf, uint32_t toread, uint32_t *read, uint8_t *inputControl);
+BURROW_OWNS(ret) Error syscall_read_directory_changes(SyscallHandle handle, uint8_t *buf, uint32_t buflen, bool watchSubTree, uint32_t mask, uint32_t *retlen, SyscallOverlapped *overlapped, Uintptr completionRoutine);
+BURROW_OWNS(ret) Error syscall_reg_close_key(SyscallHandle key);
+BURROW_OWNS(ret) Error syscall_reg_open_key_ex(SyscallHandle key, uint16_t *subkey, uint32_t options, uint32_t desiredAccess, SyscallHandle *result);
+BURROW_OWNS(ret) Error syscall_reg_query_info_key(SyscallHandle key, uint16_t *class_, uint32_t *classLen, uint32_t *reserved, uint32_t *subkeysLen, uint32_t *maxSubkeyLen, uint32_t *maxClassLen, uint32_t *valuesLen, uint32_t *maxValueNameLen, uint32_t *maxValueLen, uint32_t *saLen, SyscallFiletime *lastWriteTime);
+BURROW_OWNS(ret) Error syscall_reg_query_value_ex(SyscallHandle key, uint16_t *name, uint32_t *reserved, uint32_t *valtype, uint8_t *buf, uint32_t *buflen);
+BURROW_OWNS(ret) Error syscall_remove_directory(uint16_t *path);
+BURROW_OWNS(ret) Error syscall_set_current_directory(uint16_t *path);
+BURROW_OWNS(ret) Error syscall_set_end_of_file(SyscallHandle handle);
+BURROW_OWNS(ret) Error syscall_set_environment_variable(uint16_t *name, uint16_t *value);
+BURROW_OWNS(ret) Error syscall_set_file_attributes(uint16_t *name, uint32_t attrs);
+BURROW_OWNS(ret) Error syscall_set_file_completion_notification_modes(SyscallHandle handle, uint8_t flags);
+uint32_t syscall_set_file_pointer(SyscallHandle handle, int32_t lowoffset, int32_t *highoffsetptr, uint32_t whence, Error *err);
+BURROW_OWNS(ret) Error syscall_set_file_time(SyscallHandle handle, SyscallFiletime *ctime, SyscallFiletime *atime, SyscallFiletime *wtime);
+BURROW_OWNS(ret) Error syscall_set_handle_information(SyscallHandle handle, uint32_t mask, uint32_t flags);
+BURROW_OWNS(ret) Error syscall_setsockopt(SyscallHandle s, int32_t level, int32_t optname, uint8_t *optval, int32_t optlen);
+BURROW_OWNS(ret) Error syscall_terminate_process(SyscallHandle handle, uint32_t exitcode);
+BURROW_OWNS(ret) Error syscall_translate_name(uint16_t *accName, uint32_t accNameFormat, uint32_t desiredNameFormat, uint16_t *translatedName, uint32_t *nSize);
+BURROW_OWNS(ret) Error syscall_transmit_file(SyscallHandle s, SyscallHandle handle, uint32_t bytesToWrite, uint32_t bytsPerSend, SyscallOverlapped *overlapped, SyscallTransmitFileBuffers *transmitFileBuf, uint32_t flags);
+BURROW_OWNS(ret) Error syscall_unmap_view_of_file(Uintptr addr);
+BURROW_OWNS(ret) Error syscall_virtual_lock(Uintptr addr, Uintptr length);
+BURROW_OWNS(ret) Error syscall_virtual_unlock(Uintptr addr, Uintptr length);
+BURROW_OWNS(ret) Error syscall_wsa_cleanup(void);
+int32_t syscall_wsa_enum_protocols(int32_t *protocols, SyscallWSAProtocolInfo *protocolBuffer, uint32_t *bufferLength, Error *err);
+BURROW_OWNS(ret) Error syscall_wsa_ioctl(SyscallHandle s, uint32_t iocc, uint8_t *inbuf, uint32_t cbif, uint8_t *outbuf, uint32_t cbob, uint32_t *cbbr, SyscallOverlapped *overlapped, Uintptr completionRoutine);
+BURROW_OWNS(ret) Error syscall_wsa_recv(SyscallHandle s, SyscallWSABuf *bufs, uint32_t bufcnt, uint32_t *recvd, uint32_t *flags, SyscallOverlapped *overlapped, uint8_t *croutine);
+BURROW_OWNS(ret) Error syscall_wsa_recv_from(SyscallHandle s, SyscallWSABuf *bufs, uint32_t bufcnt, uint32_t *recvd, uint32_t *flags, SyscallRawSockaddrAny *from, int32_t *fromlen, SyscallOverlapped *overlapped, uint8_t *croutine);
+BURROW_OWNS(ret) Error syscall_wsa_send(SyscallHandle s, SyscallWSABuf *bufs, uint32_t bufcnt, uint32_t *sent, uint32_t flags, SyscallOverlapped *overlapped, uint8_t *croutine);
+BURROW_OWNS(ret) Error syscall_wsa_send_to(SyscallHandle s, SyscallWSABuf *bufs, uint32_t bufcnt, uint32_t *sent, uint32_t flags, SyscallRawSockaddrAny *to, int32_t tolen, SyscallOverlapped *overlapped, uint8_t *croutine);
+BURROW_OWNS(ret) Error syscall_wsa_startup(uint32_t verreq, SyscallWSAData *data);
+uint32_t syscall_wait_for_single_object(SyscallHandle handle, uint32_t waitMilliseconds, Error *err);
+BURROW_OWNS(ret) Error syscall_write_console(SyscallHandle console, uint16_t *buf, uint32_t towrite, uint32_t *written, uint8_t *reserved);
+
+#elif defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
 
 /* darwin */
 

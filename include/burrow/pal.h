@@ -1441,13 +1441,14 @@ void pal_signal_note_sleep(void);
 uintptr_t pal_syscall(uintptr_t trap, const uintptr_t *args, int32_t n,
                       uintptr_t *errnum);
 
-/* Calls the C function at fn with the first n of args, n at most 18, each an
- * integer or a pointer passed as a whole register, and returns what came back
- * in the return register. nfixed is -1 for a function with only fixed
- * parameters, and for a variadic one such as open or fcntl it is how many come
- * before the "...", from 1 to 3, which matters because Apple's arm64 passes the
- * variadic ones on the stack. A variadic call takes at most 9. On 386 Windows
- * fn is __stdcall, as the Windows API is.
+/* Calls the C function at fn with the first n of args, n at most 18, or 42 on
+ * Windows as in Go's SyscallN, each an integer or a pointer passed as a whole
+ * register, and returns what came back in the return register. nfixed is -1
+ * for a function with only fixed parameters, and for a variadic one such as
+ * open or fcntl it is how many come before the "...", from 1 to 3, which
+ * matters because Apple's arm64 passes the variadic ones on the stack. A
+ * variadic call takes at most 9. On 386 Windows fn is __stdcall, as the
+ * Windows API is.
  *
  * *errnum is errno as it is straight after the call, or on Windows what
  * GetLastError says, having been set to 0 first, which is what Go's syscall
@@ -1464,6 +1465,18 @@ uintptr_t pal_call(void *fn, const uintptr_t *args, int32_t n, int32_t nfixed,
  * program does not need -ldl on an older glibc, and so it is on Windows,
  * wasip1 and Cosmopolitan. */
 BURROW_STATIC(ret) void *pal_libc_symbol(const char *name);
+
+/* LoadLibraryExW of name, a UTF-16 string with a NUL on the end, looking only
+ * in the system directory when system is true, which is what Go does for the
+ * DLLs its syscall package names, so that one dropped next to the program is
+ * not picked up instead. It returns the module, or 0 with GetLastError's code
+ * in *errnum. Anywhere but Windows it fails with ENOSYS. */
+uintptr_t pal_load_library(const uint16_t *name, bool system, uintptr_t *errnum);
+
+/* GetProcAddress: the function name in module, or NULL with GetLastError's
+ * code in *errnum. Anywhere but Windows it fails with ENOSYS. */
+BURROW_STATIC(ret) void *pal_proc_address(uintptr_t module, const char *name,
+                                          uintptr_t *errnum);
 
 /* ------------------------------------------------------------ dynamic loading
  *

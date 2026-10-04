@@ -98,6 +98,13 @@ void burrow__syscall_cstring_free(burrow__SyscallCString *h) {
 
 #if !defined(BURROW_OS_WINDOWS)
 
+/* Go's errnoErr on Unix, which is nil for 0. */
+Error burrow__syscall_errno_err(SyscallErrno e) {
+    if (e == 0)
+        return BURROW_NO_ERROR;
+    return syscall_errno_as_error(e, error_allocator());
+}
+
 /* ------------------------------------------------------------- by number */
 
 /* A system call by number. r2 is always 0: syscall(2) has nowhere to put the

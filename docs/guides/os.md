@@ -482,5 +482,5 @@ if (BURROW_OK(err))
     err = syscall_close(fd);
 ```
 
-`syscall_syscall`, `syscall_syscall6` and the raw ones make a call by its `SYSCALL_SYS_` number, the way Go's `Syscall` does, except that the second result is always 0, since the C library has nowhere to give it back. The functions Go writes by hand around these, such as `Open`, `Stat` and `Pipe` on Linux, are not here yet, and neither are Windows's. On Cosmopolitan and wasip1 the functions are Linux's, and every call fails with `ENOSYS`.
+`syscall_syscall`, `syscall_syscall6` and the raw ones make a call by its `SYSCALL_SYS_` number, the way Go's `Syscall` does, except that the second result is always 0, since the C library has nowhere to give it back. On Windows they are the ones Go generates from `zsyscall_windows.go`, and each finds its DLL procedure the first time it is called, through a `SyscallLazyDLL` and a `SyscallLazyProc`, and calls it with `syscall_syscall_n`. The functions Go writes by hand around these, such as `Open`, `Stat` and `Pipe` on Linux, are not here yet. On Cosmopolitan and wasip1 the functions are Linux's, and every call fails with `ENOSYS`.
 

@@ -41,6 +41,29 @@ typedef struct burrow__SyscallCString {
 uint8_t *burrow__syscall_cstring(burrow__SyscallCString *h, Str s, Error *err);
 void burrow__syscall_cstring_free(burrow__SyscallCString *h);
 
+/* Go's errnoErr: e as an Error from error_allocator. 0 is nil on Unix, and
+ * EINVAL on Windows, where a call can fail without saying why. */
+Error burrow__syscall_errno_err(SyscallErrno e);
+
+#if defined(BURROW_OS_WINDOWS)
+/* A string as UTF-16 with a 0 after it, for the length of one call, the way
+ * burrow__SyscallCString holds a C string: in buf when it fits and on the
+ * heap when it does not, EINVAL if s has a NUL in it. */
+typedef struct burrow__SyscallWString {
+    uint16_t *heap;
+    size_t size;
+    uint16_t buf[256];
+} burrow__SyscallWString;
+
+uint16_t *burrow__syscall_wstring(burrow__SyscallWString *h, Str s, Error *err);
+void burrow__syscall_wstring_free(burrow__SyscallWString *h);
+
+/* SyscallN with the arguments as an array, n of them, which args may be NULL
+ * for when n is 0. */
+Uintptr burrow__syscall_n(Uintptr fn, const Uintptr *args, Int n, Uintptr *r2,
+                          SyscallErrno *err);
+#endif
+
 #if defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO) || defined(BURROW_OS_WASI)
 /* Go's rawSyscallNoError, for a call that cannot fail. */
 Uintptr burrow__syscall_raw_syscall_no_error(Uintptr trap, Uintptr a1, Uintptr a2,

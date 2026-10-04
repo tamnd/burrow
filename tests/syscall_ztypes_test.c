@@ -163,7 +163,9 @@ static void TestTypesMatchSystem(TestingT *t) {
     SAME_OFFSET(SyscallStat_t, mtim, struct stat, st_mtim);
     SAME_SIZE(SyscallTimespec, struct timespec);
     SAME_SIZE(SyscallTimeval, struct timeval);
-    SAME_SIZE(SyscallRusage, struct rusage);
+    /* musl pads struct rusage with sixteen longs past what the kernel fills
+     * in, so it is the last field that has to line up. */
+    SAME_OFFSET(SyscallRusage, nivcsw, struct rusage, ru_nivcsw);
     SAME_SIZE(SyscallRawSockaddrInet4, struct sockaddr_in);
     SAME_SIZE(SyscallRawSockaddrInet6, struct sockaddr_in6);
     SAME_OFFSET(SyscallRawSockaddrInet6, scope_id, struct sockaddr_in6, sin6_scope_id);

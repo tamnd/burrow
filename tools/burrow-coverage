@@ -527,13 +527,21 @@ def select_target(code, macros):
     # taken, this branch is live).
     stack = []
     live = True
-    for i, line in enumerate(lines):
-        m = re.match(r"^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)$", line)
+    i = -1
+    while i + 1 < len(lines):
+        i += 1
+        m = re.match(r"^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)$", lines[i])
         if not m:
             if not live:
                 lines[i] = ""
             continue
         kw, rest = m.group(1), m.group(2).strip()
+        # A condition can go on past a backslash at the end of the line.
+        lines[i] = ""
+        while rest.endswith("\\") and i + 1 < len(lines):
+            i += 1
+            rest = rest[:-1] + " " + lines[i].strip()
+            lines[i] = ""
         if kw in ("if", "ifdef", "ifndef"):
             if kw == "ifdef":
                 rest = "defined(%s)" % rest
@@ -556,7 +564,6 @@ def select_target(code, macros):
         elif kw == "endif" and stack:
             stack.pop()
         live = stack[-1][2] if stack else True
-        lines[i] = ""
     return "\n".join(lines)
 
 

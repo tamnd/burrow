@@ -1017,6 +1017,15 @@ def classify(d, headers, waivers, reshaped, gotypes):
     if d.owner is not None:
         if headers.has_member(d.owner, d.member):
             return "renamed" if d.renamed else "present"
+        # A field named for a C or C++ keyword or a macro the system headers
+        # define, like Rlimit's Max, gets an underscore after it.
+        if headers.has_member(d.owner, d.member + "_"):
+            return "renamed"
+        # A zero-length array has no storage and C has no field for it in
+        # the middle of a struct, so the generated structs leave it out.
+        if re.search(r"\s\[0\]\w+$", d.text) and headers.has(d.owner):
+            d.why = "a zero-length array, which C has no field for"
+            return "reshaped"
         if d.alternative and headers.has(d.alternative) and (not d.getter or headers.opaque(d.owner)):
             return "present"
         return "missing"

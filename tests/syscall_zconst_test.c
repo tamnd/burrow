@@ -4,7 +4,7 @@
  * the system's headers, so every constant whose name is also a macro in those
  * headers has to come out the same as the macro. This includes the headers
  * Go's mkerrors.sh does, and tests/syscall_zconst_check.inc, which
- * tools/gen-syscall-consts.sh writes along with the constants, compares every
+ * tools/gen-syscall-tables.sh writes along with the constants, compares every
  * name both sides define. The two values are compared at the width of the
  * narrower of their two types, so a 32-bit value is the same whether one side
  * is signed and the other not, as Windows' HRESULT and HKEY constants are.

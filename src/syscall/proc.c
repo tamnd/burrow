@@ -242,6 +242,11 @@ SyscallRusage syscall_rusage_from_pal(const PalRusage *ru) {
 
 #else
 
+/* Sets f to v. The fields of Timeval and Rusage are as wide as the system's,
+ * 32 or 64 bits, so the conversion depends on the platform, as Go's
+ * setTimeval does. */
+#define SET_FIELD(f, v) ((f) = _Generic((f), int32_t: (int32_t)(v), int64_t: (int64_t)(v)))
+
 int64_t syscall_timeval_nano(const SyscallTimeval *tv) {
     return (int64_t)((uint64_t)tv->sec * 1000000000U + (uint64_t)tv->usec * 1000U);
 }
@@ -258,30 +263,34 @@ SyscallTimeval syscall_nsec_to_timeval(int64_t nsec) {
         usec += 1000000;
         sec--;
     }
-    SyscallTimeval tv = {sec, usec};
+    SyscallTimeval tv;
+    memset(&tv, 0, sizeof tv);
+    SET_FIELD(tv.sec, sec);
+    SET_FIELD(tv.usec, usec);
     return tv;
 }
 
 SyscallRusage syscall_rusage_from_pal(const PalRusage *ru) {
     SyscallRusage r;
-    r.utime.sec = ru->utime_sec;
-    r.utime.usec = ru->utime_usec;
-    r.stime.sec = ru->stime_sec;
-    r.stime.usec = ru->stime_usec;
-    r.maxrss = ru->maxrss;
-    r.ixrss = ru->ixrss;
-    r.idrss = ru->idrss;
-    r.isrss = ru->isrss;
-    r.minflt = ru->minflt;
-    r.majflt = ru->majflt;
-    r.nswap = ru->nswap;
-    r.inblock = ru->inblock;
-    r.oublock = ru->oublock;
-    r.msgsnd = ru->msgsnd;
-    r.msgrcv = ru->msgrcv;
-    r.nsignals = ru->nsignals;
-    r.nvcsw = ru->nvcsw;
-    r.nivcsw = ru->nivcsw;
+    memset(&r, 0, sizeof r);
+    SET_FIELD(r.utime.sec, ru->utime_sec);
+    SET_FIELD(r.utime.usec, ru->utime_usec);
+    SET_FIELD(r.stime.sec, ru->stime_sec);
+    SET_FIELD(r.stime.usec, ru->stime_usec);
+    SET_FIELD(r.maxrss, ru->maxrss);
+    SET_FIELD(r.ixrss, ru->ixrss);
+    SET_FIELD(r.idrss, ru->idrss);
+    SET_FIELD(r.isrss, ru->isrss);
+    SET_FIELD(r.minflt, ru->minflt);
+    SET_FIELD(r.majflt, ru->majflt);
+    SET_FIELD(r.nswap, ru->nswap);
+    SET_FIELD(r.inblock, ru->inblock);
+    SET_FIELD(r.oublock, ru->oublock);
+    SET_FIELD(r.msgsnd, ru->msgsnd);
+    SET_FIELD(r.msgrcv, ru->msgrcv);
+    SET_FIELD(r.nsignals, ru->nsignals);
+    SET_FIELD(r.nvcsw, ru->nvcsw);
+    SET_FIELD(r.nivcsw, ru->nivcsw);
     return r;
 }
 

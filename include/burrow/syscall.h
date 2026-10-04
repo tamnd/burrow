@@ -20,7 +20,8 @@
  * fs_path_error_timeout too.
  *
  * Signal is here too, with its names, and WaitStatus and Rusage, which are what
- * os.ProcessState is made of.
+ * os.ProcessState is made of. The rest of syscall's constants and types are
+ * generated from Go's tables, in syscall/zconst.h and syscall/ztypes.h.
  *
  * Derived from Go's src/syscall/syscall_unix.go, syscall_linux.go and
  * syscall_bsd.go, and on Windows syscall_windows.go and types_windows.go.
@@ -58,6 +59,7 @@ typedef Int SyscallSignal;
 
 #include "burrow/syscall/zconst.h"
 #include "burrow/syscall/zerrors.h"
+#include "burrow/syscall/ztypes.h"
 
 /* The descriptor of Errno, for errors_as. What errors_as hands back points at
  * a SyscallErrno. */
@@ -171,11 +173,8 @@ Int syscall_wait_status_trap_cause(SyscallWaitStatus w);
 /* -------------------------------------------------------- resource usage */
 
 #if defined(BURROW_OS_WINDOWS)
-/* syscall.Filetime: 100 nanosecond intervals since 1601, in two halves. */
-typedef struct SyscallFiletime {
-    uint32_t low_date_time;
-    uint32_t high_date_time;
-} SyscallFiletime;
+/* syscall.Filetime, in ztypes.h, is 100 nanosecond intervals since 1601, in
+ * two halves. */
 
 /* Filetime.Nanoseconds: the time since the Unix epoch in nanoseconds. */
 int64_t syscall_filetime_nanoseconds(const SyscallFiletime *ft);
@@ -183,21 +182,13 @@ int64_t syscall_filetime_nanoseconds(const SyscallFiletime *ft);
 /* NsecToFiletime: the other way. */
 SyscallFiletime syscall_nsec_to_filetime(int64_t nsec);
 
-/* syscall.Rusage on Windows: what GetProcessTimes says. The creation and exit
- * times are dates, and the kernel and user times are amounts. */
-typedef struct SyscallRusage {
-    SyscallFiletime creation_time;
-    SyscallFiletime exit_time;
-    SyscallFiletime kernel_time;
-    SyscallFiletime user_time;
-} SyscallRusage;
+/* syscall.Rusage on Windows, in ztypes.h, is what GetProcessTimes says. The
+ * creation and exit times are dates, and the kernel and user times are
+ * amounts. */
 #else
-/* syscall.Timeval. Go sizes the fields to the system's struct timeval, and
- * these are 64 bits everywhere. */
-typedef struct SyscallTimeval {
-    int64_t sec;
-    int64_t usec;
-} SyscallTimeval;
+/* syscall.Timeval and syscall.Rusage are in ztypes.h, with the system's own
+ * field sizes, which are 32 bits on most 32-bit systems. Rusage is what wait4
+ * says a child used, and the fields a system does not keep are 0. */
 
 /* Timeval.Nano and TimevalToNsec: tv in nanoseconds. */
 int64_t syscall_timeval_nano(const SyscallTimeval *tv);
@@ -206,26 +197,6 @@ int64_t syscall_timeval_to_nsec(SyscallTimeval tv);
 /* NsecToTimeval, which rounds up to the next microsecond, as Go's does. */
 SyscallTimeval syscall_nsec_to_timeval(int64_t nsec);
 
-/* syscall.Rusage: what wait4 says a child used. The fields a system does not
- * keep are 0. */
-typedef struct SyscallRusage {
-    SyscallTimeval utime;
-    SyscallTimeval stime;
-    int64_t maxrss;
-    int64_t ixrss;
-    int64_t idrss;
-    int64_t isrss;
-    int64_t minflt;
-    int64_t majflt;
-    int64_t nswap;
-    int64_t inblock;
-    int64_t oublock;
-    int64_t msgsnd;
-    int64_t msgrcv;
-    int64_t nsignals;
-    int64_t nvcsw;
-    int64_t nivcsw;
-} SyscallRusage;
 
 /* wait4(2): wait for pid and give back its id. wstatus and rusage may be
  * NULL, and options are the system's own wait4 flags. A signal that arrives

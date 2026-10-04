@@ -55,12 +55,18 @@ static PalTzInfo aus(void) {
     return i;
 }
 
+/* The location Local was last made from. Local keeps using its zones, so it
+ * is freed only once another one takes its place. */
+static TimeLocation *forced_local;
+
 /* ForceUSPacificFromTZIForTesting and ForceAusFromTZIForTesting. */
 static void force_local_from_tzi(TestingT *t, PalTzInfo i) {
     TimeLocation *l = burrow__time_location_from_tzi(heap_allocator(), &i);
     if (l == NULL)
         testing_t_fatalf_v(t, "initLocalFromTZI: out of memory");
     burrow__time_force_local(l);
+    time_location_free(forced_local);
+    forced_local = l;
 }
 
 static void test_zone_abbr(TestingT *t) {

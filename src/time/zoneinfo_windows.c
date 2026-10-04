@@ -220,7 +220,7 @@ static int64_t tz_pseudo_unix(Int year, const PalTzDate *d) {
         day += week * 7;
     } else {
         /* "Last" instance of the day. */
-        day += 4 * 7;
+        day += (Int)4 * 7;
         if (day > burrow__time_days_in((TimeMonth)d->month, year))
             day -= 7;
     }

@@ -409,3 +409,24 @@ bool same = errors_is(again, os_err_not_exist); /* true */
 ```
 
 Go suggests `errors_is` with `os_err_not_exist`, `os_err_exist` and `os_err_permission` for new code. `os_is_not_exist` and the other older predicates are here too, and they only look one level into the error, as Go's do. Use `errors_as` with `TYPE_SYSCALL_ERRNO` when you need the number itself.
+
+## System constants
+
+Go's `syscall` package has thousands of constants: address families, socket options, open flags, ioctl requests, system call numbers and the sizes of the system's structs. They are all in `burrow/syscall.h` with a `SYSCALL_` prefix, and the value is the one Go has for the system and architecture you build for, so they differ between machines the way the system's own do:
+
+<!-- example: ../examples/syscall/consts.c#consts -->
+```c
+Int family = SYSCALL_AF_INET6;   /* 10 on Linux, 30 on macOS, 23 on Windows */
+Int kind = SYSCALL_SOCK_STREAM;  /* 1, but 2 on Linux on MIPS */
+Int proto = SYSCALL_IPPROTO_TCP; /* 6 */
+```
+
+A name Go writes in capitals keeps its spelling, so `IPV6_V6ONLY` is `SYSCALL_IPV6_V6ONLY`. The others are split into words like every other name here, so `SizeofSockaddrInet6` is `SYSCALL_SIZEOF_SOCKADDR_INET6`:
+
+<!-- example: ../examples/syscall/consts.c#unix -->
+```c
+Int size = SYSCALL_SIZEOF_SOCKADDR_INET6; /* 28 */
+Int call = SYSCALL_SYS_GETPID; /* 39 on Linux on amd64, 172 on arm64, 20 on macOS */
+```
+
+The values come from Go's tables, not from your system's headers. Go's `syscall` is frozen, so a few counts that newer kernels raised, such as `SYSCALL_SOMAXCONN`, are the older number, as they are in Go. `tests/syscall_zconst_test.c` compares every name that both sides define and lists the ones that differ, with the reason.

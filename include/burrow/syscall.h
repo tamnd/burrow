@@ -56,6 +56,7 @@ typedef Uintptr SyscallErrno;
  * the numbers Go gives them there. */
 typedef Int SyscallSignal;
 
+#include "burrow/syscall/zconst.h"
 #include "burrow/syscall/zerrors.h"
 
 /* The descriptor of Errno, for errors_as. What errors_as hands back points at

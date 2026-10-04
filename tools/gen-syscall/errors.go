@@ -1,3 +1,5 @@
+//go:build ignore
+
 // Command errors writes include/burrow/syscall/zerrors.h and
 // src/syscall/zerrors.c from Go's own syscall tables: the E and SIG constants
 // and the message tables behind Errno.Error and Signal.String, for every

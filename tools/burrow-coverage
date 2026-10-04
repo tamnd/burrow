@@ -306,7 +306,13 @@ def map_by_rule(d):
     m = re.match(r"^const (\w+)", text)
     if m:
         d.key = m.group(0)
-        d.cname = (seg + "_" + snake(m.group(1))).upper()
+        # A name with no lower case, like syscall's IPV6_V6ONLY, is already
+        # the way C spells it, and splitting it into words would change it.
+        name = m.group(1)
+        if name == name.upper():
+            d.cname = (seg + "_" + name).upper()
+        else:
+            d.cname = (seg + "_" + snake(name)).upper()
         return
     m = re.match(r"^var (\w+)", text)
     if m:

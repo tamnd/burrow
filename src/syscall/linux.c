@@ -1,10 +1,10 @@
 /* The Linux functions Go writes by hand rather than generates: the path calls
  * that become their at forms with AT_FDCWD, Faccessat with the checks the
- * kernel's faccessat leaves out, the ptrace helpers, ParseDirent, and the
- * calls a few architectures make their own way.
+ * kernel's faccessat leaves out, the ptrace helpers, and the calls a few
+ * architectures make their own way.
  *
  * Derived from Go's src/syscall/syscall_linux.go, the syscall_linux_ file for
- * each architecture, dirent.go, rlimit.go and flock_linux.go.
+ * each architecture, rlimit.go and flock_linux.go.
  * Go source: go1.27.1.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
@@ -625,73 +625,6 @@ Error syscall_fcntl_flock(Uintptr fd, Int cmd, SyscallFlock_t *lk) {
 
 Int syscall_read_dirent(Int fd, Slice buf, Error *err) {
     return syscall_getdents(fd, buf, err);
-}
-
-/* Go's readInt: the size bytes at off in b, in the machine's order, and
- * false if b is too short. */
-static bool linux_read_int(Slice b, size_t off, size_t size, uint64_t *u) {
-    if ((size_t)b.len < off + size)
-        return false;
-    const uint8_t *p = (const uint8_t *)b.p + off;
-    uint64_t v = 0;
-    for (size_t i = 0; i < size; i++) {
-#if BURROW_BIG_ENDIAN
-        v = v << 8 | p[i];
-#else
-        v |= (uint64_t)p[i] << (8 * i);
-#endif
-    }
-    *u = v;
-    return true;
-}
-
-Int syscall_parse_dirent(Alloc *a, Slice buf, Int max, Slice names, Int *count,
-                         Slice *newnames) {
-    const size_t namoff = offsetof(SyscallDirent, name);
-    Int origlen = buf.len;
-    Int c = 0;
-    while (max != 0 && buf.len > 0) {
-        uint64_t reclen = 0;
-        if (!linux_read_int(buf, offsetof(SyscallDirent, reclen),
-                            sizeof(((SyscallDirent *)0)->reclen), &reclen) ||
-            reclen > (uint64_t)buf.len) {
-            BURROW_OUT(count, c);
-            BURROW_OUT(newnames, names);
-            return origlen;
-        }
-        Slice rec = {buf.p, (Int)reclen, (Int)reclen, buf.elem};
-        buf.p = (uint8_t *)buf.p + reclen;
-        buf.len -= (Int)reclen;
-        buf.cap -= (Int)reclen;
-        uint64_t ino = 0;
-        if (!linux_read_int(rec, offsetof(SyscallDirent, ino),
-                            sizeof(((SyscallDirent *)0)->ino), &ino))
-            break;
-        /* Linux keeps entries whose inode is 0, where the BSDs skip them. */
-        if (reclen < namoff)
-            break;
-        uint64_t namlen = reclen - namoff;
-        if (namoff + namlen > (uint64_t)rec.len)
-            break;
-        const Byte *name = (const Byte *)rec.p + namoff;
-        const Byte *nul = (const Byte *)memchr(name, 0, (size_t)namlen);
-        Int len = nul != NULL ? (Int)(nul - name) : (Int)namlen;
-        if ((len == 1 && name[0] == '.') ||
-            (len == 2 && name[0] == '.' && name[1] == '.'))
-            continue;
-        Byte *copy = (Byte *)mem_alloc_nozero(a, (size_t)len, 1);
-        if (copy == NULL && len > 0)
-            break;
-        if (len > 0)
-            memcpy(copy, name, (size_t)len);
-        Str s = str_from_bytes(copy, len);
-        max--;
-        c++;
-        names = slice_append(a, names, &s, 1);
-    }
-    BURROW_OUT(count, c);
-    BURROW_OUT(newnames, names);
-    return origlen - buf.len;
 }
 
 /* ---------------------------------------------------------------- ptrace */

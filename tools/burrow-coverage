@@ -389,6 +389,19 @@ def read_api(api_dir, targets):
     if not files:
         raise SystemExit("%s: no go1*.txt in %s" % (PROG, api_dir))
     want = set(targets)
+    # except.txt has what Go has taken out or changed since it was in a
+    # go1*.txt, like FreeBSD's Mknod that took an int, which is not there to
+    # declare any more.
+    gone = set()
+    exc = os.path.join(api_dir, "except.txt")
+    if os.path.exists(exc):
+        with open(exc) as fh:
+            for line in fh:
+                m = LINE.match(line.rstrip("\n"))
+                if m:
+                    path, plat, text = m.groups()
+                    plat = None if plat is None else re.sub(r"-cgo$", "", plat)
+                    gone.add((path, plat, text))
     seen = {}
     by_pkg = {}
     for f in files:
@@ -400,6 +413,8 @@ def read_api(api_dir, targets):
                 path, plat, text = m.groups()
                 plat = None if plat is None else re.sub(r"-cgo$", "", plat)
                 if plat is not None and plat not in want:
+                    continue
+                if (path, plat, text) in gone:
                     continue
                 d = seen.get((path, text))
                 if d is None:

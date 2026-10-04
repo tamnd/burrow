@@ -938,6 +938,86 @@ BURROW_OWNS(ret) Error syscall_sync_file_range(Int fd, int64_t off, int64_t n,
 #endif
 #endif
 
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS) || defined(BURROW_OS_FREEBSD)
+/* --------------------------------------------------------------------- BSD */
+
+/* Getwd: the working directory, from a, up to its first NUL. An empty one is
+ * EINVAL. */
+BURROW_OWNS(ret) Str syscall_getwd(Alloc *a, Error *err);
+
+/* Getgroups: the supplementary group ids, a Slice of Int from a, nil if there
+ * are none. More than 1000 is EINVAL. */
+BURROW_OWNS(ret) Slice syscall_getgroups(Alloc *a, Error *err);
+
+/* Pipe: the two ends in p, a Slice of Int that has to have a length of 2, or
+ * it is EINVAL. FreeBSD has Pipe2 too, which Pipe is with no flags. */
+BURROW_OWNS(ret) Error syscall_pipe(Slice p);
+#if defined(BURROW_OS_FREEBSD)
+BURROW_OWNS(ret) Error syscall_pipe2(Slice p, Int flags);
+#endif
+
+/* Utimes and Futimes take a Slice of two SyscallTimeval, and UtimesNano two
+ * SyscallTimespec, the access time and then the modification time. Any other
+ * length is EINVAL. UtimesNano uses utimensat, and utimes to the microsecond
+ * only when that is ENOSYS. */
+BURROW_OWNS(ret) Error syscall_utimes(Str path, Slice tv);
+BURROW_OWNS(ret) Error syscall_utimes_nano(Str path, Slice ts);
+BURROW_OWNS(ret) Error syscall_futimes(Int fd, Slice tv);
+
+/* Getdirentries: the dirents of directory fd into buf, and how many bytes they
+ * took. FreeBSD keeps where it got to in *basep, and gives EIO when that does
+ * not fit a 32-bit Uintptr. macOS has no such call for programs, so it is
+ * built from readdir_r as in Go, keeps how many entries it has given back as
+ * fd's offset, and does not use basep. ReadDirent is Getdirentries with a base
+ * of its own. ParseDirent is as on Linux, and leaves out entries whose inode
+ * is 0. */
+Int syscall_getdirentries(Int fd, Slice buf, Uintptr *basep, Error *err);
+Int syscall_read_dirent(Int fd, Slice buf, Error *err);
+Int syscall_parse_dirent(Alloc *a, Slice buf, Int max, Slice names, Int *count,
+                         Slice *newnames);
+
+/* Kevent: kevent(2) with the changes and events Slices of SyscallKevent_t,
+ * either of which may be empty, and NULL timeout to wait for ever. SetKevent
+ * fills in what it is for: fd, the filter and the flags. */
+Int syscall_kevent(Int kq, Slice changes, Slice events, SyscallTimespec *timeout,
+                   Error *err);
+void syscall_set_kevent(SyscallKevent_t *k, Int fd, Int mode, Int flags);
+
+/* Sysctl: the value of a sysctl by name, such as "kern.ostype", from a,
+ * without its NUL. SysctlUint32 reads one that is four bytes, and anything
+ * else is EIO. */
+BURROW_OWNS(ret) Str syscall_sysctl(Alloc *a, Str name, Error *err);
+uint32_t syscall_sysctl_uint32(Str name, Error *err);
+
+/* Setrlimit: setrlimit(2). */
+BURROW_OWNS(ret) Error syscall_setrlimit(Int resource, SyscallRlimit *rlim);
+
+/* FcntlFlock: fcntl with F_GETLK, F_SETLK or F_SETLKW. */
+BURROW_OWNS(ret) Error syscall_fcntl_flock(Uintptr fd, Int cmd, SyscallFlock_t *lk);
+
+/* Sendfile: up to count bytes of infd from *offset to the socket outfd, and
+ * how many it sent, which can be more than 0 when it fails too. offset may not
+ * be NULL, as it may not be in Go, and is not moved. */
+Int syscall_sendfile(Int outfd, Int infd, int64_t *offset, Int count, Error *err);
+
+/* Getfsstat: what is mounted, into buf, a Slice of SyscallStatfs_t, and how
+ * many there are. An empty buf only counts them. flags is MNT_WAIT or
+ * MNT_NOWAIT. */
+Int syscall_getfsstat(Slice buf, Int flags, Error *err);
+
+#if defined(BURROW_OS_FREEBSD)
+/* Stat and Lstat: Fstatat with AT_FDCWD, and AT_SYMLINK_NOFOLLOW for Lstat.
+ * Mknod: mknodat with AT_FDCWD. */
+BURROW_OWNS(ret) Error syscall_stat(Str path, SyscallStat_t *st);
+BURROW_OWNS(ret) Error syscall_lstat(Str path, SyscallStat_t *st);
+BURROW_OWNS(ret) Error syscall_mknod(Str path, uint32_t mode, uint64_t dev);
+#else
+/* PtraceAttach and PtraceDetach: ptrace(2) with PT_ATTACH and PT_DETACH. */
+BURROW_OWNS(ret) Error syscall_ptrace_attach(Int pid);
+BURROW_OWNS(ret) Error syscall_ptrace_detach(Int pid);
+#endif
+#endif
+
 #if defined(BURROW_OS_WINDOWS)
 /* ------------------------------------------------------------ Windows DLLs */
 

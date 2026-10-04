@@ -188,33 +188,44 @@ Uintptr burrow__syscall_raw_syscall_no_error(Uintptr trap, Uintptr a1, Uintptr a
 
 void *burrow__syscall_libc_cache[BURROW__SYSCALL_NLIBC];
 
-/* How a libSystem function says it failed: -1 as a C int, -1 as a long, or a
- * NULL pointer. */
-typedef enum { FAIL_INT, FAIL_LONG, FAIL_PTR } Fail;
-
-static Uintptr libc(Uintptr fn, const uintptr_t *args, int32_t n, Fail fail,
-                    Uintptr *r2, SyscallErrno *err) {
+Uintptr burrow__syscall_libc_call(void **slot, const char *name, int32_t nfixed,
+                                  const uintptr_t *args, int32_t n,
+                                  burrow__SyscallFail fail, Uintptr *r2,
+                                  SyscallErrno *err) {
     BURROW_OUT(r2, 0);
-    if (fn >= BURROW__SYSCALL_NLIBC) {
-        BURROW_OUT(err, SYSCALL_ENOSYS);
-        return ~(Uintptr)0;
-    }
-    void *f = burrow__atomic_load_acquire_ptr(&burrow__syscall_libc_cache[fn]);
+    void *f = burrow__atomic_load_acquire_ptr(slot);
     if (f == NULL) {
-        f = pal_libc_symbol(burrow__syscall_libc[fn].name);
+        f = pal_libc_symbol(name);
         if (f == NULL) {
             BURROW_OUT(err, SYSCALL_ENOSYS);
             return ~(Uintptr)0;
         }
-        burrow__atomic_store_release_ptr(&burrow__syscall_libc_cache[fn], f);
+        burrow__atomic_store_release_ptr(slot, f);
     }
     uintptr_t e = 0;
-    Uintptr r = (Uintptr)pal_call(f, args, n, burrow__syscall_libc[fn].nfixed, &e);
-    bool failed = fail == FAIL_INT    ? (int32_t)r == -1
-                  : fail == FAIL_LONG ? r == ~(Uintptr)0
-                                      : r == 0;
+    Uintptr r = (Uintptr)pal_call(f, args, n, nfixed, &e);
+    bool failed = fail == BURROW__SYSCALL_FAIL_INT    ? (int32_t)r == -1
+                  : fail == BURROW__SYSCALL_FAIL_LONG ? r == ~(Uintptr)0
+                                                      : r == 0;
     BURROW_OUT(err, failed ? (SyscallErrno)e : 0);
     return r;
+}
+
+typedef burrow__SyscallFail Fail;
+#define FAIL_INT BURROW__SYSCALL_FAIL_INT
+#define FAIL_LONG BURROW__SYSCALL_FAIL_LONG
+#define FAIL_PTR BURROW__SYSCALL_FAIL_PTR
+
+static Uintptr libc(Uintptr fn, const uintptr_t *args, int32_t n, Fail fail,
+                    Uintptr *r2, SyscallErrno *err) {
+    if (fn >= BURROW__SYSCALL_NLIBC) {
+        BURROW_OUT(r2, 0);
+        BURROW_OUT(err, SYSCALL_ENOSYS);
+        return ~(Uintptr)0;
+    }
+    return burrow__syscall_libc_call(
+        &burrow__syscall_libc_cache[fn], burrow__syscall_libc[fn].name,
+        burrow__syscall_libc[fn].nfixed, args, n, fail, r2, err);
 }
 
 Uintptr burrow__syscall_syscall(Uintptr fn, Uintptr a1, Uintptr a2, Uintptr a3,

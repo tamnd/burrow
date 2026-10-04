@@ -21,4 +21,7 @@ tests/xtext_bidirule_test_gen.h
 tests/embedtest/*_embed.c
 src/syscall/zerrors.c
 include/burrow/syscall/zerrors.h
+src/syscall/zsyscall.c
+src/syscall/zsyscall.h
+include/burrow/syscall/zsyscall.h
 src/time/tzdata_zip.c

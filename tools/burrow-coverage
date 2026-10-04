@@ -490,7 +490,13 @@ class Headers:
         params = split_params(m.group(3))
         if params == ["void"]:
             params = []
-        self.protos.setdefault(m.group(2), (ret, [c_param(x) for x in params]))
+        # A function the systems declare differently, in the branches of an
+        # #if, has one prototype for each, and any of them may be the one Go's
+        # line is about.
+        proto = (ret, [c_param(x) for x in params])
+        protos = self.protos.setdefault(m.group(2), [])
+        if proto not in protos:
+            protos.append(proto)
 
     def read_structs(self, code):
         # typedef struct Tag { ... } Name; and struct Name { ... };, with the
@@ -556,8 +562,8 @@ class Headers:
             self.has_member(e, member, seen) for e in self.embeds.get(owner, ()) if e not in seen
         )
 
-    def proto(self, name):
-        return self.protos.get(name)
+    def protos_of(self, name):
+        return self.protos.get(name, [])
 
 
 def strip_annotations(text):
@@ -762,12 +768,20 @@ def spelled(g, allowed):
 
 
 def check_signature(d, headers, gotypes):
-    """None if the prototype has the shape the rules give it, or what is wrong."""
+    """None if a prototype has the shape the rules give it, or what is wrong
+    with the first."""
     if d.cname is None or d.renamed:
         return None
-    proto = headers.proto(d.cname)
-    if proto is None:
-        return None
+    first = None
+    for proto in headers.protos_of(d.cname):
+        why = check_proto(d, proto, gotypes)
+        if why is None:
+            return None
+        first = first or why
+    return first
+
+
+def check_proto(d, proto, gotypes):
     # The manifest ends a line added after Go 1.0 with the proposal it came
     # from, as in #57928, which is not part of the type.
     text = re.sub(r"\s+#\d+$", "", d.text)

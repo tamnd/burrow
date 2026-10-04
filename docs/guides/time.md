@@ -76,7 +76,7 @@ Time there = time_in(t, ny);
 
 `time_utc_loc` and `time_local_loc` are Go's `time.UTC` and `time.Local`. Local follows `$TZ` the way Go's does on Unix: unset means `/etc/localtime`, empty means UTC, and anything else is a name to load.
 
-Windows has no zoneinfo directory, and neither do plenty of small containers, so there `time_load_location` fails for every name unless the program carries the database itself. The program above falls back to a fixed zone for that reason. Local is UTC on Windows for now, since Go reads it from the registry and that part is still to come.
+Windows has no zoneinfo directory, and neither do plenty of small containers, so there `time_load_location` fails for every name unless the program carries the database itself. The program above falls back to a fixed zone for that reason. Local on Windows comes from the system's time zone settings rather than the database, the way Go does it: Windows gives the offsets and the rule for when daylight time starts and ends, and that rule is applied to the hundred years either side of this one. The zone names are the abbreviations Go uses for each Windows zone, such as PST and PDT for Pacific Standard Time.
 
 ## Carrying the database
 
@@ -361,10 +361,6 @@ err = time_unmarshal_json(&back, a, j);
 ```
 
 The text and JSON encodings are RFC 3339 with as many fraction digits as the time needs. A year outside 0 to 9999 or an offset of 24 hours or more is an error, since RFC 3339 cannot write them. An offset that is not a whole minute loses its seconds, in Go as here. `Time` has a descriptor, `TYPE_TIME`, with these as its methods, so `json_marshal` and `fmt` handle a `Time` without being told.
-
-## What Go has that this does not, yet
-
-The Windows registry lookup for Local.
 
 ## See also
 

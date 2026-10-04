@@ -1406,9 +1406,18 @@ void burrow__time_force_local(TimeLocation *l) {
 
 #if defined(BURROW_OS_WINDOWS)
 
+/* Go's initLocal on Windows, which does not look at $TZ. */
 static void tz_init_local(void *arg) {
     (void)arg;
-    tz_local_loc.name = BURROW_S("UTC");
+    PalTzInfo i;
+    TimeLocation *l = NULL;
+    if (pal_tz_info(&i, NULL))
+        l = burrow__time_location_from_tzi(heap_allocator(), &i);
+    if (l == NULL) {
+        tz_local_loc.name = BURROW_S("UTC");
+        return;
+    }
+    tz_set_local(l, BURROW_S("Local"));
 }
 
 #else

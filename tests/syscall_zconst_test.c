@@ -136,6 +136,10 @@ static const KnownDifference known_differences[] = {
     {"MS_RMT_MASK", "newer kernel"},
     /* 4096 since Linux 5.4. */
     {"SOMAXCONN", "newer kernel"},
+    /* Go's tables for some ports, such as s390x, are older than amd64's and
+     * miss flags newer kernels added to these masks. */
+    {"RTAX_FEATURE_MASK", "newer kernel"},
+    {"RTNH_COMPARE_MASK", "newer kernel"},
     /* Go's arm64 table has amd64's value, which has amd64's O_DIRECTORY bit
      * in it. */
     {"O_TMPFILE", "amd64's value in Go's table"},

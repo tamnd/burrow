@@ -455,3 +455,32 @@ Int size = (Int)sizeof(SyscallStat_t); /* 144 on Linux on amd64, 128 on arm64 */
 ```
 
 The types Go writes with a Go string, slice or func in them, such as `SysProcAttr`, `SockaddrUnix` and `NetlinkMessage`, are not here, since C has nothing to lay them out the same way. `tests/syscall_ztypes_test.c` checks every size and field offset against Go's numbers for the platform it runs on, and compares a few of the common ones with the system's own structs.
+
+## System calls
+
+The system calls Go's `syscall` makes with its generated wrappers are in `burrow/syscall.h` as well, one function each, named after Go's: `Getpid` is `syscall_getpid`, `Chdir` is `syscall_chdir` and `Fchmod` is `syscall_fchmod`. They take what Go's take, in the same order, and make the same call, on Linux and FreeBSD by number and on macOS through libSystem, as Go does:
+
+<!-- example: ../examples/syscall/calls.c#getpid -->
+```c
+Int pid = syscall_getpid();
+```
+
+A Go string is a `Str`, which goes to the system with a NUL after it, and one that already has a NUL in it fails with `EINVAL`, as it does in Go. A function that can fail returns its `Error`, or takes an `Error *` last when it has a result as well. The error is the `SyscallErrno` the system gave:
+
+<!-- example: ../examples/syscall/calls.c#chdir -->
+```c
+Error err = syscall_chdir(BURROW_S("/no/such/dir"));
+const SyscallErrno *e = errors_as(err, TYPE_SYSCALL_ERRNO);
+if (e != NULL && *e == SYSCALL_ENOENT)
+    printf("no such directory\n");
+```
+
+<!-- example: ../examples/syscall/calls.c#dup -->
+```c
+Int fd = syscall_dup(1, &err);
+if (BURROW_OK(err))
+    err = syscall_close(fd);
+```
+
+`syscall_syscall`, `syscall_syscall6` and the raw ones make a call by its `SYSCALL_SYS_` number, the way Go's `Syscall` does, except that the second result is always 0, since the C library has nowhere to give it back. The functions Go writes by hand around these, such as `Open`, `Stat` and `Pipe` on Linux, are not here yet, and neither are Windows's. On Cosmopolitan and wasip1 the functions are Linux's, and every call fails with `ENOSYS`.
+

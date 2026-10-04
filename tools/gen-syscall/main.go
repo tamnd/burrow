@@ -1,9 +1,11 @@
 //go:build ignore
 
 // Command gen-syscall writes syscall's generated tables:
-// include/burrow/syscall/zconst.h, the constants, and
-// include/burrow/syscall/ztypes.h, the types, for every system and
-// architecture burrow builds for, and the tests/ files that check them.
+// include/burrow/syscall/zconst.h, the constants,
+// include/burrow/syscall/ztypes.h, the types, and
+// include/burrow/syscall/zsyscall.h with src/syscall/zsyscall.c, the
+// functions, for every system and architecture burrow builds for, and the
+// tests/ files that check them.
 // tools/gen-syscall-tables.sh runs it.
 //
 // Both come from type checking Go's syscall package from source once for
@@ -38,6 +40,7 @@ func main() {
 
 	cw := newConstWriter(root, ver)
 	tw := newTypeWriter(root, ver, verbose)
+	fw := newCallWriter(root, ver, verbose)
 	for si, sys := range systems {
 		var archs []string
 		if sys.goos == "windows" {
@@ -61,7 +64,9 @@ func main() {
 		}
 		cw.system(si, plats)
 		tw.system(si, plats)
+		fw.system(sys.goos, plats)
 	}
 	cw.finish(root, ver, filepath.Join(root, "include/burrow/syscall/zconst.h"))
 	tw.finish(root, filepath.Join(root, "include/burrow/syscall/ztypes.h"))
+	fw.finish(root)
 }

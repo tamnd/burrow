@@ -302,3 +302,5 @@ global	src/os/env.c	os_env_mu	package-vars	syscall's envLock, over os_envs and i
 global	src/os/user.c	user_cache_once	package-vars	Fills the Current cache the first time it is needed, as Go's cache.Do does.
 global	src/os/user.c	user_cache_u	package-vars	The user Current found, written once under user_cache_once and only read after that.
 global	src/os/user.c	user_cache_err	package-vars	The error Current got instead, written once under user_cache_once and only read after that.
+global	src/syscall/call.c	burrow__syscall_zero	marker	What Go's &_zero is: a slice with nothing in it points here, and a call given a length of 0 writes nothing through it.
+global	src/syscall/call.c	burrow__syscall_libc_cache	tables	Each slot is an atomic pointer, loaded with acquire and stored with release. Two threads that look the same libSystem function up at once store the same address.

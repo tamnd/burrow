@@ -12,11 +12,14 @@ package main
 
 import (
 	"fmt"
+	"go/ast"
 	"go/build"
 	"go/importer"
+	"go/parser"
 	"go/token"
 	"go/types"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -212,6 +215,9 @@ type platform struct {
 	goos, goarch string
 	pkg          *types.Package
 	sizes        types.Sizes
+	fset         *token.FileSet
+	files        []*ast.File // syscall's files for this platform
+	info         *types.Info // the types of everything in them
 }
 
 // The architectures with Go's register ABI, from internal/buildcfg.
@@ -238,16 +244,37 @@ func load(goos, goarch string) *platform {
 		}
 		build.Default.ToolTags = append(build.Default.ToolTags, t)
 	}
-	fset := token.NewFileSet()
-	pkg, err := importer.ForCompiler(fset, "source", nil).Import("syscall")
-	if err != nil {
-		die("%s/%s: %v", goos, goarch, err)
-	}
 	sizes := types.SizesFor("gc", goarch)
 	if sizes == nil {
 		die("no sizes for %s", goarch)
 	}
-	return &platform{goos, goarch, pkg, sizes}
+	// syscall is type checked here rather than imported, so the types of the
+	// expressions in its function bodies are there for calls.go. What it
+	// imports comes from source too.
+	bp, err := build.Default.Import("syscall", "", 0)
+	if err != nil {
+		die("%s/%s: %v", goos, goarch, err)
+	}
+	fset := token.NewFileSet()
+	var files []*ast.File
+	for _, name := range bp.GoFiles {
+		f, err := parser.ParseFile(fset, filepath.Join(bp.Dir, name), nil, parser.ParseComments)
+		if err != nil {
+			die("%s/%s: %v", goos, goarch, err)
+		}
+		files = append(files, f)
+	}
+	info := &types.Info{
+		Types: map[ast.Expr]types.TypeAndValue{},
+		Defs:  map[*ast.Ident]types.Object{},
+		Uses:  map[*ast.Ident]types.Object{},
+	}
+	conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil), Sizes: sizes}
+	pkg, err := conf.Check("syscall", fset, files, info)
+	if err != nil {
+		die("%s/%s: %v", goos, goarch, err)
+	}
+	return &platform{goos, goarch, pkg, sizes, fset, files, info}
 }
 
 const banner = `/* Derived from Go's src/syscall, the zerrors, zsysnum and ztypes files and

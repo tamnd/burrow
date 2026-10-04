@@ -21,7 +21,8 @@
  *
  * Signal is here too, with its names, and WaitStatus and Rusage, which are what
  * os.ProcessState is made of. The rest of syscall's constants and types are
- * generated from Go's tables, in syscall/zconst.h and syscall/ztypes.h.
+ * generated from Go's tables, in syscall/zconst.h and syscall/ztypes.h, and
+ * its system calls from Go's own wrappers, in syscall/zsyscall.h.
  *
  * Derived from Go's src/syscall/syscall_unix.go, syscall_linux.go and
  * syscall_bsd.go, and on Windows syscall_windows.go and types_windows.go.
@@ -197,7 +198,6 @@ int64_t syscall_timeval_to_nsec(SyscallTimeval tv);
 /* NsecToTimeval, which rounds up to the next microsecond, as Go's does. */
 SyscallTimeval syscall_nsec_to_timeval(int64_t nsec);
 
-
 /* wait4(2): wait for pid and give back its id. wstatus and rusage may be
  * NULL, and options are the system's own wait4 flags. A signal that arrives
  * first is EINTR, which Go returns rather than retries, and so does this. */
@@ -229,6 +229,46 @@ typedef struct SyscallRawConn {
     const SyscallRawConnVT *vt;
     void *data;
 } SyscallRawConn;
+
+/* ----------------------------------------------------------- raw calls */
+
+/* syscall.BytePtrFromString: s with a NUL after it, from a, which is s.len + 1
+ * bytes to free. ByteSliceFromString is the same as a Slice. Either fails with
+ * EINVAL if s has a NUL in it already. */
+BURROW_OWNS(ret) uint8_t *syscall_byte_ptr_from_string(Alloc *a, Str s, Error *err);
+BURROW_OWNS(ret) Slice syscall_byte_slice_from_string(Alloc *a, Str s, Error *err);
+
+#if !defined(BURROW_OS_WINDOWS)
+/* syscall.Syscall, Syscall6 and the Raw ones: the system call trap, one of
+ * the SYSCALL_SYS_ constants, with the arguments as integers. They return
+ * what the call returned, all ones if it failed, with the Errno in *err, or 0
+ * if it worked. *r2 is always 0, since the C library has nowhere to put a
+ * second result register. Either may be NULL.
+ *
+ * burrow has no goroutines that a blocked call would hold up, so the Raw ones
+ * are the same as the others. On macOS these go through syscall(2), which
+ * Apple has deprecated, and the functions in syscall/zsyscall.h go through
+ * libSystem the way Go's do, which is the better choice there. On Cosmopolitan
+ * and wasip1 every call fails with ENOSYS. */
+Uintptr syscall_syscall(Uintptr trap, Uintptr a1, Uintptr a2, Uintptr a3, Uintptr *r2,
+                        SyscallErrno *err);
+Uintptr syscall_syscall6(Uintptr trap, Uintptr a1, Uintptr a2, Uintptr a3, Uintptr a4,
+                         Uintptr a5, Uintptr a6, Uintptr *r2, SyscallErrno *err);
+Uintptr syscall_raw_syscall(Uintptr trap, Uintptr a1, Uintptr a2, Uintptr a3,
+                            Uintptr *r2, SyscallErrno *err);
+Uintptr syscall_raw_syscall6(Uintptr trap, Uintptr a1, Uintptr a2, Uintptr a3,
+                             Uintptr a4, Uintptr a5, Uintptr a6, Uintptr *r2,
+                             SyscallErrno *err);
+#if !defined(BURROW_OS_LINUX) && !defined(BURROW_OS_COSMO) && !defined(BURROW_OS_WASI)
+/* syscall.Syscall9, which the BSDs and macOS have and Linux does not. */
+Uintptr syscall_syscall9(Uintptr trap, Uintptr a1, Uintptr a2, Uintptr a3, Uintptr a4,
+                         Uintptr a5, Uintptr a6, Uintptr a7, Uintptr a8, Uintptr a9,
+                         Uintptr *r2, SyscallErrno *err);
+#endif
+#endif
+
+/* The rest of the system calls, one function each. */
+#include "burrow/syscall/zsyscall.h"
 
 #ifdef __cplusplus
 }

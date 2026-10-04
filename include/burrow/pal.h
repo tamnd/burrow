@@ -1423,6 +1423,48 @@ bool pal_signal_ignored(int32_t native);
 void pal_signal_note_wake(void);
 void pal_signal_note_sleep(void);
 
+/* ---------------------------------------------------------------- raw calls
+ *
+ * What Go's syscall package is made of underneath: a system call by number,
+ * and a C function by address. Unlike everything else here these fail with the
+ * platform's own number, errno or on Windows GetLastError's code, rather than a
+ * PalErrno, because that number is what syscall.Errno is. Nothing but the
+ * syscall package should call them. */
+
+/* The system call trap with the first n of args, n at most 9, the way the
+ * system's syscall(2) makes it, which on FreeBSD is __syscall so that a 64-bit
+ * result comes back whole. It returns what the call did, and on failure all
+ * ones, with the errno in *errnum. *errnum is 0 when the call worked. Where
+ * there is no such thing, on Windows, wasip1, Cosmopolitan and an OpenBSD that
+ * has dropped syscall(2), every call fails with ENOSYS, or ERROR_NOT_SUPPORTED
+ * on Windows. */
+uintptr_t pal_syscall(uintptr_t trap, const uintptr_t *args, int32_t n,
+                      uintptr_t *errnum);
+
+/* Calls the C function at fn with the first n of args, n at most 18, each an
+ * integer or a pointer passed as a whole register, and returns what came back
+ * in the return register. nfixed is -1 for a function with only fixed
+ * parameters, and for a variadic one such as open or fcntl it is how many come
+ * before the "...", from 1 to 3, which matters because Apple's arm64 passes the
+ * variadic ones on the stack. A variadic call takes at most 9. On 386 Windows
+ * fn is __stdcall, as the Windows API is.
+ *
+ * *errnum is errno as it is straight after the call, or on Windows what
+ * GetLastError says, having been set to 0 first, which is what Go's syscall
+ * does on each. A function whose type does not match what it is called with is
+ * the caller's bug, and the C standard does not promise what happens then. */
+uintptr_t pal_call(void *fn, const uintptr_t *args, int32_t n, int32_t nfixed,
+                   uintptr_t *errnum);
+
+/* The address of the C library function name, as the dynamic linker finds it
+ * from the program, or NULL if there is no such function. This is how the
+ * syscall package reaches libSystem on macOS, the way Go's does, without a
+ * declaration of each function a system header might spell differently. On
+ * Linux, where syscall makes its calls by number, it is always NULL, so that a
+ * program does not need -ldl on an older glibc, and so it is on Windows,
+ * wasip1 and Cosmopolitan. */
+BURROW_STATIC(ret) void *pal_libc_symbol(const char *name);
+
 /* ------------------------------------------------------------ dynamic loading
  *
  * For plugin and for the cgo-free paths that have to reach a system library at

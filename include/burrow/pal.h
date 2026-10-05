@@ -313,11 +313,13 @@ int64_t pal_cpu_name(char *buf, int64_t cap);
 
 /* Instruction set extensions the crypto code can use, as bits of
  * pal_cpu_features. They are the fields of Go's internal/cpu that its hashes
- * check, X86.HasSHA and the rest, and a bit is only ever set on the machine it
+ * check, X86.HasSHA, X86.HasAES and the rest, and a bit is only ever set on the machine it
  * names. */
 #define PAL_CPU_X86_SSSE3 (UINT32_C(1) << 0)
 #define PAL_CPU_X86_SSE41 (UINT32_C(1) << 1)
 #define PAL_CPU_X86_SHA (UINT32_C(1) << 2)
+#define PAL_CPU_X86_AES (UINT32_C(1) << 3)
+#define PAL_CPU_X86_PCLMULQDQ (UINT32_C(1) << 4)
 #define PAL_CPU_ARM64_SHA1 (UINT32_C(1) << 8)
 #define PAL_CPU_ARM64_SHA2 (UINT32_C(1) << 9)
 #define PAL_CPU_ARM64_SHA512 (UINT32_C(1) << 10)
@@ -325,6 +327,8 @@ int64_t pal_cpu_name(char *buf, int64_t cap);
 /* Data independent timing, which crypto/subtle turns on. GODEBUG has no name
  * for it, as in Go, so cpu.all=off leaves it alone. */
 #define PAL_CPU_ARM64_DIT (UINT32_C(1) << 12)
+#define PAL_CPU_ARM64_AES (UINT32_C(1) << 13)
+#define PAL_CPU_ARM64_PMULL (UINT32_C(1) << 14)
 
 /* The PAL_CPU_ bits this processor has, found on the first call and kept.
  *

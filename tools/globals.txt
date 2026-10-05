@@ -51,6 +51,7 @@ category	uuid-v7	uuid.NewV7's last timestamp. Go keeps it in package level varia
 category	weak	weak's table of slots. Go hangs a weak handle off the object and its collector clears it, and here the allocators tell one table when memory goes, which has to be process wide because memory freed on one thread may have had a WeakPointer made on another.
 category	zip-registry	archive/zip's registered compressors and decompressors. Go keeps them in sync.Maps at package level, and they are process wide because a method registered anywhere is one every Reader and Writer can use.
 category	last-error	The platform's code for the last failure each thread saw, which is per thread the way errno and GetLastError are.
+category	impl-select	Which implementation a crypto package runs, which Go keeps in crypto/internal/impl so that its tests can try every one.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -319,3 +320,4 @@ global	src/syscall/zsyscall.c	burrow__syscall_mods	tables	Go's modkernel32 and t
 global	src/syscall/zsyscall.c	burrow__syscall_procs	tables	Go's procCreateFileW and the rest, one LazyProc each. Each finds its address the first time it is called, under its own mutex, and publishes it with a release store.
 global	src/crypto/rand.c	crypto_rand_debug_flags	godebug	The cryptocustomrand setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/crypto/rand.c	crypto_rand_reader	package-vars	crypto/rand.Reader. Not synchronised, as in Go: a program assigns it before other threads read from it.
+global	src/crypto/aes.c	aes_portable_only	impl-select	Set only by tests, through burrow__aes_set_portable, with relaxed atomics. A block reads it once, when it is made.

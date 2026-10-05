@@ -54,6 +54,8 @@
 #include "burrow/container/ring.h"
 #include "burrow/context.h"
 #include "burrow/core.h"
+#include "burrow/crypto/aes.h"
+#include "burrow/crypto/cipher.h"
 #include "burrow/crypto/hkdf.h"
 #include "burrow/crypto/hmac.h"
 #include "burrow/crypto/md5.h"

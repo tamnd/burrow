@@ -104,7 +104,7 @@ BURROW_NORETURN static void crand_fatal(const char *why, Int why_len) {
 
 /* The system generator, which never comes back short: it fills p or the
  * process ends. */
-static void crand_system(Slice p) {
+void burrow__crypto_rand_system(Slice p) {
     PalErrno e = PAL_OK;
     if (!pal_random_bytes(p.p, p.len, &e)) {
         const char *why = pal_errno_string(e);
@@ -114,7 +114,7 @@ static void crand_system(Slice p) {
 
 static Int crand_default_read(void *self, Slice p, Error *err) {
     (void)self;
-    crand_system(p);
+    burrow__crypto_rand_system(p);
     BURROW_OUT(err, BURROW_NO_ERROR);
     return p.len;
 }
@@ -133,7 +133,7 @@ bool burrow__crypto_rand_is_default_reader(IoReader r) {
 
 Int crypto_rand_read(Slice b, Error *err) {
     if (burrow__crypto_rand_is_default_reader(crypto_rand_reader)) {
-        crand_system(b);
+        burrow__crypto_rand_system(b);
     } else {
         Error e = BURROW_NO_ERROR;
         (void)io_read_full(crypto_rand_reader, b, &e);

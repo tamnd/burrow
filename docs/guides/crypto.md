@@ -822,6 +822,118 @@ printf("%d\n", (int)key.len);
 
 Everything that touches secret data is constant time, as Go's code is, and the shared key goes through the same constant time selection Go uses for a ciphertext that does not check out. Go runs a self test and checks each new key against itself only in FIPS mode, which burrow does not have, so it does neither.
 
+## crypto/mldsa
+
+`burrow/crypto/mldsa.h` is ML-DSA, the signature scheme of FIPS 204 that was called Dilithium. Like ML-KEM it is meant to hold up against a quantum computer, and its keys and signatures are much bigger than those of Ed25519. There are three parameter sets, `mldsa_mldsa44`, `mldsa_mldsa65` and `mldsa_mldsa87`, and most programs want ML-DSA-44:
+
+<!-- example: ../examples/crypto/mldsa.c#sign -->
+```c
+// The signer makes a key and publishes the public key's bytes.
+Error err = BURROW_NO_ERROR;
+MldsaPrivateKey *sk = mldsa_generate_key(mldsa_mldsa44(), a, &err);
+if (BURROW_FAILED(err))
+    return;
+Slice pub_bytes = mldsa_public_key_bytes(mldsa_private_key_public_key(sk), a);
+
+// The context keeps signatures made for one purpose from passing for
+// another. Sign and Verify have to be given the same one.
+MldsaOptions opts = {BURROW_S("release manifest")};
+Slice msg = text("burrow v0.3.0");
+Slice sig = mldsa_private_key_sign(sk, a, (IoReader){0}, msg,
+                                   mldsa_options_as_signer_opts(&opts), &err);
+if (BURROW_FAILED(err))
+    return;
+
+// The verifier has only the public key's bytes.
+MldsaPublicKey *pk = mldsa_new_public_key(mldsa_mldsa44(), a, pub_bytes, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%d %d\n", (int)pub_bytes.len, (int)sig.len);
+print_error(mldsa_verify(pk, msg, sig, &opts));
+print_error(mldsa_verify(pk, msg, sig, NULL));
+print_error(mldsa_verify(pk, text("burrow v0.3.1"), sig, &opts));
+mldsa_public_key_free(pk);
+mldsa_private_key_free(sk);
+```
+
+The last two lines show what a verifier sees when the context or the message is not the one that was signed. Keys come from the allocator they are made with and go back with `mldsa_private_key_free` and `mldsa_public_key_free`. The public key of a private key is part of it and goes with it. Signing works out a fresh value from the system's generator each time, so two signatures of the same message differ. `mldsa_private_key_sign_deterministic` leaves that out, and a private key is stored as its 32 byte seed, so the same seed and message always give the same signature:
+
+<!-- example: ../examples/crypto/mldsa.c#deterministic -->
+```c
+// A private key is its 32 byte seed. The same seed gives the same key,
+// and SignDeterministic gives the same signature of the same message.
+Byte seed[MLDSA_PRIVATE_KEY_SIZE];
+for (int i = 0; i < MLDSA_PRIVATE_KEY_SIZE; i++)
+    seed[i] = (Byte)i;
+Error err = BURROW_NO_ERROR;
+MldsaPrivateKey *sk = mldsa_new_private_key(
+    mldsa_mldsa65(), a, slice_from(seed, sizeof seed, sizeof seed, TYPE_BYTE),
+    &err);
+if (BURROW_FAILED(err))
+    return;
+Slice sig = mldsa_private_key_sign_deterministic(sk, a, text("hello"),
+                                                 (CryptoSignerOpts){0}, &err);
+if (BURROW_FAILED(err))
+    return;
+Sha256Sum256Ret sum = sha256_sum256(sig);
+print_hex(a, slice_from(sum.a, sizeof sum.a, sizeof sum.a, TYPE_BYTE));
+mldsa_private_key_free(sk);
+```
+
+A private key is a `CryptoSigner` too, for code that should not care which scheme it has. Its options can be nil, an `MldsaOptions` with a context, or `CRYPTO_MLDSA_MU` for a message that is the 64 byte μ the caller worked out itself, which RFC 9881 calls external μ:
+
+<!-- example: ../examples/crypto/mldsa.c#signer -->
+```c
+// Code that works with any signature scheme takes a CryptoSigner.
+Error err = BURROW_NO_ERROR;
+MldsaPrivateKey *sk = mldsa_generate_key(mldsa_mldsa87(), a, &err);
+if (BURROW_FAILED(err))
+    return;
+CryptoSigner s = mldsa_private_key_signer(sk);
+Slice msg = text("any message");
+Slice sig =
+    crypto_signer_sign(s, a, (IoReader){0}, msg, (CryptoSignerOpts){0}, &err);
+if (BURROW_FAILED(err))
+    return;
+CryptoPublicKey pub = crypto_signer_public(s);
+printf("%.*s %d\n", (int)pub.t->name.len, (const char *)pub.t->name.p,
+       (int)sig.len);
+print_error(mldsa_verify(pub.data, msg, sig, NULL));
+mldsa_private_key_free(sk);
+```
+
+Keys and signatures of the wrong length are errors with Go's messages, and so are a context longer than 255 bytes and options that ask for a hash:
+
+<!-- example: ../examples/crypto/mldsa.c#errors -->
+```c
+Error err = BURROW_NO_ERROR;
+Byte zeros[MLDSA44_PUBLIC_KEY_SIZE] = {0};
+mldsa_new_private_key(mldsa_mldsa44(), a, slice_from(zeros, 16, 16, TYPE_BYTE),
+                      &err);
+print_error(err);
+mldsa_new_public_key(mldsa_mldsa65(), a,
+                     slice_from(zeros, sizeof zeros, sizeof zeros, TYPE_BYTE),
+                     &err);
+print_error(err);
+
+err = BURROW_NO_ERROR;
+MldsaPrivateKey *sk = mldsa_new_private_key(
+    mldsa_mldsa44(), a, slice_from(zeros, 32, 32, TYPE_BYTE), &err);
+MldsaOptions opts = {strings_repeat(a, BURROW_S("x"), 256)};
+mldsa_private_key_sign_deterministic(sk, a, text("hello"),
+                                     mldsa_options_as_signer_opts(&opts), &err);
+print_error(err);
+CryptoHash h = CRYPTO_SHA256;
+mldsa_private_key_sign_deterministic(sk, a, text("hello"),
+                                     crypto_hash_as_signer_opts(&h), &err);
+print_error(err);
+print_error(mldsa_verify(mldsa_private_key_public_key(sk), text("hello"),
+                         slice_from(zeros, 100, 100, TYPE_BYTE), NULL));
+mldsa_private_key_free(sk);
+```
+
+Everything that touches secret data is constant time, as Go's code is. Go runs a self test and checks each new key against itself only in FIPS mode, which burrow does not have, so it does neither.
+
 ## crypto/hpke
 
 `burrow/crypto/hpke.h` is Hybrid Public Key Encryption, RFC 9180: a way to encrypt to someone's public key that is built out of a KEM, a KDF and an AEAD, each picked by its own handle. It has the DHKEMs over P-256, P-384, P-521 and X25519, ML-KEM-768 and ML-KEM-1024 on their own, and the post-quantum hybrids MLKEM768-X25519 (X-Wing), MLKEM768-P256 and MLKEM1024-P384. The KDFs are HKDF with SHA-256, SHA-384 and SHA-512, and SHAKE128 and SHAKE256. The AEADs are AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305, plus the export-only one. This is the example Go's documentation has:

@@ -587,6 +587,9 @@ static void TestHardLink(TestingT *t) {
 static void TestSymlink(TestingT *t) {
 #if defined(BURROW_OS_WINDOWS)
     testing_t_skip_v(t, "making a symbolic link may need privileges on Windows");
+#elif defined(BURROW_OS_WASI)
+    /* testenv.MustHaveSymlink: some runtimes refuse absolute targets. */
+    testing_t_skip_v(t, "wasip1 runtimes may refuse an absolute symlink");
 #endif
     make_dir(t);
     Str from = path_in("symlinktestfrom"), to = path_in("symlinktestto");

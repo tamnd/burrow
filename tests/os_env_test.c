@@ -169,9 +169,14 @@ static void TestSetenvInvalid(TestingT *t) {
         S("A=B"),
 #endif
     };
+#if defined(BURROW_OS_WASI)
+    Str want = S("setenv: Invalid argument"); /* Go's wasip1 errno text */
+#else
+    Str want = S("setenv: invalid argument");
+#endif
     for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
         Error e = os_setenv(keys[i], S("v"));
-        if (!str_eq(error_text(e), S("setenv: invalid argument")))
+        if (!str_eq(error_text(e), want))
             testing_t_errorf_v(t, "Setenv(%q) error = %q", keys[i], error_text(e));
     }
 }

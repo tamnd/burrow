@@ -478,8 +478,23 @@ static Error enc_nest(Alloc *a, BytesBuffer *buf, Int n) {
 /* On wasip1 there are two stacks to run out of. The one in linear memory has
  * bounds, as anywhere else, but every goroutine also runs its calls on the
  * engine's stack, and nothing in the module can see how much of that is left,
- * so a count stands in for it. The deepest value the encoder takes has to come back from the decoder on the
- * stack wasmtime gives by default, and one level more has to be refused. */
+ * so a count stands in for it. Go grows its stacks and takes ten thousand
+ * levels here, and a fixed stack takes fewer. So the test finds how deep each
+ * side goes, wants both to manage at least 100, and wants one level more to be
+ * an error rather than a crash. The decoder spends more stack a level than the
+ * encoder, so it stops sooner. */
+static Error dec_nest(Alloc *a, BytesBuffer *buf, Int n, Int *levels) {
+    Error err = enc_nest(a, buf, n);
+    if (!BURROW_OK(err))
+        return err;
+    Box out = {0};
+    err = dec_bytes(a, bytes_buffer_bytes(buf), BURROW_ANY(TYPE_OF(Box), &out));
+    *levels = 0;
+    for (Any v = BURROW_ANY(TYPE_OF(Box), &out); v.t == TYPE_OF(Box); (*levels)++)
+        v = ((Box *)v.data)->I;
+    return err;
+}
+
 static void TestGobNesting(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -500,16 +515,24 @@ static void TestGobNesting(TestingT *t) {
     want_err(t, "encode one level too many", enc_nest(a, &buf, hi),
              "gob: encoder: nesting too deep");
 
-    want_err(t, "encode the deepest", enc_nest(a, &buf, lo), "<nil>");
-    Box out = {0};
-    want_err(t, "decode the deepest",
-             dec_bytes(a, bytes_buffer_bytes(&buf), BURROW_ANY(TYPE_OF(Box), &out)),
-             "<nil>");
     Int levels = 0;
-    for (Any v = BURROW_ANY(TYPE_OF(Box), &out); v.t == TYPE_OF(Box); levels++)
-        v = ((Box *)v.data)->I;
-    if (levels != lo)
-        testing_t_errorf_v(t, "decoded %d levels, want %d", (int)levels, (int)lo);
+    Int dlo = 0, dhi = lo + 1;
+    while (dhi - dlo > 1) {
+        Int mid = dlo + (dhi - dlo) / 2;
+        if (BURROW_OK(dec_nest(a, &buf, mid, &levels)))
+            dlo = mid;
+        else
+            dhi = mid;
+    }
+    testing_t_logf_v(t, "%d levels encode and %d decode", (int)lo, (int)dlo);
+    if (dlo < 100)
+        testing_t_errorf_v(t, "only %d levels decode, want at least 100", (int)dlo);
+    if (dhi <= lo)
+        want_err(t, "decode one level too many", dec_nest(a, &buf, dhi, &levels),
+                 "gob: decoder: nesting too deep");
+    want_err(t, "decode the deepest", dec_nest(a, &buf, dlo, &levels), "<nil>");
+    if (levels != dlo)
+        testing_t_errorf_v(t, "decoded %d levels, want %d", (int)levels, (int)dlo);
     arena_free(&ar);
 }
 

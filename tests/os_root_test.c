@@ -456,6 +456,9 @@ static void root_chmod(TestingT *t, const RootTest *test, Str target, OsRoot *r)
 }
 
 static void TestRootChmod(TestingT *t) {
+#if defined(BURROW_OS_WASI)
+    testing_t_skip_v(t, "Chmod not supported on wasip1");
+#endif
     run_cases(t, root_chmod, NULL);
 }
 

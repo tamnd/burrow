@@ -368,6 +368,7 @@ static void TestWorkingDirectory(TestingT *t) {
 }
 
 static void TestMissingProgram(TestingT *t) {
+    SKIP_WITHOUT_EXEC(t);
     const char *argv[] = {"nope", NULL};
     PalSpawn req = {"/no/such/program", argv, NULL, NULL, NULL, 0, 0, 0};
     PalErrno err = PAL_OK;
@@ -588,6 +589,7 @@ static void TestGetpid(TestingT *t) {
 }
 
 static void TestExecLookup(TestingT *t) {
+    SKIP_WITHOUT_EXEC(t);
     char buf[1024];
     PalErrno err = PAL_OK;
 #if defined(_WIN32)

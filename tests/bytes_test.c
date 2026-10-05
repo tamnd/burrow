@@ -1664,20 +1664,26 @@ static void call_repeat(void *env) {
     bytes_repeat(c->a, c->s, c->count);
 }
 
+static char repeat_panic_buf[128];
+
 /* The panic text from repeat, or the empty string if it did not panic. */
 static Str repeat_panic(Alloc *a, Slice s, Int count) {
     RepeatCall c = {a, s, count};
-    Str text = BURROW_STR_EMPTY;
+    volatile Int n = 0;
     BURROW_TRY {
         call_repeat(&c);
     }
     BURROW_CATCH(r) {
-        if (r.t != TYPE_STRING)
-            panic(r);
-        text = *(const Str *)r.data;
+        /* A runtime error as well as a string, since that is how the runtime
+         * refuses a size, and copied out because the text belongs to the
+         * panic. */
+        Str text = panic_text(r);
+        n = text.len < (Int)sizeof repeat_panic_buf ? text.len
+                                                    : (Int)sizeof repeat_panic_buf;
+        memcpy(repeat_panic_buf, text.p, (size_t)n);
     }
     BURROW_TRY_END;
-    return text;
+    return str_from_bytes(repeat_panic_buf, n);
 }
 
 static void TestRepeatCatchesOverflow(TestingT *t) {

@@ -46,6 +46,17 @@ static void TestErrorText(TestingT *t) {
         SyscallErrno e;
         const char *want;
     } tests[] = {
+#if defined(BURROW_OS_WASI)
+        /* Go's wasip1 table has its own wording, in capitals. */
+        {SYSCALL_ENOENT, "No such file or directory"},
+        {SYSCALL_EACCES, "Permission denied"},
+        {SYSCALL_EEXIST, "File exists"},
+        {SYSCALL_EINVAL, "Invalid argument"},
+        {SYSCALL_EPIPE, "Broken pipe"},
+        {SYSCALL_ENOTDIR, "Not a directory"},
+        {SYSCALL_EISDIR, "Is a directory"},
+        {SYSCALL_EBADF, "Bad file number"},
+#else
         {SYSCALL_ENOENT, "no such file or directory"},
         {SYSCALL_EACCES, "permission denied"},
         {SYSCALL_EEXIST, "file exists"},
@@ -54,6 +65,7 @@ static void TestErrorText(TestingT *t) {
         {SYSCALL_ENOTDIR, "not a directory"},
         {SYSCALL_EISDIR, "is a directory"},
         {SYSCALL_EBADF, "bad file descriptor"},
+#endif
     };
     for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
 #if defined(BURROW_OS_WINDOWS)

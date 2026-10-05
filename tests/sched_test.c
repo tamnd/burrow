@@ -742,6 +742,7 @@ static void spread_body(void *env) {
 }
 
 static void TestWorkStartedOnOneProcessorIsPickedUpByTheOthers(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
     memset(&spread_gate, 0, sizeof spread_gate);
     spread_arrived = 0;
     spread_finished = 0;

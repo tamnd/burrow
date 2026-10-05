@@ -89,8 +89,13 @@ static void TestAStackIsAtLeastTheSizeThatWasAskedFor(TestingT *t) {
         CHECK((uintptr_t)s.lo % page == 0);
         CHECK((uintptr_t)s.hi % page == 0);
 
-        /* The guard is real and is not counted in what the caller can use. */
+        /* The guard is real and is not counted in what the caller can use.
+         * WebAssembly has no protection to make one with. */
+#if defined(BURROW_ARCH_WASM)
+        CHECK(s.guard == 0);
+#else
         CHECK(s.guard >= page);
+#endif
         CHECK((unsigned char *)s.hi - (unsigned char *)s.lo == (ptrdiff_t)got);
 
         burrow__stack_free(&s);

@@ -201,6 +201,8 @@ static void race(void *env) {
 }
 
 static void TestTypeConcurrent(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     (void)t;
     burrow__mime_types_reset(true);
     enum { N = 8 };

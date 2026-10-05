@@ -1176,6 +1176,8 @@ static void signal_stack_on_a_thread(void *arg) {
 }
 
 static void TestEveryThreadInstallsItsOwnSignalStack(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     uint32_t ok = 0;
 
     int64_t h = pal_thread_create(signal_stack_on_a_thread, &ok, 0, NULL);

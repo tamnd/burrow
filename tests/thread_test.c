@@ -48,6 +48,8 @@ static void set_ran(void *arg) {
 static burrow__Thread one;
 
 static void TestAThreadRunsAndGetsItsArgument(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     int marker = 42;
 
     ran = 0;
@@ -68,6 +70,8 @@ static void TestAThreadRunsAndGetsItsArgument(TestingT *t) {
 }
 
 static void TestAStackSizeIsARequestTheSystemTakes(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     /* Two megabytes, which every system accepts, then the sizes that are the
      * reason the clamp exists at all.
      *
@@ -104,6 +108,8 @@ static void TestAStackSizeIsARequestTheSystemTakes(TestingT *t) {
 }
 
 static void TestAHandleThatWasNeverStartedIsNotJoinable(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     burrow__Thread never;
     memset(&never, 0, sizeof never);
 
@@ -132,6 +138,8 @@ static void record_id(void *arg) {
 }
 
 static void TestEveryRunningThreadHasItsOwnIdentity(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     uint64_t mine = burrow__thread_self();
     CHECK(mine == burrow__thread_self());
 
@@ -166,6 +174,8 @@ static void count_up(void *arg) {
 }
 
 static void TestEightThreadsAddingToOneCounterLoseNothing(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     counter32 = 0;
     counter64 = 0;
 
@@ -189,6 +199,8 @@ static void finish(void *arg) {
 }
 
 static void TestADetachedThreadStillRuns(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     detached_done = 0;
 
     CHECK(burrow__thread_start(&detached, finish, NULL, 0));

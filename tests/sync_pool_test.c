@@ -496,6 +496,8 @@ static void foreign(void *arg) {
 }
 
 static void TestAThreadThatIsNotAGoroutineCanUseAPool(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     reset_counts();
     SyncPool p = new_pool();
 

@@ -176,6 +176,8 @@ static void read_the_clock(void *arg) {
 }
 
 static void TestFourThreadsReadOneClockAndAgreeAboutIt(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     backwards = 0;
     highest = 0;
 

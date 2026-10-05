@@ -110,6 +110,11 @@
 #include <sys/wait.h>
 #include <termios.h>
 #endif
+#if defined(BURROW_OS_FREEBSD)
+/* sys/sockio.h spells SIOCGETSGCNT and SIOCGETVIFCNT with two structs that only
+ * this header defines. */
+#include <netinet/ip_mroute.h>
+#endif
 
 #include "check.h"
 

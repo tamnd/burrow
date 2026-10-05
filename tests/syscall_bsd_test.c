@@ -77,6 +77,13 @@ static void write_file(TestingT *t, const char *path, const char *data) {
         cstr(path), SYSCALL_O_CREAT | SYSCALL_O_WRONLY | SYSCALL_O_TRUNC, 0644, &err);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "Open(%v): %v", path, err);
+    /* The mode is the third argument of a variadic open, the one a wrong call
+     * loses first. */
+    struct stat st;
+    memset(&st, 0, sizeof st);
+    if (fstat((int)fd, &st) != 0 || (st.st_mode & 0600) != 0600)
+        testing_t_fatalf_v(t, "Open(%v) with 0644 made mode %o", path,
+                           (Int)(st.st_mode & 07777));
     Int n = (Int)strlen(data);
     if (n > 0 &&
         syscall_write(fd, (Slice){(void *)(uintptr_t)data, n, n, TYPE_BYTE}, &err) != n)

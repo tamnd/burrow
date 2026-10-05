@@ -456,6 +456,10 @@ static void TestSetgroups(TestingT *t) {
     Slice groups = os_getgroups(a, &e);
     if (BURROW_FAILED(e))
         testing_t_fatalf_v(t, "Getgroups: %s", error_text(e));
+    /* macOS will report more groups than the 16 it lets anybody set, and says
+     * EINVAL to the whole list before it gets as far as who is asking. */
+    if (groups.len > 16)
+        groups.len = 16;
     e = syscall_setgroups(groups);
     if (syscall_getuid() != 0) {
         CHECK_INT_EQ(errno_of(e), SYSCALL_EPERM);

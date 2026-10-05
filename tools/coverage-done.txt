@@ -47,6 +47,8 @@ crypto/pbkdf2
 crypto/rand
 crypto/aes
 crypto/cipher
+crypto/des
+crypto/rc4
 container/list
 container/ring
 sort

@@ -106,7 +106,7 @@ static int sleepers;
 
 static bool set_pipe_flags(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0)
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | (int)O_NONBLOCK) != 0)
         return false;
 
     flags = fcntl(fd, F_GETFD, 0);

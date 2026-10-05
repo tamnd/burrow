@@ -117,6 +117,13 @@ static void TestErrorTextInvented(TestingT *t) {
 }
 #endif
 
+/* Go's wasip1 counts only ENOSYS as unsupported. */
+#if defined(BURROW_OS_WASI)
+#define NOTSUP_IS_UNSUPPORTED false
+#else
+#define NOTSUP_IS_UNSUPPORTED true
+#endif
+
 static void TestIs(TestingT *t) {
     static const struct {
         SyscallErrno e;
@@ -132,8 +139,8 @@ static void TestIs(TestingT *t) {
         {SYSCALL_ENOENT, 2, true},
         {SYSCALL_EEXIST, 2, false},
         {SYSCALL_ENOSYS, 3, true},
-        {SYSCALL_ENOTSUP, 3, true},
-        {SYSCALL_EOPNOTSUPP, 3, true},
+        {SYSCALL_ENOTSUP, 3, NOTSUP_IS_UNSUPPORTED},
+        {SYSCALL_EOPNOTSUPP, 3, NOTSUP_IS_UNSUPPORTED},
         {SYSCALL_EINVAL, 3, false},
 #if defined(BURROW_OS_WINDOWS)
         {SYSCALL_ERROR_ACCESS_DENIED, 0, true},
@@ -166,15 +173,17 @@ static void TestIs(TestingT *t) {
 
 static void TestTimeoutTemporary(TestingT *t) {
     CHECK(syscall_errno_timeout(SYSCALL_EAGAIN));
+#if !defined(BURROW_OS_WASI)
     CHECK(syscall_errno_timeout(SYSCALL_EWOULDBLOCK));
+#endif
     CHECK(syscall_errno_timeout(SYSCALL_ETIMEDOUT));
     CHECK(!syscall_errno_timeout(SYSCALL_EINTR));
     CHECK(syscall_errno_temporary(SYSCALL_EINTR));
     CHECK(syscall_errno_temporary(SYSCALL_EMFILE));
     CHECK(syscall_errno_temporary(SYSCALL_EAGAIN));
     CHECK(!syscall_errno_temporary(SYSCALL_ENOENT));
-#if defined(BURROW_OS_WINDOWS)
-    /* syscall_windows.go leaves ENFILE out. */
+#if defined(BURROW_OS_WINDOWS) || defined(BURROW_OS_WASI)
+    /* syscall_windows.go and syscall_wasip1.go leave ENFILE out. */
     CHECK(!syscall_errno_temporary(SYSCALL_ENFILE));
 #else
     CHECK(syscall_errno_temporary(SYSCALL_ENFILE));
@@ -332,7 +341,9 @@ static void TestMatchesErrnoH(TestingT *t) {
     E(EPROTONOSUPPORT);
     E(EAFNOSUPPORT);
     E(EOPNOTSUPP);
+#if !defined(BURROW_OS_WASI)
     E(EWOULDBLOCK);
+#endif
 #undef E
 }
 #endif

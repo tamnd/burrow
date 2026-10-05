@@ -37,9 +37,13 @@ Slice pbkdf2_key(Alloc *a, HashNewFunc h, Str password, Slice salt, Int iter,
         return nil;
     }
     Int hash_len = hash_size(prf);
-    /* Go's divRoundUp does the sum in int64 so that it cannot overflow. */
-    int64_t num_blocks = ((int64_t)key_length + hash_len - 1) / hash_len;
-    if (key_length > BURROW_INT_MAX - hash_len || num_blocks > (int64_t)UINT32_MAX) {
+    /* Go tests keyLength+hashLen < keyLength, which relies on the sum wrapping.
+     * Here the same limit is tested before anything is added, and only then is
+     * the block count worked out. */
+    int64_t num_blocks = 0;
+    if (key_length <= BURROW_INT_MAX - hash_len)
+        num_blocks = ((int64_t)key_length + hash_len - 1) / hash_len;
+    if (num_blocks == 0 || num_blocks > (int64_t)UINT32_MAX) {
         BURROW_OUT(
             err, errors_new(error_allocator(), BURROW_S("pbkdf2: keyLength too long")));
         return nil;

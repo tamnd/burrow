@@ -380,6 +380,8 @@ static void sha256_check_sum(Sha256Digest *d, Byte out[SHA256_SIZE]) {
 }
 
 static void sha256_update(Sha256Digest *d, const Byte *p, Int n) {
+    if (n == 0)
+        return; /* p may be NULL, and memcpy may not be given one */
     d->len += (uint64_t)n;
     if (d->nx > 0) {
         Int k = SHA256_BLOCK_SIZE - d->nx < n ? SHA256_BLOCK_SIZE - d->nx : n;

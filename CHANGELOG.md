@@ -4,6 +4,32 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API and everything before 1.0 is published as a prerelease, because none of it has been through a security review.
 
+## v0.2.2 (2026-10-05)
+
+More of P2: the rest of os, os/exec, os/signal, os/user, embed, time/tzdata, and syscall's constants, types and generated functions.
+
+### Added
+
+- `os`: `CopyFS`, and `File`'s `ReadFrom`, `WriteTo` and `SyscallConn` (#318), then `Root` and `OpenInRoot` (#319).
+- `testing/iotest` (#320), and `testing/fstest`'s `TestFS`, run over every FS in the tree (#321).
+- `path/filepath`: `Abs`, `EvalSymlinks`, `Glob`, `Walk` and `WalkDir` (#322).
+- `os/user`: `Current`, `Lookup`, `LookupGroup` and `GroupIds`, on Unix (#323) and Windows (#325).
+- `embed`: `EmbedFS` and `EmbedFile`, with a `burrow-gen embed` generator (#324).
+- `os/exec`: `Command`, `LookPath`, pipes, contexts and `WaitDelay` (#327).
+- `syscall`: every constant Go has, for every system (#328), the types from Go's ztypes files (#336), the functions from its zsyscall files (#338), and on Windows the DLL loading, `SyscallN` and the zsyscall_windows functions (#340).
+- `time/tzdata`, the zone database built in (#331).
+- `encoding/json/v2`: the `Time` and `Duration` arshalers (#330).
+- `os/signal`: `Notify`, `Stop`, `Reset`, `Ignore` and `NotifyContext` (#335).
+
+### Changed
+
+- `time.Local` on Windows is built from the system's time zone information (#334).
+- `make tidy` runs one clang-tidy per file, in parallel (#333).
+
+### Fixed
+
+- The CI jobs that had been failing on main (#326, #329, #339), and the xml depth tests under the thread sanitizer (#332).
+
 ## v0.2.1 (2026-10-02)
 
 The first P2 work: path/filepath, syscall's errors, and most of os.

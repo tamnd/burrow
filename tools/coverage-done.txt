@@ -59,6 +59,7 @@ crypto/mlkem
 crypto/mlkem/mlkemtest
 crypto/mldsa
 crypto/hpke
+crypto/rsa
 container/list
 container/ring
 sort

@@ -73,6 +73,7 @@
 #include "burrow/crypto/pbkdf2.h"
 #include "burrow/crypto/rand.h"
 #include "burrow/crypto/rc4.h"
+#include "burrow/crypto/rsa.h"
 #include "burrow/crypto/sha1.h"
 #include "burrow/crypto/sha256.h"
 #include "burrow/crypto/sha3.h"

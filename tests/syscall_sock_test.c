@@ -47,6 +47,16 @@ static SyscallErrno errno_of(Error err) {
     return e == NULL ? 0 : *e;
 }
 
+/* Cosmopolitan has no way to make a raw system call, so everything that goes
+ * through one gives ENOSYS there, and the socket calls all do. */
+static void skip_without_raw_calls(TestingT *t) {
+#if defined(BURROW_OS_COSMO)
+    testing_t_skip_v(t, "Cosmopolitan has no raw system calls");
+#else
+    (void)t;
+#endif
+}
+
 static Slice bytes_of(void *p, Int n) {
     return (Slice){p, n, n, TYPE_BYTE};
 }
@@ -143,6 +153,7 @@ static void TestSetsockoptString(TestingT *t) {
 /* The other end of a pipe goes over a socket in an SCM_RIGHTS message, and what
  * is written to the pipe comes out of the descriptor that arrives. */
 static void TestPassRights(TestingT *t) {
+    skip_without_raw_calls(t);
     ARENA_BEGIN;
     SyscallSocketpairRet s = pair(t, SYSCALL_SOCK_STREAM);
     int p[2];
@@ -195,6 +206,7 @@ static void TestPassRights(TestingT *t) {
 
 /* A listening Unix socket, a client, Accept, Getsockname and Getpeername. */
 static void TestUnixListen(TestingT *t) {
+    skip_without_raw_calls(t);
     ARENA_BEGIN;
     Error err = BURROW_NO_ERROR;
     Str dir = os_mkdir_temp(a, BURROW_S(""), BURROW_S("burrow-sock-*"), &err);
@@ -272,6 +284,7 @@ static void TestUnixListen(TestingT *t) {
 /* UDP on the loopback address: Bind to port 0, Getsockname for the port the
  * system chose, Sendto and Recvfrom. */
 static void TestUDPLoopback(TestingT *t) {
+    skip_without_raw_calls(t);
     ARENA_BEGIN;
     Error err = BURROW_NO_ERROR;
     Int r = syscall_socket(SYSCALL_AF_INET, SYSCALL_SOCK_DGRAM, 0, &err);
@@ -332,6 +345,7 @@ static void TestUDPLoopback(TestingT *t) {
 }
 
 static void TestSockopts(TestingT *t) {
+    skip_without_raw_calls(t);
     Error err = BURROW_NO_ERROR;
     Int fd = syscall_socket(SYSCALL_AF_INET, SYSCALL_SOCK_STREAM, 0, &err);
     if (BURROW_FAILED(err))

@@ -242,3 +242,37 @@ crypto/dsa: func GenerateKey: takes the allocator the new integers come from
 # through a pointer, as it does from Encapsulate in crypto/mlkem.
 crypto/mlkem/mlkemtest: func Encapsulate768: returns the ciphertext through a pointer, as C has one return value
 crypto/mlkem/mlkemtest: func Encapsulate1024: returns the ciphertext through a pointer, as C has one return value
+
+# include/burrow/crypto/hpke.h: Go's KEM, KDF and AEAD are interfaces with
+# unexported methods, so the values crypto/hpke makes are the only ones there
+# are, and each is a pointer to a constant struct here, compared with == the way
+# Go compares them. PublicKey and PrivateKey are closed the same way, and are
+# pointers to keys from the allocator, freed with their _free functions.
+crypto/hpke: func AES128GCM: returns a pointer to a constant struct, as AEAD cannot be implemented outside the package
+crypto/hpke: func AES256GCM: returns a pointer to a constant struct, as AEAD cannot be implemented outside the package
+crypto/hpke: func ChaCha20Poly1305: returns a pointer to a constant struct, as AEAD cannot be implemented outside the package
+crypto/hpke: func ExportOnly: returns a pointer to a constant struct, as AEAD cannot be implemented outside the package
+crypto/hpke: func NewAEAD: returns a pointer to a constant struct, as AEAD cannot be implemented outside the package
+crypto/hpke: func HKDFSHA256: returns a pointer to a constant struct, as KDF cannot be implemented outside the package
+crypto/hpke: func HKDFSHA384: returns a pointer to a constant struct, as KDF cannot be implemented outside the package
+crypto/hpke: func HKDFSHA512: returns a pointer to a constant struct, as KDF cannot be implemented outside the package
+crypto/hpke: func SHAKE128: returns a pointer to a constant struct, as KDF cannot be implemented outside the package
+crypto/hpke: func SHAKE256: returns a pointer to a constant struct, as KDF cannot be implemented outside the package
+crypto/hpke: func NewKDF: returns a pointer to a constant struct, as KDF cannot be implemented outside the package
+crypto/hpke: func DHKEM: returns a pointer to a constant struct, as KEM cannot be implemented outside the package
+crypto/hpke: func MLKEM768: returns a pointer to a constant struct, as KEM cannot be implemented outside the package
+crypto/hpke: func MLKEM1024: returns a pointer to a constant struct, as KEM cannot be implemented outside the package
+crypto/hpke: func MLKEM768X25519: returns a pointer to a constant struct, as KEM cannot be implemented outside the package
+crypto/hpke: func MLKEM768P256: returns a pointer to a constant struct, as KEM cannot be implemented outside the package
+crypto/hpke: func MLKEM1024P384: returns a pointer to a constant struct, as KEM cannot be implemented outside the package
+crypto/hpke: func NewKEM: returns a pointer to a constant struct, as KEM cannot be implemented outside the package
+crypto/hpke: func NewDHKEMPublicKey: returns a pointer to a key from the allocator, as PublicKey cannot be implemented outside the package
+crypto/hpke: func NewHybridPublicKey: returns a pointer to a key from the allocator, as PublicKey cannot be implemented outside the package
+crypto/hpke: func NewMLKEMPublicKey: returns a pointer to a key from the allocator, as PublicKey cannot be implemented outside the package
+crypto/hpke: func NewDHKEMPrivateKey: returns a pointer to a key from the allocator, as PrivateKey cannot be implemented outside the package
+crypto/hpke: func NewHybridPrivateKey: returns a pointer to a key from the allocator, as PrivateKey cannot be implemented outside the package
+crypto/hpke: func NewMLKEMPrivateKey: returns a pointer to a key from the allocator, as PrivateKey cannot be implemented outside the package
+crypto/hpke: func NewSender: takes the PublicKey and the ciphersuite as pointers, as none of them can be implemented outside the package
+crypto/hpke: func Seal: takes the PublicKey and the ciphersuite as pointers, as none of them can be implemented outside the package
+crypto/hpke: func NewRecipient: takes the PrivateKey and the ciphersuite as pointers, as none of them can be implemented outside the package
+crypto/hpke: func Open: takes the PrivateKey and the ciphersuite as pointers, as none of them can be implemented outside the package

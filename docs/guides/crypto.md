@@ -821,3 +821,134 @@ printf("%d\n", (int)key.len);
 ```
 
 Everything that touches secret data is constant time, as Go's code is, and the shared key goes through the same constant time selection Go uses for a ciphertext that does not check out. Go runs a self test and checks each new key against itself only in FIPS mode, which burrow does not have, so it does neither.
+
+## crypto/hpke
+
+`burrow/crypto/hpke.h` is Hybrid Public Key Encryption, RFC 9180: a way to encrypt to someone's public key that is built out of a KEM, a KDF and an AEAD, each picked by its own handle. It has the DHKEMs over P-256, P-384, P-521 and X25519, ML-KEM-768 and ML-KEM-1024 on their own, and the post-quantum hybrids MLKEM768-X25519 (X-Wing), MLKEM768-P256 and MLKEM1024-P384. The KDFs are HKDF with SHA-256, SHA-384 and SHA-512, and SHAKE128 and SHAKE256. The AEADs are AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305, plus the export-only one. This is the example Go's documentation has:
+
+<!-- example: ../examples/crypto/hpke.c#exchange -->
+```c
+// In a real application, the private key would be stored and the
+// public key bytes sent to the sender.
+const HpkeKEM *kem = hpke_mlkem768_x25519();
+const HpkeKDF *kdf = hpke_hkdfsha256();
+const HpkeAEAD *aead = hpke_aes256_gcm();
+Error err = BURROW_NO_ERROR;
+HpkePrivateKey *k = hpke_kem_generate_key(kem, a, &err);
+if (BURROW_FAILED(err))
+    return;
+Slice public_key_bytes = hpke_public_key_bytes(hpke_private_key_public_key(k), a);
+
+// The sender parses the public key and seals a message to it.
+HpkePublicKey *pk = hpke_kem_new_public_key(kem, a, public_key_bytes, &err);
+if (BURROW_FAILED(err))
+    return;
+Slice ciphertext =
+    hpke_seal(a, pk, kdf, aead, text("example"), text("|-()-|"), &err);
+if (BURROW_FAILED(err))
+    return;
+
+// The recipient opens it with the private key.
+Slice plaintext = hpke_open(a, k, kdf, aead, text("example"), ciphertext, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("Decrypted message: %.*s\n", (int)plaintext.len, (const char *)plaintext.p);
+hpke_public_key_free(pk);
+hpke_private_key_free(k);
+```
+
+`hpke_seal` and `hpke_open` are for one message, and put the encapsulated key in front of the ciphertext. For more than one, `hpke_new_sender` gives the encapsulated key to send and a sender that seals each message with the next nonce, and `hpke_new_recipient` takes that key and opens them in the same order. Each side can also export secrets from the context, which is all an export-only context does. Keys come from the allocator they are made with and go back with `hpke_private_key_free` and `hpke_public_key_free`. The public key of a private key is borrowed from it. The handles for KEMs, KDFs and AEADs are static and never freed.
+
+`hpke_kem_derive_key_pair` makes the same key from the same input keying material every time, the way RFC 9180's test vectors do. This is the recipient of its first vector, which gets the first message out and exports a secret:
+
+<!-- example: ../examples/crypto/hpke.c#derive -->
+```c
+// The recipient of RFC 9180's first test vector, A.1, derives its key
+// from ikmR, and opens the first message the sender sent it.
+const HpkeKEM *kem = hpke_dhkem(ecdh_x25519());
+Error err = BURROW_NO_ERROR;
+HpkePrivateKey *k = hpke_kem_derive_key_pair(
+    kem, a,
+    unhex(a, "6db9df30aa07dd42ee5e8181afdb977e538f5e1fec8a06223f33f7013e525037"),
+    &err);
+if (BURROW_FAILED(err))
+    return;
+print_hex(a, hpke_public_key_bytes(hpke_private_key_public_key(k), a));
+
+Slice enc =
+    unhex(a, "37fda3567bdbd628e88668c3c8d7e97d1d1253b6d4ea6d44c150f741f1bf4431");
+HpkeRecipient *r =
+    hpke_new_recipient(a, enc, k, hpke_hkdfsha256(), hpke_aes128_gcm(),
+                       text("Ode on a Grecian Urn"), &err);
+if (BURROW_FAILED(err))
+    return;
+Slice pt = hpke_recipient_open(
+    r, a, text("Count-0"),
+    unhex(a, "f938558b5d72f1a23810b4be2ab4f84331acc02fc97babc53a52ae8218a355a9"
+             "6d8770ac83d07bea87e13c512a"),
+    &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%.*s\n", (int)pt.len, (const char *)pt.p);
+print_hex(a, hpke_recipient_export(r, a, BURROW_S(""), 32, &err));
+hpke_private_key_free(k);
+```
+
+An export-only context seals and opens nothing:
+
+<!-- example: ../examples/crypto/hpke.c#export -->
+```c
+// With ExportOnly the two sides share secrets and nothing else.
+const HpkeKEM *kem = hpke_dhkem(ecdh_p256());
+Error err = BURROW_NO_ERROR;
+HpkePrivateKey *k = hpke_kem_generate_key(kem, a, &err);
+if (BURROW_FAILED(err))
+    return;
+HpkeSender *s;
+Slice enc = hpke_new_sender(a, hpke_private_key_public_key(k), hpke_hkdfsha256(),
+                            hpke_export_only(), text("session"), &s, &err);
+if (BURROW_FAILED(err))
+    return;
+HpkeRecipient *r = hpke_new_recipient(a, enc, k, hpke_hkdfsha256(),
+                                      hpke_export_only(), text("session"), &err);
+if (BURROW_FAILED(err))
+    return;
+Slice x = hpke_sender_export(s, a, BURROW_S("key"), 16, &err);
+Slice y = hpke_recipient_export(r, a, BURROW_S("key"), 16, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%d %d %s\n", (int)enc.len, (int)x.len,
+       bytes_equal(x, y) ? "true" : "false");
+hpke_sender_seal(s, a, slice_nil(TYPE_BYTE), text("hi"), &err);
+print_error(err);
+hpke_private_key_free(k);
+```
+
+Keys can also be made out of keys of the other packages: `hpke_new_dhkem_private_key` takes any `EcdhKeyExchanger`, `hpke_new_mlkem_private_key` any ML-KEM `CryptoDecapsulator`, and `hpke_new_hybrid_private_key` one of each. A private key made of parts that are not plain keys of those packages has no bytes to give back, which is an error from `hpke_private_key_bytes`, as it is in Go. An ID nobody supports, and a ciphertext that does not open, are errors with Go's messages:
+
+<!-- example: ../examples/crypto/hpke.c#errors -->
+```c
+Error err = BURROW_NO_ERROR;
+hpke_new_kem(0x0021, &err);
+print_error(err);
+err = BURROW_NO_ERROR;
+hpke_new_aead(0xabcd, &err);
+print_error(err);
+err = BURROW_NO_ERROR;
+
+HpkePrivateKey *k = hpke_kem_generate_key(hpke_dhkem(ecdh_x25519()), a, &err);
+if (BURROW_FAILED(err))
+    return;
+Slice ct =
+    hpke_seal(a, hpke_private_key_public_key(k), hpke_hkdfsha256(),
+              hpke_cha_cha20_poly1305(), slice_nil(TYPE_BYTE), text("hi"), &err);
+if (BURROW_FAILED(err))
+    return;
+((Byte *)ct.p)[ct.len - 1] ^= 1;
+hpke_open(a, k, hpke_hkdfsha256(), hpke_cha_cha20_poly1305(), slice_nil(TYPE_BYTE),
+          ct, &err);
+print_error(err);
+hpke_private_key_free(k);
+```
+
+Go's tests set package variables to make an encapsulation come out as a vector says. burrow has no mutable globals, so its tests reach into `src/crypto/hpke_internal.h` for a sender that takes that randomness as an argument instead, and nothing of it is in the public header.

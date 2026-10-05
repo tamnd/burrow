@@ -65,6 +65,7 @@
 #include "burrow/crypto/elliptic.h"
 #include "burrow/crypto/hkdf.h"
 #include "burrow/crypto/hmac.h"
+#include "burrow/crypto/hpke.h"
 #include "burrow/crypto/md5.h"
 #include "burrow/crypto/mlkem.h"
 #include "burrow/crypto/mlkem/mlkemtest.h"

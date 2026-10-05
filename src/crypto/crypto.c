@@ -216,7 +216,7 @@ void crypto_register_hash(CryptoHash h, HashNewFunc f) {
 
 /* -------------------------------------------------------------- SignerOpts */
 
-static const Type crypto_hash_desc = {
+const Type burrow_type_CryptoHash = {
     {(const Byte *)"Hash", 4},
     {(const Byte *)"crypto", 6},
     KIND_UINT,
@@ -237,7 +237,7 @@ static CryptoHash crypto_hash_opts_hash_func(void *self) {
     return *(const CryptoHash *)self;
 }
 
-static const CryptoSignerOptsVT crypto_hash_opts_vt = {&crypto_hash_desc,
+static const CryptoSignerOptsVT crypto_hash_opts_vt = {&burrow_type_CryptoHash,
                                                        crypto_hash_opts_hash_func};
 
 CryptoSignerOpts crypto_hash_as_signer_opts(const CryptoHash *h) {

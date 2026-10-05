@@ -33,7 +33,8 @@
 
 #if defined(BURROW_OS_WINDOWS)
 #define USER_IMPL_WINDOWS 1
-#elif defined(BURROW_OSUSERGO)
+#elif defined(BURROW_OSUSERGO) || defined(BURROW_OS_WASI)
+/* wasip1 has no libc to ask, and Go has no cgo there, so it is the files. */
 #define USER_IMPL_FILES 1
 #else
 #define USER_IMPL_LIBC 1

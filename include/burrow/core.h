@@ -99,12 +99,15 @@ extern "C" {
  * and wrong. len() returns int, strings_index returns int, and the overflow
  * behaviour of a 32 bit int is visible in Go's own tests, in strconv, in
  * bytes.Repeat's overflow check and in slices.Grow's capacity arithmetic. A
- * port that is wider than the original passes tests the original fails. */
+ * port that is wider than the original passes tests the original fails.
+ *
+ * WebAssembly is the exception, in Go as here: int is 64 bits there and a
+ * pointer is 32, so on wasm a length is wider than the address it measures. */
 
 typedef uint8_t Byte;
 typedef int32_t Rune;
 
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
 typedef int64_t Int;
 typedef uint64_t Uint;
 #define BURROW_INT_MAX INT64_MAX

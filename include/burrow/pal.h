@@ -234,7 +234,9 @@ int64_t pal_tz_load(const char *name, void *buf, int64_t cap, PalErrno *err);
  * touched until pal_vm_commit says so. Returns NULL on failure.
  *
  * On POSIX this is mmap PROT_NONE, which counts against the address space limit
- * and not against memory. On Windows it is VirtualAlloc MEM_RESERVE. */
+ * and not against memory. On Windows it is VirtualAlloc MEM_RESERVE. wasm
+ * memory has no protection at all, so on wasip1 it is zeroed memory from the C
+ * heap, committing does nothing, and pal_vm_guard reports PAL_ENOTSUP. */
 BURROW_OWNS(ret) void *pal_vm_reserve(int64_t bytes, PalErrno *err);
 
 /* Back a range inside a reservation with memory and make it readable and

@@ -236,7 +236,9 @@ int64_t pal_seek(int64_t fd, int64_t off, int32_t whence, PalErrno *err) {
         return -1;
     }
 
-    off_t at = lseek((int)fd, (off_t)off, w);
+    /* In brackets because wasi-libc makes lseek a macro with a GNU statement
+     * expression in it, which -Wpedantic objects to. */
+    off_t at = (lseek)((int)fd, (off_t)off, w);
     if (at < 0)
         return file_fail_n(err);
     return (int64_t)at;
@@ -444,12 +446,26 @@ bool pal_chdir(const char *path, PalErrno *err) {
     return chdir(path) == 0 || file_fail(err);
 }
 
+#if defined(BURROW_OS_WASI)
+
+/* A wasip1 descriptor has no way back to its path. Go's os keeps the path it
+ * opened the file with and changes to that, and burrow's os does the same. */
+bool pal_fchdir(int64_t fd, PalErrno *err) {
+    (void)fd;
+    BURROW_OUT(err, PAL_ENOSYS);
+    return false;
+}
+
+#else
+
 bool pal_fchdir(int64_t fd, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (!fd_ok(fd, err))
         return false;
     return fchdir((int)fd) == 0 || file_fail(err);
 }
+
+#endif
 
 int64_t pal_getcwd(char *buf, int64_t cap, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
@@ -541,12 +557,29 @@ int64_t pal_readlink(const char *path, char *buf, int64_t cap, PalErrno *err) {
     return (int64_t)n;
 }
 
+#if defined(BURROW_OS_WASI)
+
+/* wasip1 has no modes to change. Go's Chmod there only checks that the file is
+ * there, so this does the same. */
+bool pal_chmod(const char *path, uint32_t mode, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    (void)mode;
+    if (!posix_path_ok(path, err))
+        return false;
+    struct stat st;
+    return stat(path, &st) == 0 || file_fail(err);
+}
+
+#else
+
 bool pal_chmod(const char *path, uint32_t mode, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (!posix_path_ok(path, err))
         return false;
     return chmod(path, (mode_t)(mode & 07777)) == 0 || file_fail(err);
 }
+
+#endif
 
 int pal_fd_wait(int64_t fd, bool write, int64_t cancel, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
@@ -585,6 +618,30 @@ bool pal_eaccess(const char *path, uint32_t mode, PalErrno *err) {
 #endif
 }
 
+#if defined(BURROW_OS_WASI)
+
+/* wasip1 has no owners. Go answers ENOSYS for all of these. */
+static bool file_nosys(PalErrno *err) {
+    BURROW_OUT(err, PAL_ENOSYS);
+    return false;
+}
+
+bool pal_chown(const char *path, int64_t uid, int64_t gid, PalErrno *err) {
+    (void)path;
+    (void)uid;
+    (void)gid;
+    return file_nosys(err);
+}
+
+bool pal_lchown(const char *path, int64_t uid, int64_t gid, PalErrno *err) {
+    (void)path;
+    (void)uid;
+    (void)gid;
+    return file_nosys(err);
+}
+
+#else
+
 bool pal_chown(const char *path, int64_t uid, int64_t gid, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (!posix_path_ok(path, err))
@@ -608,6 +665,22 @@ bool pal_lchown(const char *path, int64_t uid, int64_t gid, PalErrno *err) {
     }
 }
 
+#endif
+
+#if defined(BURROW_OS_WASI)
+
+/* As pal_chmod: Go's Fchmod on wasip1 is an Fstat. */
+bool pal_fchmod(int64_t fd, uint32_t mode, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    (void)mode;
+    if (!fd_ok(fd, err))
+        return false;
+    struct stat st;
+    return fstat((int)fd, &st) == 0 || file_fail(err);
+}
+
+#else
+
 bool pal_fchmod(int64_t fd, uint32_t mode, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (!fd_ok(fd, err))
@@ -619,6 +692,19 @@ bool pal_fchmod(int64_t fd, uint32_t mode, PalErrno *err) {
             return file_fail(err);
     }
 }
+
+#endif
+
+#if defined(BURROW_OS_WASI)
+
+bool pal_fchown(int64_t fd, int64_t uid, int64_t gid, PalErrno *err) {
+    (void)fd;
+    (void)uid;
+    (void)gid;
+    return file_nosys(err);
+}
+
+#else
 
 bool pal_fchown(int64_t fd, int64_t uid, int64_t gid, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
@@ -633,6 +719,8 @@ bool pal_fchown(int64_t fd, int64_t uid, int64_t gid, PalErrno *err) {
             return file_fail(err);
     }
 }
+
+#endif
 
 static struct timespec timespec_from_ns(int64_t ns) {
     int64_t sec = ns / 1000000000;
@@ -788,6 +876,18 @@ bool pal_symlinkat(const char *target, int64_t dirfd, const char *path, PalErrno
     return symlinkat(target, (int)dirfd, path) == 0 || file_fail(err);
 }
 
+#if defined(BURROW_OS_WASI)
+
+/* Go's Fchmodat on wasip1 is ENOSYS, unlike its Chmod. */
+bool pal_fchmodat(int64_t dirfd, const char *path, uint32_t mode, PalErrno *err) {
+    (void)dirfd;
+    (void)path;
+    (void)mode;
+    return file_nosys(err);
+}
+
+#else
+
 bool pal_fchmodat(int64_t dirfd, const char *path, uint32_t mode, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (!dirfd_ok(dirfd, err) || !posix_path_ok(path, err))
@@ -804,6 +904,21 @@ bool pal_fchmodat(int64_t dirfd, const char *path, uint32_t mode, PalErrno *err)
     }
 }
 
+#endif
+
+#if defined(BURROW_OS_WASI)
+
+bool pal_fchownat(int64_t dirfd, const char *path, int64_t uid, int64_t gid,
+                  PalErrno *err) {
+    (void)dirfd;
+    (void)path;
+    (void)uid;
+    (void)gid;
+    return file_nosys(err);
+}
+
+#else
+
 bool pal_fchownat(int64_t dirfd, const char *path, int64_t uid, int64_t gid,
                   PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
@@ -818,6 +933,8 @@ bool pal_fchownat(int64_t dirfd, const char *path, int64_t uid, int64_t gid,
             return file_fail(err);
     }
 }
+
+#endif
 
 bool pal_utimesat(int64_t dirfd, const char *path, int64_t atime_ns, int64_t mtime_ns,
                   PalErrno *err) {

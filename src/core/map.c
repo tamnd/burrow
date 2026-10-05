@@ -281,7 +281,13 @@ static void insert_new(Map *m, const void *key, const void *val, uint64_t hash) 
 static bool map_rehash(Map *m, Uint ngroups) {
     Byte *old = m->groups;
     Uint old_n = m->ngroups;
-    Byte *fresh = mem_alloc_array(m->a, ngroups, m->group_size, m->group_align);
+#if BURROW_INT_BITS > BURROW_PTR_BITS
+    /* Uint is wider than size_t on wasm, and a count that does not fit is an
+     * allocation that cannot succeed. */
+    if (ngroups > SIZE_MAX)
+        return false;
+#endif
+    Byte *fresh = mem_alloc_array(m->a, (size_t)ngroups, m->group_size, m->group_align);
     if (fresh == NULL)
         return false;
 
@@ -438,7 +444,8 @@ Map *map_clone(Alloc *a, const Map *m) {
     if (m->groups == NULL)
         return c;
 
-    c->groups = mem_alloc_array(a, m->ngroups, m->group_size, m->group_align);
+    /* ngroups fits in a size_t, since it was allocated once already. */
+    c->groups = mem_alloc_array(a, (size_t)m->ngroups, m->group_size, m->group_align);
     if (c->groups == NULL) {
         mem_free(a, c, sizeof(Map), _Alignof(Map));
         return NULL;

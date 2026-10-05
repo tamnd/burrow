@@ -48,4 +48,11 @@
 #define SKIP_WITHOUT_THREADS(t) ((void)(t))
 #endif
 
+/* testenv.MustHaveExec: wasip1 cannot start a process either. */
+#if defined(BURROW_OS_WASI)
+#define SKIP_WITHOUT_EXEC(t) testing_t_skip_v((t), "wasip1 cannot start a process")
+#else
+#define SKIP_WITHOUT_EXEC(t) ((void)(t))
+#endif
+
 #endif /* BURROW_TESTS_CHECK_H */

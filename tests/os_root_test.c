@@ -95,6 +95,19 @@ static void must_have_symlink(TestingT *t) {
     }
     if (have < 0)
         testing_t_skip_v(t, "symbolic links do not work here");
+#elif defined(BURROW_OS_WASI)
+    /* Some wasip1 runtimes refuse a link to an absolute path, or one that
+     * leads out of the directory they were given, so as in Go, a link that
+     * cannot be made is a skip. */
+    static int have; /* 0 not known yet, 1 yes, -1 no */
+    if (have == 0) {
+        Str d = temp_dir(t);
+        Str target = join(d, S("testfile.txt"));
+        write_file(t, target, S("x"), 0666);
+        have = BURROW_OK(os_symlink(target, join(d, S("testlink")))) ? 1 : -1;
+    }
+    if (have < 0)
+        testing_t_skip_v(t, "symbolic links do not work here");
 #else
     (void)t;
 #endif

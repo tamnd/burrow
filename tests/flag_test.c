@@ -826,6 +826,7 @@ static int child(int argc, char **argv) {
 }
 
 static void TestExitCode(TestingT *t) {
+    SKIP_WITHOUT_EXEC(t);
     static const struct {
         const char *flag;
         const char *flag_handle;

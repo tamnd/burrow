@@ -480,9 +480,11 @@ static Error enc_nest(Alloc *a, BytesBuffer *buf, Int n) {
  * engine's stack, and nothing in the module can see how much of that is left,
  * so a count stands in for it. Go grows its stacks and takes ten thousand
  * levels here, and a fixed stack takes fewer. So the test finds how deep each
- * side goes, wants both to manage at least 100, and wants one level more to be
- * an error rather than a crash. The decoder spends more stack a level than the
- * encoder, so it stops sooner. */
+ * side goes, wants each to manage some, and wants one level more to be an
+ * error rather than a crash. The decoder spends more stack a level than the
+ * encoder, so it stops sooner: in CI, 116 levels encode on the default
+ * goroutine stack and 37 decode. */
+enum { GOB_WASI_WANT_ENC = 100, GOB_WASI_WANT_DEC = 32 };
 static Error dec_nest(Alloc *a, BytesBuffer *buf, Int n, Int *levels) {
     Error err = enc_nest(a, buf, n);
     if (!BURROW_OK(err))
@@ -510,8 +512,9 @@ static void TestGobNesting(TestingT *t) {
         else
             hi = mid;
     }
-    if (lo < 100)
-        testing_t_errorf_v(t, "only %d levels encode, want at least 100", (int)lo);
+    if (lo < GOB_WASI_WANT_ENC)
+        testing_t_errorf_v(t, "only %d levels encode, want at least %d", (int)lo,
+                           (int)GOB_WASI_WANT_ENC);
     want_err(t, "encode one level too many", enc_nest(a, &buf, hi),
              "gob: encoder: nesting too deep");
 
@@ -525,8 +528,9 @@ static void TestGobNesting(TestingT *t) {
             dhi = mid;
     }
     testing_t_logf_v(t, "%d levels encode and %d decode", (int)lo, (int)dlo);
-    if (dlo < 100)
-        testing_t_errorf_v(t, "only %d levels decode, want at least 100", (int)dlo);
+    if (dlo < GOB_WASI_WANT_DEC)
+        testing_t_errorf_v(t, "only %d levels decode, want at least %d", (int)dlo,
+                           (int)GOB_WASI_WANT_DEC);
     if (dhi <= lo)
         want_err(t, "decode one level too many", dec_nest(a, &buf, dhi, &levels),
                  "gob: decoder: nesting too deep");

@@ -395,6 +395,12 @@ static void TestPipe(TestingT *t) {
     OsFile *w = NULL;
     Error e = BURROW_NO_ERROR;
     OsFile *r = os_pipe(a, &w, &e);
+#if defined(BURROW_OS_WASI)
+    /* wasip1 has no pipes, and Go's Pipe there fails the same way. */
+    if (!str_eq(error_text(e), S("pipe: Not implemented on wasip1")))
+        testing_t_errorf_v(t, "Pipe on wasip1 = %v, want ENOSYS", e);
+    return;
+#endif
     if (BURROW_FAILED(e))
         testing_t_fatalf_v(t, "Pipe: %v", e);
     CHECK(str_eq(os_file_name(r), S("|0")));
@@ -422,6 +428,10 @@ static void TestPipe(TestingT *t) {
 /* ------------------------------------------------- File.Chmod and Chown */
 
 static void TestFileChmod(TestingT *t) {
+#if defined(BURROW_OS_WASI)
+    /* As Go's TestChmod and TestChown: wasip1 has no modes or owners. */
+    testing_t_skip_v(t, "Chmod is not supported on wasip1");
+#endif
     Str d = temp_dir(t);
     Str name = fmt_sprintf_v(a, "%s%cf", d, (Int)OS_PATH_SEPARATOR);
     Error e = BURROW_NO_ERROR;

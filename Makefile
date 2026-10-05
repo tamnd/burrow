@@ -84,7 +84,9 @@ endif
 # must leave alone, because it is the one that catches the unwinding, and -g
 # keeps the function names, so that a trap says where it happened. The tests
 # run under wasmtime with the whole file system visible, which is how Go runs
-# its own wasip1 tests.
+# its own wasip1 tests. Every C call also uses the engine's own stack, and Go's
+# encoding/xml tests nest 5000 elements deep, which 8 MiB of it was not enough
+# for, so the tests get 32 MiB.
 WASI := $(shell echo | $(CC) -dM -E -x c - 2>/dev/null | grep -c __wasi__)
 ifneq ($(WASI),0)
   WASM_OPT ?= wasm-opt
@@ -97,7 +99,7 @@ ifneq ($(WASI),0)
 	--pass-arg=asyncify-ignore-imports \
 	--pass-arg=asyncify-removelist@burrow__mcontext_run -O1 \
 	--translate-to-exnref -g -o $@
-  TEST_RUN ?= $(WASMTIME) run -W exceptions=y -W max-wasm-stack=8388608 --dir=/ \
+  TEST_RUN ?= $(WASMTIME) run -W exceptions=y -W max-wasm-stack=33554432 --dir=/ \
 	--env PWD="$$PWD" --env TMPDIR=/tmp --
 endif
 WASM_POST ?= @:

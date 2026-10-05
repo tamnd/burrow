@@ -632,6 +632,10 @@ static void TestExecLookup(TestingT *t) {
 }
 
 static void TestMapShared(TestingT *t) {
+#if defined(BURROW_OS_WASI)
+    /* WASI has no mmap, and Go's syscall has no Mmap on wasip1. */
+    testing_t_skip_v(t, "wasip1 has no mmap");
+#endif
     char path[1100];
     uint32_t rnd = 0;
     pal_random_bytes(&rnd, sizeof rnd, NULL);

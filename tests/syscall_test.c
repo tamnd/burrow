@@ -209,17 +209,25 @@ static void TestTimeoutTemporary(TestingT *t) {
 
 /* The Error: its text, errors_is through the Is slot, errors_as back to the
  * number, and the same from inside a PathError. */
+#if defined(BURROW_OS_WASI)
+#define EEXIST_TEXT "File exists" /* Go's wasip1 table */
+#define EPERM_TEXT "Operation not permitted"
+#else
+#define EEXIST_TEXT "file exists"
+#define EPERM_TEXT "operation not permitted"
+#endif
+
 static void TestAsError(TestingT *t) {
     ARENA_BEGIN;
     Error err = syscall_errno_as_error(SYSCALL_EEXIST, a);
-    CHECK(str_is(error_text(err), "file exists"));
+    CHECK(str_is(error_text(err), EEXIST_TEXT));
     CHECK(errors_is(err, fs_err_exist));
     CHECK(!errors_is(err, fs_err_not_exist));
     const SyscallErrno *p = (const SyscallErrno *)errors_as(err, TYPE_SYSCALL_ERRNO);
     CHECK(p != NULL && *p == SYSCALL_EEXIST);
 
     Error pe = fs_path_error_new(a, BURROW_S("open"), BURROW_S("/nowhere"), err);
-    CHECK(str_is(error_text(pe), "open /nowhere: file exists"));
+    CHECK(str_is(error_text(pe), "open /nowhere: " EEXIST_TEXT));
     CHECK(errors_is(pe, fs_err_exist));
     p = (const SyscallErrno *)errors_as(pe, TYPE_SYSCALL_ERRNO);
     CHECK(p != NULL && *p == SYSCALL_EEXIST);
@@ -239,7 +247,7 @@ static void TestAsError(TestingT *t) {
     ARENA_END;
     p = (const SyscallErrno *)errors_as(kept, TYPE_SYSCALL_ERRNO);
     CHECK(p != NULL && *p == SYSCALL_EEXIST);
-    CHECK(str_is(error_text(kept), "file exists"));
+    CHECK(str_is(error_text(kept), EEXIST_TEXT));
     arena_free(&ar2);
 }
 
@@ -268,7 +276,7 @@ static void TestMethods(TestingT *t) {
     Str text = BURROW_STR_EMPTY;
     rets[0] = &text;
     CHECK(m != NULL && method_call(m, &e, NULL, rets));
-    CHECK(str_is(text, "operation not permitted"));
+    CHECK(str_is(text, EPERM_TEXT));
 }
 
 /* Straight after a failed PAL call the Errno is the system's own number, and

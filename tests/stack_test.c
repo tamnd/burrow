@@ -507,4 +507,22 @@ static void TestRunningOffTheBottomOfAStackIsAStackOverflow(TestingT *t) {
     TESTS_1(X)                                                                         \
     TESTS_2(X)
 
+#if defined(BURROW_MCONTEXT_ASYNCIFY)
+/* With Asyncify a switch has to happen somewhere above burrow__mcontext_run,
+ * and the context it runs is the only one that can be attached inside it, as
+ * in mcontext_test.c. */
+static int stack_run_code;
+
+static void stack_run_tests(void *m) {
+    stack_run_code = testing_m_run(m);
+}
+
+static int stack_test_main(TestingM *m) {
+    burrow__mcontext_run(&back_to, stack_run_tests, m);
+    return stack_run_code;
+}
+
+TESTING_MAIN_BARE_WITH(stack_test_main, TESTS)
+#else
 TESTING_MAIN_BARE(TESTS)
+#endif

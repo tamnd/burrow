@@ -417,7 +417,7 @@ jobs:
           echo "$RUNNER_TEMP/wasmtime-v49.0.2-x86_64-linux" >>"$GITHUB_PATH"
           echo "$RUNNER_TEMP/binaryen-version_133/bin" >>"$GITHUB_PATH"
       - name: the test suite
-        run: make -j4 BUILD=build-wasi CC="$WASI_SDK/bin/clang --target=wasm32-wasip1" AR="$WASI_SDK/bin/llvm-ar" TESTFLAGS=-test.short test
+        run: make -j4 BUILD=build-wasi CC="$WASI_SDK/bin/clang --target=wasm32-wasip1" AR="$WASI_SDK/bin/llvm-ar" TESTFLAGS="-test.short -test.v" test
 
   # The gc backend is the only optional dependency in the project, and an
   # optional backend nobody builds is a backend that is already broken. One job
@@ -462,7 +462,7 @@ jobs:
       # Short mode, because since archive/zip landed tsan and msan have both
       # hit the timeout with zip_test still running. Its ZIP64 tests are the
       # ones Go skips in short mode, and the other jobs still run them.
-      - run: make CC=clang MODE=debug CFLAGS="-std=c11 -O1 -g -Iinclude -DBURROW_SOURCE_ID=\\\"ci\\\" ${{ matrix.flags }}" TESTFLAGS=-test.short test
+      - run: make CC=clang MODE=debug CFLAGS="-std=c11 -O1 -g -Iinclude -DBURROW_SOURCE_ID=\\\"ci\\\" ${{ matrix.flags }}" TESTFLAGS="-test.short -test.v" test
         env:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1

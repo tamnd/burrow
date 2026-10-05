@@ -39,3 +39,4 @@ src/crypto/fiat_p384_64.h
 src/crypto/fiat_p521_32.h
 src/crypto/fiat_p521_64.h
 src/crypto/nistec_p256_table.h
+tests/ecdsa_test_gen.h

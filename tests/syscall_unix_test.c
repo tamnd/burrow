@@ -172,7 +172,19 @@ static void TestStringByteSlice(TestingT *t) {
 #if !defined(BURROW_OS_WINDOWS)
 /* ------------------------------------------------------------- every Unix */
 
+/* Cosmopolitan has no way to make a raw system call, so everything that goes
+ * through one gives ENOSYS there. syscall_call_test.c leaves it out for the
+ * same reason. */
+static void skip_without_raw_calls(TestingT *t) {
+#if defined(BURROW_OS_COSMO)
+    testing_t_skip_v(t, "Cosmopolitan has no raw system calls");
+#else
+    (void)t;
+#endif
+}
+
 static void TestMmap(TestingT *t) {
+    skip_without_raw_calls(t);
     Error err = BURROW_NO_ERROR;
     Slice b = syscall_mmap(-1, 0, syscall_getpagesize(), SYSCALL_PROT_NONE,
                            SYSCALL_MAP_ANON | SYSCALL_MAP_PRIVATE, &err);
@@ -185,6 +197,7 @@ static void TestMmap(TestingT *t) {
 
 /* Munmap only takes back a whole mapping Mmap gave, and only once. */
 static void TestMunmapChecks(TestingT *t) {
+    skip_without_raw_calls(t);
     Int page = syscall_getpagesize();
     Error err = BURROW_NO_ERROR;
     Slice b = syscall_mmap(-1, 0, 2 * page, SYSCALL_PROT_READ | SYSCALL_PROT_WRITE,
@@ -241,6 +254,7 @@ static void TestSlicePtrFromStrings(TestingT *t) {
 }
 
 static void TestSetNonblock(TestingT *t) {
+    skip_without_raw_calls(t);
     int fds[2];
     if (pipe(fds) != 0)
         testing_t_fatalf_v(t, "pipe failed");

@@ -1695,7 +1695,7 @@ static void TestRepeatCatchesOverflow(TestingT *t) {
         {cb("gopher"), 0, ""},
         {cb("-"), -1, "negative"},
         {cb("--"), -102, "negative"},
-        {slice_make(a, TYPE_BYTE, 255, 255), (Int)(UINTPTR_MAX / 255 + 1), "overflow"},
+        {slice_make(a, TYPE_BYTE, 255, 255), (Int)((Uint)-1 / 255 + 1), "overflow"},
     };
     for (Int i = 0; i < LEN(tests); i++) {
         Str err = repeat_panic(a, tests[i].s, tests[i].count);

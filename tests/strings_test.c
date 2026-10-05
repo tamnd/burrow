@@ -1750,7 +1750,7 @@ static void TestRepeatCatchesOverflow(TestingT *t) {
         {S("gopher"), 0, ""},
         {S("-"), -1, "negative"},
         {S("--"), -102, "negative"},
-        {b255, (Int)(UINTPTR_MAX / 255 + 1), "overflow"},
+        {b255, (Int)((Uint)-1 / 255 + 1), "overflow"},
     };
     for (Int i = 0; i < LEN(tests); i++) {
         Str err = repeat_panic(a, tests[i].s, tests[i].count);

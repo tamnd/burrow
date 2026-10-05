@@ -346,6 +346,8 @@ static void gob_type_string(GobBuf *b, const Type *t, int depth) {
 
 enum { GOB_THREAD_CHECK_AFTER = 32 };
 
+#if !defined(BURROW_OS_WASI)
+
 /* Where the stack is now. A local's address will not do under
  * AddressSanitizer, which can put locals on a fake stack in the heap, so the
  * frame address is used wherever there is one. */
@@ -359,8 +361,13 @@ static uintptr_t gob_stack_here(void) {
     return (uintptr_t)&probe;
 #endif
 }
+#endif
 
 bool burrow__gob_stack_low(uintptr_t *floor, int depth) {
+#if defined(BURROW_OS_WASI)
+    (void)floor;
+    return depth >= GOB_WASI_MAX_DEPTH;
+#else
     /* 0 is not looked at yet, 1 is bounds nobody would give, which falls
      * back on a count, and 2 is an OS thread whose bounds are left until the
      * nesting gets deep enough to be worth the call. */
@@ -385,6 +392,7 @@ bool burrow__gob_stack_low(uintptr_t *floor, int depth) {
     if (*floor == 1)
         return depth >= GOB_MAX_DEPTH;
     return gob_stack_here() < *floor;
+#endif
 }
 
 Str burrow__gob_type_string(Alloc *a, const Type *t) {

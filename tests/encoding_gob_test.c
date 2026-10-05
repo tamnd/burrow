@@ -465,6 +465,55 @@ static Any nest(Alloc *a, Int n) {
     return v;
 }
 
+#if defined(BURROW_OS_WASI)
+
+static Error enc_nest(Alloc *a, BytesBuffer *buf, Int n) {
+    bytes_buffer_reset(buf);
+    GobEncoder *e = gob_new_encoder(a, bytes_buffer_as_io_writer(buf));
+    Error err = gob_encoder_encode(e, nest(a, n));
+    gob_encoder_free(e);
+    return err;
+}
+
+/* On wasip1 the limit is a count, because every goroutine runs its calls on the
+ * engine's stack and nothing in the module can see how much of it is left. The
+ * deepest value the encoder takes has to come back from the decoder on the
+ * stack wasmtime gives by default, and one level more has to be refused. */
+static void TestGobNesting(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    gob_register_name(BURROW_S("main.Box"), BURROW_ANY(TYPE_OF(Box), NULL));
+
+    BytesBuffer buf = BYTES_BUFFER(a);
+    Int lo = 0, hi = 10001;
+    while (hi - lo > 1) {
+        Int mid = lo + (hi - lo) / 2;
+        if (BURROW_OK(enc_nest(a, &buf, mid)))
+            lo = mid;
+        else
+            hi = mid;
+    }
+    if (lo < 100)
+        testing_t_errorf_v(t, "only %d levels encode, want at least 100", (int)lo);
+    want_err(t, "encode one level too many", enc_nest(a, &buf, hi),
+             "gob: encoder: nesting too deep");
+
+    want_err(t, "encode the deepest", enc_nest(a, &buf, lo), "<nil>");
+    Box out = {0};
+    want_err(t, "decode the deepest",
+             dec_bytes(a, bytes_buffer_bytes(&buf), BURROW_ANY(TYPE_OF(Box), &out)),
+             "<nil>");
+    Int levels = 0;
+    for (Any v = BURROW_ANY(TYPE_OF(Box), &out); v.t == TYPE_OF(Box); levels++)
+        v = ((Box *)v.data)->I;
+    if (levels != lo)
+        testing_t_errorf_v(t, "decoded %d levels, want %d", (int)levels, (int)lo);
+    arena_free(&ar);
+}
+
+#else
+
 typedef struct DeepJob {
     Alloc *a;
     BytesBuffer *buf;
@@ -518,6 +567,8 @@ static void TestGobNesting(TestingT *t) {
     gob_encoder_free(e);
     arena_free(&ar);
 }
+
+#endif
 
 #define TESTS(X)                                                                       \
     X(TestGobComplex)                                                                  \

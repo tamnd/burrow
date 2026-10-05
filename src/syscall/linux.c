@@ -24,6 +24,10 @@
 #include <stddef.h>
 #include <string.h>
 
+#if BURROW_MSAN
+#include <sanitizer/msan_interface.h>
+#endif
+
 /* Go's own names for these, which the C library spells AT_. */
 #define LINUX_AT_FDCWD (-0x64)
 #define LINUX_AT_SYMLINK_NOFOLLOW 0x100
@@ -502,6 +506,11 @@ Str syscall_getwd(Alloc *a, Error *err) {
         BURROW_OUT(err, e);
         return nil;
     }
+#if BURROW_MSAN
+    /* The kernel wrote buf, where MemorySanitizer can't see it. */
+    if (n > 0 && n <= (Int)sizeof buf)
+        __msan_unpoison(buf, (size_t)n);
+#endif
     /* Getcwd counts the NUL. */
     if (n < 1 || n > (Int)sizeof buf || buf[n - 1] != 0) {
         BURROW_OUT(err, linux_einval());

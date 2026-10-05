@@ -232,6 +232,12 @@ struct burrow__G {
      * Cleared by the goroutine itself, at the safe point where it gives way. */
     uint32_t preempt;
 
+    /* Whether this goroutine runs with data independent timing, from
+     * burrow/dit.h. Go's g.ditWanted. Set by crypto/subtle on the goroutine
+     * itself, copied to every goroutine it starts, and read by whichever thread
+     * runs it next. */
+    bool dit_wanted;
+
     /* The coroutine this goroutine was made for by burrow__newcoro, or NULL for
      * an ordinary goroutine. When one of these exits it hands its thread
      * straight to whoever is waiting in the coroutine, the way it would have
@@ -421,6 +427,10 @@ struct burrow__M {
      * scheduler avoids waking a second thread to do a search that a first thread
      * is already doing. */
     uint32_t spinning;
+
+    /* Whether this thread has data independent timing on, which is Go's
+     * m.ditEnabled. Only this thread reads or writes it. */
+    bool dit_enabled;
 
     /* Next on the idle list, under the scheduler lock. */
     burrow__M *next;

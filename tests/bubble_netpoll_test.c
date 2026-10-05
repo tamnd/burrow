@@ -4,7 +4,7 @@
  * and it is a file of its own because everything in it needs a readiness
  * backend. On Windows, and on the web targets that have no backend at all, this
  * compiles to a main that says so, which is what tests/netpoll_test.c does and
- * for the same reason.
+ * for the same reason. wasip1 has a backend but no pipes, so it skips too.
  *
  * There is one question here and it is the one the rest of synctest is built
  * around. A goroutine waiting for a socket is not durably blocked, because the
@@ -37,6 +37,18 @@ static void TestNotAReadinessBackend(TestingT *t) {
 }
 
 #define TESTS(X) X(TestNotAReadinessBackend)
+
+TESTING_MAIN(TESTS)
+
+#elif defined(BURROW_OS_WASI)
+
+#include "burrow/testing.h"
+
+static void TestNoPipes(TestingT *t) {
+    testing_t_skip_v(t, "wasip1 has no pipes or socket pairs to read in a bubble");
+}
+
+#define TESTS(X) X(TestNoPipes)
 
 TESTING_MAIN(TESTS)
 

@@ -155,7 +155,7 @@ static void TestADeadlineAlreadyPastTimesOutWithoutParking(TestingT *t) {
     X(TestAFileIsReadyBothWays)                                                        \
     X(TestADeadlineAlreadyPastTimesOutWithoutParking)
 
-TESTING_MAIN(TESTS)
+TESTING_MAIN_BARE(TESTS)
 
 #else
 

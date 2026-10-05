@@ -2417,6 +2417,11 @@ void runtime_goexit(void) {
 /* ---------------------------------------------------------------- GOMAXPROCS */
 
 int runtime_gomaxprocs(int n) {
+    /* One thread is one P, as in Go's GOMAXPROCS on wasm. A second P would want
+     * a second M, and there is nothing to run it on. */
+    if (ONE_THREAD && n > 1)
+        n = 1;
+
     int was = (int)sched.gomaxprocs;
     if (was == 0)
         was = burrow__thread_ncpu();

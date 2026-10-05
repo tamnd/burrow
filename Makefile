@@ -81,7 +81,8 @@ endif
 # what lets a goroutine's stack be put down and picked up again (burrow/mcontext.h
 # says how), and --translate-to-exnref turns the exception handling LLVM writes
 # into the form wasmtime runs. burrow__mcontext_run is the one function Asyncify
-# must leave alone, because it is the one that catches the unwinding. The tests
+# must leave alone, because it is the one that catches the unwinding, and -g
+# keeps the function names, so that a trap says where it happened. The tests
 # run under wasmtime with the whole file system visible, which is how Go runs
 # its own wasip1 tests.
 WASI := $(shell echo | $(CC) -dM -E -x c - 2>/dev/null | grep -c __wasi__)
@@ -95,7 +96,7 @@ ifneq ($(WASI),0)
   WASM_POST = $(WASM_OPT) $(WASM_FEATURES) $@ --asyncify \
 	--pass-arg=asyncify-ignore-imports \
 	--pass-arg=asyncify-removelist@burrow__mcontext_run -O1 \
-	--translate-to-exnref -o $@
+	--translate-to-exnref -g -o $@
   TEST_RUN ?= $(WASMTIME) run -W exceptions=y -W max-wasm-stack=8388608 --dir=/ \
 	--env PWD="$$PWD" --env TMPDIR=/tmp --
 endif

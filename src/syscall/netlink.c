@@ -228,13 +228,11 @@ static Error netlink_read(Alloc *a, Int s, uint32_t pid, Slice rb, Slice *tab) {
         Error res = BURROW_NO_ERROR;
         bool done = false;
         for (Int i = 0; i < msgs.len && !done; i++) {
-            if (m[i].header.seq != 1 || m[i].header.pid != pid) {
+            if (m[i].header.seq != 1 || m[i].header.pid != pid ||
+                m[i].header.type == SYSCALL_NLMSG_ERROR) {
                 res = netlink_einval();
                 done = true;
             } else if (m[i].header.type == SYSCALL_NLMSG_DONE) {
-                done = true;
-            } else if (m[i].header.type == SYSCALL_NLMSG_ERROR) {
-                res = netlink_einval();
                 done = true;
             }
         }

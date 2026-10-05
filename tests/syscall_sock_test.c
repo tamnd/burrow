@@ -432,7 +432,7 @@ static void TestSCMCredentials(TestingT *t) {
         if (n != 0)
             testing_t_fatalf_v(t, "WriteMsgUnix n = %d, want 0", n);
 
-        Byte oob2[256];
+        Byte oob2[256] = {0};
         Int oobn2 = 0, flags = 0;
         SyscallSockaddr from;
         n = syscall_recvmsg(a, srv, slice_nil(TYPE_BYTE), bytes_of(oob2, 10 * oob.len),

@@ -64,7 +64,9 @@ Int syscall_cmsg_space(Int datalen) {
 static Error cmsg_header_and_data(const Byte *b, Int n, SyscallCmsghdr *h,
                                   Slice *data) {
     memcpy(h, b, sizeof *h);
-    if (h->len < SYSCALL_SIZEOF_CMSGHDR || (uint64_t)h->len > (uint64_t)n)
+    /* len is 32 bits on some systems and 64 on others. */
+    uint64_t hlen = h->len;
+    if (hlen < SYSCALL_SIZEOF_CMSGHDR || hlen > (uint64_t)n)
         return burrow__syscall_errno_err(SYSCALL_EINVAL);
     Int off = cmsg_align(SYSCALL_SIZEOF_CMSGHDR);
     Int len = (Int)h->len - off;

@@ -46,6 +46,7 @@ crypto/hkdf
 crypto/pbkdf2
 crypto/rand
 crypto/aes
+crypto
 crypto/cipher
 crypto/des
 crypto/rc4

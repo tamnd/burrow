@@ -52,6 +52,7 @@ category	weak	weak's table of slots. Go hangs a weak handle off the object and i
 category	zip-registry	archive/zip's registered compressors and decompressors. Go keeps them in sync.Maps at package level, and they are process wide because a method registered anywhere is one every Reader and Writer can use.
 category	last-error	The platform's code for the last failure each thread saw, which is per thread the way errno and GetLastError are.
 category	impl-select	Which implementation a crypto package runs, which Go keeps in crypto/internal/impl so that its tests can try every one.
+category	crypto-registry	crypto's table of registered hash functions. Go keeps it in a package level slice that RegisterHash writes from init, and it is process wide because a hash registered anywhere is one Hash.New can make everywhere.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -321,3 +322,4 @@ global	src/syscall/zsyscall.c	burrow__syscall_procs	tables	Go's procCreateFileW 
 global	src/crypto/rand.c	crypto_rand_debug_flags	godebug	The cryptocustomrand setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/crypto/rand.c	crypto_rand_reader	package-vars	crypto/rand.Reader. Not synchronised, as in Go: a program assigns it before other threads read from it.
 global	src/crypto/aes.c	aes_portable_only	impl-select	Set only by tests, through burrow__aes_set_portable, with relaxed atomics. A block reads it once, when it is made.
+global	src/crypto/crypto.c	crypto_hashes	crypto-registry	What crypto_register_hash was given for each hash, as a function address in an atomic word. Release stores and acquire loads only, so a hash being registered and one being made can race safely.

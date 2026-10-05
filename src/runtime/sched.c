@@ -52,6 +52,7 @@
 #include "burrow/mem/heap.h"
 #include "burrow/netpoll.h"
 #include "burrow/note.h"
+#include "burrow/pal.h"
 #include "burrow/platform.h"
 #include "burrow/reclaim.h"
 #include "burrow/runtime.h"
@@ -74,6 +75,19 @@
 #define GOROUTINE_MAPS_ITS_STACK 0
 #else
 #define GOROUTINE_MAPS_ITS_STACK 1
+#endif
+
+/* wasip1 has one thread and no call that makes another, which is Go's case on
+ * wasm too. The scheduler is the same one with a single M that is never a
+ * thread of its own: runtime_main runs it in place, there is no sysmon, and an
+ * M with nothing to do sleeps until the next timer rather than waiting for
+ * another thread to wake it, because there is no other thread. A sleep with no
+ * timer to wake it and nothing in the poller is a program that can never make
+ * progress, and Go stops those with the same message. */
+#if defined(BURROW_OS_WASI)
+#define ONE_THREAD 1
+#else
+#define ONE_THREAD 0
 #endif
 
 /* How many dead goroutines a P keeps to itself before half of them go to the
@@ -976,8 +990,14 @@ static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
 
     /* Last, so that by the time runtime_main wakes up, the goroutine it was
      * waiting for is on a free list and not half way there. */
-    if (was_main)
+    if (was_main) {
+        /* With one thread, this is the thread runtime_main is waiting on, and
+         * it has to stop picking up goroutines for runtime_main to get it back.
+         * Elsewhere runtime_main sets this itself once it wakes. */
+        if (ONE_THREAD)
+            burrow__atomic_store_u32(&sched.stopping, 1);
         burrow__note_wake(&sched.mainnote);
+    }
 
     /* After the free list, because the last goroutine out of a bubble starts
      * the goroutine sitting in synctest_run, and that one returning takes the
@@ -1563,6 +1583,30 @@ static bool any_work_left(void) {
  * woken only when it is being handed a P, so the note and the handover cannot
  * disagree. Deadlines are what make them able to. */
 static void stopm(burrow__M *m, int64_t until) {
+#if ONE_THREAD
+    /* Nobody else can hand this thread a P or ready a goroutine while it
+     * sleeps, so a sleep is only ever until the next timer, and the P it gave
+     * up is still on the idle list when the sleep ends. */
+    for (;;) {
+        if (burrow__atomic_load_relaxed_u32(&sched.stopping) != 0)
+            return;
+        if (until == 0)
+            runtime_throw(BURROW_S("all goroutines are asleep - deadlock!"));
+
+        int64_t left = until - burrow__nanotime();
+        if (left > 0)
+            pal_nanosleep(left);
+
+        burrow__lock(&sched.lock);
+        burrow__P *p = pidle_get();
+        burrow__unlock(&sched.lock);
+        if (p != NULL) {
+            acquirep(m, p);
+            return;
+        }
+        until = 0;
+    }
+#endif
     for (;;) {
         burrow__lock(&sched.lock);
         if (burrow__atomic_load_relaxed_u32(&sched.stopping) != 0) {
@@ -2029,8 +2073,19 @@ static void newm(burrow__P *p, bool spinning) {
      * the scheduler's own needs and not a goroutine's. Zero asks for the
      * platform default, which is megabytes and is more than this will ever
      * use. */
+#if ONE_THREAD
+    /* Here, on the thread that called runtime_main, and back when the program
+     * is over. Only runtime_main gets this far, since with one P the check at
+     * the top turns every later call away. */
+#if defined(BURROW_MCONTEXT_ASYNCIFY)
+    burrow__mcontext_run(&m->g0.ctx, mstart, m);
+#else
+    mstart(m);
+#endif
+#else
     if (!burrow__thread_start(&m->thread, mstart, m, 0))
         runtime_throw(BURROW_S("newm: cannot start a thread"));
+#endif
 }
 
 /* ------------------------------------------------------------------ starting */
@@ -2400,6 +2455,11 @@ void runtime_goexit(void) {
 /* ---------------------------------------------------------------- GOMAXPROCS */
 
 int runtime_gomaxprocs(int n) {
+    /* One thread is one P, as in Go's GOMAXPROCS on wasm. A second P would want
+     * a second M, and there is nothing to run it on. */
+    if (ONE_THREAD && n > 1)
+        n = 1;
+
     int was = (int)sched.gomaxprocs;
     if (was == 0)
         was = burrow__thread_ncpu();
@@ -2541,7 +2601,7 @@ void runtime_main(Func fn) {
      * program starting rather than a program already running. A run where the
      * gate or the thread cannot be made goes ahead without it, for the reason
      * written at the top of the sysmon section. */
-    if (burrow__note_init(&sched.sysmonnote)) {
+    if (!ONE_THREAD && burrow__note_init(&sched.sysmonnote)) {
         sched.sysmonstarted =
             burrow__thread_start(&sched.sysmonthread, sysmon, NULL, 0);
         if (!sched.sysmonstarted)
@@ -2610,7 +2670,7 @@ void runtime_main(Func fn) {
         burrow__note_wake(&m->park);
     burrow__unlock(&sched.lock);
 
-    for (int32_t i = 0; i < sched.nmcreated; i++)
+    for (int32_t i = 0; i < sched.nmcreated && !ONE_THREAD; i++)
         (void)burrow__thread_join(&allm[i].thread);
 
     teardown();

@@ -1,6 +1,6 @@
 /* Reading a directory where burrow has no backend for it yet.
  *
- * WASI, illumos, AIX and Emscripten. Each has a way to do it and none of them
+ * illumos, AIX and Emscripten. Each has a way to do it and none of them
  * has a caller that runs there yet, so this says so rather than guessing.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -13,7 +13,7 @@
     !defined(BURROW_OS_DARWIN) && !defined(BURROW_OS_IOS) &&                           \
     !defined(BURROW_OS_FREEBSD) && !defined(BURROW_OS_NETBSD) &&                       \
     !defined(BURROW_OS_OPENBSD) && !defined(BURROW_OS_DRAGONFLY) &&                    \
-    !defined(BURROW_OS_COSMO)
+    !defined(BURROW_OS_COSMO) && !defined(BURROW_OS_WASI)
 
 #include "burrow/pal.h"
 

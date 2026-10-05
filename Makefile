@@ -67,6 +67,43 @@ COSMO := $(shell echo | $(CC) -dM -E -x c - 2>/dev/null | grep -c __COSMOPOLITAN
 ifneq ($(COSMO),0)
   HARDENING := -fno-common
 endif
+ifneq ($(WASI),0)
+  HARDENING := -fno-common
+endif
+
+# WebAssembly under WASI, which is wasip1 and the target Go calls the same
+# thing. It takes wasi-sdk's compiler and archiver and Binaryen's wasm-opt:
+#
+#   make CC="$WASI_SDK/bin/clang --target=wasm32-wasip1" AR=$WASI_SDK/bin/llvm-ar
+#
+# setjmp is WebAssembly exception handling there, which is a compile flag and a
+# library. Every program then goes through wasm-opt twice over: --asyncify is
+# what lets a goroutine's stack be put down and picked up again (burrow/mcontext.h
+# says how), and --translate-to-exnref turns the exception handling LLVM writes
+# into the form wasmtime runs. burrow__mcontext_run is the one function Asyncify
+# must leave alone, because it is the one that catches the unwinding, and -g
+# keeps the function names, so that a trap says where it happened. The tests
+# run under wasmtime with the whole file system visible, which is how Go runs
+# its own wasip1 tests. Every C call also uses the engine's own stack, and Go's
+# encoding/xml tests nest 5000 elements deep, which 8 MiB of it was not enough
+# for, so the tests get 32 MiB.
+WASI := $(shell echo | $(CC) -dM -E -x c - 2>/dev/null | grep -c __wasi__)
+ifneq ($(WASI),0)
+  WASM_OPT ?= wasm-opt
+  WASMTIME ?= wasmtime
+  WASM_FEATURES := --enable-exception-handling --enable-bulk-memory \
+	--enable-bulk-memory-opt --enable-nontrapping-float-to-int --enable-sign-ext \
+	--enable-mutable-globals --enable-multivalue --enable-reference-types \
+	--enable-call-indirect-overlong
+  WASM_POST = $(WASM_OPT) $(WASM_FEATURES) $@ --asyncify \
+	--pass-arg=asyncify-ignore-imports \
+	--pass-arg=asyncify-removelist@burrow__mcontext_run -O1 \
+	--translate-to-exnref -g -o $@
+  TEST_RUN ?= $(WASMTIME) run -W exceptions=y -W max-wasm-stack=33554432 --dir=/ \
+	--env PWD="$$PWD" --env TMPDIR=/tmp --
+endif
+WASM_POST ?= @:
+TEST_RUN ?=
 
 # The compiler's coverage counters, which tests/testing_cover_test.c is built
 # with and nothing else is. clang has 8-bit counters and gcc has only trace-pc,
@@ -112,6 +149,13 @@ ifeq ($(OS),Windows_NT)
   LDLIBS += -lws2_32
 endif
 
+# The flags setjmp needs on WASI, the library it is in, and room on the stack
+# the program starts on, which wasm-ld makes 64 KiB unless it is asked.
+ifneq ($(WASI),0)
+  DEFINES += -mllvm -wasm-enable-sjlj -mexception-handling
+  LDLIBS  += -lsetjmp -Wl,-z,stack-size=8388608
+endif
+
 # Forces the portable context switch on a machine that has assembly for it.
 # This is not a fallback you would ship, it is how you find out whether a bug is
 # in the assembly or above it, and it has to go in DEFINES rather than on one
@@ -131,6 +175,9 @@ LDFLAGS ?=
 # same reason DEPFLAGS is: CI overrides CFLAGS wholesale.
 ifneq ($(OS),Windows_NT)
   THREADS := -pthread
+endif
+ifneq ($(WASI),0)
+  THREADS :=
 endif
 
 # Two levels is what the layout uses, src/version.c and src/mem/arena.c, and
@@ -157,7 +204,12 @@ endif
 # The table of names a traceback prints, read out of the objects above by
 # tools/burrow-symtab once they are built. See burrow/symtab.h for what it is
 # and what it costs. SYMTAB=0 builds an empty one, which gives back the bare
-# addresses and lets the linker drop objects nothing calls.
+# addresses and lets the linker drop objects nothing calls. WebAssembly has no
+# addresses a traceback could print, since its call stack cannot be walked from
+# inside, so it is off there.
+ifneq ($(WASI),0)
+  SYMTAB ?= 0
+endif
 SYMTAB     ?= 1
 SYMTAB_SRC := $(BUILD)/gen/symtab_gen.c
 SYMTAB_OBJ := $(BUILD)/obj/gen/symtab_gen.o
@@ -235,10 +287,12 @@ $(BUILD)/obj/%.o: src/%.c
 $(BUILD)/tests/%: tests/%.c $(TEST_GEN) $(LIB)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(TEST_EXTRA) $(THREADS) $(DEPFLAGS) -MF $@.d -Itests $(TEST_GEN) $< $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
+	$(WASM_POST)
 
 $(BUILD)/tests/gen_tests_fixture_test: $(GEN_TESTS_FIXTURE) $(TEST_GEN) $(LIB)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(THREADS) $(DEPFLAGS) -MF $@.d -Itests $(TEST_GEN) $< $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
+	$(WASM_POST)
 
 $(BUILD)/tests/testing_cover_test: TEST_EXTRA = $(COVERFLAGS)
 
@@ -257,6 +311,9 @@ $(BUILD)/tests/embed_test: $(EMBED_TEST_GEN)
 # portable code is tested on the machines that have the instructions too. The
 # PAL test checks that turning them off works.
 CPU_TESTS := $(patsubst %,$(BUILD)/tests/%_test,pal sha1 sha256 sha512)
+ifneq ($(WASI),0)
+  CPU_TESTS :=
+endif
 
 # Flags for every test binary, such as TESTFLAGS=-test.short to leave out the
 # tests that take minutes on their own.
@@ -264,7 +321,7 @@ TESTFLAGS ?=
 
 test: $(TEST_BINS)
 	@fail=0; for t in $(TEST_BINS); do \
-		if ./$$t $(TESTFLAGS) > $$t.out 2>&1; then printf 'ok\t%s\n' "$${t##*/}"; \
+		if $(TEST_RUN) ./$$t $(TESTFLAGS) > $$t.out 2>&1; then printf 'ok\t%s\n' "$${t##*/}"; \
 		else cat $$t.out; printf 'FAIL\t%s\n' "$${t##*/}"; fail=1; fi; \
 	done; \
 	for t in $(CPU_TESTS); do \

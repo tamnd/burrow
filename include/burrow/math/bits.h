@@ -44,7 +44,7 @@ extern "C" {
 #endif
 
 /* The size of a Uint in bits, 32 or 64. */
-#define BITS_UINT_SIZE BURROW_PTR_BITS
+#define BITS_UINT_SIZE BURROW_INT_BITS
 
 /* The builtins are used when the compiler has them. Defining
  * BURROW__BITS_PORTABLE turns them off, and the tests build a second time with
@@ -246,7 +246,7 @@ static inline uint8_t bits_rotate_left8(uint8_t x, Int k) {
 }
 
 static inline Uint bits_rotate_left(Uint x, Int k) {
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
     return bits_rotate_left64(x, k);
 #else
     return bits_rotate_left32(x, k);
@@ -282,7 +282,7 @@ static inline uint64_t bits_reverse_bytes64(uint64_t x) {
 }
 
 static inline Uint bits_reverse_bytes(Uint x) {
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
     return bits_reverse_bytes64(x);
 #else
     return bits_reverse_bytes32(x);
@@ -318,7 +318,7 @@ static inline uint8_t bits_reverse8(uint8_t x) {
 }
 
 static inline Uint bits_reverse(Uint x) {
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
     return bits_reverse64(x);
 #else
     return bits_reverse32(x);
@@ -348,7 +348,7 @@ static inline uint32_t bits_add32(uint32_t x, uint32_t y, uint32_t carry,
 }
 
 static inline Uint bits_add(Uint x, Uint y, Uint carry, Uint *carry_out) {
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
     return bits_add64(x, y, carry, carry_out);
 #else
     return bits_add32(x, y, carry, carry_out);
@@ -372,7 +372,7 @@ static inline uint32_t bits_sub32(uint32_t x, uint32_t y, uint32_t borrow,
 }
 
 static inline Uint bits_sub(Uint x, Uint y, Uint borrow, Uint *borrow_out) {
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
     return bits_sub64(x, y, borrow, borrow_out);
 #else
     return bits_sub32(x, y, borrow, borrow_out);
@@ -427,7 +427,7 @@ static inline uint32_t bits_mul32(uint32_t x, uint32_t y, uint32_t *lo) {
 }
 
 static inline Uint bits_mul(Uint x, Uint y, Uint *lo) {
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
     return bits_mul64(x, y, lo);
 #else
     return bits_mul32(x, y, lo);
@@ -507,7 +507,7 @@ static inline uint32_t bits_div32(uint32_t hi, uint32_t lo, uint32_t y, uint32_t
 }
 
 static inline Uint bits_div(Uint hi, Uint lo, Uint y, Uint *rem) {
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
     return bits_div64(hi, lo, y, rem);
 #else
     return bits_div32(hi, lo, y, rem);
@@ -531,7 +531,7 @@ static inline uint32_t bits_rem32(uint32_t hi, uint32_t lo, uint32_t y) {
 }
 
 static inline Uint bits_rem(Uint hi, Uint lo, Uint y) {
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
     return bits_rem64(hi, lo, y);
 #else
     return bits_rem32(hi, lo, y);

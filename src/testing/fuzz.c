@@ -50,6 +50,7 @@
 #include "burrow/strconv.h"
 #include "burrow/testing.h"
 #include "burrow/thread.h"
+#include "burrow/trace.h"
 #include "burrow/type.h"
 
 #include <float.h>
@@ -253,7 +254,7 @@ FUZZ_NO_COVERAGE void __sanitizer_cov_trace_pc(
     void) { /* NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
     /* The offset from this function and not the address, since every worker
      * is loaded somewhere else and they all have to agree on the map. */
-    uint64_t pc = (uint64_t)((uintptr_t)__builtin_return_address(0) -
+    uint64_t pc = (uint64_t)((uintptr_t)BURROW_RETURN_ADDRESS -
                              (uintptr_t)&__sanitizer_cov_trace_pc);
     uint32_t h = (uint32_t)(pc ^ (pc >> 32)) * 0x9E3779B1U;
     fuzz_cov.pc[h >> (32 - FUZZ_COV_PC_BITS)]++;

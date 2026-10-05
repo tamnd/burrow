@@ -577,10 +577,24 @@ int64_t os_file_seek(OsFile *f, int64_t offset, Int whence, Error *err) {
     /* Reading the directory again after a seek starts from the top. */
     burrow__os_dirinfo_reset(f);
     PalErrno pe = PAL_OK;
-    int64_t r = pal_seek(f->fd, offset, (int32_t)whence, &pe);
+    int64_t r;
     Error e = BURROW_NO_ERROR;
-    if (r < 0)
-        e = burrow__os_errno(pe);
+#if defined(BURROW_OS_WASI)
+    /* WASI cannot seek a directory, and Go's poll.FD takes a seek back to the
+     * start as the reset of its read cookie, which the line above already did,
+     * and refuses any other. */
+    PalStat st;
+    if (pal_fstat(f->fd, &st, &pe) && (st.mode & PAL_S_IFMT) == PAL_S_IFDIR) {
+        r = 0;
+        if (offset != 0 || whence != 0)
+            e = burrow__os_errno(PAL_EINVAL);
+    } else
+#endif
+    {
+        r = pal_seek(f->fd, offset, (int32_t)whence, &pe);
+        if (r < 0)
+            e = burrow__os_errno(pe);
+    }
 #if defined(BURROW_OS_WINDOWS)
     os_read_unlock(f);
 #else
@@ -682,8 +696,19 @@ Error os_file_chdir(OsFile *f) {
         return os_wrap(f, OS_LIT("chdir"), burrow__os_err_file_closing);
     PalErrno pe = PAL_OK;
     Error e = BURROW_NO_ERROR;
+#if defined(BURROW_OS_WASI)
+    /* A wasip1 descriptor has no fchdir, so Go's poll.FD changes to the path
+     * the file was opened with. */
+    OsCPath c;
+    if (burrow__os_cpath(&c, f->name, &e)) {
+        if (!pal_chdir(c.p, &pe))
+            e = burrow__os_errno(pe);
+        burrow__os_cpath_free(&c);
+    }
+#else
     if (!pal_fchdir(f->fd, &pe))
         e = burrow__os_errno(pe);
+#endif
     os_decref(f);
     return os_wrap(f, OS_LIT("chdir"), e);
 }

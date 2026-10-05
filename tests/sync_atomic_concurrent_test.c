@@ -42,6 +42,7 @@
 static burrow__Thread threads[THREADS];
 
 static void run_all(TestingT *t, burrow__ThreadFn fn) {
+    SKIP_WITHOUT_THREADS(t);
     for (size_t i = 0; i < THREADS; i++)
         CHECK(burrow__thread_start(&threads[i], fn, (void *)(uintptr_t)i, 0));
     for (size_t i = 0; i < THREADS; i++)

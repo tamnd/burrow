@@ -679,6 +679,8 @@ static void outside_body(void *arg) {
 }
 
 static void TestAThreadThatIsNotAGoroutineCanBlockOnAChannel(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     reset();
     (void)runtime_gomaxprocs(1);
     runtime_main(BURROW_FN(Func, outside_body, NULL));
@@ -727,6 +729,8 @@ static void outside_recv_body(void *arg) {
 }
 
 static void TestAGoroutineCanHandAValueToAThreadThatIsNotOne(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     reset();
     (void)runtime_gomaxprocs(1);
     runtime_main(BURROW_FN(Func, outside_recv_body, NULL));
@@ -799,6 +803,8 @@ static void pingpong_body(void *arg) {
 }
 
 static void TestAThreadAndAGoroutineCanKeepHandingAValueBackAndForth(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     reset();
     (void)runtime_gomaxprocs(1);
     runtime_main(BURROW_FN(Func, pingpong_body, NULL));

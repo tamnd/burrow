@@ -51,6 +51,12 @@
 #endif
 #endif
 
+/* wasm memory has no guard pages and no faults to catch, so wasip1 leaves out
+ * the tests that make one, along with the sanitizers. */
+#if defined(SANITIZED) || defined(BURROW_OS_WASI)
+#define NO_FAULTS 1
+#endif
+
 static size_t usable(const burrow__Stack *s) {
     return (size_t)((unsigned char *)s->hi - (unsigned char *)s->lo);
 }
@@ -83,8 +89,13 @@ static void TestAStackIsAtLeastTheSizeThatWasAskedFor(TestingT *t) {
         CHECK((uintptr_t)s.lo % page == 0);
         CHECK((uintptr_t)s.hi % page == 0);
 
-        /* The guard is real and is not counted in what the caller can use. */
+        /* The guard is real and is not counted in what the caller can use.
+         * WebAssembly has no protection to make one with. */
+#if defined(BURROW_ARCH_WASM)
+        CHECK(s.guard == 0);
+#else
         CHECK(s.guard >= page);
+#endif
         CHECK((unsigned char *)s.hi - (unsigned char *)s.lo == (ptrdiff_t)got);
 
         burrow__stack_free(&s);
@@ -199,6 +210,8 @@ static void look_at_current(void *arg) {
 }
 
 static void TestTheCurrentStackBelongsToOneThread(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     burrow__Stack mine;
     memset(&mine, 0, sizeof mine);
     (void)burrow__stack_set_current(&mine);
@@ -270,7 +283,7 @@ static void TestAContextRunsOnAStackThisFileAllocated(TestingT *t) {
 
 /* -------------------------------------------------------------- the report */
 
-#if !defined(SANITIZED)
+#if !defined(NO_FAULTS)
 
 #if defined(BURROW_OS_WINDOWS)
 #include <setjmp.h>
@@ -469,15 +482,15 @@ static void TestRunningOffTheBottomOfAStackIsAStackOverflow(TestingT *t) {
 
 #endif /* !BURROW_MCONTEXT_FIBERS */
 
-#endif /* !SANITIZED */
+#endif /* !NO_FAULTS */
 
-#if !defined(SANITIZED)
+#if !defined(NO_FAULTS)
 #define TESTS_1(X) X(TestAWriteIntoTheGuardIsAStackOverflow)
 #else
 #define TESTS_1(X)
 #endif
 
-#if !defined(SANITIZED) && !defined(BURROW_MCONTEXT_FIBERS)
+#if !defined(NO_FAULTS) && !defined(BURROW_MCONTEXT_FIBERS)
 #define TESTS_2(X) X(TestRunningOffTheBottomOfAStackIsAStackOverflow)
 #else
 #define TESTS_2(X)
@@ -494,4 +507,22 @@ static void TestRunningOffTheBottomOfAStackIsAStackOverflow(TestingT *t) {
     TESTS_1(X)                                                                         \
     TESTS_2(X)
 
+#if defined(BURROW_MCONTEXT_ASYNCIFY)
+/* With Asyncify a switch has to happen somewhere above burrow__mcontext_run,
+ * and the context it runs is the only one that can be attached inside it, as
+ * in mcontext_test.c. */
+static int stack_run_code;
+
+static void stack_run_tests(void *m) {
+    stack_run_code = testing_m_run(m);
+}
+
+static int stack_test_main(TestingM *m) {
+    burrow__mcontext_run(&back_to, stack_run_tests, m);
+    return stack_run_code;
+}
+
+TESTING_MAIN_BARE_WITH(stack_test_main, TESTS)
+#else
 TESTING_MAIN_BARE(TESTS)
+#endif

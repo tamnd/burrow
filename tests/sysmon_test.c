@@ -126,6 +126,8 @@ static void park_until_an_outsider_says_so(void *env) {
 }
 
 static void TestAGoroutineReadiedFromOutsideGetsTheProgramMovingAgain(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     burrow__atomic_store_u32(&parked, 0);
     burrow__atomic_store_u32(&woke, 0);
     sleeper = NULL;

@@ -30,6 +30,7 @@
 #include "burrow/atomic.h"
 #include "burrow/clock.h"
 #include "burrow/pal.h"
+#include "burrow/runtime.h"
 #include "burrow/thread.h"
 
 #include <stdbool.h>
@@ -206,6 +207,12 @@ void burrow__note_wake(burrow__Note *n) {
 void burrow__note_sleep(burrow__Note *n) {
     if (burrow__atomic_load_acquire_u32(&n->state) != 0)
         return;
+
+#if defined(BURROW_OS_WASI)
+    /* Nothing else runs while this thread sleeps, so nothing could ever wake
+     * it. Go's notesleep throws on wasm for the same reason. */
+    runtime_throw(BURROW_S("notesleep not supported by wasip1"));
+#endif
 
     (void)burrow__atomic_add_u32(&n->waiters, 1);
 

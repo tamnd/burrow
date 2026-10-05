@@ -19,6 +19,7 @@
 #include "burrow/func.h"
 #include "burrow/mem.h"
 #include "burrow/panic.h"
+#include "burrow/runtime.h"
 #include "burrow/slice.h"
 #include "burrow/strings.h"
 #include "burrow/type.h"
@@ -58,10 +59,13 @@ static Slice bnil(void) {
 }
 
 /* A new []byte of length n, not nil even when n is zero, or nil when a cannot
- * give it. */
+ * give it. On wasm an Int is wider than a size_t, and a length that doesn't fit
+ * in one panics the way Go's bytealg.MakeNoZero does. */
 static Slice bmake(Alloc *a, Int n) {
     if (n == 0)
         return slice_make(a, TYPE_BYTE, 0, 0);
+    if ((uint64_t)n > SIZE_MAX)
+        runtime_panic(BURROW_S("runtime error: makeslice: len out of range"));
     Byte *p = (Byte *)mem_alloc_nozero(a, (size_t)n, 1);
     if (p == NULL)
         return bnil();

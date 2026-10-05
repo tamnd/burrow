@@ -113,6 +113,7 @@ static void explicit_body(void *env) {
 }
 
 static void TestALoopWithAnExplicitSafePointInItGivesWay(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
     reset();
 
     int old = runtime_gomaxprocs(1);
@@ -158,6 +159,7 @@ static void chan_body(void *env) {
 }
 
 static void TestALoopOfChannelOperationsGivesWay(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
     reset();
 
     empty = chan_make(heap_allocator(), TYPE_INT, 1);
@@ -200,6 +202,7 @@ static void select_body(void *env) {
 }
 
 static void TestALoopOfSelectsWithADefaultGivesWay(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
     reset();
 
     empty = chan_make(heap_allocator(), TYPE_INT, 1);
@@ -284,6 +287,7 @@ static void share_top(void *env) {
 }
 
 static void TestSeveralSpinnersOnOneProcessorAllMakeProgress(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
     burrow__atomic_store_u32(&claimed, 0);
     burrow__atomic_store_u32(&checked_in, 0);
     for (int i = 0; i < SPINNERS; i++)

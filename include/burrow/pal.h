@@ -234,7 +234,9 @@ int64_t pal_tz_load(const char *name, void *buf, int64_t cap, PalErrno *err);
  * touched until pal_vm_commit says so. Returns NULL on failure.
  *
  * On POSIX this is mmap PROT_NONE, which counts against the address space limit
- * and not against memory. On Windows it is VirtualAlloc MEM_RESERVE. */
+ * and not against memory. On Windows it is VirtualAlloc MEM_RESERVE. wasm
+ * memory has no protection at all, so on wasip1 it is zeroed memory from the C
+ * heap, committing does nothing, and pal_vm_guard reports PAL_ENOTSUP. */
 BURROW_OWNS(ret) void *pal_vm_reserve(int64_t bytes, PalErrno *err);
 
 /* Back a range inside a reservation with memory and make it readable and
@@ -534,8 +536,9 @@ bool pal_thread_on_exit(PalThreadExit *node);
  * True means the wait ended normally, which covers being woken, being told the
  * word had already changed, and waking for no reason anybody can name. False
  * means it did not: PAL_ETIMEDOUT when the time ran out, PAL_EINTR when a
- * signal arrived, PAL_EINVAL for a null address. A caller loops on the first
- * two. Nothing here reports a word that already differed as a failure, because
+ * signal arrived, PAL_EINVAL for a null address, and PAL_EDEADLK on wasip1 for
+ * a wait with no timeout, because there is only one thread and nothing could
+ * end it. A caller loops on the first two. Nothing here reports a word that already differed as a failure, because
  * the caller is going to look at the word again in either case and an error out
  * of a successful early return is a branch nobody wants to write. */
 bool pal_futex_wait(uint32_t *addr, uint32_t expect, int64_t timeout_ns, PalErrno *err);

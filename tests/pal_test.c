@@ -237,8 +237,14 @@ static void TestAGuardCanBePutOnACommittedPage(TestingT *t) {
      * tests/stack_test.c checks, because checking it here would mean catching
      * the fault, and the machinery for that is the runtime's. */
     PalErrno err = PAL_EOTHER;
+#if defined(BURROW_OS_WASI)
+    /* wasm memory has no protection to change, so there is no guard to give. */
+    CHECK(!pal_vm_guard(p, page, &err));
+    CHECK(err == PAL_ENOTSUP);
+#else
     CHECK(pal_vm_guard(p, page, &err));
     CHECK(err == PAL_OK);
+#endif
 
     /* The page above the guard is still writable, which is the half that makes
      * a guard a guard rather than a wall across the whole mapping. */
@@ -414,7 +420,11 @@ static void TestTheErrorIsOptionalLikeEveryOtherOutParameter(TestingT *t) {
     /* Guard before decommit, because a guard is made from committed memory.
      * POSIX will protect a page that has nothing behind it and Windows will
      * not, so the other order passes on one and fails on the other. */
+#if defined(BURROW_OS_WASI)
+    CHECK(!pal_vm_guard(p, page, NULL));
+#else
     CHECK(pal_vm_guard(p, page, NULL));
+#endif
     CHECK(pal_vm_decommit(p, page, NULL));
     CHECK(pal_vm_release(p, page, NULL));
 
@@ -679,6 +689,8 @@ static void TestAWaitWithADeadlineWaitsAtLeastThatLong(TestingT *t) {
 }
 
 static void TestASleeperIsWokenByAWake(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     FutexParty p = {0, 0, 0, -1};
     burrow__Thread th;
 
@@ -727,6 +739,8 @@ static void exit_registrar(void *arg) {
 }
 
 static void TestExitHooksRunNewestFirstWhenTheThreadEnds(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     ExitLog log = {{0}, 0};
     ExitNode nodes[2] = {{{NULL, NULL, NULL, NULL}, &log, 1},
                          {{NULL, NULL, NULL, NULL}, &log, 2}};
@@ -740,6 +754,8 @@ static void TestExitHooksRunNewestFirstWhenTheThreadEnds(TestingT *t) {
 }
 
 static void TestEverybodyWaitingCanBeReleasedAtOnce(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     enum { SLEEPERS = 8 };
 
     FutexParty p = {0, 0, 0, -1};
@@ -762,6 +778,8 @@ static void TestEverybodyWaitingCanBeReleasedAtOnce(TestingT *t) {
 }
 
 static void TestASleeperOnOneWordIsNotReleasedByAWakeOnAnother(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     FutexParty mine = {0, 0, 0, -1};
     uint32_t other = 0;
     burrow__Thread th;
@@ -793,6 +811,8 @@ static void TestAWakeWithNobodyWaitingIsFreeAndNotAnError(TestingT *t) {
 }
 
 static void TestASleeperWithADeadlineGivesUpWhenNobodyComes(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     FutexParty p = {0, 0, 0, 20000000};
     burrow__Thread th;
 
@@ -869,6 +889,8 @@ static void thread_marker(void *arg) {
 }
 
 static void TestAThreadRunsTheFunctionItWasGiven(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     ThreadParty p = {0, NULL, 0, 0};
     PalErrno err = PAL_EOTHER;
 
@@ -884,6 +906,8 @@ static void TestAThreadRunsTheFunctionItWasGiven(TestingT *t) {
 }
 
 static void TestTheArgumentArrivesAtTheNewThreadUnchanged(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     ThreadParty p = {0, NULL, 0, 0};
 
     int64_t h = pal_thread_create(thread_marker, &p, 0, NULL);
@@ -894,6 +918,8 @@ static void TestTheArgumentArrivesAtTheNewThreadUnchanged(TestingT *t) {
 }
 
 static void TestAStackSmallerThanTheSystemAllowsIsRaisedAndNotRefused(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     ThreadParty p = {0, NULL, 0, 0};
 
     /* A kilobyte is below every platform's minimum. The layer raises it to the
@@ -907,6 +933,8 @@ static void TestAStackSmallerThanTheSystemAllowsIsRaisedAndNotRefused(TestingT *
 }
 
 static void TestAStackBiggerThanTheDefaultIsTaken(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     ThreadParty p = {0, NULL, 0, 0};
 
     int64_t h = pal_thread_create(thread_marker, &p, 2 * 1024 * 1024, NULL);
@@ -917,6 +945,8 @@ static void TestAStackBiggerThanTheDefaultIsTaken(TestingT *t) {
 }
 
 static void TestAThreadCanBeDetachedInsteadOfJoined(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     static ThreadParty p;
 
     /* Static rather than on this frame, because a detached thread is still
@@ -939,6 +969,8 @@ static void TestAThreadCanBeDetachedInsteadOfJoined(TestingT *t) {
 }
 
 static void TestSixteenThreadsAllStartAndAllFinish(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     ThreadParty parties[THREAD_PARTY];
     int64_t handles[THREAD_PARTY];
 
@@ -962,6 +994,8 @@ static void TestSixteenThreadsAllStartAndAllFinish(TestingT *t) {
 }
 
 static void TestEveryThreadRunningAtOnceHasItsOwnIdentity(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     ThreadParty parties[THREAD_PARTY];
     int64_t handles[THREAD_PARTY];
     int64_t mine = pal_thread_self();
@@ -1075,6 +1109,7 @@ static void TestTheThreadsTakeANullErrorLikeEverythingElse(TestingT *t) {
     CHECK(!pal_thread_join(PAL_INVALID_HANDLE, NULL));
     CHECK(!pal_thread_detach(PAL_INVALID_HANDLE, NULL));
 
+    SKIP_WITHOUT_THREADS(t);
     int64_t h = pal_thread_create(thread_marker, &p, 0, NULL);
     CHECK(h != PAL_INVALID_HANDLE);
     CHECK(pal_thread_join(h, NULL));
@@ -1090,18 +1125,24 @@ static void TestTheThreadsTakeANullErrorLikeEverythingElse(TestingT *t) {
  * it: what the arguments refuse, that a signal stack is per thread, and that a
  * handler installed for an ordinary signal actually runs when it arrives. */
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(BURROW_OS_WASI)
 #include <signal.h>
 #endif
 
 static uint32_t signal_hits;
+#if !defined(_WIN32) && !defined(BURROW_OS_WASI)
 static int32_t signal_seen;
+#endif
 
 static bool count_signal(int32_t sig, void *info, void *ctx) {
     (void)info;
     (void)ctx;
 
+#if !defined(_WIN32) && !defined(BURROW_OS_WASI)
     signal_seen = sig;
+#else
+    (void)sig;
+#endif
     (void)burrow__atomic_add_u32(&signal_hits, 1);
     return true;
 }
@@ -1135,6 +1176,8 @@ static void signal_stack_on_a_thread(void *arg) {
 }
 
 static void TestEveryThreadInstallsItsOwnSignalStack(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     uint32_t ok = 0;
 
     int64_t h = pal_thread_create(signal_stack_on_a_thread, &ok, 0, NULL);
@@ -1158,9 +1201,10 @@ static void TestANumberThatIsNotASignalIsRefused(TestingT *t) {
     PalErrno err = PAL_OK;
 
     CHECK(!pal_signal_install(4242, count_signal, &err));
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(BURROW_OS_WASI)
     /* Windows has one of these and says so about the rest, so a number nobody
-     * recognises and a signal it cannot offer come back the same way. */
+     * recognises and a signal it cannot offer come back the same way. WASI
+     * has none at all. */
     CHECK_INT_EQ(err, PAL_ENOTSUP);
 #else
     CHECK_INT_EQ(err, PAL_EINVAL);
@@ -1182,7 +1226,7 @@ static void TestAFaultAddressNeedsAFaultToReadItFrom(TestingT *t) {
     CHECK(pal_signal_fault_addr(NULL) == NULL);
 }
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(BURROW_OS_WASI)
 
 static void TestAHandlerRunsWhenTheSignalArrives(TestingT *t) {
     PalErrno err = PAL_EOTHER;
@@ -1240,14 +1284,14 @@ TestInstallingTwiceReplacesTheHandlerAndKeepsWhatWasThereFirst(TestingT *t) {
     CHECK_INT_EQ(burrow__atomic_load_u32(&signal_hits), 1);
 }
 
-#endif /* !_WIN32 */
+#endif /* !_WIN32 && !BURROW_OS_WASI */
 
 static void TestTheSignalsTakeANullErrorLikeEverythingElse(TestingT *t) {
     CHECK(!pal_signal_install(PAL_SIGFAULT, NULL, NULL));
     CHECK(!pal_signal_install(4242, count_signal, NULL));
     CHECK(pal_signal_stack_install(NULL));
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(BURROW_OS_WASI)
     CHECK(pal_signal_mask(PAL_SIGPREEMPT, true, NULL));
     CHECK(pal_signal_mask(PAL_SIGPREEMPT, false, NULL));
 #else
@@ -1333,7 +1377,7 @@ static void TestAVariadicCallIntoTheCLibraryPassesItsLastArgument(TestingT *t) {
 #define TESTS_1(X)
 #endif
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(BURROW_OS_WASI)
 #define TESTS_2(X)                                                                     \
     X(TestAHandlerRunsWhenTheSignalArrives)                                            \
     X(TestABlockedSignalWaitsAndArrivesWhenItIsLetThrough)                             \

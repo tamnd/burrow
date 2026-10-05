@@ -337,3 +337,5 @@ global	src/crypto/nistec_p521.c	p521_b_value	tables	The curve's b in the field's
 global	src/crypto/nistec_p521.c	p521_b_once	tables	A SyncOnce, which is the synchronisation for p521_b_value.
 global	src/crypto/nistec_p521.c	p521_generator_table	tables	Multiples of the generator for ScalarBaseMult, made once by p521_generator_table_init.
 global	src/crypto/nistec_p521.c	p521_generator_table_once	tables	A SyncOnce, which is the synchronisation for p521_generator_table.
+global	src/crypto/elliptic.c	elliptic_nist	tables	The four NIST curves with their CurveParams, filled in once by elliptic_init and only read after that, as Go's initonce has it.
+global	src/crypto/elliptic.c	elliptic_once	tables	A SyncOnce, which is the synchronisation for elliptic_nist.

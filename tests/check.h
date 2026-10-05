@@ -41,7 +41,8 @@
     } while (0)
 
 /* wasip1 runs one thread and has no way to start another, so a test that
- * needs a second one skips there. */
+ * needs a second one, or the monitor thread that preempts a goroutine that
+ * will not stop, skips there. */
 #if defined(BURROW_OS_WASI)
 #define SKIP_WITHOUT_THREADS(t) testing_t_skip_v((t), "wasip1 has no threads")
 #else

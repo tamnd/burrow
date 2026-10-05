@@ -85,3 +85,4 @@ archive/tar
 archive/zip
 encoding/asn1
 path/filepath
+syscall

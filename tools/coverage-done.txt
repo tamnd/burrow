@@ -49,6 +49,7 @@ crypto/aes
 crypto
 crypto/cipher
 crypto/des
+crypto/ed25519
 crypto/rc4
 container/list
 container/ring

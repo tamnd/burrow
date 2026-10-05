@@ -182,6 +182,12 @@ static IoReader crand_custom_reader(IoReader r) {
     return crand_default_reader;
 }
 
+IoReader burrow__crypto_rand_nil_reader(void) {
+    if ((crand_debug_load() & CRAND_DEBUG_CUSTOM) != 0)
+        return crypto_rand_reader;
+    return crand_default_reader;
+}
+
 static void crand_drop(Alloc *a, BigInt *n, Slice bytes) {
     Alloc *h = a != NULL ? a : heap_allocator();
     if (n != NULL) {

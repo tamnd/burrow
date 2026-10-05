@@ -339,3 +339,56 @@ print_hex(a, data);
 ```
 
 `rc4_cipher_as_cipher_stream` turns an `Rc4Cipher` into a `CipherStream`, so it can go into a `CipherStreamReader` or `CipherStreamWriter`. A DES key that is not 8 bytes fails with `crypto/des: invalid key size 5` or whatever the length was, and a Triple DES key that is not 24 bytes fails the same way. RC4 fails with `crypto/rc4: invalid key size 0` for an empty key or one longer than 256 bytes. Like Go's, none of these three is constant time. They look up tables with bits of the key, so on a shared machine the key can leak through the cache.
+
+## crypto/ed25519
+
+`burrow/crypto/ed25519.h` signs and verifies with Ed25519, RFC 8032. A private key is 64 bytes, the 32 byte seed followed by the public key, and both are plain byte slices. `ed25519_generate_key` makes a key pair from the system's random source when the reader is nil:
+
+<!-- example: ../examples/crypto/ed25519.c#generate -->
+```c
+Error err = BURROW_NO_ERROR;
+Ed25519PrivateKey priv;
+Ed25519PublicKey pub = ed25519_generate_key(a, (IoReader){NULL, NULL}, &priv, &err);
+if (BURROW_FAILED(err))
+    return;
+```
+
+A seed always gives the same key, and Ed25519 signatures are deterministic, so the same key and message always give the same signature:
+
+<!-- example: ../examples/crypto/ed25519.c#sign -->
+```c
+Ed25519PrivateKey priv =
+    ed25519_new_key_from_seed(a, text("an ed25519 seed is 32 bytes long"));
+Ed25519PublicKey pub = ed25519_private_key_public(priv, a);
+
+Slice msg = text("The quick brown fox jumps over the lazy dog");
+Slice sig = ed25519_sign(a, priv, msg);
+```
+
+`ed25519_verify` says whether a signature is good. It takes nothing to be secret, so it is fine to call on what a peer sent:
+
+<!-- example: ../examples/crypto/ed25519.c#verify -->
+```c
+printf("%d\n", ed25519_verify(pub, msg, sig));
+printf("%d\n", ed25519_verify(
+                   pub, text("The quick brown fox jumps over the lazy cat"), sig));
+```
+
+`Ed25519Options` picks the other two variants of RFC 8032. A context string on its own gives Ed25519ctx, and a hash of `CRYPTO_SHA512` gives Ed25519ph, which signs a SHA-512 digest of the message rather than the message. A signature made with one context does not verify with another:
+
+<!-- example: ../examples/crypto/ed25519.c#context -->
+```c
+Error err = BURROW_NO_ERROR;
+Ed25519Options opts = {0, BURROW_S("Example_ed25519ctx")};
+Slice ctx_sig =
+    ed25519_private_key_sign(priv, a, (IoReader){NULL, NULL}, msg,
+                             ed25519_options_as_signer_opts(&opts), &err);
+if (BURROW_FAILED(err))
+    return;
+print_error(ed25519_verify_with_options(pub, msg, ctx_sig, &opts));
+
+Ed25519Options other = {0, BURROW_S("another context")};
+print_error(ed25519_verify_with_options(pub, msg, ctx_sig, &other));
+```
+
+`ed25519_private_key_signer` turns a private key into a `CryptoSigner`, for code that signs through the interface. Its public half comes back from `crypto_signer_public` as a `CryptoPublicKey` holding an `Ed25519PublicKey`, which `ed25519_public_key_equal` compares with. `ed25519_sign` panics if the private key is not 64 bytes, and `ed25519_verify` panics if the public key is not 32, as Go's do. Signing and key generation are constant time. Verifying is not, and does not need to be.

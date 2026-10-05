@@ -94,6 +94,24 @@ CI builds `tests/amalgamation/hello.c` this way on Linux and runs the same binar
 
 Some things to know. The netpoller has no Cosmopolitan backend yet, so nothing under cosmocc waits on a descriptor through it, which matters once there is a net package to use it. The stack protector is left out of a cosmocc build, because a binary built with it crashes on its first check. And `make test` works with the x86-64 compiler, `x86_64-unknown-cosmo-cc` with `x86_64-unknown-cosmo-ar`, but not with `cosmocc` itself, whose archive tool keeps only one architecture's objects. The single file build has no archive and so has no such problem.
 
+## WebAssembly
+
+burrow builds for wasip1, the WebAssembly target Go has under the same name, with [wasi-sdk](https://github.com/WebAssembly/wasi-sdk), and runs under [wasmtime](https://wasmtime.dev). WebAssembly gives a program no way to switch stacks, so a goroutine switch there is done with Binaryen's Asyncify pass, and every program goes through `wasm-opt` after it is linked:
+
+```sh
+$WASI_SDK/bin/clang --target=wasm32-wasip1 -std=c11 -O2 \
+    -mllvm -wasm-enable-sjlj -mexception-handling \
+    -o hello.wasm burrow.c hello.c -lsetjmp -Wl,-z,stack-size=8388608
+wasm-opt -all hello.wasm --asyncify --pass-arg=asyncify-ignore-imports \
+    --pass-arg=asyncify-removelist@burrow__mcontext_run -O1 \
+    --translate-to-exnref -o hello.wasm
+wasmtime run -W exceptions=y hello.wasm
+```
+
+The setjmp flags are there because burrow's panics use it, and wasi-sdk does setjmp with WebAssembly exceptions, which `--translate-to-exnref` turns into the form wasmtime runs. `burrow__mcontext_run` is the one function Asyncify has to leave alone. The stack size is for the program's own stack, which wasm-ld makes 64 KiB otherwise. Inside the program, `Int` and `Uint` are 64 bits, as they are in Go on wasm, while pointers are 32.
+
+What wasip1 lacks, burrow lacks there too, much as Go does. There is one thread, so `runtime_gomaxprocs` is always 1 and goroutines take turns rather than run at once. Starting a process fails with `ENOSYS` and asking for a signal with `ENOTSUP`, and some runtimes refuse a symbolic link to an absolute path. The tests skip what isn't there. `make test` with wasi-sdk's `clang` and `llvm-ar` as `CC` and `AR` runs the suite this way, and CI does the same on every pull request.
+
 ## make
 
 From a checkout, `make` builds `build/libburrow.a`, and your program adds `-Iinclude` and links the archive. `make test` runs the suite and `make check` runs the source gates first. `make amalgamation` writes the two files into `build/amalgamation`, and `make AMALGAMATION=1 test` builds the library out of them and runs every test against exactly what ships.

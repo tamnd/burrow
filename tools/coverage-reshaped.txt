@@ -232,3 +232,10 @@ syscall: func GetsockoptUcred: returns the Ucred by value
 syscall: func LsfJump: returns the SockFilter by value
 syscall: func LsfStmt: returns the SockFilter by value
 syscall: func ParseUnixCredentials: returns the Ucred by value
+
+# include/burrow/syscall.h: Go's NewCallback and NewCallbackCDecl take any Go
+# function and build a stub that calls it with the Windows calling convention.
+# A C function can be called as it is, so they take a function pointer and
+# give back its address.
+syscall: func NewCallback: takes a C function pointer where Go takes any function
+syscall: func NewCallbackCDecl: takes a C function pointer where Go takes any function

@@ -308,6 +308,20 @@ global	src/syscall/unix.c	unix_mmap_active	package-vars	The mappings syscall_mma
 global	src/syscall/unix.c	unix_mmap_len	package-vars	How many mappings unix_mmap_active has, under unix_mmap_mu.
 global	src/syscall/unix.c	unix_mmap_cap	package-vars	How many mappings unix_mmap_active has room for, under unix_mmap_mu.
 global	src/syscall/sock.c	syscall_socket_disable_ipv6	package-vars	Go's syscall.SocketDisableIPv6, a variable there too, which tests set before they open sockets and nothing in burrow writes.
+global	src/syscall/windows.c	win_std_once	package-vars	Fills win_std the first time syscall_stdin, syscall_stdout or syscall_stderr is used, as Go's package initialisation does.
+global	src/syscall/windows.c	win_std	package-vars	Go's syscall.Stdin, Stdout and Stderr on Windows, which are variables there too. Nothing in burrow writes them, and a program that does is doing what a Go program that assigns them does.
+global	src/syscall/windows.c	syscall_socket_disable_ipv6	package-vars	Go's syscall.SocketDisableIPv6 on Windows, as on Unix, set by tests before they make sockets.
+global	src/syscall/windows.c	win_set_file_pointer_ex	package-vars	Go's procSetFilePointerEx, a LazyProc that finds its address once with an atomic store, as the generated ones do.
+global	src/syscall/windows.c	syscall_wsaid_connectex	package-vars	Go's syscall.WSAID_CONNECTEX, which is a variable there too and which LoadConnectEx passes to WSAIoctl by address.
+global	src/syscall/windows.c	win_connectex_once	package-vars	Finds ConnectEx's address the first time LoadConnectEx or ConnectEx is called, as Go's connectExFunc.once does.
+global	src/syscall/windows.c	win_connectex_addr	package-vars	ConnectEx's address, written once under win_connectex_once and only read after it.
+global	src/syscall/windows.c	win_connectex_err	package-vars	Why ConnectEx could not be found, written once under win_connectex_once and only read after it, kept with error_retain.
+global	src/syscall/windows.c	win_oid_server_auth	package-vars	The bytes of Go's OID_PKIX_KP_SERVER_AUTH, which syscall_oid_pkix_kp_server_auth points at. Go's is a variable too.
+global	src/syscall/windows.c	win_oid_server_gated	package-vars	The bytes of Go's OID_SERVER_GATED_CRYPTO, which syscall_oid_server_gated_crypto points at.
+global	src/syscall/windows.c	win_oid_sgc_netscape	package-vars	The bytes of Go's OID_SGC_NETSCAPE, which syscall_oid_sgc_netscape points at.
+global	src/syscall/windows.c	syscall_oid_pkix_kp_server_auth	package-vars	Go's syscall.OID_PKIX_KP_SERVER_AUTH, a []byte variable there too.
+global	src/syscall/windows.c	syscall_oid_server_gated_crypto	package-vars	Go's syscall.OID_SERVER_GATED_CRYPTO, a []byte variable there too.
+global	src/syscall/windows.c	syscall_oid_sgc_netscape	package-vars	Go's syscall.OID_SGC_NETSCAPE, a []byte variable there too.
 global	src/syscall/route.c	route_conf_arch	package-vars	Go's freebsdConfArch, on 32-bit FreeBSD only: whether the kernel is amd64, read from kern.conftxt the first time a routing message needs it. Loaded with acquire and stored with release, and two threads that both read it store the same value.
 global	src/os/user.c	user_cache_once	package-vars	Fills the Current cache the first time it is needed, as Go's cache.Do does.
 global	src/os/user.c	user_cache_u	package-vars	The user Current found, written once under user_cache_once and only read after that.

@@ -62,6 +62,11 @@ void burrow__syscall_wstring_free(burrow__SyscallWString *h);
  * for when n is 0. */
 Uintptr burrow__syscall_n(Uintptr fn, const Uintptr *args, Int n, Uintptr *r2,
                           SyscallErrno *err);
+
+/* Go's decodeWTF16: the n units at s as UTF-8 in buf, which has room for
+ * them, 3 bytes a unit at most, and how many bytes it wrote. A unit that is
+ * half a pair on its own goes as the 3 bytes WTF-8 has for it. */
+Int burrow__syscall_decode_wtf16(const uint16_t *s, Int n, Byte *buf, Int room);
 #endif
 
 #if defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO) || defined(BURROW_OS_WASI)

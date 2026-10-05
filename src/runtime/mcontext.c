@@ -597,12 +597,14 @@ static void sp_set(void *sp) {
 /* There is one thread, so there is one of each of these. `root` is the context
  * burrow__mcontext_run was called with, `next` is where a switch on its way down
  * is going, and the two flags say which way Asyncify is moving the stack. */
-static struct {
+typedef struct AsyncifyState {
     burrow__MContext *root;
     burrow__MContext *next;
     bool unwinding;
     bool rewinding;
-} asy;
+} AsyncifyState;
+
+static AsyncifyState asy;
 
 /* The root context's buffer. A made context keeps its buffer at the bottom of
  * the stack it was given, but the root is running on the stack the program

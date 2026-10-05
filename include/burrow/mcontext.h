@@ -12,10 +12,9 @@
  * about thirty instructions.
  *
  * It is written in assembly because the alternatives are worse. `swapcontext`
- * does not exist on Windows, it makes a `sigprocmask` system call on every
- * switch where it does exist, and musl does not implement it at all. Fibers are
- * Windows only. So each ABI gets its own file and the portable paths are the
- * fallback rather than the plan.
+ * does not exist on Windows, makes a `sigprocmask` system call on every switch
+ * where it does, and musl does not have it. Fibers are Windows only. So each
+ * ABI gets its own file and the portable paths are the fallback.
  *
  * Four backends, and which one you get is decided by the machine:
  *
@@ -23,18 +22,6 @@
  *   Windows                                   Fibers
  *   WebAssembly                               Binaryen's Asyncify
  *   everything else                           ucontext
- *
- * WebAssembly is the odd one. Its call stack belongs to the engine and no
- * instruction can read it or point it anywhere else, so there is nothing to
- * save and nothing to load. Asyncify gets round that by rewriting the module
- * after it is linked: a switch returns from every function between it and the
- * bottom of the stack, writing each one's locals to a buffer as it goes, and
- * resuming calls them all again and reads the locals back. What C keeps in
- * memory, anything whose address was taken, lives on a second stack that the
- * module manages itself through a global called __stack_pointer, and that one
- * is switched the ordinary way. The cost is that something has to sit below
- * every context to catch the returns, which is burrow__mcontext_run, and that
- * the rewriting has to happen, which the Makefile does with wasm-opt.
  *
  * `-DBURROW_PORTABLE_CONTEXT=1` forces the fallback everywhere it exists, which
  * is how you find out whether a bug is in the assembly or above it. The tests
@@ -349,6 +336,18 @@ static inline void burrow__mcontext_switch(burrow__MContext *from,
 #if defined(BURROW_MCONTEXT_ASYNCIFY)
 /* Runs fn(arg) with `self` as the context of the stack it runs on, and returns
  * when fn does.
+ *
+ * WebAssembly's call stack belongs to the engine and no instruction can read it
+ * or point it anywhere else, so there is nothing to save and nothing to load.
+ * Asyncify gets round that by rewriting the module after it is linked: a switch
+ * returns from every function between it and the bottom of the stack, writing
+ * each one's locals to a buffer as it goes, and resuming calls them all again
+ * and reads the locals back. What C keeps in memory, anything whose address was
+ * taken, lives on a second stack that the module manages itself through a
+ * global called __stack_pointer, and that one is switched the ordinary way. The
+ * cost is that something has to sit below every context to catch the returns,
+ * which is this, and that the rewriting has to happen, which the Makefile does
+ * with wasm-opt.
  *
  * Only here with Asyncify, where a switch works by returning all the way down to
  * this and calling the next context's bottom function, so every switch has to

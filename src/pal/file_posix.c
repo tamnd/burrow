@@ -46,6 +46,11 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#if defined(BURROW_OS_WASI)
+#include <stdlib.h>
+#include <wasi/api.h>
+#endif
+
 /* macOS fails a read or write of more than INT_MAX bytes with EINVAL, and Go
  * caps every one at a gigabyte on every platform for that reason. A short read
  * or write is already something every caller handles, so the cap costs
@@ -482,6 +487,70 @@ int64_t pal_getcwd(char *buf, int64_t cap, PalErrno *err) {
         n++;
     return n;
 }
+
+#if defined(BURROW_OS_WASI)
+
+/* Go's syscall keeps its own working directory on wasip1. It starts at $PWD,
+ * cleaned and made absolute, or at the name of the first preopened directory
+ * when there is no $PWD. wasi-libc keeps one too and starts it at "/", so it is
+ * moved to where Go's would be before main runs. A $PWD that is not a directory
+ * leaves it at "/", where Go would keep the name and fail on the first relative
+ * path. */
+__attribute__((constructor)) static void wasi_start_cwd(void) {
+    char path[4096];
+    const char *pwd = getenv("PWD");
+    if (pwd != NULL && pwd[0] != 0) {
+        /* Go's joinPath("/", pwd): every . goes, and every .. takes the name
+         * before it with it, or nothing at the top. */
+        size_t n = 0;
+        const char *p = pwd;
+        while (*p != 0) {
+            while (*p == '/')
+                p++;
+            const char *e = p;
+            while (*e != 0 && *e != '/')
+                e++;
+            size_t len = (size_t)(e - p);
+            if (len == 0 || (len == 1 && p[0] == '.')) {
+                /* nothing */
+            } else if (len == 2 && p[0] == '.' && p[1] == '.') {
+                while (n > 0 && path[n - 1] != '/')
+                    n--;
+                if (n > 0)
+                    n--;
+            } else {
+                if (n + 1 + len >= sizeof path)
+                    return;
+                path[n] = '/';
+                memcpy(path + n + 1, p, len);
+                n += 1 + len;
+            }
+            p = e;
+        }
+        if (n == 0)
+            path[n++] = '/';
+        path[n] = 0;
+        (void)chdir(path);
+        return;
+    }
+    for (__wasi_fd_t fd = 3;; fd++) {
+        __wasi_prestat_t st;
+        __wasi_errno_t e = __wasi_fd_prestat_get(fd, &st);
+        if (e == __WASI_ERRNO_BADF)
+            return;
+        if (e != 0 || st.tag != __WASI_PREOPENTYPE_DIR)
+            continue;
+        size_t len = st.u.dir.pr_name_len;
+        if (len >= sizeof path ||
+            __wasi_fd_prestat_dir_name(fd, (uint8_t *)path, len) != 0)
+            return;
+        path[len] = 0;
+        (void)chdir(path);
+        return;
+    }
+}
+
+#endif
 
 int64_t pal_temp_dir(char *buf, int64_t cap, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);

@@ -517,8 +517,8 @@ static Int exw_fail(ExwCleanup *c, Uintptr *handle, Error *err, Error e) {
 
 Int syscall_start_process(Str argv0, Slice argv, const SyscallProcAttr *attr,
                           Uintptr *handle, Error *err) {
-    static const SyscallProcAttr zero_proc_attr;
-    static const SyscallSysProcAttr zero_sys_proc_attr;
+    static const SyscallProcAttr zero_proc_attr = {0};
+    static const SyscallSysProcAttr zero_sys_proc_attr = {0};
     if (handle != NULL)
         *handle = 0;
     if (argv0.len == 0) {

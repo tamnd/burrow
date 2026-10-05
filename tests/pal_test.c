@@ -237,8 +237,14 @@ static void TestAGuardCanBePutOnACommittedPage(TestingT *t) {
      * tests/stack_test.c checks, because checking it here would mean catching
      * the fault, and the machinery for that is the runtime's. */
     PalErrno err = PAL_EOTHER;
+#if defined(BURROW_OS_WASI)
+    /* wasm memory has no protection to change, so there is no guard to give. */
+    CHECK(!pal_vm_guard(p, page, &err));
+    CHECK(err == PAL_ENOTSUP);
+#else
     CHECK(pal_vm_guard(p, page, &err));
     CHECK(err == PAL_OK);
+#endif
 
     /* The page above the guard is still writable, which is the half that makes
      * a guard a guard rather than a wall across the whole mapping. */
@@ -414,7 +420,11 @@ static void TestTheErrorIsOptionalLikeEveryOtherOutParameter(TestingT *t) {
     /* Guard before decommit, because a guard is made from committed memory.
      * POSIX will protect a page that has nothing behind it and Windows will
      * not, so the other order passes on one and fails on the other. */
+#if defined(BURROW_OS_WASI)
+    CHECK(!pal_vm_guard(p, page, NULL));
+#else
     CHECK(pal_vm_guard(p, page, NULL));
+#endif
     CHECK(pal_vm_decommit(p, page, NULL));
     CHECK(pal_vm_release(p, page, NULL));
 
@@ -679,6 +689,8 @@ static void TestAWaitWithADeadlineWaitsAtLeastThatLong(TestingT *t) {
 }
 
 static void TestASleeperIsWokenByAWake(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     FutexParty p = {0, 0, 0, -1};
     burrow__Thread th;
 
@@ -727,6 +739,8 @@ static void exit_registrar(void *arg) {
 }
 
 static void TestExitHooksRunNewestFirstWhenTheThreadEnds(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     ExitLog log = {{0}, 0};
     ExitNode nodes[2] = {{{NULL, NULL, NULL, NULL}, &log, 1},
                          {{NULL, NULL, NULL, NULL}, &log, 2}};
@@ -740,6 +754,8 @@ static void TestExitHooksRunNewestFirstWhenTheThreadEnds(TestingT *t) {
 }
 
 static void TestEverybodyWaitingCanBeReleasedAtOnce(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     enum { SLEEPERS = 8 };
 
     FutexParty p = {0, 0, 0, -1};
@@ -762,6 +778,8 @@ static void TestEverybodyWaitingCanBeReleasedAtOnce(TestingT *t) {
 }
 
 static void TestASleeperOnOneWordIsNotReleasedByAWakeOnAnother(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     FutexParty mine = {0, 0, 0, -1};
     uint32_t other = 0;
     burrow__Thread th;
@@ -793,6 +811,8 @@ static void TestAWakeWithNobodyWaitingIsFreeAndNotAnError(TestingT *t) {
 }
 
 static void TestASleeperWithADeadlineGivesUpWhenNobodyComes(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     FutexParty p = {0, 0, 0, 20000000};
     burrow__Thread th;
 
@@ -869,6 +889,8 @@ static void thread_marker(void *arg) {
 }
 
 static void TestAThreadRunsTheFunctionItWasGiven(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     ThreadParty p = {0, NULL, 0, 0};
     PalErrno err = PAL_EOTHER;
 
@@ -884,6 +906,8 @@ static void TestAThreadRunsTheFunctionItWasGiven(TestingT *t) {
 }
 
 static void TestTheArgumentArrivesAtTheNewThreadUnchanged(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     ThreadParty p = {0, NULL, 0, 0};
 
     int64_t h = pal_thread_create(thread_marker, &p, 0, NULL);
@@ -894,6 +918,8 @@ static void TestTheArgumentArrivesAtTheNewThreadUnchanged(TestingT *t) {
 }
 
 static void TestAStackSmallerThanTheSystemAllowsIsRaisedAndNotRefused(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     ThreadParty p = {0, NULL, 0, 0};
 
     /* A kilobyte is below every platform's minimum. The layer raises it to the
@@ -907,6 +933,8 @@ static void TestAStackSmallerThanTheSystemAllowsIsRaisedAndNotRefused(TestingT *
 }
 
 static void TestAStackBiggerThanTheDefaultIsTaken(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     ThreadParty p = {0, NULL, 0, 0};
 
     int64_t h = pal_thread_create(thread_marker, &p, 2 * 1024 * 1024, NULL);
@@ -917,6 +945,8 @@ static void TestAStackBiggerThanTheDefaultIsTaken(TestingT *t) {
 }
 
 static void TestAThreadCanBeDetachedInsteadOfJoined(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     static ThreadParty p;
 
     /* Static rather than on this frame, because a detached thread is still
@@ -939,6 +969,8 @@ static void TestAThreadCanBeDetachedInsteadOfJoined(TestingT *t) {
 }
 
 static void TestSixteenThreadsAllStartAndAllFinish(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     ThreadParty parties[THREAD_PARTY];
     int64_t handles[THREAD_PARTY];
 
@@ -962,6 +994,8 @@ static void TestSixteenThreadsAllStartAndAllFinish(TestingT *t) {
 }
 
 static void TestEveryThreadRunningAtOnceHasItsOwnIdentity(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     ThreadParty parties[THREAD_PARTY];
     int64_t handles[THREAD_PARTY];
     int64_t mine = pal_thread_self();
@@ -1075,6 +1109,7 @@ static void TestTheThreadsTakeANullErrorLikeEverythingElse(TestingT *t) {
     CHECK(!pal_thread_join(PAL_INVALID_HANDLE, NULL));
     CHECK(!pal_thread_detach(PAL_INVALID_HANDLE, NULL));
 
+    SKIP_WITHOUT_THREADS(t);
     int64_t h = pal_thread_create(thread_marker, &p, 0, NULL);
     CHECK(h != PAL_INVALID_HANDLE);
     CHECK(pal_thread_join(h, NULL));

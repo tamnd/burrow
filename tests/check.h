@@ -40,4 +40,12 @@
             testing_t_errorf_v(t, "%s = %d, want %d", #got, g_, w_);                   \
     } while (0)
 
+/* wasip1 runs one thread and has no way to start another, so a test that
+ * needs a second one skips there. */
+#if defined(BURROW_OS_WASI)
+#define SKIP_WITHOUT_THREADS(t) testing_t_skip_v((t), "wasip1 has no threads")
+#else
+#define SKIP_WITHOUT_THREADS(t) ((void)(t))
+#endif
+
 #endif /* BURROW_TESTS_CHECK_H */

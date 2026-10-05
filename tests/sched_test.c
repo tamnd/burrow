@@ -330,6 +330,8 @@ static void fair_body(void *env) {
 }
 
 static void TestGoschedDoesNotStarveTheGlobalQueue(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     fair_flag = 0;
     fair_started = 0;
     fair_turns = 0;

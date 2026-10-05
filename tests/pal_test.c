@@ -1255,6 +1255,69 @@ static void TestTheSignalsTakeANullErrorLikeEverythingElse(TestingT *t) {
 #endif
 }
 
+/* ---------------------------------------------------------- foreign calls */
+
+#include <stdarg.h>
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
+static uintptr_t digits3(uintptr_t a, uintptr_t b, uintptr_t c) {
+    return a * 100 + b * 10 + c;
+}
+
+/* Reads its third argument the way open and fcntl read their last one. */
+static uintptr_t digits3_variadic(uintptr_t a, uintptr_t b, ...) {
+    va_list ap;
+    va_start(ap, b);
+    uintptr_t c = va_arg(ap, uintptr_t);
+    va_end(ap);
+    return a * 100 + b * 10 + c;
+}
+
+static void TestACallGetsItsArgumentsInOrder(TestingT *t) {
+    const uintptr_t args[3] = {1, 2, 3};
+    uintptr_t e = 99;
+    CHECK_INT_EQ(pal_call((void *)(uintptr_t)digits3, args, 3, -1, &e), 123);
+    CHECK_INT_EQ(e, 0);
+}
+
+static void TestAVariadicCallGetsTheArgumentsAfterTheDots(TestingT *t) {
+    const uintptr_t args[3] = {4, 5, 6};
+    uintptr_t e = 99;
+    CHECK_INT_EQ(pal_call((void *)(uintptr_t)digits3_variadic, args, 3, 2, &e), 456);
+    CHECK_INT_EQ(e, 0);
+}
+
+/* The C library's own fcntl, which is variadic, setting a flag that the C
+ * library then has to see. */
+static void TestAVariadicCallIntoTheCLibraryPassesItsLastArgument(TestingT *t) {
+#if defined(_WIN32)
+    testing_t_skip_v(t, "Windows has no fcntl");
+#else
+    void *fn = pal_libc_symbol("fcntl");
+    if (fn == NULL)
+        testing_t_skip_v(t, "no C library symbols here");
+    int fds[2];
+    if (pipe(fds) != 0)
+        testing_t_fatalf_v(t, "pipe failed");
+    int before = fcntl(fds[0], F_GETFL);
+    const uintptr_t args[3] = {(uintptr_t)fds[0], (uintptr_t)F_SETFL,
+                               (uintptr_t)(before | (int)O_NONBLOCK)};
+    uintptr_t e = 99;
+    CHECK_INT_EQ((int)pal_call(fn, args, 3, 2, &e), 0);
+    CHECK_INT_EQ(e, 0);
+    int after = fcntl(fds[0], F_GETFL);
+    if ((after & (int)O_NONBLOCK) == 0)
+        testing_t_errorf_v(t, "flags after fcntl(F_SETFL, %#x) = %#x",
+                           (Int)(before | (int)O_NONBLOCK), (Int)after);
+    close(fds[0]);
+    close(fds[1]);
+#endif
+}
+
 #if defined(BURROW_NETPOLL_READINESS)
 #define TESTS_1(X)                                                                     \
     X(TestThereIsOnePollerAndASecondAskIsRefused)                                      \
@@ -1325,6 +1388,9 @@ static void TestTheSignalsTakeANullErrorLikeEverythingElse(TestingT *t) {
     X(TestYieldingIsAllowedAsOftenAsYouLike)                                           \
     X(TestStartingOrJoiningNothingIsRefused)                                           \
     X(TestTheThreadsTakeANullErrorLikeEverythingElse)                                  \
+    X(TestACallGetsItsArgumentsInOrder)                                                \
+    X(TestAVariadicCallGetsTheArgumentsAfterTheDots)                                   \
+    X(TestAVariadicCallIntoTheCLibraryPassesItsLastArgument)                           \
     X(TestASignalStackCanBeInstalledAndGivenBack)                                      \
     X(TestEveryThreadInstallsItsOwnSignalStack)                                        \
     X(TestAHandlerThatIsNotThereIsRefused)                                             \

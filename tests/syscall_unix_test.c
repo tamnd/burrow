@@ -264,7 +264,7 @@ static void TestSetNonblock(TestingT *t) {
     /* Checked through the C library first, so that a SetNonblock that did
      * nothing fails here rather than leaving the read below to wait forever. */
     int fl = fcntl(fds[0], F_GETFL);
-    if (fl == -1 || (fl & O_NONBLOCK) == 0)
+    if (fl == -1 || (fl & (int)O_NONBLOCK) == 0)
         testing_t_fatalf_v(t, "flags after SetNonblock(true) = %#x, want O_NONBLOCK",
                            (Int)fl);
     Byte buf[1];

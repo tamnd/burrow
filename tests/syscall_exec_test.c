@@ -75,10 +75,18 @@ static Str self_path(TestingT *t) {
     return exe;
 }
 
-/* Our environment with the child variable set to what. */
+/* Our environment with the child variable set to what. A child that starts
+ * another already has one, and the first of two is the one that counts, so
+ * the old one has to go rather than stay in front of the new. */
 static Slice child_env(Str what) {
     Slice env = os_environ(a);
-    return BURROW_APPEND(Str, a, env, fmt_sprintf_v(a, "%s=%s", S(CHILD_VAR), what));
+    Slice out = slice_make(a, TYPE_STRING, 0, env.len + 1);
+    for (Int i = 0; i < env.len; i++) {
+        Str kv = BURROW_AT(Str, env, i);
+        if (!strings_has_prefix(kv, S(CHILD_VAR "=")))
+            out = BURROW_APPEND(Str, a, out, kv);
+    }
+    return BURROW_APPEND(Str, a, out, fmt_sprintf_v(a, "%s=%s", S(CHILD_VAR), what));
 }
 
 /* Starts this program as a child that does what, with sys and files. */

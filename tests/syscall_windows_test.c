@@ -91,11 +91,10 @@ static void TestOpen(TestingT *t) {
     syscall_open(BURROW_S(""), SYSCALL_O_RDONLY, 0, &err);
     if (errno_of(err) != SYSCALL_ERROR_FILE_NOT_FOUND)
         testing_t_errorf_v(t, "Open(\"\") = %v, want ERROR_FILE_NOT_FOUND", err);
-    syscall_open(file, SYSCALL_O_RDONLY | 0x40000000, 0, &err);
+    syscall_open(file, SYSCALL_O_RDONLY | 0x00400000, 0, &err);
     if (!errors_is(err, fs_err_invalid))
-        testing_t_errorf_v(t,
-                           "Open with FILE_FLAG_OVERLAPPED's neighbour = %v, want %v",
-                           err, fs_err_invalid);
+        testing_t_errorf_v(t, "Open with FILE_FLAG_ bit 0x400000 = %v, want %v", err,
+                           fs_err_invalid);
     syscall_open(file, SYSCALL_O_RDONLY | 0x4000, 0, &err);
     if (errno_of(err) != SYSCALL_ENOTDIR)
         testing_t_errorf_v(t, "Open(file, o_DIRECTORY) = %v, want ENOTDIR", err);
@@ -301,15 +300,15 @@ static void TestFileOps(TestingT *t) {
         1000000000LL * 1000000000LL)
         testing_t_errorf_v(t, "mtime after Utimes = %d",
                            (Int)syscall_filetime_nanoseconds(&fd.last_write_time));
-    SyscallTimespec ts[2] = {{0, -1}, {1100000000, 500}};
+    SyscallTimespec ts[2] = {{0, -1}, {1100000000, 550}};
     err = syscall_utimes_nano(g, (Slice){ts, 2, 2, TYPE_BYTE});
     if (BURROW_FAILED(err))
         testing_t_errorf_v(t, "UtimesNano: %v", err);
     h = syscall_find_first_file(gp, &fd, &err);
     syscall_find_close(h);
-    /* A Filetime counts in 100ns, so the 500ns go. */
+    /* A Filetime counts in 100ns, so the last 50ns go. */
     if (syscall_filetime_nanoseconds(&fd.last_write_time) !=
-        1100000000LL * 1000000000LL)
+        1100000000LL * 1000000000LL + 500)
         testing_t_errorf_v(t, "mtime after UtimesNano = %d",
                            (Int)syscall_filetime_nanoseconds(&fd.last_write_time));
 

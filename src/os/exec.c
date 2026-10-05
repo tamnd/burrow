@@ -591,7 +591,7 @@ OsProcess *os_start_process(Alloc *a, Str name, Slice argv, const OsProcAttr *at
     int64_t pid = pal_spawn(&req, &pe);
     sync_rw_mutex_unlock(&syscall_fork_lock);
 #if defined(BURROW_OS_LINUX)
-    if (sys.pidfd != NULL)
+    if (sys.pidfd != NULL && attr->sys != NULL)
         *attr->sys->pid_fd = (Int)*sys.pidfd;
 #endif
     arena_free(&sysar);

@@ -30,7 +30,13 @@
 # WHAT IT CHECKS AND WHAT IT DOES NOT
 #
 # A name is present if it is a token in the headers once comments and strings
-# are gone. A struct field is present if the struct with the mapped name has a
+# are gone, and the #if branches that are not for the platform are gone too.
+# Each target reads the headers as its own compiler would: an #if that only
+# asks about BURROW_OS_ and BURROW_ARCH_ macros is decided for that target, and
+# any other #if keeps every branch, since there is no telling which one a
+# build takes. A line Go has for one platform is looked for in that
+# platform's headers, and a line Go has everywhere in the headers of any of
+# the targets. A struct field is present if the struct with the mapped name has a
 # member with the mapped field name, and an interface method is present if the
 # vtable has a member with that name or there is a function with the method's
 # name.
@@ -284,6 +290,7 @@ class Decl:
         self.status = None
         self.renamed = False
         self.why = None
+        self.plats = set()  # the targets Go has this line on
 
 
 def map_decl(d):
@@ -382,7 +389,7 @@ def read_api(api_dir, targets):
     if not files:
         raise SystemExit("%s: no go1*.txt in %s" % (PROG, api_dir))
     want = set(targets)
-    seen = set()
+    seen = {}
     by_pkg = {}
     for f in files:
         with open(f) as fh:
@@ -391,12 +398,14 @@ def read_api(api_dir, targets):
                 if not m:
                     continue
                 path, plat, text = m.groups()
-                if plat is not None and re.sub(r"-cgo$", "", plat) not in want:
+                plat = None if plat is None else re.sub(r"-cgo$", "", plat)
+                if plat is not None and plat not in want:
                     continue
-                if (path, text) in seen:
-                    continue
-                seen.add((path, text))
-                by_pkg.setdefault(path, []).append(Decl(path, text))
+                d = seen.get((path, text))
+                if d is None:
+                    d = seen[(path, text)] = Decl(path, text)
+                    by_pkg.setdefault(path, []).append(d)
+                d.plats.update(want if plat is None else [plat])
     return by_pkg
 
 
@@ -437,16 +446,139 @@ def strip_c(text):
 
 TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
+# Go's GOOS and GOARCH, as the macros include/burrow/platform.h defines for
+# them. Android and iOS define the macro of the system they are built on too.
+GOOS_MACROS = {
+    "linux": ["BURROW_OS_LINUX"],
+    "android": ["BURROW_OS_ANDROID", "BURROW_OS_LINUX"],
+    "darwin": ["BURROW_OS_DARWIN"],
+    "ios": ["BURROW_OS_IOS"],
+    "windows": ["BURROW_OS_WINDOWS"],
+    "freebsd": ["BURROW_OS_FREEBSD"],
+    "openbsd": ["BURROW_OS_OPENBSD"],
+    "netbsd": ["BURROW_OS_NETBSD"],
+    "dragonfly": ["BURROW_OS_DRAGONFLY"],
+    "illumos": ["BURROW_OS_SOLARIS"],
+    "solaris": ["BURROW_OS_SOLARIS"],
+    "aix": ["BURROW_OS_AIX"],
+    "js": ["BURROW_OS_JS"],
+    "wasip1": ["BURROW_OS_WASI"],
+}
+GOARCH_MACROS = {
+    "amd64": "BURROW_ARCH_AMD64",
+    "arm64": "BURROW_ARCH_ARM64",
+    "386": "BURROW_ARCH_386",
+    "arm": "BURROW_ARCH_ARM",
+    "riscv64": "BURROW_ARCH_RISCV64",
+    "loong64": "BURROW_ARCH_LOONG64",
+    "ppc64": "BURROW_ARCH_PPC64",
+    "ppc64le": "BURROW_ARCH_PPC64",
+    "s390x": "BURROW_ARCH_S390X",
+    "mips64": "BURROW_ARCH_MIPS64",
+    "mips64le": "BURROW_ARCH_MIPS64",
+    "wasm": "BURROW_ARCH_WASM",
+}
+
+
+def target_macros(target):
+    """The BURROW_OS_ and BURROW_ARCH_ macros defined for a GOOS-GOARCH, or
+    None for a target this table does not know, which keeps every branch."""
+    goos, _, goarch = target.partition("-")
+    if goos not in GOOS_MACROS or goarch not in GOARCH_MACROS:
+        return None
+    return set(GOOS_MACROS[goos]) | {GOARCH_MACROS[goarch]}
+
+
+PLATFORM_MACRO = re.compile(r"^BURROW_(?:OS|ARCH)_[A-Z0-9]+$")
+
+
+def eval_cond(cond, macros):
+    """True or False for an #if that only asks which platform this is, and
+    None for anything else."""
+    cond = re.sub(r"\bdefined\s*\(\s*(\w+)\s*\)|\bdefined\s+(\w+)", lambda m: " D_%s " % (m.group(1) or m.group(2)), cond)
+    out = []
+    for tok in re.findall(r"D_\w+|\w+|\|\||&&|!|\(|\)|\S", cond):
+        if tok.startswith("D_"):
+            name = tok[2:]
+            if not PLATFORM_MACRO.match(name) or name == "BURROW_OS_NAME" or name == "BURROW_ARCH_NAME":
+                return None
+            out.append("True" if name in macros else "False")
+        elif tok == "||":
+            out.append("or")
+        elif tok == "&&":
+            out.append("and")
+        elif tok == "!":
+            out.append("not")
+        elif tok in ("(", ")"):
+            out.append(tok)
+        else:
+            return None
+    try:
+        return bool(eval(" ".join(out), {"__builtins__": {}}))
+    except SyntaxError:
+        return None
+
+
+def select_target(code, macros):
+    """The code with the lines in #if branches that cannot be taken on the
+    target blanked, line structure kept."""
+    lines = code.split("\n")
+    # Each level: (the enclosing level is live, a branch here was surely
+    # taken, this branch is live).
+    stack = []
+    live = True
+    i = -1
+    while i + 1 < len(lines):
+        i += 1
+        m = re.match(r"^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)$", lines[i])
+        if not m:
+            if not live:
+                lines[i] = ""
+            continue
+        kw, rest = m.group(1), m.group(2).strip()
+        # A condition can go on past a backslash at the end of the line.
+        lines[i] = ""
+        while rest.endswith("\\") and i + 1 < len(lines):
+            i += 1
+            rest = rest[:-1] + " " + lines[i].strip()
+            lines[i] = ""
+        if kw in ("if", "ifdef", "ifndef"):
+            if kw == "ifdef":
+                rest = "defined(%s)" % rest
+            elif kw == "ifndef":
+                rest = "!defined(%s)" % rest
+            v = eval_cond(rest, macros)
+            stack.append([live, v is True, live and v is not False])
+        elif kw == "elif" and stack:
+            top = stack[-1]
+            if top[1]:
+                top[2] = False
+            else:
+                v = eval_cond(rest, macros)
+                top[2] = top[0] and v is not False
+                top[1] = v is True
+        elif kw == "else" and stack:
+            top = stack[-1]
+            top[2] = top[0] and not top[1]
+            top[1] = True
+        elif kw == "endif" and stack:
+            stack.pop()
+        live = stack[-1][2] if stack else True
+    return "\n".join(lines)
+
 
 class Headers:
-    def __init__(self, files):
+    def __init__(self, files, target=None):
         self.tokens = set()
         self.members = {}
         self.embeds = {}
         self.protos = {}
+        macros = target_macros(target) if target else None
         for f in files:
             with open(f) as fh:
                 code = strip_c(fh.read())
+            if macros is not None:
+                code = select_target(code, macros)
             self.tokens.update(TOKEN.findall(code))
             self.read_structs(code)
             self.read_protos(code)
@@ -862,12 +994,38 @@ def read_waivers(path):
 # ------------------------------------------------------------ the report
 
 
+# The best of what a declaration is on the targets it is looked for on.
+RANK = {"present": 0, "renamed": 0, "reshaped": 1, "waived": 1, "differs": 2, "missing": 3}
+
+
+def classify_on(d, headers_list, waivers, reshaped, gotypes):
+    best, why = None, None
+    for headers in headers_list:
+        d.why = None
+        status = classify(d, headers, waivers, reshaped, gotypes)
+        if best is None or RANK[status] < RANK[best]:
+            best, why = status, d.why
+        if RANK[best] == 0:
+            break
+    d.why = why
+    return best
+
+
 def classify(d, headers, waivers, reshaped, gotypes):
     if (d.path, d.key) in waivers or (d.path, "*") in waivers:
         return "waived"
     if d.owner is not None:
         if headers.has_member(d.owner, d.member):
             return "renamed" if d.renamed else "present"
+        # A field named for a C or C++ keyword or a macro the system headers
+        # define, like Rlimit's Max, gets an underscore after it.
+        if headers.has_member(d.owner, d.member + "_"):
+            return "renamed"
+        # A zero-length array has no storage and C has no field for it in
+        # the middle of a struct, so the generated structs leave it out.
+        if re.search(r"\s\[0\]\w+$", d.text) and headers.has(d.owner):
+            d.why = "a zero-length array, which C has no field for"
+            return "reshaped"
         if d.alternative and headers.has(d.alternative) and (not d.getter or headers.opaque(d.owner)):
             return "present"
         return "missing"
@@ -903,8 +1061,10 @@ def main():
     args = p.parse_args()
 
     api_dir = args.go_api or os.path.join(goroot(), "api")
-    decls = read_api(api_dir, args.target or TARGETS)
-    headers = Headers(header_files(args.header))
+    targets = args.target or TARGETS
+    decls = read_api(api_dir, targets)
+    files = header_files(args.header)
+    headers = {t: Headers(files, t) for t in targets}
     waivers = read_waivers(args.waivers)
     reshaped = read_waivers(args.reshaped)
     done = [line for _, line in read_list(args.done)]
@@ -929,7 +1089,7 @@ def main():
         rows = []
         for d in decls.get(pkg, []):
             map_decl(d)
-            d.status = classify(d, headers, waivers, reshaped, gotypes)
+            d.status = classify_on(d, [headers[t] for t in sorted(d.plats)], waivers, reshaped, gotypes)
             counts[counted.get(d.status, d.status)] += 1
             if d.status == "differs":
                 counts["differs"] += 1

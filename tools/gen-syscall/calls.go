@@ -312,6 +312,11 @@ func (t *trans) call(e *ast.CallExpr, outs []string) string {
 		if len(e.Args) != 1 {
 			return t.fail("conversion")
 		}
+		// A conversion to the type the value already has, like uintptr(r0),
+		// is left out, since clang-tidy calls the cast redundant.
+		if at := t.g.p.info.Types[e.Args[0]]; at.Type != nil && types.Identical(at.Type, ftv.Type) {
+			return t.expr(e.Args[0])
+		}
 		to, why := t.g.castType(ftv.Type)
 		if why != "" {
 			return t.fail("conversion to %s", why)

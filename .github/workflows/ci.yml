@@ -172,8 +172,8 @@ jobs:
   # gets broken is never a cast that looks wrong. It is a test that reads the
   # first byte of an int, or a hash that walks a word, and it passes everywhere
   # anybody runs it. s390x is the only big endian target still maintained well
-  # enough to build on, and under emulation the whole suite takes about three
-  # minutes, which is cheap for the only check in the matrix that can find this.
+  # enough to build on, and under emulation the tests take about twelve minutes,
+  # which is cheap for the only check in the matrix that can find this.
   #
   # The gcc image is used rather than a distro image with a compiler installed,
   # because apt under emulation costs more than the build does. s390x is not in
@@ -181,8 +181,8 @@ jobs:
   bigendian:
     name: linux-s390x-gcc (big endian)
     runs-on: ubuntu-latest
-    # Under qemu the build alone takes close to 30 minutes, and the tests run
-    # after that, so 30 was not enough.
+    # Under qemu the build alone took about an hour on one core and the tests twelve
+    # minutes more, so the build uses every core the runner has.
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
@@ -197,11 +197,14 @@ jobs:
       # container that quietly came up on the host architecture would run the
       # suite, pass, and report a big endian job that never saw a big endian
       # machine, which is worse than not having the job at all.
+      #
+      # BURROW_TEST_EMULATED tells the few tests that qemu itself gets wrong
+      # to skip, rather than fail now and then for a reason that is not ours.
       - name: build and test
         run: |
-          docker run --rm --platform linux/s390x \
+          docker run --rm --platform linux/s390x -e BURROW_TEST_EMULATED=1 \
             -v "$PWD":/src -w /src gcc:15 \
-            sh -c 'cc -dM -E - </dev/null | grep -q "__BYTE_ORDER__ __ORDER_BIG_ENDIAN__" || { echo "this is not a big endian compiler" >&2; exit 1; }; make test TESTFLAGS=-test.short'
+            sh -c 'cc -dM -E - </dev/null | grep -q "__BYTE_ORDER__ __ORDER_BIG_ENDIAN__" || { echo "this is not a big endian compiler" >&2; exit 1; }; make -j"$(nproc)" test TESTFLAGS=-test.short'
 
   # musl, which is the other Linux libc and the one that disagrees with glibc
   # about what a strict C11 build is allowed to see. Most of the standard

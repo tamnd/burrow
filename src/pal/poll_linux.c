@@ -46,7 +46,7 @@
  * touch them and runs before anything else here can. Read without any
  * synchronisation afterwards, which is safe because nothing writes them again.
  */
-static int epfd = -1;
+static int epoll_fd = -1;
 static int breakfd = -1;
 
 /* Whether a wakeup is already on its way, so that a thousand goroutines readied
@@ -63,7 +63,7 @@ static uint32_t wakesig;
  * lost one. See the same paragraph in poll_bsd.c, where the choice costs more.
  */
 int64_t pal_poll_create(PalErrno *err) {
-    if (epfd >= 0) {
+    if (epoll_fd >= 0) {
         BURROW_OUT(err, PAL_EBUSY);
         return PAL_INVALID_HANDLE;
     }
@@ -93,7 +93,7 @@ int64_t pal_poll_create(PalErrno *err) {
         return PAL_INVALID_HANDLE;
     }
 
-    epfd = ep;
+    epoll_fd = ep;
     breakfd = bf;
     BURROW_OUT(err, PAL_OK);
     return (int64_t)ep;
@@ -103,7 +103,7 @@ int64_t pal_poll_create(PalErrno *err) {
  * one is a caller bug rather than a system failure, so it is PAL_EINVAL and not
  * a guess at what was meant. */
 static bool is_poller(int64_t poll) {
-    return epfd >= 0 && poll == (int64_t)epfd;
+    return epoll_fd >= 0 && poll == (int64_t)epoll_fd;
 }
 
 bool pal_poll_add(int64_t poll, int64_t fd, void *user, PalErrno *err) {
@@ -116,7 +116,7 @@ bool pal_poll_add(int64_t poll, int64_t fd, void *user, PalErrno *err) {
     ev.events = (uint32_t)(EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET);
     ev.data.u64 = (uint64_t)(uintptr_t)user;
 
-    if (epoll_ctl(epfd, EPOLL_CTL_ADD, (int)fd, &ev) != 0) {
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, (int)fd, &ev) != 0) {
         BURROW_OUT(err, burrow__pal_errno(errno));
         return false;
     }
@@ -138,7 +138,7 @@ bool pal_poll_del(int64_t poll, int64_t fd, PalErrno *err) {
     ev.events = 0;
     ev.data.u64 = 0;
 
-    if (epoll_ctl(epfd, EPOLL_CTL_DEL, (int)fd, &ev) != 0) {
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, (int)fd, &ev) != 0) {
         BURROW_OUT(err, burrow__pal_errno(errno));
         return false;
     }
@@ -221,7 +221,7 @@ int64_t pal_poll_wait(int64_t poll, PalPollEvent *out, int64_t cap, int64_t time
 
     int n;
     for (;;) {
-        n = epoll_wait(epfd, events, want, ms);
+        n = epoll_wait(epoll_fd, events, want, ms);
         if (n >= 0)
             break;
         if (errno != EINTR) {

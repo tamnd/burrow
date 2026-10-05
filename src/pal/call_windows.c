@@ -22,7 +22,7 @@
 
 typedef uintptr_t U;
 
-#define CALL(params, ...)                                                              \
+#define FN_CALL(params, ...)                                                           \
     do {                                                                               \
         union {                                                                        \
             void *object;                                                              \
@@ -88,61 +88,61 @@ uintptr_t pal_call(void *fn, const uintptr_t *args, int32_t n, int32_t nfixed,
     SetLastError(0);
     switch (n) {
     case 0:
-        CALL((void), A0);
+        FN_CALL((void), A0);
         break;
     case 1:
-        CALL((P1), A1);
+        FN_CALL((P1), A1);
         break;
     case 2:
-        CALL((P2), A2);
+        FN_CALL((P2), A2);
         break;
     case 3:
-        CALL((P3), A3);
+        FN_CALL((P3), A3);
         break;
     case 4:
-        CALL((P4), A4);
+        FN_CALL((P4), A4);
         break;
     case 5:
-        CALL((P5), A5);
+        FN_CALL((P5), A5);
         break;
     case 6:
-        CALL((P6), A6);
+        FN_CALL((P6), A6);
         break;
     case 7:
-        CALL((P7), A7);
+        FN_CALL((P7), A7);
         break;
     case 8:
-        CALL((P8), A8);
+        FN_CALL((P8), A8);
         break;
     case 9:
-        CALL((P9), A9);
+        FN_CALL((P9), A9);
         break;
     case 10:
-        CALL((P10), A10);
+        FN_CALL((P10), A10);
         break;
     case 11:
-        CALL((P11), A11);
+        FN_CALL((P11), A11);
         break;
     case 12:
-        CALL((P12), A12);
+        FN_CALL((P12), A12);
         break;
     case 13:
-        CALL((P13), A13);
+        FN_CALL((P13), A13);
         break;
     case 14:
-        CALL((P14), A14);
+        FN_CALL((P14), A14);
         break;
     case 15:
-        CALL((P15), A15);
+        FN_CALL((P15), A15);
         break;
     case 16:
-        CALL((P16), A16);
+        FN_CALL((P16), A16);
         break;
     case 17:
-        CALL((P17), A17);
+        FN_CALL((P17), A17);
         break;
     default:
-        CALL((P18), A18);
+        FN_CALL((P18), A18);
         break;
     }
     BURROW_OUT(errnum, (uintptr_t)GetLastError());

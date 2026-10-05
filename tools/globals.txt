@@ -114,10 +114,10 @@ global	src/runtime/netpoll.c	cache_ndescs	netpoller	How many descriptors exist, 
 global	src/runtime/netpoll.c	init_lock	netpoller	The lock the poller is started under, so that two goroutines opening their first descriptor at once make one epoll or kqueue between them.
 global	src/runtime/netpoll.c	init_done	netpoller	Whether the poller is started. A release store under init_lock and an acquire load everywhere else, which is what lets the scheduler ask the question without taking anything.
 global	src/runtime/netpoll.c	netpoll_nwaiters	netpoller	How many goroutines are parked on a descriptor. Atomic, and read by the scheduler to decide whether a poll could find anything.
-global	src/pal/poll_linux.c	epfd	netpoller	The epoll descriptor. One per process, made once by pal_poll_create and read without anything afterwards.
-global	src/pal/poll_linux.c	breakfd	netpoller	The eventfd a wakeup is written to, made alongside epfd and read the same way.
+global	src/pal/poll_linux.c	epoll_fd	netpoller	The epoll descriptor. One per process, made once by pal_poll_create and read without anything afterwards.
+global	src/pal/poll_linux.c	breakfd	netpoller	The eventfd a wakeup is written to, made alongside epoll_fd and read the same way.
 global	src/pal/poll_linux.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one write, and cleared by whoever drains the eventfd.
-global	src/pal/poll_bsd.c	kq	netpoller	The kqueue descriptor. One per process, made once by pal_poll_create and read without anything afterwards.
+global	src/pal/poll_bsd.c	kqueue_fd	netpoller	The kqueue descriptor. One per process, made once by pal_poll_create and read without anything afterwards.
 global	src/pal/poll_bsd.c	breakrd	netpoller	The read end of the wakeup pipe, which is what the kqueue watches.
 global	src/pal/poll_bsd.c	breakwr	netpoller	The write end of the wakeup pipe, which is where a byte goes to interrupt a wait.
 global	src/pal/poll_bsd.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one byte, and cleared by whoever drains the pipe.

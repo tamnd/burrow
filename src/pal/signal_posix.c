@@ -87,8 +87,14 @@ static struct sigaction previous[SIG_SLOTS];
 static unsigned char previous_saved[SIG_SLOTS];
 
 /* Serialises the installers, pal_signal_install and pal_signal_relay, which can
- * be called from any thread. The handler never takes it. */
+ * be called from any thread. The handler never takes it.
+ *
+ * Cosmopolitan's PTHREAD_MUTEX_INITIALIZER leaves fields out, which GCC warns
+ * about. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 static pthread_mutex_t install_mu = PTHREAD_MUTEX_INITIALIZER;
+#pragma GCC diagnostic pop
 
 /* What pal_signal_relay last asked for, read by the handler. RELAY_NONE until
  * the first call. */
@@ -554,7 +560,7 @@ bool pal_signal_relay_init(PalSignalRelay send, PalErrno *err) {
          * nothing to add, and a handler that blocks is a program that stops. */
         int fl = fcntl(fds[1], F_GETFL);
         if (!cloexec(fds[0]) || !cloexec(fds[1]) || fl < 0 ||
-            fcntl(fds[1], F_SETFL, fl | O_NONBLOCK) != 0) {
+            fcntl(fds[1], F_SETFL, fl | (int)O_NONBLOCK) != 0) {
             int e = errno;
             (void)close(fds[0]);
             (void)close(fds[1]);

@@ -79,9 +79,14 @@ static void test_read(TestingT *t, ReadFunc read) {
         testing_t_fatalf_v(t, "Read(buf) = %d, %s", n, error_text(err));
 
     BytesBuffer *z = bytes_new_buffer(a, slice_nil(TYPE_BYTE));
-    FlateWriter *f = flate_new_writer(a, bytes_buffer_as_io_writer(z), 5, NULL);
-    flate_writer_write(f, b, NULL);
-    flate_writer_close(f);
+    FlateWriter *f = flate_new_writer(a, bytes_buffer_as_io_writer(z), 5, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "flate.NewWriter: %s", error_text(err));
+    flate_writer_write(f, b, &err);
+    if (!BURROW_FAILED(err))
+        err = flate_writer_close(f);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "compressing: %s", error_text(err));
     if (bytes_buffer_len(z) < b.len * 99 / 100)
         testing_t_fatalf_v(t, "Compressed %d -> %d", b.len, bytes_buffer_len(z));
     arena_free(&ar);

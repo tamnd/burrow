@@ -22,26 +22,61 @@
 
 #include <string.h>
 
+#if BURROW_MSAN
+#include <sanitizer/msan_interface.h>
+#endif
+
 Int syscall_stdin = 0;
 Int syscall_stdout = 1;
 Int syscall_stderr = 2;
 
 /* --------------------------------------------------------------- reads */
 
+/* The calls go to the kernel without the C library, so the memory sanitizer
+ * never sees the kernel fill the buffer of a read or look at the one of a
+ * write. Go tells it, in these four and nowhere else, and so does this. */
+static void unix_msan_write(Slice p, Int n) {
+#if BURROW_MSAN
+    if (n > 0)
+        __msan_unpoison(p.p, (size_t)n);
+#else
+    (void)p;
+    (void)n;
+#endif
+}
+
+static void unix_msan_read(Slice p, Int n) {
+#if BURROW_MSAN
+    if (n > 0)
+        __msan_check_mem_is_initialized(p.p, (size_t)n);
+#else
+    (void)p;
+    (void)n;
+#endif
+}
+
 Int syscall_read(Int fd, Slice p, Error *err) {
-    return burrow__syscall_read(fd, p, err);
+    Int n = burrow__syscall_read(fd, p, err);
+    unix_msan_write(p, n);
+    return n;
 }
 
 Int syscall_write(Int fd, Slice p, Error *err) {
-    return burrow__syscall_write(fd, p, err);
+    Int n = burrow__syscall_write(fd, p, err);
+    unix_msan_read(p, n);
+    return n;
 }
 
 Int syscall_pread(Int fd, Slice p, int64_t offset, Error *err) {
-    return burrow__syscall_pread(fd, p, offset, err);
+    Int n = burrow__syscall_pread(fd, p, offset, err);
+    unix_msan_write(p, n);
+    return n;
 }
 
 Int syscall_pwrite(Int fd, Slice p, int64_t offset, Error *err) {
-    return burrow__syscall_pwrite(fd, p, offset, err);
+    Int n = burrow__syscall_pwrite(fd, p, offset, err);
+    unix_msan_read(p, n);
+    return n;
 }
 
 /* ---------------------------------------------------- strings for exec */

@@ -3,12 +3,16 @@
  * libc asks NSS, so this finds users from LDAP and the like as well as the
  * ones in /etc/passwd.
  *
+ * FreeBSD and DragonFly get no _XOPEN_SOURCE, which there hides getgrouplist.
+ *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
 #if !defined(_WIN32)
+#if !defined(__FreeBSD__) && !defined(__DragonFly__)
 #define _XOPEN_SOURCE 700
+#endif
 #define _DEFAULT_SOURCE 1
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE 1

@@ -11,15 +11,19 @@
  * The feature test macros come first for the reason src/runtime/stack.c gives:
  * glibc reads them when its first header arrives and ignores one that is defined
  * afterwards, and MAP_ANONYMOUS is an extension that a bare _POSIX_C_SOURCE
- * build does not get. _WIN32 rather than BURROW_OS_WINDOWS because knowing the
- * latter would mean including a header first.
+ * build does not get. FreeBSD and DragonFly are the other way round, where
+ * _XOPEN_SOURCE is what hides MAP_ANONYMOUS, so they go without it. _WIN32
+ * rather than BURROW_OS_WINDOWS because knowing the latter would mean
+ * including a header first.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
 #if !defined(_WIN32)
+#if !defined(__FreeBSD__) && !defined(__DragonFly__)
 #define _XOPEN_SOURCE 700
+#endif
 #define _DEFAULT_SOURCE 1
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE 1

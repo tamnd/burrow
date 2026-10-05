@@ -1710,15 +1710,24 @@ static void TestRepeatCatchesOverflow(TestingT *t) {
     }
 
     /* Go's 64-bit case, {"-", maxInt}, is the runtime refusing to make the
-     * buffer, which panics with "out of range". Here the allocator refuses
-     * and Repeat gives an empty slice, as every function here does when it
-     * runs out of memory. A fixed allocator refuses without asking malloc. */
+     * buffer, which panics with "out of range". Where Int is wider than a
+     * size_t, as on wasm, the same panic comes before asking for memory.
+     * Elsewhere the allocator refuses and Repeat gives an empty slice, as every
+     * function here does when it runs out of memory. A fixed allocator
+     * refuses without asking malloc. */
     unsigned char buf[64];
     Fixed fx;
     fixed_init(&fx, buf, sizeof buf);
+#if BURROW_INT_MAX > SIZE_MAX
+    Str err = repeat_panic(fixed_allocator(&fx), cb("-"), BURROW_INT_MAX);
+    if (!strings_contains(err, S("out of range")))
+        testing_t_errorf_v(t, "Repeat(\"-\", maxInt) panicked %q, want out of range",
+                           err);
+#else
     Slice got = bytes_repeat(fixed_allocator(&fx), cb("-"), BURROW_INT_MAX);
     if (got.len != 0)
         testing_t_errorf_v(t, "Repeat(\"-\", maxInt) = %d bytes, want 0", got.len);
+#endif
     arena_free(&ar);
 }
 

@@ -475,9 +475,10 @@ static Error enc_nest(Alloc *a, BytesBuffer *buf, Int n) {
     return err;
 }
 
-/* On wasip1 the limit is a count, because every goroutine runs its calls on the
- * engine's stack and nothing in the module can see how much of it is left. The
- * deepest value the encoder takes has to come back from the decoder on the
+/* On wasip1 there are two stacks to run out of. The one in linear memory has
+ * bounds, as anywhere else, but every goroutine also runs its calls on the
+ * engine's stack, and nothing in the module can see how much of that is left,
+ * so a count stands in for it. The deepest value the encoder takes has to come back from the decoder on the
  * stack wasmtime gives by default, and one level more has to be refused. */
 static void TestGobNesting(TestingT *t) {
     Arena ar;

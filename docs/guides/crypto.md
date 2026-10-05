@@ -462,3 +462,73 @@ print_error(err);
 ```
 
 For the NIST curves a public key is the uncompressed point, a 4 then x and y, and the shared secret is the x coordinate of the shared point. Compressed points and the point at infinity are refused. For X25519 any 32 bytes are a public key, and a key of small order shows up as an error from `ecdh_private_key_ecdh`, which refuses to return a secret of all zeros. The field arithmetic is the same fiat-crypto code Go uses, and the scalar multiplications follow Go's constant time ones step for step.
+
+## crypto/elliptic
+
+`burrow/crypto/elliptic.h` is the old interface to the NIST curves, with points as `BigInt` coordinates. Go deprecates most of it: for key exchange use crypto/ecdh, and for signatures crypto/ecdsa. It is here for code that still speaks it, and it gives the same answers Go's does. An `EllipticCurve` is a vtable and a pointer, and `elliptic_p224`, `elliptic_p256`, `elliptic_p384` and `elliptic_p521` give the four curves. Each operation returns x and puts y in its last argument, both new from the allocator, and that argument can be NULL when only x is wanted:
+
+<!-- example: ../examples/crypto/elliptic.c#points -->
+```c
+EllipticCurve p256 = elliptic_p256();
+const EllipticCurveParams *params = elliptic_curve_params(p256);
+
+// 2G, two ways.
+uint8_t two[] = {2};
+BigInt *y1;
+BigInt *x1 =
+    elliptic_curve_scalar_base_mult(p256, a, slice_from(two, 1, 1, TYPE_BYTE), &y1);
+BigInt *y2;
+BigInt *x2 = elliptic_curve_double(p256, a, params->gx, params->gy, &y2);
+print_int(a, x1);
+printf("%d %d\n", big_int_cmp(x1, x2) == 0 && big_int_cmp(y1, y2) == 0,
+       elliptic_curve_is_on_curve(p256, x1, y1));
+
+// G + 2G is 3G.
+uint8_t three[] = {3};
+BigInt *y3;
+BigInt *x3 = elliptic_curve_add(p256, a, params->gx, params->gy, x1, y1, &y3);
+BigInt *x4 = elliptic_curve_scalar_base_mult(
+    p256, a, slice_from(three, 1, 1, TYPE_BYTE), NULL);
+printf("%d\n", big_int_cmp(x3, x4) == 0);
+```
+
+`elliptic_marshal` writes the uncompressed form, a 4 then x and y, and `elliptic_marshal_compressed` the compressed form, a 2 or 3 for the sign of y then x. The unmarshal functions return NULL for anything that is not a point on the curve, and the point at infinity, (0, 0), is not one. Passing a point that is not on the curve to the operations or to the marshal functions panics with Go's message:
+
+<!-- example: ../examples/crypto/elliptic.c#encoding -->
+```c
+EllipticCurve p256 = elliptic_p256();
+const EllipticCurveParams *params = elliptic_curve_params(p256);
+
+Slice full = elliptic_marshal(a, p256, params->gx, params->gy);
+Slice small = elliptic_marshal_compressed(a, p256, params->gx, params->gy);
+printf("%d %d\n", (int)full.len, (int)small.len);
+print_hex(a, small);
+
+BigInt *y;
+BigInt *x = elliptic_unmarshal_compressed(a, p256, small, &y);
+printf("%d\n", big_int_cmp(x, params->gx) == 0 && big_int_cmp(y, params->gy) == 0);
+
+// A point that is not on the curve does not unmarshal.
+x = elliptic_unmarshal(a, p256, unhex(a, "0400"), &y);
+printf("%d %d\n", x == NULL, y == NULL);
+```
+
+The four curves use the same constant time field code as crypto/ecdh, with only the conversions to and from `BigInt` left variable time. An `EllipticCurveParams` other than the four curves' own params gets a generic implementation in math/big, which is what Go's tests compare the fast code against. A copy of the P-384 params is enough to get it:
+
+<!-- example: ../examples/crypto/elliptic.c#generic -->
+```c
+// A copy of the params is the generic implementation of the same curve.
+EllipticCurveParams copy = *elliptic_curve_params(elliptic_p384());
+EllipticCurve slow = elliptic_curve_params_as_elliptic_curve(&copy);
+
+Error err = BURROW_NO_ERROR;
+BigInt *x, *y;
+Slice priv =
+    elliptic_generate_key(a, elliptic_p384(), (IoReader){NULL, NULL}, &x, &y, &err);
+if (BURROW_FAILED(err))
+    return;
+BigInt *gy;
+BigInt *gx = elliptic_curve_scalar_base_mult(slow, a, priv, &gy);
+printf("%d %d\n", (int)priv.len,
+       big_int_cmp(x, gx) == 0 && big_int_cmp(y, gy) == 0);
+```

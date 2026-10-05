@@ -392,3 +392,73 @@ print_error(ed25519_verify_with_options(pub, msg, ctx_sig, &other));
 ```
 
 `ed25519_private_key_signer` turns a private key into a `CryptoSigner`, for code that signs through the interface. Its public half comes back from `crypto_signer_public` as a `CryptoPublicKey` holding an `Ed25519PublicKey`, which `ed25519_public_key_equal` compares with. `ed25519_sign` panics if the private key is not 64 bytes, and `ed25519_verify` panics if the public key is not 32, as Go's do. Signing and key generation are constant time. Verifying is not, and does not need to be.
+
+## crypto/ecdh
+
+`burrow/crypto/ecdh.h` is Elliptic Curve Diffie-Hellman over P-256, P-384, P-521 and X25519. Two sides each make a private key, send each other the public half as bytes, and each gets the same shared secret from its own private key and the other's public key:
+
+<!-- example: ../examples/crypto/ecdh.c#exchange -->
+```c
+Error err = BURROW_NO_ERROR;
+const EcdhCurve *curve = ecdh_x25519();
+EcdhPrivateKey *alice =
+    ecdh_curve_generate_key(curve, a, (IoReader){NULL, NULL}, &err);
+EcdhPrivateKey *bob =
+    ecdh_curve_generate_key(curve, a, (IoReader){NULL, NULL}, &err);
+if (BURROW_FAILED(err))
+    return;
+
+// Each side sends the other its public key, as bytes.
+Slice alice_sends = ecdh_public_key_bytes(ecdh_private_key_public_key(alice), a);
+Slice bob_sends = ecdh_public_key_bytes(ecdh_private_key_public_key(bob), a);
+
+EcdhPublicKey *from_bob = ecdh_curve_new_public_key(curve, a, bob_sends, &err);
+EcdhPublicKey *from_alice = ecdh_curve_new_public_key(curve, a, alice_sends, &err);
+if (BURROW_FAILED(err))
+    return;
+Slice s1 = ecdh_private_key_ecdh(alice, a, from_bob, &err);
+Slice s2 = ecdh_private_key_ecdh(bob, a, from_alice, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%d %d\n", (int)s1.len, bytes_equal(s1, s2));
+```
+
+The curves are the four values `ecdh_p256`, `ecdh_p384`, `ecdh_p521` and `ecdh_x25519` return, so `==` tells whether two keys are on the same curve. Keys come from the allocator they are made with, in one block each, and `ecdh_private_key_free` and `ecdh_public_key_free` give them back. `ecdh_curve_new_private_key` and `ecdh_curve_new_public_key` take the encodings `ecdh_private_key_bytes` and `ecdh_public_key_bytes` give, so a fixed key gives a fixed result. This is the X25519 example of RFC 7748:
+
+<!-- example: ../examples/crypto/ecdh.c#vector -->
+```c
+Error err = BURROW_NO_ERROR;
+EcdhPrivateKey *k = ecdh_curve_new_private_key(
+    ecdh_x25519(), a,
+    unhex(a, "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"),
+    &err);
+EcdhPublicKey *peer = ecdh_curve_new_public_key(
+    ecdh_x25519(), a,
+    unhex(a, "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"),
+    &err);
+if (BURROW_FAILED(err))
+    return;
+print_hex(a, ecdh_public_key_bytes(ecdh_private_key_public_key(k), a));
+print_hex(a, ecdh_private_key_ecdh(k, a, peer, &err));
+```
+
+A shared secret is not a key yet. It is not uniformly random, and wants a key derivation function like HKDF first. A public key on another curve and an encoding that is not a point are errors with Go's messages:
+
+<!-- example: ../examples/crypto/ecdh.c#errors -->
+```c
+Error err = BURROW_NO_ERROR;
+EcdhPrivateKey *k =
+    ecdh_curve_generate_key(ecdh_p256(), a, (IoReader){NULL, NULL}, &err);
+EcdhPrivateKey *other =
+    ecdh_curve_generate_key(ecdh_p384(), a, (IoReader){NULL, NULL}, &err);
+if (BURROW_FAILED(err))
+    return;
+ecdh_private_key_ecdh(k, a, ecdh_private_key_public_key(other), &err);
+print_error(err);
+
+err = BURROW_NO_ERROR;
+ecdh_curve_new_public_key(ecdh_p256(), a, unhex(a, "00"), &err);
+print_error(err);
+```
+
+For the NIST curves a public key is the uncompressed point, a 4 then x and y, and the shared secret is the x coordinate of the shared point. Compressed points and the point at infinity are refused. For X25519 any 32 bytes are a public key, and a key of small order shows up as an error from `ecdh_private_key_ecdh`, which refuses to return a secret of all zeros. The field arithmetic is the same fiat-crypto code Go uses, and the scalar multiplications follow Go's constant time ones step for step.

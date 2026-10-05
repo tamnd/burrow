@@ -1090,18 +1090,24 @@ static void TestTheThreadsTakeANullErrorLikeEverythingElse(TestingT *t) {
  * it: what the arguments refuse, that a signal stack is per thread, and that a
  * handler installed for an ordinary signal actually runs when it arrives. */
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(BURROW_OS_WASI)
 #include <signal.h>
 #endif
 
 static uint32_t signal_hits;
+#if !defined(_WIN32) && !defined(BURROW_OS_WASI)
 static int32_t signal_seen;
+#endif
 
 static bool count_signal(int32_t sig, void *info, void *ctx) {
     (void)info;
     (void)ctx;
 
+#if !defined(_WIN32) && !defined(BURROW_OS_WASI)
     signal_seen = sig;
+#else
+    (void)sig;
+#endif
     (void)burrow__atomic_add_u32(&signal_hits, 1);
     return true;
 }
@@ -1158,9 +1164,10 @@ static void TestANumberThatIsNotASignalIsRefused(TestingT *t) {
     PalErrno err = PAL_OK;
 
     CHECK(!pal_signal_install(4242, count_signal, &err));
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(BURROW_OS_WASI)
     /* Windows has one of these and says so about the rest, so a number nobody
-     * recognises and a signal it cannot offer come back the same way. */
+     * recognises and a signal it cannot offer come back the same way. WASI
+     * has none at all. */
     CHECK_INT_EQ(err, PAL_ENOTSUP);
 #else
     CHECK_INT_EQ(err, PAL_EINVAL);
@@ -1182,7 +1189,7 @@ static void TestAFaultAddressNeedsAFaultToReadItFrom(TestingT *t) {
     CHECK(pal_signal_fault_addr(NULL) == NULL);
 }
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(BURROW_OS_WASI)
 
 static void TestAHandlerRunsWhenTheSignalArrives(TestingT *t) {
     PalErrno err = PAL_EOTHER;
@@ -1240,14 +1247,14 @@ TestInstallingTwiceReplacesTheHandlerAndKeepsWhatWasThereFirst(TestingT *t) {
     CHECK_INT_EQ(burrow__atomic_load_u32(&signal_hits), 1);
 }
 
-#endif /* !_WIN32 */
+#endif /* !_WIN32 && !BURROW_OS_WASI */
 
 static void TestTheSignalsTakeANullErrorLikeEverythingElse(TestingT *t) {
     CHECK(!pal_signal_install(PAL_SIGFAULT, NULL, NULL));
     CHECK(!pal_signal_install(4242, count_signal, NULL));
     CHECK(pal_signal_stack_install(NULL));
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(BURROW_OS_WASI)
     CHECK(pal_signal_mask(PAL_SIGPREEMPT, true, NULL));
     CHECK(pal_signal_mask(PAL_SIGPREEMPT, false, NULL));
 #else
@@ -1270,7 +1277,7 @@ static void TestTheSignalsTakeANullErrorLikeEverythingElse(TestingT *t) {
 #define TESTS_1(X)
 #endif
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(BURROW_OS_WASI)
 #define TESTS_2(X)                                                                     \
     X(TestAHandlerRunsWhenTheSignalArrives)                                            \
     X(TestABlockedSignalWaitsAndArrivesWhenItIsLetThrough)                             \

@@ -81,7 +81,10 @@ bool pal_kill(int64_t pid, int32_t sig, PalErrno *err) {
 
 bool pal_signal_install(int32_t sig, PalSignalHandler handler, PalErrno *err) {
     (void)sig;
-    (void)handler;
+    if (handler == NULL) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
     return nosig(err);
 }
 

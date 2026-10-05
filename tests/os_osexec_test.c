@@ -46,6 +46,7 @@ static Slice strs(const Str *v, Int n) {
 }
 
 static Str exe_path(TestingT *t) {
+    SKIP_WITHOUT_EXEC(t);
     Error e = BURROW_NO_ERROR;
     Str exe = os_executable(a, &e);
     if (BURROW_FAILED(e))

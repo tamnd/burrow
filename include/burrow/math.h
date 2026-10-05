@@ -85,9 +85,9 @@ extern "C" {
 #define MATH_MAX_UINT16 UINT16_MAX
 #define MATH_MAX_UINT32 UINT32_MAX
 #define MATH_MAX_UINT64 UINT64_MAX
-#define MATH_MAX_INT INTPTR_MAX
-#define MATH_MIN_INT INTPTR_MIN
-#define MATH_MAX_UINT UINTPTR_MAX
+#define MATH_MAX_INT BURROW_INT_MAX
+#define MATH_MIN_INT BURROW_INT_MIN
+#define MATH_MAX_UINT BURROW_UINT_MAX
 
 /* --------------------------------------------------------------------- bits
  *

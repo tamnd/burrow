@@ -94,11 +94,16 @@ static void TestErrorTextUnknown(TestingT *t) {
     got = syscall_errno_error(9999, a);
     if (!str_is(got, "errno 9999"))
         testing_t_errorf_v(t, "Errno(9999).Error() = %q, want %q", got, "errno 9999");
-    /* int(e), so the top half prints negative. */
+    /* int(e), so the top half prints negative. Except on wasip1, where Errno is
+     * a uint32 and int has 64 bits. */
+#if defined(BURROW_OS_WASI)
+    const char *want = "errno 4294967295";
+#else
+    const char *want = "errno -1";
+#endif
     got = syscall_errno_error((SyscallErrno)-1, a);
-    if (!str_is(got, "errno -1"))
-        testing_t_errorf_v(t, "Errno(^uintptr(0)).Error() = %q, want %q", got,
-                           "errno -1");
+    if (!str_is(got, want))
+        testing_t_errorf_v(t, "Errno(^uintptr(0)).Error() = %q, want %q", got, want);
 #endif
     ARENA_END;
 }

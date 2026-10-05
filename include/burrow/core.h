@@ -112,11 +112,13 @@ typedef int64_t Int;
 typedef uint64_t Uint;
 #define BURROW_INT_MAX INT64_MAX
 #define BURROW_INT_MIN INT64_MIN
+#define BURROW_UINT_MAX UINT64_MAX
 #else
 typedef int32_t Int;
 typedef uint32_t Uint;
 #define BURROW_INT_MAX INT32_MAX
 #define BURROW_INT_MIN INT32_MIN
+#define BURROW_UINT_MAX UINT32_MAX
 #endif
 
 typedef uintptr_t Uintptr;

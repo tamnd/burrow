@@ -134,6 +134,8 @@ static uint32_t cpu_detect(void) {
         f |= PAL_CPU_ARM64_SHA3;
     if ((hw & (1UL << 21)) != 0)
         f |= PAL_CPU_ARM64_SHA512;
+    if ((hw & (1UL << 24)) != 0)
+        f |= PAL_CPU_ARM64_DIT;
 #elif defined(CPU_SYSCTL)
     /* Every Apple arm64 processor has SHA-1 and SHA-256, which is why Go's
      * cpu_arm64_darwin.go sets them without asking. The FEAT_ names arrived in
@@ -145,6 +147,8 @@ static uint32_t cpu_detect(void) {
     if (cpu_sysctl("hw.optional.arm.FEAT_SHA3") ||
         cpu_sysctl("hw.optional.armv8_2_sha3"))
         f |= PAL_CPU_ARM64_SHA3;
+    if (cpu_sysctl("hw.optional.arm.FEAT_DIT"))
+        f |= PAL_CPU_ARM64_DIT;
 #elif defined(CPU_WINDOWS)
     /* PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE is 30, and SHA3 and SHA512 are
      * 64 and 65, which older SDKs do not name. A Windows too old to know one
@@ -155,6 +159,7 @@ static uint32_t cpu_detect(void) {
         f |= PAL_CPU_ARM64_SHA3;
     if (IsProcessorFeaturePresent(65))
         f |= PAL_CPU_ARM64_SHA512;
+    /* Go does not look for DIT on Windows, so neither does this. */
 #endif
     return f;
 }

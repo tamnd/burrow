@@ -44,6 +44,7 @@
 #include "burrow/atomic.h"
 #include "burrow/clock.h"
 #include "burrow/core.h"
+#include "burrow/dit.h"
 #include "burrow/func.h"
 #include "burrow/mcontext.h"
 #include "burrow/mem.h"
@@ -236,6 +237,26 @@ burrow__M *burrow__curm(void) {
 
 burrow__G *burrow__curg(void) {
     return getm() != NULL ? getm()->curg : NULL;
+}
+
+/* Go's dit_setEnabled and dit_setDisabled. A thread that is not running a
+ * goroutine has nothing to remember the mode on but the bit itself. */
+bool burrow__dit_set_enabled(void) {
+    burrow__M *m = getm();
+    if (m != NULL && m->curg != NULL) {
+        m->curg->dit_wanted = true;
+        m->dit_enabled = true;
+    }
+    return burrow__dit_enable();
+}
+
+void burrow__dit_set_disabled(void) {
+    burrow__M *m = getm();
+    if (m != NULL && m->curg != NULL) {
+        m->curg->dit_wanted = false;
+        m->dit_enabled = false;
+    }
+    burrow__dit_disable();
 }
 
 burrow__Bubble *burrow__curbubble(void) {
@@ -872,6 +893,18 @@ static burrow__G *execute(burrow__M *m, burrow__G *gp) {
     burrow__atomic_store_release_u32(
         &m->p->schedtick, burrow__atomic_load_relaxed_u32(&m->p->schedtick) + 1U);
     burrow__atomic_store_release_u32(&gp->preempt, 0);
+
+    /* The thread takes on the goroutine's timing mode, unless GODEBUG has it
+     * on for every thread. Turning it off here leaves the scheduler running
+     * without it after this goroutine stops, which Go accepts too. */
+    if (gp->dit_wanted != m->dit_enabled && burrow__dit_supported() &&
+        !burrow__dit_everywhere()) {
+        if (gp->dit_wanted)
+            (void)burrow__dit_enable();
+        else
+            burrow__dit_disable();
+        m->dit_enabled = gp->dit_wanted;
+    }
 
     burrow__mcontext_switch(&m->g0.ctx, &gp->ctx);
 
@@ -1949,6 +1982,9 @@ static void mstart(void *arg) {
     (void)burrow__stack_guard_arm_thread();
     burrow__stack_set_current(NULL);
 
+    if (burrow__dit_everywhere() && burrow__dit_supported())
+        (void)burrow__dit_enable();
+
     burrow__P *p = m->nextp;
     m->nextp = NULL;
     if (p != NULL)
@@ -2058,6 +2094,7 @@ static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble, bool b
     newg->next = NULL;
     newg->coro = NULL;
     newg->bubble = bubble;
+    newg->dit_wanted = m != NULL && m->curg != NULL && m->curg->dit_wanted;
     burrow__atomic_store_release_u32(&newg->bubbleblocked, 0);
 
     if (!make_context(newg, stack_bytes)) {
@@ -2152,6 +2189,7 @@ bool burrow__newcoro(burrow__Coro *c, void (*f)(burrow__Coro *c, void *env),
     newg->next = NULL;
     newg->coro = c;
     newg->bubble = m->curg->bubble;
+    newg->dit_wanted = m->curg->dit_wanted;
     burrow__atomic_store_release_u32(&newg->bubbleblocked, 0);
 
     if (!make_context(newg, BURROW_GOROUTINE_STACK)) {
@@ -2486,6 +2524,7 @@ void runtime_main(Func fn) {
 
     mg->entry = fn.f;
     mg->arg = fn.env;
+    mg->dit_wanted = false;
 
     if (!make_context(mg, BURROW_GOROUTINE_STACK))
         runtime_throw(BURROW_S("runtime_main: cannot make the main goroutine"));

@@ -320,6 +320,9 @@ int64_t pal_cpu_name(char *buf, int64_t cap);
 #define PAL_CPU_ARM64_SHA2 (UINT32_C(1) << 9)
 #define PAL_CPU_ARM64_SHA512 (UINT32_C(1) << 10)
 #define PAL_CPU_ARM64_SHA3 (UINT32_C(1) << 11)
+/* Data independent timing, which crypto/subtle turns on. GODEBUG has no name
+ * for it, as in Go, so cpu.all=off leaves it alone. */
+#define PAL_CPU_ARM64_DIT (UINT32_C(1) << 12)
 
 /* The PAL_CPU_ bits this processor has, found on the first call and kept.
  *

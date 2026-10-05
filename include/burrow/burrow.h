@@ -59,6 +59,7 @@
 #include "burrow/crypto/sha256.h"
 #include "burrow/crypto/sha3.h"
 #include "burrow/crypto/sha512.h"
+#include "burrow/crypto/subtle.h"
 #include "burrow/declare.h"
 #include "burrow/defer.h"
 #include "burrow/embed.h"

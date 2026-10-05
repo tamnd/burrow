@@ -40,6 +40,7 @@ crypto/sha1
 crypto/sha256
 crypto/sha512
 crypto/sha3
+crypto/subtle
 container/list
 container/ring
 sort

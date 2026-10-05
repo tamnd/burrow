@@ -58,6 +58,7 @@
 #include "burrow/crypto/hmac.h"
 #include "burrow/crypto/md5.h"
 #include "burrow/crypto/pbkdf2.h"
+#include "burrow/crypto/rand.h"
 #include "burrow/crypto/sha1.h"
 #include "burrow/crypto/sha256.h"
 #include "burrow/crypto/sha3.h"

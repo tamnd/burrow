@@ -627,3 +627,69 @@ err = BURROW_NO_ERROR;
 ecdsa_parse_uncompressed_public_key(a, elliptic_p256(), unhex(a, "00"), &err);
 print_error(err);
 ```
+
+## crypto/dsa
+
+`burrow/crypto/dsa.h` is the Digital Signature Algorithm of FIPS 186-3. Go deprecates it and so does this: it is here for checking signatures made by old systems, and new code should use Ed25519. Keys are structs of `BigInt` pointers, the shared parameters p, q and g, then y for the public key and x for the private one, so a key from somewhere else can be put together with `big_int_set_string` or `big_int_set_bytes`. `dsa_sign` gives the signature as two integers, r and s. The hash is not cut down to the length of q for you, and FIPS 186-3 says it should be:
+
+<!-- example: ../examples/crypto/dsa.c#sign -->
+```c
+DsaPrivateKey priv = test_key(a);
+
+// q is 160 bits, so the SHA-256 hash is cut down to its first 20 bytes.
+Sha256Sum256Ret sum = sha256_sum256(text("hello, world"));
+Int n = big_int_bit_len(priv.public_key.parameters.q) / 8;
+Slice hash = slice_from(sum.a, n, n, TYPE_BYTE);
+
+Error err = BURROW_NO_ERROR;
+BigInt *s;
+BigInt *r = dsa_sign(a, (IoReader){NULL, NULL}, &priv, hash, &s, &err);
+if (BURROW_FAILED(err))
+    return;
+
+printf("signature verified: %s\n",
+       dsa_verify(&priv.public_key, hash, r, s) ? "true" : "false");
+sum.a[0] ^= 1;
+printf("other hash verified: %s\n",
+       dsa_verify(&priv.public_key, hash, r, s) ? "true" : "false");
+```
+
+`dsa_generate_key` makes x and y for parameters that are already in the key. Making the parameters themselves with `dsa_generate_parameters` means finding two primes and can take several seconds. Many keys can share one set:
+
+<!-- example: ../examples/crypto/dsa.c#generate -->
+```c
+// New keys for parameters someone already has. dsa_generate_parameters
+// makes new ones, which takes seconds.
+DsaPrivateKey shared = test_key(a);
+DsaPrivateKey priv = {0};
+priv.public_key.parameters = shared.public_key.parameters;
+
+Error err = dsa_generate_key(&priv, a, (IoReader){NULL, NULL});
+if (BURROW_FAILED(err))
+    return;
+printf("x < q: %s\n",
+       big_int_cmp(priv.x, priv.public_key.parameters.q) < 0 ? "true" : "false");
+printf("y < p: %s\n",
+       big_int_cmp(priv.public_key.y, priv.public_key.parameters.p) < 0 ? "true"
+                                                                        : "false");
+```
+
+The functions that only report an error return it, as Go's do. `dsa_sign` gives `dsa_err_invalid_public_key` for a key it cannot sign with, which a key made by other code can be, so check for it with `errors_is`:
+
+<!-- example: ../examples/crypto/dsa.c#errors -->
+```c
+DsaParameters params = {0};
+print_error(dsa_generate_parameters(&params, a, (IoReader){NULL, NULL}, 7));
+
+DsaPrivateKey empty = {0};
+print_error(dsa_generate_key(&empty, a, (IoReader){NULL, NULL}));
+
+// A q whose length in bits is not a multiple of 8.
+DsaPrivateKey bad = test_key(a);
+bad.public_key.parameters.q = from_hex(a, "7F");
+Error err = BURROW_NO_ERROR;
+BigInt *s;
+dsa_sign(a, (IoReader){NULL, NULL}, &bad, text("hash"), &s, &err);
+print_error(err);
+printf("%d\n", errors_is(err, dsa_err_invalid_public_key));
+```

@@ -230,3 +230,9 @@ crypto/ecdh: func P521: returns a pointer to one of the four curves, as Curve ca
 crypto/ecdh: func X25519: returns a pointer to one of the four curves, as Curve cannot be implemented outside the package
 crypto/ecdh: method (*PrivateKey) Curve: returns a pointer to one of the four curves, as Curve cannot be implemented outside the package
 crypto/ecdh: method (*PublicKey) Curve: returns a pointer to one of the four curves, as Curve cannot be implemented outside the package
+
+# include/burrow/crypto/dsa.h: Go puts new big.Ints in the struct it is given,
+# and the collector looks after them. Here they come from an allocator, so
+# there is one more parameter.
+crypto/dsa: func GenerateParameters: takes the allocator the new integers come from
+crypto/dsa: func GenerateKey: takes the allocator the new integers come from

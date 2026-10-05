@@ -236,3 +236,9 @@ crypto/ecdh: method (*PublicKey) Curve: returns a pointer to one of the four cur
 # there is one more parameter.
 crypto/dsa: func GenerateParameters: takes the allocator the new integers come from
 crypto/dsa: func GenerateKey: takes the allocator the new integers come from
+
+# include/burrow/crypto/mlkem/mlkemtest.h: Go returns the shared key and the
+# ciphertext together. C has one return value, so the ciphertext comes back
+# through a pointer, as it does from Encapsulate in crypto/mlkem.
+crypto/mlkem/mlkemtest: func Encapsulate768: returns the ciphertext through a pointer, as C has one return value
+crypto/mlkem/mlkemtest: func Encapsulate1024: returns the ciphertext through a pointer, as C has one return value

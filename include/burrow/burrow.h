@@ -66,6 +66,8 @@
 #include "burrow/crypto/hkdf.h"
 #include "burrow/crypto/hmac.h"
 #include "burrow/crypto/md5.h"
+#include "burrow/crypto/mlkem.h"
+#include "burrow/crypto/mlkem/mlkemtest.h"
 #include "burrow/crypto/pbkdf2.h"
 #include "burrow/crypto/rand.h"
 #include "burrow/crypto/rc4.h"

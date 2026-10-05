@@ -55,6 +55,8 @@ crypto/ecdsa
 crypto/elliptic
 crypto/ed25519
 crypto/rc4
+crypto/mlkem
+crypto/mlkem/mlkemtest
 container/list
 container/ring
 sort

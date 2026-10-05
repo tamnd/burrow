@@ -97,7 +97,9 @@ typedef struct TestcipherGuard {
 static inline void testcipher_boundary(TestingT *t, Int size, TestcipherGuard *g,
                                        Slice *start, Slice *end) {
     int64_t page = pal_page_size();
-    int64_t need = 2 + (2 * (int64_t)size + page - 1) / page;
+    /* At least one page between the guards, since committing none fails. */
+    int64_t mid = (2 * (int64_t)size + page - 1) / page;
+    int64_t need = 2 + (mid > 0 ? mid : 1);
     PalErrno err = 0;
     Byte *b = (Byte *)pal_vm_reserve(need * page, &err);
     if (b == NULL)

@@ -197,9 +197,12 @@ jobs:
       # container that quietly came up on the host architecture would run the
       # suite, pass, and report a big endian job that never saw a big endian
       # machine, which is worse than not having the job at all.
+      #
+      # BURROW_TEST_EMULATED tells the few tests that qemu itself gets wrong
+      # to skip, rather than fail now and then for a reason that is not ours.
       - name: build and test
         run: |
-          docker run --rm --platform linux/s390x \
+          docker run --rm --platform linux/s390x -e BURROW_TEST_EMULATED=1 \
             -v "$PWD":/src -w /src gcc:15 \
             sh -c 'cc -dM -E - </dev/null | grep -q "__BYTE_ORDER__ __ORDER_BIG_ENDIAN__" || { echo "this is not a big endian compiler" >&2; exit 1; }; make -j"$(nproc)" test TESTFLAGS=-test.short'
 

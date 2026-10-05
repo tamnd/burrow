@@ -75,3 +75,57 @@ The mode belongs to the thread, and a goroutine can move between threads, so the
 Where the processor has no such mode, which is everywhere but arm64 today, the function just runs. burrow looks for DIT on Linux, FreeBSD and Apple systems. Go also looks on OpenBSD, which burrow does not do yet, and neither looks on Windows.
 
 `GODEBUG=dataindependenttiming=1` turns the mode on for every thread the runtime starts and leaves it on, which is Go's setting of the same name.
+
+## crypto/hmac
+
+`burrow/crypto/hmac.h` makes a message authentication code out of any hash and a key. The sender works out the MAC of a message and sends both, and the receiver, who has the same key, works it out again and compares:
+
+<!-- example: ../examples/crypto/hmac.c#mac -->
+```c
+static Slice sign(Alloc *a, Slice key, Slice message) {
+    Hash mac = hmac_new(a, sha256_new, key);
+    hash_write(mac, message, NULL);
+    return hash_sum(a, mac, slice_nil(TYPE_BYTE));
+}
+
+static bool valid_mac(Alloc *a, Slice key, Slice message, Slice message_mac) {
+    return hmac_equal(message_mac, sign(a, key, message));
+}
+```
+
+`hmac_new` takes the function that makes the hash rather than a hash, because it needs two of them, one inside the other. Any function of the shape `Hash f(Alloc *a)` will do, which `HashNewFunc` in `burrow/hash.h` names, and `sha256_new`, `sha512_new`, `sha1_new` and `md5_new` all are. The result is a `Hash` like any other, so writing, summing and resetting go through the usual calls.
+
+Compare MACs with `hmac_equal`, never with `memcmp`. It is `subtle_constant_time_compare` underneath, so how long it takes does not say how much of a forged MAC was right.
+
+Go's HMAC is also a `hash.Cloner` when the hash under it is one. A `Hash` here has no way to say that it is, so `hmac_new` does not offer cloning.
+
+## crypto/hkdf
+
+`burrow/crypto/hkdf.h` is RFC 5869. It turns a secret that is random enough but not in a usable shape, such as what a key exchange gives you, into as many keys as you need, telling them apart by an info string:
+
+<!-- example: ../examples/crypto/hmac.c#hkdf -->
+```c
+Error err;
+Slice enc_key =
+    hkdf_key(a, sha256_new, secret, salt, BURROW_S("encryption"), 16, &err);
+Slice mac_key = hkdf_key(a, sha256_new, secret, salt, BURROW_S("mac"), 16, &err);
+```
+
+`hkdf_key` is the two halves of the RFC in one call, and `hkdf_extract` and `hkdf_expand` are there for protocols that need them apart. Asking for more than 255 sums' worth of key fails with `hkdf: requested key length too large`, as in Go. HKDF assumes its secret is already hard to guess, so it is the wrong tool for a password.
+
+## crypto/pbkdf2
+
+`burrow/crypto/pbkdf2.h` is the one for passwords. It runs HMAC as many times as you ask, so that each guess costs an attacker that much work:
+
+<!-- example: ../examples/crypto/hmac.c#pbkdf2 -->
+```c
+Error err;
+Slice key =
+    pbkdf2_key(a, sha256_new, BURROW_S("correct horse"), salt, 4096, 32, &err);
+if (BURROW_FAILED(err))
+    return;
+```
+
+The salt should be random, at least 8 bytes as the RFC recommends, different for each password and kept next to whatever the key protects. A higher iteration count makes each guess cost more and makes your own derivation slower by the same factor. A key length of zero or less, or one longer than the RFC allows, is an error rather than a panic.
+
+None of the three has Go's FIPS 140-only mode, so the errors and panics that mode adds for short keys and unapproved hashes never happen here.

@@ -260,3 +260,51 @@ io_copy(a, cipher_stream_writer_as_io_writer(&w), bytes_reader_as_io_reader(&in)
 Go's `StreamWriter.Close` closes the writer underneath if it is an `io.Closer`. C cannot ask an interface whether it is another one, so fill in the `closer` field when you want that, and leave it empty when you do not.
 
 Where the processor has AES instructions, AES-NI on x86-64 or the Armv8 ones on arm64, the block cipher uses them, and CTR, CBC decryption and GCM hand them several blocks at a time. GCM's hash then runs on the carry-less multiply, PCLMULQDQ or PMULL. Without them burrow differs from Go on purpose: Go's portable AES looks up tables indexed by secret data, which can leak the key through the cache, while burrow's is bitsliced and takes the same time whatever the key and data are. The portable GHASH is Go's, which is already constant time.
+
+## crypto/des and crypto/rc4
+
+`burrow/crypto/des.h` is DES and Triple DES, and `burrow/crypto/rc4.h` is the RC4 stream cipher. All three are broken or close to it, and they are here only for old protocols and files that still use them. For anything new, use AES-GCM from the section above.
+
+Triple DES takes a 24 byte key, three DES keys in a row. Two key Triple DES, which some old systems use, is the same thing with the first key repeated at the end:
+
+<!-- example: ../examples/crypto/des.c#ede2 -->
+```c
+/* Two key Triple DES, where the first key is used again at the end. */
+Slice ede2_key = text("example key 1234");
+Byte key[24];
+memcpy(key, ede2_key.p, 16);
+memcpy(key + 16, ede2_key.p, 8);
+CipherBlock block =
+    des_new_triple_des_cipher(a, slice_from(key, 24, 24, TYPE_BYTE), &err);
+```
+
+The block works with any of the modes in `burrow/crypto/cipher.h`, just like an AES one, only with 8 byte blocks:
+
+<!-- example: ../examples/crypto/des.c#cbc -->
+```c
+Byte iv[DES_BLOCK_SIZE] = {0};
+Slice data = slice_make(a, TYPE_BYTE, 16, 16);
+memcpy(data.p, "exampleplaintext", 16);
+
+CipherBlockMode enc =
+    cipher_new_cbc_encrypter(a, block, slice_from(iv, 8, 8, TYPE_BYTE));
+cipher_block_mode_crypt_blocks(enc, data, data);
+print_hex(a, data);
+
+CipherBlockMode dec =
+    cipher_new_cbc_decrypter(a, block, slice_from(iv, 8, 8, TYPE_BYTE));
+cipher_block_mode_crypt_blocks(dec, data, data);
+print_text(data);
+```
+
+RC4 has no block and no IV. A key of 1 to 256 bytes gives an `Rc4Cipher`, and every call to `rc4_cipher_xor_key_stream` continues the key stream where the last one stopped:
+
+<!-- example: ../examples/crypto/des.c#rc4 -->
+```c
+Rc4Cipher *c = rc4_new_cipher(a, text("Key"), &err);
+Slice data = slice_make(a, TYPE_BYTE, 9, 9);
+rc4_cipher_xor_key_stream(c, data, text("Plaintext"));
+print_hex(a, data);
+```
+
+`rc4_cipher_as_cipher_stream` turns an `Rc4Cipher` into a `CipherStream`, so it can go into a `CipherStreamReader` or `CipherStreamWriter`. A DES key that is not 8 bytes fails with `crypto/des: invalid key size 5` or whatever the length was, and a Triple DES key that is not 24 bytes fails the same way. RC4 fails with `crypto/rc4: invalid key size 0` for an empty key or one longer than 256 bytes. Like Go's, none of these three is constant time. They look up tables with bits of the key, so on a shared machine the key can leak through the cache.

@@ -96,21 +96,17 @@ static Int wait_code(TestingT *t, Int pid) {
 }
 
 static void make_pipe(TestingT *t, Int fds[2]) {
+    /* os makes it rather than syscall_pipe, which is Go's Pipe and leaves both
+     * ends open across exec, so a child would hold the write end of its own
+     * release pipe and never see it close. The two OsFiles stay in the arena
+     * and the descriptors are closed with syscall_close. */
     Error e = BURROW_NO_ERROR;
-#if defined(BURROW_OS_LINUX)
-    e = syscall_pipe((Slice){fds, 2, 2, TYPE_INT});
-#else
-    /* syscall.Pipe is not here yet off Linux, so os makes it. The two OsFiles
-     * stay in the arena and the descriptors are closed with syscall_close. */
     OsFile *w = NULL;
     OsFile *r = os_pipe(a, &w, &e);
-    if (!BURROW_FAILED(e)) {
-        fds[0] = (Int)os_file_fd(r);
-        fds[1] = (Int)os_file_fd(w);
-    }
-#endif
     if (BURROW_FAILED(e))
         testing_t_fatalf_v(t, "Pipe: %s", error_text(e));
+    fds[0] = (Int)os_file_fd(r);
+    fds[1] = (Int)os_file_fd(w);
 }
 
 /* Everything on fd until its end, as a Str in a. */
@@ -361,7 +357,13 @@ static void TestForkExecDir(TestingT *t) {
 static void TestForkExecKeepsFds(TestingT *t) {
     Int p[2];
     make_pipe(t, p);
+    /* Linux on arm64, riscv64 and loong64 has no dup2, and Go has no Dup2
+     * there either. */
+#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO)
+    Error e = syscall_dup3(p[0], 7, 0);
+#else
     Error e = syscall_dup2(p[0], 7);
+#endif
     if (BURROW_FAILED(e))
         testing_t_fatalf_v(t, "Dup2: %s", error_text(e));
     (void)syscall_close(p[1]);

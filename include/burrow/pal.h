@@ -1637,7 +1637,9 @@ int64_t pal_if_enumerate(PalInterface *out, int64_t cap, PalErrno *err);
  * one platform, an eventfd on another and a posted completion on the third and
  * is not something a caller should have to know about.
  *
- * Implemented, in src/pal/poll_linux.c, poll_bsd.c and poll_windows.c. */
+ * Implemented, in src/pal/poll_linux.c, poll_bsd.c and poll_windows.c, and in
+ * poll_posix.c on Cosmopolitan and wasip1, which have neither epoll nor kqueue
+ * everywhere they run and use poll(2). */
 
 enum { PAL_POLL_READ = 1u << 0, PAL_POLL_WRITE = 1u << 1 };
 
@@ -1728,6 +1730,16 @@ bool pal_poll_add(int64_t poll, int64_t fd, void *user, PalErrno *err);
 /* Undo it. On kqueue and on a completion port this does nothing, because
  * closing the descriptor is what takes it off and the caller is about to. */
 bool pal_poll_del(int64_t poll, int64_t fd, PalErrno *err);
+
+#if defined(BURROW_OS_COSMO) || defined(BURROW_OS_WASI)
+/* Only where the backend is poll(2), which is level triggered and has to be
+ * told what to look for. mode is PAL_POLL_READ or PAL_POLL_WRITE, or both, and
+ * says what somebody is about to wait for on fd. The next wait that finds fd
+ * ready that way reports it once and forgets it, so a caller arms before every
+ * wait, as Go's netpollarm does on AIX and wasip1. A wait already asleep is
+ * woken to take it in. */
+bool pal_poll_arm(int64_t poll, int64_t fd, uint32_t mode, PalErrno *err);
+#endif
 
 /* Ends a blocking pal_poll_wait early, from any thread, including one that is
  * not in the poller. Collapses: a thousand of these while one wait is asleep

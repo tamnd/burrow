@@ -12,6 +12,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "check.h"
+
 #include "burrow/atomic.h"
 #include "burrow/pal.h"
 #include "burrow/testing.h"
@@ -150,6 +152,7 @@ typedef struct Run {
  * a pipe that is read to the end, and waits for it. */
 static bool run(TestingT *t, const char *const *args, const char *const *envp,
                 const char *dir, Run *r) {
+    SKIP_WITHOUT_EXEC(t);
     const char *argv[16];
     int n = 0;
     argv[n++] = self_path;
@@ -301,8 +304,13 @@ static void TestEnvironment(TestingT *t) {
     for (int i = 0; env[i] != NULL; i++)
         path = path || strncmp(env[i], "PATH=", 5) == 0 ||
                strncmp(env[i], "Path=", 5) == 0;
+#if !defined(BURROW_OS_WASI)
+    /* A wasip1 program sees only the variables its host passes it. */
     if (!path)
         testing_t_errorf_v(t, "pal_environ has no PATH");
+#else
+    (void)path;
+#endif
 
     /* Everything we have plus one, since a Windows child without SystemRoot
      * cannot load the libraries it needs. */
@@ -375,6 +383,7 @@ static void TestMissingProgram(TestingT *t) {
 }
 
 static void TestWaitNoHangAndKill(TestingT *t) {
+    SKIP_WITHOUT_EXEC(t);
     PalErrno err = PAL_OK;
     int64_t in[2];
     if (!pal_pipe(in, 0, &err))
@@ -414,6 +423,7 @@ static void TestWaitSignal(TestingT *t) {
 #if defined(_WIN32)
     testing_t_skip_v(t, "Windows has no signals to report");
 #else
+    SKIP_WITHOUT_EXEC(t);
     PalErrno err = PAL_OK;
     int64_t in[2];
     if (!pal_pipe(in, 0, &err))
@@ -448,6 +458,7 @@ static void TestWaitSignal(TestingT *t) {
  * interrupt is a Ctrl-Break sent to a child in a process group of its own,
  * because Ctrl-C to the whole console would reach the test runner too. */
 static void TestInterruptReachesTheHandler(TestingT *t) {
+    SKIP_WITHOUT_EXEC(t);
 #if defined(_WIN32)
     /* Wine ends a process on Ctrl-Break even when a handler has claimed it. */
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
@@ -532,6 +543,7 @@ static void TestDescriptorTable(TestingT *t) {
 #if defined(_WIN32)
     testing_t_skip_v(t, "Windows has no descriptor numbers to hand a child");
 #else
+    SKIP_WITHOUT_EXEC(t);
     PalErrno err = PAL_OK;
     int64_t p[2];
     if (!pal_pipe(p, 0, &err))

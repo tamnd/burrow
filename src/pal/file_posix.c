@@ -312,6 +312,11 @@ static void stat_from(const struct stat *st, PalStat *out) {
     out->size = (int64_t)st->st_size;
     /* The PAL_S_ numbering is POSIX's, so nothing is translated. */
     out->mode = (uint32_t)st->st_mode;
+#if defined(BURROW_OS_WASI)
+    /* WASI has no permissions. Go's wasip1 gives a directory 0700 and anything
+     * else 0600, since programs expect some, and so does this. */
+    out->mode = (out->mode & ~(uint32_t)07777) | (S_ISDIR(st->st_mode) ? 0700u : 0600u);
+#endif
     out->uid = (uint32_t)st->st_uid;
     out->gid = (uint32_t)st->st_gid;
     out->dev = (uint64_t)st->st_dev;
@@ -1035,7 +1040,7 @@ int64_t pal_dup(int64_t fd, PalErrno *err) {
 
 #if !(defined(BURROW_OS_LINUX) || defined(BURROW_OS_FREEBSD) ||                        \
       defined(BURROW_OS_NETBSD) || defined(BURROW_OS_OPENBSD) ||                       \
-      defined(BURROW_OS_DRAGONFLY))
+      defined(BURROW_OS_DRAGONFLY) || defined(BURROW_OS_WASI))
 static bool set_fd_flag(int fd, int get, int set, int flag) {
     int cur = fcntl(fd, get);
     return cur >= 0 && fcntl(fd, set, cur | flag) == 0;
@@ -1057,6 +1062,10 @@ bool pal_pipe(int64_t out[2], uint32_t flags, PalErrno *err) {
     int o = O_CLOEXEC | ((flags & PAL_O_NONBLOCK) ? O_NONBLOCK : 0);
     if (pipe2(p, o) != 0)
         return file_fail(err);
+#elif defined(BURROW_OS_WASI)
+    /* wasip1 has no pipes, and Go's Pipe there is ENOSYS. */
+    (void)p;
+    return file_nosys(err);
 #else
     /* No pipe2, so there is a moment where both ends are open without close on
      * exec, and a fork on another thread in that moment would give the child a

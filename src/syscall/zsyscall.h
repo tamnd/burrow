@@ -12,14 +12,220 @@
 /* The unexported functions of syscall's zsyscall files, burrow__syscall_ and
  * the Go name, which the hand-written functions call the way Go's do. On
  * macOS, also the numbers of the libSystem functions they reach, which
- * src/syscall/zsyscall.c has the names of. */
+ * src/syscall/zsyscall.c has the names of, and on Windows the DLLs and
+ * procedures. */
 
 #ifndef BURROW_SRC_SYSCALL_ZSYSCALL_H
 #define BURROW_SRC_SYSCALL_ZSYSCALL_H
 
 #include "burrow/syscall.h"
 
-#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+#if defined(BURROW_OS_WINDOWS)
+
+/* windows */
+
+enum {
+    BURROW__SYSCALL_MOD_ADVAPI32,
+    BURROW__SYSCALL_MOD_CRYPT32,
+    BURROW__SYSCALL_MOD_DNSAPI,
+    BURROW__SYSCALL_MOD_IPHLPAPI,
+    BURROW__SYSCALL_MOD_KERNEL32,
+    BURROW__SYSCALL_MOD_MSWSOCK,
+    BURROW__SYSCALL_MOD_NETAPI32,
+    BURROW__SYSCALL_MOD_SECUR32,
+    BURROW__SYSCALL_MOD_SHELL32,
+    BURROW__SYSCALL_MOD_USERENV,
+    BURROW__SYSCALL_MOD_WS2_32,
+    BURROW__SYSCALL_NMODS
+};
+
+enum {
+    BURROW__SYSCALL_PROC_CONVERT_SID_TO_STRING_SID_W,
+    BURROW__SYSCALL_PROC_CONVERT_STRING_SID_TO_SID_W,
+    BURROW__SYSCALL_PROC_COPY_SID,
+    BURROW__SYSCALL_PROC_CREATE_PROCESS_AS_USER_W,
+    BURROW__SYSCALL_PROC_CRYPT_ACQUIRE_CONTEXT_W,
+    BURROW__SYSCALL_PROC_CRYPT_GEN_RANDOM,
+    BURROW__SYSCALL_PROC_CRYPT_RELEASE_CONTEXT,
+    BURROW__SYSCALL_PROC_GET_LENGTH_SID,
+    BURROW__SYSCALL_PROC_GET_TOKEN_INFORMATION,
+    BURROW__SYSCALL_PROC_LOOKUP_ACCOUNT_NAME_W,
+    BURROW__SYSCALL_PROC_LOOKUP_ACCOUNT_SID_W,
+    BURROW__SYSCALL_PROC_OPEN_PROCESS_TOKEN,
+    BURROW__SYSCALL_PROC_REG_CLOSE_KEY,
+    BURROW__SYSCALL_PROC_REG_ENUM_KEY_EX_W,
+    BURROW__SYSCALL_PROC_REG_OPEN_KEY_EX_W,
+    BURROW__SYSCALL_PROC_REG_QUERY_INFO_KEY_W,
+    BURROW__SYSCALL_PROC_REG_QUERY_VALUE_EX_W,
+    BURROW__SYSCALL_PROC_CERT_ADD_CERTIFICATE_CONTEXT_TO_STORE,
+    BURROW__SYSCALL_PROC_CERT_CLOSE_STORE,
+    BURROW__SYSCALL_PROC_CERT_CREATE_CERTIFICATE_CONTEXT,
+    BURROW__SYSCALL_PROC_CERT_ENUM_CERTIFICATES_IN_STORE,
+    BURROW__SYSCALL_PROC_CERT_FREE_CERTIFICATE_CHAIN,
+    BURROW__SYSCALL_PROC_CERT_FREE_CERTIFICATE_CONTEXT,
+    BURROW__SYSCALL_PROC_CERT_GET_CERTIFICATE_CHAIN,
+    BURROW__SYSCALL_PROC_CERT_OPEN_STORE,
+    BURROW__SYSCALL_PROC_CERT_OPEN_SYSTEM_STORE_W,
+    BURROW__SYSCALL_PROC_CERT_VERIFY_CERTIFICATE_CHAIN_POLICY,
+    BURROW__SYSCALL_PROC_DNS_NAME_COMPARE_W,
+    BURROW__SYSCALL_PROC_DNS_QUERY_W,
+    BURROW__SYSCALL_PROC_DNS_RECORD_LIST_FREE,
+    BURROW__SYSCALL_PROC_GET_ADAPTERS_INFO,
+    BURROW__SYSCALL_PROC_GET_IF_ENTRY,
+    BURROW__SYSCALL_PROC_CANCEL_IO,
+    BURROW__SYSCALL_PROC_CANCEL_IO_EX,
+    BURROW__SYSCALL_PROC_CLOSE_HANDLE,
+    BURROW__SYSCALL_PROC_CREATE_DIRECTORY_W,
+    BURROW__SYSCALL_PROC_CREATE_FILE_MAPPING_W,
+    BURROW__SYSCALL_PROC_CREATE_FILE_W,
+    BURROW__SYSCALL_PROC_CREATE_HARD_LINK_W,
+    BURROW__SYSCALL_PROC_CREATE_IO_COMPLETION_PORT,
+    BURROW__SYSCALL_PROC_CREATE_PIPE,
+    BURROW__SYSCALL_PROC_CREATE_PROCESS_W,
+    BURROW__SYSCALL_PROC_CREATE_SYMBOLIC_LINK_W,
+    BURROW__SYSCALL_PROC_CREATE_TOOLHELP32_SNAPSHOT,
+    BURROW__SYSCALL_PROC_DELETE_FILE_W,
+    BURROW__SYSCALL_PROC_DELETE_PROC_THREAD_ATTRIBUTE_LIST,
+    BURROW__SYSCALL_PROC_DEVICE_IO_CONTROL,
+    BURROW__SYSCALL_PROC_DUPLICATE_HANDLE,
+    BURROW__SYSCALL_PROC_EXIT_PROCESS,
+    BURROW__SYSCALL_PROC_FIND_CLOSE,
+    BURROW__SYSCALL_PROC_FIND_FIRST_FILE_W,
+    BURROW__SYSCALL_PROC_FIND_NEXT_FILE_W,
+    BURROW__SYSCALL_PROC_FLUSH_FILE_BUFFERS,
+    BURROW__SYSCALL_PROC_FLUSH_VIEW_OF_FILE,
+    BURROW__SYSCALL_PROC_FORMAT_MESSAGE_W,
+    BURROW__SYSCALL_PROC_FREE_ENVIRONMENT_STRINGS_W,
+    BURROW__SYSCALL_PROC_FREE_LIBRARY,
+    BURROW__SYSCALL_PROC_GET_COMMAND_LINE_W,
+    BURROW__SYSCALL_PROC_GET_COMPUTER_NAME_W,
+    BURROW__SYSCALL_PROC_GET_CONSOLE_MODE,
+    BURROW__SYSCALL_PROC_GET_CURRENT_DIRECTORY_W,
+    BURROW__SYSCALL_PROC_GET_CURRENT_PROCESS,
+    BURROW__SYSCALL_PROC_GET_CURRENT_PROCESS_ID,
+    BURROW__SYSCALL_PROC_GET_ENVIRONMENT_STRINGS_W,
+    BURROW__SYSCALL_PROC_GET_ENVIRONMENT_VARIABLE_W,
+    BURROW__SYSCALL_PROC_GET_EXIT_CODE_PROCESS,
+    BURROW__SYSCALL_PROC_GET_FILE_ATTRIBUTES_EX_W,
+    BURROW__SYSCALL_PROC_GET_FILE_ATTRIBUTES_W,
+    BURROW__SYSCALL_PROC_GET_FILE_INFORMATION_BY_HANDLE,
+    BURROW__SYSCALL_PROC_GET_FILE_TYPE,
+    BURROW__SYSCALL_PROC_GET_FINAL_PATH_NAME_BY_HANDLE_W,
+    BURROW__SYSCALL_PROC_GET_FULL_PATH_NAME_W,
+    BURROW__SYSCALL_PROC_GET_LAST_ERROR,
+    BURROW__SYSCALL_PROC_GET_LONG_PATH_NAME_W,
+    BURROW__SYSCALL_PROC_GET_PROC_ADDRESS,
+    BURROW__SYSCALL_PROC_GET_PROCESS_TIMES,
+    BURROW__SYSCALL_PROC_GET_QUEUED_COMPLETION_STATUS,
+    BURROW__SYSCALL_PROC_GET_SHORT_PATH_NAME_W,
+    BURROW__SYSCALL_PROC_GET_STARTUP_INFO_W,
+    BURROW__SYSCALL_PROC_GET_STD_HANDLE,
+    BURROW__SYSCALL_PROC_GET_SYSTEM_TIME_AS_FILE_TIME,
+    BURROW__SYSCALL_PROC_GET_TEMP_PATH_W,
+    BURROW__SYSCALL_PROC_GET_TIME_ZONE_INFORMATION,
+    BURROW__SYSCALL_PROC_GET_VERSION,
+    BURROW__SYSCALL_PROC_INITIALIZE_PROC_THREAD_ATTRIBUTE_LIST,
+    BURROW__SYSCALL_PROC_LOAD_LIBRARY_W,
+    BURROW__SYSCALL_PROC_LOCAL_ALLOC,
+    BURROW__SYSCALL_PROC_LOCAL_FREE,
+    BURROW__SYSCALL_PROC_MAP_VIEW_OF_FILE,
+    BURROW__SYSCALL_PROC_MOVE_FILE_W,
+    BURROW__SYSCALL_PROC_OPEN_PROCESS,
+    BURROW__SYSCALL_PROC_POST_QUEUED_COMPLETION_STATUS,
+    BURROW__SYSCALL_PROC_PROCESS32_FIRST_W,
+    BURROW__SYSCALL_PROC_PROCESS32_NEXT_W,
+    BURROW__SYSCALL_PROC_READ_CONSOLE_W,
+    BURROW__SYSCALL_PROC_READ_DIRECTORY_CHANGES_W,
+    BURROW__SYSCALL_PROC_READ_FILE,
+    BURROW__SYSCALL_PROC_REMOVE_DIRECTORY_W,
+    BURROW__SYSCALL_PROC_SET_CURRENT_DIRECTORY_W,
+    BURROW__SYSCALL_PROC_SET_END_OF_FILE,
+    BURROW__SYSCALL_PROC_SET_ENVIRONMENT_VARIABLE_W,
+    BURROW__SYSCALL_PROC_SET_FILE_ATTRIBUTES_W,
+    BURROW__SYSCALL_PROC_SET_FILE_COMPLETION_NOTIFICATION_MODES,
+    BURROW__SYSCALL_PROC_SET_FILE_INFORMATION_BY_HANDLE,
+    BURROW__SYSCALL_PROC_SET_FILE_POINTER,
+    BURROW__SYSCALL_PROC_SET_FILE_TIME,
+    BURROW__SYSCALL_PROC_SET_HANDLE_INFORMATION,
+    BURROW__SYSCALL_PROC_TERMINATE_PROCESS,
+    BURROW__SYSCALL_PROC_UNMAP_VIEW_OF_FILE,
+    BURROW__SYSCALL_PROC_UPDATE_PROC_THREAD_ATTRIBUTE,
+    BURROW__SYSCALL_PROC_VIRTUAL_LOCK,
+    BURROW__SYSCALL_PROC_VIRTUAL_UNLOCK,
+    BURROW__SYSCALL_PROC_WAIT_FOR_SINGLE_OBJECT,
+    BURROW__SYSCALL_PROC_WRITE_CONSOLE_W,
+    BURROW__SYSCALL_PROC_WRITE_FILE,
+    BURROW__SYSCALL_PROC_ACCEPT_EX,
+    BURROW__SYSCALL_PROC_GET_ACCEPT_EX_SOCKADDRS,
+    BURROW__SYSCALL_PROC_TRANSMIT_FILE,
+    BURROW__SYSCALL_PROC_NET_API_BUFFER_FREE,
+    BURROW__SYSCALL_PROC_NET_GET_JOIN_INFORMATION,
+    BURROW__SYSCALL_PROC_NET_USER_GET_INFO,
+    BURROW__SYSCALL_PROC_GET_USER_NAME_EX_W,
+    BURROW__SYSCALL_PROC_TRANSLATE_NAME_W,
+    BURROW__SYSCALL_PROC_COMMAND_LINE_TO_ARGV_W,
+    BURROW__SYSCALL_PROC_GET_USER_PROFILE_DIRECTORY_W,
+    BURROW__SYSCALL_PROC_FREE_ADDR_INFO_W,
+    BURROW__SYSCALL_PROC_GET_ADDR_INFO_W,
+    BURROW__SYSCALL_PROC_WSA_CLEANUP,
+    BURROW__SYSCALL_PROC_WSA_ENUM_PROTOCOLS_W,
+    BURROW__SYSCALL_PROC_WSA_IOCTL,
+    BURROW__SYSCALL_PROC_WSA_RECV,
+    BURROW__SYSCALL_PROC_WSA_RECV_FROM,
+    BURROW__SYSCALL_PROC_WSA_SEND,
+    BURROW__SYSCALL_PROC_WSA_SEND_TO,
+    BURROW__SYSCALL_PROC_WSA_STARTUP,
+    BURROW__SYSCALL_PROC_BIND,
+    BURROW__SYSCALL_PROC_CLOSESOCKET,
+    BURROW__SYSCALL_PROC_CONNECT,
+    BURROW__SYSCALL_PROC_GETHOSTBYNAME,
+    BURROW__SYSCALL_PROC_GETPEERNAME,
+    BURROW__SYSCALL_PROC_GETPROTOBYNAME,
+    BURROW__SYSCALL_PROC_GETSERVBYNAME,
+    BURROW__SYSCALL_PROC_GETSOCKNAME,
+    BURROW__SYSCALL_PROC_GETSOCKOPT,
+    BURROW__SYSCALL_PROC_LISTEN,
+    BURROW__SYSCALL_PROC_NTOHS,
+    BURROW__SYSCALL_PROC_SETSOCKOPT,
+    BURROW__SYSCALL_PROC_SHUTDOWN,
+    BURROW__SYSCALL_PROC_SOCKET,
+    BURROW__SYSCALL_NPROCS
+};
+
+/* The DLLs the functions call into, which are the DLLs LoadDLL only looks
+ * for in the system directory, and the procedures, each loaded and found the
+ * first time a function needs it, in src/syscall/zsyscall.c. */
+extern SyscallLazyDLL burrow__syscall_mods[BURROW__SYSCALL_NMODS];
+extern SyscallLazyProc burrow__syscall_procs[BURROW__SYSCALL_NPROCS];
+
+BURROW_OWNS(ret) Error burrow__syscall_dns_query(uint16_t *name, uint16_t qtype, uint32_t options, uint8_t *extra, SyscallDNSRecord **qrs, uint8_t *pr);
+BURROW_OWNS(ret) SyscallHostent *burrow__syscall_get_host_by_name(uint8_t *name, Error *err);
+Uintptr burrow__syscall_get_proc_address(SyscallHandle module, uint8_t *procname, Error *err);
+BURROW_OWNS(ret) SyscallProtoent *burrow__syscall_get_proto_by_name(uint8_t *name, Error *err);
+BURROW_OWNS(ret) SyscallServent *burrow__syscall_get_serv_by_name(uint8_t *name, uint8_t *proto, Error *err);
+SyscallHandle burrow__syscall_load_library(uint16_t *libname, Error *err);
+BURROW_OWNS(ret) Error burrow__syscall_bind(SyscallHandle s, void *name, int32_t namelen);
+BURROW_OWNS(ret) Error burrow__syscall_connect(SyscallHandle s, void *name, int32_t namelen);
+SyscallHandle burrow__syscall_create_file(uint16_t *name, uint32_t access, uint32_t mode, SyscallSecurityAttributes *sa, uint32_t createmode, uint32_t attrs, int32_t templatefile, Error *err);
+SyscallHandle burrow__syscall_create_io_completion_port(SyscallHandle filehandle, SyscallHandle cphandle, Uintptr key, uint32_t threadcnt, Error *err);
+uint32_t burrow__syscall_format_message(uint32_t flags, Uintptr msgsrc, uint32_t msgid, uint32_t langid, Slice buf, uint8_t *args, Error *err);
+uint32_t burrow__syscall_get_current_process_id(void);
+uint32_t burrow__syscall_get_final_path_name_by_handle(SyscallHandle file, uint16_t *filePath, uint32_t filePathSize, uint32_t flags, Error *err);
+BURROW_OWNS(ret) Error burrow__syscall_get_queued_completion_status(SyscallHandle cphandle, uint32_t *qty, Uintptr *key, SyscallOverlapped **overlapped, uint32_t timeout);
+void burrow__syscall_get_startup_info(SyscallStartupInfo *startupInfo);
+BURROW_OWNS(ret) Error burrow__syscall_getpeername(SyscallHandle s, SyscallRawSockaddrAny *rsa, int32_t *addrlen);
+BURROW_OWNS(ret) Error burrow__syscall_getsockname(SyscallHandle s, SyscallRawSockaddrAny *rsa, int32_t *addrlen);
+BURROW_OWNS(ret) Error burrow__syscall_listen(SyscallHandle s, int32_t backlog);
+Uintptr burrow__syscall_local_alloc(uint32_t flags, uint32_t length, Error *err);
+BURROW_OWNS(ret) Error burrow__syscall_post_queued_completion_status(SyscallHandle cphandle, uint32_t qty, Uintptr key, SyscallOverlapped *overlapped);
+BURROW_OWNS(ret) Error burrow__syscall_read_file(SyscallHandle handle, Slice buf, uint32_t *done, SyscallOverlapped *overlapped);
+BURROW_OWNS(ret) Error burrow__syscall_reg_enum_key_ex(SyscallHandle key, uint32_t index, uint16_t *name, uint32_t *nameLen, uint32_t *reserved, uint16_t *class_, uint32_t *classLen, SyscallFiletime *lastWriteTime);
+BURROW_OWNS(ret) Error burrow__syscall_set_file_information_by_handle(SyscallHandle handle, uint32_t fileInformationClass, void *buf, uint32_t bufsize);
+BURROW_OWNS(ret) Error burrow__syscall_shutdown(SyscallHandle s, int32_t how);
+SyscallHandle burrow__syscall_socket(int32_t af, int32_t typ, int32_t protocol, Error *err);
+BURROW_OWNS(ret) Error burrow__syscall_write_file(SyscallHandle handle, Slice buf, uint32_t *done, SyscallOverlapped *overlapped);
+
+#elif defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
 
 /* darwin */
 

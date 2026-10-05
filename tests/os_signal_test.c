@@ -1010,7 +1010,7 @@ static void TestCtrlBreak(TestingT *t) {
 
     ExecCmd *cmd = self_cmd(t, a, BURROW_STR_EMPTY, "TestCtrlBreak",
                             S("BURROW_SIGNAL_CTRLBREAK"), S("1"));
-    static const SyscallSysProcAttr attr = {CREATE_NEW_PROCESS_GROUP};
+    static const SyscallSysProcAttr attr = {.creation_flags = CREATE_NEW_PROCESS_GROUP};
     cmd->sys_proc_attr = &attr;
 
     BytesBuffer buf = BYTES_BUFFER(heap_allocator());

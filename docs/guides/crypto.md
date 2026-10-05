@@ -76,6 +76,46 @@ Where the processor has no such mode, which is everywhere but arm64 today, the f
 
 `GODEBUG=dataindependenttiming=1` turns the mode on for every thread the runtime starts and leaves it on, which is Go's setting of the same name.
 
+## crypto/rand
+
+`burrow/crypto/rand.h` is where keys, nonces and tokens come from. The bytes come from the operating system every time, through getrandom on Linux, arc4random_buf or getentropy on macOS and the BSDs, RtlGenRandom on Windows and random_get on WASI, and burrow keeps no generator of its own that a fork could copy.
+
+<!-- example: ../examples/crypto/rand.c#read -->
+```c
+Byte key[32];
+crypto_rand_read(slice_from(key, 32, 32, TYPE_BYTE), NULL);
+```
+
+There is no error to check. As in Go, a read that fails ends the program with `fatal error: crypto/rand: failed to read random data`, because carrying on with a key that might not be random is worse than stopping. The `Error *` is there to match Go's signature and always comes back empty.
+
+For something a person will see or type, `crypto_rand_text` gives 26 characters of base32, which is at least 128 bits:
+
+<!-- example: ../examples/crypto/rand.c#text -->
+```c
+Str token = crypto_rand_text(a);
+```
+
+`crypto_rand_int` picks uniformly below a `BigInt`, which is the way to get a number in a range without the bias that taking a remainder adds:
+
+<!-- example: ../examples/crypto/rand.c#int -->
+```c
+BigInt *six = big_new_int(a, 6);
+BigInt *roll = crypto_rand_int(a, crypto_rand_reader, six, NULL);
+int64_t face = big_int_int64(roll) + 1;
+```
+
+`crypto_rand_prime` makes a prime of an exact bit length:
+
+<!-- example: ../examples/crypto/rand.c#prime -->
+```c
+Error err;
+BigInt *p = crypto_rand_prime(a, crypto_rand_reader, 64, &err);
+```
+
+Both take a reader. Int reads from the one you give it, which is how a test makes it deterministic. Prime ignores it and uses the system generator, as Go has done since 1.26, unless `GODEBUG` has `cryptocustomrand=1`.
+
+`crypto_rand_reader` is a variable, as `rand.Reader` is in Go, so a test can point it at a reader of its own. Do that before other threads start, because nothing synchronises it.
+
 ## crypto/hmac
 
 `burrow/crypto/hmac.h` makes a message authentication code out of any hash and a key. The sender works out the MAC of a message and sends both, and the receiver, who has the same key, works it out again and compares:

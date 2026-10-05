@@ -102,13 +102,17 @@ burrow builds for wasip1, the WebAssembly target Go has under the same name, wit
 $WASI_SDK/bin/clang --target=wasm32-wasip1 -std=c11 -O2 \
     -mllvm -wasm-enable-sjlj -mexception-handling \
     -o hello.wasm burrow.c hello.c -lsetjmp -Wl,-z,stack-size=8388608
-wasm-opt -all hello.wasm --asyncify --pass-arg=asyncify-ignore-imports \
+wasm-opt --enable-exception-handling --enable-bulk-memory \
+    --enable-bulk-memory-opt --enable-nontrapping-float-to-int --enable-sign-ext \
+    --enable-mutable-globals --enable-multivalue --enable-reference-types \
+    --enable-call-indirect-overlong hello.wasm --asyncify \
+    --pass-arg=asyncify-ignore-imports \
     --pass-arg=asyncify-removelist@burrow__mcontext_run -O1 \
     --translate-to-exnref -o hello.wasm
 wasmtime run -W exceptions=y hello.wasm
 ```
 
-The setjmp flags are there because burrow's panics use it, and wasi-sdk does setjmp with WebAssembly exceptions, which `--translate-to-exnref` turns into the form wasmtime runs. `burrow__mcontext_run` is the one function Asyncify has to leave alone. The stack size is for the program's own stack, which wasm-ld makes 64 KiB otherwise. Inside the program, `Int` and `Uint` are 64 bits, as they are in Go on wasm, while pointers are 32.
+The setjmp flags are there because burrow's panics use it, and wasi-sdk does setjmp with WebAssembly exceptions, which `--translate-to-exnref` turns into the form wasmtime runs. `burrow__mcontext_run` is the one function Asyncify has to leave alone. The features are the ones wasi-sdk's output uses. `-all` would turn on more than that, and wasmtime refuses the module it writes then. The stack size is for the program's own stack, which wasm-ld makes 64 KiB otherwise. Inside the program, `Int` and `Uint` are 64 bits, as they are in Go on wasm, while pointers are 32.
 
 What wasip1 lacks, burrow lacks there too, much as Go does. There is one thread, so `runtime_gomaxprocs` is always 1 and goroutines take turns rather than run at once. Starting a process fails with `ENOSYS` and asking for a signal with `ENOTSUP`, and some runtimes refuse a symbolic link to an absolute path. The tests skip what isn't there. `make test` with wasi-sdk's `clang` and `llvm-ar` as `CC` and `AR` runs the suite this way, and CI does the same on every pull request.
 

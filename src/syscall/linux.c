@@ -246,7 +246,13 @@ Error syscall_pipe2(Slice p, Int flags) {
 }
 
 Int syscall_readlink(Str path, Slice buf, Error *err) {
-    return burrow__syscall_readlinkat(LINUX_AT_FDCWD, path, buf, err);
+    Int n = burrow__syscall_readlinkat(LINUX_AT_FDCWD, path, buf, err);
+#if BURROW_MSAN
+    /* The kernel wrote buf, where MemorySanitizer can't see it. */
+    if (n > 0 && n <= buf.len)
+        __msan_unpoison(buf.p, (size_t)n);
+#endif
+    return n;
 }
 
 #if defined(BURROW_ARCH_RISCV64)

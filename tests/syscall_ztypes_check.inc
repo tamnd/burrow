@@ -3693,7 +3693,14 @@ CHECK_OFFSET(SyscallInet4Pktinfo, addr, 8);
 CHECK_SIZE(SyscallInet6Pktinfo, 20);
 CHECK_OFFSET(SyscallInet6Pktinfo, addr, 0);
 CHECK_OFFSET(SyscallInet6Pktinfo, ifindex, 16);
-#if defined(BURROW_ARCH_LOONG64) || defined(BURROW_ARCH_RISCV64) || defined(BURROW_ARCH_S390X)
+#if defined(BURROW_ARCH_386) || defined(BURROW_ARCH_AMD64) || defined(BURROW_ARCH_ARM) || defined(BURROW_ARCH_ARM64) || defined(BURROW_ARCH_MIPS64) || defined(BURROW_ARCH_PPC64)
+CHECK_SIZE(SyscallInotifyEvent, 16);
+CHECK_OFFSET(SyscallInotifyEvent, wd, 0);
+CHECK_OFFSET(SyscallInotifyEvent, mask, 4);
+CHECK_OFFSET(SyscallInotifyEvent, cookie, 8);
+CHECK_OFFSET(SyscallInotifyEvent, len, 12);
+CHECK_OFFSET(SyscallInotifyEvent, name, 16);
+#elif defined(BURROW_ARCH_LOONG64) || defined(BURROW_ARCH_RISCV64) || defined(BURROW_ARCH_S390X)
 CHECK_SIZE(SyscallInotifyEvent, 16);
 CHECK_OFFSET(SyscallInotifyEvent, wd, 0);
 CHECK_OFFSET(SyscallInotifyEvent, mask, 4);

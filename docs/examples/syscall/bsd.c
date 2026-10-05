@@ -38,6 +38,25 @@ int main(void) {
     // doc: end
     if (BURROW_FAILED(err))
         return 1;
+
+    // doc: rib
+    Slice tab = syscall_route_rib(a, SYSCALL_NET_RT_IFLIST, 0, &err);
+    Slice msgs = syscall_parse_routing_message(a, tab, &err);
+    SyscallRoutingMessage *ms = (SyscallRoutingMessage *)msgs.p;
+    for (Int i = 0; i < msgs.len; i++) {
+        if (ms[i].vt->self_type != TYPE_SYSCALL_INTERFACE_MESSAGE)
+            continue;
+        Slice sas = syscall_parse_routing_sockaddr(a, ms[i], &err);
+        if (sas.len == 0)
+            continue;
+        SyscallSockaddr ifp = ((SyscallSockaddr *)sas.p)[SYSCALL_RTAX_IFP];
+        SyscallSockaddrDatalink *dl = (SyscallSockaddrDatalink *)ifp.data;
+        printf("interface %d is %.*s\n", (int)dl->index, (int)dl->nlen,
+               (const char *)dl->data);
+    }
+    // doc: end
+    if (BURROW_FAILED(err))
+        return 1;
     arena_free(&ar);
 #endif
     return 0;

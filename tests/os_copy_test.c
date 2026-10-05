@@ -364,6 +364,17 @@ static void TestRawConn(TestingT *t) {
     e = c.vt->write(c.data, (SyscallFdDoneFunc){not_ready, NULL});
     CHECK(BURROW_FAILED(e));
 
+    /* The same through syscall.Conn, the way code that only has the
+     * interface gets at it. */
+    SyscallConn sc = os_file_as_syscall_conn(f);
+    CHECK(sc.vt->self_type == TYPE_OS_FILE);
+    SyscallRawConn rc = sc.vt->syscall_conn(sc.data, &e);
+    CHECK(BURROW_OK(e));
+    got = 0;
+    e = rc.vt->control(rc.data, (SyscallFdFunc){save_fd, &got});
+    CHECK(BURROW_OK(e));
+    CHECK(got == os_file_fd(f));
+
     CHECK(BURROW_OK(os_file_close(f)));
     e = c.vt->control(c.data, (SyscallFdFunc){save_fd, &got});
     CHECK(BURROW_FAILED(e));

@@ -35,6 +35,8 @@
 #endif
 #if defined(BURROW_OS_LINUX)
 #include <grp.h>
+#include <stddef.h>
+#include <sys/inotify.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #endif
@@ -659,6 +661,56 @@ static void TestPipeUtimes(TestingT *t) {
     ARENA_END;
 }
 
+/* InotifyEvent is a header with the name right after it, which C says with a
+ * flexible array member. It has to line up with what the C library says and
+ * with what the kernel writes. */
+static void TestInotifyEvent(TestingT *t) {
+    CHECK(sizeof(SyscallInotifyEvent) == sizeof(struct inotify_event));
+    CHECK(offsetof(SyscallInotifyEvent, wd) == offsetof(struct inotify_event, wd));
+    CHECK(offsetof(SyscallInotifyEvent, mask) == offsetof(struct inotify_event, mask));
+    CHECK(offsetof(SyscallInotifyEvent, cookie) ==
+          offsetof(struct inotify_event, cookie));
+    CHECK(offsetof(SyscallInotifyEvent, len) == offsetof(struct inotify_event, len));
+#if !defined(BURROW_ARCH_LOONG64) && !defined(BURROW_ARCH_RISCV64) &&                  \
+    !defined(BURROW_ARCH_S390X)
+    /* Go leaves Name out on these three, so there is none here either. */
+    CHECK(offsetof(SyscallInotifyEvent, name) == offsetof(struct inotify_event, name));
+#endif
+
+    ARENA_BEGIN;
+    Error err = BURROW_NO_ERROR;
+    Int fd = syscall_inotify_init1(SYSCALL_IN_CLOEXEC, &err);
+    if (BURROW_FAILED(err)) {
+        ARENA_END;
+        testing_t_skipf_v(t, "InotifyInit1: %v", err);
+        return;
+    }
+    Str d = temp_dir(t, a);
+    Int wd = syscall_inotify_add_watch(fd, d, SYSCALL_IN_CREATE, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "InotifyAddWatch: %v", err);
+    char path[512];
+    touch(t, join(path, sizeof path, d, "hello"));
+
+    _Alignas(SyscallInotifyEvent) Byte buf[4096];
+    Int n = syscall_read(fd, (Slice){buf, sizeof buf, sizeof buf, TYPE_BYTE}, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "Read: %v", err);
+    CHECK(n >= (Int)sizeof(SyscallInotifyEvent));
+    SyscallInotifyEvent ev;
+    memcpy(&ev, buf, sizeof ev);
+    CHECK(ev.wd == wd);
+    CHECK((ev.mask & SYSCALL_IN_CREATE) != 0);
+    CHECK(ev.cookie == 0);
+    CHECK(ev.len > 0 && (Int)(sizeof ev + ev.len) <= n);
+    const char *name = (const char *)buf + sizeof ev;
+    if (strncmp(name, "hello", ev.len) != 0)
+        testing_t_errorf_v(t, "name = %v, want hello", name);
+    (void)syscall_close(fd);
+    (void)os_remove_all(d);
+    ARENA_END;
+}
+
 #define LINUX_TESTS(X)                                                                 \
     X(TestFaccessat)                                                                   \
     X(TestFchmodat)                                                                    \
@@ -667,7 +719,8 @@ static void TestPipeUtimes(TestingT *t) {
     X(TestPrlimitSelf)                                                                 \
     X(TestGettimeofday)                                                                \
     X(TestGetwdGetgroups)                                                              \
-    X(TestPipeUtimes)
+    X(TestPipeUtimes)                                                                  \
+    X(TestInotifyEvent)
 #else
 #define LINUX_TESTS(X)
 #endif

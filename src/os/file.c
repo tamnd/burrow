@@ -1059,3 +1059,13 @@ SyscallRawConn os_file_syscall_conn(OsFile *f, Error *err) {
     BURROW_OUT(err, BURROW_NO_ERROR);
     return (SyscallRawConn){&os_raw_conn_vt, f};
 }
+
+static SyscallRawConn os_vt_syscall_conn(void *self, Error *err) {
+    return os_file_syscall_conn((OsFile *)self, err);
+}
+
+static const SyscallConnVT os_syscall_conn_vt = {&os_file_desc, os_vt_syscall_conn};
+
+SyscallConn os_file_as_syscall_conn(OsFile *f) {
+    return (SyscallConn){&os_syscall_conn_vt, f};
+}

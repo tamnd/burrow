@@ -215,9 +215,14 @@ os: method (*ProcessState) SysUsage: returns a pointer to the syscall.Rusage its
 os: method (*Process) WithHandle: the callback is an OsHandleFunc, a function pointer with a context argument
 
 # include/burrow/syscall.h: Go's Getsockopt functions for structs, LsfStmt,
-# LsfJump and ParseUnixCredentials allocate the struct and return a pointer to
-# it. The structs are small and the caller owns them either way, so they come
-# back by value and there is nothing to free.
+# LsfJump, ParseUnixCredentials, BpfStmt, BpfJump, BpfTimeout and BpfStats
+# allocate the struct and return a pointer to it. The structs are small and the
+# caller owns them either way, so they come back by value and there is nothing
+# to free.
+syscall: func BpfJump: returns the BpfInsn by value
+syscall: func BpfStats: returns the BpfStat by value
+syscall: func BpfStmt: returns the BpfInsn by value
+syscall: func BpfTimeout: returns the Timeval by value
 syscall: func GetsockoptICMPv6Filter: returns the ICMPv6Filter by value
 syscall: func GetsockoptIPMreq: returns the IPMreq by value
 syscall: func GetsockoptIPMreqn: returns the IPMreqn by value

@@ -401,6 +401,18 @@ typedef struct SyscallRawConn {
     void *data;
 } SyscallRawConn;
 
+/* syscall.Conn: something with a descriptor under it, such as an OsFile
+ * through os_file_as_syscall_conn, that hands out a SyscallRawConn for it. */
+typedef struct SyscallConnVT {
+    const Type *self_type;
+    SyscallRawConn (*syscall_conn)(void *self, Error *err);
+} SyscallConnVT;
+
+typedef struct SyscallConn {
+    const SyscallConnVT *vt;
+    void *data;
+} SyscallConn;
+
 /* ----------------------------------------------------------- raw calls */
 
 /* syscall.BytePtrFromString: s with a NUL after it, from a, which is s.len + 1
@@ -1016,6 +1028,107 @@ BURROW_OWNS(ret) Error syscall_mknod(Str path, uint32_t mode, uint64_t dev);
 BURROW_OWNS(ret) Error syscall_ptrace_attach(Int pid);
 BURROW_OWNS(ret) Error syscall_ptrace_detach(Int pid);
 #endif
+
+/* The BSD packet filter, which Go has deprecated in favour of
+ * golang.org/x/net/bpf. Each is one ioctl(2) on a /dev/bpf descriptor. BpfStmt
+ * and BpfJump build one instruction, and BpfTimeout and BpfStats read one
+ * value, which all come back by value where Go returns a pointer. SetBpf puts
+ * a program, a Slice of SyscallBpfInsn, on fd. BpfInterface gives back name
+ * unchanged, as Go's does, whatever interface fd is on. CheckBpfVersion is
+ * EINVAL when the kernel's filter is not the version these constants are. */
+SyscallBpfInsn syscall_bpf_stmt(Int code, Int k);
+SyscallBpfInsn syscall_bpf_jump(Int code, Int k, Int jt, Int jf);
+Int syscall_bpf_buflen(Int fd, Error *err);
+Int syscall_set_bpf_buflen(Int fd, Int l, Error *err);
+Int syscall_bpf_datalink(Int fd, Error *err);
+Int syscall_set_bpf_datalink(Int fd, Int t, Error *err);
+BURROW_OWNS(ret) Error syscall_set_bpf_promisc(Int fd, Int m);
+BURROW_OWNS(ret) Error syscall_flush_bpf(Int fd);
+BURROW_BORROWS(ret, name) Str syscall_bpf_interface(Int fd, Str name, Error *err);
+BURROW_OWNS(ret) Error syscall_set_bpf_interface(Int fd, Str name);
+SyscallTimeval syscall_bpf_timeout(Int fd, Error *err);
+BURROW_OWNS(ret) Error syscall_set_bpf_timeout(Int fd, SyscallTimeval *tv);
+SyscallBpfStat syscall_bpf_stats(Int fd, Error *err);
+BURROW_OWNS(ret) Error syscall_set_bpf_immediate(Int fd, Int m);
+BURROW_OWNS(ret) Error syscall_set_bpf(Int fd, Slice i);
+BURROW_OWNS(ret) Error syscall_check_bpf_version(Int fd);
+Int syscall_bpf_headercmpl(Int fd, Error *err);
+BURROW_OWNS(ret) Error syscall_set_bpf_headercmpl(Int fd, Int f);
+
+/* syscall.RoutingMessage: one message from a routing socket or RouteRIB,
+ * which is one of the message types below. Go keeps the set closed with an
+ * unexported method, and so does this: only this package makes the vtables.
+ * sockaddr is what ParseRoutingSockaddr calls. To find out which type one is,
+ * compare vt->self_type with the TYPE_SYSCALL_ descriptors below. */
+typedef struct SyscallRoutingMessageVT {
+    const Type *self_type;
+    Slice (*sockaddr)(void *self, Alloc *a, Error *err);
+} SyscallRoutingMessageVT;
+
+typedef struct SyscallRoutingMessage {
+    const SyscallRoutingMessageVT *vt;
+    void *data;
+} SyscallRoutingMessage;
+
+/* The message types, each a header and the addresses after it. data borrows
+ * the bytes the message was parsed from. */
+typedef struct SyscallRouteMessage {
+    SyscallRtMsghdr header;
+    Slice data;
+} SyscallRouteMessage;
+
+typedef struct SyscallInterfaceMessage {
+    SyscallIfMsghdr header;
+    Slice data;
+} SyscallInterfaceMessage;
+
+typedef struct SyscallInterfaceAddrMessage {
+    SyscallIfaMsghdr header;
+    Slice data;
+} SyscallInterfaceAddrMessage;
+
+typedef struct SyscallInterfaceMulticastAddrMessage {
+#if defined(BURROW_OS_FREEBSD)
+    SyscallIfmaMsghdr header;
+#else
+    SyscallIfmaMsghdr2 header;
+#endif
+    Slice data;
+} SyscallInterfaceMulticastAddrMessage;
+
+extern const Type *const TYPE_SYSCALL_ROUTE_MESSAGE;
+extern const Type *const TYPE_SYSCALL_INTERFACE_MESSAGE;
+extern const Type *const TYPE_SYSCALL_INTERFACE_ADDR_MESSAGE;
+extern const Type *const TYPE_SYSCALL_INTERFACE_MULTICAST_ADDR_MESSAGE;
+#if defined(BURROW_OS_FREEBSD)
+/* FreeBSD also says when an interface comes and goes, with a message that is
+ * only a header and has no addresses. */
+extern const Type *const TYPE_SYSCALL_INTERFACE_ANNOUNCE_MESSAGE;
+#endif
+
+/* RouteRIB: the kernel's routing information for facility, such as
+ * NET_RT_DUMP or NET_RT_IFLIST, and param, as bytes from a. Nothing there is
+ * a nil Slice and no error. */
+BURROW_OWNS(ret) Slice syscall_route_rib(Alloc *a, Int facility, Int param, Error *err);
+
+/* ParseRoutingMessage: the messages in b, as a Slice of SyscallRoutingMessage
+ * from a. A message of a type Go has no message for is passed over, and one of
+ * another version makes it EINVAL, as in Go. So does a message whose length
+ * runs past b or is shorter than its header, where Go would panic or, for a
+ * length of 0, never return. The messages borrow b, and are one allocation
+ * with the Slice, which syscall_routing_message_free gives back. */
+BURROW_OWNS(ret) Slice syscall_parse_routing_message(Alloc *a, Slice b, Error *err);
+void syscall_routing_message_free(Alloc *a, Slice msgs);
+
+/* ParseRoutingSockaddr: the addresses in msg, a Slice of RTAX_MAX
+ * SyscallSockaddr from a, indexed by RTAX_DST and the rest, with the zero
+ * Sockaddr for each one the message does not have. A message with no
+ * addresses at all gives a nil Slice. syscall_routing_sockaddr_free gives back
+ * the Slice and every Sockaddr in it. */
+BURROW_OWNS(ret) Slice syscall_parse_routing_sockaddr(Alloc *a,
+                                                      SyscallRoutingMessage msg,
+                                                      Error *err);
+void syscall_routing_sockaddr_free(Alloc *a, Slice sas);
 #endif
 
 #if defined(BURROW_OS_WINDOWS)

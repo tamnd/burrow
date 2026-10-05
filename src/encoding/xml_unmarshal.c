@@ -76,7 +76,13 @@ static Error xu_type_error(const char *msg, const Type *t) {
 
 BURROW_SENTINEL_ERROR(burrow__xml_err_unmarshal_depth, "exceeded max depth");
 
+/* Go's maxUnmarshalDepth, and the lower one it keeps for wasm, where the
+ * engine's stack runs out first (go.dev/issue/56498). */
+#if defined(BURROW_ARCH_WASM)
+enum { XU_MAX_DEPTH = 5000 };
+#else
 enum { XU_MAX_DEPTH = 10000 };
+#endif
 
 /* ---------------------------------------------------------- UnmarshalError */
 

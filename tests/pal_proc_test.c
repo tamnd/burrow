@@ -165,7 +165,7 @@ static bool run(TestingT *t, const char *const *args, const char *const *envp,
         return false;
     }
     int64_t fds[3] = {PAL_INVALID_HANDLE, p[1], p[1]};
-    PalSpawn req = {self_path, argv, envp, dir, fds, 3, 0, 0};
+    PalSpawn req = {self_path, argv, envp, dir, fds, 3, 0, 0, NULL};
     r->pid = pal_spawn(&req, &err);
     pal_close(p[1], NULL);
     if (r->pid < 0) {
@@ -361,13 +361,13 @@ static void TestWorkingDirectory(TestingT *t) {
 
 static void TestMissingProgram(TestingT *t) {
     const char *argv[] = {"nope", NULL};
-    PalSpawn req = {"/no/such/program", argv, NULL, NULL, NULL, 0, 0, 0};
+    PalSpawn req = {"/no/such/program", argv, NULL, NULL, NULL, 0, 0, 0, NULL};
     PalErrno err = PAL_OK;
     if (pal_spawn(&req, &err) != -1 || err != PAL_ENOENT)
         testing_t_errorf_v(t, "spawn of a missing program: %s, want ENOENT",
                            pal_errno_string(err));
     const char *full[] = {self_path, "child", "cwd", NULL};
-    PalSpawn bad_dir = {self_path, full, NULL, "/no/such/dir", NULL, 0, 0, 0};
+    PalSpawn bad_dir = {self_path, full, NULL, "/no/such/dir", NULL, 0, 0, 0, NULL};
     err = PAL_OK;
     if (pal_spawn(&bad_dir, &err) != -1 || err != PAL_ENOENT)
         testing_t_errorf_v(t, "spawn into a missing directory: %s, want ENOENT",
@@ -381,7 +381,7 @@ static void TestWaitNoHangAndKill(TestingT *t) {
         testing_t_fatalf_v(t, "pipe: %s", pal_errno_string(err));
     const char *argv[] = {self_path, "child", "cat", NULL};
     int64_t fds[1] = {in[0]};
-    PalSpawn req = {self_path, argv, NULL, NULL, fds, 1, 0, 0};
+    PalSpawn req = {self_path, argv, NULL, NULL, fds, 1, 0, 0, NULL};
     int64_t pid = pal_spawn(&req, &err);
     pal_close(in[0], NULL);
     if (pid < 0) {
@@ -420,7 +420,7 @@ static void TestWaitSignal(TestingT *t) {
         testing_t_fatalf_v(t, "pipe: %s", pal_errno_string(err));
     const char *argv[] = {self_path, "child", "cat", NULL};
     int64_t fds[1] = {in[0]};
-    PalSpawn req = {self_path, argv, NULL, NULL, fds, 1, 0, 0};
+    PalSpawn req = {self_path, argv, NULL, NULL, fds, 1, 0, 0, NULL};
     int64_t pid = pal_spawn(&req, &err);
     pal_close(in[0], NULL);
     if (pid < 0) {
@@ -461,7 +461,7 @@ static void TestInterruptReachesTheHandler(TestingT *t) {
         testing_t_fatalf_v(t, "pipe: %s", pal_errno_string(err));
     const char *argv[] = {self_path, "child", "interrupt", NULL};
     int64_t fds[3] = {PAL_INVALID_HANDLE, p[1], p[1]};
-    PalSpawn req = {self_path, argv, NULL, NULL, fds, 3, PAL_SPAWN_SETPGID, 0};
+    PalSpawn req = {self_path, argv, NULL, NULL, fds, 3, PAL_SPAWN_SETPGID, 0, NULL};
     int64_t pid = pal_spawn(&req, &err);
     pal_close(p[1], NULL);
     if (pid < 0) {
@@ -540,7 +540,7 @@ static void TestDescriptorTable(TestingT *t) {
      * the pipe unless the child found it in the slot it was put in. */
     const char *argv[] = {self_path, "child", "fd3", NULL};
     int64_t fds[4] = {PAL_INVALID_HANDLE, PAL_INVALID_HANDLE, 2, p[1]};
-    PalSpawn req = {self_path, argv, NULL, NULL, fds, 4, 0, 0};
+    PalSpawn req = {self_path, argv, NULL, NULL, fds, 4, 0, 0, NULL};
     int64_t pid = pal_spawn(&req, &err);
     pal_close(p[1], NULL);
     if (pid < 0)

@@ -843,7 +843,7 @@ static void TestExitCode(TestingT *t) {
             testing_t_fatalf_v(t, "pipe: %s", pal_errno_string(err));
         /* The child's usage goes to the pipe, which is drained and dropped. */
         int64_t fds[3] = {PAL_INVALID_HANDLE, p[1], p[1]};
-        PalSpawn req = {self_path, argv, NULL, NULL, fds, 3, 0, 0};
+        PalSpawn req = {self_path, argv, NULL, NULL, fds, 3, 0, 0, NULL};
         int64_t pid = pal_spawn(&req, &err);
         pal_close(p[1], NULL);
         if (pid < 0) {

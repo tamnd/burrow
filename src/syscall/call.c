@@ -188,6 +188,22 @@ Uintptr burrow__syscall_raw_syscall_no_error(Uintptr trap, Uintptr a1, Uintptr a
 
 void *burrow__syscall_libc_cache[BURROW__SYSCALL_NLIBC];
 
+/* The name libSystem has name under. On an Intel Mac the plain names of these
+ * three are the versions from before 64-bit inode numbers, with the old struct
+ * layouts, and the ones that match Go's structs end in $INODE64. Go's linker
+ * renames the same three on amd64, in cmd/link's macho.go. */
+static const char *libc_name(const char *name) {
+#if defined(BURROW_OS_DARWIN) && defined(BURROW_ARCH_AMD64)
+    if (strcmp(name, "fdopendir") == 0)
+        return "fdopendir$INODE64";
+    if (strcmp(name, "readdir_r") == 0)
+        return "readdir_r$INODE64";
+    if (strcmp(name, "getfsstat") == 0)
+        return "getfsstat$INODE64";
+#endif
+    return name;
+}
+
 Uintptr burrow__syscall_libc_call(void **slot, const char *name, int32_t nfixed,
                                   const uintptr_t *args, int32_t n,
                                   burrow__SyscallFail fail, Uintptr *r2,
@@ -195,7 +211,7 @@ Uintptr burrow__syscall_libc_call(void **slot, const char *name, int32_t nfixed,
     BURROW_OUT(r2, 0);
     void *f = burrow__atomic_load_acquire_ptr(slot);
     if (f == NULL) {
-        f = pal_libc_symbol(name);
+        f = pal_libc_symbol(libc_name(name));
         if (f == NULL) {
             BURROW_OUT(err, SYSCALL_ENOSYS);
             return ~(Uintptr)0;

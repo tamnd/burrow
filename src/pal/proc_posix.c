@@ -294,8 +294,14 @@ static int proc_child_credential(const PalSpawnSys *sys) {
     if (syscall(PROC_SYS_SETUID, (unsigned long)sys->uid) != 0)
         return errno;
 #else
+#if defined(BURROW_OS_COSMO)
+    /* Cosmopolitan has the Linux signature, with a size_t count. */
+    size_t ngroups = (size_t)sys->ngroups;
+#else
+    int ngroups = (int)sys->ngroups;
+#endif
     if (!sys->no_set_groups &&
-        setgroups((int)sys->ngroups, (const gid_t *)(const void *)sys->groups) != 0)
+        setgroups(ngroups, (const gid_t *)(const void *)sys->groups) != 0)
         return errno;
     if (setgid((gid_t)sys->gid) != 0)
         return errno;

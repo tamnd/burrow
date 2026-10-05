@@ -42,6 +42,17 @@ static SyscallErrno errno_of(Error err) {
     return e != NULL ? *e : 0;
 }
 
+/* Cosmopolitan has no way to make a raw system call, so everything that goes
+ * through one gives ENOSYS there. These tests need one, in the test or in the
+ * child it starts. */
+static void skip_without_raw_calls(TestingT *t) {
+#if defined(BURROW_OS_COSMO)
+    testing_t_skip_v(t, "Cosmopolitan has no raw system calls");
+#else
+    (void)t;
+#endif
+}
+
 static Slice strs(const Str *v, Int n) {
     Slice s = slice_make(a, TYPE_OF(Str), n, n);
     for (Int i = 0; i < n; i++)
@@ -162,6 +173,7 @@ static Int pgid_of(TestingT *t, Int pid) {
 /* ------------------------------------------------------------ process groups */
 
 static void TestZeroSysProcAttr(TestingT *t) {
+    skip_without_raw_calls(t);
     Int ppid = syscall_getpid(), ppgrp = syscall_getpgrp();
     Waiting w = start_waiting(t, NULL);
     Int cpgrp = pgid_of(t, w.pid);
@@ -173,6 +185,7 @@ static void TestZeroSysProcAttr(TestingT *t) {
 }
 
 static void TestSetpgid(TestingT *t) {
+    skip_without_raw_calls(t);
     Int ppgrp = syscall_getpgrp();
     SyscallSysProcAttr sys = {.setpgid = true};
     Waiting w = start_waiting(t, &sys);
@@ -185,6 +198,7 @@ static void TestSetpgid(TestingT *t) {
 }
 
 static void TestPgid(TestingT *t) {
+    skip_without_raw_calls(t);
     Int ppgrp = syscall_getpgrp();
     SyscallSysProcAttr sys1 = {.setpgid = true};
     Waiting w1 = start_waiting(t, &sys1);
@@ -208,6 +222,7 @@ static void TestPgid(TestingT *t) {
 /* os goes through the same SysProcAttr code, so joining a group works there
  * too now. */
 static void TestOsPgid(TestingT *t) {
+    skip_without_raw_calls(t);
     SyscallSysProcAttr sys1 = {.setpgid = true};
     Waiting w1 = start_waiting(t, &sys1);
     SyscallSysProcAttr sys2 = {.setpgid = true, .pgid = w1.pid};
@@ -291,6 +306,7 @@ static void TestForkExecNotFound(TestingT *t) {
 /* ---------------------------------------------------------------- exec */
 
 static void TestExec(TestingT *t) {
+    skip_without_raw_calls(t);
     Error e = BURROW_NO_ERROR;
     Int pid =
         start_child(t, S("exec"), NULL, uintptrs((const Uintptr[]){0, 1, 2}, 3), &e);
@@ -301,6 +317,7 @@ static void TestExec(TestingT *t) {
 }
 
 static void TestExecFails(TestingT *t) {
+    skip_without_raw_calls(t);
     (void)t;
     Str argv[1] = {S("/nonexistent/burrow")};
     Error e = syscall_exec(argv[0], strs(argv, 1), (Slice){NULL, 0, 0, NULL});
@@ -332,6 +349,7 @@ static void TestForkExecNilEnv(TestingT *t) {
 }
 
 static void TestForkExecDir(TestingT *t) {
+    skip_without_raw_calls(t);
     Int p[2];
     make_pipe(t, p);
     Str argv[1] = {S("/bin/pwd")};
@@ -355,6 +373,7 @@ static void TestForkExecDir(TestingT *t) {
  * it does in Go, and os_start_process closes it. The shell is asked to read
  * from it, which fails with a bad descriptor if it is not there. */
 static void TestForkExecKeepsFds(TestingT *t) {
+    skip_without_raw_calls(t);
     Int p[2];
     make_pipe(t, p);
     /* Linux on arm64, riscv64 and loong64 has no dup2, and Go has no Dup2

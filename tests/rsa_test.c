@@ -1569,6 +1569,7 @@ static void pss_golden_value(PssGolden *g, const char *v) {
     switch (g->state) {
     case PSS_IDLE:
         testing_t_fatalf_v(g->t, "unknown marker: %s", v);
+        return;
     case PSS_N:
         g->key.n = from_hex(g->a, v);
         g->state = PSS_E;

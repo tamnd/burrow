@@ -31,7 +31,8 @@ static void sign(Alloc *a) {
     // Both schemes sign the hash of the message, not the message itself.
     Sha256Sum256Ret sum = sha256_sum256(text("burrow v0.3.0"));
     Slice hashed = slice_from(sum.a, sizeof sum.a, sizeof sum.a, TYPE_BYTE);
-    Slice sig = rsa_sign_pss(a, (IoReader){0}, priv, CRYPTO_SHA256, hashed, NULL, &err);
+    Slice sig =
+        rsa_sign_pss(a, crypto_rand_reader, priv, CRYPTO_SHA256, hashed, NULL, &err);
     if (BURROW_FAILED(err))
         return;
     printf("%d\n", (int)sig.len);
@@ -60,7 +61,7 @@ static void encrypt(Alloc *a) {
         return;
 
     // The label is not secret, but decrypting needs the same one.
-    Slice ct = rsa_encrypt_oaep(a, sha256_new(a), (IoReader){0}, &priv->public_key,
+    Slice ct = rsa_encrypt_oaep(a, sha256_new(a), crypto_rand_reader, &priv->public_key,
                                 text("a session key"), text("orders"), &err);
     if (BURROW_FAILED(err))
         return;
@@ -88,7 +89,7 @@ static void errors(Alloc *a) {
         return;
     // OAEP with SHA-256 fits 128 - 2*32 - 2 = 62 bytes in a 1024 bit key.
     Byte big[63] = {0};
-    rsa_encrypt_oaep(a, sha256_new(a), (IoReader){0}, &priv->public_key,
+    rsa_encrypt_oaep(a, sha256_new(a), crypto_rand_reader, &priv->public_key,
                      slice_from(big, sizeof big, sizeof big, TYPE_BYTE), (Slice){0},
                      &err);
     print_error(err);

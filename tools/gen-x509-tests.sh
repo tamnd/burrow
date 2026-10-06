@@ -567,9 +567,12 @@ def cert_init(ref):
     return f"{{{ref}, 0, NULL, 0}}"
 
 
-def brace(items):
-    # An empty {} is C23, so an empty list is {0}.
-    return "{" + (", ".join(items) if items else "0") + "}"
+def brace(items, depth=1):
+    # An empty {} is C23, so an empty list is {0}, with a brace for each level
+    # of aggregate inside it so that GCC's -Wmissing-braces has nothing to say.
+    if not items:
+        return "{" * depth + "0" + "}" * depth
+    return "{" + ", ".join(items) + "}"
 
 
 rows = []
@@ -579,8 +582,8 @@ for c in cases:
         "    {\n"
         f"        {q(c['name'])},\n"
         f"        {cert_init(c['leaf'])},\n"
-        f"        {brace([cert_init(r) for r in c['intermediates']])},\n"
-        f"        {brace([cert_init(r) for r in c['roots']])},\n"
+        f"        {brace([cert_init(r) for r in c['intermediates']], 2)},\n"
+        f"        {brace([cert_init(r) for r in c['roots']], 2)},\n"
         f"        {c['current_time']},\n"
         f"        {q(c['dns_name'])},\n"
         f"        {'true' if c['system_skip'] else 'false'},\n"
@@ -589,7 +592,7 @@ for c in cases:
         f"        {len(c['key_usages'])},\n"
         f"        {c['expect']},\n"
         f"        {q(c['expect_msg']) if c['expect_msg'] is not None else 'NULL'},\n"
-        f"        {brace(chains)},\n"
+        f"        {brace(chains, 2)},\n"
         "    },\n"
     )
 defs.append("static const X509VerifyCase verify_tests[] = {\n" + "".join(rows) + "};\n")
@@ -875,15 +878,15 @@ for t in tests:
     req = t.get("requestedEKUs", [])
     level_lens = "{" + ", ".join(str(len(l)) for l in inter) + "}" if inter else "{0}"
     levels = (
-        "{" + ", ".join("{" + ", ".join(spec(s) for s in l) + "}" if l else "{0}" for l in inter) + "}"
+        "{" + ", ".join("{" + ", ".join(spec(s) for s in l) + "}" if l else "{" + spec({}) + "}" for l in inter) + "}"
         if inter
-        else "{0}"
+        else "{{" + spec({}) + "}}"
     )
     rows.append(
         "    {\n"
         f"        .name = {c_str(t['name'])},\n"
         f"        .nroots = {len(roots)},\n"
-        f"        .roots = {'{' + ', '.join(spec(s) for s in roots) + '}' if roots else '{0}'},\n"
+        f"        .roots = {'{' + ', '.join(spec(s) for s in roots) + '}' if roots else '{' + spec({}) + '}'},\n"
         f"        .nlevels = {len(inter)},\n"
         f"        .level_len = {level_lens},\n"
         f"        .intermediates = {levels},\n"

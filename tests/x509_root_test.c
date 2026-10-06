@@ -125,8 +125,8 @@ static Slice strs(Alloc *a, Int n, const Str *s) {
     return slice_append(a, slice_nil(TYPE_STRING), s, n);
 }
 
-static const Str cert_file_env = BURROW_S("SSL_CERT_FILE");
-static const Str cert_dir_env = BURROW_S("SSL_CERT_DIR");
+static const Str cert_file_env = BURROW_S_INIT("SSL_CERT_FILE");
+static const Str cert_dir_env = BURROW_S_INIT("SSL_CERT_DIR");
 
 /* ---------------------------------------------------------- root_test.go */
 

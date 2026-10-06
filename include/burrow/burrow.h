@@ -61,6 +61,7 @@
 #include "burrow/crypto/ecdh.h"
 #include "burrow/crypto/ed25519.h"
 #include "burrow/crypto/elliptic.h"
+#include "burrow/crypto/fips140.h"
 #include "burrow/crypto/hkdf.h"
 #include "burrow/crypto/hmac.h"
 #include "burrow/crypto/md5.h"

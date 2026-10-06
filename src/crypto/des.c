@@ -408,10 +408,10 @@ static void des_crypt_block(const uint64_t *subkeys, Byte *dst, const Byte *src,
     uint32_t left, right;
     des_begin(src, &left, &right);
     if (decrypt) {
-        for (int i = 0; i < 8; i++)
+        for (Int i = 0; i < 8; i++)
             des_feistel(&left, &right, subkeys[15 - 2 * i], subkeys[15 - (2 * i + 1)]);
     } else {
-        for (int i = 0; i < 8; i++)
+        for (Int i = 0; i < 8; i++)
             des_feistel(&left, &right, subkeys[2 * i], subkeys[2 * i + 1]);
     }
     des_end(dst, left, right);
@@ -530,13 +530,13 @@ static void triple_des_encrypt(void *self, Slice dst, Slice src) {
 
     uint32_t left, right;
     des_begin((const Byte *)src.p, &left, &right);
-    for (int i = 0; i < 8; i++)
+    for (Int i = 0; i < 8; i++)
         des_feistel(&left, &right, c->cipher1.subkeys[2 * i],
                     c->cipher1.subkeys[2 * i + 1]);
-    for (int i = 0; i < 8; i++)
+    for (Int i = 0; i < 8; i++)
         des_feistel(&right, &left, c->cipher2.subkeys[15 - 2 * i],
                     c->cipher2.subkeys[15 - (2 * i + 1)]);
-    for (int i = 0; i < 8; i++)
+    for (Int i = 0; i < 8; i++)
         des_feistel(&left, &right, c->cipher3.subkeys[2 * i],
                     c->cipher3.subkeys[2 * i + 1]);
     des_end((Byte *)dst.p, left, right);
@@ -548,10 +548,10 @@ static void triple_des_decrypt(void *self, Slice dst, Slice src) {
 
     uint32_t left, right;
     des_begin((const Byte *)src.p, &left, &right);
-    for (int i = 0; i < 8; i++)
+    for (Int i = 0; i < 8; i++)
         des_feistel(&left, &right, c->cipher3.subkeys[15 - 2 * i],
                     c->cipher3.subkeys[15 - (2 * i + 1)]);
-    for (int i = 0; i < 8; i++)
+    for (Int i = 0; i < 8; i++)
         des_feistel(&right, &left, c->cipher2.subkeys[2 * i],
                     c->cipher2.subkeys[2 * i + 1]);
     for (int i = 0; i < 8; i++)

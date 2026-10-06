@@ -340,7 +340,8 @@ def map_by_rule(d):
     if m:
         tname, kind, rest = m.group(1), m.group(3), m.group(4)
         owner = type_name(path, tname)
-        if rest == "unexported methods":
+        # The api files can follow it with the proposal that added it, like #52221.
+        if rest.split(" #")[0] == "unexported methods":
             d.key = "type %s interface, unexported methods" % tname
             d.cname = owner
             return

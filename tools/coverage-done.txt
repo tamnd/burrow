@@ -46,7 +46,13 @@ crypto/hkdf
 crypto/pbkdf2
 crypto/rand
 crypto/aes
+crypto
 crypto/cipher
+crypto/des
+crypto/ecdh
+crypto/elliptic
+crypto/ed25519
+crypto/rc4
 container/list
 container/ring
 sort
@@ -92,3 +98,4 @@ archive/zip
 encoding/asn1
 path/filepath
 syscall
+crypto/fips140

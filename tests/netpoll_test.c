@@ -64,7 +64,7 @@ static int file_open(void) {
     char path[512];
     (void)snprintf(path, sizeof path, "%s/burrow-netpoll-%lld", dir,
                    (long long)burrow__nanotime());
-    int fd = open(path, O_RDWR | O_CREAT | O_EXCL | O_NONBLOCK, 0600);
+    int fd = open(path, O_RDWR | O_CREAT | O_EXCL | (int)O_NONBLOCK, 0600);
     if (fd >= 0)
         (void)unlink(path);
     return fd;
@@ -188,7 +188,7 @@ typedef struct Pipe {
 
 static bool nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
-    return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+    return flags >= 0 && fcntl(fd, F_SETFL, flags | (int)O_NONBLOCK) == 0;
 }
 
 static bool pipe_open(Pipe *p) {

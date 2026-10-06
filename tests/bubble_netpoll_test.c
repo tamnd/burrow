@@ -82,7 +82,7 @@ typedef struct Pipe {
 
 static bool nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
-    return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+    return flags >= 0 && fcntl(fd, F_SETFL, flags | (int)O_NONBLOCK) == 0;
 }
 
 static bool pipe_open(Pipe *p) {

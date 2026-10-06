@@ -133,6 +133,8 @@ define("pem_ed25519_key", one(r"var pemEd25519Key = `(.*?)`", x509_test))
 define("pem_x25519_key", one(r"var pemX25519Key = `(.*?)`", x509_test))
 define("pkix_public_key_hex", one(r'const pkixPublicKey = "([0-9a-f]+)"', x509_test))
 define("pkcs1_public_key_hex", one(r'const pkcs1PublicKey = "([0-9a-f]+)"', x509_test))
+define("hex_pkcs1_test_pkcs8_key", one(r'const hexPKCS1TestPKCS8Key = "([0-9a-f]+)"', x509_test))
+define("hex_pkcs1_test_ec_key", one(r'const hexPKCS1TestECKey = "([0-9a-f]+)"', x509_test))
 
 rsa = one(r"var rsaPrivateKey = &rsa.PrivateKey\{(.*?)\n\}\n", x509_test)
 nums = re.findall(r'bigFromString\("([0-9]+)"\)', rsa)

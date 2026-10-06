@@ -1058,6 +1058,12 @@ static void sweep_record(Rec *rec, Alloc *a, const IdnaProfile *trans, Rune r) {
 }
 
 static void TestSweep(TestingT *t) {
+    /* Over a million runes three times takes minutes, and longer under the
+     * sanitisers and emulators, so the short runs leave it to the long ones. */
+    if (testing_short()) {
+        testing_t_skip_v(t, "every rune takes minutes");
+        return;
+    }
     IdnaProfile trans = conf_profile(true);
     Rec *rec = mem_alloc(heap_allocator(), sizeof *rec, _Alignof(Rec));
     if (rec == NULL) {

@@ -2,8 +2,8 @@
  * parser_test.go and the tests of x509_test.go that read fixed certificates,
  * CSRs and CRLs.
  *
- * The tests that make a certificate first with CreateCertificate come with
- * certificate creation. TestDomainNameValid leaves out the comparison with
+ * The tests that make a certificate first with CreateCertificate are in
+ * x509_create_test.c. TestDomainNameValid leaves out the comparison with
  * domainToReverseLabels, which comes with verification, and TestCertificateParse
  * the VerifyHostname call for the same reason. TestParsePolicies reads the two
  * certificates it uses from testdata through the generated header.

@@ -1,4 +1,4 @@
-/* What x509.c has inside, for tests/x509_test.c.
+/* What x509.c has inside, for the crypto/x509 tests.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -36,5 +36,15 @@ bool burrow__x509_parse_rfc2821_mailbox(Alloc *a, Str in, Str *local, Str *domai
 
 /* asn1BitLength, the number of bits in bit_string up to the last one set. */
 Int burrow__x509_asn1_bit_length(Slice bit_string);
+
+/* marshalSANs, the subjectAltName extension value for the names given. */
+Slice burrow__x509_marshal_sans(Alloc *a, Slice dns_names, Slice email_addresses,
+                                Slice ip_addresses, Slice uris, Error *err);
+
+/* Entry i of signatureAlgorithmDetails, or false when i is past the end.
+ * params is the DER of the parameters a PSS algorithm writes and nil for the
+ * others. */
+bool burrow__x509_signature_details(Int i, CryptoHash *hash, bool *is_rsa_pss,
+                                    Slice *params);
 
 #endif /* BURROW_SRC_CRYPTO_X509_INTERNAL_H */

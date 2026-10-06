@@ -362,6 +362,20 @@ static const X509SignatureAlgorithmDetails x509_signature_algorithm_details[] = 
     ((Int)(sizeof x509_signature_algorithm_details /                                   \
            sizeof x509_signature_algorithm_details[0]))
 
+bool burrow__x509_signature_details(Int i, CryptoHash *hash, bool *is_rsa_pss,
+                                    Slice *params) {
+    if (i < 0 || i >= X509_NSIG)
+        return false;
+    const X509SignatureAlgorithmDetails *d = &x509_signature_algorithm_details[i];
+    *hash = d->hash;
+    *is_rsa_pss = d->is_rsa_pss;
+    *params = slice_nil(TYPE_BYTE);
+    if (d->pss != NULL)
+        *params = (Slice){(void *)(uintptr_t)d->pss, (Int)sizeof x509_pss_params_sha256,
+                          (Int)sizeof x509_pss_params_sha256, TYPE_BYTE};
+    return true;
+}
+
 /* oidExtKeyUsage*, in ExtKeyUsage order. */
 X509_OID_ARCS(x509_oid_eku_any, 2, 5, 29, 37, 0);
 X509_OID_ARCS(x509_oid_eku_server_auth, 1, 3, 6, 1, 5, 5, 7, 3, 1);
@@ -4081,8 +4095,8 @@ static Asn1RawValue x509_general_name(Int tag, Slice b) {
 }
 
 /* marshalSANs: the contents of a subjectAltName extension. */
-static Slice x509_marshal_sans(Alloc *a, Slice dns_names, Slice email_addresses,
-                               Slice ip_addresses, Slice uris, Error *err) {
+Slice burrow__x509_marshal_sans(Alloc *a, Slice dns_names, Slice email_addresses,
+                                Slice ip_addresses, Slice uris, Error *err) {
     Slice raw = slice_nil(TYPE_ASN1_RAW_VALUE);
     Error e = BURROW_NO_ERROR;
     const Str *dns = dns_names.p;
@@ -4508,7 +4522,7 @@ static Error x509_build_cert_extensions(Alloc *a, const X509Certificate *templat
          * is critical. */
         ret[n].critical = subject_is_empty;
         ret[n].value =
-            x509_marshal_sans(a, template_->dns_names, template_->email_addresses,
+            burrow__x509_marshal_sans(a, template_->dns_names, template_->email_addresses,
                               template_->ip_addresses, template_->uris, &e);
         if (BURROW_FAILED(e))
             return e;
@@ -4577,7 +4591,7 @@ static Error x509_build_csr_extensions(Alloc *a,
         memset(&ext, 0, sizeof ext);
         ext.id = X509_OID(x509_oid_extension_subject_alt_name);
         ext.value =
-            x509_marshal_sans(a, template_->dns_names, template_->email_addresses,
+            burrow__x509_marshal_sans(a, template_->dns_names, template_->email_addresses,
                               template_->ip_addresses, template_->uris, &e);
         if (BURROW_FAILED(e))
             return e;

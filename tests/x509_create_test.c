@@ -259,7 +259,7 @@ static EcdsaPrivateKey *ec_key(Alloc *a, EllipticCurve c) {
 
 static MldsaPrivateKey *mldsa_key(Alloc *a, const MldsaParameters *params) {
     Error err = BURROW_NO_ERROR;
-    MldsaPrivateKey *k = mldsa_generate_key(params, a, &err);
+    MldsaPrivateKey *k = mldsa_generate_key(a, params, &err);
     if (BURROW_FAILED(err))
         panic_str(BURROW_S("x509_create_test: ML-DSA key generation failed"));
     return k;

@@ -26,7 +26,7 @@ static void sign(Alloc *a) {
     // doc: sign
     // The signer makes a key and publishes the public key's bytes.
     Error err = BURROW_NO_ERROR;
-    MldsaPrivateKey *sk = mldsa_generate_key(mldsa_mldsa44(), a, &err);
+    MldsaPrivateKey *sk = mldsa_generate_key(a, mldsa_mldsa44(), &err);
     if (BURROW_FAILED(err))
         return;
     Slice pub_bytes = mldsa_public_key_bytes(mldsa_private_key_public_key(sk), a);
@@ -41,7 +41,7 @@ static void sign(Alloc *a) {
         return;
 
     // The verifier has only the public key's bytes.
-    MldsaPublicKey *pk = mldsa_new_public_key(mldsa_mldsa44(), a, pub_bytes, &err);
+    MldsaPublicKey *pk = mldsa_new_public_key(a, mldsa_mldsa44(), pub_bytes, &err);
     if (BURROW_FAILED(err))
         return;
     printf("%d %d\n", (int)pub_bytes.len, (int)sig.len);
@@ -62,7 +62,7 @@ static void deterministic(Alloc *a) {
         seed[i] = (Byte)i;
     Error err = BURROW_NO_ERROR;
     MldsaPrivateKey *sk = mldsa_new_private_key(
-        mldsa_mldsa65(), a, slice_from(seed, sizeof seed, sizeof seed, TYPE_BYTE),
+        a, mldsa_mldsa65(), slice_from(seed, sizeof seed, sizeof seed, TYPE_BYTE),
         &err);
     if (BURROW_FAILED(err))
         return;
@@ -80,7 +80,7 @@ static void signer(Alloc *a) {
     // doc: signer
     // Code that works with any signature scheme takes a CryptoSigner.
     Error err = BURROW_NO_ERROR;
-    MldsaPrivateKey *sk = mldsa_generate_key(mldsa_mldsa87(), a, &err);
+    MldsaPrivateKey *sk = mldsa_generate_key(a, mldsa_mldsa87(), &err);
     if (BURROW_FAILED(err))
         return;
     CryptoSigner s = mldsa_private_key_signer(sk);
@@ -100,18 +100,18 @@ static void signer(Alloc *a) {
 static void errors(Alloc *a) {
     // doc: errors
     Error err = BURROW_NO_ERROR;
-    Byte zeros[MLDSA44_PUBLIC_KEY_SIZE] = {0};
-    mldsa_new_private_key(mldsa_mldsa44(), a, slice_from(zeros, 16, 16, TYPE_BYTE),
+    Byte zeros[MLDSA_MLDSA44_PUBLIC_KEY_SIZE] = {0};
+    mldsa_new_private_key(a, mldsa_mldsa44(), slice_from(zeros, 16, 16, TYPE_BYTE),
                           &err);
     print_error(err);
-    mldsa_new_public_key(mldsa_mldsa65(), a,
+    mldsa_new_public_key(a, mldsa_mldsa65(),
                          slice_from(zeros, sizeof zeros, sizeof zeros, TYPE_BYTE),
                          &err);
     print_error(err);
 
     err = BURROW_NO_ERROR;
     MldsaPrivateKey *sk = mldsa_new_private_key(
-        mldsa_mldsa44(), a, slice_from(zeros, 32, 32, TYPE_BYTE), &err);
+        a, mldsa_mldsa44(), slice_from(zeros, 32, 32, TYPE_BYTE), &err);
     MldsaOptions opts = {strings_repeat(a, BURROW_S("x"), 256)};
     mldsa_private_key_sign_deterministic(sk, a, text("hello"),
                                          mldsa_options_as_signer_opts(&opts), &err);

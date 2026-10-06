@@ -129,6 +129,7 @@
 #include "burrow/mime/multipart.h"
 #include "burrow/mime/quotedprintable.h"
 #include "burrow/net.h"
+#include "burrow/net/mail.h"
 #include "burrow/net/netip.h"
 #include "burrow/net/textproto.h"
 #include "burrow/net/url.h"

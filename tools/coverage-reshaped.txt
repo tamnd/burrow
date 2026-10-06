@@ -277,6 +277,20 @@ crypto/hpke: func Seal: takes the PublicKey and the ciphersuite as pointers, as 
 crypto/hpke: func NewRecipient: takes the PrivateKey and the ciphersuite as pointers, as none of them can be implemented outside the package
 crypto/hpke: func Open: takes the PrivateKey and the ciphersuite as pointers, as none of them can be implemented outside the package
 
+# include/burrow/crypto/mldsa.h: Go's Parameters is a small value that compares
+# equal to itself. Here each parameter set is one static object and the calls
+# that give or take a Parameters use a pointer to it, which compares with ==.
+crypto/mldsa: func MLDSA44: returns a pointer to one of the three parameter sets, compared with ==
+crypto/mldsa: func MLDSA65: returns a pointer to one of the three parameter sets, compared with ==
+crypto/mldsa: func MLDSA87: returns a pointer to one of the three parameter sets, compared with ==
+crypto/mldsa: method (*PublicKey) Parameters: returns a pointer to one of the three parameter sets, compared with ==
+crypto/mldsa: method (Parameters) PublicKeySize: takes a pointer to one of the three parameter sets
+crypto/mldsa: method (Parameters) SignatureSize: takes a pointer to one of the three parameter sets
+crypto/mldsa: method (Parameters) String: takes a pointer to one of the three parameter sets
+crypto/mldsa: func GenerateKey: takes a pointer to one of the three parameter sets
+crypto/mldsa: func NewPrivateKey: takes a pointer to one of the three parameter sets
+crypto/mldsa: func NewPublicKey: takes a pointer to one of the three parameter sets
+
 # include/burrow/crypto/x509.h: Go takes the private key as an `any` and asks
 # it for crypto.Signer at run time. C cannot ask an Any what it implements, so
 # the signer is the parameter, and a zero one gives Go's error for a key that

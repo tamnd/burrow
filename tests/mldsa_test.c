@@ -398,17 +398,17 @@ static void TestConstants(TestingT *t) {
     if (burrow__mldsa_field_infinity_norm(MLDSA_MINUS_ONE) != 1)
         testing_t_errorf_v(t, "minusOne infinity norm incorrect");
 
-    if (MLDSA44_PUBLIC_KEY_SIZE != burrow__mldsa_pub_key_size(mldsa_mldsa44()))
+    if (MLDSA_MLDSA44_PUBLIC_KEY_SIZE != burrow__mldsa_pub_key_size(mldsa_mldsa44()))
         testing_t_errorf_v(t, "PublicKeySize44 constant incorrect");
-    if (MLDSA65_PUBLIC_KEY_SIZE != burrow__mldsa_pub_key_size(mldsa_mldsa65()))
+    if (MLDSA_MLDSA65_PUBLIC_KEY_SIZE != burrow__mldsa_pub_key_size(mldsa_mldsa65()))
         testing_t_errorf_v(t, "PublicKeySize65 constant incorrect");
-    if (MLDSA87_PUBLIC_KEY_SIZE != burrow__mldsa_pub_key_size(mldsa_mldsa87()))
+    if (MLDSA_MLDSA87_PUBLIC_KEY_SIZE != burrow__mldsa_pub_key_size(mldsa_mldsa87()))
         testing_t_errorf_v(t, "PublicKeySize87 constant incorrect");
-    if (MLDSA44_SIGNATURE_SIZE != burrow__mldsa_sig_size(mldsa_mldsa44()))
+    if (MLDSA_MLDSA44_SIGNATURE_SIZE != burrow__mldsa_sig_size(mldsa_mldsa44()))
         testing_t_errorf_v(t, "SignatureSize44 constant incorrect");
-    if (MLDSA65_SIGNATURE_SIZE != burrow__mldsa_sig_size(mldsa_mldsa65()))
+    if (MLDSA_MLDSA65_SIGNATURE_SIZE != burrow__mldsa_sig_size(mldsa_mldsa65()))
         testing_t_errorf_v(t, "SignatureSize65 constant incorrect");
-    if (MLDSA87_SIGNATURE_SIZE != burrow__mldsa_sig_size(mldsa_mldsa87()))
+    if (MLDSA_MLDSA87_SIGNATURE_SIZE != burrow__mldsa_sig_size(mldsa_mldsa87()))
         testing_t_errorf_v(t, "SignatureSize87 constant incorrect");
 }
 
@@ -622,7 +622,7 @@ static void accumulated(void *env, TestingT *t) {
         Error err = BURROW_NO_ERROR;
         sha3_shake_read(s, bs(seed, sizeof seed), NULL);
         MldsaPrivateKey *dk =
-            mldsa_new_private_key(params, a, bs(seed, sizeof seed), &err);
+            mldsa_new_private_key(a, params, bs(seed, sizeof seed), &err);
         if (BURROW_FAILED(err))
             testing_t_fatalf_v(t, "NewPrivateKey: %s", error_text(err));
         Slice pk = mldsa_public_key_bytes(pub_of(dk), a);
@@ -631,7 +631,7 @@ static void accumulated(void *env, TestingT *t) {
         if (BURROW_FAILED(err))
             testing_t_fatalf_v(t, "SignDeterministic: %s", error_text(err));
         sha3_shake_write(o, sig, NULL);
-        MldsaPublicKey *pub = mldsa_new_public_key(params, a, pk, &err);
+        MldsaPublicKey *pub = mldsa_new_public_key(a, params, pk, &err);
         if (BURROW_FAILED(err))
             testing_t_fatalf_v(t, "NewPublicKey: %s", error_text(err));
         if (!burrow__mldsa_public_key_identical(pub, pub_of(dk)))
@@ -685,7 +685,7 @@ static void test_all_parameters(TestingT *t, void (*f)(void *, TestingT *)) {
 static MldsaPrivateKey *must_generate(TestingT *t, const MldsaParameters *params,
                                       Alloc *a) {
     Error err = BURROW_NO_ERROR;
-    MldsaPrivateKey *sk = mldsa_generate_key(params, a, &err);
+    MldsaPrivateKey *sk = mldsa_generate_key(a, params, &err);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "GenerateKey: %s", error_text(err));
     return sk;
@@ -702,7 +702,7 @@ static void generate_key(void *env, TestingT *t) {
         testing_t_errorf_v(t, "two generated keys are equal");
     Error err = BURROW_NO_ERROR;
     MldsaPrivateKey *k1x =
-        mldsa_new_private_key(params, a, mldsa_private_key_bytes(k1, a), &err);
+        mldsa_new_private_key(a, params, mldsa_private_key_bytes(k1, a), &err);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "NewPrivateKey: %s", error_text(err));
     if (!mldsa_private_key_equal(k1, BURROW_ANY(TYPE_MLDSA_PRIVATE_KEY, k1x)))
@@ -1014,12 +1014,12 @@ static void public_key(void *env, TestingT *t) {
         testing_t_errorf_v(t, "PrivateKey.Public() does not equal PublicKey()");
 
     /* Round trip through NewPrivateKey and NewPublicKey. */
-    MldsaPrivateKey *sk2 = mldsa_new_private_key(params, a, sk_bytes, &err);
+    MldsaPrivateKey *sk2 = mldsa_new_private_key(a, params, sk_bytes, &err);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "NewPrivateKey round-trip: %s", error_text(err));
     if (!mldsa_private_key_equal(sk, BURROW_ANY(TYPE_MLDSA_PRIVATE_KEY, sk2)))
         testing_t_errorf_v(t, "PrivateKey round-trip not equal");
-    MldsaPublicKey *pk2 = mldsa_new_public_key(params, a, pk_bytes, &err);
+    MldsaPublicKey *pk2 = mldsa_new_public_key(a, params, pk_bytes, &err);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "NewPublicKey round-trip: %s", error_text(err));
     if (!mldsa_public_key_equal(pk, BURROW_ANY(TYPE_MLDSA_PUBLIC_KEY, pk2)))
@@ -1029,9 +1029,9 @@ static void public_key(void *env, TestingT *t) {
 
 static void TestPublicKey(TestingT *t) {
     static const PublicKeyCase cases[] = {
-        {44, "ML-DSA-44", MLDSA44_PUBLIC_KEY_SIZE, MLDSA44_SIGNATURE_SIZE},
-        {65, "ML-DSA-65", MLDSA65_PUBLIC_KEY_SIZE, MLDSA65_SIGNATURE_SIZE},
-        {87, "ML-DSA-87", MLDSA87_PUBLIC_KEY_SIZE, MLDSA87_SIGNATURE_SIZE},
+        {44, "ML-DSA-44", MLDSA_MLDSA44_PUBLIC_KEY_SIZE, MLDSA_MLDSA44_SIGNATURE_SIZE},
+        {65, "ML-DSA-65", MLDSA_MLDSA65_PUBLIC_KEY_SIZE, MLDSA_MLDSA65_SIGNATURE_SIZE},
+        {87, "ML-DSA-87", MLDSA_MLDSA87_PUBLIC_KEY_SIZE, MLDSA_MLDSA87_SIGNATURE_SIZE},
     };
     for (size_t i = 0; i < 3; i++)
         testing_t_run(
@@ -1067,17 +1067,17 @@ static void TestInvalidParameters(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
-    Byte zeros[MLDSA44_PUBLIC_KEY_SIZE] = {0};
+    Byte zeros[MLDSA_MLDSA44_PUBLIC_KEY_SIZE] = {0};
     Error err = BURROW_NO_ERROR;
-    mldsa_generate_key(NULL, a, &err);
+    mldsa_generate_key(a, NULL, &err);
     if (!BURROW_FAILED(err))
         testing_t_errorf_v(t, "GenerateKey(zero Parameters): want error, got nil");
     err = BURROW_NO_ERROR;
-    mldsa_new_private_key(NULL, a, bs(zeros, MLDSA_PRIVATE_KEY_SIZE), &err);
+    mldsa_new_private_key(a, NULL, bs(zeros, MLDSA_PRIVATE_KEY_SIZE), &err);
     if (!BURROW_FAILED(err))
         testing_t_errorf_v(t, "NewPrivateKey(zero Parameters): want error, got nil");
     err = BURROW_NO_ERROR;
-    mldsa_new_public_key(NULL, a, bs(zeros, MLDSA44_PUBLIC_KEY_SIZE), &err);
+    mldsa_new_public_key(a, NULL, bs(zeros, MLDSA_MLDSA44_PUBLIC_KEY_SIZE), &err);
     if (!BURROW_FAILED(err))
         testing_t_errorf_v(t, "NewPublicKey(zero Parameters): want error, got nil");
     arena_free(&ar);
@@ -1088,23 +1088,23 @@ static void invalid_size(void *env, TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
-    Byte zeros[MLDSA87_PUBLIC_KEY_SIZE + 1] = {0};
+    Byte zeros[MLDSA_MLDSA87_PUBLIC_KEY_SIZE + 1] = {0};
     Int pk_size = mldsa_parameters_public_key_size(params);
     Error err = BURROW_NO_ERROR;
 
-    mldsa_new_private_key(params, a, bs(zeros, MLDSA_PRIVATE_KEY_SIZE - 1), &err);
+    mldsa_new_private_key(a, params, bs(zeros, MLDSA_PRIVATE_KEY_SIZE - 1), &err);
     if (!BURROW_FAILED(err))
         testing_t_errorf_v(t, "NewPrivateKey with short seed: want error, got nil");
     err = BURROW_NO_ERROR;
-    mldsa_new_private_key(params, a, bs(zeros, MLDSA_PRIVATE_KEY_SIZE + 1), &err);
+    mldsa_new_private_key(a, params, bs(zeros, MLDSA_PRIVATE_KEY_SIZE + 1), &err);
     if (!BURROW_FAILED(err))
         testing_t_errorf_v(t, "NewPrivateKey with long seed: want error, got nil");
     err = BURROW_NO_ERROR;
-    mldsa_new_public_key(params, a, bs(zeros, pk_size - 1), &err);
+    mldsa_new_public_key(a, params, bs(zeros, pk_size - 1), &err);
     if (!BURROW_FAILED(err))
         testing_t_errorf_v(t, "NewPublicKey with short encoding: want error, got nil");
     err = BURROW_NO_ERROR;
-    mldsa_new_public_key(params, a, bs(zeros, pk_size + 1), &err);
+    mldsa_new_public_key(a, params, bs(zeros, pk_size + 1), &err);
     if (!BURROW_FAILED(err))
         testing_t_errorf_v(t, "NewPublicKey with long encoding: want error, got nil");
     err = BURROW_NO_ERROR;
@@ -1134,7 +1134,7 @@ static void TestInvalidSize(TestingT *t) {
     Alloc *a = arena_allocator(&ar);
     MldsaPrivateKey *sk65 = must_generate(t, mldsa_mldsa65(), a);
     Error err = BURROW_NO_ERROR;
-    mldsa_new_public_key(mldsa_mldsa44(), a, mldsa_public_key_bytes(pub_of(sk65), a),
+    mldsa_new_public_key(a, mldsa_mldsa44(), mldsa_public_key_bytes(pub_of(sk65), a),
                          &err);
     if (!BURROW_FAILED(err))
         testing_t_errorf_v(
@@ -1150,8 +1150,8 @@ static void TestUninitialized(TestingT *t) {
 
     /* Verify with Go's zero PublicKey. */
     Slice msg = slices_clone(a, cs("attacker-controlled message"));
-    Slice sig =
-        slice_make(a, TYPE_BYTE, MLDSA44_SIGNATURE_SIZE, MLDSA44_SIGNATURE_SIZE);
+    Slice sig = slice_make(a, TYPE_BYTE, MLDSA_MLDSA44_SIGNATURE_SIZE,
+                           MLDSA_MLDSA44_SIGNATURE_SIZE);
     MldsaPublicKey *zero_pk = burrow__mldsa_new_zero_public_key(a);
     MldsaOptions empty = {BURROW_STR_EMPTY}, ctx = {BURROW_S("ctx")};
     struct {
@@ -1243,7 +1243,7 @@ static void TestVerifyWycheproof(TestingT *t) {
         Error err = BURROW_NO_ERROR;
         Slice pk_bytes = unhex_parts(a, g->pk);
         MldsaPublicKey *pub =
-            mldsa_new_public_key(params_of(g->params), a, pk_bytes, &err);
+            mldsa_new_public_key(a, params_of(g->params), pk_bytes, &err);
         if (BURROW_FAILED(err)) {
             if (tv->pass)
                 testing_t_fatalf_v(t, "%d/%d: NewPublicKey: %s", g->params, tv->tc_id,
@@ -1354,7 +1354,7 @@ static void sign_seed_wycheproof(TestingT *t, bool randomized_api) {
         const GenMldsaSeedGroup *g = &gen_mldsa_seed_groups[tv->group];
         Error err = BURROW_NO_ERROR;
         MldsaPrivateKey *priv =
-            mldsa_new_private_key(params_of(g->params), a, unhex(a, g->seed), &err);
+            mldsa_new_private_key(a, params_of(g->params), unhex(a, g->seed), &err);
         if (BURROW_FAILED(err)) {
             if (tv->pass)
                 testing_t_fatalf_v(t, "%d/%d: NewPrivateKey: %s", g->params, tv->tc_id,
@@ -1421,7 +1421,7 @@ static void acvp_kat(void *env, TestingT *t) {
     Alloc *a = arena_allocator(&ar);
     Error err = BURROW_NO_ERROR;
     const MldsaParameters *params = params_of(kat->params);
-    MldsaPrivateKey *priv = mldsa_new_private_key(params, a, unhex(a, kat->seed), &err);
+    MldsaPrivateKey *priv = mldsa_new_private_key(a, params, unhex(a, kat->seed), &err);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "NewPrivateKey: %s", error_text(err));
 
@@ -1436,7 +1436,7 @@ static void acvp_kat(void *env, TestingT *t) {
     if (!sha256_is(slices_concat(a, (Slice[]){pk, sk}, 2), kat->key_sha256))
         testing_t_errorf_v(t, "Key hash mismatch, want %s", kat->key_sha256);
 
-    MldsaPublicKey *pub = mldsa_new_public_key(params, a, pk, &err);
+    MldsaPublicKey *pub = mldsa_new_public_key(a, params, pk, &err);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "NewPublicKey: %s", error_text(err));
     if (!mldsa_public_key_equal(pub, mldsa_private_key_public(priv)))
@@ -1502,15 +1502,15 @@ static void TestErrors(TestingT *t) {
     Byte zeros[64] = {0};
     const MldsaParameters *p = mldsa_mldsa44();
 
-    mldsa_generate_key(NULL, a, &err);
+    mldsa_generate_key(a, NULL, &err);
     want_error(t, "GenerateKey", err, "mldsa: invalid parameters");
-    mldsa_new_private_key(p, a, bs(zeros, 31), &err);
+    mldsa_new_private_key(a, p, bs(zeros, 31), &err);
     want_error(t, "NewPrivateKey", err, "mldsa: invalid seed length");
-    mldsa_new_public_key(p, a, bs(zeros, 64), &err);
+    mldsa_new_public_key(a, p, bs(zeros, 64), &err);
     want_error(t, "NewPublicKey", err, "mldsa: invalid public key length");
 
     err = BURROW_NO_ERROR;
-    MldsaPrivateKey *sk = mldsa_new_private_key(p, a, bs(zeros, 32), &err);
+    MldsaPrivateKey *sk = mldsa_new_private_key(a, p, bs(zeros, 32), &err);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "NewPrivateKey: %s", error_text(err));
     Slice msg = bs(zeros, 8);
@@ -1672,12 +1672,12 @@ static void TestSigner(TestingT *t) {
  * which its free leaves alone. */
 static void TestHeapKeys(TestingT *t) {
     Error err = BURROW_NO_ERROR;
-    MldsaPrivateKey *sk = mldsa_generate_key(mldsa_mldsa87(), NULL, &err);
+    MldsaPrivateKey *sk = mldsa_generate_key(NULL, mldsa_mldsa87(), &err);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "%s", error_text(err));
     mldsa_public_key_free((MldsaPublicKey *)(uintptr_t)pub_of(sk));
     Slice pk_bytes = mldsa_public_key_bytes(pub_of(sk), NULL);
-    MldsaPublicKey *pk = mldsa_new_public_key(mldsa_mldsa87(), NULL, pk_bytes, &err);
+    MldsaPublicKey *pk = mldsa_new_public_key(NULL, mldsa_mldsa87(), pk_bytes, &err);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "%s", error_text(err));
     Byte m[4] = {1, 2, 3, 4};
@@ -1719,7 +1719,7 @@ static void bench_sign(void *env, TestingB *b) {
     Byte seed[32] = {0};
     Error err = BURROW_NO_ERROR;
     MldsaPrivateKey *priv = mldsa_new_private_key(
-        params_of(sb->params), arena_allocator(&keys), bs(seed, 32), &err);
+        arena_allocator(&keys), params_of(sb->params), bs(seed, 32), &err);
     if (BURROW_FAILED(err))
         testing_b_fatalf_v(b, "NewPrivateKey: %s", error_text(err));
     size_t i = 0;
@@ -1761,7 +1761,7 @@ static void bench_verify_whole(void *env, TestingB *b) {
     Alloc *a = arena_allocator(&ar);
     while (testing_b_loop(b)) {
         Error err = BURROW_NO_ERROR;
-        MldsaPublicKey *pk = mldsa_new_public_key(vb->params, a, vb->pub, &err);
+        MldsaPublicKey *pk = mldsa_new_public_key(a, vb->params, vb->pub, &err);
         if (BURROW_FAILED(err))
             testing_b_fatalf_v(b, "NewPublicKey: %s", error_text(err));
         if (BURROW_FAILED(err = mldsa_verify(pk, vb->msg, vb->sig, &vb->opts)))
@@ -1778,7 +1778,7 @@ static void bench_verify_precomputed(void *env, TestingB *b) {
     arena_init(&ar, NULL, 0);
     Error err = BURROW_NO_ERROR;
     MldsaPublicKey *pk =
-        mldsa_new_public_key(vb->params, arena_allocator(&ar), vb->pub, &err);
+        mldsa_new_public_key(arena_allocator(&ar), vb->params, vb->pub, &err);
     if (BURROW_FAILED(err))
         testing_b_fatalf_v(b, "NewPublicKey: %s", error_text(err));
     while (testing_b_loop(b)) {
@@ -1798,7 +1798,7 @@ static void bench_verify(void *env, TestingB *b) {
                       slice_nil(TYPE_BYTE),
                       slice_nil(TYPE_BYTE),
                       {BURROW_S("context")}};
-    MldsaPrivateKey *priv = mldsa_generate_key(vb.params, a, &err);
+    MldsaPrivateKey *priv = mldsa_generate_key(a, vb.params, &err);
     if (BURROW_FAILED(err))
         testing_b_fatalf_v(b, "GenerateKey: %s", error_text(err));
     vb.msg = slice_make(a, TYPE_BYTE, 128, 128);
@@ -1832,7 +1832,7 @@ static void bench_keygen(void *env, TestingB *b) {
     Alloc *a = arena_allocator(&ar);
     Byte seed[32] = {0};
     while (testing_b_loop(b)) {
-        MldsaPrivateKey *sk = mldsa_new_private_key(params, a, bs(seed, 32), NULL);
+        MldsaPrivateKey *sk = mldsa_new_private_key(a, params, bs(seed, 32), NULL);
         sink ^= mldsa_private_key_bytes(sk, a).len != 0;
         arena_reset(&ar);
     }
@@ -1862,7 +1862,7 @@ static void bench_cast(void *env, TestingB *b) {
     while (testing_b_loop(b)) {
         Error err = BURROW_NO_ERROR;
         MldsaPrivateKey *priv =
-            mldsa_new_private_key(params_of(c->params), a, seed, &err);
+            mldsa_new_private_key(a, params_of(c->params), seed, &err);
         if (BURROW_FAILED(err))
             testing_b_fatalf_v(b, "NewPrivateKey: %s", error_text(err));
         Slice sk = burrow__mldsa_testing_only_private_key_semi_expanded_bytes(priv, a);

@@ -41,8 +41,8 @@ enum {
     MLDSA_MAX_L = 7,
     MLDSA_MAX_LAMBDA = 256,
     MLDSA_MAX_GAMMA1 = 19,
-    MLDSA_MAX_PUB_KEY_SIZE = MLDSA87_PUBLIC_KEY_SIZE,
-    MLDSA_MAX_SIG_SIZE = MLDSA87_SIGNATURE_SIZE,
+    MLDSA_MAX_PUB_KEY_SIZE = MLDSA_MLDSA87_PUBLIC_KEY_SIZE,
+    MLDSA_MAX_SIG_SIZE = MLDSA_MLDSA87_SIGNATURE_SIZE,
 };
 
 /* Go's public Parameters and its internal parameters in one. */
@@ -59,8 +59,8 @@ struct MldsaParameters {
 };
 
 static const MldsaParameters mldsa_params44 = {BURROW_S_INIT("ML-DSA-44"),
-                                               MLDSA44_PUBLIC_KEY_SIZE,
-                                               MLDSA44_SIGNATURE_SIZE,
+                                               MLDSA_MLDSA44_PUBLIC_KEY_SIZE,
+                                               MLDSA_MLDSA44_SIGNATURE_SIZE,
                                                4,
                                                4,
                                                2,
@@ -70,8 +70,8 @@ static const MldsaParameters mldsa_params44 = {BURROW_S_INIT("ML-DSA-44"),
                                                39,
                                                80};
 static const MldsaParameters mldsa_params65 = {BURROW_S_INIT("ML-DSA-65"),
-                                               MLDSA65_PUBLIC_KEY_SIZE,
-                                               MLDSA65_SIGNATURE_SIZE,
+                                               MLDSA_MLDSA65_PUBLIC_KEY_SIZE,
+                                               MLDSA_MLDSA65_SIGNATURE_SIZE,
                                                6,
                                                5,
                                                4,
@@ -81,8 +81,8 @@ static const MldsaParameters mldsa_params65 = {BURROW_S_INIT("ML-DSA-65"),
                                                49,
                                                55};
 static const MldsaParameters mldsa_params87 = {BURROW_S_INIT("ML-DSA-87"),
-                                               MLDSA87_PUBLIC_KEY_SIZE,
-                                               MLDSA87_SIGNATURE_SIZE,
+                                               MLDSA_MLDSA87_PUBLIC_KEY_SIZE,
+                                               MLDSA_MLDSA87_SIGNATURE_SIZE,
                                                8,
                                                7,
                                                2,
@@ -1535,7 +1535,7 @@ Error burrow__mldsa_fips140_cast(const MldsaRejectionHook *hook) {
         return mldsa_error("unexpected private key hash");
     }
 
-    Byte sig[MLDSA44_SIGNATURE_SIZE];
+    Byte sig[MLDSA_MLDSA44_SIGNATURE_SIZE];
     if (!mldsa_sign_internal(priv, mu, random, hook, sig)) {
         mldsa_private_key_free(priv);
         return burrow_err_out_of_memory;
@@ -1582,7 +1582,7 @@ static MldsaPrivateKey *mldsa_private_key_from_seed(const MldsaParameters *p, Al
     return priv;
 }
 
-MldsaPrivateKey *mldsa_generate_key(const MldsaParameters *params, Alloc *a,
+MldsaPrivateKey *mldsa_generate_key(Alloc *a, const MldsaParameters *params,
                                     Error *err) {
     if (!mldsa_valid_params(params)) {
         mldsa_set_error(err, "mldsa: invalid parameters");
@@ -1595,7 +1595,7 @@ MldsaPrivateKey *mldsa_generate_key(const MldsaParameters *params, Alloc *a,
     return priv;
 }
 
-MldsaPrivateKey *mldsa_new_private_key(const MldsaParameters *params, Alloc *a,
+MldsaPrivateKey *mldsa_new_private_key(Alloc *a, const MldsaParameters *params,
                                        Slice seed, Error *err) {
     if (!mldsa_valid_params(params)) {
         mldsa_set_error(err, "mldsa: invalid parameters");
@@ -1697,7 +1697,7 @@ CryptoSigner mldsa_private_key_signer(const MldsaPrivateKey *sk) {
     return out;
 }
 
-MldsaPublicKey *mldsa_new_public_key(const MldsaParameters *params, Alloc *a,
+MldsaPublicKey *mldsa_new_public_key(Alloc *a, const MldsaParameters *params,
                                      Slice encoding, Error *err) {
     if (!mldsa_valid_params(params)) {
         mldsa_set_error(err, "mldsa: invalid parameters");

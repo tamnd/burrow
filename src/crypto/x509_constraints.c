@@ -421,7 +421,9 @@ static Error x509_chain_constraints_check(Alloc *a, const X509ChainConstraints *
                 NetIPNet *const *found = x509_search(
                     set, &ip[i], BURROW_FN(SlicesCmpFunc, x509_ip_binary_search, NULL),
                     x509_ip_match);
-                c = net_ip_net_string(*found, error_allocator());
+                /* excluded means the query found it, so found is set. */
+                if (found != NULL)
+                    c = net_ip_net_string(*found, error_allocator());
             }
             return x509_constraint_result(
                 "IP address", net_ip_string(ip[i], error_allocator()),

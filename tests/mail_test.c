@@ -968,8 +968,9 @@ static void TestReadMessageErrors(TestingT *t) {
         Str want;
     } tests[] = {
         {L(" From: a@b\n\nbody\n"), L("malformed initial line: \" From: a@b\"")},
-        {L("From a@b\nno colon here\n\n"),
+        {L("From: a@b\nno colon here\n\n"),
          L("malformed header line: \"no colon here\"")},
+        {L("From a@b\n\n"), L("malformed header line: \"From a@b\"")},
         {L(""), L("EOF")},
     };
     ARENA_BEGIN;

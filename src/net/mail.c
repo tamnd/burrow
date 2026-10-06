@@ -120,8 +120,15 @@ static bool ml_strs_push(Alloc *sa, MlStrs *v, Str s) {
     return true;
 }
 
-static Str ml_join(Alloc *sa, MlStrs *v, Str sep) {
-    return strings_join(sa, slice_from(v->p, v->len, v->cap, TYPE_STRING), sep);
+/* The words of v joined by sep, which is never empty. False when out of
+ * memory, which an empty result cannot say by itself: one word can be "". */
+static bool ml_join(Alloc *sa, MlStrs *v, Str sep, Str *out) {
+    if (v->len <= 1) {
+        *out = v->len == 1 ? v->p[0] : (Str){NULL, 0};
+        return true;
+    }
+    *out = strings_join(sa, slice_from(v->p, v->len, v->cap, TYPE_STRING), sep);
+    return out->p != NULL;
 }
 
 /* The name and address of one parsed address, still in the scratch arena. */
@@ -426,8 +433,8 @@ static Error ml_consume_display_name_comment(MlParser *p, Str *out) {
         if (!ml_strs_push(p->sa, &words, encoded ? decoded : word))
             return burrow_err_out_of_memory;
     }
-    Str joined = ml_join(p->sa, &words, BURROW_S(" "));
-    if (joined.p == NULL && words.len > 0)
+    Str joined;
+    if (!ml_join(p->sa, &words, BURROW_S(" "), &joined))
         return burrow_err_out_of_memory;
     *out = joined;
     return BURROW_NO_ERROR;
@@ -488,8 +495,8 @@ static Error ml_consume_phrase(MlParser *p, Str *out) {
             return fmt_errorf_v("mail: missing word in phrase: %v", err);
         error_release(m);
     }
-    Str phrase = ml_join(p->sa, &words, BURROW_S(" "));
-    if (phrase.p == NULL && words.len > 0)
+    Str phrase;
+    if (!ml_join(p->sa, &words, BURROW_S(" "), &phrase))
         return burrow_err_out_of_memory;
     *out = phrase;
     return BURROW_NO_ERROR;

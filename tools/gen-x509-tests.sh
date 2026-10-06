@@ -1,8 +1,9 @@
 #!/bin/sh
-# Regenerates tests/x509_test_gen.h and tests/x509_parse_test_gen.h: the keys,
-# certificates, PEM blocks and numbers in Go's crypto/x509 tests that
-# tests/x509_test.c, tests/x509_parse_test.c and tests/x509_create_test.c use,
-# read out of the Go sources so none of them is copied by hand. testingKey's
+# Regenerates tests/x509_test_gen.h, tests/x509_parse_test_gen.h,
+# tests/x509_verify_test_gen.h and tests/x509_name_constraints_test_gen.h: the
+# keys, certificates, PEM blocks, tables and numbers in Go's crypto/x509 tests
+# that the tests/x509_*_test.c files use, read out of the Go sources so none of
+# them is copied by hand. testingKey's
 # "TESTING KEY" becomes "PRIVATE KEY" the same as in Go.
 #
 # The Go on PATH should be the release the port follows. GOROOT can be set to
@@ -630,4 +631,296 @@ with open(out, "w") as f:
     )
     f.write("\n".join(defs))
     f.write("\n#endif\n")
+PY
+
+# The nameConstraintsTests and rfc2821Tests tables in name_constraints_test.go,
+# for tests/x509_name_constraints_test.c. The Go composite literals are read
+# with a small parser that knows only the shapes those two tables use.
+python3 - "$goroot/src/crypto/x509" "$root/tests/x509_name_constraints_test_gen.h" <<'PY'
+import re
+import sys
+
+src, out = sys.argv[1], sys.argv[2]
+with open(f"{src}/name_constraints_test.go", encoding="utf-8") as f:
+    text = f.read()
+
+
+def tokens(s):
+    i = 0
+    toks = []
+    while i < len(s):
+        c = s[i]
+        if c in " \t\n":
+            i += 1
+        elif s.startswith("//", i):
+            i = s.index("\n", i)
+        elif c == '"':
+            j = i + 1
+            while s[j] != '"':
+                j += 2 if s[j] == "\\" else 1
+            toks.append(("str", s[i : j + 1]))
+            i = j + 1
+        elif c.isalnum() or c == "_":
+            m = re.compile(r"\w+").match(s, i)
+            toks.append(("id", m.group(0)))
+            i = m.end()
+        elif c in "{}[](),:":
+            toks.append(("p", c))
+            i += 1
+        else:
+            raise SystemExit(f"gen-x509-tests: unexpected {c!r} in name_constraints_test.go")
+    return toks
+
+
+def go_string(lit):
+    """The bytes of a Go interpreted string literal."""
+    body = lit[1:-1]
+    out = bytearray()
+    i = 0
+    simple = {'"': b'"', "\\": b"\\", "n": b"\n", "t": b"\t"}
+    while i < len(body):
+        c = body[i]
+        if c == "\\":
+            e = body[i + 1]
+            if e in simple:
+                out += simple[e]
+                i += 2
+            elif e == "x":
+                out.append(int(body[i + 2 : i + 4], 16))
+                i += 4
+            else:
+                raise SystemExit(f"gen-x509-tests: escape \\{e} in {lit}")
+        else:
+            out += c.encode("utf-8")
+            i += 1
+    return bytes(out)
+
+
+class Parser:
+    def __init__(self, toks):
+        self.t = toks
+        self.i = 0
+
+    def peek(self, k=0):
+        return self.t[self.i + k] if self.i + k < len(self.t) else (None, None)
+
+    def take(self, want=None):
+        tok = self.t[self.i]
+        if want is not None and tok[1] != want:
+            raise SystemExit(f"gen-x509-tests: want {want!r}, got {tok!r}")
+        self.i += 1
+        return tok
+
+    def type_(self):
+        depth = 0
+        while self.peek()[1] == "[":
+            self.take("[")
+            self.take("]")
+            depth += 1
+        return depth, self.take()[1]
+
+    def value(self):
+        kind, v = self.peek()
+        if kind == "str":
+            self.take()
+            return go_string(v)
+        if v == "make":
+            self.take()
+            self.take("(")
+            self.type_()
+            self.take(",")
+            n = int(self.take()[1])
+            self.take(")")
+            return [{}] * n
+        if v in ("true", "false"):
+            self.take()
+            return v == "true"
+        if v == "{":
+            return self.composite()
+        if v == "[" or (kind == "id" and self.peek(1)[1] == "{"):
+            self.type_()
+            return self.composite()
+        if kind == "id":
+            self.take()
+            return v
+        raise SystemExit(f"gen-x509-tests: unexpected {v!r}")
+
+    def composite(self):
+        self.take("{")
+        items, keyed = [], {}
+        while self.peek()[1] != "}":
+            if self.peek()[0] == "id" and self.peek(1)[1] == ":":
+                k = self.take()[1]
+                self.take(":")
+                keyed[k] = self.value()
+            else:
+                items.append(self.value())
+            if self.peek()[1] == ",":
+                self.take(",")
+        self.take("}")
+        if keyed and items:
+            raise SystemExit("gen-x509-tests: mixed composite literal")
+        return keyed if keyed or not items else items
+
+
+def table(name):
+    m = re.search(r"\nvar " + name + r" = (.*?)\n}\n", text, re.S)
+    if m is None:
+        raise SystemExit(f"gen-x509-tests: no {name} in name_constraints_test.go")
+    p = Parser(tokens(m.group(1) + "\n}"))
+    if p.peek(2)[1] != "struct":
+        p.type_()
+    else:
+        p.take("[")
+        p.take("]")
+        p.take("struct")
+        p.take("{")
+        while p.peek()[1] != "}":
+            p.take()
+        p.take("}")
+    v = p.composite()
+    if p.i != len(p.t):
+        raise SystemExit(f"gen-x509-tests: trailing tokens after {name}")
+    return v
+
+
+def c_str(b):
+    if b is None:
+        return "NULL"
+    s = '"'
+    prev = ""
+    for ch in b:
+        c = chr(ch)
+        if c in '"\\':
+            e = "\\" + c
+        elif c == "?" and prev == "?":
+            e = "\\?"
+        elif 32 <= ch < 127:
+            e = c
+        else:
+            e = "\\%03o" % ch
+        s += e
+        prev = c
+    return s + '"'
+
+
+tests = table("nameConstraintsTests")
+rfc = table("rfc2821Tests")
+known = {"name", "roots", "intermediates", "leaf", "requestedEKUs", "expectedError", "noOpenSSL"}
+for t in tests:
+    extra = set(t) - known
+    if extra:
+        raise SystemExit(f"gen-x509-tests: unhandled fields {extra}")
+
+specs = [s for t in tests for s in t.get("roots", [])]
+specs += [s for t in tests for lvl in t.get("intermediates", []) for s in lvl]
+max_names = max(
+    [len(s.get(k, [])) for s in specs for k in ("ok", "bad", "ekus")]
+    + [len(t["leaf"].get(k, [])) for t in tests for k in ("sans", "ekus")]
+)
+max_roots = max(len(t.get("roots", [])) for t in tests)
+max_levels = max(len(t.get("intermediates", [])) for t in tests)
+max_per_level = max([len(l) for t in tests for l in t.get("intermediates", [])] + [1])
+max_ekus = max([len(t.get("requestedEKUs", [])) for t in tests] + [1])
+
+
+def names(v):
+    v = list(v or [])
+    if not v:
+        return "{0}"
+    return "{" + ", ".join(c_str(x) for x in v) + "}"
+
+
+def spec(s):
+    return f"{{{names(s.get('ok'))}, {names(s.get('bad'))}, {names(s.get('ekus'))}}}"
+
+
+def snake(n):
+    return "X509_" + re.sub(r"(?<!^)([A-Z])", r"_\1", n).upper()
+
+
+rows = []
+for t in tests:
+    roots = t.get("roots", [])
+    inter = t.get("intermediates", [])
+    leaf = t["leaf"]
+    req = t.get("requestedEKUs", [])
+    level_lens = "{" + ", ".join(str(len(l)) for l in inter) + "}" if inter else "{0}"
+    levels = (
+        "{" + ", ".join("{" + ", ".join(spec(s) for s in l) + "}" if l else "{0}" for l in inter) + "}"
+        if inter
+        else "{0}"
+    )
+    rows.append(
+        "    {\n"
+        f"        .name = {c_str(t['name'])},\n"
+        f"        .nroots = {len(roots)},\n"
+        f"        .roots = {'{' + ', '.join(spec(s) for s in roots) + '}' if roots else '{0}'},\n"
+        f"        .nlevels = {len(inter)},\n"
+        f"        .level_len = {level_lens},\n"
+        f"        .intermediates = {levels},\n"
+        f"        .leaf = {{{names(leaf.get('sans'))}, {names(leaf.get('ekus'))}, {c_str(leaf.get('cn'))}}},\n"
+        f"        .nrequested = {len(req)},\n"
+        f"        .requested_ekus = {{{', '.join(snake(e) for e in req) if req else '0'}}},\n"
+        f"        .expected_error = {c_str(t.get('expectedError'))},\n"
+        "    },\n"
+    )
+
+rfc_rows = "".join(
+    f"    {{{c_str(r[0])}, {c_str(r[1])}, {c_str(r[2])}}},\n" for r in rfc
+)
+with open(out, "w") as f:
+    f.write(
+        "/* Generated by tools/gen-x509-tests.sh from Go's crypto/x509 tests. Do not\n"
+        " * edit.\n"
+        " *\n"
+        " * Copyright 2017 The Go Authors. All rights reserved.\n"
+        " * Copyright 2026 The burrow Authors. All rights reserved.\n"
+        " * Use of this source code is governed by a BSD-style licence that can be found\n"
+        " * in the LICENSE file. */\n\n"
+        "#ifndef BURROW_TESTS_X509_NAME_CONSTRAINTS_TEST_GEN_H\n"
+        "#define BURROW_TESTS_X509_NAME_CONSTRAINTS_TEST_GEN_H\n\n"
+        '#include "burrow/crypto/x509.h"\n\n#include <stddef.h>\n\n'
+        f"#define X509_NC_MAX_NAMES {max_names + 1}\n"
+        f"#define X509_NC_MAX_ROOTS {max_roots}\n"
+        f"#define X509_NC_MAX_LEVELS {max_levels}\n"
+        f"#define X509_NC_MAX_PER_LEVEL {max_per_level}\n"
+        f"#define X509_NC_MAX_EKUS {max_ekus}\n\n"
+        "/* constraintsSpec, each list ending at the first NULL. */\n"
+        "typedef struct X509ConstraintsSpec {\n"
+        "    const char *ok[X509_NC_MAX_NAMES];\n"
+        "    const char *bad[X509_NC_MAX_NAMES];\n"
+        "    const char *ekus[X509_NC_MAX_NAMES];\n"
+        "} X509ConstraintsSpec;\n\n"
+        "/* leafSpec */\n"
+        "typedef struct X509LeafSpec {\n"
+        "    const char *sans[X509_NC_MAX_NAMES];\n"
+        "    const char *ekus[X509_NC_MAX_NAMES];\n"
+        "    const char *cn;\n"
+        "} X509LeafSpec;\n\n"
+        "/* nameConstraintsTest, less noOpenSSL and ignoreCN, which only matter when\n"
+        " * the chains are also checked with OpenSSL. */\n"
+        "typedef struct X509NameConstraintsTest {\n"
+        "    const char *name;\n"
+        "    Int nroots;\n"
+        "    X509ConstraintsSpec roots[X509_NC_MAX_ROOTS];\n"
+        "    Int nlevels;\n"
+        "    Int level_len[X509_NC_MAX_LEVELS];\n"
+        "    X509ConstraintsSpec intermediates[X509_NC_MAX_LEVELS][X509_NC_MAX_PER_LEVEL];\n"
+        "    X509LeafSpec leaf;\n"
+        "    Int nrequested;\n"
+        "    X509ExtKeyUsage requested_ekus[X509_NC_MAX_EKUS];\n"
+        "    const char *expected_error;\n"
+        "} X509NameConstraintsTest;\n\n"
+        "static const X509NameConstraintsTest name_constraints_tests[] = {\n"
+        + "".join(rows)
+        + "};\n\n"
+        "/* rfc2821Tests */\n"
+        "typedef struct X509RFC2821Test {\n"
+        "    const char *in;\n"
+        "    const char *local_part;\n"
+        "    const char *domain;\n"
+        "} X509RFC2821Test;\n\n"
+        "static const X509RFC2821Test rfc2821_tests[] = {\n" + rfc_rows + "};\n\n#endif\n"
+    )
 PY

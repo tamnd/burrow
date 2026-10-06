@@ -669,6 +669,9 @@ static void TestVectors(TestingT *t) {
 
 /* ------------------------------------------------------------- Singletons */
 
+/* Each call is compared with itself on purpose, to see the same pointer come
+ * back twice. */
+/* NOLINTBEGIN(misc-redundant-expression) */
 static void TestSingletons(TestingT *t) {
     if (hpke_hkdfsha256() != hpke_hkdfsha256())
         testing_t_errorf_v(t, "HKDFSHA256() != HKDFSHA256()");
@@ -703,6 +706,7 @@ static void TestSingletons(TestingT *t) {
     if (hpke_mlkem1024_p384() != hpke_mlkem1024_p384())
         testing_t_errorf_v(t, "MLKEM1024P384() != MLKEM1024P384()");
 }
+/* NOLINTEND(misc-redundant-expression) */
 
 /* ----------------------------------------------------------------- burrow */
 
@@ -760,8 +764,8 @@ static void TestErrors(TestingT *t) {
         testing_t_fatalf_v(t, "%s", error_text(err));
     const HpkePublicKey *pk = hpke_private_key_public_key(k);
 
-    /* An export-only context seals and opens nothing, and exports up to
-     * 0xffff bytes. */
+    /* An export-only context seals and opens nothing. Export takes up to
+     * 0xffff bytes, but HKDF-SHA256 stops at 255 blocks of 32, as Go's does. */
     HpkeSender *s;
     Slice enc =
         hpke_new_sender(a, pk, kdf, hpke_export_only(), slice_nil(TYPE_BYTE), &s, &err);
@@ -783,13 +787,16 @@ static void TestErrors(TestingT *t) {
     hpke_recipient_export(r, a, BURROW_S(""), 0x10000, &err);
     want_error(t, "Recipient.Export(0x10000)", err, "invalid length");
     err = BURROW_NO_ERROR;
-    Slice x = hpke_sender_export(s, a, BURROW_S(""), 0xffff, &err);
-    Slice y = hpke_recipient_export(r, a, BURROW_S(""), 0xffff, &err);
+    Slice x = hpke_sender_export(s, a, BURROW_S(""), (Int)255 * 32, &err);
+    Slice y = hpke_recipient_export(r, a, BURROW_S(""), (Int)255 * 32, &err);
     if (BURROW_FAILED(err))
-        testing_t_errorf_v(t, "Export(0xffff): %s", error_text(err));
-    else if (x.len != 0xffff || !bytes_eq(x, y))
-        testing_t_errorf_v(t, "Export(0xffff) gave %d bytes, or the two sides differ",
+        testing_t_errorf_v(t, "Export(8160): %s", error_text(err));
+    else if (x.len != (Int)255 * 32 || !bytes_eq(x, y))
+        testing_t_errorf_v(t, "Export(8160) gave %d bytes, or the two sides differ",
                            x.len);
+    err = BURROW_NO_ERROR;
+    hpke_sender_export(s, a, BURROW_S(""), 0xffff, &err);
+    want_error(t, "Sender.Export(0xffff)", err, "hkdf: requested key length too large");
     err = BURROW_NO_ERROR;
     /* SHAKE256 can export 0xffff bytes too. */
     HpkeSender *s2;

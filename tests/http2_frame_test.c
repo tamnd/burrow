@@ -1633,6 +1633,510 @@ static void TestTypeFrameParserHolePanic(TestingT *t) {
     tf_free(&tf);
 }
 
+/* ------------------------------------------------------ burrow's own tests
+ *
+ * Go has no tests for these, so the expected strings are what Go 1.27.1's
+ * http2 package prints for the same input. */
+
+static void TestErrorStrings(TestingT *t) {
+    struct {
+        Error err;
+        const char *want;
+    } tests[] = {
+        {burrow__http2_connection_error(HTTP2_ERR_CODE_PROTOCOL),
+         "connection error: PROTOCOL_ERROR"},
+        {burrow__http2_connection_error(0x20),
+         "connection error: unknown error code 0x20"},
+        {burrow__http2_stream_error(1, HTTP2_ERR_CODE_PROTOCOL, BURROW_NO_ERROR),
+         "stream error: stream ID 1; PROTOCOL_ERROR"},
+        {burrow__http2_stream_error(7, HTTP2_ERR_CODE_CANCEL,
+                                    burrow__http2_err_from_peer),
+         "stream error: stream ID 7; CANCEL; received from peer"},
+        {burrow__http2_conn_error(
+             HTTP2_ERR_CODE_FRAME_SIZE,
+             BURROW_S("PRIORITY frame payload size was 4; want 5")),
+         "http2: connection error: FRAME_SIZE_ERROR: PRIORITY frame payload size was "
+         "4; "
+         "want 5"},
+        {burrow__http2_pseudo_header_error(BURROW_S(":x\"y")),
+         "invalid pseudo-header \":x\\\"y\""},
+        {burrow__http2_duplicate_pseudo_header_error(BURROW_S(":method")),
+         "duplicate pseudo-header \":method\""},
+        {burrow__http2_header_field_name_error(BURROW_S("Bad\x01")),
+         "invalid header field name \"Bad\\x01\""},
+        {burrow__http2_header_field_value_error(BURROW_S("key")),
+         "invalid header field value for \"key\""},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
+        Str got = error_text(tests[i].err);
+        if (!str_eq(got, str_from_cstr(tests[i].want)))
+            testing_t_errorf_v(t, "%d. Error() = %q; want %q", (int)i, got,
+                               str_from_cstr(tests[i].want));
+    }
+    Byte buf[HTTP2_STRING_MAX];
+    CHECK(str_eq(burrow__http2_err_code_string_token(15, buf),
+                 BURROW_S("ERR_UNKNOWN_15")));
+}
+
+static void TestSettingString(TestingT *t) {
+    Http2Setting max_frame = {HTTP2_SETTING_MAX_FRAME_SIZE, 16384};
+    Http2Setting unknown = {7, 1};
+    CHECK(str_eq(burrow__http2_setting_string(ta(t), max_frame),
+                 BURROW_S("[MAX_FRAME_SIZE = 16384]")));
+    CHECK(str_eq(burrow__http2_setting_string(ta(t), unknown),
+                 BURROW_S("[UNKNOWN_SETTING_7 = 1]")));
+}
+
+static void TestFrameHeaderString(TestingT *t) {
+    struct {
+        Http2FrameHeader h;
+        const char *want;
+    } tests[] = {
+        {fhdr(HTTP2_FRAME_DATA, HTTP2_FLAG_DATA_END_STREAM | HTTP2_FLAG_DATA_PADDED, 3,
+              1),
+         "[FrameHeader DATA flags=END_STREAM|PADDED stream=1 len=3]"},
+        {fhdr(HTTP2_FRAME_HEADERS, 0xff, 0, 0),
+         "[FrameHeader HEADERS "
+         "flags=END_STREAM|0x2|END_HEADERS|PADDED|0x10|PRIORITY|0x40|0x80 "
+         "len=0]"},
+        /* 0x0b is one of the unassigned types, which Go names "". */
+        {fhdr(0x0b, 0x2, 1, 9), "[FrameHeader  flags=0x2 stream=9 len=1]"},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
+        Str got = header_string(ta(t), tests[i].h);
+        if (!str_eq(got, str_from_cstr(tests[i].want)))
+            testing_t_errorf_v(t, "%d. String() = %q; want %q", (int)i, got,
+                               str_from_cstr(tests[i].want));
+    }
+}
+
+/* Writes the frame for case i of TestSummarizeFrame. */
+static void summary_write(Http2Framer *f, int i) {
+    static const Byte ping[8] = {1, 2, 3, 4, 5, 6, 7, 'z'};
+    if (i == 0) {
+        (void)burrow__http2_framer_write_data(f, 1, true, bs_n("ABC\x00\"", 5));
+    } else if (i == 1) {
+        Byte data[300];
+        memset(data, 'x', sizeof data);
+        (void)burrow__http2_framer_write_data(f, 3, false,
+                                              bs_n((const char *)data, 300));
+    } else if (i == 2) {
+        Http2Setting s[] = {{1, 2}, {7, 4}};
+        (void)burrow__http2_framer_write_settings(f, s, 2);
+    } else if (i == 3) {
+        (void)burrow__http2_framer_write_settings(f, NULL, 0);
+    } else if (i == 4) {
+        (void)burrow__http2_framer_write_settings_ack(f);
+    } else if (i == 5) {
+        (void)burrow__http2_framer_write_window_update(f, 0, 1000);
+    } else if (i == 6) {
+        (void)burrow__http2_framer_write_window_update(f, 5, 1);
+    } else if (i == 7) {
+        (void)burrow__http2_framer_write_ping(f, true, ping);
+    } else if (i == 8) {
+        (void)burrow__http2_framer_write_go_away(f, 9, HTTP2_ERR_CODE_ENHANCE_YOUR_CALM,
+                                                 bs("bye"));
+    } else if (i == 9) {
+        (void)burrow__http2_framer_write_rst_stream(f, 3, 0x99);
+    } else if (i == 10) {
+        Http2HeadersFrameParam p = {0};
+        p.stream_id = 1;
+        p.block_fragment = bs("ab");
+        p.end_headers = true;
+        p.pad_length = 1;
+        p.priority = prio(3, false, 9);
+        (void)burrow__http2_framer_write_headers(f, p);
+    } else if (i == 11) {
+        (void)burrow__http2_framer_write_raw_frame(f, 0x20, 0x81, 4, bs("q"));
+    } else {
+        (void)burrow__http2_framer_write_priority_update(f, 5, BURROW_S("u=1"));
+    }
+}
+
+static void TestSummarizeFrame(TestingT *t) {
+    static const char *const tests[] = {
+        "DATA flags=END_STREAM stream=1 len=5 data=\"ABC\\x00\\\"\"",
+        NULL, /* big_want */
+        "SETTINGS len=12, settings: HEADER_TABLE_SIZE=2, UNKNOWN_SETTING_7=4",
+        "SETTINGS len=0",
+        "SETTINGS flags=ACK len=0",
+        "WINDOW_UPDATE len=4 (conn) incr=1000",
+        "WINDOW_UPDATE stream=5 len=4 incr=1",
+        "PING flags=ACK len=8 ping=\"\\x01\\x02\\x03\\x04\\x05\\x06\\az\"",
+        "GOAWAY len=11 LastStreamID=9 ErrCode=ENHANCE_YOUR_CALM Debug=\"bye\"",
+        "RST_STREAM stream=3 len=4 ErrCode=unknown error code 0x99",
+        "HEADERS flags=END_HEADERS|PADDED|PRIORITY stream=1 len=9",
+        "UNKNOWN_FRAME_TYPE_32 flags=0x1|0x80 stream=4 len=1",
+        "PRIORITY_UPDATE len=7",
+    };
+    /* A DATA summary shows the first 256 bytes. */
+    static const char big_head[] = "DATA stream=3 len=300 data=\"";
+    static const char big_tail[] = "\" (44 bytes omitted)";
+    char big_want[sizeof big_head - 1 + 256 + sizeof big_tail];
+    memcpy(big_want, big_head, sizeof big_head - 1);
+    memset(big_want + sizeof big_head - 1, 'x', 256);
+    memcpy(big_want + sizeof big_head - 1 + 256, big_tail, sizeof big_tail);
+
+    for (int i = 0; i < (int)(sizeof tests / sizeof tests[0]); i++) {
+        Str want = str_from_cstr(i == 1 ? big_want : tests[i]);
+        TF tf;
+        Http2Framer *fr = tf_init(&tf);
+        fr->allow_illegal_reads = true;
+        summary_write(fr, i);
+        Error err = BURROW_NO_ERROR;
+        Http2Frame *f = burrow__http2_framer_read_frame(fr, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "%d. ReadFrame: %v", i, err);
+            tf_free(&tf);
+            continue;
+        }
+        Str got = burrow__http2_summarize_frame(ta(t), f);
+        if (!str_eq(got, want))
+            testing_t_errorf_v(t, "%d. summarizeFrame = %q; want %q", i, got, want);
+        burrow__http2_frame_free(f);
+        tf_free(&tf);
+    }
+}
+
+static void count_into(void *env, Str token) {
+    BytesBuffer *b = (BytesBuffer *)env;
+    if (bytes_buffer_len(b) > 0)
+        (void)bytes_buffer_write_string(b, BURROW_S(","), NULL);
+    (void)bytes_buffer_write_string(b, token, NULL);
+}
+
+#define P(s) (s), (Int)sizeof(s) - 1
+
+/* Each malformed frame gives "error|ErrorDetail|countError tokens", with
+ * "<nil>" for no error. */
+static void TestMalformedFrames(TestingT *t) {
+    static const struct {
+        const char *name;
+        const char *payload;
+        Int n;
+        const char *want;
+        uint32_t stream_id;
+        Http2FrameType type;
+        Http2Flags flags;
+    } tests[] = {
+        {"bdata0", P("x"),
+         "connection error: PROTOCOL_ERROR|DATA frame with stream ID "
+         "0|frame_data_stream_0",
+         0, HTTP2_FRAME_DATA, 0},
+        {"bdatapad", P(""), "unexpected EOF|<nil>|frame_data_pad_byte_short", 1,
+         HTTP2_FRAME_DATA, HTTP2_FLAG_DATA_PADDED},
+        {"bdatapadbig",
+         P("\x05"
+           "ab"),
+         "connection error: PROTOCOL_ERROR|pad size larger than data "
+         "payload|frame_data_pad_too_big",
+         1, HTTP2_FRAME_DATA, HTTP2_FLAG_DATA_PADDED},
+        {"bsetack", P("\x00\x01\x00\x00\x00\x00"),
+         "connection error: FRAME_SIZE_ERROR|<nil>|frame_settings_ack_with_length", 0,
+         HTTP2_FRAME_SETTINGS, HTTP2_FLAG_SETTINGS_ACK},
+        {"bsetstream", P(""),
+         "connection error: PROTOCOL_ERROR|<nil>|frame_settings_has_stream", 1,
+         HTTP2_FRAME_SETTINGS, 0},
+        {"bsetmod", P("\x00\x01\x00"),
+         "connection error: FRAME_SIZE_ERROR|<nil>|frame_settings_mod_6", 0,
+         HTTP2_FRAME_SETTINGS, 0},
+        {"bsetwin", P("\x00\x04\x80\x00\x00\x00"),
+         "connection error: "
+         "FLOW_CONTROL_ERROR|<nil>|frame_settings_window_size_too_big",
+         0, HTTP2_FRAME_SETTINGS, 0},
+        {"bping", P("1234567"),
+         "connection error: FRAME_SIZE_ERROR|<nil>|frame_ping_length", 0,
+         HTTP2_FRAME_PING, 0},
+        {"bpingstream", P("12345678"),
+         "connection error: PROTOCOL_ERROR|<nil>|frame_ping_has_stream", 1,
+         HTTP2_FRAME_PING, 0},
+        {"bgoawaystream", P("12345678"),
+         "connection error: PROTOCOL_ERROR|<nil>|frame_goaway_has_stream", 1,
+         HTTP2_FRAME_GO_AWAY, 0},
+        {"bgoawayshort", P("1234567"),
+         "connection error: FRAME_SIZE_ERROR|<nil>|frame_goaway_short", 0,
+         HTTP2_FRAME_GO_AWAY, 0},
+        {"bwulen", P("123"),
+         "connection error: FRAME_SIZE_ERROR|<nil>|frame_windowupdate_bad_len", 1,
+         HTTP2_FRAME_WINDOW_UPDATE, 0},
+        {"bwuconn", P("\x80\x00\x00\x00"),
+         "connection error: PROTOCOL_ERROR|<nil>|frame_windowupdate_zero_inc_conn", 0,
+         HTTP2_FRAME_WINDOW_UPDATE, 0},
+        {"bwustream", P("\x00\x00\x00\x00"),
+         "stream error: stream ID 3; "
+         "PROTOCOL_ERROR|<nil>|frame_windowupdate_zero_inc_stream",
+         3, HTTP2_FRAME_WINDOW_UPDATE, 0},
+        {"bhdr0", P("x"),
+         "connection error: PROTOCOL_ERROR|HEADERS frame with stream ID "
+         "0|frame_headers_zero_stream",
+         0, HTTP2_FRAME_HEADERS, HTTP2_FLAG_HEADERS_END_HEADERS},
+        {"bhdrpad", P(""), "unexpected EOF|<nil>|frame_headers_pad_short", 1,
+         HTTP2_FRAME_HEADERS,
+         HTTP2_FLAG_HEADERS_END_HEADERS | HTTP2_FLAG_HEADERS_PADDED},
+        {"bhdrprio", P("123"), "unexpected EOF|<nil>|frame_headers_prio_short", 1,
+         HTTP2_FRAME_HEADERS,
+         HTTP2_FLAG_HEADERS_END_HEADERS | HTTP2_FLAG_HEADERS_PRIORITY},
+        {"bhdrweight", P("1234"),
+         "unexpected EOF|<nil>|frame_headers_prio_weight_short", 1, HTTP2_FRAME_HEADERS,
+         HTTP2_FLAG_HEADERS_END_HEADERS | HTTP2_FLAG_HEADERS_PRIORITY},
+        {"bhdrpadbig",
+         P("\x09"
+           "ab"),
+         "stream error: stream ID 1; PROTOCOL_ERROR|<nil>|frame_headers_pad_too_big", 1,
+         HTTP2_FRAME_HEADERS,
+         HTTP2_FLAG_HEADERS_END_HEADERS | HTTP2_FLAG_HEADERS_PADDED},
+        {"bprio0", P("12345"),
+         "connection error: PROTOCOL_ERROR|PRIORITY frame with stream ID "
+         "0|frame_priority_zero_stream",
+         0, HTTP2_FRAME_PRIORITY, 0},
+        {"bpriolen", P("1234"),
+         "connection error: FRAME_SIZE_ERROR|PRIORITY frame payload size was 4; want "
+         "5|frame_priority_bad_length",
+         1, HTTP2_FRAME_PRIORITY, 0},
+        {"bpu", P("\x00\x00\x00\x01"),
+         "connection error: PROTOCOL_ERROR|PRIORITY_UPDATE frame with non-zero stream "
+         "ID|frame_priority_update_non_zero_stream",
+         1, HTTP2_FRAME_PRIORITY_UPDATE, 0},
+        {"bpulen", P("\x00\x01"),
+         "connection error: FRAME_SIZE_ERROR|PRIORITY_UPDATE frame payload size was 2; "
+         "want at "
+         "least 4|frame_priority_update_bad_length",
+         0, HTTP2_FRAME_PRIORITY_UPDATE, 0},
+        {"bpuzero", P("\x80\x00\x00\x00u=1"),
+         "connection error: PROTOCOL_ERROR|PRIORITY_UPDATE frame with prioritized "
+         "stream ID of "
+         "zero|frame_priority_update_prioritizing_zero_stream",
+         0, HTTP2_FRAME_PRIORITY_UPDATE, 0},
+        {"brstlen", P("12"),
+         "connection error: FRAME_SIZE_ERROR|<nil>|frame_rststream_bad_len", 1,
+         HTTP2_FRAME_RST_STREAM, 0},
+        {"brst0", P("1234"),
+         "connection error: PROTOCOL_ERROR|<nil>|frame_rststream_zero_stream", 0,
+         HTTP2_FRAME_RST_STREAM, 0},
+        /* The order check catches this one before a parser can count it. */
+        {"bcont0", P("x"),
+         "connection error: PROTOCOL_ERROR|unexpected CONTINUATION for stream 0|", 0,
+         HTTP2_FRAME_CONTINUATION, 0},
+        {"bpp0", P("1234"),
+         "connection error: PROTOCOL_ERROR|<nil>|frame_pushpromise_zero_stream", 0,
+         HTTP2_FRAME_PUSH_PROMISE, 0},
+        {"bpppad", P(""), "unexpected EOF|<nil>|frame_pushpromise_pad_short", 1,
+         HTTP2_FRAME_PUSH_PROMISE, HTTP2_FLAG_PUSH_PROMISE_PADDED},
+        {"bppid", P("123"), "unexpected EOF|<nil>|frame_pushpromise_promiseid_short", 1,
+         HTTP2_FRAME_PUSH_PROMISE, 0},
+        {"bpppadbig",
+         P("\x02\x00\x00\x00\x02"
+           "a"),
+         "connection error: PROTOCOL_ERROR|<nil>|frame_pushpromise_pad_too_big", 1,
+         HTTP2_FRAME_PUSH_PROMISE, HTTP2_FLAG_PUSH_PROMISE_PADDED},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
+        TF tf;
+        Http2Framer *fr = tf_init(&tf);
+        Alloc *a = ta(t);
+        BytesBuffer tokens = BYTES_BUFFER(a);
+        fr->count_error = BURROW_FN(Http2CountErrorFunc, count_into, &tokens);
+        (void)burrow__http2_framer_write_raw_frame(fr, tests[i].type, tests[i].flags,
+                                                   tests[i].stream_id,
+                                                   bs_n(tests[i].payload, tests[i].n));
+        Error err = BURROW_NO_ERROR;
+        Http2Frame *f = burrow__http2_framer_read_frame(fr, &err);
+        burrow__http2_frame_free(f);
+        Error detail = burrow__http2_framer_error_detail(fr);
+        Str got = fmt_sprintf_v(
+            a, "%s|%s|%s", BURROW_FAILED(err) ? error_text(err) : BURROW_S("<nil>"),
+            BURROW_FAILED(detail) ? error_text(detail) : BURROW_S("<nil>"),
+            bytes_buffer_string(&tokens, a));
+        Str want = str_from_cstr(tests[i].want);
+        if (!str_eq(got, want))
+            testing_t_errorf_v(t, "%s:\n got: %q\nwant: %q", tests[i].name, got, want);
+        tf_free(&tf);
+    }
+}
+
+#undef P
+
+/* What a Framer makes of an HTTP/1.1 response. */
+static void TestHTTP1Response(TestingT *t) {
+    static const struct {
+        uint32_t max;
+        const char *want;
+    } tests[] = {
+        {16384, "http2: failed reading the frame payload: http2: frame too large, note "
+                "that the "
+                "frame header looked like an HTTP/1.1 header"},
+        {0,
+         "http2: failed reading the frame payload: unexpected EOF, note that the frame "
+         "header looked like an HTTP/1.1 header"},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
+        BytesBuffer *r = bytes_new_buffer_string(
+            heap_allocator(),
+            BURROW_S("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"));
+        if (r == NULL) {
+            testing_t_fatalf_v(t, "out of memory");
+            return;
+        }
+        Http2Framer *fr = burrow__http2_new_framer(heap_allocator(), (IoWriter){0},
+                                                   bytes_buffer_as_io_reader(r));
+        if (fr == NULL) {
+            bytes_buffer_free(r);
+            testing_t_fatalf_v(t, "out of memory");
+            return;
+        }
+        if (tests[i].max != 0)
+            burrow__http2_framer_set_max_read_frame_size(fr, tests[i].max);
+        Error err = BURROW_NO_ERROR;
+        Http2Frame *f = burrow__http2_framer_read_frame(fr, &err);
+        burrow__http2_frame_free(f);
+        Str want = str_from_cstr(tests[i].want);
+        if (!str_eq(error_text(err), want))
+            testing_t_errorf_v(t, "%d. ReadFrame = %v; want %q", (int)i, err, want);
+        burrow__http2_framer_free(fr);
+        bytes_buffer_free(r);
+    }
+}
+
+typedef struct LogLines {
+    Alloc *a;
+    Str fr;
+    Str lines[8];
+    int n;
+} LogLines;
+
+static void log_line(LogLines *l, const char *prefix, Str msg) {
+    Str line = fmt_sprintf_v(l->a, "%s%s", prefix, msg);
+    line = strings_replace(l->a, line, l->fr, BURROW_S("FR"), 1);
+    if (l->n < 8)
+        l->lines[l->n] = line;
+    l->n++;
+}
+
+static void log_read(void *env, Str msg) {
+    log_line((LogLines *)env, "R ", msg);
+}
+
+static void log_write(void *env, Str msg) {
+    log_line((LogLines *)env, "W ", msg);
+}
+
+static void TestDebugLoggers(TestingT *t) {
+    static const char *const want[] = {
+        "W http2: Framer FR: wrote DATA flags=END_STREAM stream=1 len=3 data=\"ABC\"",
+        "R http2: Framer FR: read DATA flags=END_STREAM stream=1 len=3 data=\"ABC\"",
+        "W http2: Framer FR: failed to decode just-written frame",
+    };
+    TF tf;
+    Http2Framer *fr = tf_init(&tf);
+    LogLines logs = {0};
+    logs.a = ta(t);
+    logs.fr = fmt_sprintf_v(logs.a, "%p", (void *)fr);
+    fr->log_reads = true;
+    fr->log_writes = true;
+    fr->debug_read_logger = BURROW_FN(Http2LogFunc, log_read, &logs);
+    fr->debug_write_logger = BURROW_FN(Http2LogFunc, log_write, &logs);
+    (void)burrow__http2_framer_write_data(fr, 1, true, bs("ABC"));
+    Error err = BURROW_NO_ERROR;
+    burrow__http2_frame_free(burrow__http2_framer_read_frame(fr, &err));
+    fr->allow_illegal_writes = true;
+    (void)burrow__http2_framer_write_raw_frame(fr, HTTP2_FRAME_PING, 0, 0, bs("short"));
+
+    int nwant = (int)(sizeof want / sizeof want[0]);
+    if (logs.n != nwant)
+        testing_t_errorf_v(t, "got %d log lines; want %d", logs.n, nwant);
+    for (int i = 0; i < logs.n && i < nwant; i++) {
+        if (!str_eq(logs.lines[i], str_from_cstr(want[i])))
+            testing_t_errorf_v(t, "log %d = %q; want %q", i, logs.lines[i],
+                               str_from_cstr(want[i]));
+    }
+    tf_free(&tf);
+}
+
+static void TestMetaHeadersHelpers(TestingT *t) {
+    static const Str m1[] = {BURROW_S_INIT(":method"),  BURROW_S_INIT("GET"),
+                             BURROW_S_INIT(":path"),    BURROW_S_INIT("/"),
+                             BURROW_S_INIT("priority"), BURROW_S_INIT("u=1"),
+                             BURROW_S_INIT("foo"),      BURROW_S_INIT("bar")};
+    static const Str m2[] = {BURROW_S_INIT(":method"),  BURROW_S_INIT("GET"),
+                             BURROW_S_INIT(":path"),    BURROW_S_INIT("/"),
+                             BURROW_S_INIT("priority"), BURROW_S_INIT("u=1"),
+                             BURROW_S_INIT("via"),      BURROW_S_INIT("x")};
+    static const Str m3[] = {BURROW_S_INIT(":method"), BURROW_S_INIT("GET"),
+                             BURROW_S_INIT("foo"), BURROW_S_INIT("bar")};
+    static const Str m4[] = {BURROW_S_INIT("foo"), BURROW_S_INIT("bar"),
+                             BURROW_S_INIT("x-forwarded-for"), BURROW_S_INIT("y")};
+    static const Str m5[] = {BURROW_S_INIT(":status"), BURROW_S_INIT("200"),
+                             BURROW_S_INIT("priority"), BURROW_S_INIT("u=9, i")};
+    static const struct {
+        const Str *headers;
+        const char *want;
+        int n;
+    } tests[] = {
+        {m1,
+         "method=\"GET\" path=\"/\" regular=2 pseudo=2 p1=1,0,true,false "
+         "p2=1,0,true,false",
+         8},
+        {m2,
+         "method=\"GET\" path=\"/\" regular=2 pseudo=2 p1=1,1,true,true "
+         "p2=1,1,true,true",
+         8},
+        {m3,
+         "method=\"GET\" path=\"\" regular=1 pseudo=1 p1=3,1,false,false "
+         "p2=3,0,true,false",
+         4},
+        {m4,
+         "method=\"\" path=\"\" regular=2 pseudo=0 p1=3,1,false,true p2=3,1,true,true",
+         4},
+        {m5,
+         "method=\"\" path=\"\" regular=1 pseudo=1 p1=3,1,true,false p2=3,1,true,false",
+         4},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
+        Alloc *a = ta(t);
+        BytesBuffer block = BYTES_BUFFER(a);
+        Slice all = encode_header_raw(t, &block, tests[i].headers, tests[i].n);
+        TF tf;
+        Http2Framer *fr = tf_init(&tf);
+        HpackDecoder *dec = burrow__hpack_new_decoder(
+            heap_allocator(), HTTP2_INITIAL_HEADER_TABLE_SIZE, NULL, NULL);
+        fr->read_meta_headers = dec;
+        Http2HeadersFrameParam p = {0};
+        p.stream_id = 1;
+        p.block_fragment = all;
+        p.end_headers = true;
+        (void)burrow__http2_framer_write_headers(fr, p);
+        Error err = BURROW_NO_ERROR;
+        Http2Frame *f = burrow__http2_framer_read_frame(fr, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "%d. ReadFrame: %v", (int)i, err);
+        } else {
+            bool aware1 = false;
+            bool inter1 = false;
+            bool aware2 = false;
+            bool inter2 = false;
+            Http2PriorityParam p1 = burrow__http2_meta_headers_frame_rfc9218_priority(
+                f, false, &aware1, &inter1);
+            Http2PriorityParam p2 = burrow__http2_meta_headers_frame_rfc9218_priority(
+                f, true, &aware2, &inter2);
+            Str got = fmt_sprintf_v(
+                a,
+                "method=%q path=%q regular=%d pseudo=%d p1=%d,%d,%t,%t p2=%d,%d,%t,%t",
+                burrow__http2_meta_headers_frame_pseudo_value(f, BURROW_S("method")),
+                burrow__http2_meta_headers_frame_pseudo_value(f, BURROW_S("path")),
+                burrow__http2_meta_headers_frame_regular_fields(f).len,
+                burrow__http2_meta_headers_frame_pseudo_fields(f).len, p1.urgency,
+                p1.incremental, aware1, inter1, p2.urgency, p2.incremental, aware2,
+                inter2);
+            Str want = str_from_cstr(tests[i].want);
+            if (!str_eq(got, want))
+                testing_t_errorf_v(t, "%d.\n got: %s\nwant: %s", (int)i, got, want);
+        }
+        burrow__http2_frame_free(f);
+        burrow__hpack_decoder_free(dec);
+        tf_free(&tf);
+    }
+}
+
 #define TESTS(X)                                                                       \
     X(TestErrCodeString)                                                               \
     X(TestFrameSizes)                                                                  \
@@ -1667,6 +2171,14 @@ static void TestTypeFrameParserHolePanic(TestingT *t) {
     X(TestReadFrameHeaderFrameTooLarge)                                                \
     X(TestReadFrameHeaderBadFrameOrder)                                                \
     X(TestReadFrameForHeaderUnexpectedEOF)                                             \
-    X(TestTypeFrameParserHolePanic)
+    X(TestTypeFrameParserHolePanic)                                                    \
+    X(TestErrorStrings)                                                                \
+    X(TestSettingString)                                                               \
+    X(TestFrameHeaderString)                                                           \
+    X(TestSummarizeFrame)                                                              \
+    X(TestMalformedFrames)                                                             \
+    X(TestHTTP1Response)                                                               \
+    X(TestDebugLoggers)                                                                \
+    X(TestMetaHeadersHelpers)
 
 TESTING_MAIN(TESTS)

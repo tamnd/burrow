@@ -348,19 +348,29 @@ enum { GOB_THREAD_CHECK_AFTER = 32 };
 
 /* Where the stack is now. A local's address will not do under
  * AddressSanitizer, which can put locals on a fake stack in the heap, so the
- * frame address is used wherever there is one. */
+ * frame address is used wherever there is one. On wasip1 that is the stack in
+ * linear memory, where C keeps what it takes the address of, and a local is
+ * the way to find it. */
 static uintptr_t gob_stack_here(void) {
-#if defined(__GNUC__) || defined(__clang__)
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(BURROW_OS_WASI)
     return (uintptr_t)__builtin_frame_address(0);
 #elif defined(_MSC_VER)
     return (uintptr_t)_AddressOfReturnAddress();
 #else
     volatile char probe = 0;
-    return (uintptr_t)&probe;
+    uintptr_t here = (uintptr_t)&probe;
+    return here;
 #endif
 }
 
 bool burrow__gob_stack_low(uintptr_t *floor, int depth) {
+#if defined(BURROW_OS_WASI)
+    /* Both stacks have to have room: the engine's, which only a count can
+     * stand in for, and the one in linear memory, which has bounds and no
+     * guard page below it. */
+    if (depth >= GOB_WASI_MAX_DEPTH)
+        return true;
+#endif
     /* 0 is not looked at yet, 1 is bounds nobody would give, which falls
      * back on a count, and 2 is an OS thread whose bounds are left until the
      * nesting gets deep enough to be worth the call. */
@@ -1367,7 +1377,7 @@ const Type *burrow__gob_iface_elem(const Type *t, void *p, void **vp) {
     if (v->vt == NULL || v->vt->self_type == NULL)
         return NULL;
     if (t->size > sizeof(Iface))
-        *vp = (Byte *)p + sizeof(void *);
+        *vp = burrow__iface_inline(t, p);
     else
         *vp = v->data;
     return v->vt->self_type;

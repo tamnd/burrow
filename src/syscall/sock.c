@@ -21,6 +21,10 @@
 
 #include <string.h>
 
+#if BURROW_MSAN
+#include <sanitizer/msan_interface.h>
+#endif
+
 #if defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO) || defined(BURROW_OS_WASI)
 #define SOCK_LINUX 1
 #endif
@@ -604,6 +608,19 @@ SyscallSockaddr syscall_getpeername(Alloc *a, Int fd, Error *err) {
     return sa;
 }
 
+/* The calls go to the kernel without the C library, so the memory sanitizer
+ * does not see the kernel fill what a receive reads into. This tells it, as
+ * unix.c does for read. */
+static void sock_msan_write(const void *p, Int n) {
+#if BURROW_MSAN
+    if (p != NULL && n > 0)
+        __msan_unpoison(p, (size_t)n);
+#else
+    (void)p;
+    (void)n;
+#endif
+}
+
 Int syscall_recvfrom(Alloc *a, Int fd, Slice p, Int flags, SyscallSockaddr *from,
                      Error *err) {
     SyscallRawSockaddrAny rsa;
@@ -612,6 +629,8 @@ Int syscall_recvfrom(Alloc *a, Int fd, Slice p, Int flags, SyscallSockaddr *from
     SyscallSockaddr sa = {NULL, NULL};
     Error e = BURROW_NO_ERROR;
     Int n = burrow__syscall_recvfrom(fd, p, flags, &rsa, &len, &e);
+    if (BURROW_OK(e))
+        sock_msan_write(p.p, n);
     if (BURROW_OK(e) && rsa.addr.family != SYSCALL_AF_UNSPEC)
         e = burrow__syscall_any_to_sockaddr(a, &rsa, &sa);
     BURROW_OUT(from, sa);
@@ -670,6 +689,10 @@ Int syscall_recvmsg(Alloc *a, Int fd, Slice p, Slice oob, Int flags, Int *oobn,
     Error e = sock_msg(fd, p, oob, &msg, &iov, &dummy);
     if (BURROW_OK(e))
         n = burrow__syscall_recvmsg(fd, &msg, flags, &e);
+    if (BURROW_OK(e)) {
+        sock_msan_write(iov.base, n);
+        sock_msan_write(msg.control, (Int)msg.controllen);
+    }
     BURROW_OUT(oobn, BURROW_OK(e) ? (Int)msg.controllen : 0);
     BURROW_OUT(recvflags, BURROW_OK(e) ? (Int)msg.flags : 0);
     /* The sender is only there when the socket is not connected. */

@@ -72,9 +72,15 @@ static void TestTheBuiltinsHaveTheSizeCSaysTheyHave(TestingT *t) {
     CHECK_INT_EQ(TYPE_UNSAFE_POINTER->size, sizeof(void *));
 
     /* Go's int follows the pointer width and so does ours, which is the whole
-     * reason Int is a typedef rather than int64_t everywhere. */
+     * reason Int is a typedef rather than int64_t everywhere. Except on wasm,
+     * where Go's int is 64 bits and its pointers are 32. */
+    CHECK_INT_EQ(TYPE_INT->size, sizeof(Int));
+    CHECK_INT_EQ(TYPE_UINT->size, sizeof(Uint));
+#if defined(BURROW_ARCH_WASM)
+    CHECK_INT_EQ(TYPE_INT->size, 8);
+#else
     CHECK_INT_EQ(TYPE_INT->size, sizeof(void *));
-    CHECK_INT_EQ(TYPE_UINT->size, sizeof(void *));
+#endif
     CHECK_INT_EQ(TYPE_UINTPTR->size, sizeof(void *));
 }
 

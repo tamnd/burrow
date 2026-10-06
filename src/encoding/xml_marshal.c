@@ -186,7 +186,7 @@ static const Type *xm_iface_elem(const Type *t, void *p, void **vp) {
     if (v->vt == NULL)
         return NULL;
     if (t->size > sizeof(Iface))
-        *vp = (Byte *)p + sizeof(void *);
+        *vp = burrow__iface_inline(t, p);
     else
         *vp = v->data;
     return v->vt->self_type;

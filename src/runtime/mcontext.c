@@ -1,9 +1,9 @@
-/* The two backends that are not assembly, and the trampoline all three share.
+/* The three backends that are not assembly, and the trampoline all four share.
  *
  * See burrow/mcontext.h for what a context is. What is here is the portable
- * fallback in its two flavours, Fibers on Windows and ucontext everywhere else,
- * plus burrow__mcontext_start, which is where every backend's entry trampoline
- * ends up once the new stack is live.
+ * fallback in its three flavours, Fibers on Windows, Asyncify on WebAssembly
+ * and ucontext everywhere else, plus burrow__mcontext_start, which is where
+ * every backend's entry trampoline ends up once the new stack is live.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -556,6 +556,191 @@ void burrow__mcontext_switch_raw(burrow__MContext *from, burrow__MContext *to) {
      * not have to know which one it is talking to. */
     (void)from;
     SwitchToFiber(to->fiber);
+}
+
+#elif defined(BURROW_MCONTEXT_ASYNCIFY)
+
+/* ------------------------------------------------------------------ Asyncify */
+
+/* The four calls wasm-opt --asyncify gives a module. Spelled as imports from a
+ * module called "asyncify" because that is how code inside the module asks for
+ * them: the pass finds these imports and turns every call to one into a call to
+ * the function it adds, so none of them is left for the engine to supply. */
+#define ASYNCIFY_IMPORT(name)                                                          \
+    __attribute__((import_module("asyncify"), import_name(name)))
+ASYNCIFY_IMPORT("start_unwind") void asyncify_start_unwind(void *buf);
+ASYNCIFY_IMPORT("stop_unwind") void asyncify_stop_unwind(void);
+ASYNCIFY_IMPORT("start_rewind") void asyncify_start_rewind(void *buf);
+ASYNCIFY_IMPORT("stop_rewind") void asyncify_stop_rewind(void);
+
+enum { CTX_NEW, CTX_RUNNING, CTX_SUSPENDED };
+
+/* The stack C keeps in memory is wherever the global __stack_pointer says, and
+ * nothing in C can name a WebAssembly global, so these two are the only
+ * assembly in the backend. The .globaltype line is what tells the assembler the
+ * symbol is the linker's global and not a function or some data. */
+static void *sp_get(void) {
+    void *sp;
+    __asm__ volatile(".globaltype __stack_pointer, i32\n\t"
+                     "global.get __stack_pointer\n\t"
+                     "local.set %0"
+                     : "=r"(sp));
+    return sp;
+}
+
+static void sp_set(void *sp) {
+    __asm__ volatile(".globaltype __stack_pointer, i32\n\t"
+                     "local.get %0\n\t"
+                     "global.set __stack_pointer" ::"r"(sp));
+}
+
+/* There is one thread, so there is one of each of these. `root` is the context
+ * burrow__mcontext_run was called with, `next` is where a switch on its way down
+ * is going, and the two flags say which way Asyncify is moving the stack. */
+typedef struct AsyncifyState {
+    burrow__MContext *root;
+    burrow__MContext *next;
+    bool unwinding;
+    bool rewinding;
+} AsyncifyState;
+
+static AsyncifyState asy;
+
+/* The root context's buffer. A made context keeps its buffer at the bottom of
+ * the stack it was given, but the root is running on the stack the program
+ * started on, which is not ours to carve up. 64 KiB is room for a few hundred
+ * frames, and running out is a trap from inside the rewritten code rather than
+ * memory overwritten. */
+#define ROOT_UNWIND_WORDS (65536 / sizeof(void *))
+static void *root_unwind[ROOT_UNWIND_WORDS];
+
+static void unwind_init(burrow__MContext *ctx, void **buf, size_t words) {
+    ctx->unwind = buf;
+    buf[0] = buf + 2;
+    buf[1] = buf + words;
+}
+
+static void bottom_start(void *ctx) {
+    burrow__mcontext_start(ctx);
+}
+
+bool burrow__mcontext_attach(burrow__MContext *self) {
+    /* burrow__mcontext_run has already set the context up, so all this can do
+     * is check that it is the same one. Anything else would be a stack with
+     * nothing underneath it to catch a switch. */
+    if (self == NULL || self != asy.root)
+        return false;
+
+    annotate_attach(self);
+    return true;
+}
+
+void burrow__mcontext_detach(burrow__MContext *self) {
+    (void)self;
+}
+
+bool burrow__mcontext_make(burrow__MContext *ctx, void *stack, size_t size,
+                           void (*entry)(void *), void *arg, burrow__MContext *link) {
+    if (ctx == NULL || stack == NULL || entry == NULL ||
+        size < BURROW_MCONTEXT_STACK_MIN)
+        return false;
+
+    ctx->entry = entry;
+    ctx->arg = arg;
+    ctx->link = link;
+    annotate_make(ctx, stack, size);
+
+    /* The bottom quarter of the stack is the unwind buffer and C's stack grows
+     * down from the top towards it. The locals Asyncify saves are the ones the
+     * engine had in registers, so the two grow together and a quarter is a
+     * guess at the ratio rather than a measurement. */
+    size_t buf_bytes = (size / 4) & ~(size_t)(sizeof(void *) - 1);
+    unwind_init(ctx, (void **)stack, buf_bytes / sizeof(void *));
+    ctx->sp = (void *)(((uintptr_t)stack + size) & ~(uintptr_t)15);
+    ctx->bottom = bottom_start;
+    ctx->bottom_arg = ctx;
+    ctx->state = CTX_NEW;
+    return true;
+}
+
+void burrow__mcontext_free(burrow__MContext *ctx) {
+    if (ctx == NULL)
+        return;
+
+    annotate_free(ctx);
+}
+
+void burrow__mcontext_switch_raw(burrow__MContext *from, burrow__MContext *to) {
+    /* The second time through. burrow__mcontext_run has rewound `from` and every
+     * frame above this one has been called again with its locals put back, so
+     * this call is the switch coming back, and returning from it is the whole
+     * of resuming. */
+    if (asy.rewinding) {
+        asyncify_stop_rewind();
+        asy.rewinding = false;
+        return;
+    }
+
+    if (from == to)
+        return;
+    if (asy.root == NULL)
+        runtime_throw(BURROW_S("context switch outside burrow__mcontext_run"));
+
+    /* The first time through. Every function from here down returns as soon as
+     * this does, and burrow__mcontext_run carries on with `to`. */
+    from->sp = sp_get();
+    from->unwind[0] = from->unwind + 2;
+    asy.next = to;
+    asy.unwinding = true;
+    asyncify_start_unwind(from->unwind);
+}
+
+BURROW_NOINLINE void burrow__mcontext_run(burrow__MContext *self, void (*fn)(void *),
+                                          void *arg) {
+    if (self == NULL || fn == NULL)
+        runtime_throw(BURROW_S("burrow__mcontext_run of nothing"));
+    if (asy.root != NULL)
+        runtime_throw(BURROW_S("burrow__mcontext_run inside another one"));
+
+    self->entry = NULL;
+    self->arg = NULL;
+    self->link = NULL;
+    unwind_init(self, root_unwind, ROOT_UNWIND_WORDS);
+    self->bottom = fn;
+    self->bottom_arg = arg;
+    self->state = CTX_RUNNING;
+    asy.root = self;
+
+    burrow__MContext *cur = self;
+    for (;;) {
+        /* Through the pointer in the context, never by name, and that matters:
+         * a call the compiler can see is to burrow__mcontext_start is a call it
+         * knows does not return, and it would drop everything after it. Here it
+         * does return, every time the context switches away. */
+        cur->bottom(cur->bottom_arg);
+
+        if (!asy.unwinding) {
+            /* An ordinary return, which only fn is allowed. Every other bottom
+             * is burrow__mcontext_start, which ends in a switch. */
+            if (cur != self)
+                runtime_throw(BURROW_S("a context returned to burrow__mcontext_run"));
+            break;
+        }
+
+        asyncify_stop_unwind();
+        asy.unwinding = false;
+        cur->state = CTX_SUSPENDED;
+
+        cur = asy.next;
+        sp_set(cur->sp);
+        if (cur->state == CTX_SUSPENDED) {
+            asy.rewinding = true;
+            asyncify_start_rewind(cur->unwind);
+        }
+        cur->state = CTX_RUNNING;
+    }
+
+    asy.root = NULL;
 }
 
 #else

@@ -103,6 +103,8 @@ static void sleep_on_gate(void *arg) {
 }
 
 static void TestASleeperWaitsUntilSomebodyElseWakesIt(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     CHECK(burrow__note_init(&gate));
     entered = 0;
     left = 0;
@@ -137,6 +139,8 @@ static void sleep_after_the_wake(void *arg) {
 }
 
 static void TestAWakeThatLandsBeforeTheSleepIsNotLost(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     CHECK(burrow__note_init(&early));
     early_done = 0;
 
@@ -168,6 +172,8 @@ static void join_the_crowd(void *arg) {
 }
 
 static void TestOneWakeReleasesEverySleeper(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     CHECK(burrow__note_init(&crowd));
     arrived = 0;
     released = 0;
@@ -200,6 +206,8 @@ static void TestOneWakeReleasesEverySleeper(TestingT *t) {
 #define CROWD_ROUNDS 16
 
 static void TestACrowdCanGoToSleepRoundAfterRound(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     CHECK(burrow__note_init(&crowd));
 
     for (uint32_t round = 0; round < CROWD_ROUNDS; round++) {
@@ -239,6 +247,8 @@ static void one_round(void *arg) {
 }
 
 static void TestANoteCanBeClosedAgainAndUsedForTheNextRound(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     CHECK(burrow__note_init(&reused));
     rounds_seen = 0;
 
@@ -287,6 +297,8 @@ static void pong(void *arg) {
 }
 
 static void TestTwoThreadsPassATurnBackAndForth(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     CHECK(burrow__note_init(&to_worker));
     CHECK(burrow__note_init(&to_main));
     turn_counter = 0;
@@ -371,6 +383,8 @@ static bool one_handoff(void) {
 }
 
 static void TestANoteOnAStackCanBeFreedTheMomentTheSleepReturns(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     CHECK(burrow__note_init(&handoff_go));
     burrow__note_clear(&handoff_go);
     handoffs_seen = 0;
@@ -491,6 +505,8 @@ static void wake_after_a_moment(void *arg) {
 }
 
 static void TestAWakeThatArrivesBeforeTheTimeoutWins(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     CHECK(burrow__note_init(&timed));
 
     CHECK(burrow__thread_start(&timed_waker, wake_after_a_moment, NULL, 0));
@@ -525,6 +541,8 @@ static void wake_forever(void *arg) {
 }
 
 static void TestATimeoutAtTheEndOfTheClockIsASleepWithNoEnd(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     CHECK(burrow__note_init(&forever));
 
     CHECK(burrow__thread_start(&forever_waker, wake_forever, NULL, 0));
@@ -563,6 +581,8 @@ static void wait_with_a_deadline(void *arg) {
 }
 
 static void TestOneWakeReleasesEveryTimedSleeperToo(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     CHECK(burrow__note_init(&timed_crowd));
     arrived = 0;
     timed_released = 0;

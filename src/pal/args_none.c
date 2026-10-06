@@ -1,6 +1,6 @@
 /* No command line, for a platform that has nowhere to ask for one.
  *
- * This is wasm, illumos, AIX, a freestanding target, and any system somebody
+ * This is js/wasm, illumos, AIX, a freestanding target, and any system somebody
  * adds to platform.h before adding it to one of the files next to this one.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -12,7 +12,8 @@
 #if !defined(BURROW_OS_LINUX) && !defined(BURROW_OS_WINDOWS) &&                        \
     !defined(BURROW_OS_DARWIN) && !defined(BURROW_OS_FREEBSD) &&                       \
     !defined(BURROW_OS_NETBSD) && !defined(BURROW_OS_OPENBSD) &&                       \
-    !defined(BURROW_OS_DRAGONFLY) && !defined(BURROW_OS_COSMO)
+    !defined(BURROW_OS_DRAGONFLY) && !defined(BURROW_OS_COSMO) &&                      \
+    !defined(BURROW_OS_WASI)
 
 #include "burrow/pal.h"
 

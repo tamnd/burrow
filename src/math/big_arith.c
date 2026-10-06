@@ -22,7 +22,7 @@
  * __builtin_addcll, which clang and gcc 14 have, a run of them becomes a chain
  * of adc or adcs instructions. Without it they are math/bits' portable
  * version, which gives the same answer more slowly. */
-#if defined(__has_builtin) && BURROW_PTR_BITS == 64 && !defined(BURROW__BITS_PORTABLE)
+#if defined(__has_builtin) && BURROW_INT_BITS == 64 && !defined(BURROW__BITS_PORTABLE)
 #if __has_builtin(__builtin_addcll) && __has_builtin(__builtin_subcll)
 #define BIG_CARRY_BUILTINS 1
 #endif
@@ -31,7 +31,7 @@
 #define BIG_CARRY_BUILTINS 0
 #endif
 
-#if BURROW__BITS_INT128 && BURROW_PTR_BITS == 64
+#if BURROW__BITS_INT128 && BURROW_INT_BITS == 64
 #define BIG_WIDE 1
 __extension__ typedef unsigned __int128 BigDWord;
 #else

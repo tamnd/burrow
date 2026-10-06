@@ -76,7 +76,13 @@ static Error xu_type_error(const char *msg, const Type *t) {
 
 BURROW_SENTINEL_ERROR(burrow__xml_err_unmarshal_depth, "exceeded max depth");
 
+/* Go's maxUnmarshalDepth, and the lower one it keeps for wasm, where the
+ * engine's stack runs out first (go.dev/issue/56498). */
+#if defined(BURROW_ARCH_WASM)
+enum { XU_MAX_DEPTH = 5000 };
+#else
 enum { XU_MAX_DEPTH = 10000 };
+#endif
 
 /* ---------------------------------------------------------- UnmarshalError */
 
@@ -447,7 +453,7 @@ static const Type *xu_iface_elem(const Type *t, void *p, void **vp) {
     if (v->vt == NULL)
         return NULL;
     if (t->size > sizeof(Iface))
-        *vp = (Byte *)p + sizeof(void *);
+        *vp = burrow__iface_inline(t, p);
     else
         *vp = v->data;
     return v->vt->self_type;

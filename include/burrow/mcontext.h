@@ -12,15 +12,15 @@
  * about thirty instructions.
  *
  * It is written in assembly because the alternatives are worse. `swapcontext`
- * does not exist on Windows, it makes a `sigprocmask` system call on every
- * switch where it does exist, and musl does not implement it at all. Fibers are
- * Windows only. So each ABI gets its own file and the portable paths are the
- * fallback rather than the plan.
+ * does not exist on Windows, makes a `sigprocmask` system call on every switch
+ * where it does, and musl does not have it. Fibers are Windows only. So each
+ * ABI gets its own file and the portable paths are the fallback.
  *
- * Three backends, and which one you get is decided by the machine:
+ * Four backends, and which one you get is decided by the machine:
  *
  *   amd64 and arm64 on anything but Windows   hand written assembly
  *   Windows                                   Fibers
+ *   WebAssembly                               Binaryen's Asyncify
  *   everything else                           ucontext
  *
  * `-DBURROW_PORTABLE_CONTEXT=1` forces the fallback everywhere it exists, which
@@ -72,6 +72,8 @@ extern "C" {
 #define BURROW_MCONTEXT_ASM 1
 #elif defined(BURROW_OS_WINDOWS)
 #define BURROW_MCONTEXT_FIBERS 1
+#elif defined(BURROW_ARCH_WASM)
+#define BURROW_MCONTEXT_ASYNCIFY 1
 #else
 #define BURROW_MCONTEXT_UCONTEXT 1
 #endif
@@ -161,6 +163,21 @@ struct burrow__MContext {
     /* Whether this context created the fiber, which decides whether tearing it
      * down deletes it or hands the thread back. */
     bool owns_fiber;
+#elif defined(BURROW_MCONTEXT_ASYNCIFY)
+    /* The value of __stack_pointer when this context was switched away from,
+     * or for one that has never run, the top of its stack. */
+    void *sp;
+    /* Where Asyncify writes the locals of every frame on the way out and reads
+     * them back on the way in. The first word is the next free byte, the second
+     * is the end, and the space starts after them, which is the layout the
+     * rewritten module expects. */
+    void **unwind;
+    /* What burrow__mcontext_run calls to start this context or to rewind it,
+     * which has to be the function that was at the bottom of its stack. */
+    void (*bottom)(void *);
+    void *bottom_arg;
+    /* Whether it has never run, is running, or is switched away from. */
+    unsigned char state;
 #else
     _Alignas(16) unsigned char storage[BURROW_MCONTEXT_STORAGE];
 #endif
@@ -315,6 +332,35 @@ static inline void burrow__mcontext_switch(burrow__MContext *from,
     burrow__mcontext_switch_raw(from, to);
     burrow__mcontext_enter(from);
 }
+
+#if defined(BURROW_MCONTEXT_ASYNCIFY)
+/* Runs fn(arg) with `self` as the context of the stack it runs on, and returns
+ * when fn does.
+ *
+ * WebAssembly's call stack belongs to the engine and no instruction can read it
+ * or point it anywhere else, so there is nothing to save and nothing to load.
+ * Asyncify gets round that by rewriting the module after it is linked: a switch
+ * returns from every function between it and the bottom of the stack, writing
+ * each one's locals to a buffer as it goes, and resuming calls them all again
+ * and reads the locals back. What C keeps in memory, anything whose address was
+ * taken, lives on a second stack that the module manages itself through a
+ * global called __stack_pointer, and that one is switched the ordinary way. The
+ * cost is that something has to sit below every context to catch the returns,
+ * which is this, and that the rewriting has to happen, which the Makefile does
+ * with wasm-opt.
+ *
+ * Only here with Asyncify, where a switch works by returning all the way down to
+ * this and calling the next context's bottom function, so every switch has to
+ * happen somewhere above one of these. A thread that is going to run goroutines
+ * calls fn through this rather than directly, and burrow__mcontext_attach on
+ * `self` inside fn is what it would have been anywhere else. Attaching any other
+ * context fails.
+ *
+ * One at a time: WebAssembly here has one thread, and a second call from inside
+ * the first throws. The wasm-opt step in the Makefile names this function as
+ * the one it must not rewrite, so it must not be inlined either. */
+void burrow__mcontext_run(burrow__MContext *self, void (*fn)(void *), void *arg);
+#endif
 
 /* The other end of every trampoline. Runs entry, then goes to link.
  *

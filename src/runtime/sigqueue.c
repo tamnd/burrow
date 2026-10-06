@@ -172,6 +172,13 @@ void burrow__signal_wait_until_idle(void) {
     if (burrow__atomic_load_acquire_u32(&sigq.inuse) != 2)
         return;
 
+#if defined(BURROW_OS_WASI)
+    /* os/signal starts no reader on wasip1, because no signal ever arrives
+     * there, so the state never gets to RECEIVING and the loop below would
+     * give way for ever. With nothing ever sent there is nothing to drain. */
+    return;
+#endif
+
     while (burrow__atomic_load_u32(&sigq.delivering) != 0)
         sigq_yield();
     while (burrow__atomic_load_u32(&sigq.state) != SIGQ_RECEIVING)

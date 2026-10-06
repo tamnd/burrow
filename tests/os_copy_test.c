@@ -109,8 +109,9 @@ static void TestCopyFS(TestingT *t) {
     CHECK_S(read_file(t, join(dst, "dir/nothing")), S(""));
     OsFileInfo fi = os_stat(a, join(dst, "dir/empty"), &e);
     CHECK(BURROW_OK(e) && fi.vt->is_dir(fi.data));
-#if !defined(BURROW_OS_WINDOWS)
-    /* 0666 | mode&0777, so the execute bits come across. */
+#if !defined(BURROW_OS_WINDOWS) && !defined(BURROW_OS_WASI)
+    /* 0666 | mode&0777, so the execute bits come across. wasip1 has no mode
+     * bits to keep. */
     fi = os_stat(a, join(dst, "dir/run.sh"), &e);
     CHECK(BURROW_OK(e) && (fi.vt->mode(fi.data) & 0100) != 0);
     fi = os_stat(a, join(dst, "hello.txt"), &e);

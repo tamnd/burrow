@@ -26,7 +26,7 @@
 
 #include "burrow/platform.h"
 
-#if !defined(BURROW_OS_WINDOWS)
+#if !defined(BURROW_OS_WINDOWS) && !defined(BURROW_OS_WASI)
 
 #include "burrow/atomic.h"
 #include "burrow/pal.h"
@@ -719,4 +719,4 @@ void pal_signal_note_sleep(void) {
     }
 }
 
-#endif /* !BURROW_OS_WINDOWS */
+#endif /* !BURROW_OS_WINDOWS && !BURROW_OS_WASI */

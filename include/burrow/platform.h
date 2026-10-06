@@ -187,6 +187,16 @@
     "burrow does not know this architecture. Add it to platform.h, which is the only place that has to change."
 #endif
 
+/* How wide Go's int and uint are. The pointer width everywhere but WebAssembly,
+ * where Go's int is 64 bits and an address into the module's memory is 32, and
+ * where C's pointers are the 32 bit ones. Int follows Go and void * follows the
+ * machine. */
+#if defined(BURROW_ARCH_WASM)
+#define BURROW_INT_BITS 64
+#else
+#define BURROW_INT_BITS BURROW_PTR_BITS
+#endif
+
 /* ------------------------------------------------------------- byte order */
 
 #if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__)

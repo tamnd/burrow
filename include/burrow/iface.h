@@ -98,6 +98,16 @@ typedef struct Iface {
     void *data;
 } Iface;
 
+/* Where an interface bigger than an Iface keeps the value it holds inline:
+ * after the vtable, at the first offset the interface's alignment allows. That
+ * is past some padding where a pointer is 4 bytes, since Color's value is
+ * aligned to 8. */
+BURROW_BORROWS(ret, p) static inline void *burrow__iface_inline(const Type *t,
+                                                                const void *p) {
+    size_t align = t->align;
+    return (Byte *)(uintptr_t)p + (sizeof(void *) + align - 1) / align * align;
+}
+
 /* Convert any interface value to an Iface. The cast on the vtable is the one
  * described above and is why self_type has to be first. */
 #define BURROW_IFACE(v) ((Iface){(const IfaceVT *)(v).vt, (void *)(v).data})

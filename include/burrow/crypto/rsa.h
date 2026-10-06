@@ -6,7 +6,8 @@
  *     Alloc *a = arena_allocator(&ar);
  *     Error err = BURROW_NO_ERROR;
  *     RsaPrivateKey *k = rsa_generate_key(a, (IoReader){0}, 2048, &err);
- *     Slice sig = rsa_sign_pss(a, (IoReader){0}, k, CRYPTO_SHA256, digest, NULL, &err);
+ *     Slice sig = rsa_sign_pss(a, crypto_rand_reader, k, CRYPTO_SHA256, digest, NULL,
+ *                              &err);
  *     Error verr = rsa_verify_pss(&k->public_key, CRYPTO_SHA256, digest, sig, NULL);
  *     arena_free(&ar);
  *

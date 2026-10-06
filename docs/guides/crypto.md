@@ -1079,7 +1079,8 @@ if (BURROW_FAILED(err))
 // Both schemes sign the hash of the message, not the message itself.
 Sha256Sum256Ret sum = sha256_sum256(text("burrow v0.3.0"));
 Slice hashed = slice_from(sum.a, sizeof sum.a, sizeof sum.a, TYPE_BYTE);
-Slice sig = rsa_sign_pss(a, (IoReader){0}, priv, CRYPTO_SHA256, hashed, NULL, &err);
+Slice sig =
+    rsa_sign_pss(a, crypto_rand_reader, priv, CRYPTO_SHA256, hashed, NULL, &err);
 if (BURROW_FAILED(err))
     return;
 printf("%d\n", (int)sig.len);
@@ -1099,7 +1100,7 @@ print_error(
 rsa_private_key_free(priv, a);
 ```
 
-A key is a struct of `BigInt` pointers, as in Go, and everything in it comes from the allocator it was made with. `rsa_private_key_free` gives back a key that `rsa_generate_key` made, and an arena does the same for a whole batch. An `IoReader` with nothing in it means the system's generator.
+A key is a struct of `BigInt` pointers, as in Go, and everything in it comes from the allocator it was made with. `rsa_private_key_free` gives back a key that `rsa_generate_key` made, and an arena does the same for a whole batch. `rsa_generate_key` takes an `IoReader` with nothing in it to mean the system's generator. Signing with PSS and encrypting with OAEP read the reader they are given, as Go's do, so they need a real one, and `crypto_rand_reader` is the one to pass. Given an empty reader they panic, the way Go does with nil.
 
 For encryption, OAEP is the scheme to use, and PKCS #1 v1.5 encryption is only there for old protocols. RSA can only encrypt a message shorter than its key, so in practice it carries a key for a symmetric cipher. The label is bound into the ciphertext, and decrypting with a different one fails:
 
@@ -1111,7 +1112,7 @@ if (BURROW_FAILED(err))
     return;
 
 // The label is not secret, but decrypting needs the same one.
-Slice ct = rsa_encrypt_oaep(a, sha256_new(a), (IoReader){0}, &priv->public_key,
+Slice ct = rsa_encrypt_oaep(a, sha256_new(a), crypto_rand_reader, &priv->public_key,
                             text("a session key"), text("orders"), &err);
 if (BURROW_FAILED(err))
     return;
@@ -1140,7 +1141,7 @@ if (BURROW_FAILED(err))
     return;
 // OAEP with SHA-256 fits 128 - 2*32 - 2 = 62 bytes in a 1024 bit key.
 Byte big[63] = {0};
-rsa_encrypt_oaep(a, sha256_new(a), (IoReader){0}, &priv->public_key,
+rsa_encrypt_oaep(a, sha256_new(a), crypto_rand_reader, &priv->public_key,
                  slice_from(big, sizeof big, sizeof big, TYPE_BYTE), (Slice){0},
                  &err);
 print_error(err);

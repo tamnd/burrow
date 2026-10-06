@@ -182,7 +182,7 @@ PNG_FORMAT(png_err_not_png, "not a PNG file");
 PNG_UNSUPPORTED(png_err_compression, "compression method");
 PNG_UNSUPPORTED(png_err_filter_method, "filter method");
 PNG_UNSUPPORTED(png_err_overflow, "dimension overflow");
-#if BURROW_PTR_BITS != 64
+#if BURROW_INT_BITS != 64
 PNG_UNSUPPORTED(png_err_idat_overflow, "IDAT chunk length overflow");
 #endif
 
@@ -606,7 +606,7 @@ static Int png_idat_read(void *self, Slice p, Error *err) {
         d->crc = 0;
         png_crc_write(d, d->tmp + 4, 4);
     }
-#if BURROW_PTR_BITS != 64
+#if BURROW_INT_BITS != 64
     /* Go's int(d.idatLength) < 0, which only a 32-bit int can hit. */
     if (d->idat_length > (uint32_t)BURROW_INT_MAX) {
         BURROW_OUT(err, png_err_idat_overflow);

@@ -22,7 +22,7 @@
 #define M64 UINT64_MAX
 #define M32 UINT32_MAX
 
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
 #define MU ((Uint)UINT64_MAX)
 #else
 #define MU ((Uint)UINT32_MAX)
@@ -83,13 +83,13 @@ static void TestLeadingZeros(TestingT *t) {
             if (x <= 0xffffffff) {
                 Int want = x == 0 ? 32 : nlz - k + 24;
                 CHECK_INT_EQ(bits_leading_zeros32((uint32_t)x), want);
-#if BURROW_PTR_BITS == 32
+#if BURROW_INT_BITS == 32
                 CHECK_INT_EQ(bits_leading_zeros((Uint)x), want);
 #endif
             }
             Int want = x == 0 ? 64 : nlz - k + 56;
             CHECK_INT_EQ(bits_leading_zeros64(x), want);
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
             CHECK_INT_EQ(bits_leading_zeros((Uint)x), want);
 #endif
         }
@@ -108,12 +108,12 @@ static void TestTrailingZeros(TestingT *t) {
                 CHECK_INT_EQ(bits_trailing_zeros16((uint16_t)x), x == 0 ? 16 : want);
             if (x <= 0xffffffff) {
                 CHECK_INT_EQ(bits_trailing_zeros32((uint32_t)x), x == 0 ? 32 : want);
-#if BURROW_PTR_BITS == 32
+#if BURROW_INT_BITS == 32
                 CHECK_INT_EQ(bits_trailing_zeros((Uint)x), x == 0 ? 32 : want);
 #endif
             }
             CHECK_INT_EQ(bits_trailing_zeros64(x), x == 0 ? 64 : want);
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
             CHECK_INT_EQ(bits_trailing_zeros((Uint)x), x == 0 ? 64 : want);
 #endif
         }
@@ -127,12 +127,12 @@ static void check_ones_count(TestingT *t, uint64_t x, Int want) {
         CHECK_INT_EQ(bits_ones_count16((uint16_t)x), want);
     if (x <= 0xffffffff) {
         CHECK_INT_EQ(bits_ones_count32((uint32_t)x), want);
-#if BURROW_PTR_BITS == 32
+#if BURROW_INT_BITS == 32
         CHECK_INT_EQ(bits_ones_count((Uint)x), want);
 #endif
     }
     CHECK_INT_EQ(bits_ones_count64(x), want);
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
     CHECK_INT_EQ(bits_ones_count((Uint)x), want);
 #endif
 }
@@ -189,7 +189,7 @@ static void check_reverse(TestingT *t, uint64_t x64, uint64_t want64) {
     CHECK_INT_EQ(bits_reverse16((uint16_t)x64), (uint16_t)(want64 >> 48));
     CHECK_INT_EQ(bits_reverse32((uint32_t)x64), (uint32_t)(want64 >> 32));
     CHECK(bits_reverse64(x64) == want64);
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
     CHECK(bits_reverse((Uint)x64) == want64);
 #else
     CHECK(bits_reverse((Uint)x64) == (Uint)(want64 >> 32));
@@ -232,7 +232,7 @@ static void check_reverse_bytes(TestingT *t, uint64_t x64, uint64_t want64) {
     CHECK_INT_EQ(bits_reverse_bytes16((uint16_t)x64), (uint16_t)(want64 >> 48));
     CHECK_INT_EQ(bits_reverse_bytes32((uint32_t)x64), (uint32_t)(want64 >> 32));
     CHECK(bits_reverse_bytes64(x64) == want64);
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
     CHECK(bits_reverse_bytes((Uint)x64) == want64);
 #else
     CHECK(bits_reverse_bytes((Uint)x64) == (Uint)(want64 >> 32));

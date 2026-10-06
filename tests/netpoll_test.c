@@ -763,6 +763,8 @@ static void sleep_in_the_poller(void *env) {
 }
 
 static void TestTheLastThreadSleepsInsideThePoller(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     shared = (Pipe){-1, -1};
     shared_pd = NULL;
     outsider_started = false;
@@ -788,6 +790,8 @@ static void TestTheLastThreadSleepsInsideThePoller(TestingT *t) {
 /* Again, because the interesting bugs in this area are in teardown and they
  * only show up on the run after the one that made them. */
 static void TestTheLastThreadSleepsInsideThePollerAgain(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     shared = (Pipe){-1, -1};
     shared_pd = NULL;
     outsider_started = false;

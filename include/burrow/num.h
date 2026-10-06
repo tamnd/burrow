@@ -256,7 +256,7 @@ BURROW__NUM_UNSIGNED(uint64, uint64_t, uint64_t, UINT64_MAX, 64,
  * are still their own type, the same way they are in Go, so int_add is a real
  * function rather than a spelling of int64_add that stops working on a 32 bit
  * build. The compiler inlines both to the same instruction. */
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
 BURROW__NUM_SIGNED(int, Int, Uint, Uint, BURROW_INT_MIN, BURROW_INT_MAX, 64,
                    9223372036854775808.0, -9223372036854775808.0);
 BURROW__NUM_UNSIGNED(uint, Uint, Uint, UINT64_MAX, 64, 18446744073709551616.0);

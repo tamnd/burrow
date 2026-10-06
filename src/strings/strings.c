@@ -20,6 +20,7 @@
 #include "burrow/func.h"
 #include "burrow/mem.h"
 #include "burrow/panic.h"
+#include "burrow/runtime.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
 #include "burrow/unicode.h"
@@ -47,8 +48,12 @@ static Rune decode_rune(Str s, Int *size) {
     return utf8_decode_rune_in_string(s, size);
 }
 
-/* A fresh buffer of n bytes from a, or NULL. */
+/* A fresh buffer of n bytes from a, or NULL. On wasm an Int is wider than a
+ * size_t, and a length that doesn't fit in one panics the way Go's
+ * bytealg.MakeNoZero does. */
 static Byte *alloc_bytes(Alloc *a, Int n) {
+    if ((uint64_t)n > SIZE_MAX)
+        runtime_panic(BURROW_S("runtime error: makeslice: len out of range"));
     return (Byte *)mem_alloc_nozero(a, (size_t)n, 1);
 }
 

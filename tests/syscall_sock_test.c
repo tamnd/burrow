@@ -48,10 +48,14 @@ static SyscallErrno errno_of(Error err) {
 }
 
 /* Cosmopolitan has no way to make a raw system call, so everything that goes
- * through one gives ENOSYS there, and the socket calls all do. */
+ * through one gives ENOSYS there, and the socket calls all do. wasip1 has no
+ * socket, socketpair or setsockopt at all, and Go only runs these tests on
+ * unix, which wasip1 is not. */
 static void skip_without_raw_calls(TestingT *t) {
 #if defined(BURROW_OS_COSMO)
     testing_t_skip_v(t, "Cosmopolitan has no raw system calls");
+#elif defined(BURROW_OS_WASI)
+    testing_t_skip_v(t, "wasip1 has no sockets to make");
 #else
     (void)t;
 #endif

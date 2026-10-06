@@ -695,11 +695,14 @@ static RsaFipsKey *rsa_fips_new_private_key(Alloc *a, Alloc *tmp, Slice N, Int e
                                             Slice d, Slice P, Slice Q, Error *err) {
     RsaFipsKey *k = rsa_fips_key_new(a);
     k->e = e;
-    if ((k->n = bigmod_new_modulus(k->a, N, err)) == NULL)
+    k->n = bigmod_new_modulus(k->a, N, err);
+    if (k->n == NULL)
         goto fail;
-    if ((k->p = bigmod_new_modulus(k->a, P, err)) == NULL)
+    k->p = bigmod_new_modulus(k->a, P, err);
+    if (k->p == NULL)
         goto fail;
-    if ((k->q = bigmod_new_modulus(k->a, Q, err)) == NULL)
+    k->q = bigmod_new_modulus(k->a, Q, err);
+    if (k->q == NULL)
         goto fail;
     if (bigmod_nat_set_bytes(&k->d, d, k->n, err) == NULL)
         goto fail;
@@ -722,11 +725,14 @@ rsa_fips_new_private_key_with_precomputation(Alloc *a, Alloc *tmp, Slice N, Int 
                                              Slice dQ, Slice qInv, Error *err) {
     RsaFipsKey *k = rsa_fips_key_new(a);
     k->e = e;
-    if ((k->n = bigmod_new_modulus(k->a, N, err)) == NULL)
+    k->n = bigmod_new_modulus(k->a, N, err);
+    if (k->n == NULL)
         goto fail;
-    if ((k->p = bigmod_new_modulus(k->a, P, err)) == NULL)
+    k->p = bigmod_new_modulus(k->a, P, err);
+    if (k->p == NULL)
         goto fail;
-    if ((k->q = bigmod_new_modulus(k->a, Q, err)) == NULL)
+    k->q = bigmod_new_modulus(k->a, Q, err);
+    if (k->q == NULL)
         goto fail;
     if (bigmod_nat_set_bytes(&k->d, d, k->n, err) == NULL)
         goto fail;
@@ -754,7 +760,8 @@ static RsaFipsKey *rsa_fips_new_private_key_without_crt(Alloc *a, Alloc *tmp, Sl
                                                         Int e, Slice d, Error *err) {
     RsaFipsKey *k = rsa_fips_key_new(a);
     k->e = e;
-    if ((k->n = bigmod_new_modulus(k->a, N, err)) == NULL)
+    k->n = bigmod_new_modulus(k->a, N, err);
+    if (k->n == NULL)
         goto fail;
     if (bigmod_nat_set_bytes(&k->d, d, k->n, err) == NULL)
         goto fail;
@@ -1581,9 +1588,11 @@ static RsaFipsKey *rsa_fips_generate_key(Alloc *a, IoReader rand, Int bits,
             break;
 
         k = rsa_fips_key_new(a);
-        if ((k->p = bigmod_new_modulus(k->a, p, err)) == NULL)
+        k->p = bigmod_new_modulus(k->a, p, err);
+        if (k->p == NULL)
             goto fail;
-        if ((k->q = bigmod_new_modulus(k->a, q, err)) == NULL)
+        k->q = bigmod_new_modulus(k->a, q, err);
+        if (k->q == NULL)
             goto fail;
 
         BigmodNat *qp = bigmod_nat_expand_for(bigmod_modulus_nat(k->q, s.a), k->p);
@@ -1592,7 +1601,8 @@ static RsaFipsKey *rsa_fips_generate_key(Alloc *a, IoReader rand, Int bits,
             goto fail;
         }
 
-        if ((k->n = bigmod_new_modulus_product(k->a, p, q, err)) == NULL)
+        k->n = bigmod_new_modulus_product(k->a, p, q, err);
+        if (k->n == NULL)
             goto fail;
         if (bigmod_modulus_bit_len(k->n) != bits) {
             rsa_set_error(err, "rsa: internal error: modulus size incorrect");
@@ -2634,8 +2644,9 @@ Slice rsa_private_key_decrypt(const RsaPrivateKey *priv, Alloc *a, IoReader rand
             rsa_nil();
         Error e = BURROW_NO_ERROR;
         (void)io_read_full(rand, plaintext, &e);
-        if (BURROW_FAILED(e) || BURROW_FAILED(e = rsa_decrypt_pkcs1_v15_session_key(
-                                                  rand, priv, ciphertext, plaintext))) {
+        if (BURROW_OK(e))
+            e = rsa_decrypt_pkcs1_v15_session_key(rand, priv, ciphertext, plaintext);
+        if (BURROW_FAILED(e)) {
             rsa_slice_free(a, plaintext);
             BURROW_OUT(err, e);
             return slice_nil(TYPE_BYTE);

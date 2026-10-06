@@ -41,4 +41,8 @@ int main(void) {
 }
 
 /* Output:
+303031143012060355040a130b4578616d706c65204c7464311830160603550403130f7777772e6578616d706c652e636f6d
+CN=www.example.com,O=Example Ltd
+www.example.com
+2 attributes
 */

@@ -227,3 +227,20 @@ syscall: func GetsockoptUcred: returns the Ucred by value
 syscall: func LsfJump: returns the SockFilter by value
 syscall: func LsfStmt: returns the SockFilter by value
 syscall: func ParseUnixCredentials: returns the Ucred by value
+
+# include/burrow/crypto/ed25519.h: Go's Public hands back a PublicKey inside a
+# crypto.PublicKey. An Any here points at its value, and a fresh key has nowhere
+# to live that the caller frees, so ed25519_private_key_public returns the key
+# from the allocator and ed25519_private_key_signer gives the CryptoPublicKey.
+crypto/ed25519: method (PrivateKey) Public: returns the key itself, the CryptoSigner gives the interface value
+
+# include/burrow/crypto/ecdh.h: Go's Curve is an interface with an unexported
+# method, so the four curves crypto/ecdh makes are the only ones there are. A
+# curve here is a pointer to one of four constant structs, which can be compared
+# the way Go programs compare Curve values.
+crypto/ecdh: func P256: returns a pointer to one of the four curves, as Curve cannot be implemented outside the package
+crypto/ecdh: func P384: returns a pointer to one of the four curves, as Curve cannot be implemented outside the package
+crypto/ecdh: func P521: returns a pointer to one of the four curves, as Curve cannot be implemented outside the package
+crypto/ecdh: func X25519: returns a pointer to one of the four curves, as Curve cannot be implemented outside the package
+crypto/ecdh: method (*PrivateKey) Curve: returns a pointer to one of the four curves, as Curve cannot be implemented outside the package
+crypto/ecdh: method (*PublicKey) Curve: returns a pointer to one of the four curves, as Curve cannot be implemented outside the package

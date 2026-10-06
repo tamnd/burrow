@@ -170,15 +170,20 @@ static void crand_maybe_read_byte(IoReader r) {
     (void)r.vt->read(r.data, slice_from(buf, 1, 1, TYPE_BYTE), NULL);
 }
 
-/* crypto/internal/rand.CustomReader: the system generator, unless GODEBUG has
- * cryptocustomrand=1. Go also passes over its testing reader here, which
- * testing/cryptotest sets and burrow does not have. */
-static IoReader crand_custom_reader(IoReader r) {
+/* Go also passes over its testing reader here, which testing/cryptotest sets
+ * and burrow does not have. */
+IoReader burrow__crypto_rand_custom_reader(IoReader r) {
     if ((crand_debug_load() & CRAND_DEBUG_CUSTOM) != 0) {
         if (!burrow__crypto_rand_is_default_reader(r))
             crand_maybe_read_byte(r);
         return r;
     }
+    return crand_default_reader;
+}
+
+IoReader burrow__crypto_rand_nil_reader(void) {
+    if ((crand_debug_load() & CRAND_DEBUG_CUSTOM) != 0)
+        return crypto_rand_reader;
     return crand_default_reader;
 }
 
@@ -201,7 +206,7 @@ BigInt *crypto_rand_prime(Alloc *a, IoReader rand, Int bits, Error *err) {
         return NULL;
     }
 
-    rand = crand_custom_reader(rand);
+    rand = burrow__crypto_rand_custom_reader(rand);
 
     unsigned b = (unsigned)(bits % 8);
     if (b == 0)

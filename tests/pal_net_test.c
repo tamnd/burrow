@@ -23,6 +23,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(BURROW_OS_WINDOWS)
+#include <winsock2.h>
+#endif
+
 #define WAIT_TRIES 10000
 #define WAIT_NS 1000000
 
@@ -112,6 +116,33 @@ static int64_t read_full(int64_t fd, char *buf, int64_t n, PalErrno *err) {
 
 /* What became of a non blocking connect, once it is settled: PAL_OK when it
  * is connected, or the reason it is not. */
+#if defined(BURROW_OS_WINDOWS)
+/* Windows answers getpeername while a connect is still going, which is a long
+ * time for one that will be refused, since it tries the SYN again first. So
+ * this waits in select, which puts a failed connect in the except set and a
+ * finished one in the write set. */
+static PalErrno connect_result(int64_t fd) {
+    fd_set w;
+    fd_set x;
+    FD_ZERO(&w);
+    FD_ZERO(&x);
+    FD_SET((SOCKET)fd, &w);
+    FD_SET((SOCKET)fd, &x);
+    struct timeval tv = {10, 0};
+    int n = select(0, NULL, &w, &x, &tv);
+    if (n == 0)
+        return PAL_ETIMEDOUT;
+    if (n < 0)
+        return PAL_EIO;
+    PalErrno err;
+    int64_t v = 0;
+    if (!pal_getsockopt(fd, PAL_SO_ERROR, &v, &err))
+        return err;
+    if (v != PAL_OK)
+        return (PalErrno)v;
+    return FD_ISSET((SOCKET)fd, &w) ? PAL_OK : PAL_EIO;
+}
+#else
 static PalErrno connect_result(int64_t fd) {
     for (int i = 0; i < WAIT_TRIES; i++) {
         PalSockAddr peer;
@@ -127,6 +158,7 @@ static PalErrno connect_result(int64_t fd) {
     }
     return PAL_ETIMEDOUT;
 }
+#endif
 
 /* Dials addr from a new socket of the same family and waits until it is
  * connected. */

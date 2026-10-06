@@ -245,8 +245,8 @@ static void TestClosingAListenerRemovesItsFileUnlessToldNot(TestingT *t) {
     CHECK(exists(addr.name));
 
     /* A second close is an error and does not remove the file either. */
-    char buf[200];
-    char want[200];
+    char buf[512];
+    char want[512];
     char path[160];
     snprintf(want, sizeof want, "close unix %s: use of closed network connection",
              c_text(addr.name, path, sizeof path));
@@ -319,8 +319,8 @@ static void TestAReadPastItsDeadlineTimesOut(TestingT *t) {
         CHECK_INT_EQ(net_unix_conn_read(s, bytes_of(buf, 8), &e), 0);
         CHECK(errors_is(e, os_err_deadline_exceeded));
         CHECK(net_error_timeout(e));
-        char want[200];
-        char got[200];
+        char want[512];
+        char got[512];
         char path[160];
         snprintf(want, sizeof want, "read unix %s->" UNNAMED ": i/o timeout",
                  c_text(addr.name, path, sizeof path));
@@ -418,8 +418,8 @@ static void TestAnUnboundSenderHasNoName(TestingT *t) {
 #endif
 
         /* A dialed socket has its peer and takes no WriteTo. */
-        char got[200];
-        char want[200];
+        char got[512];
+        char want[512];
         char path[160];
         c_text(ra.name, path, sizeof path);
         CHECK_INT_EQ(net_unix_conn_write_to_unix(c, bytes_of(ping, 4), &ra, &e), 0);
@@ -617,8 +617,8 @@ static void TestTheWriteToErrorsReadTheWayGosDo(TestingT *t) {
     }
     char path[160];
     c_text(ra.name, path, sizeof path);
-    char got[300];
-    char want[300];
+    char got[512];
+    char want[512];
     char p[] = "p";
 
     CHECK_INT_EQ(net_unix_conn_write_to_unix(r, bytes_of(p, 1), NULL, &e), 0);

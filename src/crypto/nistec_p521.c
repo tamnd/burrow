@@ -29,6 +29,7 @@
 #include <stdint.h>
 #include <string.h>
 
+/* NOLINTNEXTLINE(misc-redundant-expression) */
 _Static_assert(FIAT_P521_LIMBS == NISTEC_P521_LIMBS,
                "nistec.h has the wrong number of words for a P-521 element");
 _Static_assert(sizeof(fiat_p521_limb) == sizeof(NistecLimb),
@@ -636,7 +637,7 @@ static SyncOnce p521_generator_table_once;
 
 static void p521_generator_table_init(void *env) {
     (void)env;
-    NistecP521Point base;
+    NistecP521Point base = {0};
     p521_point_set_generator(&base);
     for (int i = 0; i < p521_element_length * 2; i++) {
         p521_generator_table[i].p[0] = base;

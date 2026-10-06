@@ -29,6 +29,7 @@
 #include <stdint.h>
 #include <string.h>
 
+/* NOLINTNEXTLINE(misc-redundant-expression) */
 _Static_assert(FIAT_P384_LIMBS == NISTEC_P384_LIMBS,
                "nistec.h has the wrong number of words for a P-384 element");
 _Static_assert(sizeof(fiat_p384_limb) == sizeof(NistecLimb),

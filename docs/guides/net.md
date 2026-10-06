@@ -120,6 +120,17 @@ net_parse_cidr(a, BURROW_S("10.1.2.3/33"), NULL, &err);
 fmt_printf_v("%v\n", err);
 ```
 
+That prints:
+
+```
+16 4
+10.1.2.3
+10.1.0.0/20
+1 0
+2001:db8::
+invalid CIDR address: 10.1.2.3/33
+```
+
 `net_parse_ip` always gives 16 bytes, and `net_ip_to4` gives the 4-byte view of an IPv4 address, or the nil slice for one that is not. A nil `NetIP` is what Go's `nil` is, and its string is `<nil>`. Use `net_ip_equal` to compare two addresses, since an IPv4 address in 4 bytes and the same one in 16 are equal. The error from `net_parse_cidr` is a `NetParseError`, which `errors_as` finds with `TYPE_NET_PARSE_ERROR`.
 
 `net_split_host_port` and `net_join_host_port` go between `host:port` strings and their parts, with the brackets an IPv6 literal needs:
@@ -135,6 +146,15 @@ print(net_join_host_port(a, BURROW_S("example.com"), BURROW_S("https")));
 
 net_split_host_port(BURROW_S("example.com"), &port, &err);
 fmt_printf_v("%v\n", err);
+```
+
+That prints:
+
+```
+fe80::1%eth0 8080
+[fe80::1%eth0]:443
+example.com:https
+address example.com: missing port in address
 ```
 
 The host and port from `net_split_host_port` point into the string you pass, so nothing is allocated. A malformed string is a `NetAddrError` with Go's message. New code that does not have to match an older API is better off with `burrow/net/netip.h`, which never allocates.

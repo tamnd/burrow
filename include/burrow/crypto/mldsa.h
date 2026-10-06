@@ -1,11 +1,11 @@
 /* crypto/mldsa, the quantum-resistant signature scheme ML-DSA of NIST FIPS 204,
  * once called Dilithium.
  *
- *     MldsaPrivateKey *sk = mldsa_generate_key(mldsa_mldsa44(), a, &err);
+ *     MldsaPrivateKey *sk = mldsa_generate_key(a, mldsa_mldsa44(), &err);
  *     Slice sig = mldsa_private_key_sign_deterministic(sk, a, msg,
  *                                                      (CryptoSignerOpts){0}, &err);
  *
- *     MldsaPublicKey *pk = mldsa_new_public_key(mldsa_mldsa44(), a, pk_bytes, &err);
+ *     MldsaPublicKey *pk = mldsa_new_public_key(a, mldsa_mldsa44(), pk_bytes, &err);
  *     Error verr = mldsa_verify(pk, msg, sig, NULL);
  *
  * Most programs want ML-DSA-44. ML-DSA-65 and ML-DSA-87 are the same with
@@ -51,12 +51,12 @@ extern "C" {
 
 /* MLDSA44PublicKeySize and the rest: the sizes of public keys and signatures
  * for each parameter set. */
-#define MLDSA44_PUBLIC_KEY_SIZE 1312
-#define MLDSA65_PUBLIC_KEY_SIZE 1952
-#define MLDSA87_PUBLIC_KEY_SIZE 2592
-#define MLDSA44_SIGNATURE_SIZE 2420
-#define MLDSA65_SIGNATURE_SIZE 3309
-#define MLDSA87_SIGNATURE_SIZE 4627
+#define MLDSA_MLDSA44_PUBLIC_KEY_SIZE 1312
+#define MLDSA_MLDSA65_PUBLIC_KEY_SIZE 1952
+#define MLDSA_MLDSA87_PUBLIC_KEY_SIZE 2592
+#define MLDSA_MLDSA44_SIGNATURE_SIZE 2420
+#define MLDSA_MLDSA65_SIGNATURE_SIZE 3309
+#define MLDSA_MLDSA87_SIGNATURE_SIZE 4627
 
 /* Parameters: one of the parameter sets of FIPS 204. Go's is a small value
  * that compares equal to itself. Here each set is one static object and
@@ -114,13 +114,13 @@ mldsa_options_as_signer_opts(const MldsaOptions *opts);
 /* GenerateKey: a new private key for params from the system's generator, from
  * a. A params that is not one of the three sets is "mldsa: invalid
  * parameters". Keep the key secret. */
-BURROW_OWNS(ret) MldsaPrivateKey *mldsa_generate_key(const MldsaParameters *params,
-                                                     Alloc *a, Error *err);
+BURROW_OWNS(ret) MldsaPrivateKey *
+mldsa_generate_key(Alloc *a, const MldsaParameters *params, Error *err);
 
 /* NewPrivateKey: the key for params with the given seed, from a. A seed that
  * is not MLDSA_PRIVATE_KEY_SIZE bytes is "mldsa: invalid seed length". */
 BURROW_OWNS(ret) MldsaPrivateKey *
-mldsa_new_private_key(const MldsaParameters *params, Alloc *a, Slice seed, Error *err);
+mldsa_new_private_key(Alloc *a, const MldsaParameters *params, Slice seed, Error *err);
 
 /* Frees a key from mldsa_generate_key or mldsa_new_private_key, clearing it
  * first. NULL is fine. */
@@ -172,9 +172,9 @@ mldsa_private_key_signer(const MldsaPrivateKey *sk);
 /* NewPublicKey: the key for params in its encoded form, from a. A params that
  * is not one of the sets is "mldsa: invalid parameters", and an encoding of the
  * wrong length is "mldsa: invalid public key length". */
-BURROW_OWNS(ret) MldsaPublicKey *mldsa_new_public_key(const MldsaParameters *params,
-                                                      Alloc *a, Slice encoding,
-                                                      Error *err);
+BURROW_OWNS(ret) MldsaPublicKey *mldsa_new_public_key(Alloc *a,
+                                                      const MldsaParameters *params,
+                                                      Slice encoding, Error *err);
 
 /* Frees a key from mldsa_new_public_key. NULL is fine, and so is the public
  * key of a private key, which is left alone. */

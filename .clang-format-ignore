@@ -47,3 +47,4 @@ tests/chacha20poly1305_test_gen.h
 tests/hpke_test_gen.h
 tests/rsa_test_gen.h
 tests/x509_test_gen.h
+tests/x509_parse_test_gen.h

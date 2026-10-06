@@ -1,7 +1,8 @@
 #!/bin/sh
-# Regenerates tests/x509_test_gen.h: the keys, PEM blocks and numbers in Go's
-# crypto/x509 tests that tests/x509_test.c uses, read out of the Go sources so
-# none of them is copied by hand. testingKey's "TESTING KEY" becomes "PRIVATE
+# Regenerates tests/x509_test_gen.h and tests/x509_parse_test_gen.h: the keys,
+# certificates, PEM blocks and numbers in Go's crypto/x509 tests that
+# tests/x509_test.c and tests/x509_parse_test.c use, read out of the Go sources
+# so none of them is copied by hand. testingKey's "TESTING KEY" becomes "PRIVATE
 # KEY" the same as in Go.
 #
 # The Go on PATH should be the release the port follows. GOROOT can be set to
@@ -177,6 +178,173 @@ with open(out, "w") as f:
         " * in the LICENSE file. */\n\n"
         "#ifndef BURROW_TESTS_X509_TEST_GEN_H\n#define BURROW_TESTS_X509_TEST_GEN_H\n\n"
         '#include "burrow/crypto/x509.h"\n\n#include <stdbool.h>\n\n'
+    )
+    f.write("\n".join(defs))
+    f.write("\n#endif\n")
+PY
+
+# The certificates, CSRs and CRLs that the parsing tests in parser_test.go and
+# x509_test.go read go to a header of their own for tests/x509_parse_test.c.
+python3 - "$goroot/src/crypto/x509" "$root/tests/x509_parse_test_gen.h" <<'PY'
+import re
+import sys
+
+src, out = sys.argv[1], sys.argv[2]
+
+
+def read(name):
+    with open(f"{src}/{name}") as f:
+        return f.read()
+
+
+parser_test = read("parser_test.go")
+x509_test = read("x509_test.go")
+
+
+def one(pattern, text):
+    m = re.findall(pattern, text, re.S)
+    assert len(m) == 1, (pattern, len(m))
+    return m[0]
+
+
+def func(name, text):
+    return one(rf"\nfunc {name}\(t \*testing.T\) \{{(.*?)\n\}}\n", text)
+
+
+def go_string(name, text):
+    """The value of a top level string, in backquotes or quoted pieces."""
+    m = re.findall(rf"\n(?:var|const) {name} = `(.*?)`", text, re.S)
+    if m:
+        assert len(m) == 1, name
+        return m[0]
+    m = re.findall(rf'\n(?:var|const) {name} = ((?:"[^"\\]*"(?:\s*\+\s*)?)+)', text)
+    assert len(m) == 1, name
+    return "".join(re.findall(r'"([^"]*)"', m[0]))
+
+
+def pem_only(s):
+    """s from its first PEM boundary on, leaving out openssl's text dump."""
+    i = s.index("-----BEGIN")
+    return s[i:].strip() + "\n"
+
+
+def c_str(s, indent="    "):
+    pieces = []
+    lines = s.split("\n")
+    for i, line in enumerate(lines):
+        nl = "\\n" if i < len(lines) - 1 else ""
+        if line == "" and nl == "":
+            continue
+        while len(line) > 64:
+            pieces.append(line[:64])
+            line = line[64:]
+        pieces.append(line + nl)
+    if not pieces:
+        pieces = [""]
+    for p in pieces:
+        assert '"' not in p and "\\" not in p.replace("\\n", "")
+    return "\n".join(f'{indent}"{p}"' for p in pieces)
+
+
+defs = []
+
+
+def define(name, value):
+    assert len(value) <= 4000, name
+    defs.append(f"static const char {name}[] =\n{c_str(value)};\n")
+
+
+def define_parts(name, value):
+    """value cut into pieces short enough for C99, NULL at the end."""
+    parts = [value[i : i + 4000] for i in range(0, len(value), 4000)]
+    body = ",\n".join(c_str(p, "    ") for p in parts)
+    defs.append(f"static const char *const {name}[] = {{\n{body},\n    NULL,\n}};\n")
+
+
+# parser_test.go
+define("policy_pem", go_string("policyPEM", parser_test))
+neg = re.findall(
+    r"(-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)",
+    func("TestParseCertificateNegativeMaxPathLength", parser_test),
+    re.S,
+)
+assert len(neg) == 2
+for i, c in enumerate(neg):
+    define(f"negative_max_path_len_{i}", c + "\n")
+define(
+    "name_types_pem",
+    one(r"(-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)", func("TestParseNameTypes", parser_test))
+    + "\n",
+)
+for name in ["policy_leaf_duplicate", "policy_leaf_invalid"]:
+    define(f"{name}_pem", read(f"testdata/{name}.pem"))
+
+# x509_test.go
+define("cert_bytes", go_string("certBytes", x509_test))
+for go, c in [
+    ("rsaPSSSelfSignedPEM", "rsa_pss_self_signed_pem"),
+    ("rsaPSSSelfSignedOpenSSL110PEM", "rsa_pss_self_signed_openssl110_pem"),
+    ("ed25519Certificate", "ed25519_certificate"),
+    ("dsaCertPem", "dsa_cert_pem"),
+    ("ecdsaSHA256p256CertPem", "ecdsa_sha256_p256_cert_pem"),
+    ("ecdsaSHA256p384CertPem", "ecdsa_sha256_p384_cert_pem"),
+    ("ecdsaSHA384p521CertPem", "ecdsa_sha384_p521_cert_pem"),
+    ("ecdsaSHA1CertPem", "ecdsa_sha1_cert_pem"),
+    ("md5cert", "md5_cert"),
+    ("certMissingRSANULL", "cert_missing_rsa_null"),
+    ("certISOOID", "cert_iso_oid"),
+    ("certMultipleRDN", "cert_multiple_rdn"),
+    ("emptyNameConstraintsPEM", "empty_name_constraints_pem"),
+    ("criticalNameConstraintWithUnknownTypePEM", "critical_name_constraint_with_unknown_type_pem"),
+    ("badIPMaskPEM", "bad_ip_mask_pem"),
+    ("additionalGeneralSubtreePEM", "additional_general_subtree_pem"),
+    ("multipleURLsInCRLDPPEM", "multiple_urls_in_crldp_pem"),
+    ("pemCertificate", "pem_certificate"),
+    ("mismatchingSigAlgIDPEM", "mismatching_sig_alg_id_pem"),
+    ("mismatchingSigAlgParamPEM", "mismatching_sig_alg_param_pem"),
+    ("optionalAuthKeyIDPEM", "optional_auth_key_id_pem"),
+    ("largeOIDPEM", "large_oid_pem"),
+    ("uniqueIDPEM", "unique_id_pem"),
+    ("negativeSerialCert", "negative_serial_cert"),
+    ("dupExtCert", "dup_ext_cert"),
+    ("dupExtCSR", "dup_ext_csr"),
+    ("dupAttCSR", "dup_att_csr"),
+]:
+    define(c, pem_only(go_string(go, x509_test)))
+rows = re.findall(
+    r"\{(ECDSAWith\w+), (\w+)\}", one(r"\nvar ecdsaTests = (.*?)\n\}\n", x509_test)
+)
+assert [r[1] for r in rows] == ["ecdsaSHA256p256CertPem", "ecdsaSHA256p384CertPem", "ecdsaSHA384p521CertPem"]
+defs.append(
+    "static const X509SignatureAlgorithm ecdsa_test_sig_algo[] = {"
+    + ", ".join("X509_" + r[0].replace("ECDSAWith", "ECDSA_WITH_").upper() for r in rows)
+    + "};\n"
+)
+define_parts("der_crl_base64", go_string("derCRLBase64", x509_test))
+define("pem_crl_base64", go_string("pemCRLBase64", x509_test))
+define("crl_without_expiry_base64", one(r'fromBase64\("([^"]+)"\)', func("TestCRLWithoutExpiry", x509_test)))
+csrs = re.findall(r'\n\t"([A-Za-z0-9+/=]+)",', one(r"\nvar csrBase64Array = (.*?)\n\}\n", x509_test))
+assert len(csrs) == 2
+for i, c in enumerate(csrs):
+    define(f"csr_base64_{i}", c)
+define(
+    "critical_csr_base64",
+    one(r'const csrBase64 = "([^"]+)"', func("TestCriticalFlagInCSRRequestedExtensions", x509_test)),
+)
+define("ipv4_mapped_san_cert", go_string("ipv4MappedSANCert", x509_test))
+define("ipv4_mapped_constraint_cert", go_string("ipv4MappedConstraintCert", x509_test))
+
+with open(out, "w") as f:
+    f.write(
+        "/* Generated by tools/gen-x509-tests.sh from Go's crypto/x509 tests. Do not\n"
+        " * edit.\n"
+        " *\n"
+        " * Copyright 2009 The Go Authors. All rights reserved.\n"
+        " * Copyright 2026 The burrow Authors. All rights reserved.\n"
+        " * Use of this source code is governed by a BSD-style licence that can be found\n"
+        " * in the LICENSE file. */\n\n"
+        "#ifndef BURROW_TESTS_X509_PARSE_TEST_GEN_H\n#define BURROW_TESTS_X509_PARSE_TEST_GEN_H\n\n"
+        '#include "burrow/crypto/x509.h"\n\n#include <stddef.h>\n\n'
     )
     f.write("\n".join(defs))
     f.write("\n#endif\n")

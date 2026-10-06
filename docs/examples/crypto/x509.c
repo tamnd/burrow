@@ -64,11 +64,102 @@ static void oids(Alloc *a) {
     // doc: end
 }
 
+static void certs(Alloc *a) {
+    // doc: create
+    Byte seed[ED25519_SEED_SIZE] = {0};
+    for (int i = 0; i < ED25519_SEED_SIZE; i++)
+        seed[i] = (Byte)(i + 1);
+    Ed25519Signer ca_key;
+    CryptoSigner ca_signer = ed25519_private_key_signer(
+        ed25519_new_key_from_seed(
+            a, slice_from(seed, sizeof seed, sizeof seed, TYPE_BYTE)),
+        &ca_key);
+
+    X509Certificate tmpl = {0};
+    tmpl.serial_number = big_new_int(a, 1);
+    tmpl.subject.common_name = BURROW_S("Example Root");
+    tmpl.not_before = time_date(2026, TIME_JANUARY, 1, 0, 0, 0, 0, time_utc_loc);
+    tmpl.not_after = time_date(2036, TIME_JANUARY, 1, 0, 0, 0, 0, time_utc_loc);
+    tmpl.key_usage = X509_KEY_USAGE_CERT_SIGN;
+    tmpl.basic_constraints_valid = true;
+    tmpl.is_ca = true;
+
+    // Self-signed, so the template is its own parent.
+    Error err = BURROW_NO_ERROR;
+    Slice der = x509_create_certificate(
+        a, (IoReader){0}, &tmpl, &tmpl,
+        BURROW_ANY(TYPE_ED25519_PUBLIC_KEY, &ca_key.pub), ca_signer, &err);
+    if (BURROW_FAILED(err))
+        return;
+    printf("%d bytes\n", (int)der.len);
+    // doc: end
+
+    // doc: certparse
+    X509Certificate *ca = x509_parse_certificate(a, der, &err);
+    if (BURROW_FAILED(err))
+        return;
+    print(pkix_name_string(ca->subject, a));
+    print(x509_signature_algorithm_string(ca->signature_algorithm, a));
+    print(hex_encode_to_string(a, ca->subject_key_id));
+    print(time_format(ca->not_after, a, TIME_RFC3339));
+    err = x509_certificate_check_signature_from(ca, ca);
+    printf("signed by itself: %s\n", BURROW_FAILED(err) ? "no" : "yes");
+    // doc: end
+
+    // doc: request
+    for (int i = 0; i < ED25519_SEED_SIZE; i++)
+        seed[i] = (Byte)(0x80 + i);
+    Ed25519Signer leaf_key;
+    CryptoSigner leaf_signer = ed25519_private_key_signer(
+        ed25519_new_key_from_seed(
+            a, slice_from(seed, sizeof seed, sizeof seed, TYPE_BYTE)),
+        &leaf_key);
+
+    Str host = BURROW_S("www.example.com");
+    X509CertificateRequest req = {0};
+    req.subject.common_name = host;
+    req.dns_names = slice_append(a, slice_nil(TYPE_STRING), &host, 1);
+    Slice csr_der =
+        x509_create_certificate_request(a, (IoReader){0}, &req, leaf_signer, &err);
+    if (BURROW_FAILED(err))
+        return;
+    X509CertificateRequest *csr = x509_parse_certificate_request(a, csr_der, &err);
+    if (BURROW_FAILED(err))
+        return;
+    err = x509_certificate_request_check_signature(csr);
+    printf("request for %.*s: %s\n", (int)csr->subject.common_name.len,
+           csr->subject.common_name.p, BURROW_FAILED(err) ? "bad" : "ok");
+    // doc: end
+
+    // doc: issue
+    // The CA signs a certificate for the key in the request.
+    X509Certificate leaf_tmpl = {0};
+    leaf_tmpl.serial_number = big_new_int(a, 2);
+    leaf_tmpl.subject = csr->subject;
+    leaf_tmpl.dns_names = csr->dns_names;
+    leaf_tmpl.not_before = tmpl.not_before;
+    leaf_tmpl.not_after = time_date(2027, TIME_JANUARY, 1, 0, 0, 0, 0, time_utc_loc);
+    leaf_tmpl.key_usage = X509_KEY_USAGE_DIGITAL_SIGNATURE;
+    X509ExtKeyUsage server = X509_EXT_KEY_USAGE_SERVER_AUTH;
+    leaf_tmpl.ext_key_usage = slice_append(a, slice_nil(TYPE_INT), &server, 1);
+    Slice leaf_der = x509_create_certificate(a, (IoReader){0}, &leaf_tmpl, ca,
+                                             csr->public_key, ca_signer, &err);
+    if (BURROW_FAILED(err))
+        return;
+    X509Certificate *leaf = x509_parse_certificate(a, leaf_der, &err);
+    if (BURROW_FAILED(err))
+        return;
+    print(pkix_name_string(leaf->issuer, a));
+    print(hex_encode_to_string(a, leaf->authority_key_id));
+    // doc: end
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     keys(arena_allocator(&ar));
     oids(arena_allocator(&ar));
+    certs(arena_allocator(&ar));
     arena_free(&ar);
     return 0;
 }

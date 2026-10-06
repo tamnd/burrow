@@ -1289,7 +1289,7 @@ static Any x509_parse_pkcs8_mldsa(Alloc *a, const X509Pkcs8 *k, Error *err) {
         return (Any){NULL, NULL};
     }
     MldsaPrivateKey *key = mldsa_new_private_key(
-        params, a, slice_sub(k->private_key, 2, k->private_key.len), err);
+        a, params, slice_sub(k->private_key, 2, k->private_key.len), err);
     return x509_any(a, TYPE_MLDSA_PRIVATE_KEY, key, err);
 }
 
@@ -1595,7 +1595,7 @@ static Any x509_parse_public_key(Alloc *a, const X509PublicKeyInfo *ki, Error *e
             x509_fail(err, "x509: unsupported ML-DSA parameters");
             return none;
         }
-        MldsaPublicKey *pub = mldsa_new_public_key(mp, a, data, err);
+        MldsaPublicKey *pub = mldsa_new_public_key(a, mp, data, err);
         return x509_any(a, TYPE_MLDSA_PUBLIC_KEY, pub, err);
     }
 

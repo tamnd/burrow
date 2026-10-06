@@ -830,7 +830,7 @@ Everything that touches secret data is constant time, as Go's code is, and the s
 ```c
 // The signer makes a key and publishes the public key's bytes.
 Error err = BURROW_NO_ERROR;
-MldsaPrivateKey *sk = mldsa_generate_key(mldsa_mldsa44(), a, &err);
+MldsaPrivateKey *sk = mldsa_generate_key(a, mldsa_mldsa44(), &err);
 if (BURROW_FAILED(err))
     return;
 Slice pub_bytes = mldsa_public_key_bytes(mldsa_private_key_public_key(sk), a);
@@ -845,7 +845,7 @@ if (BURROW_FAILED(err))
     return;
 
 // The verifier has only the public key's bytes.
-MldsaPublicKey *pk = mldsa_new_public_key(mldsa_mldsa44(), a, pub_bytes, &err);
+MldsaPublicKey *pk = mldsa_new_public_key(a, mldsa_mldsa44(), pub_bytes, &err);
 if (BURROW_FAILED(err))
     return;
 printf("%d %d\n", (int)pub_bytes.len, (int)sig.len);
@@ -867,7 +867,7 @@ for (int i = 0; i < MLDSA_PRIVATE_KEY_SIZE; i++)
     seed[i] = (Byte)i;
 Error err = BURROW_NO_ERROR;
 MldsaPrivateKey *sk = mldsa_new_private_key(
-    mldsa_mldsa65(), a, slice_from(seed, sizeof seed, sizeof seed, TYPE_BYTE),
+    a, mldsa_mldsa65(), slice_from(seed, sizeof seed, sizeof seed, TYPE_BYTE),
     &err);
 if (BURROW_FAILED(err))
     return;
@@ -886,7 +886,7 @@ A private key is a `CryptoSigner` too, for code that should not care which schem
 ```c
 // Code that works with any signature scheme takes a CryptoSigner.
 Error err = BURROW_NO_ERROR;
-MldsaPrivateKey *sk = mldsa_generate_key(mldsa_mldsa87(), a, &err);
+MldsaPrivateKey *sk = mldsa_generate_key(a, mldsa_mldsa87(), &err);
 if (BURROW_FAILED(err))
     return;
 CryptoSigner s = mldsa_private_key_signer(sk);
@@ -907,18 +907,18 @@ Keys and signatures of the wrong length are errors with Go's messages, and so ar
 <!-- example: ../examples/crypto/mldsa.c#errors -->
 ```c
 Error err = BURROW_NO_ERROR;
-Byte zeros[MLDSA44_PUBLIC_KEY_SIZE] = {0};
-mldsa_new_private_key(mldsa_mldsa44(), a, slice_from(zeros, 16, 16, TYPE_BYTE),
+Byte zeros[MLDSA_MLDSA44_PUBLIC_KEY_SIZE] = {0};
+mldsa_new_private_key(a, mldsa_mldsa44(), slice_from(zeros, 16, 16, TYPE_BYTE),
                       &err);
 print_error(err);
-mldsa_new_public_key(mldsa_mldsa65(), a,
+mldsa_new_public_key(a, mldsa_mldsa65(),
                      slice_from(zeros, sizeof zeros, sizeof zeros, TYPE_BYTE),
                      &err);
 print_error(err);
 
 err = BURROW_NO_ERROR;
 MldsaPrivateKey *sk = mldsa_new_private_key(
-    mldsa_mldsa44(), a, slice_from(zeros, 32, 32, TYPE_BYTE), &err);
+    a, mldsa_mldsa44(), slice_from(zeros, 32, 32, TYPE_BYTE), &err);
 MldsaOptions opts = {strings_repeat(a, BURROW_S("x"), 256)};
 mldsa_private_key_sign_deterministic(sk, a, text("hello"),
                                      mldsa_options_as_signer_opts(&opts), &err);

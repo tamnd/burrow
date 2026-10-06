@@ -60,6 +60,7 @@ crypto/mlkem/mlkemtest
 crypto/mldsa
 crypto/hpke
 crypto/rsa
+crypto/x509/pkix
 container/list
 container/ring
 sort

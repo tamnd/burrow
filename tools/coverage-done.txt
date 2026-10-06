@@ -50,6 +50,7 @@ crypto
 crypto/cipher
 crypto/des
 crypto/ecdh
+crypto/elliptic
 crypto/ed25519
 crypto/rc4
 container/list

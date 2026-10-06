@@ -5,8 +5,6 @@
  *
  * What is left out:
  *
- *   - The DES subtests of TestCBCBlockMode, TestCFBStream, TestCTRStream and
- *     TestOFBStream, until there is a crypto/des.
  *   - TestCBCExtraMethods, TestCTRExtraMethods and all of modes_test.go. They
  *     ask reflection what methods a value has, or whether NewCTR and friends
  *     pick up an undocumented method on the block, and a C table has nothing
@@ -30,6 +28,7 @@
 #include "burrow/clock.h"
 #include "burrow/crypto/aes.h"
 #include "burrow/crypto/cipher.h"
+#include "burrow/crypto/des.h"
 #include "burrow/crypto/rand.h"
 #include "burrow/encoding/hex.h"
 #include "burrow/io.h"
@@ -157,6 +156,27 @@ static void each_key_size_env(void *env, TestingT *t) {
     each_key_size(t, *(const KeyTest *)env);
 }
 
+static void des_one(void *env, TestingT *t) {
+    KeyTest f = *(const KeyTest *)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TesthashRand rng = testhash_new_rand(t);
+    Slice key = testhash_bytes(a, 8);
+    testhash_read(&rng, key);
+    Error err = BURROW_NO_ERROR;
+    CipherBlock block = des_new_cipher(a, key, &err);
+    if (BURROW_FAILED(err))
+        panic(BURROW_ANY(TYPE_ERROR, &err));
+    f(t, block);
+    arena_free(&ar);
+}
+
+/* The same with DES and a fresh random key, as a "DES" subtest. */
+static void des_subtest(TestingT *t, KeyTest f) {
+    testing_t_run(t, BURROW_S("DES"), BURROW_FN(TestingTFunc, des_one, &f));
+}
+
 /* ---------------------------------------------------------------------- CBC */
 
 typedef struct ModeTest {
@@ -281,6 +301,7 @@ static void cbc_block_mode(TestingT *t, CipherBlock block) {
 static void TestCBCBlockMode(TestingT *t) {
     static const KeyTest f = cbc_block_mode;
     testcipher_all_implementations(t, each_key_size_env, (void *)(uintptr_t)&f);
+    des_subtest(t, cbc_block_mode);
 }
 
 /* Not Go's: SetIV, which Go only reaches through NoExtraMethods. Decrypting
@@ -468,6 +489,7 @@ static void cfb_stream(TestingT *t, CipherBlock block) {
 
 static void TestCFBStream(TestingT *t) {
     each_key_size(t, cfb_stream);
+    des_subtest(t, cfb_stream);
 }
 
 /* ---------------------------------------------------------------------- CTR */
@@ -538,6 +560,7 @@ static void ctr_stream(TestingT *t, CipherBlock block) {
 static void TestCTRStream(TestingT *t) {
     static const KeyTest f = ctr_stream;
     testcipher_all_implementations(t, each_key_size_env, (void *)(uintptr_t)&f);
+    des_subtest(t, ctr_stream);
 }
 
 /* NIST SP 800-38A pp 55-58 */
@@ -1105,6 +1128,7 @@ static void ofb_stream(TestingT *t, CipherBlock block) {
 
 static void TestOFBStream(TestingT *t) {
     each_key_size(t, ofb_stream);
+    des_subtest(t, ofb_stream);
 }
 
 /* ------------------------------------------------------------------ streams */

@@ -570,7 +570,7 @@ bool cryptobyte_string_read_asn1_bit_string(CryptobyteString *s, Asn1BitString *
     cryptobyte_string_skip(&bytes, 1);
     if (padding_bits > 7 || (bytes.len == 0 && padding_bits != 0) ||
         (bytes.len > 0 &&
-         (((const Byte *)bytes.p)[bytes.len - 1] & ((1u << padding_bits) - 1)) != 0))
+         (((const Byte *)bytes.p)[bytes.len - 1] & ((1U << padding_bits) - 1)) != 0))
         return false;
     out->bit_length = bytes.len * 8 - (Int)padding_bits;
     out->bytes = bytes;
@@ -769,7 +769,7 @@ static void cb_add(CryptobyteBuilder *b, const Byte *bytes, Int n) {
     if (need > b->result.cap) {
         /* append's growth: double while small, then a quarter more. */
         Int cap = b->result.cap;
-        Int ncap = cap < 256 ? cap * 2 : cap + (cap + 3 * 256) / 4;
+        Int ncap = cap < 256 ? cap * 2 : cap + (cap + (Int)3 * 256) / 4;
         if (ncap < need)
             ncap = need;
         if (ncap < 8)
@@ -868,7 +868,8 @@ static void cb_flush_child(CryptobyteBuilder *b) {
         if ((int64_t)length > 0xfffffffe) {
             b->err = cb_error("pending ASN.1 child too long");
             return;
-        } else if (length > 0xffffff) {
+        }
+        if (length > 0xffffff) {
             len_len = 5;
             len_byte = 0x80 | 4;
         } else if (length > 0xffff) {
@@ -1130,7 +1131,7 @@ static void cb_utc_time_contents(void *env, CryptobyteBuilder *c) {
     }
     Byte buf[64];
     Str s = cb_format_time(u->t, buf, str_from_cstr(default_utc_time_format));
-    cb_add(c, (const Byte *)s.p, s.len);
+    cb_add(c, s.p, s.len);
 }
 
 void cryptobyte_builder_add_asn1_utc_time(CryptobyteBuilder *b, Time t) {

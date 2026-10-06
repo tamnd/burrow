@@ -10,6 +10,8 @@
 #ifndef BURROW_CRYPTO_AES_INTERNAL_H
 #define BURROW_CRYPTO_AES_INTERNAL_H
 
+#include "burrow/crypto/aes.h"
+
 #include "burrow/core.h"
 #include "burrow/crypto/cipher.h"
 #include "burrow/error.h"

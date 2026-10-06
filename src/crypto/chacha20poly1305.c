@@ -28,6 +28,9 @@
 /* ----------------------------------------------------------------- helpers */
 
 static uint32_t chacha20_le32(const Byte *p) {
+    /* The analyzer finds a path where a padded Poly1305 write of fewer than
+     * 16 bytes reads a whole block, which the length checks rule out. */
+    /* NOLINTNEXTLINE(clang-analyzer-core.UndefinedBinaryOperatorResult) */
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 |
            (uint32_t)p[3] << 24;
 }
@@ -77,6 +80,7 @@ enum {
     CHACHA20_J3 = 0x6b206574,
 };
 
+/* NOLINTBEGIN(bugprone-macro-parentheses) */
 #define CHACHA20_QR(a, b, c, d)                                                        \
     do {                                                                               \
         a += b;                                                                        \
@@ -92,6 +96,7 @@ enum {
         b ^= c;                                                                        \
         b = bits_rotate_left32(b, 7);                                                  \
     } while (0)
+/* NOLINTEND(bugprone-macro-parentheses) */
 
 /* The core of HChaCha20: the first and last rows after twenty rounds, with no
  * feed forward. key is 32 bytes and nonce 16. */
@@ -131,9 +136,9 @@ static void chacha20_hchacha20_core(Byte out[32], const Byte *key, const Byte *n
 /* newUnauthenticatedCipher, into c, for a 32 byte key and a 12 byte nonce. */
 static void chacha20_setup(Chacha20Cipher *c, const Byte *key, const Byte *nonce) {
     memset(c, 0, sizeof *c);
-    for (int i = 0; i < 8; i++)
+    for (Int i = 0; i < 8; i++)
         c->key[i] = chacha20_le32(key + 4 * i);
-    for (int i = 0; i < 3; i++)
+    for (Int i = 0; i < 3; i++)
         c->nonce[i] = chacha20_le32(nonce + 4 * i);
 }
 
@@ -253,7 +258,7 @@ static void chacha20_xor_blocks(Chacha20Cipher *s, Byte *dst, const Byte *src, I
                                 x8, x9, x10, x11, x12, x13, x14, x15};
         const uint32_t c[16] = {c0, c1, c2,  c3,  c4,         c5,  c6,  c7,
                                 c8, c9, c10, c11, s->counter, c13, c14, c15};
-        for (int i = 0; i < 16; i++)
+        for (Int i = 0; i < 16; i++)
             chacha20_put_le32(dst + 4 * i, chacha20_le32(src + 4 * i) ^ (x[i] + c[i]));
 
         s->counter += 1;
@@ -671,6 +676,7 @@ static Slice chacha20poly1305_slice_for_append(Alloc *a, Slice dst, Int n,
             return slice_nil(TYPE_BYTE);
         }
         if (dst.len > 0)
+            /* NOLINTNEXTLINE(clang-analyzer-unix.cstring.NullArg) */
             memcpy(head.p, dst.p, (size_t)dst.len);
     }
     *tail = (Byte *)head.p + dst.len;

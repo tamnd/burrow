@@ -131,7 +131,6 @@ static void cipher_cbc_decrypt_generic(CipherCbc *x, Byte *d, Byte *s, Int n) {
                              cipher_bytes(s + start, bs));
         subtle_xor_bytes(cipher_bytes(d + start, bs), cipher_bytes(d + start, bs),
                          cipher_bytes(s + prev, bs));
-        end = start;
         start = prev;
         prev -= bs;
     }
@@ -156,7 +155,7 @@ static void cipher_cbc_decrypt_aes(CipherCbc *x, Byte *d, const Byte *s, Int n) 
     memcpy(x->iv, s + n - AES_BLOCK_SIZE, AES_BLOCK_SIZE);
     Int end = n;
     while (end > 0) {
-        Int start = end - 8 * AES_BLOCK_SIZE;
+        Int start = end - (Int)8 * AES_BLOCK_SIZE;
         if (start < 0)
             start = 0;
         Byte buf[8 * AES_BLOCK_SIZE];
@@ -246,7 +245,7 @@ static void cipher_put_be64(Byte *p, uint64_t v) {
  * dst. src is read in full before dst is written. */
 static void cipher_aes_ctr_blocks(const AesBlock *b, Byte *dst, const Byte *src,
                                   Int len, uint64_t lo, uint64_t hi) {
-    Byte buf[8 * AES_BLOCK_SIZE];
+    Byte buf[8 * AES_BLOCK_SIZE] = {0};
     Int n = (len + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE;
     for (Int i = 0; i < n; i++) {
         cipher_put_be64(buf + 16 * i, hi);
@@ -286,7 +285,7 @@ static void cipher_aes_ctr_xor_at(CipherAesCtr *c, Byte *dst, const Byte *src, I
     }
 
     while (len > 0) {
-        Int n = len < 8 * AES_BLOCK_SIZE ? len : 8 * AES_BLOCK_SIZE;
+        Int n = len < (Int)8 * AES_BLOCK_SIZE ? len : (Int)8 * AES_BLOCK_SIZE;
         cipher_aes_ctr_blocks(c->b, dst, src, n, lo, hi);
         src += n;
         dst += n;

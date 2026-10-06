@@ -858,16 +858,37 @@ static bool make_context(burrow__G *g, size_t asked) {
 #endif
 }
 
+/* The half of mcall before the switch: records fn and the running goroutine
+ * on this M for g0 to pick up, and returns the M. */
+static burrow__M *mcall_prepare(burrow__G *(*fn)(burrow__M *m, burrow__G *g)) {
+    burrow__M *m = getm();
+    if (m == NULL || m->curg == NULL)
+        runtime_throw(BURROW_S("mcall: not on a goroutine"));
+    m->mcall = fn;
+    m->mcallg = m->curg;
+    return m;
+}
+
 /* Leaves a call for the scheduler to make on g0 and switches to it. Comes back
  * when somebody schedules this goroutine again, and for goexit it never comes
  * back at all. */
 static void mcall(burrow__G *(*fn)(burrow__M *m, burrow__G *g)) {
-    burrow__M *m = getm();
-    burrow__G *gp = m->curg;
+    burrow__M *m = mcall_prepare(fn);
+    burrow__mcontext_switch(&m->mcallg->ctx, &m->g0.ctx);
+}
 
-    m->mcall = fn;
-    m->mcallg = gp;
-    burrow__mcontext_switch(&gp->ctx, &m->g0.ctx);
+/* mcall for a goroutine that is ending, which never comes back. The final form
+ * of the switch is what tells the address sanitizer to throw away the fake
+ * stack this goroutine was using. The ordinary switch keeps it in the context
+ * for a return that is not coming, and the next goroutine to reuse the context
+ * starts without it, so every goroutine that ended leaked one. A test that ran
+ * a few thousand subtests went past 3 GB that way. In any other build the two
+ * switches are the same thing. */
+BURROW_NORETURN static void mcall_final(burrow__G *(*fn)(burrow__M *m, burrow__G *g)) {
+    burrow__M *m = mcall_prepare(fn);
+    burrow__mcontext_leave_final(&m->mcallg->ctx, &m->g0.ctx);
+    burrow__mcontext_switch_raw(&m->mcallg->ctx, &m->g0.ctx);
+    runtime_throw(BURROW_S("runtime_goexit: a dead goroutine came back"));
 }
 
 /* Runs one goroutine until it stops, makes the call it left behind, and answers
@@ -2448,8 +2469,7 @@ void runtime_goexit(void) {
      * re-read after every one. */
     burrow__defer_unwind_all();
 
-    mcall(goexit0);
-    runtime_throw(BURROW_S("runtime_goexit: a dead goroutine came back"));
+    mcall_final(goexit0);
 }
 
 /* ---------------------------------------------------------------- GOMAXPROCS */

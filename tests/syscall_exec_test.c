@@ -35,7 +35,7 @@ static Alloc *a;
 
 #define CHILD_VAR "BURROW_SYSCALL_EXEC_CHILD"
 
-#if !defined(BURROW_OS_WINDOWS)
+#if !defined(BURROW_OS_WINDOWS) && !defined(BURROW_OS_WASI)
 
 static SyscallErrno errno_of(Error err) {
     const SyscallErrno *e = (const SyscallErrno *)errors_as(err, TYPE_SYSCALL_ERRNO);
@@ -385,9 +385,8 @@ static void TestForkExecKeepsFds(TestingT *t) {
     Int p[2];
     make_pipe(t, p);
     /* Linux on arm64, riscv64 and loong64 has no dup2, and Go has no Dup2
-     * there either. The WASI build declares the same calls as Linux on wasm32,
-     * which has none. */
-#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO) || defined(BURROW_OS_WASI)
+     * there either. */
+#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO)
     Error e = syscall_dup3(p[0], 7, 0);
 #else
     Error e = syscall_dup2(p[0], 7);
@@ -698,6 +697,28 @@ static void child(Str what) {
     X(TestSetgroups)                                                                   \
     X(TestCredential)                                                                  \
     LINUX_TESTS(X)
+
+#elif defined(BURROW_OS_WASI)
+
+/* wasip1 has no processes but this one. Go's exec_unix_test.go is for unix
+ * only, and its StartProcess there gives ENOSYS. */
+static void TestStartProcessWASI(TestingT *t) {
+    (void)t;
+    Slice argv = slice_make(a, TYPE_OF(Str), 1, 1);
+    BURROW_AT(Str, argv, 0) = S("true");
+    Error e = BURROW_NO_ERROR;
+    Int pid = syscall_start_process(S("/bin/true"), argv, NULL, NULL, &e);
+    CHECK_INT_EQ(pid, 0);
+    const SyscallErrno *n = (const SyscallErrno *)errors_as(e, TYPE_SYSCALL_ERRNO);
+    CHECK_INT_EQ(n != NULL ? *n : 0, SYSCALL_ENOSYS);
+}
+
+static void child(Str what) {
+    (void)what;
+    os_exit(9);
+}
+
+#define UNIX_TESTS(X) X(TestStartProcessWASI)
 
 #else
 

@@ -125,6 +125,14 @@ global	src/pal/poll_bsd.c	kqueue_fd	netpoller	The kqueue descriptor. One per pro
 global	src/pal/poll_bsd.c	breakrd	netpoller	The read end of the wakeup pipe, which is what the kqueue watches.
 global	src/pal/poll_bsd.c	breakwr	netpoller	The write end of the wakeup pipe, which is where a byte goes to interrupt a wait.
 global	src/pal/poll_bsd.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one byte, and cleared by whoever drains the pipe.
+global	src/pal/poll_posix.c	table	netpoller	The poll(2) backend's set: for each descriptor, whether it is in, the pointer to hand back and the directions armed. Under table_mu.
+global	src/pal/poll_posix.c	table_hi	netpoller	One more than the highest descriptor in table, so that a wait stops there. Under table_mu.
+global	src/pal/poll_posix.c	sleepers	netpoller	How many waits are asleep in poll, under table_mu, so that pal_poll_arm knows to wake them.
+global	src/pal/poll_posix.c	pollset_handle	netpoller	The handle pal_poll_create gave back, set once by it and read without anything afterwards.
+global	src/pal/poll_posix.c	table_mu	netpoller	The lock over table, table_hi and sleepers. Held while a wait copies the set and while it reads the answer, never across poll itself.
+global	src/pal/poll_posix.c	breakrd	netpoller	The read end of the wakeup pipe, set once by pal_poll_create.
+global	src/pal/poll_posix.c	breakwr	netpoller	The write end of the wakeup pipe, set alongside breakrd.
+global	src/pal/poll_posix.c	wakesig	netpoller	Whether a wakeup is already on its way, so that many cost one byte. Cleared by the thread that drains the pipe.
 global	src/pal/poll_windows.c	iocp	netpoller	The completion port. One per process, made once by pal_poll_create and read without anything afterwards.
 global	src/pal/poll_windows.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one posted completion, and cleared by whoever takes that completion off the port.
 global	src/runtime/netpoll_readiness.c	poller	netpoller	The PAL's handle for the poller. Set once by the backend init, which runs under init_lock, and read without anything afterwards.

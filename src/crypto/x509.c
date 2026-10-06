@@ -303,16 +303,23 @@ typedef struct X509SignatureAlgorithmDetails {
     const char *name;
     const Int *oid;
     Int oid_len;
-    int params;
     const Byte *pss;
     X509PublicKeyAlgorithm pub_key_algo;
     CryptoHash hash;
+    int params;
     bool is_rsa_pss;
 } X509SignatureAlgorithmDetails;
 
-#define X509_SIG(algo, name, oid, params, pss, pub, hash, is_pss)                      \
-    {algo, name, oid,   (Int)(sizeof(oid) / sizeof((oid)[0])), params, pss,            \
-     pub,  hash, is_pss}
+#define X509_SIG(al, nm, o, pr, ps, pub, h, ip)                                        \
+    {.algo = (al),                                                                     \
+     .name = (nm),                                                                     \
+     .oid = (o),                                                                       \
+     .oid_len = (Int)(sizeof(o) / sizeof((o)[0])),                                     \
+     .pss = (ps),                                                                      \
+     .pub_key_algo = (pub),                                                            \
+     .hash = (h),                                                                      \
+     .params = (pr),                                                                   \
+     .is_rsa_pss = (ip)}
 
 static const X509SignatureAlgorithmDetails x509_signature_algorithm_details[] = {
     X509_SIG(X509_MD5_WITH_RSA, "MD5-RSA", x509_oid_signature_md5_with_rsa,
@@ -632,7 +639,8 @@ static Int x509_append_base128(Byte *dst, uint64_t n) {
 static X509OID x509_oid_from_arcs(Alloc *a, const uint64_t *u, const Int *s, Int n,
                                   Error *err) {
 #define X509_ARC(i) (u != NULL ? u[i] : (uint64_t)s[i])
-    if (n < 2 || X509_ARC(0) > 2 || (X509_ARC(0) < 2 && X509_ARC(1) >= 40)) {
+    if (n < 2 || (u == NULL && s == NULL) || X509_ARC(0) > 2 ||
+        (X509_ARC(0) < 2 && X509_ARC(1) >= 40)) {
         BURROW_OUT(err, burrow__x509_err_invalid_oid);
         return (X509OID){{0}};
     }
@@ -1205,6 +1213,7 @@ x509_parse_ec_private_key_oid(Alloc *a, const Asn1ObjectIdentifier *named_curve_
     Int size = (big_int_bit_len(elliptic_curve_params(curve)->n) + 7) / 8;
     Slice pk = priv.private_key;
     while (pk.len > size) {
+        /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
         if (((const Byte *)pk.p)[0] != 0) {
             x509_fail(err, "x509: invalid private key length");
             return NULL;
@@ -1214,6 +1223,7 @@ x509_parse_ec_private_key_oid(Alloc *a, const Asn1ObjectIdentifier *named_curve_
     Byte buf[66];
     memset(buf, 0, sizeof buf);
     if (pk.len > 0)
+        /* NOLINTNEXTLINE(clang-analyzer-unix.cstring.NullArg) */
         memcpy(buf + (size - pk.len), pk.p, (size_t)pk.len);
     EcdsaPrivateKey *key =
         ecdsa_parse_raw_private_key(a, curve, x509_bytes(buf, size), err);
@@ -1238,6 +1248,7 @@ Slice x509_marshal_ec_private_key(Alloc *a, const EcdsaPrivateKey *key, Error *e
 
 /* key in an Any made from a. */
 static Any x509_any(Alloc *a, const Type *t, void *key, Error *err) {
+    (void)a;
     if (key == NULL)
         return (Any){NULL, NULL};
     BURROW_OUT(err, BURROW_NO_ERROR);
@@ -2457,7 +2468,7 @@ static Error x509_parse_certificate_policies(Alloc *a, CryptobyteString der,
 /* OID.toASN1OID, false for an arc past 31 bits. */
 static bool x509_oid_to_asn1_oid(X509OID oid, Alloc *a, Asn1ObjectIdentifier *out) {
     Slice arcs = slice_make(a, TYPE_INT, 0, oid.der.len + 1);
-    if (arcs.p == NULL && oid.der.len + 1 > 0)
+    if (arcs.p == NULL)
         return false;
     Int *o = arcs.p;
     Int n = 0;
@@ -2499,6 +2510,7 @@ static bool x509_is_valid_ip_mask(Slice mask) {
                 return false;
             continue;
         }
+        /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
         switch (m[i]) {
         case 0x00:
         case 0x80:
@@ -3114,7 +3126,7 @@ static Error x509_parse_certificate_extensions(Alloc *a, CryptobyteString *tbs,
     if (!cryptobyte_string_read_asn1(&exts, &exts, CRYPTOBYTE_ASN1_SEQUENCE))
         return x509_err("x509: malformed extensions");
     while (!cryptobyte_string_empty(exts)) {
-        PkixExtension ext;
+        PkixExtension ext = {0};
         Error err = x509_read_extension(a, &exts, &ext);
         if (BURROW_FAILED(err))
             return err;
@@ -3404,6 +3416,7 @@ Str x509_insecure_algorithm_error_error(X509InsecureAlgorithmError e, Alloc *a) 
 
 /* ConstraintViolationError and UnhandledCriticalExtension, which have
  * nothing in them and so are one constant each. */
+/* NOLINTBEGIN(bugprone-macro-parentheses) */
 #define X509_EMPTY_ERROR(T, desc, name, gotype, text)                                  \
     static const Type desc = {                                                         \
         {(const Byte *)(gotype), (Int)(sizeof(gotype) - 1)},                           \
@@ -3430,6 +3443,7 @@ Str x509_insecure_algorithm_error_error(X509InsecureAlgorithmError e, Alloc *a) 
     };                                                                                 \
     static const T desc##_value = {0};                                                 \
     const Error name = {&desc##_vt, &desc##_value}
+/* NOLINTEND(bugprone-macro-parentheses) */
 
 X509_EMPTY_ERROR(X509ConstraintViolationError, x509_constraint_violation_desc,
                  x509_constraint_violation_error, "ConstraintViolationError",
@@ -3766,7 +3780,7 @@ static Error x509_parse_revoked_entry(Alloc *a, CryptobyteString *revoked,
                                               CRYPTOBYTE_ASN1_SEQUENCE))
         return x509_err("x509: malformed extensions");
     while (present && !cryptobyte_string_empty(exts)) {
-        PkixExtension ext;
+        PkixExtension ext = {0};
         err = x509_read_extension(a, &exts, &ext);
         if (BURROW_FAILED(err))
             return err;
@@ -3799,7 +3813,7 @@ static Error x509_parse_crl_extensions(Alloc *a, CryptobyteString *tbs,
     if (!cryptobyte_string_read_asn1(&exts, &exts, CRYPTOBYTE_ASN1_SEQUENCE))
         return x509_err("x509: malformed extensions");
     while (!cryptobyte_string_empty(exts)) {
-        PkixExtension ext;
+        PkixExtension ext = {0};
         Error err = x509_read_extension(a, &exts, &ext);
         if (BURROW_FAILED(err))
             return err;

@@ -73,4 +73,11 @@ X509PotentialParent *burrow__x509_cert_pool_find_potential_parents(
 /* Marks s as the system pool, which Equal tells apart from other pools. */
 void burrow__x509_cert_pool_set_system(X509CertPool *s);
 
+/* GODEBUG x509usefallbackroots=1 and x509sslcertoverrideplatform=0. */
+bool burrow__x509_use_fallback_roots(void);
+bool burrow__x509_no_cert_override(void);
+
+/* systemRootsPool: the shared system pool, or NULL when there is none. */
+X509CertPool *burrow__x509_system_roots_pool(void);
+
 #endif /* BURROW_SRC_CRYPTO_X509_INTERNAL_H */

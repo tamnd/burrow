@@ -97,10 +97,12 @@ static Int x509_bit_len64(uint64_t n) {
 
 enum {
     X509_DEBUG_KNOWN = 1 << 0,
-    X509_DEBUG_RSACRT_OFF = 1 << 1,      /* x509rsacrt=0 */
-    X509_DEBUG_NEGATIVE_SERIAL = 1 << 2, /* x509negativeserial=1 */
-    X509_DEBUG_POLICY_IDS = 1 << 3,      /* x509usepolicies=0 */
-    X509_DEBUG_SHA1_SKID = 1 << 4,       /* x509sha256skid=0 */
+    X509_DEBUG_RSACRT_OFF = 1 << 1,       /* x509rsacrt=0 */
+    X509_DEBUG_NEGATIVE_SERIAL = 1 << 2,  /* x509negativeserial=1 */
+    X509_DEBUG_POLICY_IDS = 1 << 3,       /* x509usepolicies=0 */
+    X509_DEBUG_SHA1_SKID = 1 << 4,        /* x509sha256skid=0 */
+    X509_DEBUG_FALLBACK_ROOTS = 1 << 5,   /* x509usefallbackroots=1 */
+    X509_DEBUG_NO_CERT_OVERRIDE = 1 << 6, /* x509sslcertoverrideplatform=0 */
 };
 
 static uint32_t x509_debug_flags;
@@ -133,6 +135,10 @@ static uint32_t x509_debug_parse(const char *value) {
         f |= X509_DEBUG_POLICY_IDS;
     if (x509_godebug_is(value, "x509sha256skid", "0"))
         f |= X509_DEBUG_SHA1_SKID;
+    if (x509_godebug_is(value, "x509usefallbackroots", "1"))
+        f |= X509_DEBUG_FALLBACK_ROOTS;
+    if (x509_godebug_is(value, "x509sslcertoverrideplatform", "0"))
+        f |= X509_DEBUG_NO_CERT_OVERRIDE;
     return f;
 }
 
@@ -149,6 +155,14 @@ static uint32_t x509_debug_load(void) {
     }
     burrow__atomic_store_relaxed_u32(&x509_debug_flags, f);
     return f;
+}
+
+bool burrow__x509_use_fallback_roots(void) {
+    return (x509_debug_load() & X509_DEBUG_FALLBACK_ROOTS) != 0;
+}
+
+bool burrow__x509_no_cert_override(void) {
+    return (x509_debug_load() & X509_DEBUG_NO_CERT_OVERRIDE) != 0;
 }
 
 void burrow__x509_godebug_set(const char *value) {
@@ -4521,9 +4535,9 @@ static Error x509_build_cert_extensions(Alloc *a, const X509Certificate *templat
         /* RFC 5280 section 4.2.1.6: with an empty subject the subjectAltName
          * is critical. */
         ret[n].critical = subject_is_empty;
-        ret[n].value =
-            burrow__x509_marshal_sans(a, template_->dns_names, template_->email_addresses,
-                              template_->ip_addresses, template_->uris, &e);
+        ret[n].value = burrow__x509_marshal_sans(
+            a, template_->dns_names, template_->email_addresses,
+            template_->ip_addresses, template_->uris, &e);
         if (BURROW_FAILED(e))
             return e;
         n++;
@@ -4590,9 +4604,9 @@ static Error x509_build_csr_extensions(Alloc *a,
         PkixExtension ext;
         memset(&ext, 0, sizeof ext);
         ext.id = X509_OID(x509_oid_extension_subject_alt_name);
-        ext.value =
-            burrow__x509_marshal_sans(a, template_->dns_names, template_->email_addresses,
-                              template_->ip_addresses, template_->uris, &e);
+        ext.value = burrow__x509_marshal_sans(
+            a, template_->dns_names, template_->email_addresses,
+            template_->ip_addresses, template_->uris, &e);
         if (BURROW_FAILED(e))
             return e;
         if (!x509_push(a, out, TYPE_PKIX_EXTENSION, &ext))

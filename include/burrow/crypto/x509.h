@@ -721,6 +721,16 @@ BURROW_OWNS(ret) Slice x509_cert_pool_subjects(const X509CertPool *s, Alloc *a);
 /* CertPool.Equal: whether s and other hold the same certificates. */
 bool x509_cert_pool_equal(const X509CertPool *s, const X509CertPool *other);
 
+/* SystemCertPool: a copy of the system's roots, from a. On Windows and macOS
+ * the pool stands for the platform's own verifier and has no certificates in
+ * it, unless SSL_CERT_FILE or SSL_CERT_DIR is set. */
+BURROW_OWNS(ret) X509CertPool *x509_system_cert_pool(Alloc *a, Error *err);
+
+/* SetFallbackRoots: the roots to use when the system has none, or always with
+ * GODEBUG=x509usefallbackroots=1. roots is kept for the life of the program.
+ * Panics when roots is NULL or when called a second time. */
+void x509_set_fallback_roots(X509CertPool *roots);
+
 #ifdef __cplusplus
 }
 #endif

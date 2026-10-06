@@ -13,12 +13,18 @@
 #include "burrow/crypto/sha256.h"
 #include "burrow/encoding/pem.h"
 #include "burrow/error.h"
+#include "burrow/io/fs.h"
 #include "burrow/map.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
+#include "burrow/os.h"
 #include "burrow/panic.h"
+#include "burrow/path/filepath.h"
+#include "burrow/platform.h"
 #include "burrow/slice.h"
+#include "burrow/strings.h"
+#include "burrow/sync.h"
 
 #include "x509_internal.h"
 
@@ -266,4 +272,219 @@ X509PotentialParent *burrow__x509_cert_pool_find_potential_parents(
 
 void burrow__x509_cert_pool_set_system(X509CertPool *s) {
     s->system_pool = true;
+}
+
+/* ---------------------------------------------------------- system roots */
+
+#if defined(BURROW_OS_LINUX)
+static const char *const x509_cert_files[] = {
+    "/etc/ssl/certs/ca-certificates.crt",                /* Debian/Ubuntu/Gentoo etc. */
+    "/etc/pki/tls/certs/ca-bundle.crt",                  /* Fedora/RHEL 6 */
+    "/etc/ssl/ca-bundle.pem",                            /* OpenSUSE */
+    "/etc/pki/tls/cacert.pem",                           /* OpenELEC */
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", /* CentOS/RHEL 7 */
+    "/etc/ssl/cert.pem",                                 /* Alpine Linux */
+    NULL,
+};
+
+static const char *const x509_cert_directories[] = {
+    "/etc/ssl/certs",     /* SLES10/SLES11, https://golang.org/issue/12139 */
+    "/etc/pki/tls/certs", /* Fedora/RHEL */
+#if defined(BURROW_OS_ANDROID)
+    "/system/etc/security/cacerts",    /* Android system roots */
+    "/data/misc/keychain/certs-added", /* User trusted CA folder */
+#endif
+    NULL,
+};
+#elif defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_OPENBSD) ||                      \
+    defined(BURROW_OS_NETBSD) || defined(BURROW_OS_DRAGONFLY)
+static const char *const x509_cert_files[] = {
+    "/usr/local/etc/ssl/cert.pem",            /* FreeBSD */
+    "/etc/ssl/cert.pem",                      /* OpenBSD */
+    "/usr/local/share/certs/ca-root-nss.crt", /* DragonFly */
+    "/etc/openssl/certs/ca-certificates.crt", /* NetBSD */
+    NULL,
+};
+
+static const char *const x509_cert_directories[] = {
+    "/etc/ssl/certs",         /* FreeBSD 12.2+ */
+    "/usr/local/share/certs", /* FreeBSD */
+    "/etc/openssl/certs",     /* NetBSD */
+    NULL,
+};
+#else
+/* Windows and macOS ask the platform to verify, and only read files when
+ * SSL_CERT_FILE or SSL_CERT_DIR says to. */
+static const char *const x509_cert_files[] = {NULL};
+static const char *const x509_cert_directories[] = {NULL};
+#endif
+
+/* isSameDirSymlink: whether entry f of dir is a link to a name in dir. */
+static bool x509_same_dir_symlink(Alloc *a, FsDirEntry f, Str dir) {
+    if ((f.vt->type(f.data) & FS_MODE_SYMLINK) == 0)
+        return false;
+    Error err = BURROW_NO_ERROR;
+    Str target = os_readlink(a, filepath_join_v(a, 2, dir, f.vt->name(f.data)), &err);
+    return !BURROW_FAILED(err) && !strings_contains_rune(target, FILEPATH_SEPARATOR);
+}
+
+/* Reads every file named in files until one can be read, then every file in
+ * dirs, into roots. The first error that is not a missing file goes to
+ * *first_err. */
+static void x509_load_on_disk(X509CertPool *roots, Alloc *a, Slice files, Slice dirs,
+                              Error *first_err) {
+    const Str *f = files.p;
+    for (Int i = 0; i < files.len; i++) {
+        Error err = BURROW_NO_ERROR;
+        Slice data = os_read_file(a, f[i], &err);
+        if (!BURROW_FAILED(err)) {
+            x509_cert_pool_append_certs_from_pem(roots, data);
+            break;
+        }
+        if (!BURROW_FAILED(*first_err) && !os_is_not_exist(err))
+            *first_err = err;
+    }
+    const Str *d = dirs.p;
+    for (Int i = 0; i < dirs.len; i++) {
+        Error err = BURROW_NO_ERROR;
+        Slice fis = os_read_dir(a, d[i], &err);
+        if (BURROW_FAILED(err)) {
+            if (!BURROW_FAILED(*first_err) && !os_is_not_exist(err))
+                *first_err = err;
+            continue;
+        }
+        for (Int j = 0; j < fis.len; j++) {
+            FsDirEntry fi = *(FsDirEntry *)slice_at(fis, j);
+            if (x509_same_dir_symlink(a, fi, d[i]))
+                continue;
+            Error rerr = BURROW_NO_ERROR;
+            Slice data = os_read_file(
+                a, filepath_join_v(a, 2, d[i], fi.vt->name(fi.data)), &rerr);
+            if (!BURROW_FAILED(rerr))
+                x509_cert_pool_append_certs_from_pem(roots, data);
+        }
+    }
+}
+
+static Slice x509_cstr_list(Alloc *a, const char *const *list) {
+    Slice s = slice_nil(TYPE_STRING);
+    for (; *list != NULL; list++) {
+        Str x = str_from_cstr(*list);
+        s = slice_append(a, s, &x, 1);
+    }
+    return s;
+}
+
+/* loadOnDiskRoots, with a pool from a. A pool comes back unless nothing was
+ * found and something failed. */
+static X509CertPool *x509_load_on_disk_roots(Alloc *a, Str cert_file, Str cert_dir,
+                                             Error *err) {
+    Arena scratch;
+    arena_init(&scratch, a, 0);
+    Alloc *s = arena_allocator(&scratch);
+    X509CertPool *roots = x509_new_cert_pool(a);
+    Slice files = cert_file.len > 0
+                      ? slice_append(s, slice_nil(TYPE_STRING), &cert_file, 1)
+                      : x509_cstr_list(s, x509_cert_files);
+    Slice dirs = cert_dir.len > 0 ? filepath_split_list(s, cert_dir)
+                                  : x509_cstr_list(s, x509_cert_directories);
+    Error first_err = BURROW_NO_ERROR;
+    x509_load_on_disk(roots, s, files, dirs, &first_err);
+    arena_free(&scratch);
+    if (roots->len > 0 || !BURROW_FAILED(first_err))
+        return roots;
+    x509_cert_pool_free(roots);
+    BURROW_OUT(err, first_err);
+    return NULL;
+}
+
+/* loadSystemRoots */
+static X509CertPool *x509_load_system_roots(Alloc *a, Error *err) {
+    Str cert_file = os_getenv(a, BURROW_S("SSL_CERT_FILE"));
+    Str cert_dir = os_getenv(a, BURROW_S("SSL_CERT_DIR"));
+#if defined(BURROW_OS_WINDOWS) || defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+    if ((cert_file.len == 0 && cert_dir.len == 0) || burrow__x509_no_cert_override()) {
+        X509CertPool *p = x509_new_cert_pool(a);
+        p->system_pool = true;
+        return p;
+    }
+#endif
+    return x509_load_on_disk_roots(a, cert_file, cert_dir, err);
+}
+
+static SyncOnce x509_roots_once;
+static SyncRWMutex x509_roots_mu;
+static X509CertPool *x509_system_roots;
+static Error x509_system_roots_err;
+static bool x509_fallbacks_set;
+static bool x509_use_fallback_roots;
+
+/* Whether p has roots in it or stands for the platform's. */
+static bool x509_system_certs_avail(const X509CertPool *p) {
+    return p != NULL && (p->len > 0 || p->system_pool);
+}
+
+/* initSystemRoots. The pool lives as long as the program does. */
+static void x509_init_system_roots(void *env) {
+    (void)env;
+    sync_rw_mutex_lock(&x509_roots_mu);
+    X509CertPool *fallback_roots = x509_system_roots;
+    Error err = BURROW_NO_ERROR;
+    x509_system_roots = x509_load_system_roots(heap_allocator(), &err);
+    x509_system_roots_err =
+        BURROW_FAILED(err) ? error_retain(heap_allocator(), err) : err;
+    if (BURROW_FAILED(err))
+        x509_system_roots = NULL;
+    if (fallback_roots != NULL &&
+        (x509_use_fallback_roots || !x509_system_certs_avail(x509_system_roots))) {
+        x509_system_roots = fallback_roots;
+        x509_system_roots_err = BURROW_NO_ERROR;
+    }
+    sync_rw_mutex_unlock(&x509_roots_mu);
+}
+
+/* systemRootsPool */
+X509CertPool *burrow__x509_system_roots_pool(void) {
+    sync_once_do(&x509_roots_once, BURROW_FN(Func, x509_init_system_roots, NULL));
+    sync_rw_mutex_r_lock(&x509_roots_mu);
+    X509CertPool *p = x509_system_roots;
+    sync_rw_mutex_r_unlock(&x509_roots_mu);
+    return p;
+}
+
+X509CertPool *x509_system_cert_pool(Alloc *a, Error *err) {
+    X509CertPool *sys_roots = burrow__x509_system_roots_pool();
+    if (sys_roots != NULL)
+        return x509_cert_pool_clone(sys_roots, a);
+    return x509_load_system_roots(a, err);
+}
+
+static void x509_unreachable(void *env) {
+    (void)env;
+    panic_str(BURROW_S("unreachable"));
+}
+
+void x509_set_fallback_roots(X509CertPool *roots) {
+    if (roots == NULL)
+        panic_str(BURROW_S("roots must be non-nil"));
+    sync_rw_mutex_lock(&x509_roots_mu);
+    if (x509_fallbacks_set) {
+        sync_rw_mutex_unlock(&x509_roots_mu);
+        panic_str(BURROW_S("SetFallbackRoots has already been called"));
+    }
+    x509_fallbacks_set = true;
+    if (x509_system_roots == NULL && !BURROW_FAILED(x509_system_roots_err)) {
+        x509_system_roots = roots;
+        x509_use_fallback_roots = burrow__x509_use_fallback_roots();
+        sync_rw_mutex_unlock(&x509_roots_mu);
+        return;
+    }
+    /* Asserts that the system roots were indeed loaded before. */
+    sync_once_do(&x509_roots_once, BURROW_FN(Func, x509_unreachable, NULL));
+    if (burrow__x509_use_fallback_roots() ||
+        !x509_system_certs_avail(x509_system_roots)) {
+        x509_system_roots = roots;
+        x509_system_roots_err = BURROW_NO_ERROR;
+    }
+    sync_rw_mutex_unlock(&x509_roots_mu);
 }

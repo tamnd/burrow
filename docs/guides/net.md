@@ -241,9 +241,10 @@ net_tcp_listener_free(l);
 
 /* Errors read the way Go's do. */
 raddr.port = 80;
-net_dial_tcp(heap_allocator(), BURROW_S("tcp5"), NULL, &raddr, &err);
-Str msg = error_text(err);
-printf("%.*s\n", (int)msg.len, (const char *)msg.p);
+if (net_dial_tcp(heap_allocator(), BURROW_S("tcp5"), NULL, &raddr, &err) == NULL) {
+    Str msg = error_text(err);
+    printf("%.*s\n", (int)msg.len, (const char *)msg.p);
+}
 ```
 
 That prints:

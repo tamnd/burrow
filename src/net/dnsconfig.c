@@ -163,6 +163,8 @@ static void nc_fallback(Alloc *a, burrow__DNSConfig *conf,
 void burrow__dns_read_config(Alloc *a, Str filename, burrow__NetHostnameFunc hostname,
                              burrow__DNSConfig *conf) {
     memset(conf, 0, sizeof *conf);
+    /* Typed, so the nameserver lines can append to it. */
+    conf->servers = slice_nil(TYPE_STRING);
     conf->ndots = 1;
     conf->timeout = 5 * TIME_SECOND;
     conf->attempts = 2;

@@ -233,13 +233,13 @@ BigInt *crypto_rand_prime(Alloc *a, IoReader rand, Int bits, Error *err) {
 
         /* Clear bits in the first byte to make sure the candidate has a size
          * <= bits. */
-        p8[0] &= (Byte)((1u << b) - 1);
+        p8[0] &= (Byte)((1U << b) - 1);
         /* Don't let the value be too small, i.e, set the most significant two
          * bits. Setting the top two bits, rather than just the top bit, means
          * that when two of these values are multiplied together, the result
          * isn't ever one bit short. */
         if (b >= 2) {
-            p8[0] |= (Byte)(3u << (b - 2));
+            p8[0] |= (Byte)(3U << (b - 2));
         } else {
             /* Here b==1, because b cannot be zero. */
             p8[0] |= 1;
@@ -297,7 +297,7 @@ BigInt *crypto_rand_int(Alloc *a, IoReader rand, const BigInt *max, Error *err) 
 
         /* Clear bits in the first byte to increase the probability that the
          * candidate is < max. */
-        ((Byte *)bytes.p)[0] &= (Byte)((1u << b) - 1);
+        ((Byte *)bytes.p)[0] &= (Byte)((1U << b) - 1);
 
         big_int_set_bytes(n, bytes);
         if (big_int_cmp(n, max) < 0) {

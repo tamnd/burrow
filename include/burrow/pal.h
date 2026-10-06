@@ -313,8 +313,8 @@ int64_t pal_cpu_name(char *buf, int64_t cap);
 
 /* Instruction set extensions the crypto code can use, as bits of
  * pal_cpu_features. They are the fields of Go's internal/cpu that its hashes
- * check, X86.HasSHA, X86.HasAES and the rest, and a bit is only ever set on the machine it
- * names. */
+ * check, X86.HasSHA, X86.HasAES and the rest, and a bit is only ever set on
+ * the machine it names. */
 #define PAL_CPU_X86_SSSE3 (UINT32_C(1) << 0)
 #define PAL_CPU_X86_SSE41 (UINT32_C(1) << 1)
 #define PAL_CPU_X86_SHA (UINT32_C(1) << 2)

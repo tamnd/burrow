@@ -731,6 +731,40 @@ BURROW_OWNS(ret) X509CertPool *x509_system_cert_pool(Alloc *a, Error *err);
  * Panics when roots is NULL or when called a second time. */
 void x509_set_fallback_roots(X509CertPool *roots);
 
+/* ----------------------------------------------------------- verification */
+
+/* InvalidReason: why CertificateInvalidError rejected a certificate. */
+typedef Int X509InvalidReason;
+
+enum {
+    /* A certificate signed another one without being a CA. */
+    X509_NOT_AUTHORIZED_TO_SIGN = 0,
+    /* The certificate is outside its validity period. */
+    X509_EXPIRED = 1,
+    /* An intermediate or root has a name constraint that the leaf's name is
+     * not inside. */
+    X509_CA_NOT_AUTHORIZED_FOR_THIS_NAME = 2,
+    /* A path length constraint was broken. */
+    X509_TOO_MANY_INTERMEDIATES = 3,
+    /* The key usages do not allow the use asked for. */
+    X509_INCOMPATIBLE_USAGE = 4,
+    /* The issuer's subject is not the child's issuer. */
+    X509_NAME_MISMATCH = 5,
+    /* Never used any more, kept as Go keeps it. */
+    X509_NAME_CONSTRAINTS_WITHOUT_SANS = 6,
+    /* A CA has a name constraint and the leaf a name of a kind it does not
+     * cover. */
+    X509_UNCONSTRAINED_NAME = 7,
+    /* Checking name constraints would take more comparisons than
+     * VerifyOptions.MaxConstraintComparisions allows. */
+    X509_TOO_MANY_CONSTRAINTS = 8,
+    /* An intermediate or root does not allow an extended key usage the leaf
+     * asks for. */
+    X509_CA_NOT_AUTHORIZED_FOR_EXT_KEY_USAGE = 9,
+    /* Chains were built, but none of them were valid. */
+    X509_NO_VALID_CHAINS = 10,
+};
+
 #ifdef __cplusplus
 }
 #endif

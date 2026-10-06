@@ -140,9 +140,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.RELEASE_REF }}
+      # CI is what holds the tree to zero warnings. Here a compiler newer than
+      # the tag, which is every compiler for an old tag, would only cost the
+      # archive.
       - name: build
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBURROW_BUILD_TESTS=OFF
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBURROW_BUILD_TESTS=OFF -DBURROW_WERROR=OFF
           cmake --build build --config Release
       - name: pack
         shell: bash

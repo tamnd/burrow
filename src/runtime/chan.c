@@ -1174,12 +1174,17 @@ static void sel_enqueue(Select *s) {
     }
 }
 
-/* Takes them all off again, with every channel locked. The winning entry is in
- * here too and is already off, which waitq_remove works out for itself. */
+/* Takes them all off again, with every channel locked, except the winning
+ * entry, which whoever claimed it already took off. It has to be skipped and
+ * not just looked at. chan_close strings the entries it wakes together through
+ * their next pointers after taking them off, so a winner woken by a close can
+ * have a neighbour and look as if it were still on the queue, and unlinking it
+ * would put another goroutine's entry back at the head of a queue it has
+ * left. Go's selectgo skips the winning case for the same reason. */
 static void sel_dequeue(Select *s) {
     for (Int i = 0; i < s->n; i++) {
         SelectCase *sc = &s->cases[i];
-        if (sc->op == SELECT_DEFAULT || sc->c == NULL)
+        if (sc->op == SELECT_DEFAULT || sc->c == NULL || i == s->p.won)
             continue;
 
         if (sc->op == SELECT_SEND)

@@ -244,3 +244,8 @@ crypto/ecdh: func P521: returns a pointer to one of the four curves, as Curve ca
 crypto/ecdh: func X25519: returns a pointer to one of the four curves, as Curve cannot be implemented outside the package
 crypto/ecdh: method (*PrivateKey) Curve: returns a pointer to one of the four curves, as Curve cannot be implemented outside the package
 crypto/ecdh: method (*PublicKey) Curve: returns a pointer to one of the four curves, as Curve cannot be implemented outside the package
+
+# include/burrow/net.h: Go returns both ends and leaves the memory to the
+# collector. Here the pipe comes from an allocator and net_pipe_free gives it
+# back, and two values come back through out parameters.
+net: func Pipe: takes an allocator and returns both ends through out parameters

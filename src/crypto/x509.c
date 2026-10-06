@@ -4202,10 +4202,12 @@ static Error x509_marshal_ext_key_usage(Alloc *a, Slice ext_usages,
         if (u[i] < 0 || u[i] >= X509_NEKU)
             return x509_err("x509: unknown extended key usage");
         const X509ExtKeyUsageOID *eku = &x509_ext_key_usage_oids[u[i]];
+        /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
         o[i] = (Asn1ObjectIdentifier){(void *)(uintptr_t)eku->oid, eku->len, eku->len,
                                       TYPE_INT};
     }
     if (unknown_usages.len > 0)
+        /* NOLINTNEXTLINE(clang-analyzer-unix.cstring.NullArg) */
         memcpy(o + ext_usages.len, unknown_usages.p,
                (size_t)unknown_usages.len * sizeof *o);
     return x509_marshal_extension(a, ext, ext->id, false,
@@ -4325,8 +4327,10 @@ static Error x509_ip_and_mask(Alloc *a, const NetIPNet *ip_net, Slice *out) {
     if (out->p == NULL && n != 0)
         return burrow_err_out_of_memory;
     if (masked.len > 0)
+        /* NOLINTNEXTLINE(clang-analyzer-unix.cstring.NullArg) */
         memcpy(out->p, masked.p, (size_t)masked.len);
     if (ip_net->mask.len > 0)
+        /* NOLINTNEXTLINE(clang-analyzer-unix.cstring.NullArg) */
         memcpy((Byte *)out->p + masked.len, ip_net->mask.p, (size_t)ip_net->mask.len);
     return BURROW_NO_ERROR;
 }
@@ -4541,9 +4545,9 @@ static Error x509_build_cert_extensions(Alloc *a, const X509Certificate *templat
         /* RFC 5280 section 4.2.1.6: with an empty subject the subjectAltName
          * is critical. */
         ret[n].critical = subject_is_empty;
-        ret[n].value =
-            burrow__x509_marshal_sans(a, template_->dns_names, template_->email_addresses,
-                              template_->ip_addresses, template_->uris, &e);
+        ret[n].value = burrow__x509_marshal_sans(
+            a, template_->dns_names, template_->email_addresses,
+            template_->ip_addresses, template_->uris, &e);
         if (BURROW_FAILED(e))
             return e;
         n++;
@@ -4610,9 +4614,9 @@ static Error x509_build_csr_extensions(Alloc *a,
         PkixExtension ext;
         memset(&ext, 0, sizeof ext);
         ext.id = X509_OID(x509_oid_extension_subject_alt_name);
-        ext.value =
-            burrow__x509_marshal_sans(a, template_->dns_names, template_->email_addresses,
-                              template_->ip_addresses, template_->uris, &e);
+        ext.value = burrow__x509_marshal_sans(
+            a, template_->dns_names, template_->email_addresses,
+            template_->ip_addresses, template_->uris, &e);
         if (BURROW_FAILED(e))
             return e;
         if (!x509_push(a, out, TYPE_PKIX_EXTENSION, &ext))

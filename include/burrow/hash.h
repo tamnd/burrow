@@ -65,6 +65,12 @@ typedef struct Hash {
     void *data;
 } Hash;
 
+/* A function that makes a new Hash, which is what Go's func() hash.Hash is.
+ * crypto/hmac, crypto/hkdf and crypto/pbkdf2 take one so they can make as many
+ * hashes of the same kind as they need, and sha256_new is one as it stands. It
+ * returns a nil Hash when a runs out of memory. */
+typedef Hash (*HashNewFunc)(Alloc *a);
+
 /* hash.Hash32, a Hash whose sum is also a 32 bit number. */
 typedef struct HashHash32VT {
     HashVT hash;

@@ -51,6 +51,8 @@ category	uuid-v7	uuid.NewV7's last timestamp. Go keeps it in package level varia
 category	weak	weak's table of slots. Go hangs a weak handle off the object and its collector clears it, and here the allocators tell one table when memory goes, which has to be process wide because memory freed on one thread may have had a WeakPointer made on another.
 category	zip-registry	archive/zip's registered compressors and decompressors. Go keeps them in sync.Maps at package level, and they are process wide because a method registered anywhere is one every Reader and Writer can use.
 category	last-error	The platform's code for the last failure each thread saw, which is per thread the way errno and GetLastError are.
+category	impl-select	Which implementation a crypto package runs, which Go keeps in crypto/internal/impl so that its tests can try every one.
+category	crypto-registry	crypto's table of registered hash functions. Go keeps it in a package level slice that RegisterHash writes from init, and it is process wide because a hash registered anywhere is one Hash.New can make everywhere.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -325,3 +327,23 @@ global	src/syscall/call.c	burrow__syscall_zero	marker	What Go's &_zero is: a sli
 global	src/syscall/call.c	burrow__syscall_libc_cache	tables	Each slot is an atomic pointer, loaded with acquire and stored with release. Two threads that look the same libSystem function up at once store the same address.
 global	src/syscall/zsyscall.c	burrow__syscall_mods	tables	Go's modkernel32 and the rest, one LazyDLL each. Each loads its DLL the first time a procedure in it is called, under its own mutex, and publishes the handle with a release store.
 global	src/syscall/zsyscall.c	burrow__syscall_procs	tables	Go's procCreateFileW and the rest, one LazyProc each. Each finds its address the first time it is called, under its own mutex, and publishes it with a release store.
+global	src/crypto/rand.c	crypto_rand_debug_flags	godebug	The cryptocustomrand setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
+global	src/crypto/rand.c	crypto_rand_reader	package-vars	crypto/rand.Reader. Not synchronised, as in Go: a program assigns it before other threads read from it.
+global	src/crypto/aes.c	aes_portable_only	impl-select	Set only by tests, through burrow__aes_set_portable, with relaxed atomics. A block reads it once, when it is made.
+global	src/crypto/crypto.c	crypto_hashes	crypto-registry	What crypto_register_hash was given for each hash, as a function address in an atomic word. Release stores and acquire loads only, so a hash being registered and one being made can race safely.
+global	src/crypto/nistec_p224.c	p224_b_value	tables	The curve's b in the field's own form, made once by p224_b_init.
+global	src/crypto/nistec_p224.c	p224_b_once	tables	A SyncOnce, which is the synchronisation for p224_b_value.
+global	src/crypto/nistec_p224.c	p224_gg	tables	g, g^2, g^4 and so on to g^(2^95), for the 2^96th root of unity g that the square root uses, made once by p224_gg_init.
+global	src/crypto/nistec_p224.c	p224_gg_once	tables	A SyncOnce, which is the synchronisation for p224_gg.
+global	src/crypto/nistec_p224.c	p224_generator_table	tables	Multiples of the generator for ScalarBaseMult, made once by p224_generator_table_init.
+global	src/crypto/nistec_p224.c	p224_generator_table_once	tables	A SyncOnce, which is the synchronisation for p224_generator_table.
+global	src/crypto/nistec_p384.c	p384_b_value	tables	The curve's b in the field's own form, made once by p384_b_init.
+global	src/crypto/nistec_p384.c	p384_b_once	tables	A SyncOnce, which is the synchronisation for p384_b_value.
+global	src/crypto/nistec_p384.c	p384_generator_table	tables	Multiples of the generator for ScalarBaseMult, made once by p384_generator_table_init.
+global	src/crypto/nistec_p384.c	p384_generator_table_once	tables	A SyncOnce, which is the synchronisation for p384_generator_table.
+global	src/crypto/nistec_p521.c	p521_b_value	tables	The curve's b in the field's own form, made once by p521_b_init.
+global	src/crypto/nistec_p521.c	p521_b_once	tables	A SyncOnce, which is the synchronisation for p521_b_value.
+global	src/crypto/nistec_p521.c	p521_generator_table	tables	Multiples of the generator for ScalarBaseMult, made once by p521_generator_table_init.
+global	src/crypto/nistec_p521.c	p521_generator_table_once	tables	A SyncOnce, which is the synchronisation for p521_generator_table.
+global	src/crypto/elliptic.c	elliptic_nist	tables	The four NIST curves with their CurveParams, filled in once by elliptic_init and only read after that, as Go's initonce has it.
+global	src/crypto/elliptic.c	elliptic_once	tables	A SyncOnce, which is the synchronisation for elliptic_nist.

@@ -17,16 +17,9 @@
 #include "burrow/type.h"
 
 #include "internal.h"
+#include "sha512_internal.h"
 
 #include <string.h>
-
-typedef struct Sha512Digest {
-    uint64_t h[8];
-    Byte x[SHA512_BLOCK_SIZE];
-    Int nx;
-    uint64_t len;
-    Int size;
-} Sha512Digest;
 
 static const uint64_t sha512_k[80] = {
     0x428A2F98D728AE22ULL, 0x7137449123EF65CDULL, 0xB5C0FBCFEC4D3B2FULL,
@@ -478,6 +471,8 @@ static void sha512_check_sum(Sha512Digest *d, Byte out[SHA512_SIZE]) {
 }
 
 static void sha512_update(Sha512Digest *d, const Byte *p, Int n) {
+    if (n == 0)
+        return; /* p may be NULL, and memcpy may not be given one */
     d->len += (uint64_t)n;
     if (d->nx > 0) {
         Int k = SHA512_BLOCK_SIZE - d->nx < n ? SHA512_BLOCK_SIZE - d->nx : n;
@@ -594,4 +589,17 @@ Sha512Sum512256Ret sha512_sum512256(Slice data) {
     sha512_one_shot(SHA512_SIZE256, data, h);
     memcpy(r.a, h, sizeof r.a);
     return r;
+}
+
+void burrow__sha512_init(Sha512Digest *d) {
+    d->size = SHA512_SIZE;
+    sha512_reset(d);
+}
+
+void burrow__sha512_write(Sha512Digest *d, const void *p, Int n) {
+    sha512_update(d, p, n);
+}
+
+void burrow__sha512_sum(Sha512Digest *d, Byte out[SHA512_SIZE]) {
+    sha512_check_sum(d, out);
 }

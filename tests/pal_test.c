@@ -156,9 +156,11 @@ static void TestCPUFeaturesAreTheMachines(TestingT *t) {
         CHECK(pal_cpu_features() == f);
 
     /* A bit is only set on the architecture it names. */
-    uint32_t x86 = PAL_CPU_X86_SSSE3 | PAL_CPU_X86_SSE41 | PAL_CPU_X86_SHA;
+    uint32_t x86 = PAL_CPU_X86_SSSE3 | PAL_CPU_X86_SSE41 | PAL_CPU_X86_SHA |
+                   PAL_CPU_X86_AES | PAL_CPU_X86_PCLMULQDQ;
     uint32_t arm64 = PAL_CPU_ARM64_SHA1 | PAL_CPU_ARM64_SHA2 | PAL_CPU_ARM64_SHA512 |
-                     PAL_CPU_ARM64_SHA3;
+                     PAL_CPU_ARM64_SHA3 | PAL_CPU_ARM64_DIT | PAL_CPU_ARM64_AES |
+                     PAL_CPU_ARM64_PMULL;
 #if !defined(BURROW_ARCH_AMD64) && !defined(BURROW_ARCH_386)
     CHECK((f & x86) == 0);
 #endif
@@ -168,10 +170,11 @@ static void TestCPUFeaturesAreTheMachines(TestingT *t) {
     CHECK((f & ~(x86 | arm64)) == 0);
 
     /* make test runs this again with GODEBUG=cpu.all=off, which has to leave
-     * nothing. */
+     * nothing but DIT. Go has no GODEBUG option for DIT, so cpu.all does not
+     * reach it there either. */
     for (const char *const *env = pal_environ(); env != NULL && *env != NULL; env++)
         if (strcmp(*env, "GODEBUG=cpu.all=off") == 0)
-            CHECK(f == 0);
+            CHECK((f & ~PAL_CPU_ARM64_DIT) == 0);
 }
 
 /* --------------------------------------------------------------- the memory */

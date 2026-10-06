@@ -27,8 +27,10 @@ vendored="$goroot/src/vendor/golang.org/x/net/idna"
 
 netver=$(sed -n 's|^# golang.org/x/net \(v[^ ]*\)$|\1|p' "$goroot/src/vendor/modules.txt")
 ver=$(sed -n 's|^# golang.org/x/text \(v[^ ]*\)$|\1|p' "$goroot/src/vendor/modules.txt")
-[ -n "$netver" ] && [ -n "$ver" ] ||
-	{ echo "gen-xnet-idna: no golang.org/x/net or x/text in modules.txt" >&2; exit 1; }
+if [ -z "$netver" ] || [ -z "$ver" ]; then
+	echo "gen-xnet-idna: no golang.org/x/net or x/text in modules.txt" >&2
+	exit 1
+fi
 
 tmp=$(mktemp -d)
 trap 'chmod -R u+w "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT

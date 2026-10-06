@@ -25,7 +25,8 @@ static void run(void *env) {
     Byte buf[64];
     NetipAddrPort from;
     Int n = net_udp_conn_read_from_udp_addr_port(
-        server, slice_from(buf, 0, (Int)sizeof buf, TYPE_BYTE), &from, &err);
+        server, slice_from(buf, (Int)sizeof buf, (Int)sizeof buf, TYPE_BYTE), &from,
+        &err);
     Str ip = netip_addr_string(netip_addr_port_addr(from), heap_allocator());
     printf("%.*s from %.*s\n", (int)n, (const char *)buf, (int)ip.len,
            (const char *)ip.p);

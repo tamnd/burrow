@@ -1188,7 +1188,7 @@ printf("%d attributes\n", (int)parsed.names.len);
 
 ## crypto/x509
 
-`burrow/crypto/x509.h` is Go's crypto/x509. It covers key formats, object identifiers, certificates, certificate requests and revocation lists; chain building comes next. Private keys go in and out of PKCS #8 as an `Any`, the same way Go uses `any`, so one call handles RSA, ECDSA, Ed25519, X25519 and ML-DSA keys. PKCS #1 and SEC 1 have calls of their own for RSA and EC keys:
+`burrow/crypto/x509.h` is Go's crypto/x509. It covers key formats, object identifiers, certificates, certificate requests, revocation lists and chain verification. Private keys go in and out of PKCS #8 as an `Any`, the same way Go uses `any`, so one call handles RSA, ECDSA, Ed25519, X25519 and ML-DSA keys. PKCS #1 and SEC 1 have calls of their own for RSA and EC keys:
 
 <!-- example: ../examples/crypto/x509.c#pkcs8 -->
 ```c
@@ -1352,6 +1352,39 @@ print(hex_encode_to_string(a, leaf->authority_key_id));
 ```
 
 `x509_create_revocation_list` and `x509_parse_revocation_list` do the same for CRLs. Parsing does not fail on an extension it does not know. When such an extension is marked critical it goes in `unhandled_critical_extensions`, as in Go, and verification turns the certificate down unless the caller handles it and takes it out of that list.
+
+`x509_certificate_verify` builds chains from a certificate up to a root in `opts.roots`, through any intermediates in `opts.intermediates`, and checks names, validity periods, key usages, name constraints and policies along the way, the way Go's `Certificate.Verify` does. Each chain is an `X509CertificateChain` with the leaf first. A zero `current_time` means now, and with no roots it uses the system pool. When something is wrong the error says what, with Go's wording:
+
+<!-- example: ../examples/crypto/x509.c#verify -->
+```c
+X509CertPool *roots = x509_new_cert_pool(a);
+x509_cert_pool_add_cert(roots, ca);
+X509VerifyOptions opts = {0};
+opts.roots = roots;
+opts.dns_name = BURROW_S("www.example.com");
+opts.current_time = time_date(2026, TIME_JUNE, 1, 0, 0, 0, 0, time_utc_loc);
+Slice chains = x509_certificate_verify(leaf, a, opts, &err);
+if (BURROW_FAILED(err))
+    return;
+X509CertificateChain *chain = chains.p;
+printf("%d chain, %d certificates\n", (int)chains.len, (int)chain[0].len);
+
+opts.dns_name = BURROW_S("mail.example.com");
+x509_certificate_verify(leaf, a, opts, &err);
+print(error_text(err));
+
+opts.dns_name = BURROW_S("www.example.com");
+opts.current_time = time_date(2027, TIME_JUNE, 1, 0, 0, 0, 0, time_utc_loc);
+x509_certificate_verify(leaf, a, opts, &err);
+print(error_text(err));
+
+opts.roots = x509_new_cert_pool(a);
+opts.current_time = time_date(2026, TIME_JUNE, 1, 0, 0, 0, 0, time_utc_loc);
+x509_certificate_verify(leaf, a, opts, &err);
+print(error_text(err));
+```
+
+`x509_system_cert_pool` loads the system roots once, from the usual files and directories on Linux and the BSDs or from `SSL_CERT_FILE` and `SSL_CERT_DIR` when they are set. On macOS, iOS and Windows Go asks the platform to verify instead, and that is not done yet, so there the system pool is empty unless those variables name a file or directory.
 
 `x509_encrypt_pem_block` and `x509_decrypt_pem_block` handle the RFC 1423 `DEK-Info` encryption that old OpenSSL keys use. Go deprecates them because the scheme is weak and a wrong password is not always caught, and they are here for reading old files, not for writing new ones.
 

@@ -6,6 +6,16 @@
  * directory; here it is written to a directory of its own first. GODEBUG is
  * set with burrow__x509_godebug_set rather than through the environment.
  *
+ * Some of Go's crypto/x509 tests are not anywhere in burrow's tests.
+ * TestSetFallbackRoots re-runs the test binary in a new user and mount
+ * namespace with an empty /etc. TestFallback here goes through the same
+ * SetFallbackRoots paths without one. TestHybridPool and TestPlatformVerifier
+ * need the macOS and Windows platform verifiers, which are not done yet.
+ * TestNISTPKITSPolicy and TestX509Limbo read large test suites from outside
+ * the package. The fips140v1.0 tests check a GODEBUG that pins an older FIPS
+ * module, TestGob is about encoding/gob, and TestImports checks Go's import
+ * graph.
+ *
  * Copyright 2022 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found

@@ -8,6 +8,8 @@
 #ifndef BURROW_CRYPTO_DES_INTERNAL_H
 #define BURROW_CRYPTO_DES_INTERNAL_H
 
+#include "burrow/crypto/des.h"
+
 #include <stdint.h>
 
 /* Go's permuteInitialBlock and permuteFinalBlock. */

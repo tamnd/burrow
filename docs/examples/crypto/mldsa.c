@@ -139,4 +139,16 @@ int main(void) {
 }
 
 /* Output:
+1312 2420
+ok
+mldsa: invalid signature
+mldsa: invalid signature
+1494cfed0b3c18c0b8534b86460e06cec9ae1b8f0ced906dc8b140241a1ac738
+PublicKey 4627
+ok
+mldsa: invalid seed length
+mldsa: invalid public key length
+mldsa: context too long
+mldsa: invalid SignerOpts
+mldsa: invalid signature length
 */

@@ -712,7 +712,8 @@ static IoReader latin_reader(void *env, Str charset, IoReader input, Error *err)
 
 static void TestAddressParser(TestingT *t) {
     ARENA_BEGIN;
-    Latin l = {a, {0}};
+    Latin l = {0};
+    l.a = a;
     MimeWordDecoder dec = {BURROW_FN(MimeCharsetReader, latin_reader, &l)};
     MailAddressParser ap = {&dec};
     check_addresses(t, a, &ap, parser_tests,

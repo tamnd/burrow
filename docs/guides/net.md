@@ -344,6 +344,16 @@ printf("%.*s\n", P(time_format(t, a, TIME_RFC3339)));
 mail_message_free(m);
 ```
 
+That prints:
+
+```
+Date: Mon, 23 Jun 2015 11:40:36 -0400
+From: Gopher <from@example.com>
+Subject: Gophers at Gophercon
+Message body
+2015-06-23T11:40:36-04:00
+```
+
 `mail_parse_address` reads one address and `mail_parse_address_list` reads a list, groups included. Each `MailAddress` is one allocation that holds the struct and both strings, so the input can go away while it lives, and a list is a `Slice` of `MailAddress *` that `mail_address_list_free` gives back in one call. `mail_address_string` puts an address back together the way RFC 5322 wants it, quoting the name, or encoding it as an RFC 2047 word when it is not plain ASCII:
 
 <!-- example: ../examples/net/mail.c#addresses -->
@@ -367,6 +377,16 @@ mail_address_list_free(a, list);
 
 if (mail_parse_address(a, BURROW_S("John Doe"), &err) == NULL)
     fmt_printf_v("%v\n", err);
+```
+
+That prints:
+
+```
+Alice alice@example.com
+"Bob" <bob@example.com>
+<eve@example.com>
+=?utf-8?b?R8O2LCBQaGVy?= <g@example.com>
+mail: no angle-addr
 ```
 
 Names written as RFC 2047 encoded words are decoded with a `MimeWordDecoder`. Without one, UTF-8, ISO-8859-1 and US-ASCII work and any other charset is an error, as in Go. To take more, put a decoder with a `charset_reader` in a `MailAddressParser` and call `mail_address_parser_parse` or `mail_address_parser_parse_list`. The parser follows the same parts of RFC 5322 Go does, and leaves out the same ones: obsolete forms such as routes are not read, an address cannot be folded across lines, and nothing is normalised.

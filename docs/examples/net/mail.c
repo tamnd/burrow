@@ -66,4 +66,14 @@ int main(void) {
 }
 
 /* Output:
+Date: Mon, 23 Jun 2015 11:40:36 -0400
+From: Gopher <from@example.com>
+Subject: Gophers at Gophercon
+Message body
+2015-06-23T11:40:36-04:00
+Alice alice@example.com
+"Bob" <bob@example.com>
+<eve@example.com>
+=?utf-8?b?R8O2LCBQaGVy?= <g@example.com>
+mail: no angle-addr
 */

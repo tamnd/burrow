@@ -348,8 +348,8 @@ if (client == NULL || server == NULL)
 char hello[] = "hello";
 (void)net_unix_conn_write(client, slice_from(hello, 5, 5, TYPE_BYTE), &err);
 Byte buf[64];
-Int n = net_unix_conn_read(server, slice_from(buf, 0, (Int)sizeof buf, TYPE_BYTE),
-                           &err);
+Int n = net_unix_conn_read(
+    server, slice_from(buf, (Int)sizeof buf, (Int)sizeof buf, TYPE_BYTE), &err);
 printf("%.*s\n", (int)n, (const char *)buf);
 
 /* The server's end is named for the path the listener is on. */

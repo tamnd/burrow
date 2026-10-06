@@ -4087,6 +4087,24 @@ static bool x509_oid_in_extensions(Asn1ObjectIdentifier oid, Slice extensions) {
     return false;
 }
 
+bool burrow__x509_has_san_extension(const X509Certificate *c) {
+    return x509_oid_in_extensions(X509_OID(x509_oid_extension_subject_alt_name),
+                                  c->extensions);
+}
+
+bool burrow__x509_has_name_constraints(const X509Certificate *c) {
+    return x509_oid_in_extensions(X509_OID(x509_oid_extension_name_constraints),
+                                  c->extensions);
+}
+
+const PkixExtension *burrow__x509_san_extension(const X509Certificate *c) {
+    const PkixExtension *e = c->extensions.p;
+    for (Int i = 0; i < c->extensions.len; i++)
+        if (x509_oid_is(e[i].id, X509_OID(x509_oid_extension_subject_alt_name)))
+            return &e[i];
+    return NULL;
+}
+
 /* isIA5String, as the error. */
 static Error x509_ia5_error(Str s) {
     if (x509_is_ia5(s))

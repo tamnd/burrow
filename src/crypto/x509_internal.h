@@ -80,4 +80,15 @@ bool burrow__x509_no_cert_override(void);
 /* systemRootsPool: the shared system pool, or NULL when there is none. */
 X509CertPool *burrow__x509_system_roots_pool(void);
 
+/* hasSANExtension and hasNameConstraints, and the SAN extension of c or
+ * NULL. */
+bool burrow__x509_has_san_extension(const X509Certificate *c);
+bool burrow__x509_has_name_constraints(const X509Certificate *c);
+const PkixExtension *burrow__x509_san_extension(const X509Certificate *c);
+
+/* checkChainConstraints over the n certificates of chain, leaf first, with
+ * scratch memory from a. */
+Error burrow__x509_check_chain_constraints(Alloc *a,
+                                           const X509Certificate *const *chain, Int n);
+
 #endif /* BURROW_SRC_CRYPTO_X509_INTERNAL_H */

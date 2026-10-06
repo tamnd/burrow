@@ -765,6 +765,128 @@ enum {
     X509_NO_VALID_CHAINS = 10,
 };
 
+/* CertificateInvalidError: something about cert is wrong for the chain it
+ * was in. detail is only in the messages of some reasons. errors_as with
+ * TYPE_X509_CERTIFICATE_INVALID_ERROR gives a pointer to the struct, which
+ * borrows cert. */
+typedef struct X509CertificateInvalidError {
+    const X509Certificate *cert;
+    X509InvalidReason reason;
+    Str detail;
+} X509CertificateInvalidError;
+
+extern const Type *const TYPE_X509_CERTIFICATE_INVALID_ERROR;
+
+/* CertificateInvalidError.Error, such as "x509: certificate has expired or is
+ * not yet valid: " and the detail, from a. */
+BURROW_OWNS(ret) Str x509_certificate_invalid_error_error(X509CertificateInvalidError e,
+                                                          Alloc *a);
+
+/* e as an Error, from a, with its own copy of the detail. */
+BURROW_OWNS(ret) Error
+x509_certificate_invalid_error_as_error(X509CertificateInvalidError e, Alloc *a);
+
+/* HostnameError: host is not one of the names certificate is for. */
+typedef struct X509HostnameError {
+    const X509Certificate *certificate;
+    Str host;
+} X509HostnameError;
+
+extern const Type *const TYPE_X509_HOSTNAME_ERROR;
+
+/* HostnameError.Error, such as "x509: certificate is valid for example.com,
+ * not example.org", from a. */
+BURROW_OWNS(ret) Str x509_hostname_error_error(X509HostnameError e, Alloc *a);
+
+/* e as an Error, from a, with its own copy of the host. */
+BURROW_OWNS(ret) Error x509_hostname_error_as_error(X509HostnameError e, Alloc *a);
+
+/* UnknownAuthorityError: no root signed cert. The error Verify gives says
+ * which candidate came closest and why it was turned down, and Go keeps that
+ * in fields only it can set, so here it is only in the message. */
+typedef struct X509UnknownAuthorityError {
+    const X509Certificate *cert;
+} X509UnknownAuthorityError;
+
+extern const Type *const TYPE_X509_UNKNOWN_AUTHORITY_ERROR;
+
+/* UnknownAuthorityError.Error: "x509: certificate signed by unknown
+ * authority", from a. */
+BURROW_OWNS(ret) Str x509_unknown_authority_error_error(X509UnknownAuthorityError e,
+                                                        Alloc *a);
+
+/* e as an Error, from a. */
+BURROW_OWNS(ret) Error
+x509_unknown_authority_error_as_error(X509UnknownAuthorityError e, Alloc *a);
+
+/* SystemRootsError: the system roots could not be loaded, and the
+ * VerifyOptions had none of their own. err is why, and may be no error. */
+typedef struct X509SystemRootsError {
+    Error err;
+} X509SystemRootsError;
+
+extern const Type *const TYPE_X509_SYSTEM_ROOTS_ERROR;
+
+/* SystemRootsError.Error: "x509: failed to load system roots and no roots
+ * provided", then "; " and err's message when there is one, from a. */
+BURROW_OWNS(ret) Str x509_system_roots_error_error(X509SystemRootsError e, Alloc *a);
+
+/* SystemRootsError.Unwrap: e.err. */
+BURROW_BORROWS(ret, e) Error x509_system_roots_error_unwrap(X509SystemRootsError e);
+
+/* e as an Error, from a. It keeps e.err as it is, so that has to live as long
+ * as the result. */
+BURROW_OWNS(ret) Error x509_system_roots_error_as_error(X509SystemRootsError e,
+                                                        Alloc *a);
+
+/* VerifyOptions: what Verify checks a certificate against.
+ *
+ * dns_name, when not empty, is checked with x509_certificate_verify_hostname.
+ * intermediates may be NULL, and roots NULL means the system roots. A zero
+ * current_time means now. key_usages holds X509ExtKeyUsage, and empty means
+ * server auth; put X509_EXT_KEY_USAGE_ANY in it to take any.
+ * max_constraint_comparisions is spelt as Go spells it and, as in Go, is no
+ * longer looked at. certificate_policies holds X509OID, and empty takes any
+ * policy.
+ *
+ * The last three are unexported in Go, where only its tests set them. They
+ * are here so the same tests can. */
+typedef struct X509VerifyOptions {
+    Str dns_name;
+    const X509CertPool *intermediates;
+    const X509CertPool *roots;
+    Time current_time;
+    Slice key_usages;
+    Int max_constraint_comparisions;
+    Slice certificate_policies;
+
+    bool inhibit_policy_mapping;
+    bool require_explicit_policy;
+    bool inhibit_any_policy;
+} X509VerifyOptions;
+
+/* A chain, as Verify gives them: a []*Certificate with the leaf first. */
+BURROW_SLICE_TYPE_DECL(X509CertificateChain, X509CertificatePtr);
+#define TYPE_X509_CERTIFICATE_CHAIN TYPE_OF(X509CertificateChain)
+
+/* Certificate.Verify: the chains from c up to one of opts' roots, each a
+ * slice of X509Certificate pointers with c first and the root last, as a
+ * slice of X509CertificateChain from a. The certificates are borrowed from c and the
+ * pools.
+ *
+ * On Windows, macOS and iOS, with no roots given, Go asks the platform to
+ * verify. That is not here yet, and the system pool there is empty, so this
+ * gives an UnknownAuthorityError unless SSL_CERT_FILE or SSL_CERT_DIR names
+ * some roots. */
+BURROW_OWNS(ret) Slice x509_certificate_verify(const X509Certificate *c, Alloc *a,
+                                               X509VerifyOptions opts, Error *err);
+
+/* Certificate.VerifyHostname: no error when c is valid for h, which is a host
+ * name or an IP address, the IPv6 one in brackets or not. Otherwise a
+ * HostnameError. */
+BURROW_STATIC(ret) Error x509_certificate_verify_hostname(const X509Certificate *c,
+                                                          Str h);
+
 #ifdef __cplusplus
 }
 #endif

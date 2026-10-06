@@ -238,7 +238,7 @@ void burrow__mlkem_ring_decode_and_decompress(MlkemRing *f, const Byte *b, uint8
         unsigned c_idx = 0;
         while (c_idx < d) {
             c |= (uint16_t)((unsigned)(b[0] >> b_idx) << c_idx);
-            c &= (uint16_t)((1u << d) - 1);
+            c &= (uint16_t)((1U << d) - 1);
             unsigned bits = 8 - b_idx < d - c_idx ? 8 - b_idx : d - c_idx;
             b_idx += bits;
             c_idx += bits;
@@ -610,7 +610,7 @@ static void mlkem_pke_encrypt(const MlkemView *v, Byte *c, const Byte m[32],
             burrow__mlkem_ring_compress_and_encode10(c, &u_hat);
         else
             burrow__mlkem_ring_compress_and_encode(c, &u_hat, (uint8_t)v->du);
-        c += v->du * 32;
+        c += (Int)v->du * 32;
     }
 
     MlkemRing mu;
@@ -641,16 +641,16 @@ static void mlkem_pke_decrypt(const MlkemView *v, Byte m[32], const Byte *c) {
     /* mask = sᵀ ◦ NTT(u) */
     for (int i = 0; i < k; i++) {
         if (v->du == 10)
-            burrow__mlkem_ring_decode_and_decompress10(&u, c + i * v->du * 32);
+            burrow__mlkem_ring_decode_and_decompress10(&u, c + (Int)i * v->du * 32);
         else
-            burrow__mlkem_ring_decode_and_decompress(&u, c + i * v->du * 32,
+            burrow__mlkem_ring_decode_and_decompress(&u, c + (Int)i * v->du * 32,
                                                      (uint8_t)v->du);
         mlkem_ntt(&u);
         mlkem_ntt_mul(&p, &v->s[i], &u);
         mlkem_poly_add(&mask, &mask, &p);
     }
     MlkemRing vv;
-    const Byte *cv = c + k * v->du * 32;
+    const Byte *cv = c + (Int)k * v->du * 32;
     if (v->dv == 4)
         burrow__mlkem_ring_decode_and_decompress4(&vv, cv);
     else
@@ -810,7 +810,7 @@ static bool mlkem_parse_expanded(const MlkemView *v, Slice b, Error *err) {
 }
 
 static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
-    Int n = v->k * MLKEM_ENCODING_SIZE12 + mlkem_ek_size(v) + 32 + 32;
+    Int n = (Int)v->k * MLKEM_ENCODING_SIZE12 + mlkem_ek_size(v) + 32 + 32;
     Slice b = slice_make(mlkem_alloc(a), TYPE_BYTE, n, n);
     if (b.p == NULL)
         return b;

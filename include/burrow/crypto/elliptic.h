@@ -191,8 +191,8 @@ BURROW_OWNS(ret) BigInt *elliptic_curve_params_double(EllipticCurveParams *curve
                                                       Alloc *a, const BigInt *x1,
                                                       const BigInt *y1, BigInt **y);
 BURROW_OWNS(ret) BigInt *elliptic_curve_params_scalar_mult(EllipticCurveParams *curve,
-                                                           Alloc *a, const BigInt *x1,
-                                                           const BigInt *y1, Slice k,
+                                                           Alloc *a, const BigInt *bx,
+                                                           const BigInt *by, Slice k,
                                                            BigInt **y);
 BURROW_OWNS(ret) BigInt *
 elliptic_curve_params_scalar_base_mult(EllipticCurveParams *curve, Alloc *a, Slice k,

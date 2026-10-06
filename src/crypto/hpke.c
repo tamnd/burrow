@@ -73,6 +73,7 @@ static Slice hpke_concat(Alloc *a, const HpkePart *parts, size_t n, Error *err) 
     Byte *q = out.p;
     for (size_t i = 0; i < n; i++) {
         if (parts[i].len > 0) {
+            /* NOLINTNEXTLINE(clang-analyzer-unix.cstring.NullArg) */
             memcpy(q, parts[i].p, (size_t)parts[i].len);
             q += parts[i].len;
         }
@@ -629,8 +630,11 @@ HpkePublicKey *hpke_new_dhkem_public_key(Alloc *a, const EcdhPublicKey *pub,
     HpkePublicKey *pk = NULL;
     if (kem->kind != HPKE_KEM_DH)
         hpke_set_error(&e, "unsupported curve");
-    else if ((pk = hpke_public_key_alloc(a, kem, &e)) != NULL)
-        pk->t = pub;
+    else {
+        pk = hpke_public_key_alloc(a, kem, &e);
+        if (pk != NULL)
+            pk->t = pub;
+    }
     BURROW_OUT(err, e);
     return pk;
 }
@@ -1631,7 +1635,7 @@ Slice hpke_seal(Alloc *a, const HpkePublicKey *pk, const HpkeKDF *kdf,
     HpkeSender *sender;
     Slice enc = hpke_new_sender(s, pk, kdf, aead, info, &sender, &e);
     Slice out = slice_nil(TYPE_BYTE);
-    if (BURROW_OK(e)) {
+    if (BURROW_OK(e) && sender != NULL) {
         Slice ct = hpke_sender_seal(sender, s, slice_nil(TYPE_BYTE), plaintext, &e);
         if (BURROW_OK(e)) {
             HpkePart parts[] = {hpke_part(enc), hpke_part(ct)};

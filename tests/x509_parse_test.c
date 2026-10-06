@@ -5,8 +5,9 @@
  * The tests that make a certificate first with CreateCertificate come with
  * certificate creation. TestDomainNameValid has its own copy of
  * domainToReverseLabels, which Go only keeps for that test. TestCertificateParse
- * leaves out the VerifyHostname call, which comes with verification. TestParsePolicies reads the two
- * certificates it uses from testdata through the generated header.
+ * leaves out the VerifyHostname call, which comes with verification.
+ * TestParsePolicies reads the two certificates it uses from testdata through
+ * the generated header.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.

@@ -1,6 +1,6 @@
 # Networking
 
-`burrow/net/netip.h` is Go's `net/netip`, which holds IP addresses, address and port pairs, and CIDR prefixes as small values. `burrow/net/url.h` is Go's `net/url`, which parses, builds and resolves URLs and query strings. The rest of `net` (sockets, the resolver, `net/http` and friends) sits on top of the runtime's network poller and will land in this guide as it is ported.
+`burrow/net/netip.h` is Go's `net/netip`, which holds IP addresses, address and port pairs, and CIDR prefixes as small values. `burrow/net/url.h` is Go's `net/url`, which parses, builds and resolves URLs and query strings. `burrow/net.h` has the address types from Go's `net` package itself, `IP`, `IPMask` and `IPNet`, with `SplitHostPort` and `JoinHostPort`. The rest of `net` (sockets, the resolver, `net/http` and friends) sits on top of the runtime's network poller and will land in this guide as it is ported.
 
 ## Addresses, ports and prefixes
 
@@ -95,6 +95,49 @@ A zone such as `eth0` in `fe80::1%eth0` goes through `unique_make`, so each dist
 ## Speed
 
 Parsing is faster than Go on every input in Go's own benchmarks, by 1.3 to 1.5 times. Printing to a new heap string is faster for the long IPv6 forms and a few nanoseconds slower for the short ones, IPv4 and prefixes among them, where most of the time is the allocation. Take the string from an arena, or use the `append_to` functions with a buffer you already have, and printing is ahead of Go on every input. The numbers are in the pull request that added the package and in [burrow-bench](https://github.com/tamnd/burrow-bench).
+
+## net.IP, IPMask and IPNet
+
+Go's `net` package has older address types that came before `net/netip`, and a lot of APIs still use them, `crypto/x509` among them. `burrow/net.h` has them too. `NetIP` and `NetIPMask` are byte slices, 4 or 16 bytes long, the same as in Go, and `NetIPNet` is an address and a mask. They are slices, so they allocate, and every function that makes one takes an allocator:
+
+<!-- example: ../examples/net/ip.c#ip -->
+```c
+NetIP ip = net_parse_ip(a, BURROW_S("192.0.2.77"));
+printf("%d %d\n", (int)ip.len, (int)net_ip_to4(ip).len); /* 16 4 */
+
+Error err;
+NetIPNet *lan;
+NetIP host = net_parse_cidr(a, BURROW_S("10.1.2.3/20"), &lan, &err);
+print(net_ip_string(host, a));
+print(net_ip_net_string(lan, a));
+printf("%d %d\n", net_ip_net_contains(lan, net_ipv4(a, 10, 1, 15, 1)),
+       net_ip_net_contains(lan, ip));
+
+NetIP v6 = net_parse_ip(a, BURROW_S("2001:db8:0:0:1::1"));
+print(net_ip_string(net_ip_mask(v6, a, net_cidr_mask(a, 64, 128)), a));
+
+net_parse_cidr(a, BURROW_S("10.1.2.3/33"), NULL, &err);
+fmt_printf_v("%v\n", err);
+```
+
+`net_parse_ip` always gives 16 bytes, and `net_ip_to4` gives the 4-byte view of an IPv4 address, or the nil slice for one that is not. A nil `NetIP` is what Go's `nil` is, and its string is `<nil>`. Use `net_ip_equal` to compare two addresses, since an IPv4 address in 4 bytes and the same one in 16 are equal. The error from `net_parse_cidr` is a `NetParseError`, which `errors_as` finds with `TYPE_NET_PARSE_ERROR`.
+
+`net_split_host_port` and `net_join_host_port` go between `host:port` strings and their parts, with the brackets an IPv6 literal needs:
+
+<!-- example: ../examples/net/ip.c#hostport -->
+```c
+Error err;
+Str port;
+Str host = net_split_host_port(BURROW_S("[fe80::1%eth0]:8080"), &port, &err);
+printf("%.*s %.*s\n", (int)host.len, host.p, (int)port.len, port.p);
+print(net_join_host_port(a, host, BURROW_S("443")));
+print(net_join_host_port(a, BURROW_S("example.com"), BURROW_S("https")));
+
+net_split_host_port(BURROW_S("example.com"), &port, &err);
+fmt_printf_v("%v\n", err);
+```
+
+The host and port from `net_split_host_port` point into the string you pass, so nothing is allocated. A malformed string is a `NetAddrError` with Go's message. New code that does not have to match an older API is better off with `burrow/net/netip.h`, which never allocates.
 
 ## URLs
 

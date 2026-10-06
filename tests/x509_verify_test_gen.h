@@ -1665,4 +1665,72 @@ static const char policy_root_cross_inhibit_mapping_pem[] =
     "x+RN2wYp3kmm8iswUOrqiI6J4PSzT8CYP8Q=\n"
     "-----END CERTIFICATE-----\n";
 
+typedef struct X509MatchHostnamesTest {
+    const char *pattern, *host;
+    bool ok;
+} X509MatchHostnamesTest;
+
+static const X509MatchHostnamesTest match_hostnames_tests[] = {
+    {"a.b.c", "a.b.c", true},
+    {"a.b.c", "b.b.c", false},
+    {"", "b.b.c", false},
+    {"a.b.c", "", false},
+    {"example.com", "example.com", true},
+    {"example.com", "www.example.com", false},
+    {"*.example.com", "example.com", false},
+    {"*.example.com", "www.example.com", true},
+    {"*.example.com", "www.example.com.", true},
+    {"*.example.com", "xyz.www.example.com", false},
+    {"*.example.com", "https://www.example.com", false},
+    {"*.example..com", "www.example..com", false},
+    {"www.example..com", "www.example..com", true},
+    {"*.*.example.com", "xyz.www.example.com", false},
+    {"*.www.*.com", "xyz.www.example.com", false},
+    {"*bar.example.com", "foobar.example.com", false},
+    {"f*.example.com", "foobar.example.com", false},
+    {"www.example.com", "*.example.com", false},
+    {"", ".", false},
+    {".", "", false},
+    {".", ".", false},
+    {"example.com", "example.com.", true},
+    {"example.com.", "example.com", false},
+    {"example.com.", "example.com.", true},
+    {"*.com.", "example.com.", false},
+    {"*.com.", "example.com", false},
+    {"*.com", "example.com", true},
+    {"*.com", "example.com.", true},
+    {"foo:bar", "foo:bar", true},
+    {"*.foo:bar", "xxx.foo:bar", false},
+    {"*.2.3.4", "1.2.3.4", false},
+    {"*.2.3.4", "[1.2.3.4]", false},
+    {"*:4860:4860::8888", "2001:4860:4860::8888", false},
+    {"*:4860:4860::8888", "[2001:4860:4860::8888]", false},
+    {"2001:4860:4860::8888", "2001:4860:4860::8888", false},
+    {"2001:4860:4860::8888", "[2001:4860:4860::8888]", false},
+    {"[2001:4860:4860::8888]", "2001:4860:4860::8888", false},
+    {"[2001:4860:4860::8888]", "[2001:4860:4860::8888]", false},
+};
+
+static const char system_cert_pool_pem[] =
+    "\n"
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIIDBjCCAe6gAwIBAgIRANXM5I3gjuqDfTp/PYrs+u8wDQYJKoZIhvcNAQELBQAw\n"
+    "EjEQMA4GA1UEChMHQWNtZSBDbzAeFw0xODAzMjcxOTU2MjFaFw0xOTAzMjcxOTU2\n"
+    "MjFaMBIxEDAOBgNVBAoTB0FjbWUgQ28wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAw\n"
+    "ggEKAoIBAQDK+9m3rjsO2Djes6bIYQZ3eV29JF09ZrjOrEHLtaKrD6/acsoSoTsf\n"
+    "cQr+rzzztdB5ijWXCS64zo/0OiqBeZUNZ67jVdToa9qW5UYe2H0Y+ZNdfA5GYMFD\n"
+    "yk/l3/uBu3suTZPfXiW2TjEi27Q8ruNUIZ54DpTcs6y2rBRFzadPWwn/VQMlvRXM\n"
+    "jrzl8Y08dgnYmaAHprxVzwMXcQ/Brol+v9GvjaH1DooHqkn8O178wsPQNhdtvN01\n"
+    "IXL46cYdcUwWrE/GX5u+9DaSi+0KWxAPQ+NVD5qUI0CKl4714yGGh7feXMjJdHgl\n"
+    "VG4QJZlJvC4FsURgCHJT6uHGIelnSwhbAgMBAAGjVzBVMA4GA1UdDwEB/wQEAwIF\n"
+    "oDATBgNVHSUEDDAKBggrBgEFBQcDATAMBgNVHRMBAf8EAjAAMCAGA1UdEQQZMBeC\n"
+    "FVRlc3RTeXN0ZW1DZXJ0UG9vbC5nbzANBgkqhkiG9w0BAQsFAAOCAQEAwuSRx/VR\n"
+    "BKh2ICxZjL6jBwk/7UlU1XKbhQD96RqkidDNGEc6eLZ90Z5XXTurEsXqdm5jQYPs\n"
+    "1cdcSW+fOSMl7MfW9e5tM66FaIPZl9rKZ1r7GkOfgn93xdLAWe8XHd19xRfDreub\n"
+    "YC8DVqgLASOEYFupVSl76ktPfxkU5KCvmUf3P2PrRybk1qLGFytGxfyice2gHSNI\n"
+    "gify3K/+H/7wCkyFW4xYvzl7WW4mXxoqPRPjQt1J423DhnnQ4G1P8V/vhUpXNXOq\n"
+    "N9IEPnWuihC09cyx/WMQIUlWnaQLHdfpPS04Iez3yy2PdfXJzwfPrja7rNE+skK6\n"
+    "pa/O1nF0AfWOpw==\n"
+    "-----END CERTIFICATE-----\n";
+
 #endif

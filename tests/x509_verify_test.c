@@ -1,5 +1,6 @@
 /* crypto/x509 tests for Verify, VerifyHostname and the checks behind them:
- * Go's verify_test.go.
+ * Go's verify_test.go, and TestMatchHostnames, TestMatchIP,
+ * TestVerifyEmptyCertificate and TestSystemCertPool from x509_test.go.
  *
  * Go's table driven tests are loops here rather than subtests, with the name
  * of the case in each message. generatePEMCertWithRepeatSAN signs with a new
@@ -1591,6 +1592,93 @@ static void TestVerifyHostnameIPAddresses(TestingT *t) {
     arena_free(&ar);
 }
 
+static void TestMatchHostnames(TestingT *t) {
+    ARENA(a);
+    for (Int i = 0; i < LEN(match_hostnames_tests); i++) {
+        const X509MatchHostnamesTest *test = &match_hostnames_tests[i];
+        X509Certificate c = {0};
+        c.dns_names = STRS(a, test->pattern);
+        bool r = !BURROW_FAILED(
+            x509_certificate_verify_hostname(&c, str_from_cstr(test->host)));
+        if (r != test->ok)
+            testing_t_errorf_v(
+                t, "#%d mismatch got: %t want: %t when matching '%s' against '%s'", i,
+                r, test->ok, test->host, test->pattern);
+    }
+    arena_free(&ar);
+}
+
+static void TestMatchIP(TestingT *t) {
+    ARENA(a);
+    /* Check that pattern matching is working. */
+    X509Certificate c = {0};
+    c.dns_names = STRS(a, "*.foo.bar.baz");
+    c.subject.common_name = BURROW_S("*.foo.bar.baz");
+    Error err = x509_certificate_verify_hostname(&c, BURROW_S("quux.foo.bar.baz"));
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "VerifyHostname(quux.foo.bar.baz): %v", err);
+
+    /* But check that if we change it to be matching against an IP address, it
+     * is rejected. */
+    c = (X509Certificate){0};
+    c.dns_names = STRS(a, "*.2.3.4");
+    c.subject.common_name = BURROW_S("*.2.3.4");
+    err = x509_certificate_verify_hostname(&c, BURROW_S("1.2.3.4"));
+    if (!BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "VerifyHostname(1.2.3.4) should have failed, did not");
+
+    c = (X509Certificate){0};
+    const NetIP ips[] = {net_parse_ip(a, BURROW_S("127.0.0.1")),
+                         net_parse_ip(a, BURROW_S("::1"))};
+    c.ip_addresses = slice_append(a, slice_nil(TYPE_NET_IP), ips, 2);
+    static const char *const hosts[] = {"127.0.0.1", "::1", "[::1]"};
+    for (Int i = 0; i < LEN(hosts); i++) {
+        err = x509_certificate_verify_hostname(&c, str_from_cstr(hosts[i]));
+        if (BURROW_FAILED(err))
+            testing_t_fatalf_v(t, "VerifyHostname(%s): %v", hosts[i], err);
+    }
+    arena_free(&ar);
+}
+
+static void TestVerifyEmptyCertificate(TestingT *t) {
+    ARENA(a);
+    X509Certificate c = {0};
+    Error err = BURROW_NO_ERROR;
+    (void)x509_certificate_verify(&c, a, (X509VerifyOptions){0}, &err);
+    if (!errors_is(err, burrow__x509_err_not_parsed))
+        testing_t_errorf_v(
+            t,
+            "Verifying empty certificate resulted in unexpected error: %q (wanted %q)",
+            err, burrow__x509_err_not_parsed);
+    arena_free(&ar);
+}
+
+static void TestSystemCertPool(TestingT *t) {
+#if defined(BURROW_OS_WINDOWS) || defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+    testing_t_skip_v(t, "not implemented on Windows (Issue 16736, 18609) or darwin "
+                        "(Issue 46287)");
+#endif
+    ARENA(a);
+    Error err = BURROW_NO_ERROR;
+    X509CertPool *pa = x509_system_cert_pool(a, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    X509CertPool *pb = x509_system_cert_pool(a, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    if (!x509_cert_pool_equal(pa, pb))
+        testing_t_fatal_v(t, "two calls to SystemCertPool had different results");
+    Slice pem = slice_from((void *)(uintptr_t)system_cert_pool_pem,
+                           (Int)sizeof system_cert_pool_pem - 1,
+                           (Int)sizeof system_cert_pool_pem - 1, TYPE_BYTE);
+    if (!x509_cert_pool_append_certs_from_pem(pb, pem))
+        testing_t_fatal_v(t, "AppendCertsFromPEM failed");
+    /* Go compares the two with reflect.DeepEqual. */
+    if (x509_cert_pool_equal(pa, pb))
+        testing_t_fatal_v(t, "changing one pool modified the other");
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestGoVerify)                                                                    \
     X(TestUnknownAuthorityError)                                                       \
@@ -1606,6 +1694,10 @@ static void TestVerifyHostnameIPAddresses(TestingT *t) {
     X(TestPoliciesValid)                                                               \
     X(TestInvalidPolicyWithAnyKeyUsage)                                                \
     X(TestCertificateChainSignedByECDSA)                                               \
-    X(TestVerifyHostnameIPAddresses)
+    X(TestVerifyHostnameIPAddresses)                                                   \
+    X(TestMatchHostnames)                                                              \
+    X(TestMatchIP)                                                                     \
+    X(TestVerifyEmptyCertificate)                                                      \
+    X(TestSystemCertPool)
 
 TESTING_MAIN(TESTS)

@@ -18,6 +18,9 @@
  * that is not an OID. */
 extern const Error burrow__x509_err_invalid_oid;
 
+/* errNotParsed, which Verify gives for a certificate with no DER. */
+extern const Error burrow__x509_err_not_parsed;
+
 /* Reads the GODEBUG settings from value as if it were the environment's, or
  * forgets them when value is NULL so that the next use reads the environment
  * again. For tests, which cannot change the environment of a process that has

@@ -51,4 +51,14 @@ int main(void) {
 }
 
 /* Output:
+16 4
+10.1.2.3
+10.1.0.0/20
+1 0
+2001:db8::
+invalid CIDR address: 10.1.2.3/33
+fe80::1%eth0 8080
+[fe80::1%eth0]:443
+example.com:https
+address example.com: missing port in address
 */

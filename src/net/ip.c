@@ -349,7 +349,7 @@ NetIPMask net_ipv4_mask(Alloc *a, Byte a0, Byte b, Byte c, Byte d) {
 }
 
 NetIPMask net_cidr_mask(Alloc *a, Int ones, Int bits) {
-    if (bits != 8 * NET_IPV4_LEN && bits != 8 * NET_IPV6_LEN)
+    if (bits != (Int)8 * NET_IPV4_LEN && bits != (Int)8 * NET_IPV6_LEN)
         return slice_nil(TYPE_BYTE);
     if (ones < 0 || ones > bits)
         return slice_nil(TYPE_BYTE);

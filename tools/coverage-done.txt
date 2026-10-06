@@ -45,6 +45,8 @@ crypto/hmac
 crypto/hkdf
 crypto/pbkdf2
 crypto/rand
+crypto/aes
+crypto/cipher
 container/list
 container/ring
 sort

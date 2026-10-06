@@ -1,4 +1,5 @@
-/* Which of the hashes' hardware paths this compiler can build, and how.
+/* Which of the hardware paths for the hashes and ciphers this compiler can
+ * build, and how.
  *
  * Each path is a function that uses one instruction set extension through the
  * compiler's intrinsics. It is built with a target attribute naming the
@@ -39,9 +40,27 @@
 #define CRYPTO_X86_SHA 1
 #define CRYPTO_TARGET_X86_SHA __attribute__((target("sha,sse4.1,ssse3")))
 #endif
+/* AES-NI, and the carryless multiply GCM uses next to it. The SSE2 and SSSE3
+ * the code around them uses are in every processor that has either. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#define CRYPTO_X86_AES 1
+#define CRYPTO_TARGET_X86_AES
+#define CRYPTO_TARGET_X86_GCM
+#elif (defined(__clang__) && __clang_major__ >= 9) ||                                  \
+    (!defined(__clang__) && defined(__GNUC__) && __GNUC__ >= 5)
+#define CRYPTO_X86_AES 1
+#define CRYPTO_TARGET_X86_AES __attribute__((target("aes,sse2")))
+#define CRYPTO_TARGET_X86_GCM __attribute__((target("aes,pclmul,sse2,ssse3")))
+#endif
+#if defined(CRYPTO_X86_AES)
+#define CRYPTO_X86_GCM_NEEDS                                                           \
+    (PAL_CPU_X86_AES | PAL_CPU_X86_PCLMULQDQ | PAL_CPU_X86_SSSE3)
+#endif
+#if defined(CRYPTO_X86_SHA) || defined(CRYPTO_X86_AES)
+#include <immintrin.h>
+#endif
 #if defined(CRYPTO_X86_SHA)
 #define CRYPTO_X86_SHA_NEEDS (PAL_CPU_X86_SHA | PAL_CPU_X86_SSSE3 | PAL_CPU_X86_SSE41)
-#include <immintrin.h>
 #include <string.h>
 
 /* Sixteen bytes in and out of a vector at any alignment. memcpy says that
@@ -84,7 +103,20 @@ CRYPTO_TARGET_X86_SHA static inline void crypto_x86_store(void *p, __m128i v) {
 #define CRYPTO_ARM64_SHA512 1
 #define CRYPTO_TARGET_ARM64_SHA512 __attribute__((target("+sha3")))
 #endif
-#if defined(CRYPTO_ARM64_SHA2) || defined(CRYPTO_ARM64_SHA512)
+/* The Armv8.0 AES instructions and the 64 bit carryless multiply, PMULL,
+ * which compilers put behind the same feature. */
+#if defined(__ARM_FEATURE_AES) || defined(__ARM_FEATURE_CRYPTO)
+#define CRYPTO_ARM64_AES 1
+#define CRYPTO_TARGET_ARM64_AES
+#elif defined(__clang__) && __clang_major__ >= 16 && !defined(__apple_build_version__)
+#define CRYPTO_ARM64_AES 1
+#define CRYPTO_TARGET_ARM64_AES __attribute__((target("aes")))
+#elif !defined(__clang__) && defined(__GNUC__) && __GNUC__ >= 10
+#define CRYPTO_ARM64_AES 1
+#define CRYPTO_TARGET_ARM64_AES __attribute__((target("+crypto")))
+#endif
+#if defined(CRYPTO_ARM64_SHA2) || defined(CRYPTO_ARM64_SHA512) ||                      \
+    defined(CRYPTO_ARM64_AES)
 #include <arm_neon.h>
 #endif
 #endif

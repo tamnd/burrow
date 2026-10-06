@@ -830,7 +830,8 @@ static void TestPipeTimeoutError(TestingT *t) {
     CHECK(errors_is(err, os_err_deadline_exceeded));
     CHECK(net_is_error(err));
     CHECK(net_error_timeout(err));
-    CHECK(!net_error_temporary(err));
+    /* os.ErrDeadlineExceeded says it is temporary, and OpError passes that on. */
+    CHECK(net_error_temporary(err));
 
     (void)c2.vt->set_write_deadline(c2.data, a_long_time_ago());
     (void)conn_write(c2, slice_from(buf, 8, 8, TYPE_BYTE), &err);

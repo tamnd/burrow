@@ -149,16 +149,18 @@ typedef Error (*burrow__NetToSockaddr)(const void *addr, int32_t family,
  * report it as that call's error, the way Go's syscall package does. */
 extern const Error burrow__net_err_sockaddr_einval;
 
-/* Go's socket: makes a socket and then, with laddr and no raddr on a stream,
- * binds and listens on it, and otherwise binds to laddr if there is one and
- * connects to raddr. laddr and raddr are whatever to_sockaddr takes, and
- * either may be NULL. A connect waits, from a goroutine, until it is done or
- * deadline passes, and the zero Time is no deadline. On an error nothing is
- * left open. */
+/* Go's socket: makes a socket and then, with laddr and no raddr, binds to
+ * laddr and on a stream listens too, and otherwise binds to laddr if there is
+ * one and connects to raddr. laddr and raddr are whatever to_sockaddr takes,
+ * and either may be NULL. group says that a datagram socket's laddr is a
+ * multicast group, for which the socket gets the options that let others
+ * listen to the group too. A connect waits, from a goroutine, until it is
+ * done or deadline passes, and the zero Time is no deadline. On an error
+ * nothing is left open. */
 Error burrow__netfd_socket(burrow__NetFD *fd, Str net, int32_t family, int32_t sotype,
                            int32_t proto, bool ipv6only, const void *laddr,
-                           const void *raddr, burrow__NetToSockaddr to_sockaddr,
-                           Time deadline);
+                           const void *raddr, bool group,
+                           burrow__NetToSockaddr to_sockaddr, Time deadline);
 
 /* netFD.accept: the next connection, in out, with both its addresses. */
 Error burrow__netfd_accept(burrow__NetFD *fd, burrow__NetFD *out);
@@ -169,6 +171,16 @@ Error burrow__netfd_close(burrow__NetFD *fd);
 /* netFD.Read and Write. */
 Int burrow__netfd_read(burrow__NetFD *fd, Slice p, Error *err);
 Int burrow__netfd_write(burrow__NetFD *fd, Slice p, Error *err);
+
+/* netFD.readFromInet4 and the rest, and writeToInet4 and the rest, for any
+ * family, from or to holding the other end's address. */
+Int burrow__netfd_read_from(burrow__NetFD *fd, Slice p, PalSockAddr *from, Error *err);
+Int burrow__netfd_write_to(burrow__NetFD *fd, Slice p, const PalSockAddr *to,
+                           Error *err);
+
+/* What making the sockaddr for a write_to failed with, as Go gives it, which
+ * for burrow__net_err_sockaddr_einval is the send's EINVAL. */
+Error burrow__netfd_write_to_error(Error err);
 
 /* netFD.shutdown, with PAL_SHUT_RD or PAL_SHUT_WR. */
 Error burrow__netfd_shutdown(burrow__NetFD *fd, int32_t how);

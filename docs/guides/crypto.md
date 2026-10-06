@@ -2,6 +2,37 @@
 
 burrow's `crypto` packages are Go's, with the same algorithms, the same answers and the same panics. The hashes are covered in [hashing.md](hashing.md). This page covers the rest, one package at a time as they land.
 
+## crypto
+
+`burrow/crypto.h` is Go's top level `crypto` package. It names hash functions by number, so a signature or a certificate can say which hash it used without pulling in the package that implements it, and it has the interfaces every private key type fits: `CryptoSigner`, `CryptoDecrypter`, and the KEM pair `CryptoEncapsulator` and `CryptoDecapsulator`.
+
+A `CryptoHash` gives the hash's name and digest size, and makes a new `Hash`:
+
+<!-- example: ../examples/crypto/crypto.c#hash -->
+```c
+CryptoHash h = CRYPTO_SHA256;
+Str name = crypto_hash_string(h, a);
+printf("%.*s, %d bytes\n", (int)name.len, (const char *)name.p,
+       (int)crypto_hash_size(h));
+
+Hash d = crypto_hash_new(h, a);
+hash_write(d, text("abc"), NULL);
+print_hex(a, hash_sum(a, d, slice_nil(TYPE_BYTE)));
+```
+
+Go only has a hash when the program imports the package that registers it. burrow is one library, so MD5, SHA-1, the SHA-2 family and SHA-3 are always there. MD4, RIPEMD-160 and the BLAKE2 hashes are not in Go's standard library, and they stay unavailable until a program brings its own with `crypto_register_hash`. `crypto_hash_new` panics for a hash that is not available, so check first when the number comes from outside:
+
+<!-- example: ../examples/crypto/crypto.c#available -->
+```c
+for (CryptoHash h = CRYPTO_MD4; h <= CRYPTO_SHA1; h++) {
+    Str name = crypto_hash_string(h, a);
+    printf("%.*s %s\n", (int)name.len, (const char *)name.p,
+           crypto_hash_available(h) ? "yes" : "no");
+}
+```
+
+`crypto_sign_message` signs a whole message with any `CryptoSigner`. It hashes the message with the hash the options name and hands the digest to the signer. A signer whose type has a `SignMessage` method in its method set gets the message as it is, which is how Go treats a `crypto.MessageSigner`. `burrow/crypto.h` shows the signature that method needs.
+
 ## crypto/subtle
 
 `burrow/crypto/subtle.h` is what the other packages build on to keep secrets out of timing. Code that stops at the first wrong byte of a MAC, or branches on a bit of a key, takes a different time depending on the secret, and that difference can be measured from across a network. The functions here take the same time whatever the bytes are.

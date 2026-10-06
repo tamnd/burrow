@@ -112,6 +112,7 @@
 #include "burrow/io.h"
 #include "burrow/io/fs.h"
 #include "burrow/iter.h"
+#include "burrow/log.h"
 #include "burrow/map.h"
 #include "burrow/maps.h"
 #include "burrow/math.h"

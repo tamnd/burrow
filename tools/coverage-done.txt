@@ -100,3 +100,4 @@ encoding/asn1
 path/filepath
 crypto/fips140
 net/mail
+log

@@ -164,6 +164,18 @@ static const KnownDifference known_differences[] = {
     {"NET_RT_MAXID", "newer SDK"},
     {"SYS_MAXSYSCALL", "newer SDK"},
     {"TCP_MAX_SACK", "newer SDK"},
+#elif defined(BURROW_OS_FREEBSD)
+    /* Go's FreeBSD tables come from much older headers. These counts went
+     * up, the two BSD/OS link types were renumbered, and struct ifaliasreq
+     * grew by 4 bytes, which changes the size and the number in the two
+     * ioctls that take it. */
+    {"AF_MAX", "newer headers"},
+    {"DLT_MATCHING_MAX", "newer headers"},
+    {"DLT_PPP_BSDOS", "newer headers"},
+    {"DLT_SLIP_BSDOS", "newer headers"},
+    {"EVFILT_SYSCOUNT", "newer headers"},
+    {"SIOCAIFADDR", "newer headers"},
+    {"SIOCSIFPHYADDR", "newer headers"},
 #elif defined(BURROW_OS_WINDOWS)
     /* Go's are the numbers 0x80000000 and up. The SDK makes them pointers
      * from a 32-bit LONG, so on 64-bit Windows they are sign extended, and

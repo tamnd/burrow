@@ -1,7 +1,8 @@
 /* crypto/x509 tests for creating certificates, CSRs and CRLs: the tests of
  * Go's x509_test.go that make something with CreateCertificate,
  * CreateCertificateRequest, CreateRevocationList or Certificate.CreateCRL
- * and read it back.
+ * and read it back, and TestRoundtripWeirdSANs from parser_test.go, which
+ * does the same.
  *
  * Go's table driven tests are loops here rather than subtests, and
  * reflect.DeepEqual is a comparison of the fields that matter. Go has two
@@ -2165,6 +2166,40 @@ static void TestRevocationListCheckSignatureFrom(TestingT *t) {
     arena_free(&ar);
 }
 
+static void TestRoundtripWeirdSANs(TestingT *t) {
+    /* TODO(#75835) in Go: check that certificates we create with
+     * CreateCertificate that have malformed SAN values can be parsed by
+     * ParseCertificate. We should eventually restrict this, but for now we
+     * have to maintain this property as people have been relying on it. */
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    EcdsaPrivateKey *k = ec_key(a, elliptic_p256());
+    Byte long_label[65 + 4];
+    memset(long_label, 'a', 65);
+    memcpy(long_label + 65, ".com", 4);
+    Str names[] = {
+        BURROW_S("baredomain"),
+        BURROW_S("baredomain."),
+        strings_repeat(a, BURROW_S("a"), 255),
+        str_from_bytes(long_label, (Int)sizeof long_label),
+    };
+    Slice bad_names = slice_append(a, slice_nil(TYPE_STRING), names, 4);
+    X509Certificate tmpl = {0};
+    tmpl.email_addresses = bad_names;
+    tmpl.dns_names = bad_names;
+    Error err = BURROW_NO_ERROR;
+    Slice b = x509_create_certificate(a, (IoReader){0}, &tmpl, &tmpl,
+                                      ecdsa_private_key_public(k),
+                                      ecdsa_private_key_signer(k), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    (void)x509_parse_certificate(a, b, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "Couldn't roundtrip certificate: %v", err);
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestCreateSelfSignedCertificate)                                                 \
     X(TestCRLCreation)                                                                 \
@@ -2199,6 +2234,7 @@ static void TestRevocationListCheckSignatureFrom(TestingT *t) {
     X(TestCreateCertificateNegativeMaxPathLength)                                      \
     X(TestMLDSACertificates)                                                           \
     X(TestIPv4MappedIPsSANCreate)                                                      \
-    X(TestIPv4MappedIPsConstraintCreate)
+    X(TestIPv4MappedIPsConstraintCreate)                                               \
+    X(TestRoundtripWeirdSANs)
 
 TESTING_MAIN(TESTS)

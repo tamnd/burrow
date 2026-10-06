@@ -1,7 +1,7 @@
 /* crypto/x509 tests for the key formats, OIDs and encrypted PEM blocks: Go's
  * sec1_test.go, pkcs8_test.go, pem_decrypt_test.go and oid_test.go, and the
  * tests of x509_test.go that only touch keys: TestParsePKCS1PrivateKey,
- * TestPKCS1MismatchPublicKeyFormat, TestMarshalInvalidPublicKey,
+ * TestPKCS1MismatchPublicKeyFormat, TestPKCS1MismatchKeyFormat, TestMarshalInvalidPublicKey,
  * TestParsePKIXPublicKey, TestPKIXMismatchPublicKeyFormat,
  * TestMarshalRSAPrivateKey, TestMarshalRSAPrivateKeyInvalid,
  * TestMarshalRSAPublicKey, TestEKUOIDS and the key half of TestMLDSA.
@@ -883,6 +883,29 @@ static void TestParsePKCS1PrivateKey(TestingT *t) {
     arena_free(&ar);
 }
 
+static void TestPKCS1MismatchKeyFormat(TestingT *t) {
+    static const struct {
+        const char *hex_key;
+        const char *error_contains;
+    } tests[] = {
+        {hex_pkcs1_test_pkcs8_key, "use ParsePKCS8PrivateKey instead"},
+        {hex_pkcs1_test_ec_key, "use ParseECPrivateKey instead"},
+    };
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (Int i = 0; i < (Int)(sizeof tests / sizeof tests[0]); i++) {
+        Error err = BURROW_NO_ERROR;
+        RsaPrivateKey *key =
+            x509_parse_pkcs1_private_key(a, hexb(a, tests[i].hex_key), &err);
+        CHECK(key == NULL);
+        if (!contains(err, tests[i].error_contains))
+            testing_t_errorf_v(t, "#%d: expected error containing %q, got %s", i,
+                               tests[i].error_contains, ERRTEXT(a, err));
+    }
+    arena_free(&ar);
+}
+
 static void TestPKCS1MismatchPublicKeyFormat(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -1170,6 +1193,7 @@ static void TestMLDSA(TestingT *t) {
     X(TestEnumStrings)                                                                 \
     X(TestParsePKCS1PrivateKey)                                                        \
     X(TestPKCS1MismatchPublicKeyFormat)                                                \
+    X(TestPKCS1MismatchKeyFormat)                                                      \
     X(TestMarshalInvalidPublicKey)                                                     \
     X(TestParsePKIXPublicKey)                                                          \
     X(TestPKIXMismatchPublicKeyFormat)                                                 \

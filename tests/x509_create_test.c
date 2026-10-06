@@ -44,8 +44,8 @@
 #include "burrow/testing.h"
 #include "burrow/time.h"
 
+#include "../src/crypto/x509_internal.h"
 #include "check.h"
-#include "crypto/x509_internal.h"
 #include "x509_parse_test_gen.h"
 #include "x509_test_gen.h"
 

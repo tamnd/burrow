@@ -313,3 +313,60 @@ That prints:
 ```
 
 A reader or writer holds one dot reader or writer, and asking for another, or reading or writing a line, finishes the one before it. Go does the same, except that there the old reader or writer is a separate value that goes stale; here it is the same one starting over. `TextprotoConn` puts a reader, a writer and a `TextprotoPipeline` over one connection. The `textproto_conn_` functions are the methods Go promotes from those three, and `textproto_conn_cmd` sends a command and returns its id for the pipeline. Go's `Dial` is not here yet, because it needs the `net` package; `textproto_new_conn` takes any `IoReadWriteCloser` in the meantime.
+
+## Mail
+
+`net/mail` follows Go's `net/mail`. `mail_read_message` reads the header of a message and leaves the body to be read from the message's `body`, and `mail_header_get`, `mail_header_date` and `mail_header_address_list` read the fields most programs want. The header is a `MailHeader`, which is the same `Map` as a `TextprotoMIMEHeader`, so the `textproto_mime_header_` functions work on it too. The header lives in an arena of the message's own, and `mail_message_free` gives it back with the reader:
+
+<!-- example: ../examples/net/mail.c#message -->
+```c
+StringsReader *sr =
+    strings_new_reader(a, BURROW_S("Date: Mon, 23 Jun 2015 11:40:36 -0400\n"
+                                   "From: Gopher <from@example.com>\n"
+                                   "To: Another Gopher <to@example.com>\n"
+                                   "Subject: Gophers at Gophercon\n"
+                                   "\n"
+                                   "Message body\n"));
+Error err;
+MailMessage *m = mail_read_message(a, strings_reader_as_io_reader(sr), &err);
+if (m == NULL) {
+    fmt_printf_v("%v\n", err);
+    return;
+}
+printf("Date: %.*s\n", P(mail_header_get(m->header, BURROW_S("Date"))));
+printf("From: %.*s\n", P(mail_header_get(m->header, BURROW_S("From"))));
+printf("Subject: %.*s\n", P(mail_header_get(m->header, BURROW_S("Subject"))));
+Slice body = io_read_all(a, m->body, &err);
+printf("%.*s", (int)body.len, (const char *)body.p);
+
+Time t = mail_header_date(m->header, a, &err);
+printf("%.*s\n", P(time_format(t, a, TIME_RFC3339)));
+mail_message_free(m);
+```
+
+`mail_parse_address` reads one address and `mail_parse_address_list` reads a list, groups included. Each `MailAddress` is one allocation that holds the struct and both strings, so the input can go away while it lives, and a list is a `Slice` of `MailAddress *` that `mail_address_list_free` gives back in one call. `mail_address_string` puts an address back together the way RFC 5322 wants it, quoting the name, or encoding it as an RFC 2047 word when it is not plain ASCII:
+
+<!-- example: ../examples/net/mail.c#addresses -->
+```c
+Error err;
+MailAddress *e = mail_parse_address(a, BURROW_S("Alice <alice@example.com>"), &err);
+if (e != NULL) {
+    printf("%.*s %.*s\n", P(e->name), P(e->address));
+    mail_address_free(a, e);
+}
+
+Slice list = mail_parse_address_list(
+    a,
+    BURROW_S(
+        "Bob <bob@example.com>, eve@example.com, \"Gö, Pher\" <g@example.com>"),
+    &err);
+MailAddress **v = (MailAddress **)list.p;
+for (Int i = 0; i < list.len; i++)
+    printf("%.*s\n", P(mail_address_string(v[i], a)));
+mail_address_list_free(a, list);
+
+if (mail_parse_address(a, BURROW_S("John Doe"), &err) == NULL)
+    fmt_printf_v("%v\n", err);
+```
+
+Names written as RFC 2047 encoded words are decoded with a `MimeWordDecoder`. Without one, UTF-8, ISO-8859-1 and US-ASCII work and any other charset is an error, as in Go. To take more, put a decoder with a `charset_reader` in a `MailAddressParser` and call `mail_address_parser_parse` or `mail_address_parser_parse_list`. The parser follows the same parts of RFC 5322 Go does, and leaves out the same ones: obsolete forms such as routes are not read, an address cannot be folded across lines, and nothing is normalised.

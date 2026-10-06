@@ -633,6 +633,10 @@ burrow__PollStatus burrow__poll_wait(burrow__PollDesc *pd, uint32_t mode) {
     if (st != BURROW_POLL_READY)
         return st;
 
+#if defined(BURROW_NETPOLL_POLL)
+    burrow__netpoll_backend_arm(pd->fd, mode);
+#endif
+
     /* The loop is for a wait that ended without a notification and without a
      * reason. That happens when a deadline fires and is moved again before the
      * goroutine gets a turn, so the state it woke up to complain about is no

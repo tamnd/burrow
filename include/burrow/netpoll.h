@@ -33,8 +33,8 @@
  * wait with one wakeup. burrow__netpoll and burrow__netpoll_break are the two
  * calls the scheduler makes for that, and they are not for anybody else.
  *
- * What is not here yet: io_uring, and a backend for the two web targets. There
- * burrow__netpoll_inited answers false and burrow__poll_open refuses.
+ * Not here yet: io_uring, and a backend for the systems not named below.
+ * There burrow__netpoll_inited answers false and burrow__poll_open refuses.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -71,6 +71,8 @@ extern "C" {
 #define BURROW_NETPOLL_KQUEUE 1
 #elif defined(BURROW_OS_WINDOWS)
 #define BURROW_NETPOLL_IOCP 1
+#elif defined(BURROW_OS_COSMO) || defined(BURROW_OS_WASI)
+#define BURROW_NETPOLL_POLL 1
 #else
 #define BURROW_NETPOLL_NONE 1
 #endif
@@ -482,9 +484,10 @@ void burrow__netpoll_backend_init(void);
  * handle, which reaches it in the operation instead. */
 int burrow__netpoll_backend_open(burrow__PollFd fd, uintptr_t handle);
 
-/* Unregisters it. An errno, or 0. All three backends here treat closing the
+/* Unregisters it. An errno, or 0. epoll, kqueue and IOCP treat closing the
  * descriptor as unregistering it, so this is allowed to be, and on kqueue and
- * IOCP is, nothing at all. */
+ * IOCP is, nothing at all. The poll(2) backend keeps its own table and has to
+ * be told. */
 int burrow__netpoll_backend_close(burrow__PollFd fd);
 
 /* The wait itself. Reports every ready descriptor by calling
@@ -493,6 +496,13 @@ void burrow__netpoll_backend_wait(int64_t delay, burrow__GQueue *out);
 
 /* The wakeup. Whatever the backend's own way of interrupting its wait is. */
 void burrow__netpoll_backend_break(void);
+
+#if defined(BURROW_NETPOLL_POLL)
+/* Says a goroutine is about to wait on `fd` for `mode`, which poll(2) needs
+ * before every wait and the edge triggered backends never do. Go's netpollarm,
+ * which is called from the same place, on AIX and wasip1. */
+void burrow__netpoll_backend_arm(burrow__PollFd fd, uint32_t mode);
+#endif
 
 /* What a backend calls for each ready descriptor.
  *

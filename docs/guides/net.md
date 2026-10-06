@@ -159,6 +159,50 @@ address example.com: missing port in address
 
 The host and port from `net_split_host_port` point into the string you pass, so nothing is allocated. A malformed string is a `NetAddrError` with Go's message. New code that does not have to match an older API is better off with `burrow/net/netip.h`, which never allocates.
 
+## Connections and Pipe
+
+`net.Conn`, `net.Addr` and `net.Listener` are interfaces in Go, and here they are the vtable and data pairs `NetConn`, `NetAddr` and `NetListener`, built the way [interfaces](interfaces.md) describes. A `NetConn` is a reader, a writer and a closer with the addresses and deadlines on top, and `net_conn_as_io_reader` and its siblings hand it to anything in `burrow/io.h` that wants one of those. No call allocates.
+
+`net_pipe` is Go's `net.Pipe`: two ends of a connection that lives in memory, with no buffer in between, so each write waits until the other end has read all of it. It is handy for testing code that talks over a connection, and it is what `crypto/tls` is tested over:
+
+<!-- example: ../examples/net/pipe.c#pipe -->
+```c
+NetConn client, server;
+net_pipe(heap_allocator(), &client, &server);
+SyncWaitGroup wg = {0};
+sync_wait_group_go(&wg, BURROW_FN(Func, echo, &server));
+
+Error err;
+Byte buf[5];
+Slice b = slice_from(buf, 5, 5, TYPE_BYTE);
+io_write_string(net_conn_as_io_writer(client), BURROW_S("hello"), &err);
+io_read_full(net_conn_as_io_reader(client), b, &err);
+printf("%.*s\n", 5, (const char *)buf);
+
+/* Nothing more is coming, so this read gives up at the deadline. */
+client.vt->set_read_deadline(client.data,
+                             time_add(time_now(), 10 * TIME_MILLISECOND));
+io_read_full(net_conn_as_io_reader(client), b, &err);
+Str msg = error_text(err);
+printf("%.*s, timeout %d\n", (int)msg.len, (const char *)msg.p,
+       net_error_timeout(err));
+
+client.vt->closer.close(client.data);
+sync_wait_group_wait(&wg);
+net_pipe_free(client);
+```
+
+That prints:
+
+```
+hello
+read pipe: i/o timeout, timeout 1
+```
+
+A call that runs past a deadline fails with a `NetOpError` that wraps `os_err_deadline_exceeded`, and `net_error_timeout` says true for it, the same as in Go. `errors_is` finds the wrapped error, and `errors_as` with `TYPE_NET_OP_ERROR` finds the `NetOpError`. Setting a deadline starts a timer, so it has to happen on a goroutine, which is why the example runs under `runtime_main`. Closing an end makes its own calls fail with `io_err_closed_pipe` and makes a read on the other end give `io_eof`.
+
+Go's collector takes care of a pipe once nothing refers to it. Here `net_pipe_free` gives both ends back, given either one, once both are closed and no goroutine is still in a call on them. It stops any deadline timer that has not gone off yet.
+
 ## URLs
 
 `url_parse` splits a URL into a `Url` with the same fields as Go's `url.URL`. `path` holds the decoded path and `url_escaped_path` gives back the form that goes on the wire. The parse makes one allocation that holds the `Url` and every string in it, so the input can go away while the `Url` lives, and `url_free` gives it back. With an arena you do not need to free at all. In these examples `P(s)` is short for `(int)(s).len, (const char *)(s).p`, the two arguments that `%.*s` wants:

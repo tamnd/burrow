@@ -343,7 +343,7 @@ void burrow__sc_non_adjacent_form(const Edwards25519Scalar *s, unsigned w,
 
     memset(naf, 0, 256);
     uint64_t digits[5] = {0};
-    for (int i = 0; i < 4; i++)
+    for (Int i = 0; i < 4; i++)
         digits[i] = sc_le64(b + i * 8);
 
     uint64_t width = (uint64_t)1 << w;
@@ -393,7 +393,7 @@ void burrow__sc_signed_radix16(const Edwards25519Scalar *s, int8_t digits[64]) {
         panic_str(BURROW_S("scalar has high bit set illegally"));
 
     /* The unsigned radix 16 digits. */
-    for (int i = 0; i < 32; i++) {
+    for (Int i = 0; i < 32; i++) {
         digits[2 * i] = (int8_t)(b[i] & 15);
         digits[2 * i + 1] = (int8_t)((b[i] >> 4) & 15);
     }

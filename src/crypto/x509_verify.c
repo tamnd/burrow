@@ -1608,7 +1608,8 @@ static Slice x509_copy_chains(Alloc *a, Slice from, Error *err) {
             *err = burrow_err_out_of_memory;
             return slice_nil(TYPE_X509_CERTIFICATE_CHAIN);
         }
-        memcpy(to[i].p, in[i].p, (size_t)in[i].len * sizeof(X509Certificate *));
+        if (in[i].len > 0)
+            memcpy(to[i].p, in[i].p, (size_t)in[i].len * sizeof(X509Certificate *));
     }
     return out;
 }

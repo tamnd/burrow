@@ -796,7 +796,7 @@ extern const Type *const TYPE_X509_HOSTNAME_ERROR;
 
 /* HostnameError.Error, such as "x509: certificate is valid for example.com,
  * not example.org", from a. */
-BURROW_OWNS(ret) Str x509_hostname_error_error(X509HostnameError e, Alloc *a);
+BURROW_OWNS(ret) Str x509_hostname_error_error(X509HostnameError h, Alloc *a);
 
 /* e as an Error, from a, with its own copy of the host. */
 BURROW_OWNS(ret) Error x509_hostname_error_as_error(X509HostnameError e, Alloc *a);

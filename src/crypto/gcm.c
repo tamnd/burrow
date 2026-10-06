@@ -100,7 +100,7 @@ static Slice gcm_slice_for_append(Alloc *a, Slice dst, Int n, Byte **tail) {
             *tail = NULL;
             return slice_nil(TYPE_BYTE);
         }
-        if (dst.len > 0)
+        if (dst.len > 0 && dst.p != NULL && head.p != NULL)
             memcpy(head.p, dst.p, (size_t)dst.len);
     }
     *tail = (Byte *)head.p + dst.len;
@@ -150,7 +150,7 @@ static uint64_t gcm_mul32(uint32_t x, uint32_t y) {
  * then the reduction. */
 static void gcm_ct_block(uint32_t y[4], const uint32_t h[4], const Byte *block) {
     for (int i = 0; i < 4; i++)
-        y[3 - i] ^= gcm_be32(block + i * 4);
+        y[3 - i] ^= gcm_be32(block + 4 * (size_t)i);
     uint64_t z_lo[3], z_hi[3], z_sum[3];
     z_lo[0] = gcm_mul32(y[0], h[0]);
     z_hi[0] = gcm_mul32(y[1], h[1]);
@@ -190,8 +190,8 @@ static void gcm_ct_block(uint32_t y[4], const uint32_t h[4], const Byte *block) 
 static void gcm_ghash_ct(const Byte *hkey, Byte *ys, const Byte *p, size_t n) {
     uint32_t y[4], h[4];
     for (int i = 0; i < 4; i++) {
-        h[3 - i] = gcm_be32(hkey + i * 4);
-        y[3 - i] = gcm_be32(ys + i * 4);
+        h[3 - i] = gcm_be32(hkey + 4 * (size_t)i);
+        y[3 - i] = gcm_be32(ys + 4 * (size_t)i);
     }
     for (; n >= GCM_BLOCK_SIZE; n -= GCM_BLOCK_SIZE, p += GCM_BLOCK_SIZE)
         gcm_ct_block(y, h, p);
@@ -201,7 +201,7 @@ static void gcm_ghash_ct(const Byte *hkey, Byte *ys, const Byte *p, size_t n) {
         gcm_ct_block(y, h, last);
     }
     for (int i = 0; i < 4; i++)
-        gcm_put_be32(ys + i * 4, y[3 - i]);
+        gcm_put_be32(ys + 4 * (size_t)i, y[3 - i]);
 }
 
 /* ------------------------------------------------------- GHASH on x86-64 */

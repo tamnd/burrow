@@ -22,6 +22,17 @@ bool burrow__crypto_rand_is_default_reader(IoReader r);
  * p or the process ends. */
 void burrow__crypto_rand_system(Slice p);
 
+/* What a nil reader means to the key generators that take one, ed25519's
+ * first: the system generator, or crypto_rand_reader when GODEBUG has
+ * cryptocustomrand=1. */
+IoReader burrow__crypto_rand_nil_reader(void);
+
+/* crypto/internal/rand.CustomReader, which the key generators put the reader
+ * they are given through: the system generator, unless GODEBUG has
+ * cryptocustomrand=1, when it is r, after half the time reading a byte from it
+ * to throw away. r cannot be nil. */
+IoReader burrow__crypto_rand_custom_reader(IoReader r);
+
 /* Reads the GODEBUG settings from value as if it were the environment's, or
  * forgets them when value is NULL so that the next use reads the environment
  * again. For tests, which cannot change the environment of a process that has

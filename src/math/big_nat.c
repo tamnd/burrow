@@ -564,7 +564,7 @@ Nat nat_random(Nat z, MathRandRand *rnd, Nat limit, Int n) {
         msw = BIG_W;
     BigWord mask = msw == BIG_W ? BIG_M : ((BigWord)1 << msw) - 1;
     for (;;) {
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
         for (Int i = 0; i < z.len; i++) {
             /* Two statements, since C leaves the order of the operands of |
              * open and MSVC draws the high half first. */

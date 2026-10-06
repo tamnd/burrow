@@ -37,20 +37,25 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <grp.h>
 #include <limits.h>
 #include <pthread.h>
-#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+/* wasip1 has no processes but this one, no signals, no mapping and no groups,
+ * and the headers for them say so with an #error or are not there. */
+#if !defined(BURROW_OS_WASI)
+#include <grp.h>
+#include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
-#include <sys/stat.h>
 #include <sys/wait.h>
-#include <unistd.h>
+#endif
 
 #if defined(BURROW_OS_LINUX)
 #include <sys/syscall.h>
@@ -118,12 +123,68 @@ static bool proc_fail(PalErrno *err) {
     return false;
 }
 
+#if !defined(BURROW_OS_WASI)
 static int64_t proc_fail_n(PalErrno *err) {
     BURROW_OUT(err, burrow__pal_errno(errno));
     return -1;
 }
+#endif
 
 /* ------------------------------------------------------------------ spawn */
+
+#if defined(BURROW_OS_WASI)
+
+/* Nothing to start and nothing to wait for. Go's StartProcess and Wait4 on
+ * wasip1 both give ENOSYS, and so does everything here. */
+static int64_t proc_nosys(PalErrno *err) {
+    BURROW_OUT(err, PAL_ENOSYS);
+    return -1;
+}
+
+int64_t pal_spawn(const PalSpawn *req, PalErrno *err) {
+    (void)req;
+    return proc_nosys(err);
+}
+
+int64_t pal_wait(int64_t pid, int32_t *status, uint32_t flags, PalErrno *err) {
+    (void)pid;
+    (void)status;
+    (void)flags;
+    return proc_nosys(err);
+}
+
+int64_t pal_wait4(int64_t pid, uint32_t *status, int32_t options, PalRusage *ru,
+                  PalErrno *err) {
+    (void)pid;
+    (void)status;
+    (void)options;
+    (void)ru;
+    return proc_nosys(err);
+}
+
+bool pal_wait_ready(int64_t pid, PalErrno *err) {
+    (void)pid;
+    BURROW_OUT(err, PAL_ENOSYS);
+    return false;
+}
+
+bool pal_set_ids(PalSetID which, uint32_t a, uint32_t b, uint32_t c, PalErrno *err) {
+    (void)which;
+    (void)a;
+    (void)b;
+    (void)c;
+    BURROW_OUT(err, PAL_ENOSYS);
+    return false;
+}
+
+bool pal_setgroups(const uint32_t *gids, int64_t n, PalErrno *err) {
+    (void)gids;
+    (void)n;
+    BURROW_OUT(err, PAL_ENOSYS);
+    return false;
+}
+
+#else
 
 #if defined(BURROW_OS_LINUX)
 /* The numbers Go spells out as well, for prctl, mount, clone and capset,
@@ -920,6 +981,8 @@ bool pal_wait_ready(int64_t pid, PalErrno *err) {
 #endif
 }
 
+#endif /* !BURROW_OS_WASI */
+
 int64_t pal_process_id(int64_t pid) {
     return pid;
 }
@@ -932,6 +995,40 @@ int64_t pal_process_open(int64_t id, PalErrno *err) {
 void pal_process_close(int64_t pid) {
     (void)pid;
 }
+
+#if defined(BURROW_OS_WASI)
+
+/* wasip1 has no ids to ask for. These are the numbers Go's syscall makes up
+ * for it, so that a program sees the same ones under either. */
+int64_t pal_getpid(void) {
+    return 3;
+}
+
+int64_t pal_getppid(void) {
+    return 2;
+}
+
+void pal_ids(PalIds *out) {
+    out->uid = 1;
+    out->euid = 1;
+    out->gid = 1;
+    out->egid = 1;
+}
+
+int64_t pal_getgroups(uint32_t *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (cap < 0 || (cap > 0 && buf == NULL)) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return -1;
+    }
+    /* getgroups(0, NULL) asks how many there are, and the answer is Go's one
+     * group, 1. */
+    if (cap > 0)
+        buf[0] = 1;
+    return 1;
+}
+
+#else
 
 int64_t pal_getpid(void) {
     return (int64_t)getpid();
@@ -963,6 +1060,8 @@ int64_t pal_getgroups(uint32_t *buf, int64_t cap, PalErrno *err) {
     }
     return (int64_t)n;
 }
+
+#endif /* !BURROW_OS_WASI */
 
 int64_t pal_std_handle(int i) {
     return i >= 0 && i <= 2 ? (int64_t)i : PAL_INVALID_HANDLE;
@@ -1201,6 +1300,28 @@ int64_t pal_executable(char *buf, int64_t cap, PalErrno *err) {
 
 /* -------------------------------------------------------------------- mmap */
 
+#if defined(BURROW_OS_WASI)
+
+/* Go's syscall has no Mmap on wasip1, and wasi-libc's emulation copies the
+ * file into memory, which is not a mapping two processes could share. */
+void *pal_mmap(int64_t fd, int64_t off, int64_t len, uint32_t prot, PalErrno *err) {
+    (void)fd;
+    (void)off;
+    (void)len;
+    (void)prot;
+    BURROW_OUT(err, PAL_ENOSYS);
+    return NULL;
+}
+
+bool pal_munmap(void *addr, int64_t len, PalErrno *err) {
+    (void)addr;
+    (void)len;
+    BURROW_OUT(err, PAL_ENOSYS);
+    return false;
+}
+
+#else
+
 void *pal_mmap(int64_t fd, int64_t off, int64_t len, uint32_t prot, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     if (fd < 0 || off < 0 || len <= 0 ||
@@ -1235,5 +1356,7 @@ bool pal_munmap(void *addr, int64_t len, PalErrno *err) {
     }
     return munmap(addr, (size_t)len) == 0 || proc_fail(err);
 }
+
+#endif /* !BURROW_OS_WASI */
 
 #endif /* !BURROW_OS_WINDOWS */

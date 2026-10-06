@@ -122,19 +122,29 @@ bool syscall_errno_is(SyscallErrno e, Error target) {
             e == SYSCALL_EWINDOWS)
             return true;
 #endif
+#if defined(BURROW_OS_WASI)
+        /* Go's wasip1 counts only ENOSYS. */
+        return e == SYSCALL_ENOSYS;
+#else
         /* ENOTSUP and EOPNOTSUPP are the same number on Linux. */
         /* NOLINTNEXTLINE(misc-redundant-expression) */
         return e == SYSCALL_ENOSYS || e == SYSCALL_ENOTSUP || e == SYSCALL_EOPNOTSUPP;
+#endif
     }
     return false;
 }
 
 bool syscall_errno_timeout(SyscallErrno e) {
+#if defined(BURROW_OS_WASI)
+    /* wasip1 has no EWOULDBLOCK. */
+    return e == SYSCALL_EAGAIN || e == SYSCALL_ETIMEDOUT;
+#else
     return e == SYSCALL_EAGAIN || e == SYSCALL_EWOULDBLOCK || e == SYSCALL_ETIMEDOUT;
+#endif
 }
 
 bool syscall_errno_temporary(SyscallErrno e) {
-#if defined(BURROW_OS_WINDOWS)
+#if defined(BURROW_OS_WINDOWS) || defined(BURROW_OS_WASI)
     return e == SYSCALL_EINTR || e == SYSCALL_EMFILE || syscall_errno_timeout(e);
 #else
     return e == SYSCALL_EINTR || e == SYSCALL_EMFILE || e == SYSCALL_ENFILE ||

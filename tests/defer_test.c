@@ -456,6 +456,8 @@ static void on_a_bare_thread(void *env) {
 }
 
 static void TestAThreadThatIsNotAGoroutineHasAChainOfItsOwn(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     reset();
     thread_ran = 0;
 

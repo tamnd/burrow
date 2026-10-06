@@ -176,10 +176,14 @@ static void TestStringByteSlice(TestingT *t) {
 
 /* Cosmopolitan has no way to make a raw system call, so everything that goes
  * through one gives ENOSYS there. syscall_call_test.c leaves it out for the
- * same reason. */
+ * same reason. wasip1 has no system calls of its own at all, and no mmap or
+ * pipe in its C library, so these give ENOSYS there too. Go builds none of
+ * these tests for wasip1, which is not unix to it. */
 static void skip_without_raw_calls(TestingT *t) {
 #if defined(BURROW_OS_COSMO)
     testing_t_skip_v(t, "Cosmopolitan has no raw system calls");
+#elif defined(BURROW_OS_WASI)
+    testing_t_skip_v(t, "wasip1 has no mmap and no pipe");
 #else
     (void)t;
 #endif

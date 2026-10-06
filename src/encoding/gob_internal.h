@@ -45,6 +45,12 @@ enum { GOB_X_GOB = 1, GOB_X_BINARY = 2, GOB_X_TEXT = 3 };
  * go below it is an error rather than a stack overflow. */
 #define GOB_STACK_MARGIN ((uintptr_t)64 << 10)
 
+/* The cap on nesting on wasip1. Every goroutine there runs its calls on the
+ * engine's own stack, which nothing inside the module can measure and which is
+ * 512 KiB in wasmtime unless the host asks for more, so a count is all there is
+ * to go on. */
+#define GOB_WASI_MAX_DEPTH 1000
+
 /* tooBig: the largest message, 8 GB with a 64 bit int and 1 GB otherwise. */
 #define GOB_TOO_BIG ((uint64_t)(1u << 30) << (sizeof(void *) == 8 ? 3 : 0))
 

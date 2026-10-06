@@ -543,6 +543,7 @@ static void steal_loop(void *arg) {
  * Answering false means a thread would not start, and the caller gives up rather
  * than waiting for a thief that is never going to arrive. */
 static bool start_thieves(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
     stress_stop = 0;
     thieves_running = 0;
 

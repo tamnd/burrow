@@ -403,6 +403,8 @@ static void thread_count_body(void *env) {
 }
 
 static void TestThreadsThatAreNotGoroutinesCanShareAMutex(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     reset();
 
     for (size_t i = 0; i < WORKERS; i++)
@@ -450,6 +452,8 @@ static void thread_writer_body(void *env) {
 }
 
 static void TestThreadsThatAreNotGoroutinesCanShareAnRwMutex(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     reset();
 
     for (size_t i = 0; i < 6; i++)
@@ -483,6 +487,8 @@ static void mixed_main(void *env) {
 }
 
 static void TestAGoroutineAndAThreadCanQueueOnTheSameMutex(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     reset();
 
     for (size_t i = 0; i < 4; i++)

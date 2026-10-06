@@ -810,6 +810,8 @@ static void host_body(void *arg) {
 }
 
 static void TestAThreadThatIsNotAGoroutineCanSelect(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     reset();
     (void)runtime_gomaxprocs(2);
 

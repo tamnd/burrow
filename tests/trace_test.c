@@ -274,6 +274,8 @@ static void thread_body(void *unused) {
 }
 
 static void TestAPlainThreadWalksToo(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     burrow__Thread th;
 
     if (!walks())

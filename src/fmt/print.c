@@ -399,7 +399,7 @@ static void unwrap(const Type **tp, void **dp) {
                 /* An interface bigger than two words, image/color's Color
                  * being the one, holds its value inline after the vtable. */
                 if (t->size > sizeof(Iface))
-                    *dp = (Byte *)*dp + sizeof(void *);
+                    *dp = burrow__iface_inline(t, *dp);
                 else
                     *dp = v.data;
             }

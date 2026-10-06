@@ -373,3 +373,261 @@ with open(out, "w") as f:
     f.write("\n".join(defs))
     f.write("\n#endif\n")
 PY
+
+# The certificates in verify_test.go and the verifyTests table that reads them,
+# for tests/x509_verify_test.c.
+python3 - "$goroot/src/crypto/x509" "$root/tests/x509_verify_test_gen.h" <<'PY'
+import re
+import sys
+
+src, out = sys.argv[1], sys.argv[2]
+
+with open(f"{src}/verify_test.go") as f:
+    verify_test = f.read()
+
+
+def one(pattern, text):
+    m = re.findall(pattern, text, re.S)
+    assert len(m) == 1, (pattern, len(m))
+    return m[0]
+
+
+def snake(name):
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", name).lower()
+
+
+def c_str(s, indent="    "):
+    pieces = []
+    lines = s.split("\n")
+    for i, line in enumerate(lines):
+        nl = "\\n" if i < len(lines) - 1 else ""
+        if line == "" and nl == "":
+            continue
+        while len(line) > 64:
+            pieces.append(line[:64])
+            line = line[64:]
+        pieces.append(line + nl)
+    if not pieces:
+        pieces = [""]
+    for p in pieces:
+        assert '"' not in p and "\\" not in p.replace("\\n", "")
+    return "\n".join(f'{indent}"{p}"' for p in pieces)
+
+
+def q(s):
+    """s as one C string literal."""
+    assert "\\" not in s
+    return '"' + s.replace('"', '\\"') + '"'
+
+
+defs = []
+pems = {}
+for name, value in re.findall(r"\n(?:var|const) (\w+) = `(.*?)`", verify_test, re.S):
+    assert len(value) <= 4000, name
+    pems[name] = snake(name)
+    defs.append(f"static const char {snake(name)}[] =\n{c_str(value)};\n")
+
+
+def entries(table):
+    """The top level { ... } entries of a Go composite literal body."""
+    out, depth, start = [], 0, None
+    i = 0
+    while i < len(table):
+        c = table[i]
+        if c == '"':
+            j = i + 1
+            while table[j] != '"':
+                j += 2 if table[j] == "\\" else 1
+            i = j
+        elif c == "{":
+            if depth == 0:
+                start = i + 1
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                out.append(table[start:i])
+        i += 1
+    return out
+
+
+def strings_in(s):
+    return [x.replace('\\"', '"') for x in re.findall(r'"((?:[^"\\]|\\.)*)"', s)]
+
+
+def cert_ref(expr):
+    """A PEM constant, or (count, san) for generatePEMCertWithRepeatSAN."""
+    expr = expr.strip()
+    m = re.fullmatch(r"generatePEMCertWithRepeatSAN\((\d+), (\d+), \"([^\"]+)\"\)", expr)
+    if m:
+        return (int(m.group(2)), m.group(3), int(m.group(1)))
+    return pems[expr]
+
+
+EXPECT = {
+    "expectExpired": "X509_EXPECT_EXPIRED",
+    "expectUsageError": "X509_EXPECT_USAGE",
+    "expectAuthorityUnknown": "X509_EXPECT_AUTHORITY_UNKNOWN",
+    "expectHashError": "X509_EXPECT_HASH",
+    "expectNameConstraintsError": "X509_EXPECT_NAME_CONSTRAINTS",
+    "expectNotAuthorizedError": "X509_EXPECT_NOT_AUTHORIZED",
+    "expectUnhandledCriticalExtension": "X509_EXPECT_UNHANDLED_CRITICAL_EXTENSION",
+}
+
+table = one(r"\nvar verifyTests = \[\]verifyTest\{(.*?)\n\}\n", verify_test)
+cases = []
+for e in entries(table):
+    e = re.sub(r"//[^\n]*", "", e)
+    c = {"intermediates": [], "roots": [], "chains": [], "key_usages": []}
+    m = re.search(r'\bname: +"([^"]*)"', e)
+    c["name"] = m.group(1) if m else ""
+    leaf = one(r"\bleaf: +([^\n]+),\n", e)
+    c["leaf"] = cert_ref(leaf)
+    for field in ["intermediates", "roots"]:
+        m = re.search(rf"\b{field}: +\[\]string\{{(.*?)\}},\n", e, re.S)
+        if m:
+            parts = re.findall(r"generatePEMCertWithRepeatSAN\([^)]*\)|\w+", m.group(1))
+            c[field] = [cert_ref(p) for p in parts]
+    c["current_time"] = int(one(r"\bcurrentTime: +(\d+),", e))
+    m = re.search(r'\bdnsName: +"([^"]*)"', e)
+    c["dns_name"] = m.group(1) if m else ""
+    c["system_skip"] = re.search(r"\bsystemSkip: +true", e) is not None
+    c["system_lax"] = re.search(r"\bsystemLax: +true", e) is not None
+    m = re.search(r"\bkeyUsages: +\[\]ExtKeyUsage\{(.*?)\}", e)
+    if m:
+        c["key_usages"] = [
+            "X509_EXT_KEY_USAGE_" + snake(k.strip()[len("ExtKeyUsage") :]).upper()
+            for k in m.group(1).split(",")
+        ]
+    c["expect"], c["expect_msg"] = "X509_EXPECT_NOTHING", None
+    m = re.search(r"\berrorCallback: +(\w+)(?:\((\"[^\n]*\")\))?,", e)
+    if m:
+        if m.group(1) == "expectHostnameError":
+            c["expect"] = "X509_EXPECT_HOSTNAME"
+            c["expect_msg"] = strings_in(m.group(2))[0]
+        else:
+            c["expect"] = EXPECT[m.group(1)]
+    m = re.search(r"\bexpectedChains: +\[\]\[\]string\{(.*)\}", e, re.S)
+    if m:
+        c["chains"] = [strings_in(x) for x in entries(m.group(1))]
+    cases.append(c)
+
+assert len(cases) == len(re.findall(r"\n\t\tleaf: ", table)), len(cases)
+n_int = max(len(c["intermediates"]) for c in cases) + 1
+n_root = max(len(c["roots"]) for c in cases) + 1
+n_chain = max(len(c["chains"]) for c in cases) + 1
+n_link = max((len(x) for c in cases for x in c["chains"]), default=0) + 1
+n_eku = max(len(c["key_usages"]) for c in cases) + 1
+
+defs.append(
+    "/* What a verifyTests entry's errorCallback checks for. */\n"
+    "enum {\n"
+    "    X509_EXPECT_NOTHING,\n"
+    "    X509_EXPECT_HOSTNAME,\n"
+    + "".join(f"    {v},\n" for v in EXPECT.values())
+    + "};\n"
+)
+defs.append(
+    "/* A certificate in a verifyTests entry: a PEM constant, or when pem is NULL\n"
+    " * one generatePEMCertWithRepeatSAN makes at the time given. */\n"
+    "typedef struct X509VerifyCert {\n"
+    "    const char *pem;\n"
+    "    Int repeat;\n"
+    "    const char *san;\n"
+    "    int64_t at;\n"
+    "} X509VerifyCert;\n"
+)
+defs.append(
+    "typedef struct X509VerifyCase {\n"
+    "    const char *name;\n"
+    "    X509VerifyCert leaf;\n"
+    f"    X509VerifyCert intermediates[{n_int}];\n"
+    f"    X509VerifyCert roots[{n_root}];\n"
+    "    int64_t current_time;\n"
+    "    const char *dns_name;\n"
+    "    bool system_skip;\n"
+    "    bool system_lax;\n"
+    f"    X509ExtKeyUsage key_usages[{n_eku}];\n"
+    "    Int n_key_usages;\n"
+    "    int expect;\n"
+    "    const char *expect_msg;\n"
+    f"    const char *chains[{n_chain}][{n_link}];\n"
+    "} X509VerifyCase;\n"
+)
+
+
+def cert_init(ref):
+    if isinstance(ref, tuple):
+        count, san, at = ref
+        return f"{{NULL, {count}, {q(san)}, {at}}}"
+    return f"{{{ref}, 0, NULL, 0}}"
+
+
+def brace(items):
+    # An empty {} is C23, so an empty list is {0}.
+    return "{" + (", ".join(items) if items else "0") + "}"
+
+
+rows = []
+for c in cases:
+    chains = [brace([q(x) for x in ch]) for ch in c["chains"]]
+    rows.append(
+        "    {\n"
+        f"        {q(c['name'])},\n"
+        f"        {cert_init(c['leaf'])},\n"
+        f"        {brace([cert_init(r) for r in c['intermediates']])},\n"
+        f"        {brace([cert_init(r) for r in c['roots']])},\n"
+        f"        {c['current_time']},\n"
+        f"        {q(c['dns_name'])},\n"
+        f"        {'true' if c['system_skip'] else 'false'},\n"
+        f"        {'true' if c['system_lax'] else 'false'},\n"
+        f"        {brace(c['key_usages'])},\n"
+        f"        {len(c['key_usages'])},\n"
+        f"        {c['expect']},\n"
+        f"        {q(c['expect_msg']) if c['expect_msg'] is not None else 'NULL'},\n"
+        f"        {brace(chains)},\n"
+        "    },\n"
+    )
+defs.append("static const X509VerifyCase verify_tests[] = {\n" + "".join(rows) + "};\n")
+
+uae = one(r"\nvar unknownAuthorityErrorTests = \[\]struct \{.*?\n\}\{(.*?)\n\}\n", verify_test)
+urows = []
+for e in entries(uae):
+    m = re.fullmatch(r'"([^"]*)", (\w+), ("(?:[^"\\]|\\.)*")', e.strip())
+    assert m, e
+    urows.append(f"    {{{q(m.group(1))}, {pems[m.group(2)]}, {m.group(3)}}},\n")
+assert len(urows) == 3
+defs.append(
+    "typedef struct X509UnknownAuthorityCase {\n"
+    "    const char *name;\n"
+    "    const char *cert;\n"
+    "    const char *expected;\n"
+    "} X509UnknownAuthorityCase;\n\n"
+    "static const X509UnknownAuthorityCase unknown_authority_error_tests[] = {\n"
+    + "".join(urows)
+    + "};\n"
+)
+
+# The testdata certificates TestPoliciesValid and
+# TestInvalidPolicyWithAnyKeyUsage read, as policy_root_pem and so on.
+for path in sorted(set(re.findall(r'"testdata/(policy_[a-z_0-9]+)\.pem"', verify_test))):
+    with open(f"{src}/testdata/{path}.pem") as f:
+        value = f.read()
+    assert len(value) <= 4000, path
+    defs.append(f"static const char {path}_pem[] =\n{c_str(value)};\n")
+
+with open(out, "w") as f:
+    f.write(
+        "/* Generated by tools/gen-x509-tests.sh from Go's crypto/x509 tests. Do not\n"
+        " * edit.\n"
+        " *\n"
+        " * Copyright 2011 The Go Authors. All rights reserved.\n"
+        " * Copyright 2026 The burrow Authors. All rights reserved.\n"
+        " * Use of this source code is governed by a BSD-style licence that can be found\n"
+        " * in the LICENSE file. */\n\n"
+        "#ifndef BURROW_TESTS_X509_VERIFY_TEST_GEN_H\n#define BURROW_TESTS_X509_VERIFY_TEST_GEN_H\n\n"
+        '#include "burrow/crypto/x509.h"\n\n#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n\n'
+    )
+    f.write("\n".join(defs))
+    f.write("\n#endif\n")
+PY

@@ -457,6 +457,15 @@ X509CertPool *burrow__x509_system_roots_pool(void) {
     return p;
 }
 
+X509CertPool *burrow__x509_swap_system_roots(X509CertPool *p) {
+    sync_once_do(&x509_roots_once, BURROW_FN(Func, x509_init_system_roots, NULL));
+    sync_rw_mutex_lock(&x509_roots_mu);
+    X509CertPool *old = x509_system_roots;
+    x509_system_roots = p;
+    sync_rw_mutex_unlock(&x509_roots_mu);
+    return old;
+}
+
 X509CertPool *x509_system_cert_pool(Alloc *a, Error *err) {
     X509CertPool *sys_roots = burrow__x509_system_roots_pool();
     if (sys_roots != NULL)
@@ -714,6 +723,14 @@ static bool x509_valid_hostname(Str host, bool is_pattern) {
     return true;
 }
 
+bool burrow__x509_valid_hostname_pattern(Str host) {
+    return x509_valid_hostname(host, true);
+}
+
+bool burrow__x509_valid_hostname_input(Str host) {
+    return x509_valid_hostname(host, false);
+}
+
 /* matchExactly */
 static bool x509_match_exactly(Str a, Str b) {
     if (a.len == 0 || (a.len == 1 && a.p[0] == '.') || b.len == 0 ||
@@ -822,6 +839,11 @@ static Str x509_unknown_message(Alloc *a, Error hint_err,
                          "%s (possibly because of %q while trying to verify candidate "
                          "authority certificate %q)",
                          s, error_text(hint_err), name);
+}
+
+Str burrow__x509_unknown_authority_message(Alloc *a, Error hint_err,
+                                           const X509Certificate *hint_cert) {
+    return x509_unknown_message(a, hint_err, hint_cert);
 }
 
 static Str x509_unknown_text(const void *self) {
@@ -1592,6 +1614,16 @@ static Slice x509_copy_chains(Alloc *a, Slice from, Error *err) {
 }
 
 /* Verify, with scratch memory from s. */
+Error burrow__x509_build_chains(Alloc *a, const X509Certificate *c, Slice current,
+                                const X509VerifyOptions *opts, Slice *chains) {
+    Int sig_checks = 0;
+    return x509_build_chains(a, c, current, &sig_checks, opts, chains);
+}
+
+bool burrow__x509_policies_valid(Alloc *a, Slice chain, const X509VerifyOptions *opts) {
+    return x509_policies_valid(a, chain, opts);
+}
+
 static Slice x509_verify(Alloc *s, const X509Certificate *c, X509VerifyOptions *opts,
                          Alloc *a, Error *err) {
     Slice none = slice_nil(TYPE_X509_CERTIFICATE_CHAIN);

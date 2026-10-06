@@ -80,6 +80,25 @@ bool burrow__x509_no_cert_override(void);
 /* systemRootsPool: the shared system pool, or NULL when there is none. */
 X509CertPool *burrow__x509_system_roots_pool(void);
 
+/* For the tests: sets the system pool to p once it has been loaded, and
+ * gives back the one it had. */
+X509CertPool *burrow__x509_swap_system_roots(X509CertPool *p);
+
+/* validHostnamePattern and validHostnameInput. */
+bool burrow__x509_valid_hostname_pattern(Str host);
+bool burrow__x509_valid_hostname_input(Str host);
+
+/* buildChains, with a count of signature checks of its own, and
+ * policiesValid. chain and current are slices of X509Certificate pointers. */
+Error burrow__x509_build_chains(Alloc *a, const X509Certificate *c, Slice current,
+                                const X509VerifyOptions *opts, Slice *chains);
+bool burrow__x509_policies_valid(Alloc *a, Slice chain, const X509VerifyOptions *opts);
+
+/* The message of an UnknownAuthorityError with Go's hintErr and hintCert,
+ * from a. */
+Str burrow__x509_unknown_authority_message(Alloc *a, Error hint_err,
+                                           const X509Certificate *hint_cert);
+
 /* hasSANExtension and hasNameConstraints, and the SAN extension of c or
  * NULL. */
 bool burrow__x509_has_san_extension(const X509Certificate *c);

@@ -33,7 +33,7 @@
 #include <string.h>
 
 #define W ((Uint)BIGMOD_W)
-#define S ((Int)BIGMOD_S)
+#define SW ((Int)BIGMOD_S)
 #define PRE BIGMOD_PREALLOC_LIMBS
 
 static BigmodChoice not_(BigmodChoice c) {
@@ -64,11 +64,15 @@ static void *bigmod_error(Error *err, const char *msg) {
     return NULL;
 }
 
-static void out_of_memory(void) {
+static void bigmod_oom(void) {
     panic_str(BURROW_S("bigmod: out of memory"));
 }
 
 /* ---------------------------------------------------------------- storage */
+
+/* The NOLINTNEXTLINE lines in this file are clang-analyzer paths where a nat
+ * has len words in use but limbs is NULL, which cannot happen: limbs only
+ * stays NULL while cap, and so len, is zero. */
 
 void bigmod_nat_init(BigmodNat *x, Alloc *a) {
     *x = (BigmodNat){NULL, 0, 0, a, false};
@@ -78,7 +82,7 @@ BigmodNat *bigmod_new_nat(Alloc *a) {
     BigmodNat *x =
         mem_alloc(a != NULL ? a : heap_allocator(), sizeof *x, _Alignof(BigmodNat));
     if (x == NULL)
-        out_of_memory();
+        bigmod_oom();
     bigmod_nat_init(x, a);
     return x;
 }
@@ -104,7 +108,7 @@ void bigmod_nat_free(BigmodNat *x) {
 static void nat_grow(BigmodNat *x, Int n, Int keep) {
     Uint *p = mem_alloc(nat_alloc(x), (size_t)n * sizeof(Uint), _Alignof(Uint));
     if (p == NULL)
-        out_of_memory();
+        bigmod_oom();
     memset(p, 0, (size_t)n * sizeof(Uint));
     if (keep > 0)
         memcpy(p, x->limbs, (size_t)keep * sizeof(Uint));
@@ -142,21 +146,21 @@ BigmodNat *bigmod_nat_reset(BigmodNat *x, Int n) {
     return x;
 }
 
-/* bigEndianUint: the S bytes at buf, big endian. */
+/* bigEndianUint: the SW bytes at buf, big endian. */
 static Uint big_endian_uint(const uint8_t *buf) {
     Uint v = 0;
-    for (Int i = 0; i < S; i++)
+    for (Int i = 0; i < SW; i++)
         v = v << 8 | buf[i];
     return v;
 }
 
 /* setBytes: x = b, big endian, in the words x already has. */
-static bool nat_set_bytes(BigmodNat *x, Slice b) {
+static bool limbs_set_bytes(BigmodNat *x, Slice b) {
     const uint8_t *p = b.p;
     Int i = b.len, k = 0;
-    while (k < x->len && i >= S) {
-        x->limbs[k] = big_endian_uint(p + i - S);
-        i -= S;
+    while (k < x->len && i >= SW) {
+        x->limbs[k] = big_endian_uint(p + i - SW);
+        i -= SW;
         k++;
     }
     for (Uint s = 0; s < W && k < x->len && i > 0; s += 8) {
@@ -167,8 +171,8 @@ static bool nat_set_bytes(BigmodNat *x, Slice b) {
 }
 
 BigmodNat *bigmod_nat_reset_to_bytes(BigmodNat *x, Slice b) {
-    bigmod_nat_reset(x, (b.len + S - 1) / S);
-    if (!nat_set_bytes(x, b))
+    bigmod_nat_reset(x, (b.len + SW - 1) / SW);
+    if (!limbs_set_bytes(x, b))
         panic_str(BURROW_S("bigmod: internal error: bad arithmetic"));
     return bigmod_nat_trim(x);
 }
@@ -177,6 +181,7 @@ BigmodNat *bigmod_nat_trim(BigmodNat *x) {
     /* Trim most significant (trailing in little-endian) zero limbs. We assume
      * comparison with zero (but not the branch) is constant time. */
     for (Int i = x->len - 1; i >= 0; i--) {
+        /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
         if (x->limbs[i] != 0)
             break;
         x->len = i;
@@ -210,19 +215,20 @@ Slice bigmod_nat_bytes(const BigmodNat *x, Alloc *a, const BigmodModulus *m) {
     if (i > 0) {
         bytes = mem_alloc(a != NULL ? a : heap_allocator(), (size_t)i, 1);
         if (bytes == NULL)
-            out_of_memory();
+            bigmod_oom();
         memset(bytes, 0, (size_t)i);
     }
     Int size = i;
     for (Int k = 0; k < x->len; k++) {
         Uint limb = x->limbs[k];
-        for (Int j = 0; j < S; j++) {
+        for (Int j = 0; j < SW; j++) {
             i--;
             if (i < 0) {
                 if (limb == 0)
                     break;
                 panic_str(BURROW_S("bigmod: modulus is smaller than nat"));
             }
+            /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
             bytes[i] = (uint8_t)limb;
             limb >>= 8;
         }
@@ -250,7 +256,7 @@ static BigmodNat *nat_assign(BigmodNat *x, BigmodChoice on, const BigmodNat *y) 
 }
 
 /* add: x += y, returning the carry, for x and y of the same length. */
-static Uint nat_add(BigmodNat *x, const BigmodNat *y) {
+static Uint limbs_add(BigmodNat *x, const BigmodNat *y) {
     Uint c = 0;
     for (Int i = 0; i < x->len; i++)
         x->limbs[i] = bits_add(x->limbs[i], y->limbs[i], c, &c);
@@ -258,7 +264,7 @@ static Uint nat_add(BigmodNat *x, const BigmodNat *y) {
 }
 
 /* sub: x -= y, returning the borrow, for x and y of the same length. */
-static Uint nat_sub(BigmodNat *x, const BigmodNat *y) {
+static Uint limbs_sub(BigmodNat *x, const BigmodNat *y) {
     Uint c = 0;
     for (Int i = 0; i < x->len; i++)
         x->limbs[i] = bits_sub(x->limbs[i], y->limbs[i], c, &c);
@@ -268,7 +274,7 @@ static Uint nat_sub(BigmodNat *x, const BigmodNat *y) {
 BigmodNat *bigmod_nat_set_bytes(BigmodNat *x, Slice b, const BigmodModulus *m,
                                 Error *err) {
     bigmod_nat_reset_for(x, m);
-    if (!nat_set_bytes(x, b))
+    if (!limbs_set_bytes(x, b))
         return bigmod_error(err, "input overflows the modulus size");
     if (nat_cmp_geq(x, &m->nat) == 1)
         return bigmod_error(err, "input overflows the modulus");
@@ -290,7 +296,7 @@ static Int bit_len(Uint n) {
 BigmodNat *bigmod_nat_set_overflowing_bytes(BigmodNat *x, Slice b,
                                             const BigmodModulus *m, Error *err) {
     bigmod_nat_reset_for(x, m);
-    if (!nat_set_bytes(x, b))
+    if (!limbs_set_bytes(x, b))
         return bigmod_error(err, "input overflows the modulus size");
     /* setBytes would have returned an error if the input overflowed the limb
      * size of the modulus, so now we only need to check if the most
@@ -311,6 +317,7 @@ BigmodNat *bigmod_nat_set_uint(BigmodNat *x, Uint y) {
 BigmodChoice bigmod_nat_equal(const BigmodNat *x, const BigmodNat *y) {
     BigmodChoice equal = 1;
     for (Int i = 0; i < x->len; i++)
+        /* NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage) */
         equal &= ct_eq(x->limbs[i], y->limbs[i]);
     return equal;
 }
@@ -473,7 +480,7 @@ static BigmodModulus *new_modulus(Alloc *a, BigmodNat *n, Error *err) {
         mem_alloc(a != NULL ? a : heap_allocator(), sizeof *m, _Alignof(BigmodModulus));
     if (m == NULL) {
         bigmod_nat_free(n);
-        out_of_memory();
+        bigmod_oom();
     }
     m->nat = *n;
     m->odd = false;
@@ -504,6 +511,7 @@ BigmodModulus *bigmod_new_modulus_product(Alloc *a, Slice x_bytes, Slice y_bytes
     bigmod_nat_reset_to_bytes(&y, y_bytes);
     bigmod_nat_reset(&n, x.len + y.len);
     for (Int i = 0; i < y.len; i++)
+        /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
         n.limbs[i + x.len] =
             bigmod_add_mul_vvw(n.limbs + i, x.limbs, y.limbs[i], x.len);
     bigmod_nat_free(&x);
@@ -604,7 +612,7 @@ void bigmod_nat_maybe_subtract_modulus(BigmodNat *x, BigmodChoice always,
     BigmodNat t;
     bigmod_nat_init_buf(&t, buf, PRE);
     bigmod_nat_set(&t, x);
-    Uint underflow = nat_sub(&t, &m->nat);
+    Uint underflow = limbs_sub(&t, &m->nat);
     /* We keep the result if x - m didn't underflow (meaning x >= m) or if
      * always was set. */
     BigmodChoice keep = not_(underflow) | always;
@@ -613,13 +621,13 @@ void bigmod_nat_maybe_subtract_modulus(BigmodNat *x, BigmodChoice always,
 }
 
 BigmodNat *bigmod_nat_sub(BigmodNat *x, const BigmodNat *y, const BigmodModulus *m) {
-    Uint underflow = nat_sub(x, y);
+    Uint underflow = limbs_sub(x, y);
     /* If the subtraction underflowed, add m. */
     Uint buf[PRE];
     BigmodNat t;
     bigmod_nat_init_buf(&t, buf, PRE);
     bigmod_nat_set(&t, x);
-    (void)nat_add(&t, &m->nat);
+    (void)limbs_add(&t, &m->nat);
     nat_assign(x, underflow, &t);
     bigmod_nat_free(&t);
     return x;
@@ -639,7 +647,7 @@ BigmodNat *bigmod_nat_sub_one(BigmodNat *x, const BigmodModulus *m) {
 }
 
 BigmodNat *bigmod_nat_add(BigmodNat *x, const BigmodNat *y, const BigmodModulus *m) {
-    Uint overflow = nat_add(x, y);
+    Uint overflow = limbs_add(x, y);
     bigmod_nat_maybe_subtract_modulus(x, overflow, m);
     return x;
 }
@@ -674,7 +682,7 @@ static Uint *scratch_words(Uint *buf, Int cap, Int n) {
     }
     Uint *p = mem_alloc(heap_allocator(), (size_t)n * sizeof(Uint), _Alignof(Uint));
     if (p == NULL)
-        out_of_memory();
+        bigmod_oom();
     memset(p, 0, (size_t)n * sizeof(Uint));
     return p;
 }
@@ -692,7 +700,7 @@ BigmodNat *bigmod_nat_montgomery_mul(BigmodNat *x, const BigmodNat *a,
     const Uint *b_limbs = b->limbs;
 
     Uint buf[PRE * 2];
-    Uint *t = scratch_words(buf, PRE * 2, n * 2);
+    Uint *t = scratch_words(buf, (Int)PRE * 2, n * 2);
 
     /* This loop implements Word-by-Word Montgomery Multiplication, as
      * described in Algorithm 4 (Fig. 3) of "Efficient Software
@@ -742,6 +750,7 @@ Uint bigmod_add_mul_vvw(Uint *z, const Uint *x, Uint y, Int len) {
     Uint carry = 0;
     for (Int i = 0; i < len; i++) {
         Uint lo;
+        /* NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage) */
         Uint hi = bits_mul(x[i], y, &lo);
         Uint c;
         lo = bits_add(lo, z[i], 0, &c);
@@ -784,7 +793,7 @@ BigmodNat *bigmod_nat_mul(BigmodNat *x, const BigmodNat *y, const BigmodModulus 
 
     Int n = m->nat.len;
     Uint buf[PRE * 2];
-    Uint *t = scratch_words(buf, PRE * 2, n * 2);
+    Uint *t = scratch_words(buf, (Int)PRE * 2, n * 2);
 
     /* T = x * y */
     for (Int i = 0; i < n; i++)
@@ -839,7 +848,7 @@ BigmodNat *bigmod_nat_exp(BigmodNat *out, const BigmodNat *x, Slice e,
 
             /* Select x^k in constant time from the table. */
             Uint k = (Uint)((b >> js[ji]) & 0xf);
-            for (int i = 0; i < TABLE; i++)
+            for (Int i = 0; i < TABLE; i++)
                 nat_assign(&tmp, ct_eq(k, (Uint)(i + 1)), &table[i]);
 
             /* Multiply by x^k, discarding the result if k = 0. */
@@ -969,11 +978,11 @@ static const char *extended_gcd(const BigmodNat *a, const BigmodNat *m, BigmodNa
          * condition. */
         if (bigmod_nat_is_odd(u) == 1 && bigmod_nat_is_odd(&v) == 1) {
             if (nat_cmp_geq(&v, u) == 0) {
-                (void)nat_sub(u, &v);
+                (void)limbs_sub(u, &v);
                 bigmod_nat_add(A, &C, &mod_m);
                 bigmod_nat_add(&B, &D, &mod_a);
             } else {
-                (void)nat_sub(&v, u);
+                (void)limbs_sub(&v, u);
                 bigmod_nat_add(&C, A, &mod_m);
                 bigmod_nat_add(&D, &B, &mod_a);
             }
@@ -988,8 +997,8 @@ static const char *extended_gcd(const BigmodNat *a, const BigmodNat *m, BigmodNa
         if (bigmod_nat_is_odd(u) == 0) {
             rshift1(u, 0);
             if (bigmod_nat_is_odd(A) == 1 || bigmod_nat_is_odd(&B) == 1) {
-                rshift1(A, nat_add(A, m));
-                rshift1(&B, nat_add(&B, a));
+                rshift1(A, limbs_add(A, m));
+                rshift1(&B, limbs_add(&B, a));
             } else {
                 rshift1(A, 0);
                 rshift1(&B, 0);
@@ -997,8 +1006,8 @@ static const char *extended_gcd(const BigmodNat *a, const BigmodNat *m, BigmodNa
         } else { /* v.IsOdd() == no */
             rshift1(&v, 0);
             if (bigmod_nat_is_odd(&C) == 1 || bigmod_nat_is_odd(&D) == 1) {
-                rshift1(&C, nat_add(&C, m));
-                rshift1(&D, nat_add(&D, a));
+                rshift1(&C, limbs_add(&C, m));
+                rshift1(&D, limbs_add(&D, a));
             } else {
                 rshift1(&C, 0);
                 rshift1(&D, 0);

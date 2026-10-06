@@ -712,6 +712,9 @@ static void mldsa_pk_encode(Byte *pk, const Byte rho[32], uint16_t (*t1)[MLDSA_N
     for (int r = 0; r < p->k; r++) {
         const uint16_t *w = t1[r];
         for (int i = 0; i < MLDSA_N; i += 4) {
+            /* The analyzer takes p->k as zero when t1 is filled and nonzero
+               here; the caller fills all k rows. */
+            /* NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Assign) */
             uint16_t c0 = w[i], c1 = w[i + 1], c2 = w[i + 2], c3 = w[i + 3];
             pk[0] = (Byte)(c0 >> 0);
             pk[1] = (Byte)((c0 >> 8) | (c1 << 2));

@@ -73,6 +73,9 @@ X509PotentialParent *burrow__x509_cert_pool_find_potential_parents(
 /* Marks s as the system pool, which Equal tells apart from other pools. */
 void burrow__x509_cert_pool_set_system(X509CertPool *s);
 
+/* CertPool.systemPool */
+bool burrow__x509_cert_pool_is_system(const X509CertPool *s);
+
 /* GODEBUG x509usefallbackroots=1 and x509sslcertoverrideplatform=0. */
 bool burrow__x509_use_fallback_roots(void);
 bool burrow__x509_no_cert_override(void);
@@ -83,6 +86,19 @@ X509CertPool *burrow__x509_system_roots_pool(void);
 /* For the tests: sets the system pool to p once it has been loaded, and
  * gives back the one it had. */
 X509CertPool *burrow__x509_swap_system_roots(X509CertPool *p);
+
+/* For the tests: forgets that SetFallbackRoots was called and what GODEBUG
+ * said then. */
+void burrow__x509_reset_fallbacks(void);
+
+/* loadSystemRoots, with cert_files and cert_directories, slices of Str, in
+ * place of the platform's certFiles and certDirectories. The pool is from a. */
+X509CertPool *burrow__x509_load_system_roots(Alloc *a, Slice cert_files,
+                                             Slice cert_directories, Error *err);
+
+/* readUniqueDirectoryEntries: the entries of dir, from a, less the symlinks
+ * to other names in dir. */
+Slice burrow__x509_read_unique_directory_entries(Alloc *a, Str dir, Error *err);
 
 /* validHostnamePattern and validHostnameInput. */
 bool burrow__x509_valid_hostname_pattern(Str host);

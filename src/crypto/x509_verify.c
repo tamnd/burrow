@@ -279,6 +279,10 @@ void burrow__x509_cert_pool_set_system(X509CertPool *s) {
     s->system_pool = true;
 }
 
+bool burrow__x509_cert_pool_is_system(const X509CertPool *s) {
+    return s->system_pool;
+}
+
 /* ---------------------------------------------------------- system roots */
 
 #if defined(BURROW_OS_LINUX)
@@ -333,6 +337,20 @@ static bool x509_same_dir_symlink(Alloc *a, FsDirEntry f, Str dir) {
     return !BURROW_FAILED(err) && !strings_contains_rune(target, FILEPATH_SEPARATOR);
 }
 
+Slice burrow__x509_read_unique_directory_entries(Alloc *a, Str dir, Error *err) {
+    Slice files = os_read_dir(a, dir, err);
+    if (BURROW_FAILED(*err))
+        return slice_nil(TYPE_FS_DIR_ENTRY);
+    Int n = 0;
+    for (Int i = 0; i < files.len; i++) {
+        FsDirEntry f = *(FsDirEntry *)slice_at(files, i);
+        if (!x509_same_dir_symlink(a, f, dir))
+            *(FsDirEntry *)slice_at(files, n++) = f;
+    }
+    files.len = n;
+    return files;
+}
+
 /* Reads every file named in files until one can be read, then every file in
  * dirs, into roots. The first error that is not a missing file goes to
  * *first_err. */
@@ -352,7 +370,7 @@ static void x509_load_on_disk(X509CertPool *roots, Alloc *a, Slice files, Slice 
     const Str *d = dirs.p;
     for (Int i = 0; i < dirs.len; i++) {
         Error err = BURROW_NO_ERROR;
-        Slice fis = os_read_dir(a, d[i], &err);
+        Slice fis = burrow__x509_read_unique_directory_entries(a, d[i], &err);
         if (BURROW_FAILED(err)) {
             if (!BURROW_FAILED(*first_err) && !os_is_not_exist(err))
                 *first_err = err;
@@ -360,8 +378,6 @@ static void x509_load_on_disk(X509CertPool *roots, Alloc *a, Slice files, Slice 
         }
         for (Int j = 0; j < fis.len; j++) {
             FsDirEntry fi = *(FsDirEntry *)slice_at(fis, j);
-            if (x509_same_dir_symlink(a, fi, d[i]))
-                continue;
             Error rerr = BURROW_NO_ERROR;
             Slice data = os_read_file(
                 a, filepath_join_v(a, 2, d[i], fi.vt->name(fi.data)), &rerr);
@@ -380,9 +396,11 @@ static Slice x509_cstr_list(Alloc *a, const char *const *list) {
     return s;
 }
 
-/* loadOnDiskRoots, with a pool from a. A pool comes back unless nothing was
- * found and something failed. */
+/* loadOnDiskRoots, with a pool from a, and cert_files and cert_directories
+ * as the places to look when the environment does not say. A pool comes back
+ * unless nothing was found and something failed. */
 static X509CertPool *x509_load_on_disk_roots(Alloc *a, Str cert_file, Str cert_dir,
+                                             Slice cert_files, Slice cert_directories,
                                              Error *err) {
     Arena scratch;
     arena_init(&scratch, a, 0);
@@ -390,9 +408,8 @@ static X509CertPool *x509_load_on_disk_roots(Alloc *a, Str cert_file, Str cert_d
     X509CertPool *roots = x509_new_cert_pool(a);
     Slice files = cert_file.len > 0
                       ? slice_append(s, slice_nil(TYPE_STRING), &cert_file, 1)
-                      : x509_cstr_list(s, x509_cert_files);
-    Slice dirs = cert_dir.len > 0 ? filepath_split_list(s, cert_dir)
-                                  : x509_cstr_list(s, x509_cert_directories);
+                      : cert_files;
+    Slice dirs = cert_dir.len > 0 ? filepath_split_list(s, cert_dir) : cert_directories;
     Error first_err = BURROW_NO_ERROR;
     x509_load_on_disk(roots, s, files, dirs, &first_err);
     arena_free(&scratch);
@@ -403,8 +420,8 @@ static X509CertPool *x509_load_on_disk_roots(Alloc *a, Str cert_file, Str cert_d
     return NULL;
 }
 
-/* loadSystemRoots */
-static X509CertPool *x509_load_system_roots(Alloc *a, Error *err) {
+X509CertPool *burrow__x509_load_system_roots(Alloc *a, Slice cert_files,
+                                             Slice cert_directories, Error *err) {
     Str cert_file = os_getenv(a, BURROW_S("SSL_CERT_FILE"));
     Str cert_dir = os_getenv(a, BURROW_S("SSL_CERT_DIR"));
 #if defined(BURROW_OS_WINDOWS) || defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
@@ -414,7 +431,20 @@ static X509CertPool *x509_load_system_roots(Alloc *a, Error *err) {
         return p;
     }
 #endif
-    return x509_load_on_disk_roots(a, cert_file, cert_dir, err);
+    return x509_load_on_disk_roots(a, cert_file, cert_dir, cert_files, cert_directories,
+                                   err);
+}
+
+/* loadSystemRoots */
+static X509CertPool *x509_load_system_roots(Alloc *a, Error *err) {
+    Arena scratch;
+    arena_init(&scratch, a, 0);
+    Alloc *s = arena_allocator(&scratch);
+    X509CertPool *p =
+        burrow__x509_load_system_roots(a, x509_cstr_list(s, x509_cert_files),
+                                       x509_cstr_list(s, x509_cert_directories), err);
+    arena_free(&scratch);
+    return p;
 }
 
 static SyncOnce x509_roots_once;
@@ -476,6 +506,13 @@ X509CertPool *x509_system_cert_pool(Alloc *a, Error *err) {
 static void x509_unreachable(void *env) {
     (void)env;
     panic_str(BURROW_S("unreachable"));
+}
+
+void burrow__x509_reset_fallbacks(void) {
+    sync_rw_mutex_lock(&x509_roots_mu);
+    x509_fallbacks_set = false;
+    x509_use_fallback_roots = false;
+    sync_rw_mutex_unlock(&x509_roots_mu);
 }
 
 void x509_set_fallback_roots(X509CertPool *roots) {

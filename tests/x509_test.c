@@ -38,8 +38,8 @@
 #include "burrow/strings.h"
 #include "burrow/testing.h"
 
+#include "../src/crypto/x509_internal.h"
 #include "check.h"
-#include "crypto/x509_internal.h"
 #include "x509_test_gen.h"
 
 #include <stdint.h>

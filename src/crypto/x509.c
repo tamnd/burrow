@@ -1054,7 +1054,9 @@ Slice x509_marshal_pkcs1_private_key(Alloc *a, RsaPrivateKey *key) {
         ap[i].exp = key->precomputed.crt_values[i].exp;
         ap[i].coeff = key->precomputed.crt_values[i].coeff;
     }
-    return asn1_marshal(a, BURROW_ANY(TYPE_OF(X509Pkcs1PrivateKey), &priv), NULL);
+    /* Go drops this error too: the structure always marshals. */
+    Error ignored = BURROW_NO_ERROR;
+    return asn1_marshal(a, BURROW_ANY(TYPE_OF(X509Pkcs1PrivateKey), &priv), &ignored);
 }
 
 RsaPublicKey *x509_parse_pkcs1_public_key(Alloc *a, Slice der, Error *err) {
@@ -1097,7 +1099,9 @@ RsaPublicKey *x509_parse_pkcs1_public_key(Alloc *a, Slice der, Error *err) {
 
 Slice x509_marshal_pkcs1_public_key(Alloc *a, const RsaPublicKey *key) {
     X509Pkcs1PublicKey pub = {key->n, key->e};
-    return asn1_marshal(a, BURROW_ANY(TYPE_OF(X509Pkcs1PublicKey), &pub), NULL);
+    /* Go drops this error too: the structure always marshals. */
+    Error ignored = BURROW_NO_ERROR;
+    return asn1_marshal(a, BURROW_ANY(TYPE_OF(X509Pkcs1PublicKey), &pub), &ignored);
 }
 
 /* -------------------------------------------------------------------- SEC 1 */
@@ -1738,7 +1742,9 @@ Slice x509_marshal_pkix_public_key(Alloc *a, Any pub, Error *err) {
     pkix.bit_string.bytes = bytes;
     pkix.bit_string.bit_length = 8 * bytes.len;
     BURROW_OUT(err, BURROW_NO_ERROR);
-    return asn1_marshal(a, BURROW_ANY(TYPE_OF(X509PkixPublicKey), &pkix), NULL);
+    /* Go drops this error too: the structure always marshals. */
+    Error ignored = BURROW_NO_ERROR;
+    return asn1_marshal(a, BURROW_ANY(TYPE_OF(X509PkixPublicKey), &pkix), &ignored);
 }
 
 /* ------------------------------------------------------------ certificates */

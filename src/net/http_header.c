@@ -172,7 +172,21 @@ static void ht_write_key(IoWriter w, Str key, const Slice *values, Error *err) {
     }
 }
 
-Error http_header_write_subset(HttpHeader h, IoWriter w, Map *exclude) {
+static bool ht_excluded(Str key, Map *exclude, const Str *list, Int nlist) {
+    if (exclude != NULL) {
+        const bool *ex = (const bool *)map_get(exclude, &key);
+        if (ex != NULL && *ex)
+            return true;
+    }
+    for (Int i = 0; i < nlist; i++) {
+        if (str_eq(key, list[i]))
+            return true;
+    }
+    return false;
+}
+
+static Error ht_write_subset(HttpHeader h, IoWriter w, Map *exclude, const Str *list,
+                             Int nlist) {
     Error err = BURROW_NO_ERROR;
     Int n = h == NULL ? 0 : map_len(h);
     if (n == 0)
@@ -192,11 +206,8 @@ Error http_header_write_subset(HttpHeader h, IoWriter w, Map *exclude) {
     void *v;
     while (map_next(&it, &k, &v)) {
         Str key = *(const Str *)k;
-        if (exclude != NULL) {
-            const bool *ex = (const bool *)map_get(exclude, &key);
-            if (ex != NULL && *ex)
-                continue;
-        }
+        if (ht_excluded(key, exclude, list, nlist))
+            continue;
         keys[nk++] = key;
     }
     slices_sort_func(slice_from(keys, nk, nk, TYPE_STRING),
@@ -216,8 +227,17 @@ Error http_header_write_subset(HttpHeader h, IoWriter w, Map *exclude) {
     return err;
 }
 
+Error http_header_write_subset(HttpHeader h, IoWriter w, Map *exclude) {
+    return ht_write_subset(h, w, exclude, NULL, 0);
+}
+
+Error burrow__http_header_write_except(HttpHeader h, IoWriter w, const Str *exclude,
+                                       Int nexclude) {
+    return ht_write_subset(h, w, NULL, exclude, nexclude);
+}
+
 Error http_header_write(HttpHeader h, IoWriter w) {
-    return http_header_write_subset(h, w, NULL);
+    return ht_write_subset(h, w, NULL, NULL, 0);
 }
 
 /* ----------------------------------------------------------------- hasToken */

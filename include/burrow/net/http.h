@@ -32,8 +32,10 @@
 #define BURROW_NET_HTTP_H
 
 #include "burrow/bufio.h"
+#include "burrow/context.h"
 #include "burrow/core.h"
 #include "burrow/error.h"
+#include "burrow/func.h"
 #include "burrow/io.h"
 #include "burrow/map.h"
 #include "burrow/mem.h"
@@ -288,8 +290,12 @@ extern const IoReadCloser http_no_body;
 /* http.ErrBodyReadAfterClose, from reading a body after it was closed. */
 extern const Error http_err_body_read_after_close;
 
-/* http.Request, as far as reading one from the wire goes: a request a server
- * got, or one a client is about to send.
+/* Request.GetBody. A new reader of the same body, for a client that has to
+ * send the request again, such as after a redirect. */
+BURROW_FUNC(HttpGetBodyFunc, IoReadCloser, Error *err);
+
+/* http.Request, as far as reading one from the wire and writing one to it go:
+ * a request a server got, or one a client is about to send.
  *
  * url is where the request goes, which for a request read by
  * http_read_request is the target in its first line, request_uri, parsed.
@@ -311,6 +317,11 @@ extern const Error http_err_body_read_after_close;
  * remote_addr is the address the request came from, which a server sets, and
  * pattern is the ServeMux pattern that matched it.
  *
+ * get_body, which may be nil, makes a new copy of the body, and
+ * http_new_request sets it for a body it knows how to copy. ctx is the
+ * request's context, read with http_request_context, and nil means
+ * context_background.
+ *
  * Everything a request read from the wire has, the strings and the header and
  * the URL, lives in the request's own arena until http_request_free. */
 typedef struct HttpRequest {
@@ -328,6 +339,8 @@ typedef struct HttpRequest {
     Str remote_addr;
     Str request_uri;
     Str pattern;
+    HttpGetBodyFunc get_body;
+    Context ctx;
     bool close;
 
     /* The request's own. */
@@ -367,6 +380,69 @@ bool http_request_basic_auth(const HttpRequest *r, Alloc *a, Str *username,
  * an allocator says no, or when r has no header. */
 bool http_request_set_basic_auth(HttpRequest *r, Alloc *a, Str username, Str password);
 
+/* http.NewRequest and NewRequestWithContext. A request for a client to send,
+ * made in a, with url parsed into it, method "GET" when it is "", protocol
+ * HTTP/1.1, an empty header and host taken from the URL. ctx may not be nil.
+ * Give it back with http_request_free.
+ *
+ * body is read when the request is written, and may be nil. Go keeps a body
+ * that is an io.ReadCloser as it is, so that writing the request closes it,
+ * but an IoReader cannot say whether it is one, so here the body is always
+ * wrapped in a closer that does nothing. To have it closed, set the request's
+ * body to the IoReadCloser after this.
+ *
+ * When body is a BytesBuffer, a BytesReader or a StringsReader, content_length
+ * is the number of bytes left in it and get_body reads those same bytes again,
+ * and a body with nothing left in it is http_no_body. The BytesBuffer's bytes
+ * are not copied, so they have to stay as they are. For any other body
+ * content_length is 0, which for a request that is not known to be empty
+ * means unknown.
+ *
+ * The errors are a method that is not a token, a nil ctx, and any from
+ * url_parse. */
+BURROW_OWNS(ret) HttpRequest *http_new_request(Alloc *a, Str method, Str url,
+                                               IoReader body, Error *err);
+BURROW_OWNS(ret) HttpRequest *http_new_request_with_context(Alloc *a, Context ctx,
+                                                            Str method, Str url,
+                                                            IoReader body, Error *err);
+
+/* Request.Context. The request's context, and context_background when it has
+ * none. */
+Context http_request_context(const HttpRequest *r);
+
+/* Request.WithContext. A shallow copy of r, made in a, with its context set to
+ * ctx, which may not be nil. The copy shares everything else with r, so r has
+ * to outlive it. Give it back with http_request_free, which frees only the
+ * copy. NULL when a says no. */
+BURROW_OWNS(ret) HttpRequest *http_request_with_context(const HttpRequest *r, Alloc *a,
+                                                        Context ctx);
+
+/* Request.Write. Writes r to w as an HTTP/1.1 request a client sends: the
+ * request line, the header and the body. The host is r's host, or the URL's
+ * when that is "", and a host that is not valid in a Host field is sent as ""
+ * rather than altered. User-Agent is "Go-http-client/1.1" unless the header
+ * has one, and an empty one leaves it out. Content-Length or
+ * Transfer-Encoding, and Trailer, come from content_length,
+ * transfer_encoding and trailer, and the same fields in the header are not
+ * written. The body is closed, even on an error.
+ *
+ * A request with a body of unknown length, content_length 0 and a body that
+ * is not nil or http_no_body, and a method such as GET that usually has no
+ * body, has its first byte read to see whether there is one. In a goroutine
+ * that read is given 200 milliseconds and the request goes out with a chunked
+ * body if it takes longer. Outside of one only a body in memory, as listed at
+ * http_new_request, is read, and any other is taken as one that took too
+ * long.
+ *
+ * Writes go to w as they are when w is a BufioWriter, a StringsBuilder or a
+ * BytesBuffer, or has a WriteByte method, and through a BufioWriter of its own
+ * otherwise. */
+BURROW_BORROWS(ret) Error http_request_write(HttpRequest *r, IoWriter w);
+
+/* Request.WriteProxy. http_request_write in the form a proxy wants, with the
+ * whole URL in the request line. */
+BURROW_BORROWS(ret) Error http_request_write_proxy(HttpRequest *r, IoWriter w);
+
 /* http.ParseHTTPVersion. The numbers of an HTTP version such as "HTTP/1.0",
  * which gives 1 and 0. A version without a minor number, such as "HTTP/2", is
  * not one. False for anything that is not a version. */
@@ -378,7 +454,7 @@ bool http_parse_http_version(Str vers, Int *major, Int *minor);
  * field. */
 extern const Error http_err_no_location;
 
-/* http.Response, as far as reading one from the wire goes. status is the
+/* http.Response, as far as reading one from the wire and writing one go. status is the
  * status line after the protocol, such as "200 OK", and status_code is its
  * number. The rest is as in HttpRequest. request is the request this is the
  * response to, which is borrowed, and uncompressed says the transport took
@@ -417,6 +493,15 @@ BURROW_OWNS(ret) HttpResponse *http_read_response(Alloc *a, BufioReader *r,
 
 /* Gives back a response http_read_response made, and its body. NULL is fine. */
 void http_response_free(HttpResponse *r);
+
+/* Response.Write. Writes r to w as an HTTP/1.x response a server sends: the
+ * status line from proto_major, proto_minor, status_code and status, the
+ * header, and the body, which is closed after. A content_length of 0 with a
+ * body that has bytes in it is taken as unknown, and a body of unknown length
+ * that is not chunked closes the connection after it, which an HTTP/1.1
+ * response says with "Connection: close". Content-Length, Transfer-Encoding
+ * and Trailer come from the fields, not the header. */
+BURROW_BORROWS(ret) Error http_response_write(HttpResponse *r, IoWriter w);
 
 /* Response.ProtoAtLeast. */
 bool http_response_proto_at_least(const HttpResponse *r, Int major, Int minor);

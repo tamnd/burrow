@@ -13,6 +13,7 @@
 
 #include "burrow/bufio.h"
 #include "burrow/core.h"
+#include "burrow/func.h"
 #include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/own.h"
@@ -186,6 +187,103 @@ BURROW_OWNS(ret) IoReadCloser burrow__http_new_body(Alloc *a, IoReader src,
 bool burrow__http_body_did_early_close(void *body);
 bool burrow__http_body_remains(void *body);
 void burrow__http_body_set_do_early_close(void *body, bool on);
+
+/* bodyAllowedForStatus. Whether a response with this status may have a body,
+ * which 1xx, 204 and 304 may not. */
+bool burrow__http_body_allowed_for_status(Int status);
+
+/* ------------------------------------------------------ transfer writer
+ *
+ * The writing half of transfer.go, which looks at a request or a response
+ * about to go out, works out from its body, content_length and
+ * transfer_encoding which framing it gets, and writes that framing and the
+ * body. */
+
+/* validateHeaders. "" when every key in hdrs is a valid field name and every
+ * value a valid field value, and otherwise what is wrong, made in a, such as
+ * `field name "X\r\n"`. A NULL hdrs is fine. */
+BURROW_OWNS(ret) Str burrow__http_validate_headers(Alloc *a, HttpHeader hdrs);
+
+/* What the probe of a request body found, for the body that hands it back. */
+typedef struct burrow__HttpProbed {
+    struct burrow__HttpProbe *async; /* a read still going on in a goroutine */
+    IoReader rest;                   /* the reader to go on with */
+    Error tail;                      /* given instead of reading rest, if set */
+    bool have_byte;
+    bool has_tail;
+    Byte b;
+} burrow__HttpProbed;
+
+/* transferWriter. Made by burrow__http_new_transfer_writer, which needs no
+ * freeing beyond burrow__http_transfer_writer_done. */
+typedef struct burrow__HttpTransferWriter {
+    Str method;
+    IoReader body;            /* nil when there is none to write */
+    IoReadCloser body_closer; /* closed by write_body, nil when none */
+    int64_t content_length;   /* -1 for unknown, 0 for exactly none */
+    Slice transfer_encoding;  /* of Str */
+    HttpHeader header;
+    HttpHeader trailer;
+    Error body_read_error; /* any non-EOF error from copying body */
+    burrow__HttpProbed probed;
+    struct burrow__HttpProbe *probe; /* set when probeRequestBody gave up */
+    bool response_to_head;
+    bool close;
+    bool is_response;
+    bool flush_headers; /* flush the header to the network before the body */
+} burrow__HttpTransferWriter;
+
+/* newTransferWriter, from exactly one of req and resp. Probing a request body
+ * may read its first byte, which the writer keeps and writes. Scratch memory
+ * comes from a. */
+BURROW_BORROWS(ret) Error burrow__http_new_transfer_writer(
+    burrow__HttpTransferWriter *t, Alloc *a, HttpRequest *req, HttpResponse *resp);
+
+/* Lets go of what probing the body left behind. Safe to call more than once,
+ * and on a writer that failed to be made. */
+void burrow__http_transfer_writer_done(burrow__HttpTransferWriter *t);
+
+/* shouldSendContentLength, writeHeader and writeBody. write_body always closes
+ * body_closer. */
+bool burrow__http_transfer_writer_should_send_content_length(
+    const burrow__HttpTransferWriter *t);
+BURROW_BORROWS(ret) Error burrow__http_transfer_writer_write_header(
+    burrow__HttpTransferWriter *t, Alloc *a, IoWriter w);
+BURROW_BORROWS(ret) Error burrow__http_transfer_writer_write_body(
+    burrow__HttpTransferWriter *t, Alloc *a, IoWriter w);
+
+/* chunked and isIdentity, on a Slice of Str. */
+bool burrow__http_chunked(Slice te);
+bool burrow__http_is_identity(Slice te);
+
+/* The writer behind w when it is a BufioWriter, and NULL otherwise. */
+BURROW_BORROWS(ret, w) BufioWriter *burrow__http_bufio_writer_of(IoWriter w);
+
+/* Header.writeSubset with the keys in exclude, which are canonical, left out. */
+BURROW_BORROWS(ret) Error burrow__http_header_write_except(HttpHeader h, IoWriter w,
+                                                           const Str *exclude,
+                                                           Int nexclude);
+
+/* requestBodyReadError. Request.write gives an error from reading the body
+ * wrapped in one, so that the transport can tell it from a network error. Its
+ * message is the wrapped error's, and it does not unwrap, as in Go. */
+BURROW_OWNS(ret) Error burrow__http_request_body_read_error(Error inner);
+bool burrow__http_is_request_body_read_error(Error err, Error *inner);
+
+/* waitForContinue, which says whether to go on and send the body. */
+BURROW_FUNC0(burrow__HttpWaitFunc, bool);
+
+/* Request.write. extra may be NULL and wait nil. */
+BURROW_BORROWS(ret) Error burrow__http_request_write(HttpRequest *r, IoWriter w,
+                                                     bool using_proxy, HttpHeader extra,
+                                                     burrow__HttpWaitFunc wait);
+
+/* outgoingLength. The Content-Length of a client request, with 0 taken as
+ * unknown, -1, when the body is not nil or http_no_body. */
+int64_t burrow__http_request_outgoing_length(const HttpRequest *r);
+
+/* requestMethodUsuallyLacksBody. */
+bool burrow__http_request_method_usually_lacks_body(Str method);
 
 /* readRequestLimit. readRequest, which is http_read_request without taking
  * Host out of the header, with a limit on the header fields. */

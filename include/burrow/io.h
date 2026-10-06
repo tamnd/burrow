@@ -758,6 +758,11 @@ int64_t burrow__io_seek(const Method *m, void *data, int64_t offset, Int whence,
 BURROW_STATIC(ret) const Method *burrow__io_read_at_method(const Type *t);
 Int burrow__io_read_at(const Method *m, void *data, Slice p, int64_t off, Error *err);
 
+/* net/http's unwrapNopCloser. Whether r is the reader of a ReadCloser from
+ * io_nop_closer_as_io_read_closer, and if so the reader inside it in *inner.
+ * net/http looks through one to see whether a body is in memory. */
+bool burrow__io_unwrap_nop_closer(IoReader r, IoReader *inner);
+
 #if defined(BURROW_SHORT) && BURROW_SHORT
 #define IO_SEEK_START BURROW_IO_SEEK_START
 #define IO_SEEK_CURRENT BURROW_IO_SEEK_CURRENT

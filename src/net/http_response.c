@@ -1,5 +1,5 @@
 /* Derived from Go's src/net/http/response.go, the parts that read a response
- * from the wire and look at one.
+ * from the wire, write one to it and look at one.
  * Go source: go1.27.1.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
@@ -12,12 +12,15 @@
 #include "burrow/bufio.h"
 #include "burrow/core.h"
 #include "burrow/error.h"
+#include "burrow/fmt.h"
 #include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
+#include "burrow/mem/heap.h"
 #include "burrow/net/http.h"
 #include "burrow/net/textproto.h"
 #include "burrow/net/url.h"
+#include "burrow/slice.h"
 #include "burrow/strconv.h"
 
 #include <stdbool.h>
@@ -128,4 +131,146 @@ void http_response_free(HttpResponse *r) {
     burrow__http_body_free(r->wire);
     arena_free(&r->arena);
     mem_free(r->a, r, sizeof *r, _Alignof(HttpResponse));
+}
+
+/* --------------------------------------------------------------- writing */
+
+/* The fields Response.Write writes itself and so leaves out of the header. */
+static const Str hr_resp_write_exclude[] = {
+    BURROW_S_INIT("Content-Length"),
+    BURROW_S_INIT("Transfer-Encoding"),
+    BURROW_S_INIT("Trailer"),
+};
+
+/* The body once its first byte has been read to see whether it is empty: that
+ * byte and then the rest, closed by closing the body it came from. */
+typedef struct hr_Peeked {
+    IoReadCloser body;
+    bool have_byte;
+    Byte b;
+} hr_Peeked;
+
+static Int hr_peeked_read(void *self, Slice p, Error *err) {
+    hr_Peeked *pk = (hr_Peeked *)self;
+    if (pk->have_byte) {
+        *err = BURROW_NO_ERROR;
+        if (p.len == 0)
+            return 0;
+        ((Byte *)p.p)[0] = pk->b;
+        pk->have_byte = false;
+        return 1;
+    }
+    return pk->body.vt->reader.read(pk->body.data, p, err);
+}
+
+static Error hr_peeked_close(void *self) {
+    hr_Peeked *pk = (hr_Peeked *)self;
+    return pk->body.vt->closer.close(pk->body.data);
+}
+
+static const IoReadCloserVT hr_peeked_vt = {
+    {NULL, hr_peeked_read},
+    {NULL, hr_peeked_close},
+};
+
+static Error hr_write(const HttpResponse *r, IoWriter w, Alloc *sa,
+                      burrow__HttpTransferWriter *tw, hr_Peeked *pk) {
+    /* The status line. */
+    Str text = r->status;
+    if (text.len == 0) {
+        text = http_status_text(r->status_code);
+        if (text.len == 0)
+            text = fmt_sprintf_v(sa, "status code %d", r->status_code);
+    } else {
+        /* Only to save saying "200 200 OK" when status is "200 OK". */
+        Str prefix = fmt_sprintf_v(sa, "%d ", r->status_code);
+        if (text.len >= prefix.len && memcmp(text.p, prefix.p, (size_t)prefix.len) == 0)
+            text = str_from_bytes(text.p + prefix.len, text.len - prefix.len);
+    }
+    Error err = BURROW_NO_ERROR;
+    (void)io_write_string(w,
+                          fmt_sprintf_v(sa, "HTTP/%d.%d %03d %s\r\n", r->proto_major,
+                                        r->proto_minor, r->status_code, text),
+                          &err);
+    if (BURROW_FAILED(err))
+        return err;
+
+    /* A copy, so that r1 can change. */
+    HttpResponse r1 = *r;
+    if (r1.content_length == 0 && r1.body.vt != NULL) {
+        /* Whether it is empty, or its length is just not known. */
+        Byte buf[1];
+        Int n = r1.body.vt->reader.read(r1.body.data, slice_from(buf, 1, 1, TYPE_BYTE),
+                                        &err);
+        if (BURROW_FAILED(err) && !(err.vt == io_eof.vt && err.data == io_eof.data))
+            return err;
+        if (n == 0) {
+            /* A known empty reader, in case this one does not like being read
+             * again. */
+            r1.body = http_no_body;
+        } else {
+            r1.content_length = -1;
+            pk->body = r->body;
+            pk->have_byte = true;
+            pk->b = buf[0];
+            r1.body = (IoReadCloser){&hr_peeked_vt, pk};
+        }
+    }
+    /* A non-chunked HTTP/1.1 response with no Content-Length can only end the
+     * HTTP/1.0 way, by closing the connection. */
+    if (r1.content_length == -1 && !r1.close &&
+        http_response_proto_at_least(&r1, 1, 1) &&
+        !burrow__http_chunked(r1.transfer_encoding) && !r1.uncompressed)
+        r1.close = true;
+
+    /* The body, content_length, close and trailer. */
+    err = burrow__http_new_transfer_writer(tw, sa, NULL, &r1);
+    if (BURROW_FAILED(err))
+        return err;
+    err = burrow__http_transfer_writer_write_header(tw, sa, w);
+    if (BURROW_FAILED(err))
+        return err;
+
+    /* The rest of the header. */
+    err = burrow__http_header_write_except(
+        r->header, w, hr_resp_write_exclude,
+        (Int)(sizeof hr_resp_write_exclude / sizeof hr_resp_write_exclude[0]));
+    if (BURROW_FAILED(err))
+        return err;
+
+    /* A POST or PUT response may have sent Content-Length already, even when it
+     * is 0, Go issue 8180. */
+    bool content_length_already_sent =
+        burrow__http_transfer_writer_should_send_content_length(tw);
+    if (r1.content_length == 0 && !burrow__http_chunked(r1.transfer_encoding) &&
+        !content_length_already_sent &&
+        burrow__http_body_allowed_for_status(r->status_code)) {
+        (void)io_write_string(w, BURROW_S("Content-Length: 0\r\n"), &err);
+        if (BURROW_FAILED(err))
+            return err;
+    }
+
+    /* The end of the header. */
+    (void)io_write_string(w, BURROW_S("\r\n"), &err);
+    if (BURROW_FAILED(err))
+        return err;
+
+    /* The body and the trailer. */
+    return burrow__http_transfer_writer_write_body(tw, sa, w);
+}
+
+Error http_response_write(HttpResponse *r, IoWriter w) {
+    Arena scratch;
+    arena_init(&scratch, heap_allocator(), 0);
+    burrow__HttpTransferWriter tw;
+    memset(&tw, 0, sizeof tw);
+    hr_Peeked pk;
+    memset(&pk, 0, sizeof pk);
+    Error err = hr_write(r, w, arena_allocator(&scratch), &tw, &pk);
+    burrow__http_transfer_writer_done(&tw);
+    /* An error made in the scratch arena has to outlive it. */
+    if (BURROW_FAILED(err))
+        err = error_retain(error_allocator(), err);
+    arena_free(&scratch);
+    return err;
 }

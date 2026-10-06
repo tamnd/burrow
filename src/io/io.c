@@ -1039,6 +1039,14 @@ static const IoReadCloserVT nop_closer_writer_to_vt = {
     {&nop_closer_writer_to_desc, nop_io_close},
 };
 
+bool burrow__io_unwrap_nop_closer(IoReader r, IoReader *inner) {
+    if (r.vt == NULL || (r.vt->self_type != &nop_closer_desc &&
+                         r.vt->self_type != &nop_closer_writer_to_desc))
+        return false;
+    *inner = ((const IoNopCloser *)r.data)->r;
+    return true;
+}
+
 IoReadCloser io_nop_closer_as_io_read_closer(IoNopCloser *c) {
     const IoReadCloserVT *vt = &nop_closer_vt;
     if (c->r.vt != NULL && io_method(c->r.vt->self_type, io_name_write_to,

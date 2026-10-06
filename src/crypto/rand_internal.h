@@ -27,6 +27,12 @@ void burrow__crypto_rand_system(Slice p);
  * cryptocustomrand=1. */
 IoReader burrow__crypto_rand_nil_reader(void);
 
+/* crypto/internal/rand.CustomReader, which the key generators put the reader
+ * they are given through: the system generator, unless GODEBUG has
+ * cryptocustomrand=1, when it is r, after half the time reading a byte from it
+ * to throw away. r cannot be nil. */
+IoReader burrow__crypto_rand_custom_reader(IoReader r);
+
 /* Reads the GODEBUG settings from value as if it were the environment's, or
  * forgets them when value is NULL so that the next use reads the environment
  * again. For tests, which cannot change the environment of a process that has

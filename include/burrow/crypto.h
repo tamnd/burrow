@@ -41,6 +41,9 @@ extern "C" {
 /* crypto.Hash: a hash function implemented somewhere else, by number. */
 typedef Uint CryptoHash;
 
+extern const Type burrow_type_CryptoHash;
+#define TYPE_CRYPTO_HASH TYPE_OF(CryptoHash)
+
 #define CRYPTO_MD4 ((CryptoHash)1)         /* not in burrow, register your own */
 #define CRYPTO_MD5 ((CryptoHash)2)         /* burrow/crypto/md5.h */
 #define CRYPTO_SHA1 ((CryptoHash)3)        /* burrow/crypto/sha1.h */

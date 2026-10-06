@@ -299,8 +299,12 @@ static X509Certificate *serialise_and_parse(TestingT *t, Alloc *a,
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "failed to create certificate: %v", err);
     X509Certificate *cert = x509_parse_certificate(a, der, &err);
-    if (BURROW_FAILED(err))
+    if (BURROW_FAILED(err) || cert == NULL) {
         testing_t_fatalf_v(t, "failed to parse certificate: %v", err);
+        /* The callers read a field straight off what comes back, so the
+         * test is already failed and they get an empty certificate. */
+        cert = (X509Certificate *)mem_alloc(a, sizeof *cert, _Alignof(X509Certificate));
+    }
     return cert;
 }
 
@@ -746,8 +750,11 @@ static void TestEmptySubject(TestingT *t) {
     X509Certificate *cert = serialise_and_parse(t, a, &tmpl);
     const PkixExtension *san =
         find_extension(cert->extensions, OID(oid_extension_subject_alt_name));
-    if (san == NULL)
+    if (san == NULL) {
         testing_t_fatalf_v(t, "SAN extension is missing");
+        arena_free(&ar);
+        return;
+    }
     if (!san->critical)
         testing_t_fatalf_v(t, "SAN extension is not critical");
     arena_free(&ar);

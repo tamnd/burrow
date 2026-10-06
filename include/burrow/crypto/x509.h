@@ -42,6 +42,7 @@
 #include "burrow/encoding/asn1.h"
 #include "burrow/encoding/pem.h"
 #include "burrow/error.h"
+#include "burrow/func.h"
 #include "burrow/iface.h"
 #include "burrow/io.h"
 #include "burrow/math/big.h"
@@ -672,6 +673,53 @@ BURROW_OWNS(ret) PemBlock *x509_encrypt_pem_block(Alloc *a, IoReader rand,
                                                   Str block_type, Slice data,
                                                   Slice password, X509PEMCipher alg,
                                                   Error *err);
+
+/* ------------------------------------------------------------- CertPool */
+
+/* CertPool: a set of certificates, looked up by subject when a chain is
+ * built. The pool keeps its own memory, from the Alloc it was made with, and
+ * x509_cert_pool_free gives it back. A certificate added with
+ * x509_cert_pool_add_cert is borrowed, so it has to live as long as the pool
+ * does. One read from PEM is parsed into the pool's memory. Go parses those
+ * again each time they are needed to keep the system pool small, and this
+ * keeps the parsed certificate instead. */
+typedef struct X509CertPool X509CertPool;
+
+/* A constraint AddCertWithConstraint puts on the chains a root may finish.
+ * chain is a slice of X509Certificate pointers, and an error rejects it. */
+BURROW_FUNC(X509CertConstraint, Error, Slice chain);
+
+/* NewCertPool: an empty pool, from a. */
+BURROW_OWNS(ret) X509CertPool *x509_new_cert_pool(Alloc *a);
+
+/* Gives back the memory of s and the certificates it parsed. s may be NULL. */
+void x509_cert_pool_free(X509CertPool *s);
+
+/* CertPool.Clone: a copy of s, from a. The certificates are shared with s, as
+ * they are in Go, so the copy must not outlive s. */
+BURROW_OWNS(ret) X509CertPool *x509_cert_pool_clone(const X509CertPool *s, Alloc *a);
+
+/* CertPool.AddCert: adds cert to s, unless s has it already. Panics when cert
+ * is NULL. */
+void x509_cert_pool_add_cert(X509CertPool *s, const X509Certificate *cert);
+
+/* CertPool.AddCertWithConstraint: AddCert, with constraint called on every
+ * chain that cert ends once the chain is built. A zero constraint is none. */
+void x509_cert_pool_add_cert_with_constraint(X509CertPool *s,
+                                             const X509Certificate *cert,
+                                             X509CertConstraint constraint);
+
+/* CertPool.AppendCertsFromPEM: adds each CERTIFICATE block in pem_certs that
+ * has no headers and parses, and says whether one was added. */
+bool x509_cert_pool_append_certs_from_pem(X509CertPool *s, Slice pem_certs);
+
+/* CertPool.Subjects: the raw subject of each certificate in s, in the order
+ * they were added. The slice is from a, and the subjects in it are borrowed
+ * from s. Deprecated in Go, since it leaves out the system roots. */
+BURROW_OWNS(ret) Slice x509_cert_pool_subjects(const X509CertPool *s, Alloc *a);
+
+/* CertPool.Equal: whether s and other hold the same certificates. */
+bool x509_cert_pool_equal(const X509CertPool *s, const X509CertPool *other);
 
 #ifdef __cplusplus
 }

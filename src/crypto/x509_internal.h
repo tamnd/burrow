@@ -47,4 +47,30 @@ Slice burrow__x509_marshal_sans(Alloc *a, Slice dns_names, Slice email_addresses
 bool burrow__x509_signature_details(Int i, CryptoHash *hash, bool *is_rsa_pss,
                                     Slice *params);
 
+/* The parts of a CertPool that chain building reads, from x509_verify.c. */
+Int burrow__x509_cert_pool_len(const X509CertPool *s);
+
+/* The certificate at index n of s, with its constraint in *constraint when
+ * that is not NULL. */
+const X509Certificate *burrow__x509_cert_pool_cert(const X509CertPool *s, Int n,
+                                                   X509CertConstraint *constraint);
+
+/* Whether s has a certificate with the same DER as cert. */
+bool burrow__x509_cert_pool_contains(const X509CertPool *s,
+                                     const X509Certificate *cert);
+
+/* potentialParent */
+typedef struct X509PotentialParent {
+    const X509Certificate *cert;
+    X509CertConstraint constraint;
+} X509PotentialParent;
+
+/* findPotentialParents: the certificates in s whose subject is cert's
+ * issuer, best key id match first, as an array from a with *n entries. */
+X509PotentialParent *burrow__x509_cert_pool_find_potential_parents(
+    const X509CertPool *s, const X509Certificate *cert, Alloc *a, Int *n);
+
+/* Marks s as the system pool, which Equal tells apart from other pools. */
+void burrow__x509_cert_pool_set_system(X509CertPool *s);
+
 #endif /* BURROW_SRC_CRYPTO_X509_INTERNAL_H */

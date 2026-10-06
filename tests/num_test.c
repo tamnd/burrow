@@ -78,7 +78,7 @@ static void TestIntIsItsOwnTypeAndFollowsThePlatform(TestingT *t) {
 
     /* Int is 64 bits on a 64 bit platform and 32 on a 32 bit one, which is the
      * whole reason it is not int64_t. */
-#if BURROW_PTR_BITS == 64
+#if BURROW_INT_BITS == 64
     CHECK_INT_EQ(sizeof(Int), 8);
 #else
     CHECK_INT_EQ(sizeof(Int), 4);

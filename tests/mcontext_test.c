@@ -373,7 +373,25 @@ static void TestMakeRefusesWhatItCannotHonour(TestingT *t) {
     X(TestARoundRobinOverSixteenContexts)                                              \
     X(TestMakeRefusesWhatItCannotHonour)
 
+#if defined(BURROW_MCONTEXT_ASYNCIFY)
+/* With Asyncify a switch has to happen somewhere above burrow__mcontext_run,
+ * and main_ctx is the only context that can be attached inside it, so the
+ * tests all run there. */
+static int run_code;
+
+static void run_tests(void *m) {
+    run_code = testing_m_run(m);
+}
+
+static int test_main(TestingM *m) {
+    burrow__mcontext_run(&main_ctx, run_tests, m);
+    return run_code;
+}
+
+TESTING_MAIN_BARE_WITH(test_main, TESTS)
+#else
 /* Bare, because these tests attach the thread they run on, and a scheduler
  * thread is attached already. With Fibers that is a second
  * ConvertThreadToFiber, which fails. */
 TESTING_MAIN_BARE(TESTS)
+#endif

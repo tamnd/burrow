@@ -148,10 +148,10 @@ static void TestStrPrintsWithPrintf(TestingT *t) {
 }
 
 static void TestNumbersAreTheWidthGoSays(TestingT *t) {
-    /* Int follows the pointer, because Go's int does, and because the overflow
-     * behaviour of a 32 bit int is visible in Go's own tests. */
-    CHECK_INT_EQ(sizeof(Int), BURROW_PTR_BITS / 8);
-    CHECK_INT_EQ(sizeof(Uint), BURROW_PTR_BITS / 8);
+    /* Int is as wide as Go's int, which is the pointer everywhere but wasm, and
+     * the overflow behaviour of a 32 bit int is visible in Go's own tests. */
+    CHECK_INT_EQ(sizeof(Int), BURROW_INT_BITS / 8);
+    CHECK_INT_EQ(sizeof(Uint), BURROW_INT_BITS / 8);
     CHECK_INT_EQ(sizeof(Uintptr), sizeof(void *));
     CHECK_INT_EQ(sizeof(Byte), 1);
     CHECK_INT_EQ(sizeof(Rune), 4);

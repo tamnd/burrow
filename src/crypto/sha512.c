@@ -478,6 +478,8 @@ static void sha512_check_sum(Sha512Digest *d, Byte out[SHA512_SIZE]) {
 }
 
 static void sha512_update(Sha512Digest *d, const Byte *p, Int n) {
+    if (n == 0)
+        return; /* p may be NULL, and memcpy may not be given one */
     d->len += (uint64_t)n;
     if (d->nx > 0) {
         Int k = SHA512_BLOCK_SIZE - d->nx < n ? SHA512_BLOCK_SIZE - d->nx : n;

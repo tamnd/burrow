@@ -28,7 +28,7 @@ typedef struct CorpusCase {
     const char *want; /* when it differs from in */
 } CorpusCase;
 
-#if UINTPTR_MAX == 0xffffffffu
+#if BURROW_INT_BITS == 32
 #define CORPUS_INT_OVERFLOW "go test fuzz v1\nint(-1)\nuint(4294967295)"
 #else
 #define CORPUS_INT_OVERFLOW                                                            \

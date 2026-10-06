@@ -12,6 +12,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "check.h"
+
 #include "burrow/mem.h"
 #include "burrow/mem/heap.h"
 #include "burrow/pal.h"
@@ -408,8 +410,15 @@ static void TestChmodAndUtimes(TestingT *t) {
     if (!pal_chmod(p, 0444, &err))
         testing_t_fatalf_v(t, "chmod: %s", pal_errno_string(err));
     pal_stat(p, &st, &err);
+#if defined(BURROW_OS_WASI)
+    /* No permissions on wasip1: a chmod only checks the file is there, and
+     * every file says 0600, as in Go. */
+    if ((st.mode & 0777) != 0600)
+        testing_t_errorf_v(t, "mode after chmod 0444 = %o, want 0600", st.mode & 0777);
+#else
     if ((st.mode & 0777) != 0444)
         testing_t_errorf_v(t, "mode after chmod 0444 = %o", st.mode & 0777);
+#endif
     pal_chmod(p, 0644, &err);
     pal_stat(p, &st, &err);
     if ((st.mode & 0200) == 0)
@@ -425,6 +434,9 @@ static void TestChmodAndUtimes(TestingT *t) {
 }
 
 static void TestPipeAndDup(TestingT *t) {
+#if defined(BURROW_OS_WASI)
+    testing_t_skip_v(t, "wasip1 has no pipes");
+#endif
     int64_t p[2];
     PalErrno err = PAL_OK;
     if (!pal_pipe(p, 0, &err))

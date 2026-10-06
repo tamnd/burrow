@@ -166,6 +166,7 @@ static bool ready(PalErrno *err) {
     return true;
 }
 
+#if !defined(BURROW_OS_WASI)
 /* One wait of at most left_ns nanoseconds on an already locked bucket. The
  * result is ignored on purpose: the caller recomputes what is left of its own
  * deadline every time round and decides from that, so whether this returned
@@ -218,6 +219,7 @@ static void unlink_waiter(Bucket *b, Waiter *w) {
         link = &(*link)->next;
     }
 }
+#endif
 
 bool pal_futex_wait(uint32_t *addr, uint32_t expect, int64_t timeout_ns,
                     PalErrno *err) {
@@ -242,6 +244,22 @@ bool pal_futex_wait(uint32_t *addr, uint32_t expect, int64_t timeout_ns,
         return false;
     }
 
+#if defined(BURROW_OS_WASI)
+    /* One thread, so nothing can change the word or wake this while it sleeps,
+     * and a wait is a sleep for all of its time. A wait with no end is a wait
+     * for something that can never happen, and it says so rather than sleeping
+     * for ever, as Go's notesleep on wasip1 throws. */
+    if (timeout_ns < 0) {
+        BURROW_OUT(err, PAL_EDEADLK);
+        return false;
+    }
+    struct timespec ts;
+    ts.tv_sec = (time_t)(timeout_ns / 1000000000);
+    ts.tv_nsec = (long)(timeout_ns % 1000000000);
+    (void)nanosleep(&ts, NULL);
+    BURROW_OUT(err, PAL_ETIMEDOUT);
+    return false;
+#else
     int64_t deadline = timeout_ns > 0 ? deadline_from(timeout_ns) : -1;
 
     Bucket *b = bucket_of(addr);
@@ -305,6 +323,7 @@ bool pal_futex_wait(uint32_t *addr, uint32_t expect, int64_t timeout_ns,
 
     BURROW_OUT(err, PAL_OK);
     return true;
+#endif
 }
 
 int64_t pal_futex_wake(uint32_t *addr, int64_t n, PalErrno *err) {

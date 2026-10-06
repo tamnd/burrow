@@ -54,6 +54,7 @@ static Slice strs(const Str *v, Int n) {
 }
 
 static Str self_path(TestingT *t) {
+    SKIP_WITHOUT_EXEC(t);
     Error e = BURROW_NO_ERROR;
     Str exe = os_executable(a, &e);
     if (BURROW_FAILED(e))
@@ -118,6 +119,7 @@ static void TestStartProcessSuccess(TestingT *t) {
 /* The child's standard output is the write end of a pipe, which checks that
  * Files and Env both arrive. */
 static void TestStartProcessFiles(TestingT *t) {
+    SKIP_WITHOUT_EXEC(t);
     Error e = BURROW_NO_ERROR;
     OsFile *w = NULL;
     OsFile *r = os_pipe(a, &w, &e);

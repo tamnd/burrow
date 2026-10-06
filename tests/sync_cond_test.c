@@ -366,6 +366,8 @@ static void thread_waiter(void *env) {
 }
 
 static void TestThreadsThatAreNotGoroutinesCanWaitOnACond(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     reset();
 
     for (size_t i = 0; i < WAITERS; i++)

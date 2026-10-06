@@ -389,6 +389,36 @@ jobs:
           chmod +x hello.com
           ./hello.com
 
+  # GOOS=wasip1 GOARCH=wasm. wasi-sdk builds it, wasm-opt from Binaryen adds
+  # the Asyncify rewrite the goroutine switch needs to every test binary, and
+  # wasmtime runs them.
+  wasip1:
+    name: wasip1 (wasmtime)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      WASI_SDK_URL: https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz
+      WASI_SDK_SHA256: b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
+      WASMTIME_URL: https://github.com/bytecodealliance/wasmtime/releases/download/v49.0.2/wasmtime-v49.0.2-x86_64-linux.tar.xz
+      WASMTIME_SHA256: a4d6e9e3a5a60f527cf7793d674c48930c80c2e8977995b8a275cad3254b9322
+      BINARYEN_URL: https://github.com/WebAssembly/binaryen/releases/download/version_133/binaryen-version_133-x86_64-linux.tar.gz
+      BINARYEN_SHA256: 2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489
+    steps:
+      - uses: actions/checkout@v7
+      - name: install wasi-sdk, wasmtime and binaryen
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o sdk.tgz "$WASI_SDK_URL"
+          curl -fsSL -o wt.txz "$WASMTIME_URL"
+          curl -fsSL -o bn.tgz "$BINARYEN_URL"
+          printf '%s  sdk.tgz\n%s  wt.txz\n%s  bn.tgz\n' "$WASI_SDK_SHA256" "$WASMTIME_SHA256" "$BINARYEN_SHA256" | sha256sum -c -
+          tar xzf sdk.tgz && tar xJf wt.txz && tar xzf bn.tgz
+          echo "WASI_SDK=$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux" >>"$GITHUB_ENV"
+          echo "$RUNNER_TEMP/wasmtime-v49.0.2-x86_64-linux" >>"$GITHUB_PATH"
+          echo "$RUNNER_TEMP/binaryen-version_133/bin" >>"$GITHUB_PATH"
+      - name: the test suite
+        run: make -j4 BUILD=build-wasi CC="$WASI_SDK/bin/clang --target=wasm32-wasip1" AR="$WASI_SDK/bin/llvm-ar" TESTFLAGS="-test.short -test.v" test
+
   # The gc backend is the only optional dependency in the project, and an
   # optional backend nobody builds is a backend that is already broken. One job
   # is enough: it is the same tests, and what it is really checking is that the
@@ -432,7 +462,7 @@ jobs:
       # Short mode, because since archive/zip landed tsan and msan have both
       # hit the timeout with zip_test still running. Its ZIP64 tests are the
       # ones Go skips in short mode, and the other jobs still run them.
-      - run: make CC=clang MODE=debug CFLAGS="-std=c11 -O1 -g -Iinclude -DBURROW_SOURCE_ID=\\\"ci\\\" ${{ matrix.flags }}" TESTFLAGS=-test.short test
+      - run: make CC=clang MODE=debug CFLAGS="-std=c11 -O1 -g -Iinclude -DBURROW_SOURCE_ID=\\\"ci\\\" ${{ matrix.flags }}" TESTFLAGS="-test.short -test.v" test
         env:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1

@@ -83,7 +83,16 @@ bool burrow__stack_alloc(burrow__Stack *stack, size_t size) {
     if (size < BURROW_STACK_MIN || size > SIZE_MAX - page)
         return false;
 
-    size_t total = page + size;
+    /* WebAssembly memory has no protection to put under a stack, so a page
+     * there would be 64 KiB that guards nothing. Running off the bottom of a
+     * stack on wasip1 overwrites whatever is below it, which is also true of
+     * every other program built for it. */
+#if defined(BURROW_ARCH_WASM)
+    size_t guard = 0;
+#else
+    size_t guard = page;
+#endif
+    size_t total = guard + size;
     if (total > (size_t)INT64_MAX)
         return false;
 
@@ -104,7 +113,7 @@ bool burrow__stack_alloc(burrow__Stack *stack, size_t size) {
     if (base == NULL)
         return false;
 
-    void *lo = (unsigned char *)base + page;
+    void *lo = (unsigned char *)base + guard;
     if (!pal_vm_commit(lo, (int64_t)size, NULL)) {
         (void)pal_vm_release(base, (int64_t)total, NULL);
         return false;
@@ -112,7 +121,7 @@ bool burrow__stack_alloc(burrow__Stack *stack, size_t size) {
 
     stack->lo = lo;
     stack->hi = (unsigned char *)lo + size;
-    stack->guard = page;
+    stack->guard = guard;
     return true;
 }
 

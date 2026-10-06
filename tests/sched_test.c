@@ -44,6 +44,14 @@
 #include <stdint.h>
 #include <string.h>
 
+/* Go's GOMAXPROCS keeps wasm at one P, since there is no second thread to give
+ * another one to, and so does this. */
+#if defined(BURROW_OS_WASI)
+#define SET_PROCS(n) 1
+#else
+#define SET_PROCS(n) (n)
+#endif
+
 /* How many times a waiting goroutine gives the processor away before it decides
  * that whatever it is waiting for is not coming. Every wait in here finishes in
  * a handful of turns when the scheduler is working, so this only costs anything
@@ -330,6 +338,8 @@ static void fair_body(void *env) {
 }
 
 static void TestGoschedDoesNotStarveTheGlobalQueue(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     fair_flag = 0;
     fair_started = 0;
     fair_turns = 0;
@@ -423,8 +433,8 @@ static void TestGomaxprocsReportsAndSetsBeforeTheSchedulerStarts(TestingT *t) {
     CHECK_INT_EQ(runtime_gomaxprocs(0), cpus);
 
     CHECK_INT_EQ(runtime_gomaxprocs(3), cpus);
-    CHECK_INT_EQ(runtime_gomaxprocs(0), 3);
-    CHECK_INT_EQ(runtime_gomaxprocs(-1), 3);
+    CHECK_INT_EQ(runtime_gomaxprocs(0), SET_PROCS(3));
+    CHECK_INT_EQ(runtime_gomaxprocs(-1), SET_PROCS(3));
 
     /* And it goes back to the machine's number once a run is over, because the
      * scheduler that was set up is gone. */
@@ -451,8 +461,8 @@ static void TestGomaxprocsDoesNotChangeWhileTheSchedulerIsRunning(TestingT *t) {
 
     runtime_main(BURROW_FN(Func, procs_body, NULL));
 
-    CHECK_INT_EQ(procs_changed, 3);
-    CHECK_INT_EQ(procs_inside, 3);
+    CHECK_INT_EQ(procs_changed, SET_PROCS(3));
+    CHECK_INT_EQ(procs_inside, SET_PROCS(3));
 }
 
 /* ----------------------------------------------------------------- the stacks */
@@ -732,6 +742,7 @@ static void spread_body(void *env) {
 }
 
 static void TestWorkStartedOnOneProcessorIsPickedUpByTheOthers(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
     memset(&spread_gate, 0, sizeof spread_gate);
     spread_arrived = 0;
     spread_finished = 0;

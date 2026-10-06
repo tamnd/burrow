@@ -41,6 +41,12 @@ crypto/sha256
 crypto/sha512
 crypto/sha3
 crypto/subtle
+crypto/hmac
+crypto/hkdf
+crypto/pbkdf2
+crypto/rand
+crypto/aes
+crypto/cipher
 container/list
 container/ring
 sort

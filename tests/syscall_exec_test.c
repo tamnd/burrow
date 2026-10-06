@@ -385,8 +385,9 @@ static void TestForkExecKeepsFds(TestingT *t) {
     Int p[2];
     make_pipe(t, p);
     /* Linux on arm64, riscv64 and loong64 has no dup2, and Go has no Dup2
-     * there either. */
-#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO)
+     * there either. The WASI build declares the same calls as Linux on wasm32,
+     * which has none. */
+#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO) || defined(BURROW_OS_WASI)
     Error e = syscall_dup3(p[0], 7, 0);
 #else
     Error e = syscall_dup2(p[0], 7);

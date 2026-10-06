@@ -320,6 +320,7 @@ global	src/syscall/unix.c	unix_mmap_mu	package-vars	The lock in Go's mapper, hel
 global	src/syscall/unix.c	unix_mmap_active	package-vars	The mappings syscall_mmap made and syscall_munmap has not undone, Go's mapper.active, under unix_mmap_mu.
 global	src/syscall/unix.c	unix_mmap_len	package-vars	How many mappings unix_mmap_active has, under unix_mmap_mu.
 global	src/syscall/unix.c	unix_mmap_cap	package-vars	How many mappings unix_mmap_active has room for, under unix_mmap_mu.
+global	src/syscall/sock.c	syscall_socket_disable_ipv6	package-vars	Go's syscall.SocketDisableIPv6, a variable there too, which tests set before they open sockets and nothing in burrow writes.
 global	src/os/user.c	user_cache_once	package-vars	Fills the Current cache the first time it is needed, as Go's cache.Do does.
 global	src/os/user.c	user_cache_u	package-vars	The user Current found, written once under user_cache_once and only read after that.
 global	src/os/user.c	user_cache_err	package-vars	The error Current got instead, written once under user_cache_once and only read after that.

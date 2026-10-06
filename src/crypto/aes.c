@@ -443,20 +443,20 @@ static void aes_ct_encrypt(const AesBlock *b, uint64_t q[8]) {
         aes_ct_sbox(q);
         aes_ct_shift_rows(q);
         aes_ct_mix_columns(q);
-        aes_ct_add_key(q, sk + 8 * r);
+        aes_ct_add_key(q, sk + 8 * (size_t)r);
     }
     aes_ct_sbox(q);
     aes_ct_shift_rows(q);
-    aes_ct_add_key(q, sk + 8 * b->rounds);
+    aes_ct_add_key(q, sk + 8 * (size_t)b->rounds);
 }
 
 static void aes_ct_decrypt(const AesBlock *b, uint64_t q[8]) {
     const uint64_t *sk = b->sk;
-    aes_ct_add_key(q, sk + 8 * b->rounds);
+    aes_ct_add_key(q, sk + 8 * (size_t)b->rounds);
     for (int r = b->rounds - 1; r > 0; r--) {
         aes_ct_inv_shift_rows(q);
         aes_ct_inv_sbox(q);
-        aes_ct_add_key(q, sk + 8 * r);
+        aes_ct_add_key(q, sk + 8 * (size_t)r);
         aes_ct_inv_mix_columns(q);
     }
     aes_ct_inv_shift_rows(q);
@@ -488,7 +488,7 @@ static void aes_expand_key(AesBlock *b, const Byte *key, int nk) {
     Byte rcon = 1;
     for (int i = nk; i < words; i++) {
         Byte t[4];
-        memcpy(t, w + 4 * (i - 1), 4);
+        memcpy(t, w + 4 * (size_t)(i - 1), 4);
         if (i % nk == 0) {
             Byte t0 = t[0];
             t[0] = t[1];
@@ -511,8 +511,8 @@ static void aes_ct_schedule(AesBlock *b) {
     for (int r = 0; r <= b->rounds; r++) {
         Byte four[64];
         for (int k = 0; k < 4; k++)
-            memcpy(four + 16 * k, b->enc + 16 * r, 16);
-        aes_ct_load(b->sk + 8 * r, four, 4);
+            memcpy(four + 16 * (size_t)k, b->enc + 16 * (size_t)r, 16);
+        aes_ct_load(b->sk + 8 * (size_t)r, four, 4);
     }
 }
 
@@ -562,11 +562,11 @@ CRYPTO_TARGET_X86_AES static inline void aes_x86_store(void *p, __m128i v) {
  * InvMixColumns applied to all but the first and last. */
 CRYPTO_TARGET_X86_AES static void aes_x86_dec_keys(AesBlock *b) {
     int nr = b->rounds;
-    aes_x86_store(b->dec, aes_x86_load(b->enc + 16 * nr));
+    aes_x86_store(b->dec, aes_x86_load(b->enc + 16 * (size_t)nr));
     for (int i = 1; i < nr; i++)
-        aes_x86_store(b->dec + 16 * i,
-                      _mm_aesimc_si128(aes_x86_load(b->enc + 16 * (nr - i))));
-    aes_x86_store(b->dec + 16 * nr, aes_x86_load(b->enc));
+        aes_x86_store(b->dec + 16 * (size_t)i,
+                      _mm_aesimc_si128(aes_x86_load(b->enc + 16 * (size_t)(nr - i))));
+    aes_x86_store(b->dec + 16 * (size_t)nr, aes_x86_load(b->enc));
 }
 
 /* Four blocks at a time, so that the four chains of aesenc overlap in the
@@ -576,7 +576,7 @@ CRYPTO_TARGET_X86_AES static void aes_x86_encrypt_blocks(const AesBlock *b, Byte
     int nr = b->rounds;
     __m128i k[15];
     for (int i = 0; i <= nr; i++)
-        k[i] = aes_x86_load(b->enc + 16 * i);
+        k[i] = aes_x86_load(b->enc + 16 * (size_t)i);
     for (; n >= 4; n -= 4, src += 64, dst += 64) {
         __m128i s0 = _mm_xor_si128(aes_x86_load(src), k[0]);
         __m128i s1 = _mm_xor_si128(aes_x86_load(src + 16), k[0]);
@@ -606,7 +606,7 @@ CRYPTO_TARGET_X86_AES static void aes_x86_decrypt_blocks(const AesBlock *b, Byte
     int nr = b->rounds;
     __m128i k[15];
     for (int i = 0; i <= nr; i++)
-        k[i] = aes_x86_load(b->dec + 16 * i);
+        k[i] = aes_x86_load(b->dec + 16 * (size_t)i);
     for (; n >= 4; n -= 4, src += 64, dst += 64) {
         __m128i s0 = _mm_xor_si128(aes_x86_load(src), k[0]);
         __m128i s1 = _mm_xor_si128(aes_x86_load(src + 16), k[0]);
@@ -641,10 +641,11 @@ CRYPTO_TARGET_X86_AES static void aes_x86_decrypt_blocks(const AesBlock *b, Byte
  * the keys go in one place earlier and the last one is a plain XOR. */
 CRYPTO_TARGET_ARM64_AES static void aes_arm64_dec_keys(AesBlock *b) {
     int nr = b->rounds;
-    vst1q_u8(b->dec, vld1q_u8(b->enc + 16 * nr));
+    vst1q_u8(b->dec, vld1q_u8(b->enc + 16 * (size_t)nr));
     for (int i = 1; i < nr; i++)
-        vst1q_u8(b->dec + 16 * i, vaesimcq_u8(vld1q_u8(b->enc + 16 * (nr - i))));
-    vst1q_u8(b->dec + 16 * nr, vld1q_u8(b->enc));
+        vst1q_u8(b->dec + 16 * (size_t)i,
+                 vaesimcq_u8(vld1q_u8(b->enc + 16 * (size_t)(nr - i))));
+    vst1q_u8(b->dec + 16 * (size_t)nr, vld1q_u8(b->enc));
 }
 
 CRYPTO_TARGET_ARM64_AES static void
@@ -652,7 +653,7 @@ aes_arm64_encrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src, size_t n
     int nr = b->rounds;
     uint8x16_t k[15];
     for (int i = 0; i <= nr; i++)
-        k[i] = vld1q_u8(b->enc + 16 * i);
+        k[i] = vld1q_u8(b->enc + 16 * (size_t)i);
     for (; n >= 4; n -= 4, src += 64, dst += 64) {
         uint8x16_t s0 = vld1q_u8(src);
         uint8x16_t s1 = vld1q_u8(src + 16);
@@ -682,7 +683,7 @@ aes_arm64_decrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src, size_t n
     int nr = b->rounds;
     uint8x16_t k[15];
     for (int i = 0; i <= nr; i++)
-        k[i] = vld1q_u8(b->dec + 16 * i);
+        k[i] = vld1q_u8(b->dec + 16 * (size_t)i);
     for (; n >= 4; n -= 4, src += 64, dst += 64) {
         uint8x16_t s0 = vld1q_u8(src);
         uint8x16_t s1 = vld1q_u8(src + 16);
@@ -714,7 +715,7 @@ aes_arm64_decrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src, size_t n
 static uint32_t aes_portable_only;
 
 void burrow__aes_set_portable(bool on) {
-    burrow__atomic_store_relaxed_u32(&aes_portable_only, on ? 1u : 0u);
+    burrow__atomic_store_relaxed_u32(&aes_portable_only, on ? 1U : 0U);
 }
 
 const char *burrow__aes_hardware(bool *available) {

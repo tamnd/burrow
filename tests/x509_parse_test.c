@@ -3,10 +3,11 @@
  * CSRs and CRLs.
  *
  * The tests that make a certificate first with CreateCertificate are in
- * x509_create_test.c. TestDomainNameValid leaves out the comparison with
- * domainToReverseLabels, which comes with verification, and TestCertificateParse
- * the VerifyHostname call for the same reason. TestParsePolicies reads the two
- * certificates it uses from testdata through the generated header.
+ * x509_create_test.c. TestDomainNameValid has its own copy of
+ * domainToReverseLabels, which Go only keeps for that test. TestCertificateParse
+ * leaves out the VerifyHostname call, which comes with verification.
+ * TestParsePolicies reads the two certificates it uses from testdata through
+ * the generated header.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -227,6 +228,26 @@ static void TestParseCertificateNegativeMaxPathLength(TestingT *t) {
     arena_free(&ar);
 }
 
+/* The ok result of domainToReverseLabels, which nothing in Go's crypto/x509
+ * calls any more but this test: every label between the periods is there and
+ * is printable ASCII other than a space. */
+static bool domain_to_reverse_labels_ok(Str domain) {
+    Int label = 0;
+    for (Int i = 0; i < domain.len; i++) {
+        Byte c = domain.p[i];
+        if (c == '.') {
+            if (label == 0)
+                return false;
+            label = 0;
+        } else if (c < 33 || c > 126) {
+            return false;
+        } else {
+            label++;
+        }
+    }
+    return domain.len == 0 || label > 0;
+}
+
 static void TestDomainNameValid(TestingT *t) {
     ARENA(a);
     /* strings.Repeat("a.a", 84) + "aaa" and the rest. */
@@ -272,6 +293,18 @@ static void TestDomainNameValid(TestingT *t) {
             testing_t_errorf_v(t, "%s: domainNameValid(%q, %t) = %t; want %t",
                                tests[i].name, tests[i].dns_name, tests[i].constraint,
                                valid, tests[i].valid);
+        /* Also check that we enforce the same properties as
+         * domainToReverseLabels. */
+        Str trimmed_name = tests[i].dns_name;
+        if (tests[i].constraint && trimmed_name.len > 1 && trimmed_name.p[0] == '.')
+            trimmed_name = str_from_bytes(trimmed_name.p + 1, trimmed_name.len - 1);
+        bool rev_valid = domain_to_reverse_labels_ok(trimmed_name);
+        if (valid != rev_valid)
+            testing_t_errorf_v(t,
+                               "%s: domainNameValid(%q, %t) = %t != "
+                               "domainToReverseLabels(%q) = %t",
+                               tests[i].name, tests[i].dns_name, tests[i].constraint,
+                               valid, trimmed_name, rev_valid);
     }
     arena_free(&ar);
 }

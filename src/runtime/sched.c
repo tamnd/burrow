@@ -44,6 +44,7 @@
 #include "burrow/atomic.h"
 #include "burrow/clock.h"
 #include "burrow/core.h"
+#include "burrow/dit.h"
 #include "burrow/func.h"
 #include "burrow/mcontext.h"
 #include "burrow/mem.h"
@@ -51,6 +52,7 @@
 #include "burrow/mem/heap.h"
 #include "burrow/netpoll.h"
 #include "burrow/note.h"
+#include "burrow/pal.h"
 #include "burrow/platform.h"
 #include "burrow/reclaim.h"
 #include "burrow/runtime.h"
@@ -73,6 +75,19 @@
 #define GOROUTINE_MAPS_ITS_STACK 0
 #else
 #define GOROUTINE_MAPS_ITS_STACK 1
+#endif
+
+/* wasip1 has one thread and no call that makes another, which is Go's case on
+ * wasm too. The scheduler is the same one with a single M that is never a
+ * thread of its own: runtime_main runs it in place, there is no sysmon, and an
+ * M with nothing to do sleeps until the next timer rather than waiting for
+ * another thread to wake it, because there is no other thread. A sleep with no
+ * timer to wake it and nothing in the poller is a program that can never make
+ * progress, and Go stops those with the same message. */
+#if defined(BURROW_OS_WASI)
+#define ONE_THREAD 1
+#else
+#define ONE_THREAD 0
 #endif
 
 /* How many dead goroutines a P keeps to itself before half of them go to the
@@ -236,6 +251,26 @@ burrow__M *burrow__curm(void) {
 
 burrow__G *burrow__curg(void) {
     return getm() != NULL ? getm()->curg : NULL;
+}
+
+/* Go's dit_setEnabled and dit_setDisabled. A thread that is not running a
+ * goroutine has nothing to remember the mode on but the bit itself. */
+bool burrow__dit_set_enabled(void) {
+    burrow__M *m = getm();
+    if (m != NULL && m->curg != NULL) {
+        m->curg->dit_wanted = true;
+        m->dit_enabled = true;
+    }
+    return burrow__dit_enable();
+}
+
+void burrow__dit_set_disabled(void) {
+    burrow__M *m = getm();
+    if (m != NULL && m->curg != NULL) {
+        m->curg->dit_wanted = false;
+        m->dit_enabled = false;
+    }
+    burrow__dit_disable();
 }
 
 burrow__Bubble *burrow__curbubble(void) {
@@ -823,16 +858,37 @@ static bool make_context(burrow__G *g, size_t asked) {
 #endif
 }
 
+/* The half of mcall before the switch: records fn and the running goroutine
+ * on this M for g0 to pick up, and returns the M. */
+static burrow__M *mcall_prepare(burrow__G *(*fn)(burrow__M *m, burrow__G *g)) {
+    burrow__M *m = getm();
+    if (m == NULL || m->curg == NULL)
+        runtime_throw(BURROW_S("mcall: not on a goroutine"));
+    m->mcall = fn;
+    m->mcallg = m->curg;
+    return m;
+}
+
 /* Leaves a call for the scheduler to make on g0 and switches to it. Comes back
  * when somebody schedules this goroutine again, and for goexit it never comes
  * back at all. */
 static void mcall(burrow__G *(*fn)(burrow__M *m, burrow__G *g)) {
-    burrow__M *m = getm();
-    burrow__G *gp = m->curg;
+    burrow__M *m = mcall_prepare(fn);
+    burrow__mcontext_switch(&m->mcallg->ctx, &m->g0.ctx);
+}
 
-    m->mcall = fn;
-    m->mcallg = gp;
-    burrow__mcontext_switch(&gp->ctx, &m->g0.ctx);
+/* mcall for a goroutine that is ending, which never comes back. The final form
+ * of the switch is what tells the address sanitizer to throw away the fake
+ * stack this goroutine was using. The ordinary switch keeps it in the context
+ * for a return that is not coming, and the next goroutine to reuse the context
+ * starts without it, so every goroutine that ended leaked one. A test that ran
+ * a few thousand subtests went past 3 GB that way. In any other build the two
+ * switches are the same thing. */
+BURROW_NORETURN static void mcall_final(burrow__G *(*fn)(burrow__M *m, burrow__G *g)) {
+    burrow__M *m = mcall_prepare(fn);
+    burrow__mcontext_leave_final(&m->mcallg->ctx, &m->g0.ctx);
+    burrow__mcontext_switch_raw(&m->mcallg->ctx, &m->g0.ctx);
+    runtime_throw(BURROW_S("runtime_goexit: a dead goroutine came back"));
 }
 
 /* Runs one goroutine until it stops, makes the call it left behind, and answers
@@ -872,6 +928,18 @@ static burrow__G *execute(burrow__M *m, burrow__G *gp) {
     burrow__atomic_store_release_u32(
         &m->p->schedtick, burrow__atomic_load_relaxed_u32(&m->p->schedtick) + 1U);
     burrow__atomic_store_release_u32(&gp->preempt, 0);
+
+    /* The thread takes on the goroutine's timing mode, unless GODEBUG has it
+     * on for every thread. Turning it off here leaves the scheduler running
+     * without it after this goroutine stops, which Go accepts too. */
+    if (gp->dit_wanted != m->dit_enabled && burrow__dit_supported() &&
+        !burrow__dit_everywhere()) {
+        if (gp->dit_wanted)
+            (void)burrow__dit_enable();
+        else
+            burrow__dit_disable();
+        m->dit_enabled = gp->dit_wanted;
+    }
 
     burrow__mcontext_switch(&m->g0.ctx, &gp->ctx);
 
@@ -943,8 +1011,14 @@ static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
 
     /* Last, so that by the time runtime_main wakes up, the goroutine it was
      * waiting for is on a free list and not half way there. */
-    if (was_main)
+    if (was_main) {
+        /* With one thread, this is the thread runtime_main is waiting on, and
+         * it has to stop picking up goroutines for runtime_main to get it back.
+         * Elsewhere runtime_main sets this itself once it wakes. */
+        if (ONE_THREAD)
+            burrow__atomic_store_u32(&sched.stopping, 1);
         burrow__note_wake(&sched.mainnote);
+    }
 
     /* After the free list, because the last goroutine out of a bubble starts
      * the goroutine sitting in synctest_run, and that one returning takes the
@@ -1530,6 +1604,30 @@ static bool any_work_left(void) {
  * woken only when it is being handed a P, so the note and the handover cannot
  * disagree. Deadlines are what make them able to. */
 static void stopm(burrow__M *m, int64_t until) {
+#if ONE_THREAD
+    /* Nobody else can hand this thread a P or ready a goroutine while it
+     * sleeps, so a sleep is only ever until the next timer, and the P it gave
+     * up is still on the idle list when the sleep ends. */
+    for (;;) {
+        if (burrow__atomic_load_relaxed_u32(&sched.stopping) != 0)
+            return;
+        if (until == 0)
+            runtime_throw(BURROW_S("all goroutines are asleep - deadlock!"));
+
+        int64_t left = until - burrow__nanotime();
+        if (left > 0)
+            pal_nanosleep(left);
+
+        burrow__lock(&sched.lock);
+        burrow__P *p = pidle_get();
+        burrow__unlock(&sched.lock);
+        if (p != NULL) {
+            acquirep(m, p);
+            return;
+        }
+        until = 0;
+    }
+#endif
     for (;;) {
         burrow__lock(&sched.lock);
         if (burrow__atomic_load_relaxed_u32(&sched.stopping) != 0) {
@@ -1949,6 +2047,9 @@ static void mstart(void *arg) {
     (void)burrow__stack_guard_arm_thread();
     burrow__stack_set_current(NULL);
 
+    if (burrow__dit_everywhere() && burrow__dit_supported())
+        (void)burrow__dit_enable();
+
     burrow__P *p = m->nextp;
     m->nextp = NULL;
     if (p != NULL)
@@ -1993,8 +2094,19 @@ static void newm(burrow__P *p, bool spinning) {
      * the scheduler's own needs and not a goroutine's. Zero asks for the
      * platform default, which is megabytes and is more than this will ever
      * use. */
+#if ONE_THREAD
+    /* Here, on the thread that called runtime_main, and back when the program
+     * is over. Only runtime_main gets this far, since with one P the check at
+     * the top turns every later call away. */
+#if defined(BURROW_MCONTEXT_ASYNCIFY)
+    burrow__mcontext_run(&m->g0.ctx, mstart, m);
+#else
+    mstart(m);
+#endif
+#else
     if (!burrow__thread_start(&m->thread, mstart, m, 0))
         runtime_throw(BURROW_S("newm: cannot start a thread"));
+#endif
 }
 
 /* ------------------------------------------------------------------ starting */
@@ -2058,6 +2170,7 @@ static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble, bool b
     newg->next = NULL;
     newg->coro = NULL;
     newg->bubble = bubble;
+    newg->dit_wanted = m != NULL && m->curg != NULL && m->curg->dit_wanted;
     burrow__atomic_store_release_u32(&newg->bubbleblocked, 0);
 
     if (!make_context(newg, stack_bytes)) {
@@ -2152,6 +2265,7 @@ bool burrow__newcoro(burrow__Coro *c, void (*f)(burrow__Coro *c, void *env),
     newg->next = NULL;
     newg->coro = c;
     newg->bubble = m->curg->bubble;
+    newg->dit_wanted = m->curg->dit_wanted;
     burrow__atomic_store_release_u32(&newg->bubbleblocked, 0);
 
     if (!make_context(newg, BURROW_GOROUTINE_STACK)) {
@@ -2355,13 +2469,17 @@ void runtime_goexit(void) {
      * re-read after every one. */
     burrow__defer_unwind_all();
 
-    mcall(goexit0);
-    runtime_throw(BURROW_S("runtime_goexit: a dead goroutine came back"));
+    mcall_final(goexit0);
 }
 
 /* ---------------------------------------------------------------- GOMAXPROCS */
 
 int runtime_gomaxprocs(int n) {
+    /* One thread is one P, as in Go's GOMAXPROCS on wasm. A second P would want
+     * a second M, and there is nothing to run it on. */
+    if (ONE_THREAD && n > 1)
+        n = 1;
+
     int was = (int)sched.gomaxprocs;
     if (was == 0)
         was = burrow__thread_ncpu();
@@ -2486,6 +2604,7 @@ void runtime_main(Func fn) {
 
     mg->entry = fn.f;
     mg->arg = fn.env;
+    mg->dit_wanted = false;
 
     if (!make_context(mg, BURROW_GOROUTINE_STACK))
         runtime_throw(BURROW_S("runtime_main: cannot make the main goroutine"));
@@ -2502,7 +2621,7 @@ void runtime_main(Func fn) {
      * program starting rather than a program already running. A run where the
      * gate or the thread cannot be made goes ahead without it, for the reason
      * written at the top of the sysmon section. */
-    if (burrow__note_init(&sched.sysmonnote)) {
+    if (!ONE_THREAD && burrow__note_init(&sched.sysmonnote)) {
         sched.sysmonstarted =
             burrow__thread_start(&sched.sysmonthread, sysmon, NULL, 0);
         if (!sched.sysmonstarted)
@@ -2571,7 +2690,7 @@ void runtime_main(Func fn) {
         burrow__note_wake(&m->park);
     burrow__unlock(&sched.lock);
 
-    for (int32_t i = 0; i < sched.nmcreated; i++)
+    for (int32_t i = 0; i < sched.nmcreated && !ONE_THREAD; i++)
         (void)burrow__thread_join(&allm[i].thread);
 
     teardown();

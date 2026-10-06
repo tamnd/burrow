@@ -41,7 +41,7 @@
 #ifdef _WIN32
 #define popen _popen
 #define pclose _pclose
-#else
+#elif !defined(BURROW_OS_WASI)
 #include <sys/wait.h>
 #endif
 
@@ -873,6 +873,12 @@ static void normalise(Buf *out, const char *s) {
 
 /* Runs this binary on a scenario, with the flags in front. */
 static int run_cmd(const char *cmd, Buf *out) {
+#if defined(BURROW_OS_WASI)
+    (void)cmd;
+    (void)out;
+    (void)normalise;
+    return -1;
+#else
 #ifdef __COSMOPOLITAN__
     /* Cosmopolitan's popen runs its own small shell, which has no # in a word
      * and no for loop, so the command goes to /bin/sh in a file instead. */
@@ -905,6 +911,7 @@ static int run_cmd(const char *cmd, Buf *out) {
     return status;
 #else
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
 #endif
 }
 
@@ -1750,7 +1757,11 @@ static void TestHelpers(TestingT *t) {
     X(ExampleNeverRun)
 
 int main(int argc, char **argv) {
+    /* WASI has no way to start a process, so there is no running this binary
+     * again and the tests that would are skipped. */
+#if !defined(BURROW_OS_WASI)
     self_path = argv[0];
+#endif
     if (argc >= 3 && strcmp(argv[argc - 2], "child") == 0) {
         testing_init(argc, argv);
         return run_child(argv[argc - 1]);

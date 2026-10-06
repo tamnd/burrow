@@ -88,6 +88,11 @@ int64_t pal_cpu_count(void) {
         n = CPU_COUNT(&set);
 #endif
 
+#if defined(BURROW_OS_WASI)
+    /* One thread is all wasip1 has, and Go's NumCPU there is 1. */
+    n = 1;
+#endif
+
     if (n <= 0)
         n = sysconf(_SC_NPROCESSORS_ONLN);
 
@@ -140,6 +145,11 @@ int64_t pal_hostname(char *buf, int64_t cap, PalErrno *err) {
         if (n > 0 && tmp[n - 1] == '\n')
             n--;
     }
+#elif defined(BURROW_OS_WASI)
+    /* WASI has no call that names the host. Go's os.Hostname on wasip1 asks
+     * syscall.Sysctl("kern.hostname"), and that answers this. */
+    n = sizeof "wasip1" - 1;
+    memcpy(tmp, "wasip1", n);
 #else
     if (gethostname(tmp, sizeof tmp - 1) != 0) {
         BURROW_OUT(err, burrow__pal_errno(errno));

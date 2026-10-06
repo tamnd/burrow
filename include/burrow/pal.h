@@ -234,7 +234,9 @@ int64_t pal_tz_load(const char *name, void *buf, int64_t cap, PalErrno *err);
  * touched until pal_vm_commit says so. Returns NULL on failure.
  *
  * On POSIX this is mmap PROT_NONE, which counts against the address space limit
- * and not against memory. On Windows it is VirtualAlloc MEM_RESERVE. */
+ * and not against memory. On Windows it is VirtualAlloc MEM_RESERVE. wasm
+ * memory has no protection at all, so on wasip1 it is zeroed memory from the C
+ * heap, committing does nothing, and pal_vm_guard reports PAL_ENOTSUP. */
 BURROW_OWNS(ret) void *pal_vm_reserve(int64_t bytes, PalErrno *err);
 
 /* Back a range inside a reservation with memory and make it readable and
@@ -311,15 +313,22 @@ int64_t pal_cpu_name(char *buf, int64_t cap);
 
 /* Instruction set extensions the crypto code can use, as bits of
  * pal_cpu_features. They are the fields of Go's internal/cpu that its hashes
- * check, X86.HasSHA and the rest, and a bit is only ever set on the machine it
- * names. */
+ * check, X86.HasSHA, X86.HasAES and the rest, and a bit is only ever set on
+ * the machine it names. */
 #define PAL_CPU_X86_SSSE3 (UINT32_C(1) << 0)
 #define PAL_CPU_X86_SSE41 (UINT32_C(1) << 1)
 #define PAL_CPU_X86_SHA (UINT32_C(1) << 2)
+#define PAL_CPU_X86_AES (UINT32_C(1) << 3)
+#define PAL_CPU_X86_PCLMULQDQ (UINT32_C(1) << 4)
 #define PAL_CPU_ARM64_SHA1 (UINT32_C(1) << 8)
 #define PAL_CPU_ARM64_SHA2 (UINT32_C(1) << 9)
 #define PAL_CPU_ARM64_SHA512 (UINT32_C(1) << 10)
 #define PAL_CPU_ARM64_SHA3 (UINT32_C(1) << 11)
+/* Data independent timing, which crypto/subtle turns on. GODEBUG has no name
+ * for it, as in Go, so cpu.all=off leaves it alone. */
+#define PAL_CPU_ARM64_DIT (UINT32_C(1) << 12)
+#define PAL_CPU_ARM64_AES (UINT32_C(1) << 13)
+#define PAL_CPU_ARM64_PMULL (UINT32_C(1) << 14)
 
 /* The PAL_CPU_ bits this processor has, found on the first call and kept.
  *
@@ -531,8 +540,9 @@ bool pal_thread_on_exit(PalThreadExit *node);
  * True means the wait ended normally, which covers being woken, being told the
  * word had already changed, and waking for no reason anybody can name. False
  * means it did not: PAL_ETIMEDOUT when the time ran out, PAL_EINTR when a
- * signal arrived, PAL_EINVAL for a null address. A caller loops on the first
- * two. Nothing here reports a word that already differed as a failure, because
+ * signal arrived, PAL_EINVAL for a null address, and PAL_EDEADLK on wasip1 for
+ * a wait with no timeout, because there is only one thread and nothing could
+ * end it. A caller loops on the first two. Nothing here reports a word that already differed as a failure, because
  * the caller is going to look at the word again in either case and an error out
  * of a successful early return is a branch nobody wants to write. */
 bool pal_futex_wait(uint32_t *addr, uint32_t expect, int64_t timeout_ns, PalErrno *err);

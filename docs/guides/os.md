@@ -482,5 +482,49 @@ if (BURROW_OK(err))
     err = syscall_close(fd);
 ```
 
-`syscall_syscall`, `syscall_syscall6` and the raw ones make a call by its `SYSCALL_SYS_` number, the way Go's `Syscall` does, except that the second result is always 0, since the C library has nowhere to give it back. On Windows they are the ones Go generates from `zsyscall_windows.go`, and each finds its DLL procedure the first time it is called, through a `SyscallLazyDLL` and a `SyscallLazyProc`, and calls it with `syscall_syscall_n`. The functions Go writes by hand around these, such as `Open`, `Stat` and `Pipe` on Linux, are not here yet. On Cosmopolitan and wasip1 the functions are Linux's, and every call fails with `ENOSYS`.
+`syscall_syscall`, `syscall_syscall6` and the raw ones make a call by its `SYSCALL_SYS_` number, the way Go's `Syscall` does, except that the second result is always 0, since the C library has nowhere to give it back. On Windows they are the ones Go generates from `zsyscall_windows.go`, and each finds its DLL procedure the first time it is called, through a `SyscallLazyDLL` and a `SyscallLazyProc`, and calls it with `syscall_syscall_n`. On Cosmopolitan and wasip1 the functions are Linux's, and every call fails with `ENOSYS`.
+
+Go writes some of `syscall` by hand, and those are here too. The environment functions work on the process's own copy of the environment, as Go's do, and `os_getenv` and the rest go through them:
+
+<!-- example: ../examples/syscall/unix.c#env -->
+```c
+Error err = syscall_setenv(BURROW_S("GREETING"), BURROW_S("hello"));
+bool found = false;
+Str v = syscall_getenv(a, BURROW_S("GREETING"), &found);
+if (found)
+    printf("GREETING=%.*s\n", (int)v.len, (const char *)v.p);
+```
+
+`syscall_mmap` gives back the mapping as a `Slice` of bytes, and `syscall_munmap` only takes back a whole mapping `syscall_mmap` made, once, and fails with `EINVAL` for anything else, the way Go's mapper does:
+
+<!-- example: ../examples/syscall/unix.c#mmap -->
+```c
+Slice b = syscall_mmap(-1, 0, syscall_getpagesize(),
+                       SYSCALL_PROT_READ | SYSCALL_PROT_WRITE,
+                       SYSCALL_MAP_ANON | SYSCALL_MAP_PRIVATE, &err);
+if (BURROW_OK(err)) {
+    ((Byte *)b.p)[0] = 1;
+    err = syscall_munmap(b);
+}
+```
+
+On Linux the path calls Go writes in terms of the `at` calls are here, `Open`, `Stat`, `Pipe`, `Faccessat` with the checks Go makes when the kernel has no `faccessat2`, `Getwd`, `Getgroups`, the `ptrace` helpers, and `ReadDirent` and `ParseDirent`, which append the names to a slice of `Str` from the allocator you give it:
+
+<!-- example: ../examples/syscall/unix.c#dirent -->
+```c
+Int fd =
+    syscall_open(BURROW_S("/"), SYSCALL_O_RDONLY | SYSCALL_O_DIRECTORY, 0, &err);
+Byte buf[4096];
+Slice names = slice_nil(TYPE_STRING);
+for (;;) {
+    Int n = syscall_read_dirent(fd, (Slice){buf, 4096, 4096, TYPE_BYTE}, &err);
+    if (n <= 0)
+        break;
+    syscall_parse_dirent(a, (Slice){buf, n, n, TYPE_BYTE}, -1, names, NULL, &names);
+}
+(void)syscall_close(fd);
+printf("%d entries in /\n", (int)names.len);
+```
+
+The sockets, `ForkExec` and the rest of what Go writes by hand on Linux, and all of it on macOS, FreeBSD and Windows, are still to come.
 

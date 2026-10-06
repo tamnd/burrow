@@ -40,7 +40,9 @@
 #define pclose _pclose
 #define SEP "\\"
 #else
+#if !defined(BURROW_OS_WASI)
 #include <sys/wait.h>
+#endif
 #define SEP "/"
 #endif
 
@@ -133,6 +135,12 @@ static void buf_free(Buf *b) {
 }
 
 static int spawn(const char *flags, Buf *out) {
+#if defined(BURROW_OS_WASI)
+    (void)flags;
+    (void)out;
+    (void)put;
+    return -1;
+#else
     char cmd[4096];
 #ifdef _WIN32
     snprintf(cmd, sizeof cmd, "\"\"%s\" %s child 2>&1\"", self_path, flags);
@@ -152,6 +160,7 @@ static int spawn(const char *flags, Buf *out) {
     return status;
 #else
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
 #endif
 }
 
@@ -227,7 +236,11 @@ static void TestCoverageGuided(TestingT *t) {
 #define TESTS(X) X(TestCoverageGuided)
 
 int main(int argc, char **argv) {
+    /* WASI has no way to start a process, so there is no running this binary
+     * again and the tests that would are skipped. */
+#if !defined(BURROW_OS_WASI)
     self_path = argv[0];
+#endif
     if (argc >= 2 && strcmp(argv[argc - 1], "child") == 0) {
         testing_init(argc, argv);
         return run_child();

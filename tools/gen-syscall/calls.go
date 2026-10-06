@@ -816,15 +816,14 @@ func callsOf(p *platform, hand map[string]bool, handFuncs map[string]bool) (map[
 	return out, g.why, g.libc, g.mods, g.procs
 }
 
-// The C names of the functions syscall.h declares by hand.
-func handFunctions(path string) map[string]bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		die("%v", err)
-	}
+// The C names of the functions syscall.h declares by hand for goos/goarch.
+// A declaration in an #if branch the platform does not take is not one, so
+// a function the header has only for some architectures is still generated
+// for the rest.
+func handFunctions(header []byte, goos, goarch string) map[string]bool {
 	out := map[string]bool{}
 	re := regexp.MustCompile(`\b(syscall_\w+)\(`)
-	for _, m := range re.FindAllSubmatch(data, -1) {
+	for _, m := range re.FindAllSubmatch(selectTarget(header, targetMacros(goos, goarch)), -1) {
 		out[string(m[1])] = true
 	}
 	return out
@@ -834,7 +833,7 @@ func handFunctions(path string) map[string]bool {
 type callWriter struct {
 	pub, priv, c bytes.Buffer
 	hand         map[string]bool
-	handFuncs    map[string]bool
+	header       []byte // syscall.h
 	verbose      bool
 	n            int // systems written so far
 	count        map[string]int
@@ -842,10 +841,10 @@ type callWriter struct {
 
 func newCallWriter(root, ver string, verbose bool) *callWriter {
 	w := &callWriter{
-		hand:      handWritten(filepath.Join(root, "include/burrow/syscall.h")),
-		handFuncs: handFunctions(filepath.Join(root, "include/burrow/syscall.h")),
-		verbose:   verbose,
-		count:     map[string]int{},
+		hand:    handWritten(filepath.Join(root, "include/burrow/syscall.h")),
+		header:  readFile(filepath.Join(root, "include/burrow/syscall.h")),
+		verbose: verbose,
+		count:   map[string]int{},
 	}
 	fmt.Fprintf(&w.pub, banner, ver)
 	fmt.Fprintf(&w.pub, `
@@ -917,7 +916,7 @@ func (w *callWriter) system(goos string, plats []*platform) {
 	mods := map[string]string{}
 	procs := map[string]winProc{}
 	for _, p := range plats {
-		fs, why, libc, ms, ps := callsOf(p, w.hand, w.handFuncs)
+		fs, why, libc, ms, ps := callsOf(p, w.hand, handFunctions(w.header, p.goos, p.goarch))
 		for k, v := range ms {
 			mods[k] = v
 		}

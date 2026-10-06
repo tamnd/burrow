@@ -56,12 +56,13 @@ var systems = []struct{ goos, cond string }{
 	{"dragonfly", "defined(BURROW_OS_DRAGONFLY)"},
 	{"solaris", "defined(BURROW_OS_SOLARIS)"},
 	{"aix", "defined(BURROW_OS_AIX)"},
+	{"wasip1", "defined(BURROW_OS_WASI)"},
 	{"linux", "defined(BURROW_OS_LINUX)"},
 }
 
 // linux/arm64 is the asm-generic numbering, which is the one every newer Linux
 // port uses, so it is what a Linux architecture with no table of its own gets,
-// and what Cosmopolitan and wasip1 get as well.
+// and what Cosmopolitan gets as well.
 const fallback = "linux/arm64"
 
 type constant struct {
@@ -339,6 +340,126 @@ func windowsTable(dir string) *table {
 	return t
 }
 
+// wasip1: the numbers WASI gives its errors, which wasi-libc's errno uses too,
+// and Go's own numbering of the signals. Go writes these by hand, the errors in
+// tables_wasip1.go as Errno constants and an errorstr table keyed by name, and
+// the signals in syscall_wasip1.go as an iota list with a switch for String.
+func wasip1Table(dir string) *table {
+	path := filepath.Join(dir, "tables_wasip1.go")
+	f := parse(path)
+	t := &table{errors: map[uint64]string{}, signals: map[uint64]string{}}
+	byName := map[string]uint64{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		vs, ok := n.(*ast.ValueSpec)
+		if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 || !strings.HasPrefix(vs.Names[0].Name, "E") {
+			return true
+		}
+		name := vs.Names[0].Name
+		v, ok := intLit(vs.Values[0])
+		if !ok {
+			// EOPNOTSUPP = ENOTSUP, which comes before it.
+			id, isID := vs.Values[0].(*ast.Ident)
+			if !isID {
+				die("%s: %s is not a number or a name", path, name)
+			}
+			if v, ok = byName[id.Name]; !ok {
+				die("%s: %s is %s, which is not defined above it", path, name, id.Name)
+			}
+		}
+		if _, dup := byName[name]; dup {
+			die("%s: %s twice", path, name)
+		}
+		byName[name] = v
+		t.consts = append(t.consts, constant{name, v})
+		return true
+	})
+	for _, kv := range namedTable(f, "errorstr") {
+		id, ok := kv.Key.(*ast.Ident)
+		if !ok {
+			die("%s: an errorstr key that is not a name", path)
+		}
+		v, ok := byName[id.Name]
+		if !ok {
+			die("%s: no constant %s", path, id.Name)
+		}
+		t.errors[v] = wasip1Str(kv.Value)
+	}
+	sort.Slice(t.consts, func(i, j int) bool { return t.consts[i].name < t.consts[j].name })
+
+	path = filepath.Join(dir, "syscall_wasip1.go")
+	f = parse(path)
+	sigs := map[string]uint64{}
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST || len(gd.Specs) == 0 {
+			continue
+		}
+		first := gd.Specs[0].(*ast.ValueSpec)
+		if len(first.Names) != 1 || first.Names[0].Name != "SIGNONE" {
+			continue
+		}
+		for i, sp := range gd.Specs {
+			vs := sp.(*ast.ValueSpec)
+			if len(vs.Names) != 1 || (i > 0 && len(vs.Values) != 0) {
+				die("%s: the signals are not a plain iota list", path)
+			}
+			name := vs.Names[0].Name
+			sigs[name] = uint64(i)
+			t.sigs = append(t.sigs, constant{name, uint64(i)})
+		}
+	}
+	if len(t.sigs) == 0 {
+		die("%s: no SIG constants", path)
+	}
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Name.Name != "String" || fd.Recv == nil {
+			continue
+		}
+		if rt, ok := fd.Recv.List[0].Type.(*ast.Ident); !ok || rt.Name != "Signal" {
+			continue
+		}
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			cc, ok := n.(*ast.CaseClause)
+			if !ok || len(cc.List) != 1 || len(cc.Body) != 1 {
+				return true
+			}
+			id, ok := cc.List[0].(*ast.Ident)
+			if !ok {
+				return true
+			}
+			ret, ok := cc.Body[0].(*ast.ReturnStmt)
+			if !ok || len(ret.Results) != 1 {
+				return true
+			}
+			v, ok := sigs[id.Name]
+			if !ok {
+				die("%s: a case for %s, which is not a signal", path, id.Name)
+			}
+			t.signals[v] = strLit(ret.Results[0])
+			return true
+		})
+	}
+	if len(t.signals) != len(t.sigs) {
+		die("%s: %d signals and %d names for them", path, len(t.sigs), len(t.signals))
+	}
+	sort.Slice(t.sigs, func(i, j int) bool { return t.sigs[i].name < t.sigs[j].name })
+	return t
+}
+
+// A string, or one with runtime.GOOS added on the end, which is how Go writes
+// the message for ENOSYS.
+func wasip1Str(e ast.Expr) string {
+	if b, ok := e.(*ast.BinaryExpr); ok && b.Op == token.ADD {
+		if sel, ok := b.Y.(*ast.SelectorExpr); ok && sel.Sel.Name == "GOOS" {
+			if x, ok := sel.X.(*ast.Ident); ok && x.Name == "runtime" {
+				return wasip1Str(b.X) + "wasip1"
+			}
+		}
+	}
+	return strLit(e)
+}
+
 type group struct {
 	goos  string
 	archs []string
@@ -372,6 +493,10 @@ func main() {
 	for _, sys := range systems {
 		if sys.goos == "windows" {
 			groups = append(groups, &group{goos: "windows", t: windowsTable(dir)})
+			continue
+		}
+		if sys.goos == "wasip1" {
+			groups = append(groups, &group{goos: "wasip1", t: wasip1Table(dir)})
 			continue
 		}
 		files, _ := filepath.Glob(filepath.Join(dir, "zerrors_"+sys.goos+"_*.go"))
@@ -433,17 +558,19 @@ func main() {
 	fmt.Fprintf(&h, `/* Derived from Go's src/syscall/zerrors_linux_amd64.go.
  * Go source: %s.
  *
- * The other systems come from their own zerrors files in the same place, and
- * the Windows ERROR_ and WSA codes from types_windows.go.
+ * The other systems come from their own zerrors files in the same place,
+ * wasip1 from tables_wasip1.go and syscall_wasip1.go, and the Windows ERROR_
+ * and WSA codes from types_windows.go.
  *
  * Generated by tools/gen-syscall-errors.sh from the Go tables. Do not edit.
  *
  * syscall's E and SIG constants for the system this is built for, and on
  * Windows its ERROR_ and WSA codes too. The numbers are the system's own, so
  * they differ from one system to the next and, on Linux, between some
- * architectures. A Linux architecture Go has no table for, Cosmopolitan and
- * wasip1 get the numbers of linux/arm64, which are the generic ones. Windows
- * has no signals, and its SIG constants are the ones Go made up.
+ * architectures. A Linux architecture Go has no table for and Cosmopolitan get
+ * the numbers of linux/arm64, which are the generic ones. wasip1 has WASI's
+ * error numbers, which are wasi-libc's too, and signal numbers Go made up.
+ * Windows has no signals, and its SIG constants are the ones Go made up.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -457,8 +584,9 @@ func main() {
 	fmt.Fprintf(&c, `/* Derived from Go's src/syscall/zerrors_linux_amd64.go.
  * Go source: %s.
  *
- * The other systems come from their own zerrors files in the same place, and
- * Windows from zerrors_windows.go, which has Go's own codes.
+ * The other systems come from their own zerrors files in the same place,
+ * wasip1 from tables_wasip1.go and syscall_wasip1.go, and Windows from
+ * zerrors_windows.go, which has Go's own codes.
  *
  * Generated by tools/gen-syscall-errors.sh from the Go tables. Do not edit.
  *

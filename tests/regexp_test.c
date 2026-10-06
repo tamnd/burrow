@@ -696,6 +696,8 @@ static void worker(void *arg) {
 }
 
 static void TestConcurrent(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     Regexp *re = regexp_must_compile(heap_allocator(), BURROW_S("([a-z]+)([0-9]+)"));
     enum { N = 8 };
     Worker w[N];

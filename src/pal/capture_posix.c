@@ -1,4 +1,4 @@
-/* Capturing standard output everywhere but Windows.
+/* Capturing standard output everywhere but Windows and wasip1.
  *
  * A pipe, descriptor 1 moved onto its write end with dup2 and back again
  * afterwards, and a thread reading the other end until it sees the end of the
@@ -20,7 +20,7 @@
 
 #include "burrow/platform.h"
 
-#if !defined(BURROW_OS_WINDOWS)
+#if !defined(BURROW_OS_WINDOWS) && !defined(BURROW_OS_WASI)
 
 #include "burrow/pal.h"
 

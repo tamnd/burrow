@@ -132,6 +132,8 @@ static void md5_reset(void *self) {
 }
 
 static void md5_update(Md5Digest *d, const Byte *p, Int n) {
+    if (n == 0)
+        return; /* p may be NULL, and memcpy may not be given one */
     d->len += (uint64_t)n;
     if (d->nx > 0) {
         Int k = MD5_BLOCK_SIZE - d->nx < n ? MD5_BLOCK_SIZE - d->nx : n;

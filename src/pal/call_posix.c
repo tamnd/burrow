@@ -100,8 +100,23 @@ _Static_assert(sizeof(void (*)(void)) == sizeof(void *),
 #define P18 P17, U
 
 /* A variadic function, with nf fixed parameters, gets all nine. The ones after
- * what it reads are never looked at, wherever the convention puts them. */
-#define VCALL(nf) FN_CALL((P##nf, ...), A9)
+ * what it reads are never looked at, wherever the convention puts them.
+ *
+ * Each shape is a function of its own. As three branches of one function, the
+ * three calls differ in nothing but their type, and clang at -O2 on arm64 macOS
+ * folded them into one call with three fixed parameters. The type is the one
+ * thing Apple's arm64 cares about here, since it puts the variadic arguments on
+ * the stack, so fcntl and open found their last argument missing. */
+#define VCALL(nf)                                                                      \
+    NO_SANITIZE_FUNCTION BURROW_NOINLINE static U vcall##nf(void *fn, const U *a) {    \
+        U r;                                                                           \
+        FN_CALL((P##nf, ...), A9);                                                     \
+        return r;                                                                      \
+    }
+
+VCALL(1)
+VCALL(2)
+VCALL(3)
 
 NO_SANITIZE_FUNCTION
 uintptr_t pal_call(void *fn, const uintptr_t *args, int32_t n, int32_t nfixed,
@@ -117,11 +132,11 @@ uintptr_t pal_call(void *fn, const uintptr_t *args, int32_t n, int32_t nfixed,
     errno = 0;
     if (nfixed >= 1 && nfixed <= 3 && n >= nfixed) {
         if (nfixed == 1)
-            VCALL(1);
+            r = vcall1(fn, a);
         else if (nfixed == 2)
-            VCALL(2);
+            r = vcall2(fn, a);
         else
-            VCALL(3);
+            r = vcall3(fn, a);
     } else {
         switch (n) {
         case 0:

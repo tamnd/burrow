@@ -52,9 +52,13 @@ BANNED_STRING='strcpy|strcat|sprintf|vsprintf|gets|strtok|strncpy|strncat|alloca
 
 # Allocation. It is legal in exactly one file, which is the heap backend, and
 # nowhere else, because the whole memory design is that allocation is something
-# a caller hands you rather than something you reach for.
+# a caller hands you rather than something you reach for. The PAL's memory
+# reservations on WASI are the other file. A wasm module has one memory that
+# only grows, so a reservation there is a block of it handed out and taken back
+# by a free list, which is what Go's runtime keeps for wasm in mem_sbrk.go and
+# what the C heap already is.
 BANNED_ALLOC='\bmalloc\b|\bcalloc\b|\brealloc\b|\bfree\b|\baligned_alloc\b|\bposix_memalign\b|\b_aligned_malloc\b|\b_aligned_realloc\b|\b_aligned_free\b'
-ALLOC_ALLOWED='src/mem/heap.c'
+ALLOC_ALLOWED='src/mem/heap.c src/pal/vm_wasi.c'
 
 # Exiting. A library does not get to end the host's process. Failures come back
 # as an Error, and the one case where that is impossible is allocation failure,

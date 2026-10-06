@@ -51,6 +51,8 @@ category	uuid-v7	uuid.NewV7's last timestamp. Go keeps it in package level varia
 category	weak	weak's table of slots. Go hangs a weak handle off the object and its collector clears it, and here the allocators tell one table when memory goes, which has to be process wide because memory freed on one thread may have had a WeakPointer made on another.
 category	zip-registry	archive/zip's registered compressors and decompressors. Go keeps them in sync.Maps at package level, and they are process wide because a method registered anywhere is one every Reader and Writer can use.
 category	last-error	The platform's code for the last failure each thread saw, which is per thread the way errno and GetLastError are.
+category	impl-select	Which implementation a crypto package runs, which Go keeps in crypto/internal/impl so that its tests can try every one.
+category	crypto-registry	crypto's table of registered hash functions. Go keeps it in a package level slice that RegisterHash writes from init, and it is process wide because a hash registered anywhere is one Hash.New can make everywhere.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -68,6 +70,8 @@ global	src/runtime/mcontext.c	tsan_pool_lock	scheduler	This is the synchronisati
 global	src/runtime/mcontext.c	tsan_pool	scheduler	The spare fibers, under tsan_pool_lock above. Shared rather than thread local because the goroutine that frees a context is often not the one that made it, so a per thread pool would drift until one thread had all the fibers and another had none.
 global	src/runtime/mcontext.c	tsan_pool_len	scheduler	How many of the pool are spare, under tsan_pool_lock above.
 global	src/runtime/mcontext.c	tsan_fibers_made	scheduler	How many fibers this process has ever asked the sanitizer for, under tsan_pool_lock above. It only goes up, because the sanitizer never gives an identifier back, and that is the whole reason there is a budget to count against.
+global	src/runtime/mcontext.c	asy	scheduler	Only on WebAssembly, which runs one thread, so only one context is ever running and nothing else can be looking. Which context is the root, which one a switch is going to, and whether the module is unwinding or rewinding.
+global	src/runtime/mcontext.c	root_unwind	scheduler	Only on WebAssembly, the same as asy above. Where the root context's locals go while it is switched out, since the root is the one context whose stack burrow did not make.
 global	src/runtime/stack.c	armed	signal-table	Three states and a compare and swap between them. The thread that wins installs the handlers and publishes the done state with a release, and the threads that lose spin on an acquire load rather than answering yes while the handler is still not there.
 global	src/runtime/stack.c	current	scheduler	Thread local. Written by whoever switched to this stack and read by the fault handler on the same thread, which is the one place a signal handler is allowed to look at.
 global	src/runtime/panic.c	fatal_handler	fatal-handler	Written once during startup and read on the way out. Becomes an atomic load when sync/atomic lands, which weakens the contract rather than changing any caller.
@@ -148,6 +152,7 @@ global	src/pal/signal_windows.c	relay_send	signal-table	The function on_console 
 global	src/pal/signal_windows.c	relay_int	signal-table	Whether os/signal wants SIGINT, which is Ctrl-C and Ctrl-Break. Release store, and an acquire load on the console handler's thread.
 global	src/pal/signal_windows.c	relay_term	signal-table	Whether os/signal wants SIGTERM, which is the close, logoff and shutdown events. The same as relay_int.
 global	src/pal/signal_windows.c	note_event	signal-table	The auto-reset event that wakes os/signal's reader. Made once and set by compare and swap, so two first calls racing keep one event and close the other.
+global	src/pal/signal_wasi.c	note_pending	signal-table	Whether a wake is waiting for the next sleep. Release store and atomic swap, though wasip1 runs one thread and nothing else reaches it.
 global	src/runtime/sigqueue.c	sigq	signal-table	Go's sig struct, the queue between the signal handler and os/signal's reader. The masks and the state word are atomics, recv is the reader's alone, and wanted and ignored are written under os/signal's lock and read with atomic loads from the handler.
 global	src/os/signal.c	notify_table	signal-table	Go's handlers: which channel or context wants which signal, and how many want each. Everything in it is under its own mutex, as Go's is.
 global	src/os/signal.c	notify_causes	signal-table	The cause NotifyContext cancels with for each signal, built the first time that signal cancels something and never changed after. Written under notify_table's mutex, and read only through an error that the cancel which follows publishes.
@@ -159,6 +164,7 @@ global	src/runtime/registry.c	registry_len	type-registry	How many of the slots a
 global	src/pal/machine_posix.c	cached_page	machine	Relaxed atomic, and the race is benign by construction. Two threads arriving together both ask the system, both get the same number, and both write it. There is nothing published alongside it, so there is nothing for a release store to order.
 global	src/pal/machine_windows.c	cached_page	machine	The Windows half of cached_page above, with the same reasoning.
 global	src/pal/cpu.c	cached_features	machine	Relaxed atomic, like cached_page. The processor and GODEBUG give every thread the same answer, so two threads that both work it out write the same value.
+global	src/runtime/dit.c	dit_everywhere	godebug	The dataindependenttiming setting, read from GODEBUG on first use. Relaxed atomic loads and stores only, and two racing first loads store the same value.
 global	src/runtime/symtab.c	symtab_once	symbol-table	A Once, which is what makes the sort happen exactly once however many threads panic at the same moment.
 global	src/runtime/symtab.c	symtab_sorted	symbol-table	Written once inside the Once and read after it, so the Once is the ordering. Null afterwards means the allocation failed and the lookup walks the unsorted table instead, which is why it is read into a local before it is used.
 global	src/runtime/symtab.c	symtab_sorted_len	symbol-table	How long symtab_sorted is, written beside it under the same Once.
@@ -293,12 +299,19 @@ global	src/archive/zip.c	zip_decompressors	zip-registry	The head of the list of 
 global	src/os/proc.c	os_args_slice	package-vars	os.Args, built from the command line once under os_args_once and never written again.
 global	src/os/proc.c	os_getwd_mu	package-vars	Go's getwdCache lock, which keeps two Getwd calls from walking up the tree at once.
 global	src/os/proc.c	os_getwd_cache	package-vars	Go's getwdCache.dir, the last directory the slow Getwd found. Read and written under os_getwd_mu.
-global	src/os/env.c	os_envs	package-vars	syscall's copy of the environment, filled once under os_env_once, then read under os_env_mu and written with it held for writing.
-global	src/os/env.c	os_envs_len	package-vars	How many entries os_envs has, under os_env_mu as os_envs is.
-global	src/os/env.c	os_envs_cap	package-vars	How many entries os_envs has room for, under os_env_mu as os_envs is.
+global	src/syscall/env.c	env_envs	package-vars	syscall's copy of the environment, Go's envs, filled once under syscall_env_once, then read under env_mu and written with it held for writing.
+global	src/syscall/env.c	env_envs_len	package-vars	How many entries env_envs has, under env_mu as env_envs is.
+global	src/syscall/env.c	env_envs_cap	package-vars	How many entries env_envs has room for, under env_mu as env_envs is.
 global	src/os/proc.c	os_args_once	package-vars	Makes os_args_slice the first time os_args is called.
-global	src/os/env.c	os_env_once	package-vars	Copies the environment into os_envs the first time any of the environment calls needs it, as syscall's envOnce does.
-global	src/os/env.c	os_env_mu	package-vars	syscall's envLock, over os_envs and its length and room.
+global	src/syscall/env.c	syscall_env_once	package-vars	Copies the environment into env_envs the first time any of the environment calls needs it, as Go's copyenv does.
+global	src/syscall/env.c	env_mu	package-vars	Go's envLock, over env_envs and its length and room.
+global	src/syscall/unix.c	syscall_stdin	package-vars	Go's syscall.Stdin, which is a variable there too. Nothing in burrow writes it, and a program that does is doing what a Go program that assigns it does.
+global	src/syscall/unix.c	syscall_stdout	package-vars	Go's syscall.Stdout, as syscall_stdin is.
+global	src/syscall/unix.c	syscall_stderr	package-vars	Go's syscall.Stderr, as syscall_stdin is.
+global	src/syscall/unix.c	unix_mmap_mu	package-vars	The lock in Go's mapper, held over each read and write of the table of mappings.
+global	src/syscall/unix.c	unix_mmap_active	package-vars	The mappings syscall_mmap made and syscall_munmap has not undone, Go's mapper.active, under unix_mmap_mu.
+global	src/syscall/unix.c	unix_mmap_len	package-vars	How many mappings unix_mmap_active has, under unix_mmap_mu.
+global	src/syscall/unix.c	unix_mmap_cap	package-vars	How many mappings unix_mmap_active has room for, under unix_mmap_mu.
 global	src/os/user.c	user_cache_once	package-vars	Fills the Current cache the first time it is needed, as Go's cache.Do does.
 global	src/os/user.c	user_cache_u	package-vars	The user Current found, written once under user_cache_once and only read after that.
 global	src/os/user.c	user_cache_err	package-vars	The error Current got instead, written once under user_cache_once and only read after that.
@@ -306,3 +319,23 @@ global	src/syscall/call.c	burrow__syscall_zero	marker	What Go's &_zero is: a sli
 global	src/syscall/call.c	burrow__syscall_libc_cache	tables	Each slot is an atomic pointer, loaded with acquire and stored with release. Two threads that look the same libSystem function up at once store the same address.
 global	src/syscall/zsyscall.c	burrow__syscall_mods	tables	Go's modkernel32 and the rest, one LazyDLL each. Each loads its DLL the first time a procedure in it is called, under its own mutex, and publishes the handle with a release store.
 global	src/syscall/zsyscall.c	burrow__syscall_procs	tables	Go's procCreateFileW and the rest, one LazyProc each. Each finds its address the first time it is called, under its own mutex, and publishes it with a release store.
+global	src/crypto/rand.c	crypto_rand_debug_flags	godebug	The cryptocustomrand setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
+global	src/crypto/rand.c	crypto_rand_reader	package-vars	crypto/rand.Reader. Not synchronised, as in Go: a program assigns it before other threads read from it.
+global	src/crypto/aes.c	aes_portable_only	impl-select	Set only by tests, through burrow__aes_set_portable, with relaxed atomics. A block reads it once, when it is made.
+global	src/crypto/crypto.c	crypto_hashes	crypto-registry	What crypto_register_hash was given for each hash, as a function address in an atomic word. Release stores and acquire loads only, so a hash being registered and one being made can race safely.
+global	src/crypto/nistec_p224.c	p224_b_value	tables	The curve's b in the field's own form, made once by p224_b_init.
+global	src/crypto/nistec_p224.c	p224_b_once	tables	A SyncOnce, which is the synchronisation for p224_b_value.
+global	src/crypto/nistec_p224.c	p224_gg	tables	g, g^2, g^4 and so on to g^(2^95), for the 2^96th root of unity g that the square root uses, made once by p224_gg_init.
+global	src/crypto/nistec_p224.c	p224_gg_once	tables	A SyncOnce, which is the synchronisation for p224_gg.
+global	src/crypto/nistec_p224.c	p224_generator_table	tables	Multiples of the generator for ScalarBaseMult, made once by p224_generator_table_init.
+global	src/crypto/nistec_p224.c	p224_generator_table_once	tables	A SyncOnce, which is the synchronisation for p224_generator_table.
+global	src/crypto/nistec_p384.c	p384_b_value	tables	The curve's b in the field's own form, made once by p384_b_init.
+global	src/crypto/nistec_p384.c	p384_b_once	tables	A SyncOnce, which is the synchronisation for p384_b_value.
+global	src/crypto/nistec_p384.c	p384_generator_table	tables	Multiples of the generator for ScalarBaseMult, made once by p384_generator_table_init.
+global	src/crypto/nistec_p384.c	p384_generator_table_once	tables	A SyncOnce, which is the synchronisation for p384_generator_table.
+global	src/crypto/nistec_p521.c	p521_b_value	tables	The curve's b in the field's own form, made once by p521_b_init.
+global	src/crypto/nistec_p521.c	p521_b_once	tables	A SyncOnce, which is the synchronisation for p521_b_value.
+global	src/crypto/nistec_p521.c	p521_generator_table	tables	Multiples of the generator for ScalarBaseMult, made once by p521_generator_table_init.
+global	src/crypto/nistec_p521.c	p521_generator_table_once	tables	A SyncOnce, which is the synchronisation for p521_generator_table.
+global	src/crypto/elliptic.c	elliptic_nist	tables	The four NIST curves with their CurveParams, filled in once by elliptic_init and only read after that, as Go's initonce has it.
+global	src/crypto/elliptic.c	elliptic_once	tables	A SyncOnce, which is the synchronisation for elliptic_nist.

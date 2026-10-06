@@ -242,34 +242,10 @@ SyscallRusage syscall_rusage_from_pal(const PalRusage *ru) {
 
 #else
 
-/* Sets f to v. The fields of Timeval and Rusage are as wide as the system's,
- * 32 or 64 bits, so the conversion depends on the platform, as Go's
- * setTimeval does. */
+/* Sets f to v. The fields of Rusage are as wide as the system's, 32 or 64
+ * bits, so the conversion depends on the platform. */
 #define SET_FIELD(f, v)                                                                \
     ((f) = _Generic((f), int32_t: (int32_t)(v), int64_t: (int64_t)(v)))
-
-int64_t syscall_timeval_nano(const SyscallTimeval *tv) {
-    return (int64_t)((uint64_t)tv->sec * 1000000000U + (uint64_t)tv->usec * 1000U);
-}
-
-int64_t syscall_timeval_to_nsec(SyscallTimeval tv) {
-    return syscall_timeval_nano(&tv);
-}
-
-SyscallTimeval syscall_nsec_to_timeval(int64_t nsec) {
-    nsec = (int64_t)((uint64_t)nsec + 999U); /* round up to a microsecond */
-    int64_t usec = nsec % 1000000000 / 1000;
-    int64_t sec = nsec / 1000000000;
-    if (usec < 0) {
-        usec += 1000000;
-        sec--;
-    }
-    SyscallTimeval tv;
-    memset(&tv, 0, sizeof tv);
-    SET_FIELD(tv.sec, sec);
-    SET_FIELD(tv.usec, usec);
-    return tv;
-}
 
 SyscallRusage syscall_rusage_from_pal(const PalRusage *ru) {
     SyscallRusage r;

@@ -26,3 +26,16 @@ src/syscall/zsyscall.h
 include/burrow/syscall/zsyscall.h
 include/burrow/syscall/ztypes.h
 src/time/tzdata_zip.c
+src/crypto/fiat_25519_scalar_64.h
+src/crypto/fiat_25519_scalar_32.h
+src/crypto/edwards25519_table.c
+tests/ed25519_test_gen.h
+src/crypto/fiat_p224_32.h
+src/crypto/fiat_p224_64.h
+src/crypto/fiat_p256_32.h
+src/crypto/fiat_p256_64.h
+src/crypto/fiat_p384_32.h
+src/crypto/fiat_p384_64.h
+src/crypto/fiat_p521_32.h
+src/crypto/fiat_p521_64.h
+src/crypto/nistec_p256_table.h

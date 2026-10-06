@@ -126,8 +126,11 @@ static const void *uq_lookup(const UqTable *tab, const Type *t, uint64_t h,
 }
 
 static UqTable *uq_new_table(Uint nslots) {
-    UqTable *tab = mem_alloc(
-        heap_allocator(), sizeof(UqTable) + nslots * sizeof(void *), _Alignof(UqTable));
+    if (nslots > (SIZE_MAX - sizeof(UqTable)) / sizeof(void *))
+        uq_out_of_memory();
+    UqTable *tab =
+        mem_alloc(heap_allocator(), sizeof(UqTable) + (size_t)nslots * sizeof(void *),
+                  _Alignof(UqTable));
     if (tab == NULL)
         uq_out_of_memory();
     tab->mask = nslots - 1;

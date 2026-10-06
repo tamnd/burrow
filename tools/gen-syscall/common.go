@@ -20,6 +20,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -288,3 +289,184 @@ const banner = `/* Derived from Go's src/syscall, the zerrors, zsysnum and ztype
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 `
+
+// readFile is os.ReadFile that gives up on an error.
+func readFile(path string) []byte {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		die("%v", err)
+	}
+	return data
+}
+
+// The BURROW_OS_ macros each GOOS defines.
+var osMacros = map[string][]string{
+	"linux":     {"BURROW_OS_LINUX"},
+	"android":   {"BURROW_OS_ANDROID", "BURROW_OS_LINUX"},
+	"darwin":    {"BURROW_OS_DARWIN"},
+	"ios":       {"BURROW_OS_IOS"},
+	"windows":   {"BURROW_OS_WINDOWS"},
+	"freebsd":   {"BURROW_OS_FREEBSD"},
+	"openbsd":   {"BURROW_OS_OPENBSD"},
+	"netbsd":    {"BURROW_OS_NETBSD"},
+	"dragonfly": {"BURROW_OS_DRAGONFLY"},
+	"illumos":   {"BURROW_OS_SOLARIS"},
+	"solaris":   {"BURROW_OS_SOLARIS"},
+	"aix":       {"BURROW_OS_AIX"},
+	"wasip1":    {"BURROW_OS_WASI"},
+}
+
+// The BURROW_OS_ and BURROW_ARCH_ macros defined for goos/goarch, or nil
+// for a platform these tables do not know, which keeps every branch.
+func targetMacros(goos, goarch string) map[string]bool {
+	oses, ok := osMacros[goos]
+	arch, ok2 := archMacro[goarch]
+	if !ok || !ok2 {
+		return nil
+	}
+	m := map[string]bool{arch: true}
+	for _, o := range oses {
+		m[o] = true
+	}
+	return m
+}
+
+var (
+	platformMacro = regexp.MustCompile(`^BURROW_(?:OS|ARCH)_[A-Z0-9]+$`)
+	definedRE     = regexp.MustCompile(`\bdefined\s*\(\s*(\w+)\s*\)|\bdefined\s+(\w+)`)
+	condToken     = regexp.MustCompile(`D_\w+|\w+|\|\||&&|!|\(|\)|\S`)
+	directive     = regexp.MustCompile(`^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)$`)
+)
+
+// evalCond decides an #if condition that only asks which platform this is,
+// with ok false for anything else.
+func evalCond(cond string, macros map[string]bool) (v, ok bool) {
+	cond = definedRE.ReplaceAllStringFunc(cond, func(s string) string {
+		m := definedRE.FindStringSubmatch(s)
+		return " D_" + m[1] + m[2] + " "
+	})
+	toks := condToken.FindAllString(cond, -1)
+	for _, t := range toks {
+		if strings.HasPrefix(t, "D_") {
+			if !platformMacro.MatchString(t[2:]) {
+				return false, false
+			}
+		} else if t != "||" && t != "&&" && t != "!" && t != "(" && t != ")" {
+			return false, false
+		}
+	}
+	// or := and ("||" and)*, and := not ("&&" not)*, not := "!" not | atom
+	i := 0
+	var or, and, not func() (bool, bool)
+	or = func() (bool, bool) {
+		v, ok := and()
+		for ok && i < len(toks) && toks[i] == "||" {
+			i++
+			w, ok2 := and()
+			v, ok = v || w, ok2
+		}
+		return v, ok
+	}
+	and = func() (bool, bool) {
+		v, ok := not()
+		for ok && i < len(toks) && toks[i] == "&&" {
+			i++
+			w, ok2 := not()
+			v, ok = v && w, ok2
+		}
+		return v, ok
+	}
+	not = func() (bool, bool) {
+		if i >= len(toks) {
+			return false, false
+		}
+		t := toks[i]
+		i++
+		switch {
+		case t == "!":
+			v, ok := not()
+			return !v, ok
+		case t == "(":
+			v, ok := or()
+			if !ok || i >= len(toks) || toks[i] != ")" {
+				return false, false
+			}
+			i++
+			return v, true
+		case strings.HasPrefix(t, "D_"):
+			return macros[t[2:]], true
+		}
+		return false, false
+	}
+	v, ok = or()
+	return v, ok && i == len(toks)
+}
+
+// selectTarget blanks the lines of code in #if branches the platform the
+// macros are for cannot take. A condition that asks anything other than
+// which platform this is keeps both its branches.
+func selectTarget(code []byte, macros map[string]bool) []byte {
+	if macros == nil {
+		return code
+	}
+	lines := strings.Split(string(code), "\n")
+	// Each level: whether the enclosing level is live, whether a branch here
+	// was surely taken, and whether this branch is live.
+	type level struct{ outer, taken, live bool }
+	var stack []level
+	live := true
+	for i := 0; i < len(lines); i++ {
+		m := directive.FindStringSubmatch(lines[i])
+		if m == nil {
+			if !live {
+				lines[i] = ""
+			}
+			continue
+		}
+		// A condition can go on past a backslash at the end of the line.
+		kw, rest := m[1], strings.TrimSpace(m[2])
+		lines[i] = ""
+		for strings.HasSuffix(rest, "\\") && i+1 < len(lines) {
+			i++
+			rest = strings.TrimSuffix(rest, "\\") + " " + strings.TrimSpace(lines[i])
+			lines[i] = ""
+		}
+		switch kw {
+		case "if", "ifdef", "ifndef":
+			if kw == "ifdef" {
+				rest = "defined(" + rest + ")"
+			} else if kw == "ifndef" {
+				rest = "!defined(" + rest + ")"
+			}
+			v, ok := evalCond(rest, macros)
+			stack = append(stack, level{live, ok && v, live && (!ok || v)})
+		case "elif":
+			if len(stack) > 0 {
+				top := &stack[len(stack)-1]
+				if top.taken {
+					top.live = false
+				} else {
+					v, ok := evalCond(rest, macros)
+					top.live = top.outer && (!ok || v)
+					top.taken = ok && v
+				}
+			}
+		case "else":
+			if len(stack) > 0 {
+				top := &stack[len(stack)-1]
+				top.live = top.outer && !top.taken
+				top.taken = true
+			}
+		case "endif":
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+		if len(stack) > 0 {
+			live = stack[len(stack)-1].live
+		} else {
+			live = true
+		}
+	}
+	return []byte(strings.Join(lines, "\n"))
+}

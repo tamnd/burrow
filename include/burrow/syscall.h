@@ -166,6 +166,60 @@ syscall_wait_status_stop_signal(SyscallWaitStatus w); /* -1 unless Stopped */
 /* The ptrace event of a process stopped at a SIGTRAP, on Linux. -1 elsewhere. */
 Int syscall_wait_status_trap_cause(SyscallWaitStatus w);
 
+/* --------------------------------------------------------------------- time */
+
+/* syscall.Timespec and syscall.Timeval are in ztypes.h, with the system's own
+ * field sizes, which are 32 bits on most 32-bit systems. */
+
+/* Timespec.Unix and Timeval.Unix: the seconds, with the nanoseconds in *nsec,
+ * which may be NULL. */
+int64_t syscall_timespec_unix(const SyscallTimespec *ts, int64_t *nsec);
+int64_t syscall_timeval_unix(const SyscallTimeval *tv, int64_t *nsec);
+
+/* Timespec.Nano, Timeval.Nano and TimespecToNsec: the time in nanoseconds. */
+int64_t syscall_timespec_nano(const SyscallTimespec *ts);
+int64_t syscall_timeval_nano(const SyscallTimeval *tv);
+int64_t syscall_timespec_to_nsec(SyscallTimespec ts);
+
+#if defined(BURROW_OS_WINDOWS)
+/* Timeval.Nanoseconds, which is Nano under the name Windows has. */
+int64_t syscall_timeval_nanoseconds(const SyscallTimeval *tv);
+#else
+/* TimevalToNsec, which Windows does not have. */
+int64_t syscall_timeval_to_nsec(SyscallTimeval tv);
+#endif
+
+/* NsecToTimespec and NsecToTimeval. On Unix a negative time gives a positive
+ * nsec or usec with one second less, and NsecToTimeval rounds up to the next
+ * microsecond. Windows does what Go does there, which is neither: it
+ * truncates toward 0. */
+SyscallTimespec syscall_nsec_to_timespec(int64_t nsec);
+SyscallTimeval syscall_nsec_to_timeval(int64_t nsec);
+
+/* ------------------------------------------------------------- environment */
+
+/* syscall.Getenv: the value of key, from a, and in *found whether it is set at
+ * all. On Unix the environment is read once, the first time it is needed, and
+ * then kept here, so a setenv(3) another library makes after that is not seen,
+ * as in Go. On Windows it is the process's own, each time. A failed
+ * allocation gives the empty string with *found true. */
+BURROW_OWNS(ret) Str syscall_getenv(Alloc *a, Str key, bool *found);
+
+/* syscall.Setenv: set key to value. An empty key, or one with '=' or a NUL in
+ * it, or a value with a NUL, is EINVAL. On Unix the C library's copy is set
+ * too, so C code in the same process sees it. */
+BURROW_OWNS(ret) Error syscall_setenv(Str key, Str value);
+
+/* syscall.Unsetenv, which is not an error when key is not set. */
+BURROW_OWNS(ret) Error syscall_unsetenv(Str key);
+
+/* syscall.Clearenv: unset everything. */
+void syscall_clearenv(void);
+
+/* syscall.Environ: a Slice of Str, "key=value" each, all from a. A failed
+ * allocation gives a nil slice. */
+BURROW_OWNS(ret) Slice syscall_environ(Alloc *a);
+
 /* -------------------------------------------------------- resource usage */
 
 #if defined(BURROW_OS_WINDOWS)
@@ -182,16 +236,9 @@ SyscallFiletime syscall_nsec_to_filetime(int64_t nsec);
  * creation and exit times are dates, and the kernel and user times are
  * amounts. */
 #else
-/* syscall.Timeval and syscall.Rusage are in ztypes.h, with the system's own
- * field sizes, which are 32 bits on most 32-bit systems. Rusage is what wait4
- * says a child used, and the fields a system does not keep are 0. */
-
-/* Timeval.Nano and TimevalToNsec: tv in nanoseconds. */
-int64_t syscall_timeval_nano(const SyscallTimeval *tv);
-int64_t syscall_timeval_to_nsec(SyscallTimeval tv);
-
-/* NsecToTimeval, which rounds up to the next microsecond, as Go's does. */
-SyscallTimeval syscall_nsec_to_timeval(int64_t nsec);
+/* syscall.Rusage is in ztypes.h, with the system's own field sizes, which are
+ * 32 bits on most 32-bit systems. It is what wait4 says a child used, and the
+ * fields a system does not keep are 0. */
 
 /* wait4(2): wait for pid and give back its id. wstatus and rusage may be
  * NULL, and options are the system's own wait4 flags. A signal that arrives
@@ -233,6 +280,18 @@ typedef struct SyscallRawConn {
 BURROW_OWNS(ret) uint8_t *syscall_byte_ptr_from_string(Alloc *a, Str s, Error *err);
 BURROW_OWNS(ret) Slice syscall_byte_slice_from_string(Alloc *a, Str s, Error *err);
 
+/* syscall.StringByteSlice and StringBytePtr, which panic where the others give
+ * EINVAL. Go has deprecated them. A failed allocation gives a nil slice. */
+BURROW_OWNS(ret) Slice syscall_string_byte_slice(Alloc *a, Str s);
+BURROW_OWNS(ret) uint8_t *syscall_string_byte_ptr(Alloc *a, Str s);
+
+/* syscall.Getpagesize: the size of a memory page. */
+Int syscall_getpagesize(void);
+
+/* syscall.Exit: end the process now with code, running nothing on the way
+ * out, as Go's does. */
+BURROW_NORETURN void syscall_exit(Int code);
+
 #if !defined(BURROW_OS_WINDOWS)
 /* syscall.Syscall, Syscall6 and the Raw ones: the system call trap, one of
  * the SYSCALL_SYS_ constants, with the arguments as integers. They return
@@ -259,6 +318,224 @@ Uintptr syscall_raw_syscall6(Uintptr trap, Uintptr a1, Uintptr a2, Uintptr a3,
 Uintptr syscall_syscall9(Uintptr trap, Uintptr a1, Uintptr a2, Uintptr a3, Uintptr a4,
                          Uintptr a5, Uintptr a6, Uintptr a7, Uintptr a8, Uintptr a9,
                          Uintptr *r2, SyscallErrno *err);
+#endif
+#endif
+
+#if !defined(BURROW_OS_WINDOWS)
+/* -------------------------------------------------------------------- Unix */
+
+/* syscall.Stdin, Stdout and Stderr: 0, 1 and 2, as variables, since Go has
+ * them as variables. */
+extern Int syscall_stdin;
+extern Int syscall_stdout;
+extern Int syscall_stderr;
+
+/* read(2), write(2), pread(2) and pwrite(2) on p's bytes. They give back what
+ * the call did, which is -1 with the Errno in *err when it failed. */
+Int syscall_read(Int fd, Slice p, Error *err);
+Int syscall_write(Int fd, Slice p, Error *err);
+Int syscall_pread(Int fd, Slice p, int64_t offset, Error *err);
+Int syscall_pwrite(Int fd, Slice p, int64_t offset, Error *err);
+
+/* syscall.SlicePtrFromStrings: the Str values in ss as C strings, in a Slice of
+ * uint8_t * with a NULL after the last, for execve. It fails with EINVAL if a
+ * string has a NUL in it. The pointers and the bytes are one allocation from
+ * a, which syscall_slice_ptr_free gives back. */
+BURROW_OWNS(ret) Slice syscall_slice_ptr_from_strings(Alloc *a, Slice ss, Error *err);
+
+/* syscall.StringSlicePtr, which panics where SlicePtrFromStrings gives EINVAL.
+ * Go has deprecated it. */
+BURROW_OWNS(ret) Slice syscall_string_slice_ptr(Alloc *a, Slice ss);
+
+/* Gives back what syscall_slice_ptr_from_strings or syscall_string_slice_ptr
+ * made from a. A nil slice is fine. */
+void syscall_slice_ptr_free(Alloc *a, Slice bb);
+
+/* syscall.CloseOnExec: mark fd to be closed in a child exec starts, ignoring
+ * any error, as Go does. */
+void syscall_close_on_exec(Int fd);
+
+/* syscall.SetNonblock: turn O_NONBLOCK on fd on or off. */
+BURROW_OWNS(ret) Error syscall_set_nonblock(Int fd, bool nonblocking);
+
+/* syscall.Mmap: map length bytes of fd from offset, with the system's PROT_
+ * and MAP_ flags, and give them back as a Slice of bytes. A length of 0 or
+ * less is EINVAL. syscall_munmap undoes it, and only takes the whole slice
+ * Mmap gave, as in Go, so anything else is EINVAL. */
+BURROW_OWNS(ret) Slice syscall_mmap(Int fd, int64_t offset, Int length, Int prot,
+                                    Int flags, Error *err);
+BURROW_OWNS(ret) Error syscall_munmap(Slice b);
+
+/* Iovec.SetLen, Msghdr.SetControllen and Cmsghdr.SetLen, which set a length
+ * whose width depends on the system. */
+void syscall_iovec_set_len(SyscallIovec *iov, Int length);
+void syscall_msghdr_set_controllen(SyscallMsghdr *msghdr, Int length);
+void syscall_cmsghdr_set_len(SyscallCmsghdr *cmsg, Int length);
+#endif
+
+#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO) || defined(BURROW_OS_WASI)
+/* ------------------------------------------------------------------- Linux */
+
+/* The path calls, each the at form with AT_FDCWD as Go does it. Open and
+ * Openat add O_LARGEFILE, which is 0 on 64-bit systems. Creat is Open with
+ * O_CREAT, O_WRONLY and O_TRUNC, Rmdir is unlinkat with AT_REMOVEDIR, and
+ * Mkfifo is Mknod with S_IFIFO. */
+BURROW_OWNS(ret) Error syscall_access(Str path, uint32_t mode);
+BURROW_OWNS(ret) Error syscall_chmod(Str path, uint32_t mode);
+BURROW_OWNS(ret) Error syscall_chown(Str path, Int uid, Int gid);
+Int syscall_creat(Str path, uint32_t mode, Error *err);
+BURROW_OWNS(ret) Error syscall_link(Str oldpath, Str newpath);
+BURROW_OWNS(ret) Error syscall_mkdir(Str path, uint32_t mode);
+BURROW_OWNS(ret) Error syscall_mknod(Str path, uint32_t mode, Int dev);
+BURROW_OWNS(ret) Error syscall_mkfifo(Str path, uint32_t mode);
+Int syscall_open(Str path, Int mode, uint32_t perm, Error *err);
+Int syscall_openat(Int dirfd, Str path, Int flags, uint32_t mode, Error *err);
+Int syscall_readlink(Str path, Slice buf, Error *err);
+BURROW_OWNS(ret) Error syscall_rename(Str oldpath, Str newpath);
+BURROW_OWNS(ret) Error syscall_rmdir(Str path);
+BURROW_OWNS(ret) Error syscall_symlink(Str oldpath, Str newpath);
+BURROW_OWNS(ret) Error syscall_unlink(Str path);
+BURROW_OWNS(ret) Error syscall_unlinkat(Int dirfd, Str path);
+
+/* Faccessat: faccessat2 when there are flags, and when the kernel does not
+ * have it, the checks the C library makes, from the file's mode, owner and
+ * group, as Go does. Only AT_SYMLINK_NOFOLLOW and AT_EACCESS are known. */
+BURROW_OWNS(ret) Error syscall_faccessat(Int dirfd, Str path, uint32_t mode, Int flags);
+
+/* Fchmodat: fchmodat2 when there are flags. A kernel without it gives
+ * EOPNOTSUPP for AT_SYMLINK_NOFOLLOW and AT_EMPTY_PATH, and EINVAL for any
+ * other flag. */
+BURROW_OWNS(ret) Error syscall_fchmodat(Int dirfd, Str path, uint32_t mode, Int flags);
+
+/* EpollCreate: EpollCreate1(0), and EINVAL for a size of 0 or less. */
+Int syscall_epoll_create(Int size, Error *err);
+
+/* Pipe and Pipe2: the two ends in p, a Slice of Int that has to have a
+ * length of 2, or it is EINVAL. */
+BURROW_OWNS(ret) Error syscall_pipe(Slice p);
+BURROW_OWNS(ret) Error syscall_pipe2(Slice p, Int flags);
+
+/* Utimes, Futimesat and Futimes take a Slice of two SyscallTimeval, and
+ * UtimesNano two SyscallTimespec, the access time and then the modification
+ * time. Any other length is EINVAL. Futimes goes through /proc/self/fd, as the
+ * C library does. */
+BURROW_OWNS(ret) Error syscall_utimes(Str path, Slice tv);
+BURROW_OWNS(ret) Error syscall_utimes_nano(Str path, Slice ts);
+BURROW_OWNS(ret) Error syscall_futimesat(Int dirfd, Str path, Slice tv);
+BURROW_OWNS(ret) Error syscall_futimes(Int fd, Slice tv);
+
+/* Getwd: the working directory, from a. A path that is not absolute, which
+ * Linux gives as "(unreachable)" and the rest, is ENOENT. */
+BURROW_OWNS(ret) Str syscall_getwd(Alloc *a, Error *err);
+
+/* Getgroups: the supplementary group ids, a Slice of Int from a, nil if there
+ * are none. */
+BURROW_OWNS(ret) Slice syscall_getgroups(Alloc *a, Error *err);
+
+/* Mount: mount(2), with data passed as NULL when it is empty. */
+BURROW_OWNS(ret) Error syscall_mount(Str source, Str target, Str fstype, Uintptr flags,
+                                     Str data);
+
+/* Reboot: reboot(2) with the two magic numbers. cmd is a LINUX_REBOOT_CMD_
+ * constant. */
+BURROW_OWNS(ret) Error syscall_reboot(Int cmd);
+
+/* Getpgrp: Getpgid(0). */
+Int syscall_getpgrp(void);
+
+/* Getrlimit and Setrlimit, through prlimit64 on this process. */
+BURROW_OWNS(ret) Error syscall_getrlimit(Int resource, SyscallRlimit *rlim);
+BURROW_OWNS(ret) Error syscall_setrlimit(Int resource, SyscallRlimit *rlim);
+
+/* Sendfile: sendfile(2), from offset when it is not NULL. */
+Int syscall_sendfile(Int outfd, Int infd, int64_t *offset, Int count, Error *err);
+
+/* FcntlFlock: fcntl with F_GETLK, F_SETLK or F_SETLKW, and fcntl64 on 32-bit
+ * systems. */
+BURROW_OWNS(ret) Error syscall_fcntl_flock(Uintptr fd, Int cmd, SyscallFlock_t *lk);
+
+/* ReadDirent: Getdents. ParseDirent: the names in the dirents at the start of
+ * buf, up to max of them, or all of them when max is -1, leaving out . and
+ * .., appended to names from a and given back in *newnames, with how many in
+ * *count. It returns how many bytes of buf it used. */
+Int syscall_read_dirent(Int fd, Slice buf, Error *err);
+Int syscall_parse_dirent(Alloc *a, Slice buf, Int max, Slice names, Int *count,
+                         Slice *newnames);
+
+/* The ptrace helpers. Peek and Poke read and write the tracee's memory a word
+ * at a time, so addr need not be aligned, and give back how many bytes they
+ * did. GetRegs and SetRegs use PTRACE_GETREGSET and PTRACE_SETREGSET. */
+Int syscall_ptrace_peek_text(Int pid, Uintptr addr, Slice out, Error *err);
+Int syscall_ptrace_peek_data(Int pid, Uintptr addr, Slice out, Error *err);
+Int syscall_ptrace_poke_text(Int pid, Uintptr addr, Slice data, Error *err);
+Int syscall_ptrace_poke_data(Int pid, Uintptr addr, Slice data, Error *err);
+BURROW_OWNS(ret) Error syscall_ptrace_get_regs(Int pid, SyscallPtraceRegs *regsout);
+BURROW_OWNS(ret) Error syscall_ptrace_set_regs(Int pid, SyscallPtraceRegs *regs);
+BURROW_OWNS(ret) Error syscall_ptrace_set_options(Int pid, Int options);
+Uint syscall_ptrace_get_event_msg(Int pid, Error *err);
+BURROW_OWNS(ret) Error syscall_ptrace_cont(Int pid, Int signal);
+BURROW_OWNS(ret) Error syscall_ptrace_syscall(Int pid, Int signal);
+BURROW_OWNS(ret) Error syscall_ptrace_single_step(Int pid);
+BURROW_OWNS(ret) Error syscall_ptrace_attach(Int pid);
+BURROW_OWNS(ret) Error syscall_ptrace_detach(Int pid);
+
+#if defined(BURROW_ARCH_LOONG64)
+/* PtraceRegs.GetEra and SetEra, which loong64 has in place of PC. */
+uint64_t syscall_ptrace_regs_get_era(const SyscallPtraceRegs *r);
+void syscall_ptrace_regs_set_era(SyscallPtraceRegs *r, uint64_t era);
+#else
+/* PtraceRegs.PC and SetPC: the program counter, whatever the architecture
+ * calls it. */
+uint64_t syscall_ptrace_regs_pc(const SyscallPtraceRegs *r);
+void syscall_ptrace_regs_set_pc(SyscallPtraceRegs *r, uint64_t pc);
+#endif
+
+/* The ones Go writes by hand on some architectures and generates on the rest,
+ * so syscall/zsyscall.h has them where they are generated. */
+#if defined(BURROW_ARCH_AMD64)
+BURROW_OWNS(ret) Error syscall_gettimeofday(SyscallTimeval *tv);
+#endif
+#if !defined(BURROW_ARCH_386) && !defined(BURROW_ARCH_ARM) &&                          \
+    !defined(BURROW_ARCH_PPC64)
+/* Time: the seconds Gettimeofday gives, also in *t when it is not NULL. */
+SyscallTime_t syscall_time(SyscallTime_t *t, Error *err);
+#endif
+#if !defined(BURROW_ARCH_PPC64) && !defined(BURROW_ARCH_S390X) &&                      \
+    !defined(BURROW_ARCH_LOONG64) && !defined(BURROW_ARCH_MIPS64)
+BURROW_OWNS(ret) Error syscall_stat(Str path, SyscallStat_t *stat);
+BURROW_OWNS(ret) Error syscall_lstat(Str path, SyscallStat_t *stat);
+#endif
+#if defined(BURROW_ARCH_ARM64) || defined(BURROW_ARCH_RISCV64)
+BURROW_OWNS(ret) Error syscall_fstatat(Int fd, Str path, SyscallStat_t *stat,
+                                       Int flags);
+#endif
+#if !defined(BURROW_ARCH_MIPS64) && !defined(BURROW_ARCH_PPC64) &&                     \
+    !defined(BURROW_ARCH_S390X)
+BURROW_OWNS(ret) Error syscall_lchown(Str path, Int uid, Int gid);
+#endif
+#if defined(BURROW_ARCH_RISCV64)
+BURROW_OWNS(ret) Error syscall_renameat(Int olddirfd, Str oldpath, Int newdirfd,
+                                        Str newpath);
+#endif
+#if defined(BURROW_ARCH_386) || defined(BURROW_ARCH_ARM)
+int64_t syscall_seek(Int fd, int64_t offset, Int whence, Error *err);
+BURROW_OWNS(ret) Error syscall_fstatfs(Int fd, SyscallStatfs_t *buf);
+BURROW_OWNS(ret) Error syscall_statfs(Str path, SyscallStatfs_t *buf);
+#endif
+#if defined(BURROW_ARCH_ARM64) || defined(BURROW_ARCH_RISCV64) ||                      \
+    defined(BURROW_ARCH_LOONG64) || defined(BURROW_ARCH_MIPS64)
+Int syscall_select(Int nfd, SyscallFdSet *r, SyscallFdSet *w, SyscallFdSet *e,
+                   SyscallTimeval *timeout, Error *err);
+#endif
+#if defined(BURROW_ARCH_ARM64) || defined(BURROW_ARCH_RISCV64) ||                      \
+    defined(BURROW_ARCH_LOONG64)
+BURROW_OWNS(ret) Error syscall_utime(Str path, SyscallUtimbuf *buf);
+Int syscall_inotify_init(Error *err);
+BURROW_OWNS(ret) Error syscall_pause(void);
+#endif
+#if defined(BURROW_ARCH_PPC64)
+BURROW_OWNS(ret) Error syscall_sync_file_range(Int fd, int64_t off, int64_t n,
+                                               Int flags);
 #endif
 #endif
 

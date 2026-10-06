@@ -4,6 +4,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+/* burrow:package net */
+
 #ifndef BURROW_SRC_NET_INTERNAL_H
 #define BURROW_SRC_NET_INTERNAL_H
 

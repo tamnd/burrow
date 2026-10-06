@@ -336,11 +336,14 @@ static void TestNameRoundTrip(TestingT *t) {
         testing_t_fatalf_v(t, "%v", err);
     PkixName m = {0};
     CHECK(pkix_name_fill_from_rdn_sequence(&m, a, &back));
-    CHECK_STR_EQ(cz(a, pkix_name_string(m, a)), "CN=example.com,O=Example+O=Two,C=NZ");
+    /* DER sorts a SET OF by encoding, so the two O values come back swapped,
+     * the same as in Go. */
+    CHECK_STR_EQ(cz(a, pkix_name_string(m, a)), "CN=example.com,O=Two+O=Example,C=NZ");
     CHECK_STR_EQ(cz(a, pkix_name_string(n, a)), "CN=example.com,O=Example+O=Two,C=NZ");
     CHECK_INT_EQ(m.names.len, 4);
     CHECK_INT_EQ(m.organization.len, 2);
     CHECK_STR_EQ(cz(a, m.common_name), "example.com");
+    CHECK_STR_EQ(cz(a, *(const Str *)slice_at(m.organization, 0)), "Two");
 
     /* An empty name has no RDNs at all. */
     PkixName empty = {0};

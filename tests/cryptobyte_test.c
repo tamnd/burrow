@@ -1368,6 +1368,31 @@ static void TestBurrow(TestingT *t) {
     arena_free(&ar);
 }
 
+/* x509 reads a string into itself, which only works if the bytes are taken
+ * before the string moves on. */
+static void TestReadIntoItself(TestingT *t) {
+    static const Byte der[] = {0x30, 0x05, 0x02, 0x01, 0x07, 0x05, 0x00, 0xff};
+    CryptobyteString s = bs(der, sizeof der);
+    if (!cryptobyte_string_read_asn1_element(&s, &s, CRYPTOBYTE_ASN1_SEQUENCE)) {
+        testing_t_fatalf_v(t, "ReadASN1Element(&s, &s) failed");
+        return;
+    }
+    if (s.len != 7 || s.p != der)
+        testing_t_errorf_v(t, "after ReadASN1Element(&s, &s), len = %d, want 7", s.len);
+    if (!cryptobyte_string_read_asn1(&s, &s, CRYPTOBYTE_ASN1_SEQUENCE)) {
+        testing_t_fatalf_v(t, "ReadASN1(&s, &s) failed");
+        return;
+    }
+    if (s.len != 5 || s.p != der + 2)
+        testing_t_errorf_v(t, "after ReadASN1(&s, &s), len = %d, want 5", s.len);
+    Slice b;
+    s = bs(der, sizeof der);
+    if (!cryptobyte_string_read_bytes(&s, &s, 3) || s.len != 3 || s.p != der)
+        testing_t_errorf_v(t, "ReadBytes(&s, &s, 3) left len = %d, want 3", s.len);
+    if (!cryptobyte_string_read_bytes(&s, &b, 3) || b.len != 3 || s.len != 0)
+        testing_t_errorf_v(t, "ReadBytes after it, len = %d, want 0", s.len);
+}
+
 static void bytes_or_panic(void *env) {
     cryptobyte_builder_bytes_or_panic(env);
 }
@@ -1417,6 +1442,7 @@ static void TestPanics(TestingT *t) {
     X(TestAddASN1BigInt)                                                               \
     X(TestReadASN1Boolean)                                                             \
     X(TestBurrow)                                                                      \
+    X(TestReadIntoItself)                                                              \
     X(TestPanics)
 
 TESTING_MAIN(TESTS)

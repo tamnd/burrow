@@ -426,7 +426,8 @@ Error burrow__netfd_socket(burrow__NetFD *fd, Str net, int32_t family, int32_t s
     }
     nf_new(fd, s, family, sotype, net);
 
-    if (laddr != NULL && raddr == NULL && sotype == PAL_SOCK_STREAM)
+    if (laddr != NULL && raddr == NULL &&
+        (sotype == PAL_SOCK_STREAM || sotype == PAL_SOCK_SEQPACKET))
         e = nf_listen_stream(fd, laddr, to_sockaddr);
     else if (laddr != NULL && raddr == NULL && sotype == PAL_SOCK_DGRAM)
         e = nf_listen_datagram(fd, laddr, group, to_sockaddr);

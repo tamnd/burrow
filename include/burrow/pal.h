@@ -1528,7 +1528,12 @@ bool pal_user_lookup(int64_t uid, PalUser *out, PalErrno *err);
  * PAL_ENOSYS there. */
 
 enum { PAL_AF_UNSPEC = 0, PAL_AF_INET = 1, PAL_AF_INET6 = 2, PAL_AF_UNIX = 3 };
-enum { PAL_SOCK_STREAM = 1, PAL_SOCK_DGRAM = 2, PAL_SOCK_RAW = 3 };
+enum {
+    PAL_SOCK_STREAM = 1,
+    PAL_SOCK_DGRAM = 2,
+    PAL_SOCK_RAW = 3,
+    PAL_SOCK_SEQPACKET = 4
+};
 enum { PAL_IPPROTO_TCP = 6, PAL_IPPROTO_UDP = 17 };
 
 /* An address, in host byte order everywhere a number appears. addr holds four

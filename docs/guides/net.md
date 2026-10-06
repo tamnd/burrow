@@ -321,6 +321,74 @@ A datagram is read whole. When it is longer than the buffer, the rest of it is l
 
 `ListenMulticastUDP`, `ReadMsgUDP` and `WriteMsgUDP` are still to come, and Windows and wasip1 are where TCP is: a dial or a listen on Windows fails with `ENOSYS` for now, and wasip1 has no sockets.
 
+## Unix
+
+`net_listen_unix`, `net_listen_unixgram` and `net_dial_unix` are Go's `ListenUnix`, `ListenUnixgram` and `DialUnix`. The networks are the three Go has: "unix" for streams, "unixgram" for datagrams and "unixpacket" for sequenced packets, which keep each write apart the way datagrams do but are connected the way streams are. A `NetUnixAddr` is a name and a network, and the name is a path:
+
+<!-- example: ../examples/net/unix.c#unix -->
+```c
+Error err;
+Str dir = os_mkdir_temp(heap_allocator(), BURROW_STR_EMPTY, BURROW_S("ex"), &err);
+if (BURROW_FAILED(err))
+    return;
+Str path = filepath_join_v(heap_allocator(), 2, dir, BURROW_S("echo.sock"));
+NetUnixAddr addr = {path, BURROW_S("unix")};
+NetUnixListener *l =
+    net_listen_unix(heap_allocator(), BURROW_S("unix"), &addr, &err);
+if (l == NULL)
+    return;
+
+NetUnixConn *client =
+    net_dial_unix(heap_allocator(), BURROW_S("unix"), NULL, &addr, &err);
+NetUnixConn *server = net_unix_listener_accept_unix(l, &err);
+if (client == NULL || server == NULL)
+    return;
+
+char hello[] = "hello";
+(void)net_unix_conn_write(client, slice_from(hello, 5, 5, TYPE_BYTE), &err);
+Byte buf[64];
+Int n = net_unix_conn_read(server, slice_from(buf, 0, (Int)sizeof buf, TYPE_BYTE),
+                           &err);
+printf("%.*s\n", (int)n, (const char *)buf);
+
+/* The server's end is named for the path the listener is on. */
+const NetUnixAddr *local = net_unix_conn_local_addr(server).data;
+printf("same path: %d\n", str_eq(local->name, path));
+
+net_unix_conn_free(client);
+net_unix_conn_free(server);
+
+/* Closing a listener removes the file it made, as Go's does. */
+net_unix_listener_free(l);
+(void)os_lstat(heap_allocator(), path, &err);
+printf("gone: %d\n", os_is_not_exist(err));
+(void)os_remove_all(dir);
+mem_free(heap_allocator(), (void *)(uintptr_t)path.p, (size_t)path.len, 1);
+mem_free(heap_allocator(), (void *)(uintptr_t)dir.p, (size_t)dir.len, 1);
+
+/* Errors read the way Go's do. */
+NetUnixAddr there = {BURROW_S("/run/app.sock"), BURROW_S("unix")};
+if (net_listen_unix(heap_allocator(), BURROW_S("unixgram"), &there, &err) == NULL) {
+    Str msg = error_text(err);
+    printf("%.*s\n", (int)msg.len, (const char *)msg.p);
+}
+```
+
+That prints:
+
+```
+hello
+same path: 1
+gone: 1
+listen unixgram /run/app.sock: unknown network unixgram
+```
+
+A listener made by `net_listen_unix` removes its file when it closes, and so does `net_unix_listener_free`. `net_unix_listener_set_unlink_on_close` turns that off, for a socket file that should outlive the program. A socket from `net_listen_unixgram` never removes its file, which is what Go does too.
+
+On Linux a name that starts with "@" is in the abstract namespace, has no file, and goes away with the last socket on it. Listening on an empty name binds to a fresh abstract name, and a socket that was never bound is called "@" there and "" everywhere else, so those are the names a dialer's end and an unbound sender have. A name has to fit in the system's sockaddr, which is 107 bytes on Linux and 103 on macOS and the BSDs, and a longer one fails with "bind: invalid argument" as it does in Go.
+
+The datagram functions are the UDP ones with a `NetUnixAddr` in place of a `NetUDPAddr`: `net_unix_conn_read_from_unix` makes the sender's address in the allocator it is given, and `net_unix_conn_write_to_unix` sends to a name. `ReadMsgUnix`, `WriteMsgUnix` and the `File` methods, which pass descriptors, are still to come, and Windows is where TCP is for now.
+
 ## URLs
 
 `url_parse` splits a URL into a `Url` with the same fields as Go's `url.URL`. `path` holds the decoded path and `url_escaped_path` gives back the form that goes on the wire. The parse makes one allocation that holds the `Url` and every string in it, so the input can go away while the `Url` lives, and `url_free` gives it back. With an arena you do not need to free at all. In these examples `P(s)` is short for `(int)(s).len, (const char *)(s).p`, the two arguments that `%.*s` wants:

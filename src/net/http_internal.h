@@ -124,6 +124,83 @@ BURROW_STATIC(ret) Error burrow__http_chunked_writer_close(HttpChunkedWriter *cw
 BURROW_BORROWS(ret, cw) IoWriteCloser
 burrow__http_chunked_writer_as_io_write_closer(HttpChunkedWriter *cw);
 
+/* ------------------------------------------------------------ transfer
+ *
+ * The reading half of transfer.go, which works out from a header how long a
+ * body is and how it comes, and the body that reads it. */
+
+/* badStringError, fmt.Errorf("%s %q", what, val). */
+BURROW_BORROWS(ret) Error burrow__http_bad_string_error(Str what, Str val);
+
+/* errTooLarge, "http: request too large". */
+extern const Error burrow__http_err_too_large;
+
+/* maxPostHandlerReadBytes, the most of a body a server reads past what its
+ * handler did, to keep the connection. */
+#define BURROW__HTTP_MAX_POST_HANDLER_READ_BYTES ((int64_t)256 << 10)
+
+/* httplaxcontentlength=1 in GODEBUG, which takes an empty Content-Length as no
+ * Content-Length at all. */
+bool burrow__http_godebug_lax_content_length(void);
+
+/* parseContentLength. The length in the first of the Content-Length values cl,
+ * a Slice of Str, or -1 when there are none. */
+int64_t burrow__http_parse_content_length(Slice cl, Error *err);
+
+/* shouldClose. Whether the connection closes after a message with this
+ * version and header. With remove_close_header, a "Connection: close" field
+ * is taken out of an HTTP/1.1 header. */
+bool burrow__http_should_close(Int major, Int minor, HttpHeader header,
+                               bool remove_close_header);
+
+/* transferReader.parseTransferEncoding. Sets chunked from the
+ * Transfer-Encoding field of header, which it takes out of header. */
+BURROW_BORROWS(ret) Error burrow__http_parse_transfer_encoding(HttpHeader header,
+                                                               Int major, Int minor,
+                                                               bool *chunked);
+
+/* isUnsupportedTEError. Whether err is the error readTransfer gives for a
+ * Transfer-Encoding it does not do. */
+bool burrow__http_is_unsupported_te_error(Error err);
+
+/* readTransfer. Works out the body of req or resp, whichever is not NULL,
+ * from its header, and sets its body, content_length, transfer_encoding,
+ * close and trailer. The body reads from r. A chunked body reads its trailer
+ * with at most max_trailer_headers fields. */
+BURROW_BORROWS(ret) Error burrow__http_read_transfer(HttpRequest *req,
+                                                     HttpResponse *resp, BufioReader *r,
+                                                     int64_t max_trailer_headers);
+
+/* Frees the body read_transfer made, which is the wire field of the message.
+ * NULL is fine. */
+void burrow__http_body_free(void *body);
+
+/* A body as Go's tests make one, reading src, and the trailer from r into
+ * *trailer after src ends when trailer is not NULL. Its data is the body to
+ * free, and it is zero when a says no. */
+BURROW_OWNS(ret) IoReadCloser burrow__http_new_body(Alloc *a, IoReader src,
+                                                    HttpHeader *trailer,
+                                                    BufioReader *r);
+
+/* body.didEarlyClose, body.bodyRemains and doEarlyClose, for the server. */
+bool burrow__http_body_did_early_close(void *body);
+bool burrow__http_body_remains(void *body);
+void burrow__http_body_set_do_early_close(void *body, bool on);
+
+/* readRequestLimit. readRequest, which is http_read_request without taking
+ * Host out of the header, with a limit on the header fields. */
+BURROW_OWNS(ret) HttpRequest *burrow__http_read_request_limit(Alloc *a, BufioReader *b,
+                                                              int64_t max_headers,
+                                                              Error *err);
+
+/* fixPragmaCacheControl. "Pragma: no-cache" means "Cache-Control: no-cache"
+ * when there is no Cache-Control. False when the header's allocator says no. */
+bool burrow__http_fix_pragma_cache_control(HttpHeader header);
+
+/* parseBasicAuth. The user name and password in "Basic " and their base64,
+ * decoded into a. */
+bool burrow__http_parse_basic_auth(Alloc *a, Str auth, Str *username, Str *password);
+
 /* The parts of Protocols that are not exported. */
 bool burrow__http_protocols_http3(HttpProtocols p);
 void burrow__http_protocols_set_http3(HttpProtocols *p, bool ok);

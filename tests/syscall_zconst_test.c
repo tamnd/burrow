@@ -209,6 +209,12 @@ static void check_const(TestingT *t, const char *name, unsigned long long got,
                 (unsigned long long)(n), sizeof(n))
 
 static void TestConstantsMatchSystem(TestingT *t) {
+#if defined(BURROW_OS_WASI)
+    /* WASI has Linux's tables until syscall has wasip1's own, so there is
+     * nothing to compare its headers with yet. */
+    (void)check_const;
+    testing_t_skip_v(t, "no wasip1 tables yet");
+#endif
     compared = 0;
     /* macOS marks a few of the kqueue flags deprecated, and naming them is
      * the point here. Some of the system's macros mix signed and unsigned

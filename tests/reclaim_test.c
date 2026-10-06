@@ -216,6 +216,8 @@ static void foreign_reader(void *arg) {
 }
 
 static void TestAThreadThatIsNotAGoroutineHoldsTheEpochToo(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     reset();
     sync_atomic_uint32_store(&reader_pinned, 0);
     sync_atomic_uint32_store(&reader_release, 0);

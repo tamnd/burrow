@@ -433,6 +433,8 @@ static void sha1_check_sum(Sha1Digest *d, Byte out[SHA1_SIZE]) {
 }
 
 static void sha1_update(Sha1Digest *d, const Byte *p, Int n) {
+    if (n == 0)
+        return; /* p may be NULL, and memcpy may not be given one */
     d->len += (uint64_t)n;
     if (d->nx > 0) {
         Int k = SHA1_BLOCK_SIZE - d->nx < n ? SHA1_BLOCK_SIZE - d->nx : n;

@@ -52,6 +52,11 @@ extern "C" {
 #if defined(_MSC_VER)
 #include <intrin.h>
 #define BURROW_RETURN_ADDRESS _ReturnAddress()
+#elif defined(BURROW_ARCH_WASM)
+/* WebAssembly keeps return addresses where no instruction can read them, so
+ * there is no answer to give. A null one is what the panic path already takes
+ * to mean it has no mark, and burrow__callers finds no frames there anyway. */
+#define BURROW_RETURN_ADDRESS ((void *)0)
 #else
 #define BURROW_RETURN_ADDRESS __builtin_return_address(0)
 #endif

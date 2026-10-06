@@ -467,6 +467,8 @@ static void thread_use_it(void *env) {
 }
 
 static void TestThreadsThatAreNotGoroutinesShareAOnceAndAWaitGroup(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     memset(&once, 0, sizeof(once));
     memset(&thread_wg, 0, sizeof(thread_wg));
     sync_atomic_int64_store(&ran, 0);

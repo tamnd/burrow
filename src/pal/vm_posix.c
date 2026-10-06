@@ -28,7 +28,7 @@
 
 #include "burrow/platform.h"
 
-#if !defined(BURROW_OS_WINDOWS)
+#if !defined(BURROW_OS_WINDOWS) && !defined(BURROW_OS_WASI)
 
 #include "burrow/pal.h"
 
@@ -165,4 +165,4 @@ bool pal_vm_guard(void *addr, int64_t bytes, PalErrno *err) {
     return true;
 }
 
-#endif /* !BURROW_OS_WINDOWS */
+#endif /* !BURROW_OS_WINDOWS && !BURROW_OS_WASI */

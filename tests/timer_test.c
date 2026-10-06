@@ -597,6 +597,7 @@ static void spin_until_the_timer(void *env) {
 }
 
 static void TestATimerOnABusyPIsRunByAnotherThread(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
     armed = false;
     waited = 0;
     fired_flag = 0;

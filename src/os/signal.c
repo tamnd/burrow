@@ -242,11 +242,19 @@ static void notify_watch(void) {
         return;
     notify_table.watching = true;
 
+#if defined(BURROW_OS_WASI)
+    /* No signal ever arrives on wasip1, where Go's signal_enable does nothing,
+     * and there is only the one thread. A reader would wait for ever and take
+     * the thread every goroutine runs on with it. */
+    (void)notify_loop;
+    return;
+#else
     burrow__Thread t;
     if (!burrow__thread_start(&t, notify_loop, NULL, 0))
         runtime_throw(
             BURROW_S("os/signal: cannot start the thread that delivers signals"));
     (void)burrow__thread_detach(&t);
+#endif
 }
 
 /* ------------------------------------------------------------- Notify */

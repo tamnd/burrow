@@ -306,6 +306,9 @@ static Error linux_futimesat(Int dirfd, Str path, SyscallTimeval *tv) {
     return linux_utimensat_tv(dirfd, path, tv);
 }
 
+#if defined(BURROW_ARCH_ARM64) || defined(BURROW_ARCH_RISCV64) ||                      \
+    defined(BURROW_ARCH_LOONG64)
+/* wasip1 sets times through utimensat as well, but has no Utime in Go. */
 Error syscall_utime(Str path, SyscallUtimbuf *buf) {
     SyscallTimeval tv[2];
     memset(tv, 0, sizeof tv);
@@ -313,6 +316,7 @@ Error syscall_utime(Str path, SyscallUtimbuf *buf) {
     LINUX_SET(tv[1].sec, buf->modtime);
     return syscall_utimes(path, (Slice){tv, 2, 2, NULL});
 }
+#endif
 #else
 static Error linux_utimes(Str path, SyscallTimeval *tv) {
     return burrow__syscall_utimes(path, tv);

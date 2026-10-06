@@ -634,6 +634,8 @@ static void factorial_worker(void *arg) {
 }
 
 static void TestThreads(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     enum { N = 4 };
     burrow__Thread th[N];
     Str out[N];

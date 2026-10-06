@@ -46,6 +46,17 @@ static void TestErrorText(TestingT *t) {
         SyscallErrno e;
         const char *want;
     } tests[] = {
+#if defined(BURROW_OS_WASI)
+        /* Go's wasip1 table has its own wording, in capitals. */
+        {SYSCALL_ENOENT, "No such file or directory"},
+        {SYSCALL_EACCES, "Permission denied"},
+        {SYSCALL_EEXIST, "File exists"},
+        {SYSCALL_EINVAL, "Invalid argument"},
+        {SYSCALL_EPIPE, "Broken pipe"},
+        {SYSCALL_ENOTDIR, "Not a directory"},
+        {SYSCALL_EISDIR, "Is a directory"},
+        {SYSCALL_EBADF, "Bad file number"},
+#else
         {SYSCALL_ENOENT, "no such file or directory"},
         {SYSCALL_EACCES, "permission denied"},
         {SYSCALL_EEXIST, "file exists"},
@@ -54,6 +65,7 @@ static void TestErrorText(TestingT *t) {
         {SYSCALL_ENOTDIR, "not a directory"},
         {SYSCALL_EISDIR, "is a directory"},
         {SYSCALL_EBADF, "bad file descriptor"},
+#endif
     };
     for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
 #if defined(BURROW_OS_WINDOWS)
@@ -94,11 +106,16 @@ static void TestErrorTextUnknown(TestingT *t) {
     got = syscall_errno_error(9999, a);
     if (!str_is(got, "errno 9999"))
         testing_t_errorf_v(t, "Errno(9999).Error() = %q, want %q", got, "errno 9999");
-    /* int(e), so the top half prints negative. */
+    /* int(e), so the top half prints negative. Except on wasip1, where Errno is
+     * a uint32 and int has 64 bits. */
+#if defined(BURROW_OS_WASI)
+    const char *want = "errno 4294967295";
+#else
+    const char *want = "errno -1";
+#endif
     got = syscall_errno_error((SyscallErrno)-1, a);
-    if (!str_is(got, "errno -1"))
-        testing_t_errorf_v(t, "Errno(^uintptr(0)).Error() = %q, want %q", got,
-                           "errno -1");
+    if (!str_is(got, want))
+        testing_t_errorf_v(t, "Errno(^uintptr(0)).Error() = %q, want %q", got, want);
 #endif
     ARENA_END;
 }
@@ -117,6 +134,13 @@ static void TestErrorTextInvented(TestingT *t) {
 }
 #endif
 
+/* Go's wasip1 counts only ENOSYS as unsupported. */
+#if defined(BURROW_OS_WASI)
+#define NOTSUP_IS_UNSUPPORTED false
+#else
+#define NOTSUP_IS_UNSUPPORTED true
+#endif
+
 static void TestIs(TestingT *t) {
     static const struct {
         SyscallErrno e;
@@ -132,8 +156,8 @@ static void TestIs(TestingT *t) {
         {SYSCALL_ENOENT, 2, true},
         {SYSCALL_EEXIST, 2, false},
         {SYSCALL_ENOSYS, 3, true},
-        {SYSCALL_ENOTSUP, 3, true},
-        {SYSCALL_EOPNOTSUPP, 3, true},
+        {SYSCALL_ENOTSUP, 3, NOTSUP_IS_UNSUPPORTED},
+        {SYSCALL_EOPNOTSUPP, 3, NOTSUP_IS_UNSUPPORTED},
         {SYSCALL_EINVAL, 3, false},
 #if defined(BURROW_OS_WINDOWS)
         {SYSCALL_ERROR_ACCESS_DENIED, 0, true},
@@ -166,15 +190,17 @@ static void TestIs(TestingT *t) {
 
 static void TestTimeoutTemporary(TestingT *t) {
     CHECK(syscall_errno_timeout(SYSCALL_EAGAIN));
+#if !defined(BURROW_OS_WASI)
     CHECK(syscall_errno_timeout(SYSCALL_EWOULDBLOCK));
+#endif
     CHECK(syscall_errno_timeout(SYSCALL_ETIMEDOUT));
     CHECK(!syscall_errno_timeout(SYSCALL_EINTR));
     CHECK(syscall_errno_temporary(SYSCALL_EINTR));
     CHECK(syscall_errno_temporary(SYSCALL_EMFILE));
     CHECK(syscall_errno_temporary(SYSCALL_EAGAIN));
     CHECK(!syscall_errno_temporary(SYSCALL_ENOENT));
-#if defined(BURROW_OS_WINDOWS)
-    /* syscall_windows.go leaves ENFILE out. */
+#if defined(BURROW_OS_WINDOWS) || defined(BURROW_OS_WASI)
+    /* syscall_windows.go and syscall_wasip1.go leave ENFILE out. */
     CHECK(!syscall_errno_temporary(SYSCALL_ENFILE));
 #else
     CHECK(syscall_errno_temporary(SYSCALL_ENFILE));
@@ -183,17 +209,25 @@ static void TestTimeoutTemporary(TestingT *t) {
 
 /* The Error: its text, errors_is through the Is slot, errors_as back to the
  * number, and the same from inside a PathError. */
+#if defined(BURROW_OS_WASI)
+#define EEXIST_TEXT "File exists" /* Go's wasip1 table */
+#define EPERM_TEXT "Operation not permitted"
+#else
+#define EEXIST_TEXT "file exists"
+#define EPERM_TEXT "operation not permitted"
+#endif
+
 static void TestAsError(TestingT *t) {
     ARENA_BEGIN;
     Error err = syscall_errno_as_error(SYSCALL_EEXIST, a);
-    CHECK(str_is(error_text(err), "file exists"));
+    CHECK(str_is(error_text(err), EEXIST_TEXT));
     CHECK(errors_is(err, fs_err_exist));
     CHECK(!errors_is(err, fs_err_not_exist));
     const SyscallErrno *p = (const SyscallErrno *)errors_as(err, TYPE_SYSCALL_ERRNO);
     CHECK(p != NULL && *p == SYSCALL_EEXIST);
 
     Error pe = fs_path_error_new(a, BURROW_S("open"), BURROW_S("/nowhere"), err);
-    CHECK(str_is(error_text(pe), "open /nowhere: file exists"));
+    CHECK(str_is(error_text(pe), "open /nowhere: " EEXIST_TEXT));
     CHECK(errors_is(pe, fs_err_exist));
     p = (const SyscallErrno *)errors_as(pe, TYPE_SYSCALL_ERRNO);
     CHECK(p != NULL && *p == SYSCALL_EEXIST);
@@ -213,7 +247,7 @@ static void TestAsError(TestingT *t) {
     ARENA_END;
     p = (const SyscallErrno *)errors_as(kept, TYPE_SYSCALL_ERRNO);
     CHECK(p != NULL && *p == SYSCALL_EEXIST);
-    CHECK(str_is(error_text(kept), "file exists"));
+    CHECK(str_is(error_text(kept), EEXIST_TEXT));
     arena_free(&ar2);
 }
 
@@ -242,7 +276,7 @@ static void TestMethods(TestingT *t) {
     Str text = BURROW_STR_EMPTY;
     rets[0] = &text;
     CHECK(m != NULL && method_call(m, &e, NULL, rets));
-    CHECK(str_is(text, "operation not permitted"));
+    CHECK(str_is(text, EPERM_TEXT));
 }
 
 /* Straight after a failed PAL call the Errno is the system's own number, and
@@ -332,7 +366,9 @@ static void TestMatchesErrnoH(TestingT *t) {
     E(EPROTONOSUPPORT);
     E(EAFNOSUPPORT);
     E(EOPNOTSUPP);
+#if !defined(BURROW_OS_WASI)
     E(EWOULDBLOCK);
+#endif
 #undef E
 }
 #endif

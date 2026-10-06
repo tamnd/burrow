@@ -329,18 +329,31 @@ static void TestAConnectionToAClosedPortIsRefused(TestingT *t) {
     }
     CHECK(pal_socket_close(l, NULL));
 
-    PalErrno err;
-    int64_t fd = pal_socket(PAL_AF_INET, PAL_SOCK_STREAM, 0, &err);
-    CHECK(fd >= 0);
-    PalErrno r = PAL_OK;
-    if (pal_connect(fd, &a, &err))
-        r = PAL_OK;
-    else if (err == PAL_EINPROGRESS)
-        r = connect_result(fd);
-    else
-        r = err;
-    CHECK_INT_EQ(r, PAL_ECONNREFUSED);
-    CHECK(pal_socket_close(fd, NULL));
+    /* The system may give the dialing socket the port that was just freed,
+     * and a socket that dials its own address connects to itself. Go's dial
+     * tries again when that happens, and so does this. */
+    for (int attempt = 0;; attempt++) {
+        PalErrno err;
+        int64_t fd = pal_socket(PAL_AF_INET, PAL_SOCK_STREAM, 0, &err);
+        CHECK(fd >= 0);
+        bool at_once = pal_connect(fd, &a, &err);
+        PalErrno r = PAL_OK;
+        if (!at_once)
+            r = err == PAL_EINPROGRESS ? connect_result(fd) : err;
+        PalSockAddr local = {0};
+        bool self =
+            r == PAL_OK && pal_getsockname(fd, &local, NULL) && local.port == a.port;
+        CHECK(pal_socket_close(fd, NULL));
+        if (self && attempt < 3)
+            continue;
+        if (r != PAL_ECONNREFUSED)
+            testing_t_errorf_v(t,
+                               "r = %d, want %d (connected at once: %d, local port %d, "
+                               "dialed port %d)",
+                               (int)r, (int)PAL_ECONNREFUSED, (int)at_once,
+                               (int)local.port, (int)a.port);
+        return;
+    }
 }
 
 static void TestASecondBindToTheSamePortIsInUse(TestingT *t) {

@@ -2446,7 +2446,7 @@ static Error x509_parse_certificate_policies(Alloc *a, CryptobyteString der,
 /* OID.toASN1OID, false for an arc past 31 bits. */
 static bool x509_oid_to_asn1_oid(X509OID oid, Alloc *a, Asn1ObjectIdentifier *out) {
     Slice arcs = slice_make(a, TYPE_INT, 0, oid.der.len + 1);
-    if (arcs.p == NULL && oid.der.len + 1 > 0)
+    if (arcs.p == NULL)
         return false;
     Int *o = arcs.p;
     Int n = 0;
@@ -2488,6 +2488,7 @@ static bool x509_is_valid_ip_mask(Slice mask) {
                 return false;
             continue;
         }
+        /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
         switch (m[i]) {
         case 0x00:
         case 0x80:
@@ -3103,7 +3104,7 @@ static Error x509_parse_certificate_extensions(Alloc *a, CryptobyteString *tbs,
     if (!cryptobyte_string_read_asn1(&exts, &exts, CRYPTOBYTE_ASN1_SEQUENCE))
         return x509_err("x509: malformed extensions");
     while (!cryptobyte_string_empty(exts)) {
-        PkixExtension ext;
+        PkixExtension ext = {0};
         Error err = x509_read_extension(a, &exts, &ext);
         if (BURROW_FAILED(err))
             return err;
@@ -3393,6 +3394,7 @@ Str x509_insecure_algorithm_error_error(X509InsecureAlgorithmError e, Alloc *a) 
 
 /* ConstraintViolationError and UnhandledCriticalExtension, which have
  * nothing in them and so are one constant each. */
+/* NOLINTBEGIN(bugprone-macro-parentheses) */
 #define X509_EMPTY_ERROR(T, desc, name, gotype, text)                                  \
     static const Type desc = {                                                         \
         {(const Byte *)(gotype), (Int)(sizeof(gotype) - 1)},                           \
@@ -3419,6 +3421,7 @@ Str x509_insecure_algorithm_error_error(X509InsecureAlgorithmError e, Alloc *a) 
     };                                                                                 \
     static const T desc##_value = {0};                                                 \
     const Error name = {&desc##_vt, &desc##_value}
+/* NOLINTEND(bugprone-macro-parentheses) */
 
 X509_EMPTY_ERROR(X509ConstraintViolationError, x509_constraint_violation_desc,
                  x509_constraint_violation_error, "ConstraintViolationError",
@@ -3755,7 +3758,7 @@ static Error x509_parse_revoked_entry(Alloc *a, CryptobyteString *revoked,
                                               CRYPTOBYTE_ASN1_SEQUENCE))
         return x509_err("x509: malformed extensions");
     while (present && !cryptobyte_string_empty(exts)) {
-        PkixExtension ext;
+        PkixExtension ext = {0};
         err = x509_read_extension(a, &exts, &ext);
         if (BURROW_FAILED(err))
             return err;
@@ -3788,7 +3791,7 @@ static Error x509_parse_crl_extensions(Alloc *a, CryptobyteString *tbs,
     if (!cryptobyte_string_read_asn1(&exts, &exts, CRYPTOBYTE_ASN1_SEQUENCE))
         return x509_err("x509: malformed extensions");
     while (!cryptobyte_string_empty(exts)) {
-        PkixExtension ext;
+        PkixExtension ext = {0};
         Error err = x509_read_extension(a, &exts, &ext);
         if (BURROW_FAILED(err))
             return err;

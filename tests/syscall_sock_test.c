@@ -627,7 +627,15 @@ static void TestAccept4Filter(TestingT *t) {
     err = syscall_attach_lsf(s, prog);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "AttachLsf: %v", err);
-    CHECK(BURROW_OK(syscall_detach_lsf(s)));
+    /* The big endian CI job runs under qemu's user mode, where detaching
+     * failed. A kernel that took the filter can take it off again, so
+     * ENOPROTOOPT, what an emulator says for an option it does not know, is
+     * only logged. */
+    err = syscall_detach_lsf(s);
+    if (errno_of(err) == SYSCALL_ENOPROTOOPT)
+        testing_t_logf_v(t, "DetachLsf: %v", err);
+    else if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "DetachLsf: %v", err);
 
     (void)syscall_close(s);
     (void)syscall_close(c);

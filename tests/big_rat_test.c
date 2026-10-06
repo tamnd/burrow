@@ -529,6 +529,8 @@ static void worker(void *arg) {
 /* Each thread has its own scratch memory: every thread sums the same
  * series at once. */
 static void TestThreads(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+
     enum { N = 4 };
     burrow__Thread th[N];
     Str out[N];

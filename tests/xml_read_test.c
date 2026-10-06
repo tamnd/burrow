@@ -302,14 +302,21 @@ static Error recursive_node_unmarshal_xml(RecursiveNode *n, XmlDecoder *d,
 BURROW_STRUCT_DEFINE_METHODS(RecursiveNode, RECURSIVE_NODE_FIELDS,
                              RECURSIVE_NODE_METHODS);
 
+/* maxDepth in Go's test: maxUnmarshalDepthWasm on wasm. */
+#if defined(BURROW_ARCH_WASM)
+#define MAX_DEPTH 5000
+#else
+#define MAX_DEPTH 10000
+#endif
+
 static void TestDecodeElementRecursion_body(TestingT *t) {
     static const struct {
         const char *name;
         Int depth;
         bool fail;
     } tests[] = {
-        {"below limit", 10000, false},
-        {"above limit", 10000 + 1, true},
+        {"below limit", MAX_DEPTH, false},
+        {"above limit", MAX_DEPTH + 1, true},
     };
     for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
         Arena ar;

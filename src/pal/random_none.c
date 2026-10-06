@@ -1,7 +1,7 @@
 /* No system generator, for a platform that has nowhere to ask.
  *
- * This is wasm, it is a freestanding target, and it is any system somebody adds
- * to platform.h before adding it to one of the three files next to this one.
+ * This is js/wasm, a freestanding target, and any system somebody adds to
+ * platform.h before adding it to one of the files next to this one.
  *
  * It fails rather than mixing an address and a clock together and calling the
  * result random. A caller that can carry on with a weaker source is entitled to
@@ -21,7 +21,8 @@
     !defined(BURROW_OS_DARWIN) && !defined(BURROW_OS_IOS) &&                           \
     !defined(BURROW_OS_FREEBSD) && !defined(BURROW_OS_NETBSD) &&                       \
     !defined(BURROW_OS_OPENBSD) && !defined(BURROW_OS_DRAGONFLY) &&                    \
-    !defined(BURROW_OS_SOLARIS) && !defined(BURROW_OS_COSMO)
+    !defined(BURROW_OS_SOLARIS) && !defined(BURROW_OS_COSMO) &&                        \
+    !defined(BURROW_OS_WASI)
 
 #include "burrow/pal.h"
 

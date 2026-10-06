@@ -587,6 +587,9 @@ static void TestHardLink(TestingT *t) {
 static void TestSymlink(TestingT *t) {
 #if defined(BURROW_OS_WINDOWS)
     testing_t_skip_v(t, "making a symbolic link may need privileges on Windows");
+#elif defined(BURROW_OS_WASI)
+    /* testenv.MustHaveSymlink: some runtimes refuse absolute targets. */
+    testing_t_skip_v(t, "wasip1 runtimes may refuse an absolute symlink");
 #endif
     make_dir(t);
     Str from = path_in("symlinktestfrom"), to = path_in("symlinktestto");
@@ -630,6 +633,9 @@ static void TestLongSymlink(TestingT *t) {
 }
 
 static void TestChmod(TestingT *t) {
+#if defined(BURROW_OS_WASI)
+    testing_t_skip_v(t, "Chmod is not supported on wasip1"); /* as Go's test */
+#endif
     make_dir(t);
     Str path = path_in("f");
     write_file(t, path, "x");
@@ -678,6 +684,9 @@ static void TestChtimes(TestingT *t) {
 }
 
 static void TestChown(TestingT *t) {
+#if defined(BURROW_OS_WASI)
+    testing_t_skip_v(t, "file ownership not supported on wasip1"); /* as Go's test */
+#endif
     make_dir(t);
     Str path = path_in("f");
     write_file(t, path, "x");

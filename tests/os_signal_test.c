@@ -54,6 +54,14 @@ static Duration settle_time = 100 * TIME_MILLISECOND;
  * may still be using memory from ar when the tests are over. */
 static bool keep_arena;
 
+/* Go's signal tests are for unix. On wasip1 a signal a program sends itself
+ * ends it, and nothing else ever arrives. */
+#if defined(BURROW_OS_WASI)
+#define SKIP_WITHOUT_SIGNALS(t) testing_t_skip_v((t), "wasip1 has no signals")
+#else
+#define SKIP_WITHOUT_SIGNALS(t) ((void)(t))
+#endif
+
 static OsSignal sig_of(SyscallSignal n) {
     return os_signal_from_syscall(n);
 }
@@ -154,6 +162,7 @@ static void expect_nothing(TestingT *t, Chan *c) {
 }
 
 static void TestSignal(TestingT *t) {
+    SKIP_WITHOUT_SIGNALS(t);
     /* Ask for SIGHUP. */
     Chan *c = sig_chan(a, 1);
     signal_notify_v(c, 1, sig_of(SYSCALL_SIGHUP));
@@ -232,6 +241,7 @@ static void drain(void *env) {
 }
 
 static void TestStress(TestingT *t) {
+    SKIP_WITHOUT_SIGNALS(t);
     Duration dur = 3 * TIME_SECOND;
     if (testing_short())
         dur = 100 * TIME_MILLISECOND;
@@ -287,14 +297,17 @@ static void test_cancel(TestingT *t, bool ignore) {
 }
 
 static void TestReset(TestingT *t) {
+    SKIP_WITHOUT_SIGNALS(t);
     test_cancel(t, false);
 }
 
 static void TestIgnore(TestingT *t) {
+    SKIP_WITHOUT_SIGNALS(t);
     test_cancel(t, true);
 }
 
 static void TestIgnored(TestingT *t) {
+    SKIP_WITHOUT_SIGNALS(t);
     Chan *c = sig_chan(a, 1);
     signal_notify_v(c, 1, sig_of(SYSCALL_SIGWINCH));
 
@@ -319,6 +332,7 @@ static bool exists(Str path) {
 }
 
 static void TestDetectNohup(TestingT *t) {
+    SKIP_WITHOUT_SIGNALS(t);
     if (env_or_empty(a, "BURROW_SIGNAL_CHECK_SIGHUP_IGNORED").len > 0) {
         if (!signal_ignored(sig_of(SYSCALL_SIGHUP)))
             testing_t_fatalf_v(t, "SIGHUP is not ignored.");
@@ -434,6 +448,7 @@ static void stop_one(void *env, TestingT *t) {
 }
 
 static void TestStop(TestingT *t) {
+    SKIP_WITHOUT_SIGNALS(t);
     SyscallSignal sigs[] = {SYSCALL_SIGWINCH, SYSCALL_SIGHUP, SYSCALL_SIGUSR1};
     for (size_t i = 0; i < sizeof sigs / sizeof sigs[0]; i++) {
         Str name = syscall_signal_string(sigs[i], a);
@@ -516,6 +531,7 @@ static void nohup_group(void *env, TestingT *t) {
 }
 
 static void TestNohup(TestingT *t) {
+    SKIP_WITHOUT_SIGNALS(t);
     /* Without nohup an uncaught SIGHUP ends the child, and under nohup it does
      * not. Either way TestStop in the child catches it while it wants it.
      * send_uncaught_sighup=1 sends before Notify and 2 after Stop. */
@@ -532,6 +548,7 @@ static void TestNohup(TestingT *t) {
 }
 
 static void TestSIGCONT(TestingT *t) {
+    SKIP_WITHOUT_SIGNALS(t);
     Chan *c = sig_chan(a, 1);
     signal_notify_v(c, 1, sig_of(SYSCALL_SIGCONT));
     kill_self(SYSCALL_SIGCONT);
@@ -597,6 +614,7 @@ static void atomic_stop_test_program(TestingT *t) {
 }
 
 static void TestAtomicStop(TestingT *t) {
+    SKIP_WITHOUT_SIGNALS(t);
     if (env_or_empty(a, "BURROW_SIGNAL_ATOMIC_STOP").len > 0) {
         atomic_stop_test_program(t);
         testing_t_fatalf_v(t, "atomicStopTestProgram returned");
@@ -661,6 +679,7 @@ static void TestAtomicStop(TestingT *t) {
 }
 
 static void TestTime(TestingT *t) {
+    SKIP_WITHOUT_SIGNALS(t);
     /* That signals work while the program is reading the clock, which some
      * systems do through the vDSO. Go's issue 34391. */
     Duration dur = 3 * TIME_SECOND;
@@ -726,6 +745,7 @@ static void notify_ctx_case(void *env, TestingT *t) {
 }
 
 static void TestNotifyContextNotifications(TestingT *t) {
+    SKIP_WITHOUT_SIGNALS(t);
     Str times = env_or_empty(a, "BURROW_SIGNAL_CHECK_NOTIFY_CTX");
     if (times.len > 0) {
         Error e = BURROW_NO_ERROR;
@@ -767,6 +787,7 @@ static void TestNotifyContextNotifications(TestingT *t) {
 }
 
 static void TestNotifyContextCause(TestingT *t) {
+    SKIP_WITHOUT_SIGNALS(t);
     ContextCancelFunc stop;
     Context ctx = signal_notify_context_v(a, testing_t_context(t), &stop, 1,
                                           sig_of(SYSCALL_SIGINT));
@@ -790,6 +811,7 @@ static void TestNotifyContextCause(TestingT *t) {
 }
 
 static void TestSignalTrace(TestingT *t) {
+    SKIP_WITHOUT_SIGNALS(t);
     testing_t_skip_v(t, "burrow has no runtime/trace to start and stop");
 }
 
@@ -929,7 +951,7 @@ static void TestNotifyContextRelease(TestingT *t) {
     /* The same channel can be asked for SIGHUP again, and gets it. */
     Chan *ch = sig_chan(a, 1);
     signal_notify_v(ch, 1, sig_of(SYSCALL_SIGHUP));
-#if !defined(BURROW_OS_WINDOWS)
+#if !defined(BURROW_OS_WINDOWS) && !defined(BURROW_OS_WASI)
     kill_self(SYSCALL_SIGHUP);
     wait_sig(t, a, ch, sig_of(SYSCALL_SIGHUP));
 #endif

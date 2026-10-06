@@ -789,6 +789,7 @@ FUNC_TYPES = {
     "func([]uint8) []uint8": {"BytesFunc"},
     "func(string) error": {"FlagFunc"},
     "func(*Flag)": {"FlagVisitFunc"},
+    "func() hash.Hash": {"HashNewFunc"},
 }
 
 BUILTIN = {

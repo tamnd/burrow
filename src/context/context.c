@@ -283,6 +283,14 @@ typedef struct TimerCtx {
     Error deadline_cause;
 } TimerCtx;
 
+/* The TimerCtx a timed node is the first field of. Through void * because
+ * on wasm32 when makes a TimerCtx 8-aligned and a CancelCtx is only
+ * 4-aligned, and the compiler cannot know that every timed node was made as
+ * a TimerCtx. */
+static TimerCtx *timer_ctx(CancelCtx *c) {
+    return (TimerCtx *)(void *)c;
+}
+
 /* Go's afterFuncCtx, a cancel node with a function to run instead of anybody
  * waiting on the channel. Embedded the same way TimerCtx embeds one, so the two
  * pointers are the same address and everything that works on a CancelCtx works
@@ -654,7 +662,7 @@ static void cancel_node(CancelCtx *c, bool remove_from_parent, Error err, Error 
      * is the only place that knows nothing else can be looking at it. */
     bool timer_stopped = false;
     if (c->timed) {
-        TimerCtx *t = (TimerCtx *)c;
+        TimerCtx *t = timer_ctx(c);
         if (t->timer != NULL)
             timer_stopped = time_timer_stop(t->timer);
     }
@@ -722,7 +730,7 @@ static void cancel_ctx_release(CancelCtx *c) {
          * the last one means the timer has either fired or been disarmed.
          * time_timer_free takes it out of whatever P's heap it is still sitting
          * in, which a plain mem_free would not, and NULL is fine. */
-        time_timer_free(((TimerCtx *)c)->timer);
+        time_timer_free(timer_ctx(c)->timer);
         size = sizeof(TimerCtx);
         align = _Alignof(TimerCtx);
     } else if (c->after) {
@@ -1216,7 +1224,7 @@ static bool timer_deadline(void *self, int64_t *when) {
 static void deadline_reached(void *env) {
     CancelCtx *c = (CancelCtx *)env;
 
-    cancel_node(c, true, context_deadline_exceeded, ((TimerCtx *)c)->deadline_cause);
+    cancel_node(c, true, context_deadline_exceeded, timer_ctx(c)->deadline_cause);
     cancel_ctx_release(c);
 }
 

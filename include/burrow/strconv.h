@@ -80,7 +80,7 @@ BURROW_OWNS(ret) Error strconv_num_error_as_error(Alloc *a, const StrconvNumErro
 /* ----------------------------------------------------------------- integers */
 
 /* strconv.IntSize, the width of Int in bits. */
-#define STRCONV_INT_SIZE BURROW_PTR_BITS
+#define STRCONV_INT_SIZE BURROW_INT_BITS
 
 /* strconv.ParseInt. s may start with + or -. base is 2 to 36, or 0 to take it
  * from a prefix the way Go source does: 0b, 0o or a bare 0, and 0x, and in that

@@ -32,7 +32,7 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-ALTERNATES="posix windows linux bsd darwin completion readiness"
+ALTERNATES="posix windows linux bsd darwin wasi completion readiness"
 
 sources=$(git ls-files --cached --others --exclude-standard \
 	'src/*.c' 'src/**/*.c' 2>/dev/null || true)

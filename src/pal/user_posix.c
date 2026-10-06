@@ -27,15 +27,10 @@
 #include "internal.h"
 
 #include <errno.h>
-#include <grp.h>
 #include <limits.h>
-#include <pwd.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include <unistd.h>
-
-_Static_assert(sizeof(uid_t) == sizeof(uint32_t), "uid_t is 32 bits");
-_Static_assert(sizeof(gid_t) == sizeof(uint32_t), "gid_t is 32 bits");
 
 static PalErrno user_cap_ok(char *buf, int64_t cap, bool *found) {
     *found = false;
@@ -43,6 +38,64 @@ static PalErrno user_cap_ok(char *buf, int64_t cap, bool *found) {
         return PAL_EINVAL;
     return PAL_OK;
 }
+
+#if defined(BURROW_OS_WASI)
+
+/* wasip1 has no user database in its libc. os/user reads /etc/passwd and
+ * /etc/group there instead, as Go does, so these only say there is nothing. */
+
+PalErrno pal_getpwnam(const char *name, PalPasswd *pw, char *buf, int64_t cap,
+                      bool *found) {
+    (void)name;
+    (void)pw;
+    PalErrno e = user_cap_ok(buf, cap, found);
+    return e != PAL_OK ? e : PAL_ENOSYS;
+}
+
+PalErrno pal_getpwuid(uint32_t uid, PalPasswd *pw, char *buf, int64_t cap,
+                      bool *found) {
+    (void)uid;
+    (void)pw;
+    PalErrno e = user_cap_ok(buf, cap, found);
+    return e != PAL_OK ? e : PAL_ENOSYS;
+}
+
+PalErrno pal_getgrnam(const char *name, PalGroup *gr, char *buf, int64_t cap,
+                      bool *found) {
+    (void)name;
+    (void)gr;
+    PalErrno e = user_cap_ok(buf, cap, found);
+    return e != PAL_OK ? e : PAL_ENOSYS;
+}
+
+PalErrno pal_getgrgid(uint32_t gid, PalGroup *gr, char *buf, int64_t cap, bool *found) {
+    (void)gid;
+    (void)gr;
+    PalErrno e = user_cap_ok(buf, cap, found);
+    return e != PAL_OK ? e : PAL_ENOSYS;
+}
+
+int64_t pal_user_buf_size(bool group) {
+    (void)group;
+    return -1;
+}
+
+int pal_getgrouplist(const char *name, uint32_t gid, uint32_t *gids, int *n) {
+    (void)name;
+    (void)gid;
+    (void)gids;
+    *n = 0;
+    errno = ENOSYS;
+    return -1;
+}
+
+#else
+
+#include <grp.h>
+#include <pwd.h>
+
+_Static_assert(sizeof(uid_t) == sizeof(uint32_t), "uid_t is 32 bits");
+_Static_assert(sizeof(gid_t) == sizeof(uint32_t), "gid_t is 32 bits");
 
 static PalErrno user_passwd(int rc, struct passwd *res, PalPasswd *pw, bool *found) {
     if (rc != 0)
@@ -126,6 +179,8 @@ int pal_getgrouplist(const char *name, uint32_t gid, uint32_t *gids, int *n) {
     return getgrouplist(name, (gid_t)gid, (gid_t *)(void *)gids, n);
 #endif
 }
+
+#endif /* !BURROW_OS_WASI */
 
 /* The Windows account calls, which have nothing to ask here. */
 

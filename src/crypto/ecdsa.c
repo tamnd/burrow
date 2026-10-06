@@ -1053,7 +1053,7 @@ static bool ecdsa_rand_field_element(Alloc *tmp, const EllipticCurveParams *para
             return false;
         }
         Int excess = len * 8 - bits;
-        if (excess > 0) {
+        if (excess > 0 && len > 0) {
             uint8_t *p = b.p;
             p[0] = (uint8_t)(p[0] >> excess);
         }

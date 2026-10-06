@@ -257,7 +257,7 @@ static bool pnet_to_native(const PalSockAddr *a, struct sockaddr_storage *ss,
     switch (a->family) {
     case PAL_AF_INET: {
         struct sockaddr_in *in = (struct sockaddr_in *)ss;
-        in->sin_family = AF_INET;
+        in->sin_family = (sa_family_t)AF_INET;
         in->sin_port = htons(a->port);
         memcpy(&in->sin_addr, a->addr, 4);
 #if defined(PNET_SA_LEN)
@@ -268,7 +268,7 @@ static bool pnet_to_native(const PalSockAddr *a, struct sockaddr_storage *ss,
     }
     case PAL_AF_INET6: {
         struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)ss;
-        in6->sin6_family = AF_INET6;
+        in6->sin6_family = (sa_family_t)AF_INET6;
         in6->sin6_port = htons(a->port);
         in6->sin6_scope_id = a->scope_id;
         memcpy(&in6->sin6_addr, a->addr, 16);
@@ -288,7 +288,7 @@ static bool pnet_to_native(const PalSockAddr *a, struct sockaddr_storage *ss,
             BURROW_OUT(err, PAL_EINVAL);
             return false;
         }
-        un->sun_family = AF_UNIX;
+        un->sun_family = (sa_family_t)AF_UNIX;
         memcpy(un->sun_path, a->path, n);
         *len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + n);
 #if defined(PNET_SA_LEN)
@@ -356,7 +356,7 @@ static bool pnet_setup(int fd) {
     if (fdf < 0 || fcntl(fd, F_SETFD, fdf | FD_CLOEXEC) != 0)
         return false;
     int fl = fcntl(fd, F_GETFL);
-    if (fl < 0 || fcntl(fd, F_SETFL, fl | O_NONBLOCK) != 0)
+    if (fl < 0 || fcntl(fd, F_SETFL, fl | (int)O_NONBLOCK) != 0)
         return false;
     return true;
 }

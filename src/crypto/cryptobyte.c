@@ -39,11 +39,14 @@ static Alloc *cb_alloc(Alloc *a) {
 static bool cb_read(CryptobyteString *s, Int n, Slice *v) {
     if (s->len < n || n < 0 || s->p == NULL)
         return false;
-    if (v != NULL)
-        *v = (Slice){s->p, n, n, TYPE_BYTE};
+    /* Go takes the bytes before it moves s, and so must this, since x509 reads
+     * a string into itself, as in input.ReadASN1(&input, ...). */
+    Slice r = {s->p, n, n, TYPE_BYTE};
     s->p = (Byte *)s->p + n;
     s->len -= n;
     s->cap -= n;
+    if (v != NULL)
+        *v = r;
     return true;
 }
 

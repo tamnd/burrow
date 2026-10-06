@@ -201,6 +201,8 @@ global	src/unique/unique.c	uq_types	intern	Written under uq_lock with a release 
 global	src/unique/unique.c	uq_seed	intern	Written once under uq_lock before the first type is published, and only read after a reader has seen one.
 global	src/unique/unique.c	uq_arena	intern	Only touched under uq_lock.
 global	src/unique/unique.c	uq_ready	intern	Only touched under uq_lock.
+global	src/net/netfd.c	nf_stack	package-vars	Whether this machine has IPv4, IPv6 and IPv4-mapped IPv6 sockets, probed by the first socket that needs to know and stored with a release store after the probed bit. Two racing probes store the same value.
+global	src/net/netfd.c	nf_backlog	package-vars	The listen backlog the system allows, worked out by the first listener. Atomic loads and stores only, and two racing listeners store the same value.
 global	src/net/url.c	url_debug_flags	godebug	The urlstrictcolons and urlmaxqueryparams settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/net/url.c	url_debug_max	godebug	The urlmaxqueryparams number, stored atomically before url_debug_flags says it is there.
 global	src/math/rand.c	rand_debug_flags	godebug	The randautoseed and randseednop settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.

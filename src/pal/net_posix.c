@@ -47,6 +47,13 @@
 #include <unistd.h>
 #endif
 
+#if defined(BURROW_OS_LINUX)
+#include <sys/utsname.h>
+#elif defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS) ||                           \
+    defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_OPENBSD)
+#include <sys/sysctl.h>
+#endif
+
 #if defined(BURROW_OS_WASI)
 
 /* wasip1 sockets are the ones the host opened and handed in, and Go's net
@@ -145,6 +152,10 @@ bool pal_shutdown(int64_t fd, int32_t how, PalErrno *err) {
     (void)fd;
     (void)how;
     return pnet_nosys(err);
+}
+
+int32_t pal_listen_backlog_max(void) {
+    return 0;
 }
 
 #else
@@ -765,6 +776,93 @@ bool pal_shutdown(int64_t fd, int32_t how, PalErrno *err) {
         return pnet_fail(err);
     return true;
 }
+
+#if defined(BURROW_OS_LINUX)
+
+/* unix.KernelVersionGE(4, 1), from the release uname gives, such as
+ * "6.8.0-45-generic". A release that does not parse counts as new enough. */
+static bool pnet_kernel_4_1(void) {
+    struct utsname u;
+    if (uname(&u) != 0)
+        return true;
+    long major = 0;
+    long minor = 0;
+    const char *p = u.release;
+    while (*p >= '0' && *p <= '9')
+        major = major * 10 + (*p++ - '0');
+    if (*p == '.')
+        p++;
+    while (*p >= '0' && *p <= '9')
+        minor = minor * 10 + (*p++ - '0');
+    return major > 4 || (major == 4 && minor >= 1);
+}
+
+/* Go's maxListenerBacklog on Linux: the first field of
+ * /proc/sys/net/core/somaxconn, read with Go's dtoi, which gives up on a
+ * number of 0xFFFFFF or more. Above 65535 it is capped at what the kernel's
+ * backlog field holds, 16 bits before 4.1 and 32 bits since. */
+int32_t pal_listen_backlog_max(void) {
+    int fd;
+    do {
+        fd = open("/proc/sys/net/core/somaxconn", O_RDONLY | O_CLOEXEC);
+    } while (fd < 0 && errno == EINTR);
+    if (fd < 0)
+        return 0;
+    char buf[64];
+    ssize_t n;
+    do {
+        n = read(fd, buf, sizeof buf);
+    } while (n < 0 && errno == EINTR);
+    (void)close(fd);
+    if (n <= 0)
+        return 0;
+    ssize_t i = 0;
+    while (i < n && (buf[i] == ' ' || buf[i] == '\t' || buf[i] == '\r'))
+        i++;
+    long v = 0;
+    ssize_t start = i;
+    while (i < n && buf[i] >= '0' && buf[i] <= '9') {
+        v = v * 10 + (buf[i] - '0');
+        if (v >= 0xFFFFFF)
+            return 0;
+        i++;
+    }
+    if (i == start || v == 0)
+        return 0;
+    if (v > 65535 && !pnet_kernel_4_1())
+        v = 65535;
+    return (int32_t)v;
+}
+
+#elif defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS) ||                           \
+    defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_OPENBSD)
+
+/* Go's maxListenerBacklog on the BSDs: the sysctl each of them keeps the
+ * limit in, capped at 65535. NetBSD has none, and Go asks nothing there. */
+int32_t pal_listen_backlog_max(void) {
+#if defined(BURROW_OS_FREEBSD)
+    const char *name = "kern.ipc.soacceptqueue";
+#elif defined(BURROW_OS_OPENBSD)
+    const char *name = "kern.somaxconn";
+#else
+    const char *name = "kern.ipc.somaxconn";
+#endif
+    uint32_t v = 0;
+    size_t len = sizeof v;
+    if (sysctlbyname(name, &v, &len, NULL, 0) != 0 || len != sizeof v)
+        return 0;
+    if (v > 65535)
+        v = 65535;
+    return (int32_t)v;
+}
+
+#else
+
+int32_t pal_listen_backlog_max(void) {
+    return 0;
+}
+
+#endif
 
 #endif /* BURROW_OS_WASI */
 

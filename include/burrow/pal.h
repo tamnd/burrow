@@ -1628,6 +1628,12 @@ bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err);
 enum { PAL_SHUT_RD = 0, PAL_SHUT_WR = 1, PAL_SHUT_RDWR = 2 };
 bool pal_shutdown(int64_t fd, int32_t how, PalErrno *err);
 
+/* The longest queue of connections a listener can ask the system for, which
+ * is what Go's net passes to listen: /proc/sys/net/core/somaxconn on Linux
+ * and a sysctl on macOS, FreeBSD and OpenBSD. 0 when the system does not say,
+ * and then the caller uses SOMAXCONN. */
+int32_t pal_listen_backlog_max(void);
+
 /* One result from a name lookup. */
 typedef struct PalAddrInfo {
     PalSockAddr addr;

@@ -469,7 +469,8 @@ text/html
 ```c
 Byte png[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
 char html[] = "  <!DOCTYPE html><title>hi</title>";
-Str ct = http_detect_content_type(slice_from(png, sizeof png, sizeof png, TYPE_BYTE));
+Str ct =
+    http_detect_content_type(slice_from(png, sizeof png, sizeof png, TYPE_BYTE));
 printf("%.*s\n", P(ct));
 Int n = (Int)strlen(html);
 ct = http_detect_content_type(slice_from(html, n, n, TYPE_BYTE));
@@ -503,3 +504,43 @@ That prints:
 Sun, 06 Nov 1994 08:49:37 GMT
 not a date
 ```
+
+## Cookies
+
+`HttpCookie` is Go's `Cookie`. `http_parse_set_cookie` reads the value of a `Set-Cookie` header from a response, and `http_parse_cookie` reads a `Cookie` header from a request, which can hold many cookies. The strings in a parsed cookie point into the line, and an attribute the parser doesn't know goes in `unparsed` as it was written:
+
+<!-- example: ../examples/net/http.c#cookie -->
+```c
+Error err;
+Str line = BURROW_S("session=38afes7a8; Path=/; Max-Age=3600; HttpOnly; Flavour=mint");
+HttpCookie c = http_parse_set_cookie(a, line, &err);
+if (BURROW_OK(err)) {
+    printf("%.*s=%.*s, path %.*s, max-age %d\n", P(c.name), P(c.value), P(c.path),
+           (int)c.max_age);
+    printf("unparsed: %.*s\n", P(BURROW_AT(Str, c.unparsed, 0)));
+}
+
+Slice sent = http_parse_cookie(a, BURROW_S("lang=en; theme=\"dark\""), &err);
+for (Int i = 0; i < sent.len; i++) {
+    HttpCookie k = BURROW_AT(HttpCookie, sent, i);
+    printf("%.*s is %.*s%s\n", P(k.name), P(k.value), k.quoted ? ", quoted" : "");
+}
+
+HttpCookie out = {
+    .name = BURROW_S_INIT("cart"),
+    .value = BURROW_S_INIT("3 items"),
+    .path = BURROW_S_INIT("/shop"),
+    .expires = time_date(2030, TIME_MARCH, 1, 12, 0, 0, 0, time_utc_loc),
+    .secure = true,
+    .same_site = HTTP_SAME_SITE_STRICT_MODE,
+};
+printf("%.*s\n", P(http_cookie_string(a, &out)));
+```
+
+That prints:
+
+```
+PENDING
+```
+
+`http_cookie_string` goes the other way, and drops the bytes a value or path can't hold, quoting a value with a space or comma in it as Go does. Each of those is reported on the standard logger from `burrow/log.h`, as Go reports it with `log.Printf`. `http_cookie_valid` says whether a cookie could be sent as it is. A request with more than 3000 cookies gets an error, and `GODEBUG=httpcookiemaxnum=N` moves that limit, with 0 taking it away.

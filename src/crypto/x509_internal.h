@@ -34,4 +34,7 @@ bool burrow__x509_domain_name_valid(Str s, bool constraint);
 /* parseRFC2821Mailbox, with the unquoted local part made in a. */
 bool burrow__x509_parse_rfc2821_mailbox(Alloc *a, Str in, Str *local, Str *domain);
 
+/* asn1BitLength, the number of bits in bit_string up to the last one set. */
+Int burrow__x509_asn1_bit_length(Slice bit_string);
+
 #endif /* BURROW_SRC_CRYPTO_X509_INTERNAL_H */

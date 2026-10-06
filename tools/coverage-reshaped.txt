@@ -276,3 +276,11 @@ crypto/hpke: func NewSender: takes the PublicKey and the ciphersuite as pointers
 crypto/hpke: func Seal: takes the PublicKey and the ciphersuite as pointers, as none of them can be implemented outside the package
 crypto/hpke: func NewRecipient: takes the PrivateKey and the ciphersuite as pointers, as none of them can be implemented outside the package
 crypto/hpke: func Open: takes the PrivateKey and the ciphersuite as pointers, as none of them can be implemented outside the package
+
+# include/burrow/crypto/x509.h: Go takes the private key as an `any` and asks
+# it for crypto.Signer at run time. C cannot ask an Any what it implements, so
+# the signer is the parameter, and a zero one gives Go's error for a key that
+# is not a crypto.Signer.
+crypto/x509: func CreateCertificate: takes priv as a CryptoSigner, since an Any cannot be asked whether it is a crypto.Signer
+crypto/x509: func CreateCertificateRequest: takes priv as a CryptoSigner, since an Any cannot be asked whether it is a crypto.Signer
+crypto/x509: method (*Certificate) CreateCRL: takes priv as a CryptoSigner, since an Any cannot be asked whether it is a crypto.Signer

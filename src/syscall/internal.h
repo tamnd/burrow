@@ -155,6 +155,14 @@ Int burrow__syscall_recvmsg(Int s, SyscallMsghdr *msg, Int flags, Error *err);
 Int burrow__syscall_sendmsg(Int s, SyscallMsghdr *msg, Int flags, Error *err);
 #endif
 
+#if !defined(BURROW_OS_WINDOWS)
+/* Go's anyToSockaddr, in sock.c: the Sockaddr for the address the system
+ * wrote in rsa, made from a. A family there is no Sockaddr for is
+ * EAFNOSUPPORT. route.c parses the addresses in routing messages with it. */
+Error burrow__syscall_any_to_sockaddr(Alloc *a, SyscallRawSockaddrAny *rsa,
+                                      SyscallSockaddr *out);
+#endif
+
 /* The unexported functions of Go's zsyscall files. */
 #include "zsyscall.h"
 

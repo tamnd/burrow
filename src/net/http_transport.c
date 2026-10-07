@@ -86,7 +86,8 @@ BURROW_SENTINEL_ERROR(burrow__http_err_close_idle_conns,
                       "http: CloseIdleConnections called");
 BURROW_SENTINEL_ERROR(burrow__http_err_read_loop_exiting,
                       "http: persistConn.readLoop exiting");
-BURROW_SENTINEL_ERROR(burrow__http_err_idle_conn_timeout, "http: idle connection timeout");
+BURROW_SENTINEL_ERROR(burrow__http_err_idle_conn_timeout,
+                      "http: idle connection timeout");
 BURROW_SENTINEL_ERROR(burrow__http_err_server_closed_idle,
                       "http: server closed idle connection");
 BURROW_SENTINEL_ERROR(burrow__http_err_caller_owns_conn,
@@ -109,9 +110,11 @@ BURROW_SENTINEL_ERROR(tp_err_nil_url, "http: nil Request.URL");
 BURROW_SENTINEL_ERROR(tp_err_nil_header, "http: nil Request.Header");
 BURROW_SENTINEL_ERROR(tp_err_dial_context_nil,
                       "net/http: Transport.DialContext hook returned (nil, nil)");
-BURROW_SENTINEL_ERROR(tp_err_dial_nil, "net/http: Transport.Dial hook returned (nil, nil)");
-BURROW_SENTINEL_ERROR(tp_err_dial_tls_nil,
-                      "net/http: Transport.DialTLS or DialTLSContext returned (nil, nil)");
+BURROW_SENTINEL_ERROR(tp_err_dial_nil,
+                      "net/http: Transport.Dial hook returned (nil, nil)");
+BURROW_SENTINEL_ERROR(
+    tp_err_dial_tls_nil,
+    "net/http: Transport.DialTLS or DialTLSContext returned (nil, nil)");
 BURROW_SENTINEL_ERROR(tp_err_unknown_status, "unknown status code");
 BURROW_SENTINEL_ERROR(tp_err_unencrypted_h2,
                       "http: Transport does not support unencrypted HTTP/2");
@@ -212,13 +215,13 @@ static Error tp_nothing_written_clone(const void *self, Alloc *a);
 static Error tp_read_from_server_clone(const void *self, Alloc *a);
 
 static const ErrorVT tp_nothing_written_vt = {
-    NULL, tp_wrapped_message, tp_wrapped_unwrap, NULL, NULL, NULL,
-    tp_nothing_written_clone,
+    NULL, tp_wrapped_message,       tp_wrapped_unwrap, NULL, NULL,
+    NULL, tp_nothing_written_clone,
 };
 
 static const ErrorVT tp_read_from_server_vt = {
-    NULL, tp_wrapped_message, tp_wrapped_unwrap, NULL, NULL, NULL,
-    tp_read_from_server_clone,
+    NULL, tp_wrapped_message,        tp_wrapped_unwrap, NULL, NULL,
+    NULL, tp_read_from_server_clone,
 };
 
 static Error tp_wrap(Alloc *a, const ErrorVT *vt, Error inner) {
@@ -387,10 +390,12 @@ static Str tp_cm_key(Alloc *a, const tp_ConnectMethod *cm) {
 
 /* Request.requiresHTTP1: a websocket upgrade. */
 static bool tp_requires_http1(const HttpRequest *r) {
-    return burrow__http_has_token(burrow__http_header_get(r->header, BURROW_S("Connection")),
-                                  BURROW_S("upgrade")) &&
+    return burrow__http_has_token(
+               burrow__http_header_get(r->header, BURROW_S("Connection")),
+               BURROW_S("upgrade")) &&
            burrow__http_ascii_equal_fold(
-               burrow__http_header_get(r->header, BURROW_S("Upgrade")), BURROW_S("websocket"));
+               burrow__http_header_get(r->header, BURROW_S("Upgrade")),
+               BURROW_S("websocket"));
 }
 
 /* isProtocolSwitchHeader. */
@@ -406,15 +411,16 @@ static bool tp_is_protocol_switch_header(HttpHeader h) {
 
 /* Request.expectsContinue and wantsClose. */
 static bool tp_expects_continue(const HttpRequest *r) {
-    return burrow__http_has_token(burrow__http_header_get(r->header, BURROW_S("Expect")),
-                                  BURROW_S("100-continue"));
+    return burrow__http_has_token(
+        burrow__http_header_get(r->header, BURROW_S("Expect")),
+        BURROW_S("100-continue"));
 }
 
 static bool tp_wants_close(const HttpRequest *r) {
     if (r->close)
         return true;
-    return burrow__http_has_token(burrow__http_header_get(r->header, BURROW_S("Connection")),
-                                  BURROW_S("close"));
+    return burrow__http_has_token(
+        burrow__http_header_get(r->header, BURROW_S("Connection")), BURROW_S("close"));
 }
 
 /* Request.isReplayable. */
@@ -530,6 +536,7 @@ struct burrow__HttpCall {
     ContextCancelCauseFunc cancel;
     tp_Trip *trip;    /* the try that gave the response */
     tp_Track *tracks; /* every body tracker made, freed with the call */
+    Func alt_on_free; /* the alternate round tripper's response's on_free */
     bool linked;      /* under t->req_mu */
     HttpRequest req;  /* orig with its body in a tracker */
 };
@@ -582,6 +589,7 @@ typedef struct burrow__HttpAltProto {
 static void tp_pc_unref(tp_PConn *pc);
 static void tp_want_unref(tp_Want *w);
 static void tp_trip_unref(tp_Trip *tr);
+static void tp_call_cancel(tp_Call *call, Error cause);
 static void tp_pc_close(tp_PConn *pc, Error err);
 static void tp_pc_close_locked(tp_PConn *pc, Error err);
 static void tp_dec_conns_per_host(HttpTransport *t, Str key);
@@ -679,7 +687,8 @@ static tp_IdleBucket *tp_idle_bucket(HttpTransport *t, Str key, bool make) {
     if (!make)
         return NULL;
     Alloc *a = tp_alloc(t);
-    tp_IdleBucket *b = (tp_IdleBucket *)mem_alloc(a, sizeof *b, _Alignof(tp_IdleBucket));
+    tp_IdleBucket *b =
+        (tp_IdleBucket *)mem_alloc(a, sizeof *b, _Alignof(tp_IdleBucket));
     if (b == NULL)
         return NULL;
     b->key = tp_dup(a, key);
@@ -715,8 +724,8 @@ static bool tp_idle_bucket_append(HttpTransport *t, tp_IdleBucket *b, tp_PConn *
     if (b->n == b->cap) {
         Alloc *a = tp_alloc(t);
         Int ncap = b->cap == 0 ? 2 : b->cap * 2;
-        tp_PConn **nc = (tp_PConn **)mem_alloc(a, (size_t)ncap * sizeof *nc,
-                                               _Alignof(tp_PConn *));
+        tp_PConn **nc =
+            (tp_PConn **)mem_alloc(a, (size_t)ncap * sizeof *nc, _Alignof(tp_PConn *));
         if (nc == NULL)
             return false;
         if (b->n > 0)
@@ -738,7 +747,8 @@ static tp_HostBucket *tp_host_bucket(HttpTransport *t, Str key, bool make) {
     if (!make)
         return NULL;
     Alloc *a = tp_alloc(t);
-    tp_HostBucket *b = (tp_HostBucket *)mem_alloc(a, sizeof *b, _Alignof(tp_HostBucket));
+    tp_HostBucket *b =
+        (tp_HostBucket *)mem_alloc(a, sizeof *b, _Alignof(tp_HostBucket));
     if (b == NULL)
         return NULL;
     b->key = tp_dup(a, key);
@@ -1360,7 +1370,8 @@ static void tp_dec_conns_per_host(HttpTransport *t, Str key) {
 }
 
 /* dial. */
-static NetConn tp_dial(HttpTransport *t, Context ctx, Str network, Str addr, Error *err) {
+static NetConn tp_dial(HttpTransport *t, Context ctx, Str network, Str addr,
+                       Error *err) {
     Error e = BURROW_NO_ERROR;
     NetConn c;
     if (t->dial_context.f != NULL) {
@@ -1434,8 +1445,8 @@ static void tp_connect_job(void *env) {
     if (BURROW_OK(e)) {
         /* A buffered reader that goes after the response is fine, since the
          * server does not speak until spoken to once the tunnel is up. */
-        IoLimitedReader *lr = (IoLimitedReader *)mem_alloc(c->a, sizeof *lr,
-                                                           _Alignof(IoLimitedReader));
+        IoLimitedReader *lr =
+            (IoLimitedReader *)mem_alloc(c->a, sizeof *lr, _Alignof(IoLimitedReader));
         if (lr != NULL) {
             *lr = io_limit_reader(net_conn_as_io_reader(c->conn), c->limit);
             c->br = bufio_new_reader(c->a, io_limited_reader_as_io_reader(lr));
@@ -1571,8 +1582,8 @@ static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMet
     pc->eofc = chan_make(a, TYPE_BOOL, 0);
     Str addr = tp_cm_addr(pa, cm);
     if (pc->key.len == 0 || addr.len == 0 || pc->reqch == NULL || pc->writech == NULL ||
-        pc->closech == NULL || pc->write_err_ch == NULL || pc->write_loop_done == NULL ||
-        pc->eofc == NULL) {
+        pc->closech == NULL || pc->write_err_ch == NULL ||
+        pc->write_loop_done == NULL || pc->eofc == NULL) {
         e = burrow_err_out_of_memory;
         goto fail;
     }
@@ -1613,7 +1624,8 @@ static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMet
     /* Unencrypted HTTP/2 with prior knowledge, which needs HTTP/2. The
      * connection is never TLS of the transport's own here. */
     const HttpProtocols *p = t->protocols;
-    if (p != NULL && http_protocols_unencrypted_http2(*p) && !http_protocols_http1(*p)) {
+    if (p != NULL && http_protocols_unencrypted_http2(*p) &&
+        !http_protocols_http1(*p)) {
         e = tp_err_unencrypted_h2;
         goto fail;
     }
@@ -1684,7 +1696,7 @@ static void tp_trip_set_error(tp_Trip *tr, Error err) {
 /* transportRequest.cancel, which cancels the call's context. */
 static void tp_trip_cancel(tp_Trip *tr, Error cause) {
     if (tr->call != NULL)
-        BURROW_CALLF(tr->call->cancel, cause);
+        tp_call_cancel(tr->call, cause);
 }
 
 /* The read loop's send of its result, which loses to the caller having gone.
@@ -1719,7 +1731,7 @@ struct tp_Body {
 static Error tp_body_fn(tp_Body *b, Error err) {
     tp_PConn *pc = b->tr->pc;
     bool is_eof = tp_same(err, io_eof);
-    (void)chan_send(b->tr->wait_body, &is_eof);
+    chan_send(b->tr->wait_body, &is_eof);
     if (is_eof) {
         tp_wait(pc->eofc);
     } else if (BURROW_FAILED(err)) {
@@ -1777,7 +1789,7 @@ static Error tp_body_close(void *self) {
     if (!tp_same(b->rerr, io_eof)) {
         /* earlyCloseFn. */
         bool f = false;
-        (void)chan_send(b->tr->wait_body, &f);
+        chan_send(b->tr->wait_body, &f);
         tp_wait(b->tr->pc->eofc);
         err = BURROW_NO_ERROR;
     } else {
@@ -1992,7 +2004,8 @@ static void tp_write_loop(void *env) {
     tp_PConn *pc = (tp_PConn *)env;
     for (;;) {
         uintptr_t p = 0;
-        SelectCase cases[2] = {BURROW_RECV(pc->writech, &p), BURROW_RECV(pc->closech, NULL)};
+        SelectCase cases[2] = {BURROW_RECV(pc->writech, &p),
+                               BURROW_RECV(pc->closech, NULL)};
         if (chan_select(cases, 2) != 0)
             break;
         tp_Trip *tr = (tp_Trip *)p;
@@ -2002,8 +2015,8 @@ static void tp_write_loop(void *env) {
         memset(&wait, 0, sizeof wait);
         if (tr->continue_ch != NULL)
             wait = BURROW_FN(burrow__HttpWaitFunc, tp_wait_for_continue, tr);
-        Error err = burrow__http_request_write(tr->req, bufio_writer_as_io_writer(pc->bw),
-                                               pc->is_proxy, tr->extra, wait);
+        Error err = burrow__http_request_write(
+            tr->req, bufio_writer_as_io_writer(pc->bw), pc->is_proxy, tr->extra, wait);
         Error inner = BURROW_NO_ERROR;
         if (burrow__http_is_request_body_read_error(err, &inner)) {
             /* An error reading the caller's body comes first, so it is set
@@ -2020,8 +2033,8 @@ static void tp_write_loop(void *env) {
         sync_mutex_lock(&tr->mu);
         tr->wl_err = error_retain(arena_allocator(&tr->wl_arena), err);
         sync_mutex_unlock(&tr->mu);
-        (void)chan_send(pc->write_err_ch, &ok); /* to the body, which may reuse pc */
-        (void)chan_send(tr->write_err_ch, &ok); /* to the round trip */
+        chan_send(pc->write_err_ch, &ok); /* to the body, which may reuse pc */
+        chan_send(tr->write_err_ch, &ok); /* to the round trip */
         if (!ok) {
             tp_pc_close(pc, err);
             tp_trip_wl_release(tr);
@@ -2046,7 +2059,8 @@ static bool tp_pc_wrote_request(tp_PConn *pc) {
     bool ok = false;
     if (chan_try_recv(pc->write_err_ch, &ok, NULL))
         return ok;
-    TimeTimer *tm = time_new_timer(tp_alloc(pc->t), TP_MAX_WRITE_WAIT_BEFORE_CONN_REUSE);
+    TimeTimer *tm =
+        time_new_timer(tp_alloc(pc->t), TP_MAX_WRITE_WAIT_BEFORE_CONN_REUSE);
     if (tm == NULL)
         return false;
     SelectCase cases[2] = {BURROW_RECV(pc->write_err_ch, &ok),
@@ -2103,7 +2117,7 @@ static HttpResponse *tp_read_response(tp_PConn *pc, tp_Trip *tr, Error *err) {
         Int code = resp->status_code;
         if (continue_ch != NULL && code == HTTP_STATUS_CONTINUE) {
             bool v = true;
-            (void)chan_send(continue_ch, &v);
+            chan_send(continue_ch, &v);
             continue_ch = NULL;
         }
         /* A 101 is the last, see Go's issue 26161. */
@@ -2114,8 +2128,8 @@ static HttpResponse *tp_read_response(tp_PConn *pc, tp_Trip *tr, Error *err) {
         break;
     }
     if (tp_is_protocol_switch(resp)) {
-        tp_Rwc *b =
-            (tp_Rwc *)mem_alloc(arena_allocator(&resp->arena), sizeof *b, _Alignof(tp_Rwc));
+        tp_Rwc *b = (tp_Rwc *)mem_alloc(arena_allocator(&resp->arena), sizeof *b,
+                                        _Alignof(tp_Rwc));
         if (b == NULL) {
             http_response_free(resp);
             BURROW_OUT(err, burrow_err_out_of_memory);
@@ -2135,7 +2149,7 @@ static HttpResponse *tp_read_response(tp_PConn *pc, tp_Trip *tr, Error *err) {
             chan_close(continue_ch);
         } else {
             bool v = true;
-            (void)chan_send(continue_ch, &v);
+            chan_send(continue_ch, &v);
         }
     }
     return resp;
@@ -2183,7 +2197,8 @@ static bool tp_maybe_drain_body(tp_PConn *pc, IoReadCloser body, Error close_err
     TimeTimer *tm = time_new_timer(a, TP_MAX_POST_CLOSE_READ_TIME);
     Int i = 1;
     if (tm != NULL) {
-        SelectCase cases[2] = {BURROW_RECV(d.done, NULL), BURROW_RECV(time_timer_c(tm), NULL)};
+        SelectCase cases[2] = {BURROW_RECV(d.done, NULL),
+                               BURROW_RECV(time_timer_c(tm), NULL)};
         i = chan_select(cases, 2);
         (void)time_timer_stop(tm);
         time_timer_free(tm);
@@ -2234,11 +2249,12 @@ static void tp_read_loop(void *env) {
             err = tp_wrap(error_allocator(), &tp_read_from_server_vt, err);
             close_err = err;
         }
-        if (BURROW_FAILED(err)) {
+        if (BURROW_FAILED(err) || resp == NULL) {
             if (pc->read_limit <= 0)
-                err = fmt_errorf_v("net/http: server response headers exceeded %d bytes; "
-                                   "aborted",
-                                   tp_max_header_response_size(t));
+                err =
+                    fmt_errorf_v("net/http: server response headers exceeded %d bytes; "
+                                 "aborted",
+                                 tp_max_header_response_size(t));
             tp_rl_fail(tr, err);
             break;
         }
@@ -2325,13 +2341,13 @@ static void tp_read_loop(void *env) {
                 !body_eof && resp->content_length <= TP_MAX_POST_CLOSE_READ_BYTES;
             bool v = true;
             if (try_drain) {
-                (void)chan_send(pc->eofc, &v);
+                chan_send(pc->eofc, &v);
                 body_eof = tp_maybe_drain_body(pc, body->body, close_err);
             }
             alive = alive && body_eof && !pc->saw_eof && tp_pc_wrote_request(pc) &&
                     tp_rl_try_put_idle(pc, &close_err);
             if (!try_drain && body_eof)
-                (void)chan_send(pc->eofc, &v);
+                chan_send(pc->eofc, &v);
             break;
         }
         case 1:
@@ -2360,4 +2376,945 @@ static void tp_read_loop(void *env) {
     tp_pc_unref(pc);
 }
 
-/* @@TP-PART-6@@ */
+/* ------------------------------------------------------- making the trips */
+
+static void tp_trip_free(tp_Trip *tr) {
+    HttpTransport *t = tr->t;
+    tp_gzip_free(tr->gz);
+    tp_body_free(t, tr->body);
+    chan_free(tr->resc);
+    chan_free(tr->gone);
+    chan_free(tr->write_err_ch);
+    chan_free(tr->continue_ch);
+    chan_free(tr->wait_body);
+    chan_free(tr->rl_done);
+    chan_free(tr->wl_done);
+    arena_free(&tr->arena);
+    arena_free(&tr->rl_arena);
+    arena_free(&tr->wl_arena);
+    if (tr->pc != NULL)
+        tp_pc_unref(tr->pc);
+    mem_free(tp_alloc(t), tr, sizeof *tr, _Alignof(tp_Trip));
+}
+
+static void tp_trip_unref(tp_Trip *tr) {
+    if (sync_atomic_int64_add(&tr->refs, -1) != 0)
+        return;
+    tp_trip_free(tr);
+}
+
+/* A try at call's request on pc, which it takes a reference on. NULL when the
+ * allocator says no. */
+static tp_Trip *tp_trip_new(HttpTransport *t, tp_Call *call, tp_PConn *pc) {
+    Alloc *a = tp_alloc(t);
+    tp_Trip *tr = (tp_Trip *)mem_alloc(a, sizeof *tr, _Alignof(tp_Trip));
+    if (tr == NULL)
+        return NULL;
+    tr->t = t;
+    tr->call = call;
+    tr->req = &call->req;
+    tr->ctx = call->ctx;
+    tp_pc_ref(pc);
+    tr->pc = pc;
+    sync_atomic_int64_store(&tr->refs, 1);
+    arena_init(&tr->arena, a, 0);
+    arena_init(&tr->rl_arena, a, 0);
+    arena_init(&tr->wl_arena, a, 0);
+    tr->resc = chan_make(a, TYPE_BOOL, 0);
+    tr->gone = chan_make(a, TYPE_BOOL, 0);
+    tr->write_err_ch = chan_make(a, TYPE_BOOL, 1);
+    tr->wait_body = chan_make(a, TYPE_BOOL, 2);
+    tr->rl_done = chan_make(a, TYPE_BOOL, 0);
+    tr->wl_done = chan_make(a, TYPE_BOOL, 0);
+    if (tr->resc == NULL || tr->gone == NULL || tr->write_err_ch == NULL ||
+        tr->wait_body == NULL || tr->rl_done == NULL || tr->wl_done == NULL) {
+        tp_trip_free(tr);
+        return NULL;
+    }
+    return tr;
+}
+
+/* transportRequest.extraHeaders, made the first time it is wanted. False when
+ * the allocator says no. */
+static bool tp_trip_set_extra(tp_Trip *tr, Str key, Str value) {
+    if (tr->extra == NULL) {
+        tr->extra = http_header_make(arena_allocator(&tr->arena));
+        if (tr->extra == NULL)
+            return false;
+    }
+    return http_header_set(tr->extra, key, value);
+}
+
+/* ------------------------------------------------------ persistConn.roundTrip */
+
+/* mapRoundTripError. Waits for the write loop to end first, which it does
+ * once the connection is closed, as it is or soon will be for every error
+ * this is called with. */
+static Error tp_map_round_trip_error(tp_PConn *pc, tp_Trip *tr, int64_t start,
+                                     Error err) {
+    if (BURROW_OK(err))
+        return err;
+    tp_wait(pc->write_loop_done);
+    Error cerr = tp_pc_canceled(pc);
+    if (BURROW_FAILED(cerr))
+        return cerr;
+    sync_mutex_lock(&tr->mu);
+    Error req_err = tr->set_err;
+    sync_mutex_unlock(&tr->mu);
+    if (BURROW_FAILED(req_err))
+        return req_err;
+    if (tp_same(err, burrow__http_err_server_closed_idle))
+        return err;
+    bool nothing = sync_atomic_int64_load(&pc->nwrite) == start;
+    if (tp_is_read_from_server(err))
+        return nothing ? tp_wrap(error_allocator(), &tp_nothing_written_vt, err) : err;
+    if (tp_pc_is_broken(pc)) {
+        if (nothing)
+            return tp_wrap(error_allocator(), &tp_nothing_written_vt, err);
+        return fmt_errorf_v("net/http: HTTP/1.x transport connection broken: %w", err);
+    }
+    return err;
+}
+
+/* The response the read loop sent, or its error mapped. */
+static HttpResponse *tp_pc_handle_response(tp_PConn *pc, tp_Trip *tr, int64_t start,
+                                           Error *err) {
+    if (tr->res != NULL)
+        return tr->res;
+    BURROW_OUT(err, tp_map_round_trip_error(pc, tr, start, tr->rl_err));
+    return NULL;
+}
+
+/* persistConn.roundTrip. The error may point into tr and pc, so it is to be
+ * retained before they go. */
+static HttpResponse *tp_pc_round_trip(tp_PConn *pc, tp_Trip *tr, Error *err) {
+    HttpTransport *t = pc->t;
+    HttpRequest *req = tr->req;
+    Alloc *ta = arena_allocator(&tr->arena);
+    bool ok = true;
+
+    /* The headers and channels the trip needs are made before the read loop
+     * is told to expect a response, so that there is nothing left to fail
+     * once it has been. */
+    sync_mutex_lock(&pc->mu);
+    Str auth = pc->is_proxy ? tp_dup(ta, pc->proxy_auth) : BURROW_STR_EMPTY;
+    ok = auth.len == (pc->is_proxy ? pc->proxy_auth.len : 0);
+    sync_mutex_unlock(&pc->mu);
+    if (ok && auth.len > 0)
+        ok = tp_trip_set_extra(tr, BURROW_S("Proxy-Authorization"), auth);
+
+    /* Ask for gzip when the caller has not asked for an encoding of its own,
+     * and take it off again only then. Not for a range, which would fail to
+     * decode, or HEAD, for nginx's sake. */
+    bool requested_gzip = false;
+    if (ok && !t->disable_compression &&
+        http_header_get(req->header, BURROW_S("Accept-Encoding")).len == 0 &&
+        http_header_get(req->header, BURROW_S("Range")).len == 0 &&
+        !str_eq(req->method, BURROW_S("HEAD"))) {
+        requested_gzip = true;
+        ok = tp_trip_set_extra(tr, BURROW_S("Accept-Encoding"), BURROW_S("gzip"));
+    }
+    if (ok && http_request_proto_at_least(req, 1, 1) && req->body.vt != NULL &&
+        tp_expects_continue(req)) {
+        tr->continue_ch = chan_make(tp_alloc(t), TYPE_BOOL, 1);
+        ok = tr->continue_ch != NULL;
+    }
+    if (ok && t->disable_keep_alives && !tp_wants_close(req) &&
+        !tp_is_protocol_switch_header(req->header))
+        ok = tp_trip_set_extra(tr, BURROW_S("Connection"), BURROW_S("close"));
+    if (!ok) {
+        chan_close(tr->rl_done);
+        chan_close(tr->wl_done);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    tr->added_gzip = requested_gzip;
+
+    /* Write the request while waiting for the response, in case the server
+     * answers before it has read the whole body. A loop that has ended takes
+     * no more trips, and the closed connection that ended it is what the
+     * select below finds. */
+    int64_t start = sync_atomic_int64_load(&pc->nwrite);
+    uintptr_t p = (uintptr_t)tr;
+    sync_mutex_lock(&pc->mu);
+    pc->num_expected++;
+    bool to_wl = false;
+    bool to_rl = false;
+    (void)sync_atomic_int64_add(&tr->refs, 2);
+    if (!pc->wl_exited)
+        to_wl = chan_try_send(pc->writech, &p);
+    if (!pc->rl_exited)
+        to_rl = chan_try_send(pc->reqch, &p);
+    (void)sync_atomic_int64_add(&tr->refs, -(int64_t)(!to_wl) - (int64_t)(!to_rl));
+    sync_mutex_unlock(&pc->mu);
+    if (!to_wl)
+        chan_close(tr->wl_done);
+    if (!to_rl)
+        chan_close(tr->rl_done);
+
+    TimeTimer *hdr_timer = NULL;
+    Chan *ctx_done = context_done(tr->ctx);
+    HttpResponse *res = NULL;
+    Error e = BURROW_NO_ERROR;
+    for (;;) {
+        bool wrote = false;
+        SelectCase cases[5] = {
+            BURROW_RECV(tr->write_err_ch, &wrote),
+            BURROW_RECV(pc->closech, NULL),
+            BURROW_RECV(hdr_timer != NULL ? time_timer_c(hdr_timer) : NULL, NULL),
+            BURROW_RECV(tr->resc, NULL),
+            BURROW_RECV(ctx_done, NULL),
+        };
+        Int i = chan_select(cases, 5);
+        if (i == 0) {
+            if (!wrote) {
+                sync_mutex_lock(&tr->mu);
+                Error werr = tr->wl_err;
+                sync_mutex_unlock(&tr->mu);
+                tp_pc_close(pc, fmt_errorf_v("write error: %w", werr));
+                e = tp_map_round_trip_error(pc, tr, start, werr);
+                break;
+            }
+            if (t->response_header_timeout > 0) {
+                hdr_timer = time_new_timer(tp_alloc(t), t->response_header_timeout);
+                if (hdr_timer == NULL) {
+                    tp_pc_close(pc, burrow_err_out_of_memory);
+                    e = burrow_err_out_of_memory;
+                    break;
+                }
+            }
+        } else if (i == 1) {
+            /* The connection closing raced with the response, which is most
+             * likely a server that wrote one and closed at once. Use it. */
+            if (chan_try_recv(tr->resc, NULL, NULL)) {
+                res = tp_pc_handle_response(pc, tr, start, &e);
+                break;
+            }
+            sync_mutex_lock(&pc->mu);
+            Error closed = pc->closed;
+            sync_mutex_unlock(&pc->mu);
+            e = tp_map_round_trip_error(pc, tr, start, closed);
+            break;
+        } else if (i == 2) {
+            tp_pc_close(pc, burrow__http_err_timeout);
+            e = burrow__http_err_timeout;
+            break;
+        } else if (i == 3) {
+            res = tp_pc_handle_response(pc, tr, start, &e);
+            break;
+        } else {
+            /* The read loop cancels the context once the body is read, so a
+             * response may have beaten it here. */
+            if (chan_try_recv(tr->resc, NULL, NULL)) {
+                res = tp_pc_handle_response(pc, tr, start, &e);
+                break;
+            }
+            tp_pc_cancel_request(pc, context_cause(tr->ctx));
+            ctx_done = NULL; /* closech is next */
+        }
+    }
+    if (hdr_timer != NULL) {
+        (void)time_timer_stop(hdr_timer);
+        time_timer_free(hdr_timer);
+    }
+    BURROW_OUT(err, e);
+    return res;
+}
+
+/* --------------------------------------------------------- the request body */
+
+/* readTrackingBody. What the request body is wrapped in, to tell whether it
+ * was read or closed when the request is to be sent again. */
+struct tp_Track {
+    tp_Track *next; /* in the call's list */
+    IoReadCloser body;
+    SyncAtomicBool did_close;
+    bool did_read; /* the write loop's, and the caller's once it is done */
+};
+
+static Int tp_track_read(void *self, Slice p, Error *err) {
+    tp_Track *k = (tp_Track *)self;
+    k->did_read = true;
+    return k->body.vt->reader.read(k->body.data, p, err);
+}
+
+static Error tp_track_close(void *self) {
+    tp_Track *k = (tp_Track *)self;
+    if (!sync_atomic_bool_compare_and_swap(&k->did_close, false, true))
+        return BURROW_NO_ERROR;
+    return k->body.vt->closer.close(k->body.data);
+}
+
+static const IoReadCloserVT tp_track_vt = {{NULL, tp_track_read},
+                                           {NULL, tp_track_close}};
+
+/* Request.closeBody. */
+static void tp_close_body(HttpRequest *r) {
+    if (r->body.vt != NULL)
+        (void)r->body.vt->closer.close(r->body.data);
+}
+
+/* Puts body in a tracker as call's request body. False when the allocator
+ * says no. */
+static bool tp_call_track(tp_Call *call, IoReadCloser body) {
+    tp_Track *k =
+        (tp_Track *)mem_alloc(tp_alloc(call->t), sizeof *k, _Alignof(tp_Track));
+    if (k == NULL)
+        return false;
+    k->body = body;
+    k->next = call->tracks;
+    call->tracks = k;
+    call->req.body = (IoReadCloser){&tp_track_vt, k};
+    return true;
+}
+
+/* rewindBody. Gets call's request ready to go again, with a new body from
+ * get_body when the one it had was read or closed. */
+static Error tp_call_rewind(tp_Call *call) {
+    HttpRequest *r = &call->req;
+    if (tp_is_no_body(r->body))
+        return BURROW_NO_ERROR;
+    tp_Track *k = (tp_Track *)r->body.data;
+    bool closed = sync_atomic_bool_load(&k->did_close);
+    if (!k->did_read && !closed)
+        return BURROW_NO_ERROR; /* nothing to rewind */
+    if (!closed)
+        tp_close_body(r);
+    if (r->get_body.f == NULL)
+        return burrow__http_err_cannot_rewind;
+    Error e = BURROW_NO_ERROR;
+    IoReadCloser body = BURROW_CALLF(r->get_body, &e);
+    if (BURROW_FAILED(e))
+        return e;
+    if (!tp_call_track(call, body)) {
+        if (body.vt != NULL)
+            (void)body.vt->closer.close(body.data);
+        return burrow_err_out_of_memory;
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* ------------------------------------------------------------------ the calls */
+
+/* Takes call out of t->calls, so that CancelRequest no longer finds it. */
+static void tp_call_unlink(tp_Call *call) {
+    HttpTransport *t = call->t;
+    sync_mutex_lock(&t->req_mu);
+    if (call->linked) {
+        for (tp_Call **pp = &t->calls; *pp != NULL; pp = &(*pp)->next) {
+            if (*pp == call) {
+                *pp = call->next;
+                break;
+            }
+        }
+        call->linked = false;
+    }
+    sync_mutex_unlock(&t->req_mu);
+}
+
+/* The cancel that prepareTransportCancel makes, which forgets the request as
+ * well. */
+static void tp_call_cancel(tp_Call *call, Error cause) {
+    BURROW_CALLF(call->cancel, cause);
+    tp_call_unlink(call);
+}
+
+static tp_Call *tp_call_new(HttpTransport *t, HttpRequest *orig) {
+    tp_Call *call = (tp_Call *)mem_alloc(tp_alloc(t), sizeof *call, _Alignof(tp_Call));
+    if (call == NULL)
+        return NULL;
+    call->t = t;
+    call->orig = orig;
+    call->req = *orig;
+    return call;
+}
+
+static void tp_call_free(tp_Call *call) {
+    HttpTransport *t = call->t;
+    Alloc *a = tp_alloc(t);
+    tp_call_unlink(call);
+    context_release(call->ctx);
+    while (call->tracks != NULL) {
+        tp_Track *k = call->tracks;
+        call->tracks = k->next;
+        mem_free(a, k, sizeof *k, _Alignof(tp_Track));
+    }
+    mem_free(a, call, sizeof *call, _Alignof(tp_Call));
+}
+
+/* The response's on_free. The body is closed first, which lets the read loop
+ * go on, and the request is not freed before both loops are done with it. */
+static void tp_call_on_free(void *env) {
+    tp_Call *call = (tp_Call *)env;
+    tp_Trip *tr = call->trip;
+    if (tr->gz != NULL)
+        tp_gzip_close_reader(tr->gz);
+    if (tr->body != NULL)
+        (void)tp_body_close(tr->body);
+    tp_wait(tr->rl_done);
+    tp_wait(tr->wl_done);
+    tp_trip_unref(tr);
+    tp_call_free(call);
+}
+
+/* The on_free of a response from an alternate round tripper, which keeps the
+ * call for as long as the response may point at its request. */
+static void tp_call_alt_on_free(void *env) {
+    tp_Call *call = (tp_Call *)env;
+    if (!BURROW_FUNC_IS_NIL(call->alt_on_free))
+        BURROW_CALLF0(call->alt_on_free);
+    tp_call_free(call);
+}
+
+/* ------------------------------------------------------------------- getConn */
+
+/* The context's cause, as getConn gives it. */
+static Error tp_get_conn_cause(Context ctx) {
+    Error e = context_cause(ctx);
+    if (tp_same(e, burrow__http_err_request_canceled))
+        e = burrow__http_err_request_canceled_conn;
+    return e;
+}
+
+/* getConn. A connection for cm, from the pool or a new dial, whichever comes
+ * first, with a reference that is the caller's. The dial goes on when the
+ * call gives up, and its connection goes in the pool. Its context comes from
+ * the background and not the request's, which may be gone by then, so values
+ * in the request's context do not reach dial_context. */
+static tp_PConn *tp_get_conn(HttpTransport *t, tp_Call *call,
+                             const tp_ConnectMethod *cm, Error *err) {
+    Alloc *a = tp_alloc(t);
+    tp_Want *w = (tp_Want *)mem_alloc(a, sizeof *w, _Alignof(tp_Want));
+    if (w == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    w->t = t;
+    sync_atomic_int64_store(&w->refs, 1);
+    arena_init(&w->arena, a, 0);
+    arena_init(&w->err_arena, a, 0);
+    Alloc *wa = arena_allocator(&w->arena);
+    bool ok = true;
+    if (cm->proxy_url != NULL) {
+        w->cm.proxy_url = url_clone(cm->proxy_url, wa);
+        ok = w->cm.proxy_url != NULL;
+    }
+    w->cm.target_scheme = tp_dup(wa, cm->target_scheme);
+    w->cm.target_addr = tp_dup(wa, cm->target_addr);
+    w->cm.only_h1 = cm->only_h1;
+    w->key = tp_cm_key(wa, &w->cm);
+    w->ready = chan_make(a, TYPE_BOOL, 0);
+    w->ctx = context_with_cancel(a, context_background(), &w->cancel_ctx);
+    w->has_cancel_ctx = true;
+    if (!ok || w->cm.target_scheme.len != cm->target_scheme.len ||
+        w->cm.target_addr.len != cm->target_addr.len || w->key.len == 0 ||
+        w->ready == NULL || BURROW_CONTEXT_IS_NIL(w->ctx)) {
+        tp_want_free(w);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+
+    if (!tp_queue_for_idle_conn(t, w))
+        tp_queue_for_dial(t, w);
+
+    SelectCase cases[2] = {BURROW_RECV(w->ready, NULL),
+                           BURROW_RECV(context_done(call->ctx), NULL)};
+    tp_PConn *pc = NULL;
+    Error e = BURROW_NO_ERROR;
+    if (chan_select(cases, 2) == 0) {
+        sync_mutex_lock(&w->mu);
+        pc = w->res_pc;
+        w->res_pc = NULL;
+        e = w->res_err;
+        sync_mutex_unlock(&w->mu);
+        /* An error that came with the request canceled is the cancel's. */
+        if (pc == NULL && BURROW_FAILED(context_err(call->ctx)))
+            e = tp_get_conn_cause(call->ctx);
+    } else {
+        e = tp_get_conn_cause(call->ctx);
+    }
+    if (pc == NULL) {
+        e = error_retain(error_allocator(), e);
+        tp_want_cancel(w);
+    }
+    tp_want_unref(w);
+    BURROW_OUT(err, e);
+    return pc;
+}
+
+/* ---------------------------------------------------------- Transport.roundTrip */
+
+/* Transport.useRegisteredProtocol and alternateRoundTripper. */
+static bool tp_alternate_round_tripper(HttpTransport *t, const HttpRequest *req,
+                                       HttpRoundTripper *rt) {
+    if (str_eq(req->url->scheme, BURROW_S("https")) && tp_requires_http1(req))
+        return false;
+    bool found = false;
+    sync_mutex_lock(&t->alt_mu);
+    for (tp_AltProto *p = t->alt; p != NULL; p = p->next) {
+        if (str_eq(p->scheme, req->url->scheme)) {
+            *rt = p->rt;
+            found = true;
+            break;
+        }
+    }
+    sync_mutex_unlock(&t->alt_mu);
+    return found;
+}
+
+/* persistConn.shouldRetryRequest. */
+static bool tp_should_retry_request(tp_PConn *pc, const HttpRequest *req, Error err) {
+    if (burrow__http_is_err_missing_host(err))
+        return false;
+    if (!tp_pc_is_reused(pc))
+        return false; /* a new connection that failed is not the server's fault */
+    if (tp_is_nothing_written(err))
+        return burrow__http_request_outgoing_length(req) == 0 ||
+               req->get_body.f != NULL;
+    if (!tp_is_replayable(req))
+        return false;
+    if (tp_is_read_from_server(err))
+        return true;
+    return tp_same(err, burrow__http_err_server_closed_idle);
+}
+
+/* connectMethodForRequest, with what it makes in a. */
+static Error tp_connect_method_for_request(HttpTransport *t, HttpRequest *req, Alloc *a,
+                                           tp_ConnectMethod *cm) {
+    memset(cm, 0, sizeof *cm);
+    cm->target_scheme = req->url->scheme;
+    cm->target_addr = burrow__httpproxy_canonical_addr(a, req->url);
+    if (cm->target_addr.len == 0)
+        return burrow_err_out_of_memory;
+    Error e = BURROW_NO_ERROR;
+    if (t->proxy.f != NULL)
+        cm->proxy_url = BURROW_CALLF(t->proxy, req, a, &e);
+    cm->only_h1 = tp_requires_http1(req);
+    return e;
+}
+
+/* The checks Transport.roundTrip makes before it sends anything. */
+static Error tp_check_request(HttpRequest *req) {
+    if (req->url == NULL)
+        return tp_err_nil_url;
+    if (req->header == NULL)
+        return tp_err_nil_header;
+    Str scheme = req->url->scheme;
+    if (str_eq(scheme, BURROW_S("http")) || str_eq(scheme, BURROW_S("https"))) {
+        Str bad = burrow__http_validate_headers(error_allocator(), req->header);
+        if (bad.len > 0)
+            return fmt_errorf_v("net/http: invalid header %s", bad);
+        bad = burrow__http_validate_headers(error_allocator(), req->trailer);
+        if (bad.len > 0)
+            return fmt_errorf_v("net/http: invalid trailer %s", bad);
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* Transport.roundTrip, from setupRewindBody on. */
+static HttpResponse *tp_round_trip_call(HttpTransport *t, tp_Call *call, Error *err) {
+    HttpRequest *orig = call->orig;
+    HttpRequest *req = &call->req;
+    Alloc *a = tp_alloc(t);
+    Error e = BURROW_NO_ERROR;
+    HttpResponse *res = NULL;
+
+    HttpRoundTripper alt;
+    if (tp_alternate_round_tripper(t, req, &alt)) {
+        res = http_round_tripper_round_trip(alt, req, &e);
+        if (!tp_same(e, http_err_skip_alt_protocol)) {
+            if (res == NULL) {
+                tp_call_free(call);
+                BURROW_OUT(err, e);
+                return NULL;
+            }
+            if (res->request == req)
+                res->request = orig;
+            call->alt_on_free = res->on_free;
+            res->on_free = BURROW_FN(Func, tp_call_alt_on_free, call);
+            BURROW_OUT(err, e);
+            return res;
+        }
+        e = tp_call_rewind(call);
+        if (BURROW_FAILED(e)) {
+            tp_call_free(call);
+            BURROW_OUT(err, e);
+            return NULL;
+        }
+    }
+
+    Str scheme = req->url->scheme;
+    if (!str_eq(scheme, BURROW_S("http")) && !str_eq(scheme, BURROW_S("https"))) {
+        tp_close_body(req);
+        e = burrow__http_bad_string_error(BURROW_S("unsupported protocol scheme"),
+                                          scheme);
+        tp_call_free(call);
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    if (req->method.len != 0 && !burrow__http_valid_method(req->method)) {
+        tp_close_body(req);
+        e = fmt_errorf_v("net/http: invalid method %q", req->method);
+        tp_call_free(call);
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    if (req->url->host.len == 0) {
+        tp_close_body(req);
+        tp_call_free(call);
+        BURROW_OUT(err, burrow__http_err_no_host_in_url);
+        return NULL;
+    }
+
+    call->ctx = context_with_cancel_cause(a, http_request_context(orig), &call->cancel);
+    if (BURROW_CONTEXT_IS_NIL(call->ctx)) {
+        tp_close_body(req);
+        tp_call_free(call);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    /* prepareTransportCancel. */
+    sync_mutex_lock(&t->req_mu);
+    call->next = t->calls;
+    t->calls = call;
+    call->linked = true;
+    sync_mutex_unlock(&t->req_mu);
+
+    Arena scratch;
+    arena_init(&scratch, a, 0);
+    for (;;) {
+        if (BURROW_FAILED(context_err(call->ctx))) {
+            tp_close_body(req);
+            e = context_cause(call->ctx);
+            break;
+        }
+        tp_ConnectMethod cm;
+        e = tp_connect_method_for_request(t, req, arena_allocator(&scratch), &cm);
+        if (BURROW_FAILED(e)) {
+            tp_close_body(req);
+            break;
+        }
+        tp_PConn *pc = tp_get_conn(t, call, &cm, &e);
+        if (pc == NULL) {
+            tp_close_body(req);
+            break;
+        }
+        tp_Trip *tr = tp_trip_new(t, call, pc);
+        if (tr == NULL) {
+            tp_put_or_close_idle_conn(t, pc);
+            tp_pc_unref(pc);
+            tp_close_body(req);
+            e = burrow_err_out_of_memory;
+            break;
+        }
+        tp_pc_unref(pc);
+        res = tp_pc_round_trip(pc, tr, &e);
+        chan_close(tr->gone);
+        if (res != NULL) {
+            call->trip = tr;
+            res->request = orig;
+            res->on_free = BURROW_FN(Func, tp_call_on_free, call);
+            arena_free(&scratch);
+            BURROW_OUT(err, BURROW_NO_ERROR);
+            return res;
+        }
+
+        /* Neither loop looks at the request after this. */
+        tp_wait(tr->rl_done);
+        tp_wait(tr->wl_done);
+        e = error_retain(error_allocator(), e);
+        bool retry = tp_should_retry_request(pc, req, e);
+        tp_trip_unref(tr);
+        if (!retry) {
+            if (tp_is_nothing_written(e))
+                e = tp_wrapped_unwrap(e.data);
+            if (tp_is_read_from_server(e))
+                e = tp_wrapped_unwrap(e.data);
+            if (req->body.vt == &tp_track_vt &&
+                !sync_atomic_bool_load(&((tp_Track *)req->body.data)->did_close))
+                tp_close_body(req);
+            break;
+        }
+        e = tp_call_rewind(call);
+        if (BURROW_FAILED(e))
+            break;
+    }
+    arena_free(&scratch);
+    e = error_retain(error_allocator(), e);
+    tp_call_cancel(call, e);
+    tp_call_free(call);
+    BURROW_OUT(err, e);
+    return NULL;
+}
+
+HttpResponse *http_transport_round_trip(HttpTransport *t, HttpRequest *req,
+                                        Error *err) {
+    Error e = tp_check_request(req);
+    if (BURROW_FAILED(e)) {
+        tp_close_body(req);
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    tp_Call *call = tp_call_new(t, req);
+    if (call == NULL ||
+        (!tp_is_no_body(req->body) && !tp_call_track(call, req->body))) {
+        if (call != NULL)
+            tp_call_free(call);
+        tp_close_body(req);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    return tp_round_trip_call(t, call, err);
+}
+
+static HttpResponse *tp_rt_round_trip(void *self, HttpRequest *req, Error *err) {
+    return http_transport_round_trip((HttpTransport *)self, req, err);
+}
+
+static const HttpRoundTripperVT tp_rt_vt = {NULL, tp_rt_round_trip};
+
+HttpRoundTripper http_transport_as_round_tripper(HttpTransport *t) {
+    HttpRoundTripper rt = {&tp_rt_vt, t};
+    return rt;
+}
+
+/* ---------------------------------------------------- the rest of Transport */
+
+void http_transport_close_idle_connections(HttpTransport *t) {
+    /* A connection in the pool has a read loop, which takes it out under
+     * idle_mu, so it is still there while this holds idle_mu. */
+    sync_mutex_lock(&t->idle_mu);
+    t->close_idle = true; /* and close the ones that go idle from now on */
+    tp_IdleBucket *b = t->idle;
+    while (b != NULL) {
+        tp_IdleBucket *next = b->next;
+        while (b->n > 0) {
+            tp_PConn *pc = b->conns[--b->n];
+            tp_lru_remove(t, pc);
+            tp_pc_close(pc, burrow__http_err_close_idle_conns);
+            tp_stop_idle_timer(pc);
+        }
+        tp_idle_bucket_trim(t, b);
+        b = next;
+    }
+    sync_mutex_unlock(&t->idle_mu);
+
+    /* Dials nobody waits for any more are stopped too. */
+    sync_mutex_lock(&t->conns_per_host_mu);
+    for (Int i = 0; i < t->dials.len; i++) {
+        tp_Want *w = t->dials.w[(t->dials.head + i) % t->dials.cap];
+        if (w->has_cancel_ctx && !tp_want_waiting(w))
+            BURROW_CALLF0(w->cancel_ctx);
+    }
+    sync_mutex_unlock(&t->conns_per_host_mu);
+}
+
+void http_transport_cancel_request(HttpTransport *t, HttpRequest *req) {
+    sync_mutex_lock(&t->req_mu);
+    for (tp_Call **pp = &t->calls; *pp != NULL; pp = &(*pp)->next) {
+        tp_Call *call = *pp;
+        if (call->orig != req)
+            continue;
+        /* Under req_mu, which the call is taken out under before it is
+         * freed. */
+        BURROW_CALLF(call->cancel, burrow__http_err_request_canceled);
+        *pp = call->next;
+        call->linked = false;
+        break;
+    }
+    sync_mutex_unlock(&t->req_mu);
+}
+
+bool http_transport_register_protocol(HttpTransport *t, Str scheme,
+                                      HttpRoundTripper rt) {
+    Alloc *a = tp_alloc(t);
+    bool ok = false;
+    sync_mutex_lock(&t->alt_mu);
+    bool dup = false;
+    for (tp_AltProto *p = t->alt; p != NULL; p = p->next)
+        dup = dup || str_eq(p->scheme, scheme);
+    tp_AltProto *p = NULL;
+    if (!dup)
+        p = (tp_AltProto *)mem_alloc(a, sizeof *p, _Alignof(tp_AltProto));
+    if (p != NULL) {
+        p->scheme = tp_dup(a, scheme);
+        if (p->scheme.len == scheme.len) {
+            p->rt = rt;
+            p->next = t->alt;
+            t->alt = p;
+            ok = true;
+        } else {
+            mem_free(a, p, sizeof *p, _Alignof(tp_AltProto));
+        }
+    }
+    sync_mutex_unlock(&t->alt_mu);
+    return ok;
+}
+
+HttpTransport http_transport_clone(const HttpTransport *t, Alloc *a) {
+    HttpTransport t2;
+    memset(&t2, 0, sizeof t2);
+    t2.proxy = t->proxy;
+    t2.on_proxy_connect_response = t->on_proxy_connect_response;
+    t2.dial_context = t->dial_context;
+    t2.dial = t->dial;
+    t2.dial_tls_context = t->dial_tls_context;
+    t2.dial_tls = t->dial_tls;
+    t2.free_conn = t->free_conn;
+    t2.disable_keep_alives = t->disable_keep_alives;
+    t2.disable_compression = t->disable_compression;
+    t2.max_idle_conns = t->max_idle_conns;
+    t2.max_idle_conns_per_host = t->max_idle_conns_per_host;
+    t2.max_conns_per_host = t->max_conns_per_host;
+    t2.idle_conn_timeout = t->idle_conn_timeout;
+    t2.response_header_timeout = t->response_header_timeout;
+    t2.expect_continue_timeout = t->expect_continue_timeout;
+    if (t->proxy_connect_header != NULL)
+        t2.proxy_connect_header = http_header_clone(a, t->proxy_connect_header);
+    t2.get_proxy_connect_header = t->get_proxy_connect_header;
+    t2.max_response_header_bytes = t->max_response_header_bytes;
+    t2.write_buffer_size = t->write_buffer_size;
+    t2.read_buffer_size = t->read_buffer_size;
+    t2.protocols = t->protocols;
+    t2.a = t->a;
+    return t2;
+}
+
+void http_transport_free(HttpTransport *t) {
+    http_transport_close_idle_connections(t);
+    sync_wait_group_wait(&t->live);
+    Alloc *a = tp_alloc(t);
+    sync_mutex_lock(&t->idle_mu);
+    while (t->idle != NULL) {
+        tp_IdleBucket *b = t->idle;
+        b->n = 0;
+        tp_queue_free(t, &b->wait);
+        tp_idle_bucket_trim(t, b);
+    }
+    sync_mutex_unlock(&t->idle_mu);
+    sync_mutex_lock(&t->conns_per_host_mu);
+    while (t->conns_per_host != NULL) {
+        tp_HostBucket *b = t->conns_per_host;
+        b->n = 0;
+        tp_queue_free(t, &b->wait);
+        tp_host_bucket_trim(t, b);
+    }
+    tp_queue_free(t, &t->dials);
+    sync_mutex_unlock(&t->conns_per_host_mu);
+    sync_mutex_lock(&t->alt_mu);
+    while (t->alt != NULL) {
+        tp_AltProto *p = t->alt;
+        t->alt = p->next;
+        if (p->scheme.len > 0)
+            mem_free(a, (void *)(uintptr_t)p->scheme.p, (size_t)p->scheme.len, 1);
+        mem_free(a, p, sizeof *p, _Alignof(tp_AltProto));
+    }
+    sync_mutex_unlock(&t->alt_mu);
+}
+
+/* --------------------------------------------------------- DefaultTransport */
+
+static NetConn tp_default_dial(void *env, Context ctx, Str network, Str addr,
+                               Error *err) {
+    (void)env;
+    NetDialer d;
+    memset(&d, 0, sizeof d);
+    d.timeout = 30 * TIME_SECOND;
+    d.keep_alive = 30 * TIME_SECOND;
+    return net_dialer_dial_context(&d, heap_allocator(), ctx, network, addr, err);
+}
+
+static Url *tp_env_proxy(void *env, HttpRequest *req, Alloc *a, Error *err);
+
+static HttpTransport tp_default_transport = {
+    .proxy = {.f = tp_env_proxy, .env = NULL},
+    .dial_context = {.f = tp_default_dial, .env = NULL},
+    .max_idle_conns = 100,
+    .idle_conn_timeout = 90 * TIME_SECOND,
+    .expect_continue_timeout = 1 * TIME_SECOND,
+};
+
+HttpTransport *const http_default_transport = &tp_default_transport;
+
+/* ------------------------------------------------------------ the proxies */
+
+/* envProxyFunc's cache, which resetProxyConfig empties. */
+typedef struct tp_EnvProxy {
+    SyncMutex mu;
+    bool loaded;
+    Arena arena;
+    burrow__Httpproxy *p;
+} tp_EnvProxy;
+
+static tp_EnvProxy tp_env_proxy_cache;
+
+Url *http_proxy_from_environment(HttpRequest *req, Alloc *a, Error *err) {
+    tp_EnvProxy *c = &tp_env_proxy_cache;
+    Error e = BURROW_NO_ERROR;
+    Url *out = NULL;
+    sync_mutex_lock(&c->mu);
+    if (!c->loaded) {
+        arena_init(&c->arena, heap_allocator(), 0);
+        Alloc *ea = arena_allocator(&c->arena);
+        burrow__HttpproxyConfig cfg = burrow__httpproxy_from_environment(ea);
+        c->p = burrow__httpproxy_new(ea, &cfg);
+        if (c->p == NULL) {
+            arena_free(&c->arena);
+            sync_mutex_unlock(&c->mu);
+            BURROW_OUT(err, burrow_err_out_of_memory);
+            return NULL;
+        }
+        c->loaded = true;
+    }
+    Arena scratch;
+    arena_init(&scratch, heap_allocator(), 0);
+    const Url *u =
+        burrow__httpproxy_proxy_for_url(c->p, req->url, arena_allocator(&scratch), &e);
+    if (u != NULL && BURROW_OK(e)) {
+        out = url_clone(u, a);
+        if (out == NULL)
+            e = burrow_err_out_of_memory;
+    }
+    sync_mutex_unlock(&c->mu);
+    arena_free(&scratch);
+    BURROW_OUT(err, e);
+    return out;
+}
+
+void burrow__http_reset_cached_environment(void) {
+    tp_EnvProxy *c = &tp_env_proxy_cache;
+    sync_mutex_lock(&c->mu);
+    if (c->loaded) {
+        arena_free(&c->arena);
+        c->p = NULL;
+        c->loaded = false;
+    }
+    sync_mutex_unlock(&c->mu);
+}
+
+static Url *tp_env_proxy(void *env, HttpRequest *req, Alloc *a, Error *err) {
+    (void)env;
+    return http_proxy_from_environment(req, a, err);
+}
+
+HttpProxyFunc http_proxy_from_environment_func(void) {
+    HttpProxyFunc f = {tp_env_proxy, NULL};
+    return f;
+}
+
+static Url *tp_fixed_proxy(void *env, HttpRequest *req, Alloc *a, Error *err) {
+    (void)req;
+    const Url *u = (const Url *)env;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    if (u == NULL)
+        return NULL;
+    Url *c = url_clone(u, a);
+    if (c == NULL)
+        BURROW_OUT(err, burrow_err_out_of_memory);
+    return c;
+}
+
+HttpProxyFunc http_proxy_url(const Url *u) {
+    HttpProxyFunc f = {tp_fixed_proxy, (void *)(uintptr_t)u};
+    return f;
+}

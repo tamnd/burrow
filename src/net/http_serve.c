@@ -2570,9 +2570,9 @@ static const HttpResponseWriterVT sv_timeout_writer_vt = {
 
 static bool sv_tw_call(sv_TimeoutWriter *tw) {
     volatile bool panicked = false;
+    HttpResponseWriter w = {&sv_timeout_writer_vt, tw};
     BURROW_TRY {
-        http_handler_serve_http(
-            tw->handler, (HttpResponseWriter){&sv_timeout_writer_vt, tw}, tw->req);
+        http_handler_serve_http(tw->handler, w, tw->req);
     }
     BURROW_CATCH(p) {
         tw->panic_value = sv_keep(&tw->storage, p);

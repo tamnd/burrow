@@ -39,7 +39,7 @@
 #include "burrow/testing/fstest.h"
 #include "burrow/time.h"
 
-#include "http_internal.h"
+#include "../src/net/http_internal.h"
 
 #include <string.h>
 

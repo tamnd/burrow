@@ -134,6 +134,9 @@ static bool wnet_type(int32_t type, int *out) {
     case PAL_SOCK_RAW:
         *out = SOCK_RAW;
         return true;
+    case PAL_SOCK_SEQPACKET:
+        *out = SOCK_SEQPACKET;
+        return true;
     default:
         return false;
     }

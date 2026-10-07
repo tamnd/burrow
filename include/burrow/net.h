@@ -696,6 +696,145 @@ BURROW_BORROWS(ret) NetUDPConn *net_conn_as_udp_conn(NetConn c);
 /* Closes c if it is open and gives its memory back. NULL does nothing. */
 void net_udp_conn_free(NetUDPConn *c);
 
+/* ------------------------------------------------------------------- Unix
+ *
+ * net.UnixAddr, net.UnixConn and net.UnixListener, which are sockets named
+ * by a path on this machine, on the same poller as TCP and UDP:
+ *
+ *     NetUnixAddr addr = {BURROW_S("/tmp/app.sock"), BURROW_S("unix")};
+ *     NetUnixListener *l = net_listen_unix(a, BURROW_S("unix"), &addr, &err);
+ *     NetUnixConn *c = net_dial_unix(a, BURROW_S("unix"), NULL, &addr, &err);
+ *
+ * The network is "unix" for a stream, "unixgram" for datagrams, and
+ * "unixpacket" for datagrams over a connection, which Linux and some of the
+ * BSDs have and macOS does not. Listening makes a file at the path, and
+ * closing the listener removes it again. On Linux a name that starts with
+ * "@" is in the abstract namespace instead, with no file behind it, and a
+ * socket that was never bound is named "@" there, where macOS and the BSDs
+ * call it "".
+ *
+ * The errors are Go's, and so are the rules for the memory, which are the
+ * ones TCP has. A NetUnixAddr from net_resolve_unix_addr or read_from_unix
+ * is the caller's, and goes back with net_unix_addr_free.
+ *
+ * As with TCP, Windows gives ENOSYS until its poller is here and wasip1 has
+ * no sockets. ReadMsgUnix, WriteMsgUnix and the File methods are still to
+ * come. */
+
+/* net.UnixAddr: the path, or the abstract name, and the network it is for,
+ * which is "unix", "unixgram" or "unixpacket". */
+typedef struct NetUnixAddr {
+    Str name;
+    Str net;
+} NetUnixAddr;
+
+extern const Type *const TYPE_NET_UNIX_ADDR;
+
+/* ResolveUnixAddr: address for network, made in a with both copied. A
+ * network other than the three is a NetUnknownNetworkError. */
+BURROW_OWNS(ret) NetUnixAddr *net_resolve_unix_addr(Alloc *a, Str network, Str address,
+                                                    Error *err);
+
+/* UnixAddr.Network, which is a->net, and empty for a NULL a. */
+BURROW_BORROWS(ret) Str net_unix_addr_network(const NetUnixAddr *a);
+
+/* UnixAddr.String, which is the name, made in al, and "<nil>" for a NULL a. */
+BURROW_OWNS(ret) Str net_unix_addr_string(const NetUnixAddr *a, Alloc *al);
+
+/* a as a NetAddr, which points at a, and nil for a NULL a. */
+NetAddr net_unix_addr_as_addr(const NetUnixAddr *a);
+
+/* Gives back a NetUnixAddr that this package made in a. NULL does nothing. */
+void net_unix_addr_free(Alloc *a, NetUnixAddr *addr);
+
+typedef struct NetUnixConn NetUnixConn;
+typedef struct NetUnixListener NetUnixListener;
+
+/* DialUnix: a socket connected to raddr, bound to laddr first when that is
+ * not NULL. For "unixgram" raddr may be NULL if laddr is not, which gives a
+ * socket bound to laddr and not connected. NULL on an error, which is a
+ * NetOpError with the op "dial". */
+BURROW_OWNS(ret) NetUnixConn *net_dial_unix(Alloc *a, Str network,
+                                            const NetUnixAddr *laddr,
+                                            const NetUnixAddr *raddr, Error *err);
+
+/* ListenUnix: a listener on laddr, for "unix" or "unixpacket". laddr may not
+ * be NULL. An empty name on Linux binds to a fresh abstract name, which
+ * net_unix_listener_addr gives. NULL on an error, which is a NetOpError with
+ * the op "listen". */
+BURROW_OWNS(ret) NetUnixListener *net_listen_unix(Alloc *a, Str network,
+                                                  const NetUnixAddr *laddr, Error *err);
+
+/* ListenUnixgram: a datagram socket bound to laddr, for "unixgram" only,
+ * which sends with the write_to calls. */
+BURROW_OWNS(ret) NetUnixConn *net_listen_unixgram(Alloc *a, Str network,
+                                                  const NetUnixAddr *laddr, Error *err);
+
+/* conn.Read and conn.Write. A NULL c is EINVAL. */
+Int net_unix_conn_read(NetUnixConn *c, Slice p, Error *err);
+Int net_unix_conn_write(NetUnixConn *c, Slice p, Error *err);
+
+/* ReadFromUnix: what was read, and in *addr who sent it, made in a. *addr is
+ * NULL when the sender has no name, which is always so on a stream. */
+Int net_unix_conn_read_from_unix(NetUnixConn *c, Slice p, Alloc *a, NetUnixAddr **addr,
+                                 Error *err);
+
+/* ReadFrom, which is ReadFromUnix with the sender as a NetAddr, nil when it
+ * has no name. */
+Int net_unix_conn_read_from(NetUnixConn *c, Slice p, Alloc *a, NetAddr *addr,
+                            Error *err);
+
+/* WriteToUnix and WriteTo: p to addr, on a socket that is not connected.
+ * addr's network has to be the socket's, and WriteTo takes only a
+ * NetUnixAddr. */
+Int net_unix_conn_write_to_unix(NetUnixConn *c, Slice p, const NetUnixAddr *addr,
+                                Error *err);
+Int net_unix_conn_write_to(NetUnixConn *c, Slice p, NetAddr addr, Error *err);
+
+/* Close, CloseRead and CloseWrite, as TCP has them, and the rest of
+ * NetConn. */
+BURROW_STATIC(ret) Error net_unix_conn_close(NetUnixConn *c);
+BURROW_STATIC(ret) Error net_unix_conn_close_read(NetUnixConn *c);
+BURROW_STATIC(ret) Error net_unix_conn_close_write(NetUnixConn *c);
+NetAddr net_unix_conn_local_addr(NetUnixConn *c);
+NetAddr net_unix_conn_remote_addr(NetUnixConn *c);
+BURROW_STATIC(ret) Error net_unix_conn_set_deadline(NetUnixConn *c, Time t);
+BURROW_STATIC(ret) Error net_unix_conn_set_read_deadline(NetUnixConn *c, Time t);
+BURROW_STATIC(ret) Error net_unix_conn_set_write_deadline(NetUnixConn *c, Time t);
+BURROW_STATIC(ret) Error net_unix_conn_set_read_buffer(NetUnixConn *c, Int bytes);
+BURROW_STATIC(ret) Error net_unix_conn_set_write_buffer(NetUnixConn *c, Int bytes);
+
+/* c as a NetConn, and back. */
+NetConn net_unix_conn_as_conn(NetUnixConn *c);
+BURROW_BORROWS(ret) NetUnixConn *net_conn_as_unix_conn(NetConn c);
+
+/* Closes c if it is open and gives its memory back. NULL does nothing. */
+void net_unix_conn_free(NetUnixConn *c);
+
+/* UnixListener.AcceptUnix: the next connection, made in the listener's
+ * allocator. NULL on an error, which is a NetOpError with the op "accept". */
+BURROW_OWNS(ret) NetUnixConn *net_unix_listener_accept_unix(NetUnixListener *l,
+                                                            Error *err);
+
+/* UnixListener.Close: removes the file the listener made, unless
+ * net_unix_listener_set_unlink_on_close said not to, and then closes it. */
+BURROW_STATIC(ret) Error net_unix_listener_close(NetUnixListener *l);
+
+/* UnixListener.Addr, a NetUnixAddr that belongs to l, and SetDeadline. */
+NetAddr net_unix_listener_addr(NetUnixListener *l);
+BURROW_STATIC(ret) Error net_unix_listener_set_deadline(NetUnixListener *l, Time t);
+
+/* UnixListener.SetUnlinkOnClose: whether closing l removes its file, which
+ * it does unless this says otherwise. */
+void net_unix_listener_set_unlink_on_close(NetUnixListener *l, bool unlink);
+
+/* l as a NetListener. */
+NetListener net_unix_listener_as_listener(NetUnixListener *l);
+
+/* Closes l the way net_unix_listener_close does if it is still open, and
+ * gives its memory back. NULL does nothing. */
+void net_unix_listener_free(NetUnixListener *l);
+
 /* ------------------------------------------------------------- descriptors */
 
 /* The descriptors. NetIP lists AppendText, MarshalText, String and

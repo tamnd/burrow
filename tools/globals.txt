@@ -183,6 +183,8 @@ global	src/testing/fuzz.c	fuzz_global_inc	package-vars	internal/fuzz's globalInc
 global	src/testing/fuzz.c	fuzz_cov	coverage	The counter sections the compiler registered and the table trace-pc counts into. Registration happens before main on one thread. The counts are bumped without synchronisation, as Go's are, because a lost count only changes a number the snapshot rounds to a power of two, and the snapshot is only ever taken by a worker process between calls of the fuzz target.
 global	src/testing/fuzz.c	fuzz_interrupt	signal-table	Whether SIGINT stops fuzzing or kills the process, and whether it has arrived, which a handler has to be able to reach with no argument to find it by. Only ever touched atomically, and the handler does nothing else.
 global	src/pal/proc_posix.c	fork_lock	package-vars	This is the synchronisation, and a lock is what it is. Go has the same one as syscall.ForkLock: pal_spawn holds the write side across a fork, and anything that has a descriptor open without close on exec holds the read side until it is marked.
+global	src/pal/net_windows.c	wsa_once	netpoller	Windows only. InitOnceExecuteOnce, which starts Winsock the first time a socket call needs it and is the synchronisation for wsa_start_rc below.
+global	src/pal/net_windows.c	wsa_start_rc	netpoller	Windows only. What WSAStartup said, written once inside wsa_once and only read after it.
 global	src/pal/proc_windows.c	env_once	package-vars	Windows only. InitOnceExecuteOnce, which is the synchronisation for env_list below.
 global	src/pal/proc_windows.c	env_list	package-vars	Windows only. Written once inside env_once and only read after it, so every reader sees the finished list.
 global	src/hash/crc32.c	ieee_table8	tables	Filled inside ieee_once and only read after it.

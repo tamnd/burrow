@@ -1522,27 +1522,51 @@ bool pal_user_lookup(int64_t uid, PalUser *out, PalErrno *err);
  * systems and not others, and a port in network byte order in the middle of it.
  * Converting once, in the backend, is the whole reason this layer exists.
  *
- * Not implemented yet. These arrive with the net package. */
+ * pal_getaddrinfo and pal_if_enumerate are not implemented yet. They arrive with
+ * the resolver and with net.Interfaces. wasip1 has none of this: its sockets
+ * are the ones the host hands in already open, and every call here answers
+ * PAL_ENOSYS there. */
 
-enum { PAL_AF_INET = 1, PAL_AF_INET6 = 2, PAL_AF_UNIX = 3 };
+enum { PAL_AF_UNSPEC = 0, PAL_AF_INET = 1, PAL_AF_INET6 = 2, PAL_AF_UNIX = 3 };
 enum { PAL_SOCK_STREAM = 1, PAL_SOCK_DGRAM = 2, PAL_SOCK_RAW = 3 };
 enum { PAL_IPPROTO_TCP = 6, PAL_IPPROTO_UDP = 17 };
 
 /* An address, in host byte order everywhere a number appears. addr holds four
  * bytes for IPv4 and sixteen for IPv6, most significant first, which is how an
- * address is written down and how net.IP stores it. */
+ * address is written down and how net.IP stores it.
+ *
+ * A Unix domain address is the first path_len bytes of path, exactly as the
+ * kernel takes them and gives them back, with no NUL added or taken away: a
+ * name in the file system wants its NUL counted in path_len, a Linux abstract
+ * name starts with a NUL and has none at the end, and a path_len of zero is a
+ * socket with no name. That is what Go's syscall does, and it leaves the
+ * conventions, such as writing an abstract name with an "@", to net. macOS and
+ * the BSDs have room for 104 bytes, not 108, and a longer path is PAL_EINVAL
+ * there.
+ *
+ * family is PAL_AF_UNSPEC for no address at all, which is what pal_recvfrom
+ * gives on a connected socket, and for one of a family not listed above. */
 typedef struct PalSockAddr {
     uint16_t family;
     uint16_t port;
     uint32_t scope_id; /* the IPv6 zone, 0 for none */
     uint8_t addr[16];
-    char path[108]; /* AF_UNIX, NUL terminated, or a leading NUL for abstract */
+    uint16_t path_len;
+    char path[108];
 } PalSockAddr;
 
 /* A socket, always non blocking and always close on exec, because every
  * descriptor in burrow goes to the poller and a blocking one would park an OS
- * thread instead of a goroutine. */
+ * thread instead of a goroutine. A write to a socket whose far end has gone is
+ * PAL_EPIPE and never SIGPIPE: the sends below ask for that on Linux and the
+ * BSDs, and the socket itself asks for it on macOS. protocol is the IANA
+ * number, which every platform uses as is, or 0 for the usual one. */
 int64_t pal_socket(int32_t family, int32_t type, int32_t protocol, PalErrno *err);
+
+/* Closes a socket. On Windows a socket is not a handle the file calls can
+ * close, so a descriptor from pal_socket or pal_accept is closed here and not
+ * with pal_close. Elsewhere the two are the same. */
+bool pal_socket_close(int64_t fd, PalErrno *err);
 
 bool pal_bind(int64_t fd, const PalSockAddr *addr, PalErrno *err);
 bool pal_listen(int64_t fd, int32_t backlog, PalErrno *err);
@@ -1552,11 +1576,19 @@ bool pal_listen(int64_t fd, int32_t backlog, PalErrno *err);
  * sends the goroutine to the poller. */
 int64_t pal_accept(int64_t fd, PalSockAddr *peer, PalErrno *err);
 
+/* The address a socket is bound to and the one it is connected to, Go's
+ * Getsockname and Getpeername. */
+bool pal_getsockname(int64_t fd, PalSockAddr *out, PalErrno *err);
+bool pal_getpeername(int64_t fd, PalSockAddr *out, PalErrno *err);
+
 /* PAL_EINPROGRESS is the normal answer, not a failure: the caller waits for
  * writability and then reads PAL_SO_ERROR to find out how it went. */
 bool pal_connect(int64_t fd, const PalSockAddr *addr, PalErrno *err);
 
-/* addr NULL means a connected socket, which makes these send and recv. */
+/* addr NULL means a connected socket, which makes these send and recv. from
+ * may be NULL too, when the caller has no use for where a datagram came from.
+ * Both answer -1 with PAL_EAGAIN when they would block, and pal_recvfrom
+ * answers 0 at the end of a stream. */
 int64_t pal_sendto(int64_t fd, const void *buf, int64_t n, const PalSockAddr *addr,
                    PalErrno *err);
 int64_t pal_recvfrom(int64_t fd, void *buf, int64_t n, PalSockAddr *from,
@@ -1584,6 +1616,12 @@ enum {
     PAL_IPV6_HOPLIMIT
 };
 
+/* A value is 1 or 0 for the options that are on or off, a count for the
+ * buffer sizes, the hop limits and TCP_KEEPCNT, and seconds for the other two
+ * TCP ones. PAL_SO_LINGER is the linger time in seconds, or -1 for lingering
+ * off. PAL_SO_ERROR only reads, and what it reads is a PalErrno, PAL_OK when
+ * there is no error, with the native code behind it kept for
+ * pal_errno_native. An option the platform does not have is PAL_ENOTSUP. */
 bool pal_getsockopt(int64_t fd, int32_t opt, int64_t *value, PalErrno *err);
 bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err);
 

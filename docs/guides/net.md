@@ -650,7 +650,14 @@ http_serve_mux_free(mux);
 That prints:
 
 ```
-PENDING
+GET /notes/42: 200
+    note 42
+DELETE /notes/42: 405, allow GET, HEAD
+GET /files/a.txt: 200
+    file /files/a.txt
+GET /files: 307 to /files/
+GET /files/x/../b.txt: 307 to /files/b.txt
+GET /other: 404
 ```
 
 `http_serve_mux_handler` answers the same question without calling anything, and gives back the pattern that matched. `http_strip_prefix`, `http_redirect_handler` and `http_not_found_handler` are the small handlers Go has, and `http_handle` registers on `http_default_serve_mux` as `http.Handle` does.

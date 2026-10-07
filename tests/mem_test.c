@@ -354,6 +354,27 @@ static void TestArenaFreeIsSafeTwiceAndWhenUnused(TestingT *t) {
     arena_free(&ar);
 }
 
+/* A struct cleared with memset holds a usable Arena, the way a Go struct's zero
+ * value is ready to use, and its chunks still grow past the first. */
+static void TestArenaWorksFromZeroBytes(TestingT *t) {
+    Arena ar;
+    memset(&ar, 0, sizeof(ar));
+    Alloc *a = arena_allocator(&ar);
+
+    unsigned char *p = (unsigned char *)mem_alloc(a, 100, 8);
+    if (p == NULL)
+        testing_t_fatalf_v(t, "mem_alloc on a zeroed arena returned NULL");
+    CHECK(all_zero(p, 100));
+    for (int i = 0; i < 64; i++)
+        CHECK(mem_alloc(a, 16 * 1024, 8) != NULL);
+    AllocStats st = mem_stats(a);
+    CHECK(st.allocs == 65);
+    /* 1MiB in chunks that start at 64KiB and double takes far fewer than one
+     * chunk per allocation. */
+    CHECK(st.blocks < 16);
+    arena_free(&ar);
+}
+
 static void TestFixedStaysInsideTheBudget(TestingT *t) {
     unsigned char buf[512];
     memset(buf, 0xFF, sizeof(buf)); /* nothing here is zero to begin with */
@@ -736,6 +757,7 @@ static void TestGcCollectsAndReportsTheCollectorNumbers(TestingT *t) {
     X(TestArenaTakesAllocationsLargerThanAChunk)                                       \
     X(TestArenaNests)                                                                  \
     X(TestArenaFreeIsSafeTwiceAndWhenUnused)                                           \
+    X(TestArenaWorksFromZeroBytes)                                                     \
     X(TestFixedStaysInsideTheBudget)                                                   \
     X(TestFixedHandlesAnEmptyBuffer)                                                   \
     X(TestOomHandlerFiresAndIsToldWhatWasAskedFor)                                     \

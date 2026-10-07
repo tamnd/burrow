@@ -71,7 +71,11 @@ typedef struct Arena {
  * plan for.
  *
  * Takes no memory from the parent yet. An arena that is never used costs
- * nothing but the struct. */
+ * nothing but the struct.
+ *
+ * An Arena filled with zero bytes and never given to arena_init works too, as
+ * if arena_init had been called with NULL and zero, so a struct that holds one
+ * can be cleared with memset and used. */
 void arena_init(Arena *ar, Alloc *parent, size_t chunk_size);
 
 /* The allocator to pass to everything else. Valid until arena_free, and tied to

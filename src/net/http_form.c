@@ -80,6 +80,13 @@ static bool hf_protocol_error_is(const void *self, Error target) {
     return http_protocol_error_is((const HttpProtocolError *)self, target);
 }
 
+/* Every protocol error the library makes is a static one, so a retained copy
+ * is the same error and errors_is still matches it. */
+static Error hf_protocol_error_clone(const void *self, Alloc *a) {
+    (void)a;
+    return (Error){&burrow__http_protocol_error_vt, self};
+}
+
 const ErrorVT burrow__http_protocol_error_vt = {
     &hf_protocol_error_desc,
     hf_protocol_error_message,
@@ -87,7 +94,7 @@ const ErrorVT burrow__http_protocol_error_vt = {
     NULL,
     hf_protocol_error_is,
     NULL,
-    NULL,
+    hf_protocol_error_clone,
 };
 
 const Error http_err_not_supported = {&burrow__http_protocol_error_vt,

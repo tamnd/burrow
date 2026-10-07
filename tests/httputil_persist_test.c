@@ -263,6 +263,8 @@ static void TestServerConnClosed(TestingT *t) {
         BURROW_FAILED(httputil_err_closed) &&
         str_eq(error_text(httputil_err_closed), BURROW_S("connection closed by user")));
     CHECK(errors_as(httputil_err_persist_eof, TYPE_HTTP_PROTOCOL_ERROR) != NULL);
+    /* A kept copy of one is still the same error. */
+    CHECK(errors_is(error_retain(a, httputil_err_pipeline), httputil_err_pipeline));
 
     httputil_server_conn_free(sc);
     net_pipe_free(cli);

@@ -123,7 +123,8 @@ extern const Str burrow__http_line_too_long_text;
 bool burrow__http_is_max_bytes_reader(IoReadCloser r);
 
 /* The vtable of an HttpProtocolError, so that another package can make a
- * const Error that is one, such as httputil's ErrPipeline. */
+ * const Error that is one, such as httputil's ErrPipeline. Use it only with a
+ * static HttpProtocolError, since error_retain hands back the same pointer. */
 extern const ErrorVT burrow__http_protocol_error_vt;
 
 /* httputil's singleJoiningSlash, joinURLPath and flushInterval, which its tests

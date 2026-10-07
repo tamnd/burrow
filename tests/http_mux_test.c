@@ -275,10 +275,11 @@ static void TestFindHandler(TestingT *t) {
         HttpHandler h =
             burrow__http_serve_mux_find_handler(mux, &r, a, &pattern, &pat, &matches);
         Str got = describe_handler(a, h);
-        const Regexp *re = regexp_must_compile(a, cs(tests[i].want_handler));
+        Regexp *re = regexp_must_compile(a, cs(tests[i].want_handler));
         if (!regexp_match_string(re, got))
             testing_t_errorf_v(t, "%s %q: got %q, want %q", cs(tests[i].method),
                                cs(tests[i].path), got, cs(tests[i].want_handler));
+        regexp_free(re);
     }
     http_serve_mux_free(mux);
     ARENA_END;
@@ -327,11 +328,12 @@ static void TestRegisterErr(TestingT *t) {
             testing_t_errorf_v(t, "%q: got nil error", cs(tests[i].pattern));
             continue;
         }
-        const Regexp *re = regexp_must_compile(a, cs(tests[i].want_regexp));
+        Regexp *re = regexp_must_compile(a, cs(tests[i].want_regexp));
         Str g = error_text(err);
         if (!regexp_match_string(re, g))
             testing_t_errorf_v(t, "\ngot %q\nwant string matching %q", g,
                                cs(tests[i].want_regexp));
+        regexp_free(re);
     }
     http_serve_mux_free(mux);
     ARENA_END;

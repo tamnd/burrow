@@ -1,9 +1,10 @@
-/* net, the addresses, the interfaces and Pipe so far.
+/* net: the addresses, the interfaces, Pipe, the sockets, the resolver,
+ * Dial and Listen.
  *
  * Go's net/ip.go, the interfaces and errors from net.go, SplitHostPort and
- * JoinHostPort from ipsock.go, and pipe.go. The sockets, the resolver and the
- * rest of the package come later. These are here first because crypto/x509
- * and crypto/tls use them, and Pipe is what crypto/tls is tested over.
+ * JoinHostPort from ipsock.go, pipe.go, the TCP, UDP and Unix sockets, the
+ * resolver, and dial.go. IPConn, ListenPacket, Interface and the rest of
+ * the package come later.
  *
  * A NetIP is a byte slice, 4 bytes for an IPv4 address or 16 for IPv6, as in
  * Go. Functions take either length, and the ones that make an address give

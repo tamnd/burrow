@@ -1,6 +1,6 @@
 # Networking
 
-`burrow/net/netip.h` is Go's `net/netip`, which holds IP addresses, address and port pairs, and CIDR prefixes as small values. `burrow/net/url.h` is Go's `net/url`, which parses, builds and resolves URLs and query strings. `burrow/net.h` has the address types from Go's `net` package itself, `IP`, `IPMask` and `IPNet`, with `SplitHostPort` and `JoinHostPort`. The rest of `net` (sockets, the resolver, `net/http` and friends) sits on top of the runtime's network poller and will land in this guide as it is ported.
+`burrow/net/netip.h` is Go's `net/netip`, which holds IP addresses, address and port pairs, and CIDR prefixes as small values. `burrow/net/url.h` is Go's `net/url`, which parses, builds and resolves URLs and query strings. `burrow/net.h` has the address types from Go's `net` package itself, `IP`, `IPMask` and `IPNet`, with `SplitHostPort` and `JoinHostPort`. The sockets, `Dial` and `Listen` sit on top of the runtime's network poller, and `net/http` and the rest will land in this guide as they are ported.
 
 ## Addresses, ports and prefixes
 
@@ -205,7 +205,7 @@ Go's collector takes care of a pipe once nothing refers to it. Here `net_pipe_fr
 
 ## TCP
 
-`net_listen_tcp` and `net_dial_tcp` are Go's `ListenTCP` and `DialTCP`, and the `NetTCPConn` and `NetTCPListener` they give back have Go's methods as functions. Addresses are `NetTCPAddr` literals for now, since the resolver that turns "localhost:80" into one is still to come. A listener on port 0 gets a free port from the system, and `net_tcp_listener_addr` says which:
+`net_listen_tcp` and `net_dial_tcp` are Go's `ListenTCP` and `DialTCP`, and the `NetTCPConn` and `NetTCPListener` they give back have Go's methods as functions. These take `NetTCPAddr` values, and `net_dial` and `net_listen`, under [Dial and Listen](#dial-and-listen), take the address as text. A listener on port 0 gets a free port from the system, and `net_tcp_listener_addr` says which:
 
 <!-- example: ../examples/net/tcp.c#tcp -->
 ```c
@@ -389,6 +389,73 @@ A listener made by `net_listen_unix` removes its file when it closes, and so doe
 On Linux a name that starts with "@" is in the abstract namespace, has no file, and goes away with the last socket on it. Listening on an empty name binds to a fresh abstract name, and a socket that was never bound is called "@" there and "" everywhere else, so those are the names a dialer's end and an unbound sender have. A name has to fit in the system's sockaddr, which is 107 bytes on Linux and 103 on macOS and the BSDs, and a longer one fails with "bind: invalid argument" as it does in Go.
 
 The datagram functions are the UDP ones with a `NetUnixAddr` in place of a `NetUDPAddr`: `net_unix_conn_read_from_unix` makes the sender's address in the allocator it is given, and `net_unix_conn_write_to_unix` sends to a name. `ReadMsgUnix`, `WriteMsgUnix` and the `File` methods, which pass descriptors, are still to come, and Windows is where TCP is for now.
+
+## Dial and Listen
+
+`net_dial` and `net_listen` are Go's `Dial` and `Listen`. They take the network and the address as text, look up a host name and a service name for the port, and give back a `NetConn` or a `NetListener` whatever the network. `NetDialer` and `NetListenConfig` are the structs behind them, with Go's fields: a timeout, a deadline, a local address, the keep-alive settings, a resolver, and a `control` callback that sees the socket before it connects. The zero value of either works, and so does passing NULL.
+
+<!-- example: ../examples/net/dial.c#dial -->
+```c
+/* Connections go in the heap, since the server's goroutine makes one
+ * too. */
+Alloc *heap = heap_allocator();
+Error err;
+NetListener l = net_listen(heap, BURROW_S("tcp"), BURROW_S("127.0.0.1:0"), &err);
+if (l.vt == NULL)
+    return;
+SyncWaitGroup wg = {0};
+sync_wait_group_go(&wg, BURROW_FN(Func, serve, &l));
+
+/* The text this goroutine makes goes in an arena. The listener's
+ * address as text is something Dial takes. */
+Arena ar;
+arena_init(&ar, NULL, 0);
+Alloc *a = arena_allocator(&ar);
+NetAddr la = l.vt->addr(l.data);
+Str address = la.vt->string(la.data, a);
+NetDialer d = {0};
+d.timeout = 5 * TIME_SECOND;
+NetConn c = net_dialer_dial(&d, heap, BURROW_S("tcp"), address, &err);
+if (c.vt != NULL) {
+    Slice got = io_read_all(a, net_conn_as_io_reader(c), &err);
+    printf("%.*s\n", (int)got.len, (const char *)got.p);
+    net_conn_free(c);
+}
+/* Closing the listener stops an accept that is still waiting. */
+(void)l.vt->closer.close(l.data);
+sync_wait_group_wait(&wg);
+net_listener_free(l);
+
+/* Ports by name, and zones, the way ResolveTCPAddr reads them. */
+NetTCPAddr *ta =
+    net_resolve_tcp_addr(a, BURROW_S("tcp"), BURROW_S("[::1%lo]:http"), &err);
+if (ta != NULL) {
+    printf("port %d zone %.*s\n", (int)ta->port, (int)ta->zone.len,
+           (const char *)ta->zone.p);
+    print_str(net_tcp_addr_string(ta, a));
+}
+
+/* A dial that cannot start says why, as an OpError. */
+c = net_dial(heap, BURROW_S("tcp6"), BURROW_S("127.0.0.1:80"), &err);
+if (c.vt == NULL)
+    print_str(error_text(err));
+arena_free(&ar);
+```
+
+That prints:
+
+```
+hello from the server
+port 80 zone lo
+[::1%lo]:80
+dial tcp6: address 127.0.0.1: no suitable address found
+```
+
+A name with several addresses is tried one address at a time, each with its share of whatever time is left, and for "tcp" a name with both IPv4 and IPv6 addresses races the first of each, starting the second family 300ms after the first unless `fallback_delay` says otherwise. That is RFC 6555, which Go calls Happy Eyeballs. The connection that loses the race is closed before the dial returns. `net_dialer_dial_context` takes a context, and cancelling it stops a dial that is still going.
+
+`net_conn_free` and `net_listener_free` close what they are given and give it back, and `net_conn_as_tcp_conn` and its siblings get the concrete type when you need its methods. `net_resolve_tcp_addr`, `net_resolve_udp_addr` and `net_resolve_ip_addr` are Go's `ResolveTCPAddr` and friends, for when you want the address without the connection.
+
+When a dial fails, the error is a `NetOpError` with the op "dial", and it names the addresses it tried. Those addresses live in the error arena of the goroutine that dialed, so the error stays readable for as long as the goroutine keeps it, and a dial that works leaves nothing behind there. The "ip" networks need `IPConn`, which is still to come, so a dial on one fails with ENOSYS for now.
 
 ## URLs
 

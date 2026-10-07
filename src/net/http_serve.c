@@ -669,14 +669,20 @@ static HttpHeader sv_final_trailers(sv_Response *w, Alloc *a) {
         Str kk = strings_cut_prefix(*(const Str *)k, HTTP_TRAILER_PREFIX, &found);
         if (!found)
             continue;
-        if (t == NULL && (t = http_header_make(a)) == NULL)
-            return NULL;
+        if (t == NULL) {
+            t = http_header_make(a);
+            if (t == NULL)
+                return NULL;
+        }
         (void)map_set(t, &kk, v);
     }
     const Str *keys = (const Str *)w->trailers.p;
     for (Int i = 0; i < w->trailers.len; i++) {
-        if (t == NULL && (t = http_header_make(a)) == NULL)
-            return NULL;
+        if (t == NULL) {
+            t = http_header_make(a);
+            if (t == NULL)
+                return NULL;
+        }
         Slice vv = http_header_values(w->handler_header, keys[i]);
         const Str *vs = (const Str *)vv.p;
         for (Int j = 0; j < vv.len; j++)
@@ -977,10 +983,8 @@ static void sv_cw_write_header(sv_ChunkWriter *cw, Slice p) {
     }
 
     if (is_head || !burrow__http_body_allowed_for_status(code) ||
-        code == HTTP_STATUS_NO_CONTENT) {
-        /* No body, so no framing for one. */
-        sv_del_header(header, owned, &exclude, a, BURROW_S("Transfer-Encoding"));
-    } else if (has_cl) {
+        code == HTTP_STATUS_NO_CONTENT || has_cl) {
+        /* No body, so no framing for one, or a length that frames it. */
         sv_del_header(header, owned, &exclude, a, BURROW_S("Transfer-Encoding"));
     } else if (http_request_proto_at_least(w->req, 1, 1)) {
         if (has_te && str_eq(te, BURROW_S("identity"))) {

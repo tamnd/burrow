@@ -96,7 +96,7 @@ var acronyms = map[string]bool{}
 func init() {
 	for _, w := range strings.Fields("URL HTTP HTTPS TLS TCP UDP IP DNS ID API CPU IO EOF ASN1 DER PEM JSON XML " +
 		"UTF8 UTF16 RSA ECDSA GCM CBC SHA MD5 CRC FS DB SQL RPC MIME SMTP URI UUID " +
-		"PKCS OID SAN CA OCSP SCT ALPN SNI QUIC HPACK GZIP ZIP RW") {
+		"PKCS OID SAN CA OCSP SCT ALPN SNI QUIC HPACK GZIP ZIP RW ICMP") {
 		acronyms[w] = true
 	}
 }

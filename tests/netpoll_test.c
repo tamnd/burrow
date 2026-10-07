@@ -18,8 +18,10 @@
  * Everything in here is written against a readiness backend, so it is epoll and
  * kqueue only. That is not a gap: readiness is what this file is testing, and a
  * completion backend has a different deal with its caller and a test of its own
- * in netpoll_iocp_test.c. On Windows, and on the web targets that have no
- * backend at all, this compiles to a main that says so.
+ * in netpoll_iocp_test.c. On Windows, and on the targets that have no backend
+ * at all, this compiles to a main that says so. wasip1 has the poll(2)
+ * backend and no pipes or socket pairs, so there the tests are the two below
+ * that a regular file can do.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -38,6 +40,122 @@ static void TestNotAReadinessBackend(TestingT *t) {
 #define TESTS(X) X(TestNotAReadinessBackend)
 
 TESTING_MAIN(TESTS)
+
+#elif defined(BURROW_OS_WASI)
+
+#include "check.h"
+
+#include "burrow/clock.h"
+#include "burrow/func.h"
+#include "burrow/proc.h"
+#include "burrow/time.h"
+
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+/* A regular file, which poll_oneoff says is ready for both at once, opened and
+ * unlinked so that nothing is left behind. */
+static int file_open(void) {
+    const char *dir = getenv("TMPDIR");
+    if (dir == NULL || dir[0] == '\0')
+        dir = "/tmp";
+    char path[512];
+    (void)snprintf(path, sizeof path, "%s/burrow-netpoll-%lld", dir,
+                   (long long)burrow__nanotime());
+    int fd = open(path, O_RDWR | O_CREAT | O_EXCL | (int)O_NONBLOCK, 0600);
+    if (fd >= 0)
+        (void)unlink(path);
+    return fd;
+}
+
+static int file_fd;
+static burrow__PollDesc *file_pd;
+static int file_err;
+static bool file_set;
+static int64_t file_elapsed;
+static burrow__PollStatus file_read;
+static burrow__PollStatus file_write;
+
+static void file_reset(void) {
+    file_fd = -1;
+    file_pd = NULL;
+    file_err = -1;
+    file_set = false;
+    file_elapsed = 0;
+    file_read = BURROW_POLL_UNPOLLABLE;
+    file_write = BURROW_POLL_UNPOLLABLE;
+}
+
+static void file_done(void) {
+    if (file_pd != NULL) {
+        burrow__poll_unblock(file_pd);
+        burrow__poll_close(file_pd);
+    }
+    if (file_fd >= 0)
+        (void)close(file_fd);
+}
+
+/* The goroutine parks in both waits, since nothing is ready until the poller
+ * has looked, and the one thread there is has to go into poll to find out. */
+static void wait_on_a_file(void *env) {
+    (void)env;
+    file_fd = file_open();
+    if (file_fd < 0)
+        return;
+    file_err = burrow__poll_open(file_fd, &file_pd);
+    if (file_err != 0)
+        return;
+    file_read = burrow__poll_wait(file_pd, BURROW_POLL_READ);
+    file_write = burrow__poll_wait(file_pd, BURROW_POLL_WRITE);
+}
+
+static void TestAFileIsReadyBothWays(TestingT *t) {
+    file_reset();
+    runtime_main(BURROW_FN(Func, wait_on_a_file, NULL));
+
+    CHECK(file_fd >= 0);
+    CHECK_INT_EQ(file_err, 0);
+    CHECK_INT_EQ(file_read, BURROW_POLL_READY);
+    CHECK_INT_EQ(file_write, BURROW_POLL_READY);
+    CHECK(burrow__netpoll_inited());
+    file_done();
+}
+
+static void deadline_already_past(void *env) {
+    (void)env;
+    file_fd = file_open();
+    if (file_fd < 0)
+        return;
+    file_err = burrow__poll_open(file_fd, &file_pd);
+    if (file_err != 0)
+        return;
+    file_set = burrow__poll_set_deadline(file_pd, burrow__nanotime() - TIME_SECOND,
+                                         BURROW_POLL_READ);
+    int64_t start = burrow__nanotime();
+    file_read = burrow__poll_wait(file_pd, BURROW_POLL_READ);
+    file_elapsed = burrow__nanotime() - start;
+    file_write = burrow__poll_wait(file_pd, BURROW_POLL_WRITE);
+}
+
+static void TestADeadlineAlreadyPastTimesOutWithoutParking(TestingT *t) {
+    file_reset();
+    runtime_main(BURROW_FN(Func, deadline_already_past, NULL));
+
+    CHECK_INT_EQ(file_err, 0);
+    CHECK(file_set);
+    CHECK_INT_EQ(file_read, BURROW_POLL_TIMEOUT);
+    CHECK(file_elapsed < 10 * TIME_MILLISECOND);
+    CHECK_INT_EQ(file_write, BURROW_POLL_READY);
+    file_done();
+}
+
+#define TESTS(X)                                                                       \
+    X(TestAFileIsReadyBothWays)                                                        \
+    X(TestADeadlineAlreadyPastTimesOutWithoutParking)
+
+TESTING_MAIN_BARE(TESTS)
 
 #else
 
@@ -70,7 +188,7 @@ typedef struct Pipe {
 
 static bool nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
-    return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+    return flags >= 0 && fcntl(fd, F_SETFL, flags | (int)O_NONBLOCK) == 0;
 }
 
 static bool pipe_open(Pipe *p) {

@@ -23,6 +23,7 @@
 #include "internal.h"
 
 #include <stdint.h>
+#include <string.h>
 
 #include <windows.h>
 
@@ -90,6 +91,28 @@ int64_t pal_hostname(char *buf, int64_t cap, PalErrno *err) {
     }
     buf[len] = 0;
     return len;
+}
+
+int64_t pal_hosts_path(char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    static const char tail[] = "/Drivers/etc/hosts";
+    wchar_t w[MAX_PATH];
+    UINT n = GetSystemDirectoryW(w, MAX_PATH);
+    if (n == 0) {
+        BURROW_OUT(err, burrow__pal_errno_win(GetLastError()));
+        return -1;
+    }
+    if (n >= MAX_PATH || buf == NULL || cap <= (int64_t)sizeof tail) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    int64_t len = burrow__pal_narrow(w, n, buf, (size_t)cap - sizeof tail);
+    if (len < 0) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    memcpy(buf + len, tail, sizeof tail);
+    return len + (int64_t)sizeof tail - 1;
 }
 
 #endif /* BURROW_OS_WINDOWS */

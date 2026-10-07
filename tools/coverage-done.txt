@@ -60,6 +60,7 @@ crypto/mlkem/mlkemtest
 crypto/mldsa
 crypto/hpke
 crypto/rsa
+
 crypto/x509/pkix
 container/list
 container/ring
@@ -105,3 +106,5 @@ archive/tar
 archive/zip
 encoding/asn1
 path/filepath
+crypto/fips140
+net/mail

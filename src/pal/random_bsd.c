@@ -12,7 +12,8 @@
  * the contract rather than an implementation detail, so the loop that is here is
  * over chunks and not over short answers.
  *
- * getentropy is in sys/random.h on every system left that uses it here.
+ * getentropy is in unistd.h on FreeBSD and NetBSD and in sys/random.h on
+ * Solaris, so both are included.
  *
  * Cosmopolitan is here rather than with Linux because one of its binaries runs
  * on all of these, and getentropy is the call its libc answers on every one of
@@ -41,6 +42,7 @@
 #include <stdlib.h>
 #else
 #include <sys/random.h>
+#include <unistd.h>
 #endif
 
 /* What getentropy will take in one call, which every system that has it

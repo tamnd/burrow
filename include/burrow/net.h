@@ -835,6 +835,66 @@ NetListener net_unix_listener_as_listener(NetUnixListener *l);
  * gives its memory back. NULL does nothing. */
 void net_unix_listener_free(NetUnixListener *l);
 
+/* -------------------------------------------------------------------- DNS */
+
+/* net.DNSError, a lookup that failed: what went wrong, the name looked for
+ * and the server that was asked, which may be empty. Go's Error method gives
+ * "lookup " + name, then " on " + server when there is one, then ": " + err,
+ * as in "lookup example.invalid on 192.0.2.53:53: no such host", and "<nil>"
+ * for a NULL e.
+ *
+ * unwrap_err is what Unwrap gives, and nil for most of them. The resolver
+ * sets it to context_canceled or context_deadline_exceeded when a lookup
+ * stopped because its context did, so that errors_is finds those. */
+typedef struct NetDNSError {
+    Error unwrap_err;
+    Str err;
+    Str name;
+    Str server;
+    bool is_timeout;
+    bool is_temporary;
+
+    /* The name has no records of the type asked for, or does not exist at
+     * all. */
+    bool is_not_found;
+} NetDNSError;
+
+extern const Type *const TYPE_NET_DNS_ERROR;
+
+/* The text, built in a. */
+BURROW_OWNS(ret) Str net_dns_error_error(const NetDNSError *e, Alloc *a);
+
+/* e->unwrap_err. */
+BURROW_BORROWS(ret, e) Error net_dns_error_unwrap(const NetDNSError *e);
+
+/* DNSError.Timeout, which is is_timeout, and Temporary, which is is_timeout
+ * or is_temporary. Neither is always known, so a lookup that did time out may
+ * still say false. */
+bool net_dns_error_timeout(const NetDNSError *e);
+bool net_dns_error_temporary(const NetDNSError *e);
+
+/* The Error for e, which errors_as with TYPE_NET_DNS_ERROR gives back and
+ * which unwraps to e->unwrap_err. The strings are copied into a. */
+BURROW_OWNS(ret) Error net_dns_error_as_error(const NetDNSError *e, Alloc *a);
+
+/* net.SRV, net.MX and net.NS, one record each of what LookupSRV, LookupMX
+ * and LookupNS give. */
+typedef struct NetSRV {
+    Str target;
+    uint16_t port;
+    uint16_t priority;
+    uint16_t weight;
+} NetSRV;
+
+typedef struct NetMX {
+    Str host;
+    uint16_t pref;
+} NetMX;
+
+typedef struct NetNS {
+    Str host;
+} NetNS;
+
 /* ------------------------------------------------------------- descriptors */
 
 /* The descriptors. NetIP lists AppendText, MarshalText, String and

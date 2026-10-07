@@ -51,6 +51,7 @@ category	uuid-v7	uuid.NewV7's last timestamp. Go keeps it in package level varia
 category	weak	weak's table of slots. Go hangs a weak handle off the object and its collector clears it, and here the allocators tell one table when memory goes, which has to be process wide because memory freed on one thread may have had a WeakPointer made on another.
 category	zip-registry	archive/zip's registered compressors and decompressors. Go keeps them in sync.Maps at package level, and they are process wide because a method registered anywhere is one every Reader and Writer can use.
 category	last-error	The platform's code for the last failure each thread saw, which is per thread the way errno and GetLastError are.
+category	hosts-cache	What net last read from the hosts file. Go keeps it in a package level struct behind a mutex, and it is process wide because the file is.
 category	impl-select	Which implementation a crypto package runs, which Go keeps in crypto/internal/impl so that its tests can try every one.
 category	crypto-registry	crypto's table of registered hash functions. Go keeps it in a package level slice that RegisterHash writes from init, and it is process wide because a hash registered anywhere is one Hash.New can make everywhere.
 
@@ -202,6 +203,7 @@ global	src/unique/unique.c	uq_types	intern	Written under uq_lock with a release 
 global	src/unique/unique.c	uq_seed	intern	Written once under uq_lock before the first type is published, and only read after a reader has seen one.
 global	src/unique/unique.c	uq_arena	intern	Only touched under uq_lock.
 global	src/unique/unique.c	uq_ready	intern	Only touched under uq_lock.
+global	src/net/hosts.c	nh_hosts	hosts-cache	The parsed hosts file, its path, size and modification time, and the path tests read instead. Read and written only under nh_hosts.mu, and a new reading is built aside and swapped in whole.
 global	src/net/netfd.c	nf_stack	package-vars	Whether this machine has IPv4, IPv6 and IPv4-mapped IPv6 sockets, probed by the first socket that needs to know and stored with a release store after the probed bit. Two racing probes store the same value.
 global	src/net/netfd.c	nf_backlog	package-vars	The listen backlog the system allows, worked out by the first listener. Atomic loads and stores only, and two racing listeners store the same value.
 global	src/net/url.c	url_debug_flags	godebug	The urlstrictcolons and urlmaxqueryparams settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.

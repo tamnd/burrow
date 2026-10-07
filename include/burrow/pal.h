@@ -345,6 +345,11 @@ uint32_t pal_cpu_features(void);
  * physical DNS host name on Windows. */
 int64_t pal_hostname(char *buf, int64_t cap, PalErrno *err);
 
+/* Where the hosts file lives, into buf, NUL terminated, returning its length
+ * or -1. It is /etc/hosts everywhere but Windows, where it is
+ * Drivers/etc/hosts in the system directory, as Go's net package has it. */
+int64_t pal_hosts_path(char *buf, int64_t cap, PalErrno *err);
+
 /* ------------------------------------------------------------------- random
  *
  * The system generator, which is getrandom on Linux, getentropy on the BSDs and

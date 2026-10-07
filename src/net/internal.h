@@ -14,6 +14,7 @@
 #include "burrow/mem.h"
 #include "burrow/net.h"
 #include "burrow/netpoll.h"
+#include "burrow/os.h"
 #include "burrow/own.h"
 #include "burrow/pal.h"
 #include "burrow/slice.h"
@@ -271,5 +272,159 @@ Error burrow__net_internet_socket(burrow__NetFD *fd, Str net,
                                   const burrow__NetInetAddr *laddr,
                                   const burrow__NetInetAddr *raddr, int32_t sotype,
                                   bool listen);
+
+/* ------------------------------------------------------------------ parse.go
+ *
+ * Go's file from parse.go: a file read a line at a time through a buffer of
+ * 64 KiB, and the small string helpers the resolver's files are read with.
+ * data[start:end] is what has been read and not handed out yet. */
+typedef struct burrow__NetFile {
+    OsFile *file;
+    Byte *data;
+    Int start;
+    Int end;
+    bool at_eof;
+} burrow__NetFile;
+
+/* open: the file and its buffer in a, or NULL and the error from os_open. */
+BURROW_OWNS(ret) burrow__NetFile *burrow__net_open(Alloc *a, Str name, Error *err);
+
+/* close, which also gives back what burrow__net_open took from a. */
+void burrow__net_file_close(burrow__NetFile *f, Alloc *a);
+
+/* readLine: the next line without its newline, and false at the end. The line
+ * points into f's buffer and lasts until the next call. */
+bool burrow__net_file_read_line(burrow__NetFile *f, Str *line);
+
+/* splitAtBytes: the runs of s between bytes of t, and getFields, the runs
+ * between spaces, tabs, CRs and newlines. A Slice of Str in a, each pointing
+ * into s. */
+BURROW_OWNS(ret) Slice burrow__net_split_at_bytes(Alloc *a, Str s, Str t);
+BURROW_OWNS(ret) Slice burrow__net_get_fields(Alloc *a, Str s);
+
+/* big, and dtoi: the decimal number at the start of s, how many bytes it
+ * took, and whether there was one. It gives up at big. */
+#define BURROW__NET_BIG 0xFFFFFF
+bool burrow__net_dtoi(Str s, Int *n, Int *used);
+
+/* hasUpperCase, lowerASCIIBytes, stringsEqualFold and stringsHasSuffixFold,
+ * all ASCII only. */
+bool burrow__net_has_upper_case(Str s);
+void burrow__net_lower_ascii_bytes(Byte *x, Int n);
+bool burrow__net_equal_fold(Str s, Str t);
+bool burrow__net_has_suffix_fold(Str s, Str suffix);
+
+/* -------------------------------------------------------------- dnsclient.go */
+
+/* notFoundError, an error whose text is s and which newDNSError turns into a
+ * DNSError with is_not_found set, and temporaryError, a net.Error whose
+ * Temporary says true. Both in a. */
+BURROW_OWNS(ret) Error burrow__net_not_found_error(Alloc *a, Str s);
+BURROW_OWNS(ret) Error burrow__net_temporary_error(Alloc *a, Str s);
+
+/* newDNSError: a DNSError for err, in a. is_timeout and is_temporary are
+ * what err says when it is a net.Error, is_not_found is whether it is a
+ * notFoundError, and unwrap_err is err when it is or wraps context_canceled
+ * or context_deadline_exceeded. */
+BURROW_OWNS(ret) Error burrow__net_new_dns_error(Alloc *a, Error err, Str name,
+                                                 Str server);
+
+/* reverseaddr: the in-addr.arpa. or ip6.arpa. name of addr, in a, or empty
+ * and a DNSError "unrecognized address" when addr is not an IP address. */
+BURROW_OWNS(ret) Str burrow__net_reverseaddr(Alloc *a, Str addr, Error *err);
+
+/* isDomainName: whether s is a domain name of letters, digits, hyphens and
+ * underscores that would fit in a DNS message. */
+bool burrow__net_is_domain_name(Str s);
+
+/* absDomainName: s with a dot on the end when it has a dot in it and does not
+ * end with one, so "localhost" stays as it is. The result is in a when it is
+ * new and is s when it is not. */
+BURROW_OWNS(ret) BURROW_BORROWS(ret, s) Str burrow__net_abs_domain_name(Alloc *a,
+                                                                        Str s);
+
+/* byPriorityWeight.shuffleByWeight, byPriorityWeight.sort and byPref.sort,
+ * on n pointers to records, which is what Go's []*SRV and []*MX are. The
+ * order of equal weights and preferences is random, as RFC 2782 and RFC 5321
+ * want. */
+void burrow__net_srv_shuffle_by_weight(NetSRV **addrs, Int n);
+void burrow__net_srv_sort(NetSRV **addrs, Int n);
+void burrow__net_mx_sort(NetMX **s, Int n);
+
+/* --------------------------------------------------------------- dnsconfig.go
+ *
+ * What resolv.conf says, read the way Go's pure resolver reads it. */
+typedef struct burrow__DNSConfig {
+    Slice servers; /* Str, as host:port */
+    Slice search;  /* Str, each ending in a dot */
+    Int ndots;     /* dots in a name that make it tried as it is first */
+    Duration timeout;
+    Int attempts; /* tries per server */
+    bool rotate;  /* round robin over the servers */
+    bool unknown_opt;
+    Slice lookup; /* Str, OpenBSD's lookup order */
+    Error err;    /* why the file could not be opened, if it could not */
+    Time mtime;
+    uint32_t soffset; /* what server_offset counts with */
+    bool single_request;
+    bool use_tcp;
+    bool trust_ad;
+    bool no_reload;
+} burrow__DNSConfig;
+
+/* defaultNS, the servers to ask when resolv.conf names none. */
+extern const Str burrow__net_default_ns[2];
+
+/* isDefaultNS: whether servers is defaultNS itself, which is how Go tells a
+ * file with no nameserver line from one that names the same two. */
+bool burrow__dns_config_is_default_ns(const burrow__DNSConfig *c);
+
+/* serverOffset: 0 each time, or with rotate one more each time. */
+uint32_t burrow__dns_config_server_offset(burrow__DNSConfig *c);
+
+/* What Go's getHostname is, which its tests replace. NULL means
+ * os_hostname. */
+typedef Str (*burrow__NetHostnameFunc)(Alloc *a, Error *err);
+
+/* dnsReadConfig: filename read into c, with everything in a. A file that
+ * will not open gives the defaults and its error in c->err. */
+void burrow__dns_read_config(Alloc *a, Str filename, burrow__NetHostnameFunc hostname,
+                             burrow__DNSConfig *c);
+
+/* dnsDefaultSearch: the domain of the host's name, rooted, or the nil Slice
+ * when the name has no domain or cannot be had. */
+BURROW_OWNS(ret) Slice burrow__dns_default_search(Alloc *a,
+                                                  burrow__NetHostnameFunc hostname);
+
+/* ensureRooted: s with a dot on the end if it has none. */
+BURROW_OWNS(ret) BURROW_BORROWS(ret, s) Str burrow__net_ensure_rooted(Alloc *a, Str s);
+
+/* avoidDNS: whether name is empty or under .onion, which RFC 7686 says never
+ * to ask DNS about. */
+bool burrow__net_avoid_dns(Str name);
+
+/* nameList: the names to ask for, in order, with the search list applied the
+ * way ndots says. The nil Slice for a name too long to look up. */
+BURROW_OWNS(ret) Slice burrow__dns_config_name_list(const burrow__DNSConfig *c,
+                                                    Alloc *a, Str name);
+
+/* ------------------------------------------------------------------ hosts.go
+ *
+ * The hosts file, read again when it changes and at most every five
+ * seconds. */
+
+/* lookupStaticHost: host's addresses, as a Slice of Str in a, and its
+ * canonical name, also in a. The nil Slice when the file does not list
+ * host. */
+BURROW_OWNS(ret) Slice burrow__net_lookup_static_host(Alloc *a, Str host,
+                                                      Str *canonical);
+
+/* lookupStaticAddr: the names for addr, as a Slice of Str in a, rooted when
+ * they have a dot. The nil Slice when the file does not list addr. */
+BURROW_OWNS(ret) Slice burrow__net_lookup_static_addr(Alloc *a, Str addr);
+
+/* Go's tests set hostsFilePath, and this is how ours do. The path is copied,
+ * and an empty one goes back to the system's. */
+void burrow__net_set_hosts_file_path(Str path);
 
 #endif /* BURROW_SRC_NET_INTERNAL_H */

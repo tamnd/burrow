@@ -280,7 +280,17 @@ static Error late_write_err;
 static void serve_slow(void *env, HttpResponseWriter w, HttpRequest *r) {
     (void)env;
     (void)chan_recv(context_done(http_request_context(r)), NULL);
-    (void)http_response_writer_write(w, bytes_of("late", 4), &late_write_err);
+    /* The handler and TimeoutHandler see the context end at the same time, and
+     * a write can get in before the timeout is written down, which it can in
+     * Go too. Writing until one fails waits that out, and what got in is
+     * thrown away with the rest of the handler's output. */
+    for (int i = 0; i < 5000; i++) {
+        late_write_err = BURROW_NO_ERROR;
+        (void)http_response_writer_write(w, bytes_of("late", 4), &late_write_err);
+        if (BURROW_FAILED(late_write_err))
+            break;
+        time_sleep(TIME_MILLISECOND);
+    }
 }
 
 static void serve_fast(void *env, HttpResponseWriter w, HttpRequest *r) {

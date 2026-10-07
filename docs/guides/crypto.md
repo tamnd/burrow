@@ -555,3 +555,37 @@ BigInt *gx = elliptic_curve_scalar_base_mult(slow, a, priv, &gy);
 printf("%d %d\n", (int)priv.len,
        big_int_cmp(x, gx) == 0 && big_int_cmp(y, gy) == 0);
 ```
+
+## crypto/x509/pkix
+
+`burrow/crypto/x509/pkix.h` has the ASN.1 structures that certificates, CRLs and OCSP share: distinguished names, algorithm identifiers, extensions and the old CRL types. Each one has a type descriptor carrying Go's asn1 struct tags, so `encoding/asn1` reads and writes them with no extra code. A `PkixName` is the friendly form of a name, and `pkix_name_to_rdn_sequence` turns it into the sequence of RDNs that goes on the wire:
+
+<!-- example: ../examples/crypto/pkix.c#name -->
+```c
+Str org = BURROW_S("Example Ltd");
+PkixName n = {0};
+n.common_name = BURROW_S("www.example.com");
+n.organization = slice_append(a, slice_nil(TYPE_STRING), &org, 1);
+PkixRDNSequence rdns = pkix_name_to_rdn_sequence(n, a);
+
+Error err = BURROW_NO_ERROR;
+Slice der = asn1_marshal(a, BURROW_ANY(TYPE_PKIX_RDN_SEQUENCE, &rdns), &err);
+print(hex_encode_to_string(a, der));
+```
+
+Going the other way, unmarshal into a `PkixRDNSequence` and fill a `PkixName` from it. The string form follows RFC 2253, last RDN first, with the same escaping as Go:
+
+<!-- example: ../examples/crypto/pkix.c#parse -->
+```c
+PkixRDNSequence back = slice_nil(TYPE_PKIX_RELATIVE_DISTINGUISHED_NAME_SET);
+asn1_unmarshal(a, der, BURROW_ANY(TYPE_PKIX_RDN_SEQUENCE, &back), &err);
+if (BURROW_FAILED(err))
+    return;
+PkixName parsed = {0};
+pkix_name_fill_from_rdn_sequence(&parsed, a, &back);
+print(pkix_name_string(parsed, a));
+print(parsed.common_name);
+printf("%d attributes\n", (int)parsed.names.len);
+```
+
+`names` keeps every attribute the parsed name had, including ones with no field of their own. `extra_names` is for the other direction: attributes put there are written into the name and win over a field of the same type. As in Go, a nil `extra_names` and an empty one are not the same thing when the name is printed, so leave it nil unless you mean to hide the uncommon attributes in `names`.

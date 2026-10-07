@@ -273,7 +273,7 @@ static int32_t ip_favorite_family(Str net, const burrow__NetInetAddr *laddr,
 Error burrow__net_internet_socket(burrow__NetFD *fd, Str net,
                                   const burrow__NetInetAddr *laddr,
                                   const burrow__NetInetAddr *raddr, int32_t sotype,
-                                  bool listen) {
+                                  bool listen, Time deadline) {
 #if defined(BURROW_OS_AIX) || defined(BURROW_OS_FREEBSD) ||                            \
     defined(BURROW_OS_OPENBSD) || defined(BURROW_OS_WINDOWS)
     /* These systems will not connect to the unspecified address, which means
@@ -297,5 +297,5 @@ Error burrow__net_internet_socket(burrow__NetFD *fd, Str net,
                  laddr->ip.p != NULL && net_ip_is_multicast(laddr->ip);
     return burrow__netfd_socket(fd, net, family, sotype, 0, ipv6only, laddr, raddr,
                                 group, group ? ip_group_sockaddr : ip_inet_sockaddr,
-                                (Time){0});
+                                deadline);
 }

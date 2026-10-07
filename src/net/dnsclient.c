@@ -287,6 +287,27 @@ static const ErrorVT nd_temporary_vt = {
     &nd_temporary_desc, nd_text_message, NULL, NULL, NULL, NULL, nd_temporary_clone,
 };
 
+/* errNoSuchHost and errUnknownPort, which are notFoundErrors, and
+ * errServerTemporarilyMisbehaving, a temporaryError. */
+#define ND_TEXT_ERROR(name, vt, text)                                                  \
+    static const NetDNSTextError name##__v = {                                         \
+        {(const Byte *)("" text), (Int)(sizeof(text) - 1)}};                           \
+    const Error name = {&vt, &name##__v}
+
+ND_TEXT_ERROR(burrow__net_err_no_such_host, nd_not_found_vt, "no such host");
+ND_TEXT_ERROR(burrow__net_err_unknown_port, nd_not_found_vt, "unknown port");
+ND_TEXT_ERROR(burrow__net_err_server_temporarily_misbehaving, nd_temporary_vt,
+              "server misbehaving");
+
+BURROW_SENTINEL_ERROR(burrow__net_err_no_suitable_address, "no suitable address found");
+BURROW_SENTINEL_ERROR(burrow__net_err_lame_referral, "lame referral");
+BURROW_SENTINEL_ERROR(burrow__net_err_cannot_unmarshal, "cannot unmarshal DNS message");
+BURROW_SENTINEL_ERROR(burrow__net_err_cannot_marshal, "cannot marshal DNS message");
+BURROW_SENTINEL_ERROR(burrow__net_err_server_misbehaving, "server misbehaving");
+BURROW_SENTINEL_ERROR(burrow__net_err_invalid_dns_response, "invalid DNS response");
+BURROW_SENTINEL_ERROR(burrow__net_err_no_answer_from_dns_server,
+                      "no answer from DNS server");
+
 static Error nd_text_error(Alloc *a, const ErrorVT *vt, Str s) {
     NetDNSTextError *b = (NetDNSTextError *)mem_alloc_nozero(
         a, sizeof(NetDNSTextError) + (size_t)s.len, _Alignof(NetDNSTextError));

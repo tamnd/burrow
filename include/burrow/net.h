@@ -28,6 +28,7 @@
 #ifndef BURROW_NET_H
 #define BURROW_NET_H
 
+#include "burrow/context.h"
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/io.h"
@@ -35,6 +36,7 @@
 #include "burrow/net/netip.h"
 #include "burrow/own.h"
 #include "burrow/slice.h"
+#include "burrow/sync.h"
 #include "burrow/time.h"
 #include "burrow/type.h"
 
@@ -835,6 +837,28 @@ NetListener net_unix_listener_as_listener(NetUnixListener *l);
  * gives its memory back. NULL does nothing. */
 void net_unix_listener_free(NetUnixListener *l);
 
+/* ------------------------------------------------------------------ IPAddr
+ *
+ * net.IPAddr, an IP address with the zone it is in, which is what
+ * net_resolver_lookup_ip_addr gives. IPConn, the raw socket that goes with
+ * it, is still to come. */
+
+typedef struct NetIPAddr {
+    NetIP ip;
+    Str zone;
+} NetIPAddr;
+
+extern const Type *const TYPE_NET_IP_ADDR;
+
+/* IPAddr.Network, which is "ip". */
+BURROW_STATIC(ret) Str net_ip_addr_network(const NetIPAddr *a);
+
+/* IPAddr.String, "<nil>" for a NULL a, such as "fe80::1%eth0". */
+BURROW_OWNS(ret) Str net_ip_addr_string(const NetIPAddr *a, Alloc *al);
+
+/* a as a NetAddr, which points at a, and nil for a NULL a. */
+NetAddr net_ip_addr_as_addr(const NetIPAddr *a);
+
 /* -------------------------------------------------------------------- DNS */
 
 /* net.DNSError, a lookup that failed: what went wrong, the name looked for
@@ -894,6 +918,123 @@ typedef struct NetMX {
 typedef struct NetNS {
     Str host;
 } NetNS;
+
+/* --------------------------------------------------------------- Resolver
+ *
+ * net.Resolver, which looks up names, addresses, ports and records:
+ *
+ *     Error err;
+ *     Slice addrs = net_lookup_host(a, BURROW_S("example.com"), &err);
+ *     Slice mx = net_resolver_lookup_mx(NULL, a, ctx, BURROW_S("example.com"), &err);
+ *
+ * This is Go's own resolver, the one it calls the pure Go one. It reads
+ * /etc/hosts, /etc/resolv.conf and /etc/nsswitch.conf the way Go does, looks
+ * again at most every five seconds, and asks the name servers over UDP, then
+ * TCP for an answer that was cut short. Go can also hand a lookup to the C
+ * library through cgo, and burrow never does, so the settings that ask for
+ * that, such as GODEBUG=netdns=cgo, act as Go does when cgo is not there.
+ * Go on Windows asks the system, and burrow does not yet: it reads the hosts
+ * file there and asks 127.0.0.1 and ::1, which is what a missing resolv.conf
+ * means, until the name servers of the network adapters can be read.
+ *
+ * A NULL NetResolver is the default one, as a nil *Resolver is in Go. The
+ * results are made in a, the slice and the strings and addresses in it, and
+ * an arena is the easy way to give them back. An error is a NetDNSError, or
+ * a NetAddrError for an address that is not one, in error_allocator(). A few
+ * of them come with results as well: when some of the records in an answer
+ * are not well formed, the rest come back with a DNSError that says so, as
+ * in Go. */
+
+/* Resolver.Dial: makes the connection to a name server, at address, over
+ * network, which is "udp" or "tcp". The NetConn is made in a, which the
+ * resolver gives back after it has closed it. One that is not a UDP
+ * connection from this package gets a two byte length before each message,
+ * the way DNS over TCP does. */
+BURROW_FUNC(NetResolverDial, NetConn, Alloc *a, Context ctx, Str network, Str address,
+            Error *err);
+
+typedef struct NetResolver {
+    /* Go's resolver rather than the system's. burrow only has Go's, so this
+     * changes nothing, and is here to keep the struct Go's shape. */
+    bool prefer_go;
+
+    /* A temporary error from any one query fails the whole lookup, rather
+     * than giving what the other queries found. */
+    bool strict_errors;
+
+    /* How to reach a name server, and net_dial_udp or net_dial_tcp when f is
+     * NULL. */
+    NetResolverDial dial;
+
+    /* Internal: the lookups in flight, so that two of the same name at once
+     * share one. A zeroed NetResolver is ready to use. */
+    SyncMutex burrow_mu;
+    void *burrow_calls;
+} NetResolver;
+
+/* net.DefaultResolver, which the net_lookup functions and a NULL resolver
+ * use. */
+NetResolver *net_default_resolver(void);
+
+/* LookupHost: the addresses of host, as text, from the hosts file and DNS. */
+BURROW_OWNS(ret) Slice net_resolver_lookup_host(NetResolver *r, Alloc *a, Context ctx,
+                                                Str host, Error *err);
+
+/* LookupIPAddr: the same as NetIPAddr values. */
+BURROW_OWNS(ret) Slice net_resolver_lookup_ip_addr(NetResolver *r, Alloc *a,
+                                                   Context ctx, Str host, Error *err);
+
+/* LookupIP: the addresses as NetIP values, for network "ip", "ip4" or "ip6",
+ * with only the IPv4 or only the IPv6 ones for the last two. */
+BURROW_OWNS(ret) Slice net_resolver_lookup_ip(NetResolver *r, Alloc *a, Context ctx,
+                                              Str network, Str host, Error *err);
+
+/* LookupNetIP: the same as NetipAddr values. */
+BURROW_OWNS(ret) Slice net_resolver_lookup_net_ip(NetResolver *r, Alloc *a, Context ctx,
+                                                  Str network, Str host, Error *err);
+
+/* LookupPort: the port of service on network, which is "tcp", "udp" or one
+ * of the "4" and "6" forms of them, or "ip" for either. */
+Int net_resolver_lookup_port(NetResolver *r, Context ctx, Str network, Str service,
+                             Error *err);
+
+/* LookupCNAME: the canonical name of host, the name its CNAME records lead
+ * to, or host itself when it has none. */
+BURROW_OWNS(ret) Str net_resolver_lookup_cname(NetResolver *r, Alloc *a, Context ctx,
+                                               Str host, Error *err);
+
+/* LookupSRV: the SRV records of _service._proto.name, sorted by priority and
+ * shuffled by weight, with the name they were found under in *cname, which
+ * may be NULL. Empty service and proto look up name itself. */
+BURROW_OWNS(ret) Slice net_resolver_lookup_srv(NetResolver *r, Alloc *a, Context ctx,
+                                               Str service, Str proto, Str name,
+                                               Str *cname, Error *err);
+
+/* LookupMX, LookupNS and LookupTXT: the records of name, the MX ones sorted
+ * by preference. The TXT strings of one record are joined into one. */
+BURROW_OWNS(ret) Slice net_resolver_lookup_mx(NetResolver *r, Alloc *a, Context ctx,
+                                              Str name, Error *err);
+BURROW_OWNS(ret) Slice net_resolver_lookup_ns(NetResolver *r, Alloc *a, Context ctx,
+                                              Str name, Error *err);
+BURROW_OWNS(ret) Slice net_resolver_lookup_txt(NetResolver *r, Alloc *a, Context ctx,
+                                               Str name, Error *err);
+
+/* LookupAddr: the names of addr, from the hosts file and PTR records. */
+BURROW_OWNS(ret) Slice net_resolver_lookup_addr(NetResolver *r, Alloc *a, Context ctx,
+                                                Str addr, Error *err);
+
+/* The package functions, which are the default resolver's with
+ * context_background(). */
+BURROW_OWNS(ret) Slice net_lookup_host(Alloc *a, Str host, Error *err);
+BURROW_OWNS(ret) Slice net_lookup_ip(Alloc *a, Str host, Error *err);
+Int net_lookup_port(Str network, Str service, Error *err);
+BURROW_OWNS(ret) Str net_lookup_cname(Alloc *a, Str host, Error *err);
+BURROW_OWNS(ret) Slice net_lookup_srv(Alloc *a, Str service, Str proto, Str name,
+                                      Str *cname, Error *err);
+BURROW_OWNS(ret) Slice net_lookup_mx(Alloc *a, Str name, Error *err);
+BURROW_OWNS(ret) Slice net_lookup_ns(Alloc *a, Str name, Error *err);
+BURROW_OWNS(ret) Slice net_lookup_txt(Alloc *a, Str name, Error *err);
+BURROW_OWNS(ret) Slice net_lookup_addr(Alloc *a, Str addr, Error *err);
 
 /* ------------------------------------------------------------- descriptors */
 

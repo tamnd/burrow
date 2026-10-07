@@ -15,6 +15,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "internal.h"
+
 #include "burrow/declare.h"
 #include "burrow/error.h"
 #include "burrow/mem.h"
@@ -29,7 +31,6 @@
 #include "burrow/time.h"
 
 #include "../os/internal.h"
-#include "internal.h"
 
 #include <stddef.h>
 #include <stdint.h>

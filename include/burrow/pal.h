@@ -1714,7 +1714,10 @@ int64_t pal_recvfrom(int64_t fd, void *buf, int64_t n, PalSockAddr *from,
  * syscall package does, which on Linux and AIX leaves datagram sockets out. pal_recvmsg counts
  * that byte, and pal_sendmsg answers 0 whenever there is oob and no data.
  * Descriptors that arrive in an SCM_RIGHTS message are close-on-exec, as
- * Go's UnixConn makes them. */
+ * Go's UnixConn makes them. Linux hands MSG_CMSG_CLOEXEC back in the flags
+ * when it is asked for, and *flags leaves it out, since it says nothing about
+ * the message. Go's UnixConn does pass it on there, and its IPConn and
+ * UDPConn, which never ask for it, do not. */
 int64_t pal_recvmsg(int64_t fd, void *buf, int64_t n, void *oob, int64_t oobcap,
                     int64_t *oobn, int32_t *flags, PalSockAddr *from, PalErrno *err);
 int64_t pal_sendmsg(int64_t fd, const void *buf, int64_t n, const void *oob,

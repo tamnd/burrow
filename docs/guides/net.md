@@ -604,7 +604,12 @@ bufio_reader_free(br);
 That prints:
 
 ```
-PENDING
+POST /upload for example.com, 11 bytes
+from alice
+body: hello world
+404, 404 Not Found
+body: none here
+malformed HTTP status code "OK"
 ```
 
 As in Go, a request's `Host` field is taken out of its header and kept in `host`. The response is given the request it answers, or NULL, because a response to `HEAD` has no body whatever its header says. `Transfer-Encoding` other than a single `chunked` is refused, and so are two different `Content-Length` values, since both are ways to smuggle one request inside another.

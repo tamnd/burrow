@@ -153,12 +153,6 @@ static void TestServerConnPipelined(TestingT *t) {
         testing_t_errorf_v(t, "Read #2 path = %q, want /two", r2->url->path);
     CHECK_INT_EQ(httputil_server_conn_pending(sc), 2);
 
-    /* The client is done, so there is nothing more to read. */
-    HttpRequest *r3 = httputil_server_conn_read(sc, &err);
-    if (r3 != NULL || !errors_is(err, httputil_err_persist_eof))
-        testing_t_errorf_v(t, "Read #3 = %p, %v; want nil, %v", (void *)r3, err,
-                           httputil_err_persist_eof);
-
     Reply rep;
     reply_init(&rep, a, BURROW_S("one"), false);
     err = httputil_server_conn_write(sc, r1, &rep.resp);
@@ -170,6 +164,14 @@ static void TestServerConnPipelined(TestingT *t) {
     if (BURROW_FAILED(err))
         testing_t_errorf_v(t, "Write #2: %v", err);
     CHECK_INT_EQ(httputil_server_conn_pending(sc), 0);
+
+    /* The client is done, so there is nothing more to read. A Read that gets no
+     * request waits for the earlier responses to go out, so it comes after the
+     * writes. */
+    HttpRequest *r3 = httputil_server_conn_read(sc, &err);
+    if (r3 != NULL || !errors_is(err, httputil_err_persist_eof))
+        testing_t_errorf_v(t, "Read #3 = %p, %v; want nil, %v", (void *)r3, err,
+                           httputil_err_persist_eof);
 
     /* A request the conn did not read, or has answered, is not in its pipeline. */
     HttpRequest other;

@@ -941,8 +941,13 @@ void httputil_reverse_proxy_serve_http(HttputilReverseProxy *p, HttpResponseWrit
         Slice keys = slice_make(ha, TYPE_STRING, 0, announced);
         MapIter it = map_iter(res->trailer);
         const void *kp;
-        while (map_next(&it, &kp, NULL))
-            keys = slice_append(ha, keys, kp, 1);
+        while (map_next(&it, &kp, NULL)) {
+            /* The keys live in the response, which is freed before the server
+             * reads the Trailer field back, and a join of one key is the key
+             * itself. */
+            Str k = str_clone(ha, *(const Str *)kp);
+            keys = slice_append(ha, keys, &k, 1);
+        }
         Str joined = strings_join(ha, keys, BURROW_S(", "));
         (void)http_header_add(h, BURROW_S("Trailer"), joined);
     }

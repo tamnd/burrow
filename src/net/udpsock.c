@@ -13,8 +13,12 @@
 #include "burrow/declare.h"
 #include "burrow/error.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
 #include "burrow/net.h"
 #include "burrow/net/netip.h"
+#include "burrow/os.h"
+#include "burrow/platform.h"
+#include "burrow/slice.h"
 #include "burrow/type.h"
 
 #include <stddef.h>
@@ -116,62 +120,21 @@ NetAddr net_udp_addr_as_addr(const NetUDPAddr *a) {
 }
 
 NetipAddrPort net_udp_addr_addr_port(const NetUDPAddr *a) {
-    if (a == NULL)
-        return (NetipAddrPort){0};
-    bool ok = false;
-    NetipAddr na = netip_addr_from_slice(a->ip, &ok);
-    na = netip_addr_with_zone(na, a->zone);
-    return netip_addr_port_from(na, (uint16_t)a->port);
+    return burrow__net_inet_addr_port(nu_inet(a));
 }
-
-/* A NetUDPAddr this package made, with the bytes its ip and zone point at
- * after it, and the size to give back. */
-typedef struct NuAddrBox {
-    NetUDPAddr a;
-    size_t size;
-} NuAddrBox;
 
 /* A NetUDPAddr in a for ip, port and zone, copying their bytes. */
 static NetUDPAddr *nu_addr_new(Alloc *a, const Byte *ip, Int iplen, Int port,
                                Str zone) {
-    size_t size = sizeof(NuAddrBox) + (size_t)iplen + (size_t)zone.len;
-    NuAddrBox *b = (NuAddrBox *)mem_alloc_nozero(a, size, _Alignof(NuAddrBox));
-    if (b == NULL)
-        return NULL;
-    b->size = size;
-    Byte *p = (Byte *)(b + 1);
-    if (iplen > 0)
-        memcpy(p, ip, (size_t)iplen);
-    b->a.ip = iplen > 0 ? slice_from(p, iplen, iplen, TYPE_BYTE) : (NetIP){0};
-    if (zone.len > 0)
-        memcpy(p + iplen, zone.p, (size_t)zone.len);
-    b->a.zone = str_from_bytes(p + iplen, zone.len);
-    b->a.port = port;
-    return &b->a;
+    return (NetUDPAddr *)(void *)burrow__net_inet_addr_new(a, ip, iplen, port, zone);
 }
 
 NetUDPAddr *net_udp_addr_from_addr_port(Alloc *a, NetipAddrPort addr) {
-    NetipAddr ip = netip_addr_port_addr(addr);
-    Byte bytes[16] = {0};
-    Int iplen = 0;
-    if (netip_addr_is4(ip)) {
-        NetipAddrAs4Ret b4 = netip_addr_as4(ip);
-        memcpy(bytes, b4.a, 4);
-        iplen = 4;
-    } else if (netip_addr_is_valid(ip)) {
-        NetipAddrAs16Ret b16 = netip_addr_as16(ip);
-        memcpy(bytes, b16.a, 16);
-        iplen = 16;
-    }
-    return nu_addr_new(a, bytes, iplen, (Int)netip_addr_port_port(addr),
-                       netip_addr_zone(ip));
+    return (NetUDPAddr *)(void *)burrow__net_inet_from_addr_port(a, addr);
 }
 
 void net_udp_addr_free(Alloc *a, NetUDPAddr *addr) {
-    if (addr == NULL)
-        return;
-    NuAddrBox *b = (NuAddrBox *)(void *)addr;
-    mem_free(a, b, b->size, _Alignof(NuAddrBox));
+    burrow__net_inet_addr_free(a, (burrow__NetInetAddr *)(void *)addr);
 }
 
 /* addrPortUDPAddr: a NetipAddrPort as an Addr, whose String is the
@@ -250,6 +213,7 @@ static void nu_new_conn(NetUDPConn *c) {
     if (burrow__net_inet_from_sockaddr(&c->c.fd.raddr, &r->a.ip, &r->a.port, &r->a.zone,
                                        &r->b))
         c->c.raddr = net_udp_addr_as_addr(&r->a);
+    c->c.raw = (burrow__NetRawConn){&c->c.fd, c->c.laddr, c->c.raddr, false};
 }
 
 static bool nu_is_oom(Error e) {
@@ -257,8 +221,9 @@ static bool nu_is_oom(Error e) {
            e.data == burrow_err_out_of_memory.data;
 }
 
-static NetUDPConn *nu_socket(Alloc *a, Str net, const NetUDPAddr *laddr,
-                             const NetUDPAddr *raddr, bool listen, Error *err) {
+static NetUDPConn *nu_socket(Alloc *a, const burrow__NetSysOpts *o, Str net,
+                             const NetUDPAddr *laddr, const NetUDPAddr *raddr,
+                             bool listen, Error *err) {
     NetUDPConn *c =
         (NetUDPConn *)mem_alloc(a, sizeof(NetUDPConn), _Alignof(NetUDPConn));
     if (c == NULL) {
@@ -266,8 +231,9 @@ static NetUDPConn *nu_socket(Alloc *a, Str net, const NetUDPAddr *laddr,
         return NULL;
     }
     c->c.alloc = a;
-    *err = burrow__net_internet_socket(&c->c.fd, net, nu_inet(laddr), nu_inet(raddr),
-                                       PAL_SOCK_DGRAM, listen);
+    *err = burrow__net_internet_socket(&c->c.fd, o != NULL ? &o->ctl : NULL, net,
+                                       nu_inet(laddr), nu_inet(raddr), PAL_SOCK_DGRAM,
+                                       0, listen);
     if (BURROW_FAILED(*err)) {
         mem_free(a, c, sizeof(NetUDPConn), _Alignof(NetUDPConn));
         return NULL;
@@ -276,8 +242,37 @@ static NetUDPConn *nu_socket(Alloc *a, Str net, const NetUDPAddr *laddr,
     return c;
 }
 
-NetUDPConn *net_dial_udp(Alloc *a, Str network, const NetUDPAddr *laddr,
-                         const NetUDPAddr *raddr, Error *err) {
+NetUDPConn *burrow__net_sys_dial_udp(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                                     const NetUDPAddr *laddr, const NetUDPAddr *raddr,
+                                     Error *err) {
+    Str net = BURROW_STR_EMPTY;
+    if (!nu_network(network, &net)) {
+        BURROW_OUT(err, net_unknown_network_error(error_allocator(), network));
+        return NULL;
+    }
+    Error e = BURROW_NO_ERROR;
+    NetUDPConn *c = nu_socket(a, o, net, laddr, raddr, false, &e);
+    BURROW_OUT(err, e);
+    return c;
+}
+
+NetUDPConn *burrow__net_sys_listen_udp(Alloc *a, const burrow__NetSysOpts *o,
+                                       Str network, const NetUDPAddr *laddr,
+                                       Error *err) {
+    Str net = BURROW_STR_EMPTY;
+    if (!nu_network(network, &net)) {
+        BURROW_OUT(err, net_unknown_network_error(error_allocator(), network));
+        return NULL;
+    }
+    Error e = BURROW_NO_ERROR;
+    NetUDPConn *c = nu_socket(a, o, net, laddr, NULL, true, &e);
+    BURROW_OUT(err, e);
+    return c;
+}
+
+NetUDPConn *burrow__net_dial_udp(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                                 const NetUDPAddr *laddr, const NetUDPAddr *raddr,
+                                 Error *err) {
     Str net = BURROW_STR_EMPTY;
     NetAddr src = net_udp_addr_as_addr(laddr);
     NetAddr dst = net_udp_addr_as_addr(raddr);
@@ -292,11 +287,54 @@ NetUDPConn *net_dial_udp(Alloc *a, Str network, const NetUDPAddr *laddr,
         return NULL;
     }
     Error e = BURROW_NO_ERROR;
-    NetUDPConn *c = nu_socket(a, net, laddr, raddr, false, &e);
+    NetUDPConn *c = nu_socket(a, o, net, laddr, raddr, false, &e);
     if (c == NULL && !nu_is_oom(e))
         e = burrow__net_op_error(NU_LIT("dial"), network, src, dst, e);
     BURROW_OUT(err, e);
     return c;
+}
+
+NetUDPConn *net_dial_udp(Alloc *a, Str network, const NetUDPAddr *laddr,
+                         const NetUDPAddr *raddr, Error *err) {
+    return burrow__net_dial_udp(a, NULL, network, laddr, raddr, err);
+}
+
+OsFile *net_udp_conn_file(NetUDPConn *c, Alloc *a, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return NULL;
+    }
+    return burrow__conn_file(&c->c, a, err);
+}
+
+NetUDPConn *burrow__net_udp_conn_from_file(Alloc *a, const burrow__NetFileSock *fs,
+                                           Error *err) {
+    NetUDPConn *c =
+        (NetUDPConn *)mem_alloc(a, sizeof(NetUDPConn), _Alignof(NetUDPConn));
+    if (c == NULL) {
+        (void)pal_socket_close(fs->s, NULL);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    c->c.alloc = a;
+    Error e = burrow__netfd_from_file(&c->c.fd, fs);
+    if (BURROW_FAILED(e)) {
+        mem_free(a, c, sizeof(NetUDPConn), _Alignof(NetUDPConn));
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    nu_new_conn(c);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return c;
+}
+
+SyscallRawConn net_udp_conn_syscall_conn(NetUDPConn *c, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return (SyscallRawConn){NULL, NULL};
+    }
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return burrow__net_raw_conn(&c->c.raw);
 }
 
 NetUDPConn *net_listen_udp(Alloc *a, Str network, const NetUDPAddr *laddr, Error *err) {
@@ -312,10 +350,154 @@ NetUDPConn *net_listen_udp(Alloc *a, Str network, const NetUDPAddr *laddr, Error
     if (laddr == NULL)
         laddr = &zero;
     Error e = BURROW_NO_ERROR;
-    NetUDPConn *c = nu_socket(a, net, laddr, NULL, true, &e);
+    NetUDPConn *c = nu_socket(a, NULL, net, laddr, NULL, true, &e);
     if (c == NULL && !nu_is_oom(e))
         e = burrow__net_op_error(NU_LIT("listen"), network, nu_nil_addr,
                                  net_udp_addr_as_addr(laddr), e);
+    BURROW_OUT(err, e);
+    return c;
+}
+
+/* ------------------------------------------------------------- multicast */
+
+/* Linux names an IPv4 interface by its index, in an ip_mreqn, and the other
+ * systems by one of its addresses, which Go has to go and find. */
+#if defined(BURROW_OS_LINUX)
+#define NU_MREQN 1
+#else
+#define NU_MREQN 0
+#endif
+
+/* interfaceToIPv4Addr for an interface that is there: its first IPv4
+ * address, or errNoSuchInterface when it has none. */
+static Error nu_interface_ipv4(const NetInterface *ifi, Byte out[4]) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Error e = BURROW_NO_ERROR;
+    Slice ifat = net_interface_addrs_of(ifi, arena_allocator(&ar), &e);
+    if (BURROW_OK(e)) {
+        e = burrow__net_err_no_such_interface;
+        const NetAddr *as = (const NetAddr *)ifat.p;
+        for (Int i = 0; i < ifat.len; i++) {
+            NetIP ip = slice_nil(TYPE_BYTE);
+            if (as[i].vt != NULL && as[i].vt->self_type == TYPE_NET_IP_ADDR)
+                ip = ((const NetIPAddr *)as[i].data)->ip;
+            else if (as[i].vt != NULL && as[i].vt->self_type == TYPE_NET_IP_NET)
+                ip = ((const NetIPNet *)as[i].data)->ip;
+            NetIP v4 = net_ip_to4(ip);
+            if (v4.p != NULL) {
+                memcpy(out, v4.p, 4);
+                e = BURROW_NO_ERROR;
+                break;
+            }
+        }
+    }
+    /* The error is the interface's, made outside the arena. */
+    arena_free(&ar);
+    return e;
+}
+
+static int32_t nu_index(const NetInterface *ifi) {
+    if (ifi == NULL)
+        return 0;
+    return ifi->index < 0 || ifi->index > INT32_MAX ? -1 : (int32_t)ifi->index;
+}
+
+/* setIPv4MulticastInterface. */
+static Error nu_set_ipv4_multicast_if(NetUDPConn *c, const NetInterface *ifi) {
+    PalMreq m;
+    memset(&m, 0, sizeof m);
+    m.index = nu_index(ifi);
+    if (!NU_MREQN) {
+        Error e = nu_interface_ipv4(ifi, m.ifaddr);
+        if (BURROW_FAILED(e)) {
+#if defined(BURROW_OS_WINDOWS)
+            /* Go's Windows code wraps whatever it got, not only an Errno. */
+            if (e.vt != burrow_err_out_of_memory.vt ||
+                e.data != burrow_err_out_of_memory.data)
+                e = os_new_syscall_error(error_allocator(), NU_LIT("setsockopt"), e);
+#endif
+            return e;
+        }
+    }
+    return burrow__netfd_setsockopt_mreq(&c->c.fd, PAL_MREQ_IPV4_IF, &m);
+}
+
+/* joinIPv4Group. Outside Linux an interface has to have an IPv4 address to
+ * name it by, or it is errNoSuchMulticastInterface, and no interface is the
+ * system's choice. */
+static Error nu_join_ipv4_group(NetUDPConn *c, const NetInterface *ifi, NetIP ip4) {
+    PalMreq m;
+    memset(&m, 0, sizeof m);
+    memcpy(m.group, ip4.p, 4);
+    m.index = nu_index(ifi);
+    if (!NU_MREQN && ifi != NULL) {
+        Error e = nu_interface_ipv4(ifi, m.ifaddr);
+        if (e.vt == burrow__net_err_no_such_interface.vt &&
+            e.data == burrow__net_err_no_such_interface.data)
+            return burrow__net_err_no_such_multicast_interface;
+        if (BURROW_FAILED(e))
+            return e;
+        static const Byte zero[4] = {0, 0, 0, 0};
+        if (memcmp(m.ifaddr, zero, 4) == 0)
+            return burrow__net_err_no_such_multicast_interface;
+    }
+    return burrow__netfd_setsockopt_mreq(&c->c.fd, PAL_MREQ_IPV4_JOIN, &m);
+}
+
+/* listenIPv4MulticastUDP and listenIPv6MulticastUDP. */
+static Error nu_listen_multicast(NetUDPConn *c, const NetInterface *ifi, NetIP ip) {
+    NetIP ip4 = net_ip_to4(ip);
+    Error e = BURROW_NO_ERROR;
+    if (ip4.p != NULL) {
+        if (ifi != NULL)
+            e = nu_set_ipv4_multicast_if(c, ifi);
+        if (BURROW_OK(e))
+            e = burrow__netfd_setsockopt(&c->c.fd, PAL_IP_MULTICAST_LOOP, 0);
+        if (BURROW_OK(e))
+            e = nu_join_ipv4_group(c, ifi, ip4);
+        return e;
+    }
+    if (ifi != NULL)
+        e = burrow__netfd_setsockopt(&c->c.fd, PAL_IPV6_MULTICAST_IF, nu_index(ifi));
+    if (BURROW_OK(e))
+        e = burrow__netfd_setsockopt(&c->c.fd, PAL_IPV6_MULTICAST_LOOP, 0);
+    if (BURROW_OK(e)) {
+        PalMreq m;
+        memset(&m, 0, sizeof m);
+        memcpy(m.group, ip.p, (size_t)(ip.len < 16 ? ip.len : 16));
+        m.index = nu_index(ifi);
+        e = burrow__netfd_setsockopt_mreq(&c->c.fd, PAL_MREQ_IPV6_JOIN, &m);
+    }
+    return e;
+}
+
+NetUDPConn *net_listen_multicast_udp(Alloc *a, Str network, const NetInterface *ifi,
+                                     const NetUDPAddr *gaddr, Error *err) {
+    Str net = BURROW_STR_EMPTY;
+    NetAddr ga = net_udp_addr_as_addr(gaddr);
+    if (!nu_network(network, &net)) {
+        Error u = net_unknown_network_error(error_allocator(), network);
+        BURROW_OUT(err,
+                   burrow__net_op_error(NU_LIT("listen"), network, nu_nil_addr, ga, u));
+        return NULL;
+    }
+    if (gaddr == NULL || gaddr->ip.p == NULL) {
+        BURROW_OUT(err, burrow__net_op_error(NU_LIT("listen"), network, nu_nil_addr, ga,
+                                             burrow__net_err_missing_address));
+        return NULL;
+    }
+    Error e = BURROW_NO_ERROR;
+    NetUDPConn *c = nu_socket(a, NULL, net, gaddr, NULL, true, &e);
+    if (c != NULL) {
+        e = nu_listen_multicast(c, ifi, gaddr->ip);
+        if (BURROW_FAILED(e)) {
+            net_udp_conn_free(c);
+            c = NULL;
+        }
+    }
+    if (c == NULL && !nu_is_oom(e))
+        e = burrow__net_op_error(NU_LIT("listen"), network, nu_nil_addr, ga, e);
     BURROW_OUT(err, e);
     return c;
 }
@@ -487,6 +669,161 @@ Int net_udp_conn_write_to(NetUDPConn *c, Slice p, NetAddr addr, Error *err) {
     return net_udp_conn_write_to_udp(c, p, (const NetUDPAddr *)addr.data, err);
 }
 
+/* ---------------------------------------------------------------- messages */
+
+/* readMsg, with the sender's sockaddr in from. */
+static Int nu_read_msg(NetUDPConn *c, Slice p, Slice oob, Int *oobn, Int *flags,
+                       PalSockAddr *from, Error *err) {
+    Int on = 0;
+    Int fl = 0;
+    Error e = BURROW_NO_ERROR;
+    Int n = burrow__netfd_read_msg(&c->c.fd, p, oob, &on, &fl, from, &e);
+    if (BURROW_FAILED(e))
+        e = burrow__net_op_error(NU_LIT("read"), c->c.fd.net, c->c.laddr, c->c.raddr,
+                                 e);
+    if (oobn != NULL)
+        *oobn = on;
+    if (flags != NULL)
+        *flags = fl;
+    *err = e;
+    return n;
+}
+
+Int net_udp_conn_read_msg_udp(NetUDPConn *c, Slice p, Slice oob, Alloc *a, Int *oobn,
+                              Int *flags, NetUDPAddr **addr, Error *err) {
+    if (addr != NULL)
+        *addr = NULL;
+    NetipAddrPort ap = {0};
+    Error e = BURROW_NO_ERROR;
+    Int n = net_udp_conn_read_msg_udp_addr_port(c, p, oob, oobn, flags, &ap, &e);
+    if (addr != NULL && netip_addr_port_is_valid(ap)) {
+        /* UDPAddrFromAddrPort. */
+        NetipAddr ip = netip_addr_port_addr(ap);
+        NetipAddrAs16Ret b = netip_addr_as16(ip);
+        bool v4 = netip_addr_is4(ip);
+        *addr = nu_addr_new(a, v4 ? b.a + 12 : b.a, v4 ? 4 : 16,
+                            (Int)netip_addr_port_port(ap), netip_addr_zone(ip));
+        if (*addr == NULL && BURROW_OK(e))
+            e = burrow_err_out_of_memory;
+    }
+    BURROW_OUT(err, e);
+    return n;
+}
+
+Int net_udp_conn_read_msg_udp_addr_port(NetUDPConn *c, Slice p, Slice oob, Int *oobn,
+                                        Int *flags, NetipAddrPort *addr, Error *err) {
+    if (oobn != NULL)
+        *oobn = 0;
+    if (flags != NULL)
+        *flags = 0;
+    if (addr != NULL)
+        *addr = (NetipAddrPort){0};
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    PalSockAddr from = {0};
+    Error e = BURROW_NO_ERROR;
+    Int n = nu_read_msg(c, p, oob, oobn, flags, &from, &e);
+    if (addr != NULL) {
+        NuAddr got = {0};
+        if (burrow__net_inet_from_sockaddr(&from, &got.a.ip, &got.a.port, &got.a.zone,
+                                           &got.b)) {
+            NetipAddr ip =
+                got.a.ip.len == 4
+                    ? netip_addr_from4(got.b.ip)
+                    : netip_addr_with_zone(netip_addr_from16(got.b.ip), got.a.zone);
+            *addr = netip_addr_port_from(ip, (uint16_t)got.a.port);
+        }
+    }
+    BURROW_OUT(err, e);
+    return n;
+}
+
+/* writeMsg past its checks: to the address, when there is one. */
+static Int nu_write_msg(NetUDPConn *c, Slice p, Slice oob, bool has_addr, NetIP ip,
+                        Int port, Str zone, Int *oobn, Error *err) {
+    PalSockAddr to = {0};
+    if (has_addr) {
+        Error e = burrow__net_ip_sockaddr(c->c.fd.family, ip, port, zone, &to);
+        if (BURROW_FAILED(e)) {
+            *err = burrow__netfd_write_msg_error(e);
+            return 0;
+        }
+    }
+    return burrow__netfd_write_msg(&c->c.fd, p, oob, has_addr ? &to : NULL, oobn, err);
+}
+
+Int net_udp_conn_write_msg_udp(NetUDPConn *c, Slice p, Slice oob,
+                               const NetUDPAddr *addr, Int *oobn, Error *err) {
+    if (oobn != NULL)
+        *oobn = 0;
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    Error e = BURROW_NO_ERROR;
+    Int n = 0;
+    Int on = 0;
+    if (c->c.fd.is_connected && addr != NULL)
+        e = net_err_write_to_connected;
+    else if (!c->c.fd.is_connected && addr == NULL)
+        e = burrow__net_err_missing_address;
+    else if (addr == NULL)
+        n = nu_write_msg(c, p, oob, false, slice_nil(TYPE_BYTE), 0, BURROW_STR_EMPTY,
+                         &on, &e);
+    else
+        n = nu_write_msg(c, p, oob, true, addr->ip, addr->port, addr->zone, &on, &e);
+    if (BURROW_FAILED(e))
+        e = burrow__net_op_error(NU_LIT("write"), c->c.fd.net, c->c.laddr,
+                                 net_udp_addr_as_addr(addr), e);
+    if (oobn != NULL)
+        *oobn = on;
+    BURROW_OUT(err, e);
+    return n;
+}
+
+Int net_udp_conn_write_msg_udp_addr_port(NetUDPConn *c, Slice p, Slice oob,
+                                         NetipAddrPort addr, Int *oobn, Error *err) {
+    if (oobn != NULL)
+        *oobn = 0;
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    Error e = BURROW_NO_ERROR;
+    Int n = 0;
+    Int on = 0;
+    NetipAddr ip = netip_addr_port_addr(addr);
+    bool valid = netip_addr_port_is_valid(addr);
+    if (c->c.fd.is_connected && valid) {
+        e = net_err_write_to_connected;
+    } else if (!c->c.fd.is_connected && !valid) {
+        e = burrow__net_err_missing_address;
+    } else if (!valid) {
+        n = nu_write_msg(c, p, oob, false, slice_nil(TYPE_BYTE), 0, BURROW_STR_EMPTY,
+                         &on, &e);
+    } else if (c->c.fd.family == PAL_AF_INET && !netip_addr_is4(ip) &&
+               !netip_addr_is4_in6(ip)) {
+        /* addrPortToSockaddrInet4. */
+        NetAddrError ae = {NU_LIT("non-IPv4 address"),
+                           netip_addr_string(ip, error_allocator())};
+        e = net_addr_error_as_error(&ae, error_allocator());
+    } else {
+        NetipAddrAs16Ret b = netip_addr_as16(ip);
+        NetIP nip = slice_from(b.a, 16, 16, TYPE_BYTE);
+        n = nu_write_msg(c, p, oob, true, nip, (Int)netip_addr_port_port(addr),
+                         netip_addr_zone(ip), &on, &e);
+    }
+    if (BURROW_FAILED(e))
+        e = burrow__net_op_error(NU_LIT("write"), c->c.fd.net, c->c.laddr,
+                                 nu_ap_addr(addr), e);
+    if (oobn != NULL)
+        *oobn = on;
+    BURROW_OUT(err, e);
+    return n;
+}
+
 Error net_udp_conn_close(NetUDPConn *c) {
     if (c == NULL)
         return burrow__net_einval();
@@ -596,6 +933,8 @@ static const NetConnVT nu_conn_vt = {
     nu_m_set_write_deadline,
 };
 
+const IoWriterVT *const burrow__nu_conn_writer = &nu_conn_vt.writer;
+
 NetConn net_udp_conn_as_conn(NetUDPConn *c) {
     NetConn conn = {NULL, NULL};
     if (c != NULL) {
@@ -607,6 +946,39 @@ NetConn net_udp_conn_as_conn(NetUDPConn *c) {
 
 NetUDPConn *net_conn_as_udp_conn(NetConn c) {
     if (c.vt != &nu_conn_vt)
+        return NULL;
+    return (NetUDPConn *)c.data;
+}
+
+static Int nu_m_read_from(void *self, Slice p, Alloc *a, NetAddr *addr, Error *err) {
+    return net_udp_conn_read_from((NetUDPConn *)self, p, a, addr, err);
+}
+
+static Int nu_m_write_to(void *self, Slice p, NetAddr addr, Error *err) {
+    return net_udp_conn_write_to((NetUDPConn *)self, p, addr, err);
+}
+
+static const NetPacketConnVT nu_packet_conn_vt = {
+    {&nu_conn_desc, nu_m_close},
+    nu_m_read_from,
+    nu_m_write_to,
+    nu_m_local_addr,
+    nu_m_set_deadline,
+    nu_m_set_read_deadline,
+    nu_m_set_write_deadline,
+};
+
+NetPacketConn net_udp_conn_as_packet_conn(NetUDPConn *c) {
+    NetPacketConn conn = {NULL, NULL};
+    if (c != NULL) {
+        conn.vt = &nu_packet_conn_vt;
+        conn.data = c;
+    }
+    return conn;
+}
+
+NetUDPConn *net_packet_conn_as_udp_conn(NetPacketConn c) {
+    if (c.vt != &nu_packet_conn_vt)
         return NULL;
     return (NetUDPConn *)c.data;
 }

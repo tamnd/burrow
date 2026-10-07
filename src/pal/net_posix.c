@@ -43,6 +43,7 @@
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <sys/un.h>
 #include <unistd.h>
 #endif
@@ -75,6 +76,12 @@ int64_t pal_socket(int32_t family, int32_t type, int32_t protocol, PalErrno *err
 bool pal_socket_close(int64_t fd, PalErrno *err) {
     (void)fd;
     return pnet_nosys(err);
+}
+
+int64_t pal_socket_dup(int64_t fd, PalErrno *err) {
+    (void)fd;
+    pnet_nosys(err);
+    return -1;
 }
 
 bool pal_bind(int64_t fd, const PalSockAddr *addr, PalErrno *err) {
@@ -134,6 +141,40 @@ int64_t pal_recvfrom(int64_t fd, void *buf, int64_t n, PalSockAddr *from,
     return -1;
 }
 
+int64_t pal_recvmsg(int64_t fd, void *buf, int64_t n, void *oob, int64_t oobcap,
+                    int64_t *oobn, int32_t *flags, PalSockAddr *from, PalErrno *err) {
+    (void)fd;
+    (void)buf;
+    (void)n;
+    (void)oob;
+    (void)oobcap;
+    (void)oobn;
+    (void)flags;
+    (void)from;
+    pnet_nosys(err);
+    return -1;
+}
+
+int64_t pal_writev(int64_t fd, const PalIovec *v, int32_t count, PalErrno *err) {
+    (void)fd;
+    (void)v;
+    (void)count;
+    pnet_nosys(err);
+    return -1;
+}
+
+int64_t pal_sendmsg(int64_t fd, const void *buf, int64_t n, const void *oob,
+                    int64_t oobn, const PalSockAddr *to, PalErrno *err) {
+    (void)fd;
+    (void)buf;
+    (void)n;
+    (void)oob;
+    (void)oobn;
+    (void)to;
+    pnet_nosys(err);
+    return -1;
+}
+
 bool pal_getsockopt(int64_t fd, int32_t opt, int64_t *value, PalErrno *err) {
     (void)fd;
     (void)opt;
@@ -148,6 +189,13 @@ bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err) {
     return pnet_nosys(err);
 }
 
+bool pal_setsockopt_mreq(int64_t fd, int32_t opt, const PalMreq *m, PalErrno *err) {
+    (void)fd;
+    (void)opt;
+    (void)m;
+    return pnet_nosys(err);
+}
+
 bool pal_shutdown(int64_t fd, int32_t how, PalErrno *err) {
     (void)fd;
     (void)how;
@@ -156,6 +204,18 @@ bool pal_shutdown(int64_t fd, int32_t how, PalErrno *err) {
 
 int32_t pal_listen_backlog_max(void) {
     return 0;
+}
+
+bool pal_kernel_version_ge(int32_t major, int32_t minor) {
+    (void)major;
+    (void)minor;
+    return false;
+}
+
+bool pal_mptcp_in_use(int64_t fd, bool sol_mptcp) {
+    (void)fd;
+    (void)sol_mptcp;
+    return false;
 }
 
 #else
@@ -248,6 +308,21 @@ static bool pnet_type(int32_t type, int *out) {
     default:
         return false;
     }
+}
+
+/* SO_TYPE's answer as a PAL_SOCK_ type, 0 for one with no name here. */
+static int64_t pnet_type_from(int ty) {
+    if (ty == SOCK_STREAM)
+        return PAL_SOCK_STREAM;
+    if (ty == SOCK_DGRAM)
+        return PAL_SOCK_DGRAM;
+    if (ty == SOCK_RAW)
+        return PAL_SOCK_RAW;
+#if defined(SOCK_SEQPACKET)
+    if (ty == SOCK_SEQPACKET)
+        return PAL_SOCK_SEQPACKET;
+#endif
+    return 0;
 }
 
 /* An address of ours as the platform's, in ss, with its length. The port and
@@ -435,6 +510,16 @@ bool pal_socket_close(int64_t fd, PalErrno *err) {
     return true;
 }
 
+int64_t pal_socket_dup(int64_t fd, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!pnet_fd_ok(fd, err))
+        return -1;
+    int nfd = fcntl((int)fd, F_DUPFD_CLOEXEC, 0);
+    if (nfd < 0)
+        return pnet_fail_n(err);
+    return nfd;
+}
+
 bool pal_bind(int64_t fd, const PalSockAddr *addr, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
     struct sockaddr_storage ss;
@@ -594,6 +679,180 @@ int64_t pal_recvfrom(int64_t fd, void *buf, int64_t n, PalSockAddr *from,
     return (int64_t)r;
 }
 
+/* Where recvmsg can make the descriptors it hands over close-on-exec itself,
+ * it does, and elsewhere they are made so after, as Go's
+ * setReadMsgCloseOnExec does, which leaves a window a fork can slip into. */
+#if defined(MSG_CMSG_CLOEXEC)
+#define PNET_RECVMSG_FLAGS MSG_CMSG_CLOEXEC
+static void pnet_rights_cloexec(struct msghdr *msg) {
+    (void)msg;
+}
+#else
+#define PNET_RECVMSG_FLAGS 0
+static void pnet_rights_cloexec(struct msghdr *msg) {
+    if (msg->msg_controllen == 0)
+        return;
+    for (struct cmsghdr *c = CMSG_FIRSTHDR(msg); c != NULL; c = CMSG_NXTHDR(msg, c)) {
+        if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS)
+            continue;
+        const unsigned char *d = CMSG_DATA(c);
+        size_t len = (size_t)c->cmsg_len - (size_t)(d - (const unsigned char *)c);
+        for (size_t i = 0; i + sizeof(int) <= len; i += sizeof(int)) {
+            int rfd;
+            memcpy(&rfd, d + i, sizeof rfd);
+            (void)fcntl(rfd, F_SETFD, FD_CLOEXEC);
+        }
+    }
+}
+#endif
+
+/* Whether a message with control data and no data needs a byte to carry it.
+ * Go's syscall package on Linux and AIX asks whether fd is something other
+ * than a datagram socket, and gives up on the message when it cannot ask, and
+ * on the BSDs and Solaris it always sends the byte. */
+static bool pnet_needs_byte(int fd, PalErrno *err, bool *ok) {
+#if !defined(BURROW_OS_LINUX) && !defined(BURROW_OS_ANDROID) && !defined(BURROW_OS_AIX)
+    (void)fd;
+    (void)err;
+    *ok = true;
+    return true;
+#else
+    int type = 0;
+    socklen_t len = (socklen_t)sizeof type;
+    *ok = getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &len) == 0;
+    if (!*ok) {
+        (void)pnet_fail(err);
+        return false;
+    }
+    return type != SOCK_DGRAM;
+#endif
+}
+
+int64_t pal_recvmsg(int64_t fd, void *buf, int64_t n, void *oob, int64_t oobcap,
+                    int64_t *oobn, int32_t *flags, PalSockAddr *from, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (oobn != NULL)
+        *oobn = 0;
+    if (flags != NULL)
+        *flags = 0;
+    if (!pnet_fd_ok(fd, err))
+        return -1;
+    if ((buf == NULL && n > 0) || (oob == NULL && oobcap > 0)) {
+        BURROW_OUT(err, PAL_EFAULT);
+        return -1;
+    }
+    struct sockaddr_storage ss;
+    memset(&ss, 0, sizeof ss);
+    unsigned char dummy = 0;
+    struct iovec iov;
+    iov.iov_base = buf;
+    iov.iov_len = pnet_count(n);
+    struct msghdr msg;
+    memset(&msg, 0, sizeof msg);
+    msg.msg_name = &ss;
+    msg.msg_namelen = (socklen_t)sizeof ss;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    if (oobcap > 0) {
+        if (n <= 0) {
+            bool ok = false;
+            if (pnet_needs_byte((int)fd, err, &ok)) {
+                iov.iov_base = &dummy;
+                iov.iov_len = 1;
+            } else if (!ok) {
+                return -1;
+            }
+        }
+        msg.msg_control = oob;
+        msg.msg_controllen = (socklen_t)(oobcap > INT32_MAX ? INT32_MAX : oobcap);
+    }
+    ssize_t r = recvmsg((int)fd, &msg, PNET_RECVMSG_FLAGS);
+    if (r < 0)
+        return pnet_fail_n(err);
+    pnet_rights_cloexec(&msg);
+    if (oobn != NULL)
+        *oobn = (int64_t)msg.msg_controllen;
+    if (flags != NULL)
+        *flags = (int32_t)msg.msg_flags;
+    if (from != NULL && !pnet_from_native(&ss, msg.msg_namelen, from))
+        from->family = PAL_AF_UNSPEC;
+    return (int64_t)r;
+}
+
+int64_t pal_sendmsg(int64_t fd, const void *buf, int64_t n, const void *oob,
+                    int64_t oobn, const PalSockAddr *to, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!pnet_fd_ok(fd, err))
+        return -1;
+    if ((buf == NULL && n > 0) || (oob == NULL && oobn > 0)) {
+        BURROW_OUT(err, PAL_EFAULT);
+        return -1;
+    }
+    struct sockaddr_storage ss;
+    socklen_t sslen = 0;
+    if (to != NULL && !pnet_to_native(to, &ss, &sslen, err))
+        return -1;
+    unsigned char dummy = 0;
+    struct iovec iov;
+    iov.iov_base = (void *)(uintptr_t)buf;
+    iov.iov_len = pnet_count(n);
+    struct msghdr msg;
+    memset(&msg, 0, sizeof msg);
+    if (to != NULL) {
+        msg.msg_name = &ss;
+        msg.msg_namelen = sslen;
+    }
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    if (oobn > 0) {
+        if (n <= 0) {
+            bool ok = false;
+            if (pnet_needs_byte((int)fd, err, &ok)) {
+                iov.iov_base = &dummy;
+                iov.iov_len = 1;
+            } else if (!ok) {
+                return -1;
+            }
+        }
+        msg.msg_control = (void *)(uintptr_t)oob;
+        msg.msg_controllen = (socklen_t)(oobn > INT32_MAX ? INT32_MAX : oobn);
+    }
+    ssize_t r = sendmsg((int)fd, &msg, PNET_SEND_FLAGS);
+    if (r < 0)
+        return pnet_fail_n(err);
+    if (oobn > 0 && n <= 0)
+        return 0;
+    return (int64_t)r;
+}
+
+_Static_assert(sizeof(PalIovec) == sizeof(struct iovec) &&
+                   offsetof(PalIovec, base) == offsetof(struct iovec, iov_base) &&
+                   offsetof(PalIovec, len) == offsetof(struct iovec, iov_len),
+               "PalIovec is laid out as struct iovec");
+
+int64_t pal_writev(int64_t fd, const PalIovec *v, int32_t count, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!pnet_fd_ok(fd, err))
+        return -1;
+    if ((v == NULL && count > 0) || count < 0) {
+        BURROW_OUT(err, PAL_EFAULT);
+        return -1;
+    }
+    struct msghdr msg;
+    memset(&msg, 0, sizeof msg);
+    msg.msg_iov = (struct iovec *)(uintptr_t)v;
+    /* size_t on glibc and int on the BSDs and musl, and count fits both. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wconversion"
+#pragma GCC diagnostic ignored "-Wsign-conversion"
+    msg.msg_iovlen = count;
+#pragma GCC diagnostic pop
+    ssize_t r = sendmsg((int)fd, &msg, PNET_SEND_FLAGS);
+    if (r < 0)
+        return pnet_fail_n(err);
+    return (int64_t)r;
+}
+
 /* An option of ours as the level and name the platform knows it by, and
  * whether it is on or off rather than a number, since macOS and the BSDs read
  * those back as the flag's bit and not as 1. False for one this platform does
@@ -601,7 +860,8 @@ int64_t pal_recvfrom(int64_t fd, void *buf, int64_t n, PalSockAddr *from,
 static bool pnet_opt(int32_t opt, int *level, int *name, bool *flag) {
     *flag = opt == PAL_SO_REUSEADDR || opt == PAL_SO_REUSEPORT ||
             opt == PAL_SO_KEEPALIVE || opt == PAL_SO_BROADCAST ||
-            opt == PAL_TCP_NODELAY || opt == PAL_IPV6_V6ONLY;
+            opt == PAL_TCP_NODELAY || opt == PAL_IPV6_V6ONLY ||
+            opt == PAL_IP_MULTICAST_LOOP || opt == PAL_IPV6_MULTICAST_LOOP;
     switch (opt) {
     case PAL_SO_REUSEADDR:
         *level = SOL_SOCKET;
@@ -638,6 +898,10 @@ static bool pnet_opt(int32_t opt, int *level, int *name, bool *flag) {
     case PAL_SO_ERROR:
         *level = SOL_SOCKET;
         *name = SO_ERROR;
+        return true;
+    case PAL_SO_TYPE:
+        *level = SOL_SOCKET;
+        *name = SO_TYPE;
         return true;
     case PAL_TCP_NODELAY:
         *level = IPPROTO_TCP;
@@ -683,10 +947,33 @@ static bool pnet_opt(int32_t opt, int *level, int *name, bool *flag) {
         *level = IPPROTO_IPV6;
         *name = IPV6_UNICAST_HOPS;
         return true;
+    case PAL_IP_MULTICAST_LOOP:
+        *level = IPPROTO_IP;
+        *name = IP_MULTICAST_LOOP;
+        return true;
+    case PAL_IPV6_MULTICAST_IF:
+        *level = IPPROTO_IPV6;
+        *name = IPV6_MULTICAST_IF;
+        return true;
+    case PAL_IPV6_MULTICAST_LOOP:
+        *level = IPPROTO_IPV6;
+        *name = IPV6_MULTICAST_LOOP;
+        return true;
     default:
         return false;
     }
 }
+
+/* Whether IP_MULTICAST_LOOP is a u_char here rather than an int, which is
+ * what Go's sockoptip4_bsdvar.go passes it as. */
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS) ||                             \
+    defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_NETBSD) ||                         \
+    defined(BURROW_OS_OPENBSD) || defined(BURROW_OS_DRAGONFLY) ||                      \
+    defined(BURROW_OS_SOLARIS) || defined(BURROW_OS_AIX)
+#define PNET_LOOP_BYTE 1
+#else
+#define PNET_LOOP_BYTE 0
+#endif
 
 bool pal_getsockopt(int64_t fd, int32_t opt, int64_t *value, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
@@ -712,12 +999,22 @@ bool pal_getsockopt(int64_t fd, int32_t opt, int64_t *value, PalErrno *err) {
         *value = l.l_onoff ? (int64_t)l.l_linger : -1;
         return true;
     }
+    if (PNET_LOOP_BYTE && opt == PAL_IP_MULTICAST_LOOP) {
+        unsigned char c = 0;
+        socklen_t len = (socklen_t)sizeof c;
+        if (getsockopt((int)fd, level, name, &c, &len) != 0)
+            return pnet_fail(err);
+        *value = c != 0;
+        return true;
+    }
     int v = 0;
     socklen_t len = (socklen_t)sizeof v;
     if (getsockopt((int)fd, level, name, &v, &len) != 0)
         return pnet_fail(err);
     if (opt == PAL_SO_ERROR)
         *value = v == 0 ? (int64_t)PAL_OK : (int64_t)burrow__pal_errno(v);
+    else if (opt == PAL_SO_TYPE)
+        *value = pnet_type_from(v);
     else if (flag)
         *value = v != 0;
     else
@@ -737,7 +1034,7 @@ bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err) {
         return false;
     }
     (void)flag;
-    if (opt == PAL_SO_ERROR || value > INT32_MAX || value < -1 ||
+    if (opt == PAL_SO_ERROR || opt == PAL_SO_TYPE || value > INT32_MAX || value < -1 ||
         (value < 0 && opt != PAL_SO_LINGER)) {
         BURROW_OUT(err, PAL_EINVAL);
         return false;
@@ -749,9 +1046,67 @@ bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err) {
         l.l_onoff = value >= 0;
         l.l_linger = value >= 0 ? (int)value : 0;
         r = setsockopt((int)fd, level, name, &l, (socklen_t)sizeof l);
+    } else if (PNET_LOOP_BYTE && opt == PAL_IP_MULTICAST_LOOP) {
+        unsigned char c = value != 0;
+        r = setsockopt((int)fd, level, name, &c, (socklen_t)sizeof c);
     } else {
         int v = (int)value;
         r = setsockopt((int)fd, level, name, &v, (socklen_t)sizeof v);
+    }
+    if (r != 0)
+        return pnet_fail(err);
+    return true;
+}
+
+bool pal_setsockopt_mreq(int64_t fd, int32_t opt, const PalMreq *m, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!pnet_fd_ok(fd, err))
+        return false;
+    if (m == NULL || m->index < 0) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+    int r;
+    switch (opt) {
+    case PAL_MREQ_IPV4_IF:
+    case PAL_MREQ_IPV4_JOIN: {
+#if defined(BURROW_OS_LINUX)
+        struct ip_mreqn q;
+        memset(&q, 0, sizeof q);
+        q.imr_ifindex = (int)m->index;
+        if (opt == PAL_MREQ_IPV4_JOIN)
+            memcpy(&q.imr_multiaddr, m->group, 4);
+        r = setsockopt((int)fd, IPPROTO_IP,
+                       opt == PAL_MREQ_IPV4_IF ? IP_MULTICAST_IF : IP_ADD_MEMBERSHIP,
+                       &q, (socklen_t)sizeof q);
+#else
+        if (opt == PAL_MREQ_IPV4_IF) {
+            struct in_addr a;
+            memcpy(&a, m->ifaddr, 4);
+            r = setsockopt((int)fd, IPPROTO_IP, IP_MULTICAST_IF, &a,
+                           (socklen_t)sizeof a);
+        } else {
+            struct ip_mreq q;
+            memset(&q, 0, sizeof q);
+            memcpy(&q.imr_multiaddr, m->group, 4);
+            memcpy(&q.imr_interface, m->ifaddr, 4);
+            r = setsockopt((int)fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &q,
+                           (socklen_t)sizeof q);
+        }
+#endif
+        break;
+    }
+    case PAL_MREQ_IPV6_JOIN: {
+        struct ipv6_mreq q;
+        memset(&q, 0, sizeof q);
+        memcpy(&q.ipv6mr_multiaddr, m->group, 16);
+        q.ipv6mr_interface = (unsigned int)m->index;
+        r = setsockopt((int)fd, IPPROTO_IPV6, IPV6_JOIN_GROUP, &q, (socklen_t)sizeof q);
+        break;
+    }
+    default:
+        BURROW_OUT(err, PAL_ENOTSUP);
+        return false;
     }
     if (r != 0)
         return pnet_fail(err);
@@ -784,22 +1139,37 @@ bool pal_shutdown(int64_t fd, int32_t how, PalErrno *err) {
 
 #if defined(BURROW_OS_LINUX)
 
-/* unix.KernelVersionGE(4, 1), from the release uname gives, such as
- * "6.8.0-45-generic". A release that does not parse counts as new enough. */
-static bool pnet_kernel_4_1(void) {
+bool pal_kernel_version_ge(int32_t major, int32_t minor) {
     struct utsname u;
     if (uname(&u) != 0)
         return true;
-    long major = 0;
-    long minor = 0;
+    long ma = 0;
+    long mi = 0;
     const char *p = u.release;
-    while (*p >= '0' && *p <= '9')
-        major = major * 10 + (*p++ - '0');
+    while (*p >= '0' && *p <= '9' && ma < 100000)
+        ma = ma * 10 + (*p++ - '0');
     if (*p == '.')
         p++;
-    while (*p >= '0' && *p <= '9')
-        minor = minor * 10 + (*p++ - '0');
-    return major > 4 || (major == 4 && minor >= 1);
+    while (*p >= '0' && *p <= '9' && mi < 100000)
+        mi = mi * 10 + (*p++ - '0');
+    return ma > major || (ma == major && mi >= minor);
+}
+
+/* SOL_MPTCP and MPTCP_INFO, which older headers do not have. */
+#define PNET_SOL_MPTCP 284
+#define PNET_MPTCP_INFO 1
+
+bool pal_mptcp_in_use(int64_t fd, bool sol_mptcp) {
+    int v = 0;
+    socklen_t len = sizeof v;
+    if (sol_mptcp) {
+        if (getsockopt((int)fd, PNET_SOL_MPTCP, PNET_MPTCP_INFO, &v, &len) == 0)
+            return true;
+        return errno != EOPNOTSUPP && errno != ENOPROTOOPT;
+    }
+    if (getsockopt((int)fd, SOL_SOCKET, SO_PROTOCOL, &v, &len) != 0)
+        return false;
+    return v == PAL_IPPROTO_MPTCP;
 }
 
 /* Go's maxListenerBacklog on Linux: the first field of
@@ -834,7 +1204,7 @@ int32_t pal_listen_backlog_max(void) {
     }
     if (i == start || v == 0)
         return 0;
-    if (v > 65535 && !pnet_kernel_4_1())
+    if (v > 65535 && !pal_kernel_version_ge(4, 1))
         v = 65535;
     return (int32_t)v;
 }
@@ -865,6 +1235,22 @@ int32_t pal_listen_backlog_max(void) {
 
 int32_t pal_listen_backlog_max(void) {
     return 0;
+}
+
+#endif
+
+#if !defined(BURROW_OS_LINUX)
+
+bool pal_kernel_version_ge(int32_t major, int32_t minor) {
+    (void)major;
+    (void)minor;
+    return false;
+}
+
+bool pal_mptcp_in_use(int64_t fd, bool sol_mptcp) {
+    (void)fd;
+    (void)sol_mptcp;
+    return false;
 }
 
 #endif

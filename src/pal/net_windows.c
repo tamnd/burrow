@@ -38,6 +38,8 @@
 
 #include <windows.h>
 
+#include <mswsock.h>
+
 #if !defined(WSA_FLAG_NO_HANDLE_INHERIT)
 #define WSA_FLAG_NO_HANDLE_INHERIT 0x80
 #endif
@@ -139,6 +141,22 @@ static bool wnet_type(int32_t type, int *out) {
         return true;
     default:
         return false;
+    }
+}
+
+/* SO_TYPE's answer as a PAL_SOCK_ type, 0 for one with no name here. */
+static int64_t wnet_type_from(int ty) {
+    switch (ty) {
+    case SOCK_STREAM:
+        return PAL_SOCK_STREAM;
+    case SOCK_DGRAM:
+        return PAL_SOCK_DGRAM;
+    case SOCK_RAW:
+        return PAL_SOCK_RAW;
+    case SOCK_SEQPACKET:
+        return PAL_SOCK_SEQPACKET;
+    default:
+        return 0;
     }
 }
 
@@ -270,6 +288,40 @@ bool pal_socket_close(int64_t fd, PalErrno *err) {
     if (!wnet_fd_ok(fd, err))
         return false;
     if (closesocket((SOCKET)fd) != 0)
+        return wnet_fail(err);
+    return true;
+}
+
+/* Go's dupSocket: the socket's protocol info, for this process, and a new
+ * socket from it. */
+int64_t pal_socket_dup(int64_t fd, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!wnet_fd_ok(fd, err))
+        return -1;
+    WSAPROTOCOL_INFOW info;
+    memset(&info, 0, sizeof info);
+    if (WSADuplicateSocketW((SOCKET)fd, GetCurrentProcessId(), &info) != 0)
+        return wnet_fail_n(err);
+    SOCKET s = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO,
+                          &info, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+    if (s == INVALID_SOCKET)
+        return wnet_fail_n(err);
+    return (int64_t)s;
+}
+
+bool pal_nonblock(int64_t fd, bool *on, PalErrno *err) {
+    (void)fd;
+    (void)on;
+    BURROW_OUT(err, PAL_ENOTSUP);
+    return false;
+}
+
+bool pal_set_nonblock(int64_t fd, bool on, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!wnet_fd_ok(fd, err))
+        return false;
+    u_long v = on ? 1 : 0;
+    if (ioctlsocket((SOCKET)fd, (long)FIONBIO, &v) != 0)
         return wnet_fail(err);
     return true;
 }
@@ -417,6 +469,121 @@ int64_t pal_recvfrom(int64_t fd, void *buf, int64_t n, PalSockAddr *from,
     return (int64_t)r;
 }
 
+/* WSARecvMsg and WSASendMsg, which are reached through the socket rather
+ * than linked, as Go reaches them. */
+static void *wnet_extension(SOCKET s, GUID id, PalErrno *err) {
+    void *fn = NULL;
+    DWORD got = 0;
+    if (WSAIoctl(s, SIO_GET_EXTENSION_FUNCTION_POINTER, &id, (DWORD)sizeof id, &fn,
+                 (DWORD)sizeof fn, &got, NULL, NULL) != 0) {
+        (void)wnet_fail(err);
+        return NULL;
+    }
+    return fn;
+}
+
+int64_t pal_recvmsg(int64_t fd, void *buf, int64_t n, void *oob, int64_t oobcap,
+                    int64_t *oobn, int32_t *flags, PalSockAddr *from, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (oobn != NULL)
+        *oobn = 0;
+    if (flags != NULL)
+        *flags = 0;
+    if (!wnet_fd_ok(fd, err))
+        return -1;
+    if ((buf == NULL && n > 0) || (oob == NULL && oobcap > 0)) {
+        BURROW_OUT(err, PAL_EFAULT);
+        return -1;
+    }
+    static const GUID id = WSAID_WSARECVMSG;
+    LPFN_WSARECVMSG recvmsg_fn = NULL;
+    void *fn = wnet_extension((SOCKET)fd, id, err);
+    if (fn == NULL)
+        return -1;
+    memcpy(&recvmsg_fn, &fn, sizeof recvmsg_fn);
+    struct sockaddr_storage ss;
+    memset(&ss, 0, sizeof ss);
+    WSABUF data;
+    data.len = (ULONG)wnet_count(n);
+    data.buf = (char *)buf;
+    WSAMSG msg;
+    memset(&msg, 0, sizeof msg);
+    msg.name = (struct sockaddr *)&ss;
+    msg.namelen = (INT)sizeof ss;
+    msg.lpBuffers = &data;
+    msg.dwBufferCount = 1;
+    msg.Control.len = (ULONG)wnet_count(oobcap);
+    msg.Control.buf = (char *)oob;
+    DWORD got = 0;
+    if (recvmsg_fn((SOCKET)fd, &msg, &got, NULL, NULL) != 0)
+        return wnet_fail_n(err);
+    if (oobn != NULL)
+        *oobn = (int64_t)msg.Control.len;
+    if (flags != NULL)
+        *flags = (int32_t)msg.dwFlags;
+    if (from != NULL && !wnet_from_native(&ss, msg.namelen, from))
+        from->family = PAL_AF_UNSPEC;
+    return (int64_t)got;
+}
+
+_Static_assert(sizeof(PalIovec) == sizeof(WSABUF) &&
+                   offsetof(PalIovec, base) == offsetof(WSABUF, buf) &&
+                   offsetof(PalIovec, len) == offsetof(WSABUF, len),
+               "PalIovec is laid out as WSABUF");
+
+int64_t pal_writev(int64_t fd, const PalIovec *v, int32_t count, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!wnet_fd_ok(fd, err))
+        return -1;
+    if ((v == NULL && count > 0) || count < 0) {
+        BURROW_OUT(err, PAL_EFAULT);
+        return -1;
+    }
+    DWORD sent = 0;
+    if (WSASend((SOCKET)fd, (WSABUF *)(uintptr_t)v, (DWORD)count, &sent, 0, NULL,
+                NULL) == SOCKET_ERROR)
+        return wnet_fail_n(err);
+    return (int64_t)sent;
+}
+
+int64_t pal_sendmsg(int64_t fd, const void *buf, int64_t n, const void *oob,
+                    int64_t oobn, const PalSockAddr *to, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!wnet_fd_ok(fd, err))
+        return -1;
+    if ((buf == NULL && n > 0) || (oob == NULL && oobn > 0)) {
+        BURROW_OUT(err, PAL_EFAULT);
+        return -1;
+    }
+    struct sockaddr_storage ss;
+    int sslen = 0;
+    if (to != NULL && !wnet_to_native(to, &ss, &sslen, err))
+        return -1;
+    static const GUID id = WSAID_WSASENDMSG;
+    LPFN_WSASENDMSG sendmsg_fn = NULL;
+    void *fn = wnet_extension((SOCKET)fd, id, err);
+    if (fn == NULL)
+        return -1;
+    memcpy(&sendmsg_fn, &fn, sizeof sendmsg_fn);
+    WSABUF data;
+    data.len = (ULONG)wnet_count(n);
+    data.buf = (char *)(uintptr_t)buf;
+    WSAMSG msg;
+    memset(&msg, 0, sizeof msg);
+    if (to != NULL) {
+        msg.name = (struct sockaddr *)&ss;
+        msg.namelen = sslen;
+    }
+    msg.lpBuffers = &data;
+    msg.dwBufferCount = 1;
+    msg.Control.len = (ULONG)wnet_count(oobn);
+    msg.Control.buf = (char *)(uintptr_t)oob;
+    DWORD sent = 0;
+    if (sendmsg_fn((SOCKET)fd, &msg, 0, &sent, NULL, NULL) != 0)
+        return wnet_fail_n(err);
+    return (int64_t)sent;
+}
+
 /* The level and name of an option, and whether it is on or off rather than a
  * number. False for one Windows does not have. */
 static bool wnet_opt(int32_t opt, int *level, int *name, bool *flag) {
@@ -453,6 +620,10 @@ static bool wnet_opt(int32_t opt, int *level, int *name, bool *flag) {
         *level = SOL_SOCKET;
         *name = SO_ERROR;
         return true;
+    case PAL_SO_TYPE:
+        *level = SOL_SOCKET;
+        *name = SO_TYPE;
+        return true;
     case PAL_TCP_NODELAY:
         *level = IPPROTO_TCP;
         *name = TCP_NODELAY;
@@ -482,6 +653,20 @@ static bool wnet_opt(int32_t opt, int *level, int *name, bool *flag) {
     case PAL_IPV6_HOPLIMIT:
         *level = IPPROTO_IPV6;
         *name = IPV6_UNICAST_HOPS;
+        return true;
+    case PAL_IP_MULTICAST_LOOP:
+        *level = IPPROTO_IP;
+        *name = IP_MULTICAST_LOOP;
+        *flag = true;
+        return true;
+    case PAL_IPV6_MULTICAST_IF:
+        *level = IPPROTO_IPV6;
+        *name = IPV6_MULTICAST_IF;
+        return true;
+    case PAL_IPV6_MULTICAST_LOOP:
+        *level = IPPROTO_IPV6;
+        *name = IPV6_MULTICAST_LOOP;
+        *flag = true;
         return true;
     default:
         /* PAL_SO_REUSEPORT among them: Windows has no such option. */
@@ -521,6 +706,8 @@ bool pal_getsockopt(int64_t fd, int32_t opt, int64_t *value, PalErrno *err) {
         return wnet_fail(err);
     if (opt == PAL_SO_ERROR)
         *value = v == 0 ? (int64_t)PAL_OK : (int64_t)burrow__pal_errno_wsa(v);
+    else if (opt == PAL_SO_TYPE)
+        *value = wnet_type_from(v);
     else if (flag)
         *value = v != 0;
     else
@@ -540,7 +727,7 @@ bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err) {
         return false;
     }
     (void)flag;
-    if (opt == PAL_SO_ERROR || value > INT32_MAX || value < -1 ||
+    if (opt == PAL_SO_ERROR || opt == PAL_SO_TYPE || value > INT32_MAX || value < -1 ||
         (value < 0 && opt != PAL_SO_LINGER) ||
         (opt == PAL_SO_LINGER && value > 65535)) {
         BURROW_OUT(err, PAL_EINVAL);
@@ -556,6 +743,51 @@ bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err) {
     } else {
         int v = (int)value;
         r = setsockopt((SOCKET)fd, level, name, (const char *)&v, (int)sizeof v);
+    }
+    if (r != 0)
+        return wnet_fail(err);
+    return true;
+}
+
+/* Windows takes an IPv4 interface by its address, as the BSDs do. */
+bool pal_setsockopt_mreq(int64_t fd, int32_t opt, const PalMreq *m, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!wnet_fd_ok(fd, err))
+        return false;
+    if (m == NULL || m->index < 0) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+    int r;
+    switch (opt) {
+    case PAL_MREQ_IPV4_IF: {
+        struct in_addr a;
+        memcpy(&a, m->ifaddr, 4);
+        r = setsockopt((SOCKET)fd, IPPROTO_IP, IP_MULTICAST_IF, (const char *)&a,
+                       (int)sizeof a);
+        break;
+    }
+    case PAL_MREQ_IPV4_JOIN: {
+        struct ip_mreq q;
+        memset(&q, 0, sizeof q);
+        memcpy(&q.imr_multiaddr, m->group, 4);
+        memcpy(&q.imr_interface, m->ifaddr, 4);
+        r = setsockopt((SOCKET)fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const char *)&q,
+                       (int)sizeof q);
+        break;
+    }
+    case PAL_MREQ_IPV6_JOIN: {
+        struct ipv6_mreq q;
+        memset(&q, 0, sizeof q);
+        memcpy(&q.ipv6mr_multiaddr, m->group, 16);
+        q.ipv6mr_interface = (ULONG)m->index;
+        r = setsockopt((SOCKET)fd, IPPROTO_IPV6, IPV6_JOIN_GROUP, (const char *)&q,
+                       (int)sizeof q);
+        break;
+    }
+    default:
+        BURROW_OUT(err, PAL_ENOTSUP);
+        return false;
     }
     if (r != 0)
         return wnet_fail(err);
@@ -590,6 +822,18 @@ bool pal_shutdown(int64_t fd, int32_t how, PalErrno *err) {
  * caller's fallback. */
 int32_t pal_listen_backlog_max(void) {
     return 0;
+}
+
+bool pal_kernel_version_ge(int32_t major, int32_t minor) {
+    (void)major;
+    (void)minor;
+    return false;
+}
+
+bool pal_mptcp_in_use(int64_t fd, bool sol_mptcp) {
+    (void)fd;
+    (void)sol_mptcp;
+    return false;
 }
 
 #endif /* BURROW_OS_WINDOWS */

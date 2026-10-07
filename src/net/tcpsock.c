@@ -12,10 +12,14 @@
 
 #include "internal.h"
 
+#include "burrow/atomic.h"
 #include "burrow/declare.h"
 #include "burrow/error.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
+#include "burrow/mem/heap.h"
 #include "burrow/net.h"
+#include "burrow/net/netip.h"
 #include "burrow/os.h"
 #include "burrow/platform.h"
 #include "burrow/syscall.h"
@@ -131,6 +135,18 @@ NetAddr net_tcp_addr_as_addr(const NetTCPAddr *a) {
 
 /* A TCPAddr that owns its bytes, which is what a connection keeps for each
  * end. */
+NetipAddrPort net_tcp_addr_addr_port(const NetTCPAddr *a) {
+    return burrow__net_inet_addr_port(nt_inet(a));
+}
+
+NetTCPAddr *net_tcp_addr_from_addr_port(Alloc *a, NetipAddrPort addr) {
+    return (NetTCPAddr *)(void *)burrow__net_inet_from_addr_port(a, addr);
+}
+
+void net_tcp_addr_free(Alloc *a, NetTCPAddr *addr) {
+    burrow__net_inet_addr_free(a, (burrow__NetInetAddr *)(void *)addr);
+}
+
 typedef struct NtAddr {
     NetTCPAddr a;
     burrow__NetInetBytes b;
@@ -159,10 +175,91 @@ static bool nt_network(Str network, Str *lit) {
 }
 
 /* internetSocket, for a TCP stream. */
-static Error nt_internet_socket(burrow__NetFD *fd, Str net, const NetTCPAddr *laddr,
-                                const NetTCPAddr *raddr, bool listen) {
-    return burrow__net_internet_socket(fd, net, nt_inet(laddr), nt_inet(raddr),
-                                       PAL_SOCK_STREAM, listen);
+static Error nt_internet_socket(burrow__NetFD *fd, const burrow__NetSysOpts *o, Str net,
+                                const NetTCPAddr *laddr, const NetTCPAddr *raddr,
+                                int32_t proto, bool listen) {
+    return burrow__net_internet_socket(fd, o != NULL ? &o->ctl : NULL, net,
+                                       nt_inet(laddr), nt_inet(raddr), PAL_SOCK_STREAM,
+                                       proto, listen);
+}
+
+/* ------------------------------------------------------------------ MPTCP */
+
+/* Go's mptcpsock_linux.go. Whether the kernel has Multipath TCP is worked out
+ * by the first socket that wants it, as Go's mptcpOnce does, and kept here
+ * with a release store after the probed bit. Two racing probes store the
+ * same thing. */
+enum { NT_MPTCP_PROBED = 1, NT_MPTCP_AVAILABLE = 2, NT_MPTCP_SOL = 4 };
+
+#if defined(BURROW_OS_LINUX)
+static uint32_t nt_mptcp;
+#endif
+
+/* initMPTCPavailable. An error other than the two that say the protocol is
+ * not there counts as there, since it may be later. SOL_MPTCP came in
+ * Linux 5.16. */
+static uint32_t nt_mptcp_probe(void) {
+#if defined(BURROW_OS_LINUX)
+    uint32_t bits = burrow__atomic_load_acquire_u32(&nt_mptcp);
+    if (bits & NT_MPTCP_PROBED)
+        return bits;
+    bits = NT_MPTCP_PROBED;
+    int32_t family = burrow__net_supports_ipv4() ? PAL_AF_INET : PAL_AF_INET6;
+    PalErrno pe = PAL_OK;
+    int64_t s = pal_socket(family, PAL_SOCK_STREAM, PAL_IPPROTO_MPTCP, &pe);
+    if (s >= 0)
+        (void)pal_socket_close(s, NULL);
+    if (s >= 0 || (pe != PAL_EPROTONOSUPPORT && pe != PAL_EINVAL)) {
+        bits |= NT_MPTCP_AVAILABLE;
+        if (pal_kernel_version_ge(5, 16))
+            bits |= NT_MPTCP_SOL;
+    }
+    burrow__atomic_store_release_u32(&nt_mptcp, bits);
+    return bits;
+#else
+    return NT_MPTCP_PROBED;
+#endif
+}
+
+static bool nt_mptcp_from_godebug(const char *on1, const char *on2) {
+    Str v = BURROW_STR_EMPTY;
+    if (!burrow__net_godebug("multipathtcp", &v))
+        return false;
+    return str_eq(v, str_from_cstr(on1)) || str_eq(v, str_from_cstr(on2));
+}
+
+bool burrow__net_mptcp_dial(uint8_t status) {
+    if (status == 1)
+        return true;
+    if (status == 2)
+        return false;
+    /* MPTCP forced on with GODEBUG=multipathtcp=1, or on dialers only. */
+    return nt_mptcp_from_godebug("1", "3");
+}
+
+bool burrow__net_mptcp_listen(uint8_t status) {
+    if (status == 1)
+        return true;
+    if (status == 2)
+        return false;
+    /* Off with GODEBUG=multipathtcp=0, or on dialers only. */
+    return !nt_mptcp_from_godebug("0", "3");
+}
+
+/* isUsingMultipathTCP. Go asks through the poll FD, and a closed one fails
+ * with ErrNetClosing, which is not one of the fallback errors, so a closed
+ * connection says yes on a 5.16 kernel and no before it, and this keeps
+ * that. */
+static bool nt_using_mptcp(burrow__NetFD *fd) {
+    uint32_t bits = nt_mptcp_probe();
+    if ((bits & NT_MPTCP_AVAILABLE) == 0)
+        return false;
+    bool sol = (bits & NT_MPTCP_SOL) != 0;
+    if (BURROW_FAILED(burrow__pfd_incref(&fd->pfd)))
+        return sol;
+    bool on = pal_mptcp_in_use(fd->pfd.sysfd, sol);
+    (void)burrow__pfd_decref(&fd->pfd);
+    return on;
 }
 
 /* selfConnect: a connection whose two ends are the same address and port,
@@ -210,6 +307,10 @@ struct NetTCPListener {
     burrow__NetFD fd;
     Alloc *alloc;
     NtAddr laddr;
+    /* The ListenConfig's keep-alive, which every accepted connection gets. */
+    Duration keep_alive;
+    NetKeepAliveConfig keep_alive_config;
+    burrow__NetRawConn raw;
     bool has_laddr;
 };
 
@@ -268,24 +369,111 @@ Error net_tcp_conn_set_keep_alive_config(NetTCPConn *c, NetKeepAliveConfig confi
     return nt_set_op(c, e);
 }
 
-/* newTCPConn, with the zero Dialer or ListenConfig, whose KeepAlive of zero
- * turns keep-alives on with the defaults. What these fail with is dropped,
- * as in Go. */
-static void nt_new_conn(NetTCPConn *c) {
+bool net_tcp_conn_multipath_tcp(NetTCPConn *c, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return false;
+    }
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return nt_using_mptcp(&c->c.fd);
+}
+
+/* newTCPConn: Nagle off, and keep-alives on unless the Dialer or the
+ * ListenConfig says otherwise. A KeepAliveConfig that is not enabled gives
+ * way to KeepAlive, whose zero is the defaults and which turns keep-alives
+ * off when it is below zero. What these fail with is dropped, as in Go. */
+static void nt_new_conn(NetTCPConn *c, Duration keep_alive, NetKeepAliveConfig cfg) {
     if (nt_from_sockaddr(&c->laddr, &c->c.fd.laddr))
         c->c.laddr = net_tcp_addr_as_addr(&c->laddr.a);
     if (nt_from_sockaddr(&c->raddr, &c->c.fd.raddr))
         c->c.raddr = net_tcp_addr_as_addr(&c->raddr.a);
+    c->c.raw = (burrow__NetRawConn){&c->c.fd, c->c.laddr, c->c.raddr, false};
     (void)burrow__netfd_setsockopt(&c->c.fd, PAL_TCP_NODELAY, 1);
-    NetKeepAliveConfig cfg = {true, 0, 0, 0};
-    (void)net_tcp_conn_set_keep_alive_config(c, cfg);
+    if (!cfg.enable && keep_alive >= 0)
+        cfg = (NetKeepAliveConfig){true, keep_alive, 0, 0};
+    if (cfg.enable)
+        (void)net_tcp_conn_set_keep_alive_config(c, cfg);
 }
 
-NetTCPConn *net_dial_tcp(Alloc *a, Str network, const NetTCPAddr *laddr,
-                         const NetTCPAddr *raddr, Error *err) {
+static void nt_lock(const burrow__NetSysOpts *o) {
+    if (o != NULL && o->alloc_mu != NULL)
+        sync_mutex_lock(o->alloc_mu);
+}
+
+static void nt_unlock(const burrow__NetSysOpts *o) {
+    if (o != NULL && o->alloc_mu != NULL)
+        sync_mutex_unlock(o->alloc_mu);
+}
+
+/* doDialTCPProto: the dial, tried again when the system hands out the very
+ * port it dials, or says it has no address to give, as Go does. */
+static Error nt_do_dial(NetTCPConn *c, const burrow__NetSysOpts *o, Str net,
+                        const NetTCPAddr *laddr, const NetTCPAddr *raddr,
+                        int32_t proto) {
+    Error e = BURROW_NO_ERROR;
+    for (int i = 0;; i++) {
+        e = nt_internet_socket(&c->c.fd, o, net, laddr, raddr, proto, false);
+        if (i >= 2 || (laddr != NULL && laddr->port != 0))
+            break;
+        if (BURROW_OK(e) ? !nt_self_connect(&c->c.fd) : !nt_spurious_enotavail(e))
+            break;
+        if (BURROW_OK(e))
+            (void)burrow__netfd_close(&c->c.fd);
+    }
+    return e;
+}
+
+NetTCPConn *burrow__net_sys_dial_tcp(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                                     const NetTCPAddr *laddr, const NetTCPAddr *raddr,
+                                     Error *err) {
     Str net = BURROW_STR_EMPTY;
+    if (!nt_network(network, &net)) {
+        BURROW_OUT(err, net_unknown_network_error(error_allocator(), network));
+        return NULL;
+    }
+    nt_lock(o);
+    NetTCPConn *c =
+        (NetTCPConn *)mem_alloc(a, sizeof(NetTCPConn), _Alignof(NetTCPConn));
+    nt_unlock(o);
+    if (c == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    c->c.alloc = a;
+    /* dialMPTCP, which falls back to plain TCP on any error at all, since
+     * MPTCP can be turned off or blocked in more ways than one. */
+    bool mptcp = o != NULL ? o->mptcp : burrow__net_mptcp_dial(0);
+    Error e = burrow__net_einval();
+    if (mptcp && (nt_mptcp_probe() & NT_MPTCP_AVAILABLE) != 0)
+        e = nt_do_dial(c, o, net, laddr, raddr, PAL_IPPROTO_MPTCP);
+    if (BURROW_FAILED(e))
+        e = nt_do_dial(c, o, net, laddr, raddr, 0);
+    if (BURROW_FAILED(e)) {
+        nt_lock(o);
+        mem_free(a, c, sizeof(NetTCPConn), _Alignof(NetTCPConn));
+        nt_unlock(o);
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    if (o != NULL)
+        nt_new_conn(c, o->keep_alive, o->keep_alive_config);
+    else
+        nt_new_conn(c, 0, (NetKeepAliveConfig){false, 0, 0, 0});
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return c;
+}
+
+static bool nt_is_oom(Error e) {
+    return e.vt == burrow_err_out_of_memory.vt &&
+           e.data == burrow_err_out_of_memory.data;
+}
+
+NetTCPConn *burrow__net_dial_tcp(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                                 const NetTCPAddr *laddr, const NetTCPAddr *raddr,
+                                 Error *err) {
     NetAddr src = net_tcp_addr_as_addr(laddr);
     NetAddr dst = net_tcp_addr_as_addr(raddr);
+    Str net = BURROW_STR_EMPTY;
     if (!nt_network(network, &net)) {
         Error u = net_unknown_network_error(error_allocator(), network);
         BURROW_OUT(err, burrow__net_op_error(NT_LIT("dial"), network, src, dst, u));
@@ -296,53 +484,105 @@ NetTCPConn *net_dial_tcp(Alloc *a, Str network, const NetTCPAddr *laddr,
                                              burrow__net_err_missing_address));
         return NULL;
     }
+    Error e = BURROW_NO_ERROR;
+    NetTCPConn *c = burrow__net_sys_dial_tcp(a, o, network, laddr, raddr, &e);
+    if (c == NULL && !nt_is_oom(e))
+        e = burrow__net_op_error(NT_LIT("dial"), network, src, dst, e);
+    BURROW_OUT(err, e);
+    return c;
+}
+
+NetTCPConn *net_dial_tcp(Alloc *a, Str network, const NetTCPAddr *laddr,
+                         const NetTCPAddr *raddr, Error *err) {
+    return burrow__net_dial_tcp(a, NULL, network, laddr, raddr, err);
+}
+
+OsFile *net_tcp_conn_file(NetTCPConn *c, Alloc *a, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return NULL;
+    }
+    return burrow__conn_file(&c->c, a, err);
+}
+
+OsFile *net_tcp_listener_file(NetTCPListener *l, Alloc *a, Error *err) {
+    if (l == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return NULL;
+    }
+    Error e = BURROW_NO_ERROR;
+    OsFile *f =
+        burrow__netfd_dup(&l->fd, nt_listener_laddr(l), (NetAddr){NULL, NULL}, a, &e);
+    if (f == NULL && !nt_is_oom(e))
+        e = burrow__net_op_error(NT_LIT("file"), l->fd.net, (NetAddr){NULL, NULL},
+                                 nt_listener_laddr(l), e);
+    BURROW_OUT(err, e);
+    return f;
+}
+
+/* fileConn's newTCPConn, with the keep-alive a dial with no Dialer gets. */
+NetTCPConn *burrow__net_tcp_conn_from_file(Alloc *a, const burrow__NetFileSock *fs,
+                                           Error *err) {
     NetTCPConn *c =
         (NetTCPConn *)mem_alloc(a, sizeof(NetTCPConn), _Alignof(NetTCPConn));
     if (c == NULL) {
+        (void)pal_socket_close(fs->s, NULL);
         BURROW_OUT(err, burrow_err_out_of_memory);
         return NULL;
     }
     c->c.alloc = a;
-    Error e = BURROW_NO_ERROR;
-    for (int i = 0;; i++) {
-        e = nt_internet_socket(&c->c.fd, net, laddr, raddr, false);
-        if (i >= 2 || (laddr != NULL && laddr->port != 0))
-            break;
-        if (BURROW_OK(e) ? !nt_self_connect(&c->c.fd) : !nt_spurious_enotavail(e))
-            break;
-        if (BURROW_OK(e))
-            (void)burrow__netfd_close(&c->c.fd);
-    }
+    Error e = burrow__netfd_from_file(&c->c.fd, fs);
     if (BURROW_FAILED(e)) {
         mem_free(a, c, sizeof(NetTCPConn), _Alignof(NetTCPConn));
-        BURROW_OUT(err, burrow__net_op_error(NT_LIT("dial"), network, src, dst, e));
+        BURROW_OUT(err, e);
         return NULL;
     }
-    nt_new_conn(c);
+    NetKeepAliveConfig none = {false, 0, 0, 0};
+    nt_new_conn(c, NT_KEEPALIVE_IDLE, none);
     BURROW_OUT(err, BURROW_NO_ERROR);
     return c;
 }
 
-Int net_tcp_conn_read(NetTCPConn *c, Slice p, Error *err) {
-    if (c == NULL) {
-        BURROW_OUT(err, burrow__net_einval());
-        return 0;
+/* fileListener's TCPListener, with the zero ListenConfig. */
+NetTCPListener *burrow__net_tcp_listener_from_file(Alloc *a,
+                                                   const burrow__NetFileSock *fs,
+                                                   Error *err) {
+    NetTCPListener *l = (NetTCPListener *)mem_alloc(a, sizeof(NetTCPListener),
+                                                    _Alignof(NetTCPListener));
+    if (l == NULL) {
+        (void)pal_socket_close(fs->s, NULL);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
     }
-    return burrow__conn_read(&c->c, p, err);
+    l->alloc = a;
+    Error e = burrow__netfd_from_file(&l->fd, fs);
+    if (BURROW_FAILED(e)) {
+        mem_free(a, l, sizeof(NetTCPListener), _Alignof(NetTCPListener));
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    l->has_laddr = nt_from_sockaddr(&l->laddr, &l->fd.laddr);
+    l->raw = (burrow__NetRawConn){&l->fd, nt_listener_laddr(l), {NULL, NULL}, true};
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return l;
 }
 
-Int net_tcp_conn_write(NetTCPConn *c, Slice p, Error *err) {
+SyscallRawConn net_tcp_conn_syscall_conn(NetTCPConn *c, Error *err) {
     if (c == NULL) {
         BURROW_OUT(err, burrow__net_einval());
-        return 0;
+        return (SyscallRawConn){NULL, NULL};
     }
-    return burrow__conn_write(&c->c, p, err);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return burrow__net_raw_conn(&c->c.raw);
 }
 
-Error net_tcp_conn_close(NetTCPConn *c) {
-    if (c == NULL)
-        return burrow__net_einval();
-    return burrow__conn_close(&c->c);
+SyscallRawConn net_tcp_listener_syscall_conn(NetTCPListener *l, Error *err) {
+    if (l == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return (SyscallRawConn){NULL, NULL};
+    }
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return burrow__net_raw_conn(&l->raw);
 }
 
 /* CloseRead and CloseWrite fail the way Close does. */
@@ -469,8 +709,12 @@ static Error nt_m_set_write_deadline(void *self, Time t) {
     return net_tcp_conn_set_write_deadline((NetTCPConn *)self, t);
 }
 
-static const Type nt_conn_desc = {
-    BURROW_S_INIT("TCPConn"),
+/* tcpConnWithoutReadFrom and tcpConnWithoutWriteTo: c with neither method,
+ * which is what the copies below hand io_copy so that it does not come back
+ * to them. Go hides one at a time, and hiding both changes nothing here, as
+ * io_copy only asks a reader for WriteTo and a writer for ReadFrom. */
+static const Type nt_plain_desc = {
+    BURROW_S_INIT("tcpConnWithoutReadFrom"),
     BURROW_S_INIT("net"),
     KIND_STRUCT,
     (uint32_t)sizeof(NetTCPConn),
@@ -479,6 +723,71 @@ static const Type nt_conn_desc = {
     0,
     NULL,
     NULL,
+    NULL,
+    NULL,
+    0,
+    0x6e747077U, /* "ntpw" */
+    NULL,
+};
+
+static const IoReaderVT nt_plain_reader = {&nt_plain_desc, nt_m_read};
+static const IoWriterVT nt_plain_writer = {&nt_plain_desc, nt_m_write};
+
+/* It is still a TCPConn underneath, so a Buffers copied to it is a writev, as
+ * Go's, which embeds the *TCPConn, gets. */
+const IoWriterVT *const burrow__nt_plain_writer = &nt_plain_writer;
+
+/* The error from the copies: io_eof as it is, and the rest in an OpError,
+ * except running out of memory, which this library never wraps. */
+static Error nt_copy_error(NetTCPConn *c, Str op, Error e) {
+    if (BURROW_OK(e) || (e.vt == io_eof.vt && e.data == io_eof.data) || nt_is_oom(e))
+        return e;
+    return burrow__net_op_error(op, c->c.fd.net, c->c.laddr, c->c.raddr, e);
+}
+
+int64_t net_tcp_conn_read_from(NetTCPConn *c, IoReader r, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    Error e = BURROW_NO_ERROR;
+    IoWriter w = {&nt_plain_writer, c};
+    int64_t n = io_copy(heap_allocator(), w, r, &e);
+    BURROW_OUT(err, nt_copy_error(c, NT_LIT("readfrom"), e));
+    return n;
+}
+
+int64_t net_tcp_conn_write_to(NetTCPConn *c, IoWriter w, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    Error e = BURROW_NO_ERROR;
+    IoReader r = {&nt_plain_reader, c};
+    int64_t n = io_copy(heap_allocator(), w, r, &e);
+    BURROW_OUT(err, nt_copy_error(c, NT_LIT("writeto"), e));
+    return n;
+}
+
+/* ReadFrom and WriteTo are on the type, as they are in Go, so that io_copy
+ * to or from a TCPConn goes through them. */
+#define NT_CONN_METHODS(M, T)                                                          \
+    M(T, ReadFrom, net_tcp_conn_read_from, IO_SIG_READ_FROM)                           \
+    M(T, WriteTo, net_tcp_conn_write_to, IO_SIG_WRITE_TO)
+
+BURROW_METHODS_DEFINE(NetTCPConn, NT_CONN_METHODS);
+
+static const Type nt_conn_desc = {
+    BURROW_S_INIT("TCPConn"),
+    BURROW_S_INIT("net"),
+    KIND_STRUCT,
+    (uint32_t)sizeof(NetTCPConn),
+    (uint16_t)_Alignof(NetTCPConn),
+    0,
+    (uint16_t)(sizeof burrow__methods_NetTCPConn /
+               sizeof burrow__methods_NetTCPConn[0]),
+    NULL,
+    burrow__methods_NetTCPConn,
     NULL,
     NULL,
     0,
@@ -496,6 +805,8 @@ static const NetConnVT nt_conn_vt = {
     nt_m_set_read_deadline,
     nt_m_set_write_deadline,
 };
+
+const IoWriterVT *const burrow__nt_conn_writer = &nt_conn_vt.writer;
 
 NetConn net_tcp_conn_as_conn(NetTCPConn *c) {
     NetConn conn = {NULL, NULL};
@@ -521,6 +832,43 @@ void net_tcp_conn_free(NetTCPConn *c) {
 
 /* ------------------------------------------------------------ the listener */
 
+NetTCPListener *burrow__net_sys_listen_tcp(Alloc *a, const burrow__NetSysOpts *o,
+                                           Str network, const NetTCPAddr *laddr,
+                                           Error *err) {
+    Str net = BURROW_STR_EMPTY;
+    if (!nt_network(network, &net)) {
+        BURROW_OUT(err, net_unknown_network_error(error_allocator(), network));
+        return NULL;
+    }
+    NetTCPListener *l = (NetTCPListener *)mem_alloc(a, sizeof(NetTCPListener),
+                                                    _Alignof(NetTCPListener));
+    if (l == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    l->alloc = a;
+    /* listenMPTCP, falling back as the dial does. */
+    bool mptcp = o != NULL ? o->mptcp : burrow__net_mptcp_listen(0);
+    Error e = burrow__net_einval();
+    if (mptcp && (nt_mptcp_probe() & NT_MPTCP_AVAILABLE) != 0)
+        e = nt_internet_socket(&l->fd, o, net, laddr, NULL, PAL_IPPROTO_MPTCP, true);
+    if (BURROW_FAILED(e))
+        e = nt_internet_socket(&l->fd, o, net, laddr, NULL, 0, true);
+    if (BURROW_FAILED(e)) {
+        mem_free(a, l, sizeof(NetTCPListener), _Alignof(NetTCPListener));
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    if (o != NULL) {
+        l->keep_alive = o->keep_alive;
+        l->keep_alive_config = o->keep_alive_config;
+    }
+    l->has_laddr = nt_from_sockaddr(&l->laddr, &l->fd.laddr);
+    l->raw = (burrow__NetRawConn){&l->fd, nt_listener_laddr(l), {NULL, NULL}, true};
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return l;
+}
+
 NetTCPListener *net_listen_tcp(Alloc *a, Str network, const NetTCPAddr *laddr,
                                Error *err) {
     Str net = BURROW_STR_EMPTY;
@@ -535,23 +883,12 @@ NetTCPListener *net_listen_tcp(Alloc *a, Str network, const NetTCPAddr *laddr,
     NetTCPAddr zero = {0};
     if (laddr == NULL)
         laddr = &zero;
-    NetAddr dst = net_tcp_addr_as_addr(laddr);
-    NetTCPListener *l = (NetTCPListener *)mem_alloc(a, sizeof(NetTCPListener),
-                                                    _Alignof(NetTCPListener));
-    if (l == NULL) {
-        BURROW_OUT(err, burrow_err_out_of_memory);
-        return NULL;
-    }
-    l->alloc = a;
-    Error e = nt_internet_socket(&l->fd, net, laddr, NULL, true);
-    if (BURROW_FAILED(e)) {
-        mem_free(a, l, sizeof(NetTCPListener), _Alignof(NetTCPListener));
-        BURROW_OUT(err, burrow__net_op_error(NT_LIT("listen"), network,
-                                             (NetAddr){NULL, NULL}, dst, e));
-        return NULL;
-    }
-    l->has_laddr = nt_from_sockaddr(&l->laddr, &l->fd.laddr);
-    BURROW_OUT(err, BURROW_NO_ERROR);
+    Error e = BURROW_NO_ERROR;
+    NetTCPListener *l = burrow__net_sys_listen_tcp(a, NULL, network, laddr, &e);
+    if (l == NULL && !nt_is_oom(e))
+        e = burrow__net_op_error(NT_LIT("listen"), network, (NetAddr){NULL, NULL},
+                                 net_tcp_addr_as_addr(laddr), e);
+    BURROW_OUT(err, e);
     return l;
 }
 
@@ -575,9 +912,13 @@ NetTCPConn *net_tcp_listener_accept_tcp(NetTCPListener *l, Error *err) {
                                              nt_listener_laddr(l), e));
         return NULL;
     }
-    nt_new_conn(c);
+    nt_new_conn(c, l->keep_alive, l->keep_alive_config);
     BURROW_OUT(err, BURROW_NO_ERROR);
     return c;
+}
+
+NetConn net_tcp_listener_accept(NetTCPListener *l, Error *err) {
+    return net_tcp_conn_as_conn(net_tcp_listener_accept_tcp(l, err));
 }
 
 Error net_tcp_listener_close(NetTCPListener *l) {
@@ -608,8 +949,7 @@ static Error nt_l_close(void *self) {
 }
 
 static NetConn nt_l_accept(void *self, Error *err) {
-    return net_tcp_conn_as_conn(
-        net_tcp_listener_accept_tcp((NetTCPListener *)self, err));
+    return net_tcp_listener_accept((NetTCPListener *)self, err);
 }
 
 static NetAddr nt_l_addr(void *self) {
@@ -646,6 +986,12 @@ NetListener net_tcp_listener_as_listener(NetTCPListener *l) {
         nl.data = l;
     }
     return nl;
+}
+
+NetTCPListener *net_listener_as_tcp_listener(NetListener l) {
+    if (l.vt != &nt_listener_vt)
+        return NULL;
+    return (NetTCPListener *)l.data;
 }
 
 void net_tcp_listener_free(NetTCPListener *l) {

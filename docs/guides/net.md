@@ -1,6 +1,6 @@
 # Networking
 
-`burrow/net/netip.h` is Go's `net/netip`, which holds IP addresses, address and port pairs, and CIDR prefixes as small values. `burrow/net/url.h` is Go's `net/url`, which parses, builds and resolves URLs and query strings. `burrow/net.h` has the address types from Go's `net` package itself, `IP`, `IPMask` and `IPNet`, with `SplitHostPort` and `JoinHostPort`. The rest of `net` (sockets, the resolver, `net/http` and friends) sits on top of the runtime's network poller and will land in this guide as it is ported.
+`burrow/net/netip.h` is Go's `net/netip`, which holds IP addresses, address and port pairs, and CIDR prefixes as small values. `burrow/net/url.h` is Go's `net/url`, which parses, builds and resolves URLs and query strings. `burrow/net.h` has the address types from Go's `net` package itself, `IP`, `IPMask` and `IPNet`, with `SplitHostPort` and `JoinHostPort`. The sockets, `Dial` and `Listen` sit on top of the runtime's network poller, and `net/http` and the rest will land in this guide as they are ported.
 
 ## Addresses, ports and prefixes
 
@@ -205,7 +205,7 @@ Go's collector takes care of a pipe once nothing refers to it. Here `net_pipe_fr
 
 ## TCP
 
-`net_listen_tcp` and `net_dial_tcp` are Go's `ListenTCP` and `DialTCP`, and the `NetTCPConn` and `NetTCPListener` they give back have Go's methods as functions. Addresses are `NetTCPAddr` literals for now, since the resolver that turns "localhost:80" into one is still to come. A listener on port 0 gets a free port from the system, and `net_tcp_listener_addr` says which:
+`net_listen_tcp` and `net_dial_tcp` are Go's `ListenTCP` and `DialTCP`, and the `NetTCPConn` and `NetTCPListener` they give back have Go's methods as functions. These take `NetTCPAddr` values, and `net_dial` and `net_listen`, under [Dial and Listen](#dial-and-listen), take the address as text. A listener on port 0 gets a free port from the system, and `net_tcp_listener_addr` says which:
 
 <!-- example: ../examples/net/tcp.c#tcp -->
 ```c
@@ -258,6 +258,37 @@ dial tcp5 127.0.0.1:80: unknown network tcp5
 Every call that can wait, from a dial to a read, has to be made on a goroutine. A goroutine waiting on a socket parks in the netpoller and holds a stack but no thread, so a server can have a goroutine per connection the way a Go server does. A Close from another goroutine wakes a read, a write or an accept with `net_err_closed`, and a deadline wakes it with `os_err_deadline_exceeded`.
 
 The errors are Go's, down to the text. A failed call gives a `NetOpError` naming the operation and the addresses, wrapping an `OsSyscallError` naming the system call, wrapping the `Errno`, so "dial tcp 127.0.0.1:9: connect: connection refused" reads the same as it would from Go, and `errors_as` finds each layer. The one exception is the end of a stream, which is `io_eof` as it is, so `errors_is(err, io_eof)` works on a read.
+
+`NetBuffers` is Go's `net.Buffers`, a slice of byte slices to write as one. Written to a TCP, UDP, IP or Unix connection with `net_buffers_write_to`, it goes in as few `writev` calls as the system allows, which is one for up to 1024 buffers, or one `WSASend` on Windows. Written to anything else, it is one `Write` per buffer. Either way the buffers that went are taken off the front, so a write that fails part way leaves what is still to go:
+
+<!-- example: ../examples/net/buffers.c#buffers -->
+```c
+char one[] = "first line\n";
+char two[] = "second line\n";
+char three[] = "third line\n";
+Slice parts[3] = {
+    slice_from(one, (Int)sizeof one - 1, (Int)sizeof one - 1, TYPE_BYTE),
+    slice_from(two, (Int)sizeof two - 1, (Int)sizeof two - 1, TYPE_BYTE),
+    slice_from(three, (Int)sizeof three - 1, (Int)sizeof three - 1, TYPE_BYTE),
+};
+NetBuffers v = slice_from(parts, 3, 3, TYPE_BYTES);
+
+/* One writev for all three, since the writer is a connection. */
+NetConn conn = net_tcp_conn_as_conn(c);
+int64_t n = net_buffers_write_to(&v, net_conn_as_io_writer(conn), &err);
+printf("wrote %d bytes, %d buffers left\n", (int)n, (int)v.len);
+```
+
+With the example's server printing what it reads, that prints:
+
+```
+wrote 34 bytes, 0 buffers left
+server got 34 bytes: first line
+second line
+third line
+```
+
+`net_tcp_conn_read_from` and `net_tcp_conn_write_to` are the connection's `ReadFrom` and `WriteTo`, so `io_copy` to or from a TCP connection goes through them, as it does in Go. They copy through a buffer on every system, where Go on Linux would splice or sendfile, and an error from either comes in a `NetOpError` named "readfrom" or "writeto" around the read or write that failed.
 
 A dialed connection, like an accepted one, has Nagle's algorithm off and keep-alives on, with Go's defaults of 15 seconds idle, 15 seconds between probes and 9 probes. `net_tcp_conn_set_keep_alive_config` and the other setters change them. `net_tcp_conn_free` and `net_tcp_listener_free` close what is still open and give the memory back, and the addresses a connection hands out belong to it until then.
 
@@ -320,7 +351,7 @@ Go has three ways to say who sent a datagram, and so does this. `net_udp_conn_re
 
 A datagram is read whole. When it is longer than the buffer, the rest of it is lost and the next read starts on the next datagram, as it does in Go. Writing to a connected socket with a write-to function fails with `net_err_write_to_connected`, and the errors otherwise are Go's, down to "write udp 127.0.0.1:5000->127.0.0.1:70000: sendto: invalid argument" for a port that does not fit.
 
-`ListenMulticastUDP`, `ReadMsgUDP` and `WriteMsgUDP` are still to come, and Windows and wasip1 are where TCP is: a dial or a listen on Windows fails with `ENOSYS` for now, and wasip1 has no sockets.
+`net_udp_conn_read_msg_udp` and `net_udp_conn_write_msg_udp` carry control messages alongside the data, in the system's own layout, which `syscall_parse_socket_control_message` picks apart, and they have `_addr_port` twins that need no memory for the address. `ListenMulticastUDP` is under [Interfaces](#interfaces), since it takes one. Windows and wasip1 are where TCP is: a dial or a listen on Windows fails with `ENOSYS` for now, and wasip1 has no sockets.
 
 ## Unix
 
@@ -388,7 +419,451 @@ A listener made by `net_listen_unix` removes its file when it closes, and so doe
 
 On Linux a name that starts with "@" is in the abstract namespace, has no file, and goes away with the last socket on it. Listening on an empty name binds to a fresh abstract name, and a socket that was never bound is called "@" there and "" everywhere else, so those are the names a dialer's end and an unbound sender have. A name has to fit in the system's sockaddr, which is 107 bytes on Linux and 103 on macOS and the BSDs, and a longer one fails with "bind: invalid argument" as it does in Go.
 
-The datagram functions are the UDP ones with a `NetUnixAddr` in place of a `NetUDPAddr`: `net_unix_conn_read_from_unix` makes the sender's address in the allocator it is given, and `net_unix_conn_write_to_unix` sends to a name. `ReadMsgUnix`, `WriteMsgUnix` and the `File` methods, which pass descriptors, are still to come, and Windows is where TCP is for now.
+The datagram functions are the UDP ones with a `NetUnixAddr` in place of a `NetUDPAddr`: `net_unix_conn_read_from_unix` makes the sender's address in the allocator it is given, and `net_unix_conn_write_to_unix` sends to a name. `net_unix_conn_read_msg_unix` and `net_unix_conn_write_msg_unix` pass descriptors between processes, with `syscall_unix_rights` making the control message and `syscall_parse_unix_rights` reading it back. The descriptors that arrive are close-on-exec, as in Go. This one hands an open file across a connection:
+
+<!-- example: ../examples/net/rights.c#rights -->
+```c
+Arena ar;
+arena_init(&ar, NULL, 0);
+Alloc *a = arena_allocator(&ar);
+Error err;
+Str dir = os_mkdir_temp(a, BURROW_STR_EMPTY, BURROW_S("ex"), &err);
+if (BURROW_FAILED(err))
+    return;
+Str note = filepath_join_v(a, 2, dir, BURROW_S("note.txt"));
+char text[] = "read through a passed descriptor";
+(void)os_write_file(note, slice_from(text, 32, 32, TYPE_BYTE), 0600);
+
+NetUnixAddr addr = {filepath_join_v(a, 2, dir, BURROW_S("pass.sock")),
+                    BURROW_S("unix")};
+NetUnixListener *l = net_listen_unix(a, BURROW_S("unix"), &addr, &err);
+NetUnixConn *client = net_dial_unix(a, BURROW_S("unix"), NULL, &addr, &err);
+NetUnixConn *server = net_unix_listener_accept_unix(l, &err);
+if (client == NULL || server == NULL)
+    return;
+
+/* One end opens the file and sends the descriptor along with a byte. */
+Int fd = syscall_open(note, SYSCALL_O_RDONLY, 0, &err);
+Slice rights = syscall_unix_rights(a, (Slice){&fd, 1, 1, TYPE_INT});
+char one[] = "f";
+Int oobn = 0;
+(void)net_unix_conn_write_msg_unix(client, slice_from(one, 1, 1, TYPE_BYTE), rights,
+                                   NULL, &oobn, &err);
+printf("sent all of it: %d\n", oobn == rights.len);
+(void)syscall_close(fd);
+
+/* The other end gets a descriptor of its own for the same open file. */
+Byte b[1];
+Byte oob[64];
+(void)net_unix_conn_read_msg_unix(server, slice_from(b, 1, 1, TYPE_BYTE),
+                                  slice_from(oob, 64, 64, TYPE_BYTE), a, &oobn,
+                                  NULL, NULL, &err);
+Slice msgs = syscall_parse_socket_control_message(
+    a, slice_from(oob, oobn, oobn, TYPE_BYTE), &err);
+Slice fds =
+    syscall_parse_unix_rights(a, &((SyscallSocketControlMessage *)msgs.p)[0], &err);
+if (BURROW_FAILED(err) || fds.len != 1)
+    return;
+Int got = ((const Int *)fds.p)[0];
+Byte data[64];
+Int n = syscall_read(got, slice_from(data, 64, 64, TYPE_BYTE), &err);
+printf("%.*s\n", (int)n, (const char *)data);
+(void)syscall_close(got);
+
+net_unix_conn_free(client);
+net_unix_conn_free(server);
+net_unix_listener_free(l);
+(void)os_remove_all(dir);
+arena_free(&ar);
+```
+
+That prints:
+
+```
+sent all of it: 1
+read through a passed descriptor
+```
+
+The `File` methods are still to come, and Windows is where TCP is for now.
+
+## Raw IP
+
+`net_listen_ip` and `net_dial_ip` are Go's `ListenIP` and `DialIP`, which make raw IP sockets. The network is "ip", "ip4" or "ip6" with the protocol after a colon, by number or by the name /etc/protocols gives it, so "ip4:icmp" and "ip4:1" are the same thing. A `NetIPAddr` is an address and a zone with no port. The system only hands out raw sockets to root, or to a program with CAP_NET_RAW on Linux, and anyone else gets an error, which is EPERM on Linux. `net_dialer_dial_ip` is the Dialer's `DialIP`, new in Go 1.27, which takes `NetipAddr` values and a context. This one sends an ICMP echo request to the loopback address and waits for the reply:
+
+<!-- example: ../examples/net/ipconn.c#ipconn -->
+```c
+Arena ar;
+arena_init(&ar, NULL, 0);
+Alloc *a = arena_allocator(&ar);
+Error err;
+/* Raw sockets need root, or CAP_NET_RAW on Linux. */
+NetIPConn *c = net_listen_ip(a, BURROW_S("ip4:icmp"), NULL, &err);
+if (c == NULL) {
+    Str s = error_text(err);
+    printf("%.*s\n", (int)s.len, (const char *)s.p);
+    arena_free(&ar);
+    return;
+}
+(void)net_ip_conn_set_deadline(c, time_add(time_now(), 5 * TIME_SECOND));
+
+/* An echo request: type 8, code 0, the checksum, an identifier and a
+ * sequence number, then the data. */
+Byte req[12] = {8, 0, 0, 0, 0x62, 0x78, 0, 1, 'p', 'i', 'n', 'g'};
+icmp_checksum(req, sizeof req);
+NetIPAddr *to =
+    net_resolve_ip_addr(a, BURROW_S("ip4"), BURROW_S("127.0.0.1"), &err);
+(void)net_ip_conn_write_to_ip(c, slice_from(req, sizeof req, sizeof req, TYPE_BYTE),
+                              to, &err);
+
+/* The socket sees every ICMP packet to this machine, so wait for the
+ * reply, which is type 0. read_from_ip takes the IPv4 header off. */
+for (;;) {
+    Byte got[128];
+    NetIPAddr *from = NULL;
+    Int n = net_ip_conn_read_from_ip(
+        c, slice_from(got, sizeof got, sizeof got, TYPE_BYTE), a, &from, &err);
+    if (BURROW_FAILED(err)) {
+        Str s = error_text(err);
+        printf("%.*s\n", (int)s.len, (const char *)s.p);
+        break;
+    }
+    if (n >= 8 && got[0] == 0 && memcmp(got + 4, req + 4, 4) == 0) {
+        Str s = net_ip_addr_string(from, a);
+        printf("echo reply from %.*s, %d bytes\n", (int)s.len, (const char *)s.p,
+               (int)n);
+        break;
+    }
+}
+net_ip_conn_free(c);
+arena_free(&ar);
+```
+
+On an IPv4 socket, `net_ip_conn_read_from_ip` and the `read_from` of the `NetPacketConn` take the IPv4 header off the front of each packet, as Go's `ReadFromIP` does, while `net_ip_conn_read` gives the packet as the system hands it over, header and all. `net_ip_conn_read_msg_ip` leaves the header where it is, as Go's `ReadMsgIP` does, and `net_ip_conn_write_msg_ip` always needs an address. Windows is where TCP is for now.
+
+## Interfaces
+
+`net_interfaces` is Go's `Interfaces`, the machine's network interfaces with their index, MTU, name, hardware address and flags, and `net_interface_by_index` and `net_interface_by_name` find one. `net_interface_addrs_of` is the `Addrs` method, the addresses of one interface, each a `NetAddr` that holds a `NetIPNet` with the prefix, and `net_interface_addrs` is the `InterfaceAddrs` function, every address on the machine. On Windows the list includes the anycast addresses too, as `NetIPAddr`, which is what Go gives there. `net_interface_multicast_addrs` is the groups an interface has joined. This one prints each interface and its addresses:
+
+<!-- example: ../examples/net/interfaces.c#interfaces -->
+```c
+Arena ar;
+arena_init(&ar, NULL, 0);
+Alloc *a = arena_allocator(&ar);
+Error err;
+Slice ift = net_interfaces(a, &err);
+if (BURROW_FAILED(err)) {
+    fmt_printf_v("%v\n", err);
+    arena_free(&ar);
+    return;
+}
+for (Int i = 0; i < ift.len; i++) {
+    const NetInterface *ifi = &((const NetInterface *)ift.p)[i];
+    Str flags = net_flags_string(ifi->flags, a);
+    Str hw = net_hardware_addr_string(ifi->hardware_addr, a);
+    printf("%d %.*s mtu %d <%.*s> %.*s\n", (int)ifi->index, (int)ifi->name.len,
+           (const char *)ifi->name.p, (int)ifi->mtu, (int)flags.len,
+           (const char *)flags.p, (int)hw.len, (const char *)hw.p);
+
+    /* Unicast addresses come back as NetIPNet, with the prefix. */
+    Slice addrs = net_interface_addrs_of(ifi, a, &err);
+    for (Int j = 0; j < addrs.len; j++) {
+        NetAddr x = ((const NetAddr *)addrs.p)[j];
+        Str s = x.vt->string(x.data, a);
+        printf("    %.*s\n", (int)s.len, (const char *)s.p);
+    }
+}
+arena_free(&ar);
+```
+
+On Linux the list comes from a netlink dump and the groups from /proc/net/igmp and /proc/net/igmp6, which is where Go reads them. On macOS and the BSDs it comes from `getifaddrs` and `getifmaddrs`, and on Windows from `GetAdaptersAddresses`. These are also what turns an IPv6 zone such as `eth0` into the index a socket needs, and back. Like Go, the names are cached and the cache is read again when it is more than a minute old or when a name or index is not in it.
+
+`net_parse_mac` reads a hardware address in any of the three forms Go reads, with colons, with hyphens, or in dotted groups of four digits, for 48 bit and 64 bit addresses and 20 byte InfiniBand ones:
+
+<!-- example: ../examples/net/mac.c#mac -->
+```c
+Error err;
+NetHardwareAddr hw = net_parse_mac(a, BURROW_S("00-00-5E-00-53-01"), &err);
+print(net_hardware_addr_string(hw, a));
+
+/* Cisco's dotted form, and an EUI-64. */
+hw = net_parse_mac(a, BURROW_S("0200.5e10.0000.0001"), &err);
+printf("%d ", (int)hw.len);
+print(net_hardware_addr_string(hw, a));
+
+net_parse_mac(a, BURROW_S("01:02:03:04:05"), &err);
+fmt_printf_v("%v\n", err);
+```
+
+### Multicast
+
+`net_listen_multicast_udp` is Go's `ListenMulticastUDP`. It binds the group's port, joins the group on the interface it is given, and turns off the loopback of what the socket sends itself, as Go does. Other sockets can listen on the same group and port. With a NULL interface the system picks one, which is rarely the right one on a machine with several, so name it:
+
+<!-- example: ../examples/net/multicast.c#multicast -->
+```c
+Arena ar;
+arena_init(&ar, NULL, 0);
+Alloc *a = arena_allocator(&ar);
+Error err;
+
+/* The loopback interface, which every machine has. */
+const NetInterface *lo = NULL;
+Slice ift = net_interfaces(a, &err);
+for (Int i = 0; i < ift.len && lo == NULL; i++) {
+    const NetInterface *ifi = &((const NetInterface *)ift.p)[i];
+    if ((ifi->flags & NET_FLAG_LOOPBACK) != 0 && (ifi->flags & NET_FLAG_UP) != 0)
+        lo = ifi;
+}
+
+/* 224.0.0.254 is a group set aside for experiments. */
+NetUDPAddr group = {net_ipv4(a, 224, 0, 0, 254), 12345, BURROW_STR_EMPTY};
+NetUDPConn *c =
+    net_listen_multicast_udp(heap_allocator(), BURROW_S("udp4"), lo, &group, &err);
+if (c == NULL) {
+    fmt_printf_v("%v\n", err);
+    arena_free(&ar);
+    return;
+}
+NetAddr la = net_udp_conn_local_addr(c);
+Str s = la.vt->string(la.data, a);
+printf("listening on %.*s\n", (int)s.len, (const char *)s.p);
+
+/* The group is in the interface's list of joined groups now. */
+if (lo != NULL) {
+    Slice groups = net_interface_multicast_addrs(lo, a, &err);
+    for (Int i = 0; i < groups.len; i++) {
+        NetAddr g = ((const NetAddr *)groups.p)[i];
+        Str gs = g.vt->string(g.data, a);
+        printf("    %.*s\n", (int)gs.len, (const char *)gs.p);
+    }
+}
+net_udp_conn_free(c);
+arena_free(&ar);
+```
+
+Linux joins by the interface's index. macOS, the BSDs and Windows join by one of the interface's IPv4 addresses, so there an interface with no IPv4 address fails with "no such multicast network interface", which is Go's error. Go points anything more involved at golang.org/x/net/ipv4 and ipv6, which burrow does not have yet.
+
+## Sockets as files
+
+Each connection and listener has Go's `File` method, `net_tcp_conn_file`, `net_tcp_listener_file` and the rest, which hands back a copy of the socket as an `OsFile`. The copy stays open when the connection closes, and the caller closes it. `net_file_conn`, `net_file_listener` and `net_file_packet_conn` go the other way, which is how a socket handed over by a parent process or a service manager becomes a connection again. What comes back depends on the socket's family and type, so a TCP socket becomes a TCPConn and a datagram Unix socket a UnixConn, and asking for a listener from a socket that is not listening gives EINVAL:
+
+<!-- example: ../examples/net/file.c#file -->
+```c
+/* A copy of the listening socket as a file, which outlives the listener. */
+NetAddr was = l.vt->addr(l.data);
+Str before = was.vt->string(was.data, a);
+OsFile *f =
+    net_tcp_listener_file(net_listener_as_tcp_listener(l), heap_allocator(), &err);
+net_listener_free(l);
+if (f == NULL) {
+    fmt_printf_v("%v\n", err);
+    arena_free(&ar);
+    return;
+}
+
+/* And a listener again, from the file, on the same address. */
+NetListener l2 = net_file_listener(heap_allocator(), f, &err);
+(void)os_file_close(f);
+os_file_free(f);
+if (l2.vt == NULL) {
+    fmt_printf_v("%v\n", err);
+    arena_free(&ar);
+    return;
+}
+NetAddr now = l2.vt->addr(l2.data);
+Str after = now.vt->string(now.data, a);
+printf("same address: %s\n", str_eq(before, after) ? "yes" : "no");
+
+SyncWaitGroup wg = {0};
+sync_wait_group_go(&wg, BURROW_FN(Func, dial, &now));
+NetConn c = l2.vt->accept(l2.data, &err);
+if (c.vt != NULL) {
+    NetAddr ra = c.vt->remote_addr(c.data);
+    Str network = ra.vt->network(ra.data);
+    printf("accepted a %.*s connection\n", (int)network.len,
+           (const char *)network.p);
+    net_conn_free(c);
+}
+sync_wait_group_wait(&wg);
+net_listener_free(l2);
+```
+
+That prints:
+
+```
+same address: yes
+accepted a tcp connection
+```
+
+The file keeps its copy in non blocking mode until something asks for its descriptor with `os_file_fd`, which puts it in blocking mode first, as Go's `Fd` does, since code that takes a descriptor from a connection's file has always had a blocking one from Go. The connection made from a file gets a copy of its own, in non blocking mode for the poller, and leaves the file's alone. A Unix listener made from a file does not remove its socket file when it closes. On Windows the copy comes from `WSADuplicateSocket` and is never put in non blocking mode. WASI cannot copy a socket yet, so these give ENOSYS there.
+
+## Dial and Listen
+
+`net_dial` and `net_listen` are Go's `Dial` and `Listen`. They take the network and the address as text, look up a host name and a service name for the port, and give back a `NetConn` or a `NetListener` whatever the network. `NetDialer` and `NetListenConfig` are the structs behind them, with Go's fields: a timeout, a deadline, a local address, the keep-alive settings, a resolver, and a `control` callback that sees the socket before it connects. The zero value of either works, and so does passing NULL.
+
+<!-- example: ../examples/net/dial.c#dial -->
+```c
+/* Connections go in the heap, since the server's goroutine makes one
+ * too. */
+Alloc *heap = heap_allocator();
+Error err;
+NetListener l = net_listen(heap, BURROW_S("tcp"), BURROW_S("127.0.0.1:0"), &err);
+if (l.vt == NULL)
+    return;
+SyncWaitGroup wg = {0};
+sync_wait_group_go(&wg, BURROW_FN(Func, serve, &l));
+
+/* The text this goroutine makes goes in an arena. The listener's
+ * address as text is something Dial takes. */
+Arena ar;
+arena_init(&ar, NULL, 0);
+Alloc *a = arena_allocator(&ar);
+NetAddr la = l.vt->addr(l.data);
+Str address = la.vt->string(la.data, a);
+NetDialer d = {0};
+d.timeout = 5 * TIME_SECOND;
+NetConn c = net_dialer_dial(&d, heap, BURROW_S("tcp"), address, &err);
+if (c.vt != NULL) {
+    Slice got = io_read_all(a, net_conn_as_io_reader(c), &err);
+    printf("%.*s\n", (int)got.len, (const char *)got.p);
+    net_conn_free(c);
+}
+/* Closing the listener stops an accept that is still waiting. */
+(void)l.vt->closer.close(l.data);
+sync_wait_group_wait(&wg);
+net_listener_free(l);
+
+/* Ports by name, and zones, the way ResolveTCPAddr reads them. */
+NetTCPAddr *ta =
+    net_resolve_tcp_addr(a, BURROW_S("tcp"), BURROW_S("[::1%lo]:http"), &err);
+if (ta != NULL) {
+    printf("port %d zone %.*s\n", (int)ta->port, (int)ta->zone.len,
+           (const char *)ta->zone.p);
+    print_str(net_tcp_addr_string(ta, a));
+}
+
+/* A dial that cannot start says why, as an OpError. */
+c = net_dial(heap, BURROW_S("tcp6"), BURROW_S("127.0.0.1:80"), &err);
+if (c.vt == NULL)
+    print_str(error_text(err));
+arena_free(&ar);
+```
+
+That prints:
+
+```
+hello from the server
+port 80 zone lo
+[::1%lo]:80
+dial tcp6: address 127.0.0.1: no suitable address found
+```
+
+`net_listen_packet` is Go's `ListenPacket`, for "udp", "udp4", "udp6", "unixgram" and the "ip" networks with a protocol, such as "ip4:icmp". It gives back a `NetPacketConn`, whose `read_from` says who sent each packet and whose `write_to` sends one to any address. `net_udp_conn_as_packet_conn`, `net_unix_conn_as_packet_conn` and `net_ip_conn_as_packet_conn` turn the connections the UDP, Unix and IP sections make into one, and `net_packet_conn_free` gives any of them back.
+
+<!-- example: ../examples/net/listen_packet.c#listen-packet -->
+```c
+Alloc *heap = heap_allocator();
+Arena ar;
+arena_init(&ar, NULL, 0);
+Alloc *a = arena_allocator(&ar);
+Error err;
+NetPacketConn pc =
+    net_listen_packet(heap, BURROW_S("udp"), BURROW_S("127.0.0.1:0"), &err);
+if (pc.vt == NULL) {
+    arena_free(&ar);
+    return;
+}
+NetAddr la = pc.vt->local_addr(pc.data);
+NetConn c = net_dial(heap, BURROW_S("udp"), la.vt->string(la.data, a), &err);
+if (c.vt != NULL) {
+    /* One datagram there, and the answer back to whoever sent it. */
+    char buf[64];
+    char ping[] = "ping";
+    (void)c.vt->writer.write(c.data, slice_from(ping, 4, 4, TYPE_BYTE), &err);
+    NetAddr from = {NULL, NULL};
+    Int n = pc.vt->read_from(pc.data,
+                             slice_from(buf, sizeof buf, sizeof buf, TYPE_BYTE), a,
+                             &from, &err);
+    NetAddr cl = c.vt->local_addr(c.data);
+    bool same = from.vt != NULL &&
+                str_eq(from.vt->string(from.data, a), cl.vt->string(cl.data, a));
+    printf("got %.*s, from the dialer: %s\n", (int)n, buf, same ? "true" : "false");
+    char pong[] = "pong";
+    (void)pc.vt->write_to(pc.data, slice_from(pong, 4, 4, TYPE_BYTE), from, &err);
+    n = c.vt->reader.read(c.data,
+                          slice_from(buf, sizeof buf, sizeof buf, TYPE_BYTE), &err);
+    printf("got %.*s back\n", (int)n, buf);
+    net_conn_free(c);
+}
+net_packet_conn_free(pc);
+
+/* Only the datagram networks make a packet connection. */
+pc = net_listen_packet(heap, BURROW_S("tcp"), BURROW_S("127.0.0.1:0"), &err);
+if (pc.vt == NULL) {
+    Str s = error_text(err);
+    printf("%.*s\n", (int)s.len, (const char *)s.p);
+}
+arena_free(&ar);
+```
+
+That prints:
+
+```
+got ping, from the dialer: true
+got pong back
+listen tcp 127.0.0.1:0: address 127.0.0.1:0: unexpected address type
+```
+
+A name with several addresses is tried one address at a time, each with its share of whatever time is left, and for "tcp" a name with both IPv4 and IPv6 addresses races the first of each, starting the second family 300ms after the first unless `fallback_delay` says otherwise. That is RFC 6555, which Go calls Happy Eyeballs. The connection that loses the race is closed before the dial returns. `net_dialer_dial_context` takes a context, and cancelling it stops a dial that is still going.
+
+`net_conn_free` and `net_listener_free` close what they are given and give it back, and `net_conn_as_tcp_conn` and its siblings get the concrete type when you need its methods. `net_resolve_tcp_addr`, `net_resolve_udp_addr` and `net_resolve_ip_addr` are Go's `ResolveTCPAddr` and friends, for when you want the address without the connection.
+
+When a dial fails, the error is a `NetOpError` with the op "dial", and it names the addresses it tried. Those addresses live in the error arena of the goroutine that dialed, so the error stays readable for as long as the goroutine keeps it, and a dial that works leaves nothing behind there.
+
+### Multipath TCP
+
+Multipath TCP lets one connection use several paths at once, such as Wi-Fi and a mobile link, and only Linux has it. As in Go, a TCP listener asks for it unless told otherwise and a dial does not. `net_listen_config_set_multipath_tcp` and `net_dialer_set_multipath_tcp` change that, and `net_listen_config_multipath_tcp` and `net_dialer_multipath_tcp` say what was asked for. Left alone, both follow the GODEBUG environment variable as Go reads it: multipathtcp=0 turns it off for listeners, 1 turns it on for dials, and 3 turns it on for dials and off for listeners. A socket that cannot have Multipath TCP, because the kernel is too old or it is turned off, falls back to plain TCP without an error, and a peer that does not speak it gets plain TCP too, so `net_tcp_conn_multipath_tcp` is how to tell what a connection ended up with. On anything but Linux it always says no.
+
+## Looking up names
+
+`net_lookup_host`, `net_lookup_ip`, `net_lookup_port`, `net_lookup_addr` and the record lookups are Go's, and so is the choice of who answers them. There are two resolvers. One is Go's own, which reads `/etc/hosts`, `/etc/resolv.conf` and `/etc/nsswitch.conf` and talks to the name servers itself. The other is the system's `getaddrinfo` and `getnameinfo`, which Go reaches through cgo and burrow reaches through its platform layer. A lookup goes to the system when the configuration has something Go's resolver does not understand, such as an NSS module or mDNS in `nsswitch.conf`, and on macOS, where the system is always asked. `GODEBUG=netdns=go` and `GODEBUG=netdns=cgo` force one or the other, `GODEBUG=netdns=1` says which was picked and why, and a `NetResolver` with `prefer_go` set gets Go's.
+
+<!-- example: ../examples/net/lookup.c#lookup -->
+```c
+Arena ar;
+arena_init(&ar, NULL, 0);
+Alloc *a = arena_allocator(&ar);
+Error err;
+
+/* A service by name. The system is asked first where there is one, and
+ * Go's own table answers when it does not know. */
+Int port = net_lookup_port(BURROW_S("tcp"), BURROW_S("https"), &err);
+printf("https is port %d\n", (int)port);
+
+/* A host, through whichever resolver the system's configuration and
+ * GODEBUG=netdns= pick. */
+Slice addrs = net_lookup_host(a, BURROW_S("localhost"), &err);
+printf("localhost has 127.0.0.1: %s\n", has(addrs, "127.0.0.1") ? "yes" : "no");
+
+/* The same through Go's resolver, which reads the hosts file itself. */
+NetResolver r = {0};
+r.prefer_go = true;
+addrs = net_resolver_lookup_host(&r, a, context_background(), BURROW_S("localhost"),
+                                 &err);
+printf("and so says Go's: %s\n", has(addrs, "127.0.0.1") ? "yes" : "no");
+arena_free(&ar);
+```
+
+That prints:
+
+```
+https is port 443
+localhost has 127.0.0.1: yes
+and so says Go's: yes
+```
+
+The system's calls block the thread that makes them, and burrow has no way to hand a goroutine's thread to another one while that happens, the way cgo does. So the calls run on threads of their own, which wait around for a while for the next lookup and then exit, and the goroutine waits for the answer as it would for a socket. A context that is done stops the wait but not the call, which finishes on its own thread and is thrown away. At most 500 calls run at once, fewer when the limit on open files is low, which is Go's rule.
+
+Windows and wasip1 always use Go's resolver for now. wasip1 has no other, and Go's Windows lookups go through `GetAddrInfoW` and `DnsQuery_W` in a way of their own that is still to come.
 
 ## URLs
 

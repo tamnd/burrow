@@ -6,6 +6,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "internal.h"
+
 #include "burrow/net.h"
 
 #include "burrow/atomic.h"
@@ -526,6 +528,10 @@ void net_pipe(Alloc *a, NetConn *c1, NetConn *c2) {
     NetConn p2 = {&np_conn_vt, &pair->end[1]};
     BURROW_OUT(c1, p1);
     BURROW_OUT(c2, p2);
+}
+
+bool burrow__net_is_pipe(NetConn c) {
+    return c.vt == &np_conn_vt;
 }
 
 void net_pipe_free(NetConn c) {

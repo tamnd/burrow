@@ -860,6 +860,13 @@ bool pal_utimesat(int64_t dirfd, const char *path, int64_t atime_ns, int64_t mti
 
 int64_t pal_dup(int64_t fd, PalErrno *err);
 
+/* Whether fd is in non blocking mode, and putting it in or out of it, which
+ * are Go's unix.IsNonblock and syscall.SetNonblock. On Windows the setter
+ * works on sockets only, through FIONBIO, and asking is PAL_ENOTSUP, since
+ * Windows has no way to read the mode back. */
+bool pal_nonblock(int64_t fd, bool *on, PalErrno *err);
+bool pal_set_nonblock(int64_t fd, bool on, PalErrno *err);
+
 /* out[0] is the read end and out[1] is the write end. flags takes
  * PAL_O_NONBLOCK and nothing else. */
 bool pal_pipe(int64_t out[2], uint32_t flags, PalErrno *err);
@@ -1608,10 +1615,8 @@ bool pal_user_lookup(int64_t uid, PalUser *out, PalErrno *err);
  * systems and not others, and a port in network byte order in the middle of it.
  * Converting once, in the backend, is the whole reason this layer exists.
  *
- * pal_getaddrinfo and pal_if_enumerate are not implemented yet. They arrive with
- * the resolver and with net.Interfaces. wasip1 has none of this: its sockets
- * are the ones the host hands in already open, and every call here answers
- * PAL_ENOSYS there. */
+ * wasip1 has none of this: its sockets are the ones the host hands in already
+ * open, and every call here answers PAL_ENOSYS there. */
 
 enum { PAL_AF_UNSPEC = 0, PAL_AF_INET = 1, PAL_AF_INET6 = 2, PAL_AF_UNIX = 3 };
 enum {
@@ -1620,7 +1625,9 @@ enum {
     PAL_SOCK_RAW = 3,
     PAL_SOCK_SEQPACKET = 4
 };
-enum { PAL_IPPROTO_TCP = 6, PAL_IPPROTO_UDP = 17 };
+/* PAL_IPPROTO_MPTCP is Linux's number for Multipath TCP, which no other system
+ * has. */
+enum { PAL_IPPROTO_TCP = 6, PAL_IPPROTO_UDP = 17, PAL_IPPROTO_MPTCP = 262 };
 
 /* An address, in host byte order everywhere a number appears. addr holds four
  * bytes for IPv4 and sixteen for IPv6, most significant first, which is how an
@@ -1659,6 +1666,13 @@ int64_t pal_socket(int32_t family, int32_t type, int32_t protocol, PalErrno *err
  * with pal_close. Elsewhere the two are the same. */
 bool pal_socket_close(int64_t fd, PalErrno *err);
 
+/* A second descriptor for the socket fd, close on exec, which is what Go's
+ * File methods hand out. On POSIX it is F_DUPFD_CLOEXEC, and the two share
+ * their status flags, non blocking among them. On Windows it is
+ * WSADuplicateSocketW and then WSASocketW, a new socket that is not
+ * inherited, which pal_socket_close closes. */
+int64_t pal_socket_dup(int64_t fd, PalErrno *err);
+
 bool pal_bind(int64_t fd, const PalSockAddr *addr, PalErrno *err);
 bool pal_listen(int64_t fd, int32_t backlog, PalErrno *err);
 
@@ -1685,6 +1699,48 @@ int64_t pal_sendto(int64_t fd, const void *buf, int64_t n, const PalSockAddr *ad
 int64_t pal_recvfrom(int64_t fd, void *buf, int64_t n, PalSockAddr *from,
                      PalErrno *err);
 
+/* recvmsg and sendmsg, with one buffer of data, and oob for the control
+ * messages as the system lays them out, which is what Go's ReadMsgUDP and the
+ * rest hand their callers.
+ *
+ * pal_recvmsg answers how much it read, sets *oobn to how much of oob it
+ * filled and *flags to the flags the system set on the message, in the
+ * system's own MSG_ bits, and fills in *from, which may be NULL. pal_sendmsg
+ * answers how much of buf went, and sends to `to`, NULL on a connected
+ * socket.
+ *
+ * A stream needs at least one byte of data to carry control messages, so
+ * with some oob and an empty buf, both move a byte of their own, as Go's
+ * syscall package does, which on Linux and AIX leaves datagram sockets out. pal_recvmsg counts
+ * that byte, and pal_sendmsg answers 0 whenever there is oob and no data.
+ * Descriptors that arrive in an SCM_RIGHTS message are close-on-exec, as
+ * Go's UnixConn makes them. */
+int64_t pal_recvmsg(int64_t fd, void *buf, int64_t n, void *oob, int64_t oobcap,
+                    int64_t *oobn, int32_t *flags, PalSockAddr *from, PalErrno *err);
+int64_t pal_sendmsg(int64_t fd, const void *buf, int64_t n, const void *oob,
+                    int64_t oobn, const PalSockAddr *to, PalErrno *err);
+
+/* One buffer of a gathered write, laid out the way the system's own is,
+ * struct iovec or WSABUF, so that an array of them goes to the system as it
+ * stands. Set base and len by name, since their order differs. */
+#if defined(BURROW_OS_WINDOWS)
+typedef struct PalIovec {
+    uint32_t len;
+    void *base;
+} PalIovec;
+#else
+typedef struct PalIovec {
+    void *base;
+    size_t len;
+} PalIovec;
+#endif
+
+/* writev on a connected socket: sends the count buffers in v as one write
+ * and answers how much of them went. It is sendmsg underneath, or WSASend on
+ * Windows, so that a write to a stream the other end has closed fails with
+ * EPIPE and raises no SIGPIPE, as pal_sendto's does. */
+int64_t pal_writev(int64_t fd, const PalIovec *v, int32_t count, PalErrno *err);
+
 /* Socket options, ours, for the same reason the signal numbers are: the level
  * and name pairs differ between platforms and a caller should not have to know
  * which. The set is what Go's net package actually sets, and it grows from
@@ -1704,7 +1760,11 @@ enum {
     PAL_TCP_KEEPCNT,
     PAL_IP_TTL,
     PAL_IPV6_V6ONLY,
-    PAL_IPV6_HOPLIMIT
+    PAL_IPV6_HOPLIMIT,
+    PAL_IP_MULTICAST_LOOP,
+    PAL_IPV6_MULTICAST_IF,
+    PAL_IPV6_MULTICAST_LOOP,
+    PAL_SO_TYPE
 };
 
 /* A value is 1 or 0 for the options that are on or off, a count for the
@@ -1712,9 +1772,29 @@ enum {
  * TCP ones. PAL_SO_LINGER is the linger time in seconds, or -1 for lingering
  * off. PAL_SO_ERROR only reads, and what it reads is a PalErrno, PAL_OK when
  * there is no error, with the native code behind it kept for
- * pal_errno_native. An option the platform does not have is PAL_ENOTSUP. */
+ * pal_errno_native. PAL_SO_TYPE only reads too, and what it reads is a
+ * PAL_SOCK_ type, or 0 for a type with no name here. PAL_IPV6_MULTICAST_IF is
+ * an interface index. An option the platform does not have is PAL_ENOTSUP. */
 bool pal_getsockopt(int64_t fd, int32_t opt, int64_t *value, PalErrno *err);
 bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err);
+
+/* The multicast options that take a request rather than a number.
+ *
+ * PAL_MREQ_IPV4_IF is IP_MULTICAST_IF, PAL_MREQ_IPV4_JOIN is
+ * IP_ADD_MEMBERSHIP for the four bytes of group, and PAL_MREQ_IPV6_JOIN is
+ * IPV6_JOIN_GROUP for its sixteen. Linux names an IPv4 interface by its index
+ * and every other system by one of its addresses, ifaddr, which is all zeros
+ * for the system's choice, so a caller fills in both and each system reads the
+ * one it wants. IPv6 always goes by the index, 0 for the system's choice. */
+enum { PAL_MREQ_IPV4_IF = 1, PAL_MREQ_IPV4_JOIN, PAL_MREQ_IPV6_JOIN };
+
+typedef struct PalMreq {
+    uint8_t group[16];
+    uint8_t ifaddr[4];
+    int32_t index;
+} PalMreq;
+
+bool pal_setsockopt_mreq(int64_t fd, int32_t opt, const PalMreq *m, PalErrno *err);
 
 enum { PAL_SHUT_RD = 0, PAL_SHUT_WR = 1, PAL_SHUT_RDWR = 2 };
 bool pal_shutdown(int64_t fd, int32_t how, PalErrno *err);
@@ -1725,6 +1805,19 @@ bool pal_shutdown(int64_t fd, int32_t how, PalErrno *err);
  * and then the caller uses SOMAXCONN. */
 int32_t pal_listen_backlog_max(void);
 
+/* Linux's unix.KernelVersionGE: whether the running kernel is major.minor or
+ * newer, by the release uname gives, such as "6.8.0-45-generic". A release
+ * that does not parse counts as new enough. False on every other system. */
+bool pal_kernel_version_ge(int32_t major, int32_t minor);
+
+/* Whether the TCP socket fd is speaking Multipath TCP, which is the second half
+ * of Go's isUsingMultipathTCP. With sol_mptcp, which kernels from 5.16 on have,
+ * that is getsockopt MPTCP_INFO not failing with EOPNOTSUPP or ENOPROTOOPT, the
+ * errors of a connection that fell back to plain TCP, and without it the
+ * socket having been made with PAL_IPPROTO_MPTCP. False on every system but
+ * Linux. */
+bool pal_mptcp_in_use(int64_t fd, bool sol_mptcp);
+
 /* One result from a name lookup. */
 typedef struct PalAddrInfo {
     PalSockAddr addr;
@@ -1732,16 +1825,87 @@ typedef struct PalAddrInfo {
     int32_t protocol;
 } PalAddrInfo;
 
-/* Resolve host and service into at most cap results, returning how many were
- * written, or -1. Nothing is allocated, which is the difference from the
+/* The ways the system's resolver says a lookup failed, which are the EAI_ codes
+ * Go's cgo resolver tells apart. PAL_EAI_OTHER is any code not listed, and the
+ * text says which. */
+enum {
+    PAL_EAI_OTHER = 1,
+    PAL_EAI_ADDRFAMILY = 2,
+    PAL_EAI_AGAIN = 3,
+    PAL_EAI_NODATA = 4,
+    PAL_EAI_NONAME = 5,
+    PAL_EAI_OVERFLOW = 6,
+    PAL_EAI_SERVICE = 7,
+    PAL_EAI_SYSTEM = 8
+};
+
+/* Why a lookup failed. code is a PAL_EAI_ value, err is what errno said for
+ * PAL_EAI_SYSTEM and 0 when it said nothing, and text is gai_strerror's words
+ * for the code, which is the text of Go's addrinfoErrno. */
+typedef struct PalLookupError {
+    int32_t code;
+    PalErrno err;
+    char text[120];
+} PalLookupError;
+
+/* Flags for pal_getaddrinfo, which are the AI_ flags Go's cgo resolver passes.
+ * A flag the system does not have, or does not take in a query, is dropped. */
+enum { PAL_AI_CANONNAME = 1, PAL_AI_V4MAPPED = 2, PAL_AI_ALL = 4 };
+
+/* Resolve host and service, either of which may be NULL, into out, and answer
+ * how many results there were, which may be more than cap. Only the first cap
+ * are written, so a caller that gets back more than it had room for asks
+ * again with more room. Nothing is allocated, which is the difference from the
  * platform call this sits on and the reason there is no free to pair with it.
+ * family is PAL_AF_UNSPEC for either, socktype and protocol are 0 for any.
+ * Failure is -1, with err filled in. A result in a family this layer has no
+ * shape for comes back with PAL_AF_UNSPEC.
  *
- * This is the blocking resolver, which runs on a thread of its own the way Go's
- * cgo resolver does. The pure Go resolver, which reads resolv.conf and speaks
- * DNS itself, is portable code above this line and does not come through
- * here. */
+ * This is the blocking resolver, the system's own, and a call can take as long
+ * as the system's DNS timeouts. net runs it on a thread of its own the way Go
+ * runs its cgo resolver, so that no goroutine's thread waits on it. The pure
+ * resolver, which reads resolv.conf and speaks DNS itself, is portable code
+ * above this line and does not come through here. */
 int64_t pal_getaddrinfo(const char *host, const char *service, int32_t family,
-                        int32_t socktype, PalAddrInfo *out, int64_t cap, PalErrno *err);
+                        int32_t socktype, int32_t protocol, int32_t flags,
+                        PalAddrInfo *out, int64_t cap, PalLookupError *err);
+
+/* The name the system has for addr, from getnameinfo with NI_NAMEREQD, into
+ * host with its NUL. False with err filled in on failure, and PAL_EAI_OVERFLOW
+ * there means cap was too small. */
+bool pal_getnameinfo(const PalSockAddr *addr, char *host, int64_t cap,
+                     PalLookupError *err);
+
+/* res_nsearch, or res_search on Linux and OpenBSD as in Go: a DNS query for
+ * name of type rtype and class rclass, through the system's stub resolver,
+ * with the reply into ans. Answers the reply's length, which can be more than
+ * cap when the reply did not fit, -1 when the query failed, or -2 when
+ * res_ninit did, with its errno as the error or PAL_EOTHER if it left none.
+ * The error of a -1 is PAL_ENOSYS where the call is not there to reach without
+ * linking another library, which is glibc older than 2.34 and every system but
+ * Linux, macOS and the BSDs. Go's cgo resolver uses this for CNAME and goes on
+ * to its own when it fails, so ENOSYS costs nothing but the system's opinion. */
+int64_t pal_res_search(const char *name, int32_t rclass, int32_t rtype, uint8_t *ans,
+                       int64_t cap, PalErrno *err);
+
+/* ------------------------------------------------------------- interfaces
+ *
+ * The machine's network interfaces and their addresses, for net.Interfaces and
+ * the rest of interface.go. Each platform has its own way to ask and Go uses
+ * each one directly: a netlink dump on Linux, the routing sysctls on macOS and
+ * the BSDs, which getifaddrs and getifmaddrs read for us here, and
+ * GetAdaptersAddresses on Windows, reached through LoadLibrary so that nothing
+ * new goes on the link line. Linux's multicast groups are files in /proc,
+ * which net reads itself the way Go does, so the call for them answers nothing
+ * there. wasip1 and Emscripten have no interfaces to list and answer none,
+ * which is what Go's stub does. illumos, AIX and Cosmopolitan answer
+ * PAL_ENOSYS until somebody needs them.
+ *
+ * Each call fills out with up to cap records and answers how many there are,
+ * which can be more than cap, so that the caller can grow its buffer and ask
+ * again, or -1 on failure. A failure says which call failed as well as how,
+ * since Go wraps the error in a SyscallError named for it on Linux and
+ * Windows and hands the BSDs' back as it is. */
 
 enum {
     PAL_IFF_UP = 1u << 0,
@@ -1761,10 +1925,46 @@ typedef struct PalInterface {
     int32_t hwaddr_len;
 } PalInterface;
 
-/* The machine's network interfaces into out, returning how many were written,
- * or -1. Addresses are not here: they are a second call with a different shape
- * and they arrive with net. */
-int64_t pal_if_enumerate(PalInterface *out, int64_t cap, PalErrno *err);
+/* How a call here failed: err, and the name Go gives the call in its
+ * SyscallError, such as "netlinkrib", or NULL where Go gives the errno with no
+ * name around it. */
+typedef struct PalIfError {
+    const char *call;
+    PalErrno err;
+} PalIfError;
+
+/* An address of an interface. A PAL_IFA_NET one is an address and its mask,
+ * which is a net.IPNet, with mask_len 4 or 16, or 0 for a mask Go would have
+ * left nil. A PAL_IFA_ADDR one is the address alone, which is a net.IPAddr:
+ * the multicast groups, and Windows' anycast addresses. addr has 4 bytes for
+ * PAL_AF_INET and 16 for PAL_AF_INET6, and the zone a BSD kernel keeps inside
+ * a link local IPv6 address has been taken out, as Go takes it out. */
+enum { PAL_IFA_NET = 0, PAL_IFA_ADDR = 1 };
+
+typedef struct PalIfAddr {
+    int32_t index;
+    int32_t family;
+    int32_t kind;
+    int32_t mask_len;
+    uint8_t addr[16];
+    uint8_t mask[16];
+} PalIfAddr;
+
+/* The interface with this index, or all of them in the order the system lists
+ * them for 0. */
+int64_t pal_if_enumerate(int32_t index, PalInterface *out, int64_t cap,
+                         PalIfError *err);
+
+/* The unicast addresses of the interface with this index, or of all of them
+ * for 0, and on Windows the anycast ones after each interface's unicast
+ * ones. */
+int64_t pal_if_addrs(int32_t index, PalIfAddr *out, int64_t cap, PalIfError *err);
+
+/* The multicast groups the interface with this index has joined, as
+ * PAL_IFA_ADDR records. None on Linux, where net reads them from /proc, and
+ * none on NetBSD, OpenBSD and DragonFly, which Go does not ask either. */
+int64_t pal_if_multicast_addrs(int32_t index, PalIfAddr *out, int64_t cap,
+                               PalIfError *err);
 
 /* --------------------------------------------------------------------- poll
  *

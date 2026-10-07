@@ -14,6 +14,7 @@
 #include "burrow/clock.h"
 #include "burrow/error.h"
 #include "burrow/io.h"
+#include "burrow/mem/heap.h"
 #include "burrow/net.h"
 #include "burrow/os.h"
 #include "burrow/sema.h"
@@ -187,6 +188,44 @@ Int burrow__pfd_read_from(burrow__PollFD *fd, Slice p, PalSockAddr *from, Error 
     return pfd_recv(fd, p, from, err);
 }
 
+/* poll.FD.ReadMsg. Unlike a read, an empty p still goes to the system,
+ * since the control messages may be all there is. */
+Int burrow__pfd_read_msg(burrow__PollFD *fd, Slice p, Slice oob, Int *oobn, Int *flags,
+                         PalSockAddr *from, Error *err) {
+    *oobn = 0;
+    *flags = 0;
+    if (!pfd_lock(fd, true)) {
+        BURROW_OUT(err, net_err_closed);
+        return 0;
+    }
+    Int n = 0;
+    Error e = pfd_prepare(fd, BURROW_POLL_READ);
+    while (!BURROW_FAILED(e)) {
+        PalErrno pe = PAL_OK;
+        int64_t on = 0;
+        int32_t fl = 0;
+        int64_t r =
+            pal_recvmsg(fd->sysfd, p.p, p.len, oob.p, oob.len, &on, &fl, from, &pe);
+        if (r >= 0) {
+            n = (Int)r;
+            *oobn = (Int)on;
+            *flags = (Int)fl;
+            e = pfd_eof(fd, n, BURROW_NO_ERROR);
+            break;
+        }
+        if (pe == PAL_EINTR)
+            continue;
+        if (pe == PAL_EAGAIN) {
+            e = pfd_wait(fd, BURROW_POLL_READ);
+            continue;
+        }
+        e = burrow__os_errno(pe);
+    }
+    pfd_unlock(fd, true);
+    BURROW_OUT(err, e);
+    return n;
+}
+
 /* ------------------------------------------------------------- writing */
 
 Int burrow__pfd_write(burrow__PollFD *fd, Slice p, Error *err) {
@@ -244,6 +283,176 @@ Int burrow__pfd_write_to(burrow__PollFD *fd, Slice p, const PalSockAddr *to,
         if (r >= 0) {
             /* A datagram goes whole or not at all, so Go reports all of p. */
             n = p.len;
+            break;
+        }
+        if (pe == PAL_EINTR)
+            continue;
+        if (pe == PAL_EAGAIN) {
+            e = pfd_wait(fd, BURROW_POLL_WRITE);
+            continue;
+        }
+        e = burrow__os_errno(pe);
+    }
+    pfd_unlock(fd, false);
+    BURROW_OUT(err, e);
+    return n;
+}
+
+/* How many buffers one writev takes. Go does not ask sysconf either: Linux
+ * and Darwin take 1024, and AIX and Solaris the 16 XOPEN_IOV_MAX promises.
+ * Windows has no such limit, and Go hands WSASend every buffer at once. */
+#if defined(BURROW_OS_AIX) || defined(BURROW_OS_SOLARIS)
+#define PFD_MAX_VEC 16
+#else
+#define PFD_MAX_VEC 1024
+#endif
+
+static burrow__NetWritevHook pfd_did_writev;
+
+void burrow__pfd_set_writev_hook(burrow__NetWritevHook f) {
+    pfd_did_writev = f;
+}
+
+void burrow__net_buffers_consume(NetBuffers *v, int64_t n) {
+    while (v->len > 0) {
+        Slice *b0 = (Slice *)v->p;
+        if ((int64_t)b0->len > n) {
+            *b0 = slice_sub(*b0, (Int)n, b0->len);
+            return;
+        }
+        n -= (int64_t)b0->len;
+        *b0 = slice_nil(TYPE_BYTE);
+        *v = slice_sub(*v, 1, v->len);
+    }
+}
+
+#if defined(BURROW_OS_WINDOWS)
+/* How many WSABUFs all of v takes, which is newWSABufs's count less the empty
+ * ones, which are left out here as they are on the other systems. */
+static int32_t pfd_vec_cap(const NetBuffers *v) {
+    int64_t k = 0;
+    const Slice *b = (const Slice *)v->p;
+    for (Int i = 0; i < v->len; i++)
+        k += ((int64_t)b[i].len + PFD_MAX_RW - 1) / PFD_MAX_RW;
+    return k > INT32_MAX / 2 ? INT32_MAX / 2 : (int32_t)k;
+}
+
+/* The non-empty buffers of v into iov, which has room for cap, with one past
+ * a gigabyte cut into gigabyte pieces, as newWSABufs does. */
+static int32_t pfd_iovecs(const burrow__PollFD *fd, const NetBuffers *v, PalIovec *iov,
+                          int32_t cap) {
+    (void)fd;
+    int32_t k = 0;
+    const Slice *b = (const Slice *)v->p;
+    for (Int i = 0; i < v->len && k < cap; i++) {
+        Byte *p = (Byte *)b[i].p;
+        for (Int len = b[i].len; len > 0 && k < cap; k++) {
+            Int m = len > PFD_MAX_RW ? PFD_MAX_RW : len;
+            iov[k].base = p;
+            iov[k].len = (uint32_t)m;
+            p += m;
+            len -= m;
+        }
+    }
+    return k;
+}
+#else
+static int32_t pfd_vec_cap(const NetBuffers *v) {
+    return v->len < PFD_MAX_VEC ? (int32_t)v->len : PFD_MAX_VEC;
+}
+
+/* The next run of non-empty buffers of v into iov, which has room for cap,
+ * cutting one past a gigabyte on a stream so that the rest goes next time. */
+static int32_t pfd_iovecs(const burrow__PollFD *fd, const NetBuffers *v, PalIovec *iov,
+                          int32_t cap) {
+    int32_t k = 0;
+    const Slice *b = (const Slice *)v->p;
+    for (Int i = 0; i < v->len; i++) {
+        Int len = b[i].len;
+        if (len == 0)
+            continue;
+        bool cut = fd->stream && len > PFD_MAX_RW;
+        if (cut)
+            len = PFD_MAX_RW;
+        iov[k].base = b[i].p;
+        iov[k].len = (size_t)len;
+        k++;
+        if (cut || k == cap)
+            break;
+    }
+    return k;
+}
+#endif
+
+int64_t burrow__pfd_writev(burrow__PollFD *fd, NetBuffers *v, Error *err) {
+    if (!pfd_lock(fd, false)) {
+        BURROW_OUT(err, net_err_closed);
+        return 0;
+    }
+    Error e = pfd_prepare(fd, BURROW_POLL_WRITE);
+    int32_t cap = pfd_vec_cap(v);
+    PalIovec *iov = NULL;
+    if (!BURROW_FAILED(e) && cap > 0) {
+        iov = (PalIovec *)mem_alloc(heap_allocator(), (size_t)cap * sizeof(PalIovec),
+                                    _Alignof(PalIovec));
+        if (iov == NULL)
+            e = burrow_err_out_of_memory;
+    }
+    int64_t n = 0;
+    /* No room was made when there is nothing to write: no buffers, or on
+     * Windows only empty ones. */
+    while (!BURROW_FAILED(e) && iov != NULL && v->len > 0) {
+        int32_t k = pfd_iovecs(fd, v, iov, cap);
+        if (k == 0)
+            break;
+        PalErrno pe = PAL_OK;
+        int64_t wrote = pal_writev(fd->sysfd, iov, k, &pe);
+        if (wrote < 0)
+            wrote = 0;
+        if (pfd_did_writev != NULL)
+            pfd_did_writev((Int)wrote);
+        n += wrote;
+        burrow__net_buffers_consume(v, wrote);
+        if (pe == PAL_EINTR)
+            continue;
+        if (pe == PAL_EAGAIN) {
+            e = pfd_wait(fd, BURROW_POLL_WRITE);
+            continue;
+        }
+        if (pe != PAL_OK) {
+            e = burrow__os_errno(pe);
+            break;
+        }
+        if (n == 0) {
+            e = io_err_unexpected_eof;
+            break;
+        }
+    }
+    if (iov != NULL)
+        mem_free(heap_allocator(), iov, (size_t)cap * sizeof(PalIovec),
+                 _Alignof(PalIovec));
+    pfd_unlock(fd, false);
+    BURROW_OUT(err, e);
+    return n;
+}
+
+/* poll.FD.WriteMsg, which answers all of oob as sent when the message
+ * went. */
+Int burrow__pfd_write_msg(burrow__PollFD *fd, Slice p, Slice oob, const PalSockAddr *to,
+                          Int *oobn, Error *err) {
+    *oobn = 0;
+    if (!pfd_lock(fd, false)) {
+        BURROW_OUT(err, net_err_closed);
+        return 0;
+    }
+    Int n = 0;
+    Error e = pfd_prepare(fd, BURROW_POLL_WRITE);
+    while (!BURROW_FAILED(e)) {
+        PalErrno pe = PAL_OK;
+        int64_t r = pal_sendmsg(fd->sysfd, p.p, p.len, oob.p, oob.len, to, &pe);
+        if (r >= 0) {
+            n = (Int)r;
+            *oobn = oob.len;
             break;
         }
         if (pe == PAL_EINTR)
@@ -322,4 +531,54 @@ Error burrow__pfd_set_deadline(burrow__PollFD *fd, Time t, uint32_t mode) {
 
 Error burrow__pfd_wait_write(burrow__PollFD *fd) {
     return pfd_wait(fd, BURROW_POLL_WRITE);
+}
+
+/* ------------------------------------------------------------ the raw calls */
+
+BURROW_SENTINEL_ERROR(burrow__net_err_unsupported_wait,
+                      "waiting for unsupported file type");
+
+/* pollDesc.prepare and wait for a descriptor that may not be in the poller
+ * yet, which Go lets through and then refuses to wait for. */
+static Error pfd_raw_prepare(burrow__PollFD *fd, uint32_t mode) {
+    if (fd->pd == NULL)
+        return BURROW_NO_ERROR;
+    return pfd_prepare(fd, mode);
+}
+
+static Error pfd_raw_wait(burrow__PollFD *fd, uint32_t mode) {
+    if (fd->pd == NULL)
+        return burrow__net_err_unsupported_wait;
+    return pfd_wait(fd, mode);
+}
+
+Error burrow__pfd_raw_control(burrow__PollFD *fd, SyscallFdFunc f) {
+    Error e = burrow__pfd_incref(fd);
+    if (BURROW_FAILED(e))
+        return e;
+    f.f(f.env, (Uintptr)fd->sysfd);
+    (void)burrow__pfd_decref(fd);
+    return BURROW_NO_ERROR;
+}
+
+static Error pfd_raw_io(burrow__PollFD *fd, SyscallFdDoneFunc f, bool read) {
+    uint32_t mode = read ? BURROW_POLL_READ : BURROW_POLL_WRITE;
+    if (!pfd_lock(fd, read))
+        return net_err_closed;
+    Error e = pfd_raw_prepare(fd, mode);
+    while (!BURROW_FAILED(e)) {
+        if (f.f(f.env, (Uintptr)fd->sysfd))
+            break;
+        e = pfd_raw_wait(fd, mode);
+    }
+    pfd_unlock(fd, read);
+    return e;
+}
+
+Error burrow__pfd_raw_read(burrow__PollFD *fd, SyscallFdDoneFunc f) {
+    return pfd_raw_io(fd, f, true);
+}
+
+Error burrow__pfd_raw_write(burrow__PollFD *fd, SyscallFdDoneFunc f) {
+    return pfd_raw_io(fd, f, false);
 }

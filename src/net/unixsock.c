@@ -292,9 +292,16 @@ static bool nx_from_sockaddr(NxAddr *out, const PalSockAddr *sa, int32_t sotype)
 
 /* -------------------------------------------------------------- the socket */
 
+/* UnixAddr.String, for a Control function. */
+static Str nx_text(const void *addr, int32_t family, Alloc *a) {
+    (void)family;
+    return str_clone(a, ((const NetUnixAddr *)addr)->name);
+}
+
 /* unixSocket. A dial treats an empty name as no address at all. */
-static Error nx_socket(burrow__NetFD *fd, Str net, int32_t sotype,
-                       const NetUnixAddr *laddr, const NetUnixAddr *raddr, bool dial) {
+static Error nx_socket(burrow__NetFD *fd, const burrow__NetSysOpts *o, Str net,
+                       int32_t sotype, const NetUnixAddr *laddr,
+                       const NetUnixAddr *raddr, bool dial) {
     if (dial) {
         if (laddr != NULL && laddr->name.len == 0)
             laddr = NULL;
@@ -303,8 +310,9 @@ static Error nx_socket(burrow__NetFD *fd, Str net, int32_t sotype,
         if (raddr == NULL && (sotype != PAL_SOCK_DGRAM || laddr == NULL))
             return burrow__net_err_missing_address;
     }
-    return burrow__netfd_socket(fd, net, PAL_AF_UNIX, sotype, 0, false, laddr, raddr,
-                                false, nx_to_sockaddr, (Time){0});
+    return burrow__netfd_socket(fd, o != NULL ? &o->ctl : NULL, net, PAL_AF_UNIX,
+                                sotype, 0, false, laddr, raddr, false, nx_to_sockaddr,
+                                nx_text);
 }
 
 static bool nx_is_oom(Error e) {
@@ -330,13 +338,13 @@ static void nx_new_conn(NetUnixConn *c) {
         c->c.laddr = net_unix_addr_as_addr(&c->laddr.a);
     if (nx_from_sockaddr(&c->raddr, &c->c.fd.raddr, c->c.fd.sotype))
         c->c.raddr = net_unix_addr_as_addr(&c->raddr.a);
+    c->c.raw = (burrow__NetRawConn){&c->c.fd, c->c.laddr, c->c.raddr, false};
 }
 
-/* A new conn for a dial or for ListenUnixgram, or the error, which is an
- * OpError with the op "dial" or "listen". */
-static NetUnixConn *nx_conn(Alloc *a, bool dial, Str network, Str net, int32_t sotype,
-                            const NetUnixAddr *laddr, const NetUnixAddr *raddr,
-                            Error *err) {
+/* A new conn for a dial or for ListenUnixgram, or the error as it is. */
+static NetUnixConn *nx_sys_conn(Alloc *a, const burrow__NetSysOpts *o, bool dial,
+                                Str net, int32_t sotype, const NetUnixAddr *laddr,
+                                const NetUnixAddr *raddr, Error *err) {
     NetUnixConn *c =
         (NetUnixConn *)mem_alloc(a, sizeof(NetUnixConn), _Alignof(NetUnixConn));
     if (c == NULL) {
@@ -344,13 +352,9 @@ static NetUnixConn *nx_conn(Alloc *a, bool dial, Str network, Str net, int32_t s
         return NULL;
     }
     c->c.alloc = a;
-    Error e = nx_socket(&c->c.fd, net, sotype, laddr, raddr, dial);
+    Error e = nx_socket(&c->c.fd, o, net, sotype, laddr, raddr, dial);
     if (BURROW_FAILED(e)) {
         mem_free(a, c, sizeof(NetUnixConn), _Alignof(NetUnixConn));
-        if (!nx_is_oom(e))
-            e = burrow__net_op_error(dial ? NX_LIT("dial") : NX_LIT("listen"), network,
-                                     dial ? net_unix_addr_as_addr(laddr) : nx_nil_addr,
-                                     net_unix_addr_as_addr(dial ? raddr : laddr), e);
         BURROW_OUT(err, e);
         return NULL;
     }
@@ -359,8 +363,48 @@ static NetUnixConn *nx_conn(Alloc *a, bool dial, Str network, Str net, int32_t s
     return c;
 }
 
-NetUnixConn *net_dial_unix(Alloc *a, Str network, const NetUnixAddr *laddr,
-                           const NetUnixAddr *raddr, Error *err) {
+/* The same with the error an OpError with the op "dial" or "listen". */
+static NetUnixConn *nx_conn(Alloc *a, const burrow__NetSysOpts *o, bool dial,
+                            Str network, Str net, int32_t sotype,
+                            const NetUnixAddr *laddr, const NetUnixAddr *raddr,
+                            Error *err) {
+    Error e = BURROW_NO_ERROR;
+    NetUnixConn *c = nx_sys_conn(a, o, dial, net, sotype, laddr, raddr, &e);
+    if (c == NULL && !nx_is_oom(e))
+        e = burrow__net_op_error(dial ? NX_LIT("dial") : NX_LIT("listen"), network,
+                                 dial ? net_unix_addr_as_addr(laddr) : nx_nil_addr,
+                                 net_unix_addr_as_addr(dial ? raddr : laddr), e);
+    BURROW_OUT(err, e);
+    return c;
+}
+
+NetUnixConn *burrow__net_sys_dial_unix(Alloc *a, const burrow__NetSysOpts *o,
+                                       Str network, const NetUnixAddr *laddr,
+                                       const NetUnixAddr *raddr, Error *err) {
+    Str net = BURROW_STR_EMPTY;
+    int32_t sotype = 0;
+    if (!nx_network(network, &net, &sotype)) {
+        BURROW_OUT(err, net_unknown_network_error(error_allocator(), network));
+        return NULL;
+    }
+    return nx_sys_conn(a, o, true, net, sotype, laddr, raddr, err);
+}
+
+NetUnixConn *burrow__net_sys_listen_unixgram(Alloc *a, const burrow__NetSysOpts *o,
+                                             Str network, const NetUnixAddr *laddr,
+                                             Error *err) {
+    Str net = BURROW_STR_EMPTY;
+    int32_t sotype = 0;
+    if (!nx_network(network, &net, &sotype)) {
+        BURROW_OUT(err, net_unknown_network_error(error_allocator(), network));
+        return NULL;
+    }
+    return nx_sys_conn(a, o, false, net, sotype, laddr, NULL, err);
+}
+
+NetUnixConn *burrow__net_dial_unix(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                                   const NetUnixAddr *laddr, const NetUnixAddr *raddr,
+                                   Error *err) {
     Str net = BURROW_STR_EMPTY;
     int32_t sotype = 0;
     if (!nx_network(network, &net, &sotype)) {
@@ -370,7 +414,50 @@ NetUnixConn *net_dial_unix(Alloc *a, Str network, const NetUnixAddr *laddr,
                                              net_unix_addr_as_addr(raddr), u));
         return NULL;
     }
-    return nx_conn(a, true, network, net, sotype, laddr, raddr, err);
+    return nx_conn(a, o, true, network, net, sotype, laddr, raddr, err);
+}
+
+NetUnixConn *net_dial_unix(Alloc *a, Str network, const NetUnixAddr *laddr,
+                           const NetUnixAddr *raddr, Error *err) {
+    return burrow__net_dial_unix(a, NULL, network, laddr, raddr, err);
+}
+
+OsFile *net_unix_conn_file(NetUnixConn *c, Alloc *a, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return NULL;
+    }
+    return burrow__conn_file(&c->c, a, err);
+}
+
+NetUnixConn *burrow__net_unix_conn_from_file(Alloc *a, const burrow__NetFileSock *fs,
+                                             Error *err) {
+    NetUnixConn *c =
+        (NetUnixConn *)mem_alloc(a, sizeof(NetUnixConn), _Alignof(NetUnixConn));
+    if (c == NULL) {
+        (void)pal_socket_close(fs->s, NULL);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    c->c.alloc = a;
+    Error e = burrow__netfd_from_file(&c->c.fd, fs);
+    if (BURROW_FAILED(e)) {
+        mem_free(a, c, sizeof(NetUnixConn), _Alignof(NetUnixConn));
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    nx_new_conn(c);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return c;
+}
+
+SyscallRawConn net_unix_conn_syscall_conn(NetUnixConn *c, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return (SyscallRawConn){NULL, NULL};
+    }
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return burrow__net_raw_conn(&c->c.raw);
 }
 
 NetUnixConn *net_listen_unixgram(Alloc *a, Str network, const NetUnixAddr *laddr,
@@ -389,7 +476,7 @@ NetUnixConn *net_listen_unixgram(Alloc *a, Str network, const NetUnixAddr *laddr
                                         nx_nil_addr, burrow__net_err_missing_address));
         return NULL;
     }
-    return nx_conn(a, false, network, net, sotype, laddr, NULL, err);
+    return nx_conn(a, NULL, false, network, net, sotype, laddr, NULL, err);
 }
 
 Int net_unix_conn_read(NetUnixConn *c, Slice p, Error *err) {
@@ -492,6 +579,77 @@ Int net_unix_conn_write_to(NetUnixConn *c, Slice p, NetAddr addr, Error *err) {
         return 0;
     }
     return net_unix_conn_write_to_unix(c, p, (const NetUnixAddr *)addr.data, err);
+}
+
+Int net_unix_conn_read_msg_unix(NetUnixConn *c, Slice p, Slice oob, Alloc *a, Int *oobn,
+                                Int *flags, NetUnixAddr **addr, Error *err) {
+    if (oobn != NULL)
+        *oobn = 0;
+    if (flags != NULL)
+        *flags = 0;
+    if (addr != NULL)
+        *addr = NULL;
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    PalSockAddr from = {0};
+    Int on = 0;
+    Int fl = 0;
+    Error e = BURROW_NO_ERROR;
+    Int n = burrow__netfd_read_msg(&c->c.fd, p, oob, &on, &fl, &from, &e);
+    NxAddr got = {0};
+    if (addr != NULL && nx_from_sockaddr(&got, &from, c->c.fd.sotype) &&
+        got.a.name.len > 0) {
+        *addr = nx_addr_new(a, got.a.name, got.a.net);
+        if (*addr == NULL && BURROW_OK(e))
+            e = burrow_err_out_of_memory;
+    }
+    if (BURROW_FAILED(e) && !nx_is_eof(e) &&
+        !(e.vt == burrow_err_out_of_memory.vt &&
+          e.data == burrow_err_out_of_memory.data))
+        e = burrow__net_op_error(NX_LIT("read"), c->c.fd.net, c->c.laddr, c->c.raddr,
+                                 e);
+    if (oobn != NULL)
+        *oobn = on;
+    if (flags != NULL)
+        *flags = fl;
+    BURROW_OUT(err, e);
+    return n;
+}
+
+Int net_unix_conn_write_msg_unix(NetUnixConn *c, Slice p, Slice oob,
+                                 const NetUnixAddr *addr, Int *oobn, Error *err) {
+    if (oobn != NULL)
+        *oobn = 0;
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    Error e = BURROW_NO_ERROR;
+    Int n = 0;
+    Int on = 0;
+    if (c->c.fd.sotype == PAL_SOCK_DGRAM && c->c.fd.is_connected) {
+        e = net_err_write_to_connected;
+    } else if (addr == NULL) {
+        n = burrow__netfd_write_msg(&c->c.fd, p, oob, NULL, &on, &e);
+    } else if (!nx_str_eq(addr->net, nx_sotype_net(c->c.fd.sotype))) {
+        e = burrow__os_errno(PAL_EAFNOSUPPORT);
+    } else {
+        PalSockAddr to = {0};
+        e = nx_sockaddr(addr->name, &to);
+        if (BURROW_FAILED(e))
+            e = burrow__netfd_write_msg_error(e);
+        else
+            n = burrow__netfd_write_msg(&c->c.fd, p, oob, &to, &on, &e);
+    }
+    if (BURROW_FAILED(e))
+        e = burrow__net_op_error(NX_LIT("write"), c->c.fd.net, c->c.laddr,
+                                 net_unix_addr_as_addr(addr), e);
+    if (oobn != NULL)
+        *oobn = on;
+    BURROW_OUT(err, e);
+    return n;
 }
 
 Error net_unix_conn_close(NetUnixConn *c) {
@@ -623,6 +781,8 @@ static const NetConnVT nx_conn_vt = {
     nx_m_set_write_deadline,
 };
 
+const IoWriterVT *const burrow__nx_conn_writer = &nx_conn_vt.writer;
+
 NetConn net_unix_conn_as_conn(NetUnixConn *c) {
     NetConn conn = {NULL, NULL};
     if (c != NULL) {
@@ -634,6 +794,39 @@ NetConn net_unix_conn_as_conn(NetUnixConn *c) {
 
 NetUnixConn *net_conn_as_unix_conn(NetConn c) {
     if (c.vt != &nx_conn_vt)
+        return NULL;
+    return (NetUnixConn *)c.data;
+}
+
+static Int nx_m_read_from(void *self, Slice p, Alloc *a, NetAddr *addr, Error *err) {
+    return net_unix_conn_read_from((NetUnixConn *)self, p, a, addr, err);
+}
+
+static Int nx_m_write_to(void *self, Slice p, NetAddr addr, Error *err) {
+    return net_unix_conn_write_to((NetUnixConn *)self, p, addr, err);
+}
+
+static const NetPacketConnVT nx_packet_conn_vt = {
+    {&nx_conn_desc, nx_m_close},
+    nx_m_read_from,
+    nx_m_write_to,
+    nx_m_local_addr,
+    nx_m_set_deadline,
+    nx_m_set_read_deadline,
+    nx_m_set_write_deadline,
+};
+
+NetPacketConn net_unix_conn_as_packet_conn(NetUnixConn *c) {
+    NetPacketConn conn = {NULL, NULL};
+    if (c != NULL) {
+        conn.vt = &nx_packet_conn_vt;
+        conn.data = c;
+    }
+    return conn;
+}
+
+NetUnixConn *net_packet_conn_as_unix_conn(NetPacketConn c) {
+    if (c.vt != &nx_packet_conn_vt)
         return NULL;
     return (NetUnixConn *)c.data;
 }
@@ -651,6 +844,7 @@ struct NetUnixListener {
     burrow__NetFD fd;
     Alloc *alloc;
     NxAddr laddr;
+    burrow__NetRawConn raw;
     bool has_laddr;
     bool unlink;
     SyncAtomicBool unlinked;
@@ -658,6 +852,35 @@ struct NetUnixListener {
 
 static NetAddr nx_listener_laddr(const NetUnixListener *l) {
     return l->has_laddr ? net_unix_addr_as_addr(&l->laddr.a) : nx_nil_addr;
+}
+
+NetUnixListener *burrow__net_sys_listen_unix(Alloc *a, const burrow__NetSysOpts *o,
+                                             Str network, const NetUnixAddr *laddr,
+                                             Error *err) {
+    Str net = BURROW_STR_EMPTY;
+    int32_t sotype = 0;
+    if (!nx_network(network, &net, &sotype)) {
+        BURROW_OUT(err, net_unknown_network_error(error_allocator(), network));
+        return NULL;
+    }
+    NetUnixListener *l = (NetUnixListener *)mem_alloc(a, sizeof(NetUnixListener),
+                                                      _Alignof(NetUnixListener));
+    if (l == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    l->alloc = a;
+    Error e = nx_socket(&l->fd, o, net, sotype, laddr, NULL, false);
+    if (BURROW_FAILED(e)) {
+        mem_free(a, l, sizeof(NetUnixListener), _Alignof(NetUnixListener));
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    l->has_laddr = nx_from_sockaddr(&l->laddr, &l->fd.laddr, sotype);
+    l->raw = (burrow__NetRawConn){&l->fd, nx_listener_laddr(l), nx_nil_addr, true};
+    l->unlink = true;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return l;
 }
 
 NetUnixListener *net_listen_unix(Alloc *a, Str network, const NetUnixAddr *laddr,
@@ -677,24 +900,62 @@ NetUnixListener *net_listen_unix(Alloc *a, Str network, const NetUnixAddr *laddr
                                              burrow__net_err_missing_address));
         return NULL;
     }
+    Error e = BURROW_NO_ERROR;
+    NetUnixListener *l = burrow__net_sys_listen_unix(a, NULL, network, laddr, &e);
+    if (l == NULL && !nx_is_oom(e))
+        e = burrow__net_op_error(NX_LIT("listen"), network, (NetAddr){NULL, NULL}, want,
+                                 e);
+    BURROW_OUT(err, e);
+    return l;
+}
+
+OsFile *net_unix_listener_file(NetUnixListener *l, Alloc *a, Error *err) {
+    if (l == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return NULL;
+    }
+    Error e = BURROW_NO_ERROR;
+    OsFile *f = burrow__netfd_dup(&l->fd, nx_listener_laddr(l), nx_nil_addr, a, &e);
+    if (f == NULL && !nx_is_oom(e))
+        e = burrow__net_op_error(NX_LIT("file"), l->fd.net, nx_nil_addr,
+                                 nx_listener_laddr(l), e);
+    BURROW_OUT(err, e);
+    return f;
+}
+
+/* fileListener's UnixListener, which leaves its path alone when it closes,
+ * since the listener it was copied from is the one that made it. */
+NetUnixListener *burrow__net_unix_listener_from_file(Alloc *a,
+                                                     const burrow__NetFileSock *fs,
+                                                     Error *err) {
     NetUnixListener *l = (NetUnixListener *)mem_alloc(a, sizeof(NetUnixListener),
                                                       _Alignof(NetUnixListener));
     if (l == NULL) {
+        (void)pal_socket_close(fs->s, NULL);
         BURROW_OUT(err, burrow_err_out_of_memory);
         return NULL;
     }
     l->alloc = a;
-    Error e = nx_socket(&l->fd, net, sotype, laddr, NULL, false);
+    Error e = burrow__netfd_from_file(&l->fd, fs);
     if (BURROW_FAILED(e)) {
         mem_free(a, l, sizeof(NetUnixListener), _Alignof(NetUnixListener));
-        BURROW_OUT(err, burrow__net_op_error(NX_LIT("listen"), network,
-                                             (NetAddr){NULL, NULL}, want, e));
+        BURROW_OUT(err, e);
         return NULL;
     }
-    l->has_laddr = nx_from_sockaddr(&l->laddr, &l->fd.laddr, sotype);
-    l->unlink = true;
+    l->has_laddr = nx_from_sockaddr(&l->laddr, &l->fd.laddr, l->fd.sotype);
+    l->raw = (burrow__NetRawConn){&l->fd, nx_listener_laddr(l), nx_nil_addr, true};
+    l->unlink = false;
     BURROW_OUT(err, BURROW_NO_ERROR);
     return l;
+}
+
+SyscallRawConn net_unix_listener_syscall_conn(NetUnixListener *l, Error *err) {
+    if (l == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return (SyscallRawConn){NULL, NULL};
+    }
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return burrow__net_raw_conn(&l->raw);
 }
 
 NetUnixConn *net_unix_listener_accept_unix(NetUnixListener *l, Error *err) {
@@ -770,9 +1031,12 @@ static Error nx_l_close(void *self) {
     return net_unix_listener_close((NetUnixListener *)self);
 }
 
+NetConn net_unix_listener_accept(NetUnixListener *l, Error *err) {
+    return net_unix_conn_as_conn(net_unix_listener_accept_unix(l, err));
+}
+
 static NetConn nx_l_accept(void *self, Error *err) {
-    return net_unix_conn_as_conn(
-        net_unix_listener_accept_unix((NetUnixListener *)self, err));
+    return net_unix_listener_accept((NetUnixListener *)self, err);
 }
 
 static NetAddr nx_l_addr(void *self) {
@@ -809,6 +1073,12 @@ NetListener net_unix_listener_as_listener(NetUnixListener *l) {
         nl.data = l;
     }
     return nl;
+}
+
+NetUnixListener *net_listener_as_unix_listener(NetListener l) {
+    if (l.vt != &nx_listener_vt)
+        return NULL;
+    return (NetUnixListener *)l.data;
 }
 
 void net_unix_listener_free(NetUnixListener *l) {

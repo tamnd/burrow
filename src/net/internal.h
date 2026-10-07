@@ -400,6 +400,12 @@ BURROW_OWNS(ret) NetUnixConn *
 burrow__net_dial_unix(Alloc *a, const burrow__NetSysOpts *o, Str network,
                       const NetUnixAddr *laddr, const NetUnixAddr *raddr, Error *err);
 
+/* partialDeadline: the deadline for the next of addrs_remaining addresses
+ * when the whole dial has until deadline, both on the monotonic clock, with
+ * 0 for no deadline. burrow__net_err_timeout when the time is up. */
+Error burrow__net_partial_deadline(int64_t now, int64_t deadline, Int addrs_remaining,
+                                   int64_t *out);
+
 /* parseNetwork: the network without the protocol an "ip:" one has after it,
  * in *afnet, and that protocol's number in *proto. needs_proto turns down an
  * "ip" network that has none. */

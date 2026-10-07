@@ -612,6 +612,25 @@ static NetConn dl_dial_single(const DlSys *sd, Alloc *a, Context ctx, const DlAd
     return c;
 }
 
+Error burrow__net_partial_deadline(int64_t now, int64_t deadline, Int addrs_remaining,
+                                   int64_t *out) {
+    *out = deadline;
+    if (deadline == 0)
+        return BURROW_NO_ERROR;
+    int64_t remaining = deadline - now;
+    if (remaining <= 0) {
+        *out = 0;
+        return burrow__net_err_timeout;
+    }
+    /* Tentatively allocate equal time to each remaining address. */
+    int64_t timeout = remaining / addrs_remaining;
+    /* If the time per address is too short, steal from the end of the list. */
+    if (timeout < DL_SANE_MINIMUM)
+        timeout = remaining < DL_SANE_MINIMUM ? remaining : DL_SANE_MINIMUM;
+    *out = now + timeout;
+    return BURROW_NO_ERROR;
+}
+
 /* dialSerial: a connection to the first of ras that answers, with the time
  * left split between them, and the first error when none does. */
 static NetConn dl_dial_serial(const DlSys *sd, Alloc *a, Context ctx, const DlAddr *ras,
@@ -633,21 +652,16 @@ static NetConn dl_dial_serial(const DlSys *sd, Alloc *a, Context ctx, const DlAd
         ContextCancelFunc cancel = {NULL, NULL};
         int64_t deadline = 0;
         if (context_deadline(ctx, &deadline)) {
-            /* partialDeadline */
-            int64_t now = burrow_nanotime();
-            int64_t remaining = deadline - now;
-            if (remaining <= 0) {
+            int64_t partial = 0;
+            Error pe = burrow__net_partial_deadline(burrow_nanotime(), deadline, n - i,
+                                                    &partial);
+            if (BURROW_FAILED(pe)) {
                 /* Ran out of time. */
                 if (BURROW_OK(first))
                     first = burrow__net_op_error(DL_LIT("dial"), sd->network,
-                                                 sd->d->local_addr, dl_addr(ra),
-                                                 burrow__net_err_timeout);
+                                                 sd->d->local_addr, dl_addr(ra), pe);
                 break;
             }
-            int64_t timeout = remaining / (n - i);
-            if (timeout < DL_SANE_MINIMUM)
-                timeout = remaining < DL_SANE_MINIMUM ? remaining : DL_SANE_MINIMUM;
-            int64_t partial = now + timeout;
             if (partial < deadline) {
                 sub = context_with_deadline(heap_allocator(), ctx, partial, &cancel);
                 if (BURROW_CONTEXT_IS_NIL(sub)) {

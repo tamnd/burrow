@@ -951,7 +951,26 @@ for (size_t i = 0; i < sizeof reqs / sizeof reqs[0]; i++) {
 That prints:
 
 ```
-PENDING
+GET /
+  200 OK
+  Content-Type: text/html; charset=utf-8
+  Last-Modified: Fri, 02 Jan 2026 15:04:05 GMT
+  body: "<h1>burrow</h1>\n"
+GET / with If-Modified-Since: Fri, 02 Jan 2026 15:04:05 GMT
+  304 Not Modified
+  Last-Modified: Fri, 02 Jan 2026 15:04:05 GMT
+GET /notes.txt with Range: bytes=2-5
+  206 Partial Content
+  Content-Type: text/plain; charset=utf-8
+  Content-Range: bytes 2-5/11
+  body: "2345"
+GET /index.html
+  301 Moved Permanently
+  Location: ./
+GET /missing.txt
+  404 Not Found
+  Content-Type: text/plain; charset=utf-8
+  body: "404 page not found\n"
 ```
 
 The Content-Type comes from the file's extension, and from sniffing the first 512 bytes when the extension is unknown. A file with a zero modification time gets no Last-Modified, which is why notes.txt has none. `http_serve_file` and `http_serve_file_fs` serve one named file, and refuse a request whose path has a `..` element in it.

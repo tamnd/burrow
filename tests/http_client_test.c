@@ -846,13 +846,13 @@ static void serve_use_response(void *env, HttpResponseWriter w, HttpRequest *r) 
         write_str(w, cs("wrong body"));
         return;
     }
-    Arena ar;
-    arena_init(&ar, heap_allocator(), 0);
-    Str loc = fmt_sprintf_v(arena_allocator(&ar), "http://%s/other", r->host);
-    HCHECK(http_header_set(http_response_writer_header(w), cs("Location"), loc));
+    /* The header keeps the value it is given, so it goes in the header's
+     * allocator. */
+    HttpHeader h = http_response_writer_header(w);
+    Str loc = fmt_sprintf_v(burrow__map_allocator(h), "http://%s/other", r->host);
+    HCHECK(http_header_set(h, cs("Location"), loc));
     http_response_writer_write_header(w, HTTP_STATUS_FOUND);
     write_str(w, cs("Hello, world."));
-    arena_free(&ar);
 }
 
 static Error use_last_response(void *env, HttpRequest *req, Slice via) {

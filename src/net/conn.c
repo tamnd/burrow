@@ -141,8 +141,10 @@ static Str nc_closing_message(const void *self) {
     return NC_LIT("use of closed network connection");
 }
 
+static Error nc_closing_clone(const void *self, Alloc *a);
+
 static const ErrorVT nc_closing_vt = {
-    &nc_closing_desc, nc_closing_message, NULL, NULL, NULL, NULL, NULL,
+    &nc_closing_desc, nc_closing_message, NULL, NULL, NULL, NULL, nc_closing_clone,
 };
 
 static const NetErrNetClosing nc_closing_value = {0};
@@ -253,6 +255,14 @@ Error burrow__net_map_err(Error err) {
     if (nc_same(err, context_deadline_exceeded))
         return burrow__net_err_timeout;
     return err;
+}
+
+/* There is only the one, so a retained copy is the same error and errors_is
+ * still finds it. */
+static Error nc_closing_clone(const void *self, Alloc *a) {
+    (void)self;
+    (void)a;
+    return net_err_closed;
 }
 
 /* ------------------------------------------------------------------ OpError */

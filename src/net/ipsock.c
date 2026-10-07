@@ -183,10 +183,15 @@ bool burrow__net_inet_from_sockaddr(const PalSockAddr *sa, NetIP *ip, Int *port,
         memcpy(b->ip, sa->addr, 16);
         *ip = slice_from(b->ip, 16, 16, TYPE_BYTE);
         if (sa->scope_id != 0) {
+            /* zoneCache.name: the interface's name, which the cache keeps, or
+             * the index in decimal, which is copied into b. */
             Byte buf[24];
-            Int n = ip_itoa(buf, (int64_t)sa->scope_id);
-            memcpy(b->zone, buf, (size_t)n);
-            *zone = str_from_bytes(b->zone, n);
+            Str z = burrow__net_zone_name((Int)sa->scope_id, buf);
+            if (z.p == buf) {
+                memcpy(b->zone, buf, (size_t)z.len);
+                z = str_from_bytes(b->zone, z.len);
+            }
+            *zone = z;
         }
     } else {
         return false;
@@ -215,28 +220,10 @@ static bool ip_is_v4mapped(const Byte b[16]) {
     return memcmp(b, prefix, 12) == 0;
 }
 
-/* dtoi, which reads the digits at the start of s and stops at the first
- * thing that is not one, or at 0xFFFFFF. */
-static int64_t ip_dtoi(Str s) {
-    int64_t n = 0;
-    for (Int i = 0; i < s.len; i++) {
-        Byte c = s.p[i];
-        if (c < '0' || c > '9')
-            break;
-        n = n * 10 + (c - '0');
-        if (n >= 0xFFFFFF)
-            return 0xFFFFFF;
-    }
-    return n;
-}
-
 /* zoneCache.index: a zone's interface index. Go looks the name up first and
- * reads it as a number when there is no such interface. The lookup arrives
- * with net.Interfaces, and until then every zone is read as a number. */
+ * reads it as a number when there is no such interface. */
 static uint32_t ip_zone_index(Str zone) {
-    if (zone.len == 0)
-        return 0;
-    return (uint32_t)ip_dtoi(zone);
+    return (uint32_t)burrow__net_zone_index(zone);
 }
 
 static Error ip_addr_error(const char *msg, NetIP ip) {

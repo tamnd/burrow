@@ -1608,7 +1608,6 @@ bool pal_user_lookup(int64_t uid, PalUser *out, PalErrno *err);
  * systems and not others, and a port in network byte order in the middle of it.
  * Converting once, in the backend, is the whole reason this layer exists.
  *
- * pal_if_enumerate is not implemented yet. It arrives with net.Interfaces.
  * wasip1 has none of this: its sockets are the ones the host hands in already
  * open, and every call here answers PAL_ENOSYS there. */
 
@@ -1794,6 +1793,25 @@ bool pal_getnameinfo(const PalSockAddr *addr, char *host, int64_t cap,
 int64_t pal_res_search(const char *name, int32_t rclass, int32_t rtype, uint8_t *ans,
                        int64_t cap, PalErrno *err);
 
+/* ------------------------------------------------------------- interfaces
+ *
+ * The machine's network interfaces and their addresses, for net.Interfaces and
+ * the rest of interface.go. Each platform has its own way to ask and Go uses
+ * each one directly: a netlink dump on Linux, the routing sysctls on macOS and
+ * the BSDs, which getifaddrs and getifmaddrs read for us here, and
+ * GetAdaptersAddresses on Windows, reached through LoadLibrary so that nothing
+ * new goes on the link line. Linux's multicast groups are files in /proc,
+ * which net reads itself the way Go does, so the call for them answers nothing
+ * there. wasip1 and Emscripten have no interfaces to list and answer none,
+ * which is what Go's stub does. illumos, AIX and Cosmopolitan answer
+ * PAL_ENOSYS until somebody needs them.
+ *
+ * Each call fills out with up to cap records and answers how many there are,
+ * which can be more than cap, so that the caller can grow its buffer and ask
+ * again, or -1 on failure. A failure says which call failed as well as how,
+ * since Go wraps the error in a SyscallError named for it on Linux and
+ * Windows and hands the BSDs' back as it is. */
+
 enum {
     PAL_IFF_UP = 1u << 0,
     PAL_IFF_BROADCAST = 1u << 1,
@@ -1812,10 +1830,46 @@ typedef struct PalInterface {
     int32_t hwaddr_len;
 } PalInterface;
 
-/* The machine's network interfaces into out, returning how many were written,
- * or -1. Addresses are not here: they are a second call with a different shape
- * and they arrive with net. */
-int64_t pal_if_enumerate(PalInterface *out, int64_t cap, PalErrno *err);
+/* How a call here failed: err, and the name Go gives the call in its
+ * SyscallError, such as "netlinkrib", or NULL where Go gives the errno with no
+ * name around it. */
+typedef struct PalIfError {
+    const char *call;
+    PalErrno err;
+} PalIfError;
+
+/* An address of an interface. A PAL_IFA_NET one is an address and its mask,
+ * which is a net.IPNet, with mask_len 4 or 16, or 0 for a mask Go would have
+ * left nil. A PAL_IFA_ADDR one is the address alone, which is a net.IPAddr:
+ * the multicast groups, and Windows' anycast addresses. addr has 4 bytes for
+ * PAL_AF_INET and 16 for PAL_AF_INET6, and the zone a BSD kernel keeps inside
+ * a link local IPv6 address has been taken out, as Go takes it out. */
+enum { PAL_IFA_NET = 0, PAL_IFA_ADDR = 1 };
+
+typedef struct PalIfAddr {
+    int32_t index;
+    int32_t family;
+    int32_t kind;
+    int32_t mask_len;
+    uint8_t addr[16];
+    uint8_t mask[16];
+} PalIfAddr;
+
+/* The interface with this index, or all of them in the order the system lists
+ * them for 0. */
+int64_t pal_if_enumerate(int32_t index, PalInterface *out, int64_t cap,
+                         PalIfError *err);
+
+/* The unicast addresses of the interface with this index, or of all of them
+ * for 0, and on Windows the anycast ones after each interface's unicast
+ * ones. */
+int64_t pal_if_addrs(int32_t index, PalIfAddr *out, int64_t cap, PalIfError *err);
+
+/* The multicast groups the interface with this index has joined, as
+ * PAL_IFA_ADDR records. None on Linux, where net reads them from /proc, and
+ * none on NetBSD, OpenBSD and DragonFly, which Go does not ask either. */
+int64_t pal_if_multicast_addrs(int32_t index, PalIfAddr *out, int64_t cap,
+                               PalIfError *err);
 
 /* --------------------------------------------------------------------- poll
  *

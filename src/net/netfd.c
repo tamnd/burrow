@@ -139,6 +139,10 @@ bool burrow__net_supports_ipv4(void) {
     return (nf_stack_probe() & NF_STACK_IPV4) != 0;
 }
 
+bool burrow__net_supports_ipv6(void) {
+    return (nf_stack_probe() & NF_STACK_IPV6) != 0;
+}
+
 bool burrow__net_supports_ipv4map(void) {
     return (nf_stack_probe() & NF_STACK_IPV4MAP) != 0;
 }

@@ -444,6 +444,60 @@ arena_free(&ar);
 
 On an IPv4 socket, `net_ip_conn_read_from_ip` and the `read_from` of the `NetPacketConn` take the IPv4 header off the front of each packet, as Go's `ReadFromIP` does, while `net_ip_conn_read` gives the packet as the system hands it over, header and all. `ReadMsgIP` and `WriteMsgIP` are still to come, and Windows is where TCP is for now.
 
+## Interfaces
+
+`net_interfaces` is Go's `Interfaces`, the machine's network interfaces with their index, MTU, name, hardware address and flags, and `net_interface_by_index` and `net_interface_by_name` find one. `net_interface_addrs_of` is the `Addrs` method, the addresses of one interface, each a `NetAddr` that holds a `NetIPNet` with the prefix, and `net_interface_addrs` is the `InterfaceAddrs` function, every address on the machine. On Windows the list includes the anycast addresses too, as `NetIPAddr`, which is what Go gives there. `net_interface_multicast_addrs` is the groups an interface has joined. This one prints each interface and its addresses:
+
+<!-- example: ../examples/net/interfaces.c#interfaces -->
+```c
+Arena ar;
+arena_init(&ar, NULL, 0);
+Alloc *a = arena_allocator(&ar);
+Error err;
+Slice ift = net_interfaces(a, &err);
+if (BURROW_FAILED(err)) {
+    fmt_printf_v("%v\n", err);
+    arena_free(&ar);
+    return;
+}
+for (Int i = 0; i < ift.len; i++) {
+    const NetInterface *ifi = &((const NetInterface *)ift.p)[i];
+    Str flags = net_flags_string(ifi->flags, a);
+    Str hw = net_hardware_addr_string(ifi->hardware_addr, a);
+    printf("%d %.*s mtu %d <%.*s> %.*s\n", (int)ifi->index, (int)ifi->name.len,
+           (const char *)ifi->name.p, (int)ifi->mtu, (int)flags.len,
+           (const char *)flags.p, (int)hw.len, (const char *)hw.p);
+
+    /* Unicast addresses come back as NetIPNet, with the prefix. */
+    Slice addrs = net_interface_addrs_of(ifi, a, &err);
+    for (Int j = 0; j < addrs.len; j++) {
+        NetAddr x = ((const NetAddr *)addrs.p)[j];
+        Str s = x.vt->string(x.data, a);
+        printf("    %.*s\n", (int)s.len, (const char *)s.p);
+    }
+}
+arena_free(&ar);
+```
+
+On Linux the list comes from a netlink dump and the groups from /proc/net/igmp and /proc/net/igmp6, which is where Go reads them. On macOS and the BSDs it comes from `getifaddrs` and `getifmaddrs`, and on Windows from `GetAdaptersAddresses`. These are also what turns an IPv6 zone such as `eth0` into the index a socket needs, and back. Like Go, the names are cached and the cache is read again when it is more than a minute old or when a name or index is not in it.
+
+`net_parse_mac` reads a hardware address in any of the three forms Go reads, with colons, with hyphens, or in dotted groups of four digits, for 48 bit and 64 bit addresses and 20 byte InfiniBand ones:
+
+<!-- example: ../examples/net/mac.c#mac -->
+```c
+Error err;
+NetHardwareAddr hw = net_parse_mac(a, BURROW_S("00-00-5E-00-53-01"), &err);
+print(net_hardware_addr_string(hw, a));
+
+/* Cisco's dotted form, and an EUI-64. */
+hw = net_parse_mac(a, BURROW_S("0200.5e10.0000.0001"), &err);
+printf("%d ", (int)hw.len);
+print(net_hardware_addr_string(hw, a));
+
+net_parse_mac(a, BURROW_S("01:02:03:04:05"), &err);
+fmt_printf_v("%v\n", err);
+```
+
 ## Dial and Listen
 
 `net_dial` and `net_listen` are Go's `Dial` and `Listen`. They take the network and the address as text, look up a host name and a service name for the port, and give back a `NetConn` or a `NetListener` whatever the network. `NetDialer` and `NetListenConfig` are the structs behind them, with Go's fields: a timeout, a deadline, a local address, the keep-alive settings, a resolver, and a `control` callback that sees the socket before it connects. The zero value of either works, and so does passing NULL.

@@ -741,9 +741,11 @@ Slice burrow__net_cgo_lookup_ptr(Alloc *a, Context ctx, Str addr, Error *err) {
             break;
         }
     } else {
-        const char *host = (const char *)j->buf;
-        Str name =
-            str_from_bytes((const Byte *)host, (Int)strnlen(host, (size_t)j->buf_cap));
+        /* The name ends at its NUL, or at the end of the buffer. strnlen is
+         * POSIX, which -std=c11 hides. */
+        const Byte *nul = memchr(j->buf, 0, (size_t)j->buf_cap);
+        Int n = nul != NULL ? (Int)(nul - (const Byte *)j->buf) : j->buf_cap;
+        Str name = str_from_bytes((const Byte *)j->buf, n);
         Str s = str_clone(a, burrow__net_abs_domain_name(a, name));
         out = slice_make(a, TYPE_STRING, 0, 1);
         out = slice_append(a, out, &s, 1);

@@ -214,6 +214,14 @@ typedef struct burrow__NetConnCore {
 /* errMissingAddress, for a dial with no address to dial. */
 extern const Error burrow__net_err_missing_address;
 
+/* errTimeout and errCanceled, "i/o timeout" and "operation was canceled",
+ * which errors_is matches to context_deadline_exceeded and context_canceled.
+ * mapErr turns a context's error into the one of these a lookup or a dial
+ * reports and leaves any other error alone. */
+extern const Error burrow__net_err_timeout;
+extern const Error burrow__net_err_canceled;
+Error burrow__net_map_err(Error err);
+
 /* An OpError with these fields, boxed in error_allocator. */
 Error burrow__net_op_error(Str op, Str net, NetAddr source, NetAddr addr, Error err);
 

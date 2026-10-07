@@ -97,7 +97,7 @@ jobs:
           sha256="$PWD/tools/sha256.sh"
           mkdir -p dist
           git archive --format=tar.gz --prefix="burrow-$v/" -o "dist/burrow-$v-source.tar.gz" HEAD
-          (cd dist && "$sha256" *.tar.gz > "burrow-$v-source.tar.gz.sha256")
+          (cd dist && "$sha256" "burrow-$v-source.tar.gz" > "burrow-$v-source.tar.gz.sha256")
       - uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*.tar.gz
@@ -178,6 +178,9 @@ jobs:
     if: ${{ !cancelled() && needs.verify.result == 'success' && needs.test.result != 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Tags from before burrow-gen learned to amalgamate have nothing to run
+    # here, and the rest of such a release is still worth publishing.
+    continue-on-error: ${{ inputs.backfill == true }}
     permissions:
       contents: read
       id-token: write
@@ -217,7 +220,7 @@ jobs:
   publish:
     name: publish
     needs: [verify, source, binaries, amalgamation]
-    if: ${{ !cancelled() && needs.source.result == 'success' && needs.amalgamation.result == 'success' && (needs.binaries.result == 'success' || inputs.backfill) }}
+    if: ${{ !cancelled() && needs.source.result == 'success' && ((needs.amalgamation.result == 'success' && needs.binaries.result == 'success') || inputs.backfill) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -251,7 +254,7 @@ jobs:
           latest=true
           if [ "$BACKFILL" = "true" ]; then
             latest=false
-            printf '\nThis release was published after the tag, from the same tree. The release run failed when the tag was pushed, so the tests were not run again for it, and a platform whose archive is missing here did not build at this version.\n' >> /tmp/notes.md
+            printf '\nThis release was published after the tag, from the same tree. The release run failed when the tag was pushed, so the tests were not run again for it, and an archive missing here, for a platform or for the amalgamation, could not be built at this version.\n' >> /tmp/notes.md
           fi
           gh release create "v$v" dist/* \
             --title "v$v" \

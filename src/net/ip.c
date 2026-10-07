@@ -8,12 +8,13 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
-#include "burrow/net.h"
+#include "internal.h"
 
 #include "burrow/declare.h"
 #include "burrow/encoding.h"
 #include "burrow/error.h"
 #include "burrow/mem.h"
+#include "burrow/net.h"
 #include "burrow/net/netip.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
@@ -621,25 +622,6 @@ Error net_ip_unmarshal_text(NetIP *ip, Alloc *a, Slice text) {
     return BURROW_NO_ERROR;
 }
 
-/* dtoi from parse.go: a decimal number, how many bytes it took, and whether
- * there was one. It gives up at 0xFFFFFF. */
-static bool net_dtoi(Str s, Int *n, Int *used) {
-    enum { NET_BIG = 0xFFFFFF };
-    Int v = 0;
-    Int i = 0;
-    for (; i < s.len && s.p[i] >= '0' && s.p[i] <= '9'; i++) {
-        v = v * 10 + (s.p[i] - '0');
-        if (v >= NET_BIG) {
-            *n = NET_BIG;
-            *used = i;
-            return false;
-        }
-    }
-    *n = v;
-    *used = i;
-    return i != 0;
-}
-
 NetIP net_parse_cidr(Alloc *a, Str s, NetIPNet **net_out, Error *err) {
     NetIP r = slice_nil(TYPE_BYTE);
     BURROW_OUT(net_out, NULL);
@@ -659,7 +641,7 @@ NetIP net_parse_cidr(Alloc *a, Str s, NetIPNet **net_out, Error *err) {
     Int n = 0;
     Int used = 0;
     bool ok = slash >= 0 && BURROW_OK(perr) && netip_addr_zone(ip).len == 0 &&
-              net_dtoi(mask, &n, &used) && used == mask.len && n >= 0 &&
+              burrow__net_dtoi(mask, &n, &used) && used == mask.len && n >= 0 &&
               n <= netip_addr_bit_len(ip);
     if (!ok) {
         BURROW_OUT(err, net_parse_err(NET_LIT("CIDR address"), s));

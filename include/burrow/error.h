@@ -96,11 +96,12 @@ struct ErrorVT {
 
     /* A copy of this error in a, deep enough that nothing in it points back at
      * the original's memory, for error_retain. Copy what the error wraps with
-     * error_retain as well. NULL is fine for an error whose memory never goes
-     * away, which is every sentinel, and error_retain falls back to copying the
-     * message and the chain for everything else, which keeps errors_is working
-     * and loses errors_as. Give an error with a self_type a clone and it keeps
-     * both. */
+     * error_retain as well. A sentinel made with BURROW_SENTINEL_ERROR needs
+     * none, since error_retain hands those back as they are. Without a clone,
+     * error_retain copies the message and the chain, which keeps errors_is
+     * working for what the error wraps and loses errors_as. The error itself
+     * becomes a new one, so a static error with its own vtable, which errors_is
+     * matches by identity, should have a clone that returns itself. */
     Error (*clone)(const void *self, Alloc *a);
 };
 
@@ -262,7 +263,9 @@ void burrow__error_thread_exit(void);
  * clone slot is copied by it. Anything else becomes an error with the same
  * message that wraps a retained copy of what the original wrapped, so errors_is
  * still finds the sentinels in the chain, and errors_as no longer finds the
- * original's type.
+ * original's type. Each error in such a copy remembers the address of the one
+ * it was made from, so errors_is matches the copy against the original, the
+ * way Go matches an error made with errors.New that you kept to compare with.
  *
  * A failed allocation gives you burrow_err_out_of_memory. */
 BURROW_OWNS(ret) Error error_retain(Alloc *a, Error err);

@@ -24,6 +24,7 @@ Checks: >
   -bugprone-not-null-terminated-result,
   -cert-err33-c,
   -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -clang-analyzer-unix.Chroot,
   -misc-include-cleaner,
   -misc-no-recursion,
   -performance-no-int-to-ptr,
@@ -82,6 +83,12 @@ Checks: >
 #     This check fires on Linux and not on the macOS SDK, which is how the job
 #     stayed red on CI while every local run looked clean. Worth knowing before
 #     trusting a green tidy on a Mac.
+#
+#   clang-analyzer-unix.Chroot
+#     It wants chdir("/") straight after every chroot. Go's SysProcAttr.Chroot
+#     does not do that: the child changes to Dir afterwards if there is one and
+#     otherwise keeps the directory it had, and os/exec callers rely on which
+#     one they get. The only chroot in the library is that one.
 #
 #   misc-include-cleaner
 #     It wants every file to include the header that declares each symbol it

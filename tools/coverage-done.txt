@@ -98,5 +98,6 @@ archive/tar
 archive/zip
 encoding/asn1
 path/filepath
+syscall
 crypto/fips140
 net/mail

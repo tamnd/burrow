@@ -1608,3 +1608,68 @@ httptest_server_free(ts);
 The client follows up to ten redirects, and `check_redirect` decides otherwise: an error from it ends the request, and `http_err_use_last_response` hands back the redirect itself, body unread. A 301, 302 or 303 turns the request into a GET with no body, while a 307 or 308 sends the same method and body again, which takes a `get_body` when the body isn't a `BytesBuffer`, `BytesReader` or `StringsReader`, the three `http_new_request` knows how to rewind. Headers go along to the same host and its subdomains, but `Authorization`, `Cookie` and the other credential headers stop at a different domain. With a `jar`, cookies from each response go into the jar and the jar's cookies go out with each request.
 
 `timeout` covers the whole exchange, the redirects and the reading of the body included. When it runs out the error is a `UrlError` that is a timeout to `net_error_timeout`, and `errors_is` finds `context_deadline_exceeded` in it. A request's context can cancel it too. Every error from the client is a `UrlError` with the method and the URL, with any password in the URL shown as `***`. A status like 404 is not an error. The response it comes with has to be freed with `http_response_free`, and so does the one that comes back with an error from `check_redirect`.
+
+## Tracing requests
+
+`net/http/httptrace` shows what the client does on the way to a response. An `HttptraceClientTrace` is a set of hooks, any of which can be left out, for getting a connection, the DNS lookup and the dial, writing the request and reading the response. `httptrace_with_client_trace` puts it in a context, and a request sent with that context calls the hooks:
+
+<!-- example: ../examples/net/httptrace.c#hooks -->
+```c
+static void get_conn(void *env, Str host_port) {
+    (void)env;
+    (void)host_port;
+    fmt_printf_v("get conn\n");
+}
+
+static void got_conn(void *env, HttptraceGotConnInfo info) {
+    (void)env;
+    fmt_printf_v("got conn, reused: %t\n", info.reused);
+}
+
+static void wrote_headers(void *env) {
+    (void)env;
+    fmt_printf_v("wrote headers\n");
+}
+
+static void first_byte(void *env) {
+    (void)env;
+    fmt_printf_v("first response byte\n");
+}
+
+static void put_idle_conn(void *env, Error err) {
+    (void)env;
+    fmt_printf_v("put idle conn: %v\n", err);
+}
+```
+
+<!-- example: ../examples/net/httptrace.c#trace -->
+```c
+HttptraceClientTrace trace = {
+    .get_conn = BURROW_FN(HttptraceGetConnFunc, get_conn, NULL),
+    .got_conn = BURROW_FN(HttptraceGotConnFunc, got_conn, NULL),
+    .wrote_headers = BURROW_FN(Func, wrote_headers, NULL),
+    .got_first_response_byte = BURROW_FN(Func, first_byte, NULL),
+    .put_idle_conn = BURROW_FN(HttptracePutIdleConnFunc, put_idle_conn, NULL),
+};
+Context ctx = httptrace_with_client_trace(a, context_background(), &trace);
+
+/* The second request gets the connection the first one left idle. */
+for (int i = 0; i < 2; i++) {
+    Error err;
+    IoReader none = {NULL, NULL};
+    HttpRequest *req = http_new_request_with_context(a, ctx, BURROW_S("GET"),
+                                                     ts->url, none, &err);
+    HttpResponse *res = http_client_do(c, req, &err);
+    if (res == NULL) {
+        fmt_printf_v("error: %v\n", err);
+        break;
+    }
+    Slice b = io_read_all(a, io_read_closer_as_io_reader(res->body), &err);
+    Str status = str_clone(a, res->status);
+    http_response_free(res);
+    fmt_printf_v("%s: %s", status, str_from_bytes(b.p, b.len));
+}
+context_release(ctx);
+```
+
+The hooks run on the transport's goroutines, so one that shares state with the caller needs a lock, and the trace has to live until the last response sent with it is freed. A trace put in a context that already has one runs its own hooks and then the older one's, as in Go. Unlike Go, it does that by keeping a pointer to the older trace rather than rewriting its own fields, so code that wants to run the hooks itself calls `httptrace_client_trace_got_conn` and the rest. The hooks for the dial stop once the request has its connection, while in Go a dial that lost the race to an idle connection keeps calling them. There are no TLS hooks yet.

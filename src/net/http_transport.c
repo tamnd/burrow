@@ -26,6 +26,7 @@
 
 #include "../xnet/httpproxy.h"
 #include "http_ascii.h"
+#include "internal.h"
 
 #include "burrow/bufio.h"
 #include "burrow/chan.h"
@@ -44,6 +45,7 @@
 #include "burrow/mem/heap.h"
 #include "burrow/net.h"
 #include "burrow/net/http.h"
+#include "burrow/net/http/httptrace.h"
 #include "burrow/net/url.h"
 #include "burrow/panic.h"
 #include "burrow/proc.h"
@@ -56,6 +58,7 @@
 #include "burrow/type.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -559,12 +562,15 @@ struct burrow__HttpCall {
  * connection to, unless it is canceled first. */
 struct burrow__HttpWant {
     HttpTransport *t;
-    Context ctx; /* for the dial, released with the want */
+    Context ctx;     /* for the dial, the last of ctxs */
+    Context ctxs[3]; /* what ctx is made of, released with the want */
+    int nctx;
     ContextCancelFunc cancel_ctx;
     tp_ConnectMethod cm; /* in arena, with the proxy URL a copy */
     Str key;             /* in arena */
     Chan *ready;         /* bool, closed once there is a result */
     tp_PConn *res_pc;    /* a reference, under mu, until it is taken */
+    Time res_idle_at;    /* under mu, when res_pc came from the pool */
     Error res_err;       /* in err_arena, under mu */
     SyncAtomicInt64 refs;
     Arena arena; /* made in before the want is shared */
@@ -573,6 +579,17 @@ struct burrow__HttpWant {
     bool done;           /* under mu: delivered or canceled */
     bool has_result;     /* under mu */
     bool has_cancel_ctx; /* under t->conns_per_host_mu */
+
+    /* What the dial sees of the request's context. Go dials with a context
+     * that keeps the request's values, but the request can be gone before the
+     * dial is done, so here ctx gets copies: the alternate resolver tests set,
+     * and in place of the trace, trace_proxy, a trace with no hooks of its own
+     * whose net hooks pass the dial's events on to trace_to. That stops once
+     * the request has its connection. */
+    burrow__NetLookupIPFunc alt;
+    HttptraceClientTrace trace_proxy;
+    const HttptraceClientTrace *trace_to; /* under trace_mu */
+    SyncMutex trace_mu;
 };
 
 /* The idle connections for one key, and the wants waiting for one. */
@@ -1075,7 +1092,7 @@ static Int tp_max_idle_conns_per_host(const HttpTransport *t) {
                                            : HTTP_DEFAULT_MAX_IDLE_CONNS_PER_HOST;
 }
 
-static bool tp_want_try_deliver(tp_Want *w, tp_PConn *pc, Error err);
+static bool tp_want_try_deliver(tp_Want *w, tp_PConn *pc, Error err, Time idle_at);
 
 static Error tp_try_put_idle_conn_locked(HttpTransport *t, tp_PConn *pc) {
     /* Again, now under idle_mu. The read loop closes a connection and then
@@ -1091,7 +1108,7 @@ static Error tp_try_put_idle_conn_locked(HttpTransport *t, tp_PConn *pc) {
         bool done = false;
         while (!done && tp_queue_len(&b->wait) > 0) {
             tp_Want *w = tp_queue_pop(&b->wait);
-            done = tp_want_try_deliver(w, pc, BURROW_NO_ERROR);
+            done = tp_want_try_deliver(w, pc, BURROW_NO_ERROR, (Time){0});
             tp_want_unref(w);
         }
         if (done) {
@@ -1187,7 +1204,7 @@ static bool tp_queue_for_idle_conn(HttpTransport *t, tp_Want *w) {
                 b->n--;
                 continue;
             }
-            delivered = tp_want_try_deliver(w, pc, BURROW_NO_ERROR);
+            delivered = tp_want_try_deliver(w, pc, BURROW_NO_ERROR, pc->idle_at);
             if (delivered) {
                 tp_lru_remove(t, pc);
                 b->n--;
@@ -1219,7 +1236,8 @@ static bool tp_queue_for_idle_conn(HttpTransport *t, tp_Want *w) {
 
 static void tp_want_free(tp_Want *w) {
     HttpTransport *t = w->t;
-    context_release(w->ctx);
+    for (int i = w->nctx - 1; i >= 0; i--)
+        context_release(w->ctxs[i]);
     chan_free(w->ready);
     arena_free(&w->arena);
     arena_free(&w->err_arena);
@@ -1233,8 +1251,9 @@ static void tp_want_unref(tp_Want *w) {
 }
 
 /* tryDeliver. Gives w a reference on pc, or a copy of err, unless it has had
- * one already or been canceled. */
-static bool tp_want_try_deliver(tp_Want *w, tp_PConn *pc, Error err) {
+ * one already or been canceled. idle_at is when pc went in the pool, for one
+ * that comes from there, and the zero Time otherwise. */
+static bool tp_want_try_deliver(tp_Want *w, tp_PConn *pc, Error err, Time idle_at) {
     sync_mutex_lock(&w->mu);
     if (w->done) {
         sync_mutex_unlock(&w->mu);
@@ -1247,6 +1266,7 @@ static bool tp_want_try_deliver(tp_Want *w, tp_PConn *pc, Error err) {
     if (pc != NULL) {
         tp_pc_ref(pc);
         w->res_pc = pc;
+        w->res_idle_at = idle_at;
     } else {
         w->res_err = error_retain(arena_allocator(&w->err_arena), err);
     }
@@ -1273,6 +1293,89 @@ static void tp_want_cancel(tp_Want *w) {
     }
 }
 
+/* The want whose trace_proxy.burrow_net self is. */
+static tp_Want *tp_want_of_trace(const void *self) {
+    return (tp_Want *)((uintptr_t)self - offsetof(tp_Want, trace_proxy) -
+                       offsetof(HttptraceClientTrace, burrow_net));
+}
+
+static void tp_trace_dns_start(const void *self, Str host) {
+    tp_Want *w = tp_want_of_trace(self);
+    sync_mutex_lock(&w->trace_mu);
+    httptrace_client_trace_dns_start(w->trace_to,
+                                     (HttptraceDNSStartInfo){.host = host});
+    sync_mutex_unlock(&w->trace_mu);
+}
+
+static void tp_trace_dns_done(const void *self, Slice addrs, bool coalesced,
+                              Error err) {
+    tp_Want *w = tp_want_of_trace(self);
+    sync_mutex_lock(&w->trace_mu);
+    httptrace_client_trace_dns_done(
+        w->trace_to,
+        (HttptraceDNSDoneInfo){.addrs = addrs, .err = err, .coalesced = coalesced});
+    sync_mutex_unlock(&w->trace_mu);
+}
+
+static void tp_trace_connect_start(const void *self, Str network, Str addr) {
+    tp_Want *w = tp_want_of_trace(self);
+    sync_mutex_lock(&w->trace_mu);
+    httptrace_client_trace_connect_start(w->trace_to, network, addr);
+    sync_mutex_unlock(&w->trace_mu);
+}
+
+static void tp_trace_connect_done(const void *self, Str network, Str addr, Error err) {
+    tp_Want *w = tp_want_of_trace(self);
+    sync_mutex_lock(&w->trace_mu);
+    httptrace_client_trace_connect_done(w->trace_to, network, addr, err);
+    sync_mutex_unlock(&w->trace_mu);
+}
+
+static const burrow__NetTraceVT tp_trace_proxy_vt = {
+    tp_trace_dns_start,
+    tp_trace_dns_done,
+    tp_trace_connect_start,
+    tp_trace_connect_done,
+};
+
+/* Puts what the dial is to see of the request's context, from ctx, over the
+ * want's cancel context. False when the allocator says no. */
+static bool tp_want_dial_values(tp_Want *w, Alloc *a, Context ctx,
+                                const HttptraceClientTrace *trace) {
+    w->alt = burrow__net_lookup_ip_alt_resolver(ctx);
+    if (w->alt.f != NULL) {
+        Context c = context_with_value(a, w->ctxs[w->nctx - 1],
+                                       burrow__net_lookup_ip_alt_resolver_key,
+                                       (Any){TYPE_UINTPTR, (void *)&w->alt});
+        if (BURROW_CONTEXT_IS_NIL(c))
+            return false;
+        w->ctxs[w->nctx++] = c;
+    }
+    if (BURROW__HTTPTRACE_HAS(trace, dns_start) ||
+        BURROW__HTTPTRACE_HAS(trace, dns_done) ||
+        BURROW__HTTPTRACE_HAS(trace, connect_start) ||
+        BURROW__HTTPTRACE_HAS(trace, connect_done)) {
+        w->trace_to = trace;
+        w->trace_proxy.burrow_net = &tp_trace_proxy_vt;
+        Context c =
+            context_with_value(a, w->ctxs[w->nctx - 1], burrow__nettrace_key,
+                               (Any){TYPE_UINTPTR, (void *)&w->trace_proxy.burrow_net});
+        if (BURROW_CONTEXT_IS_NIL(c))
+            return false;
+        w->ctxs[w->nctx++] = c;
+    }
+    w->ctx = w->ctxs[w->nctx - 1];
+    return true;
+}
+
+/* Stops the dial's events going to the request's trace, which may be gone
+ * once the request has its connection or has given up. */
+static void tp_want_detach_trace(tp_Want *w) {
+    sync_mutex_lock(&w->trace_mu);
+    w->trace_to = NULL;
+    sync_mutex_unlock(&w->trace_mu);
+}
+
 /* ---------------------------------------------------------------- dialing */
 
 static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMethod *cm,
@@ -1292,7 +1395,7 @@ static void tp_dial_conn_for(HttpTransport *t, tp_Want *w) {
     }
     Error err = BURROW_NO_ERROR;
     tp_PConn *pc = tp_dial_conn(t, w->ctx, &w->cm, &err);
-    bool delivered = tp_want_try_deliver(w, pc, err);
+    bool delivered = tp_want_try_deliver(w, pc, err, (Time){0});
     if (pc != NULL) {
         /* Nobody wanted it, so it goes in the pool for the next request. */
         if (!delivered)
@@ -1325,7 +1428,7 @@ static void tp_start_dial_conn_for_locked(HttpTransport *t, tp_Want *w) {
         (void)sync_atomic_int64_add(&w->refs, -1);
     }
     w->has_cancel_ctx = false;
-    (void)tp_want_try_deliver(w, NULL, burrow_err_out_of_memory);
+    (void)tp_want_try_deliver(w, NULL, burrow_err_out_of_memory, (Time){0});
     tp_dec_conns_per_host_locked(t, w->key);
 }
 
@@ -1340,14 +1443,14 @@ static void tp_queue_for_dial(HttpTransport *t, tp_Want *w) {
     }
     tp_HostBucket *b = tp_host_bucket(t, w->key, true);
     if (b == NULL) {
-        (void)tp_want_try_deliver(w, NULL, burrow_err_out_of_memory);
+        (void)tp_want_try_deliver(w, NULL, burrow_err_out_of_memory, (Time){0});
     } else if (b->n < t->max_conns_per_host) {
         b->n++;
         tp_start_dial_conn_for_locked(t, w);
     } else {
         tp_queue_clean_front_not_waiting(&b->wait);
         if (!tp_queue_push(t, &b->wait, w)) {
-            (void)tp_want_try_deliver(w, NULL, burrow_err_out_of_memory);
+            (void)tp_want_try_deliver(w, NULL, burrow_err_out_of_memory, (Time){0});
             tp_host_bucket_trim(t, b);
         }
     }
@@ -2122,6 +2225,14 @@ static void tp_read_loop_peek_fail_locked(tp_PConn *pc, Error peek_err) {
 /* readResponse. The final response to tr's request, after any 1xx ones but a
  * 101. */
 static HttpResponse *tp_read_response(tp_PConn *pc, tp_Trip *tr, Error *err) {
+    const HttptraceClientTrace *trace = httptrace_context_client_trace(tr->ctx);
+    if (BURROW__HTTPTRACE_HAS(trace, got_first_response_byte)) {
+        Error pe = BURROW_NO_ERROR;
+        Slice peek = bufio_reader_peek(pc->br, 1, &pe);
+        if (BURROW_OK(pe) && peek.len == 1)
+            httptrace_client_trace_got_first_response_byte(trace);
+    }
+
     Chan *continue_ch = tr->continue_ch;
     HttpResponse *resp;
     for (;;) {
@@ -2130,12 +2241,26 @@ static HttpResponse *tp_read_response(tp_PConn *pc, tp_Trip *tr, Error *err) {
             return NULL;
         Int code = resp->status_code;
         if (continue_ch != NULL && code == HTTP_STATUS_CONTINUE) {
+            httptrace_client_trace_got100_continue(trace);
             bool v = true;
             chan_send(continue_ch, &v);
             continue_ch = NULL;
         }
         /* A 101 is the last, see Go's issue 26161. */
         if (100 <= code && code <= 199 && code != HTTP_STATUS_SWITCHING_PROTOCOLS) {
+            if (BURROW__HTTPTRACE_HAS(trace, got1xx_response)) {
+                Error e =
+                    httptrace_client_trace_got1xx_response(trace, code, resp->header);
+                if (BURROW_FAILED(e)) {
+                    http_response_free(resp);
+                    BURROW_OUT(err, e);
+                    return NULL;
+                }
+                /* The hook saw the 1xx, so limiting how many there are is up
+                 * to it. Without one, the 1xx headers and the final one
+                 * share the limit. */
+                pc->read_limit = tp_max_header_response_size(pc->t);
+            }
             http_response_free(resp);
             continue;
         }
@@ -2170,12 +2295,16 @@ static HttpResponse *tp_read_response(tp_PConn *pc, tp_Trip *tr, Error *err) {
 }
 
 /* The tryPutIdleConn of readLoop. */
-static bool tp_rl_try_put_idle(tp_PConn *pc, Error *close_err) {
+static bool tp_rl_try_put_idle(tp_PConn *pc, tp_Trip *tr, Error *close_err) {
+    const HttptraceClientTrace *trace = httptrace_context_client_trace(tr->ctx);
     Error e = tp_try_put_idle_conn(pc->t, pc);
     if (BURROW_FAILED(e)) {
         *close_err = e;
+        if (!tp_same(e, burrow__http_err_keep_alives_disabled))
+            httptrace_client_trace_put_idle_conn(trace, e);
         return false;
     }
+    httptrace_client_trace_put_idle_conn(trace, BURROW_NO_ERROR);
     return true;
 }
 
@@ -2293,7 +2422,7 @@ static void tp_read_loop(void *env) {
              * round trip is out of its select, which also waits for pc to
              * close, by the time this goroutine can end. */
             alive = alive && !pc->saw_eof && tp_pc_wrote_request(pc) &&
-                    tp_rl_try_put_idle(pc, &close_err);
+                    tp_rl_try_put_idle(pc, tr, &close_err);
             if (writable)
                 close_err = burrow__http_err_caller_owns_conn;
             if (!tp_trip_deliver(tr, resp)) {
@@ -2359,7 +2488,7 @@ static void tp_read_loop(void *env) {
                 body_eof = tp_maybe_drain_body(pc, body->body, close_err);
             }
             alive = alive && body_eof && !pc->saw_eof && tp_pc_wrote_request(pc) &&
-                    tp_rl_try_put_idle(pc, &close_err);
+                    tp_rl_try_put_idle(pc, tr, &close_err);
             if (!try_drain && body_eof)
                 chan_send(pc->eofc, &v);
             break;
@@ -2794,7 +2923,8 @@ static Error tp_get_conn_cause(Context ctx) {
  * first, with a reference that is the caller's. The dial goes on when the
  * call gives up, and its connection goes in the pool. Its context comes from
  * the background and not the request's, which may be gone by then, so values
- * in the request's context do not reach dial_context. */
+ * in the request's context do not reach dial_context, apart from the copies
+ * tp_want_dial_values makes. */
 static tp_PConn *tp_get_conn(HttpTransport *t, tp_Call *call,
                              const tp_ConnectMethod *cm, Error *err) {
     Alloc *a = tp_alloc(t);
@@ -2819,14 +2949,21 @@ static tp_PConn *tp_get_conn(HttpTransport *t, tp_Call *call,
     w->key = tp_cm_key(wa, &w->cm);
     w->ready = chan_make(a, TYPE_BOOL, 0);
     w->ctx = context_with_cancel(a, context_background(), &w->cancel_ctx);
+    if (!BURROW_CONTEXT_IS_NIL(w->ctx))
+        w->ctxs[w->nctx++] = w->ctx;
     w->has_cancel_ctx = true;
+    const HttptraceClientTrace *trace = httptrace_context_client_trace(call->ctx);
     if (!ok || w->cm.target_scheme.len != cm->target_scheme.len ||
         w->cm.target_addr.len != cm->target_addr.len || w->key.len == 0 ||
-        w->ready == NULL || BURROW_CONTEXT_IS_NIL(w->ctx)) {
+        w->ready == NULL || BURROW_CONTEXT_IS_NIL(w->ctx) ||
+        !tp_want_dial_values(w, a, call->ctx, trace)) {
         tp_want_free(w);
         BURROW_OUT(err, burrow_err_out_of_memory);
         return NULL;
     }
+
+    if (BURROW__HTTPTRACE_HAS(trace, get_conn))
+        httptrace_client_trace_get_conn(trace, tp_cm_addr(wa, &w->cm));
 
     if (!tp_queue_for_idle_conn(t, w))
         tp_queue_for_dial(t, w);
@@ -2834,11 +2971,13 @@ static tp_PConn *tp_get_conn(HttpTransport *t, tp_Call *call,
     SelectCase cases[2] = {BURROW_RECV(w->ready, NULL),
                            BURROW_RECV(context_done(call->ctx), NULL)};
     tp_PConn *pc = NULL;
+    Time idle_at = {0};
     Error e = BURROW_NO_ERROR;
     if (chan_select(cases, 2) == 0) {
         sync_mutex_lock(&w->mu);
         pc = w->res_pc;
         w->res_pc = NULL;
+        idle_at = w->res_idle_at;
         e = w->res_err;
         sync_mutex_unlock(&w->mu);
         /* An error that came with the request canceled is the cancel's. */
@@ -2851,7 +2990,16 @@ static tp_PConn *tp_get_conn(HttpTransport *t, tp_Call *call,
         e = error_retain(error_allocator(), e);
         tp_want_cancel(w);
     }
+    tp_want_detach_trace(w);
     tp_want_unref(w);
+    if (pc != NULL && BURROW__HTTPTRACE_HAS(trace, got_conn)) {
+        HttptraceGotConnInfo info = {.conn = pc->conn, .reused = tp_pc_is_reused(pc)};
+        if (!time_is_zero(idle_at)) {
+            info.was_idle = true;
+            info.idle_time = time_since(idle_at);
+        }
+        httptrace_client_trace_got_conn(trace, info);
+    }
     BURROW_OUT(err, e);
     return pc;
 }

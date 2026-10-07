@@ -17,7 +17,10 @@
 #include "burrow/io.h"
 #include "burrow/map.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
+#include "burrow/mem/heap.h"
 #include "burrow/net/http.h"
+#include "burrow/net/http/httptrace.h"
 #include "burrow/net/textproto.h"
 #include "burrow/slice.h"
 #include "burrow/slices.h"
@@ -172,6 +175,38 @@ static void ht_write_key(IoWriter w, Str key, const Slice *values, Error *err) {
     }
 }
 
+/* Tells trace about key, with its values as they went out: trimmed and with
+ * each "\r" and "\n" a space. Go writes those back into the header, and this
+ * makes a copy instead. */
+static void ht_trace_key(const HttptraceClientTrace *trace, Str key,
+                         const Slice *values) {
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    const Str *vs = (const Str *)values->p;
+    Slice out = slice_make(a, TYPE_STRING, values->len, values->len);
+    Str *os = (Str *)out.p;
+    for (Int j = 0; j < values->len && os != NULL; j++) {
+        Str v = vs[j];
+        Int lo = 0, hi = v.len;
+        while (lo < hi && ht_is_space(v.p[lo]))
+            lo++;
+        while (hi > lo && ht_is_space(v.p[hi - 1]))
+            hi--;
+        Byte *b = hi > lo ? (Byte *)mem_alloc_nozero(a, (size_t)(hi - lo), 1) : NULL;
+        if (b == NULL) {
+            os[j] = BURROW_STR_EMPTY;
+            continue;
+        }
+        for (Int i = lo; i < hi; i++)
+            b[i - lo] = v.p[i] == '\r' || v.p[i] == '\n' ? (Byte)' ' : v.p[i];
+        os[j] = str_from_bytes(b, hi - lo);
+    }
+    if (os != NULL || values->len == 0)
+        httptrace_client_trace_wrote_header_field(trace, key, out);
+    arena_free(&ar);
+}
+
 static bool ht_excluded(Str key, Map *exclude, const Str *list, Int nlist) {
     if (exclude != NULL) {
         const bool *ex = (const bool *)map_get(exclude, &key);
@@ -186,8 +221,10 @@ static bool ht_excluded(Str key, Map *exclude, const Str *list, Int nlist) {
 }
 
 static Error ht_write_subset(HttpHeader h, IoWriter w, Map *exclude, const Str *list,
-                             Int nlist) {
+                             Int nlist, const HttptraceClientTrace *trace) {
     Error err = BURROW_NO_ERROR;
+    if (!BURROW__HTTPTRACE_HAS(trace, wrote_header_field))
+        trace = NULL;
     Int n = h == NULL ? 0 : map_len(h);
     if (n == 0)
         return err;
@@ -221,6 +258,8 @@ static Error ht_write_subset(HttpHeader h, IoWriter w, Map *exclude, const Str *
         ht_write_key(w, keys[i], values, &err);
         if (BURROW_FAILED(err))
             break;
+        if (trace != NULL)
+            ht_trace_key(trace, keys[i], values);
     }
     if (a != NULL)
         mem_free(a, keys, (size_t)n * sizeof(Str), _Alignof(Str));
@@ -228,16 +267,17 @@ static Error ht_write_subset(HttpHeader h, IoWriter w, Map *exclude, const Str *
 }
 
 Error http_header_write_subset(HttpHeader h, IoWriter w, Map *exclude) {
-    return ht_write_subset(h, w, exclude, NULL, 0);
+    return ht_write_subset(h, w, exclude, NULL, 0, NULL);
 }
 
 Error burrow__http_header_write_except(HttpHeader h, IoWriter w, const Str *exclude,
-                                       Int nexclude) {
-    return ht_write_subset(h, w, NULL, exclude, nexclude);
+                                       Int nexclude,
+                                       const HttptraceClientTrace *trace) {
+    return ht_write_subset(h, w, NULL, exclude, nexclude, trace);
 }
 
 Error http_header_write(HttpHeader h, IoWriter w) {
-    return ht_write_subset(h, w, NULL, NULL, 0);
+    return ht_write_subset(h, w, NULL, NULL, 0, NULL);
 }
 
 /* ----------------------------------------------------------------- hasToken */

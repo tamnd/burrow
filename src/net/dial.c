@@ -568,11 +568,73 @@ static const void *dl_local_as(NetAddr la, const Type *t) {
     return la.vt != NULL && la.vt->self_type == t ? la.data : NULL;
 }
 
+/* ---------------------------------------------------------- internal/nettrace */
+
+/* The type of the two keys, which Go tells apart by type and this file by
+ * value. */
+static const Type dl_trace_key_desc = {
+    {(const Byte *)"traceKey", 8},
+    {(const Byte *)"internal/nettrace", 17},
+    KIND_INT,
+    (uint32_t)sizeof(Int),
+    (uint16_t)_Alignof(Int),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x6e747263U, /* "ntrc" */
+    NULL,
+};
+
+static const Int dl_key_trace = 0;
+static const Int dl_key_alt_resolver = 1;
+
+const Any burrow__nettrace_key = {&dl_trace_key_desc, (void *)(uintptr_t)&dl_key_trace};
+const Any burrow__net_lookup_ip_alt_resolver_key = {
+    &dl_trace_key_desc, (void *)(uintptr_t)&dl_key_alt_resolver};
+
+const burrow__NetTraceVT *burrow__nettrace(Context ctx, const void **self) {
+    *self = NULL;
+    if (BURROW_CONTEXT_IS_NIL(ctx))
+        return NULL;
+    Any v = context_value(ctx, burrow__nettrace_key);
+    if (v.data == NULL)
+        return NULL;
+    const burrow__NetTraceVT *const *vtp = (const burrow__NetTraceVT *const *)v.data;
+    *self = v.data;
+    return *vtp;
+}
+
+burrow__NetLookupIPFunc burrow__net_lookup_ip_alt_resolver(Context ctx) {
+    burrow__NetLookupIPFunc none = {NULL, NULL};
+    if (BURROW_CONTEXT_IS_NIL(ctx))
+        return none;
+    Any v = context_value(ctx, burrow__net_lookup_ip_alt_resolver_key);
+    if (v.data == NULL)
+        return none;
+    return *(const burrow__NetLookupIPFunc *)v.data;
+}
+
 /* dialSingle: a connection to ra, made in a. */
 static NetConn dl_dial_single(const DlSys *sd, Alloc *a, Context ctx, const DlAddr *ra,
                               Error *err) {
     NetConn c = {NULL, NULL};
     NetAddr la = sd->d->local_addr;
+    const void *tself = NULL;
+    const burrow__NetTraceVT *trace = burrow__nettrace(ctx, &tself);
+    Str ra_str = BURROW_STR_EMPTY;
+    Arena tar;
+    arena_init(&tar, heap_allocator(), 0);
+    if (trace != NULL) {
+        NetAddr rad = dl_addr(ra);
+        if (rad.vt != NULL)
+            ra_str = rad.vt->string(rad.data, arena_allocator(&tar));
+        if (trace->connect_start != NULL)
+            trace->connect_start(tself, sd->network, ra_str);
+    }
     burrow__NetSysOpts o = dl_dialer_opts(sd->d, ctx);
     o.alloc_mu = sd->alloc_mu;
     Error e = BURROW_NO_ERROR;
@@ -615,6 +677,9 @@ static NetConn dl_dial_single(const DlSys *sd, Alloc *a, Context ctx, const DlAd
     }
     if (BURROW_FAILED(e) && !dl_is_oom(e))
         e = burrow__net_op_error(DL_LIT("dial"), sd->network, la, dl_addr(ra), e);
+    if (trace != NULL && trace->connect_done != NULL)
+        trace->connect_done(tself, sd->network, ra_str, e);
+    arena_free(&tar);
     BURROW_OUT(err, e);
     return c;
 }

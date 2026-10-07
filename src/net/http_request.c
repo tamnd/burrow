@@ -27,6 +27,7 @@
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
 #include "burrow/net/http.h"
+#include "burrow/net/http/httptrace.h"
 #include "burrow/net/textproto.h"
 #include "burrow/net/url.h"
 #include "burrow/runtime.h"
@@ -447,8 +448,9 @@ static Error hq_close_body(HttpRequest *r) {
 /* The rest of Request.write, once the scratch arena is there. *closed says
  * whether the body has been closed, or handed to the code that closes it. */
 static Error hq_write(HttpRequest *r, IoWriter w, bool using_proxy, HttpHeader extra,
-                      burrow__HttpWaitFunc wait, Alloc *sa,
-                      burrow__HttpTransferWriter *tw, BufioWriter **bwp, bool *closed) {
+                      burrow__HttpWaitFunc wait, const HttptraceClientTrace *trace,
+                      Alloc *sa, burrow__HttpTransferWriter *tw, BufioWriter **bwp,
+                      bool *closed) {
     /* The host from the Host field when there is one, and from the URL when
      * not, cleaned in case it has something unexpected in it. */
     Str host = r->host;
@@ -504,6 +506,10 @@ static Error hq_write(HttpRequest *r, IoWriter w, bool using_proxy, HttpHeader e
     (void)io_write_string(w, fmt_sprintf_v(sa, "Host: %s\r\n", host), &err);
     if (BURROW_FAILED(err))
         return err;
+    bool trace_fields = BURROW__HTTPTRACE_HAS(trace, wrote_header_field);
+    if (trace_fields)
+        httptrace_client_trace_wrote_header_field(trace, BURROW_S("Host"),
+                                                  slice_from(&host, 1, 1, TYPE_STRING));
 
     /* The default User-Agent unless the header has one, which may be empty so
      * that none is sent. */
@@ -516,24 +522,28 @@ static Error hq_write(HttpRequest *r, IoWriter w, bool using_proxy, HttpHeader e
                               &err);
         if (BURROW_FAILED(err))
             return err;
+        if (trace_fields)
+            httptrace_client_trace_wrote_header_field(
+                trace, BURROW_S("User-Agent"),
+                slice_from(&user_agent, 1, 1, TYPE_STRING));
     }
 
     /* The body, content_length, close and trailer. */
     err = burrow__http_new_transfer_writer(tw, sa, r, NULL);
     if (BURROW_FAILED(err))
         return err;
-    err = burrow__http_transfer_writer_write_header(tw, sa, w);
+    err = burrow__http_transfer_writer_write_header(tw, sa, w, trace);
     if (BURROW_FAILED(err))
         return err;
 
     err = burrow__http_header_write_except(
         r->header, w, hq_req_write_exclude,
-        (Int)(sizeof hq_req_write_exclude / sizeof hq_req_write_exclude[0]));
+        (Int)(sizeof hq_req_write_exclude / sizeof hq_req_write_exclude[0]), trace);
     if (BURROW_FAILED(err))
         return err;
 
     if (extra != NULL) {
-        err = http_header_write(extra, w);
+        err = burrow__http_header_write_except(extra, w, NULL, 0, trace);
         if (BURROW_FAILED(err))
             return err;
     }
@@ -541,6 +551,7 @@ static Error hq_write(HttpRequest *r, IoWriter w, bool using_proxy, HttpHeader e
     (void)io_write_string(w, BURROW_S("\r\n"), &err);
     if (BURROW_FAILED(err))
         return err;
+    httptrace_client_trace_wrote_headers(trace);
 
     /* Flush, and wait for 100-continue if it is expected. */
     BufioWriter *wbuf = burrow__http_bufio_writer_of(w);
@@ -550,6 +561,7 @@ static Error hq_write(HttpRequest *r, IoWriter w, bool using_proxy, HttpHeader e
             if (BURROW_FAILED(err))
                 return err;
         }
+        httptrace_client_trace_wait100_continue(trace);
         if (!wait.f(wait.env)) {
             *closed = true;
             (void)hq_close_body(r);
@@ -585,13 +597,17 @@ Error burrow__http_request_write(HttpRequest *r, IoWriter w, bool using_proxy,
     memset(&tw, 0, sizeof tw);
     BufioWriter *bw = NULL;
     bool closed = false;
-    Error err = hq_write(r, w, using_proxy, extra, wait, arena_allocator(&scratch), &tw,
-                         &bw, &closed);
+    const HttptraceClientTrace *trace =
+        httptrace_context_client_trace(http_request_context(r));
+    Error err = hq_write(r, w, using_proxy, extra, wait, trace,
+                         arena_allocator(&scratch), &tw, &bw, &closed);
     if (!closed) {
         Error cerr = hq_close_body(r);
         if (BURROW_FAILED(cerr) && BURROW_OK(err))
             err = cerr;
     }
+    httptrace_client_trace_wrote_request(trace,
+                                         (HttptraceWroteRequestInfo){.err = err});
     burrow__http_transfer_writer_done(&tw);
     /* An error made in the scratch arena has to outlive it. */
     if (BURROW_FAILED(err))

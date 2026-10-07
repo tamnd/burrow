@@ -10,6 +10,7 @@
 #define BURROW_SRC_NET_HTTP_INTERNAL_H
 
 #include "burrow/net/http.h"
+#include "burrow/net/http/httptrace.h"
 
 #include "burrow/bufio.h"
 #include "burrow/core.h"
@@ -19,7 +20,24 @@
 #include "burrow/own.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <string.h>
+
+/* Whether t or a trace under it has the hook at offset off, which
+ * BURROW__HTTPTRACE_HAS works out from the field's name. */
+static inline bool burrow__httptrace_has(const HttptraceClientTrace *t, size_t off) {
+    for (; t != NULL; t = t->burrow_old) {
+        /* Every hook is a closure with its function pointer first. */
+        void (*f)(void) = NULL;
+        memcpy((void *)&f, (const char *)t + off, sizeof f);
+        if (f != NULL)
+            return true;
+    }
+    return false;
+}
+#define BURROW__HTTPTRACE_HAS(t, field)                                                \
+    burrow__httptrace_has((t), offsetof(HttptraceClientTrace, field))
 
 /* internal.SniffLen, the most bytes DetectContentType looks at. */
 #define BURROW__HTTP_SNIFF_LEN 512
@@ -261,11 +279,13 @@ BURROW_BORROWS(ret) Error burrow__http_new_transfer_writer(
 void burrow__http_transfer_writer_done(burrow__HttpTransferWriter *t);
 
 /* shouldSendContentLength, writeHeader and writeBody. write_body always closes
- * body_closer. */
+ * body_closer. write_header tells trace about each header it writes, and
+ * trace can be NULL. */
 bool burrow__http_transfer_writer_should_send_content_length(
     const burrow__HttpTransferWriter *t);
 BURROW_BORROWS(ret) Error burrow__http_transfer_writer_write_header(
-    burrow__HttpTransferWriter *t, Alloc *a, IoWriter w);
+    burrow__HttpTransferWriter *t, Alloc *a, IoWriter w,
+    const HttptraceClientTrace *trace);
 BURROW_BORROWS(ret) Error burrow__http_transfer_writer_write_body(
     burrow__HttpTransferWriter *t, Alloc *a, IoWriter w);
 
@@ -276,10 +296,11 @@ bool burrow__http_is_identity(Slice te);
 /* The writer behind w when it is a BufioWriter, and NULL otherwise. */
 BURROW_BORROWS(ret, w) BufioWriter *burrow__http_bufio_writer_of(IoWriter w);
 
-/* Header.writeSubset with the keys in exclude, which are canonical, left out. */
-BURROW_BORROWS(ret) Error burrow__http_header_write_except(HttpHeader h, IoWriter w,
-                                                           const Str *exclude,
-                                                           Int nexclude);
+/* Header.writeSubset with the keys in exclude, which are canonical, left out,
+ * and with trace told about each key it writes. trace can be NULL. */
+BURROW_BORROWS(ret) Error
+burrow__http_header_write_except(HttpHeader h, IoWriter w, const Str *exclude,
+                                 Int nexclude, const HttptraceClientTrace *trace);
 
 /* requestBodyReadError. Request.write gives an error from reading the body
  * wrapped in one, so that the transport can tell it from a network error. Its

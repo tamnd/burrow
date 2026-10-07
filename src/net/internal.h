@@ -9,8 +9,10 @@
 #ifndef BURROW_SRC_NET_INTERNAL_H
 #define BURROW_SRC_NET_INTERNAL_H
 
+#include "burrow/context.h"
 #include "burrow/error.h"
 #include "burrow/fdmutex.h"
+#include "burrow/func.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/net.h"
@@ -1062,5 +1064,40 @@ BURROW_OWNS(ret) Slice burrow__net_lookup_static_addr(Alloc *a, Str addr);
 /* Go's tests set hostsFilePath, and this is how ours do. The path is copied,
  * and an empty one goes back to the system's. */
 void burrow__net_set_hosts_file_path(Str path);
+
+/* -------------------------------------------------------- internal/nettrace
+ *
+ * The hooks net/http/httptrace puts in a context for a dial and the lookup
+ * under it to call. The value under burrow__nettrace_key points at a pointer
+ * to the table, and that pointer's address is what each hook gets as self, so
+ * that whoever put it there can find its way back. A NULL table, or a NULL
+ * hook in it, is not called. */
+
+typedef struct burrow__NetTraceVT {
+    /* Before a lookup of host, and after it, with the NetIPAddr values it
+     * found. */
+    void (*dns_start)(const void *self, Str host);
+    void (*dns_done)(const void *self, Slice addrs, bool coalesced, Error err);
+    /* Before a dial of addr, and after it. */
+    void (*connect_start)(const void *self, Str network, Str addr);
+    void (*connect_done)(const void *self, Str network, Str addr, Error err);
+} burrow__NetTraceVT;
+
+/* TraceKey. */
+extern const Any burrow__nettrace_key;
+
+/* The table in ctx, with what to hand its hooks in *self, or NULL. */
+BURROW_BORROWS(ret, ctx) const burrow__NetTraceVT *burrow__nettrace(Context ctx,
+                                                                    const void **self);
+
+/* LookupIPAltResolverKey: tests put a pointer to one of these in a context
+ * under this key to answer the lookups made with it in place of the
+ * resolver. It gives a Slice of NetIPAddr in a. */
+BURROW_FUNC(burrow__NetLookupIPFunc, Slice, Alloc *a, Context ctx, Str network,
+            Str host, Error *err);
+extern const Any burrow__net_lookup_ip_alt_resolver_key;
+
+/* The resolver in ctx, or one with a NULL f. */
+burrow__NetLookupIPFunc burrow__net_lookup_ip_alt_resolver(Context ctx);
 
 #endif /* BURROW_SRC_NET_INTERNAL_H */

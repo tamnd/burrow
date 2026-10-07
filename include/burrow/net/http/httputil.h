@@ -26,16 +26,21 @@
 #ifndef BURROW_NET_HTTP_HTTPUTIL_H
 #define BURROW_NET_HTTP_HTTPUTIL_H
 
+#include "burrow/bufio.h"
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/func.h"
 #include "burrow/io.h"
 #include "burrow/log.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
+#include "burrow/net.h"
 #include "burrow/net/http.h"
+#include "burrow/net/textproto.h"
 #include "burrow/net/url.h"
 #include "burrow/own.h"
 #include "burrow/slice.h"
+#include "burrow/sync.h"
 #include "burrow/time.h"
 
 #include <stdbool.h>
@@ -225,6 +230,168 @@ void httputil_reverse_proxy_serve_http(HttputilReverseProxy *p, HttpResponseWrit
 /* p as an HttpHandler, borrowing p. */
 BURROW_BORROWS(ret, p) HttpHandler
 httputil_reverse_proxy_as_handler(HttputilReverseProxy *p);
+
+/* --------------------------------------------------------- persistent conns
+ *
+ * ServerConn and ClientConn, which Go keeps from its early HTTP code and has
+ * deprecated in favour of HttpServer, HttpClient and HttpTransport. Each reads
+ * and writes HTTP/1.x messages on one connection, in order, keeping track of
+ * when the connection is done in the keep-alive sense. Reads and writes may
+ * come from different goroutines, and the conn makes them take their turns in
+ * the order the requests came.
+ *
+ * Before reading the next message a conn closes the body of the last one it
+ * read, so that what is left of that body is read off the connection and the
+ * next message starts where it should. That is why the conn keeps what it
+ * reads: a request a server conn reads is its own until httputil_server_conn_
+ * write has answered it, and a response a client conn reads is its own until
+ * the next read. Both go back with the conn if nothing frees them sooner. */
+
+/* httputil.ErrPersistEOF, ErrClosed and ErrPipeline, all of them
+ * HttpProtocolErrors as in Go. A read gets httputil_err_persist_eof once the
+ * other side has said the connection is done, httputil_err_closed is from a
+ * write after httputil_server_conn_close, and httputil_err_pipeline from
+ * answering a request the conn has no record of. Go has them deprecated as no
+ * longer used, but the conns below still give all three. */
+extern const Error httputil_err_persist_eof;
+extern const Error httputil_err_closed;
+extern const Error httputil_err_pipeline;
+
+/* One request a conn is waiting to see answered, and its turn. */
+typedef struct burrow__HttputilPipeReq {
+    HttpRequest *req;
+    Uint id;
+} burrow__HttputilPipeReq;
+
+/* httputil.ServerConn, the server's side of a connection: it reads requests
+ * and writes the responses to them. Made by httputil_new_server_conn, with
+ * fields that are the conn's own. */
+typedef struct HttputilServerConn {
+    SyncMutex mu;
+    NetConn c;
+    BufioReader *r;
+    Error re, we;
+    HttpRequest *last;     /* the request the next read closes the body of */
+    IoReadCloser lastbody; /* that body, as it was when it was read */
+    bool last_answered;    /* and whether a write has answered it already */
+    Int nread, nwritten;
+    burrow__HttputilPipeReq *pipereq;
+    Int npipereq, cappipereq;
+    TextprotoPipeline pipe;
+    Alloc *a;
+    BufioReader *made_r; /* r, when the conn made it */
+    Arena errs;          /* where re and we are kept */
+} HttputilServerConn;
+
+/* httputil.NewServerConn. A conn, made in a, that reads requests from r and
+ * writes responses to c. A NULL r is a new BufioReader on c, which the conn
+ * frees, unless a hijack hands it over first. NULL when a says no. */
+BURROW_OWNS(ret) HttputilServerConn *httputil_new_server_conn(Alloc *a, NetConn c,
+                                                              BufioReader *r);
+
+/* Gives back sc and the requests it still has. It does not close the
+ * connection, which is what httputil_server_conn_close is for. NULL is fine. */
+void httputil_server_conn_free(HttputilServerConn *sc);
+
+/* ServerConn.Hijack. Takes the connection and its reader away from sc and
+ * gives them back to you, the reader through r, which may be NULL. The reader
+ * may have read some of what came after the last request. A reader the conn
+ * made is yours after this, to give back with bufio_reader_free. Not to be
+ * called while a read or a write is going on. */
+NetConn httputil_server_conn_hijack(HttputilServerConn *sc, BufioReader **r);
+
+/* ServerConn.Close. Takes the connection as httputil_server_conn_hijack does
+ * and closes it. Nil when there was none to close. */
+BURROW_BORROWS(ret) Error httputil_server_conn_close(HttputilServerConn *sc);
+
+/* ServerConn.Read. The next request on the connection, or NULL with err set.
+ * When the request asks for the connection to be closed, or the client closes
+ * it partway through one, err is httputil_err_persist_eof, and in the first of
+ * those the request comes back too, to be answered. The request belongs to sc
+ * and goes once httputil_server_conn_write has answered it. */
+BURROW_BORROWS(ret, sc) HttpRequest *httputil_server_conn_read(HttputilServerConn *sc,
+                                                               Error *err);
+
+/* ServerConn.Pending. How many requests have been read and not answered. */
+Int httputil_server_conn_pending(HttputilServerConn *sc);
+
+/* ServerConn.Write. Writes resp as the answer to req, which has to be a
+ * request sc read and has not answered yet. Answers go out in the order the
+ * requests came, so this waits for the answers to the earlier ones. A resp
+ * with close set ends the connection after it, and the requests not read by
+ * then are lost. req is freed before this returns, so resp->request should not
+ * be used after. The error is sticky, and every write after a failed one gives
+ * it again. */
+BURROW_BORROWS(ret, sc) Error httputil_server_conn_write(HttputilServerConn *sc,
+                                                         HttpRequest *req,
+                                                         HttpResponse *resp);
+
+/* httputil.ClientConn, the client's side of a connection: it writes requests
+ * and reads the responses to them. Made by httputil_new_client_conn or
+ * httputil_new_proxy_client_conn, with fields that are the conn's own. */
+typedef struct HttputilClientConn {
+    SyncMutex mu;
+    NetConn c;
+    BufioReader *r;
+    Error re, we;
+    HttpResponse *last; /* the response the next read closes the body of */
+    IoReadCloser lastbody;
+    Int nread, nwritten;
+    burrow__HttputilPipeReq *pipereq;
+    Int npipereq, cappipereq;
+    TextprotoPipeline pipe;
+    bool proxy; /* write requests with http_request_write_proxy */
+    Alloc *a;
+    BufioReader *made_r;
+    Arena errs;
+} HttputilClientConn;
+
+/* httputil.NewClientConn. A conn, made in a, that writes requests to c and
+ * reads responses from r. A NULL r is a new BufioReader on c, which the conn
+ * frees, unless a hijack hands it over first. NULL when a says no. */
+BURROW_OWNS(ret) HttputilClientConn *httputil_new_client_conn(Alloc *a, NetConn c,
+                                                              BufioReader *r);
+
+/* httputil.NewProxyClientConn. httputil_new_client_conn for a conn to a
+ * proxy, which writes each request with the whole URL in its first line, as
+ * http_request_write_proxy does. */
+BURROW_OWNS(ret) HttputilClientConn *httputil_new_proxy_client_conn(Alloc *a, NetConn c,
+                                                                    BufioReader *r);
+
+/* Gives back cc and the response it still has. It does not close the
+ * connection. NULL is fine. */
+void httputil_client_conn_free(HttputilClientConn *cc);
+
+/* ClientConn.Hijack and ClientConn.Close, as httputil_server_conn_hijack and
+ * httputil_server_conn_close are for a server conn. */
+NetConn httputil_client_conn_hijack(HttputilClientConn *cc, BufioReader **r);
+BURROW_BORROWS(ret) Error httputil_client_conn_close(HttputilClientConn *cc);
+
+/* ClientConn.Write. Writes req, which stays yours but has to last until the
+ * response to it has been read. httputil_err_persist_eof once the connection
+ * is done in the keep-alive sense. A req with close set tells the server this
+ * is the last one, and the writes after it fail. io_err_unexpected_eof says
+ * the server closed the connection, which is usually as good as a close. */
+BURROW_BORROWS(ret, cc) Error httputil_client_conn_write(HttputilClientConn *cc,
+                                                         HttpRequest *req);
+
+/* ClientConn.Pending. How many requests have been written and their
+ * responses not read. */
+Int httputil_client_conn_pending(HttputilClientConn *cc);
+
+/* ClientConn.Read. The response to req, which has to have been written with
+ * httputil_client_conn_write and its response not read yet. Responses are read
+ * in the order the requests went, so this waits for the earlier ones. A
+ * response can come back with err set to httputil_err_persist_eof, which says
+ * the server wants it to be the last. The response belongs to cc and goes at
+ * the next read, which closes its body. Not to be called while another read
+ * is going on, though a write may be. */
+BURROW_BORROWS(ret, cc) HttpResponse *
+httputil_client_conn_read(HttputilClientConn *cc, HttpRequest *req, Error *err);
+
+/* ClientConn.Do. Writes req and reads the response to it. */
+BURROW_BORROWS(ret, cc) HttpResponse *
+httputil_client_conn_do(HttputilClientConn *cc, HttpRequest *req, Error *err);
 
 #ifdef __cplusplus
 }

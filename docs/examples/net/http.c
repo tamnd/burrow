@@ -161,7 +161,17 @@ static HttpHeader printer_header(void *self) {
 }
 
 static const HttpResponseWriterVT printer_vt = {
-    {NULL, printer_write}, printer_header, printer_write_header};
+    {NULL, printer_write},
+    printer_header,
+    printer_write_header,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+};
 
 static void show_note(void *env, HttpResponseWriter w, HttpRequest *r) {
     (void)env;

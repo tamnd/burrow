@@ -83,7 +83,17 @@ static HttpHeader rec_header(void *self) {
 }
 
 static const HttpResponseWriterVT rec_vt = {
-    {NULL, rec_write}, rec_header, rec_write_header};
+    {NULL, rec_write},
+    rec_header,
+    rec_write_header,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+};
 
 /* httptest.NewRecorder, with 200 for the code until something writes one. */
 static void rec_init(TestingT *t, Alloc *a, Recorder *rr) {

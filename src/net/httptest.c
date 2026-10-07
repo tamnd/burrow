@@ -166,7 +166,17 @@ static Error hh_vt_flush(void *self) {
 }
 
 static const HttpResponseWriterVT hh_writer_vt = {
-    {&hh_recorder_desc, hh_vt_write}, hh_vt_header, hh_vt_write_header, hh_vt_flush};
+    {&hh_recorder_desc, hh_vt_write},
+    hh_vt_header,
+    hh_vt_write_header,
+    hh_vt_flush,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+};
 
 HttpResponseWriter
 httptest_response_recorder_as_response_writer(HttptestResponseRecorder *rw) {

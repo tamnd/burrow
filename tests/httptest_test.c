@@ -59,8 +59,10 @@ static void set_header(HttpResponseWriter w, const char *k, const char *v) {
 
 static HttpResponse *result(TestingT *t, HttptestResponseRecorder *rec) {
     HttpResponse *res = httptest_response_recorder_result(rec);
-    if (res == NULL)
-        testing_t_fatalf_v(t, "Result() = nil");
+    if (res == NULL) {
+        testing_t_errorf_v(t, "Result() = nil");
+        testing_t_fail_now(t);
+    }
     return res;
 }
 

@@ -220,8 +220,8 @@ static void TestWriteSetCookies(TestingT *t) {
         {{.name = T("special-7"), .value = T("a,")}, T("special-7=\"a,\"")},
         {{.name = T("special-8"), .value = T(",")}, T("special-8=\",\"")},
         {{.name = T("empty-value")}, T("empty-value=")},
-        {{0}, T("")},
-        {{0}, T("")},
+        {.raw = T("")},
+        {.raw = T("")},
         {{.name = T("\011")}, T("")},
         {{.name = T("\015")}, T("")},
         {{.name = T("a\012b"), .value = T("v")}, T("")},
@@ -634,7 +634,7 @@ static void TestCookieValid(TestingT *t) {
         bool nil;
         bool valid;
     } tests[] = {
-        {{0}, true, false},
+        {.nil = true},
         {{.name = T("")}, false, false},
         {{.name = T("invalid-value"), .value = T("foo\"bar")}, false, false},
         {{.name = T("invalid-path"), .path = T("/foo;bar/")}, false, false},
@@ -888,10 +888,10 @@ static void TestParseSetCookie(TestingT *t) {
                   .value = T(","),
                   .quoted = true,
                   .raw = T("special-9 =\",\"")}},
-        {T(""), .err = blank, .want = {0}},
-        {T("equal-not-found"), .err = equal_not_found, .want = {0}},
-        {T("=v1"), .err = invalid_name, .want = {0}},
-        {T("k1=\\"), .err = invalid_value, .want = {0}},
+        {T(""), .err = blank},
+        {T("equal-not-found"), .err = equal_not_found},
+        {T("=v1"), .err = invalid_name},
+        {T("k1=\\"), .err = invalid_value},
     };
     ARENA_BEGIN;
     for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {

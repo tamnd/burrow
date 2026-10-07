@@ -518,6 +518,32 @@ Int burrow__net_lookup_port_map(Str network, Str service, Error *err);
  * error_allocator(). */
 Int burrow__net_lookup_protocol(Str name, Error *err);
 
+/* ------------------------------------------------------------- cgo_unix.go */
+
+/* The lookups Go makes through the C library, made here through the platform
+ * layer on threads kept for them (src/net/cgo.c). Errors are in
+ * error_allocator() and results in a. */
+
+/* cgoLookupHost: the addresses of name as strings. */
+BURROW_OWNS(ret) Slice burrow__net_cgo_lookup_host(Alloc *a, Context ctx, Str name,
+                                                   Error *err);
+
+/* cgoLookupIP: the NetIPAddr values of name, of the version network ends in. */
+BURROW_OWNS(ret) Slice burrow__net_cgo_lookup_ip(Alloc *a, Context ctx, Str network,
+                                                 Str name, Error *err);
+
+/* cgoLookupPort: the port of service for network, which is "ip" or one of
+ * the TCP and UDP networks. */
+Int burrow__net_cgo_lookup_port(Context ctx, Str network, Str service, Error *err);
+
+/* cgoLookupPTR: the name of addr, as an absolute domain name. */
+BURROW_OWNS(ret) Slice burrow__net_cgo_lookup_ptr(Alloc *a, Context ctx, Str addr,
+                                                  Error *err);
+
+/* cgoLookupCNAME: the first answer of a CNAME query through res_search. */
+BURROW_OWNS(ret) Str burrow__net_cgo_lookup_cname(Alloc *a, Context ctx, Str name,
+                                                  Error *err);
+
 /* -------------------------------------------------------------- dnsclient.go */
 
 /* notFoundError, an error whose text is s and which newDNSError turns into a
@@ -752,10 +778,9 @@ void burrow__net_force_dns_config_file(Str filename, Time last_checked);
 
 /* ------------------------------------------------------------------ conf.go */
 
-/* hostLookupOrder, the order to look a name up in: the C library, the hosts
- * file then DNS, DNS then the hosts file, one or the other. burrow has no C
- * library to ask, and cgo is only ever the answer when a burrow__NetConf says
- * it is available, which the tests do and the system's never does. */
+/* hostLookupOrder, the order to look a name up in: the system's resolver
+ * (src/net/cgo.c), the hosts file then DNS, DNS then the hosts file, one or
+ * the other. */
 typedef enum burrow__HostLookupOrder {
     BURROW__HOST_LOOKUP_CGO,
     BURROW__HOST_LOOKUP_FILES_DNS,

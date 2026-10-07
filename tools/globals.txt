@@ -206,6 +206,8 @@ global	src/unique/unique.c	uq_arena	intern	Only touched under uq_lock.
 global	src/unique/unique.c	uq_ready	intern	Only touched under uq_lock.
 global	src/net/hosts.c	nh_hosts	hosts-cache	The parsed hosts file, its path, size and modification time, and the path tests read instead. Read and written only under nh_hosts.mu, and a new reading is built aside and swapped in whole.
 global	src/net/conf.c	cf_get_hostname	resolver	The function that gives the host name for resolv.conf's search list. Only tests set it, before the lookups they make, which is how Go's tests use getHostname.
+global	src/net/cgo.c	cg_threads	resolver	threadLimit, the channel with a slot for each call to the system's resolver that may run at once. Made once under cg_threads.once and only sent to and received from after that.
+global	src/net/cgo.c	cg_pool	resolver	The threads waiting for a call to the system's resolver. Read and written only under cg_pool.mu.
 global	src/net/dnsclient_unix.c	du_fallback	resolver	The config used when resolv.conf cannot be read. Written once under du_resolv.init_once and only read after that.
 global	src/net/lookup.c	lk_default	resolver	DefaultResolver. Its only state is the list of lookups in flight, which is read and written under its burrow_mu.
 global	src/net/netfd.c	nf_stack	package-vars	Whether this machine has IPv4, IPv6 and IPv4-mapped IPv6 sockets, probed by the first socket that needs to know and stored with a release store after the probed bit. Two racing probes store the same value.

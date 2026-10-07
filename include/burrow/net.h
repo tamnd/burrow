@@ -342,6 +342,37 @@ typedef struct NetPacketConn {
 
 IoCloser net_packet_conn_as_io_closer(NetPacketConn c);
 
+/* ---------------------------------------------------------------- Buffers */
+
+/* net.Buffers: runs of bytes to write one after another, a Slice whose
+ * elements are Slices of bytes and whose elem is TYPE_BYTES.
+ *
+ *     Slice parts[] = {head, body};
+ *     NetBuffers v = slice_from(parts, 2, 2, TYPE_BYTES);
+ *     net_buffers_write_to(&v, net_conn_as_io_writer(c), &err);
+ *
+ * To a TCPConn, a UDPConn, an IPConn or a UnixConn, this is one writev for
+ * all of them, or as many as it takes when there are more than a system call
+ * takes at once, rather than a write each. Both calls take what they used
+ * off the front of *v, setting the Slices they finish with to nil, and leave
+ * the bytes themselves alone. */
+typedef Slice NetBuffers;
+
+extern const Type *const TYPE_NET_BUFFERS;
+
+/* Buffers.WriteTo: writes all of *v to w and says how many bytes went. To one
+ * of the four above, a failure is a NetOpError whose op is "writev", or
+ * "wsasend" on Windows, and elsewhere it is whatever w's write said. */
+int64_t net_buffers_write_to(NetBuffers *v, IoWriter w, Error *err);
+
+/* Buffers.Read: copies from the front of *v into p, as much as fits, and
+ * gives io_eof once *v is empty, with the last of the bytes or after them. */
+Int net_buffers_read(NetBuffers *v, Slice p, Error *err);
+
+/* v as an io.Reader, whose type has WriteTo, so that io_copy from it to a
+ * connection writes it all at once as net_buffers_write_to does. */
+IoReader net_buffers_as_io_reader(NetBuffers *v);
+
 /* --------------------------------------------------------------- net.Error */
 
 /* net.Error, an error that can say whether it was a timeout.
@@ -362,6 +393,9 @@ bool net_is_error(Error err);
  * timeouts and the rest are surprising, and nothing should use it. */
 bool net_error_timeout(NetError err);
 bool net_error_temporary(NetError err);
+
+/* Error.Error, the text of err, which is error_text's. */
+BURROW_BORROWS(ret, err) Str net_error_error(NetError err);
 
 /* net.ErrClosed, "use of closed network connection", for a call on a
  * connection that has been closed. Test for it with errors_is. It is a
@@ -478,6 +512,31 @@ extern const Type *const TYPE_NET_UNKNOWN_NETWORK_ERROR;
 /* The Error for the name network, which is copied into a. */
 BURROW_OWNS(ret) Error net_unknown_network_error(Alloc *a, Str network);
 
+/* UnknownNetworkError.Error, "unknown network " and e, built in a, and its
+ * Timeout and Temporary, which are always false. */
+BURROW_OWNS(ret) Str net_unknown_network_error_error(NetUnknownNetworkError e,
+                                                     Alloc *a);
+bool net_unknown_network_error_timeout(NetUnknownNetworkError e);
+bool net_unknown_network_error_temporary(NetUnknownNetworkError e);
+
+/* net.InvalidAddrError, an address that makes no sense, whose text is the
+ * string itself. Nothing in this package makes one any more, as in Go, where
+ * only Plan 9 does, but a program can. It is a net.Error that is neither a
+ * timeout nor temporary, and errors_as with TYPE_NET_INVALID_ADDR_ERROR gives
+ * back the string. */
+typedef Str NetInvalidAddrError;
+
+extern const Type *const TYPE_NET_INVALID_ADDR_ERROR;
+
+/* The Error for the text, which is copied into a. */
+BURROW_OWNS(ret) Error net_invalid_addr_error(Alloc *a, Str text);
+
+/* InvalidAddrError.Error, which is e itself, and Timeout and Temporary,
+ * which are always false. */
+BURROW_BORROWS(ret, e) Str net_invalid_addr_error_error(NetInvalidAddrError e);
+bool net_invalid_addr_error_timeout(NetInvalidAddrError e);
+bool net_invalid_addr_error_temporary(NetInvalidAddrError e);
+
 /* net.TCPAddr: an IP address, a port and, for an IPv6 address that needs one,
  * the zone, which is an interface name or its index in decimal. An empty ip
  * is the unspecified address, which is what a listener that takes
@@ -558,6 +617,25 @@ BURROW_OWNS(ret) NetTCPListener *net_listen_tcp(Alloc *a, Str network,
 Int net_tcp_conn_read(NetTCPConn *c, Slice p, Error *err);
 Int net_tcp_conn_write(NetTCPConn *c, Slice p, Error *err);
 
+/* TCPConn.ReadFrom, which io_copy uses when c is what it copies to: writes
+ * what it reads from r to c until r ends, and says how many bytes went. The
+ * end of r is not an error. Any other failure, the reading side's or the
+ * writing side's, is a NetOpError with the op "readfrom" around it, so a
+ * write that failed reads "readfrom tcp ...: write tcp ...: broken pipe",
+ * the way Go's does. A NULL c is EINVAL.
+ *
+ * Go hands the copy to the kernel where it can, with splice from another
+ * socket or sendfile from a file on Linux, and copies through a buffer
+ * otherwise. This always copies through a buffer, which takes longer but
+ * moves the same bytes. */
+int64_t net_tcp_conn_read_from(NetTCPConn *c, IoReader r, Error *err);
+
+/* TCPConn.WriteTo, which io_copy uses when c is what it copies from: reads c
+ * until the other end closes it and writes it all to w. A failure is a
+ * NetOpError with the op "writeto" around it, and the end of c is not an
+ * error. A NULL c is EINVAL. */
+int64_t net_tcp_conn_write_to(NetTCPConn *c, IoWriter w, Error *err);
+
 /* conn.Close, which wakes every call blocked on c with net_err_closed, and
  * TCPConn.CloseRead and CloseWrite, which shut down one direction. After a
  * CloseWrite the other end reads io_eof, and after a CloseRead this end
@@ -620,6 +698,10 @@ void net_tcp_conn_free(NetTCPConn *c);
  * as a dialed one does. NULL on an error, which is a NetOpError with the op
  * "accept". */
 BURROW_OWNS(ret) NetTCPConn *net_tcp_listener_accept_tcp(NetTCPListener *l, Error *err);
+
+/* TCPListener.Accept, which is the same as a NetConn, and which a NetListener
+ * made from l gives too. */
+BURROW_OWNS(ret) NetConn net_tcp_listener_accept(NetTCPListener *l, Error *err);
 
 /* TCPListener.Close, which makes an accept that is waiting fail with
  * net_err_closed, and Addr, a NetTCPAddr that belongs to l. */
@@ -775,8 +857,8 @@ Int net_udp_conn_read_msg_udp_addr_port(NetUDPConn *c, Slice p, Slice oob, Int *
  * addr is NULL on a connected conn, and must not be on one that is not. It
  * gives back how much of p went, and in *oobn how much of oob, which is all
  * of it when the message went. oobn may be NULL. */
-Int net_udp_conn_write_msg_udp(NetUDPConn *c, Slice p, Slice oob, const NetUDPAddr *addr,
-                               Int *oobn, Error *err);
+Int net_udp_conn_write_msg_udp(NetUDPConn *c, Slice p, Slice oob,
+                               const NetUDPAddr *addr, Int *oobn, Error *err);
 
 /* WriteMsgUDPAddrPort, with the zero NetipAddrPort for no address. */
 Int net_udp_conn_write_msg_udp_addr_port(NetUDPConn *c, Slice p, Slice oob,
@@ -941,6 +1023,9 @@ void net_unix_conn_free(NetUnixConn *c);
  * allocator. NULL on an error, which is a NetOpError with the op "accept". */
 BURROW_OWNS(ret) NetUnixConn *net_unix_listener_accept_unix(NetUnixListener *l,
                                                             Error *err);
+
+/* UnixListener.Accept, the same as a NetConn. */
+BURROW_OWNS(ret) NetConn net_unix_listener_accept(NetUnixListener *l, Error *err);
 
 /* UnixListener.Close: removes the file the listener made, unless
  * net_unix_listener_set_unlink_on_close said not to, and then closes it. */
@@ -1109,6 +1194,33 @@ bool net_dns_error_temporary(const NetDNSError *e);
 /* The Error for e, which errors_as with TYPE_NET_DNS_ERROR gives back and
  * which unwraps to e->unwrap_err. The strings are copied into a. */
 BURROW_OWNS(ret) Error net_dns_error_as_error(const NetDNSError *e, Alloc *a);
+
+/* net.DNSConfigError, a failure to read the resolver's configuration, around
+ * the error that said so. Go deprecated it, since nothing has made one for a
+ * long time, and it is here for the programs that still look for it. Its
+ * text is "error reading DNS config: " and err's, and it is a net.Error that
+ * is neither a timeout nor temporary. */
+typedef struct NetDNSConfigError {
+    Error err;
+} NetDNSConfigError;
+
+extern const Type *const TYPE_NET_DNS_CONFIG_ERROR;
+
+/* The text, built in a. */
+BURROW_OWNS(ret) Str net_dns_config_error_error(const NetDNSConfigError *e, Alloc *a);
+
+/* e->err. */
+BURROW_BORROWS(ret, e) Error net_dns_config_error_unwrap(const NetDNSConfigError *e);
+
+/* Always false, both. */
+bool net_dns_config_error_timeout(const NetDNSConfigError *e);
+bool net_dns_config_error_temporary(const NetDNSConfigError *e);
+
+/* The Error for e, which errors_as with TYPE_NET_DNS_CONFIG_ERROR gives back
+ * and which unwraps to e->err. The text is built when it is made, and e->err
+ * is kept as it is, so it has to live as long as the error does. */
+BURROW_OWNS(ret) Error net_dns_config_error_as_error(const NetDNSConfigError *e,
+                                                     Alloc *a);
 
 /* net.SRV, net.MX and net.NS, one record each of what LookupSRV, LookupMX
  * and LookupNS give. */

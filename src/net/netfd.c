@@ -62,6 +62,7 @@ static Error nf_syscall_error(Str call, PalErrno pe) {
 #define NF_WRITE_CALL "wsasend"
 #define NF_WRITE_TO_CALL "wsasendto"
 #define NF_WRITE_MSG_CALL "wsasendmsg"
+#define NF_WRITEV_CALL "wsasend"
 #else
 #define NF_READ_CALL "read"
 #define NF_READ_FROM_CALL "recvfrom"
@@ -69,6 +70,7 @@ static Error nf_syscall_error(Str call, PalErrno pe) {
 #define NF_WRITE_CALL "write"
 #define NF_WRITE_TO_CALL "sendto"
 #define NF_WRITE_MSG_CALL "sendmsg"
+#define NF_WRITEV_CALL "writev"
 #endif
 
 /* ---------------------------------------------------------------- the stack */
@@ -592,6 +594,13 @@ Int burrow__netfd_write(burrow__NetFD *fd, Slice p, Error *err) {
     return n;
 }
 
+int64_t burrow__netfd_write_buffers(burrow__NetFD *fd, NetBuffers *v, Error *err) {
+    Error e = BURROW_NO_ERROR;
+    int64_t n = burrow__pfd_writev(&fd->pfd, v, &e);
+    BURROW_OUT(err, nf_wrap(NF_LIT(NF_WRITEV_CALL), e));
+    return n;
+}
+
 Int burrow__netfd_read_from(burrow__NetFD *fd, Slice p, PalSockAddr *from, Error *err) {
     Error e = BURROW_NO_ERROR;
     Int n = burrow__pfd_read_from(&fd->pfd, p, from, &e);
@@ -615,8 +624,8 @@ Int burrow__netfd_read_msg(burrow__NetFD *fd, Slice p, Slice oob, Int *oobn, Int
     return n;
 }
 
-Int burrow__netfd_write_msg(burrow__NetFD *fd, Slice p, Slice oob, const PalSockAddr *to,
-                            Int *oobn, Error *err) {
+Int burrow__netfd_write_msg(burrow__NetFD *fd, Slice p, Slice oob,
+                            const PalSockAddr *to, Int *oobn, Error *err) {
     Error e = BURROW_NO_ERROR;
     Int n = burrow__pfd_write_msg(&fd->pfd, p, oob, to, oobn, &e);
     BURROW_OUT(err, nf_wrap(NF_LIT(NF_WRITE_MSG_CALL), e));

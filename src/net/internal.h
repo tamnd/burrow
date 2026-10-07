@@ -101,6 +101,21 @@ Int burrow__pfd_write(burrow__PollFD *fd, Slice p, Error *err);
 Int burrow__pfd_write_to(burrow__PollFD *fd, Slice p, const PalSockAddr *to,
                          Error *err);
 
+/* poll.FD.Writev: writes the buffers in v, as many at a time as one system
+ * call takes, and consumes from v what went, which on success is all of it.
+ * Nothing written and nothing wrong is io_err_unexpected_eof, as in Go. */
+int64_t burrow__pfd_writev(burrow__PollFD *fd, NetBuffers *v, Error *err);
+
+/* poll.TestHookDidWritev: called with how much each of those system calls
+ * wrote, for the tests that count them. NULL takes it away. Set it only
+ * while nothing is writing. */
+typedef void (*burrow__NetWritevHook)(Int n);
+void burrow__pfd_set_writev_hook(burrow__NetWritevHook f);
+
+/* Buffers.consume: drops the first n bytes of v, and with them every buffer
+ * they empty, setting each one dropped to nil. */
+void burrow__net_buffers_consume(NetBuffers *v, int64_t n);
+
 /* poll.FD.Accept: the next connection, non blocking and not inherited, with
  * the address of the other end in peer, which may be NULL. -1 on an error. A
  * connection that was aborted before it could be accepted is skipped, as Go
@@ -232,6 +247,10 @@ Error burrow__netfd_close(burrow__NetFD *fd);
 Int burrow__netfd_read(burrow__NetFD *fd, Slice p, Error *err);
 Int burrow__netfd_write(burrow__NetFD *fd, Slice p, Error *err);
 
+/* netFD.writeBuffers, poll's Writev with its Errno named "writev", or
+ * "wsasend" on Windows. */
+int64_t burrow__netfd_write_buffers(burrow__NetFD *fd, NetBuffers *v, Error *err);
+
 /* netFD.readFromInet4 and the rest, and writeToInet4 and the rest, for any
  * family, from or to holding the other end's address. */
 Int burrow__netfd_read_from(burrow__NetFD *fd, Slice p, PalSockAddr *from, Error *err);
@@ -301,6 +320,23 @@ Error burrow__net_einval(void);
 Int burrow__conn_read(burrow__NetConnCore *c, Slice p, Error *err);
 Int burrow__conn_write(burrow__NetConnCore *c, Slice p, Error *err);
 Error burrow__conn_close(burrow__NetConnCore *c);
+
+/* conn.writeBuffers, which Buffers.WriteTo uses for a conn, with an OpError
+ * whose op is the call's name, as Go's is. */
+int64_t burrow__conn_write_buffers(burrow__NetConnCore *c, NetBuffers *v, Error *err);
+
+/* The conn under w when w is a TCPConn, a UDPConn, an IPConn or a UnixConn
+ * as an io.Writer, which is Go's w.(buffersWriter), and NULL otherwise. */
+burrow__NetConnCore *burrow__net_buffers_writer(IoWriter w);
+
+/* The io.Writer vtables of those four, and of the TCPConn that
+ * net_tcp_conn_read_from copies to, for burrow__net_buffers_writer to know
+ * them by. */
+extern const IoWriterVT *const burrow__nt_conn_writer;
+extern const IoWriterVT *const burrow__nu_conn_writer;
+extern const IoWriterVT *const burrow__ir_conn_writer;
+extern const IoWriterVT *const burrow__nx_conn_writer;
+extern const IoWriterVT *const burrow__nt_plain_writer;
 
 /* conn.SetDeadline and the rest, mode being the netpoll mode, and
  * SetReadBuffer and SetWriteBuffer, opt being PAL_SO_RCVBUF or PAL_SO_SNDBUF. */

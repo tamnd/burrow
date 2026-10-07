@@ -476,6 +476,26 @@ int64_t pal_recvmsg(int64_t fd, void *buf, int64_t n, void *oob, int64_t oobcap,
     return (int64_t)got;
 }
 
+_Static_assert(sizeof(PalIovec) == sizeof(WSABUF) &&
+                   offsetof(PalIovec, base) == offsetof(WSABUF, buf) &&
+                   offsetof(PalIovec, len) == offsetof(WSABUF, len),
+               "PalIovec is laid out as WSABUF");
+
+int64_t pal_writev(int64_t fd, const PalIovec *v, int32_t count, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!wnet_fd_ok(fd, err))
+        return -1;
+    if ((v == NULL && count > 0) || count < 0) {
+        BURROW_OUT(err, PAL_EFAULT);
+        return -1;
+    }
+    DWORD sent = 0;
+    if (WSASend((SOCKET)fd, (WSABUF *)(uintptr_t)v, (DWORD)count, &sent, 0, NULL,
+                NULL) == SOCKET_ERROR)
+        return wnet_fail_n(err);
+    return (int64_t)sent;
+}
+
 int64_t pal_sendmsg(int64_t fd, const void *buf, int64_t n, const void *oob,
                     int64_t oobn, const PalSockAddr *to, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);

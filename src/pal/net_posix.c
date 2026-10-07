@@ -149,6 +149,14 @@ int64_t pal_recvmsg(int64_t fd, void *buf, int64_t n, void *oob, int64_t oobcap,
     return -1;
 }
 
+int64_t pal_writev(int64_t fd, const PalIovec *v, int32_t count, PalErrno *err) {
+    (void)fd;
+    (void)v;
+    (void)count;
+    pnet_nosys(err);
+    return -1;
+}
+
 int64_t pal_sendmsg(int64_t fd, const void *buf, int64_t n, const void *oob,
                     int64_t oobn, const PalSockAddr *to, PalErrno *err) {
     (void)fd;
@@ -771,6 +779,34 @@ int64_t pal_sendmsg(int64_t fd, const void *buf, int64_t n, const void *oob,
         return pnet_fail_n(err);
     if (oobn > 0 && n <= 0)
         return 0;
+    return (int64_t)r;
+}
+
+_Static_assert(sizeof(PalIovec) == sizeof(struct iovec) &&
+                   offsetof(PalIovec, base) == offsetof(struct iovec, iov_base) &&
+                   offsetof(PalIovec, len) == offsetof(struct iovec, iov_len),
+               "PalIovec is laid out as struct iovec");
+
+int64_t pal_writev(int64_t fd, const PalIovec *v, int32_t count, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!pnet_fd_ok(fd, err))
+        return -1;
+    if ((v == NULL && count > 0) || count < 0) {
+        BURROW_OUT(err, PAL_EFAULT);
+        return -1;
+    }
+    struct msghdr msg;
+    memset(&msg, 0, sizeof msg);
+    msg.msg_iov = (struct iovec *)(uintptr_t)v;
+    /* size_t on glibc and int on the BSDs and musl, and count fits both. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wconversion"
+#pragma GCC diagnostic ignored "-Wsign-conversion"
+    msg.msg_iovlen = count;
+#pragma GCC diagnostic pop
+    ssize_t r = sendmsg((int)fd, &msg, PNET_SEND_FLAGS);
+    if (r < 0)
+        return pnet_fail_n(err);
     return (int64_t)r;
 }
 

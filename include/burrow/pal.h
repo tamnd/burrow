@@ -1704,6 +1704,27 @@ int64_t pal_recvmsg(int64_t fd, void *buf, int64_t n, void *oob, int64_t oobcap,
 int64_t pal_sendmsg(int64_t fd, const void *buf, int64_t n, const void *oob,
                     int64_t oobn, const PalSockAddr *to, PalErrno *err);
 
+/* One buffer of a gathered write, laid out the way the system's own is,
+ * struct iovec or WSABUF, so that an array of them goes to the system as it
+ * stands. Set base and len by name, since their order differs. */
+#if defined(BURROW_OS_WINDOWS)
+typedef struct PalIovec {
+    uint32_t len;
+    void *base;
+} PalIovec;
+#else
+typedef struct PalIovec {
+    void *base;
+    size_t len;
+} PalIovec;
+#endif
+
+/* writev on a connected socket: sends the count buffers in v as one write
+ * and answers how much of them went. It is sendmsg underneath, or WSASend on
+ * Windows, so that a write to a stream the other end has closed fails with
+ * EPIPE and raises no SIGPIPE, as pal_sendto's does. */
+int64_t pal_writev(int64_t fd, const PalIovec *v, int32_t count, PalErrno *err);
+
 /* Socket options, ours, for the same reason the signal numbers are: the level
  * and name pairs differ between platforms and a caller should not have to know
  * which. The set is what Go's net package actually sets, and it grows from

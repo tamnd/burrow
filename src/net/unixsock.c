@@ -577,7 +577,8 @@ Int net_unix_conn_read_msg_unix(NetUnixConn *c, Slice p, Slice oob, Alloc *a, In
             e = burrow_err_out_of_memory;
     }
     if (BURROW_FAILED(e) && !nx_is_eof(e) &&
-        !(e.vt == burrow_err_out_of_memory.vt && e.data == burrow_err_out_of_memory.data))
+        !(e.vt == burrow_err_out_of_memory.vt &&
+          e.data == burrow_err_out_of_memory.data))
         e = burrow__net_op_error(NX_LIT("read"), c->c.fd.net, c->c.laddr, c->c.raddr,
                                  e);
     if (oobn != NULL)
@@ -750,6 +751,8 @@ static const NetConnVT nx_conn_vt = {
     nx_m_set_read_deadline,
     nx_m_set_write_deadline,
 };
+
+const IoWriterVT *const burrow__nx_conn_writer = &nx_conn_vt.writer;
 
 NetConn net_unix_conn_as_conn(NetUnixConn *c) {
     NetConn conn = {NULL, NULL};
@@ -959,9 +962,12 @@ static Error nx_l_close(void *self) {
     return net_unix_listener_close((NetUnixListener *)self);
 }
 
+NetConn net_unix_listener_accept(NetUnixListener *l, Error *err) {
+    return net_unix_conn_as_conn(net_unix_listener_accept_unix(l, err));
+}
+
 static NetConn nx_l_accept(void *self, Error *err) {
-    return net_unix_conn_as_conn(
-        net_unix_listener_accept_unix((NetUnixListener *)self, err));
+    return net_unix_listener_accept((NetUnixListener *)self, err);
 }
 
 static NetAddr nx_l_addr(void *self) {

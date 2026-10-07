@@ -108,6 +108,34 @@ static void TestRetainingAStaticTypedErrorGivesBackTheSame(TestingT *t) {
     arena_free(&keep);
 }
 
+/* An error made with errors_new and kept by the caller to compare with, as
+ * Go code keeps one from errors.New, still matches once something in between
+ * has retained it, and so does the chain wrapping it. Another error with the
+ * same text does not. */
+static void TestRetainingKeepsTheOriginalsIdentity(TestingT *t) {
+    Arena keep;
+    arena_init(&keep, NULL, 0);
+    Alloc *ka = arena_allocator(&keep);
+    Error stop = errors_new(ka, BURROW_S("stop"));
+    Error same_text = errors_new(ka, BURROW_S("stop"));
+
+    ArenaMark m = error_mark();
+    Error kept = error_retain(ka, stop);
+    Error kc = error_retain(ka, wrap(error_allocator(), "outer", stop));
+    error_release(m);
+
+    CHECK(kept.data != stop.data);
+    CHECK(errors_is(kept, stop));
+    CHECK(errors_is(kc, stop));
+    CHECK(!errors_is(kept, same_text));
+    CHECK(!errors_is(kc, same_text));
+
+    /* Retaining the copy again keeps the same original. */
+    Error again = error_retain(ka, kept);
+    CHECK(errors_is(again, stop));
+    arena_free(&keep);
+}
+
 static void TestRetainingCopiesTheTextOutOfTheArena(TestingT *t) {
     Arena keep;
     arena_init(&keep, NULL, 0);
@@ -226,6 +254,7 @@ static void TestEachGoroutineHasItsOwnArenaAndARetainedErrorOutlivesIt(TestingT 
     X(TestReleasingAMarkGivesTheMemoryBack)                                            \
     X(TestRetainingASentinelGivesBackTheSentinel)                                      \
     X(TestRetainingAStaticTypedErrorGivesBackTheSame)                                  \
+    X(TestRetainingKeepsTheOriginalsIdentity)                                          \
     X(TestRetainingCopiesTheTextOutOfTheArena)                                         \
     X(TestRetainingKeepsErrorsIsThroughAChainAndAJoin)                                 \
     X(TestRetainingARuntimeErrorKeepsItsType)                                          \

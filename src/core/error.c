@@ -414,6 +414,10 @@ typedef struct ErrorRetained {
     Str text;
     Error inner;
     Slice kids; /* of Error */
+    /* Which error this is a copy of. The address is kept as a number, since
+     * the original may be gone and nothing reads through it. */
+    const ErrorVT *orig_vt;
+    uintptr_t orig_data;
 } ErrorRetained;
 
 static Str retained_message(const void *self) {
@@ -428,12 +432,19 @@ static Slice retained_unwrap_multi(const void *self) {
     return ((const ErrorRetained *)self)->kids;
 }
 
+/* A copy still matches the error it was made from, the way Go's errors.Is
+ * matches the same pointer. */
+static bool retained_is(const void *self, Error target) {
+    const ErrorRetained *r = (const ErrorRetained *)self;
+    return target.vt == r->orig_vt && (uintptr_t)target.data == r->orig_data;
+}
+
 static const ErrorVT retained_vt = {
-    NULL, retained_message, retained_unwrap, NULL, NULL, NULL, NULL,
+    NULL, retained_message, retained_unwrap, NULL, retained_is, NULL, NULL,
 };
 
 static const ErrorVT retained_multi_vt = {
-    NULL, retained_message, NULL, retained_unwrap_multi, NULL, NULL, NULL,
+    NULL, retained_message, NULL, retained_unwrap_multi, retained_is, NULL, NULL,
 };
 
 Error error_retain(Alloc *a, Error err) {
@@ -453,6 +464,14 @@ Error error_retain(Alloc *a, Error err) {
         memcpy(bytes, text.p, n);
     r->text.p = bytes;
     r->text.len = (Int)n;
+    r->orig_vt = err.vt;
+    r->orig_data = (uintptr_t)err.data;
+    if (err.vt == &retained_vt || err.vt == &retained_multi_vt) {
+        /* A copy of a copy still answers for the first original. */
+        const ErrorRetained *src = (const ErrorRetained *)err.data;
+        r->orig_vt = src->orig_vt;
+        r->orig_data = src->orig_data;
+    }
 
     /* The same order errors_is asks in, so a type that sets both slots, which
      * the header says not to do, is retained as the chain that errors_is

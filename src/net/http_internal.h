@@ -118,6 +118,10 @@ void burrow__http_godebug_set(const char *value);
 extern const Error burrow__http_err_line_too_long;
 extern const Str burrow__http_line_too_long_text;
 
+/* Whether r is a reader http_max_bytes_reader made, which parsing a form
+ * takes as a limit already set. */
+bool burrow__http_is_max_bytes_reader(IoReadCloser r);
+
 /* parseHexUint. A chunk's size from its hex digits, at most 16 of them. */
 uint64_t burrow__http_parse_hex_uint(Slice v, Error *err);
 

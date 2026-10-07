@@ -26,6 +26,7 @@
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
+#include "burrow/mime/multipart.h"
 #include "burrow/net.h"
 #include "burrow/net/http.h"
 #include "burrow/net/url.h"
@@ -52,7 +53,6 @@ BURROW_SENTINEL_ERROR(http_err_hijacked, "http: connection has been hijacked");
 BURROW_SENTINEL_ERROR(http_err_content_length,
                       "http: wrote more than the declared Content-Length");
 BURROW_SENTINEL_ERROR(http_err_abort_handler, "net/http: abort Handler");
-BURROW_SENTINEL_ERROR(http_err_not_supported, "feature not supported");
 BURROW_SENTINEL_ERROR(http_err_handler_timeout, "http: Handler timeout");
 
 /* errNotSupported, which wraps ErrNotSupported. */
@@ -1573,6 +1573,9 @@ static void sv_finish_request(sv_Response *w) {
     /* Close the body (regardless of w->close_after_reply) so we can re-use
      * its bufio.Reader later safely. */
     (void)burrow__http_body_close(w->req_body);
+
+    if (w->req->multipart_form != NULL)
+        (void)multipart_form_remove_all(w->req->multipart_form);
 }
 
 static bool sv_closed_request_body_early(sv_Response *w) {
@@ -2720,6 +2723,10 @@ static const ErrorVT sv_max_bytes_error_vt = {
     &sv_max_bytes_error_desc, sv_max_bytes_error_message, NULL, NULL, NULL, NULL, NULL,
 };
 
+Str http_max_bytes_error_error(const HttpMaxBytesError *e) {
+    return sv_max_bytes_error_message(e);
+}
+
 typedef struct sv_MaxBytesReader {
     HttpResponseWriter w;
     IoReadCloser r;
@@ -2773,6 +2780,10 @@ static Error sv_mbr_close(void *self) {
 }
 
 static const IoReadCloserVT sv_mbr_vt = {{NULL, sv_mbr_read}, {NULL, sv_mbr_close}};
+
+bool burrow__http_is_max_bytes_reader(IoReadCloser r) {
+    return r.vt == &sv_mbr_vt;
+}
 
 IoReadCloser http_max_bytes_reader(Alloc *a, HttpResponseWriter w, IoReadCloser r,
                                    int64_t n) {

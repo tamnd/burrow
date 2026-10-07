@@ -42,6 +42,7 @@
 #include "burrow/map.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
+#include "burrow/mime/multipart.h"
 #include "burrow/net.h"
 #include "burrow/net/textproto.h"
 #include "burrow/net/url.h"
@@ -56,6 +57,19 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* ------------------------------------------------------------------ Methods */
+
+/* The common HTTP methods, from RFC 9110 and, for PATCH, RFC 5789. */
+#define HTTP_METHOD_GET BURROW_S("GET")
+#define HTTP_METHOD_HEAD BURROW_S("HEAD")
+#define HTTP_METHOD_POST BURROW_S("POST")
+#define HTTP_METHOD_PUT BURROW_S("PUT")
+#define HTTP_METHOD_PATCH BURROW_S("PATCH")
+#define HTTP_METHOD_DELETE BURROW_S("DELETE")
+#define HTTP_METHOD_CONNECT BURROW_S("CONNECT")
+#define HTTP_METHOD_OPTIONS BURROW_S("OPTIONS")
+#define HTTP_METHOD_TRACE BURROW_S("TRACE")
 
 /* ------------------------------------------------------------------- Status */
 
@@ -347,6 +361,12 @@ BURROW_FUNC(HttpGetBodyFunc, IoReadCloser, Error *err);
  * Trailer field named, and once the body has been read to its end it has the
  * values the trailer gave them too.
  *
+ * form, post_form and multipart_form are NULL until something parses the form,
+ * which http_request_parse_form, http_request_parse_multipart_form and
+ * http_request_form_value do. form then has the query of the URL and the
+ * form in the body, post_form has only the one in the body, and
+ * multipart_form has a multipart/form-data body with its files.
+ *
  * close says whether the connection is to be closed after this request.
  * host is the host the request is for, from the URL or the Host field.
  * remote_addr is the address the request came from, which a server sets, and
@@ -372,6 +392,9 @@ typedef struct HttpRequest {
     Slice transfer_encoding;
     HttpHeader trailer;
     Str host;
+    UrlValues form;
+    UrlValues post_form;
+    MultipartForm *multipart_form;
     Str remote_addr;
     Str request_uri;
     Str pattern;
@@ -509,6 +532,77 @@ BURROW_BORROWS(ret) Error http_request_write(HttpRequest *r, IoWriter w);
 /* Request.WriteProxy. http_request_write in the form a proxy wants, with the
  * whole URL in the request line. */
 BURROW_BORROWS(ret) Error http_request_write_proxy(HttpRequest *r, IoWriter w);
+
+/* Request.Clone. A deep copy of r, made in a, with its context set to ctx,
+ * which may not be nil. The URL, the header, the trailer, transfer_encoding,
+ * the forms and the path values are copies, so changing them leaves r as it
+ * was. The body is the same body, and the strings are r's own, so r has to
+ * outlive the copy. Give it back with http_request_free, which frees only the
+ * copy. NULL when a says no. */
+BURROW_OWNS(ret) HttpRequest *http_request_clone(const HttpRequest *r, Alloc *a,
+                                                 Context ctx);
+
+/* ------------------------------------------------------------------- forms
+ *
+ * The forms are made in the request's arena, and live until
+ * http_request_free. A request made by hand starts with a zeroed arena, which
+ * takes its memory from the heap, and arena_free on it gives that back. */
+
+/* http.ErrMissingFile, from http_request_form_file when the form has no file
+ * by that name. Its text is "http: no such file". */
+extern const Error http_err_missing_file;
+
+/* Request.ParseForm. Sets form and post_form. form gets the query of the URL.
+ * A POST, PUT or PATCH request with a Content-Type of
+ * application/x-www-form-urlencoded has its body read and parsed as a form,
+ * which goes in post_form and in form, ahead of the query's values. A body of
+ * more than 10 MB is an error unless it is already limited by
+ * http_max_bytes_reader. For any other request post_form is empty. When
+ * form is already set it is left as it is, so calling this twice does
+ * nothing more. On an error both are still set to as much as parsed. */
+BURROW_BORROWS(ret) Error http_request_parse_form(HttpRequest *r);
+
+/* Request.ParseMultipartForm. Reads a multipart/form-data body into
+ * multipart_form, with up to max_memory bytes of its files in memory and the
+ * rest in temporary files, and adds its values to form and post_form. It calls
+ * http_request_parse_form first when form is not set, and gives its error at
+ * the end, after the body is read. Once multipart_form is set it does
+ * nothing. The server removes the temporary files after the handler returns,
+ * and a program that calls this on a request of its own removes them with
+ * multipart_form_remove_all. */
+BURROW_BORROWS(ret) Error http_request_parse_multipart_form(HttpRequest *r,
+                                                            int64_t max_memory);
+
+/* Request.FormValue. The first value for key in form, after parsing the form
+ * with http_request_parse_multipart_form and http_request_parse_form, with 32
+ * MB of memory, when that has not been done. Errors from that are left out,
+ * and a key with no value gives "". A value in the body of a POST, PUT or
+ * PATCH comes before one in the query, which comes before one in a multipart
+ * body. */
+BURROW_BORROWS(ret, r) Str http_request_form_value(HttpRequest *r, Str key);
+
+/* Request.PostFormValue. http_request_form_value with only the values in the
+ * body, from post_form. */
+BURROW_BORROWS(ret, r) Str http_request_post_form_value(HttpRequest *r, Str key);
+
+/* Request.FormFile. The first file for key in a multipart form, opened, and
+ * its header in *fh. The form is parsed with 32 MB of memory first when it
+ * has not been. The file is made in the request's arena, and
+ * multipart_file_close closes it. NULL with http_err_missing_file when there
+ * is no such file. fh may be NULL. */
+BURROW_OWNS(ret) MultipartFile *http_request_form_file(HttpRequest *r, Str key,
+                                                       MultipartFileHeader **fh,
+                                                       Error *err);
+
+/* Request.MultipartReader. A reader of the parts of a multipart/form-data or
+ * multipart/mixed body, to read it as a stream rather than all at once as
+ * http_request_parse_multipart_form does. Only one of the two can be used on
+ * a request, and calling either after the other is an error, as is calling
+ * this twice. http_err_not_multipart for any other Content-Type, and
+ * http_err_missing_boundary when it has no boundary. The reader is made in
+ * the request's arena and is freed with it. */
+BURROW_BORROWS(ret, r) MultipartReader *http_request_multipart_reader(HttpRequest *r,
+                                                                      Error *err);
 
 /* Request.PathValue. The value of the wildcard called name in the ServeMux
  * pattern that matched r, or one set with http_request_set_path_value, and ""
@@ -1038,9 +1132,47 @@ extern const Error http_err_content_length;
  */
 extern const Error http_err_abort_handler;
 
+/* http.ProtocolError, an HTTP protocol error. Go has it as deprecated, since
+ * not all of its protocol errors are one, and the errors below are what is
+ * left of it. errors_as with TYPE_HTTP_PROTOCOL_ERROR gives the struct. */
+typedef struct HttpProtocolError {
+    Str error_string;
+} HttpProtocolError;
+
+extern const Type *const TYPE_HTTP_PROTOCOL_ERROR;
+
+/* ProtocolError.Error, which is error_string. */
+BURROW_BORROWS(ret, pe) Str http_protocol_error_error(const HttpProtocolError *pe);
+
+/* ProtocolError.Is. Whether pe is http_err_not_supported and err is
+ * errors_err_unsupported, so that errors_is matches the two. */
+bool http_protocol_error_is(const HttpProtocolError *pe, Error err);
+
 /* http.ErrNotSupported, which HttpResponseController's functions wrap when the
- * writer does not have the method. Its text is "feature not supported". */
+ * writer does not have the method. Its text is "feature not supported", and
+ * errors_is says it is errors_err_unsupported as well. */
 extern const Error http_err_not_supported;
+
+/* http.ErrMissingBoundary and ErrNotMultipart, from
+ * http_request_multipart_reader when the Content-Type has no boundary, and
+ * when it is not multipart. */
+extern const Error http_err_missing_boundary;
+extern const Error http_err_not_multipart;
+
+/* http.ErrUnexpectedTrailer, ErrHeaderTooLong, ErrShortBody and
+ * ErrMissingContentLength, which nothing gives any more, kept as Go keeps
+ * them. */
+extern const Error http_err_unexpected_trailer;
+extern const Error http_err_header_too_long;
+extern const Error http_err_short_body;
+extern const Error http_err_missing_content_length;
+
+/* http.ErrWriteAfterFlush, which nothing gives either. Its text is "unused". */
+extern const Error http_err_write_after_flush;
+
+/* http.ErrLineTooLong, "header line too long", from reading a chunked body
+ * with a line longer than it will read. */
+extern const Error http_err_line_too_long;
 
 /* http.DefaultMaxHeaderBytes and DefaultMaxHeaderValueCount, the most bytes a
  * request's first line and header may have, and the most header values, when
@@ -1271,6 +1403,9 @@ typedef struct HttpMaxBytesError {
 } HttpMaxBytesError;
 
 extern const Type *const TYPE_HTTP_MAX_BYTES_ERROR;
+
+/* MaxBytesError.Error, "http: request body too large". */
+BURROW_STATIC(ret) Str http_max_bytes_error_error(const HttpMaxBytesError *e);
 
 /* http.MaxBytesReader. A reader of r that gives an HttpMaxBytesError after n
  * bytes, or after none when n is below zero, and tells the server w belongs to

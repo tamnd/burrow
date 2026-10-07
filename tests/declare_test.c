@@ -292,6 +292,29 @@ static void TestExportednessFollowsGosRule(TestingT *t) {
     CHECK(!field_is_exported(NULL));
 }
 
+/* A struct whose fields are snake_case in C and Go's names in the descriptor,
+ * which is how burrow's own structs reach encoding/asn1. */
+#define SPELLED_FIELDS(F, T)                                                           \
+    F(T, Int, serial_number, SerialNumber, "asn1:\"optional\"")                        \
+    F(T, Int, hidden, hidden, "")
+
+BURROW_STRUCT_AS(Spelled, SPELLED_FIELDS);
+
+static void TestAFieldCanBeDescribedUnderItsGoName(TestingT *t) {
+    const Type *ty = TYPE_OF(Spelled);
+    Spelled s = {7, 8};
+
+    CHECK_INT_EQ(ty->nfield, 2);
+    CHECK(str_eq(ty->fields[0].name, BURROW_S("SerialNumber")));
+    CHECK(str_eq(ty->fields[0].tag, BURROW_S("asn1:\"optional\"")));
+    CHECK_INT_EQ(ty->fields[0].offset, (uint32_t)offsetof(Spelled, serial_number));
+    CHECK_INT_EQ(ty->fields[1].offset, (uint32_t)offsetof(Spelled, hidden));
+    CHECK(field_is_exported(&ty->fields[0]));
+    CHECK(!field_is_exported(&ty->fields[1]));
+    CHECK(type_field_by_name(ty, BURROW_S("serial_number")) == NULL);
+    CHECK_INT_EQ(s.serial_number + s.hidden, 15);
+}
+
 static void TestAnEmbeddedFieldIsOneNamedAfterItsType(TestingT *t) {
     const Type *ty = TYPE_OF(Mixed);
 
@@ -461,6 +484,7 @@ static void TestADescribedForeignStructBehavesLikeADeclaredOne(TestingT *t) {
     X(TestAStructFieldCarriesItsOwnDescriptor)                                         \
     X(TestEqualityRecursesIntoANestedStruct)                                           \
     X(TestExportednessFollowsGosRule)                                                  \
+    X(TestAFieldCanBeDescribedUnderItsGoName)                                          \
     X(TestAnEmbeddedFieldIsOneNamedAfterItsType)                                       \
     X(TestASliceDescriptorDescribesTheHeaderAndTheElement)                             \
     X(TestAPointerDescriptorPointsAtSomething)                                         \

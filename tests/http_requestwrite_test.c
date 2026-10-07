@@ -21,7 +21,6 @@
 #include "burrow/mem/arena.h"
 #include "burrow/net/http.h"
 #include "burrow/net/url.h"
-#include "burrow/runtime.h"
 #include "burrow/strings.h"
 #include "burrow/testing/iotest.h"
 
@@ -884,7 +883,7 @@ static void TestRequestWriteError(TestingT *t) {
 /* The GET cases of TestRequestWriteTransport, written straight to a builder
  * rather than through a Transport. A GET body of unknown length is read a byte
  * ahead to see whether it is empty, on a goroutine of its own with a timer,
- * so this runs under runtime_main. */
+ * which works because the test itself runs on a goroutine. */
 typedef struct ProbeCase {
     const char *method;
     int64_t clen;
@@ -956,7 +955,7 @@ static bool contains(Str s, const char *sub) {
 static void TestRequestWriteProbe(TestingT *t) {
     ARENA_BEGIN;
     ProbeRun run = {.a = a};
-    runtime_main(BURROW_FN(Func, probe_main, &run));
+    probe_main(&run);
     for (size_t i = 0; i < sizeof probe_cases / sizeof probe_cases[0]; i++) {
         const ProbeCase *tc = &probe_cases[i];
         Str got = run.out[i];

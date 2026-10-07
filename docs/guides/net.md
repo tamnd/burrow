@@ -1562,3 +1562,49 @@ serve: http: Server closed
 `http_server_shutdown` closes the listeners, so `http_server_serve` returns `http_err_server_closed` at once, and then waits for each connection to finish its request and go idle, or for the context to be done. `http_server_close` doesn't wait: it closes every connection there and then. A handler that panics gets its connection closed and the panic logged with a stack trace to `error_log`, or to the standard logger when that is NULL, and the server goes on serving the others. A handler that wants to stop without a log line panics with `http_err_abort_handler`.
 
 A server can't be copied once it has started, and `http_server_free` waits for the goroutines of all its connections to end, so call it after Serve has returned. A connection from a `NetTCPListener` or `NetUnixListener` is freed by the server when it is done, and one from any other listener is closed but stays yours to free. `http_timeout_handler`, `http_max_bytes_handler` and `http_allow_query_semicolons` wrap a handler the way Go's do, and `HttpResponseController` reaches the flush, hijack and deadline methods of the writer a handler gets. Only HTTP/1 is here so far, without TLS.
+
+## Making requests
+
+An `HttpClient` sends requests and follows redirects. `http_client_get`, `http_client_head`, `http_client_post` and `http_client_post_form` cover the common cases, and `http_client_do` sends a request you made with `http_new_request`. A zero client works, with `http_default_transport` underneath, which keeps connections open between requests and shares them. `http_get` and the rest use `http_default_client`. An `httptest_new_server` runs a handler on a loopback port, so a test can talk to it with a real client, and its `httptest_server_client` already knows the way:
+
+<!-- example: ../examples/net/client.c#client -->
+```c
+HttptestServer *ts =
+    httptest_new_server(heap_allocator(), http_serve_mux_as_handler(mux));
+HttpClient *c = httptest_server_client(ts);
+Error err;
+
+/* Get follows the redirect. */
+Str url = fmt_sprintf_v(a, "%s/old", ts->url);
+show(a, http_client_get(c, url, &err), err);
+
+/* PostForm encodes the values as the body. */
+UrlValues form = url_values_make(a);
+url_values_set(form, BURROW_S("name"), BURROW_S("gopher"));
+url_values_add(form, BURROW_S("name"), BURROW_S("burrow"));
+show(a, http_client_post_form(c, fmt_sprintf_v(a, "%s/echo", ts->url), form, &err),
+     err);
+
+/* check_redirect can stop at the redirect and hand it back. */
+HttpClient stopping = *c;
+stopping.check_redirect = BURROW_FN(HttpCheckRedirectFunc, stop_here, NULL);
+HttpResponse *res = http_client_get(&stopping, url, &err);
+if (res != NULL)
+    fmt_printf_v("Location: %s\n",
+                 http_header_get(res->header, BURROW_S("Location")));
+show(a, res, err);
+
+/* timeout covers the whole exchange, body and all. */
+HttpClient hurried = *c;
+hurried.timeout = 100 * TIME_MILLISECOND;
+res = http_client_get(&hurried, fmt_sprintf_v(a, "%s/slow", ts->url), &err);
+fmt_printf_v("deadline exceeded: %t, timeout: %t\n",
+             errors_is(err, context_deadline_exceeded),
+             res == NULL && net_error_timeout(err));
+http_response_free(res);
+httptest_server_free(ts);
+```
+
+The client follows up to ten redirects, and `check_redirect` decides otherwise: an error from it ends the request, and `http_err_use_last_response` hands back the redirect itself, body unread. A 301, 302 or 303 turns the request into a GET with no body, while a 307 or 308 sends the same method and body again, which takes a `get_body` when the body isn't a `BytesBuffer`, `BytesReader` or `StringsReader`, the three `http_new_request` knows how to rewind. Headers go along to the same host and its subdomains, but `Authorization`, `Cookie` and the other credential headers stop at a different domain. With a `jar`, cookies from each response go into the jar and the jar's cookies go out with each request.
+
+`timeout` covers the whole exchange, the redirects and the reading of the body included. When it runs out the error is a `UrlError` that is a timeout to `net_error_timeout`, and `errors_is` finds `context_deadline_exceeded` in it. A request's context can cancel it too. Every error from the client is a `UrlError` with the method and the URL, with any password in the URL shown as `***`. A status like 404 is not an error. The response it comes with has to be freed with `http_response_free`, and so does the one that comes back with an error from `check_redirect`.

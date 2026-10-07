@@ -596,6 +596,10 @@ void burrow__net_sort_by_rfc6724_with_srcs(NetIPAddr *addrs, const NetipAddr *sr
 BURROW_OWNS(ret) burrow__DNSConfig *burrow__net_system_dns_config(void);
 void burrow__dns_config_put(burrow__DNSConfig *c);
 
+/* getSystemDNSConfigNamed: the same, with the file looked at being name, for
+ * tests. */
+BURROW_OWNS(ret) burrow__DNSConfig *burrow__net_system_dns_config_named(Str name);
+
 /* distantFuture, a last check time for the hooks below that means never
  * look at the file again. */
 Time burrow__net_distant_future(void);
@@ -682,6 +686,20 @@ burrow__NetHostnameFunc burrow__net_get_hostname(void);
 Error burrow__net_dns_lookup(NetResolver *r, Alloc *ma, Context ctx, Str name,
                              DnsmsgType qtype, burrow__DNSConfig *conf, DnsmsgParser *p,
                              Str *server);
+
+/* exchange: q to server, over UDP and then over TCP when the answer is cut
+ * short, or over TCP alone with use_tcp. The answer is in ma, with p just
+ * past its question. ad asks for the AD bit. */
+Error burrow__net_dns_exchange(NetResolver *r, Alloc *ma, Context ctx, Str server,
+                               DnsmsgQuestion q, Duration timeout, bool use_tcp,
+                               bool ad, DnsmsgParser *p, DnsmsgHeader *h);
+
+/* tryOneName: name asked of each server in turn, cfg->attempts times over,
+ * until one answers. The answer is in ma, *server is borrowed from cfg, and
+ * the error is a DNSError in error_allocator(). */
+Error burrow__net_dns_try_one_name(NetResolver *r, Alloc *ma, Context ctx,
+                                   burrow__DNSConfig *cfg, Str name, DnsmsgType qtype,
+                                   DnsmsgParser *p, Str *server);
 
 /* goLookupHostOrder, as a Slice of Str. */
 BURROW_OWNS(ret) Slice burrow__net_go_lookup_host_order(NetResolver *r, Alloc *a,

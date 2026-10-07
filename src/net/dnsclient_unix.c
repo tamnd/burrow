@@ -165,7 +165,11 @@ static void du_try_update(Str name) {
 }
 
 burrow__DNSConfig *burrow__net_system_dns_config(void) {
-    du_try_update(DU_LIT(du_path));
+    return burrow__net_system_dns_config_named(DU_LIT(du_path));
+}
+
+burrow__DNSConfig *burrow__net_system_dns_config_named(Str name) {
+    du_try_update(name);
     sync_mutex_lock(&du_resolv.mu);
     DuConf *h = du_resolv.conf;
     if (!h->pinned)
@@ -466,11 +470,9 @@ static Error du_round_trip(NetResolver *r, Alloc *sa, Alloc *ma, Context ctx,
     return BURROW_NO_ERROR;
 }
 
-/* exchange: q to server, over UDP and then TCP for an answer cut short, or
- * over TCP alone. The answer is in ma. */
-static Error du_exchange(NetResolver *r, Alloc *ma, Context ctx, Str server,
-                         DnsmsgQuestion q, Duration timeout, bool use_tcp, bool ad,
-                         DnsmsgParser *p, DnsmsgHeader *h) {
+Error burrow__net_dns_exchange(NetResolver *r, Alloc *ma, Context ctx, Str server,
+                               DnsmsgQuestion q, Duration timeout, bool use_tcp,
+                               bool ad, DnsmsgParser *p, DnsmsgHeader *h) {
     memset(p, 0, sizeof *p);
     memset(h, 0, sizeof *h);
     q.class_ = DNSMSG_CLASS_INET;
@@ -572,12 +574,9 @@ static Error du_skip_to_answer(DnsmsgParser *p, DnsmsgType qtype) {
     }
 }
 
-/* tryOneName: name asked of each server in turn, cfg->attempts times over,
- * until one answers. The answer is in ma, *server is borrowed from cfg, and
- * the error is a DNSError in error_allocator(). */
-static Error du_try_one_name(NetResolver *r, Alloc *ma, Context ctx,
-                             burrow__DNSConfig *cfg, Str name, DnsmsgType qtype,
-                             DnsmsgParser *p, Str *server) {
+Error burrow__net_dns_try_one_name(NetResolver *r, Alloc *ma, Context ctx,
+                                   burrow__DNSConfig *cfg, Str name, DnsmsgType qtype,
+                                   DnsmsgParser *p, Str *server) {
     memset(p, 0, sizeof *p);
     *server = BURROW_STR_EMPTY;
     Error last_err = BURROW_NO_ERROR;
@@ -600,8 +599,8 @@ static Error du_try_one_name(NetResolver *r, Alloc *ma, Context ctx,
         for (uint32_t j = 0; j < slen; j++) {
             Str s = servers[(offset + j) % slen];
             DnsmsgHeader h;
-            Error err = du_exchange(r, ma, ctx, s, q, cfg->timeout, cfg->use_tcp,
-                                    cfg->trust_ad, p, &h);
+            Error err = burrow__net_dns_exchange(r, ma, ctx, s, q, cfg->timeout,
+                                                 cfg->use_tcp, cfg->trust_ad, p, &h);
             if (BURROW_FAILED(err)) {
                 NetDNSError e = burrow__net_dns_error_of(err, name, s);
                 if (err.vt != NULL && err.vt->self_type == TYPE_NET_OP_ERROR)
@@ -670,8 +669,8 @@ Error burrow__net_dns_lookup(NetResolver *r, Alloc *ma, Context ctx, Str name,
     Error err = BURROW_NO_ERROR;
     Str s = BURROW_STR_EMPTY;
     for (Int i = 0; i < names.len; i++) {
-        err =
-            du_try_one_name(r, ma, ctx, conf, ((const Str *)names.p)[i], qtype, p, &s);
+        err = burrow__net_dns_try_one_name(r, ma, ctx, conf, ((const Str *)names.p)[i],
+                                           qtype, p, &s);
         if (BURROW_OK(err))
             break;
         if (du_strict(r, err))
@@ -764,8 +763,8 @@ typedef struct DuJob {
 
 static void du_job_run(DuJob *j) {
     Alloc *a = arena_allocator(&j->ar);
-    j->err =
-        du_try_one_name(j->r, a, j->ctx, j->conf, j->fqdn, j->qtype, &j->p, &j->server);
+    j->err = burrow__net_dns_try_one_name(j->r, a, j->ctx, j->conf, j->fqdn, j->qtype,
+                                          &j->p, &j->server);
     /* The error dies with the goroutine that made it, unless it is moved. */
     if (BURROW_FAILED(j->err))
         j->err = error_retain(a, j->err);

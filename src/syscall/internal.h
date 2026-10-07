@@ -71,6 +71,23 @@ Uintptr burrow__syscall_raw_syscall_no_error(Uintptr trap, Uintptr a1, Uintptr a
 #endif
 
 #if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+/* How a libSystem function says it failed: -1 as a C int, -1 as a long, or a
+ * NULL pointer. */
+typedef enum burrow__SyscallFail {
+    BURROW__SYSCALL_FAIL_INT,
+    BURROW__SYSCALL_FAIL_LONG,
+    BURROW__SYSCALL_FAIL_PTR
+} burrow__SyscallFail;
+
+/* Calls the libSystem function name with n arguments, the first nfixed of them
+ * before the ..., or all of them when nfixed is -1, looking it up the first
+ * time and keeping it in *slot. The functions Go writes its own trampolines
+ * for, fdopendir and the rest, go through this. */
+Uintptr burrow__syscall_libc_call(void **slot, const char *name, int32_t nfixed,
+                                  const uintptr_t *args, int32_t n,
+                                  burrow__SyscallFail fail, Uintptr *r2,
+                                  SyscallErrno *err);
+
 /* Go's syscall, syscall6 and the rest on macOS, which call the libSystem
  * function fn, a BURROW__SYSCALL_LIBC_ number from zsyscall.h. They fail when
  * it returns -1 as an int, or for the X ones as a long, or for syscallPtr a

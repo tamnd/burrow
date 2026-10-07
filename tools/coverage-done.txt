@@ -58,6 +58,8 @@ crypto/rc4
 crypto/mlkem
 crypto/mlkem/mlkemtest
 crypto/hpke
+
+crypto/x509/pkix
 container/list
 container/ring
 sort
@@ -102,3 +104,5 @@ archive/tar
 archive/zip
 encoding/asn1
 path/filepath
+crypto/fips140
+net/mail

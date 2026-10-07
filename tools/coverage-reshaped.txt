@@ -214,6 +214,20 @@ os: method (*ProcessState) Sys: returns the syscall.WaitStatus itself, the only 
 os: method (*ProcessState) SysUsage: returns a pointer to the syscall.Rusage itself, the only type Go puts there
 os: method (*Process) WithHandle: the callback is an OsHandleFunc, a function pointer with a context argument
 
+# include/burrow/syscall.h: Go's Getsockopt functions for structs, LsfStmt,
+# LsfJump and ParseUnixCredentials allocate the struct and return a pointer to
+# it. The structs are small and the caller owns them either way, so they come
+# back by value and there is nothing to free.
+syscall: func GetsockoptICMPv6Filter: returns the ICMPv6Filter by value
+syscall: func GetsockoptIPMreq: returns the IPMreq by value
+syscall: func GetsockoptIPMreqn: returns the IPMreqn by value
+syscall: func GetsockoptIPv6MTUInfo: returns the IPv6MTUInfo by value
+syscall: func GetsockoptIPv6Mreq: returns the IPv6Mreq by value
+syscall: func GetsockoptUcred: returns the Ucred by value
+syscall: func LsfJump: returns the SockFilter by value
+syscall: func LsfStmt: returns the SockFilter by value
+syscall: func ParseUnixCredentials: returns the Ucred by value
+
 # include/burrow/crypto/ed25519.h: Go's Public hands back a PublicKey inside a
 # crypto.PublicKey. An Any here points at its value, and a fresh key has nowhere
 # to live that the caller frees, so ed25519_private_key_public returns the key
@@ -276,3 +290,8 @@ crypto/hpke: func NewSender: takes the PublicKey and the ciphersuite as pointers
 crypto/hpke: func Seal: takes the PublicKey and the ciphersuite as pointers, as none of them can be implemented outside the package
 crypto/hpke: func NewRecipient: takes the PrivateKey and the ciphersuite as pointers, as none of them can be implemented outside the package
 crypto/hpke: func Open: takes the PrivateKey and the ciphersuite as pointers, as none of them can be implemented outside the package
+
+# include/burrow/net.h: Go returns both ends and leaves the memory to the
+# collector. Here the pipe comes from an allocator and net_pipe_free gives it
+# back, and two values come back through out parameters.
+net: func Pipe: takes an allocator and returns both ends through out parameters

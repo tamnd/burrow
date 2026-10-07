@@ -144,10 +144,9 @@ extern const Error context_canceled;
 
 /* context.DeadlineExceeded, returned by Err after a deadline went by.
  *
- * In Go this satisfies net.Error with Timeout() true, so that code written
- * against the network package treats it as a timeout rather than as a hard
- * failure. burrow has no net package yet and this is a plain sentinel until it
- * does. */
+ * As in Go, its type has Timeout and Temporary methods that both say true, so
+ * net_error_timeout calls it a timeout and code written against the network
+ * package treats it as one rather than as a hard failure. */
 extern const Error context_deadline_exceeded;
 
 /* Go's context.CancelFunc.

@@ -203,6 +203,66 @@ A call that runs past a deadline fails with a `NetOpError` that wraps `os_err_de
 
 Go's collector takes care of a pipe once nothing refers to it. Here `net_pipe_free` gives both ends back, given either one, once both are closed and no goroutine is still in a call on them. It stops any deadline timer that has not gone off yet.
 
+## TCP
+
+`net_listen_tcp` and `net_dial_tcp` are Go's `ListenTCP` and `DialTCP`, and the `NetTCPConn` and `NetTCPListener` they give back have Go's methods as functions. Addresses are `NetTCPAddr` literals for now, since the resolver that turns "localhost:80" into one is still to come. A listener on port 0 gets a free port from the system, and `net_tcp_listener_addr` says which:
+
+<!-- example: ../examples/net/tcp.c#tcp -->
+```c
+Byte loopback[4] = {127, 0, 0, 1};
+NetTCPAddr laddr = {slice_from(loopback, 4, 4, TYPE_BYTE), 0, BURROW_STR_EMPTY};
+Error err;
+NetTCPListener *l = net_listen_tcp(heap_allocator(), BURROW_S("tcp"), &laddr, &err);
+if (l == NULL)
+    return;
+SyncWaitGroup wg = {0};
+sync_wait_group_go(&wg, BURROW_FN(Func, serve, l));
+
+/* Port 0 asked the system for a free port, and the address says which. */
+const NetTCPAddr *bound = net_tcp_listener_addr(l).data;
+NetTCPAddr raddr = {laddr.ip, bound->port, BURROW_STR_EMPTY};
+NetTCPConn *c = net_dial_tcp(heap_allocator(), BURROW_S("tcp"), NULL, &raddr, &err);
+if (c == NULL)
+    return;
+NetConn conn = net_tcp_conn_as_conn(c);
+io_write_string(net_conn_as_io_writer(conn), BURROW_S("hello"), &err);
+net_tcp_conn_close_write(c);
+
+Byte buf[16];
+Int n = io_read_full(net_conn_as_io_reader(conn), slice_from(buf, 5, 5, TYPE_BYTE),
+                     &err);
+printf("%.*s\n", (int)n, (const char *)buf);
+const NetTCPAddr *remote = net_tcp_conn_remote_addr(c).data;
+printf("same port: %d\n", remote->port == bound->port);
+
+sync_wait_group_wait(&wg);
+net_tcp_conn_free(c);
+net_tcp_listener_free(l);
+
+/* Errors read the way Go's do. */
+raddr.port = 80;
+if (net_dial_tcp(heap_allocator(), BURROW_S("tcp5"), NULL, &raddr, &err) == NULL) {
+    Str msg = error_text(err);
+    printf("%.*s\n", (int)msg.len, (const char *)msg.p);
+}
+```
+
+That prints:
+
+```
+hello
+same port: 1
+dial tcp5 127.0.0.1:80: unknown network tcp5
+```
+
+Every call that can wait, from a dial to a read, has to be made on a goroutine. A goroutine waiting on a socket parks in the netpoller and holds a stack but no thread, so a server can have a goroutine per connection the way a Go server does. A Close from another goroutine wakes a read, a write or an accept with `net_err_closed`, and a deadline wakes it with `os_err_deadline_exceeded`.
+
+The errors are Go's, down to the text. A failed call gives a `NetOpError` naming the operation and the addresses, wrapping an `OsSyscallError` naming the system call, wrapping the `Errno`, so "dial tcp 127.0.0.1:9: connect: connection refused" reads the same as it would from Go, and `errors_as` finds each layer. The one exception is the end of a stream, which is `io_eof` as it is, so `errors_is(err, io_eof)` works on a read.
+
+A dialed connection, like an accepted one, has Nagle's algorithm off and keep-alives on, with Go's defaults of 15 seconds idle, 15 seconds between probes and 9 probes. `net_tcp_conn_set_keep_alive_config` and the other setters change them. `net_tcp_conn_free` and `net_tcp_listener_free` close what is still open and give the memory back, and the addresses a connection hands out belong to it until then.
+
+On Windows a socket is read by handing the kernel the read and waiting for it to finish, which is a different poller from the one here, so until that arrives a dial or a listen there fails with `ENOSYS`. wasip1 has no sockets to dial with.
+
 ## URLs
 
 `url_parse` splits a URL into a `Url` with the same fields as Go's `url.URL`. `path` holds the decoded path and `url_escaped_path` gives back the form that goes on the wire. The parse makes one allocation that holds the `Url` and every string in it, so the input can go away while the `Url` lives, and `url_free` gives it back. With an arena you do not need to free at all. In these examples `P(s)` is short for `(int)(s).len, (const char *)(s).p`, the two arguments that `%.*s` wants:

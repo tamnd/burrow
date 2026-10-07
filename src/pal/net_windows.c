@@ -583,4 +583,10 @@ bool pal_shutdown(int64_t fd, int32_t how, PalErrno *err) {
     return true;
 }
 
+/* Go's maxListenerBacklog on Windows is syscall.SOMAXCONN, which is the
+ * caller's fallback. */
+int32_t pal_listen_backlog_max(void) {
+    return 0;
+}
+
 #endif /* BURROW_OS_WINDOWS */

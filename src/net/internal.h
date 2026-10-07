@@ -11,6 +11,8 @@
 
 #include "burrow/error.h"
 #include "burrow/fdmutex.h"
+#include "burrow/mem.h"
+#include "burrow/net.h"
 #include "burrow/netpoll.h"
 #include "burrow/own.h"
 #include "burrow/pal.h"
@@ -104,5 +106,158 @@ Error burrow__pfd_set_deadline(burrow__PollFD *fd, Time t, uint32_t mode);
  * non blocking connect is waited for. Takes no lock, as in Go, because the
  * caller is the only one who has the FD yet. */
 Error burrow__pfd_wait_write(burrow__PollFD *fd);
+
+/* ------------------------------------------------------------------- netFD
+ *
+ * Go's netFD: a poll FD with what net knows about the socket around it, the
+ * family and type it was made with, the network name the caller asked for,
+ * and the two addresses. TCPConn, TCPListener and the rest are a netFD and
+ * the methods that turn its answers into Go's errors.
+ *
+ * The errors that come out of here are what Go's netFD gives: an Errno from
+ * a system call is wrapped in an os.SyscallError naming the call, and
+ * net_err_closed, os_err_deadline_exceeded and io_eof come through as they
+ * are. The OpError around all of it is the caller's to add, because the
+ * caller knows the operation's name. */
+typedef struct burrow__NetFD {
+    burrow__PollFD pfd;
+
+    /* Whether pfd went through burrow__pfd_init. Go makes the socket first
+     * and hands it to the poller only once it is bound and listening or
+     * connected, and a socket that fails before then is closed by hand. */
+    bool polled;
+    bool is_connected;
+    int32_t family;
+    int32_t sotype;
+
+    /* The network the caller asked for, such as "tcp4". A literal, since the
+     * caller's Str may not live as long as the socket does. */
+    Str net;
+
+    /* The addresses, family PAL_AF_UNSPEC when there is none. */
+    PalSockAddr laddr;
+    PalSockAddr raddr;
+} burrow__NetFD;
+
+/* Go's sockaddr interface, cut down to the one method socket needs: the
+ * address addr for a socket of family, in out. Fails with a NetAddrError for
+ * an address that family cannot hold, such as an IPv6 address on an IPv4
+ * socket. addr is never NULL when this is called. */
+typedef Error (*burrow__NetToSockaddr)(const void *addr, int32_t family,
+                                       PalSockAddr *out);
+
+/* What a burrow__NetToSockaddr gives for an address the system call would
+ * turn down with EINVAL, such as a port past 65535, so that the caller can
+ * report it as that call's error, the way Go's syscall package does. */
+extern const Error burrow__net_err_sockaddr_einval;
+
+/* Go's socket: makes a socket and then, with laddr and no raddr on a stream,
+ * binds and listens on it, and otherwise binds to laddr if there is one and
+ * connects to raddr. laddr and raddr are whatever to_sockaddr takes, and
+ * either may be NULL. A connect waits, from a goroutine, until it is done or
+ * deadline passes, and the zero Time is no deadline. On an error nothing is
+ * left open. */
+Error burrow__netfd_socket(burrow__NetFD *fd, Str net, int32_t family, int32_t sotype,
+                           int32_t proto, bool ipv6only, const void *laddr,
+                           const void *raddr, burrow__NetToSockaddr to_sockaddr,
+                           Time deadline);
+
+/* netFD.accept: the next connection, in out, with both its addresses. */
+Error burrow__netfd_accept(burrow__NetFD *fd, burrow__NetFD *out);
+
+/* netFD.Close. A socket that never reached the poller is closed at once. */
+Error burrow__netfd_close(burrow__NetFD *fd);
+
+/* netFD.Read and Write. */
+Int burrow__netfd_read(burrow__NetFD *fd, Slice p, Error *err);
+Int burrow__netfd_write(burrow__NetFD *fd, Slice p, Error *err);
+
+/* netFD.shutdown, with PAL_SHUT_RD or PAL_SHUT_WR. */
+Error burrow__netfd_shutdown(burrow__NetFD *fd, int32_t how);
+
+/* poll.FD.SetsockoptInt with the error wrapped the way net's setters wrap
+ * it, as "setsockopt". */
+Error burrow__netfd_setsockopt(burrow__NetFD *fd, int32_t opt, int64_t value);
+
+/* Whether this machine can make IPv4 sockets, and IPv6 sockets that take
+ * IPv4 as well, which decides the family of a listener on every address.
+ * Probed once, as Go does. */
+bool burrow__net_supports_ipv4(void);
+bool burrow__net_supports_ipv4map(void);
+
+/* -------------------------------------------------------------------- conn
+ *
+ * Go's conn, the part TCPConn, UDPConn and UnixConn all are: the netFD, the
+ * allocator the connection came from, and the two addresses as the NetAddr
+ * an OpError holds, nil when there is none. The calls below are conn's
+ * methods, with the error each one gives wrapped in the OpError Go's does. */
+typedef struct burrow__NetConnCore {
+    burrow__NetFD fd;
+    Alloc *alloc;
+    NetAddr laddr;
+    NetAddr raddr;
+} burrow__NetConnCore;
+
+/* errMissingAddress, for a dial with no address to dial. */
+extern const Error burrow__net_err_missing_address;
+
+/* An OpError with these fields, boxed in error_allocator. */
+Error burrow__net_op_error(Str op, Str net, NetAddr source, NetAddr addr, Error err);
+
+/* syscall.EINVAL as an error, which is what Go's methods on a nil conn give. */
+Error burrow__net_einval(void);
+
+/* conn.Read, Write and Close. A read that reaches the end gives io_eof as it
+ * is, and anything else is an OpError naming the operation. */
+Int burrow__conn_read(burrow__NetConnCore *c, Slice p, Error *err);
+Int burrow__conn_write(burrow__NetConnCore *c, Slice p, Error *err);
+Error burrow__conn_close(burrow__NetConnCore *c);
+
+/* conn.SetDeadline and the rest, mode being the netpoll mode, and
+ * SetReadBuffer and SetWriteBuffer, opt being PAL_SO_RCVBUF or PAL_SO_SNDBUF. */
+Error burrow__conn_set_deadline(burrow__NetConnCore *c, Time t, uint32_t mode);
+Error burrow__conn_set_buffer(burrow__NetConnCore *c, int32_t opt, Int bytes);
+
+/* ------------------------------------------------------------ IP sockets
+ *
+ * What TCPAddr and UDPAddr have in common, which is everything: an IP, a
+ * port and a zone. NetTCPAddr and NetUDPAddr have this layout, so a pointer
+ * to either is a pointer to one of these. */
+typedef struct burrow__NetInetAddr {
+    NetIP ip;
+    Int port;
+    Str zone;
+} burrow__NetInetAddr;
+
+/* Room for the bytes of an address read out of a sockaddr, so that the IP
+ * and zone can point at something that lives as long as the address does. */
+typedef struct burrow__NetInetBytes {
+    Byte ip[16];
+    Byte zone[12];
+} burrow__NetInetBytes;
+
+/* The IP, port and zone of an AF_INET or AF_INET6 sockaddr, with the bytes in
+ * b. False for any other family, which leaves everything zero. */
+bool burrow__net_inet_from_sockaddr(const PalSockAddr *sa, NetIP *ip, Int *port,
+                                    Str *zone, burrow__NetInetBytes *b);
+
+/* TCPAddr.String and UDPAddr.String, "<nil>" for a NULL a. */
+BURROW_OWNS(ret) Str burrow__net_inet_addr_string(const burrow__NetInetAddr *a,
+                                                  Alloc *al);
+
+/* ipToSockaddr: the sockaddr of family for ip, port and zone. */
+Error burrow__net_ip_sockaddr(int32_t family, NetIP ip, Int port, Str zone,
+                              PalSockAddr *out);
+
+/* To16, true when ip is 4 or 16 bytes long. */
+bool burrow__net_ip_to16(NetIP ip, Byte out[16]);
+
+/* internetSocket: a socket of type sotype for net, of the family Go would
+ * choose for these addresses, bound, listening or connected the way
+ * burrow__netfd_socket does it. */
+Error burrow__net_internet_socket(burrow__NetFD *fd, Str net,
+                                  const burrow__NetInetAddr *laddr,
+                                  const burrow__NetInetAddr *raddr, int32_t sotype,
+                                  bool listen);
 
 #endif /* BURROW_SRC_NET_INTERNAL_H */

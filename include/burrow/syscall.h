@@ -373,6 +373,276 @@ void syscall_msghdr_set_controllen(SyscallMsghdr *msghdr, Int length);
 void syscall_cmsghdr_set_len(SyscallCmsghdr *cmsg, Int length);
 #endif
 
+/* ----------------------------------------------------------------- sockets */
+
+/* syscall.Sockaddr: a socket address, which is one of the Sockaddr types
+ * below. Go keeps the set closed with an unexported method, and here only this
+ * package makes the vtables, through syscall_sockaddr_inet4_as_sockaddr and
+ * the others. sockaddr fills in the system's form of the address in the
+ * struct's raw field and gives back a pointer to it, with its length in *len.
+ * The zero SyscallSockaddr, with no vt, is Go's nil.
+ *
+ * To find out which type one is, as a type switch would, compare
+ * sa.vt->self_type with the TYPE_SYSCALL_SOCKADDR_ descriptors, or call
+ * iface_assert on BURROW_IFACE(sa). */
+typedef struct SyscallSockaddrVT {
+    const Type *self_type;
+    void *(*sockaddr)(void *self, uint32_t *len, Error *err);
+} SyscallSockaddrVT;
+
+typedef struct SyscallSockaddr {
+    const SyscallSockaddrVT *vt;
+    void *data;
+} SyscallSockaddr;
+
+/* syscall.SockaddrUnix: the address of a Unix domain socket, a path, or on
+ * Linux an abstract name, which starts with @ or a NUL. raw is Go's
+ * unexported field, which sockaddr fills in. */
+typedef struct SyscallSockaddrUnix {
+    Str name;
+    SyscallRawSockaddrUnix raw;
+} SyscallSockaddrUnix;
+
+#if !defined(BURROW_OS_WINDOWS)
+/* syscall.SocketDisableIPv6: when it is true, syscall_socket fails with
+ * EAFNOSUPPORT for AF_INET6, for tests. */
+extern bool syscall_socket_disable_ipv6;
+
+/* The descriptors of the Sockaddr types, the self_type of the vtables. */
+extern const Type *const TYPE_SYSCALL_SOCKADDR_INET4;
+extern const Type *const TYPE_SYSCALL_SOCKADDR_INET6;
+extern const Type *const TYPE_SYSCALL_SOCKADDR_UNIX;
+
+/* sa as a Sockaddr. The Sockaddr borrows sa, which has to stay where it is for
+ * as long as the Sockaddr is used. */
+SyscallSockaddr syscall_sockaddr_inet4_as_sockaddr(SyscallSockaddrInet4 *sa);
+SyscallSockaddr syscall_sockaddr_inet6_as_sockaddr(SyscallSockaddrInet6 *sa);
+SyscallSockaddr syscall_sockaddr_unix_as_sockaddr(SyscallSockaddrUnix *sa);
+
+/* Gives back to a a Sockaddr that syscall_accept, syscall_getsockname,
+ * syscall_getpeername, syscall_recvfrom or syscall_recvmsg made from a. Each
+ * one is a single allocation, a SockaddrUnix's name included. The zero
+ * Sockaddr is fine. */
+void syscall_sockaddr_free(Alloc *a, SyscallSockaddr sa);
+
+/* Socket: socket(2). Socketpair: socketpair(2), with the two descriptors in
+ * the result's fd. */
+Int syscall_socket(Int domain, Int typ, Int proto, Error *err);
+
+typedef struct SyscallSocketpairRet {
+    Int fd[2];
+} SyscallSocketpairRet;
+SyscallSocketpairRet syscall_socketpair(Int domain, Int typ, Int proto, Error *err);
+
+/* Bind and Connect: bind(2) and connect(2) to sa. An address sa cannot spell,
+ * such as a port above 65535 or a path too long for the system, is EINVAL. */
+BURROW_OWNS(ret) Error syscall_bind(Int fd, SyscallSockaddr sa);
+BURROW_OWNS(ret) Error syscall_connect(Int fd, SyscallSockaddr sa);
+
+/* Accept: accept(2), with the peer's address made from a in *sa. A family
+ * this package has no Sockaddr for is EAFNOSUPPORT, and then the new
+ * descriptor is closed and 0 comes back, as in Go. On Linux it is
+ * Accept4 with no flags. */
+Int syscall_accept(Alloc *a, Int fd, SyscallSockaddr *sa, Error *err);
+
+/* Getsockname and Getpeername: the socket's own address and its peer's, made
+ * from a. */
+BURROW_OWNS(ret) SyscallSockaddr syscall_getsockname(Alloc *a, Int fd, Error *err);
+BURROW_OWNS(ret) SyscallSockaddr syscall_getpeername(Alloc *a, Int fd, Error *err);
+
+/* Recvfrom: recvfrom(2) into p. *from is where the data came from, made from
+ * a, or the zero Sockaddr when the system did not say, as on a connected
+ * socket. from may be NULL. */
+Int syscall_recvfrom(Alloc *a, Int fd, Slice p, Int flags, SyscallSockaddr *from,
+                     Error *err);
+
+/* Recvmsg: recvmsg(2) into p, with the control messages in oob. It gives back
+ * how many bytes of p it filled, and in *oobn how many of oob, in *recvflags
+ * the message's flags, and in *from the sender, as Recvfrom does. With oob and
+ * no p, it asks for one byte, as Go does, except of a datagram socket on Linux. */
+Int syscall_recvmsg(Alloc *a, Int fd, Slice p, Slice oob, Int flags, Int *oobn,
+                    Int *recvflags, SyscallSockaddr *from, Error *err);
+
+/* Sendto: sendto(2) of p to to, or with no address when to is the zero
+ * Sockaddr. */
+BURROW_OWNS(ret) Error syscall_sendto(Int fd, Slice p, Int flags, SyscallSockaddr to);
+
+/* SendmsgN: sendmsg(2) of p with the control messages in oob, to to, or with
+ * no address when to is the zero Sockaddr. It gives back how many bytes of p
+ * went, which is 0 when p is empty and oob is not, since one byte is sent then
+ * to carry oob. Sendmsg is the same without the count. */
+Int syscall_sendmsg_n(Int fd, Slice p, Slice oob, SyscallSockaddr to, Int flags,
+                      Error *err);
+BURROW_OWNS(ret) Error syscall_sendmsg(Int fd, Slice p, Slice oob, SyscallSockaddr to,
+                                       Int flags);
+
+/* The Getsockopt functions: getsockopt(2) of a value of each type. Go returns
+ * a pointer to the structs, and here they come back by value. */
+Int syscall_getsockopt_int(Int fd, Int level, Int opt, Error *err);
+
+typedef struct SyscallGetsockoptInet4AddrRet {
+    uint8_t value[4];
+} SyscallGetsockoptInet4AddrRet;
+SyscallGetsockoptInet4AddrRet syscall_getsockopt_inet4_addr(Int fd, Int level, Int opt,
+                                                            Error *err);
+
+SyscallIPMreq syscall_getsockopt_ip_mreq(Int fd, Int level, Int opt, Error *err);
+SyscallIPv6Mreq syscall_getsockopt_ipv6_mreq(Int fd, Int level, Int opt, Error *err);
+SyscallIPv6MTUInfo syscall_getsockopt_ipv6_mtu_info(Int fd, Int level, Int opt,
+                                                    Error *err);
+SyscallICMPv6Filter syscall_getsockopt_icmpv6_filter(Int fd, Int level, Int opt,
+                                                     Error *err);
+
+/* The Setsockopt functions: setsockopt(2) of a value of each type. An Int
+ * goes as 32 bits and a Str as its bytes. */
+BURROW_OWNS(ret) Error syscall_setsockopt_byte(Int fd, Int level, Int opt,
+                                               uint8_t value);
+BURROW_OWNS(ret) Error syscall_setsockopt_int(Int fd, Int level, Int opt, Int value);
+BURROW_OWNS(ret) Error syscall_setsockopt_inet4_addr(Int fd, Int level, Int opt,
+                                                     const uint8_t value[4]);
+BURROW_OWNS(ret) Error syscall_setsockopt_ip_mreq(Int fd, Int level, Int opt,
+                                                  SyscallIPMreq *mreq);
+BURROW_OWNS(ret) Error syscall_setsockopt_ipv6_mreq(Int fd, Int level, Int opt,
+                                                    SyscallIPv6Mreq *mreq);
+BURROW_OWNS(ret) Error syscall_setsockopt_icmpv6_filter(Int fd, Int level, Int opt,
+                                                        SyscallICMPv6Filter *filter);
+BURROW_OWNS(ret) Error syscall_setsockopt_linger(Int fd, Int level, Int opt,
+                                                 SyscallLinger *l);
+BURROW_OWNS(ret) Error syscall_setsockopt_string(Int fd, Int level, Int opt, Str s);
+BURROW_OWNS(ret) Error syscall_setsockopt_timeval(Int fd, Int level, Int opt,
+                                                  SyscallTimeval *tv);
+
+/* ----------------------------------------------------- control messages */
+
+/* syscall.SocketControlMessage: one control message from
+ * syscall_parse_socket_control_message. data borrows the bytes it was parsed
+ * from. */
+typedef struct SyscallSocketControlMessage {
+    SyscallCmsghdr header;
+    Slice data;
+} SyscallSocketControlMessage;
+
+extern const Type *const TYPE_SYSCALL_SOCKET_CONTROL_MESSAGE;
+
+/* CmsgLen: the length a control message's header says it is, for datalen
+ * bytes of data. CmsgSpace: the room it takes in a buffer, padding included. */
+Int syscall_cmsg_len(Int datalen);
+Int syscall_cmsg_space(Int datalen);
+
+/* ParseSocketControlMessage: the control messages in b, in a Slice of
+ * SyscallSocketControlMessage from a. A header whose length runs past b is
+ * EINVAL. */
+BURROW_OWNS(ret) Slice syscall_parse_socket_control_message(Alloc *a, Slice b,
+                                                            Error *err);
+
+/* UnixRights: a control message that passes the descriptors in fds, a Slice of
+ * Int, to another process, in bytes from a. A failed allocation gives a nil
+ * slice. ParseUnixRights: the descriptors in an SCM_RIGHTS message, as a Slice
+ * of Int from a. Any other message is EINVAL. */
+BURROW_OWNS(ret) Slice syscall_unix_rights(Alloc *a, Slice fds);
+BURROW_OWNS(ret) Slice syscall_parse_unix_rights(Alloc *a,
+                                                 SyscallSocketControlMessage *m,
+                                                 Error *err);
+#endif
+
+#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO) || defined(BURROW_OS_WASI) || \
+    defined(BURROW_OS_FREEBSD)
+/* Accept4: accept4(2), which takes SOCK_NONBLOCK and SOCK_CLOEXEC in flags,
+ * and is otherwise Accept. */
+Int syscall_accept4(Alloc *a, Int fd, Int flags, SyscallSockaddr *sa, Error *err);
+
+/* GetsockoptIPMreqn and SetsockoptIPMreqn. */
+SyscallIPMreqn syscall_getsockopt_ip_mreqn(Int fd, Int level, Int opt, Error *err);
+BURROW_OWNS(ret) Error syscall_setsockopt_ip_mreqn(Int fd, Int level, Int opt,
+                                                   SyscallIPMreqn *mreq);
+#endif
+
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS) || defined(BURROW_OS_FREEBSD)
+/* The descriptor of SockaddrDatalink, a link layer address on the BSDs, and
+ * one as a Sockaddr, which borrows sa. */
+extern const Type *const TYPE_SYSCALL_SOCKADDR_DATALINK;
+SyscallSockaddr syscall_sockaddr_datalink_as_sockaddr(SyscallSockaddrDatalink *sa);
+
+/* GetsockoptByte: getsockopt(2) of one byte. */
+uint8_t syscall_getsockopt_byte(Int fd, Int level, Int opt, Error *err);
+#endif
+
+#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO) || defined(BURROW_OS_WASI)
+/* The descriptors of SockaddrLinklayer, an AF_PACKET address, and
+ * SockaddrNetlink, and either as a Sockaddr, which borrows sa. */
+extern const Type *const TYPE_SYSCALL_SOCKADDR_LINKLAYER;
+extern const Type *const TYPE_SYSCALL_SOCKADDR_NETLINK;
+SyscallSockaddr syscall_sockaddr_linklayer_as_sockaddr(SyscallSockaddrLinklayer *sa);
+SyscallSockaddr syscall_sockaddr_netlink_as_sockaddr(SyscallSockaddrNetlink *sa);
+
+/* GetsockoptUcred: the credentials of the peer of a Unix domain socket, with
+ * SO_PEERCRED. */
+SyscallUcred syscall_getsockopt_ucred(Int fd, Int level, Int opt, Error *err);
+
+/* BindToDevice: SO_BINDTODEVICE, which ties the socket to the network
+ * interface called device. */
+BURROW_OWNS(ret) Error syscall_bind_to_device(Int fd, Str device);
+
+/* UnixCredentials: an SCM_CREDENTIALS control message carrying ucred, in
+ * bytes from a. ParseUnixCredentials: the Ucred in one, which the receiving
+ * socket has to have SO_PASSCRED set to get. Any other message is EINVAL. */
+BURROW_OWNS(ret) Slice syscall_unix_credentials(Alloc *a, SyscallUcred *ucred);
+SyscallUcred syscall_parse_unix_credentials(SyscallSocketControlMessage *m, Error *err);
+
+/* syscall.NetlinkMessage and NetlinkRouteAttr: a netlink message and a route
+ * attribute in one. data and value borrow the bytes they were parsed from. */
+typedef struct SyscallNetlinkMessage {
+    SyscallNlMsghdr header;
+    Slice data;
+} SyscallNetlinkMessage;
+
+typedef struct SyscallNetlinkRouteAttr {
+    SyscallRtAttr attr;
+    Slice value;
+} SyscallNetlinkRouteAttr;
+
+extern const Type *const TYPE_SYSCALL_NETLINK_MESSAGE;
+extern const Type *const TYPE_SYSCALL_NETLINK_ROUTE_ATTR;
+
+/* NetlinkRIB: what the kernel says about its links, addresses or routes, all
+ * of the replies to one NETLINK_ROUTE dump request for proto, such as
+ * RTM_GETLINK, and family, in bytes from a. */
+BURROW_OWNS(ret) Slice syscall_netlink_rib(Alloc *a, Int proto, Int family, Error *err);
+
+/* ParseNetlinkMessage: the netlink messages in b, as a Slice of
+ * SyscallNetlinkMessage from a. ParseNetlinkRouteAttr: the route attributes
+ * in m, a link, address or route message, as a Slice of
+ * SyscallNetlinkRouteAttr. A length that runs past the bytes is EINVAL, and so
+ * is a message of another type. */
+BURROW_OWNS(ret) Slice syscall_parse_netlink_message(Alloc *a, Slice b, Error *err);
+BURROW_OWNS(ret) Slice syscall_parse_netlink_route_attr(Alloc *a,
+                                                        SyscallNetlinkMessage *m,
+                                                        Error *err);
+
+/* The Linux socket filter functions, which Go has deprecated in favour of
+ * golang.org/x/net/bpf. LsfStmt and LsfJump build one instruction, which comes
+ * back by value where Go returns a pointer. LsfSocket opens an AF_PACKET
+ * socket for proto bound to the interface ifindex. SetLsfPromisc turns
+ * promiscuous mode on the interface called name on or off. AttachLsf and
+ * DetachLsf put a program, a Slice of SyscallSockFilter, on a socket and take
+ * it off. */
+SyscallSockFilter syscall_lsf_stmt(Int code, Int k);
+SyscallSockFilter syscall_lsf_jump(Int code, Int k, Int jt, Int jf);
+Int syscall_lsf_socket(Int ifindex, Int proto, Error *err);
+BURROW_OWNS(ret) Error syscall_set_lsf_promisc(Str name, bool m);
+BURROW_OWNS(ret) Error syscall_attach_lsf(Int fd, Slice i);
+BURROW_OWNS(ret) Error syscall_detach_lsf(Int fd);
+#endif
+
+#if (defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO) ||                           \
+     defined(BURROW_OS_WASI)) &&                                                       \
+    (defined(BURROW_ARCH_386) || defined(BURROW_ARCH_S390X))
+/* Listen and Shutdown, which these two have through socketcall(2) and the
+ * others have generated. */
+BURROW_OWNS(ret) Error syscall_listen(Int s, Int n);
+BURROW_OWNS(ret) Error syscall_shutdown(Int s, Int how);
+#endif
+
 #if defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO) || defined(BURROW_OS_WASI)
 /* ------------------------------------------------------------------- Linux */
 

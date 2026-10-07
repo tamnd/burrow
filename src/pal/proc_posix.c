@@ -11,13 +11,18 @@
  * a copy of it held by nobody. A failure in the child goes back to the parent
  * over a pipe that exec closes, so an empty read is a successful exec.
  *
+ * FreeBSD and DragonFly get no _XOPEN_SOURCE, because asking for X/Open there
+ * hides NSIG, wait4 and wait6.
+ *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
 #if !defined(_WIN32)
 #define _FILE_OFFSET_BITS 64
+#if !defined(__FreeBSD__) && !defined(__DragonFly__)
 #define _XOPEN_SOURCE 700
+#endif
 #define _DEFAULT_SOURCE 1
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE 1

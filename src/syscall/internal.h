@@ -109,6 +109,35 @@ Uintptr burrow__syscall_syscall_ptr(Uintptr fn, Uintptr a1, Uintptr a2, Uintptr 
 #define BURROW__SYSCALL_IOS 0
 #endif
 
+/* The socket calls Go writes by hand on Linux for 32-bit x86 and s390x, through
+ * socketcall(2), in socketcall.c. The other architectures have them generated
+ * in zsyscall.h, with the same prototypes. */
+#if (defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO) ||                           \
+     defined(BURROW_OS_WASI)) &&                                                       \
+    (defined(BURROW_ARCH_386) || defined(BURROW_ARCH_S390X))
+Int burrow__syscall_accept4(Int s, SyscallRawSockaddrAny *rsa, uint32_t *addrlen,
+                            Int flags, Error *err);
+BURROW_OWNS(ret) Error burrow__syscall_getsockname(Int fd, SyscallRawSockaddrAny *rsa,
+                                                   uint32_t *addrlen);
+BURROW_OWNS(ret) Error burrow__syscall_getpeername(Int fd, SyscallRawSockaddrAny *rsa,
+                                                   uint32_t *addrlen);
+BURROW_OWNS(ret) Error burrow__syscall_socketpair(Int domain, Int typ, Int proto,
+                                                  int32_t *fd);
+BURROW_OWNS(ret) Error burrow__syscall_bind(Int s, void *addr, uint32_t addrlen);
+BURROW_OWNS(ret) Error burrow__syscall_connect(Int s, void *addr, uint32_t addrlen);
+Int burrow__syscall_socket(Int domain, Int typ, Int proto, Error *err);
+BURROW_OWNS(ret) Error burrow__syscall_getsockopt(Int s, Int level, Int name, void *val,
+                                                  uint32_t *vallen);
+BURROW_OWNS(ret) Error burrow__syscall_setsockopt(Int s, Int level, Int name, void *val,
+                                                  Uintptr vallen);
+Int burrow__syscall_recvfrom(Int fd, Slice p, Int flags, SyscallRawSockaddrAny *from,
+                             uint32_t *fromlen, Error *err);
+BURROW_OWNS(ret) Error burrow__syscall_sendto(Int s, Slice buf, Int flags, void *to,
+                                              uint32_t addrlen);
+Int burrow__syscall_recvmsg(Int s, SyscallMsghdr *msg, Int flags, Error *err);
+Int burrow__syscall_sendmsg(Int s, SyscallMsghdr *msg, Int flags, Error *err);
+#endif
+
 /* The unexported functions of Go's zsyscall files. */
 #include "zsyscall.h"
 

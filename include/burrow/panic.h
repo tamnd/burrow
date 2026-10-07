@@ -319,6 +319,13 @@ void burrow__recover_close(burrow__Recover *r);
     defined(BURROW_OS_NETBSD) || defined(BURROW_OS_DRAGONFLY)
 #define BURROW_SETJMP(buf) _setjmp(buf)
 #define BURROW_LONGJMP(buf) _longjmp((buf), 1)
+#if !defined(BURROW_OS_DARWIN) && !defined(BURROW_OS_IOS)
+/* The BSDs only declare the pair for XSI or their own extensions, and a program
+ * that asks for plain _POSIX_C_SOURCE gets neither. Saying it again here costs
+ * nothing when setjmp.h already has. */
+int _setjmp(jmp_buf);
+BURROW_NORETURN void _longjmp(jmp_buf, int);
+#endif
 #elif defined(__MINGW32__) && defined(__x86_64__)
 #define BURROW_SETJMP(buf) _setjmp((buf), NULL)
 #define BURROW_LONGJMP(buf) longjmp((buf), 1)

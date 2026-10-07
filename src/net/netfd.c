@@ -76,6 +76,7 @@ enum {
 
 static uint32_t nf_stack;
 
+#if !defined(BURROW_OS_WASI)
 /* The probe's bind of ::1, or of 127.0.0.1 as an IPv4-mapped address, on an
  * IPv6 socket with IPV6_V6ONLY set to v6only. A bind that the system refuses
  * for want of permission still shows the address works. */
@@ -99,6 +100,7 @@ static bool nf_probe_bind(bool mapped) {
     (void)pal_socket_close(s, &pe);
     return ok;
 }
+#endif
 
 static uint32_t nf_stack_probe(void) {
     uint32_t bits = burrow__atomic_load_acquire_u32(&nf_stack);

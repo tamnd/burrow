@@ -67,9 +67,9 @@ static bool sf_is_tchar(Byte b) {
     }
 }
 
-/* s[i:] */
+/* s[i:]. An empty s may have a NULL p, which takes no offset, not even 0. */
 static Str sf_from(Str s, Int i) {
-    return str_from_bytes(s.p + i, s.len - i);
+    return i == 0 ? s : str_from_bytes(s.p + i, s.len - i);
 }
 
 static Str sf_skip_whitespace(Str s) {

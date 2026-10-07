@@ -191,8 +191,12 @@ bool x509_cert_pool_append_certs_from_pem(X509CertPool *s, Slice pem_certs) {
         }
         ArenaMark m = error_mark();
         Error err = BURROW_NO_ERROR;
-        X509Certificate *cert = x509_parse_certificate(s->a, block->bytes, &err);
+        /* The certificate keeps pointing into the DER it was parsed from, so
+         * that has to live as long as the pool, and the block does not. A
+         * copy that fails is nil and does not parse. */
+        Slice der = bytes_clone(s->a, block->bytes);
         pem_block_free(h, block);
+        X509Certificate *cert = x509_parse_certificate(s->a, der, &err);
         error_release(m);
         if (BURROW_FAILED(err))
             continue;

@@ -135,6 +135,7 @@
 #include "burrow/net/http/cookiejar.h"
 #include "burrow/net/http/httptest.h"
 #include "burrow/net/http/httptrace.h"
+#include "burrow/net/http/httputil.h"
 #include "burrow/net/mail.h"
 #include "burrow/net/netip.h"
 #include "burrow/net/textproto.h"

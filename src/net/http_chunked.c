@@ -24,7 +24,11 @@
 /* maxLineLength, which has to be no more than bufio's default size. */
 #define HK_MAX_LINE_LENGTH 4096
 
-BURROW_SENTINEL_ERROR(burrow__http_err_line_too_long, "header line too long");
+/* The text is shared so that httputil's ErrLineTooLong can be this same error,
+ * as it is in Go. */
+const Str burrow__http_line_too_long_text = BURROW_S_INIT("header line too long");
+const Error burrow__http_err_line_too_long = {&burrow_sentinel_error_vt,
+                                              &burrow__http_line_too_long_text};
 
 /* The errors Go makes with errors.New where they happen. */
 static const Str hk_text_too_much =

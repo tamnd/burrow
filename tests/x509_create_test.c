@@ -1506,7 +1506,8 @@ static X509Certificate *crl_issuer(Alloc *a, X509KeyUsage usage, bool subject) {
     c->key_usage = usage;
     if (subject) {
         c->subject.common_name = BURROW_S("testing");
-        c->subject_key_id = BYTES(1, 2, 3);
+        /* Copied, as the literal goes with this frame and c does not. */
+        c->subject_key_id = bytes_clone(a, BYTES(1, 2, 3));
     }
     return c;
 }

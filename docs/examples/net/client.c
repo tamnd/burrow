@@ -93,7 +93,7 @@ static void run(void *env) {
     res = http_client_get(&hurried, fmt_sprintf_v(a, "%s/slow", ts->url), &err);
     fmt_printf_v("deadline exceeded: %t, timeout: %t\n",
                  errors_is(err, context_deadline_exceeded),
-                 res == NULL && net_error_timeout(err));
+                 (bool)(res == NULL && net_error_timeout(err)));
     http_response_free(res);
     httptest_server_free(ts);
     // doc: end

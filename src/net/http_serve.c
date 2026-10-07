@@ -756,9 +756,12 @@ static const Str sv_excluded_headers_no_body[] = {BURROW_S_INIT("Content-Length"
 
 /* isProtocolSwitchResponse. */
 static bool sv_is_protocol_switch_response(Int code, HttpHeader h) {
-    return code == HTTP_STATUS_SWITCHING_PROTOCOLS && sv_hhas(h, BURROW_S("Upgrade")) &&
-           burrow__http_has_token(sv_hget(h, BURROW_S("Connection")),
-                                  BURROW_S("Upgrade"));
+    if (code != HTTP_STATUS_SWITCHING_PROTOCOLS ||
+        sv_hget(h, BURROW_S("Upgrade")).len == 0)
+        return false;
+    Slice vs = http_header_values(h, BURROW_S("Connection"));
+    return burrow__httpguts_header_values_contains_token((const Str *)vs.p, vs.len,
+                                                         BURROW_S("Upgrade"));
 }
 
 /* What chunkWriter.writeHeader adds to the header, extraHeader. */

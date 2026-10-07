@@ -24,6 +24,7 @@
 
 #include "http_internal.h"
 
+#include "../xnet/httpguts.h"
 #include "../xnet/httpproxy.h"
 #include "http_ascii.h"
 #include "internal.h"
@@ -420,10 +421,8 @@ static bool tp_is_protocol_switch_header(HttpHeader h) {
     if (burrow__http_header_get(h, BURROW_S("Upgrade")).len == 0)
         return false;
     Slice vs = http_header_values(h, BURROW_S("Connection"));
-    for (Int i = 0; i < vs.len; i++)
-        if (burrow__http_has_token(((const Str *)vs.p)[i], BURROW_S("Upgrade")))
-            return true;
-    return false;
+    return burrow__httpguts_header_values_contains_token((const Str *)vs.p, vs.len,
+                                                         BURROW_S("Upgrade"));
 }
 
 /* Request.expectsContinue and wantsClose. */

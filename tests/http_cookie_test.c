@@ -68,7 +68,8 @@ static HttpCookie ck_cookie(const CK *k) {
     c.max_age = k->max_age;
     c.secure = k->secure;
     c.http_only = k->http_only;
-    c.same_site = (HttpSameSite)k->same_site;
+    if (k->same_site != 0)
+        c.same_site = (HttpSameSite)k->same_site;
     c.partitioned = k->partitioned;
     c.raw = k->raw;
     return c;
@@ -162,7 +163,76 @@ static void TestWriteSetCookies(TestingT *t) {
         CK cookie;
         Str raw;
     } tests[] = {
-        /* PROBE: writeSetCookiesTests */
+        {{.name = T("cookie-1"), .value = T("v$1")}, T("cookie-1=v$1")},
+        {{.name = T("cookie-2"), .value = T("two"), .max_age = 3600},
+         T("cookie-2=two; Max-Age=3600")},
+        {{.name = T("cookie-3"), .value = T("three"), .domain = T(".example.com")},
+         T("cookie-3=three; Domain=example.com")},
+        {{.name = T("cookie-4"), .value = T("four"), .path = T("/restricted/")},
+         T("cookie-4=four; Path=/restricted/")},
+        {{.name = T("cookie-5"), .value = T("five"), .domain = T("wrong;bad.abc")},
+         T("cookie-5=five")},
+        {{.name = T("cookie-6"), .value = T("six"), .domain = T("bad-.abc")},
+         T("cookie-6=six")},
+        {{.name = T("cookie-7"), .value = T("seven"), .domain = T("127.0.0.1")},
+         T("cookie-7=seven; Domain=127.0.0.1")},
+        {{.name = T("cookie-8"), .value = T("eight"), .domain = T("::1")},
+         T("cookie-8=eight")},
+        {{.name = T("cookie-9"),
+          .value = T("expiring"),
+          .exp = 1,
+          .exp_sec = 1257894000,
+          .exp_nsec = 0},
+         T("cookie-9=expiring; Expires=Tue, 10 Nov 2009 23:00:00 GMT")},
+        {{.name = T("cookie-10"),
+          .value = T("expiring-1601"),
+          .exp = 1,
+          .exp_sec = -11644469939,
+          .exp_nsec = 1},
+         T("cookie-10=expiring-1601; Expires=Mon, 01 Jan 1601 01:01:01 GMT")},
+        {{.name = T("cookie-11"),
+          .value = T("invalid-expiry"),
+          .exp = 1,
+          .exp_sec = -11676092339,
+          .exp_nsec = 1},
+         T("cookie-11=invalid-expiry")},
+        {{.name = T("cookie-12"), .value = T("samesite-default"), .same_site = 1},
+         T("cookie-12=samesite-default")},
+        {{.name = T("cookie-13"), .value = T("samesite-lax"), .same_site = 2},
+         T("cookie-13=samesite-lax; SameSite=Lax")},
+        {{.name = T("cookie-14"), .value = T("samesite-strict"), .same_site = 3},
+         T("cookie-14=samesite-strict; SameSite=Strict")},
+        {{.name = T("cookie-15"), .value = T("samesite-none"), .same_site = 4},
+         T("cookie-15=samesite-none; SameSite=None")},
+        {{.name = T("cookie-16"),
+          .value = T("partitioned"),
+          .path = T("/"),
+          .secure = true,
+          .same_site = 4,
+          .partitioned = true},
+         T("cookie-16=partitioned; Path=/; Secure; SameSite=None; Partitioned")},
+        {{.name = T("special-1"), .value = T("a z")}, T("special-1=\"a z\"")},
+        {{.name = T("special-2"), .value = T(" z")}, T("special-2=\" z\"")},
+        {{.name = T("special-3"), .value = T("a ")}, T("special-3=\"a \"")},
+        {{.name = T("special-4"), .value = T(" ")}, T("special-4=\" \"")},
+        {{.name = T("special-5"), .value = T("a,z")}, T("special-5=\"a,z\"")},
+        {{.name = T("special-6"), .value = T(",z")}, T("special-6=\",z\"")},
+        {{.name = T("special-7"), .value = T("a,")}, T("special-7=\"a,\"")},
+        {{.name = T("special-8"), .value = T(",")}, T("special-8=\",\"")},
+        {{.name = T("empty-value")}, T("empty-value=")},
+        {{0}, T("")},
+        {{0}, T("")},
+        {{.name = T("\011")}, T("")},
+        {{.name = T("\015")}, T("")},
+        {{.name = T("a\012b"), .value = T("v")}, T("")},
+        {{.name = T("a\012b"), .value = T("v")}, T("")},
+        {{.name = T("a\015b"), .value = T("v")}, T("")},
+        {{.name = T("cookie"), .value = T("quoted"), .quoted = true},
+         T("cookie=\"quoted\"")},
+        {{.name = T("cookie"), .value = T("quoted with spaces"), .quoted = true},
+         T("cookie=\"quoted with spaces\"")},
+        {{.name = T("cookie"), .value = T("quoted,with,commas"), .quoted = true},
+         T("cookie=\"quoted,with,commas\"")},
     };
     ARENA_BEGIN;
     BytesBuffer logbuf = BYTES_BUFFER(a);
@@ -194,7 +264,166 @@ typedef struct CKRead {
 
 static void TestReadSetCookies(TestingT *t) {
     static const CKRead tests[] = {
-        /* PROBE: readSetCookiesTests */
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("Cookie-1=v$1")},
+         .n = 1,
+         .want = {{.name = T("Cookie-1"), .value = T("v$1"), .raw = T("Cookie-1=v$1")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("NID=99=YsDT5i3E-CXax-; expires=Wed, 23-Nov-2011 "
+                                  "01:05:03 GMT; path=/; domain=.google.ch; HttpOnly")},
+         .n = 1,
+         .want = {{.name = T("NID"),
+                   .value = T("99=YsDT5i3E-CXax-"),
+                   .path = T("/"),
+                   .domain = T(".google.ch"),
+                   .exp = 1,
+                   .exp_sec = 1322010303,
+                   .exp_nsec = 0,
+                   .raw_expires = T("Wed, 23-Nov-2011 01:05:03 GMT"),
+                   .http_only = true,
+                   .raw = T("NID=99=YsDT5i3E-CXax-; expires=Wed, 23-Nov-2011 01:05:03 "
+                            "GMT; path=/; domain=.google.ch; HttpOnly")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T(".ASPXAUTH=7E3AA; expires=Wed, 07-Mar-2012 14:25:06 "
+                                  "GMT; path=/; HttpOnly")},
+         .n = 1,
+         .want = {{.name = T(".ASPXAUTH"),
+                   .value = T("7E3AA"),
+                   .path = T("/"),
+                   .exp = 1,
+                   .exp_sec = 1331130306,
+                   .exp_nsec = 0,
+                   .raw_expires = T("Wed, 07-Mar-2012 14:25:06 GMT"),
+                   .http_only = true,
+                   .raw = T(".ASPXAUTH=7E3AA; expires=Wed, 07-Mar-2012 14:25:06 GMT; "
+                            "path=/; HttpOnly")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("ASP.NET_SessionId=foo; path=/; HttpOnly")},
+         .n = 1,
+         .want = {{.name = T("ASP.NET_SessionId"),
+                   .value = T("foo"),
+                   .path = T("/"),
+                   .http_only = true,
+                   .raw = T("ASP.NET_SessionId=foo; path=/; HttpOnly")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("samesitedefault=foo; SameSite")},
+         .n = 1,
+         .want = {{.name = T("samesitedefault"),
+                   .value = T("foo"),
+                   .same_site = 1,
+                   .raw = T("samesitedefault=foo; SameSite")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("samesiteinvalidisdefault=foo; SameSite=invalid")},
+         .n = 1,
+         .want = {{.name = T("samesiteinvalidisdefault"),
+                   .value = T("foo"),
+                   .same_site = 1,
+                   .raw = T("samesiteinvalidisdefault=foo; SameSite=invalid")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("samesitelax=foo; SameSite=Lax")},
+         .n = 1,
+         .want = {{.name = T("samesitelax"),
+                   .value = T("foo"),
+                   .same_site = 2,
+                   .raw = T("samesitelax=foo; SameSite=Lax")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("samesitestrict=foo; SameSite=Strict")},
+         .n = 1,
+         .want = {{.name = T("samesitestrict"),
+                   .value = T("foo"),
+                   .same_site = 3,
+                   .raw = T("samesitestrict=foo; SameSite=Strict")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("samesitenone=foo; SameSite=None")},
+         .n = 1,
+         .want = {{.name = T("samesitenone"),
+                   .value = T("foo"),
+                   .same_site = 4,
+                   .raw = T("samesitenone=foo; SameSite=None")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("special-1=a z")},
+         .n = 1,
+         .want = {{.name = T("special-1"),
+                   .value = T("a z"),
+                   .raw = T("special-1=a z")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("special-2=\" z\"")},
+         .n = 1,
+         .want = {{.name = T("special-2"),
+                   .value = T(" z"),
+                   .quoted = true,
+                   .raw = T("special-2=\" z\"")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("special-3=\"a \"")},
+         .n = 1,
+         .want = {{.name = T("special-3"),
+                   .value = T("a "),
+                   .quoted = true,
+                   .raw = T("special-3=\"a \"")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("special-4=\" \"")},
+         .n = 1,
+         .want = {{.name = T("special-4"),
+                   .value = T(" "),
+                   .quoted = true,
+                   .raw = T("special-4=\" \"")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("special-5=a,z")},
+         .n = 1,
+         .want = {{.name = T("special-5"),
+                   .value = T("a,z"),
+                   .raw = T("special-5=a,z")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("special-6=\",z\"")},
+         .n = 1,
+         .want = {{.name = T("special-6"),
+                   .value = T(",z"),
+                   .quoted = true,
+                   .raw = T("special-6=\",z\"")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("special-7=a,")},
+         .n = 1,
+         .want = {{.name = T("special-7"), .value = T("a,"), .raw = T("special-7=a,")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("special-8=\",\"")},
+         .n = 1,
+         .want = {{.name = T("special-8"),
+                   .value = T(","),
+                   .quoted = true,
+                   .raw = T("special-8=\",\"")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("special-9 =\",\"")},
+         .n = 1,
+         .want = {{.name = T("special-9"),
+                   .value = T(","),
+                   .quoted = true,
+                   .raw = T("special-9 =\",\"")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Set-Cookie"), T("cookie=\"quoted\"")},
+         .n = 1,
+         .want = {{.name = T("cookie"),
+                   .value = T("quoted"),
+                   .quoted = true,
+                   .raw = T("cookie=\"quoted\"")}},
+         .godebug = ""},
     };
     ARENA_BEGIN;
     for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
@@ -247,7 +476,47 @@ static void TestReadSetCookies(TestingT *t) {
 
 static void TestReadCookies(TestingT *t) {
     static const CKRead tests[] = {
-        /* PROBE: readCookiesTests */
+        {.nh = 2,
+         .h = {T("Cookie"), T("Cookie-1=v$1"), T("c2=v2")},
+         .filter = T(""),
+         .n = 2,
+         .want = {{.name = T("Cookie-1"), .value = T("v$1")},
+                  {.name = T("c2"), .value = T("v2")}},
+         .godebug = ""},
+        {.nh = 2,
+         .h = {T("Cookie"), T("Cookie-1=v$1"), T("c2=v2")},
+         .filter = T("c2"),
+         .n = 1,
+         .want = {{.name = T("c2"), .value = T("v2")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Cookie"), T("Cookie-1=v$1; c2=v2")},
+         .filter = T(""),
+         .n = 2,
+         .want = {{.name = T("Cookie-1"), .value = T("v$1")},
+                  {.name = T("c2"), .value = T("v2")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Cookie"), T("Cookie-1=v$1; c2=v2")},
+         .filter = T("c2"),
+         .n = 1,
+         .want = {{.name = T("c2"), .value = T("v2")}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Cookie"), T("Cookie-1=\"v$1\"; c2=\"v2\"")},
+         .filter = T(""),
+         .n = 2,
+         .want = {{.name = T("Cookie-1"), .value = T("v$1"), .quoted = true},
+                  {.name = T("c2"), .value = T("v2"), .quoted = true}},
+         .godebug = ""},
+        {.nh = 1,
+         .h = {T("Cookie"), T("Cookie-1=\"v$1\"; c2=v2;")},
+         .filter = T(""),
+         .n = 2,
+         .want = {{.name = T("Cookie-1"), .value = T("v$1"), .quoted = true},
+                  {.name = T("c2"), .value = T("v2")}},
+         .godebug = ""},
+        {.nh = 1, .h = {T("Cookie"), T("")}, .filter = T(""), .n = 0, .godebug = ""},
     };
     ARENA_BEGIN;
     for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
@@ -300,7 +569,20 @@ static void TestCookieSanitizeValue(TestingT *t) {
         bool quoted;
         Str want;
     } tests[] = {
-        /* PROBE: sanitizeCookieValue */
+        {T("foo"), false, T("foo")},
+        {T("foo;bar"), false, T("foobar")},
+        {T("foo\\bar"), false, T("foobar")},
+        {T("foo\"bar"), false, T("foobar")},
+        {T("\000~\177\200"), false, T("~")},
+        {T("withquotes"), true, T("\"withquotes\"")},
+        {T("\"withquotes\""), true, T("\"withquotes\"")},
+        {T("a z"), false, T("\"a z\"")},
+        {T(" z"), false, T("\" z\"")},
+        {T("a "), false, T("\"a \"")},
+        {T("a,z"), false, T("\"a,z\"")},
+        {T(",z"), false, T("\",z\"")},
+        {T("a,"), false, T("\"a,\"")},
+        {T(""), true, T("\"\"")},
     };
     ARENA_BEGIN;
     BytesBuffer logbuf = BYTES_BUFFER(a);
@@ -323,7 +605,9 @@ static void TestCookieSanitizePath(TestingT *t) {
     static const struct {
         Str in, want;
     } tests[] = {
-        /* PROBE: sanitizeCookiePath */
+        {T("/path"), T("/path")},
+        {T("/path with space/"), T("/path with space/")},
+        {T("/just;no;semicolon\000orstuff/"), T("/justnosemicolonorstuff/")},
     };
     ARENA_BEGIN;
     BytesBuffer logbuf = BYTES_BUFFER(a);
@@ -435,11 +719,23 @@ static Error ck_err(int e) {
 static void TestParseCookie(TestingT *t) {
     static const struct {
         Str line;
-        int err;
         CK want[2];
+        int err;
         int n;
     } tests[] = {
-        /* PROBE: TestParseCookie */
+        {T("Cookie-1=v$1"), .err = none, .n = 1,
+         .want = {{.name = T("Cookie-1"), .value = T("v$1")}}},
+        {T("Cookie-1=v$1;c2=v2"), .err = none, .n = 2,
+         .want = {{.name = T("Cookie-1"), .value = T("v$1")},
+                  {.name = T("c2"), .value = T("v2")}}},
+        {T("Cookie-1=\"v$1\";c2=\"v2\""), .err = none, .n = 2,
+         .want = {{.name = T("Cookie-1"), .value = T("v$1"), .quoted = true},
+                  {.name = T("c2"), .value = T("v2"), .quoted = true}}},
+        {T("k1="), .err = none, .n = 1, .want = {{.name = T("k1")}}},
+        {T(""), .err = blank, .n = 0},
+        {T("equal-not-found"), .err = equal_not_found, .n = 0},
+        {T("=v1"), .err = invalid_name, .n = 0},
+        {T("k1=\\"), .err = invalid_value, .n = 0},
     };
     ARENA_BEGIN;
     for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
@@ -458,19 +754,31 @@ static void TestParseCookie(TestingT *t) {
                                "not the same",
                                (int)i, (int)got.len, tests[i].n);
     }
-    /* The last case of Go's table: 3001 cookies with the limit raised. */
-    burrow__http_godebug_set("httpcookiemaxnum=3001");
-    Error err;
-    Slice got = http_parse_cookie(a, ck_repeat_line(a, MAX_NUM + 1), &err);
-    if (BURROW_FAILED(err) || !ck_all_a(got, MAX_NUM + 1))
-        testing_t_errorf_v(t, "ParseCookie of %d cookies: error %v, %d cookies",
-                           MAX_NUM + 1, err, (int)got.len);
-    /* And without it raised, which is the error. */
-    burrow__http_godebug_set("");
-    got = http_parse_cookie(a, ck_repeat_line(a, MAX_NUM + 1), &err);
-    if (!errors_is(err, burrow__http_err_cookie_num_limit_exceeded) || got.len != 0)
-        testing_t_errorf_v(t, "ParseCookie of %d cookies: error %v, %d cookies",
-                           MAX_NUM + 1, err, (int)got.len);
+    /* The rest of Go's table: more cookies than the limit, a lower limit, and
+     * the limit taken away or raised. */
+    struct {
+        const char *godebug;
+        Int n, want;
+        int err;
+    } limits[] = {
+        {"", MAX_NUM + 1, 0, num_limit},
+        {"httpcookiemaxnum=5", 10, 0, num_limit},
+        {"httpcookiemaxnum=0", MAX_NUM + 1, MAX_NUM + 1, none},
+        {"httpcookiemaxnum=3001", MAX_NUM + 1, MAX_NUM + 1, none},
+    };
+    for (size_t i = 0; i < sizeof limits / sizeof limits[0]; i++) {
+        burrow__http_godebug_set(limits[i].godebug);
+        Error err;
+        Slice got = http_parse_cookie(a, ck_repeat_line(a, limits[i].n), &err);
+        bool err_ok = limits[i].err == none ? BURROW_OK(err)
+                                            : errors_is(err, ck_err(limits[i].err));
+        if (!err_ok || !ck_all_a(got, limits[i].want))
+            testing_t_errorf_v(t,
+                               "GODEBUG=%s: ParseCookie of %d cookies: error %v, %d "
+                               "cookies, want %d",
+                               limits[i].godebug, (int)limits[i].n, err, (int)got.len,
+                               (int)limits[i].want);
+    }
     burrow__http_godebug_set(NULL);
     ARENA_END;
 }
@@ -481,7 +789,109 @@ static void TestParseSetCookie(TestingT *t) {
         int err;
         CK want;
     } tests[] = {
-        /* PROBE: TestParseSetCookie */
+        {T("Cookie-1=v$1"), .err = none,
+         .want = {.name = T("Cookie-1"), .value = T("v$1"), .raw = T("Cookie-1=v$1")}},
+        {T("NID=99=YsDT5i3E-CXax-; expires=Wed, 23-Nov-2011 01:05:03 GMT; path=/; "
+           "domain=.google.ch; HttpOnly"),
+         .err = none,
+         .want = {.name = T("NID"),
+                  .value = T("99=YsDT5i3E-CXax-"),
+                  .path = T("/"),
+                  .domain = T(".google.ch"),
+                  .exp = 1,
+                  .exp_sec = 1322010303,
+                  .exp_nsec = 0,
+                  .raw_expires = T("Wed, 23-Nov-2011 01:05:03 GMT"),
+                  .http_only = true,
+                  .raw = T("NID=99=YsDT5i3E-CXax-; expires=Wed, 23-Nov-2011 01:05:03 "
+                           "GMT; path=/; domain=.google.ch; HttpOnly")}},
+        {T(".ASPXAUTH=7E3AA; expires=Wed, 07-Mar-2012 14:25:06 GMT; path=/; HttpOnly"),
+         .err = none,
+         .want = {.name = T(".ASPXAUTH"),
+                  .value = T("7E3AA"),
+                  .path = T("/"),
+                  .exp = 1,
+                  .exp_sec = 1331130306,
+                  .exp_nsec = 0,
+                  .raw_expires = T("Wed, 07-Mar-2012 14:25:06 GMT"),
+                  .http_only = true,
+                  .raw = T(".ASPXAUTH=7E3AA; expires=Wed, 07-Mar-2012 14:25:06 GMT; "
+                           "path=/; HttpOnly")}},
+        {T("ASP.NET_SessionId=foo; path=/; HttpOnly"), .err = none,
+         .want = {.name = T("ASP.NET_SessionId"),
+                  .value = T("foo"),
+                  .path = T("/"),
+                  .http_only = true,
+                  .raw = T("ASP.NET_SessionId=foo; path=/; HttpOnly")}},
+        {T("samesitedefault=foo; SameSite"), .err = none,
+         .want = {.name = T("samesitedefault"),
+                  .value = T("foo"),
+                  .same_site = 1,
+                  .raw = T("samesitedefault=foo; SameSite")}},
+        {T("samesiteinvalidisdefault=foo; SameSite=invalid"), .err = none,
+         .want = {.name = T("samesiteinvalidisdefault"),
+                  .value = T("foo"),
+                  .same_site = 1,
+                  .raw = T("samesiteinvalidisdefault=foo; SameSite=invalid")}},
+        {T("samesitelax=foo; SameSite=Lax"), .err = none,
+         .want = {.name = T("samesitelax"),
+                  .value = T("foo"),
+                  .same_site = 2,
+                  .raw = T("samesitelax=foo; SameSite=Lax")}},
+        {T("samesitestrict=foo; SameSite=Strict"), .err = none,
+         .want = {.name = T("samesitestrict"),
+                  .value = T("foo"),
+                  .same_site = 3,
+                  .raw = T("samesitestrict=foo; SameSite=Strict")}},
+        {T("samesitenone=foo; SameSite=None"), .err = none,
+         .want = {.name = T("samesitenone"),
+                  .value = T("foo"),
+                  .same_site = 4,
+                  .raw = T("samesitenone=foo; SameSite=None")}},
+        {T("special-1=a z"), .err = none,
+         .want = {.name = T("special-1"),
+                  .value = T("a z"),
+                  .raw = T("special-1=a z")}},
+        {T("special-2=\" z\""), .err = none,
+         .want = {.name = T("special-2"),
+                  .value = T(" z"),
+                  .quoted = true,
+                  .raw = T("special-2=\" z\"")}},
+        {T("special-3=\"a \""), .err = none,
+         .want = {.name = T("special-3"),
+                  .value = T("a "),
+                  .quoted = true,
+                  .raw = T("special-3=\"a \"")}},
+        {T("special-4=\" \""), .err = none,
+         .want = {.name = T("special-4"),
+                  .value = T(" "),
+                  .quoted = true,
+                  .raw = T("special-4=\" \"")}},
+        {T("special-5=a,z"), .err = none,
+         .want = {.name = T("special-5"),
+                  .value = T("a,z"),
+                  .raw = T("special-5=a,z")}},
+        {T("special-6=\",z\""), .err = none,
+         .want = {.name = T("special-6"),
+                  .value = T(",z"),
+                  .quoted = true,
+                  .raw = T("special-6=\",z\"")}},
+        {T("special-7=a,"), .err = none,
+         .want = {.name = T("special-7"), .value = T("a,"), .raw = T("special-7=a,")}},
+        {T("special-8=\",\""), .err = none,
+         .want = {.name = T("special-8"),
+                  .value = T(","),
+                  .quoted = true,
+                  .raw = T("special-8=\",\"")}},
+        {T("special-9 =\",\""), .err = none,
+         .want = {.name = T("special-9"),
+                  .value = T(","),
+                  .quoted = true,
+                  .raw = T("special-9 =\",\"")}},
+        {T(""), .err = blank, .want = {0}},
+        {T("equal-not-found"), .err = equal_not_found, .want = {0}},
+        {T("=v1"), .err = invalid_name, .want = {0}},
+        {T("k1=\\"), .err = invalid_value, .want = {0}},
     };
     ARENA_BEGIN;
     for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {

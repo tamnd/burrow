@@ -512,7 +512,8 @@ not a date
 <!-- example: ../examples/net/http.c#cookie -->
 ```c
 Error err;
-Str line = BURROW_S("session=38afes7a8; Path=/; Max-Age=3600; HttpOnly; Flavour=mint");
+Str line =
+    BURROW_S("session=38afes7a8; Path=/; Max-Age=3600; HttpOnly; Flavour=mint");
 HttpCookie c = http_parse_set_cookie(a, line, &err);
 if (BURROW_OK(err)) {
     printf("%.*s=%.*s, path %.*s, max-age %d\n", P(c.name), P(c.value), P(c.path),
@@ -540,7 +541,11 @@ printf("%.*s\n", P(http_cookie_string(a, &out)));
 That prints:
 
 ```
-PENDING
+session=38afes7a8, path /, max-age 3600
+unparsed: Flavour=mint
+lang is en
+theme is dark, quoted
+cart="3 items"; Path=/shop; Expires=Fri, 01 Mar 2030 12:00:00 GMT; Secure; SameSite=Strict
 ```
 
 `http_cookie_string` goes the other way, and drops the bytes a value or path can't hold, quoting a value with a space or comma in it as Go does. Each of those is reported on the standard logger from `burrow/log.h`, as Go reports it with `log.Printf`. `http_cookie_valid` says whether a cookie could be sent as it is. A request with more than 3000 cookies gets an error, and `GODEBUG=httpcookiemaxnum=N` moves that limit, with 0 taking it away.

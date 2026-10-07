@@ -500,15 +500,17 @@ struct tp_Trip {
     HttpHeader extra;   /* in arena */
     Chan *resc;         /* bool, unbuffered: res or rl_err is set */
     Chan *gone;         /* closed when the caller has returned */
-    Chan *write_err_ch; /* Error, in wl_arena */
+    Chan *write_err_ch; /* bool, after wl_err is set */
     Chan *continue_ch;  /* bool, or NULL without "Expect: 100-continue" */
     Chan *wait_body;    /* bool, whether the body was read to its end */
     Chan *rl_done;      /* closed when the read loop is done with the trip */
+    Chan *wl_done;      /* closed when the write loop is done with the trip */
     HttpResponse *res;
     tp_Body *body; /* what the response body is wrapped in */
     tp_Gzip *gz;
     Error rl_err;  /* in rl_arena */
     Error set_err; /* in wl_arena, under mu */
+    Error wl_err;  /* in wl_arena, under mu, before write_err_ch is sent on */
     SyncAtomicInt64 refs;
     Arena arena;    /* the caller's, until the trip is handed over */
     Arena rl_arena; /* the read loop's */
@@ -1543,12 +1545,6 @@ static void tp_write_loop(void *env);
 static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMethod *cm,
                               Error *err) {
     Alloc *a = tp_alloc(t);
-    const HttpProtocols *p = t->protocols;
-    if (p != NULL && http_protocols_unencrypted_http2(*p) && !http_protocols_http1(*p)) {
-        /* Unencrypted HTTP/2 with prior knowledge, which needs HTTP/2. */
-        BURROW_OUT(err, tp_err_unencrypted_h2);
-        return NULL;
-    }
     if (cm->proxy_url != NULL && (str_eq(cm->proxy_url->scheme, BURROW_S("socks5")) ||
                                   str_eq(cm->proxy_url->scheme, BURROW_S("socks5h")))) {
         BURROW_OUT(err, tp_err_socks5);
@@ -1614,6 +1610,14 @@ static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMet
         goto fail;
     }
 
+    /* Unencrypted HTTP/2 with prior knowledge, which needs HTTP/2. The
+     * connection is never TLS of the transport's own here. */
+    const HttpProtocols *p = t->protocols;
+    if (p != NULL && http_protocols_unencrypted_http2(*p) && !http_protocols_http1(*p)) {
+        e = tp_err_unencrypted_h2;
+        goto fail;
+    }
+
     pc->br = bufio_new_reader_size(a, (IoReader){&tp_pc_reader_vt, pc},
                                    tp_read_buffer_size(t));
     pc->bw = bufio_new_writer_size(a, (IoWriter){&tp_pc_writer_vt, pc},
@@ -1654,4 +1658,706 @@ fail:
     return NULL;
 }
 
-/* @@TP-PART-5@@ */
+/* ------------------------------------------------------------ the trips */
+
+/* What each loop does with a trip when it is done with it: the read loop and
+ * the write loop each close their channel, so that whoever frees the request
+ * knows nothing looks at it any more, and give back their reference. */
+static void tp_trip_rl_release(tp_Trip *tr) {
+    chan_close(tr->rl_done);
+    tp_trip_unref(tr);
+}
+
+static void tp_trip_wl_release(tp_Trip *tr) {
+    chan_close(tr->wl_done);
+    tp_trip_unref(tr);
+}
+
+/* transportRequest.setError. The first error set is kept. */
+static void tp_trip_set_error(tp_Trip *tr, Error err) {
+    sync_mutex_lock(&tr->mu);
+    if (BURROW_OK(tr->set_err))
+        tr->set_err = error_retain(arena_allocator(&tr->wl_arena), err);
+    sync_mutex_unlock(&tr->mu);
+}
+
+/* transportRequest.cancel, which cancels the call's context. */
+static void tp_trip_cancel(tp_Trip *tr, Error cause) {
+    if (tr->call != NULL)
+        BURROW_CALLF(tr->call->cancel, cause);
+}
+
+/* The read loop's send of its result, which loses to the caller having gone.
+ * res, or rl_err when it is NULL, is the result. */
+static bool tp_trip_deliver(tp_Trip *tr, HttpResponse *res) {
+    tr->res = res;
+    bool v = true;
+    SelectCase cases[2] = {BURROW_SEND(tr->resc, &v), BURROW_RECV(tr->gone, NULL)};
+    if (chan_select(cases, 2) == 0)
+        return true;
+    tr->res = NULL;
+    return false;
+}
+
+/* ------------------------------------------------------ the response bodies */
+
+/* bodyEOFSignal. The response body the read loop hands over, which tells it
+ * when the body has been read to its end, or closed before then, so that it
+ * can read the next response. fn and earlyCloseFn are always the read loop's,
+ * so they are written out here. */
+struct tp_Body {
+    IoReadCloser body; /* the response's own */
+    tp_Trip *tr;
+    Error rerr; /* in arena, under mu */
+    Arena arena;
+    SyncMutex mu;
+    bool closed; /* under mu */
+    bool fn_ran; /* under mu */
+};
+
+/* fn. err is nil for a Close at the end of the body. */
+static Error tp_body_fn(tp_Body *b, Error err) {
+    tp_PConn *pc = b->tr->pc;
+    bool is_eof = tp_same(err, io_eof);
+    (void)chan_send(b->tr->wait_body, &is_eof);
+    if (is_eof) {
+        tp_wait(pc->eofc);
+    } else if (BURROW_FAILED(err)) {
+        Error cerr = tp_pc_canceled(pc);
+        if (BURROW_FAILED(cerr))
+            return cerr;
+    }
+    return err;
+}
+
+/* condfn, with b->mu held. */
+static Error tp_body_condfn(tp_Body *b, Error err) {
+    if (b->fn_ran)
+        return err;
+    b->fn_ran = true;
+    return tp_body_fn(b, err);
+}
+
+static Int tp_body_read(void *self, Slice p, Error *err) {
+    tp_Body *b = (tp_Body *)self;
+    sync_mutex_lock(&b->mu);
+    bool closed = b->closed;
+    Error rerr = b->rerr;
+    sync_mutex_unlock(&b->mu);
+    if (closed) {
+        BURROW_OUT(err, burrow__http_err_read_on_closed_res_body);
+        return 0;
+    }
+    if (BURROW_FAILED(rerr)) {
+        BURROW_OUT(err, rerr);
+        return 0;
+    }
+    Error e = BURROW_NO_ERROR;
+    Int n = b->body.vt->reader.read(b->body.data, p, &e);
+    if (BURROW_FAILED(e)) {
+        sync_mutex_lock(&b->mu);
+        if (BURROW_OK(b->rerr))
+            b->rerr = error_retain(arena_allocator(&b->arena), e);
+        e = tp_body_condfn(b, e);
+        sync_mutex_unlock(&b->mu);
+    }
+    BURROW_OUT(err, e);
+    return n;
+}
+
+static Error tp_body_close(void *self) {
+    tp_Body *b = (tp_Body *)self;
+    sync_mutex_lock(&b->mu);
+    if (b->closed) {
+        sync_mutex_unlock(&b->mu);
+        return BURROW_NO_ERROR;
+    }
+    b->closed = true;
+    Error err;
+    if (!tp_same(b->rerr, io_eof)) {
+        /* earlyCloseFn. */
+        bool f = false;
+        (void)chan_send(b->tr->wait_body, &f);
+        tp_wait(b->tr->pc->eofc);
+        err = BURROW_NO_ERROR;
+    } else {
+        err = tp_body_condfn(b, b->body.vt->closer.close(b->body.data));
+    }
+    sync_mutex_unlock(&b->mu);
+    return err;
+}
+
+static const IoReadCloserVT tp_body_vt = {{NULL, tp_body_read}, {NULL, tp_body_close}};
+
+static tp_Body *tp_body_new(HttpTransport *t, tp_Trip *tr, IoReadCloser body) {
+    Alloc *a = tp_alloc(t);
+    tp_Body *b = (tp_Body *)mem_alloc(a, sizeof *b, _Alignof(tp_Body));
+    if (b == NULL)
+        return NULL;
+    b->body = body;
+    b->tr = tr;
+    arena_init(&b->arena, a, 0);
+    return b;
+}
+
+static void tp_body_free(HttpTransport *t, tp_Body *b) {
+    if (b == NULL)
+        return;
+    arena_free(&b->arena);
+    mem_free(tp_alloc(t), b, sizeof *b, _Alignof(tp_Body));
+}
+
+/* gzipReader. Go keeps its gzip readers in a pool, which only saves work, so
+ * here each body makes its own the first time it is read. zerr is
+ * burrow__http_err_concurrent_read_on_res_body while a read has zr, and
+ * burrow__http_err_read_on_closed_res_body once the body is closed. */
+struct tp_Gzip {
+    HttpTransport *t;
+    tp_Body *body;
+    GzipReader *zr; /* under mu */
+    Error zerr;     /* in arena, under mu */
+    Arena arena;
+    SyncMutex mu;
+};
+
+static GzipReader *tp_gzip_acquire(tp_Gzip *gz, Error *err) {
+    sync_mutex_lock(&gz->mu);
+    if (BURROW_FAILED(gz->zerr)) {
+        BURROW_OUT(err, gz->zerr);
+        sync_mutex_unlock(&gz->mu);
+        return NULL;
+    }
+    if (gz->zr == NULL) {
+        /* gzip_new_reader reads the header, which may block for as long as
+         * the server likes, so mu is let go meanwhile and zerr keeps other
+         * reads out. */
+        gz->zerr = burrow__http_err_concurrent_read_on_res_body;
+        sync_mutex_unlock(&gz->mu);
+        Error e = BURROW_NO_ERROR;
+        GzipReader *zr = gzip_new_reader(tp_alloc(gz->t),
+                                         (IoReader){&tp_body_vt.reader, gz->body}, &e);
+        sync_mutex_lock(&gz->mu);
+        if (!tp_same(gz->zerr, burrow__http_err_concurrent_read_on_res_body)) {
+            /* Closed meanwhile. */
+            gzip_reader_free(zr);
+            BURROW_OUT(err, gz->zerr);
+            sync_mutex_unlock(&gz->mu);
+            return NULL;
+        }
+        gz->zr = zr;
+        gz->zerr = error_retain(arena_allocator(&gz->arena), e);
+        if (BURROW_FAILED(gz->zerr)) {
+            gzip_reader_free(gz->zr);
+            gz->zr = NULL;
+            BURROW_OUT(err, gz->zerr);
+            sync_mutex_unlock(&gz->mu);
+            return NULL;
+        }
+    }
+    GzipReader *ret = gz->zr;
+    gz->zr = NULL;
+    gz->zerr = burrow__http_err_concurrent_read_on_res_body;
+    sync_mutex_unlock(&gz->mu);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return ret;
+}
+
+static void tp_gzip_release(tp_Gzip *gz, GzipReader *zr) {
+    sync_mutex_lock(&gz->mu);
+    if (tp_same(gz->zerr, burrow__http_err_concurrent_read_on_res_body)) {
+        gz->zr = zr;
+        gz->zerr = BURROW_NO_ERROR;
+    } else {
+        gzip_reader_free(zr);
+    }
+    sync_mutex_unlock(&gz->mu);
+}
+
+/* gzipReader.close. */
+static void tp_gzip_close_reader(tp_Gzip *gz) {
+    sync_mutex_lock(&gz->mu);
+    if (BURROW_OK(gz->zerr) && gz->zr != NULL) {
+        gzip_reader_free(gz->zr);
+        gz->zr = NULL;
+    }
+    gz->zerr = burrow__http_err_read_on_closed_res_body;
+    sync_mutex_unlock(&gz->mu);
+}
+
+static Int tp_gzip_read(void *self, Slice p, Error *err) {
+    tp_Gzip *gz = (tp_Gzip *)self;
+    GzipReader *zr = tp_gzip_acquire(gz, err);
+    if (zr == NULL)
+        return 0;
+    Int n = gzip_reader_read(zr, p, err);
+    tp_gzip_release(gz, zr);
+    return n;
+}
+
+static Error tp_gzip_close(void *self) {
+    tp_Gzip *gz = (tp_Gzip *)self;
+    tp_gzip_close_reader(gz);
+    return tp_body_close(gz->body);
+}
+
+static const IoReadCloserVT tp_gzip_vt = {{NULL, tp_gzip_read}, {NULL, tp_gzip_close}};
+
+static tp_Gzip *tp_gzip_new(HttpTransport *t, tp_Body *body) {
+    Alloc *a = tp_alloc(t);
+    tp_Gzip *gz = (tp_Gzip *)mem_alloc(a, sizeof *gz, _Alignof(tp_Gzip));
+    if (gz == NULL)
+        return NULL;
+    gz->t = t;
+    gz->body = body;
+    arena_init(&gz->arena, a, 0);
+    return gz;
+}
+
+/* Once nothing reads the body any more. */
+static void tp_gzip_free(tp_Gzip *gz) {
+    if (gz == NULL)
+        return;
+    gzip_reader_free(gz->zr);
+    arena_free(&gz->arena);
+    mem_free(tp_alloc(gz->t), gz, sizeof *gz, _Alignof(tp_Gzip));
+}
+
+/* readWriteCloserBody, the body of a 101 response, which is the connection
+ * itself after what br has of it already. It is the caller's to write to and
+ * close, and its connection goes with the transport's connection when the
+ * response is freed. */
+typedef struct tp_Rwc {
+    BufioReader *br; /* NULL once it has nothing left */
+    NetConn conn;
+} tp_Rwc;
+
+static Int tp_rwc_read(void *self, Slice p, Error *err) {
+    tp_Rwc *b = (tp_Rwc *)self;
+    if (b->br != NULL) {
+        Int n = bufio_reader_buffered(b->br);
+        if (p.len > n)
+            p.len = n;
+        n = bufio_reader_read(b->br, p, err);
+        if (bufio_reader_buffered(b->br) == 0)
+            b->br = NULL;
+        return n;
+    }
+    return b->conn.vt->reader.read(b->conn.data, p, err);
+}
+
+static Int tp_rwc_write(void *self, Slice p, Error *err) {
+    tp_Rwc *b = (tp_Rwc *)self;
+    return b->conn.vt->writer.write(b->conn.data, p, err);
+}
+
+static Error tp_rwc_close(void *self) {
+    tp_Rwc *b = (tp_Rwc *)self;
+    return b->conn.vt->closer.close(b->conn.data);
+}
+
+static const IoReadCloserVT tp_rwc_vt = {{NULL, tp_rwc_read}, {NULL, tp_rwc_close}};
+static const IoWriterVT tp_rwc_writer_vt = {NULL, tp_rwc_write};
+
+bool http_response_body_writer(const HttpResponse *r, IoWriter *w) {
+    if (r == NULL || r->body.vt != &tp_rwc_vt)
+        return false;
+    if (w != NULL)
+        *w = (IoWriter){&tp_rwc_writer_vt, r->body.data};
+    return true;
+}
+
+/* -------------------------------------------------------- the write loop */
+
+/* waitForContinue. Whether to send the body after "Expect: 100-continue". */
+static bool tp_wait_for_continue(void *env) {
+    tp_Trip *tr = (tp_Trip *)env;
+    tp_PConn *pc = tr->pc;
+    TimeTimer *tm = time_new_timer(tp_alloc(pc->t), pc->t->expect_continue_timeout);
+    if (tm == NULL)
+        return true; /* as if the time were up */
+    bool ok = false;
+    SelectCase cases[3] = {BURROW_RECV_OK(tr->continue_ch, NULL, &ok),
+                           BURROW_RECV(time_timer_c(tm), NULL),
+                           BURROW_RECV(pc->closech, NULL)};
+    Int i = chan_select(cases, 3);
+    (void)time_timer_stop(tm);
+    time_timer_free(tm);
+    if (i == 0)
+        return ok;
+    return i == 1;
+}
+
+/* writeLoop. */
+static void tp_write_loop(void *env) {
+    tp_PConn *pc = (tp_PConn *)env;
+    for (;;) {
+        uintptr_t p = 0;
+        SelectCase cases[2] = {BURROW_RECV(pc->writech, &p), BURROW_RECV(pc->closech, NULL)};
+        if (chan_select(cases, 2) != 0)
+            break;
+        tp_Trip *tr = (tp_Trip *)p;
+        ArenaMark m = error_mark();
+        int64_t start = sync_atomic_int64_load(&pc->nwrite);
+        burrow__HttpWaitFunc wait;
+        memset(&wait, 0, sizeof wait);
+        if (tr->continue_ch != NULL)
+            wait = BURROW_FN(burrow__HttpWaitFunc, tp_wait_for_continue, tr);
+        Error err = burrow__http_request_write(tr->req, bufio_writer_as_io_writer(pc->bw),
+                                               pc->is_proxy, tr->extra, wait);
+        Error inner = BURROW_NO_ERROR;
+        if (burrow__http_is_request_body_read_error(err, &inner)) {
+            /* An error reading the caller's body comes first, so it is set
+             * before the channels below or the close tell anyone of the
+             * errors that follow from it. */
+            err = inner;
+            tp_trip_set_error(tr, err);
+        }
+        if (BURROW_OK(err))
+            err = bufio_writer_flush(pc->bw);
+        if (BURROW_FAILED(err) && sync_atomic_int64_load(&pc->nwrite) == start)
+            err = tp_wrap(error_allocator(), &tp_nothing_written_vt, err);
+        bool ok = BURROW_OK(err);
+        sync_mutex_lock(&tr->mu);
+        tr->wl_err = error_retain(arena_allocator(&tr->wl_arena), err);
+        sync_mutex_unlock(&tr->mu);
+        (void)chan_send(pc->write_err_ch, &ok); /* to the body, which may reuse pc */
+        (void)chan_send(tr->write_err_ch, &ok); /* to the round trip */
+        if (!ok) {
+            tp_pc_close(pc, err);
+            tp_trip_wl_release(tr);
+            break;
+        }
+        tp_trip_wl_release(tr);
+        error_release(m);
+    }
+    sync_mutex_lock(&pc->mu);
+    pc->wl_exited = true;
+    sync_mutex_unlock(&pc->mu);
+    uintptr_t q = 0;
+    while (chan_try_recv(pc->writech, &q, NULL))
+        tp_trip_wl_release((tp_Trip *)q);
+    chan_close(pc->write_loop_done);
+    tp_pc_unref(pc);
+}
+
+/* wroteRequest. Whether the last request went out, waiting a little for the
+ * write loop to say when it has not yet. */
+static bool tp_pc_wrote_request(tp_PConn *pc) {
+    bool ok = false;
+    if (chan_try_recv(pc->write_err_ch, &ok, NULL))
+        return ok;
+    TimeTimer *tm = time_new_timer(tp_alloc(pc->t), TP_MAX_WRITE_WAIT_BEFORE_CONN_REUSE);
+    if (tm == NULL)
+        return false;
+    SelectCase cases[2] = {BURROW_RECV(pc->write_err_ch, &ok),
+                           BURROW_RECV(time_timer_c(tm), NULL)};
+    Int i = chan_select(cases, 2);
+    (void)time_timer_stop(tm);
+    time_timer_free(tm);
+    return i == 0 && ok;
+}
+
+/* --------------------------------------------------------- the read loop */
+
+/* is408Message. */
+static bool tp_is_408_message(Slice buf) {
+    const Byte *b = (const Byte *)buf.p;
+    if (buf.len < 12)
+        return false;
+    if (memcmp(b, "HTTP/1.", 7) != 0)
+        return false;
+    return memcmp(b + 8, " 408", 4) == 0;
+}
+
+/* readLoopPeekFailLocked. */
+static void tp_read_loop_peek_fail_locked(tp_PConn *pc, Error peek_err) {
+    if (BURROW_FAILED(pc->closed))
+        return;
+    Int n = bufio_reader_buffered(pc->br);
+    if (n > 0) {
+        Error e = BURROW_NO_ERROR;
+        Slice buf = bufio_reader_peek(pc->br, n, &e);
+        if (tp_is_408_message(buf)) {
+            tp_pc_close_locked(pc, burrow__http_err_server_closed_idle);
+            return;
+        }
+        log_printf_v("Unsolicited response received on idle HTTP channel starting with "
+                     "%q; err=%v",
+                     str_from_bytes((const Byte *)buf.p, buf.len), peek_err);
+    }
+    if (tp_same(peek_err, io_eof))
+        tp_pc_close_locked(pc, burrow__http_err_server_closed_idle);
+    else
+        tp_pc_close_locked(pc, fmt_errorf_v("readLoopPeekFailLocked: %w", peek_err));
+}
+
+/* readResponse. The final response to tr's request, after any 1xx ones but a
+ * 101. */
+static HttpResponse *tp_read_response(tp_PConn *pc, tp_Trip *tr, Error *err) {
+    Chan *continue_ch = tr->continue_ch;
+    HttpResponse *resp;
+    for (;;) {
+        resp = http_read_response(tp_alloc(pc->t), pc->br, tr->req, err);
+        if (resp == NULL)
+            return NULL;
+        Int code = resp->status_code;
+        if (continue_ch != NULL && code == HTTP_STATUS_CONTINUE) {
+            bool v = true;
+            (void)chan_send(continue_ch, &v);
+            continue_ch = NULL;
+        }
+        /* A 101 is the last, see Go's issue 26161. */
+        if (100 <= code && code <= 199 && code != HTTP_STATUS_SWITCHING_PROTOCOLS) {
+            http_response_free(resp);
+            continue;
+        }
+        break;
+    }
+    if (tp_is_protocol_switch(resp)) {
+        tp_Rwc *b =
+            (tp_Rwc *)mem_alloc(arena_allocator(&resp->arena), sizeof *b, _Alignof(tp_Rwc));
+        if (b == NULL) {
+            http_response_free(resp);
+            BURROW_OUT(err, burrow_err_out_of_memory);
+            return NULL;
+        }
+        if (bufio_reader_buffered(pc->br) != 0)
+            b->br = pc->br;
+        b->conn = pc->conn;
+        resp->body = (IoReadCloser){&tp_rwc_vt, b};
+    }
+    if (continue_ch != NULL) {
+        /* The request said "Expect: 100-continue" and the response came
+         * without a 100 first. The body goes out if the connection is to be
+         * used again, and not if it is to close. A 101 gets the body as well,
+         * since it would go once expect_continue_timeout is up anyway. */
+        if (resp->close || tr->req->close) {
+            chan_close(continue_ch);
+        } else {
+            bool v = true;
+            (void)chan_send(continue_ch, &v);
+        }
+    }
+    return resp;
+}
+
+/* The tryPutIdleConn of readLoop. */
+static bool tp_rl_try_put_idle(tp_PConn *pc, Error *close_err) {
+    Error e = tp_try_put_idle_conn(pc->t, pc);
+    if (BURROW_FAILED(e)) {
+        *close_err = e;
+        return false;
+    }
+    return true;
+}
+
+typedef struct tp_Drain {
+    HttpTransport *t;
+    IoReadCloser body;
+    Chan *done;
+    bool drained;
+} tp_Drain;
+
+static void tp_drain_job(void *env) {
+    tp_Drain *d = (tp_Drain *)env;
+    Error e = BURROW_NO_ERROR;
+    (void)io_copy_n(tp_alloc(d->t), io_discard, io_read_closer_as_io_reader(d->body),
+                    TP_MAX_POST_CLOSE_READ_BYTES + 1, &e);
+    d->drained = tp_same(e, io_eof);
+    chan_close(d->done);
+}
+
+/* maybeDrainBody. Go leaves the goroutine reading when its time is up, and
+ * closing the connection after ends it. The body goes with the response here,
+ * which may be freed as soon as the read loop is done with it, so the
+ * connection is closed at once and the goroutine waited for. */
+static bool tp_maybe_drain_body(tp_PConn *pc, IoReadCloser body, Error close_err) {
+    Alloc *a = tp_alloc(pc->t);
+    tp_Drain d = {pc->t, body, chan_make(a, TYPE_BOOL, 0), false};
+    if (d.done == NULL)
+        return false;
+    if (!go(BURROW_FN(Func, tp_drain_job, &d))) {
+        chan_free(d.done);
+        return false;
+    }
+    TimeTimer *tm = time_new_timer(a, TP_MAX_POST_CLOSE_READ_TIME);
+    Int i = 1;
+    if (tm != NULL) {
+        SelectCase cases[2] = {BURROW_RECV(d.done, NULL), BURROW_RECV(time_timer_c(tm), NULL)};
+        i = chan_select(cases, 2);
+        (void)time_timer_stop(tm);
+        time_timer_free(tm);
+    }
+    if (i != 0) {
+        tp_pc_close(pc, close_err);
+        tp_wait(d.done);
+    }
+    chan_free(d.done);
+    return i == 0 && d.drained;
+}
+
+/* A response the read loop could not hand over, or whose wrapping failed. */
+static void tp_rl_fail(tp_Trip *tr, Error err) {
+    tr->rl_err = error_retain(arena_allocator(&tr->rl_arena), err);
+    (void)tp_trip_deliver(tr, NULL);
+    tp_trip_rl_release(tr);
+}
+
+/* readLoop. */
+static void tp_read_loop(void *env) {
+    tp_PConn *pc = (tp_PConn *)env;
+    HttpTransport *t = pc->t;
+    Error close_err = burrow__http_err_read_loop_exiting;
+    bool alive = true;
+    while (alive) {
+        ArenaMark m = error_mark();
+        pc->read_limit = tp_max_header_response_size(t);
+        Error err = BURROW_NO_ERROR;
+        (void)bufio_reader_peek(pc->br, 1, &err);
+
+        sync_mutex_lock(&pc->mu);
+        if (pc->num_expected == 0) {
+            tp_read_loop_peek_fail_locked(pc, err);
+            sync_mutex_unlock(&pc->mu);
+            break;
+        }
+        sync_mutex_unlock(&pc->mu);
+
+        uintptr_t p = 0;
+        (void)chan_recv(pc->reqch, &p);
+        tp_Trip *tr = (tp_Trip *)p;
+
+        HttpResponse *resp = NULL;
+        if (BURROW_OK(err)) {
+            resp = tp_read_response(pc, tr, &err);
+        } else {
+            err = tp_wrap(error_allocator(), &tp_read_from_server_vt, err);
+            close_err = err;
+        }
+        if (BURROW_FAILED(err)) {
+            if (pc->read_limit <= 0)
+                err = fmt_errorf_v("net/http: server response headers exceeded %d bytes; "
+                                   "aborted",
+                                   tp_max_header_response_size(t));
+            tp_rl_fail(tr, err);
+            break;
+        }
+        pc->read_limit = INT64_MAX; /* no limit for the body */
+
+        sync_mutex_lock(&pc->mu);
+        pc->num_expected--;
+        sync_mutex_unlock(&pc->mu);
+
+        bool writable = resp->body.vt == &tp_rwc_vt;
+        bool has_body =
+            !str_eq(tr->req->method, BURROW_S("HEAD")) && resp->content_length != 0;
+        if (resp->close || tr->req->close || resp->status_code <= 199 || writable) {
+            /* No keep-alive when either side asked to close, or after an
+             * unexpected 1xx. */
+            alive = false;
+        }
+
+        if (!has_body || writable) {
+            /* Back in the pool before the response goes out, so that a quick
+             * next request gets this connection. resc has no buffer, so the
+             * round trip is out of its select, which also waits for pc to
+             * close, by the time this goroutine can end. */
+            alive = alive && !pc->saw_eof && tp_pc_wrote_request(pc) &&
+                    tp_rl_try_put_idle(pc, &close_err);
+            if (writable)
+                close_err = burrow__http_err_caller_owns_conn;
+            if (!tp_trip_deliver(tr, resp)) {
+                http_response_free(resp);
+                tp_trip_rl_release(tr);
+                break;
+            }
+            tp_trip_cancel(tr, burrow__http_err_request_done);
+            tp_trip_rl_release(tr);
+            error_release(m);
+            continue;
+        }
+
+        tp_Body *body = tp_body_new(t, tr, resp->body);
+        tp_Gzip *gz = NULL;
+        bool gzipped = tr->added_gzip &&
+                       burrow__http_ascii_equal_fold(
+                           http_header_get(resp->header, BURROW_S("Content-Encoding")),
+                           BURROW_S("gzip"));
+        if (body != NULL && gzipped) {
+            gz = tp_gzip_new(t, body);
+            if (gz == NULL) {
+                tp_body_free(t, body);
+                body = NULL;
+            }
+        }
+        if (body == NULL) {
+            http_response_free(resp);
+            tp_rl_fail(tr, burrow_err_out_of_memory);
+            break;
+        }
+        tr->body = body;
+        tr->gz = gz;
+        resp->body = (IoReadCloser){&tp_body_vt, body};
+        if (gz != NULL) {
+            resp->body = (IoReadCloser){&tp_gzip_vt, gz};
+            http_header_del(resp->header, BURROW_S("Content-Encoding"));
+            http_header_del(resp->header, BURROW_S("Content-Length"));
+            resp->content_length = -1;
+            resp->uncompressed = true;
+        }
+
+        if (!tp_trip_deliver(tr, resp)) {
+            http_response_free(resp);
+            tp_trip_rl_release(tr);
+            break;
+        }
+
+        /* Wait for the caller to read the body to its end, or close it, or
+         * give up, before reading on. The response is not freed before the
+         * read loop is done with the trip. */
+        bool body_eof = false;
+        SelectCase cases[3] = {BURROW_RECV(tr->wait_body, &body_eof),
+                               BURROW_RECV(context_done(tr->ctx), NULL),
+                               BURROW_RECV(pc->closech, NULL)};
+        switch (chan_select(cases, 3)) {
+        case 0: {
+            bool try_drain =
+                !body_eof && resp->content_length <= TP_MAX_POST_CLOSE_READ_BYTES;
+            bool v = true;
+            if (try_drain) {
+                (void)chan_send(pc->eofc, &v);
+                body_eof = tp_maybe_drain_body(pc, body->body, close_err);
+            }
+            alive = alive && body_eof && !pc->saw_eof && tp_pc_wrote_request(pc) &&
+                    tp_rl_try_put_idle(pc, &close_err);
+            if (!try_drain && body_eof)
+                (void)chan_send(pc->eofc, &v);
+            break;
+        }
+        case 1:
+            alive = false;
+            tp_pc_cancel_request(pc, context_cause(tr->ctx));
+            break;
+        default:
+            alive = false;
+            break;
+        }
+
+        tp_trip_cancel(tr, burrow__http_err_request_done);
+        tp_trip_rl_release(tr);
+        error_release(m);
+    }
+
+    chan_close(pc->eofc);
+    tp_pc_close(pc, close_err);
+    (void)tp_remove_idle(t, pc);
+    sync_mutex_lock(&pc->mu);
+    pc->rl_exited = true;
+    sync_mutex_unlock(&pc->mu);
+    uintptr_t q = 0;
+    while (chan_try_recv(pc->reqch, &q, NULL))
+        tp_trip_rl_release((tp_Trip *)q);
+    tp_pc_unref(pc);
+}
+
+/* @@TP-PART-6@@ */

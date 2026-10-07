@@ -589,6 +589,12 @@ void http_response_free(HttpResponse *r);
  * and Trailer come from the fields, not the header. */
 BURROW_BORROWS(ret) Error http_response_write(HttpResponse *r, IoWriter w);
 
+/* The body of a 101 Switching Protocols response from HttpTransport is the
+ * connection, and can be written to as well as read, which is Go's
+ * resp.Body.(io.ReadWriteCloser). Sets *w to the writer and gives true for
+ * such a body, and false for any other. */
+bool http_response_body_writer(const HttpResponse *r, IoWriter *w);
+
 /* Response.ProtoAtLeast. */
 bool http_response_proto_at_least(const HttpResponse *r, Int major, Int minor);
 
@@ -1380,8 +1386,9 @@ BURROW_FUNC(HttpFreeConnFunc, void, NetConn c);
  * max_response_header_bytes is the most a response's header may have, and 10
  * MiB when it is zero. write_buffer_size and read_buffer_size are the sizes of
  * the buffers on each connection, 4 KiB when they are zero. protocols is the
- * set of protocols to use. NULL is HTTP/1, and HTTP/2 is not here yet, so a set
- * without HTTP/1 can send nothing.
+ * set of protocols to use, and NULL is HTTP/1. HTTP/2 is not here yet, so a set
+ * with unencrypted HTTP/2 and without HTTP/1 fails each "http" request, as Go's
+ * does without its HTTP/2 package, and HTTP/1 is used for the rest.
  *
  * a is where the transport makes its connections and the responses, the heap
  * when it is NULL, and has to be one any goroutine can use at once. The rest is

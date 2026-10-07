@@ -10,6 +10,7 @@
 #include "burrow/burrow.h"
 #include "burrow/mem/arena.h"
 #include "burrow/net.h"
+#include "burrow/netpoll.h"
 #include "burrow/os.h"
 #include "burrow/syscall.h"
 #include "burrow/time.h"

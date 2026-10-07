@@ -76,13 +76,22 @@ static Str deadline_message(const void *self) {
     return deadline_text;
 }
 
+static Error deadline_clone(const void *self, Alloc *a);
+
 static const ErrorVT deadline_vt = {
-    &deadline_desc, deadline_message, NULL, NULL, NULL, NULL, NULL,
+    &deadline_desc, deadline_message, NULL, NULL, NULL, NULL, deadline_clone,
 };
 
 static const OsDeadlineExceededError deadline_value = {0};
 
 const Error os_err_deadline_exceeded = {&deadline_vt, &deadline_value};
+
+/* There is only the one, so a retained copy is the same error. */
+static Error deadline_clone(const void *self, Alloc *a) {
+    (void)self;
+    (void)a;
+    return os_err_deadline_exceeded;
+}
 
 /* ---------------------------------------------------------------- LinkError */
 

@@ -371,7 +371,8 @@ static void TestZoneCacheLookups(TestingT *t) {
     CHECK(burrow__net_zone_index(BURROW_STR_EMPTY) == 0);
     CHECK(str_eq(burrow__net_zone_name(9999999, buf), S("9999999")));
     CHECK_INT_EQ(burrow__net_zone_index(S("no-such-zone")), 0);
-    CHECK_INT_EQ(burrow__net_zone_index(S("12345678")), 0xFFFFFF);
+    CHECK_INT_EQ(burrow__net_zone_index(S("12345678")), 12345678);
+    CHECK_INT_EQ(burrow__net_zone_index(S("99999999")), 0xFFFFFF);
 }
 
 /* ---------------------------------------------------------- /proc/net/igmp */

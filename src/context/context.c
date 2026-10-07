@@ -110,13 +110,23 @@ static Str ctx_deadline_message(const void *self) {
     return ctx_deadline_text;
 }
 
+static Error ctx_deadline_clone(const void *self, Alloc *a);
+
 static const ErrorVT ctx_deadline_vt = {
-    &ctx_deadline_desc, ctx_deadline_message, NULL, NULL, NULL, NULL, NULL,
+    &ctx_deadline_desc, ctx_deadline_message, NULL, NULL, NULL, NULL,
+    ctx_deadline_clone,
 };
 
 static const ContextDeadlineExceededError ctx_deadline_value = {0};
 
 const Error context_deadline_exceeded = {&ctx_deadline_vt, &ctx_deadline_value};
+
+/* There is only the one, so a retained copy is the same error. */
+static Error ctx_deadline_clone(const void *self, Alloc *a) {
+    (void)self;
+    (void)a;
+    return context_deadline_exceeded;
+}
 
 /* -------------------------------------------------------------- descriptors */
 

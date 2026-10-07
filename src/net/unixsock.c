@@ -395,7 +395,7 @@ NetUnixConn *burrow__net_sys_listen_unixgram(Alloc *a, const burrow__NetSysOpts 
                                              Error *err) {
     Str net = BURROW_STR_EMPTY;
     int32_t sotype = 0;
-    if (!nx_network(network, &net, &sotype) || sotype != PAL_SOCK_DGRAM) {
+    if (!nx_network(network, &net, &sotype)) {
         BURROW_OUT(err, net_unknown_network_error(error_allocator(), network));
         return NULL;
     }
@@ -757,7 +757,7 @@ NetUnixListener *burrow__net_sys_listen_unix(Alloc *a, const burrow__NetSysOpts 
                                              Error *err) {
     Str net = BURROW_STR_EMPTY;
     int32_t sotype = 0;
-    if (!nx_network(network, &net, &sotype) || sotype == PAL_SOCK_DGRAM) {
+    if (!nx_network(network, &net, &sotype)) {
         BURROW_OUT(err, net_unknown_network_error(error_allocator(), network));
         return NULL;
     }

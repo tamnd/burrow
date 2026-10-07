@@ -853,10 +853,6 @@ static void TestListenPacketErrors(TestingT *t) {
     CHECK_STR_EQ(
         c_text(error_text(e), buf, sizeof buf),
         "listen tcp 127.0.0.1:0: address 127.0.0.1:0: unexpected address type");
-    c = net_listen_packet(heap_allocator(), S("unix"), S("/tmp/bx-none"), &e);
-    CHECK(c.vt == NULL);
-    CHECK_STR_EQ(c_text(error_text(e), buf, sizeof buf),
-                 "listen unix /tmp/bx-none: unknown network unix");
     c = net_listen_packet(heap_allocator(), S("bogus"), S("127.0.0.1:0"), &e);
     CHECK(c.vt == NULL);
     CHECK_STR_EQ(c_text(error_text(e), buf, sizeof buf),
@@ -870,10 +866,35 @@ static void TestListenPacketErrors(TestingT *t) {
     CHECK_STR_EQ(
         c_text(error_text(e), buf, sizeof buf),
         "listen udp 127.0.0.1:0: address 127.0.0.1:0: unexpected address type");
-    l = net_listen(heap_allocator(), S("unixgram"), S("/tmp/bx-none"), &e);
+    l = net_listen(heap_allocator(), S("ip4:icmp"), S("127.0.0.1"), &e);
     CHECK(l.vt == NULL);
-    CHECK_STR_EQ(c_text(error_text(e), buf, sizeof buf),
-                 "listen unixgram /tmp/bx-none: unknown network unixgram");
+    CHECK_STR_EQ(
+        c_text(error_text(e), buf, sizeof buf),
+        "listen ip4:icmp 127.0.0.1: address 127.0.0.1: unexpected address type");
+}
+
+/* Go does not check the Unix network a Listen or a ListenPacket is given
+ * against the one it makes, so a "unixgram" Listen is a listener on a
+ * datagram socket and a "unix" ListenPacket is a packet connection on a
+ * listening stream one. Both work, and this keeps it that way. */
+static void TestListenTakesEitherUnixNetwork(TestingT *t) {
+#if !defined(HAVE_UNIXGRAM)
+    testing_t_skip_v(t, "no unixgram sockets here");
+#else
+    Str dir = BURROW_STR_EMPTY;
+    Error e = BURROW_NO_ERROR;
+    NetListener l = net_listen(heap_allocator(), S("unixgram"), unix_path(t, &dir), &e);
+    if (l.vt == NULL)
+        testing_t_errorf_v(t, "Listen(unixgram): %v", e);
+    net_listener_free(l);
+    remove_dir(dir);
+    NetPacketConn c =
+        net_listen_packet(heap_allocator(), S("unix"), unix_path(t, &dir), &e);
+    if (c.vt == NULL)
+        testing_t_errorf_v(t, "ListenPacket(unix): %v", e);
+    net_packet_conn_free(c);
+    remove_dir(dir);
+#endif
 }
 
 /* ------------------------------------------------------------ the Resolve */
@@ -1091,6 +1112,7 @@ static void TestResolveIPAddr(TestingT *t) {
     X(TestDialTimeoutGivesUp)                                                          \
     X(TestListenPacket)                                                                \
     X(TestListenPacketErrors)                                                          \
+    X(TestListenTakesEitherUnixNetwork)                                                \
     X(TestResolveTCPAddr)                                                              \
     X(TestResolveUDPAddr)                                                              \
     X(TestResolveIPAddr)

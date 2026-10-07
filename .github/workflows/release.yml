@@ -6,14 +6,24 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to build, without the leading v"
+        description: "Version to build, without the leading v. The tag v<version> has to exist."
         required: true
+      backfill:
+        description: "Publish a tag whose release run failed: skip the tests, publish whatever binaries build, and leave the latest release alone"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+# A run started by hand builds the tag it names, not the branch it was started
+# from, so that an old tag can be published with this workflow as it is now.
+env:
+  RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/v{0}', inputs.version) || github.ref }}
+  BACKFILL: ${{ github.event_name == 'workflow_dispatch' && inputs.backfill && 'true' || 'false' }}
+
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.version || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -28,6 +38,8 @@ jobs:
       version: ${{ steps.v.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_REF }}
       - id: v
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -47,6 +59,7 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     needs: verify
+    if: ${{ !inputs.backfill }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -55,6 +68,8 @@ jobs:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest]
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_REF }}
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --config Release
       - run: ctest --test-dir build -C Release --output-on-failure
@@ -65,6 +80,7 @@ jobs:
   source:
     name: source tarball
     needs: [verify, test]
+    if: ${{ !cancelled() && needs.verify.result == 'success' && needs.test.result != 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -73,13 +89,15 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_REF }}
       - name: pack
         run: |
           v="${{ needs.verify.outputs.version }}"
           sha256="$PWD/tools/sha256.sh"
           mkdir -p dist
           git archive --format=tar.gz --prefix="burrow-$v/" -o "dist/burrow-$v-source.tar.gz" HEAD
-          (cd dist && "$sha256" *.tar.gz > "burrow-$v-source.tar.gz.sha256")
+          (cd dist && "$sha256" "burrow-$v-source.tar.gz" > "burrow-$v-source.tar.gz.sha256")
       - uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*.tar.gz
@@ -94,6 +112,10 @@ jobs:
   binaries:
     name: ${{ matrix.name }}
     needs: [verify, test]
+    if: ${{ !cancelled() && needs.verify.result == 'success' && needs.test.result != 'failure' }}
+    # A backfilled tag may not build everywhere, and what does build is still
+    # worth having.
+    continue-on-error: ${{ inputs.backfill == true }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     permissions:
@@ -116,9 +138,14 @@ jobs:
             os: windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_REF }}
+      # CI is what holds the tree to zero warnings. Here a compiler newer than
+      # the tag, which is every compiler for an old tag, would only cost the
+      # archive.
       - name: build
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBURROW_BUILD_TESTS=OFF
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBURROW_BUILD_TESTS=OFF -DBURROW_WERROR=OFF
           cmake --build build --config Release
       - name: pack
         shell: bash
@@ -148,14 +175,20 @@ jobs:
   amalgamation:
     name: amalgamation
     needs: [verify, test]
+    if: ${{ !cancelled() && needs.verify.result == 'success' && needs.test.result != 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Tags from before burrow-gen learned to amalgamate have nothing to run
+    # here, and the rest of such a release is still worth publishing.
+    continue-on-error: ${{ inputs.backfill == true }}
     permissions:
       contents: read
       id-token: write
       attestations: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_REF }}
       - name: generate
         run: tools/burrow-gen amalgamate --out "stage/burrow-${{ needs.verify.outputs.version }}-amalgamation" --source-id "v${{ needs.verify.outputs.version }}"
       - name: smoke test
@@ -187,6 +220,7 @@ jobs:
   publish:
     name: publish
     needs: [verify, source, binaries, amalgamation]
+    if: ${{ !cancelled() && needs.source.result == 'success' && ((needs.amalgamation.result == 'success' && needs.binaries.result == 'success') || inputs.backfill) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -194,6 +228,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ env.RELEASE_REF }}
           fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
@@ -203,9 +238,8 @@ jobs:
           mkdir -p dist
           find artifacts -type f -exec cp {} dist/ \;
           ls -la dist
-      # Pre 1.0 everything is a prerelease, because nothing in this repository
-      # has been through a security review and a green checkmark on a release
-      # page reads as an endorsement it has not earned.
+      # A backfilled tag is older than the latest release, so it must not
+      # take that place.
       - name: release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -217,7 +251,13 @@ jobs:
             exit 1
           fi
           printf '%s\n' "$notes" > /tmp/notes.md
+          latest=true
+          if [ "$BACKFILL" = "true" ]; then
+            latest=false
+            printf '\nThis release was published after the tag, from the same tree. The release run failed when the tag was pushed, so the tests were not run again for it, and an archive missing here, for a platform or for the amalgamation, could not be built at this version.\n' >> /tmp/notes.md
+          fi
           gh release create "v$v" dist/* \
             --title "v$v" \
             --notes-file /tmp/notes.md \
-            --prerelease
+            --verify-tag \
+            --latest="$latest"

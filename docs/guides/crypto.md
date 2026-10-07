@@ -147,6 +147,29 @@ Both take a reader. Int reads from the one you give it, which is how a test make
 
 `crypto_rand_reader` is a variable, as `rand.Reader` is in Go, so a test can point it at a reader of its own. Do that before other threads start, because nothing synchronises it.
 
+## crypto/fips140
+
+`burrow/crypto/fips140.h` answers whether the program is running in FIPS 140-3 mode. In burrow the answer is always no:
+
+<!-- example: ../examples/crypto/fips140.c#enabled -->
+```c
+if (fips140_enabled())
+    printf("FIPS 140-3 mode\n");
+else
+    printf("not in FIPS 140-3 mode\n");
+```
+
+Go ships a FIPS 140-3 module, a fixed set of its crypto packages that has been through validation, and `GODEBUG=fips140=on` makes a Go program use only that module, check its own code against a checksum when it starts and run the self tests the standard asks for. burrow's code follows the same module, but it has not been validated, and it does not claim to be.
+
+So when `GODEBUG` asks for the mode with `fips140=on`, `only` or `debug`, `fips140_enabled` and `fips140_enforced` panic with `fips140: FIPS 140-3 mode is not supported by burrow`. That is what a Go program does at startup on a platform where the mode is not supported, and it is better than letting a program that asked for FIPS mode carry on without it. An unknown value panics as it does in Go, and `off` or no setting at all gives false. The setting is read the first time either function is called and never again.
+
+`fips140_version` gives `"latest"`, which is what Go gives for a program that was not built against a frozen module. `fips140_without_enforcement` runs a function with strict enforcement off, and since enforcement is never on here, it just runs it:
+
+<!-- example: ../examples/crypto/fips140.c#without -->
+```c
+fips140_without_enforcement(BURROW_FN(Func, legacy, NULL));
+```
+
 ## crypto/hmac
 
 `burrow/crypto/hmac.h` makes a message authentication code out of any hash and a key. The sender works out the MAC of a message and sends both, and the receiver, who has the same key, works it out again and compares:
@@ -1255,3 +1278,4 @@ print(error_text(err));
 `x509_encrypt_pem_block` and `x509_decrypt_pem_block` handle the RFC 1423 `DEK-Info` encryption that old OpenSSL keys use. Go deprecates them because the scheme is weak and a wrong password is not always caught, and they are here for reading old files, not for writing new ones.
 
 One GODEBUG setting from Go applies: `x509rsacrt=0` makes `x509_parse_pkcs1_private_key` work out the CRT values again when the ones in the key are wrong, instead of failing. It is read once from the `GODEBUG` environment variable.
+

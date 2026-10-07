@@ -159,6 +159,50 @@ address example.com: missing port in address
 
 The host and port from `net_split_host_port` point into the string you pass, so nothing is allocated. A malformed string is a `NetAddrError` with Go's message. New code that does not have to match an older API is better off with `burrow/net/netip.h`, which never allocates.
 
+## Connections and Pipe
+
+`net.Conn`, `net.Addr` and `net.Listener` are interfaces in Go, and here they are the vtable and data pairs `NetConn`, `NetAddr` and `NetListener`, built the way [interfaces](interfaces.md) describes. A `NetConn` is a reader, a writer and a closer with the addresses and deadlines on top, and `net_conn_as_io_reader` and its siblings hand it to anything in `burrow/io.h` that wants one of those. No call allocates.
+
+`net_pipe` is Go's `net.Pipe`: two ends of a connection that lives in memory, with no buffer in between, so each write waits until the other end has read all of it. It is handy for testing code that talks over a connection, and it is what `crypto/tls` is tested over:
+
+<!-- example: ../examples/net/pipe.c#pipe -->
+```c
+NetConn client, server;
+net_pipe(heap_allocator(), &client, &server);
+SyncWaitGroup wg = {0};
+sync_wait_group_go(&wg, BURROW_FN(Func, echo, &server));
+
+Error err;
+Byte buf[5];
+Slice b = slice_from(buf, 5, 5, TYPE_BYTE);
+io_write_string(net_conn_as_io_writer(client), BURROW_S("hello"), &err);
+io_read_full(net_conn_as_io_reader(client), b, &err);
+printf("%.*s\n", 5, (const char *)buf);
+
+/* Nothing more is coming, so this read gives up at the deadline. */
+client.vt->set_read_deadline(client.data,
+                             time_add(time_now(), 10 * TIME_MILLISECOND));
+io_read_full(net_conn_as_io_reader(client), b, &err);
+Str msg = error_text(err);
+printf("%.*s, timeout %d\n", (int)msg.len, (const char *)msg.p,
+       net_error_timeout(err));
+
+client.vt->closer.close(client.data);
+sync_wait_group_wait(&wg);
+net_pipe_free(client);
+```
+
+That prints:
+
+```
+hello
+read pipe: i/o timeout, timeout 1
+```
+
+A call that runs past a deadline fails with a `NetOpError` that wraps `os_err_deadline_exceeded`, and `net_error_timeout` says true for it, the same as in Go. `errors_is` finds the wrapped error, and `errors_as` with `TYPE_NET_OP_ERROR` finds the `NetOpError`. Setting a deadline starts a timer, so it has to happen on a goroutine, which is why the example runs under `runtime_main`. Closing an end makes its own calls fail with `io_err_closed_pipe` and makes a read on the other end give `io_eof`.
+
+Go's collector takes care of a pipe once nothing refers to it. Here `net_pipe_free` gives both ends back, given either one, once both are closed and no goroutine is still in a call on them. It stops any deadline timer that has not gone off yet.
+
 ## URLs
 
 `url_parse` splits a URL into a `Url` with the same fields as Go's `url.URL`. `path` holds the decoded path and `url_escaped_path` gives back the form that goes on the wire. The parse makes one allocation that holds the `Url` and every string in it, so the input can go away while the `Url` lives, and `url_free` gives it back. With an arena you do not need to free at all. In these examples `P(s)` is short for `(int)(s).len, (const char *)(s).p`, the two arguments that `%.*s` wants:
@@ -313,3 +357,80 @@ That prints:
 ```
 
 A reader or writer holds one dot reader or writer, and asking for another, or reading or writing a line, finishes the one before it. Go does the same, except that there the old reader or writer is a separate value that goes stale; here it is the same one starting over. `TextprotoConn` puts a reader, a writer and a `TextprotoPipeline` over one connection. The `textproto_conn_` functions are the methods Go promotes from those three, and `textproto_conn_cmd` sends a command and returns its id for the pipeline. Go's `Dial` is not here yet, because it needs the `net` package; `textproto_new_conn` takes any `IoReadWriteCloser` in the meantime.
+
+## Mail
+
+`net/mail` follows Go's `net/mail`. `mail_read_message` reads the header of a message and leaves the body to be read from the message's `body`, and `mail_header_get`, `mail_header_date` and `mail_header_address_list` read the fields most programs want. The header is a `MailHeader`, which is the same `Map` as a `TextprotoMIMEHeader`, so the `textproto_mime_header_` functions work on it too. The header lives in an arena of the message's own, and `mail_message_free` gives it back with the reader:
+
+<!-- example: ../examples/net/mail.c#message -->
+```c
+StringsReader *sr =
+    strings_new_reader(a, BURROW_S("Date: Mon, 23 Jun 2015 11:40:36 -0400\n"
+                                   "From: Gopher <from@example.com>\n"
+                                   "To: Another Gopher <to@example.com>\n"
+                                   "Subject: Gophers at Gophercon\n"
+                                   "\n"
+                                   "Message body\n"));
+Error err;
+MailMessage *m = mail_read_message(a, strings_reader_as_io_reader(sr), &err);
+if (m == NULL) {
+    fmt_printf_v("%v\n", err);
+    return;
+}
+printf("Date: %.*s\n", P(mail_header_get(m->header, BURROW_S("Date"))));
+printf("From: %.*s\n", P(mail_header_get(m->header, BURROW_S("From"))));
+printf("Subject: %.*s\n", P(mail_header_get(m->header, BURROW_S("Subject"))));
+Slice body = io_read_all(a, m->body, &err);
+printf("%.*s", (int)body.len, (const char *)body.p);
+
+Time t = mail_header_date(m->header, a, &err);
+printf("%.*s\n", P(time_format(t, a, TIME_RFC3339)));
+mail_message_free(m);
+```
+
+That prints:
+
+```
+Date: Mon, 23 Jun 2015 11:40:36 -0400
+From: Gopher <from@example.com>
+Subject: Gophers at Gophercon
+Message body
+2015-06-23T11:40:36-04:00
+```
+
+`mail_parse_address` reads one address and `mail_parse_address_list` reads a list, groups included. Each `MailAddress` is one allocation that holds the struct and both strings, so the input can go away while it lives, and a list is a `Slice` of `MailAddress *` that `mail_address_list_free` gives back in one call. `mail_address_string` puts an address back together the way RFC 5322 wants it, quoting the name, or encoding it as an RFC 2047 word when it is not plain ASCII:
+
+<!-- example: ../examples/net/mail.c#addresses -->
+```c
+Error err;
+MailAddress *e = mail_parse_address(a, BURROW_S("Alice <alice@example.com>"), &err);
+if (e != NULL) {
+    printf("%.*s %.*s\n", P(e->name), P(e->address));
+    mail_address_free(a, e);
+}
+
+Slice list = mail_parse_address_list(
+    a,
+    BURROW_S(
+        "Bob <bob@example.com>, eve@example.com, \"Gö, Pher\" <g@example.com>"),
+    &err);
+MailAddress **v = (MailAddress **)list.p;
+for (Int i = 0; i < list.len; i++)
+    printf("%.*s\n", P(mail_address_string(v[i], a)));
+mail_address_list_free(a, list);
+
+if (mail_parse_address(a, BURROW_S("John Doe"), &err) == NULL)
+    fmt_printf_v("%v\n", err);
+```
+
+That prints:
+
+```
+Alice alice@example.com
+"Bob" <bob@example.com>
+<eve@example.com>
+=?utf-8?b?R8O2LCBQaGVy?= <g@example.com>
+mail: no angle-addr
+```
+
+Names written as RFC 2047 encoded words are decoded with a `MimeWordDecoder`. Without one, UTF-8, ISO-8859-1 and US-ASCII work and any other charset is an error, as in Go. To take more, put a decoder with a `charset_reader` in a `MailAddressParser` and call `mail_address_parser_parse` or `mail_address_parser_parse_list`. The parser follows the same parts of RFC 5322 Go does, and leaves out the same ones: obsolete forms such as routes are not read, an address cannot be folded across lines, and nothing is normalised.

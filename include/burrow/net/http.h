@@ -652,14 +652,19 @@ typedef struct HttpResponseWriter {
 /* The writer as the IoWriter it embeds. */
 IoWriter http_response_writer_as_io_writer(HttpResponseWriter w);
 
-/* ResponseWriter.Header, Write and WriteHeader. */
+/* ResponseWriter.Header, Write and WriteHeader. Write takes NULL for err, as
+ * the io functions do, when the error is of no interest. */
 BURROW_BORROWS(ret, w) static inline HttpHeader
 http_response_writer_header(HttpResponseWriter w) {
     return w.vt->header(w.data);
 }
 static inline Int http_response_writer_write(HttpResponseWriter w, Slice p,
                                              Error *err) {
-    return w.vt->writer.write(w.data, p, err);
+    Error e = BURROW_NO_ERROR;
+    Int n = w.vt->writer.write(w.data, p, &e);
+    if (err != NULL)
+        *err = e;
+    return n;
 }
 static inline void http_response_writer_write_header(HttpResponseWriter w,
                                                      Int status_code) {

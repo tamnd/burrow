@@ -402,4 +402,50 @@ BURROW_BORROWS(ret, s) Str burrow__http_scan_etag(Str s, Str *remain);
 void burrow__http_serve_file(HttpResponseWriter w, HttpRequest *r, HttpFileSystem fs,
                              Str name, bool redirect);
 
+/* ----------------------------------------------------------------- Transport
+ *
+ * The errors of transport.go that Go's tests compare against, and what they
+ * reach inside it for. */
+
+extern const Error burrow__http_err_keep_alives_disabled;
+extern const Error burrow__http_err_conn_broken;
+extern const Error burrow__http_err_close_idle;
+extern const Error burrow__http_err_too_many_idle;
+extern const Error burrow__http_err_too_many_idle_host;
+extern const Error burrow__http_err_close_idle_conns;
+extern const Error burrow__http_err_read_loop_exiting;
+extern const Error burrow__http_err_idle_conn_timeout;
+extern const Error burrow__http_err_server_closed_idle;
+extern const Error burrow__http_err_caller_owns_conn;
+extern const Error burrow__http_err_request_canceled;
+extern const Error burrow__http_err_request_canceled_conn;
+extern const Error burrow__http_err_request_done;
+extern const Error burrow__http_err_read_on_closed_res_body;
+extern const Error burrow__http_err_concurrent_read_on_res_body;
+extern const Error burrow__http_err_cannot_rewind;
+extern const Error burrow__http_err_no_host_in_url;
+extern const Error burrow__http_err_no_tls;
+
+/* errTimeout, a net.Error whose Timeout is true. */
+extern const Error burrow__http_err_timeout;
+
+/* validMethod. */
+bool burrow__http_valid_method(Str m);
+
+/* Whether e is the error Request.write gives for a request with no host. */
+bool burrow__http_is_err_missing_host(Error e);
+
+/* connectMethodKey.String, for a connection to target_addr by target_scheme
+ * through proxy_url, NULL for none, made in a. */
+BURROW_OWNS(ret) Str burrow__http_connect_method_key(Alloc *a, const Url *proxy_url,
+                                                     Str target_scheme, Str target_addr,
+                                                     bool only_h1);
+
+/* connectMethod.proxyAuth. The Proxy-Authorization value for proxy_url's user,
+ * made in a, and empty when it has none. */
+BURROW_OWNS(ret) Str burrow__http_proxy_auth(Alloc *a, const Url *proxy_url);
+
+/* resetProxyConfig. Makes ProxyFromEnvironment read the environment again. */
+void burrow__http_reset_cached_environment(void);
+
 #endif /* BURROW_SRC_NET_HTTP_INTERNAL_H */

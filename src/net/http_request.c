@@ -827,3 +827,13 @@ bool http_request_set_path_value(HttpRequest *r, Alloc *a, Str name, Str value) 
     }
     return map_set(r->other_values, &name, &value);
 }
+
+/* ---------------------------------------------------- for the transport */
+
+bool burrow__http_valid_method(Str m) {
+    return hq_valid_method(m);
+}
+
+bool burrow__http_is_err_missing_host(Error e) {
+    return e.vt == &burrow_sentinel_error_vt && e.data == &hq_text_missing_host;
+}

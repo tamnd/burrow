@@ -695,7 +695,14 @@ for (size_t i = 0; i < sizeof methods / sizeof methods[0]; i++) {
 That prints:
 
 ```
-PENDING
+GET 200 OK
+  Content-Type: text/html; charset=utf-8
+  Cache-Control: no-store
+  body: "<p>hello from /greet</p>"
+POST 405 Method Not Allowed
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: no-store
+  body: "only GET here\n"
 ```
 
 The recorder sniffs a Content-Type from the first write when the handler sets none, as a server does, and a write after a 204 or 304 status keeps the bytes but returns `http_err_body_not_allowed`. Go's `httptest.Server` needs the HTTP server and comes with it.

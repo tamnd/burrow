@@ -692,3 +692,65 @@ PENDING
 ```
 
 The recorder sniffs a Content-Type from the first write when the handler sets none, as a server does, and a write after a 204 or 304 status keeps the bytes but returns `http_err_body_not_allowed`. Go's `httptest.Server` needs the HTTP server and comes with it.
+
+## Serving files
+
+`http_file_server` serves the files of an `HttpFileSystem`, and `http_file_server_fs` serves an `Fs` from io/fs, such as `os_dir_fs` or the in-memory `FstestMapFS` here. A request for a directory gets its index.html or a listing. A request for index.html itself is redirected to the directory, and so is a directory asked for without its slash. The handler answers conditional and range requests through `http_serve_content`, which works on any `IoReadSeeker` when the content isn't a file:
+
+<!-- example: ../examples/net/http.c#files -->
+```c
+FstestMapFS site = fstest_map_fs_make(a);
+FstestMapFile page = {
+    .data = slice_from_str(a, BURROW_S("<h1>burrow</h1>\n")),
+    .mod_time = time_date(2026, TIME_JANUARY, 2, 15, 4, 5, 0, time_utc_loc),
+};
+FstestMapFile notes = {.data = slice_from_str(a, BURROW_S("0123456789\n"))};
+fstest_map_fs_set(site, BURROW_S("index.html"), &page);
+fstest_map_fs_set(site, BURROW_S("notes.txt"), &notes);
+HttpHandler h = http_file_server_fs(a, fstest_map_fs_as_fs(site));
+
+const struct {
+    const char *target, *key, *value;
+} reqs[] = {
+    {"/", NULL, NULL},
+    {"/", "If-Modified-Since", "Fri, 02 Jan 2026 15:04:05 GMT"},
+    {"/notes.txt", "Range", "bytes=2-5"},
+    {"/index.html", NULL, NULL},
+    {"/missing.txt", NULL, NULL},
+};
+const char *show[] = {"Content-Type", "Content-Range", "Last-Modified", "Location"};
+for (size_t i = 0; i < sizeof reqs / sizeof reqs[0]; i++) {
+    HttpRequest *r = httptest_new_request(
+        a, BURROW_S("GET"), str_from_cstr(reqs[i].target), (IoReader){0});
+    fmt_printf_v("GET %s", r->url->path);
+    if (reqs[i].key != NULL) {
+        Str key = str_from_cstr(reqs[i].key), value = str_from_cstr(reqs[i].value);
+        http_header_set(r->header, key, value);
+        fmt_printf_v(" with %s: %s", key, value);
+    }
+    HttptestResponseRecorder *rec = httptest_new_recorder(a);
+    http_handler_serve_http(h, httptest_response_recorder_as_response_writer(rec),
+                            r);
+
+    HttpResponse *res = httptest_response_recorder_result(rec);
+    fmt_printf_v("\n  %s\n", res->status);
+    for (size_t j = 0; j < sizeof show / sizeof show[0]; j++) {
+        Str v = http_header_get(res->header, str_from_cstr(show[j]));
+        if (v.len > 0)
+            fmt_printf_v("  %s: %s\n", str_from_cstr(show[j]), v);
+    }
+    Slice body = bytes_buffer_bytes(rec->body);
+    if (body.len > 0)
+        fmt_printf_v("  body: %q\n", str_from_bytes(body.p, body.len));
+    httptest_response_recorder_free(rec);
+    http_request_free(r);
+}
+```
+
+That prints:
+
+```
+PENDING
+```
+
+The Content-Type comes from the file's extension, and from sniffing the first 512 bytes when the extension is unknown. A file with a zero modification time gets no Last-Modified, which is why notes.txt has none. `http_serve_file` and `http_serve_file_fs` serve one named file, and refuse a request whose path has a `..` element in it.

@@ -953,6 +953,118 @@ static void TestClientExampleCom(TestingT *t) {
                         BURROW_FN(TestingTFunc, client_example_com, &example_hosts[1]));
 }
 
+/* A listener that can only be closed, for a Server that was never started. */
+static Error only_close(void *self) {
+    (void)self;
+    return BURROW_NO_ERROR;
+}
+
+static NetConn only_close_accept(void *self, Error *err) {
+    (void)self;
+    (void)err;
+    panic_str(S("not implemented"));
+    NetConn none = {NULL, NULL};
+    return none;
+}
+
+static NetAddr only_close_addr(void *self) {
+    (void)self;
+    panic_str(S("not implemented"));
+    NetAddr none = {NULL, NULL};
+    return none;
+}
+
+static const NetListenerVT only_close_listener_vt = {
+    .closer = {.self_type = NULL, .close = only_close},
+    .accept = only_close_accept,
+    .addr = only_close_addr,
+};
+
+static void TestServerZeroValueClose(TestingT *t) {
+    (void)t;
+    HttptestServer ts;
+    memset(&ts, 0, sizeof ts);
+    ts.listener.vt = &only_close_listener_vt;
+
+    httptest_server_close(&ts); /* tests that it doesn't panic */
+}
+
+typedef struct Hijack {
+    HttptestServer *ts;
+    SyncWaitGroup hijacked; /* done once conn is set, or the hijack failed */
+    NetConn conn;
+    Error err;
+} Hijack;
+
+static void serve_hijack(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    Hijack *h = env;
+    HttpResponseController rc = http_new_response_controller(w);
+    BufioReadWriter buf;
+    memset(&buf, 0, sizeof buf);
+    h->conn = http_response_controller_hijack(&rc, &buf, &h->err);
+    if (h->conn.vt != NULL) {
+        bufio_reader_free(buf.reader);
+        bufio_writer_free(buf.writer);
+    }
+    sync_wait_group_done(&h->hijacked);
+}
+
+/* Uses a client not associated with the Server. */
+static void hijack_get(void *env) {
+    Hijack *h = env;
+    HttpClient c;
+    memset(&c, 0, sizeof c);
+    Error err = BURROW_NO_ERROR;
+    HttpRequest *req = http_new_request(heap_allocator(), S("GET"), h->ts->url,
+                                        (IoReader){NULL, NULL}, &err);
+    if (req == NULL)
+        return;
+    HttpResponse *resp = http_client_do(&c, req, &err);
+    if (resp != NULL) {
+        (void)resp->body.vt->closer.close(resp->body.data);
+        http_response_free(resp);
+    }
+    http_request_free(req);
+}
+
+/* Closes the connection and then tells the Server that it is closed. */
+static void hijack_close_conn(void *env) {
+    Hijack *h = env;
+    (void)h->conn.vt->closer.close(h->conn.data);
+    BURROW_CALLF(h->ts->config.conn_state, h->conn, HTTP_STATE_CLOSED);
+}
+
+static void hijack_close_server(void *env) {
+    httptest_server_close(((Hijack *)env)->ts);
+}
+
+/* Issue 51799: test hijacking a connection and then closing it concurrently
+ * with closing the server. */
+static void TestCloseHijackedConnection(TestingT *t) {
+    need_tcp(t);
+    Hijack h;
+    memset(&h, 0, sizeof h);
+    sync_wait_group_add(&h.hijacked, 1);
+    HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_hijack, &h);
+    h.ts = httptest_new_server(NULL, http_handler_func_as_handler(&f));
+
+    SyncWaitGroup wg;
+    memset(&wg, 0, sizeof wg);
+    sync_wait_group_go(&wg, BURROW_FN(Func, hijack_get, &h));
+
+    sync_wait_group_wait(&h.hijacked);
+    if (h.conn.vt == NULL) {
+        testing_t_errorf_v(t, "failed to hijack: %v", h.err);
+    } else {
+        sync_wait_group_go(&wg, BURROW_FN(Func, hijack_close_conn, &h));
+    }
+    sync_wait_group_go(&wg, BURROW_FN(Func, hijack_close_server, &h));
+    sync_wait_group_wait(&wg);
+    net_conn_free(h.conn);
+    httptest_server_free(h.ts);
+}
+
 #define TESTS(X)                                                                       \
     X(TestRecorder)                                                                    \
     X(TestBodyNotAllowed)                                                              \
@@ -962,6 +1074,6 @@ static void TestClientExampleCom(TestingT *t) {
     X(TestNewRequestWithContext)                                                       \
     X(TestNewRequestPanics)                                                            \
     X(TestServer)                                                                      \
-    X(TestClientExampleCom)
+    X(TestClientExampleCom) X(TestServerZeroValueClose) X(TestCloseHijackedConnection)
 
 TESTING_MAIN(TESTS)

@@ -766,3 +766,12 @@ bool http_request_add_cookie(HttpRequest *r, Alloc *a, const HttpCookie *c) {
 Slice http_response_cookies(const HttpResponse *r, Alloc *a) {
     return burrow__http_read_set_cookies(a, r->header);
 }
+
+bool http_set_cookie(HttpResponseWriter w, const HttpCookie *c) {
+    HttpHeader h = http_response_writer_header(w);
+    Alloc *a = burrow__map_allocator(h);
+    if (c == NULL || !burrow__http_is_token(c->name))
+        return true;
+    Str v = http_cookie_string(a, c);
+    return v.len > 0 && http_header_add(h, BURROW_S("Set-Cookie"), v);
+}

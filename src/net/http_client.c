@@ -139,8 +139,12 @@ static Str cl_concat(Alloc *a, Str s, Str t) {
 static Str cl_url_error_op(Alloc *a, Str method) {
     if (method.len == 0)
         return BURROW_S("Get");
-    Str rest = strings_to_lower(a, str_from_bytes(method.p + 1, method.len - 1));
-    return cl_concat(a, str_from_bytes(method.p, 1), rest);
+    bool ok = false;
+    Str lower = burrow__http_ascii_to_lower(a, method, &ok);
+    if (!ok)
+        return method;
+    return cl_concat(a, str_from_bytes(method.p, 1),
+                     str_from_bytes(lower.p + 1, lower.len - 1));
 }
 
 /* stripPassword. */
@@ -157,7 +161,7 @@ static Str cl_strip_password(Alloc *a, const Url *u) {
 }
 
 /* refererForURL. */
-static Str cl_referer_for_url(Alloc *a, const Url *last, const Url *next,
+Str burrow__http_referer_for_url(Alloc *a, const Url *last, const Url *next,
                               Str explicit_ref) {
     if (str_eq(last->scheme, BURROW_S("https")) &&
         str_eq(next->scheme, BURROW_S("http")))
@@ -188,7 +192,7 @@ static bool cl_is_domain_or_subdomain(Str sub, Str parent) {
 /* shouldCopyHeaderOnRedirect. Whether the header the caller set, Cookie and
  * Authorization among it, goes along from initial to dest, which it does for
  * the same domain and its subdomains. */
-static bool cl_should_copy_header_on_redirect(Alloc *a, const Url *initial,
+bool burrow__http_should_copy_header_on_redirect(Alloc *a, const Url *initial,
                                               const Url *dest) {
     Error e1 = BURROW_NO_ERROR;
     Error e2 = BURROW_NO_ERROR;
@@ -754,12 +758,12 @@ static HttpRequest *cl_redirect_request(cl_Do *d, HttpRequest *req, HttpResponse
     /* The first request's header before Referer, in case it set its own.
      * check_redirect can change it after. */
     if (!*strip_sensitive && !str_eq(ireq->url->host, nr->url->host)) {
-        if (!cl_should_copy_header_on_redirect(na, ireq->url, nr->url))
+        if (!burrow__http_should_copy_header_on_redirect(na, ireq->url, nr->url))
             *strip_sensitive = true;
     }
     bool ok = cl_copy_headers(d, nr, *strip_sensitive, !include_body);
     if (ok) {
-        Str ref = cl_referer_for_url(na, d->reqs[d->nreqs - 1]->url, nr->url,
+        Str ref = burrow__http_referer_for_url(na, d->reqs[d->nreqs - 1]->url, nr->url,
                                      http_header_get(nr->header, BURROW_S("Referer")));
         if (ref.len > 0)
             ok = http_header_set(nr->header, BURROW_S("Referer"), ref);

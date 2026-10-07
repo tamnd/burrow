@@ -459,4 +459,13 @@ BURROW_BORROWS(ret, rt) HttpTransport *burrow__http_as_transport(HttpRoundTrippe
 bool burrow__http_transport_alternate(HttpTransport *t, const HttpRequest *req,
                                       HttpRoundTripper *rt);
 
+/* The client's refererForURL and shouldCopyHeaderOnRedirect, for the tests.
+ * The first gives the Referer for a redirect from last to next, made in a when
+ * it has to be made, and the second says whether the header the caller set
+ * goes along from initial to dest. */
+Str burrow__http_referer_for_url(Alloc *a, const Url *last, const Url *next,
+                                 Str explicit_ref);
+bool burrow__http_should_copy_header_on_redirect(Alloc *a, const Url *initial,
+                                                 const Url *dest);
+
 #endif /* BURROW_SRC_NET_HTTP_INTERNAL_H */

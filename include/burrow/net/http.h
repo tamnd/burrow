@@ -736,6 +736,12 @@ HttpHandler http_not_found_handler(void);
  * is made with the header's allocator. */
 void http_redirect(HttpResponseWriter w, HttpRequest *r, Str url, Int code);
 
+/* http.SetCookie. Adds a Set-Cookie field for c to w's header, made with the
+ * header's allocator, unless http_cookie_string gives "" for it, which it does
+ * for a cookie with a name that is not valid. False when the allocator says
+ * no. */
+bool http_set_cookie(HttpResponseWriter w, const HttpCookie *c);
+
 /* http.RedirectHandler, a handler that redirects every request to url with
  * code. It is made in a, and keeps url as it is, so url has to outlive it. NULL
  * data, which is no handler, when a says no. */

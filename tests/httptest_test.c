@@ -690,17 +690,26 @@ static void TestNewRequestWithContext(TestingT *t) {
     }
 }
 
+/* Out of the BURROW_TRY so the Str literals are not locals that a longjmp
+ * could clobber. */
+static void new_request_bad_target(Alloc *a) {
+    (void)httptest_new_request(a, S("GET"), S("/a b"), (IoReader){0});
+}
+
+static bool is_new_request_panic(Str text) {
+    return strings_has_prefix(text, S("invalid NewRequest arguments; "));
+}
+
 /* Not in Go's tests: the panic for arguments that make no request line. */
 static void TestNewRequestPanics(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     volatile bool panicked = false;
     BURROW_TRY {
-        (void)httptest_new_request(arena_allocator(&ar), S("GET"), S("/a b"),
-                                   (IoReader){0});
+        new_request_bad_target(arena_allocator(&ar));
     }
     BURROW_CATCH(p) {
-        if (!strings_has_prefix(panic_text(p), S("invalid NewRequest arguments; ")))
+        if (!is_new_request_panic(panic_text(p)))
             testing_t_errorf_v(t, "panic = %q", panic_text(p));
         panicked = true;
     }

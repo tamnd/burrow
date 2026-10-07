@@ -13,6 +13,7 @@
 #include "burrow/mem/heap.h"
 #include "burrow/net.h"
 #include "burrow/net/netip.h"
+#include "burrow/netpoll.h"
 #include "burrow/os.h"
 #include "burrow/time.h"
 

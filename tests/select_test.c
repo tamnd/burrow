@@ -455,6 +455,7 @@ static uint32_t value_ok;
 static uint32_t closed_seen;
 static uint32_t rounds_done;
 static uint32_t child_done;
+static uint32_t entered;
 
 static void reset(void) {
     c1 = NULL;
@@ -465,6 +466,7 @@ static void reset(void) {
     closed_seen = 0;
     rounds_done = 0;
     child_done = 0;
+    entered = 0;
 }
 
 /* --- waiting on two channels
@@ -605,6 +607,81 @@ static void TestASendArmWaitsForAReceiverAndThenHandsTheValueOver(TestingT *t) {
 
     chan_free(c1);
     chan_free(c2);
+    (void)runtime_gomaxprocs(0);
+}
+
+/* --- one close that wakes several selects
+ *
+ * A close takes every waiter off its queue and strings the ones it wakes
+ * together through their next pointers. A select woken that way used to take
+ * its winning entry off the queue a second time on the way out, and with a
+ * neighbour in that list it looked as if it were still on it, so the unlink
+ * wrote another goroutine's entry back as the head of the closed channel. The
+ * chan_free at the end of each round is what notices.
+ *
+ * Which goroutine runs first after the wake decides whether a leftover is the
+ * last thing written, so the rounds go from two waiters up to eight. */
+
+#ifndef MANY_WAITERS
+#define MANY_WAITERS 8
+#endif
+
+static void many_child(void *arg) {
+    (void)arg;
+    Int got = -1;
+    bool ok = true;
+    SelectCase cases[] = {
+        BURROW_RECV(c1, &got),
+        BURROW_RECV_OK(c2, &got, &ok),
+    };
+
+    (void)burrow__atomic_add_u32(&entered, 1);
+    Int which = chan_select(cases, 2);
+    if (which == 1 && !ok)
+        (void)burrow__atomic_add_u32(&child_done, 1);
+}
+
+static void many_body(void *arg) {
+    (void)arg;
+    for (uint32_t n = 2; n <= MANY_WAITERS; n++) {
+        c1 = chan_make(heap_allocator(), TYPE_INT, 0);
+        c2 = chan_make(heap_allocator(), TYPE_INT, 0);
+        if (c1 == NULL || c2 == NULL)
+            return;
+        burrow__atomic_store_u32(&entered, 0);
+        burrow__atomic_store_u32(&child_done, 0);
+
+        for (uint32_t i = 0; i < n; i++) {
+            if (!go(BURROW_FN(Func, many_child, NULL)))
+                return;
+        }
+
+        /* One processor, so a child that has said it is in runs until it is
+         * parked in the select before this goroutine gets the processor back.
+         * A few more yields cover a child that has not got that far. */
+        while (burrow__atomic_load_acquire_u32(&entered) < n)
+            runtime_gosched();
+        for (int i = 0; i < 8; i++)
+            runtime_gosched();
+
+        chan_close(c2);
+        while (burrow__atomic_load_acquire_u32(&child_done) < n)
+            runtime_gosched();
+
+        chan_free(c1);
+        chan_free(c2);
+        c1 = NULL;
+        c2 = NULL;
+        (void)burrow__atomic_add_u32(&rounds_done, 1);
+    }
+}
+
+static void TestACloseThatWakesSeveralSelectsLeavesItsQueueEmpty(TestingT *t) {
+    reset();
+    (void)runtime_gomaxprocs(1);
+    runtime_main(BURROW_FN(Func, many_body, NULL));
+
+    CHECK_INT_EQ(burrow__atomic_load_acquire_u32(&rounds_done), MANY_WAITERS - 1);
     (void)runtime_gomaxprocs(0);
 }
 
@@ -850,6 +927,7 @@ static void TestAThreadThatIsNotAGoroutineCanSelect(TestingT *t) {
     X(TestASelectWithNoDefaultWaitsForOneOfItsChannels)                                \
     X(TestACloseWakesAWaitingSelectAndSaysSo)                                          \
     X(TestASendArmWaitsForAReceiverAndThenHandsTheValueOver)                           \
+    X(TestACloseThatWakesSeveralSelectsLeavesItsQueueEmpty)                            \
     X(TestTwoSelectsListingTheSameChannelsTheOtherWayRoundAgree)                       \
     X(TestASelectLoopDrainsTwoProducersAndNoticesBothCloses)                           \
     X(TestAThreadThatIsNotAGoroutineCanSelect)

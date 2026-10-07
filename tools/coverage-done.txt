@@ -53,6 +53,7 @@ crypto/ecdh
 crypto/elliptic
 crypto/ed25519
 crypto/rc4
+crypto/x509/pkix
 container/list
 container/ring
 sort
@@ -97,3 +98,5 @@ archive/tar
 archive/zip
 encoding/asn1
 path/filepath
+crypto/fips140
+net/mail

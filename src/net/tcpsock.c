@@ -408,6 +408,28 @@ SyscallRawConn net_tcp_listener_syscall_conn(NetTCPListener *l, Error *err) {
     return burrow__net_raw_conn(&l->raw);
 }
 
+Int net_tcp_conn_read(NetTCPConn *c, Slice p, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    return burrow__conn_read(&c->c, p, err);
+}
+
+Int net_tcp_conn_write(NetTCPConn *c, Slice p, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    return burrow__conn_write(&c->c, p, err);
+}
+
+Error net_tcp_conn_close(NetTCPConn *c) {
+    if (c == NULL)
+        return burrow__net_einval();
+    return burrow__conn_close(&c->c);
+}
+
 /* CloseRead and CloseWrite fail the way Close does. */
 static Error nt_close_op(NetTCPConn *c, Error e) {
     if (BURROW_OK(e))

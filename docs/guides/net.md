@@ -1066,7 +1066,22 @@ net_tcp_listener_free(l);
 That prints:
 
 ```
-PENDING
+HTTP/1.1 200 OK
+Content-Length: 14
+Content-Type: text/plain; charset=utf-8
+Connection: close
+
+hello, gopher
+HTTP/1.1 405 Method Not Allowed
+Allow: GET, HEAD
+Content-Type: text/plain; charset=utf-8
+X-Content-Type-Options: nosniff
+Content-Length: 19
+Connection: close
+
+Method Not Allowed
+shutdown: <nil>
+serve: http: Server closed
 ```
 
 `http_server_shutdown` closes the listeners, so `http_server_serve` returns `http_err_server_closed` at once, and then waits for each connection to finish its request and go idle, or for the context to be done. `http_server_close` doesn't wait: it closes every connection there and then. A handler that panics gets its connection closed and the panic logged with a stack trace to `error_log`, or to the standard logger when that is NULL, and the server goes on serving the others. A handler that wants to stop without a log line panics with `http_err_abort_handler`.

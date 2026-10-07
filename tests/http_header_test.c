@@ -55,8 +55,10 @@ static void ht_put(HttpHeader h, Alloc *a, const HtKV *kv) {
             vs[i] = str_from_cstr(kv->v[i]);
         s = slice_from(vs, kv->n, kv->n, TYPE_STRING);
     }
-    Str key = str_from_cstr(kv->key);
-    if (!map_set(h, &key, &s))
+    /* A copy, since the header keeps keys as they are given and the key can
+     * be in a buffer the caller reuses. */
+    Str key = str_clone(a, str_from_cstr(kv->key));
+    if ((key.len == 0 && kv->key[0] != 0) || !map_set(h, &key, &s))
         panic_str(S("out of memory"));
 }
 

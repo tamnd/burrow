@@ -890,7 +890,8 @@ static const IoCloserVT os_closer_vt = {&burrow__os_file_desc, os_vt_close};
 static const IoSeekerVT os_seeker_vt = {&burrow__os_file_desc, os_vt_seek};
 static const IoReaderAtVT os_reader_at_vt = {&burrow__os_file_desc, os_vt_read_at};
 static const IoWriterAtVT os_writer_at_vt = {&burrow__os_file_desc, os_vt_write_at};
-static const IoStringWriterVT os_string_writer_vt = {&burrow__os_file_desc, os_vt_write_string};
+static const IoStringWriterVT os_string_writer_vt = {&burrow__os_file_desc,
+                                                     os_vt_write_string};
 static const IoReadWriteSeekerVT os_read_write_seeker_vt = {
     {&burrow__os_file_desc, os_vt_read},
     {&burrow__os_file_desc, os_vt_write},
@@ -1089,7 +1090,8 @@ static SyscallRawConn os_vt_syscall_conn(void *self, Error *err) {
     return os_file_syscall_conn((OsFile *)self, err);
 }
 
-static const SyscallConnVT os_syscall_conn_vt = {&os_file_desc, os_vt_syscall_conn};
+static const SyscallConnVT os_syscall_conn_vt = {&burrow__os_file_desc,
+                                                 os_vt_syscall_conn};
 
 SyscallConn os_file_as_syscall_conn(OsFile *f) {
     return (SyscallConn){&os_syscall_conn_vt, f};

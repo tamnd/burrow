@@ -236,8 +236,7 @@ HttpHandler http_strip_prefix(Alloc *a, Str prefix, HttpHandler h) {
     return (HttpHandler){&mx_strip_prefix_vt, s};
 }
 
-/* htmlEscape, which is htmlReplacer: the five characters HTML cares about. */
-static Str mx_html_escape(Alloc *a, Str s) {
+Str burrow__http_html_escape(Alloc *a, Str s) {
     Str out = {0};
     Int from = 0;
     for (Int i = 0; i < s.len; i++) {
@@ -333,7 +332,7 @@ static void mx_redirect(mx_RedirectEnv *e) {
      * without. */
     if (!had_ct && get) {
         Str body = BURROW_S("<a href=\"");
-        body = mx_cat_or_panic(t, body, mx_html_escape(t, url));
+        body = mx_cat_or_panic(t, body, burrow__http_html_escape(t, url));
         body = mx_cat_or_panic(t, body, BURROW_S("\">"));
         body = mx_cat_or_panic(t, body, http_status_text(e->code));
         body = mx_cat_or_panic(t, body, BURROW_S("</a>.\n"));

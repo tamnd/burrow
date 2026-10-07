@@ -81,6 +81,11 @@ burrow__http_sanitize_cookie_value(Alloc *a, Str v, bool quoted);
 BURROW_OWNS(ret) BURROW_BORROWS(ret, v) Str burrow__http_sanitize_cookie_path(Alloc *a,
                                                                               Str v);
 
+/* htmlEscape, which is htmlReplacer: s with the five characters HTML cares
+ * about as entities, &#34; and &#39; for the quotes. s itself when it has none
+ * of them, and from a otherwise. Panics when a says no. */
+BURROW_OWNS(ret) BURROW_BORROWS(ret, s) Str burrow__http_html_escape(Alloc *a, Str s);
+
 /* Sets GODEBUG as net/http sees it, for tests, the way t.Setenv does in Go.
  * NULL goes back to reading the environment. */
 void burrow__http_godebug_set(const char *value);
@@ -353,5 +358,35 @@ BURROW_BORROWS(ret, mux) Alloc *burrow__http_serve_mux_alloc(HttpServeMux *mux);
 /* stripHostPort. h without its port, or h as it is when it has none or is not
  * host:port. */
 BURROW_BORROWS(ret, h) Str burrow__http_strip_host_port(Str h);
+
+/* --------------------------------------------------------------- File server
+ *
+ * What Go's tests of fs.go reach inside it for. */
+
+/* httpservecontentkeepheaders=1 in GODEBUG. */
+bool burrow__http_godebug_serve_content_keep_headers(void);
+
+/* httpRange, one range of a Range header. */
+typedef struct burrow__HttpRange {
+    int64_t start;
+    int64_t length;
+} burrow__HttpRange;
+
+/* parseRange. The ranges of s, a Range header value, for content of size
+ * bytes, made in a and put in *out, and how many there are. None and no error
+ * when s is empty. An error saying "invalid range" when s does not parse, and
+ * one saying "invalid range: failed to overlap" when it does but every range
+ * starts past the end. */
+Int burrow__http_parse_range(Alloc *a, Str s, int64_t size, burrow__HttpRange **out,
+                             Error *err);
+
+/* scanETag. The ETag at the start of s, after its spaces, and in *remain what
+ * follows it. Both empty when s does not start with one. */
+BURROW_BORROWS(ret, s) Str burrow__http_scan_etag(Str s, Str *remain);
+
+/* serveFile, with redirect saying whether a directory is redirected to a path
+ * that ends in '/' and a file to one that does not. */
+void burrow__http_serve_file(HttpResponseWriter w, HttpRequest *r, HttpFileSystem fs,
+                             Str name, bool redirect);
 
 #endif /* BURROW_SRC_NET_HTTP_INTERNAL_H */

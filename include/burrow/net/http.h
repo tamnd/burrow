@@ -37,6 +37,7 @@
 #include "burrow/error.h"
 #include "burrow/func.h"
 #include "burrow/io.h"
+#include "burrow/io/fs.h"
 #include "burrow/map.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
@@ -758,6 +759,129 @@ void http_serve_mux_serve_http(HttpServeMux *mux, HttpResponseWriter w, HttpRequ
 
 /* The mux as a Handler, which calls http_serve_mux_serve_http. */
 BURROW_BORROWS(ret, mux) HttpHandler http_serve_mux_as_handler(HttpServeMux *mux);
+
+/* -------------------------------------------------------------------- Files */
+
+/* http.File, what an HttpFileSystem's open gives and a file server serves. Its
+ * methods are an OsFile's: read and close, seek, readdir, which gives up to
+ * count entries as a Slice of FsFileInfo and everything left when count <= 0,
+ * and stat.
+ *
+ * read_dir is fs.ReadDirFile's method, which Go finds with a type assertion,
+ * and may be NULL. A directory listing uses it when it is there, since it does
+ * not need a stat of every entry, and readdir when it is not. It gives a Slice
+ * of FsDirEntry the way readdir gives FsFileInfo.
+ *
+ * What a file needs comes from the allocator open was given, and closing it
+ * gives back whatever it holds that is not memory, such as a descriptor. The
+ * memory goes with the allocator, so an arena is the usual one, and the file
+ * server opens every file in an arena it frees when it is done. */
+typedef struct HttpFileVT {
+    IoReadCloserVT read_closer;
+    int64_t (*seek)(void *self, int64_t offset, int whence, Error *err);
+    Slice (*readdir)(void *self, Alloc *a, Int count, Error *err);   /* of FsFileInfo */
+    FsFileInfo (*stat)(void *self, Alloc *a, Error *err);
+    Slice (*read_dir)(void *self, Alloc *a, Int count, Error *err); /* of FsDirEntry */
+} HttpFileVT;
+
+typedef struct HttpFile {
+    const HttpFileVT *vt;
+    void *data;
+} HttpFile;
+
+/* http.FileSystem, a set of files by name. The names are separated by '/'
+ * whatever the system's separator is. open makes the file in a. */
+typedef struct HttpFileSystemVT {
+    const Type *self_type;
+    HttpFile (*open)(void *self, Alloc *a, Str name, Error *err);
+} HttpFileSystemVT;
+
+typedef struct HttpFileSystem {
+    const HttpFileSystemVT *vt;
+    void *data;
+} HttpFileSystem;
+
+/* http.Dir, the files under a directory of the system's own, named with its
+ * own separator. An empty Dir is ".".
+ *
+ * A Dir follows symbolic links, including ones that lead out of it, and serves
+ * names that start with a dot, such as .git and .htpasswd, so it is not for a
+ * directory where somebody else can make files. */
+typedef Str HttpDir;
+
+extern const Type *const TYPE_HTTP_DIR;
+
+/* Dir.Open. name, cleaned as a '/' path from the root so that ".." cannot
+ * climb out, under d, opened with os_open. The file is the OsFile, made in a,
+ * and closing it closes and frees the OsFile, so it is not to be used again.
+ * A name the system cannot have, such as one with a NUL or, on Windows, a
+ * reserved name, fails with an error saying "http: invalid or unsafe file
+ * path". When a file that is not a directory is on the way to name, the error
+ * is fs_err_not_exist rather than whatever the system said. */
+HttpFile http_dir_open(HttpDir d, Alloc *a, Str name, Error *err);
+
+/* d as an HttpFileSystem, borrowing it. */
+BURROW_BORROWS(ret, d) HttpFileSystem http_dir_as_file_system(const HttpDir *d);
+
+/* http.FS. fsys as an HttpFileSystem, made in a, with NULL data when a says no.
+ * A name of "/" is "." and any other loses its leading '/' on the way to fsys.
+ * The files have to have a Seek method, which is looked for in the method set
+ * of the type that their reader vtable names. A file without one serves an
+ * error rather than its bytes. */
+BURROW_OWNS(ret) HttpFileSystem http_fs(Alloc *a, Fs fsys);
+
+/* http.FileServer. A handler that serves the files in root, made in a, with
+ * NULL data when a says no.
+ *
+ * The request path is cleaned and served from root. A directory is served as
+ * its index.html when it has one and as a listing of its entries when it does
+ * not, and a path that ends in "/index.html" is redirected to the directory.
+ * Directories are redirected to their path with a '/' at the end, and files
+ * to theirs without. Everything else is http_serve_content's.
+ *
+ * A request path that does not start with '/' gets one. When the request has
+ * its own arena, from http_read_request or a mux, the new path stays in the
+ * request as it does in Go, and otherwise the path is put back as it was once
+ * the handler is done. */
+BURROW_OWNS(ret) HttpHandler http_file_server(Alloc *a, HttpFileSystem root);
+
+/* http.FileServerFS, http_file_server(a, http_fs(a, root)). */
+BURROW_OWNS(ret) HttpHandler http_file_server_fs(Alloc *a, Fs root);
+
+/* http.ServeContent. Replies to r with what content has, which is found by
+ * seeking to its end and back to the start, and handles Range, If-Match,
+ * If-Unmodified-Since, If-None-Match, If-Modified-Since and If-Range.
+ *
+ * A response with no Content-Type gets one from the extension of name, or
+ * from http_detect_content_type of the first 512 bytes when the extension says
+ * nothing. A Content-Type key with no values stops that. name is not used
+ * otherwise and can be empty. A modtime that is neither zero nor the Unix
+ * epoch goes out as Last-Modified, and decides If-Modified-Since. An ETag set
+ * in w's header, in RFC 7232's form, decides If-Match, If-None-Match and
+ * If-Range.
+ *
+ * Several ranges go out as multipart/byteranges. Go makes those in a goroutine
+ * that writes into a pipe, and they are written straight to w here, with the
+ * same bytes. When serving fails, such as on a range that does not fit,
+ * Cache-Control, Content-Encoding, Etag and Last-Modified come out of w's
+ * header before the error is written, unless GODEBUG has
+ * httpservecontentkeepheaders=1. */
+void http_serve_content(HttpResponseWriter w, HttpRequest *r, Str name, Time modtime,
+                        IoReadSeeker content);
+
+/* http.ServeFile. Replies to r with the named file or directory of the
+ * system, the way http_file_server does, except that a directory is not
+ * redirected to its path with a '/' and a file is not redirected to its path
+ * without one. name is relative to the current directory when it is not
+ * absolute, and may climb out of it, so a name from the request has to be
+ * checked first. A request path with a ".." element is refused with a 400, in
+ * case name was made from it. A request path that ends in "/index.html" is
+ * redirected as http_file_server does. */
+void http_serve_file(HttpResponseWriter w, HttpRequest *r, Str name);
+
+/* http.ServeFileFS. http_serve_file with the named file of fsys, whose files
+ * have to have a Seek method as http_fs says. */
+void http_serve_file_fs(HttpResponseWriter w, HttpRequest *r, Fs fsys, Str name);
 
 /* ----------------------------------------------------------------- Sniffing */
 

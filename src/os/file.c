@@ -48,7 +48,7 @@ BURROW_SENTINEL_ERROR(burrow__os_err_file_closing, "use of closed file");
     M(T, WriteTo, os_file_write_to, IO_SIG_WRITE_TO)
 BURROW_METHODS_DEFINE(OsFile, OS_FILE_METHODS);
 
-static const Type os_file_desc = {
+const Type burrow__os_file_desc = {
     {(const Byte *)"File", 4},
     {(const Byte *)"os", 2},
     KIND_STRUCT,
@@ -84,7 +84,7 @@ static const Type os_file_plain_desc = {
     NULL,
 };
 
-const Type *const TYPE_OS_FILE = &os_file_desc;
+const Type *const TYPE_OS_FILE = &burrow__os_file_desc;
 
 /* ------------------------------------------------------------------ paths */
 
@@ -884,32 +884,32 @@ static FsFileInfo os_vt_stat(void *self, Alloc *a, Error *err) {
     return os_file_stat((OsFile *)self, a, err);
 }
 
-static const IoReaderVT os_reader_vt = {&os_file_desc, os_vt_read};
-static const IoWriterVT os_writer_vt = {&os_file_desc, os_vt_write};
-static const IoCloserVT os_closer_vt = {&os_file_desc, os_vt_close};
-static const IoSeekerVT os_seeker_vt = {&os_file_desc, os_vt_seek};
-static const IoReaderAtVT os_reader_at_vt = {&os_file_desc, os_vt_read_at};
-static const IoWriterAtVT os_writer_at_vt = {&os_file_desc, os_vt_write_at};
-static const IoStringWriterVT os_string_writer_vt = {&os_file_desc, os_vt_write_string};
+static const IoReaderVT os_reader_vt = {&burrow__os_file_desc, os_vt_read};
+static const IoWriterVT os_writer_vt = {&burrow__os_file_desc, os_vt_write};
+static const IoCloserVT os_closer_vt = {&burrow__os_file_desc, os_vt_close};
+static const IoSeekerVT os_seeker_vt = {&burrow__os_file_desc, os_vt_seek};
+static const IoReaderAtVT os_reader_at_vt = {&burrow__os_file_desc, os_vt_read_at};
+static const IoWriterAtVT os_writer_at_vt = {&burrow__os_file_desc, os_vt_write_at};
+static const IoStringWriterVT os_string_writer_vt = {&burrow__os_file_desc, os_vt_write_string};
 static const IoReadWriteSeekerVT os_read_write_seeker_vt = {
-    {&os_file_desc, os_vt_read},
-    {&os_file_desc, os_vt_write},
-    {&os_file_desc, os_vt_seek},
+    {&burrow__os_file_desc, os_vt_read},
+    {&burrow__os_file_desc, os_vt_write},
+    {&burrow__os_file_desc, os_vt_seek},
 };
 static const IoReadCloserVT os_read_closer_vt = {
-    {&os_file_desc, os_vt_read},
-    {&os_file_desc, os_vt_close},
+    {&burrow__os_file_desc, os_vt_read},
+    {&burrow__os_file_desc, os_vt_close},
 };
 static const IoWriteCloserVT os_write_closer_vt = {
-    {&os_file_desc, os_vt_write},
-    {&os_file_desc, os_vt_close},
+    {&burrow__os_file_desc, os_vt_write},
+    {&burrow__os_file_desc, os_vt_close},
 };
 static Slice os_vt_read_dir(void *self, Alloc *a, Int n, Error *err) {
     return os_file_read_dir((OsFile *)self, a, n, err);
 }
 
 static const FsFileVT os_fs_file_vt = {
-    {{&os_file_desc, os_vt_read}, {&os_file_desc, os_vt_close}},
+    {{&burrow__os_file_desc, os_vt_read}, {&burrow__os_file_desc, os_vt_close}},
     os_vt_stat,
     os_vt_read_dir,
 };

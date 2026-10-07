@@ -64,6 +64,7 @@ global	src/mem/gc.c	gc_singleton	allocator	The same as heap_singleton. One colle
 global	src/mem/gc.c	gc_started	allocator	Written once by the first gc_allocator call, which the header requires to come from the main thread before any others exist.
 global	src/mem/mem.c	mem_forget_fn	weak	Written once by the first weak_make, under weak's lock, before mem_forget_on is set with a release store. Only read after an acquire load of mem_forget_on sees it set.
 global	src/mem/mem.c	mem_forget_on	weak	Release store once, acquire loads on every free.
+global	src/net/http2_frame.c	h2_debug_flags	godebug	The http2debug setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/runtime/mcontext.c	resuming	scheduler	Thread local, and it only exists on the ucontext path. Written by a switch and read by the trampoline on the other side of that same switch, on the same thread, with nothing in between.
 global	src/runtime/mcontext.c	annotate_prev	scheduler	Thread local, and it only exists in a build with the address sanitizer on. Written on the old stack and read on the new one, on the same thread, with nothing in between, the same as resuming above.
 global	src/runtime/mcontext.c	tsan_pool_lock	scheduler	This is the synchronisation for the three below, and it only exists in a build with the thread sanitizer on. Held for the handful of instructions that move a fiber into or out of the pool, never across the call that makes one.

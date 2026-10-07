@@ -236,8 +236,10 @@ typedef struct ShiftInExample {
 } ShiftInExample;
 
 static void TestShiftIn(TestingT *t) {
-    if (BIGMOD_W != 64)
+    if (BIGMOD_W != 64) {
         testing_t_skip_v(t, "examples are only valid in 64 bit");
+        return;
+    }
     static const ShiftInExample examples[] = {
         {{13}, {0}, {2}, 1, 1, 1, UINT64_C(0xFFFFFFFFFFFFFFFF)},
         {{13}, {7}, {10}, 1, 1, 1, UINT64_C(0xFFFFFFFFFFFFFFFF)},
@@ -1005,6 +1007,7 @@ static void inverse_case(void *env, TestingT *t) {
     if (m == NULL) {
         arena_free(&ar);
         testing_t_skip_v(t, "modulus <= 1");
+        return;
     }
     BigmodNat a, got, exp;
     bigmod_nat_init(&a, NULL);

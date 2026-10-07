@@ -483,6 +483,20 @@ static bool wnet_opt(int32_t opt, int *level, int *name, bool *flag) {
         *level = IPPROTO_IPV6;
         *name = IPV6_UNICAST_HOPS;
         return true;
+    case PAL_IP_MULTICAST_LOOP:
+        *level = IPPROTO_IP;
+        *name = IP_MULTICAST_LOOP;
+        *flag = true;
+        return true;
+    case PAL_IPV6_MULTICAST_IF:
+        *level = IPPROTO_IPV6;
+        *name = IPV6_MULTICAST_IF;
+        return true;
+    case PAL_IPV6_MULTICAST_LOOP:
+        *level = IPPROTO_IPV6;
+        *name = IPV6_MULTICAST_LOOP;
+        *flag = true;
+        return true;
     default:
         /* PAL_SO_REUSEPORT among them: Windows has no such option. */
         return false;
@@ -556,6 +570,51 @@ bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err) {
     } else {
         int v = (int)value;
         r = setsockopt((SOCKET)fd, level, name, (const char *)&v, (int)sizeof v);
+    }
+    if (r != 0)
+        return wnet_fail(err);
+    return true;
+}
+
+/* Windows takes an IPv4 interface by its address, as the BSDs do. */
+bool pal_setsockopt_mreq(int64_t fd, int32_t opt, const PalMreq *m, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!wnet_fd_ok(fd, err))
+        return false;
+    if (m == NULL || m->index < 0) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+    int r;
+    switch (opt) {
+    case PAL_MREQ_IPV4_IF: {
+        struct in_addr a;
+        memcpy(&a, m->ifaddr, 4);
+        r = setsockopt((SOCKET)fd, IPPROTO_IP, IP_MULTICAST_IF, (const char *)&a,
+                       (int)sizeof a);
+        break;
+    }
+    case PAL_MREQ_IPV4_JOIN: {
+        struct ip_mreq q;
+        memset(&q, 0, sizeof q);
+        memcpy(&q.imr_multiaddr, m->group, 4);
+        memcpy(&q.imr_interface, m->ifaddr, 4);
+        r = setsockopt((SOCKET)fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const char *)&q,
+                       (int)sizeof q);
+        break;
+    }
+    case PAL_MREQ_IPV6_JOIN: {
+        struct ipv6_mreq q;
+        memset(&q, 0, sizeof q);
+        memcpy(&q.ipv6mr_multiaddr, m->group, 16);
+        q.ipv6mr_interface = (ULONG)m->index;
+        r = setsockopt((SOCKET)fd, IPPROTO_IPV6, IPV6_JOIN_GROUP, (const char *)&q,
+                       (int)sizeof q);
+        break;
+    }
+    default:
+        BURROW_OUT(err, PAL_ENOTSUP);
+        return false;
     }
     if (r != 0)
         return wnet_fail(err);

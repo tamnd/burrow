@@ -715,6 +715,23 @@ BURROW_OWNS(ret) NetUDPConn *net_dial_udp(Alloc *a, Str network,
 BURROW_OWNS(ret) NetUDPConn *net_listen_udp(Alloc *a, Str network,
                                             const NetUDPAddr *laddr, Error *err);
 
+/* net.Interface, which is further down with the rest of the interfaces. */
+typedef struct NetInterface NetInterface;
+
+/* ListenMulticastUDP: a socket bound to gaddr's port that has joined the
+ * group gaddr names, on the interface ifi, or on one the system picks for a
+ * NULL ifi, which is rarely what you want on a machine with more than one.
+ * network is "udp", "udp4" or "udp6". Other sockets can bind the same group
+ * and port, and the socket does not get back what it sends to the group
+ * itself.
+ *
+ * This is for simple programs. golang.org/x/net/ipv4 and ipv6 are the
+ * general purpose answer in Go, and burrow has no port of them yet. */
+BURROW_OWNS(ret) NetUDPConn *net_listen_multicast_udp(Alloc *a, Str network,
+                                                      const NetInterface *ifi,
+                                                      const NetUDPAddr *gaddr,
+                                                      Error *err);
+
 /* conn.Read and Write, for a dialed connection. */
 Int net_udp_conn_read(NetUDPConn *c, Slice p, Error *err);
 Int net_udp_conn_write(NetUDPConn *c, Slice p, Error *err);
@@ -1404,13 +1421,13 @@ BURROW_OWNS(ret) Str net_flags_string(NetFlags f, Alloc *a);
 
 /* net.Interface. index starts at 1 and 0 is never one. name is "lo", "eth0"
  * or "en0" and the like, and can be empty. */
-typedef struct NetInterface {
+struct NetInterface {
     Int index;
     Int mtu;
     Str name;
     NetHardwareAddr hardware_addr;
     NetFlags flags;
-} NetInterface;
+};
 
 extern const Type *const TYPE_NET_INTERFACE;
 
@@ -1437,13 +1454,13 @@ BURROW_OWNS(ret) NetInterface *net_interface_by_name(Alloc *a, Str name, Error *
  * them. Go calls this Addrs, which is the name net_interface_addrs already
  * has here. */
 BURROW_OWNS(ret) Slice net_interface_addrs_of(const NetInterface *ifi, Alloc *a,
-                                               Error *err);
+                                              Error *err);
 
 /* Interface.MulticastAddrs: the multicast groups ifi has joined, a Slice of
  * NetAddr, each one a NetIPAddr. There are none on NetBSD, OpenBSD and
  * DragonFly, where Go does not look either. */
 BURROW_OWNS(ret) Slice net_interface_multicast_addrs(const NetInterface *ifi, Alloc *a,
-                                                      Error *err);
+                                                     Error *err);
 
 /* n as a NetAddr, which points at n, and nil for a NULL n. */
 NetAddr net_ip_net_as_addr(const NetIPNet *n);

@@ -241,6 +241,7 @@ Error burrow__netfd_shutdown(burrow__NetFD *fd, int32_t how);
 /* poll.FD.SetsockoptInt with the error wrapped the way net's setters wrap
  * it, as "setsockopt". */
 Error burrow__netfd_setsockopt(burrow__NetFD *fd, int32_t opt, int64_t value);
+Error burrow__netfd_setsockopt_mreq(burrow__NetFD *fd, int32_t opt, const PalMreq *m);
 
 /* Whether this machine can make IPv4 sockets, IPv6 sockets, and IPv6 sockets
  * that take IPv4 as well, which decides the family of a listener on every

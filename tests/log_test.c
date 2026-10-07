@@ -81,8 +81,13 @@ static Str buf_str(BytesBuffer *b) {
     return (Str){(const Byte *)s.p, s.len};
 }
 
+/* The regexp's search memory is on the heap whatever a is, so it is freed
+ * here. */
 static bool matches(Alloc *a, Str pattern, Str s) {
-    return regexp_match_string(regexp_must_compile(a, pattern), s);
+    Regexp *re = regexp_must_compile(a, pattern);
+    bool ok = regexp_match_string(re, s);
+    regexp_free(re);
+    return ok;
 }
 
 /* Test using log_println_v("hello", 23, "world") or using

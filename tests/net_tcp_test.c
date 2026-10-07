@@ -12,6 +12,7 @@
 #include "burrow/io.h"
 #include "burrow/mem/heap.h"
 #include "burrow/net.h"
+#include "burrow/netpoll.h"
 #include "burrow/os.h"
 #include "burrow/sync.h"
 #include "burrow/time.h"

@@ -1011,7 +1011,11 @@ cookiejar_jar_free(jar);
 That prints:
 
 ```
-PENDING
+http://www.example.com/shop/basket: lang=en cart=3 session=1
+https://www.example.com/: session=1 admin=1
+https://api.example.com/:
+http://other.com/:
+https://www.example.com/shop/basket: lang=en cart=3 admin=1
 ```
 
 `cookiejar_new` takes options with a public suffix list, which is what stops a server for foo.co.uk from setting a cookie for every site under co.uk. Without one, as here, the jar can't tell co.uk from example.com, so don't leave it out in a client that talks to sites you don't trust. Go's list is in golang.org/x/net/publicsuffix, which burrow doesn't have yet, and any `CookiejarPublicSuffixList` you write works. The jar copies what it keeps into the allocator you gave `cookiejar_new`, so the cookies you hand it can go away as soon as the call returns, and `cookiejar_jar_cookies` gives copies in the allocator you pass. `cookiejar_jar_as_cookie_jar` gives the jar as an `HttpCookieJar`, the interface Go's client takes.

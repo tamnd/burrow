@@ -132,6 +132,7 @@
 #include "burrow/mime/quotedprintable.h"
 #include "burrow/net.h"
 #include "burrow/net/http.h"
+#include "burrow/net/http/httptest.h"
 #include "burrow/net/mail.h"
 #include "burrow/net/netip.h"
 #include "burrow/net/textproto.h"

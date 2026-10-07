@@ -654,3 +654,41 @@ PENDING
 ```
 
 `http_serve_mux_handler` answers the same question without calling anything, and gives back the pattern that matched. `http_strip_prefix`, `http_redirect_handler` and `http_not_found_handler` are the small handlers Go has, and `http_handle` registers on `http_default_serve_mux` as `http.Handle` does.
+
+## Testing handlers
+
+`net/http/httptest` tests a handler without a network. `httptest_new_request` makes a request the way a server hands one to a handler: the target is read as the target of a request line, the request is HTTP/1.1, and its host is example.com unless the target names one. It panics on arguments that don't make a request line, since in a test that is a bug in the test. An `HttptestResponseRecorder` is a response writer that keeps the status, the header and the body, and `httptest_response_recorder_result` turns what the handler did into the `HttpResponse` a client would have read, with the header as it was when the body began:
+
+<!-- example: ../examples/net/http.c#httptest -->
+```c
+HttpHandlerFunc h = BURROW_FN(HttpHandlerFunc, hello, NULL);
+const char *methods[] = {"GET", "POST"};
+for (size_t i = 0; i < sizeof methods / sizeof methods[0]; i++) {
+    HttpRequest *r = httptest_new_request(a, str_from_cstr(methods[i]),
+                                          BURROW_S("/greet"), (IoReader){0});
+    HttptestResponseRecorder *rec = httptest_new_recorder(a);
+    http_handler_func_serve_http(
+        h, httptest_response_recorder_as_response_writer(rec), r);
+
+    HttpResponse *res = httptest_response_recorder_result(rec);
+    Error err;
+    Slice body = io_read_all(a, io_read_closer_as_io_reader(res->body), &err);
+    fmt_printf_v("%s %s\n", r->method, res->status);
+    fmt_printf_v("  Content-Type: %s\n",
+                 http_header_get(res->header, BURROW_S("Content-Type")));
+    fmt_printf_v("  Cache-Control: %s\n",
+                 http_header_get(res->header, BURROW_S("Cache-Control")));
+    Str text = {(const Byte *)body.p, body.len};
+    fmt_printf_v("  body: %q\n", text);
+    httptest_response_recorder_free(rec);
+    http_request_free(r);
+}
+```
+
+That prints:
+
+```
+PENDING
+```
+
+The recorder sniffs a Content-Type from the first write when the handler sets none, as a server does, and a write after a 204 or 304 status keeps the bytes but returns `http_err_body_not_allowed`. Go's `httptest.Server` needs the HTTP server and comes with it.

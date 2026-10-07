@@ -117,7 +117,15 @@ static HttpResponse *rec_round_trip(void *self, HttpRequest *req, Error *err) {
             str_clone(a, http_header_get(req->header, cs("Content-Type")));
         r->authorization =
             str_clone(a, http_header_get(req->header, cs("Authorization")));
+        /* The cookies' strings are the header's, which go with the request
+         * the client frees once this has failed. */
         r->cookies = http_request_cookies(req, a);
+        HttpCookie *ck = (HttpCookie *)r->cookies.p;
+        for (Int i = 0; i < r->cookies.len; i++) {
+            ck[i].name = str_clone(a, ck[i].name);
+            ck[i].value = str_clone(a, ck[i].value);
+            ck[i].raw = str_clone(a, ck[i].raw);
+        }
     }
     r->body = BURROW_STR_EMPTY;
     if (req->body.vt != NULL) {

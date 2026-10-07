@@ -96,11 +96,12 @@ struct ErrorVT {
 
     /* A copy of this error in a, deep enough that nothing in it points back at
      * the original's memory, for error_retain. Copy what the error wraps with
-     * error_retain as well. NULL is fine for an error whose memory never goes
-     * away, which is every sentinel, and error_retain falls back to copying the
-     * message and the chain for everything else, which keeps errors_is working
-     * and loses errors_as. Give an error with a self_type a clone and it keeps
-     * both. */
+     * error_retain as well. A sentinel made with BURROW_SENTINEL_ERROR needs
+     * none, since error_retain hands those back as they are. Without a clone,
+     * error_retain copies the message and the chain, which keeps errors_is
+     * working for what the error wraps and loses errors_as. The error itself
+     * becomes a new one, so a static error with its own vtable, which errors_is
+     * matches by identity, should have a clone that returns itself. */
     Error (*clone)(const void *self, Alloc *a);
 };
 

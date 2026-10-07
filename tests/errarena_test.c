@@ -91,6 +91,23 @@ static void TestRetainingASentinelGivesBackTheSentinel(TestingT *t) {
     CHECK(BURROW_OK(error_retain(heap_allocator(), BURROW_NO_ERROR)));
 }
 
+/* The library's static errors with a type of their own, which errors_is
+ * matches by identity, come back as themselves, alone and inside a chain. */
+static void TestRetainingAStaticTypedErrorGivesBackTheSame(TestingT *t) {
+    Arena keep;
+    arena_init(&keep, NULL, 0);
+    Alloc *ka = arena_allocator(&keep);
+    const Error statics[3] = {net_err_closed, context_deadline_exceeded,
+                              os_err_deadline_exceeded};
+    for (int i = 0; i < 3; i++) {
+        Error e = error_retain(ka, statics[i]);
+        CHECK(e.vt == statics[i].vt && e.data == statics[i].data);
+        Error kc = error_retain(ka, wrap(error_allocator(), "outer", statics[i]));
+        CHECK(errors_is(kc, statics[i]));
+    }
+    arena_free(&keep);
+}
+
 static void TestRetainingCopiesTheTextOutOfTheArena(TestingT *t) {
     Arena keep;
     arena_init(&keep, NULL, 0);
@@ -208,6 +225,7 @@ static void TestEachGoroutineHasItsOwnArenaAndARetainedErrorOutlivesIt(TestingT 
     X(TestAThreadHasAnErrorAllocatorBeforeTheRuntimeStarts)                            \
     X(TestReleasingAMarkGivesTheMemoryBack)                                            \
     X(TestRetainingASentinelGivesBackTheSentinel)                                      \
+    X(TestRetainingAStaticTypedErrorGivesBackTheSame)                                  \
     X(TestRetainingCopiesTheTextOutOfTheArena)                                         \
     X(TestRetainingKeepsErrorsIsThroughAChainAndAJoin)                                 \
     X(TestRetainingARuntimeErrorKeepsItsType)                                          \

@@ -333,6 +333,10 @@ BURROW_OWNS(ret) BURROW_BORROWS(ret, u) UrlValues url_query(const Url *u, Alloc 
  * back to reading the environment. */
 void burrow__url_godebug_set(const char *value);
 
+/* Not API. Whether GODEBUG gives urlmaxqueryparams a value at all, which is
+ * Go's urlmaxqueryparams.Value() != "", for httputil's ReverseProxy. */
+bool burrow__url_max_query_params_named(void);
+
 /* Not API. Go's resolvePath and shouldEscape, which its tests call directly.
  * The mode is one of Go's encoding values, 1 for a path up to 0x40 for a
  * fragment. */

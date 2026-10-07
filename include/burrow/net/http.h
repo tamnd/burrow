@@ -632,6 +632,13 @@ extern const Error http_err_no_location;
  * response to, which is borrowed, and uncompressed says the transport took
  * gzip off the body.
  *
+ * body_writer writes to whatever body reads from, for a body that is a
+ * connection, as the body of a 101 Switching Protocols response from
+ * HttpTransport is. That is Go's resp.Body.(io.ReadWriteCloser), and it is nil
+ * for any other body. body_close_write, which may be NULL, is the CloseWrite
+ * method such a body may have too, called with body_writer's data, and shuts
+ * only the writing half. A body that wraps one of these sets both or neither.
+ *
  * on_free is for whatever made the response, such as HttpTransport, and runs
  * first in http_response_free, to let go of what it keeps for the response. A
  * round tripper that wraps another and wants a hook of its own keeps the one
@@ -653,6 +660,8 @@ typedef struct HttpResponse {
     HttpRequest *request;
     bool close;
     bool uncompressed;
+    IoWriter body_writer;
+    Error (*body_close_write)(void *self);
     Func on_free;
 
     /* The response's own. */
@@ -683,9 +692,9 @@ void http_response_free(HttpResponse *r);
  * and Trailer come from the fields, not the header. */
 BURROW_BORROWS(ret) Error http_response_write(HttpResponse *r, IoWriter w);
 
-/* The body of a 101 Switching Protocols response from HttpTransport is the
- * connection, and can be written to as well as read, which is Go's
- * resp.Body.(io.ReadWriteCloser). Sets *w to the writer and gives true for
+/* Whether r's body can be written to as well as read, which is Go's
+ * resp.Body.(io.ReadWriteCloser), as the body of a 101 Switching Protocols
+ * response from HttpTransport can. Sets *w to body_writer and gives true for
  * such a body, and false for any other. */
 bool http_response_body_writer(const HttpResponse *r, IoWriter *w);
 

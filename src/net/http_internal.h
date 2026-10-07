@@ -122,6 +122,19 @@ extern const Str burrow__http_line_too_long_text;
  * takes as a limit already set. */
 bool burrow__http_is_max_bytes_reader(IoReadCloser r);
 
+/* The vtable of an HttpProtocolError, so that another package can make a
+ * const Error that is one, such as httputil's ErrPipeline. */
+extern const ErrorVT burrow__http_protocol_error_vt;
+
+/* httputil's singleJoiningSlash, joinURLPath and flushInterval, which its tests
+ * call directly, as Go's do. The strings are made in a. */
+struct HttputilReverseProxy;
+Str burrow__httputil_single_joining_slash(Alloc *a, Str x, Str y);
+void burrow__httputil_join_url_path(Alloc *a, const Url *x, const Url *y, Str *path,
+                                    Str *raw_path);
+Duration burrow__httputil_flush_interval(const struct HttputilReverseProxy *p,
+                                         const HttpResponse *res);
+
 /* parseHexUint. A chunk's size from its hex digits, at most 16 of them. */
 uint64_t burrow__http_parse_hex_uint(Slice v, Error *err);
 

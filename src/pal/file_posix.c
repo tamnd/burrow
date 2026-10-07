@@ -10,7 +10,9 @@
  *
  * _FILE_OFFSET_BITS is for 32 bit Linux, where off_t is 32 bits without it and
  * a file past two gigabytes cannot be seeked in. The others are for utimensat,
- * pipe2 and F_DUPFD_CLOEXEC, which a strict build hides.
+ * pipe2 and F_DUPFD_CLOEXEC, which a strict build hides. FreeBSD and
+ * DragonFly are the other way round: they show everything by default, and
+ * asking for X/Open there hides pipe2, so they get no _XOPEN_SOURCE.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -18,7 +20,9 @@
 
 #if !defined(_WIN32)
 #define _FILE_OFFSET_BITS 64
+#if !defined(__FreeBSD__) && !defined(__DragonFly__)
 #define _XOPEN_SOURCE 700
+#endif
 #define _DEFAULT_SOURCE 1
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE 1

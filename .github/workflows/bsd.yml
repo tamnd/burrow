@@ -1,0 +1,38 @@
+name: BSD
+
+# The BSDs other than macOS, each in a virtual machine on a Linux runner.
+# docs/design/10-packages-os.md section 3 promises freebsd/amd64 the full suite
+# every night, and OpenBSD, NetBSD and DragonFly a weekly run with their gaps
+# written down. A VM takes a few minutes to boot and the suite runs without
+# hardware acceleration, which is why this is not part of every pull request.
+# A pull request that changes this file runs it, so that a change to the jobs
+# is tried before it lands.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/bsd.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  freebsd:
+    name: freebsd-amd64-clang
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.3"
+          usesh: true
+          prepare: pkg install -y gmake
+          run: gmake -j"$(sysctl -n hw.ncpu)" TESTFLAGS=-test.short test

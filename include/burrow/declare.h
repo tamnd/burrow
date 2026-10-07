@@ -187,6 +187,10 @@ extern "C" {
  * in another. */
 #define BURROW_STRUCT_DEFINE(T, FIELDS)                                                \
     static const Field burrow__fields_##T[] = {FIELDS(BURROW__FIELD, T)};              \
+    BURROW__STRUCT_TYPE(T)
+
+/* The descriptor around a field array already defined as burrow__fields_T. */
+#define BURROW__STRUCT_TYPE(T)                                                         \
     const Type burrow_type_##T = {                                                     \
         BURROW_S_INIT(#T),                                                             \
         {NULL, 0},                                                                     \
@@ -208,6 +212,47 @@ extern "C" {
 #define BURROW_STRUCT(T, FIELDS)                                                       \
     BURROW_STRUCT_DECL(T, FIELDS);                                                     \
     BURROW_STRUCT_DEFINE(T, FIELDS)
+
+/* A struct whose fields have one name in C and another in its descriptor.
+ *
+ * burrow's own structs name their fields the C way, so a PkixExtension has
+ * .critical and not .Critical. A descriptor that said "critical" would make
+ * the field unexported to every package that asks, the same as a lowercase
+ * name in Go, and encoding/asn1 would refuse the struct the way Go's does. So
+ * each line of the list carries the name the descriptor gets as well, which is
+ * the Go name, after the C one:
+ *
+ *     #define EXTENSION_FIELDS(F, T)                              \
+ *         F(T, Asn1ObjectIdentifier, id, Id, "")                  \
+ *         F(T, bool, critical, Critical, "asn1:\"optional\"")
+ *
+ *     BURROW_STRUCT_AS(Extension, EXTENSION_FIELDS);
+ *
+ * Everything else is as for BURROW_STRUCT, including the DECL and DEFINE
+ * split. */
+#define BURROW__MEMBER_AS(T, ctype, fname, name, tag) ctype fname;
+
+#define BURROW__FIELD_AS(T, ctype, fname, name, tag)                                   \
+    {                                                                                  \
+        BURROW_S_INIT(#name),                                                          \
+        BURROW_S_INIT(tag),                                                            \
+        TYPE_OF(ctype),                                                                \
+        (uint32_t)offsetof(T, fname),                                                  \
+    },
+
+#define BURROW_STRUCT_AS_DECL(T, FIELDS)                                               \
+    typedef struct T {                                                                 \
+        FIELDS(BURROW__MEMBER_AS, T)                                                   \
+    } T;                                                                               \
+    extern const Type burrow_type_##T
+
+#define BURROW_STRUCT_AS_DEFINE(T, FIELDS)                                             \
+    static const Field burrow__fields_##T[] = {FIELDS(BURROW__FIELD_AS, T)};           \
+    BURROW__STRUCT_TYPE(T)
+
+#define BURROW_STRUCT_AS(T, FIELDS)                                                    \
+    BURROW_STRUCT_AS_DECL(T, FIELDS);                                                  \
+    BURROW_STRUCT_AS_DEFINE(T, FIELDS)
 
 /* ------------------------------------------------------- composite types
  *

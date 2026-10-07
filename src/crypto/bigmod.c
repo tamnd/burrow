@@ -42,7 +42,7 @@ static BigmodChoice not_(BigmodChoice c) {
 
 /* ctMask: all ones if on is 1, and all zeros if it is 0. */
 static Uint ct_mask(BigmodChoice on) {
-    return -(Uint)on;
+    return 0 - (Uint)on;
 }
 
 /* ctEq: 1 if x == y, and 0 otherwise, in time that does not depend on them. */
@@ -467,7 +467,7 @@ static Uint minus_inverse_mod_w(Uint x) {
     Uint y = x;
     for (int i = 0; i < 5; i++)
         y = y * (2 - x * y);
-    return -y;
+    return 0 - y;
 }
 
 /* newModulus: the struct around n, which it takes, from a. */

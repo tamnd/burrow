@@ -706,3 +706,63 @@ Error http_cookie_valid(const HttpCookie *c) {
         return hc_error(&hc_text_partitioned);
     return BURROW_NO_ERROR;
 }
+
+/* ------------------------------------------- Request and Response cookies */
+
+BURROW_SENTINEL_ERROR(http_err_no_cookie, "http: named cookie not present");
+
+Slice http_request_cookies(const HttpRequest *r, Alloc *a) {
+    return burrow__http_read_cookies(a, r->header, BURROW_STR_EMPTY);
+}
+
+Slice http_request_cookies_named(const HttpRequest *r, Alloc *a, Str name) {
+    if (name.len == 0)
+        return hc_make(a, 0);
+    return burrow__http_read_cookies(a, r->header, name);
+}
+
+HttpCookie http_request_cookie(const HttpRequest *r, Alloc *a, Str name, Error *err) {
+    HttpCookie c;
+    memset(&c, 0, sizeof c);
+    if (name.len > 0) {
+        Slice cookies = burrow__http_read_cookies(a, r->header, name);
+        if (cookies.len > 0) {
+            *err = BURROW_NO_ERROR;
+            return ((const HttpCookie *)cookies.p)[0];
+        }
+    }
+    *err = http_err_no_cookie;
+    return c;
+}
+
+/* sanitizeCookieName, which turns each CR and LF into "-". False when a says
+ * no. */
+static bool hc_sanitize_name(Alloc *a, Str n, Str *out) {
+    *out = n;
+    if (strings_index_any(n, BURROW_S("\r\n")) < 0)
+        return true;
+    Byte *p = (Byte *)mem_alloc_nozero(a, (size_t)n.len, 1);
+    if (p == NULL)
+        return false;
+    for (Int i = 0; i < n.len; i++)
+        p[i] = n.p[i] == '\n' || n.p[i] == '\r' ? (Byte)'-' : n.p[i];
+    *out = str_from_bytes(p, n.len);
+    return true;
+}
+
+bool http_request_add_cookie(HttpRequest *r, Alloc *a, const HttpCookie *c) {
+    Str name;
+    if (!hc_sanitize_name(a, c->name, &name))
+        return false;
+    Str value = burrow__http_sanitize_cookie_value(a, c->value, c->quoted);
+    Str have = http_header_get(r->header, BURROW_S("Cookie"));
+    Str s = have.len > 0 ? fmt_sprintf_v(a, "%s; %s=%s", have, name, value)
+                         : fmt_sprintf_v(a, "%s=%s", name, value);
+    if (s.len == 0)
+        return false;
+    return http_header_set(r->header, BURROW_S("Cookie"), s);
+}
+
+Slice http_response_cookies(const HttpResponse *r, Alloc *a) {
+    return burrow__http_read_set_cookies(a, r->header);
+}

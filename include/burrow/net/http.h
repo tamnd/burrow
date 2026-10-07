@@ -355,7 +355,8 @@ BURROW_FUNC(HttpGetBodyFunc, IoReadCloser, Error *err);
  * get_body, which may be nil, makes a new copy of the body, and
  * http_new_request sets it for a body it knows how to copy. ctx is the
  * request's context, read with http_request_context, and nil means
- * context_background.
+ * context_background. response is the redirect response that made an
+ * HttpClient send this request, and NULL for the first request it sends.
  *
  * Everything a request read from the wire has, the strings and the header and
  * the URL, lives in the request's own arena until http_request_free. */
@@ -376,6 +377,7 @@ typedef struct HttpRequest {
     Str pattern;
     HttpGetBodyFunc get_body;
     Context ctx;
+    struct HttpResponse *response;
     bool close;
 
     /* The request's own. */
@@ -419,6 +421,31 @@ bool http_request_basic_auth(const HttpRequest *r, Alloc *a, Str *username,
  * The value is made in a, which has to last as long as the header. False when
  * an allocator says no, or when r has no header. */
 bool http_request_set_basic_auth(HttpRequest *r, Alloc *a, Str username, Str password);
+
+/* http.ErrNoCookie, from http_request_cookie when there is no such cookie. */
+extern const Error http_err_no_cookie;
+
+/* Request.Cookies. The cookies of the request's Cookie fields, as a Slice of
+ * HttpCookie from a, with any that do not parse left out. Their strings point
+ * into the header. */
+BURROW_OWNS(ret) Slice http_request_cookies(const HttpRequest *r, Alloc *a);
+
+/* Request.CookiesNamed. http_request_cookies with only the ones called name,
+ * and none for an empty name. */
+BURROW_OWNS(ret) Slice http_request_cookies_named(const HttpRequest *r, Alloc *a,
+                                                  Str name);
+
+/* Request.Cookie. The first cookie called name, and http_err_no_cookie with a
+ * zero cookie when there is none. */
+HttpCookie http_request_cookie(const HttpRequest *r, Alloc *a, Str name, Error *err);
+
+/* Request.AddCookie. Adds c's name and value to the request's Cookie field,
+ * after the cookies it has, as RFC 6265 says to keep them all in one field. A
+ * CR or LF in the name becomes "-", and the value loses the bytes a cookie
+ * cannot hold, as http_cookie_string does with it. Nothing else of c is used.
+ * The field is made in a, which has to last as long as the header. False when
+ * a says no. */
+bool http_request_add_cookie(HttpRequest *r, Alloc *a, const HttpCookie *c);
 
 /* http.NewRequest and NewRequestWithContext. A request for a client to send,
  * made in a, with url parsed into it, method "GET" when it is "", protocol
@@ -511,6 +538,11 @@ extern const Error http_err_no_location;
  * response to, which is borrowed, and uncompressed says the transport took
  * gzip off the body.
  *
+ * on_free is for whatever made the response, such as HttpTransport, and runs
+ * first in http_response_free, to let go of what it keeps for the response. A
+ * round tripper that wraps another and wants a hook of its own keeps the one
+ * it found and calls it from its own.
+ *
  * Read body to its end, or close it, before reading the next response on the
  * same connection. */
 typedef struct HttpResponse {
@@ -527,6 +559,7 @@ typedef struct HttpResponse {
     HttpRequest *request;
     bool close;
     bool uncompressed;
+    Func on_free;
 
     /* The response's own. */
     Alloc *a;
@@ -542,7 +575,9 @@ typedef struct HttpResponse {
 BURROW_OWNS(ret) HttpResponse *http_read_response(Alloc *a, BufioReader *r,
                                                   HttpRequest *req, Error *err);
 
-/* Gives back a response http_read_response made, and its body. NULL is fine. */
+/* Gives back a response http_read_response made, and its body, after running
+ * its on_free. NULL is fine. A response from a client or a transport goes back
+ * this way too, and closes its body first if it is still open. */
 void http_response_free(HttpResponse *r);
 
 /* Response.Write. Writes r to w as an HTTP/1.x response a server sends: the
@@ -562,6 +597,10 @@ bool http_response_proto_at_least(const HttpResponse *r, Int major, Int minor);
  * there is no Location field. */
 BURROW_OWNS(ret) Url *http_response_location(const HttpResponse *r, Alloc *a,
                                              Error *err);
+
+/* Response.Cookies. The cookies of the response's Set-Cookie fields, as a
+ * Slice of HttpCookie from a, with any that do not parse left out. */
+BURROW_OWNS(ret) Slice http_response_cookies(const HttpResponse *r, Alloc *a);
 
 /* ------------------------------------------------------------------ Handler */
 

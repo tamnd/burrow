@@ -128,6 +128,8 @@ HttpResponse *http_read_response(Alloc *a, BufioReader *r, HttpRequest *req,
 void http_response_free(HttpResponse *r) {
     if (r == NULL)
         return;
+    if (!BURROW_FUNC_IS_NIL(r->on_free))
+        BURROW_CALLF0(r->on_free);
     burrow__http_body_free(r->wire);
     arena_free(&r->arena);
     mem_free(r->a, r, sizeof *r, _Alignof(HttpResponse));

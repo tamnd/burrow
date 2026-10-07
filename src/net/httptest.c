@@ -160,8 +160,13 @@ static void hh_vt_write_header(void *self, Int code) {
     httptest_response_recorder_write_header((HttptestResponseRecorder *)self, code);
 }
 
+static Error hh_vt_flush(void *self) {
+    httptest_response_recorder_flush((HttptestResponseRecorder *)self);
+    return BURROW_NO_ERROR;
+}
+
 static const HttpResponseWriterVT hh_writer_vt = {
-    {&hh_recorder_desc, hh_vt_write}, hh_vt_header, hh_vt_write_header};
+    {&hh_recorder_desc, hh_vt_write}, hh_vt_header, hh_vt_write_header, hh_vt_flush};
 
 HttpResponseWriter
 httptest_response_recorder_as_response_writer(HttptestResponseRecorder *rw) {

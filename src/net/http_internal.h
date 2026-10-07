@@ -193,6 +193,19 @@ bool burrow__http_body_did_early_close(void *body);
 bool burrow__http_body_remains(void *body);
 void burrow__http_body_set_do_early_close(void *body, bool on);
 
+/* body.Close, which is nothing for a NULL body. */
+BURROW_BORROWS(ret) Error burrow__http_body_close(void *body);
+
+/* body.registerOnHitEOF, which does nothing for a NULL body. fn runs, with the body's lock held, once a read has
+ * come to the end of the body. */
+void burrow__http_body_register_on_hit_eof(void *body, Func fn);
+
+/* What the server asks of a request body when the handler is done: whether it
+ * was closed, whether its end was read, and how much of its declared length is
+ * left, which is -1 when it has no length (body.unreadDataSizeLocked). */
+void burrow__http_body_state(void *body, bool *closed, bool *saw_eof,
+                             int64_t *unread);
+
 /* bodyAllowedForStatus. Whether a response with this status may have a body,
  * which 1xx, 204 and 304 may not. */
 bool burrow__http_body_allowed_for_status(Int status);

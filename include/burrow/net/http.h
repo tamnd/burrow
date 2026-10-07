@@ -38,9 +38,11 @@
 #include "burrow/func.h"
 #include "burrow/io.h"
 #include "burrow/io/fs.h"
+#include "burrow/log.h"
 #include "burrow/map.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
+#include "burrow/net.h"
 #include "burrow/net/textproto.h"
 #include "burrow/net/url.h"
 #include "burrow/own.h"
@@ -572,11 +574,29 @@ BURROW_OWNS(ret) Url *http_response_location(const HttpResponse *r, Alloc *a,
  * the header, and is called at most once, with a code from 100 to 999.
  *
  * The writer embeds an IoWriter, so http_response_writer_as_io_writer is what
- * the fmt and io functions take. */
+ * the fmt and io functions take.
+ *
+ * The rest are the methods Go finds on a writer with a type assertion, and
+ * each is NULL in a writer that does not have it, which a zeroed member is.
+ * HttpResponseController is the way to call them. flush is Go's FlushError,
+ * or Flush with no error to give. hijack, set_read_deadline,
+ * set_write_deadline, enable_full_duplex and close_notify are the methods of
+ * the same names, and unwrap gives the writer this one wraps, for a
+ * middleware writer that wants the controller to reach the methods of the one
+ * under it. */
+struct HttpResponseWriter;
+
 typedef struct HttpResponseWriterVT {
     IoWriterVT writer;
     HttpHeader (*header)(void *self);
     void (*write_header)(void *self, Int status_code);
+    Error (*flush)(void *self);
+    NetConn (*hijack)(void *self, BufioReadWriter *buf, Error *err);
+    Error (*set_read_deadline)(void *self, Time deadline);
+    Error (*set_write_deadline)(void *self, Time deadline);
+    Error (*enable_full_duplex)(void *self);
+    Chan *(*close_notify)(void *self);
+    struct HttpResponseWriter (*unwrap)(void *self);
 } HttpResponseWriterVT;
 
 typedef struct HttpResponseWriter {
@@ -945,6 +965,278 @@ void http_protocols_set_unencrypted_http2(HttpProtocols *p, bool ok);
 
 /* Protocols.String, such as "{HTTP1,HTTP2}". */
 BURROW_STATIC(ret) Str http_protocols_string(HttpProtocols p);
+
+/* ------------------------------------------------------------------- Server */
+
+/* http.ErrServerClosed, from http_server_serve and
+ * http_server_listen_and_serve once the server is closed or shutting down. */
+extern const Error http_err_server_closed;
+
+/* http.ErrHijacked, from writing to a response whose connection a handler has
+ * hijacked, and from hijacking it again. */
+extern const Error http_err_hijacked;
+
+/* http.ErrContentLength, from writing more than the Content-Length the
+ * handler set. */
+extern const Error http_err_content_length;
+
+/* http.ErrAbortHandler. A handler that panics with it, as an Error, ends the
+ * response and the connection without the server logging the panic:
+ *
+ *     panic(BURROW_ANY(TYPE_ERROR, &http_err_abort_handler));
+ */
+extern const Error http_err_abort_handler;
+
+/* http.ErrNotSupported, which HttpResponseController's functions wrap when the
+ * writer does not have the method. Its text is "feature not supported". */
+extern const Error http_err_not_supported;
+
+/* http.DefaultMaxHeaderBytes and DefaultMaxHeaderValueCount, the most bytes a
+ * request's first line and header may have, and the most header values, when
+ * the server does not say. */
+#define HTTP_DEFAULT_MAX_HEADER_BYTES ((Int)1 << 20)
+#define HTTP_DEFAULT_MAX_HEADER_VALUE_COUNT ((Int)500)
+
+/* http.ConnState, where a connection to a server is in its life. A connection
+ * is new when it has been accepted and nothing has been read from it, active
+ * once a byte of a request has come, idle when it is waiting for the next
+ * request, hijacked when a handler has taken it, and closed. Hijacked and
+ * closed are where a connection ends. */
+typedef enum HttpConnState {
+    HTTP_STATE_NEW,
+    HTTP_STATE_ACTIVE,
+    HTTP_STATE_IDLE,
+    HTTP_STATE_HIJACKED,
+    HTTP_STATE_CLOSED,
+} HttpConnState;
+
+/* ConnState.String, such as "idle", and "" for a state that is not one. */
+BURROW_STATIC(ret) Str http_conn_state_string(HttpConnState s);
+
+/* Server.ConnState, called each time a connection changes state. */
+BURROW_FUNC(HttpConnStateFunc, void, NetConn c, HttpConnState state);
+
+/* Server.BaseContext, the context the requests on l start from. It may not
+ * give the nil Context, and what it gives has to outlive every connection l
+ * accepts. */
+BURROW_FUNC(HttpBaseContextFunc, Context, NetListener l);
+
+/* Server.ConnContext, the context for the requests on c, made from ctx. It may
+ * not give the nil Context, and what it gives has to outlive c. */
+BURROW_FUNC(HttpConnContextFunc, Context, Context ctx, NetConn c);
+
+/* http.Server, an HTTP/1 server. Fill in the fields wanted and leave the rest
+ * zero, which is Go's &http.Server{...}:
+ *
+ *     HttpServer srv = {.addr = BURROW_S(":8080"), .handler = h};
+ *     Error err = http_server_listen_and_serve(&srv);
+ *     http_server_free(&srv);
+ *
+ * addr is where http_server_listen_and_serve listens, ":http" when it is "".
+ * handler answers every request, and with no vt it is
+ * http_default_serve_mux. An OPTIONS request for "*" gets a 200 with no body
+ * instead, unless disable_general_options_handler is set.
+ *
+ * read_timeout is how long reading a request may take, body and all, and
+ * read_header_timeout the time for the first line and the header, which is
+ * read_timeout when it is zero. write_timeout is how long writing a response
+ * may take, from the end of reading the request's header. idle_timeout is how
+ * long a connection waits for the next request, read_timeout when it is zero.
+ * Zero, or less, is no limit for each of them.
+ *
+ * max_header_bytes is the most a request's first line and header may have,
+ * HTTP_DEFAULT_MAX_HEADER_BYTES when it is zero or less, and a request with
+ * more gets a 431. max_header_value_count is the most header values,
+ * HTTP_DEFAULT_MAX_HEADER_VALUE_COUNT when it is zero or less.
+ *
+ * conn_state, base_context and conn_context are the hooks of those names, and
+ * error_log is where the server logs what goes wrong with a connection, and
+ * log's standard logger when it is NULL. protocols is the protocols the
+ * server speaks, and only HTTP/1 is here so far, so a server whose protocols
+ * leave it out serves nothing. NULL, or the empty set, is HTTP/1.
+ *
+ * a is where the server makes each connection and request, and the heap when
+ * it is NULL. It has to be one that any goroutine can use at once.
+ *
+ * A connection is served on a goroutine of its own and freed when it is done,
+ * and so is a connection a NetTCPListener or a NetUnixListener accepted. One
+ * from another kind of listener is closed but stays the listener's to free.
+ * The rest of the struct is the server's own, and the server is not to be
+ * copied once it has started. */
+typedef struct HttpServer {
+    Str addr;
+    HttpHandler handler;
+    bool disable_general_options_handler;
+    Duration read_timeout;
+    Duration read_header_timeout;
+    Duration write_timeout;
+    Duration idle_timeout;
+    Int max_header_bytes;
+    Int max_header_value_count;
+    HttpConnStateFunc conn_state;
+    LogLogger *error_log;
+    HttpBaseContextFunc base_context;
+    HttpConnContextFunc conn_context;
+    const HttpProtocols *protocols;
+    Alloc *a;
+
+    /* The server's own. */
+    SyncAtomicBool in_shutdown;
+    SyncAtomicBool disable_keep_alives;
+    SyncMutex mu;
+    struct burrow__HttpServeListener *listeners;
+    struct burrow__HttpServeConn *active_conn;
+    Slice on_shutdown; /* of Func */
+    SyncWaitGroup listener_group;
+    SyncWaitGroup conn_group;
+} HttpServer;
+
+/* Server.Serve. Accepts connections on l and serves each on a goroutine of
+ * its own, until l fails. A failure that is temporary is tried again after a
+ * pause. Closes l before it returns. The result is http_err_server_closed after
+ * http_server_close or http_server_shutdown, and otherwise the error from the
+ * accept. */
+BURROW_BORROWS(ret) Error http_server_serve(HttpServer *s, NetListener l);
+
+/* Server.ListenAndServe. Listens on TCP at the server's addr and serves the
+ * connections with http_server_serve. A host in addr is an IP address or a
+ * name from the hosts file, and the port a number or a service such as "http".
+ * Its result is never BURROW_NO_ERROR, and is http_err_server_closed after
+ * http_server_close or http_server_shutdown. */
+BURROW_OWNS(ret) Error http_server_listen_and_serve(HttpServer *s);
+
+/* Server.Close. Closes every listener and every connection now, including
+ * those with a request being handled, but not the ones hijacked. Waits for
+ * the listeners' http_server_serve calls to stop accepting. The result is the
+ * first error from closing a listener. */
+BURROW_BORROWS(ret) Error http_server_close(HttpServer *s);
+
+/* Server.Shutdown. Closes every listener, then closes the idle connections
+ * and waits, checking more and more slowly, for the others to go idle. Gives
+ * the first error from closing a listener once every connection is closed,
+ * or ctx's error if ctx is done first, which leaves the rest open. Calls the
+ * functions given to http_server_register_on_shutdown, each on a goroutine of
+ * its own. http_server_serve returns at once with http_err_server_closed, so
+ * a program has to wait for this to return before it ends. Hijacked
+ * connections are not waited for. */
+BURROW_BORROWS(ret) Error http_server_shutdown(HttpServer *s, Context ctx);
+
+/* Server.RegisterOnShutdown. f runs when http_server_shutdown is called, to
+ * close what a connection that has been hijacked, or one with some other
+ * protocol, has open. False when the server's allocator says no. */
+bool http_server_register_on_shutdown(HttpServer *s, Func f);
+
+/* Server.SetKeepAlivesEnabled. Whether a connection is kept open for more
+ * than one request, which is the default. Turning it off closes the idle
+ * connections. */
+void http_server_set_keep_alives_enabled(HttpServer *s, bool v);
+
+/* Waits for the goroutine of every connection the server has served to end,
+ * and gives back what the server holds. Not while it is serving, so after
+ * http_server_serve has returned and http_server_close or
+ * http_server_shutdown has closed the connections, or the wait is for clients
+ * to hang up. A handler still running keeps it waiting. */
+void http_server_free(HttpServer *s);
+
+/* http.Serve and http.ListenAndServe, with a server that has only a handler,
+ * and the connections made in the heap. A handler with no vt is
+ * http_default_serve_mux. */
+BURROW_BORROWS(ret) Error http_serve(NetListener l, HttpHandler handler);
+BURROW_OWNS(ret) Error http_listen_and_serve(Str addr, HttpHandler handler);
+
+/* http.ServerContextKey and LocalAddrContextKey, the keys of the request
+ * context's values for the HttpServer, as TYPE_HTTP_SERVER and a pointer to
+ * it, and for the local address of the connection the request came on, as the
+ * NetAddr's type and data. */
+extern const Any http_server_context_key;
+extern const Any http_local_addr_context_key;
+
+extern const Type *const TYPE_HTTP_SERVER;
+
+/* http.ResponseController, which reaches the methods a ResponseWriter may
+ * have beyond the three every one has, by way of unwrap when the writer
+ * wraps another. Each function gives an error wrapping
+ * http_err_not_supported when no writer in the chain has the method. */
+typedef struct HttpResponseController {
+    HttpResponseWriter rw;
+} HttpResponseController;
+
+/* http.NewResponseController. */
+HttpResponseController http_new_response_controller(HttpResponseWriter rw);
+
+/* ResponseController.Flush, which sends what has been written to the client. */
+BURROW_BORROWS(ret) Error http_response_controller_flush(HttpResponseController *c);
+
+/* ResponseController.Hijack. Takes the connection from the server, which
+ * neither writes to it nor reads from it after this, and gives it with *buf,
+ * the server's reader, which may already hold bytes from the client, and its
+ * writer. They are the caller's to close and free: buf->reader with
+ * bufio_reader_free, buf->writer with bufio_writer_free, and the connection the
+ * way its listener's connections are, such as net_tcp_conn_free on
+ * net_conn_as_tcp_conn. The request is the server's still, and is gone once
+ * the handler returns. */
+BURROW_OWNS(ret) NetConn http_response_controller_hijack(HttpResponseController *c,
+                                                         BufioReadWriter *buf,
+                                                         Error *err);
+
+/* ResponseController.SetReadDeadline and SetWriteDeadline. The time by which
+ * the rest of the request's body has to be read, or the response written. A
+ * deadline in the past makes the reads or the writes fail at once, and the
+ * zero Time is none. */
+BURROW_BORROWS(ret) Error
+http_response_controller_set_read_deadline(HttpResponseController *c, Time deadline);
+BURROW_BORROWS(ret) Error
+http_response_controller_set_write_deadline(HttpResponseController *c, Time deadline);
+
+/* ResponseController.EnableFullDuplex. Lets the handler read the request's
+ * body while it writes the response, which an HTTP/1 server otherwise does
+ * not, since a client may not read until it has sent everything. */
+BURROW_BORROWS(ret) Error
+http_response_controller_enable_full_duplex(HttpResponseController *c);
+
+/* http.TimeoutHandler. A handler that gives h dt to answer, and replies with
+ * a 503 and msg when it takes longer, or a short HTML page when msg is "".
+ * h writes to a writer of the handler's own, which keeps what h writes until
+ * h returns and then sends it, and after the time is up gives h
+ * http_err_handler_timeout. h can see the time running out in its request's
+ * context. It does not have the methods HttpResponseController reaches.
+ *
+ * Go's goes on to the next request while h is still running. Here nothing
+ * collects h's request once it is done with, so after sending the 503 the
+ * handler waits for h to return. Made in a, and NULL data when a says no. msg
+ * is not copied. */
+BURROW_OWNS(ret) HttpHandler http_timeout_handler(Alloc *a, HttpHandler h, Duration dt,
+                                                  Str msg);
+
+/* http.ErrHandlerTimeout, which a handler under http_timeout_handler gets from
+ * writing once its time is up. */
+extern const Error http_err_handler_timeout;
+
+/* http.MaxBytesError, what reading past the limit of http_max_bytes_reader
+ * gives. Its text is "http: request body too large", and errors_as with
+ * TYPE_HTTP_MAX_BYTES_ERROR gives the limit. */
+typedef struct HttpMaxBytesError {
+    int64_t limit;
+} HttpMaxBytesError;
+
+extern const Type *const TYPE_HTTP_MAX_BYTES_ERROR;
+
+/* http.MaxBytesReader. A reader of r that gives an HttpMaxBytesError after n
+ * bytes, or after none when n is below zero, and tells the server w belongs to
+ * to close the connection after the response. Closing it closes r. Made in a,
+ * which has to last as long as it does, so the request's arena is the place
+ * for one made in a handler. Nil when a says no. */
+BURROW_OWNS(ret) IoReadCloser http_max_bytes_reader(Alloc *a, HttpResponseWriter w,
+                                                    IoReadCloser r, int64_t n);
+
+/* http.MaxBytesHandler. A handler that calls h with the request's body wrapped
+ * by http_max_bytes_reader, with n. Made in a, and NULL data when a says no. */
+BURROW_OWNS(ret) HttpHandler http_max_bytes_handler(Alloc *a, HttpHandler h, int64_t n);
+
+/* http.AllowQuerySemicolons. A handler that calls h with each ";" in the
+ * request URL's raw query turned into "&", for the old way of separating query
+ * parameters. Made in a, and NULL data when a says no. */
+BURROW_OWNS(ret) HttpHandler http_allow_query_semicolons(Alloc *a, HttpHandler h);
 
 #ifdef __cplusplus
 }

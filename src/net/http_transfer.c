@@ -349,6 +349,7 @@ typedef struct HbBody {
     bool saw_eof;
     bool closed;
     bool early_close; /* Close came before the end of src */
+    Func on_hit_eof;  /* called when the end has been read, nil for none */
 } HbBody;
 
 /* seeUpcomingDoubleCRLF. Peeks until bufio's buffer is full, looking for the
@@ -448,6 +449,8 @@ static Int hb_read_locked(HbBody *b, Slice p, Error *err) {
         e = io_eof;
         b->saw_eof = true;
     }
+    if (b->saw_eof && !BURROW_FUNC_IS_NIL(b->on_hit_eof))
+        BURROW_CALLF0(b->on_hit_eof);
     *err = e;
     return n;
 }
@@ -561,6 +564,31 @@ bool burrow__http_body_remains(void *body) {
 
 void burrow__http_body_set_do_early_close(void *body, bool on) {
     ((HbBody *)body)->do_early_close = on;
+}
+
+void burrow__http_body_register_on_hit_eof(void *body, Func fn) {
+    HbBody *b = (HbBody *)body;
+    if (b == NULL)
+        return;
+    sync_mutex_lock(&b->mu);
+    b->on_hit_eof = fn;
+    sync_mutex_unlock(&b->mu);
+}
+
+Error burrow__http_body_close(void *body) {
+    if (body == NULL)
+        return BURROW_NO_ERROR;
+    return hb_body_close(body);
+}
+
+void burrow__http_body_state(void *body, bool *closed, bool *saw_eof,
+                             int64_t *unread) {
+    HbBody *b = (HbBody *)body;
+    sync_mutex_lock(&b->mu);
+    *closed = b->closed;
+    *saw_eof = b->saw_eof;
+    *unread = b->limited ? b->lr.n : -1;
+    sync_mutex_unlock(&b->mu);
 }
 
 IoReadCloser burrow__http_new_body(Alloc *a, IoReader src, HttpHeader *trailer,

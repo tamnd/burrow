@@ -101,3 +101,4 @@ path/filepath
 crypto/fips140
 net/mail
 log
+net/http/cookiejar

@@ -768,3 +768,44 @@ PENDING
 ```
 
 The Content-Type comes from the file's extension, and from sniffing the first 512 bytes when the extension is unknown. A file with a zero modification time gets no Last-Modified, which is why notes.txt has none. `http_serve_file` and `http_serve_file_fs` serve one named file, and refuse a request whose path has a `..` element in it.
+
+## Cookie jars
+
+`net/http/cookiejar` keeps the cookies a client is sent and picks the ones each request should carry, by the rules of RFC 6265. A cookie with no Domain attribute only goes back to the host that set it, and one with a Domain goes to that domain and every name under it, as long as the host that set it is in that domain. A Secure cookie only goes over https, or to localhost. Cookies with longer paths come first, and among those the ones set earlier come first. A Max-Age of 0, or an Expires in the past, deletes the cookie it names:
+
+<!-- example: ../examples/net/http.c#cookiejar -->
+```c
+Error err;
+CookiejarJar *jar = cookiejar_new(a, NULL, &err);
+Url *from = url_parse(a, BURROW_S("http://www.example.com/shop/"), &err);
+const char *lines[] = {
+    "session=1; Path=/",       "lang=en; Domain=example.com",
+    "cart=3; Max-Age=3600",    "track=x; Domain=other.com",
+    "admin=1; Path=/; Secure",
+};
+Slice set = slice_make(a, TYPE_HTTP_COOKIE, 0, 5);
+for (size_t i = 0; i < sizeof lines / sizeof lines[0]; i++) {
+    HttpCookie c = http_parse_set_cookie(a, str_from_cstr(lines[i]), &err);
+    set = slice_append(a, set, &c, 1);
+}
+cookiejar_jar_set_cookies(jar, from, set);
+
+show_cookies(jar, a, "http://www.example.com/shop/basket");
+show_cookies(jar, a, "https://www.example.com/");
+show_cookies(jar, a, "https://api.example.com/");
+show_cookies(jar, a, "http://other.com/");
+
+HttpCookie gone =
+    http_parse_set_cookie(a, BURROW_S("session=; Path=/; Max-Age=0"), &err);
+cookiejar_jar_set_cookies(jar, from, slice_from(&gone, 1, 1, TYPE_HTTP_COOKIE));
+show_cookies(jar, a, "https://www.example.com/shop/basket");
+cookiejar_jar_free(jar);
+```
+
+That prints:
+
+```
+PENDING
+```
+
+`cookiejar_new` takes options with a public suffix list, which is what stops a server for foo.co.uk from setting a cookie for every site under co.uk. Without one, as here, the jar can't tell co.uk from example.com, so don't leave it out in a client that talks to sites you don't trust. Go's list is in golang.org/x/net/publicsuffix, which burrow doesn't have yet, and any `CookiejarPublicSuffixList` you write works. The jar copies what it keeps into the allocator you gave `cookiejar_new`, so the cookies you hand it can go away as soon as the call returns, and `cookiejar_jar_cookies` gives copies in the allocator you pass. `cookiejar_jar_as_cookie_jar` gives the jar as an `HttpCookieJar`, the interface Go's client takes.

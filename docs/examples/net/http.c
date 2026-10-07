@@ -292,6 +292,48 @@ static void files(Alloc *a) {
     // doc: end
 }
 
+static void show_cookies(CookiejarJar *jar, Alloc *a, const char *target) {
+    Error err;
+    Url *u = url_parse(a, str_from_cstr(target), &err);
+    Slice got = cookiejar_jar_cookies(jar, a, u);
+    printf("%s:", target);
+    for (Int i = 0; i < got.len; i++) {
+        HttpCookie c = BURROW_AT(HttpCookie, got, i);
+        printf(" %.*s=%.*s", P(c.name), P(c.value));
+    }
+    printf("\n");
+}
+
+static void jar(Alloc *a) {
+    // doc: cookiejar
+    Error err;
+    CookiejarJar *jar = cookiejar_new(a, NULL, &err);
+    Url *from = url_parse(a, BURROW_S("http://www.example.com/shop/"), &err);
+    const char *lines[] = {
+        "session=1; Path=/",       "lang=en; Domain=example.com",
+        "cart=3; Max-Age=3600",    "track=x; Domain=other.com",
+        "admin=1; Path=/; Secure",
+    };
+    Slice set = slice_make(a, TYPE_HTTP_COOKIE, 0, 5);
+    for (size_t i = 0; i < sizeof lines / sizeof lines[0]; i++) {
+        HttpCookie c = http_parse_set_cookie(a, str_from_cstr(lines[i]), &err);
+        set = slice_append(a, set, &c, 1);
+    }
+    cookiejar_jar_set_cookies(jar, from, set);
+
+    show_cookies(jar, a, "http://www.example.com/shop/basket");
+    show_cookies(jar, a, "https://www.example.com/");
+    show_cookies(jar, a, "https://api.example.com/");
+    show_cookies(jar, a, "http://other.com/");
+
+    HttpCookie gone =
+        http_parse_set_cookie(a, BURROW_S("session=; Path=/; Max-Age=0"), &err);
+    cookiejar_jar_set_cookies(jar, from, slice_from(&gone, 1, 1, TYPE_HTTP_COOKIE));
+    show_cookies(jar, a, "https://www.example.com/shop/basket");
+    cookiejar_jar_free(jar);
+    // doc: end
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -304,6 +346,7 @@ int main(void) {
     route(a);
     recorder(a);
     files(a);
+    jar(a);
     arena_free(&ar);
     return 0;
 }

@@ -281,6 +281,37 @@ BURROW_OWNS(ret) Str http_cookie_string(Alloc *a, const HttpCookie *c);
  * that does not belong is made by fmt_errorf, and the others are static. */
 BURROW_BORROWS(ret) Error http_cookie_valid(const HttpCookie *c);
 
+/* http.CookieJar, which keeps the cookies a client is sent and picks the ones
+ * to send back. set_cookies is handed the cookies of a response from u, a
+ * Slice of HttpCookie, and may keep them or not as its rules say. cookies
+ * gives the ones a request to u should carry, as a Slice of HttpCookie from a,
+ * and it is up to the jar to keep to the rules of RFC 6265 about which those
+ * are. Neither keeps u or anything in the cookies it is given. A jar has to be
+ * safe to use from more than one goroutine at once. net/http/cookiejar has
+ * one. */
+typedef struct HttpCookieJarVT {
+    const Type *self_type;
+    void (*set_cookies)(void *self, const Url *u, Slice cookies);
+    Slice (*cookies)(void *self, Alloc *a, const Url *u);
+} HttpCookieJarVT;
+
+typedef struct HttpCookieJar {
+    const HttpCookieJarVT *vt;
+    void *data;
+} HttpCookieJar;
+
+/* CookieJar.SetCookies. */
+static inline void http_cookie_jar_set_cookies(HttpCookieJar j, const Url *u,
+                                               Slice cookies) {
+    j.vt->set_cookies(j.data, u, cookies);
+}
+
+/* CookieJar.Cookies. */
+BURROW_OWNS(ret) static inline Slice http_cookie_jar_cookies(HttpCookieJar j, Alloc *a,
+                                                             const Url *u) {
+    return j.vt->cookies(j.data, a, u);
+}
+
 /* ------------------------------------------------------------------ Request */
 
 /* http.NoBody, a body with no bytes in it. Reading gives io_eof at once and
@@ -779,7 +810,7 @@ BURROW_BORROWS(ret, mux) HttpHandler http_serve_mux_as_handler(HttpServeMux *mux
 typedef struct HttpFileVT {
     IoReadCloserVT read_closer;
     int64_t (*seek)(void *self, int64_t offset, int whence, Error *err);
-    Slice (*readdir)(void *self, Alloc *a, Int count, Error *err);   /* of FsFileInfo */
+    Slice (*readdir)(void *self, Alloc *a, Int count, Error *err); /* of FsFileInfo */
     FsFileInfo (*stat)(void *self, Alloc *a, Error *err);
     Slice (*read_dir)(void *self, Alloc *a, Int count, Error *err); /* of FsDirEntry */
 } HttpFileVT;

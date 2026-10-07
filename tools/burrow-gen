@@ -700,6 +700,27 @@ class Packages:
                     "burrow:package line" % (s, first or "none")
                 )
             self.owner[s] = self.owner[first]
+        # A public header with no package line, like the generated ones under
+        # include/burrow/syscall, goes with the package whose files include it
+        # when they are all in one package. Otherwise a --packages list without
+        # that package would still paste it, and what it declares would have
+        # nothing to stand on.
+        includers = {}
+        for f in list(headers) + list(sources):
+            for line in lines_of(f):
+                m = AMALG_INCLUDE.match(line)
+                if m:
+                    includers.setdefault(amalg_header_path(m.group(1), f), set()).add(f)
+        changed = True
+        while changed:
+            changed = False
+            for h in headers:
+                if h in self.owner or not h.startswith("include/") or h not in includers:
+                    continue
+                got = set(self.owner.get(f) for f in includers[h])
+                if len(got) == 1 and None not in got:
+                    self.owner[h] = got.pop()
+                    changed = True
 
         self.names = sorted(set(self.owner.values()))
         reached = {}

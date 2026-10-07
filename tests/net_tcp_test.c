@@ -10,8 +10,10 @@
 
 #include "burrow/burrow.h"
 #include "burrow/io.h"
+#include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
 #include "burrow/net.h"
+#include "burrow/netpoll.h"
 #include "burrow/os.h"
 #include "burrow/sync.h"
 #include "burrow/time.h"
@@ -89,18 +91,24 @@ static NetTCPListener *listen_loop4(TestingT *t) {
 
 /* ------------------------------------------------------------- the echo */
 
+/* The errors the jobs below hand back are made on their own goroutines, whose
+ * error arenas go when they end, so they keep them in an arena of the test's. */
 typedef struct EchoJob {
     NetTCPListener *l;
     Error err;
+    Arena keep;
     char remote[64];
 } EchoJob;
 
 /* Accepts one connection and writes back what it reads until the end. */
 static void echo_job(void *env) {
     EchoJob *j = env;
-    NetTCPConn *c = net_tcp_listener_accept_tcp(j->l, &j->err);
-    if (c == NULL)
+    Error ae = BURROW_NO_ERROR;
+    NetTCPConn *c = net_tcp_listener_accept_tcp(j->l, &ae);
+    if (c == NULL) {
+        j->err = error_retain(arena_allocator(&j->keep), ae);
         return;
+    }
     (void)addr_text(net_tcp_conn_remote_addr(c), j->remote, sizeof j->remote);
     char buf[256];
     for (;;) {
@@ -110,7 +118,7 @@ static void echo_job(void *env) {
             (void)net_tcp_conn_write(c, bytes_of(buf, n), NULL);
         if (BURROW_FAILED(e)) {
             if (!errors_is(e, io_eof))
-                j->err = e;
+                j->err = error_retain(arena_allocator(&j->keep), e);
             break;
         }
     }
@@ -125,6 +133,7 @@ static void TestADialedConnectionTalksToTheOneAccepted(TestingT *t) {
     Int port = port_of(net_tcp_listener_addr(l));
     CHECK(port > 0);
     EchoJob j = {.l = l};
+    arena_init(&j.keep, NULL, 0);
     SyncWaitGroup wg = {0};
     sync_wait_group_go(&wg, BURROW_FN(Func, echo_job, &j));
 
@@ -166,6 +175,7 @@ static void TestADialedConnectionTalksToTheOneAccepted(TestingT *t) {
     net_tcp_conn_free(c);
     CHECK(!BURROW_FAILED(net_tcp_listener_close(l)));
     net_tcp_listener_free(l);
+    arena_free(&j.keep);
 }
 
 static void TestAConnectionCanBeUsedAsANetConn(TestingT *t) {
@@ -286,11 +296,14 @@ typedef struct AcceptJob {
     NetTCPListener *l;
     NetTCPConn *c;
     Error err;
+    Arena keep;
 } AcceptJob;
 
 static void accept_job(void *env) {
     AcceptJob *j = env;
-    j->c = net_tcp_listener_accept_tcp(j->l, &j->err);
+    Error e = BURROW_NO_ERROR;
+    j->c = net_tcp_listener_accept_tcp(j->l, &e);
+    j->err = error_retain(arena_allocator(&j->keep), e);
 }
 
 static void TestACloseWakesAnAccept(TestingT *t) {
@@ -300,6 +313,7 @@ static void TestACloseWakesAnAccept(TestingT *t) {
         return;
     Int port = port_of(net_tcp_listener_addr(l));
     AcceptJob j = {.l = l};
+    arena_init(&j.keep, NULL, 0);
     SyncWaitGroup wg = {0};
     sync_wait_group_go(&wg, BURROW_FN(Func, accept_job, &j));
     time_sleep(20 * TIME_MILLISECOND);
@@ -318,6 +332,7 @@ static void TestACloseWakesAnAccept(TestingT *t) {
              "close tcp 127.0.0.1:%d: use of closed network connection", (int)port);
     CHECK_STR_EQ(text_of(net_tcp_listener_close(l), buf, sizeof buf), want);
     net_tcp_listener_free(l);
+    arena_free(&j.keep);
 }
 
 static void TestAReadPastItsDeadlineTimesOut(TestingT *t) {

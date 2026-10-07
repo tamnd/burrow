@@ -29,7 +29,9 @@
 #include "burrow/net/url.h"
 #include "burrow/netpoll.h"
 #include "burrow/panic.h"
+#include "burrow/proc.h"
 #include "burrow/strings.h"
+#include "burrow/time.h"
 
 #if defined(BURROW_NETPOLL_READINESS) && !defined(BURROW_OS_WASI)
 #define HAVE_TCP 1
@@ -918,8 +920,19 @@ static void serve_requested_hostname(void *env, HttpResponseWriter w, HttpReques
                           str_clone(burrow__map_allocator(h), r->host));
 }
 
+/* A client's read and write loops finish on their own after a connection
+ * closes, in Go and here. A C test binary frees what they hold when it exits,
+ * though, and one still on its way out then looks like a leak to ASAN, so the
+ * tests that leave one wait up to five seconds for the count to come back. */
+static void wait_for_goroutines(int want) {
+    http_transport_close_idle_connections(http_default_transport);
+    for (int i = 0; i < 5000 && runtime_numgoroutine() > want; i++)
+        time_sleep(TIME_MILLISECOND);
+}
+
 static void client_example_com(void *env, TestingT *t) {
     need_tcp(t);
+    int ng = runtime_numgoroutine();
     Str host = *(const Str *)env;
     HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_requested_hostname, NULL);
     HttptestServer *cst =
@@ -943,6 +956,7 @@ static void client_example_com(void *env, TestingT *t) {
     }
     arena_free(&ar);
     httptest_server_free(cst);
+    wait_for_goroutines(ng);
 }
 
 static void TestClientExampleCom(TestingT *t) {
@@ -1044,6 +1058,7 @@ static void hijack_close_server(void *env) {
  * with closing the server. */
 static void TestCloseHijackedConnection(TestingT *t) {
     need_tcp(t);
+    int ng = runtime_numgoroutine();
     Hijack h;
     memset(&h, 0, sizeof h);
     sync_wait_group_add(&h.hijacked, 1);
@@ -1064,6 +1079,7 @@ static void TestCloseHijackedConnection(TestingT *t) {
     sync_wait_group_wait(&wg);
     net_conn_free(h.conn);
     httptest_server_free(h.ts);
+    wait_for_goroutines(ng);
 }
 
 #define TESTS(X)                                                                       \

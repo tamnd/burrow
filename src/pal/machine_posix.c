@@ -167,4 +167,15 @@ int64_t pal_hostname(char *buf, int64_t cap, PalErrno *err) {
     return (int64_t)n;
 }
 
+int64_t pal_hosts_path(char *buf, int64_t cap, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    static const char path[] = "/etc/hosts";
+    if (buf == NULL || cap < (int64_t)sizeof path) {
+        BURROW_OUT(err, PAL_ERANGE);
+        return -1;
+    }
+    memcpy(buf, path, sizeof path);
+    return (int64_t)sizeof path - 1;
+}
+
 #endif /* !BURROW_OS_WINDOWS */

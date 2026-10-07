@@ -88,6 +88,13 @@ Error burrow__pfd_decref(burrow__PollFD *fd);
 Int burrow__pfd_read(burrow__PollFD *fd, Slice p, Error *err);
 Int burrow__pfd_read_from(burrow__PollFD *fd, Slice p, PalSockAddr *from, Error *err);
 
+/* poll.FD.ReadMsg and WriteMsg: one message, with its control messages in
+ * oob. from may be NULL and to is NULL on a connected socket. */
+Int burrow__pfd_read_msg(burrow__PollFD *fd, Slice p, Slice oob, Int *oobn, Int *flags,
+                         PalSockAddr *from, Error *err);
+Int burrow__pfd_write_msg(burrow__PollFD *fd, Slice p, Slice oob, const PalSockAddr *to,
+                          Int *oobn, Error *err);
+
 /* poll.FD.Write, which writes all of p unless something fails, and WriteTo,
  * which sends one datagram to `to`. */
 Int burrow__pfd_write(burrow__PollFD *fd, Slice p, Error *err);
@@ -234,6 +241,13 @@ Int burrow__netfd_write_to(burrow__NetFD *fd, Slice p, const PalSockAddr *to,
 /* What making the sockaddr for a write_to failed with, as Go gives it, which
  * for burrow__net_err_sockaddr_einval is the send's EINVAL. */
 Error burrow__netfd_write_to_error(Error err);
+
+/* netFD.readMsg and writeMsg, and the write_msg twin of the one above. */
+Int burrow__netfd_read_msg(burrow__NetFD *fd, Slice p, Slice oob, Int *oobn, Int *flags,
+                           PalSockAddr *from, Error *err);
+Int burrow__netfd_write_msg(burrow__NetFD *fd, Slice p, Slice oob, const PalSockAddr *to,
+                            Int *oobn, Error *err);
+Error burrow__netfd_write_msg_error(Error err);
 
 /* netFD.shutdown, with PAL_SHUT_RD or PAL_SHUT_WR. */
 Error burrow__netfd_shutdown(burrow__NetFD *fd, int32_t how);

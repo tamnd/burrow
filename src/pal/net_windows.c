@@ -38,6 +38,8 @@
 
 #include <windows.h>
 
+#include <mswsock.h>
+
 #if !defined(WSA_FLAG_NO_HANDLE_INHERIT)
 #define WSA_FLAG_NO_HANDLE_INHERIT 0x80
 #endif
@@ -415,6 +417,101 @@ int64_t pal_recvfrom(int64_t fd, void *buf, int64_t n, PalSockAddr *from,
     if (!wnet_from_native(&ss, len, from))
         from->family = PAL_AF_UNSPEC;
     return (int64_t)r;
+}
+
+/* WSARecvMsg and WSASendMsg, which are reached through the socket rather
+ * than linked, as Go reaches them. */
+static void *wnet_extension(SOCKET s, GUID id, PalErrno *err) {
+    void *fn = NULL;
+    DWORD got = 0;
+    if (WSAIoctl(s, SIO_GET_EXTENSION_FUNCTION_POINTER, &id, (DWORD)sizeof id, &fn,
+                 (DWORD)sizeof fn, &got, NULL, NULL) != 0) {
+        (void)wnet_fail(err);
+        return NULL;
+    }
+    return fn;
+}
+
+int64_t pal_recvmsg(int64_t fd, void *buf, int64_t n, void *oob, int64_t oobcap,
+                    int64_t *oobn, int32_t *flags, PalSockAddr *from, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (oobn != NULL)
+        *oobn = 0;
+    if (flags != NULL)
+        *flags = 0;
+    if (!wnet_fd_ok(fd, err))
+        return -1;
+    if ((buf == NULL && n > 0) || (oob == NULL && oobcap > 0)) {
+        BURROW_OUT(err, PAL_EFAULT);
+        return -1;
+    }
+    static const GUID id = WSAID_WSARECVMSG;
+    LPFN_WSARECVMSG recvmsg_fn = NULL;
+    void *fn = wnet_extension((SOCKET)fd, id, err);
+    if (fn == NULL)
+        return -1;
+    memcpy(&recvmsg_fn, &fn, sizeof recvmsg_fn);
+    struct sockaddr_storage ss;
+    memset(&ss, 0, sizeof ss);
+    WSABUF data;
+    data.len = (ULONG)wnet_count(n);
+    data.buf = (char *)buf;
+    WSAMSG msg;
+    memset(&msg, 0, sizeof msg);
+    msg.name = (struct sockaddr *)&ss;
+    msg.namelen = (INT)sizeof ss;
+    msg.lpBuffers = &data;
+    msg.dwBufferCount = 1;
+    msg.Control.len = (ULONG)wnet_count(oobcap);
+    msg.Control.buf = (char *)oob;
+    DWORD got = 0;
+    if (recvmsg_fn((SOCKET)fd, &msg, &got, NULL, NULL) != 0)
+        return wnet_fail_n(err);
+    if (oobn != NULL)
+        *oobn = (int64_t)msg.Control.len;
+    if (flags != NULL)
+        *flags = (int32_t)msg.dwFlags;
+    if (from != NULL && !wnet_from_native(&ss, msg.namelen, from))
+        from->family = PAL_AF_UNSPEC;
+    return (int64_t)got;
+}
+
+int64_t pal_sendmsg(int64_t fd, const void *buf, int64_t n, const void *oob,
+                    int64_t oobn, const PalSockAddr *to, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!wnet_fd_ok(fd, err))
+        return -1;
+    if ((buf == NULL && n > 0) || (oob == NULL && oobn > 0)) {
+        BURROW_OUT(err, PAL_EFAULT);
+        return -1;
+    }
+    struct sockaddr_storage ss;
+    int sslen = 0;
+    if (to != NULL && !wnet_to_native(to, &ss, &sslen, err))
+        return -1;
+    static const GUID id = WSAID_WSASENDMSG;
+    LPFN_WSASENDMSG sendmsg_fn = NULL;
+    void *fn = wnet_extension((SOCKET)fd, id, err);
+    if (fn == NULL)
+        return -1;
+    memcpy(&sendmsg_fn, &fn, sizeof sendmsg_fn);
+    WSABUF data;
+    data.len = (ULONG)wnet_count(n);
+    data.buf = (char *)(uintptr_t)buf;
+    WSAMSG msg;
+    memset(&msg, 0, sizeof msg);
+    if (to != NULL) {
+        msg.name = (struct sockaddr *)&ss;
+        msg.namelen = sslen;
+    }
+    msg.lpBuffers = &data;
+    msg.dwBufferCount = 1;
+    msg.Control.len = (ULONG)wnet_count(oobn);
+    msg.Control.buf = (char *)(uintptr_t)oob;
+    DWORD sent = 0;
+    if (sendmsg_fn((SOCKET)fd, &msg, 0, &sent, NULL, NULL) != 0)
+        return wnet_fail_n(err);
+    return (int64_t)sent;
 }
 
 /* The level and name of an option, and whether it is on or off rather than a

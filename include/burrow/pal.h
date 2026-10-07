@@ -1683,6 +1683,27 @@ int64_t pal_sendto(int64_t fd, const void *buf, int64_t n, const PalSockAddr *ad
 int64_t pal_recvfrom(int64_t fd, void *buf, int64_t n, PalSockAddr *from,
                      PalErrno *err);
 
+/* recvmsg and sendmsg, with one buffer of data, and oob for the control
+ * messages as the system lays them out, which is what Go's ReadMsgUDP and the
+ * rest hand their callers.
+ *
+ * pal_recvmsg answers how much it read, sets *oobn to how much of oob it
+ * filled and *flags to the flags the system set on the message, in the
+ * system's own MSG_ bits, and fills in *from, which may be NULL. pal_sendmsg
+ * answers how much of buf went, and sends to `to`, NULL on a connected
+ * socket.
+ *
+ * A stream needs at least one byte of data to carry control messages, so
+ * with some oob and an empty buf, both move a byte of their own, as Go's
+ * syscall package does, which on Linux and AIX leaves datagram sockets out. pal_recvmsg counts
+ * that byte, and pal_sendmsg answers 0 whenever there is oob and no data.
+ * Descriptors that arrive in an SCM_RIGHTS message are close-on-exec, as
+ * Go's UnixConn makes them. */
+int64_t pal_recvmsg(int64_t fd, void *buf, int64_t n, void *oob, int64_t oobcap,
+                    int64_t *oobn, int32_t *flags, PalSockAddr *from, PalErrno *err);
+int64_t pal_sendmsg(int64_t fd, const void *buf, int64_t n, const void *oob,
+                    int64_t oobn, const PalSockAddr *to, PalErrno *err);
+
 /* Socket options, ours, for the same reason the signal numbers are: the level
  * and name pairs differ between platforms and a caller should not have to know
  * which. The set is what Go's net package actually sets, and it grows from

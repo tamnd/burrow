@@ -758,6 +758,30 @@ Int net_udp_conn_write_to_udp_addr_port(NetUDPConn *c, Slice p, NetipAddrPort ad
                                         Error *err);
 Int net_udp_conn_write_to(NetUDPConn *c, Slice p, NetAddr addr, Error *err);
 
+/* ReadMsgUDP: a datagram into p and its control messages into oob. *oobn is
+ * how much of oob they took, *flags the flags the system set on the message,
+ * in its own MSG_ bits, and *addr the sender, made in a, or NULL when there
+ * is none to give. Any of oobn, flags and addr may be NULL to not ask. The
+ * control messages are as the system lays them out, for
+ * syscall_parse_socket_control_message to pick apart. */
+Int net_udp_conn_read_msg_udp(NetUDPConn *c, Slice p, Slice oob, Alloc *a, Int *oobn,
+                              Int *flags, NetUDPAddr **addr, Error *err);
+
+/* ReadMsgUDPAddrPort, which needs no memory for the sender. */
+Int net_udp_conn_read_msg_udp_addr_port(NetUDPConn *c, Slice p, Slice oob, Int *oobn,
+                                        Int *flags, NetipAddrPort *addr, Error *err);
+
+/* WriteMsgUDP: p as one datagram to addr, with the control messages in oob.
+ * addr is NULL on a connected conn, and must not be on one that is not. It
+ * gives back how much of p went, and in *oobn how much of oob, which is all
+ * of it when the message went. oobn may be NULL. */
+Int net_udp_conn_write_msg_udp(NetUDPConn *c, Slice p, Slice oob, const NetUDPAddr *addr,
+                               Int *oobn, Error *err);
+
+/* WriteMsgUDPAddrPort, with the zero NetipAddrPort for no address. */
+Int net_udp_conn_write_msg_udp_addr_port(NetUDPConn *c, Slice p, Slice oob,
+                                         NetipAddrPort addr, Int *oobn, Error *err);
+
 /* conn.Close, LocalAddr, RemoteAddr and the setters, as for TCP. A
  * connection from net_listen_udp has no remote address. */
 BURROW_STATIC(ret) Error net_udp_conn_close(NetUDPConn *c);
@@ -875,6 +899,17 @@ Int net_unix_conn_read_from(NetUnixConn *c, Slice p, Alloc *a, NetAddr *addr,
 Int net_unix_conn_write_to_unix(NetUnixConn *c, Slice p, const NetUnixAddr *addr,
                                 Error *err);
 Int net_unix_conn_write_to(NetUnixConn *c, Slice p, NetAddr addr, Error *err);
+
+/* ReadMsgUnix and WriteMsgUnix, as UDP has them, which is how descriptors go
+ * between processes: syscall_unix_rights makes the oob that sends them and
+ * syscall_parse_unix_rights reads it back. The descriptors that arrive are
+ * close-on-exec. A stream that has ended reads as io_eof, not wrapped, as
+ * read does. addr may be NULL to write on a connected socket, and has to be
+ * on a connected datagram one. */
+Int net_unix_conn_read_msg_unix(NetUnixConn *c, Slice p, Slice oob, Alloc *a, Int *oobn,
+                                Int *flags, NetUnixAddr **addr, Error *err);
+Int net_unix_conn_write_msg_unix(NetUnixConn *c, Slice p, Slice oob,
+                                 const NetUnixAddr *addr, Int *oobn, Error *err);
 
 /* Close, CloseRead and CloseWrite, as TCP has them, and the rest of
  * NetConn. */
@@ -1003,6 +1038,14 @@ Int net_ip_conn_read_from(NetIPConn *c, Slice p, Alloc *a, NetAddr *addr, Error 
  * NetIPAddr. A connection that was dialed gives net_err_write_to_connected. */
 Int net_ip_conn_write_to_ip(NetIPConn *c, Slice p, const NetIPAddr *addr, Error *err);
 Int net_ip_conn_write_to(NetIPConn *c, Slice p, NetAddr addr, Error *err);
+
+/* ReadMsgIP and WriteMsgIP, as UDP has them, except that an IPv4 packet
+ * keeps its header, as Go leaves it, and that WriteMsgIP always needs an
+ * address and fails on a connected conn, as WriteToIP does. */
+Int net_ip_conn_read_msg_ip(NetIPConn *c, Slice p, Slice oob, Alloc *a, Int *oobn,
+                            Int *flags, NetIPAddr **addr, Error *err);
+Int net_ip_conn_write_msg_ip(NetIPConn *c, Slice p, Slice oob, const NetIPAddr *addr,
+                             Int *oobn, Error *err);
 
 /* Close, the addresses, the deadlines and the buffer sizes, as UDP has
  * them. */

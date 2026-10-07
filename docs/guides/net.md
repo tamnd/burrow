@@ -320,7 +320,7 @@ Go has three ways to say who sent a datagram, and so does this. `net_udp_conn_re
 
 A datagram is read whole. When it is longer than the buffer, the rest of it is lost and the next read starts on the next datagram, as it does in Go. Writing to a connected socket with a write-to function fails with `net_err_write_to_connected`, and the errors otherwise are Go's, down to "write udp 127.0.0.1:5000->127.0.0.1:70000: sendto: invalid argument" for a port that does not fit.
 
-`ReadMsgUDP` and `WriteMsgUDP` are still to come, and `ListenMulticastUDP` is under [Interfaces](#interfaces), since it takes one. Windows and wasip1 are where TCP is: a dial or a listen on Windows fails with `ENOSYS` for now, and wasip1 has no sockets.
+`net_udp_conn_read_msg_udp` and `net_udp_conn_write_msg_udp` carry control messages alongside the data, in the system's own layout, which `syscall_parse_socket_control_message` picks apart, and they have `_addr_port` twins that need no memory for the address. `ListenMulticastUDP` is under [Interfaces](#interfaces), since it takes one. Windows and wasip1 are where TCP is: a dial or a listen on Windows fails with `ENOSYS` for now, and wasip1 has no sockets.
 
 ## Unix
 
@@ -388,7 +388,72 @@ A listener made by `net_listen_unix` removes its file when it closes, and so doe
 
 On Linux a name that starts with "@" is in the abstract namespace, has no file, and goes away with the last socket on it. Listening on an empty name binds to a fresh abstract name, and a socket that was never bound is called "@" there and "" everywhere else, so those are the names a dialer's end and an unbound sender have. A name has to fit in the system's sockaddr, which is 107 bytes on Linux and 103 on macOS and the BSDs, and a longer one fails with "bind: invalid argument" as it does in Go.
 
-The datagram functions are the UDP ones with a `NetUnixAddr` in place of a `NetUDPAddr`: `net_unix_conn_read_from_unix` makes the sender's address in the allocator it is given, and `net_unix_conn_write_to_unix` sends to a name. `ReadMsgUnix`, `WriteMsgUnix` and the `File` methods, which pass descriptors, are still to come, and Windows is where TCP is for now.
+The datagram functions are the UDP ones with a `NetUnixAddr` in place of a `NetUDPAddr`: `net_unix_conn_read_from_unix` makes the sender's address in the allocator it is given, and `net_unix_conn_write_to_unix` sends to a name. `net_unix_conn_read_msg_unix` and `net_unix_conn_write_msg_unix` pass descriptors between processes, with `syscall_unix_rights` making the control message and `syscall_parse_unix_rights` reading it back. The descriptors that arrive are close-on-exec, as in Go. This one hands an open file across a connection:
+
+<!-- example: ../examples/net/rights.c#rights -->
+```c
+Arena ar;
+arena_init(&ar, NULL, 0);
+Alloc *a = arena_allocator(&ar);
+Error err;
+Str dir = os_mkdir_temp(a, BURROW_STR_EMPTY, BURROW_S("ex"), &err);
+if (BURROW_FAILED(err))
+    return;
+Str note = filepath_join_v(a, 2, dir, BURROW_S("note.txt"));
+char text[] = "read through a passed descriptor";
+(void)os_write_file(note, slice_from(text, 32, 32, TYPE_BYTE), 0600);
+
+NetUnixAddr addr = {filepath_join_v(a, 2, dir, BURROW_S("pass.sock")),
+                    BURROW_S("unix")};
+NetUnixListener *l = net_listen_unix(a, BURROW_S("unix"), &addr, &err);
+NetUnixConn *client = net_dial_unix(a, BURROW_S("unix"), NULL, &addr, &err);
+NetUnixConn *server = net_unix_listener_accept_unix(l, &err);
+if (client == NULL || server == NULL)
+    return;
+
+/* One end opens the file and sends the descriptor along with a byte. */
+Int fd = syscall_open(note, SYSCALL_O_RDONLY, 0, &err);
+Slice rights = syscall_unix_rights(a, (Slice){&fd, 1, 1, TYPE_INT});
+char one[] = "f";
+Int oobn = 0;
+(void)net_unix_conn_write_msg_unix(client, slice_from(one, 1, 1, TYPE_BYTE), rights,
+                                   NULL, &oobn, &err);
+printf("sent all of it: %d\n", oobn == rights.len);
+(void)syscall_close(fd);
+
+/* The other end gets a descriptor of its own for the same open file. */
+Byte b[1];
+Byte oob[64];
+(void)net_unix_conn_read_msg_unix(server, slice_from(b, 1, 1, TYPE_BYTE),
+                                  slice_from(oob, 64, 64, TYPE_BYTE), a, &oobn,
+                                  NULL, NULL, &err);
+Slice msgs = syscall_parse_socket_control_message(
+    a, slice_from(oob, oobn, oobn, TYPE_BYTE), &err);
+Slice fds =
+    syscall_parse_unix_rights(a, &((SyscallSocketControlMessage *)msgs.p)[0], &err);
+if (BURROW_FAILED(err) || fds.len != 1)
+    return;
+Int got = ((const Int *)fds.p)[0];
+Byte data[64];
+Int n = syscall_read(got, slice_from(data, 64, 64, TYPE_BYTE), &err);
+printf("%.*s\n", (int)n, (const char *)data);
+(void)syscall_close(got);
+
+net_unix_conn_free(client);
+net_unix_conn_free(server);
+net_unix_listener_free(l);
+(void)os_remove_all(dir);
+arena_free(&ar);
+```
+
+That prints:
+
+```
+sent all of it: 1
+read through a passed descriptor
+```
+
+The `File` methods are still to come, and Windows is where TCP is for now.
 
 ## Raw IP
 
@@ -442,7 +507,7 @@ net_ip_conn_free(c);
 arena_free(&ar);
 ```
 
-On an IPv4 socket, `net_ip_conn_read_from_ip` and the `read_from` of the `NetPacketConn` take the IPv4 header off the front of each packet, as Go's `ReadFromIP` does, while `net_ip_conn_read` gives the packet as the system hands it over, header and all. `ReadMsgIP` and `WriteMsgIP` are still to come, and Windows is where TCP is for now.
+On an IPv4 socket, `net_ip_conn_read_from_ip` and the `read_from` of the `NetPacketConn` take the IPv4 header off the front of each packet, as Go's `ReadFromIP` does, while `net_ip_conn_read` gives the packet as the system hands it over, header and all. `net_ip_conn_read_msg_ip` leaves the header where it is, as Go's `ReadMsgIP` does, and `net_ip_conn_write_msg_ip` always needs an address. Windows is where TCP is for now.
 
 ## Interfaces
 

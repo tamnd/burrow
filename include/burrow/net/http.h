@@ -1422,7 +1422,10 @@ typedef struct HttpTransport {
     struct burrow__HttpAltProto *alt;
     SyncMutex conns_per_host_mu;
     struct burrow__HttpHostBucket *conns_per_host;
-    struct burrow__HttpWant *dials_head, *dials_tail;
+    struct burrow__HttpWantQueue {
+        struct burrow__HttpWant **w;
+        Int head, len, cap;
+    } dials;
     SyncWaitGroup live;
 } HttpTransport;
 

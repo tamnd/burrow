@@ -919,6 +919,11 @@ typedef struct NetNS {
     Str host;
 } NetNS;
 
+/* Their descriptors, the element types of the slices the lookups give. */
+extern const Type *const TYPE_NET_SRV;
+extern const Type *const TYPE_NET_MX;
+extern const Type *const TYPE_NET_NS;
+
 /* --------------------------------------------------------------- Resolver
  *
  * net.Resolver, which looks up names, addresses, ports and records:
@@ -947,11 +952,13 @@ typedef struct NetNS {
 
 /* Resolver.Dial: makes the connection to a name server, at address, over
  * network, which is "udp" or "tcp". The NetConn is made in a, which the
- * resolver gives back after it has closed it. One that is not a UDP
- * connection from this package gets a two byte length before each message,
- * the way DNS over TCP does. */
+ * resolver gives back after it has closed it. *packet starts out false, and
+ * the dial sets it for a connection where each read gives one whole message,
+ * which Go finds out by asking whether the Conn is a PacketConn. A UDP
+ * connection from this package is one either way. The others get a two byte
+ * length before each message, the way DNS over TCP does. */
 BURROW_FUNC(NetResolverDial, NetConn, Alloc *a, Context ctx, Str network, Str address,
-            Error *err);
+            bool *packet, Error *err);
 
 typedef struct NetResolver {
     /* Go's resolver rather than the system's. burrow only has Go's, so this
@@ -974,7 +981,7 @@ typedef struct NetResolver {
 
 /* net.DefaultResolver, which the net_lookup functions and a NULL resolver
  * use. */
-NetResolver *net_default_resolver(void);
+BURROW_STATIC(ret) NetResolver *net_default_resolver(void);
 
 /* LookupHost: the addresses of host, as text, from the hosts file and DNS. */
 BURROW_OWNS(ret) Slice net_resolver_lookup_host(NetResolver *r, Alloc *a, Context ctx,
@@ -1003,15 +1010,17 @@ Int net_resolver_lookup_port(NetResolver *r, Context ctx, Str network, Str servi
 BURROW_OWNS(ret) Str net_resolver_lookup_cname(NetResolver *r, Alloc *a, Context ctx,
                                                Str host, Error *err);
 
-/* LookupSRV: the SRV records of _service._proto.name, sorted by priority and
- * shuffled by weight, with the name they were found under in *cname, which
- * may be NULL. Empty service and proto look up name itself. */
+/* LookupSRV: the SRV records of _service._proto.name, as NetSRV values,
+ * sorted by priority and shuffled by weight, with the name they were found
+ * under in *cname, which may be NULL. Empty service and proto look up name
+ * itself. */
 BURROW_OWNS(ret) Slice net_resolver_lookup_srv(NetResolver *r, Alloc *a, Context ctx,
                                                Str service, Str proto, Str name,
                                                Str *cname, Error *err);
 
-/* LookupMX, LookupNS and LookupTXT: the records of name, the MX ones sorted
- * by preference. The TXT strings of one record are joined into one. */
+/* LookupMX, LookupNS and LookupTXT: the records of name, as NetMX values
+ * sorted by preference, NetNS values and Strs. The TXT strings of one record
+ * are joined into one. */
 BURROW_OWNS(ret) Slice net_resolver_lookup_mx(NetResolver *r, Alloc *a, Context ctx,
                                               Str name, Error *err);
 BURROW_OWNS(ret) Slice net_resolver_lookup_ns(NetResolver *r, Alloc *a, Context ctx,

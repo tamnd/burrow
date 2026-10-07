@@ -327,7 +327,7 @@ Error burrow__net_temporary_error(Alloc *a, Str s) {
     return nd_text_error(a, &nd_temporary_vt, s);
 }
 
-Error burrow__net_new_dns_error(Alloc *a, Error err, Str name, Str server) {
+NetDNSError burrow__net_dns_error_of(Error err, Str name, Str server) {
     NetDNSError e = {0};
     if (net_is_error(err)) {
         e.is_timeout = net_error_timeout(err);
@@ -341,7 +341,18 @@ Error burrow__net_new_dns_error(Alloc *a, Error err, Str name, Str server) {
     e.err = error_text(err);
     e.name = name;
     e.server = server;
+    return e;
+}
+
+Error burrow__net_new_dns_error(Alloc *a, Error err, Str name, Str server) {
+    NetDNSError e = burrow__net_dns_error_of(err, name, server);
     return net_dns_error_as_error(&e, a);
+}
+
+const NetDNSError *burrow__net_as_dns_error(Error err) {
+    if (err.vt != &nd_dns_error_vt)
+        return NULL;
+    return &((const NetDNSErrorBox *)err.data)->e;
 }
 
 /* -------------------------------------------------------------- reverseaddr */

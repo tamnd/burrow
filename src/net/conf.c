@@ -153,6 +153,10 @@ void burrow__net_set_get_hostname(burrow__NetHostnameFunc fn) {
     cf_get_hostname = fn != NULL ? fn : cf_os_hostname;
 }
 
+burrow__NetHostnameFunc burrow__net_get_hostname(void) {
+    return cf_get_hostname;
+}
+
 static bool cf_is_localhost(Str h) {
     return burrow__net_equal_fold(h, CF_LIT("localhost")) ||
            burrow__net_equal_fold(h, CF_LIT("localhost.localdomain")) ||

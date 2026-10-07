@@ -21,6 +21,8 @@
 #include "burrow/slice.h"
 #include "burrow/time.h"
 
+#include "../xnet/dnsmessage.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -407,6 +409,13 @@ extern const Error burrow__net_err_no_answer_from_dns_server;
 BURROW_OWNS(ret) Error burrow__net_new_dns_error(Alloc *a, Error err, Str name,
                                                  Str server);
 
+/* The DNSError newDNSError makes, before it becomes an Error, for a caller
+ * that has more to set. The strings are borrowed. */
+NetDNSError burrow__net_dns_error_of(Error err, Str name, Str server);
+
+/* err.(*DNSError): the DNSError err is, and not one it wraps, or NULL. */
+BURROW_BORROWS(ret, err) const NetDNSError *burrow__net_as_dns_error(Error err);
+
 /* reverseaddr: the in-addr.arpa. or ip6.arpa. name of addr, in a, or empty
  * and a DNSError "unrecognized address" when addr is not an IP address. */
 BURROW_OWNS(ret) Str burrow__net_reverseaddr(Alloc *a, Str addr, Error *err);
@@ -657,6 +666,51 @@ burrow__net_conf_addr_lookup_order(const burrow__NetConf *c, const NetResolver *
 /* Go's tests set getHostname, and this is how ours do. NULL goes back to
  * os_hostname. */
 void burrow__net_set_get_hostname(burrow__NetHostnameFunc fn);
+
+/* getHostname as the tests have it set, which reading resolv.conf uses. */
+burrow__NetHostnameFunc burrow__net_get_hostname(void);
+
+/* ------------------------------------------------------- dnsclient_unix.go
+ *
+ * The lookups that ask DNS themselves. A NULL conf is the system's, looked
+ * at when it is needed. r is never NULL here. Results are in a and errors
+ * in error_allocator(). */
+
+/* lookup: name asked for, under each name the search list makes of it, with
+ * the answer in ma, at the first answer of type qtype, and *server, in ma,
+ * the server that gave it. Not finding one is a DNSError named name. */
+Error burrow__net_dns_lookup(NetResolver *r, Alloc *ma, Context ctx, Str name,
+                             DnsmsgType qtype, burrow__DNSConfig *conf, DnsmsgParser *p,
+                             Str *server);
+
+/* goLookupHostOrder, as a Slice of Str. */
+BURROW_OWNS(ret) Slice burrow__net_go_lookup_host_order(NetResolver *r, Alloc *a,
+                                                        Context ctx, Str name,
+                                                        burrow__HostLookupOrder order,
+                                                        burrow__DNSConfig *conf,
+                                                        Error *err);
+
+/* goLookupIPFiles: what the hosts file says name is, as NetIPAddr values
+ * sorted the way RFC 6724 says, and its canonical name. */
+BURROW_OWNS(ret) Slice burrow__net_go_lookup_ip_files(Alloc *a, Str name,
+                                                      Str *canonical);
+
+/* goLookupIPCNAMEOrder: the NetIPAddr values of name for network, "ip",
+ * "ip4", "ip6" or "CNAME", and the canonical name in *cname, which may be
+ * NULL. */
+BURROW_OWNS(ret) Slice burrow__net_go_lookup_ip_cname_order(
+    NetResolver *r, Alloc *a, Context ctx, Str network, Str name,
+    burrow__HostLookupOrder order, burrow__DNSConfig *conf, Str *cname, Error *err);
+
+/* goLookupCNAME and goLookupPTR. */
+BURROW_OWNS(ret) Str burrow__net_go_lookup_cname(NetResolver *r, Alloc *a, Context ctx,
+                                                 Str host,
+                                                 burrow__HostLookupOrder order,
+                                                 burrow__DNSConfig *conf, Error *err);
+BURROW_OWNS(ret) Slice burrow__net_go_lookup_ptr(NetResolver *r, Alloc *a, Context ctx,
+                                                 Str addr,
+                                                 burrow__HostLookupOrder order,
+                                                 burrow__DNSConfig *conf, Error *err);
 
 /* ------------------------------------------------------------------ hosts.go
  *

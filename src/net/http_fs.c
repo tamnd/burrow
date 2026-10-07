@@ -1129,9 +1129,11 @@ static void hd_serve_file(HttpResponseWriter w, HttpRequest *r, HttpFileSystem f
         return;
     }
 
+    /* The deferred closes take the files' addresses, so they live outside the
+     * scope that runs them. */
+    HttpFile f;
+    HttpFile ff;
     BURROW_SCOPE {
-        HttpFile f;
-        HttpFile ff;
         Error e = BURROW_NO_ERROR;
         f = fs.vt->open(fs.data, t, name, &e);
         if (BURROW_FAILED(e)) {

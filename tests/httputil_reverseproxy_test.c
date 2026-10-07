@@ -2395,15 +2395,14 @@ static void half_backend(void *env, HttpResponseWriter w, HttpRequest *r) {
         testing_t_errorf_v(t, "conn is not a TCPConn");
         return;
     }
-    (void)io_write_string(net_conn_as_io_writer(h.conn), upgrade_msg, &err);
-    if (BURROW_FAILED(err)) {
-        free_hijacked(&h);
-        testing_t_errorf_v(t, "backend upgrade failed: %v", err);
-        return;
-    }
+    /* Store srv before sending the 101, as Go does. The client looks for it as
+     * soon as the 101 arrives. */
     sync_mutex_lock(&e->mu);
     e->srv = h;
     sync_mutex_unlock(&e->mu);
+    (void)io_write_string(net_conn_as_io_writer(h.conn), upgrade_msg, &err);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "backend upgrade failed: %v", err);
 }
 
 static void must_read(TestingT *t, NetTCPConn *conn, const char *msg) {

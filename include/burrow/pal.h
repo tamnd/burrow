@@ -906,7 +906,7 @@ enum {
  * i in the child, and PAL_INVALID_HANDLE leaves that slot closed. Descriptors
  * above nfds are closed in the child, which is the only behaviour that is safe
  * in a threaded process where another thread may be opening a file right
- * now.
+ * now, unless sys asks to keep them.
  *
  * Windows has no descriptor numbers. There the first three slots become the
  * child's standard handles, and handles in any slot after them are inherited
@@ -917,7 +917,10 @@ enum {
  * Go.
  *
  * creation_flags is added to the flags Windows' CreateProcess is given, as
- * Go's SysProcAttr.CreationFlags is, and is ignored everywhere else. */
+ * Go's SysProcAttr.CreationFlags is, and is ignored everywhere else.
+ *
+ * sys is the rest of Go's SysProcAttr on everything but Windows, which ignores
+ * it, and NULL asks for none of it. */
 typedef struct PalSpawn {
     const char *path;
     const char *const *argv;
@@ -927,7 +930,63 @@ typedef struct PalSpawn {
     int32_t nfds;
     uint32_t flags;
     uint32_t creation_flags;
+    const struct PalSpawnSys *sys;
 } PalSpawn;
+
+/* What Go's SysProcAttr asks of the child beyond the two flags, with Go's
+ * meanings, and zero for each one meaning it is not asked for. The child does
+ * them in the order Go's does on the system, and the first that fails is the
+ * error pal_spawn gives.
+ *
+ * pgid goes with PAL_SPAWN_SETPGID: the group to join, or 0 for a new one with
+ * the child's own id. foreground puts that group in the foreground of the
+ * terminal ctty, a descriptor in the parent, and implies PAL_SPAWN_SETPGID.
+ * setctty makes ctty, a slot in fds, the controlling terminal, and noctty
+ * detaches descriptor 0 from its terminal.
+ *
+ * credential sets the user and group to uid and gid, and the supplementary
+ * groups to groups, unless no_set_groups.
+ *
+ * keep_fds leaves descriptors above nfds open, as Go does, rather than closing
+ * them. Go can because everything it opens is close on exec, and a caller that
+ * asks for this is saying the same of everything it has open.
+ *
+ * The rest are Linux's. cloneflags go to the clone that makes the child, and
+ * unshareflags to an unshare in it. uid_map and gid_map are the text for
+ * /proc/PID/uid_map and gid_map, NUL terminated, and gid_map_setgroups writes
+ * "allow" to /proc/PID/setgroups where it would write "deny". ambient_caps are
+ * raised in the ambient set. cgroup_fd, with use_cgroup_fd, is the cgroup the
+ * child starts in. pidfd, when it is not NULL, is set to a pidfd for the child,
+ * or -1. FreeBSD has pdeathsig too, and jail, which the child attaches to. On a
+ * system without one of them, asking for it is PAL_ENOSYS. */
+typedef struct PalSpawnSys {
+    const char *chroot;
+    bool credential;
+    bool no_set_groups;
+    uint32_t uid;
+    uint32_t gid;
+    const uint32_t *groups;
+    int64_t ngroups;
+    bool ptrace;
+    bool setctty;
+    bool noctty;
+    bool foreground;
+    int64_t ctty;
+    int64_t pgid;
+    bool keep_fds;
+    int32_t pdeathsig;
+    int64_t jail;
+    uint64_t cloneflags;
+    uint64_t unshareflags;
+    const char *uid_map;
+    const char *gid_map;
+    bool gid_map_setgroups;
+    const uint64_t *ambient_caps;
+    int64_t nambient_caps;
+    bool use_cgroup_fd;
+    int64_t cgroup_fd;
+    int32_t *pidfd;
+} PalSpawnSys;
 
 /* Start the process and return its id, or -1.
  *
@@ -936,6 +995,28 @@ typedef struct PalSpawn {
  * asked to wait on a process that never existed. That is what the pipe in the
  * POSIX backend is for. */
 int64_t pal_spawn(const PalSpawn *req, PalErrno *err);
+
+/* Which of the C library's id calls pal_set_ids makes. */
+typedef enum PalSetID {
+    PAL_SETUID,
+    PAL_SETGID,
+    PAL_SETEUID,
+    PAL_SETEGID,
+    PAL_SETREUID,
+    PAL_SETREGID,
+    PAL_SETRESUID,
+    PAL_SETRESGID
+} PalSetID;
+
+/* setuid, setgid and the rest, which, with the ids it takes in order and the
+ * ones after them ignored. These go through the C library, which on Linux
+ * changes every thread of the process where the system call alone changes the
+ * one that made it. setresuid and setresgid fail with ENOSYS where the C
+ * library has neither, and every one of them does on Windows. */
+bool pal_set_ids(PalSetID which, uint32_t a, uint32_t b, uint32_t c, PalErrno *err);
+
+/* setgroups, from the C library for the same reason. ENOSYS on Windows. */
+bool pal_setgroups(const uint32_t *gids, int64_t n, PalErrno *err);
 
 enum {
     PAL_WAIT_NOHANG = 1u << 0,

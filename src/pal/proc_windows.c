@@ -473,6 +473,22 @@ bool pal_kill(int64_t pid, int32_t sig, PalErrno *err) {
     return proc_signal(pid, sig == PAL_SIGKILL, sig == 0, err);
 }
 
+bool pal_set_ids(PalSetID which, uint32_t a, uint32_t b, uint32_t c, PalErrno *err) {
+    (void)which;
+    (void)a;
+    (void)b;
+    (void)c;
+    BURROW_OUT(err, PAL_ENOSYS);
+    return false;
+}
+
+bool pal_setgroups(const uint32_t *gids, int64_t n, PalErrno *err) {
+    (void)gids;
+    (void)n;
+    BURROW_OUT(err, PAL_ENOSYS);
+    return false;
+}
+
 /* Go's syscall.SIGKILL on Windows is 9, the same number as PAL_SIGKILL. */
 bool pal_kill_native(int64_t pid, int32_t sig, PalErrno *err) {
     return proc_signal(pid, sig == 9, sig == 0, err);

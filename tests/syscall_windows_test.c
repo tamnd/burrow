@@ -606,6 +606,251 @@ static void TestMisc(TestingT *t) {
     syscall_close_handle(cp);
 }
 
+static void TestEscapeArg(TestingT *t) {
+    static const char *const tests[][2] = {
+        {"", "\"\""},
+        {"a", "a"},
+        {" ", "\" \""},
+        {"\\", "\\"},
+        {"\"", "\\\""},
+        {"\\\"", "\\\\\\\""},
+        {"\\\\\"", "\\\\\\\\\\\""},
+        {"\\\\ ", "\"\\\\ \""},
+        {" \\\\", "\" \\\\\\\\\""},
+        {"a ", "\"a \""},
+        {"C:\\", "C:\\"},
+        {"C:\\Program Files (x32)\\Common\\",
+         "\"C:\\Program Files (x32)\\Common\\\\\""},
+        {"C:\\Users\\Игорь\\", "C:\\Users\\Игорь\\"},
+        {"Андрей\\file", "Андрей\\file"},
+        {"C:\\Windows\\temp", "C:\\Windows\\temp"},
+        {"c:\\temp\\newfile", "c:\\temp\\newfile"},
+        {"\\\\?\\C:\\Windows", "\\\\?\\C:\\Windows"},
+        {"\\\\?\\", "\\\\?\\"},
+        {"\\\\.\\C:\\Windows\\", "\\\\.\\C:\\Windows\\"},
+        {"\\\\server\\share\\file", "\\\\server\\share\\file"},
+        {"\\\\newserver\\tempshare\\really.txt",
+         "\\\\newserver\\tempshare\\really.txt"},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
+        Str in = str_from_cstr(tests[i][0]);
+        Str got = syscall_escape_arg(a, in);
+        if (!str_eq(got, str_from_cstr(tests[i][1])))
+            testing_t_errorf_v(t, "EscapeArg(%q) = %q, want %q", in, got,
+                               str_from_cstr(tests[i][1]));
+    }
+}
+
+static void TestFullPath(TestingT *t) {
+    Error err = BURROW_NO_ERROR;
+    Str wd = syscall_getwd(a, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "Getwd: %v", err);
+    Str got = syscall_full_path(a, BURROW_S("a\\..\\b"), &err);
+    Str want = fmt_sprintf_v(a, "%s\\b", wd);
+    if (strings_has_suffix(wd, BURROW_S("\\")))
+        want = fmt_sprintf_v(a, "%sb", wd);
+    if (BURROW_FAILED(err) || !str_eq(got, want))
+        testing_t_errorf_v(t, "FullPath(a\\..\\b) = %q, %v, want %q", got, err, want);
+    got = syscall_full_path(a, BURROW_S("C:\\x\\..\\y"), &err);
+    if (BURROW_FAILED(err) || !str_eq(got, BURROW_S("C:\\y")))
+        testing_t_errorf_v(t, "FullPath(C:\\x\\..\\y) = %q, %v", got, err);
+    /* Longer than the 100 units FullPath starts with. */
+    Str long_name = fmt_sprintf_v(a, "C:\\%s", strings_repeat(a, BURROW_S("x"), 300));
+    got = syscall_full_path(a, long_name, &err);
+    if (BURROW_FAILED(err) || !str_eq(got, long_name))
+        testing_t_errorf_v(t, "FullPath of %d bytes = %d bytes, %v", long_name.len,
+                           got.len, err);
+}
+
+/* cmd.exe, from ComSpec, and the directory it is in. */
+static Str comspec(Str *dir) {
+    bool found = false;
+    Str s = syscall_getenv(a, BURROW_S("ComSpec"), &found);
+    if (!found || s.len == 0)
+        s = BURROW_S("C:\\windows\\system32\\cmd.exe");
+    Int i = strings_last_index_byte(s, '\\');
+    if (dir != NULL)
+        *dir = i < 0 ? BURROW_S("") : (Str){s.p, i};
+    return s;
+}
+
+/* Starts argv0 with argv, a slice of C strings, and attr's other fields, with
+ * the child's standard output and error on a pipe, and gives what it wrote
+ * and its exit code. */
+static uint32_t run(TestingT *t, Str argv0, Slice argv, SyscallProcAttr attr, Str *out,
+                    Error *err) {
+    SyscallHandle p[2];
+    Error e = syscall_pipe((Slice){p, 2, 2, TYPE_BYTE});
+    if (BURROW_FAILED(e))
+        testing_t_fatalf_v(t, "Pipe: %v", e);
+    Uintptr files[3] = {0, (Uintptr)p[1], (Uintptr)p[1]};
+    if (attr.files.p == NULL)
+        attr.files = (Slice){files, 3, 3, TYPE_BYTE};
+    Uintptr h = 0;
+    Int pid = syscall_start_process(argv0, argv, &attr, &h, err);
+    syscall_close_handle(p[1]);
+    if (BURROW_FAILED(*err)) {
+        syscall_close_handle(p[0]);
+        return 0;
+    }
+    if (pid <= 0 || h == 0)
+        testing_t_errorf_v(t, "StartProcess = %d, %d", pid, (Int)h);
+    char buf[512];
+    Int n = 0;
+    for (;;) {
+        Int m = syscall_read(
+            p[0],
+            slice_from(buf + n, (Int)sizeof buf - n, (Int)sizeof buf - n, TYPE_BYTE),
+            &e);
+        if (m <= 0)
+            break;
+        n += m;
+    }
+    syscall_close_handle(p[0]);
+    *out = str_clone(a, (Str){(const Byte *)buf, n});
+    (void)syscall_wait_for_single_object((SyscallHandle)h, (uint32_t)SYSCALL_INFINITE,
+                                         &e);
+    uint32_t code = 0;
+    e = syscall_get_exit_code_process((SyscallHandle)h, &code);
+    if (BURROW_FAILED(e))
+        testing_t_errorf_v(t, "GetExitCodeProcess: %v", e);
+    syscall_close_handle((SyscallHandle)h);
+    return code;
+}
+
+static Slice args(Int n, const char *const *v) {
+    Str *s = BURROW_NEW_N(a, Str, (size_t)n);
+    for (Int i = 0; i < n; i++)
+        s[i] = str_from_cstr(v[i]);
+    return (Slice){s, n, n, TYPE_BYTE};
+}
+
+static void TestStartProcess(TestingT *t) {
+    Str dir;
+    Str cmd = comspec(&dir);
+    Slice env = syscall_environ(a);
+    Error err = BURROW_NO_ERROR;
+    Str out = BURROW_STR_EMPTY;
+
+    static const char *const echo[] = {"cmd", "/c", "echo hello"};
+    uint32_t code =
+        run(t, cmd, args(3, echo), (SyscallProcAttr){.env = env}, &out, &err);
+    if (BURROW_FAILED(err) || code != 0 || !str_eq(out, BURROW_S("hello\r\n")))
+        testing_t_errorf_v(t, "echo hello = %d, %q, %v", (Int)code, out, err);
+
+    static const char *const exit3[] = {"cmd", "/c", "exit 3"};
+    code = run(t, cmd, args(3, exit3), (SyscallProcAttr){.env = env}, &out, &err);
+    if (BURROW_FAILED(err) || code != 3)
+        testing_t_errorf_v(t, "exit 3 = %d, %v", (Int)code, err);
+
+    /* cmd_line goes to the child as it is, and argv is not used. */
+    SyscallSysProcAttr sys = {.cmd_line = BURROW_S("cmd /c echo raw"),
+                              .hide_window = true};
+    code = run(t, cmd, args(3, exit3), (SyscallProcAttr){.env = env, .sys = &sys}, &out,
+               &err);
+    if (BURROW_FAILED(err) || code != 0 || !str_eq(out, BURROW_S("raw\r\n")))
+        testing_t_errorf_v(t, "CmdLine = %d, %q, %v", (Int)code, out, err);
+
+    /* A relative argv0 is found from dir, and the child starts in dir. */
+    static const char *const cd[] = {"cmd", "/c", "cd"};
+    code = run(t, BURROW_S("cmd.exe"), args(3, cd),
+               (SyscallProcAttr){.dir = dir, .env = env}, &out, &err);
+    Str want = fmt_sprintf_v(a, "%s\r\n", dir);
+    if (BURROW_FAILED(err) || code != 0 || !strings_equal_fold(out, want))
+        testing_t_errorf_v(t, "cd in %s = %d, %q, %v", dir, (Int)code, out, err);
+
+    /* The environment is the one given, sorted the way CreateProcess wants
+     * it, and nothing else. */
+    bool found = false;
+    Str root = syscall_getenv(a, BURROW_S("SystemRoot"), &found);
+    Str kv[4] = {BURROW_S("c=3"), BURROW_S("B=2"), BURROW_S("a=1"),
+                 fmt_sprintf_v(a, "SystemRoot=%s", root)};
+    static const char *const echo_env[] = {"cmd", "/c", "echo %a%%B%%c%"};
+    code = run(t, cmd, args(3, echo_env),
+               (SyscallProcAttr){.env = (Slice){kv, 4, 4, TYPE_BYTE}}, &out, &err);
+    if (BURROW_FAILED(err) || code != 0 || !str_eq(out, BURROW_S("123\r\n")))
+        testing_t_errorf_v(t, "echo of the environment = %d, %q, %v", (Int)code, out,
+                           err);
+
+    /* With no_inherit_handles the child gets none of ours, so it writes
+     * nothing to the pipe. */
+    SyscallSysProcAttr none = {.no_inherit_handles = true};
+    code = run(t, cmd, args(3, echo), (SyscallProcAttr){.env = env, .sys = &none}, &out,
+               &err);
+    if (BURROW_FAILED(err) || out.len != 0)
+        testing_t_errorf_v(t, "NoInheritHandles = %d, %q, %v", (Int)code, out, err);
+
+    /* The child of another process, here ourselves through a real handle. */
+    Error e = BURROW_NO_ERROR;
+    SyscallHandle self =
+        syscall_open_process(0x0080 | 0x0040 | SYSCALL_PROCESS_QUERY_INFORMATION, false,
+                             (uint32_t)syscall_getpid(), &e);
+    if (BURROW_FAILED(e)) {
+        testing_t_errorf_v(t, "OpenProcess: %v", e);
+    } else {
+        SyscallSysProcAttr par = {.parent_process = self};
+        code = run(t, cmd, args(3, exit3), (SyscallProcAttr){.env = env, .sys = &par},
+                   &out, &err);
+        if (BURROW_FAILED(err) || code != 3)
+            testing_t_errorf_v(t, "ParentProcess = %d, %v", (Int)code, err);
+        syscall_close_handle(self);
+    }
+}
+
+static void TestStartProcessErrors(TestingT *t) {
+    Str cmd = comspec(NULL);
+    Uintptr files[4] = {0, 0, 0, 0};
+    Uintptr h = 7;
+    Error err = BURROW_NO_ERROR;
+    SyscallProcAttr attr = {.files = (Slice){files, 3, 3, TYPE_BYTE}};
+    syscall_start_process(BURROW_S(""), (Slice){0}, &attr, &h, &err);
+    if (errno_of(err) != SYSCALL_EWINDOWS || h != 0)
+        testing_t_errorf_v(t, "StartProcess of \"\" = %v", err);
+    attr.files.len = 2;
+    syscall_start_process(cmd, (Slice){0}, &attr, &h, &err);
+    if (errno_of(err) != SYSCALL_EINVAL)
+        testing_t_errorf_v(t, "StartProcess with 2 files = %v", err);
+    attr.files.len = 4;
+    syscall_start_process(cmd, (Slice){0}, &attr, &h, &err);
+    if (errno_of(err) != SYSCALL_EWINDOWS)
+        testing_t_errorf_v(t, "StartProcess with 4 files = %v", err);
+    syscall_start_process(cmd, (Slice){0}, NULL, &h, &err);
+    if (errno_of(err) != SYSCALL_EINVAL)
+        testing_t_errorf_v(t, "StartProcess with no attr = %v", err);
+    attr.files.len = 3;
+    Str bad = BURROW_S("A=\0");
+    attr.env = (Slice){&bad, 1, 1, TYPE_BYTE};
+    syscall_start_process(cmd, (Slice){0}, &attr, &h, &err);
+    if (errno_of(err) != SYSCALL_EINVAL)
+        testing_t_errorf_v(t, "StartProcess with a NUL in env = %v", err);
+    attr.env = (Slice){0};
+    attr.dir = BURROW_S("C:\\");
+    syscall_start_process(BURROW_S("C:"), (Slice){0}, &attr, &h, &err);
+    if (errno_of(err) != SYSCALL_EINVAL)
+        testing_t_errorf_v(t, "StartProcess of C: in a dir = %v", err);
+    attr.dir = BURROW_S("C:\\no-such-burrow-dir");
+    syscall_start_process(cmd, (Slice){0}, &attr, &h, &err);
+    if (BURROW_OK(err))
+        testing_t_errorf_v(t, "StartProcess in a missing dir succeeded");
+
+    err = syscall_exec(cmd, (Slice){0}, (Slice){0});
+    if (errno_of(err) != SYSCALL_EWINDOWS)
+        testing_t_errorf_v(t, "Exec = %v", err);
+    err = syscall_set_nonblock(syscall_stdin, true);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "SetNonblock = %v", err);
+    SyscallHandle p[2];
+    err = syscall_pipe((Slice){p, 2, 2, TYPE_BYTE});
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "Pipe: %v", err);
+    syscall_close_on_exec(p[0]);
+    syscall_close_handle(p[0]);
+    syscall_close_handle(p[1]);
+    sync_rw_mutex_r_lock(&syscall_fork_lock);
+    sync_rw_mutex_r_unlock(&syscall_fork_lock);
+}
+
 #define TESTS(X)                                                                       \
     X(TestOpen)                                                                        \
     X(TestComputerName)                                                                \
@@ -621,7 +866,11 @@ static void TestMisc(TestingT *t) {
     X(TestSocket)                                                                      \
     X(TestSID)                                                                         \
     X(TestToken)                                                                       \
-    X(TestMisc)
+    X(TestMisc)                                                                        \
+    X(TestEscapeArg)                                                                   \
+    X(TestFullPath)                                                                    \
+    X(TestStartProcess)                                                                \
+    X(TestStartProcessErrors)
 
 static void setup(void) {
     arena_init(&ar, NULL, 0);

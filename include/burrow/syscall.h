@@ -122,12 +122,75 @@ BURROW_OWNS(ret) Error syscall_kill(Int pid, SyscallSignal sig);
 /* ------------------------------------------------------------ process attr */
 
 #if defined(BURROW_OS_WINDOWS)
-/* syscall.SysProcAttr on Windows, with the one field so far. creation_flags
- * is added to the flags CreateProcess is given, so CREATE_NEW_PROCESS_GROUP
- * works as it does in Go. */
+/* syscall.SysProcAttr on Windows, Go's fields in Go's order.
+ *
+ * hide_window starts the child with its window hidden. cmd_line, when not
+ * empty, is the command line it gets as it is, and otherwise
+ * syscall_start_process builds one from argv with syscall_escape_arg.
+ * creation_flags is added to the flags CreateProcess is given, so
+ * CREATE_NEW_PROCESS_GROUP works as it does in Go. token, when not 0, runs the
+ * child as the user it stands for, through CreateProcessAsUser.
+ * process_attributes and thread_attributes, when not NULL, are the security
+ * attributes of the child's process and of its first thread.
+ *
+ * no_inherit_handles has the child inherit no handles at all, not even the
+ * ones in ProcAttr.files. additional_inherited_handles is a slice of
+ * SyscallHandle, already inheritable, for the child to inherit as well.
+ * parent_process, when not 0, is the process the child gets as its parent,
+ * which is where the handles in additional_inherited_handles have to be. */
 typedef struct SyscallSysProcAttr {
+    bool hide_window;
+    Str cmd_line;
     uint32_t creation_flags;
+    SyscallToken token;
+    SyscallSecurityAttributes *process_attributes;
+    SyscallSecurityAttributes *thread_attributes;
+    bool no_inherit_handles;
+    Slice additional_inherited_handles; /* of SyscallHandle */
+    SyscallHandle parent_process;
 } SyscallSysProcAttr;
+
+/* syscall.ProcAttr on Windows: dir is the child's working directory, and the
+ * empty Str leaves it ours. env is a slice of "key=value" Strs, and nil is no
+ * environment at all. files is a slice of Uintptr, exactly three of them, the
+ * handles that become the child's standard input, output and error, with 0
+ * for none. sys may be NULL. */
+typedef struct SyscallProcAttr {
+    Str dir;
+    Slice env;   /* of Str */
+    Slice files; /* of Uintptr */
+    const SyscallSysProcAttr *sys;
+} SyscallProcAttr;
+
+/* syscall.ForkLock, which nothing on Windows uses, as in Go. */
+extern SyncRWMutex syscall_fork_lock;
+
+/* syscall.StartProcess: starts argv0 with the command line argv makes, set up
+ * as attr says, which may be NULL, and gives its process id, with a handle to
+ * the process in *handle for the caller to close. A relative argv0 is found
+ * from attr->dir when that is set, as Go does it. More than three files is
+ * EWINDOWS and fewer is EINVAL. */
+BURROW_OWNS(err) Int syscall_start_process(Str argv0, Slice argv,
+                                           const SyscallProcAttr *attr, Uintptr *handle,
+                                           Error *err);
+
+/* syscall.Exec, which Windows does not have: always EWINDOWS. */
+BURROW_OWNS(ret) Error syscall_exec(Str argv0, Slice argv, Slice envv);
+
+/* syscall.EscapeArg: s quoted for a Windows command line the way the C
+ * runtime splits one, from a. The empty string is "", two quotes. Otherwise a
+ * backslash is doubled when a quote follows it, a quote gets a backslash, and
+ * the whole is quoted when it has a space or a tab. When none of that is
+ * needed, the result is a copy of s. */
+BURROW_OWNS(ret) Str syscall_escape_arg(Alloc *a, Str s);
+
+/* syscall.FullPath: name as a full path, from GetFullPathName, from a. */
+BURROW_OWNS(ret) Str syscall_full_path(Alloc *a, Str name, Error *err);
+
+/* syscall.CloseOnExec: fd stops being inherited. syscall.SetNonblock does
+ * nothing on Windows and returns nil, as in Go. */
+void syscall_close_on_exec(SyscallHandle fd);
+BURROW_OWNS(ret) Error syscall_set_nonblock(SyscallHandle fd, bool nonblocking);
 #else
 /* syscall.Credential: the user and groups the child runs as. groups is a
  * slice of uint32_t, the supplementary groups, set before the group and the

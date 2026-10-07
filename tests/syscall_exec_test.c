@@ -726,7 +726,7 @@ static void child(Str what) {
  * uses. */
 static void TestSysProcAttrWindows(TestingT *t) {
     (void)t;
-    SyscallSysProcAttr sys = {0x200};
+    SyscallSysProcAttr sys = {.creation_flags = 0x200};
     CHECK_INT_EQ(sys.creation_flags, 0x200);
 }
 

@@ -683,7 +683,9 @@ Int burrow__http_parse_range(Alloc *a, Str s, int64_t size, burrow__HttpRange **
     for (Int i = 0; i <= s.len; i++) {
         if (i < s.len && s.p[i] != ',')
             continue;
-        Str ra = textproto_trim_string(str_from_bytes(s.p + from, i - from));
+        /* s.p is NULL when nothing follows "bytes=". */
+        Str ra = i > from ? textproto_trim_string(str_from_bytes(s.p + from, i - from))
+                          : BURROW_STR_EMPTY;
         from = i + 1;
         if (ra.len == 0)
             continue;

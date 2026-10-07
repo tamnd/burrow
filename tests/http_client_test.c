@@ -25,6 +25,7 @@
 #include "burrow/net/http.h"
 #include "burrow/net/http/httptest.h"
 #include "burrow/net/url.h"
+#include "burrow/netpoll.h"
 #include "burrow/strings.h"
 #include "burrow/sync.h"
 #include "burrow/time.h"

@@ -29,6 +29,7 @@
 #include "burrow/net/http.h"
 #include "burrow/net/http/httptest.h"
 #include "burrow/net/url.h"
+#include "burrow/netpoll.h"
 #include "burrow/strings.h"
 #include "burrow/sync.h"
 #include "burrow/time.h"
@@ -143,7 +144,7 @@ static HttptestServer *host_port_server(HttpHandlerFunc *f) {
 static void TestTransportKeepAlives(TestingT *t) {
     need_tcp(t);
     HttpHandlerFunc hf;
-    Fetcher f = {t, host_port_server(&hf), {0}};
+    Fetcher f = {.t = t, .ts = host_port_server(&hf)};
     arena_init(&f.ar, heap_allocator(), 0);
     HttpClient *c = httptest_server_client(f.ts);
     for (int i = 0; i < 2; i++) {
@@ -167,7 +168,7 @@ static void TestTransportKeepAlives(TestingT *t) {
 static void TestTransportConnectionCloseOnResponse(TestingT *t) {
     need_tcp(t);
     HttpHandlerFunc hf;
-    Fetcher f = {t, host_port_server(&hf), {0}};
+    Fetcher f = {.t = t, .ts = host_port_server(&hf)};
     arena_init(&f.ar, heap_allocator(), 0);
     HttpClient *c = httptest_server_client(f.ts);
     for (int i = 0; i < 2; i++) {
@@ -192,7 +193,7 @@ static void TestTransportConnectionCloseOnResponse(TestingT *t) {
 static void TestTransportConnectionCloseOnRequest(TestingT *t) {
     need_tcp(t);
     HttpHandlerFunc hf;
-    Fetcher f = {t, host_port_server(&hf), {0}};
+    Fetcher f = {.t = t, .ts = host_port_server(&hf)};
     arena_init(&f.ar, heap_allocator(), 0);
     HttpClient *c = httptest_server_client(f.ts);
     for (int i = 0; i < 2; i++) {
@@ -226,7 +227,7 @@ static void TestTransportConnectionCloseOnRequest(TestingT *t) {
 static void TestTransportConnectionCloseOnRequestDisableKeepAlive(TestingT *t) {
     need_tcp(t);
     HttpHandlerFunc hf;
-    Fetcher f = {t, host_port_server(&hf), {0}};
+    Fetcher f = {.t = t, .ts = host_port_server(&hf)};
     arena_init(&f.ar, heap_allocator(), 0);
     f.ts->transport.disable_keep_alives = true;
     Str saw = BURROW_STR_EMPTY;

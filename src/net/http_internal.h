@@ -203,8 +203,7 @@ void burrow__http_body_register_on_hit_eof(void *body, Func fn);
 /* What the server asks of a request body when the handler is done: whether it
  * was closed, whether its end was read, and how much of its declared length is
  * left, which is -1 when it has no length (body.unreadDataSizeLocked). */
-void burrow__http_body_state(void *body, bool *closed, bool *saw_eof,
-                             int64_t *unread);
+void burrow__http_body_state(void *body, bool *closed, bool *saw_eof, int64_t *unread);
 
 /* bodyAllowedForStatus. Whether a response with this status may have a body,
  * which 1xx, 204 and 304 may not. */
@@ -429,6 +428,9 @@ extern const Error burrow__http_err_no_tls;
 /* errTimeout, a net.Error whose Timeout is true. */
 extern const Error burrow__http_err_timeout;
 
+/* &timeoutError{text}, errTimeout with text of its own, made in a. */
+BURROW_OWNS(ret) Error burrow__http_timeout_error(Alloc *a, Str text);
+
 /* validMethod. */
 bool burrow__http_valid_method(Str m);
 
@@ -447,5 +449,14 @@ BURROW_OWNS(ret) Str burrow__http_proxy_auth(Alloc *a, const Url *proxy_url);
 
 /* resetProxyConfig. Makes ProxyFromEnvironment read the environment again. */
 void burrow__http_reset_cached_environment(void);
+
+/* The HttpTransport behind rt, or NULL when rt is some other round tripper. */
+BURROW_BORROWS(ret, rt) HttpTransport *burrow__http_as_transport(HttpRoundTripper rt);
+
+/* Transport.alternateRoundTripper. Sets *rt to the round tripper registered
+ * for req's scheme and gives true, or gives false when the transport sends req
+ * itself. */
+bool burrow__http_transport_alternate(HttpTransport *t, const HttpRequest *req,
+                                      HttpRoundTripper *rt);
 
 #endif /* BURROW_SRC_NET_HTTP_INTERNAL_H */

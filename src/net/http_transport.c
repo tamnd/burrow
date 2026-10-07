@@ -120,15 +120,14 @@ BURROW_SENTINEL_ERROR(tp_err_unencrypted_h2,
                       "http: Transport does not support unencrypted HTTP/2");
 BURROW_SENTINEL_ERROR(tp_err_socks5, "net/http: SOCKS5 proxies are not supported yet");
 
-/* timeoutError, errTimeout. A net.Error that is a timeout and is
- * context_deadline_exceeded to errors_is. */
+/* timeoutError, and errTimeout, which is one. A net.Error that is a timeout
+ * and is context_deadline_exceeded to errors_is. */
 typedef struct HttpErrTimeout {
-    Byte unused;
+    Str text;
 } HttpErrTimeout;
 
 static Str tp_timeout_m_error(HttpErrTimeout *self) {
-    (void)self;
-    return BURROW_S("net/http: timeout awaiting response headers");
+    return self->text;
 }
 
 static bool tp_timeout_m_true(HttpErrTimeout *self) {
@@ -173,21 +172,36 @@ static bool tp_timeout_is(const void *self, Error target) {
            target.data == context_deadline_exceeded.data;
 }
 
-/* The error lives as long as the program, so a copy is the error itself. */
-static Error tp_static_clone(const void *self, Alloc *a);
+static Error tp_timeout_clone(const void *self, Alloc *a);
 
 static const ErrorVT tp_timeout_vt = {
     &tp_timeout_desc, tp_timeout_message, NULL, NULL, tp_timeout_is, NULL,
-    tp_static_clone,
+    tp_timeout_clone,
 };
 
-static const HttpErrTimeout tp_timeout_value = {0};
+static const HttpErrTimeout tp_timeout_value = {
+    BURROW_S_INIT("net/http: timeout awaiting response headers")};
 
 const Error burrow__http_err_timeout = {&tp_timeout_vt, &tp_timeout_value};
 
-static Error tp_static_clone(const void *self, Alloc *a) {
-    (void)a;
-    return (Error){&tp_timeout_vt, self};
+Error burrow__http_timeout_error(Alloc *a, Str text) {
+    /* One block, the text after the struct. */
+    HttpErrTimeout *e = (HttpErrTimeout *)mem_alloc(a, sizeof *e + (size_t)text.len,
+                                                    _Alignof(HttpErrTimeout));
+    if (e == NULL)
+        return burrow_err_out_of_memory;
+    Byte *p = (Byte *)(e + 1);
+    if (text.len > 0)
+        memcpy(p, text.p, (size_t)text.len);
+    e->text = str_from_bytes(p, text.len);
+    return (Error){&tp_timeout_vt, e};
+}
+
+/* errTimeout lives as long as the program, so a copy of it is itself. */
+static Error tp_timeout_clone(const void *self, Alloc *a) {
+    if (self == &tp_timeout_value)
+        return burrow__http_err_timeout;
+    return burrow__http_timeout_error(a, ((const HttpErrTimeout *)self)->text);
 }
 
 static bool tp_same(Error a, Error b) {
@@ -3072,6 +3086,15 @@ static HttpResponse *tp_rt_round_trip(void *self, HttpRequest *req, Error *err) 
 }
 
 static const HttpRoundTripperVT tp_rt_vt = {NULL, tp_rt_round_trip};
+
+HttpTransport *burrow__http_as_transport(HttpRoundTripper rt) {
+    return rt.vt == &tp_rt_vt ? (HttpTransport *)rt.data : NULL;
+}
+
+bool burrow__http_transport_alternate(HttpTransport *t, const HttpRequest *req,
+                                      HttpRoundTripper *rt) {
+    return tp_alternate_round_tripper(t, req, rt);
+}
 
 HttpRoundTripper http_transport_as_round_tripper(HttpTransport *t) {
     HttpRoundTripper rt = {&tp_rt_vt, t};

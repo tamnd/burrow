@@ -390,3 +390,4 @@ global	src/crypto/elliptic.c	elliptic_once	tables	A SyncOnce, which is the synch
 global	src/log/log.c	log_std	package-vars	The standard logger, log.std in Go. Its flags are atomic and its prefix and output each have a lock inside the logger, as in Go, so any thread may use it and change it.
 global	src/net/http_transport.c	tp_default_transport	package-vars	DefaultTransport. Its own mutexes guard the pool and the calls, and the settings are only read.
 global	src/net/http_transport.c	tp_env_proxy_cache	package-vars	envProxyFunc's cache of the proxy settings in the environment. Go keeps it behind a sync.Once, and here it is loaded on first use under its own mutex.
+global	src/net/http_client.c	cl_default_client	package-vars	DefaultClient. Its fields are only read, and the default transport guards itself.

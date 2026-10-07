@@ -650,7 +650,14 @@ http_serve_mux_free(mux);
 That prints:
 
 ```
-PENDING
+GET /notes/42: 200
+    note 42
+DELETE /notes/42: 405, allow GET, HEAD
+GET /files/a.txt: 200
+    file /files/a.txt
+GET /files: 307 to /files/
+GET /files/x/../b.txt: 307 to /files/b.txt
+GET /other: 404
 ```
 
 `http_serve_mux_handler` answers the same question without calling anything, and gives back the pattern that matched. `http_strip_prefix`, `http_redirect_handler` and `http_not_found_handler` are the small handlers Go has, and `http_handle` registers on `http_default_serve_mux` as `http.Handle` does.
@@ -688,7 +695,14 @@ for (size_t i = 0; i < sizeof methods / sizeof methods[0]; i++) {
 That prints:
 
 ```
-PENDING
+GET 200 OK
+  Content-Type: text/html; charset=utf-8
+  Cache-Control: no-store
+  body: "<p>hello from /greet</p>"
+POST 405 Method Not Allowed
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: no-store
+  body: "only GET here\n"
 ```
 
 The recorder sniffs a Content-Type from the first write when the handler sets none, as a server does, and a write after a 204 or 304 status keeps the bytes but returns `http_err_body_not_allowed`. Go's `httptest.Server` needs the HTTP server and comes with it.

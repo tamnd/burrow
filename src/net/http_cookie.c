@@ -74,13 +74,14 @@ static Error hc_error(const Str *text) {
 
 /* ------------------------------------------------------------------ GODEBUG
  *
- * The settings net/http reads from GODEBUG: httpcookiemaxnum here, and
- * httplaxcontentlength for http_transfer.c. */
+ * The settings net/http reads from GODEBUG: httpcookiemaxnum here,
+ * httplaxcontentlength for http_transfer.c and httpmuxgo121 for the mux. */
 
 enum {
     HC_DEBUG_KNOWN = 1 << 0,
     HC_DEBUG_MAX_SET = 1 << 1, /* httpcookiemaxnum is a number */
     HC_DEBUG_LAX_CL = 1 << 2,  /* httplaxcontentlength=1 */
+    HC_DEBUG_MUX121 = 1 << 3,  /* httpmuxgo121=1 */
 };
 
 static uint32_t hc_debug_flags;
@@ -123,6 +124,8 @@ static uint32_t hc_debug_parse(const char *v) {
     if (v != NULL && hc_godebug(v, "httplaxcontentlength", &s) &&
         str_eq(s, BURROW_S("1")))
         f |= HC_DEBUG_LAX_CL;
+    if (v != NULL && hc_godebug(v, "httpmuxgo121", &s) && str_eq(s, BURROW_S("1")))
+        f |= HC_DEBUG_MUX121;
     burrow__atomic64_store(&hc_debug_max, max);
     burrow__atomic_store_relaxed_u32(&hc_debug_flags, f);
     return f;
@@ -151,6 +154,10 @@ void burrow__http_godebug_set(const char *value) {
 
 bool burrow__http_godebug_lax_content_length(void) {
     return (hc_debug_load() & HC_DEBUG_LAX_CL) != 0;
+}
+
+bool burrow__http_godebug_mux121(void) {
+    return (hc_debug_load() & HC_DEBUG_MUX121) != 0;
 }
 
 /* cookieNumWithinMax. */

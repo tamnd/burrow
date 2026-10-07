@@ -304,4 +304,54 @@ bool burrow__http_protocols_http3(HttpProtocols p);
 void burrow__http_protocols_set_http3(HttpProtocols *p, bool ok);
 bool burrow__http_protocols_empty(HttpProtocols p);
 
+/* ----------------------------------------------------------- ServeMux
+ *
+ * What Go's tests for the mux reach inside it for. */
+
+struct burrow__HttpRoutingNode;
+struct burrow__HttpPattern;
+
+/* httpmuxgo121=1 in GODEBUG, which gives every mux the one Go 1.21 had. */
+bool burrow__http_godebug_mux121(void);
+
+/* redirectHandler, what http_redirect_handler makes. */
+typedef struct burrow__HttpRedirectHandler {
+    Str url;
+    Int code;
+} burrow__HttpRedirectHandler;
+
+extern const HttpHandlerVT burrow__http_redirect_handler_vt;
+
+/* registerErr. ServeMux.Handle without the panic, the pattern registered as
+ * being at file and line. */
+BURROW_BORROWS(ret) Error burrow__http_serve_mux_register_err(
+    HttpServeMux *mux, Str pattern, HttpHandler h, const char *file, Int line);
+
+/* findHandler. The handler for r, with the pattern's text, the pattern itself
+ * and what its wildcards matched, the last two only when r is to go to a
+ * handler that was registered. What is made is made in a. */
+BURROW_BORROWS(ret, mux) HttpHandler burrow__http_serve_mux_find_handler(
+    HttpServeMux *mux, const HttpRequest *r, Alloc *a, Str *pattern,
+    const struct burrow__HttpPattern **pat, Slice *matches);
+
+/* exactMatch. Whether n, which may be NULL, matched path by its own pattern
+ * and not by the multi wildcard at its end. */
+bool burrow__http_exact_match(const struct burrow__HttpRoutingNode *n, Str path);
+
+/* The Go 1.21 mux, from servemux121.go, kept in the mux's arena. */
+typedef struct burrow__HttpMux121 burrow__HttpMux121;
+
+/* handle and findHandler. handle panics as Go's does. */
+void burrow__http_mux121_handle(HttpServeMux *mux, Str pattern, HttpHandler h);
+BURROW_BORROWS(ret, mux) HttpHandler burrow__http_mux121_find_handler(
+    HttpServeMux *mux, const HttpRequest *r, Alloc *a, Str *pattern);
+
+/* The mux's arena, set up the first time it is wanted. Call with mux->mu held
+ * for writing. */
+BURROW_BORROWS(ret, mux) Alloc *burrow__http_serve_mux_alloc(HttpServeMux *mux);
+
+/* stripHostPort. h without its port, or h as it is when it has none or is not
+ * host:port. */
+BURROW_BORROWS(ret, h) Str burrow__http_strip_host_port(Str h);
+
 #endif /* BURROW_SRC_NET_HTTP_INTERNAL_H */

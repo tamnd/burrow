@@ -13,6 +13,8 @@
 #ifndef BURROW_SRC_NET_HTTP_ROUTING_H
 #define BURROW_SRC_NET_HTTP_ROUTING_H
 
+#include "burrow/net/http.h"
+
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/map.h"

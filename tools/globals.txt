@@ -201,8 +201,9 @@ global	src/unique/unique.c	uq_arena	intern	Only touched under uq_lock.
 global	src/unique/unique.c	uq_ready	intern	Only touched under uq_lock.
 global	src/net/url.c	url_debug_flags	godebug	The urlstrictcolons and urlmaxqueryparams settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/net/url.c	url_debug_max	godebug	The urlmaxqueryparams number, stored atomically before url_debug_flags says it is there.
-global	src/net/http_cookie.c	hc_debug_flags	godebug	The httpcookiemaxnum and httplaxcontentlength settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
+global	src/net/http_cookie.c	hc_debug_flags	godebug	The httpcookiemaxnum, httplaxcontentlength and httpmuxgo121 settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/net/http_cookie.c	hc_debug_max	godebug	The httpcookiemaxnum number, stored atomically before hc_debug_flags says it is there.
+global	src/net/http_server.c	mx_default_serve_mux	package-vars	DefaultServeMux. Its zero value is ready, and its own RWMutex guards everything in it.
 global	src/math/rand.c	rand_debug_flags	godebug	The randautoseed and randseednop settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/mime/multipart.c	mp_debug_flags	godebug	The multipartfiles, multipartmaxheaders and multipartmaxparts settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/mime/multipart.c	mp_debug_max_headers	godebug	The multipartmaxheaders number, stored atomically before mp_debug_flags says it is there.

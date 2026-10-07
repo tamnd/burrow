@@ -604,3 +604,44 @@ PENDING
 ```
 
 As in Go, a request's `Host` field is taken out of its header and kept in `host`. The response is given the request it answers, or NULL, because a response to `HEAD` has no body whatever its header says. `Transfer-Encoding` other than a single `chunked` is refused, and so are two different `Content-Length` values, since both are ways to smuggle one request inside another.
+
+## Routing requests
+
+`HttpServeMux` is Go's `ServeMux`, with the patterns Go 1.22 brought in. A pattern can name a method and a host, and a wildcard such as `{id}` matches one segment of the path, which the handler gets back with `http_request_path_value`. A pattern ending in a slash matches everything under it, and `{$}` at the end matches only the slash. When two patterns match a request the more specific one wins, and two patterns that match the same requests with neither more specific panic when the second is registered, with the file and line of the first in the message. `GODEBUG=httpmuxgo121=1` brings back the Go 1.21 mux, which has none of this.
+
+A handler is an `HttpHandler`, a vtable and a pointer like any other interface, and `HttpHandlerFunc` makes one from a function and its environment. `http_serve_mux_serve_http` finds the handler for a request and calls it. A path that isn't clean is redirected to the clean one, a path that is only registered with a slash on the end is redirected there, and a method no pattern allows gets a 405 with an `Allow` header listing the ones that are. There is no server yet, so here a small `ResponseWriter` from the example file prints what each request gets:
+
+<!-- example: ../examples/net/http.c#mux -->
+```c
+HttpServeMux *mux = http_new_serve_mux(a);
+http_serve_mux_handle_func(mux, BURROW_S("GET /notes/{id}"),
+                           BURROW_FN(HttpHandlerFunc, show_note, NULL));
+http_serve_mux_handle_func(mux, BURROW_S("/files/"),
+                           BURROW_FN(HttpHandlerFunc, show_file, NULL));
+
+const char *reqs[][2] = {
+    {"GET", "/notes/42"}, {"DELETE", "/notes/42"},      {"GET", "/files/a.txt"},
+    {"GET", "/files"},    {"GET", "/files/x/../b.txt"}, {"GET", "/other"},
+};
+for (size_t i = 0; i < sizeof reqs / sizeof reqs[0]; i++) {
+    Error err;
+    HttpRequest *r =
+        http_new_request(a, str_from_cstr(reqs[i][0]), str_from_cstr(reqs[i][1]),
+                         (IoReader){0}, &err);
+    if (r == NULL)
+        continue;
+    printf("%s %s: ", reqs[i][0], reqs[i][1]);
+    Printer out = {http_header_make(a), 0};
+    http_serve_mux_serve_http(mux, (HttpResponseWriter){&printer_vt, &out}, r);
+    http_request_free(r);
+}
+http_serve_mux_free(mux);
+```
+
+That prints:
+
+```
+PENDING
+```
+
+`http_serve_mux_handler` answers the same question without calling anything, and gives back the pattern that matched. `http_strip_prefix`, `http_redirect_handler` and `http_not_found_handler` are the small handlers Go has, and `http_handle` registers on `http_default_serve_mux` as `http.Handle` does.

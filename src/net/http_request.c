@@ -8,6 +8,7 @@
  * in the LICENSE file. */
 
 #include "http_internal.h"
+#include "http_routing.h"
 
 #include "../xnet/httpguts.h"
 #include "http_ascii.h"
@@ -782,4 +783,47 @@ HttpRequest *http_request_with_context(const HttpRequest *r, Alloc *a, Context c
     arena_init(&r2->arena, a, 0);
     r2->wire = NULL;
     return r2;
+}
+
+/* --------------------------------------------------------------- path values */
+
+/* patIndex. Where name is among the pattern's named wildcards, or -1. A
+ * search beats a map here, since most patterns have a wildcard or two. */
+static Int hq_pat_index(const HttpRequest *r, Str name) {
+    if (r->pat == NULL)
+        return -1;
+    Int i = 0;
+    for (Int k = 0; k < r->pat->nsegments; k++) {
+        const burrow__HttpSegment *seg = &r->pat->segments[k];
+        if (seg->wild && seg->s.len > 0) {
+            if (str_eq(name, seg->s))
+                return i;
+            i++;
+        }
+    }
+    return -1;
+}
+
+Str http_request_path_value(const HttpRequest *r, Str name) {
+    Int i = hq_pat_index(r, name);
+    if (i >= 0)
+        return i < r->matches.len ? ((const Str *)r->matches.p)[i] : (Str){0};
+    if (r->other_values == NULL)
+        return (Str){0};
+    const Str *v = (const Str *)map_get(r->other_values, &name);
+    return v != NULL ? *v : (Str){0};
+}
+
+bool http_request_set_path_value(HttpRequest *r, Alloc *a, Str name, Str value) {
+    Int i = hq_pat_index(r, name);
+    if (i >= 0 && i < r->matches.len) {
+        ((Str *)r->matches.p)[i] = value;
+        return true;
+    }
+    if (r->other_values == NULL) {
+        r->other_values = map_make(a, TYPE_STRING, TYPE_STRING, 0);
+        if (r->other_values == NULL)
+            return false;
+    }
+    return map_set(r->other_values, &name, &value);
 }

@@ -2,7 +2,7 @@
  * routing_index_test.go and mapping_test.go.
  * Go source: go1.27.1.
  *
- * TestRegisterConflict waits for ServeMux.
+ * TestRegisterConflict needs a ServeMux, so it is in http_mux_test.c.
  *
  * Copyright 2023 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.

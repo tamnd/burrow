@@ -144,6 +144,22 @@ static bool wnet_type(int32_t type, int *out) {
     }
 }
 
+/* SO_TYPE's answer as a PAL_SOCK_ type, 0 for one with no name here. */
+static int64_t wnet_type_from(int ty) {
+    switch (ty) {
+    case SOCK_STREAM:
+        return PAL_SOCK_STREAM;
+    case SOCK_DGRAM:
+        return PAL_SOCK_DGRAM;
+    case SOCK_RAW:
+        return PAL_SOCK_RAW;
+    case SOCK_SEQPACKET:
+        return PAL_SOCK_SEQPACKET;
+    default:
+        return 0;
+    }
+}
+
 static bool wnet_to_native(const PalSockAddr *a, struct sockaddr_storage *ss, int *len,
                            PalErrno *err) {
     memset(ss, 0, sizeof *ss);
@@ -272,6 +288,40 @@ bool pal_socket_close(int64_t fd, PalErrno *err) {
     if (!wnet_fd_ok(fd, err))
         return false;
     if (closesocket((SOCKET)fd) != 0)
+        return wnet_fail(err);
+    return true;
+}
+
+/* Go's dupSocket: the socket's protocol info, for this process, and a new
+ * socket from it. */
+int64_t pal_socket_dup(int64_t fd, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!wnet_fd_ok(fd, err))
+        return -1;
+    WSAPROTOCOL_INFOW info;
+    memset(&info, 0, sizeof info);
+    if (WSADuplicateSocketW((SOCKET)fd, GetCurrentProcessId(), &info) != 0)
+        return wnet_fail_n(err);
+    SOCKET s = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO,
+                          &info, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+    if (s == INVALID_SOCKET)
+        return wnet_fail_n(err);
+    return (int64_t)s;
+}
+
+bool pal_nonblock(int64_t fd, bool *on, PalErrno *err) {
+    (void)fd;
+    (void)on;
+    BURROW_OUT(err, PAL_ENOTSUP);
+    return false;
+}
+
+bool pal_set_nonblock(int64_t fd, bool on, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!wnet_fd_ok(fd, err))
+        return false;
+    u_long v = on ? 1 : 0;
+    if (ioctlsocket((SOCKET)fd, (long)FIONBIO, &v) != 0)
         return wnet_fail(err);
     return true;
 }
@@ -570,6 +620,10 @@ static bool wnet_opt(int32_t opt, int *level, int *name, bool *flag) {
         *level = SOL_SOCKET;
         *name = SO_ERROR;
         return true;
+    case PAL_SO_TYPE:
+        *level = SOL_SOCKET;
+        *name = SO_TYPE;
+        return true;
     case PAL_TCP_NODELAY:
         *level = IPPROTO_TCP;
         *name = TCP_NODELAY;
@@ -652,6 +706,8 @@ bool pal_getsockopt(int64_t fd, int32_t opt, int64_t *value, PalErrno *err) {
         return wnet_fail(err);
     if (opt == PAL_SO_ERROR)
         *value = v == 0 ? (int64_t)PAL_OK : (int64_t)burrow__pal_errno_wsa(v);
+    else if (opt == PAL_SO_TYPE)
+        *value = wnet_type_from(v);
     else if (flag)
         *value = v != 0;
     else
@@ -671,7 +727,7 @@ bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err) {
         return false;
     }
     (void)flag;
-    if (opt == PAL_SO_ERROR || value > INT32_MAX || value < -1 ||
+    if (opt == PAL_SO_ERROR || opt == PAL_SO_TYPE || value > INT32_MAX || value < -1 ||
         (value < 0 && opt != PAL_SO_LINGER) ||
         (opt == PAL_SO_LINGER && value > 65535)) {
         BURROW_OUT(err, PAL_EINVAL);

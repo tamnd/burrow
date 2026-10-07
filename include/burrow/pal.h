@@ -860,6 +860,13 @@ bool pal_utimesat(int64_t dirfd, const char *path, int64_t atime_ns, int64_t mti
 
 int64_t pal_dup(int64_t fd, PalErrno *err);
 
+/* Whether fd is in non blocking mode, and putting it in or out of it, which
+ * are Go's unix.IsNonblock and syscall.SetNonblock. On Windows the setter
+ * works on sockets only, through FIONBIO, and asking is PAL_ENOTSUP, since
+ * Windows has no way to read the mode back. */
+bool pal_nonblock(int64_t fd, bool *on, PalErrno *err);
+bool pal_set_nonblock(int64_t fd, bool on, PalErrno *err);
+
 /* out[0] is the read end and out[1] is the write end. flags takes
  * PAL_O_NONBLOCK and nothing else. */
 bool pal_pipe(int64_t out[2], uint32_t flags, PalErrno *err);
@@ -1657,6 +1664,13 @@ int64_t pal_socket(int32_t family, int32_t type, int32_t protocol, PalErrno *err
  * with pal_close. Elsewhere the two are the same. */
 bool pal_socket_close(int64_t fd, PalErrno *err);
 
+/* A second descriptor for the socket fd, close on exec, which is what Go's
+ * File methods hand out. On POSIX it is F_DUPFD_CLOEXEC, and the two share
+ * their status flags, non blocking among them. On Windows it is
+ * WSADuplicateSocketW and then WSASocketW, a new socket that is not
+ * inherited, which pal_socket_close closes. */
+int64_t pal_socket_dup(int64_t fd, PalErrno *err);
+
 bool pal_bind(int64_t fd, const PalSockAddr *addr, PalErrno *err);
 bool pal_listen(int64_t fd, int32_t backlog, PalErrno *err);
 
@@ -1747,7 +1761,8 @@ enum {
     PAL_IPV6_HOPLIMIT,
     PAL_IP_MULTICAST_LOOP,
     PAL_IPV6_MULTICAST_IF,
-    PAL_IPV6_MULTICAST_LOOP
+    PAL_IPV6_MULTICAST_LOOP,
+    PAL_SO_TYPE
 };
 
 /* A value is 1 or 0 for the options that are on or off, a count for the
@@ -1755,8 +1770,9 @@ enum {
  * TCP ones. PAL_SO_LINGER is the linger time in seconds, or -1 for lingering
  * off. PAL_SO_ERROR only reads, and what it reads is a PalErrno, PAL_OK when
  * there is no error, with the native code behind it kept for
- * pal_errno_native. PAL_IPV6_MULTICAST_IF is an interface index. An option
- * the platform does not have is PAL_ENOTSUP. */
+ * pal_errno_native. PAL_SO_TYPE only reads too, and what it reads is a
+ * PAL_SOCK_ type, or 0 for a type with no name here. PAL_IPV6_MULTICAST_IF is
+ * an interface index. An option the platform does not have is PAL_ENOTSUP. */
 bool pal_getsockopt(int64_t fd, int32_t opt, int64_t *value, PalErrno *err);
 bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err);
 

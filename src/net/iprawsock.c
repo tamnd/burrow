@@ -269,6 +269,34 @@ NetIPConn *net_listen_ip(Alloc *a, Str network, const NetIPAddr *laddr, Error *e
     return c;
 }
 
+OsFile *net_ip_conn_file(NetIPConn *c, Alloc *a, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return NULL;
+    }
+    return burrow__conn_file(&c->c, a, err);
+}
+
+NetIPConn *burrow__net_ip_conn_from_file(Alloc *a, const burrow__NetFileSock *fs,
+                                         Error *err) {
+    NetIPConn *c = (NetIPConn *)mem_alloc(a, sizeof(NetIPConn), _Alignof(NetIPConn));
+    if (c == NULL) {
+        (void)pal_socket_close(fs->s, NULL);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    c->c.alloc = a;
+    Error e = burrow__netfd_from_file(&c->c.fd, fs);
+    if (BURROW_FAILED(e)) {
+        mem_free(a, c, sizeof(NetIPConn), _Alignof(NetIPConn));
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    ir_new_conn(c);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return c;
+}
+
 SyscallRawConn net_ip_conn_syscall_conn(NetIPConn *c, Error *err) {
     if (c == NULL) {
         BURROW_OUT(err, burrow__net_einval());

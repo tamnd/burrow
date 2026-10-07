@@ -1042,6 +1042,31 @@ int64_t pal_dup(int64_t fd, PalErrno *err) {
     return nfd;
 }
 
+bool pal_nonblock(int64_t fd, bool *on, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!fd_ok(fd, err))
+        return false;
+    int fl = fcntl((int)fd, F_GETFL);
+    if (fl < 0)
+        return file_fail(err);
+    if (on != NULL)
+        *on = (fl & O_NONBLOCK) != 0;
+    return true;
+}
+
+bool pal_set_nonblock(int64_t fd, bool on, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!fd_ok(fd, err))
+        return false;
+    int fl = fcntl((int)fd, F_GETFL);
+    if (fl < 0)
+        return file_fail(err);
+    int want = on ? fl | O_NONBLOCK : fl & ~O_NONBLOCK;
+    if (want != fl && fcntl((int)fd, F_SETFL, want) != 0)
+        return file_fail(err);
+    return true;
+}
+
 #if !(defined(BURROW_OS_LINUX) || defined(BURROW_OS_FREEBSD) ||                        \
       defined(BURROW_OS_NETBSD) || defined(BURROW_OS_OPENBSD) ||                       \
       defined(BURROW_OS_DRAGONFLY) || defined(BURROW_OS_WASI))

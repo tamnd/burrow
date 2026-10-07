@@ -78,6 +78,12 @@ bool pal_socket_close(int64_t fd, PalErrno *err) {
     return pnet_nosys(err);
 }
 
+int64_t pal_socket_dup(int64_t fd, PalErrno *err) {
+    (void)fd;
+    pnet_nosys(err);
+    return -1;
+}
+
 bool pal_bind(int64_t fd, const PalSockAddr *addr, PalErrno *err) {
     (void)fd;
     (void)addr;
@@ -292,6 +298,21 @@ static bool pnet_type(int32_t type, int *out) {
     }
 }
 
+/* SO_TYPE's answer as a PAL_SOCK_ type, 0 for one with no name here. */
+static int64_t pnet_type_from(int ty) {
+    if (ty == SOCK_STREAM)
+        return PAL_SOCK_STREAM;
+    if (ty == SOCK_DGRAM)
+        return PAL_SOCK_DGRAM;
+    if (ty == SOCK_RAW)
+        return PAL_SOCK_RAW;
+#if defined(SOCK_SEQPACKET)
+    if (ty == SOCK_SEQPACKET)
+        return PAL_SOCK_SEQPACKET;
+#endif
+    return 0;
+}
+
 /* An address of ours as the platform's, in ss, with its length. The port and
  * the address go into network byte order here and nowhere else. */
 static bool pnet_to_native(const PalSockAddr *a, struct sockaddr_storage *ss,
@@ -475,6 +496,16 @@ bool pal_socket_close(int64_t fd, PalErrno *err) {
     if (close((int)fd) != 0 && errno != EINTR)
         return pnet_fail(err);
     return true;
+}
+
+int64_t pal_socket_dup(int64_t fd, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!pnet_fd_ok(fd, err))
+        return -1;
+    int nfd = fcntl((int)fd, F_DUPFD_CLOEXEC, 0);
+    if (nfd < 0)
+        return pnet_fail_n(err);
+    return nfd;
 }
 
 bool pal_bind(int64_t fd, const PalSockAddr *addr, PalErrno *err) {
@@ -856,6 +887,10 @@ static bool pnet_opt(int32_t opt, int *level, int *name, bool *flag) {
         *level = SOL_SOCKET;
         *name = SO_ERROR;
         return true;
+    case PAL_SO_TYPE:
+        *level = SOL_SOCKET;
+        *name = SO_TYPE;
+        return true;
     case PAL_TCP_NODELAY:
         *level = IPPROTO_TCP;
         *name = TCP_NODELAY;
@@ -966,6 +1001,8 @@ bool pal_getsockopt(int64_t fd, int32_t opt, int64_t *value, PalErrno *err) {
         return pnet_fail(err);
     if (opt == PAL_SO_ERROR)
         *value = v == 0 ? (int64_t)PAL_OK : (int64_t)burrow__pal_errno(v);
+    else if (opt == PAL_SO_TYPE)
+        *value = pnet_type_from(v);
     else if (flag)
         *value = v != 0;
     else
@@ -985,7 +1022,7 @@ bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err) {
         return false;
     }
     (void)flag;
-    if (opt == PAL_SO_ERROR || value > INT32_MAX || value < -1 ||
+    if (opt == PAL_SO_ERROR || opt == PAL_SO_TYPE || value > INT32_MAX || value < -1 ||
         (value < 0 && opt != PAL_SO_LINGER)) {
         BURROW_OUT(err, PAL_EINVAL);
         return false;

@@ -107,7 +107,10 @@ static HttptraceConnectStartFunc connect_start(ByteHook *h) {
 }
 
 static void TestWithClientTrace(TestingT *t) {
-    StringsBuilder buf = STRINGS_BUILDER(heap_allocator());
+    /* Strings the builder lends out stay until the arena goes. */
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    StringsBuilder buf = STRINGS_BUILDER(arena_allocator(&ar));
     ByteHook o = {&buf, 'O', t};
     ByteHook n = {&buf, 'N', t};
 
@@ -125,11 +128,13 @@ static void TestWithClientTrace(TestingT *t) {
         testing_t_errorf_v(t, "got %q; want %q", got, cs("NO"));
     context_release(ctx2);
     context_release(ctx);
-    strings_builder_reset(&buf);
+    arena_free(&ar);
 }
 
 static void TestCompose(TestingT *t) {
-    StringsBuilder buf = STRINGS_BUILDER(heap_allocator());
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    StringsBuilder buf = STRINGS_BUILDER(arena_allocator(&ar));
     ByteHook th = {&buf, 'T', t};
     ByteHook oh = {&buf, 'O', t};
 
@@ -165,14 +170,16 @@ static void TestCompose(TestingT *t) {
         if (tests[i].has_old)
             context_release(octx);
     }
-    strings_builder_reset(&buf);
+    arena_free(&ar);
 }
 
 /* A trace with no hooks in a context gives back that trace, and one put over
  * a trace with no hooks calls only its own. */
 static void TestContextClientTrace(TestingT *t) {
     CHECK(httptrace_context_client_trace(context_background()) == NULL);
-    StringsBuilder buf = STRINGS_BUILDER(heap_allocator());
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    StringsBuilder buf = STRINGS_BUILDER(arena_allocator(&ar));
     ByteHook n = {&buf, 'N', t};
     HttptraceClientTrace empty;
     memset(&empty, 0, sizeof empty);
@@ -191,7 +198,7 @@ static void TestContextClientTrace(TestingT *t) {
     context_release(ctx3);
     context_release(ctx2);
     context_release(ctx);
-    strings_builder_reset(&buf);
+    arena_free(&ar);
 }
 
 /* --------------------------------------------------------- the event log */

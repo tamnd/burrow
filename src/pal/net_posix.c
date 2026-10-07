@@ -761,7 +761,7 @@ int64_t pal_recvmsg(int64_t fd, void *buf, int64_t n, void *oob, int64_t oobcap,
     if (oobn != NULL)
         *oobn = (int64_t)msg.msg_controllen;
     if (flags != NULL)
-        *flags = (int32_t)msg.msg_flags;
+        *flags = (int32_t)(msg.msg_flags & ~PNET_RECVMSG_FLAGS);
     if (from != NULL && !pnet_from_native(&ss, msg.msg_namelen, from))
         from->family = PAL_AF_UNSPEC;
     return (int64_t)r;

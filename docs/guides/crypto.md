@@ -147,6 +147,29 @@ Both take a reader. Int reads from the one you give it, which is how a test make
 
 `crypto_rand_reader` is a variable, as `rand.Reader` is in Go, so a test can point it at a reader of its own. Do that before other threads start, because nothing synchronises it.
 
+## crypto/fips140
+
+`burrow/crypto/fips140.h` answers whether the program is running in FIPS 140-3 mode. In burrow the answer is always no:
+
+<!-- example: ../examples/crypto/fips140.c#enabled -->
+```c
+if (fips140_enabled())
+    printf("FIPS 140-3 mode\n");
+else
+    printf("not in FIPS 140-3 mode\n");
+```
+
+Go ships a FIPS 140-3 module, a fixed set of its crypto packages that has been through validation, and `GODEBUG=fips140=on` makes a Go program use only that module, check its own code against a checksum when it starts and run the self tests the standard asks for. burrow's code follows the same module, but it has not been validated, and it does not claim to be.
+
+So when `GODEBUG` asks for the mode with `fips140=on`, `only` or `debug`, `fips140_enabled` and `fips140_enforced` panic with `fips140: FIPS 140-3 mode is not supported by burrow`. That is what a Go program does at startup on a platform where the mode is not supported, and it is better than letting a program that asked for FIPS mode carry on without it. An unknown value panics as it does in Go, and `off` or no setting at all gives false. The setting is read the first time either function is called and never again.
+
+`fips140_version` gives `"latest"`, which is what Go gives for a program that was not built against a frozen module. `fips140_without_enforcement` runs a function with strict enforcement off, and since enforcement is never on here, it just runs it:
+
+<!-- example: ../examples/crypto/fips140.c#without -->
+```c
+fips140_without_enforcement(BURROW_FN(Func, legacy, NULL));
+```
+
 ## crypto/hmac
 
 `burrow/crypto/hmac.h` makes a message authentication code out of any hash and a key. The sender works out the MAC of a message and sends both, and the receiver, who has the same key, works it out again and compares:
@@ -1152,3 +1175,37 @@ rsa_private_key_free(priv, a);
 ```
 
 Everything that touches the private key is constant time, and so is checking the padding when decrypting. A key put together by hand should go through `rsa_private_key_precompute` before use, which checks it and works out the values that make the private key operations fast.
+
+## crypto/x509/pkix
+
+`burrow/crypto/x509/pkix.h` has the ASN.1 structures that certificates, CRLs and OCSP share: distinguished names, algorithm identifiers, extensions and the old CRL types. Each one has a type descriptor carrying Go's asn1 struct tags, so `encoding/asn1` reads and writes them with no extra code. A `PkixName` is the friendly form of a name, and `pkix_name_to_rdn_sequence` turns it into the sequence of RDNs that goes on the wire:
+
+<!-- example: ../examples/crypto/pkix.c#name -->
+```c
+Str org = BURROW_S("Example Ltd");
+PkixName n = {0};
+n.common_name = BURROW_S("www.example.com");
+n.organization = slice_append(a, slice_nil(TYPE_STRING), &org, 1);
+PkixRDNSequence rdns = pkix_name_to_rdn_sequence(n, a);
+
+Error err = BURROW_NO_ERROR;
+Slice der = asn1_marshal(a, BURROW_ANY(TYPE_PKIX_RDN_SEQUENCE, &rdns), &err);
+print(hex_encode_to_string(a, der));
+```
+
+Going the other way, unmarshal into a `PkixRDNSequence` and fill a `PkixName` from it. The string form follows RFC 2253, last RDN first, with the same escaping as Go:
+
+<!-- example: ../examples/crypto/pkix.c#parse -->
+```c
+PkixRDNSequence back = slice_nil(TYPE_PKIX_RELATIVE_DISTINGUISHED_NAME_SET);
+asn1_unmarshal(a, der, BURROW_ANY(TYPE_PKIX_RDN_SEQUENCE, &back), &err);
+if (BURROW_FAILED(err))
+    return;
+PkixName parsed = {0};
+pkix_name_fill_from_rdn_sequence(&parsed, a, &back);
+print(pkix_name_string(parsed, a));
+print(parsed.common_name);
+printf("%d attributes\n", (int)parsed.names.len);
+```
+
+`names` keeps every attribute the parsed name had, including ones with no field of their own. `extra_names` is for the other direction: attributes put there are written into the name and win over a field of the same type. As in Go, a nil `extra_names` and an empty one are not the same thing when the name is printed, so leave it nil unless you mean to hide the uncommon attributes in `names`.

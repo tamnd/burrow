@@ -64,6 +64,20 @@ void burrow__netpoll_backend_break(void) {
         runtime_throw(BURROW_S("netpoll: the wakeup could not be delivered"));
 }
 
+#if defined(BURROW_NETPOLL_POLL)
+void burrow__netpoll_backend_arm(burrow__PollFd fd, uint32_t mode) {
+    PalErrno err = PAL_OK;
+
+    uint32_t m = 0;
+    if ((mode & BURROW_POLL_READ) != 0)
+        m |= PAL_POLL_READ;
+    if ((mode & BURROW_POLL_WRITE) != 0)
+        m |= PAL_POLL_WRITE;
+    if (!pal_poll_arm(poller, (int64_t)fd, m, &err))
+        runtime_throw(BURROW_S("netpoll: a descriptor could not be armed"));
+}
+#endif
+
 void burrow__netpoll_backend_wait(int64_t delay, burrow__GQueue *out) {
     PalPollEvent events[EVENTS];
     PalErrno err = PAL_OK;

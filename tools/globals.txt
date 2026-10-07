@@ -125,6 +125,14 @@ global	src/pal/poll_bsd.c	kqueue_fd	netpoller	The kqueue descriptor. One per pro
 global	src/pal/poll_bsd.c	breakrd	netpoller	The read end of the wakeup pipe, which is what the kqueue watches.
 global	src/pal/poll_bsd.c	breakwr	netpoller	The write end of the wakeup pipe, which is where a byte goes to interrupt a wait.
 global	src/pal/poll_bsd.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one byte, and cleared by whoever drains the pipe.
+global	src/pal/poll_posix.c	table	netpoller	The poll(2) backend's set: for each descriptor, whether it is in, the pointer to hand back and the directions armed. Under table_mu.
+global	src/pal/poll_posix.c	table_hi	netpoller	One more than the highest descriptor in table, so that a wait stops there. Under table_mu.
+global	src/pal/poll_posix.c	sleepers	netpoller	How many waits are asleep in poll, under table_mu, so that pal_poll_arm knows to wake them.
+global	src/pal/poll_posix.c	pollset_handle	netpoller	The handle pal_poll_create gave back, set once by it and read without anything afterwards.
+global	src/pal/poll_posix.c	table_mu	netpoller	The lock over table, table_hi and sleepers. Held while a wait copies the set and while it reads the answer, never across poll itself.
+global	src/pal/poll_posix.c	breakrd	netpoller	The read end of the wakeup pipe, set once by pal_poll_create.
+global	src/pal/poll_posix.c	breakwr	netpoller	The write end of the wakeup pipe, set alongside breakrd.
+global	src/pal/poll_posix.c	wakesig	netpoller	Whether a wakeup is already on its way, so that many cost one byte. Cleared by the thread that drains the pipe.
 global	src/pal/poll_windows.c	iocp	netpoller	The completion port. One per process, made once by pal_poll_create and read without anything afterwards.
 global	src/pal/poll_windows.c	wakesig	netpoller	Whether a wakeup is already on its way. Atomic, set by a compare and swap so that many wakeups at once cost one posted completion, and cleared by whoever takes that completion off the port.
 global	src/runtime/netpoll_readiness.c	poller	netpoller	The PAL's handle for the poller. Set once by the backend init, which runs under init_lock, and read without anything afterwards.
@@ -312,6 +320,7 @@ global	src/syscall/unix.c	unix_mmap_mu	package-vars	The lock in Go's mapper, hel
 global	src/syscall/unix.c	unix_mmap_active	package-vars	The mappings syscall_mmap made and syscall_munmap has not undone, Go's mapper.active, under unix_mmap_mu.
 global	src/syscall/unix.c	unix_mmap_len	package-vars	How many mappings unix_mmap_active has, under unix_mmap_mu.
 global	src/syscall/unix.c	unix_mmap_cap	package-vars	How many mappings unix_mmap_active has room for, under unix_mmap_mu.
+global	src/syscall/sock.c	syscall_socket_disable_ipv6	package-vars	Go's syscall.SocketDisableIPv6, a variable there too, which tests set before they open sockets and nothing in burrow writes.
 global	src/os/user.c	user_cache_once	package-vars	Fills the Current cache the first time it is needed, as Go's cache.Do does.
 global	src/os/user.c	user_cache_u	package-vars	The user Current found, written once under user_cache_once and only read after that.
 global	src/os/user.c	user_cache_err	package-vars	The error Current got instead, written once under user_cache_once and only read after that.
@@ -319,6 +328,7 @@ global	src/syscall/call.c	burrow__syscall_zero	marker	What Go's &_zero is: a sli
 global	src/syscall/call.c	burrow__syscall_libc_cache	tables	Each slot is an atomic pointer, loaded with acquire and stored with release. Two threads that look the same libSystem function up at once store the same address.
 global	src/syscall/zsyscall.c	burrow__syscall_mods	tables	Go's modkernel32 and the rest, one LazyDLL each. Each loads its DLL the first time a procedure in it is called, under its own mutex, and publishes the handle with a release store.
 global	src/syscall/zsyscall.c	burrow__syscall_procs	tables	Go's procCreateFileW and the rest, one LazyProc each. Each finds its address the first time it is called, under its own mutex, and publishes it with a release store.
+global	src/crypto/fips140.c	fips140_off	godebug	Whether the fips140 setting has been read and said off, which is all there is to remember since every other value panics. Relaxed atomic loads and stores only, and two racing first loads store the same value.
 global	src/crypto/rand.c	crypto_rand_debug_flags	godebug	The cryptocustomrand setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/crypto/rand.c	crypto_rand_reader	package-vars	crypto/rand.Reader. Not synchronised, as in Go: a program assigns it before other threads read from it.
 global	src/crypto/aes.c	aes_portable_only	impl-select	Set only by tests, through burrow__aes_set_portable, with relaxed atomics. A block reads it once, when it is made.

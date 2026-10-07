@@ -745,9 +745,14 @@ static void TestADialErrorIsAnOpError(TestingT *t) {
                  "dial tcp6: address 127.0.0.1: no suitable address found");
     const NetOpError *oe = errors_as(e, TYPE_NET_OP_ERROR);
     CHECK(oe != NULL);
-    c = net_dial(heap_allocator(), S("ip4:icmp"), S("127.0.0.1"), &e);
-    CHECK(c.vt == NULL && BURROW_FAILED(e));
-    CHECK(errors_as(e, TYPE_NET_OP_ERROR) != NULL);
+    c = net_dial(heap_allocator(), S("ip::"), S("127.0.0.1"), &e);
+    CHECK(c.vt == NULL);
+    CHECK_STR_EQ(c_text(error_text(e), buf, sizeof buf),
+                 "dial ip::: unknown network ip::");
+    c = net_dial(heap_allocator(), S("ip4:icmp"), S("127.0.0.1:80"), &e);
+    CHECK(c.vt == NULL);
+    CHECK_STR_EQ(c_text(error_text(e), buf, sizeof buf),
+                 "dial ip4:icmp: lookup 127.0.0.1:80: no such host");
 }
 
 static void TestDialTimeoutGivesUp(TestingT *t) {
@@ -857,9 +862,11 @@ static void TestListenPacketErrors(TestingT *t) {
     CHECK(c.vt == NULL);
     CHECK_STR_EQ(c_text(error_text(e), buf, sizeof buf),
                  "listen bogus: unknown network bogus");
-    c = net_listen_packet(heap_allocator(), S("ip4:icmp"), S("127.0.0.1"), &e);
-    CHECK(c.vt == NULL && BURROW_FAILED(e));
-    CHECK(errors_as(e, TYPE_NET_OP_ERROR) != NULL);
+    c = net_listen_packet(heap_allocator(), S("ip4:bogusproto"), S("127.0.0.1"), &e);
+    CHECK(c.vt == NULL);
+    CHECK_STR_EQ(
+        c_text(error_text(e), buf, sizeof buf),
+        "listen ip4:bogusproto: address bogusproto: unknown IP protocol specified");
     /* And Listen does not take a datagram network. */
     NetListener l = net_listen(heap_allocator(), S("udp"), S("127.0.0.1:0"), &e);
     CHECK(l.vt == NULL);

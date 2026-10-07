@@ -263,9 +263,10 @@ void burrow__error_thread_exit(void);
  * clone slot is copied by it. Anything else becomes an error with the same
  * message that wraps a retained copy of what the original wrapped, so errors_is
  * still finds the sentinels in the chain, and errors_as no longer finds the
- * original's type. Each error in such a copy remembers the address of the one
- * it was made from, so errors_is matches the copy against the original, the
- * way Go matches an error made with errors.New that you kept to compare with.
+ * original's type. Each error in such a copy, and the copy errors_new's clone
+ * makes, remembers the address of the one it was made from, so errors_is
+ * matches the copy against the original, the way Go matches an error made with
+ * errors.New that you kept to compare with.
  *
  * A failed allocation gives you burrow_err_out_of_memory. */
 BURROW_OWNS(ret) Error error_retain(Alloc *a, Error err);

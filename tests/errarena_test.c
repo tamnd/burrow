@@ -133,6 +133,7 @@ static void TestRetainingKeepsTheOriginalsIdentity(TestingT *t) {
     /* Retaining the copy again keeps the same original. */
     Error again = error_retain(ka, kept);
     CHECK(errors_is(again, stop));
+    CHECK(errors_is(again, kept));
     arena_free(&keep);
 }
 

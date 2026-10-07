@@ -218,7 +218,7 @@ static int x509_dns_compare(void *env, const void *a, const void *b) {
 
 /* trimFirstLabel: dnsName from its first period on, or "" with none. */
 static Str x509_trim_first_label(Str s) {
-    const Byte *dot = memchr(s.p, '.', (size_t)s.len);
+    const Byte *dot = s.len > 0 ? memchr(s.p, '.', (size_t)s.len) : NULL;
     if (dot == NULL)
         return BURROW_STR_EMPTY;
     return str_from_bytes(dot, s.len - (dot - s.p));
@@ -304,9 +304,12 @@ static Str x509_mailbox_key(Alloc *a, X509Mailbox m) {
     Byte *p = mem_alloc_nozero(a, (size_t)(m.local.len + 1 + m.domain.len), 1);
     if (p == NULL)
         return BURROW_STR_EMPTY;
-    memcpy(p, m.local.p, (size_t)m.local.len);
+    /* Either part can be empty, and an empty one may have a NULL p. */
+    if (m.local.len > 0)
+        memcpy(p, m.local.p, (size_t)m.local.len);
     p[m.local.len] = 0;
-    memcpy(p + m.local.len + 1, m.domain.p, (size_t)m.domain.len);
+    if (m.domain.len > 0)
+        memcpy(p + m.local.len + 1, m.domain.p, (size_t)m.domain.len);
     return str_from_bytes(p, m.local.len + 1 + m.domain.len);
 }
 
@@ -334,7 +337,7 @@ static X509EmailConstraints *x509_new_email_constraints(Alloc *a, Slice l,
     const Str *names = l.p;
     for (Int i = 0; i < l.len; i++) {
         Str c = names[i];
-        if (memchr(c.p, '@', (size_t)c.len) == NULL) {
+        if (c.len == 0 || memchr(c.p, '@', (size_t)c.len) == NULL) {
             domains = slice_append(a, domains, &c, 1);
             continue;
         }

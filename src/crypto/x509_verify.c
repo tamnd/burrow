@@ -698,7 +698,8 @@ static bool x509_fold_equal(Str a, Str b) {
 /* The label of s up to the next period, and s after that period. *more says
  * whether there was one, which is how strings.Split tells "a" from "a.". */
 static Str x509_next_label(Str *s, bool *more) {
-    const Byte *dot = memchr(s->p, '.', (size_t)s->len);
+    /* An empty s may have a NULL p, which memchr may not be given. */
+    const Byte *dot = s->len > 0 ? memchr(s->p, '.', (size_t)s->len) : NULL;
     if (dot == NULL) {
         Str label = *s;
         *s = BURROW_STR_EMPTY;
@@ -1206,7 +1207,8 @@ static bool x509_check_chain_for_key_usage(Alloc *a, Slice chain, Slice key_usag
     X509ExtKeyUsage *usages = BURROW_NEW_N(a, X509ExtKeyUsage, (size_t)(n > 0 ? n : 1));
     if (usages == NULL)
         return false;
-    memcpy(usages, key_usages.p, (size_t)n * sizeof(X509ExtKeyUsage));
+    if (n > 0)
+        memcpy(usages, key_usages.p, (size_t)n * sizeof(X509ExtKeyUsage));
     Int remaining = n;
     const X509ExtKeyUsage invalid_usage = -1;
     X509Certificate *const *certs = chain.p;

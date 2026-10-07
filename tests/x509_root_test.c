@@ -28,6 +28,7 @@
 #include "burrow/fmt.h"
 #include "burrow/io/fs.h"
 #include "burrow/mem/arena.h"
+#include "burrow/mem/heap.h"
 #include "burrow/os.h"
 #include "burrow/panic.h"
 #include "burrow/path/filepath.h"
@@ -86,7 +87,10 @@ static Str temp_dir(TestingT *t, Alloc *a) {
     return *d;
 }
 
+/* What set_env replaced. It runs after the test has freed its arena, so it
+ * has an arena of its own and comes from the heap. */
 typedef struct SavedEnv {
+    Arena arena;
     Str key, value;
     bool found;
 } SavedEnv;
@@ -97,12 +101,18 @@ static void restore_env(void *env) {
         (void)os_setenv(s->key, s->value);
     else
         (void)os_unsetenv(s->key);
+    arena_free(&s->arena);
+    mem_free(heap_allocator(), s, sizeof *s, _Alignof(SavedEnv));
 }
 
 /* t.Setenv: key set to value until the test ends. */
-static void set_env(TestingT *t, Alloc *a, Str key, Str value) {
-    SavedEnv *s = BURROW_NEW(a, SavedEnv);
-    s->key = key;
+static void set_env(TestingT *t, Str key, Str value) {
+    SavedEnv *s = mem_alloc(heap_allocator(), sizeof *s, _Alignof(SavedEnv));
+    if (s == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    arena_init(&s->arena, NULL, 0);
+    Alloc *a = arena_allocator(&s->arena);
+    s->key = str_clone(a, key);
     s->value = os_lookup_env(a, key, &s->found);
     testing_t_cleanup(t, BURROW_FN(Func, restore_env, s));
     Error e = os_setenv(key, value);
@@ -259,8 +269,8 @@ static void env_vars_case(void *env, TestingT *t) {
     const EnvVarsEnv *e = env;
     const EnvVarsCase *tc = &env_vars_tests[e->i];
     ARENA(a);
-    set_env(t, a, cert_file_env, env_path(e, tc->file_env));
-    set_env(t, a, cert_dir_env, env_path(e, tc->dir_env));
+    set_env(t, cert_file_env, env_path(e, tc->file_env));
+    set_env(t, cert_dir_env, env_path(e, tc->dir_env));
 
     Error err = BURROW_NO_ERROR;
     X509CertPool *r = burrow__x509_load_system_roots(a, env_paths(a, e, tc->files),
@@ -339,8 +349,8 @@ static void TestLoadSystemCertsLoadColonSeparatedDirs(TestingT *t) {
     ARENA(a);
     /* To prevent any other certs from being loaded in through "SSL_CERT_FILE"
      * or from known "certFiles", clear them all. */
-    set_env(t, a, cert_file_env, BURROW_STR_EMPTY);
-    set_env(t, a, cert_dir_env, BURROW_STR_EMPTY);
+    set_env(t, cert_file_env, BURROW_STR_EMPTY);
+    set_env(t, cert_dir_env, BURROW_STR_EMPTY);
 
     Str tmp_dir = temp_dir(t, a);
     const char *const root_pems[] = {gts_root, google_leaf};
@@ -436,8 +446,8 @@ static void TestReadUniqueDirectoryEntries(TestingT *t) {
 static void TestSSLCertEnvOverride(TestingT *t) {
     ARENA(a);
     set_godebug(t, "x509sslcertoverrideplatform=0");
-    set_env(t, a, cert_file_env, BURROW_S("/tmp/nope"));
-    set_env(t, a, cert_dir_env, BURROW_S("/tmp/nope"));
+    set_env(t, cert_file_env, BURROW_S("/tmp/nope"));
+    set_env(t, cert_dir_env, BURROW_S("/tmp/nope"));
 
     Error err = BURROW_NO_ERROR;
     X509CertPool *p = burrow__x509_load_system_roots(a, slice_nil(TYPE_STRING),

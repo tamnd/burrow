@@ -2694,7 +2694,7 @@ static Error x509_constraint_values(Alloc *a, CryptobyteString subtrees,
             if (!x509_is_ia5(s))
                 return x509_constraint_ia5_error(s);
             /* With an @ in it, the constraint is one exact mailbox. */
-            bool has_at = memchr(s.p, '@', (size_t)s.len) != NULL;
+            bool has_at = s.len > 0 && memchr(s.p, '@', (size_t)s.len) != NULL;
             bool ok = has_at ? x509_parse_rfc2821_mailbox(a, s, NULL, NULL)
                              : x509_domain_name_valid(s, true);
             if (!ok)

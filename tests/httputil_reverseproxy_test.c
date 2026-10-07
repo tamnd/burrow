@@ -2853,6 +2853,7 @@ typedef struct TestRW {
     TestingT *t;
     bool hijacked;
     NetConn cli; /* the client's end of the pipe Hijack gives */
+    NetConn srv; /* and the server's, which Hijack hands out wrapped */
     SyncWaitGroup wg;
 } TestRW;
 
@@ -2878,23 +2879,79 @@ static Int trw_write(void *self, Slice p, Error *err) {
 static void trw_copy_cli(void *env) {
     TestRW *rw = (TestRW *)env;
     (void)io_copy(heap_allocator(), io_discard, net_conn_as_io_reader(rw->cli), NULL);
-    net_conn_free(rw->cli);
+    (void)rw->cli.vt->closer.close(rw->cli.data);
 }
+
+/* The server's end as Hijack hands it out. Freeing either end of a pipe frees
+ * both, and the proxy frees what Hijack gave it while trw_copy_cli can still be
+ * reading the other end, so the proxy gets this wrapper instead, which
+ * net_conn_free only closes. test_rw_free frees the pipe once that goroutine
+ * is done. */
+static Int trw_srv_read(void *self, Slice p, Error *err) {
+    NetConn c = *(const NetConn *)self;
+    return c.vt->reader.read(c.data, p, err);
+}
+
+static Int trw_srv_write(void *self, Slice p, Error *err) {
+    NetConn c = *(const NetConn *)self;
+    return c.vt->writer.write(c.data, p, err);
+}
+
+static Error trw_srv_close(void *self) {
+    NetConn c = *(const NetConn *)self;
+    return c.vt->closer.close(c.data);
+}
+
+static NetAddr trw_srv_local_addr(void *self) {
+    NetConn c = *(const NetConn *)self;
+    return c.vt->local_addr(c.data);
+}
+
+static NetAddr trw_srv_remote_addr(void *self) {
+    NetConn c = *(const NetConn *)self;
+    return c.vt->remote_addr(c.data);
+}
+
+static Error trw_srv_set_deadline(void *self, Time t) {
+    NetConn c = *(const NetConn *)self;
+    return c.vt->set_deadline(c.data, t);
+}
+
+static Error trw_srv_set_read_deadline(void *self, Time t) {
+    NetConn c = *(const NetConn *)self;
+    return c.vt->set_read_deadline(c.data, t);
+}
+
+static Error trw_srv_set_write_deadline(void *self, Time t) {
+    NetConn c = *(const NetConn *)self;
+    return c.vt->set_write_deadline(c.data, t);
+}
+
+static const NetConnVT trw_srv_vt = {
+    .reader = {NULL, trw_srv_read},
+    .writer = {NULL, trw_srv_write},
+    .closer = {NULL, trw_srv_close},
+    .local_addr = trw_srv_local_addr,
+    .remote_addr = trw_srv_remote_addr,
+    .set_deadline = trw_srv_set_deadline,
+    .set_read_deadline = trw_srv_set_read_deadline,
+    .set_write_deadline = trw_srv_set_write_deadline,
+};
 
 static NetConn trw_hijack(void *self, BufioReadWriter *buf, Error *err) {
     TestRW *rw = (TestRW *)self;
     NetConn none = {NULL, NULL};
     rw->hijacked = true;
-    NetConn srv;
-    net_pipe(heap_allocator(), &rw->cli, &srv);
-    if (srv.vt == NULL) {
+    net_pipe(heap_allocator(), &rw->cli, &rw->srv);
+    if (rw->srv.vt == NULL) {
         *err = burrow_err_out_of_memory;
         return none;
     }
+    NetConn srv = {&trw_srv_vt, &rw->srv};
     buf->reader = bufio_new_reader(heap_allocator(), net_conn_as_io_reader(srv));
     buf->writer = bufio_new_writer(heap_allocator(), net_conn_as_io_writer(srv));
     if (!sync_wait_group_go(&rw->wg, BURROW_FN(Func, trw_copy_cli, rw)))
-        net_conn_free(rw->cli);
+        (void)rw->cli.vt->closer.close(rw->cli.data);
     *err = BURROW_NO_ERROR;
     return srv;
 }
@@ -2920,6 +2977,8 @@ static void test_rw_init(TestRW *rw, TestingT *t) {
 
 static void test_rw_free(TestRW *rw) {
     sync_wait_group_wait(&rw->wg);
+    if (rw->cli.vt != NULL)
+        net_pipe_free(rw->cli);
     arena_free(&rw->ar);
 }
 

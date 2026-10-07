@@ -46,6 +46,10 @@ manifest_packages() {
 packages=$(manifest_packages "$tmp/full/burrow-manifest.json")
 omittable=$(sed -n 's|^#if !defined(\(BURROW_OMIT_[A-Z0-9_]*\))$|\1|p' "$tmp/full/burrow.h" | sort -u)
 required=$(sed -n 's|^#error "\(BURROW_OMIT_[A-Z0-9_]*\) is set, and the runtime uses.*|\1|p' "$tmp/full/burrow.h")
+# A package that is opt-in, like time/tzdata, is left out unless its macro is
+# defined, so a check that leaving out what it needs is refused has to ask for
+# it first. Otherwise the check compiles and proves nothing.
+optin=$(sed -n 's|^#error "\(BURROW_[A-Z0-9_]*\) asks for .*|-D\1|p' "$tmp/full/burrow.h" | sort -u)
 
 [ -n "$omittable" ] || fail "burrow.h has no BURROW_OMIT_ guards at all"
 [ -n "$required" ] || fail "burrow.h has no check for the packages the runtime needs"
@@ -83,6 +87,10 @@ PY
 }
 
 build "$tmp/full" -DBURROW_OMIT_NOTHING
+if [ -n "$optin" ]; then
+	# shellcheck disable=SC2086
+	build "$tmp/full" $optin
+fi
 all=""
 omit_sets "$tmp/full/burrow.h" >"$tmp/sets"
 while read -r m flags; do
@@ -90,7 +98,8 @@ while read -r m flags; do
 	build "$tmp/full" $flags
 	all="$all -D$m"
 	if [ "$flags" != "-D$m" ]; then
-		if "$CC" -std=c11 -fsyntax-only "-D$m" "$tmp/full/burrow.c" 2>"$tmp/err"; then
+		# shellcheck disable=SC2086
+		if "$CC" -std=c11 -fsyntax-only $optin "-D$m" "$tmp/full/burrow.c" 2>"$tmp/err"; then
 			fail "$m on its own compiles, and other packages need it"
 		fi
 		grep -q "$m is set, and" "$tmp/err" || fail "$m on its own fails, but not with the #error that explains it"

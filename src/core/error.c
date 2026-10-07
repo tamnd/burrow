@@ -97,20 +97,42 @@ BURROW_SENTINEL_ERROR(burrow_err_out_of_memory, "out of memory");
  * in different cache lines for no reason. The text follows the struct. */
 typedef struct ErrorString {
     Str text;
+    /* The error this is a clone of, or zero for one errors_new made. Kept as
+     * a number because the original may be gone and nothing reads it. */
+    uintptr_t orig;
 } ErrorString;
 
 static Str error_string_message(const void *self) {
     return ((const ErrorString *)self)->text;
 }
 
+static uintptr_t error_string_orig(const ErrorString *e) {
+    return e->orig != 0 ? e->orig : (uintptr_t)e;
+}
+
+/* Go compares an errors.New value by its pointer, and a clone stands in for
+ * the same pointer, so a clone matches the error it was made from and every
+ * other clone of it. The target is one of these when its vtable has this
+ * function in it. */
+static bool error_string_is(const void *self, Error target) {
+    if (target.vt == NULL || target.vt->is != error_string_is)
+        return false;
+    return error_string_orig((const ErrorString *)self) ==
+           error_string_orig((const ErrorString *)target.data);
+}
+
 static Error error_string_clone(const void *self, Alloc *a) {
-    return errors_new(a, ((const ErrorString *)self)->text);
+    const ErrorString *e = (const ErrorString *)self;
+    Error c = errors_new(a, e->text);
+    if (c.vt != NULL && c.vt->clone == error_string_clone)
+        ((ErrorString *)(uintptr_t)c.data)->orig = error_string_orig(e);
+    return c;
 }
 
 /* No self_type, for the reason written over burrow_sentinel_error_vt: Go's
  * errorString is unexported and errors.As can never match it. */
 static const ErrorVT error_string_vt = {
-    NULL, error_string_message, NULL, NULL, NULL, NULL, error_string_clone,
+    NULL, error_string_message, NULL, NULL, error_string_is, NULL, error_string_clone,
 };
 
 Error errors_new(Alloc *a, Str text) {
@@ -130,6 +152,7 @@ Error errors_new(Alloc *a, Str text) {
 
     e->text.p = bytes;
     e->text.len = (Int)n;
+    e->orig = 0;
 
     return (Error){&error_string_vt, e};
 }
@@ -414,6 +437,10 @@ typedef struct ErrorRetained {
     Str text;
     Error inner;
     Slice kids; /* of Error */
+    /* Which error this is a copy of. The address is kept as a number, since
+     * the original may be gone and nothing reads through it. */
+    const ErrorVT *orig_vt;
+    uintptr_t orig_data;
 } ErrorRetained;
 
 static Str retained_message(const void *self) {
@@ -428,12 +455,19 @@ static Slice retained_unwrap_multi(const void *self) {
     return ((const ErrorRetained *)self)->kids;
 }
 
+/* A copy still matches the error it was made from, the way Go's errors.Is
+ * matches the same pointer. */
+static bool retained_is(const void *self, Error target) {
+    const ErrorRetained *r = (const ErrorRetained *)self;
+    return target.vt == r->orig_vt && (uintptr_t)target.data == r->orig_data;
+}
+
 static const ErrorVT retained_vt = {
-    NULL, retained_message, retained_unwrap, NULL, NULL, NULL, NULL,
+    NULL, retained_message, retained_unwrap, NULL, retained_is, NULL, NULL,
 };
 
 static const ErrorVT retained_multi_vt = {
-    NULL, retained_message, NULL, retained_unwrap_multi, NULL, NULL, NULL,
+    NULL, retained_message, NULL, retained_unwrap_multi, retained_is, NULL, NULL,
 };
 
 Error error_retain(Alloc *a, Error err) {
@@ -453,6 +487,14 @@ Error error_retain(Alloc *a, Error err) {
         memcpy(bytes, text.p, n);
     r->text.p = bytes;
     r->text.len = (Int)n;
+    r->orig_vt = err.vt;
+    r->orig_data = (uintptr_t)err.data;
+    if (err.vt == &retained_vt || err.vt == &retained_multi_vt) {
+        /* A copy of a copy still answers for the first original. */
+        const ErrorRetained *src = (const ErrorRetained *)err.data;
+        r->orig_vt = src->orig_vt;
+        r->orig_data = src->orig_data;
+    }
 
     /* The same order errors_is asks in, so a type that sets both slots, which
      * the header says not to do, is retained as the chain that errors_is

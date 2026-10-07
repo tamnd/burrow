@@ -915,8 +915,21 @@ void net_unix_listener_free(NetUnixListener *l);
 /* ------------------------------------------------------------------ IPAddr
  *
  * net.IPAddr, an IP address with the zone it is in, which is what
- * net_resolver_lookup_ip_addr gives. IPConn, the raw socket that goes with
- * it, is still to come. */
+ * net_resolver_lookup_ip_addr gives, and net.IPConn, the raw IP socket that
+ * goes with it:
+ *
+ *     NetIPAddr any = {0};
+ *     NetIPConn *c = net_listen_ip(a, BURROW_S("ip4:icmp"), &any, &err);
+ *     NetIPAddr *from;
+ *     Int n = net_ip_conn_read_from_ip(c, buf, a, &from, &err);
+ *
+ * The network is "ip", "ip4" or "ip6" with the protocol after a colon, by
+ * number or by name, as in "ip4:1" or "ip6:ipv6-icmp". Raw sockets need
+ * privileges on most systems, and without them the dial or listen fails
+ * with EPERM or EACCES. read_from_ip on an IPv4 socket gives the payload
+ * without the IPv4 header in front of it, as Go does, while read gives the
+ * packet as the system hands it over. The rest, the errors and the memory,
+ * is as UDP has it. ReadMsgIP and WriteMsgIP are still to come. */
 
 typedef struct NetIPAddr {
     NetIP ip;
@@ -944,6 +957,56 @@ BURROW_OWNS(ret) NetIPAddr *net_resolve_ip_addr(Alloc *a, Str network, Str host,
 /* Gives back a NetIPAddr that net_resolve_ip_addr made in a. NULL does
  * nothing. */
 void net_ip_addr_free(Alloc *a, NetIPAddr *addr);
+
+/* net.IPConn. */
+typedef struct NetIPConn NetIPConn;
+
+/* DialIP: a raw socket connected to raddr, made in a. laddr may be NULL. */
+BURROW_OWNS(ret) NetIPConn *net_dial_ip(Alloc *a, Str network, const NetIPAddr *laddr,
+                                        const NetIPAddr *raddr, Error *err);
+
+/* ListenIP: a raw socket bound to laddr that is not connected, made in a. A
+ * NULL laddr is the zero IPAddr, every address. */
+BURROW_OWNS(ret) NetIPConn *net_listen_ip(Alloc *a, Str network, const NetIPAddr *laddr,
+                                          Error *err);
+
+/* IPConn.SyscallConn. */
+SyscallRawConn net_ip_conn_syscall_conn(NetIPConn *c, Error *err);
+
+/* Read and Write, as NetConn's are, one packet at a time. */
+Int net_ip_conn_read(NetIPConn *c, Slice p, Error *err);
+Int net_ip_conn_write(NetIPConn *c, Slice p, Error *err);
+
+/* ReadFromIP and ReadFrom: one packet, and who sent it, made in a. */
+Int net_ip_conn_read_from_ip(NetIPConn *c, Slice p, Alloc *a, NetIPAddr **addr,
+                             Error *err);
+Int net_ip_conn_read_from(NetIPConn *c, Slice p, Alloc *a, NetAddr *addr, Error *err);
+
+/* WriteToIP and WriteTo: one packet to addr, which for write_to has to be a
+ * NetIPAddr. A connection that was dialed gives net_err_write_to_connected. */
+Int net_ip_conn_write_to_ip(NetIPConn *c, Slice p, const NetIPAddr *addr, Error *err);
+Int net_ip_conn_write_to(NetIPConn *c, Slice p, NetAddr addr, Error *err);
+
+/* Close, the addresses, the deadlines and the buffer sizes, as UDP has
+ * them. */
+BURROW_STATIC(ret) Error net_ip_conn_close(NetIPConn *c);
+NetAddr net_ip_conn_local_addr(NetIPConn *c);
+NetAddr net_ip_conn_remote_addr(NetIPConn *c);
+BURROW_STATIC(ret) Error net_ip_conn_set_deadline(NetIPConn *c, Time t);
+BURROW_STATIC(ret) Error net_ip_conn_set_read_deadline(NetIPConn *c, Time t);
+BURROW_STATIC(ret) Error net_ip_conn_set_write_deadline(NetIPConn *c, Time t);
+BURROW_STATIC(ret) Error net_ip_conn_set_read_buffer(NetIPConn *c, Int bytes);
+BURROW_STATIC(ret) Error net_ip_conn_set_write_buffer(NetIPConn *c, Int bytes);
+
+/* c as a NetConn or a NetPacketConn, and back, which is NULL for anything
+ * that is not an IPConn. */
+NetConn net_ip_conn_as_conn(NetIPConn *c);
+BURROW_BORROWS(ret) NetIPConn *net_conn_as_ip_conn(NetConn c);
+NetPacketConn net_ip_conn_as_packet_conn(NetIPConn *c);
+BURROW_BORROWS(ret) NetIPConn *net_packet_conn_as_ip_conn(NetPacketConn c);
+
+/* Closes c if it is open and gives it back. NULL does nothing. */
+void net_ip_conn_free(NetIPConn *c);
 
 /* -------------------------------------------------------------------- DNS */
 
@@ -1139,15 +1202,16 @@ BURROW_OWNS(ret) Slice net_lookup_addr(Alloc *a, Str addr, Error *err);
  *     NetConn c = net_dial(a, BURROW_S("tcp"), BURROW_S("example.com:80"), &err);
  *     NetListener l = net_listen(a, BURROW_S("tcp"), BURROW_S(":8080"), &err);
  *
- * The networks are "tcp", "tcp4", "tcp6", "udp", "udp4", "udp6", "unix",
- * "unixgram" and "unixpacket". The IP ones take a host and a port, as
- * net_join_host_port gives, where the host may be a name, which the resolver
- * looks up, and the port a service name. A dial to a name with several
+ * The networks are "tcp", "tcp4", "tcp6", "udp", "udp4", "udp6", "ip",
+ * "ip4", "ip6", "unix", "unixgram" and "unixpacket", with a protocol after
+ * the "ip" ones, as in "ip4:icmp". The TCP and UDP ones take a host and a
+ * port, as net_join_host_port gives, where the host may be a name, which the
+ * resolver looks up, and the port a service name. A dial to a name with several
  * addresses tries them in turn until one answers, and for "tcp", when the
  * name has both IPv4 and IPv6 addresses, it races the first of each kind the
- * way RFC 6555 says, which Go calls Happy Eyeballs. The "ip" networks, which
- * need IPConn, are still to come, and a dial on one fails with ENOSYS until
- * then. So is Multipath TCP, and a dial or listen is always a plain TCP one.
+ * way RFC 6555 says, which Go calls Happy Eyeballs. The "ip" ones take a host
+ * with no port. Multipath TCP is still to come, and a dial or listen is
+ * always a plain TCP one.
  *
  * The NetConn and NetListener are made in a and go back with net_conn_free
  * and net_listener_free, which close them first. net_conn_as_tcp_conn and
@@ -1262,13 +1326,11 @@ BURROW_OWNS(ret) NetListener net_listen_config_listen(const NetListenConfig *lc,
 BURROW_OWNS(ret) NetListener net_listen(Alloc *a, Str network, Str address, Error *err);
 
 /* ListenConfig.ListenPacket: a packet connection on address for "udp",
- * "udp4", "udp6" or "unixgram", made in a, with the addresses read as
- * net_listen_config_listen reads them. The "ip" networks fail with ENOSYS
- * until IPConn is here. */
-BURROW_OWNS(ret) NetPacketConn net_listen_config_listen_packet(const NetListenConfig *lc,
-                                                               Alloc *a, Context ctx,
-                                                               Str network, Str address,
-                                                               Error *err);
+ * "udp4", "udp6", "unixgram" or an "ip" network with its protocol, made in
+ * a, with the addresses read as net_listen_config_listen reads them. */
+BURROW_OWNS(ret) NetPacketConn
+net_listen_config_listen_packet(const NetListenConfig *lc, Alloc *a, Context ctx,
+                                Str network, Str address, Error *err);
 
 /* ListenPacket, which is the zero ListenConfig's with context_background(). */
 BURROW_OWNS(ret) NetPacketConn net_listen_packet(Alloc *a, Str network, Str address,

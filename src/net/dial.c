@@ -600,10 +600,16 @@ static NetConn dl_dial_single(const DlSys *sd, Alloc *a, Context ctx, const DlAd
             c = net_unix_conn_as_conn(xc);
         break;
     }
-    case DL_IP:
+    case DL_IP: {
+        NetIPConn *ic = burrow__net_sys_dial_ip(
+            a, &o, sd->network, (const NetIPAddr *)dl_local_as(la, TYPE_NET_IP_ADDR),
+            &ra->ip, &e);
+        if (ic != NULL)
+            c = net_ip_conn_as_conn(ic);
+        break;
+    }
     default:
-        /* IPConn is still to come. */
-        e = burrow__os_errno(PAL_ENOSYS);
+        e = dl_addr_error(DL_LIT("unexpected address type"), sd->address);
         break;
     }
     if (BURROW_FAILED(e) && !dl_is_oom(e))
@@ -1080,10 +1086,12 @@ NetPacketConn net_listen_config_listen_packet(const NetListenConfig *lc, Alloc *
             c = net_unix_conn_as_packet_conn(xc);
         break;
     }
-    case DL_IP:
-        /* IPConn is not here yet. */
-        e = burrow__os_errno(PAL_ENOSYS);
+    case DL_IP: {
+        NetIPConn *ic = burrow__net_sys_listen_ip(a, &o, network, &la->ip, &e);
+        if (ic != NULL)
+            c = net_ip_conn_as_packet_conn(ic);
         break;
+    }
     case DL_TCP:
     default:
         e = dl_addr_error(DL_LIT("unexpected address type"), address);
@@ -1114,12 +1122,15 @@ void net_conn_free(NetConn c) {
     NetTCPConn *tc = net_conn_as_tcp_conn(c);
     NetUDPConn *uc = net_conn_as_udp_conn(c);
     NetUnixConn *xc = net_conn_as_unix_conn(c);
+    NetIPConn *ic = net_conn_as_ip_conn(c);
     if (tc != NULL)
         net_tcp_conn_free(tc);
     else if (uc != NULL)
         net_udp_conn_free(uc);
     else if (xc != NULL)
         net_unix_conn_free(xc);
+    else if (ic != NULL)
+        net_ip_conn_free(ic);
     else if (burrow__net_is_pipe(c))
         net_pipe_free(c);
     else
@@ -1144,10 +1155,13 @@ void net_packet_conn_free(NetPacketConn c) {
         return;
     NetUDPConn *uc = net_packet_conn_as_udp_conn(c);
     NetUnixConn *xc = net_packet_conn_as_unix_conn(c);
+    NetIPConn *ic = net_packet_conn_as_ip_conn(c);
     if (uc != NULL)
         net_udp_conn_free(uc);
     else if (xc != NULL)
         net_unix_conn_free(xc);
+    else if (ic != NULL)
+        net_ip_conn_free(ic);
     else
         (void)c.vt->closer.close(c.data);
 }

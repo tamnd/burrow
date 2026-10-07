@@ -451,7 +451,7 @@ port 80 zone lo
 dial tcp6: address 127.0.0.1: no suitable address found
 ```
 
-`net_listen_packet` is Go's `ListenPacket`, for "udp", "udp4", "udp6" and "unixgram". It gives back a `NetPacketConn`, whose `read_from` says who sent each packet and whose `write_to` sends one to any address. `net_udp_conn_as_packet_conn` and `net_unix_conn_as_packet_conn` turn the connections the UDP and Unix sections make into one, and `net_packet_conn_free` gives either back. The "ip" networks fail with ENOSYS for now, since raw IP sockets are not here yet.
+`net_listen_packet` is Go's `ListenPacket`, for "udp", "udp4", "udp6", "unixgram" and the "ip" networks with a protocol, such as "ip4:icmp". It gives back a `NetPacketConn`, whose `read_from` says who sent each packet and whose `write_to` sends one to any address. `net_udp_conn_as_packet_conn`, `net_unix_conn_as_packet_conn` and `net_ip_conn_as_packet_conn` turn the connections the UDP, Unix and IP sections make into one, and `net_packet_conn_free` gives any of them back.
 
 <!-- example: ../examples/net/listen_packet.c#listen-packet -->
 ```c
@@ -511,7 +511,7 @@ A name with several addresses is tried one address at a time, each with its shar
 
 `net_conn_free` and `net_listener_free` close what they are given and give it back, and `net_conn_as_tcp_conn` and its siblings get the concrete type when you need its methods. `net_resolve_tcp_addr`, `net_resolve_udp_addr` and `net_resolve_ip_addr` are Go's `ResolveTCPAddr` and friends, for when you want the address without the connection.
 
-When a dial fails, the error is a `NetOpError` with the op "dial", and it names the addresses it tried. Those addresses live in the error arena of the goroutine that dialed, so the error stays readable for as long as the goroutine keeps it, and a dial that works leaves nothing behind there. The "ip" networks need `IPConn`, which is still to come, so a dial on one fails with ENOSYS for now.
+When a dial fails, the error is a `NetOpError` with the op "dial", and it names the addresses it tried. Those addresses live in the error arena of the goroutine that dialed, so the error stays readable for as long as the goroutine keeps it, and a dial that works leaves nothing behind there.
 
 ## URLs
 

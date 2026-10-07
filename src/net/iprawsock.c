@@ -106,3 +106,33 @@ NetAddr net_ip_addr_as_addr(const NetIPAddr *a) {
     }
     return addr;
 }
+
+/* A NetIPAddr this package made, with the bytes its ip and zone point at
+ * after it, and the size to give back. */
+typedef struct IrAddrBox {
+    NetIPAddr a;
+    size_t size;
+} IrAddrBox;
+
+NetIPAddr *burrow__net_ip_addr_new(Alloc *a, NetIP ip, Str zone) {
+    size_t size = sizeof(IrAddrBox) + (size_t)ip.len + (size_t)zone.len;
+    IrAddrBox *b = (IrAddrBox *)mem_alloc_nozero(a, size, _Alignof(IrAddrBox));
+    if (b == NULL)
+        return NULL;
+    b->size = size;
+    Byte *p = (Byte *)(b + 1);
+    if (ip.len > 0)
+        memcpy(p, ip.p, (size_t)ip.len);
+    b->a.ip = ip.len > 0 ? slice_from(p, ip.len, ip.len, TYPE_BYTE) : (NetIP){0};
+    if (zone.len > 0)
+        memcpy(p + ip.len, zone.p, (size_t)zone.len);
+    b->a.zone = str_from_bytes(p + ip.len, zone.len);
+    return &b->a;
+}
+
+void net_ip_addr_free(Alloc *a, NetIPAddr *addr) {
+    if (addr == NULL)
+        return;
+    IrAddrBox *b = (IrAddrBox *)(void *)addr;
+    mem_free(a, b, b->size, _Alignof(IrAddrBox));
+}

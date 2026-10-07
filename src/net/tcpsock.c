@@ -16,6 +16,7 @@
 #include "burrow/error.h"
 #include "burrow/mem.h"
 #include "burrow/net.h"
+#include "burrow/net/netip.h"
 #include "burrow/os.h"
 #include "burrow/platform.h"
 #include "burrow/syscall.h"
@@ -131,6 +132,18 @@ NetAddr net_tcp_addr_as_addr(const NetTCPAddr *a) {
 
 /* A TCPAddr that owns its bytes, which is what a connection keeps for each
  * end. */
+NetipAddrPort net_tcp_addr_addr_port(const NetTCPAddr *a) {
+    return burrow__net_inet_addr_port(nt_inet(a));
+}
+
+NetTCPAddr *net_tcp_addr_from_addr_port(Alloc *a, NetipAddrPort addr) {
+    return (NetTCPAddr *)(void *)burrow__net_inet_from_addr_port(a, addr);
+}
+
+void net_tcp_addr_free(Alloc *a, NetTCPAddr *addr) {
+    burrow__net_inet_addr_free(a, (burrow__NetInetAddr *)(void *)addr);
+}
+
 typedef struct NtAddr {
     NetTCPAddr a;
     burrow__NetInetBytes b;
@@ -159,10 +172,12 @@ static bool nt_network(Str network, Str *lit) {
 }
 
 /* internetSocket, for a TCP stream. */
-static Error nt_internet_socket(burrow__NetFD *fd, Str net, const NetTCPAddr *laddr,
-                                const NetTCPAddr *raddr, bool listen, Time deadline) {
-    return burrow__net_internet_socket(fd, net, nt_inet(laddr), nt_inet(raddr),
-                                       PAL_SOCK_STREAM, listen, deadline);
+static Error nt_internet_socket(burrow__NetFD *fd, const burrow__NetSysOpts *o, Str net,
+                                const NetTCPAddr *laddr, const NetTCPAddr *raddr,
+                                bool listen) {
+    return burrow__net_internet_socket(fd, o != NULL ? &o->ctl : NULL, net,
+                                       nt_inet(laddr), nt_inet(raddr), PAL_SOCK_STREAM,
+                                       0, listen);
 }
 
 /* selfConnect: a connection whose two ends are the same address and port,
@@ -210,6 +225,10 @@ struct NetTCPListener {
     burrow__NetFD fd;
     Alloc *alloc;
     NtAddr laddr;
+    /* The ListenConfig's keep-alive, which every accepted connection gets. */
+    Duration keep_alive;
+    NetKeepAliveConfig keep_alive_config;
+    burrow__NetRawConn raw;
     bool has_laddr;
 };
 
@@ -268,30 +287,86 @@ Error net_tcp_conn_set_keep_alive_config(NetTCPConn *c, NetKeepAliveConfig confi
     return nt_set_op(c, e);
 }
 
-/* newTCPConn, with the zero Dialer or ListenConfig, whose KeepAlive of zero
- * turns keep-alives on with the defaults. What these fail with is dropped,
- * as in Go. */
-static void nt_new_conn(NetTCPConn *c) {
+/* newTCPConn: Nagle off, and keep-alives on unless the Dialer or the
+ * ListenConfig says otherwise. A KeepAliveConfig that is not enabled gives
+ * way to KeepAlive, whose zero is the defaults and which turns keep-alives
+ * off when it is below zero. What these fail with is dropped, as in Go. */
+static void nt_new_conn(NetTCPConn *c, Duration keep_alive, NetKeepAliveConfig cfg) {
     if (nt_from_sockaddr(&c->laddr, &c->c.fd.laddr))
         c->c.laddr = net_tcp_addr_as_addr(&c->laddr.a);
     if (nt_from_sockaddr(&c->raddr, &c->c.fd.raddr))
         c->c.raddr = net_tcp_addr_as_addr(&c->raddr.a);
+    c->c.raw = (burrow__NetRawConn){&c->c.fd, c->c.laddr, c->c.raddr, false};
     (void)burrow__netfd_setsockopt(&c->c.fd, PAL_TCP_NODELAY, 1);
-    NetKeepAliveConfig cfg = {true, 0, 0, 0};
-    (void)net_tcp_conn_set_keep_alive_config(c, cfg);
+    if (!cfg.enable && keep_alive >= 0)
+        cfg = (NetKeepAliveConfig){true, keep_alive, 0, 0};
+    if (cfg.enable)
+        (void)net_tcp_conn_set_keep_alive_config(c, cfg);
 }
 
-NetTCPConn *net_dial_tcp(Alloc *a, Str network, const NetTCPAddr *laddr,
-                         const NetTCPAddr *raddr, Error *err) {
-    return burrow__net_dial_tcp_deadline(a, network, laddr, raddr, (Time){0}, err);
+static void nt_lock(const burrow__NetSysOpts *o) {
+    if (o != NULL && o->alloc_mu != NULL)
+        sync_mutex_lock(o->alloc_mu);
 }
 
-NetTCPConn *burrow__net_dial_tcp_deadline(Alloc *a, Str network, const NetTCPAddr *laddr,
-                                          const NetTCPAddr *raddr, Time deadline,
-                                          Error *err) {
+static void nt_unlock(const burrow__NetSysOpts *o) {
+    if (o != NULL && o->alloc_mu != NULL)
+        sync_mutex_unlock(o->alloc_mu);
+}
+
+NetTCPConn *burrow__net_sys_dial_tcp(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                                     const NetTCPAddr *laddr, const NetTCPAddr *raddr,
+                                     Error *err) {
     Str net = BURROW_STR_EMPTY;
+    if (!nt_network(network, &net)) {
+        BURROW_OUT(err, net_unknown_network_error(error_allocator(), network));
+        return NULL;
+    }
+    nt_lock(o);
+    NetTCPConn *c =
+        (NetTCPConn *)mem_alloc(a, sizeof(NetTCPConn), _Alignof(NetTCPConn));
+    nt_unlock(o);
+    if (c == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    c->c.alloc = a;
+    Error e = BURROW_NO_ERROR;
+    for (int i = 0;; i++) {
+        e = nt_internet_socket(&c->c.fd, o, net, laddr, raddr, false);
+        if (i >= 2 || (laddr != NULL && laddr->port != 0))
+            break;
+        if (BURROW_OK(e) ? !nt_self_connect(&c->c.fd) : !nt_spurious_enotavail(e))
+            break;
+        if (BURROW_OK(e))
+            (void)burrow__netfd_close(&c->c.fd);
+    }
+    if (BURROW_FAILED(e)) {
+        nt_lock(o);
+        mem_free(a, c, sizeof(NetTCPConn), _Alignof(NetTCPConn));
+        nt_unlock(o);
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    if (o != NULL)
+        nt_new_conn(c, o->keep_alive, o->keep_alive_config);
+    else
+        nt_new_conn(c, 0, (NetKeepAliveConfig){false, 0, 0, 0});
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return c;
+}
+
+static bool nt_is_oom(Error e) {
+    return e.vt == burrow_err_out_of_memory.vt &&
+           e.data == burrow_err_out_of_memory.data;
+}
+
+NetTCPConn *burrow__net_dial_tcp(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                                 const NetTCPAddr *laddr, const NetTCPAddr *raddr,
+                                 Error *err) {
     NetAddr src = net_tcp_addr_as_addr(laddr);
     NetAddr dst = net_tcp_addr_as_addr(raddr);
+    Str net = BURROW_STR_EMPTY;
     if (!nt_network(network, &net)) {
         Error u = net_unknown_network_error(error_allocator(), network);
         BURROW_OUT(err, burrow__net_op_error(NT_LIT("dial"), network, src, dst, u));
@@ -302,53 +377,35 @@ NetTCPConn *burrow__net_dial_tcp_deadline(Alloc *a, Str network, const NetTCPAdd
                                              burrow__net_err_missing_address));
         return NULL;
     }
-    NetTCPConn *c =
-        (NetTCPConn *)mem_alloc(a, sizeof(NetTCPConn), _Alignof(NetTCPConn));
-    if (c == NULL) {
-        BURROW_OUT(err, burrow_err_out_of_memory);
-        return NULL;
-    }
-    c->c.alloc = a;
     Error e = BURROW_NO_ERROR;
-    for (int i = 0;; i++) {
-        e = nt_internet_socket(&c->c.fd, net, laddr, raddr, false, deadline);
-        if (i >= 2 || (laddr != NULL && laddr->port != 0))
-            break;
-        if (BURROW_OK(e) ? !nt_self_connect(&c->c.fd) : !nt_spurious_enotavail(e))
-            break;
-        if (BURROW_OK(e))
-            (void)burrow__netfd_close(&c->c.fd);
-    }
-    if (BURROW_FAILED(e)) {
-        mem_free(a, c, sizeof(NetTCPConn), _Alignof(NetTCPConn));
-        BURROW_OUT(err, burrow__net_op_error(NT_LIT("dial"), network, src, dst, e));
-        return NULL;
-    }
-    nt_new_conn(c);
-    BURROW_OUT(err, BURROW_NO_ERROR);
+    NetTCPConn *c = burrow__net_sys_dial_tcp(a, o, network, laddr, raddr, &e);
+    if (c == NULL && !nt_is_oom(e))
+        e = burrow__net_op_error(NT_LIT("dial"), network, src, dst, e);
+    BURROW_OUT(err, e);
     return c;
 }
 
-Int net_tcp_conn_read(NetTCPConn *c, Slice p, Error *err) {
-    if (c == NULL) {
-        BURROW_OUT(err, burrow__net_einval());
-        return 0;
-    }
-    return burrow__conn_read(&c->c, p, err);
+NetTCPConn *net_dial_tcp(Alloc *a, Str network, const NetTCPAddr *laddr,
+                         const NetTCPAddr *raddr, Error *err) {
+    return burrow__net_dial_tcp(a, NULL, network, laddr, raddr, err);
 }
 
-Int net_tcp_conn_write(NetTCPConn *c, Slice p, Error *err) {
+SyscallRawConn net_tcp_conn_syscall_conn(NetTCPConn *c, Error *err) {
     if (c == NULL) {
         BURROW_OUT(err, burrow__net_einval());
-        return 0;
+        return (SyscallRawConn){NULL, NULL};
     }
-    return burrow__conn_write(&c->c, p, err);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return burrow__net_raw_conn(&c->c.raw);
 }
 
-Error net_tcp_conn_close(NetTCPConn *c) {
-    if (c == NULL)
-        return burrow__net_einval();
-    return burrow__conn_close(&c->c);
+SyscallRawConn net_tcp_listener_syscall_conn(NetTCPListener *l, Error *err) {
+    if (l == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return (SyscallRawConn){NULL, NULL};
+    }
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return burrow__net_raw_conn(&l->raw);
 }
 
 /* CloseRead and CloseWrite fail the way Close does. */
@@ -527,6 +584,37 @@ void net_tcp_conn_free(NetTCPConn *c) {
 
 /* ------------------------------------------------------------ the listener */
 
+NetTCPListener *burrow__net_sys_listen_tcp(Alloc *a, const burrow__NetSysOpts *o,
+                                           Str network, const NetTCPAddr *laddr,
+                                           Error *err) {
+    Str net = BURROW_STR_EMPTY;
+    if (!nt_network(network, &net)) {
+        BURROW_OUT(err, net_unknown_network_error(error_allocator(), network));
+        return NULL;
+    }
+    NetTCPListener *l = (NetTCPListener *)mem_alloc(a, sizeof(NetTCPListener),
+                                                    _Alignof(NetTCPListener));
+    if (l == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    l->alloc = a;
+    Error e = nt_internet_socket(&l->fd, o, net, laddr, NULL, true);
+    if (BURROW_FAILED(e)) {
+        mem_free(a, l, sizeof(NetTCPListener), _Alignof(NetTCPListener));
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    if (o != NULL) {
+        l->keep_alive = o->keep_alive;
+        l->keep_alive_config = o->keep_alive_config;
+    }
+    l->has_laddr = nt_from_sockaddr(&l->laddr, &l->fd.laddr);
+    l->raw = (burrow__NetRawConn){&l->fd, nt_listener_laddr(l), {NULL, NULL}, true};
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return l;
+}
+
 NetTCPListener *net_listen_tcp(Alloc *a, Str network, const NetTCPAddr *laddr,
                                Error *err) {
     Str net = BURROW_STR_EMPTY;
@@ -541,23 +629,12 @@ NetTCPListener *net_listen_tcp(Alloc *a, Str network, const NetTCPAddr *laddr,
     NetTCPAddr zero = {0};
     if (laddr == NULL)
         laddr = &zero;
-    NetAddr dst = net_tcp_addr_as_addr(laddr);
-    NetTCPListener *l = (NetTCPListener *)mem_alloc(a, sizeof(NetTCPListener),
-                                                    _Alignof(NetTCPListener));
-    if (l == NULL) {
-        BURROW_OUT(err, burrow_err_out_of_memory);
-        return NULL;
-    }
-    l->alloc = a;
-    Error e = nt_internet_socket(&l->fd, net, laddr, NULL, true, (Time){0});
-    if (BURROW_FAILED(e)) {
-        mem_free(a, l, sizeof(NetTCPListener), _Alignof(NetTCPListener));
-        BURROW_OUT(err, burrow__net_op_error(NT_LIT("listen"), network,
-                                             (NetAddr){NULL, NULL}, dst, e));
-        return NULL;
-    }
-    l->has_laddr = nt_from_sockaddr(&l->laddr, &l->fd.laddr);
-    BURROW_OUT(err, BURROW_NO_ERROR);
+    Error e = BURROW_NO_ERROR;
+    NetTCPListener *l = burrow__net_sys_listen_tcp(a, NULL, network, laddr, &e);
+    if (l == NULL && !nt_is_oom(e))
+        e = burrow__net_op_error(NT_LIT("listen"), network, (NetAddr){NULL, NULL},
+                                 net_tcp_addr_as_addr(laddr), e);
+    BURROW_OUT(err, e);
     return l;
 }
 
@@ -581,7 +658,7 @@ NetTCPConn *net_tcp_listener_accept_tcp(NetTCPListener *l, Error *err) {
                                              nt_listener_laddr(l), e));
         return NULL;
     }
-    nt_new_conn(c);
+    nt_new_conn(c, l->keep_alive, l->keep_alive_config);
     BURROW_OUT(err, BURROW_NO_ERROR);
     return c;
 }
@@ -652,6 +729,12 @@ NetListener net_tcp_listener_as_listener(NetTCPListener *l) {
         nl.data = l;
     }
     return nl;
+}
+
+NetTCPListener *net_listener_as_tcp_listener(NetListener l) {
+    if (l.vt != &nt_listener_vt)
+        return NULL;
+    return (NetTCPListener *)l.data;
 }
 
 void net_tcp_listener_free(NetTCPListener *l) {

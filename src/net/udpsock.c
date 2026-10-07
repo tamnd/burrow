@@ -116,62 +116,21 @@ NetAddr net_udp_addr_as_addr(const NetUDPAddr *a) {
 }
 
 NetipAddrPort net_udp_addr_addr_port(const NetUDPAddr *a) {
-    if (a == NULL)
-        return (NetipAddrPort){0};
-    bool ok = false;
-    NetipAddr na = netip_addr_from_slice(a->ip, &ok);
-    na = netip_addr_with_zone(na, a->zone);
-    return netip_addr_port_from(na, (uint16_t)a->port);
+    return burrow__net_inet_addr_port(nu_inet(a));
 }
-
-/* A NetUDPAddr this package made, with the bytes its ip and zone point at
- * after it, and the size to give back. */
-typedef struct NuAddrBox {
-    NetUDPAddr a;
-    size_t size;
-} NuAddrBox;
 
 /* A NetUDPAddr in a for ip, port and zone, copying their bytes. */
 static NetUDPAddr *nu_addr_new(Alloc *a, const Byte *ip, Int iplen, Int port,
                                Str zone) {
-    size_t size = sizeof(NuAddrBox) + (size_t)iplen + (size_t)zone.len;
-    NuAddrBox *b = (NuAddrBox *)mem_alloc_nozero(a, size, _Alignof(NuAddrBox));
-    if (b == NULL)
-        return NULL;
-    b->size = size;
-    Byte *p = (Byte *)(b + 1);
-    if (iplen > 0)
-        memcpy(p, ip, (size_t)iplen);
-    b->a.ip = iplen > 0 ? slice_from(p, iplen, iplen, TYPE_BYTE) : (NetIP){0};
-    if (zone.len > 0)
-        memcpy(p + iplen, zone.p, (size_t)zone.len);
-    b->a.zone = str_from_bytes(p + iplen, zone.len);
-    b->a.port = port;
-    return &b->a;
+    return (NetUDPAddr *)(void *)burrow__net_inet_addr_new(a, ip, iplen, port, zone);
 }
 
 NetUDPAddr *net_udp_addr_from_addr_port(Alloc *a, NetipAddrPort addr) {
-    NetipAddr ip = netip_addr_port_addr(addr);
-    Byte bytes[16] = {0};
-    Int iplen = 0;
-    if (netip_addr_is4(ip)) {
-        NetipAddrAs4Ret b4 = netip_addr_as4(ip);
-        memcpy(bytes, b4.a, 4);
-        iplen = 4;
-    } else if (netip_addr_is_valid(ip)) {
-        NetipAddrAs16Ret b16 = netip_addr_as16(ip);
-        memcpy(bytes, b16.a, 16);
-        iplen = 16;
-    }
-    return nu_addr_new(a, bytes, iplen, (Int)netip_addr_port_port(addr),
-                       netip_addr_zone(ip));
+    return (NetUDPAddr *)(void *)burrow__net_inet_from_addr_port(a, addr);
 }
 
 void net_udp_addr_free(Alloc *a, NetUDPAddr *addr) {
-    if (addr == NULL)
-        return;
-    NuAddrBox *b = (NuAddrBox *)(void *)addr;
-    mem_free(a, b, b->size, _Alignof(NuAddrBox));
+    burrow__net_inet_addr_free(a, (burrow__NetInetAddr *)(void *)addr);
 }
 
 /* addrPortUDPAddr: a NetipAddrPort as an Addr, whose String is the
@@ -250,6 +209,7 @@ static void nu_new_conn(NetUDPConn *c) {
     if (burrow__net_inet_from_sockaddr(&c->c.fd.raddr, &r->a.ip, &r->a.port, &r->a.zone,
                                        &r->b))
         c->c.raddr = net_udp_addr_as_addr(&r->a);
+    c->c.raw = (burrow__NetRawConn){&c->c.fd, c->c.laddr, c->c.raddr, false};
 }
 
 static bool nu_is_oom(Error e) {
@@ -257,8 +217,9 @@ static bool nu_is_oom(Error e) {
            e.data == burrow_err_out_of_memory.data;
 }
 
-static NetUDPConn *nu_socket(Alloc *a, Str net, const NetUDPAddr *laddr,
-                             const NetUDPAddr *raddr, bool listen, Error *err) {
+static NetUDPConn *nu_socket(Alloc *a, const burrow__NetSysOpts *o, Str net,
+                             const NetUDPAddr *laddr, const NetUDPAddr *raddr,
+                             bool listen, Error *err) {
     NetUDPConn *c =
         (NetUDPConn *)mem_alloc(a, sizeof(NetUDPConn), _Alignof(NetUDPConn));
     if (c == NULL) {
@@ -266,8 +227,9 @@ static NetUDPConn *nu_socket(Alloc *a, Str net, const NetUDPAddr *laddr,
         return NULL;
     }
     c->c.alloc = a;
-    *err = burrow__net_internet_socket(&c->c.fd, net, nu_inet(laddr), nu_inet(raddr),
-                                       PAL_SOCK_DGRAM, listen, (Time){0});
+    *err = burrow__net_internet_socket(&c->c.fd, o != NULL ? &o->ctl : NULL, net,
+                                       nu_inet(laddr), nu_inet(raddr), PAL_SOCK_DGRAM,
+                                       0, listen);
     if (BURROW_FAILED(*err)) {
         mem_free(a, c, sizeof(NetUDPConn), _Alignof(NetUDPConn));
         return NULL;
@@ -276,8 +238,37 @@ static NetUDPConn *nu_socket(Alloc *a, Str net, const NetUDPAddr *laddr,
     return c;
 }
 
-NetUDPConn *net_dial_udp(Alloc *a, Str network, const NetUDPAddr *laddr,
-                         const NetUDPAddr *raddr, Error *err) {
+NetUDPConn *burrow__net_sys_dial_udp(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                                     const NetUDPAddr *laddr, const NetUDPAddr *raddr,
+                                     Error *err) {
+    Str net = BURROW_STR_EMPTY;
+    if (!nu_network(network, &net)) {
+        BURROW_OUT(err, net_unknown_network_error(error_allocator(), network));
+        return NULL;
+    }
+    Error e = BURROW_NO_ERROR;
+    NetUDPConn *c = nu_socket(a, o, net, laddr, raddr, false, &e);
+    BURROW_OUT(err, e);
+    return c;
+}
+
+NetUDPConn *burrow__net_sys_listen_udp(Alloc *a, const burrow__NetSysOpts *o,
+                                       Str network, const NetUDPAddr *laddr,
+                                       Error *err) {
+    Str net = BURROW_STR_EMPTY;
+    if (!nu_network(network, &net)) {
+        BURROW_OUT(err, net_unknown_network_error(error_allocator(), network));
+        return NULL;
+    }
+    Error e = BURROW_NO_ERROR;
+    NetUDPConn *c = nu_socket(a, o, net, laddr, NULL, true, &e);
+    BURROW_OUT(err, e);
+    return c;
+}
+
+NetUDPConn *burrow__net_dial_udp(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                                 const NetUDPAddr *laddr, const NetUDPAddr *raddr,
+                                 Error *err) {
     Str net = BURROW_STR_EMPTY;
     NetAddr src = net_udp_addr_as_addr(laddr);
     NetAddr dst = net_udp_addr_as_addr(raddr);
@@ -292,11 +283,25 @@ NetUDPConn *net_dial_udp(Alloc *a, Str network, const NetUDPAddr *laddr,
         return NULL;
     }
     Error e = BURROW_NO_ERROR;
-    NetUDPConn *c = nu_socket(a, net, laddr, raddr, false, &e);
+    NetUDPConn *c = nu_socket(a, o, net, laddr, raddr, false, &e);
     if (c == NULL && !nu_is_oom(e))
         e = burrow__net_op_error(NU_LIT("dial"), network, src, dst, e);
     BURROW_OUT(err, e);
     return c;
+}
+
+NetUDPConn *net_dial_udp(Alloc *a, Str network, const NetUDPAddr *laddr,
+                         const NetUDPAddr *raddr, Error *err) {
+    return burrow__net_dial_udp(a, NULL, network, laddr, raddr, err);
+}
+
+SyscallRawConn net_udp_conn_syscall_conn(NetUDPConn *c, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return (SyscallRawConn){NULL, NULL};
+    }
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return burrow__net_raw_conn(&c->c.raw);
 }
 
 NetUDPConn *net_listen_udp(Alloc *a, Str network, const NetUDPAddr *laddr, Error *err) {
@@ -312,7 +317,7 @@ NetUDPConn *net_listen_udp(Alloc *a, Str network, const NetUDPAddr *laddr, Error
     if (laddr == NULL)
         laddr = &zero;
     Error e = BURROW_NO_ERROR;
-    NetUDPConn *c = nu_socket(a, net, laddr, NULL, true, &e);
+    NetUDPConn *c = nu_socket(a, NULL, net, laddr, NULL, true, &e);
     if (c == NULL && !nu_is_oom(e))
         e = burrow__net_op_error(NU_LIT("listen"), network, nu_nil_addr,
                                  net_udp_addr_as_addr(laddr), e);

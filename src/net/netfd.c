@@ -15,6 +15,7 @@
 
 #include "burrow/atomic.h"
 #include "burrow/error.h"
+#include "burrow/mem/heap.h"
 #include "burrow/net.h"
 #include "burrow/os.h"
 #include "burrow/platform.h"
@@ -251,10 +252,37 @@ Error burrow__netfd_close(burrow__NetFD *fd) {
     return ok ? BURROW_NO_ERROR : burrow__os_errno(pe);
 }
 
-/* netFD.connect: a non blocking connect, and the wait for it. What comes
- * back in crsa is the address the socket ended up connected to, when the
- * system says, and family PAL_AF_UNSPEC when it does not. */
-static Error nf_connect(burrow__NetFD *fd, const PalSockAddr *rsa, Time deadline,
+/* What the context.AfterFunc in connect does: makes the descriptor unwritable
+ * so that the wait for the connect gives up at once. The connect waits for
+ * this to finish before it lets go of fd, which Go leaves to the collector. */
+typedef struct NfCancel {
+    burrow__NetFD *fd;
+    uint32_t done;
+} NfCancel;
+
+static void nf_cancel_connect(void *env) {
+    NfCancel *c = (NfCancel *)env;
+    (void)burrow__pfd_set_deadline(&c->fd->pfd, time_from_unix(1, 0),
+                                   BURROW_POLL_WRITE);
+    burrow__sema_release(&c->done, false);
+}
+
+/* A context's deadline, which is a reading of the monotonic clock, as a Time. */
+static Time nf_mono_time(int64_t when) {
+    return time_add(time_now(), when - burrow_nanotime());
+}
+
+/* Whether the channel is closed, without waiting. */
+static bool nf_closed(Chan *c) {
+    bool ok = true;
+    return chan_try_recv(c, NULL, &ok) && !ok;
+}
+
+/* netFD.connect: a non blocking connect, and the wait for it, which ctx's
+ * deadline and its cancellation cut short. What comes back in crsa is the
+ * address the socket ended up connected to, when the system says, and family
+ * PAL_AF_UNSPEC when it does not. */
+static Error nf_connect(burrow__NetFD *fd, Context ctx, const PalSockAddr *rsa,
                         PalSockAddr *crsa) {
     crsa->family = PAL_AF_UNSPEC;
     PalErrno pe = PAL_OK;
@@ -267,19 +295,36 @@ static Error nf_connect(burrow__NetFD *fd, const PalSockAddr *rsa, Time deadline
     Error e = nf_init(fd);
     if (BURROW_FAILED(e))
         return e;
-    bool timed = !time_is_zero(deadline);
-    if (timed) {
-        e = burrow__pfd_set_deadline(&fd->pfd, deadline, BURROW_POLL_WRITE);
-        if (BURROW_FAILED(e))
-            return e;
+
+    Chan *done = ctx.vt != NULL ? context_done(ctx) : NULL;
+    bool timed = false;
+    NfCancel cancel = {fd, 0};
+    StopFunc stop = {NULL, NULL};
+    Context reg = {NULL, NULL};
+    if (done != NULL) {
+        int64_t when = 0;
+        if (context_deadline(ctx, &when)) {
+            e = burrow__pfd_set_deadline(&fd->pfd, nf_mono_time(when),
+                                         BURROW_POLL_WRITE);
+            if (BURROW_FAILED(e))
+                return e;
+            timed = true;
+        }
+        reg = context_after_func(heap_allocator(), ctx,
+                                 BURROW_FN(Func, nf_cancel_connect, &cancel), &stop);
+        if (reg.vt == NULL)
+            e = burrow_err_out_of_memory;
     }
-    for (;;) {
+    while (BURROW_OK(e)) {
         /* Writable means the connect has finished, one way or the other, and
          * SO_ERROR says which. A connect that is still going, which can be
          * seen after a spurious wakeup, goes round again. */
         e = burrow__pfd_wait_write(&fd->pfd);
-        if (BURROW_FAILED(e))
+        if (BURROW_FAILED(e)) {
+            if (done != NULL && nf_closed(done))
+                e = burrow__net_map_err(context_err(ctx));
             break;
+        }
         int64_t nerr = 0;
         if (!pal_getsockopt(fd->pfd.sysfd, PAL_SO_ERROR, &nerr, &pe)) {
             e = nf_syscall_error(NF_LIT("getsockopt"), pe);
@@ -300,6 +345,17 @@ static Error nf_connect(burrow__NetFD *fd, const PalSockAddr *rsa, Time deadline
         }
         e = nf_syscall_error(NF_LIT("connect"), ce);
         break;
+    }
+    if (reg.vt != NULL) {
+        if (!BURROW_CALLF0(stop)) {
+            /* Too late to stop it: the descriptor has been made unwritable or
+             * is about to be, so a connect that got through anyway is no
+             * use, and fd has to outlive the function either way. */
+            burrow__sema_acquire(&cancel.done, false, false);
+            if (BURROW_OK(e))
+                e = burrow__net_map_err(context_err(ctx));
+        }
+        context_release(reg);
     }
     if (timed)
         (void)burrow__pfd_set_deadline(&fd->pfd, (Time){0}, BURROW_POLL_WRITE);
@@ -327,14 +383,56 @@ static Error nf_sockaddr(Str call, burrow__NetToSockaddr to_sockaddr, const void
     return e;
 }
 
+/* netFD.ctrlNetwork: the network a Control function is told, which names
+ * the family for an IP network that did not. */
+static Str nf_ctrl_network(const burrow__NetFD *fd, Alloc *a) {
+    Str net = fd->net;
+    if (fd->family == PAL_AF_UNIX || net.len == 0)
+        return net;
+    Byte last = net.p[net.len - 1];
+    if (last == '4' || last == '6')
+        return net;
+    Byte *p = (Byte *)mem_alloc_nozero(a, (size_t)net.len + 1, 1);
+    if (p == NULL)
+        return BURROW_STR_EMPTY;
+    memcpy(p, net.p, (size_t)net.len);
+    p[net.len] = fd->family == PAL_AF_INET ? '4' : '6';
+    return str_from_bytes(p, net.len + 1);
+}
+
+/* Hands fd to ctl's control function, if there is one, before the socket is
+ * bound or connected, with the text of addr as the address. */
+static Error nf_control(burrow__NetFD *fd, const burrow__NetSockCtl *ctl,
+                        const void *addr, burrow__NetAddrText to_text) {
+    if (ctl == NULL || ctl->ctrl.f == NULL)
+        return BURROW_NO_ERROR;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Str network = nf_ctrl_network(fd, a);
+    Str address = addr != NULL ? to_text(addr, fd->family, a) : BURROW_STR_EMPTY;
+    Error e = burrow_err_out_of_memory;
+    if (network.len > 0 && (addr == NULL || address.len > 0)) {
+        burrow__NetRawConn rc = {fd, {NULL, NULL}, {NULL, NULL}, false};
+        Context ctx = ctl->ctx.vt != NULL ? ctl->ctx : context_background();
+        e = BURROW_CALLF(ctl->ctrl, ctx, network, address, burrow__net_raw_conn(&rc));
+    }
+    arena_free(&ar);
+    return e;
+}
+
 /* netFD.listenStream. */
-static Error nf_listen_stream(burrow__NetFD *fd, const void *laddr,
-                              burrow__NetToSockaddr to_sockaddr) {
+static Error nf_listen_stream(burrow__NetFD *fd, const burrow__NetSockCtl *ctl,
+                              const void *laddr, burrow__NetToSockaddr to_sockaddr,
+                              burrow__NetAddrText to_text) {
     Error e = nf_default_listener_sockopts(fd->pfd.sysfd);
     if (BURROW_FAILED(e))
         return e;
     PalSockAddr lsa = {0};
     e = nf_sockaddr(NF_LIT("bind"), to_sockaddr, laddr, fd->family, &lsa);
+    if (BURROW_FAILED(e))
+        return e;
+    e = nf_control(fd, ctl, laddr, to_text);
     if (BURROW_FAILED(e))
         return e;
     PalErrno pe = PAL_OK;
@@ -350,9 +448,12 @@ static Error nf_listen_stream(burrow__NetFD *fd, const void *laddr,
 }
 
 /* netFD.listenDatagram. For a multicast group the caller has to_sockaddr
- * give the unspecified address with the group's port, as Go binds there. */
-static Error nf_listen_datagram(burrow__NetFD *fd, const void *laddr, bool group,
-                                burrow__NetToSockaddr to_sockaddr) {
+ * and to_text give the unspecified address with the group's port, as Go
+ * binds there. */
+static Error nf_listen_datagram(burrow__NetFD *fd, const burrow__NetSockCtl *ctl,
+                                const void *laddr, bool group,
+                                burrow__NetToSockaddr to_sockaddr,
+                                burrow__NetAddrText to_text) {
     Error e = BURROW_NO_ERROR;
     if (group) {
         e = nf_default_multicast_sockopts(fd->pfd.sysfd);
@@ -361,6 +462,9 @@ static Error nf_listen_datagram(burrow__NetFD *fd, const void *laddr, bool group
     }
     PalSockAddr lsa = {0};
     e = nf_sockaddr(NF_LIT("bind"), to_sockaddr, laddr, fd->family, &lsa);
+    if (BURROW_FAILED(e))
+        return e;
+    e = nf_control(fd, ctl, laddr, to_text);
     if (BURROW_FAILED(e))
         return e;
     PalErrno pe = PAL_OK;
@@ -374,9 +478,12 @@ static Error nf_listen_datagram(burrow__NetFD *fd, const void *laddr, bool group
 }
 
 /* netFD.dial. */
-static Error nf_dial(burrow__NetFD *fd, const void *laddr, const void *raddr,
-                     burrow__NetToSockaddr to_sockaddr, Time deadline) {
-    Error e = BURROW_NO_ERROR;
+static Error nf_dial(burrow__NetFD *fd, const burrow__NetSockCtl *ctl,
+                     const void *laddr, const void *raddr,
+                     burrow__NetToSockaddr to_sockaddr, burrow__NetAddrText to_text) {
+    Error e = nf_control(fd, ctl, raddr != NULL ? raddr : laddr, to_text);
+    if (BURROW_FAILED(e))
+        return e;
     PalErrno pe = PAL_OK;
     if (laddr != NULL) {
         PalSockAddr lsa = {0};
@@ -392,7 +499,8 @@ static Error nf_dial(burrow__NetFD *fd, const void *laddr, const void *raddr,
         e = nf_sockaddr(NF_LIT("connect"), to_sockaddr, raddr, fd->family, &rsa);
         if (BURROW_FAILED(e))
             return e;
-        e = nf_connect(fd, &rsa, deadline, &crsa);
+        Context ctx = ctl != NULL ? ctl->ctx : (Context){NULL, NULL};
+        e = nf_connect(fd, ctx, &rsa, &crsa);
         if (BURROW_FAILED(e))
             return e;
         fd->is_connected = true;
@@ -411,10 +519,11 @@ static Error nf_dial(burrow__NetFD *fd, const void *laddr, const void *raddr,
     return BURROW_NO_ERROR;
 }
 
-Error burrow__netfd_socket(burrow__NetFD *fd, Str net, int32_t family, int32_t sotype,
-                           int32_t proto, bool ipv6only, const void *laddr,
-                           const void *raddr, bool group,
-                           burrow__NetToSockaddr to_sockaddr, Time deadline) {
+Error burrow__netfd_socket(burrow__NetFD *fd, const burrow__NetSockCtl *ctl, Str net,
+                           int32_t family, int32_t sotype, int32_t proto, bool ipv6only,
+                           const void *laddr, const void *raddr, bool group,
+                           burrow__NetToSockaddr to_sockaddr,
+                           burrow__NetAddrText to_text) {
     *fd = (burrow__NetFD){0};
     fd->pfd.sysfd = -1;
     PalErrno pe = PAL_OK;
@@ -430,11 +539,11 @@ Error burrow__netfd_socket(burrow__NetFD *fd, Str net, int32_t family, int32_t s
 
     if (laddr != NULL && raddr == NULL &&
         (sotype == PAL_SOCK_STREAM || sotype == PAL_SOCK_SEQPACKET))
-        e = nf_listen_stream(fd, laddr, to_sockaddr);
+        e = nf_listen_stream(fd, ctl, laddr, to_sockaddr, to_text);
     else if (laddr != NULL && raddr == NULL && sotype == PAL_SOCK_DGRAM)
-        e = nf_listen_datagram(fd, laddr, group, to_sockaddr);
+        e = nf_listen_datagram(fd, ctl, laddr, group, to_sockaddr, to_text);
     else
-        e = nf_dial(fd, laddr, raddr, to_sockaddr, deadline);
+        e = nf_dial(fd, ctl, laddr, raddr, to_sockaddr, to_text);
     if (BURROW_FAILED(e)) {
         (void)burrow__netfd_close(fd);
         return e;
@@ -512,4 +621,64 @@ Error burrow__netfd_setsockopt(burrow__NetFD *fd, int32_t opt, int64_t value) {
     if (BURROW_OK(e))
         e = d;
     return nf_wrap(NF_LIT("setsockopt"), e);
+}
+
+/* ---------------------------------------------------------------- rawConn */
+
+static Error nf_raw_control(void *self, SyscallFdFunc f) {
+    burrow__NetRawConn *c = (burrow__NetRawConn *)self;
+    if (c == NULL || c->fd == NULL)
+        return burrow__net_einval();
+    Error e = burrow__pfd_raw_control(&c->fd->pfd, f);
+    if (BURROW_FAILED(e))
+        e = burrow__net_op_error(NF_LIT("raw-control"), c->fd->net,
+                                 (NetAddr){NULL, NULL}, c->laddr, e);
+    return e;
+}
+
+static Error nf_raw_io(burrow__NetRawConn *c, SyscallFdDoneFunc f, bool read) {
+    if (c == NULL || c->fd == NULL || c->listener)
+        return burrow__net_einval();
+    Error e = read ? burrow__pfd_raw_read(&c->fd->pfd, f)
+                   : burrow__pfd_raw_write(&c->fd->pfd, f);
+    if (BURROW_FAILED(e))
+        e = burrow__net_op_error(read ? NF_LIT("raw-read") : NF_LIT("raw-write"),
+                                 c->fd->net, c->laddr, c->raddr, e);
+    return e;
+}
+
+static Error nf_raw_read(void *self, SyscallFdDoneFunc f) {
+    return nf_raw_io((burrow__NetRawConn *)self, f, true);
+}
+
+static Error nf_raw_write(void *self, SyscallFdDoneFunc f) {
+    return nf_raw_io((burrow__NetRawConn *)self, f, false);
+}
+
+static const Type nf_raw_conn_desc = {
+    {(const Byte *)"rawConn", 7},
+    {(const Byte *)"net", 3},
+    KIND_STRUCT,
+    (uint32_t)sizeof(burrow__NetRawConn),
+    (uint16_t)_Alignof(burrow__NetRawConn),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x6e727763U, /* "nrwc" */
+    NULL,
+};
+
+static const SyscallRawConnVT nf_raw_conn_vt = {
+    &nf_raw_conn_desc,
+    nf_raw_control,
+    nf_raw_read,
+    nf_raw_write,
+};
+
+SyscallRawConn burrow__net_raw_conn(burrow__NetRawConn *rc) {
+    return (SyscallRawConn){&nf_raw_conn_vt, rc};
 }

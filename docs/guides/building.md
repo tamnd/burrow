@@ -92,7 +92,7 @@ cosmocc -std=c11 -O2 -o hello burrow.c hello.c
 
 CI builds `tests/amalgamation/hello.c` this way on Linux and runs the same binary, without rebuilding it, on macOS and Windows. It is about a megabyte.
 
-Some things to know. The netpoller has no Cosmopolitan backend yet, so nothing under cosmocc waits on a descriptor through it, which matters once there is a net package to use it. The stack protector is left out of a cosmocc build, because a binary built with it crashes on its first check. And `make test` works with the x86-64 compiler, `x86_64-unknown-cosmo-cc` with `x86_64-unknown-cosmo-ar`, but not with `cosmocc` itself, whose archive tool keeps only one architecture's objects. The single file build has no archive and so has no such problem.
+Some things to know. The netpoller uses poll(2) under cosmocc, since that is what every system it runs on has, so a wait looks through every descriptor that has a goroutine waiting on it rather than asking the kernel for a list. The stack protector is left out of a cosmocc build, because a binary built with it crashes on its first check. And `make test` works with the x86-64 compiler, `x86_64-unknown-cosmo-cc` with `x86_64-unknown-cosmo-ar`, but not with `cosmocc` itself, whose archive tool keeps only one architecture's objects. The single file build has no archive and so has no such problem.
 
 ## WebAssembly
 

@@ -1,9 +1,9 @@
-/* net, the addresses part so far.
+/* net, the addresses, the interfaces and Pipe so far.
  *
- * Go's net/ip.go, the address errors from net.go, and SplitHostPort and
- * JoinHostPort from ipsock.go. The sockets, the resolver and the rest of the
- * package come later. These are here first because crypto/x509 and
- * crypto/tls use them.
+ * Go's net/ip.go, the interfaces and errors from net.go, SplitHostPort and
+ * JoinHostPort from ipsock.go, and pipe.go. The sockets, the resolver and the
+ * rest of the package come later. These are here first because crypto/x509
+ * and crypto/tls use them, and Pipe is what crypto/tls is tested over.
  *
  * A NetIP is a byte slice, 4 bytes for an IPv4 address or 16 for IPv6, as in
  * Go. Functions take either length, and the ones that make an address give
@@ -30,9 +30,11 @@
 
 #include "burrow/core.h"
 #include "burrow/error.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/own.h"
 #include "burrow/slice.h"
+#include "burrow/time.h"
 #include "burrow/type.h"
 
 #include <stdbool.h>
@@ -234,6 +236,176 @@ net_split_host_port(Str hostport, Str *port, Error *err);
 /* net.JoinHostPort: host and port with a colon between, and brackets around
  * a host with a colon in it, which is taken to be an IPv6 literal. */
 BURROW_OWNS(ret) Str net_join_host_port(Alloc *a, Str host, Str port);
+
+/* ------------------------------------------------------------- interfaces
+ *
+ * net.Addr, net.Conn and net.Listener, in the shape io's interfaces have: a
+ * vtable whose first word is the concrete type, and a value that is the vtable
+ * and a data pointer, with a zeroed value being nil. burrow/iface.h has the
+ * rules and burrow/io.h has the worked example. */
+
+/* net.Addr, the address of an end of a connection. network is the name of the
+ * network, such as "tcp" or "udp", and is a constant. string is the address
+ * the way people write it, such as "192.0.2.1:25" or "[2001:db8::1]:80", made
+ * in a. */
+typedef struct NetAddrVT {
+    const Type *self_type;
+    Str (*network)(void *self);
+    Str (*string)(void *self, Alloc *a);
+} NetAddrVT;
+
+typedef struct NetAddr {
+    const NetAddrVT *vt;
+    void *data;
+} NetAddr;
+
+/* net.Conn, a stream connection, which any number of goroutines may use at
+ * once.
+ *
+ * Read, Write and Close are io's, with io's contracts, and are in the three
+ * embedded vtables so that net_conn_as_io_reader and the others below are the
+ * address of a member. local_addr and remote_addr give addresses that belong
+ * to the connection and live as long as it does.
+ *
+ * A deadline is a Time after which a read or a write fails with an error that
+ * wraps os_err_deadline_exceeded and that net_error_timeout says is a timeout,
+ * instead of blocking. It covers calls already blocked when it is set as well
+ * as later ones, and the zero Time means no deadline. set_deadline sets both,
+ * set_read_deadline and set_write_deadline one each. A deadline is a point in
+ * time and not an idle timeout, so a program that wants one of those moves
+ * the deadline forward after every successful call. */
+typedef struct NetConnVT {
+    IoReaderVT reader;
+    IoWriterVT writer;
+    IoCloserVT closer;
+    NetAddr (*local_addr)(void *self);
+    NetAddr (*remote_addr)(void *self);
+    Error (*set_deadline)(void *self, Time t);
+    Error (*set_read_deadline)(void *self, Time t);
+    Error (*set_write_deadline)(void *self, Time t);
+} NetConnVT;
+
+typedef struct NetConn {
+    const NetConnVT *vt;
+    void *data;
+} NetConn;
+
+/* net.Listener, which accepts stream connections. accept waits for the next
+ * one, and a Close makes any accept that is waiting fail. addr is the address
+ * it listens on and belongs to the listener. Close is first, as an io.Closer,
+ * so that net_listener_as_io_closer is the address of a member. */
+typedef struct NetListenerVT {
+    IoCloserVT closer;
+    NetConn (*accept)(void *self, Error *err);
+    NetAddr (*addr)(void *self);
+} NetListenerVT;
+
+typedef struct NetListener {
+    const NetListenerVT *vt;
+    void *data;
+} NetListener;
+
+/* Go's implicit conversions from a Conn or a Listener to the io interfaces
+ * they satisfy. A nil value in gives a nil value out. */
+IoReader net_conn_as_io_reader(NetConn c);
+IoWriter net_conn_as_io_writer(NetConn c);
+IoCloser net_conn_as_io_closer(NetConn c);
+IoCloser net_listener_as_io_closer(NetListener l);
+
+/* --------------------------------------------------------------- net.Error */
+
+/* net.Error, an error that can say whether it was a timeout.
+ *
+ * In Go it is an interface, error with Timeout and Temporary methods, and a
+ * program asks for it with a type assertion. Here it is an Error whose type
+ * lists both methods, and the functions below ask the type. Every error this
+ * package makes is one, and so are os_err_deadline_exceeded and an Errno from
+ * syscall_errno_as_error. */
+typedef Error NetError;
+
+/* Whether err is a net.Error at all, which is Go's err.(net.Error) with the
+ * comma ok. Only err itself is asked, and not what it wraps, as in Go. */
+bool net_is_error(Error err);
+
+/* Error.Timeout and Error.Temporary, and false for an error that is not a
+ * net.Error. Temporary is deprecated in Go, because most temporary errors are
+ * timeouts and the rest are surprising, and nothing should use it. */
+bool net_error_timeout(NetError err);
+bool net_error_temporary(NetError err);
+
+/* net.ErrClosed, "use of closed network connection", for a call on a
+ * connection that has been closed. Test for it with errors_is. It is a
+ * net.Error whose Timeout and Temporary say false. */
+extern const Error net_err_closed;
+
+/* net.OpError, what most of this package's calls fail with: the operation,
+ * such as "read" or "write", the network, such as "tcp" or "pipe", the two
+ * addresses, either of which may be nil, and what went wrong. Go's Error
+ * method gives op, then the network, then source->addr or whichever of them
+ * is there, then ": " and the text of err, such as
+ * "read tcp 192.0.2.1:5000->192.0.2.2:80: i/o timeout". */
+typedef struct NetOpError {
+    Str op;
+    Str net;
+    NetAddr source;
+    NetAddr addr;
+    Error err;
+} NetOpError;
+
+extern const Type *const TYPE_NET_OP_ERROR;
+
+/* The text, built in a, and "<nil>" for a NULL e. */
+BURROW_OWNS(ret) Str net_op_error_error(const NetOpError *e, Alloc *a);
+
+/* e->err. */
+BURROW_BORROWS(ret, e) Error net_op_error_unwrap(const NetOpError *e);
+
+/* Whether err, or the error inside it when it is an OsSyscallError, has a
+ * Timeout method that says true. */
+bool net_op_error_timeout(const NetOpError *e);
+
+/* The same with Temporary, and true as well for ECONNRESET and ECONNABORTED
+ * from an accept, which Go counts as temporary because the next accept is
+ * likely to work. */
+bool net_op_error_temporary(const NetOpError *e);
+
+/* The Error for e, which errors_as with TYPE_NET_OP_ERROR gives back and
+ * which unwraps to e->err. op, net and the text are copied into a, and so is
+ * the text of the addresses. The addresses themselves are not copied, and
+ * have to live as long as the error does if anything is going to look at
+ * them. */
+BURROW_OWNS(ret) Error net_op_error_as_error(const NetOpError *e, Alloc *a);
+
+/* ------------------------------------------------------------------- Pipe */
+
+/* net.Pipe: two connected ends of a connection that lives in memory, with
+ * what is written to one read from the other, in both directions.
+ *
+ *     NetConn c1, c2;
+ *     net_pipe(a, &c1, &c2);
+ *
+ * There is no buffer. A Write waits for Reads on the other end to take all
+ * of it, and each Read copies straight out of the writer's slice, so a
+ * Write and a Read on the same end, with nothing reading the other, wait
+ * forever. Closing an end makes its own calls give io_err_closed_pipe and a
+ * Read on the other end give io_eof. The deadlines work, and a call that runs
+ * past one fails with a NetOpError around os_err_deadline_exceeded. Both ends'
+ * addresses are an Addr whose network and text are both "pipe".
+ *
+ * A deadline is a timer, so setting one has to be done from a goroutine, the
+ * way context_with_deadline does.
+ *
+ * Go leaves the memory to the collector. Here it comes from a and goes back
+ * with net_pipe_free, which takes either end and frees both. That has to wait
+ * until no goroutine is in a call on either end and none will make one, which
+ * usually means after both are closed and every goroutine using them has
+ * been waited for. On a failed allocation both ends are nil. */
+void net_pipe(Alloc *a, NetConn *c1, NetConn *c2);
+
+/* Frees a pipe from net_pipe, given either of its ends. NULL data does
+ * nothing. Stops any deadline timer still armed, and waits for one that is
+ * already running. */
+void net_pipe_free(NetConn c);
 
 /* ------------------------------------------------------------- descriptors */
 

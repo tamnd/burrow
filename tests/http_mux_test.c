@@ -586,13 +586,19 @@ static void TestServeMuxHandlerTrailingSlash(TestingT *t) {
     ARENA_END;
 }
 
+/* Outside the TRY below, since gcc for Windows takes the Str literal in it for
+ * a variable longjmp can clobber. */
+static void handle_nil_func(HttpServeMux *mux) {
+    http_serve_mux_handle_func(mux, S("/"), (HttpHandlerFunc){0});
+}
+
 /* Issue 24297. */
 static void TestServeMuxHandleFuncWithNilHandler(TestingT *t) {
     ARENA_BEGIN;
     HttpServeMux *mux = (HttpServeMux *)must(t, http_new_serve_mux(a));
     volatile bool panicked = false;
     BURROW_TRY {
-        http_serve_mux_handle_func(mux, S("/"), (HttpHandlerFunc){0});
+        handle_nil_func(mux);
     }
     BURROW_CATCH(p) {
         (void)p;

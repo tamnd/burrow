@@ -696,6 +696,12 @@ SyscallRawConn net_tcp_listener_syscall_conn(NetTCPListener *l, Error *err);
 BURROW_OWNS(ret) OsFile *net_tcp_conn_file(NetTCPConn *c, Alloc *a, Error *err);
 BURROW_OWNS(ret) OsFile *net_tcp_listener_file(NetTCPListener *l, Alloc *a, Error *err);
 
+/* TCPConn.MultipathTCP: whether c is speaking Multipath TCP, which it may
+ * have given up on if the peer or something in between does not speak it, so
+ * the answer can change. Before Linux 5.16 this can only say whether c was
+ * made for it. A NULL c is EINVAL. */
+bool net_tcp_conn_multipath_tcp(NetTCPConn *c, Error *err);
+
 /* c as a NetConn, and back: Go's conversion to net.Conn and its
  * conn.(*TCPConn), which gives NULL for a NetConn that is not a TCPConn. */
 NetConn net_tcp_conn_as_conn(NetTCPConn *c);
@@ -1468,6 +1474,11 @@ typedef struct NetDialer {
     /* Deprecated in Go: the race is on unless fallback_delay is below zero,
      * and this changes nothing. */
     bool dual_stack;
+
+    /* Whether dials to TCP networks use Multipath TCP: 0 for the default, 1
+     * for yes and 2 for no, which is Go's unexported mptcpStatus. Set it with
+     * net_dialer_set_multipath_tcp. */
+    uint8_t mptcp_status;
 } NetDialer;
 
 /* Dialer.DialContext: a connection to address on network, made in a. A
@@ -1502,6 +1513,23 @@ BURROW_OWNS(ret) NetUnixConn *
 net_dialer_dial_unix(const NetDialer *d, Alloc *a, Context ctx, Str network,
                      const NetUnixAddr *laddr, const NetUnixAddr *raddr, Error *err);
 
+/* Dialer.DialIP, new in Go 1.27 too: DialTCP for IP networks such as
+ * "ip4:icmp", which need privileges. The addresses become IPAddrs as Go's
+ * ipAddrFromAddr makes them, so an invalid laddr is an IPAddr with no IP. */
+BURROW_OWNS(ret) NetIPConn *net_dialer_dial_ip(const NetDialer *d, Alloc *a,
+                                               Context ctx, Str network,
+                                               NetipAddr laddr, NetipAddr raddr,
+                                               Error *err);
+
+/* Dialer.MultipathTCP and SetMultipathTCP: whether a dial to a TCP network
+ * tries Multipath TCP first, and asking for it or not. Left alone, the answer
+ * is no, unless the GODEBUG environment variable has multipathtcp=1 or 3.
+ * Only Linux has Multipath TCP, and a dial that asks for it and cannot have it
+ * makes a plain TCP connection, so this says what was asked for and
+ * net_tcp_conn_multipath_tcp says what came of it. */
+bool net_dialer_multipath_tcp(const NetDialer *d);
+void net_dialer_set_multipath_tcp(NetDialer *d, bool use);
+
 /* ListenConfig.Control, called on a listener's socket before it is bound. */
 typedef NetDialerControl NetListenConfigControl;
 
@@ -1511,6 +1539,10 @@ typedef struct NetListenConfig {
     NetListenConfigControl control;
     Duration keep_alive;
     NetKeepAliveConfig keep_alive_config;
+
+    /* Whether TCP listeners use Multipath TCP, as NetDialer's mptcp_status
+     * is. Set it with net_listen_config_set_multipath_tcp. */
+    uint8_t mptcp_status;
 } NetListenConfig;
 
 /* ListenConfig.Listen: a listener on address for "tcp", "tcp4", "tcp6",
@@ -1522,6 +1554,14 @@ BURROW_OWNS(ret) NetListener net_listen_config_listen(const NetListenConfig *lc,
                                                       Alloc *a, Context ctx,
                                                       Str network, Str address,
                                                       Error *err);
+
+/* ListenConfig.MultipathTCP and SetMultipathTCP, as the Dialer's are, except
+ * that left alone the answer is yes, which Go chose for listeners, unless
+ * GODEBUG has multipathtcp=0 or 3. So on Linux a TCP listener is a Multipath
+ * TCP one when the kernel has it switched on, and the connections it accepts
+ * from peers that do not speak it are plain TCP. */
+bool net_listen_config_multipath_tcp(const NetListenConfig *lc);
+void net_listen_config_set_multipath_tcp(NetListenConfig *lc, bool use);
 
 /* Listen, which is the zero ListenConfig's with context_background(). */
 BURROW_OWNS(ret) NetListener net_listen(Alloc *a, Str network, Str address, Error *err);

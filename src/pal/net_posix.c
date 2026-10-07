@@ -206,6 +206,18 @@ int32_t pal_listen_backlog_max(void) {
     return 0;
 }
 
+bool pal_kernel_version_ge(int32_t major, int32_t minor) {
+    (void)major;
+    (void)minor;
+    return false;
+}
+
+bool pal_mptcp_in_use(int64_t fd, bool sol_mptcp) {
+    (void)fd;
+    (void)sol_mptcp;
+    return false;
+}
+
 #else
 
 /* The systems with socket flags and accept4, where a socket is made non
@@ -1127,22 +1139,37 @@ bool pal_shutdown(int64_t fd, int32_t how, PalErrno *err) {
 
 #if defined(BURROW_OS_LINUX)
 
-/* unix.KernelVersionGE(4, 1), from the release uname gives, such as
- * "6.8.0-45-generic". A release that does not parse counts as new enough. */
-static bool pnet_kernel_4_1(void) {
+bool pal_kernel_version_ge(int32_t major, int32_t minor) {
     struct utsname u;
     if (uname(&u) != 0)
         return true;
-    long major = 0;
-    long minor = 0;
+    long ma = 0;
+    long mi = 0;
     const char *p = u.release;
-    while (*p >= '0' && *p <= '9')
-        major = major * 10 + (*p++ - '0');
+    while (*p >= '0' && *p <= '9' && ma < 100000)
+        ma = ma * 10 + (*p++ - '0');
     if (*p == '.')
         p++;
-    while (*p >= '0' && *p <= '9')
-        minor = minor * 10 + (*p++ - '0');
-    return major > 4 || (major == 4 && minor >= 1);
+    while (*p >= '0' && *p <= '9' && mi < 100000)
+        mi = mi * 10 + (*p++ - '0');
+    return ma > major || (ma == major && mi >= minor);
+}
+
+/* SOL_MPTCP and MPTCP_INFO, which older headers do not have. */
+#define PNET_SOL_MPTCP 284
+#define PNET_MPTCP_INFO 1
+
+bool pal_mptcp_in_use(int64_t fd, bool sol_mptcp) {
+    int v = 0;
+    socklen_t len = sizeof v;
+    if (sol_mptcp) {
+        if (getsockopt((int)fd, PNET_SOL_MPTCP, PNET_MPTCP_INFO, &v, &len) == 0)
+            return true;
+        return errno != EOPNOTSUPP && errno != ENOPROTOOPT;
+    }
+    if (getsockopt((int)fd, SOL_SOCKET, SO_PROTOCOL, &v, &len) != 0)
+        return false;
+    return v == PAL_IPPROTO_MPTCP;
 }
 
 /* Go's maxListenerBacklog on Linux: the first field of
@@ -1177,7 +1204,7 @@ int32_t pal_listen_backlog_max(void) {
     }
     if (i == start || v == 0)
         return 0;
-    if (v > 65535 && !pnet_kernel_4_1())
+    if (v > 65535 && !pal_kernel_version_ge(4, 1))
         v = 65535;
     return (int32_t)v;
 }
@@ -1208,6 +1235,22 @@ int32_t pal_listen_backlog_max(void) {
 
 int32_t pal_listen_backlog_max(void) {
     return 0;
+}
+
+#endif
+
+#if !defined(BURROW_OS_LINUX)
+
+bool pal_kernel_version_ge(int32_t major, int32_t minor) {
+    (void)major;
+    (void)minor;
+    return false;
+}
+
+bool pal_mptcp_in_use(int64_t fd, bool sol_mptcp) {
+    (void)fd;
+    (void)sol_mptcp;
+    return false;
 }
 
 #endif

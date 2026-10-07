@@ -102,6 +102,51 @@ static void TestIPConnErrors(TestingT *t) {
     net_ip_conn_free(NULL);
 }
 
+/* Dialer.DialIP, whose addresses become IPAddrs even when they are the zero
+ * Addr, so an error names an empty source. The texts are Go's. */
+static void TestDialerDialIP(TestingT *t) {
+    need_sockets(t);
+    char buf[160];
+    NetipAddr lo = netip_must_parse_addr(S("127.0.0.1"));
+    NetipAddr none = {0};
+    struct {
+        const char *network;
+        NetipAddr laddr;
+        const char *want;
+    } tests[] = {
+        {"ip4:bogusproto", none,
+         "dial ip4:bogusproto ->127.0.0.1: address bogusproto: unknown IP protocol "
+         "specified"},
+        {"ip4:bogusproto", lo,
+         "dial ip4:bogusproto 127.0.0.1->127.0.0.1: address bogusproto: unknown IP "
+         "protocol specified"},
+        {"tcp", none, "dial tcp ->127.0.0.1: unknown network tcp"},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
+        Error e = BURROW_NO_ERROR;
+        NetIPConn *c =
+            net_dialer_dial_ip(NULL, heap_allocator(), context_background(),
+                               str_from_cstr(tests[i].network), tests[i].laddr, lo, &e);
+        CHECK(c == NULL);
+        net_ip_conn_free(c);
+        CHECK_STR_EQ(c_text(error_text(e), buf, sizeof buf), tests[i].want);
+    }
+    if (!privileged())
+        return;
+    Error e = BURROW_NO_ERROR;
+    NetIPConn *c = net_dialer_dial_ip(NULL, heap_allocator(), context_background(),
+                                      S("ip4:icmp"), none, lo, &e);
+    if (c == NULL) {
+        testing_t_errorf_v(t, "DialIP: %v", e);
+        return;
+    }
+    CHECK_STR_EQ(c_text(addr_str(net_ip_conn_local_addr(c)), buf, sizeof buf),
+                 "127.0.0.1");
+    CHECK_STR_EQ(c_text(addr_str(net_ip_conn_remote_addr(c)), buf, sizeof buf),
+                 "127.0.0.1");
+    net_ip_conn_free(c);
+}
+
 /* TestDialListenIPArgs: networks with no protocol, an empty one, or one
  * that is not a protocol at all fail every way they can be used. */
 static void TestDialListenIPArgs(TestingT *t) {
@@ -365,6 +410,7 @@ static void TestIPConnICMPEchoMsg(TestingT *t) {
 
 #define TESTS(X)                                                                       \
     X(TestIPConnErrors)                                                                \
+    X(TestDialerDialIP)                                                                \
     X(TestDialListenIPArgs)                                                            \
     X(TestIPConnLocalName)                                                             \
     X(TestIPConnRemoteName)                                                            \

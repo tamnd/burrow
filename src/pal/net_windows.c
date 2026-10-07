@@ -824,4 +824,16 @@ int32_t pal_listen_backlog_max(void) {
     return 0;
 }
 
+bool pal_kernel_version_ge(int32_t major, int32_t minor) {
+    (void)major;
+    (void)minor;
+    return false;
+}
+
+bool pal_mptcp_in_use(int64_t fd, bool sol_mptcp) {
+    (void)fd;
+    (void)sol_mptcp;
+    return false;
+}
+
 #endif /* BURROW_OS_WINDOWS */

@@ -1,8 +1,13 @@
-/* The client: what it sends, its redirects, its cookies, its errors and its
- * time limit. Ported from Go's src/net/http/client_test.go, go1.27.1, over
- * HTTP/1 only, since that is what the transport has.
+/* Derived from Go's src/net/http/client_test.go, the parts that HTTP/1 can
+ * run: what the client sends, its redirects, its cookies, its errors and its
+ * time limit. The tests that need a server use httptest's, on the loopback
+ * address.
+ * Go source: go1.27.1.
  *
- * The tests that need a server use httptest's, on the loopback address. */
+ * Copyright 2009 The Go Authors. All rights reserved.
+ * Copyright 2026 The burrow Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style licence that can be found
+ * in the LICENSE file. */
 
 #include "check.h"
 

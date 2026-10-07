@@ -1,11 +1,16 @@
-/* The transport over a real connection: keep-alives, Connection: close, HEAD,
- * gzip, the header timeout and limit, closing a body early, and the errors it
- * gives before it dials. Ported from Go's src/net/http/transport_test.go,
- * go1.27.1, in its HTTP/1 mode.
+/* Derived from Go's src/net/http/transport_test.go, in its HTTP/1 mode:
+ * keep-alives, Connection: close, HEAD, gzip, the header timeout and limit,
+ * closing a body early, and the errors the transport gives before it dials.
+ * Go source: go1.27.1.
  *
  * Go's hostPortHandler also writes the address of the net.Conn, in case the
- * kernel hands out the same port again at once. That isn't something a test
- * can get at here, so the tests go by the remote address alone. */
+ * kernel hands out the same port again at once. A test can't get at that
+ * here, so the tests go by the remote address alone.
+ *
+ * Copyright 2011 The Go Authors. All rights reserved.
+ * Copyright 2026 The burrow Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style licence that can be found
+ * in the LICENSE file. */
 
 #include "check.h"
 

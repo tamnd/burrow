@@ -496,6 +496,15 @@ int64_t pal_writev(int64_t fd, const PalIovec *v, int32_t count, PalErrno *err) 
     return (int64_t)sent;
 }
 
+/* WSAID_WSASENDMSG and LPFN_WSASENDMSG, which mswsock.h has only when
+ * _WIN32_WINNT is 0x0600 or more. In the amalgamation, windows.h may have come
+ * in first with a lower one. */
+typedef INT(WSAAPI *wnet_SendMsgFn)(SOCKET s, LPWSAMSG msg, DWORD flags, LPDWORD sent,
+                                    LPWSAOVERLAPPED ov,
+                                    LPWSAOVERLAPPED_COMPLETION_ROUTINE done);
+static const GUID wnet_sendmsg_id = {
+    0xa441e712, 0x754f, 0x43ca, {0x84, 0xa7, 0x0d, 0xee, 0x44, 0xcf, 0x60, 0x6d}};
+
 int64_t pal_sendmsg(int64_t fd, const void *buf, int64_t n, const void *oob,
                     int64_t oobn, const PalSockAddr *to, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
@@ -509,9 +518,8 @@ int64_t pal_sendmsg(int64_t fd, const void *buf, int64_t n, const void *oob,
     int sslen = 0;
     if (to != NULL && !wnet_to_native(to, &ss, &sslen, err))
         return -1;
-    static const GUID id = WSAID_WSASENDMSG;
-    LPFN_WSASENDMSG sendmsg_fn = NULL;
-    void *fn = wnet_extension((SOCKET)fd, id, err);
+    wnet_SendMsgFn sendmsg_fn = NULL;
+    void *fn = wnet_extension((SOCKET)fd, wnet_sendmsg_id, err);
     if (fn == NULL)
         return -1;
     memcpy(&sendmsg_fn, &fn, sizeof sendmsg_fn);

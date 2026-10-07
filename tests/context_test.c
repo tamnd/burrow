@@ -30,6 +30,7 @@
 #include "burrow/atomic.h"
 #include "burrow/chan.h"
 #include "burrow/func.h"
+#include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
 #include "burrow/mem/track.h"
 #include "burrow/proc.h"
@@ -2157,6 +2158,38 @@ static void TestARegistrationWhoseFunctionHasRunIsStillGivenBack(TestingT *t) {
     track_free(&af_track);
 }
 
+/* A deadline that fires closes the done channel partway through its cancel, so
+ * the timer's goroutine still has the node when a receive on the channel
+ * returns. Releasing the context waits for it, which is what lets the arena
+ * underneath go straight after. */
+static int release_rounds;
+
+static void release_after_deadline_body(void *env) {
+    (void)env;
+
+    for (int i = 0; i < 500; i++) {
+        Arena ar;
+        arena_init(&ar, heap_allocator(), 0);
+        ContextCancelFunc cancel;
+        Context c = context_with_timeout(arena_allocator(&ar), context_background(),
+                                         TIME_MICROSECOND, &cancel);
+        if (BURROW_CONTEXT_IS_NIL(c)) {
+            arena_free(&ar);
+            return;
+        }
+        (void)chan_recv(context_done(c), NULL);
+        context_release(c);
+        arena_free(&ar);
+        release_rounds++;
+    }
+}
+
+static void TestReleaseWaitsForADeadlineThatHasFired(TestingT *t) {
+    release_rounds = 0;
+    runtime_main(BURROW_FN(Func, release_after_deadline_body, NULL));
+    CHECK_INT_EQ((Int)release_rounds, 500);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTheRootIsNeverCancelledAndCarriesNothing)                                    \
     X(TestBackgroundAndTodoAreNotTheSameContext)                                       \
@@ -2219,6 +2252,7 @@ static void TestARegistrationWhoseFunctionHasRunIsStillGivenBack(TestingT *t) {
     X(TestAContextThatIsAlreadyOverStartsTheFunctionAtOnce)                            \
     X(TestADeadlineRunningOutRunsTheFunctionToo)                                       \
     X(TestTheFunctionRunsOnceHoweverManyThingsCancel)                                  \
-    X(TestARegistrationWhoseFunctionHasRunIsStillGivenBack)
+    X(TestARegistrationWhoseFunctionHasRunIsStillGivenBack)                            \
+    X(TestReleaseWaitsForADeadlineThatHasFired)
 
 TESTING_MAIN_BARE(TESTS)

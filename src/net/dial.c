@@ -981,6 +981,17 @@ static Error dl_listen_control(void *env, Context ctx, Str network, Str address,
 
 static const NetListenConfig dl_zero_listen_config;
 
+static burrow__NetSysOpts dl_listen_opts(const NetListenConfig *lc, Context ctx) {
+    burrow__NetSysOpts o;
+    memset(&o, 0, sizeof o);
+    o.ctl.ctx = ctx;
+    if (lc->control.f != NULL)
+        o.ctl.ctrl = (burrow__NetCtrlFn){dl_listen_control, (void *)(uintptr_t)lc};
+    o.keep_alive = lc->keep_alive;
+    o.keep_alive_config = lc->keep_alive_config;
+    return o;
+}
+
 NetListener net_listen_config_listen(const NetListenConfig *lc, Alloc *a, Context ctx,
                                      Str network, Str address, Error *err) {
     NetListener none = {NULL, NULL};
@@ -997,14 +1008,7 @@ NetListener net_listen_config_listen(const NetListenConfig *lc, Alloc *a, Contex
         BURROW_OUT(err, e);
         return none;
     }
-    burrow__NetSysOpts o;
-    memset(&o, 0, sizeof o);
-    o.ctl.ctx = ctx;
-    if (lc->control.f != NULL)
-        o.ctl.ctrl = (burrow__NetCtrlFn){dl_listen_control, (void *)(uintptr_t)lc};
-    o.keep_alive = lc->keep_alive;
-    o.keep_alive_config = lc->keep_alive_config;
-
+    burrow__NetSysOpts o = dl_listen_opts(lc, ctx);
     const DlAddr *la = dl_first_ipv4(addrs);
     NetListener l = none;
     switch (la->kind) {
@@ -1043,6 +1047,65 @@ NetListener net_listen(Alloc *a, Str network, Str address, Error *err) {
                                     err);
 }
 
+NetPacketConn net_listen_config_listen_packet(const NetListenConfig *lc, Alloc *a,
+                                              Context ctx, Str network, Str address,
+                                              Error *err) {
+    NetPacketConn none = {NULL, NULL};
+    if (lc == NULL)
+        lc = &dl_zero_listen_config;
+    ArenaMark m = error_mark();
+    DlList addrs = {NULL, 0};
+    Error e = dl_resolve_addr_list(NULL, error_allocator(), ctx, DL_LIT("listen"),
+                                   network, address, dl_nil_addr, &addrs);
+    if (BURROW_FAILED(e)) {
+        if (!dl_is_oom(e))
+            e = burrow__net_op_error(DL_LIT("listen"), network, dl_nil_addr,
+                                     dl_nil_addr, e);
+        BURROW_OUT(err, e);
+        return none;
+    }
+    burrow__NetSysOpts o = dl_listen_opts(lc, ctx);
+    const DlAddr *la = dl_first_ipv4(addrs);
+    NetPacketConn c = none;
+    switch (la->kind) {
+    case DL_UDP: {
+        NetUDPConn *uc = burrow__net_sys_listen_udp(a, &o, network, &la->udp, &e);
+        if (uc != NULL)
+            c = net_udp_conn_as_packet_conn(uc);
+        break;
+    }
+    case DL_UNIX: {
+        NetUnixConn *xc = burrow__net_sys_listen_unixgram(a, &o, network, &la->ux, &e);
+        if (xc != NULL)
+            c = net_unix_conn_as_packet_conn(xc);
+        break;
+    }
+    case DL_IP:
+        /* IPConn is not here yet. */
+        e = burrow__os_errno(PAL_ENOSYS);
+        break;
+    case DL_TCP:
+    default:
+        e = dl_addr_error(DL_LIT("unexpected address type"), address);
+        break;
+    }
+    if (BURROW_FAILED(e)) {
+        if (!dl_is_oom(e))
+            e = burrow__net_op_error(DL_LIT("listen"), network, dl_nil_addr,
+                                     dl_addr(la), e);
+        BURROW_OUT(err, e);
+        return none;
+    }
+    error_release(m);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return c;
+}
+
+NetPacketConn net_listen_packet(Alloc *a, Str network, Str address, Error *err) {
+    return net_listen_config_listen_packet(NULL, a, context_background(), network,
+                                           address, err);
+}
+
 /* ------------------------------------------------------------ the freeing */
 
 void net_conn_free(NetConn c) {
@@ -1074,4 +1137,17 @@ void net_listener_free(NetListener l) {
         net_unix_listener_free(xl);
     else
         (void)l.vt->closer.close(l.data);
+}
+
+void net_packet_conn_free(NetPacketConn c) {
+    if (c.vt == NULL)
+        return;
+    NetUDPConn *uc = net_packet_conn_as_udp_conn(c);
+    NetUnixConn *xc = net_packet_conn_as_unix_conn(c);
+    if (uc != NULL)
+        net_udp_conn_free(uc);
+    else if (xc != NULL)
+        net_unix_conn_free(xc);
+    else
+        (void)c.vt->closer.close(c.data);
 }

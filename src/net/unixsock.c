@@ -395,7 +395,7 @@ NetUnixConn *burrow__net_sys_listen_unixgram(Alloc *a, const burrow__NetSysOpts 
                                              Error *err) {
     Str net = BURROW_STR_EMPTY;
     int32_t sotype = 0;
-    if (!nx_network(network, &net, &sotype)) {
+    if (!nx_network(network, &net, &sotype) || sotype != PAL_SOCK_DGRAM) {
         BURROW_OUT(err, net_unknown_network_error(error_allocator(), network));
         return NULL;
     }
@@ -696,6 +696,39 @@ NetUnixConn *net_conn_as_unix_conn(NetConn c) {
     return (NetUnixConn *)c.data;
 }
 
+static Int nx_m_read_from(void *self, Slice p, Alloc *a, NetAddr *addr, Error *err) {
+    return net_unix_conn_read_from((NetUnixConn *)self, p, a, addr, err);
+}
+
+static Int nx_m_write_to(void *self, Slice p, NetAddr addr, Error *err) {
+    return net_unix_conn_write_to((NetUnixConn *)self, p, addr, err);
+}
+
+static const NetPacketConnVT nx_packet_conn_vt = {
+    {&nx_conn_desc, nx_m_close},
+    nx_m_read_from,
+    nx_m_write_to,
+    nx_m_local_addr,
+    nx_m_set_deadline,
+    nx_m_set_read_deadline,
+    nx_m_set_write_deadline,
+};
+
+NetPacketConn net_unix_conn_as_packet_conn(NetUnixConn *c) {
+    NetPacketConn conn = {NULL, NULL};
+    if (c != NULL) {
+        conn.vt = &nx_packet_conn_vt;
+        conn.data = c;
+    }
+    return conn;
+}
+
+NetUnixConn *net_packet_conn_as_unix_conn(NetPacketConn c) {
+    if (c.vt != &nx_packet_conn_vt)
+        return NULL;
+    return (NetUnixConn *)c.data;
+}
+
 void net_unix_conn_free(NetUnixConn *c) {
     if (c == NULL)
         return;
@@ -724,7 +757,7 @@ NetUnixListener *burrow__net_sys_listen_unix(Alloc *a, const burrow__NetSysOpts 
                                              Error *err) {
     Str net = BURROW_STR_EMPTY;
     int32_t sotype = 0;
-    if (!nx_network(network, &net, &sotype)) {
+    if (!nx_network(network, &net, &sotype) || sotype == PAL_SOCK_DGRAM) {
         BURROW_OUT(err, net_unknown_network_error(error_allocator(), network));
         return NULL;
     }

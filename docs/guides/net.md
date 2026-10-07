@@ -1015,3 +1015,56 @@ PENDING
 ```
 
 `cookiejar_new` takes options with a public suffix list, which is what stops a server for foo.co.uk from setting a cookie for every site under co.uk. Without one, as here, the jar can't tell co.uk from example.com, so don't leave it out in a client that talks to sites you don't trust. Go's list is in golang.org/x/net/publicsuffix, which burrow doesn't have yet, and any `CookiejarPublicSuffixList` you write works. The jar copies what it keeps into the allocator you gave `cookiejar_new`, so the cookies you hand it can go away as soon as the call returns, and `cookiejar_jar_cookies` gives copies in the allocator you pass. `cookiejar_jar_as_cookie_jar` gives the jar as an `HttpCookieJar`, the interface Go's client takes.
+
+## Running a server
+
+`HttpServer` is Go's `http.Server`. Fill in the fields you want, leave the rest zero, and hand it a listener with `http_server_serve`, or let `http_server_listen_and_serve` listen on its `addr`. Each connection is served on a goroutine of its own, so the handler has to be safe to call from several at once. Keep-alive, `Expect: 100-continue`, chunked responses when the handler sets no length, and the 400s, 431s and 505s for requests that are wrong all work the way they do in Go. The example listens on a port the system picks, sends two requests the long way over TCP, and shuts down:
+
+<!-- example: ../examples/net/server.c#server -->
+```c
+Byte loopback[4] = {127, 0, 0, 1};
+NetTCPAddr laddr = {slice_from(loopback, 4, 4, TYPE_BYTE), 0, BURROW_STR_EMPTY};
+Error err;
+NetTCPListener *l = net_listen_tcp(heap_allocator(), BURROW_S("tcp"), &laddr, &err);
+if (l == NULL)
+    return;
+Int port = ((const NetTCPAddr *)net_tcp_listener_addr(l).data)->port;
+
+HttpServeMux *mux = http_new_serve_mux(heap_allocator());
+http_serve_mux_handle_func(mux, BURROW_S("GET /hello/{name}"),
+                           BURROW_FN(HttpHandlerFunc, greet, NULL));
+HttpServer srv = {.handler = http_serve_mux_as_handler(mux),
+                  .read_header_timeout = 5 * TIME_SECOND};
+Serving s = {&srv, net_tcp_listener_as_listener(l), BURROW_NO_ERROR};
+SyncWaitGroup wg = {0};
+sync_wait_group_go(&wg, BURROW_FN(Func, serve, &s));
+
+ask(a, port,
+    "GET /hello/gopher HTTP/1.1\r\nHost: example\r\nConnection: close\r\n\r\n");
+ask(a, port,
+    "DELETE /hello/gopher HTTP/1.1\r\nHost: example\r\nConnection: close\r\n\r\n");
+
+/* Shutdown stops taking connections and waits for the open ones to go
+ * idle, for five seconds at most. */
+ContextCancelFunc cancel;
+Context ctx = context_with_timeout(heap_allocator(), context_background(),
+                                   5 * TIME_SECOND, &cancel);
+err = http_server_shutdown(&srv, ctx);
+BURROW_CALLF0(cancel);
+context_release(ctx);
+sync_wait_group_wait(&wg);
+fmt_printf_v("shutdown: %v\nserve: %v\n", err, s.err);
+http_server_free(&srv);
+http_serve_mux_free(mux);
+net_tcp_listener_free(l);
+```
+
+That prints:
+
+```
+PENDING
+```
+
+`http_server_shutdown` closes the listeners, so `http_server_serve` returns `http_err_server_closed` at once, and then waits for each connection to finish its request and go idle, or for the context to be done. `http_server_close` doesn't wait: it closes every connection there and then. A handler that panics gets its connection closed and the panic logged with a stack trace to `error_log`, or to the standard logger when that is NULL, and the server goes on serving the others. A handler that wants to stop without a log line panics with `http_err_abort_handler`.
+
+A server can't be copied once it has started, and `http_server_free` waits for the goroutines of all its connections to end, so call it after Serve has returned. A connection from a `NetTCPListener` or `NetUnixListener` is freed by the server when it is done, and one from any other listener is closed but stays yours to free. `http_timeout_handler`, `http_max_bytes_handler` and `http_allow_query_semicolons` wrap a handler the way Go's do, and `HttpResponseController` reaches the flush, hijack and deadline methods of the writer a handler gets. Only HTTP/1 is here so far, without TLS.

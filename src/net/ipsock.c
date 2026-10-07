@@ -221,6 +221,13 @@ static Error ip_inet_sockaddr(const void *addr, int32_t family, PalSockAddr *out
     return burrow__net_ip_sockaddr(family, a->ip, a->port, a->zone, out);
 }
 
+/* A multicast group's address as a listener binds it: the unspecified
+ * address of the socket's family, with the group's port and zone. */
+static Error ip_group_sockaddr(const void *addr, int32_t family, PalSockAddr *out) {
+    const burrow__NetInetAddr *a = (const burrow__NetInetAddr *)addr;
+    return burrow__net_ip_sockaddr(family, (NetIP){0}, a->port, a->zone, out);
+}
+
 /* TCPAddr.family and UDPAddr.family. */
 static int32_t ip_family(const burrow__NetInetAddr *a) {
     if (a == NULL || a->ip.len <= 4)
@@ -267,8 +274,8 @@ Error burrow__net_internet_socket(burrow__NetFD *fd, Str net,
                                   const burrow__NetInetAddr *laddr,
                                   const burrow__NetInetAddr *raddr, int32_t sotype,
                                   bool listen) {
-#if defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_OPENBSD) ||                        \
-    defined(BURROW_OS_WINDOWS)
+#if defined(BURROW_OS_AIX) || defined(BURROW_OS_FREEBSD) ||                            \
+    defined(BURROW_OS_OPENBSD) || defined(BURROW_OS_WINDOWS)
     /* These systems will not connect to the unspecified address, which means
      * this machine everywhere else, so Go dials loopback instead. */
     static const Byte loop4[4] = {127, 0, 0, 1};
@@ -285,6 +292,10 @@ Error burrow__net_internet_socket(burrow__NetFD *fd, Str net,
 #endif
     bool ipv6only = false;
     int32_t family = ip_favorite_family(net, laddr, raddr, listen, &ipv6only);
+    /* listenDatagram binds a multicast group as the unspecified address. */
+    bool group = sotype == PAL_SOCK_DGRAM && laddr != NULL && raddr == NULL &&
+                 laddr->ip.p != NULL && net_ip_is_multicast(laddr->ip);
     return burrow__netfd_socket(fd, net, family, sotype, 0, ipv6only, laddr, raddr,
-                                ip_inet_sockaddr, (Time){0});
+                                group, group ? ip_group_sockaddr : ip_inet_sockaddr,
+                                (Time){0});
 }

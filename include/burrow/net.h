@@ -32,6 +32,7 @@
 #include "burrow/error.h"
 #include "burrow/io.h"
 #include "burrow/mem.h"
+#include "burrow/net/netip.h"
 #include "burrow/own.h"
 #include "burrow/slice.h"
 #include "burrow/time.h"
@@ -579,6 +580,121 @@ NetListener net_tcp_listener_as_listener(NetTCPListener *l);
 /* Closes l if it is still open and gives its memory back. NULL does
  * nothing. The connections it accepted are their own and are not freed. */
 void net_tcp_listener_free(NetTCPListener *l);
+
+/* -------------------------------------------------------------------- UDP
+ *
+ * net.UDPAddr and net.UDPConn, on the same poller as TCP:
+ *
+ *     NetUDPAddr any = {0};
+ *     NetUDPConn *c = net_listen_udp(a, BURROW_S("udp"), &any, &err);
+ *     NetipAddrPort from;
+ *     Int n = net_udp_conn_read_from_udp_addr_port(c, buf, &from, &err);
+ *
+ * A connection from net_listen_udp is bound and not connected, and sends
+ * with the write_to calls, each to the address it names. One from
+ * net_dial_udp is connected, sends with write, and only hears from the
+ * address it dialed. A datagram is read whole, and what does not fit in the
+ * buffer is gone.
+ *
+ * The errors are Go's, and so are the rules for the memory, which are the
+ * ones TCP has. A NetUDPAddr from read_from_udp or from_addr_port is the
+ * caller's, and goes back with net_udp_addr_free.
+ *
+ * As with TCP, Windows gives ENOSYS until its poller is here and wasip1 has
+ * no sockets. ListenMulticastUDP, ReadMsgUDP and WriteMsgUDP are still to
+ * come. */
+
+/* net.UDPAddr, laid out as NetTCPAddr is, and read the same way. */
+typedef struct NetUDPAddr {
+    NetIP ip;
+    Int port;
+    Str zone;
+} NetUDPAddr;
+
+extern const Type *const TYPE_NET_UDP_ADDR;
+
+/* UDPAddr.Network, which is "udp". */
+BURROW_STATIC(ret) Str net_udp_addr_network(const NetUDPAddr *a);
+
+/* UDPAddr.String, "<nil>" for a NULL a, such as "[::1%eth0]:53". */
+BURROW_OWNS(ret) Str net_udp_addr_string(const NetUDPAddr *a, Alloc *al);
+
+/* a as a NetAddr, which points at a, and nil for a NULL a. */
+NetAddr net_udp_addr_as_addr(const NetUDPAddr *a);
+
+/* UDPAddr.AddrPort: the zero NetipAddrPort for a NULL a, and an invalid
+ * address in it for an ip that is not 4 or 16 bytes long. */
+NetipAddrPort net_udp_addr_addr_port(const NetUDPAddr *a);
+
+/* UDPAddrFromAddrPort, made in a, with its ip and zone in the same block. */
+BURROW_OWNS(ret) NetUDPAddr *net_udp_addr_from_addr_port(Alloc *a, NetipAddrPort addr);
+
+/* Gives back a NetUDPAddr that this package made in a. NULL does nothing. */
+void net_udp_addr_free(Alloc *a, NetUDPAddr *addr);
+
+/* net.ErrWriteToConnected, for a write_to on a connection that was dialed. */
+extern const Error net_err_write_to_connected;
+
+typedef struct NetUDPConn NetUDPConn;
+
+/* DialUDP: a socket connected to raddr, from laddr when that is not NULL.
+ * network is "udp", "udp4" or "udp6". Nothing is sent, so a dial to a port
+ * where nothing listens works, and the first read or write after it may fail
+ * with ECONNREFUSED. */
+BURROW_OWNS(ret) NetUDPConn *net_dial_udp(Alloc *a, Str network,
+                                          const NetUDPAddr *laddr,
+                                          const NetUDPAddr *raddr, Error *err);
+
+/* ListenUDP: a socket bound to laddr, every address of the machine for a
+ * NULL laddr or an empty ip, and a free port for port 0. A multicast laddr
+ * binds the unspecified address with that port and lets other sockets bind
+ * it too, but joins no group. */
+BURROW_OWNS(ret) NetUDPConn *net_listen_udp(Alloc *a, Str network,
+                                            const NetUDPAddr *laddr, Error *err);
+
+/* conn.Read and Write, for a dialed connection. */
+Int net_udp_conn_read(NetUDPConn *c, Slice p, Error *err);
+Int net_udp_conn_write(NetUDPConn *c, Slice p, Error *err);
+
+/* ReadFromUDP: a datagram, and in *addr who sent it, made in a. *addr is
+ * NULL on an error. addr may be NULL to not ask. */
+Int net_udp_conn_read_from_udp(NetUDPConn *c, Slice p, Alloc *a, NetUDPAddr **addr,
+                               Error *err);
+
+/* ReadFrom, which is ReadFromUDP with the sender as a NetAddr, nil on an
+ * error. */
+Int net_udp_conn_read_from(NetUDPConn *c, Slice p, Alloc *a, NetAddr *addr, Error *err);
+
+/* ReadFromUDPAddrPort, which needs no memory for the sender. */
+Int net_udp_conn_read_from_udp_addr_port(NetUDPConn *c, Slice p, NetipAddrPort *addr,
+                                         Error *err);
+
+/* WriteToUDP, WriteToUDPAddrPort and WriteTo: p as one datagram to addr.
+ * WriteTo takes any NetAddr, and fails with EINVAL for one that is not a
+ * NetUDPAddr. */
+Int net_udp_conn_write_to_udp(NetUDPConn *c, Slice p, const NetUDPAddr *addr,
+                              Error *err);
+Int net_udp_conn_write_to_udp_addr_port(NetUDPConn *c, Slice p, NetipAddrPort addr,
+                                        Error *err);
+Int net_udp_conn_write_to(NetUDPConn *c, Slice p, NetAddr addr, Error *err);
+
+/* conn.Close, LocalAddr, RemoteAddr and the setters, as for TCP. A
+ * connection from net_listen_udp has no remote address. */
+BURROW_STATIC(ret) Error net_udp_conn_close(NetUDPConn *c);
+NetAddr net_udp_conn_local_addr(NetUDPConn *c);
+NetAddr net_udp_conn_remote_addr(NetUDPConn *c);
+BURROW_STATIC(ret) Error net_udp_conn_set_deadline(NetUDPConn *c, Time t);
+BURROW_STATIC(ret) Error net_udp_conn_set_read_deadline(NetUDPConn *c, Time t);
+BURROW_STATIC(ret) Error net_udp_conn_set_write_deadline(NetUDPConn *c, Time t);
+BURROW_STATIC(ret) Error net_udp_conn_set_read_buffer(NetUDPConn *c, Int bytes);
+BURROW_STATIC(ret) Error net_udp_conn_set_write_buffer(NetUDPConn *c, Int bytes);
+
+/* c as a NetConn, and back. */
+NetConn net_udp_conn_as_conn(NetUDPConn *c);
+BURROW_BORROWS(ret) NetUDPConn *net_conn_as_udp_conn(NetConn c);
+
+/* Closes c if it is open and gives its memory back. NULL does nothing. */
+void net_udp_conn_free(NetUDPConn *c);
 
 /* ------------------------------------------------------------- descriptors */
 

@@ -263,6 +263,65 @@ A dialed connection, like an accepted one, has Nagle's algorithm off and keep-al
 
 On Windows a socket is read by handing the kernel the read and waiting for it to finish, which is a different poller from the one here, so until that arrives a dial or a listen there fails with `ENOSYS`. wasip1 has no sockets to dial with.
 
+## UDP
+
+`net_listen_udp` and `net_dial_udp` are Go's `ListenUDP` and `DialUDP`. A socket from `net_listen_udp` is bound but not connected, so it can hear from anyone and says where each datagram goes with one of the write-to functions. A socket from `net_dial_udp` is connected to one peer, writes with `net_udp_conn_write` and only hears from that peer:
+
+<!-- example: ../examples/net/udp.c#udp -->
+```c
+Byte loopback[4] = {127, 0, 0, 1};
+NetUDPAddr laddr = {slice_from(loopback, 4, 4, TYPE_BYTE), 0, BURROW_STR_EMPTY};
+Error err;
+NetUDPConn *server =
+    net_listen_udp(heap_allocator(), BURROW_S("udp"), &laddr, &err);
+NetUDPConn *client =
+    net_listen_udp(heap_allocator(), BURROW_S("udp"), &laddr, &err);
+if (server == NULL || client == NULL)
+    return;
+
+/* Neither socket is connected, so each datagram says where it goes. */
+NetipAddrPort to = net_udp_addr_addr_port(net_udp_conn_local_addr(server).data);
+char ping[] = "ping";
+net_udp_conn_write_to_udp_addr_port(client, slice_from(ping, 4, 4, TYPE_BYTE), to,
+                                    &err);
+
+Byte buf[64];
+NetipAddrPort from;
+Int n = net_udp_conn_read_from_udp_addr_port(
+    server, slice_from(buf, (Int)sizeof buf, (Int)sizeof buf, TYPE_BYTE), &from,
+    &err);
+Str ip = netip_addr_string(netip_addr_port_addr(from), heap_allocator());
+printf("%.*s from %.*s\n", (int)n, (const char *)buf, (int)ip.len,
+       (const char *)ip.p);
+const NetUDPAddr *client_addr = net_udp_conn_local_addr(client).data;
+printf("same port: %d\n", netip_addr_port_port(from) == client_addr->port);
+mem_free(heap_allocator(), (void *)(uintptr_t)ip.p, (size_t)ip.len, 1);
+
+net_udp_conn_free(client);
+net_udp_conn_free(server);
+
+/* Errors read the way Go's do. */
+laddr.port = 53;
+if (net_dial_udp(heap_allocator(), BURROW_S("udp5"), NULL, &laddr, &err) == NULL) {
+    Str msg = error_text(err);
+    printf("%.*s\n", (int)msg.len, (const char *)msg.p);
+}
+```
+
+That prints:
+
+```
+ping from 127.0.0.1
+same port: 1
+dial udp5 127.0.0.1:53: unknown network udp5
+```
+
+Go has three ways to say who sent a datagram, and so does this. `net_udp_conn_read_from_udp_addr_port` fills in a `NetipAddrPort` and needs no memory, which makes it the one to use in a loop. `net_udp_conn_read_from_udp` makes a `NetUDPAddr` in the allocator it is given, and `net_udp_conn_read_from` gives the same address as a `NetAddr`. The addresses those two make belong to the caller and go back with `net_udp_addr_free`.
+
+A datagram is read whole. When it is longer than the buffer, the rest of it is lost and the next read starts on the next datagram, as it does in Go. Writing to a connected socket with a write-to function fails with `net_err_write_to_connected`, and the errors otherwise are Go's, down to "write udp 127.0.0.1:5000->127.0.0.1:70000: sendto: invalid argument" for a port that does not fit.
+
+`ListenMulticastUDP`, `ReadMsgUDP` and `WriteMsgUDP` are still to come, and Windows and wasip1 are where TCP is: a dial or a listen on Windows fails with `ENOSYS` for now, and wasip1 has no sockets.
+
 ## URLs
 
 `url_parse` splits a URL into a `Url` with the same fields as Go's `url.URL`. `path` holds the decoded path and `url_escaped_path` gives back the form that goes on the wire. The parse makes one allocation that holds the `Url` and every string in it, so the input can go away while the `Url` lives, and `url_free` gives it back. With an arena you do not need to free at all. In these examples `P(s)` is short for `(int)(s).len, (const char *)(s).p`, the two arguments that `%.*s` wants:

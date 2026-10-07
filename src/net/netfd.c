@@ -52,13 +52,18 @@ static Error nf_syscall_error(Str call, PalErrno pe) {
 #define NF_ACCEPT_CALL "accept"
 #endif
 
-/* readSyscallName and writeSyscallName. */
+/* readSyscallName, readFromSyscallName, writeSyscallName and
+ * writeToSyscallName. */
 #if defined(BURROW_OS_WINDOWS)
 #define NF_READ_CALL "wsarecv"
+#define NF_READ_FROM_CALL "wsarecvfrom"
 #define NF_WRITE_CALL "wsasend"
+#define NF_WRITE_TO_CALL "wsasendto"
 #else
 #define NF_READ_CALL "read"
+#define NF_READ_FROM_CALL "recvfrom"
 #define NF_WRITE_CALL "write"
+#define NF_WRITE_TO_CALL "sendto"
 #endif
 
 /* ---------------------------------------------------------------- the stack */
@@ -188,6 +193,23 @@ static Error nf_default_listener_sockopts(int64_t s) {
         return nf_syscall_error(NF_LIT("setsockopt"), pe);
     return BURROW_NO_ERROR;
 #endif
+}
+
+/* setDefaultMulticastSockopts: SO_REUSEADDR, so that more than one socket
+ * can listen to a group, and on the BSDs SO_REUSEPORT as well, which is what
+ * lets them share the port there. */
+static Error nf_default_multicast_sockopts(int64_t s) {
+    PalErrno pe = PAL_OK;
+    if (!pal_setsockopt(s, PAL_SO_REUSEADDR, 1, &pe))
+        return nf_syscall_error(NF_LIT("setsockopt"), pe);
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS) ||                             \
+    defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_NETBSD) ||                         \
+    defined(BURROW_OS_OPENBSD) || defined(BURROW_OS_DRAGONFLY) ||                      \
+    defined(BURROW_OS_AIX)
+    if (!pal_setsockopt(s, PAL_SO_REUSEPORT, 1, &pe))
+        return nf_syscall_error(NF_LIT("setsockopt"), pe);
+#endif
+    return BURROW_NO_ERROR;
 }
 
 /* ------------------------------------------------------------- the netFD */
@@ -327,6 +349,30 @@ static Error nf_listen_stream(burrow__NetFD *fd, const void *laddr,
     return BURROW_NO_ERROR;
 }
 
+/* netFD.listenDatagram. For a multicast group the caller has to_sockaddr
+ * give the unspecified address with the group's port, as Go binds there. */
+static Error nf_listen_datagram(burrow__NetFD *fd, const void *laddr, bool group,
+                                burrow__NetToSockaddr to_sockaddr) {
+    Error e = BURROW_NO_ERROR;
+    if (group) {
+        e = nf_default_multicast_sockopts(fd->pfd.sysfd);
+        if (BURROW_FAILED(e))
+            return e;
+    }
+    PalSockAddr lsa = {0};
+    e = nf_sockaddr(NF_LIT("bind"), to_sockaddr, laddr, fd->family, &lsa);
+    if (BURROW_FAILED(e))
+        return e;
+    PalErrno pe = PAL_OK;
+    if (!pal_bind(fd->pfd.sysfd, &lsa, &pe))
+        return nf_syscall_error(NF_LIT("bind"), pe);
+    e = nf_init(fd);
+    if (BURROW_FAILED(e))
+        return e;
+    nf_sockname(fd, &fd->laddr);
+    return BURROW_NO_ERROR;
+}
+
 /* netFD.dial. */
 static Error nf_dial(burrow__NetFD *fd, const void *laddr, const void *raddr,
                      burrow__NetToSockaddr to_sockaddr, Time deadline) {
@@ -367,8 +413,8 @@ static Error nf_dial(burrow__NetFD *fd, const void *laddr, const void *raddr,
 
 Error burrow__netfd_socket(burrow__NetFD *fd, Str net, int32_t family, int32_t sotype,
                            int32_t proto, bool ipv6only, const void *laddr,
-                           const void *raddr, burrow__NetToSockaddr to_sockaddr,
-                           Time deadline) {
+                           const void *raddr, bool group,
+                           burrow__NetToSockaddr to_sockaddr, Time deadline) {
     *fd = (burrow__NetFD){0};
     fd->pfd.sysfd = -1;
     PalErrno pe = PAL_OK;
@@ -384,6 +430,8 @@ Error burrow__netfd_socket(burrow__NetFD *fd, Str net, int32_t family, int32_t s
 
     if (laddr != NULL && raddr == NULL && sotype == PAL_SOCK_STREAM)
         e = nf_listen_stream(fd, laddr, to_sockaddr);
+    else if (laddr != NULL && raddr == NULL && sotype == PAL_SOCK_DGRAM)
+        e = nf_listen_datagram(fd, laddr, group, to_sockaddr);
     else
         e = nf_dial(fd, laddr, raddr, to_sockaddr, deadline);
     if (BURROW_FAILED(e)) {
@@ -424,6 +472,28 @@ Int burrow__netfd_write(burrow__NetFD *fd, Slice p, Error *err) {
     Int n = burrow__pfd_write(&fd->pfd, p, &e);
     BURROW_OUT(err, nf_wrap(NF_LIT(NF_WRITE_CALL), e));
     return n;
+}
+
+Int burrow__netfd_read_from(burrow__NetFD *fd, Slice p, PalSockAddr *from, Error *err) {
+    Error e = BURROW_NO_ERROR;
+    Int n = burrow__pfd_read_from(&fd->pfd, p, from, &e);
+    BURROW_OUT(err, nf_wrap(NF_LIT(NF_READ_FROM_CALL), e));
+    return n;
+}
+
+Int burrow__netfd_write_to(burrow__NetFD *fd, Slice p, const PalSockAddr *to,
+                           Error *err) {
+    Error e = BURROW_NO_ERROR;
+    Int n = burrow__pfd_write_to(&fd->pfd, p, to, &e);
+    BURROW_OUT(err, nf_wrap(NF_LIT(NF_WRITE_TO_CALL), e));
+    return n;
+}
+
+Error burrow__netfd_write_to_error(Error err) {
+    if (err.vt == burrow__net_err_sockaddr_einval.vt &&
+        err.data == burrow__net_err_sockaddr_einval.data)
+        return nf_syscall_error(NF_LIT(NF_WRITE_TO_CALL), PAL_EINVAL);
+    return err;
 }
 
 Error burrow__netfd_shutdown(burrow__NetFD *fd, int32_t how) {

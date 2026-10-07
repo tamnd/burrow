@@ -1277,6 +1277,293 @@ BURROW_OWNS(ret) HttpHandler http_max_bytes_handler(Alloc *a, HttpHandler h, int
  * parameters. Made in a, and NULL data when a says no. */
 BURROW_OWNS(ret) HttpHandler http_allow_query_semicolons(Alloc *a, HttpHandler h);
 
+/* ------------------------------------------------------------ RoundTripper */
+
+/* http.RoundTripper, which sends one request and gives back its response,
+ * without following redirects or handling cookies or authentication, which is
+ * what an HttpClient does on top of one.
+ *
+ * round_trip gives a response or an error, never both, and a response with a
+ * status that is not 2xx is not an error. It does not change the request,
+ * though it may read and close its body, which it closes even on an error,
+ * and may do so on another goroutine after it has returned. The request has to
+ * outlive the response, which points to it, and the response is the caller's
+ * to free with http_response_free, after reading and closing the body for the
+ * connection to be used again. The error is in the caller's
+ * error_allocator. */
+typedef struct HttpRoundTripperVT {
+    const Type *self_type;
+    HttpResponse *(*round_trip)(void *self, HttpRequest *req, Error *err);
+} HttpRoundTripperVT;
+
+typedef struct HttpRoundTripper {
+    const HttpRoundTripperVT *vt;
+    void *data;
+} HttpRoundTripper;
+
+/* RoundTripper.RoundTrip. */
+BURROW_OWNS(ret) static inline HttpResponse *
+http_round_tripper_round_trip(HttpRoundTripper rt, HttpRequest *req, Error *err) {
+    return rt.vt->round_trip(rt.data, req, err);
+}
+
+/* http.ErrSkipAltProtocol, which a round tripper registered with
+ * http_transport_register_protocol gives to have the transport send the
+ * request itself. */
+extern const Error http_err_skip_alt_protocol;
+
+/* ---------------------------------------------------------------- Transport */
+
+/* http.DefaultMaxIdleConnsPerHost, the idle connections a transport keeps for
+ * each host when max_idle_conns_per_host is zero. */
+#define HTTP_DEFAULT_MAX_IDLE_CONNS_PER_HOST ((Int)2)
+
+/* Transport.Proxy. The proxy for req, made in a, or NULL for none. Only an
+ * "http" proxy can be used so far, and "https" and "socks5" ones give an
+ * error when a request goes to them. */
+BURROW_FUNC(HttpProxyFunc, Url *, HttpRequest *req, Alloc *a, Error *err);
+
+/* Transport.DialContext, DialTLSContext, Dial and DialTLS. The connection is
+ * the transport's from then on, and it closes it and gives it back with the
+ * transport's free_conn. */
+BURROW_FUNC(HttpDialContextFunc, NetConn, Context ctx, Str network, Str addr,
+            Error *err);
+BURROW_FUNC(HttpDialFunc, NetConn, Str network, Str addr, Error *err);
+
+/* Transport.OnProxyConnectResponse, called with the response to each CONNECT
+ * request to a proxy. An error ends the request with that error. */
+BURROW_FUNC(HttpOnProxyConnectResponseFunc, Error, Context ctx, const Url *proxy_url,
+            HttpRequest *connect_req, HttpResponse *connect_res);
+
+/* Transport.GetProxyConnectHeader. The header to send in a CONNECT request to
+ * proxy_url for target, made in a. */
+BURROW_FUNC(HttpGetProxyConnectHeaderFunc, HttpHeader, Context ctx, Alloc *a,
+            const Url *proxy_url, Str target, Error *err);
+
+/* What gives back a connection the transport is done with, after closing it. */
+BURROW_FUNC(HttpFreeConnFunc, void, NetConn c);
+
+/* http.Transport, an HTTP/1 round tripper that keeps connections open for
+ * more requests and reuses them. Fill in the fields wanted and leave the rest
+ * zero, as with Go's &http.Transport{...}, and free it with
+ * http_transport_free. It may be used from any number of goroutines at once,
+ * and is not to be copied once it has been used.
+ *
+ * proxy picks the proxy for a request, and none is used when it is nil.
+ * http_proxy_from_environment is the one http_default_transport has.
+ * proxy_connect_header is sent in each CONNECT request, and
+ * get_proxy_connect_header, when it is set, makes the header instead.
+ *
+ * dial_context makes the TCP connections, and dial when that is nil, and
+ * net_dialer_dial_context with a zero NetDialer when both are. dial_tls_context
+ * and dial_tls make the connections for an "https" request without a proxy,
+ * and the transport does nothing more with them, so they are where TLS comes
+ * from until crypto/tls is here. Without them an "https" request fails.
+ * free_conn gives back each connection, and is net_conn_free when it is nil.
+ *
+ * disable_keep_alives sends each request on a new connection, and closes it
+ * after. disable_compression stops the transport asking for gzip. When it asks
+ * on its own, it takes the gzip off a gzipped response, and the response says
+ * so in uncompressed.
+ *
+ * max_idle_conns is the most idle connections over all hosts, and zero is no
+ * limit. max_idle_conns_per_host is the most for one host, with
+ * HTTP_DEFAULT_MAX_IDLE_CONNS_PER_HOST for zero. max_conns_per_host is the
+ * most for one host whatever they are doing, and requests past it wait for
+ * one. idle_conn_timeout is how long an idle connection is kept.
+ * response_header_timeout is how long the transport waits for a response's
+ * header once the request is written, and expect_continue_timeout how long it
+ * waits for a "100 Continue" before sending a body after "Expect:
+ * 100-continue". Zero is no limit for each of them, and for
+ * expect_continue_timeout it means the body is sent at once.
+ *
+ * max_response_header_bytes is the most a response's header may have, and 10
+ * MiB when it is zero. write_buffer_size and read_buffer_size are the sizes of
+ * the buffers on each connection, 4 KiB when they are zero. protocols is the
+ * set of protocols to use. NULL is HTTP/1, and HTTP/2 is not here yet, so a set
+ * without HTTP/1 can send nothing.
+ *
+ * a is where the transport makes its connections and the responses, the heap
+ * when it is NULL, and has to be one any goroutine can use at once. The rest is
+ * the transport's own. */
+typedef struct HttpTransport {
+    HttpProxyFunc proxy;
+    HttpOnProxyConnectResponseFunc on_proxy_connect_response;
+    HttpDialContextFunc dial_context;
+    HttpDialFunc dial;
+    HttpDialContextFunc dial_tls_context;
+    HttpDialFunc dial_tls;
+    HttpFreeConnFunc free_conn;
+    bool disable_keep_alives;
+    bool disable_compression;
+    Int max_idle_conns;
+    Int max_idle_conns_per_host;
+    Int max_conns_per_host;
+    Duration idle_conn_timeout;
+    Duration response_header_timeout;
+    Duration expect_continue_timeout;
+    HttpHeader proxy_connect_header;
+    HttpGetProxyConnectHeaderFunc get_proxy_connect_header;
+    int64_t max_response_header_bytes;
+    Int write_buffer_size;
+    Int read_buffer_size;
+    const HttpProtocols *protocols;
+    Alloc *a;
+
+    /* The transport's own. */
+    SyncMutex idle_mu;
+    bool close_idle;
+    struct burrow__HttpIdleBucket *idle;
+    struct burrow__HttpPConn *lru_head, *lru_tail;
+    Int lru_len;
+    SyncMutex req_mu;
+    struct burrow__HttpCall *calls;
+    SyncMutex alt_mu;
+    struct burrow__HttpAltProto *alt;
+    SyncMutex conns_per_host_mu;
+    struct burrow__HttpHostBucket *conns_per_host;
+    struct burrow__HttpWant *dials_head, *dials_tail;
+    SyncWaitGroup live;
+} HttpTransport;
+
+/* Transport.RoundTrip. Sends req and gives back its response, as an
+ * HttpRoundTripper does. Only HTTP/1 is spoken. A request on a connection
+ * that turns out to have been closed by the server is sent again on another
+ * one when that is safe, which it is for a request with no body or one
+ * get_body can make again, and an idempotent method. */
+BURROW_OWNS(ret) HttpResponse *http_transport_round_trip(HttpTransport *t,
+                                                         HttpRequest *req, Error *err);
+
+/* The transport as an HttpRoundTripper. */
+BURROW_BORROWS(ret, t) HttpRoundTripper
+http_transport_as_round_tripper(HttpTransport *t);
+
+/* Transport.CloseIdleConnections. Closes the connections that are idle now,
+ * but not ones in use. */
+void http_transport_close_idle_connections(HttpTransport *t);
+
+/* Transport.CancelRequest. Cancels a request in flight, which Go deprecates
+ * in favour of the request's context, and which is all a round tripper that is
+ * not this one sees of a client's timeout. */
+void http_transport_cancel_request(HttpTransport *t, HttpRequest *req);
+
+/* Transport.RegisterProtocol. Sends requests for scheme to rt instead, such
+ * as "file" ones to http_new_file_transport. rt can give
+ * http_err_skip_alt_protocol to hand a request back. The scheme may only be
+ * registered once, and false is what doing it again gives, or the allocator
+ * saying no. rt has to outlive the transport. */
+bool http_transport_register_protocol(HttpTransport *t, Str scheme,
+                                      HttpRoundTripper rt);
+
+/* Transport.Clone. A transport with the same settings as t and none of its
+ * connections, with proxy_connect_header copied into a. Its proxy_connect_header
+ * is nil when a says no. */
+HttpTransport http_transport_clone(const HttpTransport *t, Alloc *a);
+
+/* Closes the idle connections and waits for every connection, dial and
+ * goroutine the transport has going to end. A response that is not freed yet
+ * keeps it waiting, so free them all first. */
+void http_transport_free(HttpTransport *t);
+
+/* http.DefaultTransport, which has proxy set to http_proxy_from_environment,
+ * a dialer with a 30 second timeout and keep-alive, max_idle_conns of 100, an
+ * idle_conn_timeout of 90 seconds and an expect_continue_timeout of 1 second.
+ * It lives as long as the program. */
+extern HttpTransport *const http_default_transport;
+
+/* http.ProxyFromEnvironment. The proxy for req from the environment:
+ * HTTP_PROXY for an "http" request and HTTPS_PROXY for an "https" one, or the
+ * same names in lower case, unless NO_PROXY, or no_proxy, says not to. A value
+ * may be a whole URL, or a host and port taken as "http". NULL for no proxy,
+ * which a request for localhost or a loopback address never has. The
+ * environment is read once, the first time it is wanted, and the URL is made
+ * in a. */
+BURROW_OWNS(ret) Url *http_proxy_from_environment(HttpRequest *req, Alloc *a,
+                                                  Error *err);
+
+/* http_proxy_from_environment as the HttpProxyFunc a transport takes. */
+HttpProxyFunc http_proxy_from_environment_func(void);
+
+/* http.ProxyURL. A proxy function that gives a copy of u, which has to outlive
+ * it, for every request. */
+HttpProxyFunc http_proxy_url(const Url *u);
+
+/* ------------------------------------------------------------------- Client */
+
+/* http.ErrUseLastResponse, which check_redirect gives to stop following
+ * redirects and hand back the last response, with its body still to read. */
+extern const Error http_err_use_last_response;
+
+/* http.ErrSchemeMismatch, which a client gives when an "https" request gets
+ * back what looks like an HTTP response. */
+extern const Error http_err_scheme_mismatch;
+
+/* Client.CheckRedirect. Says whether to follow the redirect to req, after the
+ * requests in via, a Slice of HttpRequest pointers with the oldest first. Its
+ * error comes back from http_client_do wrapped in a UrlError, with the last
+ * response's body closed, unless it is http_err_use_last_response. */
+BURROW_FUNC(HttpCheckRedirectFunc, Error, HttpRequest *req, Slice via);
+
+/* http.Client, which sends requests with its transport and follows the
+ * redirects that come back, with the cookies in jar. Fill in the fields wanted
+ * and leave the rest zero, as with Go's &http.Client{...}. It may be used from
+ * any number of goroutines at once.
+ *
+ * transport sends each request, and is http_default_transport when it has no
+ * vt. check_redirect says whether to follow a redirect, and when it is nil the
+ * client follows up to ten of them. jar, when it has a vt, is given the
+ * cookies of each response and adds its cookies to each request. timeout is
+ * the most a request may take, from sending it to reading the end of the
+ * response's body, and zero is no limit. a is where the client makes the
+ * requests it sends on redirects, the heap when it is NULL, and has to be one
+ * any goroutine can use at once. */
+typedef struct HttpClient {
+    HttpRoundTripper transport;
+    HttpCheckRedirectFunc check_redirect;
+    HttpCookieJar jar;
+    Duration timeout;
+    Alloc *a;
+} HttpClient;
+
+/* Client.Do. Sends req and follows redirects, as the client's fields say, and
+ * gives back the last response. Redirects of 301, 302 and 303 become a GET, or
+ * a HEAD for a HEAD, with no body. 307 and 308 keep the method and the body,
+ * when get_body can make it again. The header goes along to the same domain
+ * and its subdomains, and Authorization, Cookie and the like no further.
+ *
+ * The error is a UrlError, in the caller's error_allocator, and there is no
+ * response with it, except that check_redirect giving one closes the last
+ * response's body and gives that response back with the error. A status that
+ * is not 2xx is not an error. req's body is closed, even on an error, and req
+ * has to outlive the response, which may point to a request the client made
+ * for a redirect and frees with the response. */
+BURROW_OWNS(ret) HttpResponse *http_client_do(HttpClient *c, HttpRequest *req,
+                                              Error *err);
+
+/* Client.Get, Head, Post and PostForm. A request made with http_new_request
+ * and sent with http_client_do, made in a and freed with the response, or on
+ * an error. content_type is the Content-Type of a POST, and data is a url's
+ * UrlValues, sent as "application/x-www-form-urlencoded". */
+BURROW_OWNS(ret) HttpResponse *http_client_get(HttpClient *c, Str url, Error *err);
+BURROW_OWNS(ret) HttpResponse *http_client_head(HttpClient *c, Str url, Error *err);
+BURROW_OWNS(ret) HttpResponse *
+http_client_post(HttpClient *c, Str url, Str content_type, IoReader body, Error *err);
+BURROW_OWNS(ret) HttpResponse *http_client_post_form(HttpClient *c, Str url,
+                                                     UrlValues data, Error *err);
+
+/* Client.CloseIdleConnections, which closes the idle connections of the
+ * transport when it has a way to. */
+void http_client_close_idle_connections(HttpClient *c);
+
+/* http.DefaultClient, a client with every field zero, and http.Get, Head,
+ * Post and PostForm, which use it. */
+extern HttpClient *const http_default_client;
+BURROW_OWNS(ret) HttpResponse *http_get(Str url, Error *err);
+BURROW_OWNS(ret) HttpResponse *http_head(Str url, Error *err);
+BURROW_OWNS(ret) HttpResponse *http_post(Str url, Str content_type, IoReader body,
+                                         Error *err);
+BURROW_OWNS(ret) HttpResponse *http_post_form(Str url, UrlValues data, Error *err);
+
 #ifdef __cplusplus
 }
 #endif

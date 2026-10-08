@@ -1,5 +1,6 @@
 /* Derived from Go's src/net/http/response_test.go, the tests of reading a
- * response, and TestFinalChunkedBodyReadEOF from transfer_test.go.
+ * response, the ones that write back what they read, and
+ * TestFinalChunkedBodyReadEOF from transfer_test.go.
  * Go source: go1.27.1.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
@@ -95,7 +96,7 @@ typedef struct RespTest {
     struct {
         const char *p;
         size_t n;
-    } raw, body;
+    } raw, raw_out, body;
     const char *status;
     const char *proto;
     const char *request; /* dummyReq's method, NULL for a nil Request */
@@ -115,6 +116,10 @@ static const RespTest resp_tests[] = {
                  "Connection: close\r\n"
                  "\r\n"
                  "Body here\n"),
+        .raw_out = L("HTTP/1.0 200 OK\r\n"
+                     "Connection: close\r\n"
+                     "\r\n"
+                     "Body here\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.0",
@@ -133,6 +138,10 @@ static const RespTest resp_tests[] = {
         .raw = L("HTTP/1.1 200 OK\r\n"
                  "\r\n"
                  "Body here\n"),
+        .raw_out = L("HTTP/1.1 200 OK\r\n"
+                     "Connection: close\r\n"
+                     "\r\n"
+                     "Body here\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.1",
@@ -150,6 +159,8 @@ static const RespTest resp_tests[] = {
         .raw = L("HTTP/1.1 204 No Content\r\n"
                  "\r\n"
                  "Body should not be read!\n"),
+        .raw_out = L("HTTP/1.1 204 No Content\r\n"
+                     "\r\n"),
         .status = "204 No Content",
         .status_code = 204,
         .proto = "HTTP/1.1",
@@ -169,6 +180,11 @@ static const RespTest resp_tests[] = {
                  "Connection: close\r\n"
                  "\r\n"
                  "Body here\n"),
+        .raw_out = L("HTTP/1.0 200 OK\r\n"
+                     "Content-Length: 10\r\n"
+                     "Connection: close\r\n"
+                     "\r\n"
+                     "Body here\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.0",
@@ -192,6 +208,14 @@ static const RespTest resp_tests[] = {
                  "continued\r\n"
                  "0\r\n"
                  "\r\n"),
+        .raw_out = L("HTTP/1.1 200 OK\r\n"
+                     "Transfer-Encoding: chunked\r\n"
+                     "\r\n"
+                     "13\r\n"
+                     "Body here\n"
+                     "continued\r\n"
+                     "0\r\n"
+                     "\r\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.1",
@@ -213,6 +237,11 @@ static const RespTest resp_tests[] = {
                  "Connection: close\r\n"
                  "\r\n"
                  "Body here\n"),
+        .raw_out = L("HTTP/1.0 200 OK\r\n"
+                     "Content-Length: 10\r\n"
+                     "Connection: close\r\n"
+                     "\r\n"
+                     "Body here\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.0",
@@ -236,6 +265,14 @@ static const RespTest resp_tests[] = {
                  "Body here\n\r\n"
                  "0\r\n"
                  "\r\n"),
+        .raw_out = L("HTTP/1.1 200 OK\r\n"
+                     "Transfer-Encoding: chunked\r\n"
+                     "\r\n"
+                     "a\r\n"
+                     "Body here\n"
+                     "\r\n"
+                     "0\r\n"
+                     "\r\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.1",
@@ -254,6 +291,9 @@ static const RespTest resp_tests[] = {
         .raw = L("HTTP/1.1 200 OK\r\n"
                  "Transfer-Encoding: chunked\r\n"
                  "\r\n"),
+        .raw_out = L("HTTP/1.1 200 OK\r\n"
+                     "Transfer-Encoding: chunked\r\n"
+                     "\r\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.1",
@@ -272,6 +312,10 @@ static const RespTest resp_tests[] = {
         .raw = L("HTTP/1.0 200 OK\r\n"
                  "Content-Length: 256\r\n"
                  "\r\n"),
+        .raw_out = L("HTTP/1.0 200 OK\r\n"
+                     "Connection: close\r\n"
+                     "Content-Length: 256\r\n"
+                     "\r\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.0",
@@ -289,6 +333,9 @@ static const RespTest resp_tests[] = {
         .raw = L("HTTP/1.1 200 OK\r\n"
                  "Content-Length: 256\r\n"
                  "\r\n"),
+        .raw_out = L("HTTP/1.1 200 OK\r\n"
+                     "Content-Length: 256\r\n"
+                     "\r\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.1",
@@ -305,6 +352,9 @@ static const RespTest resp_tests[] = {
     {
         .raw = L("HTTP/1.0 200 OK\r\n"
                  "\r\n"),
+        .raw_out = L("HTTP/1.0 200 OK\r\n"
+                     "Connection: close\r\n"
+                     "\r\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.0",
@@ -322,6 +372,9 @@ static const RespTest resp_tests[] = {
         .raw = L("HTTP/1.1 200 OK\r\n"
                  "Content-Length: 0\r\n"
                  "\r\n"),
+        .raw_out = L("HTTP/1.1 200 OK\r\n"
+                     "Content-Length: 0\r\n"
+                     "\r\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.1",
@@ -338,6 +391,9 @@ static const RespTest resp_tests[] = {
      * RFC 7230, section 3.1.2) */
     {
         .raw = L("HTTP/1.0 303 \r\n\r\n"),
+        .raw_out = L("HTTP/1.0 303 \r\n"
+                     "Connection: close\r\n"
+                     "\r\n"),
         .status = "303 ",
         .status_code = 303,
         .proto = "HTTP/1.0",
@@ -354,6 +410,9 @@ static const RespTest resp_tests[] = {
      * permitted by RFC 7230, but we'll accept it anyway) */
     {
         .raw = L("HTTP/1.0 303\r\n\r\n"),
+        .raw_out = L("HTTP/1.0 303 303\r\n"
+                     "Connection: close\r\n"
+                     "\r\n"),
         .status = "303",
         .status_code = 303,
         .proto = "HTTP/1.0",
@@ -374,6 +433,11 @@ static const RespTest resp_tests[] = {
                  "Content-Type: multipart/byteranges; boundary=18a75608c8f47cef\n"
                  "\n"
                  "some body"),
+        .raw_out = L("HTTP/1.1 206 Partial Content\r\n"
+                     "Connection: close\r\n"
+                     "Content-Type: multipart/byteranges; boundary=18a75608c8f47cef\r\n"
+                     "\r\n"
+                     "some body"),
         .status = "206 Partial Content",
         .status_code = 206,
         .proto = "HTTP/1.1",
@@ -392,6 +456,10 @@ static const RespTest resp_tests[] = {
                  "Connection: close\r\n"
                  "\r\n"
                  "Body here\n"),
+        .raw_out = L("HTTP/1.0 200 OK\r\n"
+                     "Connection: close\r\n"
+                     "\r\n"
+                     "Body here\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.0",
@@ -411,6 +479,13 @@ static const RespTest resp_tests[] = {
                  "Content-Range: bytes 0-5/1862\r\n"
                  "Content-Length: 6\r\n\r\n"
                  "foobar"),
+        .raw_out = L("HTTP/1.1 206 Partial Content\r\n"
+                     "Content-Length: 6\r\n"
+                     "Accept-Ranges: bytes\r\n"
+                     "Content-Range: bytes 0-5/1862\r\n"
+                     "Content-Type: text/plain; charset=utf-8\r\n"
+                     "\r\n"
+                     "foobar"),
         .status = "206 Partial Content",
         .status_code = 206,
         .proto = "HTTP/1.1",
@@ -429,6 +504,10 @@ static const RespTest resp_tests[] = {
                  "Content-Length: 256\r\n"
                  "Connection: keep-alive, close\r\n"
                  "\r\n"),
+        .raw_out = L("HTTP/1.1 200 OK\r\n"
+                     "Connection: close\r\n"
+                     "Content-Length: 256\r\n"
+                     "\r\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.1",
@@ -449,6 +528,10 @@ static const RespTest resp_tests[] = {
                  "Connection: keep-alive\r\n"
                  "Connection: close\r\n"
                  "\r\n"),
+        .raw_out = L("HTTP/1.1 200 OK\r\n"
+                     "Connection: close\r\n"
+                     "Content-Length: 256\r\n"
+                     "\r\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.1",
@@ -468,6 +551,10 @@ static const RespTest resp_tests[] = {
                  "Transfer-Encoding: bogus\r\n"
                  "\r\n"
                  "Body here\n"),
+        .raw_out = L("HTTP/1.0 200 OK\r\n"
+                     "Connection: close\r\n"
+                     "\r\n"
+                     "Body here\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.0",
@@ -488,6 +575,11 @@ static const RespTest resp_tests[] = {
                  "Content-Length: 10\r\n"
                  "\r\n"
                  "Body here\n"),
+        .raw_out = L("HTTP/1.0 200 OK\r\n"
+                     "Connection: close\r\n"
+                     "Content-Length: 10\r\n"
+                     "\r\n"
+                     "Body here\n"),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.0",
@@ -509,6 +601,34 @@ static const RespTest resp_tests[] = {
               "Keep-Alive: timeout=7200\r\n\r\n"
               "\x1f\x8b\b\x00\x00\x00\x00\x00\x00\x00s\xf3\xf7\a\x00\xab'\xd4\x1a\x03"
               "\x00\x00\x00"),
+        .raw_out = L("HTTP/1.1 200 OK\r\n"
+                     "Content-Length: 23\r\n"
+                     "Connection: keep-alive\r\n"
+                     "Content-Encoding: gzip\r\n"
+                     "Keep-Alive: timeout=7200\r\n"
+                     "\r\n"
+                     "\x1f"
+                     "\x8b"
+                     "\x08"
+                     "\x00"
+                     "\x00"
+                     "\x00"
+                     "\x00"
+                     "\x00"
+                     "\x00"
+                     "\x00"
+                     "s\xf3"
+                     "\xf7"
+                     "\x07"
+                     "\x00"
+                     "\xab"
+                     "'\xd4"
+                     "\x1a"
+                     "\x03"
+                     "\x00"
+                     "\x00"
+                     "\x00"
+                     ""),
         .status = "200 OK",
         .status_code = 200,
         .proto = "HTTP/1.1",
@@ -530,6 +650,12 @@ static const RespTest resp_tests[] = {
                  "Content-type: text/html\r\n"
                  "WWW-Authenticate: Basic realm=\"\"\r\n\r\n"
                  "Your Authentication failed.\r\n"),
+        .raw_out = L("HTTP/1.0 401 Unauthorized\r\n"
+                     "Connection: close\r\n"
+                     "Content-Type: text/html\r\n"
+                     "Www-Authenticate: Basic realm=\"\"\r\n"
+                     "\r\n"
+                     "Your Authentication failed.\r\n"),
         .status = "401 Unauthorized",
         .status_code = 401,
         .proto = "HTTP/1.0",
@@ -614,6 +740,91 @@ static void TestReadResponse(TestingT *t) {
         bufio_reader_free(br);
         ARENA_END;
     }
+}
+
+static void TestWriteResponse(TestingT *t) {
+    for (Int i = 0; i < (Int)(sizeof resp_tests / sizeof resp_tests[0]); i++) {
+        const RespTest *tt = &resp_tests[i];
+        ARENA_BEGIN;
+        HttpRequest dummy = {0};
+        dummy.method = cs(tt->request);
+        StringsReader sr;
+        BufioReader *br = reader_of(a, &sr, str_from_bytes(tt->raw.p, (Int)tt->raw.n));
+        Error err;
+        HttpResponse *resp =
+            http_read_response(a, br, tt->request != NULL ? &dummy : NULL, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "#%d: %v", i, err);
+            bufio_reader_free(br);
+            ARENA_END;
+            continue;
+        }
+        BytesBuffer buf = BYTES_BUFFER(a);
+        err = http_response_write(resp, bytes_buffer_as_io_writer(&buf));
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "#%d: %v", i, err);
+        } else {
+            Str got = bytes_buffer_string(&buf, a);
+            Str want = str_from_bytes(tt->raw_out.p, (Int)tt->raw_out.n);
+            if (!str_eq(got, want))
+                testing_t_errorf_v(t,
+                                   "#%d: response differs; "
+                                   "got:\n----\n%v\n----\nwant:\n----\n%v\n----\n",
+                                   i, strings_replace_all(a, got, S("\r"), S("\\r")),
+                                   strings_replace_all(a, want, S("\r"), S("\\r")));
+        }
+        http_response_free(resp);
+        bufio_reader_free(br);
+        ARENA_END;
+    }
+}
+
+static void TestResponseStatusStutter(TestingT *t) {
+    ARENA_BEGIN;
+    HttpResponse r = {0};
+    r.status = S("123 some status");
+    r.status_code = 123;
+    r.proto_major = 1;
+    r.proto_minor = 3;
+    StringsBuilder buf = STRINGS_BUILDER(a);
+    (void)http_response_write(&r, strings_builder_as_io_writer(&buf));
+    if (strings_contains(strings_builder_string(&buf), S("123 123")))
+        testing_t_errorf_v(t, "stutter in status: %s", strings_builder_string(&buf));
+    ARENA_END;
+}
+
+static void TestResponseWritesOnlySingleConnectionClose(TestingT *t) {
+    ARENA_BEGIN;
+    Str connection_close_header = S("Connection: close");
+
+    StringsReader sr;
+    BufioReader *br = reader_of(a, &sr, S("HTTP/1.0 200 OK\r\n\r\nAAAA"));
+    Error err;
+    HttpResponse *res = http_read_response(a, br, NULL, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "ReadResponse failed %v", err);
+
+    BytesBuffer buf1 = BYTES_BUFFER(a);
+    err = http_response_write(res, bytes_buffer_as_io_writer(&buf1));
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "Write failed %v", err);
+    BufioReader *br2 = bufio_new_reader(a, bytes_buffer_as_io_reader(&buf1));
+    HttpResponse *res2 = http_read_response(a, br2, NULL, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "ReadResponse failed %v", err);
+
+    StringsBuilder buf2 = STRINGS_BUILDER(a);
+    err = http_response_write(res2, strings_builder_as_io_writer(&buf2));
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "Write failed %v", err);
+    Int count = strings_count(strings_builder_string(&buf2), connection_close_header);
+    if (count != 1)
+        testing_t_errorf_v(t, "Found %d %q header", count, connection_close_header);
+    http_response_free(res2);
+    http_response_free(res);
+    bufio_reader_free(br2);
+    bufio_reader_free(br);
+    ARENA_END;
 }
 
 /* ------------------------------------------- TestReadResponseCloseInMiddle */
@@ -1032,6 +1243,9 @@ static void TestFinalChunkedBodyReadEOF(TestingT *t) {
 
 #define TESTS(X)                                                                       \
     X(TestReadResponse)                                                                \
+    X(TestWriteResponse)                                                               \
+    X(TestResponseStatusStutter)                                                       \
+    X(TestResponseWritesOnlySingleConnectionClose)                                     \
     X(TestReadResponseCloseInMiddle)                                                   \
     X(TestLocationResponse)                                                            \
     X(TestResponseContentLengthShortBody)                                              \

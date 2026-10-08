@@ -280,6 +280,10 @@ BURROW_BORROWS(ret) Error burrow__http_new_transfer_writer(
  * and on a writer that failed to be made. */
 void burrow__http_transfer_writer_done(burrow__HttpTransferWriter *t);
 
+/* isKnownInMemoryReader: a BytesReader, BytesBuffer or StringsReader, as it
+ * is or inside io_nop_closer, which can be read without blocking. */
+bool burrow__http_is_known_in_memory_reader(IoReader r);
+
 /* shouldSendContentLength, writeHeader and writeBody. write_body always closes
  * body_closer. write_header tells trace about each header it writes, and
  * trace can be NULL. */

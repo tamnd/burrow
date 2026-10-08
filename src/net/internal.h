@@ -602,6 +602,13 @@ Int burrow__net_lookup_port_map(Str network, Str service, Error *err);
  * error_allocator(). */
 Int burrow__net_lookup_protocol(Str name, Error *err);
 
+/* dnsWaitGroup.Wait: waits for every lookup that was started in a goroutine
+ * to finish with its resolver. A caller that gives up through its context
+ * returns while the lookup goes on with the same NetResolver, so a test with
+ * a resolver on its stack calls this before it returns, where Go's tests
+ * defer dnsWaitGroup.Wait. */
+void burrow__net_dns_wait(void);
+
 /* ------------------------------------------------------------- cgo_unix.go */
 
 /* The lookups Go makes through the C library, made here through the platform

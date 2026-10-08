@@ -4103,7 +4103,7 @@ PemBlock *x509_encrypt_pem_block(Alloc *a, IoReader rand, Str block_type, Slice 
     if (rand.vt == NULL)
         rand = crypto_rand_reader;
 
-    Byte iv[AES_BLOCK_SIZE];
+    Byte iv[AES_BLOCK_SIZE] = {0};
     Slice ivs = x509_bytes(iv, ciph->block_size);
     Error e = BURROW_NO_ERROR;
     (void)io_read_full(rand, ivs, &e);

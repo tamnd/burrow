@@ -134,6 +134,7 @@
 #include "burrow/net/http.h"
 #include "burrow/net/http/cgi.h"
 #include "burrow/net/http/cookiejar.h"
+#include "burrow/net/http/fcgi.h"
 #include "burrow/net/http/httptest.h"
 #include "burrow/net/http/httptrace.h"
 #include "burrow/net/http/httputil.h"

@@ -1836,3 +1836,66 @@ PENDING
 `cgi_serve` does the rest of a program's work: it reads the request with `cgi_request`, serves it with a handler and writes what the handler writes to standard output, with a `Status` line and the header in front. The other side is `CgiHandler`, for a web server. It runs the program at `path` for each request, with `root` as the part of the URL path in front of the program's `PATH_INFO`, and copies back what the program prints. A program that answers with a `Location` and no `Status` sends the client a 302 Found to it. When the location starts with `/` and `path_location_handler` is set, that handler serves a GET for the path instead, in the same response.
 
 Go's request has a TLS field, which `cgi.Request` fills in when `HTTPS` is on. There's no `crypto/tls` here yet, so for now that shows only in the URL, whose scheme is `https`.
+
+## FastCGI
+
+`net/http/fcgi` is the program's side of FastCGI. Where a CGI program starts once for each request, a FastCGI program keeps running, and the web server sends it requests over a connection that can carry several at once. `fcgi_serve` accepts those connections and serves each request with a handler on a goroutine of its own. A web server that starts the program itself passes the listening socket as its standard input, and a listener with no vt means that one. Variables the request has no field for, such as `REMOTE_USER`, are in `fcgi_process_env`.
+
+The example plays the web server by hand, so you can see the records go back and forth:
+
+<!-- example: ../examples/net/fcgi.c#serve -->
+```c
+/* The program's side: serve FastCGI on a TCP port. */
+NetListener l = net_listen(heap, BURROW_S("tcp"), BURROW_S("127.0.0.1:0"), &err);
+if (l.vt == NULL)
+    return;
+SyncWaitGroup wg = {0};
+sync_wait_group_go(&wg, BURROW_FN(Func, serve, &l));
+
+/* The web server's side, by hand: begin a request, send its variables,
+ * then an empty body. */
+NetAddr la = l.vt->addr(l.data);
+NetConn c = net_dial(heap, BURROW_S("tcp"), la.vt->string(la.data, a), &err);
+if (c.vt != NULL) {
+    BytesBuffer *params = bytes_new_buffer(a, (Slice){0});
+    param(params, "REQUEST_METHOD", "GET");
+    param(params, "SERVER_PROTOCOL", "HTTP/1.1");
+    param(params, "REQUEST_URI", "/hello");
+    param(params, "REMOTE_USER", "jane");
+    BytesBuffer *out = bytes_new_buffer(a, (Slice){0});
+    Byte begin[8] = {0, 1}; /* the responder role */
+    record(out, 1, (Slice){begin, 8, 8, NULL});
+    record(out, 4, bytes_buffer_bytes(params));
+    record(out, 4, (Slice){0});
+    record(out, 5, (Slice){0});
+    bytes_buffer_write_to(out, net_conn_as_io_writer(c), &err);
+
+    /* The response comes back as stdout records, up to an end-request
+     * record. */
+    BytesBuffer *stdout_ = bytes_new_buffer(a, (Slice){0});
+    Byte h[8];
+    Byte *body = mem_alloc(a, 65535 + 255, 1);
+    IoReader r = net_conn_as_io_reader(c);
+    while (io_read_full(r, (Slice){h, 8, 8, NULL}, &err) == 8 && h[1] != 3) {
+        Int n = (Int)h[4] << 8 | h[5];
+        io_read_full(r, (Slice){body, n + h[6], n + h[6], NULL}, &err);
+        if (h[1] == 6)
+            bytes_buffer_write(stdout_, (Slice){body, n, n, NULL}, NULL);
+    }
+    Str got = bytes_buffer_string(stdout_, a);
+    fmt_printf_v("%s",
+                 strings_replace_all(a, got, BURROW_S("\r\n"), BURROW_S("\n")));
+    net_conn_free(c);
+}
+(void)l.vt->closer.close(l.data);
+sync_wait_group_wait(&wg);
+net_listener_free(l);
+```
+
+That prints:
+
+```
+PENDING
+```
+
+The response comes back as CGI output: a `Status` line, the header, a blank line and the body. As in Go, only the responder role is supported.

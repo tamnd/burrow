@@ -24,6 +24,14 @@
 #include <stdio.h>
 #include <string.h>
 
+/* What EINVAL says. WASI's table has it capitalised, and so does Go's
+ * tables_wasip1.go. */
+#if defined(BURROW_OS_WASI)
+#define EINVAL_TEXT "Invalid argument"
+#else
+#define EINVAL_TEXT "invalid argument"
+#endif
+
 #if defined(BURROW_NETPOLL_READINESS) && !defined(BURROW_OS_WASI)
 #define HAVE_TCP 1
 #endif
@@ -281,10 +289,8 @@ static void TestAPortPastTheLastIsAnInvalidArgument(TestingT *t) {
 
 static void TestANilConnIsAnInvalidArgument(TestingT *t) {
     char buf[64];
-    CHECK_STR_EQ(text_of(net_tcp_conn_close(NULL), buf, sizeof buf),
-                 "invalid argument");
-    CHECK_STR_EQ(text_of(net_tcp_listener_close(NULL), buf, sizeof buf),
-                 "invalid argument");
+    CHECK_STR_EQ(text_of(net_tcp_conn_close(NULL), buf, sizeof buf), EINVAL_TEXT);
+    CHECK_STR_EQ(text_of(net_tcp_listener_close(NULL), buf, sizeof buf), EINVAL_TEXT);
     CHECK(net_tcp_conn_local_addr(NULL).vt == NULL);
     net_tcp_conn_free(NULL);
     net_tcp_listener_free(NULL);

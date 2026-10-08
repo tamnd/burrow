@@ -672,7 +672,7 @@ static bool ecdsa_fips_sign(const EcdsaFipsCurve *c, Slice d, IoReader rand, Sli
     /* The nonce comes from a DRBG with random bytes as its entropy, and the
      * key and the hash as its personalization string, padded to blocks as
      * draft-irtf-cfrg-det-sigs-with-noise-04 says. */
-    uint8_t z[NISTEC_MAX_ELEMENT_BYTES];
+    uint8_t z[NISTEC_MAX_ELEMENT_BYTES] = {0};
     if (!ecdsa_read(rand, ecdsa_bytes(z, d.len), err))
         return false;
     uint8_t h[NISTEC_MAX_ELEMENT_BYTES];

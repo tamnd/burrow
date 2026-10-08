@@ -1037,6 +1037,8 @@ static void TestDNSErrorUnwrap(TestingT *t) {
         testing_t_errorf_v(t, "errors.Is(err, context.Canceled) = false; want = true");
     context_release(ctx);
     arena_free(&ar);
+    /* The lookup may still be going with r, which is on this stack. */
+    burrow__net_dns_wait();
 }
 
 #define TESTS(X)                                                                       \

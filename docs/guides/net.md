@@ -1605,6 +1605,17 @@ http_response_free(res);
 httptest_server_free(ts);
 ```
 
+That prints:
+
+```
+200 OK from /new: you found the new page
+200 OK from /echo: application/x-www-form-urlencoded name=gopher&name=burrow
+Location: /new
+302 Found from /old: <a href="/new">Found</a>.
+
+deadline exceeded: true, timeout: true
+```
+
 The client follows up to ten redirects, and `check_redirect` decides otherwise: an error from it ends the request, and `http_err_use_last_response` hands back the redirect itself, body unread. A 301, 302 or 303 turns the request into a GET with no body, while a 307 or 308 sends the same method and body again, which takes a `get_body` when the body isn't a `BytesBuffer`, `BytesReader` or `StringsReader`, the three `http_new_request` knows how to rewind. Headers go along to the same host and its subdomains, but `Authorization`, `Cookie` and the other credential headers stop at a different domain. With a `jar`, cookies from each response go into the jar and the jar's cookies go out with each request.
 
 `timeout` covers the whole exchange, the redirects and the reading of the body included. When it runs out the error is a `UrlError` that is a timeout to `net_error_timeout`, and `errors_is` finds `context_deadline_exceeded` in it. A request's context can cancel it too. Every error from the client is a `UrlError` with the method and the URL, with any password in the URL shown as `***`. A status like 404 is not an error. The response it comes with has to be freed with `http_response_free`, and so does the one that comes back with an error from `check_redirect`.
@@ -1672,7 +1683,69 @@ for (int i = 0; i < 2; i++) {
 context_release(ctx);
 ```
 
+That prints:
+
+```
+get conn
+got conn, reused: false
+wrote headers
+first response byte
+put idle conn: <nil>
+200 OK: hello
+get conn
+got conn, reused: true
+wrote headers
+first response byte
+put idle conn: <nil>
+200 OK: hello
+```
+
 The hooks run on the transport's goroutines, so one that shares state with the caller needs a lock, and the trace has to live until the last response sent with it is freed. A trace put in a context that already has one runs its own hooks and then the older one's, as in Go. Unlike Go, it does that by keeping a pointer to the older trace rather than rewriting its own fields, so code that wants to run the hooks itself calls `httptrace_client_trace_got_conn` and the rest. The hooks for the dial stop once the request has its connection, while in Go a dial that lost the race to an idle connection keeps calling them. There are no TLS hooks yet.
+
+## Dumping requests and responses
+
+`net/http/httputil` can show a message the way it goes over the wire, which helps when debugging a client or a server. `httputil_dump_request_out` shows a request as the transport would send it, with the `User-Agent`, `Accept-Encoding` and other fields the transport adds, by sending it through a transport to a connection that only records it. `httputil_dump_request` shows a request as a server got it, and `httputil_dump_response` shows a response:
+
+<!-- example: ../examples/net/httputil.c#dump -->
+```c
+/* A request as the transport would send it, with the fields it adds. */
+StringsReader body;
+strings_reader_reset(&body, BURROW_S("name=gopher"));
+Error err;
+HttpRequest *req = http_new_request(a, BURROW_S("POST"),
+                                    BURROW_S("http://example.com/signup?ref=docs"),
+                                    strings_reader_as_io_reader(&body), &err);
+if (req == NULL)
+    return;
+http_header_set(req->header, BURROW_S("Content-Type"),
+                BURROW_S("application/x-www-form-urlencoded"));
+Slice out = httputil_dump_request_out(a, req, true, &err);
+if (BURROW_OK(err))
+    fmt_printf_v("%q\n", str_from_bytes(out.p, out.len));
+http_request_free(req);
+
+/* A response, with its body read into the dump and put back after. */
+StringsReader sr;
+strings_reader_reset(&sr, BURROW_S("HTTP/1.1 200 OK\r\n"
+                                   "Content-Type: text/plain\r\n"
+                                   "Content-Length: 5\r\n"
+                                   "\r\n"
+                                   "hello"));
+BufioReader *br = bufio_new_reader(a, strings_reader_as_io_reader(&sr));
+HttpResponse *res = http_read_response(a, br, NULL, &err);
+if (res != NULL) {
+    out = httputil_dump_response(a, res, false, &err);
+    fmt_printf_v("%q\n", str_from_bytes(out.p, out.len));
+    out = httputil_dump_response(a, res, true, &err);
+    fmt_printf_v("%q\n", str_from_bytes(out.p, out.len));
+    Slice b = io_read_all(a, io_read_closer_as_io_reader(res->body), &err);
+    fmt_printf_v("body after the dump: %s\n", str_from_bytes(b.p, b.len));
+    http_response_free(res);
+}
+bufio_reader_free(br);
+```
+
+With `body` true, a dump reads the whole body into memory, and the request or response gets a reader over those same bytes, so it can still be used after. With `body` false the body is left out, but the header keeps the length the body would have had. `httputil_new_chunked_reader` and `httputil_new_chunked_writer` are the chunked encoding the client and server use, for code that speaks HTTP/1 itself.
 
 ## Reverse proxies
 

@@ -5,9 +5,8 @@
  * write as literals, and for TestParseCookie and TestParseSetCookie what Go's
  * ParseCookie and ParseSetCookie give for each line of their tables, which
  * Go's tests check are those literals. The cases that repeat a cookie 3001
- * times are written out as loops. TestSetCookie, TestAddCookie and
- * TestSetCookieDoubleQuotes need ResponseWriter, Request and Response, and
- * come with them.
+ * times are written out as loops. TestSetCookieDoubleQuotes prints the name,
+ * value and max age where Go prints the whole cookie.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -940,6 +939,121 @@ static void TestCookieHeap(TestingT *t) {
     (void)t;
 }
 
+/* headerOnlyResponseWriter: a writer that is only its header. */
+static HttpHeader ho_header(void *self) {
+    return *(HttpHeader *)self;
+}
+
+static Int ho_write(void *self, Slice p, Error *err) {
+    (void)self, (void)p, (void)err;
+    panic_str(S("NOIMPL"));
+    return 0;
+}
+
+static void ho_write_header(void *self, Int code) {
+    (void)self, (void)code;
+    panic_str(S("NOIMPL"));
+}
+
+static const HttpResponseWriterVT ho_vt = {
+    .writer = {NULL, ho_write},
+    .header = ho_header,
+    .write_header = ho_write_header,
+};
+
+static void TestSetCookie(TestingT *t) {
+    ARENA_BEGIN;
+    HttpHeader m = http_header_make(a);
+    HttpResponseWriter w = {&ho_vt, &m};
+    HttpCookie c1 = {
+        .name = T("cookie-1"), .value = T("one"), .path = T("/restricted/")};
+    HttpCookie c2 = {.name = T("cookie-2"), .value = T("two"), .max_age = 3600};
+    (void)http_set_cookie(w, &c1);
+    (void)http_set_cookie(w, &c2);
+    Slice v = http_header_values(m, S("Set-Cookie"));
+    if (v.len != 2)
+        testing_t_fatalf_v(t, "expected %d cookies, got %d", 2, v.len);
+    Str g = ((Str *)v.p)[0], e = S("cookie-1=one; Path=/restricted/");
+    if (!str_eq(g, e))
+        testing_t_errorf_v(t, "cookie #1: want %q, got %q", e, g);
+    g = ((Str *)v.p)[1], e = S("cookie-2=two; Max-Age=3600");
+    if (!str_eq(g, e))
+        testing_t_errorf_v(t, "cookie #2: want %q, got %q", e, g);
+    ARENA_END;
+}
+
+static const struct {
+    HttpCookie cookies[3];
+    int n;
+    Str raw;
+} add_cookie_tests[] = {
+    {.n = 0, .raw = T("")},
+    {.cookies = {{.name = T("cookie-1"), .value = T("v$1")}},
+     .n = 1,
+     .raw = T("cookie-1=v$1")},
+    {.cookies = {{.name = T("cookie-1"), .value = T("v$1")},
+                 {.name = T("cookie-2"), .value = T("v$2")},
+                 {.name = T("cookie-3"), .value = T("v$3")}},
+     .n = 3,
+     .raw = T("cookie-1=v$1; cookie-2=v$2; cookie-3=v$3")},
+    /* Quoted values (issue #46443) */
+    {.cookies =
+         {{.name = T("cookie-1"), .value = T("quoted"), .quoted = true},
+          {.name = T("cookie-2"), .value = T("quoted with spaces"), .quoted = true},
+          {.name = T("cookie-3"), .value = T("quoted,with,commas"), .quoted = true}},
+     .n = 3,
+     .raw = T("cookie-1=\"quoted\"; cookie-2=\"quoted with spaces\"; "
+              "cookie-3=\"quoted,with,commas\"")},
+};
+
+static void TestAddCookie(TestingT *t) {
+    ARENA_BEGIN;
+    for (size_t i = 0; i < sizeof add_cookie_tests / sizeof add_cookie_tests[0]; i++) {
+        Error err;
+        HttpRequest *req = http_new_request(a, S("GET"), S("http://example.com/"),
+                                            (IoReader){0}, &err);
+        if (BURROW_FAILED(err))
+            testing_t_fatalf_v(t, "NewRequest: %v", err);
+        for (int j = 0; j < add_cookie_tests[i].n; j++)
+            (void)http_request_add_cookie(req, a, &add_cookie_tests[i].cookies[j]);
+        Str g = http_header_get(req->header, S("Cookie"));
+        if (!str_eq(g, add_cookie_tests[i].raw))
+            testing_t_errorf_v(t, "Test %d:\nwant: %s\n got: %s\n", (Int)i,
+                               add_cookie_tests[i].raw, g);
+    }
+    ARENA_END;
+}
+
+static void TestSetCookieDoubleQuotes(TestingT *t) {
+    ARENA_BEGIN;
+    HttpResponse res = {0};
+    res.header = http_header_make(a);
+    http_header_add(res.header, S("Set-Cookie"), S("quoted0=none; max-age=30"));
+    http_header_add(res.header, S("Set-Cookie"),
+                    S("quoted1=\"cookieValue\"; max-age=31"));
+    http_header_add(res.header, S("Set-Cookie"), S("quoted2=cookieAV; max-age=\"32\""));
+    http_header_add(res.header, S("Set-Cookie"), S("quoted3=\"both\"; max-age=\"33\""));
+    Slice got = http_response_cookies(&res, a);
+    static const HttpCookie want[] = {
+        {.name = T("quoted0"), .value = T("none"), .max_age = 30},
+        {.name = T("quoted1"), .value = T("cookieValue"), .max_age = 31},
+        {.name = T("quoted2"), .value = T("cookieAV")},
+        {.name = T("quoted3"), .value = T("both")},
+    };
+    Int nwant = (Int)(sizeof want / sizeof want[0]);
+    if (got.len != nwant)
+        testing_t_fatalf_v(t, "got %d cookies, want %d", got.len, nwant);
+    for (Int i = 0; i < nwant; i++) {
+        const HttpCookie *g = &((HttpCookie *)got.p)[i], *w = &want[i];
+        if (!str_eq(g->name, w->name) || !str_eq(g->value, w->value) ||
+            g->max_age != w->max_age)
+            testing_t_errorf_v(
+                t, "cookie #%d:\ngot  %s=%s max-age %d\nwant %s=%s max-age %d", i,
+                g->name, g->value, g->max_age, w->name, w->value, w->max_age);
+    }
+    ARENA_END;
+}
+
 #define TESTS(X)                                                                       \
     X(TestWriteSetCookies)                                                             \
     X(TestReadSetCookies)                                                              \
@@ -949,6 +1063,9 @@ static void TestCookieHeap(TestingT *t) {
     X(TestCookieValid)                                                                 \
     X(TestParseCookie)                                                                 \
     X(TestParseSetCookie)                                                              \
-    X(TestCookieHeap)
+    X(TestCookieHeap)                                                                  \
+    X(TestSetCookie)                                                                   \
+    X(TestAddCookie)                                                                   \
+    X(TestSetCookieDoubleQuotes)
 
 TESTING_MAIN(TESTS)

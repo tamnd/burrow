@@ -289,8 +289,8 @@ static void TestDialerLocalAddr(TestingT *t) {
         UDP,
         UNIX
     };
+    /* One for each TCP_ name above, in the same order. */
     NetTCPAddr tcp[] = {
-        {slice_nil(TYPE_BYTE), 0, BURROW_STR_EMPTY},
         {slice_nil(TYPE_BYTE), 0, BURROW_STR_EMPTY},
         {slice_from(any16, 16, 16, TYPE_BYTE), 0, BURROW_STR_EMPTY},
         {slice_from(any4, 4, 4, TYPE_BYTE), 0, BURROW_STR_EMPTY},
@@ -761,7 +761,10 @@ static void TestDialTimeoutGivesUp(TestingT *t) {
                                  -1 * TIME_SECOND, &e);
     CHECK(c.vt == NULL);
     CHECK(net_error_timeout(e));
-    CHECK(errors_is(e, os_err_deadline_exceeded));
+    /* Go's errTimeout, which is context.DeadlineExceeded and not
+     * os.ErrDeadlineExceeded, as a Go 1.27.1 run of the same dial says. */
+    CHECK(errors_is(e, context_deadline_exceeded));
+    CHECK(!errors_is(e, os_err_deadline_exceeded));
     c = net_dial_timeout(heap_allocator(), S("tcp"), listener_addr(l), TIME_SECOND, &e);
     CHECK(BURROW_OK(e));
     net_conn_free(c);

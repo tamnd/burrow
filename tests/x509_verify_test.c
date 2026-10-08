@@ -919,11 +919,17 @@ typedef struct EkuDescs {
     bool unknown; /* UnknownExtKeyUsage is {1, 2, 3} */
 } EkuDescs;
 
+/* The arcs live at file scope because the certificate template keeps pointing at
+ * them after apply_ekus returns. */
+static const Int eku_unknown_arcs[] = {1, 2, 3};
+
 static void apply_ekus(Alloc *a, X509Certificate *c, const EkuDescs *d) {
     c->ext_key_usage = ekus(a, d->ekus, d->n);
     c->unknown_ext_key_usage = slice_nil(TYPE_ASN1_OBJECT_IDENTIFIER);
     if (d->unknown) {
-        Asn1ObjectIdentifier oid = ASN1_OID(1, 2, 3);
+        Int n = (Int)(sizeof eku_unknown_arcs / sizeof eku_unknown_arcs[0]);
+        Asn1ObjectIdentifier oid =
+            slice_from((void *)(uintptr_t)eku_unknown_arcs, n, n, TYPE_INT);
         c->unknown_ext_key_usage = slice_append(a, c->unknown_ext_key_usage, &oid, 1);
     }
 }

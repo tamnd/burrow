@@ -193,4 +193,26 @@ int main(void) {
 }
 
 /* Output:
+-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f
+-----END PRIVATE KEY-----
+302a300506032b657003210003a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8
+x509: failed to parse private key (use ParsePKCS8PrivateKey instead for this key format)
+2b06010401d679020402
+2.25.329800735698586629295641978511506172918
+1.3.6.1.5.5.7.3.1
+invalid oid
+290 bytes
+CN=Example Root
+Ed25519
+65b60673d6ed884bf01c2c222d82ada0740f29ac
+2036-01-01T00:00:00Z
+signed by itself: yes
+request for www.example.com: ok
+CN=Example Root
+65b60673d6ed884bf01c2c222d82ada0740f29ac
+1 chain, 2 certificates
+x509: certificate is valid for www.example.com, not mail.example.com
+x509: certificate has expired or is not yet valid: current time 2027-06-01T00:00:00Z is after 2027-01-01T00:00:00Z
+x509: certificate signed by unknown authority
 */

@@ -1611,6 +1611,13 @@ typedef struct CopyEnv {
     Error recovered;
 } CopyEnv;
 
+static const Str copy_not_an_error = BURROW_S_INIT("not an error");
+
+/* Kept out of copy_frontend, which has a setjmp in it. */
+static void copy_repanic(Error *err) {
+    panic(BURROW_ANY(TYPE_ERROR, err));
+}
+
 static void copy_frontend(void *env, HttpResponseWriter w, HttpRequest *r) {
     CopyEnv *e = (CopyEnv *)env;
     BURROW_TRY {
@@ -1621,7 +1628,7 @@ static void copy_frontend(void *env, HttpResponseWriter w, HttpRequest *r) {
         if (p.t == TYPE_ERROR)
             e->recovered = *(const Error *)p.data;
         else
-            e->recovered = errors_new(error_allocator(), BURROW_S("not an error"));
+            e->recovered = errors_new(error_allocator(), copy_not_an_error);
     }
     BURROW_TRY_END;
     bool done = true;
@@ -1629,7 +1636,7 @@ static void copy_frontend(void *env, HttpResponseWriter w, HttpRequest *r) {
     /* Go's deferred send lets the panic go on, which the server recovers
      * from. */
     if (e->panicked)
-        panic(BURROW_ANY(TYPE_ERROR, &e->recovered));
+        copy_repanic(&e->recovered);
 }
 
 static void TestReverseProxy_CopyBuffer(TestingT *t) {
@@ -1895,7 +1902,7 @@ static void TestReverseProxy_PanicBodyError(TestingT *t) {
     HttpRequest *req = http_new_request_with_context(
         heap_allocator(), ctx, cs("GET"), cs("http://foo.tld/"), no_body(), &err);
     HttptestResponseRecorder *rec = httptest_new_recorder(heap_allocator());
-    bool panicked = false;
+    volatile bool panicked = false;
     if (req != NULL && rec != NULL) {
         BURROW_TRY {
             httputil_reverse_proxy_serve_http(

@@ -1,8 +1,8 @@
 /* net/http's Transport: HTTP/1 requests over connections kept open and used
  * again, through a proxy when one is set.
  *
- * Derived from Go's src/net/http/transport.go and proxy parts of
- * src/net/http/transport.go. Go source: go1.27.1.
+ * Derived from Go's src/net/http/transport.go.
+ * Go source: go1.27.1.
  *
  * Go leans on its collector for most of the lifetimes here. A connection, a
  * request in flight and a goroutine waiting for a connection are each reached

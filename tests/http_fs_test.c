@@ -2,12 +2,12 @@
  * Go source: go1.27.1.
  *
  * Go runs most of these against a test server and a client, and the client
- * follows redirects. There is no Server here yet, so they run the handler
- * against a ResponseRecorder, ask for where a redirect would have gone, and
- * check the redirect itself on the way. What only a server adds, such as the
- * Content-Length of an error page, is not checked. The tests that need a
- * server for what they test (sendfile, the gzip writer, the relative paths
- * that need a working directory) wait for it.
+ * follows redirects. They were ported before there was a Server here, so most
+ * run the handler against a ResponseRecorder, ask for where a redirect would
+ * have gone, and check the redirect itself on the way. What only a server
+ * adds, such as the Content-Length of an error page, is not checked. The ones
+ * at the end, which need a server for what they test, use httptest's.
+ * TestLinuxSendfile, which runs the test binary under strace, isn't ported.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -19,12 +19,14 @@
 #include "burrow/bufio.h"
 #include "burrow/burrow.h"
 #include "burrow/bytes.h"
+#include "burrow/compress/gzip.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
 #include "burrow/io.h"
 #include "burrow/io/fs.h"
 #include "burrow/map.h"
 #include "burrow/mem/arena.h"
+#include "burrow/mem/heap.h"
 #include "burrow/mime.h"
 #include "burrow/mime/multipart.h"
 #include "burrow/net/http.h"
@@ -1644,6 +1646,267 @@ static void TestFileServerRestoresPath(TestingT *t) {
     done(rec, req);
 }
 
+/* ------------------------------------------------------ through a server */
+
+#if defined(BURROW_NETPOLL_READINESS) && !defined(BURROW_OS_WASI)
+#define HAVE_TCP 1
+#endif
+
+static bool need_tcp(TestingT *t) {
+#if !defined(HAVE_TCP)
+    testing_t_skip_v(t, "TCP here needs the readiness poll FD");
+    return false;
+#else
+    (void)t;
+    return true;
+#endif
+}
+
+/* Go's tests run in the package's directory, which has fs_test.go and
+ * testdata in it. Here root stands in for it, with a file called fs_test.go
+ * that setup writes, and the tests that use the working directory move into
+ * root and back out. The old directory, or a zero Str when the move failed. */
+static Str enter_root(TestingT *t) {
+    Error err;
+    Str old = os_getwd(a, &err);
+    if (BURROW_OK(err))
+        err = os_chdir(root);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "chdir to %s: %v", root, err);
+        return (Str){0};
+    }
+    return old;
+}
+
+static void leave_root(TestingT *t, Str old) {
+    Error err = os_chdir(old);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "chdir back to %s: %v", old, err);
+}
+
+/* A GET through ts's client, its body read to the end and closed. */
+static HttpResponse *client_get(HttptestServer *ts, Str path, Str *body, Error *err) {
+    Str url = fmt_sprintf_v(a, "%s%s", ts->url, path);
+    HttpResponse *res = http_client_get(httptest_server_client(ts), url, err);
+    if (res == NULL)
+        return NULL;
+    Slice b = io_read_all(a, io_read_closer_as_io_reader(res->body), err);
+    (void)res->body.vt->closer.close(res->body.data);
+    if (body != NULL)
+        *body = str_of(b);
+    return res;
+}
+
+static const struct {
+    const char *original;
+    const char *redirect;
+    Int status;
+} fs_redirect_test_data[] = {
+    {"/test/index.html", "/test/", 200},
+    {"/test/testdata", "/test/testdata/", 200},
+    {"/test/testdata/file/", "/test/testdata/file", 200},
+    /* Redirect attempts for path with escaped slashes should result in 404.
+     * However, escaped paths are okay if they do not trigger a redirect. See
+     * https://go.dev/issue/80289. */
+    {"/test%2ftestdata", "/test/testdata", 404},
+    {"/test/testdata%2ffile/", "/test/testdata/file/", 404},
+    {"/test/testdata%2Findex.html", "/test/testdata/index.html", 404},
+};
+
+static void TestFSRedirect(TestingT *t) {
+    if (!need_tcp(t))
+        return;
+    Str old = enter_root(t);
+    if (old.p == NULL)
+        return;
+    HttpDir dot = S(".");
+    HttpHandler h = http_strip_prefix(
+        a, S("/test"), http_file_server(a, http_dir_as_file_system(&dot)));
+    HttptestServer *ts = httptest_new_server(NULL, h);
+
+    Int n = (Int)(sizeof fs_redirect_test_data / sizeof fs_redirect_test_data[0]);
+    for (Int i = 0; i < n; i++) {
+        Str original = cs(fs_redirect_test_data[i].original);
+        Str redirect = cs(fs_redirect_test_data[i].redirect);
+        Error err = BURROW_NO_ERROR;
+        HttpResponse *res = client_get(ts, original, NULL, &err);
+        if (res == NULL) {
+            testing_t_errorf_v(t, "%v", err);
+            break;
+        }
+        if (!str_eq(res->request->url->path, redirect))
+            testing_t_errorf_v(t, "redirect from %s: got %s, want %s", original,
+                               res->request->url->path, redirect);
+        if (res->status_code != fs_redirect_test_data[i].status)
+            testing_t_errorf_v(t, "redirect from %s: got status %d, want %d", original,
+                               res->status_code, fs_redirect_test_data[i].status);
+        http_response_free(res);
+    }
+    httptest_server_free(ts);
+    leave_root(t, old);
+}
+
+static void TestServeIndexHtmlFS(TestingT *t) {
+    if (!need_tcp(t))
+        return;
+    Str old = enter_root(t);
+    if (old.p == NULL)
+        return;
+    HttpDir dot = S(".");
+    HttptestServer *ts =
+        httptest_new_server(NULL, http_file_server(a, http_dir_as_file_system(&dot)));
+
+    static const char *const paths[] = {"/testdata/", "/testdata/index.html"};
+    for (size_t i = 0; i < sizeof paths / sizeof paths[0]; i++) {
+        Str body = {0};
+        Error err = BURROW_NO_ERROR;
+        HttpResponse *res = client_get(ts, cs(paths[i]), &body, &err);
+        if (res == NULL) {
+            testing_t_errorf_v(t, "%v", err);
+            break;
+        }
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "reading Body: %v", err);
+        else if (!str_eq(body, index_contents))
+            testing_t_errorf_v(t, "for path %q got %q, want %q", cs(paths[i]), body,
+                               index_contents);
+        http_response_free(res);
+    }
+    httptest_server_free(ts);
+    leave_root(t, old);
+}
+
+static void TestEmptyDirOpenCWD(TestingT *t) {
+    Str old = enter_root(t);
+    if (old.p == NULL)
+        return;
+    static const char *const dirs[] = {"", ".", "./"};
+    for (size_t i = 0; i < sizeof dirs / sizeof dirs[0]; i++) {
+        Str name = S("fs_test.go");
+        Error err;
+        HttpFile f = http_dir_open(cs(dirs[i]), a, name, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "open of %s: %v", name, err);
+            break;
+        }
+        (void)f.vt->read_closer.closer.close(f.data);
+    }
+    leave_root(t, old);
+}
+
+static void serve_fs_test_go(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    http_serve_file(w, r, S("fs_test.go"));
+}
+
+static void TestServeFileFromCWD(TestingT *t) {
+    if (!need_tcp(t))
+        return;
+    Str old = enter_root(t);
+    if (old.p == NULL)
+        return;
+    HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_fs_test_go, NULL);
+    HttptestServer *ts = httptest_new_server(NULL, http_handler_func_as_handler(&f));
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *r = client_get(ts, (Str){0}, NULL, &err);
+    if (r == NULL)
+        testing_t_errorf_v(t, "%v", err);
+    else if (r->status_code != 200)
+        testing_t_errorf_v(t, "expected 200 OK, got %s", r->status);
+    http_response_free(r);
+    httptest_server_free(ts);
+    leave_root(t, old);
+}
+
+/* gzipResponseWriter, a ResponseWriter whose Write goes through a gzip
+ * writer. Go embeds the ResponseWriter, so only its three methods are there. */
+typedef struct GzipResponseWriter {
+    HttpResponseWriter rw;
+    GzipWriter *w;
+} GzipResponseWriter;
+
+static Int gzrw_write(void *self, Slice p, Error *err) {
+    return gzip_writer_write(((GzipResponseWriter *)self)->w, p, err);
+}
+
+static HttpHeader gzrw_header(void *self) {
+    return http_response_writer_header(((GzipResponseWriter *)self)->rw);
+}
+
+static void gzrw_write_header(void *self, Int code) {
+    http_response_writer_write_header(((GzipResponseWriter *)self)->rw, code);
+}
+
+static const HttpResponseWriterVT gzrw_vt = {
+    {NULL, gzrw_write},
+    gzrw_header,
+    gzrw_write_header,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+};
+
+static const Str zipping_contents =
+    BURROW_S_INIT("contents will be sent with Content-Encoding: gzip");
+
+static void serve_zipping(void *env, HttpResponseWriter w, HttpRequest *r) {
+    Fs fsys = *(const Fs *)env;
+    (void)http_header_set(http_response_writer_header(w), S("Content-Encoding"),
+                          S("gzip"));
+    GzipWriter *gzw =
+        gzip_new_writer(heap_allocator(), http_response_writer_as_io_writer(w));
+    if (gzw == NULL)
+        return;
+    GzipResponseWriter gw = {w, gzw};
+    http_serve_file_fs((HttpResponseWriter){&gzrw_vt, &gw}, r, fsys, S("index.html"));
+    (void)gzip_writer_close(gzw);
+    gzip_writer_free(gzw);
+}
+
+/* This test exercises a pattern which is incorrect, but has been observed
+ * enough in the world that we don't want to break it.
+ *
+ * The server is setting "Content-Encoding: gzip", wrapping the ResponseWriter
+ * in an implementation which gzips data written to it, and passing this
+ * ResponseWriter to ServeFile.
+ *
+ * This means ServeFile cannot properly set a Content-Length header, because it
+ * doesn't know what content it is going to send--the ResponseWriter is
+ * modifying the bytes sent.
+ *
+ * Range requests are always going to be broken in this scenario, but verify
+ * that we can serve non-range requests correctly. */
+static void TestServeFileZippingResponseWriter(TestingT *t) {
+    if (!need_tcp(t))
+        return;
+    Str filename = S("index.html");
+    FstestMapFile file;
+    memset(&file, 0, sizeof file);
+    file.data = bytes_of(zipping_contents);
+    FstestMapFS fsys = fstest_map_fs_make(a);
+    fstest_map_fs_set(fsys, filename, &file);
+    Fs fs = fstest_map_fs_as_fs(fsys);
+    HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_zipping, &fs);
+    HttptestServer *ts = httptest_new_server(NULL, http_handler_func_as_handler(&f));
+
+    Str body = {0};
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *res = client_get(ts, fmt_sprintf_v(a, "/%s", filename), &body, &err);
+    if (res == NULL)
+        testing_t_errorf_v(t, "%v", err);
+    else if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "reading Body: %v", err);
+    else if (!str_eq(body, zipping_contents))
+        testing_t_errorf_v(t, "for path %q got %q, want %q", filename, body,
+                           zipping_contents);
+    http_response_free(res);
+    httptest_server_free(ts);
+}
+
 static bool setup(void) {
     arena_init(&ar, NULL, 0);
     a = arena_allocator(&ar);
@@ -1656,7 +1919,9 @@ static bool setup(void) {
         return false;
     return BURROW_OK(os_write_file(td("file"), bytes_of(file_contents), 0644)) &&
            BURROW_OK(os_write_file(td("index.html"), bytes_of(index_contents), 0644)) &&
-           BURROW_OK(os_write_file(td("style.css"), bytes_of(style_contents), 0644));
+           BURROW_OK(os_write_file(td("style.css"), bytes_of(style_contents), 0644)) &&
+           BURROW_OK(os_write_file(filepath_join_v(a, 2, root, S("fs_test.go")),
+                                   bytes_of(S("package http\n")), 0644));
 }
 
 #define TESTS(X)                                                                       \
@@ -1692,7 +1957,12 @@ static bool setup(void) {
     X(TestServeFileFS)                                                                 \
     X(TestFileServerDirWithRootFile)                                                   \
     X(TestServeContentHeadersWithError)                                                \
-    X(TestFileServerRestoresPath)
+    X(TestFileServerRestoresPath)                                                      \
+    X(TestFSRedirect)                                                                  \
+    X(TestServeIndexHtmlFS)                                                            \
+    X(TestEmptyDirOpenCWD)                                                             \
+    X(TestServeFileFromCWD)                                                            \
+    X(TestServeFileZippingResponseWriter)
 
 static int http_fs_main(TestingM *m) {
     int r = 1;

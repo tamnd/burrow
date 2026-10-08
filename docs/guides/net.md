@@ -1672,4 +1672,21 @@ for (int i = 0; i < 2; i++) {
 context_release(ctx);
 ```
 
+That prints:
+
+```
+get conn
+got conn, reused: false
+wrote headers
+first response byte
+put idle conn: <nil>
+200 OK: hello
+get conn
+got conn, reused: true
+wrote headers
+first response byte
+put idle conn: <nil>
+200 OK: hello
+```
+
 The hooks run on the transport's goroutines, so one that shares state with the caller needs a lock, and the trace has to live until the last response sent with it is freed. A trace put in a context that already has one runs its own hooks and then the older one's, as in Go. Unlike Go, it does that by keeping a pointer to the older trace rather than rewriting its own fields, so code that wants to run the hooks itself calls `httptrace_client_trace_got_conn` and the rest. The hooks for the dial stop once the request has its connection, while in Go a dial that lost the race to an idle connection keeps calling them. There are no TLS hooks yet.

@@ -20,6 +20,14 @@
 #include <stdio.h>
 #include <string.h>
 
+/* What EINVAL says. WASI's table has it capitalised, and so does Go's
+ * tables_wasip1.go. */
+#if defined(BURROW_OS_WASI)
+#define EINVAL_TEXT "Invalid argument"
+#else
+#define EINVAL_TEXT "invalid argument"
+#endif
+
 #if defined(BURROW_NETPOLL_READINESS) && !defined(BURROW_OS_WASI)
 #define HAVE_UNIX 1
 #endif
@@ -523,6 +531,10 @@ static void TestAbstractNamesNeedNoFile(TestingT *t) {
     need_unix(t);
 #if !defined(HAVE_ABSTRACT)
     testing_t_skip_v(t, "abstract names are Linux's");
+#elif defined(BURROW_OS_COSMO)
+    /* A bind to the empty name fails with EINVAL in a Cosmopolitan build, even
+     * on Linux, so there is no autobind to test. */
+    testing_t_skip_v(t, "Cosmopolitan does not autobind");
 #else
     /* unixsock_linux_test.go's TestUnixAutobind: an empty name binds to a
      * fresh abstract one. */
@@ -657,18 +669,16 @@ static void TestANilConnIsAnInvalidArgument(TestingT *t) {
     (void)t;
     char buf[64];
     Error e = BURROW_NO_ERROR;
-    CHECK_STR_EQ(text_of(net_unix_conn_close(NULL), buf, sizeof buf),
-                 "invalid argument");
+    CHECK_STR_EQ(text_of(net_unix_conn_close(NULL), buf, sizeof buf), EINVAL_TEXT);
     CHECK_INT_EQ(net_unix_conn_read(NULL, (Slice){0}, &e), 0);
-    CHECK_STR_EQ(text_of(e, buf, sizeof buf), "invalid argument");
+    CHECK_STR_EQ(text_of(e, buf, sizeof buf), EINVAL_TEXT);
     NetUnixAddr *from = NULL;
     CHECK_INT_EQ(net_unix_conn_read_from_unix(NULL, (Slice){0}, a, &from, &e), 0);
     CHECK(from == NULL);
-    CHECK_STR_EQ(text_of(e, buf, sizeof buf), "invalid argument");
+    CHECK_STR_EQ(text_of(e, buf, sizeof buf), EINVAL_TEXT);
     CHECK(net_unix_listener_accept_unix(NULL, &e) == NULL);
-    CHECK_STR_EQ(text_of(e, buf, sizeof buf), "invalid argument");
-    CHECK_STR_EQ(text_of(net_unix_listener_close(NULL), buf, sizeof buf),
-                 "invalid argument");
+    CHECK_STR_EQ(text_of(e, buf, sizeof buf), EINVAL_TEXT);
+    CHECK_STR_EQ(text_of(net_unix_listener_close(NULL), buf, sizeof buf), EINVAL_TEXT);
     CHECK(net_unix_conn_local_addr(NULL).vt == NULL);
     CHECK(net_unix_listener_addr(NULL).vt == NULL);
     net_unix_conn_free(NULL);

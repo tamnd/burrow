@@ -96,7 +96,10 @@ omit_sets "$tmp/full/burrow.h" >"$tmp/sets"
 while read -r m flags; do
 	# shellcheck disable=SC2086
 	build "$tmp/full" $flags
-	all="$all -D$m"
+	# A package private to src/ has its guard in burrow.c, not burrow.h, so
+	# it is only in the sets of the packages it needs. Taking the whole set
+	# keeps it out of the build that leaves everything out.
+	all="$all $flags"
 	if [ "$flags" != "-D$m" ]; then
 		# shellcheck disable=SC2086
 		if "$CC" -std=c11 -fsyntax-only $optin "-D$m" "$tmp/full/burrow.c" 2>"$tmp/err"; then

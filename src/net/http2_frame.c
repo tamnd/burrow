@@ -115,6 +115,14 @@ static void h2_std_log_str(Str msg) {
     h2_std_log(NULL, msg);
 }
 
+bool burrow__http2_verbose_logs(void) {
+    return h2_verbose();
+}
+
+void burrow__http2_log(Str msg) {
+    h2_std_log(NULL, msg);
+}
+
 /* ---------------------------------------------------------------- errors */
 
 static const Str h2_err_code_names[] = {

@@ -124,6 +124,14 @@ const Type *const TYPE_NET_NS = &lk_ns_desc;
 /* DefaultResolver. Its lookups in flight are the only state it has. */
 static NetResolver lk_default;
 
+/* dnsWaitGroup: the lookups running in goroutines of their own, which a caller
+ * that gave up through its context no longer waits for. */
+static SyncWaitGroup lk_wait;
+
+void burrow__net_dns_wait(void) {
+    sync_wait_group_wait(&lk_wait);
+}
+
 NetResolver *net_default_resolver(void) {
     return &lk_default;
 }
@@ -338,6 +346,8 @@ static void lk_call_go(void *env) {
         lk_unlist(c);
     c->shared = c->dups > 0;
     sync_mutex_unlock(&c->r->burrow_mu);
+    /* c->r is not touched after this, so the resolver may go now. */
+    sync_wait_group_done(&lk_wait);
     chan_close(c->done);
     lk_call_put(c);
 }
@@ -399,6 +409,8 @@ static LkCall *lk_join(NetResolver *r, Str network, Str host,
         c->listed = true;
     }
     sync_mutex_unlock(&r->burrow_mu);
+    if (c != NULL)
+        sync_wait_group_add(&lk_wait, 1);
     /* Without a goroutine, the lookup runs here, and anyone who joins it in
      * the meantime waits for this caller. */
     if (c != NULL && !go(BURROW_FN(Func, lk_call_go, c)))

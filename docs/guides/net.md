@@ -1605,6 +1605,17 @@ http_response_free(res);
 httptest_server_free(ts);
 ```
 
+That prints:
+
+```
+200 OK from /new: you found the new page
+200 OK from /echo: application/x-www-form-urlencoded name=gopher&name=burrow
+Location: /new
+302 Found from /old: <a href="/new">Found</a>.
+
+deadline exceeded: true, timeout: true
+```
+
 The client follows up to ten redirects, and `check_redirect` decides otherwise: an error from it ends the request, and `http_err_use_last_response` hands back the redirect itself, body unread. A 301, 302 or 303 turns the request into a GET with no body, while a 307 or 308 sends the same method and body again, which takes a `get_body` when the body isn't a `BytesBuffer`, `BytesReader` or `StringsReader`, the three `http_new_request` knows how to rewind. Headers go along to the same host and its subdomains, but `Authorization`, `Cookie` and the other credential headers stop at a different domain. With a `jar`, cookies from each response go into the jar and the jar's cookies go out with each request.
 
 `timeout` covers the whole exchange, the redirects and the reading of the body included. When it runs out the error is a `UrlError` that is a timeout to `net_error_timeout`, and `errors_is` finds `context_deadline_exceeded` in it. A request's context can cancel it too. Every error from the client is a `UrlError` with the method and the URL, with any password in the URL shown as `***`. A status like 404 is not an error. The response it comes with has to be freed with `http_response_free`, and so does the one that comes back with an error from `check_redirect`.

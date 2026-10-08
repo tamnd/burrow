@@ -50,6 +50,11 @@ bool burrow__http_header_has(HttpHeader h, Str key);
  * NULL h. NULL only when a says no. */
 BURROW_OWNS(ret) HttpHeader burrow__http_clone_or_make_header(Alloc *a, HttpHeader h);
 
+/* foreachHeaderElement. Calls fn for each comma separated part of v, trimmed,
+ * leaving out the empty ones. */
+void burrow__http_foreach_header_element(Str v, void (*fn)(void *env, Str f),
+                                         void *env);
+
 /* hasToken. Whether v, a header value, has token in it, as a whole word with
  * the ASCII letters folded. The words are separated by spaces, tabs and
  * commas. */

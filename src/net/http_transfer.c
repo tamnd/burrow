@@ -279,6 +279,29 @@ static bool hb_is_bad_trailer_key(Str key) {
            str_eq(key, BURROW_S("Trailer")) || str_eq(key, BURROW_S("Content-Length"));
 }
 
+typedef struct HbTrailerKeys {
+    Alloc *a;
+    HttpHeader trailer;
+    Error *err;
+    bool oom;
+} HbTrailerKeys;
+
+/* The body of fixTrailer's foreachHeaderElement. */
+static void hb_trailer_key(void *env, Str f) {
+    HbTrailerKeys *k = (HbTrailerKeys *)env;
+    if (k->oom)
+        return;
+    Str key = textproto_canonical_mime_header_key(k->a, f);
+    if (hb_is_bad_trailer_key(key)) {
+        if (BURROW_OK(*k->err))
+            *k->err = burrow__http_bad_string_error(BURROW_S("bad trailer key"), key);
+        return;
+    }
+    Slice none = slice_from(NULL, 0, 0, TYPE_STRING);
+    if (!map_set(k->trailer, &key, &none))
+        k->oom = true;
+}
+
 /* fixTrailer. The keys the Trailer field names, as a header with no values,
  * or NULL when there are none or the body is not chunked. */
 static HttpHeader hb_fix_trailer(Alloc *a, HttpHeader header, bool chunked,
@@ -298,32 +321,13 @@ static HttpHeader hb_fix_trailer(Alloc *a, HttpHeader header, bool chunked,
         *err = burrow_err_out_of_memory;
         return NULL;
     }
-    Slice none = slice_from(NULL, 0, 0, TYPE_STRING);
-    for (Int i = 0; i < vv.len; i++) {
-        /* foreachHeaderElement: the value split at commas, each part trimmed
-         * and the empty ones left out. */
-        Str v = textproto_trim_string(((const Str *)vv.p)[i]);
-        while (v.len > 0) {
-            const Byte *p = v.p;
-            const Byte *comma = (const Byte *)memchr(p, ',', (size_t)v.len);
-            Int flen = comma != NULL ? (Int)(comma - p) : v.len;
-            Str f = textproto_trim_string(str_from_bytes(p, flen));
-            v = comma != NULL ? str_from_bytes(comma + 1, v.len - flen - 1)
-                              : str_from_bytes(p + v.len, 0);
-            if (f.len == 0)
-                continue;
-            Str key = textproto_canonical_mime_header_key(a, f);
-            if (hb_is_bad_trailer_key(key)) {
-                if (BURROW_OK(*err))
-                    *err =
-                        burrow__http_bad_string_error(BURROW_S("bad trailer key"), key);
-                continue;
-            }
-            if (!map_set(trailer, &key, &none)) {
-                *err = burrow_err_out_of_memory;
-                return NULL;
-            }
-        }
+    HbTrailerKeys keys = {a, trailer, err, false};
+    for (Int i = 0; i < vv.len && !keys.oom; i++)
+        burrow__http_foreach_header_element(((const Str *)vv.p)[i], hb_trailer_key,
+                                            &keys);
+    if (keys.oom) {
+        *err = burrow_err_out_of_memory;
+        return NULL;
     }
     if (BURROW_FAILED(*err) || map_len(trailer) == 0)
         return NULL;
@@ -581,8 +585,7 @@ Error burrow__http_body_close(void *body) {
     return hb_body_close(body);
 }
 
-void burrow__http_body_state(void *body, bool *closed, bool *saw_eof,
-                             int64_t *unread) {
+void burrow__http_body_state(void *body, bool *closed, bool *saw_eof, int64_t *unread) {
     HbBody *b = (HbBody *)body;
     sync_mutex_lock(&b->mu);
     *closed = b->closed;

@@ -254,8 +254,14 @@ static Str errno_message(const void *self) {
     return ((const ErrnoBox *)self)->message;
 }
 
+/* Go's errors.Is compares an Errno with == before it asks Errno.Is, so an
+ * Errno matches any other boxed Errno with the same number. The target is one
+ * of those when its vtable has this function in it. */
 static bool errno_is_slot(const void *self, Error target) {
-    return syscall_errno_is(((const ErrnoBox *)self)->e, target);
+    SyscallErrno e = ((const ErrnoBox *)self)->e;
+    if (target.vt != NULL && target.vt->is == errno_is_slot)
+        return e == ((const ErrnoBox *)target.data)->e;
+    return syscall_errno_is(e, target);
 }
 
 static Error errno_clone(const void *self, Alloc *a) {

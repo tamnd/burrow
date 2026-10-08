@@ -1912,6 +1912,7 @@ static void TestDNSGoroutineRace(TestingT *t) {
     BURROW_CALLF0(cancel);
     context_release(ctx);
     arena_free(&ar);
+    burrow__net_dns_wait();
 }
 
 /* ---------------------------------------------------------- tryOneName */

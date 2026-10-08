@@ -72,19 +72,33 @@ static bool recovered(void (*f)(void *), void *env) {
     return got;
 }
 
+/* A directory to remove when the test ends. The cleanup runs after the test
+ * has freed its arena, so this comes from the heap with an arena of its own. */
+typedef struct TempDir {
+    Arena arena;
+    Str path;
+} TempDir;
+
 static void remove_tree(void *env) {
-    (void)os_remove_all(*(Str *)env);
+    TempDir *d = env;
+    (void)os_remove_all(d->path);
+    arena_free(&d->arena);
+    mem_free(heap_allocator(), d, sizeof *d, _Alignof(TempDir));
 }
 
 /* t.TempDir: a new directory, removed when the test ends. */
 static Str temp_dir(TestingT *t, Alloc *a) {
     Error e = BURROW_NO_ERROR;
-    Str *d = BURROW_NEW(a, Str);
-    *d = os_mkdir_temp(a, BURROW_STR_EMPTY, BURROW_S("burrow-x509-root-*"), &e);
+    Str path = os_mkdir_temp(a, BURROW_STR_EMPTY, BURROW_S("burrow-x509-root-*"), &e);
     if (BURROW_FAILED(e))
         testing_t_fatalf_v(t, "MkdirTemp: %s", e);
+    TempDir *d = mem_alloc(heap_allocator(), sizeof *d, _Alignof(TempDir));
+    if (d == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    arena_init(&d->arena, NULL, 0);
+    d->path = str_clone(arena_allocator(&d->arena), path);
     testing_t_cleanup(t, BURROW_FN(Func, remove_tree, d));
-    return *d;
+    return path;
 }
 
 /* What set_env replaced. It runs after the test has freed its arena, so it

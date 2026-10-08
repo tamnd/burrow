@@ -415,7 +415,7 @@ static X509Certificate *generate_cert(Alloc *a, const char *cn, bool is_ca,
 
     BigInt *limit = big_int_lsh(big_new_int(a, 0), big_new_int(a, 1), 128);
     X509Certificate tmpl = {0};
-    tmpl.serial_number = crypto_rand_int(a, (IoReader){0}, limit, err);
+    tmpl.serial_number = crypto_rand_int(a, crypto_rand_reader, limit, err);
     if (BURROW_FAILED(*err))
         return NULL;
     tmpl.subject.common_name = str_from_cstr(cn);
@@ -567,7 +567,8 @@ static X509Certificate *gen_cert_edge(TestingT *t, Alloc *a, const char *subject
                                       EcdsaPrivateKey *signer) {
     Error err = BURROW_NO_ERROR;
     X509Certificate tmpl = {0};
-    tmpl.serial_number = crypto_rand_int(a, (IoReader){0}, big_new_int(a, 100), &err);
+    tmpl.serial_number =
+        crypto_rand_int(a, crypto_rand_reader, big_new_int(a, 100), &err);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "failed to generate test serial: %v", err);
     tmpl.subject.common_name = str_from_cstr(subject);
@@ -934,7 +935,8 @@ static X509Certificate *gen_eku_cert(TestingT *t, Alloc *a, const char *subject,
                                      EcdsaPrivateKey *signer) {
     Error err = BURROW_NO_ERROR;
     X509Certificate tmpl = {0};
-    tmpl.serial_number = crypto_rand_int(a, (IoReader){0}, big_new_int(a, 100), &err);
+    tmpl.serial_number =
+        crypto_rand_int(a, crypto_rand_reader, big_new_int(a, 100), &err);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "failed to generate test serial: %v", err);
     tmpl.subject.common_name = str_from_cstr(subject);

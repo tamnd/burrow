@@ -2394,10 +2394,14 @@ static void tp_read_loop(void *env) {
             sync_mutex_unlock(&pc->mu);
             break;
         }
-        sync_mutex_unlock(&pc->mu);
-
+        /* Taken under mu, where a failed round trip takes its trip back, so
+         * that the two never both think they have it. The trip goes in with
+         * num_expected under the same lock, so it is there to be had. */
         uintptr_t p = 0;
-        (void)chan_recv(pc->reqch, &p);
+        bool have = chan_try_recv(pc->reqch, &p, NULL);
+        sync_mutex_unlock(&pc->mu);
+        if (!have)
+            (void)chan_recv(pc->reqch, &p);
         tp_Trip *tr = (tp_Trip *)p;
 
         HttpResponse *resp = NULL;
@@ -2645,6 +2649,35 @@ static HttpResponse *tp_pc_handle_response(tp_PConn *pc, tp_Trip *tr, int64_t st
 
 /* persistConn.roundTrip. The error may point into tr and pc, so it is to be
  * retained before they go. */
+/* After a round trip that failed: takes tr back from a loop that has not
+ * picked it up yet, so that nobody has to wait for that loop to be done with
+ * it. A read loop only takes the next trip once the connection has something
+ * to say, and a connection whose Close does not end a Read in progress, such
+ * as the one httputil.DumpRequestOut dials, would never say it. Go does not
+ * wait for the loops, so it never meets this. */
+static void tp_pc_take_back(tp_PConn *pc, tp_Trip *tr) {
+    uintptr_t q = 0;
+    bool from_rl = false;
+    bool from_wl = false;
+    sync_mutex_lock(&pc->mu);
+    if (chan_try_recv(pc->reqch, &q, NULL)) {
+        if ((tp_Trip *)q != tr)
+            runtime_throw(BURROW_S("net/http: a trip that is not ours on reqch"));
+        from_rl = true;
+        pc->num_expected--;
+    }
+    if (chan_try_recv(pc->writech, &q, NULL)) {
+        if ((tp_Trip *)q != tr)
+            runtime_throw(BURROW_S("net/http: a trip that is not ours on writech"));
+        from_wl = true;
+    }
+    sync_mutex_unlock(&pc->mu);
+    if (from_rl)
+        tp_trip_rl_release(tr);
+    if (from_wl)
+        tp_trip_wl_release(tr);
+}
+
 static HttpResponse *tp_pc_round_trip(tp_PConn *pc, tp_Trip *tr, Error *err) {
     HttpTransport *t = pc->t;
     HttpRequest *req = tr->req;
@@ -2775,6 +2808,8 @@ static HttpResponse *tp_pc_round_trip(tp_PConn *pc, tp_Trip *tr, Error *err) {
         (void)time_timer_stop(hdr_timer);
         time_timer_free(hdr_timer);
     }
+    if (res == NULL)
+        tp_pc_take_back(pc, tr);
     BURROW_OUT(err, e);
     return res;
 }

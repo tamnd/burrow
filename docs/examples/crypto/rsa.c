@@ -112,4 +112,14 @@ int main(void) {
 }
 
 /* Output:
+256
+ok
+ok
+crypto/rsa: verification error
+256
+a session key
+crypto/rsa: decryption error
+crypto/rsa: 512-bit keys are insecure (see https://go.dev/pkg/crypto/rsa#hdr-Minimum_key_size)
+crypto/rsa: message too long for RSA key size
+crypto/rsa: input must be hashed message
 */

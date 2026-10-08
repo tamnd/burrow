@@ -659,6 +659,12 @@ void burrow__http2_framer_start_write(Http2Framer *fr, Http2FrameType t,
 void burrow__http2_framer_write_bytes(Http2Framer *fr, Slice v);
 Error burrow__http2_framer_end_write(Http2Framer *fr);
 
+/* startWriteDataPadded: write_data_padded up to the end_write, which the
+ * server does on another goroutine for a large frame. */
+Error burrow__http2_framer_start_write_data_padded(Http2Framer *fr, uint32_t stream_id,
+                                                   bool end_stream, Slice data,
+                                                   Slice pad);
+
 /* Sets what GODEBUG says from value, or reads GODEBUG again when value is
  * NULL. For tests. */
 void burrow__http2_godebug_set(const char *value);
@@ -824,6 +830,10 @@ void burrow__http2_pipe_free(Http2Pipe *p);
 
 /* Whether GODEBUG has http2debug=1 or 2, which is Go's VerboseLogs. */
 bool burrow__http2_verbose_logs(void);
+
+/* disableExtendedConnectProtocol, which is true unless GODEBUG has
+ * http2xconnect=1. */
+bool burrow__http2_extended_connect_disabled(void);
 
 /* log.Printf: the date and time, msg and a newline, to standard error. */
 void burrow__http2_log(Str msg);
@@ -1052,15 +1062,55 @@ bool burrow__http2_write_scheduler_is_rfc9218(Http2WriteScheduler ws);
  * whatever the stream has queued. AdjustStream may name a stream that is not
  * open. Push queues a frame, and Pop takes the next one that can be written,
  * or says false. */
-bool burrow__http2_write_scheduler_open_stream(Http2WriteScheduler ws, uint32_t stream_id,
+bool burrow__http2_write_scheduler_open_stream(Http2WriteScheduler ws,
+                                               uint32_t stream_id,
                                                Http2OpenStreamOptions opts);
 void burrow__http2_write_scheduler_close_stream(Http2WriteScheduler ws,
                                                 uint32_t stream_id);
 void burrow__http2_write_scheduler_adjust_stream(Http2WriteScheduler ws,
                                                  uint32_t stream_id,
                                                  Http2PriorityParam p);
-bool burrow__http2_write_scheduler_push(Http2WriteScheduler ws, Http2FrameWriteRequest wr);
-bool burrow__http2_write_scheduler_pop(Http2WriteScheduler ws, Http2FrameWriteRequest *wr);
+bool burrow__http2_write_scheduler_push(Http2WriteScheduler ws,
+                                        Http2FrameWriteRequest wr);
+bool burrow__http2_write_scheduler_pop(Http2WriteScheduler ws,
+                                       Http2FrameWriteRequest *wr);
 void burrow__http2_write_scheduler_free(Http2WriteScheduler ws);
+
+/* Not Go's. The server's requests each hold the stream they are on, which Go
+ * leaves to the collector. retain is called when Pop splits a DATA request in
+ * two, on the part left in the queue, and drop on each request the scheduler
+ * throws away unwritten, when its stream closes or the scheduler is freed.
+ * Either may be NULL, and both are by default. */
+typedef struct Http2WriteRefHooks {
+    void (*retain)(void *ctx, const Http2FrameWriteRequest *wr);
+    void (*drop)(void *ctx, Http2FrameWriteRequest *wr);
+    void *ctx;
+} Http2WriteRefHooks;
+
+void burrow__http2_write_scheduler_set_hooks(Http2WriteScheduler ws,
+                                             Http2WriteRefHooks hooks);
+
+/* ------------------------------------------------------------------ server */
+
+/* The server's errors. */
+extern const Error burrow__http2_err_client_disconnected;
+extern const Error burrow__http2_err_closed_body;
+extern const Error burrow__http2_err_handler_complete;
+extern const Error burrow__http2_err_stream_closed;
+extern const Error burrow__http2_err_preface_timeout;
+extern const Error burrow__http2_err_handler_panicked;
+extern const Error burrow__http2_err_handler_wrote_too_much;
+
+/* Server.ServeConn as net/http calls it: serves HTTP/2 on c until the
+ * connection is done, closes c, and returns. ctx is the base context of the
+ * requests. saw_client_preface says the caller already read the preface. */
+void burrow__http2_serve_conn(HttpServer *srv, Alloc *a, NetConn c, Context ctx,
+                              bool saw_client_preface);
+
+/* configureHTTP2 without the TLS parts: hooks graceful shutdown of the HTTP/2
+ * connections into srv's Shutdown, once. False when that ran out of memory.
+ * burrow__http2_server_configured says whether it ran. */
+bool burrow__http2_configure_server(HttpServer *srv);
+bool burrow__http2_server_configured(HttpServer *srv);
 
 #endif

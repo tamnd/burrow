@@ -518,4 +518,14 @@ Str burrow__http_referer_for_url(Alloc *a, const Url *last, const Url *next,
 bool burrow__http_should_copy_header_on_redirect(Alloc *a, const Url *initial,
                                                  const Url *dest);
 
+/* GODEBUG http2server=0, which turns the HTTP/2 server off. */
+bool burrow__http_godebug_http2server_disabled(void);
+
+/* The pieces of the server the HTTP/2 server shares: serverHandler.ServeHTTP,
+ * doKeepAlives, and the header value limit. */
+void burrow__http_server_handler_serve(HttpServer *srv, HttpResponseWriter w,
+                                       HttpRequest *req);
+bool burrow__http_server_do_keep_alives(HttpServer *srv);
+Int burrow__http_server_max_header_value_count(HttpServer *srv);
+
 #endif /* BURROW_SRC_NET_HTTP_INTERNAL_H */

@@ -213,6 +213,7 @@ global	src/net/fd.c	pfd_did_writev	package-vars	poll.TestHookDidWritev, called w
 global	src/net/interface.c	if_zone_cache	zone-cache	ipv6ZoneCache, the interface names and indexes IPv6 zones are read through, and the names it has handed out, which are never freed. Read under if_zone_cache.mu held for reading and replaced whole under it held for writing.
 global	src/net/dnsclient_unix.c	du_fallback	resolver	The config used when resolv.conf cannot be read. Written once under du_resolv.init_once and only read after that.
 global	src/net/lookup.c	lk_default	resolver	DefaultResolver. Its only state is the list of lookups in flight, which is read and written under its burrow_mu.
+global	src/net/lookup.c	lk_wait	resolver	dnsWaitGroup, the lookups still running in goroutines of their own. Only touched through the wait group's own atomics, and only waited on by tests.
 global	src/net/netfd.c	nf_stack	package-vars	Whether this machine has IPv4, IPv6 and IPv4-mapped IPv6 sockets, probed by the first socket that needs to know and stored with a release store after the probed bit. Two racing probes store the same value.
 global	src/net/tcpsock.c	nt_mptcp	package-vars	Whether the kernel has Multipath TCP and SOL_MPTCP, probed by the first socket that wants it and stored with a release store after the probed bit. Two racing probes store the same value.
 global	src/net/netfd.c	nf_backlog	package-vars	The listen backlog the system allows, worked out by the first listener. Atomic loads and stores only, and two racing listeners store the same value.

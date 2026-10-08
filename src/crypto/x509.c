@@ -4800,7 +4800,7 @@ Slice x509_create_certificate(Alloc *a, IoReader rand, const X509Certificate *te
         /* RFC 5280 section 4.1.2.2: positive and at most 20 octets once
          * encoded. With the top bit set the encoding would need a zero byte in
          * front, which makes 21, so it is cleared. */
-        Byte serial_bytes[20];
+        Byte serial_bytes[20] = {0};
         io_read_full(rand, x509_bytes(serial_bytes, 20), &e);
         if (BURROW_FAILED(e))
             return x509_fail_nil(err, e);

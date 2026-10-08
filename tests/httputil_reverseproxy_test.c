@@ -1606,7 +1606,9 @@ typedef struct CopyEnv {
     HttputilReverseProxy *p;
     Chan *donec;
     bool panicked;
-    Any recovered;
+    /* What the proxy panicked with, which is always an error. The Any the catch
+     * block gets points into that block, so the error is copied out. */
+    Error recovered;
 } CopyEnv;
 
 static void copy_frontend(void *env, HttpResponseWriter w, HttpRequest *r) {
@@ -1616,7 +1618,10 @@ static void copy_frontend(void *env, HttpResponseWriter w, HttpRequest *r) {
     }
     BURROW_CATCH(p) {
         e->panicked = true;
-        e->recovered = p;
+        if (p.t == TYPE_ERROR)
+            e->recovered = *(const Error *)p.data;
+        else
+            e->recovered = errors_new(error_allocator(), BURROW_S("not an error"));
     }
     BURROW_TRY_END;
     bool done = true;
@@ -1624,7 +1629,7 @@ static void copy_frontend(void *env, HttpResponseWriter w, HttpRequest *r) {
     /* Go's deferred send lets the panic go on, which the server recovers
      * from. */
     if (e->panicked)
-        panic(e->recovered);
+        panic(BURROW_ANY(TYPE_ERROR, &e->recovered));
 }
 
 static void TestReverseProxy_CopyBuffer(TestingT *t) {
@@ -1891,22 +1896,21 @@ static void TestReverseProxy_PanicBodyError(TestingT *t) {
         heap_allocator(), ctx, cs("GET"), cs("http://foo.tld/"), no_body(), &err);
     HttptestResponseRecorder *rec = httptest_new_recorder(heap_allocator());
     bool panicked = false;
-    Any rec_val = {NULL, NULL};
     if (req != NULL && rec != NULL) {
         BURROW_TRY {
             httputil_reverse_proxy_serve_http(
                 rproxy, httptest_response_recorder_as_response_writer(rec), req);
         }
         BURROW_CATCH(p) {
+            /* Checked here, because the value points into this block. */
             panicked = true;
-            rec_val = p;
+            if (p.t != TYPE_ERROR ||
+                !errors_is(*(const Error *)p.data, http_err_abort_handler))
+                testing_t_errorf_v(t, "expected ErrAbortHandler, got %v", p);
         }
         BURROW_TRY_END;
         if (!panicked)
             testing_t_errorf_v(t, "handler should have panicked");
-        else if (rec_val.t != TYPE_ERROR ||
-                 !errors_is(*(const Error *)rec_val.data, http_err_abort_handler))
-            testing_t_errorf_v(t, "expected ErrAbortHandler, got %v", rec_val);
     }
     httptest_response_recorder_free(rec);
     http_request_free(req);

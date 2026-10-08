@@ -177,7 +177,7 @@ static void hw_take_probe(burrow__HttpTransferWriter *t, Int n, Byte b, Error er
 }
 
 /* isKnownInMemoryReader. */
-static bool hw_is_known_in_memory_reader(IoReader r) {
+bool burrow__http_is_known_in_memory_reader(IoReader r) {
     IoReader inner;
     while (burrow__io_unwrap_nop_closer(r, &inner))
         r = inner;
@@ -195,7 +195,7 @@ static void hw_probe_gave_up(burrow__HttpTransferWriter *t) {
 }
 
 static void hw_probe_request_body(burrow__HttpTransferWriter *t) {
-    if (hw_is_known_in_memory_reader(t->body)) {
+    if (burrow__http_is_known_in_memory_reader(t->body)) {
         /* It cannot block, so it needs no goroutine and no timer. */
         Byte buf[1];
         Error err = BURROW_NO_ERROR;
@@ -319,7 +319,7 @@ Error burrow__http_new_transfer_writer(burrow__HttpTransferWriter *t, Alloc *a,
         /* With a body, flush the header to a BufioWriter before copying the
          * body, which may block, in case the server needs the header first.
          * Not for the readers in memory, which would only cost a packet. */
-        if (t->content_length != 0 && !hw_is_known_in_memory_reader(t->body))
+        if (t->content_length != 0 && !burrow__http_is_known_in_memory_reader(t->body))
             t->flush_headers = true;
         at_least_http11 = true; /* the transport only sends 1.1 or 2 */
     } else {

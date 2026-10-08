@@ -1,7 +1,7 @@
 /* Derived from Go's src/net/http/client_test.go, the parts that HTTP/1 can
  * run: what the client sends, its redirects, its cookies, its errors and its
- * time limit. The tests that need a server use httptest's, on the loopback
- * address.
+ * time limit, and the two tests in request_test.go that send a request. The
+ * tests that need a server use httptest's, on the loopback address.
  * Go source: go1.27.1.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
@@ -1071,6 +1071,81 @@ static void TestClientReusesTheConnection(TestingT *t) {
     check_handlers(t);
 }
 
+/* ------------------------------------------------- from request_test.go */
+
+static void serve_request_redirect(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    if (str_eq(r->url->path, cs("/"))) {
+        HCHECK(http_header_set(http_response_writer_header(w), cs("Location"),
+                               cs("/foo/")));
+        http_response_writer_write_header(w, HTTP_STATUS_SEE_OTHER);
+    } else if (str_eq(r->url->path, cs("/foo/"))) {
+        write_str(w, cs("foo"));
+    } else {
+        http_response_writer_write_header(w, HTTP_STATUS_BAD_REQUEST);
+    }
+}
+
+static void TestRequestRedirect(TestingT *t) {
+    need_tcp(t);
+    HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_request_redirect, NULL);
+    HttptestServer *ts = httptest_new_server(NULL, http_handler_func_as_handler(&f));
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *r = http_client_get(httptest_server_client(ts), ts->url, &err);
+    if (r == NULL) {
+        testing_t_errorf_v(t, "%v", err);
+    } else {
+        (void)r->body.vt->closer.close(r->body.data);
+        Arena ar;
+        arena_init(&ar, heap_allocator(), 0);
+        Str url = url_string(r->request->url, arena_allocator(&ar));
+        /* Go matches the URL against the regexp "/foo/$". */
+        if (r->status_code != 200 || !strings_has_suffix(url, cs("/foo/")))
+            testing_t_errorf_v(t, "Get got status %d at %q, want 200 matching /foo/$",
+                               r->status_code, url);
+        arena_free(&ar);
+        http_response_free(r);
+    }
+    httptest_server_free(ts);
+    check_handlers(t);
+}
+
+static void serve_nothing(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)w;
+    (void)r;
+}
+
+static void TestNoPanicOnRoundTripWithBasicAuth(TestingT *t) {
+    need_tcp(t);
+    HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_nothing, NULL);
+    HttptestServer *ts = httptest_new_server(NULL, http_handler_func_as_handler(&f));
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    Url *u = url_parse(a, ts->url, &err);
+    if (u == NULL) {
+        testing_t_errorf_v(t, "%v", err);
+    } else {
+        u->user = url_user_password(a, cs("foo"), cs("bar"));
+        /* A request with no header, as Go's &Request{URL: u, Method: "GET"}. */
+        HttpRequest req = {0};
+        req.url = u;
+        req.method = cs("GET");
+        HttpResponse *res = http_client_do(httptest_server_client(ts), &req, &err);
+        if (res == NULL)
+            testing_t_errorf_v(t, "Unexpected error: %v", err);
+        else
+            (void)read_body(a, res, &err);
+        http_response_free(res);
+        arena_free(&req.arena);
+    }
+    arena_free(&ar);
+    httptest_server_free(ts);
+    check_handlers(t);
+}
+
 #define TESTS(X)                                                                       \
     X(TestGetRequestFormat)                                                            \
     X(TestPostRequestFormat)                                                           \
@@ -1090,5 +1165,7 @@ static void TestClientReusesTheConnection(TestingT *t) {
     X(TestClientRedirectNoLocation)                                                    \
     X(TestRedirectCookiesJar)                                                          \
     X(TestClientTimeout_Headers)                                                       \
-    X(TestClientReusesTheConnection)
+    X(TestClientReusesTheConnection)                                                   \
+    X(TestRequestRedirect)                                                             \
+    X(TestNoPanicOnRoundTripWithBasicAuth)
 TESTING_MAIN(TESTS)

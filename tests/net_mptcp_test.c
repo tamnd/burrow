@@ -237,7 +237,9 @@ static void test_multipath_tcp(TestingT *t, bool env_var) {
         sync_wait_group_done(&s.wg);
         testing_t_error_v(t, S("go: out of memory"));
     } else {
-        dialer_mptcp(t, la.vt->string(la.data, heap_allocator()), env_var);
+        Str addr = la.vt->string(la.data, heap_allocator());
+        dialer_mptcp(t, addr, env_var);
+        mem_free(heap_allocator(), (void *)(uintptr_t)addr.p, (size_t)addr.len, 1);
         (void)s.l.vt->closer.close(s.l.data);
         sync_wait_group_wait(&s.wg);
         if (BURROW_FAILED(s.err))

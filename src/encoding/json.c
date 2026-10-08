@@ -1151,7 +1151,7 @@ static Error jx_decoder_fail(JsonDecoder *d, Error err) {
     return d->err;
 }
 
-Error json_decoder_decode(JsonDecoder *d, Any v) {
+static Error jx_decode_with(JsonDecoder *d, Alloc *va, Any v) {
     if (BURROW_FAILED(d->err))
         return d->err;
     Error err = BURROW_NO_ERROR;
@@ -1166,7 +1166,15 @@ Error json_decoder_decode(JsonDecoder *d, Any v) {
     d->had_peeked = false;
     d->had_eof = false;
     Slice in = {(void *)(uintptr_t)b.p, b.len, b.len, TYPE_BYTE};
-    return jsonv2_unmarshal_v(d->a, in, v, 1, d->opts);
+    return jsonv2_unmarshal_v(va, in, v, 1, d->opts);
+}
+
+Error json_decoder_decode(JsonDecoder *d, Any v) {
+    return jx_decode_with(d, d->a, v);
+}
+
+Error json_decoder_decode_in(JsonDecoder *d, Alloc *a, Any v) {
+    return jx_decode_with(d, a, v);
 }
 
 IoReader json_decoder_buffered(JsonDecoder *d) {

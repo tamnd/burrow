@@ -1899,3 +1899,111 @@ PENDING
 ```
 
 The response comes back as CGI output: a `Status` line, the header, a blank line and the body. As in Go, only the responder role is supported.
+
+## RPC
+
+`net/rpc` calls the methods of an object on the other end of a connection. The server registers the object, and every method of its type with the right shape becomes callable as `Type.Method`. The right shape is Go's: two arguments, the second a pointer to the reply, and an `Error` back. Methods are found through the type's descriptor, so the service is declared with `BURROW_STRUCT_DECL` and its methods listed with `BURROW_STRUCT_DEFINE_METHODS`:
+
+<!-- example: ../examples/net/rpc.c#service -->
+```c
+#define ARGS_FIELDS(F, T) F(T, Int, A, "") F(T, Int, B, "")
+BURROW_STRUCT(Args, ARGS_FIELDS);
+BURROW_PTR_TYPE(IntPtr, Int);
+
+#define ARITH_FIELDS(F, T) F(T, Int, calls, "")
+BURROW_STRUCT_DECL(Arith, ARITH_FIELDS);
+
+static Error arith_divide(Arith *t, Args args, IntPtr reply) {
+    (void)t;
+    if (args.B == 0)
+        return errors_new(error_allocator(), BURROW_S("divide by zero"));
+    *reply = args.A / args.B;
+    return BURROW_NO_ERROR;
+}
+
+static Error arith_multiply(Arith *t, Args args, IntPtr reply) {
+    (void)t;
+    *reply = args.A * args.B;
+    return BURROW_NO_ERROR;
+}
+
+#define ARITH_SIG(IN, OUT) IN(0, Args) IN(1, IntPtr) OUT(Error)
+#define ARITH_METHODS(M, T)                                                            \
+    M(T, Divide, arith_divide, ARITH_SIG)                                              \
+    M(T, Multiply, arith_multiply, ARITH_SIG)
+BURROW_STRUCT_DEFINE_METHODS(Arith, ARITH_FIELDS, ARITH_METHODS);
+```
+
+`rpc_register` puts the object on the default server, and `rpc_serve_conn` answers calls on one connection until the client hangs up. The client side is `rpc_new_client` over a connection, or `rpc_dial` and `rpc_dial_http` to make one. `rpc_client_call` waits for the answer, and `rpc_client_go` doesn't, giving back an `RpcCall` whose `done` channel gets it when the reply arrives. An error the method returns comes back as its text:
+
+<!-- example: ../examples/net/rpc.c#call -->
+```c
+rpc_register(BURROW_ANY(TYPE_OF(Arith), &arith));
+
+/* A pipe stands in for the network: the server on one end, the client on
+ * the other. */
+NetConn client, server;
+net_pipe(heap, &client, &server);
+SyncWaitGroup wg = {0};
+sync_wait_group_go(&wg, BURROW_FN(Func, serve, &server));
+
+RpcClient *c = rpc_new_client(heap, net_conn_as_io_read_write_closer(&client));
+Args args = {7, 8};
+Int product = 0;
+Error err = rpc_client_call(c, heap, BURROW_S("Arith.Multiply"),
+                            BURROW_ANY(TYPE_OF(Args), &args),
+                            BURROW_ANY(TYPE_INT, &product));
+fmt_printf_v("%d*%d=%d\n", args.A, args.B, product);
+
+args.B = 0;
+Int quotient = 0;
+err = rpc_client_call(c, heap, BURROW_S("Arith.Divide"),
+                      BURROW_ANY(TYPE_OF(Args), &args),
+                      BURROW_ANY(TYPE_INT, &quotient));
+fmt_printf_v("Divide: %v\n", err);
+err = rpc_client_call(c, heap, BURROW_S("Arith.Add"),
+                      BURROW_ANY(TYPE_OF(Args), &args),
+                      BURROW_ANY(TYPE_INT, &quotient));
+fmt_printf_v("Add: %v\n", err);
+
+rpc_client_free(c);
+sync_wait_group_wait(&wg);
+net_pipe_free(client);
+```
+
+That prints:
+
+```
+PENDING
+```
+
+The values on the wire are encoded with `encoding/gob`, which is what Go's server and client use, so either end can be Go. `net/rpc/jsonrpc` swaps in JSON-RPC 1.0, where each request is an object with the method, its parameters in a one-element array and an id, and the response echoes the id:
+
+<!-- example: ../examples/net/rpc.c#json -->
+```c
+/* The same service over JSON-RPC, with the request written by hand. */
+net_pipe(heap, &client, &server);
+sync_wait_group_go(&wg, BURROW_FN(Func, serve_json, &server));
+io_write_string(net_conn_as_io_writer(client),
+                BURROW_S("{\"method\": \"Arith.Multiply\", "
+                         "\"params\": [{\"A\": 6, \"B\": 7}], \"id\": 1}\n"),
+                &err);
+BufioReader *r = bufio_new_reader(heap, net_conn_as_io_reader(client));
+Str line = bufio_reader_read_string(r, heap, '\n', &err);
+fmt_printf_v("%s", line);
+bufio_reader_free(r);
+
+client.vt->closer.close(client.data);
+sync_wait_group_wait(&wg);
+net_pipe_free(client);
+```
+
+That prints:
+
+```
+PENDING
+```
+
+`rpc_handle_http` serves the default server over HTTP as well, on `RPC_DEFAULT_RPC_PATH`, where a client asks for the connection with a CONNECT, and puts a page listing the services and how often each method has been called at `RPC_DEFAULT_DEBUG_PATH`.
+
+Go's server makes a fresh argument and reply for every call and leaves them to the collector. Here they come from an arena that goes back once the reply is sent, and a method whose first argument is an `EncodingAllocArg` gets that arena to build its reply in, such as a string or a slice that grows.

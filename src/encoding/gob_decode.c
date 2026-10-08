@@ -47,6 +47,7 @@ typedef struct GobEngine GobEngine;
 
 struct GobDecoder {
     Alloc *a;
+    Alloc *va; /* where decoded values go, which is a unless decode_in says */
     SyncMutex mu;
     IoReader r;
     BufioReader *owned;
@@ -246,7 +247,7 @@ static Str gob_prefix(GobDecoder *d, const char *pre, Str s) {
 
 /* reflect.New(t).Elem(), from the decoder's allocator. */
 static void *gob_new_value(GobDecoder *d, const Type *t) {
-    return gob_calloc(d->a, t->size, t->align);
+    return gob_calloc(d->va, t->size, t->align);
 }
 
 /* decAlloc. */
@@ -901,7 +902,7 @@ static void gob_helper_string(GobDecoder *d, Str *out) {
     if (u > (uint64_t)gob_buf_len(b))
         gob_errorf("length of string exceeds input size (%d bytes)", u);
     Int n = (Int)u;
-    *out = gob_copy_str(d->a, b->data + b->off, n);
+    *out = gob_copy_str(d->va, b->data + b->off, n);
     gob_drop(b, n);
 }
 
@@ -928,9 +929,9 @@ static void gob_decode_array_helper(GobDecoder *d, const GobDecOp *op, const Typ
             /* A slice that was only partly allocated, because its length
              * came off the wire. It grows as the elements really arrive. */
             Int nc = s->cap < 1 ? 1 : s->cap * 2;
-            void *np = gob_calloc(d->a, (size_t)nc * et->size, et->align);
+            void *np = gob_calloc(d->va, (size_t)nc * et->size, et->align);
             memcpy(np, s->p, (size_t)s->len * et->size);
-            mem_free(d->a, s->p, (size_t)s->cap * et->size,
+            mem_free(d->va, s->p, (size_t)s->cap * et->size,
                      et->align == 0 ? 1 : et->align);
             s->p = np;
             s->cap = nc;
@@ -966,7 +967,7 @@ static void gob_decode_slice(GobDecoder *d, const GobDecOp *op, Slice *s) {
         if (safe < 0)
             gob_errorf("%s slice too big: %d elements of %d bytes", gob_dec_tstr(et), u,
                        size);
-        s->p = gob_calloc(d->a, (size_t)safe * et->size, et->align);
+        s->p = gob_calloc(d->va, (size_t)safe * et->size, et->align);
         s->len = s->cap = safe;
     } else {
         s->len = n;
@@ -982,7 +983,7 @@ static void gob_decode_bytes(GobDecoder *d, const Type *t, Slice *s) {
     if (!gob_get_length(b, &n))
         gob_errorf("bad %s slice length: %d", gob_dec_tstr(t), n);
     if (s->cap < n) {
-        s->p = gob_calloc(d->a, (size_t)n, 1);
+        s->p = gob_calloc(d->va, (size_t)n, 1);
         s->cap = n;
     }
     s->len = n;
@@ -1001,7 +1002,7 @@ static void gob_decode_map(GobDecoder *d, const GobDecOp *op, Map **mp) {
         Int safe = gob_safe_cap(mt->elem->size, (uint64_t)n);
         if (safe < 0)
             safe = 1;
-        *mp = map_make(d->a, mt->key, mt->elem, safe);
+        *mp = map_make(d->va, mt->key, mt->elem, safe);
         if (*mp == NULL)
             gob_dec_oom();
     }
@@ -1093,7 +1094,7 @@ static void gob_decode_gob_decoder(GobDecoder *d, const GobUserType *ut, void *p
     Bytes data = slice_from((void *)(uintptr_t)(b->data + b->off), n, n, TYPE_BYTE);
     gob_drop(b, n);
     Error err = BURROW_NO_ERROR;
-    EncodingAllocArg aa = d->a;
+    EncodingAllocArg aa = d->va;
     void *args[2] = {&aa, &data};
     void *rets[1] = {&err};
     method_call(ut->dec_method, p, args, rets);
@@ -1169,7 +1170,7 @@ static void gob_run(GobDecoder *d, const GobDecOp *op, Str ovfl, void *p) {
         if (gob_buf_len(b) < n)
             gob_errorf("invalid string length %d: exceeds input size %d", n,
                        gob_buf_len(b));
-        *(Str *)p = gob_copy_str(d->a, b->data + b->off, n);
+        *(Str *)p = gob_copy_str(d->va, b->data + b->off, n);
         gob_drop(b, n);
         return;
     }
@@ -1948,6 +1949,7 @@ GobDecoder *gob_new_decoder(Alloc *a, IoReader r) {
     if (d == NULL)
         return NULL;
     d->a = a;
+    d->va = a;
     arena_init(&d->ar, a, 0);
     arena_init(&d->scratch, a, 0);
     d->ca = arena_allocator(&d->ar);
@@ -2009,11 +2011,12 @@ static void gob_decode_top(GobDecoder *d, Any v) {
     gob_decode_value(d, id, pt, &pv);
 }
 
-Error gob_decoder_decode_value(GobDecoder *d, Any v) {
+static Error gob_decode_with(GobDecoder *d, Alloc *va, Any v) {
     if (v.t != NULL && v.data == NULL)
         return errors_new(error_allocator(),
                           BURROW_S("gob: DecodeValue of unassignable value"));
     sync_mutex_lock(&d->mu);
+    d->va = va;
     d->buf = (GobDecBuf){d->store, 0, 0};
     d->err = BURROW_NO_ERROR;
     d->depth = 0;
@@ -2037,6 +2040,14 @@ Error gob_decoder_decode_value(GobDecoder *d, Any v) {
     return err;
 }
 
+Error gob_decoder_decode_value(GobDecoder *d, Any v) {
+    return gob_decode_with(d, d->a, v);
+}
+
 Error gob_decoder_decode(GobDecoder *d, Any v) {
-    return gob_decoder_decode_value(d, v);
+    return gob_decode_with(d, d->a, v);
+}
+
+Error gob_decoder_decode_in(GobDecoder *d, Alloc *a, Any v) {
+    return gob_decode_with(d, a, v);
 }

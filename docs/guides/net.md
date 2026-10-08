@@ -1673,3 +1673,48 @@ context_release(ctx);
 ```
 
 The hooks run on the transport's goroutines, so one that shares state with the caller needs a lock, and the trace has to live until the last response sent with it is freed. A trace put in a context that already has one runs its own hooks and then the older one's, as in Go. Unlike Go, it does that by keeping a pointer to the older trace rather than rewriting its own fields, so code that wants to run the hooks itself calls `httptrace_client_trace_got_conn` and the rest. The hooks for the dial stop once the request has its connection, while in Go a dial that lost the race to an idle connection keeps calling them. There are no TLS hooks yet.
+
+## Dumping requests and responses
+
+`net/http/httputil` can show a message the way it goes over the wire, which helps when debugging a client or a server. `httputil_dump_request_out` shows a request as the transport would send it, with the `User-Agent`, `Accept-Encoding` and other fields the transport adds, by sending it through a transport to a connection that only records it. `httputil_dump_request` shows a request as a server got it, and `httputil_dump_response` shows a response:
+
+<!-- example: ../examples/net/httputil.c#dump -->
+```c
+/* A request as the transport would send it, with the fields it adds. */
+StringsReader body;
+strings_reader_reset(&body, BURROW_S("name=gopher"));
+Error err;
+HttpRequest *req = http_new_request(a, BURROW_S("POST"),
+                                    BURROW_S("http://example.com/signup?ref=docs"),
+                                    strings_reader_as_io_reader(&body), &err);
+if (req == NULL)
+    return;
+http_header_set(req->header, BURROW_S("Content-Type"),
+                BURROW_S("application/x-www-form-urlencoded"));
+Slice out = httputil_dump_request_out(a, req, true, &err);
+if (BURROW_OK(err))
+    fmt_printf_v("%q\n", str_from_bytes(out.p, out.len));
+http_request_free(req);
+
+/* A response, with its body read into the dump and put back after. */
+StringsReader sr;
+strings_reader_reset(&sr, BURROW_S("HTTP/1.1 200 OK\r\n"
+                                   "Content-Type: text/plain\r\n"
+                                   "Content-Length: 5\r\n"
+                                   "\r\n"
+                                   "hello"));
+BufioReader *br = bufio_new_reader(a, strings_reader_as_io_reader(&sr));
+HttpResponse *res = http_read_response(a, br, NULL, &err);
+if (res != NULL) {
+    out = httputil_dump_response(a, res, false, &err);
+    fmt_printf_v("%q\n", str_from_bytes(out.p, out.len));
+    out = httputil_dump_response(a, res, true, &err);
+    fmt_printf_v("%q\n", str_from_bytes(out.p, out.len));
+    Slice b = io_read_all(a, io_read_closer_as_io_reader(res->body), &err);
+    fmt_printf_v("body after the dump: %s\n", str_from_bytes(b.p, b.len));
+    http_response_free(res);
+}
+bufio_reader_free(br);
+```
+
+With `body` true, a dump reads the whole body into memory, and the request or response gets a reader over those same bytes, so it can still be used after. With `body` false the body is left out, but the header keeps the length the body would have had. `httputil_new_chunked_reader` and `httputil_new_chunked_writer` are the chunked encoding the client and server use, for code that speaks HTTP/1 itself.

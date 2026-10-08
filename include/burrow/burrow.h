@@ -132,6 +132,7 @@
 #include "burrow/mime/quotedprintable.h"
 #include "burrow/net.h"
 #include "burrow/net/http.h"
+#include "burrow/net/http/cgi.h"
 #include "burrow/net/http/cookiejar.h"
 #include "burrow/net/http/httptest.h"
 #include "burrow/net/http/httptrace.h"

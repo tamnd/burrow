@@ -1798,3 +1798,41 @@ path /api/users, X-Forwarded-Proto http
 Before `rewrite` runs, the proxy takes the hop-by-hop fields off `out`, the ones `Connection` names and the standard ones such as `Keep-Alive` and `Proxy-Authorization`, along with `Forwarded`, the `X-Forwarded` fields and any query parameters that don't parse. So a backend only sees forwarding fields the rewrite put there. `httputil_new_single_host_reverse_proxy` makes a proxy the older way, with a `director` that changes the request in place. That one leaves the `Host` field as the client sent it, and in that mode the proxy adds the client's address to `X-Forwarded-For` itself.
 
 When the backend can't be reached, or `modify_response` returns an error, `error_handler` gets the error, and without one the proxy logs it to `error_log` and answers 502 Bad Gateway. A 101 Switching Protocols from the backend, to an upgrade the client asked for, takes over the client's connection and copies bytes both ways, which is how WebSockets go through. `flush_interval` says how often the body is flushed to the client while it is copied, and a response of unknown length or of type `text/event-stream` is flushed after every write.
+
+## CGI
+
+`net/http/cgi` does CGI, RFC 3875, from both sides. A CGI program gets its request from the web server in environment variables and its body on standard input, and prints the response. `cgi_request` reads the request out of the environment, and `cgi_request_from_map` does the same from a map, which makes it easy to see what a program gets:
+
+<!-- example: ../examples/net/cgi.c#request -->
+```c
+/* What a web server puts in a CGI program's environment. */
+Map *env = map_make(a, TYPE_STRING, TYPE_STRING, 0);
+set(env, "SERVER_PROTOCOL", "HTTP/1.1");
+set(env, "REQUEST_METHOD", "POST");
+set(env, "HTTP_HOST", "example.com");
+set(env, "REQUEST_URI", "/search?q=gopher");
+set(env, "CONTENT_LENGTH", "11");
+set(env, "HTTP_USER_AGENT", "curl/8.5.0");
+set(env, "REMOTE_ADDR", "10.0.0.7");
+set(env, "REMOTE_PORT", "51234");
+
+HttpRequest *req = cgi_request_from_map(a, env, &err);
+if (req != NULL) {
+    fmt_printf_v("%s %s\n", req->method, url_string(req->url, a));
+    fmt_printf_v("host %s, from %s, %d bytes\n", req->host, req->remote_addr,
+                 req->content_length);
+    fmt_printf_v("User-Agent %s\n",
+                 http_header_get(req->header, BURROW_S("User-Agent")));
+    http_request_free(req);
+}
+```
+
+That prints:
+
+```
+PENDING
+```
+
+`cgi_serve` does the rest of a program's work: it reads the request with `cgi_request`, serves it with a handler and writes what the handler writes to standard output, with a `Status` line and the header in front. The other side is `CgiHandler`, for a web server. It runs the program at `path` for each request, with `root` as the part of the URL path in front of the program's `PATH_INFO`, and copies back what the program prints. A program that answers with a `Location` and no `Status` sends the client a 302 Found to it. When the location starts with `/` and `path_location_handler` is set, that handler serves a GET for the path instead, in the same response.
+
+Go's request has a TLS field, which `cgi.Request` fills in when `HTTPS` is on. There's no `crypto/tls` here yet, so for now that shows only in the URL, whose scheme is `https`.

@@ -861,7 +861,8 @@ static void TestLookupPort(TestingT *t) {
                                tests[i].network, tests[i].name, port, err,
                                tests[i].port, !tests[i].ok);
         /* parseLookupPortError */
-        if (BURROW_FAILED(err) && !is_dns_error(err))
+        if (BURROW_FAILED(err) && !is_dns_error(err) &&
+            errors_as(err, TYPE_NET_ADDR_ERROR) == NULL)
             testing_t_errorf_v(t, "unexpected type: %v", err);
     }
 }

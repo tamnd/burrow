@@ -159,6 +159,7 @@ typedef struct CgJob {
     int32_t family;
     int32_t socktype;
     int32_t protocol;
+    int32_t flags; /* the hints' ai_flags, which a port lookup leaves at 0 */
     int32_t rclass;
     int32_t rtype;
     bool oom;
@@ -243,7 +244,7 @@ static void cg_run_addrinfo(CgJob *j) {
         }
         j->ai_cap = cap;
         j->n = pal_getaddrinfo(j->host, j->service, j->family, j->socktype, j->protocol,
-                               CG_AI_FLAGS, j->ai, cap, &j->gerr);
+                               j->flags, j->ai, cap, &j->gerr);
         if (j->n <= cap)
             return;
         mem_free(h, j->ai, (size_t)cap * sizeof(PalAddrInfo), _Alignof(PalAddrInfo));
@@ -485,6 +486,7 @@ Slice burrow__net_cgo_lookup_ip(Alloc *a, Context ctx, Str network, Str name,
         BURROW_OUT(err, burrow_err_out_of_memory);
         return out;
     }
+    j->flags = CG_AI_FLAGS;
     bool bad = false;
     j->host = cg_cstr(name, &bad);
     if (j->host == NULL) {

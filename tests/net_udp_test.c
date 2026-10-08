@@ -24,6 +24,14 @@
 #include <stdio.h>
 #include <string.h>
 
+/* What EINVAL says. WASI's table has it capitalised, and so does Go's
+ * tables_wasip1.go. */
+#if defined(BURROW_OS_WASI)
+#define EINVAL_TEXT "Invalid argument"
+#else
+#define EINVAL_TEXT "invalid argument"
+#endif
+
 #if defined(BURROW_NETPOLL_READINESS) && !defined(BURROW_OS_WASI)
 #define HAVE_UDP 1
 #endif
@@ -416,10 +424,9 @@ static void TestANilConnIsAnInvalidArgument(TestingT *t) {
     (void)t;
     char buf[64];
     Error e = BURROW_NO_ERROR;
-    CHECK_STR_EQ(text_of(net_udp_conn_close(NULL), buf, sizeof buf),
-                 "invalid argument");
+    CHECK_STR_EQ(text_of(net_udp_conn_close(NULL), buf, sizeof buf), EINVAL_TEXT);
     CHECK_INT_EQ(net_udp_conn_read(NULL, (Slice){0}, &e), 0);
-    CHECK_STR_EQ(text_of(e, buf, sizeof buf), "invalid argument");
+    CHECK_STR_EQ(text_of(e, buf, sizeof buf), EINVAL_TEXT);
     CHECK(net_udp_conn_local_addr(NULL).vt == NULL);
     CHECK(net_udp_conn_as_conn(NULL).vt == NULL);
     net_udp_conn_free(NULL);

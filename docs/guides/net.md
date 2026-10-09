@@ -1991,8 +1991,11 @@ io_write_string(net_conn_as_io_writer(client),
                          "\"params\": [{\"A\": 6, \"B\": 7}], \"id\": 1}\n"),
                 &err);
 BufioReader *r = bufio_new_reader(heap, net_conn_as_io_reader(client));
-Str line = bufio_reader_read_string(r, heap, '\n', &err);
+Arena ar;
+arena_init(&ar, NULL, 0);
+Str line = bufio_reader_read_string(r, arena_allocator(&ar), '\n', &err);
 fmt_printf_v("%s", line);
+arena_free(&ar);
 bufio_reader_free(r);
 
 client.vt->closer.close(client.data);

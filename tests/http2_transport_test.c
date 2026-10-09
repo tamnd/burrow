@@ -6128,12 +6128,22 @@ static NetConn h2ct_ping_block_dial(void *env, Str network, Str addr, Error *err
         return none;
     }
     if (!sync_wait_group_go(&pb->wg, BURROW_FN(Func, h2ct_ping_block_job, pb))) {
-        net_conn_free(c);
+        net_pipe_free(c); /* both ends */
+        pb->s = none;
         *err = burrow_err_out_of_memory;
         return none;
     }
     *err = BURROW_NO_ERROR;
     return c;
+}
+
+/* The transport's free_conn, which leaves the pipe alone. Freeing either end
+ * frees both, and the test's reader can still be in a read on the other end
+ * when the transport gives the connection up, so the test frees the pipe once
+ * that reader is done. */
+static void h2ct_ping_block_free(void *env, NetConn c) {
+    (void)env;
+    (void)c;
 }
 
 static void TestTransportPingWriteBlocks(TestingT *t) {
@@ -6142,6 +6152,7 @@ static void TestTransportPingWriteBlocks(TestingT *t) {
     memset(&pb, 0, sizeof pb);
     if (h2ct_ts_start(&s, t, NULL, NULL)) {
         s.tr.dial = BURROW_FN(HttpDialFunc, h2ct_ping_block_dial, &pb);
+        s.tr.free_conn = BURROW_FN(HttpFreeConnFunc, h2ct_ping_block_free, NULL);
         s.h2.ping_timeout = TIME_MILLISECOND;
         s.h2.send_ping_timeout = TIME_MILLISECOND;
         HttpClient c = {0};
@@ -6158,7 +6169,7 @@ static void TestTransportPingWriteBlocks(TestingT *t) {
     if (pb.s.vt != NULL) {
         (void)pb.s.vt->closer.close(pb.s.data);
         sync_wait_group_wait(&pb.wg);
-        net_conn_free(pb.s);
+        net_pipe_free(pb.s);
     }
 }
 
@@ -7349,12 +7360,12 @@ static void TestExtendedConnectClientWithoutServerSupport(TestingT *t) {
     X(TestTransportFrameBufferReuse)                                                   \
     X(TestTransportCloseRequestBody)                                                   \
     X(TestTransportContentLengthWithoutBody)                                           \
-        X(TestTransportCloseResponseBodyWhileRequestBodyHangs)                         \
-            X(TestTransport300ResponseBody) X(TestTransportWriteByteTimeout)           \
-                X(TestTransportSlowWrites) X(TestTransportSlowClose)                   \
-                    X(TestTransportDialTLSContext) X(TestDialRaceResumesDial)          \
-                        X(TestIssue66763Race) X(TestIssue67671)                        \
-                            X(TestExtendedConnectClientWithServerSupport)              \
-                                X(TestExtendedConnectClientWithoutServerSupport)
+    X(TestTransportCloseResponseBodyWhileRequestBodyHangs)                             \
+    X(TestTransport300ResponseBody)                                                    \
+    X(TestTransportWriteByteTimeout) X(TestTransportSlowWrites)                        \
+        X(TestTransportSlowClose) X(TestTransportDialTLSContext)                       \
+            X(TestDialRaceResumesDial) X(TestIssue66763Race) X(TestIssue67671)         \
+                X(TestExtendedConnectClientWithServerSupport)                          \
+                    X(TestExtendedConnectClientWithoutServerSupport)
 
 TESTING_MAIN(TESTS)

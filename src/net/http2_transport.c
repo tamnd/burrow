@@ -4176,6 +4176,100 @@ HttpResponse *burrow__http2_client_conn_round_trip(Http2ClientConn *cc,
     return h2c_conn_round_trip(cc, req, req->body, err);
 }
 
+/* sendGoAway. */
+static Error h2c_send_go_away(h2c_Conn *cc) {
+    sync_mutex_lock(&cc->mu);
+    bool closing = cc->closing;
+    cc->closing = true;
+    uint32_t max_stream_id = cc->next_stream_id;
+    sync_mutex_unlock(&cc->mu);
+    if (closing) {
+        /* GOAWAY sent already */
+        return BURROW_NO_ERROR;
+    }
+
+    sync_mutex_lock(&cc->wmu);
+    /* Send a graceful shutdown frame to server */
+    Error err = burrow__http2_framer_write_go_away(
+        cc->fr, max_stream_id, HTTP2_ERR_CODE_NO, slice_from(NULL, 0, 0, TYPE_BYTE));
+    if (BURROW_OK(err))
+        err = bufio_writer_flush(cc->bw);
+    sync_mutex_unlock(&cc->wmu);
+    /* Prevent new requests */
+    return err;
+}
+
+/* What Shutdown and the goroutine it starts share. */
+typedef struct h2c_Shutdown {
+    h2c_Conn *cc;
+    Chan *done;
+    bool cancelled; /* under cc->mu */
+} h2c_Shutdown;
+
+/* Waits for all in-flight streams to complete or the connection to close. */
+static void h2c_shutdown_wait(void *env) {
+    h2c_Shutdown *sd = (h2c_Shutdown *)env;
+    h2c_Conn *cc = sd->cc;
+    sync_mutex_lock(&cc->mu);
+    for (;;) {
+        if (map_len(cc->streams) == 0 || cc->closed) {
+            cc->closed = true;
+            chan_close(sd->done);
+            break;
+        }
+        if (sd->cancelled)
+            break;
+        sync_cond_wait(&cc->cond);
+    }
+    sync_mutex_unlock(&cc->mu);
+}
+
+/* Shutdown. Go's goroutine can outlive it. This one waits for it, which
+ * is soon, as it stops at the next broadcast once cancelled is set. */
+Error burrow__http2_client_conn_shutdown(Http2ClientConn *cc, Context ctx) {
+    Error err = h2c_send_go_away(cc);
+    if (BURROW_FAILED(err))
+        return err;
+    h2c_Shutdown sd = {cc, chan_make(cc->a, TYPE_BOOL, 0), false};
+    if (sd.done == NULL)
+        return burrow_err_out_of_memory;
+    SyncWaitGroup wg;
+    memset(&wg, 0, sizeof wg);
+    if (!sync_wait_group_go(&wg, BURROW_FN(Func, h2c_shutdown_wait, &sd))) {
+        chan_free(sd.done);
+        return burrow_err_out_of_memory;
+    }
+    SelectCase sc[] = {BURROW_RECV(sd.done, NULL),
+                       BURROW_RECV(context_done(ctx), NULL)};
+    if (chan_select(sc, 2) == 0) {
+        sync_wait_group_wait(&wg);
+        h2c_close_conn(cc);
+    } else {
+        sync_mutex_lock(&cc->mu);
+        /* Free the goroutine above */
+        sd.cancelled = true;
+        sync_cond_broadcast(&cc->cond);
+        sync_mutex_unlock(&cc->mu);
+        sync_wait_group_wait(&wg);
+        err = context_err(ctx);
+    }
+    chan_free(sd.done);
+    return err;
+}
+
+/* ReserveNewRequest. */
+bool burrow__http2_client_conn_reserve_new_request(Http2ClientConn *cc) {
+    return h2c_reserve_new_request(cc);
+}
+
+/* State().StreamsActive. */
+Int burrow__http2_client_conn_streams_active(Http2ClientConn *cc) {
+    sync_mutex_lock(&cc->mu);
+    Int n = map_len(cc->streams) + cc->pending_resets;
+    sync_mutex_unlock(&cc->mu);
+    return n;
+}
+
 void burrow__http2_client_conn_release(Http2ClientConn *cc) {
     if (cc != NULL)
         h2c_unref(cc);

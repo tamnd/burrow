@@ -1529,6 +1529,12 @@ static void h2ct_unknown_1xx(H2ctTT *tt, const void *arg) {
         return;
     }
     *buf = BYTES_BUFFER(a);
+    /* The hook runs on the client's read loop. Room made here keeps it from
+     * taking more from the test's arena while the test takes from it too. */
+    if (!bytes_buffer_grow(buf, 1024)) {
+        testing_t_errorf_v(tt->t, "no memory for the trace");
+        return;
+    }
     trace->got1xx_response = BURROW_FN(HttptraceGot1xxResponseFunc, h2ct_got1xx, buf);
     Context ctx = httptrace_with_client_trace(a, context_background(), trace);
 
@@ -1889,6 +1895,51 @@ static void h2ct_read_head_response_with_body(H2ctTT *tt, const void *arg) {
 
 static void TestTransportReadHeadResponseWithBody(TestingT *t) {
     h2ct_run(t, h2ct_read_head_response_with_body, NULL);
+}
+
+static void h2ct_allocations_after_response_body_close(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    /* Send request. */
+    H2ctRT *rt = h2ct_tc_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("PUT"), h2ct_no_body));
+    H2CT_TRY(rt != NULL && h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+
+    /* Receive response with some body. */
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    static const Str res_kv[] = {S_(":status"), S_("200")};
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, res_kv, 2), false)));
+    H2CT_TRY(h2ct_write_zeros(tc, id, false, 64));
+    H2CT_TRY(h2ct_want_idle(tc));
+
+    /* Client reads a byte of the body, and then closes it. */
+    HttpResponse *res = h2ct_rt_response(rt);
+    H2CT_TRY(res != NULL);
+    Byte b[1];
+    Error err = BURROW_NO_ERROR;
+    IoReader r = io_read_closer_as_io_reader(res->body);
+    (void)r.vt->read(r.data, slice_from(b, 1, 1, TYPE_BYTE), &err);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(tt->t, "%v", err);
+    err = res->body.vt->closer.close(res->body.data);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(tt->t, "%v", err);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_RST_STREAM));
+
+    /* Server sends more of the body, which is ignored. */
+    H2CT_TRY(h2ct_write_zeros(tc, id, false, 64));
+
+    err = BURROW_NO_ERROR;
+    (void)r.vt->read(r.data, slice_from(b, 1, 1, TYPE_BYTE), &err);
+    if (BURROW_OK(err))
+        testing_t_errorf_v(tt->t, "read from closed body unexpectedly succeeded");
+}
+
+static void TestTransportAllocationsAfterResponseBodyClose(TestingT *t) {
+    h2ct_run(t, h2ct_allocations_after_response_body_close, NULL);
 }
 
 static void h2ct_no_body_means_no_data(H2ctTT *tt, const void *arg) {
@@ -4277,6 +4328,193 @@ static void TestTransportBlockingRequestWrite_trailer(TestingT *t) {
     h2ct_run(t, h2ct_blocking_request_write, &kind);
 }
 
+/* tc.cc.Shutdown on a goroutine of its own, which finish waits for, having
+ * closed the conn so that it does not wait on a test that gave up. */
+typedef struct H2ctShutdown {
+    H2ctTT *tt;
+    Context ctx;
+    Arena arena;
+    Error err; /* in arena */
+    SyncAtomicBool done;
+    SyncWaitGroup wg;
+} H2ctShutdown;
+
+static void h2ct_shutdown_job(void *env) {
+    H2ctShutdown *sd = (H2ctShutdown *)env;
+    Error err = burrow__http2_client_conn_shutdown(sd->tt->cc, sd->ctx);
+    sd->err = error_retain(arena_allocator(&sd->arena), err);
+    sync_atomic_bool_store(&sd->done, true);
+}
+
+static bool h2ct_shutdown_start(H2ctTT *tt, H2ctShutdown *sd, Context ctx) {
+    memset(sd, 0, sizeof *sd);
+    sd->tt = tt;
+    sd->ctx = ctx;
+    arena_init(&sd->arena, tt->a, 0);
+    if (!sync_wait_group_go(&sd->wg, BURROW_FN(Func, h2ct_shutdown_job, sd))) {
+        testing_t_errorf_v(tt->t, "no memory for Shutdown's goroutine");
+        return false;
+    }
+    return true;
+}
+
+static void h2ct_shutdown_finish(H2ctConn *tc, H2ctShutdown *sd) {
+    h2ct_conn_close(tc);
+    sync_wait_group_wait(&sd->wg);
+    arena_free(&sd->arena);
+}
+
+static void h2ct_client_conn_shutdown_steps(H2ctConn *tc, H2ctRT *rt) {
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_GO_AWAY));
+    H2CT_TRY(h2ct_want_idle(tc)); /* connection is not closed */
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    static const Str res_kv[] = {S_(":status"), S_("200")};
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, res_kv, 2), false)));
+    H2CT_TRY(h2ct_write_data(tc, id, true, "body"));
+
+    H2CT_TRY(h2ct_rt_want_status(rt, 200));
+    H2CT_TRY(h2ct_rt_want_body(rt, "body"));
+
+    /* Now that the client has received the response, it closes the
+     * connection. */
+    (void)h2ct_want_closed(tc);
+}
+
+static void h2ct_client_conn_shutdown(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_tc_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt != NULL && h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+
+    H2ctShutdown sd;
+    H2CT_TRY(h2ct_shutdown_start(tt, &sd, context_background()));
+    h2ct_client_conn_shutdown_steps(tc, rt);
+    h2ct_shutdown_finish(tc, &sd);
+}
+
+static void TestClientConnShutdown(TestingT *t) {
+    h2ct_run(t, h2ct_client_conn_shutdown, NULL);
+}
+
+static void h2ct_client_conn_shutdown_cancel_steps(H2ctTT *tt, H2ctConn *tc, H2ctRT *rt,
+                                                   H2ctShutdown *sd,
+                                                   ContextCancelFunc cancel) {
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_GO_AWAY));
+    H2CT_TRY(h2ct_want_idle(tc)); /* connection is not closed */
+
+    BURROW_CALLF0(cancel);
+    Time deadline = time_add(time_now(), H2CT_WAIT);
+    while (!sync_atomic_bool_load(&sd->done) && time_before(time_now(), deadline))
+        time_sleep(TIME_MILLISECOND);
+
+    if (!sync_atomic_bool_load(&sd->done) || !errors_is(sd->err, context_canceled))
+        FATALF("ClientConn.Shutdown(ctx) did not return context.Canceled after "
+               "cancelling context");
+
+    /* The documentation for this test states:
+     *     The expected behavior is the client closing the connection
+     *     after the context is canceled.
+     *
+     * This seems reasonable, but it isn't what we do.
+     * When ClientConn.Shutdown's context is canceled, Shutdown returns but
+     * the connection is not closed.
+     *
+     * TODO: Figure out the correct behavior. */
+    if (h2ct_rt_done(rt))
+        FATALF("RoundTrip unexpectedly returned during shutdown");
+}
+
+/* The client sends a GOAWAY frame before the server finishes processing a
+ * request, but cancels the passed context before the request is completed.
+ * The expected behavior is the client closing the connection after the
+ * context is canceled. */
+static void h2ct_client_conn_shutdown_cancel(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_tc_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt != NULL && h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+
+    ContextCancelFunc cancel;
+    Context ctx = context_with_cancel(tt->a, context_background(), &cancel);
+    H2ctShutdown sd;
+    if (h2ct_shutdown_start(tt, &sd, ctx)) {
+        h2ct_client_conn_shutdown_cancel_steps(tt, tc, rt, &sd, cancel);
+        BURROW_CALLF0(cancel);
+        h2ct_shutdown_finish(tc, &sd);
+    }
+    context_release(ctx);
+}
+
+static void TestClientConnShutdownCancel(TestingT *t) {
+    h2ct_run(t, h2ct_client_conn_shutdown_cancel, NULL);
+}
+
+/* Go's bubble has the stream gone by the time the response is read. Here it
+ * waits for that. */
+static bool h2ct_reservations_round_trip(H2ctTT *tt, H2ctConn *tc) {
+    H2ctRT *rt = h2ct_tc_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    if (rt == NULL || !h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS))
+        return false;
+    uint32_t id = h2ct_rt_stream_id(rt);
+    if (id == 0 || !h2ct_write_status(tc, id, "200") || !h2ct_rt_want_status(rt, 200))
+        return false;
+    Time deadline = time_add(time_now(), H2CT_WAIT);
+    while (burrow__http2_client_conn_streams_active(tt->cc) > 0) {
+        if (!time_before(time_now(), deadline)) {
+            testing_t_errorf_v(tt->t, "stream %d is still active", (int)id);
+            return false;
+        }
+        time_sleep(TIME_MILLISECOND);
+    }
+    return true;
+}
+
+static void h2ct_client_conn_reservations(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    enum { INITIAL_MAX_CONCURRENT_STREAMS = 100 };
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    static const Http2Setting s[] = {
+        {HTTP2_SETTING_MAX_CONCURRENT_STREAMS, INITIAL_MAX_CONCURRENT_STREAMS}};
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, s, 1));
+
+    int n = 0;
+    while (n <= INITIAL_MAX_CONCURRENT_STREAMS &&
+           burrow__http2_client_conn_reserve_new_request(tt->cc))
+        n++;
+    if (n != INITIAL_MAX_CONCURRENT_STREAMS)
+        testing_t_errorf_v(tt->t, "did %d reservations; want %d", n,
+                           INITIAL_MAX_CONCURRENT_STREAMS);
+    H2CT_TRY(h2ct_reservations_round_trip(tt, tc));
+    int n2 = 0;
+    while (n2 <= 5 && burrow__http2_client_conn_reserve_new_request(tt->cc))
+        n2++;
+    if (n2 != 1)
+        FATALF("after one RoundTrip, did %d reservations; want 1", n2);
+
+    /* Use up all the reservations */
+    for (int i = 0; i < n; i++)
+        H2CT_TRY(h2ct_reservations_round_trip(tt, tc));
+
+    n2 = 0;
+    while (n2 <= INITIAL_MAX_CONCURRENT_STREAMS &&
+           burrow__http2_client_conn_reserve_new_request(tt->cc))
+        n2++;
+    if (n2 != n)
+        testing_t_errorf_v(tt->t, "after reset, reservations = %d; want %d", n2, n);
+}
+
+static void TestClientConnReservations(TestingT *t) {
+    h2ct_run(t, h2ct_client_conn_reservations, NULL);
+}
+
 /* Go sleeps five seconds of its fake clock. This sleeps five real ones. */
 static void h2ct_timeout_server_hangs(H2ctTT *tt, const void *arg) {
     (void)arg;
@@ -4362,6 +4600,7 @@ static void TestTransportTimeoutServerHangs(TestingT *t) {
     X(TestTransportRetryAfterRefusedStream)                                            \
     X(TestTransportReadHeadResponse)                                                   \
     X(TestTransportReadHeadResponseWithBody)                                           \
+    X(TestTransportAllocationsAfterResponseBodyClose)                                  \
     X(TestTransportNoBodyMeansNoDATA)                                                  \
     X(TestTransportReturnsErrorOnBadResponseHeaders)                                   \
     X(TestTransportResponseDataBeforeHeaders)                                          \
@@ -4421,6 +4660,9 @@ static void TestTransportTimeoutServerHangs(TestingT *t) {
     X(TestTransportBlockingRequestWrite_headers)                                       \
     X(TestTransportBlockingRequestWrite_body)                                          \
     X(TestTransportBlockingRequestWrite_trailer)                                       \
+    X(TestClientConnShutdown)                                                          \
+    X(TestClientConnShutdownCancel)                                                    \
+    X(TestClientConnReservations)                                                      \
     X(TestTransportTimeoutServerHangs)
 
 TESTING_MAIN(TESTS)

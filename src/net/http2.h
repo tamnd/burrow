@@ -1226,6 +1226,18 @@ burrow__http2_transport_client_conn(Http2Transport *t2, NetConn c);
 BURROW_OWNS(ret) HttpResponse *
 burrow__http2_client_conn_round_trip(Http2ClientConn *cc, HttpRequest *req, Error *err);
 
+/* Shutdown: sends a GOAWAY and closes cc once its streams are done, or gives
+ * ctx's error when ctx is done first, leaving cc open. */
+Error burrow__http2_client_conn_shutdown(Http2ClientConn *cc, Context ctx);
+
+/* ReserveNewRequest: a stream on cc for a request to come, when cc can take
+ * one. */
+bool burrow__http2_client_conn_reserve_new_request(Http2ClientConn *cc);
+
+/* State().StreamsActive: the streams cc has open, and those it has reset and
+ * is waiting to hear back on. */
+Int burrow__http2_client_conn_streams_active(Http2ClientConn *cc);
+
 void burrow__http2_client_conn_release(Http2ClientConn *cc);
 
 /* IdleConnStrsForTesting: the address of each connection that can take a new

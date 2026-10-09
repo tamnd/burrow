@@ -179,8 +179,11 @@ static void TestRetainingKeepsErrorsIsThroughAChainAndAJoin(TestingT *t) {
     arena_free(&keep);
 }
 
-/* Static so that the longjmp out of the panic cannot clobber them. */
+/* Static so that the longjmp out of the panic cannot clobber them. The message
+ * is here too: a compound literal in a function with a setjmp in it is one
+ * more thing gcc -Wclobbered warns about, and mingw's gcc does. */
 static Error caught, kept;
+static const Str div_message = BURROW_S_INIT("runtime error: integer divide by zero");
 
 static void TestRetainingARuntimeErrorKeepsItsType(TestingT *t) {
     volatile Int zero = 0;
@@ -199,7 +202,7 @@ static void TestRetainingARuntimeErrorKeepsItsType(TestingT *t) {
     const RuntimeError *re = errors_as(kept, TYPE_RUNTIME_ERROR);
     CHECK(re != NULL);
     if (re != NULL)
-        CHECK(str_eq(re->message, BURROW_S("runtime error: integer divide by zero")));
+        CHECK(str_eq(re->message, div_message));
 }
 
 /* ----------------------------------------------------- with goroutines */

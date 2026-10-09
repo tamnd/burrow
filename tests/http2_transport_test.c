@@ -919,6 +919,69 @@ static bool h2ct_want_frame_type(H2ctConn *tc, Http2FrameType want) {
     return f != NULL;
 }
 
+/* wantRSTStream: a RST_STREAM frame on stream id with code. */
+static bool h2ct_want_rst_stream(H2ctConn *tc, uint32_t id, Http2ErrCode code) {
+    Http2Frame *f = h2ct_read_type(tc, HTTP2_FRAME_RST_STREAM);
+    if (f == NULL)
+        return false;
+    bool ok = f->header.stream_id == id && f->u.rst_stream.err_code == code;
+    if (!ok)
+        testing_t_errorf_v(tc->t,
+                           "got RST_STREAM stream=%d code=%d, want stream=%d code=%d",
+                           (int)f->header.stream_id, (int)f->u.rst_stream.err_code,
+                           (int)id, (int)code);
+    burrow__http2_frame_free(f);
+    return ok;
+}
+
+/* wantSettingsAck: a SETTINGS frame with the ACK flag. */
+static bool h2ct_want_settings_ack(H2ctConn *tc) {
+    Http2Frame *f = h2ct_read_type(tc, HTTP2_FRAME_SETTINGS);
+    if (f == NULL)
+        return false;
+    bool ok = (f->header.flags & HTTP2_FLAG_SETTINGS_ACK) != 0;
+    if (!ok)
+        testing_t_errorf_v(tc->t, "Settings frame is not an ACK");
+    burrow__http2_frame_free(f);
+    return ok;
+}
+
+/* wantGoAway: a GOAWAY frame with max_stream_id and code. */
+static bool h2ct_want_go_away(H2ctConn *tc, uint32_t max_stream_id, Http2ErrCode code) {
+    Http2Frame *f = h2ct_read_type(tc, HTTP2_FRAME_GO_AWAY);
+    if (f == NULL)
+        return false;
+    bool ok =
+        f->u.go_away.last_stream_id == max_stream_id && f->u.go_away.err_code == code;
+    if (!ok)
+        testing_t_errorf_v(tc->t,
+                           "got GOAWAY LastStreamID=%d code=%d, want LastStreamID=%d "
+                           "code=%d",
+                           (int)f->u.go_away.last_stream_id, (int)f->u.go_away.err_code,
+                           (int)max_stream_id, (int)code);
+    burrow__http2_frame_free(f);
+    return ok;
+}
+
+/* wantClosed: the connection ends with no more frames. */
+static bool h2ct_want_closed(H2ctConn *tc) {
+    Error err = BURROW_NO_ERROR;
+    Http2Frame *f = h2ct_read_frame_within(tc, H2CT_WAIT, &err);
+    if (f != NULL && BURROW_OK(err)) {
+        testing_t_errorf_v(tc->t,
+                           "got unexpected frame type %d (want closed connection)",
+                           (int)f->header.type);
+        burrow__http2_frame_free(f);
+        return false;
+    }
+    burrow__http2_frame_free(f);
+    if (errors_is(err, os_err_deadline_exceeded)) {
+        testing_t_errorf_v(tc->t, "connection is not closed; want it to be");
+        return false;
+    }
+    return true;
+}
+
 /* wantHeaders: a HEADERS frame on stream id, and for each name in want, the
  * values the frame has under it are the ones want gives it, in order. want
  * holds n names and values. */
@@ -1074,6 +1137,11 @@ static bool h2ct_write_go_away(H2ctConn *tc, uint32_t max_stream_id,
 static bool h2ct_write_rst_stream(H2ctConn *tc, uint32_t id, Http2ErrCode code) {
     return !h2ct_failed(tc, "writing RST_STREAM",
                         burrow__http2_framer_write_rst_stream(tc->fr, id, code));
+}
+
+static bool h2ct_write_window_update(H2ctConn *tc, uint32_t id, uint32_t incr) {
+    return !h2ct_failed(tc, "writing WINDOW_UPDATE",
+                        burrow__http2_framer_write_window_update(tc->fr, id, incr));
 }
 
 /* makeHeaderBlockFragment: kv holds n names and values. The block is good
@@ -2203,6 +2271,77 @@ static void TestTransportClosesConnAfterGoAwayLastStream(TestingT *t) {
     h2ct_run(t, h2ct_closes_conn_after_go_away, &last_stream);
 }
 
+/* testTransportSettingsFlowControlUpdate: a SETTINGS frame that raises the
+ * initial window takes a stream with extra flow control to the limit, or one
+ * past it. */
+static void h2ct_settings_flow_control_update(H2ctTT *tt, const void *arg) {
+    bool beyond = *(const bool *)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_tc_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+
+    /* Give this stream some additional flow control. */
+    enum { WINDOW_INCREASE = 1000 };
+    H2CT_TRY(h2ct_write_window_update(tc, id, WINDOW_INCREASE));
+    H2CT_TRY(h2ct_want_idle(tc));
+
+    /* Adjust the initial flow control window. Within the limit, the stream is
+     * just at it. Beyond it, the stream is now over it. */
+    const uint32_t max_window_size = 0x7fffffffU; /* RFC 9113, 6.9.1 */
+    const uint32_t max_initial_window_size = max_window_size - WINDOW_INCREASE;
+    Http2Setting s[1];
+    s[0].id = HTTP2_SETTING_INITIAL_WINDOW_SIZE;
+    s[0].val = beyond ? max_initial_window_size + 1 : max_initial_window_size;
+    H2CT_TRY(h2ct_write_settings(tc, s, 1));
+    if (beyond) {
+        H2CT_TRY(h2ct_want_go_away(tc, 0, HTTP2_ERR_CODE_FLOW_CONTROL));
+        return;
+    }
+    H2CT_TRY(h2ct_want_settings_ack(tc));
+    H2CT_TRY(h2ct_want_idle(tc));
+}
+
+static void TestTransportSettingsFlowControlUpdateBeyondLimit(TestingT *t) {
+    static const bool beyond = true;
+    h2ct_run(t, h2ct_settings_flow_control_update, &beyond);
+}
+
+static void TestTransportSettingsFlowControlUpdateWithinLimit(TestingT *t) {
+    static const bool beyond = false;
+    h2ct_run(t, h2ct_settings_flow_control_update, &beyond);
+}
+
+static void h2ct_window_update_beyond_limit(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    /* Will cause window to exceed limit of 2^31-1. */
+    const uint32_t window_increase = 0x7fffffffU;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_tc_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt != NULL);
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    H2CT_TRY(h2ct_want_headers(tc, id, true, NULL, 0));
+
+    H2CT_TRY(h2ct_write_window_update(tc, id, window_increase));
+    H2CT_TRY(h2ct_want_rst_stream(tc, id, HTTP2_ERR_CODE_FLOW_CONTROL));
+
+    H2CT_TRY(h2ct_write_window_update(tc, 0, window_increase));
+    H2CT_TRY(h2ct_want_closed(tc));
+}
+
+static void TestTransportWindowUpdateBeyondLimit(TestingT *t) {
+    h2ct_run(t, h2ct_window_update_beyond_limit, NULL);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -2269,6 +2408,9 @@ static void TestTransportClosesConnAfterGoAwayLastStream(TestingT *t) {
     X(TestTransportChecksResponseHeaderListSize_trailers)                              \
     X(TestTransportStreamEndsWhileBodyIsBeingWritten)                                  \
     X(TestTransportClosesConnAfterGoAwayNoStreams)                                     \
-    X(TestTransportClosesConnAfterGoAwayLastStream)
+    X(TestTransportClosesConnAfterGoAwayLastStream)                                    \
+    X(TestTransportSettingsFlowControlUpdateBeyondLimit)                               \
+    X(TestTransportSettingsFlowControlUpdateWithinLimit)                               \
+    X(TestTransportWindowUpdateBeyondLimit)
 
 TESTING_MAIN(TESTS)

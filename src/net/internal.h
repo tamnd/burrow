@@ -421,6 +421,16 @@ BURROW_OWNS(ret) NetUnixConn *
 burrow__net_sys_listen_unixgram(Alloc *a, const burrow__NetSysOpts *o, Str network,
                                 const NetUnixAddr *laddr, Error *err);
 
+/* dialIP and listenIP, for an "ip", "ip4" or "ip6" network with its
+ * protocol. The errors are not wrapped. */
+BURROW_OWNS(ret) NetIPConn *burrow__net_sys_dial_ip(Alloc *a,
+                                                    const burrow__NetSysOpts *o,
+                                                    Str network, const NetIPAddr *laddr,
+                                                    const NetIPAddr *raddr, Error *err);
+BURROW_OWNS(ret) NetIPConn *
+burrow__net_sys_listen_ip(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                          const NetIPAddr *laddr, Error *err);
+
 /* ------------------------------------------------------------------ parse.go
  *
  * Go's file from parse.go: a file read a line at a time through a buffer of

@@ -841,14 +841,14 @@ static NetConn dl_dial_parallel(DlSys *sd, Alloc *a, Context ctx, DlList primari
     return c;
 }
 
-/* Not const: MSVC wants const objects to have an initializer. */
-static NetDialer dl_zero_dialer;
-
 NetConn net_dialer_dial_context(const NetDialer *d, Alloc *a, Context ctx, Str network,
                                 Str address, Error *err) {
     NetConn none = {NULL, NULL};
-    if (d == NULL)
-        d = &dl_zero_dialer;
+    NetDialer zero;
+    if (d == NULL) {
+        memset(&zero, 0, sizeof zero);
+        d = &zero;
+    }
     DlCtx dc;
     if (!dl_ctx_begin(d, ctx, &dc)) {
         dl_ctx_end(&dc);
@@ -909,8 +909,11 @@ NetConn net_dial_timeout(Alloc *a, Str network, Str address, Duration timeout,
  * that the errors can name them. */
 NetTCPConn *net_dialer_dial_tcp(const NetDialer *d, Alloc *a, Context ctx, Str network,
                                 NetipAddrPort laddr, NetipAddrPort raddr, Error *err) {
-    if (d == NULL)
-        d = &dl_zero_dialer;
+    NetDialer zero;
+    if (d == NULL) {
+        memset(&zero, 0, sizeof zero);
+        d = &zero;
+    }
     DlCtx dc;
     ArenaMark m = error_mark();
     NetTCPAddr *la = net_tcp_addr_from_addr_port(error_allocator(), laddr);
@@ -933,8 +936,11 @@ NetTCPConn *net_dialer_dial_tcp(const NetDialer *d, Alloc *a, Context ctx, Str n
 
 NetUDPConn *net_dialer_dial_udp(const NetDialer *d, Alloc *a, Context ctx, Str network,
                                 NetipAddrPort laddr, NetipAddrPort raddr, Error *err) {
-    if (d == NULL)
-        d = &dl_zero_dialer;
+    NetDialer zero;
+    if (d == NULL) {
+        memset(&zero, 0, sizeof zero);
+        d = &zero;
+    }
     DlCtx dc;
     ArenaMark m = error_mark();
     NetUDPAddr *la = net_udp_addr_from_addr_port(error_allocator(), laddr);
@@ -958,8 +964,11 @@ NetUDPConn *net_dialer_dial_udp(const NetDialer *d, Alloc *a, Context ctx, Str n
 NetUnixConn *net_dialer_dial_unix(const NetDialer *d, Alloc *a, Context ctx,
                                   Str network, const NetUnixAddr *laddr,
                                   const NetUnixAddr *raddr, Error *err) {
-    if (d == NULL)
-        d = &dl_zero_dialer;
+    NetDialer zero;
+    if (d == NULL) {
+        memset(&zero, 0, sizeof zero);
+        d = &zero;
+    }
     DlCtx dc;
     if (!dl_ctx_begin(d, ctx, &dc)) {
         dl_ctx_end(&dc);
@@ -981,14 +990,14 @@ static Error dl_listen_control(void *env, Context ctx, Str network, Str address,
     return BURROW_CALLF(lc->control, network, address, c);
 }
 
-/* Not const, for the same reason as dl_zero_dialer. */
-static NetListenConfig dl_zero_listen_config;
-
 NetListener net_listen_config_listen(const NetListenConfig *lc, Alloc *a, Context ctx,
                                      Str network, Str address, Error *err) {
     NetListener none = {NULL, NULL};
-    if (lc == NULL)
-        lc = &dl_zero_listen_config;
+    NetListenConfig zero;
+    if (lc == NULL) {
+        memset(&zero, 0, sizeof zero);
+        lc = &zero;
+    }
     ArenaMark m = error_mark();
     DlList addrs = {NULL, 0};
     Error e = dl_resolve_addr_list(NULL, error_allocator(), ctx, DL_LIT("listen"),

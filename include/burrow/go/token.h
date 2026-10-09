@@ -160,7 +160,9 @@ enum {
     TOKEN_SELECT = 81,
     TOKEN_STRUCT = 82,
     TOKEN_SWITCH = 83,
-    TOKEN_TYPE = 84,
+    /* Go's TYPE, with the underscore because <windows.h> has a TOKEN_TYPE of
+     * its own. */
+    TOKEN_TYPE_ = 84,
     TOKEN_VAR = 85,
     BURROW__TOKEN_KEYWORD_END = 86,
 

@@ -650,16 +650,21 @@ static void h2ct_body_close_with_error(H2ctBody *b, Error err) {
 
 /* -------------------------------------------------------------- round trips */
 
-static HttpRequest *h2ct_new_request(H2ctTT *tt, Context ctx, Str method,
-                                     IoReader body) {
+static HttpRequest *h2ct_new_request_url(H2ctTT *tt, Context ctx, Str method, Str url,
+                                         IoReader body) {
     Error err = BURROW_NO_ERROR;
     if (ctx.vt == NULL)
         ctx = context_background();
-    HttpRequest *req = http_new_request_with_context(
-        tt->a, ctx, method, BURROW_S("http://dummy.tld/"), body, &err);
+    HttpRequest *req =
+        http_new_request_with_context(tt->a, ctx, method, url, body, &err);
     if (req == NULL)
         testing_t_errorf_v(tt->t, "NewRequest: %v", err);
     return req;
+}
+
+static HttpRequest *h2ct_new_request(H2ctTT *tt, Context ctx, Str method,
+                                     IoReader body) {
+    return h2ct_new_request_url(tt, ctx, method, BURROW_S("http://dummy.tld/"), body);
 }
 
 static void h2ct_rt_job(void *env) {
@@ -2707,6 +2712,122 @@ static void TestTransportTLSNextProtoConnImmediateFailureUnused(TestingT *t) {
     h2ct_run(t, h2ct_tls_next_proto_conn_immediate_failure_unused, NULL);
 }
 
+/* Go cancels one request with its Cancel channel, which an HttpRequest
+ * doesn't have, so this cancels the request's context instead. */
+static void h2ct_requests_stall_at_server_limit(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    enum { MAX_CONCURRENT = 2 };
+
+    static const HttpHTTP2Config h2 = {.strict_max_concurrent_requests = true};
+    tt->tr1.http2 = &h2;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    static const Http2Setting s[] = {
+        {HTTP2_SETTING_MAX_CONCURRENT_STREAMS, MAX_CONCURRENT}};
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, s, 1));
+
+    /* Start maxConcurrent+2 requests. The server does not respond to any of
+     * them yet. */
+    H2ctRT *rts[MAX_CONCURRENT + 2];
+    for (int k = 0; k < MAX_CONCURRENT + 2; k++) {
+        Str url = fmt_sprintf_v(arena_allocator(&tt->ar), "http://dummy.tld/%d", k);
+        H2ctRT *rt = h2ct_tc_round_trip(
+            tt,
+            h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"), url, h2ct_no_body));
+        H2CT_TRY(rt != NULL);
+        rts[k] = rt;
+
+        if (k < MAX_CONCURRENT) {
+            /* We are under the stream limit, so the client sends the
+             * request. */
+            uint32_t id = h2ct_rt_stream_id(rt);
+            H2CT_TRY(id != 0);
+            Str want[] = {S_(":authority"), S_("dummy.tld"), S_(":method"),
+                          S_("GET"),        S_(":path"),     {NULL, 0}};
+            want[5] = str_from_bytes(url.p + 16, url.len - 16);
+            H2CT_TRY(h2ct_want_headers(tc, id, true, want, 6));
+        } else {
+            /* We have reached the stream limit, so the client cannot send the
+             * request. */
+            if (!h2ct_want_idle(tc))
+                FATALF("after making new request while at stream limit, got "
+                       "unexpected frame");
+        }
+
+        if (h2ct_rt_done(rt))
+            FATALF("rt %d done", k);
+    }
+
+    /* Cancel the maxConcurrent'th request. The request should fail. */
+    BURROW_CALLF0(rts[MAX_CONCURRENT]->cancel);
+    if (BURROW_OK(h2ct_rt_err(rts[MAX_CONCURRENT])))
+        FATALF("RoundTrip(%d) should have failed due to cancel, did not",
+               MAX_CONCURRENT);
+
+    /* No requests should be complete, except for the canceled one. */
+    for (int i = 0; i < MAX_CONCURRENT + 2; i++) {
+        if (i != MAX_CONCURRENT && h2ct_rt_done(rts[i]))
+            FATALF("RoundTrip(%d) is done, but should not be", i);
+    }
+
+    /* Server responds to a request, unblocking the last one. */
+    uint32_t id0 = h2ct_rt_stream_id(rts[0]);
+    H2CT_TRY(id0 != 0);
+    H2CT_TRY(h2ct_write_status(tc, id0, "200"));
+    uint32_t id = h2ct_rt_stream_id(rts[MAX_CONCURRENT + 1]);
+    H2CT_TRY(id != 0);
+    static const Str want[] = {S_(":authority"), S_("dummy.tld"), S_(":method"),
+                               S_("GET"),        S_(":path"),     S_("/3")};
+    H2CT_TRY(h2ct_want_headers(tc, id, true, want, 6));
+    H2CT_TRY(h2ct_rt_want_status(rts[0], 200));
+}
+
+static void TestTransportRequestsStallAtServerLimit(TestingT *t) {
+    h2ct_run(t, h2ct_requests_stall_at_server_limit, NULL);
+}
+
+typedef struct H2ctFrameSize {
+    Int max_read_frame_size;
+    uint32_t want;
+} H2ctFrameSize;
+
+static void h2ct_max_frame_read_size(H2ctTT *tt, const void *arg) {
+    const H2ctFrameSize *test = (const H2ctFrameSize *)arg;
+    HttpHTTP2Config *h2 = (HttpHTTP2Config *)mem_alloc(
+        arena_allocator(&tt->ar), sizeof *h2, _Alignof(HttpHTTP2Config));
+    H2CT_TRY(h2 != NULL);
+    memset(h2, 0, sizeof *h2);
+    h2->max_read_frame_size = test->max_read_frame_size;
+    tt->tr1.http2 = h2;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL);
+
+    Http2Frame *fr = h2ct_read_type(tc, HTTP2_FRAME_SETTINGS);
+    H2CT_TRY(fr != NULL);
+    uint32_t got = 0;
+    if (!burrow__http2_settings_frame_value(fr, HTTP2_SETTING_MAX_FRAME_SIZE, &got))
+        testing_t_errorf_v(tt->t,
+                           "Transport.MaxReadFrameSize = %d; server got no setting, "
+                           "want %d",
+                           test->max_read_frame_size, (int64_t)test->want);
+    else if (got != test->want)
+        testing_t_errorf_v(
+            tt->t, "Transport.MaxReadFrameSize = %d; server got %d, want %d",
+            test->max_read_frame_size, (int64_t)got, (int64_t)test->want);
+    burrow__http2_frame_free(fr);
+}
+
+static void TestTransportMaxFrameReadSize_64000(TestingT *t) {
+    static const H2ctFrameSize test = {64000, 64000};
+    h2ct_run(t, h2ct_max_frame_read_size, &test);
+}
+
+/* Setting net/http.Transport.HTTP2Config.MaxReadFrameSize to an out of range
+ * value reverts to the default, Go's DefaultMaxReadFrameSize. */
+static void TestTransportMaxFrameReadSize_1024(TestingT *t) {
+    static const H2ctFrameSize test = {1024, 1U << 20};
+    h2ct_run(t, h2ct_max_frame_read_size, &test);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -2784,6 +2905,9 @@ static void TestTransportTLSNextProtoConnImmediateFailureUnused(TestingT *t) {
     X(TestTransportUnusedConnOK)                                                       \
     X(TestTransportUnusedConnImmediateFailureUsed)                                     \
     X(TestTransportUnusedConnIdleTimoutBeforeUse)                                      \
-    X(TestTransportTLSNextProtoConnImmediateFailureUnused)
+    X(TestTransportTLSNextProtoConnImmediateFailureUnused)                             \
+    X(TestTransportRequestsStallAtServerLimit)                                         \
+    X(TestTransportMaxFrameReadSize_64000)                                             \
+    X(TestTransportMaxFrameReadSize_1024)
 
 TESTING_MAIN(TESTS)

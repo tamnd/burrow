@@ -2,7 +2,9 @@
  *
  * This part has the key formats: PKCS #1 and SEC 1 private keys, PKCS #8 for
  * any of them, PKIX public keys, the old encrypted PEM blocks of RFC 1423, and
- * OIDs. Reading a key the way most programs meet one:
+ * OIDs. It also parses certificates, certificate requests and revocation
+ * lists, and checks the signatures on them. Reading a key the way most
+ * programs meet one:
  *
  *     PemBlock *b = pem_decode(a, pem, &rest);
  *     Any key = x509_parse_pkcs8_private_key(a, b->bytes, &err);
@@ -35,13 +37,19 @@
 #include "burrow/crypto.h"
 #include "burrow/crypto/ecdsa.h"
 #include "burrow/crypto/rsa.h"
+#include "burrow/crypto/x509/pkix.h"
+#include "burrow/declare.h"
 #include "burrow/encoding/asn1.h"
 #include "burrow/encoding/pem.h"
 #include "burrow/error.h"
 #include "burrow/iface.h"
 #include "burrow/io.h"
+#include "burrow/math/big.h"
 #include "burrow/mem.h"
+#include "burrow/net.h"
+#include "burrow/net/url.h"
 #include "burrow/slice.h"
+#include "burrow/time.h"
 #include "burrow/type.h"
 
 #include <stdbool.h>
@@ -266,6 +274,320 @@ BURROW_OWNS(ret) Any x509_parse_pkix_public_key(Alloc *a, Slice der, Error *err)
  * any of the types above but DSA, and an EcdhPublicKey on any of its four
  * curves. */
 BURROW_OWNS(ret) Slice x509_marshal_pkix_public_key(Alloc *a, Any pub, Error *err);
+
+/* ----------------------------------------------------------- certificates */
+
+/* PolicyMapping: one entry of a policyMappings extension, a policy of the
+ * issuer and the policy of the subject it counts as. */
+typedef struct X509PolicyMapping {
+    X509OID issuer_domain_policy;
+    X509OID subject_domain_policy;
+} X509PolicyMapping;
+
+extern const Type burrow_type_X509PolicyMapping;
+#define TYPE_X509_POLICY_MAPPING TYPE_OF(X509PolicyMapping)
+
+/* The element types of the slices of *url.URL and *net.IPNet in a
+ * certificate. */
+BURROW_PTR_TYPE_DECL(X509URLPtr, Url);
+BURROW_PTR_TYPE_DECL(X509IPNetPtr, NetIPNet);
+#define TYPE_X509_URL_PTR TYPE_OF(X509URLPtr)
+#define TYPE_X509_IP_NET_PTR TYPE_OF(X509IPNetPtr)
+
+/* Certificate: an X.509 v1, v2 or v3 certificate, field for field the same as
+ * Go's. The raw fields point into the DER it was parsed from, so keep that
+ * around for as long as the certificate.
+ *
+ * The slices hold, in order: extensions and extra_extensions PkixExtension;
+ * unhandled_critical_extensions, unknown_ext_key_usage and policy_identifiers
+ * Asn1ObjectIdentifier; ext_key_usage X509ExtKeyUsage; ip_addresses NetIP;
+ * uris Url pointers; permitted_ip_ranges and excluded_ip_ranges NetIPNet
+ * pointers; policies X509OID; policy_mappings X509PolicyMapping; and the rest,
+ * which are names, Str.
+ *
+ * public_key holds what x509_parse_pkix_public_key would give, and is empty
+ * when public_key_algorithm is X509_UNKNOWN_PUBLIC_KEY_ALGORITHM.
+ *
+ * max_path_len, inhibit_any_policy, inhibit_policy_mapping and
+ * require_explicit_policy are -1 or 0 when they are not set, and their _zero
+ * fields tell a real zero from an absent one, as in Go. */
+typedef struct X509Certificate {
+    Slice raw;                         /* the whole certificate */
+    Slice raw_tbs_certificate;         /* the part that is signed */
+    Slice raw_subject_public_key_info; /* the SubjectPublicKeyInfo */
+    Slice raw_subject;                 /* the subject's DER */
+    Slice raw_issuer;                  /* the issuer's DER */
+    Slice raw_signature_algorithm;     /* the AlgorithmIdentifier */
+
+    Slice signature;
+    X509SignatureAlgorithm signature_algorithm;
+
+    X509PublicKeyAlgorithm public_key_algorithm;
+    Any public_key;
+
+    Int version;
+    BigInt *serial_number;
+    PkixName issuer;
+    PkixName subject;
+    Time not_before, not_after;
+    X509KeyUsage key_usage;
+
+    Slice extensions;
+    Slice extra_extensions;
+    Slice unhandled_critical_extensions;
+
+    Slice ext_key_usage;
+    Slice unknown_ext_key_usage;
+
+    bool basic_constraints_valid;
+    bool is_ca;
+    Int max_path_len;
+    bool max_path_len_zero;
+
+    Slice subject_key_id;
+    Slice authority_key_id;
+
+    Slice ocsp_server;
+    Slice issuing_certificate_url;
+
+    Slice dns_names;
+    Slice email_addresses;
+    Slice ip_addresses;
+    Slice uris;
+
+    bool permitted_dns_domains_critical;
+    Slice permitted_dns_domains;
+    Slice excluded_dns_domains;
+    Slice permitted_ip_ranges;
+    Slice excluded_ip_ranges;
+    Slice permitted_email_addresses;
+    Slice excluded_email_addresses;
+    Slice permitted_uri_domains;
+    Slice excluded_uri_domains;
+
+    Slice crl_distribution_points;
+
+    Slice policy_identifiers;
+    Slice policies;
+
+    Int inhibit_any_policy;
+    bool inhibit_any_policy_zero;
+    Int inhibit_policy_mapping;
+    bool inhibit_policy_mapping_zero;
+    Int require_explicit_policy;
+    bool require_explicit_policy_zero;
+
+    Slice policy_mappings;
+} X509Certificate;
+
+extern const Type burrow_type_X509Certificate;
+#define TYPE_X509_CERTIFICATE TYPE_OF(X509Certificate)
+
+BURROW_PTR_TYPE_DECL(X509CertificatePtr, X509Certificate);
+#define TYPE_X509_CERTIFICATE_PTR TYPE_OF(X509CertificatePtr)
+
+/* ParseCertificate: the certificate in der, from a. Anything after it is
+ * "x509: trailing data". A negative serial number is an error unless GODEBUG
+ * has x509negativeserial=1. */
+BURROW_OWNS(ret) X509Certificate *x509_parse_certificate(Alloc *a, Slice der,
+                                                         Error *err);
+
+/* ParseCertificates: the certificates in der, one after another with nothing
+ * between them, as a slice of X509Certificate pointers from a. */
+BURROW_OWNS(ret) Slice x509_parse_certificates(Alloc *a, Slice der, Error *err);
+
+/* Certificate.Equal: whether c and other have the same raw bytes. Two NULLs
+ * are equal and a NULL is not equal to anything else. */
+bool x509_certificate_equal(const X509Certificate *c, const X509Certificate *other);
+
+/* Certificate.CheckSignatureFrom: no error when the signature on c is a valid
+ * one from parent. Only the basic constraints and key usage of parent are
+ * looked at, and parent has to be allowed to sign certificates.
+ * x509_constraint_violation_error when it is not. SHA-1 signatures are not
+ * accepted. */
+BURROW_STATIC(ret) Error x509_certificate_check_signature_from(
+    const X509Certificate *c, const X509Certificate *parent);
+
+/* Certificate.CheckSignature: no error when signature is a valid signature of
+ * signed by c's public key with algo. MD5 is an X509InsecureAlgorithmError and
+ * SHA-1 is accepted. */
+BURROW_STATIC(ret) Error x509_certificate_check_signature(const X509Certificate *c,
+                                                          X509SignatureAlgorithm algo,
+                                                          Slice signed_data,
+                                                          Slice signature);
+
+/* Certificate.CheckCRLSignature: no error when crl is signed by c. Deprecated
+ * in Go in favour of x509_revocation_list_check_signature_from. */
+BURROW_STATIC(ret) Error x509_certificate_check_crl_signature(
+    const X509Certificate *c, const PkixCertificateList *crl);
+
+/* ------------------------------------------------------------------ errors */
+
+/* ErrUnsupportedAlgorithm: the signature uses an algorithm this cannot check,
+ * "x509: cannot verify signature: algorithm unimplemented". */
+extern const Error x509_err_unsupported_algorithm;
+
+/* InsecureAlgorithmError: a signature with an algorithm that is not safe to
+ * trust, such as MD5. errors_as with TYPE_X509_INSECURE_ALGORITHM_ERROR gives a
+ * pointer to the algorithm. */
+typedef X509SignatureAlgorithm X509InsecureAlgorithmError;
+
+extern const Type *const TYPE_X509_INSECURE_ALGORITHM_ERROR;
+
+/* InsecureAlgorithmError.Error: "x509: cannot verify signature: insecure
+ * algorithm SHA1-RSA" and so on, from a. */
+BURROW_OWNS(ret) Str x509_insecure_algorithm_error_error(X509InsecureAlgorithmError e,
+                                                         Alloc *a);
+
+/* e as an Error, from a. */
+BURROW_OWNS(ret) Error
+x509_insecure_algorithm_error_as_error(X509InsecureAlgorithmError e, Alloc *a);
+
+/* ConstraintViolationError: the parent of a certificate or list is not allowed
+ * to sign it. Go's is an empty struct, and C's cannot be, so the byte in it
+ * means nothing. x509_constraint_violation_error is the value as an Error, and
+ * errors_as finds it with TYPE_X509_CONSTRAINT_VIOLATION_ERROR. */
+typedef struct X509ConstraintViolationError {
+    Byte unused_;
+} X509ConstraintViolationError;
+
+extern const Type *const TYPE_X509_CONSTRAINT_VIOLATION_ERROR;
+extern const Error x509_constraint_violation_error;
+
+/* ConstraintViolationError.Error: "x509: invalid signature: parent certificate
+ * cannot sign this kind of certificate". */
+BURROW_STATIC(ret) Str
+x509_constraint_violation_error_error(X509ConstraintViolationError e);
+
+/* UnhandledCriticalExtension: a certificate has a critical extension that
+ * this does not understand. The same arrangement as the one above. */
+typedef struct X509UnhandledCriticalExtension {
+    Byte unused_;
+} X509UnhandledCriticalExtension;
+
+extern const Type *const TYPE_X509_UNHANDLED_CRITICAL_EXTENSION;
+extern const Error x509_unhandled_critical_extension;
+
+/* UnhandledCriticalExtension.Error: "x509: unhandled critical extension". */
+BURROW_STATIC(ret) Str
+x509_unhandled_critical_extension_error(X509UnhandledCriticalExtension e);
+
+/* ------------------------------------------------------- certificate requests */
+
+/* CertificateRequest: a PKCS #10 certificate signing request. The raw fields
+ * point into the DER it was parsed from. attributes is a slice of
+ * PkixAttributeTypeAndValueSET and deprecated in Go; extensions and
+ * extra_extensions are PkixExtension, and the names are as in a
+ * certificate. */
+typedef struct X509CertificateRequest {
+    Slice raw;                         /* the whole request */
+    Slice raw_tbs_certificate_request; /* the part that is signed */
+    Slice raw_subject_public_key_info; /* the SubjectPublicKeyInfo */
+    Slice raw_subject;                 /* the subject's DER */
+    Slice raw_signature_algorithm;     /* the AlgorithmIdentifier */
+
+    Int version;
+    Slice signature;
+    X509SignatureAlgorithm signature_algorithm;
+
+    X509PublicKeyAlgorithm public_key_algorithm;
+    Any public_key;
+
+    PkixName subject;
+
+    Slice attributes;
+
+    Slice extensions;
+    Slice extra_extensions;
+
+    Slice dns_names;
+    Slice email_addresses;
+    Slice ip_addresses;
+    Slice uris;
+} X509CertificateRequest;
+
+extern const Type burrow_type_X509CertificateRequest;
+#define TYPE_X509_CERTIFICATE_REQUEST TYPE_OF(X509CertificateRequest)
+
+/* ParseCertificateRequest: the request in der, from a. */
+BURROW_OWNS(ret) X509CertificateRequest *
+x509_parse_certificate_request(Alloc *a, Slice der, Error *err);
+
+/* CertificateRequest.CheckSignature: no error when the signature on c is
+ * valid. */
+BURROW_STATIC(ret) Error
+x509_certificate_request_check_signature(const X509CertificateRequest *c);
+
+/* ------------------------------------------------------- revocation lists */
+
+/* RevocationListEntry: one entry of the revokedCertificates of a CRL. raw
+ * points into the DER the list was parsed from, and extensions and
+ * extra_extensions are slices of PkixExtension. reason_code is the reasonCode
+ * extension of RFC 5280 section 5.3.1, and zero both when it is absent and
+ * when it says unspecified. */
+typedef struct X509RevocationListEntry {
+    Slice raw;
+    BigInt *serial_number;
+    Time revocation_time;
+    Int reason_code;
+    Slice extensions;
+    Slice extra_extensions;
+} X509RevocationListEntry;
+
+extern const Type burrow_type_X509RevocationListEntry;
+#define TYPE_X509_REVOCATION_LIST_ENTRY TYPE_OF(X509RevocationListEntry)
+
+/* RevocationList: a certificate revocation list of RFC 5280. The raw fields
+ * point into the DER it was parsed from. revoked_certificate_entries is a
+ * slice of X509RevocationListEntry, revoked_certificates the same entries as
+ * PkixRevokedCertificate, which Go has deprecated, and extensions and
+ * extra_extensions slices of PkixExtension. */
+typedef struct X509RevocationList {
+    Slice raw;                     /* the whole list */
+    Slice raw_tbs_revocation_list; /* the part that is signed */
+    Slice raw_issuer;              /* the issuer's DER */
+    Slice raw_signature_algorithm; /* the AlgorithmIdentifier */
+
+    PkixName issuer;
+    Slice authority_key_id;
+
+    Slice signature;
+    X509SignatureAlgorithm signature_algorithm;
+
+    Slice revoked_certificate_entries;
+    Slice revoked_certificates;
+
+    BigInt *number;
+
+    Time this_update;
+    Time next_update;
+
+    Slice extensions;
+    Slice extra_extensions;
+} X509RevocationList;
+
+extern const Type burrow_type_X509RevocationList;
+#define TYPE_X509_REVOCATION_LIST TYPE_OF(X509RevocationList)
+
+/* ParseRevocationList: the X.509 v2 CRL in der, from a. Anything after the
+ * list is ignored, as in Go. */
+BURROW_OWNS(ret) X509RevocationList *x509_parse_revocation_list(Alloc *a, Slice der,
+                                                                Error *err);
+
+/* RevocationList.CheckSignatureFrom: no error when rl is signed by parent,
+ * which has to be allowed to sign CRLs. */
+BURROW_STATIC(ret) Error x509_revocation_list_check_signature_from(
+    const X509RevocationList *rl, const X509Certificate *parent);
+
+/* ParseCRL: the CRL in crl_bytes, which can be DER or a PEM block of type
+ * "X509 CRL" with nothing before it, from a. Deprecated in Go in favour of
+ * x509_parse_revocation_list. */
+BURROW_OWNS(ret) PkixCertificateList *x509_parse_crl(Alloc *a, Slice crl_bytes,
+                                                     Error *err);
+
+/* ParseDERCRL: the CRL in der, from a. Deprecated in Go, as above. */
+BURROW_OWNS(ret) PkixCertificateList *x509_parse_dercrl(Alloc *a, Slice der,
+                                                        Error *err);
 
 /* ------------------------------------------------------- encrypted PEM */
 

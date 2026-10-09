@@ -1,6 +1,7 @@
-/* crypto/x509: OIDs, the key formats and encrypted PEM blocks, from Go's
- * oid.go, pkcs1.go, sec1.go, pkcs8.go, pem_decrypt.go, x509_string.go and the
- * parts of x509.go and parser.go that read and write public keys.
+/* crypto/x509: OIDs, the key formats, parsing certificates, CSRs and CRLs,
+ * signature checks and encrypted PEM blocks, from Go's oid.go, pkcs1.go,
+ * sec1.go, pkcs8.go, parser.go, pem_decrypt.go, x509_string.go and the parts
+ * of x509.go that read keys and check signatures.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -32,16 +33,21 @@
 #include "burrow/encoding/pem.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
+#include "burrow/hash.h"
 #include "burrow/io.h"
 #include "burrow/map.h"
 #include "burrow/math/big.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
+#include "burrow/net.h"
+#include "burrow/net/url.h"
 #include "burrow/pal.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
 #include "burrow/strings.h"
+#include "burrow/time.h"
 #include "burrow/type.h"
+#include "burrow/utf8.h"
 
 #include "cryptobyte.h"
 #include "x509_internal.h"
@@ -89,7 +95,8 @@ static Int x509_bit_len64(uint64_t n) {
 
 enum {
     X509_DEBUG_KNOWN = 1 << 0,
-    X509_DEBUG_RSACRT_OFF = 1 << 1, /* x509rsacrt=0 */
+    X509_DEBUG_RSACRT_OFF = 1 << 1,      /* x509rsacrt=0 */
+    X509_DEBUG_NEGATIVE_SERIAL = 1 << 2, /* x509negativeserial=1 */
 };
 
 static uint32_t x509_debug_flags;
@@ -120,6 +127,8 @@ static uint32_t x509_debug_load(void) {
         if (strncmp(*env, "GODEBUG=", 8) == 0) {
             if (x509_godebug_is(*env + 8, "x509rsacrt", "0"))
                 f |= X509_DEBUG_RSACRT_OFF;
+            if (x509_godebug_is(*env + 8, "x509negativeserial", "1"))
+                f |= X509_DEBUG_NEGATIVE_SERIAL;
             break;
         }
     }
@@ -133,6 +142,8 @@ void burrow__x509_godebug_set(const char *value) {
         f = X509_DEBUG_KNOWN;
         if (x509_godebug_is(value, "x509rsacrt", "0"))
             f |= X509_DEBUG_RSACRT_OFF;
+        if (x509_godebug_is(value, "x509negativeserial", "1"))
+            f |= X509_DEBUG_NEGATIVE_SERIAL;
     }
     burrow__atomic_store_relaxed_u32(&x509_debug_flags, f);
 }
@@ -1745,6 +1756,2178 @@ Slice x509_marshal_pkix_public_key(Alloc *a, Any pub, Error *err) {
     /* Go drops this error too: the structure always marshals. */
     Error ignored = BURROW_NO_ERROR;
     return asn1_marshal(a, BURROW_ANY(TYPE_OF(X509PkixPublicKey), &pkix), &ignored);
+}
+
+/* ------------------------------------------------------------ certificates */
+
+X509_OID_ARCS(x509_oid_extension_subject_alt_name, 2, 5, 29, 17);
+X509_OID_ARCS(x509_oid_extension_crl_number, 2, 5, 29, 20);
+X509_OID_ARCS(x509_oid_extension_reason_code, 2, 5, 29, 21);
+X509_OID_ARCS(x509_oid_extension_authority_key_id, 2, 5, 29, 35);
+X509_OID_ARCS(x509_oid_extension_authority_info_access, 1, 3, 6, 1, 5, 5, 7, 1, 1);
+X509_OID_ARCS(x509_oid_authority_info_access_ocsp, 1, 3, 6, 1, 5, 5, 7, 48, 1);
+X509_OID_ARCS(x509_oid_authority_info_access_issuers, 1, 3, 6, 1, 5, 5, 7, 48, 2);
+X509_OID_ARCS(x509_oid_extension_request, 1, 2, 840, 113549, 1, 9, 14);
+X509_OID_ARCS(x509_oid_mgf1, 1, 2, 840, 113549, 1, 1, 8);
+X509_OID_ARCS(x509_oid_sha256, 2, 16, 840, 1, 101, 3, 4, 2, 1);
+X509_OID_ARCS(x509_oid_sha384, 2, 16, 840, 1, 101, 3, 4, 2, 2);
+X509_OID_ARCS(x509_oid_sha512, 2, 16, 840, 1, 101, 3, 4, 2, 3);
+
+/* The GeneralName tags of RFC 5280 section 4.2.1.6 the parser reads. */
+enum {
+    X509_NAME_TYPE_EMAIL = 1,
+    X509_NAME_TYPE_DNS = 2,
+    X509_NAME_TYPE_URI = 6,
+    X509_NAME_TYPE_IP = 7,
+};
+
+/* The ASN.1 string tags cryptobyte has no names for. */
+#define X509_TAG_NUMERIC_STRING ((CryptobyteAsn1Tag)18)
+#define X509_TAG_BMP_STRING ((CryptobyteAsn1Tag)30)
+
+#define X509_CTX(n) cryptobyte_asn1_tag_context_specific((CryptobyteAsn1Tag)(n))
+#define X509_CTX_CONS(n)                                                               \
+    cryptobyte_asn1_tag_context_specific(                                              \
+        cryptobyte_asn1_tag_constructed((CryptobyteAsn1Tag)(n)))
+
+/* A type whose descriptor says only its name, for the structs whose fields
+ * have no descriptors of their own. */
+#define X509_OPAQUE_TYPE(T, name)                                                      \
+    const Type burrow_type_##T = {                                                     \
+        {(const Byte *)(name), (Int)(sizeof(name) - 1)},                               \
+        {(const Byte *)"crypto/x509", 11},                                             \
+        KIND_STRUCT,                                                                   \
+        (uint32_t)sizeof(T),                                                           \
+        (uint16_t)_Alignof(T),                                                         \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+    }
+
+/* A pointer type whose typedef is in the header already. */
+#define X509_PTR_TYPE(Name, T)                                                         \
+    const Type burrow_type_##Name = {                                                  \
+        {NULL, 0},                                                                     \
+        {NULL, 0},                                                                     \
+        KIND_POINTER,                                                                  \
+        (uint32_t)sizeof(void *),                                                      \
+        (uint16_t)_Alignof(void *),                                                    \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        TYPE_OF(T),                                                                    \
+        NULL,                                                                          \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+    }
+
+X509_PTR_TYPE(X509URLPtr, Url);
+X509_PTR_TYPE(X509IPNetPtr, NetIPNet);
+
+#define X509_POLICY_MAPPING_FIELDS(F, T)                                               \
+    F(T, X509OID, issuer_domain_policy, IssuerDomainPolicy, "")                        \
+    F(T, X509OID, subject_domain_policy, SubjectDomainPolicy, "")
+BURROW_STRUCT_AS_DEFINE(X509PolicyMapping, X509_POLICY_MAPPING_FIELDS);
+
+BURROW_SLICE_TYPE(X509Extensions, PkixExtension);
+BURROW_SLICE_TYPE(X509RawValues, Asn1RawValue);
+
+#define X509_REVOCATION_LIST_ENTRY_FIELDS(F, T)                                        \
+    F(T, Bytes, raw, Raw, "")                                                          \
+    F(T, X509BigIntPtr, serial_number, SerialNumber, "")                               \
+    F(T, Time, revocation_time, RevocationTime, "")                                    \
+    F(T, Int, reason_code, ReasonCode, "")                                             \
+    F(T, X509Extensions, extensions, Extensions, "")                                   \
+    F(T, X509Extensions, extra_extensions, ExtraExtensions, "")
+BURROW_STRUCT_AS_DEFINE(X509RevocationListEntry, X509_REVOCATION_LIST_ENTRY_FIELDS);
+
+X509_OPAQUE_TYPE(X509Certificate, "Certificate");
+X509_OPAQUE_TYPE(X509CertificateRequest, "CertificateRequest");
+X509_OPAQUE_TYPE(X509RevocationList, "RevocationList");
+X509_PTR_TYPE(X509CertificatePtr, X509Certificate);
+
+/* pssParameters */
+#define X509_PSS_PARAMETERS_FIELDS(F, T)                                               \
+    F(T, PkixAlgorithmIdentifier, hash, Hash, "asn1:\"explicit,tag:0\"")               \
+    F(T, PkixAlgorithmIdentifier, mgf, MGF, "asn1:\"explicit,tag:1\"")                 \
+    F(T, Int, salt_length, SaltLength, "asn1:\"explicit,tag:2\"")                      \
+    F(T, Int, trailer_field, TrailerField, "asn1:\"optional,explicit,tag:3,default:1\"")
+BURROW_STRUCT_AS(X509PssParameters, X509_PSS_PARAMETERS_FIELDS);
+
+/* tbsCertificateRequest */
+#define X509_TBS_CSR_FIELDS(F, T)                                                      \
+    F(T, Asn1RawContent, raw, Raw, "")                                                 \
+    F(T, Int, version, Version, "")                                                    \
+    F(T, Asn1RawValue, subject, Subject, "")                                           \
+    F(T, X509PublicKeyInfo, public_key, PublicKey, "")                                 \
+    F(T, X509RawValues, raw_attributes, RawAttributes, "asn1:\"tag:0\"")
+BURROW_STRUCT_AS(X509TbsCsr, X509_TBS_CSR_FIELDS);
+
+/* The SignatureAlgorithm of certificateRequest. */
+#define X509_CSR_ALGORITHM_FIELDS(F, T)                                                \
+    F(T, Asn1RawContent, raw, Raw, "")                                                 \
+    F(T, Asn1ObjectIdentifier, algorithm, Algorithm, "")                               \
+    F(T, Asn1RawValue, parameters, Parameters, "asn1:\"optional\"")
+BURROW_STRUCT_AS(X509CsrAlgorithm, X509_CSR_ALGORITHM_FIELDS);
+
+/* certificateRequest */
+#define X509_CSR_FIELDS(F, T)                                                          \
+    F(T, Asn1RawContent, raw, Raw, "")                                                 \
+    F(T, X509TbsCsr, tbs_csr, TBSCSR, "")                                              \
+    F(T, X509CsrAlgorithm, signature_algorithm, SignatureAlgorithm, "")                \
+    F(T, Asn1BitString, signature_value, SignatureValue, "")
+BURROW_STRUCT_AS(X509Csr, X509_CSR_FIELDS);
+
+/* pkcs10Attribute */
+#define X509_PKCS10_ATTRIBUTE_FIELDS(F, T)                                             \
+    F(T, Asn1ObjectIdentifier, id, Id, "")                                             \
+    F(T, X509RawValues, values, Values, "asn1:\"set\"")
+BURROW_STRUCT_AS(X509Pkcs10Attribute, X509_PKCS10_ATTRIBUTE_FIELDS);
+
+static Error x509_err(const char *msg) {
+    return errors_new(error_allocator(), str_from_cstr(msg));
+}
+
+/* append(*s, *v) for a slice of t, which may still be the zero Slice. */
+static bool x509_push(Alloc *a, Slice *s, const Type *t, const void *v) {
+    if (s->elem == NULL)
+        *s = slice_nil(t);
+    Slice grown = slice_append(a, *s, v, 1);
+    if (grown.len != s->len + 1)
+        return false;
+    *s = grown;
+    return true;
+}
+
+static bool x509_push_str(Alloc *a, Slice *s, Slice b) {
+    Str v = str_from_bytes(b.p, b.len);
+    return x509_push(a, s, TYPE_STRING, &v);
+}
+
+/* *v copied into a and held in an Any of t. */
+static bool x509_box(Alloc *a, Any *out, const Type *t, const void *v, size_t size,
+                     size_t align) {
+    void *p = mem_alloc(a, size, align);
+    if (p == NULL)
+        return false;
+    memcpy(p, v, size);
+    *out = BURROW_ANY(t, p);
+    return true;
+}
+
+#define X509_BOX(a, out, T, t, v) x509_box((a), (out), (t), (v), sizeof(T), _Alignof(T))
+
+static Asn1ObjectIdentifier x509_details_oid(const X509SignatureAlgorithmDetails *d) {
+    return (Asn1ObjectIdentifier){(void *)(uintptr_t)d->oid, d->oid_len, d->oid_len,
+                                  TYPE_INT};
+}
+
+/* isIA5String, as a bool. Go ranges over the runes, and a byte that is not
+ * ASCII is either part of a rune past it or a RuneError, so any such byte
+ * fails. */
+static bool x509_is_ia5(Str s) {
+    for (Int i = 0; i < s.len; i++)
+        if (s.p[i] >= 0x80)
+            return false;
+    return true;
+}
+
+/* isPrintable, which lets '*' and '&' through as well, since certificates use
+ * them. */
+static bool x509_is_printable(Byte b) {
+    return ('a' <= b && b <= 'z') || ('A' <= b && b <= 'Z') || ('0' <= b && b <= '9') ||
+           ('\'' <= b && b <= ')') || ('+' <= b && b <= '/') || b == ' ' || b == ':' ||
+           b == '=' || b == '?' || b == '*' || b == '&';
+}
+
+/* The UTF-8 of r, which is below 0x10000, at p. The count. */
+static Int x509_put_bmp_rune(Byte *p, unsigned r) {
+    if (r < 0x80) {
+        p[0] = (Byte)r;
+        return 1;
+    }
+    if (r < 0x800) {
+        p[0] = (Byte)(0xc0U | (r >> 6));
+        p[1] = (Byte)(0x80U | (r & 0x3fU));
+        return 2;
+    }
+    p[0] = (Byte)(0xe0U | (r >> 12));
+    p[1] = (Byte)(0x80U | ((r >> 6) & 0x3fU));
+    p[2] = (Byte)(0x80U | (r & 0x3fU));
+    return 3;
+}
+
+/* parseASN1String */
+static Error x509_parse_asn1_string(Alloc *a, CryptobyteAsn1Tag tag, Slice value,
+                                    Str *out) {
+    const Byte *v = value.p;
+    Int n = value.len;
+    *out = BURROW_STR_EMPTY;
+    switch (tag) {
+    case CRYPTOBYTE_ASN1_T61_STRING: {
+        /* Taken as Latin-1, as most of the world does. */
+        if (n == 0)
+            return BURROW_NO_ERROR;
+        Byte *p = mem_alloc_nozero(a, (size_t)n * 2, 1);
+        if (p == NULL)
+            return burrow_err_out_of_memory;
+        Int l = 0;
+        for (Int i = 0; i < n; i++)
+            l += x509_put_bmp_rune(p + l, v[i]);
+        *out = str_from_bytes(p, l);
+        return BURROW_NO_ERROR;
+    }
+    case CRYPTOBYTE_ASN1_PRINTABLE_STRING:
+        for (Int i = 0; i < n; i++)
+            if (!x509_is_printable(v[i]))
+                return x509_err("invalid PrintableString");
+        *out = str_from_bytes(v, n);
+        return BURROW_NO_ERROR;
+    case CRYPTOBYTE_ASN1_UTF8_STRING:
+        if (!utf8_valid(value))
+            return x509_err("invalid UTF-8 string");
+        *out = str_from_bytes(v, n);
+        return BURROW_NO_ERROR;
+    case X509_TAG_BMP_STRING: {
+        /* UCS-2, read as UTF-16 without the surrogates. */
+        if (n % 2 != 0)
+            return x509_err("invalid BMPString");
+        if (n >= 2 && v[n - 1] == 0 && v[n - 2] == 0)
+            n -= 2;
+        if (n == 0)
+            return BURROW_NO_ERROR;
+        Byte *p = mem_alloc_nozero(a, (size_t)n / 2 * 3, 1);
+        if (p == NULL)
+            return burrow_err_out_of_memory;
+        Int l = 0;
+        for (Int i = 0; i < n; i += 2) {
+            unsigned point = (unsigned)v[i] << 8 | v[i + 1];
+            if (point == 0xfffeU || point == 0xffffU ||
+                (point >= 0xfdd0U && point <= 0xfdefU) ||
+                (point >= 0xd800U && point <= 0xdfffU))
+                return x509_err("invalid BMPString");
+            l += x509_put_bmp_rune(p + l, point);
+        }
+        *out = str_from_bytes(p, l);
+        return BURROW_NO_ERROR;
+    }
+    case CRYPTOBYTE_ASN1_IA5_STRING:
+        if (!x509_is_ia5(str_from_bytes(v, n)))
+            return x509_err("invalid IA5String");
+        *out = str_from_bytes(v, n);
+        return BURROW_NO_ERROR;
+    case X509_TAG_NUMERIC_STRING:
+        for (Int i = 0; i < n; i++)
+            if (!(('0' <= v[i] && v[i] <= '9') || v[i] == ' '))
+                return x509_err("invalid NumericString");
+        *out = str_from_bytes(v, n);
+        return BURROW_NO_ERROR;
+    default:
+        return fmt_errorf_v("unsupported string type: %v", (int)tag);
+    }
+}
+
+Error burrow__x509_parse_asn1_string(Alloc *a, uint8_t tag, Slice value, Str *out) {
+    return x509_parse_asn1_string(a, (CryptobyteAsn1Tag)tag, value, out);
+}
+
+/* readASN1Time */
+static Error x509_read_asn1_time(Alloc *a, CryptobyteString *der, Time *t) {
+    *t = (Time){0};
+    if (cryptobyte_string_peek_asn1_tag(*der, CRYPTOBYTE_ASN1_UTC_TIME)) {
+        if (!cryptobyte_string_read_asn1_utc_time(der, a, t))
+            return x509_err("x509: malformed UTCTime");
+    } else if (cryptobyte_string_peek_asn1_tag(*der,
+                                               CRYPTOBYTE_ASN1_GENERALIZED_TIME)) {
+        if (!cryptobyte_string_read_asn1_generalized_time(der, a, t))
+            return x509_err("x509: malformed GeneralizedTime");
+    } else {
+        return x509_err("x509: unsupported time format");
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* readASN1Any, for the types PkixAttributeTypeAndValue lists. */
+static Error x509_read_asn1_any(Alloc *a, CryptobyteString *der, Any *out) {
+    *out = (Any){NULL, NULL};
+    CryptobyteString full;
+    CryptobyteAsn1Tag tag = 0;
+    if (!cryptobyte_string_read_any_asn1_element(der, &full, &tag))
+        return x509_err("invalid ASN.1 element");
+    bool ok = true;
+    switch (tag) {
+    case CRYPTOBYTE_ASN1_T61_STRING:
+    case CRYPTOBYTE_ASN1_PRINTABLE_STRING:
+    case CRYPTOBYTE_ASN1_UTF8_STRING:
+    case X509_TAG_BMP_STRING:
+    case CRYPTOBYTE_ASN1_IA5_STRING:
+    case X509_TAG_NUMERIC_STRING: {
+        CryptobyteString raw;
+        if (!cryptobyte_string_read_asn1(&full, &raw, tag))
+            return x509_err("invalid ASN.1 element");
+        Str s;
+        Error e = x509_parse_asn1_string(a, tag, raw, &s);
+        if (BURROW_FAILED(e))
+            return e;
+        ok = X509_BOX(a, out, Str, TYPE_STRING, &s);
+        break;
+    }
+    case CRYPTOBYTE_ASN1_INTEGER: {
+        int64_t i = 0;
+        if (!cryptobyte_string_read_asn1_integer_int64(&full, &i))
+            return x509_err("invalid ASN.1 integer");
+        ok = X509_BOX(a, out, int64_t, TYPE_INT64, &i);
+        break;
+    }
+    case CRYPTOBYTE_ASN1_BIT_STRING: {
+        Asn1BitString bs = {0};
+        if (!cryptobyte_string_read_asn1_bit_string(&full, &bs))
+            return x509_err("invalid ASN.1 BIT STRING");
+        ok = X509_BOX(a, out, Asn1BitString, TYPE_ASN1_BIT_STRING, &bs);
+        break;
+    }
+    case CRYPTOBYTE_ASN1_OCTET_STRING: {
+        CryptobyteString s;
+        if (!cryptobyte_string_read_asn1(&full, &s, CRYPTOBYTE_ASN1_OCTET_STRING))
+            return x509_err("invalid ASN.1 OCTET STRING");
+        ok = X509_BOX(a, out, Slice, TYPE_BYTES, &s);
+        break;
+    }
+    case CRYPTOBYTE_ASN1_OBJECT_IDENTIFIER: {
+        Asn1ObjectIdentifier oid = {0};
+        if (!cryptobyte_string_read_asn1_object_identifier(&full, a, &oid))
+            return x509_err("invalid ASN.1 OBJECT IDENTIFIER");
+        ok = X509_BOX(a, out, Asn1ObjectIdentifier, TYPE_ASN1_OBJECT_IDENTIFIER, &oid);
+        break;
+    }
+    case CRYPTOBYTE_ASN1_UTC_TIME:
+    case CRYPTOBYTE_ASN1_GENERALIZED_TIME: {
+        Time t;
+        Error e = x509_read_asn1_time(a, &full, &t);
+        if (BURROW_FAILED(e))
+            return e;
+        ok = X509_BOX(a, out, Time, TYPE_TIME, &t);
+        break;
+    }
+    case CRYPTOBYTE_ASN1_BOOLEAN: {
+        bool b = false;
+        if (!cryptobyte_string_read_asn1_boolean(&full, &b))
+            return x509_err("invalid ASN.1 BOOLEAN");
+        ok = X509_BOX(a, out, bool, TYPE_BOOL, &b);
+        break;
+    }
+    case CRYPTOBYTE_ASN1_NULL:
+        return BURROW_NO_ERROR;
+    default: {
+        Asn1RawValue rv;
+        memset(&rv, 0, sizeof rv);
+        rv.cls = (Int)(tag >> 6);
+        rv.is_compound = (tag & 0x20) == 0x20;
+        rv.tag = (Int)(tag & 0x1f);
+        rv.full_bytes = full;
+        if (!cryptobyte_string_read_any_asn1(&full, &rv.bytes, &tag))
+            return x509_err("invalid ASN.1 element");
+        ok = X509_BOX(a, out, Asn1RawValue, TYPE_ASN1_RAW_VALUE, &rv);
+        break;
+    }
+    }
+    return ok ? BURROW_NO_ERROR : burrow_err_out_of_memory;
+}
+
+/* parseName */
+static Error x509_parse_name(Alloc *a, CryptobyteString raw, PkixRDNSequence *out) {
+    *out = slice_nil(TYPE_PKIX_RELATIVE_DISTINGUISHED_NAME_SET);
+    if (!cryptobyte_string_read_asn1(&raw, &raw, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: invalid RDNSequence");
+    while (!cryptobyte_string_empty(raw)) {
+        PkixRelativeDistinguishedNameSET rdn =
+            slice_nil(TYPE_PKIX_ATTRIBUTE_TYPE_AND_VALUE);
+        CryptobyteString set;
+        if (!cryptobyte_string_read_asn1(&raw, &set, CRYPTOBYTE_ASN1_SET))
+            return x509_err("x509: invalid RDNSequence");
+        while (!cryptobyte_string_empty(set)) {
+            CryptobyteString atv;
+            if (!cryptobyte_string_read_asn1(&set, &atv, CRYPTOBYTE_ASN1_SEQUENCE))
+                return x509_err("x509: invalid RDNSequence: invalid attribute");
+            PkixAttributeTypeAndValue attr;
+            memset(&attr, 0, sizeof attr);
+            if (!cryptobyte_string_read_asn1_object_identifier(&atv, a, &attr.type))
+                return x509_err("x509: invalid RDNSequence: invalid attribute type");
+            Error e = x509_read_asn1_any(a, &atv, &attr.value);
+            if (BURROW_FAILED(e)) {
+                if (errors_is(e, burrow_err_out_of_memory))
+                    return e;
+                return fmt_errorf_v(
+                    "x509: invalid RDNSequence: invalid attribute value: %s",
+                    error_text(e));
+            }
+            if (!x509_push(a, &rdn, TYPE_PKIX_ATTRIBUTE_TYPE_AND_VALUE, &attr))
+                return burrow_err_out_of_memory;
+        }
+        if (!x509_push(a, out, TYPE_PKIX_RELATIVE_DISTINGUISHED_NAME_SET, &rdn))
+            return burrow_err_out_of_memory;
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* parseName and FillFromRDNSequence. */
+static Error x509_parse_name_into(Alloc *a, CryptobyteString raw, PkixName *name) {
+    PkixRDNSequence rdns;
+    Error e = x509_parse_name(a, raw, &rdns);
+    if (BURROW_FAILED(e))
+        return e;
+    if (!pkix_name_fill_from_rdn_sequence(name, a, &rdns))
+        return burrow_err_out_of_memory;
+    return BURROW_NO_ERROR;
+}
+
+/* parseAI */
+static Error x509_parse_ai(Alloc *a, CryptobyteString der,
+                           PkixAlgorithmIdentifier *ai) {
+    memset(ai, 0, sizeof *ai);
+    if (!cryptobyte_string_read_asn1_object_identifier(&der, a, &ai->algorithm))
+        return x509_err("x509: malformed OID");
+    if (cryptobyte_string_empty(der))
+        return BURROW_NO_ERROR;
+    CryptobyteString params;
+    CryptobyteAsn1Tag tag = 0;
+    if (!cryptobyte_string_read_any_asn1_element(&der, &params, &tag))
+        return x509_err("x509: malformed parameters");
+    ai->parameters.tag = (Int)tag;
+    ai->parameters.full_bytes = params;
+    return BURROW_NO_ERROR;
+}
+
+/* parseExtension */
+static Error x509_parse_extension(Alloc *a, CryptobyteString der, PkixExtension *ext) {
+    memset(ext, 0, sizeof *ext);
+    if (!cryptobyte_string_read_asn1_object_identifier(&der, a, &ext->id))
+        return x509_err("x509: malformed extension OID field");
+    if (cryptobyte_string_peek_asn1_tag(der, CRYPTOBYTE_ASN1_BOOLEAN)) {
+        if (!cryptobyte_string_read_asn1_boolean(&der, &ext->critical))
+            return x509_err("x509: malformed extension critical field");
+    }
+    CryptobyteString val;
+    if (!cryptobyte_string_read_asn1(&der, &val, CRYPTOBYTE_ASN1_OCTET_STRING))
+        return x509_err("x509: malformed extension value field");
+    ext->value = val;
+    return BURROW_NO_ERROR;
+}
+
+/* parseKeyUsageExtension */
+static Error x509_parse_key_usage(CryptobyteString der, X509KeyUsage *out) {
+    Asn1BitString bits = {0};
+    if (!cryptobyte_string_read_asn1_bit_string(&der, &bits))
+        return x509_err("x509: invalid key usage");
+    Int usage = 0;
+    for (Int i = 0; i < 9; i++)
+        if (asn1_bit_string_at(bits, i) != 0)
+            usage |= (Int)1 << i;
+    *out = usage;
+    return BURROW_NO_ERROR;
+}
+
+/* parseBasicConstraintsExtension */
+static Error x509_parse_basic_constraints(CryptobyteString der, bool *is_ca,
+                                          Int *max_path_len) {
+    *is_ca = false;
+    if (!cryptobyte_string_read_asn1(&der, &der, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: invalid basic constraints");
+    if (cryptobyte_string_peek_asn1_tag(der, CRYPTOBYTE_ASN1_BOOLEAN)) {
+        if (!cryptobyte_string_read_asn1_boolean(&der, is_ca))
+            return x509_err("x509: invalid basic constraints");
+    }
+    *max_path_len = -1;
+    if (cryptobyte_string_peek_asn1_tag(der, CRYPTOBYTE_ASN1_INTEGER)) {
+        uint64_t mpl = 0;
+        if (!cryptobyte_string_read_asn1_integer_uint64(&der, &mpl) ||
+            mpl > (uint64_t)BURROW_INT_MAX)
+            return x509_err("x509: invalid basic constraints");
+        *max_path_len = (Int)mpl;
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* forEachSAN: fn with the tag and contents of each GeneralName in der. */
+typedef Error (*X509SANFunc)(void *ctx, int tag, Slice data);
+
+static Error x509_for_each_san(CryptobyteString der, X509SANFunc fn, void *ctx) {
+    if (!cryptobyte_string_read_asn1(&der, &der, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: invalid subject alternative names");
+    while (!cryptobyte_string_empty(der)) {
+        CryptobyteString san;
+        CryptobyteAsn1Tag tag = 0;
+        if (!cryptobyte_string_read_any_asn1(&der, &san, &tag))
+            return x509_err("x509: invalid subject alternative name");
+        Error e = fn(ctx, (int)(tag ^ 0x80), san);
+        if (BURROW_FAILED(e))
+            return e;
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* The names a subjectAltName extension holds. */
+typedef struct X509SANs {
+    Alloc *a;
+    Slice dns_names, email_addresses, ip_addresses, uris;
+} X509SANs;
+
+/* domainNameValid, the checks domainToReverseLabels makes without the
+ * allocation. Go leaves out some RFC 1034 checks for now since turning them on
+ * broke certificates people use, and so does this. */
+static bool x509_domain_name_valid(Str s, bool constraint) {
+    if (s.len == 0)
+        return true;
+    /* No trailing period. */
+    if (s.p[s.len - 1] == '.')
+        return false;
+    Int last_dot = -1;
+    const Byte *p = s.p;
+    Int n = s.len;
+    if (constraint && p[0] == '.') {
+        p++;
+        n--;
+    }
+    for (Int i = 0; i <= n; i++) {
+        if (i < n && (p[i] < 33 || p[i] > 126))
+            return false;
+        if (i == n || p[i] == '.') {
+            Int label_len = i;
+            if (last_dot >= 0)
+                label_len -= last_dot + 1;
+            if (label_len == 0)
+                return false;
+            last_dot = i;
+        }
+    }
+    return true;
+}
+
+bool burrow__x509_domain_name_valid(Str s, bool constraint) {
+    return x509_domain_name_valid(s, constraint);
+}
+
+static Error x509_san_one(void *ctx, int tag, Slice data) {
+    X509SANs *out = ctx;
+    Alloc *a = out->a;
+    Str s = str_from_bytes(data.p, data.len);
+    switch (tag) {
+    case X509_NAME_TYPE_EMAIL:
+        if (!x509_is_ia5(s))
+            return x509_err("x509: SAN rfc822Name is malformed");
+        if (!x509_push(a, &out->email_addresses, TYPE_STRING, &s))
+            return burrow_err_out_of_memory;
+        break;
+    case X509_NAME_TYPE_DNS:
+        if (!x509_is_ia5(s))
+            return x509_err("x509: SAN dNSName is malformed");
+        if (!x509_push(a, &out->dns_names, TYPE_STRING, &s))
+            return burrow_err_out_of_memory;
+        break;
+    case X509_NAME_TYPE_URI: {
+        if (!x509_is_ia5(s))
+            return x509_err("x509: SAN uniformResourceIdentifier is malformed");
+        Error e = BURROW_NO_ERROR;
+        Url *uri = url_parse(a, s, &e);
+        if (BURROW_FAILED(e))
+            return fmt_errorf_v("x509: cannot parse URI %q: %s", s, error_text(e));
+        if (uri->host.len > 0 && !x509_domain_name_valid(uri->host, false))
+            return fmt_errorf_v("x509: cannot parse URI %q: invalid domain", s);
+        if (!x509_push(a, &out->uris, TYPE_X509_URL_PTR, &uri))
+            return burrow_err_out_of_memory;
+        break;
+    }
+    case X509_NAME_TYPE_IP:
+        if (data.len == NET_IPV6_LEN) {
+            if (net_ip_to4(data).len != 0)
+                return x509_err(
+                    "x509: SAN iPAddress contains IPv4-mapped IPv6 address");
+        } else if (data.len != NET_IPV4_LEN) {
+            return fmt_errorf_v("x509: cannot parse IP address of length %d", data.len);
+        }
+        if (!x509_push(a, &out->ip_addresses, TYPE_NET_IP, &data))
+            return burrow_err_out_of_memory;
+        break;
+    default:
+        break;
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* parseSANExtension */
+static Error x509_parse_san(Alloc *a, CryptobyteString der, X509SANs *out) {
+    memset(out, 0, sizeof *out);
+    out->a = a;
+    return x509_for_each_san(der, x509_san_one, out);
+}
+
+/* parseAuthorityKeyIdentifier */
+static Error x509_parse_authority_key_id(const PkixExtension *e, Slice *out) {
+    *out = slice_nil(TYPE_BYTE);
+    if (e->critical)
+        return x509_err("x509: authority key identifier incorrectly marked critical");
+    CryptobyteString val = e->value, akid;
+    if (!cryptobyte_string_read_asn1(&val, &akid, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: invalid authority key identifier");
+    if (cryptobyte_string_peek_asn1_tag(akid, X509_CTX(0))) {
+        if (!cryptobyte_string_read_asn1(&akid, &akid, X509_CTX(0)))
+            return x509_err("x509: invalid authority key identifier");
+        *out = akid;
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* extKeyUsageFromOID */
+static bool x509_ext_key_usage_from_oid(Asn1ObjectIdentifier oid,
+                                        X509ExtKeyUsage *eku) {
+    for (Int i = 0; i < X509_NEKU; i++) {
+        const X509ExtKeyUsageOID *e = &x509_ext_key_usage_oids[i];
+        Asn1ObjectIdentifier want = {(void *)(uintptr_t)e->oid, e->len, e->len,
+                                     TYPE_INT};
+        if (x509_oid_is(oid, want)) {
+            *eku = (X509ExtKeyUsage)i;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* parseExtKeyUsageExtension */
+static Error x509_parse_ext_key_usage(Alloc *a, CryptobyteString der, Slice *ekus,
+                                      Slice *unknown) {
+    if (!cryptobyte_string_read_asn1(&der, &der, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: invalid extended key usages");
+    while (!cryptobyte_string_empty(der)) {
+        Asn1ObjectIdentifier oid = {0};
+        if (!cryptobyte_string_read_asn1_object_identifier(&der, a, &oid))
+            return x509_err("x509: invalid extended key usages");
+        X509ExtKeyUsage eku = 0;
+        bool ok = x509_ext_key_usage_from_oid(oid, &eku)
+                      ? x509_push(a, ekus, TYPE_INT, &eku)
+                      : x509_push(a, unknown, TYPE_ASN1_OBJECT_IDENTIFIER, &oid);
+        if (!ok)
+            return burrow_err_out_of_memory;
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* parseCertificatePoliciesExtension */
+static Error x509_parse_certificate_policies(Alloc *a, CryptobyteString der,
+                                             Slice *oids) {
+    if (!cryptobyte_string_read_asn1(&der, &der, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: invalid certificate policies");
+    while (!cryptobyte_string_empty(der)) {
+        CryptobyteString cp, oid_bytes;
+        if (!cryptobyte_string_read_asn1(&der, &cp, CRYPTOBYTE_ASN1_SEQUENCE) ||
+            !cryptobyte_string_read_asn1(&cp, &oid_bytes,
+                                         CRYPTOBYTE_ASN1_OBJECT_IDENTIFIER))
+            return x509_err("x509: invalid certificate policies");
+        const X509OID *seen = oids->p;
+        for (Int i = 0; i < oids->len; i++)
+            if (bytes_equal(seen[i].der, oid_bytes))
+                return x509_err("x509: invalid certificate policies");
+        if (!x509_oid_der_valid(oid_bytes))
+            return x509_err("x509: invalid certificate policies");
+        X509OID oid = {oid_bytes};
+        if (!x509_push(a, oids, TYPE_OF(X509OID), &oid))
+            return burrow_err_out_of_memory;
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* OID.toASN1OID, false for an arc past 31 bits. */
+static bool x509_oid_to_asn1_oid(X509OID oid, Alloc *a, Asn1ObjectIdentifier *out) {
+    Slice arcs = slice_make(a, TYPE_INT, 0, oid.der.len + 1);
+    if (arcs.p == NULL)
+        return false;
+    Int *o = arcs.p;
+    Int n = 0;
+    Int val = 0;
+    const Int max_safe_shift = ((Int)1 << (31 - 7)) - 1;
+    const Byte *d = oid.der.p;
+    for (Int i = 0; i < oid.der.len; i++) {
+        if (val > max_safe_shift)
+            return false;
+        val <<= 7;
+        val |= (Int)(d[i] & 0x7f);
+        if ((d[i] & 0x80) == 0) {
+            if (n == 0) {
+                if (val < 80) {
+                    o[n++] = val / 40;
+                    o[n++] = val % 40;
+                } else {
+                    o[n++] = 2;
+                    o[n++] = val - 80;
+                }
+            } else {
+                o[n++] = val;
+            }
+            val = 0;
+        }
+    }
+    arcs.len = n;
+    *out = arcs;
+    return true;
+}
+
+/* isValidIPMask: some 1 bits followed by 0 bits only. */
+static bool x509_is_valid_ip_mask(Slice mask) {
+    bool seen_zero = false;
+    const Byte *m = mask.p;
+    for (Int i = 0; i < mask.len; i++) {
+        if (seen_zero) {
+            if (m[i] != 0)
+                return false;
+            continue;
+        }
+        /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
+        switch (m[i]) {
+        case 0x00:
+        case 0x80:
+        case 0xc0:
+        case 0xe0:
+        case 0xf0:
+        case 0xf8:
+        case 0xfc:
+        case 0xfe:
+            seen_zero = true;
+            break;
+        case 0xff:
+            break;
+        default:
+            return false;
+        }
+    }
+    return true;
+}
+
+/* parseRFC2821Mailbox: whether in is an RFC 2821 mailbox, with its local part
+ * unquoted into a and its domain pointing into in. local and domain may be
+ * NULL when only the answer is wanted. */
+static bool x509_parse_rfc2821_mailbox(Alloc *a, Str in, Str *local, Str *domain) {
+    if (in.len == 0)
+        return false;
+    Byte *buf = NULL;
+    if (local != NULL) {
+        buf = mem_alloc_nozero(a, (size_t)in.len, 1);
+        if (buf == NULL)
+            return false;
+    }
+    const Byte *p = in.p;
+    Int n = in.len;
+    Int lp = 0;
+    Byte first = 0, last = 0;
+    bool two_dots = false;
+#define X509_LP_ADD(c)                                                                 \
+    do {                                                                               \
+        Byte c_ = (c);                                                                 \
+        if (lp == 0)                                                                   \
+            first = c_;                                                                \
+        else if (last == '.' && c_ == '.')                                             \
+            two_dots = true;                                                           \
+        if (buf != NULL)                                                               \
+            buf[lp] = c_;                                                              \
+        lp++;                                                                          \
+        last = c_;                                                                     \
+    } while (0)
+
+    if (p[0] == '"') {
+        /* Quoted-string = DQUOTE *qcontent DQUOTE, without the obsolete
+         * syntax of RFC 2822. */
+        p++;
+        n--;
+        for (;;) {
+            if (n == 0)
+                return false;
+            Byte c = *p++;
+            n--;
+            if (c == '"')
+                break;
+            if (c == '\\') {
+                /* quoted-pair */
+                if (n == 0)
+                    return false;
+                if (p[0] == 11 || p[0] == 12 || (1 <= p[0] && p[0] <= 9) ||
+                    (14 <= p[0] && p[0] <= 127)) {
+                    X509_LP_ADD(p[0]);
+                    p++;
+                    n--;
+                } else {
+                    return false;
+                }
+            } else if (c == 11 || c == 12 ||
+                       /* Space is not in the grammar, but RFC 3696 has an
+                        * example that uses it, so it is let through. */
+                       c == 32 || c == 33 || c == 127 || (1 <= c && c <= 8) ||
+                       (14 <= c && c <= 31) || (35 <= c && c <= 91) ||
+                       (93 <= c && c <= 126)) {
+                /* qtext */
+                X509_LP_ADD(c);
+            } else {
+                return false;
+            }
+        }
+    } else {
+        /* Atom ("." Atom)* */
+        while (n > 0) {
+            /* atext from RFC 2822 section 3.2.4 */
+            Byte c = p[0];
+            if (c == '\\') {
+                /* RFC 3696 has escaped characters outside quotes in its
+                 * examples, and they are let through. */
+                p++;
+                n--;
+                if (n == 0)
+                    return false;
+            } else if (!(('0' <= c && c <= '9') || ('a' <= c && c <= 'z') ||
+                         ('A' <= c && c <= 'Z') || c == '!' || c == '#' || c == '$' ||
+                         c == '%' || c == '&' || c == '\'' || c == '*' || c == '+' ||
+                         c == '-' || c == '/' || c == '=' || c == '?' || c == '^' ||
+                         c == '_' || c == '`' || c == '{' || c == '|' || c == '}' ||
+                         c == '~' || c == '.')) {
+                break;
+            }
+            X509_LP_ADD(p[0]);
+            p++;
+            n--;
+        }
+        if (lp == 0)
+            return false;
+        /* RFC 3696 section 3: a period may not start or end the local part,
+         * and two may not be next to each other. */
+        if (first == '.' || last == '.' || two_dots)
+            return false;
+    }
+#undef X509_LP_ADD
+
+    if (n == 0 || p[0] != '@')
+        return false;
+    p++;
+    n--;
+
+    /* Anything after the @ is taken as the domain, since the format the RFC
+     * gives is not what people use. */
+    Str d = str_from_bytes(p, n);
+    if (!x509_domain_name_valid(d, false))
+        return false;
+    for (Int i = 0; i < n; i++)
+        if (p[i] == '@')
+            return false;
+    if (local != NULL)
+        *local = str_from_bytes(buf, lp);
+    if (domain != NULL)
+        *domain = d;
+    return true;
+}
+
+bool burrow__x509_parse_rfc2821_mailbox(Alloc *a, Str in, Str *local, Str *domain) {
+    return x509_parse_rfc2821_mailbox(a, in, local, domain);
+}
+
+/* The four lists a GeneralSubtrees of a NameConstraints fills. */
+typedef struct X509Subtrees {
+    Slice *dns, *ips, *emails, *uris;
+} X509Subtrees;
+
+static Error x509_constraint_ia5_error(Str s) {
+    return fmt_errorf_v(
+        "x509: invalid constraint value: x509: %q cannot be encoded as an IA5String",
+        s);
+}
+
+/* getValues in parseNameConstraintsExtension. */
+static Error x509_constraint_values(Alloc *a, CryptobyteString subtrees,
+                                    const X509Subtrees *out, bool *unhandled) {
+    const CryptobyteAsn1Tag dns_tag = X509_CTX(2);
+    const CryptobyteAsn1Tag email_tag = X509_CTX(1);
+    const CryptobyteAsn1Tag ip_tag = X509_CTX(7);
+    const CryptobyteAsn1Tag uri_tag = X509_CTX(6);
+    while (!cryptobyte_string_empty(subtrees)) {
+        CryptobyteString seq, value;
+        CryptobyteAsn1Tag tag = 0;
+        if (!cryptobyte_string_read_asn1(&subtrees, &seq, CRYPTOBYTE_ASN1_SEQUENCE) ||
+            !cryptobyte_string_read_any_asn1(&seq, &value, &tag))
+            return x509_err("x509: invalid NameConstraints extension");
+        Str s = str_from_bytes(value.p, value.len);
+        if (tag == dns_tag) {
+            if (!x509_is_ia5(s))
+                return x509_constraint_ia5_error(s);
+            if (!x509_domain_name_valid(s, true))
+                return fmt_errorf_v("x509: failed to parse dnsName constraint %q", s);
+            if (!x509_push(a, out->dns, TYPE_STRING, &s))
+                return burrow_err_out_of_memory;
+        } else if (tag == ip_tag) {
+            Int half;
+            if (value.len == 8)
+                half = 4;
+            else if (value.len == 32)
+                half = 16;
+            else
+                return fmt_errorf_v("x509: IP constraint contained value of length %d",
+                                    value.len);
+            Slice ip = slice_sub(value, 0, half);
+            Slice mask = slice_sub(value, half, value.len);
+            if (!x509_is_valid_ip_mask(mask)) {
+                Str hex = hex_encode_to_string(error_allocator(), mask);
+                return fmt_errorf_v("x509: IP constraint contained invalid mask %s",
+                                    hex);
+            }
+            if (ip.len == NET_IPV6_LEN && net_ip_to4(ip).len != 0)
+                return x509_err(
+                    "x509: IP constraint contained IPv4-mapped IPv6 address");
+            NetIPNet *ipnet = BURROW_NEW(a, NetIPNet);
+            if (ipnet == NULL)
+                return burrow_err_out_of_memory;
+            ipnet->ip = ip;
+            ipnet->mask = mask;
+            if (!x509_push(a, out->ips, TYPE_X509_IP_NET_PTR, &ipnet))
+                return burrow_err_out_of_memory;
+        } else if (tag == email_tag) {
+            if (!x509_is_ia5(s))
+                return x509_constraint_ia5_error(s);
+            /* With an @ in it, the constraint is one exact mailbox. */
+            bool has_at = s.len > 0 && memchr(s.p, '@', (size_t)s.len) != NULL;
+            bool ok = has_at ? x509_parse_rfc2821_mailbox(a, s, NULL, NULL)
+                             : x509_domain_name_valid(s, true);
+            if (!ok)
+                return fmt_errorf_v("x509: failed to parse rfc822Name constraint %q",
+                                    s);
+            if (!x509_push(a, out->emails, TYPE_STRING, &s))
+                return burrow_err_out_of_memory;
+        } else if (tag == uri_tag) {
+            if (!x509_is_ia5(s))
+                return x509_constraint_ia5_error(s);
+            if (net_parse_ip(a, s).len != 0)
+                return fmt_errorf_v(
+                    "x509: failed to parse URI constraint %q: cannot be IP address", s);
+            if (!x509_domain_name_valid(s, true))
+                return fmt_errorf_v("x509: failed to parse URI constraint %q", s);
+            if (!x509_push(a, out->uris, TYPE_STRING, &s))
+                return burrow_err_out_of_memory;
+        } else {
+            *unhandled = true;
+        }
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* parseNameConstraintsExtension */
+static Error x509_parse_name_constraints(Alloc *a, X509Certificate *out,
+                                         const PkixExtension *e, bool *unhandled) {
+    *unhandled = false;
+    CryptobyteString outer = e->value, toplevel, permitted = {0}, excluded = {0};
+    bool have_permitted = false, have_excluded = false;
+    if (!cryptobyte_string_read_asn1(&outer, &toplevel, CRYPTOBYTE_ASN1_SEQUENCE) ||
+        !cryptobyte_string_empty(outer) ||
+        !cryptobyte_string_read_optional_asn1(&toplevel, &permitted, &have_permitted,
+                                              X509_CTX_CONS(0)) ||
+        !cryptobyte_string_read_optional_asn1(&toplevel, &excluded, &have_excluded,
+                                              X509_CTX_CONS(1)) ||
+        !cryptobyte_string_empty(toplevel))
+        return x509_err("x509: invalid NameConstraints extension");
+    if ((!have_permitted && !have_excluded) ||
+        (permitted.len == 0 && excluded.len == 0))
+        /* RFC 5280 section 4.2.1.10: either the permittedSubtrees field or
+         * the excludedSubtrees MUST be present. */
+        return x509_err("x509: empty name constraints extension");
+
+    /* Go assigns each list whole, so a second NameConstraints replaces what
+     * the first one gave. */
+    out->permitted_dns_domains = slice_nil(TYPE_STRING);
+    out->permitted_ip_ranges = slice_nil(TYPE_X509_IP_NET_PTR);
+    out->permitted_email_addresses = slice_nil(TYPE_STRING);
+    out->permitted_uri_domains = slice_nil(TYPE_STRING);
+    out->excluded_dns_domains = slice_nil(TYPE_STRING);
+    out->excluded_ip_ranges = slice_nil(TYPE_X509_IP_NET_PTR);
+    out->excluded_email_addresses = slice_nil(TYPE_STRING);
+    out->excluded_uri_domains = slice_nil(TYPE_STRING);
+    const X509Subtrees p = {&out->permitted_dns_domains, &out->permitted_ip_ranges,
+                            &out->permitted_email_addresses,
+                            &out->permitted_uri_domains};
+    const X509Subtrees x = {&out->excluded_dns_domains, &out->excluded_ip_ranges,
+                            &out->excluded_email_addresses, &out->excluded_uri_domains};
+    Error err = x509_constraint_values(a, permitted, &p, unhandled);
+    if (BURROW_FAILED(err))
+        return err;
+    err = x509_constraint_values(a, excluded, &x, unhandled);
+    if (BURROW_FAILED(err))
+        return err;
+    out->permitted_dns_domains_critical = e->critical;
+    return BURROW_NO_ERROR;
+}
+
+/* The CRL distribution points extension, case 31 of processExtensions. */
+static Error x509_parse_crl_distribution_points(Alloc *a, CryptobyteString val,
+                                                Slice *out) {
+    if (!cryptobyte_string_read_asn1(&val, &val, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: invalid CRL distribution points");
+    while (!cryptobyte_string_empty(val)) {
+        CryptobyteString dp, name = {0};
+        bool present = false;
+        if (!cryptobyte_string_read_asn1(&val, &dp, CRYPTOBYTE_ASN1_SEQUENCE))
+            return x509_err("x509: invalid CRL distribution point");
+        if (!cryptobyte_string_read_optional_asn1(&dp, &name, &present,
+                                                  X509_CTX_CONS(0)))
+            return x509_err("x509: invalid CRL distribution point");
+        if (!present)
+            continue;
+        if (!cryptobyte_string_read_asn1(&name, &name, X509_CTX_CONS(0)))
+            return x509_err("x509: invalid CRL distribution point");
+        while (!cryptobyte_string_empty(name)) {
+            if (!cryptobyte_string_peek_asn1_tag(name, X509_CTX(6)))
+                break;
+            CryptobyteString uri;
+            if (!cryptobyte_string_read_asn1(&name, &uri, X509_CTX(6)))
+                return x509_err("x509: invalid CRL distribution point");
+            if (!x509_push_str(a, out, uri))
+                return burrow_err_out_of_memory;
+        }
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* The policy constraints extension, case 36 of processExtensions. */
+static Error x509_parse_policy_constraints(CryptobyteString val, X509Certificate *out) {
+    if (!cryptobyte_string_read_asn1(&val, &val, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: invalid policy constraints extension");
+    if (cryptobyte_string_peek_asn1_tag(val, X509_CTX(0))) {
+        int64_t v = 0;
+        if (!cryptobyte_string_read_asn1_int64_with_tag(&val, &v, X509_CTX(0)))
+            return x509_err("x509: invalid policy constraints extension");
+        out->require_explicit_policy = (Int)v;
+        if ((int64_t)out->require_explicit_policy != v)
+            return x509_err(
+                "x509: policy constraints requireExplicitPolicy field overflows int");
+        out->require_explicit_policy_zero = out->require_explicit_policy == 0;
+    }
+    if (cryptobyte_string_peek_asn1_tag(val, X509_CTX(1))) {
+        int64_t v = 0;
+        if (!cryptobyte_string_read_asn1_int64_with_tag(&val, &v, X509_CTX(1)))
+            return x509_err("x509: invalid policy constraints extension");
+        out->inhibit_policy_mapping = (Int)v;
+        if ((int64_t)out->inhibit_policy_mapping != v)
+            return x509_err(
+                "x509: policy constraints inhibitPolicyMapping field overflows int");
+        out->inhibit_policy_mapping_zero = out->inhibit_policy_mapping == 0;
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* The policy mappings extension, case 33 of processExtensions. */
+static Error x509_parse_policy_mappings(Alloc *a, CryptobyteString val, Slice *out) {
+    if (!cryptobyte_string_read_asn1(&val, &val, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: invalid policy mappings extension");
+    while (!cryptobyte_string_empty(val)) {
+        CryptobyteString s, issuer, subject;
+        if (!cryptobyte_string_read_asn1(&val, &s, CRYPTOBYTE_ASN1_SEQUENCE) ||
+            !cryptobyte_string_read_asn1(&s, &issuer,
+                                         CRYPTOBYTE_ASN1_OBJECT_IDENTIFIER) ||
+            !cryptobyte_string_read_asn1(&s, &subject,
+                                         CRYPTOBYTE_ASN1_OBJECT_IDENTIFIER))
+            return x509_err("x509: invalid policy mappings extension");
+        X509PolicyMapping m = {{issuer}, {subject}};
+        if (!x509_push(a, out, TYPE_X509_POLICY_MAPPING, &m))
+            return burrow_err_out_of_memory;
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* The authority information access extension of RFC 5280 section 4.2.2.1. */
+static Error x509_parse_authority_info_access(Alloc *a, const PkixExtension *e,
+                                              X509Certificate *out) {
+    if (e->critical)
+        return x509_err("x509: authority info access incorrectly marked critical");
+    CryptobyteString val = e->value;
+    if (!cryptobyte_string_read_asn1(&val, &val, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: invalid authority info access");
+    while (!cryptobyte_string_empty(val)) {
+        CryptobyteString aia;
+        if (!cryptobyte_string_read_asn1(&val, &aia, CRYPTOBYTE_ASN1_SEQUENCE))
+            return x509_err("x509: invalid authority info access");
+        Asn1ObjectIdentifier method = {0};
+        if (!cryptobyte_string_read_asn1_object_identifier(&aia, a, &method))
+            return x509_err("x509: invalid authority info access");
+        if (!cryptobyte_string_peek_asn1_tag(aia, X509_CTX(6)))
+            continue;
+        if (!cryptobyte_string_read_asn1(&aia, &aia, X509_CTX(6)))
+            return x509_err("x509: invalid authority info access");
+        bool ok = true;
+        if (x509_oid_is(method, X509_OID(x509_oid_authority_info_access_ocsp)))
+            ok = x509_push_str(a, &out->ocsp_server, aia);
+        else if (x509_oid_is(method, X509_OID(x509_oid_authority_info_access_issuers)))
+            ok = x509_push_str(a, &out->issuing_certificate_url, aia);
+        if (!ok)
+            return burrow_err_out_of_memory;
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* One extension with an id of 2.5.29.n, a switch case of processExtensions. */
+static Error x509_process_id_ce(Alloc *a, X509Certificate *out, const PkixExtension *e,
+                                Int n, bool *unhandled) {
+    Error err = BURROW_NO_ERROR;
+    switch (n) {
+    case 15:
+        return x509_parse_key_usage(e->value, &out->key_usage);
+    case 19:
+        err = x509_parse_basic_constraints(e->value, &out->is_ca, &out->max_path_len);
+        if (BURROW_FAILED(err))
+            return err;
+        out->basic_constraints_valid = true;
+        out->max_path_len_zero = out->max_path_len == 0;
+        return BURROW_NO_ERROR;
+    case 17: {
+        X509SANs sans;
+        err = x509_parse_san(a, e->value, &sans);
+        if (BURROW_FAILED(err))
+            return err;
+        out->dns_names = sans.dns_names;
+        out->email_addresses = sans.email_addresses;
+        out->ip_addresses = sans.ip_addresses;
+        out->uris = sans.uris;
+        /* An empty one gets the critical check below. */
+        if (sans.dns_names.len == 0 && sans.email_addresses.len == 0 &&
+            sans.ip_addresses.len == 0 && sans.uris.len == 0)
+            *unhandled = true;
+        return BURROW_NO_ERROR;
+    }
+    case 30:
+        return x509_parse_name_constraints(a, out, e, unhandled);
+    case 31:
+        return x509_parse_crl_distribution_points(a, e->value,
+                                                  &out->crl_distribution_points);
+    case 35:
+        return x509_parse_authority_key_id(e, &out->authority_key_id);
+    case 36:
+        return x509_parse_policy_constraints(e->value, out);
+    case 37:
+        out->ext_key_usage = slice_nil(TYPE_INT);
+        out->unknown_ext_key_usage = slice_nil(TYPE_ASN1_OBJECT_IDENTIFIER);
+        return x509_parse_ext_key_usage(a, e->value, &out->ext_key_usage,
+                                        &out->unknown_ext_key_usage);
+    case 14: {
+        /* RFC 5280 section 4.2.1.2. Conforming CAs mark it non-critical. */
+        if (e->critical)
+            return x509_err("x509: subject key identifier incorrectly marked critical");
+        CryptobyteString val = e->value, skid;
+        if (!cryptobyte_string_read_asn1(&val, &skid, CRYPTOBYTE_ASN1_OCTET_STRING))
+            return x509_err("x509: invalid subject key identifier");
+        out->subject_key_id = skid;
+        return BURROW_NO_ERROR;
+    }
+    case 32: {
+        out->policies = slice_nil(TYPE_OF(X509OID));
+        err = x509_parse_certificate_policies(a, e->value, &out->policies);
+        if (BURROW_FAILED(err))
+            return err;
+        Slice ids = slice_make(a, TYPE_ASN1_OBJECT_IDENTIFIER, 0, out->policies.len);
+        if (ids.p == NULL && out->policies.len > 0)
+            return burrow_err_out_of_memory;
+        const X509OID *oids = out->policies.p;
+        for (Int i = 0; i < out->policies.len; i++) {
+            Asn1ObjectIdentifier oid;
+            if (x509_oid_to_asn1_oid(oids[i], a, &oid) &&
+                !x509_push(a, &ids, TYPE_ASN1_OBJECT_IDENTIFIER, &oid))
+                return burrow_err_out_of_memory;
+        }
+        out->policy_identifiers = ids;
+        return BURROW_NO_ERROR;
+    }
+    case 33:
+        return x509_parse_policy_mappings(a, e->value, &out->policy_mappings);
+    case 54: {
+        CryptobyteString val = e->value;
+        if (!cryptobyte_string_read_asn1_integer_int(&val, &out->inhibit_any_policy))
+            return x509_err("x509: invalid inhibit any policy extension");
+        out->inhibit_any_policy_zero = out->inhibit_any_policy == 0;
+        return BURROW_NO_ERROR;
+    }
+    default:
+        /* Unknown extensions are recorded when critical. */
+        *unhandled = true;
+        return BURROW_NO_ERROR;
+    }
+}
+
+/* processExtensions */
+static Error x509_process_extensions(Alloc *a, X509Certificate *out) {
+    const PkixExtension *exts = out->extensions.p;
+    for (Int i = 0; i < out->extensions.len; i++) {
+        const PkixExtension *e = &exts[i];
+        const Int *id = e->id.p;
+        bool unhandled = false;
+        Error err = BURROW_NO_ERROR;
+        if (e->id.len == 4 && id[0] == 2 && id[1] == 5 && id[2] == 29)
+            err = x509_process_id_ce(a, out, e, id[3], &unhandled);
+        else if (x509_oid_is(e->id, X509_OID(x509_oid_extension_authority_info_access)))
+            err = x509_parse_authority_info_access(a, e, out);
+        else
+            unhandled = true;
+        if (BURROW_FAILED(err))
+            return err;
+        if (e->critical && unhandled &&
+            !x509_push(a, &out->unhandled_critical_extensions,
+                       TYPE_ASN1_OBJECT_IDENTIFIER, &e->id))
+            return burrow_err_out_of_memory;
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* getSignatureAlgorithmFromAI */
+static X509SignatureAlgorithm
+x509_signature_algorithm_from_ai(const PkixAlgorithmIdentifier *ai) {
+    Asn1ObjectIdentifier oid = ai->algorithm;
+    /* RFC 8410 section 3 and RFC 9881 section 2: the parameters MUST be
+     * absent. */
+    if ((x509_oid_is(oid, X509_OID(x509_oid_public_key_ed25519)) ||
+         x509_is_mldsa_oid(oid)) &&
+        ai->parameters.full_bytes.len != 0)
+        return X509_UNKNOWN_SIGNATURE_ALGORITHM;
+
+    if (!x509_oid_is(oid, X509_OID(x509_oid_signature_rsapss))) {
+        for (Int i = 0; i < X509_NSIG; i++) {
+            const X509SignatureAlgorithmDetails *d =
+                &x509_signature_algorithm_details[i];
+            if (x509_oid_is(oid, x509_details_oid(d)))
+                return d->algo;
+        }
+        return X509_UNKNOWN_SIGNATURE_ALGORITHM;
+    }
+
+    /* RSA PSS keeps what matters in the parameters, and only three settings
+     * of them are taken: the MGF1 hash the same as the message hash, the
+     * salt as long as the hash, and the default trailer. */
+    X509SignatureAlgorithm algo = X509_UNKNOWN_SIGNATURE_ALGORITHM;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *ta = arena_allocator(&ar);
+    X509PssParameters params;
+    PkixAlgorithmIdentifier mgf1;
+    memset(&params, 0, sizeof params);
+    memset(&mgf1, 0, sizeof mgf1);
+    Error e = BURROW_NO_ERROR;
+    (void)asn1_unmarshal(ta, ai->parameters.full_bytes,
+                         BURROW_ANY(TYPE_OF(X509PssParameters), &params), &e);
+    if (BURROW_FAILED(e))
+        goto done;
+    (void)asn1_unmarshal(ta, params.mgf.parameters.full_bytes,
+                         BURROW_ANY(TYPE_PKIX_ALGORITHM_IDENTIFIER, &mgf1), &e);
+    if (BURROW_FAILED(e))
+        goto done;
+    Slice hp = params.hash.parameters.full_bytes;
+    Slice mp = mgf1.parameters.full_bytes;
+    if ((hp.len != 0 && !bytes_equal(hp, asn1_null_bytes)) ||
+        !x509_oid_is(params.mgf.algorithm, X509_OID(x509_oid_mgf1)) ||
+        !x509_oid_is(mgf1.algorithm, params.hash.algorithm) ||
+        (mp.len != 0 && !bytes_equal(mp, asn1_null_bytes)) || params.trailer_field != 1)
+        goto done;
+    if (x509_oid_is(params.hash.algorithm, X509_OID(x509_oid_sha256)) &&
+        params.salt_length == 32)
+        algo = X509_SHA256_WITH_RSAPSS;
+    else if (x509_oid_is(params.hash.algorithm, X509_OID(x509_oid_sha384)) &&
+             params.salt_length == 48)
+        algo = X509_SHA384_WITH_RSAPSS;
+    else if (x509_oid_is(params.hash.algorithm, X509_OID(x509_oid_sha512)) &&
+             params.salt_length == 64)
+        algo = X509_SHA512_WITH_RSAPSS;
+done:
+    arena_free(&ar);
+    return algo;
+}
+
+/* getPublicKeyAlgorithmFromOID */
+static X509PublicKeyAlgorithm
+x509_public_key_algorithm_from_oid(Asn1ObjectIdentifier oid) {
+    if (x509_oid_is(oid, X509_OID(x509_oid_public_key_rsa)))
+        return X509_RSA;
+    if (x509_oid_is(oid, X509_OID(x509_oid_public_key_dsa)))
+        return X509_DSA;
+    if (x509_oid_is(oid, X509_OID(x509_oid_public_key_ecdsa)))
+        return X509_ECDSA;
+    if (x509_oid_is(oid, X509_OID(x509_oid_public_key_ed25519)))
+        return X509_ED25519;
+    if (x509_is_mldsa_oid(oid))
+        return X509_MLDSA;
+    return X509_UNKNOWN_PUBLIC_KEY_ALGORITHM;
+}
+
+/* Reads one Extension SEQUENCE from *exts into a. */
+static Error x509_read_extension(Alloc *a, CryptobyteString *exts, PkixExtension *ext) {
+    CryptobyteString one;
+    if (!cryptobyte_string_read_asn1(exts, &one, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed extension");
+    return x509_parse_extension(a, one, ext);
+}
+
+/* The slices of a certificate with their element types and no elements. */
+static void x509_certificate_init(X509Certificate *c) {
+    memset(c, 0, sizeof *c);
+    c->raw = c->raw_tbs_certificate = c->raw_subject_public_key_info =
+        slice_nil(TYPE_BYTE);
+    c->raw_subject = c->raw_issuer = c->raw_signature_algorithm = slice_nil(TYPE_BYTE);
+    c->signature = c->subject_key_id = c->authority_key_id = slice_nil(TYPE_BYTE);
+    c->extensions = c->extra_extensions = slice_nil(TYPE_PKIX_EXTENSION);
+    c->unhandled_critical_extensions = slice_nil(TYPE_ASN1_OBJECT_IDENTIFIER);
+    c->ext_key_usage = slice_nil(TYPE_INT);
+    c->unknown_ext_key_usage = slice_nil(TYPE_ASN1_OBJECT_IDENTIFIER);
+    c->ocsp_server = c->issuing_certificate_url = slice_nil(TYPE_STRING);
+    c->dns_names = c->email_addresses = slice_nil(TYPE_STRING);
+    c->ip_addresses = slice_nil(TYPE_NET_IP);
+    c->uris = slice_nil(TYPE_X509_URL_PTR);
+    c->permitted_dns_domains = c->excluded_dns_domains = slice_nil(TYPE_STRING);
+    c->permitted_ip_ranges = c->excluded_ip_ranges = slice_nil(TYPE_X509_IP_NET_PTR);
+    c->permitted_email_addresses = c->excluded_email_addresses = slice_nil(TYPE_STRING);
+    c->permitted_uri_domains = c->excluded_uri_domains = slice_nil(TYPE_STRING);
+    c->crl_distribution_points = slice_nil(TYPE_STRING);
+    c->policy_identifiers = slice_nil(TYPE_ASN1_OBJECT_IDENTIFIER);
+    c->policies = slice_nil(TYPE_OF(X509OID));
+    c->policy_mappings = slice_nil(TYPE_X509_POLICY_MAPPING);
+}
+
+/* The extensions of a version 3 certificate, [3] EXPLICIT. */
+static Error x509_parse_certificate_extensions(Alloc *a, CryptobyteString *tbs,
+                                               X509Certificate *cert) {
+    CryptobyteString exts = {0};
+    bool present = false;
+    if (!cryptobyte_string_read_optional_asn1(tbs, &exts, &present, X509_CTX_CONS(3)))
+        return x509_err("x509: malformed extensions");
+    if (!present)
+        return BURROW_NO_ERROR;
+    if (!cryptobyte_string_read_asn1(&exts, &exts, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed extensions");
+    while (!cryptobyte_string_empty(exts)) {
+        PkixExtension ext = {0};
+        Error err = x509_read_extension(a, &exts, &ext);
+        if (BURROW_FAILED(err))
+            return err;
+        const PkixExtension *seen = cert->extensions.p;
+        for (Int i = 0; i < cert->extensions.len; i++)
+            if (x509_oid_is(seen[i].id, ext.id))
+                return fmt_errorf_v(
+                    "x509: certificate contains duplicate extension with OID %q",
+                    asn1_object_identifier_string(ext.id, error_allocator()));
+        if (!x509_push(a, &cert->extensions, TYPE_PKIX_EXTENSION, &ext))
+            return burrow_err_out_of_memory;
+    }
+    return x509_process_extensions(a, cert);
+}
+
+/* The AlgorithmIdentifier SEQUENCE at the front of tbs, checked against the
+ * one after the TBS in input. The element goes to *raw. */
+static Error x509_read_signature_ai(Alloc *a, CryptobyteString *tbs,
+                                    CryptobyteString *input, Slice *raw,
+                                    X509SignatureAlgorithm *algo) {
+    CryptobyteString sig_ai, outer;
+    if (!cryptobyte_string_read_asn1_element(tbs, &sig_ai, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed signature algorithm identifier");
+    *raw = sig_ai;
+    if (!cryptobyte_string_read_asn1(&sig_ai, &sig_ai, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed signature algorithm identifier");
+    if (!cryptobyte_string_read_asn1(input, &outer, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed algorithm identifier");
+    if (!bytes_equal(outer, sig_ai))
+        return x509_err(
+            "x509: inner and outer signature algorithm identifiers don't match");
+    PkixAlgorithmIdentifier ai;
+    Error err = x509_parse_ai(a, sig_ai, &ai);
+    if (BURROW_FAILED(err))
+        return err;
+    *algo = x509_signature_algorithm_from_ai(&ai);
+    return BURROW_NO_ERROR;
+}
+
+/* The SubjectPublicKeyInfo of a certificate. */
+static Error x509_read_spki(Alloc *a, CryptobyteString *tbs, X509Certificate *cert) {
+    CryptobyteString spki, pk_ai_seq;
+    if (!cryptobyte_string_read_asn1_element(tbs, &spki, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed spki");
+    cert->raw_subject_public_key_info = spki;
+    if (!cryptobyte_string_read_asn1(&spki, &spki, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed spki");
+    if (!cryptobyte_string_read_asn1(&spki, &pk_ai_seq, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed public key algorithm identifier");
+    X509PublicKeyInfo ki;
+    memset(&ki, 0, sizeof ki);
+    Error err = x509_parse_ai(a, pk_ai_seq, &ki.algorithm);
+    if (BURROW_FAILED(err))
+        return err;
+    cert->public_key_algorithm =
+        x509_public_key_algorithm_from_oid(ki.algorithm.algorithm);
+    if (!cryptobyte_string_read_asn1_bit_string(&spki, &ki.public_key))
+        return x509_err("x509: malformed subjectPublicKey");
+    if (cert->public_key_algorithm != X509_UNKNOWN_PUBLIC_KEY_ALGORITHM) {
+        err = BURROW_NO_ERROR;
+        cert->public_key = x509_parse_public_key(a, &ki, &err);
+        if (BURROW_FAILED(err))
+            return err;
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* parseCertificate */
+static Error x509_parse_certificate_der(Alloc *a, Slice der, X509Certificate *cert) {
+    x509_certificate_init(cert);
+    CryptobyteString input = der;
+    /* The SEQUENCE with its header first, for raw, then its contents. */
+    if (!cryptobyte_string_read_asn1_element(&input, &input, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed certificate");
+    cert->raw = input;
+    if (!cryptobyte_string_read_asn1(&input, &input, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed certificate");
+
+    CryptobyteString tbs;
+    if (!cryptobyte_string_read_asn1_element(&input, &tbs, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed tbs certificate");
+    cert->raw_tbs_certificate = tbs;
+    if (!cryptobyte_string_read_asn1(&tbs, &tbs, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed tbs certificate");
+
+    if (!cryptobyte_string_read_optional_asn1_integer_int(&tbs, &cert->version,
+                                                          X509_CTX_CONS(0), 0))
+        return x509_err("x509: malformed version");
+    if (cert->version < 0)
+        return x509_err("x509: malformed version");
+    /* One-indexed, unlike the encoding of RFC 5280, as Go has always had it. */
+    cert->version++;
+    if (cert->version > 3)
+        return x509_err("x509: invalid version");
+
+    BigInt *serial = big_new_int(a, 0);
+    if (serial == NULL)
+        return burrow_err_out_of_memory;
+    if (!cryptobyte_string_read_asn1_integer_big(&tbs, serial))
+        return x509_err("x509: malformed serial number");
+    if (big_int_sign(serial) == -1 &&
+        (x509_debug_load() & X509_DEBUG_NEGATIVE_SERIAL) == 0)
+        return x509_err("x509: negative serial number");
+    cert->serial_number = serial;
+
+    Error err = x509_read_signature_ai(a, &tbs, &input, &cert->raw_signature_algorithm,
+                                       &cert->signature_algorithm);
+    if (BURROW_FAILED(err))
+        return err;
+
+    CryptobyteString issuer;
+    if (!cryptobyte_string_read_asn1_element(&tbs, &issuer, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed issuer");
+    cert->raw_issuer = issuer;
+    err = x509_parse_name_into(a, issuer, &cert->issuer);
+    if (BURROW_FAILED(err))
+        return err;
+
+    CryptobyteString validity;
+    if (!cryptobyte_string_read_asn1(&tbs, &validity, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed validity");
+    err = x509_read_asn1_time(a, &validity, &cert->not_before);
+    if (BURROW_FAILED(err))
+        return err;
+    err = x509_read_asn1_time(a, &validity, &cert->not_after);
+    if (BURROW_FAILED(err))
+        return err;
+
+    CryptobyteString subject;
+    if (!cryptobyte_string_read_asn1_element(&tbs, &subject, CRYPTOBYTE_ASN1_SEQUENCE))
+        /* Go says issuer here too. */
+        return x509_err("x509: malformed issuer");
+    cert->raw_subject = subject;
+    err = x509_parse_name_into(a, subject, &cert->subject);
+    if (BURROW_FAILED(err))
+        return err;
+
+    err = x509_read_spki(a, &tbs, cert);
+    if (BURROW_FAILED(err))
+        return err;
+
+    if (cert->version > 1) {
+        if (!cryptobyte_string_skip_optional_asn1(&tbs, X509_CTX(1)))
+            return x509_err("x509: malformed issuerUniqueID");
+        if (!cryptobyte_string_skip_optional_asn1(&tbs, X509_CTX(2)))
+            return x509_err("x509: malformed subjectUniqueID");
+        if (cert->version == 3) {
+            err = x509_parse_certificate_extensions(a, &tbs, cert);
+            if (BURROW_FAILED(err))
+                return err;
+        }
+    }
+
+    Asn1BitString signature = {0};
+    if (!cryptobyte_string_read_asn1_bit_string(&input, &signature))
+        return x509_err("x509: malformed signature");
+    cert->signature = asn1_bit_string_right_align(signature, a);
+    return BURROW_NO_ERROR;
+}
+
+X509Certificate *x509_parse_certificate(Alloc *a, Slice der, Error *err) {
+    X509Certificate *cert = BURROW_NEW(a, X509Certificate);
+    if (cert == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    Error e = x509_parse_certificate_der(a, der, cert);
+    if (!BURROW_FAILED(e) && der.len != cert->raw.len)
+        e = x509_err("x509: trailing data");
+    BURROW_OUT(err, e);
+    return BURROW_FAILED(e) ? NULL : cert;
+}
+
+Slice x509_parse_certificates(Alloc *a, Slice der, Error *err) {
+    Slice certs = slice_nil(TYPE_X509_CERTIFICATE_PTR);
+    while (der.len > 0) {
+        X509Certificate *cert = BURROW_NEW(a, X509Certificate);
+        Error e = cert == NULL ? burrow_err_out_of_memory
+                               : x509_parse_certificate_der(a, der, cert);
+        if (!BURROW_FAILED(e) &&
+            !x509_push(a, &certs, TYPE_X509_CERTIFICATE_PTR, &cert))
+            e = burrow_err_out_of_memory;
+        if (BURROW_FAILED(e)) {
+            BURROW_OUT(err, e);
+            return slice_nil(TYPE_X509_CERTIFICATE_PTR);
+        }
+        der = slice_sub(der, cert->raw.len, der.len);
+    }
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return certs;
+}
+
+bool x509_certificate_equal(const X509Certificate *c, const X509Certificate *other) {
+    if (c == NULL || other == NULL)
+        return c == other;
+    return bytes_equal(c->raw, other->raw);
+}
+
+/* ------------------------------------------------------------- signatures */
+
+BURROW_SENTINEL_ERROR(x509_err_unsupported_algorithm,
+                      "x509: cannot verify signature: algorithm unimplemented");
+
+/* InsecureAlgorithmError with its message, the algorithm first so errors_as
+ * hands back a pointer to it. */
+typedef struct X509InsecureBox {
+    X509InsecureAlgorithmError algo;
+    Str message;
+} X509InsecureBox;
+
+static const Type x509_insecure_desc = {
+    {(const Byte *)"InsecureAlgorithmError", 22},
+    {(const Byte *)"crypto/x509", 11},
+    KIND_INT,
+    (uint32_t)sizeof(X509InsecureAlgorithmError),
+    (uint16_t)_Alignof(X509InsecureAlgorithmError),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
+const Type *const TYPE_X509_INSECURE_ALGORITHM_ERROR = &x509_insecure_desc;
+
+static const char x509_insecure_prefix[] =
+    "x509: cannot verify signature: insecure algorithm ";
+
+#define X509_INSECURE_PREFIX_LEN ((Int)sizeof(x509_insecure_prefix) - 1)
+
+static Str x509_insecure_text(const void *self) {
+    return ((const X509InsecureBox *)self)->message;
+}
+
+static Error x509_insecure_clone(const void *self, Alloc *a) {
+    return x509_insecure_algorithm_error_as_error(((const X509InsecureBox *)self)->algo,
+                                                  a);
+}
+
+static const ErrorVT x509_insecure_vt = {
+    .self_type = &x509_insecure_desc,
+    .message = x509_insecure_text,
+    .clone = x509_insecure_clone,
+};
+
+/* SignatureAlgorithm.String of e, with num as the room for a number. */
+static Str x509_insecure_name(X509InsecureAlgorithmError e, char num[24]) {
+    for (Int i = 0; i < X509_NSIG; i++)
+        if (x509_signature_algorithm_details[i].algo == e)
+            return str_from_cstr(x509_signature_algorithm_details[i].name);
+    return str_from_bytes((const Byte *)num, x509_itoa(e, num));
+}
+
+/* Writes the message for name to p, which has room for it. */
+static Str x509_insecure_write(Byte *p, Str name) {
+    memcpy(p, x509_insecure_prefix, (size_t)X509_INSECURE_PREFIX_LEN);
+    memcpy(p + X509_INSECURE_PREFIX_LEN, name.p, (size_t)name.len);
+    return str_from_bytes(p, X509_INSECURE_PREFIX_LEN + name.len);
+}
+
+Error x509_insecure_algorithm_error_as_error(X509InsecureAlgorithmError e, Alloc *a) {
+    char num[24];
+    Str name = x509_insecure_name(e, num);
+    X509InsecureBox *b = (X509InsecureBox *)mem_alloc_nozero(
+        a, sizeof(X509InsecureBox) + (size_t)(X509_INSECURE_PREFIX_LEN + name.len),
+        _Alignof(X509InsecureBox));
+    if (b == NULL)
+        return burrow_err_out_of_memory;
+    b->algo = e;
+    b->message = x509_insecure_write((Byte *)(b + 1), name);
+    return (Error){&x509_insecure_vt, b};
+}
+
+Str x509_insecure_algorithm_error_error(X509InsecureAlgorithmError e, Alloc *a) {
+    char num[24];
+    Str name = x509_insecure_name(e, num);
+    Byte *p =
+        (Byte *)mem_alloc_nozero(a, (size_t)(X509_INSECURE_PREFIX_LEN + name.len), 1);
+    if (p == NULL)
+        return BURROW_STR_EMPTY;
+    return x509_insecure_write(p, name);
+}
+
+/* ConstraintViolationError and UnhandledCriticalExtension, which have
+ * nothing in them and so are one constant each. */
+/* NOLINTBEGIN(bugprone-macro-parentheses) */
+#define X509_EMPTY_ERROR(T, desc, name, gotype, text)                                  \
+    static const Type desc = {                                                         \
+        {(const Byte *)(gotype), (Int)(sizeof(gotype) - 1)},                           \
+        {(const Byte *)"crypto/x509", 11},                                             \
+        KIND_STRUCT,                                                                   \
+        (uint32_t)sizeof(T),                                                           \
+        (uint16_t)_Alignof(T),                                                         \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+    };                                                                                 \
+    static Str desc##_message(const void *self) {                                      \
+        (void)self;                                                                    \
+        return (Str){(const Byte *)(text), (Int)(sizeof(text) - 1)};                   \
+    }                                                                                  \
+    static const ErrorVT desc##_vt = {                                                 \
+        &desc, desc##_message, NULL, NULL, NULL, NULL, NULL,                           \
+    };                                                                                 \
+    static const T desc##_value = {0};                                                 \
+    const Error name = {&desc##_vt, &desc##_value}
+/* NOLINTEND(bugprone-macro-parentheses) */
+
+X509_EMPTY_ERROR(X509ConstraintViolationError, x509_constraint_violation_desc,
+                 x509_constraint_violation_error, "ConstraintViolationError",
+                 "x509: invalid signature: parent certificate cannot sign this kind of "
+                 "certificate");
+const Type *const TYPE_X509_CONSTRAINT_VIOLATION_ERROR =
+    &x509_constraint_violation_desc;
+
+Str x509_constraint_violation_error_error(X509ConstraintViolationError e) {
+    return x509_constraint_violation_desc_message(&e);
+}
+
+X509_EMPTY_ERROR(X509UnhandledCriticalExtension, x509_unhandled_critical_desc,
+                 x509_unhandled_critical_extension, "UnhandledCriticalExtension",
+                 "x509: unhandled critical extension");
+const Type *const TYPE_X509_UNHANDLED_CRITICAL_EXTENSION =
+    &x509_unhandled_critical_desc;
+
+Str x509_unhandled_critical_extension_error(X509UnhandledCriticalExtension e) {
+    return x509_unhandled_critical_desc_message(&e);
+}
+
+/* signaturePublicKeyAlgoMismatchError, type_name being what %T says of the
+ * key in Go. */
+static Error x509_key_mismatch_error(X509PublicKeyAlgorithm want, const char *type_name,
+                                     Alloc *ta) {
+    return fmt_errorf_v(
+        "x509: signature algorithm specifies an %s public key, but have "
+        "public key of type %s",
+        x509_public_key_algorithm_string(want, ta), type_name);
+}
+
+/* checkSignature, with signed hashed in ta first when the algorithm hashes. */
+static Error x509_check_signature_in(Alloc *ta, X509SignatureAlgorithm algo,
+                                     Slice signed_data, Slice signature, Any public_key,
+                                     bool allow_sha1) {
+    CryptoHash hash_type = 0;
+    X509PublicKeyAlgorithm pub_key_algo = X509_UNKNOWN_PUBLIC_KEY_ALGORITHM;
+    bool is_pss = false;
+    for (Int i = 0; i < X509_NSIG; i++) {
+        const X509SignatureAlgorithmDetails *d = &x509_signature_algorithm_details[i];
+        if (d->algo == algo) {
+            hash_type = d->hash;
+            pub_key_algo = d->pub_key_algo;
+            is_pss = d->is_rsa_pss;
+            break;
+        }
+    }
+
+    if (hash_type == 0) {
+        if (pub_key_algo != X509_ED25519 && pub_key_algo != X509_MLDSA)
+            return x509_err_unsupported_algorithm;
+    } else {
+        if (hash_type == CRYPTO_MD5 || (hash_type == CRYPTO_SHA1 && !allow_sha1))
+            /* SHA-1 is only taken for CRLs and CSRs. */
+            return x509_insecure_algorithm_error_as_error(algo, error_allocator());
+        if (!crypto_hash_available(hash_type))
+            return x509_err_unsupported_algorithm;
+        Hash h = crypto_hash_new(hash_type, ta);
+        if (h.vt == NULL)
+            return burrow_err_out_of_memory;
+        hash_write(h, signed_data, NULL);
+        signed_data = hash_sum(ta, h, slice_nil(TYPE_BYTE));
+        if (signed_data.len == 0)
+            return burrow_err_out_of_memory;
+    }
+
+    const Type *t = public_key.t;
+    if (t == NULL || public_key.data == NULL)
+        return x509_err_unsupported_algorithm;
+    if (t == TYPE_RSA_PUBLIC_KEY) {
+        if (pub_key_algo != X509_RSA)
+            return x509_key_mismatch_error(pub_key_algo, "*rsa.PublicKey", ta);
+        const RsaPublicKey *pub = public_key.data;
+        if (is_pss) {
+            RsaPSSOptions opts = {RSA_PSS_SALT_LENGTH_EQUALS_HASH, 0};
+            return rsa_verify_pss(pub, hash_type, signed_data, signature, &opts);
+        }
+        return rsa_verify_pkcs1_v15(pub, hash_type, signed_data, signature);
+    }
+    if (t == TYPE_ECDSA_PUBLIC_KEY) {
+        if (pub_key_algo != X509_ECDSA)
+            return x509_key_mismatch_error(pub_key_algo, "*ecdsa.PublicKey", ta);
+        if (!ecdsa_verify_asn1(public_key.data, signed_data, signature))
+            return x509_err("x509: ECDSA verification failure");
+        return BURROW_NO_ERROR;
+    }
+    if (t == TYPE_ED25519_PUBLIC_KEY) {
+        if (pub_key_algo != X509_ED25519)
+            return x509_key_mismatch_error(pub_key_algo, "ed25519.PublicKey", ta);
+        if (!ed25519_verify(*(const Slice *)public_key.data, signed_data, signature))
+            return x509_err("x509: Ed25519 verification failure");
+        return BURROW_NO_ERROR;
+    }
+    if (t == TYPE_MLDSA_PUBLIC_KEY) {
+        if (pub_key_algo != X509_MLDSA)
+            return x509_key_mismatch_error(pub_key_algo, "*mldsa.PublicKey", ta);
+        const MldsaPublicKey *pub = public_key.data;
+        const MldsaParameters *params = mldsa_public_key_parameters(pub);
+        X509SignatureAlgorithm want;
+        if (params == mldsa_mldsa44())
+            want = X509_MLDSA44;
+        else if (params == mldsa_mldsa65())
+            want = X509_MLDSA65;
+        else if (params == mldsa_mldsa87())
+            want = X509_MLDSA87;
+        else
+            return fmt_errorf_v("x509: unknown ML-DSA parameters: %s",
+                                mldsa_parameters_string(params));
+        if (algo != want)
+            return fmt_errorf_v(
+                "x509: signature algorithm specifies an ML-DSA public key with %s "
+                "parameters, but have a public key with %s parameters",
+                x509_signature_algorithm_string(algo, ta),
+                mldsa_parameters_string(params));
+        Error e = mldsa_verify(pub, signed_data, signature, NULL);
+        if (BURROW_FAILED(e))
+            return fmt_errorf_v("x509: ML-DSA verification failure: %w", e);
+        return BURROW_NO_ERROR;
+    }
+    return x509_err_unsupported_algorithm;
+}
+
+static Error x509_check_signature(X509SignatureAlgorithm algo, Slice signed_data,
+                                  Slice signature, Any public_key, bool allow_sha1) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Error e = x509_check_signature_in(arena_allocator(&ar), algo, signed_data,
+                                      signature, public_key, allow_sha1);
+    arena_free(&ar);
+    return e;
+}
+
+/* Whether parent may sign with usage, the checks CheckSignatureFrom of a
+ * certificate and of a revocation list share. */
+static Error x509_check_parent(const X509Certificate *parent, X509KeyUsage usage) {
+    /* RFC 5280 section 4.2.1.9: without basic constraints in a version 3
+     * certificate, or with them and no cA, the key MUST NOT check
+     * certificate signatures. */
+    if ((parent->version == 3 && !parent->basic_constraints_valid) ||
+        (parent->basic_constraints_valid && !parent->is_ca))
+        return x509_constraint_violation_error;
+    if (parent->key_usage != 0 && (parent->key_usage & usage) == 0)
+        return x509_constraint_violation_error;
+    if (parent->public_key_algorithm == X509_UNKNOWN_PUBLIC_KEY_ALGORITHM)
+        return x509_err_unsupported_algorithm;
+    return BURROW_NO_ERROR;
+}
+
+Error x509_certificate_check_signature_from(const X509Certificate *c,
+                                            const X509Certificate *parent) {
+    Error e = x509_check_parent(parent, X509_KEY_USAGE_CERT_SIGN);
+    if (BURROW_FAILED(e))
+        return e;
+    return x509_check_signature(c->signature_algorithm, c->raw_tbs_certificate,
+                                c->signature, parent->public_key, false);
+}
+
+Error x509_certificate_check_signature(const X509Certificate *c,
+                                       X509SignatureAlgorithm algo, Slice signed_data,
+                                       Slice signature) {
+    return x509_check_signature(algo, signed_data, signature, c->public_key, true);
+}
+
+Error x509_certificate_check_crl_signature(const X509Certificate *c,
+                                           const PkixCertificateList *crl) {
+    X509SignatureAlgorithm algo =
+        x509_signature_algorithm_from_ai(&crl->signature_algorithm);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *ta = arena_allocator(&ar);
+    Slice sig = asn1_bit_string_right_align(crl->signature_value, ta);
+    Error e =
+        x509_check_signature(algo, crl->tbs_cert_list.raw, sig, c->public_key, true);
+    arena_free(&ar);
+    return e;
+}
+
+/* ---------------------------------------------------- certificate requests */
+
+/* parseRawAttributes: the attributes that are AttributeTypeAndValueSETs,
+ * leaving out the ones such as challengePassword that are not. */
+static Slice x509_parse_raw_attributes(Alloc *a, Slice raw_attributes) {
+    Slice out = slice_nil(TYPE_PKIX_ATTRIBUTE_TYPE_AND_VALUE_SET);
+    const Asn1RawValue *raw = raw_attributes.p;
+    for (Int i = 0; i < raw_attributes.len; i++) {
+        PkixAttributeTypeAndValueSET attr;
+        memset(&attr, 0, sizeof attr);
+        Error e = BURROW_NO_ERROR;
+        Slice rest = asn1_unmarshal(
+            a, raw[i].full_bytes,
+            BURROW_ANY(TYPE_PKIX_ATTRIBUTE_TYPE_AND_VALUE_SET, &attr), &e);
+        if (!BURROW_FAILED(e) && rest.len == 0)
+            (void)x509_push(a, &out, TYPE_PKIX_ATTRIBUTE_TYPE_AND_VALUE_SET, &attr);
+    }
+    return out;
+}
+
+/* parseCSRExtensions: the extensions in the extensionRequest attributes. */
+static Error x509_parse_csr_extensions(Alloc *a, Slice raw_attributes, Slice *out) {
+    *out = slice_nil(TYPE_PKIX_EXTENSION);
+    const Asn1RawValue *raw = raw_attributes.p;
+    for (Int i = 0; i < raw_attributes.len; i++) {
+        X509Pkcs10Attribute attr;
+        memset(&attr, 0, sizeof attr);
+        Error e = BURROW_NO_ERROR;
+        Slice rest = asn1_unmarshal(
+            a, raw[i].full_bytes, BURROW_ANY(TYPE_OF(X509Pkcs10Attribute), &attr), &e);
+        /* The ones that do not parse are skipped. */
+        if (BURROW_FAILED(e) || rest.len != 0 || attr.values.len == 0)
+            continue;
+        if (!x509_oid_is(attr.id, X509_OID(x509_oid_extension_request)))
+            continue;
+        Slice exts = slice_nil(TYPE_PKIX_EXTENSION);
+        const Asn1RawValue *values = attr.values.p;
+        (void)asn1_unmarshal(a, values[0].full_bytes,
+                             BURROW_ANY(TYPE_OF(X509Extensions), &exts), &e);
+        if (BURROW_FAILED(e))
+            return e;
+        const PkixExtension *ext = exts.p;
+        for (Int j = 0; j < exts.len; j++) {
+            const PkixExtension *seen = out->p;
+            for (Int k = 0; k < out->len; k++)
+                if (x509_oid_is(seen[k].id, ext[j].id))
+                    return x509_err(
+                        "x509: certificate request contains duplicate requested "
+                        "extensions");
+            if (!x509_push(a, out, TYPE_PKIX_EXTENSION, &ext[j]))
+                return burrow_err_out_of_memory;
+        }
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* parseCertificateRequest */
+static Error x509_parse_csr(Alloc *a, const X509Csr *in, X509CertificateRequest *out) {
+    memset(out, 0, sizeof *out);
+    out->raw = in->raw;
+    out->raw_tbs_certificate_request = in->tbs_csr.raw;
+    out->raw_subject_public_key_info = in->tbs_csr.public_key.raw;
+    out->raw_subject = in->tbs_csr.subject.full_bytes;
+    out->raw_signature_algorithm = in->signature_algorithm.raw;
+    out->signature = asn1_bit_string_right_align(in->signature_value, a);
+    PkixAlgorithmIdentifier ai = {in->signature_algorithm.algorithm,
+                                  in->signature_algorithm.parameters};
+    out->signature_algorithm = x509_signature_algorithm_from_ai(&ai);
+    out->public_key_algorithm =
+        x509_public_key_algorithm_from_oid(in->tbs_csr.public_key.algorithm.algorithm);
+    out->version = in->tbs_csr.version;
+    out->attributes = x509_parse_raw_attributes(a, in->tbs_csr.raw_attributes);
+    out->extra_extensions = slice_nil(TYPE_PKIX_EXTENSION);
+    out->dns_names = out->email_addresses = slice_nil(TYPE_STRING);
+    out->ip_addresses = slice_nil(TYPE_NET_IP);
+    out->uris = slice_nil(TYPE_X509_URL_PTR);
+
+    Error err = BURROW_NO_ERROR;
+    if (out->public_key_algorithm != X509_UNKNOWN_PUBLIC_KEY_ALGORITHM) {
+        out->public_key = x509_parse_public_key(a, &in->tbs_csr.public_key, &err);
+        if (BURROW_FAILED(err))
+            return err;
+    }
+    err = x509_parse_name_into(a, in->tbs_csr.subject.full_bytes, &out->subject);
+    if (BURROW_FAILED(err))
+        return err;
+    err = x509_parse_csr_extensions(a, in->tbs_csr.raw_attributes, &out->extensions);
+    if (BURROW_FAILED(err))
+        return err;
+    const PkixExtension *ext = out->extensions.p;
+    for (Int i = 0; i < out->extensions.len; i++) {
+        if (!x509_oid_is(ext[i].id, X509_OID(x509_oid_extension_subject_alt_name)))
+            continue;
+        X509SANs sans;
+        err = x509_parse_san(a, ext[i].value, &sans);
+        if (BURROW_FAILED(err))
+            return err;
+        out->dns_names = sans.dns_names;
+        out->email_addresses = sans.email_addresses;
+        out->ip_addresses = sans.ip_addresses;
+        out->uris = sans.uris;
+    }
+    return BURROW_NO_ERROR;
+}
+
+X509CertificateRequest *x509_parse_certificate_request(Alloc *a, Slice der,
+                                                       Error *err) {
+    X509Csr csr;
+    memset(&csr, 0, sizeof csr);
+    Error e = BURROW_NO_ERROR;
+    Slice rest = asn1_unmarshal(a, der, BURROW_ANY(TYPE_OF(X509Csr), &csr), &e);
+    if (BURROW_FAILED(e)) {
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    if (rest.len != 0) {
+        BURROW_OUT(err, x509_trailing_data());
+        return NULL;
+    }
+    X509CertificateRequest *out = BURROW_NEW(a, X509CertificateRequest);
+    e = out == NULL ? burrow_err_out_of_memory : x509_parse_csr(a, &csr, out);
+    BURROW_OUT(err, e);
+    return BURROW_FAILED(e) ? NULL : out;
+}
+
+Error x509_certificate_request_check_signature(const X509CertificateRequest *c) {
+    return x509_check_signature(c->signature_algorithm, c->raw_tbs_certificate_request,
+                                c->signature, c->public_key, true);
+}
+
+/* -------------------------------------------------------- revocation lists */
+
+/* One entry of revokedCertificates. */
+static Error x509_parse_revoked_entry(Alloc *a, CryptobyteString *revoked,
+                                      X509RevocationList *rl) {
+    X509RevocationListEntry rce;
+    memset(&rce, 0, sizeof rce);
+    rce.extensions = rce.extra_extensions = slice_nil(TYPE_PKIX_EXTENSION);
+    CryptobyteString cert;
+    if (!cryptobyte_string_read_asn1_element(revoked, &cert, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed crl");
+    rce.raw = cert;
+    if (!cryptobyte_string_read_asn1(&cert, &cert, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed crl");
+    rce.serial_number = big_new_int(a, 0);
+    if (rce.serial_number == NULL)
+        return burrow_err_out_of_memory;
+    if (!cryptobyte_string_read_asn1_integer_big(&cert, rce.serial_number))
+        return x509_err("x509: malformed serial number");
+    Error err = x509_read_asn1_time(a, &cert, &rce.revocation_time);
+    if (BURROW_FAILED(err))
+        return err;
+    CryptobyteString exts = {0};
+    bool present = false;
+    if (!cryptobyte_string_read_optional_asn1(&cert, &exts, &present,
+                                              CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed extensions");
+    while (present && !cryptobyte_string_empty(exts)) {
+        PkixExtension ext = {0};
+        err = x509_read_extension(a, &exts, &ext);
+        if (BURROW_FAILED(err))
+            return err;
+        if (x509_oid_is(ext.id, X509_OID(x509_oid_extension_reason_code))) {
+            CryptobyteString val = ext.value;
+            if (!cryptobyte_string_read_asn1_enum(&val, &rce.reason_code))
+                return x509_err("x509: malformed reasonCode extension");
+        }
+        if (!x509_push(a, &rce.extensions, TYPE_PKIX_EXTENSION, &ext))
+            return burrow_err_out_of_memory;
+    }
+    PkixRevokedCertificate rc = {rce.serial_number, rce.revocation_time,
+                                 rce.extensions};
+    if (!x509_push(a, &rl->revoked_certificate_entries, TYPE_X509_REVOCATION_LIST_ENTRY,
+                   &rce) ||
+        !x509_push(a, &rl->revoked_certificates, TYPE_PKIX_REVOKED_CERTIFICATE, &rc))
+        return burrow_err_out_of_memory;
+    return BURROW_NO_ERROR;
+}
+
+/* The crlExtensions of a list, [0] EXPLICIT. */
+static Error x509_parse_crl_extensions(Alloc *a, CryptobyteString *tbs,
+                                       X509RevocationList *rl) {
+    CryptobyteString exts = {0};
+    bool present = false;
+    if (!cryptobyte_string_read_optional_asn1(tbs, &exts, &present, X509_CTX_CONS(0)))
+        return x509_err("x509: malformed extensions");
+    if (!present)
+        return BURROW_NO_ERROR;
+    if (!cryptobyte_string_read_asn1(&exts, &exts, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed extensions");
+    while (!cryptobyte_string_empty(exts)) {
+        PkixExtension ext = {0};
+        Error err = x509_read_extension(a, &exts, &ext);
+        if (BURROW_FAILED(err))
+            return err;
+        if (x509_oid_is(ext.id, X509_OID(x509_oid_extension_authority_key_id))) {
+            err = x509_parse_authority_key_id(&ext, &rl->authority_key_id);
+            if (BURROW_FAILED(err))
+                return err;
+        } else if (x509_oid_is(ext.id, X509_OID(x509_oid_extension_crl_number))) {
+            CryptobyteString value = ext.value;
+            rl->number = big_new_int(a, 0);
+            if (rl->number == NULL)
+                return burrow_err_out_of_memory;
+            if (!cryptobyte_string_read_asn1_integer_big(&value, rl->number))
+                return x509_err("x509: malformed crl number");
+        }
+        if (!x509_push(a, &rl->extensions, TYPE_PKIX_EXTENSION, &ext))
+            return burrow_err_out_of_memory;
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* ParseRevocationList */
+static Error x509_parse_revocation_list_der(Alloc *a, Slice der,
+                                            X509RevocationList *rl) {
+    memset(rl, 0, sizeof *rl);
+    rl->authority_key_id = slice_nil(TYPE_BYTE);
+    rl->revoked_certificate_entries = slice_nil(TYPE_X509_REVOCATION_LIST_ENTRY);
+    rl->revoked_certificates = slice_nil(TYPE_PKIX_REVOKED_CERTIFICATE);
+    rl->extensions = rl->extra_extensions = slice_nil(TYPE_PKIX_EXTENSION);
+
+    CryptobyteString input = der;
+    if (!cryptobyte_string_read_asn1_element(&input, &input, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed crl");
+    rl->raw = input;
+    if (!cryptobyte_string_read_asn1(&input, &input, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed crl");
+
+    CryptobyteString tbs;
+    if (!cryptobyte_string_read_asn1_element(&input, &tbs, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed tbs crl");
+    rl->raw_tbs_revocation_list = tbs;
+    if (!cryptobyte_string_read_asn1(&tbs, &tbs, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed tbs crl");
+
+    Int version = 0;
+    if (!cryptobyte_string_peek_asn1_tag(tbs, CRYPTOBYTE_ASN1_INTEGER))
+        return x509_err("x509: unsupported crl version");
+    if (!cryptobyte_string_read_asn1_integer_int(&tbs, &version))
+        return x509_err("x509: malformed crl");
+    /* X.509 v2 is encoded as 1. */
+    if (version != 1)
+        return fmt_errorf_v("x509: unsupported crl version: %d", version);
+
+    Error err = x509_read_signature_ai(a, &tbs, &input, &rl->raw_signature_algorithm,
+                                       &rl->signature_algorithm);
+    if (BURROW_FAILED(err))
+        return err;
+
+    Asn1BitString signature = {0};
+    if (!cryptobyte_string_read_asn1_bit_string(&input, &signature))
+        return x509_err("x509: malformed signature");
+    rl->signature = asn1_bit_string_right_align(signature, a);
+
+    CryptobyteString issuer;
+    if (!cryptobyte_string_read_asn1_element(&tbs, &issuer, CRYPTOBYTE_ASN1_SEQUENCE))
+        return x509_err("x509: malformed issuer");
+    rl->raw_issuer = issuer;
+    err = x509_parse_name_into(a, issuer, &rl->issuer);
+    if (BURROW_FAILED(err))
+        return err;
+
+    err = x509_read_asn1_time(a, &tbs, &rl->this_update);
+    if (BURROW_FAILED(err))
+        return err;
+    if (cryptobyte_string_peek_asn1_tag(tbs, CRYPTOBYTE_ASN1_GENERALIZED_TIME) ||
+        cryptobyte_string_peek_asn1_tag(tbs, CRYPTOBYTE_ASN1_UTC_TIME)) {
+        err = x509_read_asn1_time(a, &tbs, &rl->next_update);
+        if (BURROW_FAILED(err))
+            return err;
+    }
+
+    if (cryptobyte_string_peek_asn1_tag(tbs, CRYPTOBYTE_ASN1_SEQUENCE)) {
+        CryptobyteString revoked;
+        if (!cryptobyte_string_read_asn1(&tbs, &revoked, CRYPTOBYTE_ASN1_SEQUENCE))
+            return x509_err("x509: malformed crl");
+        while (!cryptobyte_string_empty(revoked)) {
+            err = x509_parse_revoked_entry(a, &revoked, rl);
+            if (BURROW_FAILED(err))
+                return err;
+        }
+    }
+    return x509_parse_crl_extensions(a, &tbs, rl);
+}
+
+X509RevocationList *x509_parse_revocation_list(Alloc *a, Slice der, Error *err) {
+    X509RevocationList *rl = BURROW_NEW(a, X509RevocationList);
+    Error e = rl == NULL ? burrow_err_out_of_memory
+                         : x509_parse_revocation_list_der(a, der, rl);
+    BURROW_OUT(err, e);
+    return BURROW_FAILED(e) ? NULL : rl;
+}
+
+Error x509_revocation_list_check_signature_from(const X509RevocationList *rl,
+                                                const X509Certificate *parent) {
+    Error e = x509_check_parent(parent, X509_KEY_USAGE_CRL_SIGN);
+    if (BURROW_FAILED(e))
+        return e;
+    return x509_certificate_check_signature(parent, rl->signature_algorithm,
+                                            rl->raw_tbs_revocation_list, rl->signature);
+}
+
+PkixCertificateList *x509_parse_crl(Alloc *a, Slice crl_bytes, Error *err) {
+    /* A PEM CRL where a DER one should be is common, so one with nothing in
+     * front of it is decoded first. */
+    static const Byte prefix[] = "-----BEGIN X509 CRL";
+    if (bytes_has_prefix(crl_bytes, x509_bytes(prefix, (Int)sizeof prefix - 1))) {
+        Slice rest;
+        PemBlock *block = pem_decode(a, crl_bytes, &rest);
+        if (block != NULL && str_eq(block->type, BURROW_S("X509 CRL")))
+            crl_bytes = block->bytes;
+    }
+    return x509_parse_dercrl(a, crl_bytes, err);
+}
+
+PkixCertificateList *x509_parse_dercrl(Alloc *a, Slice der, Error *err) {
+    PkixCertificateList *cl = BURROW_NEW(a, PkixCertificateList);
+    if (cl == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    Error e = BURROW_NO_ERROR;
+    Slice rest = asn1_unmarshal(a, der, BURROW_ANY(TYPE_PKIX_CERTIFICATE_LIST, cl), &e);
+    if (!BURROW_FAILED(e) && rest.len != 0)
+        e = x509_err("x509: trailing data after CRL");
+    BURROW_OUT(err, e);
+    return BURROW_FAILED(e) ? NULL : cl;
 }
 
 /* ----------------------------------------------------------- encrypted PEM */

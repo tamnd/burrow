@@ -552,6 +552,7 @@ static burrow__NetSysOpts dl_dialer_opts(const NetDialer *d, Context ctx) {
         o.ctl.ctrl = (burrow__NetCtrlFn){dl_control, (void *)(uintptr_t)d};
     o.keep_alive = d->keep_alive;
     o.keep_alive_config = d->keep_alive_config;
+    o.mptcp = burrow__net_mptcp_dial(d->mptcp_status);
     return o;
 }
 
@@ -978,6 +979,68 @@ NetUnixConn *net_dialer_dial_unix(const NetDialer *d, Alloc *a, Context ctx,
     return c;
 }
 
+/* ipAddrFromAddr, in the error arena as the TCP and UDP ones are: AsSlice's
+ * bytes, none for the zero Addr, and the zone. */
+static NetIPAddr *dl_ip_addr_from(NetipAddr ip) {
+    Byte bytes[16] = {0};
+    Int n = 0;
+    if (netip_addr_is4(ip)) {
+        NetipAddrAs4Ret b4 = netip_addr_as4(ip);
+        memcpy(bytes, b4.a, 4);
+        n = 4;
+    } else if (netip_addr_is_valid(ip)) {
+        NetipAddrAs16Ret b16 = netip_addr_as16(ip);
+        memcpy(bytes, b16.a, 16);
+        n = 16;
+    }
+    NetIP s = n > 0 ? slice_from(bytes, n, n, TYPE_BYTE) : (NetIP){0};
+    return burrow__net_ip_addr_new(error_allocator(), s, netip_addr_zone(ip));
+}
+
+NetIPConn *net_dialer_dial_ip(const NetDialer *d, Alloc *a, Context ctx, Str network,
+                              NetipAddr laddr, NetipAddr raddr, Error *err) {
+    if (d == NULL)
+        d = &dl_zero_dialer;
+    DlCtx dc;
+    ArenaMark m = error_mark();
+    NetIPAddr *la = dl_ip_addr_from(laddr);
+    NetIPAddr *ra = dl_ip_addr_from(raddr);
+    if (la == NULL || ra == NULL || !dl_ctx_begin(d, ctx, &dc)) {
+        if (la != NULL && ra != NULL)
+            dl_ctx_end(&dc);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    burrow__NetSysOpts o = dl_dialer_opts(d, dc.ctx);
+    Error e = BURROW_NO_ERROR;
+    NetIPConn *c = burrow__net_dial_ip(a, &o, network, la, ra, &e);
+    dl_ctx_end(&dc);
+    if (c != NULL)
+        error_release(m);
+    BURROW_OUT(err, e);
+    return c;
+}
+
+/* ----------------------------------------------------------------- MPTCP */
+
+bool net_dialer_multipath_tcp(const NetDialer *d) {
+    return burrow__net_mptcp_dial(d != NULL ? d->mptcp_status : 0);
+}
+
+void net_dialer_set_multipath_tcp(NetDialer *d, bool use) {
+    if (d != NULL)
+        d->mptcp_status = use ? 1 : 2;
+}
+
+bool net_listen_config_multipath_tcp(const NetListenConfig *lc) {
+    return burrow__net_mptcp_listen(lc != NULL ? lc->mptcp_status : 0);
+}
+
+void net_listen_config_set_multipath_tcp(NetListenConfig *lc, bool use) {
+    if (lc != NULL)
+        lc->mptcp_status = use ? 1 : 2;
+}
+
 /* -------------------------------------------------------------- listening */
 
 static Error dl_listen_control(void *env, Context ctx, Str network, Str address,
@@ -998,6 +1061,7 @@ static burrow__NetSysOpts dl_listen_opts(const NetListenConfig *lc, Context ctx)
         o.ctl.ctrl = (burrow__NetCtrlFn){dl_listen_control, (void *)(uintptr_t)lc};
     o.keep_alive = lc->keep_alive;
     o.keep_alive_config = lc->keep_alive_config;
+    o.mptcp = burrow__net_mptcp_listen(lc->mptcp_status);
     return o;
 }
 

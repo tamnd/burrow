@@ -215,6 +215,7 @@ global	src/net/dnsclient_unix.c	du_fallback	resolver	The config used when resolv
 global	src/net/lookup.c	lk_default	resolver	DefaultResolver. Its only state is the list of lookups in flight, which is read and written under its burrow_mu.
 global	src/net/lookup.c	lk_wait	resolver	dnsWaitGroup, the lookups still running in goroutines of their own. Only touched through the wait group's own atomics, and only waited on by tests.
 global	src/net/netfd.c	nf_stack	package-vars	Whether this machine has IPv4, IPv6 and IPv4-mapped IPv6 sockets, probed by the first socket that needs to know and stored with a release store after the probed bit. Two racing probes store the same value.
+global	src/net/tcpsock.c	nt_mptcp	package-vars	Whether the kernel has Multipath TCP and SOL_MPTCP, probed by the first socket that wants it and stored with a release store after the probed bit. Two racing probes store the same value.
 global	src/net/netfd.c	nf_backlog	package-vars	The listen backlog the system allows, worked out by the first listener. Atomic loads and stores only, and two racing listeners store the same value.
 global	src/net/url.c	url_debug_flags	godebug	The urlstrictcolons and urlmaxqueryparams settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/net/url.c	url_debug_max	godebug	The urlmaxqueryparams number, stored atomically before url_debug_flags says it is there.

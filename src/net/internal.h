@@ -468,7 +468,14 @@ typedef struct burrow__NetSysOpts {
     SyncMutex *alloc_mu;
     Duration keep_alive;
     NetKeepAliveConfig keep_alive_config;
+    bool mptcp; /* the Dialer's or ListenConfig's MultipathTCP */
 } burrow__NetSysOpts;
+
+/* mptcpStatusDial.get and mptcpStatusListen.get: what a status of 0, 1 or 2
+ * comes to, with GODEBUG's multipathtcp deciding for 0. A NULL burrow__NetSysOpts
+ * is a zero Dialer or ListenConfig, so it comes to the default. */
+bool burrow__net_mptcp_dial(uint8_t status);
+bool burrow__net_mptcp_listen(uint8_t status);
 
 /* sysDialer.dialTCP, dialUDP and dialUnix, and sysListener.listenTCP,
  * listenUDP, listenUnix and listenUnixgram: o may be NULL, and the error is
@@ -497,7 +504,7 @@ burrow__net_sys_listen_unix(Alloc *a, const burrow__NetSysOpts *o, Str network,
 /* Whether c is an end of a net_pipe. */
 bool burrow__net_is_pipe(NetConn c);
 
-/* DialTCP, DialUDP and DialUnix with a Dialer's options in o, which may be
+/* DialTCP, DialUDP, DialUnix and DialIP with a Dialer's options in o, which may be
  * NULL, and Go's checks and errors. */
 BURROW_OWNS(ret) NetTCPConn *burrow__net_dial_tcp(Alloc *a, const burrow__NetSysOpts *o,
                                                   Str network, const NetTCPAddr *laddr,
@@ -508,6 +515,9 @@ BURROW_OWNS(ret) NetUDPConn *burrow__net_dial_udp(Alloc *a, const burrow__NetSys
 BURROW_OWNS(ret) NetUnixConn *
 burrow__net_dial_unix(Alloc *a, const burrow__NetSysOpts *o, Str network,
                       const NetUnixAddr *laddr, const NetUnixAddr *raddr, Error *err);
+BURROW_OWNS(ret) NetIPConn *burrow__net_dial_ip(Alloc *a, const burrow__NetSysOpts *o,
+                                                Str network, const NetIPAddr *laddr,
+                                                const NetIPAddr *raddr, Error *err);
 
 /* partialDeadline: the deadline for the next of addrs_remaining addresses
  * when the whole dial has until deadline, both on the monotonic clock, with

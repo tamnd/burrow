@@ -265,6 +265,15 @@ ConstantValue q = constant_binary_op(a, constant_make_uint64(a, 11), TOKEN_QUO,
 fmt_println_v(constant_value_string(q, a));
 ```
 
+That prints:
+
+```
+real part 25.3 is not exact as a double
+go/constant (25.3 + 55i)
+double 25.299999999999997 55 true
+22
+```
+
 The kinds go up from `CONSTANT_INT` to `CONSTANT_FLOAT` to `CONSTANT_COMPLEX` as needed, so an Int divided by a Float is a Float. `TOKEN_QUO` on two Ints gives the exact fraction, and `TOKEN_QUO_ASSIGN` gives the truncated integer quotient. `constant_value_string` rounds a number that is not an integer to 6 digits and `constant_value_exact_string` writes it in full, and the type descriptor `TYPE_CONSTANT_VALUE` has the short form as its `String` method, so a value can go straight to `fmt`.
 
 `constant_unary_op` takes a precision, which makes `^` work on an unsigned integer of that many bits:
@@ -294,6 +303,14 @@ for (int i = 0; i < 3; i++) {
 }
 for (int i = 0; i < 3; i++)
     fmt_println_v(constant_value_string(vs[i], a));
+```
+
+That prints:
+
+```
+false
+-2.7
+65493
 ```
 
 `constant_compare` works for strings as well as numbers, so it can sort:
@@ -326,6 +343,17 @@ static void compare(Alloc *a) {
 }
 ```
 
+That prints:
+
+```
+Frame
+Z
+a
+bacon
+defer
+go
+```
+
 `constant_sign` is -1, 0 or +1, and a complex value is 0 only when both its parts are:
 
 <!-- example: ../examples/go/constant.c#sign -->
@@ -355,6 +383,21 @@ static void sign(Alloc *a) {
 }
 ```
 
+That prints:
+
+```
+-1 -1
+-1 (0 + -1i)
+-1 (1 + -1i)
+-1 (-1 + 1i)
+-1 (-1 + -1i)
+ 0 0
+ 0 (0 + 0i)
+ 1 1
+ 1 (0 + 1i)
+ 1 (1 + 1i)
+```
+
 `constant_val` gives a value back as an `Any`: a `bool`, a `Str` or an `int64_t` when it fits one, and otherwise the `BigInt`, `BigRat` or `BigFloat` it is held in. A float that came from a double is held as a fraction:
 
 <!-- example: ../examples/go/constant.c#val -->
@@ -367,6 +410,15 @@ ConstantValue vs[] = {
 };
 for (int i = 0; i < 4; i++)
     fmt_printf_v("%v\n", constant_val(a, vs[i]));
+```
+
+That prints:
+
+```
+9223372036854775807
+6121026514868073/2251799813685248
+true
+false
 ```
 
 A ConstantValue is a small struct passed by value, and `{0}` is the unknown value, which is what an operation on an unknown value or a bad literal gives back. Anything bigger than an `int64_t` lives in the allocator passed to the function that made it, and values share that memory, since none of them ever changes. Nothing frees a single value, so make them in an arena and free the arena when you are done. Operations panic on operands that make no sense, like `!1` or `true + true`, with the same messages as Go.

@@ -130,3 +130,33 @@ int main(void) {
     arena_free(&ar);
     return 0;
 }
+
+/* Output:
+real part 25.3 is not exact as a double
+go/constant (25.3 + 55i)
+double 25.299999999999997 55 true
+22
+false
+-2.7
+65493
+Frame
+Z
+a
+bacon
+defer
+go
+-1 -1
+-1 (0 + -1i)
+-1 (1 + -1i)
+-1 (-1 + 1i)
+-1 (-1 + -1i)
+ 0 0
+ 0 (0 + 0i)
+ 1 1
+ 1 (0 + 1i)
+ 1 (1 + 1i)
+9223372036854775807
+6121026514868073/2251799813685248
+true
+false
+*/

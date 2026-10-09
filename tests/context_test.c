@@ -2190,6 +2190,44 @@ static void TestReleaseWaitsForADeadlineThatHasFired(TestingT *t) {
     CHECK_INT_EQ((Int)release_rounds, 500);
 }
 
+/* A deadline that has already gone by is cancelled before the constructor
+ * returns, after propagate_cancel has put it in its parent's list. It has to
+ * come out of that list then, because nothing later takes it out: its release
+ * finds it cancelled already. If it stayed, the parent's cancel below would
+ * walk into the arena that was just freed, which asan reports. */
+static Int past_child_rounds;
+
+static void past_deadline_child_body(void *env) {
+    (void)env;
+    for (int i = 0; i < 100; i++) {
+        ContextCancelFunc pcancel;
+        Context p =
+            context_with_cancel(heap_allocator(), context_background(), &pcancel);
+        if (BURROW_CONTEXT_IS_NIL(p))
+            return;
+        Arena ar;
+        arena_init(&ar, heap_allocator(), 0);
+        Context c = context_with_deadline(arena_allocator(&ar), p,
+                                          burrow_nanotime() - TIME_SECOND, NULL);
+        if (BURROW_CONTEXT_IS_NIL(c)) {
+            arena_free(&ar);
+            context_release(p);
+            return;
+        }
+        context_release(c);
+        arena_free(&ar);
+        BURROW_CALLF0(pcancel);
+        context_release(p);
+        past_child_rounds++;
+    }
+}
+
+static void TestAPastDeadlineLeavesItsParentsListWhenReleased(TestingT *t) {
+    past_child_rounds = 0;
+    runtime_main(BURROW_FN(Func, past_deadline_child_body, NULL));
+    CHECK_INT_EQ(past_child_rounds, 100);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTheRootIsNeverCancelledAndCarriesNothing)                                    \
     X(TestBackgroundAndTodoAreNotTheSameContext)                                       \
@@ -2253,6 +2291,7 @@ static void TestReleaseWaitsForADeadlineThatHasFired(TestingT *t) {
     X(TestADeadlineRunningOutRunsTheFunctionToo)                                       \
     X(TestTheFunctionRunsOnceHoweverManyThingsCancel)                                  \
     X(TestARegistrationWhoseFunctionHasRunIsStillGivenBack)                            \
-    X(TestReleaseWaitsForADeadlineThatHasFired)
+    X(TestReleaseWaitsForADeadlineThatHasFired)                                        \
+    X(TestAPastDeadlineLeavesItsParentsListWhenReleased)
 
 TESTING_MAIN_BARE(TESTS)

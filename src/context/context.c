@@ -1363,10 +1363,13 @@ Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Erro
     /* Already gone by, so there is nothing to arm. Go cancels here too and
      * hands back a context whose done channel is closed, which is more useful
      * than a failure: the caller's select wakes at once and takes the same path
-     * it would have taken a second later. */
+     * it would have taken a second later. It comes out of the parent's list
+     * here as well, as Go's cancel(true, ...) does, because propagate_cancel
+     * may have just put it there, and once the error is set no later cancel or
+     * release takes it out again. */
     Duration left = when - burrow_nanotime();
     if (left <= 0) {
-        cancel_node(c, false, context_deadline_exceeded, t->deadline_cause);
+        cancel_node(c, true, context_deadline_exceeded, t->deadline_cause);
         return out;
     }
 

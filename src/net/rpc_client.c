@@ -63,7 +63,7 @@ static void rc_call_done(RpcCall *call) {
 
 /* An error for the call, in the call's allocator. */
 static void rc_call_fail(RpcCall *call, Error err) {
-    call->error = BURROW_OK(err) ? err : error_retain(call->a, err);
+    call->error = BURROW_OK(err) ? err : error_retain(call->ea, err);
 }
 
 static RpcCall *rc_take(RpcClient *c, uint64_t seq) {
@@ -146,7 +146,7 @@ static void rc_input(void *env) {
             /* We've got an error response. Give this to the request; any
              * subsequent requests will get the ReadResponseBody error if there
              * is one. */
-            call->error = rpc_server_error_as_error(response.error, call->a);
+            call->error = rpc_server_error_as_error(response.error, call->ea);
             err = c->codec.vt->read_response_body(c->codec.data, sa,
                                                   BURROW_ANY(NULL, NULL));
             if (BURROW_FAILED(err))
@@ -416,6 +416,7 @@ static void rc_call_init(RpcCall *call, Alloc *a, Str service_method, Any args,
     call->reply = reply;
     call->done = done;
     call->a = a;
+    call->ea = a;
 }
 
 RpcCall *rpc_client_go(RpcClient *c, Alloc *a, Str service_method, Any args, Any reply,
@@ -455,12 +456,19 @@ Error rpc_client_call(RpcClient *c, Alloc *a, Str service_method, Any args, Any 
     Chan *done = chan_make(heap_allocator(), TYPE_UNSAFE_POINTER, 1);
     if (done == NULL)
         return burrow_err_out_of_memory;
+    /* The error comes back in the caller's error arena, so the copy the input
+     * loop makes only has to last until then. */
+    Arena ea;
+    arena_init(&ea, heap_allocator(), 0);
     RpcCall call;
     rc_call_init(&call, a, service_method, args, reply, done);
+    call.ea = arena_allocator(&ea);
     rc_send(c, &call);
     void *got = NULL;
     (void)chan_recv(done, &got);
     chan_free(done);
-    return BURROW_OK(call.error) ? call.error
-                                 : error_retain(error_allocator(), call.error);
+    Error err = BURROW_OK(call.error) ? call.error
+                                      : error_retain(error_allocator(), call.error);
+    arena_free(&ea);
+    return err;
 }

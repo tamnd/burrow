@@ -47,6 +47,7 @@
 #include "burrow/proc.h"
 #include "burrow/runtime.h"
 #include "burrow/sync.h"
+#include "burrow/thread.h"
 #include "burrow/time.h"
 #include "burrow/timer.h"
 #include "burrow/type.h"
@@ -1362,10 +1363,13 @@ Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Erro
     /* Already gone by, so there is nothing to arm. Go cancels here too and
      * hands back a context whose done channel is closed, which is more useful
      * than a failure: the caller's select wakes at once and takes the same path
-     * it would have taken a second later. */
+     * it would have taken a second later. It comes out of the parent's list
+     * here as well, as Go's cancel(true, ...) does, because propagate_cancel
+     * may have just put it there, and once the error is set no later cancel or
+     * release takes it out again. */
     Duration left = when - burrow_nanotime();
     if (left <= 0) {
-        cancel_node(c, false, context_deadline_exceeded, t->deadline_cause);
+        cancel_node(c, true, context_deadline_exceeded, t->deadline_cause);
         return out;
     }
 
@@ -1463,6 +1467,19 @@ void context_release(Context c) {
         /* Cancel first, so that the done channel is closed and anything parked
          * on it has been let go before the channel stops existing. */
         cancel_node(cc, true, context_canceled, BURROW_NO_ERROR);
+
+        /* Whatever else holds a reference puts it down soon after the cancel: a
+         * deadline that has already fired is on its way through cancel_node, a
+         * watcher wakes on the closed channel, and a parent's cancel is part
+         * way through its children. Waiting for them here means nothing touches
+         * the node once this returns, so the memory it came from can go
+         * straight after, an arena included. Go's collector never has to ask. */
+        while (burrow__atomic_load_acquire_u32(&cc->refs) != 1) {
+            if (burrow__timers_local() != NULL)
+                runtime_gosched();
+            else
+                burrow__thread_yield();
+        }
         cancel_ctx_release(cc);
         return;
     }

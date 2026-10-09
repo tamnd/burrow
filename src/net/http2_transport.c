@@ -99,7 +99,8 @@ enum {
 
 /* ---------------------------------------------------------------- errors */
 
-BURROW_SENTINEL_ERROR(burrow__http2_err_client_conn_closed, "http2: client conn is closed");
+BURROW_SENTINEL_ERROR(burrow__http2_err_client_conn_closed,
+                      "http2: client conn is closed");
 BURROW_SENTINEL_ERROR(burrow__http2_err_client_conn_unusable,
                       "http2: client conn not usable");
 BURROW_SENTINEL_ERROR(burrow__http2_err_client_conn_not_established,
@@ -297,7 +298,7 @@ static uint32_t h2c_max_header_list_size(const HttpTransport *t1) {
     if (b != 0) {
         n = b;
         if (n > 0) /* adjustHTTP1MaxHeaderSize, which wraps as Go's does */
-            n = (int64_t)((uint64_t)n + 10 * 32);
+            n = (int64_t)((uint64_t)n + (uint64_t)10 * 32);
     }
     if (n <= 0)
         return 10 << 20;
@@ -328,7 +329,8 @@ Str burrow__http2_authority_addr(Alloc *a, Str scheme, Str authority) {
         host = ah;
     Str out;
     /* IPv6 address literal, without a port: */
-    if (strings_has_prefix(host, BURROW_S("[")) && strings_has_suffix(host, BURROW_S("]")))
+    if (strings_has_prefix(host, BURROW_S("[")) &&
+        strings_has_suffix(host, BURROW_S("]")))
         out = fmt_sprintf_v(a, "%s:%s", host, port);
     else
         out = net_join_host_port(a, host, port);
@@ -360,8 +362,8 @@ static Str h2c_value0(Slice vv) {
 /* checkConnHeaders. */
 static Error h2c_check_conn_headers(Alloc *a, HttpHeader h) {
     Slice vv = http_header_values(h, BURROW_S("Upgrade"));
-    if (vv.len > 0 && (h2c_value0(vv).len != 0 &&
-                       !str_eq(h2c_value0(vv), BURROW_S("chunked"))))
+    if (vv.len > 0 &&
+        (h2c_value0(vv).len != 0 && !str_eq(h2c_value0(vv), BURROW_S("chunked"))))
         return fmt_errorf_v("invalid Upgrade request header: %s",
                             h2c_quote_values(a, vv));
     vv = http_header_values(h, BURROW_S("Transfer-Encoding"));
@@ -394,8 +396,8 @@ static Error h2c_comma_separated_trailers(Alloc *a, HttpHeader trailer, Str *out
     void *vp;
     while (map_next(&it, &kp, &vp)) {
         Str k = textproto_canonical_mime_header_key(a, *(const Str *)kp);
-        if (str_eq(k, BURROW_S("Transfer-Encoding")) || str_eq(k, BURROW_S("Trailer")) ||
-            str_eq(k, BURROW_S("Content-Length")))
+        if (str_eq(k, BURROW_S("Transfer-Encoding")) ||
+            str_eq(k, BURROW_S("Trailer")) || str_eq(k, BURROW_S("Content-Length")))
             return fmt_errorf_v("invalid Trailer key %q", k);
         keys = slice_append(a, keys, &k, 1);
         if (keys.p == NULL)
@@ -425,7 +427,8 @@ static Str h2c_validate_headers(Alloc *a, HttpHeader hdrs) {
             return fmt_sprintf_v(a, "name %q", k);
         Slice vv = *(const Slice *)vp;
         for (Int i = 0; i < vv.len; i++) {
-            if (!burrow__httpguts_valid_header_field_value(*(const Str *)slice_at(vv, i)))
+            if (!burrow__httpguts_valid_header_field_value(
+                    *(const Str *)slice_at(vv, i)))
                 return fmt_sprintf_v(a, "value for header %q", k);
         }
     }
@@ -446,7 +449,8 @@ static bool h2c_should_send_req_content_length(Str method, int64_t content_lengt
 }
 
 /* isRequestGzip. */
-static bool h2c_is_request_gzip(Str method, HttpHeader header, bool disable_compression) {
+static bool h2c_is_request_gzip(Str method, HttpHeader header,
+                                bool disable_compression) {
     /* TODO(bradfitz): this is a copy of the logic in net/http. Unify
      * somewhere? */
     return !disable_compression &&
@@ -491,21 +495,19 @@ static void h2c_enumerate_headers(const h2c_Enum *en, Http2HeaderFunc f, void *e
         while (map_next(&it, &kp, &vp)) {
             Str k = *(const Str *)kp;
             Slice vv = *(const Slice *)vp;
+            /* Host is :authority, already sent. Content-Length is automatic,
+             * sent below. And per 8.1.2.2 Connection-Specific Header Fields,
+             * don't send connection-specific fields. We have already checked
+             * if any are error-worthy so just ignore the rest. */
             if (burrow__http_ascii_equal_fold(k, BURROW_S("host")) ||
-                burrow__http_ascii_equal_fold(k, BURROW_S("content-length"))) {
-                /* Host is :authority, already sent. Content-Length is
-                 * automatic, sent below. */
+                burrow__http_ascii_equal_fold(k, BURROW_S("content-length")) ||
+                burrow__http_ascii_equal_fold(k, BURROW_S("connection")) ||
+                burrow__http_ascii_equal_fold(k, BURROW_S("proxy-connection")) ||
+                burrow__http_ascii_equal_fold(k, BURROW_S("transfer-encoding")) ||
+                burrow__http_ascii_equal_fold(k, BURROW_S("upgrade")) ||
+                burrow__http_ascii_equal_fold(k, BURROW_S("keep-alive")))
                 continue;
-            } else if (burrow__http_ascii_equal_fold(k, BURROW_S("connection")) ||
-                       burrow__http_ascii_equal_fold(k, BURROW_S("proxy-connection")) ||
-                       burrow__http_ascii_equal_fold(k, BURROW_S("transfer-encoding")) ||
-                       burrow__http_ascii_equal_fold(k, BURROW_S("upgrade")) ||
-                       burrow__http_ascii_equal_fold(k, BURROW_S("keep-alive"))) {
-                /* Per 8.1.2.2 Connection-Specific Header Fields, don't send
-                 * connection-specific fields. We have already checked if any
-                 * are error-worthy so just ignore the rest. */
-                continue;
-            } else if (burrow__http_ascii_equal_fold(k, BURROW_S("user-agent"))) {
+            if (burrow__http_ascii_equal_fold(k, BURROW_S("user-agent"))) {
                 /* Match Go's http1 behavior: at most one User-Agent. If set
                  * to nil or empty string, then omit it. Otherwise if not
                  * mentioned, include the default (below). */
@@ -697,10 +699,10 @@ typedef struct h2c_GzipReader h2c_GzipReader;
  * the ones for the same key that come while it does wait for. */
 typedef struct h2c_AddCall {
     Str key;
-    Chan *done;  /* closed when it is done */
-    Error err;   /* in earena, set before done is closed */
+    Chan *done; /* closed when it is done */
+    Error err;  /* in earena, set before done is closed */
     Arena earena;
-    Int refs;    /* under the transport's mu */
+    Int refs; /* under the transport's mu */
     struct h2c_AddCall *next;
 } h2c_AddCall;
 
@@ -721,21 +723,17 @@ struct burrow__Http2Transport {
     SyncAtomicBool closed;
 };
 
-/* ClientConn. */
+/* ClientConn. The flags are at the end, each under what its group says. */
 struct h2c_Conn {
     Http2Transport *t;
     Alloc *a;
-    SyncAtomicInt32 refs;
     h2c_Conn *all_prev; /* under t->mu */
     h2c_Conn *all_next;
-    Str key;              /* in a */
-    bool in_pool;         /* under t->mu, and holds a reference */
-    bool get_conn_called; /* under t->mu */
-    bool free_closed;     /* under t->mu, once the transport's free closed it */
+    Str key; /* in a */
     NetConn tconn;
     h2c_Config conf;
+    SyncAtomicInt32 refs;
     SyncAtomicUint32 atomic_reused;
-    bool single_use;
 
     /* readLoop goroutine fields: */
     Chan *reader_done; /* closed on error */
@@ -749,44 +747,34 @@ struct h2c_Conn {
     TimeTimer *dead_t;
     TimeTimer *read_idle_t; /* the read loop's health check */
 
-    SyncMutex mu; /* guards the following */
+    SyncMutex mu;  /* guards the following */
     SyncCond cond; /* on mu, broadcast on flow and closed changes */
     Http2Outflow flow;
     Http2Inflow inflow;
-    bool do_not_reuse;
-    bool closing;
-    bool closed;
-    bool closed_on_idle;
-    bool seen_settings;
     Chan *seen_settings_chan; /* closed when seen_settings is or reading fails */
-    bool want_settings_ack;
-    bool has_go_away;
-    uint32_t go_away_last_stream_id;
-    Http2ErrCode go_away_err_code;
-    Str go_away_debug; /* in earena */
-    Map *streams;      /* uint32_t to h2c_Stream *, which each hold a reference */
+    Str go_away_debug;        /* in earena */
+    Map *streams; /* uint32_t to h2c_Stream *, which each hold a reference */
     Int streams_reserved;
-    uint32_t next_stream_id;
     Int pending_requests;
     Map *pings; /* the 8 bytes, as a uint64_t, to the Chan * a PING ack closes */
     BufioReader *br;
     Time last_active;
     Time last_idle;
+    uint32_t go_away_last_stream_id;
+    Http2ErrCode go_away_err_code;
+    uint32_t next_stream_id;
 
     /* Settings from peer, also guarded by wmu. */
     uint32_t max_frame_size;
     uint32_t max_concurrent_streams;
-    uint64_t peer_max_header_list_size;
     uint32_t peer_max_header_table_size;
     uint32_t initial_window_size;
     int32_t initial_stream_recv_window_size;
+    uint32_t read_before_stream_id;
+    uint64_t peer_max_header_list_size;
     Duration read_idle_timeout;
     Duration ping_timeout;
-    bool extended_connect_allowed;
-    bool strict_max_concurrent_streams;
-    bool rst_stream_pings_blocked;
     Int pending_resets;
-    uint32_t read_before_stream_id;
 
     /* A semaphore with room for one, held while a request's headers are
      * written. Taken before mu or wmu. */
@@ -804,12 +792,30 @@ struct h2c_Conn {
     /* Where errors that outlive a call are kept. */
     SyncMutex emu;
     Arena earena;
+
+    bool in_pool;         /* under t->mu, and holds a reference */
+    bool get_conn_called; /* under t->mu */
+    bool free_closed;     /* under t->mu, once the transport's free closed it */
+    bool single_use;
+
+    /* Under mu. */
+    bool do_not_reuse;
+    bool closing;
+    bool closed;
+    bool closed_on_idle;
+    bool seen_settings;
+    bool want_settings_ack;
+    bool has_go_away;
+
+    /* Settings from peer, under mu and wmu. */
+    bool extended_connect_allowed;
+    bool strict_max_concurrent_streams;
+    bool rst_stream_pings_blocked;
 };
 
-/* clientStream. */
+/* clientStream. The flags are at the end. */
 struct h2c_Stream {
     h2c_Conn *cc; /* a reference */
-    SyncAtomicInt32 refs;
     HttpRequest *req;
 
     Context ctx;
@@ -818,13 +824,11 @@ struct h2c_Stream {
     SyncMutex tmu;
     const HttptraceClientTrace *trace;
 
+    SyncAtomicInt32 refs;
     uint32_t id;
     Http2Pipe buf_pipe; /* the flow-controlled response body */
     Http2DataBuffer dbuf;
-    bool requested_gzip;
-    bool is_head;
 
-    bool aborted;      /* under cc->mu */
     Chan *abort;       /* closed to end the stream straight away */
     Error abort_err;   /* kept, set if abort is closed */
     Chan *peer_closed; /* closed when the peer sends END_STREAM */
@@ -833,17 +837,32 @@ struct h2c_Stream {
 
     Chan *resp_header_recv; /* closed when headers are received */
     HttpResponse *res;      /* set if resp_header_recv is closed */
-    bool res_taken;         /* res is the caller's, and holds a reference */
 
-    Http2Outflow flow; /* under cc->mu */
-    Http2Inflow inflow; /* under cc->mu */
+    Http2Outflow flow;    /* under cc->mu */
+    Http2Inflow inflow;   /* under cc->mu */
     int64_t bytes_remain; /* -1 means unknown, owned by the body's Read */
     Error read_err;       /* kept, sticky, owned by the body's Read */
 
     IoReadCloser req_body;
     int64_t req_body_content_length; /* -1 means unknown */
+    Chan *req_body_closed;           /* closed once req_body_closing's Close is done */
+
+    /* Owned by the read loop. */
+    int64_t total_header_size;
+    Arena tarena;
+    HttpHeader trailer; /* in tarena */
+
+    h2c_GzipReader *gz;
+
+    SyncMutex emu;
+    Arena earena;
+
+    bool requested_gzip;
+    bool is_head;
+    bool aborted;          /* under cc->mu */
+    bool res_taken;        /* res is the caller's, and holds a reference */
     bool req_body_closing; /* under cc->mu, set once Close has begun */
-    Chan *req_body_closed; /* closed once that Close is done */
+    bool body_closed;      /* the response body's Close has run */
 
     /* Owned by writeRequest. */
     bool sent_end_stream;
@@ -855,15 +874,6 @@ struct h2c_Stream {
     bool past_trailers;
     bool read_closed;
     bool read_aborted;
-    int64_t total_header_size;
-    Arena tarena;
-    HttpHeader trailer; /* in tarena */
-
-    h2c_GzipReader *gz;
-    bool body_closed; /* the response body's Close has run */
-
-    SyncMutex emu;
-    Arena earena;
 };
 
 /* ------------------------------------------------------ connection basics */
@@ -1063,7 +1073,8 @@ static bool h2c_too_idle_locked(h2c_Conn *cc) {
 /* isUsableLocked. */
 static bool h2c_is_usable_locked(h2c_Conn *cc) {
     return !cc->has_go_away && !cc->closed && !cc->closing && !cc->do_not_reuse &&
-           (int64_t)cc->next_stream_id + 2 * (int64_t)cc->pending_requests < INT32_MAX &&
+           (int64_t)cc->next_stream_id + 2 * (int64_t)cc->pending_requests <
+               INT32_MAX &&
            !h2c_too_idle_locked(cc);
 }
 
@@ -1185,9 +1196,11 @@ static void h2c_abort_stream(h2c_Stream *cs, Error err) {
 }
 
 /* Each stream in cc->streams, for fn to look at under cc->mu. */
-#define H2C_EACH_STREAM(cc, cs)                                                  \
-    for (MapIter it_ = map_iter((cc)->streams); map_next(&it_, &k_, &v_);)       \
+/* NOLINTBEGIN(bugprone-macro-parentheses): cs is the name it declares. */
+#define H2C_EACH_STREAM(cc, cs)                                                        \
+    for (MapIter it_ = map_iter((cc)->streams); map_next(&it_, &k_, &v_);)             \
         for (h2c_Stream *cs = (h2c_Stream *)*(uintptr_t *)v_; cs != NULL; cs = NULL)
+/* NOLINTEND(bugprone-macro-parentheses) */
 
 /* closeForError. */
 static void h2c_close_for_error(h2c_Conn *cc, Error err) {
@@ -1273,9 +1286,10 @@ static h2c_Conn *h2c_new_client_conn(Http2Transport *t, NetConn c, bool single_u
     cc->conf = h2c_config_from_transport(t->t1);
     cc->single_use = single_use;
     cc->next_stream_id = 1;
-    cc->max_frame_size = H2C_SPEC_MAX_FRAME_SIZE; /* spec default */
+    cc->max_frame_size = H2C_SPEC_MAX_FRAME_SIZE;      /* spec default */
     cc->initial_window_size = H2C_INITIAL_WINDOW_SIZE; /* spec default */
-    cc->initial_stream_recv_window_size = (int32_t)cc->conf.max_receive_buffer_per_stream;
+    cc->initial_stream_recv_window_size =
+        (int32_t)cc->conf.max_receive_buffer_per_stream;
     /* "infinite", per spec. Use a smaller value until we have received
      * server settings. */
     cc->max_concurrent_streams = H2C_INITIAL_MAX_CONCURRENT_STREAMS;
@@ -1319,8 +1333,8 @@ static h2c_Conn *h2c_new_client_conn(Http2Transport *t, NetConn c, bool single_u
                                       bufio_reader_as_io_reader(cc->br));
     if (cc->fr == NULL)
         goto oom;
-    burrow__http2_framer_set_max_read_frame_size(cc->fr,
-                                                 (uint32_t)cc->conf.max_read_frame_size);
+    burrow__http2_framer_set_max_read_frame_size(
+        cc->fr, (uint32_t)cc->conf.max_read_frame_size);
     if (!BURROW_FUNC_IS_NIL(cc->conf.count_error)) {
         cc->fr->count_error.f = cc->conf.count_error.f;
         cc->fr->count_error.env = cc->conf.count_error.env;
@@ -1439,7 +1453,8 @@ static void h2c_add_call_unref(Http2Transport *t, h2c_AddCall *call) {
 
 Http2Transport *burrow__http2_new_transport(HttpTransport *t1) {
     Alloc *a = t1 != NULL && t1->a != NULL ? t1->a : heap_allocator();
-    Http2Transport *t = (Http2Transport *)mem_alloc(a, sizeof *t, _Alignof(Http2Transport));
+    Http2Transport *t =
+        (Http2Transport *)mem_alloc(a, sizeof *t, _Alignof(Http2Transport));
     if (t == NULL)
         return NULL;
     t->t1 = t1;
@@ -1638,8 +1653,8 @@ static void h2c_end_stream(h2c_Conn *cc, h2c_Stream *cs) {
      * caller can read io.EOF from the body and close it before peer_closed
      * is closed, which makes cleanupWriteRequest send a RST_STREAM. */
     sync_mutex_lock(&cc->mu);
-    burrow__http2_pipe_close_with_error_and_code(&cs->buf_pipe, io_eof,
-                                                 BURROW_FN(Func, h2c_copy_trailers, cs));
+    burrow__http2_pipe_close_with_error_and_code(
+        &cs->buf_pipe, io_eof, BURROW_FN(Func, h2c_copy_trailers, cs));
     chan_close(cs->peer_closed);
     sync_mutex_unlock(&cc->mu);
 }
@@ -1728,7 +1743,8 @@ static HttpResponse *h2c_handle_response(h2c_Conn *cc, h2c_Stream *cs,
     }
 
     Alloc *a = cc->a;
-    HttpResponse *res = (HttpResponse *)mem_alloc(a, sizeof *res, _Alignof(HttpResponse));
+    HttpResponse *res =
+        (HttpResponse *)mem_alloc(a, sizeof *res, _Alignof(HttpResponse));
     if (res == NULL) {
         *err = burrow_err_out_of_memory;
         return NULL;
@@ -1859,9 +1875,9 @@ static HttpResponse *h2c_handle_response(h2c_Conn *cc, h2c_Stream *cs,
     res->body = (IoReadCloser){&h2c_body_vt, cs};
 
     if (cs->requested_gzip &&
-        burrow__http_ascii_equal_fold(http_header_get(res->header,
-                                                      BURROW_S("Content-Encoding")),
-                                      BURROW_S("gzip"))) {
+        burrow__http_ascii_equal_fold(
+            http_header_get(res->header, BURROW_S("Content-Encoding")),
+            BURROW_S("gzip"))) {
         IoReadCloser gz = h2c_gzip_body(cs);
         if (gz.vt == NULL)
             goto oom;
@@ -1955,8 +1971,8 @@ static Error h2c_process_stream_headers(h2c_Conn *cc, h2c_Stream *cs,
         if (burrow__http2_error_connection(err, &code))
             return err;
         /* Any other error type is a stream error. */
-        h2c_end_stream_error(cs,
-                             burrow__http2_stream_error(id, HTTP2_ERR_CODE_PROTOCOL, err));
+        h2c_end_stream_error(
+            cs, burrow__http2_stream_error(id, HTTP2_ERR_CODE_PROTOCOL, err));
         return BURROW_NO_ERROR; /* to keep the connection alive */
     }
     if (res == NULL) {
@@ -1993,14 +2009,16 @@ static void h2c_write_window_updates(h2c_Conn *cc, uint32_t id, int32_t conn_add
     if (conn_add > 0)
         (void)burrow__http2_framer_write_window_update(cc->fr, 0, (uint32_t)conn_add);
     if (stream_add > 0)
-        (void)burrow__http2_framer_write_window_update(cc->fr, id, (uint32_t)stream_add);
+        (void)burrow__http2_framer_write_window_update(cc->fr, id,
+                                                       (uint32_t)stream_add);
     (void)bufio_writer_flush(cc->bw);
     error_release(m);
     sync_mutex_unlock(&cc->wmu);
 }
 
 /* processData, for a stream there is. */
-static Error h2c_process_stream_data(h2c_Conn *cc, h2c_Stream *cs, const Http2Frame *f) {
+static Error h2c_process_stream_data(h2c_Conn *cc, h2c_Stream *cs,
+                                     const Http2Frame *f) {
     uint32_t id = f->header.stream_id;
     uint32_t length = f->header.length;
     Slice data = burrow__http2_data_frame_data(f);
@@ -2082,7 +2100,8 @@ static Error h2c_process_data(h2c_Conn *cc, const Http2Frame *f) {
     sync_mutex_unlock(&cc->mu);
     if (id >= never_sent) {
         /* We never asked for this. */
-        h2c_logf("http2: Transport received unsolicited DATA frame; closing connection");
+        h2c_logf(
+            "http2: Transport received unsolicited DATA frame; closing connection");
         return burrow__http2_connection_error(HTTP2_ERR_CODE_PROTOCOL);
     }
     /* We probably did ask for this, but canceled. Just ignore it, but at
@@ -2152,8 +2171,9 @@ static Error h2c_process_go_away(h2c_Conn *cc, const Http2Frame *f) {
              * connection, retrying the request on a new one probably isn't
              * going to work. */
             h2c_abort_stream_locked(
-                cs, fmt_errorf_v("http2: Transport received GOAWAY from server ErrCode:%v",
-                                 burrow__http2_err_code_string(cc->go_away_err_code, cb)));
+                cs,
+                fmt_errorf_v("http2: Transport received GOAWAY from server ErrCode:%v",
+                             burrow__http2_err_code_string(cc->go_away_err_code, cb)));
         } else {
             /* Aborting the stream with errClientConnGotGoAway indicates that
              * the request should be retried on a new connection. */
@@ -2306,8 +2326,8 @@ static Error h2c_process_reset_stream(h2c_Conn *cc, const Http2Frame *f) {
         return BURROW_NO_ERROR;
     }
     Http2ErrCode code = f->u.rst_stream.err_code;
-    Error serr = h2c_skeep(cs, burrow__http2_stream_error(cs->id, code,
-                                                          burrow__http2_err_from_peer));
+    Error serr = h2c_skeep(
+        cs, burrow__http2_stream_error(cs->id, code, burrow__http2_err_from_peer));
     if (code == HTTP2_ERR_CODE_PROTOCOL)
         h2c_set_do_not_reuse(cc);
     h2c_count(cc, "recv_rststream_", code);
@@ -2386,7 +2406,8 @@ static Error h2c_ping(h2c_Conn *cc, Context ctx) {
     }
 
     Error err = burrow_err_out_of_memory;
-    h2c_PingWrite *pw = (h2c_PingWrite *)mem_alloc(cc->a, sizeof *pw, _Alignof(h2c_PingWrite));
+    h2c_PingWrite *pw =
+        (h2c_PingWrite *)mem_alloc(cc->a, sizeof *pw, _Alignof(h2c_PingWrite));
     if (pw == NULL)
         goto out;
     pw->cc = cc;
@@ -2443,8 +2464,8 @@ static void h2c_health_check(void *env) {
      * readLoop of ClientConn will trigger the healthCheck again if there is
      * no frame received. */
     ContextCancelFunc cancel;
-    Context ctx = context_with_timeout(cc->a, context_background(), cc->ping_timeout,
-                                       &cancel);
+    Context ctx =
+        context_with_timeout(cc->a, context_background(), cc->ping_timeout, &cancel);
     h2c_vlogf("http2: Transport sending health check");
     Error err = h2c_ping(cc, ctx);
     BURROW_CALLF0(cancel);
@@ -2582,7 +2603,8 @@ static Error h2c_run(h2c_Conn *cc) {
         if (read_idle_timeout != 0 && cc->read_idle_t != NULL)
             h2c_timer_reset(cc, cc->read_idle_t, read_idle_timeout);
         if (BURROW_FAILED(err))
-            h2c_vlogf("http2: Transport readFrame error on conn %p: (%s) %v", (void *)cc,
+            h2c_vlogf("http2: Transport readFrame error on conn %p: (%s) %v",
+                      (void *)cc,
                       err.vt->self_type != NULL ? type_name(err.vt->self_type)
                                                 : BURROW_S("error"),
                       err);
@@ -2592,8 +2614,8 @@ static Error h2c_run(h2c_Conn *cc) {
             if (cs != NULL) {
                 if (BURROW_OK(se.cause))
                     se.cause = cc->fr->err_detail;
-                h2c_end_stream_error(cs, burrow__http2_stream_error(se.stream_id, se.code,
-                                                                    se.cause));
+                h2c_end_stream_error(
+                    cs, burrow__http2_stream_error(se.stream_id, se.code, se.cause));
                 h2c_sunref(cs);
             }
             if (f != NULL)
@@ -2628,7 +2650,8 @@ static Error h2c_run(h2c_Conn *cc) {
 
         err = h2c_process_frame(cc, f);
         if (BURROW_FAILED(err)) {
-            if (burrow__http2_verbose_logs() && !h2c_same(err, h2c_err_stop_read_loop)) {
+            if (burrow__http2_verbose_logs() &&
+                !h2c_same(err, h2c_err_stop_read_loop)) {
                 Str sum = burrow__http2_summarize_frame(cc->a, f);
                 log_printf_v("http2: Transport conn %p received error from processing "
                              "frame %v: %v",
@@ -2691,8 +2714,9 @@ static void h2c_cleanup(h2c_Conn *cc) {
     if (cc->idle_timeout > 0 && unused_wait_time > cc->idle_timeout)
         unused_wait_time = cc->idle_timeout;
     Duration idle_time = time_since(cc->last_active);
-    if (sync_atomic_uint32_load(&cc->atomic_reused) == 0 && idle_time < unused_wait_time &&
-        !cc->closed_on_idle && !sync_atomic_bool_load(&cc->t->closed)) {
+    if (sync_atomic_uint32_load(&cc->atomic_reused) == 0 &&
+        idle_time < unused_wait_time && !cc->closed_on_idle &&
+        !sync_atomic_bool_load(&cc->t->closed)) {
         h2c_timer_start(cc, &cc->dead_t, unused_wait_time - idle_time,
                         BURROW_FN(Func, h2c_on_dead, cc));
         cc->idle_timer = cc->dead_t;
@@ -2804,7 +2828,8 @@ static h2c_Stream *h2c_new_stream(h2c_Conn *cc, HttpRequest *req, IoReadCloser b
         return NULL;
     }
     bool disable_compression = cc->t->t1 != NULL && cc->t->t1->disable_compression;
-    cs->requested_gzip = h2c_is_request_gzip(req->method, req->header, disable_compression);
+    cs->requested_gzip =
+        h2c_is_request_gzip(req->method, req->header, disable_compression);
     return cs;
 }
 
@@ -2847,6 +2872,28 @@ static bool h2c_close_on_idle_locked(h2c_Conn *cc) {
            (cc->t->t1 != NULL && cc->t->t1->disable_keep_alives) || cc->has_go_away;
 }
 
+static const Type h2c_stream_id_key_desc = {
+    {(const Byte *)"streamIDHookKey", 15},
+    {(const Byte *)"net/http/internal/http2", 23},
+    KIND_INT,
+    (uint32_t)sizeof(Int),
+    (uint16_t)_Alignof(Int),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x68327369U, /* "h2si" */
+    NULL,
+};
+
+static const Int h2c_stream_id_key_v = 0;
+
+const Any burrow__http2_stream_id_hook_key = {&h2c_stream_id_key_desc,
+                                              (void *)(uintptr_t)&h2c_stream_id_key_v};
+
 /* addStreamLocked, which gives the stream map a reference. */
 static Error h2c_add_stream_locked(h2c_Conn *cc, h2c_Stream *cs) {
     uint32_t id = cc->next_stream_id;
@@ -2859,6 +2906,9 @@ static Error h2c_add_stream_locked(h2c_Conn *cc, h2c_Stream *cs) {
     burrow__http2_inflow_init(&cs->inflow, cc->initial_stream_recv_window_size);
     cs->id = id;
     cc->next_stream_id += 2;
+    Any hook = context_value(cs->ctx, burrow__http2_stream_id_hook_key);
+    if (hook.data != NULL)
+        sync_atomic_int64_store((SyncAtomicInt64 *)hook.data, (int64_t)id);
     return BURROW_NO_ERROR;
 }
 
@@ -2885,8 +2935,9 @@ static void h2c_forget_stream_id(h2c_Conn *cc, uint32_t id) {
         map_len(cc->streams) == 0) {
         bool single_use = cc->single_use;
         uint32_t max_stream = cc->next_stream_id - 2;
-        h2c_vlogf("http2: Transport closing idle conn %p (forSingleUse=%v, maxStream=%v)",
-                  (void *)cc, single_use, max_stream);
+        h2c_vlogf(
+            "http2: Transport closing idle conn %p (forSingleUse=%v, maxStream=%v)",
+            (void *)cc, single_use, max_stream);
         cc->closed = true;
         close_conn = true;
     }
@@ -2956,7 +3007,8 @@ static Error h2c_write_headers(h2c_Conn *cc, uint32_t id, bool end_stream,
             (void)burrow__http2_framer_write_headers(cc->fr, p);
             first = false;
         } else {
-            (void)burrow__http2_framer_write_continuation(cc->fr, id, end_headers, chunk);
+            (void)burrow__http2_framer_write_continuation(cc->fr, id, end_headers,
+                                                          chunk);
         }
     }
     (void)bufio_writer_flush(cc->bw);
@@ -3003,7 +3055,8 @@ static Error h2c_encode_and_write_headers(h2c_Stream *cs) {
     p.peer_max_header_list_size = cc->peer_max_header_list_size;
     p.default_user_agent = BURROW_S(H2C_DEFAULT_USER_AGENT);
     Http2EncodeHeadersResult res;
-    err = burrow__http2_encode_headers(arena_allocator(&tmp), &p, h2c_write_header, cc, &res);
+    err = burrow__http2_encode_headers(arena_allocator(&tmp), &p, h2c_write_header, cc,
+                                       &res);
     if (BURROW_FAILED(err)) {
         err = fmt_errorf_v("http2: %w", err);
     } else {
@@ -3102,8 +3155,8 @@ static Error h2c_encode_trailers(h2c_Conn *cc, HttpHeader trailer, Slice *out) {
     it = map_iter(trailer);
     while (map_next(&it, &k, &v)) {
         bool ascii = false;
-        Str low_key = burrow__http_ascii_to_lower(arena_allocator(&tmp), *(const Str *)k,
-                                                  &ascii);
+        Str low_key =
+            burrow__http_ascii_to_lower(arena_allocator(&tmp), *(const Str *)k, &ascii);
         if (!ascii) {
             /* Skip writing invalid headers. Per RFC 7540, Section 8.1.2,
              * header field names have to be ASCII characters (just as in
@@ -3158,8 +3211,8 @@ static Error h2c_write_request_body(h2c_Stream *cs) {
                  * should return (0, EOF) at this point. If either value is
                  * different, we return an error in one of two ways below. */
                 Byte scratch[1];
-                Int n1 = body.vt->reader.read(body.data,
-                                              slice_from(scratch, 1, 1, TYPE_BYTE), &rerr);
+                Int n1 = body.vt->reader.read(
+                    body.data, slice_from(scratch, 1, 1, TYPE_BYTE), &rerr);
                 remain_len -= n1;
             }
             if (remain_len < 0) {
@@ -3249,9 +3302,8 @@ out:
  * for a single request and then close the connection. */
 static bool h2c_is_connection_close_request(const HttpRequest *req) {
     Slice v = http_header_values(req->header, BURROW_S("Connection"));
-    return req->close ||
-           burrow__httpguts_header_values_contains_token((const Str *)v.p, v.len,
-                                                         BURROW_S("close"));
+    return req->close || burrow__httpguts_header_values_contains_token(
+                             (const Str *)v.p, v.len, BURROW_S("close"));
 }
 
 /* writeRequest sends a request.
@@ -3403,8 +3455,8 @@ static Error h2c_write_request(h2c_Stream *cs) {
      * first. */
     for (;;) {
         SelectCase sc[] = {
-            BURROW_RECV(cs->peer_closed, NULL),   BURROW_RECV(resp_header_timer, NULL),
-            BURROW_RECV(resp_header_recv, NULL),  BURROW_RECV(cs->abort, NULL),
+            BURROW_RECV(cs->peer_closed, NULL),  BURROW_RECV(resp_header_timer, NULL),
+            BURROW_RECV(resp_header_recv, NULL), BURROW_RECV(cs->abort, NULL),
             BURROW_RECV(ctx_done, NULL),
         };
         Int i = chan_select(sc, 5);
@@ -3418,9 +3470,9 @@ static Error h2c_write_request(h2c_Stream *cs) {
             err = BURROW_NO_ERROR;
             break;
         case 1:
-            err = burrow__http_timeout_error(error_allocator(),
-                                             BURROW_S("http2: timeout awaiting response "
-                                                      "headers"));
+            err = burrow__http_timeout_error(
+                error_allocator(), BURROW_S("http2: timeout awaiting response "
+                                            "headers"));
             break;
         case 3:
             err = cs->abort_err;
@@ -3515,11 +3567,13 @@ static void h2c_cleanup_write_request(h2c_Stream *cs, Error err) {
                 h2c_write_stream_reset(cc, cs->id, HTTP2_ERR_CODE_CANCEL, ping);
             }
         }
-        burrow__http2_pipe_close_with_error(&cs->buf_pipe, err); /* no-op if already closed */
+        burrow__http2_pipe_close_with_error(&cs->buf_pipe,
+                                            err); /* no-op if already closed */
     } else {
         if (cs->sent_headers && !cs->sent_end_stream)
             h2c_write_stream_reset(cc, cs->id, HTTP2_ERR_CODE_NO, false);
-        burrow__http2_pipe_close_with_error(&cs->buf_pipe, burrow__http_err_request_canceled);
+        burrow__http2_pipe_close_with_error(&cs->buf_pipe,
+                                            burrow__http_err_request_canceled);
     }
     if (cs->id != 0)
         h2c_forget_stream_id(cc, cs->id);
@@ -3578,8 +3632,7 @@ static HttpResponse *h2c_handle_response_headers(h2c_Stream *cs, Error *err) {
          * avoid adding knobs to Transport. Hopefully we can keep it. */
         h2c_abort_request_body_write(cs);
     }
-    if (res->body.vt == http_no_body.vt &&
-        cs->req_body_content_length == 0) {
+    if (res->body.vt == http_no_body.vt && cs->req_body_content_length == 0) {
         /* If there isn't a request or response body still being written,
          * then wait for the stream to be closed before RoundTrip returns. */
         SelectCase sc[] = {
@@ -3624,8 +3677,8 @@ static Error h2c_cancel_request(h2c_Stream *cs, Error err) {
 
 /* ClientConn.RoundTrip. The caller holds a reservation on cc, which this
  * gives back. The error is in the calling goroutine's error arena. */
-static HttpResponse *h2c_conn_round_trip(h2c_Conn *cc, HttpRequest *req, IoReadCloser body,
-                                         Error *err) {
+static HttpResponse *h2c_conn_round_trip(h2c_Conn *cc, HttpRequest *req,
+                                         IoReadCloser body, Error *err) {
     h2c_Stream *cs = h2c_new_stream(cc, req, body);
     if (cs == NULL) {
         h2c_decr_stream_reservations(cc);
@@ -3724,7 +3777,8 @@ static Error h2c_body_close(void *self) {
     h2c_Conn *cc = cs->cc;
     cs->body_closed = true;
 
-    burrow__http2_pipe_break_with_error(&cs->buf_pipe, burrow__http2_err_closed_response_body);
+    burrow__http2_pipe_break_with_error(&cs->buf_pipe,
+                                        burrow__http2_err_closed_response_body);
     h2c_abort_stream(cs, burrow__http2_err_closed_response_body);
 
     Int unread = burrow__http2_pipe_len(&cs->buf_pipe);
@@ -3781,8 +3835,8 @@ static GzipReader *h2c_gzip_acquire(h2c_GzipReader *gz, Error *err) {
         gz->zerr = burrow__http2_err_concurrent_read_on_res_body;
         sync_mutex_unlock(&gz->mu);
         Error e = BURROW_NO_ERROR;
-        GzipReader *zr = gzip_new_reader(gz->cs->cc->a,
-                                         (IoReader){&h2c_body_vt.reader, gz->cs}, &e);
+        GzipReader *zr =
+            gzip_new_reader(gz->cs->cc->a, (IoReader){&h2c_body_vt.reader, gz->cs}, &e);
         sync_mutex_lock(&gz->mu);
         /* Guard against Close being called while gzip_new_reader is
          * running. */
@@ -3851,11 +3905,13 @@ static Error h2c_gzip_close(void *self) {
     return h2c_body_close(gz->cs);
 }
 
-static const IoReadCloserVT h2c_gzip_vt = {{NULL, h2c_gzip_read}, {NULL, h2c_gzip_close}};
+static const IoReadCloserVT h2c_gzip_vt = {{NULL, h2c_gzip_read},
+                                           {NULL, h2c_gzip_close}};
 
 static IoReadCloser h2c_gzip_body(h2c_Stream *cs) {
     Alloc *a = cs->cc->a;
-    h2c_GzipReader *gz = (h2c_GzipReader *)mem_alloc(a, sizeof *gz, _Alignof(h2c_GzipReader));
+    h2c_GzipReader *gz =
+        (h2c_GzipReader *)mem_alloc(a, sizeof *gz, _Alignof(h2c_GzipReader));
     if (gz == NULL)
         return (IoReadCloser){NULL, NULL};
     gz->cs = cs;
@@ -3956,9 +4012,10 @@ static Error h2c_should_retry_request(HttpRequest *req, IoReadCloser *body, Erro
     if (h2c_same(err, burrow__http2_err_client_conn_unusable))
         return BURROW_NO_ERROR;
 
-    return fmt_errorf_v("http2: Transport: cannot retry err [%v] after Request.Body was "
-                        "written; define Request.GetBody to avoid this error",
-                        err);
+    return fmt_errorf_v(
+        "http2: Transport: cannot retry err [%v] after Request.Body was "
+        "written; define Request.GetBody to avoid this error",
+        err);
 }
 
 /* RoundTrip, which is RoundTripOpt with no options. */
@@ -3977,7 +4034,8 @@ HttpResponse *burrow__http2_transport_round_trip(Http2Transport *t, HttpRequest 
 
     Arena tmp;
     arena_init(&tmp, heap_allocator(), 0);
-    Str addr = burrow__http2_authority_addr(arena_allocator(&tmp), scheme, req->url->host);
+    Str addr =
+        burrow__http2_authority_addr(arena_allocator(&tmp), scheme, req->url->host);
     if (addr.len == 0) {
         arena_free(&tmp);
         *err = burrow_err_out_of_memory;
@@ -4027,7 +4085,8 @@ HttpResponse *burrow__http2_transport_round_trip(Http2Transport *t, HttpRequest 
                     (void)time_timer_stop(tm);
                     time_timer_free(tm);
                     if (i == 0) {
-                        h2c_vlogf("RoundTrip retrying after failure: %v", round_trip_err);
+                        h2c_vlogf("RoundTrip retrying after failure: %v",
+                                  round_trip_err);
                         h2c_unref(cc);
                         continue;
                     }

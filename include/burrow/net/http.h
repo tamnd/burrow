@@ -1587,9 +1587,10 @@ BURROW_FUNC(HttpFreeConnFunc, void, NetConn c);
  * max_response_header_bytes is the most a response's header may have, and 10
  * MiB when it is zero. write_buffer_size and read_buffer_size are the sizes of
  * the buffers on each connection, 4 KiB when they are zero. protocols is the
- * set of protocols to use, and NULL is HTTP/1. HTTP/2 is not here yet, so a set
- * with unencrypted HTTP/2 and without HTTP/1 fails each "http" request, as Go's
- * does without its HTTP/2 package, and HTTP/1 is used for the rest.
+ * set of protocols to use, and NULL is HTTP/1. There is no TLS yet, so HTTP/2 here
+ * means unencrypted HTTP/2 with prior knowledge: a set with it and without
+ * HTTP/1 speaks HTTP/2 on each "http" connection, with http2 as its settings,
+ * and HTTP/1 is used otherwise.
  *
  * a is where the transport makes its connections and the responses, the heap
  * when it is NULL, and has to be one any goroutine can use at once. The rest is
@@ -1629,6 +1630,8 @@ typedef struct HttpTransport {
     struct burrow__HttpCall *calls;
     SyncMutex alt_mu;
     struct burrow__HttpAltProto *alt;
+    struct burrow__Http2Transport *h2; /* under alt_mu, made on first use */
+    bool h2_tried;
     SyncMutex conns_per_host_mu;
     struct burrow__HttpHostBucket *conns_per_host;
     struct burrow__HttpWantQueue {

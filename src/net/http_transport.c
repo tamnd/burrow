@@ -22,6 +22,7 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "http2.h"
 #include "http_internal.h"
 
 #include "../xnet/httpguts.h"
@@ -508,6 +509,7 @@ struct burrow__HttpPConn {
     bool rl_exited; /* under mu, and reqch takes no more after */
     bool wl_exited; /* under mu, and writech takes no more after */
     bool uncounted; /* the dial gave back the count for key, not the close */
+    bool alt;       /* HTTP/2's: conn is t->h2's, and there are no loops */
 };
 
 /* transportRequest and requestAndChan in one: a single try at sending a request
@@ -877,6 +879,10 @@ static void tp_free_conn(HttpTransport *t, NetConn c) {
         net_conn_free(c);
 }
 
+void burrow__http_transport_free_conn(HttpTransport *t, NetConn c) {
+    tp_free_conn(t, c);
+}
+
 /* The last reference is gone, so both loops have ended and the connection is
  * closed. It is closed again here for a connection a 101 response handed to
  * its caller, which may not have. */
@@ -991,7 +997,8 @@ static void tp_pc_close_locked(tp_PConn *pc, Error err) {
     pc->closed = error_retain(arena_allocator(&pc->err_arena), err);
     if (!pc->uncounted)
         tp_dec_conns_per_host(pc->t, pc->key);
-    if (!tp_same(err, burrow__http_err_caller_owns_conn))
+    /* HTTP/2 closes its connection itself. */
+    if (!pc->alt && !tp_same(err, burrow__http_err_caller_owns_conn))
         (void)pc->conn.vt->closer.close(pc->conn.data);
     chan_close(pc->closech);
 }
@@ -1013,7 +1020,16 @@ static void tp_idle_token_drop(tp_PConn *pc) {
     sync_wait_group_done(&t->live);
 }
 
-/* closeConnIfStillIdle, which the idle timer runs. */
+/* An HTTP/2 connection has no read loop to keep it alive while it is in the
+ * pool, so the pool has a reference on it, which this gives back when it
+ * leaves. Under idle_mu. */
+static void tp_idle_release(tp_PConn *pc) {
+    if (pc->alt)
+        tp_pc_unref(pc);
+}
+
+/* closeConnIfStillIdle, which the idle timer runs. HTTP/2 has no idle timer
+ * here, as its own transport has one. */
 static bool tp_remove_idle_locked(HttpTransport *t, tp_PConn *pc);
 
 static void tp_close_if_still_idle(void *env) {
@@ -1074,6 +1090,8 @@ static bool tp_remove_idle_locked(HttpTransport *t, tp_PConn *pc) {
         tp_idle_bucket_trim(t, b);
     }
     tp_stop_idle_timer(pc);
+    if (removed)
+        tp_idle_release(pc);
     return removed;
 }
 
@@ -1099,15 +1117,21 @@ static Error tp_try_put_idle_conn_locked(HttpTransport *t, tp_PConn *pc) {
      * would stay in the pool after its read loop has gone. */
     if (tp_pc_is_broken(pc))
         return burrow__http_err_conn_broken;
+    /* HTTP/2 connections do not come out of the pool when they are used, as
+     * many requests can share one, so one given back is there already. */
+    if (pc->alt && pc->in_lru)
+        return BURROW_NO_ERROR;
 
     /* Hand pc to a want waiting for an idle connection, if there is one. It
-     * may be dialing as well, but this one is ready first. */
+     * may be dialing as well, but this one is ready first. An HTTP/2 one goes
+     * to every want in line, and in the pool after for the ones to come. */
     tp_IdleBucket *b = tp_idle_bucket(t, pc->key, false);
     if (b != NULL && tp_queue_len(&b->wait) > 0) {
         bool done = false;
         while (!done && tp_queue_len(&b->wait) > 0) {
             tp_Want *w = tp_queue_pop(&b->wait);
-            done = tp_want_try_deliver(w, pc, BURROW_NO_ERROR, (Time){0});
+            bool delivered = tp_want_try_deliver(w, pc, BURROW_NO_ERROR, (Time){0});
+            done = delivered && !pc->alt;
             tp_want_unref(w);
         }
         if (done) {
@@ -1137,12 +1161,14 @@ static Error tp_try_put_idle_conn_locked(HttpTransport *t, tp_PConn *pc) {
         return burrow_err_out_of_memory;
     }
     tp_lru_add(t, pc);
+    if (pc->alt)
+        tp_pc_ref(pc);
     if (t->max_idle_conns != 0 && t->lru_len > t->max_idle_conns) {
         tp_PConn *oldest = tp_lru_remove_oldest(t);
         tp_pc_close(oldest, burrow__http_err_too_many_idle);
         (void)tp_remove_idle_locked(t, oldest);
     }
-    if (t->idle_conn_timeout > 0)
+    if (t->idle_conn_timeout > 0 && !pc->alt)
         tp_arm_idle_timer(t, pc);
     pc->idle_at = time_now();
     return BURROW_NO_ERROR;
@@ -1201,10 +1227,12 @@ static bool tp_queue_for_idle_conn(HttpTransport *t, tp_Want *w) {
             if (too_old || tp_pc_is_broken(pc)) {
                 /* Either way it is on its way to being closed. */
                 b->n--;
+                tp_idle_release(pc);
                 continue;
             }
             delivered = tp_want_try_deliver(w, pc, BURROW_NO_ERROR, pc->idle_at);
-            if (delivered) {
+            /* An HTTP/2 one can be shared, so it stays. */
+            if (delivered && !pc->alt) {
                 tp_lru_remove(t, pc);
                 b->n--;
                 tp_stop_idle_timer(pc);
@@ -1286,8 +1314,11 @@ static void tp_want_cancel(tp_Want *w) {
     }
     w->done = true;
     sync_mutex_unlock(&w->mu);
+    /* An HTTP/2 one was never taken out of the pool, and if it is not there
+     * now, it was taken out for an error. */
     if (pc != NULL) {
-        tp_put_or_close_idle_conn(w->t, pc);
+        if (!pc->alt)
+            tp_put_or_close_idle_conn(w->t, pc);
         tp_pc_unref(pc);
     }
 }
@@ -1396,8 +1427,9 @@ static void tp_dial_conn_for(HttpTransport *t, tp_Want *w) {
     tp_PConn *pc = tp_dial_conn(t, w->ctx, &w->cm, &err);
     bool delivered = tp_want_try_deliver(w, pc, err, (Time){0});
     if (pc != NULL) {
-        /* Nobody wanted it, so it goes in the pool for the next request. */
-        if (!delivered)
+        /* Nobody wanted it, or it is HTTP/2 and can be shared, so it goes in
+         * the pool for the next request. */
+        if (!delivered || pc->alt)
             tp_put_or_close_idle_conn(t, pc);
         tp_pc_unref(pc);
     } else {
@@ -1669,6 +1701,24 @@ static void tp_write_loop(void *env);
 /* dialConn. A connection for cm with its loops going, and a reference for the
  * caller. Only HTTP/1 is spoken, and TLS comes from dial_tls_context or
  * dial_tls, and only to the first hop. */
+/* The HTTP/2 transport, which onceSetNextProtoDefaults makes when protocols
+ * has HTTP/2 in it. NULL when it has not, or GODEBUG http2client=0 turns it
+ * off. Go registers it for "https" as well, which needs TLS. */
+static Http2Transport *tp_h2_transport(HttpTransport *t) {
+    sync_mutex_lock(&t->alt_mu);
+    if (!t->h2_tried) {
+        t->h2_tried = true;
+        const HttpProtocols *p = t->protocols;
+        if (p != NULL &&
+            (http_protocols_http2(*p) || http_protocols_unencrypted_http2(*p)) &&
+            !burrow__http_godebug_http2client_disabled())
+            t->h2 = burrow__http2_new_transport(t);
+    }
+    Http2Transport *t2 = t->h2;
+    sync_mutex_unlock(&t->alt_mu);
+    return t2;
+}
+
 static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMethod *cm,
                               Error *err) {
     Alloc *a = tp_alloc(t);
@@ -1737,13 +1787,26 @@ static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMet
         goto fail;
     }
 
-    /* Unencrypted HTTP/2 with prior knowledge, which needs HTTP/2. The
-     * connection is never TLS of the transport's own here. */
+    /* Unencrypted HTTP/2 with prior knowledge. The connection is never TLS of
+     * the transport's own here, so this is the only HTTP/2 there is. The
+     * connection goes to the HTTP/2 transport, and pc is no more than its
+     * place in the pool. */
     const HttpProtocols *p = t->protocols;
     if (p != NULL && http_protocols_unencrypted_http2(*p) &&
         !http_protocols_http1(*p)) {
-        e = tp_err_unencrypted_h2;
-        goto fail;
+        Http2Transport *t2 = tp_h2_transport(t);
+        if (t2 == NULL) {
+            e = tp_err_unencrypted_h2;
+            goto fail;
+        }
+        NetConn c = pc->conn;
+        memset(&pc->conn, 0, sizeof pc->conn);
+        e = burrow__http2_transport_add_conn(t2, cm->target_scheme, cm->target_addr, c);
+        if (BURROW_FAILED(e))
+            goto fail;
+        pc->alt = true;
+        BURROW_OUT(err, BURROW_NO_ERROR);
+        return pc;
     }
 
     pc->br = bufio_new_reader_size(a, (IoReader){&tp_pc_reader_vt, pc},
@@ -3042,7 +3105,8 @@ static tp_PConn *tp_get_conn(HttpTransport *t, tp_Call *call,
     }
     tp_want_detach_trace(w);
     tp_want_unref(w);
-    if (pc != NULL && BURROW__HTTPTRACE_HAS(trace, got_conn)) {
+    /* HTTP/2 calls got_conn itself. */
+    if (pc != NULL && !pc->alt && BURROW__HTTPTRACE_HAS(trace, got_conn)) {
         HttptraceGotConnInfo info = {.conn = pc->conn, .reused = tp_pc_is_reused(pc)};
         if (!time_is_zero(idle_at)) {
             info.was_idle = true;
@@ -3076,6 +3140,8 @@ static bool tp_alternate_round_tripper(HttpTransport *t, const HttpRequest *req,
 
 /* persistConn.shouldRetryRequest. */
 static bool tp_should_retry_request(tp_PConn *pc, const HttpRequest *req, Error err) {
+    if (burrow__http2_is_no_cached_conn_error(err))
+        return true; /* the HTTP/2 transport had no connection that would take it */
     if (burrow__http_is_err_missing_host(err))
         return false;
     if (!tp_pc_is_reused(pc))
@@ -3124,6 +3190,49 @@ static Error tp_check_request(HttpRequest *req) {
 }
 
 /* Transport.roundTrip, from setupRewindBody on. */
+/* The HTTP/2 path of a try, on pc, which gives back the reference on it. It
+ * says whether there is a response, and otherwise e is the error to give up
+ * with, or no error for one to try again after. */
+static bool tp_round_trip_h2(HttpTransport *t, tp_Call *call, tp_PConn *pc,
+                             HttpResponse **res, Error *e) {
+    HttpRequest *req = &call->req;
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *r = burrow__http2_transport_round_trip(tp_h2_transport(t), req, &err);
+    if (r != NULL) {
+        tp_pc_unref(pc);
+        /* HTTP/2 requests are not cancelable with CancelRequest, so the
+         * context is not needed any more. */
+        tp_call_cancel(call, burrow__http_err_request_done);
+        r->request = call->orig;
+        call->alt_on_free = r->on_free;
+        r->on_free = BURROW_FN(Func, tp_call_alt_on_free, call);
+        *res = r;
+        *e = BURROW_NO_ERROR;
+        return true;
+    }
+    err = error_retain(error_allocator(), err);
+    if (burrow__http2_is_no_cached_conn_error(err)) {
+        /* The pool still had a connection the HTTP/2 transport has let go of.
+         * Closing it gives back its count for the key. */
+        if (tp_remove_idle(t, pc))
+            tp_pc_close(pc, err);
+        tp_pc_unref(pc);
+        *e = BURROW_NO_ERROR;
+        return false;
+    }
+    bool retry = tp_should_retry_request(pc, req, err);
+    tp_pc_unref(pc);
+    if (retry) {
+        *e = BURROW_NO_ERROR;
+        return false;
+    }
+    if (req->body.vt == &tp_track_vt &&
+        !sync_atomic_bool_load(&((tp_Track *)req->body.data)->did_close))
+        tp_close_body(req);
+    *e = err;
+    return false;
+}
+
 static HttpResponse *tp_round_trip_call(HttpTransport *t, tp_Call *call, Error *err) {
     HttpRequest *orig = call->orig;
     HttpRequest *req = &call->req;
@@ -3210,6 +3319,19 @@ static HttpResponse *tp_round_trip_call(HttpTransport *t, tp_Call *call, Error *
         if (pc == NULL) {
             tp_close_body(req);
             break;
+        }
+        if (pc->alt) {
+            if (tp_round_trip_h2(t, call, pc, &res, &e)) {
+                arena_free(&scratch);
+                BURROW_OUT(err, BURROW_NO_ERROR);
+                return res;
+            }
+            if (BURROW_FAILED(e))
+                break;
+            e = tp_call_rewind(call);
+            if (BURROW_FAILED(e))
+                break;
+            continue;
         }
         tp_Trip *tr = tp_trip_new(t, call, pc);
         if (tr == NULL) {
@@ -3303,7 +3425,8 @@ HttpRoundTripper http_transport_as_round_tripper(HttpTransport *t) {
 
 void http_transport_close_idle_connections(HttpTransport *t) {
     /* A connection in the pool has a read loop, which takes it out under
-     * idle_mu, so it is still there while this holds idle_mu. */
+     * idle_mu, or the pool's reference for HTTP/2, so it is still there while
+     * this holds idle_mu. */
     sync_mutex_lock(&t->idle_mu);
     t->close_idle = true; /* and close the ones that go idle from now on */
     tp_IdleBucket *b = t->idle;
@@ -3314,6 +3437,7 @@ void http_transport_close_idle_connections(HttpTransport *t) {
             tp_lru_remove(t, pc);
             tp_pc_close(pc, burrow__http_err_close_idle_conns);
             tp_stop_idle_timer(pc);
+            tp_idle_release(pc);
         }
         tp_idle_bucket_trim(t, b);
         b = next;
@@ -3328,6 +3452,13 @@ void http_transport_close_idle_connections(HttpTransport *t) {
             BURROW_CALLF0(w->cancel_ctx);
     }
     sync_mutex_unlock(&t->conns_per_host_mu);
+
+    /* And the HTTP/2 transport's. */
+    sync_mutex_lock(&t->alt_mu);
+    Http2Transport *t2 = t->h2;
+    sync_mutex_unlock(&t->alt_mu);
+    if (t2 != NULL)
+        burrow__http2_transport_close_idle_connections(t2);
 }
 
 void http_transport_cancel_request(HttpTransport *t, HttpRequest *req) {
@@ -3397,6 +3528,7 @@ HttpTransport http_transport_clone(const HttpTransport *t, Alloc *a) {
     t2.write_buffer_size = t->write_buffer_size;
     t2.read_buffer_size = t->read_buffer_size;
     t2.protocols = t->protocols;
+    t2.http2 = t->http2;
     t2.a = t->a;
     return t2;
 }
@@ -3422,6 +3554,13 @@ void http_transport_free(HttpTransport *t) {
     }
     tp_queue_free(t, &t->dials);
     sync_mutex_unlock(&t->conns_per_host_mu);
+    sync_mutex_lock(&t->alt_mu);
+    Http2Transport *t2 = t->h2;
+    t->h2 = NULL;
+    t->h2_tried = false;
+    sync_mutex_unlock(&t->alt_mu);
+    if (t2 != NULL)
+        burrow__http2_transport_free(t2);
     sync_mutex_lock(&t->alt_mu);
     while (t->alt != NULL) {
         tp_AltProto *p = t->alt;

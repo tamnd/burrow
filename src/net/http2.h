@@ -1215,4 +1215,9 @@ BURROW_OWNS(ret) Slice burrow__http2_transport_idle_conn_strs(Http2Transport *t2
  * first. */
 void burrow__http2_transport_free(Http2Transport *t2);
 
+/* For the tests, as Go's ClientConn.TestRoundTrip has: a request whose
+ * context has a SyncAtomicInt64 * for this key gets its stream's ID stored
+ * there once it has one. */
+extern const Any burrow__http2_stream_id_hook_key;
+
 #endif

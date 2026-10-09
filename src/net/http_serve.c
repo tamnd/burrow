@@ -2623,12 +2623,28 @@ static void sv_timeout_handler_serve(void *self, HttpResponseWriter w, HttpReque
     bool finished = chan_select(cases, 2) == 0;
     sync_mutex_lock(&tw->mu);
     if (finished && !panicked) {
+        /* Go's dst[k] = vv shares the slices. Here they are in tw's arena,
+         * which goes before the response is written out, so they are copied
+         * into dst's own allocator. */
         HttpHeader dst = http_response_writer_header(w);
+        Alloc *da = burrow__map_allocator(dst);
         MapIter it = map_iter(tw->h);
         const void *k;
         void *v;
-        while (map_next(&it, &k, &v))
-            (void)map_set(dst, k, v);
+        while (map_next(&it, &k, &v)) {
+            const Slice *vv = (const Slice *)v;
+            Str *cp = NULL;
+            if (vv->len > 0) {
+                cp = (Str *)mem_alloc(da, (size_t)vv->len * sizeof(Str), _Alignof(Str));
+                if (cp == NULL)
+                    continue;
+                for (Int i = 0; i < vv->len; i++)
+                    cp[i] = str_clone(da, ((const Str *)vv->p)[i]);
+            }
+            Str key = str_clone(da, *(const Str *)k);
+            Slice vals = slice_from(cp, vv->len, vv->len, TYPE_STRING);
+            (void)map_set(dst, &key, &vals);
+        }
         if (!tw->wrote_header)
             tw->code = HTTP_STATUS_OK;
         http_response_writer_write_header(w, tw->code);

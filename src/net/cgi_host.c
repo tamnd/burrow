@@ -470,12 +470,16 @@ void cgi_handler_serve_http(CgiHandler *h, HttpResponseWriter rw, HttpRequest *r
      * go into handleInternalRedirect, which won't want its rw
      * headers to have been touched. */
     HttpHeader out = http_response_writer_header(rw);
+    /* The child's headers are in s.arena, which goes when this returns, and
+     * out keeps what it is given, so they are copied into out's allocator. */
+    Alloc *oa = burrow__map_allocator(out);
     const void *kp;
     void *vp;
     for (MapIter it = map_iter(headers); map_next(&it, &kp, &vp);) {
         const Slice *vv = (const Slice *)vp;
+        Str k = str_clone(oa, *(const Str *)kp);
         for (Int i = 0; i < vv->len; i++)
-            (void)http_header_add(out, *(const Str *)kp, ((const Str *)vv->p)[i]);
+            (void)http_header_add(out, k, str_clone(oa, ((const Str *)vv->p)[i]));
     }
 
     http_response_writer_write_header(rw, status_code);

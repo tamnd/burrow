@@ -8,6 +8,8 @@
 #ifndef BURROW_SRC_NET_RPC_INTERNAL_H
 #define BURROW_SRC_NET_RPC_INTERNAL_H
 
+#include "burrow/net/rpc.h"
+
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/io.h"

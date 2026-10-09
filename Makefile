@@ -127,6 +127,20 @@ else
   HARDENING += -D_FORTIFY_SOURCE=2
 endif
 
+# make HARDENED=1 is the build for a program that faces the internet. It adds
+# the compiler's bounds checks on arrays whose size it knows, and its checks on
+# object sizes, which only work when optimising, so a debug build leaves them
+# out. Both trap, so they need no runtime library and an access out of bounds
+# stops the program with an illegal instruction instead of touching the memory.
+# burrow's own index checks panic in every build and need nothing from here.
+HARDENED ?= 0
+ifeq ($(HARDENED),1)
+  HARDENING += -fsanitize=bounds -fsanitize-trap=all
+  ifneq ($(MODE),debug)
+    HARDENING += -fsanitize=object-size
+  endif
+endif
+
 DEFINES := -DBURROW_SOURCE_ID='"$(SOURCE_ID)"'
 
 # The one optional dependency in the whole project. make BOEHM=1 turns the gc

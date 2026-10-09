@@ -37,6 +37,13 @@ option(BURROW_SYMTAB "Build the table of names a traceback prints" ON)
 # rather than quietly produce a program without one.
 option(BURROW_ENABLE_BOEHM "Link the Boehm collector and enable the gc backend" OFF)
 
+# The build for a program that faces the internet, the same as make HARDENED=1:
+# the compiler's bounds and object size checks, in trap mode so that nothing
+# extra is linked. The object size checks do nothing without optimisation, so
+# only the optimised build types get them. MSVC has neither, and there this
+# does nothing.
+option(BURROW_HARDENED "Build with the compiler's bounds checks, trapping" OFF)
+
 # Forces the portable context switch on a machine that has assembly for it. This
 # is not something you would ship, it is how you find out whether a bug is in
 # the assembly or above it. It has to be a PUBLIC definition further down rather
@@ -213,6 +220,11 @@ else()
         "$<$<COMPILE_LANGUAGE:C>:-Wall;-Wextra;-Wpedantic;-Wshadow;-Wcast-qual;-Wcast-align;-Wconversion;-Wsign-conversion;-Wwrite-strings;-Wpointer-arith;-Wstrict-prototypes;-Wmissing-prototypes;-Wmissing-declarations;-Wredundant-decls;-Wundef;-Wswitch-enum;-Wswitch-default;-Wdouble-promotion;-Wformat=2;-Wformat-security;-Wnull-dereference;-Wstack-protector;-Wvla;-Wno-unused-parameter;-fstack-protector-strong;-fno-common>")
     if(BURROW_WERROR)
         target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:C>:-Werror>")
+    endif()
+    if(BURROW_HARDENED)
+        target_compile_options(${target} PRIVATE
+            "$<$<COMPILE_LANGUAGE:C>:-fsanitize=bounds;-fsanitize-trap=all>"
+            "$<$<AND:$<COMPILE_LANGUAGE:C>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>>:-fsanitize=object-size>")
     endif()
 
     # PUBLIC, and separate from the warning list, because this one is not a

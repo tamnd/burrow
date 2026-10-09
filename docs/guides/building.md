@@ -124,6 +124,20 @@ From a checkout, `make` builds `build/libburrow.a`, and your program adds `-Iinc
 
 `cmake -S . -B build && cmake --build build` builds the same archive, and after `cmake --install` a project can use `find_package(burrow)` and link `burrow::burrow`. MSVC builds go this way.
 
+## Hardened builds
+
+`make HARDENED=1`, or `-DBURROW_HARDENED=ON` with CMake, is the build for a program that faces the internet. It compiles the library with the compiler's bounds checks on arrays whose size it knows, `-fsanitize=bounds`, and in an optimised build its object size checks too, `-fsanitize=object-size`, which do nothing without optimisation. Both are in trap mode, `-fsanitize-trap=all`, so they link nothing extra and print nothing. An access out of bounds stops the program with an illegal instruction, `SIGILL`, before it reads or writes the memory. Each checked access costs a compare and a branch.
+
+It adds to the default build rather than replacing it. `-fstack-protector-strong` is there in both, and so is `_FORTIFY_SOURCE=2` when optimising. burrow's own checks on indexes and slice bounds are on in every build and panic with the messages Go's do, so there is nothing for this mode to turn back on there.
+
+With the amalgamation, compile `burrow.c` with the same flags:
+
+```sh
+cc -std=c11 -O2 -fsanitize=bounds,object-size -fsanitize-trap=all -c burrow.c
+```
+
+gcc and clang both take them. MSVC has neither check, and there the CMake option changes nothing.
+
 ## Not yet
 
 Choosing a single target platform, baking in a prefix for the private names, and splitting `burrow.c` into several files are designed in [docs/design/15-build-deploy.md](../design/15-build-deploy.md) section 2 and not implemented. Today the pair holds the code for every platform, and the parts for the platforms you are not on compile to nothing.

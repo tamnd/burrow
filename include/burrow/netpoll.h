@@ -251,6 +251,21 @@ void burrow__poll_close(burrow__PollDesc *pd);
  * Callable only from a goroutine, since parking is the whole of what it does. */
 burrow__PollStatus burrow__poll_wait(burrow__PollDesc *pd, uint32_t mode);
 
+/* Gets the descriptor ready for a new read or write in `mode`, which is
+ * BURROW_POLL_READ or BURROW_POLL_WRITE and not both, before the caller makes
+ * the system call. Go's runtime_pollReset, which internal/poll calls at the
+ * top of every Read and Write.
+ *
+ * It answers what a wait would answer without waiting: closed, timed out or
+ * unpollable when one of those applies, which is how a read after an expired
+ * deadline fails even with data sitting there to be read, and ready otherwise.
+ * On ready it throws away a notification left over from an earlier call,
+ * because that call read until it was told it would block and so the edge it
+ * stands for has been used.
+ *
+ * Callable from anywhere, since it never parks. */
+burrow__PollStatus burrow__poll_reset(burrow__PollDesc *pd, uint32_t mode);
+
 /* Sets, moves or clears a deadline. `mode` is BURROW_POLL_READ,
  * BURROW_POLL_WRITE, or both together, and this is the one call where both
  * together is the ordinary thing to ask for.

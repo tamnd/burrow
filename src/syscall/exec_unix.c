@@ -232,9 +232,10 @@ Int syscall_fork_exec(Str argv0, Slice argv, const SyscallProcAttr *attr, Error 
     req.path = exec_cstring(a, argv0, &e);
     if (req.path == NULL)
         goto done;
-    req.argv = exec_cstrings(a, argv, &e);
-    if (req.argv == NULL)
+    const char **args = exec_cstrings(a, argv, &e);
+    if (args == NULL)
         goto done;
+    req.argv = args;
     /* A nil env is no environment at all here, where os would give ours. */
     req.envp = exec_cstrings(a, attr->env, &e);
     if (req.envp == NULL)
@@ -242,7 +243,7 @@ Int syscall_fork_exec(Str argv0, Slice argv, const SyscallProcAttr *attr, Error 
 #if defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_DRAGONFLY)
     /* What Go does there, for the kernel's sake. */
     if (argv.len > 0 && ((const Str *)argv.p)[0].len > argv0.len)
-        req.argv[0] = req.path;
+        args[0] = req.path;
 #endif
     if (attr->dir.len > 0) {
         req.dir = exec_cstring(a, attr->dir, &e);

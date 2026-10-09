@@ -55,8 +55,8 @@ static void run(void *env) {
     for (int i = 0; i < 2; i++) {
         Error err;
         IoReader none = {NULL, NULL};
-        HttpRequest *req = http_new_request_with_context(a, ctx, BURROW_S("GET"),
-                                                         ts->url, none, &err);
+        HttpRequest *req =
+            http_new_request_with_context(a, ctx, BURROW_S("GET"), ts->url, none, &err);
         HttpResponse *res = http_client_do(c, req, &err);
         if (res == NULL) {
             fmt_printf_v("error: %v\n", err);

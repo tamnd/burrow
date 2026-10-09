@@ -286,7 +286,8 @@ NetTCPConn *net_dial_tcp(Alloc *a, Str network, const NetTCPAddr *laddr,
     return burrow__net_dial_tcp_deadline(a, network, laddr, raddr, (Time){0}, err);
 }
 
-NetTCPConn *burrow__net_dial_tcp_deadline(Alloc *a, Str network, const NetTCPAddr *laddr,
+NetTCPConn *burrow__net_dial_tcp_deadline(Alloc *a, Str network,
+                                          const NetTCPAddr *laddr,
                                           const NetTCPAddr *raddr, Time deadline,
                                           Error *err) {
     Str net = BURROW_STR_EMPTY;

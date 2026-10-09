@@ -228,7 +228,14 @@ static bool ch_read_header(CgiHandler *h, HttpResponseWriter rw, BufioReader *li
             ch_printf(h, "cgi: error reading headers: %v", err);
             return false;
         }
-        Str line = str_from_bytes(lineb.p, lineb.len);
+        /* The line is in linebody's buffer, which the next read reuses, and
+         * headers keeps what it is given, so the line is copied first. */
+        Str line = str_clone(burrow__map_allocator(headers),
+                             str_from_bytes(lineb.p, lineb.len));
+        if (line.len > 0 && line.p == NULL) {
+            ch_internal_error(h, rw, burrow_err_out_of_memory);
+            return false;
+        }
         if (line.len == 0) {
             saw_blank_line = true;
             break;

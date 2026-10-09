@@ -3752,6 +3752,211 @@ static void TestTransportConnBecomesUnresponsive(TestingT *t) {
     h2ct_run(t, h2ct_conn_becomes_unresponsive, NULL);
 }
 
+typedef struct H2ctIdleConnTimeout {
+    Duration idle_conn_timeout;
+    Duration wait;
+    bool want_new_conn;
+} H2ctIdleConnTimeout;
+
+/* Go waits in a bubble. These are real waits, as long as Go's. */
+static void h2ct_idle_conn_timeout(H2ctTT *tt, const void *arg) {
+    const H2ctIdleConnTimeout *test = (const H2ctIdleConnTimeout *)arg;
+    tt->tr1.idle_conn_timeout = test->idle_conn_timeout;
+    H2ctConn *tc = NULL;
+    for (int i = 0; i < 3; i++) {
+        H2ctRT *rt = h2ct_tt_round_trip(
+            tt, h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
+                                     BURROW_S("https://dummy.tld/"), h2ct_no_body));
+        H2CT_TRY(rt != NULL);
+
+        /* This request happens on a new conn if it's the first request (and
+         * there is no cached conn), or if the test timeout is long enough
+         * that old conns are being closed. */
+        bool want_conn = i == 0 || test->want_new_conn;
+        bool has = h2ct_tt_has_conn(tt);
+        if (has != want_conn)
+            FATALF("request %d: hasConn=%v, want %v", i, has, want_conn);
+        if (want_conn) {
+            tc = h2ct_get_conn(tt);
+            /* Read client's SETTINGS and first WINDOW_UPDATE, send our
+             * SETTINGS. */
+            H2CT_TRY(tc != NULL && h2ct_want_frame_type(tc, HTTP2_FRAME_SETTINGS) &&
+                     h2ct_want_frame_type(tc, HTTP2_FRAME_WINDOW_UPDATE) &&
+                     h2ct_write_settings(tc, NULL, 0));
+        }
+        if (h2ct_tt_has_conn(tt))
+            FATALF("request %d: Transport has more than one conn", i);
+
+        /* Respond to the client's request. */
+        Http2Frame *hf = h2ct_read_type(tc, HTTP2_FRAME_HEADERS);
+        H2CT_TRY(hf != NULL);
+        uint32_t id = hf->header.stream_id;
+        burrow__http2_frame_free(hf);
+        H2CT_TRY(h2ct_write_status(tc, id, "200"));
+        H2CT_TRY(h2ct_rt_want_status(rt, 200));
+
+        /* If this was a newly-accepted conn, read the SETTINGS ACK. */
+        if (want_conn)
+            H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_SETTINGS)); /* ACK */
+
+        time_sleep(test->wait);
+        bool got = h2ct_is_closed(tc);
+        if (got != test->want_new_conn)
+            FATALF("after waiting %s, conn closed=%v; want %v",
+                   duration_string(test->wait, arena_allocator(&tt->ar)), got,
+                   test->want_new_conn);
+    }
+}
+
+static void TestIdleConnTimeout_NoExpiry(TestingT *t) {
+    static const H2ctIdleConnTimeout test = {2 * TIME_SECOND, 1 * TIME_SECOND, false};
+    h2ct_run(t, h2ct_idle_conn_timeout, &test);
+}
+
+static void TestIdleConnTimeout_H2TransportTimeoutExpires(TestingT *t) {
+    static const H2ctIdleConnTimeout test = {1 * TIME_SECOND, 2 * TIME_SECOND, true};
+    h2ct_run(t, h2ct_idle_conn_timeout, &test);
+}
+
+/* Go gives this case a base transport with an IdleConnTimeout of 2s, which
+ * the test never uses. */
+static void TestIdleConnTimeout_H1TransportTimeoutExpires(TestingT *t) {
+    static const H2ctIdleConnTimeout test = {0, 1 * TIME_SECOND, false};
+    h2ct_run(t, h2ct_idle_conn_timeout, &test);
+}
+
+static void h2ct_req_body_after_response(H2ctTT *tt, const void *arg) {
+    Int status = *(const Int *)arg;
+    enum { BODY_SIZE = 1 << 10 };
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctBody *body = h2ct_new_request_body(tt);
+    H2CT_TRY(body != NULL);
+    h2ct_body_write_bytes(body, BODY_SIZE / 2);
+    HttpRequest *req = h2ct_new_request_url(tt, (Context){0}, BURROW_S("PUT"),
+                                            BURROW_S("https://dummy.tld/"),
+                                            (IoReader){&h2ct_body_vt, body});
+    H2CT_TRY(req != NULL);
+    H2ctRT *rt = h2ct_tc_round_trip(tt, req);
+    H2CT_TRY(rt != NULL);
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+
+    static const Str want[] = {S_(":authority"), S_("dummy.tld"), S_(":method"),
+                               S_("PUT"),        S_(":path"),     S_("/")};
+    H2CT_TRY(h2ct_want_headers(tc, id, false, want, 6));
+
+    /* Provide enough congestion window for the full request body. */
+    H2CT_TRY(h2ct_write_window_update(tc, 0, BODY_SIZE));
+    H2CT_TRY(h2ct_write_window_update(tc, id, BODY_SIZE));
+
+    H2CT_TRY(h2ct_want_data(tc, id, false, BODY_SIZE / 2, NULL, false));
+
+    Str code = fmt_sprintf_v(arena_allocator(&tt->ar), "%d", status);
+    Str kv[] = {BURROW_S(":status"), code};
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, kv, 2), true)));
+
+    HttpResponse *res = h2ct_rt_response(rt);
+    H2CT_TRY(res != NULL);
+    if (res->status_code != status)
+        FATALF("status code = %d; want %d", (int)res->status_code, (int)status);
+
+    h2ct_body_write_bytes(body, BODY_SIZE / 2);
+    h2ct_body_close_with_error(body, io_eof);
+
+    if (status == 200) {
+        /* After a 200 response, client sends the remaining request body. */
+        H2CT_TRY(h2ct_want_data(tc, id, true, BODY_SIZE / 2, NULL, true));
+    } else {
+        /* After a 403 response, client gives up and resets the stream. */
+        H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_RST_STREAM));
+    }
+
+    (void)h2ct_rt_want_body(rt, "");
+}
+
+static void TestTransportReqBodyAfterResponse_200(TestingT *t) {
+    static const Int status = 200;
+    h2ct_run(t, h2ct_req_body_after_response, &status);
+}
+
+static void TestTransportReqBodyAfterResponse_403(TestingT *t) {
+    static const Int status = 403;
+    h2ct_run(t, h2ct_req_body_after_response, &status);
+}
+
+static void h2ct_record_path(void *env, Str name, Str value) {
+    if (str_eq(name, BURROW_S(":path")))
+        *(Str *)env = value;
+}
+
+/* Go encodes the headers with hpack and decodes them again to find :path.
+ * This takes :path as it is encoded. */
+static void TestTransportRequestPathPseudo(TestingT *t) {
+    static const struct {
+        const char *method;
+        const char *host; /* Request.Host */
+        const char *scheme;
+        const char *opaque;
+        const char *url_host;
+        const char *path;
+        const char *want_path;
+        const char *want_err;
+    } tests[] = {
+        {"GET", "", "", "", "foo.com", "/foo", "/foo", ""},
+        /* In Go 1.7, we accepted paths of "//foo". In Go 1.8, we rejected it
+         * (issue 16847). In Go 1.9, we accepted it again (issue 19103). */
+        {"GET", "", "", "", "foo.com", "//foo", "//foo", ""},
+        /* Opaque with //$Matching_Hostname/path */
+        {"GET", "", "https", "//foo.com/path", "foo.com", "/ignored", "/path", ""},
+        /* Opaque with some other Request.Host instead: */
+        {"GET", "bar.com", "https", "//bar.com/path", "foo.com", "/ignored", "/path",
+         ""},
+        /* Opaque without the leading "//": */
+        {"GET", "", "", "/path", "foo.com", "/ignored", "/path", ""},
+        /* Opaque we can't handle: */
+        {"GET", "", "https", "//unknown_host/path", "foo.com", "/ignored", "",
+         "invalid request :path \"https://unknown_host/path\" from URL.Opaque = "
+         "\"//unknown_host/path\""},
+        /* A CONNECT request: */
+        {"CONNECT", "", "", "", "foo.com", "", "", ""},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
+        Arena ar;
+        arena_init(&ar, NULL, 0);
+        Url u;
+        memset(&u, 0, sizeof u);
+        u.scheme = str_from_cstr(tests[i].scheme);
+        u.opaque = str_from_cstr(tests[i].opaque);
+        u.host = str_from_cstr(tests[i].url_host);
+        u.path = str_from_cstr(tests[i].path);
+        Http2EncodeHeadersParam p;
+        memset(&p, 0, sizeof p);
+        p.ctx = context_background();
+        p.url = &u;
+        p.method = str_from_cstr(tests[i].method);
+        p.host = str_from_cstr(tests[i].host);
+        p.add_gzip_header = false;
+        p.peer_max_header_list_size = UINT64_MAX;
+        Http2EncodeHeadersResult res;
+        Str got_path = BURROW_STR_EMPTY;
+        Error err = burrow__http2_encode_headers(arena_allocator(&ar), &p,
+                                                 h2ct_record_path, &got_path, &res);
+        Str got_err = BURROW_STR_EMPTY;
+        if (BURROW_FAILED(err)) {
+            got_err = error_text(err);
+            got_path = BURROW_STR_EMPTY;
+        }
+        Str want_path = str_from_cstr(tests[i].want_path);
+        Str want_err = str_from_cstr(tests[i].want_err);
+        if (!str_eq(got_path, want_path) || !str_eq(got_err, want_err))
+            testing_t_errorf_v(t, "%d. got {path:%s err:%s}; want {path:%s err:%s}",
+                               (int)i, got_path, got_err, want_path, want_err);
+        arena_free(&ar);
+    }
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -3851,6 +4056,12 @@ static void TestTransportConnBecomesUnresponsive(TestingT *t) {
     X(TestTransportResponseHeaderTimeout_Body)                                         \
     X(TestTransportDoNotHangOnZeroMaxFrameSize)                                        \
     X(TestTransportSendNoMoreThanOnePingWithReset)                                     \
-    X(TestTransportConnBecomesUnresponsive)
+    X(TestTransportConnBecomesUnresponsive)                                            \
+    X(TestIdleConnTimeout_NoExpiry)                                                    \
+    X(TestIdleConnTimeout_H2TransportTimeoutExpires)                                   \
+    X(TestIdleConnTimeout_H1TransportTimeoutExpires)                                   \
+    X(TestTransportReqBodyAfterResponse_200)                                           \
+    X(TestTransportReqBodyAfterResponse_403)                                           \
+    X(TestTransportRequestPathPseudo)
 
 TESTING_MAIN(TESTS)

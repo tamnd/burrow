@@ -560,6 +560,49 @@ static void test_decode_series(TestingT *t, uint32_t size, const EncAndWant *ste
 
 /* C.3 Request Examples without Huffman Coding
  * https://httpwg.org/specs/rfc7541.html#rfc.section.C.3 */
+/* Not in Go. A literal with incremental indexing may have an empty name, which
+ * HTTP/2 rejects only after HPACK has decoded it and put it in the table. The
+ * table finds an entry's block from its name, so this adds two such entries to
+ * a table with room for one, and the second evicts the first. */
+static void TestDynamicTableEmptyName(TestingT *t) {
+    static const HpackHeaderField want_a[] = {
+        {BURROW_S_INIT(""), BURROW_S_INIT("a"), false}};
+    static const HpackHeaderField want_b[] = {
+        {BURROW_S_INIT(""), BURROW_S_INIT("b"), false}};
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    HpackDecoder *d = burrow__hpack_new_decoder(heap_allocator(), 40, NULL, NULL);
+    if (d == NULL) {
+        arena_free(&ar);
+        testing_t_fatalf_v(t, "NewDecoder failed");
+        return;
+    }
+    static const char *const in[] = {"4000 0161", "4000 0162"};
+    static const HpackHeaderField *const want[] = {want_a, want_b};
+    for (int i = 0; i < 2; i++) {
+        Error err = BURROW_NO_ERROR;
+        HpackHeaderFields hf =
+            burrow__hpack_decoder_decode_full(d, a, dehex(a, in[i]), &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "step %d: %s", i, error_text(err));
+            break;
+        }
+        if (!fields_eq(hf.p, hf.len, want[i], 1))
+            testing_t_errorf_v(t, "step %d: Got %s; want %s", i,
+                               fields_string(a, hf.p, hf.len),
+                               fields_string(a, want[i], 1));
+        HpackHeaderField dyn[8];
+        Int ndyn = reverse_copy(&d->dyn_tab, dyn, 8);
+        if (!fields_eq(dyn, ndyn, want[i], 1))
+            testing_t_errorf_v(t, "step %d: dynamic table = %s; want %s", i,
+                               fields_string(a, dyn, ndyn),
+                               fields_string(a, want[i], 1));
+    }
+    burrow__hpack_decoder_free(d);
+    arena_free(&ar);
+}
+
 static void TestDecodeC3_NoHuffman(TestingT *t) {
     static const EncAndWant steps[] = {
         {"8286 8441 0f77 7777 2e65 7861 6d70 6c65 2e63 6f6d",
@@ -1864,6 +1907,7 @@ static void TestOutOfMemory(TestingT *t) {
     X(TestDynamicTableAt)                                                              \
     X(TestDynamicTableSizeEvict)                                                       \
     X(TestDecoderDecode)                                                               \
+    X(TestDynamicTableEmptyName)                                                       \
     X(TestDecodeC3_NoHuffman)                                                          \
     X(TestDecodeC4_Huffman)                                                            \
     X(TestDecodeC5_ResponsesNoHuff)                                                    \

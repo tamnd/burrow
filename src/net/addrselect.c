@@ -74,8 +74,8 @@ burrow__NetPolicyEntry burrow__net_policy_classify(NetipAddr ip) {
         ip = netip_addr_from16(b.a);
     }
     for (size_t i = 0; i < sizeof ra_policy / sizeof ra_policy[0]; i++) {
-        NetipPrefix p =
-            netip_prefix_from(netip_addr_from16(ra_policy[i].prefix), ra_policy[i].bits);
+        NetipPrefix p = netip_prefix_from(netip_addr_from16(ra_policy[i].prefix),
+                                          ra_policy[i].bits);
         if (netip_prefix_contains(p, ip)) {
             burrow__NetPolicyEntry e = {p, ra_policy[i].precedence, ra_policy[i].label};
             return e;
@@ -221,8 +221,8 @@ void burrow__net_sort_by_rfc6724_with_srcs(NetIPAddr *addrs, const NetipAddr *sr
         return;
     Arena ar;
     arena_init(&ar, NULL, 0);
-    RaInfo *infos = (RaInfo *)mem_alloc(arena_allocator(&ar), sizeof(RaInfo) * (size_t)n,
-                                        _Alignof(RaInfo));
+    RaInfo *infos = (RaInfo *)mem_alloc(arena_allocator(&ar),
+                                        sizeof(RaInfo) * (size_t)n, _Alignof(RaInfo));
     if (infos == NULL) {
         /* Out of memory, and the addresses keep the order they came in. */
         arena_free(&ar);
@@ -253,7 +253,8 @@ static void ra_src_addrs(const NetIPAddr *addrs, NetipAddr *srcs, Int n) {
         arena_init(&ar, NULL, 0);
         Error err = BURROW_NO_ERROR;
         NetUDPAddr dst = {addrs[i].ip, 53, addrs[i].zone};
-        NetUDPConn *c = net_dial_udp(arena_allocator(&ar), BURROW_S("udp"), NULL, &dst, &err);
+        NetUDPConn *c =
+            net_dial_udp(arena_allocator(&ar), BURROW_S("udp"), NULL, &dst, &err);
         if (BURROW_OK(err) && c != NULL) {
             NetAddr la = net_udp_conn_local_addr(c);
             if (la.vt != NULL && la.vt->self_type == TYPE_NET_UDP_ADDR) {
@@ -272,9 +273,8 @@ void burrow__net_sort_by_rfc6724(NetIPAddr *addrs, Int n) {
         return;
     Arena ar;
     arena_init(&ar, NULL, 0);
-    NetipAddr *srcs = (NetipAddr *)mem_alloc(arena_allocator(&ar),
-                                             sizeof(NetipAddr) * (size_t)n,
-                                             _Alignof(NetipAddr));
+    NetipAddr *srcs = (NetipAddr *)mem_alloc(
+        arena_allocator(&ar), sizeof(NetipAddr) * (size_t)n, _Alignof(NetipAddr));
     if (srcs != NULL) {
         ra_src_addrs(addrs, srcs, n);
         burrow__net_sort_by_rfc6724_with_srcs(addrs, srcs, n);

@@ -1516,7 +1516,8 @@ static void cookies_by_name_case(void *env, TestingT *t) {
     for (Int i = 0; same && i < tt->nwant; i++)
         same = cookie_is(&gc[i], tt->want[i].name, tt->want[i].value);
     if (!same) {
-        HttpCookie want[2] = {{0}};
+        HttpCookie want[2];
+        memset(want, 0, sizeof want);
         for (Int i = 0; i < tt->nwant; i++) {
             want[i].name = cs(tt->want[i].name);
             want[i].value = cs(tt->want[i].value);

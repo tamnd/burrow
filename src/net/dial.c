@@ -1050,7 +1050,8 @@ static Error dl_listen_control(void *env, Context ctx, Str network, Str address,
     return BURROW_CALLF(lc->control, network, address, c);
 }
 
-static const NetListenConfig dl_zero_listen_config;
+/* Not const, for the same reason as dl_zero_dialer. */
+static NetListenConfig dl_zero_listen_config;
 
 static burrow__NetSysOpts dl_listen_opts(const NetListenConfig *lc, Context ctx) {
     burrow__NetSysOpts o;

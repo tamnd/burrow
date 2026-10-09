@@ -32,11 +32,13 @@
 #include "burrow/net.h"
 #include "burrow/net/http.h"
 #include "burrow/net/url.h"
+#include "burrow/os.h"
 #include "burrow/strings.h"
 #include "burrow/sync.h"
 #include "burrow/time.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #define FATALF(...)                                                                    \
@@ -1389,6 +1391,779 @@ out:
     chan_free(g.handler_done);
 }
 
+/* ------------------------------------------------ frames out of order */
+
+/* HEADERS on stream 1 without END_HEADERS. */
+static bool h2t_headers_no_end(H2tTester *st) {
+    return h2t_write_headers(st, 1, h2t_encode_header(st, NULL, 0), true, false);
+}
+
+static bool h2t_send_no_end_then_headers(H2tTester *st) {
+    /* Not a continuation, and on a different stream. */
+    return h2t_headers_no_end(st) &&
+           h2t_write_headers(st, 3, h2t_encode_header(st, NULL, 0), true, true);
+}
+
+/* HEADERS without END_HEADERS, then another HEADERS. */
+static void TestServer_Rejects_HeadersNoEnd_Then_Headers(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_want_conn_error(t, h2t_send_no_end_then_headers, 0);
+}
+
+static bool h2t_send_no_end_then_ping(H2tTester *st) {
+    static const Byte zero[8] = {0};
+    return h2t_headers_no_end(st) &&
+           !h2t_failed(st, "WritePing",
+                       burrow__http2_framer_write_ping(st->fr, false, zero));
+}
+
+/* HEADERS without END_HEADERS, then a PING. */
+static void TestServer_Rejects_HeadersNoEnd_Then_Ping(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_want_conn_error(t, h2t_send_no_end_then_ping, 0);
+}
+
+static bool h2t_write_foo_continuation(H2tTester *st, uint32_t id) {
+    static const Str kv[] = {S_("foo"), S_("bar")};
+    return !h2t_failed(st, "WriteContinuation",
+                       burrow__http2_framer_write_continuation(
+                           st->fr, id, true, h2t_encode_header_raw(st, kv, 2)));
+}
+
+/* HEADERS with END_HEADERS, then a CONTINUATION. */
+static void TestServer_Rejects_HeadersEnd_Then_Continuation(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    H2tTester st;
+    if (h2t_start(&st, t, NULL, NULL) && h2t_greet(&st) &&
+        h2t_bodyless_req1(&st, NULL, 0) && h2t_want_headers(&st, 1, true, NULL, 0) &&
+        h2t_write_foo_continuation(&st, 1))
+        (void)h2t_want_go_away(&st, 1, HTTP2_ERR_CODE_PROTOCOL);
+    h2t_close(&st);
+}
+
+static bool h2t_send_continuation_wrong_stream(H2tTester *st) {
+    return h2t_headers_no_end(st) && h2t_write_foo_continuation(st, 3);
+}
+
+/* HEADERS without END_HEADERS, then a CONTINUATION on another stream. */
+static void TestServer_Rejects_HeadersNoEnd_Then_ContinuationWrongStream(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_want_conn_error(t, h2t_send_continuation_wrong_stream, 0);
+}
+
+static bool h2t_send_priority_update0(H2tTester *st) {
+    st->fr->allow_illegal_writes = true;
+    return !h2t_failed(
+        st, "WritePriorityUpdate",
+        burrow__http2_framer_write_priority_update(st->fr, 0, BURROW_STR_EMPTY));
+}
+
+/* PRIORITY_UPDATE only takes a stream other than 0 in its payload. */
+static void TestServer_Rejects_PriorityUpdate0(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_want_conn_error(t, h2t_send_priority_update0, 0);
+}
+
+/* testServerRejectsStream: the request write sends is answered with a
+ * RST_STREAM carrying code. */
+static void h2t_rejects_stream(TestingT *t, Http2ErrCode code, H2tFrameFn write) {
+    H2tTester st;
+    if (h2t_start(&st, t, NULL, NULL) && h2t_greet(&st) && write(&st))
+        (void)h2t_want_rst_stream(&st, 1, code);
+    h2t_close(&st);
+}
+
+static bool h2t_send_priority_unparsable(H2tTester *st) {
+    return !h2t_failed(st, "WritePriorityUpdate",
+                       burrow__http2_framer_write_priority_update(
+                           st->fr, 1, BURROW_S("Invalid dictionary: ((((")));
+}
+
+/* PRIORITY_UPDATE whose priority doesn't parse. */
+static void TestServer_Rejects_PriorityUpdateUnparsable(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_rejects_stream(t, HTTP2_ERR_CODE_PROTOCOL, h2t_send_priority_unparsable);
+}
+
+static bool h2t_send_headers_self_dep(H2tTester *st) {
+    st->fr->allow_illegal_writes = true;
+    Http2HeadersFrameParam p;
+    memset(&p, 0, sizeof p);
+    p.stream_id = 1;
+    p.block_fragment = h2t_encode_header(st, NULL, 0);
+    p.end_stream = true;
+    p.end_headers = true;
+    p.priority.stream_dep = 1;
+    return !h2t_failed(st, "writing HEADERS",
+                       burrow__http2_framer_write_headers(st->fr, p));
+}
+
+/* No HEADERS frame that depends on its own stream. */
+static void TestServer_Rejects_HeadersSelfDependence(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_rejects_stream(t, HTTP2_ERR_CODE_PROTOCOL, h2t_send_headers_self_dep);
+}
+
+static bool h2t_send_priority_self_dep(H2tTester *st) {
+    st->fr->allow_illegal_writes = true;
+    Http2PriorityParam p;
+    memset(&p, 0, sizeof p);
+    p.stream_dep = 1;
+    return !h2t_failed(st, "WritePriority",
+                       burrow__http2_framer_write_priority(st->fr, 1, p));
+}
+
+/* No PRIORITY frame that depends on its own stream. */
+static void TestServer_Rejects_PrioritySelfDependence(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_rejects_stream(t, HTTP2_ERR_CODE_PROTOCOL, h2t_send_priority_self_dep);
+}
+
+/* wantClosed: the next read finds the connection closed, not a frame and not
+ * the read deadline. */
+static void h2t_want_closed(H2tTester *st) {
+    Error err = BURROW_NO_ERROR;
+    Http2Frame *f = burrow__http2_framer_read_frame(st->fr, &err);
+    if (!BURROW_FAILED(err))
+        testing_t_errorf_v(st->t, "got frame type %d, want closed connection",
+                           f != NULL ? (int)f->header.type : -1);
+    else if (errors_is(err, os_err_deadline_exceeded))
+        testing_t_errorf_v(st->t, "connection is not closed; want it to be");
+    burrow__http2_frame_free(f);
+}
+
+/* A frame one byte larger than the server reads. The server only reads its
+ * header before it hangs up, so the rest stays in the tester's buffer. Go
+ * moves its clock past GoAwayTimeout, and this waits for it. */
+static void TestServer_RejectsLargeFrames(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    enum { N = (1 << 20) + 1 };
+    H2tTester st;
+    Byte *big = NULL;
+    if (h2t_start(&st, t, NULL, NULL) && h2t_greet(&st)) {
+        big = (Byte *)mem_alloc(st.a, N, 1);
+        if (big == NULL) {
+            testing_t_errorf_v(t, "no memory");
+        } else {
+            (void)burrow__http2_framer_write_raw_frame(
+                st.fr, (Http2FrameType)0xff, 0, 0, slice_from(big, N, N, TYPE_BYTE));
+            if (h2t_want_go_away(&st, 0, HTTP2_ERR_CODE_FRAME_SIZE))
+                h2t_want_closed(&st);
+        }
+    }
+    h2t_close(&st);
+    if (big != NULL)
+        mem_free(st.a, big, N, 1);
+}
+
+static bool h2t_write_connect(H2tTester *st) {
+    static const Str kv[] = {S_(":method"), S_("CONNECT"), S_(":authority"),
+                             S_("example.com:123")};
+    return h2t_write_headers(st, 1, h2t_encode_header_raw(st, kv, 4), true, true);
+}
+
+static void h2t_check_connect(TestingT *t, HttpRequest *r) {
+    if (!str_eq(r->method, BURROW_S("CONNECT")))
+        testing_t_errorf_v(t, "Method = %q; want %q", r->method, BURROW_S("CONNECT"));
+    if (!str_eq(r->request_uri, BURROW_S("example.com:123")))
+        testing_t_errorf_v(t, "RequestURI = %q; want %q", r->request_uri,
+                           BURROW_S("example.com:123"));
+    if (!str_eq(r->url->host, BURROW_S("example.com:123")))
+        testing_t_errorf_v(t, "URL.Host = %q; want %q", r->url->host,
+                           BURROW_S("example.com:123"));
+}
+
+static void TestServer_Request_Connect(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_request(t, h2t_write_connect, h2t_check_connect);
+}
+
+static bool h2t_write_connect_path(H2tTester *st) {
+    static const Str kv[] = {S_(":method"),         S_("CONNECT"), S_(":authority"),
+                             S_("example.com:123"), S_(":path"),   S_("/bogus")};
+    return h2t_write_headers(st, 1, h2t_encode_header_raw(st, kv, 6), true, true);
+}
+
+static void TestServer_Request_Connect_InvalidPath(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_rejects_stream(t, HTTP2_ERR_CODE_PROTOCOL, h2t_write_connect_path);
+}
+
+static bool h2t_write_connect_scheme(H2tTester *st) {
+    static const Str kv[] = {S_(":method"),         S_("CONNECT"), S_(":authority"),
+                             S_("example.com:123"), S_(":scheme"), S_("https")};
+    return h2t_write_headers(st, 1, h2t_encode_header_raw(st, kv, 6), true, true);
+}
+
+static void TestServer_Request_Connect_InvalidScheme(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_rejects_stream(t, HTTP2_ERR_CODE_PROTOCOL, h2t_write_connect_scheme);
+}
+
+H2T_REJECT(TestServer_Request_Post_Body_ContentLength_EndStream, S_(":method"),
+           S_("POST"), S_("content-length"), S_("3"))
+
+/* The request's header block in chunks of 5 bytes, one HEADERS frame and
+ * then CONTINUATION frames. */
+static bool h2t_write_continued(H2tTester *st) {
+    static const Str kv[] = {S_("foo-one"),   S_("value-one"), S_("foo-two"),
+                             S_("value-two"), S_("foo-three"), S_("value-three")};
+    Slice remain = h2t_encode_header(st, kv, 6);
+    int chunks = 0;
+    while (remain.len > 0) {
+        Int n = remain.len < 5 ? remain.len : 5;
+        Slice chunk = slice_sub(remain, 0, n);
+        remain = slice_sub(remain, n, remain.len);
+        if (chunks == 0) {
+            /* no DATA frames, and CONTINUATION frames to come */
+            if (!h2t_write_headers(st, 1, chunk, true, false))
+                return false;
+        } else if (h2t_failed(st, "WriteContinuation",
+                              burrow__http2_framer_write_continuation(
+                                  st->fr, 1, remain.len == 0, chunk))) {
+            return false;
+        }
+        chunks++;
+    }
+    if (chunks < 2) {
+        testing_t_errorf_v(st->t, "too few chunks");
+        return false;
+    }
+    return true;
+}
+
+static void h2t_check_continued(TestingT *t, HttpRequest *r) {
+    static const char *const keys[] = {"Foo-One", "Foo-Two", "Foo-Three"};
+    static const char *const vals[] = {"value-one", "value-two", "value-three"};
+    bool ok = map_len(r->header) == 3;
+    for (int i = 0; ok && i < 3; i++) {
+        Slice vs = http_header_values(r->header, str_from_cstr(keys[i]));
+        ok = vs.len == 1 && str_eq(((const Str *)vs.p)[0], str_from_cstr(vals[i]));
+    }
+    if (!ok)
+        testing_t_errorf_v(t, "Header has %d keys; want Foo-One, Foo-Two and Foo-Three",
+                           map_len(r->header));
+}
+
+static void TestServer_Request_WithContinuation(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_request(t, h2t_write_continued, h2t_check_continued);
+}
+
+/* ------------------------------------------------------- stream limit */
+
+enum { H2T_MAX_STREAMS = 250 }; /* defaultMaxStreams */
+
+/* Each handler says which stream it has and waits for its own channel, which
+ * stands in for Go's serverHandlerCall. */
+typedef struct H2tCalls {
+    Chan *started;
+    Chan *exit[H2T_MAX_STREAMS + 2];
+} H2tCalls;
+
+static void h2t_handle_call(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)w;
+    H2tCalls *c = (H2tCalls *)env;
+    Int id = 0;
+    Str p = r->url->path;
+    for (Int i = 1; i < p.len && p.p[i] >= '0' && p.p[i] <= '9'; i++)
+        id = id * 10 + (p.p[i] - '0');
+    chan_send(c->started, &id);
+    Int k = (id - 1) / 2;
+    if (k >= 0 && k < (Int)(sizeof c->exit / sizeof c->exit[0])) {
+        bool v;
+        (void)chan_recv(c->exit[k], &v);
+    }
+}
+
+static Slice h2t_encode_path(H2tTester *st, uint32_t id) {
+    char path[16];
+    int n = 0;
+    char digits[12];
+    int nd = 0;
+    path[n++] = '/';
+    do {
+        digits[nd++] = (char)('0' + id % 10);
+        id /= 10;
+    } while (id > 0);
+    while (nd > 0)
+        path[n++] = digits[--nd];
+    Str kv[2] = {BURROW_S(":path"), str_from_bytes(path, n)};
+    return h2t_encode_header(st, kv, 2);
+}
+
+static bool h2t_next_call(H2tTester *st, H2tCalls *c, Int want) {
+    Int id = 0;
+    (void)chan_recv(c->started, &id);
+    if (id != want) {
+        testing_t_errorf_v(st->t, "Got request for /%d, want /%d", id, want);
+        return false;
+    }
+    return true;
+}
+
+static void TestServer_Rejects_Too_Many_Streams(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    H2tCalls c;
+    memset(&c, 0, sizeof c);
+    size_t nexit = sizeof c.exit / sizeof c.exit[0];
+    c.started = chan_make(heap_allocator(), TYPE_INT, (Int)nexit);
+    bool ok = c.started != NULL;
+    for (size_t i = 0; i < nexit; i++) {
+        c.exit[i] = chan_make(heap_allocator(), TYPE_BOOL, 1);
+        ok = ok && c.exit[i] != NULL;
+    }
+    H2tTester st;
+    if (!ok) {
+        testing_t_errorf_v(t, "no memory");
+        goto done;
+    }
+    if (!h2t_start(&st, t, h2t_handle_call, &c) || !h2t_greet(&st))
+        goto out;
+    uint32_t id = 1;
+    for (int i = 0; i < H2T_MAX_STREAMS; i++, id += 2) {
+        if (!h2t_write_headers(&st, id, h2t_encode_path(&st, id), true, true) ||
+            !h2t_next_call(&st, &c, (Int)id))
+            goto out;
+    }
+
+    /* This one crosses the limit. It goes as HEADERS and a CONTINUATION, to
+     * check that the decoder's state is still kept for a stream turned away. */
+    uint32_t reject_id = id;
+    id += 2;
+    Slice block = h2t_encode_path(&st, reject_id);
+    if (!h2t_write_headers(&st, reject_id, slice_sub(block, 0, 3), true, false) ||
+        h2t_failed(&st, "WriteContinuation",
+                   burrow__http2_framer_write_continuation(
+                       st.fr, reject_id, true, slice_sub(block, 3, block.len))) ||
+        !h2t_want_rst_stream(&st, reject_id, HTTP2_ERR_CODE_PROTOCOL))
+        goto out;
+
+    /* Let one handler finish. */
+    bool v = true;
+    chan_send(c.exit[0], &v);
+    if (!h2t_want_headers(&st, 1, true, NULL, 0))
+        goto out;
+
+    /* And now another stream can start. */
+    uint32_t good_id = id;
+    if (h2t_write_headers(&st, good_id, h2t_encode_path(&st, good_id), true, true))
+        (void)h2t_next_call(&st, &c, (Int)good_id);
+
+out:
+    for (size_t i = 0; i < nexit; i++)
+        chan_close(c.exit[i]);
+    h2t_close(&st);
+done:
+    chan_free(c.started);
+    for (size_t i = 0; i < nexit; i++)
+        chan_free(c.exit[i]);
+}
+
+/* ------------------------------------------------- more responses */
+
+/* The test a handler given to h2t_server_response reports to, which Go's
+ * handlers do by returning an error. */
+static TestingT *h2t_resp_t;
+
+static void h2t_server_response_t(TestingT *t, H2tRespFn handler, H2tClientFn client) {
+    h2t_resp_t = t;
+    h2t_server_response(t, handler, client);
+    h2t_resp_t = NULL;
+}
+
+#define H2T_HTML "<html>this is HTML."
+
+static bool h2t_want_settings_ack(H2tTester *st) {
+    Http2Frame *f = h2t_read_kind(st, HTTP2_SETTINGS_FRAME);
+    if (f == NULL)
+        return false;
+    bool ack = burrow__http2_settings_frame_is_ack(f);
+    burrow__http2_frame_free(f);
+    if (!ack)
+        testing_t_errorf_v(st->t, "Settings Frame didn't have ACK set");
+    return ack;
+}
+
+static bool h2t_write_settings(H2tTester *st, const Http2Setting *s, Int n) {
+    return !h2t_failed(st, "WriteSettings",
+                       burrow__http2_framer_write_settings(st->fr, s, n)) &&
+           h2t_want_settings_ack(st);
+}
+
+static bool h2t_write_window_update(H2tTester *st, uint32_t id, uint32_t n) {
+    return !h2t_failed(st, "WriteWindowUpdate",
+                       burrow__http2_framer_write_window_update(st->fr, id, n));
+}
+
+/* wantData with a size and no data: one DATA frame of n bytes. */
+static bool h2t_want_data_size(H2tTester *st, uint32_t id, bool end_stream, Int n) {
+    Http2Frame *f = h2t_read_kind(st, HTTP2_DATA_FRAME);
+    if (f == NULL)
+        return false;
+    bool ended = (f->header.flags & HTTP2_FLAG_DATA_END_STREAM) != 0;
+    bool ok =
+        f->header.stream_id == id && ended == end_stream && f->u.data.data.len == n;
+    if (!ok)
+        testing_t_errorf_v(st->t,
+                           "got DATA stream %d end %t of %d bytes; want stream %d end "
+                           "%t of %d bytes",
+                           (int)f->header.stream_id, ended, f->u.data.data.len, (int)id,
+                           end_stream, n);
+    burrow__http2_frame_free(f);
+    return ok;
+}
+
+static void h2t_handle_foo_bar_type(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    (void)http_header_set(http_response_writer_header(w), BURROW_S("Content-Type"),
+                          BURROW_S("foo/bar"));
+    h2t_write_str(w, H2T_HTML);
+}
+
+static bool h2t_client_foo_bar_type(H2tTester *st) {
+    static const Str want[] = {S_(":status"),        S_("200"),
+                               S_("content-type"),   S_("foo/bar"),
+                               S_("content-length"), S_("19")};
+    return h2t_get_slash(st) &&
+           h2t_want_headers(st, 1, false, want, sizeof want / sizeof want[0]) &&
+           h2t_want_data(st, 1, true, H2T_HTML);
+}
+
+static void TestServer_Response_Data_Sniff_DoesntOverride(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response(t, h2t_handle_foo_bar_type, h2t_client_foo_bar_type);
+}
+
+static const Str h2t_html_want[] = {
+    S_(":status"),        S_("200"), S_("content-type"), S_("text/html; charset=utf-8"),
+    S_("content-length"), S_("19")};
+
+static void h2t_handle_ignore_after(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    h2t_write_str(w, H2T_HTML);
+    (void)http_header_set(http_response_writer_header(w), BURROW_S("foo"),
+                          BURROW_S("should be ignored"));
+}
+
+static bool h2t_client_html(H2tTester *st) {
+    return h2t_get_slash(st) &&
+           h2t_want_headers(st, 1, false, h2t_html_want,
+                            sizeof h2t_html_want / sizeof h2t_html_want[0]);
+}
+
+/* Header looked at only after the first write. */
+static void TestServer_Response_Data_IgnoreHeaderAfterWrite_After(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response(t, h2t_handle_ignore_after, h2t_client_html);
+}
+
+static void h2t_handle_ignore_overwrite(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    HttpHeader h = http_response_writer_header(w);
+    (void)http_header_set(h, BURROW_S("foo"), BURROW_S("proper value"));
+    h2t_write_str(w, H2T_HTML);
+    (void)http_header_set(h, BURROW_S("foo"), BURROW_S("should be ignored"));
+}
+
+static bool h2t_client_overwrite(H2tTester *st) {
+    static const Str want[] = {S_(":status"),
+                               S_("200"),
+                               S_("foo"),
+                               S_("proper value"),
+                               S_("content-type"),
+                               S_("text/html; charset=utf-8"),
+                               S_("content-length"),
+                               S_("19")};
+    return h2t_get_slash(st) &&
+           h2t_want_headers(st, 1, false, want, sizeof want / sizeof want[0]);
+}
+
+/* Header looked at before the first write and changed after it. */
+static void TestServer_Response_Data_IgnoreHeaderAfterWrite_Overwrite(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response(t, h2t_handle_ignore_overwrite, h2t_client_overwrite);
+}
+
+static void h2t_handle_html(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    h2t_write_str(w, H2T_HTML);
+}
+
+static bool h2t_client_html_data(H2tTester *st) {
+    return h2t_client_html(st) && h2t_want_data(st, 1, true, H2T_HTML);
+}
+
+static void TestServer_Response_Data_SniffLenType(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response(t, h2t_handle_html, h2t_client_html_data);
+}
+
+#define H2T_MSG "<html>this is HTML"
+#define H2T_MSG2 ", and this is the next chunk"
+
+static void h2t_handle_flush_mid_write(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    h2t_write_str(w, H2T_MSG);
+    (void)w.vt->flush(w.data);
+    h2t_write_str(w, H2T_MSG2);
+}
+
+static bool h2t_client_flush_mid_write(H2tTester *st) {
+    /* sniffed, and no content-length */
+    static const Str want[] = {S_(":status"), S_("200"), S_("content-type"),
+                               S_("text/html; charset=utf-8")};
+    return h2t_get_slash(st) &&
+           h2t_want_headers(st, 1, false, want, sizeof want / sizeof want[0]) &&
+           h2t_want_data(st, 1, false, H2T_MSG) && h2t_want_data(st, 1, true, H2T_MSG2);
+}
+
+static void TestServer_Response_Header_Flush_MidWrite(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response(t, h2t_handle_flush_mid_write, h2t_client_flush_mid_write);
+}
+
+/* A handler's write of n bytes of 'a', with a flush first when flush is set,
+ * reporting whether it failed. */
+static bool h2t_write_as(HttpResponseWriter w, Int n, bool flush, Error *err) {
+    if (flush)
+        (void)w.vt->flush(w.data);
+    Byte *p = (Byte *)mem_alloc_nozero(heap_allocator(), (size_t)n, 1);
+    if (p == NULL) {
+        testing_t_errorf_v(h2t_resp_t, "no memory");
+        return false;
+    }
+    memset(p, 'a', (size_t)n);
+    *err = BURROW_NO_ERROR;
+    Int got = http_response_writer_write(w, slice_from(p, n, n, TYPE_BYTE), err);
+    mem_free(heap_allocator(), p, (size_t)n, 1);
+    if (!BURROW_FAILED(*err) && got != n)
+        testing_t_errorf_v(h2t_resp_t, "Error in handler: wrong size %d from Write",
+                           got);
+    return !BURROW_FAILED(*err);
+}
+
+enum { H2T_LARGE = 1 << 20, H2T_MAX_FRAME = 16 << 10 };
+
+static void h2t_handle_large_write(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    Error err = BURROW_NO_ERROR;
+    if (!h2t_write_as(w, H2T_LARGE, false, &err))
+        testing_t_errorf_v(h2t_resp_t, "Error in handler: Write error: %v", err);
+}
+
+static const Http2Setting h2t_no_window_small_frames[] = {
+    {HTTP2_SETTING_INITIAL_WINDOW_SIZE, 0},
+    {HTTP2_SETTING_MAX_FRAME_SIZE, H2T_MAX_FRAME}};
+
+static bool h2t_client_large_write(H2tTester *st) {
+    /* sniffed, and no content-length */
+    static const Str want[] = {S_(":status"), S_("200"), S_("content-type"),
+                               S_("text/plain; charset=utf-8")};
+    if (!h2t_write_settings(st, h2t_no_window_small_frames, 2) || !h2t_get_slash(st) ||
+        /* Quota for the handler to write, on the stream and on the connection. */
+        !h2t_write_window_update(st, 1, H2T_LARGE) ||
+        !h2t_write_window_update(st, 0, H2T_LARGE) ||
+        !h2t_want_headers(st, 1, false, want, sizeof want / sizeof want[0]))
+        return false;
+    Int bytes = 0;
+    Int frames = 0;
+    for (;;) {
+        Http2Frame *f = h2t_read_kind(st, HTTP2_DATA_FRAME);
+        if (f == NULL)
+            return false;
+        Slice d = f->u.data.data;
+        bytes += d.len;
+        frames++;
+        bool non_a = false;
+        for (Int i = 0; i < d.len; i++)
+            non_a = non_a || ((const Byte *)d.p)[i] != 'a';
+        bool ended = (f->header.flags & HTTP2_FLAG_DATA_END_STREAM) != 0;
+        burrow__http2_frame_free(f);
+        if (non_a) {
+            testing_t_errorf_v(st->t, "non-'a' byte seen in DATA");
+            return false;
+        }
+        if (ended)
+            break;
+    }
+    if (bytes != H2T_LARGE)
+        testing_t_errorf_v(st->t, "Got %d bytes; want %d", bytes, (Int)H2T_LARGE);
+    Int want_frames = H2T_LARGE / H2T_MAX_FRAME;
+    if (frames < want_frames || frames > want_frames * 2)
+        testing_t_errorf_v(st->t, "Got %d frames; want %d", frames, want_frames);
+    return true;
+}
+
+static void TestServer_Response_LargeWrite(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response_t(t, h2t_handle_large_write, h2t_client_large_write);
+}
+
+/* Before each read the client gives exactly enough window for it. */
+static const Int h2t_reads[] = {123, 1, 13, 127};
+
+static void h2t_handle_flow_controlled(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    Error err = BURROW_NO_ERROR;
+    if (!h2t_write_as(w, 123 + 1 + 13 + 127, true, &err))
+        testing_t_errorf_v(h2t_resp_t, "Error in handler: Write error: %v", err);
+}
+
+static bool h2t_client_flow_controlled(H2tTester *st) {
+    /* The window, and so how much comes before the first WINDOW_UPDATE. */
+    Http2Setting s = {HTTP2_SETTING_INITIAL_WINDOW_SIZE, (uint32_t)h2t_reads[0]};
+    if (!h2t_write_settings(st, &s, 1) || !h2t_get_slash(st) ||
+        !h2t_want_headers(st, 1, false, NULL, 0) ||
+        !h2t_want_data_size(st, 1, false, h2t_reads[0]))
+        return false;
+    size_t n = sizeof h2t_reads / sizeof h2t_reads[0];
+    for (size_t i = 1; i < n; i++) {
+        if (!h2t_write_window_update(st, 1, (uint32_t)h2t_reads[i]) ||
+            !h2t_want_data_size(st, 1, i == n - 1, h2t_reads[i]))
+            return false;
+    }
+    return true;
+}
+
+/* The handler can't write more than the client allows. */
+static void TestServer_Response_LargeWrite_FlowControlled(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response_t(t, h2t_handle_flow_controlled, h2t_client_flow_controlled);
+}
+
+static void h2t_handle_rst_unblocks(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    Error err = BURROW_NO_ERROR;
+    if (h2t_write_as(w, H2T_LARGE, true, &err))
+        testing_t_errorf_v(
+            h2t_resp_t, "Error in handler: unexpected nil error from Write in handler");
+}
+
+static bool h2t_client_rst_unblocks(H2tTester *st) {
+    return h2t_write_settings(st, h2t_no_window_small_frames, 2) && h2t_get_slash(st) &&
+           h2t_want_headers(st, 1, false, NULL, 0) &&
+           !h2t_failed(
+               st, "WriteRSTStream",
+               burrow__http2_framer_write_rst_stream(st->fr, 1, HTTP2_ERR_CODE_CANCEL));
+}
+
+/* A handler blocked in a write is let go when the client resets the stream. */
+static void TestServer_Response_RST_Unblocks_LargeWrite(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response_t(t, h2t_handle_rst_unblocks, h2t_client_rst_unblocks);
+}
+
+static void h2t_handle_flush_only(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    (void)w.vt->flush(w.data);
+    /* Nothing, so an empty DATA frame. */
+}
+
+static bool h2t_client_empty_data(H2tTester *st) {
+    /* No window for the handler. */
+    Http2Setting s = {HTTP2_SETTING_INITIAL_WINDOW_SIZE, 0};
+    return h2t_write_settings(st, &s, 1) && h2t_get_slash(st) &&
+           h2t_want_headers(st, 1, false, NULL, 0) &&
+           h2t_want_data_size(st, 1, true, 0);
+}
+
+static void TestServer_Response_Empty_Data_Not_FlowControlled(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response(t, h2t_handle_flush_only, h2t_client_empty_data);
+}
+
+static void h2t_handle_100_continue(HttpResponseWriter w, HttpRequest *r) {
+    Str v = http_header_get(r->header, BURROW_S("Expect"));
+    if (v.len > 0)
+        testing_t_errorf_v(h2t_resp_t, "Expect header = %q; want empty", v);
+    /* This read is what sends the 100-continue. */
+    Byte buf[3];
+    Error err = BURROW_NO_ERROR;
+    Int n = io_read_full(io_read_closer_as_io_reader(r->body),
+                         slice_from(buf, 3, 3, TYPE_BYTE), &err);
+    if (BURROW_FAILED(err) || n != 3 || memcmp(buf, "foo", 3) != 0) {
+        testing_t_errorf_v(h2t_resp_t,
+                           "Error in handler: ReadFull = %q, %v; want %q, nil",
+                           str_from_bytes(buf, n), err, BURROW_S("foo"));
+        return;
+    }
+    h2t_write_str(w, "bar");
+}
+
+static bool h2t_client_100_continue(H2tTester *st) {
+    static const Str kv[] = {S_(":method"), S_("POST"), S_("expect"),
+                             S_("100-Continue")};
+    static const Str want100[] = {S_(":status"), S_("100")};
+    static const Str want[] = {S_(":status"),        S_("200"),
+                               S_("content-type"),   S_("text/plain; charset=utf-8"),
+                               S_("content-length"), S_("3")};
+    /* With the 100 in, the client can send its gigantic and/or sensitive "foo". */
+    return h2t_write_headers(st, 1, h2t_encode_header(st, kv, 4), false, true) &&
+           h2t_want_headers(st, 1, false, want100, 2) &&
+           h2t_write_data(st, 1, true, "foo", 3) &&
+           h2t_want_headers(st, 1, false, want, sizeof want / sizeof want[0]) &&
+           h2t_want_data(st, 1, true, "bar");
+}
+
+static void TestServer_Response_Automatic100Continue(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response_t(t, h2t_handle_100_continue, h2t_client_100_continue);
+}
+
+/* A header keeps the value it's given rather than a copy, so the values live
+ * here, past the handler's return. */
+static char h2t_many_values[5000][16];
+
+static void h2t_handle_many_headers(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    HttpHeader h = http_response_writer_header(w);
+    char k[24];
+    for (int i = 0; i < 5000; i++) {
+        char *v = h2t_many_values[i];
+        int kn = snprintf(k, sizeof k, "x-header-%d", i);
+        int vn = snprintf(v, sizeof h2t_many_values[i], "x-value-%d", i);
+        (void)http_header_set(h, str_from_bytes(k, kn), str_from_bytes(v, vn));
+    }
+}
+
+/* Read as frames of their own rather than as one block, so the client's
+ * framer stops putting them together for this. */
+static bool h2t_client_many_headers(H2tTester *st) {
+    if (!h2t_get_slash(st))
+        return false;
+    st->fr->read_meta_headers = NULL;
+    Http2Frame *f = h2t_read_kind(st, HTTP2_HEADERS_FRAME);
+    if (f == NULL)
+        return false;
+    bool ended = (f->header.flags & HTTP2_FLAG_HEADERS_END_HEADERS) != 0;
+    burrow__http2_frame_free(f);
+    if (ended) {
+        testing_t_errorf_v(st->t, "got unwanted END_HEADERS flag");
+        return false;
+    }
+    int n = 0;
+    for (;;) {
+        n++;
+        f = h2t_read_kind(st, HTTP2_CONTINUATION_FRAME);
+        if (f == NULL)
+            return false;
+        ended = (f->header.flags & HTTP2_FLAG_CONTINUATION_END_HEADERS) != 0;
+        burrow__http2_frame_free(f);
+        if (ended)
+            break;
+    }
+    if (n < 5)
+        testing_t_errorf_v(st->t, "Only got %d CONTINUATION frames; expected 5+", n);
+    return true;
+}
+
+/* So many response headers that the server needs CONTINUATION frames. */
+static void TestServer_Response_ManyHeaders_With_Continuation(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response(t, h2t_handle_many_headers, h2t_client_many_headers);
+}
+
 #define TESTS(X)                                                                       \
     X(TestServer)                                                                      \
     X(TestServer_Request_Get)                                                          \
@@ -1434,6 +2209,32 @@ out:
     X(TestServerReadsTrailers)                                                         \
     X(TestServerWritesTrailers_WithFlush)                                              \
     X(TestServerWritesTrailers_WithoutFlush)                                           \
-    X(TestServerGracefulShutdown)
+    X(TestServerGracefulShutdown)                                                      \
+    X(TestServer_Request_Post_Body_ContentLength_EndStream)                            \
+    X(TestServer_Request_WithContinuation)                                             \
+    X(TestServer_Request_Connect)                                                      \
+    X(TestServer_Request_Connect_InvalidPath)                                          \
+    X(TestServer_Request_Connect_InvalidScheme)                                        \
+    X(TestServer_RejectsLargeFrames)                                                   \
+    X(TestServer_Rejects_HeadersNoEnd_Then_Headers)                                    \
+    X(TestServer_Rejects_HeadersNoEnd_Then_Ping)                                       \
+    X(TestServer_Rejects_HeadersEnd_Then_Continuation)                                 \
+    X(TestServer_Rejects_HeadersNoEnd_Then_ContinuationWrongStream)                    \
+    X(TestServer_Rejects_PriorityUpdate0)                                              \
+    X(TestServer_Rejects_PriorityUpdateUnparsable)                                     \
+    X(TestServer_Rejects_HeadersSelfDependence)                                        \
+    X(TestServer_Rejects_PrioritySelfDependence)                                       \
+    X(TestServer_Rejects_Too_Many_Streams)                                             \
+    X(TestServer_Response_Data_Sniff_DoesntOverride)                                   \
+    X(TestServer_Response_Data_IgnoreHeaderAfterWrite_After)                           \
+    X(TestServer_Response_Data_IgnoreHeaderAfterWrite_Overwrite)                       \
+    X(TestServer_Response_Data_SniffLenType)                                           \
+    X(TestServer_Response_Header_Flush_MidWrite)                                       \
+    X(TestServer_Response_LargeWrite)                                                  \
+    X(TestServer_Response_LargeWrite_FlowControlled)                                   \
+    X(TestServer_Response_RST_Unblocks_LargeWrite)                                     \
+    X(TestServer_Response_Empty_Data_Not_FlowControlled)                               \
+    X(TestServer_Response_Automatic100Continue)                                        \
+    X(TestServer_Response_ManyHeaders_With_Continuation)
 
 TESTING_MAIN(TESTS)

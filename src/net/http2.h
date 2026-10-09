@@ -1199,9 +1199,8 @@ Error burrow__http2_transport_add_conn(Http2Transport *t2, Str scheme, Str autho
                                        NetConn c);
 
 /* RoundTrip. The response's request is req, which has to outlive it. */
-BURROW_OWNS(ret) HttpResponse *burrow__http2_transport_round_trip(Http2Transport *t2,
-                                                                  HttpRequest *req,
-                                                                  Error *err);
+BURROW_OWNS(ret) HttpResponse *
+burrow__http2_transport_round_trip(Http2Transport *t2, HttpRequest *req, Error *err);
 
 /* CloseIdleConnections. */
 void burrow__http2_transport_close_idle_connections(Http2Transport *t2);
@@ -1211,6 +1210,23 @@ void burrow__http2_transport_close_idle_connections(Http2Transport *t2);
  * burrow__http2_err_client_conn_force_closed. Nothing when the transport has
  * no such connection. */
 void burrow__http2_transport_close_conn(Http2Transport *t2, NetConn c);
+
+/* ClientConn, for the tests: one connection of a transport, which the
+ * transport keeps until the last of those holding it lets go. */
+typedef struct burrow__Http2ClientConn Http2ClientConn;
+
+/* The connection add_conn was given as c, held for the caller until it calls
+ * burrow__http2_client_conn_release, or NULL when the transport has no such
+ * connection. Release it before freeing the transport, which waits for it. */
+BURROW_OWNS(ret) Http2ClientConn *
+burrow__http2_transport_client_conn(Http2Transport *t2, NetConn c);
+
+/* ClientConn.RoundTrip: req on cc and no other connection, with no retry, as
+ * Go's tests make it. */
+BURROW_OWNS(ret) HttpResponse *
+burrow__http2_client_conn_round_trip(Http2ClientConn *cc, HttpRequest *req, Error *err);
+
+void burrow__http2_client_conn_release(Http2ClientConn *cc);
 
 /* IdleConnStrsForTesting: the address of each connection that can take a new
  * request, sorted, as a Slice of Str in a. */

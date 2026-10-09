@@ -396,6 +396,7 @@ struct H2ctTT {
     HttpTransport tr1;
     HttpProtocols protos;
     Http2Transport *t2;
+    Http2ClientConn *cc; /* new_client_conn's, which tc_round_trip uses */
     SyncMutex mu;
     H2ctConn *conns;
     H2ctConn **conns_tail;
@@ -534,6 +535,7 @@ static void h2ct_tt_close(H2ctTT *tt) {
     }
     for (H2ctRT *rt = rts; rt != NULL; rt = rt->next)
         http_response_free(rt->res);
+    burrow__http2_client_conn_release(tt->cc);
     burrow__http2_transport_free(tt->t2);
     http_transport_free(&tt->tr1);
 
@@ -618,7 +620,7 @@ static H2ctConn *h2ct_get_conn(H2ctTT *tt) {
 }
 
 /* newTestClientConn: a connection added to t2, which the round trips of
- * h2ct_tc_round_trip use without going through tr1. */
+ * h2ct_tc_round_trip use without going through tr1 or t2's pool. */
 static H2ctConn *h2ct_new_client_conn(H2ctTT *tt) {
     tt->t2 = burrow__http2_new_transport(&tt->tr1);
     if (tt->t2 == NULL) {
@@ -643,6 +645,11 @@ static H2ctConn *h2ct_new_client_conn(H2ctTT *tt) {
                                                  BURROW_S("dummy.tld"), c);
     if (BURROW_FAILED(err)) {
         testing_t_errorf_v(tt->t, "newClientConn: %v", err);
+        return NULL;
+    }
+    tt->cc = burrow__http2_transport_client_conn(tt->t2, c);
+    if (tt->cc == NULL) {
+        testing_t_errorf_v(tt->t, "newClientConn: the transport has no conn");
         return NULL;
     }
     return h2ct_get_conn(tt);
@@ -738,7 +745,7 @@ static void h2ct_rt_job(void *env) {
     Error err = BURROW_NO_ERROR;
     HttpResponse *res;
     if (rt->via_t2)
-        res = burrow__http2_transport_round_trip(rt->tt->t2, rt->req, &err);
+        res = burrow__http2_client_conn_round_trip(rt->tt->cc, rt->req, &err);
     else
         res = http_transport_round_trip(&rt->tt->tr1, rt->req, &err);
     rt->res = res;
@@ -748,10 +755,16 @@ static void h2ct_rt_job(void *env) {
 
 /* roundTrip: starts req on its way, with a context of its own that the test
  * can cancel and that tells it the request's stream ID. The test transport
- * has req from then on. via_t2 is tc.roundTrip, and the rest tt.roundTrip. */
+ * has req from then on. via_t2 is tc.roundTrip, on new_client_conn's
+ * connection, and the rest tt.roundTrip. */
 static H2ctRT *h2ct_round_trip_via(H2ctTT *tt, HttpRequest *req, bool via_t2) {
     if (req == NULL)
         return NULL;
+    if (via_t2 && tt->cc == NULL) {
+        http_request_free(req);
+        testing_t_errorf_v(tt->t, "tc.roundTrip with no newTestClientConn");
+        return NULL;
+    }
     H2ctRT *rt = (H2ctRT *)mem_alloc(tt->a, sizeof *rt, _Alignof(H2ctRT));
     if (rt == NULL) {
         http_request_free(req);
@@ -2746,8 +2759,6 @@ static void TestTransportReturnsUnusedFlowControlMultipleWrites(TestingT *t) {
     h2ct_run(t, h2ct_returns_unused_flow_control, &one_data_frame);
 }
 
-/* newTestTransportWithUnusedConn: tt with a connection that was dialed for
- * a request cancelled before the dial was done, and so never used. */
 /* Waits for a dial to be waiting on dial_held, or for none to be. */
 static bool h2ct_tt_wait_dials(H2ctTT *tt, bool waiting) {
     Time deadline = time_add(time_now(), H2CT_WAIT);
@@ -2763,6 +2774,8 @@ static bool h2ct_tt_wait_dials(H2ctTT *tt, bool waiting) {
     }
 }
 
+/* newTestTransportWithUnusedConn: tt with a connection that was dialed for
+ * a request cancelled before the dial was done, and so never used. */
 static bool h2ct_tt_with_unused_conn(H2ctTT *tt) {
     sync_mutex_lock(&tt->mu);
     tt->dial_held = true;
@@ -3336,9 +3349,8 @@ static void h2ct_client_conn_close_at_headers(H2ctTT *tt, const void *arg) {
     H2ctConn *tc = h2ct_new_client_conn(tt);
     H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
 
-    HttpRequest *req =
-        h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
-                             BURROW_S("https://dummy.tld/"), h2ct_no_body);
+    HttpRequest *req = h2ct_new_request_url(
+        tt, (Context){0}, BURROW_S("GET"), BURROW_S("http://dummy.tld/"), h2ct_no_body);
     H2CT_TRY(req != NULL);
     H2ctRT *rt = h2ct_tc_round_trip(tt, req);
     H2CT_TRY(rt != NULL && h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
@@ -3358,9 +3370,8 @@ static void h2ct_client_conn_close_at_body(H2ctTT *tt, const void *arg) {
     H2ctConn *tc = h2ct_new_client_conn(tt);
     H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
 
-    HttpRequest *req =
-        h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
-                             BURROW_S("https://dummy.tld/"), h2ct_no_body);
+    HttpRequest *req = h2ct_new_request_url(
+        tt, (Context){0}, BURROW_S("GET"), BURROW_S("http://dummy.tld/"), h2ct_no_body);
     H2CT_TRY(req != NULL);
     H2ctRT *rt = h2ct_tc_round_trip(tt, req);
     H2CT_TRY(rt != NULL && h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
@@ -3393,9 +3404,8 @@ static void h2ct_flow_control(H2ctTT *tt, const void *arg) {
     H2ctConn *tc = h2ct_new_client_conn(tt);
     H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
 
-    HttpRequest *req =
-        h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
-                             BURROW_S("https://dummy.tld/"), h2ct_no_body);
+    HttpRequest *req = h2ct_new_request_url(
+        tt, (Context){0}, BURROW_S("GET"), BURROW_S("http://dummy.tld/"), h2ct_no_body);
     H2CT_TRY(req != NULL);
     H2ctRT *rt = h2ct_tc_round_trip(tt, req);
     H2CT_TRY(rt != NULL && h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
@@ -3471,7 +3481,7 @@ static void h2ct_body_read_error(H2ctTT *tt, const void *arg) {
     h2ct_body_write(b, body);
     h2ct_body_close_with_error(b, body_read_error);
     HttpRequest *req = h2ct_new_request_url(tt, (Context){0}, BURROW_S("PUT"),
-                                            BURROW_S("https://dummy.tld/"),
+                                            BURROW_S("http://dummy.tld/"),
                                             (IoReader){&h2ct_body_vt, b});
     H2CT_TRY(req != NULL);
     H2ctRT *rt = h2ct_tc_round_trip(tt, req);
@@ -3560,7 +3570,7 @@ static void h2ct_1xx_limits(H2ctTT *tt, const void *arg) {
         ctx = httptrace_with_client_trace(a, ctx, trace);
     }
     HttpRequest *req = h2ct_new_request_url(
-        tt, ctx, BURROW_S("GET"), BURROW_S("https://dummy.tld/"), h2ct_no_body);
+        tt, ctx, BURROW_S("GET"), BURROW_S("http://dummy.tld/"), h2ct_no_body);
     H2CT_TRY(req != NULL);
     H2ctRT *rt = h2ct_tc_round_trip(tt, req);
     H2CT_TRY(rt != NULL && h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
@@ -3629,13 +3639,13 @@ static void h2ct_response_header_timeout(H2ctTT *tt, const void *arg) {
         h2ct_body_write_bytes(req_body, BODY_SIZE);
         h2ct_body_close_with_error(req_body, io_eof);
         req = h2ct_new_request_url(tt, (Context){0}, BURROW_S("POST"),
-                                   BURROW_S("https://dummy.tld/"),
+                                   BURROW_S("http://dummy.tld/"),
                                    (IoReader){&h2ct_body_vt, req_body});
         H2CT_TRY(req != NULL);
         http_header_set(req->header, BURROW_S("Content-Type"), BURROW_S("text/foo"));
     } else {
         req = h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
-                                   BURROW_S("https://dummy.tld/"), h2ct_no_body);
+                                   BURROW_S("http://dummy.tld/"), h2ct_no_body);
         H2CT_TRY(req != NULL);
     }
 
@@ -3680,7 +3690,7 @@ static void h2ct_do_not_hang_on_zero_max_frame_size(H2ctTT *tt, const void *arg)
         strings_new_reader(arena_allocator(&tt->ar), BURROW_S("body"));
     H2CT_TRY(body != NULL);
     HttpRequest *req = h2ct_new_request_url(tt, (Context){0}, BURROW_S("POST"),
-                                            BURROW_S("https://dummy.tld/"),
+                                            BURROW_S("http://dummy.tld/"),
                                             strings_reader_as_io_reader(body));
     H2CT_TRY(req != NULL);
     (void)h2ct_tc_round_trip(tt, req);
@@ -3693,9 +3703,8 @@ static void TestTransportDoNotHangOnZeroMaxFrameSize(TestingT *t) {
 
 /* makeAndResetRequest: a request the client sends and then cancels. */
 static bool h2ct_make_and_reset_request(H2ctTT *tt, H2ctConn *tc) {
-    HttpRequest *req =
-        h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
-                             BURROW_S("https://dummy.tld/"), h2ct_no_body);
+    HttpRequest *req = h2ct_new_request_url(
+        tt, (Context){0}, BURROW_S("GET"), BURROW_S("http://dummy.tld/"), h2ct_no_body);
     if (req == NULL)
         return false;
     H2ctRT *rt = h2ct_tc_round_trip(tt, req);
@@ -3796,7 +3805,7 @@ static void h2ct_conn_becomes_unresponsive(H2ctTT *tt, const void *arg) {
     testing_t_logf_v(tt->t, "first request opens a new connection and succeeds");
     H2ctRT *rt1 = h2ct_tt_round_trip(
         tt, h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
-                                 BURROW_S("https://dummy.tld/"), h2ct_no_body));
+                                 BURROW_S("http://dummy.tld/"), h2ct_no_body));
     H2CT_TRY(rt1 != NULL);
     H2ctConn *tc1 = h2ct_get_conn(tt);
     H2CT_TRY(tc1 != NULL && h2ct_first_request_ok(tc1, rt1, MAX_CONCURRENT));
@@ -3806,7 +3815,7 @@ static void h2ct_conn_becomes_unresponsive(H2ctTT *tt, const void *arg) {
         testing_t_logf_v(tt->t, "request %d receives no response and is canceled", i);
         H2ctRT *rt = h2ct_tt_round_trip(
             tt, h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
-                                     BURROW_S("https://dummy.tld/"), h2ct_no_body));
+                                     BURROW_S("http://dummy.tld/"), h2ct_no_body));
         H2CT_TRY(rt != NULL);
         if (h2ct_tt_has_conn(tt))
             FATALF("new connection created; expect existing conn to be reused");
@@ -3822,7 +3831,7 @@ static void h2ct_conn_becomes_unresponsive(H2ctTT *tt, const void *arg) {
      * new conn. */
     H2ctRT *rt2 = h2ct_tt_round_trip(
         tt, h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
-                                 BURROW_S("https://dummy.tld/"), h2ct_no_body));
+                                 BURROW_S("http://dummy.tld/"), h2ct_no_body));
     H2CT_TRY(rt2 != NULL);
     H2ctConn *tc2 = h2ct_get_conn(tt);
     H2CT_TRY(tc2 != NULL && h2ct_first_request_ok(tc2, rt2, MAX_CONCURRENT));
@@ -3846,7 +3855,7 @@ static void h2ct_idle_conn_timeout(H2ctTT *tt, const void *arg) {
     for (int i = 0; i < 3; i++) {
         H2ctRT *rt = h2ct_tt_round_trip(
             tt, h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
-                                     BURROW_S("https://dummy.tld/"), h2ct_no_body));
+                                     BURROW_S("http://dummy.tld/"), h2ct_no_body));
         H2CT_TRY(rt != NULL);
 
         /* This request happens on a new conn if it's the first request (and
@@ -3891,8 +3900,12 @@ static void h2ct_idle_conn_timeout(H2ctTT *tt, const void *arg) {
     }
 }
 
+/* Go's timeout is 2s. net/http keeps an HTTP/2 connection in its pool from
+ * when it was first put there, and only uses it within the timeout of that.
+ * Go's third request comes exactly 2s after on its fake clock, which is still
+ * within it, and here it always comes later, so the timeout is 4s. */
 static void TestIdleConnTimeout_NoExpiry(TestingT *t) {
-    static const H2ctIdleConnTimeout test = {2 * TIME_SECOND, 1 * TIME_SECOND, false};
+    static const H2ctIdleConnTimeout test = {4 * TIME_SECOND, 1 * TIME_SECOND, false};
     h2ct_run(t, h2ct_idle_conn_timeout, &test);
 }
 
@@ -3918,7 +3931,7 @@ static void h2ct_req_body_after_response(H2ctTT *tt, const void *arg) {
     H2CT_TRY(body != NULL);
     h2ct_body_write_bytes(body, BODY_SIZE / 2);
     HttpRequest *req = h2ct_new_request_url(tt, (Context){0}, BURROW_S("PUT"),
-                                            BURROW_S("https://dummy.tld/"),
+                                            BURROW_S("http://dummy.tld/"),
                                             (IoReader){&h2ct_body_vt, body});
     H2CT_TRY(req != NULL);
     H2ctRT *rt = h2ct_tc_round_trip(tt, req);
@@ -4090,7 +4103,7 @@ static void h2ct_roundtrip_close_on_write_error(H2ctTT *tt, const void *arg) {
     H2CT_TRY(body != NULL);
     h2ct_body_write_bytes(body, 1);
     HttpRequest *req = h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
-                                            BURROW_S("https://dummy.tld/"),
+                                            BURROW_S("http://dummy.tld/"),
                                             (IoReader){&h2ct_body_vt, body});
     H2CT_TRY(req != NULL);
     H2ctRT *rt = h2ct_tc_round_trip(tt, req);
@@ -4106,7 +4119,12 @@ static void h2ct_roundtrip_close_on_write_error(H2ctTT *tt, const void *arg) {
     if (!errors_is(err, write_err))
         FATALF("RoundTrip error %v, want %v", err, write_err);
 
-    H2ctRT *rt2 = h2ct_tc_round_trip(tt, req);
+    /* The first round trip has req, so the second takes a copy, as Go's
+     * roundTrip makes with WithContext. */
+    HttpRequest *req2 =
+        http_request_with_context(req, tt->a, http_request_context(req));
+    H2CT_TRY(req2 != NULL);
+    H2ctRT *rt2 = h2ct_tc_round_trip(tt, req2);
     H2CT_TRY(rt2 != NULL);
     err = h2ct_rt_err(rt2);
     if (!errors_is(err, burrow__http2_err_client_conn_unusable))
@@ -4132,7 +4150,7 @@ static Str h2ct_blocking_filler(H2ctTT *tt) {
 static HttpRequest *h2ct_blocking_request(H2ctTT *tt, H2ctBlockingWrite kind) {
     Str filler = h2ct_blocking_filler(tt);
     Alloc *a = arena_allocator(&tt->ar);
-    Str url = BURROW_S("https://dummy.tld/");
+    Str url = BURROW_S("http://dummy.tld/");
     HttpRequest *req = NULL;
     switch (kind) {
     case H2CT_BLOCK_HEADERS:
@@ -4167,9 +4185,38 @@ static HttpRequest *h2ct_blocking_request(H2ctTT *tt, H2ctBlockingWrite kind) {
     }
 }
 
+/* Waits for tr1's HTTP/2 transport to have a connection that can take a
+ * request, or for it to have none, as it does in Go's bubble once a request's
+ * stream is gone, or once a request has the last stream. */
+static bool h2ct_tt_wait_idle_conn(H2ctTT *tt, bool want) {
+    sync_mutex_lock(&tt->tr1.alt_mu);
+    Http2Transport *t2 = tt->tr1.h2;
+    sync_mutex_unlock(&tt->tr1.alt_mu);
+    if (t2 == NULL) {
+        testing_t_errorf_v(tt->t, "the Transport has no HTTP/2 transport");
+        return false;
+    }
+    Time deadline = time_add(time_now(), H2CT_WAIT);
+    for (;;) {
+        Arena ar;
+        arena_init(&ar, tt->a, 0);
+        Slice idle = burrow__http2_transport_idle_conn_strs(t2, arena_allocator(&ar));
+        bool ok = (idle.len > 0) == want;
+        arena_free(&ar);
+        if (ok)
+            return true;
+        if (!time_before(time_now(), deadline)) {
+            testing_t_errorf_v(tt->t, "a conn can take a new request: %t, want %t",
+                               !want, want);
+            return false;
+        }
+        time_sleep(TIME_MILLISECOND);
+    }
+}
+
 static HttpRequest *h2ct_small_request(H2ctTT *tt) {
     return h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
-                                BURROW_S("https://dummy.tld/"), h2ct_no_body);
+                                BURROW_S("http://dummy.tld/"), h2ct_no_body);
 }
 
 static void h2ct_blocking_request_write(H2ctTT *tt, const void *arg) {
@@ -4188,6 +4235,7 @@ static void h2ct_blocking_request_write(H2ctTT *tt, const void *arg) {
     H2CT_TRY(h2ct_write_status(tc1, 1, "200"));
     H2CT_TRY(h2ct_rt_want_status(rt1, 200));
     H2CT_TRY(h2ct_want_frame_type(tc1, HTTP2_FRAME_SETTINGS)); /* settings ACK */
+    H2CT_TRY(h2ct_tt_wait_idle_conn(tt, true));
 
     /* Request 2: A large request that blocks while being written. */
     sync_mutex_lock(&tc1->rmu);
@@ -4196,7 +4244,7 @@ static void h2ct_blocking_request_write(H2ctTT *tt, const void *arg) {
     HttpRequest *req2 = h2ct_blocking_request(tt, kind);
     H2CT_TRY(req2 != NULL);
     H2ctRT *rt2 = h2ct_tt_round_trip(tt, req2);
-    H2CT_TRY(rt2 != NULL);
+    H2CT_TRY(rt2 != NULL && h2ct_tt_wait_idle_conn(tt, false));
 
     /* Request 3: A small request that is sent on a new connection, since
      * request 2 is hogging the only available stream on the previous
@@ -4239,7 +4287,7 @@ static void h2ct_timeout_server_hangs(H2ctTT *tt, const void *arg) {
 
     H2ctRT *rt = h2ct_tc_round_trip(
         tt, h2ct_new_request_url(tt, (Context){0}, BURROW_S("PUT"),
-                                 BURROW_S("https://dummy.tld/"), h2ct_no_body));
+                                 BURROW_S("http://dummy.tld/"), h2ct_no_body));
     H2CT_TRY(rt != NULL);
 
     H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));

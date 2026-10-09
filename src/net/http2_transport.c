@@ -691,7 +691,7 @@ Error burrow__http2_encode_headers(Alloc *a, const Http2EncodeHeadersParam *p,
 
 /* ----------------------------------------------------------------- types */
 
-typedef struct h2c_Conn h2c_Conn;
+typedef struct burrow__Http2ClientConn h2c_Conn;
 typedef struct h2c_Stream h2c_Stream;
 typedef struct h2c_GzipReader h2c_GzipReader;
 
@@ -724,7 +724,7 @@ struct burrow__Http2Transport {
 };
 
 /* ClientConn. The flags are at the end, each under what its group says. */
-struct h2c_Conn {
+struct burrow__Http2ClientConn {
     Http2Transport *t;
     Alloc *a;
     h2c_Conn *all_prev; /* under t->mu */
@@ -4153,6 +4153,32 @@ void burrow__http2_transport_close_conn(Http2Transport *t, NetConn c) {
         return;
     h2c_close_for_error(cc, burrow__http2_err_client_conn_force_closed);
     h2c_unref(cc);
+}
+
+/* What tests hold where Go's hold a *ClientConn. */
+Http2ClientConn *burrow__http2_transport_client_conn(Http2Transport *t, NetConn c) {
+    h2c_Conn *found = NULL;
+    sync_mutex_lock(&t->mu);
+    for (h2c_Conn *cc = t->all; cc != NULL; cc = cc->all_next) {
+        if (cc->tconn.data == c.data && h2c_tryref(cc)) {
+            found = cc;
+            break;
+        }
+    }
+    sync_mutex_unlock(&t->mu);
+    return found;
+}
+
+/* ClientConn.RoundTrip. */
+HttpResponse *burrow__http2_client_conn_round_trip(Http2ClientConn *cc,
+                                                   HttpRequest *req, Error *err) {
+    *err = BURROW_NO_ERROR;
+    return h2c_conn_round_trip(cc, req, req->body, err);
+}
+
+void burrow__http2_client_conn_release(Http2ClientConn *cc) {
+    if (cc != NULL)
+        h2c_unref(cc);
 }
 
 /* IdleConnStrsForTesting. */

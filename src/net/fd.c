@@ -14,6 +14,7 @@
 #include "burrow/clock.h"
 #include "burrow/error.h"
 #include "burrow/io.h"
+#include "burrow/mem/heap.h"
 #include "burrow/net.h"
 #include "burrow/os.h"
 #include "burrow/sema.h"
@@ -203,7 +204,8 @@ Int burrow__pfd_read_msg(burrow__PollFD *fd, Slice p, Slice oob, Int *oobn, Int 
         PalErrno pe = PAL_OK;
         int64_t on = 0;
         int32_t fl = 0;
-        int64_t r = pal_recvmsg(fd->sysfd, p.p, p.len, oob.p, oob.len, &on, &fl, from, &pe);
+        int64_t r =
+            pal_recvmsg(fd->sysfd, p.p, p.len, oob.p, oob.len, &on, &fl, from, &pe);
         if (r >= 0) {
             n = (Int)r;
             *oobn = (Int)on;
@@ -291,6 +293,144 @@ Int burrow__pfd_write_to(burrow__PollFD *fd, Slice p, const PalSockAddr *to,
         }
         e = burrow__os_errno(pe);
     }
+    pfd_unlock(fd, false);
+    BURROW_OUT(err, e);
+    return n;
+}
+
+/* How many buffers one writev takes. Go does not ask sysconf either: Linux
+ * and Darwin take 1024, and AIX and Solaris the 16 XOPEN_IOV_MAX promises.
+ * Windows has no such limit, and Go hands WSASend every buffer at once. */
+#if defined(BURROW_OS_AIX) || defined(BURROW_OS_SOLARIS)
+#define PFD_MAX_VEC 16
+#else
+#define PFD_MAX_VEC 1024
+#endif
+
+static burrow__NetWritevHook pfd_did_writev;
+
+void burrow__pfd_set_writev_hook(burrow__NetWritevHook f) {
+    pfd_did_writev = f;
+}
+
+void burrow__net_buffers_consume(NetBuffers *v, int64_t n) {
+    while (v->len > 0) {
+        Slice *b0 = (Slice *)v->p;
+        if ((int64_t)b0->len > n) {
+            *b0 = slice_sub(*b0, (Int)n, b0->len);
+            return;
+        }
+        n -= (int64_t)b0->len;
+        *b0 = slice_nil(TYPE_BYTE);
+        *v = slice_sub(*v, 1, v->len);
+    }
+}
+
+#if defined(BURROW_OS_WINDOWS)
+/* How many WSABUFs all of v takes, which is newWSABufs's count less the empty
+ * ones, which are left out here as they are on the other systems. */
+static int32_t pfd_vec_cap(const NetBuffers *v) {
+    int64_t k = 0;
+    const Slice *b = (const Slice *)v->p;
+    for (Int i = 0; i < v->len; i++)
+        k += ((int64_t)b[i].len + PFD_MAX_RW - 1) / PFD_MAX_RW;
+    return k > INT32_MAX / 2 ? INT32_MAX / 2 : (int32_t)k;
+}
+
+/* The non-empty buffers of v into iov, which has room for cap, with one past
+ * a gigabyte cut into gigabyte pieces, as newWSABufs does. */
+static int32_t pfd_iovecs(const burrow__PollFD *fd, const NetBuffers *v, PalIovec *iov,
+                          int32_t cap) {
+    (void)fd;
+    int32_t k = 0;
+    const Slice *b = (const Slice *)v->p;
+    for (Int i = 0; i < v->len && k < cap; i++) {
+        Byte *p = (Byte *)b[i].p;
+        for (Int len = b[i].len; len > 0 && k < cap; k++) {
+            Int m = len > PFD_MAX_RW ? PFD_MAX_RW : len;
+            iov[k].base = p;
+            iov[k].len = (uint32_t)m;
+            p += m;
+            len -= m;
+        }
+    }
+    return k;
+}
+#else
+static int32_t pfd_vec_cap(const NetBuffers *v) {
+    return v->len < PFD_MAX_VEC ? (int32_t)v->len : PFD_MAX_VEC;
+}
+
+/* The next run of non-empty buffers of v into iov, which has room for cap,
+ * cutting one past a gigabyte on a stream so that the rest goes next time. */
+static int32_t pfd_iovecs(const burrow__PollFD *fd, const NetBuffers *v, PalIovec *iov,
+                          int32_t cap) {
+    int32_t k = 0;
+    const Slice *b = (const Slice *)v->p;
+    for (Int i = 0; i < v->len; i++) {
+        Int len = b[i].len;
+        if (len == 0)
+            continue;
+        bool cut = fd->stream && len > PFD_MAX_RW;
+        if (cut)
+            len = PFD_MAX_RW;
+        iov[k].base = b[i].p;
+        iov[k].len = (size_t)len;
+        k++;
+        if (cut || k == cap)
+            break;
+    }
+    return k;
+}
+#endif
+
+int64_t burrow__pfd_writev(burrow__PollFD *fd, NetBuffers *v, Error *err) {
+    if (!pfd_lock(fd, false)) {
+        BURROW_OUT(err, net_err_closed);
+        return 0;
+    }
+    Error e = pfd_prepare(fd, BURROW_POLL_WRITE);
+    int32_t cap = pfd_vec_cap(v);
+    PalIovec *iov = NULL;
+    if (!BURROW_FAILED(e) && cap > 0) {
+        iov = (PalIovec *)mem_alloc(heap_allocator(), (size_t)cap * sizeof(PalIovec),
+                                    _Alignof(PalIovec));
+        if (iov == NULL)
+            e = burrow_err_out_of_memory;
+    }
+    int64_t n = 0;
+    /* No room was made when there is nothing to write: no buffers, or on
+     * Windows only empty ones. */
+    while (!BURROW_FAILED(e) && iov != NULL && v->len > 0) {
+        int32_t k = pfd_iovecs(fd, v, iov, cap);
+        if (k == 0)
+            break;
+        PalErrno pe = PAL_OK;
+        int64_t wrote = pal_writev(fd->sysfd, iov, k, &pe);
+        if (wrote < 0)
+            wrote = 0;
+        if (pfd_did_writev != NULL)
+            pfd_did_writev((Int)wrote);
+        n += wrote;
+        burrow__net_buffers_consume(v, wrote);
+        if (pe == PAL_EINTR)
+            continue;
+        if (pe == PAL_EAGAIN) {
+            e = pfd_wait(fd, BURROW_POLL_WRITE);
+            continue;
+        }
+        if (pe != PAL_OK) {
+            e = burrow__os_errno(pe);
+            break;
+        }
+        if (n == 0) {
+            e = io_err_unexpected_eof;
+            break;
+        }
+    }
+    if (iov != NULL)
+        mem_free(heap_allocator(), iov, (size_t)cap * sizeof(PalIovec),
+                 _Alignof(PalIovec));
     pfd_unlock(fd, false);
     BURROW_OUT(err, e);
     return n;

@@ -87,6 +87,10 @@ bool net_is_error(Error err) {
            nc_bool_method(err, NC_LIT("Temporary")) != NULL;
 }
 
+Str net_error_error(NetError err) {
+    return error_text(err);
+}
+
 bool net_error_timeout(NetError err) {
     return net_is_error(err) && nc_ask(err, NC_LIT("Timeout"));
 }

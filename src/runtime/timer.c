@@ -578,7 +578,9 @@ static void wait_running(burrow__Timer *t) {
         burrow__thread_yield();
 }
 
-void burrow__timer_drop(burrow__Timer *t) {
+/* Takes t out of whatever heap it is in and forgets what it was going to do.
+ * The caller holds the send lock of a channel timer. */
+static void timer_forget(burrow__Timer *t) {
     for (;;) {
         timer_lock(t);
         if ((t->state & BURROW__TIMER_HEAPED) == 0) {
@@ -591,7 +593,6 @@ void burrow__timer_drop(burrow__Timer *t) {
             if (t->is_chan)
                 t->seq++;
             timer_unlock(t);
-            wait_running(t);
             return;
         }
 
@@ -632,9 +633,21 @@ void burrow__timer_drop(burrow__Timer *t) {
         delete_at(ts, at);
         timer_unlock(t);
         timers_unlock(ts);
-        wait_running(t);
         return;
     }
+}
+
+void burrow__timer_drop(burrow__Timer *t) {
+    /* A channel timer's seq is written with the send lock held as well as mu,
+     * the same as in a stop and a reset, and the send lock comes first. It goes
+     * down again before the wait, because a run that has been picked holds
+     * running while it waits for that lock, and would never let go of it. */
+    if (t->is_chan)
+        burrow__lock(&t->send_lock);
+    timer_forget(t);
+    if (t->is_chan)
+        burrow__unlock(&t->send_lock);
+    wait_running(t);
 }
 
 bool burrow__timer_reset_on(burrow__Timers *ts, burrow__Timer *t, int64_t when,

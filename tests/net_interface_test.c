@@ -47,6 +47,14 @@ static bool same_bytes(Slice x, Slice y) {
     return x.len == y.len && (x.len == 0 || memcmp(x.p, y.p, (size_t)x.len) == 0);
 }
 
+static bool iface_under_wine(void) {
+#ifdef _WIN32
+    return GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version") != NULL;
+#else
+    return false;
+#endif
+}
+
 /* Not in Go: wine 9.0 on one of the Linux hosts the suite runs on answers
  * GetAdaptersAddresses with ERROR_FILE_NOT_FOUND whatever family and flags it
  * is given, so there is no list to look at there. Windows itself has one. */
@@ -54,7 +62,7 @@ static bool list_failed(TestingT *t, Error err) {
     if (BURROW_OK(err))
         return false;
 #ifdef _WIN32
-    if (GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version") != NULL &&
+    if (iface_under_wine() &&
         strings_contains(error_text(err), S("getadaptersaddresses")))
         testing_t_skip_v(t, "wine lists no adapters: ", err);
 #endif
@@ -307,6 +315,12 @@ static void TestInterfaceMulticastAddrs(TestingT *t) {
         }
         if (!validate_multicast(t, ifmat, &m))
             return;
+    }
+    /* Not in Go: wine 9.0 lists the adapters but gives none of them an IPv6
+     * multicast address, where Windows itself gives them some. */
+    if (iface_under_wine() && m.ipv6 == 0) {
+        testing_t_skip_v(t, "wine lists no IPv6 multicast addresses");
+        return;
     }
     check_multicast_stats(t, s, u, m);
 }

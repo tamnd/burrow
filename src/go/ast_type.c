@@ -785,8 +785,8 @@ const Type *ast_node_type(AstNode n) {
 }
 
 AstNode ast_node_new(Alloc *a, AstKind kind) {
-    const Type *t = (kind > AST_KIND_INVALID && kind < AST_KIND_COUNT) ? at_node_types[kind]
-                                                                         : NULL;
+    const Type *t =
+        (kind > AST_KIND_INVALID && kind < AST_KIND_COUNT) ? at_node_types[kind] : NULL;
     if (t == NULL) {
         return NULL;
     }

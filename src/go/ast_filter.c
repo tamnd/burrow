@@ -138,7 +138,8 @@ static bool af_filter_field_list(AstFieldList *fields, AstFilter filter, bool ex
 
 static Slice af_filter_expr_list(Slice list, AstFilter filter, bool export);
 
-static void af_filter_composite_lit(AstCompositeLit *lit, AstFilter filter, bool export) {
+static void af_filter_composite_lit(AstCompositeLit *lit, AstFilter filter,
+                                    bool export) {
     Int n = lit->elts.len;
     lit->elts = af_filter_expr_list(lit->elts, filter, export);
     if (lit->elts.len < n) {
@@ -786,8 +787,8 @@ static Int af_sort_specs(AfSort *st, AstFile *f, AstGenDecl *d, Slice specs) {
         if (spec_index == 0 && pos[spec_index].start > gpos) {
             /* A comment before the first import. */
             left = true;
-        } else if (spec_index + 1 < n &&
-                   af_line_at(fset, pos[spec_index].start) + 1 == af_line_at(fset, gpos)) {
+        } else if (spec_index + 1 < n && af_line_at(fset, pos[spec_index].start) + 1 ==
+                                             af_line_at(fset, gpos)) {
             /* A comment on the line before the next import. */
             spec_index++;
             left = true;
@@ -874,10 +875,12 @@ void ast_sort_imports(Alloc *a, TokenFileSet *fset, AstFile *f) {
             if (!run_ends) {
                 continue;
             }
-            Slice run = slice_from((AstNode *)d->specs.p + i, j - i, j - i, TYPE_AST_SPEC);
+            Slice run =
+                slice_from((AstNode *)d->specs.p + i, j - i, j - i, TYPE_AST_SPEC);
             Int kept = af_sort_specs(&st, f, d, run);
             if (kept > 0) {
-                memmove((AstNode *)d->specs.p + out, run.p, (size_t)kept * sizeof(AstNode));
+                memmove((AstNode *)d->specs.p + out, run.p,
+                        (size_t)kept * sizeof(AstNode));
             }
             out += kept;
             i = j;
@@ -892,7 +895,8 @@ void ast_sort_imports(Alloc *a, TokenFileSet *fset, AstFile *f) {
             Int rparen_line = af_line_at(fset, d->rparen);
             while (rparen_line > last_line + 1) {
                 rparen_line--;
-                token_file_merge_line(token_file_set_file(fset, d->rparen), rparen_line);
+                token_file_merge_line(token_file_set_file(fset, d->rparen),
+                                      rparen_line);
             }
         }
     }

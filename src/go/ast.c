@@ -91,7 +91,8 @@ static bool an_is_lower_alnum(Byte b) {
 static bool an_is_directive(Str c) {
     /* "//line " is a line directive, "//extern " is for gccgo and "//export "
      * is for cgo. */
-    if (strings_has_prefix(c, BURROW_S("line ")) || strings_has_prefix(c, BURROW_S("extern ")) ||
+    if (strings_has_prefix(c, BURROW_S("line ")) ||
+        strings_has_prefix(c, BURROW_S("extern ")) ||
         strings_has_prefix(c, BURROW_S("export "))) {
         return true;
     }

@@ -30,6 +30,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #define S(lit) BURROW_S(lit)
 
 static Arena ar;
@@ -43,6 +47,21 @@ static bool same_bytes(Slice x, Slice y) {
     return x.len == y.len && (x.len == 0 || memcmp(x.p, y.p, (size_t)x.len) == 0);
 }
 
+/* Not in Go: wine 9.0 on one of the Linux hosts the suite runs on answers
+ * GetAdaptersAddresses with ERROR_FILE_NOT_FOUND whatever family and flags it
+ * is given, so there is no list to look at there. Windows itself has one. */
+static bool list_failed(TestingT *t, Error err) {
+    if (BURROW_OK(err))
+        return false;
+#ifdef _WIN32
+    if (GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version") != NULL &&
+        strings_contains(error_text(err), S("getadaptersaddresses")))
+        testing_t_skip_v(t, "wine lists no adapters: ", err);
+#endif
+    testing_t_fatal_v(t, err);
+    return true;
+}
+
 /* reflect.DeepEqual for two Interfaces. */
 static bool same_interface(const NetInterface *x, const NetInterface *y) {
     return x->index == y->index && x->mtu == y->mtu && str_eq(x->name, y->name) &&
@@ -53,10 +72,8 @@ static bool same_interface(const NetInterface *x, const NetInterface *y) {
 static void TestInterfaces(TestingT *t) {
     Error err = BURROW_NO_ERROR;
     Slice ift = net_interfaces(a, &err);
-    if (BURROW_FAILED(err)) {
-        testing_t_fatal_v(t, err);
+    if (list_failed(t, err))
         return;
-    }
     for (Int i = 0; i < ift.len; i++) {
         const NetInterface *ifi = at(ift, i);
         NetInterface *ifxi = net_interface_by_index(a, ifi->index, &err);
@@ -234,10 +251,8 @@ static void check_multicast_stats(TestingT *t, IfStats s, RouteStats u, RouteSta
 static void TestInterfaceAddrs(TestingT *t) {
     Error err = BURROW_NO_ERROR;
     Slice ift = net_interfaces(a, &err);
-    if (BURROW_FAILED(err)) {
-        testing_t_fatal_v(t, err);
+    if (list_failed(t, err))
         return;
-    }
     IfStats s = interface_stats(ift);
     Slice ifat = net_interface_addrs(a, &err);
     if (BURROW_FAILED(err)) {
@@ -253,10 +268,8 @@ static void TestInterfaceAddrs(TestingT *t) {
 static void TestInterfaceUnicastAddrs(TestingT *t) {
     Error err = BURROW_NO_ERROR;
     Slice ift = net_interfaces(a, &err);
-    if (BURROW_FAILED(err)) {
-        testing_t_fatal_v(t, err);
+    if (list_failed(t, err))
         return;
-    }
     IfStats s = interface_stats(ift);
     RouteStats u = {0, 0};
     for (Int i = 0; i < ift.len; i++) {
@@ -274,10 +287,8 @@ static void TestInterfaceUnicastAddrs(TestingT *t) {
 static void TestInterfaceMulticastAddrs(TestingT *t) {
     Error err = BURROW_NO_ERROR;
     Slice ift = net_interfaces(a, &err);
-    if (BURROW_FAILED(err)) {
-        testing_t_fatal_v(t, err);
+    if (list_failed(t, err))
         return;
-    }
     IfStats s = interface_stats(ift);
     Slice ifat = net_interface_addrs(a, &err);
     if (BURROW_FAILED(err)) {
@@ -303,6 +314,10 @@ static void TestInterfaceMulticastAddrs(TestingT *t) {
 /* The errors, which Go gives as an OpError with no addresses. */
 static void TestInterfaceErrors(TestingT *t) {
     Error err = BURROW_NO_ERROR;
+    /* A name is looked for in the list, so there has to be one. */
+    (void)net_interfaces(a, &err);
+    if (list_failed(t, err))
+        return;
     CHECK(net_interface_by_index(a, 0, &err) == NULL);
     CHECK(str_eq(error_text(err), S("route ip+net: invalid network interface index")));
     err = BURROW_NO_ERROR;
@@ -339,10 +354,8 @@ static void TestFlagsString(TestingT *t) {
 static void TestZoneCacheLookups(TestingT *t) {
     Error err = BURROW_NO_ERROR;
     Slice ift = net_interfaces(a, &err);
-    if (BURROW_FAILED(err)) {
-        testing_t_fatal_v(t, err);
+    if (list_failed(t, err))
         return;
-    }
     burrow__net_zone_cache_update(true);
     Byte buf[24];
     for (Int i = 0; i < ift.len; i++) {

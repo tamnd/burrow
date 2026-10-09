@@ -2261,9 +2261,13 @@ static bool sv_close_idle_conns(HttpServer *s) {
     return quiescent;
 }
 
+/* Runs a copy of an on_shutdown func, since the server can be freed before
+ * the goroutine gets to it. */
 static void sv_run_on_shutdown(void *env) {
     Func *f = (Func *)env;
-    BURROW_CALLF0(*f);
+    Func fn = *f;
+    mem_free(heap_allocator(), f, sizeof *f, _Alignof(Func));
+    BURROW_CALLF0(fn);
 }
 
 Error http_server_shutdown(HttpServer *s, Context ctx) {
@@ -2273,8 +2277,16 @@ Error http_server_shutdown(HttpServer *s, Context ctx) {
     Error lnerr = sv_close_listeners_locked(s);
     Func *fs = (Func *)s->on_shutdown.p;
     for (Int i = 0; i < s->on_shutdown.len; i++) {
-        if (!go(BURROW_FN(Func, sv_run_on_shutdown, &fs[i])))
+        Func *f = (Func *)mem_alloc(heap_allocator(), sizeof *f, _Alignof(Func));
+        if (f == NULL) {
             BURROW_CALLF0(fs[i]);
+            continue;
+        }
+        *f = fs[i];
+        if (!go(BURROW_FN(Func, sv_run_on_shutdown, f))) {
+            mem_free(heap_allocator(), f, sizeof *f, _Alignof(Func));
+            BURROW_CALLF0(fs[i]);
+        }
     }
     sync_mutex_unlock(&s->mu);
     sync_wait_group_wait(&s->listener_group);

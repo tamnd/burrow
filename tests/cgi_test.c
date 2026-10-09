@@ -1050,7 +1050,12 @@ static void TestEnvOverride(TestingT *t) {
 static void TestHandlerStderr(TestingT *t) {
     SKIP_WITHOUT_EXEC(t);
     ARENA_BEGIN;
-    StringsBuilder stderr_ = STRINGS_BUILDER(a);
+    /* The program's stderr is copied in on another goroutine while this one
+     * allocates from a, and an arena is not safe for that, so the builder
+     * has an arena of its own. */
+    Arena ea;
+    arena_init(&ea, heap_allocator(), 0);
+    StringsBuilder stderr_ = STRINGS_BUILDER(arena_allocator(&ea));
     CgiHandler h = {0};
     h.path = self_path(a);
     h.root = S("/test.cgi");
@@ -1063,6 +1068,7 @@ static void TestHandlerStderr(TestingT *t) {
     Str got = strings_builder_string(&stderr_), want = S("Hello, stderr!\n");
     if (!str_eq(got, want))
         testing_t_errorf_v(t, "Stderr = %q; want %q", got, want);
+    arena_free(&ea);
     http_request_free(req);
     httptest_response_recorder_free(rw);
     ARENA_END;

@@ -552,6 +552,76 @@ Int net_unix_conn_write_to(NetUnixConn *c, Slice p, NetAddr addr, Error *err) {
     return net_unix_conn_write_to_unix(c, p, (const NetUnixAddr *)addr.data, err);
 }
 
+Int net_unix_conn_read_msg_unix(NetUnixConn *c, Slice p, Slice oob, Alloc *a, Int *oobn,
+                                Int *flags, NetUnixAddr **addr, Error *err) {
+    if (oobn != NULL)
+        *oobn = 0;
+    if (flags != NULL)
+        *flags = 0;
+    if (addr != NULL)
+        *addr = NULL;
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    PalSockAddr from = {0};
+    Int on = 0;
+    Int fl = 0;
+    Error e = BURROW_NO_ERROR;
+    Int n = burrow__netfd_read_msg(&c->c.fd, p, oob, &on, &fl, &from, &e);
+    NxAddr got = {0};
+    if (addr != NULL && nx_from_sockaddr(&got, &from, c->c.fd.sotype) &&
+        got.a.name.len > 0) {
+        *addr = nx_addr_new(a, got.a.name, got.a.net);
+        if (*addr == NULL && BURROW_OK(e))
+            e = burrow_err_out_of_memory;
+    }
+    if (BURROW_FAILED(e) && !nx_is_eof(e) &&
+        !(e.vt == burrow_err_out_of_memory.vt && e.data == burrow_err_out_of_memory.data))
+        e = burrow__net_op_error(NX_LIT("read"), c->c.fd.net, c->c.laddr, c->c.raddr,
+                                 e);
+    if (oobn != NULL)
+        *oobn = on;
+    if (flags != NULL)
+        *flags = fl;
+    BURROW_OUT(err, e);
+    return n;
+}
+
+Int net_unix_conn_write_msg_unix(NetUnixConn *c, Slice p, Slice oob,
+                                 const NetUnixAddr *addr, Int *oobn, Error *err) {
+    if (oobn != NULL)
+        *oobn = 0;
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    Error e = BURROW_NO_ERROR;
+    Int n = 0;
+    Int on = 0;
+    if (c->c.fd.sotype == PAL_SOCK_DGRAM && c->c.fd.is_connected) {
+        e = net_err_write_to_connected;
+    } else if (addr == NULL) {
+        n = burrow__netfd_write_msg(&c->c.fd, p, oob, NULL, &on, &e);
+    } else if (!nx_str_eq(addr->net, nx_sotype_net(c->c.fd.sotype))) {
+        e = burrow__os_errno(PAL_EAFNOSUPPORT);
+    } else {
+        PalSockAddr to = {0};
+        e = nx_sockaddr(addr->name, &to);
+        if (BURROW_FAILED(e))
+            e = burrow__netfd_write_msg_error(e);
+        else
+            n = burrow__netfd_write_msg(&c->c.fd, p, oob, &to, &on, &e);
+    }
+    if (BURROW_FAILED(e))
+        e = burrow__net_op_error(NX_LIT("write"), c->c.fd.net, c->c.laddr,
+                                 net_unix_addr_as_addr(addr), e);
+    if (oobn != NULL)
+        *oobn = on;
+    BURROW_OUT(err, e);
+    return n;
+}
+
 Error net_unix_conn_close(NetUnixConn *c) {
     if (c == NULL)
         return burrow__net_einval();

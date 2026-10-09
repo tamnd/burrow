@@ -47,6 +47,7 @@
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <sys/un.h>
 #include <unistd.h>
 #endif
@@ -134,6 +135,32 @@ int64_t pal_recvfrom(int64_t fd, void *buf, int64_t n, PalSockAddr *from,
     (void)buf;
     (void)n;
     (void)from;
+    pnet_nosys(err);
+    return -1;
+}
+
+int64_t pal_recvmsg(int64_t fd, void *buf, int64_t n, void *oob, int64_t oobcap,
+                    int64_t *oobn, int32_t *flags, PalSockAddr *from, PalErrno *err) {
+    (void)fd;
+    (void)buf;
+    (void)n;
+    (void)oob;
+    (void)oobcap;
+    (void)oobn;
+    (void)flags;
+    (void)from;
+    pnet_nosys(err);
+    return -1;
+}
+
+int64_t pal_sendmsg(int64_t fd, const void *buf, int64_t n, const void *oob,
+                    int64_t oobn, const PalSockAddr *to, PalErrno *err) {
+    (void)fd;
+    (void)buf;
+    (void)n;
+    (void)oob;
+    (void)oobn;
+    (void)to;
     pnet_nosys(err);
     return -1;
 }
@@ -602,6 +629,152 @@ int64_t pal_recvfrom(int64_t fd, void *buf, int64_t n, PalSockAddr *from,
         return pnet_fail_n(err);
     if (!pnet_from_native(&ss, len, from))
         from->family = PAL_AF_UNSPEC;
+    return (int64_t)r;
+}
+
+/* Where recvmsg can make the descriptors it hands over close-on-exec itself,
+ * it does, and elsewhere they are made so after, as Go's
+ * setReadMsgCloseOnExec does, which leaves a window a fork can slip into. */
+#if defined(MSG_CMSG_CLOEXEC)
+#define PNET_RECVMSG_FLAGS MSG_CMSG_CLOEXEC
+static void pnet_rights_cloexec(struct msghdr *msg) {
+    (void)msg;
+}
+#else
+#define PNET_RECVMSG_FLAGS 0
+static void pnet_rights_cloexec(struct msghdr *msg) {
+    if (msg->msg_controllen == 0)
+        return;
+    for (struct cmsghdr *c = CMSG_FIRSTHDR(msg); c != NULL; c = CMSG_NXTHDR(msg, c)) {
+        if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS)
+            continue;
+        const unsigned char *d = CMSG_DATA(c);
+        size_t len = (size_t)c->cmsg_len - (size_t)(d - (const unsigned char *)c);
+        for (size_t i = 0; i + sizeof(int) <= len; i += sizeof(int)) {
+            int rfd;
+            memcpy(&rfd, d + i, sizeof rfd);
+            (void)fcntl(rfd, F_SETFD, FD_CLOEXEC);
+        }
+    }
+}
+#endif
+
+/* Whether a message with control data and no data needs a byte to carry it.
+ * Go's syscall package on Linux and AIX asks whether fd is something other
+ * than a datagram socket, and gives up on the message when it cannot ask, and
+ * on the BSDs and Solaris it always sends the byte. */
+static bool pnet_needs_byte(int fd, PalErrno *err, bool *ok) {
+#if !defined(BURROW_OS_LINUX) && !defined(BURROW_OS_ANDROID) && !defined(BURROW_OS_AIX)
+    (void)fd;
+    (void)err;
+    *ok = true;
+    return true;
+#else
+    int type = 0;
+    socklen_t len = (socklen_t)sizeof type;
+    *ok = getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &len) == 0;
+    if (!*ok) {
+        (void)pnet_fail(err);
+        return false;
+    }
+    return type != SOCK_DGRAM;
+#endif
+}
+
+int64_t pal_recvmsg(int64_t fd, void *buf, int64_t n, void *oob, int64_t oobcap,
+                    int64_t *oobn, int32_t *flags, PalSockAddr *from, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (oobn != NULL)
+        *oobn = 0;
+    if (flags != NULL)
+        *flags = 0;
+    if (!pnet_fd_ok(fd, err))
+        return -1;
+    if ((buf == NULL && n > 0) || (oob == NULL && oobcap > 0)) {
+        BURROW_OUT(err, PAL_EFAULT);
+        return -1;
+    }
+    struct sockaddr_storage ss;
+    memset(&ss, 0, sizeof ss);
+    unsigned char dummy = 0;
+    struct iovec iov;
+    iov.iov_base = buf;
+    iov.iov_len = pnet_count(n);
+    struct msghdr msg;
+    memset(&msg, 0, sizeof msg);
+    msg.msg_name = &ss;
+    msg.msg_namelen = (socklen_t)sizeof ss;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    if (oobcap > 0) {
+        if (n <= 0) {
+            bool ok = false;
+            if (pnet_needs_byte((int)fd, err, &ok)) {
+                iov.iov_base = &dummy;
+                iov.iov_len = 1;
+            } else if (!ok) {
+                return -1;
+            }
+        }
+        msg.msg_control = oob;
+        msg.msg_controllen = (socklen_t)(oobcap > INT32_MAX ? INT32_MAX : oobcap);
+    }
+    ssize_t r = recvmsg((int)fd, &msg, PNET_RECVMSG_FLAGS);
+    if (r < 0)
+        return pnet_fail_n(err);
+    pnet_rights_cloexec(&msg);
+    if (oobn != NULL)
+        *oobn = (int64_t)msg.msg_controllen;
+    if (flags != NULL)
+        *flags = (int32_t)(msg.msg_flags & ~PNET_RECVMSG_FLAGS);
+    if (from != NULL && !pnet_from_native(&ss, msg.msg_namelen, from))
+        from->family = PAL_AF_UNSPEC;
+    return (int64_t)r;
+}
+
+int64_t pal_sendmsg(int64_t fd, const void *buf, int64_t n, const void *oob,
+                    int64_t oobn, const PalSockAddr *to, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!pnet_fd_ok(fd, err))
+        return -1;
+    if ((buf == NULL && n > 0) || (oob == NULL && oobn > 0)) {
+        BURROW_OUT(err, PAL_EFAULT);
+        return -1;
+    }
+    struct sockaddr_storage ss;
+    socklen_t sslen = 0;
+    if (to != NULL && !pnet_to_native(to, &ss, &sslen, err))
+        return -1;
+    unsigned char dummy = 0;
+    struct iovec iov;
+    iov.iov_base = (void *)(uintptr_t)buf;
+    iov.iov_len = pnet_count(n);
+    struct msghdr msg;
+    memset(&msg, 0, sizeof msg);
+    if (to != NULL) {
+        msg.msg_name = &ss;
+        msg.msg_namelen = sslen;
+    }
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    if (oobn > 0) {
+        if (n <= 0) {
+            bool ok = false;
+            if (pnet_needs_byte((int)fd, err, &ok)) {
+                iov.iov_base = &dummy;
+                iov.iov_len = 1;
+            } else if (!ok) {
+                return -1;
+            }
+        }
+        msg.msg_control = (void *)(uintptr_t)oob;
+        msg.msg_controllen = (socklen_t)(oobn > INT32_MAX ? INT32_MAX : oobn);
+    }
+    ssize_t r = sendmsg((int)fd, &msg, PNET_SEND_FLAGS);
+    if (r < 0)
+        return pnet_fail_n(err);
+    if (oobn > 0 && n <= 0)
+        return 0;
     return (int64_t)r;
 }
 

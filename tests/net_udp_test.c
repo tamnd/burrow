@@ -15,6 +15,7 @@
 #include "burrow/net/netip.h"
 #include "burrow/netpoll.h"
 #include "burrow/os.h"
+#include "burrow/syscall.h"
 #include "burrow/time.h"
 
 #include "check.h"
@@ -462,6 +463,272 @@ static void TestIPv6LoopbackWorksWhereThereIsOne(TestingT *t) {
     net_udp_conn_free(s);
 }
 
+/* ------------------------------------------------------------ messages */
+
+/* TestUDPConnSpecificMethods, for the Msg calls: a message to itself, with
+ * room for control messages and none asked for. */
+static void TestAMessageGoesOutAndComesBack(TestingT *t) {
+    need_udp(t);
+    NetUDPConn *c = listen_loop4(t, "udp4");
+    if (c == NULL)
+        return;
+    NetUDPAddr self = loop4(port_of(net_udp_conn_local_addr(c)));
+    char wb[] = "UDPCONN TEST";
+    char rb[128];
+    char oob[128];
+    Error e = BURROW_NO_ERROR;
+    Int oobn = -1;
+    CHECK_INT_EQ(net_udp_conn_write_msg_udp(c, bytes_of(wb, 12), bytes_of(oob, 0),
+                                            &self, &oobn, &e),
+                 12);
+    CHECK(BURROW_OK(e));
+    CHECK_INT_EQ(oobn, 0);
+    Int flags = -1;
+    NetUDPAddr *from = NULL;
+    CHECK_INT_EQ(net_udp_conn_read_msg_udp(c, bytes_of(rb, 128), bytes_of(oob, 128),
+                                           heap_allocator(), &oobn, &flags, &from, &e),
+                 12);
+    CHECK(BURROW_OK(e));
+    CHECK_INT_EQ(oobn, 0);
+    CHECK_INT_EQ(flags, 0);
+    CHECK(memcmp(rb, wb, 12) == 0);
+    char want[64];
+    char text[64];
+    snprintf(want, sizeof want, "127.0.0.1:%d", (int)self.port);
+    CHECK_STR_EQ(addr_text(net_udp_addr_as_addr(from), text, sizeof text), want);
+    net_udp_addr_free(heap_allocator(), from);
+    net_udp_conn_free(c);
+}
+
+/* A datagram cut to fit says so in its flags, which are the system's. */
+static void TestACutMessageIsFlaggedAsCut(TestingT *t) {
+    need_udp(t);
+    NetUDPConn *c = listen_loop4(t, "udp4");
+    if (c == NULL)
+        return;
+    NetipAddrPort self =
+        net_udp_addr_addr_port((const NetUDPAddr *)net_udp_conn_local_addr(c).data);
+    char wb[] = "0123456789";
+    char rb[4];
+    Error e = BURROW_NO_ERROR;
+    CHECK_INT_EQ(net_udp_conn_write_msg_udp_addr_port(c, bytes_of(wb, 10), (Slice){0},
+                                                      self, NULL, &e),
+                 10);
+    Int flags = 0;
+    Int n = net_udp_conn_read_msg_udp_addr_port(c, bytes_of(rb, 4), (Slice){0}, NULL,
+                                                &flags, NULL, &e);
+#if defined(BURROW_OS_WINDOWS)
+    /* WSARecvMsg fails a datagram it had to cut, with what was read. */
+    (void)n;
+    (void)flags;
+    CHECK(BURROW_FAILED(e));
+#else
+    CHECK(BURROW_OK(e));
+    CHECK_INT_EQ(n, 4);
+    CHECK((flags & SYSCALL_MSG_TRUNC) != 0);
+#endif
+    net_udp_conn_free(c);
+}
+
+/* testWriteToConn and testWriteToPacketConn, for WriteMsgUDP: a dialed conn
+ * takes no address and a listener needs one. */
+static void TestWriteMsgUDPWantsAnAddressOnlyWhenNotDialed(TestingT *t) {
+    need_udp(t);
+    NetUDPConn *s = listen_loop4(t, "udp");
+    if (s == NULL)
+        return;
+    NetUDPAddr ra = loop4(port_of(net_udp_conn_local_addr(s)));
+    Error e = BURROW_NO_ERROR;
+    NetUDPConn *c = net_dial_udp(heap_allocator(), BURROW_S("udp"), NULL, &ra, &e);
+    if (c == NULL) {
+        testing_t_fatalf_v(t, "dial: %v", e);
+        net_udp_conn_free(s);
+        return;
+    }
+    char b[] = "CONNECTED-MODE SOCKET";
+    Int oobn = -1;
+    CHECK_INT_EQ(
+        net_udp_conn_write_msg_udp(c, bytes_of(b, 21), (Slice){0}, &ra, &oobn, &e), 0);
+    CHECK(errors_is(e, net_err_write_to_connected));
+    CHECK_INT_EQ(net_udp_conn_write_msg_udp_addr_port(c, bytes_of(b, 21), (Slice){0},
+                                                      net_udp_addr_addr_port(&ra), NULL,
+                                                      &e),
+                 0);
+    CHECK(errors_is(e, net_err_write_to_connected));
+    CHECK_INT_EQ(
+        net_udp_conn_write_msg_udp(c, bytes_of(b, 21), (Slice){0}, NULL, &oobn, &e),
+        21);
+    CHECK(BURROW_OK(e));
+    CHECK_INT_EQ(net_udp_conn_write_msg_udp_addr_port(c, bytes_of(b, 21), (Slice){0},
+                                                      (NetipAddrPort){0}, NULL, &e),
+                 21);
+    CHECK(BURROW_OK(e));
+
+    char p[] = "UNCONNECTED-MODE SOCKET";
+    CHECK_INT_EQ(
+        net_udp_conn_write_msg_udp(s, bytes_of(p, 23), (Slice){0}, NULL, &oobn, &e), 0);
+    char want[128];
+    char buf[128];
+    snprintf(want, sizeof want, "write udp 127.0.0.1:%d: missing address",
+             (int)ra.port);
+    CHECK_STR_EQ(text_of(e, buf, sizeof buf), want);
+    CHECK_INT_EQ(net_udp_conn_write_msg_udp_addr_port(s, bytes_of(p, 23), (Slice){0},
+                                                      (NetipAddrPort){0}, NULL, &e),
+                 0);
+    snprintf(want, sizeof want,
+             "write udp 127.0.0.1:%d->invalid AddrPort: missing address", (int)ra.port);
+    CHECK_STR_EQ(text_of(e, buf, sizeof buf), want);
+    CHECK_INT_EQ(
+        net_udp_conn_write_msg_udp(s, bytes_of(p, 23), (Slice){0}, &ra, &oobn, &e), 23);
+    CHECK(BURROW_OK(e));
+
+    /* The port is checked where the sockaddr is made, as for WriteToUDP. */
+    NetUDPAddr far = loop4(70000);
+    CHECK_INT_EQ(
+        net_udp_conn_write_msg_udp(s, bytes_of(p, 23), (Slice){0}, &far, NULL, &e), 0);
+#if defined(BURROW_OS_WINDOWS)
+    snprintf(want, sizeof want,
+             "write udp 127.0.0.1:%d->127.0.0.1:70000: wsasendmsg: invalid argument",
+             (int)ra.port);
+#else
+    snprintf(want, sizeof want,
+             "write udp 127.0.0.1:%d->127.0.0.1:70000: sendmsg: invalid argument",
+             (int)ra.port);
+#endif
+    CHECK_STR_EQ(text_of(e, buf, sizeof buf), want);
+    net_udp_conn_free(c);
+    net_udp_conn_free(s);
+}
+
+/* TestUDPIPVersionReadMsg: an IPv4 sender reads back as IPv4 both ways. */
+static void TestUDPIPVersionReadMsg(TestingT *t) {
+    need_udp(t);
+    NetUDPConn *c = listen_loop4(t, "udp4");
+    if (c == NULL)
+        return;
+    NetipAddrPort daddr =
+        net_udp_addr_addr_port((const NetUDPAddr *)net_udp_conn_local_addr(c).data);
+    char buf[8] = {0};
+    Error e = BURROW_NO_ERROR;
+    CHECK_INT_EQ(net_udp_conn_write_to_udp_addr_port(c, bytes_of(buf, 8), daddr, &e),
+                 8);
+    NetipAddrPort saddr = {0};
+    CHECK_INT_EQ(net_udp_conn_read_msg_udp_addr_port(c, bytes_of(buf, 8), (Slice){0},
+                                                     NULL, NULL, &saddr, &e),
+                 8);
+    CHECK(BURROW_OK(e));
+    if (!netip_addr_is4(netip_addr_port_addr(saddr)))
+        testing_t_error_v(t, "returned AddrPort is not IPv4");
+    CHECK_INT_EQ(net_udp_conn_write_to_udp_addr_port(c, bytes_of(buf, 8), daddr, &e),
+                 8);
+    NetUDPAddr *soldaddr = NULL;
+    CHECK_INT_EQ(net_udp_conn_read_msg_udp(c, bytes_of(buf, 8), (Slice){0},
+                                           heap_allocator(), NULL, NULL, &soldaddr, &e),
+                 8);
+    CHECK(BURROW_OK(e));
+    if (soldaddr == NULL || soldaddr->ip.len != 4)
+        testing_t_error_v(t, "returned UDPAddr is not IPv4");
+    net_udp_addr_free(heap_allocator(), soldaddr);
+    net_udp_conn_free(c);
+}
+
+/* TestIPv6WriteMsgUDPAddrPortTargetAddrIPVersion: a dual-stack socket sends
+ * to IPv4, IPv4-mapped and IPv6 addresses alike. */
+static void TestIPv6WriteMsgUDPAddrPortTargetAddrIPVersion(TestingT *t) {
+    need_udp(t);
+#if defined(BURROW_OS_DRAGONFLY) || defined(BURROW_OS_OPENBSD)
+    testing_t_skip_v(t, "IPv6 sockets are always IPv6-only here");
+#else
+    NetUDPAddr la6 = loop6(0);
+    Error e = BURROW_NO_ERROR;
+    NetUDPConn *probe = net_listen_udp(heap_allocator(), BURROW_S("udp6"), &la6, &e);
+    if (probe == NULL) {
+        testing_t_skip_v(t, "skipping: udp6 not available");
+        return;
+    }
+    net_udp_conn_free(probe);
+    NetUDPConn *c = net_listen_udp(heap_allocator(), BURROW_S("udp"), NULL, &e);
+    if (c == NULL) {
+        testing_t_fatalf_v(t, "listen: %v", e);
+        return;
+    }
+    static const char *const daddrs[] = {"127.0.0.1:12345", "[::ffff:127.0.0.1]:12345",
+                                         "[::1]:12345"};
+    char buf[8] = {0};
+    for (size_t i = 0; i < sizeof daddrs / sizeof daddrs[0]; i++) {
+        NetipAddrPort d = netip_must_parse_addr_port(str_of(daddrs[i]));
+        (void)net_udp_conn_write_msg_udp_addr_port(c, bytes_of(buf, 8), (Slice){0}, d,
+                                                   NULL, &e);
+        if (BURROW_FAILED(e))
+            testing_t_errorf_v(t, "%s: %v", daddrs[i], e);
+    }
+    net_udp_conn_free(c);
+#endif
+}
+
+/* TestIPv4WriteMsgUDPAddrPortTargetAddrIPVersion: an IPv4 socket sends to
+ * IPv4 and IPv4-mapped addresses, and not to IPv6 ones. */
+static void TestIPv4WriteMsgUDPAddrPortTargetAddrIPVersion(TestingT *t) {
+    need_udp(t);
+    NetUDPConn *c = listen_loop4(t, "udp4");
+    if (c == NULL)
+        return;
+    char buf[8] = {0};
+    Error e = BURROW_NO_ERROR;
+    NetipAddrPort d4 = netip_must_parse_addr_port(BURROW_S("127.0.0.1:12345"));
+    NetipAddrPort d4in6 =
+        netip_must_parse_addr_port(BURROW_S("[::ffff:127.0.0.1]:12345"));
+    NetipAddrPort d6 = netip_must_parse_addr_port(BURROW_S("[::1]:12345"));
+    (void)net_udp_conn_write_msg_udp_addr_port(c, bytes_of(buf, 8), (Slice){0}, d4,
+                                               NULL, &e);
+    if (BURROW_FAILED(e))
+        testing_t_errorf_v(t, "conn.WriteMsgUDPAddrPort(buf, nil, daddr4) failed: %v",
+                           e);
+    (void)net_udp_conn_write_msg_udp_addr_port(c, bytes_of(buf, 8), (Slice){0}, d4in6,
+                                               NULL, &e);
+    if (BURROW_FAILED(e))
+        testing_t_errorf_v(
+            t, "conn.WriteMsgUDPAddrPort(buf, nil, daddr4in6) failed: %v", e);
+    (void)net_udp_conn_write_msg_udp_addr_port(c, bytes_of(buf, 8), (Slice){0}, d6,
+                                               NULL, &e);
+    if (BURROW_OK(e))
+        testing_t_error_v(t, "conn.WriteMsgUDPAddrPort(buf, nil, daddr6) should have "
+                             "failed, but got no error");
+    net_udp_conn_free(c);
+}
+
+/* TestReadWriteMsgUDPAddrPortEmptyCmsg: oob with room and no length is no
+ * oob at all, golang.org/issue/77875. */
+static void TestReadWriteMsgUDPAddrPortEmptyCmsg(TestingT *t) {
+    need_udp(t);
+    NetUDPConn *c = listen_loop4(t, "udp4");
+    if (c == NULL)
+        return;
+    char buf[8] = {0};
+    char cmsg[8];
+    Slice cmsg_buf = slice_from(cmsg, 0, 8, TYPE_BYTE);
+    NetipAddrPort daddr =
+        net_udp_addr_addr_port((const NetUDPAddr *)net_udp_conn_local_addr(c).data);
+    Error e = BURROW_NO_ERROR;
+    Int cmsgn = -1;
+    (void)net_udp_conn_write_msg_udp_addr_port(c, bytes_of(buf, 8), cmsg_buf, daddr,
+                                               &cmsgn, &e);
+    if (BURROW_FAILED(e)) {
+        testing_t_fatalf_v(t, "WriteMsgUDPAddrPort failed: %v", e);
+        net_udp_conn_free(c);
+        return;
+    }
+    if (cmsgn != 0)
+        testing_t_errorf_v(t, "WriteMsgUDPAddrPort wrote %d cmsg bytes; want 0", cmsgn);
+    (void)net_udp_conn_read_msg_udp_addr_port(c, bytes_of(buf, 8), cmsg_buf, &cmsgn,
+                                              NULL, NULL, &e);
+    if (BURROW_FAILED(e))
+        testing_t_errorf_v(t, "ReadMsgUDPAddrPort failed: %v", e);
+    else if (cmsgn != 0)
+        testing_t_errorf_v(t, "ReadMsgUDPAddrPort read %d cmsg bytes; want 0", cmsgn);
+    net_udp_conn_free(c);
+}
+
 /* ------------------------------------------------------------- UDPAddr */
 
 static void TestAUDPAddrPrintsTheWayGoPrintsIt(TestingT *t) {
@@ -547,6 +814,13 @@ static void TestAUDPAddrGoesToAndFromAnAddrPort(TestingT *t) {
     X(TestAReadPastItsDeadlineTimesOut)                                                \
     X(TestANilConnIsAnInvalidArgument)                                                 \
     X(TestIPv6LoopbackWorksWhereThereIsOne)                                            \
+    X(TestAMessageGoesOutAndComesBack)                                                 \
+    X(TestACutMessageIsFlaggedAsCut)                                                   \
+    X(TestWriteMsgUDPWantsAnAddressOnlyWhenNotDialed)                                  \
+    X(TestUDPIPVersionReadMsg)                                                         \
+    X(TestIPv6WriteMsgUDPAddrPortTargetAddrIPVersion)                                  \
+    X(TestIPv4WriteMsgUDPAddrPortTargetAddrIPVersion)                                  \
+    X(TestReadWriteMsgUDPAddrPortEmptyCmsg)                                            \
     X(TestAUDPAddrPrintsTheWayGoPrintsIt)                                              \
     X(TestAUDPAddrGoesToAndFromAnAddrPort)
 

@@ -12,6 +12,7 @@
 #include "burrow/net.h"
 #include "burrow/netpoll.h"
 #include "burrow/os.h"
+#include "burrow/syscall.h"
 #include "burrow/time.h"
 
 #include "check.h"
@@ -665,6 +666,232 @@ static void TestTheWriteToErrorsReadTheWayGosDo(TestingT *t) {
     (void)os_remove_all(dir);
 }
 
+/* ------------------------------------------------------------ messages */
+
+/* testUnixgramWriteConn and testUnixgramWritePacketConn, for WriteMsgUnix:
+ * a dialed datagram socket takes no address, and one that is not sends to
+ * the one it is given, which ReadMsgUnix then names. */
+static void TestWriteMsgUnixOnADatagramSocket(TestingT *t) {
+    need_unixgram(t);
+    Str dir = temp_dir(t);
+    if (dir.len == 0)
+        return;
+    NetUnixAddr ra = {path_in(dir, "r"), S("unixgram")};
+    NetUnixAddr sa = {path_in(dir, "s"), S("unixgram")};
+    Error e = BURROW_NO_ERROR;
+    NetUnixConn *r = net_listen_unixgram(a, S("unixgram"), &ra, &e);
+    NetUnixConn *s = net_listen_unixgram(a, S("unixgram"), &sa, &e);
+    NetUnixConn *c = r == NULL ? NULL : net_dial_unix(a, S("unixgram"), NULL, &ra, &e);
+    if (r == NULL || s == NULL || c == NULL) {
+        testing_t_errorf_v(t, "listen or dial: %v", e);
+        net_unix_conn_free(r);
+        net_unix_conn_free(s);
+        net_unix_conn_free(c);
+        (void)os_remove_all(dir);
+        return;
+    }
+    (void)net_unix_conn_set_read_deadline(r, soon());
+
+    char b[] = "CONNECTED-MODE SOCKET";
+    Int oobn = -1;
+    CHECK_INT_EQ(
+        net_unix_conn_write_msg_unix(c, bytes_of(b, 21), (Slice){0}, &ra, &oobn, &e),
+        0);
+    CHECK(errors_is(e, net_err_write_to_connected));
+    CHECK_INT_EQ(net_unix_conn_write(c, bytes_of(b, 21), &e), 21);
+    char buf[32] = {0};
+    CHECK_INT_EQ(net_unix_conn_read(r, bytes_of(buf, 32), &e), 21);
+
+    char u[] = "UNCONNECTED-MODE SOCKET";
+    CHECK_INT_EQ(
+        net_unix_conn_write_msg_unix(s, bytes_of(u, 23), (Slice){0}, &ra, &oobn, &e),
+        23);
+    CHECK(BURROW_OK(e));
+    CHECK_INT_EQ(oobn, 0);
+    char oob[64];
+    Int flags = -1;
+    NetUnixAddr *from = NULL;
+    CHECK_INT_EQ(net_unix_conn_read_msg_unix(r, bytes_of(buf, 32), bytes_of(oob, 64), a,
+                                             &oobn, &flags, &from, &e),
+                 23);
+    CHECK(BURROW_OK(e));
+    CHECK(memcmp(buf, u, 23) == 0);
+    CHECK_INT_EQ(oobn, 0);
+    char got[160];
+    char want[160];
+    CHECK(from != NULL);
+    if (from != NULL)
+        CHECK_STR_EQ(c_text(from->name, got, sizeof got),
+                     c_text(sa.name, want, sizeof want));
+
+    /* An address for another network is not one this socket can send to. */
+    NetUnixAddr stream = {ra.name, S("unix")};
+    CHECK_INT_EQ(
+        net_unix_conn_write_msg_unix(s, bytes_of(u, 23), (Slice){0}, &stream, NULL, &e),
+        0);
+    char spath[160];
+    char rpath[160];
+    char text[512];
+    char wantx[512];
+    snprintf(wantx, sizeof wantx,
+             "write unixgram %s->%s: address family not supported by protocol",
+             c_text(sa.name, spath, sizeof spath),
+             c_text(ra.name, rpath, sizeof rpath));
+    CHECK(strncmp(text_of(e, text, sizeof text), wantx, strlen(wantx)) == 0);
+
+    /* Nobody at the name, which sendmsg finds out. */
+    NetUnixAddr gone = {path_in(dir, "gone"), S("unixgram")};
+    char gpath[160];
+    CHECK_INT_EQ(
+        net_unix_conn_write_msg_unix(s, bytes_of(u, 23), (Slice){0}, &gone, NULL, &e),
+        0);
+    snprintf(wantx, sizeof wantx,
+             "write unixgram %s->%s: sendmsg: no such file or directory", spath,
+             c_text(gone.name, gpath, sizeof gpath));
+    CHECK_STR_EQ(text_of(e, text, sizeof text), wantx);
+
+    net_unix_conn_free(c);
+    net_unix_conn_free(s);
+    net_unix_conn_free(r);
+    (void)os_remove_all(dir);
+}
+
+/* A stream listener and the two ends of one connection to it, with
+ * deadlines, or false with nothing left open. */
+typedef struct StreamPair {
+    Str dir;
+    NetUnixListener *l;
+    NetUnixConn *c;
+    NetUnixConn *s;
+} StreamPair;
+
+static void stream_pair_free(StreamPair *p) {
+    net_unix_conn_free(p->c);
+    net_unix_conn_free(p->s);
+    net_unix_listener_free(p->l);
+    if (p->dir.len > 0)
+        (void)os_remove_all(p->dir);
+}
+
+static bool stream_pair(TestingT *t, StreamPair *p) {
+    memset(p, 0, sizeof *p);
+    p->dir = temp_dir(t);
+    if (p->dir.len == 0)
+        return false;
+    NetUnixAddr addr = {path_in(p->dir, "s"), S("unix")};
+    Error e = BURROW_NO_ERROR;
+    p->l = net_listen_unix(a, S("unix"), &addr, &e);
+    if (p->l != NULL)
+        p->c = net_dial_unix(a, S("unix"), NULL, &addr, &e);
+    if (p->c != NULL)
+        p->s = net_unix_listener_accept_unix(p->l, &e);
+    if (p->s == NULL) {
+        testing_t_errorf_v(t, "listen, dial or accept: %v", e);
+        stream_pair_free(p);
+        return false;
+    }
+    (void)net_unix_conn_set_deadline(p->c, soon());
+    (void)net_unix_conn_set_deadline(p->s, soon());
+    return true;
+}
+
+/* TestUnixUnlinkOnClose's ReadMsgUnix: the end of a stream is io.EOF, not
+ * wrapped. */
+static void TestReadMsgUnixAtTheEndIsEOF(TestingT *t) {
+    need_unix(t);
+    StreamPair p;
+    if (!stream_pair(t, &p))
+        return;
+    (void)net_unix_conn_close(p.s);
+    char b[1];
+    Error e = BURROW_NO_ERROR;
+    CHECK_INT_EQ(net_unix_conn_read_msg_unix(p.c, bytes_of(b, 1), (Slice){0}, a, NULL,
+                                             NULL, NULL, &e),
+                 0);
+    if (!(e.vt == io_eof.vt && e.data == io_eof.data)) {
+        char text[128];
+        testing_t_errorf_v(t, "ReadMsgUnix returned %s, want io.EOF",
+                           text_of(e, text, sizeof text));
+    }
+    stream_pair_free(&p);
+}
+
+#if defined(HAVE_UNIXGRAM)
+/* The rest of the test below, once it has its pair and its file. */
+static void scm_rights_close_on_exec(TestingT *t, StreamPair *p, Int scm_file) {
+    Error e = BURROW_NO_ERROR;
+    Slice rights = syscall_unix_rights(a, (Slice){&scm_file, 1, 1, TYPE_INT});
+    Int oobn = -1;
+    (void)net_unix_conn_write_msg_unix(p->c, (Slice){0}, rights, NULL, &oobn, &e);
+    if (BURROW_FAILED(e)) {
+        testing_t_errorf_v(t, "UnixConn writeMsg: %v", e);
+        return;
+    }
+    CHECK_INT_EQ(oobn, rights.len);
+    Byte oob[64];
+    Int space = syscall_cmsg_space(4);
+    (void)net_unix_conn_read_msg_unix(p->s, (Slice){0},
+                                      slice_from(oob, space, space, TYPE_BYTE), a,
+                                      &oobn, NULL, NULL, &e);
+    if (BURROW_FAILED(e)) {
+        testing_t_errorf_v(t, "UnixConn readMsg: %v", e);
+        return;
+    }
+    Slice scms = syscall_parse_socket_control_message(
+        a, slice_from(oob, oobn, oobn, TYPE_BYTE), &e);
+    if (BURROW_FAILED(e)) {
+        testing_t_errorf_v(t, "ParseSocketControlMessage: %v", e);
+        return;
+    }
+    if (scms.len != 1) {
+        testing_t_errorf_v(t, "got %d scms; expected 1 SocketControlMessage", scms.len);
+        return;
+    }
+    Slice got_fds =
+        syscall_parse_unix_rights(a, &((SyscallSocketControlMessage *)scms.p)[0], &e);
+    if (BURROW_FAILED(e)) {
+        testing_t_errorf_v(t, "syscall.ParseUnixRights: %v", e);
+        return;
+    }
+    if (got_fds.len != 1) {
+        testing_t_errorf_v(t, "got %d FDs: wanted only 1 fd", got_fds.len);
+        return;
+    }
+    Int fd = ((const Int *)got_fds.p)[0];
+#if !defined(BURROW_OS_DARWIN) && !defined(BURROW_OS_IOS) && !defined(BURROW_OS_COSMO)
+    /* fcntl by number, which macOS has deprecated. */
+    SyscallErrno en = 0;
+    Uintptr flags =
+        syscall_syscall(SYSCALL_SYS_FCNTL, (Uintptr)fd, SYSCALL_F_GETFD, 0, NULL, &en);
+    if (en != 0)
+        testing_t_errorf_v(t, "Can't get flags of fd:%d, with err:%d", fd, (Int)en);
+    else if ((flags & SYSCALL_FD_CLOEXEC) == 0)
+        testing_t_errorf_v(t, "got flags %#x, want %#x (FD_CLOEXEC) set", (Int)flags,
+                           (Int)SYSCALL_FD_CLOEXEC);
+#endif
+    CHECK(BURROW_OK(syscall_close(fd)));
+}
+
+/* TestUnixConnReadMsgUnixSCMRightsCloseOnExec: a descriptor sent with no
+ * data, which takes a byte of its own to carry it, arrives close-on-exec. Go
+ * makes its pair with socketpair and FileConn, and a listener does as well. */
+static void TestUnixConnReadMsgUnixSCMRightsCloseOnExec(TestingT *t) {
+    need_unix(t);
+    Error e = BURROW_NO_ERROR;
+    Int scm_file = syscall_open(S("/dev/null"), SYSCALL_O_RDONLY, 0, &e);
+    if (BURROW_FAILED(e)) {
+        testing_t_errorf_v(t, "file open: %v", e);
+        return;
+    }
+    StreamPair p;
+    if (stream_pair(t, &p)) {
+        scm_rights_close_on_exec(t, &p, scm_file);
+        stream_pair_free(&p);
+    }
+    (void)syscall_close(scm_file);
+}
+#endif
+
 static void TestANilConnIsAnInvalidArgument(TestingT *t) {
     (void)t;
     char buf[64];
@@ -721,6 +948,12 @@ static void setup(void) {
     a = arena_allocator(&ar);
 }
 
+#if defined(HAVE_UNIXGRAM)
+#define UNIX_RIGHTS_TESTS(X) X(TestUnixConnReadMsgUnixSCMRightsCloseOnExec)
+#else
+#define UNIX_RIGHTS_TESTS(X)
+#endif
+
 #define TESTS(X)                                                                       \
     X(TestAStreamListenerAcceptsAndTalks)                                              \
     X(TestTheNamesAtEachEndAreGos)                                                     \
@@ -734,6 +967,9 @@ static void setup(void) {
     X(TestAbstractNamesNeedNoFile)                                                     \
     X(TestTheErrorsReadTheWayGosDo)                                                    \
     X(TestTheWriteToErrorsReadTheWayGosDo)                                             \
+    X(TestWriteMsgUnixOnADatagramSocket)                                               \
+    X(TestReadMsgUnixAtTheEndIsEOF)                                                    \
+    UNIX_RIGHTS_TESTS(X)                                                               \
     X(TestANilConnIsAnInvalidArgument)                                                 \
     X(TestAUnixAddrIsItsName)
 

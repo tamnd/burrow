@@ -187,6 +187,43 @@ Int burrow__pfd_read_from(burrow__PollFD *fd, Slice p, PalSockAddr *from, Error 
     return pfd_recv(fd, p, from, err);
 }
 
+/* poll.FD.ReadMsg. Unlike a read, an empty p still goes to the system,
+ * since the control messages may be all there is. */
+Int burrow__pfd_read_msg(burrow__PollFD *fd, Slice p, Slice oob, Int *oobn, Int *flags,
+                         PalSockAddr *from, Error *err) {
+    *oobn = 0;
+    *flags = 0;
+    if (!pfd_lock(fd, true)) {
+        BURROW_OUT(err, net_err_closed);
+        return 0;
+    }
+    Int n = 0;
+    Error e = pfd_prepare(fd, BURROW_POLL_READ);
+    while (!BURROW_FAILED(e)) {
+        PalErrno pe = PAL_OK;
+        int64_t on = 0;
+        int32_t fl = 0;
+        int64_t r = pal_recvmsg(fd->sysfd, p.p, p.len, oob.p, oob.len, &on, &fl, from, &pe);
+        if (r >= 0) {
+            n = (Int)r;
+            *oobn = (Int)on;
+            *flags = (Int)fl;
+            e = pfd_eof(fd, n, BURROW_NO_ERROR);
+            break;
+        }
+        if (pe == PAL_EINTR)
+            continue;
+        if (pe == PAL_EAGAIN) {
+            e = pfd_wait(fd, BURROW_POLL_READ);
+            continue;
+        }
+        e = burrow__os_errno(pe);
+    }
+    pfd_unlock(fd, true);
+    BURROW_OUT(err, e);
+    return n;
+}
+
 /* ------------------------------------------------------------- writing */
 
 Int burrow__pfd_write(burrow__PollFD *fd, Slice p, Error *err) {
@@ -244,6 +281,38 @@ Int burrow__pfd_write_to(burrow__PollFD *fd, Slice p, const PalSockAddr *to,
         if (r >= 0) {
             /* A datagram goes whole or not at all, so Go reports all of p. */
             n = p.len;
+            break;
+        }
+        if (pe == PAL_EINTR)
+            continue;
+        if (pe == PAL_EAGAIN) {
+            e = pfd_wait(fd, BURROW_POLL_WRITE);
+            continue;
+        }
+        e = burrow__os_errno(pe);
+    }
+    pfd_unlock(fd, false);
+    BURROW_OUT(err, e);
+    return n;
+}
+
+/* poll.FD.WriteMsg, which answers all of oob as sent when the message
+ * went. */
+Int burrow__pfd_write_msg(burrow__PollFD *fd, Slice p, Slice oob, const PalSockAddr *to,
+                          Int *oobn, Error *err) {
+    *oobn = 0;
+    if (!pfd_lock(fd, false)) {
+        BURROW_OUT(err, net_err_closed);
+        return 0;
+    }
+    Int n = 0;
+    Error e = pfd_prepare(fd, BURROW_POLL_WRITE);
+    while (!BURROW_FAILED(e)) {
+        PalErrno pe = PAL_OK;
+        int64_t r = pal_sendmsg(fd->sysfd, p.p, p.len, oob.p, oob.len, to, &pe);
+        if (r >= 0) {
+            n = (Int)r;
+            *oobn = oob.len;
             break;
         }
         if (pe == PAL_EINTR)

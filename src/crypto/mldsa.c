@@ -1176,7 +1176,7 @@ Slice burrow__mldsa_sign_external_mu_deterministic(const MldsaPrivateKey *sk, Al
                                                    Slice mu,
                                                    const MldsaRejectionHook *hook,
                                                    Error *err) {
-    static const Byte zero[32];
+    static const Byte zero[32] = {0};
     return mldsa_sign_mu(sk, a, mu, zero, hook, err);
 }
 
@@ -1512,7 +1512,7 @@ Error burrow__mldsa_fips140_cast(const MldsaRejectionHook *hook) {
         0x7f, 0x6d, 0x01, 0x8a, 0x19, 0xad, 0xa1, 0x54, 0xd1, 0xe2, 0xee,
         0x36, 0x0e, 0xd5, 0x33, 0xce, 0xcd, 0x5d, 0xc9, 0x80, 0xad,
     };
-    static const Byte random[32];
+    static const Byte random[32] = {0};
 
     Alloc *heap = heap_allocator();
     Error e = BURROW_NO_ERROR;
@@ -1616,7 +1616,7 @@ void mldsa_private_key_free(MldsaPrivateKey *sk) {
     mem_free(a, sk, sizeof *sk, _Alignof(MldsaPrivateKey));
 }
 
-static const Byte mldsa_zero_seed[32];
+static const Byte mldsa_zero_seed[32] = {0};
 
 Slice mldsa_private_key_bytes(const MldsaPrivateKey *sk, Alloc *a) {
     return mldsa_bytes(a, sk != NULL ? sk->seed : mldsa_zero_seed, 32, NULL);
@@ -1648,7 +1648,7 @@ CryptoPublicKey mldsa_private_key_public(const MldsaPrivateKey *sk) {
 static Slice mldsa_sign_with_opts(const MldsaPrivateKey *sk, Alloc *a, Slice message,
                                   CryptoSignerOpts opts, bool deterministic,
                                   Error *err) {
-    static const Byte zero[32];
+    static const Byte zero[32] = {0};
     if (sk == NULL || sk->pub.p == NULL) {
         mldsa_set_error(err, "mldsa: zero private key");
         return slice_nil(TYPE_BYTE);

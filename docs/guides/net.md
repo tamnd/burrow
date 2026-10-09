@@ -1038,3 +1038,73 @@ mail: no angle-addr
 ```
 
 Names written as RFC 2047 encoded words are decoded with a `MimeWordDecoder`. Without one, UTF-8, ISO-8859-1 and US-ASCII work and any other charset is an error, as in Go. To take more, put a decoder with a `charset_reader` in a `MailAddressParser` and call `mail_address_parser_parse` or `mail_address_parser_parse_list`. The parser follows the same parts of RFC 5322 Go does, and leaves out the same ones: obsolete forms such as routes are not read, an address cannot be folded across lines, and nothing is normalised.
+
+## HTTP headers and content types
+
+`net/http` is arriving in pieces, and the first piece is the part that needs no connection. An `HttpHeader` is a `TextprotoMIMEHeader` with Go's `Header` methods on it: `http_header_add` and `http_header_set` put the key into canonical form, `http_header_get` gives the first value, and `http_header_write` writes the header the way it goes on the wire, keys sorted, with any CR or LF in a value turned into a space so a value cannot start a header of its own:
+
+<!-- example: ../examples/net/http.c#header -->
+```c
+HttpHeader h = http_header_make(a);
+http_header_add(h, BURROW_S("accept-encoding"), BURROW_S("gzip"));
+http_header_add(h, BURROW_S("Accept-Encoding"), BURROW_S("br"));
+http_header_set(h, BURROW_S("content-type"), BURROW_S("text/html"));
+http_header_set(h, BURROW_S("X-Note"), BURROW_S("one\r\nInjected: two"));
+printf("%.*s\n", P(http_header_get(h, BURROW_S("CONTENT-TYPE"))));
+
+BytesBuffer out = BYTES_BUFFER(a);
+Error err = http_header_write(h, bytes_buffer_as_io_writer(&out));
+if (BURROW_OK(err))
+    fmt_printf_v("%q\n", bytes_buffer_string(&out, a));
+```
+
+That prints:
+
+```
+text/html
+"Accept-Encoding: gzip\r\nAccept-Encoding: br\r\nContent-Type: text/html\r\nX-Note: one  Injected: two\r\n"
+```
+
+`http_header_write_subset` leaves out the keys in a `Map` from `Str` to `bool`, and `http_header_clone` copies a header with all its values in one block. Neither write allocates for a header of up to 64 keys.
+
+`http_detect_content_type` is Go's `DetectContentType`, the WHATWG sniffing algorithm over the first 512 bytes, and it gives `application/octet-stream` when nothing matches. The status codes are `HTTP_STATUS_` constants and `http_status_text` gives Go's text for each:
+
+<!-- example: ../examples/net/http.c#sniff -->
+```c
+Byte png[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+char html[] = "  <!DOCTYPE html><title>hi</title>";
+Str ct =
+    http_detect_content_type(slice_from(png, sizeof png, sizeof png, TYPE_BYTE));
+printf("%.*s\n", P(ct));
+Int n = (Int)strlen(html);
+ct = http_detect_content_type(slice_from(html, n, n, TYPE_BYTE));
+printf("%.*s\n", P(ct));
+printf("%d %.*s\n", HTTP_STATUS_TEAPOT, P(http_status_text(HTTP_STATUS_TEAPOT)));
+```
+
+That prints:
+
+```
+image/png
+text/html; charset=utf-8
+418 I'm a teapot
+```
+
+`http_parse_time` reads the three date formats HTTP has used, `HTTP_TIME_FORMAT` and the older RFC 850 and ANSI C ones, as Go's `ParseTime` does:
+
+<!-- example: ../examples/net/http.c#time -->
+```c
+Error err;
+Time t = http_parse_time(a, BURROW_S("Sunday, 06-Nov-94 08:49:37 GMT"), &err);
+if (BURROW_OK(err))
+    printf("%.*s\n", P(time_format(t, a, HTTP_TIME_FORMAT)));
+http_parse_time(a, BURROW_S("yesterday"), &err);
+printf("%s\n", BURROW_FAILED(err) ? "not a date" : "a date");
+```
+
+That prints:
+
+```
+Sun, 06 Nov 1994 08:49:37 GMT
+not a date
+```

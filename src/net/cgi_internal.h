@@ -7,6 +7,8 @@
 #ifndef BURROW_NET_CGI_INTERNAL_H
 #define BURROW_NET_CGI_INTERNAL_H
 
+#include "burrow/net/http/cgi.h"
+
 #include "burrow/core.h"
 #include "burrow/io.h"
 #include "burrow/mem.h"

@@ -194,14 +194,31 @@ static bool rs_is_exported(Str name) {
     return unicode_is_upper(utf8_decode_rune_in_string(name, &size));
 }
 
-/* isExportedOrBuiltinType. A type with no package path is a builtin as far as
- * Go is concerned, which takes in the types BURROW_STRUCT declares. */
+/* Whether t is one of Go's predeclared types, which have a name and no
+ * package path. */
+static bool rs_is_predeclared(const Type *t) {
+    static const char *const names[] = {
+        "bool",      "int",        "int8",   "int16",  "int32",   "int64",   "uint",
+        "uint8",     "uint16",     "uint32", "uint64", "uintptr", "float32", "float64",
+        "complex64", "complex128", "string", "error",  "byte",    "rune",    "any",
+    };
+    if (t->pkg_path.len != 0)
+        return false;
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (str_eq(t->name, str_from_cstr(names[i])))
+            return true;
+    return false;
+}
+
+/* isExportedOrBuiltinType. Go takes a type with no package path as a builtin,
+ * but a type BURROW_STRUCT declares has none either, so here that means an
+ * unnamed type or a predeclared one, and anything else goes by its name. */
 static bool rs_is_exported_or_builtin(const Type *t) {
     for (int i = 0; t != NULL && t->kind == KIND_POINTER && i < 100; i++)
         t = t->elem;
     if (t == NULL)
         return false;
-    return rs_is_exported(t->name) || t->pkg_path.len == 0;
+    return rs_is_exported(t->name) || t->name.len == 0 || rs_is_predeclared(t);
 }
 
 /* reflect.Type.String, which is what fmt's %T writes, except for an interface

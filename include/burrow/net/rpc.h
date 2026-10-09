@@ -263,8 +263,10 @@ typedef struct RpcCall {
     Error error;
     Chan *done;
 
-    /* The call's own. */
+    /* The call's own. ea is where error goes, which is a except for the call
+     * rpc_client_call makes for itself. */
     Alloc *a;
+    Alloc *ea;
     Chan *own_done;
 } RpcCall;
 

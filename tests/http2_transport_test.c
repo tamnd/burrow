@@ -90,7 +90,8 @@ typedef struct H2ctConn {
     SyncCond wcond;
     BytesBuffer wbuf;
     SyncWaitGroup wwg;
-    NetConn cli; /* the client's end, which the client has as h2ct_cli_vt */
+    NetConn cli;    /* the client's end, which the client has as h2ct_cli_vt */
+    Error cli_werr; /* under rmu: what the client's writes fail with, if set */
     struct H2ctConn *next;
     SyncAtomicBool cli_closed; /* the client closed cli */
     bool reof;
@@ -237,6 +238,13 @@ static Int h2ct_cli_read(void *self, Slice p, Error *err) {
 
 static Int h2ct_cli_write(void *self, Slice p, Error *err) {
     H2ctConn *tc = (H2ctConn *)self;
+    sync_mutex_lock(&tc->rmu);
+    Error werr = tc->cli_werr;
+    sync_mutex_unlock(&tc->rmu);
+    if (BURROW_FAILED(werr)) {
+        *err = werr;
+        return 0;
+    }
     return tc->cli.vt->writer.write(tc->cli.data, p, err);
 }
 
@@ -3800,7 +3808,10 @@ static void h2ct_idle_conn_timeout(H2ctTT *tt, const void *arg) {
             H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_SETTINGS)); /* ACK */
 
         time_sleep(test->wait);
-        bool got = h2ct_is_closed(tc);
+        /* is_closed waits for the close, which is only worth it when one is
+         * wanted. */
+        bool got = test->want_new_conn ? h2ct_is_closed(tc)
+                                       : sync_atomic_bool_load(&tc->cli_closed);
         if (got != test->want_new_conn)
             FATALF("after waiting %s, conn closed=%v; want %v",
                    duration_string(test->wait, arena_allocator(&tt->ar)), got,
@@ -3957,6 +3968,83 @@ static void TestTransportRequestPathPseudo(TestingT *t) {
     }
 }
 
+static void h2ct_round_trip_doesnt_consume_request_body_early(H2ctTT *tt,
+                                                              const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+    h2ct_close_write(tc);
+    /* Go waits for the bubble to go quiet. This waits for the client to see
+     * the end of the conn and close it. */
+    H2CT_TRY(h2ct_is_closed(tc));
+
+    static const char body[] = "foo";
+    StringsReader *sr = strings_new_reader(arena_allocator(&tt->ar), BURROW_S("foo"));
+    H2CT_TRY(sr != NULL);
+    HttpRequest *req = h2ct_new_request_url(tt, (Context){0}, BURROW_S("POST"),
+                                            BURROW_S("http://foo.com/"),
+                                            strings_reader_as_io_reader(sr));
+    H2CT_TRY(req != NULL);
+    H2ctRT *rt = h2ct_tc_round_trip(tt, req);
+    H2CT_TRY(rt != NULL);
+    Error err = h2ct_rt_err(rt);
+    if (!errors_is(err, burrow__http2_err_client_conn_not_established))
+        FATALF("RoundTrip = %v; want errClientConnNotEstablished", err);
+
+    Error rerr = BURROW_NO_ERROR;
+    Slice slurp = io_read_all(arena_allocator(&tt->ar),
+                              io_read_closer_as_io_reader(req->body), &rerr);
+    if (BURROW_FAILED(rerr))
+        testing_t_errorf_v(tt->t, "ReadAll = %v", rerr);
+    Str got = str_from_bytes(slurp.p, slurp.len);
+    if (!str_eq(got, str_from_cstr(body)))
+        testing_t_errorf_v(tt->t, "Body = %q; want %q", got, str_from_cstr(body));
+}
+
+static void TestRoundTripDoesntConsumeRequestBodyEarly(TestingT *t) {
+    h2ct_run(t, h2ct_round_trip_doesnt_consume_request_body_early, NULL);
+}
+
+/* Go's closeWriteWithError also makes the client's reads end. That is left
+ * out here: the client closes the conn once a write fails, which ends its
+ * reads, and an end it reads first could fail the request before the write
+ * error does. */
+static void h2ct_roundtrip_close_on_write_error(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctBody *body = h2ct_new_request_body(tt);
+    H2CT_TRY(body != NULL);
+    h2ct_body_write_bytes(body, 1);
+    HttpRequest *req = h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
+                                            BURROW_S("https://dummy.tld/"),
+                                            (IoReader){&h2ct_body_vt, body});
+    H2CT_TRY(req != NULL);
+    H2ctRT *rt = h2ct_tc_round_trip(tt, req);
+    H2CT_TRY(rt != NULL);
+
+    Error write_err = errors_new(arena_allocator(&tt->ar), BURROW_S("write error"));
+    sync_mutex_lock(&tc->rmu);
+    tc->cli_werr = write_err;
+    sync_mutex_unlock(&tc->rmu);
+
+    h2ct_body_write_bytes(body, 1);
+    Error err = h2ct_rt_err(rt);
+    if (!errors_is(err, write_err))
+        FATALF("RoundTrip error %v, want %v", err, write_err);
+
+    H2ctRT *rt2 = h2ct_tc_round_trip(tt, req);
+    H2CT_TRY(rt2 != NULL);
+    err = h2ct_rt_err(rt2);
+    if (!errors_is(err, burrow__http2_err_client_conn_unusable))
+        FATALF("RoundTrip error %v, want errClientConnUnusable", err);
+}
+
+static void TestTransportRoundtripCloseOnWriteError(TestingT *t) {
+    h2ct_run(t, h2ct_roundtrip_close_on_write_error, NULL);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -4062,6 +4150,8 @@ static void TestTransportRequestPathPseudo(TestingT *t) {
     X(TestIdleConnTimeout_H1TransportTimeoutExpires)                                   \
     X(TestTransportReqBodyAfterResponse_200)                                           \
     X(TestTransportReqBodyAfterResponse_403)                                           \
-    X(TestTransportRequestPathPseudo)
+    X(TestTransportRequestPathPseudo)                                                  \
+    X(TestRoundTripDoesntConsumeRequestBodyEarly)                                      \
+    X(TestTransportRoundtripCloseOnWriteError)
 
 TESTING_MAIN(TESTS)

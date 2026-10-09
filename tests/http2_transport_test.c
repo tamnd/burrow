@@ -93,6 +93,7 @@ typedef struct H2ctConn {
     struct H2ctConn *next;
     bool reof;
     bool wclosed;
+    bool wshut; /* closeWrite: srv closes once wbuf is out */
     bool wfailed;
     bool claimed; /* given to the test by get_conn */
 } H2ctConn;
@@ -159,7 +160,7 @@ static const IoReaderVT h2ct_in_vt = {NULL, h2ct_in_read};
 static Int h2ct_out_write(void *self, Slice p, Error *err) {
     H2ctConn *tc = (H2ctConn *)self;
     sync_mutex_lock(&tc->wmu);
-    if (tc->wfailed || tc->wclosed) {
+    if (tc->wfailed || tc->wclosed || tc->wshut) {
         sync_mutex_unlock(&tc->wmu);
         *err = io_err_closed_pipe;
         return 0;
@@ -176,14 +177,19 @@ static const IoWriterVT h2ct_out_vt = {NULL, h2ct_out_write};
 static void h2ct_out_job(void *env) {
     H2ctConn *tc = (H2ctConn *)env;
     Byte *chunk = (Byte *)mem_alloc_nozero(tc->a, H2CT_CHUNK, 1);
+    bool shut = false;
     sync_mutex_lock(&tc->wmu);
     if (chunk == NULL)
         tc->wfailed = true;
     while (!tc->wfailed) {
-        while (bytes_buffer_len(&tc->wbuf) == 0 && !tc->wclosed)
+        while (bytes_buffer_len(&tc->wbuf) == 0 && !tc->wclosed && !tc->wshut)
             sync_cond_wait(&tc->wcond);
         if (tc->wclosed)
             break;
+        if (bytes_buffer_len(&tc->wbuf) == 0) {
+            shut = true;
+            break;
+        }
         Error err = BURROW_NO_ERROR;
         Int n = bytes_buffer_read(
             &tc->wbuf, slice_from(chunk, H2CT_CHUNK, H2CT_CHUNK, TYPE_BYTE), &err);
@@ -195,12 +201,23 @@ static void h2ct_out_job(void *env) {
             tc->wfailed = true;
     }
     sync_mutex_unlock(&tc->wmu);
+    if (shut)
+        (void)tc->srv.vt->closer.close(tc->srv.data);
     if (chunk != NULL)
         mem_free(tc->a, chunk, H2CT_CHUNK, 1);
 }
 
-/* closeWrite: hangs up on the client, which then reads the end of the
- * connection. What the test wrote and the client has not read yet goes. */
+/* closeWrite: once what the test wrote is out, the client reads the end of
+ * the connection. */
+static void h2ct_close_write(H2ctConn *tc) {
+    sync_mutex_lock(&tc->wmu);
+    tc->wshut = true;
+    sync_cond_signal(&tc->wcond);
+    sync_mutex_unlock(&tc->wmu);
+}
+
+/* Hangs up on the client at once. What the test wrote and the client has not
+ * read yet goes. */
 static void h2ct_conn_close(H2ctConn *tc) {
     sync_mutex_lock(&tc->wmu);
     tc->wclosed = true;
@@ -727,6 +744,53 @@ static bool h2ct_rt_want_trailers(H2ctRT *rt, const char *want) {
     return res != NULL && h2ct_want_header(rt->tt->t, "trailers", res->trailer, want);
 }
 
+/* err: what RoundTrip returned as its error, once it has. */
+static Error h2ct_rt_err(H2ctRT *rt) {
+    if (!h2ct_rt_result(rt))
+        return BURROW_NO_ERROR;
+    return rt->err;
+}
+
+/* Whether err is a StreamError on stream id with code, and, when cause is not
+ * NULL, a cause that reads the same as it. */
+static bool h2ct_is_stream_error(Error err, uint32_t id, Http2ErrCode code,
+                                 const Error *cause) {
+    Http2StreamError se;
+    memset(&se, 0, sizeof se);
+    if (!burrow__http2_error_stream(err, &se))
+        return false;
+    if (id != 0 && se.stream_id != id)
+        return false;
+    if (se.code != code)
+        return false;
+    return cause == NULL || (BURROW_FAILED(se.cause) &&
+                             str_eq(error_text(se.cause), error_text(*cause)));
+}
+
+/* Waits for RoundTrip to return, for as long as a check would, and says
+ * whether it has. done in Go, where the bubble has already settled. */
+static bool h2ct_rt_wait_done(H2ctRT *rt) {
+    Time deadline = time_add(time_now(), H2CT_WAIT);
+    while (!sync_atomic_bool_load(&rt->done)) {
+        if (!time_before(time_now(), deadline))
+            return false;
+        time_sleep(TIME_MILLISECOND);
+    }
+    return true;
+}
+
+/* hasConn: whether the client has made a connection the test has not taken,
+ * after giving it a moment. */
+static bool h2ct_tt_has_conn(H2ctTT *tt) {
+    time_sleep(H2CT_QUIET);
+    sync_mutex_lock(&tt->mu);
+    bool has = false;
+    for (H2ctConn *tc = tt->conns; tc != NULL; tc = tc->next)
+        has = has || !tc->claimed;
+    sync_mutex_unlock(&tt->mu);
+    return has;
+}
+
 /* ------------------------------------------------------- reading frames */
 
 static Http2Frame *h2ct_read_frame_within(H2ctConn *tc, Duration d, Error *err) {
@@ -762,6 +826,24 @@ static Http2Frame *h2ct_read_type(H2ctConn *tc, Http2FrameType want) {
         return NULL;
     }
     return f;
+}
+
+/* wantIdle: no frame for a moment. */
+static bool h2ct_want_idle(H2ctConn *tc) {
+    Error err = BURROW_NO_ERROR;
+    Http2Frame *f = h2ct_read_frame_within(tc, H2CT_QUIET, &err);
+    if (f != NULL && BURROW_OK(err)) {
+        testing_t_errorf_v(tc->t, "unexpected frame type %d on stream %d",
+                           (int)f->header.type, (int)f->header.stream_id);
+        burrow__http2_frame_free(f);
+        return false;
+    }
+    burrow__http2_frame_free(f);
+    if (!errors_is(err, os_err_deadline_exceeded)) {
+        testing_t_errorf_v(tc->t, "want idle, got %v", err);
+        return false;
+    }
+    return true;
 }
 
 static bool h2ct_want_frame_type(H2ctConn *tc, Http2FrameType want) {
@@ -908,12 +990,18 @@ static bool h2ct_write_data(H2ctConn *tc, uint32_t id, bool end_stream,
                         burrow__http2_framer_write_data(tc->fr, id, end_stream, p));
 }
 
-static bool h2ct_write_go_away(H2ctConn *tc, uint32_t max_stream_id,
-                               Http2ErrCode code) {
-    Slice none = {0};
+static bool h2ct_write_go_away_debug(H2ctConn *tc, uint32_t max_stream_id,
+                                     Http2ErrCode code, const char *debug) {
+    Int n = (Int)strlen(debug);
+    Slice d = slice_from((void *)(uintptr_t)debug, n, n, TYPE_BYTE);
     return !h2ct_failed(
         tc, "writing GOAWAY",
-        burrow__http2_framer_write_go_away(tc->fr, max_stream_id, code, none));
+        burrow__http2_framer_write_go_away(tc->fr, max_stream_id, code, d));
+}
+
+static bool h2ct_write_go_away(H2ctConn *tc, uint32_t max_stream_id,
+                               Http2ErrCode code) {
+    return h2ct_write_go_away_debug(tc, max_stream_id, code, "");
 }
 
 static bool h2ct_write_rst_stream(H2ctConn *tc, uint32_t id, Http2ErrCode code) {
@@ -1489,6 +1577,375 @@ static void TestTransportRetryAfterRefusedStream(TestingT *t) {
     h2ct_run(t, h2ct_retry_after_refused_stream, NULL);
 }
 
+/* A GET for the test's conn, on its way. */
+static H2ctRT *h2ct_get(H2ctTT *tt, Str method) {
+    return h2ct_tc_round_trip(tt,
+                              h2ct_new_request(tt, (Context){0}, method, h2ct_no_body));
+}
+
+static void h2ct_read_head_response(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_get(tt, BURROW_S("HEAD"));
+    H2CT_TRY(rt != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    static const Str hdr[] = {S_(":status"), S_("200"), S_("content-length"),
+                              S_("123")};
+    /* Not END_STREAM, as the GFE does. */
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, hdr, 4), false)));
+    H2CT_TRY(h2ct_write_data(tc, id, true, ""));
+
+    HttpResponse *res = h2ct_rt_response(rt);
+    H2CT_TRY(res != NULL);
+    if (res->content_length != 123)
+        FATALF("Content-Length = %d; want 123", (int)res->content_length);
+    (void)h2ct_rt_want_body(rt, "");
+}
+
+static void TestTransportReadHeadResponse(TestingT *t) {
+    h2ct_run(t, h2ct_read_head_response, NULL);
+}
+
+static void h2ct_read_head_response_with_body(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    /* This test uses an invalid response format. */
+    static const char response[] = "redirecting to /elsewhere";
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_get(tt, BURROW_S("HEAD"));
+    H2CT_TRY(rt != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    Str hdr[] = {BURROW_S(":status"), BURROW_S("200"), BURROW_S("content-length"),
+                 fmt_sprintf_v(arena_allocator(&tt->ar), "%d", (int)strlen(response))};
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, hdr, 4), false)));
+    H2CT_TRY(h2ct_write_data(tc, id, true, response));
+
+    HttpResponse *res = h2ct_rt_response(rt);
+    H2CT_TRY(res != NULL);
+    if (res->content_length != (int64_t)strlen(response))
+        FATALF("Content-Length = %d; want %d", (int)res->content_length,
+               (int)strlen(response));
+    (void)h2ct_rt_want_body(rt, "");
+}
+
+static void TestTransportReadHeadResponseWithBody(TestingT *t) {
+    h2ct_run(t, h2ct_read_head_response_with_body, NULL);
+}
+
+static void h2ct_no_body_means_no_data(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    HttpRequest *req =
+        h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body);
+    H2CT_TRY(req != NULL);
+    req->body = http_no_body;
+    H2ctRT *rt = h2ct_tc_round_trip(tt, req);
+    H2CT_TRY(rt != NULL);
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    static const Str want[] = {S_(":authority"), S_("dummy.tld"), S_(":method"),
+                               S_("GET"),        S_(":path"),     S_("/")};
+    /* END_STREAM should be set when body is http.NoBody. */
+    H2CT_TRY(h2ct_want_headers(tc, id, true, want, 6));
+    (void)h2ct_want_idle(tc);
+}
+
+static void TestTransportNoBodyMeansNoDATA(TestingT *t) {
+    h2ct_run(t, h2ct_no_body_means_no_data, NULL);
+}
+
+static void h2ct_returns_error_on_bad_response_headers(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_get(tt, BURROW_S("GET"));
+    H2CT_TRY(rt != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    static const Str hdr[] = {S_(":status"), S_("200"), S_("  content-type"),
+                              S_("bogus")};
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, hdr, 4), false)));
+
+    Error err = h2ct_rt_err(rt);
+    Error cause = burrow__http2_header_field_name_error(BURROW_S("  content-type"));
+    if (!h2ct_is_stream_error(err, 1, HTTP2_ERR_CODE_PROTOCOL, &cause))
+        FATALF("RoundTrip error = %v; want StreamError on stream 1 with "
+               "ErrCodeProtocol and cause %v",
+               err, cause);
+
+    Http2Frame *f = h2ct_read_type(tc, HTTP2_FRAME_RST_STREAM);
+    H2CT_TRY(f != NULL);
+    if (f->header.stream_id != 1 || f->u.rst_stream.err_code != HTTP2_ERR_CODE_PROTOCOL)
+        testing_t_errorf_v(tt->t,
+                           "Frame = RST_STREAM stream=%d code=%d; want RST_STREAM for "
+                           "stream 1 with ErrCodeProtocol",
+                           (int)f->header.stream_id, (int)f->u.rst_stream.err_code);
+    burrow__http2_frame_free(f);
+}
+
+static void TestTransportReturnsErrorOnBadResponseHeaders(TestingT *t) {
+    h2ct_run(t, h2ct_returns_error_on_bad_response_headers, NULL);
+}
+
+static void h2ct_response_data_before_headers(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    /* First request is normal to ensure the check is per stream and not per
+     * connection. */
+    H2ctRT *rt1 = h2ct_get(tt, BURROW_S("GET"));
+    H2CT_TRY(rt1 != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    uint32_t id1 = h2ct_rt_stream_id(rt1);
+    H2CT_TRY(id1 != 0);
+    H2CT_TRY(h2ct_write_status(tc, id1, "200"));
+    H2CT_TRY(h2ct_rt_want_status(rt1, 200));
+
+    /* Second request returns a DATA frame with no HEADERS. */
+    H2ctRT *rt2 = h2ct_get(tt, BURROW_S("GET"));
+    H2CT_TRY(rt2 != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    uint32_t id2 = h2ct_rt_stream_id(rt2);
+    H2CT_TRY(id2 != 0);
+    H2CT_TRY(h2ct_write_data(tc, id2, true, "payload"));
+    Error err = h2ct_rt_err(rt2);
+    if (!h2ct_is_stream_error(err, 0, HTTP2_ERR_CODE_PROTOCOL, NULL))
+        FATALF("expected stream PROTOCOL_ERROR, got: %v", err);
+}
+
+static void TestTransportResponseDataBeforeHeaders(TestingT *t) {
+    h2ct_run(t, h2ct_response_data_before_headers, NULL);
+}
+
+static void h2ct_handles_invalid_statusless_response(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_get(tt, BURROW_S("GET"));
+    H2CT_TRY(rt != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    /* No :status header, and not END_STREAM: we'll send some DATA to try to
+     * crash the transport. */
+    static const Str hdr[] = {S_("content-type"), S_("text/html")};
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, hdr, 2), false)));
+    H2CT_TRY(h2ct_write_data(tc, id, true, "payload"));
+    /* Go stops here. This also checks that RoundTrip failed. */
+    H2CT_TRY(h2ct_rt_result(rt));
+    if (BURROW_OK(rt->err))
+        testing_t_errorf_v(tt->t, "RoundTrip succeeded; want an error");
+}
+
+static void TestTransportHandlesInvalidStatuslessResponse(TestingT *t) {
+    h2ct_run(t, h2ct_handles_invalid_statusless_response, NULL);
+}
+
+static void h2ct_no_retry_on_stream_protocol_error(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    /* Start two requests. The first is a long request that will finish after
+     * the second. The second one will result in the protocol error. */
+
+    /* Request #1: The long request. */
+    H2ctRT *rt1 = h2ct_tt_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt1 != NULL);
+    H2ctConn *tc1 = h2ct_get_conn(tt);
+    H2CT_TRY(tc1 != NULL && h2ct_want_new_conn_get(tc1));
+    H2CT_TRY(h2ct_write_settings(tc1, NULL, 0));
+    H2CT_TRY(h2ct_want_frame_type(tc1, HTTP2_FRAME_SETTINGS)); /* settings ACK */
+
+    /* Request #2: The short request. */
+    H2ctRT *rt2 = h2ct_tt_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt2 != NULL);
+    H2CT_TRY(h2ct_want_headers(tc1, 3, true, NULL, 0));
+
+    /* Request #2 fails with ErrCodeProtocol. */
+    H2CT_TRY(h2ct_write_rst_stream(tc1, 3, HTTP2_ERR_CODE_PROTOCOL));
+    if (!h2ct_rt_wait_done(rt2))
+        FATALF("After protocol error on RoundTrip #2, RoundTrip #2 is in progress; "
+               "want done");
+    if (h2ct_rt_done(rt1))
+        FATALF("After protocol error on RoundTrip #2, RoundTrip #1 is done; want "
+               "still in progress");
+    /* Request #2 should not be retried. */
+    if (h2ct_tt_has_conn(tt))
+        FATALF("After protocol error on RoundTrip #2, RoundTrip #2 is unexpectedly "
+               "retried");
+
+    /* Request #1 succeeds. */
+    H2CT_TRY(h2ct_write_status(tc1, 1, "200"));
+    (void)h2ct_rt_want_status(rt1, 200);
+}
+
+static void TestTransportNoRetryOnStreamProtocolError(TestingT *t) {
+    h2ct_run(t, h2ct_no_retry_on_stream_protocol_error, NULL);
+}
+
+/* https://go.dev/issue/65927 - server sends a 1xx response, followed by a
+ * DATA frame. */
+static void h2ct_data_after_1xx_header(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_get(tt, BURROW_S("GET"));
+    H2CT_TRY(rt != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    static const Str hdr[] = {S_(":status"), S_("100")};
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, hdr, 2), false)));
+    static const Byte zero[1] = {0};
+    H2CT_TRY(!h2ct_failed(
+        tc, "writing DATA",
+        burrow__http2_framer_write_data(
+            tc->fr, id, true, slice_from((void *)(uintptr_t)zero, 1, 1, TYPE_BYTE))));
+    Error err = h2ct_rt_err(rt);
+    if (!h2ct_is_stream_error(err, 0, HTTP2_ERR_CODE_PROTOCOL, NULL))
+        testing_t_errorf_v(tt->t, "RoundTrip error: %v; want ErrCodeProtocol", err);
+    (void)h2ct_want_frame_type(tc, HTTP2_FRAME_RST_STREAM);
+}
+
+static void TestTransportDataAfter1xxHeader(TestingT *t) {
+    h2ct_run(t, h2ct_data_after_1xx_header, NULL);
+}
+
+static void h2ct_uses_go_away_debug_error(H2ctTT *tt, const void *arg) {
+    bool fail_mid_body = *(const bool *)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    const Http2ErrCode go_away_err_code =
+        HTTP2_ERR_CODE_HTTP_1_1_REQUIRED; /* arbitrary */
+    static const char go_away_debug_data[] = "some debug data";
+
+    H2ctRT *rt = h2ct_get(tt, BURROW_S("GET"));
+    H2CT_TRY(rt != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+
+    if (fail_mid_body) {
+        static const Str hdr[] = {S_(":status"), S_("200"), S_("content-length"),
+                                  S_("123")};
+        H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, hdr, 4), false)));
+    }
+
+    /* Write two GOAWAY frames, to test that the Transport takes the
+     * interesting parts of both. */
+    H2CT_TRY(h2ct_write_go_away_debug(tc, 5, HTTP2_ERR_CODE_NO, go_away_debug_data));
+    H2CT_TRY(h2ct_write_go_away(tc, 5, go_away_err_code));
+    h2ct_close_write(tc);
+
+    H2CT_TRY(h2ct_rt_result(rt));
+    Error err = rt->err;
+    const char *whence = "RoundTrip";
+    if (fail_mid_body) {
+        whence = "Body.Read";
+        if (BURROW_FAILED(err))
+            FATALF("RoundTrip error = %v, want success", err);
+        Byte b[1];
+        IoReader r = io_read_closer_as_io_reader(rt->res->body);
+        (void)r.vt->read(r.data, slice_from(b, 1, 1, TYPE_BYTE), &err);
+    }
+
+    Http2GoAwayError ge;
+    memset(&ge, 0, sizeof ge);
+    bool ok = burrow__http2_error_go_away(err, &ge) && ge.last_stream_id == 5 &&
+              ge.err_code == go_away_err_code &&
+              str_eq(ge.debug_data, str_from_cstr(go_away_debug_data));
+    if (!ok)
+        testing_t_errorf_v(tt->t,
+                           "%s error = %v, want GoAwayError{LastStreamID: 5, ErrCode: "
+                           "HTTP_1_1_REQUIRED, DebugData: %q}",
+                           str_from_cstr(whence), err,
+                           str_from_cstr(go_away_debug_data));
+}
+
+static void TestTransportUsesGoAwayDebugError_RoundTrip(TestingT *t) {
+    static const bool fail_mid_body = false;
+    h2ct_run(t, h2ct_uses_go_away_debug_error, &fail_mid_body);
+}
+
+static void TestTransportUsesGoAwayDebugError_Body(TestingT *t) {
+    static const bool fail_mid_body = true;
+    h2ct_run(t, h2ct_uses_go_away_debug_error, &fail_mid_body);
+}
+
+static void h2ct_cookie_header_split(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    HttpRequest *req =
+        h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body);
+    H2CT_TRY(req != NULL);
+    (void)http_header_add(req->header, BURROW_S("Cookie"), BURROW_S("a=b;c=d;  e=f;"));
+    (void)http_header_add(req->header, BURROW_S("Cookie"), BURROW_S("e=f;g=h; "));
+    (void)http_header_add(req->header, BURROW_S("Cookie"), BURROW_S("i=j"));
+    H2ctRT *rt = h2ct_tc_round_trip(tt, req);
+    H2CT_TRY(rt != NULL);
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+
+    static const Str want[] = {S_("cookie"), S_("a=b"), S_("cookie"), S_("c=d"),
+                               S_("cookie"), S_("e=f"), S_("cookie"), S_("e=f"),
+                               S_("cookie"), S_("g=h"), S_("cookie"), S_("i=j")};
+    H2CT_TRY(h2ct_want_headers(tc, id, true, want, 12));
+    H2CT_TRY(h2ct_write_status(tc, id, "204"));
+
+    Error err = h2ct_rt_err(rt);
+    if (BURROW_FAILED(err))
+        FATALF("RoundTrip = %v, want success", err);
+}
+
+static void TestTransportCookieHeaderSplit(TestingT *t) {
+    h2ct_run(t, h2ct_cookie_header_split, NULL);
+}
+
+static void h2ct_body_eager_end_stream(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    static const char req_body[] = "some request body";
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    StringsReader *body =
+        strings_new_reader(arena_allocator(&tt->ar), str_from_cstr(req_body));
+    H2CT_TRY(body != NULL);
+    H2ctRT *rt =
+        h2ct_tc_round_trip(tt, h2ct_new_request(tt, (Context){0}, BURROW_S("PUT"),
+                                                strings_reader_as_io_reader(body)));
+    H2CT_TRY(rt != NULL);
+
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    Http2Frame *f = h2ct_read_type(tc, HTTP2_FRAME_DATA);
+    H2CT_TRY(f != NULL);
+    bool ended = (f->header.flags & HTTP2_FLAG_DATA_END_STREAM) != 0;
+    Int n = f->u.data.data.len;
+    burrow__http2_frame_free(f);
+    if (!ended)
+        FATALF("data frame without END_STREAM, %d bytes", (int)n);
+}
+
+static void TestTransportBodyEagerEndStream(TestingT *t) {
+    h2ct_run(t, h2ct_body_eager_end_stream, NULL);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -1538,6 +1995,18 @@ static void TestTransportRetryAfterRefusedStream(TestingT *t) {
     X(TestTransportRetryAfterGOAWAYNoRetry)                                            \
     X(TestTransportRetryAfterGOAWAYRetry)                                              \
     X(TestTransportRetryAfterGOAWAYSecondRequest)                                      \
-    X(TestTransportRetryAfterRefusedStream)
+    X(TestTransportRetryAfterRefusedStream)                                            \
+    X(TestTransportReadHeadResponse)                                                   \
+    X(TestTransportReadHeadResponseWithBody)                                           \
+    X(TestTransportNoBodyMeansNoDATA)                                                  \
+    X(TestTransportReturnsErrorOnBadResponseHeaders)                                   \
+    X(TestTransportResponseDataBeforeHeaders)                                          \
+    X(TestTransportHandlesInvalidStatuslessResponse)                                   \
+    X(TestTransportNoRetryOnStreamProtocolError)                                       \
+    X(TestTransportDataAfter1xxHeader)                                                 \
+    X(TestTransportUsesGoAwayDebugError_RoundTrip)                                     \
+    X(TestTransportUsesGoAwayDebugError_Body)                                          \
+    X(TestTransportCookieHeaderSplit)                                                  \
+    X(TestTransportBodyEagerEndStream)
 
 TESTING_MAIN(TESTS)

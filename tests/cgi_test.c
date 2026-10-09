@@ -957,7 +957,7 @@ static void TestCopyError(TestingT *t) {
     }
     static Byte buf[5000];
     Int n = io_read_full(io_read_closer_as_io_reader(res->body),
-                         (Slice){buf, 5000, 5000, NULL}, &err);
+                         (Slice){buf, 5000, 5000, TYPE_BYTE}, &err);
     if (BURROW_FAILED(err)) {
         testing_t_errorf_v(t, "ReadFull: %d bytes, %v", n, err);
         goto done;

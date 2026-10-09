@@ -49,6 +49,7 @@ crypto/aes
 crypto
 crypto/cipher
 crypto/des
+crypto/dsa
 crypto/ecdh
 crypto/ecdsa
 crypto/elliptic

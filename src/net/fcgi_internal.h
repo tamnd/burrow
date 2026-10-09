@@ -9,6 +9,8 @@
 #ifndef BURROW_SRC_NET_FCGI_INTERNAL_H
 #define BURROW_SRC_NET_FCGI_INTERNAL_H
 
+#include "burrow/net/http/fcgi.h"
+
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/io.h"

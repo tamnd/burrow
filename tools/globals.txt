@@ -377,3 +377,4 @@ global	src/crypto/elliptic.c	elliptic_once	tables	A SyncOnce, which is the synch
 global	src/crypto/ecdsa.c	ecdsa_curves	tables	The four FIPS curves with their orders as moduli and N-2, filled in once by ecdsa_init and only read after that, as Go's sync.OnceValue has it.
 global	src/crypto/ecdsa.c	ecdsa_once	tables	A SyncOnce, which is the synchronisation for ecdsa_curves.
 global	src/crypto/rsa.c	rsa_debug_flags	godebug	The rsa1024min setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
+global	src/crypto/x509.c	x509_debug_flags	godebug	The x509rsacrt setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.

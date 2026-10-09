@@ -1668,8 +1668,8 @@ Context ctx = httptrace_with_client_trace(a, context_background(), &trace);
 for (int i = 0; i < 2; i++) {
     Error err;
     IoReader none = {NULL, NULL};
-    HttpRequest *req = http_new_request_with_context(a, ctx, BURROW_S("GET"),
-                                                     ts->url, none, &err);
+    HttpRequest *req =
+        http_new_request_with_context(a, ctx, BURROW_S("GET"), ts->url, none, &err);
     HttpResponse *res = http_client_do(c, req, &err);
     if (res == NULL) {
         fmt_printf_v("error: %v\n", err);
@@ -1774,8 +1774,8 @@ HttputilReverseProxy proxy = {
     .rewrite = BURROW_FN(HttputilRewriteFunc, rewrite, target),
     .modify_response = BURROW_FN(HttputilModifyResponseFunc, modify_response, NULL),
 };
-HttptestServer *front =
-    httptest_new_server(heap_allocator(), httputil_reverse_proxy_as_handler(&proxy));
+HttptestServer *front = httptest_new_server(
+    heap_allocator(), httputil_reverse_proxy_as_handler(&proxy));
 
 HttpResponse *res = http_client_get(httptest_server_client(front),
                                     fmt_sprintf_v(a, "%s/users", front->url), &err);

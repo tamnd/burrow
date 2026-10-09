@@ -37,5 +37,7 @@ int main(void) {
 }
 
 /* Output:
-PENDING
+POST http://example.com/search?q=gopher
+host example.com, from 10.0.0.7:51234, 11 bytes
+User-Agent curl/8.5.0
 */

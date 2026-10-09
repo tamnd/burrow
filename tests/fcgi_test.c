@@ -54,7 +54,7 @@
 #define ARENA_END arena_free(&ar)
 
 static Slice bytes_of(Str s) {
-    return (Slice){(void *)(uintptr_t)s.p, s.len, s.len, NULL};
+    return (Slice){(void *)(uintptr_t)s.p, s.len, s.len, TYPE_BYTE};
 }
 
 static bool slice_eq(Slice x, Slice y) {
@@ -89,9 +89,9 @@ static void TestSize(TestingT *t) {
     Byte b[4];
     for (size_t i = 0; i < sizeof size_tests / sizeof size_tests[0]; i++) {
         Slice want = {(void *)(uintptr_t)size_tests[i].bytes, size_tests[i].n,
-                      size_tests[i].n, NULL};
+                      size_tests[i].n, TYPE_BYTE};
         Int n = burrow__fcgi_encode_size(b, size_tests[i].size);
-        Slice got = {b, n, n, NULL}, all = {b, 4, 4, NULL};
+        Slice got = {b, n, n, TYPE_BYTE}, all = {b, 4, 4, TYPE_BYTE};
         if (!slice_eq(got, want))
             testing_t_errorf_v(t, "%d expected %x, encoded %x", (Int)i, want, all);
         uint32_t size = burrow__fcgi_read_size(want, &n);
@@ -106,7 +106,7 @@ static void TestSize(TestingT *t) {
 /* ------------------------------------------------------------ TestStreams */
 
 static void put_bytes(BytesBuffer *b, const void *p, Int n) {
-    (void)bytes_buffer_write(b, (Slice){(void *)(uintptr_t)p, n, n, NULL}, NULL);
+    (void)bytes_buffer_write(b, (Slice){(void *)(uintptr_t)p, n, n, TYPE_BYTE}, NULL);
 }
 
 static void put_zeros(BytesBuffer *b, Int n) {
@@ -295,7 +295,8 @@ static void make_pair_record(BytesBuffer *b, uint16_t request_id, Str name, Str 
     memcpy(content + 2, name.p, (size_t)name.len);
     memcpy(content + 2 + name.len, value.p, (size_t)value.len);
     Int n = 2 + name.len + value.len;
-    make_record(b, BURROW__FCGI_TYPE_PARAMS, request_id, (Slice){content, n, n, NULL});
+    make_record(b, BURROW__FCGI_TYPE_PARAMS, request_id,
+                (Slice){content, n, n, TYPE_BYTE});
 }
 
 static const Byte begin_responder[8] = {0, BURROW__FCGI_ROLE_RESPONDER, 0, 0, 0, 0, 0,
@@ -306,7 +307,7 @@ static const Byte begin_responder[8] = {0, BURROW__FCGI_ROLE_RESPONDER, 0, 0, 0,
 static void stream_begin_type_stdin(BytesBuffer *b) {
     /* set up request 1 */
     make_record(b, BURROW__FCGI_TYPE_BEGIN_REQUEST, 1,
-                (Slice){(void *)(uintptr_t)begin_responder, 8, 8, NULL});
+                (Slice){(void *)(uintptr_t)begin_responder, 8, 8, TYPE_BYTE});
     /* add required parameters to request 1 */
     make_pair_record(b, 1, S("REQUEST_METHOD"), S("GET"));
     make_pair_record(b, 1, S("SERVER_PROTOCOL"), S("HTTP/1.1"));
@@ -319,7 +320,7 @@ static void stream_begin_type_stdin(BytesBuffer *b) {
 static void stream_full_request_stdin(BytesBuffer *b) {
     /* set up request */
     make_record(b, BURROW__FCGI_TYPE_BEGIN_REQUEST, 1,
-                (Slice){(void *)(uintptr_t)begin_responder, 8, 8, NULL});
+                (Slice){(void *)(uintptr_t)begin_responder, 8, 8, TYPE_BYTE});
     /* add required parameters */
     make_pair_record(b, 1, S("REQUEST_METHOD"), S("GET"));
     make_pair_record(b, 1, S("SERVER_PROTOCOL"), S("HTTP/1.1"));
@@ -450,8 +451,8 @@ static void TestMalformedParams(TestingT *t) {
         0,
     };
     BytesBuffer *rw = bytes_new_buffer(
-        heap_allocator(),
-        (Slice){(void *)(uintptr_t)input, (Int)sizeof input, (Int)sizeof input, NULL});
+        heap_allocator(), (Slice){(void *)(uintptr_t)input, (Int)sizeof input,
+                                  (Int)sizeof input, TYPE_BYTE});
     burrow__FcgiChild *c =
         serve_input(t, rw, http_serve_mux_as_handler(http_default_serve_mux));
     burrow__fcgi_child_release(c);

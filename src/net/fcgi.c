@@ -77,7 +77,7 @@ Error burrow__fcgi_conn_close(burrow__FcgiConn *c) {
 Error burrow__fcgi_record_read(burrow__FcgiRecord *rec, IoReader r) {
     Byte h[8];
     Error err = BURROW_NO_ERROR;
-    (void)io_read_full(r, (Slice){h, 8, 8, NULL}, &err);
+    (void)io_read_full(r, (Slice){h, 8, 8, TYPE_BYTE}, &err);
     if (BURROW_FAILED(err))
         return err;
     rec->h.version = h[0];
@@ -89,13 +89,13 @@ Error burrow__fcgi_record_read(burrow__FcgiRecord *rec, IoReader r) {
     if (rec->h.version != 1)
         return fcg_err_invalid_version;
     Int n = (Int)rec->h.content_length + (Int)rec->h.padding_length;
-    (void)io_read_full(r, (Slice){rec->buf, n, n, NULL}, &err);
+    (void)io_read_full(r, (Slice){rec->buf, n, n, TYPE_BYTE}, &err);
     return err;
 }
 
 Slice burrow__fcgi_record_content(burrow__FcgiRecord *rec) {
     Int n = rec->h.content_length;
-    return (Slice){rec->buf, n, n, NULL};
+    return (Slice){rec->buf, n, n, TYPE_BYTE};
 }
 
 /* writeRecord writes and sends a single record. */
@@ -116,7 +116,7 @@ Error burrow__fcgi_conn_write_record(burrow__FcgiConn *c, uint8_t rec_type,
     memcpy(buf + 8 + b.len, fcg_pad, h.padding_length);
     Int n = 8 + b.len + h.padding_length;
     Error err = BURROW_NO_ERROR;
-    (void)c->w.vt->write(c->w.data, (Slice){buf, n, n, NULL}, &err);
+    (void)c->w.vt->write(c->w.data, (Slice){buf, n, n, TYPE_BYTE}, &err);
     sync_mutex_unlock(&c->mutex);
     return err;
 }
@@ -127,7 +127,7 @@ Error burrow__fcgi_conn_write_end_request(burrow__FcgiConn *c, uint16_t req_id,
     fcg_put_uint32(b, (uint32_t)app_status);
     b[4] = protocol_status;
     return burrow__fcgi_conn_write_record(c, BURROW__FCGI_TYPE_END_REQUEST, req_id,
-                                          (Slice){b, 8, 8, NULL});
+                                          (Slice){b, 8, 8, TYPE_BYTE});
 }
 
 Error burrow__fcgi_conn_write_pairs(burrow__FcgiConn *c, uint8_t rec_type,
@@ -146,15 +146,15 @@ Error burrow__fcgi_conn_write_pairs(burrow__FcgiConn *c, uint8_t rec_type,
         Str k = *(const Str *)kp, v = *(const Str *)vp;
         Int n = burrow__fcgi_encode_size(b, (uint32_t)k.len);
         n += burrow__fcgi_encode_size(b + n, (uint32_t)v.len);
-        (void)burrow__fcgi_writer_write(w, (Slice){b, n, n, NULL}, &err);
+        (void)burrow__fcgi_writer_write(w, (Slice){b, n, n, TYPE_BYTE}, &err);
         if (BURROW_FAILED(err))
             goto out;
         (void)burrow__fcgi_writer_write(
-            w, (Slice){(void *)(uintptr_t)k.p, k.len, k.len, NULL}, &err);
+            w, (Slice){(void *)(uintptr_t)k.p, k.len, k.len, TYPE_BYTE}, &err);
         if (BURROW_FAILED(err))
             goto out;
         (void)burrow__fcgi_writer_write(
-            w, (Slice){(void *)(uintptr_t)v.p, v.len, v.len, NULL}, &err);
+            w, (Slice){(void *)(uintptr_t)v.p, v.len, v.len, TYPE_BYTE}, &err);
         if (BURROW_FAILED(err))
             goto out;
     }
@@ -211,13 +211,13 @@ static Int fcg_stream_write(void *self, Slice p, Error *err) {
         if (n > BURROW__FCGI_MAX_WRITE)
             n = BURROW__FCGI_MAX_WRITE;
         Error e = burrow__fcgi_conn_write_record(w->c, w->rec_type, w->req_id,
-                                                 (Slice){p.p, n, n, NULL});
+                                                 (Slice){p.p, n, n, TYPE_BYTE});
         if (BURROW_FAILED(e)) {
             BURROW_OUT(err, e);
             return nn;
         }
         nn += n;
-        p = (Slice){(Byte *)p.p + n, p.len - n, p.len - n, NULL};
+        p = (Slice){(Byte *)p.p + n, p.len - n, p.len - n, TYPE_BYTE};
     }
     BURROW_OUT(err, BURROW_NO_ERROR);
     return nn;

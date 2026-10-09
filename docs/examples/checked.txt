@@ -54,3 +54,4 @@ docs/guides/archive.md
 docs/guides/embed.md
 docs/guides/crypto.md
 docs/guides/log.md
+docs/guides/go.md

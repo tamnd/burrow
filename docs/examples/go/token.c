@@ -65,4 +65,18 @@ int main(void) {
 }
 
 /* Output:
+30 main.go:4:2
+main.go(1-46) util.go(47-147)
+util.go
+parser.y:41:1
+gen.go:4:1
+func  func   identifier=false exported=false
+Func  IDENT  identifier=true exported=true
+x1    IDENT  identifier=true exported=false
+1x    IDENT  identifier=false exported=false
+|| binds at 1
+== binds at 3
++ binds at 4
+* binds at 5
+<- binds at 0
 */

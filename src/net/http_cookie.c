@@ -80,10 +80,11 @@ static Error hc_error(const Str *text) {
 
 enum {
     HC_DEBUG_KNOWN = 1 << 0,
-    HC_DEBUG_MAX_SET = 1 << 1, /* httpcookiemaxnum is a number */
-    HC_DEBUG_LAX_CL = 1 << 2,  /* httplaxcontentlength=1 */
-    HC_DEBUG_MUX121 = 1 << 3,  /* httpmuxgo121=1 */
+    HC_DEBUG_MAX_SET = 1 << 1,      /* httpcookiemaxnum is a number */
+    HC_DEBUG_LAX_CL = 1 << 2,       /* httplaxcontentlength=1 */
+    HC_DEBUG_MUX121 = 1 << 3,       /* httpmuxgo121=1 */
     HC_DEBUG_KEEP_HEADERS = 1 << 4, /* httpservecontentkeepheaders=1 */
+    HC_DEBUG_NO_H2_SERVER = 1 << 5, /* http2server=0 */
 };
 
 static uint32_t hc_debug_flags;
@@ -131,6 +132,8 @@ static uint32_t hc_debug_parse(const char *v) {
     if (v != NULL && hc_godebug(v, "httpservecontentkeepheaders", &s) &&
         str_eq(s, BURROW_S("1")))
         f |= HC_DEBUG_KEEP_HEADERS;
+    if (v != NULL && hc_godebug(v, "http2server", &s) && str_eq(s, BURROW_S("0")))
+        f |= HC_DEBUG_NO_H2_SERVER;
     burrow__atomic64_store(&hc_debug_max, max);
     burrow__atomic_store_relaxed_u32(&hc_debug_flags, f);
     return f;
@@ -167,6 +170,10 @@ bool burrow__http_godebug_mux121(void) {
 
 bool burrow__http_godebug_serve_content_keep_headers(void) {
     return (hc_debug_load() & HC_DEBUG_KEEP_HEADERS) != 0;
+}
+
+bool burrow__http_godebug_http2server_disabled(void) {
+    return (hc_debug_load() & HC_DEBUG_NO_H2_SERVER) != 0;
 }
 
 /* cookieNumWithinMax. */

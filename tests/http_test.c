@@ -1,9 +1,9 @@
 /* Derived from Go's src/net/http/http_test.go.
  * Go source: go1.27.1.
  *
- * TestProtocols and TestRemovePort are Go's. TestForeachHeaderElement waits
- * for the server, where the function is. The rest are burrow's own, and what
- * they expect is what Go gives for the same input.
+ * TestProtocols, TestRemovePort and TestForeachHeaderElement are Go's. The
+ * rest are burrow's own, and what they expect is what Go gives for the same
+ * input.
  *
  * Copyright 2014 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -244,6 +244,58 @@ static void TestIsToken(TestingT *t) {
     }
 }
 
+typedef struct ForeachGot {
+    Str v[8];
+    Int n;
+} ForeachGot;
+
+static void foreach_append(void *env, Str v) {
+    ForeachGot *got = (ForeachGot *)env;
+    if (got->n < (Int)(sizeof got->v / sizeof got->v[0]))
+        got->v[got->n] = v;
+    got->n++;
+}
+
+static void TestForeachHeaderElement(TestingT *t) {
+    static const struct {
+        const char *in;
+        const char *want[5];
+    } tests[] = {
+        {"Foo", {"Foo"}},
+        {" Foo", {"Foo"}},
+        {"Foo ", {"Foo"}},
+        {" Foo ", {"Foo"}},
+
+        {"foo", {"foo"}},
+        {"anY-cAsE", {"anY-cAsE"}},
+
+        {"", {0}},
+        {",,,,  ,  ,,   ,,, ,", {0}},
+
+        {" Foo,Bar, Baz,lower,,Quux ", {"Foo", "Bar", "Baz", "lower", "Quux"}},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
+        ForeachGot got = {0};
+        burrow__http_foreach_header_element(str_from_cstr(tests[i].in), foreach_append,
+                                            &got);
+        Str want[5];
+        Int nwant = 0;
+        while (nwant < 5 && tests[i].want[nwant] != NULL) {
+            want[nwant] = str_from_cstr(tests[i].want[nwant]);
+            nwant++;
+        }
+        bool equal = got.n == nwant;
+        for (Int j = 0; equal && j < nwant; j++)
+            equal = str_eq(got.v[j], want[j]);
+        if (!equal) {
+            Int n = got.n < 8 ? got.n : 8;
+            testing_t_errorf_v(t, "foreachHeaderElement(%q) = %q; want %q", tests[i].in,
+                               slice_from(got.v, n, n, TYPE_STRING),
+                               slice_from(want, nwant, nwant, TYPE_STRING));
+        }
+    }
+}
+
 #define TESTS(X)                                                                       \
     X(TestProtocols)                                                                   \
     X(TestRemovePort)                                                                  \
@@ -251,6 +303,7 @@ static void TestIsToken(TestingT *t) {
     X(TestStatusText)                                                                  \
     X(TestHexEscapeNonASCII)                                                           \
     X(TestStringContainsCTLByte)                                                       \
-    X(TestIsToken)
+    X(TestIsToken)                                                                     \
+    X(TestForeachHeaderElement)
 
 TESTING_MAIN(TESTS)

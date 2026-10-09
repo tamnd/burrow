@@ -8,6 +8,7 @@
  * in the LICENSE file. */
 
 #include "../xnet/httpguts.h"
+#include "http2.h"
 #include "http_internal.h"
 #include "internal.h"
 
@@ -331,19 +332,6 @@ static Str sv_sub(Str s, Int lo, Int hi) {
     return str_from_bytes(s.p + lo, hi - lo);
 }
 
-/* textproto.TrimString. */
-static Str sv_trim(Str s) {
-    while (s.len > 0 &&
-           (s.p[0] == ' ' || s.p[0] == '\t' || s.p[0] == '\r' || s.p[0] == '\n')) {
-        s.p++;
-        s.len--;
-    }
-    while (s.len > 0 && (s.p[s.len - 1] == ' ' || s.p[s.len - 1] == '\t' ||
-                         s.p[s.len - 1] == '\r' || s.p[s.len - 1] == '\n'))
-        s.len--;
-    return s;
-}
-
 /* The server's logf. */
 #define sv_logf(s, ...) log_logger_printf_v((s)->error_log, __VA_ARGS__)
 
@@ -395,6 +383,14 @@ static Int sv_max_header_value_count(const HttpServer *s) {
                                          : HTTP_DEFAULT_MAX_HEADER_VALUE_COUNT;
 }
 
+bool burrow__http_server_do_keep_alives(HttpServer *srv) {
+    return sv_do_keep_alives(srv);
+}
+
+Int burrow__http_server_max_header_value_count(HttpServer *srv) {
+    return sv_max_header_value_count(srv);
+}
+
 /* initialReadLimitSize, with bufio's slop. */
 static int64_t sv_initial_read_limit_size(const HttpServer *s) {
     return (int64_t)sv_max_header_bytes(s) + 4096;
@@ -413,6 +409,9 @@ static HttpProtocols sv_protocols(const HttpServer *s) {
         return *s->protocols;
     HttpProtocols p = {0};
     http_protocols_set_http1(&p, true);
+    /* GODEBUG http2server=0 is the historic way to turn HTTP/2 off. */
+    if (!burrow__http_godebug_http2server_disabled())
+        http_protocols_set_http2(&p, true);
     return p;
 }
 
@@ -699,19 +698,13 @@ static void sv_declare_trailer(sv_Response *w, Str k) {
     w->trailers = slice_append(sv_wa(w), w->trailers, &k, 1);
 }
 
+static void sv_declare_trailer_cb(void *env, Str k) {
+    sv_declare_trailer((sv_Response *)env, k);
+}
+
 /* foreachHeaderElement with declareTrailer. */
 static void sv_declare_trailers(sv_Response *w, Str v) {
-    v = sv_trim(v);
-    while (v.len > 0) {
-        Int i = strings_index_byte(v, ',');
-        Str f = i < 0 ? v : sv_sub(v, 0, i);
-        f = sv_trim(f);
-        if (f.len > 0)
-            sv_declare_trailer(w, f);
-        if (i < 0)
-            break;
-        v = sv_sub(v, i + 1, v.len);
-    }
+    burrow__http_foreach_header_element(v, sv_declare_trailer_cb, w);
 }
 
 /* writeStatusLine. */
@@ -1642,6 +1635,11 @@ static void sv_server_handler_serve(HttpServer *s, HttpResponseWriter rw,
     http_handler_serve_http(handler, rw, req);
 }
 
+void burrow__http_server_handler_serve(HttpServer *srv, HttpResponseWriter w,
+                                       HttpRequest *req) {
+    sv_server_handler_serve(srv, w, req);
+}
+
 /* A copy of a caught panic's value that outlives the frame that caught it, as
  * sync's once does. */
 static Any sv_keep(burrow__PanicValue *storage, Any v) {
@@ -1787,6 +1785,36 @@ static void sv_free_rwc(NetConn rwc) {
         net_unix_conn_free(unix_conn);
 }
 
+/* hasPreface: whether the connection starts with the first n bytes of the
+ * HTTP/2 client preface. The read limit keeps bufr from taking in anything
+ * past them, so the HTTP/2 server can read the rest from the connection. */
+static bool sv_has_preface(sv_Conn *c, Int n) {
+    static const char preface[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+    c->r.remain = (int64_t)n - (int64_t)bufio_reader_buffered(c->bufr);
+    Error err = BURROW_NO_ERROR;
+    Slice got = bufio_reader_peek(c->bufr, n, &err);
+    c->r.remain = INT64_MAX;
+    return !BURROW_FAILED(err) && got.len == n &&
+           memcmp(got.p, preface, (size_t)n) == 0;
+}
+
+/* maybeServeUnencryptedHTTP2 and serveHTTP2Conn: true when the connection
+ * was an HTTP/2 one and is now done. */
+static bool sv_maybe_serve_unencrypted_http2(sv_Conn *c) {
+    HttpServer *s = c->server;
+    if (!burrow__http2_server_configured(s))
+        return false;
+    if (!sv_has_preface(c, 14)) /* "PRI * HTTP/2.0" */
+        return false;
+    if (!sv_has_preface(c, 24))
+        return false;
+    sv_set_state(c, HTTP_STATE_ACTIVE, false);
+    (void)sv_set_read_deadline(c->rwc, sv_zero_time());
+    (void)sv_set_write_deadline(c->rwc, sv_zero_time());
+    burrow__http2_serve_conn(s, sv_alloc(s), c->rwc, c->cctx, true);
+    return true;
+}
+
 /* conn.serve, on a goroutine of its own. */
 static void sv_conn_serve(void *env) {
     sv_Conn *c = (sv_Conn *)env;
@@ -1823,6 +1851,10 @@ static void sv_conn_serve(void *env) {
     Duration d = sv_read_header_timeout(s);
     if (d > 0)
         (void)sv_set_read_deadline(c->rwc, time_add(time_now(), d));
+
+    if (http_protocols_unencrypted_http2(sv_protocols(s)) &&
+        sv_maybe_serve_unencrypted_http2(c))
+        goto done;
 
     if (!http_protocols_http1(sv_protocols(s)))
         goto done;
@@ -2069,6 +2101,17 @@ static Error sv_accept_loop(HttpServer *s, sv_Listener *ln, NetListener orig,
     }
 }
 
+/* onceSetNextProtoDefaults, without the TLS parts. It runs on every Serve,
+ * which is fine since configuring is done once. */
+static bool sv_setup_http2(HttpServer *s) {
+    HttpProtocols p = sv_protocols(s);
+    if (!http_protocols_http2(p) && !http_protocols_unencrypted_http2(p))
+        return true;
+    if (burrow__http_godebug_http2server_disabled())
+        return true;
+    return burrow__http2_configure_server(s);
+}
+
 Error http_server_serve(HttpServer *s, NetListener l) {
     Alloc *sa = sv_alloc(s);
     sv_Listener *ln = (sv_Listener *)mem_alloc(sa, sizeof *ln, _Alignof(sv_Listener));
@@ -2080,6 +2123,10 @@ Error http_server_serve(HttpServer *s, NetListener l) {
     ln->l = l;
 
     Error err;
+    if (!sv_setup_http2(s)) {
+        err = burrow_err_out_of_memory;
+        goto close;
+    }
     if (!sv_track_listener(s, ln, true)) {
         err = http_err_server_closed;
         goto close;
@@ -2642,12 +2689,28 @@ static void sv_timeout_handler_serve(void *self, HttpResponseWriter w, HttpReque
     bool finished = chan_select(cases, 2) == 0;
     sync_mutex_lock(&tw->mu);
     if (finished && !panicked) {
+        /* Go's dst[k] = vv shares the slices. Here they are in tw's arena,
+         * which goes before the response is written out, so they are copied
+         * into dst's own allocator. */
         HttpHeader dst = http_response_writer_header(w);
+        Alloc *da = burrow__map_allocator(dst);
         MapIter it = map_iter(tw->h);
         const void *k;
         void *v;
-        while (map_next(&it, &k, &v))
-            (void)map_set(dst, k, v);
+        while (map_next(&it, &k, &v)) {
+            const Slice *vv = (const Slice *)v;
+            Str *cp = NULL;
+            if (vv->len > 0) {
+                cp = (Str *)mem_alloc(da, (size_t)vv->len * sizeof(Str), _Alignof(Str));
+                if (cp == NULL)
+                    continue;
+                for (Int i = 0; i < vv->len; i++)
+                    cp[i] = str_clone(da, ((const Str *)vv->p)[i]);
+            }
+            Str key = str_clone(da, *(const Str *)k);
+            Slice vals = slice_from(cp, vv->len, vv->len, TYPE_STRING);
+            (void)map_set(dst, &key, &vals);
+        }
         if (!tw->wrote_header)
             tw->code = HTTP_STATUS_OK;
         http_response_writer_write_header(w, tw->code);

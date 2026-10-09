@@ -56,6 +56,7 @@ enum {
     H2_DEBUG_KNOWN = 1 << 0,
     H2_DEBUG_VERBOSE = 1 << 1,
     H2_DEBUG_FRAMES = 1 << 2,
+    H2_DEBUG_XCONNECT = 1 << 3,
 };
 
 static uint32_t h2_debug_flags;
@@ -67,6 +68,8 @@ static uint32_t h2_debug_parse(const char *v) {
             f |= H2_DEBUG_VERBOSE;
         if (strstr(v, "http2debug=2") != NULL)
             f |= H2_DEBUG_VERBOSE | H2_DEBUG_FRAMES;
+        if (strstr(v, "http2xconnect=1") != NULL)
+            f |= H2_DEBUG_XCONNECT;
     }
     burrow__atomic_store_relaxed_u32(&h2_debug_flags, f);
     return f;
@@ -112,6 +115,18 @@ static void h2_std_log(void *env, Str msg) {
 }
 
 static void h2_std_log_str(Str msg) {
+    h2_std_log(NULL, msg);
+}
+
+bool burrow__http2_verbose_logs(void) {
+    return h2_verbose();
+}
+
+bool burrow__http2_extended_connect_disabled(void) {
+    return (h2_debug() & H2_DEBUG_XCONNECT) == 0;
+}
+
+void burrow__http2_log(Str msg) {
     h2_std_log(NULL, msg);
 }
 
@@ -2007,6 +2022,16 @@ Error burrow__http2_framer_write_data(Http2Framer *fr, uint32_t stream_id,
 
 Error burrow__http2_framer_write_data_padded(Http2Framer *fr, uint32_t stream_id,
                                              bool end_stream, Slice data, Slice pad) {
+    Error err =
+        burrow__http2_framer_start_write_data_padded(fr, stream_id, end_stream, data, pad);
+    if (BURROW_FAILED(err))
+        return err;
+    return burrow__http2_framer_end_write(fr);
+}
+
+Error burrow__http2_framer_start_write_data_padded(Http2Framer *fr, uint32_t stream_id,
+                                                   bool end_stream, Slice data,
+                                                   Slice pad) {
     if (!h2_valid_stream_id(stream_id) && !fr->allow_illegal_writes)
         return burrow__http2_err_stream_id;
     if (pad.len > 0) {
@@ -2029,7 +2054,7 @@ Error burrow__http2_framer_write_data_padded(Http2Framer *fr, uint32_t stream_id
         h2_wbyte(fr, (Byte)pad.len);
     h2_wput(fr, data.p, data.len);
     h2_wput(fr, pad.p, pad.len);
-    return burrow__http2_framer_end_write(fr);
+    return BURROW_NO_ERROR;
 }
 
 Error burrow__http2_framer_write_settings(Http2Framer *fr, const Http2Setting *settings,

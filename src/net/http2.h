@@ -6,7 +6,9 @@
  * connections beyond the order HEADERS and CONTINUATION frames have to come
  * in. With read_meta_headers set it puts a HEADERS frame and the
  * CONTINUATION frames after it back together and decodes the header block
- * with HPACK.
+ * with HPACK. Under it are the pieces the server and client share: the flow
+ * control windows from flow.go, the chunked dataBuffer and the pipe a stream's
+ * body is read through.
  *
  * Go's Frame is an interface with a type for each kind of frame. Here an
  * Http2Frame is a tagged union of the same structs, with the FrameHeader they
@@ -46,12 +48,17 @@
 #define BURROW_SRC_NET_HTTP2_H
 
 #include "burrow/bytes.h"
+#include "burrow/chan.h"
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/func.h"
 #include "burrow/io.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
+#include "burrow/net/http.h"
+#include "burrow/net/url.h"
 #include "burrow/slice.h"
+#include "burrow/sync.h"
 
 #include "../xnet/hpack.h"
 
@@ -652,8 +659,458 @@ void burrow__http2_framer_start_write(Http2Framer *fr, Http2FrameType t,
 void burrow__http2_framer_write_bytes(Http2Framer *fr, Slice v);
 Error burrow__http2_framer_end_write(Http2Framer *fr);
 
+/* startWriteDataPadded: write_data_padded up to the end_write, which the
+ * server does on another goroutine for a large frame. */
+Error burrow__http2_framer_start_write_data_padded(Http2Framer *fr, uint32_t stream_id,
+                                                   bool end_stream, Slice data,
+                                                   Slice pad);
+
 /* Sets what GODEBUG says from value, or reads GODEBUG again when value is
  * NULL. For tests. */
 void burrow__http2_godebug_set(const char *value);
+
+/* ------------------------------------------------------------ flow control
+ *
+ * flow.go. An Http2Inflow is the window this end gave the peer, and an
+ * Http2Outflow is the window the peer gave this end. Both are zero values
+ * ready to use, as Go's are. */
+
+/* inflowMinRefresh, the fewest bytes a WINDOW_UPDATE is sent for. */
+enum { HTTP2_INFLOW_MIN_REFRESH = 4 << 10 };
+
+typedef struct Http2Inflow {
+    int32_t avail;
+    int32_t unsent;
+} Http2Inflow;
+
+void burrow__http2_inflow_init(Http2Inflow *f, int32_t n);
+
+/* Gives n bytes back to the peer's window and returns how many to send in a
+ * WINDOW_UPDATE, which is zero while the update is too small to be worth a
+ * frame. Panics, as Go's does, when n is negative or the window would pass
+ * 2^31-1. */
+int32_t burrow__http2_inflow_add(Http2Inflow *f, Int n);
+
+/* Takes n bytes from the window and reports whether there were that many. */
+bool burrow__http2_inflow_take(Http2Inflow *f, uint32_t n);
+
+/* takeInflows: takes n bytes from both windows, or from neither when either
+ * is short. */
+bool burrow__http2_take_inflows(Http2Inflow *f1, Http2Inflow *f2, uint32_t n);
+
+typedef struct Http2Outflow {
+    /* The DATA bytes this end may send. */
+    int32_t n;
+    /* The connection's window, shared by its streams. NULL on the
+     * connection's own. */
+    struct Http2Outflow *conn;
+} Http2Outflow;
+
+void burrow__http2_outflow_set_conn_flow(Http2Outflow *f, Http2Outflow *cf);
+int32_t burrow__http2_outflow_available(const Http2Outflow *f);
+
+/* Takes n bytes from the window and the connection's. Panics when n is more
+ * than available gives. */
+void burrow__http2_outflow_take(Http2Outflow *f, int32_t n);
+
+/* Adds n, which may be negative, and reports false, changing nothing, when
+ * the sum would pass 2^31-1. */
+bool burrow__http2_outflow_add(Http2Outflow *f, int32_t n);
+
+/* ------------------------------------------------------------- dataBuffer
+ *
+ * databuffer.go. The bytes of DATA frames for one stream, kept in chunks of
+ * 1, 2, 4, 8 or 16 KiB, so a connection can limit the memory it holds
+ * without limiting how big one body can be. Go takes the chunks from a
+ * sync.Pool for each size. Here they come from a, or the heap when a is
+ * NULL, and go back as soon as they are read, since burrow's allocators do
+ * the job the pools do in Go. A zeroed one is ready to use. */
+typedef struct Http2DataBuffer {
+    Alloc *a;
+    Slice *chunks; /* each one's len is its size class */
+    Int nchunks;
+    Int chunks_cap;
+    Int r;            /* the next byte to read is chunks[0][r] */
+    Int w;            /* the next byte to write is chunks[nchunks-1][w] */
+    Int size;         /* the bytes buffered */
+    int64_t expected; /* at least this many bytes are still to come, if > 0 */
+} Http2DataBuffer;
+
+/* errReadEmpty. */
+extern const Error burrow__http2_err_read_empty;
+
+/* Read copies into p, and gives errReadEmpty when there is nothing. */
+Int burrow__http2_data_buffer_read(Http2DataBuffer *b, Slice p, Error *err);
+Int burrow__http2_data_buffer_len(const Http2DataBuffer *b);
+
+/* Write appends p. It fails only when an allocation does, and then gives
+ * burrow_err_out_of_memory and the count of what it kept. */
+Int burrow__http2_data_buffer_write(Http2DataBuffer *b, Slice p, Error *err);
+
+/* Gives back the chunks still held. The buffer is empty and usable after. */
+void burrow__http2_data_buffer_free(Http2DataBuffer *b);
+
+/* ------------------------------------------------------------------- pipe
+ *
+ * pipe.go. A goroutine-safe reader and writer over one buffer, like io.Pipe
+ * with a buffer in the middle and no halves. A zeroed Http2Pipe is ready to
+ * use once it has a buffer, as Go's is. Errors given to it are copied into
+ * its own arena, and the ones it gives back are copies in the caller's error
+ * arena, so errors_is matches them against what was given.
+ * burrow__http2_pipe_free gives back the arena and the done channel and
+ * leaves the buffer alone, which is the caller's. */
+
+/* pipeBuffer, the interface the buffer is behind. */
+typedef struct Http2PipeBufferVT {
+    Int (*len)(void *self);
+    Int (*read)(void *self, Slice p, Error *err);
+    Int (*write)(void *self, Slice p, Error *err);
+} Http2PipeBufferVT;
+
+typedef struct Http2PipeBuffer {
+    const Http2PipeBufferVT *vt; /* NULL when there is none */
+    void *self;
+} Http2PipeBuffer;
+
+/* A dataBuffer and a bytes.Buffer as a pipeBuffer. */
+Http2PipeBuffer burrow__http2_data_buffer_as_pipe_buffer(Http2DataBuffer *b);
+Http2PipeBuffer burrow__http2_bytes_buffer_as_pipe_buffer(BytesBuffer *b);
+
+typedef struct Http2Pipe {
+    SyncMutex mu;
+    SyncCond c;        /* c.l is set to mu on first use */
+    Http2PipeBuffer b; /* none once reading is done */
+    Int unread;        /* the bytes left unread when done */
+    Error err;         /* the read error once empty, and set means closed */
+    Error break_err;   /* the read error straight away */
+    Chan *donec;       /* closed on error */
+    Func read_fn;      /* run in a Read before the error, if f is set */
+    Arena err_arena;   /* where err and break_err are */
+} Http2Pipe;
+
+/* errClosedPipeWrite and errUninitializedPipeWrite. */
+extern const Error burrow__http2_err_closed_pipe_write;
+extern const Error burrow__http2_err_uninitialized_pipe_write;
+
+/* setBuffer. Does nothing to a closed pipe. */
+void burrow__http2_pipe_set_buffer(Http2Pipe *p, Http2PipeBuffer b);
+Int burrow__http2_pipe_len(Http2Pipe *p);
+
+/* Read waits for data and copies it into d. */
+Int burrow__http2_pipe_read(Http2Pipe *p, Slice d, Error *err);
+
+/* Write copies d into the buffer and wakes a reader. */
+Int burrow__http2_pipe_write(Http2Pipe *p, Slice d, Error *err);
+
+/* CloseWithError: the next Read gives err once the data is read. err must be
+ * an error. */
+void burrow__http2_pipe_close_with_error(Http2Pipe *p, Error err);
+
+/* BreakWithError: the next Read gives err straight away, and the data left
+ * is counted as unread. */
+void burrow__http2_pipe_break_with_error(Http2Pipe *p, Error err);
+
+/* closeWithErrorAndCode: CloseWithError that runs fn in the reader before it
+ * gives the error, once. */
+void burrow__http2_pipe_close_with_error_and_code(Http2Pipe *p, Error err, Func fn);
+
+/* Err: the error BreakWithError or CloseWithError set first, if any. */
+Error burrow__http2_pipe_err(Http2Pipe *p);
+
+/* Done: a channel that is closed when the pipe is. It is the pipe's, and
+ * pipe_free frees it. */
+BURROW_BORROWS(ret, p) Chan *burrow__http2_pipe_done(Http2Pipe *p);
+
+IoReader burrow__http2_pipe_as_io_reader(Http2Pipe *p);
+IoWriter burrow__http2_pipe_as_io_writer(Http2Pipe *p);
+
+void burrow__http2_pipe_free(Http2Pipe *p);
+
+/* --------------------------------------------------------------- logging */
+
+/* Whether GODEBUG has http2debug=1 or 2, which is Go's VerboseLogs. */
+bool burrow__http2_verbose_logs(void);
+
+/* disableExtendedConnectProtocol, which is true unless GODEBUG has
+ * http2xconnect=1. */
+bool burrow__http2_extended_connect_disabled(void);
+
+/* log.Printf: the date and time, msg and a newline, to standard error. */
+void burrow__http2_log(Str msg);
+
+/* ---------------------------------------------------------- frame writers
+ *
+ * write.go. Go's writeFramer is an interface with a type for each frame the
+ * server writes. Here an Http2WriteFramer is a tagged union of them, small
+ * enough to copy, made with the burrow__http2_write_ functions. The two big
+ * ones, writeResHeaders and writePushPromise, are pointers to structs that
+ * stay the server's, and so are the settings a SETTINGS writer points at. */
+
+typedef struct Http2ServerConn Http2ServerConn;
+typedef struct Http2Stream Http2Stream;
+
+/* writeContext, which the server is. header_encoder gives the HPACK encoder
+ * and the buffer it writes into. */
+typedef struct Http2WriteContextVT {
+    Http2Framer *(*framer)(void *self);
+    Error (*flush)(void *self);
+    Error (*close_conn)(void *self);
+    HpackEncoder *(*header_encoder)(void *self, BytesBuffer **buf);
+} Http2WriteContextVT;
+
+typedef struct Http2WriteContext {
+    const Http2WriteContextVT *vt;
+    void *self;
+} Http2WriteContext;
+
+/* writeResHeaders: a HEADERS frame and any CONTINUATION frames for a response
+ * header or trailer. */
+typedef struct Http2WriteResHeaders {
+    uint32_t stream_id;
+    Int http_res_code; /* 0 means no :status */
+    HttpHeader h;      /* may be NULL */
+    /* Which keys of h to write, or NULL for all of them. */
+    const Str *trailers;
+    Int ntrailers;
+    bool end_stream;
+    Str date;
+    Str content_type;
+    Str content_length;
+} Http2WriteResHeaders;
+
+/* allocatePromisedID, which the server runs just before it writes the
+ * PUSH_PROMISE. */
+BURROW_FUNC(Http2AllocatePromisedIDFunc, uint32_t, Error *err);
+
+/* writePushPromise: a PUSH_PROMISE frame and any CONTINUATION frames. */
+typedef struct Http2WritePushPromise {
+    uint32_t stream_id; /* the stream doing the pushing */
+    Str method;
+    const Url *url; /* for :scheme, :authority and :path */
+    HttpHeader h;
+    Http2AllocatePromisedIDFunc allocate_promised_id;
+    uint32_t promised_id;
+} Http2WritePushPromise;
+
+/* Which of Go's writer types an Http2WriteFramer is. NIL is Go's nil, which
+ * is what reply_to_writer leaves behind. */
+typedef enum Http2WriteKind {
+    HTTP2_WRITE_NIL,
+    HTTP2_WRITE_FLUSH,
+    HTTP2_WRITE_SETTINGS,
+    HTTP2_WRITE_GO_AWAY,
+    HTTP2_WRITE_DATA,
+    HTTP2_WRITE_HANDLER_PANIC_RST,
+    HTTP2_WRITE_STREAM_ERROR,
+    HTTP2_WRITE_PING,
+    HTTP2_WRITE_PING_ACK,
+    HTTP2_WRITE_SETTINGS_ACK,
+    HTTP2_WRITE_RES_HEADERS,
+    HTTP2_WRITE_PUSH_PROMISE,
+    HTTP2_WRITE_100_CONTINUE,
+    HTTP2_WRITE_WINDOW_UPDATE,
+} Http2WriteKind;
+
+/* writeData. p is the handler's, which waits until it is written. */
+typedef struct Http2WriteData {
+    uint32_t stream_id;
+    Slice p;
+    bool end_stream;
+} Http2WriteData;
+
+typedef struct Http2WriteFramer {
+    Http2WriteKind kind;
+    union {
+        struct {
+            const Http2Setting *p;
+            Int n;
+        } settings;
+        struct {
+            uint32_t max_stream_id;
+            Http2ErrCode code;
+        } go_away;
+        Http2WriteData data;
+        /* handlerPanicRST's and write100ContinueHeadersFrame's. */
+        uint32_t stream_id;
+        Http2StreamError stream_error;
+        Byte ping[8]; /* writePing's and writePingAck's */
+        Http2WriteResHeaders *res_headers;
+        Http2WritePushPromise *push_promise;
+        struct {
+            uint32_t stream_id; /* 0 for the connection */
+            uint32_t n;
+        } window_update;
+    } u;
+} Http2WriteFramer;
+
+Http2WriteFramer burrow__http2_write_flush(void);
+Http2WriteFramer burrow__http2_write_settings(const Http2Setting *settings, Int n);
+Http2WriteFramer burrow__http2_write_go_away(uint32_t max_stream_id, Http2ErrCode code);
+Http2WriteFramer burrow__http2_write_data(uint32_t stream_id, Slice p, bool end_stream);
+Http2WriteFramer burrow__http2_write_handler_panic_rst(uint32_t stream_id);
+Http2WriteFramer burrow__http2_write_stream_error(Http2StreamError se);
+Http2WriteFramer burrow__http2_write_ping(const Byte data[8]);
+Http2WriteFramer burrow__http2_write_ping_ack(const Byte data[8]);
+Http2WriteFramer burrow__http2_write_settings_ack(void);
+Http2WriteFramer burrow__http2_write_res_headers(Http2WriteResHeaders *rh);
+Http2WriteFramer burrow__http2_write_push_promise(Http2WritePushPromise *pp);
+Http2WriteFramer burrow__http2_write_100_continue(uint32_t stream_id);
+Http2WriteFramer burrow__http2_write_window_update(uint32_t stream_id, uint32_t n);
+
+/* writeFrame. Panics for a NIL writer. */
+Error burrow__http2_write_frame(const Http2WriteFramer *w, Http2WriteContext ctx);
+
+/* staysWithinBuffer: whether the writer writes no more than max bytes and
+ * does not flush. */
+bool burrow__http2_write_stays_within_buffer(const Http2WriteFramer *w, Int max);
+
+/* writeEndsStream: whether the frame leaves the stream half closed (local).
+ * Panics for a NIL writer, as Go's does for nil. */
+bool burrow__http2_write_ends_stream(const Http2WriteFramer *w);
+
+/* ------------------------------------------------------- write scheduling
+ *
+ * writesched.go, writesched_roundrobin.go and
+ * writesched_priority_rfc9218.go. Go 1.27 has only these two schedulers.
+ *
+ * A scheduler copies the requests pushed to it into queues from the
+ * Alloc it was made with. Go's cannot run out of memory, and here open_stream
+ * and push say false when they do, with nothing changed. */
+
+/* The parts of server.go's stream and serverConn the scheduler looks at. The
+ * server's other fields come with the server. */
+struct Http2ServerConn {
+    int32_t max_frame_size;
+};
+
+struct Http2Stream {
+    Http2ServerConn *sc;
+    uint32_t id;
+    Http2Outflow flow;
+};
+
+/* FrameWriteRequest. */
+typedef struct Http2FrameWriteRequest {
+    Http2WriteFramer write;
+    /* The stream the frame is on, or NULL for frames that are on none, such
+     * as PING and SETTINGS, and for RST_STREAM, whose StreamError says the
+     * stream. */
+    Http2Stream *stream;
+    /* NULL, or a Chan of Error with room for one, which is sent the write's
+     * result. */
+    Chan *done;
+} Http2FrameWriteRequest;
+
+/* StreamID: 0 for a frame on no stream. */
+uint32_t burrow__http2_frame_write_request_stream_id(const Http2FrameWriteRequest *wr);
+
+/* isControl: on no stream, or RST_STREAM, for MaxQueuedControlFrames. */
+bool burrow__http2_frame_write_request_is_control(const Http2FrameWriteRequest *wr);
+
+/* DataSize: the flow control bytes the frame needs, which is 0 but for DATA. */
+Int burrow__http2_frame_write_request_data_size(const Http2FrameWriteRequest *wr);
+
+/* Consume takes min(n, available) bytes, where available is what the
+ * stream's flow control and the connection's frame size allow. It gives back
+ * 0 when it can take none, 1 with the whole frame in consumed, and 2 with the
+ * bytes taken in consumed and the rest in rest, and the bytes taken come off
+ * the stream's window. */
+Int burrow__http2_frame_write_request_consume(const Http2FrameWriteRequest *wr,
+                                              int32_t n,
+                                              Http2FrameWriteRequest *consumed,
+                                              Http2FrameWriteRequest *rest);
+
+/* replyToWriter sends err to done, if there is one, and makes the writer
+ * NIL. It panics if done has no room. */
+void burrow__http2_frame_write_request_reply_to_writer(Http2FrameWriteRequest *wr,
+                                                       Error err);
+
+/* OpenStreamOptions. pusher_id is 0 for a stream the client opened. */
+typedef struct Http2OpenStreamOptions {
+    uint32_t pusher_id;
+    Http2PriorityParam priority;
+} Http2OpenStreamOptions;
+
+/* WriteScheduler. Its methods are never called at the same time. */
+typedef struct Http2WriteSchedulerVT {
+    bool (*open_stream)(void *self, uint32_t stream_id, Http2OpenStreamOptions opts);
+    void (*close_stream)(void *self, uint32_t stream_id);
+    void (*adjust_stream)(void *self, uint32_t stream_id, Http2PriorityParam p);
+    bool (*push)(void *self, Http2FrameWriteRequest wr);
+    bool (*pop)(void *self, Http2FrameWriteRequest *wr);
+    void (*free)(void *self);
+} Http2WriteSchedulerVT;
+
+typedef struct Http2WriteScheduler {
+    const Http2WriteSchedulerVT *vt; /* NULL when making it ran out of memory */
+    void *self;
+} Http2WriteScheduler;
+
+/* newRoundRobinWriteScheduler: control frames first, and then the streams
+ * that have something to write, in turn. */
+Http2WriteScheduler burrow__http2_new_round_robin_write_scheduler(Alloc *a);
+
+/* newPriorityWriteSchedulerRFC9218: control frames first, and then by RFC
+ * 9218 urgency, in turn among incremental streams and one at a time among the
+ * rest. */
+Http2WriteScheduler burrow__http2_new_priority_write_scheduler_rfc9218(Alloc *a);
+
+/* Whether ws is the RFC 9218 one, which Go asks with a type assertion. */
+bool burrow__http2_write_scheduler_is_rfc9218(Http2WriteScheduler ws);
+
+/* OpenStream panics for a stream that is open already. CloseStream drops
+ * whatever the stream has queued. AdjustStream may name a stream that is not
+ * open. Push queues a frame, and Pop takes the next one that can be written,
+ * or says false. */
+bool burrow__http2_write_scheduler_open_stream(Http2WriteScheduler ws,
+                                               uint32_t stream_id,
+                                               Http2OpenStreamOptions opts);
+void burrow__http2_write_scheduler_close_stream(Http2WriteScheduler ws,
+                                                uint32_t stream_id);
+void burrow__http2_write_scheduler_adjust_stream(Http2WriteScheduler ws,
+                                                 uint32_t stream_id,
+                                                 Http2PriorityParam p);
+bool burrow__http2_write_scheduler_push(Http2WriteScheduler ws,
+                                        Http2FrameWriteRequest wr);
+bool burrow__http2_write_scheduler_pop(Http2WriteScheduler ws,
+                                       Http2FrameWriteRequest *wr);
+void burrow__http2_write_scheduler_free(Http2WriteScheduler ws);
+
+/* Not Go's. The server's requests each hold the stream they are on, which Go
+ * leaves to the collector. retain is called when Pop splits a DATA request in
+ * two, on the part left in the queue, and drop on each request the scheduler
+ * throws away unwritten, when its stream closes or the scheduler is freed.
+ * Either may be NULL, and both are by default. */
+typedef struct Http2WriteRefHooks {
+    void (*retain)(void *ctx, const Http2FrameWriteRequest *wr);
+    void (*drop)(void *ctx, Http2FrameWriteRequest *wr);
+    void *ctx;
+} Http2WriteRefHooks;
+
+void burrow__http2_write_scheduler_set_hooks(Http2WriteScheduler ws,
+                                             Http2WriteRefHooks hooks);
+
+/* ------------------------------------------------------------------ server */
+
+/* The server's errors. */
+extern const Error burrow__http2_err_client_disconnected;
+extern const Error burrow__http2_err_closed_body;
+extern const Error burrow__http2_err_handler_complete;
+extern const Error burrow__http2_err_stream_closed;
+extern const Error burrow__http2_err_preface_timeout;
+extern const Error burrow__http2_err_handler_panicked;
+extern const Error burrow__http2_err_handler_wrote_too_much;
+
+/* Server.ServeConn as net/http calls it: serves HTTP/2 on c until the
+ * connection is done, closes c, and returns. ctx is the base context of the
+ * requests. saw_client_preface says the caller already read the preface. */
+void burrow__http2_serve_conn(HttpServer *srv, Alloc *a, NetConn c, Context ctx,
+                              bool saw_client_preface);
+
+/* configureHTTP2 without the TLS parts: hooks graceful shutdown of the HTTP/2
+ * connections into srv's Shutdown, once. False when that ran out of memory.
+ * burrow__http2_server_configured says whether it ran. */
+bool burrow__http2_configure_server(HttpServer *srv);
+bool burrow__http2_server_configured(HttpServer *srv);
 
 #endif

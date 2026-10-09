@@ -1,5 +1,6 @@
-/* Derived from Go's src/net/http/readrequest_test.go, and the tests in
- * request_test.go and transfer_test.go of reading a request and its body.
+/* Derived from Go's src/net/http/readrequest_test.go, the tests in
+ * request_test.go and transfer_test.go of reading a request and its body, and
+ * the rest of request_test.go that needs no server.
  * Go source: go1.27.1.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
@@ -13,12 +14,17 @@
 
 #include "burrow/bufio.h"
 #include "burrow/burrow.h"
+#include "burrow/bytes.h"
+#include "burrow/declare.h"
 #include "burrow/encoding/base64.h"
+#include "burrow/fmt.h"
 #include "burrow/io.h"
+#include "burrow/map.h"
 #include "burrow/mem/arena.h"
 #include "burrow/net/http.h"
 #include "burrow/net/url.h"
 #include "burrow/strings.h"
+#include "burrow/time.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -823,6 +829,714 @@ static void TestParseContentLength(TestingT *t) {
     }
 }
 
+/* ------------------------------------------ the rest of request_test.go's */
+
+/* Whether two errors are the same error, which is Go's == on them. */
+static bool same_err(Error x, Error y) {
+    return x.vt == y.vt && x.data == y.data;
+}
+
+static const struct {
+    const char *in;
+    const char *out;
+} new_request_host_tests[] = {
+    {"http://www.example.com/", "www.example.com"},
+    {"http://www.example.com:8080/", "www.example.com:8080"},
+
+    {"http://192.168.0.1/", "192.168.0.1"},
+    {"http://192.168.0.1:8080/", "192.168.0.1:8080"},
+    {"http://192.168.0.1:/", "192.168.0.1"},
+
+    {"http://[fe80::1]/", "[fe80::1]"},
+    {"http://[fe80::1]:8080/", "[fe80::1]:8080"},
+    {"http://[fe80::1%25en0]/", "[fe80::1%en0]"},
+    {"http://[fe80::1%25en0]:8080/", "[fe80::1%en0]:8080"},
+    {"http://[fe80::1%25en0]:/", "[fe80::1%en0]"},
+};
+
+static void TestNewRequestHost(TestingT *t) {
+    ARENA_BEGIN;
+    Int n = (Int)(sizeof new_request_host_tests / sizeof new_request_host_tests[0]);
+    for (Int i = 0; i < n; i++) {
+        Error err;
+        HttpRequest *req = http_new_request(
+            a, S("GET"), cs(new_request_host_tests[i].in), (IoReader){0}, &err);
+        if (req == NULL) {
+            testing_t_errorf_v(t, "#%v: %v", i, err);
+            continue;
+        }
+        Str want = cs(new_request_host_tests[i].out);
+        if (!str_eq(req->host, want))
+            testing_t_errorf_v(t, "got %q; want %q", req->host, want);
+        http_request_free(req);
+    }
+    ARENA_END;
+}
+
+static void TestRequestInvalidMethod(TestingT *t) {
+    ARENA_BEGIN;
+    Error err;
+    HttpRequest *req =
+        http_new_request(a, S("bad method"), S("http://foo.com/"), (IoReader){0}, &err);
+    if (req != NULL) {
+        testing_t_errorf_v(t, "expected error from NewRequest with invalid method");
+        http_request_free(req);
+    }
+    req = http_new_request(a, S("GET"), S("http://foo.example/"), (IoReader){0}, &err);
+    if (req == NULL) {
+        testing_t_fatalf_v(t, "%v", err);
+        ARENA_END;
+        return;
+    }
+    req->method = S("bad method");
+    HttpResponse *res = http_client_do(http_default_client, req, &err);
+    if (res != NULL)
+        http_response_free(res);
+    if (BURROW_OK(err) || !strings_contains(error_text(err), S("invalid method")))
+        testing_t_errorf_v(t, "Transport error = %v; want invalid method", err);
+    http_request_free(req);
+
+    req = http_new_request(a, S(""), S("http://foo.com/"), (IoReader){0}, &err);
+    if (req == NULL) {
+        testing_t_errorf_v(t, "NewRequest(empty method) = %v; want nil", err);
+    } else {
+        if (!str_eq(req->method, S("GET")))
+            testing_t_errorf_v(t, "NewRequest(empty method) has method %q; want GET",
+                               req->method);
+        http_request_free(req);
+    }
+    ARENA_END;
+}
+
+/* logWrites, a writer with a WriteByte, so that a request is written to it
+ * with no BufioWriter in front, which keeps what each Write was given. */
+typedef struct LogWrites {
+    TestingT *t;
+    Alloc *a;
+    Str got[16];
+    Int n;
+} LogWrites;
+
+static Error log_writes_write_byte(LogWrites *l, Byte c) {
+    (void)c;
+    testing_t_fatalf_v(l->t, "unexpected WriteByte call");
+    return BURROW_NO_ERROR;
+}
+
+static Int log_writes_write(void *self, Slice p, Error *err) {
+    LogWrites *l = (LogWrites *)self;
+    if (l->n < (Int)(sizeof l->got / sizeof l->got[0]))
+        l->got[l->n] = str_clone(l->a, str_from_bytes((const Byte *)p.p, p.len));
+    l->n++;
+    *err = BURROW_NO_ERROR;
+    return p.len;
+}
+
+#define LOG_WRITES_SIG_WRITE_BYTE(IN, OUT) IN(0, Byte) OUT(Error)
+#define LOG_WRITES_METHODS(M, T)                                                       \
+    M(T, WriteByte, log_writes_write_byte, LOG_WRITES_SIG_WRITE_BYTE)
+BURROW_METHODS_DEFINE(LogWrites, LOG_WRITES_METHODS);
+
+static const Type log_writes_type = {
+    {(const Byte *)"logWrites", 9},
+    {(const Byte *)"http_test", 9},
+    KIND_STRUCT,
+    (uint32_t)sizeof(LogWrites),
+    (uint16_t)_Alignof(LogWrites),
+    0,
+    (uint16_t)(sizeof burrow__methods_LogWrites / sizeof burrow__methods_LogWrites[0]),
+    NULL,
+    burrow__methods_LogWrites,
+    NULL,
+    NULL,
+    0,
+    0x6c6f6777U,
+    NULL,
+};
+
+static const IoWriterVT log_writes_vt = {&log_writes_type, log_writes_write};
+
+/* The writes as Go's %q prints a []string. */
+static Str quoted_list(Alloc *a, const Str *v, Int n) {
+    StringsBuilder b = STRINGS_BUILDER(a);
+    strings_builder_write_byte(&b, '[');
+    for (Int i = 0; i < n; i++) {
+        if (i > 0)
+            strings_builder_write_byte(&b, ' ');
+        strings_builder_write_string(&b, fmt_sprintf_v(a, "%q", v[i]), NULL);
+    }
+    strings_builder_write_byte(&b, ']');
+    return strings_builder_string(&b);
+}
+
+static void check_writes(TestingT *t, Alloc *a, const LogWrites *l,
+                         const char *const *want, Int nwant) {
+    Str w[8];
+    for (Int i = 0; i < nwant; i++)
+        w[i] = cs(want[i]);
+    bool same = l->n == nwant;
+    for (Int i = 0; same && i < nwant; i++)
+        same = str_eq(l->got[i], w[i]);
+    if (!same) {
+        Int n = l->n;
+        if (n > (Int)(sizeof l->got / sizeof l->got[0]))
+            n = (Int)(sizeof l->got / sizeof l->got[0]);
+        testing_t_errorf_v(t, "Writes = %s\n  Want = %s", quoted_list(a, l->got, n),
+                           quoted_list(a, w, nwant));
+    }
+}
+
+static void TestRequestWriteBufferedWriter(TestingT *t) {
+    ARENA_BEGIN;
+    LogWrites got = {t, a, {{0}}, 0};
+    Error err;
+    HttpRequest *req =
+        http_new_request(a, S("GET"), S("http://foo.com/"), (IoReader){0}, &err);
+    if (req == NULL) {
+        testing_t_fatalf_v(t, "%v", err);
+        ARENA_END;
+        return;
+    }
+    (void)http_request_write(req, (IoWriter){&log_writes_vt, &got});
+    static const char *const want[] = {
+        "GET / HTTP/1.1\r\n",
+        "Host: foo.com\r\n",
+        "User-Agent: Go-http-client/1.1\r\n",
+        "\r\n",
+    };
+    check_writes(t, a, &got, want, (Int)(sizeof want / sizeof want[0]));
+    http_request_free(req);
+    ARENA_END;
+}
+
+static void TestRequestBadHostHeader(TestingT *t) {
+    ARENA_BEGIN;
+    LogWrites got = {t, a, {{0}}, 0};
+    Error err;
+    HttpRequest *req =
+        http_new_request(a, S("GET"), S("http://foo/after"), (IoReader){0}, &err);
+    if (req == NULL) {
+        testing_t_fatalf_v(t, "%v", err);
+        ARENA_END;
+        return;
+    }
+    req->host = S("foo.com\nnewline");
+    req->url->host = S("foo.com\nnewline");
+    (void)http_request_write(req, (IoWriter){&log_writes_vt, &got});
+    static const char *const want[] = {
+        "GET /after HTTP/1.1\r\n",
+        "Host: \r\n",
+        "User-Agent: Go-http-client/1.1\r\n",
+        "\r\n",
+    };
+    check_writes(t, a, &got, want, (Int)(sizeof want / sizeof want[0]));
+    http_request_free(req);
+    ARENA_END;
+}
+
+static void TestRequestBadUserAgent(TestingT *t) {
+    ARENA_BEGIN;
+    LogWrites got = {t, a, {{0}}, 0};
+    Error err;
+    HttpRequest *req =
+        http_new_request(a, S("GET"), S("http://foo/after"), (IoReader){0}, &err);
+    if (req == NULL) {
+        testing_t_fatalf_v(t, "%v", err);
+        ARENA_END;
+        return;
+    }
+    http_header_set(req->header, S("User-Agent"), S("evil\r\nX-Evil: evil"));
+    (void)http_request_write(req, (IoWriter){&log_writes_vt, &got});
+    static const char *const want[] = {
+        "GET /after HTTP/1.1\r\n",
+        "Host: foo\r\n",
+        "User-Agent: evil  X-Evil: evil\r\n",
+        "\r\n",
+    };
+    check_writes(t, a, &got, want, (Int)(sizeof want / sizeof want[0]));
+    http_request_free(req);
+    ARENA_END;
+}
+
+static bool str_slices_equal(Slice x, Slice y) {
+    if ((x.p == NULL) != (y.p == NULL) || x.len != y.len)
+        return false;
+    for (Int i = 0; i < x.len; i++)
+        if (!str_eq(((const Str *)x.p)[i], ((const Str *)y.p)[i]))
+            return false;
+    return true;
+}
+
+static bool urls_equal(const Url *x, const Url *y) {
+    if (x == NULL || y == NULL)
+        return x == y;
+    if ((x->user == NULL) != (y->user == NULL))
+        return false;
+    if (x->user != NULL && (!str_eq(x->user->username, y->user->username) ||
+                            !str_eq(x->user->password, y->user->password) ||
+                            x->user->password_set != y->user->password_set))
+        return false;
+    return str_eq(x->scheme, y->scheme) && str_eq(x->opaque, y->opaque) &&
+           str_eq(x->host, y->host) && str_eq(x->path, y->path) &&
+           str_eq(x->fragment, y->fragment) && str_eq(x->raw_query, y->raw_query) &&
+           str_eq(x->raw_path, y->raw_path) &&
+           str_eq(x->raw_fragment, y->raw_fragment) &&
+           x->force_query == y->force_query && x->omit_host == y->omit_host;
+}
+
+/* The first field where two requests differ, leaving out the header, as
+ * reflect.DeepEqual would find it, and NULL when they don't. Both bodies are
+ * http_no_body here, or nil, so their vtables say whether they match. */
+static const char *request_diff(const HttpRequest *x, const HttpRequest *y) {
+    if (!str_eq(x->method, y->method))
+        return "Method";
+    if (!urls_equal(x->url, y->url))
+        return "URL";
+    if (!str_eq(x->proto, y->proto) || x->proto_major != y->proto_major ||
+        x->proto_minor != y->proto_minor)
+        return "Proto";
+    if (x->body.vt != y->body.vt)
+        return "Body";
+    if (x->content_length != y->content_length)
+        return "ContentLength";
+    if (!str_slices_equal(x->transfer_encoding, y->transfer_encoding))
+        return "TransferEncoding";
+    if (x->close != y->close)
+        return "Close";
+    if (!str_eq(x->host, y->host))
+        return "Host";
+    if (x->form != NULL || y->form != NULL || x->post_form != NULL ||
+        y->post_form != NULL || x->multipart_form != NULL || y->multipart_form != NULL)
+        return "Form";
+    if ((x->trailer == NULL) != (y->trailer == NULL) ||
+        (x->trailer != NULL && (map_len(x->trailer) != 0 || map_len(y->trailer) != 0)))
+        return "Trailer";
+    if (!str_eq(x->remote_addr, y->remote_addr))
+        return "RemoteAddr";
+    if (!str_eq(x->request_uri, y->request_uri))
+        return "RequestURI";
+    if (!str_eq(x->pattern, y->pattern))
+        return "Pattern";
+    if (x->get_body.f != NULL || y->get_body.f != NULL)
+        return "GetBody";
+    if (x->ctx.vt != y->ctx.vt || x->ctx.data != y->ctx.data)
+        return "ctx";
+    if (x->response != NULL || y->response != NULL)
+        return "Response";
+    if (x->pat != y->pat || x->matches.len != y->matches.len ||
+        x->other_values != y->other_values)
+        return "pat";
+    return NULL;
+}
+
+static void TestStarRequest(TestingT *t) {
+    ARENA_BEGIN;
+    StringsReader sr;
+    BufioReader *br = reader_of(a, &sr, S("M-SEARCH * HTTP/1.1\r\n\r\n"));
+    Error err;
+    HttpRequest *req = http_read_request(a, br, &err);
+    if (req == NULL) {
+        bufio_reader_free(br);
+        ARENA_END;
+        return;
+    }
+    if (req->content_length != 0)
+        testing_t_errorf_v(t, "ContentLength = %d; want 0", req->content_length);
+    if (req->body.vt == NULL)
+        testing_t_errorf_v(t, "Body = nil; want non-nil");
+
+    /* Request.Write has Client semantics for Body/ContentLength, where
+     * ContentLength 0 means unknown if Body is non-nil, and thus chunking will
+     * happen unless we change semantics and signal that we want to serialize
+     * it as exactly zero. The only way to do that for outbound requests is
+     * with a nil Body. Go writes a copy of the request with a nil Body, and
+     * here the body is put aside while the request is written. */
+    IoReadCloser body = req->body;
+    req->body = (IoReadCloser){0};
+    StringsBuilder out = STRINGS_BUILDER(a);
+    err = http_request_write(req, strings_builder_as_io_writer(&out));
+    req->body = body;
+    Str wrote = strings_builder_string(&out);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "%v", err);
+    } else {
+        if (strings_contains(wrote, S("chunked")))
+            testing_t_errorf_v(t, "wrote chunked request; want no body");
+        StringsReader sr2;
+        BufioReader *br2 = reader_of(a, &sr2, wrote);
+        HttpRequest *back = http_read_request(a, br2, &err);
+        if (back == NULL) {
+            testing_t_fatalf_v(t, "%v", err);
+        } else {
+            /* Ignore the Headers (the User-Agent breaks the deep equal, but we
+             * don't care about it). */
+            const char *field = request_diff(req, back);
+            if (field != NULL) {
+                testing_t_errorf_v(t, "Original request doesn't match Request read "
+                                      "back.");
+                testing_t_logf_v(t, "They differ in %s", cs(field));
+                testing_t_logf_v(t, "Wrote: %s", wrote);
+            }
+            http_request_free(back);
+        }
+        bufio_reader_free(br2);
+    }
+    http_request_free(req);
+    bufio_reader_free(br);
+    ARENA_END;
+}
+
+/* responseWriterJustWriter, a ResponseWriter that is only a writer. */
+static HttpHeader just_writer_header(void *self) {
+    (void)self;
+    panic_str(S("should not be called"));
+}
+
+static void just_writer_write_header(void *self, Int code) {
+    (void)self;
+    (void)code;
+    panic_str(S("should not be called"));
+}
+
+static Int just_writer_write(void *self, Slice p, Error *err) {
+    IoWriter *w = (IoWriter *)self;
+    return w->vt->write(w->data, p, err);
+}
+
+static const HttpResponseWriterVT just_writer_vt = {
+    {NULL, just_writer_write},
+    just_writer_header,
+    just_writer_write_header,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+};
+
+/* delayedEOFReader never returns (n > 0, io.EOF), instead putting off the
+ * io.EOF until a subsequent Read call. */
+static Int delayed_eof_read(void *self, Slice p, Error *err) {
+    IoReader *r = (IoReader *)self;
+    Int n = r->vt->read(r->data, p, err);
+    if (n > 0 && same_err(*err, io_eof))
+        *err = BURROW_NO_ERROR;
+    return n;
+}
+
+static const IoReaderVT delayed_eof_vt = {NULL, delayed_eof_read};
+
+static void TestIssue10884_MaxBytesEOF(TestingT *t) {
+    ARENA_BEGIN;
+    IoWriter dst = io_discard;
+    StringsReader sr;
+    strings_reader_reset(&sr, S("12345"));
+    IoReader inner = strings_reader_as_io_reader(&sr);
+    IoNopCloser nc = io_nop_closer((IoReader){&delayed_eof_vt, &inner});
+    IoReadCloser rc =
+        http_max_bytes_reader(a, (HttpResponseWriter){&just_writer_vt, &dst},
+                              io_nop_closer_as_io_read_closer(&nc), 5);
+    Error err;
+    (void)io_copy(a, dst, io_read_closer_as_io_reader(rc), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "%v", err);
+    ARENA_END;
+}
+
+/* Issue 14981: MaxBytesReader's return error wasn't sticky. It doesn't
+ * technically need to be, but people expected it to be. The error, or a zero
+ * Str when it is. */
+static Str is_sticky(TestingT *t, Alloc *a, IoReader r) {
+    StringsBuilder log = STRINGS_BUILDER(a);
+    Slice buf = slice_from(mem_alloc(a, 1000, 1), 1000, 1000, TYPE_BYTE);
+    Error first = BURROW_NO_ERROR;
+    for (;;) {
+        Error err;
+        Int n = r.vt->read(r.data, buf, &err);
+        strings_builder_write_string(
+            &log, fmt_sprintf_v(a, "Read(%d) = %d, %v\n", buf.len, n, err), NULL);
+        if (BURROW_OK(err))
+            continue;
+        if (BURROW_OK(first)) {
+            first = err;
+            continue;
+        }
+        if (!same_err(err, first))
+            return fmt_sprintf_v(a, "non-sticky error. got log:\n%s",
+                                 strings_builder_string(&log));
+        testing_t_logf_v(t, "Got log: %s", strings_builder_string(&log));
+        return (Str){0};
+    }
+}
+
+static void TestMaxBytesReaderStickyError(TestingT *t) {
+    ARENA_BEGIN;
+    static const struct {
+        Int readable;
+        int64_t limit;
+    } tests[] = {
+        {99, 100},
+        {100, 100},
+        {101, 100},
+    };
+    for (Int i = 0; i < (Int)(sizeof tests / sizeof tests[0]); i++) {
+        BytesReader br;
+        bytes_reader_reset(&br,
+                           slice_from(mem_alloc(a, (size_t)tests[i].readable, 1),
+                                      tests[i].readable, tests[i].readable, TYPE_BYTE));
+        IoNopCloser nc = io_nop_closer(bytes_reader_as_io_reader(&br));
+        IoReadCloser rc =
+            http_max_bytes_reader(a, (HttpResponseWriter){0},
+                                  io_nop_closer_as_io_read_closer(&nc), tests[i].limit);
+        Str e = is_sticky(t, a, io_read_closer_as_io_reader(rc));
+        if (e.p != NULL)
+            testing_t_errorf_v(t, "%d. error: %s", i, e);
+    }
+    ARENA_END;
+}
+
+/* Issue 45101: maxBytesReader's Read panicked when n < -1. This test also
+ * ensures that Read treats negative limits as equivalent to 0. */
+static void TestMaxBytesReaderDifferentLimits(TestingT *t) {
+    ARENA_BEGIN;
+    static const char test_str[] = "1234";
+    const Int len = (Int)(sizeof test_str - 1);
+    const struct {
+        int64_t limit;
+        Int len_p;
+        Int want_n;
+        bool want_err;
+    } tests[] = {
+        /* Ensure we won't return an error when the limit is negative, but we
+         * don't need to read. */
+        {-123, 0, 0, false},
+        {-100, 32 * 1024, 0, true},
+        {-2, 1, 0, true},
+        {-1, 2, 0, true},
+        {0, 3, 0, true},
+        {1, 4, 1, true},
+        {2, 5, 2, true},
+        {3, 2, 2, false},
+        {len, len, len, false},
+        {100, 6, len, false},
+        {INT64_MAX, len, len, false}, /* Issue 54408 */
+    };
+    for (Int i = 0; i < (Int)(sizeof tests / sizeof tests[0]); i++) {
+        StringsReader sr;
+        strings_reader_reset(&sr, cs(test_str));
+        IoNopCloser nc = io_nop_closer(strings_reader_as_io_reader(&sr));
+        IoReadCloser rc =
+            http_max_bytes_reader(a, (HttpResponseWriter){0},
+                                  io_nop_closer_as_io_read_closer(&nc), tests[i].limit);
+        Byte *p = (Byte *)mem_alloc(a, (size_t)(tests[i].len_p + 1), 1);
+        Error err;
+        Int n = rc.vt->reader.read(
+            rc.data, slice_from(p, tests[i].len_p, tests[i].len_p, TYPE_BYTE), &err);
+
+        if (n != tests[i].want_n)
+            testing_t_errorf_v(t, "%d. n: %d, want n: %d", i, n, tests[i].want_n);
+
+        if (BURROW_FAILED(err) != tests[i].want_err)
+            testing_t_errorf_v(t, "%d. error: %v", i, err);
+    }
+    ARENA_END;
+}
+
+/* Verify that NewRequest sets Request.GetBody and that it works. */
+static void TestNewRequestGetBody(TestingT *t) {
+    ARENA_BEGIN;
+    StringsReader sr;
+    strings_reader_reset(&sr, S("hello"));
+    BytesReader br;
+    bytes_reader_reset(&br, bytes_of(S("hello")));
+    BytesBuffer *bb = bytes_new_buffer(a, bytes_of(S("hello")));
+    if (bb == NULL) {
+        testing_t_fatalf_v(t, "out of memory");
+        ARENA_END;
+        return;
+    }
+    IoReader tests[] = {
+        strings_reader_as_io_reader(&sr),
+        bytes_reader_as_io_reader(&br),
+        bytes_buffer_as_io_reader(bb),
+    };
+    for (Int i = 0; i < (Int)(sizeof tests / sizeof tests[0]); i++) {
+        Error err;
+        HttpRequest *req =
+            http_new_request(a, S("POST"), S("http://foo.tld/"), tests[i], &err);
+        if (req == NULL) {
+            testing_t_errorf_v(t, "test[%d]: %v", i, err);
+            continue;
+        }
+        if (req->body.vt == NULL) {
+            testing_t_errorf_v(t, "test[%d]: Body = nil", i);
+            http_request_free(req);
+            continue;
+        }
+        if (req->get_body.f == NULL) {
+            testing_t_errorf_v(t, "test[%d]: GetBody = nil", i);
+            http_request_free(req);
+            continue;
+        }
+        Slice slurp1 = io_read_all(a, io_read_closer_as_io_reader(req->body), &err);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "test[%d]: ReadAll(Body) = %v", i, err);
+        IoReadCloser new_body = req->get_body.f(req->get_body.env, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "test[%d]: GetBody = %v", i, err);
+            http_request_free(req);
+            continue;
+        }
+        Slice slurp2 = io_read_all(a, io_read_closer_as_io_reader(new_body), &err);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "test[%d]: ReadAll(GetBody()) = %v", i, err);
+        Str s1 = str_from_bytes((const Byte *)slurp1.p, slurp1.len);
+        Str s2 = str_from_bytes((const Byte *)slurp2.p, slurp2.len);
+        if (!str_eq(s1, s2))
+            testing_t_errorf_v(t, "test[%d]: Body %q != GetBody %q", i, s1, s2);
+        http_request_free(req);
+    }
+    ARENA_END;
+}
+
+/* Issue 53181: verify Request.Cookie return the correct Cookie. Return
+ * ErrNoCookie instead of the first cookie when name is "". */
+static void TestRequestCookie(TestingT *t) {
+    ARENA_BEGIN;
+    const struct {
+        const char *name;
+        const char *value;
+        const Error *expected_err;
+    } tests[] = {
+        {"foo", "bar", NULL},
+        {"", "", &http_err_no_cookie},
+    };
+    for (Int i = 0; i < (Int)(sizeof tests / sizeof tests[0]); i++) {
+        Error err;
+        HttpRequest *req = http_new_request(a, S("GET"), S("http://example.com/"),
+                                            (IoReader){0}, &err);
+        if (req == NULL) {
+            testing_t_fatalf_v(t, "%v", err);
+            break;
+        }
+        HttpCookie add = {0};
+        add.name = cs(tests[i].name);
+        add.value = cs(tests[i].value);
+        (void)http_request_add_cookie(req, a, &add);
+        HttpCookie c = http_request_cookie(req, a, cs(tests[i].name), &err);
+        Error want =
+            tests[i].expected_err != NULL ? *tests[i].expected_err : BURROW_NO_ERROR;
+        if (!same_err(err, want))
+            testing_t_errorf_v(t, "got %v, want %v", err, want);
+
+        /* skip if error occurred. */
+        if (BURROW_OK(err)) {
+            if (!str_eq(c.value, add.value))
+                testing_t_errorf_v(t, "got %v, want %v", c.value, add.value);
+            if (!str_eq(c.name, add.name))
+                testing_t_errorf_v(t, "got %s, want %v", add.name, c.name);
+        }
+        http_request_free(req);
+    }
+    ARENA_END;
+}
+
+/* A cookie as Go's readCookies makes one: a name and a value and nothing
+ * else, which reflect.DeepEqual checks against &Cookie{Name:, Value:}. */
+static bool cookie_is(const HttpCookie *c, const char *name, const char *value) {
+    return str_eq(c->name, cs(name)) && str_eq(c->value, cs(value)) &&
+           c->path.len == 0 && c->domain.len == 0 && time_is_zero(c->expires) &&
+           c->raw_expires.len == 0 && c->max_age == 0 && c->raw.len == 0 &&
+           c->unparsed.len == 0 && c->same_site == 0 && !c->quoted && !c->secure &&
+           !c->http_only && !c->partitioned;
+}
+
+typedef struct CookiePair {
+    const char *name;
+    const char *value;
+} CookiePair;
+
+typedef struct CookiesByNameCase {
+    CookiePair in[3];
+    Int nin;
+    const char *filter;
+    CookiePair want[2];
+    Int nwant;
+} CookiesByNameCase;
+
+static const CookiesByNameCase cookies_by_name_tests[] = {
+    {{{"foo", "foo-1"}, {"bar", "bar"}}, 2, "foo", {{"foo", "foo-1"}}, 1},
+    {{{"foo", "foo-1"}, {"foo", "foo-2"}, {"bar", "bar"}},
+     3,
+     "foo",
+     {{"foo", "foo-1"}, {"foo", "foo-2"}},
+     2},
+    {{{"bar", "bar"}}, 1, "foo", {{NULL, NULL}}, 0},
+    {{{"bar", "bar"}}, 1, "", {{NULL, NULL}}, 0},
+    {{{NULL, NULL}}, 0, "foo", {{NULL, NULL}}, 0},
+};
+
+static Str cookies_v(Alloc *a, const HttpCookie *c, Int n) {
+    StringsBuilder b = STRINGS_BUILDER(a);
+    strings_builder_write_byte(&b, '[');
+    for (Int i = 0; i < n; i++) {
+        if (i > 0)
+            strings_builder_write_string(&b, S(", "), NULL);
+        strings_builder_write_string(
+            &b, fmt_sprintf_v(a, "{%q: %q}", c[i].name, c[i].value), NULL);
+    }
+    strings_builder_write_byte(&b, ']');
+    return strings_builder_string(&b);
+}
+
+static void cookies_by_name_case(void *env, TestingT *t) {
+    const CookiesByNameCase *tt = (const CookiesByNameCase *)env;
+    ARENA_BEGIN;
+    Error err;
+    HttpRequest *req =
+        http_new_request(a, S("GET"), S("http://example.com/"), (IoReader){0}, &err);
+    if (req == NULL) {
+        testing_t_fatalf_v(t, "%v", err);
+        ARENA_END;
+        return;
+    }
+    for (Int i = 0; i < tt->nin; i++) {
+        HttpCookie c = {0};
+        c.name = cs(tt->in[i].name);
+        c.value = cs(tt->in[i].value);
+        (void)http_request_add_cookie(req, a, &c);
+    }
+
+    Slice got = http_request_cookies_named(req, a, cs(tt->filter));
+    const HttpCookie *gc = (const HttpCookie *)got.p;
+
+    bool same = got.len == tt->nwant;
+    for (Int i = 0; same && i < tt->nwant; i++)
+        same = cookie_is(&gc[i], tt->want[i].name, tt->want[i].value);
+    if (!same) {
+        HttpCookie want[2];
+        memset(want, 0, sizeof want);
+        for (Int i = 0; i < tt->nwant; i++) {
+            want[i].name = cs(tt->want[i].name);
+            want[i].value = cs(tt->want[i].value);
+        }
+        testing_t_errorf_v(t, "Result mismatch\n\tGot: %s\n\tWant: %s",
+                           cookies_v(a, gc, got.len), cookies_v(a, want, tt->nwant));
+    }
+    http_request_free(req);
+    ARENA_END;
+}
+
+static void TestRequestCookiesByName(TestingT *t) {
+    Int n = (Int)(sizeof cookies_by_name_tests / sizeof cookies_by_name_tests[0]);
+    for (Int i = 0; i < n; i++)
+        testing_t_run(t, cs(cookies_by_name_tests[i].filter),
+                      BURROW_FN(TestingTFunc, cookies_by_name_case,
+                                (void *)(uintptr_t)&cookies_by_name_tests[i]));
+}
+
 #define TESTS(X)                                                                       \
     X(TestReadRequest)                                                                 \
     X(TestReadRequest_Bad)                                                             \
@@ -833,6 +1547,18 @@ static void TestParseContentLength(TestingT *t) {
     X(TestSetBasicAuth)                                                                \
     X(TestBodyReadBadTrailer)                                                          \
     X(TestParseTransferEncoding)                                                       \
-    X(TestParseContentLength)
+    X(TestParseContentLength)                                                          \
+    X(TestNewRequestHost)                                                              \
+    X(TestRequestInvalidMethod)                                                        \
+    X(TestRequestWriteBufferedWriter)                                                  \
+    X(TestRequestBadHostHeader)                                                        \
+    X(TestRequestBadUserAgent)                                                         \
+    X(TestStarRequest)                                                                 \
+    X(TestIssue10884_MaxBytesEOF)                                                      \
+    X(TestMaxBytesReaderStickyError)                                                   \
+    X(TestMaxBytesReaderDifferentLimits)                                               \
+    X(TestNewRequestGetBody)                                                           \
+    X(TestRequestCookie)                                                               \
+    X(TestRequestCookiesByName)
 
 TESTING_MAIN(TESTS)

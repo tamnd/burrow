@@ -1222,8 +1222,46 @@ BURROW_FUNC(HttpBaseContextFunc, Context, NetListener l);
  * not give the nil Context, and what it gives has to outlive c. */
 BURROW_FUNC(HttpConnContextFunc, Context, Context ctx, NetConn c);
 
-/* http.Server, an HTTP/1 server. Fill in the fields wanted and leave the rest
- * zero, which is Go's &http.Server{...}:
+/* The CountError hook of HttpHTTP2Config. err_type has only lower case
+ * letters, digits and underscores, and is only good during the call. */
+BURROW_FUNC(HttpCountErrorFunc, void, Str err_type);
+
+/* http.HTTP2Config, the HTTP/2 settings of a server. Zero, or a value out of
+ * range, is the default for each one.
+ *
+ * max_concurrent_streams is how many streams a client may have open at once,
+ * 250 by default. strict_max_concurrent_requests is for a transport, and a
+ * server does not look at it. max_decoder_header_table_size and
+ * max_encoder_header_table_size limit the HPACK tables for the headers read
+ * and written, 4096 bytes by default. max_read_frame_size is the largest
+ * frame the server reads, from 16KiB to 16MiB, and 1MiB by default.
+ * max_receive_buffer_per_connection and max_receive_buffer_per_stream are the
+ * flow control windows for request bodies, 1MiB each by default.
+ *
+ * send_ping_timeout is how long a connection may go without a frame before
+ * the server sends a PING to check on it, and zero is never. ping_timeout is
+ * how long the server then waits for the answer before it closes the
+ * connection, 15 seconds by default. write_byte_timeout closes a connection
+ * that takes longer than this to take any bytes written to it.
+ * permit_prohibited_cipher_suites is for HTTP/2 over TLS. count_error, when
+ * set, is called for each HTTP/2 error, to count it in a metric. */
+typedef struct HttpHTTP2Config {
+    Int max_concurrent_streams;
+    bool strict_max_concurrent_requests;
+    Int max_decoder_header_table_size;
+    Int max_encoder_header_table_size;
+    Int max_read_frame_size;
+    Int max_receive_buffer_per_connection;
+    Int max_receive_buffer_per_stream;
+    Duration send_ping_timeout;
+    Duration ping_timeout;
+    Duration write_byte_timeout;
+    bool permit_prohibited_cipher_suites;
+    HttpCountErrorFunc count_error;
+} HttpHTTP2Config;
+
+/* http.Server, an HTTP/1 and HTTP/2 server. Fill in the fields wanted and
+ * leave the rest zero, which is Go's &http.Server{...}:
  *
  *     HttpServer srv = {.addr = BURROW_S(":8080"), .handler = h};
  *     Error err = http_server_listen_and_serve(&srv);
@@ -1249,8 +1287,12 @@ BURROW_FUNC(HttpConnContextFunc, Context, Context ctx, NetConn c);
  * conn_state, base_context and conn_context are the hooks of those names, and
  * error_log is where the server logs what goes wrong with a connection, and
  * log's standard logger when it is NULL. protocols is the protocols the
- * server speaks, and only HTTP/1 is here so far, so a server whose protocols
- * leave it out serves nothing. NULL, or the empty set, is HTTP/1.
+ * server speaks. NULL, or the empty set, is HTTP/1. With unencrypted HTTP/2 in
+ * it the server takes a connection that starts with the HTTP/2 preface as an
+ * HTTP/2 connection, which is prior knowledge h2c, and HTTP/2 over TLS is not
+ * here yet. http2 is the HTTP/2 settings, and NULL is the defaults.
+ * disable_client_priority serves an HTTP/2 connection's streams in turn and
+ * leaves out the priorities of RFC 9218 that the client asks for.
  *
  * a is where the server makes each connection and request, and the heap when
  * it is NULL. It has to be one that any goroutine can use at once.
@@ -1275,6 +1317,8 @@ typedef struct HttpServer {
     HttpBaseContextFunc base_context;
     HttpConnContextFunc conn_context;
     const HttpProtocols *protocols;
+    const HttpHTTP2Config *http2;
+    bool disable_client_priority;
     Alloc *a;
 
     /* The server's own. */
@@ -1286,6 +1330,9 @@ typedef struct HttpServer {
     Slice on_shutdown; /* of Func */
     SyncWaitGroup listener_group;
     SyncWaitGroup conn_group;
+    SyncMutex h2_mu; /* guards h2_conns and h2_hooked */
+    struct burrow__Http2ServeConn *h2_conns;
+    bool h2_hooked;
 } HttpServer;
 
 /* Server.Serve. Accepts connections on l and serves each on a goroutine of

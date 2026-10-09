@@ -103,3 +103,7 @@ crypto/fips140
 net/mail
 log
 net/http/cookiejar
+net/http/cgi
+net/http/fcgi
+net/rpc
+net/rpc/jsonrpc

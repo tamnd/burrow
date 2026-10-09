@@ -15,6 +15,7 @@
 #include "burrow/declare.h"
 #include "burrow/encoding/json.h"
 #include "burrow/mem/arena.h"
+#include "burrow/mem/track.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -124,6 +125,45 @@ static void TestDecodeStream(TestingT *t) {
                   "null off=34|err=EOF eof=1 off=34");
         json_decoder_free(d);
         arena_free(&ar);
+    }
+}
+
+/* json_decoder_decode_in, which is not Go's: what goes into the value is made
+ * in the allocator it is given, so it is still good once the decoder and
+ * everything the decoder made are gone. */
+static void TestDecodeIn(TestingT *t) {
+    for (int slow = 0; slow < 2; slow++) {
+        Arena dar, var;
+        arena_init(&dar, NULL, 0);
+        arena_init(&var, NULL, 0);
+        Track tr;
+        track_init(&tr, arena_allocator(&var));
+        Src src;
+        JsonDecoder *d =
+            new_dec(arena_allocator(&dar), &src,
+                    "{\"A\":1,\"b\":\"first\"} {\"A\":2,\"b\":\"second\"}", slow);
+        P p1 = {0, BURROW_STR_EMPTY}, p2 = {0, BURROW_STR_EMPTY};
+        check_err(t, "first",
+                  json_decoder_decode_in(d, track_allocator(&tr),
+                                         BURROW_ANY(TYPE_OF(P), &p1)),
+                  "<nil>");
+        if (track_live(&tr) == 0)
+            testing_t_errorf_v(t, "nothing of the first value was made in a");
+        size_t live = track_live(&tr);
+        check_err(t, "second",
+                  json_decoder_decode_in(d, track_allocator(&tr),
+                                         BURROW_ANY(TYPE_OF(P), &p2)),
+                  "<nil>");
+        if (track_live(&tr) <= live)
+            testing_t_errorf_v(t, "nothing of the second value was made in a");
+        json_decoder_free(d);
+        arena_free(&dar);
+        if (p1.A != 1 || p2.A != 2)
+            testing_t_errorf_v(t, "A = %d and %d, want 1 and 2", p1.A, p2.A);
+        check_str(t, "first b", p1.B, "first");
+        check_str(t, "second b", p2.B, "second");
+        track_free(&tr);
+        arena_free(&var);
     }
 }
 
@@ -398,6 +438,7 @@ static void TestDelim(TestingT *t) {
 
 #define TESTS(X)                                                                       \
     X(TestDecodeStream)                                                                \
+    X(TestDecodeIn)                                                                    \
     X(TestDecodeErrors)                                                                \
     X(TestDecodeOptions)                                                               \
     X(TestToken)                                                                       \

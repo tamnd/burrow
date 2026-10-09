@@ -12,7 +12,7 @@
 
 #include "burrow/platform.h"
 
-#if defined(BURROW_OS_WASI) || defined(BURROW_OS_JS) || defined(BURROW_OS_SOLARIS) || \
+#if defined(BURROW_OS_WASI) || defined(BURROW_OS_JS) || defined(BURROW_OS_SOLARIS) ||  \
     defined(BURROW_OS_AIX) || defined(BURROW_OS_COSMO)
 
 #include "burrow/pal.h"

@@ -590,9 +590,8 @@ BURROW_BORROWS(ret, r) Str http_request_post_form_value(HttpRequest *r, Str key)
  * has not been. The file is made in the request's arena, and
  * multipart_file_close closes it. NULL with http_err_missing_file when there
  * is no such file. fh may be NULL. */
-BURROW_OWNS(ret) MultipartFile *http_request_form_file(HttpRequest *r, Str key,
-                                                       MultipartFileHeader **fh,
-                                                       Error *err);
+BURROW_OWNS(ret) MultipartFile *
+http_request_form_file(HttpRequest *r, Str key, MultipartFileHeader **fh, Error *err);
 
 /* Request.MultipartReader. A reader of the parts of a multipart/form-data or
  * multipart/mixed body, to read it as a stream rather than all at once as

@@ -240,12 +240,16 @@ static bool nc_canceled_is(const void *self, Error target) {
     return nc_same(target, context_canceled);
 }
 
+static Error nc_timeout_clone(const void *self, Alloc *a);
+static Error nc_canceled_clone(const void *self, Alloc *a);
+
 static const ErrorVT nc_timeout_vt = {
-    &nc_timeout_desc, nc_ctx_message, NULL, NULL, nc_timeout_is, NULL, NULL,
+    &nc_timeout_desc, nc_ctx_message, NULL, NULL, nc_timeout_is, NULL, nc_timeout_clone,
 };
 
 static const ErrorVT nc_canceled_vt = {
-    &nc_canceled_desc, nc_ctx_message, NULL, NULL, nc_canceled_is, NULL, NULL,
+    &nc_canceled_desc, nc_ctx_message, NULL, NULL, nc_canceled_is, NULL,
+    nc_canceled_clone,
 };
 
 static const NetErrContext nc_timeout_value = {1};
@@ -253,6 +257,21 @@ static const NetErrContext nc_canceled_value = {0};
 
 const Error burrow__net_err_timeout = {&nc_timeout_vt, &nc_timeout_value};
 const Error burrow__net_err_canceled = {&nc_canceled_vt, &nc_canceled_value};
+
+/* There is only one of each. error_retain's generic copy would match only the
+ * original and lose the Is that finds the context's error, which a DNSError
+ * that crossed goroutines then no longer unwrapped to. */
+static Error nc_timeout_clone(const void *self, Alloc *a) {
+    (void)self;
+    (void)a;
+    return burrow__net_err_timeout;
+}
+
+static Error nc_canceled_clone(const void *self, Alloc *a) {
+    (void)self;
+    (void)a;
+    return burrow__net_err_canceled;
+}
 
 Error burrow__net_map_err(Error err) {
     if (nc_same(err, context_canceled))

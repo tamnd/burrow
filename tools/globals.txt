@@ -383,3 +383,4 @@ global	src/crypto/nistec_p521.c	p521_generator_table	tables	Multiples of the gen
 global	src/crypto/nistec_p521.c	p521_generator_table_once	tables	A SyncOnce, which is the synchronisation for p521_generator_table.
 global	src/crypto/elliptic.c	elliptic_nist	tables	The four NIST curves with their CurveParams, filled in once by elliptic_init and only read after that, as Go's initonce has it.
 global	src/crypto/elliptic.c	elliptic_once	tables	A SyncOnce, which is the synchronisation for elliptic_nist.
+global	src/log/log.c	log_std	package-vars	The standard logger, log.std in Go. Its flags are atomic and its prefix and output each have a lock inside the logger, as in Go, so any thread may use it and change it.

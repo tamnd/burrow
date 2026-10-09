@@ -13,7 +13,11 @@
  * in the LICENSE file. */
 
 #if !defined(_WIN32)
+/* FreeBSD hides accept4, SOCK_NONBLOCK and IP_TTL from a file that asks for
+ * plain POSIX, and shows everything when it asks for nothing. */
+#if !defined(__FreeBSD__) && !defined(__DragonFly__)
 #define _XOPEN_SOURCE 700
+#endif
 #define _DEFAULT_SOURCE 1
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE 1

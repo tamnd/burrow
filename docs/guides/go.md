@@ -1,6 +1,6 @@
 # Go source
 
-`burrow/go/token.h` is Go's `go/token`, the bottom layer of Go's own tools for reading Go source. It has the tokens of the language and the positions that tie them back to a file, a line and a column. `go/scanner`, `go/ast` and `go/parser` sit on top of it and will land in this guide when they are ported.
+`burrow/go/token.h` is Go's `go/token`, the bottom layer of Go's own tools for reading Go source. It has the tokens of the language and the positions that tie them back to a file, a line and a column. `burrow/go/scanner.h` is Go's `go/scanner`, which turns source into those tokens. `go/ast` and `go/parser` sit on top of the two and will land in this guide when they are ported.
 
 ## Positions
 
@@ -104,3 +104,98 @@ x1    IDENT  identifier=true exported=false
 ## Saving a file set
 
 `token_file_set_write` and `token_file_set_read` save and restore a set the way Go's `Write` and `Read` do. They take a function that encodes or decodes an `Any`, so the format is up to you. The value has descriptors with Go's field names, so `encoding/gob` can take it as it is, the way the tests use it. `token_file_set_read` copies what the function decoded, so memory the decoder allocated is still yours to free.
+
+## Scanning
+
+A `GoScanner` turns the source of one `TokenFile` into tokens, one per call to `go_scanner_scan`, with each token's position and its literal text. The file has to be the same size as the source, and the scanner adds the file's lines to it as it meets them, so positions come out with lines and columns without a call to `token_file_set_lines_for_content`:
+
+<!-- example: ../examples/go/scanner.c#scan -->
+```c
+Str src = BURROW_S("cos(x) + 1i*sin(x) // Euler");
+TokenFileSet *fset = token_new_file_set(a);
+TokenFile *file = token_file_set_add_file(fset, BURROW_S(""), -1, src.len);
+GoScanner s;
+go_scanner_init(&s, a, file, slice_from_str(a, src), (GoScannerErrorHandler){0},
+                GO_SCANNER_SCAN_COMMENTS);
+for (;;) {
+    Token tok;
+    Str lit;
+    TokenPos pos = go_scanner_scan(&s, &tok, &lit);
+    if (tok == TOKEN_EOF)
+        break;
+    Str where = token_position_string(token_file_set_position(fset, pos), a);
+    fmt_printf_v("%s\t%s\t%q\n", where, token_string(tok, a), lit);
+}
+token_file_set_free(fset);
+```
+
+That prints:
+
+```
+1:1	IDENT	"cos"
+1:4	(	""
+1:5	IDENT	"x"
+1:6	)	""
+1:8	+	""
+1:10	IMAG	"1i"
+1:12	*	""
+1:13	IDENT	"sin"
+1:16	(	""
+1:17	IDENT	"x"
+1:18	)	""
+1:20	COMMENT	"// Euler"
+1:28	;	"\n"
+```
+
+The scanner puts in a semicolon at the end of a line where Go's rules want one, and at the end of the file, which is the `;` with a literal of `"\n"` at the end. Comments only come out as tokens with `GO_SCANNER_SCAN_COMMENTS`; without it they are skipped. A literal is a view of the source, so the source has to outlive the literals. The one exception is a comment or a raw string with a carriage return in it, which comes back without the carriage returns, copied into the allocator given to `go_scanner_init`.
+
+## Errors
+
+The scanner doesn't stop at a syntax error. It calls the error handler, if there is one, counts the error in `error_count`, and carries on with the best token it can make. The usual handler adds each error to a `GoScannerErrorList`:
+
+<!-- example: ../examples/go/scanner.c#handler -->
+```c
+typedef struct Collect {
+    GoScannerErrorList list;
+    Alloc *a;
+} Collect;
+
+static void collect(void *env, TokenPosition pos, Str msg) {
+    Collect *c = env;
+    go_scanner_error_list_add(&c->list, c->a, pos, msg);
+}
+```
+
+<!-- example: ../examples/go/scanner.c#errors -->
+```c
+Str src = BURROW_S("z := \"open\ny := 0x\nx := 'ab'\n");
+TokenFileSet *fset = token_new_file_set(a);
+TokenFile *file = token_file_set_add_file(fset, BURROW_S("bad.go"), -1, src.len);
+Collect c = {{0}, a};
+GoScanner s;
+go_scanner_init(&s, a, file, slice_from_str(a, src),
+                BURROW_FN(GoScannerErrorHandler, collect, &c), 0);
+Token tok;
+do
+    go_scanner_scan(&s, &tok, NULL);
+while (tok != TOKEN_EOF);
+
+go_scanner_error_list_sort(c.list);
+Error err = go_scanner_error_list_err(c.list);
+fmt_println_v(err);
+BytesBuffer out = BYTES_BUFFER(a);
+go_scanner_print_error(bytes_buffer_as_io_writer(&out), err);
+fmt_printf_v("%s", bytes_buffer_string(&out, a));
+token_file_set_free(fset);
+```
+
+That prints:
+
+```
+bad.go:1:6: string literal not terminated (and 2 more errors)
+bad.go:1:6: string literal not terminated
+bad.go:2:8: hexadecimal literal has no digits
+bad.go:3:6: illegal rune literal
+```
+
+The message the handler gets is only good for the length of the call, and `go_scanner_error_list_add` makes its own copy. `go_scanner_error_list_err` turns the list into an `Error` that shares the list's memory, `errors_as` with `TYPE_GO_SCANNER_ERROR_LIST` gets the list back out of it, and `go_scanner_print_error` writes one error per line. `go_scanner_error_list_remove_multiples` keeps only the first error on each line, which is what Go's tools do before they report.

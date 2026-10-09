@@ -1897,7 +1897,11 @@ net_listener_free(l);
 That prints:
 
 ```
-PENDING
+Status: 200 OK
+Content-Type: text/plain; charset=utf-8
+Date: Thu, 08 Oct 2026 10:00:00 GMT
+
+hello jane, you asked for /hello
 ```
 
 The response comes back as CGI output: a `Status` line, the header, a blank line and the body. As in Go, only the responder role is supported.
@@ -1976,7 +1980,9 @@ net_pipe_free(client);
 That prints:
 
 ```
-PENDING
+7*8=56
+Divide: divide by zero
+Add: rpc: can't find method Arith.Add
 ```
 
 The values on the wire are encoded with `encoding/gob`, which is what Go's server and client use, so either end can be Go. `net/rpc/jsonrpc` swaps in JSON-RPC 1.0, where each request is an object with the method, its parameters in a one-element array and an id, and the response echoes the id:
@@ -2006,7 +2012,7 @@ net_pipe_free(client);
 That prints:
 
 ```
-PENDING
+{"id":1,"result":42,"error":null}
 ```
 
 `rpc_handle_http` serves the default server over HTTP as well, on `RPC_DEFAULT_RPC_PATH`, where a client asks for the connection with a CONNECT, and puts a page listing the services and how often each method has been called at `RPC_DEFAULT_DEBUG_PATH`.

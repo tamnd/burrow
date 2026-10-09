@@ -203,8 +203,7 @@ void burrow__http_body_register_on_hit_eof(void *body, Func fn);
 /* What the server asks of a request body when the handler is done: whether it
  * was closed, whether its end was read, and how much of its declared length is
  * left, which is -1 when it has no length (body.unreadDataSizeLocked). */
-void burrow__http_body_state(void *body, bool *closed, bool *saw_eof,
-                             int64_t *unread);
+void burrow__http_body_state(void *body, bool *closed, bool *saw_eof, int64_t *unread);
 
 /* bodyAllowedForStatus. Whether a response with this status may have a body,
  * which 1xx, 204 and 304 may not. */

@@ -392,6 +392,76 @@ NetTCPConn *net_dial_tcp(Alloc *a, Str network, const NetTCPAddr *laddr,
     return burrow__net_dial_tcp(a, NULL, network, laddr, raddr, err);
 }
 
+OsFile *net_tcp_conn_file(NetTCPConn *c, Alloc *a, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return NULL;
+    }
+    return burrow__conn_file(&c->c, a, err);
+}
+
+OsFile *net_tcp_listener_file(NetTCPListener *l, Alloc *a, Error *err) {
+    if (l == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return NULL;
+    }
+    Error e = BURROW_NO_ERROR;
+    OsFile *f =
+        burrow__netfd_dup(&l->fd, nt_listener_laddr(l), (NetAddr){NULL, NULL}, a, &e);
+    if (f == NULL && !nt_is_oom(e))
+        e = burrow__net_op_error(NT_LIT("file"), l->fd.net, (NetAddr){NULL, NULL},
+                                 nt_listener_laddr(l), e);
+    BURROW_OUT(err, e);
+    return f;
+}
+
+/* fileConn's newTCPConn, with the keep-alive a dial with no Dialer gets. */
+NetTCPConn *burrow__net_tcp_conn_from_file(Alloc *a, const burrow__NetFileSock *fs,
+                                           Error *err) {
+    NetTCPConn *c =
+        (NetTCPConn *)mem_alloc(a, sizeof(NetTCPConn), _Alignof(NetTCPConn));
+    if (c == NULL) {
+        (void)pal_socket_close(fs->s, NULL);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    c->c.alloc = a;
+    Error e = burrow__netfd_from_file(&c->c.fd, fs);
+    if (BURROW_FAILED(e)) {
+        mem_free(a, c, sizeof(NetTCPConn), _Alignof(NetTCPConn));
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    NetKeepAliveConfig none = {false, 0, 0, 0};
+    nt_new_conn(c, NT_KEEPALIVE_IDLE, none);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return c;
+}
+
+/* fileListener's TCPListener, with the zero ListenConfig. */
+NetTCPListener *burrow__net_tcp_listener_from_file(Alloc *a,
+                                                   const burrow__NetFileSock *fs,
+                                                   Error *err) {
+    NetTCPListener *l = (NetTCPListener *)mem_alloc(a, sizeof(NetTCPListener),
+                                                    _Alignof(NetTCPListener));
+    if (l == NULL) {
+        (void)pal_socket_close(fs->s, NULL);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    l->alloc = a;
+    Error e = burrow__netfd_from_file(&l->fd, fs);
+    if (BURROW_FAILED(e)) {
+        mem_free(a, l, sizeof(NetTCPListener), _Alignof(NetTCPListener));
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    l->has_laddr = nt_from_sockaddr(&l->laddr, &l->fd.laddr);
+    l->raw = (burrow__NetRawConn){&l->fd, nt_listener_laddr(l), {NULL, NULL}, true};
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return l;
+}
+
 SyscallRawConn net_tcp_conn_syscall_conn(NetTCPConn *c, Error *err) {
     if (c == NULL) {
         BURROW_OUT(err, burrow__net_einval());

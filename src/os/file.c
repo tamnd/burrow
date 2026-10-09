@@ -124,7 +124,7 @@ void burrow__os_cpath_free(OsCPath *c) {
 static Error os_destroy(OsFile *f) {
     PalErrno pe = PAL_OK;
     Error e = BURROW_NO_ERROR;
-    if (!pal_close(f->fd, &pe))
+    if (!(f->socket ? pal_socket_close(f->fd, &pe) : pal_close(f->fd, &pe)))
         e = burrow__os_errno(pe);
     f->fd = PAL_INVALID_HANDLE;
     burrow__os_dirinfo_free(f);
@@ -231,6 +231,17 @@ OsFile *os_new_file(Alloc *a, Uintptr fd, Str name) {
     return os_new(a, h, name);
 }
 
+OsFile *burrow__os_new_socket_file(Alloc *a, int64_t fd, Str name) {
+    OsFile *f = os_new(a, fd, name);
+    if (f == NULL)
+        return NULL;
+    f->socket = true;
+#if !defined(BURROW_OS_WINDOWS)
+    f->nonblock = true; /* Windows leaves the mode alone in Fd */
+#endif
+    return f;
+}
+
 /* syscallMode: the permission bits and the three special ones, in the
  * system's numbering. */
 static uint32_t os_syscall_mode(OsFileMode m) {
@@ -324,6 +335,11 @@ Str os_file_name(const OsFile *f) {
 Uintptr os_file_fd(OsFile *f) {
     if (f == NULL)
         return ~(Uintptr)0;
+    if (f->nonblock) {
+        PalErrno pe = PAL_OK;
+        if (pal_set_nonblock(f->fd, false, &pe))
+            f->nonblock = false;
+    }
     return (Uintptr)(intptr_t)f->fd;
 }
 

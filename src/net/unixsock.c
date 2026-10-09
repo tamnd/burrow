@@ -422,6 +422,35 @@ NetUnixConn *net_dial_unix(Alloc *a, Str network, const NetUnixAddr *laddr,
     return burrow__net_dial_unix(a, NULL, network, laddr, raddr, err);
 }
 
+OsFile *net_unix_conn_file(NetUnixConn *c, Alloc *a, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return NULL;
+    }
+    return burrow__conn_file(&c->c, a, err);
+}
+
+NetUnixConn *burrow__net_unix_conn_from_file(Alloc *a, const burrow__NetFileSock *fs,
+                                             Error *err) {
+    NetUnixConn *c =
+        (NetUnixConn *)mem_alloc(a, sizeof(NetUnixConn), _Alignof(NetUnixConn));
+    if (c == NULL) {
+        (void)pal_socket_close(fs->s, NULL);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    c->c.alloc = a;
+    Error e = burrow__netfd_from_file(&c->c.fd, fs);
+    if (BURROW_FAILED(e)) {
+        mem_free(a, c, sizeof(NetUnixConn), _Alignof(NetUnixConn));
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    nx_new_conn(c);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return c;
+}
+
 SyscallRawConn net_unix_conn_syscall_conn(NetUnixConn *c, Error *err) {
     if (c == NULL) {
         BURROW_OUT(err, burrow__net_einval());
@@ -877,6 +906,46 @@ NetUnixListener *net_listen_unix(Alloc *a, Str network, const NetUnixAddr *laddr
         e = burrow__net_op_error(NX_LIT("listen"), network, (NetAddr){NULL, NULL}, want,
                                  e);
     BURROW_OUT(err, e);
+    return l;
+}
+
+OsFile *net_unix_listener_file(NetUnixListener *l, Alloc *a, Error *err) {
+    if (l == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return NULL;
+    }
+    Error e = BURROW_NO_ERROR;
+    OsFile *f = burrow__netfd_dup(&l->fd, nx_listener_laddr(l), nx_nil_addr, a, &e);
+    if (f == NULL && !nx_is_oom(e))
+        e = burrow__net_op_error(NX_LIT("file"), l->fd.net, nx_nil_addr,
+                                 nx_listener_laddr(l), e);
+    BURROW_OUT(err, e);
+    return f;
+}
+
+/* fileListener's UnixListener, which leaves its path alone when it closes,
+ * since the listener it was copied from is the one that made it. */
+NetUnixListener *burrow__net_unix_listener_from_file(Alloc *a,
+                                                     const burrow__NetFileSock *fs,
+                                                     Error *err) {
+    NetUnixListener *l = (NetUnixListener *)mem_alloc(a, sizeof(NetUnixListener),
+                                                      _Alignof(NetUnixListener));
+    if (l == NULL) {
+        (void)pal_socket_close(fs->s, NULL);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    l->alloc = a;
+    Error e = burrow__netfd_from_file(&l->fd, fs);
+    if (BURROW_FAILED(e)) {
+        mem_free(a, l, sizeof(NetUnixListener), _Alignof(NetUnixListener));
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    l->has_laddr = nx_from_sockaddr(&l->laddr, &l->fd.laddr, l->fd.sotype);
+    l->raw = (burrow__NetRawConn){&l->fd, nx_listener_laddr(l), nx_nil_addr, true};
+    l->unlink = false;
+    BURROW_OUT(err, BURROW_NO_ERROR);
     return l;
 }
 

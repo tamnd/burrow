@@ -264,8 +264,8 @@ Error burrow__netfd_write_to_error(Error err);
 /* netFD.readMsg and writeMsg, and the write_msg twin of the one above. */
 Int burrow__netfd_read_msg(burrow__NetFD *fd, Slice p, Slice oob, Int *oobn, Int *flags,
                            PalSockAddr *from, Error *err);
-Int burrow__netfd_write_msg(burrow__NetFD *fd, Slice p, Slice oob, const PalSockAddr *to,
-                            Int *oobn, Error *err);
+Int burrow__netfd_write_msg(burrow__NetFD *fd, Slice p, Slice oob,
+                            const PalSockAddr *to, Int *oobn, Error *err);
 Error burrow__netfd_write_msg_error(Error err);
 
 /* netFD.shutdown, with PAL_SHUT_RD or PAL_SHUT_WR. */
@@ -342,6 +342,63 @@ extern const IoWriterVT *const burrow__nt_plain_writer;
  * SetReadBuffer and SetWriteBuffer, opt being PAL_SO_RCVBUF or PAL_SO_SNDBUF. */
 Error burrow__conn_set_deadline(burrow__NetConnCore *c, Time t, uint32_t mode);
 Error burrow__conn_set_buffer(burrow__NetConnCore *c, int32_t opt, Int bytes);
+
+/* ------------------------------------------------------------------ files
+ *
+ * Go's file.go and file_posix.go: the File methods, which hand out a copy of
+ * a socket as an OsFile, and FileConn and the others, which go the other
+ * way. */
+
+/* netFD.dup: a copy of fd's socket in an OsFile from a, named
+ * "net:laddr->raddr" as Go's netFD.name is. The error is the poll FD's, or
+ * the dup's wrapped as Go wraps it, for the caller to put in an OpError, and
+ * running out of memory is burrow_err_out_of_memory by itself. */
+BURROW_OWNS(ret) OsFile *burrow__netfd_dup(burrow__NetFD *fd, NetAddr laddr,
+                                           NetAddr raddr, Alloc *a, Error *err);
+
+/* conn.File: burrow__netfd_dup with the error in an OpError named "file". */
+BURROW_OWNS(ret) OsFile *burrow__conn_file(burrow__NetConnCore *c, Alloc *a,
+                                           Error *err);
+
+/* What the first half of newFileFD learns about the copy of a file's socket
+ * it makes: the copy, its family and type, the network a netFD of those gets,
+ * such as "tcp" or "unixgram", empty for a pair Go has no address for, and
+ * the two addresses, the second all zeros when it is not connected. */
+typedef struct burrow__NetFileSock {
+    int64_t s;
+    int32_t family;
+    int32_t sotype;
+    Str net;
+    PalSockAddr laddr;
+    PalSockAddr raddr;
+} burrow__NetFileSock;
+
+/* newFileFD up to the netFD: a non blocking copy of f's socket, with its
+ * type and addresses, or the error FileConn and the others put in their
+ * OpError, with nothing left open. */
+Error burrow__netfd_file_sock(OsFile *f, burrow__NetFileSock *out);
+
+/* The rest of newFileFD: fd made from fs and on the poller. On an error the
+ * socket is closed. */
+Error burrow__netfd_from_file(burrow__NetFD *fd, const burrow__NetFileSock *fs);
+
+/* newTCPConn, a TCPListener, newUDPConn, newIPConn, newUnixConn and a
+ * UnixListener that does not unlink its path, each made from fs in a. NULL
+ * on an error, which is the netFD's as it is, and then the socket is
+ * closed. */
+BURROW_OWNS(ret) NetTCPConn *
+burrow__net_tcp_conn_from_file(Alloc *a, const burrow__NetFileSock *fs, Error *err);
+BURROW_OWNS(ret) NetTCPListener *
+burrow__net_tcp_listener_from_file(Alloc *a, const burrow__NetFileSock *fs, Error *err);
+BURROW_OWNS(ret) NetUDPConn *
+burrow__net_udp_conn_from_file(Alloc *a, const burrow__NetFileSock *fs, Error *err);
+BURROW_OWNS(ret) NetIPConn *
+burrow__net_ip_conn_from_file(Alloc *a, const burrow__NetFileSock *fs, Error *err);
+BURROW_OWNS(ret) NetUnixConn *
+burrow__net_unix_conn_from_file(Alloc *a, const burrow__NetFileSock *fs, Error *err);
+BURROW_OWNS(ret) NetUnixListener *
+burrow__net_unix_listener_from_file(Alloc *a, const burrow__NetFileSock *fs,
+                                    Error *err);
 
 /* ------------------------------------------------------------ IP sockets
  *

@@ -240,6 +240,13 @@ static void TestAsError(TestingT *t) {
     fp = (const FsPathError *)errors_as(again, TYPE_FS_PATH_ERROR);
     CHECK(fp != NULL && fs_path_error_timeout(fp));
 
+    /* Two Errno errors with the same number match, as == does in Go, from
+     * inside a PathError too. */
+    CHECK(errors_is(err, syscall_errno_as_error(SYSCALL_EEXIST, a)));
+    CHECK(errors_is(pe, syscall_errno_as_error(SYSCALL_EEXIST, a)));
+    CHECK(!errors_is(err, syscall_errno_as_error(SYSCALL_EPERM, a)));
+    CHECK(!errors_is(err, errors_new(a, BURROW_S(EEXIST_TEXT))));
+
     /* error_retain clones it, and the clone is still an Errno. */
     Arena ar2;
     arena_init(&ar2, NULL, 0);
@@ -248,6 +255,8 @@ static void TestAsError(TestingT *t) {
     p = (const SyscallErrno *)errors_as(kept, TYPE_SYSCALL_ERRNO);
     CHECK(p != NULL && *p == SYSCALL_EEXIST);
     CHECK(str_is(error_text(kept), EEXIST_TEXT));
+    CHECK(
+        errors_is(kept, syscall_errno_as_error(SYSCALL_EEXIST, arena_allocator(&ar2))));
     arena_free(&ar2);
 }
 

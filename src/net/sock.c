@@ -416,6 +416,16 @@ Error burrow__conn_close(burrow__NetConnCore *c) {
     return e;
 }
 
+OsFile *burrow__conn_file(burrow__NetConnCore *c, Alloc *a, Error *err) {
+    Error e = BURROW_NO_ERROR;
+    OsFile *f = burrow__netfd_dup(&c->fd, c->laddr, c->raddr, a, &e);
+    if (f == NULL && !(e.vt == burrow_err_out_of_memory.vt &&
+                       e.data == burrow_err_out_of_memory.data))
+        e = burrow__net_op_error(SK_LIT("file"), c->fd.net, c->laddr, c->raddr, e);
+    BURROW_OUT(err, e);
+    return f;
+}
+
 /* conn's setters put the local address where the remote one would go and
  * leave the source out, as Go's do. */
 static Error sk_set_op(burrow__NetConnCore *c, Error e) {

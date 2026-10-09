@@ -2164,6 +2164,409 @@ static void TestServer_Response_ManyHeaders_With_Continuation(TestingT *t) {
     h2t_server_response(t, h2t_handle_many_headers, h2t_client_many_headers);
 }
 
+/* A handler that says it has started, then waits for block to close, which
+ * stands in for the handler calls Go's tester keeps when it has no handler. */
+typedef struct H2tBlock {
+    Chan *in;
+    Chan *block;
+} H2tBlock;
+
+static void h2t_block_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)w;
+    (void)r;
+    H2tBlock *b = (H2tBlock *)env;
+    bool v = true;
+    (void)chan_try_send(b->in, &v);
+    (void)chan_recv(b->block, &v);
+}
+
+static bool h2t_block_make(TestingT *t, H2tBlock *b) {
+    b->in = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    b->block = chan_make(heap_allocator(), TYPE_BOOL, 0);
+    if (b->in != NULL && b->block != NULL)
+        return true;
+    testing_t_errorf_v(t, "no memory");
+    return false;
+}
+
+static void h2t_block_free(H2tBlock *b) {
+    if (b->in != NULL)
+        chan_free(b->in);
+    if (b->block != NULL)
+        chan_free(b->block);
+}
+
+static void TestServer_Send_GoAway_After_Bogus_WindowUpdate(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    H2tTester st;
+    if (h2t_start(&st, t, NULL, NULL) && h2t_greet(&st) &&
+        h2t_write_window_update(&st, 0, (1U << 31) - 1))
+        (void)h2t_want_go_away(&st, 0, HTTP2_ERR_CODE_FLOW_CONTROL);
+    h2t_close(&st);
+}
+
+/* A POST that stays open, with its handler waiting, and then a window update
+ * that takes the stream's window past the limit. */
+static void TestServer_Send_RstStream_After_Bogus_WindowUpdate(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    H2tBlock b;
+    if (!h2t_block_make(t, &b)) {
+        h2t_block_free(&b);
+        return;
+    }
+    H2tTester st;
+    if (h2t_start(&st, t, h2t_block_handler, &b) && h2t_greet(&st) &&
+        h2t_write_headers(&st, 1, h2t_encode_header(&st, h2t_post, 2), false, true)) {
+        bool v;
+        (void)chan_recv(b.in, &v);
+        if (h2t_write_window_update(&st, 1, (1U << 31) - 1))
+            (void)h2t_want_rst_stream(&st, 1, HTTP2_ERR_CODE_FLOW_CONTROL);
+    }
+    chan_close(b.block);
+    h2t_close(&st);
+    h2t_block_free(&b);
+}
+
+typedef struct H2tCLSign {
+    Str name;
+    Str cl;
+    Str want_cl;
+    int64_t want;
+} H2tCLSign;
+
+static const H2tCLSign h2t_cl_sign[] = {
+    {S_("proper content-length"), S_("3"), S_("3"), 3},
+    {S_("ignore cl with plus sign"), S_("+3"), S_("0"), 0},
+    {S_("ignore cl with minus sign"), S_("-3"), S_("0"), 0},
+    {S_("max int64, for safe uint64->int64 conversion"), S_("9223372036854775807"),
+     S_("9223372036854775807"), INT64_MAX},
+    {S_("overflows int64, so ignored"), S_("9223372036854775808"), S_("0"), 0},
+};
+
+/* The case the handler and client below are on. */
+static const H2tCLSign *h2t_cl;
+
+static void h2t_handle_cl_sign(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    (void)http_header_set(http_response_writer_header(w), BURROW_S("content-length"),
+                          h2t_cl->cl);
+}
+
+static bool h2t_client_cl_sign(H2tTester *st) {
+    Str want[] = {BURROW_S(":status"), BURROW_S("200"), BURROW_S("content-length"),
+                  h2t_cl->want_cl};
+    return h2t_get_slash(st) && h2t_want_headers(st, 1, true, want, 4);
+}
+
+static void TestServerIgnoresContentLengthSignWhenWritingChunks(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    for (size_t i = 0; i < sizeof h2t_cl_sign / sizeof h2t_cl_sign[0]; i++) {
+        h2t_cl = &h2t_cl_sign[i];
+        h2t_server_response(t, h2t_handle_cl_sign, h2t_client_cl_sign);
+    }
+}
+
+static bool h2t_write_req_cl_sign(H2tTester *st) {
+    Str kv[] = {BURROW_S("content-length"), h2t_cl->cl};
+    return h2t_write_headers(st, 1, h2t_encode_header(st, kv, 2), false, true) &&
+           h2t_write_data(st, 1, false, "", 0);
+}
+
+static void h2t_check_req_cl_sign(TestingT *t, HttpRequest *r) {
+    if (r->content_length != h2t_cl->want)
+        testing_t_errorf_v(t, "Got: %d\nWant: %d", (Int)r->content_length,
+                           (Int)h2t_cl->want);
+}
+
+static void h2t_req_cl_sign(void *env, TestingT *t) {
+    h2t_cl = (const H2tCLSign *)env;
+    h2t_server_request(t, h2t_write_req_cl_sign, h2t_check_req_cl_sign);
+}
+
+/* Reject content-length headers containing a sign. See
+ * https://golang.org/issue/39017 */
+static void TestServerRejectsContentLengthWithSignNewRequests(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    for (size_t i = 0; i < sizeof h2t_cl_sign / sizeof h2t_cl_sign[0]; i++)
+        testing_t_run(t, h2t_cl_sign[i].name,
+                      BURROW_FN(TestingTFunc, h2t_req_cl_sign,
+                                (void *)(uintptr_t)&h2t_cl_sign[i]));
+}
+
+static void h2t_handle_200(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)r;
+    http_response_writer_write_header(w, 200);
+}
+
+typedef struct H2tCLDup {
+    Str name;
+    Str values[3];
+    size_t n;
+    bool ok;
+} H2tCLDup;
+
+static void h2t_cl_dup(void *env, TestingT *t) {
+    const H2tCLDup *c = (const H2tCLDup *)env;
+    H2tTester st;
+    if (h2t_start(&st, t, h2t_handle_200, NULL) && h2t_greet(&st)) {
+        Str kv[8];
+        size_t n = 0;
+        kv[n++] = BURROW_S(":method");
+        kv[n++] = BURROW_S("GET");
+        for (size_t i = 0; i < c->n; i++) {
+            kv[n++] = BURROW_S("content-length");
+            kv[n++] = c->values[i];
+        }
+        if (h2t_write_headers(&st, 1, h2t_encode_header(&st, kv, n), false, true)) {
+            static const Str want[] = {S_(":status"), S_("200")};
+            if (c->ok)
+                (void)h2t_want_headers(&st, 1, true, want, 2);
+            else
+                (void)h2t_want_rst_stream(&st, 1, HTTP2_ERR_CODE_PROTOCOL);
+        }
+    }
+    h2t_close(&st);
+}
+
+static void TestServerContentLengthDuplicates(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    static const H2tCLDup tests[] = {
+        {S_("single value"), {S_("123")}, 1, true},
+        {S_("identical duplicate values"), {S_("123"), S_("123"), S_("123")}, 3, true},
+        {S_("identical duplicate values with extra whitespace"),
+         {S_("123"), S_(" 123"), S_("123")},
+         3,
+         false},
+        {S_("different duplicate values"), {S_("123"), S_("321"), S_("123")}, 3, false},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++)
+        testing_t_run(
+            t, tests[i].name,
+            BURROW_FN(TestingTFunc, h2t_cl_dup, (void *)(uintptr_t)&tests[i]));
+}
+
+static void h2t_handle_invalid_headers(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    HttpHeader h = http_response_writer_header(w);
+    (void)http_header_add(h, BURROW_S("OK1"), BURROW_S("x"));
+    (void)http_header_add(h, BURROW_S("Bad:Colon"), BURROW_S("x")); /* colon in key */
+    (void)http_header_add(h, BURROW_S("Bad1\x00"), BURROW_S("x"));  /* null in key */
+    (void)http_header_add(h, BURROW_S("Bad2"), BURROW_S("x\x00y")); /* null in value */
+}
+
+static bool h2t_client_invalid_headers(H2tTester *st) {
+    static const Str want[] = {S_(":status"),        S_("200"), S_("ok1"), S_("x"),
+                               S_("content-length"), S_("0")};
+    return h2t_get_slash(st) &&
+           h2t_want_headers(st, 1, true, want, sizeof want / sizeof want[0]);
+}
+
+static void TestServerDoesntWriteInvalidHeaders(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response(t, h2t_handle_invalid_headers, h2t_client_invalid_headers);
+}
+
+static void TestServerNoAutoContentLengthOnHead(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    static const Str head[] = {S_(":method"), S_("HEAD")};
+    static const Str want[] = {S_(":status"), S_("200")};
+    H2tTester st;
+    if (h2t_start(&st, t, NULL, NULL) && h2t_greet(&st) &&
+        h2t_write_headers(&st, 1, h2t_encode_header(&st, head, 2), true, true))
+        (void)h2t_want_headers(&st, 1, true, want, 2);
+    h2t_close(&st);
+}
+
+static void h2t_handle_empty_content_type(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    (void)http_header_set(http_response_writer_header(w), BURROW_S("Content-Type"),
+                          BURROW_S(""));
+    h2t_write_str(w, "<html><head></head><body>hi</body></html>");
+}
+
+static bool h2t_client_empty_content_type(H2tTester *st) {
+    static const Str want[] = {S_(":status"),        S_("200"),
+                               S_("content-type"),   S_(""),
+                               S_("content-length"), S_("41")};
+    return h2t_get_slash(st) &&
+           h2t_want_headers(st, 1, false, want, sizeof want / sizeof want[0]);
+}
+
+/* golang.org/issue/13495 */
+static void TestServerNoDuplicateContentType(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response(t, h2t_handle_empty_content_type,
+                        h2t_client_empty_content_type);
+}
+
+static void h2t_handle_no_content_length(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    Str key = BURROW_S("Content-Length");
+    Slice none = slice_from(NULL, 0, 0, TYPE_STRING);
+    (void)map_set(http_response_writer_header(w), &key, &none);
+    h2t_write_str(w, "OK");
+}
+
+static bool h2t_client_no_content_length(H2tTester *st) {
+    static const Str want[] = {S_(":status"), S_("200"), S_("content-type"),
+                               S_("text/plain; charset=utf-8")};
+    return h2t_get_slash(st) &&
+           h2t_want_headers(st, 1, false, want, sizeof want / sizeof want[0]);
+}
+
+static void TestServerContentLengthCanBeDisabled(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response(t, h2t_handle_no_content_length, h2t_client_no_content_length);
+}
+
+static void h2t_handle_processing(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    http_response_writer_write_header(w, HTTP_STATUS_PROCESSING);
+    h2t_write_str(w, "stuff");
+}
+
+static bool h2t_client_processing(H2tTester *st) {
+    static const Str want1[] = {S_(":status"), S_("102")};
+    static const Str want2[] = {S_(":status"),        S_("200"),
+                                S_("content-type"),   S_("text/plain; charset=utf-8"),
+                                S_("content-length"), S_("5")};
+    return h2t_get_slash(st) && h2t_want_headers(st, 1, false, want1, 2) &&
+           h2t_want_headers(st, 1, false, want2, sizeof want2 / sizeof want2[0]);
+}
+
+static void TestServerSendsProcessing(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response(t, h2t_handle_processing, h2t_client_processing);
+}
+
+#define H2T_LINK_STYLE "</style.css>; rel=preload; as=style"
+#define H2T_LINK_SCRIPT "</script.js>; rel=preload; as=script"
+#define H2T_LINK_FOO "</foo.js>; rel=preload; as=script"
+
+static void h2t_handle_early_hints(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    HttpHeader h = http_response_writer_header(w);
+    (void)http_header_add(h, BURROW_S("Content-Length"), BURROW_S("123"));
+    (void)http_header_add(h, BURROW_S("Link"), BURROW_S(H2T_LINK_STYLE));
+    (void)http_header_add(h, BURROW_S("Link"), BURROW_S(H2T_LINK_SCRIPT));
+    http_response_writer_write_header(w, HTTP_STATUS_EARLY_HINTS);
+
+    (void)http_header_add(h, BURROW_S("Link"), BURROW_S(H2T_LINK_FOO));
+    http_response_writer_write_header(w, HTTP_STATUS_EARLY_HINTS);
+
+    h2t_write_str(w, "stuff");
+}
+
+static bool h2t_client_early_hints(H2tTester *st) {
+    static const Str want1[] = {S_(":status"),      S_("103"),  S_("link"),
+                                S_(H2T_LINK_STYLE), S_("link"), S_(H2T_LINK_SCRIPT)};
+    static const Str want2[] = {
+        S_(":status"), S_("103"),           S_("link"), S_(H2T_LINK_STYLE),
+        S_("link"),    S_(H2T_LINK_SCRIPT), S_("link"), S_(H2T_LINK_FOO)};
+    static const Str want3[] = {S_(":status"),        S_("200"),
+                                S_("link"),           S_(H2T_LINK_STYLE),
+                                S_("link"),           S_(H2T_LINK_SCRIPT),
+                                S_("link"),           S_(H2T_LINK_FOO),
+                                S_("content-type"),   S_("text/plain; charset=utf-8"),
+                                S_("content-length"), S_("123")};
+    return h2t_get_slash(st) &&
+           h2t_want_headers(st, 1, false, want1, sizeof want1 / sizeof want1[0]) &&
+           h2t_want_headers(st, 1, false, want2, sizeof want2 / sizeof want2[0]) &&
+           h2t_want_headers(st, 1, false, want3, sizeof want3 / sizeof want3[0]);
+}
+
+static void TestServerSendsEarlyHints(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response(t, h2t_handle_early_hints, h2t_client_early_hints);
+}
+
+static const Str h2t_bad_paths[] = {S_(""), S_("\x00"), S_("https://example.com/")};
+
+/* The path the write below sends. */
+static Str h2t_bad_path;
+
+static bool h2t_write_bad_path(H2tTester *st) {
+    st->fr->allow_illegal_writes = true;
+    Str kv[] = {BURROW_S(":path"), h2t_bad_path};
+    return h2t_write_headers(st, 1, h2t_encode_header(st, kv, 2), true, true);
+}
+
+static void TestServerInvalidPathHeader(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    for (size_t i = 0; i < sizeof h2t_bad_paths / sizeof h2t_bad_paths[0]; i++) {
+        h2t_bad_path = h2t_bad_paths[i];
+        h2t_rejects_stream(t, HTTP2_ERR_CODE_PROTOCOL, h2t_write_bad_path);
+    }
+}
+
+#define H2T_SLASHES_PATH "//narf.com/path"
+
+static bool h2t_write_initial_slashes(H2tTester *st) {
+    static const Str kv[] = {S_(":path"), S_(H2T_SLASHES_PATH)};
+    return h2t_write_headers(st, 1, h2t_encode_header(st, kv, 2), true, true);
+}
+
+static void h2t_check_initial_slashes(TestingT *t, HttpRequest *r) {
+    if (!str_eq(r->url->host, BURROW_S("")))
+        testing_t_errorf_v(t, "got req.URL.Host %q, want %q", r->url->host,
+                           BURROW_S(""));
+    if (!str_eq(r->url->path, BURROW_S(H2T_SLASHES_PATH)))
+        testing_t_errorf_v(t, "got req.URL.Path %q, want %q", r->url->path,
+                           BURROW_S(H2T_SLASHES_PATH));
+}
+
+/* The path goes through as it is, not as a URL relative to the protocol and
+ * not with its first slashes taken off. */
+static void TestServerPathInitialSlashes(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_request(t, h2t_write_initial_slashes, h2t_check_initial_slashes);
+}
+
+enum { H2T_WINDOW_INCREASE = 1000 };
+#define H2T_MAX_WINDOW ((1U << 31) - 1) /* RFC 9113, 6.9.1 */
+
+/* A POST with its data still to come, and some more window for it. Then a
+ * SETTINGS frame moves the initial window to over_by past what the stream can
+ * take. */
+static void h2t_settings_flow_control(TestingT *t, uint32_t over_by) {
+    H2tBlock b;
+    if (!h2t_block_make(t, &b)) {
+        h2t_block_free(&b);
+        return;
+    }
+    H2tTester st;
+    if (h2t_start(&st, t, h2t_block_handler, &b) && h2t_greet(&st) &&
+        h2t_write_headers(&st, 1, h2t_encode_header(&st, h2t_post, 2), false, true) &&
+        h2t_write_window_update(&st, 1, H2T_WINDOW_INCREASE)) {
+        Http2Setting s = {HTTP2_SETTING_INITIAL_WINDOW_SIZE,
+                          H2T_MAX_WINDOW - H2T_WINDOW_INCREASE + over_by};
+        if (over_by == 0)
+            (void)h2t_write_settings(&st, &s, 1);
+        else if (!h2t_failed(&st, "WriteSettings",
+                             burrow__http2_framer_write_settings(st.fr, &s, 1)))
+            (void)h2t_want_go_away(&st, 1, HTTP2_ERR_CODE_FLOW_CONTROL);
+    }
+    chan_close(b.block);
+    h2t_close(&st);
+    h2t_block_free(&b);
+}
+
+/* "An endpoint MUST treat a change to SETTINGS_INITIAL_WINDOW_SIZE that causes
+ * any flow-control window to exceed the maximum size as a connection error
+ * (Section 5.4.1) of type FLOW_CONTROL_ERROR."
+ * -- https://www.rfc-editor.org/rfc/rfc9113.html#section-6.9.2-7 */
+static void TestServerSettingsFlowControlUpdateBeyondLimit(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_settings_flow_control(t, 1);
+}
+
+/* A SETTINGS update which doesn't quite put a stream over the limit. */
+static void TestServerSettingsFlowControlUpdateWithinLimit(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_settings_flow_control(t, 0);
+}
+
 #define TESTS(X)                                                                       \
     X(TestServer)                                                                      \
     X(TestServer_Request_Get)                                                          \
@@ -2235,6 +2638,21 @@ static void TestServer_Response_ManyHeaders_With_Continuation(TestingT *t) {
     X(TestServer_Response_RST_Unblocks_LargeWrite)                                     \
     X(TestServer_Response_Empty_Data_Not_FlowControlled)                               \
     X(TestServer_Response_Automatic100Continue)                                        \
-    X(TestServer_Response_ManyHeaders_With_Continuation)
+    X(TestServer_Response_ManyHeaders_With_Continuation)                               \
+    X(TestServer_Send_GoAway_After_Bogus_WindowUpdate)                                 \
+    X(TestServer_Send_RstStream_After_Bogus_WindowUpdate)                              \
+    X(TestServerIgnoresContentLengthSignWhenWritingChunks)                             \
+    X(TestServerRejectsContentLengthWithSignNewRequests)                               \
+    X(TestServerContentLengthDuplicates)                                               \
+    X(TestServerDoesntWriteInvalidHeaders)                                             \
+    X(TestServerNoAutoContentLengthOnHead)                                             \
+    X(TestServerNoDuplicateContentType)                                                \
+    X(TestServerContentLengthCanBeDisabled)                                            \
+    X(TestServerSendsProcessing)                                                       \
+    X(TestServerSendsEarlyHints)                                                       \
+    X(TestServerInvalidPathHeader)                                                     \
+    X(TestServerPathInitialSlashes)                                                    \
+    X(TestServerSettingsFlowControlUpdateBeyondLimit)                                  \
+    X(TestServerSettingsFlowControlUpdateWithinLimit)
 
 TESTING_MAIN(TESTS)

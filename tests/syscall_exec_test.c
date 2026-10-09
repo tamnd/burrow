@@ -294,7 +294,13 @@ static void TestForkExecNilArgv(TestingT *t) {
     Error e = BURROW_NO_ERROR;
     Int pid = syscall_fork_exec(S("/dev/null"), (Slice){NULL, 0, 0, NULL}, NULL, &e);
     CHECK_INT_EQ(pid, 0);
+#if defined(BURROW_OS_FREEBSD)
+    /* FreeBSD turns down an exec with no arguments before it looks at the
+     * file. */
+    CHECK_INT_EQ(errno_of(e), SYSCALL_EINVAL);
+#else
     CHECK_INT_EQ(errno_of(e), SYSCALL_EACCES);
+#endif
 }
 
 static void TestForkExecNotFound(TestingT *t) {
@@ -493,8 +499,14 @@ static void TestCredential(TestingT *t) {
     /* The test binary may live somewhere nobody cannot reach. */
     if (code == 9 || got.len == 0)
         testing_t_skipf_v(t, "child could not run as nobody");
-    if (!str_eq(got, S("65534 65534 0\n")))
-        testing_t_errorf_v(t, "child ids = %q, want %q", got, S("65534 65534 0\n"));
+#if defined(BURROW_OS_FREEBSD)
+    /* The first group is the effective gid there, so the list is never empty. */
+    Str want = S("65534 65534 1\n");
+#else
+    Str want = S("65534 65534 0\n");
+#endif
+    if (!str_eq(got, want))
+        testing_t_errorf_v(t, "child ids = %q, want %q", got, want);
 }
 
 #if defined(BURROW_OS_LINUX)

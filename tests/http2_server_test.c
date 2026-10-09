@@ -170,12 +170,18 @@ static void h2t_serve_job(void *env) {
     st->serve_err = http_server_serve(&st->srv, l);
 }
 
-/* newServerTester. The server's log goes nowhere, as optQuiet has it. */
-/* newServerTester, with h2 as the server's HTTP/2 config, which can be NULL
- * and has to last until h2t_close, and max_header_bytes as its
- * MaxHeaderBytes. */
+/* What newServerTester's options set on the server. h2 is its HTTP/2 config,
+ * which can be NULL and has to last until h2t_close. */
+typedef struct H2tServerOpts {
+    const HttpHTTP2Config *h2;
+    Int max_header_bytes;
+    Duration idle_timeout;
+} H2tServerOpts;
+
+/* newServerTester, with the options o sets when it isn't NULL. The server's
+ * log goes nowhere, as optQuiet has it. */
 static bool h2t_start_server(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *env,
-                             const HttpHTTP2Config *h2, Int max_header_bytes) {
+                             const H2tServerOpts *o) {
     memset(st, 0, sizeof *st);
     st->t = t;
     st->a = heap_allocator();
@@ -183,8 +189,11 @@ static bool h2t_start_server(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *
     http_protocols_set_http1(&st->protos, true);
     http_protocols_set_unencrypted_http2(&st->protos, true);
     st->srv.protocols = &st->protos;
-    st->srv.http2 = h2;
-    st->srv.max_header_bytes = max_header_bytes;
+    if (o != NULL) {
+        st->srv.http2 = o->h2;
+        st->srv.max_header_bytes = o->max_header_bytes;
+        st->srv.idle_timeout = o->idle_timeout;
+    }
     st->hf = BURROW_FN(HttpHandlerFunc, fn != NULL ? fn : h2t_nop_handler, env);
     st->srv.handler = http_handler_func_as_handler(&st->hf);
     st->lg = log_new(st->a, io_discard, BURROW_STR_EMPTY, 0);
@@ -222,7 +231,8 @@ static bool h2t_start_server(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *
 
 static bool h2t_start_config(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *env,
                              const HttpHTTP2Config *h2) {
-    return h2t_start_server(st, t, fn, env, h2, 0);
+    H2tServerOpts o = {h2, 0, 0};
+    return h2t_start_server(st, t, fn, env, &o);
 }
 
 static bool h2t_start(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *env) {
@@ -3217,7 +3227,8 @@ static bool h2t_read_until_closed(H2tTester *st, uint32_t *last_id) {
 static void TestServerContinuationFlood(TestingT *t) {
     SKIP_WITHOUT_THREADS(t);
     H2tTester st;
-    if (h2t_start_server(&st, t, NULL, NULL, NULL, 4096) && h2t_greet(&st) &&
+    H2tServerOpts o = {NULL, 4096, 0};
+    if (h2t_start_server(&st, t, NULL, NULL, &o) && h2t_greet(&st) &&
         h2t_write_headers(&st, 1, h2t_encode_header(&st, NULL, 0), true, false)) {
         bool ok = true;
         for (int i = 0; ok && i < 1000; i++) {
@@ -3848,6 +3859,375 @@ static void TestServerRFC9218PriorityAware(TestingT *t) {
     h2t_close(&st);
 }
 
+/* wantIdle: nothing more comes from the server for a while. Go checks that
+ * the bubble has gone quiet, and this waits 50ms for a frame. */
+static bool h2t_want_idle(H2tTester *st) {
+    (void)st->cc.vt->set_read_deadline(st->cc.data,
+                                       time_add(time_now(), 50 * TIME_MILLISECOND));
+    Error err = BURROW_NO_ERROR;
+    Http2Frame *f = burrow__http2_framer_read_frame(st->fr, &err);
+    bool ok = BURROW_FAILED(err) && errors_is(err, os_err_deadline_exceeded);
+    if (!ok && !BURROW_FAILED(err))
+        testing_t_errorf_v(st->t, "got frame type %d on stream %d, want idle",
+                           (int)f->header.type, (int)f->header.stream_id);
+    else if (!ok)
+        testing_t_errorf_v(st->t, "reading while idle: %v", err);
+    burrow__http2_frame_free(f);
+    (void)st->cc.vt->set_read_deadline(st->cc.data,
+                                       time_add(time_now(), 10 * TIME_SECOND));
+    return ok;
+}
+
+static void h2t_discard_body_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)w;
+    Error err = BURROW_NO_ERROR;
+    (void)io_copy(heap_allocator(), io_discard, io_read_closer_as_io_reader(r->body),
+                  &err);
+}
+
+/* Go moves its clock past GoAwayTimeout, and this waits for it. */
+static void TestProtocolErrorAfterGoAway(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    static const Str kv[] = {S_(":method"), S_("POST"), S_("content-length"), S_("12")};
+    H2tTester st;
+    if (h2t_start(&st, t, h2t_discard_body_handler, NULL) && h2t_greet(&st) &&
+        h2t_write_headers(&st, 1, h2t_encode_header(&st, kv, 4), false, true) &&
+        h2t_write_data(&st, 1, false, "some ", 5) &&
+        /* A GOAWAY with no error, then a window update that overflows. The
+         * server should close the connection. */
+        !h2t_failed(
+            &st, "WriteGoAway",
+            burrow__http2_framer_write_go_away(st.fr, 1, HTTP2_ERR_CODE_NO,
+                                               slice_from(NULL, 0, 0, TYPE_BYTE))) &&
+        !h2t_failed(&st, "WriteWindowUpdate",
+                    burrow__http2_framer_write_window_update(st.fr, 0, 0x7fffffffU)) &&
+        h2t_want_go_away(&st, 1, HTTP2_ERR_CODE_NO))
+        h2t_want_closed(&st);
+    h2t_close(&st);
+}
+
+/* Go's nextHandlerCall and call.do: the handler runs each step the test sends
+ * it, and says when it is done with it. */
+typedef struct H2tSteps {
+    Chan *step;
+    Chan *done;
+} H2tSteps;
+
+enum { H2T_STEP_WRITE_ONE = 1, H2T_STEP_CLOSE_BODY, H2T_STEP_WRITE_TWO };
+
+static void h2t_steps_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    H2tSteps *s = (H2tSteps *)env;
+    Int step = 0;
+    while (chan_recv(s->step, &step)) {
+        Error err = BURROW_NO_ERROR;
+        if (step == H2T_STEP_CLOSE_BODY) {
+            (void)r->body.vt->closer.close(r->body.data);
+        } else {
+            static const char one[] = "one", two[] = "two";
+            const char *p = step == H2T_STEP_WRITE_ONE ? one : two;
+            (void)http_response_writer_write(
+                w, slice_from((void *)(uintptr_t)p, 3, 3, TYPE_BYTE), &err);
+            (void)w.vt->flush(w.data);
+        }
+        bool v = true;
+        chan_send(s->done, &v);
+    }
+}
+
+static bool h2t_step(H2tSteps *s, Int step) {
+    bool v;
+    chan_send(s->step, &step);
+    return chan_recv(s->done, &v);
+}
+
+static void TestServerSendDataAfterRequestBodyClose(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    H2tSteps s = {chan_make(heap_allocator(), TYPE_INT, 0),
+                  chan_make(heap_allocator(), TYPE_BOOL, 1)};
+    H2tTester st;
+    bool ok = s.step != NULL && s.done != NULL;
+    if (!ok)
+        testing_t_errorf_v(t, "no memory");
+    /* The handler starts writing the response body. */
+    if (ok && h2t_start(&st, t, h2t_steps_handler, &s) && h2t_greet(&st) &&
+        h2t_write_headers(&st, 1, h2t_encode_header(&st, NULL, 0), false, true) &&
+        h2t_step(&s, H2T_STEP_WRITE_ONE) &&
+        h2t_want_frame_type(&st, HTTP2_META_HEADERS_FRAME) &&
+        h2t_want_data(&st, 1, false, "one") && h2t_want_idle(&st) &&
+        /* The handler closes the request body, which the client can't see. */
+        h2t_step(&s, H2T_STEP_CLOSE_BODY) && h2t_want_idle(&st) &&
+        /* The client can still send request data, which is thrown away. */
+        h2t_write_data(&st, 1, false, "client-sent data", 16) && h2t_want_idle(&st) &&
+        /* The handler can still write more of the response body, which goes
+         * to the client. */
+        h2t_step(&s, H2T_STEP_WRITE_TWO) && h2t_want_data(&st, 1, false, "two"))
+        (void)h2t_want_idle(&st);
+    if (s.step != NULL)
+        chan_close(s.step);
+    if (ok)
+        h2t_close(&st);
+    chan_free(s.step);
+    chan_free(s.done);
+}
+
+static void TestServerIdleTimeout(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    if (testing_short())
+        testing_t_skip_v(t, "skipping in short mode");
+    H2tServerOpts o = {NULL, 0, 500 * TIME_MILLISECOND};
+    H2tTester st;
+    if (h2t_start_server(&st, t, NULL, NULL, &o) && h2t_greet(&st))
+        (void)h2t_want_go_away(&st, 0, HTTP2_ERR_CODE_NO);
+    h2t_close(&st);
+}
+
+static void h2t_sleep_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)w;
+    (void)r;
+    time_sleep(*(const Duration *)env);
+}
+
+static void TestServerIdleTimeout_AfterRequest(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    if (testing_short())
+        testing_t_skip_v(t, "skipping in short mode");
+    static const Duration request_timeout = 2 * TIME_SECOND;
+    H2tServerOpts o = {NULL, 0, 1 * TIME_SECOND};
+    H2tTester st;
+    /* A request that takes twice the idle timeout, which mustn't fire while
+     * the request is going. It starts again once the request is done. */
+    if (h2t_start_server(&st, t, h2t_sleep_handler, (void *)(uintptr_t)&request_timeout,
+                         &o) &&
+        h2t_greet(&st) && h2t_bodyless_req1(&st, NULL, 0) &&
+        h2t_want_headers(&st, 1, true, NULL, 0))
+        (void)h2t_want_go_away(&st, 1, HTTP2_ERR_CODE_NO);
+    h2t_close(&st);
+}
+
+/* Go waits 15s for the PING with its fake clock and 15s more for the answer.
+ * These wait for real, so the PING comes after 1s, and the server waits 2s
+ * for an answer, which leaves a margin either side of where Go looks. */
+static void TestServerPingSent(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    HttpHTTP2Config h2;
+    memset(&h2, 0, sizeof h2);
+    h2.send_ping_timeout = 1 * TIME_SECOND;
+    h2.ping_timeout = 2 * TIME_SECOND;
+    H2tTester st;
+    Http2Frame *f = NULL;
+    if (h2t_start_config(&st, t, NULL, NULL, &h2) && h2t_greet(&st) &&
+        h2t_want_idle(&st))
+        f = h2t_read_kind(&st, HTTP2_PING_FRAME);
+    if (f != NULL && h2t_want_idle(&st)) {
+        time_sleep(1 * TIME_SECOND);
+        if (h2t_want_idle(&st))
+            h2t_want_closed(&st);
+    }
+    burrow__http2_frame_free(f);
+    h2t_close(&st);
+}
+
+/* As TestServerPingSent, with the PING answered halfway through the 1s the
+ * server waits here. Go then looks 2s later, which here is half a second past
+ * the wait and half a second before the next PING is due. */
+static void TestServerPingResponded(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    HttpHTTP2Config h2;
+    memset(&h2, 0, sizeof h2);
+    h2.send_ping_timeout = 2 * TIME_SECOND;
+    h2.ping_timeout = 1 * TIME_SECOND;
+    H2tTester st;
+    Http2Frame *f = NULL;
+    if (h2t_start_config(&st, t, NULL, NULL, &h2) && h2t_greet(&st) &&
+        h2t_want_idle(&st))
+        f = h2t_read_kind(&st, HTTP2_PING_FRAME);
+    if (f != NULL && h2t_want_idle(&st)) {
+        time_sleep(300 * TIME_MILLISECOND);
+        if (h2t_want_idle(&st) &&
+            !h2t_failed(&st, "WritePing",
+                        burrow__http2_framer_write_ping(st.fr, true, f->u.ping.data))) {
+            time_sleep(1 * TIME_SECOND);
+            (void)h2t_want_idle(&st);
+        }
+    }
+    burrow__http2_frame_free(f);
+    h2t_close(&st);
+}
+
+static void h2t_write_100_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)r;
+    static const Byte zeros[100];
+    Error err = BURROW_NO_ERROR;
+    (void)http_response_writer_write(
+        w, slice_from((void *)(uintptr_t)zeros, 100, 100, TYPE_BYTE), &err);
+}
+
+/* The pipe hands the server's writes over as the test reads them, so reading a
+ * byte at a time is Go's SetReadBufferSize(1). Go's timeout is 1s of its fake
+ * clock, and it reads a byte every 1s less a nanosecond. This reads one every
+ * half of the timeout. */
+static void TestServerWriteByteTimeout(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    static const Duration timeout = 1 * TIME_SECOND;
+    HttpHTTP2Config h2;
+    memset(&h2, 0, sizeof h2);
+    h2.write_byte_timeout = timeout;
+    H2tTester st;
+    if (h2t_start_config(&st, t, h2t_write_100_handler, NULL, &h2) && h2t_greet(&st) &&
+        h2t_bodyless_req1(&st, NULL, 0)) {
+        /* Read a few bytes, staying under WriteByteTimeout. */
+        bool ok = true;
+        for (int i = 0; ok && i < 10; i++) {
+            time_sleep(timeout / 2);
+            Byte b[1];
+            Error err = BURROW_NO_ERROR;
+            Int n =
+                st.cc.vt->reader.read(st.cc.data, slice_from(b, 1, 1, TYPE_BYTE), &err);
+            ok = n == 1 && !BURROW_FAILED(err);
+            if (!ok)
+                testing_t_errorf_v(t, "read %d: %d, %v; want 1, nil", i, n, err);
+        }
+        /* Then stop reading. The server's write times out after it wrote one
+         * more byte, and then after it couldn't write any more, which is when
+         * it closes the connection. */
+        if (ok) {
+            time_sleep(2 * timeout + timeout / 2);
+            (void)st.cc.vt->set_read_deadline(st.cc.data,
+                                              time_add(time_now(), 10 * TIME_SECOND));
+            h2t_want_closed(&st);
+        }
+    }
+    h2t_close(&st);
+}
+
+static void h2t_conn_close_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    HttpHeader h = http_response_writer_header(w);
+    (void)http_header_set(h, BURROW_S("Connection"), BURROW_S("close"));
+    (void)http_header_set(h, BURROW_S("Foo"), BURROW_S("bar"));
+    (void)w.vt->flush(w.data);
+    bool v;
+    (void)chan_recv((Chan *)env, &v);
+}
+
+static Byte h2t_zeros[1 << 19];
+
+/* What the client does once it sees the GOAWAY: it opens a stream and resets
+ * it, which the server should ignore, and sends data on another one, which the
+ * server doesn't serve but still gives back the flow control for. */
+static void h2t_after_conn_close_go_away(H2tTester *st, const Http2Frame *f) {
+    if (f->u.go_away.last_stream_id != 1 || f->u.go_away.err_code != HTTP2_ERR_CODE_NO)
+        testing_t_errorf_v(st->t, "unexpected GOAWAY frame: LastStreamID=%d code=%d",
+                           (int)f->u.go_away.last_stream_id,
+                           (int)f->u.go_away.err_code);
+    (void)(h2t_write_headers(st, 3, h2t_encode_header(st, NULL, 0), false, true) &&
+           !h2t_failed(st, "WriteRSTStream",
+                       burrow__http2_framer_write_rst_stream(st->fr, 3,
+                                                             HTTP2_ERR_CODE_CANCEL)) &&
+           h2t_write_headers(st, 5, h2t_encode_header(st, NULL, 0), false, true) &&
+           /* Enough data for a window update. */
+           h2t_write_data(st, 5, true, (const char *)h2t_zeros, (Int)sizeof h2t_zeros));
+}
+
+/* The response's fields other than date, as Go's decodeHeader gives them,
+ * are :status 200 and foo bar. */
+static void h2t_check_conn_close_headers(H2tTester *st, const Http2Frame *f) {
+    static const Str want[] = {S_(":status"), S_("200"), S_("foo"), S_("bar")};
+    const HpackHeaderFields *fs = &f->u.meta_headers.fields;
+    size_t n = 0;
+    bool ok = true;
+    for (Int i = 0; ok && i < fs->len; i++) {
+        if (str_eq(fs->p[i].name, BURROW_S("date")))
+            continue;
+        ok = n < 4 && str_eq(fs->p[i].name, want[n]) &&
+             str_eq(fs->p[i].value, want[n + 1]);
+        n += 2;
+    }
+    if (!ok || n != 4)
+        testing_t_errorf_v(st->t,
+                           "got headers %d fields; want [[:status 200] [foo bar]]",
+                           (int)fs->len);
+}
+
+/* Go reads until its fake connection is closed, after it moves the clock past
+ * GoAwayTimeout. This reads until the server closes it, which takes that long
+ * for real. */
+static void TestServerHandlerConnectionClose(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    Chan *unblock = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    if (unblock == NULL)
+        FATALF("no memory");
+    H2tTester st;
+    bool saw_go_away = false, saw_res = false, saw_window_update = false;
+    if (h2t_start(&st, t, h2t_conn_close_handler, unblock) && h2t_greet(&st) &&
+        h2t_write_headers(&st, 1, h2t_encode_header(&st, NULL, 0), true, true)) {
+        for (bool done = false; !done;) {
+            Error err = BURROW_NO_ERROR;
+            Http2Frame *f = burrow__http2_framer_read_frame(st.fr, &err);
+            if (BURROW_FAILED(err)) {
+                if (errors_is(err, os_err_deadline_exceeded))
+                    testing_t_errorf_v(t, "connection is not closed; want it to be");
+                burrow__http2_frame_free(f);
+                break;
+            }
+            switch (f->kind) {
+            case HTTP2_GO_AWAY_FRAME:
+                saw_go_away = true;
+                h2t_after_conn_close_go_away(&st, f);
+                break;
+            case HTTP2_META_HEADERS_FRAME:
+                h2t_check_conn_close_headers(&st, f);
+                saw_res = true;
+                break;
+            case HTTP2_DATA_FRAME:
+                if (f->header.stream_id != 1 ||
+                    (f->header.flags & HTTP2_FLAG_DATA_END_STREAM) == 0 ||
+                    f->u.data.data.len != 0)
+                    testing_t_errorf_v(t, "unexpected DATA frame on stream %d",
+                                       (int)f->header.stream_id);
+                break;
+            case HTTP2_WINDOW_UPDATE_FRAME: {
+                if (!saw_go_away || f->header.stream_id != 0) {
+                    testing_t_errorf_v(t, "unexpected WINDOW_UPDATE frame on stream %d",
+                                       (int)f->header.stream_id);
+                    done = true;
+                    break;
+                }
+                saw_window_update = true;
+                bool v = true;
+                chan_send(unblock, &v);
+                break;
+            }
+            case HTTP2_SETTINGS_FRAME:
+            case HTTP2_HEADERS_FRAME:
+            case HTTP2_PRIORITY_FRAME:
+            case HTTP2_RST_STREAM_FRAME:
+            case HTTP2_PUSH_PROMISE_FRAME:
+            case HTTP2_PING_FRAME:
+            case HTTP2_CONTINUATION_FRAME:
+            case HTTP2_PRIORITY_UPDATE_FRAME:
+            case HTTP2_UNKNOWN_FRAME:
+            default:
+                testing_t_logf_v(t, "unexpected frame type %d", (int)f->header.type);
+                break;
+            }
+            burrow__http2_frame_free(f);
+        }
+    }
+    if (!saw_go_away)
+        testing_t_errorf_v(t, "didn't see GOAWAY");
+    if (!saw_res)
+        testing_t_errorf_v(t, "didn't see response");
+    if (!saw_window_update)
+        testing_t_errorf_v(t, "didn't see WINDOW_UPDATE");
+    /* In case of errors. */
+    chan_close(unblock);
+    h2t_close(&st);
+    chan_free(unblock);
+}
+
 #define TESTS(X)                                                                       \
     X(TestServer)                                                                      \
     X(TestServer_Request_Get)                                                          \
@@ -3962,6 +4342,14 @@ static void TestServerRFC9218PriorityAware(TestingT *t) {
     X(TestServerMaxHandlerGoroutines)                                                  \
     X(TestServerRFC9218Priority)                                                       \
     X(TestServerRFC9218PriorityIgnoredWhenProxied)                                     \
-    X(TestServerRFC9218PriorityAware)
+    X(TestServerRFC9218PriorityAware)                                                  \
+    X(TestProtocolErrorAfterGoAway)                                                    \
+    X(TestServerSendDataAfterRequestBodyClose)                                         \
+    X(TestServerIdleTimeout)                                                           \
+    X(TestServerIdleTimeout_AfterRequest)                                              \
+    X(TestServerPingSent)                                                              \
+    X(TestServerPingResponded)                                                         \
+    X(TestServerWriteByteTimeout)                                                      \
+    X(TestServerHandlerConnectionClose)
 
 TESTING_MAIN(TESTS)

@@ -1206,6 +1206,12 @@ BURROW_OWNS(ret) HttpResponse *burrow__http2_transport_round_trip(Http2Transport
 /* CloseIdleConnections. */
 void burrow__http2_transport_close_idle_connections(Http2Transport *t2);
 
+/* ClientConn.Close, for the connection add_conn was given as c: it closes the
+ * connection now and fails the requests on it with
+ * burrow__http2_err_client_conn_force_closed. Nothing when the transport has
+ * no such connection. */
+void burrow__http2_transport_close_conn(Http2Transport *t2, NetConn c);
+
 /* IdleConnStrsForTesting: the address of each connection that can take a new
  * request, sorted, as a Slice of Str in a. */
 BURROW_OWNS(ret) Slice burrow__http2_transport_idle_conn_strs(Http2Transport *t2,

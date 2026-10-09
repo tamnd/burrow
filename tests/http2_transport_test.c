@@ -1143,7 +1143,7 @@ static bool h2ct_write_data(H2ctConn *tc, uint32_t id, bool end_stream,
 
 /* writeData with n zero bytes, as Go's make([]byte, n). */
 static bool h2ct_write_zeros(H2ctConn *tc, uint32_t id, bool end_stream, Int n) {
-    static const Byte zeros[5000];
+    static const Byte zeros[64 << 10];
     if (n > (Int)sizeof zeros) {
         testing_t_errorf_v(tc->t, "%d zero bytes is more than the test has", (int)n);
         return false;
@@ -3235,6 +3235,139 @@ static void TestTransportChecksRequestHeaderListSize(TestingT *t) {
     h2ct_run(t, h2ct_checks_request_header_list_size, NULL);
 }
 
+/* tc.cc.Close(). */
+static void h2ct_cc_close(H2ctTT *tt, H2ctConn *tc) {
+    burrow__http2_transport_close_conn(tt->t2, (NetConn){&h2ct_cli_vt, tc});
+}
+
+static void h2ct_client_conn_close_at_headers(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    HttpRequest *req =
+        h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
+                             BURROW_S("https://dummy.tld/"), h2ct_no_body);
+    H2CT_TRY(req != NULL);
+    H2ctRT *rt = h2ct_tc_round_trip(tt, req);
+    H2CT_TRY(rt != NULL && h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+
+    h2ct_cc_close(tt, tc);
+    Error err = h2ct_rt_err(rt);
+    if (!errors_is(err, burrow__http2_err_client_conn_force_closed))
+        FATALF("RoundTrip error = %v, want errClientConnForceClosed", err);
+}
+
+static void TestClientConnCloseAtHeaders(TestingT *t) {
+    h2ct_run(t, h2ct_client_conn_close_at_headers, NULL);
+}
+
+static void h2ct_client_conn_close_at_body(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    HttpRequest *req =
+        h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
+                             BURROW_S("https://dummy.tld/"), h2ct_no_body);
+    H2CT_TRY(req != NULL);
+    H2ctRT *rt = h2ct_tc_round_trip(tt, req);
+    H2CT_TRY(rt != NULL && h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    Str kv[] = {BURROW_S(":status"), BURROW_S("200")};
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, kv, 2), false)));
+    H2CT_TRY(h2ct_write_zeros(tc, id, false, 64));
+    H2CT_TRY(h2ct_rt_response(rt) != NULL);
+    h2ct_cc_close(tt, tc);
+
+    Error err = BURROW_NO_ERROR;
+    (void)h2ct_rt_read_body(rt, &err);
+    if (BURROW_OK(err))
+        testing_t_errorf_v(tt->t, "expected a Copy error, got nil");
+}
+
+static void TestClientConnCloseAtBody(TestingT *t) {
+    h2ct_run(t, h2ct_client_conn_close_at_body, NULL);
+}
+
+static void h2ct_flow_control(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    enum { MAX_BUFFER = 64 << 10 }; /* 64KiB */
+    static const HttpHTTP2Config h2 = {.max_receive_buffer_per_connection = MAX_BUFFER,
+                                       .max_receive_buffer_per_stream = MAX_BUFFER,
+                                       .max_read_frame_size = 16 << 20}; /* 16MiB */
+    tt->tr1.http2 = &h2;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    HttpRequest *req =
+        h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
+                             BURROW_S("https://dummy.tld/"), h2ct_no_body);
+    H2CT_TRY(req != NULL);
+    H2ctRT *rt = h2ct_tc_round_trip(tt, req);
+    H2CT_TRY(rt != NULL && h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    Str kv[] = {BURROW_S(":status"), BURROW_S("200")};
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, kv, 2), false)));
+    H2CT_TRY(h2ct_rt_want_status(rt, 200));
+
+    /* Server fills up its transmit buffer. The client does not provide more
+     * flow control tokens, since the data hasn't been consumed by the user. */
+    H2CT_TRY(h2ct_write_zeros(tc, id, false, MAX_BUFFER));
+    H2CT_TRY(h2ct_want_idle(tc));
+
+    /* User reads data from the response body. The client sends more flow
+     * control tokens. */
+    HttpResponse *res = h2ct_rt_response(rt);
+    H2CT_TRY(res != NULL);
+    Slice buf = slice_make(arena_allocator(&tt->ar), TYPE_BYTE, MAX_BUFFER, MAX_BUFFER);
+    H2CT_TRY(buf.p != NULL);
+    Error err = BURROW_NO_ERROR;
+    (void)io_read_full(io_read_closer_as_io_reader(res->body), buf, &err);
+    if (BURROW_FAILED(err))
+        FATALF("io.Body.Read: %v", err);
+    uint32_t conn_tokens = 0;
+    uint32_t stream_tokens = 0;
+    for (;;) {
+        Http2Frame *f = h2ct_read_frame_within(tc, H2CT_QUIET, &err);
+        if (BURROW_FAILED(err)) {
+            burrow__http2_frame_free(f);
+            if (!errors_is(err, os_err_deadline_exceeded))
+                FATALF("ReadFrame: %v", err);
+            break;
+        }
+        if (f->header.type != HTTP2_FRAME_WINDOW_UPDATE) {
+            int type = (int)f->header.type;
+            burrow__http2_frame_free(f);
+            FATALF("received unexpected frame type %d (want WINDOW_UPDATE)", type);
+        }
+        /* Go's switch has wu.StreamID as its second case, which every stream
+         * matches. */
+        if (f->header.stream_id == 0)
+            conn_tokens += f->u.window_update.increment;
+        else
+            stream_tokens += f->u.window_update.increment;
+        burrow__http2_frame_free(f);
+    }
+    if (conn_tokens != (uint32_t)MAX_BUFFER)
+        testing_t_errorf_v(tt->t,
+                           "transport provided %d bytes of connection WINDOW_UPDATE, "
+                           "want %d",
+                           (int)conn_tokens, (int)MAX_BUFFER);
+    if (stream_tokens != (uint32_t)MAX_BUFFER)
+        testing_t_errorf_v(
+            tt->t, "transport provided %d bytes of stream WINDOW_UPDATE, want %d",
+            (int)stream_tokens, (int)MAX_BUFFER);
+}
+
+static void TestTransportFlowControl(TestingT *t) {
+    h2ct_run(t, h2ct_flow_control, NULL);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -3320,6 +3453,9 @@ static void TestTransportChecksRequestHeaderListSize(TestingT *t) {
     X(TestTransportSendPingWithReset)                                                  \
     X(TestTransportNoPingAfterResetWithFrames)                                         \
     X(TestPadHeaders)                                                                  \
-    X(TestTransportChecksRequestHeaderListSize)
+    X(TestTransportChecksRequestHeaderListSize)                                        \
+    X(TestClientConnCloseAtHeaders)                                                    \
+    X(TestClientConnCloseAtBody)                                                       \
+    X(TestTransportFlowControl)
 
 TESTING_MAIN(TESTS)

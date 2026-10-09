@@ -4138,6 +4138,23 @@ void burrow__http2_transport_close_idle_connections(Http2Transport *t) {
     sync_mutex_unlock(&t->mu);
 }
 
+/* ClientConn.Close, for the conn the transport made of c. */
+void burrow__http2_transport_close_conn(Http2Transport *t, NetConn c) {
+    h2c_Conn *cc = NULL;
+    sync_mutex_lock(&t->mu);
+    for (Int i = 0; i < t->npool; i++) {
+        if (t->pool[i]->tconn.data == c.data && h2c_tryref(t->pool[i])) {
+            cc = t->pool[i];
+            break;
+        }
+    }
+    sync_mutex_unlock(&t->mu);
+    if (cc == NULL)
+        return;
+    h2c_close_for_error(cc, burrow__http2_err_client_conn_force_closed);
+    h2c_unref(cc);
+}
+
 /* IdleConnStrsForTesting. */
 Slice burrow__http2_transport_idle_conn_strs(Http2Transport *t, Alloc *a) {
     Slice ret = slice_make(a, TYPE_STRING, 0, 0);

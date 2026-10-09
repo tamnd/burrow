@@ -2585,6 +2585,128 @@ static void TestTransportGoAwayWithNoConns(TestingT *t) {
     h2ct_run(t, h2ct_go_away_with_no_conns, NULL);
 }
 
+static void h2ct_unused_conn_ok(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2CT_TRY(h2ct_tt_with_unused_conn(tt));
+
+    HttpRequest *req =
+        h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body);
+    H2CT_TRY(req != NULL);
+    H2ctConn *tc = h2ct_get_conn(tt);
+    H2CT_TRY(tc != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_SETTINGS));
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_WINDOW_UPDATE));
+
+    /* Send a request on the Transport. It uses the conn we provided. */
+    H2ctRT *rt = h2ct_tt_round_trip(tt, req);
+    H2CT_TRY(rt != NULL);
+    static const Str want[] = {S_(":authority"), S_("dummy.tld"), S_(":method"),
+                               S_("GET"),        S_(":path"),     S_("/")};
+    H2CT_TRY(h2ct_want_headers(tc, 1, true, want, 6));
+
+    H2CT_TRY(h2ct_write_settings(tc, NULL, 0));
+    H2CT_TRY(h2ct_write_settings_ack(tc));
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_SETTINGS)); /* acknowledgement */
+
+    H2CT_TRY(h2ct_write_status(tc, 1, "200"));
+    H2CT_TRY(h2ct_rt_want_status(rt, 200));
+    (void)h2ct_rt_want_body(rt, "");
+}
+
+static void TestTransportUnusedConnOK(TestingT *t) {
+    h2ct_run(t, h2ct_unused_conn_ok, NULL);
+}
+
+/* What the three tests below end with: a request the Transport sends on a
+ * new conn. */
+static void h2ct_want_new_conn(H2ctTT *tt) {
+    H2ctRT *rt = h2ct_tt_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt != NULL);
+    H2ctConn *tc2 = h2ct_get_conn(tt);
+    H2CT_TRY(tc2 != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc2, HTTP2_FRAME_SETTINGS));
+    H2CT_TRY(h2ct_want_frame_type(tc2, HTTP2_FRAME_WINDOW_UPDATE));
+    H2CT_TRY(h2ct_want_frame_type(tc2, HTTP2_FRAME_HEADERS));
+}
+
+static void h2ct_unused_conn_immediate_failure_used(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2CT_TRY(h2ct_tt_with_unused_conn(tt));
+
+    /* The connection encounters an error before we send a request that uses
+     * it. */
+    H2ctConn *tc1 = h2ct_get_conn(tt);
+    H2CT_TRY(tc1 != NULL);
+    h2ct_close_write(tc1);
+
+    /* Send a request on the Transport.
+     *
+     * It should fail, because we have no usable connections, but not with
+     * ErrNoCachedConn. */
+    H2ctRT *rt = h2ct_tt_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt != NULL);
+    Error err = h2ct_rt_err(rt);
+    if (BURROW_OK(err) || errors_is(err, burrow__http2_err_no_cached_conn))
+        FATALF("RoundTrip with broken conn: got %v, want an error other than "
+               "ErrNoCachedConn",
+               err);
+
+    /* Send the request again. This time it is sent on a new conn because the
+     * dead conn has been removed from the pool. */
+    h2ct_want_new_conn(tt);
+}
+
+static void TestTransportUnusedConnImmediateFailureUsed(TestingT *t) {
+    h2ct_run(t, h2ct_unused_conn_immediate_failure_used, NULL);
+}
+
+static void h2ct_unused_conn_idle_timeout_before_use(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    tt->tr1.idle_conn_timeout = 1 * TIME_SECOND;
+    H2CT_TRY(h2ct_tt_with_unused_conn(tt));
+    H2CT_TRY(h2ct_get_conn(tt) != NULL);
+
+    /* The connection idles out before we send a request that uses it. */
+    time_sleep(2 * TIME_SECOND);
+
+    /* Send a request on the Transport.
+     *
+     * It is sent on a new conn because the old one has idled out and been
+     * removed from the pool. */
+    h2ct_want_new_conn(tt);
+}
+
+static void TestTransportUnusedConnIdleTimoutBeforeUse(TestingT *t) {
+    h2ct_run(t, h2ct_unused_conn_idle_timeout_before_use, NULL);
+}
+
+static void h2ct_tls_next_proto_conn_immediate_failure_unused(H2ctTT *tt,
+                                                              const void *arg) {
+    (void)arg;
+    tt->tr1.idle_conn_timeout = 1 * TIME_SECOND;
+    H2CT_TRY(h2ct_tt_with_unused_conn(tt));
+
+    /* The connection encounters an error before we send a request that uses
+     * it. */
+    H2ctConn *tc1 = h2ct_get_conn(tt);
+    H2CT_TRY(tc1 != NULL);
+    h2ct_close_write(tc1);
+
+    /* Some time passes. The dead connection is removed from the pool. Go
+     * lets 10 seconds pass on its fake clock. Here 2 real ones, past the
+     * idle timeout, are enough. */
+    time_sleep(2 * TIME_SECOND);
+
+    /* Send a request on the Transport. It is sent on a new conn. */
+    h2ct_want_new_conn(tt);
+}
+
+static void TestTransportTLSNextProtoConnImmediateFailureUnused(TestingT *t) {
+    h2ct_run(t, h2ct_tls_next_proto_conn_immediate_failure_unused, NULL);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -2658,6 +2780,10 @@ static void TestTransportGoAwayWithNoConns(TestingT *t) {
     X(TestTransportAdjustsFlowControl)                                                 \
     X(TestTransportReturnsUnusedFlowControlSingleWrite)                                \
     X(TestTransportReturnsUnusedFlowControlMultipleWrites)                             \
-    X(TestTransportGoAwayWithNoConns)
+    X(TestTransportGoAwayWithNoConns)                                                  \
+    X(TestTransportUnusedConnOK)                                                       \
+    X(TestTransportUnusedConnImmediateFailureUsed)                                     \
+    X(TestTransportUnusedConnIdleTimoutBeforeUse)                                      \
+    X(TestTransportTLSNextProtoConnImmediateFailureUnused)
 
 TESTING_MAIN(TESTS)

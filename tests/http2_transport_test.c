@@ -86,6 +86,8 @@ typedef struct H2ctConn {
      * set once srv has nothing more to give. */
     SyncMutex rmu;
     BytesBuffer rbuf;
+    BytesBuffer late; /* what the client wrote after closing cli, before reof */
+    Time reof_at;
     SyncWaitGroup rwg;
     /* What the test writes, which out_job passes on to srv. */
     SyncMutex wmu;
@@ -147,8 +149,13 @@ static void h2ct_in_job(void *env) {
                 err = werr;
         }
         bool done = chunk == NULL || BURROW_FAILED(err);
-        if (done)
+        if (done) {
+            Error lerr = BURROW_NO_ERROR;
+            (void)bytes_buffer_write_to(&tc->late, bytes_buffer_as_io_writer(&tc->rbuf),
+                                        &lerr);
             tc->reof = true;
+            tc->reof_at = time_now();
+        }
         sync_mutex_unlock(&tc->rmu);
         if (done)
             break;
@@ -158,7 +165,9 @@ static void h2ct_in_job(void *env) {
 }
 
 /* What the framer reads: rbuf, waiting for it until rdeadline, and the end of
- * it once srv has ended and it is empty. */
+ * it once srv has ended and it is empty. Go waits for its bubble to go quiet
+ * before it reads, by when the client has written all it will, even after
+ * closing the conn. This gives the client a moment after the end first. */
 static Int h2ct_in_read(void *self, Slice p, Error *err) {
     H2ctConn *tc = (H2ctConn *)self;
     for (;;) {
@@ -168,7 +177,8 @@ static Int h2ct_in_read(void *self, Slice p, Error *err) {
             sync_mutex_unlock(&tc->rmu);
             return n;
         }
-        bool eof = tc->reof;
+        bool eof =
+            tc->reof && !time_before(time_now(), time_add(tc->reof_at, H2CT_QUIET));
         sync_mutex_unlock(&tc->rmu);
         if (eof) {
             *err = io_eof;
@@ -264,6 +274,14 @@ static Int h2ct_cli_write(void *self, Slice p, Error *err) {
     H2ctConn *tc = (H2ctConn *)self;
     sync_mutex_lock(&tc->rmu);
     Error werr = tc->cli_werr;
+    if (BURROW_OK(werr) && sync_atomic_bool_load(&tc->cli_closed)) {
+        /* Go's fake conn takes writes after the client closes it: the close
+         * ends what the test may write, and gives the test the end once it
+         * has read the rest. The pipe is closed, so these go round it. */
+        Int n = bytes_buffer_write(tc->reof ? &tc->rbuf : &tc->late, p, err);
+        sync_mutex_unlock(&tc->rmu);
+        return n;
+    }
     sync_mutex_unlock(&tc->rmu);
     if (BURROW_FAILED(werr)) {
         *err = werr;
@@ -333,6 +351,7 @@ static void h2ct_conn_free(H2ctConn *tc) {
         burrow__hpack_encoder_free(tc->enc);
     bytes_buffer_free(&tc->hbuf);
     bytes_buffer_free(&tc->rbuf);
+    bytes_buffer_free(&tc->late);
     bytes_buffer_free(&tc->wbuf);
     net_pipe_free(tc->srv);
     mem_free(tc->a, tc, sizeof *tc, _Alignof(H2ctConn));
@@ -383,6 +402,7 @@ struct H2ctTT {
     H2ctRT *rts;
     H2ctBody *bodies;
     SyncWaitGroup rtwg;
+    Int dials_waiting;  /* under mu: dials waiting on dial_held */
     SyncCond dial_cond; /* on mu, for dial_held */
     bool dial_held;     /* dials wait until it is false */
 };
@@ -398,6 +418,7 @@ static H2ctConn *h2ct_conn_new(H2ctTT *tt, NetConn cli, NetConn srv) {
     tc->srv = srv;
     tc->hbuf = BYTES_BUFFER(a);
     tc->rbuf = BYTES_BUFFER(a);
+    tc->late = BYTES_BUFFER(a);
     tc->wbuf = BYTES_BUFFER(a);
     tc->wcond = SYNC_COND(sync_mutex_locker(&tc->wmu));
     tc->rdeadline = time_now();
@@ -428,8 +449,10 @@ static NetConn h2ct_dial(void *env, Context ctx, Str network, Str addr, Error *e
     (void)addr;
     H2ctTT *tt = (H2ctTT *)env;
     sync_mutex_lock(&tt->mu);
+    tt->dials_waiting++;
     while (tt->dial_held)
         sync_cond_wait(&tt->dial_cond);
+    tt->dials_waiting--;
     sync_mutex_unlock(&tt->mu);
     NetConn cli;
     NetConn srv;
@@ -2725,6 +2748,21 @@ static void TestTransportReturnsUnusedFlowControlMultipleWrites(TestingT *t) {
 
 /* newTestTransportWithUnusedConn: tt with a connection that was dialed for
  * a request cancelled before the dial was done, and so never used. */
+/* Waits for a dial to be waiting on dial_held, or for none to be. */
+static bool h2ct_tt_wait_dials(H2ctTT *tt, bool waiting) {
+    Time deadline = time_add(time_now(), H2CT_WAIT);
+    for (;;) {
+        sync_mutex_lock(&tt->mu);
+        bool ok = (tt->dials_waiting > 0) == waiting;
+        sync_mutex_unlock(&tt->mu);
+        if (ok)
+            return true;
+        if (!time_before(time_now(), deadline))
+            return false;
+        time_sleep(TIME_MILLISECOND);
+    }
+}
+
 static bool h2ct_tt_with_unused_conn(H2ctTT *tt) {
     sync_mutex_lock(&tt->mu);
     tt->dial_held = true;
@@ -2736,6 +2774,13 @@ static bool h2ct_tt_with_unused_conn(H2ctTT *tt) {
         h2ct_tt_release_dials(tt);
         return false;
     }
+    /* Go's roundTrip waits for the bubble, so the dial has started by the
+     * time the request is canceled. This waits for it to. */
+    if (!h2ct_tt_wait_dials(tt, true)) {
+        h2ct_tt_release_dials(tt);
+        testing_t_fatalf_v(tt->t, "RoundTrip did not dial");
+        return false;
+    }
     BURROW_CALLF0(rt->cancel);
     bool done = h2ct_rt_wait_done(rt);
     if (!done || BURROW_OK(rt->err)) {
@@ -2745,6 +2790,9 @@ static bool h2ct_tt_with_unused_conn(H2ctTT *tt) {
     }
 
     h2ct_tt_release_dials(tt);
+    /* And Go waits for the bubble again, for the conn to be in the pool. */
+    (void)h2ct_tt_wait_dials(tt, false);
+    time_sleep(H2CT_QUIET);
     return true;
 }
 

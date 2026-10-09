@@ -32,7 +32,7 @@ int main(void) {
     if (BURROW_FAILED(err))
         return 1;
 #endif
-#if defined(BURROW_OS_LINUX)
+#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_DARWIN) || defined(BURROW_OS_FREEBSD)
     // doc: dirent
     Int fd =
         syscall_open(BURROW_S("/"), SYSCALL_O_RDONLY | SYSCALL_O_DIRECTORY, 0, &err);

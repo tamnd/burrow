@@ -203,6 +203,193 @@ A call that runs past a deadline fails with a `NetOpError` that wraps `os_err_de
 
 Go's collector takes care of a pipe once nothing refers to it. Here `net_pipe_free` gives both ends back, given either one, once both are closed and no goroutine is still in a call on them. It stops any deadline timer that has not gone off yet.
 
+## TCP
+
+`net_listen_tcp` and `net_dial_tcp` are Go's `ListenTCP` and `DialTCP`, and the `NetTCPConn` and `NetTCPListener` they give back have Go's methods as functions. Addresses are `NetTCPAddr` literals for now, since the resolver that turns "localhost:80" into one is still to come. A listener on port 0 gets a free port from the system, and `net_tcp_listener_addr` says which:
+
+<!-- example: ../examples/net/tcp.c#tcp -->
+```c
+Byte loopback[4] = {127, 0, 0, 1};
+NetTCPAddr laddr = {slice_from(loopback, 4, 4, TYPE_BYTE), 0, BURROW_STR_EMPTY};
+Error err;
+NetTCPListener *l = net_listen_tcp(heap_allocator(), BURROW_S("tcp"), &laddr, &err);
+if (l == NULL)
+    return;
+SyncWaitGroup wg = {0};
+sync_wait_group_go(&wg, BURROW_FN(Func, serve, l));
+
+/* Port 0 asked the system for a free port, and the address says which. */
+const NetTCPAddr *bound = net_tcp_listener_addr(l).data;
+NetTCPAddr raddr = {laddr.ip, bound->port, BURROW_STR_EMPTY};
+NetTCPConn *c = net_dial_tcp(heap_allocator(), BURROW_S("tcp"), NULL, &raddr, &err);
+if (c == NULL)
+    return;
+NetConn conn = net_tcp_conn_as_conn(c);
+io_write_string(net_conn_as_io_writer(conn), BURROW_S("hello"), &err);
+net_tcp_conn_close_write(c);
+
+Byte buf[16];
+Int n = io_read_full(net_conn_as_io_reader(conn), slice_from(buf, 5, 5, TYPE_BYTE),
+                     &err);
+printf("%.*s\n", (int)n, (const char *)buf);
+const NetTCPAddr *remote = net_tcp_conn_remote_addr(c).data;
+printf("same port: %d\n", remote->port == bound->port);
+
+sync_wait_group_wait(&wg);
+net_tcp_conn_free(c);
+net_tcp_listener_free(l);
+
+/* Errors read the way Go's do. */
+raddr.port = 80;
+if (net_dial_tcp(heap_allocator(), BURROW_S("tcp5"), NULL, &raddr, &err) == NULL) {
+    Str msg = error_text(err);
+    printf("%.*s\n", (int)msg.len, (const char *)msg.p);
+}
+```
+
+That prints:
+
+```
+hello
+same port: 1
+dial tcp5 127.0.0.1:80: unknown network tcp5
+```
+
+Every call that can wait, from a dial to a read, has to be made on a goroutine. A goroutine waiting on a socket parks in the netpoller and holds a stack but no thread, so a server can have a goroutine per connection the way a Go server does. A Close from another goroutine wakes a read, a write or an accept with `net_err_closed`, and a deadline wakes it with `os_err_deadline_exceeded`.
+
+The errors are Go's, down to the text. A failed call gives a `NetOpError` naming the operation and the addresses, wrapping an `OsSyscallError` naming the system call, wrapping the `Errno`, so "dial tcp 127.0.0.1:9: connect: connection refused" reads the same as it would from Go, and `errors_as` finds each layer. The one exception is the end of a stream, which is `io_eof` as it is, so `errors_is(err, io_eof)` works on a read.
+
+A dialed connection, like an accepted one, has Nagle's algorithm off and keep-alives on, with Go's defaults of 15 seconds idle, 15 seconds between probes and 9 probes. `net_tcp_conn_set_keep_alive_config` and the other setters change them. `net_tcp_conn_free` and `net_tcp_listener_free` close what is still open and give the memory back, and the addresses a connection hands out belong to it until then.
+
+On Windows a socket is read by handing the kernel the read and waiting for it to finish, which is a different poller from the one here, so until that arrives a dial or a listen there fails with `ENOSYS`. wasip1 has no sockets to dial with.
+
+## UDP
+
+`net_listen_udp` and `net_dial_udp` are Go's `ListenUDP` and `DialUDP`. A socket from `net_listen_udp` is bound but not connected, so it can hear from anyone and says where each datagram goes with one of the write-to functions. A socket from `net_dial_udp` is connected to one peer, writes with `net_udp_conn_write` and only hears from that peer:
+
+<!-- example: ../examples/net/udp.c#udp -->
+```c
+Byte loopback[4] = {127, 0, 0, 1};
+NetUDPAddr laddr = {slice_from(loopback, 4, 4, TYPE_BYTE), 0, BURROW_STR_EMPTY};
+Error err;
+NetUDPConn *server =
+    net_listen_udp(heap_allocator(), BURROW_S("udp"), &laddr, &err);
+NetUDPConn *client =
+    net_listen_udp(heap_allocator(), BURROW_S("udp"), &laddr, &err);
+if (server == NULL || client == NULL)
+    return;
+
+/* Neither socket is connected, so each datagram says where it goes. */
+NetipAddrPort to = net_udp_addr_addr_port(net_udp_conn_local_addr(server).data);
+char ping[] = "ping";
+net_udp_conn_write_to_udp_addr_port(client, slice_from(ping, 4, 4, TYPE_BYTE), to,
+                                    &err);
+
+Byte buf[64];
+NetipAddrPort from;
+Int n = net_udp_conn_read_from_udp_addr_port(
+    server, slice_from(buf, (Int)sizeof buf, (Int)sizeof buf, TYPE_BYTE), &from,
+    &err);
+Str ip = netip_addr_string(netip_addr_port_addr(from), heap_allocator());
+printf("%.*s from %.*s\n", (int)n, (const char *)buf, (int)ip.len,
+       (const char *)ip.p);
+const NetUDPAddr *client_addr = net_udp_conn_local_addr(client).data;
+printf("same port: %d\n", netip_addr_port_port(from) == client_addr->port);
+mem_free(heap_allocator(), (void *)(uintptr_t)ip.p, (size_t)ip.len, 1);
+
+net_udp_conn_free(client);
+net_udp_conn_free(server);
+
+/* Errors read the way Go's do. */
+laddr.port = 53;
+if (net_dial_udp(heap_allocator(), BURROW_S("udp5"), NULL, &laddr, &err) == NULL) {
+    Str msg = error_text(err);
+    printf("%.*s\n", (int)msg.len, (const char *)msg.p);
+}
+```
+
+That prints:
+
+```
+ping from 127.0.0.1
+same port: 1
+dial udp5 127.0.0.1:53: unknown network udp5
+```
+
+Go has three ways to say who sent a datagram, and so does this. `net_udp_conn_read_from_udp_addr_port` fills in a `NetipAddrPort` and needs no memory, which makes it the one to use in a loop. `net_udp_conn_read_from_udp` makes a `NetUDPAddr` in the allocator it is given, and `net_udp_conn_read_from` gives the same address as a `NetAddr`. The addresses those two make belong to the caller and go back with `net_udp_addr_free`.
+
+A datagram is read whole. When it is longer than the buffer, the rest of it is lost and the next read starts on the next datagram, as it does in Go. Writing to a connected socket with a write-to function fails with `net_err_write_to_connected`, and the errors otherwise are Go's, down to "write udp 127.0.0.1:5000->127.0.0.1:70000: sendto: invalid argument" for a port that does not fit.
+
+`ListenMulticastUDP`, `ReadMsgUDP` and `WriteMsgUDP` are still to come, and Windows and wasip1 are where TCP is: a dial or a listen on Windows fails with `ENOSYS` for now, and wasip1 has no sockets.
+
+## Unix
+
+`net_listen_unix`, `net_listen_unixgram` and `net_dial_unix` are Go's `ListenUnix`, `ListenUnixgram` and `DialUnix`. The networks are the three Go has: "unix" for streams, "unixgram" for datagrams and "unixpacket" for sequenced packets, which keep each write apart the way datagrams do but are connected the way streams are. A `NetUnixAddr` is a name and a network, and the name is a path:
+
+<!-- example: ../examples/net/unix.c#unix -->
+```c
+Error err;
+Str dir = os_mkdir_temp(heap_allocator(), BURROW_STR_EMPTY, BURROW_S("ex"), &err);
+if (BURROW_FAILED(err))
+    return;
+Str path = filepath_join_v(heap_allocator(), 2, dir, BURROW_S("echo.sock"));
+NetUnixAddr addr = {path, BURROW_S("unix")};
+NetUnixListener *l =
+    net_listen_unix(heap_allocator(), BURROW_S("unix"), &addr, &err);
+if (l == NULL)
+    return;
+
+NetUnixConn *client =
+    net_dial_unix(heap_allocator(), BURROW_S("unix"), NULL, &addr, &err);
+NetUnixConn *server = net_unix_listener_accept_unix(l, &err);
+if (client == NULL || server == NULL)
+    return;
+
+char hello[] = "hello";
+(void)net_unix_conn_write(client, slice_from(hello, 5, 5, TYPE_BYTE), &err);
+Byte buf[64];
+Int n = net_unix_conn_read(
+    server, slice_from(buf, (Int)sizeof buf, (Int)sizeof buf, TYPE_BYTE), &err);
+printf("%.*s\n", (int)n, (const char *)buf);
+
+/* The server's end is named for the path the listener is on. */
+const NetUnixAddr *local = net_unix_conn_local_addr(server).data;
+printf("same path: %d\n", str_eq(local->name, path));
+
+net_unix_conn_free(client);
+net_unix_conn_free(server);
+
+/* Closing a listener removes the file it made, as Go's does. */
+net_unix_listener_free(l);
+(void)os_lstat(heap_allocator(), path, &err);
+printf("gone: %d\n", os_is_not_exist(err));
+(void)os_remove_all(dir);
+mem_free(heap_allocator(), (void *)(uintptr_t)path.p, (size_t)path.len, 1);
+mem_free(heap_allocator(), (void *)(uintptr_t)dir.p, (size_t)dir.len, 1);
+
+/* Errors read the way Go's do. */
+NetUnixAddr there = {BURROW_S("/run/app.sock"), BURROW_S("unix")};
+if (net_listen_unix(heap_allocator(), BURROW_S("unixgram"), &there, &err) == NULL) {
+    Str msg = error_text(err);
+    printf("%.*s\n", (int)msg.len, (const char *)msg.p);
+}
+```
+
+That prints:
+
+```
+hello
+same path: 1
+gone: 1
+listen unixgram /run/app.sock: unknown network unixgram
+```
+
+A listener made by `net_listen_unix` removes its file when it closes, and so does `net_unix_listener_free`. `net_unix_listener_set_unlink_on_close` turns that off, for a socket file that should outlive the program. A socket from `net_listen_unixgram` never removes its file, which is what Go does too.
+
+On Linux a name that starts with "@" is in the abstract namespace, has no file, and goes away with the last socket on it. Listening on an empty name binds to a fresh abstract name, and a socket that was never bound is called "@" there and "" everywhere else, so those are the names a dialer's end and an unbound sender have. A name has to fit in the system's sockaddr, which is 107 bytes on Linux and 103 on macOS and the BSDs, and a longer one fails with "bind: invalid argument" as it does in Go.
+
+The datagram functions are the UDP ones with a `NetUnixAddr` in place of a `NetUDPAddr`: `net_unix_conn_read_from_unix` makes the sender's address in the allocator it is given, and `net_unix_conn_write_to_unix` sends to a name. `ReadMsgUnix`, `WriteMsgUnix` and the `File` methods, which pass descriptors, are still to come, and Windows is where TCP is for now.
+
 ## URLs
 
 `url_parse` splits a URL into a `Url` with the same fields as Go's `url.URL`. `path` holds the decoded path and `url_escaped_path` gives back the form that goes on the wire. The parse makes one allocation that holds the `Url` and every string in it, so the input can go away while the `Url` lives, and `url_free` gives it back. With an arena you do not need to free at all. In these examples `P(s)` is short for `(int)(s).len, (const char *)(s).p`, the two arguments that `%.*s` wants:

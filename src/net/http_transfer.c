@@ -581,8 +581,7 @@ Error burrow__http_body_close(void *body) {
     return hb_body_close(body);
 }
 
-void burrow__http_body_state(void *body, bool *closed, bool *saw_eof,
-                             int64_t *unread) {
+void burrow__http_body_state(void *body, bool *closed, bool *saw_eof, int64_t *unread) {
     HbBody *b = (HbBody *)body;
     sync_mutex_lock(&b->mu);
     *closed = b->closed;

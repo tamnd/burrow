@@ -84,7 +84,7 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: ${{ matrix.timeout || 20 }}
     strategy:
       fail-fast: false
       matrix:
@@ -108,6 +108,10 @@ jobs:
           - name: macos-x64-clang
             os: macos-15-intel
             cc: clang
+            # The Intel runners are the slowest in the matrix. The full suite
+            # took about 18 minutes there in early October and started running
+            # into the 20 minute limit as packages landed.
+            timeout: 35
           - name: windows-msvc
             os: windows-latest
             cmake: true

@@ -1136,7 +1136,14 @@ smtp_client_free(c);
 That prints:
 
 ```
-PENDING
+C: EHLO localhost
+C: MAIL FROM:<sender@example.org> BODY=8BITMIME
+C: RCPT TO:<recipient@example.net>
+C: DATA
+C: This is the email body
+C: .
+C: QUIT
+sent: <nil>
 ```
 
 `smtp_plain_auth` and `smtp_crammd5_auth` make the two mechanisms Go has. PLAIN sends the password as it is, so, as in Go, it refuses unless the connection uses TLS or the server is on localhost. STARTTLS needs `crypto/tls`, which is not ported yet, so `smtp_client_start_tls` is still to come. Until then `smtp_send_mail` gives `smtp_err_no_tls` for a server that offers STARTTLS, where Go would have switched to TLS, rather than send the mail in the clear.

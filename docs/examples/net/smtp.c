@@ -92,5 +92,12 @@ int main(void) {
 }
 
 /* Output:
-PENDING
+C: EHLO localhost
+C: MAIL FROM:<sender@example.org> BODY=8BITMIME
+C: RCPT TO:<recipient@example.net>
+C: DATA
+C: This is the email body
+C: .
+C: QUIT
+sent: <nil>
 */

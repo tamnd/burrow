@@ -1774,8 +1774,8 @@ HttputilReverseProxy proxy = {
     .rewrite = BURROW_FN(HttputilRewriteFunc, rewrite, target),
     .modify_response = BURROW_FN(HttputilModifyResponseFunc, modify_response, NULL),
 };
-HttptestServer *front =
-    httptest_new_server(heap_allocator(), httputil_reverse_proxy_as_handler(&proxy));
+HttptestServer *front = httptest_new_server(
+    heap_allocator(), httputil_reverse_proxy_as_handler(&proxy));
 
 HttpResponse *res = http_client_get(httptest_server_client(front),
                                     fmt_sprintf_v(a, "%s/users", front->url), &err);

@@ -163,8 +163,8 @@ static void rp_single_host_director(void *env, HttpRequest *req) {
 
 HttputilReverseProxy *httputil_new_single_host_reverse_proxy(Alloc *a,
                                                              const Url *target) {
-    HttputilReverseProxy *p = (HttputilReverseProxy *)mem_alloc(
-        a, sizeof *p, _Alignof(HttputilReverseProxy));
+    HttputilReverseProxy *p =
+        (HttputilReverseProxy *)mem_alloc(a, sizeof *p, _Alignof(HttputilReverseProxy));
     if (p == NULL)
         return NULL;
     p->a = a;
@@ -326,8 +326,9 @@ static bool rp_modify_response(HttputilReverseProxy *p, HttpResponseWriter rw,
 /* flushInterval. */
 Duration burrow__httputil_flush_interval(const HttputilReverseProxy *p,
                                          const HttpResponse *res) {
-    Str ct = res->header != NULL ? http_header_get(res->header, BURROW_S("Content-Type"))
-                                 : BURROW_STR_EMPTY;
+    Str ct = res->header != NULL
+                 ? http_header_get(res->header, BURROW_S("Content-Type"))
+                 : BURROW_STR_EMPTY;
     /* Server-Sent Events are flushed at once, and a negative interval says
      * so. The type is in https://www.w3.org/TR/eventsource/#text-event-stream */
     Arena ar;
@@ -567,14 +568,16 @@ static void rp_handle_upgrade_response(HttputilReverseProxy *p, HttpResponseWrit
     Str res_up = rp_upgrade_type(res->header);
     /* req_up is ASCII, which the caller made sure of. */
     if (!burrow__http_ascii_is_print(res_up)) {
-        rp_error(p, rw, req,
-                 fmt_errorf_v("backend tried to switch to invalid protocol %q", res_up));
+        rp_error(
+            p, rw, req,
+            fmt_errorf_v("backend tried to switch to invalid protocol %q", res_up));
         return;
     }
     if (!burrow__http_ascii_equal_fold(req_up, res_up)) {
-        rp_error(p, rw, req,
-                 fmt_errorf_v("backend tried to switch protocol %q when %q was requested",
-                              res_up, req_up));
+        rp_error(
+            p, rw, req,
+            fmt_errorf_v("backend tried to switch protocol %q when %q was requested",
+                         res_up, req_up));
         return;
     }
 
@@ -608,7 +611,8 @@ static void rp_handle_upgrade_response(HttputilReverseProxy *p, HttpResponseWrit
     bc.back = res->body;
     SyncWaitGroup wg;
     memset(&wg, 0, sizeof wg);
-    if (bc.closed == NULL || !sync_wait_group_go(&wg, BURROW_FN(Func, rp_back_close, &bc))) {
+    if (bc.closed == NULL ||
+        !sync_wait_group_go(&wg, BURROW_FN(Func, rp_back_close, &bc))) {
         chan_free(bc.closed);
         rp_close(res->body);
         net_conn_free(conn);
@@ -661,8 +665,9 @@ static void rp_handle_upgrade_response(HttputilReverseProxy *p, HttpResponseWrit
      * already. */
     rp_Copier to_back = {back_w, bufio_reader_as_io_reader(brw.reader),
                          res->body_close_write, back_w.data, errc};
-    rp_Copier from_back = {net_conn_as_io_writer(conn), io_read_closer_as_io_reader(res->body),
-                           rp_conn_close_write, &conn, errc};
+    rp_Copier from_back = {net_conn_as_io_writer(conn),
+                           io_read_closer_as_io_reader(res->body), rp_conn_close_write,
+                           &conn, errc};
     if (go(BURROW_FN(Func, rp_copier_run, &to_back)))
         sent++;
     if (go(BURROW_FN(Func, rp_copier_run, &from_back)))
@@ -849,7 +854,8 @@ void httputil_reverse_proxy_serve_http(HttputilReverseProxy *p, HttpResponseWrit
 
     /* The hop-by-hop fields an upgrade such as a websocket needs go back. */
     if (req_up.len > 0) {
-        (void)http_header_set(outreq->header, BURROW_S("Connection"), BURROW_S("Upgrade"));
+        (void)http_header_set(outreq->header, BURROW_S("Connection"),
+                              BURROW_S("Upgrade"));
         (void)http_header_set(outreq->header, BURROW_S("Upgrade"), req_up);
     }
 

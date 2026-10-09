@@ -639,6 +639,17 @@ static void h2ct_body_write_bytes(H2ctBody *b, Int n) {
     sync_mutex_unlock(&b->mu);
 }
 
+/* Write: data, which reads give before anything else. */
+static void h2ct_body_write(H2ctBody *b, Str data) {
+    sync_mutex_lock(&b->mu);
+    Error err = BURROW_NO_ERROR;
+    (void)bytes_buffer_write_string(&b->buf, data, &err);
+    if (BURROW_FAILED(err) && BURROW_OK(b->err))
+        b->err = err;
+    sync_cond_broadcast(&b->cond);
+    sync_mutex_unlock(&b->mu);
+}
+
 /* closeWithError: what a read gives once the rest is read. */
 static void h2ct_body_close_with_error(H2ctBody *b, Error err) {
     sync_mutex_lock(&b->mu);
@@ -3368,6 +3379,159 @@ static void TestTransportFlowControl(TestingT *t) {
     h2ct_run(t, h2ct_flow_control, NULL);
 }
 
+static void h2ct_body_read_error(H2ctTT *tt, const void *arg) {
+    Str body = *(const Str *)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    Error body_read_error =
+        errors_new(arena_allocator(&tt->ar), BURROW_S("body read error"));
+    H2ctBody *b = h2ct_new_request_body(tt);
+    H2CT_TRY(b != NULL);
+    h2ct_body_write(b, body);
+    h2ct_body_close_with_error(b, body_read_error);
+    HttpRequest *req = h2ct_new_request_url(tt, (Context){0}, BURROW_S("PUT"),
+                                            BURROW_S("https://dummy.tld/"),
+                                            (IoReader){&h2ct_body_vt, b});
+    H2CT_TRY(req != NULL);
+    H2ctRT *rt = h2ct_tc_round_trip(tt, req);
+    H2CT_TRY(rt != NULL && h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+
+    BytesBuffer received = BYTES_BUFFER(arena_allocator(&tt->ar));
+    for (;;) {
+        Http2Frame *f = h2ct_read_frame(tc);
+        if (f == NULL)
+            FATALF("transport is idle, want RST_STREAM");
+        Http2FrameType type = f->header.type;
+        if (type == HTTP2_FRAME_DATA) {
+            Error err = BURROW_NO_ERROR;
+            (void)bytes_buffer_write(&received, f->u.data.data, &err);
+        }
+        burrow__http2_frame_free(f);
+        if (type == HTTP2_FRAME_RST_STREAM)
+            break;
+        if (type != HTTP2_FRAME_DATA)
+            FATALF("unexpected frame: type %d", (int)type);
+    }
+    Str got = bytes_buffer_string(&received, arena_allocator(&tt->ar));
+    if (!str_eq(got, body))
+        FATALF("body: %q; expected %q", got, body);
+
+    Error err = h2ct_rt_err(rt);
+    if (!errors_is(err, body_read_error))
+        FATALF("err = %v; want %v", err, body_read_error);
+}
+
+static void TestTransportBodyReadError_Immediately(TestingT *t) {
+    static const Str body = BURROW_S_INIT("");
+    h2ct_run(t, h2ct_body_read_error, &body);
+}
+
+static void TestTransportBodyReadError_Some(TestingT *t) {
+    static const Str body = BURROW_S_INIT("123");
+    h2ct_run(t, h2ct_body_read_error, &body);
+}
+
+typedef struct H2ct1xxLimits {
+    int64_t max_response_header_bytes;
+    Int hcount;
+    bool trace;       /* with a Got1xxResponse hook */
+    bool trace_limit; /* which fails the tenth 1xx response */
+    bool limited;
+} H2ct1xxLimits;
+
+static Error h2ct_got1xx_count(void *env, Int code, TextprotoMIMEHeader header) {
+    (void)code;
+    (void)header;
+    int *count = (int *)env;
+    (*count)++;
+    if (*count >= 10)
+        return errors_new(error_allocator(), BURROW_S("too many 1xx"));
+    return BURROW_NO_ERROR;
+}
+
+static Error h2ct_got1xx_nil(void *env, Int code, TextprotoMIMEHeader header) {
+    (void)env;
+    (void)code;
+    (void)header;
+    return BURROW_NO_ERROR;
+}
+
+static void h2ct_1xx_limits(H2ctTT *tt, const void *arg) {
+    const H2ct1xxLimits *test = (const H2ct1xxLimits *)arg;
+    Alloc *a = arena_allocator(&tt->ar);
+    tt->tr1.max_response_header_bytes = test->max_response_header_bytes;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    Context ctx = context_background();
+    if (test->trace) {
+        HttptraceClientTrace *trace = (HttptraceClientTrace *)mem_alloc(
+            a, sizeof *trace, _Alignof(HttptraceClientTrace));
+        int *count = (int *)mem_alloc(a, sizeof *count, _Alignof(int));
+        if (trace == NULL || count == NULL)
+            FATALF("no memory for the trace");
+        memset(trace, 0, sizeof *trace);
+        *count = 0;
+        trace->got1xx_response =
+            test->trace_limit
+                ? BURROW_FN(HttptraceGot1xxResponseFunc, h2ct_got1xx_count, count)
+                : BURROW_FN(HttptraceGot1xxResponseFunc, h2ct_got1xx_nil, NULL);
+        ctx = httptrace_with_client_trace(a, ctx, trace);
+    }
+    HttpRequest *req = h2ct_new_request_url(
+        tt, ctx, BURROW_S("GET"), BURROW_S("https://dummy.tld/"), h2ct_no_body);
+    H2CT_TRY(req != NULL);
+    H2ctRT *rt = h2ct_tc_round_trip(tt, req);
+    H2CT_TRY(rt != NULL && h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+
+    Str field = strings_repeat(a, BURROW_S("a"), 1000);
+    for (Int i = 0; i < test->hcount; i++) {
+        Error err = BURROW_NO_ERROR;
+        Http2Frame *f = h2ct_read_frame_within(tc, H2CT_QUIET, &err);
+        if (!errors_is(err, os_err_deadline_exceeded)) {
+            int type = f != NULL ? (int)f->header.type : -1;
+            burrow__http2_frame_free(f);
+            FATALF("after writing %d 1xx headers: read frame type %d, %v; want idle",
+                   (int)i, type, err);
+        }
+        burrow__http2_frame_free(f);
+        Str kv[] = {BURROW_S(":status"), BURROW_S("103"), BURROW_S("x-field"), field};
+        H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, kv, 4), false)));
+    }
+    if (test->limited)
+        (void)h2ct_want_frame_type(tc, HTTP2_FRAME_RST_STREAM);
+    else
+        (void)h2ct_want_idle(tc);
+}
+
+static void TestTransport1xxLimits_default(TestingT *t) {
+    static const H2ct1xxLimits test = {.hcount = 10, .limited = false};
+    h2ct_run(t, h2ct_1xx_limits, &test);
+}
+
+static void TestTransport1xxLimits_MaxResponseHeaderBytes(TestingT *t) {
+    static const H2ct1xxLimits test = {
+        .max_response_header_bytes = 10000, .hcount = 10, .limited = true};
+    h2ct_run(t, h2ct_1xx_limits, &test);
+}
+
+static void TestTransport1xxLimits_limit_by_client_trace(TestingT *t) {
+    static const H2ct1xxLimits test = {
+        .hcount = 10, .trace = true, .trace_limit = true, .limited = true};
+    h2ct_run(t, h2ct_1xx_limits, &test);
+}
+
+static void TestTransport1xxLimits_limit_disabled_by_client_trace(TestingT *t) {
+    static const H2ct1xxLimits test = {.max_response_header_bytes = 10000,
+                                       .hcount = 20,
+                                       .trace = true,
+                                       .limited = false};
+    h2ct_run(t, h2ct_1xx_limits, &test);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -3456,6 +3620,12 @@ static void TestTransportFlowControl(TestingT *t) {
     X(TestTransportChecksRequestHeaderListSize)                                        \
     X(TestClientConnCloseAtHeaders)                                                    \
     X(TestClientConnCloseAtBody)                                                       \
-    X(TestTransportFlowControl)
+    X(TestTransportFlowControl)                                                        \
+    X(TestTransportBodyReadError_Immediately)                                          \
+    X(TestTransportBodyReadError_Some)                                                 \
+    X(TestTransport1xxLimits_default)                                                  \
+    X(TestTransport1xxLimits_MaxResponseHeaderBytes)                                   \
+    X(TestTransport1xxLimits_limit_by_client_trace)                                    \
+    X(TestTransport1xxLimits_limit_disabled_by_client_trace)
 
 TESTING_MAIN(TESTS)

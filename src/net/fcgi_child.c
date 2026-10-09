@@ -136,7 +136,7 @@ static bool fch_append_params(FchRequest *r, Slice content) {
 /* parseParams reads an encoded []byte into Params. The keys and values point
  * into the old raw buffer, which the arena keeps. */
 static void fch_parse_params(FchRequest *r) {
-    Slice text = {r->raw_params, r->raw_len, r->raw_len, NULL};
+    Slice text = {r->raw_params, r->raw_len, r->raw_len, TYPE_BYTE};
     r->raw_params = NULL;
     r->raw_len = r->raw_cap = 0;
     while (text.len > 0) {
@@ -434,7 +434,7 @@ static void fch_serve_request(void *env) {
             Str text = error_text(err);
             (void)burrow__fcgi_conn_write_record(
                 c->conn, BURROW__FCGI_TYPE_STDERR, req->req_id,
-                (Slice){(void *)(uintptr_t)text.p, text.len, text.len, NULL});
+                (Slice){(void *)(uintptr_t)text.p, text.len, text.len, TYPE_BYTE});
         } else {
             http_req->body = body;
             r->env = fch_filter_out_used_env_vars(a, req->params);
@@ -607,7 +607,7 @@ Error burrow__fcgi_child_handle_record(burrow__FcgiChild *c, burrow__FcgiRecord 
         Byte b[8] = {0};
         b[0] = type;
         (void)burrow__fcgi_conn_write_record(c->conn, BURROW__FCGI_TYPE_UNKNOWN_TYPE, 0,
-                                             (Slice){b, 8, 8, NULL});
+                                             (Slice){b, 8, 8, TYPE_BYTE});
         return BURROW_NO_ERROR;
     }
     }

@@ -1,6 +1,6 @@
 # Go source
 
-`burrow/go/token.h` is Go's `go/token`, the bottom layer of Go's own tools for reading Go source. It has the tokens of the language and the positions that tie them back to a file, a line and a column. `burrow/go/scanner.h` is Go's `go/scanner`, which turns source into those tokens. `go/ast` and `go/parser` sit on top of the two and will land in this guide when they are ported.
+`burrow/go/token.h` is Go's `go/token`, the bottom layer of Go's own tools for reading Go source. It has the tokens of the language and the positions that tie them back to a file, a line and a column. `burrow/go/scanner.h` is Go's `go/scanner`, which turns source into those tokens. `burrow/go/version.h`, Go's `go/version`, compares Go versions. `go/ast` and `go/parser` sit on top of the two and will land in this guide when they are ported.
 
 ## Positions
 
@@ -199,3 +199,41 @@ bad.go:3:6: illegal rune literal
 ```
 
 The message the handler gets is only good for the length of the call, and `go_scanner_error_list_add` makes its own copy. `go_scanner_error_list_err` turns the list into an `Error` that shares the list's memory, `errors_as` with `TYPE_GO_SCANNER_ERROR_LIST` gets the list back out of it, and `go_scanner_print_error` writes one error per line. `go_scanner_error_list_remove_multiples` keeps only the first error on each line, which is what Go's tools do before they report.
+
+## Versions
+
+`burrow/go/version.h` is Go's `go/version`. It compares Go versions written the way the toolchain names them, like `go1.21`, `go1.21.0`, `go1.22rc2` and `go1.23.4-custom`:
+
+<!-- example: ../examples/go/version.c#version -->
+```c
+Str pairs[][2] = {
+    {BURROW_S("go1.21"), BURROW_S("go1.21rc1")},
+    {BURROW_S("go1.21rc1"), BURROW_S("go1.21.0")},
+    {BURROW_S("go1.9"), BURROW_S("go1.10")},
+    {BURROW_S("go1.20"), BURROW_S("go1.20.0")},
+};
+for (int i = 0; i < 4; i++)
+    fmt_println_v(pairs[i][0], pairs[i][1],
+                  version_compare(pairs[i][0], pairs[i][1]));
+
+Str vs[] = {BURROW_S("go1.22.3"), BURROW_S("go1.23rc1"), BURROW_S("go1"),
+            BURROW_S("1.22")};
+for (int i = 0; i < 4; i++)
+    fmt_printf_v("%-10s valid=%v lang=%q\n", vs[i], version_is_valid(vs[i]),
+                 version_lang(a, vs[i]));
+```
+
+That prints:
+
+```
+go1.21 go1.21rc1 -1
+go1.21rc1 go1.21.0 -1
+go1.9 go1.10 -1
+go1.20 go1.20.0 0
+go1.22.3   valid=true lang="go1.22"
+go1.23rc1  valid=true lang="go1.23"
+go1        valid=true lang="go1"
+1.22       valid=false lang=""
+```
+
+The ordering is the toolchain's. Since Go 1.21 the language version `go1.21` comes before its release candidates and `go1.21.0`, while for older versions `go1.20` and `go1.20.0` are the same thing. A version needs the `go` prefix, and anything after a `-` is ignored. `version_compare` puts an invalid version below every valid one, and `version_lang` returns an empty string for it. `version_lang` usually returns the front of the string you pass in. The exception is a bare major version, so `go222` gives `go222.0`, and that one is built in the allocator.

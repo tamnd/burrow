@@ -80,9 +80,9 @@ static Error hc_error(const Str *text) {
 
 enum {
     HC_DEBUG_KNOWN = 1 << 0,
-    HC_DEBUG_MAX_SET = 1 << 1, /* httpcookiemaxnum is a number */
-    HC_DEBUG_LAX_CL = 1 << 2,  /* httplaxcontentlength=1 */
-    HC_DEBUG_MUX121 = 1 << 3,  /* httpmuxgo121=1 */
+    HC_DEBUG_MAX_SET = 1 << 1,      /* httpcookiemaxnum is a number */
+    HC_DEBUG_LAX_CL = 1 << 2,       /* httplaxcontentlength=1 */
+    HC_DEBUG_MUX121 = 1 << 3,       /* httpmuxgo121=1 */
     HC_DEBUG_KEEP_HEADERS = 1 << 4, /* httpservecontentkeepheaders=1 */
 };
 

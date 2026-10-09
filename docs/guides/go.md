@@ -1,6 +1,6 @@
 # Go source
 
-`burrow/go/token.h` is Go's `go/token`, the bottom layer of Go's own tools for reading Go source. It has the tokens of the language and the positions that tie them back to a file, a line and a column. `burrow/go/scanner.h` is Go's `go/scanner`, which turns source into those tokens. `burrow/go/version.h`, Go's `go/version`, compares Go versions. `go/ast` and `go/parser` sit on top of the two and will land in this guide when they are ported.
+`burrow/go/token.h` is Go's `go/token`, the bottom layer of Go's own tools for reading Go source. It has the tokens of the language and the positions that tie them back to a file, a line and a column. `burrow/go/scanner.h` is Go's `go/scanner`, which turns source into those tokens. `burrow/go/version.h`, Go's `go/version`, compares Go versions, and `burrow/go/constant.h`, Go's `go/constant`, does exact arithmetic on Go constants. `go/ast` and `go/parser` sit on top of the two and will land in this guide when they are ported.
 
 ## Positions
 
@@ -237,3 +237,136 @@ go1        valid=true lang="go1"
 ```
 
 The ordering is the toolchain's. Since Go 1.21 the language version `go1.21` comes before its release candidates and `go1.21.0`, while for older versions `go1.20` and `go1.20.0` are the same thing. A version needs the `go` prefix, and anything after a `-` is ignored. `version_compare` puts an invalid version below every valid one, and `version_lang` returns an empty string for it. `version_lang` usually returns the front of the string you pass in. The exception is a bare major version, so `go222` gives `go222.0`, and that one is built in the allocator.
+
+## Constants
+
+`burrow/go/constant.h` is Go's `go/constant`. A `ConstantValue` is the exact value of an untyped Go constant, the way a compiler sees it before the constant is given a type: a bool, a string, an integer of any size, a fraction or a float of very high precision, or a complex number made of two of those. Values come from literals with `constant_make_from_literal` or from the `constant_make_*` constructors, and the operations make new ones. Here is (2.3 + 5i) * 11 worked out exactly, and then turned into doubles:
+
+<!-- example: ../examples/go/constant.c#arith -->
+```c
+// (2.3 + 5i) * 11, worked out exactly.
+ConstantValue ar = constant_make_float64(a, 2.3);
+ConstantValue ai = constant_make_imag(a, constant_make_int64(5));
+ConstantValue x = constant_binary_op(a, ar, TOKEN_ADD, ai);
+ConstantValue c = constant_binary_op(a, x, TOKEN_MUL, constant_make_uint64(a, 11));
+
+bool exact;
+double re = constant_float64_val(constant_real(c), &exact);
+if (!exact)
+    fmt_printf_v("real part %s is not exact as a double\n",
+                 constant_value_string(constant_real(c), a));
+double im = constant_float64_val(constant_imag(c), &exact);
+fmt_println_v("go/constant", BURROW_ANY(TYPE_CONSTANT_VALUE, &c));
+fmt_println_v("double", re, im, exact);
+
+// 11 / 0.5
+ConstantValue q = constant_binary_op(a, constant_make_uint64(a, 11), TOKEN_QUO,
+                                     constant_make_float64(a, 0.5));
+fmt_println_v(constant_value_string(q, a));
+```
+
+The kinds go up from `CONSTANT_INT` to `CONSTANT_FLOAT` to `CONSTANT_COMPLEX` as needed, so an Int divided by a Float is a Float. `TOKEN_QUO` on two Ints gives the exact fraction, and `TOKEN_QUO_ASSIGN` gives the truncated integer quotient. `constant_value_string` rounds a number that is not an integer to 6 digits and `constant_value_exact_string` writes it in full, and the type descriptor `TYPE_CONSTANT_VALUE` has the short form as its `String` method, so a value can go straight to `fmt`.
+
+`constant_unary_op` takes a precision, which makes `^` work on an unsigned integer of that many bits:
+
+<!-- example: ../examples/go/constant.c#unary -->
+```c
+ConstantValue vs[] = {
+    constant_make_bool(true),
+    constant_make_float64(a, 2.7),
+    constant_make_uint64(a, 42),
+};
+for (int i = 0; i < 3; i++) {
+    switch (constant_value_kind(vs[i])) {
+    case CONSTANT_BOOL:
+        vs[i] = constant_unary_op(a, TOKEN_NOT, vs[i], 0);
+        break;
+    case CONSTANT_FLOAT:
+        vs[i] = constant_unary_op(a, TOKEN_SUB, vs[i], 0);
+        break;
+    case CONSTANT_INT:
+        // 16 bits of precision, the same as ^uint16(v).
+        vs[i] = constant_unary_op(a, TOKEN_XOR, vs[i], 16);
+        break;
+    default:
+        break;
+    }
+}
+for (int i = 0; i < 3; i++)
+    fmt_println_v(constant_value_string(vs[i], a));
+```
+
+`constant_compare` works for strings as well as numbers, so it can sort:
+
+<!-- example: ../examples/go/constant.c#compare -->
+```c
+static int by_value(void *env, const void *x, const void *y) {
+    (void)env;
+    const ConstantValue *p = x, *q = y;
+    if (constant_compare(*p, TOKEN_LSS, *q))
+        return -1;
+    if (constant_compare(*p, TOKEN_GTR, *q))
+        return +1;
+    return 0;
+}
+
+static void compare(Alloc *a) {
+    ConstantValue vs[] = {
+        constant_make_string(a, BURROW_S("Z")),
+        constant_make_string(a, BURROW_S("bacon")),
+        constant_make_string(a, BURROW_S("go")),
+        constant_make_string(a, BURROW_S("Frame")),
+        constant_make_string(a, BURROW_S("defer")),
+        constant_make_from_literal(a, BURROW_S("\"a\""), TOKEN_STRING, 0),
+    };
+    Slice s = slice_from(vs, 6, 6, TYPE_CONSTANT_VALUE);
+    slices_sort_func(s, BURROW_FN(SlicesCmpFunc, by_value, NULL));
+    for (int i = 0; i < 6; i++)
+        fmt_println_v(constant_string_val(vs[i]));
+}
+```
+
+`constant_sign` is -1, 0 or +1, and a complex value is 0 only when both its parts are:
+
+<!-- example: ../examples/go/constant.c#sign -->
+```c
+static ConstantValue mk_complex(Alloc *a, ConstantValue re, ConstantValue im) {
+    return constant_binary_op(a, re, TOKEN_ADD, constant_make_imag(a, im));
+}
+
+static void sign(Alloc *a) {
+    ConstantValue zero = constant_make_int64(0);
+    ConstantValue one = constant_make_int64(1);
+    ConstantValue neg_one = constant_make_int64(-1);
+    ConstantValue vs[] = {
+        neg_one,
+        mk_complex(a, zero, neg_one),
+        mk_complex(a, one, neg_one),
+        mk_complex(a, neg_one, one),
+        mk_complex(a, neg_one, neg_one),
+        zero,
+        mk_complex(a, zero, zero),
+        one,
+        mk_complex(a, zero, one),
+        mk_complex(a, one, one),
+    };
+    for (int i = 0; i < 10; i++)
+        fmt_printf_v("% d %s\n", constant_sign(vs[i]), constant_value_string(vs[i], a));
+}
+```
+
+`constant_val` gives a value back as an `Any`: a `bool`, a `Str` or an `int64_t` when it fits one, and otherwise the `BigInt`, `BigRat` or `BigFloat` it is held in. A float that came from a double is held as a fraction:
+
+<!-- example: ../examples/go/constant.c#val -->
+```c
+ConstantValue vs[] = {
+    constant_make_int64(INT64_MAX),
+    constant_make_float64(a, MATH_E),
+    constant_make_bool(true),
+    constant_make(a, BURROW_ANY_VAL(TYPE_BOOL, bool, false)),
+};
+for (int i = 0; i < 4; i++)
+    fmt_printf_v("%v\n", constant_val(a, vs[i]));
+```
+
+A ConstantValue is a small struct passed by value, and `{0}` is the unknown value, which is what an operation on an unknown value or a bad literal gives back. Anything bigger than an `int64_t` lives in the allocator passed to the function that made it, and values share that memory, since none of them ever changes. Nothing frees a single value, so make them in an arena and free the arena when you are done. Operations panic on operands that make no sense, like `!1` or `true + true`, with the same messages as Go.

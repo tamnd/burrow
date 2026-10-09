@@ -76,7 +76,8 @@ static Error hc_error(const Str *text) {
  *
  * The settings net/http reads from GODEBUG: httpcookiemaxnum here,
  * httplaxcontentlength for http_transfer.c, httpmuxgo121 for the mux and
- * httpservecontentkeepheaders for http_fs.c. */
+ * httpservecontentkeepheaders for http_fs.c, and http2server and http2client for
+ * the HTTP/2 server and transport. */
 
 enum {
     HC_DEBUG_KNOWN = 1 << 0,
@@ -85,6 +86,7 @@ enum {
     HC_DEBUG_MUX121 = 1 << 3,       /* httpmuxgo121=1 */
     HC_DEBUG_KEEP_HEADERS = 1 << 4, /* httpservecontentkeepheaders=1 */
     HC_DEBUG_NO_H2_SERVER = 1 << 5, /* http2server=0 */
+    HC_DEBUG_NO_H2_CLIENT = 1 << 6, /* http2client=0 */
 };
 
 static uint32_t hc_debug_flags;
@@ -134,6 +136,8 @@ static uint32_t hc_debug_parse(const char *v) {
         f |= HC_DEBUG_KEEP_HEADERS;
     if (v != NULL && hc_godebug(v, "http2server", &s) && str_eq(s, BURROW_S("0")))
         f |= HC_DEBUG_NO_H2_SERVER;
+    if (v != NULL && hc_godebug(v, "http2client", &s) && str_eq(s, BURROW_S("0")))
+        f |= HC_DEBUG_NO_H2_CLIENT;
     burrow__atomic64_store(&hc_debug_max, max);
     burrow__atomic_store_relaxed_u32(&hc_debug_flags, f);
     return f;
@@ -174,6 +178,10 @@ bool burrow__http_godebug_serve_content_keep_headers(void) {
 
 bool burrow__http_godebug_http2server_disabled(void) {
     return (hc_debug_load() & HC_DEBUG_NO_H2_SERVER) != 0;
+}
+
+bool burrow__http_godebug_http2client_disabled(void) {
+    return (hc_debug_load() & HC_DEBUG_NO_H2_CLIENT) != 0;
 }
 
 /* cookieNumWithinMax. */

@@ -1113,4 +1113,106 @@ void burrow__http2_serve_conn(HttpServer *srv, Alloc *a, NetConn c, Context ctx,
 bool burrow__http2_configure_server(HttpServer *srv);
 bool burrow__http2_server_configured(HttpServer *srv);
 
+/* ------------------------------------------------------------- transport */
+
+/* GoAwayError, what a request gets when the server sent GOAWAY and then
+ * closed the connection. */
+typedef struct Http2GoAwayError {
+    uint32_t last_stream_id;
+    Http2ErrCode err_code;
+    Str debug_data;
+} Http2GoAwayError;
+
+/* A GoAwayError as an error, in a. It reads "http2: server sent GOAWAY and
+ * closed the connection; LastStreamID=1, ErrCode=NO_ERROR, debug=\"\"". */
+Error burrow__http2_go_away_error(Alloc *a, Http2GoAwayError ge);
+
+/* Whether err is a GoAwayError, and what is in it. */
+bool burrow__http2_error_go_away(Error err, Http2GoAwayError *ge);
+
+/* ErrNoCachedConn, which a round trip gives when no connection in the pool
+ * can take the request, and isNoCachedConnError. */
+extern const Error burrow__http2_err_no_cached_conn;
+bool burrow__http2_is_no_cached_conn_error(Error err);
+
+/* The transport's errors. */
+extern const Error burrow__http2_err_client_conn_closed;
+extern const Error burrow__http2_err_client_conn_unusable;
+extern const Error burrow__http2_err_client_conn_not_established;
+extern const Error burrow__http2_err_client_conn_got_go_away;
+extern const Error burrow__http2_err_client_conn_force_closed;
+extern const Error burrow__http2_err_extended_connect_not_supported;
+extern const Error burrow__http2_err_stop_req_body_write;
+extern const Error burrow__http2_err_stop_req_body_write_and_cancel;
+extern const Error burrow__http2_err_req_body_too_long;
+extern const Error burrow__http2_err_response_header_list_size;
+extern const Error burrow__http2_err_request_header_list_size;
+extern const Error burrow__http2_err_closed_response_body;
+extern const Error burrow__http2_err_concurrent_read_on_res_body;
+
+/* httpcommon.EncodeHeadersParam with its Request. ctx is where the
+ * WroteHeaderField trace hook comes from. */
+typedef struct Http2EncodeHeadersParam {
+    Context ctx;
+    const Url *url;
+    Str method;
+    Str host;
+    HttpHeader header;
+    HttpHeader trailer;
+    int64_t actual_content_length; /* 0 means 0, -1 means unknown */
+    bool add_gzip_header;
+    uint64_t peer_max_header_list_size; /* 0 for no limit */
+    Str default_user_agent;
+} Http2EncodeHeadersParam;
+
+/* httpcommon.EncodeHeadersResult. */
+typedef struct Http2EncodeHeadersResult {
+    bool has_body;
+    bool has_trailers;
+} Http2EncodeHeadersResult;
+
+/* The headerf of EncodeHeaders, given each name, in lower case, and value. */
+typedef void (*Http2HeaderFunc)(void *env, Str name, Str value);
+
+/* httpcommon.EncodeHeaders: checks the request and calls f with each pseudo
+ * header and header field to send. The error is in the error arena, and a is
+ * for what it needs on the way. */
+Error burrow__http2_encode_headers(Alloc *a, const Http2EncodeHeadersParam *p,
+                                   Http2HeaderFunc f, void *env,
+                                   Http2EncodeHeadersResult *res);
+
+/* authorityAddr: the host and port of a request's authority, with the
+ * scheme's port when it has none and the host in ASCII. In a. */
+BURROW_OWNS(ret) Str burrow__http2_authority_addr(Alloc *a, Str scheme, Str authority);
+
+/* Transport, the client side of HTTP/2 that net/http's transport hands its
+ * connections to. It never dials: add_conn gives it a connection, and a round
+ * trip with no connection that can take it gives ErrNoCachedConn. */
+typedef struct burrow__Http2Transport Http2Transport;
+
+/* NewTransport, with t1's settings. NULL when memory ran out. */
+BURROW_OWNS(ret) Http2Transport *burrow__http2_new_transport(HttpTransport *t1);
+
+/* AddConn. c becomes the transport's in every case, and is closed when it is
+ * not needed or could not be set up. */
+Error burrow__http2_transport_add_conn(Http2Transport *t2, Str scheme, Str authority,
+                                       NetConn c);
+
+/* RoundTrip. The response's request is req, which has to outlive it. */
+BURROW_OWNS(ret) HttpResponse *burrow__http2_transport_round_trip(Http2Transport *t2,
+                                                                  HttpRequest *req,
+                                                                  Error *err);
+
+/* CloseIdleConnections. */
+void burrow__http2_transport_close_idle_connections(Http2Transport *t2);
+
+/* IdleConnStrsForTesting: the address of each connection that can take a new
+ * request, sorted, as a Slice of Str in a. */
+BURROW_OWNS(ret) Slice burrow__http2_transport_idle_conn_strs(Http2Transport *t2,
+                                                              Alloc *a);
+
+/* Closes every connection and waits for them to be gone. Free the responses
+ * first. */
+void burrow__http2_transport_free(Http2Transport *t2);
+
 #endif

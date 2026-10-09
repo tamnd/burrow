@@ -186,7 +186,7 @@ static const GsElt tokens[] = {
     {TOKEN_SELECT, S_("select"), CLASS_KEYWORD},
     {TOKEN_STRUCT, S_("struct"), CLASS_KEYWORD},
     {TOKEN_SWITCH, S_("switch"), CLASS_KEYWORD},
-    {TOKEN_TYPE, S_("type"), CLASS_KEYWORD},
+    {TOKEN_TYPE_, S_("type"), CLASS_KEYWORD},
     {TOKEN_VAR, S_("var"), CLASS_KEYWORD},
 };
 
@@ -1619,21 +1619,22 @@ static void TestInitSizeMismatch(TestingT *t) {
     env_init(&e);
     TokenFile *f = add_file(e.fset, BURROW_S("x.go"), 3);
     Str src = BURROW_S("abcd");
+    /* The message is checked inside the catch so that nothing but a volatile flag
+     * changes after the setjmp, which keeps mingw's -Wclobbered quiet. */
     volatile bool panicked = false;
-    Str msg = BURROW_STR_EMPTY;
     BURROW_TRY {
         GoScanner s;
         go_scanner_init(&s, e.a, f, bytes_of(src), (GoScannerErrorHandler){0}, 0);
     }
     BURROW_CATCH(r) {
         panicked = true;
-        msg = str_clone(e.a, panic_text(r));
+        if (!str_eq(panic_text(r),
+                    BURROW_S("file size (3) does not match src len (4)")))
+            testing_t_errorf_v(t, "wrong panic message: %q", panic_text(r));
     }
     BURROW_TRY_END;
     if (!panicked)
         testing_t_errorf_v(t, "Init with a short file did not panic");
-    else if (!str_eq(msg, BURROW_S("file size (3) does not match src len (4)")))
-        testing_t_errorf_v(t, "wrong panic message: %q", msg);
     env_free(&e);
 }
 

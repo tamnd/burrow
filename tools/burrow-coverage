@@ -159,6 +159,8 @@ RENAMED = {
     # include/burrow/go/token.h: token_is_keyword is the method on a Token, so
     # the function that asks the same of a string is the _str form.
     ("go/token", "func IsKeyword"): "token_is_keyword_str",
+    # <windows.h> already has a TOKEN_TYPE, so the keyword has an underscore.
+    ("go/token", "const TYPE"): "TOKEN_TYPE_",
     # include/burrow/time.h: time_unix and friends are the methods that read a
     # Time, so the functions that build one from a count say which way they
     # go. Date the method is time_date_of because time_date builds a Time,

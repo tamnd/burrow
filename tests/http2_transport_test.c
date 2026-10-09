@@ -25,6 +25,7 @@
 #include "check.h"
 
 #include "../src/net/http2.h"
+#include "../src/net/http_internal.h"
 #include "../src/xnet/hpack.h"
 
 #include "burrow/bufio.h"
@@ -2065,6 +2066,18 @@ static void TestTransportHandlesInvalidStatuslessResponse(TestingT *t) {
     h2ct_run(t, h2ct_handles_invalid_statusless_response, NULL);
 }
 
+/* Waits for tr1 to have n connections to dummy.tld in its pool. */
+static bool h2ct_wait_pooled(H2ctTT *tt, Int n) {
+    Time deadline = time_add(time_now(), H2CT_WAIT);
+    while (burrow__http_transport_idle_conn_count_for_testing(
+               &tt->tr1, BURROW_S("http"), BURROW_S("dummy.tld:80")) != n) {
+        if (!time_before(time_now(), deadline))
+            return false;
+        time_sleep(TIME_MILLISECOND);
+    }
+    return true;
+}
+
 static void h2ct_no_retry_on_stream_protocol_error(H2ctTT *tt, const void *arg) {
     (void)arg;
     /* Start two requests. The first is a long request that will finish after
@@ -2078,6 +2091,11 @@ static void h2ct_no_retry_on_stream_protocol_error(H2ctTT *tt, const void *arg) 
     H2CT_TRY(tc1 != NULL && h2ct_want_new_conn_get(tc1));
     H2CT_TRY(h2ct_write_settings(tc1, NULL, 0));
     H2CT_TRY(h2ct_want_frame_type(tc1, HTTP2_FRAME_SETTINGS)); /* settings ACK */
+    /* Go's getConn waits for the bubble to go idle, and by then the dial has
+     * put tc1 in the pool. Here the dial can still be on its way there, and
+     * request #2 would then dial a spare conn that looks like a retry. */
+    if (!h2ct_wait_pooled(tt, 1))
+        FATALF("the dial did not put tc1 in the pool");
 
     /* Request #2: The short request. */
     H2ctRT *rt2 = h2ct_tt_round_trip(

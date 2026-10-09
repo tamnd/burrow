@@ -527,6 +527,11 @@ bool burrow__http_godebug_http2client_disabled(void);
 /* Closes c and gives it back the way t gives back each of its connections. */
 void burrow__http_transport_free_conn(HttpTransport *t, NetConn c);
 
+/* IdleConnCountForTesting: how many idle connections t has to addr by scheme,
+ * with no proxy. HTTP/2 connections stay in the pool while they are in use. */
+Int burrow__http_transport_idle_conn_count_for_testing(HttpTransport *t, Str scheme,
+                                                       Str addr);
+
 /* The pieces of the server the HTTP/2 server shares: serverHandler.ServeHTTP,
  * doKeepAlives, and the header value limit. */
 void burrow__http_server_handler_serve(HttpServer *srv, HttpResponseWriter w,

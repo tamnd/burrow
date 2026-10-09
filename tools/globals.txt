@@ -55,6 +55,7 @@ category	hosts-cache	What net last read from the hosts file. Go keeps it in a pa
 category	impl-select	Which implementation a crypto package runs, which Go keeps in crypto/internal/impl so that its tests can try every one.
 category	crypto-registry	crypto's table of registered hash functions. Go keeps it in a package level slice that RegisterHash writes from init, and it is process wide because a hash registered anywhere is one Hash.New can make everywhere.
 category	resolver	What net's resolver works from: the copy of resolv.conf it last read, the hook tests use to stand in for the host name, and the default Resolver. Go keeps the same ones as package level variables, and they are process wide because every lookup in the process reads the same files.
+category	zone-cache	The interface names and indexes IPv6 zones are read through. Go keeps the same cache as a package level variable behind a lock, and it is process wide because the interfaces are.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -208,6 +209,7 @@ global	src/net/hosts.c	nh_hosts	hosts-cache	The parsed hosts file, its path, siz
 global	src/net/conf.c	cf_get_hostname	resolver	The function that gives the host name for resolv.conf's search list. Only tests set it, before the lookups they make, which is how Go's tests use getHostname.
 global	src/net/cgo.c	cg_threads	resolver	threadLimit, the channel with a slot for each call to the system's resolver that may run at once. Made once under cg_threads.once and only sent to and received from after that.
 global	src/net/cgo.c	cg_pool	resolver	The threads waiting for a call to the system's resolver. Read and written only under cg_pool.mu.
+global	src/net/interface.c	if_zone_cache	zone-cache	ipv6ZoneCache, the interface names and indexes IPv6 zones are read through, and the names it has handed out, which are never freed. Read under if_zone_cache.mu held for reading and replaced whole under it held for writing.
 global	src/net/dnsclient_unix.c	du_fallback	resolver	The config used when resolv.conf cannot be read. Written once under du_resolv.init_once and only read after that.
 global	src/net/lookup.c	lk_default	resolver	DefaultResolver. Its only state is the list of lookups in flight, which is read and written under its burrow_mu.
 global	src/net/lookup.c	lk_wait	resolver	dnsWaitGroup, the lookups still running in goroutines of their own. Only touched through the wait group's own atomics, and only waited on by tests.

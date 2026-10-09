@@ -1352,18 +1352,118 @@ void net_conn_free(NetConn c);
 void net_listener_free(NetListener l);
 void net_packet_conn_free(NetPacketConn c);
 
+/* --------------------------------------------------------------- interfaces
+ *
+ * The machine's network interfaces and their addresses, which is Go's
+ * interface.go and mac.go. Everything these hand back is made in the
+ * allocator they are given and points only into it, so an arena is the easy
+ * way to give it all back at once. A failure is an OpError with Op "route"
+ * and Net "ip+net" around the reason, as in Go.
+ *
+ * Where the answers come from is up to the system: a netlink dump on Linux,
+ * getifaddrs on macOS and the BSDs, and GetAdaptersAddresses on Windows,
+ * which have different ideas of what an interface's flags and name are. On
+ * Windows the name is the adapter's friendly name, such as "Ethernet", and the
+ * flags other than up and running are guessed from the kind of adapter, as Go
+ * guesses them. wasip1 and Emscripten have no interfaces, and illumos, AIX and
+ * Cosmopolitan give an error that wraps PAL_ENOSYS for now. */
+
+/* net.HardwareAddr, a MAC address. */
+typedef Slice NetHardwareAddr;
+
+/* HardwareAddr.String: lower case hex pairs between colons, such as
+ * "00:00:5e:00:53:01", and "" for an empty address. */
+BURROW_OWNS(ret) Str net_hardware_addr_string(NetHardwareAddr hw, Alloc *a);
+
+/* ParseMAC: an IEEE 802 MAC-48, EUI-48, EUI-64 or 20 octet IP over
+ * InfiniBand link layer address, in any of these forms:
+ *
+ *     00:00:5e:00:53:01
+ *     00-00-5e-00-53-01
+ *     0000.5e00.5301
+ *     00005e005301
+ *
+ * An AddrError "invalid MAC address" for anything else. */
+BURROW_OWNS(ret) NetHardwareAddr net_parse_mac(Alloc *a, Str s, Error *err);
+
+/* net.Flags, what an interface can do. */
+typedef Uint NetFlags;
+
+enum {
+    NET_FLAG_UP = 1 << 0,             /* administratively up */
+    NET_FLAG_BROADCAST = 1 << 1,      /* can broadcast */
+    NET_FLAG_LOOPBACK = 1 << 2,       /* is a loopback interface */
+    NET_FLAG_POINT_TO_POINT = 1 << 3, /* is one end of a point to point link */
+    NET_FLAG_MULTICAST = 1 << 4,      /* can multicast */
+    NET_FLAG_RUNNING = 1 << 5         /* is running */
+};
+
+/* Flags.String: the names of the flags that are set between bars, such as
+ * "up|broadcast|multicast|running", and "0" for none. */
+BURROW_OWNS(ret) Str net_flags_string(NetFlags f, Alloc *a);
+
+/* net.Interface. index starts at 1 and 0 is never one. name is "lo", "eth0"
+ * or "en0" and the like, and can be empty. */
+typedef struct NetInterface {
+    Int index;
+    Int mtu;
+    Str name;
+    NetHardwareAddr hardware_addr;
+    NetFlags flags;
+} NetInterface;
+
+extern const Type *const TYPE_NET_INTERFACE;
+
+/* The type of a NetAddr in a Slice, which is what the address lists below
+ * are. */
+extern const Type *const TYPE_NET_ADDR;
+
+/* Interfaces: the system's interfaces, a Slice of NetInterface. */
+BURROW_OWNS(ret) Slice net_interfaces(Alloc *a, Error *err);
+
+/* InterfaceAddrs: the unicast addresses of every interface, a Slice of
+ * NetAddr, each one a NetIPNet, or on Windows a NetIPAddr for an anycast
+ * address, made in a. It does not say which address is whose, which
+ * net_interface_addrs_of does. */
+BURROW_OWNS(ret) Slice net_interface_addrs(Alloc *a, Error *err);
+
+/* InterfaceByIndex and InterfaceByName: the interface with this index or
+ * name, made in a, or NULL and an error, which wraps "no such network
+ * interface" when there is none. */
+BURROW_OWNS(ret) NetInterface *net_interface_by_index(Alloc *a, Int index, Error *err);
+BURROW_OWNS(ret) NetInterface *net_interface_by_name(Alloc *a, Str name, Error *err);
+
+/* Interface.Addrs: the unicast addresses of ifi, as net_interface_addrs has
+ * them. Go calls this Addrs, which is the name net_interface_addrs already
+ * has here. */
+BURROW_OWNS(ret) Slice net_interface_addrs_of(const NetInterface *ifi, Alloc *a,
+                                               Error *err);
+
+/* Interface.MulticastAddrs: the multicast groups ifi has joined, a Slice of
+ * NetAddr, each one a NetIPAddr. There are none on NetBSD, OpenBSD and
+ * DragonFly, where Go does not look either. */
+BURROW_OWNS(ret) Slice net_interface_multicast_addrs(const NetInterface *ifi, Alloc *a,
+                                                      Error *err);
+
+/* n as a NetAddr, which points at n, and nil for a NULL n. */
+NetAddr net_ip_net_as_addr(const NetIPNet *n);
+
 /* ------------------------------------------------------------- descriptors */
 
 /* The descriptors. NetIP lists AppendText, MarshalText, String and
- * UnmarshalText, NetIPMask lists String and NetIPNet lists Network and
- * String. A String method has no allocator to take, so these put their text
+ * UnmarshalText, NetIPMask lists String, NetIPNet lists Network and String,
+ * and NetHardwareAddr and NetFlags list String. A String method has no allocator to take, so these put their text
  * in the calling goroutine's error arena. */
 extern const Type burrow_type_NetIP;
 extern const Type burrow_type_NetIPMask;
 extern const Type burrow_type_NetIPNet;
+extern const Type burrow_type_NetHardwareAddr;
+extern const Type burrow_type_NetFlags;
 #define TYPE_NET_IP TYPE_OF(NetIP)
 #define TYPE_NET_IP_MASK TYPE_OF(NetIPMask)
 #define TYPE_NET_IP_NET TYPE_OF(NetIPNet)
+#define TYPE_NET_HARDWARE_ADDR TYPE_OF(NetHardwareAddr)
+#define TYPE_NET_FLAGS TYPE_OF(NetFlags)
 
 #ifdef __cplusplus
 }

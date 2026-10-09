@@ -1008,3 +1008,23 @@ const Type burrow_type_NetIPNet = {
     0,
     NULL,
 };
+
+static Str net_ip_net_addr_network(void *self) {
+    return net_ip_net_network((const NetIPNet *)self);
+}
+
+static Str net_ip_net_addr_string(void *self, Alloc *a) {
+    return net_ip_net_string((const NetIPNet *)self, a);
+}
+
+static const NetAddrVT net_ip_net_addr_vt = {
+    &burrow_type_NetIPNet, net_ip_net_addr_network, net_ip_net_addr_string};
+
+NetAddr net_ip_net_as_addr(const NetIPNet *n) {
+    NetAddr addr = {NULL, NULL};
+    if (n != NULL) {
+        addr.vt = &net_ip_net_addr_vt;
+        addr.data = (void *)(uintptr_t)n;
+    }
+    return addr;
+}

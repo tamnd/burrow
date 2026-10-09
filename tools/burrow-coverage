@@ -170,6 +170,9 @@ RENAMED = {
     # time_local are the methods that move a Time into them.
     ("time", "var UTC"): "time_utc_loc",
     ("time", "var Local"): "time_local_loc",
+    # net.InterfaceAddrs is every address on the machine, so the method that
+    # gives one interface's is net_interface_addrs_of.
+    ("net", "method (*Interface) Addrs"): "net_interface_addrs_of",
 }
 
 

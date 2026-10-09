@@ -2826,16 +2826,14 @@ static void h2ct_unused_conn_ok(H2ctTT *tt, const void *arg) {
     (void)arg;
     H2CT_TRY(h2ct_tt_with_unused_conn(tt));
 
-    HttpRequest *req =
-        h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body);
-    H2CT_TRY(req != NULL);
     H2ctConn *tc = h2ct_get_conn(tt);
     H2CT_TRY(tc != NULL);
     H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_SETTINGS));
     H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_WINDOW_UPDATE));
 
     /* Send a request on the Transport. It uses the conn we provided. */
-    H2ctRT *rt = h2ct_tt_round_trip(tt, req);
+    H2ctRT *rt = h2ct_tt_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
     H2CT_TRY(rt != NULL);
     static const Str want[] = {S_(":authority"), S_("dummy.tld"), S_(":method"),
                                S_("GET"),        S_(":path"),     S_("/")};

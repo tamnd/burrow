@@ -94,6 +94,7 @@ typedef struct H2ctConn {
     SyncWaitGroup wwg;
     NetConn cli;    /* the client's end, which the client has as h2ct_cli_vt */
     Error cli_werr; /* under rmu: what the client's writes fail with, if set */
+    Int rlimit;     /* under rmu: SetReadBufferSize, the most rbuf holds, or 0 */
     struct H2ctConn *next;
     SyncAtomicBool cli_closed; /* the client closed cli */
     bool reof;
@@ -105,6 +106,26 @@ typedef struct H2ctConn {
 
 enum { H2CT_CHUNK = 16 << 10 };
 
+/* How much in_job may read next: what rlimit leaves room for in rbuf, waiting
+ * for the test to make some. Once the conn is closed at either end, it reads
+ * on regardless, to see the end. */
+static Int h2ct_in_room(H2ctConn *tc) {
+    for (;;) {
+        sync_mutex_lock(&tc->rmu);
+        Int room =
+            tc->rlimit == 0 ? H2CT_CHUNK : tc->rlimit - bytes_buffer_len(&tc->rbuf);
+        sync_mutex_unlock(&tc->rmu);
+        if (room > 0)
+            return room < H2CT_CHUNK ? room : H2CT_CHUNK;
+        sync_mutex_lock(&tc->wmu);
+        bool closed = tc->wclosed || sync_atomic_bool_load(&tc->cli_closed);
+        sync_mutex_unlock(&tc->wmu);
+        if (closed)
+            return H2CT_CHUNK;
+        time_sleep(TIME_MILLISECOND);
+    }
+}
+
 /* Reads what the client writes into rbuf until srv ends. */
 static void h2ct_in_job(void *env) {
     H2ctConn *tc = (H2ctConn *)env;
@@ -112,10 +133,11 @@ static void h2ct_in_job(void *env) {
     for (;;) {
         Error err = BURROW_NO_ERROR;
         Int n = 0;
-        if (chunk != NULL)
-            n = tc->srv.vt->reader.read(
-                tc->srv.data, slice_from(chunk, H2CT_CHUNK, H2CT_CHUNK, TYPE_BYTE),
-                &err);
+        if (chunk != NULL) {
+            Int max = h2ct_in_room(tc);
+            n = tc->srv.vt->reader.read(tc->srv.data,
+                                        slice_from(chunk, max, max, TYPE_BYTE), &err);
+        }
         sync_mutex_lock(&tc->rmu);
         if (n > 0) {
             Error werr = BURROW_NO_ERROR;
@@ -4047,6 +4069,153 @@ static void TestTransportRoundtripCloseOnWriteError(TestingT *t) {
     h2ct_run(t, h2ct_roundtrip_close_on_write_error, NULL);
 }
 
+typedef enum H2ctBlockingWrite {
+    H2CT_BLOCK_HEADERS,
+    H2CT_BLOCK_BODY,
+    H2CT_BLOCK_TRAILER,
+} H2ctBlockingWrite;
+
+/* Go's filler is the hex of 2048 random bytes. This is as long, and hpack
+ * shrinks it no more. */
+static Str h2ct_blocking_filler(H2ctTT *tt) {
+    return strings_repeat(arena_allocator(&tt->ar), BURROW_S("0123456789abcdef"), 256);
+}
+
+static HttpRequest *h2ct_blocking_request(H2ctTT *tt, H2ctBlockingWrite kind) {
+    Str filler = h2ct_blocking_filler(tt);
+    Alloc *a = arena_allocator(&tt->ar);
+    Str url = BURROW_S("https://dummy.tld/");
+    HttpRequest *req = NULL;
+    switch (kind) {
+    case H2CT_BLOCK_HEADERS:
+        req =
+            h2ct_new_request_url(tt, (Context){0}, BURROW_S("POST"), url, h2ct_no_body);
+        if (req != NULL && !http_header_set(req->header, BURROW_S("Big"), filler))
+            return NULL;
+        return req;
+    case H2CT_BLOCK_BODY: {
+        StringsReader *sr = strings_new_reader(a, filler);
+        if (sr == NULL)
+            return NULL;
+        return h2ct_new_request_url(tt, (Context){0}, BURROW_S("POST"), url,
+                                    strings_reader_as_io_reader(sr));
+    }
+    case H2CT_BLOCK_TRAILER: {
+        StringsReader *sr = strings_new_reader(a, BURROW_S("body"));
+        if (sr == NULL)
+            return NULL;
+        req = h2ct_new_request_url(tt, (Context){0}, BURROW_S("POST"), url,
+                                   strings_reader_as_io_reader(sr));
+        if (req == NULL)
+            return NULL;
+        req->trailer = http_header_make(a);
+        if (req->trailer == NULL ||
+            !http_header_set(req->trailer, BURROW_S("Big"), filler))
+            return NULL;
+        return req;
+    }
+    default:
+        return NULL;
+    }
+}
+
+static HttpRequest *h2ct_small_request(H2ctTT *tt) {
+    return h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
+                                BURROW_S("https://dummy.tld/"), h2ct_no_body);
+}
+
+static void h2ct_blocking_request_write(H2ctTT *tt, const void *arg) {
+    H2ctBlockingWrite kind = *(const H2ctBlockingWrite *)arg;
+
+    /* Request 1: A small request to ensure we read the server
+     * MaxConcurrentStreams. */
+    H2ctRT *rt1 = h2ct_tt_round_trip(tt, h2ct_small_request(tt));
+    H2CT_TRY(rt1 != NULL);
+    H2ctConn *tc1 = h2ct_get_conn(tt);
+    H2CT_TRY(tc1 != NULL && h2ct_want_frame_type(tc1, HTTP2_FRAME_SETTINGS) &&
+             h2ct_want_frame_type(tc1, HTTP2_FRAME_WINDOW_UPDATE) &&
+             h2ct_want_headers(tc1, 1, true, NULL, 0));
+    static const Http2Setting s[] = {{HTTP2_SETTING_MAX_CONCURRENT_STREAMS, 1}};
+    H2CT_TRY(h2ct_write_settings(tc1, s, 1));
+    H2CT_TRY(h2ct_write_status(tc1, 1, "200"));
+    H2CT_TRY(h2ct_rt_want_status(rt1, 200));
+    H2CT_TRY(h2ct_want_frame_type(tc1, HTTP2_FRAME_SETTINGS)); /* settings ACK */
+
+    /* Request 2: A large request that blocks while being written. */
+    sync_mutex_lock(&tc1->rmu);
+    tc1->rlimit = 1024;
+    sync_mutex_unlock(&tc1->rmu);
+    HttpRequest *req2 = h2ct_blocking_request(tt, kind);
+    H2CT_TRY(req2 != NULL);
+    H2ctRT *rt2 = h2ct_tt_round_trip(tt, req2);
+    H2CT_TRY(rt2 != NULL);
+
+    /* Request 3: A small request that is sent on a new connection, since
+     * request 2 is hogging the only available stream on the previous
+     * connection. */
+    H2ctRT *rt3 = h2ct_tt_round_trip(tt, h2ct_small_request(tt));
+    H2CT_TRY(rt3 != NULL);
+    H2ctConn *tc2 = h2ct_get_conn(tt);
+    H2CT_TRY(tc2 != NULL && h2ct_want_frame_type(tc2, HTTP2_FRAME_SETTINGS) &&
+             h2ct_want_frame_type(tc2, HTTP2_FRAME_WINDOW_UPDATE) &&
+             h2ct_want_headers(tc2, 1, true, NULL, 0));
+    H2CT_TRY(h2ct_write_settings(tc2, NULL, 0));
+    H2CT_TRY(h2ct_write_status(tc2, 1, "200"));
+    H2CT_TRY(h2ct_rt_want_status(rt3, 200));
+    H2CT_TRY(h2ct_want_frame_type(tc2, HTTP2_FRAME_SETTINGS)); /* settings ACK */
+
+    if (h2ct_rt_done(rt2))
+        testing_t_errorf_v(tt->t, "RoundTrip 2 is done, expect it to be still pending");
+}
+
+static void TestTransportBlockingRequestWrite_headers(TestingT *t) {
+    static const H2ctBlockingWrite kind = H2CT_BLOCK_HEADERS;
+    h2ct_run(t, h2ct_blocking_request_write, &kind);
+}
+
+static void TestTransportBlockingRequestWrite_body(TestingT *t) {
+    static const H2ctBlockingWrite kind = H2CT_BLOCK_BODY;
+    h2ct_run(t, h2ct_blocking_request_write, &kind);
+}
+
+static void TestTransportBlockingRequestWrite_trailer(TestingT *t) {
+    static const H2ctBlockingWrite kind = H2CT_BLOCK_TRAILER;
+    h2ct_run(t, h2ct_blocking_request_write, &kind);
+}
+
+/* Go sleeps five seconds of its fake clock. This sleeps five real ones. */
+static void h2ct_timeout_server_hangs(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_tc_round_trip(
+        tt, h2ct_new_request_url(tt, (Context){0}, BURROW_S("PUT"),
+                                 BURROW_S("https://dummy.tld/"), h2ct_no_body));
+    H2CT_TRY(rt != NULL);
+
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    time_sleep(5 * TIME_SECOND);
+    Error err = BURROW_NO_ERROR;
+    Http2Frame *f = h2ct_read_frame_within(tc, H2CT_QUIET, &err);
+    if (f != NULL && BURROW_OK(err)) {
+        int type = (int)f->header.type;
+        burrow__http2_frame_free(f);
+        FATALF("unexpected frame: type %d", type);
+    }
+    if (sync_atomic_bool_load(&rt->done))
+        FATALF("after 5 seconds with no response, RoundTrip unexpectedly returned");
+
+    BURROW_CALLF0(rt->cancel);
+    err = h2ct_rt_err(rt);
+    if (!errors_is(err, context_canceled))
+        FATALF("RoundTrip error: %v; want context.Canceled", err);
+}
+
+static void TestTransportTimeoutServerHangs(TestingT *t) {
+    h2ct_run(t, h2ct_timeout_server_hangs, NULL);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -4154,6 +4323,10 @@ static void TestTransportRoundtripCloseOnWriteError(TestingT *t) {
     X(TestTransportReqBodyAfterResponse_403)                                           \
     X(TestTransportRequestPathPseudo)                                                  \
     X(TestRoundTripDoesntConsumeRequestBodyEarly)                                      \
-    X(TestTransportRoundtripCloseOnWriteError)
+    X(TestTransportRoundtripCloseOnWriteError)                                         \
+    X(TestTransportBlockingRequestWrite_headers)                                       \
+    X(TestTransportBlockingRequestWrite_body)                                          \
+    X(TestTransportBlockingRequestWrite_trailer)                                       \
+    X(TestTransportTimeoutServerHangs)
 
 TESTING_MAIN(TESTS)

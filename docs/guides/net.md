@@ -451,6 +451,62 @@ port 80 zone lo
 dial tcp6: address 127.0.0.1: no suitable address found
 ```
 
+`net_listen_packet` is Go's `ListenPacket`, for "udp", "udp4", "udp6" and "unixgram". It gives back a `NetPacketConn`, whose `read_from` says who sent each packet and whose `write_to` sends one to any address. `net_udp_conn_as_packet_conn` and `net_unix_conn_as_packet_conn` turn the connections the UDP and Unix sections make into one, and `net_packet_conn_free` gives either back. The "ip" networks fail with ENOSYS for now, since raw IP sockets are not here yet.
+
+<!-- example: ../examples/net/listen_packet.c#listen-packet -->
+```c
+Alloc *heap = heap_allocator();
+Arena ar;
+arena_init(&ar, NULL, 0);
+Alloc *a = arena_allocator(&ar);
+Error err;
+NetPacketConn pc =
+    net_listen_packet(heap, BURROW_S("udp"), BURROW_S("127.0.0.1:0"), &err);
+if (pc.vt == NULL) {
+    arena_free(&ar);
+    return;
+}
+NetAddr la = pc.vt->local_addr(pc.data);
+NetConn c = net_dial(heap, BURROW_S("udp"), la.vt->string(la.data, a), &err);
+if (c.vt != NULL) {
+    /* One datagram there, and the answer back to whoever sent it. */
+    char buf[64];
+    char ping[] = "ping";
+    (void)c.vt->writer.write(c.data, slice_from(ping, 4, 4, TYPE_BYTE), &err);
+    NetAddr from = {NULL, NULL};
+    Int n = pc.vt->read_from(pc.data,
+                             slice_from(buf, sizeof buf, sizeof buf, TYPE_BYTE), a,
+                             &from, &err);
+    NetAddr cl = c.vt->local_addr(c.data);
+    bool same = from.vt != NULL &&
+                str_eq(from.vt->string(from.data, a), cl.vt->string(cl.data, a));
+    printf("got %.*s, from the dialer: %s\n", (int)n, buf, same ? "true" : "false");
+    char pong[] = "pong";
+    (void)pc.vt->write_to(pc.data, slice_from(pong, 4, 4, TYPE_BYTE), from, &err);
+    n = c.vt->reader.read(c.data,
+                          slice_from(buf, sizeof buf, sizeof buf, TYPE_BYTE), &err);
+    printf("got %.*s back\n", (int)n, buf);
+    net_conn_free(c);
+}
+net_packet_conn_free(pc);
+
+/* Only the datagram networks make a packet connection. */
+pc = net_listen_packet(heap, BURROW_S("tcp"), BURROW_S("127.0.0.1:0"), &err);
+if (pc.vt == NULL) {
+    Str s = error_text(err);
+    printf("%.*s\n", (int)s.len, (const char *)s.p);
+}
+arena_free(&ar);
+```
+
+That prints:
+
+```
+got ping, from the dialer: true
+got pong back
+listen tcp 127.0.0.1:0: address 127.0.0.1:0: unexpected address type
+```
+
 A name with several addresses is tried one address at a time, each with its share of whatever time is left, and for "tcp" a name with both IPv4 and IPv6 addresses races the first of each, starting the second family 300ms after the first unless `fallback_delay` says otherwise. That is RFC 6555, which Go calls Happy Eyeballs. The connection that loses the race is closed before the dial returns. `net_dialer_dial_context` takes a context, and cancelling it stops a dial that is still going.
 
 `net_conn_free` and `net_listener_free` close what they are given and give it back, and `net_conn_as_tcp_conn` and its siblings get the concrete type when you need its methods. `net_resolve_tcp_addr`, `net_resolve_udp_addr` and `net_resolve_ip_addr` are Go's `ResolveTCPAddr` and friends, for when you want the address without the connection.

@@ -317,6 +317,31 @@ IoWriter net_conn_as_io_writer(NetConn c);
 IoCloser net_conn_as_io_closer(NetConn c);
 IoCloser net_listener_as_io_closer(NetListener l);
 
+/* net.PacketConn, a packet-oriented connection, which any number of
+ * goroutines may use at once.
+ *
+ * read_from reads one packet into p and says who sent it, with the address
+ * made in a. A packet longer than p is cut to fit, and the rest of it is
+ * lost. write_to sends p as one packet to addr. Close is first, as an
+ * io.Closer, so that net_packet_conn_as_io_closer is the address of a member.
+ * local_addr and the deadlines are what a NetConn's are. */
+typedef struct NetPacketConnVT {
+    IoCloserVT closer;
+    Int (*read_from)(void *self, Slice p, Alloc *a, NetAddr *addr, Error *err);
+    Int (*write_to)(void *self, Slice p, NetAddr addr, Error *err);
+    NetAddr (*local_addr)(void *self);
+    Error (*set_deadline)(void *self, Time t);
+    Error (*set_read_deadline)(void *self, Time t);
+    Error (*set_write_deadline)(void *self, Time t);
+} NetPacketConnVT;
+
+typedef struct NetPacketConn {
+    const NetPacketConnVT *vt;
+    void *data;
+} NetPacketConn;
+
+IoCloser net_packet_conn_as_io_closer(NetPacketConn c);
+
 /* --------------------------------------------------------------- net.Error */
 
 /* net.Error, an error that can say whether it was a timeout.
@@ -574,8 +599,6 @@ BURROW_STATIC(ret) Error net_tcp_conn_set_keep_alive_period(NetTCPConn *c, Durat
 BURROW_STATIC(ret) Error net_tcp_conn_set_keep_alive_config(NetTCPConn *c,
                                                             NetKeepAliveConfig config);
 
-/* c as a NetConn, and back: Go's conversion to net.Conn and its
- * conn.(*TCPConn), which gives NULL for a NetConn that is not a TCPConn. */
 /* TCPConn.SyscallConn and TCPListener.SyscallConn: the socket under c or l,
  * which stays the caller's to use only until c or l is freed. A NULL c or l
  * is EINVAL. The raw conn of a listener can only be controlled, and its read
@@ -583,6 +606,8 @@ BURROW_STATIC(ret) Error net_tcp_conn_set_keep_alive_config(NetTCPConn *c,
 SyscallRawConn net_tcp_conn_syscall_conn(NetTCPConn *c, Error *err);
 SyscallRawConn net_tcp_listener_syscall_conn(NetTCPListener *l, Error *err);
 
+/* c as a NetConn, and back: Go's conversion to net.Conn and its
+ * conn.(*TCPConn), which gives NULL for a NetConn that is not a TCPConn. */
 NetConn net_tcp_conn_as_conn(NetTCPConn *c);
 BURROW_BORROWS(ret) NetTCPConn *net_conn_as_tcp_conn(NetConn c);
 
@@ -727,12 +752,14 @@ BURROW_STATIC(ret) Error net_udp_conn_set_write_deadline(NetUDPConn *c, Time t);
 BURROW_STATIC(ret) Error net_udp_conn_set_read_buffer(NetUDPConn *c, Int bytes);
 BURROW_STATIC(ret) Error net_udp_conn_set_write_buffer(NetUDPConn *c, Int bytes);
 
-/* c as a NetConn, and back. */
 /* UDPConn.SyscallConn, as net_tcp_conn_syscall_conn is. */
 SyscallRawConn net_udp_conn_syscall_conn(NetUDPConn *c, Error *err);
 
+/* c as a NetConn or a NetPacketConn, and back. */
 NetConn net_udp_conn_as_conn(NetUDPConn *c);
 BURROW_BORROWS(ret) NetUDPConn *net_conn_as_udp_conn(NetConn c);
+NetPacketConn net_udp_conn_as_packet_conn(NetUDPConn *c);
+BURROW_BORROWS(ret) NetUDPConn *net_packet_conn_as_udp_conn(NetPacketConn c);
 
 /* Closes c if it is open and gives its memory back. NULL does nothing. */
 void net_udp_conn_free(NetUDPConn *c);
@@ -845,13 +872,15 @@ BURROW_STATIC(ret) Error net_unix_conn_set_write_deadline(NetUnixConn *c, Time t
 BURROW_STATIC(ret) Error net_unix_conn_set_read_buffer(NetUnixConn *c, Int bytes);
 BURROW_STATIC(ret) Error net_unix_conn_set_write_buffer(NetUnixConn *c, Int bytes);
 
-/* c as a NetConn, and back. */
 /* UnixConn.SyscallConn and UnixListener.SyscallConn, as the TCP ones are. */
 SyscallRawConn net_unix_conn_syscall_conn(NetUnixConn *c, Error *err);
 SyscallRawConn net_unix_listener_syscall_conn(NetUnixListener *l, Error *err);
 
+/* c as a NetConn or a NetPacketConn, and back. */
 NetConn net_unix_conn_as_conn(NetUnixConn *c);
 BURROW_BORROWS(ret) NetUnixConn *net_conn_as_unix_conn(NetConn c);
+NetPacketConn net_unix_conn_as_packet_conn(NetUnixConn *c);
+BURROW_BORROWS(ret) NetUnixConn *net_packet_conn_as_unix_conn(NetPacketConn c);
 
 /* Closes c if it is open and gives its memory back. NULL does nothing. */
 void net_unix_conn_free(NetUnixConn *c);
@@ -1232,13 +1261,28 @@ BURROW_OWNS(ret) NetListener net_listen_config_listen(const NetListenConfig *lc,
 /* Listen, which is the zero ListenConfig's with context_background(). */
 BURROW_OWNS(ret) NetListener net_listen(Alloc *a, Str network, Str address, Error *err);
 
+/* ListenConfig.ListenPacket: a packet connection on address for "udp",
+ * "udp4", "udp6" or "unixgram", made in a, with the addresses read as
+ * net_listen_config_listen reads them. The "ip" networks fail with ENOSYS
+ * until IPConn is here. */
+BURROW_OWNS(ret) NetPacketConn net_listen_config_listen_packet(const NetListenConfig *lc,
+                                                               Alloc *a, Context ctx,
+                                                               Str network, Str address,
+                                                               Error *err);
+
+/* ListenPacket, which is the zero ListenConfig's with context_background(). */
+BURROW_OWNS(ret) NetPacketConn net_listen_packet(Alloc *a, Str network, Str address,
+                                                 Error *err);
+
 /* Closes c if it is open and gives back what this package made for it, for
  * any connection this package made: TCP, UDP, Unix and both ends of a Pipe.
  * Anything else is only closed. The nil NetConn does nothing. */
 void net_conn_free(NetConn c);
 
-/* The same for a listener, which is TCP or Unix. */
+/* The same for a listener, which is TCP or Unix, and for a packet
+ * connection, which is UDP or Unix. */
 void net_listener_free(NetListener l);
+void net_packet_conn_free(NetPacketConn c);
 
 /* ------------------------------------------------------------- descriptors */
 

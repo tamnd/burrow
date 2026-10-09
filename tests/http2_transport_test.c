@@ -3532,6 +3532,85 @@ static void TestTransport1xxLimits_limit_disabled_by_client_trace(TestingT *t) {
     h2ct_run(t, h2ct_1xx_limits, &test);
 }
 
+/* Go waits 5ms in a bubble and looks at 4ms. The clock here is real, so the
+ * timeout is long enough for a loaded machine to read the body in, and the
+ * round trip is looked at as soon as it has been. */
+static void h2ct_response_header_timeout(H2ctTT *tt, const void *arg) {
+    bool body = *(const bool *)arg;
+    enum { BODY_SIZE = 4 << 20 };
+    tt->tr1.response_header_timeout = 2 * TIME_SECOND;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    HttpRequest *req = NULL;
+    if (body) {
+        H2ctBody *req_body = h2ct_new_request_body(tt);
+        H2CT_TRY(req_body != NULL);
+        h2ct_body_write_bytes(req_body, BODY_SIZE);
+        h2ct_body_close_with_error(req_body, io_eof);
+        req = h2ct_new_request_url(tt, (Context){0}, BURROW_S("POST"),
+                                   BURROW_S("https://dummy.tld/"),
+                                   (IoReader){&h2ct_body_vt, req_body});
+        H2CT_TRY(req != NULL);
+        http_header_set(req->header, BURROW_S("Content-Type"), BURROW_S("text/foo"));
+    } else {
+        req = h2ct_new_request_url(tt, (Context){0}, BURROW_S("GET"),
+                                   BURROW_S("https://dummy.tld/"), h2ct_no_body);
+        H2CT_TRY(req != NULL);
+    }
+
+    H2ctRT *rt = h2ct_tc_round_trip(tt, req);
+    H2CT_TRY(rt != NULL && h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+
+    H2CT_TRY(h2ct_write_window_update(tc, 0, BODY_SIZE));
+    H2CT_TRY(h2ct_write_window_update(tc, id, BODY_SIZE));
+
+    if (body)
+        H2CT_TRY(h2ct_want_data(tc, id, true, BODY_SIZE, NULL, true));
+
+    if (sync_atomic_bool_load(&rt->done))
+        FATALF("RoundTrip is done before the timeout; want still waiting");
+
+    Error err = h2ct_rt_err(rt);
+    if (!os_is_timeout(err))
+        FATALF("RoundTrip error: %v; want timeout error", err);
+}
+
+static void TestTransportResponseHeaderTimeout_NoBody(TestingT *t) {
+    static const bool body = false;
+    h2ct_run(t, h2ct_response_header_timeout, &body);
+}
+
+static void TestTransportResponseHeaderTimeout_Body(TestingT *t) {
+    static const bool body = true;
+    h2ct_run(t, h2ct_response_header_timeout, &body);
+}
+
+static void h2ct_do_not_hang_on_zero_max_frame_size(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL);
+    static const Http2Setting s[] = {{HTTP2_SETTING_MAX_FRAME_SIZE, 0}};
+    H2CT_TRY(h2ct_write_settings(tc, s, 1));
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_SETTINGS));
+
+    StringsReader *body =
+        strings_new_reader(arena_allocator(&tt->ar), BURROW_S("body"));
+    H2CT_TRY(body != NULL);
+    HttpRequest *req = h2ct_new_request_url(tt, (Context){0}, BURROW_S("POST"),
+                                            BURROW_S("https://dummy.tld/"),
+                                            strings_reader_as_io_reader(body));
+    H2CT_TRY(req != NULL);
+    (void)h2ct_tc_round_trip(tt, req);
+    /* Previously, https://go.dev/issue/78476 caused an infinite hang here. */
+}
+
+static void TestTransportDoNotHangOnZeroMaxFrameSize(TestingT *t) {
+    h2ct_run(t, h2ct_do_not_hang_on_zero_max_frame_size, NULL);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -3626,6 +3705,9 @@ static void TestTransport1xxLimits_limit_disabled_by_client_trace(TestingT *t) {
     X(TestTransport1xxLimits_default)                                                  \
     X(TestTransport1xxLimits_MaxResponseHeaderBytes)                                   \
     X(TestTransport1xxLimits_limit_by_client_trace)                                    \
-    X(TestTransport1xxLimits_limit_disabled_by_client_trace)
+    X(TestTransport1xxLimits_limit_disabled_by_client_trace)                           \
+    X(TestTransportResponseHeaderTimeout_NoBody)                                       \
+    X(TestTransportResponseHeaderTimeout_Body)                                         \
+    X(TestTransportDoNotHangOnZeroMaxFrameSize)
 
 TESTING_MAIN(TESTS)

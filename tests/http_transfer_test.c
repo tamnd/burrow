@@ -86,12 +86,19 @@ static void TestDetectInMemoryReaders(TestingT *t) {
 
 typedef struct MockTransferWriter {
     IoReader called_reader;
+    /* What called_reader reads from when it is a LimitedReader. Go looks at
+     * that afterwards, but here the LimitedReader was on write_body's stack
+     * and is gone by then. */
+    IoReader called_limited_r;
     bool write_called;
 } MockTransferWriter;
 
 static int64_t mock_transfer_writer_read_from(MockTransferWriter *w, IoReader r,
                                               Error *err) {
     w->called_reader = r;
+    IoLimitedReader probe = io_limit_reader(r, 0);
+    if (r.vt == io_limited_reader_as_io_reader(&probe).vt)
+        w->called_limited_r = ((IoLimitedReader *)r.data)->r;
     return io_copy(heap_allocator(), io_discard, r, err);
 }
 
@@ -284,8 +291,7 @@ static void write_body_case(void *env, TestingT *t) {
         const Type *actual_reader;
         bool ok = mw.called_reader.vt == io_limited_reader_as_io_reader(&probe).vt;
         if (ok && tc->limited_reader) {
-            IoLimitedReader *lr = mw.called_reader.data;
-            actual_reader = lr->r.vt->self_type;
+            actual_reader = mw.called_limited_r.vt->self_type;
         } else {
             actual_reader = mw.called_reader.vt->self_type;
             /* We have to handle this special case for genericWriteTo in os,

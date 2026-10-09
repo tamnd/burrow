@@ -110,6 +110,7 @@ typedef struct H2tTester {
     BytesBuffer wbuf;
     bool wclosed;
     bool wfailed;
+    bool wbusy; /* a chunk of wbuf is being written to cc */
     SyncWaitGroup wwg;
 } H2tTester;
 
@@ -146,10 +147,12 @@ static void h2t_out_job(void *env) {
         Error err = BURROW_NO_ERROR;
         Int n = bytes_buffer_read(&st->wbuf, slice_from(chunk, CHUNK, CHUNK, TYPE_BYTE),
                                   &err);
+        st->wbusy = true;
         sync_mutex_unlock(&st->wmu);
         (void)st->cc.vt->writer.write(st->cc.data, slice_from(chunk, n, n, TYPE_BYTE),
                                       &err);
         sync_mutex_lock(&st->wmu);
+        st->wbusy = false;
         if (BURROW_FAILED(err))
             st->wfailed = true;
     }
@@ -171,11 +174,13 @@ static void h2t_serve_job(void *env) {
 }
 
 /* What newServerTester's options set on the server. h2 is its HTTP/2 config,
- * which can be NULL and has to last until h2t_close. */
+ * which can be NULL and has to last until h2t_close. The server logs to log
+ * when it isn't NULL, as Go's tester logs to serverLogBuf. */
 typedef struct H2tServerOpts {
     const HttpHTTP2Config *h2;
     Int max_header_bytes;
     Duration idle_timeout;
+    BytesBuffer *log;
 } H2tServerOpts;
 
 /* newServerTester, with the options o sets when it isn't NULL. The server's
@@ -196,7 +201,9 @@ static bool h2t_start_server(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *
     }
     st->hf = BURROW_FN(HttpHandlerFunc, fn != NULL ? fn : h2t_nop_handler, env);
     st->srv.handler = http_handler_func_as_handler(&st->hf);
-    st->lg = log_new(st->a, io_discard, BURROW_STR_EMPTY, 0);
+    IoWriter lw =
+        o != NULL && o->log != NULL ? bytes_buffer_as_io_writer(o->log) : io_discard;
+    st->lg = log_new(st->a, lw, BURROW_STR_EMPTY, 0);
     st->srv.error_log = st->lg;
     net_pipe(st->a, &st->sc, &st->cc);
     if (st->lg == NULL || st->sc.data == NULL) {
@@ -231,7 +238,7 @@ static bool h2t_start_server(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *
 
 static bool h2t_start_config(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *env,
                              const HttpHTTP2Config *h2) {
-    H2tServerOpts o = {h2, 0, 0};
+    H2tServerOpts o = {h2, 0, 0, NULL};
     return h2t_start_server(st, t, fn, env, &o);
 }
 
@@ -3227,7 +3234,7 @@ static bool h2t_read_until_closed(H2tTester *st, uint32_t *last_id) {
 static void TestServerContinuationFlood(TestingT *t) {
     SKIP_WITHOUT_THREADS(t);
     H2tTester st;
-    H2tServerOpts o = {NULL, 4096, 0};
+    H2tServerOpts o = {NULL, 4096, 0, NULL};
     if (h2t_start_server(&st, t, NULL, NULL, &o) && h2t_greet(&st) &&
         h2t_write_headers(&st, 1, h2t_encode_header(&st, NULL, 0), true, false)) {
         bool ok = true;
@@ -3975,7 +3982,7 @@ static void TestServerIdleTimeout(TestingT *t) {
     SKIP_WITHOUT_THREADS(t);
     if (testing_short())
         testing_t_skip_v(t, "skipping in short mode");
-    H2tServerOpts o = {NULL, 0, 500 * TIME_MILLISECOND};
+    H2tServerOpts o = {NULL, 0, 500 * TIME_MILLISECOND, NULL};
     H2tTester st;
     if (h2t_start_server(&st, t, NULL, NULL, &o) && h2t_greet(&st))
         (void)h2t_want_go_away(&st, 0, HTTP2_ERR_CODE_NO);
@@ -3993,7 +4000,7 @@ static void TestServerIdleTimeout_AfterRequest(TestingT *t) {
     if (testing_short())
         testing_t_skip_v(t, "skipping in short mode");
     static const Duration request_timeout = 2 * TIME_SECOND;
-    H2tServerOpts o = {NULL, 0, 1 * TIME_SECOND};
+    H2tServerOpts o = {NULL, 0, 1 * TIME_SECOND, NULL};
     H2tTester st;
     /* A request that takes twice the idle timeout, which mustn't fire while
      * the request is going. It starts again once the request is done. */
@@ -4228,6 +4235,129 @@ static void TestServerHandlerConnectionClose(TestingT *t) {
     chan_free(unblock);
 }
 
+/* The server's GoAwayTimeout. */
+#define H2T_GO_AWAY_TIMEOUT (1 * TIME_SECOND)
+
+static void TestNoErrorLoggedOnPostAfterGOAWAY(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    static const Str kv[] = {S_(":method"), S_("POST"), S_("content-length"), S_("12")};
+    BytesBuffer log = BYTES_BUFFER(heap_allocator());
+    H2tServerOpts o = {NULL, 0, 0, &log};
+    H2tTester st;
+    SyncWaitGroup shutdown = {0};
+    if (h2t_start_server(&st, t, NULL, NULL, &o) && h2t_greet(&st) &&
+        h2t_write_headers(&st, 1, h2t_encode_header(&st, kv, 4), false, true) &&
+        h2t_want_headers(&st, 1, true, NULL, 0)) {
+        /* Go calls StartGracefulShutdown on the connection, which is what
+         * shutting the server down does to it. */
+        (void)sync_wait_group_go(&shutdown, BURROW_FN(Func, h2t_shutdown_job, &st.srv));
+        if (h2t_want_rst_stream(&st, 1, HTTP2_ERR_CODE_NO) &&
+            h2t_want_go_away(&st, 1, HTTP2_ERR_CODE_NO))
+            (void)h2t_write_data(&st, 1, true, "some content", 12);
+    }
+    h2t_close(&st);
+    sync_wait_group_wait(&shutdown);
+    if (strings_contains(
+            str_from_bytes(bytes_buffer_bytes(&log).p, bytes_buffer_len(&log)),
+            BURROW_S("PROTOCOL_ERROR")))
+        testing_t_errorf_v(t, "got protocol error");
+    bytes_buffer_free(&log);
+}
+
+/* Reads nothing until it has sent all the PINGs, so the server's writes block
+ * on the pipe, as they do in Go after SetReadBufferSize(0). Where Go waits for
+ * the bubble to go quiet, this waits for the server to have read them all, or
+ * to have hung up before it did. */
+static void TestServer_MaxQueuedControlFrames(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    /* MaxQueuedControlFrames, and more for the ones that go into the
+     * server's 4KB write buffer. Go sends 2 more, since in its bubble only
+     * one answer goes into the buffer before the server's writes block. Here
+     * the server can still be writing the greeting when the first PINGs come
+     * in, and then the buffer takes as many 17 byte answers as fit. */
+    enum { MAX_QUEUED_CONTROL_FRAMES = 10000, EXTRA_PINGS = (4 << 10) / 17 + 16 };
+    static const Byte ping_data[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    H2tTester st;
+    if (h2t_start(&st, t, NULL, NULL) && h2t_greet(&st)) {
+        bool ok = true;
+        for (int i = 0; ok && i < MAX_QUEUED_CONTROL_FRAMES + EXTRA_PINGS; i++)
+            ok = !h2t_failed(&st, "WritePing",
+                             burrow__http2_framer_write_ping(st.fr, false, ping_data));
+        Time give_up = time_add(time_now(), 10 * TIME_SECOND);
+        bool sent = false;
+        while (ok && !sent && time_before(time_now(), give_up)) {
+            time_sleep(10 * TIME_MILLISECOND);
+            sync_mutex_lock(&st.wmu);
+            sent = st.wfailed || (bytes_buffer_len(&st.wbuf) == 0 && !st.wbusy);
+            sync_mutex_unlock(&st.wmu);
+        }
+        /* It should have closed the connection after going past the limit. */
+        time_sleep(H2T_GO_AWAY_TIMEOUT);
+        /* Some frames may have stayed in the server's buffers. */
+        for (int i = 0; ok && i < 10; i++) {
+            Error err = BURROW_NO_ERROR;
+            Http2Frame *f = burrow__http2_framer_read_frame(st.fr, &err);
+            burrow__http2_frame_free(f);
+            if (BURROW_FAILED(err))
+                break;
+        }
+        if (ok)
+            h2t_want_closed(&st);
+    }
+    h2t_close(&st);
+}
+
+typedef struct H2tHalfClose {
+    TestingT *t;
+    Chan *write_data;
+    Chan *write_headers;
+    Chan *leave;
+} H2tHalfClose;
+
+static void h2t_half_close_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)w;
+    H2tHalfClose *h = (H2tHalfClose *)env;
+    bool v = true;
+    chan_send(h->write_data, &v);
+    Byte b[1];
+    Error err = BURROW_NO_ERROR;
+    IoReader body = io_read_closer_as_io_reader(r->body);
+    Int n = body.vt->read(body.data, slice_from(b, 1, 1, TYPE_BYTE), &err);
+    if (n != 0 || !errors_is(err, io_eof))
+        testing_t_errorf_v(h->t, "body read = %d, %v; want 0, EOF", n, err);
+    chan_send(h->write_headers, &v);
+    (void)chan_recv(h->leave, &v);
+}
+
+/* Go also checks the stream's state inside the server from the handler, which
+ * the C server doesn't show. What the client sees is the same: HEADERS on a
+ * stream the client has closed its end of is a STREAM_CLOSED error. */
+static void TestServer_Headers_HalfCloseRemote(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    H2tHalfClose h = {t, chan_make(heap_allocator(), TYPE_BOOL, 0),
+                      chan_make(heap_allocator(), TYPE_BOOL, 0),
+                      chan_make(heap_allocator(), TYPE_BOOL, 0)};
+    if (h.write_data == NULL || h.write_headers == NULL || h.leave == NULL) {
+        chan_free(h.write_data);
+        chan_free(h.write_headers);
+        chan_free(h.leave);
+        FATALF("no memory");
+    }
+    H2tTester st;
+    bool v;
+    if (h2t_start(&st, t, h2t_half_close_handler, &h) && h2t_greet(&st) &&
+        h2t_write_headers(&st, 1, h2t_encode_header(&st, NULL, 0), false, true) &&
+        chan_recv(h.write_data, &v) && h2t_write_data(&st, 1, true, NULL, 0) &&
+        chan_recv(h.write_headers, &v) &&
+        h2t_write_headers(&st, 1, h2t_encode_header(&st, NULL, 0), false, true))
+        (void)h2t_want_rst_stream(&st, 1, HTTP2_ERR_CODE_STREAM_CLOSED);
+    chan_close(h.leave);
+    h2t_close(&st);
+    chan_free(h.write_data);
+    chan_free(h.write_headers);
+    chan_free(h.leave);
+}
+
 #define TESTS(X)                                                                       \
     X(TestServer)                                                                      \
     X(TestServer_Request_Get)                                                          \
@@ -4350,6 +4480,9 @@ static void TestServerHandlerConnectionClose(TestingT *t) {
     X(TestServerPingSent)                                                              \
     X(TestServerPingResponded)                                                         \
     X(TestServerWriteByteTimeout)                                                      \
-    X(TestServerHandlerConnectionClose)
+    X(TestServerHandlerConnectionClose)                                                \
+    X(TestNoErrorLoggedOnPostAfterGOAWAY)                                              \
+    X(TestServer_MaxQueuedControlFrames)                                               \
+    X(TestServer_Headers_HalfCloseRemote)
 
 TESTING_MAIN(TESTS)

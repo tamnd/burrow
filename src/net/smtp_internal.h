@@ -9,11 +9,12 @@
 #ifndef BURROW_SRC_NET_SMTP_INTERNAL_H
 #define BURROW_SRC_NET_SMTP_INTERNAL_H
 
+#include "burrow/net/smtp.h"
+
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/mem.h"
 #include "burrow/net.h"
-#include "burrow/net/smtp.h"
 
 /* &Client{Text: textproto.NewConn(conn), localName: "localhost"}, a client
  * over conn that has not read a greeting. server_name is host. NULL when a

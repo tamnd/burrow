@@ -769,7 +769,10 @@ static void script_serve(void *env) {
             i++;
             (void)textproto_conn_printf_line_v(tc, "%s", s->data[i]);
         }
-        if (strcmp(s->data[i], "221 Goodbye") == 0)
+        /* The last line is the server's last word, as in Go's
+         * TestSendMailWithAuth, which answers the EHLO and hangs up. Reading
+         * after it would only find the client's EOF. */
+        if (strcmp(s->data[i], "221 Goodbye") == 0 || i == s->n - 1)
             break;
         bool go_ahead = strcmp(s->data[i], "354 Go ahead") == 0;
         bool read = false;

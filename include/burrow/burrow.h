@@ -94,6 +94,7 @@
 #include "burrow/error.h"
 #include "burrow/flag.h"
 #include "burrow/fmt.h"
+#include "burrow/go/token.h"
 #include "burrow/func.h"
 #include "burrow/hash.h"
 #include "burrow/hash/adler32.h"

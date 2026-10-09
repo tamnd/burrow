@@ -33,7 +33,8 @@
  * channel is made when the context is rather than when somebody first asks for
  * it, because context_done has no allocator and no way to report a failure, so a
  * WithCancel costs a channel whether or not anybody waits on it and in exchange
- * context_done never fails. An arena user can ignore the first two.
+ * context_done never fails. An arena user can mostly ignore the first two, and
+ * context_release says when not to.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -456,7 +457,11 @@ BURROW_OWNS(ret) Context context_with_value(Alloc *a, Context parent, Any key, A
  * leaves the Context dangling, so it is the last thing done with one.
  *
  * Go has no such call. The rule is burrow's usual one: whoever made it frees
- * it, and an arena user can skip this entirely.
+ * it, and an arena user can mostly skip it. The exception is a context with a
+ * deadline, or one whose parent this package did not make. A timer that has
+ * just fired, or the goroutine watching that parent, can still be using the
+ * context after it is cancelled, and this waits for them to finish with it,
+ * which freeing the arena does not.
  *
  * Cancels first, so this is safe on a context nobody cancelled and so that
  * anything still waiting on the done channel is released rather than left

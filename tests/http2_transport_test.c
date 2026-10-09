@@ -90,7 +90,9 @@ typedef struct H2ctConn {
     SyncCond wcond;
     BytesBuffer wbuf;
     SyncWaitGroup wwg;
+    NetConn cli; /* the client's end, which the client has as h2ct_cli_vt */
     struct H2ctConn *next;
+    SyncAtomicBool cli_closed; /* the client closed cli */
     bool reof;
     bool wclosed;
     bool wshut; /* closeWrite: srv closes once wbuf is out */
@@ -226,6 +228,67 @@ static void h2ct_conn_close(H2ctConn *tc) {
     (void)tc->srv.vt->closer.close(tc->srv.data);
 }
 
+/* The client's end of the pipe, as the client has it: cli, with its close
+ * noted for isClosed. */
+static Int h2ct_cli_read(void *self, Slice p, Error *err) {
+    H2ctConn *tc = (H2ctConn *)self;
+    return tc->cli.vt->reader.read(tc->cli.data, p, err);
+}
+
+static Int h2ct_cli_write(void *self, Slice p, Error *err) {
+    H2ctConn *tc = (H2ctConn *)self;
+    return tc->cli.vt->writer.write(tc->cli.data, p, err);
+}
+
+static Error h2ct_cli_close(void *self) {
+    H2ctConn *tc = (H2ctConn *)self;
+    sync_atomic_bool_store(&tc->cli_closed, true);
+    return tc->cli.vt->closer.close(tc->cli.data);
+}
+
+static NetAddr h2ct_cli_local_addr(void *self) {
+    H2ctConn *tc = (H2ctConn *)self;
+    return tc->cli.vt->local_addr(tc->cli.data);
+}
+
+static NetAddr h2ct_cli_remote_addr(void *self) {
+    H2ctConn *tc = (H2ctConn *)self;
+    return tc->cli.vt->remote_addr(tc->cli.data);
+}
+
+static Error h2ct_cli_set_deadline(void *self, Time t) {
+    H2ctConn *tc = (H2ctConn *)self;
+    return tc->cli.vt->set_deadline(tc->cli.data, t);
+}
+
+static Error h2ct_cli_set_read_deadline(void *self, Time t) {
+    H2ctConn *tc = (H2ctConn *)self;
+    return tc->cli.vt->set_read_deadline(tc->cli.data, t);
+}
+
+static Error h2ct_cli_set_write_deadline(void *self, Time t) {
+    H2ctConn *tc = (H2ctConn *)self;
+    return tc->cli.vt->set_write_deadline(tc->cli.data, t);
+}
+
+static const NetConnVT h2ct_cli_vt = {
+    {NULL, h2ct_cli_read},      {NULL, h2ct_cli_write},      {NULL, h2ct_cli_close},
+    h2ct_cli_local_addr,        h2ct_cli_remote_addr,        h2ct_cli_set_deadline,
+    h2ct_cli_set_read_deadline, h2ct_cli_set_write_deadline,
+};
+
+/* isClosed: whether the client has closed its end, given as long as a check
+ * waits for it. */
+static bool h2ct_is_closed(H2ctConn *tc) {
+    Time deadline = time_add(time_now(), H2CT_WAIT);
+    while (!sync_atomic_bool_load(&tc->cli_closed)) {
+        if (!time_before(time_now(), deadline))
+            return false;
+        time_sleep(TIME_MILLISECOND);
+    }
+    return true;
+}
+
 static void h2ct_conn_free(H2ctConn *tc) {
     h2ct_conn_close(tc);
     sync_wait_group_wait(&tc->wwg);
@@ -290,13 +353,14 @@ struct H2ctTT {
     SyncWaitGroup rtwg;
 };
 
-static H2ctConn *h2ct_conn_new(H2ctTT *tt, NetConn srv) {
+static H2ctConn *h2ct_conn_new(H2ctTT *tt, NetConn cli, NetConn srv) {
     Alloc *a = tt->a;
     H2ctConn *tc = (H2ctConn *)mem_alloc(a, sizeof *tc, _Alignof(H2ctConn));
     if (tc == NULL)
         return NULL;
     tc->t = tt->t;
     tc->a = a;
+    tc->cli = cli;
     tc->srv = srv;
     tc->hbuf = BYTES_BUFFER(a);
     tc->rbuf = BYTES_BUFFER(a);
@@ -336,13 +400,14 @@ static NetConn h2ct_dial(void *env, Context ctx, Str network, Str addr, Error *e
         *err = burrow_err_out_of_memory;
         return cli;
     }
-    if (h2ct_conn_new(tt, srv) == NULL) {
+    H2ctConn *tc = h2ct_conn_new(tt, cli, srv);
+    if (tc == NULL) {
         net_pipe_free(srv);
         *err = burrow_err_out_of_memory;
         return (NetConn){NULL, NULL};
     }
     *err = BURROW_NO_ERROR;
-    return cli;
+    return (NetConn){&h2ct_cli_vt, tc};
 }
 
 /* The pipe is the test's conn's to free, once the transports are gone. */
@@ -496,13 +561,15 @@ static H2ctConn *h2ct_new_client_conn(H2ctTT *tt) {
         testing_t_errorf_v(tt->t, "no memory for the pipe");
         return NULL;
     }
-    if (h2ct_conn_new(tt, srv) == NULL) {
+    H2ctConn *tc = h2ct_conn_new(tt, cli, srv);
+    if (tc == NULL) {
         net_pipe_free(srv);
         testing_t_errorf_v(tt->t, "no memory for the test's conn");
         return NULL;
     }
+    NetConn c = {&h2ct_cli_vt, tc};
     Error err = burrow__http2_transport_add_conn(tt->t2, BURROW_S("http"),
-                                                 BURROW_S("dummy.tld"), cli);
+                                                 BURROW_S("dummy.tld"), c);
     if (BURROW_FAILED(err)) {
         testing_t_errorf_v(tt->t, "newClientConn: %v", err);
         return NULL;
@@ -1946,6 +2013,196 @@ static void TestTransportBodyEagerEndStream(TestingT *t) {
     h2ct_run(t, h2ct_body_eager_end_stream, NULL);
 }
 
+/* What ErrResponseHeaderListSize, as the cause of a StreamError or not. */
+static bool h2ct_is_header_list_size(Error err) {
+    Http2StreamError se;
+    memset(&se, 0, sizeof se);
+    if (burrow__http2_error_stream(err, &se))
+        err = se.cause;
+    return BURROW_FAILED(err) &&
+           str_eq(error_text(err),
+                  error_text(burrow__http2_err_response_header_list_size));
+}
+
+enum { H2CT_LARGE = 1 << 10, H2CT_LARGE_PAIRS = 5042 };
+
+/* The block both header list size tests send: 5042 pairs of a 1KB name and
+ * value, over 10MB in all, after a :status of 200 when status is set. It has
+ * to come to want bytes. */
+static bool h2ct_large_block(H2ctTT *tt, H2ctConn *tc, bool status, Int want,
+                             Slice *out) {
+    Alloc *a = arena_allocator(&tt->ar);
+    size_t n = 2 * H2CT_LARGE_PAIRS + (status ? 2 : 0);
+    Str *kv = (Str *)mem_alloc(a, n * sizeof *kv, _Alignof(Str));
+    char *large = (char *)mem_alloc_nozero(a, H2CT_LARGE, 1);
+    if (kv == NULL || large == NULL) {
+        testing_t_errorf_v(tt->t, "no memory for the headers");
+        return false;
+    }
+    memset(large, 'a', H2CT_LARGE);
+    size_t i = 0;
+    if (status) {
+        kv[i++] = BURROW_S(":status");
+        kv[i++] = BURROW_S("200");
+    }
+    while (i < n)
+        kv[i++] = str_from_bytes(large, H2CT_LARGE);
+    *out = h2ct_block(tc, kv, n);
+    /* Note: this number might change if our hpack implementation changes.
+     * That's fine. This is just a sanity check that our response can fit in a
+     * single header block fragment frame. */
+    if (out->len != want) {
+        testing_t_errorf_v(tt->t,
+                           "encoding over 10MB of duplicate keypairs took %d bytes; "
+                           "expected %d",
+                           (int)out->len, (int)want);
+        return false;
+    }
+    return true;
+}
+
+static void h2ct_checks_response_header_list_size(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_tc_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt != NULL);
+
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+
+    Slice hbf;
+    H2CT_TRY(h2ct_large_block(tt, tc, true, 6329, &hbf));
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, hbf, true)));
+
+    H2CT_TRY(h2ct_rt_result(rt));
+    if (!h2ct_is_header_list_size(rt->err))
+        FATALF("RoundTrip Error = %v; want errResponseHeaderListSize", rt->err);
+}
+
+static void h2ct_checks_response_trailer_header_list_size(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_tc_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt != NULL);
+
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    static const Str kv[] = {S_(":status"), S_("200"), S_("trailer"), S_("x-trailer")};
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, kv, 4), false)));
+    H2CT_TRY(h2ct_rt_want_status(rt, 200));
+
+    Slice hbf;
+    H2CT_TRY(h2ct_large_block(tt, tc, false, 6328, &hbf));
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, hbf, true)));
+
+    Error err = BURROW_NO_ERROR;
+    (void)h2ct_rt_read_body(rt, &err);
+    if (!h2ct_is_header_list_size(err))
+        testing_t_errorf_v(tt->t, "Read = %v, want %v", err,
+                           burrow__http2_err_response_header_list_size);
+    /* Verify that this is treated as a StreamError that does not close the
+     * whole connection down. */
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_RST_STREAM));
+    H2CT_TRY(h2ct_want_idle(tc));
+}
+
+static void TestTransportChecksResponseHeaderListSize_headers(TestingT *t) {
+    h2ct_run(t, h2ct_checks_response_header_list_size, NULL);
+}
+
+static void TestTransportChecksResponseHeaderListSize_trailers(TestingT *t) {
+    h2ct_run(t, h2ct_checks_response_trailer_header_list_size, NULL);
+}
+
+/* #15425: Transport goroutine leak while the transport is still trying to
+ * write its body after the stream has completed. */
+static void h2ct_stream_ends_while_body_is_being_written(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    static const char body[] = "this is the client request body";
+    enum { WINDOW_SIZE = 10 }; /* less than len(body) */
+
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    static const Http2Setting s[] = {{HTTP2_SETTING_INITIAL_WINDOW_SIZE, WINDOW_SIZE}};
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, s, 1));
+
+    /* Client sends a request, and as much body as fits into the stream
+     * window. */
+    StringsReader *r =
+        strings_new_reader(arena_allocator(&tt->ar), str_from_cstr(body));
+    H2CT_TRY(r != NULL);
+    H2ctRT *rt =
+        h2ct_tc_round_trip(tt, h2ct_new_request(tt, (Context){0}, BURROW_S("PUT"),
+                                                strings_reader_as_io_reader(r)));
+    H2CT_TRY(rt != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    H2CT_TRY(h2ct_want_data(tc, id, false, WINDOW_SIZE, NULL, false));
+
+    /* Server responds without permitting the rest of the body to be sent. */
+    H2CT_TRY(h2ct_write_status(tc, id, "413"));
+    H2CT_TRY(h2ct_rt_want_status(rt, 413));
+}
+
+static void TestTransportStreamEndsWhileBodyIsBeingWritten(TestingT *t) {
+    h2ct_run(t, h2ct_stream_ends_while_body_is_being_written, NULL);
+}
+
+/* testTransportClosesConnAfterGoAway verifies that the transport closes a
+ * connection after reading a GOAWAY from it.
+ *
+ * lastStream is the last stream ID in the GOAWAY frame. When 0, the transport
+ * (unsuccessfully) retries the request (stream 1); when 1, the transport reads
+ * the response after receiving the GOAWAY. */
+static void h2ct_closes_conn_after_go_away(H2ctTT *tt, const void *arg) {
+    uint32_t last_stream = *(const uint32_t *)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_tc_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt != NULL);
+
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    H2CT_TRY(h2ct_write_go_away(tc, last_stream, HTTP2_ERR_CODE_NO));
+
+    if (last_stream > 0) {
+        /* Send a valid response to first request. */
+        uint32_t id = h2ct_rt_stream_id(rt);
+        H2CT_TRY(id != 0);
+        H2CT_TRY(h2ct_write_status(tc, id, "200"));
+    }
+
+    h2ct_close_write(tc);
+    Error err = h2ct_rt_err(rt);
+    bool got_err = BURROW_FAILED(err);
+    bool want_err = last_stream == 0;
+    if (got_err != want_err)
+        testing_t_errorf_v(tt->t, "RoundTrip got error %v (want error: %v)", err,
+                           want_err);
+    if (!h2ct_is_closed(tc))
+        testing_t_errorf_v(tt->t,
+                           "ClientConn did not close its net.Conn, expected it to");
+}
+
+static void TestTransportClosesConnAfterGoAwayNoStreams(TestingT *t) {
+    static const uint32_t last_stream = 0;
+    h2ct_run(t, h2ct_closes_conn_after_go_away, &last_stream);
+}
+
+static void TestTransportClosesConnAfterGoAwayLastStream(TestingT *t) {
+    static const uint32_t last_stream = 1;
+    h2ct_run(t, h2ct_closes_conn_after_go_away, &last_stream);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -2007,6 +2264,11 @@ static void TestTransportBodyEagerEndStream(TestingT *t) {
     X(TestTransportUsesGoAwayDebugError_RoundTrip)                                     \
     X(TestTransportUsesGoAwayDebugError_Body)                                          \
     X(TestTransportCookieHeaderSplit)                                                  \
-    X(TestTransportBodyEagerEndStream)
+    X(TestTransportBodyEagerEndStream)                                                 \
+    X(TestTransportChecksResponseHeaderListSize_headers)                               \
+    X(TestTransportChecksResponseHeaderListSize_trailers)                              \
+    X(TestTransportStreamEndsWhileBodyIsBeingWritten)                                  \
+    X(TestTransportClosesConnAfterGoAwayNoStreams)                                     \
+    X(TestTransportClosesConnAfterGoAwayLastStream)
 
 TESTING_MAIN(TESTS)

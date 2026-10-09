@@ -56,4 +56,10 @@ int main(void) {
 }
 
 /* Output:
+linux && (amd64 || arm64)  build=true min=""
+!windows && go1.21  build=true min="go1.21"
+(darwin && !cgo) || freebsd  build=false min=""
+"//go:build linux &&": unexpected end of expression
+"// just a comment": not a build constraint
+// +build !windows,!plan9,cgo
 */

@@ -631,6 +631,16 @@ for (int i = 0; i < 5; i++) {
 }
 ```
 
+That prints:
+
+```
+linux && (amd64 || arm64)  build=true min=""
+!windows && go1.21  build=true min="go1.21"
+(darwin && !cgo) || freebsd  build=false min=""
+"//go:build linux &&": unexpected end of expression
+"// just a comment": not a build constraint
+```
+
 The old `// +build` form is read the way the go command reads it, with spaces meaning or and commas meaning and. A line that is neither form gives the "not a build constraint" error, and a bad `//go:build` expression gives a `ConstraintSyntaxError` with the byte offset of the problem, which `errors_as` with `TYPE_CONSTRAINT_SYNTAX_ERROR` gets out of the error. Both forms have a size limit, so a huge line fails instead of using up the stack.
 
 `constraint_plus_build_lines` goes the other way and writes `// +build` lines that mean the same as an expression, for code that still has to build with Go 1.16 and older:
@@ -647,6 +657,12 @@ if (!BURROW_OK(err))
     fmt_println_v(error_text(err));
 for (Int i = 0; i < lines.len; i++)
     fmt_println_v(((Str *)lines.p)[i]);
+```
+
+That prints:
+
+```
+// +build !windows,!plan9,cgo
 ```
 
 Not every expression fits. The `// +build` form can only say an and of ors of ands, and when the expression needs more than that the call returns an error and no lines. The tree, its tags and the lines all live in the allocator you pass in.

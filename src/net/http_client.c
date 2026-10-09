@@ -162,7 +162,7 @@ static Str cl_strip_password(Alloc *a, const Url *u) {
 
 /* refererForURL. */
 Str burrow__http_referer_for_url(Alloc *a, const Url *last, const Url *next,
-                              Str explicit_ref) {
+                                 Str explicit_ref) {
     if (str_eq(last->scheme, BURROW_S("https")) &&
         str_eq(next->scheme, BURROW_S("http")))
         return BURROW_STR_EMPTY;
@@ -193,7 +193,7 @@ static bool cl_is_domain_or_subdomain(Str sub, Str parent) {
  * Authorization among it, goes along from initial to dest, which it does for
  * the same domain and its subdomains. */
 bool burrow__http_should_copy_header_on_redirect(Alloc *a, const Url *initial,
-                                              const Url *dest) {
+                                                 const Url *dest) {
     Error e1 = BURROW_NO_ERROR;
     Error e2 = BURROW_NO_ERROR;
     Str ihost = burrow__httpguts_punycode_host_port(a, url_hostname(initial), &e1);
@@ -763,8 +763,9 @@ static HttpRequest *cl_redirect_request(cl_Do *d, HttpRequest *req, HttpResponse
     }
     bool ok = cl_copy_headers(d, nr, *strip_sensitive, !include_body);
     if (ok) {
-        Str ref = burrow__http_referer_for_url(na, d->reqs[d->nreqs - 1]->url, nr->url,
-                                     http_header_get(nr->header, BURROW_S("Referer")));
+        Str ref = burrow__http_referer_for_url(
+            na, d->reqs[d->nreqs - 1]->url, nr->url,
+            http_header_get(nr->header, BURROW_S("Referer")));
         if (ref.len > 0)
             ok = http_header_set(nr->header, BURROW_S("Referer"), ref);
     }

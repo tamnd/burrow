@@ -2022,8 +2022,8 @@ Error burrow__http2_framer_write_data(Http2Framer *fr, uint32_t stream_id,
 
 Error burrow__http2_framer_write_data_padded(Http2Framer *fr, uint32_t stream_id,
                                              bool end_stream, Slice data, Slice pad) {
-    Error err =
-        burrow__http2_framer_start_write_data_padded(fr, stream_id, end_stream, data, pad);
+    Error err = burrow__http2_framer_start_write_data_padded(fr, stream_id, end_stream,
+                                                             data, pad);
     if (BURROW_FAILED(err))
         return err;
     return burrow__http2_framer_end_write(fr);

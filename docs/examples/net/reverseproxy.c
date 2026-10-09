@@ -3,8 +3,9 @@
 /* The server behind the proxy says what it got. */
 static void backend(void *env, HttpResponseWriter w, HttpRequest *r) {
     (void)env;
-    fmt_fprintf_v(http_response_writer_as_io_writer(w), "path %s, X-Forwarded-Proto %s\n",
-                  r->url->path, http_header_get(r->header, BURROW_S("X-Forwarded-Proto")));
+    fmt_fprintf_v(http_response_writer_as_io_writer(w),
+                  "path %s, X-Forwarded-Proto %s\n", r->url->path,
+                  http_header_get(r->header, BURROW_S("X-Forwarded-Proto")));
 }
 
 // doc: hooks
@@ -34,8 +35,8 @@ static void run(void *env) {
         .rewrite = BURROW_FN(HttputilRewriteFunc, rewrite, target),
         .modify_response = BURROW_FN(HttputilModifyResponseFunc, modify_response, NULL),
     };
-    HttptestServer *front =
-        httptest_new_server(heap_allocator(), httputil_reverse_proxy_as_handler(&proxy));
+    HttptestServer *front = httptest_new_server(
+        heap_allocator(), httputil_reverse_proxy_as_handler(&proxy));
 
     HttpResponse *res = http_client_get(httptest_server_client(front),
                                         fmt_sprintf_v(a, "%s/users", front->url), &err);

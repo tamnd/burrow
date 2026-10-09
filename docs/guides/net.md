@@ -1830,7 +1830,9 @@ if (req != NULL) {
 That prints:
 
 ```
-PENDING
+POST http://example.com/search?q=gopher
+host example.com, from 10.0.0.7:51234, 11 bytes
+User-Agent curl/8.5.0
 ```
 
 `cgi_serve` does the rest of a program's work: it reads the request with `cgi_request`, serves it with a handler and writes what the handler writes to standard output, with a `Status` line and the header in front. The other side is `CgiHandler`, for a web server. It runs the program at `path` for each request, with `root` as the part of the URL path in front of the program's `PATH_INFO`, and copies back what the program prints. A program that answers with a `Location` and no `Status` sends the client a 302 Found to it. When the location starts with `/` and `path_location_handler` is set, that handler serves a GET for the path instead, in the same response.
@@ -1864,7 +1866,7 @@ if (c.vt != NULL) {
     param(params, "REMOTE_USER", "jane");
     BytesBuffer *out = bytes_new_buffer(a, (Slice){0});
     Byte begin[8] = {0, 1}; /* the responder role */
-    record(out, 1, (Slice){begin, 8, 8, NULL});
+    record(out, 1, (Slice){begin, 8, 8, TYPE_BYTE});
     record(out, 4, bytes_buffer_bytes(params));
     record(out, 4, (Slice){0});
     record(out, 5, (Slice){0});
@@ -1876,11 +1878,11 @@ if (c.vt != NULL) {
     Byte h[8];
     Byte *body = mem_alloc(a, 65535 + 255, 1);
     IoReader r = net_conn_as_io_reader(c);
-    while (io_read_full(r, (Slice){h, 8, 8, NULL}, &err) == 8 && h[1] != 3) {
+    while (io_read_full(r, (Slice){h, 8, 8, TYPE_BYTE}, &err) == 8 && h[1] != 3) {
         Int n = (Int)h[4] << 8 | h[5];
-        io_read_full(r, (Slice){body, n + h[6], n + h[6], NULL}, &err);
+        io_read_full(r, (Slice){body, n + h[6], n + h[6], TYPE_BYTE}, &err);
         if (h[1] == 6)
-            bytes_buffer_write(stdout_, (Slice){body, n, n, NULL}, NULL);
+            bytes_buffer_write(stdout_, (Slice){body, n, n, TYPE_BYTE}, NULL);
     }
     Str got = bytes_buffer_string(stdout_, a);
     fmt_printf_v("%s",

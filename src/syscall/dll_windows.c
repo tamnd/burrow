@@ -467,7 +467,7 @@ uint16_t *syscall_string_to_utf16_ptr(Alloc *a, Str s) {
 
 /* Go's decodeWTF16: units into buf, which has room, and how many bytes it
  * wrote. */
-static Int decode_wtf16(const uint16_t *s, Int n, Byte *buf, Int room) {
+Int burrow__syscall_decode_wtf16(const uint16_t *s, Int n, Byte *buf, Int room) {
     Int w = 0;
     for (Int i = 0; i < n; i++) {
         Rune r = s[i];
@@ -502,7 +502,7 @@ Str syscall_utf16_to_string(Alloc *a, Slice s) {
     Byte *buf = mem_alloc_nozero(a, (size_t)max, 1);
     if (buf == NULL)
         return BURROW_STR_EMPTY;
-    Int w = decode_wtf16(u, n, buf, max);
+    Int w = burrow__syscall_decode_wtf16(u, n, buf, max);
     return str_from_bytes(buf, w);
 }
 

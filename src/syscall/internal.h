@@ -62,6 +62,11 @@ void burrow__syscall_wstring_free(burrow__SyscallWString *h);
  * for when n is 0. */
 Uintptr burrow__syscall_n(Uintptr fn, const Uintptr *args, Int n, Uintptr *r2,
                           SyscallErrno *err);
+
+/* Go's decodeWTF16: the n units at s as UTF-8 in buf, which has room for
+ * them, 3 bytes a unit at most, and how many bytes it wrote. A unit that is
+ * half a pair on its own goes as the 3 bytes WTF-8 has for it. */
+Int burrow__syscall_decode_wtf16(const uint16_t *s, Int n, Byte *buf, Int room);
 #endif
 
 #if defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO) || defined(BURROW_OS_WASI)
@@ -71,6 +76,23 @@ Uintptr burrow__syscall_raw_syscall_no_error(Uintptr trap, Uintptr a1, Uintptr a
 #endif
 
 #if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+/* How a libSystem function says it failed: -1 as a C int, -1 as a long, or a
+ * NULL pointer. */
+typedef enum burrow__SyscallFail {
+    BURROW__SYSCALL_FAIL_INT,
+    BURROW__SYSCALL_FAIL_LONG,
+    BURROW__SYSCALL_FAIL_PTR
+} burrow__SyscallFail;
+
+/* Calls the libSystem function name with n arguments, the first nfixed of them
+ * before the ..., or all of them when nfixed is -1, looking it up the first
+ * time and keeping it in *slot. The functions Go writes its own trampolines
+ * for, fdopendir and the rest, go through this. */
+Uintptr burrow__syscall_libc_call(void **slot, const char *name, int32_t nfixed,
+                                  const uintptr_t *args, int32_t n,
+                                  burrow__SyscallFail fail, Uintptr *r2,
+                                  SyscallErrno *err);
+
 /* Go's syscall, syscall6 and the rest on macOS, which call the libSystem
  * function fn, a BURROW__SYSCALL_LIBC_ number from zsyscall.h. They fail when
  * it returns -1 as an int, or for the X ones as a long, or for syscallPtr a
@@ -136,6 +158,14 @@ BURROW_OWNS(ret) Error burrow__syscall_sendto(Int s, Slice buf, Int flags, void 
                                               uint32_t addrlen);
 Int burrow__syscall_recvmsg(Int s, SyscallMsghdr *msg, Int flags, Error *err);
 Int burrow__syscall_sendmsg(Int s, SyscallMsghdr *msg, Int flags, Error *err);
+#endif
+
+#if !defined(BURROW_OS_WINDOWS)
+/* Go's anyToSockaddr, in sock.c: the Sockaddr for the address the system
+ * wrote in rsa, made from a. A family there is no Sockaddr for is
+ * EAFNOSUPPORT. route.c parses the addresses in routing messages with it. */
+Error burrow__syscall_any_to_sockaddr(Alloc *a, SyscallRawSockaddrAny *rsa,
+                                      SyscallSockaddr *out);
 #endif
 
 /* The unexported functions of Go's zsyscall files. */

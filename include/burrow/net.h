@@ -32,6 +32,7 @@
 #include "burrow/error.h"
 #include "burrow/io.h"
 #include "burrow/mem.h"
+#include "burrow/net/netip.h"
 #include "burrow/own.h"
 #include "burrow/slice.h"
 #include "burrow/time.h"
@@ -406,6 +407,493 @@ void net_pipe(Alloc *a, NetConn *c1, NetConn *c2);
  * nothing. Stops any deadline timer still armed, and waits for one that is
  * already running. */
 void net_pipe_free(NetConn c);
+
+/* -------------------------------------------------------------------- TCP
+ *
+ * net.TCPAddr, net.TCPConn and net.TCPListener, on the runtime's network
+ * poller, so a goroutine blocked in a read or an accept holds a stack and not
+ * a thread:
+ *
+ *     NetTCPAddr any = {0};
+ *     NetTCPListener *l = net_listen_tcp(a, BURROW_S("tcp"), &any, &err);
+ *     NetTCPConn *c = net_tcp_listener_accept_tcp(l, &err);
+ *
+ * Every call that can wait, which is a dial, a read, a write and an accept,
+ * has to be made from a goroutine. The rest can be made from anywhere.
+ *
+ * The errors are Go's, word for word: a NetOpError around an OsSyscallError
+ * around the Errno, such as "dial tcp 127.0.0.1:1: connect: connection
+ * refused", or around net_err_closed or os_err_deadline_exceeded. A read at
+ * the end of the stream gives io_eof by itself, as Go's does.
+ *
+ * Go leaves the memory to the collector. Here a connection and a listener
+ * come from the allocator they were made with, and a connection accepted from
+ * a listener comes from the listener's, and each goes back with its _free,
+ * which closes it first if it is still open. That has to wait until no
+ * goroutine is in a call on it and none will make one, which usually means
+ * after the goroutines using it have been waited for. The addresses a
+ * connection gives belong to it and go with it.
+ *
+ * Windows reads a socket by handing the kernel the read and waiting for it to
+ * finish, which is a poller of a different kind, and until that is here a
+ * dial or a listen there fails with ENOSYS. wasip1 has no sockets to make. */
+
+/* net.UnknownNetworkError, the network name a dial or a listen did not know,
+ * such as "tcp5". Its text is "unknown network " and the name. It is a
+ * net.Error that is neither a timeout nor temporary, and errors_as with
+ * TYPE_NET_UNKNOWN_NETWORK_ERROR gives back the name. */
+typedef Str NetUnknownNetworkError;
+
+extern const Type *const TYPE_NET_UNKNOWN_NETWORK_ERROR;
+
+/* The Error for the name network, which is copied into a. */
+BURROW_OWNS(ret) Error net_unknown_network_error(Alloc *a, Str network);
+
+/* net.TCPAddr: an IP address, a port and, for an IPv6 address that needs one,
+ * the zone, which is an interface name or its index in decimal. An empty ip
+ * is the unspecified address, which is what a listener that takes
+ * connections to every address of the machine binds to, and port 0 asks the
+ * system for a free one. A NULL NetTCPAddr * is Go's nil *TCPAddr. */
+typedef struct NetTCPAddr {
+    NetIP ip;
+    Int port;
+    Str zone;
+} NetTCPAddr;
+
+extern const Type *const TYPE_NET_TCP_ADDR;
+
+/* TCPAddr.Network, which is "tcp". */
+BURROW_STATIC(ret) Str net_tcp_addr_network(const NetTCPAddr *a);
+
+/* TCPAddr.String: the host and the port the way net_join_host_port puts them
+ * together, such as "192.0.2.1:80" or "[fe80::1%eth0]:443", with an empty
+ * host for an empty ip, and "<nil>" for a NULL a. */
+BURROW_OWNS(ret) Str net_tcp_addr_string(const NetTCPAddr *a, Alloc *al);
+
+/* a as a NetAddr, whose data is a, and the nil NetAddr for a NULL a. A
+ * NetAddr whose vt->self_type is TYPE_NET_TCP_ADDR has a NetTCPAddr behind
+ * its data, which is Go's addr.(*TCPAddr). */
+NetAddr net_tcp_addr_as_addr(const NetTCPAddr *a);
+
+/* net.KeepAliveConfig. idle and interval below zero leave the system's
+ * setting alone and zero means fifteen seconds, and the same goes for count,
+ * where zero means nine. */
+typedef struct NetKeepAliveConfig {
+    bool enable;
+    Duration idle;
+    Duration interval;
+    Int count;
+} NetKeepAliveConfig;
+
+typedef struct NetTCPConn NetTCPConn;
+typedef struct NetTCPListener NetTCPListener;
+
+/* net.DialTCP: a connection to raddr, from laddr if it is not NULL, and from
+ * an address and a port the system picks if it is. network is "tcp", "tcp4"
+ * or "tcp6". Like Go's, a new connection has Nagle's algorithm off and TCP
+ * keep-alives on, every fifteen seconds. NULL on an error, which is a
+ * NetOpError with the op "dial". */
+BURROW_OWNS(ret) NetTCPConn *net_dial_tcp(Alloc *a, Str network,
+                                          const NetTCPAddr *laddr,
+                                          const NetTCPAddr *raddr, Error *err);
+
+/* net.ListenTCP: a listener on laddr, or on every address of the machine and
+ * a port the system picks when laddr is NULL. A listener for "tcp" on the
+ * unspecified address takes IPv4 and IPv6 both, where the system allows it.
+ * net_tcp_listener_addr says which port it got. NULL on an error, which is a
+ * NetOpError with the op "listen". */
+BURROW_OWNS(ret) NetTCPListener *net_listen_tcp(Alloc *a, Str network,
+                                                const NetTCPAddr *laddr, Error *err);
+
+/* conn.Read and conn.Write, which are io's. A NULL c is EINVAL. */
+Int net_tcp_conn_read(NetTCPConn *c, Slice p, Error *err);
+Int net_tcp_conn_write(NetTCPConn *c, Slice p, Error *err);
+
+/* conn.Close, which wakes every call blocked on c with net_err_closed, and
+ * TCPConn.CloseRead and CloseWrite, which shut down one direction. After a
+ * CloseWrite the other end reads io_eof, and after a CloseRead this end
+ * does. */
+BURROW_STATIC(ret) Error net_tcp_conn_close(NetTCPConn *c);
+BURROW_STATIC(ret) Error net_tcp_conn_close_read(NetTCPConn *c);
+BURROW_STATIC(ret) Error net_tcp_conn_close_write(NetTCPConn *c);
+
+/* conn.LocalAddr and RemoteAddr, which are NetTCPAddrs that belong to c. */
+NetAddr net_tcp_conn_local_addr(NetTCPConn *c);
+NetAddr net_tcp_conn_remote_addr(NetTCPConn *c);
+
+/* The deadlines, as NetConn's set_deadline and the others describe them. */
+BURROW_STATIC(ret) Error net_tcp_conn_set_deadline(NetTCPConn *c, Time t);
+BURROW_STATIC(ret) Error net_tcp_conn_set_read_deadline(NetTCPConn *c, Time t);
+BURROW_STATIC(ret) Error net_tcp_conn_set_write_deadline(NetTCPConn *c, Time t);
+
+/* The size of the system's receive and send buffers. */
+BURROW_STATIC(ret) Error net_tcp_conn_set_read_buffer(NetTCPConn *c, Int bytes);
+BURROW_STATIC(ret) Error net_tcp_conn_set_write_buffer(NetTCPConn *c, Int bytes);
+
+/* TCPConn.SetLinger: what a Close does with data not yet sent. Below zero,
+ * which is the default, the system sends it in the background. Zero throws
+ * it away. Above zero it is sent in the background too, but on some systems,
+ * Linux among them, the Close may wait until it has been sent or thrown away,
+ * and on some, what is left after sec seconds is thrown away. */
+BURROW_STATIC(ret) Error net_tcp_conn_set_linger(NetTCPConn *c, Int sec);
+
+/* TCPConn.SetNoDelay: whether a small write goes out at once, which is the
+ * default, or waits to be sent together with the next (Nagle's algorithm). */
+BURROW_STATIC(ret) Error net_tcp_conn_set_no_delay(NetTCPConn *c, bool no_delay);
+
+/* TCPConn.SetKeepAlive, SetKeepAlivePeriod, which sets the idle time and
+ * rounds it up to a second, and SetKeepAliveConfig. On a system that cannot
+ * set the idle time, the interval or the count, such as OpenBSD, asking for
+ * one fails with an Errno saying the option is not supported. */
+BURROW_STATIC(ret) Error net_tcp_conn_set_keep_alive(NetTCPConn *c, bool keepalive);
+BURROW_STATIC(ret) Error net_tcp_conn_set_keep_alive_period(NetTCPConn *c, Duration d);
+BURROW_STATIC(ret) Error net_tcp_conn_set_keep_alive_config(NetTCPConn *c,
+                                                            NetKeepAliveConfig config);
+
+/* c as a NetConn, and back: Go's conversion to net.Conn and its
+ * conn.(*TCPConn), which gives NULL for a NetConn that is not a TCPConn. */
+NetConn net_tcp_conn_as_conn(NetTCPConn *c);
+BURROW_BORROWS(ret) NetTCPConn *net_conn_as_tcp_conn(NetConn c);
+
+/* Closes c if it is still open and gives its memory back. NULL does
+ * nothing. */
+void net_tcp_conn_free(NetTCPConn *c);
+
+/* TCPListener.AcceptTCP: waits for the next connection, which comes from
+ * the listener's allocator and has Nagle's algorithm off and keep-alives on,
+ * as a dialed one does. NULL on an error, which is a NetOpError with the op
+ * "accept". */
+BURROW_OWNS(ret) NetTCPConn *net_tcp_listener_accept_tcp(NetTCPListener *l, Error *err);
+
+/* TCPListener.Close, which makes an accept that is waiting fail with
+ * net_err_closed, and Addr, a NetTCPAddr that belongs to l. */
+BURROW_STATIC(ret) Error net_tcp_listener_close(NetTCPListener *l);
+NetAddr net_tcp_listener_addr(NetTCPListener *l);
+
+/* TCPListener.SetDeadline, for the accepts. */
+BURROW_STATIC(ret) Error net_tcp_listener_set_deadline(NetTCPListener *l, Time t);
+
+/* l as a NetListener, whose accept gives a NetConn that
+ * net_conn_as_tcp_conn turns back into the NetTCPConn to free. */
+NetListener net_tcp_listener_as_listener(NetTCPListener *l);
+
+/* Closes l if it is still open and gives its memory back. NULL does
+ * nothing. The connections it accepted are their own and are not freed. */
+void net_tcp_listener_free(NetTCPListener *l);
+
+/* -------------------------------------------------------------------- UDP
+ *
+ * net.UDPAddr and net.UDPConn, on the same poller as TCP:
+ *
+ *     NetUDPAddr any = {0};
+ *     NetUDPConn *c = net_listen_udp(a, BURROW_S("udp"), &any, &err);
+ *     NetipAddrPort from;
+ *     Int n = net_udp_conn_read_from_udp_addr_port(c, buf, &from, &err);
+ *
+ * A connection from net_listen_udp is bound and not connected, and sends
+ * with the write_to calls, each to the address it names. One from
+ * net_dial_udp is connected, sends with write, and only hears from the
+ * address it dialed. A datagram is read whole, and what does not fit in the
+ * buffer is gone.
+ *
+ * The errors are Go's, and so are the rules for the memory, which are the
+ * ones TCP has. A NetUDPAddr from read_from_udp or from_addr_port is the
+ * caller's, and goes back with net_udp_addr_free.
+ *
+ * As with TCP, Windows gives ENOSYS until its poller is here and wasip1 has
+ * no sockets. ListenMulticastUDP, ReadMsgUDP and WriteMsgUDP are still to
+ * come. */
+
+/* net.UDPAddr, laid out as NetTCPAddr is, and read the same way. */
+typedef struct NetUDPAddr {
+    NetIP ip;
+    Int port;
+    Str zone;
+} NetUDPAddr;
+
+extern const Type *const TYPE_NET_UDP_ADDR;
+
+/* UDPAddr.Network, which is "udp". */
+BURROW_STATIC(ret) Str net_udp_addr_network(const NetUDPAddr *a);
+
+/* UDPAddr.String, "<nil>" for a NULL a, such as "[::1%eth0]:53". */
+BURROW_OWNS(ret) Str net_udp_addr_string(const NetUDPAddr *a, Alloc *al);
+
+/* a as a NetAddr, which points at a, and nil for a NULL a. */
+NetAddr net_udp_addr_as_addr(const NetUDPAddr *a);
+
+/* UDPAddr.AddrPort: the zero NetipAddrPort for a NULL a, and an invalid
+ * address in it for an ip that is not 4 or 16 bytes long. */
+NetipAddrPort net_udp_addr_addr_port(const NetUDPAddr *a);
+
+/* UDPAddrFromAddrPort, made in a, with its ip and zone in the same block. */
+BURROW_OWNS(ret) NetUDPAddr *net_udp_addr_from_addr_port(Alloc *a, NetipAddrPort addr);
+
+/* Gives back a NetUDPAddr that this package made in a. NULL does nothing. */
+void net_udp_addr_free(Alloc *a, NetUDPAddr *addr);
+
+/* net.ErrWriteToConnected, for a write_to on a connection that was dialed. */
+extern const Error net_err_write_to_connected;
+
+typedef struct NetUDPConn NetUDPConn;
+
+/* DialUDP: a socket connected to raddr, from laddr when that is not NULL.
+ * network is "udp", "udp4" or "udp6". Nothing is sent, so a dial to a port
+ * where nothing listens works, and the first read or write after it may fail
+ * with ECONNREFUSED. */
+BURROW_OWNS(ret) NetUDPConn *net_dial_udp(Alloc *a, Str network,
+                                          const NetUDPAddr *laddr,
+                                          const NetUDPAddr *raddr, Error *err);
+
+/* ListenUDP: a socket bound to laddr, every address of the machine for a
+ * NULL laddr or an empty ip, and a free port for port 0. A multicast laddr
+ * binds the unspecified address with that port and lets other sockets bind
+ * it too, but joins no group. */
+BURROW_OWNS(ret) NetUDPConn *net_listen_udp(Alloc *a, Str network,
+                                            const NetUDPAddr *laddr, Error *err);
+
+/* conn.Read and Write, for a dialed connection. */
+Int net_udp_conn_read(NetUDPConn *c, Slice p, Error *err);
+Int net_udp_conn_write(NetUDPConn *c, Slice p, Error *err);
+
+/* ReadFromUDP: a datagram, and in *addr who sent it, made in a. *addr is
+ * NULL on an error. addr may be NULL to not ask. */
+Int net_udp_conn_read_from_udp(NetUDPConn *c, Slice p, Alloc *a, NetUDPAddr **addr,
+                               Error *err);
+
+/* ReadFrom, which is ReadFromUDP with the sender as a NetAddr, nil on an
+ * error. */
+Int net_udp_conn_read_from(NetUDPConn *c, Slice p, Alloc *a, NetAddr *addr, Error *err);
+
+/* ReadFromUDPAddrPort, which needs no memory for the sender. */
+Int net_udp_conn_read_from_udp_addr_port(NetUDPConn *c, Slice p, NetipAddrPort *addr,
+                                         Error *err);
+
+/* WriteToUDP, WriteToUDPAddrPort and WriteTo: p as one datagram to addr.
+ * WriteTo takes any NetAddr, and fails with EINVAL for one that is not a
+ * NetUDPAddr. */
+Int net_udp_conn_write_to_udp(NetUDPConn *c, Slice p, const NetUDPAddr *addr,
+                              Error *err);
+Int net_udp_conn_write_to_udp_addr_port(NetUDPConn *c, Slice p, NetipAddrPort addr,
+                                        Error *err);
+Int net_udp_conn_write_to(NetUDPConn *c, Slice p, NetAddr addr, Error *err);
+
+/* conn.Close, LocalAddr, RemoteAddr and the setters, as for TCP. A
+ * connection from net_listen_udp has no remote address. */
+BURROW_STATIC(ret) Error net_udp_conn_close(NetUDPConn *c);
+NetAddr net_udp_conn_local_addr(NetUDPConn *c);
+NetAddr net_udp_conn_remote_addr(NetUDPConn *c);
+BURROW_STATIC(ret) Error net_udp_conn_set_deadline(NetUDPConn *c, Time t);
+BURROW_STATIC(ret) Error net_udp_conn_set_read_deadline(NetUDPConn *c, Time t);
+BURROW_STATIC(ret) Error net_udp_conn_set_write_deadline(NetUDPConn *c, Time t);
+BURROW_STATIC(ret) Error net_udp_conn_set_read_buffer(NetUDPConn *c, Int bytes);
+BURROW_STATIC(ret) Error net_udp_conn_set_write_buffer(NetUDPConn *c, Int bytes);
+
+/* c as a NetConn, and back. */
+NetConn net_udp_conn_as_conn(NetUDPConn *c);
+BURROW_BORROWS(ret) NetUDPConn *net_conn_as_udp_conn(NetConn c);
+
+/* Closes c if it is open and gives its memory back. NULL does nothing. */
+void net_udp_conn_free(NetUDPConn *c);
+
+/* ------------------------------------------------------------------- Unix
+ *
+ * net.UnixAddr, net.UnixConn and net.UnixListener, which are sockets named
+ * by a path on this machine, on the same poller as TCP and UDP:
+ *
+ *     NetUnixAddr addr = {BURROW_S("/tmp/app.sock"), BURROW_S("unix")};
+ *     NetUnixListener *l = net_listen_unix(a, BURROW_S("unix"), &addr, &err);
+ *     NetUnixConn *c = net_dial_unix(a, BURROW_S("unix"), NULL, &addr, &err);
+ *
+ * The network is "unix" for a stream, "unixgram" for datagrams, and
+ * "unixpacket" for datagrams over a connection, which Linux and some of the
+ * BSDs have and macOS does not. Listening makes a file at the path, and
+ * closing the listener removes it again. On Linux a name that starts with
+ * "@" is in the abstract namespace instead, with no file behind it, and a
+ * socket that was never bound is named "@" there, where macOS and the BSDs
+ * call it "".
+ *
+ * The errors are Go's, and so are the rules for the memory, which are the
+ * ones TCP has. A NetUnixAddr from net_resolve_unix_addr or read_from_unix
+ * is the caller's, and goes back with net_unix_addr_free.
+ *
+ * As with TCP, Windows gives ENOSYS until its poller is here and wasip1 has
+ * no sockets. ReadMsgUnix, WriteMsgUnix and the File methods are still to
+ * come. */
+
+/* net.UnixAddr: the path, or the abstract name, and the network it is for,
+ * which is "unix", "unixgram" or "unixpacket". */
+typedef struct NetUnixAddr {
+    Str name;
+    Str net;
+} NetUnixAddr;
+
+extern const Type *const TYPE_NET_UNIX_ADDR;
+
+/* ResolveUnixAddr: address for network, made in a with both copied. A
+ * network other than the three is a NetUnknownNetworkError. */
+BURROW_OWNS(ret) NetUnixAddr *net_resolve_unix_addr(Alloc *a, Str network, Str address,
+                                                    Error *err);
+
+/* UnixAddr.Network, which is a->net, and empty for a NULL a. */
+BURROW_BORROWS(ret) Str net_unix_addr_network(const NetUnixAddr *a);
+
+/* UnixAddr.String, which is the name, made in al, and "<nil>" for a NULL a. */
+BURROW_OWNS(ret) Str net_unix_addr_string(const NetUnixAddr *a, Alloc *al);
+
+/* a as a NetAddr, which points at a, and nil for a NULL a. */
+NetAddr net_unix_addr_as_addr(const NetUnixAddr *a);
+
+/* Gives back a NetUnixAddr that this package made in a. NULL does nothing. */
+void net_unix_addr_free(Alloc *a, NetUnixAddr *addr);
+
+typedef struct NetUnixConn NetUnixConn;
+typedef struct NetUnixListener NetUnixListener;
+
+/* DialUnix: a socket connected to raddr, bound to laddr first when that is
+ * not NULL. For "unixgram" raddr may be NULL if laddr is not, which gives a
+ * socket bound to laddr and not connected. NULL on an error, which is a
+ * NetOpError with the op "dial". */
+BURROW_OWNS(ret) NetUnixConn *net_dial_unix(Alloc *a, Str network,
+                                            const NetUnixAddr *laddr,
+                                            const NetUnixAddr *raddr, Error *err);
+
+/* ListenUnix: a listener on laddr, for "unix" or "unixpacket". laddr may not
+ * be NULL. An empty name on Linux binds to a fresh abstract name, which
+ * net_unix_listener_addr gives. NULL on an error, which is a NetOpError with
+ * the op "listen". */
+BURROW_OWNS(ret) NetUnixListener *net_listen_unix(Alloc *a, Str network,
+                                                  const NetUnixAddr *laddr, Error *err);
+
+/* ListenUnixgram: a datagram socket bound to laddr, for "unixgram" only,
+ * which sends with the write_to calls. */
+BURROW_OWNS(ret) NetUnixConn *net_listen_unixgram(Alloc *a, Str network,
+                                                  const NetUnixAddr *laddr, Error *err);
+
+/* conn.Read and conn.Write. A NULL c is EINVAL. */
+Int net_unix_conn_read(NetUnixConn *c, Slice p, Error *err);
+Int net_unix_conn_write(NetUnixConn *c, Slice p, Error *err);
+
+/* ReadFromUnix: what was read, and in *addr who sent it, made in a. *addr is
+ * NULL when the sender has no name, which is always so on a stream. */
+Int net_unix_conn_read_from_unix(NetUnixConn *c, Slice p, Alloc *a, NetUnixAddr **addr,
+                                 Error *err);
+
+/* ReadFrom, which is ReadFromUnix with the sender as a NetAddr, nil when it
+ * has no name. */
+Int net_unix_conn_read_from(NetUnixConn *c, Slice p, Alloc *a, NetAddr *addr,
+                            Error *err);
+
+/* WriteToUnix and WriteTo: p to addr, on a socket that is not connected.
+ * addr's network has to be the socket's, and WriteTo takes only a
+ * NetUnixAddr. */
+Int net_unix_conn_write_to_unix(NetUnixConn *c, Slice p, const NetUnixAddr *addr,
+                                Error *err);
+Int net_unix_conn_write_to(NetUnixConn *c, Slice p, NetAddr addr, Error *err);
+
+/* Close, CloseRead and CloseWrite, as TCP has them, and the rest of
+ * NetConn. */
+BURROW_STATIC(ret) Error net_unix_conn_close(NetUnixConn *c);
+BURROW_STATIC(ret) Error net_unix_conn_close_read(NetUnixConn *c);
+BURROW_STATIC(ret) Error net_unix_conn_close_write(NetUnixConn *c);
+NetAddr net_unix_conn_local_addr(NetUnixConn *c);
+NetAddr net_unix_conn_remote_addr(NetUnixConn *c);
+BURROW_STATIC(ret) Error net_unix_conn_set_deadline(NetUnixConn *c, Time t);
+BURROW_STATIC(ret) Error net_unix_conn_set_read_deadline(NetUnixConn *c, Time t);
+BURROW_STATIC(ret) Error net_unix_conn_set_write_deadline(NetUnixConn *c, Time t);
+BURROW_STATIC(ret) Error net_unix_conn_set_read_buffer(NetUnixConn *c, Int bytes);
+BURROW_STATIC(ret) Error net_unix_conn_set_write_buffer(NetUnixConn *c, Int bytes);
+
+/* c as a NetConn, and back. */
+NetConn net_unix_conn_as_conn(NetUnixConn *c);
+BURROW_BORROWS(ret) NetUnixConn *net_conn_as_unix_conn(NetConn c);
+
+/* Closes c if it is open and gives its memory back. NULL does nothing. */
+void net_unix_conn_free(NetUnixConn *c);
+
+/* UnixListener.AcceptUnix: the next connection, made in the listener's
+ * allocator. NULL on an error, which is a NetOpError with the op "accept". */
+BURROW_OWNS(ret) NetUnixConn *net_unix_listener_accept_unix(NetUnixListener *l,
+                                                            Error *err);
+
+/* UnixListener.Close: removes the file the listener made, unless
+ * net_unix_listener_set_unlink_on_close said not to, and then closes it. */
+BURROW_STATIC(ret) Error net_unix_listener_close(NetUnixListener *l);
+
+/* UnixListener.Addr, a NetUnixAddr that belongs to l, and SetDeadline. */
+NetAddr net_unix_listener_addr(NetUnixListener *l);
+BURROW_STATIC(ret) Error net_unix_listener_set_deadline(NetUnixListener *l, Time t);
+
+/* UnixListener.SetUnlinkOnClose: whether closing l removes its file, which
+ * it does unless this says otherwise. */
+void net_unix_listener_set_unlink_on_close(NetUnixListener *l, bool unlink);
+
+/* l as a NetListener. */
+NetListener net_unix_listener_as_listener(NetUnixListener *l);
+
+/* Closes l the way net_unix_listener_close does if it is still open, and
+ * gives its memory back. NULL does nothing. */
+void net_unix_listener_free(NetUnixListener *l);
+
+/* -------------------------------------------------------------------- DNS */
+
+/* net.DNSError, a lookup that failed: what went wrong, the name looked for
+ * and the server that was asked, which may be empty. Go's Error method gives
+ * "lookup " + name, then " on " + server when there is one, then ": " + err,
+ * as in "lookup example.invalid on 192.0.2.53:53: no such host", and "<nil>"
+ * for a NULL e.
+ *
+ * unwrap_err is what Unwrap gives, and nil for most of them. The resolver
+ * sets it to context_canceled or context_deadline_exceeded when a lookup
+ * stopped because its context did, so that errors_is finds those. */
+typedef struct NetDNSError {
+    Error unwrap_err;
+    Str err;
+    Str name;
+    Str server;
+    bool is_timeout;
+    bool is_temporary;
+
+    /* The name has no records of the type asked for, or does not exist at
+     * all. */
+    bool is_not_found;
+} NetDNSError;
+
+extern const Type *const TYPE_NET_DNS_ERROR;
+
+/* The text, built in a. */
+BURROW_OWNS(ret) Str net_dns_error_error(const NetDNSError *e, Alloc *a);
+
+/* e->unwrap_err. */
+BURROW_BORROWS(ret, e) Error net_dns_error_unwrap(const NetDNSError *e);
+
+/* DNSError.Timeout, which is is_timeout, and Temporary, which is is_timeout
+ * or is_temporary. Neither is always known, so a lookup that did time out may
+ * still say false. */
+bool net_dns_error_timeout(const NetDNSError *e);
+bool net_dns_error_temporary(const NetDNSError *e);
+
+/* The Error for e, which errors_as with TYPE_NET_DNS_ERROR gives back and
+ * which unwraps to e->unwrap_err. The strings are copied into a. */
+BURROW_OWNS(ret) Error net_dns_error_as_error(const NetDNSError *e, Alloc *a);
+
+/* net.SRV, net.MX and net.NS, one record each of what LookupSRV, LookupMX
+ * and LookupNS give. */
+typedef struct NetSRV {
+    Str target;
+    uint16_t port;
+    uint16_t priority;
+    uint16_t weight;
+} NetSRV;
+
+typedef struct NetMX {
+    Str host;
+    uint16_t pref;
+} NetMX;
+
+typedef struct NetNS {
+    Str host;
+} NetNS;
 
 /* ------------------------------------------------------------- descriptors */
 

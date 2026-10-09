@@ -122,22 +122,214 @@ BURROW_OWNS(ret) Error syscall_kill(Int pid, SyscallSignal sig);
 /* ------------------------------------------------------------ process attr */
 
 #if defined(BURROW_OS_WINDOWS)
-/* syscall.SysProcAttr on Windows, with the one field so far. creation_flags
- * is added to the flags CreateProcess is given, so CREATE_NEW_PROCESS_GROUP
- * works as it does in Go. */
+/* syscall.SysProcAttr on Windows, Go's fields in Go's order.
+ *
+ * hide_window starts the child with its window hidden. cmd_line, when not
+ * empty, is the command line it gets as it is, and otherwise
+ * syscall_start_process builds one from argv with syscall_escape_arg.
+ * creation_flags is added to the flags CreateProcess is given, so
+ * CREATE_NEW_PROCESS_GROUP works as it does in Go. token, when not 0, runs the
+ * child as the user it stands for, through CreateProcessAsUser.
+ * process_attributes and thread_attributes, when not NULL, are the security
+ * attributes of the child's process and of its first thread.
+ *
+ * no_inherit_handles has the child inherit no handles at all, not even the
+ * ones in ProcAttr.files. additional_inherited_handles is a slice of
+ * SyscallHandle, already inheritable, for the child to inherit as well.
+ * parent_process, when not 0, is the process the child gets as its parent,
+ * which is where the handles in additional_inherited_handles have to be. */
 typedef struct SyscallSysProcAttr {
+    bool hide_window;
+    Str cmd_line;
     uint32_t creation_flags;
+    SyscallToken token;
+    SyscallSecurityAttributes *process_attributes;
+    SyscallSecurityAttributes *thread_attributes;
+    bool no_inherit_handles;
+    Slice additional_inherited_handles; /* of SyscallHandle */
+    SyscallHandle parent_process;
 } SyscallSysProcAttr;
+
+/* syscall.ProcAttr on Windows: dir is the child's working directory, and the
+ * empty Str leaves it ours. env is a slice of "key=value" Strs, and nil is no
+ * environment at all. files is a slice of Uintptr, exactly three of them, the
+ * handles that become the child's standard input, output and error, with 0
+ * for none. sys may be NULL. */
+typedef struct SyscallProcAttr {
+    Str dir;
+    Slice env;   /* of Str */
+    Slice files; /* of Uintptr */
+    const SyscallSysProcAttr *sys;
+} SyscallProcAttr;
+
+/* syscall.ForkLock, which nothing on Windows uses, as in Go. */
+extern SyncRWMutex syscall_fork_lock;
+
+/* syscall.StartProcess: starts argv0 with the command line argv makes, set up
+ * as attr says, which may be NULL, and gives its process id, with a handle to
+ * the process in *handle for the caller to close. A relative argv0 is found
+ * from attr->dir when that is set, as Go does it. More than three files is
+ * EWINDOWS and fewer is EINVAL. */
+BURROW_OWNS(err) Int syscall_start_process(Str argv0, Slice argv,
+                                           const SyscallProcAttr *attr, Uintptr *handle,
+                                           Error *err);
+
+/* syscall.Exec, which Windows does not have: always EWINDOWS. */
+BURROW_OWNS(ret) Error syscall_exec(Str argv0, Slice argv, Slice envv);
+
+/* syscall.EscapeArg: s quoted for a Windows command line the way the C
+ * runtime splits one, from a. The empty string is "", two quotes. Otherwise a
+ * backslash is doubled when a quote follows it, a quote gets a backslash, and
+ * the whole is quoted when it has a space or a tab. When none of that is
+ * needed, the result is a copy of s. */
+BURROW_OWNS(ret) Str syscall_escape_arg(Alloc *a, Str s);
+
+/* syscall.FullPath: name as a full path, from GetFullPathName, from a. */
+BURROW_OWNS(ret) Str syscall_full_path(Alloc *a, Str name, Error *err);
+
+/* syscall.CloseOnExec: fd stops being inherited. syscall.SetNonblock does
+ * nothing on Windows and returns nil, as in Go. */
+void syscall_close_on_exec(SyscallHandle fd);
+BURROW_OWNS(ret) Error syscall_set_nonblock(SyscallHandle fd, bool nonblocking);
 #else
-/* syscall.SysProcAttr, with the fields burrow can do so far. setsid gives the
- * child a session of its own. setpgid puts it in a new process group, and
- * pgid has to be 0, which is the new group, since joining another one is not
- * done yet and gives "not supported". */
+/* syscall.Credential: the user and groups the child runs as. groups is a
+ * slice of uint32_t, the supplementary groups, set before the group and the
+ * user unless no_set_groups is true. */
+typedef struct SyscallCredential {
+    uint32_t uid;
+    uint32_t gid;
+    Slice groups; /* of uint32_t */
+    bool no_set_groups;
+} SyscallCredential;
+
+/* syscall.SysProcAttr: what the child does between the fork and the exec, in
+ * the order the fields are listed, which is Go's order on every system.
+ *
+ * chroot, when not empty, is the child's new root. credential, when not NULL,
+ * is the user it runs as. ptrace has it call ptrace(PTRACE_TRACEME), so that
+ * it stops at the exec for the parent to trace.
+ *
+ * setsid gives it a session of its own. setpgid puts it in process group pgid,
+ * or in a new one of its own when pgid is 0. setctty makes descriptor ctty its
+ * controlling terminal, which only works with setsid, and ctty is a slot in
+ * ProcAttr.files there, so a number in the child. noctty detaches descriptor
+ * 0 from its terminal. foreground puts its group in the foreground of the
+ * terminal ctty, which is a descriptor of the parent's here, and implies
+ * setpgid. setctty and foreground together are an error, as they are in Go.
+ *
+ * The rest are Linux's, except pdeathsig, which FreeBSD has too, and jail,
+ * which is FreeBSD's alone. pdeathsig is the signal the child gets when the
+ * thread that started it exits. cloneflags are given to clone, though never
+ * CLONE_VM or CLONE_VFORK, since the child is a copy of the parent here as it
+ * is after fork, and unshareflags to unshare in the child. uid_mappings and
+ * gid_mappings are slices of SyscallSysProcIDMap, written to the child's
+ * uid_map and gid_map, and gid_mappings_enable_setgroups is whether a child
+ * with gid_mappings may call setgroups. ambient_caps, a slice of Uintptr, are
+ * raised in the child, which keeps them through the exec. use_cgroup_fd starts
+ * it in the cgroup cgroup_fd is open on. pid_fd, when not NULL, is set to a
+ * pidfd for it, or -1 when the system has none to give. */
 typedef struct SyscallSysProcAttr {
+    Str chroot;
+    const SyscallCredential *credential;
+    bool ptrace;
     bool setsid;
     bool setpgid;
+    bool setctty;
+    bool noctty;
+    Int ctty;
+    bool foreground;
     Int pgid;
+#if defined(BURROW_OS_LINUX)
+    SyscallSignal pdeathsig;
+    Uintptr cloneflags;
+    Uintptr unshareflags;
+    Slice uid_mappings; /* of SyscallSysProcIDMap */
+    Slice gid_mappings; /* of SyscallSysProcIDMap */
+    bool gid_mappings_enable_setgroups;
+    Slice ambient_caps; /* of Uintptr */
+    bool use_cgroup_fd;
+    Int cgroup_fd;
+    Int *pid_fd;
+#elif defined(BURROW_OS_FREEBSD)
+    SyscallSignal pdeathsig;
+    Int jail;
+#endif
 } SyscallSysProcAttr;
+
+/* syscall.ProcAttr: dir is the child's working directory, and the empty Str
+ * leaves it ours. env is a slice of "key=value" Strs, and nil is no
+ * environment at all, not ours, which is Go's rule here and not os's. files
+ * is a slice of Uintptr, the parent's descriptors that become the child's 0,
+ * 1, 2 and so on, with ~(Uintptr)0 leaving that one closed. sys may be NULL.
+ *
+ * Descriptors that are not in files and are not close on exec stay open in
+ * the child, as they do in Go, which opens everything close on exec. So does
+ * burrow, but a C program may not, and os_start_process closes them. */
+typedef struct SyscallProcAttr {
+    Str dir;
+    Slice env;   /* of Str */
+    Slice files; /* of Uintptr */
+    const SyscallSysProcAttr *sys;
+} SyscallProcAttr;
+
+/* syscall.ForkLock. A descriptor that is opened without close on exec and
+ * marked after is opened under the read lock, and every fork takes the write
+ * lock, syscall_fork_exec's and os_start_process's, so that the child never
+ * gets one of those halfway. */
+extern SyncRWMutex syscall_fork_lock;
+
+/* syscall.ForkExec: starts argv0 with argv, set up as attr says, which may be
+ * NULL, and gives its process id. A failed exec is reported here rather than
+ * by the child exiting, because the child sends back its errno over a pipe
+ * the exec closes. The error is an Errno, or the text Go gives for a
+ * SysProcAttr that cannot work, from error_allocator. */
+BURROW_OWNS(err) Int syscall_fork_exec(Str argv0, Slice argv,
+                                       const SyscallProcAttr *attr, Error *err);
+
+/* syscall.StartProcess: syscall_fork_exec for package os. handle is always 0
+ * here and may be NULL. */
+BURROW_OWNS(err) Int syscall_start_process(Str argv0, Slice argv,
+                                           const SyscallProcAttr *attr, Uintptr *handle,
+                                           Error *err);
+
+/* syscall.Exec: execve, which replaces this process with argv0 and so only
+ * returns when it fails. argv and envv are slices of Str, and envv is the
+ * whole environment the program gets. */
+BURROW_OWNS(ret) Error syscall_exec(Str argv0, Slice argv, Slice envv);
+
+/* syscall.Setgroups: the supplementary groups, a slice of Int. */
+BURROW_OWNS(ret) Error syscall_setgroups(Slice gids);
+
+#if defined(BURROW_OS_LINUX)
+/* syscall.Setuid and the rest of the family. Each one changes every thread of
+ * the process, as POSIX says it should, which is what Go does when it is
+ * linked with cgo, and burrow always is: the C library does it. */
+BURROW_OWNS(ret) Error syscall_setuid(Int uid);
+BURROW_OWNS(ret) Error syscall_setgid(Int gid);
+BURROW_OWNS(ret) Error syscall_seteuid(Int euid);
+BURROW_OWNS(ret) Error syscall_setegid(Int egid);
+BURROW_OWNS(ret) Error syscall_setreuid(Int ruid, Int euid);
+BURROW_OWNS(ret) Error syscall_setregid(Int rgid, Int egid);
+BURROW_OWNS(ret) Error syscall_setresuid(Int ruid, Int euid, Int suid);
+BURROW_OWNS(ret) Error syscall_setresgid(Int rgid, Int egid, Int sgid);
+
+/* syscall.AllThreadsSyscall and AllThreadsSyscall6, which run a system call
+ * on every thread. Go refuses them in a program linked with cgo, since it
+ * does not know about the C library's threads, and burrow is in the same
+ * place: they fail with ENOTSUP and make no call. */
+Uintptr syscall_all_threads_syscall(Uintptr trap, Uintptr a1, Uintptr a2, Uintptr a3,
+                                    Uintptr *r2, SyscallErrno *err);
+Uintptr syscall_all_threads_syscall6(Uintptr trap, Uintptr a1, Uintptr a2, Uintptr a3,
+                                     Uintptr a4, Uintptr a5, Uintptr a6, Uintptr *r2,
+                                     SyscallErrno *err);
+#endif
+
+/* What syscall_fork_exec and os_start_process both do with a SysProcAttr
+ * before the fork: Go's two checks against it, with nfiles the length of
+ * ProcAttr.files, and the attributes as pal_spawn takes them, in out and
+ * flags, with whatever they point at from a. Not the interface. */
+bool burrow__syscall_spawn_sys(const SyscallSysProcAttr *sys, Int nfiles, Alloc *a,
+                               PalSpawnSys *out, uint32_t *flags, Error *err);
 #endif
 
 /* ------------------------------------------------------------- wait status */
@@ -272,6 +464,18 @@ typedef struct SyscallRawConn {
     void *data;
 } SyscallRawConn;
 
+/* syscall.Conn: something with a descriptor under it, such as an OsFile
+ * through os_file_as_syscall_conn, that hands out a SyscallRawConn for it. */
+typedef struct SyscallConnVT {
+    const Type *self_type;
+    SyscallRawConn (*syscall_conn)(void *self, Error *err);
+} SyscallConnVT;
+
+typedef struct SyscallConn {
+    const SyscallConnVT *vt;
+    void *data;
+} SyscallConn;
+
 /* ----------------------------------------------------------- raw calls */
 
 /* syscall.BytePtrFromString: s with a NUL after it, from a, which is s.len + 1
@@ -403,7 +607,6 @@ typedef struct SyscallSockaddrUnix {
     SyscallRawSockaddrUnix raw;
 } SyscallSockaddrUnix;
 
-#if !defined(BURROW_OS_WINDOWS)
 /* syscall.SocketDisableIPv6: when it is true, syscall_socket fails with
  * EAFNOSUPPORT for AF_INET6, for tests. */
 extern bool syscall_socket_disable_ipv6;
@@ -420,11 +623,12 @@ SyscallSockaddr syscall_sockaddr_inet6_as_sockaddr(SyscallSockaddrInet6 *sa);
 SyscallSockaddr syscall_sockaddr_unix_as_sockaddr(SyscallSockaddrUnix *sa);
 
 /* Gives back to a a Sockaddr that syscall_accept, syscall_getsockname,
- * syscall_getpeername, syscall_recvfrom or syscall_recvmsg made from a. Each
- * one is a single allocation, a SockaddrUnix's name included. The zero
- * Sockaddr is fine. */
+ * syscall_getpeername, syscall_recvfrom, syscall_recvmsg or, on Windows,
+ * syscall_raw_sockaddr_any_sockaddr made from a. Each one is a single
+ * allocation, a SockaddrUnix's name included. The zero Sockaddr is fine. */
 void syscall_sockaddr_free(Alloc *a, SyscallSockaddr sa);
 
+#if !defined(BURROW_OS_WINDOWS)
 /* Socket: socket(2). Socketpair: socketpair(2), with the two descriptors in
  * the result's fd. */
 Int syscall_socket(Int domain, Int typ, Int proto, Error *err);
@@ -809,6 +1013,187 @@ BURROW_OWNS(ret) Error syscall_sync_file_range(Int fd, int64_t off, int64_t n,
 #endif
 #endif
 
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS) || defined(BURROW_OS_FREEBSD)
+/* --------------------------------------------------------------------- BSD */
+
+/* Getwd: the working directory, from a, up to its first NUL. An empty one is
+ * EINVAL. */
+BURROW_OWNS(ret) Str syscall_getwd(Alloc *a, Error *err);
+
+/* Getgroups: the supplementary group ids, a Slice of Int from a, nil if there
+ * are none. More than 1000 is EINVAL. */
+BURROW_OWNS(ret) Slice syscall_getgroups(Alloc *a, Error *err);
+
+/* Pipe: the two ends in p, a Slice of Int that has to have a length of 2, or
+ * it is EINVAL. FreeBSD has Pipe2 too, which Pipe is with no flags. */
+BURROW_OWNS(ret) Error syscall_pipe(Slice p);
+#if defined(BURROW_OS_FREEBSD)
+BURROW_OWNS(ret) Error syscall_pipe2(Slice p, Int flags);
+#endif
+
+/* Utimes and Futimes take a Slice of two SyscallTimeval, and UtimesNano two
+ * SyscallTimespec, the access time and then the modification time. Any other
+ * length is EINVAL. UtimesNano uses utimensat, and utimes to the microsecond
+ * only when that is ENOSYS. */
+BURROW_OWNS(ret) Error syscall_utimes(Str path, Slice tv);
+BURROW_OWNS(ret) Error syscall_utimes_nano(Str path, Slice ts);
+BURROW_OWNS(ret) Error syscall_futimes(Int fd, Slice tv);
+
+/* Getdirentries: the dirents of directory fd into buf, and how many bytes they
+ * took. FreeBSD keeps where it got to in *basep, and gives EIO when that does
+ * not fit a 32-bit Uintptr. macOS has no such call for programs, so it is
+ * built from readdir_r as in Go, keeps how many entries it has given back as
+ * fd's offset, and does not use basep. ReadDirent is Getdirentries with a base
+ * of its own. ParseDirent is as on Linux, and leaves out entries whose inode
+ * is 0. */
+Int syscall_getdirentries(Int fd, Slice buf, Uintptr *basep, Error *err);
+Int syscall_read_dirent(Int fd, Slice buf, Error *err);
+Int syscall_parse_dirent(Alloc *a, Slice buf, Int max, Slice names, Int *count,
+                         Slice *newnames);
+
+/* Kevent: kevent(2) with the changes and events Slices of SyscallKevent_t,
+ * either of which may be empty, and NULL timeout to wait for ever. SetKevent
+ * fills in what it is for: fd, the filter and the flags. */
+Int syscall_kevent(Int kq, Slice changes, Slice events, SyscallTimespec *timeout,
+                   Error *err);
+void syscall_set_kevent(SyscallKevent_t *k, Int fd, Int mode, Int flags);
+
+/* Sysctl: the value of a sysctl by name, such as "kern.ostype", from a,
+ * without its NUL. SysctlUint32 reads one that is four bytes, and anything
+ * else is EIO. */
+BURROW_OWNS(ret) Str syscall_sysctl(Alloc *a, Str name, Error *err);
+uint32_t syscall_sysctl_uint32(Str name, Error *err);
+
+/* Setrlimit: setrlimit(2). */
+BURROW_OWNS(ret) Error syscall_setrlimit(Int resource, SyscallRlimit *rlim);
+
+/* FcntlFlock: fcntl with F_GETLK, F_SETLK or F_SETLKW. */
+BURROW_OWNS(ret) Error syscall_fcntl_flock(Uintptr fd, Int cmd, SyscallFlock_t *lk);
+
+/* Sendfile: up to count bytes of infd from *offset to the socket outfd, and
+ * how many it sent, which can be more than 0 when it fails too. offset may not
+ * be NULL, as it may not be in Go, and is not moved. */
+Int syscall_sendfile(Int outfd, Int infd, int64_t *offset, Int count, Error *err);
+
+/* Getfsstat: what is mounted, into buf, a Slice of SyscallStatfs_t, and how
+ * many there are. An empty buf only counts them. flags is MNT_WAIT or
+ * MNT_NOWAIT. */
+Int syscall_getfsstat(Slice buf, Int flags, Error *err);
+
+#if defined(BURROW_OS_FREEBSD)
+/* Stat and Lstat: Fstatat with AT_FDCWD, and AT_SYMLINK_NOFOLLOW for Lstat.
+ * Mknod: mknodat with AT_FDCWD. */
+BURROW_OWNS(ret) Error syscall_stat(Str path, SyscallStat_t *st);
+BURROW_OWNS(ret) Error syscall_lstat(Str path, SyscallStat_t *st);
+BURROW_OWNS(ret) Error syscall_mknod(Str path, uint32_t mode, uint64_t dev);
+#else
+/* PtraceAttach and PtraceDetach: ptrace(2) with PT_ATTACH and PT_DETACH. */
+BURROW_OWNS(ret) Error syscall_ptrace_attach(Int pid);
+BURROW_OWNS(ret) Error syscall_ptrace_detach(Int pid);
+#endif
+
+/* The BSD packet filter, which Go has deprecated in favour of
+ * golang.org/x/net/bpf. Each is one ioctl(2) on a /dev/bpf descriptor. BpfStmt
+ * and BpfJump build one instruction, and BpfTimeout and BpfStats read one
+ * value, which all come back by value where Go returns a pointer. SetBpf puts
+ * a program, a Slice of SyscallBpfInsn, on fd. BpfInterface gives back name
+ * unchanged, as Go's does, whatever interface fd is on. CheckBpfVersion is
+ * EINVAL when the kernel's filter is not the version these constants are. */
+SyscallBpfInsn syscall_bpf_stmt(Int code, Int k);
+SyscallBpfInsn syscall_bpf_jump(Int code, Int k, Int jt, Int jf);
+Int syscall_bpf_buflen(Int fd, Error *err);
+Int syscall_set_bpf_buflen(Int fd, Int l, Error *err);
+Int syscall_bpf_datalink(Int fd, Error *err);
+Int syscall_set_bpf_datalink(Int fd, Int t, Error *err);
+BURROW_OWNS(ret) Error syscall_set_bpf_promisc(Int fd, Int m);
+BURROW_OWNS(ret) Error syscall_flush_bpf(Int fd);
+BURROW_BORROWS(ret, name) Str syscall_bpf_interface(Int fd, Str name, Error *err);
+BURROW_OWNS(ret) Error syscall_set_bpf_interface(Int fd, Str name);
+SyscallTimeval syscall_bpf_timeout(Int fd, Error *err);
+BURROW_OWNS(ret) Error syscall_set_bpf_timeout(Int fd, SyscallTimeval *tv);
+SyscallBpfStat syscall_bpf_stats(Int fd, Error *err);
+BURROW_OWNS(ret) Error syscall_set_bpf_immediate(Int fd, Int m);
+BURROW_OWNS(ret) Error syscall_set_bpf(Int fd, Slice i);
+BURROW_OWNS(ret) Error syscall_check_bpf_version(Int fd);
+Int syscall_bpf_headercmpl(Int fd, Error *err);
+BURROW_OWNS(ret) Error syscall_set_bpf_headercmpl(Int fd, Int f);
+
+/* syscall.RoutingMessage: one message from a routing socket or RouteRIB,
+ * which is one of the message types below. Go keeps the set closed with an
+ * unexported method, and so does this: only this package makes the vtables.
+ * sockaddr is what ParseRoutingSockaddr calls. To find out which type one is,
+ * compare vt->self_type with the TYPE_SYSCALL_ descriptors below. */
+typedef struct SyscallRoutingMessageVT {
+    const Type *self_type;
+    Slice (*sockaddr)(void *self, Alloc *a, Error *err);
+} SyscallRoutingMessageVT;
+
+typedef struct SyscallRoutingMessage {
+    const SyscallRoutingMessageVT *vt;
+    void *data;
+} SyscallRoutingMessage;
+
+/* The message types, each a header and the addresses after it. data borrows
+ * the bytes the message was parsed from. */
+typedef struct SyscallRouteMessage {
+    SyscallRtMsghdr header;
+    Slice data;
+} SyscallRouteMessage;
+
+typedef struct SyscallInterfaceMessage {
+    SyscallIfMsghdr header;
+    Slice data;
+} SyscallInterfaceMessage;
+
+typedef struct SyscallInterfaceAddrMessage {
+    SyscallIfaMsghdr header;
+    Slice data;
+} SyscallInterfaceAddrMessage;
+
+typedef struct SyscallInterfaceMulticastAddrMessage {
+#if defined(BURROW_OS_FREEBSD)
+    SyscallIfmaMsghdr header;
+#else
+    SyscallIfmaMsghdr2 header;
+#endif
+    Slice data;
+} SyscallInterfaceMulticastAddrMessage;
+
+extern const Type *const TYPE_SYSCALL_ROUTE_MESSAGE;
+extern const Type *const TYPE_SYSCALL_INTERFACE_MESSAGE;
+extern const Type *const TYPE_SYSCALL_INTERFACE_ADDR_MESSAGE;
+extern const Type *const TYPE_SYSCALL_INTERFACE_MULTICAST_ADDR_MESSAGE;
+#if defined(BURROW_OS_FREEBSD)
+/* FreeBSD also says when an interface comes and goes, with a message that is
+ * only a header and has no addresses. */
+extern const Type *const TYPE_SYSCALL_INTERFACE_ANNOUNCE_MESSAGE;
+#endif
+
+/* RouteRIB: the kernel's routing information for facility, such as
+ * NET_RT_DUMP or NET_RT_IFLIST, and param, as bytes from a. Nothing there is
+ * a nil Slice and no error. */
+BURROW_OWNS(ret) Slice syscall_route_rib(Alloc *a, Int facility, Int param, Error *err);
+
+/* ParseRoutingMessage: the messages in b, as a Slice of SyscallRoutingMessage
+ * from a. A message of a type Go has no message for is passed over, and one of
+ * another version makes it EINVAL, as in Go. So does a message whose length
+ * runs past b or is shorter than its header, where Go would panic or, for a
+ * length of 0, never return. The messages borrow b, and are one allocation
+ * with the Slice, which syscall_routing_message_free gives back. */
+BURROW_OWNS(ret) Slice syscall_parse_routing_message(Alloc *a, Slice b, Error *err);
+void syscall_routing_message_free(Alloc *a, Slice msgs);
+
+/* ParseRoutingSockaddr: the addresses in msg, a Slice of RTAX_MAX
+ * SyscallSockaddr from a, indexed by RTAX_DST and the rest, with the zero
+ * Sockaddr for each one the message does not have. A message with no
+ * addresses at all gives a nil Slice. syscall_routing_sockaddr_free gives back
+ * the Slice and every Sockaddr in it. */
+BURROW_OWNS(ret) Slice syscall_parse_routing_sockaddr(Alloc *a,
+                                                      SyscallRoutingMessage msg,
+                                                      Error *err);
+void syscall_routing_sockaddr_free(Alloc *a, Slice sas);
+#endif
+
 #if defined(BURROW_OS_WINDOWS)
 /* ------------------------------------------------------------ Windows DLLs */
 
@@ -984,6 +1369,319 @@ BURROW_OWNS(ret) uint16_t *syscall_string_to_utf16_ptr(Alloc *a, Str s);
  * first 0 if there is one. An unpaired surrogate becomes its WTF-8 bytes
  * rather than U+FFFD, so it goes back to Windows as it came. */
 BURROW_OWNS(ret) Str syscall_utf16_to_string(Alloc *a, Slice s);
+#endif
+
+#if defined(BURROW_OS_WINDOWS)
+/* ----------------------------------------------------------------- Windows */
+
+/* syscall.Stdin, Stdout and Stderr: the handles GetStdHandle gives, as
+ * variables, since Go has them as variables. Go asks for them when the
+ * package starts, and here they are asked for the first time any of the three
+ * is used. */
+#define syscall_stdin (*burrow__syscall_std_handle(0))
+#define syscall_stdout (*burrow__syscall_std_handle(1))
+#define syscall_stderr (*burrow__syscall_std_handle(2))
+BURROW_BORROWS(ret) SyscallHandle *burrow__syscall_std_handle(Int i);
+
+/* Open: CreateFile with what Go makes of the O_ flags in mode. The top 12 bits
+ * of mode may carry FILE_FLAG_ bits for CreateFile, the ones Go allows, and any
+ * other is fs_err_invalid. perm only decides whether the file is read only.
+ * Without O_CLOEXEC a child process inherits the handle. An empty path is
+ * ERROR_FILE_NOT_FOUND, and a directory opened for writing is EISDIR. O_TRUNC
+ * is ignored on a pipe or a console, as Unix ignores it there. A failure gives
+ * SYSCALL_INVALID_HANDLE. */
+SyscallHandle syscall_open(Str path, Int mode, uint32_t perm, Error *err);
+
+/* Read and Write: ReadFile and WriteFile on p's bytes, and how many went. A
+ * failure gives 0, and so does Read at the end of a pipe, which Windows says
+ * with ERROR_BROKEN_PIPE, with no error. */
+Int syscall_read(SyscallHandle fd, Slice p, Error *err);
+Int syscall_write(SyscallHandle fd, Slice p, Error *err);
+
+/* ReadFile and WriteFile themselves, with the count in *done. */
+BURROW_OWNS(ret) Error syscall_read_file(SyscallHandle fd, Slice p, uint32_t *done,
+                                         SyscallOverlapped *overlapped);
+BURROW_OWNS(ret) Error syscall_write_file(SyscallHandle fd, Slice p, uint32_t *done,
+                                          SyscallOverlapped *overlapped);
+
+/* Seek: SetFilePointerEx, from the start, the current offset or the end for a
+ * whence of 0, 1 or 2, and the new offset. */
+int64_t syscall_seek(SyscallHandle fd, int64_t offset, Int whence, Error *err);
+
+/* Close: CloseHandle. Fsync: FlushFileBuffers. Ftruncate: sets the end of the
+ * file with SetFileInformationByHandle. */
+BURROW_OWNS(ret) Error syscall_close(SyscallHandle fd);
+BURROW_OWNS(ret) Error syscall_fsync(SyscallHandle fd);
+BURROW_OWNS(ret) Error syscall_ftruncate(SyscallHandle fd, int64_t length);
+
+/* Getwd: the working directory, from a. */
+BURROW_OWNS(ret) Str syscall_getwd(Alloc *a, Error *err);
+
+/* Chdir, Mkdir, Rmdir, Unlink and Rename: SetCurrentDirectory,
+ * CreateDirectory, RemoveDirectory, DeleteFile and MoveFile. Mkdir ignores
+ * mode, as Go's does. A path with a NUL in it is EINVAL. */
+BURROW_OWNS(ret) Error syscall_chdir(Str path);
+BURROW_OWNS(ret) Error syscall_mkdir(Str path, uint32_t mode);
+BURROW_OWNS(ret) Error syscall_rmdir(Str path);
+BURROW_OWNS(ret) Error syscall_unlink(Str path);
+BURROW_OWNS(ret) Error syscall_rename(Str oldpath, Str newpath);
+
+/* Chmod: makes the file read only when mode has no S_IWRITE, and writable when
+ * it has, which is all Windows has to say about it. */
+BURROW_OWNS(ret) Error syscall_chmod(Str path, uint32_t mode);
+
+/* Fchdir: makes the directory fd is open on the working directory, by its
+ * path, without the \\?\ Windows puts in front of it. */
+BURROW_OWNS(ret) Error syscall_fchdir(SyscallHandle fd);
+
+/* Link, Symlink, Fchmod, Chown, Lchown and Fchown: EWINDOWS, as in Go. os
+ * makes links with CreateHardLink and CreateSymbolicLink. */
+BURROW_OWNS(ret) Error syscall_link(Str oldpath, Str newpath);
+BURROW_OWNS(ret) Error syscall_symlink(Str path, Str link);
+BURROW_OWNS(ret) Error syscall_fchmod(SyscallHandle fd, uint32_t mode);
+BURROW_OWNS(ret) Error syscall_chown(Str path, Int uid, Int gid);
+BURROW_OWNS(ret) Error syscall_lchown(Str path, Int uid, Int gid);
+BURROW_OWNS(ret) Error syscall_fchown(SyscallHandle fd, Int uid, Int gid);
+
+/* Readlink: the target of the symbolic link or junction at path, copied into
+ * buf as far as it fits, and how many bytes that was. An absolute link loses
+ * the \??\ Windows keeps it under, and \??\UNC\ becomes \\. A reparse
+ * point of any other kind is ENOENT. A failure gives -1. */
+Int syscall_readlink(Str path, Slice buf, Error *err);
+
+/* Utimes and UtimesNano: SetFileTime with the access and then the
+ * modification time, from a Slice of two SyscallTimeval or two
+ * SyscallTimespec. Any other length is EINVAL. A Timeval of 0, or a Timespec
+ * whose nsec is -1, leaves that time as it is. */
+BURROW_OWNS(ret) Error syscall_utimes(Str path, Slice tv);
+BURROW_OWNS(ret) Error syscall_utimes_nano(Str path, Slice ts);
+
+/* Pipe: CreatePipe, with ends a child process inherits, in p, a Slice of
+ * SyscallHandle that has to have a length of 2, or it is EINVAL. */
+BURROW_OWNS(ret) Error syscall_pipe(Slice p);
+
+/* ComputerName: GetComputerName, from a. */
+BURROW_OWNS(ret) Str syscall_computer_name(Alloc *a, Error *err);
+
+/* Gettimeofday: the time now, from GetSystemTimeAsFileTime, which cannot
+ * fail. */
+BURROW_OWNS(ret) Error syscall_gettimeofday(SyscallTimeval *tv);
+
+/* Getpid: GetCurrentProcessId. Getppid: the parent's id, from a snapshot of
+ * the processes, or -1 if it is not there. */
+Int syscall_getpid(void);
+Int syscall_getppid(void);
+
+/* Getuid, Geteuid, Getgid and Getegid: -1. Getgroups: a nil slice and
+ * EWINDOWS. Windows has no numbers for these. a is not used. */
+Int syscall_getuid(void);
+Int syscall_geteuid(void);
+Int syscall_getgid(void);
+Int syscall_getegid(void);
+BURROW_OWNS(ret) Slice syscall_getgroups(Alloc *a, Error *err);
+
+/* FindFirstFile and FindNextFile: FindFirstFileW and FindNextFileW into
+ * *data. Windows writes two names one unit longer than Win32finddata has room
+ * for, so this goes through a struct of the size Windows uses and copies,
+ * dropping the last unit, which is a NUL, as Go does. */
+SyscallHandle syscall_find_first_file(uint16_t *name, SyscallWin32finddata *data,
+                                      Error *err);
+BURROW_OWNS(ret) Error syscall_find_next_file(SyscallHandle handle,
+                                              SyscallWin32finddata *data);
+
+/* CreateFile: CreateFileW. A good handle comes with no error, even when
+ * Windows says ERROR_ALREADY_EXISTS, as it does when OPEN_ALWAYS opens a file
+ * that was there. */
+SyscallHandle syscall_create_file(uint16_t *name, uint32_t access, uint32_t mode,
+                                  SyscallSecurityAttributes *sa, uint32_t createmode,
+                                  uint32_t attrs, int32_t templatefile, Error *err);
+
+/* GetStartupInfo: GetStartupInfoW, which cannot fail. */
+BURROW_OWNS(ret) Error syscall_get_startup_info(SyscallStartupInfo *si);
+
+/* RegEnumKeyEx: RegEnumKeyExW, the subkey of key at index, with its name in
+ * name and its length in *name_len. A name too long for the buffer is
+ * ERROR_MORE_DATA. reserved has to be NULL, and class_, class_len and
+ * last_write_time may be. Go says to call it with the index going up from 0,
+ * or down from the last, on one thread. */
+BURROW_OWNS(ret) Error syscall_reg_enum_key_ex(SyscallHandle key, uint32_t index,
+                                               uint16_t *name, uint32_t *name_len,
+                                               uint32_t *reserved, uint16_t *class_,
+                                               uint32_t *class_len,
+                                               SyscallFiletime *last_write_time);
+
+/* FormatMessage: FormatMessageW into buf, a Slice of uint16_t, and how many
+ * units it wrote. Go takes msgsrc as a uint32 here. */
+uint32_t syscall_format_message(uint32_t flags, uint32_t msgsrc, uint32_t msgid,
+                                uint32_t langid, Slice buf, uint8_t *args, Error *err);
+
+/* CreateIoCompletionPort, GetQueuedCompletionStatus and
+ * PostQueuedCompletionStatus, with the key as a uint32_t, which is how Go has
+ * them. Go has deprecated them for the ones in x/sys/windows, whose key is a
+ * uintptr. A key too big for *key is an error, "GetQueuedCompletionStatus
+ * returned key overflow", unless the call failed anyway. key may be NULL. */
+SyscallHandle syscall_create_io_completion_port(SyscallHandle filehandle,
+                                                SyscallHandle cphandle, uint32_t key,
+                                                uint32_t threadcnt, Error *err);
+BURROW_OWNS(ret) Error syscall_get_queued_completion_status(
+    SyscallHandle cphandle, uint32_t *qty, uint32_t *key,
+    SyscallOverlapped **overlapped, uint32_t timeout);
+BURROW_OWNS(ret) Error syscall_post_queued_completion_status(
+    SyscallHandle cphandle, uint32_t qty, uint32_t key, SyscallOverlapped *overlapped);
+
+/* LoadCancelIoEx, LoadSetFileCompletionNotificationModes, LoadGetAddrInfo and
+ * LoadCreateSymbolicLink: look the function up, and say why if the system does
+ * not have it. */
+BURROW_OWNS(ret) Error syscall_load_cancel_io_ex(void);
+BURROW_OWNS(ret) Error syscall_load_set_file_completion_notification_modes(void);
+BURROW_OWNS(ret) Error syscall_load_get_addr_info(void);
+BURROW_OWNS(ret) Error syscall_load_create_symbolic_link(void);
+
+/* NewCallback and NewCallbackCDecl: fn as an address to hand to Windows,
+ * which calls it with Uintptr arguments and wants a Uintptr back. Go builds a
+ * piece of code that calls the Go function. A C function can be called as it
+ * is, so this is its address, but on 386 fn has to be __stdcall for
+ * NewCallback and __cdecl for NewCallbackCDecl, which Go arranges and C leaves
+ * to you. A NULL fn is a panic. */
+Uintptr syscall_new_callback(void (*fn)(void));
+Uintptr syscall_new_callback_c_decl(void (*fn)(void));
+
+/* ----------------------------------------------------- Windows sockets */
+
+/* Socket: socket. Bind and Connect: bind and connect to sa. Listen and
+ * Shutdown: listen and shutdown. An address sa cannot spell, such as a port
+ * above 65535, is EINVAL. A failed Socket gives SYSCALL_INVALID_HANDLE. */
+SyscallHandle syscall_socket(Int domain, Int typ, Int proto, Error *err);
+BURROW_OWNS(ret) Error syscall_bind(SyscallHandle fd, SyscallSockaddr sa);
+BURROW_OWNS(ret) Error syscall_connect(SyscallHandle fd, SyscallSockaddr sa);
+BURROW_OWNS(ret) Error syscall_listen(SyscallHandle s, Int n);
+BURROW_OWNS(ret) Error syscall_shutdown(SyscallHandle fd, Int how);
+
+/* Getsockname and Getpeername: the socket's own address and its peer's, made
+ * from a. */
+BURROW_OWNS(ret) SyscallSockaddr syscall_getsockname(Alloc *a, SyscallHandle fd,
+                                                     Error *err);
+BURROW_OWNS(ret) SyscallSockaddr syscall_getpeername(Alloc *a, SyscallHandle fd,
+                                                     Error *err);
+
+/* RawSockaddrAny.Sockaddr: the Sockaddr for the address in rsa, made from a.
+ * An abstract Unix name has its NUL turned into @ in rsa, as in Go. A family
+ * with no Sockaddr is EAFNOSUPPORT. */
+BURROW_OWNS(ret) SyscallSockaddr
+syscall_raw_sockaddr_any_sockaddr(SyscallRawSockaddrAny *rsa, Alloc *a, Error *err);
+
+/* Accept, Recvfrom, Sendto and SetsockoptTimeval: EWINDOWS, as in Go, which
+ * does these with the WSA calls. Accept gives 0 and the zero Sockaddr, and
+ * Recvfrom 0 and the zero Sockaddr. sa and from may be NULL. */
+SyscallHandle syscall_accept(Alloc *a, SyscallHandle fd, SyscallSockaddr *sa,
+                             Error *err);
+Int syscall_recvfrom(Alloc *a, SyscallHandle fd, Slice p, Int flags,
+                     SyscallSockaddr *from, Error *err);
+BURROW_OWNS(ret) Error syscall_sendto(SyscallHandle fd, Slice p, Int flags,
+                                      SyscallSockaddr to);
+BURROW_OWNS(ret) Error syscall_setsockopt_timeval(SyscallHandle fd, Int level, Int opt,
+                                                  SyscallTimeval *tv);
+
+/* GetsockoptInt and the Setsockopt functions: getsockopt and setsockopt of a
+ * value of each type. An Int goes as 32 bits, and a Linger as the two 16-bit
+ * fields Windows has, which Go's Linger does not match. */
+Int syscall_getsockopt_int(SyscallHandle fd, Int level, Int opt, Error *err);
+BURROW_OWNS(ret) Error syscall_setsockopt_int(SyscallHandle fd, Int level, Int opt,
+                                              Int value);
+BURROW_OWNS(ret) Error syscall_setsockopt_linger(SyscallHandle fd, Int level, Int opt,
+                                                 SyscallLinger *l);
+BURROW_OWNS(ret) Error syscall_setsockopt_inet4_addr(SyscallHandle fd, Int level,
+                                                     Int opt, const uint8_t value[4]);
+BURROW_OWNS(ret) Error syscall_setsockopt_ip_mreq(SyscallHandle fd, Int level, Int opt,
+                                                  SyscallIPMreq *mreq);
+BURROW_OWNS(ret) Error syscall_setsockopt_ipv6_mreq(SyscallHandle fd, Int level,
+                                                    Int opt, SyscallIPv6Mreq *mreq);
+
+/* WSASendto: WSASendTo to to, or with no address when to is the zero
+ * Sockaddr. */
+BURROW_OWNS(ret) Error syscall_wsa_sendto(SyscallHandle s, SyscallWSABuf *bufs,
+                                          uint32_t bufcnt, uint32_t *sent,
+                                          uint32_t flags, SyscallSockaddr to,
+                                          SyscallOverlapped *overlapped,
+                                          uint8_t *croutine);
+
+/* syscall.WSAID_CONNECTEX: the GUID WSAIoctl looks ConnectEx up by. */
+extern SyscallGUID syscall_wsaid_connectex;
+
+/* LoadConnectEx: finds ConnectEx, through WSAIoctl on a TCP socket made for
+ * the purpose, the first time it is called, and says why it could not then
+ * and every time after. */
+BURROW_OWNS(ret) Error syscall_load_connect_ex(void);
+
+/* ConnectEx: an overlapped connect to sa, sending send_data_len bytes from
+ * send_buf once it is connected. If ConnectEx cannot be found the error says
+ * "failed to find ConnectEx: " and why. */
+BURROW_OWNS(ret) Error syscall_connect_ex(SyscallHandle fd, SyscallSockaddr sa,
+                                          uint8_t *send_buf, uint32_t send_data_len,
+                                          uint32_t *bytes_sent,
+                                          SyscallOverlapped *overlapped);
+
+/* -------------------------------------------------- Windows security */
+
+/* syscall.OID_PKIX_KP_SERVER_AUTH, OID_SERVER_GATED_CRYPTO and
+ * OID_SGC_NETSCAPE: the object identifiers, as bytes with a NUL after them,
+ * for CertVerifyCertificateChainPolicy. They are variables in Go too. */
+extern Slice syscall_oid_pkix_kp_server_auth;
+extern Slice syscall_oid_server_gated_crypto;
+extern Slice syscall_oid_sgc_netscape;
+
+/* TranslateAccountName: username in the form from in the form to, NameDisplay
+ * and the rest, from a. init_size is not used, as in Go, which starts at 50
+ * units and grows to what Windows asks for. */
+BURROW_OWNS(ret) Str syscall_translate_account_name(Alloc *a, Str username,
+                                                    uint32_t from, uint32_t to,
+                                                    Int init_size, Error *err);
+
+/* StringToSid: the SID a string such as "S-1-5-32-544" stands for, from a,
+ * which syscall_sid_free gives back. */
+BURROW_OWNS(ret) SyscallSID *syscall_string_to_sid(Alloc *a, Str s, Error *err);
+
+/* LookupSID: the SID of account on system, or on this machine when system is
+ * empty, from a, with the domain it was found in, from a, in *domain and the
+ * SidType in *acc_type. Either may be NULL. An empty account is EINVAL. */
+BURROW_OWNS(ret) SyscallSID *syscall_lookup_sid(Alloc *a, Str system, Str account,
+                                                Str *domain, uint32_t *acc_type,
+                                                Error *err);
+
+/* SID.String: sid as a string, from a. SID.Len: its length in bytes.
+ * SID.Copy: a copy from a, which syscall_sid_free gives back. */
+BURROW_OWNS(ret) Str syscall_sid_string(SyscallSID *sid, Alloc *a, Error *err);
+Int syscall_sid_len(SyscallSID *sid);
+BURROW_OWNS(ret) SyscallSID *syscall_sid_copy(SyscallSID *sid, Alloc *a, Error *err);
+
+/* SID.LookupAccount: the name of the account sid is on system, or on this
+ * machine when system is empty, from a, with its domain in *domain and the
+ * SidType in *acc_type, as LookupSID. */
+BURROW_OWNS(ret) Str syscall_sid_lookup_account(SyscallSID *sid, Alloc *a, Str system,
+                                                Str *domain, uint32_t *acc_type,
+                                                Error *err);
+
+/* Gives back a SID that syscall_string_to_sid, syscall_lookup_sid or
+ * syscall_sid_copy made from a. NULL is fine. */
+void syscall_sid_free(Alloc *a, SyscallSID *sid);
+
+/* OpenCurrentProcessToken: the access token of this process, for querying.
+ * Token.Close: CloseHandle on it. */
+SyscallToken syscall_open_current_process_token(Error *err);
+BURROW_OWNS(ret) Error syscall_token_close(SyscallToken t);
+
+/* Token.GetTokenUser and Token.GetTokenPrimaryGroup: what GetTokenInformation
+ * says, in memory from a that syscall_token_info_free gives back, with the SID
+ * in it. */
+BURROW_OWNS(ret) SyscallTokenuser *syscall_token_get_token_user(SyscallToken t,
+                                                                Alloc *a, Error *err);
+BURROW_OWNS(ret) SyscallTokenprimarygroup *
+syscall_token_get_token_primary_group(SyscallToken t, Alloc *a, Error *err);
+void syscall_token_info_free(Alloc *a, void *info);
+
+/* Token.GetUserProfileDirectory: the user's profile directory, from a. */
+BURROW_OWNS(ret) Str syscall_token_get_user_profile_directory(SyscallToken t, Alloc *a,
+                                                              Error *err);
 #endif
 
 /* The rest of the system calls, one function each. */

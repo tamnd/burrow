@@ -508,7 +508,7 @@ if (BURROW_OK(err)) {
 }
 ```
 
-On Linux the path calls Go writes in terms of the `at` calls are here, `Open`, `Stat`, `Pipe`, `Faccessat` with the checks Go makes when the kernel has no `faccessat2`, `Getwd`, `Getgroups`, the `ptrace` helpers, and `ReadDirent` and `ParseDirent`, which append the names to a slice of `Str` from the allocator you give it:
+On Linux the path calls Go writes in terms of the `at` calls are here, `Open`, `Stat`, `Pipe`, `Faccessat` with the checks Go makes when the kernel has no `faccessat2`, `Getwd`, `Getgroups` and the `ptrace` helpers. On Linux, macOS and FreeBSD there are `ReadDirent` and `ParseDirent`, which append the names to a slice of `Str` from the allocator you give it:
 
 <!-- example: ../examples/syscall/unix.c#dirent -->
 ```c
@@ -525,6 +525,39 @@ for (;;) {
 (void)syscall_close(fd);
 printf("%d entries in /\n", (int)names.len);
 ```
+
+On macOS and FreeBSD there are the calls Go writes by hand in `syscall_bsd.go` and the files next to it: `Getwd`, `Getgroups`, `Pipe`, `Utimes`, `UtimesNano`, `Futimes`, `Getdirentries`, `Getfsstat`, `Sendfile`, `Setrlimit`, `FcntlFlock`, and `Sysctl` and `SysctlUint32`, which look a name up with the same `sysctl` call Go makes:
+
+<!-- example: ../examples/syscall/bsd.c#sysctl -->
+```c
+Error err = BURROW_NO_ERROR;
+Str os = syscall_sysctl(a, BURROW_S("kern.ostype"), &err);
+uint32_t maxproc = syscall_sysctl_uint32(BURROW_S("kern.maxproc"), &err);
+if (BURROW_OK(err))
+    printf("%.*s, up to %u processes\n", (int)os.len, (const char *)os.p,
+           (unsigned)maxproc);
+```
+
+`syscall_kqueue` and `syscall_kevent` wait on a kernel event queue, and `syscall_set_kevent` fills in a `SyscallKevent_t` the way Go's `SetKevent` does:
+
+<!-- example: ../examples/syscall/bsd.c#kevent -->
+```c
+Int kq = syscall_kqueue(&err);
+Int p[2];
+err = syscall_pipe((Slice){p, 2, 2, TYPE_INT});
+SyscallKevent_t change = {0}, ev = {0};
+syscall_set_kevent(&change, p[0], SYSCALL_EVFILT_READ, SYSCALL_EV_ADD);
+(void)syscall_kevent(kq, (Slice){&change, 1, 1, NULL}, slice_nil(NULL), NULL, &err);
+Byte hi[2] = {'h', 'i'};
+(void)syscall_write(p[1], (Slice){hi, 2, 2, TYPE_BYTE}, &err);
+SyscallTimespec second = syscall_nsec_to_timespec(1000000000);
+Int n =
+    syscall_kevent(kq, slice_nil(NULL), (Slice){&ev, 1, 1, NULL}, &second, &err);
+if (n == 1)
+    printf("%d bytes to read\n", (int)ev.data);
+```
+
+On macOS Go doesn't call `getdirentries`, so there `syscall_getdirentries` reads the directory with `readdir_r` on a second descriptor, as Go does, and keeps the number of entries read so far in the seek offset of yours, so seeking it yourself changes where the next call starts. Like Go's, it leaves `*basep` alone and doesn't notice the directory changing under it, but calling it or `syscall_read_dirent` over and over works.
 
 The socket calls are on every Unix. A `SyscallSockaddr` is an interface, like Go's `Sockaddr`, with one implementation for each address family: take the address of a `SyscallSockaddrInet4`, `SyscallSockaddrInet6` or `SyscallSockaddrUnix` and pass it through its `_as_sockaddr` function. Those that give an address back, `syscall_getsockname`, `syscall_accept`, `syscall_recvfrom` and the rest, make it from the allocator you pass, and its `vt->self_type` says which kind it is:
 
@@ -578,5 +611,51 @@ if (BURROW_OK(err) && msgs.len == 1) {
 (void)syscall_close(s.fd[1]);
 ```
 
-`ForkExec` and the rest of what Go writes by hand on Linux, and all of it on macOS, FreeBSD and Windows, are still to come.
+`syscall_fork_exec` starts a program the way Go's `ForkExec` does, and `syscall_start_process` is the same with a handle that is always 0 on Unix. `SyscallProcAttr` has the directory, the environment and the descriptors, where `files[i]` becomes descriptor `i` in the child and `~0` leaves it closed. A nil environment is an empty one, not ours. Descriptors you didn't list and didn't mark close on exec stay open in the child, as in Go, which is the difference from `os_start_process`: that one closes them. `SyscallSysProcAttr` has Go's fields, `setpgid`, `pgid`, `setsid`, `setctty`, `foreground`, `chroot`, `credential` and the rest, and on Linux the namespace ones too, `cloneflags`, `unshareflags`, `uid_mappings` and `gid_mappings`, `ambient_caps`, `use_cgroup_fd` and `pid_fd`:
+
+<!-- example: ../examples/syscall/exec.c#forkexec -->
+```c
+Str argv[2] = {BURROW_S("/bin/echo"), BURROW_S("hello from a child")};
+Uintptr files[3] = {0, 1, 2};
+SyscallSysProcAttr sys = {.setpgid = true};
+SyscallProcAttr attr = {
+    .env = slice_nil(TYPE_STRING),
+    .files = {files, 3, 3, TYPE_UINTPTR},
+    .sys = &sys,
+};
+Int pid = syscall_fork_exec(argv[0], (Slice){argv, 2, 2, TYPE_STRING}, &attr, &err);
+if (BURROW_OK(err)) {
+    SyscallWaitStatus ws;
+    (void)syscall_wait4(pid, &ws, 0, NULL, &err);
+    printf("exit status %d\n", (int)syscall_wait_status_exit_status(ws));
+}
+```
+
+`syscall_exec` replaces the running program. `syscall_fork_lock` is Go's `ForkLock`: hold it for reading while you make a descriptor and set close on exec in two steps, and no fork can see it in between. `syscall_setgroups` and on Linux `syscall_setuid` and the rest of the family change every thread, as they have since Go 1.16, and `syscall_all_threads_syscall` gives `ENOTSUP` as Go's does in a program that uses cgo, which a C program always is.
+
+On macOS and FreeBSD, `syscall_route_rib` reads the kernel's table of routes or interfaces with `sysctl`, `syscall_parse_routing_message` splits it, or what a routing socket says, into messages, and `syscall_parse_routing_sockaddr` reads the addresses after one message's header. A `SyscallRoutingMessage` is an interface like `SyscallSockaddr`, and its `vt->self_type` says whether it is a `SyscallRouteMessage`, a `SyscallInterfaceMessage` or one of the others. The addresses come back as a slice of `SYSCALL_RTAX_MAX` entries, one for each `RTAX_` slot, with a `NULL` vtable where the message has none:
+
+<!-- example: ../examples/syscall/bsd.c#rib -->
+```c
+Slice tab = syscall_route_rib(a, SYSCALL_NET_RT_IFLIST, 0, &err);
+Slice msgs = syscall_parse_routing_message(a, tab, &err);
+SyscallRoutingMessage *ms = (SyscallRoutingMessage *)msgs.p;
+for (Int i = 0; i < msgs.len; i++) {
+    if (ms[i].vt->self_type != TYPE_SYSCALL_INTERFACE_MESSAGE)
+        continue;
+    Slice sas = syscall_parse_routing_sockaddr(a, ms[i], &err);
+    if (sas.len == 0)
+        continue;
+    SyscallSockaddr ifp = ((SyscallSockaddr *)sas.p)[SYSCALL_RTAX_IFP];
+    SyscallSockaddrDatalink *dl = (SyscallSockaddrDatalink *)ifp.data;
+    printf("interface %d is %.*s\n", (int)dl->index, (int)dl->nlen,
+           (const char *)dl->data);
+}
+```
+
+Go reads the headers straight out of the bytes it is given and panics when a length in them is wrong. Here a message that is too short for its header, or whose length runs past the end, gives `EINVAL`. The packet filter calls, `syscall_set_bpf_interface`, `syscall_set_bpf` and the rest, are one `ioctl` each on a `/dev/bpf` descriptor. `syscall_bpf_stmt`, `syscall_bpf_jump`, `syscall_bpf_timeout` and `syscall_bpf_stats` return their struct by value where Go returns a pointer.
+
+`SyscallConn` is Go's `syscall.Conn`, anything that can hand out a `SyscallRawConn`, and `os_file_as_syscall_conn` gives you one for an `OsFile`.
+
+The rest of what Go writes by hand on Windows is still to come.
 

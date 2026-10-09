@@ -1897,7 +1897,11 @@ net_listener_free(l);
 That prints:
 
 ```
-PENDING
+Status: 200 OK
+Content-Type: text/plain; charset=utf-8
+Date: Thu, 08 Oct 2026 10:00:00 GMT
+
+hello jane, you asked for /hello
 ```
 
 The response comes back as CGI output: a `Status` line, the header, a blank line and the body. As in Go, only the responder role is supported.

@@ -1,9 +1,10 @@
-/* net, the addresses, the interfaces and Pipe so far.
+/* net: the addresses, the interfaces, Pipe, the sockets, the resolver,
+ * Dial and Listen.
  *
  * Go's net/ip.go, the interfaces and errors from net.go, SplitHostPort and
- * JoinHostPort from ipsock.go, and pipe.go. The sockets, the resolver and the
- * rest of the package come later. These are here first because crypto/x509
- * and crypto/tls use them, and Pipe is what crypto/tls is tested over.
+ * JoinHostPort from ipsock.go, pipe.go, the TCP, UDP and Unix sockets, the
+ * resolver, and dial.go. IPConn, ListenPacket, Interface and the rest of
+ * the package come later.
  *
  * A NetIP is a byte slice, 4 bytes for an IPv4 address or 16 for IPv6, as in
  * Go. Functions take either length, and the ones that make an address give
@@ -37,6 +38,7 @@
 #include "burrow/own.h"
 #include "burrow/slice.h"
 #include "burrow/sync.h"
+#include "burrow/syscall.h"
 #include "burrow/time.h"
 #include "burrow/type.h"
 
@@ -477,6 +479,26 @@ BURROW_OWNS(ret) Str net_tcp_addr_string(const NetTCPAddr *a, Alloc *al);
  * its data, which is Go's addr.(*TCPAddr). */
 NetAddr net_tcp_addr_as_addr(const NetTCPAddr *a);
 
+/* TCPAddr.AddrPort: the zero NetipAddrPort for a NULL a, and an invalid
+ * address in it for an ip that is not 4 or 16 bytes long. */
+NetipAddrPort net_tcp_addr_addr_port(const NetTCPAddr *a);
+
+/* TCPAddrFromAddrPort, made in a, with its ip and zone in the same block. */
+BURROW_OWNS(ret) NetTCPAddr *net_tcp_addr_from_addr_port(Alloc *a, NetipAddrPort addr);
+
+/* ResolveTCPAddr: the address of a TCP end point, made in a. network is
+ * "tcp", "tcp4" or "tcp6", and an empty one is "tcp". address is a host and
+ * a port, as net_join_host_port gives, where the host may be a name to look
+ * up or a literal IP address and the port a number or a service name. A
+ * name with more than one address gives the first IPv4 one, or the first
+ * IPv6 one when address has a "[" in it, and an empty host is the
+ * unspecified address. */
+BURROW_OWNS(ret) NetTCPAddr *net_resolve_tcp_addr(Alloc *a, Str network, Str address,
+                                                  Error *err);
+
+/* Gives back a NetTCPAddr that this package made in a. NULL does nothing. */
+void net_tcp_addr_free(Alloc *a, NetTCPAddr *addr);
+
 /* net.KeepAliveConfig. idle and interval below zero leave the system's
  * setting alone and zero means fifteen seconds, and the same goes for count,
  * where zero means nine. */
@@ -554,6 +576,13 @@ BURROW_STATIC(ret) Error net_tcp_conn_set_keep_alive_config(NetTCPConn *c,
 
 /* c as a NetConn, and back: Go's conversion to net.Conn and its
  * conn.(*TCPConn), which gives NULL for a NetConn that is not a TCPConn. */
+/* TCPConn.SyscallConn and TCPListener.SyscallConn: the socket under c or l,
+ * which stays the caller's to use only until c or l is freed. A NULL c or l
+ * is EINVAL. The raw conn of a listener can only be controlled, and its read
+ * and write give EINVAL, as Go's does. */
+SyscallRawConn net_tcp_conn_syscall_conn(NetTCPConn *c, Error *err);
+SyscallRawConn net_tcp_listener_syscall_conn(NetTCPListener *l, Error *err);
+
 NetConn net_tcp_conn_as_conn(NetTCPConn *c);
 BURROW_BORROWS(ret) NetTCPConn *net_conn_as_tcp_conn(NetConn c);
 
@@ -578,6 +607,9 @@ BURROW_STATIC(ret) Error net_tcp_listener_set_deadline(NetTCPListener *l, Time t
 /* l as a NetListener, whose accept gives a NetConn that
  * net_conn_as_tcp_conn turns back into the NetTCPConn to free. */
 NetListener net_tcp_listener_as_listener(NetTCPListener *l);
+
+/* l.(*TCPListener): the listener under l, or NULL when it is not one. */
+BURROW_BORROWS(ret) NetTCPListener *net_listener_as_tcp_listener(NetListener l);
 
 /* Closes l if it is still open and gives its memory back. NULL does
  * nothing. The connections it accepted are their own and are not freed. */
@@ -630,6 +662,10 @@ NetipAddrPort net_udp_addr_addr_port(const NetUDPAddr *a);
 
 /* UDPAddrFromAddrPort, made in a, with its ip and zone in the same block. */
 BURROW_OWNS(ret) NetUDPAddr *net_udp_addr_from_addr_port(Alloc *a, NetipAddrPort addr);
+
+/* ResolveUDPAddr, as net_resolve_tcp_addr is for "udp", "udp4" and "udp6". */
+BURROW_OWNS(ret) NetUDPAddr *net_resolve_udp_addr(Alloc *a, Str network, Str address,
+                                                  Error *err);
 
 /* Gives back a NetUDPAddr that this package made in a. NULL does nothing. */
 void net_udp_addr_free(Alloc *a, NetUDPAddr *addr);
@@ -692,6 +728,9 @@ BURROW_STATIC(ret) Error net_udp_conn_set_read_buffer(NetUDPConn *c, Int bytes);
 BURROW_STATIC(ret) Error net_udp_conn_set_write_buffer(NetUDPConn *c, Int bytes);
 
 /* c as a NetConn, and back. */
+/* UDPConn.SyscallConn, as net_tcp_conn_syscall_conn is. */
+SyscallRawConn net_udp_conn_syscall_conn(NetUDPConn *c, Error *err);
+
 NetConn net_udp_conn_as_conn(NetUDPConn *c);
 BURROW_BORROWS(ret) NetUDPConn *net_conn_as_udp_conn(NetConn c);
 
@@ -807,6 +846,10 @@ BURROW_STATIC(ret) Error net_unix_conn_set_read_buffer(NetUnixConn *c, Int bytes
 BURROW_STATIC(ret) Error net_unix_conn_set_write_buffer(NetUnixConn *c, Int bytes);
 
 /* c as a NetConn, and back. */
+/* UnixConn.SyscallConn and UnixListener.SyscallConn, as the TCP ones are. */
+SyscallRawConn net_unix_conn_syscall_conn(NetUnixConn *c, Error *err);
+SyscallRawConn net_unix_listener_syscall_conn(NetUnixListener *l, Error *err);
+
 NetConn net_unix_conn_as_conn(NetUnixConn *c);
 BURROW_BORROWS(ret) NetUnixConn *net_conn_as_unix_conn(NetConn c);
 
@@ -833,6 +876,9 @@ void net_unix_listener_set_unlink_on_close(NetUnixListener *l, bool unlink);
 /* l as a NetListener. */
 NetListener net_unix_listener_as_listener(NetUnixListener *l);
 
+/* l.(*UnixListener): the listener under l, or NULL when it is not one. */
+BURROW_BORROWS(ret) NetUnixListener *net_listener_as_unix_listener(NetListener l);
+
 /* Closes l the way net_unix_listener_close does if it is still open, and
  * gives its memory back. NULL does nothing. */
 void net_unix_listener_free(NetUnixListener *l);
@@ -858,6 +904,17 @@ BURROW_OWNS(ret) Str net_ip_addr_string(const NetIPAddr *a, Alloc *al);
 
 /* a as a NetAddr, which points at a, and nil for a NULL a. */
 NetAddr net_ip_addr_as_addr(const NetIPAddr *a);
+
+/* ResolveIPAddr: the address of host, made in a. network is "ip", "ip4" or
+ * "ip6", with a protocol after a colon allowed, as in "ip4:icmp", and an
+ * empty one is "ip". A name with more than one address gives the first IPv4
+ * one, or the first IPv6 one when host has a colon in it. */
+BURROW_OWNS(ret) NetIPAddr *net_resolve_ip_addr(Alloc *a, Str network, Str host,
+                                                Error *err);
+
+/* Gives back a NetIPAddr that net_resolve_ip_addr made in a. NULL does
+ * nothing. */
+void net_ip_addr_free(Alloc *a, NetIPAddr *addr);
 
 /* -------------------------------------------------------------------- DNS */
 
@@ -1044,6 +1101,144 @@ BURROW_OWNS(ret) Slice net_lookup_mx(Alloc *a, Str name, Error *err);
 BURROW_OWNS(ret) Slice net_lookup_ns(Alloc *a, Str name, Error *err);
 BURROW_OWNS(ret) Slice net_lookup_txt(Alloc *a, Str name, Error *err);
 BURROW_OWNS(ret) Slice net_lookup_addr(Alloc *a, Str addr, Error *err);
+
+/* ----------------------------------------------------------------- Dialer
+ *
+ * net.Dial, net.Listen, net.Dialer and net.ListenConfig, which take a
+ * network and an address as text and do the rest:
+ *
+ *     NetConn c = net_dial(a, BURROW_S("tcp"), BURROW_S("example.com:80"), &err);
+ *     NetListener l = net_listen(a, BURROW_S("tcp"), BURROW_S(":8080"), &err);
+ *
+ * The networks are "tcp", "tcp4", "tcp6", "udp", "udp4", "udp6", "unix",
+ * "unixgram" and "unixpacket". The IP ones take a host and a port, as
+ * net_join_host_port gives, where the host may be a name, which the resolver
+ * looks up, and the port a service name. A dial to a name with several
+ * addresses tries them in turn until one answers, and for "tcp", when the
+ * name has both IPv4 and IPv6 addresses, it races the first of each kind the
+ * way RFC 6555 says, which Go calls Happy Eyeballs. The "ip" networks, which
+ * need IPConn, are still to come, and a dial on one fails with ENOSYS until
+ * then. So is Multipath TCP, and a dial or listen is always a plain TCP one.
+ *
+ * The NetConn and NetListener are made in a and go back with net_conn_free
+ * and net_listener_free, which close them first. net_conn_as_tcp_conn and
+ * the others give the connection under one. The errors are NetOpErrors with
+ * the op "dial" or "listen", as in Go, such as "dial tcp: lookup
+ * example.invalid: no such host". */
+
+/* Dialer.Control and Dialer.ControlContext, called with the socket made and
+ * not yet connected, so that options can be set on it. network is what the
+ * socket is for, such as "tcp4", and address the one about to be dialed. An
+ * error stops the dial with it. */
+BURROW_FUNC(NetDialerControl, Error, Str network, Str address, SyscallRawConn c);
+BURROW_FUNC(NetDialerControlContext, Error, Context ctx, Str network, Str address,
+            SyscallRawConn c);
+
+/* net.Dialer. The zero value dials with no timeout but the system's, from an
+ * address the system picks, with TCP keep-alives every fifteen seconds. */
+typedef struct NetDialer {
+    /* The longest a dial may take, the lookup included, with zero for no
+     * limit. A dial to several addresses splits it between them. */
+    Duration timeout;
+
+    /* When a dial has to give up by, with the zero Time for never. The
+     * sooner of this, timeout and the context's deadline wins. */
+    Time deadline;
+
+    /* Where to dial from, a NetAddr of the same kind as the address dialed,
+     * or nil for one the system picks. */
+    NetAddr local_addr;
+
+    /* How long the IPv6 attempt runs before the IPv4 one starts as well,
+     * with zero for 300ms and anything below zero to turn the race off. */
+    Duration fallback_delay;
+
+    /* The TCP keep-alive period, with zero for fifteen seconds and below
+     * zero for none, when keep_alive_config.enable is false. When it is
+     * true, keep_alive_config is used as it is. */
+    Duration keep_alive;
+    NetKeepAliveConfig keep_alive_config;
+
+    /* The resolver for names, and the default one when NULL. */
+    NetResolver *resolver;
+
+    /* Deprecated in Go for the context: a channel whose closing stops the
+     * dial. NULL for none. */
+    Chan *cancel;
+
+    /* Called on the socket before it connects. control_context wins when
+     * both are set. */
+    NetDialerControl control;
+    NetDialerControlContext control_context;
+
+    /* Deprecated in Go: the race is on unless fallback_delay is below zero,
+     * and this changes nothing. */
+    bool dual_stack;
+} NetDialer;
+
+/* Dialer.DialContext: a connection to address on network, made in a. A
+ * NULL d is the zero Dialer. The context bounds the whole dial, the lookup
+ * included, and once the connection is made it no longer matters. */
+BURROW_OWNS(ret) NetConn net_dialer_dial_context(const NetDialer *d, Alloc *a,
+                                                 Context ctx, Str network, Str address,
+                                                 Error *err);
+
+/* Dialer.Dial, which is DialContext with context_background(). */
+BURROW_OWNS(ret) NetConn net_dialer_dial(const NetDialer *d, Alloc *a, Str network,
+                                         Str address, Error *err);
+
+/* Dial and DialTimeout, which use a Dialer with nothing but the timeout
+ * set. */
+BURROW_OWNS(ret) NetConn net_dial(Alloc *a, Str network, Str address, Error *err);
+BURROW_OWNS(ret) NetConn net_dial_timeout(Alloc *a, Str network, Str address,
+                                          Duration timeout, Error *err);
+
+/* Dialer.DialTCP, DialUDP and DialUnix, new in Go 1.27: a dial to an address
+ * that needs no lookup, with the Dialer's options, the context and Go's
+ * errors. A zero laddr is no local address. */
+BURROW_OWNS(ret) NetTCPConn *net_dialer_dial_tcp(const NetDialer *d, Alloc *a,
+                                                 Context ctx, Str network,
+                                                 NetipAddrPort laddr,
+                                                 NetipAddrPort raddr, Error *err);
+BURROW_OWNS(ret) NetUDPConn *net_dialer_dial_udp(const NetDialer *d, Alloc *a,
+                                                 Context ctx, Str network,
+                                                 NetipAddrPort laddr,
+                                                 NetipAddrPort raddr, Error *err);
+BURROW_OWNS(ret) NetUnixConn *
+net_dialer_dial_unix(const NetDialer *d, Alloc *a, Context ctx, Str network,
+                     const NetUnixAddr *laddr, const NetUnixAddr *raddr, Error *err);
+
+/* ListenConfig.Control, called on a listener's socket before it is bound. */
+typedef NetDialerControl NetListenConfigControl;
+
+/* net.ListenConfig. keep_alive and keep_alive_config are what the
+ * connections a TCP listener accepts get, read as the Dialer's are. */
+typedef struct NetListenConfig {
+    NetListenConfigControl control;
+    Duration keep_alive;
+    NetKeepAliveConfig keep_alive_config;
+} NetListenConfig;
+
+/* ListenConfig.Listen: a listener on address for "tcp", "tcp4", "tcp6",
+ * "unix" or "unixpacket", made in a. An empty host, or none at all as in
+ * ":8080", is every address of the machine, and port 0 asks for a free one.
+ * A host with several addresses listens on the first IPv4 one. A NULL lc is
+ * the zero ListenConfig. */
+BURROW_OWNS(ret) NetListener net_listen_config_listen(const NetListenConfig *lc,
+                                                      Alloc *a, Context ctx,
+                                                      Str network, Str address,
+                                                      Error *err);
+
+/* Listen, which is the zero ListenConfig's with context_background(). */
+BURROW_OWNS(ret) NetListener net_listen(Alloc *a, Str network, Str address, Error *err);
+
+/* Closes c if it is open and gives back what this package made for it, for
+ * any connection this package made: TCP, UDP, Unix and both ends of a Pipe.
+ * Anything else is only closed. The nil NetConn does nothing. */
+void net_conn_free(NetConn c);
+
+/* The same for a listener, which is TCP or Unix. */
+void net_listener_free(NetListener l);
 
 /* ------------------------------------------------------------- descriptors */
 

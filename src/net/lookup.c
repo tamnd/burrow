@@ -241,9 +241,7 @@ static Slice lk_copy_strs(Alloc *a, Slice src) {
     return out;
 }
 
-/* parseNetwork with needsProto false: the network, without the protocol an
- * "ip:" one may have after it, in *afnet. */
-static Error lk_parse_network(Str network, Str *afnet) {
+Error burrow__net_parse_network(Str network, bool needs_proto, Str *afnet, Int *proto) {
     static const char *const plain[] = {"tcp",  "tcp4", "tcp6",     "udp",
                                         "udp4", "udp6", "ip",       "ip4",
                                         "ip6",  "unix", "unixgram", "unixpacket"};
@@ -251,8 +249,10 @@ static Error lk_parse_network(Str network, Str *afnet) {
     Int i = network.len - 1;
     while (i >= 0 && network.p[i] != ':')
         i--;
+    *proto = 0;
     if (i < 0) {
-        if (!lk_one_of(network, plain, sizeof plain / sizeof plain[0]))
+        if (!lk_one_of(network, plain, sizeof plain / sizeof plain[0]) ||
+            (needs_proto && lk_one_of(network, ips, sizeof ips / sizeof ips[0])))
             return net_unknown_network_error(error_allocator(), network);
         *afnet = network;
         return BURROW_NO_ERROR;
@@ -261,11 +261,10 @@ static Error lk_parse_network(Str network, Str *afnet) {
     if (!lk_one_of(af, ips, sizeof ips / sizeof ips[0]))
         return net_unknown_network_error(error_allocator(), network);
     Str protostr = str_from_bytes(network.p + i + 1, network.len - i - 1);
-    Int proto = 0;
     Int used = 0;
-    if (!burrow__net_dtoi(protostr, &proto, &used) || used != protostr.len) {
+    if (!burrow__net_dtoi(protostr, proto, &used) || used != protostr.len) {
         Error e = BURROW_NO_ERROR;
-        (void)burrow__net_lookup_protocol(protostr, &e);
+        *proto = burrow__net_lookup_protocol(protostr, &e);
         if (BURROW_FAILED(e))
             return e;
     }
@@ -503,6 +502,11 @@ Slice net_resolver_lookup_host(NetResolver *r, Alloc *a, Context ctx, Str host,
     return out;
 }
 
+Slice burrow__net_lookup_ip_addr(NetResolver *r, Alloc *a, Context ctx, Str network,
+                                 Str host, Error *err) {
+    return lk_lookup_ip_addr(lk_r(r), a, ctx, network, host, err);
+}
+
 Slice net_resolver_lookup_ip_addr(NetResolver *r, Alloc *a, Context ctx, Str host,
                                   Error *err) {
     return lk_lookup_ip_addr(lk_r(r), a, ctx, BURROW_S("ip"), host, err);
@@ -515,7 +519,8 @@ Slice net_resolver_lookup_ip(NetResolver *r, Alloc *a, Context ctx, Str network,
     r = lk_r(r);
     Slice out = slice_nil(TYPE_NET_IP);
     Str afnet = BURROW_STR_EMPTY;
-    Error e = lk_parse_network(network, &afnet);
+    Int proto = 0;
+    Error e = burrow__net_parse_network(network, false, &afnet, &proto);
     if (BURROW_FAILED(e)) {
         BURROW_OUT(err, e);
         return out;

@@ -38,8 +38,7 @@ static void directives(Alloc *a) {
 
 static void tokens(Alloc *a) {
     // doc: tokens
-    Str words[] = {BURROW_S("func"), BURROW_S("Func"), BURROW_S("x1"),
-                   BURROW_S("1x")};
+    Str words[] = {BURROW_S("func"), BURROW_S("Func"), BURROW_S("x1"), BURROW_S("1x")};
     for (int i = 0; i < 4; i++) {
         Token tok = token_lookup(words[i]);
         fmt_printf_v("%-5s %-6s identifier=%t exported=%t\n", words[i],

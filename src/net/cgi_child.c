@@ -309,7 +309,8 @@ static const HttpResponseWriterVT cc_response_vt = {
     NULL,
 };
 
-burrow__CgiResponse *burrow__cgi_new_response(Alloc *a, HttpRequest *req, IoWriter out) {
+burrow__CgiResponse *burrow__cgi_new_response(Alloc *a, HttpRequest *req,
+                                              IoWriter out) {
     burrow__CgiResponse *r =
         (burrow__CgiResponse *)mem_alloc(a, sizeof *r, _Alignof(burrow__CgiResponse));
     if (r == NULL)
@@ -336,8 +337,8 @@ Error cgi_serve(HttpHandler handler) {
         req->body = http_no_body;
     if (handler.vt == NULL)
         handler = http_serve_mux_as_handler(http_default_serve_mux);
-    burrow__CgiResponse *rw = burrow__cgi_new_response(arena_allocator(&req->arena), req,
-                                                       os_file_as_io_writer(os_stdout));
+    burrow__CgiResponse *rw = burrow__cgi_new_response(
+        arena_allocator(&req->arena), req, os_file_as_io_writer(os_stdout));
     if (rw == NULL) {
         http_request_free(req);
         return burrow_err_out_of_memory;

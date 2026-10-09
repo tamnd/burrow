@@ -7380,10 +7380,14 @@ static void TestExtendedConnectClientWithoutServerSupport(TestingT *t) {
     X(TestTransportContentLengthWithoutBody)                                           \
     X(TestTransportCloseResponseBodyWhileRequestBodyHangs)                             \
     X(TestTransport300ResponseBody)                                                    \
-    X(TestTransportWriteByteTimeout) X(TestTransportSlowWrites)                        \
-        X(TestTransportSlowClose) X(TestTransportDialTLSContext)                       \
-            X(TestDialRaceResumesDial) X(TestIssue66763Race) X(TestIssue67671)         \
-                X(TestExtendedConnectClientWithServerSupport)                          \
-                    X(TestExtendedConnectClientWithoutServerSupport)
+    X(TestTransportWriteByteTimeout)                                                   \
+    X(TestTransportSlowWrites)                                                         \
+    X(TestTransportSlowClose)                                                          \
+    X(TestTransportDialTLSContext)                                                     \
+    X(TestDialRaceResumesDial)                                                         \
+    X(TestIssue66763Race)                                                              \
+    X(TestIssue67671)                                                                  \
+    X(TestExtendedConnectClientWithServerSupport)                                      \
+    X(TestExtendedConnectClientWithoutServerSupport)
 
 TESTING_MAIN(TESTS)

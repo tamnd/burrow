@@ -351,6 +351,8 @@ struct H2ctTT {
     H2ctRT *rts;
     H2ctBody *bodies;
     SyncWaitGroup rtwg;
+    SyncCond dial_cond; /* on mu, for dial_held */
+    bool dial_held;     /* dials wait until it is false */
 };
 
 static H2ctConn *h2ct_conn_new(H2ctTT *tt, NetConn cli, NetConn srv) {
@@ -393,6 +395,10 @@ static NetConn h2ct_dial(void *env, Context ctx, Str network, Str addr, Error *e
     (void)network;
     (void)addr;
     H2ctTT *tt = (H2ctTT *)env;
+    sync_mutex_lock(&tt->mu);
+    while (tt->dial_held)
+        sync_cond_wait(&tt->dial_cond);
+    sync_mutex_unlock(&tt->mu);
     NetConn cli;
     NetConn srv;
     net_pipe(tt->a, &cli, &srv);
@@ -427,6 +433,15 @@ static void h2ct_tt_start(H2ctTT *tt, TestingT *t) {
     tt->tr1.dial_context = BURROW_FN(HttpDialContextFunc, h2ct_dial, tt);
     tt->tr1.free_conn = BURROW_FN(HttpFreeConnFunc, h2ct_free_conn, tt);
     tt->conns_tail = &tt->conns;
+    tt->dial_cond = SYNC_COND(sync_mutex_locker(&tt->mu));
+}
+
+/* Lets the dials waiting for it go on. */
+static void h2ct_tt_release_dials(H2ctTT *tt) {
+    sync_mutex_lock(&tt->mu);
+    tt->dial_held = false;
+    sync_cond_broadcast(&tt->dial_cond);
+    sync_mutex_unlock(&tt->mu);
 }
 
 static void h2ct_body_close_with_error(H2ctBody *b, Error err);
@@ -435,6 +450,7 @@ static void h2ct_body_close_with_error(H2ctBody *b, Error err);
  * cancelled and every connection hung up on, so they end, and then it all
  * goes. */
 static void h2ct_tt_close(H2ctTT *tt) {
+    h2ct_tt_release_dials(tt);
     sync_mutex_lock(&tt->mu);
     Int unclaimed = 0;
     for (H2ctConn *tc = tt->conns; tc != NULL; tc = tc->next) {
@@ -2531,6 +2547,44 @@ static void TestTransportReturnsUnusedFlowControlMultipleWrites(TestingT *t) {
     h2ct_run(t, h2ct_returns_unused_flow_control, &one_data_frame);
 }
 
+/* newTestTransportWithUnusedConn: tt with a connection that was dialed for
+ * a request cancelled before the dial was done, and so never used. */
+static bool h2ct_tt_with_unused_conn(H2ctTT *tt) {
+    sync_mutex_lock(&tt->mu);
+    tt->dial_held = true;
+    sync_mutex_unlock(&tt->mu);
+
+    H2ctRT *rt = h2ct_tt_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    if (rt == NULL) {
+        h2ct_tt_release_dials(tt);
+        return false;
+    }
+    BURROW_CALLF0(rt->cancel);
+    bool done = h2ct_rt_wait_done(rt);
+    if (!done || BURROW_OK(rt->err)) {
+        h2ct_tt_release_dials(tt);
+        testing_t_fatalf_v(tt->t, "RoundTrip still running after request is canceled");
+        return false;
+    }
+
+    h2ct_tt_release_dials(tt);
+    return true;
+}
+
+static void h2ct_go_away_with_no_conns(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    H2CT_TRY(h2ct_tt_with_unused_conn(tt));
+    H2ctConn *tc = h2ct_get_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+    H2CT_TRY(h2ct_write_go_away(tc, 1, HTTP2_ERR_CODE_NO));
+    H2CT_TRY(h2ct_want_closed(tc));
+}
+
+static void TestTransportGoAwayWithNoConns(TestingT *t) {
+    h2ct_run(t, h2ct_go_away_with_no_conns, NULL);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -2603,6 +2657,7 @@ static void TestTransportReturnsUnusedFlowControlMultipleWrites(TestingT *t) {
     X(TestTransportWindowUpdateBeyondLimit)                                            \
     X(TestTransportAdjustsFlowControl)                                                 \
     X(TestTransportReturnsUnusedFlowControlSingleWrite)                                \
-    X(TestTransportReturnsUnusedFlowControlMultipleWrites)
+    X(TestTransportReturnsUnusedFlowControlMultipleWrites)                             \
+    X(TestTransportGoAwayWithNoConns)
 
 TESTING_MAIN(TESTS)

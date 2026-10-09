@@ -352,9 +352,15 @@ bool burrow__hpack_table_add(HpackTable *t, HpackHeaderField f) {
         memcpy(p + HP_KEY_HEAD, f.name.p, (size_t)f.name.len);
     if (f.value.len > 0)
         memcpy(p + HP_KEY_HEAD + f.name.len, f.value.p, (size_t)f.value.len);
-    HpackHeaderField e = {str_from_bytes(p + HP_KEY_HEAD, f.name.len),
-                          str_from_bytes(p + HP_KEY_HEAD + f.name.len, f.value.len),
-                          f.sensitive};
+    /* Built by hand and not with str_from_bytes, which gives an empty string a
+     * NULL pointer: an empty name still has to point just past the length, or
+     * hp_entry_key and hp_entry_free cannot find the block from it. */
+    HpackHeaderField e;
+    e.name.p = p + HP_KEY_HEAD;
+    e.name.len = f.name.len;
+    e.value.p = p + HP_KEY_HEAD + f.name.len;
+    e.value.len = f.value.len;
+    e.sensitive = f.sensitive;
     Str key = hp_entry_key(&e);
 
     /* The maps hold the key Strs, not the bytes, so the key an entry is found

@@ -656,7 +656,8 @@ text/html
 ```c
 Byte png[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
 char html[] = "  <!DOCTYPE html><title>hi</title>";
-Str ct = http_detect_content_type(slice_from(png, sizeof png, sizeof png, TYPE_BYTE));
+Str ct =
+    http_detect_content_type(slice_from(png, sizeof png, sizeof png, TYPE_BYTE));
 printf("%.*s\n", P(ct));
 Int n = (Int)strlen(html);
 ct = http_detect_content_type(slice_from(html, n, n, TYPE_BYTE));

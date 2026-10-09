@@ -104,5 +104,8 @@ int main(void) {
 }
 
 /* Output:
-PENDING
+7*8=56
+Divide: divide by zero
+Add: rpc: can't find method Arith.Add
+{"id":1,"result":42,"error":null}
 */

@@ -171,7 +171,10 @@ static void h2t_serve_job(void *env) {
 }
 
 /* newServerTester. The server's log goes nowhere, as optQuiet has it. */
-static bool h2t_start(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *env) {
+/* newServerTester, with h2 as the server's HTTP/2 config, which can be NULL
+ * and has to last until h2t_close. */
+static bool h2t_start_config(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *env,
+                             const HttpHTTP2Config *h2) {
     memset(st, 0, sizeof *st);
     st->t = t;
     st->a = heap_allocator();
@@ -179,6 +182,7 @@ static bool h2t_start(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *env) {
     http_protocols_set_http1(&st->protos, true);
     http_protocols_set_unencrypted_http2(&st->protos, true);
     st->srv.protocols = &st->protos;
+    st->srv.http2 = h2;
     st->hf = BURROW_FN(HttpHandlerFunc, fn != NULL ? fn : h2t_nop_handler, env);
     st->srv.handler = http_handler_func_as_handler(&st->hf);
     st->lg = log_new(st->a, io_discard, BURROW_STR_EMPTY, 0);
@@ -212,6 +216,10 @@ static bool h2t_start(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *env) {
     (void)st->cc.vt->set_read_deadline(st->cc.data,
                                        time_add(time_now(), 10 * TIME_SECOND));
     return true;
+}
+
+static bool h2t_start(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *env) {
+    return h2t_start_config(st, t, fn, env, NULL);
 }
 
 /* Close: hangs up, which ends the connection, and waits for the server to
@@ -284,9 +292,12 @@ static Http2Frame *h2t_read_kind(H2tTester *st, Http2FrameKind k) {
     return f;
 }
 
-/* greet: the preface and the SETTINGS both ways, then the server's
- * WINDOW_UPDATE and SETTINGS ACK, in either order. */
-static bool h2t_greet(H2tTester *st) {
+typedef void (*H2tSettingFn)(void *env, Http2Setting s);
+
+/* greetAndCheckSettings: the preface and the SETTINGS both ways, with check
+ * called on each setting the server sends when it isn't NULL, then the
+ * server's WINDOW_UPDATE and SETTINGS ACK, in either order. */
+static bool h2t_greet_and_check_settings(H2tTester *st, H2tSettingFn check, void *env) {
     if (!h2t_write_preface(st))
         return false;
     if (h2t_failed(st, "writing SETTINGS",
@@ -296,6 +307,11 @@ static bool h2t_greet(H2tTester *st) {
     if (f == NULL)
         return false;
     bool ack = burrow__http2_settings_frame_is_ack(f);
+    if (!ack && check != NULL) {
+        Int n = burrow__http2_settings_frame_num_settings(f);
+        for (Int i = 0; i < n; i++)
+            check(env, burrow__http2_settings_frame_setting(f, i));
+    }
     burrow__http2_frame_free(f);
     if (ack) {
         testing_t_errorf_v(st->t, "got SETTINGS frame with ACK set, want no ACK");
@@ -333,6 +349,11 @@ static bool h2t_greet(H2tTester *st) {
         return false;
     }
     return true;
+}
+
+/* greet. */
+static bool h2t_greet(H2tTester *st) {
+    return h2t_greet_and_check_settings(st, NULL, NULL);
 }
 
 static void h2t_field(H2tTester *st, Str k, Str v) {
@@ -2567,6 +2588,435 @@ static void TestServerSettingsFlowControlUpdateWithinLimit(TestingT *t) {
     h2t_settings_flow_control(t, 0);
 }
 
+/* wantFrameType. */
+static bool h2t_want_frame_type(H2tTester *st, Http2FrameKind k) {
+    Http2Frame *f = h2t_read_kind(st, k);
+    bool ok = f != NULL;
+    burrow__http2_frame_free(f);
+    return ok;
+}
+
+static void h2t_hello_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)r;
+    h2t_write_str(w, "hello");
+}
+
+/* Go's fake connection takes what the server writes without waiting for the
+ * test to read it, so the server's SETTINGS and WINDOW_UPDATE are out before it
+ * reads a bad frame. A net_pipe write waits for the reader, and a server that
+ * reads the bad frame first sends its GOAWAY and drops the WINDOW_UPDATE, as
+ * Go's does. So the bad bytes go after the test has read the two frames. */
+static bool h2t_write_after_greeting(H2tTester *st, const char *p, Int n) {
+    Error err = BURROW_NO_ERROR;
+    if (!h2t_want_frame_type(st, HTTP2_SETTINGS_FRAME) ||
+        !h2t_want_frame_type(st, HTTP2_WINDOW_UPDATE_FRAME))
+        return false;
+    (void)h2t_out_write(st, slice_from((void *)(uintptr_t)p, n, n, TYPE_BYTE), &err);
+    return !h2t_failed(st, "writing", err);
+}
+
+/* A HEADERS frame on stream 0x696e6669 with a length of 0, right after the
+ * preface. Go moves its clock past GoAwayTimeout before it looks for the
+ * close, and this waits for it. */
+static void TestIssue53(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    static const char data[] = "\x00\x00\x00\x01\ainfinfin\ad";
+    H2tTester st;
+    if (h2t_start(&st, t, h2t_hello_handler, NULL) && h2t_write_preface(&st) &&
+        h2t_write_after_greeting(&st, data, (Int)sizeof data - 1) &&
+        h2t_want_frame_type(&st, HTTP2_GO_AWAY_FRAME))
+        h2t_want_closed(&st);
+    h2t_close(&st);
+}
+
+typedef Error (*H2tUnblockFn)(HttpResponseWriter w, HttpRequest *r);
+typedef void (*H2tCheckErrFn)(TestingT *t, Error err);
+
+typedef struct H2tUnblock {
+    TestingT *t;
+    Chan *in;
+    Chan *done;
+    H2tUnblockFn handler;
+    H2tCheckErrFn check;
+} H2tUnblock;
+
+static void h2t_unblock_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    H2tUnblock *u = (H2tUnblock *)env;
+    bool v = true;
+    chan_send(u->in, &v);
+    Error err = u->handler(w, r);
+    if (u->check != NULL)
+        u->check(u->t, err);
+    chan_send(u->done, &v);
+}
+
+/* testServerPostUnblock: a POST that stays open, with other's headers too,
+ * and a handler that waits in handler. Then fn, after which handler has to
+ * return. Go checks the error handler gives back on the test's goroutine, and
+ * this checks it on the handler's. */
+static void h2t_server_post_unblock(TestingT *t, H2tUnblockFn handler, H2tFrameFn fn,
+                                    H2tCheckErrFn check, const Str *other,
+                                    size_t nother) {
+    H2tUnblock u = {t, chan_make(heap_allocator(), TYPE_BOOL, 1),
+                    chan_make(heap_allocator(), TYPE_BOOL, 1), handler, check};
+    if (u.in == NULL || u.done == NULL) {
+        testing_t_errorf_v(t, "no memory");
+    } else {
+        Str kv[6] = {BURROW_S(":method"), BURROW_S("POST")};
+        size_t n = 2;
+        for (size_t i = 0; i < nother && n < sizeof kv / sizeof kv[0]; i++)
+            kv[n++] = other[i];
+        H2tTester st;
+        if (h2t_start(&st, t, h2t_unblock_handler, &u) && h2t_greet(&st) &&
+            h2t_write_headers(&st, 1, h2t_encode_header(&st, kv, n), false, true)) {
+            bool v;
+            (void)chan_recv(u.in, &v);
+            if (fn(&st))
+                (void)chan_recv(u.done, &v);
+        }
+        h2t_close(&st);
+    }
+    if (u.in != NULL)
+        chan_free(u.in);
+    if (u.done != NULL)
+        chan_free(u.done);
+}
+
+static Error h2t_block_until_closed(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    Chan *c = w.vt->close_notify(w.data);
+    if (c != NULL)
+        (void)chan_recv(c, NULL);
+    return BURROW_NO_ERROR;
+}
+
+static bool h2t_close_conn(H2tTester *st) {
+    (void)st->cc.vt->closer.close(st->cc.data);
+    return true;
+}
+
+static bool h2t_write_rst_cancel(H2tTester *st) {
+    return !h2t_failed(
+        st, "WriteRSTStream",
+        burrow__http2_framer_write_rst_stream(st->fr, 1, HTTP2_ERR_CODE_CANCEL));
+}
+
+/* Data longer than the declared Content-Length, which is a stream error. */
+static bool h2t_write_past_content_length(H2tTester *st) {
+    return h2t_write_data(st, 1, true, "1234", 4);
+}
+
+static void TestServer_CloseNotify_After_ConnClose(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_post_unblock(t, h2t_block_until_closed, h2t_close_conn, NULL, NULL, 0);
+}
+
+static void TestServer_CloseNotify_After_RSTStream(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_post_unblock(t, h2t_block_until_closed, h2t_write_rst_cancel, NULL, NULL,
+                            0);
+}
+
+/* CloseNotify unblocks after a stream error from the client's side that it
+ * didn't ask for, unlike TestServer_CloseNotify_After_RSTStream. */
+static void TestServer_CloseNotify_After_StreamError(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    static const Str cl[] = {S_("content-length"), S_("3")};
+    h2t_server_post_unblock(t, h2t_block_until_closed, h2t_write_past_content_length,
+                            NULL, cl, 2);
+}
+
+static Error h2t_read_one_byte(HttpResponseWriter w, HttpRequest *r) {
+    (void)w;
+    Byte b[1];
+    Error err = BURROW_NO_ERROR;
+    IoReader body = io_read_closer_as_io_reader(r->body);
+    (void)body.vt->read(body.data, slice_from(b, 1, 1, TYPE_BYTE), &err);
+    return err;
+}
+
+static void h2t_want_some_read_error(TestingT *t, Error err) {
+    if (!BURROW_FAILED(err))
+        testing_t_errorf_v(t, "unexpected nil error from Request.Body.Read");
+}
+
+static void TestServer_DeadConn_Unblocks_Read(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_post_unblock(t, h2t_read_one_byte, h2t_close_conn,
+                            h2t_want_some_read_error, NULL, 0);
+}
+
+static void h2t_want_cancel_error(TestingT *t, Error err) {
+    Http2StreamError se;
+    if (!burrow__http2_error_stream(err, &se) || se.stream_id != 1 ||
+        se.code != HTTP2_ERR_CODE_CANCEL || BURROW_FAILED(se.cause))
+        testing_t_errorf_v(
+            t, "Read error = %v; want %v", err,
+            burrow__http2_stream_error(1, HTTP2_ERR_CODE_CANCEL, BURROW_NO_ERROR));
+}
+
+static void TestServer_RSTStream_Unblocks_Read(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_post_unblock(t, h2t_read_one_byte, h2t_write_rst_cancel,
+                            h2t_want_cancel_error, NULL, 0);
+}
+
+enum { H2T_IN, H2T_WROTE_RST, H2T_HEADER_WRITTEN, H2T_UNBLOCK, H2T_NCHAN };
+
+static void h2t_header_write_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    Chan **c = (Chan **)env;
+    bool v = true;
+    chan_send(c[H2T_IN], &v);
+    (void)chan_recv(c[H2T_WROTE_RST], &v);
+    (void)http_header_set(http_response_writer_header(w), BURROW_S("foo"),
+                          BURROW_S("bar"));
+    http_response_writer_write_header(w, 200);
+    (void)w.vt->flush(w.data);
+    chan_send(c[H2T_HEADER_WRITTEN], &v);
+    (void)chan_recv(c[H2T_UNBLOCK], &v);
+}
+
+/* A handler that writes its header after the client has reset the stream
+ * doesn't get stuck. */
+static void TestServer_RSTStream_Unblocks_Header_Write(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    Chan *c[H2T_NCHAN];
+    bool ok = true;
+    for (int i = 0; i < H2T_NCHAN; i++) {
+        c[i] = chan_make(heap_allocator(), TYPE_BOOL, 1);
+        ok = ok && c[i] != NULL;
+    }
+    H2tTester st;
+    if (!ok) {
+        testing_t_errorf_v(t, "no memory");
+    } else {
+        if (h2t_start(&st, t, h2t_header_write_handler, c) && h2t_greet(&st) &&
+            h2t_write_headers(&st, 1, h2t_encode_header(&st, h2t_post, 2), false,
+                              true)) {
+            bool v = true;
+            (void)chan_recv(c[H2T_IN], &v);
+            if (h2t_write_rst_cancel(&st)) {
+                chan_send(c[H2T_WROTE_RST], &v);
+                (void)chan_recv(c[H2T_HEADER_WRITTEN], &v);
+            }
+        }
+        chan_close(c[H2T_WROTE_RST]);
+        chan_close(c[H2T_UNBLOCK]);
+        h2t_close(&st);
+    }
+    for (int i = 0; i < H2T_NCHAN; i++) {
+        if (c[i] != NULL)
+            chan_free(c[i]);
+    }
+}
+
+/* Go's call.do with readBodyHandler. Each count sent on step has the handler
+ * read that many bytes of the body, which the tests send as zeros, and then
+ * say it's done. The handler returns once step is closed. */
+typedef struct H2tReads {
+    TestingT *t;
+    Chan *step;
+    Chan *done;
+} H2tReads;
+
+static void h2t_reads_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)w;
+    H2tReads *rd = (H2tReads *)env;
+    Int n = 0;
+    while (chan_recv(rd->step, &n)) {
+        Byte *buf = (Byte *)mem_alloc(heap_allocator(), (size_t)n, 1);
+        if (buf == NULL) {
+            testing_t_errorf_v(rd->t, "no memory");
+        } else {
+            Error err = BURROW_NO_ERROR;
+            (void)io_read_full(io_read_closer_as_io_reader(r->body),
+                               slice_from(buf, n, n, TYPE_BYTE), &err);
+            if (BURROW_FAILED(err)) {
+                testing_t_errorf_v(rd->t, "%v", err);
+            } else {
+                for (Int i = 0; i < n; i++) {
+                    if (buf[i] != 0) {
+                        testing_t_errorf_v(rd->t, "read byte %d = %d, want 0", i,
+                                           (int)buf[i]);
+                        break;
+                    }
+                }
+            }
+            mem_free(heap_allocator(), buf, (size_t)n, 1);
+        }
+        bool v = true;
+        chan_send(rd->done, &v);
+    }
+}
+
+static bool h2t_reads_make(TestingT *t, H2tReads *rd) {
+    rd->t = t;
+    rd->step = chan_make(heap_allocator(), TYPE_INT, 0);
+    rd->done = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    if (rd->step != NULL && rd->done != NULL)
+        return true;
+    testing_t_errorf_v(t, "no memory");
+    return false;
+}
+
+static void h2t_reads_free(H2tReads *rd) {
+    if (rd->step != NULL)
+        chan_free(rd->step);
+    if (rd->done != NULL)
+        chan_free(rd->done);
+}
+
+static bool h2t_do_read(H2tReads *rd, Int n) {
+    chan_send(rd->step, &n);
+    bool v;
+    return chan_recv(rd->done, &v);
+}
+
+static bool h2t_want_window_update(H2tTester *st, uint32_t id, uint32_t incr) {
+    Http2Frame *f = h2t_read_kind(st, HTTP2_WINDOW_UPDATE_FRAME);
+    if (f == NULL)
+        return false;
+    bool ok = f->header.stream_id == id && f->u.window_update.increment == incr;
+    if (!ok)
+        testing_t_errorf_v(st->t,
+                           "got WINDOW_UPDATE stream %d increment %d, want %d %d",
+                           (int)f->header.stream_id, (Int)f->u.window_update.increment,
+                           (int)id, (Int)incr);
+    burrow__http2_frame_free(f);
+    return ok;
+}
+
+/* At least twice the initial window, or greet gets stuck waiting for a
+ * WINDOW_UPDATE, and less than MAX_FRAME_SIZE. */
+enum { H2T_WINDOW_SIZE = 65535 * 2 };
+
+/* A POST with its data to come, to a server whose windows are
+ * H2T_WINDOW_SIZE, and a handler that reads as rd says. data is
+ * H2T_WINDOW_SIZE zeros. */
+static bool h2t_window_update_start(H2tTester *st, TestingT *t, H2tReads *rd,
+                                    HttpHTTP2Config *h2, Byte **data) {
+    memset(h2, 0, sizeof *h2);
+    h2->max_receive_buffer_per_connection = H2T_WINDOW_SIZE;
+    h2->max_receive_buffer_per_stream = H2T_WINDOW_SIZE;
+    *data = (Byte *)mem_alloc(heap_allocator(), H2T_WINDOW_SIZE, 1);
+    if (*data == NULL) {
+        testing_t_errorf_v(t, "no memory");
+        memset(st, 0, sizeof *st);
+        return false;
+    }
+    return h2t_start_config(st, t, h2t_reads_handler, rd, h2) && h2t_greet(st) &&
+           h2t_write_headers(st, 1, h2t_encode_header(st, h2t_post, 2), false, true);
+}
+
+static void TestServer_Handler_Sends_WindowUpdate(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    H2tReads rd;
+    if (!h2t_reads_make(t, &rd)) {
+        h2t_reads_free(&rd);
+        return;
+    }
+    HttpHTTP2Config h2;
+    Byte *data = NULL;
+    H2tTester st;
+    /* Less than half the window, which the handler reads. The server holds on
+     * to the 1024 bytes of credit, to go with a later update. Then up to the
+     * window's limit, and the server gives back what it held. Then the handler
+     * reads that too, and the server gives back the rest. */
+    if (h2t_window_update_start(&st, t, &rd, &h2, &data) &&
+        h2t_write_data(&st, 1, false, (const char *)data, 1024) &&
+        h2t_do_read(&rd, 1024) &&
+        h2t_write_data(&st, 1, false, (const char *)data + 1024,
+                       H2T_WINDOW_SIZE - 1024) &&
+        h2t_want_window_update(&st, 0, 1024) && h2t_want_window_update(&st, 1, 1024) &&
+        h2t_do_read(&rd, H2T_WINDOW_SIZE - 1024) &&
+        h2t_want_window_update(&st, 0, H2T_WINDOW_SIZE - 1024))
+        (void)h2t_want_window_update(&st, 1, H2T_WINDOW_SIZE - 1024);
+    chan_close(rd.step);
+    h2t_close(&st);
+    h2t_reads_free(&rd);
+    if (data != NULL)
+        mem_free(heap_allocator(), data, H2T_WINDOW_SIZE, 1);
+}
+
+/* TestServer_Handler_Sends_WindowUpdate with padding. See
+ * golang.org/issue/16556 */
+static void TestServer_Handler_Sends_WindowUpdate_Padding(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    enum { N = H2T_WINDOW_SIZE / 2, PAD = 4 };
+    H2tReads rd;
+    if (!h2t_reads_make(t, &rd)) {
+        h2t_reads_free(&rd);
+        return;
+    }
+    HttpHTTP2Config h2;
+    Byte *data = NULL;
+    H2tTester st;
+    /* Half a window of data, with some padding, which the handler reads. The
+     * server gives back the body and the padding, 4 bytes of it and 1 of its
+     * length. */
+    if (h2t_window_update_start(&st, t, &rd, &h2, &data) &&
+        !h2t_failed(&st, "WriteDataPadded",
+                    burrow__http2_framer_write_data_padded(
+                        st.fr, 1, false, slice_from(data, N, N, TYPE_BYTE),
+                        slice_from(data, PAD, PAD, TYPE_BYTE))) &&
+        h2t_do_read(&rd, N) && h2t_want_window_update(&st, 0, N + 1 + PAD))
+        (void)h2t_want_window_update(&st, 1, N + 1 + PAD);
+    chan_close(rd.step);
+    h2t_close(&st);
+    h2t_reads_free(&rd);
+    if (data != NULL)
+        mem_free(heap_allocator(), data, H2T_WINDOW_SIZE, 1);
+}
+
+static void h2t_handle_missing_trailer(HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    (void)http_header_set(http_response_writer_header(w), BURROW_S("Trailer"),
+                          BURROW_S("test-trailer"));
+}
+
+static bool h2t_client_missing_trailer(H2tTester *st) {
+    return h2t_get_slash(st) && h2t_want_headers(st, 1, false, NULL, 0) &&
+           h2t_want_data(st, 1, true, "");
+}
+
+static void TestServer_Response_Stream_With_Missing_Trailer(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_server_response(t, h2t_handle_missing_trailer, h2t_client_missing_trailer);
+}
+
+static void h2t_check_no_rfc7540(void *env, Http2Setting s) {
+    if (s.id == HTTP2_SETTING_NO_RFC7540_PRIORITIES)
+        *(bool *)env = s.val == 1;
+}
+
+static void TestServerSettingNoRFC7540Priorities(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    bool got = false;
+    H2tTester st;
+    if (h2t_start(&st, t, NULL, NULL) &&
+        h2t_greet_and_check_settings(&st, h2t_check_no_rfc7540, &got) && !got)
+        testing_t_errorf_v(t, "want SETTINGS_NO_RFC7540_PRIORITIES to be %t, got %t",
+                           true, got);
+    h2t_close(&st);
+}
+
+/* The SETTINGS frame goes after the server's, for the reason
+ * h2t_write_after_greeting gives. */
+static void TestServerSettingNoRFC7540PrioritiesInvalid(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    Http2Setting s = {HTTP2_SETTING_NO_RFC7540_PRIORITIES, 2};
+    H2tTester st;
+    if (h2t_start(&st, t, NULL, NULL) && h2t_write_preface(&st) &&
+        h2t_want_frame_type(&st, HTTP2_SETTINGS_FRAME) &&
+        h2t_want_frame_type(&st, HTTP2_WINDOW_UPDATE_FRAME) &&
+        !h2t_failed(&st, "WriteSettings",
+                    burrow__http2_framer_write_settings(st.fr, &s, 1)))
+        (void)h2t_want_go_away(&st, 0, HTTP2_ERR_CODE_PROTOCOL);
+    h2t_close(&st);
+}
+
 #define TESTS(X)                                                                       \
     X(TestServer)                                                                      \
     X(TestServer_Request_Get)                                                          \
@@ -2653,6 +3103,18 @@ static void TestServerSettingsFlowControlUpdateWithinLimit(TestingT *t) {
     X(TestServerInvalidPathHeader)                                                     \
     X(TestServerPathInitialSlashes)                                                    \
     X(TestServerSettingsFlowControlUpdateBeyondLimit)                                  \
-    X(TestServerSettingsFlowControlUpdateWithinLimit)
+    X(TestServerSettingsFlowControlUpdateWithinLimit)                                  \
+    X(TestIssue53)                                                                     \
+    X(TestServer_CloseNotify_After_ConnClose)                                          \
+    X(TestServer_CloseNotify_After_RSTStream)                                          \
+    X(TestServer_CloseNotify_After_StreamError)                                        \
+    X(TestServer_DeadConn_Unblocks_Read)                                               \
+    X(TestServer_RSTStream_Unblocks_Read)                                              \
+    X(TestServer_RSTStream_Unblocks_Header_Write)                                      \
+    X(TestServer_Handler_Sends_WindowUpdate)                                           \
+    X(TestServer_Handler_Sends_WindowUpdate_Padding)                                   \
+    X(TestServer_Response_Stream_With_Missing_Trailer)                                 \
+    X(TestServerSettingNoRFC7540Priorities)                                            \
+    X(TestServerSettingNoRFC7540PrioritiesInvalid)
 
 TESTING_MAIN(TESTS)

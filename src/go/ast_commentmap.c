@@ -398,15 +398,18 @@ Str ast_comment_map_string(AstCommentMap cmap, Alloc *a) {
     strings_builder_write_string(&buf, BURROW_S("CommentMap {\n"), &err);
     for (Int i = 0; i < nodes.len && BURROW_OK(err); i++) {
         AstNode node = acm_at(nodes, i);
+        /* The Anys are locals because MSVC makes an unused copy of a compound
+         * literal for every _Generic that looks at it, and warns about each. */
+        Any nv = BURROW_ANY(ast_node_type(node), node);
+        Any pv = BURROW_ANY(TYPE_AST_NODE, &node);
         Str s;
         if (node->kind == AST_KIND_IDENT) {
             s = ((AstIdent *)node)->name;
         } else {
-            s = fmt_sprintf_v(sa, "*%T", BURROW_ANY(ast_node_type(node), node));
+            s = fmt_sprintf_v(sa, "*%T", nv);
         }
-        Str line =
-            fmt_sprintf_v(sa, "\t%p  %20s:  %s\n", BURROW_ANY(TYPE_AST_NODE, &node), s,
-                          acm_summary(sa, acm_get(cmap, node)));
+        Str line = fmt_sprintf_v(sa, "\t%p  %20s:  %s\n", pv, s,
+                                 acm_summary(sa, acm_get(cmap, node)));
         strings_builder_write_string(&buf, line, &err);
     }
     strings_builder_write_string(&buf, BURROW_S("}\n"), &err);

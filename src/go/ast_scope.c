@@ -70,8 +70,9 @@ Str ast_scope_string(AstScope *s, Alloc *a) {
     Alloc *ea = error_allocator();
     StringsBuilder buf = STRINGS_BUILDER(a);
     Error err = BURROW_NO_ERROR;
-    strings_builder_write_string(
-        &buf, fmt_sprintf_v(ea, "scope %p {", BURROW_ANY(TYPE_OF(AstScopePtr), &s)), &err);
+    /* A local, so MSVC has no compound literal to copy for each _Generic. */
+    Any sv = BURROW_ANY(TYPE_OF(AstScopePtr), &s);
+    strings_builder_write_string(&buf, fmt_sprintf_v(ea, "scope %p {", sv), &err);
     if (s != NULL && map_len(s->objects) > 0) {
         strings_builder_write_string(&buf, BURROW_S("\n"), &err);
         MapIter it = map_iter(s->objects);
@@ -79,10 +80,11 @@ Str ast_scope_string(AstScope *s, Alloc *a) {
         void *v = NULL;
         while (map_next(&it, &k, &v)) {
             AstObject *obj = *(AstObject **)v;
-            strings_builder_write_string(
-                &buf,
-                fmt_sprintf_v(ea, "\t%s %s\n", ast_obj_kind_string(obj->kind), obj->name),
-                &err);
+            strings_builder_write_string(&buf,
+                                         fmt_sprintf_v(ea, "\t%s %s\n",
+                                                       ast_obj_kind_string(obj->kind),
+                                                       obj->name),
+                                         &err);
         }
     }
     strings_builder_write_string(&buf, BURROW_S("}\n"), &err);
@@ -145,14 +147,16 @@ TokenPos ast_object_pos(AstObject *obj) {
     if (field != NULL) {
         return as_ident_list_pos(field->names, name);
     }
-    AstImportSpec *imp = (AstImportSpec *)as_decl_node(obj->decl, TYPE_OF(AstImportSpecPtr));
+    AstImportSpec *imp =
+        (AstImportSpec *)as_decl_node(obj->decl, TYPE_OF(AstImportSpecPtr));
     if (imp != NULL) {
         if (imp->name != NULL && str_eq(imp->name->name, name)) {
             return ast_ident_pos(imp->name);
         }
         return ast_basic_lit_pos(imp->path);
     }
-    AstValueSpec *vs = (AstValueSpec *)as_decl_node(obj->decl, TYPE_OF(AstValueSpecPtr));
+    AstValueSpec *vs =
+        (AstValueSpec *)as_decl_node(obj->decl, TYPE_OF(AstValueSpecPtr));
     if (vs != NULL) {
         return as_ident_list_pos(vs->names, name);
     }
@@ -164,11 +168,13 @@ TokenPos ast_object_pos(AstObject *obj) {
     if (fd != NULL) {
         return str_eq(fd->name->name, name) ? ast_ident_pos(fd->name) : TOKEN_NO_POS;
     }
-    AstLabeledStmt *ls = (AstLabeledStmt *)as_decl_node(obj->decl, TYPE_OF(AstLabeledStmtPtr));
+    AstLabeledStmt *ls =
+        (AstLabeledStmt *)as_decl_node(obj->decl, TYPE_OF(AstLabeledStmtPtr));
     if (ls != NULL) {
         return str_eq(ls->label->name, name) ? ast_ident_pos(ls->label) : TOKEN_NO_POS;
     }
-    AstAssignStmt *as = (AstAssignStmt *)as_decl_node(obj->decl, TYPE_OF(AstAssignStmtPtr));
+    AstAssignStmt *as =
+        (AstAssignStmt *)as_decl_node(obj->decl, TYPE_OF(AstAssignStmtPtr));
     if (as != NULL) {
         for (Int i = 0; i < as->lhs.len; i++) {
             AstExpr x = BURROW_AT(AstExpr, as->lhs, i);
@@ -192,10 +198,12 @@ typedef struct AsBuilder {
 } AsBuilder;
 
 static void as_error(AsBuilder *p, TokenPos pos, Str msg) {
-    go_scanner_error_list_add(&p->errors, p->a, token_file_set_position(p->fset, pos), msg);
+    go_scanner_error_list_add(&p->errors, p->a, token_file_set_position(p->fset, pos),
+                              msg);
 }
 
-static void as_declare(AsBuilder *p, AstScope *scope, AstScope *alt_scope, AstObject *obj) {
+static void as_declare(AsBuilder *p, AstScope *scope, AstScope *alt_scope,
+                       AstObject *obj) {
     AstObject *alt = ast_scope_insert(scope, obj);
     if (alt == NULL && alt_scope != NULL) {
         /* see if there is a conflicting declaration in alt_scope */
@@ -229,8 +237,9 @@ static bool as_resolve(AstScope *scope, AstIdent *ident) {
     return false;
 }
 
-static void as_import(AsBuilder *p, Map *imports, AstImporter importer, AstScope *pkg_scope,
-                      AstScope *file_scope, AstImportSpec *spec, bool *import_errors) {
+static void as_import(AsBuilder *p, Map *imports, AstImporter importer,
+                      AstScope *pkg_scope, AstScope *file_scope, AstImportSpec *spec,
+                      bool *import_errors) {
     Error uerr = BURROW_NO_ERROR;
     Str path = strconv_unquote(p->a, spec->path->value, &uerr);
     (void)uerr;
@@ -278,8 +287,9 @@ static void as_import(AsBuilder *p, Map *imports, AstImporter importer, AstScope
     }
 }
 
-static void as_resolve_file(AsBuilder *p, AstFile *file, Map *imports, AstImporter importer,
-                            AstScope *pkg_scope, AstScope *universe) {
+static void as_resolve_file(AsBuilder *p, AstFile *file, Map *imports,
+                            AstImporter importer, AstScope *pkg_scope,
+                            AstScope *universe) {
     /* build the file scope by processing all the imports */
     bool import_errors = false;
     AstScope *file_scope = ast_new_scope(p->a, pkg_scope);
@@ -306,8 +316,9 @@ static void as_resolve_file(AsBuilder *p, AstFile *file, Map *imports, AstImport
         AstIdent *ident = BURROW_AT(AstIdent *, file->unresolved, i);
         if (!as_resolve(file_scope, ident)) {
             ArenaMark m = error_mark();
-            as_error(p, ast_ident_pos(ident),
-                     fmt_sprintf_v(error_allocator(), "undeclared name: %s", ident->name));
+            as_error(
+                p, ast_ident_pos(ident),
+                fmt_sprintf_v(error_allocator(), "undeclared name: %s", ident->name));
             error_release(m);
             BURROW_AT(AstIdent *, file->unresolved, n) = ident;
             n++;
@@ -317,8 +328,8 @@ static void as_resolve_file(AsBuilder *p, AstFile *file, Map *imports, AstImport
     pkg_scope->outer = universe; /* put the universe back */
 }
 
-AstPackage *ast_new_package(Alloc *a, TokenFileSet *fset, Map *files, AstImporter importer,
-                            AstScope *universe, Error *err) {
+AstPackage *ast_new_package(Alloc *a, TokenFileSet *fset, Map *files,
+                            AstImporter importer, AstScope *universe, Error *err) {
     AsBuilder p = {a, fset, {NULL, 0, 0, NULL}};
     *err = BURROW_NO_ERROR;
 

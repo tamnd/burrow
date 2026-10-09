@@ -649,6 +649,23 @@ burrow__PollStatus burrow__poll_wait(burrow__PollDesc *pd, uint32_t mode) {
     return BURROW_POLL_READY;
 }
 
+burrow__PollStatus burrow__poll_reset(burrow__PollDesc *pd, uint32_t mode) {
+    if (mode != BURROW_POLL_READ && mode != BURROW_POLL_WRITE)
+        runtime_throw(BURROW_S("netpoll: a reset for neither reading nor writing"));
+
+    burrow__PollStatus st = check_err(pd, mode);
+    if (st != BURROW_POLL_READY)
+        return st;
+
+    /* Only a notification is cleared. A goroutine in the word is a second
+     * caller in the same direction, and burrow__poll_wait is where that is
+     * caught and stopped. */
+    uintptr_t *gpp = (mode == BURROW_POLL_READ) ? &pd->rg : &pd->wg;
+    uintptr_t ready = PD_READY;
+    (void)burrow__atomic_cas_uptr(gpp, &ready, PD_NIL);
+    return BURROW_POLL_READY;
+}
+
 #if defined(BURROW_NETPOLL_COMPLETION)
 
 void burrow__poll_wait_canceled(burrow__PollDesc *pd, uint32_t mode) {

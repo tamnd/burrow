@@ -134,7 +134,7 @@ static const Str tk_tokens[BURROW__TOKEN_ADDITIONAL_END] = {
     [TOKEN_SELECT] = BURROW_S_INIT("select"),
     [TOKEN_STRUCT] = BURROW_S_INIT("struct"),
     [TOKEN_SWITCH] = BURROW_S_INIT("switch"),
-    [TOKEN_TYPE] = BURROW_S_INIT("type"),
+    [TOKEN_TYPE_] = BURROW_S_INIT("type"),
     [TOKEN_VAR] = BURROW_S_INIT("var"),
 
     [TOKEN_TILDE] = BURROW_S_INIT("~"),

@@ -284,7 +284,8 @@ static Error dl_resolve_addr_list(NetResolver *r, Alloc *a, Context ctx, Str op,
     Int n = 0;
     for (Int i = 0; i < out->n; i++) {
         const DlAddr *x = &out->p[i];
-        if (!str_eq(dl_addr(x).vt->network(dl_addr(x).data), hnet))
+        NetAddr xa = dl_addr(x);
+        if (xa.vt == NULL || !str_eq(xa.vt->network(xa.data), hnet))
             return dl_addr_error(DL_LIT("mismatched local address type"),
                                  dl_hint_string(hint));
         if (!wildcard && !dl_is_wildcard(dl_ip(x)) && !dl_match_family(dl_ip(x), hip))
@@ -840,7 +841,8 @@ static NetConn dl_dial_parallel(DlSys *sd, Alloc *a, Context ctx, DlList primari
     return c;
 }
 
-static const NetDialer dl_zero_dialer;
+/* Not const: MSVC wants const objects to have an initializer. */
+static NetDialer dl_zero_dialer;
 
 NetConn net_dialer_dial_context(const NetDialer *d, Alloc *a, Context ctx, Str network,
                                 Str address, Error *err) {

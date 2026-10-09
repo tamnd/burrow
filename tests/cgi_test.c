@@ -978,7 +978,7 @@ static void TestCopyError(TestingT *t) {
         if (!handler_running())
             break;
         testing_t_logf_v(t, "handler still running %v after conn.Close",
-                         time_since(closed));
+                         duration_string(time_since(closed), a));
     }
 
 done:

@@ -180,7 +180,8 @@ static void child_serve(void *env, HttpResponseWriter rw, HttpRequest *req) {
     Alloc *a = (Alloc *)env;
     IoWriter w = http_response_writer_as_io_writer(rw);
     if (str_eq(http_request_form_value(req, S("nil-request-body")), S("1"))) {
-        (void)fmt_fprintf_v(w, "nil-request-body=%v\n", req->body.vt == NULL);
+        bool nil_body = req->body.vt == NULL;
+        (void)fmt_fprintf_v(w, "nil-request-body=%v\n", nil_body);
         return;
     }
     (void)http_header_set(http_response_writer_header(rw), S("X-Test-Header"),

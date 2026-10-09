@@ -142,6 +142,7 @@
 #include "burrow/net/netip.h"
 #include "burrow/net/rpc.h"
 #include "burrow/net/rpc/jsonrpc.h"
+#include "burrow/net/smtp.h"
 #include "burrow/net/textproto.h"
 #include "burrow/net/url.h"
 #include "burrow/num.h"

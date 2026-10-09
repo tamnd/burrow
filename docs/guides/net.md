@@ -2007,3 +2007,47 @@ PENDING
 `rpc_handle_http` serves the default server over HTTP as well, on `RPC_DEFAULT_RPC_PATH`, where a client asks for the connection with a CONNECT, and puts a page listing the services and how often each method has been called at `RPC_DEFAULT_DEBUG_PATH`.
 
 Go's server makes a fresh argument and reply for every call and leaves them to the collector. Here they come from an arena that goes back once the reply is sent, and a method whose first argument is an `EncodingAllocArg` gets that arena to build its reply in, such as a string or a slice that grows.
+
+## Sending mail
+
+`net/smtp` follows Go's `net/smtp`, a client for the Simple Mail Transfer Protocol. `smtp_send_mail` does the whole job in one call: it dials, says hello, authenticates when given an `SmtpAuth`, and sends one message to a list of recipients. For more control, `smtp_dial` or `smtp_new_client` gives an `SmtpClient`, and the commands go one at a time. Here the server is a pretend one on the other end of a `net_pipe`, which prints what the client says to it:
+
+<!-- example: ../examples/net/smtp.c#client -->
+```c
+Error err;
+SmtpClient *c =
+    smtp_new_client(heap_allocator(), conn, BURROW_S("mail.example.com"), &err);
+if (c == NULL) {
+    fmt_printf_v("%v\n", err);
+    return;
+}
+
+/* Set the sender and recipient first. */
+err = smtp_client_mail(c, BURROW_S("sender@example.org"));
+if (BURROW_OK(err))
+    err = smtp_client_rcpt(c, BURROW_S("recipient@example.net"));
+
+/* Send the email body. */
+IoWriteCloser wc = {0};
+if (BURROW_OK(err))
+    wc = smtp_client_data(c, &err);
+if (wc.vt != NULL) {
+    fmt_fprintf_v(io_write_closer_as_io_writer(wc), "This is the email body");
+    err = wc.vt->closer.close(wc.data);
+}
+
+/* Send the QUIT command and close the connection. */
+if (BURROW_OK(err))
+    err = smtp_client_quit(c);
+sync_wait_group_wait(&wg);
+fmt_printf_v("sent: %v\n", err);
+smtp_client_free(c);
+```
+
+That prints:
+
+```
+PENDING
+```
+
+`smtp_plain_auth` and `smtp_crammd5_auth` make the two mechanisms Go has. PLAIN sends the password as it is, so, as in Go, it refuses unless the connection uses TLS or the server is on localhost. STARTTLS needs `crypto/tls`, which is not ported yet, so `smtp_client_start_tls` is still to come. Until then `smtp_send_mail` gives `smtp_err_no_tls` for a server that offers STARTTLS, where Go would have switched to TLS, rather than send the mail in the clear.

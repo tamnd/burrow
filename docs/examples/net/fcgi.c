@@ -103,5 +103,9 @@ int main(void) {
 }
 
 /* Output:
-PENDING
+Status: 200 OK
+Content-Type: text/plain; charset=utf-8
+Date: Thu, 08 Oct 2026 10:00:00 GMT
+
+hello jane, you asked for /hello
 */

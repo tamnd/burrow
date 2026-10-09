@@ -46,5 +46,6 @@ src/crypto/nistec_p256_table.h
 tests/ecdsa_test_gen.h
 tests/dsa_test_gen.h
 tests/mlkem_test_gen.h
+tests/mldsa_test_gen.h
 tests/chacha20poly1305_test_gen.h
 tests/hpke_test_gen.h

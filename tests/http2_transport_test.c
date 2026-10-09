@@ -1120,6 +1120,18 @@ static bool h2ct_write_data(H2ctConn *tc, uint32_t id, bool end_stream,
                         burrow__http2_framer_write_data(tc->fr, id, end_stream, p));
 }
 
+/* writeData with n zero bytes, as Go's make([]byte, n). */
+static bool h2ct_write_zeros(H2ctConn *tc, uint32_t id, bool end_stream, Int n) {
+    static const Byte zeros[5000];
+    if (n > (Int)sizeof zeros) {
+        testing_t_errorf_v(tc->t, "%d zero bytes is more than the test has", (int)n);
+        return false;
+    }
+    Slice p = slice_from((void *)(uintptr_t)zeros, n, n, TYPE_BYTE);
+    return !h2ct_failed(tc, "writing DATA",
+                        burrow__http2_framer_write_data(tc->fr, id, end_stream, p));
+}
+
 static bool h2ct_write_go_away_debug(H2ctConn *tc, uint32_t max_stream_id,
                                      Http2ErrCode code, const char *debug) {
     Int n = (Int)strlen(debug);
@@ -2342,6 +2354,183 @@ static void TestTransportWindowUpdateBeyondLimit(TestingT *t) {
     h2ct_run(t, h2ct_window_update_beyond_limit, NULL);
 }
 
+/* Go's InitialWindowSize, the window a connection and its streams start
+ * with. */
+enum { H2CT_INITIAL_WINDOW_SIZE = 65535 };
+
+static void h2ct_adjusts_flow_control(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    enum { BODY_SIZE = 1 << 20 };
+
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_SETTINGS));
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_WINDOW_UPDATE));
+    /* Don't write our SETTINGS yet. */
+
+    H2ctBody *body = h2ct_new_request_body(tt);
+    H2CT_TRY(body != NULL);
+    h2ct_body_write_bytes(body, BODY_SIZE);
+    h2ct_body_close_with_error(body, io_eof);
+
+    H2ctRT *rt =
+        h2ct_tc_round_trip(tt, h2ct_new_request(tt, (Context){0}, BURROW_S("POST"),
+                                                (IoReader){&h2ct_body_vt, body}));
+    H2CT_TRY(rt != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+
+    int64_t got_bytes = 0;
+    for (;;) {
+        Http2Frame *f = h2ct_read_type(tc, HTTP2_FRAME_DATA);
+        H2CT_TRY(f != NULL);
+        got_bytes += f->u.data.data.len;
+        burrow__http2_frame_free(f);
+        /* After we've got half the client's initial flow control window's
+         * worth of request body data, give it just enough flow control to
+         * finish. */
+        if (got_bytes >= H2CT_INITIAL_WINDOW_SIZE / 2)
+            break;
+    }
+
+    Http2Setting s[1];
+    s[0].id = HTTP2_SETTING_INITIAL_WINDOW_SIZE;
+    s[0].val = BODY_SIZE;
+    H2CT_TRY(h2ct_write_settings(tc, s, 1));
+    H2CT_TRY(h2ct_write_window_update(tc, 0, BODY_SIZE));
+    H2CT_TRY(h2ct_write_settings_ack(tc));
+
+    /* wantUnorderedFrames: a SETTINGS frame, and DATA frames up to the one
+     * that ends the stream. */
+    bool seen_settings = false;
+    bool seen_end = false;
+    while (!seen_settings || !seen_end) {
+        Http2Frame *f = h2ct_read_frame(tc);
+        H2CT_TRY(f != NULL);
+        bool ok = true;
+        if (f->header.type == HTTP2_FRAME_SETTINGS && !seen_settings) {
+            seen_settings = true;
+        } else if (f->header.type == HTTP2_FRAME_DATA && !seen_end) {
+            got_bytes += f->u.data.data.len;
+            seen_end = (f->header.flags & HTTP2_FLAG_DATA_END_STREAM) != 0;
+        } else {
+            testing_t_errorf_v(tt->t, "got unexpected frame type %d",
+                               (int)f->header.type);
+            ok = false;
+        }
+        burrow__http2_frame_free(f);
+        H2CT_TRY(ok);
+    }
+
+    if (got_bytes != BODY_SIZE)
+        FATALF("server received %d bytes of body, want %d", got_bytes, BODY_SIZE);
+
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    H2CT_TRY(h2ct_write_status(tc, id, "200"));
+    H2CT_TRY(h2ct_rt_want_status(rt, 200));
+}
+
+static void TestTransportAdjustsFlowControl(TestingT *t) {
+    h2ct_run(t, h2ct_adjusts_flow_control, NULL);
+}
+
+/* Go also checks that the connection's inflow window is back where it
+ * started. The test can't see inside the client here, so that check is left
+ * out, and the WINDOW_UPDATE for all 5000 bytes is what shows they came back. */
+static void h2ct_returns_unused_flow_control(H2ctTT *tt, const void *arg) {
+    bool one_data_frame = *(const bool *)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_tc_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt != NULL);
+
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+    static const Str res_kv[] = {S_(":status"), S_("200"), S_("content-length"),
+                                 S_("5000")};
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, res_kv, 4), false)));
+
+    /* Two cases:
+     * - Send one DATA frame with 5000 bytes.
+     * - Send two DATA frames with 1 and 4999 bytes each.
+     *
+     * In both cases, the client should consume one byte of data, refund that
+     * byte, then refund the following 4999 bytes.
+     *
+     * In the second case, the server waits for the client to reset the stream
+     * before sending the second DATA frame. This tests the case where the
+     * client receives a DATA frame after it has reset the stream. */
+    const bool stream_not_ended = false;
+    H2CT_TRY(h2ct_write_zeros(tc, id, stream_not_ended, one_data_frame ? 5000 : 1));
+
+    HttpResponse *res = h2ct_rt_response(rt);
+    H2CT_TRY(res != NULL);
+    Byte b[1];
+    Error err = BURROW_NO_ERROR;
+    IoReader r = io_read_closer_as_io_reader(res->body);
+    Int n = r.vt->read(r.data, slice_from(b, 1, 1, TYPE_BYTE), &err);
+    if (BURROW_FAILED(err) || n != 1)
+        FATALF("body read = %d, %v; want 1, nil", n, err);
+    (void)res->body.vt->closer.close(res->body.data); /* leaving 4999 bytes unread */
+
+    /* wantUnorderedFrames: a RST_STREAM and a WINDOW_UPDATE. */
+    bool sent_additional_data = false;
+    bool seen_rst = false;
+    bool seen_wu = false;
+    while (!seen_rst || !seen_wu) {
+        Http2Frame *f = h2ct_read_frame(tc);
+        H2CT_TRY(f != NULL);
+        bool ok = true;
+        if (f->header.type == HTTP2_FRAME_RST_STREAM && !seen_rst) {
+            seen_rst = true;
+            if (f->u.rst_stream.err_code != HTTP2_ERR_CODE_CANCEL) {
+                testing_t_errorf_v(tt->t,
+                                   "Expected a RSTStreamFrame with code cancel; got "
+                                   "code %d",
+                                   (int)f->u.rst_stream.err_code);
+                ok = false;
+            } else if (!one_data_frame) {
+                /* Send the remaining data now. */
+                ok = h2ct_write_zeros(tc, id, stream_not_ended, 4999);
+                sent_additional_data = true;
+            }
+        } else if (f->header.type == HTTP2_FRAME_WINDOW_UPDATE && !seen_wu) {
+            seen_wu = true;
+            if (!one_data_frame && !sent_additional_data) {
+                testing_t_errorf_v(tt->t,
+                                   "Got WindowUpdateFrame, don't expect one yet");
+                ok = false;
+            } else if (f->u.window_update.increment != 5000) {
+                testing_t_errorf_v(tt->t,
+                                   "Expected WindowUpdateFrames for 5000 bytes; got "
+                                   "stream %d increment %d",
+                                   (int)f->header.stream_id,
+                                   (int)f->u.window_update.increment);
+                ok = false;
+            }
+        } else {
+            testing_t_errorf_v(tt->t, "got unexpected frame type %d",
+                               (int)f->header.type);
+            ok = false;
+        }
+        burrow__http2_frame_free(f);
+        H2CT_TRY(ok);
+    }
+}
+
+static void TestTransportReturnsUnusedFlowControlSingleWrite(TestingT *t) {
+    static const bool one_data_frame = true;
+    h2ct_run(t, h2ct_returns_unused_flow_control, &one_data_frame);
+}
+
+static void TestTransportReturnsUnusedFlowControlMultipleWrites(TestingT *t) {
+    static const bool one_data_frame = false;
+    h2ct_run(t, h2ct_returns_unused_flow_control, &one_data_frame);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -2411,6 +2600,9 @@ static void TestTransportWindowUpdateBeyondLimit(TestingT *t) {
     X(TestTransportClosesConnAfterGoAwayLastStream)                                    \
     X(TestTransportSettingsFlowControlUpdateBeyondLimit)                               \
     X(TestTransportSettingsFlowControlUpdateWithinLimit)                               \
-    X(TestTransportWindowUpdateBeyondLimit)
+    X(TestTransportWindowUpdateBeyondLimit)                                            \
+    X(TestTransportAdjustsFlowControl)                                                 \
+    X(TestTransportReturnsUnusedFlowControlSingleWrite)                                \
+    X(TestTransportReturnsUnusedFlowControlMultipleWrites)
 
 TESTING_MAIN(TESTS)

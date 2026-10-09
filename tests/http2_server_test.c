@@ -98,7 +98,63 @@ typedef struct H2tTester {
     HpackDecoder *dec;
     HpackEncoder *enc;
     BytesBuffer hbuf;
+    /* What the client writes, which a goroutine of its own passes on to cc.
+     * Go's fake connection buffers writes, so a test can write a frame the
+     * server stops reading partway through, as it does when the frame header
+     * alone is enough to end the connection, and still go on to read the
+     * GOAWAY. A net_pipe write waits for the reader instead. */
+    SyncMutex wmu;
+    SyncCond wcond;
+    BytesBuffer wbuf;
+    bool wclosed;
+    bool wfailed;
+    SyncWaitGroup wwg;
 } H2tTester;
+
+static Int h2t_out_write(void *self, Slice p, Error *err) {
+    H2tTester *st = (H2tTester *)self;
+    sync_mutex_lock(&st->wmu);
+    if (st->wfailed || st->wclosed) {
+        sync_mutex_unlock(&st->wmu);
+        *err = io_err_closed_pipe;
+        return 0;
+    }
+    Int n = bytes_buffer_write(&st->wbuf, p, err);
+    sync_cond_signal(&st->wcond);
+    sync_mutex_unlock(&st->wmu);
+    return n;
+}
+
+static const IoWriterVT h2t_out_vt = {NULL, h2t_out_write};
+
+/* Passes wbuf on to cc until the tester closes and it is empty, or a write
+ * to cc fails. */
+static void h2t_out_job(void *env) {
+    H2tTester *st = (H2tTester *)env;
+    enum { CHUNK = 16 << 10 };
+    Byte *chunk = (Byte *)mem_alloc_nozero(st->a, CHUNK, 1);
+    sync_mutex_lock(&st->wmu);
+    if (chunk == NULL)
+        st->wfailed = true;
+    while (!st->wfailed) {
+        while (bytes_buffer_len(&st->wbuf) == 0 && !st->wclosed)
+            sync_cond_wait(&st->wcond);
+        if (bytes_buffer_len(&st->wbuf) == 0)
+            break;
+        Error err = BURROW_NO_ERROR;
+        Int n = bytes_buffer_read(&st->wbuf, slice_from(chunk, CHUNK, CHUNK, TYPE_BYTE),
+                                  &err);
+        sync_mutex_unlock(&st->wmu);
+        (void)st->cc.vt->writer.write(st->cc.data, slice_from(chunk, n, n, TYPE_BYTE),
+                                      &err);
+        sync_mutex_lock(&st->wmu);
+        if (BURROW_FAILED(err))
+            st->wfailed = true;
+    }
+    sync_mutex_unlock(&st->wmu);
+    if (chunk != NULL)
+        mem_free(st->a, chunk, CHUNK, 1);
+}
 
 static void h2t_nop_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
     (void)env;
@@ -132,8 +188,15 @@ static bool h2t_start(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *env) {
     }
     st->ol.conn = st->sc;
     (void)sync_wait_group_go(&st->wg, BURROW_FN(Func, h2t_serve_job, st));
+    st->wcond = SYNC_COND(sync_mutex_locker(&st->wmu));
+    st->wbuf = BYTES_BUFFER(st->a);
+    if (!sync_wait_group_go(&st->wwg, BURROW_FN(Func, h2t_out_job, st))) {
+        st->wfailed = true;
+        testing_t_errorf_v(t, "no goroutine for the client's writes");
+        return false;
+    }
 
-    IoWriter w = {&st->cc.vt->writer, st->cc.data};
+    IoWriter w = {&h2t_out_vt, st};
     IoReader r = {&st->cc.vt->reader, st->cc.data};
     st->fr = burrow__http2_new_framer(st->a, w, r);
     st->dec =
@@ -152,8 +215,18 @@ static bool h2t_start(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *env) {
 /* Close: hangs up, which ends the connection, and waits for the server to
  * be done with it. */
 static void h2t_close(H2tTester *st) {
-    if (st->cc.data != NULL)
+    if (st->cc.data != NULL) {
+        /* What was written goes first, as it would from Go's fake conn, but
+         * not forever if the server has stopped reading. */
+        (void)st->cc.vt->set_write_deadline(st->cc.data,
+                                            time_add(time_now(), 10 * TIME_SECOND));
+        sync_mutex_lock(&st->wmu);
+        st->wclosed = true;
+        sync_cond_signal(&st->wcond);
+        sync_mutex_unlock(&st->wmu);
+        sync_wait_group_wait(&st->wwg);
         (void)st->cc.vt->closer.close(st->cc.data);
+    }
     sync_wait_group_wait(&st->wg);
     http_server_free(&st->srv);
     if (st->fr != NULL)
@@ -163,6 +236,7 @@ static void h2t_close(H2tTester *st) {
     if (st->enc != NULL)
         burrow__hpack_encoder_free(st->enc);
     bytes_buffer_free(&st->hbuf);
+    bytes_buffer_free(&st->wbuf);
     if (st->sc.data != NULL)
         net_pipe_free(st->sc);
     if (st->lg != NULL)
@@ -180,7 +254,7 @@ static bool h2t_write_preface(H2tTester *st) {
     static const char preface[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
     Error err = BURROW_NO_ERROR;
     Slice p = slice_from((void *)(uintptr_t)preface, 24, 24, TYPE_BYTE);
-    (void)st->cc.vt->writer.write(st->cc.data, p, &err);
+    (void)h2t_out_write(st, p, &err);
     return !h2t_failed(st, "writing the preface", err);
 }
 

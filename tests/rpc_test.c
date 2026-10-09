@@ -1097,14 +1097,16 @@ static void TestAcceptExitAfterListenerClose(TestingT *t) {
 typedef struct ShutdownAccept {
     NetListener l;
     Chan *ch;
+    NetConn c;
     Error err;
 } ShutdownAccept;
 
 static void shutdown_accept(void *env) {
     ShutdownAccept *sa = (ShutdownAccept *)env;
-    NetConn c = sa->l.vt->accept(sa->l.data, &sa->err);
+    sa->c = sa->l.vt->accept(sa->l.data, &sa->err);
     (void)sa->l.vt->closer.close(sa->l.data);
-    chan_send(sa->ch, &c);
+    void *v = sa;
+    chan_send(sa->ch, &v);
 }
 
 typedef struct ShutdownServe {
@@ -1137,8 +1139,10 @@ static void TestShutdown(TestingT *t) {
     }
     Error err = BURROW_NO_ERROR;
     NetConn c = net_dial(heap_allocator(), BURROW_S("tcp"), sv.addr, &err);
-    (void)chan_recv(sa.ch, &c1);
+    void *got = NULL;
+    (void)chan_recv(sa.ch, &got);
     chan_free(sa.ch);
+    c1 = sa.c;
     if (BURROW_FAILED(err)) {
         net_conn_free(c1);
         listener_stop(&sv);

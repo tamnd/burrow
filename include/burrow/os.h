@@ -351,6 +351,10 @@ int64_t os_file_write_to(OsFile *f, IoWriter w, Error *err);
  * socket read gives on a file handle. */
 SyscallRawConn os_file_syscall_conn(OsFile *f, Error *err);
 
+/* f as a SyscallConn, borrowing it, whose syscall_conn is
+ * os_file_syscall_conn. */
+SyscallConn os_file_as_syscall_conn(OsFile *f);
+
 /* os.Stdin, os.Stdout and os.Stderr, opened the first time you ask. */
 BURROW_STATIC(ret) OsFile *os_stdin_file(void);
 BURROW_STATIC(ret) OsFile *os_stdout_file(void);

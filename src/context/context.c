@@ -39,6 +39,7 @@
 #include "burrow/atomic.h"
 #include "burrow/chan.h"
 #include "burrow/core.h"
+#include "burrow/declare.h"
 #include "burrow/error.h"
 #include "burrow/iface.h"
 #include "burrow/mem.h"
@@ -56,7 +57,76 @@
 /* ---------------------------------------------------------------- sentinels */
 
 BURROW_SENTINEL_ERROR(context_canceled, "context canceled");
-BURROW_SENTINEL_ERROR(context_deadline_exceeded, "context deadline exceeded");
+
+/* Go's deadlineExceededError, an empty struct whose Timeout and Temporary
+ * both say true, so that net code can treat a context running out like any
+ * other timeout. C has no empty struct, so it has a byte nobody reads. */
+typedef struct ContextDeadlineExceededError {
+    Byte unused;
+} ContextDeadlineExceededError;
+
+static const Str ctx_deadline_text = {(const Byte *)"context deadline exceeded", 25};
+
+static Str ctx_deadline_m_error(ContextDeadlineExceededError *self) {
+    (void)self;
+    return ctx_deadline_text;
+}
+
+static bool ctx_deadline_m_true(ContextDeadlineExceededError *self) {
+    (void)self;
+    return true;
+}
+
+#define CTX_SIG_STRING(IN, OUT) OUT(Str)
+#define CTX_SIG_BOOL(IN, OUT) OUT(bool)
+
+#define CTX_DEADLINE_METHODS(M, T)                                                     \
+    M(T, Error, ctx_deadline_m_error, CTX_SIG_STRING)                                  \
+    M(T, Temporary, ctx_deadline_m_true, CTX_SIG_BOOL)                                 \
+    M(T, Timeout, ctx_deadline_m_true, CTX_SIG_BOOL)
+
+BURROW_METHODS_DEFINE(ContextDeadlineExceededError, CTX_DEADLINE_METHODS);
+
+static const Type ctx_deadline_desc = {
+    {(const Byte *)"deadlineExceededError", 21},
+    {(const Byte *)"context", 7},
+    KIND_STRUCT,
+    (uint32_t)sizeof(ContextDeadlineExceededError),
+    (uint16_t)_Alignof(ContextDeadlineExceededError),
+    0,
+    (uint16_t)(sizeof burrow__methods_ContextDeadlineExceededError /
+               sizeof burrow__methods_ContextDeadlineExceededError[0]),
+    NULL,
+    burrow__methods_ContextDeadlineExceededError,
+    NULL,
+    NULL,
+    0,
+    0x63746465U, /* "ctde" */
+    NULL,
+};
+
+static Str ctx_deadline_message(const void *self) {
+    (void)self;
+    return ctx_deadline_text;
+}
+
+static Error ctx_deadline_clone(const void *self, Alloc *a);
+
+static const ErrorVT ctx_deadline_vt = {
+    &ctx_deadline_desc, ctx_deadline_message, NULL, NULL, NULL, NULL,
+    ctx_deadline_clone,
+};
+
+static const ContextDeadlineExceededError ctx_deadline_value = {0};
+
+const Error context_deadline_exceeded = {&ctx_deadline_vt, &ctx_deadline_value};
+
+/* There is only the one, so a retained copy is the same error. */
+static Error ctx_deadline_clone(const void *self, Alloc *a) {
+    (void)self;
+    (void)a;
+    return context_deadline_exceeded;
+}
 
 /* -------------------------------------------------------------- descriptors */
 

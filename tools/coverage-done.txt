@@ -106,6 +106,7 @@ archive/tar
 archive/zip
 encoding/asn1
 path/filepath
+crypto/x509
 syscall
 crypto/fips140
 net/mail

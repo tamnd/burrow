@@ -97,10 +97,12 @@ static Int x509_bit_len64(uint64_t n) {
 
 enum {
     X509_DEBUG_KNOWN = 1 << 0,
-    X509_DEBUG_RSACRT_OFF = 1 << 1,      /* x509rsacrt=0 */
-    X509_DEBUG_NEGATIVE_SERIAL = 1 << 2, /* x509negativeserial=1 */
-    X509_DEBUG_POLICY_IDS = 1 << 3,      /* x509usepolicies=0 */
-    X509_DEBUG_SHA1_SKID = 1 << 4,       /* x509sha256skid=0 */
+    X509_DEBUG_RSACRT_OFF = 1 << 1,       /* x509rsacrt=0 */
+    X509_DEBUG_NEGATIVE_SERIAL = 1 << 2,  /* x509negativeserial=1 */
+    X509_DEBUG_POLICY_IDS = 1 << 3,       /* x509usepolicies=0 */
+    X509_DEBUG_SHA1_SKID = 1 << 4,        /* x509sha256skid=0 */
+    X509_DEBUG_FALLBACK_ROOTS = 1 << 5,   /* x509usefallbackroots=1 */
+    X509_DEBUG_NO_CERT_OVERRIDE = 1 << 6, /* x509sslcertoverrideplatform=0 */
 };
 
 static uint32_t x509_debug_flags;
@@ -133,6 +135,10 @@ static uint32_t x509_debug_parse(const char *value) {
         f |= X509_DEBUG_POLICY_IDS;
     if (x509_godebug_is(value, "x509sha256skid", "0"))
         f |= X509_DEBUG_SHA1_SKID;
+    if (x509_godebug_is(value, "x509usefallbackroots", "1"))
+        f |= X509_DEBUG_FALLBACK_ROOTS;
+    if (x509_godebug_is(value, "x509sslcertoverrideplatform", "0"))
+        f |= X509_DEBUG_NO_CERT_OVERRIDE;
     return f;
 }
 
@@ -149,6 +155,14 @@ static uint32_t x509_debug_load(void) {
     }
     burrow__atomic_store_relaxed_u32(&x509_debug_flags, f);
     return f;
+}
+
+bool burrow__x509_use_fallback_roots(void) {
+    return (x509_debug_load() & X509_DEBUG_FALLBACK_ROOTS) != 0;
+}
+
+bool burrow__x509_no_cert_override(void) {
+    return (x509_debug_load() & X509_DEBUG_NO_CERT_OVERRIDE) != 0;
 }
 
 void burrow__x509_godebug_set(const char *value) {
@@ -4091,6 +4105,24 @@ static bool x509_oid_in_extensions(Asn1ObjectIdentifier oid, Slice extensions) {
         if (x509_oid_is(e[i].id, oid))
             return true;
     return false;
+}
+
+bool burrow__x509_has_san_extension(const X509Certificate *c) {
+    return x509_oid_in_extensions(X509_OID(x509_oid_extension_subject_alt_name),
+                                  c->extensions);
+}
+
+bool burrow__x509_has_name_constraints(const X509Certificate *c) {
+    return x509_oid_in_extensions(X509_OID(x509_oid_extension_name_constraints),
+                                  c->extensions);
+}
+
+const PkixExtension *burrow__x509_san_extension(const X509Certificate *c) {
+    const PkixExtension *e = c->extensions.p;
+    for (Int i = 0; i < c->extensions.len; i++)
+        if (x509_oid_is(e[i].id, X509_OID(x509_oid_extension_subject_alt_name)))
+            return &e[i];
+    return NULL;
 }
 
 /* isIA5String, as the error. */

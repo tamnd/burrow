@@ -42,6 +42,7 @@
 #include "burrow/encoding/asn1.h"
 #include "burrow/encoding/pem.h"
 #include "burrow/error.h"
+#include "burrow/func.h"
 #include "burrow/iface.h"
 #include "burrow/io.h"
 #include "burrow/math/big.h"
@@ -672,6 +673,219 @@ BURROW_OWNS(ret) PemBlock *x509_encrypt_pem_block(Alloc *a, IoReader rand,
                                                   Str block_type, Slice data,
                                                   Slice password, X509PEMCipher alg,
                                                   Error *err);
+
+/* ------------------------------------------------------------- CertPool */
+
+/* CertPool: a set of certificates, looked up by subject when a chain is
+ * built. The pool keeps its own memory, from the Alloc it was made with, and
+ * x509_cert_pool_free gives it back. A certificate added with
+ * x509_cert_pool_add_cert is borrowed, so it has to live as long as the pool
+ * does. One read from PEM is parsed into the pool's memory. Go parses those
+ * again each time they are needed to keep the system pool small, and this
+ * keeps the parsed certificate instead. */
+typedef struct X509CertPool X509CertPool;
+
+/* A constraint AddCertWithConstraint puts on the chains a root may finish.
+ * chain is a slice of X509Certificate pointers, and an error rejects it. */
+BURROW_FUNC(X509CertConstraint, Error, Slice chain);
+
+/* NewCertPool: an empty pool, from a. */
+BURROW_OWNS(ret) X509CertPool *x509_new_cert_pool(Alloc *a);
+
+/* Gives back the memory of s and the certificates it parsed. s may be NULL. */
+void x509_cert_pool_free(X509CertPool *s);
+
+/* CertPool.Clone: a copy of s, from a. The certificates are shared with s, as
+ * they are in Go, so the copy must not outlive s. */
+BURROW_OWNS(ret) X509CertPool *x509_cert_pool_clone(const X509CertPool *s, Alloc *a);
+
+/* CertPool.AddCert: adds cert to s, unless s has it already. Panics when cert
+ * is NULL. */
+void x509_cert_pool_add_cert(X509CertPool *s, const X509Certificate *cert);
+
+/* CertPool.AddCertWithConstraint: AddCert, with constraint called on every
+ * chain that cert ends once the chain is built. A zero constraint is none. */
+void x509_cert_pool_add_cert_with_constraint(X509CertPool *s,
+                                             const X509Certificate *cert,
+                                             X509CertConstraint constraint);
+
+/* CertPool.AppendCertsFromPEM: adds each CERTIFICATE block in pem_certs that
+ * has no headers and parses, and says whether one was added. */
+bool x509_cert_pool_append_certs_from_pem(X509CertPool *s, Slice pem_certs);
+
+/* CertPool.Subjects: the raw subject of each certificate in s, in the order
+ * they were added. The slice is from a, and the subjects in it are borrowed
+ * from s. Deprecated in Go, since it leaves out the system roots. */
+BURROW_OWNS(ret) Slice x509_cert_pool_subjects(const X509CertPool *s, Alloc *a);
+
+/* CertPool.Equal: whether s and other hold the same certificates. */
+bool x509_cert_pool_equal(const X509CertPool *s, const X509CertPool *other);
+
+/* SystemCertPool: a copy of the system's roots, from a. On Windows and macOS
+ * the pool stands for the platform's own verifier and has no certificates in
+ * it, unless SSL_CERT_FILE or SSL_CERT_DIR is set. */
+BURROW_OWNS(ret) X509CertPool *x509_system_cert_pool(Alloc *a, Error *err);
+
+/* SetFallbackRoots: the roots to use when the system has none, or always with
+ * GODEBUG=x509usefallbackroots=1. roots is kept for the life of the program.
+ * Panics when roots is NULL or when called a second time. */
+void x509_set_fallback_roots(X509CertPool *roots);
+
+/* ----------------------------------------------------------- verification */
+
+/* InvalidReason: why CertificateInvalidError rejected a certificate. */
+typedef Int X509InvalidReason;
+
+enum {
+    /* A certificate signed another one without being a CA. */
+    X509_NOT_AUTHORIZED_TO_SIGN = 0,
+    /* The certificate is outside its validity period. */
+    X509_EXPIRED = 1,
+    /* An intermediate or root has a name constraint that the leaf's name is
+     * not inside. */
+    X509_CA_NOT_AUTHORIZED_FOR_THIS_NAME = 2,
+    /* A path length constraint was broken. */
+    X509_TOO_MANY_INTERMEDIATES = 3,
+    /* The key usages do not allow the use asked for. */
+    X509_INCOMPATIBLE_USAGE = 4,
+    /* The issuer's subject is not the child's issuer. */
+    X509_NAME_MISMATCH = 5,
+    /* Never used any more, kept as Go keeps it. */
+    X509_NAME_CONSTRAINTS_WITHOUT_SANS = 6,
+    /* A CA has a name constraint and the leaf a name of a kind it does not
+     * cover. */
+    X509_UNCONSTRAINED_NAME = 7,
+    /* Checking name constraints would take more comparisons than
+     * VerifyOptions.MaxConstraintComparisions allows. */
+    X509_TOO_MANY_CONSTRAINTS = 8,
+    /* An intermediate or root does not allow an extended key usage the leaf
+     * asks for. */
+    X509_CA_NOT_AUTHORIZED_FOR_EXT_KEY_USAGE = 9,
+    /* Chains were built, but none of them were valid. */
+    X509_NO_VALID_CHAINS = 10,
+};
+
+/* CertificateInvalidError: something about cert is wrong for the chain it
+ * was in. detail is only in the messages of some reasons. errors_as with
+ * TYPE_X509_CERTIFICATE_INVALID_ERROR gives a pointer to the struct, which
+ * borrows cert. */
+typedef struct X509CertificateInvalidError {
+    const X509Certificate *cert;
+    X509InvalidReason reason;
+    Str detail;
+} X509CertificateInvalidError;
+
+extern const Type *const TYPE_X509_CERTIFICATE_INVALID_ERROR;
+
+/* CertificateInvalidError.Error, such as "x509: certificate has expired or is
+ * not yet valid: " and the detail, from a. */
+BURROW_OWNS(ret) Str x509_certificate_invalid_error_error(X509CertificateInvalidError e,
+                                                          Alloc *a);
+
+/* e as an Error, from a, with its own copy of the detail. */
+BURROW_OWNS(ret) Error
+x509_certificate_invalid_error_as_error(X509CertificateInvalidError e, Alloc *a);
+
+/* HostnameError: host is not one of the names certificate is for. */
+typedef struct X509HostnameError {
+    const X509Certificate *certificate;
+    Str host;
+} X509HostnameError;
+
+extern const Type *const TYPE_X509_HOSTNAME_ERROR;
+
+/* HostnameError.Error, such as "x509: certificate is valid for example.com,
+ * not example.org", from a. */
+BURROW_OWNS(ret) Str x509_hostname_error_error(X509HostnameError h, Alloc *a);
+
+/* e as an Error, from a, with its own copy of the host. */
+BURROW_OWNS(ret) Error x509_hostname_error_as_error(X509HostnameError e, Alloc *a);
+
+/* UnknownAuthorityError: no root signed cert. The error Verify gives says
+ * which candidate came closest and why it was turned down, and Go keeps that
+ * in fields only it can set, so here it is only in the message. */
+typedef struct X509UnknownAuthorityError {
+    const X509Certificate *cert;
+} X509UnknownAuthorityError;
+
+extern const Type *const TYPE_X509_UNKNOWN_AUTHORITY_ERROR;
+
+/* UnknownAuthorityError.Error: "x509: certificate signed by unknown
+ * authority", from a. */
+BURROW_OWNS(ret) Str x509_unknown_authority_error_error(X509UnknownAuthorityError e,
+                                                        Alloc *a);
+
+/* e as an Error, from a. */
+BURROW_OWNS(ret) Error
+x509_unknown_authority_error_as_error(X509UnknownAuthorityError e, Alloc *a);
+
+/* SystemRootsError: the system roots could not be loaded, and the
+ * VerifyOptions had none of their own. err is why, and may be no error. */
+typedef struct X509SystemRootsError {
+    Error err;
+} X509SystemRootsError;
+
+extern const Type *const TYPE_X509_SYSTEM_ROOTS_ERROR;
+
+/* SystemRootsError.Error: "x509: failed to load system roots and no roots
+ * provided", then "; " and err's message when there is one, from a. */
+BURROW_OWNS(ret) Str x509_system_roots_error_error(X509SystemRootsError e, Alloc *a);
+
+/* SystemRootsError.Unwrap: e.err. */
+BURROW_BORROWS(ret, e) Error x509_system_roots_error_unwrap(X509SystemRootsError e);
+
+/* e as an Error, from a. It keeps e.err as it is, so that has to live as long
+ * as the result. */
+BURROW_OWNS(ret) Error x509_system_roots_error_as_error(X509SystemRootsError e,
+                                                        Alloc *a);
+
+/* VerifyOptions: what Verify checks a certificate against.
+ *
+ * dns_name, when not empty, is checked with x509_certificate_verify_hostname.
+ * intermediates may be NULL, and roots NULL means the system roots. A zero
+ * current_time means now. key_usages holds X509ExtKeyUsage, and empty means
+ * server auth; put X509_EXT_KEY_USAGE_ANY in it to take any.
+ * max_constraint_comparisions is spelt as Go spells it and, as in Go, is no
+ * longer looked at. certificate_policies holds X509OID, and empty takes any
+ * policy.
+ *
+ * The last three are unexported in Go, where only its tests set them. They
+ * are here so the same tests can. */
+typedef struct X509VerifyOptions {
+    Str dns_name;
+    const X509CertPool *intermediates;
+    const X509CertPool *roots;
+    Time current_time;
+    Slice key_usages;
+    Int max_constraint_comparisions;
+    Slice certificate_policies;
+
+    bool inhibit_policy_mapping;
+    bool require_explicit_policy;
+    bool inhibit_any_policy;
+} X509VerifyOptions;
+
+/* A chain, as Verify gives them: a []*Certificate with the leaf first. */
+BURROW_SLICE_TYPE_DECL(X509CertificateChain, X509CertificatePtr);
+#define TYPE_X509_CERTIFICATE_CHAIN TYPE_OF(X509CertificateChain)
+
+/* Certificate.Verify: the chains from c up to one of opts' roots, each a
+ * slice of X509Certificate pointers with c first and the root last, as a
+ * slice of X509CertificateChain from a. The certificates are borrowed from c and the
+ * pools.
+ *
+ * On Windows, macOS and iOS, with no roots given, Go asks the platform to
+ * verify. That is not here yet, and the system pool there is empty, so this
+ * gives an UnknownAuthorityError unless SSL_CERT_FILE or SSL_CERT_DIR names
+ * some roots. */
+BURROW_OWNS(ret) Slice x509_certificate_verify(const X509Certificate *c, Alloc *a,
+                                               X509VerifyOptions opts, Error *err);
+
+/* Certificate.VerifyHostname: no error when c is valid for h, which is a host
+ * name or an IP address, the IPv6 one in brackets or not. Otherwise a
+ * HostnameError. */
+BURROW_STATIC(ret) Error x509_certificate_verify_hostname(const X509Certificate *c,
+                                                          Str h);
 
 #ifdef __cplusplus
 }

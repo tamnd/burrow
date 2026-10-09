@@ -378,3 +378,9 @@ global	src/crypto/ecdsa.c	ecdsa_curves	tables	The four FIPS curves with their or
 global	src/crypto/ecdsa.c	ecdsa_once	tables	A SyncOnce, which is the synchronisation for ecdsa_curves.
 global	src/crypto/rsa.c	rsa_debug_flags	godebug	The rsa1024min setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/crypto/x509.c	x509_debug_flags	godebug	The x509rsacrt setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
+global	src/crypto/x509_verify.c	x509_roots_once	package-vars	A SyncOnce, the sync.Once of root.go that loads the system roots on first use.
+global	src/crypto/x509_verify.c	x509_roots_mu	package-vars	The SyncRWMutex of root.go, which guards the four globals below it.
+global	src/crypto/x509_verify.c	x509_system_roots	package-vars	systemRoots, the shared system pool. Written under x509_roots_mu only.
+global	src/crypto/x509_verify.c	x509_system_roots_err	package-vars	systemRootsErr, kept with error_retain. Written under x509_roots_mu only.
+global	src/crypto/x509_verify.c	x509_fallbacks_set	package-vars	fallbacksSet, whether SetFallbackRoots has run. Written under x509_roots_mu only.
+global	src/crypto/x509_verify.c	x509_use_fallback_roots	package-vars	useFallbackRoots, the x509usefallbackroots setting when the fallbacks were set. Written under x509_roots_mu only.

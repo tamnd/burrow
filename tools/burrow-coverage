@@ -791,6 +791,7 @@ FUNC_TYPES = {
     "func(string) error": {"FlagFunc"},
     "func(*Flag)": {"FlagVisitFunc"},
     "func() hash.Hash": {"HashNewFunc"},
+    "func([]*Certificate) error": {"X509CertConstraint"},
 }
 
 BUILTIN = {

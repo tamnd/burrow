@@ -23,6 +23,8 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "sha3_internal.h"
+
 #include <string.h>
 
 /* The domain separation byte of each function, with the first bit of the
@@ -949,4 +951,30 @@ Slice sha3_sum_shake128(Alloc *a, Slice data, Int length) {
 
 Slice sha3_sum_shake256(Alloc *a, Slice data, Int length) {
     return sha3_sum_shake(a, data, length, SHA3_RATE_K512, 64);
+}
+
+/* ------------------------------------------------- for the rest of burrow */
+
+void burrow__sha3_init256(Sha3 *d) {
+    sha3_setup(d, SHA3_RATE_K512, 32, SHA3_DS_SHA3);
+}
+
+void burrow__sha3_init512(Sha3 *d) {
+    sha3_setup(d, SHA3_RATE_K1024, 64, SHA3_DS_SHA3);
+}
+
+void burrow__shake128_init(Sha3 *d) {
+    sha3_setup(d, SHA3_RATE_K256, 32, SHA3_DS_SHAKE);
+}
+
+void burrow__shake256_init(Sha3 *d) {
+    sha3_setup(d, SHA3_RATE_K512, 64, SHA3_DS_SHAKE);
+}
+
+void burrow__sha3_write(Sha3 *d, const void *p, Int n) {
+    sha3_absorb(d, (const Byte *)p, n);
+}
+
+void burrow__sha3_read(Sha3 *d, void *out, Int n) {
+    sha3_squeeze(d, (Byte *)out, n);
 }

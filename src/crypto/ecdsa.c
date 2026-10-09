@@ -429,7 +429,7 @@ static void ecdsa_sum_into(EcdsaDrbg *d, Hash h, uint8_t *dst) {
 
 /* pad000: zeros up to the next multiple of the block size. */
 static void ecdsa_pad000(Hash h, Int written) {
-    static const uint8_t zeros[256];
+    static const uint8_t zeros[256] = {0};
     Int block = hash_block_size(h);
     Int rem = written % block;
     if (rem == 0)
@@ -838,7 +838,7 @@ static EcdsaPrivateBlock *ecdsa_new_private_block(Alloc *a, EllipticCurve curve,
 void ecdsa_public_key_free(EcdsaPublicKey *k) {
     if (k == NULL)
         return;
-    EcdsaPublicBlock *b = (EcdsaPublicBlock *)k;
+    EcdsaPublicBlock *b = (EcdsaPublicBlock *)(void *)k; /* k is its first field */
     Alloc *a = b->a;
     big_int_free(&b->x);
     big_int_free(&b->y);
@@ -848,7 +848,7 @@ void ecdsa_public_key_free(EcdsaPublicKey *k) {
 void ecdsa_private_key_free(EcdsaPrivateKey *k) {
     if (k == NULL)
         return;
-    EcdsaPrivateBlock *b = (EcdsaPrivateBlock *)k;
+    EcdsaPrivateBlock *b = (EcdsaPrivateBlock *)(void *)k; /* k is its first field */
     Alloc *a = b->a;
     if (b->d.abs.p != NULL)
         memset(b->d.abs.p, 0, (size_t)b->d.abs.cap * sizeof *b->d.abs.p);

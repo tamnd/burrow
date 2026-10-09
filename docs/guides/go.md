@@ -421,3 +421,186 @@ false
 ```
 
 A ConstantValue is a small struct passed by value, and `{0}` is the unknown value, which is what an operation on an unknown value or a bad literal gives back. Anything bigger than an `int64_t` lives in the allocator passed to the function that made it, and values share that memory, since none of them ever changes. Nothing frees a single value, so make them in an arena and free the arena when you are done. Operations panic on operands that make no sense, like `!1` or `true + true`, with the same messages as Go.
+
+## Syntax trees
+
+`burrow/go/ast.h` is Go's `go/ast`, the syntax tree of a Go source file. Every node starts with an `AstBase` header that holds its kind, and an `AstNode` is a pointer to that header, so the `AstExpr`, `AstStmt`, `AstDecl` and `AstSpec` interfaces are all `AstNode` and a switch on `n->kind` tells them apart. `ast_node_new` makes a zeroed node of a kind in an allocator. `go/parser` is not ported yet, so for now trees are built by hand, and `ast_print` writes one out the way `ast.Print` does, with positions from a file set:
+
+<!-- example: ../examples/go/ast.c#build -->
+```c
+static AstIdent *ident(Alloc *a, TokenFile *f, Int off, Str name) {
+    AstIdent *id = ast_new_ident(a, name);
+    if (id != NULL)
+        id->name_pos = token_file_pos(f, off);
+    return id;
+}
+
+static void build(Alloc *a) {
+    // The tree go/parser would make of this.
+    Str src = BURROW_S("package p\n\nvar x = 1\n");
+    TokenFileSet *fset = token_new_file_set(a);
+    TokenFile *f = token_file_set_add_file(fset, BURROW_S("p.go"), -1, src.len);
+    token_file_set_lines_for_content(f, slice_from_str(a, src));
+
+    AstBasicLit *one = (AstBasicLit *)ast_node_new(a, AST_KIND_BASIC_LIT);
+    AstValueSpec *spec = (AstValueSpec *)ast_node_new(a, AST_KIND_VALUE_SPEC);
+    AstGenDecl *decl = (AstGenDecl *)ast_node_new(a, AST_KIND_GEN_DECL);
+    AstFile *file = (AstFile *)ast_node_new(a, AST_KIND_FILE);
+    if (one == NULL || spec == NULL || decl == NULL || file == NULL)
+        return;
+    one->value_pos = token_file_pos(f, 19);
+    one->kind = TOKEN_INT;
+    one->value = BURROW_S("1");
+
+    AstIdent *x = ident(a, f, 15, BURROW_S("x"));
+    spec->names = slice_append(a, slice_nil(TYPE_AST_IDENT_PTR), &x, 1);
+    spec->values = slice_append(a, slice_nil(TYPE_AST_EXPR), &one, 1);
+    decl->tok_pos = token_file_pos(f, 11);
+    decl->tok = TOKEN_VAR;
+    decl->specs = slice_append(a, slice_nil(TYPE_AST_SPEC), &spec, 1);
+    file->package = token_file_pos(f, 0);
+    file->name = ident(a, f, 8, BURROW_S("p"));
+    file->decls = slice_append(a, slice_nil(TYPE_AST_DECL), &decl, 1);
+
+    Error err = ast_print(a, fset, BURROW_ANY(TYPE_AST_FILE_PTR, &file));
+    if (!BURROW_OK(err))
+        fmt_println_v("print:", err);
+}
+```
+
+That prints:
+
+```
+     0  *ast.File {
+     1  .  Package: p.go:1:1
+     2  .  Name: *ast.Ident {
+     3  .  .  NamePos: p.go:1:9
+     4  .  .  Name: "p"
+     5  .  }
+     6  .  Decls: []ast.Decl (len = 1) {
+     7  .  .  0: *ast.GenDecl {
+     8  .  .  .  TokPos: p.go:3:1
+     9  .  .  .  Tok: var
+    10  .  .  .  Lparen: -
+    11  .  .  .  Specs: []ast.Spec (len = 1) {
+    12  .  .  .  .  0: *ast.ValueSpec {
+    13  .  .  .  .  .  Names: []*ast.Ident (len = 1) {
+    14  .  .  .  .  .  .  0: *ast.Ident {
+    15  .  .  .  .  .  .  .  NamePos: p.go:3:5
+    16  .  .  .  .  .  .  .  Name: "x"
+    17  .  .  .  .  .  .  }
+    18  .  .  .  .  .  }
+    19  .  .  .  .  .  Values: []ast.Expr (len = 1) {
+    20  .  .  .  .  .  .  0: *ast.BasicLit {
+    21  .  .  .  .  .  .  .  ValuePos: p.go:3:9
+    22  .  .  .  .  .  .  .  ValueEnd: -
+    23  .  .  .  .  .  .  .  Kind: INT
+    24  .  .  .  .  .  .  .  Value: "1"
+    25  .  .  .  .  .  .  }
+    26  .  .  .  .  .  }
+    27  .  .  .  .  }
+    28  .  .  .  }
+    29  .  .  .  Rparen: -
+    30  .  .  }
+    31  .  }
+    32  .  FileStart: -
+    33  .  FileEnd: -
+    34  .  GoVersion: ""
+    35  }
+```
+
+`ast_inspect` walks a tree depth first. It calls the function for each node and goes into the node's children while the function returns true, then calls it once more with NULL when it is done with them:
+
+<!-- example: ../examples/go/ast.c#inspect -->
+```c
+static bool show(void *env, AstNode n) {
+    Alloc *a = env;
+    if (n == NULL)
+        return false;
+    switch ((int)n->kind) {
+    case AST_KIND_IDENT:
+        fmt_println_v("ident", ((AstIdent *)n)->name);
+        break;
+    case AST_KIND_BASIC_LIT:
+        fmt_println_v("literal", ((AstBasicLit *)n)->value);
+        break;
+    case AST_KIND_BINARY_EXPR:
+        fmt_println_v("operator", token_string(((AstBinaryExpr *)n)->op, a));
+        break;
+    default:
+        break;
+    }
+    return true;
+}
+
+static void inspect(Alloc *a) {
+    // a + b*2
+    AstBinaryExpr *mul = (AstBinaryExpr *)ast_node_new(a, AST_KIND_BINARY_EXPR);
+    AstBinaryExpr *add = (AstBinaryExpr *)ast_node_new(a, AST_KIND_BINARY_EXPR);
+    AstBasicLit *two = (AstBasicLit *)ast_node_new(a, AST_KIND_BASIC_LIT);
+    AstIdent *va = ast_new_ident(a, BURROW_S("a"));
+    AstIdent *vb = ast_new_ident(a, BURROW_S("b"));
+    if (mul == NULL || add == NULL || two == NULL || va == NULL || vb == NULL)
+        return;
+    two->kind = TOKEN_INT;
+    two->value = BURROW_S("2");
+    mul->x = &vb->node;
+    mul->op = TOKEN_MUL;
+    mul->y = &two->node;
+    add->x = &va->node;
+    add->op = TOKEN_ADD;
+    add->y = &mul->node;
+
+    ast_inspect(&add->node, (AstInspectFunc){show, a});
+}
+```
+
+That prints:
+
+```
+operator +
+ident a
+operator *
+ident b
+literal 2
+```
+
+`ast_walk` is the same walk with an `AstVisitor`, and `ast_preorder` gives the nodes as an iterator. `ast_file_exports` cuts a file down to its exported declarations and says whether anything is left:
+
+<!-- example: ../examples/go/ast.c#exports -->
+```c
+static void exports(Alloc *a) {
+    const char *names[] = {"Open", "close", "Read", "flush"};
+    AstFile *file = (AstFile *)ast_node_new(a, AST_KIND_FILE);
+    if (file == NULL)
+        return;
+    file->name = ast_new_ident(a, BURROW_S("p"));
+    file->decls = slice_nil(TYPE_AST_DECL);
+    for (int i = 0; i < 4; i++) {
+        AstFuncDecl *fn = (AstFuncDecl *)ast_node_new(a, AST_KIND_FUNC_DECL);
+        AstFuncType *type = (AstFuncType *)ast_node_new(a, AST_KIND_FUNC_TYPE);
+        if (fn == NULL || type == NULL)
+            return;
+        fn->name = ast_new_ident(a, str_from_cstr(names[i]));
+        fn->type = type;
+        file->decls = slice_append(a, file->decls, &fn, 1);
+    }
+
+    bool any = ast_file_exports(file);
+    fmt_println_v("exported anything:", any);
+    for (Int i = 0; i < file->decls.len; i++) {
+        AstFuncDecl *fn = ((AstFuncDecl **)file->decls.p)[i];
+        fmt_println_v("func", fn->name->name);
+    }
+}
+```
+
+That prints:
+
+```
+exported anything: true
+func Open
+func Read
+```
+
+Nodes and the slices in them live in the allocator they were made in, and nothing frees a single node, so build a tree in an arena and free the arena when you are done with it. The tree functions that build new lists, like `ast_merge_package_files`, `ast_sort_imports` and `ast_new_comment_map`, take the allocator to use as their first argument. `ast_merge_package_files` follows Go 1.27, which fixed the merged file's `FileStart` that Go 1.26 always left at 0.

@@ -95,6 +95,7 @@
 #include "burrow/flag.h"
 #include "burrow/fmt.h"
 #include "burrow/func.h"
+#include "burrow/go/ast.h"
 #include "burrow/go/constant.h"
 #include "burrow/go/scanner.h"
 #include "burrow/go/token.h"

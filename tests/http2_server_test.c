@@ -3654,6 +3654,200 @@ static void TestServerMaxHandlerGoroutines(TestingT *t) {
         chan_free(m.donec);
 }
 
+/* Go's handlers write 16MB. Anything past a stream's window does the same, as
+ * the client here never gives a stream more than its first 65535 bytes. */
+enum { H2T_BIG = 1 << 17, H2T_STREAM_WINDOW = 65535 };
+static Byte h2t_big[H2T_BIG];
+
+static void h2t_big_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)r;
+    Error err = BURROW_NO_ERROR;
+    (void)http_response_writer_write(
+        w, slice_from(h2t_big, H2T_BIG, H2T_BIG, TYPE_BYTE), &err);
+    if (!BURROW_FAILED(err))
+        (void)w.vt->flush(w.data);
+}
+
+/* A server whose handlers write more than a stream's window, and a client that
+ * has opened the connection's window wide. */
+static bool h2t_big_start(H2tTester *st, TestingT *t) {
+    memset(h2t_big, 'a', sizeof h2t_big);
+    return h2t_start(st, t, h2t_big_handler, NULL) && h2t_greet(st) &&
+           h2t_write_window_update(st, 0, 1U << 30);
+}
+
+/* A GET on stream id, with a priority header of u=urgency when urgency isn't
+ * negative, and a Via header when via is true. */
+static bool h2t_write_prio_get(H2tTester *st, uint32_t id, int urgency, bool via) {
+    char prio[16];
+    Str kv[4];
+    size_t n = 0;
+    if (urgency >= 0) {
+        (void)snprintf(prio, sizeof prio, "u=%d", urgency);
+        kv[n++] = BURROW_S("priority");
+        kv[n++] = str_from_cstr(prio);
+    }
+    if (via) {
+        kv[n++] = BURROW_S("via");
+        kv[n++] = BURROW_S("a proxy");
+    }
+    return h2t_write_headers(st, id, h2t_encode_header(st, kv, n), true, true);
+}
+
+/* The frames for the n streams from first on, until each has had all of its
+ * window. Go reads until the bubble has nothing more to give, and waits for it
+ * to go quiet before each frame, so each handler has its data queued by the
+ * time its stream comes up. This waits a little before each frame for the
+ * same. Puts the stream of each frame in order, up to cap of them, and
+ * answers how many, or -1 when the test failed. */
+static Int h2t_read_windows(H2tTester *st, uint32_t first, int n, uint32_t *order,
+                            Int cap) {
+    Int got[32];
+    Int nframes = 0;
+    int full = 0;
+    memset(got, 0, sizeof got);
+    while (full < n) {
+        time_sleep(2 * TIME_MILLISECOND);
+        Http2Frame *f = h2t_read_frame(st);
+        if (f == NULL)
+            return -1;
+        uint32_t id = f->header.stream_id;
+        if (nframes < cap)
+            order[nframes++] = id;
+        if (f->kind == HTTP2_DATA_FRAME && id >= first && (id - first) % 2 == 0 &&
+            (id - first) / 2 < (uint32_t)n) {
+            Int *g = &got[(id - first) / 2];
+            bool was_full = *g >= H2T_STREAM_WINDOW;
+            *g += f->u.data.data.len;
+            if (!was_full && *g >= H2T_STREAM_WINDOW)
+                full++;
+        }
+        burrow__http2_frame_free(f);
+    }
+    return nframes;
+}
+
+/* Whether no two frames next to each other in the middle half of order are on
+ * the same stream, which is what round robin gives. */
+static bool h2t_middle_half_alternates(const uint32_t *order, Int n) {
+    for (Int i = n / 4 + 1; i < n * 3 / 4; i++) {
+        if (order[i] == order[i - 1])
+            return false;
+    }
+    return true;
+}
+
+static void h2t_print_order(TestingT *t, const char *what, const uint32_t *order,
+                            Int n) {
+    BytesBuffer b = BYTES_BUFFER(heap_allocator());
+    for (Int i = 0; i < n; i++) {
+        char num[16];
+        (void)snprintf(num, sizeof num, i == 0 ? "%u" : " %u", (unsigned)order[i]);
+        (void)bytes_buffer_write_string(&b, str_from_cstr(num), NULL);
+    }
+    testing_t_errorf_v(t, "%s, got: [%s]", str_from_cstr(what),
+                       str_from_bytes(bytes_buffer_bytes(&b).p, bytes_buffer_len(&b)));
+    bytes_buffer_free(&b);
+}
+
+/* How long the handlers get to queue their first writes, where Go waits for
+ * its bubble to go quiet. */
+#define H2T_SETTLE (100 * TIME_MILLISECOND)
+
+static void TestServerRFC9218Priority(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    H2tTester st;
+    if (h2t_big_start(&st, t)) {
+        /* 8 streams, where a stream with a larger ID has a lower urgency
+         * value, which is more urgent. */
+        bool ok = true;
+        for (int i = 0; ok && i < 8; i++)
+            ok = h2t_write_prio_get(&st, (uint32_t)(i * 2 + 1), 7 - i, false);
+        time_sleep(H2T_SETTLE);
+        uint32_t order[256];
+        Int n = ok ? h2t_read_windows(&st, 1, 8, order, 256) : -1;
+        /* The last frame of each stream, which is when it was done. */
+        Int last[8];
+        for (int i = 0; i < 8; i++)
+            last[i] = -1;
+        for (Int i = 0; i < n; i++) {
+            if (order[i] % 2 == 1 && order[i] < 16)
+                last[order[i] / 2] = i;
+        }
+        for (int i = 0; n >= 0 && i < 7; i++) {
+            if (last[i] < last[i + 1])
+                testing_t_errorf_v(t,
+                                   "stream %d finished before stream %d unexpectedly",
+                                   i * 2 + 1, i * 2 + 3);
+        }
+    }
+    h2t_close(&st);
+}
+
+static void TestServerRFC9218PriorityIgnoredWhenProxied(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    H2tTester st;
+    if (h2t_big_start(&st, t)) {
+        /* The same 8 streams, which come through a proxy, so their urgencies
+         * don't count. */
+        bool ok = true;
+        for (int i = 0; ok && i < 8; i++)
+            ok = h2t_write_prio_get(&st, (uint32_t)(i * 2 + 1), 7 - i, true);
+        time_sleep(H2T_SETTLE);
+        uint32_t order[256];
+        Int n = ok ? h2t_read_windows(&st, 1, 8, order, 256) : -1;
+        /* Only the middle half, since stream 1 gets a few frames out before
+         * the others open, and the end isn't quite round robin either. */
+        if (n >= 0 && !h2t_middle_half_alternates(order, n))
+            h2t_print_order(
+                t, "want stream to be processed in round-robin manner when proxied",
+                order, n);
+    }
+    h2t_close(&st);
+}
+
+static void TestServerRFC9218PriorityAware(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    enum { STREAMS = 10 };
+    H2tTester st;
+    if (h2t_big_start(&st, t)) {
+        /* With no sign that the client knows RFC 9218 priorities, the streams
+         * take turns. */
+        bool ok = true;
+        for (int i = 0; ok && i < STREAMS; i++)
+            ok = h2t_write_prio_get(&st, (uint32_t)(i * 2 + 1), -1, false);
+        time_sleep(H2T_SETTLE);
+        uint32_t order[256];
+        Int n = ok ? h2t_read_windows(&st, 1, STREAMS, order, 256) : -1;
+        if (n >= 0 && !h2t_middle_half_alternates(order, n))
+            h2t_print_order(t,
+                            "want stream to be processed in round-robin manner when "
+                            "unaware of priority",
+                            order, n);
+
+        /* A PRIORITY_UPDATE for stream 1, which is done, so all it does is
+         * tell the server the client knows about RFC 9218. Then streams of the
+         * same urgency that aren't incremental go one at a time to the end.
+         * Go checks the first streams' order again here rather than these
+         * ones', which they wouldn't pass, and so does this. */
+        ok = n >= 0 && !h2t_failed(&st, "WritePriorityUpdate",
+                                   burrow__http2_framer_write_priority_update(
+                                       st.fr, 1, BURROW_STR_EMPTY));
+        time_sleep(H2T_SETTLE);
+        for (int i = STREAMS; ok && i < 2 * STREAMS; i++)
+            ok = h2t_write_prio_get(&st, (uint32_t)(i * 2 + 1), -1, false);
+        uint32_t order2[256];
+        if (ok && h2t_read_windows(&st, 2 * STREAMS + 1, STREAMS, order2, 256) >= 0 &&
+            !h2t_middle_half_alternates(order, n))
+            h2t_print_order(t,
+                            "want stream to be processed one-by-one to completion when "
+                            "aware of priority",
+                            order, n);
+    }
+    h2t_close(&st);
+}
+
 #define TESTS(X)                                                                       \
     X(TestServer)                                                                      \
     X(TestServer_Request_Get)                                                          \
@@ -3765,6 +3959,9 @@ static void TestServerMaxHandlerGoroutines(TestingT *t) {
     X(TestServerInitialFlowControlWindow)                                              \
     X(TestServerWindowUpdateOnBodyClose)                                               \
     X(TestRequestBodyReadCloseRace)                                                    \
-    X(TestServerMaxHandlerGoroutines)
+    X(TestServerMaxHandlerGoroutines)                                                  \
+    X(TestServerRFC9218Priority)                                                       \
+    X(TestServerRFC9218PriorityIgnoredWhenProxied)                                     \
+    X(TestServerRFC9218PriorityAware)
 
 TESTING_MAIN(TESTS)

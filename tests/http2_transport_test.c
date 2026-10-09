@@ -1172,6 +1172,11 @@ static bool h2ct_write_rst_stream(H2ctConn *tc, uint32_t id, Http2ErrCode code) 
                         burrow__http2_framer_write_rst_stream(tc->fr, id, code));
 }
 
+static bool h2ct_write_ping(H2ctConn *tc, bool ack, const Byte data[8]) {
+    return !h2ct_failed(tc, "writing PING",
+                        burrow__http2_framer_write_ping(tc->fr, ack, data));
+}
+
 static bool h2ct_write_window_update(H2ctConn *tc, uint32_t id, uint32_t incr) {
     return !h2ct_failed(tc, "writing WINDOW_UPDATE",
                         burrow__http2_framer_write_window_update(tc->fr, id, incr));
@@ -2828,6 +2833,133 @@ static void TestTransportMaxFrameReadSize_1024(TestingT *t) {
     h2ct_run(t, h2ct_max_frame_read_size, &test);
 }
 
+static void h2ct_close_after_lost_ping(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    static const HttpHTTP2Config h2 = {.send_ping_timeout = 1 * TIME_SECOND,
+                                       .ping_timeout = 1 * TIME_SECOND};
+    tt->tr1.http2 = &h2;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_tc_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+
+    /* A second goes by, and then the PING. */
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_PING));
+
+    /* A second more, with no answer, and the connection is lost. */
+    Error err = h2ct_rt_err(rt);
+    if (BURROW_OK(err) ||
+        !strings_contains(error_text(err), BURROW_S("client connection lost")))
+        FATALF("expected to get error about \"connection lost\", got %v", err);
+}
+
+static void TestTransportCloseAfterLostPing(TestingT *t) {
+    h2ct_run(t, h2ct_close_after_lost_ping, NULL);
+}
+
+static void h2ct_send_ping_with_reset(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    static const HttpHTTP2Config h2 = {.strict_max_concurrent_requests = true};
+    tt->tr1.http2 = &h2;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    enum { MAX_CONCURRENT = 3 };
+    static const Http2Setting s[] = {
+        {HTTP2_SETTING_MAX_CONCURRENT_STREAMS, MAX_CONCURRENT}};
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, s, 1));
+
+    /* Start several requests. */
+    H2ctRT *rts[MAX_CONCURRENT];
+    for (int i = 0; i < MAX_CONCURRENT + 1; i++) {
+        H2ctRT *rt = h2ct_tc_round_trip(
+            tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+        H2CT_TRY(rt != NULL);
+        if (i >= MAX_CONCURRENT) {
+            H2CT_TRY(h2ct_want_idle(tc));
+            continue;
+        }
+        H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+        rts[i] = rt;
+    }
+
+    /* Cancel one request. We send a PING frame along with the RST_STREAM. */
+    uint32_t id0 = h2ct_rt_stream_id(rts[0]);
+    H2CT_TRY(id0 != 0);
+    BURROW_CALLF0(rts[0]->cancel);
+    H2CT_TRY(h2ct_want_rst_stream(tc, id0, HTTP2_ERR_CODE_CANCEL));
+    Http2Frame *pf = h2ct_read_type(tc, HTTP2_FRAME_PING);
+    H2CT_TRY(pf != NULL);
+    Byte data[8];
+    memcpy(data, pf->u.ping.data, sizeof data);
+    burrow__http2_frame_free(pf);
+    H2CT_TRY(h2ct_want_idle(tc));
+
+    /* Cancel another request. No PING frame, since one is in flight. */
+    uint32_t id1 = h2ct_rt_stream_id(rts[1]);
+    H2CT_TRY(id1 != 0);
+    BURROW_CALLF0(rts[1]->cancel);
+    H2CT_TRY(h2ct_want_rst_stream(tc, id1, HTTP2_ERR_CODE_CANCEL));
+    H2CT_TRY(h2ct_want_idle(tc));
+
+    /* Respond to the PING. This finalizes the previous resets, and allows the
+     * pending request to be sent. */
+    H2CT_TRY(h2ct_write_ping(tc, true, data));
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    H2CT_TRY(h2ct_want_idle(tc));
+}
+
+static void TestTransportSendPingWithReset(TestingT *t) {
+    h2ct_run(t, h2ct_send_ping_with_reset, NULL);
+}
+
+static void h2ct_no_ping_after_reset_with_frames(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    static const HttpHTTP2Config h2 = {.strict_max_concurrent_requests = true};
+    tt->tr1.http2 = &h2;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    static const Http2Setting s[] = {{HTTP2_SETTING_MAX_CONCURRENT_STREAMS, 1}};
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, s, 1));
+
+    /* Start request #1. The server immediately responds with request
+     * headers. */
+    H2ctRT *rt1 = h2ct_tc_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt1 != NULL);
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    uint32_t id1 = h2ct_rt_stream_id(rt1);
+    H2CT_TRY(id1 != 0);
+    static const Str res_kv[] = {S_(":status"), S_("200")};
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id1, h2ct_block(tc, res_kv, 2), false)));
+    H2CT_TRY(h2ct_rt_want_status(rt1, 200));
+
+    /* Start request #2. The connection is at its concurrency limit, so this
+     * request is not yet sent. */
+    H2ctRT *rt2 = h2ct_tc_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt2 != NULL);
+    H2CT_TRY(h2ct_want_idle(tc));
+
+    /* Cancel request #1. This frees a concurrency slot, and request #2 is
+     * sent. */
+    BURROW_CALLF0(rt1->cancel);
+    H2CT_TRY(h2ct_want_rst_stream(tc, id1, HTTP2_ERR_CODE_CANCEL));
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+
+    /* Cancel request #2. We send a PING along with the RST_STREAM, since no
+     * frames have been received since this request was sent. */
+    uint32_t id2 = h2ct_rt_stream_id(rt2);
+    H2CT_TRY(id2 != 0);
+    BURROW_CALLF0(rt2->cancel);
+    H2CT_TRY(h2ct_want_rst_stream(tc, id2, HTTP2_ERR_CODE_CANCEL));
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_PING));
+}
+
+static void TestTransportNoPingAfterResetWithFrames(TestingT *t) {
+    h2ct_run(t, h2ct_no_ping_after_reset_with_frames, NULL);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -2908,6 +3040,9 @@ static void TestTransportMaxFrameReadSize_1024(TestingT *t) {
     X(TestTransportTLSNextProtoConnImmediateFailureUnused)                             \
     X(TestTransportRequestsStallAtServerLimit)                                         \
     X(TestTransportMaxFrameReadSize_64000)                                             \
-    X(TestTransportMaxFrameReadSize_1024)
+    X(TestTransportMaxFrameReadSize_1024)                                              \
+    X(TestTransportCloseAfterLostPing)                                                 \
+    X(TestTransportSendPingWithReset)                                                  \
+    X(TestTransportNoPingAfterResetWithFrames)
 
 TESTING_MAIN(TESTS)

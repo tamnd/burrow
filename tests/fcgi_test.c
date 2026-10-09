@@ -128,8 +128,14 @@ typedef struct StreamTest {
 
 static void stream_case(TestingT *t, StreamTest *test, burrow__FcgiRecord *rec) {
     Alloc *a = heap_allocator();
-    BytesBuffer *buf = bytes_new_buffer(a, test->raw);
+    /* Go's bytes.NewBuffer(test.raw) shares the slice, but there it is a
+     * fresh []byte. Here raw may be a string literal, which the writes
+     * below would land on, so the buffer gets its own copy. */
+    BytesBuffer *buf = bytes_new_buffer(a, (Slice){0});
     BytesBuffer *content = bytes_new_buffer(a, (Slice){0});
+    if (buf == NULL || content == NULL)
+        FATALF("%s: out of memory", test->desc);
+    (void)bytes_buffer_write(buf, test->raw, NULL);
     while (bytes_buffer_len(buf) > 0) {
         Error err = burrow__fcgi_record_read(rec, bytes_buffer_as_io_reader(buf));
         if (BURROW_FAILED(err)) {

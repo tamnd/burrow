@@ -1702,7 +1702,10 @@ enum {
     PAL_TCP_KEEPCNT,
     PAL_IP_TTL,
     PAL_IPV6_V6ONLY,
-    PAL_IPV6_HOPLIMIT
+    PAL_IPV6_HOPLIMIT,
+    PAL_IP_MULTICAST_LOOP,
+    PAL_IPV6_MULTICAST_IF,
+    PAL_IPV6_MULTICAST_LOOP
 };
 
 /* A value is 1 or 0 for the options that are on or off, a count for the
@@ -1710,9 +1713,28 @@ enum {
  * TCP ones. PAL_SO_LINGER is the linger time in seconds, or -1 for lingering
  * off. PAL_SO_ERROR only reads, and what it reads is a PalErrno, PAL_OK when
  * there is no error, with the native code behind it kept for
- * pal_errno_native. An option the platform does not have is PAL_ENOTSUP. */
+ * pal_errno_native. PAL_IPV6_MULTICAST_IF is an interface index. An option
+ * the platform does not have is PAL_ENOTSUP. */
 bool pal_getsockopt(int64_t fd, int32_t opt, int64_t *value, PalErrno *err);
 bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err);
+
+/* The multicast options that take a request rather than a number.
+ *
+ * PAL_MREQ_IPV4_IF is IP_MULTICAST_IF, PAL_MREQ_IPV4_JOIN is
+ * IP_ADD_MEMBERSHIP for the four bytes of group, and PAL_MREQ_IPV6_JOIN is
+ * IPV6_JOIN_GROUP for its sixteen. Linux names an IPv4 interface by its index
+ * and every other system by one of its addresses, ifaddr, which is all zeros
+ * for the system's choice, so a caller fills in both and each system reads the
+ * one it wants. IPv6 always goes by the index, 0 for the system's choice. */
+enum { PAL_MREQ_IPV4_IF = 1, PAL_MREQ_IPV4_JOIN, PAL_MREQ_IPV6_JOIN };
+
+typedef struct PalMreq {
+    uint8_t group[16];
+    uint8_t ifaddr[4];
+    int32_t index;
+} PalMreq;
+
+bool pal_setsockopt_mreq(int64_t fd, int32_t opt, const PalMreq *m, PalErrno *err);
 
 enum { PAL_SHUT_RD = 0, PAL_SHUT_WR = 1, PAL_SHUT_RDWR = 2 };
 bool pal_shutdown(int64_t fd, int32_t how, PalErrno *err);

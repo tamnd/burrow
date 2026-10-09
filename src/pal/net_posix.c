@@ -152,6 +152,13 @@ bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err) {
     return pnet_nosys(err);
 }
 
+bool pal_setsockopt_mreq(int64_t fd, int32_t opt, const PalMreq *m, PalErrno *err) {
+    (void)fd;
+    (void)opt;
+    (void)m;
+    return pnet_nosys(err);
+}
+
 bool pal_shutdown(int64_t fd, int32_t how, PalErrno *err) {
     (void)fd;
     (void)how;
@@ -605,7 +612,8 @@ int64_t pal_recvfrom(int64_t fd, void *buf, int64_t n, PalSockAddr *from,
 static bool pnet_opt(int32_t opt, int *level, int *name, bool *flag) {
     *flag = opt == PAL_SO_REUSEADDR || opt == PAL_SO_REUSEPORT ||
             opt == PAL_SO_KEEPALIVE || opt == PAL_SO_BROADCAST ||
-            opt == PAL_TCP_NODELAY || opt == PAL_IPV6_V6ONLY;
+            opt == PAL_TCP_NODELAY || opt == PAL_IPV6_V6ONLY ||
+            opt == PAL_IP_MULTICAST_LOOP || opt == PAL_IPV6_MULTICAST_LOOP;
     switch (opt) {
     case PAL_SO_REUSEADDR:
         *level = SOL_SOCKET;
@@ -687,10 +695,33 @@ static bool pnet_opt(int32_t opt, int *level, int *name, bool *flag) {
         *level = IPPROTO_IPV6;
         *name = IPV6_UNICAST_HOPS;
         return true;
+    case PAL_IP_MULTICAST_LOOP:
+        *level = IPPROTO_IP;
+        *name = IP_MULTICAST_LOOP;
+        return true;
+    case PAL_IPV6_MULTICAST_IF:
+        *level = IPPROTO_IPV6;
+        *name = IPV6_MULTICAST_IF;
+        return true;
+    case PAL_IPV6_MULTICAST_LOOP:
+        *level = IPPROTO_IPV6;
+        *name = IPV6_MULTICAST_LOOP;
+        return true;
     default:
         return false;
     }
 }
+
+/* Whether IP_MULTICAST_LOOP is a u_char here rather than an int, which is
+ * what Go's sockoptip4_bsdvar.go passes it as. */
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS) ||                             \
+    defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_NETBSD) ||                         \
+    defined(BURROW_OS_OPENBSD) || defined(BURROW_OS_DRAGONFLY) ||                      \
+    defined(BURROW_OS_SOLARIS) || defined(BURROW_OS_AIX)
+#define PNET_LOOP_BYTE 1
+#else
+#define PNET_LOOP_BYTE 0
+#endif
 
 bool pal_getsockopt(int64_t fd, int32_t opt, int64_t *value, PalErrno *err) {
     BURROW_OUT(err, PAL_OK);
@@ -714,6 +745,14 @@ bool pal_getsockopt(int64_t fd, int32_t opt, int64_t *value, PalErrno *err) {
         if (getsockopt((int)fd, level, name, &l, &len) != 0)
             return pnet_fail(err);
         *value = l.l_onoff ? (int64_t)l.l_linger : -1;
+        return true;
+    }
+    if (PNET_LOOP_BYTE && opt == PAL_IP_MULTICAST_LOOP) {
+        unsigned char c = 0;
+        socklen_t len = (socklen_t)sizeof c;
+        if (getsockopt((int)fd, level, name, &c, &len) != 0)
+            return pnet_fail(err);
+        *value = c != 0;
         return true;
     }
     int v = 0;
@@ -753,9 +792,67 @@ bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err) {
         l.l_onoff = value >= 0;
         l.l_linger = value >= 0 ? (int)value : 0;
         r = setsockopt((int)fd, level, name, &l, (socklen_t)sizeof l);
+    } else if (PNET_LOOP_BYTE && opt == PAL_IP_MULTICAST_LOOP) {
+        unsigned char c = value != 0;
+        r = setsockopt((int)fd, level, name, &c, (socklen_t)sizeof c);
     } else {
         int v = (int)value;
         r = setsockopt((int)fd, level, name, &v, (socklen_t)sizeof v);
+    }
+    if (r != 0)
+        return pnet_fail(err);
+    return true;
+}
+
+bool pal_setsockopt_mreq(int64_t fd, int32_t opt, const PalMreq *m, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+    if (!pnet_fd_ok(fd, err))
+        return false;
+    if (m == NULL || m->index < 0) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+    int r;
+    switch (opt) {
+    case PAL_MREQ_IPV4_IF:
+    case PAL_MREQ_IPV4_JOIN: {
+#if defined(BURROW_OS_LINUX)
+        struct ip_mreqn q;
+        memset(&q, 0, sizeof q);
+        q.imr_ifindex = (int)m->index;
+        if (opt == PAL_MREQ_IPV4_JOIN)
+            memcpy(&q.imr_multiaddr, m->group, 4);
+        r = setsockopt((int)fd, IPPROTO_IP,
+                       opt == PAL_MREQ_IPV4_IF ? IP_MULTICAST_IF : IP_ADD_MEMBERSHIP,
+                       &q, (socklen_t)sizeof q);
+#else
+        if (opt == PAL_MREQ_IPV4_IF) {
+            struct in_addr a;
+            memcpy(&a, m->ifaddr, 4);
+            r = setsockopt((int)fd, IPPROTO_IP, IP_MULTICAST_IF, &a,
+                           (socklen_t)sizeof a);
+        } else {
+            struct ip_mreq q;
+            memset(&q, 0, sizeof q);
+            memcpy(&q.imr_multiaddr, m->group, 4);
+            memcpy(&q.imr_interface, m->ifaddr, 4);
+            r = setsockopt((int)fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &q,
+                           (socklen_t)sizeof q);
+        }
+#endif
+        break;
+    }
+    case PAL_MREQ_IPV6_JOIN: {
+        struct ipv6_mreq q;
+        memset(&q, 0, sizeof q);
+        memcpy(&q.ipv6mr_multiaddr, m->group, 16);
+        q.ipv6mr_interface = (unsigned int)m->index;
+        r = setsockopt((int)fd, IPPROTO_IPV6, IPV6_JOIN_GROUP, &q, (socklen_t)sizeof q);
+        break;
+    }
+    default:
+        BURROW_OUT(err, PAL_ENOTSUP);
+        return false;
     }
     if (r != 0)
         return pnet_fail(err);

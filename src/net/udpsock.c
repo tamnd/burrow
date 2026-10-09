@@ -13,8 +13,12 @@
 #include "burrow/declare.h"
 #include "burrow/error.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
 #include "burrow/net.h"
 #include "burrow/net/netip.h"
+#include "burrow/os.h"
+#include "burrow/platform.h"
+#include "burrow/slice.h"
 #include "burrow/type.h"
 
 #include <stddef.h>
@@ -321,6 +325,150 @@ NetUDPConn *net_listen_udp(Alloc *a, Str network, const NetUDPAddr *laddr, Error
     if (c == NULL && !nu_is_oom(e))
         e = burrow__net_op_error(NU_LIT("listen"), network, nu_nil_addr,
                                  net_udp_addr_as_addr(laddr), e);
+    BURROW_OUT(err, e);
+    return c;
+}
+
+/* ------------------------------------------------------------- multicast */
+
+/* Linux names an IPv4 interface by its index, in an ip_mreqn, and the other
+ * systems by one of its addresses, which Go has to go and find. */
+#if defined(BURROW_OS_LINUX)
+#define NU_MREQN 1
+#else
+#define NU_MREQN 0
+#endif
+
+/* interfaceToIPv4Addr for an interface that is there: its first IPv4
+ * address, or errNoSuchInterface when it has none. */
+static Error nu_interface_ipv4(const NetInterface *ifi, Byte out[4]) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Error e = BURROW_NO_ERROR;
+    Slice ifat = net_interface_addrs_of(ifi, arena_allocator(&ar), &e);
+    if (BURROW_OK(e)) {
+        e = burrow__net_err_no_such_interface;
+        const NetAddr *as = (const NetAddr *)ifat.p;
+        for (Int i = 0; i < ifat.len; i++) {
+            NetIP ip = slice_nil(TYPE_BYTE);
+            if (as[i].vt != NULL && as[i].vt->self_type == TYPE_NET_IP_ADDR)
+                ip = ((const NetIPAddr *)as[i].data)->ip;
+            else if (as[i].vt != NULL && as[i].vt->self_type == TYPE_NET_IP_NET)
+                ip = ((const NetIPNet *)as[i].data)->ip;
+            NetIP v4 = net_ip_to4(ip);
+            if (v4.p != NULL) {
+                memcpy(out, v4.p, 4);
+                e = BURROW_NO_ERROR;
+                break;
+            }
+        }
+    }
+    /* The error is the interface's, made outside the arena. */
+    arena_free(&ar);
+    return e;
+}
+
+static int32_t nu_index(const NetInterface *ifi) {
+    if (ifi == NULL)
+        return 0;
+    return ifi->index < 0 || ifi->index > INT32_MAX ? -1 : (int32_t)ifi->index;
+}
+
+/* setIPv4MulticastInterface. */
+static Error nu_set_ipv4_multicast_if(NetUDPConn *c, const NetInterface *ifi) {
+    PalMreq m;
+    memset(&m, 0, sizeof m);
+    m.index = nu_index(ifi);
+    if (!NU_MREQN) {
+        Error e = nu_interface_ipv4(ifi, m.ifaddr);
+        if (BURROW_FAILED(e)) {
+#if defined(BURROW_OS_WINDOWS)
+            /* Go's Windows code wraps whatever it got, not only an Errno. */
+            if (e.vt != burrow_err_out_of_memory.vt ||
+                e.data != burrow_err_out_of_memory.data)
+                e = os_new_syscall_error(error_allocator(), NU_LIT("setsockopt"), e);
+#endif
+            return e;
+        }
+    }
+    return burrow__netfd_setsockopt_mreq(&c->c.fd, PAL_MREQ_IPV4_IF, &m);
+}
+
+/* joinIPv4Group. Outside Linux an interface has to have an IPv4 address to
+ * name it by, or it is errNoSuchMulticastInterface, and no interface is the
+ * system's choice. */
+static Error nu_join_ipv4_group(NetUDPConn *c, const NetInterface *ifi, NetIP ip4) {
+    PalMreq m;
+    memset(&m, 0, sizeof m);
+    memcpy(m.group, ip4.p, 4);
+    m.index = nu_index(ifi);
+    if (!NU_MREQN && ifi != NULL) {
+        Error e = nu_interface_ipv4(ifi, m.ifaddr);
+        if (e.vt == burrow__net_err_no_such_interface.vt &&
+            e.data == burrow__net_err_no_such_interface.data)
+            return burrow__net_err_no_such_multicast_interface;
+        if (BURROW_FAILED(e))
+            return e;
+        static const Byte zero[4] = {0, 0, 0, 0};
+        if (memcmp(m.ifaddr, zero, 4) == 0)
+            return burrow__net_err_no_such_multicast_interface;
+    }
+    return burrow__netfd_setsockopt_mreq(&c->c.fd, PAL_MREQ_IPV4_JOIN, &m);
+}
+
+/* listenIPv4MulticastUDP and listenIPv6MulticastUDP. */
+static Error nu_listen_multicast(NetUDPConn *c, const NetInterface *ifi, NetIP ip) {
+    NetIP ip4 = net_ip_to4(ip);
+    Error e = BURROW_NO_ERROR;
+    if (ip4.p != NULL) {
+        if (ifi != NULL)
+            e = nu_set_ipv4_multicast_if(c, ifi);
+        if (BURROW_OK(e))
+            e = burrow__netfd_setsockopt(&c->c.fd, PAL_IP_MULTICAST_LOOP, 0);
+        if (BURROW_OK(e))
+            e = nu_join_ipv4_group(c, ifi, ip4);
+        return e;
+    }
+    if (ifi != NULL)
+        e = burrow__netfd_setsockopt(&c->c.fd, PAL_IPV6_MULTICAST_IF, nu_index(ifi));
+    if (BURROW_OK(e))
+        e = burrow__netfd_setsockopt(&c->c.fd, PAL_IPV6_MULTICAST_LOOP, 0);
+    if (BURROW_OK(e)) {
+        PalMreq m;
+        memset(&m, 0, sizeof m);
+        memcpy(m.group, ip.p, (size_t)(ip.len < 16 ? ip.len : 16));
+        m.index = nu_index(ifi);
+        e = burrow__netfd_setsockopt_mreq(&c->c.fd, PAL_MREQ_IPV6_JOIN, &m);
+    }
+    return e;
+}
+
+NetUDPConn *net_listen_multicast_udp(Alloc *a, Str network, const NetInterface *ifi,
+                                     const NetUDPAddr *gaddr, Error *err) {
+    Str net = BURROW_STR_EMPTY;
+    NetAddr ga = net_udp_addr_as_addr(gaddr);
+    if (!nu_network(network, &net)) {
+        Error u = net_unknown_network_error(error_allocator(), network);
+        BURROW_OUT(err,
+                   burrow__net_op_error(NU_LIT("listen"), network, nu_nil_addr, ga, u));
+        return NULL;
+    }
+    if (gaddr == NULL || gaddr->ip.p == NULL) {
+        BURROW_OUT(err, burrow__net_op_error(NU_LIT("listen"), network, nu_nil_addr, ga,
+                                             burrow__net_err_missing_address));
+        return NULL;
+    }
+    Error e = BURROW_NO_ERROR;
+    NetUDPConn *c = nu_socket(a, NULL, net, gaddr, NULL, true, &e);
+    if (c != NULL) {
+        e = nu_listen_multicast(c, ifi, gaddr->ip);
+        if (BURROW_FAILED(e)) {
+            net_udp_conn_free(c);
+            c = NULL;
+        }
+    }
+    if (c == NULL && !nu_is_oom(e))
+        e = burrow__net_op_error(NU_LIT("listen"), network, nu_nil_addr, ga, e);
     BURROW_OUT(err, e);
     return c;
 }

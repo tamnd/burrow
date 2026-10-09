@@ -2119,6 +2119,129 @@ static void TestTransportBodyEagerEndStream(TestingT *t) {
     h2ct_run(t, h2ct_body_eager_end_stream, NULL);
 }
 
+/* headerListSize: the size of h as RFC 7540 section 6.5.2 counts it. */
+static uint64_t h2ct_header_list_size(HttpHeader h) {
+    uint64_t size = 0;
+    const void *key;
+    void *val;
+    for (MapIter it = map_iter(h); map_next(&it, &key, &val);) {
+        Str k = *(const Str *)key;
+        Slice vv = *(const Slice *)val;
+        for (Int i = 0; i < vv.len; i++)
+            size += (uint64_t)k.len + (uint64_t)((const Str *)vv.p)[i].len + 32;
+    }
+    return size;
+}
+
+/* padHeaders adds data to an http.Header until headerListSize(h) == limit.
+ * Due to the way header list sizes are calculated, padHeaders cannot add
+ * fewer than len("Pad-Headers") + 32 bytes to h, and will fail if asked to
+ * add fewer. The names and values come from a. */
+static bool h2ct_pad_headers(TestingT *t, Alloc *a, HttpHeader h, uint64_t limit,
+                             Str filler) {
+    if (limit > 0xffffffffU) {
+        testing_t_fatalf_v(t,
+                           "padHeaders: refusing to pad to more than 2^32-1 bytes. "
+                           "limit = %d",
+                           limit);
+        return false;
+    }
+    uint64_t min_padding = sizeof "Pad-Headers" - 1 + 32;
+    uint64_t size = h2ct_header_list_size(h);
+
+    uint64_t minlimit = size + min_padding;
+    if (limit < minlimit) {
+        testing_t_fatalf_v(t, "padHeaders: limit %d < %d", limit, minlimit);
+        return false;
+    }
+
+    /* Use a fixed-width format for name so that fieldSize remains
+     * constant. */
+    uint64_t field_size = sizeof "Pad-Headers-000001" - 1 + (uint64_t)filler.len + 32;
+
+    /* Add as many complete filler values as possible, leaving room for at
+     * least one empty "Pad-Headers" key. */
+    limit = limit - min_padding;
+    for (int i = 0; size + field_size < limit; i++) {
+        Str name = fmt_sprintf_v(a, "Pad-Headers-%06d", i);
+        if (name.len == 0 || !http_header_add(h, name, filler)) {
+            testing_t_fatalf_v(t, "padHeaders: out of memory");
+            return false;
+        }
+        size += field_size;
+    }
+
+    /* Add enough bytes to reach limit. */
+    uint64_t remain = limit - size;
+    Str last_value = strings_repeat(a, BURROW_S("*"), (Int)remain);
+    if ((uint64_t)last_value.len != remain ||
+        !http_header_add(h, BURROW_S("Pad-Headers"), last_value)) {
+        testing_t_fatalf_v(t, "padHeaders: out of memory");
+        return false;
+    }
+    return true;
+}
+
+/* One check of TestPadHeaders, on h, whose padding comes from keep, or on a
+ * new header when h is NULL. */
+static bool h2ct_pad_check(TestingT *t, Arena *keep, HttpHeader h, uint32_t limit,
+                           Int filler_len) {
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = h == NULL ? arena_allocator(&ar) : arena_allocator(keep);
+    if (h == NULL)
+        h = http_header_make(a);
+    bool ok = h != NULL;
+    if (!ok)
+        testing_t_fatalf_v(t, "no memory for the header");
+    if (ok)
+        ok = h2ct_pad_headers(t, a, h, limit,
+                              strings_repeat(a, BURROW_S("f"), filler_len));
+    if (ok) {
+        uint64_t got_size = h2ct_header_list_size(h);
+        if (got_size != limit)
+            testing_t_errorf_v(t, "Got size = %d; want %d", got_size, (int64_t)limit);
+    }
+    arena_free(&ar);
+    return ok;
+}
+
+static void TestPadHeaders(TestingT *t) {
+    /* Try all possible combinations for small fillerLen and limit. */
+    const uint32_t min_limit = sizeof "Pad-Headers" - 1 + 32;
+    for (uint32_t limit = min_limit; limit <= 128; limit++) {
+        for (Int filler_len = 0; (uint32_t)filler_len <= limit; filler_len++) {
+            if (!h2ct_pad_check(t, NULL, NULL, limit, filler_len))
+                return;
+        }
+    }
+
+    /* Try a few tests with larger limits, plus cumulative tests. Since these
+     * tests are cumulative, tests[i+1].limit must be >= tests[i].limit +
+     * minLimit. See the comment on padHeaders for more info on why the limit
+     * arg has this restriction. */
+    static const struct {
+        Int filler_len;
+        uint32_t limit;
+    } tests[] = {
+        {64, 1024}, {1024, 1286}, {256, 2048}, {1024, 10 * 1024}, {1023, 11 * 1024},
+    };
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    HttpHeader h = http_header_make(arena_allocator(&ar));
+    if (h == NULL) {
+        arena_free(&ar);
+        testing_t_fatalf_v(t, "no memory for the header");
+        return;
+    }
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
+        if (!h2ct_pad_check(t, NULL, NULL, tests[i].limit, tests[i].filler_len) ||
+            !h2ct_pad_check(t, &ar, h, tests[i].limit, tests[i].filler_len))
+            break;
+    }
+    arena_free(&ar);
+}
+
 /* What ErrResponseHeaderListSize, as the cause of a StreamError or not. */
 static bool h2ct_is_header_list_size(Error err) {
     Http2StreamError se;
@@ -2960,6 +3083,158 @@ static void TestTransportNoPingAfterResetWithFrames(TestingT *t) {
     h2ct_run(t, h2ct_no_ping_after_reset_with_frames, NULL);
 }
 
+static void h2ct_count_header_size(void *env, Str name, Str value) {
+    *(uint64_t *)env += (uint64_t)name.len + (uint64_t)value.len + 32;
+}
+
+/* headerListSizeForRequest: the size of the header list EncodeHeaders makes
+ * for req, with no limit. */
+static bool h2ct_header_list_size_for_request(H2ctTT *tt, HttpRequest *req,
+                                              uint64_t *size) {
+    Http2EncodeHeadersParam p;
+    memset(&p, 0, sizeof p);
+    p.ctx = context_background();
+    p.url = req->url;
+    p.method = req->method;
+    p.host = req->host;
+    p.header = req->header;
+    p.trailer = req->trailer;
+    p.actual_content_length = req->content_length;
+    p.add_gzip_header = true;
+    p.peer_max_header_list_size = UINT64_MAX;
+    Http2EncodeHeadersResult res;
+    *size = 0;
+    Error err = burrow__http2_encode_headers(arena_allocator(&tt->ar), &p,
+                                             h2ct_count_header_size, size, &res);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(tt->t, "%v", err);
+        return false;
+    }
+    return true;
+}
+
+/* newRequest: a POST with a body, so that it can have trailers, and no
+ * User-Agent. Go's request is to https://example.tld/. This one goes to
+ * dummy.tld, the host the test's connection is for, which changes the sizes
+ * but not what they add up to. */
+static HttpRequest *h2ct_new_list_size_request(H2ctTT *tt) {
+    static const char bodytext[] = "hello";
+    StringsReader *body =
+        strings_new_reader(arena_allocator(&tt->ar), str_from_cstr(bodytext));
+    if (body == NULL) {
+        testing_t_fatalf_v(tt->t, "newRequest: no memory for the body");
+        return NULL;
+    }
+    HttpRequest *req = h2ct_new_request(tt, (Context){0}, BURROW_S("POST"),
+                                        strings_reader_as_io_reader(body));
+    if (req == NULL)
+        return NULL;
+    req->content_length = (int64_t)strlen(bodytext);
+    /* http.Header{"User-Agent": nil}: the key with no values. */
+    if (!http_header_add(req->header, BURROW_S("User-Agent"), BURROW_S(""))) {
+        testing_t_fatalf_v(tt->t, "newRequest: no memory for the header");
+        return NULL;
+    }
+    Str ua = BURROW_S("User-Agent");
+    Slice *vs = (Slice *)map_get(req->header, &ua);
+    if (vs != NULL)
+        vs->len = 0;
+    return req;
+}
+
+static HttpHeader h2ct_new_trailer(H2ctTT *tt, HttpRequest *req) {
+    req->trailer = http_header_make(arena_allocator(&tt->ar));
+    if (req->trailer == NULL)
+        testing_t_fatalf_v(tt->t, "no memory for the trailer");
+    return req->trailer;
+}
+
+/* checkRoundTrip: req fails with ErrRequestHeaderListSize when want_err, and
+ * gets a 200 otherwise. */
+static bool h2ct_check_header_list_round_trip(H2ctTT *tt, H2ctConn *tc,
+                                              HttpRequest *req, bool want_err,
+                                              const char *desc) {
+    H2ctRT *rt = h2ct_tc_round_trip(tt, req);
+    if (rt == NULL)
+        return false;
+    if (want_err) {
+        Error err = h2ct_rt_err(rt);
+        if (!errors_is(err, burrow__http2_err_request_header_list_size))
+            testing_t_errorf_v(tt->t, "%s: RoundTrip err = %v; want %v",
+                               str_from_cstr(desc), err,
+                               burrow__http2_err_request_header_list_size);
+        return true;
+    }
+
+    if (!h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS))
+        return false;
+    uint32_t id = h2ct_rt_stream_id(rt);
+    return id != 0 && h2ct_write_status(tc, id, "200") && h2ct_rt_want_status(rt, 200);
+}
+
+static void h2ct_checks_request_header_list_size(H2ctTT *tt, const void *arg) {
+    (void)arg;
+    enum { PEER_SIZE = 16 << 10 };
+    Alloc *a = arena_allocator(&tt->ar);
+
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    static const Http2Setting s[] = {{HTTP2_SETTING_MAX_HEADER_LIST_SIZE, PEER_SIZE}};
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, s, 1));
+
+    /* Pad headers & trailers, but stay under peerSize. */
+    HttpRequest *req = h2ct_new_list_size_request(tt);
+    H2CT_TRY(req != NULL);
+    HttpHeader trailer = h2ct_new_trailer(tt, req);
+    H2CT_TRY(trailer != NULL);
+    Str filler = strings_repeat(a, BURROW_S("*"), 1024);
+    H2CT_TRY(h2ct_pad_headers(tt->t, a, trailer, PEER_SIZE, filler));
+    /* cc.encodeHeaders adds some default headers to the request, so we need
+     * to leave room for those. */
+    uint64_t default_bytes = 0;
+    H2CT_TRY(h2ct_header_list_size_for_request(tt, req, &default_bytes));
+    H2CT_TRY(
+        h2ct_pad_headers(tt->t, a, req->header, PEER_SIZE - default_bytes, filler));
+    H2CT_TRY(h2ct_check_header_list_round_trip(tt, tc, req, false,
+                                               "Headers & Trailers under limit"));
+
+    /* Add enough header bytes to push us over peerSize. */
+    req = h2ct_new_list_size_request(tt);
+    H2CT_TRY(req != NULL);
+    H2CT_TRY(h2ct_pad_headers(tt->t, a, req->header, PEER_SIZE, filler));
+    H2CT_TRY(
+        h2ct_check_header_list_round_trip(tt, tc, req, true, "Headers over limit"));
+
+    /* Push trailers over the limit. */
+    req = h2ct_new_list_size_request(tt);
+    H2CT_TRY(req != NULL);
+    trailer = h2ct_new_trailer(tt, req);
+    H2CT_TRY(trailer != NULL);
+    H2CT_TRY(h2ct_pad_headers(tt->t, a, trailer, PEER_SIZE + 1, filler));
+    H2CT_TRY(
+        h2ct_check_header_list_round_trip(tt, tc, req, true, "Trailers over limit"));
+
+    /* Send headers with a single large value. */
+    req = h2ct_new_list_size_request(tt);
+    H2CT_TRY(req != NULL);
+    filler = strings_repeat(a, BURROW_S("*"), PEER_SIZE);
+    H2CT_TRY(http_header_set(req->header, BURROW_S("Big"), filler));
+    H2CT_TRY(
+        h2ct_check_header_list_round_trip(tt, tc, req, true, "Single large header"));
+
+    /* Send trailers with a single large value. */
+    req = h2ct_new_list_size_request(tt);
+    H2CT_TRY(req != NULL);
+    trailer = h2ct_new_trailer(tt, req);
+    H2CT_TRY(trailer != NULL);
+    H2CT_TRY(http_header_set(trailer, BURROW_S("Big"), filler));
+    H2CT_TRY(
+        h2ct_check_header_list_round_trip(tt, tc, req, true, "Single large trailer"));
+}
+
+static void TestTransportChecksRequestHeaderListSize(TestingT *t) {
+    h2ct_run(t, h2ct_checks_request_header_list_size, NULL);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -3043,6 +3318,8 @@ static void TestTransportNoPingAfterResetWithFrames(TestingT *t) {
     X(TestTransportMaxFrameReadSize_1024)                                              \
     X(TestTransportCloseAfterLostPing)                                                 \
     X(TestTransportSendPingWithReset)                                                  \
-    X(TestTransportNoPingAfterResetWithFrames)
+    X(TestTransportNoPingAfterResetWithFrames)                                         \
+    X(TestPadHeaders)                                                                  \
+    X(TestTransportChecksRequestHeaderListSize)
 
 TESTING_MAIN(TESTS)

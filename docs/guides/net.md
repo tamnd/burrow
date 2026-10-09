@@ -1830,7 +1830,9 @@ if (req != NULL) {
 That prints:
 
 ```
-PENDING
+POST http://example.com/search?q=gopher
+host example.com, from 10.0.0.7:51234, 11 bytes
+User-Agent curl/8.5.0
 ```
 
 `cgi_serve` does the rest of a program's work: it reads the request with `cgi_request`, serves it with a handler and writes what the handler writes to standard output, with a `Status` line and the header in front. The other side is `CgiHandler`, for a web server. It runs the program at `path` for each request, with `root` as the part of the URL path in front of the program's `PATH_INFO`, and copies back what the program prints. A program that answers with a `Location` and no `Status` sends the client a 302 Found to it. When the location starts with `/` and `path_location_handler` is set, that handler serves a GET for the path instead, in the same response.

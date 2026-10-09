@@ -31,6 +31,7 @@
 #include "burrow/burrow.h"
 #include "burrow/bytes.h"
 #include "burrow/context.h"
+#include "burrow/encoding/hex.h"
 #include "burrow/fmt.h"
 #include "burrow/io.h"
 #include "burrow/log.h"
@@ -6244,6 +6245,482 @@ static void TestTransportResponseAndResetWithoutConsumingBodyRace(TestingT *t) {
     h2ct_ts_close(&s);
 }
 
+/* chunkReader */
+typedef struct H2ctChunkReader {
+    const char *const *chunks;
+    int n;
+} H2ctChunkReader;
+
+static Int h2ct_chunk_read(void *self, Slice p, Error *err) {
+    H2ctChunkReader *r = (H2ctChunkReader *)self;
+    if (r->n == 0)
+        panic_str(BURROW_S("shouldn't read this many times"));
+    Str c = str_from_cstr(r->chunks[0]);
+    Int n = c.len < p.len ? c.len : p.len;
+    memcpy(p.p, c.p, (size_t)n);
+    r->chunks++;
+    r->n--;
+    *err = BURROW_NO_ERROR;
+    return n;
+}
+
+static const IoReaderVT h2ct_chunk_reader_vt = {NULL, h2ct_chunk_read};
+
+static void h2ct_read6_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)w;
+    Byte b[6];
+    Error err = BURROW_NO_ERROR;
+    IoReader body = io_read_closer_as_io_reader(r->body);
+    (void)body.vt->read(body.data, slice_from(b, sizeof b, sizeof b, TYPE_BYTE), &err);
+}
+
+static void h2ct_body_larger_than_specified_content_length(TestingT *t,
+                                                           H2ctChunkReader *body,
+                                                           int64_t content_len) {
+    H2ctTS s;
+    if (h2ct_ts_start(&s, t, h2ct_read6_handler, NULL)) {
+        Error err = BURROW_NO_ERROR;
+        HttpRequest *req =
+            http_new_request(heap_allocator(), BURROW_S("POST"), s.ts->url,
+                             (IoReader){&h2ct_chunk_reader_vt, body}, &err);
+        HttpResponse *res = NULL;
+        if (req == NULL)
+            testing_t_errorf_v(t, "NewRequest: %v", err);
+        else {
+            req->content_length = content_len;
+            res = http_transport_round_trip(&s.tr, req, &err);
+            if (res != NULL || !errors_is(err, burrow__http2_err_req_body_too_long))
+                testing_t_errorf_v(t, "expected %v, got %v",
+                                   burrow__http2_err_req_body_too_long, err);
+        }
+        if (res != NULL)
+            (void)res->body.vt->closer.close(res->body.data);
+        http_response_free(res);
+        http_request_free(req);
+    }
+    h2ct_ts_close(&s);
+}
+
+/* Issue 32254: if the request body is larger than the specified content
+ * length, the client should refuse to send the extra part and abort the
+ * stream.
+ *
+ * In _len3 case, the first Read() matches the expected content length but
+ * the second read returns more data.
+ *
+ * In _len2 case, the first Read() exceeds the expected content length. */
+static void TestTransportBodyLargerThanSpecifiedContentLength_len3(TestingT *t) {
+    static const char *const chunks[] = {"123", "456"};
+    H2ctChunkReader body = {chunks, 2};
+    h2ct_body_larger_than_specified_content_length(t, &body, 3);
+}
+
+static void TestTransportBodyLargerThanSpecifiedContentLength_len2(TestingT *t) {
+    static const char *const chunks[] = {"123"};
+    H2ctChunkReader body = {chunks, 1};
+    h2ct_body_larger_than_specified_content_length(t, &body, 2);
+}
+
+static void h2ct_conn_close_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)r;
+    (void)http_header_set(http_response_writer_header(w), BURROW_S("Connection"),
+                          BURROW_S("close"));
+    http_response_writer_write_header(w, HTTP_STATUS_OK);
+}
+
+typedef struct H2ctRewind {
+    HttpClient *client;
+    HttpRequest *req;
+} H2ctRewind;
+
+static void h2ct_rewind_job(void *env) {
+    H2ctRewind *rw = (H2ctRewind *)env;
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *res = http_client_do(rw->client, rw->req, &err);
+    if (res != NULL)
+        (void)res->body.vt->closer.close(res->body.data);
+    http_response_free(res);
+}
+
+/* Issue 31192: A failed request may be retried if the body has not been read
+ * already. If the request body has started to be sent, one must wait until it
+ * is completed. */
+static void TestTransportBodyRewindRace(TestingT *t) {
+    enum { CLIENTS = 50 };
+    H2ctTS s;
+    H2ctRewind rw[CLIENTS];
+    memset(rw, 0, sizeof rw);
+    if (h2ct_ts_start(&s, t, h2ct_conn_close_handler, NULL)) {
+        s.tr.max_conns_per_host = 1;
+        HttpClient client = {0};
+        client.transport = http_transport_as_round_tripper(&s.tr);
+        SyncWaitGroup wg = {0};
+        for (int i = 0; i < CLIENTS; i++) {
+            StringsReader *sr =
+                strings_new_reader(arena_allocator(&s.ar), BURROW_S("abcdef"));
+            Error err = BURROW_NO_ERROR;
+            rw[i].req =
+                sr == NULL
+                    ? NULL
+                    : http_new_request(heap_allocator(), BURROW_S("POST"), s.ts->url,
+                                       strings_reader_as_io_reader(sr), &err);
+            if (rw[i].req == NULL) {
+                testing_t_errorf_v(t, "unexpected new request error: %v", err);
+                break;
+            }
+            rw[i].client = &client;
+            if (!sync_wait_group_go(&wg, BURROW_FN(Func, h2ct_rewind_job, &rw[i])))
+                testing_t_errorf_v(t, "no goroutine for request %d", i);
+        }
+        sync_wait_group_wait(&wg);
+    }
+    for (int i = 0; i < CLIENTS; i++)
+        http_request_free(rw[i].req);
+    h2ct_ts_close(&s);
+}
+
+/* errorReader */
+static Int h2ct_error_read(void *self, Slice p, Error *err) {
+    (void)p;
+    *err = *(const Error *)self;
+    return 0;
+}
+
+static const IoReaderVT h2ct_error_reader_vt = {NULL, h2ct_error_read};
+
+static void h2ct_unauthorized_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)r;
+    http_response_writer_write_header(w, HTTP_STATUS_UNAUTHORIZED);
+}
+
+/* Issue 42498: A request with a body will never be sent if the stream is
+ * reset prior to sending any data. */
+static void TestTransportServerResetStreamAtHeaders(TestingT *t) {
+    H2ctTS s;
+    Error eof = io_eof;
+    if (h2ct_ts_start(&s, t, h2ct_unauthorized_handler, NULL)) {
+        s.tr.max_conns_per_host = 1;
+        s.tr.expect_continue_timeout = 10 * TIME_SECOND;
+        HttpClient client = {0};
+        client.transport = http_transport_as_round_tripper(&s.tr);
+        Error err = BURROW_NO_ERROR;
+        HttpRequest *req =
+            http_new_request(heap_allocator(), BURROW_S("POST"), s.ts->url,
+                             (IoReader){&h2ct_error_reader_vt, &eof}, &err);
+        HttpResponse *res = NULL;
+        if (req == NULL)
+            testing_t_errorf_v(t, "unexpected new request error: %v", err);
+        else {
+            req->content_length = 0; /* so transport is tempted to sniff it */
+            (void)http_header_set(req->header, BURROW_S("Expect"),
+                                  BURROW_S("100-continue"));
+            res = http_client_do(&client, req, &err);
+            if (res == NULL)
+                testing_t_errorf_v(t, "%v", err);
+            else
+                (void)res->body.vt->closer.close(res->body.data);
+        }
+        http_response_free(res);
+        http_request_free(req);
+    }
+    h2ct_ts_close(&s);
+}
+
+/* trackingReader */
+typedef struct H2ctTrackingReader {
+    StringsReader rdr;
+    SyncAtomicBool was_read;
+} H2ctTrackingReader;
+
+static Int h2ct_tracking_read(void *self, Slice p, Error *err) {
+    H2ctTrackingReader *tr = (H2ctTrackingReader *)self;
+    sync_atomic_bool_store(&tr->was_read, true);
+    IoReader r = strings_reader_as_io_reader(&tr->rdr);
+    return r.vt->read(r.data, p, err);
+}
+
+static const IoReaderVT h2ct_tracking_reader_vt = {NULL, h2ct_tracking_read};
+
+static void h2ct_expect_continue_handler(void *env, HttpResponseWriter w,
+                                         HttpRequest *r) {
+    (void)env;
+    if (str_eq(r->url->path, BURROW_S("/reject"))) {
+        http_response_writer_write_header(w, 403);
+        return;
+    }
+    Error err = BURROW_NO_ERROR;
+    (void)io_copy(heap_allocator(), io_discard, io_read_closer_as_io_reader(r->body),
+                  &err);
+}
+
+typedef struct H2ctExpectCase {
+    const char *name;
+    const char *path;
+    int expected_code;
+    H2ctTS *s;
+    HttpClient *client;
+    H2ctTrackingReader body; /* the test's, so it outlives the transport */
+    bool should_read;
+} H2ctExpectCase;
+
+static void h2ct_expect_continue_case(void *env, TestingT *t) {
+    H2ctExpectCase *tc = (H2ctExpectCase *)env;
+    H2ctTrackingReader *body = &tc->body;
+    strings_reader_reset(&body->rdr, BURROW_S("hello"));
+    Time start_time = time_now();
+    Error err = BURROW_NO_ERROR;
+    HttpRequest *req = http_new_request(
+        heap_allocator(), BURROW_S("POST"), h2ct_ts_url(tc->s, tc->path),
+        (IoReader){&h2ct_tracking_reader_vt, body}, &err);
+    if (req == NULL) {
+        testing_t_fatalf_v(t, "%v", err);
+        return;
+    }
+    (void)http_header_set(req->header, BURROW_S("Expect"), BURROW_S("100-continue"));
+    HttpResponse *res = http_client_do(tc->client, req, &err);
+    if (res == NULL) {
+        http_request_free(req);
+        testing_t_fatalf_v(t, "%v", err);
+        return;
+    }
+    (void)res->body.vt->closer.close(res->body.data);
+    if (time_since(start_time) >= tc->s->tr.expect_continue_timeout)
+        testing_t_errorf_v(t, "Request didn't finish before expect continue timeout");
+    if (res->status_code != tc->expected_code)
+        testing_t_errorf_v(t, "Unexpected status code, got %d, expected %d",
+                           res->status_code, tc->expected_code);
+    if (sync_atomic_bool_load(&body->was_read) != tc->should_read)
+        testing_t_errorf_v(t, "Unexpected read status, got %t, expected %t",
+                           sync_atomic_bool_load(&body->was_read), tc->should_read);
+    http_response_free(res);
+    http_request_free(req);
+}
+
+static void TestTransportExpectContinue(TestingT *t) {
+    H2ctTS s;
+    HttpClient client = {0};
+    H2ctExpectCase test_cases[2];
+    memset(test_cases, 0, sizeof test_cases);
+    test_cases[0].name = "read-all";
+    test_cases[0].path = "/";
+    test_cases[0].expected_code = 200;
+    test_cases[0].should_read = true;
+    test_cases[1].name = "reject";
+    test_cases[1].path = "/reject";
+    test_cases[1].expected_code = 403;
+    if (h2ct_ts_start(&s, t, h2ct_expect_continue_handler, NULL)) {
+        s.tr.max_conns_per_host = 1;
+        s.tr.expect_continue_timeout = 10 * TIME_SECOND;
+        client.transport = http_transport_as_round_tripper(&s.tr);
+        for (int i = 0; i < 2; i++) {
+            test_cases[i].s = &s;
+            test_cases[i].client = &client;
+            (void)testing_t_run(
+                t, str_from_cstr(test_cases[i].name),
+                BURROW_FN(TestingTFunc, h2ct_expect_continue_case, &test_cases[i]));
+        }
+    }
+    h2ct_ts_close(&s);
+}
+
+typedef struct H2ctFiller {
+    TestingT *t;
+    H2ctTS *s;
+    Str filler;
+} H2ctFiller;
+
+static void h2ct_frame_buffer_reuse_handler(void *env, HttpResponseWriter w,
+                                            HttpRequest *r) {
+    (void)w;
+    const H2ctFiller *f = (const H2ctFiller *)env;
+    TestingT *t = f->t;
+    Str got = http_header_get(r->header, BURROW_S("Big"));
+    if (!str_eq(got, f->filler))
+        testing_t_errorf_v(t, "r.Header.Get(\"Big\") = %q, want %q", got, f->filler);
+    Error err = BURROW_NO_ERROR;
+    Slice b = io_read_all(heap_allocator(), io_read_closer_as_io_reader(r->body), &err);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "error reading request body: %v", err);
+    got = str_from_bytes((const Byte *)b.p, b.len);
+    if (!str_eq(got, f->filler))
+        testing_t_errorf_v(t, "request body = %q, want %q", got, f->filler);
+    if (b.p != NULL)
+        mem_free(heap_allocator(), b.p, (size_t)b.cap, 1);
+    got = http_header_get(r->trailer, BURROW_S("Big"));
+    if (!str_eq(got, f->filler))
+        testing_t_errorf_v(t, "r.Trailer.Get(\"Big\") = %q, want %q", got, f->filler);
+}
+
+static void h2ct_frame_buffer_reuse_job(void *env) {
+    const H2ctFiller *f = (const H2ctFiller *)env;
+    TestingT *t = f->t;
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    StringsReader *sr = strings_new_reader(a, f->filler);
+    Error err = BURROW_NO_ERROR;
+    HttpRequest *req =
+        sr == NULL ? NULL
+                   : http_new_request(heap_allocator(), BURROW_S("POST"), f->s->ts->url,
+                                      strings_reader_as_io_reader(sr), &err);
+    HttpResponse *res = NULL;
+    if (req == NULL)
+        testing_t_errorf_v(t, "%v", err);
+    else {
+        (void)http_header_set(req->header, BURROW_S("Big"), f->filler);
+        req->trailer = http_header_make(a);
+        if (req->trailer == NULL ||
+            !http_header_set(req->trailer, BURROW_S("Big"), f->filler))
+            testing_t_errorf_v(t, "no memory");
+        else
+            res = http_transport_round_trip(&f->s->tr, req, &err);
+        if (req->trailer != NULL && res == NULL)
+            testing_t_errorf_v(t, "%v", err);
+    }
+    if (res != NULL) {
+        if (res->status_code != 200)
+            testing_t_errorf_v(t, "StatusCode = %d; want %d", res->status_code, 200);
+        (void)res->body.vt->closer.close(res->body.data);
+    }
+    http_response_free(res);
+    http_request_free(req);
+    arena_free(&ar);
+}
+
+/* Write several requests to a ClientConn at the same time, looking for race
+ * conditions. See golang.org/issue/48340 */
+static void TestTransportFrameBufferReuse(TestingT *t) {
+    H2ctTS s;
+    H2ctFiller f = {t, &s, BURROW_STR_EMPTY};
+    if (h2ct_ts_new(&s, t, h2ct_frame_buffer_reuse_handler, &f)) {
+        Alloc *a = arena_allocator(&s.ar);
+        Byte *rs = h2ct_rand_string(a, 2048);
+        if (rs != NULL)
+            f.filler = hex_encode_to_string(a, slice_from(rs, 2048, 2048, TYPE_BYTE));
+        if (f.filler.len != 4096)
+            testing_t_errorf_v(t, "no memory");
+        else {
+            httptest_server_start(s.ts);
+            SyncWaitGroup wg = {0};
+            for (int i = 0; i < 10; i++) {
+                if (!sync_wait_group_go(
+                        &wg, BURROW_FN(Func, h2ct_frame_buffer_reuse_job, &f)))
+                    testing_t_errorf_v(t, "no goroutine for request %d", i);
+            }
+            sync_wait_group_wait(&wg);
+        }
+    }
+    h2ct_ts_close(&s);
+}
+
+/* closeChecker, on an io.Pipe's reader. */
+typedef struct H2ctCloseChecker {
+    IoPipeReader *pr;
+    SyncAtomicBool closed;
+} H2ctCloseChecker;
+
+static Int h2ct_ccheck_read(void *self, Slice p, Error *err) {
+    H2ctCloseChecker *rc = (H2ctCloseChecker *)self;
+    if (sync_atomic_bool_load(&rc->closed)) {
+        /* Go's TODO: Consider restructuring the request write to avoid
+         * reading from the request body after closing it, and check for
+         * read-after-close here. Currently, abortRequestBodyWrite races with
+         * writeRequestBody. */
+        *err = errors_new(error_allocator(), BURROW_S("read after Body.Close"));
+        return 0;
+    }
+    return io_pipe_reader_read(rc->pr, p, err);
+}
+
+static Error h2ct_ccheck_close(void *self) {
+    H2ctCloseChecker *rc = (H2ctCloseChecker *)self;
+    sync_atomic_bool_store(&rc->closed, true);
+    return io_pipe_reader_close(rc->pr);
+}
+
+static const IoReadCloserVT h2ct_close_checker_vt = {{NULL, h2ct_ccheck_read},
+                                                     {NULL, h2ct_ccheck_close}};
+
+/* The RoundTrip contract says that it will close the request body, but that
+ * it may do so in a separate goroutine. Wait a reasonable amount of time
+ * before concluding that the body isn't being closed. */
+static bool h2ct_ccheck_is_closed(H2ctCloseChecker *rc) {
+    Time deadline = time_add(time_now(), 10 * TIME_SECOND);
+    while (!sync_atomic_bool_load(&rc->closed) && time_before(time_now(), deadline))
+        time_sleep(TIME_MILLISECOND);
+    return sync_atomic_bool_load(&rc->closed);
+}
+
+static void h2ct_status_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    http_response_writer_write_header(
+        w, (Int)sync_atomic_int32_load((SyncAtomicInt32 *)env));
+}
+
+typedef struct H2ctCloseBody {
+    H2ctTS *s;
+    SyncAtomicInt32 *status_code;
+    H2ctCloseChecker *body; /* freed after the transport is gone */
+    int status;
+} H2ctCloseBody;
+
+static void h2ct_close_request_body(void *env, TestingT *t) {
+    const H2ctCloseBody *cb = (const H2ctCloseBody *)env;
+    H2ctCloseChecker *body = cb->body;
+    sync_atomic_int32_store(cb->status_code, cb->status);
+    IoPipeWriter *pw = NULL;
+    io_pipe(heap_allocator(), &body->pr, &pw);
+    if (body->pr == NULL) {
+        testing_t_fatalf_v(t, "no memory");
+        return;
+    }
+    Error err = BURROW_NO_ERROR;
+    HttpRequest *req = http_new_request(heap_allocator(), BURROW_S("PUT"),
+                                        cb->s->ts->url, h2ct_no_body, &err);
+    if (req == NULL) {
+        (void)io_pipe_writer_close(pw);
+        testing_t_fatalf_v(t, "%v", err);
+        return;
+    }
+    req->body = (IoReadCloser){&h2ct_close_checker_vt, body};
+    HttpResponse *res = http_transport_round_trip(&cb->s->tr, req, &err);
+    if (res == NULL)
+        testing_t_errorf_v(t, "%v", err);
+    else
+        (void)res->body.vt->closer.close(res->body.data);
+    (void)io_pipe_writer_close(pw);
+    if (res != NULL && !h2ct_ccheck_is_closed(body))
+        testing_t_errorf_v(t, "body not closed after %v", 10 * TIME_SECOND);
+    http_response_free(res);
+    http_request_free(req);
+}
+
+/* Go makes the connection with Transport.NewClientConn and sends the
+ * requests on it, which the C Transport doesn't have yet. These go through
+ * the transport's pool, which has just the one connection. */
+static void TestTransportCloseRequestBody(TestingT *t) {
+    static const int statuses[] = {200, 401};
+    H2ctTS s;
+    SyncAtomicInt32 status_code;
+    H2ctCloseChecker bodies[2];
+    memset(&status_code, 0, sizeof status_code);
+    memset(bodies, 0, sizeof bodies);
+    if (h2ct_ts_start(&s, t, h2ct_status_handler, &status_code)) {
+        for (int i = 0; i < 2; i++) {
+            H2ctCloseBody cb = {&s, &status_code, &bodies[i], statuses[i]};
+            Str name = fmt_sprintf_v(arena_allocator(&s.ar), "status=%d", statuses[i]);
+            (void)testing_t_run(t, name,
+                                BURROW_FN(TestingTFunc, h2ct_close_request_body, &cb));
+        }
+    }
+    h2ct_ts_close(&s);
+    for (int i = 0; i < 2; i++)
+        io_pipe_free(bodies[i].pr);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTestClientConn)                                                              \
     X(TestTransportResPattern_c0h1d0t0)                                                \
@@ -6384,6 +6861,12 @@ static void TestTransportResponseAndResetWithoutConsumingBodyRace(TestingT *t) {
     X(TestTransportNoRaceOnRequestObjectAfterRequestComplete)                          \
     X(TestTransportPingWriteBlocks)                                                    \
     X(TestTransportRequestsLowServerLimit)                                             \
-    X(TestTransportResponseAndResetWithoutConsumingBodyRace)
+    X(TestTransportResponseAndResetWithoutConsumingBodyRace)                           \
+    X(TestTransportBodyLargerThanSpecifiedContentLength_len3)                          \
+    X(TestTransportBodyLargerThanSpecifiedContentLength_len2)                          \
+    X(TestTransportBodyRewindRace)                                                     \
+    X(TestTransportServerResetStreamAtHeaders)                                         \
+    X(TestTransportExpectContinue) X(TestTransportFrameBufferReuse)                    \
+        X(TestTransportCloseRequestBody)
 
 TESTING_MAIN(TESTS)

@@ -4443,12 +4443,28 @@ struct SyscallInet6Pktinfo {
     uint32_t ifindex;
 };
 
-#if defined(BURROW_ARCH_LOONG64) || defined(BURROW_ARCH_RISCV64) || defined(BURROW_ARCH_S390X)
+#if defined(BURROW_ARCH_386) || defined(BURROW_ARCH_AMD64) || defined(BURROW_ARCH_ARM) || defined(BURROW_ARCH_PPC64)
 struct SyscallInotifyEvent {
     int32_t wd;
     uint32_t mask;
     uint32_t cookie;
     uint32_t len;
+    uint8_t name[];
+};
+#elif defined(BURROW_ARCH_LOONG64) || defined(BURROW_ARCH_RISCV64) || defined(BURROW_ARCH_S390X)
+struct SyscallInotifyEvent {
+    int32_t wd;
+    uint32_t mask;
+    uint32_t cookie;
+    uint32_t len;
+};
+#else
+struct SyscallInotifyEvent {
+    int32_t wd;
+    uint32_t mask;
+    uint32_t cookie;
+    uint32_t len;
+    int8_t name[];
 };
 #endif
 

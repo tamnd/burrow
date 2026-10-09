@@ -345,6 +345,11 @@ uint32_t pal_cpu_features(void);
  * physical DNS host name on Windows. */
 int64_t pal_hostname(char *buf, int64_t cap, PalErrno *err);
 
+/* Where the hosts file lives, into buf, NUL terminated, returning its length
+ * or -1. It is /etc/hosts everywhere but Windows, where it is
+ * Drivers/etc/hosts in the system directory, as Go's net package has it. */
+int64_t pal_hosts_path(char *buf, int64_t cap, PalErrno *err);
+
 /* ------------------------------------------------------------------- random
  *
  * The system generator, which is getrandom on Linux, getentropy on the BSDs and
@@ -901,7 +906,7 @@ enum {
  * i in the child, and PAL_INVALID_HANDLE leaves that slot closed. Descriptors
  * above nfds are closed in the child, which is the only behaviour that is safe
  * in a threaded process where another thread may be opening a file right
- * now.
+ * now, unless sys asks to keep them.
  *
  * Windows has no descriptor numbers. There the first three slots become the
  * child's standard handles, and handles in any slot after them are inherited
@@ -912,7 +917,10 @@ enum {
  * Go.
  *
  * creation_flags is added to the flags Windows' CreateProcess is given, as
- * Go's SysProcAttr.CreationFlags is, and is ignored everywhere else. */
+ * Go's SysProcAttr.CreationFlags is, and is ignored everywhere else.
+ *
+ * sys is the rest of Go's SysProcAttr on everything but Windows, which ignores
+ * it, and NULL asks for none of it. */
 typedef struct PalSpawn {
     const char *path;
     const char *const *argv;
@@ -922,7 +930,63 @@ typedef struct PalSpawn {
     int32_t nfds;
     uint32_t flags;
     uint32_t creation_flags;
+    const struct PalSpawnSys *sys;
 } PalSpawn;
+
+/* What Go's SysProcAttr asks of the child beyond the two flags, with Go's
+ * meanings, and zero for each one meaning it is not asked for. The child does
+ * them in the order Go's does on the system, and the first that fails is the
+ * error pal_spawn gives.
+ *
+ * pgid goes with PAL_SPAWN_SETPGID: the group to join, or 0 for a new one with
+ * the child's own id. foreground puts that group in the foreground of the
+ * terminal ctty, a descriptor in the parent, and implies PAL_SPAWN_SETPGID.
+ * setctty makes ctty, a slot in fds, the controlling terminal, and noctty
+ * detaches descriptor 0 from its terminal.
+ *
+ * credential sets the user and group to uid and gid, and the supplementary
+ * groups to groups, unless no_set_groups.
+ *
+ * keep_fds leaves descriptors above nfds open, as Go does, rather than closing
+ * them. Go can because everything it opens is close on exec, and a caller that
+ * asks for this is saying the same of everything it has open.
+ *
+ * The rest are Linux's. cloneflags go to the clone that makes the child, and
+ * unshareflags to an unshare in it. uid_map and gid_map are the text for
+ * /proc/PID/uid_map and gid_map, NUL terminated, and gid_map_setgroups writes
+ * "allow" to /proc/PID/setgroups where it would write "deny". ambient_caps are
+ * raised in the ambient set. cgroup_fd, with use_cgroup_fd, is the cgroup the
+ * child starts in. pidfd, when it is not NULL, is set to a pidfd for the child,
+ * or -1. FreeBSD has pdeathsig too, and jail, which the child attaches to. On a
+ * system without one of them, asking for it is PAL_ENOSYS. */
+typedef struct PalSpawnSys {
+    const char *chroot;
+    bool credential;
+    bool no_set_groups;
+    uint32_t uid;
+    uint32_t gid;
+    const uint32_t *groups;
+    int64_t ngroups;
+    bool ptrace;
+    bool setctty;
+    bool noctty;
+    bool foreground;
+    int64_t ctty;
+    int64_t pgid;
+    bool keep_fds;
+    int32_t pdeathsig;
+    int64_t jail;
+    uint64_t cloneflags;
+    uint64_t unshareflags;
+    const char *uid_map;
+    const char *gid_map;
+    bool gid_map_setgroups;
+    const uint64_t *ambient_caps;
+    int64_t nambient_caps;
+    bool use_cgroup_fd;
+    int64_t cgroup_fd;
+    int32_t *pidfd;
+} PalSpawnSys;
 
 /* Start the process and return its id, or -1.
  *
@@ -931,6 +995,28 @@ typedef struct PalSpawn {
  * asked to wait on a process that never existed. That is what the pipe in the
  * POSIX backend is for. */
 int64_t pal_spawn(const PalSpawn *req, PalErrno *err);
+
+/* Which of the C library's id calls pal_set_ids makes. */
+typedef enum PalSetID {
+    PAL_SETUID,
+    PAL_SETGID,
+    PAL_SETEUID,
+    PAL_SETEGID,
+    PAL_SETREUID,
+    PAL_SETREGID,
+    PAL_SETRESUID,
+    PAL_SETRESGID
+} PalSetID;
+
+/* setuid, setgid and the rest, which, with the ids it takes in order and the
+ * ones after them ignored. These go through the C library, which on Linux
+ * changes every thread of the process where the system call alone changes the
+ * one that made it. setresuid and setresgid fail with ENOSYS where the C
+ * library has neither, and every one of them does on Windows. */
+bool pal_set_ids(PalSetID which, uint32_t a, uint32_t b, uint32_t c, PalErrno *err);
+
+/* setgroups, from the C library for the same reason. ENOSYS on Windows. */
+bool pal_setgroups(const uint32_t *gids, int64_t n, PalErrno *err);
 
 enum {
     PAL_WAIT_NOHANG = 1u << 0,
@@ -1522,27 +1608,56 @@ bool pal_user_lookup(int64_t uid, PalUser *out, PalErrno *err);
  * systems and not others, and a port in network byte order in the middle of it.
  * Converting once, in the backend, is the whole reason this layer exists.
  *
- * Not implemented yet. These arrive with the net package. */
+ * pal_getaddrinfo and pal_if_enumerate are not implemented yet. They arrive with
+ * the resolver and with net.Interfaces. wasip1 has none of this: its sockets
+ * are the ones the host hands in already open, and every call here answers
+ * PAL_ENOSYS there. */
 
-enum { PAL_AF_INET = 1, PAL_AF_INET6 = 2, PAL_AF_UNIX = 3 };
-enum { PAL_SOCK_STREAM = 1, PAL_SOCK_DGRAM = 2, PAL_SOCK_RAW = 3 };
+enum { PAL_AF_UNSPEC = 0, PAL_AF_INET = 1, PAL_AF_INET6 = 2, PAL_AF_UNIX = 3 };
+enum {
+    PAL_SOCK_STREAM = 1,
+    PAL_SOCK_DGRAM = 2,
+    PAL_SOCK_RAW = 3,
+    PAL_SOCK_SEQPACKET = 4
+};
 enum { PAL_IPPROTO_TCP = 6, PAL_IPPROTO_UDP = 17 };
 
 /* An address, in host byte order everywhere a number appears. addr holds four
  * bytes for IPv4 and sixteen for IPv6, most significant first, which is how an
- * address is written down and how net.IP stores it. */
+ * address is written down and how net.IP stores it.
+ *
+ * A Unix domain address is the first path_len bytes of path, exactly as the
+ * kernel takes them and gives them back, with no NUL added or taken away: a
+ * name in the file system wants its NUL counted in path_len, a Linux abstract
+ * name starts with a NUL and has none at the end, and a path_len of zero is a
+ * socket with no name. That is what Go's syscall does, and it leaves the
+ * conventions, such as writing an abstract name with an "@", to net. macOS and
+ * the BSDs have room for 104 bytes, not 108, and a longer path is PAL_EINVAL
+ * there.
+ *
+ * family is PAL_AF_UNSPEC for no address at all, which is what pal_recvfrom
+ * gives on a connected socket, and for one of a family not listed above. */
 typedef struct PalSockAddr {
     uint16_t family;
     uint16_t port;
     uint32_t scope_id; /* the IPv6 zone, 0 for none */
     uint8_t addr[16];
-    char path[108]; /* AF_UNIX, NUL terminated, or a leading NUL for abstract */
+    uint16_t path_len;
+    char path[108];
 } PalSockAddr;
 
 /* A socket, always non blocking and always close on exec, because every
  * descriptor in burrow goes to the poller and a blocking one would park an OS
- * thread instead of a goroutine. */
+ * thread instead of a goroutine. A write to a socket whose far end has gone is
+ * PAL_EPIPE and never SIGPIPE: the sends below ask for that on Linux and the
+ * BSDs, and the socket itself asks for it on macOS. protocol is the IANA
+ * number, which every platform uses as is, or 0 for the usual one. */
 int64_t pal_socket(int32_t family, int32_t type, int32_t protocol, PalErrno *err);
+
+/* Closes a socket. On Windows a socket is not a handle the file calls can
+ * close, so a descriptor from pal_socket or pal_accept is closed here and not
+ * with pal_close. Elsewhere the two are the same. */
+bool pal_socket_close(int64_t fd, PalErrno *err);
 
 bool pal_bind(int64_t fd, const PalSockAddr *addr, PalErrno *err);
 bool pal_listen(int64_t fd, int32_t backlog, PalErrno *err);
@@ -1552,11 +1667,19 @@ bool pal_listen(int64_t fd, int32_t backlog, PalErrno *err);
  * sends the goroutine to the poller. */
 int64_t pal_accept(int64_t fd, PalSockAddr *peer, PalErrno *err);
 
+/* The address a socket is bound to and the one it is connected to, Go's
+ * Getsockname and Getpeername. */
+bool pal_getsockname(int64_t fd, PalSockAddr *out, PalErrno *err);
+bool pal_getpeername(int64_t fd, PalSockAddr *out, PalErrno *err);
+
 /* PAL_EINPROGRESS is the normal answer, not a failure: the caller waits for
  * writability and then reads PAL_SO_ERROR to find out how it went. */
 bool pal_connect(int64_t fd, const PalSockAddr *addr, PalErrno *err);
 
-/* addr NULL means a connected socket, which makes these send and recv. */
+/* addr NULL means a connected socket, which makes these send and recv. from
+ * may be NULL too, when the caller has no use for where a datagram came from.
+ * Both answer -1 with PAL_EAGAIN when they would block, and pal_recvfrom
+ * answers 0 at the end of a stream. */
 int64_t pal_sendto(int64_t fd, const void *buf, int64_t n, const PalSockAddr *addr,
                    PalErrno *err);
 int64_t pal_recvfrom(int64_t fd, void *buf, int64_t n, PalSockAddr *from,
@@ -1584,11 +1707,23 @@ enum {
     PAL_IPV6_HOPLIMIT
 };
 
+/* A value is 1 or 0 for the options that are on or off, a count for the
+ * buffer sizes, the hop limits and TCP_KEEPCNT, and seconds for the other two
+ * TCP ones. PAL_SO_LINGER is the linger time in seconds, or -1 for lingering
+ * off. PAL_SO_ERROR only reads, and what it reads is a PalErrno, PAL_OK when
+ * there is no error, with the native code behind it kept for
+ * pal_errno_native. An option the platform does not have is PAL_ENOTSUP. */
 bool pal_getsockopt(int64_t fd, int32_t opt, int64_t *value, PalErrno *err);
 bool pal_setsockopt(int64_t fd, int32_t opt, int64_t value, PalErrno *err);
 
 enum { PAL_SHUT_RD = 0, PAL_SHUT_WR = 1, PAL_SHUT_RDWR = 2 };
 bool pal_shutdown(int64_t fd, int32_t how, PalErrno *err);
+
+/* The longest queue of connections a listener can ask the system for, which
+ * is what Go's net passes to listen: /proc/sys/net/core/somaxconn on Linux
+ * and a sysctl on macOS, FreeBSD and OpenBSD. 0 when the system does not say,
+ * and then the caller uses SOMAXCONN. */
+int32_t pal_listen_backlog_max(void);
 
 /* One result from a name lookup. */
 typedef struct PalAddrInfo {

@@ -362,8 +362,8 @@ static Error sock_unix_from(Alloc *a, const Byte *path, Int n, SyscallSockaddr *
 
 /* Go's anyToSockaddr: the Sockaddr for the address the system wrote in rsa,
  * made from a. */
-static Error sock_any_to_sockaddr(Alloc *a, SyscallRawSockaddrAny *rsa,
-                                  SyscallSockaddr *out) {
+Error burrow__syscall_any_to_sockaddr(Alloc *a, SyscallRawSockaddrAny *rsa,
+                                      SyscallSockaddr *out) {
     *out = (SyscallSockaddr){NULL, NULL};
     switch (rsa->addr.family) {
 #if defined(SOCK_LINUX)
@@ -540,7 +540,7 @@ static Int sock_accepted(Alloc *a, Int nfd, SyscallRawSockaddrAny *rsa, uint32_t
     }
 #endif
     SyscallSockaddr out;
-    Error e = sock_any_to_sockaddr(a, rsa, &out);
+    Error e = burrow__syscall_any_to_sockaddr(a, rsa, &out);
     if (BURROW_FAILED(e)) {
         (void)syscall_close(nfd);
         nfd = 0;
@@ -591,7 +591,7 @@ SyscallSockaddr syscall_getsockname(Alloc *a, Int fd, Error *err) {
     SyscallSockaddr sa = {NULL, NULL};
     Error e = burrow__syscall_getsockname(fd, &rsa, &len);
     if (BURROW_OK(e))
-        e = sock_any_to_sockaddr(a, &rsa, &sa);
+        e = burrow__syscall_any_to_sockaddr(a, &rsa, &sa);
     BURROW_OUT(err, e);
     return sa;
 }
@@ -603,7 +603,7 @@ SyscallSockaddr syscall_getpeername(Alloc *a, Int fd, Error *err) {
     SyscallSockaddr sa = {NULL, NULL};
     Error e = burrow__syscall_getpeername(fd, &rsa, &len);
     if (BURROW_OK(e))
-        e = sock_any_to_sockaddr(a, &rsa, &sa);
+        e = burrow__syscall_any_to_sockaddr(a, &rsa, &sa);
     BURROW_OUT(err, e);
     return sa;
 }
@@ -632,7 +632,7 @@ Int syscall_recvfrom(Alloc *a, Int fd, Slice p, Int flags, SyscallSockaddr *from
     if (BURROW_OK(e))
         sock_msan_write(p.p, n);
     if (BURROW_OK(e) && rsa.addr.family != SYSCALL_AF_UNSPEC)
-        e = sock_any_to_sockaddr(a, &rsa, &sa);
+        e = burrow__syscall_any_to_sockaddr(a, &rsa, &sa);
     BURROW_OUT(from, sa);
     BURROW_OUT(err, e);
     return n;
@@ -697,7 +697,7 @@ Int syscall_recvmsg(Alloc *a, Int fd, Slice p, Slice oob, Int flags, Int *oobn,
     BURROW_OUT(recvflags, BURROW_OK(e) ? (Int)msg.flags : 0);
     /* The sender is only there when the socket is not connected. */
     if (BURROW_OK(e) && rsa.addr.family != SYSCALL_AF_UNSPEC)
-        e = sock_any_to_sockaddr(a, &rsa, &sa);
+        e = burrow__syscall_any_to_sockaddr(a, &rsa, &sa);
     BURROW_OUT(from, sa);
     BURROW_OUT(err, e);
     return n;

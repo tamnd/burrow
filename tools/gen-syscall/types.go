@@ -205,8 +205,25 @@ func (g *typeGen) fields(s *types.Struct, indent string, deps map[string]bool, n
 		if g.p.sizes.Sizeof(f.Type()) == 0 {
 			// C has no zero sized field. Go uses them to mark a struct, and
 			// one at the end makes Go pad the struct, which the check finds.
+			// The exception is an array of nothing at the end of a type of
+			// its own, such as InotifyEvent's Name, where the bytes that
+			// follow the struct start. That is C's flexible array member.
 			if i == s.NumFields()-1 {
-				return "", "zero sized last field " + f.Name()
+				if names == nil || flexibleLast(s) == nil {
+					return "", "zero sized last field " + f.Name()
+				}
+				n := fieldName(f, &blank)
+				if seen[n] {
+					return "", "two fields are " + n
+				}
+				seen[n] = true
+				d, why := g.decl(flexibleLast(s).Elem(), n+"[]", false, deps, indent)
+				if why != "" {
+					return "", "field " + f.Name() + ": " + why
+				}
+				b.WriteString(indent + d + ";\n")
+				*names = append(*names, n)
+				continue
 			}
 			if names != nil {
 				*names = append(*names, "")
@@ -231,6 +248,19 @@ func (g *typeGen) fields(s *types.Struct, indent string, deps map[string]bool, n
 		return "", "no fields"
 	}
 	return b.String(), ""
+}
+
+// flexibleLast is the last field of s when it is an array with no elements
+// that comes after other fields, and nil otherwise.
+func flexibleLast(s *types.Struct) *types.Array {
+	if s.NumFields() < 2 {
+		return nil
+	}
+	a, ok := s.Field(s.NumFields() - 1).Type().Underlying().(*types.Array)
+	if !ok || a.Len() != 0 {
+		return nil
+	}
+	return a
 }
 
 // typeOf works out the C for the exported type name, or nil if it can't be
@@ -268,7 +298,14 @@ func (g *typeGen) typeOf(name string) *ctype {
 				vars = append(vars, s.Field(i))
 			}
 			offs := g.p.sizes.Offsetsof(vars)
-			fmt.Fprintf(&check, "CHECK_SIZE(%s, %d);\n", cn, g.p.sizes.Sizeof(t))
+			size := g.p.sizes.Sizeof(t)
+			if flexibleLast(s) != nil {
+				// Go pads the struct so a pointer to the empty array does
+				// not point past it, and C does not.
+				al := g.p.sizes.Alignof(t)
+				size = (offs[len(offs)-1] + al - 1) / al * al
+			}
+			fmt.Fprintf(&check, "CHECK_SIZE(%s, %d);\n", cn, size)
 			for i, n := range names {
 				if n != "" {
 					fmt.Fprintf(&check, "CHECK_OFFSET(%s, %s, %d);\n", cn, n, offs[i])

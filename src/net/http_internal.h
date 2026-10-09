@@ -11,11 +11,14 @@
 
 #include "burrow/net/http.h"
 
+#include "burrow/bufio.h"
 #include "burrow/core.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/own.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /* internal.SniffLen, the most bytes DetectContentType looks at. */
 #define BURROW__HTTP_SNIFF_LEN 512
@@ -49,6 +52,46 @@ bool burrow__http_string_contains_ctl_byte(Str s);
  * is empty when a says no. */
 BURROW_OWNS(ret) BURROW_BORROWS(ret, s) Str burrow__http_hex_escape_non_ascii(Alloc *a,
                                                                               Str s);
+
+/* ------------------------------------------------------------- chunked
+ *
+ * net/http/internal's chunked encoding, the wire format of a body sent with
+ * Transfer-Encoding: chunked. */
+
+/* internal.ErrLineTooLong, "header line too long". */
+extern const Error burrow__http_err_line_too_long;
+
+/* parseHexUint. A chunk's size from its hex digits, at most 16 of them. */
+uint64_t burrow__http_parse_hex_uint(Slice v, Error *err);
+
+/* NewChunkedReader's reader. It reads the chunks from r and hands back the
+ * data in them, and gives io_eof after the last chunk, which is the one of no
+ * bytes, leaving any trailer that follows it to be read from r. */
+typedef struct HttpChunkedReader HttpChunkedReader;
+
+/* NewChunkedReader. A BufioReader r is read from as it is, and anything else
+ * through a new one. NULL when a says no. */
+BURROW_OWNS(ret) HttpChunkedReader *burrow__http_new_chunked_reader(Alloc *a,
+                                                                    IoReader r);
+void burrow__http_chunked_reader_free(Alloc *a, HttpChunkedReader *cr);
+Int burrow__http_chunked_reader_read(HttpChunkedReader *cr, Slice b, Error *err);
+BURROW_BORROWS(ret, cr) IoReader
+burrow__http_chunked_reader_as_io_reader(HttpChunkedReader *cr);
+
+/* NewChunkedWriter's writer. Each write goes to wire as one chunk, and closing
+ * it writes the chunk of no bytes that ends the body, but not the trailer or
+ * the blank line after that. When flush is set, which is Go's
+ * FlushAfterChunkWriter, flush is wire's BufioWriter and is flushed after each
+ * chunk. Make one with {wire} or {wire, flush}. */
+typedef struct HttpChunkedWriter {
+    IoWriter wire;
+    BufioWriter *flush;
+} HttpChunkedWriter;
+
+Int burrow__http_chunked_writer_write(HttpChunkedWriter *cw, Slice data, Error *err);
+BURROW_STATIC(ret) Error burrow__http_chunked_writer_close(HttpChunkedWriter *cw);
+BURROW_BORROWS(ret, cw) IoWriteCloser
+burrow__http_chunked_writer_as_io_write_closer(HttpChunkedWriter *cw);
 
 /* The parts of Protocols that are not exported. */
 bool burrow__http_protocols_http3(HttpProtocols p);

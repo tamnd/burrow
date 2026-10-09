@@ -14,8 +14,10 @@
 #include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/os.h"
+#include "burrow/pal.h"
 #include "burrow/slice.h"
 
+#include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -184,4 +186,53 @@ bool burrow__net_has_suffix_fold(Str s, Str suffix) {
     return s.len >= suffix.len &&
            burrow__net_equal_fold(str_from_bytes(s.p + s.len - suffix.len, suffix.len),
                                   suffix);
+}
+
+Str burrow__net_cat(Alloc *a, int n, ...) {
+    va_list ap;
+    va_start(ap, n);
+    Int total = 0;
+    for (int i = 0; i < n; i++)
+        total += va_arg(ap, Str).len;
+    va_end(ap);
+    Byte *p = (Byte *)mem_alloc_nozero(a, (size_t)total + 1, 1);
+    if (p == NULL)
+        return BURROW_STR_EMPTY;
+    Int off = 0;
+    va_start(ap, n);
+    for (int i = 0; i < n; i++) {
+        Str s = va_arg(ap, Str);
+        if (s.len > 0)
+            memcpy(p + off, s.p, (size_t)s.len);
+        off += s.len;
+    }
+    va_end(ap);
+    p[off] = 0;
+    return str_from_bytes(p, total);
+}
+
+bool burrow__net_godebug(const char *key, Str *val) {
+    const char *env = NULL;
+    for (const char *const *e = pal_environ(); e != NULL && *e != NULL; e++) {
+        if (strncmp(*e, "GODEBUG=", 8) == 0) {
+            env = *e + 8;
+            break;
+        }
+    }
+    if (env == NULL)
+        return false;
+    size_t kl = strlen(key);
+    bool found = false;
+    const char *p = env;
+    while (*p != '\0') {
+        const char *end = strchr(p, ',');
+        if (end == NULL)
+            end = p + strlen(p);
+        if ((size_t)(end - p) > kl && memcmp(p, key, kl) == 0 && p[kl] == '=') {
+            *val = str_from_bytes(p + kl + 1, (Int)(end - p - (ptrdiff_t)kl - 1));
+            found = true;
+        }
+        p = *end == ',' ? end + 1 : end;
+    }
+    return found;
 }

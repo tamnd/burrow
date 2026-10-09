@@ -1616,6 +1616,7 @@ typedef struct HttpTransport {
     Int write_buffer_size;
     Int read_buffer_size;
     const HttpProtocols *protocols;
+    const HttpHTTP2Config *http2;
     Alloc *a;
 
     /* The transport's own. */

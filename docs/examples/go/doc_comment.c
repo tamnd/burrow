@@ -66,4 +66,21 @@ int main(void) {
 }
 
 /* Output:
+paragraph of 3 text(s)
+heading, id hdr-Usage
+paragraph of 1 text(s)
+code "fmt.Println(hello.Greet(\"world\"))\n"
+paragraph of 1 text(s)
+list of 2 item(s)
+-- text
+Greet returns a greeting for name,
+as in "hello, name". It trims the name
+with strings.TrimSpace first, and an
+empty name gets a greeting all the same.
+-- markdown
+Greet returns a greeting for name, as in "hello, name". It trims the name with [strings.TrimSpace](https://pkg.go.dev/strings#TrimSpace) first, and an empty name gets a greeting all the same.
+-- html
+<p>Greet returns a greeting for name, as in
+&quot;hello, name&quot;. It trims the name with <a href="https://pkg.go.dev/strings#TrimSpace">strings.TrimSpace</a>
+first, and an empty name gets a greeting all the same.
 */

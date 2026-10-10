@@ -826,6 +826,12 @@ for (Int i = 0; i < d->content.len; i++) {
 That prints:
 
 ```
+paragraph of 3 text(s)
+heading, id hdr-Usage
+paragraph of 1 text(s)
+code "fmt.Println(hello.Greet(\"world\"))\n"
+paragraph of 1 text(s)
+list of 2 item(s)
 ```
 
 A NULL parser is Go's zero `Parser`. Set `words` to a map of words that should come out in italics or as links, and `lookup_package` and `lookup_sym` to say which names in square brackets are doc links. Without `lookup_package`, the single element packages of the standard library, such as `[strings]`, still resolve. The doc and everything in it lives in the allocator you pass, text included, so the string you parsed can go away.
@@ -842,16 +848,27 @@ CommentPrinter p = {0};
 p.doc_link_base_url = BURROW_S("https://pkg.go.dev");
 p.text_width = 40;
 Slice out = comment_printer_text(&p, a, d);
-fmt_printf_v("%s", str_from_bytes(out.p, out.len));
+fmt_printf_v("-- text\n%s", str_from_bytes(out.p, out.len));
 out = comment_printer_markdown(&p, a, d);
-fmt_printf_v("%s", str_from_bytes(out.p, out.len));
+fmt_printf_v("-- markdown\n%s", str_from_bytes(out.p, out.len));
 out = comment_printer_html(&p, a, d);
-fmt_printf_v("%s", str_from_bytes(out.p, out.len));
+fmt_printf_v("-- html\n%s", str_from_bytes(out.p, out.len));
 ```
 
 That prints:
 
 ```
+-- text
+Greet returns a greeting for name,
+as in "hello, name". It trims the name
+with strings.TrimSpace first, and an
+empty name gets a greeting all the same.
+-- markdown
+Greet returns a greeting for name, as in "hello, name". It trims the name with [strings.TrimSpace](https://pkg.go.dev/strings#TrimSpace) first, and an empty name gets a greeting all the same.
+-- html
+<p>Greet returns a greeting for name, as in
+&quot;hello, name&quot;. It trims the name with <a href="https://pkg.go.dev/strings#TrimSpace">strings.TrimSpace</a>
+first, and an empty name gets a greeting all the same.
 ```
 
 Each printer returns a new byte slice in the allocator. Set `heading_id` or `doc_link_url` to choose the heading anchors and the doc link targets yourself; otherwise `comment_heading_default_id` and `comment_doc_link_default_url` pick them, as Go's `DefaultID` and `DefaultURL` do.

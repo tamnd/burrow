@@ -104,3 +104,4 @@ net/mail
 log
 go/token
 go/scanner
+go/version

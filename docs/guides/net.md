@@ -736,3 +736,67 @@ cart="3 items"; Path=/shop; Expires=Fri, 01 Mar 2030 12:00:00 GMT; Secure; SameS
 ```
 
 `http_cookie_string` goes the other way, and drops the bytes a value or path can't hold, quoting a value with a space or comma in it as Go does. Each of those is reported on the standard logger from `burrow/log.h`, as Go reports it with `log.Printf`. `http_cookie_valid` says whether a cookie could be sent as it is. A request with more than 3000 cookies gets an error, and `GODEBUG=httpcookiemaxnum=N` moves that limit, with 0 taking it away.
+
+## Reading requests and responses
+
+`http_read_request` reads one request off a `BufioReader`, the way a server does, and `http_read_response` reads one response, the way a client does. Each hands back a message with its own arena, and `http_request_free` or `http_response_free` gives all of it back at once, the body included. The body reads only its own bytes, whether they come with a `Content-Length`, in chunks, or up to the end of the connection, so the next message can be read from the same reader once it is done:
+
+<!-- example: ../examples/net/http.c#wire -->
+```c
+StringsReader sr;
+strings_reader_reset(&sr, BURROW_S("POST /upload?name=notes HTTP/1.1\r\n"
+                                   "Host: example.com\r\n"
+                                   "Authorization: Basic YWxpY2U6czNjcmV0\r\n"
+                                   "Content-Length: 11\r\n"
+                                   "\r\n"
+                                   "hello world"));
+BufioReader *br = bufio_new_reader(a, strings_reader_as_io_reader(&sr));
+Error err;
+HttpRequest *req = http_read_request(a, br, &err);
+if (BURROW_OK(err)) {
+    printf("%.*s %.*s for %.*s, %lld bytes\n", P(req->method), P(req->url->path),
+           P(req->host), (long long)req->content_length);
+    Str user;
+    Str pass;
+    if (http_request_basic_auth(req, a, &user, &pass))
+        printf("from %.*s\n", P(user));
+    Slice body = io_read_all(a, io_read_closer_as_io_reader(req->body), &err);
+    printf("body: %.*s\n", (int)body.len, (const char *)body.p);
+    http_request_free(req);
+}
+bufio_reader_free(br);
+
+strings_reader_reset(&sr, BURROW_S("HTTP/1.1 404 Not Found\r\n"
+                                   "Content-Type: text/plain\r\n"
+                                   "Transfer-Encoding: chunked\r\n"
+                                   "\r\n"
+                                   "4\r\nnone\r\n5\r\n here\r\n0\r\n\r\n"));
+br = bufio_new_reader(a, strings_reader_as_io_reader(&sr));
+HttpResponse *resp = http_read_response(a, br, NULL, &err);
+if (BURROW_OK(err)) {
+    printf("%d, %.*s\n", (int)resp->status_code, P(resp->status));
+    Slice body = io_read_all(a, io_read_closer_as_io_reader(resp->body), &err);
+    printf("body: %.*s\n", (int)body.len, (const char *)body.p);
+    http_response_free(resp);
+}
+bufio_reader_free(br);
+
+strings_reader_reset(&sr, BURROW_S("HTTP/1.1 OK\r\n\r\n"));
+br = bufio_new_reader(a, strings_reader_as_io_reader(&sr));
+http_read_response(a, br, NULL, &err);
+printf("%.*s\n", P(error_text(err)));
+bufio_reader_free(br);
+```
+
+That prints:
+
+```
+POST /upload for example.com, 11 bytes
+from alice
+body: hello world
+404, 404 Not Found
+body: none here
+malformed HTTP status code "OK"
+```
+
+As in Go, a request's `Host` field is taken out of its header and kept in `host`. The response is given the request it answers, or NULL, because a response to `HEAD` has no body whatever its header says. `Transfer-Encoding` other than a single `chunked` is refused, and so are two different `Content-Length` values, since both are ways to smuggle one request inside another.

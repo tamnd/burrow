@@ -44,7 +44,7 @@ enum { GP_MAX_NEST_LEV = 100000 };
 typedef struct GpParser {
     Alloc *a;
     TokenFile *file;
-    GoScannerErrorList errors; /* in error_allocator(), so the Error can keep it */
+    GoScannerErrorList errors; /* in a, with the tree */
     GoScanner scanner;
 
     /* Tracing and issue tracking */
@@ -277,9 +277,11 @@ static void gp_inc_nest_lev(GpParser *p) {
 
 /* ------------------------------------------------------------ the scanner */
 
+/* The list is kept in the parse's allocator and not the error arena, since the
+ * scanner drops what it put in the error arena once this returns. */
 static void gp_scan_error(void *env, TokenPosition pos, Str msg) {
     GpParser *p = (GpParser *)env;
-    go_scanner_error_list_add(&p->errors, error_allocator(), pos, msg);
+    go_scanner_error_list_add(&p->errors, p->a, pos, msg);
 }
 
 static void gp_next(GpParser *p);
@@ -449,7 +451,7 @@ static void gp_error(GpParser *p, TokenPos pos, Str msg) {
             gp_bail(p);
     }
 
-    go_scanner_error_list_add(&p->errors, error_allocator(), epos, msg);
+    go_scanner_error_list_add(&p->errors, p->a, epos, msg);
     if (p->trace)
         gp_trace_out(p);
 }
@@ -3542,9 +3544,8 @@ static Error gp_finish(GpParser *p) {
     if (p->oom)
         return burrow_err_out_of_memory;
     if (p->bailing && p->bail_msg.len > 0)
-        go_scanner_error_list_add(&p->errors, error_allocator(),
-                                  token_file_position(p->file, p->bail_pos),
-                                  p->bail_msg);
+        go_scanner_error_list_add(
+            &p->errors, p->a, token_file_position(p->file, p->bail_pos), p->bail_msg);
     go_scanner_error_list_sort(p->errors);
     return go_scanner_error_list_err(p->errors);
 }

@@ -16,7 +16,9 @@
  * Every node is made in the allocator passed in, and nothing frees one node
  * alone, so parse into an arena. The Error of a syntax error is a
  * GoScannerErrorList, sorted by position, and the tree that comes back with it
- * is as much of the file as could be parsed.
+ * is as much of the file as could be parsed. The list is made in the allocator
+ * too, so the Error is good for as long as the tree is. error_retain copies it
+ * out when it has to last longer.
  *
  * Go stops at 100000 levels of nesting with "exceeded max nesting depth". The
  * same error comes here when the C stack is about to run out, since a C stack

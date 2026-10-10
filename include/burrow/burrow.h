@@ -98,6 +98,7 @@
 #include "burrow/go/ast.h"
 #include "burrow/go/build/constraint.h"
 #include "burrow/go/constant.h"
+#include "burrow/go/doc.h"
 #include "burrow/go/doc/comment.h"
 #include "burrow/go/format.h"
 #include "burrow/go/parser.h"

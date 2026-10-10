@@ -48,6 +48,8 @@ static void dc_append(Alloc *a, Slice *s, const void *v) {
 }
 
 static Str dc_sub(Str s, Int lo, Int hi) {
+    if (lo == hi)
+        return BURROW_STR_EMPTY; /* s.p can be NULL, and NULL + 0 is undefined */
     return str_from_bytes(s.p + lo, hi - lo);
 }
 

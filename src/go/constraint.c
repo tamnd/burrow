@@ -30,6 +30,8 @@ enum { BC_MAX_SIZE = 1000 };
 enum { BC_MAX_OLD_SIZE = 100 };
 
 static Str bc_sub(Str s, Int i, Int j) {
+    if (i == j)
+        return BURROW_STR_EMPTY; /* s.p can be NULL, and NULL + 0 is undefined */
     return str_from_bytes(s.p + i, j - i);
 }
 

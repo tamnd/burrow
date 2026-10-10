@@ -872,3 +872,104 @@ first, and an empty name gets a greeting all the same.
 ```
 
 Each printer returns a new byte slice in the allocator. Set `heading_id` or `doc_link_url` to choose the heading anchors and the doc link targets yourself; otherwise `comment_heading_default_id` and `comment_doc_link_default_url` pick them, as Go's `DefaultID` and `DefaultURL` do.
+
+## Printing
+
+`burrow/go/printer.h` is Go's `go/printer`, which writes a syntax tree back out as Go source. `printer_fprint` takes the file set the tree's positions come from and the node as an `Any` that points at the node pointer, the same way Go's takes an `any`:
+
+<!-- example: ../examples/go/printer.c#fprint -->
+```c
+Str src = BURROW_S("package main\n"
+                   "import \"fmt\"\n"
+                   "func main() {\n"
+                   "fmt.Println( \"hello\" ,1+2 ) // say hello\n"
+                   "}\n");
+TokenFileSet *fset = token_new_file_set(a);
+Error err = BURROW_NO_ERROR;
+AstFile *f =
+    parser_parse_file(a, fset, BURROW_S("hello.go"), BURROW_ANY(TYPE_STRING, &src),
+                      PARSER_PARSE_COMMENTS, &err);
+if (BURROW_FAILED(err)) {
+    fmt_printf_v("parse: %s\n", error_text(err));
+    return;
+}
+StringsBuilder b = STRINGS_BUILDER(a);
+err = printer_fprint(a, strings_builder_as_io_writer(&b), fset,
+                     BURROW_ANY(TYPE_AST_FILE_PTR, &f));
+if (BURROW_FAILED(err)) {
+    fmt_printf_v("print: %s\n", error_text(err));
+    return;
+}
+fmt_printf_v("%s", strings_builder_string(&b));
+```
+
+The layout is gofmt's, with comments kept in their places:
+
+```
+package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello", 1+2)	// say hello
+}
+```
+
+`printer_fprint` is `printer_config_fprint` with a tab width of 8 and no mode flags, so it pads columns with tabs. gofmt indents with tabs but aligns with spaces, which takes `PRINTER_USE_SPACES` and `PRINTER_TAB_INDENT`:
+
+<!-- example: ../examples/go/printer.c#config -->
+```c
+Str src = BURROW_S("package p\n"
+                   "type Person struct {\n"
+                   "Name string // full name\n"
+                   "Age int // in years\n"
+                   "}\n");
+TokenFileSet *fset = token_new_file_set(a);
+Error err = BURROW_NO_ERROR;
+AstFile *f =
+    parser_parse_file(a, fset, BURROW_STR_EMPTY, BURROW_ANY(TYPE_STRING, &src),
+                      PARSER_PARSE_COMMENTS, &err);
+if (BURROW_FAILED(err))
+    return;
+// Tabs to indent and spaces to align, the way gofmt prints.
+PrinterConfig cfg = {PRINTER_USE_SPACES | PRINTER_TAB_INDENT, 8, 0};
+StringsBuilder b = STRINGS_BUILDER(a);
+err = printer_config_fprint(&cfg, a, strings_builder_as_io_writer(&b), fset,
+                            BURROW_ANY(TYPE_AST_FILE_PTR, &f));
+if (BURROW_OK(err))
+    fmt_printf_v("%s", strings_builder_string(&b));
+```
+
+That prints:
+
+```
+package p
+
+type Person struct {
+	Name string // full name
+	Age  int    // in years
+}
+```
+
+The node can also be a single expression, statement, declaration or spec, a `Slice` of statements or declarations (`TYPE_AST_STMT_SLICE` and `TYPE_AST_DECL_SLICE`), or a `PrinterCommentedNode`, which brings the file's comments along with a node that is not a whole file. A tree built by hand, or one whose positions are not in the file set, still prints:
+
+<!-- example: ../examples/go/printer.c#expr -->
+```c
+Error err = BURROW_NO_ERROR;
+AstExpr x = parser_parse_expr(a, BURROW_S("a*(b+c)  ==  f(x,y)[ 0 ]"), &err);
+if (BURROW_FAILED(err))
+    return;
+StringsBuilder b = STRINGS_BUILDER(a);
+err = printer_fprint(a, strings_builder_as_io_writer(&b), token_new_file_set(a),
+                     BURROW_ANY(TYPE_AST_EXPR, &x));
+if (BURROW_OK(err))
+    fmt_printf_v("%s\n", strings_builder_string(&b));
+```
+
+That prints:
+
+```
+a*(b+c) == f(x, y)[0]
+```
+
+A node of any other type gives an error, and nothing is written. The printer works in an arena of its own, taken from the allocator you pass and given back before it returns, so the only memory it leaves behind is what the writer kept.

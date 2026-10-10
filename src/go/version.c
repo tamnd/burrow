@@ -31,6 +31,8 @@ typedef struct GvVersion {
 } GvVersion;
 
 static Str gv_sub(Str s, Int i, Int j) {
+    if (i == j)
+        return BURROW_STR_EMPTY; /* s.p can be NULL, and NULL + 0 is undefined */
     return str_from_bytes(s.p + i, j - i);
 }
 

@@ -63,4 +63,21 @@ int main(void) {
 }
 
 /* Output:
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	if len(os.Args) > 1 {
+		fmt.Println("hi", os.Args[1])
+	}
+	x := 0x1p4
+	fmt.Println(x)
+}
+"\tx := 1\n\tif x > 0 {\n\t\ty := x * 2\n\t\t_ = y\n\t}\n\n"
+error: 3:1: expected operand, found '}'
+(6 + 2*3) / 4
 */

@@ -54,7 +54,7 @@ typedef enum FmAdj {
 static Slice fm_wrap(Alloc *a, Str prefix, Slice src, Str suffix) {
     Int n = prefix.len + src.len + suffix.len;
     Slice out = slice_make(a, TYPE_BYTE, n, n);
-    if (out.p == NULL && n > 0)
+    if (out.p == NULL) /* a zero length slice is not nil, so this is only OOM */
         fm_oom();
     Byte *p = (Byte *)out.p;
     if (prefix.len > 0)

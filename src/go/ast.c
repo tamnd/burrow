@@ -43,6 +43,8 @@ static AstNode an_last(Slice s) {
 
 /* s[i:j], which Go has as syntax. */
 static Str an_sub(Str s, Int i, Int j) {
+    if (i == j)
+        return BURROW_STR_EMPTY; /* s.p can be NULL, and NULL + 0 is undefined */
     return str_from_bytes(s.p + i, j - i);
 }
 

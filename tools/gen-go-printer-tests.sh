@@ -42,11 +42,19 @@ BANNED = re.compile(
     rb"strncat|alloca|atoi|atol|atof)[ \t]*\("
 )
 
+# And the allocator names tools/check-banned.sh wants kept in the malloc
+# backend, which it looks for as words, called or not.
+BANNED_ALLOC = re.compile(
+    rb"(?<![A-Za-z0-9_])(malloc|calloc|realloc|free|aligned_alloc|posix_memalign|"
+    rb"_aligned_malloc|_aligned_realloc|_aligned_free)(?![A-Za-z0-9_])"
+)
+
 
 def lit(b):
     """b as C string literals, one line of the text to each."""
     lines, cur = [], ""
     hide = {m.start() for m in BANNED.finditer(b)}
+    hide |= {m.start() for m in BANNED_ALLOC.finditer(b)}
     for i, c in enumerate(b):
         if i in hide:
             s = "\\%03o" % c

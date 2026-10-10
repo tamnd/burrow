@@ -76,4 +76,18 @@ int main(void) {
 }
 
 /* Output:
+package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello", 1+2)	// say hello
+}
+package p
+
+type Person struct {
+	Name string // full name
+	Age  int    // in years
+}
+a*(b+c) == f(x, y)[0]
 */

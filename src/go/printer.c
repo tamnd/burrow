@@ -261,7 +261,7 @@ static bool pt_comments_have_newline(PtPrinter *p, Slice list) {
 }
 
 static void pt_next_comment(PtPrinter *p) {
-    while (p->ci.cindex < p->comments.len) {
+    while (p->comments.p != NULL && p->ci.cindex < p->comments.len) {
         AstCommentGroup *c = PT_AT(p->comments, AstCommentGroup *, p->ci.cindex);
         p->ci.cindex++;
         Slice list = c->list;
@@ -1455,7 +1455,7 @@ static void pt_fix_go_build_lines(PtPrinter *p) {
             Slice lines = constraint_plus_build_lines(p->a, x, &err);
             if (BURROW_FAILED(err)) {
                 Str line = pt_concat(p, S("// +build error: "), error_text(err));
-                lines = (Slice){(void *)pt_alloc(p, sizeof(Str)), 1, 1, TYPE_STRING};
+                lines = (Slice){pt_alloc(p, sizeof(Str)), 1, 1, TYPE_STRING};
                 PT_AT(lines, Str, 0) = line;
             }
             for (Int i = 0; i < lines.len; i++) {
@@ -1613,7 +1613,7 @@ static void pt_ident_list(PtPrinter *p, Slice list, bool indent) {
  * the source's line breaks between expressions. */
 static void pt_expr_list(PtPrinter *p, TokenPos prev0, Slice list, Int depth, Int mode,
                          TokenPos next0, bool is_incomplete) {
-    if (list.len == 0) {
+    if (list.len == 0 || list.p == NULL) {
         if (is_incomplete) {
             TokenPosition prev = pt_pos_for(p, prev0);
             TokenPosition next = pt_pos_for(p, next0);
@@ -2336,14 +2336,12 @@ static AstBasicLit *pt_normalized_number(PtPrinter *p, AstBasicLit *lit) {
         if (i == -1)
             return lit; /* nothing to do */
         x[i] = 'p';
+    } else if (x[0] == '0' && (x[1] == 'o' || x[1] == 'b')) {
+        return lit; /* nothing to do */
     } else if (x[0] == '0' && x[1] == 'O') {
         x[1] = 'o';
-    } else if (x[0] == '0' && x[1] == 'o') {
-        return lit; /* nothing to do */
     } else if (x[0] == '0' && x[1] == 'B') {
         x[1] = 'b';
-    } else if (x[0] == '0' && x[1] == 'b') {
-        return lit; /* nothing to do */
     } else {
         /* an octal with a 0 prefix, a decimal integer or a float, perhaps
          * with an i suffix */
@@ -2398,7 +2396,7 @@ static bool pt_selector_expr(PtPrinter *p, AstSelectorExpr *x, Int depth,
 }
 
 static void pt_func_body(PtPrinter *p, Int header_size, PtWs sep, AstBlockStmt *b);
-static Int pt_distance_from(PtPrinter *p, TokenPos startPos, Int start_outCol);
+static Int pt_distance_from(PtPrinter *p, TokenPos start_pos, Int start_out_col);
 
 static void pt_slice_expr(PtPrinter *p, AstSliceExpr *x, Int depth) {
     pt_expr1(p, x->x, TOKEN_HIGHEST_PREC, 1);

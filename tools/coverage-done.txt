@@ -105,3 +105,4 @@ log
 go/token
 go/scanner
 go/version
+go/constant

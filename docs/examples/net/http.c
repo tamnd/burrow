@@ -46,6 +46,36 @@ static void times(Alloc *a) {
     // doc: end
 }
 
+static void cookies(Alloc *a) {
+    // doc: cookie
+    Error err;
+    Str line =
+        BURROW_S("session=38afes7a8; Path=/; Max-Age=3600; HttpOnly; Flavour=mint");
+    HttpCookie c = http_parse_set_cookie(a, line, &err);
+    if (BURROW_OK(err)) {
+        printf("%.*s=%.*s, path %.*s, max-age %d\n", P(c.name), P(c.value), P(c.path),
+               (int)c.max_age);
+        printf("unparsed: %.*s\n", P(BURROW_AT(Str, c.unparsed, 0)));
+    }
+
+    Slice sent = http_parse_cookie(a, BURROW_S("lang=en; theme=\"dark\""), &err);
+    for (Int i = 0; i < sent.len; i++) {
+        HttpCookie k = BURROW_AT(HttpCookie, sent, i);
+        printf("%.*s is %.*s%s\n", P(k.name), P(k.value), k.quoted ? ", quoted" : "");
+    }
+
+    HttpCookie out = {
+        .name = BURROW_S_INIT("cart"),
+        .value = BURROW_S_INIT("3 items"),
+        .path = BURROW_S_INIT("/shop"),
+        .expires = time_date(2030, TIME_MARCH, 1, 12, 0, 0, 0, time_utc_loc),
+        .secure = true,
+        .same_site = HTTP_SAME_SITE_STRICT_MODE,
+    };
+    printf("%.*s\n", P(http_cookie_string(a, &out)));
+    // doc: end
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -53,6 +83,7 @@ int main(void) {
     header(a);
     sniff();
     times(a);
+    cookies(a);
     arena_free(&ar);
     return 0;
 }

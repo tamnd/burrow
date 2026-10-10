@@ -60,7 +60,10 @@ typedef struct Gpr {
     AstObject *unresolved_obj;
 } Gpr;
 
-static const AstVisitorVT gpr_vt;
+/* MSVC rejects a const object declared ahead of its definition, so the table
+ * is defined here and its function declared ahead of it instead. */
+static AstVisitor gpr_visit(void *self, AstNode node);
+static const AstVisitorVT gpr_vt = {NULL, gpr_visit};
 
 static void gpr_assert(bool cond, const char *msg) {
     if (!cond) {
@@ -675,8 +678,6 @@ static AstVisitor gpr_visit(void *self, AstNode node) {
     }
     return (AstVisitor){&gpr_vt, r};
 }
-
-static const AstVisitorVT gpr_vt = {NULL, gpr_visit};
 
 /* resolveFile walks the given file to resolve identifiers within the file
  * scope, updating ast.Ident.Obj fields with declaration information.

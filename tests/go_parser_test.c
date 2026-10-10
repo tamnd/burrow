@@ -23,6 +23,7 @@
 #include "burrow/burrow.h"
 #include "burrow/go/parser.h"
 #include "burrow/mem/arena.h"
+#include "burrow/mem/heap.h"
 #include "burrow/os.h"
 #include "burrow/path/filepath.h"
 #include "burrow/proc.h"
@@ -95,20 +96,35 @@ static const GptFile *find_source(const char *name) {
 }
 
 static void remove_tree(void *env) {
-    (void)os_remove_all(*(Str *)env);
+    Str *d = (Str *)env;
+    (void)os_remove_all(*d);
+    Alloc *h = heap_allocator();
+    mem_free(h, (void *)(uintptr_t)d->p, (size_t)d->len, 1);
+    mem_free(h, d, sizeof *d, _Alignof(Str));
 }
 
-/* t.TempDir: a new directory, removed when the test ends. */
+/* t.TempDir: a new directory, removed when the test ends. The name lives on
+ * the heap, since the cleanup runs after the test has freed its arena. The
+ * copy returned is in a. */
 static Str temp_dir(TestingT *t, Alloc *a) {
     Error e = BURROW_NO_ERROR;
-    Str *d = BURROW_NEW(a, Str);
-    if (d == NULL)
-        testing_t_fatalf_v(t, "out of memory");
-    *d = os_mkdir_temp(a, S(""), S("burrow-go-parser-test-*"), &e);
+    Alloc *h = heap_allocator();
+    Str dir = os_mkdir_temp(a, S(""), S("burrow-go-parser-test-*"), &e);
     if (!BURROW_OK(e))
         testing_t_fatalf_v(t, "MkdirTemp: %s", error_text(e));
+    Str *d = BURROW_NEW(h, Str);
+    char *p = d != NULL ? (char *)mem_alloc(h, (size_t)dir.len, 1) : NULL;
+    if (p == NULL) {
+        (void)os_remove_all(dir);
+        if (d != NULL)
+            mem_free(h, d, sizeof *d, _Alignof(Str));
+        testing_t_fatalf_v(t, "out of memory");
+        return dir;
+    }
+    memcpy(p, dir.p, (size_t)dir.len);
+    *d = str_from_bytes(p, dir.len);
     testing_t_cleanup(t, BURROW_FN(Func, remove_tree, d));
-    return *d;
+    return dir;
 }
 
 /* Writes data to dir/rel, where rel is slash separated, making the

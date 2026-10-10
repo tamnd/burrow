@@ -43,10 +43,12 @@ static void parse(Alloc *a) {
 static void errors(Alloc *a) {
     // doc: errors
     Str src = BURROW_S("package p\n"
+                       "\n"
                        "func f() {\n"
-                       "\tx := [1, 2]\n"
-                       "\tif x { return }\n"
-                       "\ty := 3 +\n"
+                       "\tx := 1 +\n"
+                       "}\n"
+                       "\n"
+                       "func g(a int {\n"
                        "}\n");
     TokenFileSet *fset = token_new_file_set(a);
     Error err = BURROW_NO_ERROR;

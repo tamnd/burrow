@@ -3337,15 +3337,8 @@ static AstFuncDecl *gp_parse_func_decl_body(GpParser *p) {
     AstIdent *ident = gp_parse_ident(p);
 
     AstFieldList *tparams = NULL;
-    if (p->tok == TOKEN_LBRACK) {
+    if (p->tok == TOKEN_LBRACK)
         tparams = gp_parse_type_parameters(p);
-        if (recv != NULL && tparams != NULL) {
-            /* Method declarations do not have type parameters. We parse them
-             * for a better error message and improved error recovery. */
-            gp_error(p, tparams->opening,
-                     BURROW_S("method must have no type parameters"));
-        }
-    }
     AstFieldList *params = gp_parse_parameters(p, false);
     AstFieldList *results = gp_parse_parameters(p, true);
 
@@ -3486,7 +3479,7 @@ static const Str gp_invalid_source_text = BURROW_S_INIT("invalid source");
 static Slice gp_read_source(Alloc *a, Str filename, Any src, Error *err) {
     if (src.t == NULL)
         return os_read_file(a, filename, err);
-    Slice from = slice_nil(TYPE_BYTES);
+    Slice from = slice_nil(TYPE_BYTE);
     bool ok = false;
     if (src.t == TYPE_STRING && src.data != NULL) {
         Str s = *(const Str *)src.data;
@@ -3505,14 +3498,14 @@ static Slice gp_read_source(Alloc *a, Str filename, Any src, Error *err) {
     }
     if (!ok) {
         *err = errors_new(error_allocator(), gp_invalid_source_text);
-        return slice_nil(TYPE_BYTES);
+        return slice_nil(TYPE_BYTE);
     }
-    Slice out = slice_nil(TYPE_BYTES);
+    Slice out = slice_nil(TYPE_BYTE);
     if (from.len > 0) {
         out = slice_append(a, out, from.p, from.len);
         if (out.len != from.len) {
             *err = burrow_err_out_of_memory;
-            return slice_nil(TYPE_BYTES);
+            return slice_nil(TYPE_BYTE);
         }
     }
     return out;

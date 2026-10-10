@@ -441,7 +441,7 @@ bool burrow__comment_auto_url(Str s, Str *url) {
 /* ---------------------------------------------------------------- nodes */
 
 static CommentBase *dc_node(Alloc *a, CommentKind kind, size_t size) {
-    CommentBase *n = (CommentBase *)dc_alloc(a, size, _Alignof(max_align_t));
+    CommentBase *n = (CommentBase *)dc_alloc(a, size, BURROW_ALIGN_MAX);
     n->kind = (Int)kind;
     return n;
 }

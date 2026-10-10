@@ -604,3 +604,65 @@ func Read
 ```
 
 Nodes and the slices in them live in the allocator they were made in, and nothing frees a single node, so build a tree in an arena and free the arena when you are done with it. The tree functions that build new lists, like `ast_merge_package_files`, `ast_sort_imports` and `ast_new_comment_map`, take the allocator to use as their first argument. `ast_merge_package_files` follows Go 1.27, which fixed the merged file's `FileStart` that Go 1.26 always left at 0.
+
+## Build constraints
+
+`burrow/go/build/constraint.h` is Go's `go/build/constraint`. `constraint_parse` takes one `//go:build` or `// +build` line and gives back the expression in it as a tree of tag, not, and and or nodes. `constraint_expr_eval` decides whether a build matches by asking a function about each tag, and `constraint_go_version` works out the oldest Go the line allows:
+
+<!-- example: ../examples/go/constraint.c#parse -->
+```c
+Str lines[] = {
+    BURROW_S("//go:build linux && (amd64 || arm64)"),
+    BURROW_S("//go:build !windows && go1.21"),
+    BURROW_S("// +build darwin,!cgo freebsd"),
+    BURROW_S("//go:build linux &&"),
+    BURROW_S("// just a comment"),
+};
+ConstraintTagFunc ok = BURROW_FN(ConstraintTagFunc, linux_amd64, NULL);
+for (int i = 0; i < 5; i++) {
+    Error err = BURROW_NO_ERROR;
+    ConstraintExpr x = constraint_parse(a, lines[i], &err);
+    if (!BURROW_OK(err)) {
+        fmt_printf_v("%q: %s\n", lines[i], error_text(err));
+        continue;
+    }
+    fmt_printf_v("%s  build=%v min=%q\n", constraint_expr_string(x, a),
+                 constraint_expr_eval(x, ok), constraint_go_version(a, x));
+}
+```
+
+That prints:
+
+```
+linux && (amd64 || arm64)  build=true min=""
+!windows && go1.21  build=true min="go1.21"
+(darwin && !cgo) || freebsd  build=false min=""
+"//go:build linux &&": unexpected end of expression
+"// just a comment": not a build constraint
+```
+
+The old `// +build` form is read the way the go command reads it, with spaces meaning or and commas meaning and. A line that is neither form gives the "not a build constraint" error, and a bad `//go:build` expression gives a `ConstraintSyntaxError` with the byte offset of the problem, which `errors_as` with `TYPE_CONSTRAINT_SYNTAX_ERROR` gets out of the error. Both forms have a size limit, so a huge line fails instead of using up the stack.
+
+`constraint_plus_build_lines` goes the other way and writes `// +build` lines that mean the same as an expression, for code that still has to build with Go 1.16 and older:
+
+<!-- example: ../examples/go/constraint.c#plusbuild -->
+```c
+Error err = BURROW_NO_ERROR;
+ConstraintExpr x =
+    constraint_parse(a, BURROW_S("//go:build !(windows || plan9) && cgo"), &err);
+Slice lines = slice_nil(TYPE_STRING);
+if (BURROW_OK(err))
+    lines = constraint_plus_build_lines(a, x, &err);
+if (!BURROW_OK(err))
+    fmt_println_v(error_text(err));
+for (Int i = 0; i < lines.len; i++)
+    fmt_println_v(((Str *)lines.p)[i]);
+```
+
+That prints:
+
+```
+// +build !windows,!plan9,cgo
+```
+
+Not every expression fits. The `// +build` form can only say an and of ors of ands, and when the expression needs more than that the call returns an error and no lines. The tree, its tags and the lines all live in the allocator you pass in.

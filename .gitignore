@@ -4,6 +4,9 @@
 # build-portable/ next to build/ is how the context switch gets checked both
 # ways, and CI does the same thing under the same names.
 build*/
+# Except the header directory for Go's go/build/constraint, which the glob
+# would otherwise swallow.
+!include/burrow/go/build/
 # The short names a sanitiser run or a second machine ends up with, because
 # BUILD=build-asan is a lot to type forty times and the shortening is what
 # actually happens. These are ignored for the same reason build*/ is, and they

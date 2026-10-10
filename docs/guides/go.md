@@ -710,6 +710,16 @@ for (Int i = 0; i < f->decls.len; i++) {
 }
 ```
 
+That prints:
+
+```
+package hello
+import "fmt"
+import "strings"
+hello.go:10:1: func Greet, doc "Greet says hello to name.\n"
+hello.go:14:1: func shout, doc ""
+```
+
 A syntax error does not lose the tree. The parser puts `BadExpr`, `BadStmt` and `BadDecl` nodes where it could not make sense of the source, carries on, and returns the file along with a `GoScannerErrorList` of everything it found, sorted by position:
 
 <!-- example: ../examples/go/parser.c#errors -->
@@ -737,6 +747,16 @@ if (f != NULL)
     fmt_printf_v("still got %d declaration(s)\n", f->decls.len);
 ```
 
+That prints the same errors Go's parser reports for this source, the repeated one included:
+
+```
+bad.go:5:1: expected operand, found '}'
+bad.go:8:3: expected ';', found 'EOF'
+bad.go:8:3: expected ';', found 'EOF'
+bad.go:8:3: expected '}', found 'EOF'
+still got 1 declaration(s)
+```
+
 Without `PARSER_ALL_ERRORS` the parser keeps the report short: it drops an error on the same line as the one before it, and it gives up once it has more than ten. The list lives in the allocator along with the tree, so use `error_retain` on the error if it has to outlive the arena.
 
 `parser_parse_expr` parses a single expression, which is handy for small tools and tests:
@@ -751,6 +771,13 @@ if (BURROW_OK(err) && x->kind == AST_KIND_BINARY_EXPR) {
     if (sum->y->kind == AST_KIND_BINARY_EXPR)
         fmt_printf_v("right: %s\n", token_string(((AstBinaryExpr *)sum->y)->op, a));
 }
+```
+
+That prints:
+
+```
+top: +
+right: *
 ```
 
 `parser_parse_dir` is here too, for code that still uses it, though Go deprecates it because it knows nothing of build tags. Everything the parser makes is in the allocator you pass, so parse into an arena and free it in one go. Go stops at 100000 levels of nesting. A C stack cannot grow the way a goroutine's does, so the parser also stops with the same "exceeded max nesting depth" error when the stack is about to run out. To parse code nested thousands deep, run the parse on a goroutine started with `go_stack` and a bigger stack.

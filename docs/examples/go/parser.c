@@ -90,4 +90,16 @@ int main(void) {
 }
 
 /* Output:
+package hello
+import "fmt"
+import "strings"
+hello.go:10:1: func Greet, doc "Greet says hello to name.\n"
+hello.go:14:1: func shout, doc ""
+bad.go:5:1: expected operand, found '}'
+bad.go:8:3: expected ';', found 'EOF'
+bad.go:8:3: expected ';', found 'EOF'
+bad.go:8:3: expected '}', found 'EOF'
+still got 1 declaration(s)
+top: +
+right: *
 */

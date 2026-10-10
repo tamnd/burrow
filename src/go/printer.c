@@ -143,7 +143,7 @@ static void pt_file(PtPrinter *p, AstFile *src);
 /* ---------------------------------------------------------------- helpers */
 
 static void *pt_alloc(PtPrinter *p, size_t size) {
-    void *q = mem_alloc(p->a, size, _Alignof(max_align_t));
+    void *q = mem_alloc(p->a, size, BURROW_ALIGN_MAX);
     if (q == NULL)
         pt_oom();
     return q;

@@ -199,6 +199,80 @@ http_canonical_header_key(Alloc *a, Str s) {
  * is not UTC is made in a, as time_parse does. */
 Time http_parse_time(Alloc *a, Str text, Error *err);
 
+/* ------------------------------------------------------------------ Cookies */
+
+/* http.SameSite, the SameSite attribute of a cookie. Zero means the cookie has
+ * none, and HTTP_SAME_SITE_DEFAULT_MODE means it has one with no value, or one
+ * this package does not know. */
+typedef enum HttpSameSite {
+    HTTP_SAME_SITE_DEFAULT_MODE = 1,
+    HTTP_SAME_SITE_LAX_MODE = 2,
+    HTTP_SAME_SITE_STRICT_MODE = 3,
+    HTTP_SAME_SITE_NONE_MODE = 4,
+} HttpSameSite;
+
+/* http.Cookie, a cookie as it is sent in the Set-Cookie header of a response
+ * or the Cookie header of a request. See RFC 6265.
+ *
+ * The zero value of every field means the attribute is not there. max_age 0
+ * means no Max-Age, less than 0 means "delete it now", which is written as
+ * Max-Age=0, and more than 0 is the number of seconds. quoted says the value
+ * came in double quotes, raw is the whole Set-Cookie line a parsed cookie came
+ * from, and unparsed is a Slice of Str holding the attributes that were not
+ * understood, as they were written. */
+typedef struct HttpCookie {
+    Str name;
+    Str value;
+    Str path;
+    Str domain;
+    Time expires;
+    Str raw_expires; /* only for cookies that were read */
+    Int max_age;
+    Str raw;
+    Slice unparsed; /* of Str */
+    HttpSameSite same_site;
+    bool quoted;
+    bool secure;
+    bool http_only;
+    bool partitioned;
+} HttpCookie;
+
+extern const Type *const TYPE_HTTP_COOKIE;
+
+/* http.ParseCookie. Every cookie in line, the value of a Cookie header, as a
+ * Slice of HttpCookie from a. A name can be there more than once, and each one
+ * is kept. The strings point into line. An error gives an empty Slice: an
+ * empty line, a part with no "=", a name that is not a token and a value with
+ * a byte a cookie cannot hold each have their own, as in Go, and so does a line
+ * with more than 3000 cookies, a limit GODEBUG=httpcookiemaxnum=N changes and
+ * 0 takes away. burrow_err_out_of_memory when a says no. */
+BURROW_OWNS(ret) Slice http_parse_cookie(Alloc *a, Str line, Error *err);
+
+/* http.ParseSetCookie. The cookie in line, the value of a Set-Cookie header.
+ * The strings point into line, and unparsed comes from a. The errors are
+ * ParseCookie's, less the limit. An Expires that reads as neither TIME_RFC1123
+ * nor "Mon, 02-Jan-2006 15:04:05 MST" leaves expires zero, keeps raw_expires,
+ * and goes in unparsed. Give the cookie back with http_cookie_free, or let an
+ * arena go. */
+BURROW_OWNS(ret) HttpCookie http_parse_set_cookie(Alloc *a, Str line, Error *err);
+
+/* Gives back the unparsed Slice of a cookie from http_parse_set_cookie. */
+void http_cookie_free(Alloc *a, HttpCookie *c);
+
+/* Cookie.String. The cookie written for a Cookie header when it has only a
+ * name and value, and for a Set-Cookie header when it has more, from a. Empty
+ * for a NULL c and for a name that is not a token, and when a says no.
+ *
+ * Bytes a value or path cannot hold are dropped, a value with a space or comma
+ * in it is quoted, and a domain that is not a host name or IPv4 address is left
+ * out. Each of these is reported on the standard logger, as Go reports them
+ * with log.Printf. */
+BURROW_OWNS(ret) Str http_cookie_string(Alloc *a, const HttpCookie *c);
+
+/* Cookie.Valid. No error when c could be sent as it is. The error for a byte
+ * that does not belong is made by fmt_errorf, and the others are static. */
+BURROW_BORROWS(ret) Error http_cookie_valid(const HttpCookie *c);
+
 /* ----------------------------------------------------------------- Sniffing */
 
 /* http.DetectContentType. The Content-Type of data by the algorithm at

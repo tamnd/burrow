@@ -213,6 +213,8 @@ global	src/net/netfd.c	nf_stack	package-vars	Whether this machine has IPv4, IPv6
 global	src/net/netfd.c	nf_backlog	package-vars	The listen backlog the system allows, worked out by the first listener. Atomic loads and stores only, and two racing listeners store the same value.
 global	src/net/url.c	url_debug_flags	godebug	The urlstrictcolons and urlmaxqueryparams settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/net/url.c	url_debug_max	godebug	The urlmaxqueryparams number, stored atomically before url_debug_flags says it is there.
+global	src/net/http_cookie.c	hc_debug_flags	godebug	The httpcookiemaxnum setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
+global	src/net/http_cookie.c	hc_debug_max	godebug	The httpcookiemaxnum number, stored atomically before hc_debug_flags says it is there.
 global	src/math/rand.c	rand_debug_flags	godebug	The randautoseed and randseednop settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/mime/multipart.c	mp_debug_flags	godebug	The multipartfiles, multipartmaxheaders and multipartmaxparts settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/mime/multipart.c	mp_debug_max_headers	godebug	The multipartmaxheaders number, stored atomically before mp_debug_flags says it is there.

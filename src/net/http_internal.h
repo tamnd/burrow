@@ -53,6 +53,37 @@ bool burrow__http_string_contains_ctl_byte(Str s);
 BURROW_OWNS(ret) BURROW_BORROWS(ret, s) Str burrow__http_hex_escape_non_ascii(Alloc *a,
                                                                               Str s);
 
+/* The cookie errors, which Go does not export but which its tests compare
+ * against. */
+extern const Error burrow__http_err_blank_cookie;
+extern const Error burrow__http_err_equal_not_found_in_cookie;
+extern const Error burrow__http_err_invalid_cookie_name;
+extern const Error burrow__http_err_invalid_cookie_value;
+extern const Error burrow__http_err_cookie_num_limit_exceeded;
+
+/* defaultCookieMaxNum. */
+#define BURROW__HTTP_DEFAULT_COOKIE_MAX_NUM 3000
+
+/* readSetCookies. The cookies of every Set-Cookie value in h, with the ones
+ * that do not parse left out, as a Slice of HttpCookie from a. Empty when
+ * there are more of them than the cookie limit allows, and when a says no. */
+BURROW_OWNS(ret) Slice burrow__http_read_set_cookies(Alloc *a, HttpHeader h);
+
+/* readCookies. The cookies of every Cookie value in h, and only those named
+ * filter when filter is not empty, as readSetCookies has them. */
+BURROW_OWNS(ret) Slice burrow__http_read_cookies(Alloc *a, HttpHeader h, Str filter);
+
+/* sanitizeCookieValue and sanitizeCookiePath. The result is v when nothing
+ * changes, and from a otherwise. */
+BURROW_OWNS(ret) BURROW_BORROWS(ret, v) Str
+burrow__http_sanitize_cookie_value(Alloc *a, Str v, bool quoted);
+BURROW_OWNS(ret) BURROW_BORROWS(ret, v) Str burrow__http_sanitize_cookie_path(Alloc *a,
+                                                                              Str v);
+
+/* Sets GODEBUG as net/http sees it, for tests, the way t.Setenv does in Go.
+ * NULL goes back to reading the environment. */
+void burrow__http_godebug_set(const char *value);
+
 /* ------------------------------------------------------------- chunked
  *
  * net/http/internal's chunked encoding, the wire format of a body sent with

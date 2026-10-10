@@ -754,9 +754,6 @@ static void budget_free(void *self, void *p, size_t size, size_t align) {
 static const AllocVT budget_vt = {budget_alloc, NULL, budget_realloc,
                                   budget_free,  NULL, NULL};
 
-/* Compiling and every function that allocates, with the allocator giving out
- * fewer and fewer blocks: each gives an error or the nil slice, never a
- * crash, and frees whatever it had got. */
 /* Not in Go, where a slice knows its own type. Each slice that comes back
  * says what its elements are, so BURROW_AT and slice_at can index it. */
 static void TestSliceElem(TestingT *t) {
@@ -798,9 +795,13 @@ static void TestSliceElem(TestingT *t) {
     if (m.len != 3 || m.elem != TYPE_STRING ||
         !str_eq(BURROW_AT(Str, m, 1), BURROW_S(" ")))
         testing_t_errorf_v(t, "Split: len %d, wrong element type or [1]", m.len);
+    regexp_free(re);
     arena_free(&ar);
 }
 
+/* Compiling and every function that allocates, with the allocator giving out
+ * fewer and fewer blocks: each gives an error or the nil slice, never a
+ * crash, and frees whatever it had got. */
 static void TestNoMemory(TestingT *t) {
     Str pat = BURROW_S("(?P<word>[a-z]+)(\\d*)|x+y");
     Str in = BURROW_S("abc12 xxy de 9 fgh");

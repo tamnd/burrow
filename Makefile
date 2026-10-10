@@ -242,7 +242,7 @@ TEST_GEN := $(wildcard tests/gen/*.c)
 DEPFLAGS := -MMD -MP
 DEPS     := $(OBJS:.o=.d) $(TEST_BINS:=.d)
 
-.PHONY: all lib test check collisions clean install fmt tidy amalgamation
+.PHONY: all lib test check collisions clean install fmt tidy amalgamation gofmt-gate
 
 all: lib
 
@@ -415,6 +415,18 @@ fuzz: $(addprefix $(FUZZ_BUILD)/,$(FUZZ))
 
 fuzz-replay: $(addprefix $(FUZZ_BUILD)/replay-,$(FUZZ))
 	@for t in $(FUZZ); do ./$(FUZZ_BUILD)/replay-$$t fuzz/corpus/$$t || exit 1; done
+
+# The go/printer gate, which needs Go: tools/gofmt.c, a gofmt built on burrow,
+# and Go's gofmt over the whole of $(GOROOT)/src, which have to agree byte for
+# byte. See tools/check-gofmt.sh.
+GOFMT_BIN := $(BUILD)/tools/gofmt
+
+$(GOFMT_BIN): tools/gofmt.c $(LIB)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(THREADS) $< $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
+
+gofmt-gate: $(GOFMT_BIN)
+	@tools/check-gofmt.sh $(GOFMT_BIN)
 
 install: $(LIB)
 	install -d $(DESTDIR)$(PREFIX)/lib $(DESTDIR)$(PREFIX)/include/burrow

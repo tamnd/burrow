@@ -1,6 +1,6 @@
 # Go source
 
-`burrow/go/token.h` is Go's `go/token`, the bottom layer of Go's own tools for reading Go source. It has the tokens of the language and the positions that tie them back to a file, a line and a column. `burrow/go/scanner.h` is Go's `go/scanner`, which turns source into those tokens. `burrow/go/version.h`, Go's `go/version`, compares Go versions, and `burrow/go/constant.h`, Go's `go/constant`, does exact arithmetic on Go constants. `go/ast` and `go/parser` sit on top of the two and will land in this guide when they are ported.
+`burrow/go/token.h` is Go's `go/token`, the bottom layer of Go's own tools for reading Go source. It has the tokens of the language and the positions that tie them back to a file, a line and a column. `burrow/go/scanner.h` is Go's `go/scanner`, which turns source into those tokens. `burrow/go/version.h`, Go's `go/version`, compares Go versions, and `burrow/go/constant.h`, Go's `go/constant`, does exact arithmetic on Go constants. `burrow/go/ast.h` and `burrow/go/parser.h`, Go's `go/ast` and `go/parser`, sit on top of the two and turn source into syntax trees, and `burrow/go/doc/comment.h`, Go's `go/doc/comment`, reads and prints doc comments.
 
 ## Positions
 
@@ -424,7 +424,7 @@ A ConstantValue is a small struct passed by value, and `{0}` is the unknown valu
 
 ## Syntax trees
 
-`burrow/go/ast.h` is Go's `go/ast`, the syntax tree of a Go source file. Every node starts with an `AstBase` header that holds its kind, and an `AstNode` is a pointer to that header, so the `AstExpr`, `AstStmt`, `AstDecl` and `AstSpec` interfaces are all `AstNode` and a switch on `n->kind` tells them apart. `ast_node_new` makes a zeroed node of a kind in an allocator. `go/parser` is not ported yet, so for now trees are built by hand, and `ast_print` writes one out the way `ast.Print` does, with positions from a file set:
+`burrow/go/ast.h` is Go's `go/ast`, the syntax tree of a Go source file. Every node starts with an `AstBase` header that holds its kind, and an `AstNode` is a pointer to that header, so the `AstExpr`, `AstStmt`, `AstDecl` and `AstSpec` interfaces are all `AstNode` and a switch on `n->kind` tells them apart. `ast_node_new` makes a zeroed node of a kind in an allocator. `parser_parse_file`, under Parsing below, makes trees from source, and they can also be built by hand, as here. `ast_print` writes one out the way `ast.Print` does, with positions from a file set:
 
 <!-- example: ../examples/go/ast.c#build -->
 ```c
@@ -781,3 +781,77 @@ right: *
 ```
 
 `parser_parse_dir` is here too, for code that still uses it, though Go deprecates it because it knows nothing of build tags. Everything the parser makes is in the allocator you pass, so parse into an arena and free it in one go. Go stops at 100000 levels of nesting. A C stack cannot grow the way a goroutine's does, so the parser also stops with the same "exceeded max nesting depth" error when the stack is about to run out. To parse code nested thousands deep, run the parse on a goroutine started with `go_stack` and a bigger stack.
+
+## Doc comments
+
+`burrow/go/doc/comment.h` is Go's `go/doc/comment`, which reads the text of a doc comment, with the comment markers already gone, and prints it back out as a comment, as HTML, as Markdown or as plain text. `comment_parser_parse` turns the text into a `CommentDoc`, a list of blocks. Like the nodes of `go/ast`, every block and every piece of text starts with a `CommentBase` header that holds its kind, so a switch on `b->kind` tells a heading from a paragraph, a list or a code block:
+
+<!-- example: ../examples/go/doc_comment.c#parse -->
+```c
+Str text = BURROW_S("Package hello says hello. See [strings.TrimSpace].\n"
+                    "\n"
+                    "# Usage\n"
+                    "\n"
+                    "Call it like this:\n"
+                    "\n"
+                    "\tfmt.Println(hello.Greet(\"world\"))\n"
+                    "\n"
+                    "It knows two greetings:\n"
+                    "  - hello\n"
+                    "  - goodbye\n");
+CommentDoc *d = comment_parser_parse(NULL, a, text);
+for (Int i = 0; i < d->content.len; i++) {
+    CommentBlock b = ((CommentBlock *)d->content.p)[i];
+    switch ((int)b->kind) {
+    case COMMENT_KIND_PARAGRAPH:
+        fmt_printf_v("paragraph of %d text(s)\n",
+                     ((CommentParagraph *)b)->text.len);
+        break;
+    case COMMENT_KIND_HEADING:
+        fmt_printf_v("heading, id %s\n",
+                     comment_heading_default_id((CommentHeading *)b, a));
+        break;
+    case COMMENT_KIND_CODE:
+        fmt_printf_v("code %q\n", ((CommentCode *)b)->text);
+        break;
+    case COMMENT_KIND_LIST:
+        fmt_printf_v("list of %d item(s)\n", ((CommentList *)b)->items.len);
+        break;
+    default:
+        break;
+    }
+}
+```
+
+That prints:
+
+```
+```
+
+A NULL parser is Go's zero `Parser`. Set `words` to a map of words that should come out in italics or as links, and `lookup_package` and `lookup_sym` to say which names in square brackets are doc links. Without `lookup_package`, the single element packages of the standard library, such as `[strings]`, still resolve. The doc and everything in it lives in the allocator you pass, text included, so the string you parsed can go away.
+
+A `CommentPrinter` holds the settings of the four printers, and its zero value prints the way Go's does. `text_width` and `text_prefix` shape the text output, and `doc_link_base_url` turns doc links into links in HTML and Markdown:
+
+<!-- example: ../examples/go/doc_comment.c#print -->
+```c
+Str text = BURROW_S("Greet returns a greeting for name, as in\n"
+                    "\"hello, name\". It trims the name with [strings.TrimSpace]\n"
+                    "first, and an empty name gets a greeting all the same.\n");
+CommentDoc *d = comment_parser_parse(NULL, a, text);
+CommentPrinter p = {0};
+p.doc_link_base_url = BURROW_S("https://pkg.go.dev");
+p.text_width = 40;
+Slice out = comment_printer_text(&p, a, d);
+fmt_printf_v("%s", str_from_bytes(out.p, out.len));
+out = comment_printer_markdown(&p, a, d);
+fmt_printf_v("%s", str_from_bytes(out.p, out.len));
+out = comment_printer_html(&p, a, d);
+fmt_printf_v("%s", str_from_bytes(out.p, out.len));
+```
+
+That prints:
+
+```
+```
+
+Each printer returns a new byte slice in the allocator. Set `heading_id` or `doc_link_url` to choose the heading anchors and the doc link targets yourself; otherwise `comment_heading_default_id` and `comment_doc_link_default_url` pick them, as Go's `DefaultID` and `DefaultURL` do.

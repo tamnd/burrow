@@ -1066,3 +1066,99 @@ That prints:
 ```
 
 `format_source` parses into the allocator you pass and leaves the tree there next to the result, so an arena is the easy choice. Formatting changes now and then between Go versions, and it can here too, so a check that compares output byte for byte should pin the library version.
+
+## Package documentation
+
+`burrow/go/doc.h` is Go's `go/doc`, what `go doc` and pkg.go.dev build their pages from. `doc_new_from_files` takes the parsed files of one package, comments included, and gives back a `DocPackage`: the package comment, then the constants, variables, functions and types worth documenting, sorted and grouped the way `go doc` shows them. A function that returns a type is filed under that type, methods go with their receiver, and the examples in the `_test.go` files are attached to whatever they are named after:
+
+<!-- example: ../examples/go/doc.c#package -->
+```c
+Str src = BURROW_S("// Package greet says hello.\n"
+                   "package greet\n"
+                   "\n"
+                   "import \"fmt\"\n"
+                   "\n"
+                   "// A Greeter greets people by name.\n"
+                   "type Greeter struct{ Name string }\n"
+                   "\n"
+                   "// New returns a Greeter for name.\n"
+                   "func New(name string) *Greeter { return &Greeter{name} }\n"
+                   "\n"
+                   "// Greet prints a greeting.\n"
+                   "func (g *Greeter) Greet() { fmt.Println(\"Hello,\", g.Name) }\n"
+                   "\n"
+                   "func helper() {}\n");
+Str test = BURROW_S("package greet_test\n"
+                    "\n"
+                    "import \"example.com/greet\"\n"
+                    "\n"
+                    "func ExampleGreeter_Greet() {\n"
+                    "\tgreet.New(\"world\").Greet()\n"
+                    "\t// Output: Hello, world\n"
+                    "}\n");
+TokenFileSet *fset = token_new_file_set(a);
+Error err = BURROW_NO_ERROR;
+AstFile *files[2] = {NULL, NULL};
+files[0] =
+    parser_parse_file(a, fset, BURROW_S("greet.go"), BURROW_ANY(TYPE_STRING, &src),
+                      PARSER_PARSE_COMMENTS, &err);
+if (BURROW_OK(err))
+    files[1] = parser_parse_file(a, fset, BURROW_S("greet_test.go"),
+                                 BURROW_ANY(TYPE_STRING, &test),
+                                 PARSER_PARSE_COMMENTS, &err);
+if (BURROW_FAILED(err))
+    return;
+Slice list = slice_from(files, 2, 2, TYPE_AST_FILE_PTR);
+DocPackage *p =
+    doc_new_from_files(a, fset, list, BURROW_S("example.com/greet"), 0, &err);
+if (BURROW_FAILED(err))
+    return;
+fmt_printf_v("package %s: %s", p->name, p->doc);
+for (Int i = 0; i < p->types.len; i++) {
+    DocType *t = BURROW_AT(DocType *, p->types, i);
+    fmt_printf_v("type %s: %s", t->name, t->doc);
+    for (Int j = 0; j < t->funcs.len; j++) {
+        DocFunc *f = BURROW_AT(DocFunc *, t->funcs, j);
+        fmt_printf_v("  func %s: %s", f->name, f->doc);
+    }
+    for (Int j = 0; j < t->methods.len; j++) {
+        DocFunc *m = BURROW_AT(DocFunc *, t->methods, j);
+        fmt_printf_v("  method (%s) %s: %s", m->recv, m->name, m->doc);
+        for (Int k = 0; k < m->examples.len; k++) {
+            DocExample *e = BURROW_AT(DocExample *, m->examples, k);
+            fmt_printf_v("    example, output %q\n", e->output);
+        }
+    }
+}
+```
+
+That prints:
+
+```
+package greet: Package greet says hello.
+type Greeter: A Greeter greets people by name.
+  func New: New returns a Greeter for name.
+  method (*Greeter) Greet: Greet prints a greeting.
+    example, output "Hello, world\n"
+```
+
+`helper` is not there because it is unexported. `DOC_ALL_DECLS` keeps everything, and `DOC_ALL_METHODS` lists the methods promoted from every embedded field rather than only from the unexported ones. As in Go the files are changed on the way: function bodies are dropped and unexported fields and declarations filtered out, so pass `DOC_PRESERVE_AST` if the trees are needed afterwards. Everything in the `DocPackage` lives in the allocator passed in and points into the trees, so use the arena the files were parsed into.
+
+`doc_synopsis` is the first sentence of a doc comment, as plain text on one line, and an empty string for comments that do not describe anything, such as a copyright notice:
+
+<!-- example: ../examples/go/doc.c#synopsis -->
+```c
+Str text = BURROW_S("Package sort provides primitives for sorting slices and\n"
+                    "user-defined collections. It is fast.\n");
+fmt_printf_v("%q\n", doc_synopsis(a, text));
+fmt_printf_v("%q\n", doc_synopsis(a, BURROW_S("Copyright 2009 The Go Authors.")));
+```
+
+That prints:
+
+```
+"Package sort provides primitives for sorting slices and user-defined collections."
+""
+```
+
+`doc_package_synopsis`, `doc_package_html`, `doc_package_markdown` and `doc_package_text` do the same with doc links resolved against the package, through the `CommentParser` and `CommentPrinter` that `doc_package_parser` and `doc_package_printer` set up. `doc_examples` finds the examples in a set of test files on its own, without the package they belong to.

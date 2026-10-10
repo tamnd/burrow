@@ -967,12 +967,16 @@ extern const Type burrow_type_AstChanDir;
 extern const Type burrow_type_AstObjKind;
 extern const Type burrow_type_AstDirective;
 extern const Type burrow_type_AstDirectiveArg;
+extern const Type burrow_type_AstStmtSlice;
+extern const Type burrow_type_AstDeclSlice;
 
 #define TYPE_AST_NODE TYPE_OF(AstNode)
 #define TYPE_AST_EXPR TYPE_OF(AstExpr)
 #define TYPE_AST_STMT TYPE_OF(AstStmt)
 #define TYPE_AST_DECL TYPE_OF(AstDecl)
 #define TYPE_AST_SPEC TYPE_OF(AstSpec)
+#define TYPE_AST_STMT_SLICE TYPE_OF(AstStmtSlice) /* []ast.Stmt */
+#define TYPE_AST_DECL_SLICE TYPE_OF(AstDeclSlice) /* []ast.Decl */
 #define TYPE_AST_COMMENT_PTR TYPE_OF(AstCommentPtr)
 #define TYPE_AST_COMMENT_GROUP_PTR TYPE_OF(AstCommentGroupPtr)
 #define TYPE_AST_FIELD_PTR TYPE_OF(AstFieldPtr)

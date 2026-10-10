@@ -100,6 +100,7 @@
 #include "burrow/go/constant.h"
 #include "burrow/go/doc/comment.h"
 #include "burrow/go/parser.h"
+#include "burrow/go/printer.h"
 #include "burrow/go/scanner.h"
 #include "burrow/go/token.h"
 #include "burrow/go/version.h"

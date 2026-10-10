@@ -48,11 +48,11 @@ static void print(Alloc *a) {
     p.doc_link_base_url = BURROW_S("https://pkg.go.dev");
     p.text_width = 40;
     Slice out = comment_printer_text(&p, a, d);
-    fmt_printf_v("%s", str_from_bytes(out.p, out.len));
+    fmt_printf_v("-- text\n%s", str_from_bytes(out.p, out.len));
     out = comment_printer_markdown(&p, a, d);
-    fmt_printf_v("%s", str_from_bytes(out.p, out.len));
+    fmt_printf_v("-- markdown\n%s", str_from_bytes(out.p, out.len));
     out = comment_printer_html(&p, a, d);
-    fmt_printf_v("%s", str_from_bytes(out.p, out.len));
+    fmt_printf_v("-- html\n%s", str_from_bytes(out.p, out.len));
     // doc: end
 }
 

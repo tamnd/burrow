@@ -535,6 +535,23 @@ jobs:
       - name: how much of the standard library exists
         run: tools/burrow-coverage
 
+  # The go/printer gate from the P4 milestone: a gofmt built on burrow and Go's
+  # own over the whole of $GOROOT/src, agreeing byte for byte. See
+  # tools/check-gofmt.sh. The Go release is the one burrow tracks, since
+  # gofmt's output changes now and then between releases.
+  gofmt-gate:
+    name: gofmt against go1.27.1
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.1"
+          cache: false
+      - name: format $GOROOT/src with both
+        run: make -j"$(nproc)" gofmt-gate
+
   # burrow and Go handed the same inputs, failing on the first byte where they
   # disagree. See fuzz/README.md. The oracle is built with the Go release that
   # burrow tracks, because that release is the definition of the right answer.

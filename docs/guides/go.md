@@ -666,3 +666,91 @@ That prints:
 ```
 
 Not every expression fits. The `// +build` form can only say an and of ors of ands, and when the expression needs more than that the call returns an error and no lines. The tree, its tags and the lines all live in the allocator you pass in.
+
+## Parsing
+
+`burrow/go/parser.h` is Go's `go/parser`. `parser_parse_file` reads the source of one Go file and gives back its `AstFile`, with every position recorded in the file set you pass. The source can be a `Str`, a byte slice, a `BytesBuffer` or an `IoReader`, or the nil `Any` to read the file named by the filename. `PARSER_PARSE_COMMENTS` keeps the comments, which is what fills in the doc comment of each declaration:
+
+<!-- example: ../examples/go/parser.c#parse -->
+```c
+Str src = BURROW_S("// Package hello says hello.\n"
+                   "package hello\n"
+                   "\n"
+                   "import (\n"
+                   "\t\"fmt\"\n"
+                   "\t\"strings\"\n"
+                   ")\n"
+                   "\n"
+                   "// Greet says hello to name.\n"
+                   "func Greet(name string) string {\n"
+                   "\treturn fmt.Sprint(\"hello, \", strings.TrimSpace(name))\n"
+                   "}\n"
+                   "\n"
+                   "func shout(s string) string { return strings.ToUpper(s) }\n");
+TokenFileSet *fset = token_new_file_set(a);
+Error err = BURROW_NO_ERROR;
+AstFile *f =
+    parser_parse_file(a, fset, BURROW_S("hello.go"), BURROW_ANY(TYPE_STRING, &src),
+                      PARSER_PARSE_COMMENTS, &err);
+if (!BURROW_OK(err)) {
+    fmt_println_v(error_text(err));
+    return;
+}
+fmt_printf_v("package %s\n", f->name->name);
+for (Int i = 0; i < f->imports.len; i++)
+    fmt_printf_v("import %s\n", ((AstImportSpec **)f->imports.p)[i]->path->value);
+for (Int i = 0; i < f->decls.len; i++) {
+    AstDecl d = ((AstDecl *)f->decls.p)[i];
+    if (d->kind != AST_KIND_FUNC_DECL)
+        continue;
+    AstFuncDecl *fn = (AstFuncDecl *)d;
+    TokenPosition pos = token_file_set_position(fset, ast_node_pos(d));
+    fmt_printf_v("%s: func %s, doc %q\n", token_position_string(pos, a),
+                 fn->name->name, ast_comment_group_text(fn->doc, a));
+}
+```
+
+A syntax error does not lose the tree. The parser puts `BadExpr`, `BadStmt` and `BadDecl` nodes where it could not make sense of the source, carries on, and returns the file along with a `GoScannerErrorList` of everything it found, sorted by position:
+
+<!-- example: ../examples/go/parser.c#errors -->
+```c
+Str src = BURROW_S("package p\n"
+                   "\n"
+                   "func f() {\n"
+                   "\tx := 1 +\n"
+                   "}\n"
+                   "\n"
+                   "func g(a int {\n"
+                   "}\n");
+TokenFileSet *fset = token_new_file_set(a);
+Error err = BURROW_NO_ERROR;
+AstFile *f =
+    parser_parse_file(a, fset, BURROW_S("bad.go"), BURROW_ANY(TYPE_STRING, &src),
+                      PARSER_ALL_ERRORS, &err);
+const GoScannerErrorList *list =
+    (const GoScannerErrorList *)errors_as(err, TYPE_GO_SCANNER_ERROR_LIST);
+for (Int i = 0; list != NULL && i < go_scanner_error_list_len(*list); i++) {
+    GoScannerError *e = go_scanner_error_list_at(*list, i);
+    fmt_printf_v("%s: %s\n", token_position_string(e->pos, a), e->msg);
+}
+if (f != NULL)
+    fmt_printf_v("still got %d declaration(s)\n", f->decls.len);
+```
+
+Without `PARSER_ALL_ERRORS` the parser keeps the report short: it drops an error on the same line as the one before it, and it gives up once it has more than ten. The list lives in the allocator along with the tree, so use `error_retain` on the error if it has to outlive the arena.
+
+`parser_parse_expr` parses a single expression, which is handy for small tools and tests:
+
+<!-- example: ../examples/go/parser.c#expr -->
+```c
+Error err = BURROW_NO_ERROR;
+AstExpr x = parser_parse_expr(a, BURROW_S("a + b*c"), &err);
+if (BURROW_OK(err) && x->kind == AST_KIND_BINARY_EXPR) {
+    AstBinaryExpr *sum = (AstBinaryExpr *)x;
+    fmt_printf_v("top: %s\n", token_string(sum->op, a));
+    if (sum->y->kind == AST_KIND_BINARY_EXPR)
+        fmt_printf_v("right: %s\n", token_string(((AstBinaryExpr *)sum->y)->op, a));
+}
+```
+
+`parser_parse_dir` is here too, for code that still uses it, though Go deprecates it because it knows nothing of build tags. Everything the parser makes is in the allocator you pass, so parse into an arena and free it in one go. Go stops at 100000 levels of nesting. A C stack cannot grow the way a goroutine's does, so the parser also stops with the same "exceeded max nesting depth" error when the stack is about to run out. To parse code nested thousands deep, run the parse on a goroutine started with `go_stack` and a bigger stack.

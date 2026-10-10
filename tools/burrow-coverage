@@ -797,6 +797,7 @@ FUNC_TYPES = {
     "func(*Flag)": {"FlagVisitFunc"},
     "func() hash.Hash": {"HashNewFunc"},
     "func(string) bool": {"ConstraintTagFunc"},
+    "func(os.FileInfo) bool": {"ParserFileFilter"},
 }
 
 BUILTIN = {

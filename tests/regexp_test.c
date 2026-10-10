@@ -757,6 +757,50 @@ static const AllocVT budget_vt = {budget_alloc, NULL, budget_realloc,
 /* Compiling and every function that allocates, with the allocator giving out
  * fewer and fewer blocks: each gives an error or the nil slice, never a
  * crash, and frees whatever it had got. */
+/* Not in Go, where a slice knows its own type. Each slice that comes back
+ * says what its elements are, so BURROW_AT and slice_at can index it. */
+static void TestSliceElem(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Regexp *re = regexp_must_compile(a, BURROW_S("(a)(b)?"));
+    Str in = BURROW_S("ab a");
+    Slice b = slice_from((void *)(uintptr_t)in.p, in.len, in.len, TYPE_BYTE);
+
+    Slice m = regexp_find_string_submatch(re, a, in);
+    if (m.len != 3 || m.elem != TYPE_STRING ||
+        !str_eq(BURROW_AT(Str, m, 2), BURROW_S("b")))
+        testing_t_errorf_v(t, "FindStringSubmatch: len %d, wrong element type or [2]",
+                           m.len);
+    m = regexp_find_submatch(re, a, b);
+    if (m.len != 3 || m.elem != TYPE_BYTES || BURROW_AT(Slice, m, 2).len != 1)
+        testing_t_errorf_v(t, "FindSubmatch: len %d, wrong element type or [2]", m.len);
+    m = regexp_find_string_submatch_index(re, a, in);
+    if (m.len != 6 || m.elem != TYPE_INT || BURROW_AT(Int, m, 5) != 2)
+        testing_t_errorf_v(
+            t, "FindStringSubmatchIndex: len %d, wrong element type or [5]", m.len);
+    m = regexp_find_all_string(re, a, in, -1);
+    if (m.len != 2 || m.elem != TYPE_STRING ||
+        !str_eq(BURROW_AT(Str, m, 1), BURROW_S("a")))
+        testing_t_errorf_v(t, "FindAllString: len %d, wrong element type or [1]",
+                           m.len);
+    m = regexp_find_all_string_submatch(re, a, in, -1);
+    if (m.len != 2 || m.elem == NULL || m.elem->elem != TYPE_STRING ||
+        BURROW_AT(Slice, m, 1).len != 3)
+        testing_t_errorf_v(
+            t, "FindAllStringSubmatch: len %d, wrong element type or [1]", m.len);
+    m = regexp_find_all_index(re, a, b, -1);
+    if (m.len != 2 || m.elem == NULL || m.elem->elem != TYPE_INT ||
+        BURROW_AT(Int, BURROW_AT(Slice, m, 1), 0) != 3)
+        testing_t_errorf_v(t, "FindAllIndex: len %d, wrong element type or [1][0]",
+                           m.len);
+    m = regexp_split(re, a, in, -1);
+    if (m.len != 3 || m.elem != TYPE_STRING ||
+        !str_eq(BURROW_AT(Str, m, 1), BURROW_S(" ")))
+        testing_t_errorf_v(t, "Split: len %d, wrong element type or [1]", m.len);
+    arena_free(&ar);
+}
+
 static void TestNoMemory(TestingT *t) {
     Str pat = BURROW_S("(?P<word>[a-z]+)(\\d*)|x+y");
     Str in = BURROW_S("abc12 xxy de 9 fgh");
@@ -856,6 +900,7 @@ static void TestNoMemory(TestingT *t) {
     X(TestUnmarshalText)                                                               \
     X(TestBadCompile)                                                                  \
     X(TestConcurrent)                                                                  \
+    X(TestSliceElem)                                                                   \
     X(TestNoMemory)
 
 TESTING_MAIN(TESTS)

@@ -102,3 +102,7 @@ syscall
 crypto/fips140
 net/mail
 log
+go/token
+debug/dwarf
+debug/elf
+debug/macho

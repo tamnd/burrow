@@ -287,3 +287,10 @@ debug/macho: method (FatArch) ImportedLibraries: the receiver is a pointer to th
 debug/macho: method (FatArch) ImportedSymbols: the receiver is a pointer to the arch, which holds the embedded File
 debug/macho: method (FatArch) Section: the receiver is a pointer to the arch, which holds the embedded File
 debug/macho: method (FatArch) Segment: the receiver is a pointer to the arch, which holds the embedded File
+
+# include/burrow/go/token.h: a func value in C is a function pointer with a
+# context argument, and a variadic list is a pointer and a count.
+go/token: method (*FileSet) AddExistingFiles: takes the files as a pointer and a count
+go/token: method (*FileSet) Iterate: the callback is a TokenFileFunc, a function pointer with a context argument
+go/token: method (*FileSet) Read: decode is a TokenCodecFunc, a function pointer with a context argument
+go/token: method (*FileSet) Write: encode is a TokenCodecFunc, a function pointer with a context argument

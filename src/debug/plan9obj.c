@@ -139,7 +139,7 @@ static Error plan9obj_read_file(Plan9objFile *f, IoReaderAt r, Alloc *fa) {
     h->entry = plan9obj_u32(ph + 20);
     h->ptr_size = 4;
     h->load_address = 0x1000;
-    h->hdr_size = 4 * 8;
+    h->hdr_size = UINT64_C(4) * 8;
 
     if ((h->magic & PLAN9OBJ_MAGIC64) != 0) {
         Byte entry[8];
@@ -270,6 +270,7 @@ typedef struct Plan9objTable {
     Alloc *a;
     Int n;
     Int nf;
+    Int cap;
     Plan9objSym *syms;
     Plan9objNames fname;
 } Plan9objTable;
@@ -394,6 +395,9 @@ static Str plan9obj_path(Plan9objTable *t, const Plan9objRawSym *s) {
 }
 
 static void plan9obj_add(Plan9objTable *t, const Plan9objRawSym *s) {
+    /* The second walk sees what the first one counted. */
+    if (t->syms == NULL || t->n >= t->cap)
+        return;
     Plan9objSym *ts = &t->syms[t->n++];
     ts->type = (Rune)s->typ;
     ts->value = s->value;
@@ -402,7 +406,7 @@ static void plan9obj_add(Plan9objTable *t, const Plan9objRawSym *s) {
     } else {
         ts->name = str_clone(t->a, str_from_bytes(s->name, s->name_len));
     }
-    if (s->typ == 'f') {
+    if (s->typ == 'f' && t->fname.keys != NULL) {
         Int i = plan9obj_slot(&t->fname, (uint16_t)s->value);
         t->fname.keys[i] = (uint32_t)(uint16_t)s->value + 1;
         t->fname.vals[i] = ts->name;
@@ -412,7 +416,7 @@ static void plan9obj_add(Plan9objTable *t, const Plan9objRawSym *s) {
 /* newTable. The name table is made in ta and the symbols in a. */
 static Slice plan9obj_new_table(Alloc *a, Alloc *ta, Slice symtab, Int ptrsz,
                                 Error *err) {
-    Plan9objTable t = {a, 0, 0, NULL, {NULL, NULL, 0}};
+    Plan9objTable t = {a, 0, 0, 0, NULL, {NULL, NULL, 0}};
     Error e = plan9obj_walk(symtab, ptrsz, plan9obj_count, &t);
     if (BURROW_FAILED(e)) {
         BURROW_OUT(err, e);
@@ -443,6 +447,7 @@ static Slice plan9obj_new_table(Alloc *a, Alloc *ta, Slice symtab, Int ptrsz,
         }
     }
     t.n = 0;
+    t.cap = n;
     (void)plan9obj_walk(symtab, ptrsz, plan9obj_add, &t);
     BURROW_OUT(err, BURROW_NO_ERROR);
     return (Slice){t.syms, t.n, n, TYPE_PLAN9OBJ_SYM};

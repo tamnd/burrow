@@ -23,7 +23,7 @@ fmt_printf_v("entry %#x\n", h.entry);
 for (Int i = 0; i < f->sections.len; i++) {
     ElfSection *s = ((ElfSection **)f->sections.p)[i];
     ElfSectionHeader sh = s->section_header;
-    fmt_printf_v("%-10q %-12s addr %#x size %d\n", sh.name,
+    fmt_printf_v("%-12q %-12s addr %#x size %d\n", sh.name,
                  elf_section_type_string(sh.type, a), sh.addr, sh.size);
 }
 ElfSection *text = elf_file_section(f, BURROW_S(".text"));
@@ -35,6 +35,12 @@ elf_file_free(f);
 That prints:
 
 ```
+ELFCLASS64 ELFDATA2LSB ET_EXEC EM_X86_64
+entry 0x401000
+""           SHT_NULL     addr 0x0 size 0
+".text"      SHT_PROGBITS addr 0x401000 size 3
+".shstrtab"  SHT_STRTAB   addr 0x0 size 17
+.text holds 31 c0 c3
 ```
 
 The file header and the sections are plain structs. `ElfFile.sections` is a slice of `ElfSection` pointers in the order of the section table, and `elf_file_section` finds one by name. `elf_section_data` reads a section's contents, uncompressing them first when the section is compressed with zlib or zstd, and `elf_section_open` gives an `IoReadSeeker` over them for sections too big to read at once. Every named integer type has a `_string` function that gives Go's name for a value, and Go's own way of printing one it does not know.
@@ -50,9 +56,11 @@ A file that is not ELF, or that is ELF but malformed, gives `NULL` and the error
 <!-- example: ../examples/debug/elf.c#errors -->
 ```c
 Error err = BURROW_NO_ERROR;
-BytesReader *br = bytes_new_reader(a, slice_from_str(a, BURROW_S("MZ, not ELF")));
+Str text = BURROW_S("This is a text file, not an executable.");
+BytesReader *br = bytes_new_reader(a, slice_from_str(a, text));
 ElfFile *f = elf_new_file(a, bytes_reader_as_io_reader_at(br), &err);
-fmt_println_v(f == NULL, err);
+if (f == NULL)
+    fmt_println_v("no file:", err);
 
 const ElfFormatError *fe = errors_as(err, TYPE_ELF_FORMAT_ERROR);
 if (fe != NULL)
@@ -62,6 +70,8 @@ if (fe != NULL)
 That prints:
 
 ```
+no file: bad magic number '[84 104 105 115]' in record at byte 0x0
+at offset 0 of the file: bad magic number
 ```
 
 Like Go's, the reader checks only as much as it needs to read a file without going out of bounds. A file that passes can still make no sense, and a malicious one can make it allocate a lot, so take care with files from somewhere you do not trust.
@@ -100,6 +110,8 @@ if (d == NULL) {
 }
 DwarfReader *r = dwarf_data_reader(d, a);
 for (DwarfEntry *e; (e = dwarf_reader_next(r, &err)) != NULL;) {
+    if (e->tag == 0)
+        continue; // the end of a list of children
     Str *name = any_assert(dwarf_entry_val(e, DWARF_ATTR_NAME), TYPE_STRING);
     fmt_printf_v("%#x %-12s %q\n", e->offset, dwarf_tag_string(e->tag, a),
                  name != NULL ? *name : BURROW_STR_EMPTY);
@@ -117,6 +129,10 @@ for (DwarfEntry *e; (e = dwarf_reader_next(r, &err)) != NULL;) {
 That prints:
 
 ```
+0xb CompileUnit  "hello.c"
+0x15 BaseType     "int"
+0x1c Variable     "answer"
+     is int, 4 bytes
 ```
 
 The entries form a tree. `dwarf_reader_next` walks it depth first and gives an entry with a zero tag at the end of each list of children. `dwarf_reader_skip_children` jumps over the children of the entry it just returned, which is how you stay at the top level of units. `dwarf_entry_val` gives an attribute's value as an `Any` holding the same type as in Go, so `any_assert` with `TYPE_STRING`, `TYPE_INT64`, `TYPE_UINT64` or `TYPE_DWARF_OFFSET` gets at it.

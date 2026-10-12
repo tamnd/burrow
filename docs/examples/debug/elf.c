@@ -88,3 +88,14 @@ int main(void) {
     arena_free(&ar);
     return 0;
 }
+
+/* Output:
+ELFCLASS64 ELFDATA2LSB ET_EXEC EM_X86_64
+entry 0x401000
+""           SHT_NULL     addr 0x0 size 0
+".text"      SHT_PROGBITS addr 0x401000 size 3
+".shstrtab"  SHT_STRTAB   addr 0x0 size 17
+.text holds 31 c0 c3
+no file: bad magic number '[84 104 105 115]' in record at byte 0x0
+at offset 0 of the file: bad magic number
+*/

@@ -55,3 +55,10 @@ int main(void) {
     arena_free(&ar);
     return 0;
 }
+
+/* Output:
+0xb CompileUnit  "hello.c"
+0x15 BaseType     "int"
+0x1c Variable     "answer"
+     is int, 4 bytes
+*/

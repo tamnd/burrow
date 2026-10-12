@@ -110,3 +110,5 @@ crypto/x509
 syscall
 crypto/fips140
 net/mail
+log
+go/token

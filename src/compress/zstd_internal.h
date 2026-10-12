@@ -15,6 +15,8 @@
 #ifndef BURROW_COMPRESS_ZSTD_INTERNAL_H
 #define BURROW_COMPRESS_ZSTD_INTERNAL_H
 
+/* burrow:package internal/zstd */
+
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/io.h"

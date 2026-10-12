@@ -494,6 +494,18 @@ static inline Str dw_msg_text(const DwMsg *m) {
     return s;
 }
 
+/* Tag.String, as a message. */
+static inline void dw_msg_tag(DwMsg *m, DwarfTag i) {
+    Str name = burrow__dwarf_tag_name(i);
+    if (name.len > 0) {
+        dw_msg_str(m, name);
+        return;
+    }
+    dw_msg_str(m, BURROW_S("Tag("));
+    dw_msg_int(m, (int64_t)i);
+    dw_msg_str(m, BURROW_S(")"));
+}
+
 /* ------------------------------------------------------------------ shared */
 
 /* A DecodeError, made in d's allocator. */
@@ -507,6 +519,11 @@ BURROW_NORETURN void burrow__dwarf_oom(void);
 
 /* n zeroed bytes from a, or a panic. */
 void *burrow__dwarf_alloc(Alloc *a, size_t n);
+
+#define DW_NEW(a, T) ((T *)burrow__dwarf_alloc((a), sizeof(T)))
+
+/* Go's panic for a method called on a nil pointer or a nil interface. */
+BURROW_NORETURN void burrow__dwarf_nil_panic(void);
 
 /* The maps here all hold pointers. */
 static inline Map *dw_map_make(Alloc *a, const Type *key) {

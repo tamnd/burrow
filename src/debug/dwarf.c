@@ -43,7 +43,10 @@ void *burrow__dwarf_alloc(Alloc *a, size_t n) {
     return p;
 }
 
-#define DW_NEW(a, T) ((T *)burrow__dwarf_alloc((a), sizeof(T)))
+void burrow__dwarf_nil_panic(void) {
+    runtime_panic(
+        DW_S("runtime error: invalid memory address or nil pointer dereference"));
+}
 
 /* A copy of what m holds, in a. */
 static Str dw_msg_clone(Alloc *a, const DwMsg *m) {
@@ -85,17 +88,6 @@ Str dwarf_attr_go_string(DwarfAttr i, Alloc *a) {
         dw_msg_str(&m, DW_S(")"));
     }
     return dw_msg_clone(a, &m);
-}
-
-static void dw_msg_tag(DwMsg *m, DwarfTag i) {
-    Str name = burrow__dwarf_tag_name(i);
-    if (name.len > 0) {
-        dw_msg_str(m, name);
-        return;
-    }
-    dw_msg_str(m, DW_S("Tag("));
-    dw_msg_int(m, (int64_t)i);
-    dw_msg_str(m, DW_S(")"));
 }
 
 Str dwarf_tag_string(DwarfTag i, Alloc *a) {
@@ -1544,8 +1536,7 @@ static Error dw_dwarf2_ranges(DwarfData *d, Alloc *a, const DwUnit *u, uint64_t 
                             (Byte *)d->ranges.p + ranges, d->ranges.len - (Int)ranges);
     while (buf.len > 0) {
         if (u == NULL)
-            panic_str(DW_S(
-                "runtime error: invalid memory address or nil pointer dereference"));
+            burrow__dwarf_nil_panic();
         uint64_t low = dw_buf_addr(&buf);
         uint64_t high = dw_buf_addr(&buf);
         if (low == 0 && high == 0)

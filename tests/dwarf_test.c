@@ -257,8 +257,10 @@ static void test_typedefs(TestingT *t, const char *file, const char *const (*tes
         if (e->tag == DWARF_TAG_TYPEDEF) {
             Error err = BURROW_NO_ERROR;
             DwarfType typ = dwarf_data_type(d, e->offset, &err);
-            if (BURROW_FAILED(err) || typ == NULL)
+            if (BURROW_FAILED(err) || typ == NULL) {
                 testing_t_fatalf_v(t, "d.Type: %s", error_text(err));
+                return;
+            }
             CHECK(typ->type_kind == DWARF_TYPE_KIND_TYPEDEF);
             const DwarfTypedefType *t1 = (const DwarfTypedefType *)typ;
             Str typstr = t1->type->type_kind == DWARF_TYPE_KIND_STRUCT
@@ -398,8 +400,10 @@ static void test_bit_offsets(TestingT *t, const char *file, const char *x,
         if (e->tag == DWARF_TAG_STRUCT_TYPE) {
             Error err = BURROW_NO_ERROR;
             DwarfType typ = dwarf_data_type(d, e->offset, &err);
-            if (BURROW_FAILED(err) || typ == NULL)
+            if (BURROW_FAILED(err) || typ == NULL) {
                 testing_t_fatalf_v(t, "d.Type: %s", error_text(err));
+                return;
+            }
             CHECK(typ->type_kind == DWARF_TYPE_KIND_STRUCT);
             const DwarfStructType *t1 = (const DwarfStructType *)typ;
             for (Int i = 0; i < t1->field.len; i++) {
@@ -799,13 +803,17 @@ static void TestIssue57046(TestingT *t) {
         spdies[n] = e->offset;
         lopcs[n++] = *lo;
     }
-    if (n < 2)
+    if (n < 2) {
         testing_t_fatalf_v(t, "found %d subprograms, want at least 2", (Int)n);
+        return;
+    }
     DwarfReader *r2 = dwarf_data_reader(d, a);
     dwarf_reader_seek(r2, spdies[1]);
     DwarfEntry *e = must_next(t, r2);
-    if (e == NULL)
+    if (e == NULL) {
         testing_t_fatalf_v(t, "r2.Next() returned nil");
+        return;
+    }
     uint64_t *got =
         (uint64_t *)any_assert(dwarf_entry_val(e, DWARF_ATTR_LOWPC), TYPE_UINT64);
     if (got == NULL || *got != lopcs[1])
@@ -840,8 +848,8 @@ static void TestLineSeek(TestingT *t) {
 
     enum { MAX = 256 };
     DwarfLineReaderPos pos[MAX];
-    DwarfLineEntry table[MAX];
-    DwarfLineEntry line;
+    DwarfLineEntry table[MAX] = {{0}};
+    DwarfLineEntry line = {0};
     size_t n = 0, npos = 0;
     for (;;) {
         if (npos == MAX)

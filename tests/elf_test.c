@@ -812,7 +812,7 @@ static void TestCompressedSection(TestingT *t) {
                            error_text(err), got);
     uint64_t x = 1;
     while (count < n) {
-        x = x * 6364136223846793005u + 1442695040888963407u;
+        x = x * 6364136223846793005U + 1442695040888963407U;
         int whence = (int)((x >> 33) % 3);
         int64_t target = (int64_t)((x >> 20) % (uint64_t)n);
         int64_t offset = target;
@@ -887,7 +887,7 @@ typedef struct Sect32 {
 static Byte *put_sect32(Byte *p, Sect32 s) {
     uint32_t v[10] = {s.name, s.type, s.flags, 0,           s.off,
                       s.size, s.link, s.info,  s.addralign, s.entsize};
-    for (int i = 0; i < 10; i++)
+    for (Int i = 0; i < 10; i++)
         put32(p + 4 * i, v[i]);
     return p + 40;
 }

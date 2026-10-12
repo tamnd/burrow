@@ -455,7 +455,9 @@ static Error dwl_read_header(DwarfLineReader *r, Str comp_dir) {
     /* DWARF 4 section 6.2.4. */
     r->max_ops_per_instruction = r->version >= 4 ? dw_buf_uint8(buf) : 1;
     r->default_is_stmt = dw_buf_uint8(buf) != 0;
-    r->line_base = (int8_t)dw_buf_uint8(buf);
+    /* Go reads it as an int8. */
+    Int line_base = dw_buf_uint8(buf);
+    r->line_base = line_base >= 0x80 ? line_base - 0x100 : line_base;
     r->line_range = dw_buf_uint8(buf);
 
     if (BURROW_FAILED(buf->err))
@@ -741,7 +743,7 @@ static bool dwl_step(DwarfLineReader *r, DwarfLineEntry *entry) {
         default:
             break;
         }
-        dw_buf_skip(buf, (Int)(DwarfOffset)(start_off + length - buf->off));
+        dw_buf_skip(buf, (Int)(start_off + length - buf->off));
         return ext == DW_LNE_END_SEQUENCE;
     }
 
@@ -858,7 +860,7 @@ Error dwarf_line_reader_seek_pc(DwarfLineReader *r, uint64_t pc,
 
     /* On until a row is past pc, and then back one. */
     for (;;) {
-        DwarfLineEntry next;
+        DwarfLineEntry next = {0};
         DwarfLineReaderPos pos = dwarf_line_reader_tell(r);
         err = dwarf_line_reader_next(r, &next);
         if (BURROW_FAILED(err)) {

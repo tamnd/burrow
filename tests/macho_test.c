@@ -191,7 +191,7 @@ static void dump_macho_file(Alloc *a, IoWriter w, MachoFile *f) {
                           s->name, s->type, s->sect, s->desc, s->value);
         }
     }
-    fmt_fprintf_v(w, "dysymtab %t\n", f->dysymtab != NULL);
+    fmt_fprintf_v(w, "dysymtab %t\n", (bool)(f->dysymtab != NULL));
     for (size_t i = 0; i < sizeof segment_names / sizeof segment_names[0]; i++) {
         Str name = str_from_cstr(segment_names[i]);
         const MachoSegment *s = macho_file_segment(f, name);

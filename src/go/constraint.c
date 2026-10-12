@@ -15,12 +15,17 @@
 #include "burrow/go/build/constraint.h"
 
 #include "burrow/fmt.h"
+#include "burrow/stack.h"
 #include "burrow/strconv.h"
 #include "burrow/strings.h"
+#include "burrow/thread.h"
 #include "burrow/unicode.h"
 #include "burrow/utf8.h"
 
 #include <string.h>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 /* maxSize in Go, the most ! operands a //go:build expression may have, which
  * keeps the recursion bounded. */
@@ -28,6 +33,50 @@ enum { BC_MAX_SIZE = 1000 };
 
 /* maxOldSize, the most operators a // +build line may have. */
 enum { BC_MAX_OLD_SIZE = 100 };
+
+/* Each level of parentheses costs four C frames, and a thousand operands can
+ * nest five hundred levels deep. That fits a goroutine's 256K stack on amd64
+ * but not on s390x, whose smallest frame is 160 bytes. So the parser also stops
+ * when the stack runs short, with the same error as for a large expression. */
+enum { BC_THREAD_CHECK_AFTER = 32 };
+
+#define BC_STACK_MARGIN ((uintptr_t)64 << 10)
+
+static uintptr_t bc_stack_here(void) {
+#if defined(__GNUC__) || defined(__clang__)
+    return (uintptr_t)__builtin_frame_address(0);
+#elif defined(_MSC_VER)
+    return (uintptr_t)_AddressOfReturnAddress();
+#else
+    volatile char probe = 0;
+    uintptr_t here = (uintptr_t)&probe;
+    return here;
+#endif
+}
+
+/* Whether the stack is too low to go one level deeper. *floor starts at 0, and
+ * becomes 1 when the bounds cannot be had and 2 while they are left until the
+ * nesting is deep enough to matter. */
+static bool bc_stack_low(uintptr_t *floor, Int depth) {
+    if (*floor == 0) {
+        burrow__Stack *s = burrow__stack_current();
+        if (s != NULL && s->lo != NULL)
+            *floor = (uintptr_t)s->lo + BC_STACK_MARGIN;
+        else
+            *floor = 2;
+    }
+    if (*floor == 2) {
+        if (depth < BC_THREAD_CHECK_AFTER)
+            return false;
+        void *lo = NULL;
+        if (!burrow__thread_stack_limit(&lo))
+            lo = NULL;
+        *floor = lo == NULL ? 1 : (uintptr_t)lo + BC_STACK_MARGIN;
+    }
+    if (*floor == 1)
+        return false;
+    return bc_stack_here() < *floor;
+}
 
 static Str bc_sub(Str s, Int i, Int j) {
     if (i == j)
@@ -263,6 +312,7 @@ typedef struct BcParser {
     bool is_tag;
     Int pos;
     Int size;
+    uintptr_t stack_floor;
     bool failed;
     bool oom;
     Int err_offset;
@@ -429,7 +479,7 @@ static ConstraintExpr bc_parse_atom(BcParser *p) {
 /* not: an atom, or ! and an atom. */
 static ConstraintExpr bc_parse_not(BcParser *p) {
     p->size++;
-    if (p->size > BC_MAX_SIZE) {
+    if (p->size > BC_MAX_SIZE || bc_stack_low(&p->stack_floor, p->size)) {
         bc_fail(p, p->pos, BURROW_S("build expression too large"));
         return NULL;
     }

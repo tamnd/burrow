@@ -72,11 +72,15 @@ static Error hc_error(const Str *text) {
     return (Error){&burrow_sentinel_error_vt, text};
 }
 
-/* ------------------------------------------------------------------ GODEBUG */
+/* ------------------------------------------------------------------ GODEBUG
+ *
+ * The settings net/http reads from GODEBUG: httpcookiemaxnum here, and
+ * httplaxcontentlength for http_transfer.c. */
 
 enum {
     HC_DEBUG_KNOWN = 1 << 0,
     HC_DEBUG_MAX_SET = 1 << 1, /* httpcookiemaxnum is a number */
+    HC_DEBUG_LAX_CL = 1 << 2,  /* httplaxcontentlength=1 */
 };
 
 static uint32_t hc_debug_flags;
@@ -116,6 +120,9 @@ static uint32_t hc_debug_parse(const char *v) {
             max = (uint64_t)n;
         }
     }
+    if (v != NULL && hc_godebug(v, "httplaxcontentlength", &s) &&
+        str_eq(s, BURROW_S("1")))
+        f |= HC_DEBUG_LAX_CL;
     burrow__atomic64_store(&hc_debug_max, max);
     burrow__atomic_store_relaxed_u32(&hc_debug_flags, f);
     return f;
@@ -140,6 +147,10 @@ void burrow__http_godebug_set(const char *value) {
         burrow__atomic_store_relaxed_u32(&hc_debug_flags, 0);
     else
         (void)hc_debug_parse(value);
+}
+
+bool burrow__http_godebug_lax_content_length(void) {
+    return (hc_debug_load() & HC_DEBUG_LAX_CL) != 0;
 }
 
 /* cookieNumWithinMax. */

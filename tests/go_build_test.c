@@ -527,7 +527,10 @@ static void TestMatchFile(TestingT *t) {
     gbt_begin(t);
     for (Int i = 0; i < NELEM(gbt_match_file_tests); i++) {
         const GbtMatchFile *tt = &gbt_match_file_tests[i];
-        GbtMatchFileEnv env = {t, tt, {0}};
+        GbtMatchFileEnv env;
+        memset(&env, 0, sizeof env);
+        env.t = t;
+        env.tt = tt;
         BuildContext ctxt = gbt_zero_context();
         ctxt.goarch = S("arm");
         ctxt.goos = gbt_cstr(tt->ctxt);

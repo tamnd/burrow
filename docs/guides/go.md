@@ -1191,6 +1191,13 @@ fmt_printf_v("tags seen: %s\n", strings_join(a, p->all_tags, sp));
 That prints:
 
 ```
+package greet: Package greet says hello.
+go files: greet.go greet_linux.go
+ignored: gen.go greet_windows.go
+test files: greet_test.go
+imports: fmt os
+test imports: testing
+tags seen: ignore linux windows
 ```
 
 `greet_windows.go` is left out by its name and `gen.go` by its `//go:build` line. Both end up in `ignored_go_files`, and the tags they mention are in `all_tags`, so a tool can tell which files could change under another build. `build_context_import` does the same for an import path. It looks in `GOROOT` and `GOPATH`, follows vendor directories, and in module mode asks `go list` through the `go` command in `GOROOT`, as Go does. A missing package still gives back a `BuildPackage` with what was learned along with the error. A directory without Go files gives a `BuildNoGoError`, and one holding two packages gives a `BuildMultiplePackageError`, which `errors_as` finds.
@@ -1214,6 +1221,10 @@ for (int i = 0; i < 4; i++) {
 That prints:
 
 ```
+greet.go: true
+greet_linux.go: false
+greet_windows.go: true
+gen.go: false
 ```
 
 The file system is reached through the hooks of the context, `join_path`, `read_dir`, `open_file` and the rest. They are left empty for the real file system, and setting them makes go/build work on files kept anywhere else.

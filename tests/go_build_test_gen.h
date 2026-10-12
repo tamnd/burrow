@@ -23,9 +23,7 @@ static const GbtFile gbt_files[] = {
      "\n"
      "package alltags\n",
      176},
-    {"testdata/bads/bad.s",
-     ";/\n",
-     3},
+    {"testdata/bads/bad.s", ";/\n", 3},
     {"testdata/cgo_disabled/cgo_disabled.go",
      "package cgo_disabled\n"
      "\n"
@@ -33,9 +31,7 @@ static const GbtFile gbt_files[] = {
      "\n"
      "import _ \"should/be/ignored\"\n",
      63},
-    {"testdata/cgo_disabled/empty.go",
-     "package cgo_disabled\n",
-     21},
+    {"testdata/cgo_disabled/empty.go", "package cgo_disabled\n", 21},
     {"testdata/directives/a.go",
      "//go:main1\n"
      "\n"
@@ -76,26 +72,18 @@ static const GbtFile gbt_files[] = {
      "// Doc from xtests\n"
      "package doc_test\n",
      36},
-    {"testdata/doc/b_test.go",
-     "package doc_test\n",
-     17},
-    {"testdata/doc/c_test.go",
-     "package doc\n",
-     12},
+    {"testdata/doc/b_test.go", "package doc_test\n", 17},
+    {"testdata/doc/c_test.go", "package doc\n", 12},
     {"testdata/doc/d_test.go",
      "// Doc from regular tests.\n"
      "package doc\n",
      39},
-    {"testdata/doc/e.go",
-     "package doc\n",
-     12},
+    {"testdata/doc/e.go", "package doc\n", 12},
     {"testdata/doc/f.go",
      "// Correct\n"
      "package doc\n",
      23},
-    {"testdata/empty/dummy",
-     "",
-     0},
+    {"testdata/empty/dummy", "", 0},
     {"testdata/multi/file.go",
      "// Test data - not compiled.\n"
      "\n"
@@ -149,9 +137,7 @@ static const GbtFile gbt_files[] = {
      "\n"
      "import _ \"c/d\"\n",
      26},
-    {"testdata/withvendor/src/a/vendor/c/d/d.go",
-     "package d\n",
-     10},
+    {"testdata/withvendor/src/a/vendor/c/d/d.go", "package d\n", 10},
 };
 
 typedef struct GbtRead {
@@ -161,18 +147,10 @@ typedef struct GbtRead {
 } GbtRead;
 
 static const GbtRead gbt_read_go_info_tests[] = {
-    {"package p",
-     9,
-     ""},
-    {"package p; import \"x\"",
-     21,
-     ""},
-    {"package p; import . \"x\"",
-     23,
-     ""},
-    {"package p; import \"x\";\342\204\231var x = 1",
-     34,
-     ""},
+    {"package p", 9, ""},
+    {"package p; import \"x\"", 21, ""},
+    {"package p; import . \"x\"", 23, ""},
+    {"package p; import \"x\";\342\204\231var x = 1", 34, ""},
     {"package p\n"
      "\n"
      "\t\t// comment\n"
@@ -199,27 +177,17 @@ static const GbtRead gbt_read_go_info_tests[] = {
      "\n"
      "\t\t\342\204\231var x = 1\n"
      "\t\t",
-     289,
-     ""},
+     289, ""},
     {"\357\273\277\360\235\224\273package p; import \"x\";\342\204\231var x "
      "= 1",
-     41,
-     ""},
+     41, ""},
 };
 
 static const GbtRead gbt_read_comments_tests[] = {
-    {"\342\204\231package p",
-     12,
-     ""},
-    {"\342\204\231package p; import \"x\"",
-     24,
-     ""},
-    {"\342\204\231package p; import . \"x\"",
-     26,
-     ""},
-    {"\357\273\277\360\235\224\273\342\204\231package p; import . \"x\"",
-     33,
-     ""},
+    {"\342\204\231package p", 12, ""},
+    {"\342\204\231package p; import \"x\"", 24, ""},
+    {"\342\204\231package p; import . \"x\"", 26, ""},
+    {"\357\273\277\360\235\224\273\342\204\231package p; import . \"x\"", 33, ""},
     {"// foo\n"
      "\n"
      "\t\t/* bar */\n"
@@ -230,8 +198,7 @@ static const GbtRead gbt_read_comments_tests[] = {
      "\n"
      "\t\t// asdf\n"
      "\t\t\342\204\231Hello, world",
-     83,
-     ""},
+     83, ""},
     {"\357\273\277\360\235\224\273// foo\n"
      "\n"
      "\t\t/* bar */\n"
@@ -242,62 +209,31 @@ static const GbtRead gbt_read_comments_tests[] = {
      "\n"
      "\t\t// asdf\n"
      "\t\t\342\204\231Hello, world",
-     90,
-     ""},
+     90, ""},
 };
 
 static const GbtRead gbt_read_failures_tests[] = {
-    {"package",
-     7,
-     "syntax error"},
+    {"package", 7, "syntax error"},
     {"package p\n"
      "\000\n"
      "import `math`\n",
-     26,
-     "unexpected NUL in input"},
-    {"package p; import",
-     17,
-     "syntax error"},
-    {"package p; import \"",
-     19,
-     "syntax error"},
+     26, "unexpected NUL in input"},
+    {"package p; import", 17, "syntax error"},
+    {"package p; import \"", 19, "syntax error"},
     {"package p; import ` \n"
      "\n",
-     22,
-     "syntax error"},
-    {"package p; import \"x",
-     20,
-     "syntax error"},
-    {"package p; import _",
-     19,
-     "syntax error"},
-    {"package p; import _ \"",
-     21,
-     "syntax error"},
-    {"package p; import _ \"x",
-     22,
-     "syntax error"},
-    {"package p; import .",
-     19,
-     "syntax error"},
-    {"package p; import . \"",
-     21,
-     "syntax error"},
-    {"package p; import . \"x",
-     22,
-     "syntax error"},
-    {"package p; import (",
-     19,
-     "syntax error"},
-    {"package p; import (\"",
-     20,
-     "syntax error"},
-    {"package p; import (\"x",
-     21,
-     "syntax error"},
-    {"package p; import (\"x\"",
-     22,
-     "syntax error"},
+     22, "syntax error"},
+    {"package p; import \"x", 20, "syntax error"},
+    {"package p; import _", 19, "syntax error"},
+    {"package p; import _ \"", 21, "syntax error"},
+    {"package p; import _ \"x", 22, "syntax error"},
+    {"package p; import .", 19, "syntax error"},
+    {"package p; import . \"", 21, "syntax error"},
+    {"package p; import . \"x", 22, "syntax error"},
+    {"package p; import (", 19, "syntax error"},
+    {"package p; import (\"", 20, "syntax error"},
+    {"package p; import (\"x", 21, "syntax error"},
+    {"package p; import (\"x\"", 22, "syntax error"},
 };
 
 typedef struct GbtEmbed {
@@ -308,8 +244,7 @@ typedef struct GbtEmbed {
 /* readEmbedTests, with the space in each out turned into one newline, as the
  * test does with strings.Fields. */
 static const GbtEmbed gbt_read_embed_tests[] = {
-    {"package p\n",
-     ""},
+    {"package p\n", ""},
     {"package p\n"
      "import \"embed\"\n"
      "var i int\n"
@@ -609,14 +544,18 @@ typedef struct GbtMatchFile {
  * both for GOARCH=arm. */
 static const GbtMatchFile gbt_match_file_tests[] = {
     {"plan9", "foo_arm.go", "", true},
-    {"plan9", "foo1_arm.go", "// +build linux\n"
+    {"plan9", "foo1_arm.go",
+     "// +build linux\n"
      "\n"
-     "package main\n", false},
+     "package main\n",
+     false},
     {"plan9", "foo_darwin.go", "", false},
     {"plan9", "foo.go", "", true},
-    {"plan9", "foo1.go", "// +build linux\n"
+    {"plan9", "foo1.go",
+     "// +build linux\n"
      "\n"
-     "package main\n", false},
+     "package main\n",
+     false},
     {"plan9", "foo.badsuffix", "", false},
     {"android", "foo_linux.go", "", true},
     {"android", "foo_android.go", "", true},
@@ -635,7 +574,8 @@ typedef struct GbtExpand {
 
 static const GbtExpand gbt_expand_src_dir_tests[] = {
     {"-L ${SRCDIR}/libs -ladd", "-L /projects/src/add/libs -ladd"},
-    {"${SRCDIR}/add_linux_386.a -pthread -lstdc++", "/projects/src/add/add_linux_386.a -pthread -lstdc++"},
+    {"${SRCDIR}/add_linux_386.a -pthread -lstdc++",
+     "/projects/src/add/add_linux_386.a -pthread -lstdc++"},
     {"Nothing to expand here!", "Nothing to expand here!"},
     {"$", "$"},
     {"$$", "$$"},
@@ -654,9 +594,11 @@ typedef struct GbtShellSafety {
 } GbtShellSafety;
 
 static const GbtShellSafety gbt_shell_safety_tests[] = {
-    {"-I${SRCDIR}/../include", "/projects/src/issue 11868", "-I/projects/src/issue 11868/../include", true},
+    {"-I${SRCDIR}/../include", "/projects/src/issue 11868",
+     "-I/projects/src/issue 11868/../include", true},
     {"-I${SRCDIR}", "~wtf$@%^", "-I~wtf$@%^", true},
-    {"-X${SRCDIR}/1,${SRCDIR}/2", "/projects/src/issue 11868", "-X/projects/src/issue 11868/1,/projects/src/issue 11868/2", true},
+    {"-X${SRCDIR}/1,${SRCDIR}/2", "/projects/src/issue 11868",
+     "-X/projects/src/issue 11868/1,/projects/src/issue 11868/2", true},
     {"-I/tmp -I/tmp", "/tmp2", "-I/tmp -I/tmp", true},
     {"-I/tmp", "/tmp/[0]", "-I/tmp", true},
     {"-I${SRCDIR}/dir", "/tmp/[0]", "-I/tmp/[0]/dir", false},

@@ -267,3 +267,10 @@ net: func Pipe: takes an allocator and returns both ends through out parameters
 # through the reader_at field, which lives in the struct, so it takes a pointer.
 debug/elf: method (Section) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
 debug/elf: method (Prog) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
+
+# include/burrow/go/token.h: a func value in C is a function pointer with a
+# context argument, and a variadic list is a pointer and a count.
+go/token: method (*FileSet) AddExistingFiles: takes the files as a pointer and a count
+go/token: method (*FileSet) Iterate: the callback is a TokenFileFunc, a function pointer with a context argument
+go/token: method (*FileSet) Read: decode is a TokenCodecFunc, a function pointer with a context argument
+go/token: method (*FileSet) Write: encode is a TokenCodecFunc, a function pointer with a context argument

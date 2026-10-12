@@ -55,3 +55,4 @@ docs/guides/embed.md
 docs/guides/crypto.md
 docs/guides/log.md
 docs/guides/debug.md
+docs/guides/go.md

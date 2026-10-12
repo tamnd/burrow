@@ -399,7 +399,9 @@ Str dwarf_basic_type_string(DwarfBasicType *t, Alloc *a) {
     return dwt_basic_name(dwarf_basic_type_common(t));
 }
 
-/* The basic types differ only in name. */
+/* The basic types differ only in name. T is a type name, which cannot have
+ * parentheses around it. */
+/* NOLINTBEGIN(bugprone-macro-parentheses) */
 #define DWT_BASIC_METHODS(T, pre)                                                      \
     DwarfBasicType *pre##_basic(T *t) {                                                \
         if (t == NULL)                                                                 \
@@ -425,9 +427,11 @@ DWT_BASIC_METHODS(DwarfComplexType, dwarf_complex_type)
 DWT_BASIC_METHODS(DwarfBoolType, dwarf_bool_type)
 DWT_BASIC_METHODS(DwarfAddrType, dwarf_addr_type)
 DWT_BASIC_METHODS(DwarfUnspecifiedType, dwarf_unspecified_type)
+/* NOLINTEND(bugprone-macro-parentheses) */
 
 /* The others have a CommonType first and take Size and String from the
  * generic functions, which look at type_kind. */
+/* NOLINTBEGIN(bugprone-macro-parentheses) */
 #define DWT_METHODS(T, pre)                                                            \
     DwarfCommonType *pre##_common(T *t) {                                              \
         if (t == NULL)                                                                 \
@@ -451,6 +455,7 @@ DWT_METHODS(DwarfFuncType, dwarf_func_type)
 DWT_METHODS(DwarfDotDotDotType, dwarf_dot_dot_dot_type)
 DWT_METHODS(DwarfTypedefType, dwarf_typedef_type)
 DWT_METHODS(DwarfUnsupportedType, dwarf_unsupported_type)
+/* NOLINTEND(bugprone-macro-parentheses) */
 
 /* ------------------------------------------------------------- type units */
 
@@ -490,7 +495,7 @@ Error burrow__dwarf_parse_types(DwarfData *d, Str name, Slice types) {
         DwTypeUnit *tu = DW_NEW(d->a, DwTypeUnit);
         tu->unit.base = base;
         tu->unit.off = b.off;
-        Int dn = (Int)(DwarfOffset)(n - (b.off - hdroff));
+        Int dn = (Int)(n - (b.off - hdroff));
         tu->unit.data = dw_buf_bytes(&b, dn);
         tu->unit.len = tu->unit.data != NULL ? dn : 0;
         tu->unit.atable = atable;

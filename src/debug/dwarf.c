@@ -489,7 +489,7 @@ static Error dw_parse_units(DwarfData *d) {
             break;
         }
         u->off = b.off;
-        Int dn = (Int)(DwarfOffset)(n - (b.off - data_off));
+        Int dn = (Int)(n - (b.off - data_off));
         u->data = dw_buf_bytes(&b, dn);
         u->len = u->data != NULL ? dn : 0;
     }
@@ -1503,7 +1503,7 @@ static Error dw_base_address_for_entry(DwarfData *d, Alloc *a, const DwarfEntry 
         cu = e;
     } else {
         Int i = burrow__dwarf_offset_to_unit(d, e->offset);
-        if (i == -1)
+        if (i == -1 || d->unit == NULL)
             return burrow__dwarf_error(d, DW_S("no unit for entry"));
         DwUnit *u = &d->unit[i];
         DwBuf b = dw_make_buf(d, u, DW_S("info"), u->off, u->data, u->len);

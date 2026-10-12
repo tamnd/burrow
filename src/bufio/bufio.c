@@ -8,6 +8,7 @@
 
 #include "burrow/bufio.h"
 
+#include "burrow/atomic.h"
 #include "burrow/bytes.h"
 #include "burrow/core.h"
 #include "burrow/declare.h"
@@ -22,6 +23,18 @@
 
 #include <stdint.h>
 #include <string.h>
+
+/* Adds d to a reader's or writer's refs and answers the new count. The count
+ * changes on more than one thread: a reader handed out twice, such as an HTTP
+ * connection's and the chunked body read through it, is freed by whichever of
+ * the two goroutines finishes last. */
+static Int bufio_refs_add(Int *p, Int d) {
+#if BURROW_INT_BITS == 64
+    return (Int)(burrow__atomic_add_u64((uint64_t *)p, (uint64_t)d) + (uint64_t)d);
+#else
+    return (Int)(burrow__atomic_add_u32((uint32_t *)p, (uint32_t)d) + (uint32_t)d);
+#endif
+}
 
 enum {
     BUFIO_DEFAULT_BUF_SIZE = 4096,
@@ -101,7 +114,7 @@ BufioReader *bufio_new_reader_size(Alloc *a, IoReader rd, Int size) {
     if (rd.vt == &bufio_reader_reader_vt) {
         BufioReader *b = (BufioReader *)rd.data;
         if (b->size >= size) {
-            b->refs++;
+            (void)bufio_refs_add(&b->refs, 1);
             return b;
         }
     }
@@ -129,10 +142,13 @@ BufioReader *bufio_new_reader(Alloc *a, IoReader rd) {
 void bufio_reader_free(BufioReader *b) {
     if (b == NULL)
         return;
-    if (b->refs > (b->own ? 1 : 0)) {
-        b->refs--;
+    /* An own reader starts at one and goes at zero. A caller's starts at zero,
+     * so its last free takes it to minus one, and then it is put back. */
+    Int left = bufio_refs_add(&b->refs, -1);
+    if (left > (b->own ? 0 : -1))
         return;
-    }
+    if (!b->own)
+        b->refs = 0;
     if (b->buf != NULL)
         mem_free(b->a, b->buf, (size_t)b->size, 1);
     if (b->own) {
@@ -691,7 +707,7 @@ BufioWriter *bufio_new_writer_size(Alloc *a, IoWriter w, Int size) {
     if (w.vt == &bufio_writer_writer_vt) {
         BufioWriter *b = (BufioWriter *)w.data;
         if (b->size >= size) {
-            b->refs++;
+            (void)bufio_refs_add(&b->refs, 1);
             return b;
         }
     }
@@ -723,10 +739,13 @@ BufioWriter *bufio_new_writer(Alloc *a, IoWriter w) {
 void bufio_writer_free(BufioWriter *b) {
     if (b == NULL)
         return;
-    if (b->refs > (b->own ? 1 : 0)) {
-        b->refs--;
+    /* An own reader starts at one and goes at zero. A caller's starts at zero,
+     * so its last free takes it to minus one, and then it is put back. */
+    Int left = bufio_refs_add(&b->refs, -1);
+    if (left > (b->own ? 0 : -1))
         return;
-    }
+    if (!b->own)
+        b->refs = 0;
     if (b->buf != NULL)
         mem_free(b->a, b->buf, (size_t)b->size, 1);
     if (b->own) {

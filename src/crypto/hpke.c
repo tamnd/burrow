@@ -72,8 +72,7 @@ static Slice hpke_concat(Alloc *a, const HpkePart *parts, size_t n, Error *err) 
     }
     Byte *q = out.p;
     for (size_t i = 0; i < n; i++) {
-        if (parts[i].len > 0) {
-            /* NOLINTNEXTLINE(clang-analyzer-unix.cstring.NullArg) */
+        if (parts[i].len > 0 && q != NULL && parts[i].p != NULL) {
             memcpy(q, parts[i].p, (size_t)parts[i].len);
             q += parts[i].len;
         }

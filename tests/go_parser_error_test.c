@@ -129,6 +129,7 @@ static Map *expected_errors(Alloc *a, TokenFileSet *fset, Str filename, Str src)
 
         switch ((int)tok) {
         case TOKEN_EOF:
+            regexp_free(err_rx);
             return errors;
         case TOKEN_COMMENT: {
             Slice m = regexp_find_string_submatch(err_rx, a, lit);
@@ -180,7 +181,9 @@ static void compare_errors(TestingT *t, Alloc *a, TokenFileSet *fset, Map *expec
                 testing_t_errorf_v(t, "%s: %s", where, error_text(err));
                 continue;
             }
-            if (!regexp_match_string(rx, e->msg)) {
+            bool matched = regexp_match_string(rx, e->msg);
+            regexp_free(rx);
+            if (!matched) {
                 testing_t_errorf_v(t, "%s: %q does not match %q", where, e->msg, *msg);
                 continue;
             }

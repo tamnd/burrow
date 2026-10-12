@@ -102,3 +102,4 @@ syscall
 crypto/fips140
 net/mail
 log
+go/token

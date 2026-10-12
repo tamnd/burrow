@@ -261,3 +261,10 @@ crypto/ecdh: method (*PublicKey) Curve: returns a pointer to one of the four cur
 # collector. Here the pipe comes from an allocator and net_pipe_free gives it
 # back, and two values come back through out parameters.
 net: func Pipe: takes an allocator and returns both ends through out parameters
+
+# include/burrow/go/token.h: a func value in C is a function pointer with a
+# context argument, and a variadic list is a pointer and a count.
+go/token: method (*FileSet) AddExistingFiles: takes the files as a pointer and a count
+go/token: method (*FileSet) Iterate: the callback is a TokenFileFunc, a function pointer with a context argument
+go/token: method (*FileSet) Read: decode is a TokenCodecFunc, a function pointer with a context argument
+go/token: method (*FileSet) Write: encode is a TokenCodecFunc, a function pointer with a context argument

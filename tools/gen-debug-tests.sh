@@ -1,12 +1,16 @@
 #!/bin/sh
 # Regenerates tests/debug_test_gen.h, which tests/elf_test.c and
-# tests/dwarf_test.c read. It holds Go's ELF test files, the ELF ones from
+# tests/dwarf_test.c read, or with the argument macho tests/macho_test_gen.h,
+# which tests/macho_test.c reads. It holds Go's ELF test files, the ELF ones from
 # debug/dwarf's testdata, and a dump of what Go's debug/elf and debug/dwarf make
 # of each of them: the headers, sections, segments, symbols, dynamic tags and
 # versions, and then every DWARF entry, range, type and line table row. The C
 # tests make the same dump and have to get the same text. Each file is also
 # damaged in a few dozen ways, and for those only a hash of Go's dump is kept,
 # along with the String and GoString of every named ELF and DWARF constant.
+# The macho one is the same for Go's Mach-O test files and the Mach-O ones in
+# debug/dwarf's testdata, through debug/macho, each read as a universal binary
+# and as a plain one.
 #
 # The Go packages are copied out of GOSRC, a Go source tree that defaults to
 # the one the go command has, into a scratch module and built from there, so
@@ -19,7 +23,15 @@
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-out="$root/tests/debug_test_gen.h"
+mode=${1:-elf}
+case $mode in
+elf) out="$root/tests/debug_test_gen.h" ;;
+macho) out="$root/tests/macho_test_gen.h" ;;
+*)
+	echo "usage: $0 [elf|macho]" >&2
+	exit 2
+	;;
+esac
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 gosrc=${GOSRC:-$(go env GOROOT)/src}
@@ -35,6 +47,7 @@ vendor() {
 	done
 }
 vendor debug/elf elf
+vendor debug/macho macho
 vendor debug/dwarf dwarf
 vendor internal/zstd zstd
 vendor internal/saferio saferio
@@ -48,7 +61,15 @@ for f in "$gosrc/debug/dwarf/testdata"/*.elf "$gosrc/debug/dwarf/testdata"/*.elf
 	"$gosrc/debug/dwarf/testdata"/*.elf5; do
 	cp "$f" "$tmp/dwarfdata/"
 done
+mkdir "$tmp/machodata" "$tmp/machodwarf"
+for f in "$gosrc/debug/macho/testdata"/*.base64; do
+	cp "$f" "$tmp/machodata/"
+done
+for f in "$gosrc/debug/dwarf/testdata"/*.macho "$gosrc/debug/dwarf/testdata"/*.macho4; do
+	cp "$f" "$tmp/machodwarf/"
+done
 cp "$gosrc/debug/elf/elf.go" "$tmp/elf.go.txt"
+cp "$gosrc/debug/macho/macho.go" "$tmp/macho.go.txt"
 cp "$gosrc/debug/dwarf/const.go" "$tmp/const.go.txt"
 
 cat > "$tmp/main.go" <<'GO'
@@ -685,6 +706,10 @@ func writeBase64(w io.Writer, name string, b []byte) {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "macho" {
+		machoMain()
+		return
+	}
 	var fs []*file
 	for _, f := range load("elfdata") {
 		f.name = "elf/" + f.name
@@ -738,13 +763,320 @@ func main() {
 }
 GO
 
+cat > "$tmp/macho.go" <<'GO'
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"os"
+	"sort"
+	"strings"
+
+	"gen/macho"
+)
+
+func dumpMachoFile(w *bytes.Buffer, f *macho.File) {
+	h := f.FileHeader
+	fmt.Fprintf(w, "header magic=%#x cpu=%s subcpu=%#x type=%s ncmd=%d cmdsz=%d flags=%#x byteorder=%s\n",
+		h.Magic, h.Cpu.String(), h.SubCpu, h.Type.String(), h.Ncmd, h.Cmdsz, h.Flags,
+		f.ByteOrder.String())
+	for i, l := range f.Loads {
+		fmt.Fprintf(w, "load %d raw %s\n", i, blob(l.Raw(), nil))
+		switch l := l.(type) {
+		case *macho.Segment:
+			sh := l.SegmentHeader
+			fmt.Fprintf(w, "  segment cmd=%s len=%d %q addr=%#x memsz=%#x offset=%#x filesz=%#x maxprot=%#x prot=%#x nsect=%d flag=%#x\n",
+				sh.Cmd.String(), sh.Len, sh.Name, sh.Addr, sh.Memsz, sh.Offset, sh.Filesz,
+				sh.Maxprot, sh.Prot, sh.Nsect, sh.Flag)
+			b, err := l.Data()
+			fmt.Fprintf(w, "  data %s\n", blob(b, err))
+			b, err = io.ReadAll(l.Open())
+			fmt.Fprintf(w, "  open %s\n", blob(b, err))
+			p := make([]byte, 16)
+			n, err := l.ReadAt(p, 8)
+			fmt.Fprintf(w, "  readat n=%d %x%s\n", n, p[:n], errs(err))
+		case *macho.Dylib:
+			fmt.Fprintf(w, "  dylib %q time=%d current=%#x compat=%#x\n", l.Name, l.Time,
+				l.CurrentVersion, l.CompatVersion)
+		case *macho.Symtab:
+			c := l.SymtabCmd
+			fmt.Fprintf(w, "  symtab cmd=%d len=%d symoff=%#x nsyms=%d stroff=%#x strsize=%d syms=%d\n",
+				c.Cmd, c.Len, c.Symoff, c.Nsyms, c.Stroff, c.Strsize, len(l.Syms))
+		case *macho.Dysymtab:
+			c := l.DysymtabCmd
+			fmt.Fprintf(w, "  dysymtab")
+			for _, v := range []uint32{uint32(c.Cmd), c.Len, c.Ilocalsym, c.Nlocalsym,
+				c.Iextdefsym, c.Nextdefsym, c.Iundefsym, c.Nundefsym, c.Tocoffset, c.Ntoc,
+				c.Modtaboff, c.Nmodtab, c.Extrefsymoff, c.Nextrefsyms, c.Indirectsymoff,
+				c.Nindirectsyms, c.Extreloff, c.Nextrel, c.Locreloff, c.Nlocrel} {
+				fmt.Fprintf(w, " %d", v)
+			}
+			fmt.Fprintf(w, "\n  indirect n=%d", len(l.IndirectSyms))
+			for _, x := range l.IndirectSyms {
+				fmt.Fprintf(w, " %#x", x)
+			}
+			fmt.Fprintf(w, "\n")
+		case *macho.Rpath:
+			fmt.Fprintf(w, "  rpath %q\n", l.Path)
+		case macho.LoadBytes:
+			fmt.Fprintf(w, "  bytes\n")
+		}
+	}
+	for i, s := range f.Sections {
+		sh := s.SectionHeader
+		fmt.Fprintf(w, "section %d %q seg=%q addr=%#x size=%#x offset=%#x align=%d reloff=%#x nreloc=%d flags=%#x\n",
+			i, sh.Name, sh.Seg, sh.Addr, sh.Size, sh.Offset, sh.Align, sh.Reloff, sh.Nreloc,
+			sh.Flags)
+		b, err := s.Data()
+		fmt.Fprintf(w, "  data %s\n", blob(b, err))
+		b, err = io.ReadAll(s.Open())
+		fmt.Fprintf(w, "  open %s\n", blob(b, err))
+		p := make([]byte, 16)
+		n, err := s.ReadAt(p, 4)
+		fmt.Fprintf(w, "  readat n=%d %x%s\n", n, p[:n], errs(err))
+		for _, r := range s.Relocs {
+			fmt.Fprintf(w, "  reloc addr=%#x value=%#x type=%d len=%d pcrel=%t extern=%t scattered=%t\n",
+				r.Addr, r.Value, r.Type, r.Len, r.Pcrel, r.Extern, r.Scattered)
+		}
+	}
+	if f.Symtab != nil {
+		fmt.Fprintf(w, "symbols n=%d\n", len(f.Symtab.Syms))
+		for i, s := range f.Symtab.Syms {
+			fmt.Fprintf(w, "  %d %q type=%#x sect=%d desc=%#x value=%#x\n", i, s.Name, s.Type,
+				s.Sect, s.Desc, s.Value)
+		}
+	}
+	fmt.Fprintf(w, "dysymtab %t\n", f.Dysymtab != nil)
+	for _, name := range machoSegmentNames {
+		if s := f.Segment(name); s != nil {
+			fmt.Fprintf(w, "segment %q addr=%#x\n", name, s.Addr)
+		} else {
+			fmt.Fprintf(w, "segment %q nil\n", name)
+		}
+	}
+	for _, name := range machoSectionNames {
+		if s := f.Section(name); s != nil {
+			fmt.Fprintf(w, "section %q addr=%#x\n", name, s.Addr)
+		} else {
+			fmt.Fprintf(w, "section %q nil\n", name)
+		}
+	}
+	imp, err := f.ImportedSymbols()
+	dumpStrings(w, "imported", imp, err)
+	libs, err := f.ImportedLibraries()
+	dumpStrings(w, "libraries", libs, err)
+	d, err := f.DWARF()
+	if err != nil {
+		fmt.Fprintf(w, "dwarf err=%q\n", err.Error())
+		return
+	}
+	dumpDWARF(w, d)
+}
+
+var machoSegmentNames = []string{"__TEXT", "__DATA", "__LINKEDIT", "__PAGEZERO", "__DWARF", ""}
+var machoSectionNames = []string{"__text", "__data", "__cstring", "__debug_info", "__nl_symbol_ptr", ""}
+
+func dumpMacho(w *bytes.Buffer, data []byte) {
+	ff, err := macho.NewFatFile(bytes.NewReader(data))
+	if err != nil {
+		fmt.Fprintf(w, "fat err=%q notfat=%t\n", err.Error(), err == macho.ErrNotFat)
+	} else {
+		fmt.Fprintf(w, "fat magic=%#x arches=%d\n", ff.Magic, len(ff.Arches))
+		for i, a := range ff.Arches {
+			h := a.FatArchHeader
+			fmt.Fprintf(w, "arch %d cpu=%s subcpu=%#x offset=%#x size=%#x align=%d\n", i,
+				h.Cpu.String(), h.SubCpu, h.Offset, h.Size, h.Align)
+			dumpMachoFile(w, a.File)
+		}
+	}
+	f, err := macho.NewFile(bytes.NewReader(data))
+	if err != nil {
+		fmt.Fprintf(w, "newfile err=%q\n", err.Error())
+		return
+	}
+	dumpMachoFile(w, f)
+}
+
+func safeMachoDump(data []byte) (out []byte, ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	var w bytes.Buffer
+	dumpMacho(&w, data)
+	return w.Bytes(), true
+}
+
+func machoDamages(data []byte, seed uint64) []damage {
+	var ds []damage
+	x := seed
+	n := len(data)
+	add := func(pos int, xor byte) {
+		b := append([]byte(nil), data...)
+		if xor == 0 {
+			b = b[:pos]
+		} else {
+			b[pos] ^= xor
+		}
+		out, ok := safeMachoDump(b)
+		if !ok {
+			return
+		}
+		ds = append(ds, damage{pos, xor, fmt.Sprintf("%x", sha256.Sum256(out))[:16]})
+	}
+	// The file header, then the load commands after it, then anywhere.
+	for i := 0; i < 12; i++ {
+		x = lcg(x)
+		add(int(x>>33)%min(32, n), byte(1<<((x>>20)%8)))
+	}
+	if n > 32 {
+		cmds := min(n, 32+int(uint32(data[20])|uint32(data[21])<<8|uint32(data[22])<<16))
+		for i := 0; i < 24; i++ {
+			x = lcg(x)
+			add(28+int(x>>33)%(cmds-28), byte(1<<((x>>20)%8)))
+		}
+	}
+	for i := 0; i < 16; i++ {
+		x = lcg(x)
+		xor := byte(x >> 56)
+		if xor == 0 {
+			xor = 0x80
+		}
+		add(int(x>>33)%n, xor)
+	}
+	for _, cut := range []int{n / 2, n - 1, n * 3 / 4, 100, 30} {
+		if cut > 0 && cut < n {
+			add(cut, 0)
+		}
+	}
+	return ds
+}
+
+var machoKinds = []struct {
+	name string
+	f    func(int64) (string, string)
+}{
+	{"Type", func(v int64) (string, string) { x := macho.Type(v); return x.String(), x.GoString() }},
+	{"Cpu", func(v int64) (string, string) { x := macho.Cpu(v); return x.String(), x.GoString() }},
+	{"LoadCmd", func(v int64) (string, string) { x := macho.LoadCmd(v); return x.String(), x.GoString() }},
+	{"RelocTypeGeneric", func(v int64) (string, string) { x := macho.RelocTypeGeneric(v); return x.String(), x.GoString() }},
+	{"RelocTypeX86_64", func(v int64) (string, string) { x := macho.RelocTypeX86_64(v); return x.String(), x.GoString() }},
+	{"RelocTypeARM", func(v int64) (string, string) { x := macho.RelocTypeARM(v); return x.String(), x.GoString() }},
+	{"RelocTypeARM64", func(v int64) (string, string) { x := macho.RelocTypeARM64(v); return x.String(), x.GoString() }},
+}
+
+// machoNames is names for debug/macho. The relocation types are ints made
+// with iota, so they get negative numbers and the int32 limits instead.
+func machoNames() [][3]any {
+	vals := constValues("macho.go.txt")
+	vals["Cpu"] = append(vals["Cpu"], 0x1000007, 0x100000c, 0x1000012, 0x1000000)
+	var rows [][3]any
+	for ki, k := range machoKinds {
+		set := map[int64]bool{}
+		for v := int64(0); v < 40; v++ {
+			set[v] = true
+		}
+		for _, v := range vals[k.name] {
+			set[v] = true
+			set[v+1] = true
+			if v > 0 {
+				set[v-1] = true
+			}
+		}
+		lo, hi := int64(0), int64(1)<<32
+		if strings.HasPrefix(k.name, "Reloc") {
+			lo, hi = -1<<31, 1<<31
+			set[-1] = true
+			set[-100] = true
+			set[lo] = true
+		}
+		set[hi-1] = true
+		var vs []int64
+		for v := range set {
+			if v >= lo && v < hi {
+				vs = append(vs, v)
+			}
+		}
+		sort.Slice(vs, func(i, j int) bool { return vs[i] < vs[j] })
+		for _, v := range vs {
+			s, g := k.f(v)
+			rows = append(rows, [3]any{ki, v, [2]string{s, g}})
+		}
+	}
+	return rows
+}
+
+func machoMain() {
+	var fs []*file
+	for _, f := range load("machodata") {
+		b, err := io.ReadAll(base64.NewDecoder(base64.StdEncoding, bytes.NewReader(f.raw)))
+		if err != nil {
+			panic(err)
+		}
+		f.name = "macho/" + strings.TrimSuffix(f.name, ".base64")
+		f.raw, f.data = b, b
+		fs = append(fs, f)
+	}
+	for _, f := range load("machodwarf") {
+		f.name = "dwarf/" + f.name
+		fs = append(fs, f)
+	}
+	for i, f := range fs {
+		out, ok := safeMachoDump(f.data)
+		if !ok {
+			panic("Go panics on " + f.name)
+		}
+		f.dump = out
+		f.damage = machoDamages(f.data, uint64(i)+1)
+	}
+
+	w := os.Stdout
+	fmt.Fprintf(w, "/* Generated by tools/gen-debug-tests.sh macho from Go's debug/macho and\n * debug/dwarf and their testdata. Do not edit. */\n\n")
+	fmt.Fprintf(w, "#ifndef BURROW_TESTS_MACHO_TEST_GEN_H\n#define BURROW_TESTS_MACHO_TEST_GEN_H\n\n")
+	for i, f := range fs {
+		fmt.Fprintf(w, "/* %s, %d bytes. */\n", f.name, len(f.raw))
+		writeBase64(w, fmt.Sprintf("macho_file_%d", i), f.raw)
+		fmt.Fprintf(w, "static const char *const macho_dump_%d[] = {\n", i)
+		for _, line := range strings.SplitAfter(string(f.dump), "\n") {
+			if line == "" {
+				continue
+			}
+			fmt.Fprintf(w, "    %s,\n", cstr(strings.TrimSuffix(line, "\n")))
+		}
+		fmt.Fprintf(w, "    NULL,\n};\n\n")
+		fmt.Fprintf(w, "static const DebugDamage macho_damage_%d[] = {\n", i)
+		for _, d := range f.damage {
+			fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
+		}
+		fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+	}
+	fmt.Fprintf(w, "static const DebugFile macho_files[] = {\n")
+	for i, f := range fs {
+		fmt.Fprintf(w, "    {%s, false, macho_file_%d, macho_dump_%d, macho_damage_%d},\n", cstr(f.name), i, i, i)
+	}
+	fmt.Fprintf(w, "};\n\n")
+
+	fmt.Fprintf(w, "static const DebugName macho_names[] = {\n")
+	for _, r := range machoNames() {
+		ss := r[2].([2]string)
+		fmt.Fprintf(w, "    {%d, %dLL, %s, %s},\n", r[0], r[1], cstr(ss[0]), cstr(ss[1]))
+	}
+	fmt.Fprintf(w, "};\n\n#endif\n")
+}
+GO
+
 cd "$tmp"
 cat > go.mod <<'MOD'
 module gen
 
 go 1.22
 MOD
-go run . > "$out"
+go run . "$mode" > "$out"
 if command -v clang-format >/dev/null 2>&1; then
 	clang-format -i "$out"
 fi

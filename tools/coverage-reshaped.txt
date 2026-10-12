@@ -267,3 +267,23 @@ net: func Pipe: takes an allocator and returns both ends through out parameters
 # through the reader_at field, which lives in the struct, so it takes a pointer.
 debug/elf: method (Section) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
 debug/elf: method (Prog) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
+
+# include/burrow/debug/macho.h: Go embeds io.ReaderAt in Section and Segment
+# and a LoadBytes in every load, so ReadAt and Raw have value receivers that
+# reach into the embedded field. The loads are pointers in File.Loads and the
+# reader lives in the struct, so these take a pointer. FatArch embeds *File and
+# its methods take the FatArch by pointer for the same reason.
+debug/macho: method (Section) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
+debug/macho: method (Segment) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
+debug/macho: method (LoadBytes) Raw: the receiver is a pointer, since loads are held by pointer
+debug/macho: method (Segment) Raw: the receiver is a pointer, since loads are held by pointer
+debug/macho: method (Dylib) Raw: the receiver is a pointer, since loads are held by pointer
+debug/macho: method (Symtab) Raw: the receiver is a pointer, since loads are held by pointer
+debug/macho: method (Dysymtab) Raw: the receiver is a pointer, since loads are held by pointer
+debug/macho: method (Rpath) Raw: the receiver is a pointer, since loads are held by pointer
+debug/macho: method (FatArch) Close: the receiver is a pointer to the arch, which holds the embedded File
+debug/macho: method (FatArch) DWARF: the receiver is a pointer to the arch, which holds the embedded File
+debug/macho: method (FatArch) ImportedLibraries: the receiver is a pointer to the arch, which holds the embedded File
+debug/macho: method (FatArch) ImportedSymbols: the receiver is a pointer to the arch, which holds the embedded File
+debug/macho: method (FatArch) Section: the receiver is a pointer to the arch, which holds the embedded File
+debug/macho: method (FatArch) Segment: the receiver is a pointer to the arch, which holds the embedded File

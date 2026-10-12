@@ -40,12 +40,12 @@
 #include <stdint.h>
 #include <string.h>
 
-#define S(lit) BURROW_S(lit)
+#define GD_S(lit) BURROW_S(lit)
 
 /* ---------------------------------------------------------------- helpers */
 
 BURROW_NORETURN static void gd_oom(void) {
-    panic_str(S("go/doc: out of memory"));
+    panic_str(GD_S("go/doc: out of memory"));
 }
 
 /* Zeroed memory for one T, which mem_alloc gives. */
@@ -226,16 +226,16 @@ static bool gd_not_identifier(Rune ch) {
  * has, a copy of golang.org/x/tools/internal/imports.ImportPathToAssumedName. */
 static Str gd_assumed_package_name(Alloc *a, Str import_path) {
     Str base = path_base(import_path);
-    if (strings_has_prefix(base, S("v"))) {
+    if (strings_has_prefix(base, GD_S("v"))) {
         Error err = BURROW_NO_ERROR;
         (void)strconv_atoi(gd_sub(base, 1, base.len), &err);
         if (BURROW_OK(err)) {
             Str dir = path_dir(a, import_path);
-            if (!str_eq(dir, S(".")))
+            if (!str_eq(dir, GD_S(".")))
                 base = path_base(dir);
         }
     }
-    base = strings_trim_prefix(base, S("go-"));
+    base = strings_trim_prefix(base, GD_S("go-"));
     StrIter it = str_runes(base);
     Int i = 0;
     Rune r = 0;
@@ -252,42 +252,43 @@ static Str gd_assumed_package_name(Alloc *a, Str import_path) {
 static Str gd_recv_param(AstExpr p) {
     if (gd_is(p, AST_KIND_IDENT))
         return ((AstIdent *)p)->name;
-    return S("BADPARAM");
+    return GD_S("BADPARAM");
 }
 
 /* recvString: recv as "T", "*T", "T[A, ...]" or "*T[A, ...]", or "BADRECV"
  * when it is not a proper receiver type. */
 static Str gd_recv_string(Alloc *a, AstExpr recv) {
     if (recv == NULL)
-        return S("BADRECV");
+        return GD_S("BADRECV");
     switch ((int)recv->kind) {
     case AST_KIND_IDENT:
         return ((AstIdent *)recv)->name;
     case AST_KIND_STAR_EXPR:
-        return gd_concat3(a, S("*"), gd_recv_string(a, ((AstStarExpr *)recv)->x),
+        return gd_concat3(a, GD_S("*"), gd_recv_string(a, ((AstStarExpr *)recv)->x),
                           BURROW_STR_EMPTY);
     case AST_KIND_INDEX_EXPR: {
         /* generic type with one parameter */
         AstIndexExpr *t = (AstIndexExpr *)recv;
-        Str x = gd_concat3(a, gd_recv_string(a, t->x), S("["), gd_recv_param(t->index));
-        return gd_concat3(a, x, S("]"), BURROW_STR_EMPTY);
+        Str x =
+            gd_concat3(a, gd_recv_string(a, t->x), GD_S("["), gd_recv_param(t->index));
+        return gd_concat3(a, x, GD_S("]"), BURROW_STR_EMPTY);
     }
     case AST_KIND_INDEX_LIST_EXPR: {
         /* generic type with multiple parameters */
         AstIndexListExpr *t = (AstIndexListExpr *)recv;
         if (t->indices.len > 0) {
-            Str b = gd_concat3(a, gd_recv_string(a, t->x), S("["),
+            Str b = gd_concat3(a, gd_recv_string(a, t->x), GD_S("["),
                                gd_recv_param(gd_node(t->indices, 0)));
             for (Int i = 1; i < t->indices.len; i++)
-                b = gd_concat3(a, b, S(", "), gd_recv_param(gd_node(t->indices, i)));
-            return gd_concat3(a, b, S("]"), BURROW_STR_EMPTY);
+                b = gd_concat3(a, b, GD_S(", "), gd_recv_param(gd_node(t->indices, i)));
+            return gd_concat3(a, b, GD_S("]"), BURROW_STR_EMPTY);
         }
         break;
     }
     default:
         break;
     }
-    return S("BADRECV");
+    return GD_S("BADRECV");
 }
 
 static DocFunc *gd_new_func(Alloc *a) {
@@ -502,7 +503,7 @@ static bool gd_is_visible(const GdReader *r, Str name) {
 /* lookupType: the base type with the given name, added with no declaration
  * when it has not been seen yet, or NULL for no name or a blank one. */
 static GdNamed *gd_lookup_type(GdReader *r, Str name) {
-    if (name.len == 0 || str_eq(name, S("_")))
+    if (name.len == 0 || str_eq(name, GD_S("_")))
         return NULL; /* no type docs for anonymous types */
     GdNamed *typ = (GdNamed *)gd_map_ptr(r->type_map, &name);
     if (typ != NULL)
@@ -556,7 +557,7 @@ static void gd_read_doc(GdReader *r, AstCommentGroup *comment) {
         r->doc = text;
         return;
     }
-    r->doc = gd_concat3(r->a, r->doc, S("\n"), text);
+    r->doc = gd_concat3(r->a, r->doc, GD_S("\n"), text);
 }
 
 static void gd_remember(GdReader *r, Str predecl, AstInterfaceType *typ) {
@@ -957,7 +958,7 @@ static Slice gd_filter_expr_list(Slice list) {
 
 static AstIdent *gd_underscore(GdReader *r) {
     if (r->underscore == NULL) {
-        r->underscore = ast_new_ident(r->a, S("_"));
+        r->underscore = ast_new_ident(r->a, GD_S("_"));
         if (r->underscore == NULL)
             gd_oom();
     }
@@ -1284,10 +1285,10 @@ static void gd_read_import(GdReader *r, AstImportSpec *s) {
     Str name = BURROW_STR_EMPTY;
     if (s->name != NULL) {
         name = s->name->name;
-        if (str_eq(name, S(".")))
+        if (str_eq(name, GD_S(".")))
             r->has_dot_imp = true;
     }
-    if (str_eq(name, S(".")))
+    if (str_eq(name, GD_S(".")))
         return;
     if (name.len == 0)
         name = gd_assumed_package_name(r->a, import_);
@@ -1708,7 +1709,7 @@ static Slice gd_sorted_types(GdReader *r, bool all_methods) {
 /* noteBodies: the bodies of notes, for the deprecated Package.Bugs. */
 static Slice gd_note_bodies(Alloc *a, Map *notes) {
     Slice list = slice_nil(TYPE_OF(Str));
-    Str bug = S("BUG");
+    Str bug = GD_S("BUG");
     Slice *bugs = (Slice *)map_get(notes, &bug);
     if (bugs == NULL)
         return list;
@@ -1745,11 +1746,11 @@ static void gd_collect_funcs(Alloc *a, DocPackage *p, Slice funcs) {
     for (Int i = 0; i < funcs.len; i++) {
         DocFunc *f = BURROW_AT(DocFunc *, funcs, i);
         if (f->recv.len > 0) {
-            Str r = strings_trim_prefix(f->recv, S("*"));
+            Str r = strings_trim_prefix(f->recv, GD_S("*"));
             Int j = strings_index_byte(r, '[');
             if (j >= 0)
                 r = gd_sub(r, 0, j); /* remove type parameters */
-            gd_set_true(p->syms, gd_concat3(a, r, S("."), f->name));
+            gd_set_true(p->syms, gd_concat3(a, r, GD_S("."), f->name));
         } else {
             gd_set_true(p->syms, f->name);
         }
@@ -1773,7 +1774,7 @@ static void gd_collect_fields(Alloc *a, DocPackage *p, DocType *t, bool structs)
             AstField *field = BURROW_AT(AstField *, list, j);
             for (Int k = 0; k < field->names.len; k++) {
                 Str name = BURROW_AT(AstIdent *, field->names, k)->name;
-                gd_set_true(p->syms, gd_concat3(a, t->name, S("."), name));
+                gd_set_true(p->syms, gd_concat3(a, t->name, GD_S("."), name));
             }
         }
     }
@@ -2284,7 +2285,7 @@ static bool gd_find_inspect(void *env, AstNode n) {
     switch ((int)n->kind) {
     case AST_KIND_IDENT: {
         AstIdent *e = (AstIdent *)n;
-        if (e->obj == NULL && !str_eq(e->name, S("_"))) {
+        if (e->obj == NULL && !str_eq(e->name, GD_S("_"))) {
             gd_set_true(st->unresolved, e->name);
             return true;
         }
@@ -2328,7 +2329,7 @@ static bool gd_has_iota_inspect(void *env, AstNode n) {
     bool *found = (bool *)env;
     /* Check that this is the special built-in "iota" identifier, not a
      * user-defined shadow. */
-    if (gd_is(n, AST_KIND_IDENT) && str_eq(((AstIdent *)n)->name, S("iota")) &&
+    if (gd_is(n, AST_KIND_IDENT) && str_eq(((AstIdent *)n)->name, GD_S("iota")) &&
         ((AstIdent *)n)->obj == NULL)
         *found = true;
     return !*found;
@@ -2523,7 +2524,7 @@ static void gd_top_decl(Alloc *a, Map *top_decls, AstIdent *name, AstDecl d) {
 static AstFile *gd_play_example(Alloc *a, AstFile *file, AstFuncDecl *f) {
     AstBlockStmt *body = f->body;
 
-    if (!strings_has_suffix(file->name->name, S("_test"))) {
+    if (!strings_has_suffix(file->name->name, GD_S("_test"))) {
         /* We don't support examples that are part of the greater package
          * (yet). */
         return NULL;
@@ -2591,7 +2592,7 @@ static AstFile *gd_play_example(Alloc *a, AstFile *file, AstFuncDecl *f) {
         Str p = strconv_unquote(a, s->path->value, &err);
         if (BURROW_FAILED(err))
             continue;
-        if (str_eq(p, S("syscall/js"))) {
+        if (str_eq(p, GD_S("syscall/js"))) {
             /* We don't support examples that import syscall/js, because the
              * package syscall/js is not available in the playground. */
             return NULL;
@@ -2599,12 +2600,12 @@ static AstFile *gd_play_example(Alloc *a, AstFile *file, AstFuncDecl *f) {
         Str n = gd_assumed_package_name(a, p);
         if (s->name != NULL) {
             n = s->name->name;
-            if (str_eq(n, S("_"))) {
+            if (str_eq(n, GD_S("_"))) {
                 AstSpec sp = &s->node;
                 gd_append(a, &blank_imports, &sp);
                 continue;
             }
-            if (str_eq(n, S("."))) {
+            if (str_eq(n, GD_S("."))) {
                 /* We can't resolve dot imports (yet). */
                 return NULL;
             }
@@ -2688,7 +2689,7 @@ static AstFile *gd_play_example(Alloc *a, AstFile *file, AstFuncDecl *f) {
 
     /* Synthesize main function. */
     AstFuncDecl *func_decl = (AstFuncDecl *)ast_node_new(a, AST_KIND_FUNC_DECL);
-    AstIdent *main_name = ast_new_ident(a, S("main"));
+    AstIdent *main_name = ast_new_ident(a, GD_S("main"));
     if (func_decl == NULL || main_name == NULL)
         gd_oom();
     func_decl->name = main_name;
@@ -2709,7 +2710,7 @@ static AstFile *gd_play_example(Alloc *a, AstFile *file, AstFuncDecl *f) {
 
     /* Synthesize file. */
     AstFile *out = (AstFile *)ast_node_new(a, AST_KIND_FILE);
-    AstIdent *pkg_name = ast_new_ident(a, S("main"));
+    AstIdent *pkg_name = ast_new_ident(a, GD_S("main"));
     if (out == NULL || pkg_name == NULL)
         gd_oom();
     out->name = pkg_name;
@@ -2725,7 +2726,7 @@ static AstFile *gd_play_example_file(Alloc *a, AstFile *file) {
     Slice comments = file->comments;
     if (comments.len > 0 &&
         strings_has_prefix(gd_text(a, BURROW_AT(AstCommentGroup *, comments, 0)),
-                           S("Copyright")))
+                           GD_S("Copyright")))
         comments = slice_sub(comments, 1, comments.len);
 
     /* Copy declaration slice, rewriting the ExampleX function to main. */
@@ -2733,11 +2734,11 @@ static AstFile *gd_play_example_file(Alloc *a, AstFile *file) {
     for (Int i = 0; i < file->decls.len; i++) {
         AstDecl d = gd_node(file->decls, i);
         if (gd_is(d, AST_KIND_FUNC_DECL) &&
-            gd_is_test(((AstFuncDecl *)d)->name->name, S("Example"))) {
+            gd_is_test(((AstFuncDecl *)d)->name->name, GD_S("Example"))) {
             AstFuncDecl *f = (AstFuncDecl *)d;
             /* Copy the FuncDecl, as it may be used elsewhere. */
             AstFuncDecl *nf = (AstFuncDecl *)gd_copy(a, f, sizeof(AstFuncDecl));
-            nf->name = ast_new_ident(a, S("main"));
+            nf->name = ast_new_ident(a, GD_S("main"));
             if (nf->name == NULL)
                 gd_oom();
             nf->body = gd_strip_output_comment(a, f->body, &comments);
@@ -2748,7 +2749,7 @@ static AstFile *gd_play_example_file(Alloc *a, AstFile *file) {
 
     /* Copy the File, as it may be used elsewhere. */
     AstFile *f = (AstFile *)gd_copy(a, file, sizeof(AstFile));
-    f->name = ast_new_ident(a, S("main"));
+    f->name = ast_new_ident(a, GD_S("main"));
     if (f->name == NULL)
         gd_oom();
     f->decls = decls;
@@ -2788,12 +2789,12 @@ Slice doc_examples(Alloc *a, Slice test_files) {
                 continue;
             num_decl++;
             Str name = f->name->name;
-            if (gd_is_test(name, S("Test")) || gd_is_test(name, S("Benchmark")) ||
-                gd_is_test(name, S("Fuzz"))) {
+            if (gd_is_test(name, GD_S("Test")) || gd_is_test(name, GD_S("Benchmark")) ||
+                gd_is_test(name, GD_S("Fuzz"))) {
                 has_tests = true;
                 continue;
             }
-            if (!gd_is_test(name, S("Example")))
+            if (!gd_is_test(name, GD_S("Example")))
                 continue;
             if (f->type->params != NULL && f->type->params->list.len != 0)
                 continue; /* function has params; not a valid example */
@@ -2898,8 +2899,8 @@ static void gd_classify_examples(Alloc *a, DocPackage *p, Slice examples) {
             DocFunc *m = BURROW_AT(DocFunc *, t->methods, j);
             if (!token_is_exported(m->name))
                 continue;
-            Str recv = strings_trim_prefix(gd_name_without_inst(a, m->recv), S("*"));
-            gd_example_id(ids, gd_concat3(a, recv, S("_"), m->name), &m->examples);
+            Str recv = strings_trim_prefix(gd_name_without_inst(a, m->recv), GD_S("*"));
+            gd_example_id(ids, gd_concat3(a, recv, GD_S("_"), m->name), &m->examples);
         }
     }
 
@@ -2940,7 +2941,7 @@ DocPackage *doc_new_from_files(Alloc *a, TokenFileSet *fset, Slice files,
     *err = BURROW_NO_ERROR;
     /* Check for invalid API usage. */
     if (fset == NULL)
-        panic_str(S("doc.NewFromFiles: no token.FileSet provided (fset == nil)"));
+        panic_str(GD_S("doc.NewFromFiles: no token.FileSet provided (fset == nil)"));
 
     /* Collect .go and _test.go files. */
     Str pkg_name = BURROW_STR_EMPTY;
@@ -2955,9 +2956,9 @@ DocPackage *doc_new_from_files(Alloc *a, TokenFileSet *fset, Slice files,
             return NULL;
         }
         Str filename = token_file_name(f);
-        if (strings_has_suffix(filename, S("_test.go"))) {
+        if (strings_has_suffix(filename, GD_S("_test.go"))) {
             gd_append(a, &test_go_files, &file);
-        } else if (strings_has_suffix(filename, S(".go"))) {
+        } else if (strings_has_suffix(filename, GD_S(".go"))) {
             pkg_name = file->name->name;
             gd_map_set(go_files, &filename, &file);
         } else {

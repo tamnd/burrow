@@ -30,6 +30,8 @@ static void entries(Alloc *a) {
     }
     DwarfReader *r = dwarf_data_reader(d, a);
     for (DwarfEntry *e; (e = dwarf_reader_next(r, &err)) != NULL;) {
+        if (e->tag == 0)
+            continue; // the end of a list of children
         Str *name = any_assert(dwarf_entry_val(e, DWARF_ATTR_NAME), TYPE_STRING);
         fmt_printf_v("%#x %-12s %q\n", e->offset, dwarf_tag_string(e->tag, a),
                      name != NULL ? *name : BURROW_STR_EMPTY);

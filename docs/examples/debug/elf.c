@@ -54,7 +54,7 @@ static void sections(Alloc *a) {
     for (Int i = 0; i < f->sections.len; i++) {
         ElfSection *s = ((ElfSection **)f->sections.p)[i];
         ElfSectionHeader sh = s->section_header;
-        fmt_printf_v("%-10q %-12s addr %#x size %d\n", sh.name,
+        fmt_printf_v("%-12q %-12s addr %#x size %d\n", sh.name,
                      elf_section_type_string(sh.type, a), sh.addr, sh.size);
     }
     ElfSection *text = elf_file_section(f, BURROW_S(".text"));
@@ -67,9 +67,11 @@ static void sections(Alloc *a) {
 static void errors(Alloc *a) {
     // doc: errors
     Error err = BURROW_NO_ERROR;
-    BytesReader *br = bytes_new_reader(a, slice_from_str(a, BURROW_S("MZ, not ELF")));
+    Str text = BURROW_S("This is a text file, not an executable.");
+    BytesReader *br = bytes_new_reader(a, slice_from_str(a, text));
     ElfFile *f = elf_new_file(a, bytes_reader_as_io_reader_at(br), &err);
-    fmt_println_v(f == NULL, err);
+    if (f == NULL)
+        fmt_println_v("no file:", err);
 
     const ElfFormatError *fe = errors_as(err, TYPE_ELF_FORMAT_ERROR);
     if (fe != NULL)

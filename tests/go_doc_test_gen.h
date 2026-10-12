@@ -6627,13 +6627,19 @@ static const GdocFile gdoc_files[] = {
     {"b.2.golden", gdoc_file_7, (int)(sizeof(gdoc_file_7) / sizeof(gdoc_file_7[0]))},
     {"b.go", gdoc_file_8, (int)(sizeof(gdoc_file_8) / sizeof(gdoc_file_8[0]))},
     {"benchmark.go", gdoc_file_9, (int)(sizeof(gdoc_file_9) / sizeof(gdoc_file_9[0]))},
-    {"blank.0.golden", gdoc_file_10, (int)(sizeof(gdoc_file_10) / sizeof(gdoc_file_10[0]))},
-    {"blank.1.golden", gdoc_file_11, (int)(sizeof(gdoc_file_11) / sizeof(gdoc_file_11[0]))},
-    {"blank.2.golden", gdoc_file_12, (int)(sizeof(gdoc_file_12) / sizeof(gdoc_file_12[0]))},
+    {"blank.0.golden", gdoc_file_10,
+     (int)(sizeof(gdoc_file_10) / sizeof(gdoc_file_10[0]))},
+    {"blank.1.golden", gdoc_file_11,
+     (int)(sizeof(gdoc_file_11) / sizeof(gdoc_file_11[0]))},
+    {"blank.2.golden", gdoc_file_12,
+     (int)(sizeof(gdoc_file_12) / sizeof(gdoc_file_12[0]))},
     {"blank.go", gdoc_file_13, (int)(sizeof(gdoc_file_13) / sizeof(gdoc_file_13[0]))},
-    {"bugpara.0.golden", gdoc_file_14, (int)(sizeof(gdoc_file_14) / sizeof(gdoc_file_14[0]))},
-    {"bugpara.1.golden", gdoc_file_15, (int)(sizeof(gdoc_file_15) / sizeof(gdoc_file_15[0]))},
-    {"bugpara.2.golden", gdoc_file_16, (int)(sizeof(gdoc_file_16) / sizeof(gdoc_file_16[0]))},
+    {"bugpara.0.golden", gdoc_file_14,
+     (int)(sizeof(gdoc_file_14) / sizeof(gdoc_file_14[0]))},
+    {"bugpara.1.golden", gdoc_file_15,
+     (int)(sizeof(gdoc_file_15) / sizeof(gdoc_file_15[0]))},
+    {"bugpara.2.golden", gdoc_file_16,
+     (int)(sizeof(gdoc_file_16) / sizeof(gdoc_file_16[0]))},
     {"bugpara.go", gdoc_file_17, (int)(sizeof(gdoc_file_17) / sizeof(gdoc_file_17[0]))},
     {"c.0.golden", gdoc_file_18, (int)(sizeof(gdoc_file_18) / sizeof(gdoc_file_18[0]))},
     {"c.1.golden", gdoc_file_19, (int)(sizeof(gdoc_file_19) / sizeof(gdoc_file_19[0]))},
@@ -6648,13 +6654,19 @@ static const GdocFile gdoc_files[] = {
     {"e.1.golden", gdoc_file_28, (int)(sizeof(gdoc_file_28) / sizeof(gdoc_file_28[0]))},
     {"e.2.golden", gdoc_file_29, (int)(sizeof(gdoc_file_29) / sizeof(gdoc_file_29[0]))},
     {"e.go", gdoc_file_30, (int)(sizeof(gdoc_file_30) / sizeof(gdoc_file_30[0]))},
-    {"error1.0.golden", gdoc_file_31, (int)(sizeof(gdoc_file_31) / sizeof(gdoc_file_31[0]))},
-    {"error1.1.golden", gdoc_file_32, (int)(sizeof(gdoc_file_32) / sizeof(gdoc_file_32[0]))},
-    {"error1.2.golden", gdoc_file_33, (int)(sizeof(gdoc_file_33) / sizeof(gdoc_file_33[0]))},
+    {"error1.0.golden", gdoc_file_31,
+     (int)(sizeof(gdoc_file_31) / sizeof(gdoc_file_31[0]))},
+    {"error1.1.golden", gdoc_file_32,
+     (int)(sizeof(gdoc_file_32) / sizeof(gdoc_file_32[0]))},
+    {"error1.2.golden", gdoc_file_33,
+     (int)(sizeof(gdoc_file_33) / sizeof(gdoc_file_33[0]))},
     {"error1.go", gdoc_file_34, (int)(sizeof(gdoc_file_34) / sizeof(gdoc_file_34[0]))},
-    {"error2.0.golden", gdoc_file_35, (int)(sizeof(gdoc_file_35) / sizeof(gdoc_file_35[0]))},
-    {"error2.1.golden", gdoc_file_36, (int)(sizeof(gdoc_file_36) / sizeof(gdoc_file_36[0]))},
-    {"error2.2.golden", gdoc_file_37, (int)(sizeof(gdoc_file_37) / sizeof(gdoc_file_37[0]))},
+    {"error2.0.golden", gdoc_file_35,
+     (int)(sizeof(gdoc_file_35) / sizeof(gdoc_file_35[0]))},
+    {"error2.1.golden", gdoc_file_36,
+     (int)(sizeof(gdoc_file_36) / sizeof(gdoc_file_36[0]))},
+    {"error2.2.golden", gdoc_file_37,
+     (int)(sizeof(gdoc_file_37) / sizeof(gdoc_file_37[0]))},
     {"error2.go", gdoc_file_38, (int)(sizeof(gdoc_file_38) / sizeof(gdoc_file_38[0]))},
     {"example.go", gdoc_file_39, (int)(sizeof(gdoc_file_39) / sizeof(gdoc_file_39[0]))},
     {"f.0.golden", gdoc_file_40, (int)(sizeof(gdoc_file_40) / sizeof(gdoc_file_40[0]))},
@@ -6665,71 +6677,135 @@ static const GdocFile gdoc_files[] = {
     {"g.1.golden", gdoc_file_45, (int)(sizeof(gdoc_file_45) / sizeof(gdoc_file_45[0]))},
     {"g.2.golden", gdoc_file_46, (int)(sizeof(gdoc_file_46) / sizeof(gdoc_file_46[0]))},
     {"g.go", gdoc_file_47, (int)(sizeof(gdoc_file_47) / sizeof(gdoc_file_47[0]))},
-    {"generics.0.golden", gdoc_file_48, (int)(sizeof(gdoc_file_48) / sizeof(gdoc_file_48[0]))},
-    {"generics.1.golden", gdoc_file_49, (int)(sizeof(gdoc_file_49) / sizeof(gdoc_file_49[0]))},
-    {"generics.2.golden", gdoc_file_50, (int)(sizeof(gdoc_file_50) / sizeof(gdoc_file_50[0]))},
-    {"generics.go", gdoc_file_51, (int)(sizeof(gdoc_file_51) / sizeof(gdoc_file_51[0]))},
-    {"issue12839.0.golden", gdoc_file_52, (int)(sizeof(gdoc_file_52) / sizeof(gdoc_file_52[0]))},
-    {"issue12839.1.golden", gdoc_file_53, (int)(sizeof(gdoc_file_53) / sizeof(gdoc_file_53[0]))},
-    {"issue12839.2.golden", gdoc_file_54, (int)(sizeof(gdoc_file_54) / sizeof(gdoc_file_54[0]))},
-    {"issue12839.go", gdoc_file_55, (int)(sizeof(gdoc_file_55) / sizeof(gdoc_file_55[0]))},
-    {"issue13742.0.golden", gdoc_file_56, (int)(sizeof(gdoc_file_56) / sizeof(gdoc_file_56[0]))},
-    {"issue13742.1.golden", gdoc_file_57, (int)(sizeof(gdoc_file_57) / sizeof(gdoc_file_57[0]))},
-    {"issue13742.2.golden", gdoc_file_58, (int)(sizeof(gdoc_file_58) / sizeof(gdoc_file_58[0]))},
-    {"issue13742.go", gdoc_file_59, (int)(sizeof(gdoc_file_59) / sizeof(gdoc_file_59[0]))},
-    {"issue16153.0.golden", gdoc_file_60, (int)(sizeof(gdoc_file_60) / sizeof(gdoc_file_60[0]))},
-    {"issue16153.1.golden", gdoc_file_61, (int)(sizeof(gdoc_file_61) / sizeof(gdoc_file_61[0]))},
-    {"issue16153.2.golden", gdoc_file_62, (int)(sizeof(gdoc_file_62) / sizeof(gdoc_file_62[0]))},
-    {"issue16153.go", gdoc_file_63, (int)(sizeof(gdoc_file_63) / sizeof(gdoc_file_63[0]))},
-    {"issue17788.0.golden", gdoc_file_64, (int)(sizeof(gdoc_file_64) / sizeof(gdoc_file_64[0]))},
-    {"issue17788.1.golden", gdoc_file_65, (int)(sizeof(gdoc_file_65) / sizeof(gdoc_file_65[0]))},
-    {"issue17788.2.golden", gdoc_file_66, (int)(sizeof(gdoc_file_66) / sizeof(gdoc_file_66[0]))},
-    {"issue17788.go", gdoc_file_67, (int)(sizeof(gdoc_file_67) / sizeof(gdoc_file_67[0]))},
-    {"issue22856.0.golden", gdoc_file_68, (int)(sizeof(gdoc_file_68) / sizeof(gdoc_file_68[0]))},
-    {"issue22856.1.golden", gdoc_file_69, (int)(sizeof(gdoc_file_69) / sizeof(gdoc_file_69[0]))},
-    {"issue22856.2.golden", gdoc_file_70, (int)(sizeof(gdoc_file_70) / sizeof(gdoc_file_70[0]))},
-    {"issue22856.go", gdoc_file_71, (int)(sizeof(gdoc_file_71) / sizeof(gdoc_file_71[0]))},
-    {"issue62640.0.golden", gdoc_file_72, (int)(sizeof(gdoc_file_72) / sizeof(gdoc_file_72[0]))},
-    {"issue62640.1.golden", gdoc_file_73, (int)(sizeof(gdoc_file_73) / sizeof(gdoc_file_73[0]))},
-    {"issue62640.2.golden", gdoc_file_74, (int)(sizeof(gdoc_file_74) / sizeof(gdoc_file_74[0]))},
-    {"issue62640.go", gdoc_file_75, (int)(sizeof(gdoc_file_75) / sizeof(gdoc_file_75[0]))},
-    {"predeclared.0.golden", gdoc_file_76, (int)(sizeof(gdoc_file_76) / sizeof(gdoc_file_76[0]))},
-    {"predeclared.1.golden", gdoc_file_77, (int)(sizeof(gdoc_file_77) / sizeof(gdoc_file_77[0]))},
-    {"predeclared.2.golden", gdoc_file_78, (int)(sizeof(gdoc_file_78) / sizeof(gdoc_file_78[0]))},
-    {"predeclared.go", gdoc_file_79, (int)(sizeof(gdoc_file_79) / sizeof(gdoc_file_79[0]))},
-    {"testing.0.golden", gdoc_file_80, (int)(sizeof(gdoc_file_80) / sizeof(gdoc_file_80[0]))},
-    {"testing.1.golden", gdoc_file_81, (int)(sizeof(gdoc_file_81) / sizeof(gdoc_file_81[0]))},
-    {"testing.2.golden", gdoc_file_82, (int)(sizeof(gdoc_file_82) / sizeof(gdoc_file_82[0]))},
+    {"generics.0.golden", gdoc_file_48,
+     (int)(sizeof(gdoc_file_48) / sizeof(gdoc_file_48[0]))},
+    {"generics.1.golden", gdoc_file_49,
+     (int)(sizeof(gdoc_file_49) / sizeof(gdoc_file_49[0]))},
+    {"generics.2.golden", gdoc_file_50,
+     (int)(sizeof(gdoc_file_50) / sizeof(gdoc_file_50[0]))},
+    {"generics.go", gdoc_file_51,
+     (int)(sizeof(gdoc_file_51) / sizeof(gdoc_file_51[0]))},
+    {"issue12839.0.golden", gdoc_file_52,
+     (int)(sizeof(gdoc_file_52) / sizeof(gdoc_file_52[0]))},
+    {"issue12839.1.golden", gdoc_file_53,
+     (int)(sizeof(gdoc_file_53) / sizeof(gdoc_file_53[0]))},
+    {"issue12839.2.golden", gdoc_file_54,
+     (int)(sizeof(gdoc_file_54) / sizeof(gdoc_file_54[0]))},
+    {"issue12839.go", gdoc_file_55,
+     (int)(sizeof(gdoc_file_55) / sizeof(gdoc_file_55[0]))},
+    {"issue13742.0.golden", gdoc_file_56,
+     (int)(sizeof(gdoc_file_56) / sizeof(gdoc_file_56[0]))},
+    {"issue13742.1.golden", gdoc_file_57,
+     (int)(sizeof(gdoc_file_57) / sizeof(gdoc_file_57[0]))},
+    {"issue13742.2.golden", gdoc_file_58,
+     (int)(sizeof(gdoc_file_58) / sizeof(gdoc_file_58[0]))},
+    {"issue13742.go", gdoc_file_59,
+     (int)(sizeof(gdoc_file_59) / sizeof(gdoc_file_59[0]))},
+    {"issue16153.0.golden", gdoc_file_60,
+     (int)(sizeof(gdoc_file_60) / sizeof(gdoc_file_60[0]))},
+    {"issue16153.1.golden", gdoc_file_61,
+     (int)(sizeof(gdoc_file_61) / sizeof(gdoc_file_61[0]))},
+    {"issue16153.2.golden", gdoc_file_62,
+     (int)(sizeof(gdoc_file_62) / sizeof(gdoc_file_62[0]))},
+    {"issue16153.go", gdoc_file_63,
+     (int)(sizeof(gdoc_file_63) / sizeof(gdoc_file_63[0]))},
+    {"issue17788.0.golden", gdoc_file_64,
+     (int)(sizeof(gdoc_file_64) / sizeof(gdoc_file_64[0]))},
+    {"issue17788.1.golden", gdoc_file_65,
+     (int)(sizeof(gdoc_file_65) / sizeof(gdoc_file_65[0]))},
+    {"issue17788.2.golden", gdoc_file_66,
+     (int)(sizeof(gdoc_file_66) / sizeof(gdoc_file_66[0]))},
+    {"issue17788.go", gdoc_file_67,
+     (int)(sizeof(gdoc_file_67) / sizeof(gdoc_file_67[0]))},
+    {"issue22856.0.golden", gdoc_file_68,
+     (int)(sizeof(gdoc_file_68) / sizeof(gdoc_file_68[0]))},
+    {"issue22856.1.golden", gdoc_file_69,
+     (int)(sizeof(gdoc_file_69) / sizeof(gdoc_file_69[0]))},
+    {"issue22856.2.golden", gdoc_file_70,
+     (int)(sizeof(gdoc_file_70) / sizeof(gdoc_file_70[0]))},
+    {"issue22856.go", gdoc_file_71,
+     (int)(sizeof(gdoc_file_71) / sizeof(gdoc_file_71[0]))},
+    {"issue62640.0.golden", gdoc_file_72,
+     (int)(sizeof(gdoc_file_72) / sizeof(gdoc_file_72[0]))},
+    {"issue62640.1.golden", gdoc_file_73,
+     (int)(sizeof(gdoc_file_73) / sizeof(gdoc_file_73[0]))},
+    {"issue62640.2.golden", gdoc_file_74,
+     (int)(sizeof(gdoc_file_74) / sizeof(gdoc_file_74[0]))},
+    {"issue62640.go", gdoc_file_75,
+     (int)(sizeof(gdoc_file_75) / sizeof(gdoc_file_75[0]))},
+    {"predeclared.0.golden", gdoc_file_76,
+     (int)(sizeof(gdoc_file_76) / sizeof(gdoc_file_76[0]))},
+    {"predeclared.1.golden", gdoc_file_77,
+     (int)(sizeof(gdoc_file_77) / sizeof(gdoc_file_77[0]))},
+    {"predeclared.2.golden", gdoc_file_78,
+     (int)(sizeof(gdoc_file_78) / sizeof(gdoc_file_78[0]))},
+    {"predeclared.go", gdoc_file_79,
+     (int)(sizeof(gdoc_file_79) / sizeof(gdoc_file_79[0]))},
+    {"testing.0.golden", gdoc_file_80,
+     (int)(sizeof(gdoc_file_80) / sizeof(gdoc_file_80[0]))},
+    {"testing.1.golden", gdoc_file_81,
+     (int)(sizeof(gdoc_file_81) / sizeof(gdoc_file_81[0]))},
+    {"testing.2.golden", gdoc_file_82,
+     (int)(sizeof(gdoc_file_82) / sizeof(gdoc_file_82[0]))},
     {"testing.go", gdoc_file_83, (int)(sizeof(gdoc_file_83) / sizeof(gdoc_file_83[0]))},
-    {"examples/empty.go", gdoc_file_84, (int)(sizeof(gdoc_file_84) / sizeof(gdoc_file_84[0]))},
-    {"examples/empty.golden", gdoc_file_85, (int)(sizeof(gdoc_file_85) / sizeof(gdoc_file_85[0]))},
-    {"examples/generic_constraints.go", gdoc_file_86, (int)(sizeof(gdoc_file_86) / sizeof(gdoc_file_86[0]))},
-    {"examples/generic_constraints.golden", gdoc_file_87, (int)(sizeof(gdoc_file_87) / sizeof(gdoc_file_87[0]))},
-    {"examples/import_groups.go", gdoc_file_88, (int)(sizeof(gdoc_file_88) / sizeof(gdoc_file_88[0]))},
-    {"examples/import_groups.golden", gdoc_file_89, (int)(sizeof(gdoc_file_89) / sizeof(gdoc_file_89[0]))},
-    {"examples/import_groups_named.go", gdoc_file_90, (int)(sizeof(gdoc_file_90) / sizeof(gdoc_file_90[0]))},
-    {"examples/import_groups_named.golden", gdoc_file_91, (int)(sizeof(gdoc_file_91) / sizeof(gdoc_file_91[0]))},
-    {"examples/inspect_signature.go", gdoc_file_92, (int)(sizeof(gdoc_file_92) / sizeof(gdoc_file_92[0]))},
-    {"examples/inspect_signature.golden", gdoc_file_93, (int)(sizeof(gdoc_file_93) / sizeof(gdoc_file_93[0]))},
-    {"examples/iota.go", gdoc_file_94, (int)(sizeof(gdoc_file_94) / sizeof(gdoc_file_94[0]))},
-    {"examples/iota.golden", gdoc_file_95, (int)(sizeof(gdoc_file_95) / sizeof(gdoc_file_95[0]))},
-    {"examples/issue43658.go", gdoc_file_96, (int)(sizeof(gdoc_file_96) / sizeof(gdoc_file_96[0]))},
-    {"examples/issue43658.golden", gdoc_file_97, (int)(sizeof(gdoc_file_97) / sizeof(gdoc_file_97[0]))},
-    {"examples/major_version.go", gdoc_file_98, (int)(sizeof(gdoc_file_98) / sizeof(gdoc_file_98[0]))},
-    {"examples/major_version.golden", gdoc_file_99, (int)(sizeof(gdoc_file_99) / sizeof(gdoc_file_99[0]))},
-    {"examples/multiple.go", gdoc_file_100, (int)(sizeof(gdoc_file_100) / sizeof(gdoc_file_100[0]))},
-    {"examples/multiple.golden", gdoc_file_101, (int)(sizeof(gdoc_file_101) / sizeof(gdoc_file_101[0]))},
-    {"examples/shadow_predeclared.go", gdoc_file_102, (int)(sizeof(gdoc_file_102) / sizeof(gdoc_file_102[0]))},
-    {"examples/shadow_predeclared.golden", gdoc_file_103, (int)(sizeof(gdoc_file_103) / sizeof(gdoc_file_103[0]))},
-    {"examples/values.go", gdoc_file_104, (int)(sizeof(gdoc_file_104) / sizeof(gdoc_file_104[0]))},
-    {"examples/values.golden", gdoc_file_105, (int)(sizeof(gdoc_file_105) / sizeof(gdoc_file_105[0]))},
-    {"examples/whole_file.go", gdoc_file_106, (int)(sizeof(gdoc_file_106) / sizeof(gdoc_file_106[0]))},
-    {"examples/whole_file.golden", gdoc_file_107, (int)(sizeof(gdoc_file_107) / sizeof(gdoc_file_107[0]))},
-    {"examples/whole_function.go", gdoc_file_108, (int)(sizeof(gdoc_file_108) / sizeof(gdoc_file_108[0]))},
-    {"examples/whole_function.golden", gdoc_file_109, (int)(sizeof(gdoc_file_109) / sizeof(gdoc_file_109[0]))},
-    {"examples/whole_function_external.go", gdoc_file_110, (int)(sizeof(gdoc_file_110) / sizeof(gdoc_file_110[0]))},
-    {"examples/whole_function_external.golden", gdoc_file_111, (int)(sizeof(gdoc_file_111) / sizeof(gdoc_file_111[0]))},
-    {"pkgdoc/doc.go", gdoc_file_112, (int)(sizeof(gdoc_file_112) / sizeof(gdoc_file_112[0]))},
+    {"examples/empty.go", gdoc_file_84,
+     (int)(sizeof(gdoc_file_84) / sizeof(gdoc_file_84[0]))},
+    {"examples/empty.golden", gdoc_file_85,
+     (int)(sizeof(gdoc_file_85) / sizeof(gdoc_file_85[0]))},
+    {"examples/generic_constraints.go", gdoc_file_86,
+     (int)(sizeof(gdoc_file_86) / sizeof(gdoc_file_86[0]))},
+    {"examples/generic_constraints.golden", gdoc_file_87,
+     (int)(sizeof(gdoc_file_87) / sizeof(gdoc_file_87[0]))},
+    {"examples/import_groups.go", gdoc_file_88,
+     (int)(sizeof(gdoc_file_88) / sizeof(gdoc_file_88[0]))},
+    {"examples/import_groups.golden", gdoc_file_89,
+     (int)(sizeof(gdoc_file_89) / sizeof(gdoc_file_89[0]))},
+    {"examples/import_groups_named.go", gdoc_file_90,
+     (int)(sizeof(gdoc_file_90) / sizeof(gdoc_file_90[0]))},
+    {"examples/import_groups_named.golden", gdoc_file_91,
+     (int)(sizeof(gdoc_file_91) / sizeof(gdoc_file_91[0]))},
+    {"examples/inspect_signature.go", gdoc_file_92,
+     (int)(sizeof(gdoc_file_92) / sizeof(gdoc_file_92[0]))},
+    {"examples/inspect_signature.golden", gdoc_file_93,
+     (int)(sizeof(gdoc_file_93) / sizeof(gdoc_file_93[0]))},
+    {"examples/iota.go", gdoc_file_94,
+     (int)(sizeof(gdoc_file_94) / sizeof(gdoc_file_94[0]))},
+    {"examples/iota.golden", gdoc_file_95,
+     (int)(sizeof(gdoc_file_95) / sizeof(gdoc_file_95[0]))},
+    {"examples/issue43658.go", gdoc_file_96,
+     (int)(sizeof(gdoc_file_96) / sizeof(gdoc_file_96[0]))},
+    {"examples/issue43658.golden", gdoc_file_97,
+     (int)(sizeof(gdoc_file_97) / sizeof(gdoc_file_97[0]))},
+    {"examples/major_version.go", gdoc_file_98,
+     (int)(sizeof(gdoc_file_98) / sizeof(gdoc_file_98[0]))},
+    {"examples/major_version.golden", gdoc_file_99,
+     (int)(sizeof(gdoc_file_99) / sizeof(gdoc_file_99[0]))},
+    {"examples/multiple.go", gdoc_file_100,
+     (int)(sizeof(gdoc_file_100) / sizeof(gdoc_file_100[0]))},
+    {"examples/multiple.golden", gdoc_file_101,
+     (int)(sizeof(gdoc_file_101) / sizeof(gdoc_file_101[0]))},
+    {"examples/shadow_predeclared.go", gdoc_file_102,
+     (int)(sizeof(gdoc_file_102) / sizeof(gdoc_file_102[0]))},
+    {"examples/shadow_predeclared.golden", gdoc_file_103,
+     (int)(sizeof(gdoc_file_103) / sizeof(gdoc_file_103[0]))},
+    {"examples/values.go", gdoc_file_104,
+     (int)(sizeof(gdoc_file_104) / sizeof(gdoc_file_104[0]))},
+    {"examples/values.golden", gdoc_file_105,
+     (int)(sizeof(gdoc_file_105) / sizeof(gdoc_file_105[0]))},
+    {"examples/whole_file.go", gdoc_file_106,
+     (int)(sizeof(gdoc_file_106) / sizeof(gdoc_file_106[0]))},
+    {"examples/whole_file.golden", gdoc_file_107,
+     (int)(sizeof(gdoc_file_107) / sizeof(gdoc_file_107[0]))},
+    {"examples/whole_function.go", gdoc_file_108,
+     (int)(sizeof(gdoc_file_108) / sizeof(gdoc_file_108[0]))},
+    {"examples/whole_function.golden", gdoc_file_109,
+     (int)(sizeof(gdoc_file_109) / sizeof(gdoc_file_109[0]))},
+    {"examples/whole_function_external.go", gdoc_file_110,
+     (int)(sizeof(gdoc_file_110) / sizeof(gdoc_file_110[0]))},
+    {"examples/whole_function_external.golden", gdoc_file_111,
+     (int)(sizeof(gdoc_file_111) / sizeof(gdoc_file_111[0]))},
+    {"pkgdoc/doc.go", gdoc_file_112,
+     (int)(sizeof(gdoc_file_112) / sizeof(gdoc_file_112[0]))},
 };
 
 typedef struct GdocSynopsis {
@@ -6749,33 +6825,46 @@ static const GdocSynopsis gdoc_synopsis[] = {
     {"  foo\t  bar.\n", 13, 12, "foo bar."},
     {"a  b\n"
      "\n"
-     "c\015\015d\t\t", 12, 12, "a b"},
+     "c\015\015d\t\t",
+     12, 12, "a b"},
     {"a  b\n"
      "\n"
-     "c\015\015d\t\t  . BLA", 19, 15, "a b"},
+     "c\015\015d\t\t  . BLA",
+     19, 15, "a b"},
     {"Package poems by T.S.Eliot. To rhyme...", 39, 27, "Package poems by T.S.Eliot."},
-    {"Package poems by T. S. Eliot. To rhyme...", 41, 29, "Package poems by T. S. Eliot."},
-    {"foo implements the foo ABI. The foo ABI is...", 45, 27, "foo implements the foo ABI."},
+    {"Package poems by T. S. Eliot. To rhyme...", 41, 29,
+     "Package poems by T. S. Eliot."},
+    {"foo implements the foo ABI. The foo ABI is...", 45, 27,
+     "foo implements the foo ABI."},
     {"Package\n"
-     "foo. ..", 15, 12, "Package foo."},
+     "foo. ..",
+     15, 12, "Package foo."},
     {"P . Q.", 6, 3, "P ."},
     {"P. Q.   ", 8, 8, "P. Q."},
     {"Package \316\232\316\261\316\273\316\267\316\274\316\255\317\201\316\261"
-     " \316\272\317\214\317\203\316\274\316\265.", 36, 36, "Package \316\232\316\261\316\273\316\267\316\274\316\255\317\201\316\261"
+     " \316\272\317\214\317\203\316\274\316\265.",
+     36, 36,
+     "Package \316\232\316\261\316\273\316\267\316\274\316\255\317\201\316\261"
      " \316\272\317\214\317\203\316\274\316\265."},
     {"Package \343\201\223\343\202\223\343\201\253\343\201\241\343\201\257 \344"
-     "\270\226\347\225\214\n", 31, 31, "Package \343\201\223\343\202\223\343\201\253\343\201\241\343\201\257 \344"
+     "\270\226\347\225\214\n",
+     31, 31,
+     "Package \343\201\223\343\202\223\343\201\253\343\201\241\343\201\257 \344"
      "\270\226\347\225\214"},
     {"Package \343\201\223\343\202\223\343\201\253\343\201\241\343\201\257\343"
-     "\200\202\344\270\226\347\225\214", 32, 26, "Package \343\201\223\343\202\223\343\201\253\343\201\241\343\201\257\343"
+     "\200\202\344\270\226\347\225\214",
+     32, 26,
+     "Package \343\201\223\343\202\223\343\201\253\343\201\241\343\201\257\343"
      "\200\202"},
-    {"Package \354\225\210\353\205\225\357\274\216\344\270\226\347\225\214", 23, 17, "Package \354\225\210\353\205\225\357\274\216"},
+    {"Package \354\225\210\353\205\225\357\274\216\344\270\226\347\225\214", 23, 17,
+     "Package \354\225\210\353\205\225\357\274\216"},
     {"Package foo does bar.", 21, 21, "Package foo does bar."},
     {"Copyright 2012 Google, Inc. Package foo does bar.", 49, 27, ""},
     {"All Rights reserved. Package foo does bar.", 42, 20, ""},
     {"All rights reserved. Package foo does bar.", 42, 20, ""},
     {"Authors: foo@bar.com. Package foo does bar.", 43, 21, ""},
-    {"typically invoked as ``go tool asm'',", 37, 37, "typically invoked as \342\200\234go tool asm\342\200\235,"},
+    {"typically invoked as ``go tool asm'',", 37, 37,
+     "typically invoked as \342\200\234go tool asm\342\200\235,"},
 };
 
 static const char gdoc_comment_input[] =
@@ -6903,48 +6992,47 @@ static const char *const gdoc_funcs_types[] = {
     "S2",
 };
 
-static const char gdoc_classify_src[] =
-    "\n"
-    "package p\n"
-    "\n"
-    "const Const1 = 0\n"
-    "var   Var1   = 0\n"
-    "\n"
-    "type (\n"
-    "\tType1     int\n"
-    "\tType1_Foo int\n"
-    "\tType1_foo int\n"
-    "\ttype2     int\n"
-    "\n"
-    "\tEmbed struct { Type1 }\n"
-    "\tUembed struct { type2 }\n"
-    ")\n"
-    "\n"
-    "func Func1()     {}\n"
-    "func Func1_Foo() {}\n"
-    "func Func1_foo() {}\n"
-    "func func2()     {}\n"
-    "\n"
-    "func (Type1) Func1() {}\n"
-    "func (Type1) Func1_Foo() {}\n"
-    "func (Type1) Func1_foo() {}\n"
-    "func (Type1) func2() {}\n"
-    "\n"
-    "func (type2) Func1() {}\n"
-    "\n"
-    "type (\n"
-    "\tConflict          int\n"
-    "\tConflict_Conflict int\n"
-    "\tConflict_conflict int\n"
-    ")\n"
-    "\n"
-    "func (Conflict) Conflict() {}\n"
-    "\n"
-    "func GFunc[T any]() {}\n"
-    "\n"
-    "type GType[T any] int\n"
-    "\n"
-    "func (GType[T]) M() {}\n";
+static const char gdoc_classify_src[] = "\n"
+                                        "package p\n"
+                                        "\n"
+                                        "const Const1 = 0\n"
+                                        "var   Var1   = 0\n"
+                                        "\n"
+                                        "type (\n"
+                                        "\tType1     int\n"
+                                        "\tType1_Foo int\n"
+                                        "\tType1_foo int\n"
+                                        "\ttype2     int\n"
+                                        "\n"
+                                        "\tEmbed struct { Type1 }\n"
+                                        "\tUembed struct { type2 }\n"
+                                        ")\n"
+                                        "\n"
+                                        "func Func1()     {}\n"
+                                        "func Func1_Foo() {}\n"
+                                        "func Func1_foo() {}\n"
+                                        "func func2()     {}\n"
+                                        "\n"
+                                        "func (Type1) Func1() {}\n"
+                                        "func (Type1) Func1_Foo() {}\n"
+                                        "func (Type1) Func1_foo() {}\n"
+                                        "func (Type1) func2() {}\n"
+                                        "\n"
+                                        "func (type2) Func1() {}\n"
+                                        "\n"
+                                        "type (\n"
+                                        "\tConflict          int\n"
+                                        "\tConflict_Conflict int\n"
+                                        "\tConflict_conflict int\n"
+                                        ")\n"
+                                        "\n"
+                                        "func (Conflict) Conflict() {}\n"
+                                        "\n"
+                                        "func GFunc[T any]() {}\n"
+                                        "\n"
+                                        "type GType[T any] int\n"
+                                        "\n"
+                                        "func (GType[T]) M() {}\n";
 
 static const char gdoc_classify_test[] =
     "\n"

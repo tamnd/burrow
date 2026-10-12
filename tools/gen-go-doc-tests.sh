@@ -320,3 +320,7 @@ for m in re.finditer(r'name: "([^"]*)",\s*in: `([^`]*)`,\s*want: \[\]string\{([^
 assert n >= 6, "import group cases"
 w("};\n")
 PY
+
+if command -v clang-format >/dev/null 2>&1; then
+	clang-format -i "$out"
+fi

@@ -51,12 +51,12 @@
 #include <stdint.h>
 #include <string.h>
 
-#define S(lit) BURROW_S(lit)
+#define GB_S(lit) BURROW_S(lit)
 
 /* ---------------------------------------------------------------- helpers */
 
 BURROW_NORETURN static void gb_oom(void) {
-    panic_str(S("go/build: out of memory"));
+    panic_str(GB_S("go/build: out of memory"));
 }
 
 static void *gb_alloc(Alloc *a, size_t n) {
@@ -308,7 +308,7 @@ static const Type gb_no_go_desc = {
 const Type *const TYPE_BUILD_NO_GO_ERROR = &gb_no_go_desc;
 
 Str build_no_go_error_error(const BuildNoGoError *e, Alloc *a) {
-    return gb_cat(a, 2, S("no buildable Go source files in "), e->dir);
+    return gb_cat(a, 2, GB_S("no buildable Go source files in "), e->dir);
 }
 
 static Error gb_no_go_error(Alloc *a, Str dir);
@@ -525,12 +525,12 @@ static Str gb_env_or(Alloc *a, Str key, Str def) {
  * experiment off, as buildcfg does when it records the error. */
 static void gb_parse_goexperiment(Alloc *a, Str goos, Str goarch, Str goexp,
                                   bool on[GB_NEXP]) {
-    bool regabi = str_eq(goarch, S("amd64")) || str_eq(goarch, S("arm64")) ||
-                  str_eq(goarch, S("loong64")) || str_eq(goarch, S("ppc64le")) ||
-                  str_eq(goarch, S("ppc64")) || str_eq(goarch, S("riscv64")) ||
-                  str_eq(goarch, S("s390x"));
-    bool dwarf5 = !str_eq(goos, S("darwin")) && !str_eq(goos, S("ios")) &&
-                  !str_eq(goos, S("aix"));
+    bool regabi = str_eq(goarch, GB_S("amd64")) || str_eq(goarch, GB_S("arm64")) ||
+                  str_eq(goarch, GB_S("loong64")) || str_eq(goarch, GB_S("ppc64le")) ||
+                  str_eq(goarch, GB_S("ppc64")) || str_eq(goarch, GB_S("riscv64")) ||
+                  str_eq(goarch, GB_S("s390x"));
+    bool dwarf5 = !str_eq(goos, GB_S("darwin")) && !str_eq(goos, GB_S("ios")) &&
+                  !str_eq(goos, GB_S("aix"));
     memset(on, 0, GB_NEXP * sizeof(bool));
     on[GB_EXP_REGABI_WRAPPERS] = regabi;
     on[GB_EXP_REGABI_ARGS] = regabi;
@@ -541,21 +541,21 @@ static void gb_parse_goexperiment(Alloc *a, Str goos, Str goarch, Str goexp,
     on[GB_EXP_SIZE_SPECIALIZED_MALLOC] = true;
 
     if (goexp.len > 0) {
-        Slice parts = strings_split(a, goexp, S(","));
+        Slice parts = strings_split(a, goexp, GB_S(","));
         for (Int i = 0; i < parts.len; i++) {
             Str f = gb_at(parts, i);
             if (f.len == 0)
                 continue;
-            if (str_eq(f, S("none"))) {
+            if (str_eq(f, GB_S("none"))) {
                 memset(on, 0, GB_NEXP * sizeof(bool));
                 continue;
             }
             bool val = true;
-            if (strings_has_prefix(f, S("no"))) {
+            if (strings_has_prefix(f, GB_S("no"))) {
                 f = gb_from(f, 2);
                 val = false;
             }
-            if (str_eq(f, S("regabi"))) {
+            if (str_eq(f, GB_S("regabi"))) {
                 on[GB_EXP_REGABI_WRAPPERS] = val;
                 on[GB_EXP_REGABI_ARGS] = val;
                 continue;
@@ -578,35 +578,36 @@ static void gb_parse_goexperiment(Alloc *a, Str goos, Str goarch, Str goexp,
 
 /* buildcfg.gogoarchTags, the tags for the GOAMD64 style level of goarch. */
 static void gb_arch_tags(Alloc *a, Str goos, Str goarch, Slice *list) {
-    if (str_eq(goarch, S("386"))) {
+    if (str_eq(goarch, GB_S("386"))) {
         gb_append_str(
-            a, list, gb_cat(a, 3, goarch, S("."), gb_env_or(a, S("GO386"), S("sse2"))));
-    } else if (str_eq(goarch, S("amd64"))) {
-        Str v = gb_env_or(a, S("GOAMD64"), S("v1"));
+            a, list,
+            gb_cat(a, 3, goarch, GB_S("."), gb_env_or(a, GB_S("GO386"), GB_S("sse2"))));
+    } else if (str_eq(goarch, GB_S("amd64"))) {
+        Str v = gb_env_or(a, GB_S("GOAMD64"), GB_S("v1"));
         Int level = 1;
         if (v.len == 2 && v.p[0] == 'v' && v.p[1] >= '1' && v.p[1] <= '4')
             level = v.p[1] - '0';
         for (Int i = 1; i <= level; i++)
             gb_append_str(a, list, fmt_sprintf_v(a, "%s.v%d", goarch, i));
-    } else if (str_eq(goarch, S("arm"))) {
-        Str v = gb_env_or(a, S("GOARM"), S("7"));
-        if (strings_has_suffix(v, S(",softfloat")))
+    } else if (str_eq(goarch, GB_S("arm"))) {
+        Str v = gb_env_or(a, GB_S("GOARM"), GB_S("7"));
+        if (strings_has_suffix(v, GB_S(",softfloat")))
             v = gb_sub(v, 0, v.len - 10);
-        if (strings_has_suffix(v, S(",hardfloat")))
+        if (strings_has_suffix(v, GB_S(",hardfloat")))
             v = gb_sub(v, 0, v.len - 10);
         Int version = 7;
         if (v.len == 1 && v.p[0] >= '5' && v.p[0] <= '7')
             version = v.p[0] - '0';
         for (Int i = 5; i <= version; i++)
             gb_append_str(a, list, fmt_sprintf_v(a, "%s.%d", goarch, i));
-    } else if (str_eq(goarch, S("arm64"))) {
-        Str v = gb_env_or(a, S("GOARM64"), S("v8.0"));
+    } else if (str_eq(goarch, GB_S("arm64"))) {
+        Str v = gb_env_or(a, GB_S("GOARM64"), GB_S("v8.0"));
         for (;;) {
-            if (strings_has_suffix(v, S(",lse"))) {
+            if (strings_has_suffix(v, GB_S(",lse"))) {
                 v = gb_sub(v, 0, v.len - 4);
                 continue;
             }
-            if (strings_has_suffix(v, S(",crypto"))) {
+            if (strings_has_suffix(v, GB_S(",crypto"))) {
                 v = gb_sub(v, 0, v.len - 7);
                 continue;
             }
@@ -624,37 +625,38 @@ static void gb_arch_tags(Alloc *a, Str goos, Str goarch, Slice *list) {
                 gb_append_str(a, list,
                               fmt_sprintf_v(a, "%s.v%d.%d", goarch, (Int)8, i));
         }
-    } else if (str_eq(goarch, S("mips")) || str_eq(goarch, S("mipsle")) ||
-               str_eq(goarch, S("mips64")) || str_eq(goarch, S("mips64le"))) {
+    } else if (str_eq(goarch, GB_S("mips")) || str_eq(goarch, GB_S("mipsle")) ||
+               str_eq(goarch, GB_S("mips64")) || str_eq(goarch, GB_S("mips64le"))) {
         bool is64 = goarch.len >= 6;
-        Str v = gb_env_or(a, is64 ? S("GOMIPS64") : S("GOMIPS"), S("hardfloat"));
-        if (!str_eq(v, S("hardfloat")) && !str_eq(v, S("softfloat")))
-            v = S("hardfloat");
-        gb_append_str(a, list, gb_cat(a, 3, goarch, S("."), v));
-    } else if (str_eq(goarch, S("ppc64")) || str_eq(goarch, S("ppc64le"))) {
-        Str v = gb_env_or(a, S("GOPPC64"), S("power8"));
+        Str v =
+            gb_env_or(a, is64 ? GB_S("GOMIPS64") : GB_S("GOMIPS"), GB_S("hardfloat"));
+        if (!str_eq(v, GB_S("hardfloat")) && !str_eq(v, GB_S("softfloat")))
+            v = GB_S("hardfloat");
+        gb_append_str(a, list, gb_cat(a, 3, goarch, GB_S("."), v));
+    } else if (str_eq(goarch, GB_S("ppc64")) || str_eq(goarch, GB_S("ppc64le"))) {
+        Str v = gb_env_or(a, GB_S("GOPPC64"), GB_S("power8"));
         Int level = 8;
-        if (str_eq(v, S("power9")))
+        if (str_eq(v, GB_S("power9")))
             level = 9;
-        else if (str_eq(v, S("power10")))
+        else if (str_eq(v, GB_S("power10")))
             level = 10;
         for (Int i = 8; i <= level; i++)
             gb_append_str(a, list, fmt_sprintf_v(a, "%s.power%d", goarch, i));
-    } else if (str_eq(goarch, S("riscv64"))) {
-        Str v = gb_env_or(a, S("GORISCV64"), S("rva20u64"));
+    } else if (str_eq(goarch, GB_S("riscv64"))) {
+        Str v = gb_env_or(a, GB_S("GORISCV64"), GB_S("rva20u64"));
         Int year = 20;
-        if (str_eq(v, S("rva22u64")))
+        if (str_eq(v, GB_S("rva22u64")))
             year = 22;
-        else if (str_eq(v, S("rva23u64")))
+        else if (str_eq(v, GB_S("rva23u64")))
             year = 23;
-        gb_append_str(a, list, S("riscv64.rva20u64"));
+        gb_append_str(a, list, GB_S("riscv64.rva20u64"));
         if (year >= 22)
-            gb_append_str(a, list, S("riscv64.rva22u64"));
+            gb_append_str(a, list, GB_S("riscv64.rva22u64"));
         if (year >= 23)
-            gb_append_str(a, list, S("riscv64.rva23u64"));
-    } else if (str_eq(goarch, S("wasm"))) {
-        gb_append_str(a, list, S("wasm.satconv"));
-        gb_append_str(a, list, S("wasm.signext"));
+            gb_append_str(a, list, GB_S("riscv64.rva23u64"));
+    } else if (str_eq(goarch, GB_S("wasm"))) {
+        gb_append_str(a, list, GB_S("wasm.satconv"));
+        gb_append_str(a, list, GB_S("wasm.signext"));
     }
     (void)goos;
 }
@@ -669,15 +671,15 @@ static Str gb_host_arch(void) {
 
 /* buildcfg.ToolTags for the GOOS and GOARCH in the environment. */
 static Slice gb_default_tool_tags(Alloc *a) {
-    Str goos = gb_env_or(a, S("GOOS"), gb_host_os());
-    Str goarch = gb_env_or(a, S("GOARCH"), gb_host_arch());
+    Str goos = gb_env_or(a, GB_S("GOOS"), gb_host_os());
+    Str goarch = gb_env_or(a, GB_S("GOARCH"), gb_host_arch());
     bool on[GB_NEXP];
-    gb_parse_goexperiment(a, goos, goarch, os_getenv(a, S("GOEXPERIMENT")), on);
+    gb_parse_goexperiment(a, goos, goarch, os_getenv(a, GB_S("GOEXPERIMENT")), on);
     Slice list = slice_nil(TYPE_STRING);
     for (size_t i = 0; i < GB_NEXP; i++) {
         if (on[i])
             gb_append_str(a, &list,
-                          gb_cat(a, 2, S("goexperiment."), gb_experiments[i]));
+                          gb_cat(a, 2, GB_S("goexperiment."), gb_experiments[i]));
     }
     gb_arch_tags(a, goos, goarch, &list);
     return list;
@@ -689,7 +691,7 @@ enum { GB_GO_VERSION = 27 };
 static Slice gb_default_release_tags(Alloc *a) {
     Slice list = slice_nil(TYPE_STRING);
     for (Int i = 1; i <= GB_GO_VERSION; i++)
-        gb_append_str(a, &list, gb_cat(a, 2, S("go1."), strconv_itoa(a, i)));
+        gb_append_str(a, &list, gb_cat(a, 2, GB_S("go1."), strconv_itoa(a, i)));
     return list;
 }
 
@@ -845,7 +847,7 @@ static Slice gb_gopath(BuildContext *ctxt, Alloc *a) {
         Str p = gb_at(list, i);
         if (p.len == 0 || str_eq(p, ctxt->goroot))
             continue;
-        if (strings_has_prefix(p, S("~")))
+        if (strings_has_prefix(p, GB_S("~")))
             continue;
         gb_append_str(a, &all, p);
     }
@@ -854,14 +856,14 @@ static Slice gb_gopath(BuildContext *ctxt, Alloc *a) {
 
 Slice build_context_src_dirs(BuildContext *ctxt, Alloc *a) {
     Slice all = slice_nil(TYPE_STRING);
-    if (ctxt->goroot.len > 0 && !str_eq(ctxt->compiler, S("gccgo"))) {
-        Str dir = gb_join2(ctxt, a, ctxt->goroot, S("src"));
+    if (ctxt->goroot.len > 0 && !str_eq(ctxt->compiler, GB_S("gccgo"))) {
+        Str dir = gb_join2(ctxt, a, ctxt->goroot, GB_S("src"));
         if (gb_is_dir(ctxt, a, dir))
             gb_append_str(a, &all, dir);
     }
     Slice gopath = gb_gopath(ctxt, a);
     for (Int i = 0; i < gopath.len; i++) {
-        Str dir = gb_join2(ctxt, a, gb_at(gopath, i), S("src"));
+        Str dir = gb_join2(ctxt, a, gb_at(gopath, i), GB_S("src"));
         if (gb_is_dir(ctxt, a, dir))
             gb_append_str(a, &all, dir);
     }
@@ -872,20 +874,20 @@ Slice build_context_src_dirs(BuildContext *ctxt, Alloc *a) {
 
 /* runtime.GOROOT(), which with no toolchain behind it is just $GOROOT. */
 static Str gb_runtime_goroot(Alloc *a) {
-    return os_getenv(a, S("GOROOT"));
+    return os_getenv(a, GB_S("GOROOT"));
 }
 
 static Str gb_default_gopath(Alloc *a) {
     Str host = gb_host_os();
-    Str env = S("HOME");
-    if (str_eq(host, S("windows")))
-        env = S("USERPROFILE");
-    else if (str_eq(host, S("plan9")))
-        env = S("home");
+    Str env = GB_S("HOME");
+    if (str_eq(host, GB_S("windows")))
+        env = GB_S("USERPROFILE");
+    else if (str_eq(host, GB_S("plan9")))
+        env = GB_S("home");
     Str home = os_getenv(a, env);
     if (home.len == 0)
         return BURROW_STR_EMPTY;
-    Str def = filepath_join_v(a, 2, home, S("go"));
+    Str def = filepath_join_v(a, 2, home, GB_S("go"));
     if (str_eq(filepath_clean(a, def), filepath_clean(a, gb_runtime_goroot(a))))
         return BURROW_STR_EMPTY;
     return def;
@@ -894,51 +896,52 @@ static Str gb_default_gopath(Alloc *a) {
 BuildContext build_default(Alloc *a) {
     BuildContext c;
     memset(&c, 0, sizeof c);
-    c.goarch = gb_env_or(a, S("GOARCH"), gb_host_arch());
-    c.goos = gb_env_or(a, S("GOOS"), gb_host_os());
+    c.goarch = gb_env_or(a, GB_S("GOARCH"), gb_host_arch());
+    c.goos = gb_env_or(a, GB_S("GOOS"), gb_host_os());
     Str goroot = gb_runtime_goroot(a);
     if (goroot.len > 0)
         c.goroot = filepath_clean(a, goroot);
-    c.gopath = gb_env_or(a, S("GOPATH"), gb_default_gopath(a));
-    c.compiler = S("gc");
+    c.gopath = gb_env_or(a, GB_S("GOPATH"), gb_default_gopath(a));
+    c.compiler = GB_S("gc");
     c.tool_tags = gb_default_tool_tags(a);
     c.release_tags = gb_default_release_tags(a);
 
     /* cgo must be explicitly enabled for cross compilation builds. */
-    Str env = os_getenv(a, S("CGO_ENABLED"));
+    Str env = os_getenv(a, GB_S("CGO_ENABLED"));
     c.cgo_enabled = false;
-    if (str_eq(env, S("1")))
+    if (str_eq(env, GB_S("1")))
         c.cgo_enabled = true;
-    else if (!str_eq(env, S("0")) && str_eq(gb_host_arch(), c.goarch) &&
+    else if (!str_eq(env, GB_S("0")) && str_eq(gb_host_arch(), c.goarch) &&
              str_eq(gb_host_os(), c.goos))
         c.cgo_enabled = gb_cgo_supported(c.goos, c.goarch);
     return c;
 }
 
 Str build_tool_dir(Alloc *a) {
-    Str dir = gb_cat(a, 4, S("pkg/tool/"), gb_host_os(), S("_"), gb_host_arch());
+    Str dir = gb_cat(a, 4, GB_S("pkg/tool/"), gb_host_os(), GB_S("_"), gb_host_arch());
     return filepath_join_v(a, 2, gb_runtime_goroot(a), dir);
 }
 
 /* ---------------------------------------------------------------- package */
 
 bool build_package_is_command(const BuildPackage *p) {
-    return str_eq(p->name, S("main"));
+    return str_eq(p->name, GB_S("main"));
 }
 
 bool build_is_local_import(Str path) {
-    return str_eq(path, S(".")) || str_eq(path, S("..")) ||
-           strings_has_prefix(path, S("./")) || strings_has_prefix(path, S("../"));
+    return str_eq(path, GB_S(".")) || str_eq(path, GB_S("..")) ||
+           strings_has_prefix(path, GB_S("./")) ||
+           strings_has_prefix(path, GB_S("../"));
 }
 
 Str build_arch_char(Str goarch, Error *err) {
     (void)goarch;
     *err = gb_err_arch_char;
-    return S("?");
+    return GB_S("?");
 }
 
 static Str gb_name_ext(Str name) {
-    Int i = strings_last_index(name, S("."));
+    Int i = strings_last_index(name, GB_S("."));
     if (i < 0)
         return BURROW_STR_EMPTY;
     return gb_from(name, i);
@@ -946,25 +949,26 @@ static Str gb_name_ext(Str name) {
 
 /* fileListForExt: the list in p that files with ext go in, or NULL. */
 static Slice *gb_file_list_for_ext(BuildPackage *p, Str ext) {
-    if (str_eq(ext, S(".c")))
+    if (str_eq(ext, GB_S(".c")))
         return &p->c_files;
-    if (str_eq(ext, S(".cc")) || str_eq(ext, S(".cpp")) || str_eq(ext, S(".cxx")))
+    if (str_eq(ext, GB_S(".cc")) || str_eq(ext, GB_S(".cpp")) ||
+        str_eq(ext, GB_S(".cxx")))
         return &p->cxx_files;
-    if (str_eq(ext, S(".m")))
+    if (str_eq(ext, GB_S(".m")))
         return &p->m_files;
-    if (str_eq(ext, S(".h")) || str_eq(ext, S(".hh")) || str_eq(ext, S(".hpp")) ||
-        str_eq(ext, S(".hxx")))
+    if (str_eq(ext, GB_S(".h")) || str_eq(ext, GB_S(".hh")) ||
+        str_eq(ext, GB_S(".hpp")) || str_eq(ext, GB_S(".hxx")))
         return &p->h_files;
-    if (str_eq(ext, S(".f")) || str_eq(ext, S(".F")) || str_eq(ext, S(".for")) ||
-        str_eq(ext, S(".f90")))
+    if (str_eq(ext, GB_S(".f")) || str_eq(ext, GB_S(".F")) ||
+        str_eq(ext, GB_S(".for")) || str_eq(ext, GB_S(".f90")))
         return &p->f_files;
-    if (str_eq(ext, S(".s")) || str_eq(ext, S(".S")) || str_eq(ext, S(".sx")))
+    if (str_eq(ext, GB_S(".s")) || str_eq(ext, GB_S(".S")) || str_eq(ext, GB_S(".sx")))
         return &p->s_files;
-    if (str_eq(ext, S(".swig")))
+    if (str_eq(ext, GB_S(".swig")))
         return &p->swig_files;
-    if (str_eq(ext, S(".swigcxx")))
+    if (str_eq(ext, GB_S(".swigcxx")))
         return &p->swig_cxx_files;
-    if (str_eq(ext, S(".syso")))
+    if (str_eq(ext, GB_S(".syso")))
         return &p->syso_files;
     return NULL;
 }
@@ -981,21 +985,21 @@ static bool gb_match_tag(BuildContext *ctxt, Str name, Map *all_tags) {
     if (all_tags != NULL)
         gb_set_true(all_tags, name);
 
-    if (ctxt->cgo_enabled && str_eq(name, S("cgo")))
+    if (ctxt->cgo_enabled && str_eq(name, GB_S("cgo")))
         return true;
     if (str_eq(name, ctxt->goos) || str_eq(name, ctxt->goarch) ||
         str_eq(name, ctxt->compiler))
         return true;
-    if (str_eq(ctxt->goos, S("android")) && str_eq(name, S("linux")))
+    if (str_eq(ctxt->goos, GB_S("android")) && str_eq(name, GB_S("linux")))
         return true;
-    if (str_eq(ctxt->goos, S("illumos")) && str_eq(name, S("solaris")))
+    if (str_eq(ctxt->goos, GB_S("illumos")) && str_eq(name, GB_S("solaris")))
         return true;
-    if (str_eq(ctxt->goos, S("ios")) && str_eq(name, S("darwin")))
+    if (str_eq(ctxt->goos, GB_S("ios")) && str_eq(name, GB_S("darwin")))
         return true;
-    if (str_eq(name, S("unix")) && gb_in(gb_unix_os, GB_LEN(gb_unix_os), ctxt->goos))
+    if (str_eq(name, GB_S("unix")) && gb_in(gb_unix_os, GB_LEN(gb_unix_os), ctxt->goos))
         return true;
-    if (str_eq(name, S("boringcrypto")))
-        name = S("goexperiment.boringcrypto"); /* the old name for it */
+    if (str_eq(name, GB_S("boringcrypto")))
+        name = GB_S("goexperiment.boringcrypto"); /* the old name for it */
 
     return gb_contains(ctxt->build_tags, name) || gb_contains(ctxt->tool_tags, name) ||
            gb_contains(ctxt->release_tags, name);
@@ -1019,10 +1023,10 @@ static bool gb_eval(BuildContext *ctxt, ConstraintExpr x, Map *all_tags) {
 /* matchAuto: text as a //go:build expression if it has operators in it and as
  * a // +build line if not. */
 static bool gb_match_auto(BuildContext *ctxt, Alloc *a, Str text, Map *all_tags) {
-    if (strings_contains_any(text, S("&|()")))
-        text = gb_cat(a, 2, S("//go:build "), text);
+    if (strings_contains_any(text, GB_S("&|()")))
+        text = gb_cat(a, 2, GB_S("//go:build "), text);
     else
-        text = gb_cat(a, 2, S("// +build "), text);
+        text = gb_cat(a, 2, GB_S("// +build "), text);
     Error err = BURROW_NO_ERROR;
     ConstraintExpr x = constraint_parse(a, text, &err);
     if (BURROW_FAILED(err))
@@ -1042,14 +1046,14 @@ static bool gb_good_os_arch_file(BuildContext *ctxt, Alloc *a, Str name,
     if (dot >= 0)
         name = gb_sub(name, 0, dot);
 
-    Int i = strings_index(name, S("_"));
+    Int i = strings_index(name, GB_S("_"));
     if (i < 0)
         return true;
     name = gb_from(name, i); /* what comes before the first _ does not count */
 
-    Slice l = strings_split(a, name, S("_"));
+    Slice l = strings_split(a, name, GB_S("_"));
     Int n = l.len;
-    if (n > 0 && str_eq(gb_at(l, n - 1), S("test")))
+    if (n > 0 && str_eq(gb_at(l, n - 1), GB_S("test")))
         n--;
     if (n >= 2 && gb_known_os_has(gb_at(l, n - 2)) &&
         gb_known_arch_has(gb_at(l, n - 1))) {
@@ -1073,7 +1077,7 @@ bool burrow__build_good_os_arch_file(BuildContext *ctxt, Alloc *a, Str name,
 }
 
 static bool gb_is_go_build_comment(Str line) {
-    if (!strings_has_prefix(line, S("//go:build")))
+    if (!strings_has_prefix(line, GB_S("//go:build")))
         return false;
     line = strings_trim_space(line);
     Str rest = gb_from(line, 10);
@@ -1107,7 +1111,7 @@ static Str gb_parse_file_header(Str content, Str *go_build, bool *saw_binary_onl
             end = content.len - p.len;
             continue;
         }
-        if (!strings_has_prefix(line, S("//"))) /* not a line comment */
+        if (!strings_has_prefix(line, GB_S("//"))) /* not a line comment */
             ended = true;
 
         if (!in_slash_star && gb_is_go_build_comment(line)) {
@@ -1118,14 +1122,14 @@ static Str gb_parse_file_header(Str content, Str *go_build, bool *saw_binary_onl
             *go_build = line;
             have_go_build = true;
         }
-        if (!in_slash_star && str_eq(line, S("//go:binary-only-package")))
+        if (!in_slash_star && str_eq(line, GB_S("//go:binary-only-package")))
             *saw_binary_only = true;
 
         /* Find where the comments end. */
         bool next_line = false;
         while (line.len > 0) {
             if (in_slash_star) {
-                Int j = strings_index(line, S("*/"));
+                Int j = strings_index(line, GB_S("*/"));
                 if (j >= 0) {
                     in_slash_star = false;
                     line = strings_trim_space(gb_from(line, j + 2));
@@ -1134,11 +1138,11 @@ static Str gb_parse_file_header(Str content, Str *go_build, bool *saw_binary_onl
                 next_line = true;
                 break;
             }
-            if (strings_has_prefix(line, S("//"))) {
+            if (strings_has_prefix(line, GB_S("//"))) {
                 next_line = true;
                 break;
             }
-            if (strings_has_prefix(line, S("/*"))) {
+            if (strings_has_prefix(line, GB_S("/*"))) {
                 in_slash_star = true;
                 line = strings_trim_space(gb_from(line, 2));
                 continue;
@@ -1187,8 +1191,8 @@ static bool gb_should_build(BuildContext *ctxt, Alloc *a, Str content, Map *all_
                 p = gb_from(p, p.len);
             }
             line = strings_trim_space(line);
-            if (!strings_has_prefix(line, S("//")) ||
-                !strings_contains(line, S("+build")))
+            if (!strings_has_prefix(line, GB_S("//")) ||
+                !strings_contains(line, GB_S("+build")))
                 continue;
             if (!constraint_is_plus_build(line))
                 continue;
@@ -1229,7 +1233,7 @@ static bool gb_safe_cgo_name(Str s) {
  * is safe. */
 static Str gb_expand_src_dir(Alloc *a, Str str, Str srcdir, bool *ok) {
     srcdir = filepath_to_slash(a, srcdir);
-    Slice chunks = strings_split(a, str, S("${SRCDIR}"));
+    Slice chunks = strings_split(a, str, GB_S("${SRCDIR}"));
     if (chunks.len < 2) {
         *ok = gb_safe_cgo_name(str);
         return str;
@@ -1259,8 +1263,8 @@ static void gb_make_paths_absolute(Alloc *a, Slice args, Str src_dir) {
             if (!filepath_is_abs(arg))
                 BURROW_AT(Str, args, i) = filepath_join_v(a, 2, src_dir, arg);
             next_path = false;
-        } else if (strings_has_prefix(arg, S("-I")) ||
-                   strings_has_prefix(arg, S("-L"))) {
+        } else if (strings_has_prefix(arg, GB_S("-I")) ||
+                   strings_has_prefix(arg, GB_S("-L"))) {
             if (arg.len == 2) {
                 next_path = true;
             } else if (!filepath_is_abs(gb_from(arg, 2))) {
@@ -1327,24 +1331,25 @@ static Slice gb_split_quoted(Alloc *a, Str s, Error *err) {
 static Error gb_save_cgo(BuildContext *ctxt, Alloc *a, Str filename, BuildPackage *di,
                          AstCommentGroup *cg) {
     Str text = ast_comment_group_text(cg, a);
-    Slice lines = strings_split(a, text, S("\n"));
+    Slice lines = strings_split(a, text, GB_S("\n"));
     for (Int li = 0; li < lines.len; li++) {
         Str orig = gb_at(lines, li);
         Str line = strings_trim_space(orig);
-        if (line.len < 5 || !strings_has_prefix(line, S("#cgo")) ||
+        if (line.len < 5 || !strings_has_prefix(line, GB_S("#cgo")) ||
             (line.p[4] != ' ' && line.p[4] != '\t'))
             continue;
 
         /* #cgo nocallback and #cgo noescape are for cgo itself. */
         Slice fields = strings_fields(a, line);
-        if (fields.len == 3 && (str_eq(gb_at(fields, 1), S("nocallback")) ||
-                                str_eq(gb_at(fields, 1), S("noescape"))))
+        if (fields.len == 3 && (str_eq(gb_at(fields, 1), GB_S("nocallback")) ||
+                                str_eq(gb_at(fields, 1), GB_S("noescape"))))
             continue;
 
         /* #cgo [GOOS/GOARCH...] LDFLAGS: stuff */
         Str argstr = BURROW_STR_EMPTY;
         bool ok = false;
-        line = strings_cut(strings_trim_space(gb_from(line, 4)), S(":"), &argstr, &ok);
+        line =
+            strings_cut(strings_trim_space(gb_from(line, 4)), GB_S(":"), &argstr, &ok);
         if (!ok)
             return fmt_errorf_v("%s: invalid #cgo line: %s", filename, orig);
 
@@ -1377,23 +1382,23 @@ static Error gb_save_cgo(BuildContext *ctxt, Alloc *a, Str filename, BuildPackag
             BURROW_AT(Str, args, i) = arg;
         }
 
-        if (str_eq(verb, S("CFLAGS")) || str_eq(verb, S("CPPFLAGS")) ||
-            str_eq(verb, S("CXXFLAGS")) || str_eq(verb, S("FFLAGS")) ||
-            str_eq(verb, S("LDFLAGS")))
+        if (str_eq(verb, GB_S("CFLAGS")) || str_eq(verb, GB_S("CPPFLAGS")) ||
+            str_eq(verb, GB_S("CXXFLAGS")) || str_eq(verb, GB_S("FFLAGS")) ||
+            str_eq(verb, GB_S("LDFLAGS")))
             gb_make_paths_absolute(a, args, di->dir);
 
         Slice *dst = NULL;
-        if (str_eq(verb, S("CFLAGS")))
+        if (str_eq(verb, GB_S("CFLAGS")))
             dst = &di->cgo_cflags;
-        else if (str_eq(verb, S("CPPFLAGS")))
+        else if (str_eq(verb, GB_S("CPPFLAGS")))
             dst = &di->cgo_cppflags;
-        else if (str_eq(verb, S("CXXFLAGS")))
+        else if (str_eq(verb, GB_S("CXXFLAGS")))
             dst = &di->cgo_cxxflags;
-        else if (str_eq(verb, S("FFLAGS")))
+        else if (str_eq(verb, GB_S("FFLAGS")))
             dst = &di->cgo_fflags;
-        else if (str_eq(verb, S("LDFLAGS")))
+        else if (str_eq(verb, GB_S("LDFLAGS")))
             dst = &di->cgo_ldflags;
-        else if (str_eq(verb, S("pkg-config")))
+        else if (str_eq(verb, GB_S("pkg-config")))
             dst = &di->cgo_pkg_config;
         else
             return fmt_errorf_v("%s: invalid #cgo verb: %s", filename, orig);
@@ -1412,16 +1417,16 @@ static Str gb_skip_space_or_comment(Str data) {
             continue;
         }
         if (c == '/') {
-            if (strings_has_prefix(data, S("//"))) {
+            if (strings_has_prefix(data, GB_S("//"))) {
                 Int i = strings_index_byte(data, '\n');
                 if (i < 0)
                     return BURROW_STR_EMPTY;
                 data = gb_from(data, i + 1);
                 continue;
             }
-            if (strings_has_prefix(data, S("/*"))) {
+            if (strings_has_prefix(data, GB_S("/*"))) {
                 data = gb_from(data, 2);
-                Int i = strings_index(data, S("*/"));
+                Int i = strings_index(data, GB_S("*/"));
                 if (i < 0)
                     return BURROW_STR_EMPTY;
                 data = gb_from(data, i + 2);
@@ -1462,7 +1467,7 @@ static Str gb_parse_word(Str data, Str *rest) {
 static Str gb_find_import_comment(Str data, Int *line) {
     *line = 0;
     Str word = gb_parse_word(data, &data);
-    if (!str_eq(word, S("package")))
+    if (!str_eq(word, GB_S("package")))
         return BURROW_STR_EMPTY;
 
     gb_parse_word(data, &data); /* the name */
@@ -1472,13 +1477,13 @@ static Str gb_find_import_comment(Str data, Int *line) {
         data = gb_from(data, 1);
 
     Str comment = BURROW_STR_EMPTY;
-    if (strings_has_prefix(data, S("//"))) {
+    if (strings_has_prefix(data, GB_S("//"))) {
         Str rest = gb_from(data, 2);
         Int i = strings_index_byte(rest, '\n');
         comment = i < 0 ? rest : gb_sub(rest, 0, i);
-    } else if (strings_has_prefix(data, S("/*"))) {
+    } else if (strings_has_prefix(data, GB_S("/*"))) {
         Str rest = gb_from(data, 2);
-        Int i = strings_index(rest, S("*/"));
+        Int i = strings_index(rest, GB_S("*/"));
         if (i < 0)
             return BURROW_STR_EMPTY;
         comment = gb_sub(rest, 0, i);
@@ -1489,7 +1494,7 @@ static Str gb_find_import_comment(Str data, Int *line) {
 
     Str arg = BURROW_STR_EMPTY;
     word = gb_parse_word(comment, &arg);
-    if (!str_eq(word, S("import")))
+    if (!str_eq(word, GB_S("import")))
         return BURROW_STR_EMPTY;
 
     /* The newlines in data before arg. */
@@ -1518,15 +1523,15 @@ static void gb_close_quiet(IoReadCloser f) {
 static burrow__BuildFileInfo *gb_match_file(BuildContext *ctxt, Alloc *a, Str dir,
                                             Str name, Map *all_tags, bool *binary_only,
                                             TokenFileSet *fset, Error *err) {
-    if (strings_has_prefix(name, S("_")) || strings_has_prefix(name, S(".")))
+    if (strings_has_prefix(name, GB_S("_")) || strings_has_prefix(name, GB_S(".")))
         return NULL;
 
-    Int i = strings_last_index(name, S("."));
+    Int i = strings_last_index(name, GB_S("."));
     if (i < 0)
         i = name.len;
     Str ext = gb_from(name, i);
 
-    if (!str_eq(ext, S(".go")) && !gb_known_ext(ext))
+    if (!str_eq(ext, GB_S(".go")) && !gb_known_ext(ext))
         return NULL;
 
     if (!gb_good_os_arch_file(ctxt, a, name, all_tags) && !ctxt->use_all_files)
@@ -1536,7 +1541,7 @@ static burrow__BuildFileInfo *gb_match_file(BuildContext *ctxt, Alloc *a, Str di
     info->name = gb_join2(ctxt, a, dir, name);
     info->fset = fset;
     info->parse_err = BURROW_NO_ERROR;
-    if (str_eq(ext, S(".syso"))) {
+    if (str_eq(ext, GB_S(".syso"))) {
         /* binary, no reading */
         return info;
     }
@@ -1549,9 +1554,9 @@ static burrow__BuildFileInfo *gb_match_file(BuildContext *ctxt, Alloc *a, Str di
     }
 
     Error rerr = BURROW_NO_ERROR;
-    if (strings_has_suffix(name, S(".go"))) {
+    if (strings_has_suffix(name, GB_S(".go"))) {
         rerr = burrow__build_read_go_info(a, io_read_closer_as_io_reader(f), info);
-        if (strings_has_suffix(name, S("_test.go")))
+        if (strings_has_suffix(name, GB_S("_test.go")))
             binary_only = NULL; /* //go:binary-only-package means nothing in a test */
     } else {
         binary_only = NULL; /* nor in a file that is not Go */
@@ -1613,8 +1618,8 @@ static Error gb_import_go(BuildContext *ctxt, Alloc *a, BuildPackage *p, Str pat
     if (ctxt->goroot.len == 0)
         return gb_err_no_modules;
 
-    Str go111module = os_getenv(a, S("GO111MODULE"));
-    if (str_eq(go111module, S("off")))
+    Str go111module = os_getenv(a, GB_S("GO111MODULE"));
+    if (str_eq(go111module, GB_S("off")))
         return gb_err_no_modules;
 
     /* Packages under GOROOT/src are found the old way. */
@@ -1633,19 +1638,19 @@ static Error gb_import_go(BuildContext *ctxt, Alloc *a, BuildPackage *p, Str pat
                 return gb_err_no_modules;
         }
         bool ok = false;
-        gb_has_subdir(ctxt, a, filepath_join_v(a, 2, ctxt->goroot, S("src")),
+        gb_has_subdir(ctxt, a, filepath_join_v(a, 2, ctxt->goroot, GB_S("src")),
                       abs_src_dir, &ok);
         if (ok)
             return gb_err_no_modules;
     }
 
     /* So is a standard package. */
-    Str stddir = gb_join3(ctxt, a, ctxt->goroot, S("src"), path);
+    Str stddir = gb_join3(ctxt, a, ctxt->goroot, GB_S("src"), path);
     if (gb_is_dir(ctxt, a, stddir))
         return gb_err_no_modules;
 
     /* With GO111MODULE=auto, module mode only inside a module. */
-    if (str_eq(go111module, S("auto"))) {
+    if (str_eq(go111module, GB_S("auto"))) {
         Str parent = BURROW_STR_EMPTY;
         Error perr = BURROW_NO_ERROR;
         if (ctxt->dir.len == 0) {
@@ -1660,7 +1665,7 @@ static Error gb_import_go(BuildContext *ctxt, Alloc *a, BuildPackage *p, Str pat
         for (;;) {
             Error oerr = BURROW_NO_ERROR;
             IoReadCloser f =
-                gb_open_file(ctxt, a, gb_join2(ctxt, a, parent, S("go.mod")), &oerr);
+                gb_open_file(ctxt, a, gb_join2(ctxt, a, parent, GB_S("go.mod")), &oerr);
             if (BURROW_OK(oerr)) {
                 Byte buf[100];
                 Error rerr = BURROW_NO_ERROR;
@@ -1677,14 +1682,15 @@ static Error gb_import_go(BuildContext *ctxt, Alloc *a, BuildPackage *p, Str pat
         }
     }
 
-    Str go_cmd = filepath_join_v(a, 3, ctxt->goroot, S("bin"), S("go"));
-    Slice args =
-        gb_strs(a, 8, S("list"), S("-e"), gb_cat(a, 2, S("-compiler="), ctxt->compiler),
-                gb_cat(a, 2, S("-tags="), strings_join(a, ctxt->build_tags, S(","))),
-                gb_cat(a, 2, S("-installsuffix="), ctxt->install_suffix),
-                S("-f={{.Dir}}\n{{.ImportPath}}\n{{.Root}}\n{{.Goroot}}\n{{if "
-                  ".Error}}{{.Error}}{{end}}\n"),
-                S("--"), path);
+    Str go_cmd = filepath_join_v(a, 3, ctxt->goroot, GB_S("bin"), GB_S("go"));
+    Slice args = gb_strs(
+        a, 8, GB_S("list"), GB_S("-e"),
+        gb_cat(a, 2, GB_S("-compiler="), ctxt->compiler),
+        gb_cat(a, 2, GB_S("-tags="), strings_join(a, ctxt->build_tags, GB_S(","))),
+        gb_cat(a, 2, GB_S("-installsuffix="), ctxt->install_suffix),
+        GB_S("-f={{.Dir}}\n{{.ImportPath}}\n{{.Root}}\n{{.Goroot}}\n{{if "
+             ".Error}}{{.Error}}{{end}}\n"),
+        GB_S("--"), path);
     ExecCmd *cmd = exec_command(a, go_cmd, args);
     if (cmd == NULL)
         gb_oom();
@@ -1697,13 +1703,13 @@ static Error gb_import_go(BuildContext *ctxt, Alloc *a, BuildPackage *p, Str pat
     cmd->stdout_ = strings_builder_as_io_writer(&stdout_b);
     cmd->stderr_ = strings_builder_as_io_writer(&stderr_b);
 
-    Str cgo = ctxt->cgo_enabled ? S("1") : S("0");
+    Str cgo = ctxt->cgo_enabled ? GB_S("1") : GB_S("0");
     Slice env = exec_cmd_environ(cmd, a);
-    gb_append_str(a, &env, gb_cat(a, 2, S("GOOS="), ctxt->goos));
-    gb_append_str(a, &env, gb_cat(a, 2, S("GOARCH="), ctxt->goarch));
-    gb_append_str(a, &env, gb_cat(a, 2, S("GOROOT="), ctxt->goroot));
-    gb_append_str(a, &env, gb_cat(a, 2, S("GOPATH="), ctxt->gopath));
-    gb_append_str(a, &env, gb_cat(a, 2, S("CGO_ENABLED="), cgo));
+    gb_append_str(a, &env, gb_cat(a, 2, GB_S("GOOS="), ctxt->goos));
+    gb_append_str(a, &env, gb_cat(a, 2, GB_S("GOARCH="), ctxt->goarch));
+    gb_append_str(a, &env, gb_cat(a, 2, GB_S("GOROOT="), ctxt->goroot));
+    gb_append_str(a, &env, gb_cat(a, 2, GB_S("GOPATH="), ctxt->gopath));
+    gb_append_str(a, &env, gb_cat(a, 2, GB_S("CGO_ENABLED="), cgo));
     cmd->env = env;
 
     Error rerr = exec_cmd_run(cmd);
@@ -1716,7 +1722,7 @@ static Error gb_import_go(BuildContext *ctxt, Alloc *a, BuildPackage *p, Str pat
     exec_cmd_free(cmd);
 
     Str output = strings_builder_string(&stdout_b);
-    Slice f = strings_split_n(a, output, S("\n"), 5);
+    Slice f = strings_split_n(a, output, GB_S("\n"), 5);
     if (f.len != 5)
         return fmt_errorf_v("go/build: importGo %s: unexpected output:\n%s\n", path,
                             output);
@@ -1730,7 +1736,7 @@ static Error gb_import_go(BuildContext *ctxt, Alloc *a, BuildPackage *p, Str pat
     p->dir = dir;
     p->import_path = gb_at(f, 1);
     p->root = gb_at(f, 2);
-    p->goroot = str_eq(gb_at(f, 3), S("true"));
+    p->goroot = str_eq(gb_at(f, 3), GB_S("true"));
     return BURROW_NO_ERROR;
 }
 
@@ -1745,7 +1751,7 @@ static bool gb_has_go_files(BuildContext *ctxt, Alloc *a, Str dir) {
     for (Int i = 0; i < ents.len; i++) {
         FsDirEntry ent = BURROW_AT(FsDirEntry, ents, i);
         if (!ent.vt->is_dir(ent.data) &&
-            strings_has_suffix(ent.vt->name(ent.data), S(".go")))
+            strings_has_suffix(ent.vt->name(ent.data), GB_S(".go")))
             return true;
     }
     return false;
@@ -1775,28 +1781,30 @@ static Str gb_command_output(Alloc *a, Str bin, Str arg, bool *ok) {
  * not there to say. Go asks once, and this asks each time. */
 static Slice gb_gccgo_dirs(Alloc *a) {
     Slice dirs_out = {0};
-    Str gccgo = gb_env_or(a, S("GCCGO"), S("gccgo"));
+    Str gccgo = gb_env_or(a, GB_S("GCCGO"), GB_S("gccgo"));
     Error err = BURROW_NO_ERROR;
     Str bin = exec_look_path(a, gccgo, &err);
     if (BURROW_FAILED(err))
         return dirs_out;
 
     bool ok = false;
-    Str all = gb_command_output(a, bin, S("-print-search-dirs"), &ok);
+    Str all = gb_command_output(a, bin, GB_S("-print-search-dirs"), &ok);
     if (!ok)
         return dirs_out;
-    Str version = strings_trim_space(gb_command_output(a, bin, S("-dumpversion"), &ok));
+    Str version =
+        strings_trim_space(gb_command_output(a, bin, GB_S("-dumpversion"), &ok));
     if (!ok)
         return dirs_out;
-    Str machine = strings_trim_space(gb_command_output(a, bin, S("-dumpmachine"), &ok));
+    Str machine =
+        strings_trim_space(gb_command_output(a, bin, GB_S("-dumpmachine"), &ok));
     if (!ok)
         return dirs_out;
 
-    Slice entries = strings_split(a, all, S("\n"));
+    Slice entries = strings_split(a, all, GB_S("\n"));
     Slice dirs = {0};
     for (Int i = 0; i < entries.len; i++) {
         bool found = false;
-        Str after = strings_cut_prefix(gb_at(entries, i), S("libraries: ="), &found);
+        Str after = strings_cut_prefix(gb_at(entries, i), GB_S("libraries: ="), &found);
         if (found) {
             dirs = filepath_split_list(a, after);
             break;
@@ -1808,7 +1816,7 @@ static Slice gb_gccgo_dirs(Alloc *a) {
     Slice last = {0};
     for (Int i = 0; i < dirs.len; i++) {
         Str dir = gb_at(dirs, i);
-        Str go_dir = filepath_join_v(a, 3, dir, S("go"), version);
+        Str go_dir = filepath_join_v(a, 3, dir, GB_S("go"), version);
         if (gb_stat_is_dir(a, go_dir, true)) {
             gb_append_str(a, &dirs_out, go_dir);
             go_dir = filepath_join_v(a, 2, go_dir, machine);
@@ -1824,12 +1832,12 @@ static Slice gb_gccgo_dirs(Alloc *a) {
 
 /* goroot.IsStandardPackage for gccgo. */
 static bool gb_gccgo_is_standard(Alloc *a, Str path) {
-    Int i = strings_index(path, S("/"));
+    Int i = strings_index(path, GB_S("/"));
     if (i < 0)
         i = path.len;
-    if (strings_contains(gb_sub(path, 0, i), S(".")))
+    if (strings_contains(gb_sub(path, 0, i), GB_S(".")))
         return false;
-    if (str_eq(path, S("unsafe")))
+    if (str_eq(path, GB_S("unsafe")))
         return true; /* unsafe has no .gox */
 
     Slice dirs = gb_gccgo_dirs(a);
@@ -1837,7 +1845,8 @@ static bool gb_gccgo_is_standard(Alloc *a, Str path) {
         return true; /* no gccgo to ask, so call it standard */
 
     for (Int k = 0; k < dirs.len; k++) {
-        Str full = gb_cat(a, 2, filepath_join_v(a, 2, gb_at(dirs, k), path), S(".gox"));
+        Str full =
+            gb_cat(a, 2, filepath_join_v(a, 2, gb_at(dirs, k), path), GB_S(".gox"));
         if (gb_stat_is_dir(a, full, false))
             return true;
     }
@@ -1848,17 +1857,17 @@ static bool gb_gccgo_is_standard(Alloc *a, Str path) {
 
 /* GODEBUG=installgoroot=all, the last setting of it winning. */
 static bool gb_install_goroot_all(Alloc *a) {
-    Str godebug = os_getenv(a, S("GODEBUG"));
+    Str godebug = os_getenv(a, GB_S("GODEBUG"));
     if (godebug.len == 0)
         return false;
     bool all = false;
-    Slice parts = strings_split(a, godebug, S(","));
+    Slice parts = strings_split(a, godebug, GB_S(","));
     for (Int i = 0; i < parts.len; i++) {
         Str kv = gb_at(parts, i);
         bool found = false;
-        Str v = strings_cut_prefix(kv, S("installgoroot="), &found);
+        Str v = strings_cut_prefix(kv, GB_S("installgoroot="), &found);
         if (found)
-            all = str_eq(v, S("all"));
+            all = str_eq(v, GB_S("all"));
     }
     return all;
 }
@@ -1881,20 +1890,21 @@ typedef struct GbImport {
 static void gb_set_pkga(GbImport *im) {
     BuildContext *ctxt = im->ctxt;
     Alloc *a = im->a;
-    if (str_eq(ctxt->compiler, S("gccgo"))) {
+    if (str_eq(ctxt->compiler, GB_S("gccgo"))) {
         Str elem = BURROW_STR_EMPTY;
         Str dir = path_split(im->p->import_path, &elem);
+        im->pkga = gb_cat(a, 6, im->pkgtargetroot, GB_S("/"), dir, GB_S("lib"), elem,
+                          GB_S(".a"));
+    } else if (str_eq(ctxt->compiler, GB_S("gc"))) {
         im->pkga =
-            gb_cat(a, 6, im->pkgtargetroot, S("/"), dir, S("lib"), elem, S(".a"));
-    } else if (str_eq(ctxt->compiler, S("gc"))) {
-        im->pkga = gb_cat(a, 4, im->pkgtargetroot, S("/"), im->p->import_path, S(".a"));
+            gb_cat(a, 4, im->pkgtargetroot, GB_S("/"), im->p->import_path, GB_S(".a"));
     }
 }
 
 static bool gb_in_testdata(Str sub) {
-    return strings_contains(sub, S("/testdata/")) ||
-           strings_has_suffix(sub, S("/testdata")) ||
-           strings_has_prefix(sub, S("testdata/")) || str_eq(sub, S("testdata"));
+    return strings_contains(sub, GB_S("/testdata/")) ||
+           strings_has_suffix(sub, GB_S("/testdata")) ||
+           strings_has_prefix(sub, GB_S("testdata/")) || str_eq(sub, GB_S("testdata"));
 }
 
 /* searchVendor: the vendor directories from src_dir up to root, the first
@@ -1904,17 +1914,17 @@ static bool gb_search_vendor(GbImport *im, Str root, bool is_goroot) {
     Alloc *a = im->a;
     bool ok = false;
     Str sub = gb_has_subdir(ctxt, a, root, im->src_dir, &ok);
-    if (!ok || !strings_has_prefix(sub, S("src/")) ||
-        strings_contains(sub, S("/testdata/")))
+    if (!ok || !strings_has_prefix(sub, GB_S("src/")) ||
+        strings_contains(sub, GB_S("/testdata/")))
         return false;
     for (;;) {
-        Str vendor = gb_join3(ctxt, a, root, sub, S("vendor"));
+        Str vendor = gb_join3(ctxt, a, root, sub, GB_S("vendor"));
         if (gb_is_dir(ctxt, a, vendor)) {
             Str dir = gb_join2(ctxt, a, vendor, im->path);
             if (gb_is_dir(ctxt, a, dir) && gb_has_go_files(ctxt, a, dir)) {
                 im->p->dir = dir;
                 im->p->import_path = strings_trim_prefix(
-                    path_join_v(a, 3, sub, S("vendor"), im->path), S("src/"));
+                    path_join_v(a, 3, sub, GB_S("vendor"), im->path), GB_S("src/"));
                 im->p->goroot = is_goroot;
                 im->p->root = root;
                 gb_set_pkga(im);
@@ -1922,7 +1932,7 @@ static bool gb_search_vendor(GbImport *im, Str root, bool is_goroot) {
             }
             gb_append_str(a, &im->tried_vendor, dir);
         }
-        Int i = strings_last_index(sub, S("/"));
+        Int i = strings_last_index(sub, GB_S("/"));
         if (i < 0)
             break;
         sub = gb_sub(sub, 0, i);
@@ -1974,13 +1984,13 @@ BuildPackage *build_context_import(BuildContext *ctxt, Alloc *a, Str path, Str s
     Error pkgerr = BURROW_NO_ERROR;
     Str suffix = BURROW_STR_EMPTY;
     if (ctxt->install_suffix.len > 0)
-        suffix = gb_cat(a, 2, S("_"), ctxt->install_suffix);
-    if (str_eq(ctxt->compiler, S("gccgo")))
+        suffix = gb_cat(a, 2, GB_S("_"), ctxt->install_suffix);
+    if (str_eq(ctxt->compiler, GB_S("gccgo")))
+        im.pkgtargetroot = gb_cat(a, 5, GB_S("pkg/gccgo_"), ctxt->goos, GB_S("_"),
+                                  ctxt->goarch, suffix);
+    else if (str_eq(ctxt->compiler, GB_S("gc")))
         im.pkgtargetroot =
-            gb_cat(a, 5, S("pkg/gccgo_"), ctxt->goos, S("_"), ctxt->goarch, suffix);
-    else if (str_eq(ctxt->compiler, S("gc")))
-        im.pkgtargetroot =
-            gb_cat(a, 5, S("pkg/"), ctxt->goos, S("_"), ctxt->goarch, suffix);
+            gb_cat(a, 5, GB_S("pkg/"), ctxt->goos, GB_S("_"), ctxt->goarch, suffix);
     else
         pkgerr = fmt_errorf_v("import %q: unknown compiler %q", path, ctxt->compiler);
     gb_set_pkga(&im);
@@ -1998,7 +2008,7 @@ BuildPackage *build_context_import(BuildContext *ctxt, Alloc *a, Str path, Str s
         /* A local path that is in GOROOT or GOPATH gets the import path it would
          * have there. */
         if (ctxt->goroot.len > 0) {
-            Str root = gb_join2(ctxt, a, ctxt->goroot, S("src"));
+            Str root = gb_join2(ctxt, a, ctxt->goroot, GB_S("src"));
             bool ok = false;
             Str sub = gb_has_subdir(ctxt, a, root, p->dir, &ok);
             if (ok && !gb_in_testdata(sub)) {
@@ -2012,21 +2022,21 @@ BuildPackage *build_context_import(BuildContext *ctxt, Alloc *a, Str path, Str s
         Slice all = gb_gopath(ctxt, a);
         for (Int i = 0; i < all.len; i++) {
             Str root = gb_at(all, i);
-            Str rootsrc = gb_join2(ctxt, a, root, S("src"));
+            Str rootsrc = gb_join2(ctxt, a, root, GB_S("src"));
             bool ok = false;
             Str sub = gb_has_subdir(ctxt, a, rootsrc, p->dir, &ok);
             if (ok && !gb_in_testdata(sub)) {
                 /* A package earlier on the search path hides this one, which is
                  * then left with no import path. */
-                if (ctxt->goroot.len > 0 && !str_eq(ctxt->compiler, S("gccgo"))) {
-                    Str dir = gb_join3(ctxt, a, ctxt->goroot, S("src"), sub);
+                if (ctxt->goroot.len > 0 && !str_eq(ctxt->compiler, GB_S("gccgo"))) {
+                    Str dir = gb_join3(ctxt, a, ctxt->goroot, GB_S("src"), sub);
                     if (gb_is_dir(ctxt, a, dir)) {
                         p->conflict_dir = dir;
                         goto found;
                     }
                 }
                 for (Int j = 0; j < i; j++) {
-                    Str dir = gb_join3(ctxt, a, gb_at(all, j), S("src"), sub);
+                    Str dir = gb_join3(ctxt, a, gb_at(all, j), GB_S("src"), sub);
                     if (gb_is_dir(ctxt, a, dir)) {
                         p->conflict_dir = dir;
                         goto found;
@@ -2041,7 +2051,7 @@ BuildPackage *build_context_import(BuildContext *ctxt, Alloc *a, Str path, Str s
         }
         /* Not in any tree: no import path. */
     } else {
-        if (strings_has_prefix(path, S("/"))) {
+        if (strings_has_prefix(path, GB_S("/"))) {
             *err = fmt_errorf_v("import %q: cannot import absolute path", path);
             return p;
         }
@@ -2060,7 +2070,7 @@ BuildPackage *build_context_import(BuildContext *ctxt, Alloc *a, Str path, Str s
 
         /* Vendor directories first. */
         if ((mode & BUILD_IGNORE_VENDOR) == 0 && src_dir.len > 0) {
-            if (!str_eq(ctxt->compiler, S("gccgo")) && ctxt->goroot.len > 0 &&
+            if (!str_eq(ctxt->compiler, GB_S("gccgo")) && ctxt->goroot.len > 0 &&
                 gb_search_vendor(&im, ctxt->goroot, true))
                 goto found;
             for (Int i = 0; i < gopath.len; i++) {
@@ -2073,12 +2083,12 @@ BuildPackage *build_context_import(BuildContext *ctxt, Alloc *a, Str path, Str s
          * looks in GOPATH first. */
         if (ctxt->goroot.len > 0) {
             bool goroot_first =
-                src_dir.len == 0 || !strings_has_prefix(path, S("vendor/"));
+                src_dir.len == 0 || !strings_has_prefix(path, GB_S("vendor/"));
             if (!goroot_first)
                 gb_has_subdir(ctxt, a, ctxt->goroot, src_dir, &goroot_first);
             if (goroot_first) {
-                Str dir = gb_join3(ctxt, a, ctxt->goroot, S("src"), path);
-                if (!str_eq(ctxt->compiler, S("gccgo"))) {
+                Str dir = gb_join3(ctxt, a, ctxt->goroot, GB_S("src"), path);
+                if (!str_eq(ctxt->compiler, GB_S("gccgo"))) {
                     bool is_dir = gb_is_dir(ctxt, a, dir);
                     binary_only =
                         !is_dir && (mode & BUILD_ALLOW_BINARY) != 0 &&
@@ -2093,9 +2103,10 @@ BuildPackage *build_context_import(BuildContext *ctxt, Alloc *a, Str path, Str s
                 }
                 tried_goroot = dir;
             }
-            if (str_eq(ctxt->compiler, S("gccgo")) && gb_gccgo_is_standard(a, path)) {
+            if (str_eq(ctxt->compiler, GB_S("gccgo")) &&
+                gb_gccgo_is_standard(a, path)) {
                 /* gccgo keeps no sources for its standard library */
-                p->dir = gb_join3(ctxt, a, ctxt->goroot, S("src"), path);
+                p->dir = gb_join3(ctxt, a, ctxt->goroot, GB_S("src"), path);
                 p->goroot = true;
                 p->root = ctxt->goroot;
                 goto found;
@@ -2103,7 +2114,7 @@ BuildPackage *build_context_import(BuildContext *ctxt, Alloc *a, Str path, Str s
         }
         for (Int i = 0; i < gopath.len; i++) {
             Str root = gb_at(gopath, i);
-            Str dir = gb_join3(ctxt, a, root, S("src"), path);
+            Str dir = gb_join3(ctxt, a, root, GB_S("src"), path);
             bool is_dir = gb_is_dir(ctxt, a, dir);
             binary_only = !is_dir && (mode & BUILD_ALLOW_BINARY) != 0 &&
                           im.pkga.len > 0 &&
@@ -2118,8 +2129,8 @@ BuildPackage *build_context_import(BuildContext *ctxt, Alloc *a, Str path, Str s
 
         /* GOROOT last, when it was passed over above. */
         if (ctxt->goroot.len > 0 && tried_goroot.len == 0) {
-            Str dir = gb_join3(ctxt, a, ctxt->goroot, S("src"), path);
-            if (!str_eq(ctxt->compiler, S("gccgo"))) {
+            Str dir = gb_join3(ctxt, a, ctxt->goroot, GB_S("src"), path);
+            if (!str_eq(ctxt->compiler, GB_S("gccgo"))) {
                 bool is_dir = gb_is_dir(ctxt, a, dir);
                 binary_only =
                     !is_dir && (mode & BUILD_ALLOW_BINARY) != 0 && im.pkga.len > 0 &&
@@ -2148,7 +2159,7 @@ BuildPackage *build_context_import(BuildContext *ctxt, Alloc *a, Str path, Str s
             gb_append_str(a, &paths,
                           fmt_sprintf_v(a, "\t%s (from $GOROOT)", tried_goroot));
         else
-            gb_append_str(a, &paths, S("\t($GOROOT not set)"));
+            gb_append_str(a, &paths, GB_S("\t($GOROOT not set)"));
         first = true;
         for (Int i = 0; i < tried_gopath.len; i++) {
             Str dir = gb_at(tried_gopath, i);
@@ -2160,23 +2171,23 @@ BuildPackage *build_context_import(BuildContext *ctxt, Alloc *a, Str path, Str s
         if (tried_gopath.len == 0)
             gb_append_str(
                 a, &paths,
-                S("\t($GOPATH not set. For more details see: 'go help gopath')"));
-        Str list = strings_join(a, paths, S("\n"));
+                GB_S("\t($GOPATH not set. For more details see: 'go help gopath')"));
+        Str list = strings_join(a, paths, GB_S("\n"));
         *err = fmt_errorf_v("cannot find package %q in any of:\n%s", path, list);
         return p;
     }
 
 found:
     if (p->root.len > 0) {
-        p->src_root = gb_join2(ctxt, a, p->root, S("src"));
-        p->pkg_root = gb_join2(ctxt, a, p->root, S("pkg"));
-        p->bin_dir = gb_join2(ctxt, a, p->root, S("bin"));
+        p->src_root = gb_join2(ctxt, a, p->root, GB_S("src"));
+        p->pkg_root = gb_join2(ctxt, a, p->root, GB_S("pkg"));
+        p->bin_dir = gb_join2(ctxt, a, p->root, GB_S("bin"));
         if (im.pkga.len > 0) {
             /* A GOROOT package has no .a file unless GODEBUG says otherwise. */
             p->pkg_target_root = gb_join2(ctxt, a, p->root, im.pkgtargetroot);
             if (!p->goroot ||
-                (gb_install_goroot_all(a) && !str_eq(p->import_path, S("unsafe")) &&
-                 !str_eq(p->import_path, S("builtin"))))
+                (gb_install_goroot_all(a) && !str_eq(p->import_path, GB_S("unsafe")) &&
+                 !str_eq(p->import_path, GB_S("builtin"))))
                 p->pkg_obj = gb_join2(ctxt, a, p->root, im.pkga);
         }
     }
@@ -2184,7 +2195,7 @@ found:
     /* A local import whose directory is not there is an error, and gccgo's
      * standard packages have no directory. */
     if (build_is_local_import(path) && !gb_is_dir(ctxt, a, p->dir)) {
-        if (str_eq(ctxt->compiler, S("gccgo")) && p->goroot)
+        if (str_eq(ctxt->compiler, GB_S("gccgo")) && p->goroot)
             return p;
         *err = fmt_errorf_v("cannot find package %q in:\n\t%s", p->import_path, p->dir);
         return p;
@@ -2199,7 +2210,7 @@ found:
         return p;
     }
 
-    if (str_eq(ctxt->compiler, S("gccgo")) && p->goroot)
+    if (str_eq(ctxt->compiler, GB_S("gccgo")) && p->goroot)
         return p;
 
     Error derr = BURROW_NO_ERROR;
@@ -2240,14 +2251,15 @@ found:
         Error merr = BURROW_NO_ERROR;
         burrow__BuildFileInfo *info = gb_match_file(ctxt, a, p->dir, name, all_tags,
                                                     &p->binary_only, fset, &merr);
-        if (BURROW_FAILED(merr) && strings_has_suffix(name, S(".go"))) {
+        if (BURROW_FAILED(merr) && strings_has_suffix(name, GB_S(".go"))) {
             gb_bad_go_file(&im, name, merr);
             continue;
         }
         if (info == NULL) {
-            if (strings_has_prefix(name, S("_")) || strings_has_prefix(name, S("."))) {
+            if (strings_has_prefix(name, GB_S("_")) ||
+                strings_has_prefix(name, GB_S("."))) {
                 /* not even listed as ignored */
-            } else if (str_eq(ext, S(".go"))) {
+            } else if (str_eq(ext, GB_S(".go"))) {
                 gb_append_str(a, &p->ignored_go_files, name);
             } else if (gb_file_list_for_ext(p, ext) != NULL) {
                 gb_append_str(a, &p->ignored_other_files, name);
@@ -2256,11 +2268,11 @@ found:
         }
 
         /* Everything but .go files goes straight on its list. */
-        if (str_eq(ext, S(".S")) || str_eq(ext, S(".sx"))) {
+        if (str_eq(ext, GB_S(".S")) || str_eq(ext, GB_S(".sx"))) {
             gb_append_str(a, &s_upper_files, name);
             continue;
         }
-        if (!str_eq(ext, S(".go"))) {
+        if (!str_eq(ext, GB_S(".go"))) {
             Slice *list = gb_file_list_for_ext(p, ext);
             if (list != NULL)
                 gb_append_str(a, list, name);
@@ -2276,15 +2288,16 @@ found:
         Str pkg = BURROW_STR_EMPTY;
         if (info->parsed != NULL) {
             pkg = info->parsed->name->name;
-            if (str_eq(pkg, S("documentation"))) {
+            if (str_eq(pkg, GB_S("documentation"))) {
                 gb_append_str(a, &p->ignored_go_files, name);
                 continue;
             }
         }
 
-        bool is_test = strings_has_suffix(name, S("_test.go"));
+        bool is_test = strings_has_suffix(name, GB_S("_test.go"));
         bool is_x_test = false;
-        if (is_test && strings_has_suffix(pkg, S("_test")) && !str_eq(p->name, pkg)) {
+        if (is_test && strings_has_suffix(pkg, GB_S("_test")) &&
+            !str_eq(p->name, pkg)) {
             is_x_test = true;
             pkg = gb_sub(pkg, 0, pkg.len - 5);
         }
@@ -2332,7 +2345,7 @@ found:
         for (Int i = 0; i < info->imports.len; i++) {
             burrow__BuildFileImport *imp =
                 &BURROW_AT(burrow__BuildFileImport, info->imports, i);
-            if (!str_eq(imp->path, S("C")))
+            if (!str_eq(imp->path, GB_S("C")))
                 continue;
             if (is_test) {
                 gb_bad_go_file(
@@ -2353,7 +2366,7 @@ found:
         Map *embed_map = NULL;
         Slice *directives = NULL;
         if (is_cgo) {
-            gb_set_true(all_tags, S("cgo"));
+            gb_set_true(all_tags, GB_S("cgo"));
             if (ctxt->cgo_enabled) {
                 file_list = &p->cgo_files;
                 import_map = import_pos;
@@ -2441,7 +2454,7 @@ found:
 
 BuildPackage *build_context_import_dir(BuildContext *ctxt, Alloc *a, Str dir,
                                        BuildImportMode mode, Error *err) {
-    return build_context_import(ctxt, a, S("."), dir, mode, err);
+    return build_context_import(ctxt, a, GB_S("."), dir, mode, err);
 }
 
 BuildPackage *build_import(Alloc *a, Str path, Str src_dir, BuildImportMode mode,

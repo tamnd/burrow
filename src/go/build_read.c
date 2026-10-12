@@ -33,7 +33,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#define S(lit) BURROW_S(lit)
+#define GBR_S(lit) BURROW_S(lit)
 
 static const Type gbr_file_import_desc = {
     {(const Byte *)"fileImport", 10},
@@ -75,7 +75,7 @@ static const Str gbr_nul_text = {(const Byte *)"unexpected NUL in input", 23};
 static const Error gbr_err_nul = {&burrow_sentinel_error_vt, &gbr_nul_text};
 
 BURROW_NORETURN static void gbr_oom(void) {
-    panic_str(S("go/build: out of memory"));
+    panic_str(GBR_S("go/build: out of memory"));
 }
 
 /* x then y, in a. */
@@ -204,7 +204,7 @@ static Byte gbr_peek_byte(GbrReader *r, bool skip_space) {
     if (BURROW_FAILED(r->err)) {
         r->nerr++;
         if (r->nerr > 10000)
-            panic_str(S("go/build: import reader looping"));
+            panic_str(GBR_S("go/build: import reader looping"));
         return 0;
     }
 
@@ -357,7 +357,7 @@ static Error gbr_parse_go_embed(Alloc *a, TokenFileSet *fset, TokenPos pos, Str 
                                 Slice *list) {
     bool ok = false;
     AstDirective dir = ast_parse_directive(pos, comment, &ok);
-    if (!ok || !str_eq(dir.tool, S("go")) || !str_eq(dir.name, S("embed")))
+    if (!ok || !str_eq(dir.tool, GBR_S("go")) || !str_eq(dir.name, GBR_S("embed")))
         return BURROW_NO_ERROR;
     Error err = BURROW_NO_ERROR;
     Slice args = ast_directive_parse_args(&dir, a, &err);
@@ -375,10 +375,10 @@ Error burrow__build_read_go_info(Alloc *a, IoReader f, burrow__BuildFileInfo *in
     GbrReader r;
     gbr_init(&r, a, info->name, f);
 
-    gbr_read_keyword(&r, S("package"));
+    gbr_read_keyword(&r, GBR_S("package"));
     gbr_read_ident(&r);
     while (gbr_peek_byte(&r, true) == 'i') {
-        gbr_read_keyword(&r, S("import"));
+        gbr_read_keyword(&r, GBR_S("import"));
         if (gbr_peek_byte(&r, true) == '(') {
             gbr_next_byte(&r, false);
             while (gbr_peek_byte(&r, true) != ')' && BURROW_OK(r.err))
@@ -450,7 +450,7 @@ Error burrow__build_read_go_info(Alloc *a, IoReader f, burrow__BuildFileInfo *in
                 /* The parser used to report these and no longer does. Go makes
                  * a lone *scanner.Error, and a list of one says the same. */
                 GoScannerErrorList list = {0};
-                Str msg = gbr_cat(a, S("invalid import path: "), path);
+                Str msg = gbr_cat(a, GBR_S("invalid import path: "), path);
                 go_scanner_error_list_add(
                     &list, error_allocator(),
                     token_file_set_position(info->fset, ast_node_pos(dspec)), msg);
@@ -459,7 +459,7 @@ Error burrow__build_read_go_info(Alloc *a, IoReader f, burrow__BuildFileInfo *in
                 bufio_reader_free(r.b);
                 return BURROW_NO_ERROR;
             }
-            if (str_eq(path, S("embed")))
+            if (str_eq(path, GBR_S("embed")))
                 has_embed = true;
 
             AstCommentGroup *doc = spec->doc;
@@ -479,7 +479,7 @@ Error burrow__build_read_go_info(Alloc *a, IoReader f, burrow__BuildFileInfo *in
             break;
         for (Int j = 0; j < group->list.len; j++) {
             AstComment *c = BURROW_AT(AstComment *, group->list, j);
-            if (strings_has_prefix(c->text, S("//go:"))) {
+            if (strings_has_prefix(c->text, GBR_S("//go:"))) {
                 BuildDirective dv = {c->text,
                                      token_file_set_position(info->fset, c->slash)};
                 if (info->directives.elem == NULL)
@@ -509,7 +509,7 @@ Error burrow__build_read_go_info(Alloc *a, IoReader f, burrow__BuildFileInfo *in
             TokenPos pos = go_scanner_scan(&sc, &tok, &lit);
             if (tok == TOKEN_EOF)
                 break;
-            if (tok == TOKEN_COMMENT && strings_has_prefix(lit, S("//go:embed"))) {
+            if (tok == TOKEN_COMMENT && strings_has_prefix(lit, GBR_S("//go:embed"))) {
                 /* A bad line is left for the compiler to report, so that go
                  * list can still say what it knows. */
                 Slice embs = slice_nil(&gbr_file_embed_desc);

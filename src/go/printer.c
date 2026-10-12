@@ -44,10 +44,10 @@
 #include <stdint.h>
 #include <string.h>
 
-#define S(lit) BURROW_S(lit)
+#define GP_S(lit) BURROW_S(lit)
 
 BURROW_NORETURN static void pt_oom(void) {
-    panic_str(S("go/printer: out of memory"));
+    panic_str(GP_S("go/printer: out of memory"));
 }
 
 /* ------------------------------------------------------------------ state */
@@ -318,7 +318,7 @@ static Int pt_lines_from(PtPrinter *p, Int line) {
 static void pt_write_line_directive(PtPrinter *p, TokenPosition pos) {
     if (pt_valid(pos) &&
         (p->out.line != pos.line || !str_eq(p->out.filename, pos.filename))) {
-        if (strings_contains_any(pos.filename, S("\r\n"))) {
+        if (strings_contains_any(pos.filename, GP_S("\r\n"))) {
             if (!BURROW_FAILED(p->source_pos_err))
                 p->source_pos_err = fmt_errorf_v(
                     "go/printer: source filename contains unexpected newline "
@@ -625,10 +625,10 @@ static void pt_strip_common_prefix(PtPrinter *p, Str *lines, Int n) {
     /* a vertical line of stars changes the prefix */
     bool line_of_stars = false;
     bool ok = false;
-    Str before = strings_cut(prefix, S("*"), NULL, &ok);
+    Str before = strings_cut(prefix, GP_S("*"), NULL, &ok);
     if (ok) {
         /* drop a trailing blank so the stars stay aligned */
-        prefix = strings_trim_suffix(before, S(" "));
+        prefix = strings_trim_suffix(before, GP_S(" "));
         line_of_stars = true;
     } else {
         /* No line of stars. Find the white space on the first line after
@@ -673,12 +673,12 @@ static void pt_strip_common_prefix(PtPrinter *p, Str *lines, Int n) {
     /* The last line: align a closing on its own with the opening, and
      * otherwise align the text with the other lines. */
     Str last = lines[n - 1];
-    Str closing = S("*/");
+    Str closing = GP_S("*/");
     Str head = strings_cut(last, closing, NULL, NULL); /* closing is always there */
     if (pt_is_blank(head)) {
         /* the last line is only the closing */
         if (line_of_stars)
-            closing = S(" */"); /* a blank to align the last star */
+            closing = GP_S(" */"); /* a blank to align the last star */
         lines[n - 1] = pt_concat(p, prefix, closing);
     } else {
         /* the last line has more text: take it to be aligned like the
@@ -700,7 +700,8 @@ static void pt_write_comment(PtPrinter *p, AstComment *comment) {
 
     Int saved_indent = p->indent;
     bool restore = false;
-    if (strings_has_prefix(text, S("//line ")) && (!pt_valid(pos) || pos.column == 1)) {
+    if (strings_has_prefix(text, GP_S("//line ")) &&
+        (!pt_valid(pos) || pos.column == 1)) {
         /* Possibly a //-style line directive. Suspend indentation for a
          * while to keep it valid. */
         restore = true;
@@ -721,7 +722,7 @@ static void pt_write_comment(PtPrinter *p, AstComment *comment) {
 
     /* A block comment goes out line by line and the write functions take
      * care of the indentation. */
-    Slice ls = strings_split(p->a, text, S("\n"));
+    Slice ls = strings_split(p->a, text, GP_S("\n"));
     if (ls.p == NULL && ls.len > 0)
         pt_oom();
     Str *lines = (Str *)ls.p;
@@ -733,7 +734,7 @@ static void pt_write_comment(PtPrinter *p, AstComment *comment) {
      * 1835). */
     if (pt_valid(pos) && pos.column == 1 && p->indent > 0) {
         for (Int i = 1; i < n; i++)
-            lines[i] = pt_concat(p, S("   "), lines[i]);
+            lines[i] = pt_concat(p, GP_S("   "), lines[i]);
     }
 
     pt_strip_common_prefix(p, lines, n);
@@ -1170,12 +1171,13 @@ static Slice pt_comments_slice(PtComments l) {
 static bool pt_is_directive(Str c) {
     /* "//line " is a line directive, "//extern " is for gccgo and
      * "//export " for cgo. */
-    if (strings_has_prefix(c, S("line ")) || strings_has_prefix(c, S("extern ")) ||
-        strings_has_prefix(c, S("export ")))
+    if (strings_has_prefix(c, GP_S("line ")) ||
+        strings_has_prefix(c, GP_S("extern ")) ||
+        strings_has_prefix(c, GP_S("export ")))
         return true;
 
     /* "//[a-z0-9]+:[a-z0-9]" */
-    Int colon = strings_index(c, S(":"));
+    Int colon = strings_index(c, GP_S(":"));
     if (colon <= 0 || colon + 1 >= c.len)
         return false;
     for (Int i = 0; i <= colon + 1; i++) {
@@ -1210,10 +1212,10 @@ static Slice pt_format_doc_comment(PtPrinter *p, Slice list) {
     Str text = BURROW_STR_EMPTY;
     PtComments directives = {0};
     AstComment *first = PT_AT(list, AstComment *, 0);
-    if (list.len == 1 && strings_has_prefix(first->text, S("/*"))) {
+    if (list.len == 1 && strings_has_prefix(first->text, GP_S("/*"))) {
         block = true;
         text = first->text;
-        if (!strings_contains(text, S("\n")) || pt_all_stars(text)) {
+        if (!strings_contains(text, GP_S("\n")) || pt_all_stars(text)) {
             /* A one line block comment in doc comment position, or an old
              * style one with a column of stars. Neither works well as a doc
              * comment and reformatting only makes them worse, so leave them
@@ -1221,13 +1223,13 @@ static Slice pt_format_doc_comment(PtPrinter *p, Slice list) {
             return list;
         }
         text = str_from_bytes(text.p + 2, text.len - 4); /* cut the markers */
-    } else if (strings_has_prefix(first->text, S("//"))) {
+    } else if (strings_has_prefix(first->text, GP_S("//"))) {
         Byte *buf = NULL;
         Int n = 0, cap = 0;
         for (Int i = 0; i < list.len; i++) {
             AstComment *c = PT_AT(list, AstComment *, i);
             bool found = false;
-            Str after = strings_cut_prefix(c->text, S("//"), &found);
+            Str after = strings_cut_prefix(c->text, GP_S("//"), &found);
             if (!found)
                 return list;
             /* //go:build and other directive lines go aside */
@@ -1235,7 +1237,7 @@ static Slice pt_format_doc_comment(PtPrinter *p, Slice list) {
                 pt_comments_push(p, &directives, c);
                 continue;
             }
-            after = strings_trim_prefix(after, S(" "));
+            after = strings_trim_prefix(after, GP_S(" "));
             pt_bytes_grow(p->a, &buf, &cap, n + after.len + 1);
             if (after.len > 0)
                 memcpy(buf + n, after.p, (size_t)after.len);
@@ -1261,7 +1263,7 @@ static Slice pt_format_doc_comment(PtPrinter *p, Slice list) {
     TokenPos slash = first->slash;
     PtComments out = {0};
     if (block) {
-        Str t = pt_concat(p, pt_concat(p, S("/*\n"), text), S("*/"));
+        Str t = pt_concat(p, pt_concat(p, GP_S("/*\n"), text), GP_S("*/"));
         pt_comments_push(p, &out, pt_new_comment(p, slash, t));
         return pt_comments_slice(out);
     }
@@ -1269,18 +1271,18 @@ static Slice pt_format_doc_comment(PtPrinter *p, Slice list) {
     /* a // comment comes back as a // line for each line */
     while (text.len > 0) {
         Str rest = BURROW_STR_EMPTY;
-        Str line = strings_cut(text, S("\n"), &rest, NULL);
+        Str line = strings_cut(text, GP_S("\n"), &rest, NULL);
         text = rest;
         if (line.len == 0)
-            line = S("//");
-        else if (strings_has_prefix(line, S("\t")))
-            line = pt_concat(p, S("//"), line);
+            line = GP_S("//");
+        else if (strings_has_prefix(line, GP_S("\t")))
+            line = pt_concat(p, GP_S("//"), line);
         else
-            line = pt_concat(p, S("// "), line);
+            line = pt_concat(p, GP_S("// "), line);
         pt_comments_push(p, &out, pt_new_comment(p, slash, line));
     }
     if (directives.len > 0) {
-        pt_comments_push(p, &out, pt_new_comment(p, slash, S("//")));
+        pt_comments_push(p, &out, pt_new_comment(p, slash, GP_S("//")));
         for (Int i = 0; i < directives.len; i++)
             pt_comments_push(p, &out, pt_new_comment(p, slash, directives.p[i]->text));
     }
@@ -1446,7 +1448,7 @@ static void pt_fix_go_build_lines(PtPrinter *p) {
         }
     } else {
         pt_buf_byte(p, &block, TABWRITER_ESCAPE);
-        pt_buf_str(p, &block, S("//go:build "));
+        pt_buf_str(p, &block, GP_S("//go:build "));
         pt_buf_str(p, &block, constraint_expr_string(x, p->a));
         pt_buf_byte(p, &block, TABWRITER_ESCAPE);
         pt_buf_byte(p, &block, '\n');
@@ -1454,7 +1456,7 @@ static void pt_fix_go_build_lines(PtPrinter *p) {
             Error err = BURROW_NO_ERROR;
             Slice lines = constraint_plus_build_lines(p->a, x, &err);
             if (BURROW_FAILED(err)) {
-                Str line = pt_concat(p, S("// +build error: "), error_text(err));
+                Str line = pt_concat(p, GP_S("// +build error: "), error_text(err));
                 lines = (Slice){pt_alloc(p, sizeof(Str)), 1, 1, TYPE_STRING};
                 PT_AT(lines, Str, 0) = line;
             }
@@ -1618,11 +1620,11 @@ static void pt_expr_list(PtPrinter *p, TokenPos prev0, Slice list, Int depth, In
             TokenPosition prev = pt_pos_for(p, prev0);
             TokenPosition next = pt_pos_for(p, next0);
             if (pt_valid(prev) && prev.line == next.line) {
-                pt_text(p, S("/* " PT_FILTERED_MSG " */"));
+                pt_text(p, GP_S("/* " PT_FILTERED_MSG " */"));
             } else {
                 pt_ws(p, PT_NEWLINE);
                 pt_ws(p, PT_INDENT);
-                pt_text(p, S("// " PT_FILTERED_MSG));
+                pt_text(p, GP_S("// " PT_FILTERED_MSG));
                 pt_ws2(p, PT_UNINDENT, PT_NEWLINE);
             }
         }
@@ -1648,7 +1650,7 @@ static void pt_expr_list(PtPrinter *p, TokenPos prev0, Slice list, Int depth, In
         }
         if (is_incomplete) {
             pt_tok_ws(p, TOKEN_COMMA, PT_BLANK);
-            pt_text(p, S("/* " PT_FILTERED_MSG " */"));
+            pt_text(p, GP_S("/* " PT_FILTERED_MSG " */"));
         }
         return;
     }
@@ -1780,7 +1782,7 @@ static void pt_expr_list(PtPrinter *p, TokenPos prev0, Slice list, Int depth, In
         pt_tok(p, TOKEN_COMMA);
         if (is_incomplete) {
             pt_ws(p, PT_NEWLINE);
-            pt_text(p, S("// " PT_FILTERED_MSG));
+            pt_text(p, GP_S("// " PT_FILTERED_MSG));
         }
         if (ws == PT_IGNORE && (mode & PT_NO_INDENT) == 0) {
             /* unindent if indented */
@@ -1792,7 +1794,7 @@ static void pt_expr_list(PtPrinter *p, TokenPos prev0, Slice list, Int depth, In
 
     if (is_incomplete) {
         pt_tok_ws(p, TOKEN_COMMA, PT_NEWLINE);
-        pt_text(p, S("// " PT_FILTERED_MSG));
+        pt_text(p, GP_S("// " PT_FILTERED_MSG));
         pt_ws(p, PT_NEWLINE);
     }
 
@@ -2098,7 +2100,7 @@ static void pt_field_list(PtPrinter *p, AstFieldList *fields, bool is_struct,
             bool dropped_ff = false;
             pt_flush(p, pt_pos_for(p, rbrace), TOKEN_RBRACE, &wrote_newline,
                      &dropped_ff);
-            pt_set_line_comment(p, S("// " PT_FILTERED_MSG));
+            pt_set_line_comment(p, GP_S("// " PT_FILTERED_MSG));
         }
         pt_forget_line(p, &line);
     } else { /* interface */
@@ -2134,7 +2136,7 @@ static void pt_field_list(PtPrinter *p, AstFieldList *fields, bool is_struct,
             bool dropped_ff = false;
             pt_flush(p, pt_pos_for(p, rbrace), TOKEN_RBRACE, &wrote_newline,
                      &dropped_ff);
-            pt_set_line_comment(p, S("// contains filtered or unexported methods"));
+            pt_set_line_comment(p, GP_S("// contains filtered or unexported methods"));
         }
         pt_forget_line(p, &line);
     }
@@ -2348,11 +2350,11 @@ static AstBasicLit *pt_normalized_number(PtPrinter *p, AstBasicLit *lit) {
         Int i = strings_last_index_byte(out, 'E');
         if (i >= 0) {
             x[i] = 'e';
-        } else if (x[n - 1] == 'i' && !strings_contains_any(out, S(".e"))) {
+        } else if (x[n - 1] == 'i' && !strings_contains_any(out, GP_S(".e"))) {
             /* leading zeros off an integer (not a float) imaginary */
-            out = strings_trim_left(out, S("0_"));
+            out = strings_trim_left(out, GP_S("0_"));
             if (out.len == 1)
-                out = S("0i");
+                out = GP_S("0i");
         }
     }
 
@@ -2476,7 +2478,7 @@ static void pt_expr1(PtPrinter *p, AstExpr expr, Int prec1, Int depth) {
 
     switch ((int)PT_KIND(expr)) {
     case AST_KIND_BAD_EXPR:
-        pt_text(p, S("BadExpr"));
+        pt_text(p, GP_S("BadExpr"));
         break;
 
     case AST_KIND_IDENT:
@@ -2710,7 +2712,7 @@ static void pt_expr1(PtPrinter *p, AstExpr expr, Int prec1, Int depth) {
     }
 
     default:
-        panic_str(S("unreachable"));
+        panic_str(GP_S("unreachable"));
     }
 }
 
@@ -2910,7 +2912,7 @@ static void pt_stmt(PtPrinter *p, AstStmt stmt, bool next_is_rbrace) {
 
     switch ((int)PT_KIND(stmt)) {
     case AST_KIND_BAD_STMT:
-        pt_text(p, S("BadStmt"));
+        pt_text(p, GP_S("BadStmt"));
         break;
 
     case AST_KIND_DECL_STMT:
@@ -3152,7 +3154,7 @@ static void pt_stmt(PtPrinter *p, AstStmt stmt, bool next_is_rbrace) {
     }
 
     default:
-        panic_str(S("unreachable"));
+        panic_str(GP_S("unreachable"));
     }
 }
 
@@ -3254,7 +3256,7 @@ static AstBasicLit *pt_sanitize_import_path(PtPrinter *p, AstBasicLit *lit) {
      * replacement character U+FFFD." */
     if (s.len == 0)
         return lit;
-    Str illegal = S("!\"#$%&'()*,:;<=>?[\\]^{|}`");
+    Str illegal = GP_S("!\"#$%&'()*,:;<=>?[\\]^{|}`");
     for (Int i = 0; i < s.len;) {
         Int size = 0;
         Rune r = utf8_decode_rune_in_string(str_from_bytes(s.p + i, s.len - i), &size);
@@ -3330,7 +3332,7 @@ static void pt_spec(PtPrinter *p, AstSpec spec, Int n, bool do_indent) {
     }
 
     default:
-        panic_str(S("unreachable"));
+        panic_str(GP_S("unreachable"));
     }
 }
 
@@ -3584,7 +3586,7 @@ static void pt_decl(PtPrinter *p, AstDecl decl) {
     switch ((int)PT_KIND(decl)) {
     case AST_KIND_BAD_DECL:
         pt_set_pos_node(p, decl);
-        pt_text(p, S("BadDecl"));
+        pt_text(p, GP_S("BadDecl"));
         break;
     case AST_KIND_GEN_DECL:
         pt_gen_decl(p, (AstGenDecl *)decl);
@@ -3593,7 +3595,7 @@ static void pt_decl(PtPrinter *p, AstDecl decl) {
         pt_func_decl(p, (AstFuncDecl *)decl);
         break;
     default:
-        panic_str(S("unreachable"));
+        panic_str(GP_S("unreachable"));
     }
 }
 
@@ -3895,7 +3897,7 @@ static Int pt_trimmer_write(void *self, Slice data, Error *err) {
             }
             break;
         default:
-            panic_str(S("unreachable"));
+            panic_str(GP_S("unreachable"));
         }
         if (BURROW_FAILED(*err))
             return n;
@@ -4011,8 +4013,8 @@ static bool pt_classify(Any v, PtTarget *t, AstNode *bad) {
         return true;
     }
     bool ast_ptr = v.t->kind == KIND_POINTER &&
-                   (str_eq(v.t->pkg_path, S("go/ast")) ||
-                    (v.t->elem != NULL && str_eq(v.t->elem->pkg_path, S("go/ast"))));
+                   (str_eq(v.t->pkg_path, GP_S("go/ast")) ||
+                    (v.t->elem != NULL && str_eq(v.t->elem->pkg_path, GP_S("go/ast"))));
     /* an ast.Object or ast.Scope is not a node and has no kind to look at */
     if (!ast_ptr || v.t == &burrow_type_AstObjectPtr || v.t == &burrow_type_AstScopePtr)
         return false;
@@ -4037,8 +4039,8 @@ Error printer_config_fprint(const PrinterConfig *cfg, Alloc *a, IoWriter output,
     if (node.t == TYPE_PRINTER_COMMENTED_NODE_PTR && node.data != NULL) {
         const PrinterCommentedNode *cn = *(PrinterCommentedNode *const *)node.data;
         if (cn == NULL)
-            panic_str(S("runtime error: invalid memory address or nil pointer "
-                        "dereference"));
+            panic_str(GP_S("runtime error: invalid memory address or nil pointer "
+                           "dereference"));
         t.commented = true;
         t.comments = cn->comments;
         node = cn->node;
@@ -4050,7 +4052,7 @@ Error printer_config_fprint(const PrinterConfig *cfg, Alloc *a, IoWriter output,
     if (!ok) {
         if (bad != NULL) {
             const Type *bt = ast_node_type(bad);
-            Str name = bt != NULL ? bt->name : S("Node");
+            Str name = bt != NULL ? bt->name : GP_S("Node");
             return fmt_errorf_v("go/printer: unsupported node type *ast.%s", name);
         }
         if (pt_is_iface_type(node.t) && node.data != NULL &&

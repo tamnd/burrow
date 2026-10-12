@@ -27,10 +27,10 @@
 #include <stdint.h>
 #include <string.h>
 
-#define S(lit) BURROW_S(lit)
+#define DC_S(lit) BURROW_S(lit)
 
 BURROW_NORETURN static void dc_oom(void) {
-    panic_str(S("go/doc/comment: out of memory"));
+    panic_str(DC_S("go/doc/comment: out of memory"));
 }
 
 static void *dc_alloc(Alloc *a, size_t n, size_t align) {
@@ -303,7 +303,7 @@ static bool dc_valid_import_path(Str path) {
         return false;
     if (path.p[0] == '-')
         return false;
-    if (strings_contains(path, S("//")))
+    if (strings_contains(path, DC_S("//")))
         return false;
     if (path.p[path.len - 1] == '/')
         return false;
@@ -494,7 +494,7 @@ typedef struct DcParse {
  * of single-element standard library package names. */
 static bool dc_lookup_pkg(DcParse *d, Str pkg, Str *import_path) {
     *import_path = BURROW_STR_EMPTY;
-    if (strings_contains(pkg, S("/"))) { /* assume a full import path */
+    if (strings_contains(pkg, DC_S("/"))) { /* assume a full import path */
         if (dc_valid_import_path(pkg)) {
             *import_path = pkg;
             return true;
@@ -586,7 +586,7 @@ static bool dc_is_list(Str line) {
 static bool dc_is_heading(Str line) {
     return line.len >= 2 && line.p[0] == '#' &&
            (line.p[1] == ' ' || line.p[1] == '\t') &&
-           !str_eq(strings_trim_space(line), S("#"));
+           !str_eq(strings_trim_space(line), DC_S("#"));
 }
 
 /* isOldHeading reports whether line is an old-style section heading. line is
@@ -611,26 +611,26 @@ static bool dc_is_old_heading(Str line, const Str *all, Int nall, Int off) {
 
     /* exclude lines with illegal characters. we allow "()," The two runes
      * after ^ are a degree sign and a section sign. */
-    if (strings_contains_any(line, S(";:!?+*/=[]{}_^\302\260&\302\247~%#@<\">\\")))
+    if (strings_contains_any(line, DC_S(";:!?+*/=[]{}_^\302\260&\302\247~%#@<\">\\")))
         return false;
 
     /* allow "'" for possessive "'s" only */
     for (Str b = line;;) {
         bool ok = false;
-        (void)strings_cut(b, S("'"), &b, &ok);
+        (void)strings_cut(b, DC_S("'"), &b, &ok);
         if (!ok)
             break;
-        if (!str_eq(b, S("s")) && !strings_has_prefix(b, S("s ")))
+        if (!str_eq(b, DC_S("s")) && !strings_has_prefix(b, DC_S("s ")))
             return false; /* ' not followed by s and then end-of-word */
     }
 
     /* allow "." when followed by non-space */
     for (Str b = line;;) {
         bool ok = false;
-        (void)strings_cut(b, S("."), &b, &ok);
+        (void)strings_cut(b, DC_S("."), &b, &ok);
         if (!ok)
             break;
-        if (b.len == 0 || strings_has_prefix(b, S(" ")))
+        if (b.len == 0 || strings_has_prefix(b, DC_S(" ")))
             return false; /* not followed by non-space */
     }
 
@@ -679,7 +679,7 @@ static Int dc_parse_spans(Alloc *a, DcLines l, DcSpan **out, Int *out_cap) {
         if (i >= nlines)
             break;
         if (--watchdog < 0)
-            panic_str(S("go/doc/comment: internal error: not making progress"));
+            panic_str(DC_S("go/doc/comment: internal error: not making progress"));
 
         DcSpanKind kind = DC_SPAN_NONE;
         Int start = i;
@@ -717,7 +717,7 @@ static Int dc_parse_spans(Alloc *a, DcLines l, DcSpan **out, Int *out_cap) {
              * and forgetting to indent it. The heuristic will never trigger on
              * a gofmt'ed comment, because any gofmt'ed code block or list
              * would be followed by a blank line or end of comment. */
-            if (end < nlines && strings_has_prefix(lines[end], S("}")))
+            if (end < nlines && strings_has_prefix(lines[end], DC_S("}")))
                 end++;
 
             if (dc_is_list(lines[start]))
@@ -747,8 +747,8 @@ static Int dc_parse_spans(Alloc *a, DcLines l, DcSpan **out, Int *out_cap) {
                     end--;
                     while (end > start && dc_is_list(lines[end - 1]))
                         end--;
-                } else if (strings_has_suffix(lines[i - 1], S("{")) ||
-                           strings_has_suffix(lines[i - 1], S("\\"))) {
+                } else if (strings_has_suffix(lines[i - 1], DC_S("{")) ||
+                           strings_has_suffix(lines[i - 1], DC_S("\\"))) {
                     /* If the final unindented line ended in { or \ it is
                      * probably the start of a misindented code block. Give the
                      * user a single line fix. Often that's enough; if not, the
@@ -807,13 +807,13 @@ static CommentBlock dc_code(DcParse *d, DcLines lines) {
 static bool dc_parse_link(Str line, Str *text, Str *url) {
     if (line.len == 0 || line.p[0] != '[')
         return false;
-    Int i = strings_index(line, S("]:"));
+    Int i = strings_index(line, DC_S("]:"));
     if (i < 0 || i + 3 >= line.len || (line.p[i + 2] != ' ' && line.p[i + 2] != '\t'))
         return false;
 
     Str t = dc_sub(line, 1, i);
     Str u = strings_trim_space(dc_sub(line, i + 3, line.len));
-    Int j = strings_index(u, S("://"));
+    Int j = strings_index(u, DC_S("://"));
     if (j < 0 || !dc_is_scheme(dc_sub(u, 0, j)))
         return false;
 
@@ -1007,7 +1007,7 @@ static void dc_parse_text(DcParse *d, Slice *out, Str s, bool auto_link, DcBuf *
                 continue;
             }
         }
-        if (strings_has_prefix(t, S("``"))) {
+        if (strings_has_prefix(t, DC_S("``"))) {
             if (t.len >= 3 && t.p[2] == '`') {
                 /* Do not convert `` inside ```, in case people are mistakenly
                  * writing Markdown. Go's loop compares t[i], with i the index
@@ -1018,12 +1018,12 @@ static void dc_parse_text(DcParse *d, Slice *out, Str s, bool auto_link, DcBuf *
                 continue;
             }
             DC_WRITE_UNTIL(i);
-            dc_buf_str(w, S("\342\200\234")); /* left double quotation mark */
+            dc_buf_str(w, DC_S("\342\200\234")); /* left double quotation mark */
             i += 2;
             wrote = i;
-        } else if (strings_has_prefix(t, S("''"))) {
+        } else if (strings_has_prefix(t, DC_S("''"))) {
             DC_WRITE_UNTIL(i);
-            dc_buf_str(w, S("\342\200\235")); /* right double quotation mark */
+            dc_buf_str(w, DC_S("\342\200\235")); /* right double quotation mark */
             i += 2;
             wrote = i;
         } else {
@@ -1039,7 +1039,7 @@ static void dc_parse_text(DcParse *d, Slice *out, Str s, bool auto_link, DcBuf *
  * identifier, then splitDocName returns before, name, true. Otherwise it
  * returns text, "", false. */
 static bool dc_split_doc_name(Str text, Str *before, Str *name) {
-    Int i = strings_last_index(text, S("."));
+    Int i = strings_last_index(text, DC_S("."));
     Str nm = dc_sub(text, i + 1, text.len);
     if (!dc_is_name(nm)) {
         *before = text;
@@ -1066,7 +1066,7 @@ static CommentDocLink *dc_doc_link(DcParse *d, Str text, Str before, Str after) 
         return NULL;
     if (after.len > 0 && !dc_link_edge(utf8_decode_rune_in_string(after, &n)))
         return NULL;
-    text = strings_trim_prefix(text, S("*"));
+    text = strings_trim_prefix(text, DC_S("*"));
     Str pkg = BURROW_STR_EMPTY, name = BURROW_STR_EMPTY, recv = BURROW_STR_EMPTY;
     bool ok = dc_split_doc_name(text, &pkg, &name);
     if (ok) {
@@ -1219,7 +1219,7 @@ CommentDoc *comment_parser_parse(CommentParser *p, Alloc *a, Str text) {
             b = dc_paragraph(&d, sl.p, sl.n);
             break;
         default:
-            panic_str(S("go/doc/comment: internal error: unknown span kind"));
+            panic_str(DC_S("go/doc/comment: internal error: unknown span kind"));
         }
         if (b != NULL)
             dc_append(a, &d.doc->content, &b);

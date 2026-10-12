@@ -701,9 +701,12 @@ static const GfmtPiece gfmt_file_4[] = {
 };
 
 static const GfmtFile gfmt_files[] = {
-    {"format_test.go", gfmt_file_0, (int)(sizeof(gfmt_file_0) / sizeof(gfmt_file_0[0]))},
-    {"benchmark_test.go", gfmt_file_1, (int)(sizeof(gfmt_file_1) / sizeof(gfmt_file_1[0]))},
-    {"example_test.go", gfmt_file_2, (int)(sizeof(gfmt_file_2) / sizeof(gfmt_file_2[0]))},
+    {"format_test.go", gfmt_file_0,
+     (int)(sizeof(gfmt_file_0) / sizeof(gfmt_file_0[0]))},
+    {"benchmark_test.go", gfmt_file_1,
+     (int)(sizeof(gfmt_file_1) / sizeof(gfmt_file_1[0]))},
+    {"example_test.go", gfmt_file_2,
+     (int)(sizeof(gfmt_file_2) / sizeof(gfmt_file_2[0]))},
     {"format.go", gfmt_file_3, (int)(sizeof(gfmt_file_3) / sizeof(gfmt_file_3[0]))},
     {"internal.go", gfmt_file_4, (int)(sizeof(gfmt_file_4) / sizeof(gfmt_file_4[0]))},
 };

@@ -1,7 +1,9 @@
-/* What tests/elf_test.c and tests/macho_test.c share: the shape of the files
+/* What the tests of the debug packages share: the shape of the files
  * tools/gen-debug-tests.sh writes, the DWARF half of the dump it makes with
  * Go's packages, and the loops that compare a dump with Go's, whole and for
  * each damaged copy of a file. The includer includes the burrow headers first.
+ * The functions are inline so that a test which has no DWARF to dump, like
+ * tests/plan9obj_test.c, can leave those parts unused.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -37,7 +39,7 @@ typedef struct DebugName {
 
 /* ------------------------------------------------------------------ helpers */
 
-static Slice gen_bytes(Alloc *a, const char *const *lines) {
+static inline Slice gen_bytes(Alloc *a, const char *const *lines) {
     Int n = 0;
     for (const char *const *l = lines; *l != NULL; l++)
         n += (Int)strlen(*l);
@@ -59,7 +61,7 @@ static Slice gen_bytes(Alloc *a, const char *const *lines) {
 }
 
 /* The ELF file of a test file, gunzipped if it has to be. */
-static Slice file_bytes(Alloc *a, const DebugFile *f) {
+static inline Slice file_bytes(Alloc *a, const DebugFile *f) {
     Slice raw = gen_bytes(a, f->data);
     if (!f->gz)
         return raw;
@@ -74,13 +76,13 @@ static Slice file_bytes(Alloc *a, const DebugFile *f) {
     return out;
 }
 
-static Str errs(Alloc *a, Error err) {
+static inline Str errs(Alloc *a, Error err) {
     if (BURROW_OK(err))
         return BURROW_STR_EMPTY;
     return fmt_sprintf_v(a, " err=%q", error_text(err));
 }
 
-static Str blob(Alloc *a, Slice b, Error err) {
+static inline Str blob(Alloc *a, Slice b, Error err) {
     Sha256Sum256Ret h = sha256_sum256(b);
     Str hx = hex_encode_to_string(a, (Slice){h.a, 8, 8, TYPE_BYTE});
     return fmt_sprintf_v(a, "len=%d sha=%s%s", b.len, hx, errs(a, err));
@@ -90,7 +92,7 @@ static Str blob(Alloc *a, Slice b, Error err) {
 
 /* The dump below is the one in tools/gen-debug-tests.sh, line for line. */
 
-static Str dump_val(Alloc *a, Any v) {
+static inline Str dump_val(Alloc *a, Any v) {
     if (v.t == NULL)
         return BURROW_S("nil");
     if (v.t == TYPE_INT64)
@@ -108,13 +110,13 @@ static Str dump_val(Alloc *a, Any v) {
     return BURROW_S("?");
 }
 
-static void dump_strings(Alloc *a, IoWriter w, Str label, Slice ss, Error err) {
+static inline void dump_strings(Alloc *a, IoWriter w, Str label, Slice ss, Error err) {
     fmt_fprintf_v(w, "%s n=%d%s\n", label, ss.len, errs(a, err));
     for (Int i = 0; i < ss.len; i++)
         fmt_fprintf_v(w, "  %q\n", ((Str *)ss.p)[i]);
 }
 
-static bool is_type_tag(DwarfTag t) {
+static inline bool is_type_tag(DwarfTag t) {
     switch (t) {
     case DWARF_TAG_ARRAY_TYPE:
     case DWARF_TAG_BASE_TYPE:
@@ -139,7 +141,7 @@ static bool is_type_tag(DwarfTag t) {
 }
 
 /* What %T says of each type struct in Go, without the "*dwarf.". */
-static const char *type_kind_name(DwarfTypeKind k) {
+static inline const char *type_kind_name(DwarfTypeKind k) {
     switch (k) {
     case DWARF_TYPE_KIND_COMMON:
         return "CommonType";
@@ -188,7 +190,7 @@ static const char *type_kind_name(DwarfTypeKind k) {
     }
 }
 
-static bool kind_is_basic(DwarfTypeKind k) {
+static inline bool kind_is_basic(DwarfTypeKind k) {
     switch (k) {
     case DWARF_TYPE_KIND_ADDR:
     case DWARF_TYPE_KIND_BASIC:
@@ -217,7 +219,7 @@ static bool kind_is_basic(DwarfTypeKind k) {
     }
 }
 
-static void dump_type(Alloc *a, IoWriter w, DwarfData *d, DwarfOffset off) {
+static inline void dump_type(Alloc *a, IoWriter w, DwarfData *d, DwarfOffset off) {
     Error err = BURROW_NO_ERROR;
     DwarfType t = dwarf_data_type(d, off, &err);
     if (BURROW_FAILED(err) || t == NULL) {
@@ -291,13 +293,14 @@ static void dump_type(Alloc *a, IoWriter w, DwarfData *d, DwarfOffset off) {
 }
 
 /* The rows are kept as bytes, which need not be aligned for a DwarfLineEntry. */
-static DwarfLineEntry row_at(Slice rows, Int i) {
+static inline DwarfLineEntry row_at(Slice rows, Int i) {
     DwarfLineEntry e;
     memcpy(&e, (const Byte *)rows.p + i * (Int)sizeof e, sizeof e);
     return e;
 }
 
-static void dump_lines(Alloc *a, IoWriter w, DwarfData *d, const DwarfEntry *cu) {
+static inline void dump_lines(Alloc *a, IoWriter w, DwarfData *d,
+                              const DwarfEntry *cu) {
     Error err = BURROW_NO_ERROR;
     DwarfLineReader *lr = dwarf_data_line_reader(d, a, cu, &err);
     if (BURROW_FAILED(err)) {
@@ -372,7 +375,7 @@ static void dump_lines(Alloc *a, IoWriter w, DwarfData *d, const DwarfEntry *cu)
     }
 }
 
-static void dump_dwarf(Alloc *a, IoWriter w, DwarfData *d) {
+static inline void dump_dwarf(Alloc *a, IoWriter w, DwarfData *d) {
     DwarfReader *r = dwarf_data_reader(d, a);
     Slice cus = slice_make(a, TYPE_UNSAFE_POINTER, 0, 0);
     Slice lows = slice_make(a, TYPE_UINT64, 0, 0);
@@ -457,8 +460,8 @@ static void dump_dwarf(Alloc *a, IoWriter w, DwarfData *d) {
 typedef void (*DebugDumpFn)(Alloc *a, IoWriter w, Slice data);
 
 /* The dump of each file has to be Go's, line for line. */
-static void debug_check_dumps(TestingT *t, const DebugFile *files, size_t nfiles,
-                              DebugDumpFn dump) {
+static inline void debug_check_dumps(TestingT *t, const DebugFile *files, size_t nfiles,
+                                     DebugDumpFn dump) {
     for (size_t i = 0; i < nfiles; i++) {
         const DebugFile *df = &files[i];
         Arena ar;
@@ -491,8 +494,8 @@ static void debug_check_dumps(TestingT *t, const DebugFile *files, size_t nfiles
 
 /* The dump of each damaged copy has to hash the same as Go's. Gives the number
  * of copies. */
-static int debug_check_damage(TestingT *t, const DebugFile *files, size_t nfiles,
-                              DebugDumpFn dump) {
+static inline int debug_check_damage(TestingT *t, const DebugFile *files, size_t nfiles,
+                                     DebugDumpFn dump) {
     int n = 0;
     for (size_t i = 0; i < nfiles; i++) {
         const DebugFile *df = &files[i];

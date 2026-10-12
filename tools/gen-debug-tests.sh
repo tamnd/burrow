@@ -12,6 +12,8 @@
 # debug/dwarf's testdata, through debug/macho, each read as a universal binary
 # and as a plain one. The pe one, tests/pe_test_gen.h, is the same again for
 # Go's PE test files and the PE one in debug/dwarf's testdata, through debug/pe.
+# The plan9obj one, tests/plan9obj_test_gen.h, does Go's two Plan 9 a.out files
+# through debug/plan9obj, with the damage aimed at the symbol table as well.
 #
 # The Go packages are copied out of GOSRC, a Go source tree that defaults to
 # the one the go command has, into a scratch module and built from there, so
@@ -29,8 +31,9 @@ case $mode in
 elf) out="$root/tests/debug_test_gen.h" ;;
 macho) out="$root/tests/macho_test_gen.h" ;;
 pe) out="$root/tests/pe_test_gen.h" ;;
+plan9obj) out="$root/tests/plan9obj_test_gen.h" ;;
 *)
-	echo "usage: $0 [elf|macho|pe]" >&2
+	echo "usage: $0 [elf|macho|pe|plan9obj]" >&2
 	exit 2
 	;;
 esac
@@ -51,6 +54,7 @@ vendor() {
 vendor debug/elf elf
 vendor debug/macho macho
 vendor debug/pe pe
+vendor debug/plan9obj plan9obj
 vendor debug/dwarf dwarf
 vendor internal/zstd zstd
 vendor internal/saferio saferio
@@ -77,6 +81,11 @@ for f in "$gosrc/debug/pe/testdata"/*; do
 	[ -f "$f" ] && cp "$f" "$tmp/pedata/"
 done
 cp "$gosrc/debug/dwarf/testdata/line-gcc-win.bin" "$tmp/pedwarf/"
+mkdir "$tmp/plan9data"
+for f in "$gosrc/debug/plan9obj/testdata"/*; do
+	case $f in *.c) continue ;; esac
+	cp "$f" "$tmp/plan9data/"
+done
 cp "$gosrc/debug/elf/elf.go" "$tmp/elf.go.txt"
 cp "$gosrc/debug/macho/macho.go" "$tmp/macho.go.txt"
 cp "$gosrc/debug/dwarf/const.go" "$tmp/const.go.txt"
@@ -723,6 +732,10 @@ func main() {
 		peMain()
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "plan9obj" {
+		plan9Main()
+		return
+	}
 	var fs []*file
 	for _, f := range load("elfdata") {
 		f.name = "elf/" + f.name
@@ -1339,6 +1352,242 @@ func peMain() {
 	fmt.Fprintf(w, "static const DebugFile pe_files[] = {\n")
 	for i, f := range fs {
 		fmt.Fprintf(w, "    {%s, false, pe_file_%d, pe_dump_%d, pe_damage_%d},\n", cstr(f.name), i, i, i)
+	}
+	fmt.Fprintf(w, "};\n\n#endif\n")
+}
+GO
+
+cat > "$tmp/plan9obj.go" <<'GO'
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"gen/plan9obj"
+)
+
+var plan9SectionNames = []string{"text", "data", "syms", "spsz", "pcsz", "bss", ""}
+
+func dumpPlan9(w *bytes.Buffer, data []byte) {
+	f, err := plan9obj.NewFile(bytes.NewReader(data))
+	if err != nil {
+		fmt.Fprintf(w, "newfile err=%q\n", err.Error())
+		return
+	}
+	h := f.FileHeader
+	fmt.Fprintf(w, "header magic=%#x bss=%#x entry=%#x ptrsize=%d load=%#x hdrsize=%d\n",
+		h.Magic, h.Bss, h.Entry, h.PtrSize, h.LoadAddress, h.HdrSize)
+	for i, s := range f.Sections {
+		fmt.Fprintf(w, "section %d %q size=%#x offset=%#x\n", i, s.Name, s.Size, s.Offset)
+		b, err := s.Data()
+		fmt.Fprintf(w, "  data %s\n", blob(b, err))
+		b, err = io.ReadAll(s.Open())
+		fmt.Fprintf(w, "  open %s\n", blob(b, err))
+		var buf [8]byte
+		n, err := s.ReadAt(buf[:], 4)
+		fmt.Fprintf(w, "  readat n=%d % x%s\n", n, buf[:n], errs(err))
+	}
+	for _, name := range plan9SectionNames {
+		if s := f.Section(name); s != nil {
+			fmt.Fprintf(w, "section %q offset=%#x\n", name, s.Offset)
+		} else {
+			fmt.Fprintf(w, "section %q nil\n", name)
+		}
+	}
+	syms, err := f.Symbols()
+	fmt.Fprintf(w, "symbols n=%d%s\n", len(syms), errs(err))
+	for _, s := range syms {
+		fmt.Fprintf(w, "  %#x %d %q\n", s.Value, s.Type, s.Name)
+	}
+}
+
+func safePlan9Dump(data []byte) (out []byte, ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	var w bytes.Buffer
+	dumpPlan9(&w, data)
+	return w.Bytes(), true
+}
+
+// plan9Entry is where one entry of a symbol table is in the file.
+type plan9Entry struct {
+	value int // the offset of the value
+	typ   int // the offset of the type byte
+	name  int // the offset of the name
+	t     byte
+}
+
+// plan9Entries walks the symbol table the way walksymtab does and gives where
+// each entry is, so the damage can aim at types, file codes and paths.
+func plan9Entries(data []byte) []plan9Entry {
+	if len(data) < 40 {
+		return nil
+	}
+	hdr, ptrsz := 32, 4
+	if binary.BigEndian.Uint32(data)&plan9obj.Magic64 != 0 {
+		hdr, ptrsz = 40, 8
+	}
+	text := int(binary.BigEndian.Uint32(data[4:]))
+	dat := int(binary.BigEndian.Uint32(data[8:]))
+	syms := int(binary.BigEndian.Uint32(data[16:]))
+	start := hdr + text + dat
+	if start+syms > len(data) {
+		return nil
+	}
+	var es []plan9Entry
+	p := start
+	end := start + syms
+	for end-p >= 4 && end-p >= ptrsz+1 {
+		e := plan9Entry{value: p, typ: p + ptrsz, t: data[p+ptrsz] & 0x7f}
+		p += ptrsz + 1
+		e.name = p
+		i := bytes.IndexByte(data[p:end], 0)
+		if i < 0 {
+			break
+		}
+		p += i + 1
+		if e.t == 'z' || e.t == 'Z' {
+			for p+2 <= end && !(data[p] == 0 && data[p+1] == 0) {
+				p += 2
+			}
+			p += 2
+		}
+		es = append(es, e)
+	}
+	return es
+}
+
+func plan9Damages(data []byte, seed uint64) []damage {
+	var ds []damage
+	x := seed
+	n := len(data)
+	add := func(pos int, xor byte) {
+		if pos < 0 || pos >= n || (xor == 0 && pos == 0) {
+			return
+		}
+		b := append([]byte(nil), data...)
+		if xor == 0 {
+			b = b[:pos]
+		} else {
+			b[pos] ^= xor
+		}
+		out, ok := safePlan9Dump(b)
+		if !ok {
+			return
+		}
+		ds = append(ds, damage{pos, xor, fmt.Sprintf("%x", sha256.Sum256(out))[:16]})
+	}
+	// The header, then the symbol table, aiming at the type letters, the
+	// codes of the file names and the codes in the paths that use them.
+	for i := 0; i < 24; i++ {
+		x = lcg(x)
+		add(int(x>>33)%40, byte(1<<((x>>20)%8)))
+	}
+	es := plan9Entries(data)
+	var files, paths []plan9Entry
+	for _, e := range es {
+		switch e.t {
+		case 'f':
+			files = append(files, e)
+		case 'z', 'Z':
+			paths = append(paths, e)
+		}
+	}
+	if len(es) > 0 {
+		for _, t := range []byte{'z', 'Z', 'f', 'z', 'Z', 'f', 'T'} {
+			x = lcg(x)
+			e := es[int(x>>33)%len(es)]
+			if xor := data[e.typ] ^ t; xor != 0 {
+				add(e.typ, xor)
+			}
+		}
+		// The top bit of a type is dropped, so this one changes nothing.
+		x = lcg(x)
+		add(es[int(x>>33)%len(es)].typ, 0x80)
+		for i := 0; i < 16; i++ {
+			x = lcg(x)
+			e := es[int(x>>33)%len(es)]
+			add(e.name+int(x>>20)%3, byte(x>>40)|1)
+		}
+	}
+	for i := 0; i < 6 && len(files) > 0; i++ {
+		x = lcg(x)
+		e := files[int(x>>33)%len(files)]
+		ptrsz := e.typ - e.value
+		add(e.value+ptrsz-1, byte(1<<((x>>20)%8)))
+	}
+	for i := 0; i < 6 && len(paths) > 0; i++ {
+		x = lcg(x)
+		e := paths[int(x>>33)%len(paths)]
+		add(e.name+1+int(x>>20)%4, byte(1<<((x>>24)%8)))
+	}
+	for i := 0; i < 12; i++ {
+		x = lcg(x)
+		xor := byte(x >> 56)
+		if xor == 0 {
+			xor = 0x80
+		}
+		add(int(x>>33)%n, xor)
+	}
+	cuts := []int{n / 2, n - 1, n * 3 / 4, 100, 36, 30, 3}
+	if len(es) > 2 {
+		e := es[len(es)/2]
+		cuts = append(cuts, e.value+1, e.typ, e.name+1)
+		e = es[len(es)-1]
+		cuts = append(cuts, e.typ, e.name+1)
+	}
+	for _, cut := range cuts {
+		if cut > 0 && cut < n {
+			add(cut, 0)
+		}
+	}
+	return ds
+}
+
+func plan9Main() {
+	fs := load("plan9data")
+	for i, f := range fs {
+		f.name = "plan9obj/" + f.name
+		out, ok := safePlan9Dump(f.data)
+		if !ok {
+			panic("Go panics on " + f.name)
+		}
+		f.dump = out
+		f.damage = plan9Damages(f.data, uint64(i)+1)
+	}
+
+	w := os.Stdout
+	fmt.Fprintf(w, "/* Generated by tools/gen-debug-tests.sh plan9obj from Go's debug/plan9obj\n * and its testdata. Do not edit. */\n\n")
+	fmt.Fprintf(w, "#ifndef BURROW_TESTS_PLAN9OBJ_TEST_GEN_H\n#define BURROW_TESTS_PLAN9OBJ_TEST_GEN_H\n\n")
+	for i, f := range fs {
+		fmt.Fprintf(w, "/* %s, %d bytes. */\n", f.name, len(f.raw))
+		writeBase64(w, fmt.Sprintf("plan9obj_file_%d", i), f.raw)
+		fmt.Fprintf(w, "static const char *const plan9obj_dump_%d[] = {\n", i)
+		for _, line := range strings.SplitAfter(string(f.dump), "\n") {
+			if line == "" {
+				continue
+			}
+			fmt.Fprintf(w, "    %s,\n", cstr(strings.TrimSuffix(line, "\n")))
+		}
+		fmt.Fprintf(w, "    NULL,\n};\n\n")
+		fmt.Fprintf(w, "static const DebugDamage plan9obj_damage_%d[] = {\n", i)
+		for _, d := range f.damage {
+			fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
+		}
+		fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+	}
+	fmt.Fprintf(w, "static const DebugFile plan9obj_files[] = {\n")
+	for i, f := range fs {
+		fmt.Fprintf(w, "    {%s, false, plan9obj_file_%d, plan9obj_dump_%d, plan9obj_damage_%d},\n", cstr(f.name), i, i, i)
 	}
 	fmt.Fprintf(w, "};\n\n#endif\n")
 }

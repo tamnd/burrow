@@ -107,3 +107,4 @@ debug/dwarf
 debug/elf
 debug/macho
 debug/pe
+debug/plan9obj

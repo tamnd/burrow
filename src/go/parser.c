@@ -32,6 +32,8 @@
 #include "burrow/strings.h"
 #include "burrow/thread.h"
 
+#include "parser_internal.h"
+
 #include <string.h>
 
 #if defined(_MSC_VER)
@@ -100,12 +102,6 @@ BURROW_NORETURN static void gp_oom(GpParser *p) {
 }
 
 /* The parser's hooks for the resolver in parser_resolver.c. */
-BURROW_NORETURN void burrow__parser_bail(void *p, TokenPos pos, Str msg);
-BURROW_NORETURN void burrow__parser_oom(void *p);
-void burrow__parser_error(void *p, TokenPos pos, Str msg);
-void burrow__parser_resolve_file(void *p, Alloc *a, AstFile *file, TokenFile *handle,
-                                 bool decl_errors);
-
 BURROW_NORETURN void burrow__parser_bail(void *p, TokenPos pos, Str msg) {
     GpParser *gp = (GpParser *)p;
     gp->bail_pos = pos;
@@ -213,7 +209,8 @@ static uintptr_t gp_stack_here(void) {
     return (uintptr_t)_AddressOfReturnAddress();
 #else
     volatile char probe = 0;
-    return (uintptr_t)&probe;
+    uintptr_t here = (uintptr_t)&probe;
+    return here;
 #endif
 }
 
@@ -247,7 +244,6 @@ static bool gp_stack_low(GpParser *p, Int depth) {
 
 /* The same for the resolver, which walks the tree the parser made and stops
  * the same way when the stack runs short. */
-bool burrow__parser_stack_low(void *p, Int depth);
 bool burrow__parser_stack_low(void *p, Int depth) {
     return gp_stack_low((GpParser *)p, depth);
 }
@@ -2087,6 +2083,10 @@ static AstExpr gp_parse_primary_expr_body(GpParser *p, AstExpr x) {
             /* operand may have returned a parenthesized complit type; accept
              * it but complain if we have a complit */
             AstExpr t = ast_unparen(x);
+            if (t == NULL) {
+                p->nest_lev -= n;
+                return x;
+            }
             /* determine if '{' belongs to a composite literal or a block
              * statement */
             switch (t->kind) {

@@ -46,6 +46,84 @@ static void times(Alloc *a) {
     // doc: end
 }
 
+static void cookies(Alloc *a) {
+    // doc: cookie
+    Error err;
+    Str line =
+        BURROW_S("session=38afes7a8; Path=/; Max-Age=3600; HttpOnly; Flavour=mint");
+    HttpCookie c = http_parse_set_cookie(a, line, &err);
+    if (BURROW_OK(err)) {
+        printf("%.*s=%.*s, path %.*s, max-age %d\n", P(c.name), P(c.value), P(c.path),
+               (int)c.max_age);
+        printf("unparsed: %.*s\n", P(BURROW_AT(Str, c.unparsed, 0)));
+    }
+
+    Slice sent = http_parse_cookie(a, BURROW_S("lang=en; theme=\"dark\""), &err);
+    for (Int i = 0; i < sent.len; i++) {
+        HttpCookie k = BURROW_AT(HttpCookie, sent, i);
+        printf("%.*s is %.*s%s\n", P(k.name), P(k.value), k.quoted ? ", quoted" : "");
+    }
+
+    HttpCookie out = {
+        .name = BURROW_S_INIT("cart"),
+        .value = BURROW_S_INIT("3 items"),
+        .path = BURROW_S_INIT("/shop"),
+        .expires = time_date(2030, TIME_MARCH, 1, 12, 0, 0, 0, time_utc_loc),
+        .secure = true,
+        .same_site = HTTP_SAME_SITE_STRICT_MODE,
+    };
+    printf("%.*s\n", P(http_cookie_string(a, &out)));
+    // doc: end
+}
+
+static void wire(Alloc *a) {
+    // doc: wire
+    StringsReader sr;
+    strings_reader_reset(&sr, BURROW_S("POST /upload?name=notes HTTP/1.1\r\n"
+                                       "Host: example.com\r\n"
+                                       "Authorization: Basic YWxpY2U6czNjcmV0\r\n"
+                                       "Content-Length: 11\r\n"
+                                       "\r\n"
+                                       "hello world"));
+    BufioReader *br = bufio_new_reader(a, strings_reader_as_io_reader(&sr));
+    Error err;
+    HttpRequest *req = http_read_request(a, br, &err);
+    if (BURROW_OK(err)) {
+        printf("%.*s %.*s for %.*s, %lld bytes\n", P(req->method), P(req->url->path),
+               P(req->host), (long long)req->content_length);
+        Str user;
+        Str pass;
+        if (http_request_basic_auth(req, a, &user, &pass))
+            printf("from %.*s\n", P(user));
+        Slice body = io_read_all(a, io_read_closer_as_io_reader(req->body), &err);
+        printf("body: %.*s\n", (int)body.len, (const char *)body.p);
+        http_request_free(req);
+    }
+    bufio_reader_free(br);
+
+    strings_reader_reset(&sr, BURROW_S("HTTP/1.1 404 Not Found\r\n"
+                                       "Content-Type: text/plain\r\n"
+                                       "Transfer-Encoding: chunked\r\n"
+                                       "\r\n"
+                                       "4\r\nnone\r\n5\r\n here\r\n0\r\n\r\n"));
+    br = bufio_new_reader(a, strings_reader_as_io_reader(&sr));
+    HttpResponse *resp = http_read_response(a, br, NULL, &err);
+    if (BURROW_OK(err)) {
+        printf("%d, %.*s\n", (int)resp->status_code, P(resp->status));
+        Slice body = io_read_all(a, io_read_closer_as_io_reader(resp->body), &err);
+        printf("body: %.*s\n", (int)body.len, (const char *)body.p);
+        http_response_free(resp);
+    }
+    bufio_reader_free(br);
+
+    strings_reader_reset(&sr, BURROW_S("HTTP/1.1 OK\r\n\r\n"));
+    br = bufio_new_reader(a, strings_reader_as_io_reader(&sr));
+    http_read_response(a, br, NULL, &err);
+    printf("%.*s\n", P(error_text(err)));
+    bufio_reader_free(br);
+    // doc: end
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -53,6 +131,8 @@ int main(void) {
     header(a);
     sniff();
     times(a);
+    cookies(a);
+    wire(a);
     arena_free(&ar);
     return 0;
 }

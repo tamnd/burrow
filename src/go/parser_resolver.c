@@ -25,13 +25,7 @@
 
 #include <string.h>
 
-/* The parser's side, in parser.c. */
-BURROW_NORETURN void burrow__parser_bail(void *p, TokenPos pos, Str msg);
-BURROW_NORETURN void burrow__parser_oom(void *p);
-void burrow__parser_error(void *p, TokenPos pos, Str msg);
-bool burrow__parser_stack_low(void *p, Int depth);
-void burrow__parser_resolve_file(void *p, Alloc *a, AstFile *file, TokenFile *handle,
-                                 bool decl_errors);
+#include "parser_internal.h"
 
 /* maxScopeDepth, how deep scopes may nest. */
 enum { GPR_MAX_SCOPE_DEPTH = 1000 };

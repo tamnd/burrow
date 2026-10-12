@@ -675,8 +675,7 @@ static Slice chacha20poly1305_slice_for_append(Alloc *a, Slice dst, Int n,
             *tail = NULL;
             return slice_nil(TYPE_BYTE);
         }
-        if (dst.len > 0)
-            /* NOLINTNEXTLINE(clang-analyzer-unix.cstring.NullArg) */
+        if (dst.len > 0 && head.p != NULL && dst.p != NULL)
             memcpy(head.p, dst.p, (size_t)dst.len);
     }
     *tail = (Byte *)head.p + dst.len;

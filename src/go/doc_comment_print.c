@@ -25,10 +25,10 @@
 #include <stdint.h>
 #include <string.h>
 
-#define S(lit) BURROW_S(lit)
+#define DCP_S(lit) BURROW_S(lit)
 
 BURROW_NORETURN static void dcp_oom(void) {
-    panic_str(S("go/doc/comment: out of memory"));
+    panic_str(DCP_S("go/doc/comment: out of memory"));
 }
 
 /* A growing byte buffer, Go's bytes.Buffer. */
@@ -100,26 +100,26 @@ static Str dcp_take_str(DcpBuf *b) {
 /* Go's %T of a node, for the blocks a printer does not know. */
 static Str dcp_type_name(CommentBase *x) {
     if (x == NULL)
-        return S("<nil>");
+        return DCP_S("<nil>");
     switch ((int)x->kind) {
     case COMMENT_KIND_CODE:
-        return S("*comment.Code");
+        return DCP_S("*comment.Code");
     case COMMENT_KIND_HEADING:
-        return S("*comment.Heading");
+        return DCP_S("*comment.Heading");
     case COMMENT_KIND_LIST:
-        return S("*comment.List");
+        return DCP_S("*comment.List");
     case COMMENT_KIND_PARAGRAPH:
-        return S("*comment.Paragraph");
+        return DCP_S("*comment.Paragraph");
     case COMMENT_KIND_PLAIN:
-        return S("comment.Plain");
+        return DCP_S("comment.Plain");
     case COMMENT_KIND_ITALIC:
-        return S("comment.Italic");
+        return DCP_S("comment.Italic");
     case COMMENT_KIND_LINK:
-        return S("*comment.Link");
+        return DCP_S("*comment.Link");
     case COMMENT_KIND_DOC_LINK:
-        return S("*comment.DocLink");
+        return DCP_S("*comment.DocLink");
     default:
-        return S("<invalid>");
+        return DCP_S("<invalid>");
     }
 }
 
@@ -131,7 +131,7 @@ static Str dcp_node_text(CommentBase *t) {
 /* The Text of a list item's block, which has to be a paragraph. */
 static Slice dcp_item_text(CommentBlock blk) {
     if (blk == NULL || blk->kind != COMMENT_KIND_PARAGRAPH)
-        panic_str(S("go/doc/comment: list item block is not a *comment.Paragraph"));
+        panic_str(DCP_S("go/doc/comment: list item block is not a *comment.Paragraph"));
     return ((CommentParagraph *)blk)->text;
 }
 
@@ -168,8 +168,8 @@ static void dcp_default_url(DcpBuf *out, CommentDocLink *l, Str base_url) {
     if (l->import_path.len != 0) {
         Str slash = BURROW_STR_EMPTY;
         dcp_str(out, base_url);
-        if (strings_has_suffix(base_url, S("/")))
-            slash = S("/");
+        if (strings_has_suffix(base_url, DCP_S("/")))
+            slash = DCP_S("/");
         else
             dcp_byte(out, '/');
         dcp_str(out, l->import_path);
@@ -212,7 +212,7 @@ static void dcp_default_id(DcpBuf *out, DcpBuf *tmp, CommentHeading *h) {
     Str s = strings_trim_space(dcp_view(tmp));
     if (s.len == 0)
         return;
-    dcp_str(out, S("hdr-"));
+    dcp_str(out, DCP_S("hdr-"));
     for (Int i = 0; i < s.len;) {
         Int n = 1;
         Byte c = s.p[i];
@@ -291,7 +291,7 @@ static void dcp_code_lines(DcpBuf *out, Str text, Str prefix, void (*nl)(DcpBuf 
     while (text.len > 0) {
         bool found = false;
         Str rest = BURROW_STR_EMPTY;
-        Str line = strings_cut(text, S("\n"), &rest, &found);
+        Str line = strings_cut(text, DCP_S("\n"), &rest, &found);
         if (line.len != 0) {
             dcp_str(out, prefix);
             dcp_str(out, line);
@@ -312,7 +312,7 @@ static void dcp_comment_indent(DcpBuf *out, Str indent, Str s) {
     while (s.len > 0) {
         bool ok = false;
         Str rest = BURROW_STR_EMPTY;
-        Str line = strings_cut(s, S("\n"), &rest, &ok);
+        Str line = strings_cut(s, DCP_S("\n"), &rest, &ok);
         dcp_str(out, line);
         if (ok) {
             dcp_byte(out, '\n');
@@ -363,12 +363,12 @@ static void dcp_comment_block(DcpBuf *out, CommentBlock x) {
         dcp_byte(out, '\n');
         break;
     case COMMENT_KIND_HEADING:
-        dcp_str(out, S("# "));
+        dcp_str(out, DCP_S("# "));
         dcp_comment_text(out, BURROW_STR_EMPTY, ((CommentHeading *)x)->text);
         dcp_byte(out, '\n');
         break;
     case COMMENT_KIND_CODE:
-        dcp_code_lines(out, ((CommentCode *)x)->text, S("\t"), dcp_plain_nl);
+        dcp_code_lines(out, ((CommentCode *)x)->text, DCP_S("\t"), dcp_plain_nl);
         break;
     case COMMENT_KIND_LIST: {
         CommentList *l = (CommentList *)x;
@@ -379,16 +379,16 @@ static void dcp_comment_block(DcpBuf *out, CommentBlock x) {
                 dcp_byte(out, '\n');
             dcp_byte(out, ' ');
             if (item->number.len == 0) {
-                dcp_str(out, S(" - "));
+                dcp_str(out, DCP_S(" - "));
             } else {
                 dcp_str(out, item->number);
-                dcp_str(out, S(". "));
+                dcp_str(out, DCP_S(". "));
             }
             for (Int j = 0; j < item->content.len; j++) {
                 if (j > 0)
-                    dcp_str(out, S("\n    "));
+                    dcp_str(out, DCP_S("\n    "));
                 dcp_comment_text(
-                    out, S("    "),
+                    out, DCP_S("    "),
                     dcp_item_text(BURROW_AT(CommentBlock, item->content, j)));
                 dcp_byte(out, '\n');
             }
@@ -426,7 +426,7 @@ Slice comment_printer_comment(CommentPrinter *p, Alloc *a, CommentDoc *d) {
             }
             dcp_byte(&out, '[');
             dcp_str(&out, def->text);
-            dcp_str(&out, S("]: "));
+            dcp_str(&out, DCP_S("]: "));
             dcp_str(&out, def->url);
             dcp_byte(&out, '\n');
         }
@@ -449,19 +449,19 @@ static void dcp_html_escape(DcpBuf *out, Str s) {
         Str rep = BURROW_STR_EMPTY;
         switch (s.p[i]) {
         case '<':
-            rep = S("&lt;");
+            rep = DCP_S("&lt;");
             break;
         case '&':
-            rep = S("&amp;");
+            rep = DCP_S("&amp;");
             break;
         case '"':
-            rep = S("&quot;");
+            rep = DCP_S("&quot;");
             break;
         case '\'':
-            rep = S("&apos;");
+            rep = DCP_S("&apos;");
             break;
         case '>':
-            rep = S("&gt;");
+            rep = DCP_S("&gt;");
             break;
         default:
             continue;
@@ -484,17 +484,17 @@ static void dcp_html_text(DcpHTML *hp, DcpBuf *out, Slice x) {
             dcp_html_escape(out, ((CommentPlain *)t)->text);
             break;
         case COMMENT_KIND_ITALIC:
-            dcp_str(out, S("<i>"));
+            dcp_str(out, DCP_S("<i>"));
             dcp_html_escape(out, ((CommentItalic *)t)->text);
-            dcp_str(out, S("</i>"));
+            dcp_str(out, DCP_S("</i>"));
             break;
         case COMMENT_KIND_LINK: {
             CommentLink *l = (CommentLink *)t;
-            dcp_str(out, S("<a href=\""));
+            dcp_str(out, DCP_S("<a href=\""));
             dcp_html_escape(out, l->url);
-            dcp_str(out, S("\">"));
+            dcp_str(out, DCP_S("\">"));
             dcp_html_text(hp, out, l->text);
-            dcp_str(out, S("</a>"));
+            dcp_str(out, DCP_S("</a>"));
             break;
         }
         case COMMENT_KIND_DOC_LINK: {
@@ -502,13 +502,13 @@ static void dcp_html_text(DcpHTML *hp, DcpBuf *out, Slice x) {
             Str url = dcp_doc_link_url(&hp->st, l);
             bool has = url.len != 0;
             if (has) {
-                dcp_str(out, S("<a href=\""));
+                dcp_str(out, DCP_S("<a href=\""));
                 dcp_html_escape(out, url);
-                dcp_str(out, S("\">"));
+                dcp_str(out, DCP_S("\">"));
             }
             dcp_html_text(hp, out, l->text);
             if (has)
-                dcp_str(out, S("</a>"));
+                dcp_str(out, DCP_S("</a>"));
             break;
         }
         default:
@@ -536,7 +536,7 @@ static void dcp_html_block(DcpHTML *hp, DcpBuf *out, CommentBlock x) {
     switch (x == NULL ? 0 : (int)x->kind) {
     case COMMENT_KIND_PARAGRAPH:
         if (!hp->tight)
-            dcp_str(out, S("<p>"));
+            dcp_str(out, DCP_S("<p>"));
         dcp_html_text(hp, out, ((CommentParagraph *)x)->text);
         dcp_byte(out, '\n');
         break;
@@ -553,31 +553,31 @@ static void dcp_html_block(DcpHTML *hp, DcpBuf *out, CommentBlock x) {
         } while (level > 0);
         while (nrev > 0)
             lv[nlv++] = rev[--nrev];
-        dcp_str(out, S("<h"));
+        dcp_str(out, DCP_S("<h"));
         dcp_write(out, lv, nlv);
         Str id = dcp_heading_id(&hp->st, h);
         if (id.len != 0) {
-            dcp_str(out, S(" id=\""));
+            dcp_str(out, DCP_S(" id=\""));
             dcp_html_escape(out, id);
             dcp_byte(out, '"');
         }
         dcp_byte(out, '>');
         dcp_html_text(hp, out, h->text);
-        dcp_str(out, S("</h"));
+        dcp_str(out, DCP_S("</h"));
         dcp_write(out, lv, nlv);
-        dcp_str(out, S(">\n"));
+        dcp_str(out, DCP_S(">\n"));
         break;
     }
     case COMMENT_KIND_CODE:
-        dcp_str(out, S("<pre>"));
+        dcp_str(out, DCP_S("<pre>"));
         dcp_html_escape(out, ((CommentCode *)x)->text);
-        dcp_str(out, S("</pre>\n"));
+        dcp_str(out, DCP_S("</pre>\n"));
         break;
     case COMMENT_KIND_LIST: {
         CommentList *l = (CommentList *)x;
         if (l->items.len == 0)
-            panic_str(S("runtime error: index out of range [0] with length 0"));
-        Str kind = dcp_item(l, 0)->number.len == 0 ? S("ul>\n") : S("ol>\n");
+            panic_str(DCP_S("runtime error: index out of range [0] with length 0"));
+        Str kind = dcp_item(l, 0)->number.len == 0 ? DCP_S("ul>\n") : DCP_S("ol>\n");
         dcp_byte(out, '<');
         dcp_str(out, kind);
         /* next is the number the next item gets without a value attribute. It
@@ -598,11 +598,11 @@ static void dcp_html_block(DcpHTML *hp, DcpBuf *out, CommentBlock x) {
         Int nnext = 1;
         for (Int i = 0; i < l->items.len; i++) {
             CommentListItem *item = dcp_item(l, i);
-            dcp_str(out, S("<li"));
+            dcp_str(out, DCP_S("<li"));
             Str n = item->number;
             if (n.len != 0) {
                 if (!str_eq(n, str_from_bytes(next, nnext))) {
-                    dcp_str(out, S(" value=\""));
+                    dcp_str(out, DCP_S(" value=\""));
                     dcp_str(out, n);
                     dcp_byte(out, '"');
                     memcpy(next, n.p, (size_t)n.len);
@@ -618,7 +618,7 @@ static void dcp_html_block(DcpHTML *hp, DcpBuf *out, CommentBlock x) {
         }
         if (next != small)
             mem_free(out->a, next, (size_t)most + 1, 1);
-        dcp_str(out, S("</"));
+        dcp_str(out, DCP_S("</"));
         dcp_str(out, kind);
         break;
     }
@@ -705,7 +705,7 @@ static void dcp_md_raw_text(DcpMD *mp, DcpBuf *out, Slice x) {
             CommentLink *l = (CommentLink *)t;
             dcp_byte(out, '[');
             dcp_md_raw_text(mp, out, l->text);
-            dcp_str(out, S("]("));
+            dcp_str(out, DCP_S("]("));
             dcp_str(out, l->url);
             dcp_byte(out, ')');
             break;
@@ -718,12 +718,12 @@ static void dcp_md_raw_text(DcpMD *mp, DcpBuf *out, Slice x) {
                 dcp_byte(out, '[');
             dcp_md_raw_text(mp, out, l->text);
             if (has) {
-                dcp_str(out, S("]("));
+                dcp_str(out, DCP_S("]("));
                 for (Int j = 0; j < url.len; j++) {
                     if (url.p[j] == '(')
-                        dcp_str(out, S("%28"));
+                        dcp_str(out, DCP_S("%28"));
                     else if (url.p[j] == ')')
-                        dcp_str(out, S("%29"));
+                        dcp_str(out, DCP_S("%29"));
                     else
                         dcp_byte(out, url.p[j]);
                 }
@@ -795,7 +795,7 @@ static void dcp_md_block(DcpMD *mp, DcpBuf *out, CommentBlock x) {
         dcp_md_text(mp, out, h->text);
         Str id = dcp_heading_id(&mp->st, h);
         if (id.len != 0) {
-            dcp_str(out, S(" {#"));
+            dcp_str(out, DCP_S(" {#"));
             dcp_str(out, id);
             dcp_byte(out, '}');
         }
@@ -803,7 +803,7 @@ static void dcp_md_block(DcpMD *mp, DcpBuf *out, CommentBlock x) {
         break;
     }
     case COMMENT_KIND_CODE:
-        dcp_code_lines(out, ((CommentCode *)x)->text, S("\t"), dcp_plain_nl);
+        dcp_code_lines(out, ((CommentCode *)x)->text, DCP_S("\t"), dcp_plain_nl);
         break;
     case COMMENT_KIND_LIST: {
         CommentList *l = (CommentList *)x;
@@ -815,13 +815,13 @@ static void dcp_md_block(DcpMD *mp, DcpBuf *out, CommentBlock x) {
             if (item->number.len != 0) {
                 dcp_byte(out, ' ');
                 dcp_str(out, item->number);
-                dcp_str(out, S(". "));
+                dcp_str(out, DCP_S(". "));
             } else {
-                dcp_str(out, S("  - ")); /* SP SP - SP */
+                dcp_str(out, DCP_S("  - ")); /* SP SP - SP */
             }
             for (Int j = 0; j < item->content.len; j++) {
                 if (j > 0)
-                    dcp_str(out, S("\n    "));
+                    dcp_str(out, DCP_S("\n    "));
                 dcp_md_text(mp, out,
                             dcp_item_text(BURROW_AT(CommentBlock, item->content, j)));
                 dcp_byte(out, '\n');
@@ -1081,7 +1081,7 @@ static void dcp_text_block(DcpText *tp, DcpBuf *out, CommentBlock x) {
         break;
     case COMMENT_KIND_HEADING:
         dcp_str(out, tp->prefix);
-        dcp_str(out, S("# "));
+        dcp_str(out, DCP_S("# "));
         dcp_text_text(tp, out, BURROW_STR_EMPTY, ((CommentHeading *)x)->text);
         break;
     case COMMENT_KIND_CODE:
@@ -1099,18 +1099,18 @@ static void dcp_text_block(DcpText *tp, DcpBuf *out, CommentBlock x) {
             dcp_str(out, tp->prefix);
             dcp_byte(out, ' ');
             if (item->number.len == 0) {
-                dcp_str(out, S(" - "));
+                dcp_str(out, DCP_S(" - "));
             } else {
                 dcp_str(out, item->number);
-                dcp_str(out, S(". "));
+                dcp_str(out, DCP_S(". "));
             }
             for (Int j = 0; j < item->content.len; j++) {
                 if (j > 0) {
                     dcp_write_nl(out);
                     dcp_str(out, tp->prefix);
-                    dcp_str(out, S("    "));
+                    dcp_str(out, DCP_S("    "));
                 }
-                dcp_text_text(tp, out, S("    "),
+                dcp_text_text(tp, out, DCP_S("    "),
                               dcp_item_text(BURROW_AT(CommentBlock, item->content, j)));
             }
         }
@@ -1167,7 +1167,7 @@ Slice comment_printer_text(CommentPrinter *p, Alloc *a, CommentDoc *d) {
                 continue;
             dcp_byte(&out, '[');
             dcp_str(&out, def->text);
-            dcp_str(&out, S("]: "));
+            dcp_str(&out, DCP_S("]: "));
             dcp_str(&out, def->url);
             dcp_byte(&out, '\n');
         }

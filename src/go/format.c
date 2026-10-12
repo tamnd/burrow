@@ -31,7 +31,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#define S(lit) BURROW_S(lit)
+#define GF_S(lit) BURROW_S(lit)
 
 /* Keep these in sync with cmd/gofmt, as Go's comment says. */
 #define FM_TAB_WIDTH 8
@@ -40,7 +40,7 @@
 #define FM_PARSER_MODE (PARSER_PARSE_COMMENTS | PARSER_SKIP_OBJECT_RESOLUTION)
 
 BURROW_NORETURN static void fm_oom(void) {
-    panic_str(S("go/format: out of memory"));
+    panic_str(GF_S("go/format: out of memory"));
 }
 
 /* What parse wrapped a fragment in, so that format can take it off again. */
@@ -168,12 +168,12 @@ static AstFile *fm_parse(Alloc *a, TokenFileSet *fset, Slice src, bool fragment_
     AstFile *file = parser_parse_file(
         a, fset, BURROW_STR_EMPTY, BURROW_ANY(TYPE_BYTES, &src), FM_PARSER_MODE, err);
     if (BURROW_OK(*err) || !fragment_ok ||
-        !strings_contains(error_text(*err), S("expected 'package'")))
+        !strings_contains(error_text(*err), GF_S("expected 'package'")))
         return file;
 
     /* A declaration list becomes a file with a package clause in front. It
      * goes in with a ';', not a newline, so the line numbers match src's. */
-    Slice psrc = fm_wrap(a, S("package p;"), src, BURROW_STR_EMPTY);
+    Slice psrc = fm_wrap(a, GF_S("package p;"), src, BURROW_STR_EMPTY);
     *err = BURROW_NO_ERROR;
     file = parser_parse_file(a, fset, BURROW_STR_EMPTY, BURROW_ANY(TYPE_BYTES, &psrc),
                              FM_PARSER_MODE, err);
@@ -183,12 +183,12 @@ static AstFile *fm_parse(Alloc *a, TokenFileSet *fset, Slice src, bool fragment_
     }
     /* Fall through to a statement list only if the source did not start with
      * a declaration. */
-    if (!strings_contains(error_text(*err), S("expected declaration")))
+    if (!strings_contains(error_text(*err), GF_S("expected declaration")))
         return file;
 
     /* A statement list, or an expression, becomes the body of a function. The
      * extra '\n' before the '}' makes sure comments are flushed before it. */
-    Slice fsrc = fm_wrap(a, S("package p; func _() {"), src, S("\n\n}"));
+    Slice fsrc = fm_wrap(a, GF_S("package p; func _() {"), src, GF_S("\n\n}"));
     *err = BURROW_NO_ERROR;
     file = parser_parse_file(a, fset, BURROW_STR_EMPTY, BURROW_ANY(TYPE_BYTES, &fsrc),
                              FM_PARSER_MODE, err);

@@ -1,0 +1,751 @@
+#!/bin/sh
+# Regenerates tests/debug_test_gen.h, which tests/elf_test.c and
+# tests/dwarf_test.c read. It holds Go's ELF test files, the ELF ones from
+# debug/dwarf's testdata, and a dump of what Go's debug/elf and debug/dwarf make
+# of each of them: the headers, sections, segments, symbols, dynamic tags and
+# versions, and then every DWARF entry, range, type and line table row. The C
+# tests make the same dump and have to get the same text. Each file is also
+# damaged in a few dozen ways, and for those only a hash of Go's dump is kept,
+# along with the String and GoString of every named ELF and DWARF constant.
+#
+# The Go packages are copied out of GOSRC, a Go source tree that defaults to
+# the one the go command has, into a scratch module and built from there, so
+# the dump comes from the release named in the headers even when the go
+# command is a different one. GOSRC has to have the testdata directories.
+#
+# Copyright 2026 The burrow Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style licence that can be found
+# in the LICENSE file.
+set -eu
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+out="$root/tests/debug_test_gen.h"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+gosrc=${GOSRC:-$(go env GOROOT)/src}
+
+# vendor DIR PKG copies the non-test Go files of $gosrc/DIR into $tmp/PKG and
+# points their imports at the other copies.
+vendor() {
+	mkdir -p "$tmp/$2"
+	for f in "$gosrc/$1"/*.go; do
+		case $f in *_test.go) continue ;; esac
+		sed -e 's#"debug/dwarf"#"gen/dwarf"#' -e 's#"internal/zstd"#"gen/zstd"#' \
+			-e 's#"internal/saferio"#"gen/saferio"#' "$f" > "$tmp/$2/$(basename "$f")"
+	done
+}
+vendor debug/elf elf
+vendor debug/dwarf dwarf
+vendor internal/zstd zstd
+vendor internal/saferio saferio
+
+mkdir "$tmp/elfdata" "$tmp/dwarfdata"
+for f in "$gosrc/debug/elf/testdata"/*; do
+	case $f in *.c) continue ;; esac
+	cp "$f" "$tmp/elfdata/"
+done
+for f in "$gosrc/debug/dwarf/testdata"/*.elf "$gosrc/debug/dwarf/testdata"/*.elf4 \
+	"$gosrc/debug/dwarf/testdata"/*.elf5; do
+	cp "$f" "$tmp/dwarfdata/"
+done
+cp "$gosrc/debug/elf/elf.go" "$tmp/elf.go.txt"
+cp "$gosrc/debug/dwarf/const.go" "$tmp/const.go.txt"
+
+cat > "$tmp/main.go" <<'GO'
+package main
+
+import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/base64"
+	"fmt"
+	"go/ast"
+	"go/constant"
+	"go/parser"
+	"go/token"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"gen/dwarf"
+	"gen/elf"
+)
+
+func blob(b []byte, err error) string {
+	h := sha256.Sum256(b)
+	return fmt.Sprintf("len=%d sha=%x%s", len(b), h[:8], errs(err))
+}
+
+func errs(err error) string {
+	if err == nil {
+		return ""
+	}
+	return fmt.Sprintf(" err=%q", err.Error())
+}
+
+func val(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return "nil"
+	case int64:
+		return fmt.Sprintf("i%d", x)
+	case uint64:
+		return fmt.Sprintf("u%#x", x)
+	case string:
+		return fmt.Sprintf("%q", x)
+	case []byte:
+		return fmt.Sprintf("b%x", x)
+	case bool:
+		return fmt.Sprintf("%t", x)
+	case dwarf.Offset:
+		return fmt.Sprintf("o%#x", x)
+	}
+	return fmt.Sprintf("?%T", v)
+}
+
+func dumpSyms(w *bytes.Buffer, label string, syms []elf.Symbol, err error) {
+	fmt.Fprintf(w, "%s n=%d%s\n", label, len(syms), errs(err))
+	for i, s := range syms {
+		fmt.Fprintf(w, "  %d %q info=%d %s %s other=%d %s hasver=%t vi=%d hidden=%t section=%s value=%#x size=%#x version=%q library=%q\n",
+			i, s.Name, s.Info, elf.ST_BIND(s.Info).String(), elf.ST_TYPE(s.Info).String(),
+			s.Other, elf.ST_VISIBILITY(s.Other).String(), s.HasVersion,
+			s.VersionIndex.Index(), s.VersionIndex.IsHidden(), s.Section.String(),
+			s.Value, s.Size, s.Version, s.Library)
+	}
+}
+
+func dumpStrings(w *bytes.Buffer, label string, ss []string, err error) {
+	fmt.Fprintf(w, "%s n=%d%s\n", label, len(ss), errs(err))
+	for _, s := range ss {
+		fmt.Fprintf(w, "  %q\n", s)
+	}
+}
+
+func isTypeTag(t dwarf.Tag) bool {
+	switch t {
+	case dwarf.TagArrayType, dwarf.TagBaseType, dwarf.TagClassType, dwarf.TagStructType,
+		dwarf.TagUnionType, dwarf.TagConstType, dwarf.TagVolatileType,
+		dwarf.TagRestrictType, dwarf.TagEnumerationType, dwarf.TagPointerType,
+		dwarf.TagSubroutineType, dwarf.TagTypedef, dwarf.TagUnspecifiedType,
+		dwarf.TagReferenceType, dwarf.TagRvalueReferenceType, dwarf.TagPtrToMemberType:
+		return true
+	}
+	return false
+}
+
+func dumpType(w *bytes.Buffer, d *dwarf.Data, off dwarf.Offset) {
+	t, err := d.Type(off)
+	if err != nil {
+		fmt.Fprintf(w, "  type %#x err=%q\n", off, err.Error())
+		return
+	}
+	kind := strings.TrimPrefix(fmt.Sprintf("%T", t), "*dwarf.")
+	fmt.Fprintf(w, "  type %#x %s size=%d name=%q str=%q", off, kind, t.Size(),
+		t.Common().Name, t.String())
+	if b, ok := t.(interface{ Basic() *dwarf.BasicType }); ok {
+		bt := b.Basic()
+		fmt.Fprintf(w, " bits=%d,%d,%d", bt.BitSize, bt.BitOffset, bt.DataBitOffset)
+	}
+	switch t := t.(type) {
+	case *dwarf.StructType:
+		fmt.Fprintf(w, " kind=%q sname=%q incomplete=%t defn=%q", t.Kind, t.StructName,
+			t.Incomplete, t.Defn())
+		for _, f := range t.Field {
+			fmt.Fprintf(w, " field=%q,%q,%d,%d,%d,%d,%d", f.Name, f.Type.String(),
+				f.ByteOffset, f.ByteSize, f.BitOffset, f.DataBitOffset, f.BitSize)
+		}
+	case *dwarf.ArrayType:
+		fmt.Fprintf(w, " stride=%d count=%d", t.StrideBitSize, t.Count)
+	case *dwarf.EnumType:
+		fmt.Fprintf(w, " ename=%q", t.EnumName)
+		for _, v := range t.Val {
+			fmt.Fprintf(w, " val=%q,%d", v.Name, v.Val)
+		}
+	case *dwarf.FuncType:
+		fmt.Fprintf(w, " params=%d", len(t.ParamType))
+	case *dwarf.QualType:
+		fmt.Fprintf(w, " qual=%q", t.Qual)
+	case *dwarf.UnsupportedType:
+		fmt.Fprintf(w, " tag=%s", t.Tag.String())
+	}
+	fmt.Fprintf(w, "\n")
+}
+
+func dumpLines(w *bytes.Buffer, d *dwarf.Data, cu *dwarf.Entry) {
+	lr, err := d.LineReader(cu)
+	if err != nil {
+		fmt.Fprintf(w, "lines %#x err=%q\n", cu.Offset, err.Error())
+		return
+	}
+	if lr == nil {
+		fmt.Fprintf(w, "lines %#x none\n", cu.Offset)
+		return
+	}
+	fmt.Fprintf(w, "lines %#x\n", cu.Offset)
+	var rows []dwarf.LineEntry
+	var mid dwarf.LineReaderPos
+	var e dwarf.LineEntry
+	for {
+		if len(rows) == 3 {
+			mid = lr.Tell()
+		}
+		err := lr.Next(&e)
+		if err != nil {
+			fmt.Fprintf(w, "  end err=%q\n", err.Error())
+			break
+		}
+		rows = append(rows, e)
+		file := "nil"
+		if e.File != nil {
+			file = fmt.Sprintf("%q", e.File.Name)
+		}
+		fmt.Fprintf(w, "  row %#x op=%d file=%s line=%d col=%d stmt=%t bb=%t pe=%t eb=%t isa=%d disc=%d end=%t\n",
+			e.Address, e.OpIndex, file, e.Line, e.Column, e.IsStmt, e.BasicBlock,
+			e.PrologueEnd, e.EpilogueBegin, e.ISA, e.Discriminator, e.EndSequence)
+	}
+	files := lr.Files()
+	fmt.Fprintf(w, "  files n=%d\n", len(files))
+	for _, f := range files {
+		if f == nil {
+			fmt.Fprintf(w, "    nil\n")
+			continue
+		}
+		fmt.Fprintf(w, "    %q mtime=%d len=%d\n", f.Name, f.Mtime, f.Length)
+	}
+	if len(rows) > 3 {
+		lr.Seek(mid)
+		same := 0
+		for i := 3; i < len(rows); i++ {
+			if lr.Next(&e) != nil {
+				break
+			}
+			if e.Address == rows[i].Address && e.Line == rows[i].Line {
+				same++
+			}
+		}
+		fmt.Fprintf(w, "  tellseek %d of %d\n", same, len(rows)-3)
+	}
+	lr.Reset()
+	for _, row := range rows {
+		if row.EndSequence {
+			continue
+		}
+		var got dwarf.LineEntry
+		err := lr.SeekPC(row.Address, &got)
+		if err != nil {
+			fmt.Fprintf(w, "  seekpc %#x err=%q\n", row.Address, err.Error())
+			continue
+		}
+		fmt.Fprintf(w, "  seekpc %#x %#x line=%d\n", row.Address, got.Address, got.Line)
+	}
+}
+
+func dumpDWARF(w *bytes.Buffer, d *dwarf.Data) {
+	r := d.Reader()
+	var cus []*dwarf.Entry
+	var lows []uint64
+	for {
+		e, err := r.Next()
+		if err != nil {
+			fmt.Fprintf(w, "next err=%q\n", err.Error())
+			break
+		}
+		if e == nil {
+			break
+		}
+		fmt.Fprintf(w, "entry %#x %s children=%t", e.Offset, e.Tag.String(), e.Children)
+		for _, f := range e.Field {
+			fmt.Fprintf(w, " %s:%s=%s", f.Attr.String(), f.Class.String(), val(f.Val))
+		}
+		fmt.Fprintf(w, "\n")
+		if e.Tag == dwarf.TagCompileUnit {
+			cus = append(cus, e)
+			fmt.Fprintf(w, "  unit asize=%d order=%s\n", r.AddressSize(), r.ByteOrder().String())
+		}
+		rs, err := d.Ranges(e)
+		if len(rs) > 0 || err != nil {
+			fmt.Fprintf(w, "  ranges")
+			for _, x := range rs {
+				fmt.Fprintf(w, " %#x-%#x", x[0], x[1])
+			}
+			fmt.Fprintf(w, "%s\n", errs(err))
+			if e.Tag == dwarf.TagCompileUnit && len(rs) > 0 {
+				lows = append(lows, rs[0][0])
+			}
+		}
+		if isTypeTag(e.Tag) {
+			dumpType(w, d, e.Offset)
+		}
+		if off, ok := e.Val(dwarf.AttrType).(dwarf.Offset); ok {
+			dumpType(w, d, off)
+		}
+	}
+	for _, cu := range cus {
+		dumpLines(w, d, cu)
+	}
+	r2 := d.Reader()
+	for _, pc := range lows {
+		e, err := r2.SeekPC(pc)
+		if err != nil {
+			fmt.Fprintf(w, "seekpc %#x err=%q\n", pc, err.Error())
+			continue
+		}
+		fmt.Fprintf(w, "seekpc %#x %#x\n", pc, e.Offset)
+	}
+	for _, cu := range cus {
+		r2.Seek(cu.Offset)
+		e, err := r2.Next()
+		if err != nil || e == nil {
+			fmt.Fprintf(w, "seek %#x failed%s\n", cu.Offset, errs(err))
+			continue
+		}
+		r2.SkipChildren()
+		e2, err := r2.Next()
+		next := "nil"
+		if e2 != nil {
+			next = fmt.Sprintf("%#x", e2.Offset)
+		}
+		fmt.Fprintf(w, "seek %#x %#x next=%s%s\n", cu.Offset, e.Offset, next, errs(err))
+	}
+}
+
+var dynValueTags = []elf.DynTag{elf.DT_NEEDED, elf.DT_FLAGS, elf.DT_FLAGS_1,
+	elf.DT_VERNEEDNUM, elf.DT_STRSZ, elf.DT_PLTGOT, elf.DT_INIT}
+
+func dump(w *bytes.Buffer, data []byte) {
+	f, err := elf.NewFile(bytes.NewReader(data))
+	if err != nil {
+		fmt.Fprintf(w, "newfile err=%q\n", err.Error())
+		return
+	}
+	defer f.Close()
+	h := f.FileHeader
+	fmt.Fprintf(w, "header class=%s data=%s version=%s osabi=%s abiversion=%d byteorder=%s type=%s machine=%s entry=%#x\n",
+		h.Class.String(), h.Data.String(), h.Version.String(), h.OSABI.String(),
+		h.ABIVersion, h.ByteOrder.String(), h.Type.String(), h.Machine.String(), h.Entry)
+	for i, s := range f.Sections {
+		sh := s.SectionHeader
+		fmt.Fprintf(w, "section %d %q type=%s flags=%s addr=%#x offset=%#x size=%#x link=%d info=%d addralign=%#x entsize=%#x filesize=%#x\n",
+			i, sh.Name, sh.Type.String(), sh.Flags.String(), sh.Addr, sh.Offset, sh.Size,
+			sh.Link, sh.Info, sh.Addralign, sh.Entsize, sh.FileSize)
+		b, err := s.Data()
+		fmt.Fprintf(w, "  data %s\n", blob(b, err))
+		b, err = io.ReadAll(s.Open())
+		fmt.Fprintf(w, "  open %s\n", blob(b, err))
+	}
+	for i, p := range f.Progs {
+		ph := p.ProgHeader
+		fmt.Fprintf(w, "prog %d type=%s flags=%s off=%#x vaddr=%#x paddr=%#x filesz=%#x memsz=%#x align=%#x\n",
+			i, ph.Type.String(), ph.Flags.String(), ph.Off, ph.Vaddr, ph.Paddr, ph.Filesz,
+			ph.Memsz, ph.Align)
+		b, err := io.ReadAll(p.Open())
+		fmt.Fprintf(w, "  open %s\n", blob(b, err))
+	}
+	syms, err := f.Symbols()
+	dumpSyms(w, "symbols", syms, err)
+	syms, err = f.DynamicSymbols()
+	dumpSyms(w, "dynsyms", syms, err)
+	imp, err := f.ImportedSymbols()
+	fmt.Fprintf(w, "imported n=%d%s\n", len(imp), errs(err))
+	for _, s := range imp {
+		fmt.Fprintf(w, "  %q %q %q\n", s.Name, s.Version, s.Library)
+	}
+	libs, err := f.ImportedLibraries()
+	dumpStrings(w, "libraries", libs, err)
+	for _, tag := range []elf.DynTag{elf.DT_NEEDED, elf.DT_SONAME, elf.DT_RPATH, elf.DT_RUNPATH} {
+		ss, err := f.DynString(tag)
+		dumpStrings(w, "dynstring "+tag.String(), ss, err)
+	}
+	for _, tag := range dynValueTags {
+		vs, err := f.DynValue(tag)
+		fmt.Fprintf(w, "dynvalue %s n=%d%s", tag.String(), len(vs), errs(err))
+		for _, v := range vs {
+			fmt.Fprintf(w, " %#x", v)
+		}
+		fmt.Fprintf(w, "\n")
+	}
+	vers, err := f.DynamicVersions()
+	fmt.Fprintf(w, "versions n=%d%s\n", len(vers), errs(err))
+	for _, v := range vers {
+		fmt.Fprintf(w, "  %q index=%d flags=%d deps=%d\n", v.Name, v.Index, v.Flags, len(v.Deps))
+		for _, d := range v.Deps {
+			fmt.Fprintf(w, "    %q\n", d)
+		}
+	}
+	needs, err := f.DynamicVersionNeeds()
+	fmt.Fprintf(w, "needs n=%d%s\n", len(needs), errs(err))
+	for _, n := range needs {
+		fmt.Fprintf(w, "  %q n=%d\n", n.Name, len(n.Needs))
+		for _, d := range n.Needs {
+			fmt.Fprintf(w, "    %q index=%d flags=%d\n", d.Dep, d.Index, d.Flags)
+		}
+	}
+	d, err := f.DWARF()
+	if err != nil {
+		fmt.Fprintf(w, "dwarf err=%q\n", err.Error())
+		return
+	}
+	dumpDWARF(w, d)
+}
+
+// safeDump is dump, or false if Go panics, which the C side does too, so that
+// damage is left out.
+func safeDump(data []byte) (out []byte, ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	var w bytes.Buffer
+	dump(&w, data)
+	return w.Bytes(), true
+}
+
+func lcg(x uint64) uint64 { return x*6364136223846793005 + 1442695040888963407 }
+
+type damage struct {
+	pos  int // byte to change, or where to cut when xor is 0
+	xor  byte
+	hash string
+}
+
+func damages(data []byte, seed uint64) []damage {
+	var ds []damage
+	x := seed
+	n := len(data)
+	add := func(pos int, xor byte) {
+		b := append([]byte(nil), data...)
+		if xor == 0 {
+			b = b[:pos]
+		} else {
+			b[pos] ^= xor
+		}
+		out, ok := safeDump(b)
+		if !ok {
+			return
+		}
+		ds = append(ds, damage{pos, xor, fmt.Sprintf("%x", sha256.Sum256(out))[:16]})
+	}
+	// The file header, then the section headers, then anywhere.
+	for i := 0; i < 12; i++ {
+		x = lcg(x)
+		add(int(x>>33)%min(64, n), byte(1<<((x>>20)%8)))
+	}
+	shoff := 0
+	if n > 0x30 && data[4] == 2 && data[5] == 1 {
+		shoff = int(uint64(data[0x28]) | uint64(data[0x29])<<8 | uint64(data[0x2a])<<16)
+	} else if n > 0x24 && data[4] == 1 && data[5] == 1 {
+		shoff = int(uint32(data[0x20]) | uint32(data[0x21])<<8 | uint32(data[0x22])<<16)
+	}
+	if shoff > 0 && shoff < n {
+		for i := 0; i < 12; i++ {
+			x = lcg(x)
+			add(shoff+int(x>>33)%(n-shoff), byte(1<<((x>>20)%8)))
+		}
+	}
+	for i := 0; i < 16; i++ {
+		x = lcg(x)
+		xor := byte(x >> 56)
+		if xor == 0 {
+			xor = 0x80
+		}
+		add(int(x>>33)%n, xor)
+	}
+	for _, cut := range []int{n / 2, n - 1, n * 3 / 4, 100} {
+		if cut > 0 && cut < n {
+			add(cut, 0)
+		}
+	}
+	return ds
+}
+
+type file struct {
+	name   string
+	gz     bool
+	raw    []byte // as in testdata
+	data   []byte // the ELF file
+	dump   []byte
+	damage []damage
+}
+
+func load(dir string) []*file {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		panic(err)
+	}
+	var fs []*file
+	for _, de := range ents {
+		raw, err := os.ReadFile(filepath.Join(dir, de.Name()))
+		if err != nil {
+			panic(err)
+		}
+		f := &file{name: de.Name(), raw: raw, data: raw}
+		if strings.HasSuffix(de.Name(), ".gz") {
+			zr, err := gzip.NewReader(bytes.NewReader(raw))
+			if err != nil {
+				panic(err)
+			}
+			f.data, err = io.ReadAll(zr)
+			if err != nil {
+				panic(err)
+			}
+			f.gz = true
+		}
+		fs = append(fs, f)
+	}
+	return fs
+}
+
+// The constant types with String and GoString, in the order of the C test's
+// table.
+var elfKinds = []struct {
+	name string
+	f    func(int64) (string, string)
+}{
+	{"Version", func(v int64) (string, string) { x := elf.Version(v); return x.String(), x.GoString() }},
+	{"Class", func(v int64) (string, string) { x := elf.Class(v); return x.String(), x.GoString() }},
+	{"Data", func(v int64) (string, string) { x := elf.Data(v); return x.String(), x.GoString() }},
+	{"OSABI", func(v int64) (string, string) { x := elf.OSABI(v); return x.String(), x.GoString() }},
+	{"Type", func(v int64) (string, string) { x := elf.Type(v); return x.String(), x.GoString() }},
+	{"Machine", func(v int64) (string, string) { x := elf.Machine(v); return x.String(), x.GoString() }},
+	{"SectionIndex", func(v int64) (string, string) { x := elf.SectionIndex(v); return x.String(), x.GoString() }},
+	{"SectionType", func(v int64) (string, string) { x := elf.SectionType(v); return x.String(), x.GoString() }},
+	{"SectionFlag", func(v int64) (string, string) { x := elf.SectionFlag(v); return x.String(), x.GoString() }},
+	{"CompressionType", func(v int64) (string, string) { x := elf.CompressionType(v); return x.String(), x.GoString() }},
+	{"ProgType", func(v int64) (string, string) { x := elf.ProgType(v); return x.String(), x.GoString() }},
+	{"ProgFlag", func(v int64) (string, string) { x := elf.ProgFlag(v); return x.String(), x.GoString() }},
+	{"DynTag", func(v int64) (string, string) { x := elf.DynTag(v); return x.String(), x.GoString() }},
+	{"DynFlag", func(v int64) (string, string) { x := elf.DynFlag(v); return x.String(), x.GoString() }},
+	{"DynFlag1", func(v int64) (string, string) { x := elf.DynFlag1(v); return x.String(), x.GoString() }},
+	{"NType", func(v int64) (string, string) { x := elf.NType(v); return x.String(), x.GoString() }},
+	{"SymBind", func(v int64) (string, string) { x := elf.SymBind(v); return x.String(), x.GoString() }},
+	{"SymType", func(v int64) (string, string) { x := elf.SymType(v); return x.String(), x.GoString() }},
+	{"SymVis", func(v int64) (string, string) { x := elf.SymVis(v); return x.String(), x.GoString() }},
+	{"R_X86_64", func(v int64) (string, string) { x := elf.R_X86_64(v); return x.String(), x.GoString() }},
+	{"R_AARCH64", func(v int64) (string, string) { x := elf.R_AARCH64(v); return x.String(), x.GoString() }},
+	{"R_ALPHA", func(v int64) (string, string) { x := elf.R_ALPHA(v); return x.String(), x.GoString() }},
+	{"R_ARM", func(v int64) (string, string) { x := elf.R_ARM(v); return x.String(), x.GoString() }},
+	{"R_386", func(v int64) (string, string) { x := elf.R_386(v); return x.String(), x.GoString() }},
+	{"R_MIPS", func(v int64) (string, string) { x := elf.R_MIPS(v); return x.String(), x.GoString() }},
+	{"R_LARCH", func(v int64) (string, string) { x := elf.R_LARCH(v); return x.String(), x.GoString() }},
+	{"R_PPC", func(v int64) (string, string) { x := elf.R_PPC(v); return x.String(), x.GoString() }},
+	{"R_PPC64", func(v int64) (string, string) { x := elf.R_PPC64(v); return x.String(), x.GoString() }},
+	{"R_RISCV", func(v int64) (string, string) { x := elf.R_RISCV(v); return x.String(), x.GoString() }},
+	{"R_390", func(v int64) (string, string) { x := elf.R_390(v); return x.String(), x.GoString() }},
+	{"R_SPARC", func(v int64) (string, string) { x := elf.R_SPARC(v); return x.String(), x.GoString() }},
+	{"dwarf.Attr", func(v int64) (string, string) { x := dwarf.Attr(v); return x.String(), x.GoString() }},
+	{"dwarf.Tag", func(v int64) (string, string) { x := dwarf.Tag(v); return x.String(), x.GoString() }},
+	{"dwarf.Class", func(v int64) (string, string) { x := dwarf.Class(v); return x.String(), x.GoString() }},
+}
+
+// constValues reads the typed constants in a Go file, by type name.
+func constValues(path string) map[string][]int64 {
+	fset := token.NewFileSet()
+	af, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		panic(err)
+	}
+	vals := map[string][]int64{}
+	for _, decl := range af.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs := spec.(*ast.ValueSpec)
+			id, ok := vs.Type.(*ast.Ident)
+			if !ok || len(vs.Values) != 1 {
+				continue
+			}
+			v, ok := eval(vs.Values[0])
+			if ok {
+				vals[id.Name] = append(vals[id.Name], v)
+			}
+		}
+	}
+	return vals
+}
+
+func eval(e ast.Expr) (int64, bool) {
+	switch e := e.(type) {
+	case *ast.BasicLit:
+		v := constant.MakeFromLiteral(e.Value, e.Kind, 0)
+		return constant.Int64Val(constant.ToInt(v))
+	case *ast.ParenExpr:
+		return eval(e.X)
+	case *ast.UnaryExpr:
+		x, ok := eval(e.X)
+		if ok && e.Op == token.SUB {
+			return -x, true
+		}
+	case *ast.BinaryExpr:
+		x, ok1 := eval(e.X)
+		y, ok2 := eval(e.Y)
+		if !ok1 || !ok2 {
+			return 0, false
+		}
+		switch e.Op {
+		case token.SHL:
+			return x << uint(y), true
+		case token.OR:
+			return x | y, true
+		case token.ADD:
+			return x + y, true
+		}
+	}
+	return 0, false
+}
+
+// names gives the values to try for each kind: every named one, the ones
+// next to it, the small ones, and for the flags some unions.
+func names() [][3]any {
+	vals := constValues("elf.go.txt")
+	for k, v := range constValues("const.go.txt") {
+		vals["dwarf."+k] = v
+	}
+	var rows [][3]any
+	for ki, k := range elfKinds {
+		set := map[int64]bool{}
+		width := int64(1) << 32
+		switch k.name {
+		case "Version", "Class", "Data", "OSABI":
+			width = 256
+		case "Type", "Machine":
+			width = 1 << 16
+		}
+		for v := int64(0); v < 40; v++ {
+			set[v] = true
+		}
+		named := vals[k.name]
+		for _, v := range named {
+			set[v] = true
+			set[v+1] = true
+			if v > 0 {
+				set[v-1] = true
+			}
+		}
+		if strings.Contains(k.name, "Flag") {
+			for i, v := range named {
+				if i+1 < len(named) {
+					set[v|named[i+1]] = true
+				}
+				set[v|1<<30] = true
+			}
+		}
+		set[width-1] = true
+		var vs []int64
+		for v := range set {
+			if v >= 0 && v < width {
+				vs = append(vs, v)
+			}
+		}
+		sort.Slice(vs, func(i, j int) bool { return vs[i] < vs[j] })
+		for _, v := range vs {
+			s, g := k.f(v)
+			rows = append(rows, [3]any{ki, v, [2]string{s, g}})
+		}
+	}
+	return rows
+}
+
+func cstr(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '"' || c == '\\':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case c == '?':
+			// Keeps trigraphs out.
+			b.WriteString("\\?")
+		case c >= 0x20 && c < 0x7f:
+			b.WriteByte(c)
+		default:
+			fmt.Fprintf(&b, "\\%03o", c)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+func writeBase64(w io.Writer, name string, b []byte) {
+	s := base64.StdEncoding.EncodeToString(b)
+	fmt.Fprintf(w, "static const char *const %s[] = {\n", name)
+	for len(s) > 0 {
+		n := min(72, len(s))
+		fmt.Fprintf(w, "    \"%s\",\n", s[:n])
+		s = s[n:]
+	}
+	fmt.Fprintf(w, "    NULL,\n};\n\n")
+}
+
+func main() {
+	var fs []*file
+	for _, f := range load("elfdata") {
+		f.name = "elf/" + f.name
+		fs = append(fs, f)
+	}
+	for _, f := range load("dwarfdata") {
+		f.name = "dwarf/" + f.name
+		fs = append(fs, f)
+	}
+	for i, f := range fs {
+		out, ok := safeDump(f.data)
+		if !ok {
+			panic("Go panics on " + f.name)
+		}
+		f.dump = out
+		f.damage = damages(f.data, uint64(i)+1)
+	}
+
+	w := os.Stdout
+	fmt.Fprintf(w, "/* Generated by tools/gen-debug-tests.sh from Go's debug/elf and debug/dwarf\n * and their testdata. Do not edit. */\n\n")
+	fmt.Fprintf(w, "#ifndef BURROW_TESTS_DEBUG_TEST_GEN_H\n#define BURROW_TESTS_DEBUG_TEST_GEN_H\n\n")
+	for i, f := range fs {
+		fmt.Fprintf(w, "/* %s, %d bytes. */\n", f.name, len(f.raw))
+		writeBase64(w, fmt.Sprintf("debug_file_%d", i), f.raw)
+		fmt.Fprintf(w, "static const char *const debug_dump_%d[] = {\n", i)
+		for _, line := range strings.SplitAfter(string(f.dump), "\n") {
+			if line == "" {
+				continue
+			}
+			fmt.Fprintf(w, "    %s,\n", cstr(strings.TrimSuffix(line, "\n")))
+		}
+		fmt.Fprintf(w, "    NULL,\n};\n\n")
+		fmt.Fprintf(w, "static const DebugDamage debug_damage_%d[] = {\n", i)
+		for _, d := range f.damage {
+			fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
+		}
+		fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+	}
+	fmt.Fprintf(w, "static const DebugFile debug_files[] = {\n")
+	for i, f := range fs {
+		fmt.Fprintf(w, "    {%s, %t, debug_file_%d, debug_dump_%d, debug_damage_%d},\n", cstr(f.name), f.gz, i, i, i)
+	}
+	fmt.Fprintf(w, "};\n\n")
+
+	fmt.Fprintf(w, "static const DebugName debug_names[] = {\n")
+	for _, r := range names() {
+		ss := r[2].([2]string)
+		fmt.Fprintf(w, "    {%d, %dLL, %s, %s},\n", r[0], r[1], cstr(ss[0]), cstr(ss[1]))
+	}
+	fmt.Fprintf(w, "};\n\n#endif\n")
+}
+GO
+
+cd "$tmp"
+cat > go.mod <<'MOD'
+module gen
+
+go 1.22
+MOD
+go run . > "$out"
+if command -v clang-format >/dev/null 2>&1; then
+	clang-format -i "$out"
+fi
+echo "wrote $out"

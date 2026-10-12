@@ -1413,6 +1413,8 @@ static void gd_read_package(GdReader *r, AstPackage *pkg, DocMode mode) {
     /* process files in sorted order */
     for (Int i = 0; i < r->filenames.len; i++) {
         AstFile *f = gd_package_file(pkg, BURROW_AT(Str, r->filenames, i));
+        if (f == NULL)
+            continue;
         if ((mode & DOC_ALL_DECLS) == 0)
             gd_file_exports(r, f);
         gd_read_file(r, f);
@@ -1433,6 +1435,8 @@ static void gd_read_package(GdReader *r, AstPackage *pkg, DocMode mode) {
     /* process functions now that we have better type information */
     for (Int i = 0; i < r->filenames.len; i++) {
         AstFile *f = gd_package_file(pkg, BURROW_AT(Str, r->filenames, i));
+        if (f == NULL)
+            continue;
         for (Int j = 0; j < f->decls.len; j++) {
             AstDecl d = gd_node(f->decls, j);
             if (gd_is(d, AST_KIND_FUNC_DECL))

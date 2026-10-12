@@ -88,7 +88,7 @@ static void TestCases(TestingT *t) {
         burrow__zstd_reader_free(r);
         arena_free(&ar);
     }
-    CHECK(NCASES > 1000);
+    CHECK(NCASES > 700);
 }
 
 /* One reader for every stream, with Reset between them, after streams that

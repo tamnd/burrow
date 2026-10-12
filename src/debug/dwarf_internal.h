@@ -517,6 +517,11 @@ Error burrow__dwarf_error(DwarfData *d, Str text);
 /* What every allocation that fails ends in. */
 BURROW_NORETURN void burrow__dwarf_oom(void);
 
+/* pathJoin from line.go: filename, which is relative, in the directory
+ * dirname, where either can be a Unix or a DOS path. The tests call it the way
+ * Go's export_test.go lets its tests call PathJoin. */
+BURROW_OWNS(ret) Str burrow__dwarf_path_join(Alloc *a, Str dirname, Str filename);
+
 /* n zeroed bytes from a, or a panic. */
 void *burrow__dwarf_alloc(Alloc *a, size_t n);
 

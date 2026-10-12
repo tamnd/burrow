@@ -171,7 +171,7 @@ static Str dwl_concat(Alloc *a, int n, const Str *parts) {
 
 /* pathJoin: filename, which is relative, in the directory dirname, where
  * either can be a Unix or a DOS path. */
-static Str dwl_path_join(Alloc *a, Str dirname, Str filename) {
+Str burrow__dwarf_path_join(Alloc *a, Str dirname, Str filename) {
     if (dirname.len == 0)
         return filename;
     /* dirname ought to be absolute, so a drive letter or a UNC share is a
@@ -260,7 +260,7 @@ static Error dwl_read_file_entry(DwarfLineReader *r, bool *done) {
             return dwl_decode_error_s(r, off, DWL_S("directory index too large"));
         if (dir_index < 0)
             runtime_index_out_of_range(dir_index, r->ndirectory);
-        name = dwl_path_join(r->a, r->directories[dir_index], name);
+        name = burrow__dwarf_path_join(r->a, r->directories[dir_index], name);
     }
     uint64_t mtime = dw_buf_uint(&r->buf);
     Int length = (Int)dw_buf_uint(&r->buf);
@@ -400,7 +400,7 @@ static Error dwl_read_lnct(DwarfLineReader *r, const DwlForm *s, Int n, bool dwa
         }
     }
     if (dir.len > 0 && path->len > 0)
-        *path = dwl_path_join(r->a, dir, *path);
+        *path = burrow__dwarf_path_join(r->a, dir, *path);
     return BURROW_NO_ERROR;
 }
 
@@ -503,7 +503,7 @@ static Error dwl_read_header(DwarfLineReader *r, Str comp_dir) {
                 break;
             if (!dwl_path_is_abs(directory)) {
                 /* A relative one is in the compilation directory. */
-                directory = dwl_path_join(r->a, comp_dir, directory);
+                directory = burrow__dwarf_path_join(r->a, comp_dir, directory);
             }
             if (r->ndirectory == cap) {
                 Str *d =

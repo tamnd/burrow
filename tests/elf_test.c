@@ -410,8 +410,8 @@ static void dump_lines(Alloc *a, IoWriter w, DwarfData *d, const DwarfEntry *cu)
 
 static void dump_dwarf(Alloc *a, IoWriter w, DwarfData *d) {
     DwarfReader *r = dwarf_data_reader(d, a);
-    Slice cus = slice_make(a, TYPE_BYTE, 0, 0);
-    Slice lows = slice_make(a, TYPE_BYTE, 0, 0);
+    Slice cus = slice_make(a, TYPE_UNSAFE_POINTER, 0, 0);
+    Slice lows = slice_make(a, TYPE_UINT64, 0, 0);
     for (;;) {
         Error err = BURROW_NO_ERROR;
         DwarfEntry *e = dwarf_reader_next(r, &err);
@@ -430,7 +430,7 @@ static void dump_dwarf(Alloc *a, IoWriter w, DwarfData *d) {
         }
         fmt_fprintf_v(w, "\n");
         if (e->tag == DWARF_TAG_COMPILE_UNIT) {
-            cus = slice_append(a, cus, (const Byte *)&e, (Int)sizeof e);
+            cus = slice_append(a, cus, &e, 1);
             BinaryByteOrder bo = dwarf_reader_byte_order(r);
             fmt_fprintf_v(w, "  unit asize=%d order=%s\n", dwarf_reader_address_size(r),
                           bo.vt->string(bo.data));
@@ -445,7 +445,7 @@ static void dump_dwarf(Alloc *a, IoWriter w, DwarfData *d) {
             fmt_fprintf_v(w, "%s\n", errs(a, err));
             if (e->tag == DWARF_TAG_COMPILE_UNIT && rs.len > 0) {
                 uint64_t lo = ((const DwarfPCRange *)rs.p)->v[0];
-                lows = slice_append(a, lows, (const Byte *)&lo, (Int)sizeof lo);
+                lows = slice_append(a, lows, &lo, 1);
             }
         }
         if (is_type_tag(e->tag))
@@ -456,12 +456,12 @@ static void dump_dwarf(Alloc *a, IoWriter w, DwarfData *d) {
             dump_type(a, w, d, *ref);
     }
     DwarfEntry **cu = (DwarfEntry **)cus.p;
-    Int ncu = cus.len / (Int)sizeof(DwarfEntry *);
+    Int ncu = cus.len;
     for (Int i = 0; i < ncu; i++)
         dump_lines(a, w, d, cu[i]);
     DwarfReader *r2 = dwarf_data_reader(d, a);
     const uint64_t *low = (const uint64_t *)lows.p;
-    for (Int i = 0; i < lows.len / (Int)sizeof(uint64_t); i++) {
+    for (Int i = 0; i < lows.len; i++) {
         Error err = BURROW_NO_ERROR;
         DwarfEntry *e = dwarf_reader_seek_pc(r2, low[i], &err);
         if (BURROW_FAILED(err)) {

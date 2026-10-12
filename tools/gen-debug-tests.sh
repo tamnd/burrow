@@ -10,7 +10,8 @@
 # along with the String and GoString of every named ELF and DWARF constant.
 # The macho one is the same for Go's Mach-O test files and the Mach-O ones in
 # debug/dwarf's testdata, through debug/macho, each read as a universal binary
-# and as a plain one.
+# and as a plain one. The pe one, tests/pe_test_gen.h, is the same again for
+# Go's PE test files and the PE one in debug/dwarf's testdata, through debug/pe.
 #
 # The Go packages are copied out of GOSRC, a Go source tree that defaults to
 # the one the go command has, into a scratch module and built from there, so
@@ -27,8 +28,9 @@ mode=${1:-elf}
 case $mode in
 elf) out="$root/tests/debug_test_gen.h" ;;
 macho) out="$root/tests/macho_test_gen.h" ;;
+pe) out="$root/tests/pe_test_gen.h" ;;
 *)
-	echo "usage: $0 [elf|macho]" >&2
+	echo "usage: $0 [elf|macho|pe]" >&2
 	exit 2
 	;;
 esac
@@ -48,6 +50,7 @@ vendor() {
 }
 vendor debug/elf elf
 vendor debug/macho macho
+vendor debug/pe pe
 vendor debug/dwarf dwarf
 vendor internal/zstd zstd
 vendor internal/saferio saferio
@@ -68,6 +71,12 @@ done
 for f in "$gosrc/debug/dwarf/testdata"/*.macho "$gosrc/debug/dwarf/testdata"/*.macho4; do
 	cp "$f" "$tmp/machodwarf/"
 done
+mkdir "$tmp/pedata" "$tmp/pedwarf"
+for f in "$gosrc/debug/pe/testdata"/*; do
+	case $f in *.c) continue ;; esac
+	[ -f "$f" ] && cp "$f" "$tmp/pedata/"
+done
+cp "$gosrc/debug/dwarf/testdata/line-gcc-win.bin" "$tmp/pedwarf/"
 cp "$gosrc/debug/elf/elf.go" "$tmp/elf.go.txt"
 cp "$gosrc/debug/macho/macho.go" "$tmp/macho.go.txt"
 cp "$gosrc/debug/dwarf/const.go" "$tmp/const.go.txt"
@@ -710,6 +719,10 @@ func main() {
 		machoMain()
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "pe" {
+		peMain()
+		return
+	}
 	var fs []*file
 	for _, f := range load("elfdata") {
 		f.name = "elf/" + f.name
@@ -1065,6 +1078,263 @@ func machoMain() {
 	for _, r := range machoNames() {
 		ss := r[2].([2]string)
 		fmt.Fprintf(w, "    {%d, %dLL, %s, %s},\n", r[0], r[1], cstr(ss[0]), cstr(ss[1]))
+	}
+	fmt.Fprintf(w, "};\n\n#endif\n")
+}
+GO
+
+cat > "$tmp/pe.go" <<'GO'
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"gen/pe"
+)
+
+func dumpOptional(w *bytes.Buffer, oh any) {
+	var dd [16]pe.DataDirectory
+	switch h := oh.(type) {
+	case nil:
+		fmt.Fprintf(w, "optional nil\n")
+		return
+	case *pe.OptionalHeader32:
+		fmt.Fprintf(w, "optional32 magic=%#x linker=%d.%d code=%#x idata=%#x udata=%#x entry=%#x codebase=%#x database=%#x image=%#x\n",
+			h.Magic, h.MajorLinkerVersion, h.MinorLinkerVersion, h.SizeOfCode,
+			h.SizeOfInitializedData, h.SizeOfUninitializedData, h.AddressOfEntryPoint,
+			h.BaseOfCode, h.BaseOfData, h.ImageBase)
+		fmt.Fprintf(w, "  align=%#x/%#x os=%d.%d image=%d.%d subsystem=%d.%d win32=%d size=%#x headers=%#x sum=%#x\n",
+			h.SectionAlignment, h.FileAlignment, h.MajorOperatingSystemVersion,
+			h.MinorOperatingSystemVersion, h.MajorImageVersion, h.MinorImageVersion,
+			h.MajorSubsystemVersion, h.MinorSubsystemVersion, h.Win32VersionValue,
+			h.SizeOfImage, h.SizeOfHeaders, h.CheckSum)
+		fmt.Fprintf(w, "  subsystem=%d dll=%#x stack=%#x/%#x heap=%#x/%#x loader=%#x ndd=%d\n",
+			h.Subsystem, h.DllCharacteristics, h.SizeOfStackReserve, h.SizeOfStackCommit,
+			h.SizeOfHeapReserve, h.SizeOfHeapCommit, h.LoaderFlags, h.NumberOfRvaAndSizes)
+		dd = h.DataDirectory
+	case *pe.OptionalHeader64:
+		fmt.Fprintf(w, "optional64 magic=%#x linker=%d.%d code=%#x idata=%#x udata=%#x entry=%#x codebase=%#x image=%#x\n",
+			h.Magic, h.MajorLinkerVersion, h.MinorLinkerVersion, h.SizeOfCode,
+			h.SizeOfInitializedData, h.SizeOfUninitializedData, h.AddressOfEntryPoint,
+			h.BaseOfCode, h.ImageBase)
+		fmt.Fprintf(w, "  align=%#x/%#x os=%d.%d image=%d.%d subsystem=%d.%d win32=%d size=%#x headers=%#x sum=%#x\n",
+			h.SectionAlignment, h.FileAlignment, h.MajorOperatingSystemVersion,
+			h.MinorOperatingSystemVersion, h.MajorImageVersion, h.MinorImageVersion,
+			h.MajorSubsystemVersion, h.MinorSubsystemVersion, h.Win32VersionValue,
+			h.SizeOfImage, h.SizeOfHeaders, h.CheckSum)
+		fmt.Fprintf(w, "  subsystem=%d dll=%#x stack=%#x/%#x heap=%#x/%#x loader=%#x ndd=%d\n",
+			h.Subsystem, h.DllCharacteristics, h.SizeOfStackReserve, h.SizeOfStackCommit,
+			h.SizeOfHeapReserve, h.SizeOfHeapCommit, h.LoaderFlags, h.NumberOfRvaAndSizes)
+		dd = h.DataDirectory
+	}
+	for i, d := range dd {
+		if d.VirtualAddress != 0 || d.Size != 0 {
+			fmt.Fprintf(w, "  dd %d va=%#x size=%#x\n", i, d.VirtualAddress, d.Size)
+		}
+	}
+}
+
+var peSectionNames = []string{".text", ".data", ".bss", ".idata", ".debug_info", ".rdata", ""}
+
+func dumpPEFile(w *bytes.Buffer, f *pe.File) {
+	h := f.FileHeader
+	fmt.Fprintf(w, "header machine=%#x nsec=%d time=%d symptr=%#x nsyms=%d optsize=%d chars=%#x\n",
+		h.Machine, h.NumberOfSections, h.TimeDateStamp, h.PointerToSymbolTable,
+		h.NumberOfSymbols, h.SizeOfOptionalHeader, h.Characteristics)
+	dumpOptional(w, f.OptionalHeader)
+	for i, s := range f.Sections {
+		sh := s.SectionHeader
+		fmt.Fprintf(w, "section %d %q vsize=%#x va=%#x size=%#x offset=%#x relptr=%#x lineptr=%#x nrel=%d nline=%d chars=%#x\n",
+			i, sh.Name, sh.VirtualSize, sh.VirtualAddress, sh.Size, sh.Offset,
+			sh.PointerToRelocations, sh.PointerToLineNumbers, sh.NumberOfRelocations,
+			sh.NumberOfLineNumbers, sh.Characteristics)
+		b, err := s.Data()
+		fmt.Fprintf(w, "  data %s\n", blob(b, err))
+		b, err = io.ReadAll(s.Open())
+		fmt.Fprintf(w, "  open %s\n", blob(b, err))
+		p := make([]byte, 16)
+		n, err := s.ReadAt(p, 4)
+		fmt.Fprintf(w, "  readat n=%d %x%s\n", n, p[:n], errs(err))
+		for _, r := range s.Relocs {
+			fmt.Fprintf(w, "  reloc va=%#x sym=%d type=%d\n", r.VirtualAddress,
+				r.SymbolTableIndex, r.Type)
+		}
+	}
+	st := f.StringTable
+	fmt.Fprintf(w, "strings %s\n", blob(st, nil))
+	for _, off := range []uint32{0, 3, 4, 5, 8, uint32(len(st)) + 3, uint32(len(st)) + 4,
+		uint32(len(st)) + 5} {
+		s, err := st.String(off)
+		fmt.Fprintf(w, "  string %d %q%s\n", off, s, errs(err))
+	}
+	fmt.Fprintf(w, "coff n=%d\n", len(f.COFFSymbols))
+	for i := range f.COFFSymbols {
+		s := &f.COFFSymbols[i]
+		name, err := s.FullName(st)
+		fmt.Fprintf(w, "  %d %x %q%s value=%#x sect=%d type=%#x class=%d naux=%d\n", i,
+			s.Name, name, errs(err), s.Value, s.SectionNumber, s.Type, s.StorageClass,
+			s.NumberOfAuxSymbols)
+	}
+	idx := []int{-1, 0, len(f.COFFSymbols)}
+	for i, s := range f.COFFSymbols {
+		if s.StorageClass == 3 {
+			idx = append(idx, i)
+		}
+	}
+	for _, i := range idx {
+		a, err := f.COFFSymbolReadSectionDefAux(i)
+		if err != nil {
+			fmt.Fprintf(w, "aux %d err=%q\n", i, err.Error())
+			continue
+		}
+		fmt.Fprintf(w, "aux %d %+v\n", i, *a)
+	}
+	fmt.Fprintf(w, "symbols n=%d\n", len(f.Symbols))
+	for i, s := range f.Symbols {
+		fmt.Fprintf(w, "  %d %q value=%#x sect=%d type=%#x class=%d\n", i, s.Name, s.Value,
+			s.SectionNumber, s.Type, s.StorageClass)
+	}
+	for _, name := range peSectionNames {
+		if s := f.Section(name); s != nil {
+			fmt.Fprintf(w, "section %q va=%#x\n", name, s.VirtualAddress)
+		} else {
+			fmt.Fprintf(w, "section %q nil\n", name)
+		}
+	}
+	imp, err := f.ImportedSymbols()
+	dumpStrings(w, "imported", imp, err)
+	libs, err := f.ImportedLibraries()
+	dumpStrings(w, "libraries", libs, err)
+	d, err := f.DWARF()
+	if err != nil {
+		fmt.Fprintf(w, "dwarf err=%q\n", err.Error())
+		return
+	}
+	dumpDWARF(w, d)
+}
+
+func dumpPE(w *bytes.Buffer, data []byte) {
+	f, err := pe.NewFile(bytes.NewReader(data))
+	if err != nil {
+		fmt.Fprintf(w, "newfile err=%q\n", err.Error())
+		return
+	}
+	dumpPEFile(w, f)
+}
+
+func safePEDump(data []byte) (out []byte, ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	var w bytes.Buffer
+	dumpPE(&w, data)
+	return w.Bytes(), true
+}
+
+func peDamages(data []byte, seed uint64) []damage {
+	var ds []damage
+	x := seed
+	n := len(data)
+	add := func(pos int, xor byte) {
+		b := append([]byte(nil), data...)
+		if xor == 0 {
+			b = b[:pos]
+		} else {
+			b[pos] ^= xor
+		}
+		out, ok := safePEDump(b)
+		if !ok {
+			return
+		}
+		ds = append(ds, damage{pos, xor, fmt.Sprintf("%x", sha256.Sum256(out))[:16]})
+	}
+	// The COFF header, which is after the MS-DOS stub in an image, then the
+	// optional header and the section headers after it, then anywhere.
+	base := 0
+	if n >= 0x40 && data[0] == 'M' && data[1] == 'Z' {
+		base = int(binary.LittleEndian.Uint32(data[0x3c:])) + 4
+	}
+	if base+20 <= n {
+		for i := 0; i < 12; i++ {
+			x = lcg(x)
+			add(base+int(x>>33)%20, byte(1<<((x>>20)%8)))
+		}
+		nsec := int(binary.LittleEndian.Uint16(data[base+2:]))
+		optsz := int(binary.LittleEndian.Uint16(data[base+16:]))
+		end := min(n, base+20+optsz+40*nsec)
+		if end > base+20 {
+			for i := 0; i < 24; i++ {
+				x = lcg(x)
+				add(base+20+int(x>>33)%(end-base-20), byte(1<<((x>>20)%8)))
+			}
+		}
+	}
+	for i := 0; i < 16; i++ {
+		x = lcg(x)
+		xor := byte(x >> 56)
+		if xor == 0 {
+			xor = 0x80
+		}
+		add(int(x>>33)%n, xor)
+	}
+	for _, cut := range []int{n / 2, n - 1, n * 3 / 4, 100, 30} {
+		if cut > 0 && cut < n {
+			add(cut, 0)
+		}
+	}
+	return ds
+}
+
+func peMain() {
+	var fs []*file
+	for _, f := range load("pedata") {
+		f.name = "pe/" + f.name
+		fs = append(fs, f)
+	}
+	for _, f := range load("pedwarf") {
+		f.name = "dwarf/" + f.name
+		fs = append(fs, f)
+	}
+	for i, f := range fs {
+		out, ok := safePEDump(f.data)
+		if !ok {
+			panic("Go panics on " + f.name)
+		}
+		f.dump = out
+		f.damage = peDamages(f.data, uint64(i)+1)
+	}
+
+	w := os.Stdout
+	fmt.Fprintf(w, "/* Generated by tools/gen-debug-tests.sh pe from Go's debug/pe and\n * debug/dwarf and their testdata. Do not edit. */\n\n")
+	fmt.Fprintf(w, "#ifndef BURROW_TESTS_PE_TEST_GEN_H\n#define BURROW_TESTS_PE_TEST_GEN_H\n\n")
+	for i, f := range fs {
+		fmt.Fprintf(w, "/* %s, %d bytes. */\n", f.name, len(f.raw))
+		writeBase64(w, fmt.Sprintf("pe_file_%d", i), f.raw)
+		fmt.Fprintf(w, "static const char *const pe_dump_%d[] = {\n", i)
+		for _, line := range strings.SplitAfter(string(f.dump), "\n") {
+			if line == "" {
+				continue
+			}
+			fmt.Fprintf(w, "    %s,\n", cstr(strings.TrimSuffix(line, "\n")))
+		}
+		fmt.Fprintf(w, "    NULL,\n};\n\n")
+		fmt.Fprintf(w, "static const DebugDamage pe_damage_%d[] = {\n", i)
+		for _, d := range f.damage {
+			fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
+		}
+		fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+	}
+	fmt.Fprintf(w, "static const DebugFile pe_files[] = {\n")
+	for i, f := range fs {
+		fmt.Fprintf(w, "    {%s, false, pe_file_%d, pe_dump_%d, pe_damage_%d},\n", cstr(f.name), i, i, i)
 	}
 	fmt.Fprintf(w, "};\n\n#endif\n")
 }

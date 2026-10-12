@@ -84,7 +84,7 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: ${{ matrix.timeout || 20 }}
     strategy:
       fail-fast: false
       matrix:
@@ -108,6 +108,10 @@ jobs:
           - name: macos-x64-clang
             os: macos-15-intel
             cc: clang
+            # The Intel runners are the slowest in the matrix. The full suite
+            # took about 18 minutes there in early October and started running
+            # into the 20 minute limit as packages landed.
+            timeout: 35
           - name: windows-msvc
             os: windows-latest
             cmake: true
@@ -203,7 +207,7 @@ jobs:
       - name: build and test
         run: |
           docker run --rm --platform linux/s390x -e BURROW_TEST_EMULATED=1 \
-            -v "$PWD":/src -w /src gcc:15 \
+            -v "$PWD":/src -w /src public.ecr.aws/docker/library/gcc:15 \
             sh -c 'cc -dM -E - </dev/null | grep -q "__BYTE_ORDER__ __ORDER_BIG_ENDIAN__" || { echo "this is not a big endian compiler" >&2; exit 1; }; make -j"$(nproc)" test TESTFLAGS=-test.short'
 
   # musl, which is the other Linux libc and the one that disagrees with glibc
@@ -217,6 +221,11 @@ jobs:
   # The libc is checked before the build for the same reason the big endian job
   # checks its byte order. A job that quietly ran against glibc would pass and
   # tell us nothing.
+  #
+  # Both container jobs pull Docker's official images from the copy on Amazon's
+  # public registry. Docker Hub limits anonymous pulls per address, the hosted
+  # runners share addresses, and in October 2026 that limit started failing these
+  # two jobs within seconds of starting.
   musl:
     name: linux-musl-gcc (alpine)
     runs-on: ubuntu-latest
@@ -225,7 +234,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: build and test
         run: |
-          docker run --rm -v "$PWD":/src -w /src alpine:3.20 \
+          docker run --rm -v "$PWD":/src -w /src public.ecr.aws/docker/library/alpine:3.20 \
             sh -c 'apk add --no-cache gcc make musl-dev >/dev/null; ldd --version 2>&1 | grep -qi musl || { echo "this is not a musl toolchain" >&2; exit 1; }; make test'
 
   # The portable context switch, which no machine in the matrix above would pick

@@ -452,7 +452,7 @@ static Error pe_read_data_directories(PeDataDirectory dst[16], IoReader r, Alloc
     io_read_full(r, pe_bytes(b, sz), &e);
     if (BURROW_FAILED(e))
         return fmt_errorf_v("failure to read data directories: %v", e);
-    for (uint32_t i = 0; i < n && i < 16; i++) {
+    for (size_t i = 0; i < n && i < 16; i++) {
         dst[i].virtual_address = pe_u32(b + 8 * i);
         dst[i].size = pe_u32(b + 8 * i + 4);
     }
@@ -1110,7 +1110,7 @@ static Error pe_imported_symbols(PeFile *f, Alloc *a, Alloc *tmp, Slice *all) {
         const Byte *p = d + 20 * i;
         PeImportDirectory dt = {pe_u32(p), pe_u32(p + 4), pe_u32(p + 8), pe_u32(p + 12),
                                 pe_u32(p + 16)};
-        Str dll = pe_get_string(names, (int64_t)(uint32_t)(dt.name - va0));
+        Str dll = pe_get_string(names, (int64_t)(dt.name - va0));
         /* seek to OriginalFirstThunk */
         seek = dt.original_first_thunk - va0;
         if (seek >= (uint32_t)names.len)

@@ -234,10 +234,15 @@ static void dump_pe_file(Alloc *a, IoWriter w, PeFile *f) {
     dump_strings(a, w, BURROW_S("libraries"), libs, err);
     err = BURROW_NO_ERROR;
     DwarfData *d = pe_file_dwarf(f, a, &err);
-    if (BURROW_FAILED(err) || d == NULL)
+    if (BURROW_FAILED(err) || d == NULL) {
         fmt_fprintf_v(w, "dwarf err=%q\n", error_text(err));
-    else
-        dump_dwarf(a, w, d);
+        return;
+    }
+    /* The DWARF dump is the one the ELF and Mach-O tests check line by line,
+     * so only its hash is kept here. */
+    BytesBuffer dw = BYTES_BUFFER(a);
+    dump_dwarf(a, bytes_buffer_as_io_writer(&dw), d);
+    fmt_fprintf_v(w, "dwarf %s\n", blob(a, bytes_buffer_bytes(&dw), BURROW_NO_ERROR));
 }
 
 static void dump(Alloc *a, IoWriter w, Slice data) {

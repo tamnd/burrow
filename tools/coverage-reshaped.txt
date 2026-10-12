@@ -288,6 +288,10 @@ debug/macho: method (FatArch) ImportedSymbols: the receiver is a pointer to the 
 debug/macho: method (FatArch) Section: the receiver is a pointer to the arch, which holds the embedded File
 debug/macho: method (FatArch) Segment: the receiver is a pointer to the arch, which holds the embedded File
 
+# include/burrow/debug/pe.h: Go embeds io.ReaderAt in Section, so ReadAt has a
+# value receiver. The reader lives in the struct here, so it takes a pointer.
+debug/pe: method (Section) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
+
 # include/burrow/go/token.h: a func value in C is a function pointer with a
 # context argument, and a variadic list is a pointer and a count.
 go/token: method (*FileSet) AddExistingFiles: takes the files as a pointer and a count

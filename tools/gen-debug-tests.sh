@@ -1216,7 +1216,11 @@ func dumpPEFile(w *bytes.Buffer, f *pe.File) {
 		fmt.Fprintf(w, "dwarf err=%q\n", err.Error())
 		return
 	}
-	dumpDWARF(w, d)
+	// The DWARF dump is the one the ELF and Mach-O tests check line by line,
+	// so only its hash is kept here.
+	var dw bytes.Buffer
+	dumpDWARF(&dw, d)
+	fmt.Fprintf(w, "dwarf %s\n", blob(dw.Bytes(), nil))
 }
 
 func dumpPE(w *bytes.Buffer, data []byte) {

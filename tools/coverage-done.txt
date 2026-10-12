@@ -106,3 +106,4 @@ go/token
 debug/dwarf
 debug/elf
 debug/macho
+debug/pe

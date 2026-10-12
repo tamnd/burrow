@@ -54,6 +54,7 @@ category	last-error	The platform's code for the last failure each thread saw, wh
 category	hosts-cache	What net last read from the hosts file. Go keeps it in a package level struct behind a mutex, and it is process wide because the file is.
 category	impl-select	Which implementation a crypto package runs, which Go keeps in crypto/internal/impl so that its tests can try every one.
 category	crypto-registry	crypto's table of registered hash functions. Go keeps it in a package level slice that RegisterHash writes from init, and it is process wide because a hash registered anywhere is one Hash.New can make everywhere.
+category	resolver	What net's resolver works from: the copy of resolv.conf it last read, the hook tests use to stand in for the host name, and the default Resolver. Go keeps the same ones as package level variables, and they are process wide because every lookup in the process reads the same files.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
@@ -204,6 +205,10 @@ global	src/unique/unique.c	uq_seed	intern	Written once under uq_lock before the 
 global	src/unique/unique.c	uq_arena	intern	Only touched under uq_lock.
 global	src/unique/unique.c	uq_ready	intern	Only touched under uq_lock.
 global	src/net/hosts.c	nh_hosts	hosts-cache	The parsed hosts file, its path, size and modification time, and the path tests read instead. Read and written only under nh_hosts.mu, and a new reading is built aside and swapped in whole.
+global	src/net/conf.c	cf_get_hostname	resolver	The function that gives the host name for resolv.conf's search list. Only tests set it, before the lookups they make, which is how Go's tests use getHostname.
+global	src/net/dnsclient_unix.c	du_fallback	resolver	The config used when resolv.conf cannot be read. Written once under du_resolv.init_once and only read after that.
+global	src/net/lookup.c	lk_default	resolver	DefaultResolver. Its only state is the list of lookups in flight, which is read and written under its burrow_mu.
+global	src/net/lookup.c	lk_wait	resolver	dnsWaitGroup, the lookups still running in goroutines of their own. Only touched through the wait group's own atomics, and only waited on by tests.
 global	src/net/netfd.c	nf_stack	package-vars	Whether this machine has IPv4, IPv6 and IPv4-mapped IPv6 sockets, probed by the first socket that needs to know and stored with a release store after the probed bit. Two racing probes store the same value.
 global	src/net/netfd.c	nf_backlog	package-vars	The listen backlog the system allows, worked out by the first listener. Atomic loads and stores only, and two racing listeners store the same value.
 global	src/net/url.c	url_debug_flags	godebug	The urlstrictcolons and urlmaxqueryparams settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
@@ -376,3 +381,4 @@ global	src/crypto/elliptic.c	elliptic_nist	tables	The four NIST curves with thei
 global	src/crypto/elliptic.c	elliptic_once	tables	A SyncOnce, which is the synchronisation for elliptic_nist.
 global	src/crypto/ecdsa.c	ecdsa_curves	tables	The four FIPS curves with their orders as moduli and N-2, filled in once by ecdsa_init and only read after that, as Go's sync.OnceValue has it.
 global	src/crypto/ecdsa.c	ecdsa_once	tables	A SyncOnce, which is the synchronisation for ecdsa_curves.
+global	src/log/log.c	log_std	package-vars	The standard logger, log.std in Go. Its flags are atomic and its prefix and output each have a lock inside the logger, as in Go, so any thread may use it and change it.

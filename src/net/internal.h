@@ -12,6 +12,7 @@
 #include "burrow/error.h"
 #include "burrow/fdmutex.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
 #include "burrow/net.h"
 #include "burrow/netpoll.h"
 #include "burrow/os.h"
@@ -19,6 +20,8 @@
 #include "burrow/pal.h"
 #include "burrow/slice.h"
 #include "burrow/time.h"
+
+#include "../xnet/dnsmessage.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -214,6 +217,14 @@ typedef struct burrow__NetConnCore {
 /* errMissingAddress, for a dial with no address to dial. */
 extern const Error burrow__net_err_missing_address;
 
+/* errTimeout and errCanceled, "i/o timeout" and "operation was canceled",
+ * which errors_is matches to context_deadline_exceeded and context_canceled.
+ * mapErr turns a context's error into the one of these a lookup or a dial
+ * reports and leaves any other error alone. */
+extern const Error burrow__net_err_timeout;
+extern const Error burrow__net_err_canceled;
+Error burrow__net_map_err(Error err);
+
 /* An OpError with these fields, boxed in error_allocator. */
 Error burrow__net_op_error(Str op, Str net, NetAddr source, NetAddr addr, Error err);
 
@@ -267,11 +278,20 @@ bool burrow__net_ip_to16(NetIP ip, Byte out[16]);
 
 /* internetSocket: a socket of type sotype for net, of the family Go would
  * choose for these addresses, bound, listening or connected the way
- * burrow__netfd_socket does it. */
+ * burrow__netfd_socket does it, with a connect that gives up at deadline
+ * unless that is the zero Time. */
 Error burrow__net_internet_socket(burrow__NetFD *fd, Str net,
                                   const burrow__NetInetAddr *laddr,
                                   const burrow__NetInetAddr *raddr, int32_t sotype,
-                                  bool listen);
+                                  bool listen, Time deadline);
+
+/* DialTCP with a connect that gives up at deadline, which the resolver
+ * needs and which the Dialer will be built on. The zero Time is no
+ * deadline. */
+BURROW_OWNS(ret) NetTCPConn *burrow__net_dial_tcp_deadline(Alloc *a, Str network,
+                                                           const NetTCPAddr *laddr,
+                                                           const NetTCPAddr *raddr,
+                                                           Time deadline, Error *err);
 
 /* ------------------------------------------------------------------ parse.go
  *
@@ -314,6 +334,59 @@ void burrow__net_lower_ascii_bytes(Byte *x, Int n);
 bool burrow__net_equal_fold(Str s, Str t);
 bool burrow__net_has_suffix_fold(Str s, Str suffix);
 
+/* The n Strs after n one after the other, in a, with a NUL after them that
+ * the length leaves out. Empty when a is out of memory. */
+BURROW_OWNS(ret) Str burrow__net_cat(Alloc *a, int n, ...);
+
+/* The value of key in the GODEBUG environment variable, the last one when it
+ * is there twice, as Go's internal/godebug reads it. The value points into
+ * the environment. */
+bool burrow__net_godebug(const char *key, Str *val);
+
+/* A Type for a struct that lives only in this package, enough for a Slice of
+ * them: the Go name, the C type and a hash that no other Type in the library
+ * has. */
+#define BURROW__NET_ELEM_DESC(name, go_name, ctype, hash)                              \
+    static const Type name = {                                                         \
+        {(const Byte *)(go_name), (Int)(sizeof(go_name) - 1)},                         \
+        {(const Byte *)"net", 3},                                                      \
+        KIND_STRUCT,                                                                   \
+        (uint32_t)sizeof(ctype),                                                       \
+        (uint16_t)_Alignof(ctype),                                                     \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        0,                                                                             \
+        hash,                                                                          \
+        NULL,                                                                          \
+    }
+
+/* ------------------------------------------------------------------ port.go */
+
+/* parsePort: service as a decimal port in port, or true when it is not a
+ * number and has to be looked up. A number too big comes out as 1<<30-1 or
+ * -(1<<30), which nothing takes for a port. "" is port 0. */
+bool burrow__net_parse_port(Str service, Int *port);
+
+/* goLookupPort: the port of a service by name, from the table Go has and
+ * /etc/services on top of it. The error is a DNSError in error_allocator(). */
+Int burrow__net_lookup_port_map(Str network, Str service, Error *err);
+
+/* lookupProtocol: the number of an IP protocol by name, from the table Go has
+ * and /etc/protocols under it. The error is an AddrError in
+ * error_allocator(). */
+Int burrow__net_lookup_protocol(Str name, Error *err);
+
+/* dnsWaitGroup.Wait: waits for every lookup that was started in a goroutine
+ * to finish with its resolver. A caller that gives up through its context
+ * returns while the lookup goes on with the same NetResolver, so a test with
+ * a resolver on its stack calls this before it returns, where Go's tests
+ * defer dnsWaitGroup.Wait. */
+void burrow__net_dns_wait(void);
+
 /* -------------------------------------------------------------- dnsclient.go */
 
 /* notFoundError, an error whose text is s and which newDNSError turns into a
@@ -322,12 +395,33 @@ bool burrow__net_has_suffix_fold(Str s, Str suffix);
 BURROW_OWNS(ret) Error burrow__net_not_found_error(Alloc *a, Str s);
 BURROW_OWNS(ret) Error burrow__net_temporary_error(Alloc *a, Str s);
 
+/* The errors the lookups give, by the names Go has for them. no_such_host
+ * and unknown_port are notFoundErrors and server_temporarily_misbehaving is a
+ * temporaryError. */
+extern const Error burrow__net_err_no_such_host;
+extern const Error burrow__net_err_unknown_port;
+extern const Error burrow__net_err_server_temporarily_misbehaving;
+extern const Error burrow__net_err_no_suitable_address;
+extern const Error burrow__net_err_lame_referral;
+extern const Error burrow__net_err_cannot_unmarshal;
+extern const Error burrow__net_err_cannot_marshal;
+extern const Error burrow__net_err_server_misbehaving;
+extern const Error burrow__net_err_invalid_dns_response;
+extern const Error burrow__net_err_no_answer_from_dns_server;
+
 /* newDNSError: a DNSError for err, in a. is_timeout and is_temporary are
  * what err says when it is a net.Error, is_not_found is whether it is a
  * notFoundError, and unwrap_err is err when it is or wraps context_canceled
  * or context_deadline_exceeded. */
 BURROW_OWNS(ret) Error burrow__net_new_dns_error(Alloc *a, Error err, Str name,
                                                  Str server);
+
+/* The DNSError newDNSError makes, before it becomes an Error, for a caller
+ * that has more to set. The strings are borrowed. */
+NetDNSError burrow__net_dns_error_of(Error err, Str name, Str server);
+
+/* err.(*DNSError): the DNSError err is, and not one it wraps, or NULL. */
+BURROW_BORROWS(ret, err) const NetDNSError *burrow__net_as_dns_error(Error err);
 
 /* reverseaddr: the in-addr.arpa. or ip6.arpa. name of addr, in a, or empty
  * and a DNSError "unrecognized address" when addr is not an IP address. */
@@ -407,6 +501,241 @@ bool burrow__net_avoid_dns(Str name);
  * way ndots says. The nil Slice for a name too long to look up. */
 BURROW_OWNS(ret) Slice burrow__dns_config_name_list(const burrow__DNSConfig *c,
                                                     Alloc *a, Str name);
+
+/* ------------------------------------------------------------------- nss.go
+ *
+ * nsswitch.conf, kept the way resolv.conf is. A burrow__NssConf is counted,
+ * and whoever has one gives it back with burrow__nss_conf_put. */
+typedef struct burrow__NssCriterion {
+    Str status; /* such as "success", in lower case */
+    Str action; /* such as "return", in lower case */
+    bool negate;
+} burrow__NssCriterion;
+
+typedef struct burrow__NssSource {
+    Str source;     /* such as "files" or "mdns4_minimal" */
+    Slice criteria; /* burrow__NssCriterion */
+} burrow__NssSource;
+
+typedef struct burrow__NssDatabase {
+    Str name;      /* such as "hosts" */
+    Slice sources; /* burrow__NssSource */
+} burrow__NssDatabase;
+
+typedef struct burrow__NssConf {
+    Arena ar; /* everything below */
+    Time mtime;
+    Error err;
+    Slice dbs; /* burrow__NssDatabase, in the order the file has them */
+    int32_t refs;
+} burrow__NssConf;
+
+/* parseNSSConfFile: file read into a new conf with one reference, or NULL
+ * when there is no memory for one. A file that will not open or parse gives
+ * a conf with err set. */
+BURROW_OWNS(ret) burrow__NssConf *burrow__nss_parse_file(Str file);
+void burrow__nss_conf_put(burrow__NssConf *conf);
+
+/* sources[db], the nil Slice when the file does not name db. */
+BURROW_BORROWS(ret, conf) Slice burrow__nss_conf_sources(const burrow__NssConf *conf,
+                                                         Str db);
+
+/* nssSource.standardCriteria. */
+bool burrow__nss_source_standard_criteria(const burrow__NssSource *s);
+
+/* getSystemNSS: a reference to what /etc/nsswitch.conf says, looked at again
+ * when five seconds have gone by. NULL when there was never the memory to
+ * read it. */
+BURROW_OWNS(ret) burrow__NssConf *burrow__net_system_nss(void);
+
+/* setSystemNSS, for tests: conf, whose reference this takes, is what the
+ * system says from now on, and the file is not looked at again until
+ * add_dur from now has gone by less five seconds. */
+void burrow__net_set_system_nss(burrow__NssConf *conf, Duration add_dur);
+
+/* ------------------------------------------------------------ addrselect.go */
+
+/* policyTableEntry, a row of the RFC 6724 policy table. */
+typedef struct burrow__NetPolicyEntry {
+    NetipPrefix prefix;
+    uint8_t precedence;
+    uint8_t label;
+} burrow__NetPolicyEntry;
+
+/* policyTable.Classify: the row for ip, the zero one when none matches. */
+burrow__NetPolicyEntry burrow__net_policy_classify(NetipAddr ip);
+
+/* scope, the values classifyScope gives that have a name. */
+enum {
+    BURROW__NET_SCOPE_INTERFACE_LOCAL = 0x1,
+    BURROW__NET_SCOPE_LINK_LOCAL = 0x2,
+    BURROW__NET_SCOPE_ADMIN_LOCAL = 0x4,
+    BURROW__NET_SCOPE_SITE_LOCAL = 0x5,
+    BURROW__NET_SCOPE_ORG_LOCAL = 0x8,
+    BURROW__NET_SCOPE_GLOBAL = 0xe
+};
+
+/* classifyScope */
+uint8_t burrow__net_classify_scope(NetipAddr ip);
+
+/* commonPrefixLen: how many leading bits a and b share, counting no more
+ * than the first 64 of an IPv6 address, and 0 for two of different
+ * families. */
+Int burrow__net_common_prefix_len(NetipAddr a, NetIP b);
+
+/* sortByRFC6724: addrs in the order RFC 6724 says to try them, which needs
+ * the source address for each, and sortByRFC6724withSrcs with those given.
+ * Out of memory leaves addrs as it was. */
+void burrow__net_sort_by_rfc6724(NetIPAddr *addrs, Int n);
+void burrow__net_sort_by_rfc6724_with_srcs(NetIPAddr *addrs, const NetipAddr *srcs,
+                                           Int n);
+
+/* ------------------------------------------------------- resolv.conf, held
+ *
+ * resolverConfig from dnsclient_unix.go: what /etc/resolv.conf said when it
+ * was last read, read again when its modification time moves and looked at
+ * no more than every five seconds, or on every lookup while it gives the
+ * default name servers. A config from here is counted, and whoever has one
+ * gives it back with burrow__dns_config_put. */
+
+/* getSystemDNSConfig. Never NULL: without the memory to read the file it is
+ * a config with the defaults in it. */
+BURROW_OWNS(ret) burrow__DNSConfig *burrow__net_system_dns_config(void);
+void burrow__dns_config_put(burrow__DNSConfig *c);
+
+/* getSystemDNSConfigNamed: the same, with the file looked at being name, for
+ * tests. */
+BURROW_OWNS(ret) burrow__DNSConfig *burrow__net_system_dns_config_named(Str name);
+
+/* distantFuture, a last check time for the hooks below that means never
+ * look at the file again. */
+Time burrow__net_distant_future(void);
+
+/* forceUpdateConf, for tests: c, copied, is the config from now on, with
+ * last_checked as the time the file was last looked at. What the strings and
+ * slices in c point at is borrowed, and has to outlive the config. */
+void burrow__net_force_dns_config(const burrow__DNSConfig *c, Time last_checked);
+
+/* forceUpdate, for tests: the same with the config read from filename. */
+void burrow__net_force_dns_config_file(Str filename, Time last_checked);
+
+/* ------------------------------------------------------------------ conf.go */
+
+/* hostLookupOrder, the order to look a name up in: the C library, the hosts
+ * file then DNS, DNS then the hosts file, one or the other. burrow has no C
+ * library to ask, and cgo is only ever the answer when a burrow__NetConf says
+ * it is available, which the tests do and the system's never does. */
+typedef enum burrow__HostLookupOrder {
+    BURROW__HOST_LOOKUP_CGO,
+    BURROW__HOST_LOOKUP_FILES_DNS,
+    BURROW__HOST_LOOKUP_DNS_FILES,
+    BURROW__HOST_LOOKUP_FILES,
+    BURROW__HOST_LOOKUP_DNS
+} burrow__HostLookupOrder;
+
+/* hostLookupOrder.String, such as "files,dns", in a. */
+BURROW_OWNS(ret) Str burrow__host_lookup_order_string(int32_t o, Alloc *a);
+
+/* mdnsTest */
+enum {
+    BURROW__MDNS_FROM_SYSTEM,
+    BURROW__MDNS_ASSUME_EXISTS,
+    BURROW__MDNS_ASSUME_DOES_NOT_EXIST
+};
+
+/* conf, with Go's cgoAvailable as a field so that the tests can have it. */
+typedef struct burrow__NetConf {
+    Str goos;
+    int32_t dns_debug_level;
+    int32_t mdns_test;
+    bool net_go;
+    bool net_cgo;
+    bool prefer_cgo;
+    bool cgo_available;
+} burrow__NetConf;
+
+/* systemConf */
+BURROW_STATIC(ret) const burrow__NetConf *burrow__net_system_conf(void);
+
+/* goDebugNetDNS: the mode and the debug level in GODEBUG=netdns. */
+void burrow__net_go_debug_net_dns(Str *mode, Int *level);
+
+/* mustUseGoResolver */
+bool burrow__net_conf_must_use_go_resolver(const burrow__NetConf *c,
+                                           const NetResolver *r);
+
+/* hostLookupOrder and addrLookupOrder. *dns_conf is the system's resolv.conf
+ * when it was looked at, to be given back with burrow__dns_config_put, and
+ * NULL when not. */
+burrow__HostLookupOrder
+burrow__net_conf_host_lookup_order(const burrow__NetConf *c, const NetResolver *r,
+                                   Str hostname, burrow__DNSConfig **dns_conf);
+burrow__HostLookupOrder
+burrow__net_conf_addr_lookup_order(const burrow__NetConf *c, const NetResolver *r,
+                                   Str addr, burrow__DNSConfig **dns_conf);
+
+/* Go's tests set getHostname, and this is how ours do. NULL goes back to
+ * os_hostname. */
+void burrow__net_set_get_hostname(burrow__NetHostnameFunc fn);
+
+/* getHostname as the tests have it set, which reading resolv.conf uses. */
+burrow__NetHostnameFunc burrow__net_get_hostname(void);
+
+/* ------------------------------------------------------- dnsclient_unix.go
+ *
+ * The lookups that ask DNS themselves. A NULL conf is the system's, looked
+ * at when it is needed. r is never NULL here. Results are in a and errors
+ * in error_allocator(). */
+
+/* lookup: name asked for, under each name the search list makes of it, with
+ * the answer in ma, at the first answer of type qtype, and *server, in ma,
+ * the server that gave it. Not finding one is a DNSError named name. */
+Error burrow__net_dns_lookup(NetResolver *r, Alloc *ma, Context ctx, Str name,
+                             DnsmsgType qtype, burrow__DNSConfig *conf, DnsmsgParser *p,
+                             Str *server);
+
+/* exchange: q to server, over UDP and then over TCP when the answer is cut
+ * short, or over TCP alone with use_tcp. The answer is in ma, with p just
+ * past its question. ad asks for the AD bit. */
+Error burrow__net_dns_exchange(NetResolver *r, Alloc *ma, Context ctx, Str server,
+                               DnsmsgQuestion q, Duration timeout, bool use_tcp,
+                               bool ad, DnsmsgParser *p, DnsmsgHeader *h);
+
+/* tryOneName: name asked of each server in turn, cfg->attempts times over,
+ * until one answers. The answer is in ma, *server is borrowed from cfg, and
+ * the error is a DNSError in error_allocator(). */
+Error burrow__net_dns_try_one_name(NetResolver *r, Alloc *ma, Context ctx,
+                                   burrow__DNSConfig *cfg, Str name, DnsmsgType qtype,
+                                   DnsmsgParser *p, Str *server);
+
+/* goLookupHostOrder, as a Slice of Str. */
+BURROW_OWNS(ret) Slice burrow__net_go_lookup_host_order(NetResolver *r, Alloc *a,
+                                                        Context ctx, Str name,
+                                                        burrow__HostLookupOrder order,
+                                                        burrow__DNSConfig *conf,
+                                                        Error *err);
+
+/* goLookupIPFiles: what the hosts file says name is, as NetIPAddr values
+ * sorted the way RFC 6724 says, and its canonical name. */
+BURROW_OWNS(ret) Slice burrow__net_go_lookup_ip_files(Alloc *a, Str name,
+                                                      Str *canonical);
+
+/* goLookupIPCNAMEOrder: the NetIPAddr values of name for network, "ip",
+ * "ip4", "ip6" or "CNAME", and the canonical name in *cname, which may be
+ * NULL. */
+BURROW_OWNS(ret) Slice burrow__net_go_lookup_ip_cname_order(
+    NetResolver *r, Alloc *a, Context ctx, Str network, Str name,
+    burrow__HostLookupOrder order, burrow__DNSConfig *conf, Str *cname, Error *err);
+
+/* goLookupCNAME and goLookupPTR. */
+BURROW_OWNS(ret) Str burrow__net_go_lookup_cname(NetResolver *r, Alloc *a, Context ctx,
+                                                 Str host,
+                                                 burrow__HostLookupOrder order,
+                                                 burrow__DNSConfig *conf, Error *err);
+BURROW_OWNS(ret) Slice burrow__net_go_lookup_ptr(NetResolver *r, Alloc *a, Context ctx,
+                                                 Str addr,
+                                                 burrow__HostLookupOrder order,
+                                                 burrow__DNSConfig *conf, Error *err);
 
 /* ------------------------------------------------------------------ hosts.go
  *

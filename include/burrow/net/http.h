@@ -1,9 +1,10 @@
 /* net/http, HTTP clients and servers.
  *
- * Go's net/http, which is coming in pieces. This part is what the rest of the
- * package stands on and what needs no connection: the HTTP status codes and
- * their text, HttpHeader and the way it is written on the wire, the date
- * formats a header can carry, DetectContentType, and HttpProtocols.
+ * Go's net/http, which is coming in pieces. So far it is what the rest of the
+ * package stands on: the HTTP status codes and their text, HttpHeader and the
+ * way it is written on the wire, the date formats a header can carry,
+ * DetectContentType, HttpProtocols, cookies, and reading a request or a
+ * response off a BufioReader with http_read_request and http_read_response.
  *
  *     Arena ar;
  *     arena_init(&ar, NULL, 0);
@@ -30,12 +31,15 @@
 #ifndef BURROW_NET_HTTP_H
 #define BURROW_NET_HTTP_H
 
+#include "burrow/bufio.h"
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/io.h"
 #include "burrow/map.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
 #include "burrow/net/textproto.h"
+#include "burrow/net/url.h"
 #include "burrow/own.h"
 #include "burrow/slice.h"
 #include "burrow/time.h"
@@ -272,6 +276,156 @@ BURROW_OWNS(ret) Str http_cookie_string(Alloc *a, const HttpCookie *c);
 /* Cookie.Valid. No error when c could be sent as it is. The error for a byte
  * that does not belong is made by fmt_errorf, and the others are static. */
 BURROW_BORROWS(ret) Error http_cookie_valid(const HttpCookie *c);
+
+/* ------------------------------------------------------------------ Request */
+
+/* http.NoBody, a body with no bytes in it. Reading gives io_eof at once and
+ * closing does nothing. A request or response read from the wire has it as
+ * its body when there is no body to read, and comparing body.vt with
+ * http_no_body.vt says whether that is so. */
+extern const IoReadCloser http_no_body;
+
+/* http.ErrBodyReadAfterClose, from reading a body after it was closed. */
+extern const Error http_err_body_read_after_close;
+
+/* http.Request, as far as reading one from the wire goes: a request a server
+ * got, or one a client is about to send.
+ *
+ * url is where the request goes, which for a request read by
+ * http_read_request is the target in its first line, request_uri, parsed.
+ * proto is "HTTP/1.1" or the like, and proto_major and proto_minor are its
+ * numbers. header has the header fields, with the keys in canonical form, and
+ * for a request read from the wire it does not have Host, which is in host.
+ *
+ * body is never NULL in a request read from the wire. It is http_no_body when
+ * the request has no body, and otherwise reads the body as the header says to,
+ * by Content-Length or by chunks, and closing it reads the rest so the next
+ * request on the connection can be read. content_length is the length of the
+ * body, -1 when it is not known, and transfer_encoding is a Slice of Str that
+ * holds "chunked" when the body came in chunks. trailer has the keys the
+ * Trailer field named, and once the body has been read to its end it has the
+ * values the trailer gave them too.
+ *
+ * close says whether the connection is to be closed after this request.
+ * host is the host the request is for, from the URL or the Host field.
+ * remote_addr is the address the request came from, which a server sets, and
+ * pattern is the ServeMux pattern that matched it.
+ *
+ * Everything a request read from the wire has, the strings and the header and
+ * the URL, lives in the request's own arena until http_request_free. */
+typedef struct HttpRequest {
+    Str method;
+    Url *url;
+    Str proto;
+    Int proto_major;
+    Int proto_minor;
+    HttpHeader header;
+    IoReadCloser body;
+    int64_t content_length;
+    Slice transfer_encoding;
+    HttpHeader trailer;
+    Str host;
+    Str remote_addr;
+    Str request_uri;
+    Str pattern;
+    bool close;
+
+    /* The request's own. */
+    Alloc *a;
+    Arena arena;
+    void *wire; /* the body that reads from the wire, freed with the request */
+} HttpRequest;
+
+/* http.ReadRequest. Reads a request from b, its first line and header, and
+ * leaves its body in b to be read through the request's body. The request is
+ * made in a, and the strings in it are in its arena. On an error the result is
+ * NULL. The first line can fail with io_eof, at the end of the input, and an
+ * end that comes after that is io_err_unexpected_eof. Give it back with
+ * http_request_free. */
+BURROW_OWNS(ret) HttpRequest *http_read_request(Alloc *a, BufioReader *b, Error *err);
+
+/* Gives back a request http_read_request made, and the memory of its body, so
+ * the body is not to be read after this. NULL is fine. */
+void http_request_free(HttpRequest *r);
+
+/* Request.ProtoAtLeast. Whether the request's protocol is at least
+ * major.minor. */
+bool http_request_proto_at_least(const HttpRequest *r, Int major, Int minor);
+
+/* Request.UserAgent and Referer, the User-Agent and Referer fields. */
+BURROW_BORROWS(ret, r) Str http_request_user_agent(const HttpRequest *r);
+BURROW_BORROWS(ret, r) Str http_request_referer(const HttpRequest *r);
+
+/* Request.BasicAuth. The user name and password from the Authorization field,
+ * when it has HTTP basic authentication, decoded into a. False otherwise. */
+bool http_request_basic_auth(const HttpRequest *r, Alloc *a, Str *username,
+                             Str *password);
+
+/* Request.SetBasicAuth. Sets the Authorization field to basic authentication
+ * with username and password, which are not encrypted, so it belongs on HTTPS.
+ * The value is made in a, which has to last as long as the header. False when
+ * an allocator says no, or when r has no header. */
+bool http_request_set_basic_auth(HttpRequest *r, Alloc *a, Str username, Str password);
+
+/* http.ParseHTTPVersion. The numbers of an HTTP version such as "HTTP/1.0",
+ * which gives 1 and 0. A version without a minor number, such as "HTTP/2", is
+ * not one. False for anything that is not a version. */
+bool http_parse_http_version(Str vers, Int *major, Int *minor);
+
+/* ----------------------------------------------------------------- Response */
+
+/* http.ErrNoLocation, from http_response_location when there is no Location
+ * field. */
+extern const Error http_err_no_location;
+
+/* http.Response, as far as reading one from the wire goes. status is the
+ * status line after the protocol, such as "200 OK", and status_code is its
+ * number. The rest is as in HttpRequest. request is the request this is the
+ * response to, which is borrowed, and uncompressed says the transport took
+ * gzip off the body.
+ *
+ * Read body to its end, or close it, before reading the next response on the
+ * same connection. */
+typedef struct HttpResponse {
+    Str status;
+    Int status_code;
+    Str proto;
+    Int proto_major;
+    Int proto_minor;
+    HttpHeader header;
+    IoReadCloser body;
+    int64_t content_length;
+    Slice transfer_encoding;
+    HttpHeader trailer;
+    HttpRequest *request;
+    bool close;
+    bool uncompressed;
+
+    /* The response's own. */
+    Alloc *a;
+    Arena arena;
+    void *wire;
+} HttpResponse;
+
+/* http.ReadResponse. Reads a response from r, its status line and header, and
+ * leaves the body in r to be read through the response's body. req is the
+ * request it answers, and NULL is taken as a GET. The response is made in a.
+ * NULL on an error, and an end of the input is io_err_unexpected_eof. Give it
+ * back with http_response_free. */
+BURROW_OWNS(ret) HttpResponse *http_read_response(Alloc *a, BufioReader *r,
+                                                  HttpRequest *req, Error *err);
+
+/* Gives back a response http_read_response made, and its body. NULL is fine. */
+void http_response_free(HttpResponse *r);
+
+/* Response.ProtoAtLeast. */
+bool http_response_proto_at_least(const HttpResponse *r, Int major, Int minor);
+
+/* Response.Location. The URL in the Location field, made in a, and relative
+ * to the request's URL when there is a request. http_err_no_location when
+ * there is no Location field. */
+BURROW_OWNS(ret) Url *http_response_location(const HttpResponse *r, Alloc *a,
+                                             Error *err);
 
 /* ----------------------------------------------------------------- Sniffing */
 

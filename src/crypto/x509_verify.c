@@ -630,8 +630,7 @@ Str x509_certificate_invalid_error_error(X509CertificateInvalidError e, Alloc *a
     case X509_NO_VALID_CHAINS:
         if (e.detail.len == 0)
             return x509_vclone(a, BURROW_S("x509: no valid chains built"));
-        return fmt_sprintf_v(a, "%s: %s", BURROW_S("x509: no valid chains built"),
-                             e.detail);
+        return fmt_sprintf_v(a, "x509: no valid chains built: %s", e.detail);
     default:
         break;
     }
@@ -1056,19 +1055,22 @@ static Error x509_is_valid(const X509Certificate *c, int cert_type, Slice chain,
     if (time_is_zero(now))
         now = time_now();
     if (time_before(now, c->not_before)) {
+        /* The times are locals because TIME_RFC3339 is a compound literal, and
+         * MSVC warns about the unused copies of one that fmt_sprintf_v makes. */
         Alloc *ea = error_allocator();
+        Str have = time_format(now, ea, TIME_RFC3339);
+        Str want = time_format(c->not_before, ea, TIME_RFC3339);
         return x509_invalid(
             c, X509_EXPIRED,
-            fmt_sprintf_v(ea, "current time %s is before %s",
-                          time_format(now, ea, TIME_RFC3339),
-                          time_format(c->not_before, ea, TIME_RFC3339)));
+            fmt_sprintf_v(ea, "current time %s is before %s", have, want));
     }
     if (time_after(now, c->not_after)) {
         Alloc *ea = error_allocator();
-        return x509_invalid(c, X509_EXPIRED,
-                            fmt_sprintf_v(ea, "current time %s is after %s",
-                                          time_format(now, ea, TIME_RFC3339),
-                                          time_format(c->not_after, ea, TIME_RFC3339)));
+        Str have = time_format(now, ea, TIME_RFC3339);
+        Str want = time_format(c->not_after, ea, TIME_RFC3339);
+        return x509_invalid(
+            c, X509_EXPIRED,
+            fmt_sprintf_v(ea, "current time %s is after %s", have, want));
     }
     if ((cert_type == X509_INTERMEDIATE_CERTIFICATE ||
          cert_type == X509_ROOT_CERTIFICATE) &&

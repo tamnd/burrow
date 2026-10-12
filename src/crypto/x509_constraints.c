@@ -407,7 +407,7 @@ static Error x509_chain_constraints_check(Alloc *a, const X509ChainConstraints *
                                           Slice dns, const X509ParsedURI *uris,
                                           Int nuris, const X509Mailbox *emails,
                                           Int nemails, Slice ips) {
-    Str constraint;
+    Str constraint = BURROW_STR_EMPTY;
     const NetIP *ip = ips.p;
     for (Int i = 0; i < ips.len; i++) {
         bool permitted =

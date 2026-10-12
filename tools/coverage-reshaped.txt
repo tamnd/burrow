@@ -261,3 +261,9 @@ crypto/ecdh: method (*PublicKey) Curve: returns a pointer to one of the four cur
 # collector. Here the pipe comes from an allocator and net_pipe_free gives it
 # back, and two values come back through out parameters.
 net: func Pipe: takes an allocator and returns both ends through out parameters
+
+# include/burrow/debug/elf.h: Go gets ReadAt by embedding the io.ReaderAt in
+# Section and Prog, so the receiver is the struct value. Here the method reads
+# through the reader_at field, which lives in the struct, so it takes a pointer.
+debug/elf: method (Section) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
+debug/elf: method (Prog) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct

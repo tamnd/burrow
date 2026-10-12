@@ -189,12 +189,12 @@ BURROW_OWNS(ret) DwarfData *dwarf_new(Alloc *a, Slice abbrev, Slice aranges,
 
 /* Data.AddTypes: one .debug_types section of DWARF 4. A file can have several,
  * and name tells them apart in errors. types is borrowed as in dwarf_new. */
-Error dwarf_data_add_types(DwarfData *d, Str name, Slice types);
+BURROW_STATIC(ret) Error dwarf_data_add_types(DwarfData *d, Str name, Slice types);
 
 /* Data.AddSection: a section DWARF 5 added, by its name, which is one of
  * .debug_addr, .debug_line_str, .debug_str_offsets and .debug_rnglists. Other
  * names are ignored. contents is borrowed as in dwarf_new. */
-Error dwarf_data_add_section(DwarfData *d, Str name, Slice contents);
+BURROW_STATIC(ret) Error dwarf_data_add_section(DwarfData *d, Str name, Slice contents);
 
 /* ------------------------------------------------------------------ entries */
 
@@ -224,7 +224,7 @@ typedef struct DwarfEntry {
  *     Str *name = any_assert(dwarf_entry_val(e, DWARF_ATTR_NAME), TYPE_STRING);
  *
  * which is NULL for a missing attribute and for one of another type alike. */
-Any dwarf_entry_val(const DwarfEntry *e, DwarfAttr a);
+BURROW_BORROWS(ret, e) Any dwarf_entry_val(const DwarfEntry *e, DwarfAttr a);
 
 /* Entry.AttrField: the field for attribute a, or NULL. */
 BURROW_BORROWS(ret, e) DwarfField *dwarf_entry_attr_field(const DwarfEntry *e,
@@ -645,7 +645,8 @@ dwarf_data_line_reader(DwarfData *d, Alloc *a, const DwarfEntry *cu, Error *err)
 
 /* LineReader.Next: the next row into *entry. io_eof at the end of a table that
  * ends the way it should. */
-Error dwarf_line_reader_next(DwarfLineReader *r, DwarfLineEntry *entry);
+BURROW_STATIC(ret) Error dwarf_line_reader_next(DwarfLineReader *r,
+                                                DwarfLineEntry *entry);
 
 /* LineReader.Tell and LineReader.Seek: where the reader is, and going back
  * there. pos has to have come from this reader. */
@@ -666,7 +667,8 @@ BURROW_BORROWS(ret, r) Slice dwarf_line_reader_files(DwarfLineReader *r);
  * dwarf_err_unknown_pc if no row covers pc, and then *entry and where the
  * reader is are not defined. A table can only be read forwards, so this can
  * take as long as reading the whole of it. */
-Error dwarf_line_reader_seek_pc(DwarfLineReader *r, uint64_t pc, DwarfLineEntry *entry);
+BURROW_STATIC(ret) Error dwarf_line_reader_seek_pc(DwarfLineReader *r, uint64_t pc,
+                                                   DwarfLineEntry *entry);
 
 #ifdef __cplusplus
 }

@@ -320,7 +320,13 @@ int64_t dwarf_type_size(DwarfType t);
 BURROW_OWNS(ret) Str dwarf_type_string(DwarfType t, Alloc *a);
 
 /* Data.Type: the type at off in the info section. The types are made in the
- * DwarfData's allocator and kept, so asking again gives the same one. */
+ * DwarfData's allocator and kept, so asking again gives the same one.
+ *
+ * Go reads a type by recursion, which on a type nested deeply enough would use
+ * up the stack. Go's stack grows until the runtime gives up, but a C thread's
+ * does not, so this checks how much stack is left as it goes down, and when it
+ * runs low it stops with a DecodeError saying "types nested too deeply" where
+ * Go would have kept going. Real compilers do not write types that deep. */
 BURROW_BORROWS(ret, d) DwarfType dwarf_data_type(DwarfData *d, DwarfOffset off,
                                                  Error *err);
 

@@ -334,6 +334,13 @@ static void dump_type(Alloc *a, IoWriter w, DwarfData *d, DwarfOffset off) {
     fmt_fprintf_v(w, "\n");
 }
 
+/* The rows are kept as bytes, which need not be aligned for a DwarfLineEntry. */
+static DwarfLineEntry row_at(Slice rows, Int i) {
+    DwarfLineEntry e;
+    memcpy(&e, (const Byte *)rows.p + i * (Int)sizeof e, sizeof e);
+    return e;
+}
+
 static void dump_lines(Alloc *a, IoWriter w, DwarfData *d, const DwarfEntry *cu) {
     Error err = BURROW_NO_ERROR;
     DwarfLineReader *lr = dwarf_data_line_reader(d, a, cu, &err);
@@ -371,7 +378,6 @@ static void dump_lines(Alloc *a, IoWriter w, DwarfData *d, const DwarfEntry *cu)
             e.address, e.op_index, file, e.line, e.column, e.is_stmt, e.basic_block,
             e.prologue_end, e.epilogue_begin, e.isa, e.discriminator, e.end_sequence);
     }
-    const DwarfLineEntry *all = (const DwarfLineEntry *)rows.p;
     Slice files = dwarf_line_reader_files(lr);
     fmt_fprintf_v(w, "  files n=%d\n", files.len);
     for (Int i = 0; i < files.len; i++) {
@@ -388,22 +394,24 @@ static void dump_lines(Alloc *a, IoWriter w, DwarfData *d, const DwarfEntry *cu)
         for (Int i = 3; i < nrows; i++) {
             if (BURROW_FAILED(dwarf_line_reader_next(lr, &e)))
                 break;
-            if (e.address == all[i].address && e.line == all[i].line)
+            DwarfLineEntry want = row_at(rows, i);
+            if (e.address == want.address && e.line == want.line)
                 same++;
         }
         fmt_fprintf_v(w, "  tellseek %d of %d\n", same, nrows - 3);
     }
     dwarf_line_reader_reset(lr);
     for (Int i = 0; i < nrows; i++) {
-        if (all[i].end_sequence)
+        DwarfLineEntry want = row_at(rows, i);
+        if (want.end_sequence)
             continue;
         DwarfLineEntry got = {0};
-        err = dwarf_line_reader_seek_pc(lr, all[i].address, &got);
+        err = dwarf_line_reader_seek_pc(lr, want.address, &got);
         if (BURROW_FAILED(err)) {
-            fmt_fprintf_v(w, "  seekpc %#x err=%q\n", all[i].address, error_text(err));
+            fmt_fprintf_v(w, "  seekpc %#x err=%q\n", want.address, error_text(err));
             continue;
         }
-        fmt_fprintf_v(w, "  seekpc %#x %#x line=%d\n", all[i].address, got.address,
+        fmt_fprintf_v(w, "  seekpc %#x %#x line=%d\n", want.address, got.address,
                       got.line);
     }
 }

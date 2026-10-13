@@ -264,8 +264,8 @@ Error burrow__netfd_write_to_error(Error err);
 /* netFD.readMsg and writeMsg, and the write_msg twin of the one above. */
 Int burrow__netfd_read_msg(burrow__NetFD *fd, Slice p, Slice oob, Int *oobn, Int *flags,
                            PalSockAddr *from, Error *err);
-Int burrow__netfd_write_msg(burrow__NetFD *fd, Slice p, Slice oob, const PalSockAddr *to,
-                            Int *oobn, Error *err);
+Int burrow__netfd_write_msg(burrow__NetFD *fd, Slice p, Slice oob,
+                            const PalSockAddr *to, Int *oobn, Error *err);
 Error burrow__netfd_write_msg_error(Error err);
 
 /* netFD.shutdown, with PAL_SHUT_RD or PAL_SHUT_WR. */

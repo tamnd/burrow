@@ -1409,6 +1409,108 @@ static void TestLineNum(TestingT *t) {
     arena_free(&ar);
 }
 
+/* ---------------------------------------------------------------- benchmarks */
+
+static void BenchmarkParseLarge(TestingB *b) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Str text = strings_repeat(a, BURROW_S("{{1234}}\n"), 10000);
+    Map *bi = builtins(a);
+    for (Int i = 0; i < testing_b_n(b); i++) {
+        ArenaMark m = arena_mark(&ar);
+        Error err = BURROW_NO_ERROR;
+        parse_tree_parse(parse_new(a, BURROW_S("bench"), (Slice){0}), text,
+                         BURROW_STR_EMPTY, BURROW_STR_EMPTY, tree_set(a), funcs_of(&bi),
+                         &err);
+        if (BURROW_FAILED(err)) {
+            arena_free(&ar);
+            testing_b_fatal_v(b, err);
+        }
+        arena_release(&ar, m);
+    }
+    arena_free(&ar);
+}
+
+static void BenchmarkVariableString(TestingB *b) {
+    static Str ident[] = {
+        S_("$"),
+        S_("A"),
+        S_("BB"),
+        S_("CCC"),
+        S_("THIS_IS_THE_VARIABLE_BEING_PROCESSED"),
+    };
+    ParseVariableNode v = {
+        .node_type = PARSE_NODE_VARIABLE,
+        .ident = {ident, NELEM(ident), NELEM(ident), TYPE_STRING},
+    };
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Str sinkv = BURROW_STR_EMPTY;
+    testing_b_reset_timer(b);
+    testing_b_report_allocs(b);
+    for (Int i = 0; i < testing_b_n(b); i++) {
+        ArenaMark m = arena_mark(&ar);
+        sinkv = parse_variable_node_string(&v, a);
+        if (i + 1 < testing_b_n(b))
+            arena_release(&ar, m);
+    }
+    if (sinkv.len == 0) {
+        arena_free(&ar);
+        testing_b_fatal_v(b, "Benchmark was not run");
+    }
+    arena_free(&ar);
+}
+
+static void BenchmarkListString(TestingB *b) {
+    Str text =
+        BURROW_S("\n"
+                 "{{(printf .Field1.Field2.Field3).Value}}\n"
+                 "{{$x := (printf .Field1.Field2.Field3).Value}}\n"
+                 "{{$y := (printf $x.Field1.Field2.Field3).Value}}\n"
+                 "{{$z := $y.Field1.Field2.Field3}}\n"
+                 "{{if contains $y $z}}\n"
+                 "\t{{printf \"%q\" $y}}\n"
+                 "{{else}}\n"
+                 "\t{{printf \"%q\" $x}}\n"
+                 "{{end}}\n"
+                 "{{with $z.Field1 | contains \"boring\"}}\n"
+                 "\t{{printf \"%q\" . | printf \"%s\"}}\n"
+                 "{{else}}\n"
+                 "\t{{printf \"%d %d %d\" 11 11 11}}\n"
+                 "\t{{printf \"%d %d %s\" 22 22 $x.Field1.Field2.Field3 | printf "
+                 "\"%s\"}}\n"
+                 "\t{{printf \"%v\" (contains $z.Field1.Field2 $y)}}\n"
+                 "{{end}}\n");
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Map *bi = builtins(a);
+    Error err = BURROW_NO_ERROR;
+    ParseTree *tree = parse_tree_parse(parse_new(a, BURROW_S("bench"), (Slice){0}),
+                                       text, BURROW_STR_EMPTY, BURROW_STR_EMPTY,
+                                       tree_set(a), funcs_of(&bi), &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_b_fatal_v(b, err);
+    }
+    Str sinkl = BURROW_STR_EMPTY;
+    testing_b_reset_timer(b);
+    testing_b_report_allocs(b);
+    for (Int i = 0; i < testing_b_n(b); i++) {
+        ArenaMark m = arena_mark(&ar);
+        sinkl = parse_list_node_string(tree->root, a);
+        if (i + 1 < testing_b_n(b))
+            arena_release(&ar, m);
+    }
+    if (sinkl.len == 0) {
+        arena_free(&ar);
+        testing_b_fatal_v(b, "Benchmark was not run");
+    }
+    arena_free(&ar);
+}
+
 /* Go's init: use a small stack limit for testing to avoid creating huge
  * expressions. */
 static int parse_main(TestingM *m) {
@@ -1433,6 +1535,9 @@ static int parse_main(TestingM *m) {
     X(TestErrorContextWithTreeCopy)                                                    \
     X(TestErrors)                                                                      \
     X(TestBlock)                                                                       \
-    X(TestLineNum)
+    X(TestLineNum)                                                                     \
+    X(BenchmarkParseLarge)                                                             \
+    X(BenchmarkVariableString)                                                         \
+    X(BenchmarkListString)
 
 TESTING_MAIN_WITH(parse_main, TESTS)

@@ -23,6 +23,7 @@ static void walk(Alloc *a) {
     // doc: walk
     Error err = BURROW_NO_ERROR;
     ParseTree *t = parse_new(a, BURROW_S("greeting"), (Slice){0});
+    t->mode = PARSE_SKIP_FUNC_CHECK; // len is not defined here
     t = parse_tree_parse(
         t, BURROW_S("Hello, {{.Name}}! You have {{len .Mail}} letters."),
         BURROW_STR_EMPTY, BURROW_STR_EMPTY,

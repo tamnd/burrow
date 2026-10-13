@@ -125,3 +125,5 @@ debug/buildinfo
 log/slog
 testing/slogtest
 testing/iotest
+text/template/parse
+html

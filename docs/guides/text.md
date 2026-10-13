@@ -1,6 +1,6 @@
 # Text
 
-`burrow/text/tabwriter.h` is Go's `text/tabwriter`, which lines text up in columns, and `burrow/text/scanner.h` is Go's `text/scanner`, which splits text into Go style tokens. `text/template` will land in this guide when it is ported.
+`burrow/text/tabwriter.h` is Go's `text/tabwriter`, which lines text up in columns, and `burrow/text/scanner.h` is Go's `text/scanner`, which splits text into Go style tokens. `burrow/text/template/parse.h` is Go's `text/template/parse`, the parser behind templates. The template engine itself will land in this guide when it is ported.
 
 ## Columns
 
@@ -188,4 +188,128 @@ That prints:
 error at input:1:6: hexadecimal literal has no digits
 error at input:1:12: literal not terminated
 errors: 2
+```
+
+## Template parse trees
+
+`burrow/text/template/parse.h` is Go's `text/template/parse`, the parser that `text/template` and `html/template` are built on. Most programs will want those packages, but the parser is handy on its own when you need to look inside a template: to list the fields it reads, to catch syntax errors before the template is used, or to write a tool that rewrites templates.
+
+`parse_parse` takes the name and text of a template and returns a `Map` from names to `ParseTree` pointers. The template itself gets a tree, and so does each `{{define}}` inside it. Empty delimiters mean `{{` and `}}`. Writing a tree's root list back out gives you template text again, in a tidied form:
+
+<!-- example: ../examples/text/template_parse.c#trees -->
+```c
+Str text = BURROW_S("{{define \"item\"}}<li>{{.}}</li>{{end}}"
+                    "<ul>{{range .Items}}{{template \"item\" .}}{{end}}</ul>");
+Error err = BURROW_NO_ERROR;
+Map *trees = parse_parse(a, BURROW_S("page"), text, BURROW_STR_EMPTY,
+                         BURROW_STR_EMPTY, (Slice){0}, &err);
+if (BURROW_FAILED(err)) {
+    fmt_println_v(err);
+    return;
+}
+Str names[] = {BURROW_S("page"), BURROW_S("item")};
+for (int i = 0; i < 2; i++) {
+    ParseTree **t = map_get(trees, &names[i]);
+    fmt_printf_v("%s: %s\n", names[i], parse_list_node_string((*t)->root, a));
+}
+```
+
+That prints:
+
+```
+page: <ul>{{range .Items}}{{template "item" .}}{{end}}</ul>
+item: <li>{{.}}</li>
+```
+
+## Walking a tree
+
+A `ParseNode` points at the `ParseNodeType` every node starts with, so `*n` says what the node is, and the node can then be cast to its own struct, such as `ParseActionNode` or `ParseIfNode`. To parse with options, make the tree with `parse_new`, set its `mode` and fill it in with `parse_tree_parse`. `PARSE_SKIP_FUNC_CHECK` lets the template call functions the parser has not been told about, and `PARSE_PARSE_COMMENTS` keeps comments in the tree as `PARSE_NODE_COMMENT` nodes:
+
+<!-- example: ../examples/text/template_parse.c#walk -->
+```c
+Error err = BURROW_NO_ERROR;
+ParseTree *t = parse_new(a, BURROW_S("greeting"), (Slice){0});
+t->mode = PARSE_SKIP_FUNC_CHECK; // len is not defined here
+t = parse_tree_parse(
+    t, BURROW_S("Hello, {{.Name}}! You have {{len .Mail}} letters."),
+    BURROW_STR_EMPTY, BURROW_STR_EMPTY,
+    map_make(a, TYPE_STRING, TYPE_UNSAFE_POINTER, 0), (Slice){0}, &err);
+if (t == NULL) {
+    fmt_println_v(err);
+    return;
+}
+for (Int i = 0; i < t->root->nodes.len; i++) {
+    ParseNode n = BURROW_AT(ParseNode, t->root->nodes, i);
+    switch (*n) {
+    case PARSE_NODE_TEXT:
+        fmt_printf_v("text   %q\n", parse_node_string(n, a));
+        break;
+    case PARSE_NODE_ACTION: {
+        ParseActionNode *act = (ParseActionNode *)n;
+        ParseCommandNode *cmd = BURROW_AT(ParseCommandNode *, act->pipe->cmds, 0);
+        fmt_printf_v("action %s, %d argument(s)\n", parse_node_string(n, a),
+                     cmd->args.len);
+        break;
+    }
+    default:
+        break;
+    }
+}
+```
+
+That prints:
+
+```
+text   "Hello, "
+action {{.Name}}, 1 argument(s)
+text   "! You have "
+action {{len .Mail}}, 2 argument(s)
+text   " letters."
+```
+
+## Template errors
+
+A syntax error stops the parse. It comes back in `*err` with the template name and line in front of the message, the same text Go gives. `parse_parse` still returns the trees it finished before the error, and `parse_tree_parse` returns NULL:
+
+<!-- example: ../examples/text/template_parse.c#errors -->
+```c
+Str bad[] = {BURROW_S("{{if .Ready}}go"), BURROW_S("{{.Name | shout}}"),
+             BURROW_S("line one\n{{.X 1 2 3 ) }}")};
+for (int i = 0; i < 3; i++) {
+    Error err = BURROW_NO_ERROR;
+    parse_parse(a, BURROW_S("bad"), bad[i], BURROW_STR_EMPTY, BURROW_STR_EMPTY,
+                (Slice){0}, &err);
+    fmt_println_v(err);
+}
+```
+
+That prints:
+
+```
+template: bad:1: unexpected EOF
+template: bad:1: function "shout" not defined
+template: bad:2: unexpected right paren
+```
+
+The parser checks that every function a template calls exists, but it only looks at names. The `funcs` argument is a slice of `Map` pointers, each from `Str` to `Any`, and a name counts as defined when one of the maps holds a value for it that is not nil. What the value is does not matter to the parser:
+
+<!-- example: ../examples/text/template_parse.c#funcs -->
+```c
+Map *fm = map_make(a, TYPE_STRING, TYPE_ANY, 0);
+Str name = BURROW_S("shout");
+Any f = BURROW_ANY_VAL(TYPE_INT, Int, 1); // only the name matters to the parser
+map_set(fm, &name, &f);
+Error err = BURROW_NO_ERROR;
+Map *trees =
+    parse_parse(a, BURROW_S("ok"), BURROW_S("{{.Name | shout}}"), BURROW_STR_EMPTY,
+                BURROW_STR_EMPTY, (Slice){&fm, 1, 1, TYPE_UNSAFE_POINTER}, &err);
+Str ok = BURROW_S("ok");
+ParseTree **t = map_get(trees, &ok);
+fmt_println_v(err, parse_list_node_string((*t)->root, a));
+```
+
+That prints:
+
+```
+<nil> {{.Name | shout}}
 ```

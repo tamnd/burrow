@@ -1265,10 +1265,9 @@ BURROW_OWNS(ret) NetListener net_listen(Alloc *a, Str network, Str address, Erro
  * "udp4", "udp6" or "unixgram", made in a, with the addresses read as
  * net_listen_config_listen reads them. The "ip" networks fail with ENOSYS
  * until IPConn is here. */
-BURROW_OWNS(ret) NetPacketConn net_listen_config_listen_packet(const NetListenConfig *lc,
-                                                               Alloc *a, Context ctx,
-                                                               Str network, Str address,
-                                                               Error *err);
+BURROW_OWNS(ret) NetPacketConn
+net_listen_config_listen_packet(const NetListenConfig *lc, Alloc *a, Context ctx,
+                                Str network, Str address, Error *err);
 
 /* ListenPacket, which is the zero ListenConfig's with context_background(). */
 BURROW_OWNS(ret) NetPacketConn net_listen_packet(Alloc *a, Str network, Str address,

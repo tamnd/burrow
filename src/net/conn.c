@@ -49,6 +49,11 @@ IoCloser net_listener_as_io_closer(NetListener l) {
     return cl;
 }
 
+IoCloser net_packet_conn_as_io_closer(NetPacketConn c) {
+    IoCloser cl = {c.vt != NULL ? &c.vt->closer : NULL, c.data};
+    return cl;
+}
+
 /* --------------------------------------------------------------- net.Error */
 
 /* The method called name on err's type, if it is a func() bool, which is
@@ -80,6 +85,10 @@ static bool nc_ask(Error err, Str name) {
 bool net_is_error(Error err) {
     return nc_bool_method(err, NC_LIT("Timeout")) != NULL &&
            nc_bool_method(err, NC_LIT("Temporary")) != NULL;
+}
+
+Str net_error_error(NetError err) {
+    return error_text(err);
 }
 
 bool net_error_timeout(NetError err) {

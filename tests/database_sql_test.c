@@ -2435,6 +2435,724 @@ static void TestSimultaneousQueries(TestingT *t) {
     test_database(t, testSimultaneousQueries, NULL);
 }
 
+/* A sentinel of the test's own, for the errors Go makes with errors.New and
+ * then compares by identity. */
+#define TD_SENTINEL(name, text)                                                        \
+    static const Str name##__text = BURROW_S_INIT(text);                               \
+    static const Error name = {&burrow_sentinel_error_vt, &name##__text}
+
+static Int num_deps(SqlDB *db) {
+    synctest_wait();
+    return burrow__sql_db_num_deps(db);
+}
+
+/* clearAllConns closes all connections in db. */
+static void clear_all_conns(TestingT *t, SqlDB *db) {
+    sql_db_set_max_idle_conns(db, 0);
+    Int n = num_free_conns(db);
+    if (n != 0)
+        testing_t_errorf_v(t, "free conns = %d; want %d", n, (Int)0);
+    n = num_deps(db);
+    if (n > 0)
+        testing_t_errorf_v(t, "number of dependencies = %d; expected 0", n);
+}
+
+/* The fake driver's open and close counts. */
+static void driver_counts(Int *opens, Int *closes) {
+    sync_mutex_lock(&fdb_mu);
+    *opens = fdb_open_count;
+    *closes = fdb_close_count;
+    sync_mutex_unlock(&fdb_mu);
+}
+
+/* Errors the post close hook sees go to t, until the hook is unset. */
+static void set_close_hook(TestingT *t) {
+    td_close_t = t;
+    fdb_set_hook_post_close_conn(td_post_close);
+}
+
+static void unset_close_hook(void) {
+    fdb_set_hook_post_close_conn(NULL);
+    td_close_t = NULL;
+}
+
+static void testMaxIdleConns(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+    Error err = BURROW_NO_ERROR;
+    SqlTx *tx = sql_db_begin(db, &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+    (void)sql_tx_commit(tx);
+    sql_tx_free(tx);
+    Int got = burrow__sql_db_num_free(db);
+    if (got != 1)
+        testing_t_errorf_v(t, "freeConns = %d; want 1", got);
+
+    sql_db_set_max_idle_conns(db, 0);
+
+    got = burrow__sql_db_num_free(db);
+    if (got != 0)
+        testing_t_errorf_v(t, "freeConns after set to zero = %d; want 0", got);
+
+    tx = sql_db_begin(db, &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+    (void)sql_tx_commit(tx);
+    sql_tx_free(tx);
+    got = burrow__sql_db_num_free(db);
+    if (got != 0)
+        testing_t_errorf_v(t, "freeConns = %d; want 0", got);
+}
+
+static void TestMaxIdleConns(TestingT *t) {
+    test_database(t, testMaxIdleConns, NULL);
+}
+
+typedef struct TdSlowQuery {
+    TestingT *t;
+    SqlStmt *stmt;
+} TdSlowQuery;
+
+static void td_slow_query(void *env) {
+    TdSlowQuery *q = env;
+    Str op = BURROW_STR_EMPTY;
+    SqlRow row = sql_stmt_query_row_v(q->stmt, BURROW_S("sleep"), (Int)25);
+    Error err = sql_row_scan_v(&row, heap_allocator(), &op);
+    if (BURROW_FAILED(err)) {
+        if (!errors_is(err, sql_err_no_rows))
+            testing_t_errorf_v(q->t, "%v", err);
+    } else {
+        mem_free(heap_allocator(), (void *)(uintptr_t)op.p, (size_t)op.len, 1);
+    }
+}
+
+/* Runs nbatch batches of nquery slow queries on stmt at once, waiting for each
+ * batch to finish before starting the next. */
+static void run_slow_queries(TestingT *t, SqlStmt *stmt, int nquery, int nbatch) {
+    TdSlowQuery q = {t, stmt};
+    SyncWaitGroup wg;
+    memset(&wg, 0, sizeof wg);
+    for (int batch = 0; batch < nbatch; batch++) {
+        for (int i = 0; i < nquery; i++)
+            (void)sync_wait_group_go(&wg, BURROW_FN(Func, td_slow_query, &q));
+        sync_wait_group_wait(&wg);
+    }
+}
+
+static void testMaxOpenConns(TestingT *t, SqlDB *db) {
+    if (testing_short()) {
+        testing_t_logf_v(t, "skipping in short mode");
+        return;
+    }
+    set_close_hook(t);
+    if (!populate(t, db, "magicquery")) {
+        unset_close_hook();
+        return;
+    }
+
+    /* Force the number of open connections to 0 so we can get an accurate
+     * count for the test. */
+    clear_all_conns(t, db);
+
+    Int opens0 = 0, closes0 = 0;
+    driver_counts(&opens0, &closes0);
+
+    sql_db_set_max_idle_conns(db, 10);
+    sql_db_set_max_open_conns(db, 10);
+
+    Error err = BURROW_NO_ERROR;
+    SqlStmt *stmt =
+        sql_db_prepare(db, BURROW_S("SELECT|magicquery|op|op=?,millis=?"), &err);
+    if (BURROW_FAILED(err)) {
+        unset_close_hook();
+        FATALF("%v", err);
+    }
+
+    /* Start 50 parallel slow queries, twice. */
+    run_slow_queries(t, stmt, 50, 2);
+
+    Int g = num_free_conns(db);
+    if (g != 10)
+        testing_t_errorf_v(t, "free conns = %d; want %d", g, (Int)10);
+
+    Int n = num_deps(db);
+    if (n > 20)
+        testing_t_errorf_v(t, "number of dependencies = %d; expected <= 20", n);
+
+    Int opens = 0, closes = 0;
+    driver_counts(&opens, &closes);
+    opens -= opens0;
+    closes -= closes0;
+
+    if (opens > 10) {
+        testing_t_logf_v(t, "open calls = %d", opens);
+        testing_t_logf_v(t, "close calls = %d", closes);
+        testing_t_errorf_v(t, "db connections opened = %d; want <= 10", opens);
+    }
+
+    err = sql_stmt_close(stmt);
+    sql_stmt_free(stmt);
+    if (BURROW_FAILED(err)) {
+        unset_close_hook();
+        FATALF("%v", err);
+    }
+
+    g = num_free_conns(db);
+    if (g != 10)
+        testing_t_errorf_v(t, "free conns = %d; want %d", g, (Int)10);
+
+    n = num_deps(db);
+    if (n > 10)
+        testing_t_errorf_v(t, "number of dependencies = %d; expected <= 10", n);
+
+    sql_db_set_max_open_conns(db, 5);
+
+    g = num_free_conns(db);
+    if (g != 5)
+        testing_t_errorf_v(t, "free conns = %d; want %d", g, (Int)5);
+
+    n = num_deps(db);
+    if (n > 5)
+        testing_t_errorf_v(t, "number of dependencies = %d; expected 0", n);
+
+    sql_db_set_max_open_conns(db, 0);
+
+    g = num_free_conns(db);
+    if (g != 5)
+        testing_t_errorf_v(t, "free conns = %d; want %d", g, (Int)5);
+
+    n = num_deps(db);
+    if (n > 5)
+        testing_t_errorf_v(t, "number of dependencies = %d; expected 0", n);
+
+    clear_all_conns(t, db);
+    unset_close_hook();
+}
+
+static void TestMaxOpenConns(TestingT *t) {
+    test_database(t, testMaxOpenConns, NULL);
+}
+
+/* Issue 9453: tests that SetMaxOpenConns can be lowered at runtime and affects
+ * the subsequent release of connections. */
+static void testMaxOpenConnsOnBusy(TestingT *t, SqlDB *db) {
+    set_close_hook(t);
+    if (!populate(t, db, "magicquery")) {
+        unset_close_hook();
+        return;
+    }
+
+    sql_db_set_max_open_conns(db, 3);
+
+    Context ctx = context_background();
+    void *conn[3] = {NULL, NULL, NULL};
+    for (int i = 0; i < 3; i++) {
+        Error err = BURROW_NO_ERROR;
+        conn[i] = burrow__sql_db_conn(db, ctx, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "db open conn fail: %v", err);
+            for (int j = 0; j < i; j++)
+                burrow__sql_dc_release(conn[j], BURROW_NO_ERROR);
+            unset_close_hook();
+            return;
+        }
+    }
+
+    Int g = burrow__sql_db_num_open(db);
+    if (g != 3)
+        testing_t_errorf_v(t, "free conns = %d; want %d", g, (Int)3);
+
+    sql_db_set_max_open_conns(db, 2);
+    g = burrow__sql_db_num_open(db);
+    if (g != 3)
+        testing_t_errorf_v(t, "free conns = %d; want %d", g, (Int)3);
+
+    burrow__sql_dc_release(conn[0], BURROW_NO_ERROR);
+    burrow__sql_dc_release(conn[1], BURROW_NO_ERROR);
+    g = burrow__sql_db_num_open(db);
+    if (g != 2)
+        testing_t_errorf_v(t, "free conns = %d; want %d", g, (Int)2);
+
+    burrow__sql_dc_release(conn[2], BURROW_NO_ERROR);
+    g = burrow__sql_db_num_open(db);
+    if (g != 2)
+        testing_t_errorf_v(t, "free conns = %d; want %d", g, (Int)2);
+    unset_close_hook();
+}
+
+static void TestMaxOpenConnsOnBusy(TestingT *t) {
+    test_database(t, testMaxOpenConnsOnBusy, NULL);
+}
+
+enum { TD_MAX_OPEN = 2, TD_TRY_OPEN = TD_MAX_OPEN * 2 + 2 };
+
+TD_SENTINEL(td_err_offline, "db offline");
+
+static SyncWaitGroup td_opening;
+
+static Error td_open_offline(void) {
+    /* Wait for all connections to enqueue. */
+    sync_wait_group_wait(&td_opening);
+    return td_err_offline;
+}
+
+typedef struct TdPending {
+    SqlDB *db;
+    Chan *errs;
+} TdPending;
+
+static void td_pending_exec(void *env) {
+    TdPending *p = env;
+    sync_wait_group_done(&td_opening); /* signal one connection is in flight */
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Error err = BURROW_NO_ERROR;
+    (void)sql_db_exec(p->db, arena_allocator(&ar), BURROW_S("will never run"), NO_ARGS,
+                      &err);
+    arena_free(&ar);
+    bool same = err.vt == td_err_offline.vt && err.data == td_err_offline.data;
+    chan_send(p->errs, &same);
+}
+
+/* Issue 10886: tests that all connection attempts return when more than
+ * DB.maxOpen connections are in flight and the first DB.maxOpen fail. */
+static void testPendingConnsAfterErr(TestingT *t) {
+    /* No queries will be run. */
+    register_test_driver();
+    Error err = BURROW_NO_ERROR;
+    SqlDB *db = sql_open(BURROW_S("test"), fake_db_name, &err);
+    if (BURROW_FAILED(err))
+        FATALF("Open: %v", err);
+
+    sql_db_set_max_open_conns(db, TD_MAX_OPEN);
+    sql_db_set_max_idle_conns(db, 0);
+
+    TdPending p = {db, chan_make(heap_allocator(), TYPE_BOOL, TD_TRY_OPEN)};
+
+    memset(&td_opening, 0, sizeof td_opening);
+    sync_wait_group_add(&td_opening, TD_TRY_OPEN);
+
+    fdb_set_hook_open_err(td_open_offline);
+
+    for (int i = 0; i < TD_TRY_OPEN; i++)
+        (void)go(BURROW_FN(Func, td_pending_exec, &p));
+
+    sync_wait_group_wait(&td_opening); /* wait for all workers to begin running */
+
+    /* Check that all connections fail without deadlock. A deadlock is one the
+     * bubble reports. */
+    for (int i = 0; i < TD_TRY_OPEN; i++) {
+        bool same = false;
+        (void)chan_recv(p.errs, &same);
+        if (!same)
+            testing_t_errorf_v(t, "unexpected err: want %v", td_err_offline);
+    }
+
+    /* Wait a reasonable time for the database to close all connections.
+     * Closing the database will check for numOpen and fail the test. */
+    Time deadline = time_add(time_now(), 5 * TIME_SECOND);
+    while (burrow__sql_db_num_open(db) != 0 && time_before(time_now(), deadline))
+        time_sleep(3 * TIME_MILLISECOND);
+
+    fdb_set_hook_open_err(NULL);
+    chan_free(p.errs);
+    close_db(t, db);
+}
+
+static void TestPendingConnsAfterErr(TestingT *t) {
+    synctest_test(t, testPendingConnsAfterErr);
+}
+
+static void testSingleOpenConn(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    sql_db_set_max_open_conns(db, 1);
+
+    for (int i = 0; i < 2; i++) { /* the second shouldn't deadlock */
+        Error err = BURROW_NO_ERROR;
+        SqlRows *rows =
+            sql_db_query(db, BURROW_S("SELECT|people|name|"), NO_ARGS, &err);
+        if (BURROW_FAILED(err))
+            FATALF("%v", err);
+        err = sql_rows_close(rows);
+        sql_rows_free(rows);
+        if (BURROW_FAILED(err))
+            FATALF("%v", err);
+    }
+}
+
+static void TestSingleOpenConn(TestingT *t) {
+    test_database(t, testSingleOpenConn, NULL);
+}
+
+static void testStats(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+    SqlDBStats stats = sql_db_stats(db);
+    if (stats.open_connections != 1)
+        testing_t_errorf_v(t, "stats.OpenConnections = %d; want 1",
+                           stats.open_connections);
+
+    Error err = BURROW_NO_ERROR;
+    SqlTx *tx = sql_db_begin(db, &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+    (void)sql_tx_commit(tx);
+    sql_tx_free(tx);
+
+    /* closeDB without the free, which the harness does after. */
+    err = sql_db_close(db);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "error closing DB: %v", err);
+    synctest_wait();
+    stats = sql_db_stats(db);
+    if (stats.open_connections != 0)
+        testing_t_errorf_v(t, "stats.OpenConnections = %d; want 0",
+                           stats.open_connections);
+}
+
+static void TestStats(TestingT *t) {
+    test_database(t, testStats, NULL);
+}
+
+static void testConnMaxLifetime(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "magicquery"))
+        return;
+
+    /* Force the number of open connections to 0 so we can get an accurate
+     * count for the test. */
+    clear_all_conns(t, db);
+
+    Int opens0 = 0, closes0 = 0;
+    driver_counts(&opens0, &closes0);
+
+    sql_db_set_max_idle_conns(db, 10);
+    sql_db_set_max_open_conns(db, 10);
+
+    Error err = BURROW_NO_ERROR;
+    SqlTx *tx = sql_db_begin(db, &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+
+    synctest_sleep(1 * TIME_SECOND);
+    SqlTx *tx2 = sql_db_begin(db, &err);
+    if (BURROW_FAILED(err)) {
+        sql_tx_free(tx);
+        FATALF("%v", err);
+    }
+
+    (void)sql_tx_commit(tx);
+    (void)sql_tx_commit(tx2);
+    sql_tx_free(tx);
+    sql_tx_free(tx2);
+
+    Int opens = 0, closes = 0;
+    driver_counts(&opens, &closes);
+    opens -= opens0;
+    closes -= closes0;
+
+    if (opens != 2)
+        testing_t_errorf_v(t, "opens = %d; want 2", opens);
+    if (closes != 0)
+        testing_t_errorf_v(t, "closes = %d; want 0", closes);
+    Int g = num_free_conns(db);
+    if (g != 2)
+        testing_t_errorf_v(t, "free conns = %d; want %d", g, (Int)2);
+
+    /* Expire first conn. */
+    synctest_sleep(10 * TIME_SECOND);
+    sql_db_set_conn_max_lifetime(db, 10 * TIME_SECOND);
+
+    tx = sql_db_begin(db, &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+    tx2 = sql_db_begin(db, &err);
+    if (BURROW_FAILED(err)) {
+        sql_tx_free(tx);
+        FATALF("%v", err);
+    }
+    (void)sql_tx_commit(tx);
+    (void)sql_tx_commit(tx2);
+    sql_tx_free(tx);
+    sql_tx_free(tx2);
+
+    /* Give connectionCleaner chance to run. */
+    synctest_wait();
+    driver_counts(&opens, &closes);
+    opens -= opens0;
+    closes -= closes0;
+
+    if (opens != 3)
+        testing_t_errorf_v(t, "opens = %d; want 3", opens);
+    if (closes != 1)
+        testing_t_errorf_v(t, "closes = %d; want 1", closes);
+
+    SqlDBStats s = sql_db_stats(db);
+    if (s.max_lifetime_closed != 1)
+        testing_t_errorf_v(t, "MaxLifetimeClosed = %d; want 1", s.max_lifetime_closed);
+}
+
+static void TestConnMaxLifetime(TestingT *t) {
+    test_database(t, testConnMaxLifetime, NULL);
+}
+
+/* golang.org/issue/5323 */
+static void testStmtCloseDeps(TestingT *t, SqlDB *db) {
+    if (testing_short()) {
+        testing_t_logf_v(t, "skipping in short mode");
+        return;
+    }
+    set_close_hook(t);
+    if (!populate(t, db, "magicquery")) {
+        unset_close_hook();
+        return;
+    }
+
+    Int opens0 = 0, closes0 = 0;
+    driver_counts(&opens0, &closes0);
+    Int open_delta0 = opens0 - closes0;
+
+    Error err = BURROW_NO_ERROR;
+    SqlStmt *stmt =
+        sql_db_prepare(db, BURROW_S("SELECT|magicquery|op|op=?,millis=?"), &err);
+    if (BURROW_FAILED(err)) {
+        unset_close_hook();
+        FATALF("%v", err);
+    }
+
+    /* Start 50 parallel slow queries, twice. */
+    enum { nquery = 50 };
+    run_slow_queries(t, stmt, nquery, 2);
+
+    Int g = num_free_conns(db);
+    if (g != 2)
+        testing_t_errorf_v(t, "free conns = %d; want %d", g, (Int)2);
+
+    Int n = num_deps(db);
+    if (n > 4)
+        testing_t_errorf_v(t, "number of dependencies = %d; expected <= 4", n);
+
+    Int opens = 0, closes = 0;
+    driver_counts(&opens, &closes);
+    Int open_delta = (opens - closes) - open_delta0;
+    opens -= opens0;
+    closes -= closes0;
+
+    if (open_delta > 2) {
+        testing_t_logf_v(t, "open calls = %d", opens);
+        testing_t_logf_v(t, "close calls = %d", closes);
+        testing_t_logf_v(t, "open delta = %d", open_delta);
+        testing_t_errorf_v(t, "db connections opened = %d; want <= 2", open_delta);
+    }
+
+    synctest_wait();
+    Int ncss = burrow__sql_stmt_num_css(stmt);
+    if (ncss > nquery)
+        testing_t_errorf_v(t, "len(stmt.css) = %d; want <= %d", ncss, (Int)nquery);
+
+    err = sql_stmt_close(stmt);
+    sql_stmt_free(stmt);
+    if (BURROW_FAILED(err)) {
+        unset_close_hook();
+        FATALF("%v", err);
+    }
+
+    g = num_free_conns(db);
+    if (g != 2)
+        testing_t_errorf_v(t, "free conns = %d; want %d", g, (Int)2);
+
+    n = num_deps(db);
+    if (n > 2)
+        testing_t_errorf_v(t, "number of dependencies = %d; expected <= 2", n);
+
+    clear_all_conns(t, db);
+    unset_close_hook();
+}
+
+static void TestStmtCloseDeps(TestingT *t) {
+    test_database(t, testStmtCloseDeps, NULL);
+}
+
+/* golang.org/issue/5046 */
+static void testCloseConnBeforeStmts(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    set_close_hook(t);
+
+    Error err = BURROW_NO_ERROR;
+    SqlStmt *stmt = sql_db_prepare(db, BURROW_S("SELECT|people|name|"), &err);
+    if (BURROW_FAILED(err)) {
+        unset_close_hook();
+        FATALF("%v", err);
+    }
+
+    Int nfree = burrow__sql_db_num_free(db);
+    if (nfree != 1) {
+        sql_stmt_free(stmt);
+        unset_close_hook();
+        FATALF("expected 1 freeConn; got %d", nfree);
+    }
+    void *dc = burrow__sql_db_free_dc(db, 0);
+    if (burrow__sql_dc_closed(dc))
+        testing_t_errorf_v(t, "conn shouldn't be closed");
+
+    Int n = burrow__sql_dc_num_open_stmt(dc);
+    if (n != 1)
+        testing_t_errorf_v(t, "driverConn num openStmt = %d; want 1", n);
+    err = sql_db_close(db);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "db Close = %v", err);
+    if (!burrow__sql_dc_closed(dc))
+        testing_t_errorf_v(t, "after db.Close, driverConn should be closed");
+    n = burrow__sql_dc_num_open_stmt(dc);
+    if (n != 0)
+        testing_t_errorf_v(t, "driverConn num openStmt = %d; want 0", n);
+
+    err = sql_stmt_close(stmt);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "Stmt close = %v", err);
+    sql_stmt_free(stmt);
+
+    if (!burrow__sql_dc_closed(dc))
+        testing_t_errorf_v(t, "conn should be closed");
+    if (burrow__sql_dc_has_driver(dc))
+        testing_t_errorf_v(
+            t, "after Stmt Close, driverConn's Conn interface should be nil");
+    burrow__sql_dc_unref(dc);
+    unset_close_hook();
+}
+
+static void TestCloseConnBeforeStmts(TestingT *t) {
+    test_database(t, testCloseConnBeforeStmts, NULL);
+}
+
+/* golang.org/issue/5283: don't release the Rows' connection in Close before
+ * calling Stmt.Close. */
+static void testRowsCloseOrder(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    sql_db_set_max_idle_conns(db, 0);
+    fdb_strict_close = t;
+
+    Error err = BURROW_NO_ERROR;
+    SqlRows *rows =
+        sql_db_query(db, BURROW_S("SELECT|people|age,name|"), NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        fdb_strict_close = NULL;
+        FATALF("%v", err);
+    }
+    err = sql_rows_close(rows);
+    sql_rows_free(rows);
+    fdb_strict_close = NULL;
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+}
+
+static void TestRowsCloseOrder(TestingT *t) {
+    test_database(t, testRowsCloseOrder, NULL);
+}
+
+TD_SENTINEL(td_err_fail, "fail");
+
+static void testRowsImplicitClose(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    Error err = BURROW_NO_ERROR;
+    SqlRows *rows =
+        sql_db_query(db, BURROW_S("SELECT|people|age,name|"), NO_ARGS, &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+
+    Int want = 2;
+    FakeCursor *r = fdb_get_rows_cursor(rows);
+    r->err_pos = want;
+    r->err = td_err_fail;
+    /* Keep the cursor past its close, to look at it after. */
+    r->in_table = true;
+
+    Int got = 0;
+    while (sql_rows_next(rows))
+        got++;
+    if (got != want)
+        testing_t_errorf_v(t, "got %d rows, want %d", got, want);
+    err = sql_rows_err(rows);
+    if (!errors_is(err, td_err_fail))
+        testing_t_errorf_v(t, "got error %v, want %v", err, td_err_fail);
+    if (!r->closed)
+        testing_t_errorf_v(t, "r.closed is false, want true");
+    sql_rows_free(rows);
+    fdb_cursor_free(r);
+}
+
+static void TestRowsImplicitClose(TestingT *t) {
+    test_database(t, testRowsImplicitClose, NULL);
+}
+
+TD_SENTINEL(td_err_rows_close, "rowsCursor: failed to close");
+
+static void testRowsCloseError(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+    Error err = BURROW_NO_ERROR;
+    SqlRows *rows =
+        sql_db_query(db, BURROW_S("SELECT|people|age,name|"), NO_ARGS, &err);
+    if (BURROW_FAILED(err))
+        FATALF("Query: %v", err);
+
+    FakeCursor *rc = fdb_get_rows_cursor(rows);
+    rc->close_err = td_err_rows_close;
+
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    while (sql_rows_next(rows)) {
+        Int age = 0;
+        Str name = BURROW_STR_EMPTY;
+        err = sql_rows_scan_v(rows, arena_allocator(&ar), &age, &name);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "Scan: %v", err);
+            break;
+        }
+    }
+    if (!BURROW_FAILED(err)) {
+        err = sql_rows_err(rows);
+        if (!errors_is(err, td_err_rows_close))
+            testing_t_errorf_v(t, "unexpected err: got %v, want %v", err,
+                               td_err_rows_close);
+    }
+    sql_rows_free(rows);
+    arena_free(&ar);
+}
+
+static void TestRowsCloseError(TestingT *t) {
+    test_database(t, testRowsCloseError, NULL);
+}
+
+static void testStmtCloseOrder(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    sql_db_set_max_idle_conns(db, 0);
+    fdb_strict_close = t;
+
+    Error err = BURROW_NO_ERROR;
+    SqlRows *rows =
+        sql_db_query(db, BURROW_S("SELECT|non_existent|name|"), NO_ARGS, &err);
+    fdb_strict_close = NULL;
+    if (!BURROW_FAILED(err)) {
+        sql_rows_free(rows);
+        FATALF("Querying non-existent table should fail");
+    }
+}
+
+static void TestStmtCloseOrder(TestingT *t) {
+    test_database(t, testStmtCloseOrder, NULL);
+}
+
 #define TESTS(X)                                                                       \
     X(TestOpenDB)                                                                      \
     X(TestQuery)                                                                       \
@@ -2490,6 +3208,19 @@ static void TestSimultaneousQueries(TestingT *t) {
     X(TestNullUUIDParam)                                                               \
     X(TestQueryRowNilScanDest)                                                         \
     X(TestIssue4902)                                                                   \
-    X(TestSimultaneousQueries)
+    X(TestSimultaneousQueries)                                                         \
+    X(TestMaxIdleConns)                                                                \
+    X(TestMaxOpenConns)                                                                \
+    X(TestMaxOpenConnsOnBusy)                                                          \
+    X(TestPendingConnsAfterErr)                                                        \
+    X(TestSingleOpenConn)                                                              \
+    X(TestStats)                                                                       \
+    X(TestConnMaxLifetime)                                                             \
+    X(TestStmtCloseDeps)                                                               \
+    X(TestCloseConnBeforeStmts)                                                        \
+    X(TestRowsCloseOrder)                                                              \
+    X(TestRowsImplicitClose)                                                           \
+    X(TestRowsCloseError)                                                              \
+    X(TestStmtCloseOrder)
 
 TESTING_MAIN(TESTS)

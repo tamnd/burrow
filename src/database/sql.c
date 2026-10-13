@@ -280,6 +280,7 @@ struct SqlDB {
     SqVec free_conn;
     SqVec reqs;
     Int num_open;
+    Int num_dep; /* len(Go's db.dep): open conns and Stmts with dependents */
     Int opener_pending;
     SyncCond opener_cond;
     bool opener_stop;
@@ -544,6 +545,7 @@ static SqDC *sq_dc_new(SqlDB *db, DriverConn ci) {
     dc->returned_at = dc->created_at;
     sync_atomic_int64_store(&dc->refs, 1);
     sq_db_ref(db);
+    db->num_dep++; /* the conn depends on itself until it closes */
     return dc;
 }
 
@@ -699,6 +701,7 @@ static Error sq_dc_close(SqDC *dc) {
 
     sync_mutex_lock(&dc->db->mu);
     dc->dbmu_closed = true;
+    dc->db->num_dep--;
     sync_mutex_unlock(&dc->db->mu);
     return sq_dc_final_close(dc);
 }
@@ -711,6 +714,7 @@ static void sq_dc_close_db_locked(SqDC *dc) {
     } else {
         dc->closed = true;
         dc->close_result = SQ_CLOSE_FINAL;
+        dc->db->num_dep--;
     }
     sync_mutex_unlock(&dc->mu);
 }
@@ -729,7 +733,8 @@ static Error sq_dc_run_close_result(SqDC *dc) {
  * the Stmts a Tx made from it. */
 static void sq_stmt_add_dep(SqlStmt *s) {
     sync_mutex_lock(&s->db->mu);
-    s->deps++;
+    if (s->deps++ == 0)
+        s->db->num_dep++;
     sync_mutex_unlock(&s->db->mu);
 }
 
@@ -741,6 +746,8 @@ static Error sq_stmt_remove_dep(SqlStmt *s) {
     }
     s->deps--;
     bool last = s->deps == 0;
+    if (last)
+        s->db->num_dep--;
     sync_mutex_unlock(&s->db->mu);
     if (last)
         return sq_stmt_final_close(s);
@@ -916,6 +923,7 @@ static void sq_open_new_connection(SqlDB *db) {
         return;
     }
     db->num_open--;
+    db->num_dep--;
     ci.vt->close(ci.data);
     sync_mutex_unlock(&db->mu);
     sq_dc_unref(dc);
@@ -3389,6 +3397,62 @@ Int burrow__sql_db_num_waiting(SqlDB *db) {
     Int n = db->reqs.len;
     sync_mutex_unlock(&db->mu);
     return n;
+}
+
+Int burrow__sql_db_num_deps(SqlDB *db) {
+    sync_mutex_lock(&db->mu);
+    Int n = db->num_dep;
+    sync_mutex_unlock(&db->mu);
+    return n;
+}
+
+void *burrow__sql_db_conn(SqlDB *db, Context ctx, Error *err) {
+    return sq_conn(db, ctx, SQ_CACHED_OR_NEW, err);
+}
+
+void burrow__sql_dc_release(void *dc, Error err) {
+    sq_put_conn(dc, err, true);
+}
+
+void *burrow__sql_db_free_dc(SqlDB *db, Int i) {
+    SqDC *dc = NULL;
+    sync_mutex_lock(&db->mu);
+    if (i >= 0 && i < db->free_conn.len) {
+        dc = db->free_conn.p[i];
+        sync_atomic_int64_add(&dc->refs, 1);
+    }
+    sync_mutex_unlock(&db->mu);
+    return dc;
+}
+
+void burrow__sql_dc_unref(void *dc) {
+    sq_dc_unref(dc);
+}
+
+bool burrow__sql_dc_closed(void *p) {
+    SqDC *dc = p;
+    sync_mutex_lock(&dc->mu);
+    bool closed = dc->closed;
+    sync_mutex_unlock(&dc->mu);
+    return closed;
+}
+
+Int burrow__sql_dc_num_open_stmt(void *p) {
+    SqDC *dc = p;
+    Int n = 0;
+    sync_mutex_lock(&dc->mu);
+    for (SqDS *ds = dc->open_stmt; ds != NULL; ds = ds->os_next)
+        n++;
+    sync_mutex_unlock(&dc->mu);
+    return n;
+}
+
+bool burrow__sql_dc_has_driver(void *p) {
+    SqDC *dc = p;
+    sync_mutex_lock(&dc->mu);
+    bool has = dc->ci.vt != NULL;
+    sync_mutex_unlock(&dc->mu);
+    return has;
 }
 
 int64_t burrow__sql_db_num_closed(SqlDB *db) {

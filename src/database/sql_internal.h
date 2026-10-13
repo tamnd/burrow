@@ -70,6 +70,18 @@ Int burrow__sql_db_num_free(SqlDB *db);
 DriverConn burrow__sql_db_free_conn(SqlDB *db, Int i);
 Int burrow__sql_db_num_waiting(SqlDB *db);
 int64_t burrow__sql_db_num_closed(SqlDB *db);
+Int burrow__sql_db_num_deps(SqlDB *db);
+/* db.conn(ctx, cachedOrNewConn) and driverConn.releaseConn, with the
+ * driverConn kept opaque. */
+void *burrow__sql_db_conn(SqlDB *db, Context ctx, Error *err);
+void burrow__sql_dc_release(void *dc, Error err);
+/* One of db.freeConn with a reference taken, which burrow__sql_dc_unref gives
+ * back, so that a test can look at it after the pool has let go of it. */
+void *burrow__sql_db_free_dc(SqlDB *db, Int i);
+void burrow__sql_dc_unref(void *dc);
+bool burrow__sql_dc_closed(void *dc);
+Int burrow__sql_dc_num_open_stmt(void *dc);
+bool burrow__sql_dc_has_driver(void *dc);
 Int burrow__sql_stmt_num_css(SqlStmt *s);
 DriverConn burrow__sql_conn_driver(SqlConn *c);
 DriverConn burrow__sql_tx_driver(SqlTx *tx);

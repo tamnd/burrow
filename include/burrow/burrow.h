@@ -195,6 +195,7 @@
 #include "burrow/testing/slogtest.h"
 #include "burrow/text/scanner.h"
 #include "burrow/text/tabwriter.h"
+#include "burrow/text/template/parse.h"
 #include "burrow/time.h"
 #include "burrow/time/tzdata.h"
 #include "burrow/type.h"

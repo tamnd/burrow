@@ -700,8 +700,11 @@ IO_TYPE(section_reader_desc, "SectionReader", IoSectionReader, 0, NULL);
 
 IoSectionReader io_new_section_reader(IoReaderAt r, int64_t off, int64_t n) {
     int64_t remaining;
-    if (off <= INT64_MAX - n)
-        remaining = n + off;
+    /* maxint64-n wraps in Go when n is negative, and a negative n then gets
+     * the rest of the input. The unsigned sum does the same without the
+     * overflow. */
+    if (off <= (int64_t)((uint64_t)INT64_MAX - (uint64_t)n))
+        remaining = (int64_t)((uint64_t)n + (uint64_t)off);
     else
         /* Overflow, with no way to indicate an error. Assume the caller meant
          * the rest of the input, which is what Go assumes. */

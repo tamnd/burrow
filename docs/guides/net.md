@@ -259,6 +259,37 @@ Every call that can wait, from a dial to a read, has to be made on a goroutine. 
 
 The errors are Go's, down to the text. A failed call gives a `NetOpError` naming the operation and the addresses, wrapping an `OsSyscallError` naming the system call, wrapping the `Errno`, so "dial tcp 127.0.0.1:9: connect: connection refused" reads the same as it would from Go, and `errors_as` finds each layer. The one exception is the end of a stream, which is `io_eof` as it is, so `errors_is(err, io_eof)` works on a read.
 
+`NetBuffers` is Go's `net.Buffers`, a slice of byte slices to write as one. Written to a TCP, UDP, IP or Unix connection with `net_buffers_write_to`, it goes in as few `writev` calls as the system allows, which is one for up to 1024 buffers, or one `WSASend` on Windows. Written to anything else, it is one `Write` per buffer. Either way the buffers that went are taken off the front, so a write that fails part way leaves what is still to go:
+
+<!-- example: ../examples/net/buffers.c#buffers -->
+```c
+char one[] = "first line\n";
+char two[] = "second line\n";
+char three[] = "third line\n";
+Slice parts[3] = {
+    slice_from(one, (Int)sizeof one - 1, (Int)sizeof one - 1, TYPE_BYTE),
+    slice_from(two, (Int)sizeof two - 1, (Int)sizeof two - 1, TYPE_BYTE),
+    slice_from(three, (Int)sizeof three - 1, (Int)sizeof three - 1, TYPE_BYTE),
+};
+NetBuffers v = slice_from(parts, 3, 3, TYPE_BYTES);
+
+/* One writev for all three, since the writer is a connection. */
+NetConn conn = net_tcp_conn_as_conn(c);
+int64_t n = net_buffers_write_to(&v, net_conn_as_io_writer(conn), &err);
+printf("wrote %d bytes, %d buffers left\n", (int)n, (int)v.len);
+```
+
+With the example's server printing what it reads, that prints:
+
+```
+wrote 34 bytes, 0 buffers left
+server got 34 bytes: first line
+second line
+third line
+```
+
+`net_tcp_conn_read_from` and `net_tcp_conn_write_to` are the connection's `ReadFrom` and `WriteTo`, so `io_copy` to or from a TCP connection goes through them, as it does in Go. They copy through a buffer on every system, where Go on Linux would splice or sendfile, and an error from either comes in a `NetOpError` named "readfrom" or "writeto" around the read or write that failed.
+
 A dialed connection, like an accepted one, has Nagle's algorithm off and keep-alives on, with Go's defaults of 15 seconds idle, 15 seconds between probes and 9 probes. `net_tcp_conn_set_keep_alive_config` and the other setters change them. `net_tcp_conn_free` and `net_tcp_listener_free` close what is still open and give the memory back, and the addresses a connection hands out belong to it until then.
 
 On Windows a socket is read by handing the kernel the read and waiting for it to finish, which is a different poller from the one here, so until that arrives a dial or a listen there fails with `ENOSYS`. wasip1 has no sockets to dial with.

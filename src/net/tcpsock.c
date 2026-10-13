@@ -14,7 +14,9 @@
 
 #include "burrow/declare.h"
 #include "burrow/error.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
+#include "burrow/mem/heap.h"
 #include "burrow/net.h"
 #include "burrow/net/netip.h"
 #include "burrow/os.h"
@@ -554,8 +556,12 @@ static Error nt_m_set_write_deadline(void *self, Time t) {
     return net_tcp_conn_set_write_deadline((NetTCPConn *)self, t);
 }
 
-static const Type nt_conn_desc = {
-    BURROW_S_INIT("TCPConn"),
+/* tcpConnWithoutReadFrom and tcpConnWithoutWriteTo: c with neither method,
+ * which is what the copies below hand io_copy so that it does not come back
+ * to them. Go hides one at a time, and hiding both changes nothing here, as
+ * io_copy only asks a reader for WriteTo and a writer for ReadFrom. */
+static const Type nt_plain_desc = {
+    BURROW_S_INIT("tcpConnWithoutReadFrom"),
     BURROW_S_INIT("net"),
     KIND_STRUCT,
     (uint32_t)sizeof(NetTCPConn),
@@ -564,6 +570,71 @@ static const Type nt_conn_desc = {
     0,
     NULL,
     NULL,
+    NULL,
+    NULL,
+    0,
+    0x6e747077U, /* "ntpw" */
+    NULL,
+};
+
+static const IoReaderVT nt_plain_reader = {&nt_plain_desc, nt_m_read};
+static const IoWriterVT nt_plain_writer = {&nt_plain_desc, nt_m_write};
+
+/* It is still a TCPConn underneath, so a Buffers copied to it is a writev, as
+ * Go's, which embeds the *TCPConn, gets. */
+const IoWriterVT *const burrow__nt_plain_writer = &nt_plain_writer;
+
+/* The error from the copies: io_eof as it is, and the rest in an OpError,
+ * except running out of memory, which this library never wraps. */
+static Error nt_copy_error(NetTCPConn *c, Str op, Error e) {
+    if (BURROW_OK(e) || (e.vt == io_eof.vt && e.data == io_eof.data) || nt_is_oom(e))
+        return e;
+    return burrow__net_op_error(op, c->c.fd.net, c->c.laddr, c->c.raddr, e);
+}
+
+int64_t net_tcp_conn_read_from(NetTCPConn *c, IoReader r, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    Error e = BURROW_NO_ERROR;
+    IoWriter w = {&nt_plain_writer, c};
+    int64_t n = io_copy(heap_allocator(), w, r, &e);
+    BURROW_OUT(err, nt_copy_error(c, NT_LIT("readfrom"), e));
+    return n;
+}
+
+int64_t net_tcp_conn_write_to(NetTCPConn *c, IoWriter w, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    Error e = BURROW_NO_ERROR;
+    IoReader r = {&nt_plain_reader, c};
+    int64_t n = io_copy(heap_allocator(), w, r, &e);
+    BURROW_OUT(err, nt_copy_error(c, NT_LIT("writeto"), e));
+    return n;
+}
+
+/* ReadFrom and WriteTo are on the type, as they are in Go, so that io_copy
+ * to or from a TCPConn goes through them. */
+#define NT_CONN_METHODS(M, T)                                                          \
+    M(T, ReadFrom, net_tcp_conn_read_from, IO_SIG_READ_FROM)                           \
+    M(T, WriteTo, net_tcp_conn_write_to, IO_SIG_WRITE_TO)
+
+BURROW_METHODS_DEFINE(NetTCPConn, NT_CONN_METHODS);
+
+static const Type nt_conn_desc = {
+    BURROW_S_INIT("TCPConn"),
+    BURROW_S_INIT("net"),
+    KIND_STRUCT,
+    (uint32_t)sizeof(NetTCPConn),
+    (uint16_t)_Alignof(NetTCPConn),
+    0,
+    (uint16_t)(sizeof burrow__methods_NetTCPConn /
+               sizeof burrow__methods_NetTCPConn[0]),
+    NULL,
+    burrow__methods_NetTCPConn,
     NULL,
     NULL,
     0,
@@ -581,6 +652,8 @@ static const NetConnVT nt_conn_vt = {
     nt_m_set_read_deadline,
     nt_m_set_write_deadline,
 };
+
+const IoWriterVT *const burrow__nt_conn_writer = &nt_conn_vt.writer;
 
 NetConn net_tcp_conn_as_conn(NetTCPConn *c) {
     NetConn conn = {NULL, NULL};
@@ -685,6 +758,10 @@ NetTCPConn *net_tcp_listener_accept_tcp(NetTCPListener *l, Error *err) {
     return c;
 }
 
+NetConn net_tcp_listener_accept(NetTCPListener *l, Error *err) {
+    return net_tcp_conn_as_conn(net_tcp_listener_accept_tcp(l, err));
+}
+
 Error net_tcp_listener_close(NetTCPListener *l) {
     if (l == NULL)
         return burrow__net_einval();
@@ -713,8 +790,7 @@ static Error nt_l_close(void *self) {
 }
 
 static NetConn nt_l_accept(void *self, Error *err) {
-    return net_tcp_conn_as_conn(
-        net_tcp_listener_accept_tcp((NetTCPListener *)self, err));
+    return net_tcp_listener_accept((NetTCPListener *)self, err);
 }
 
 static NetAddr nt_l_addr(void *self) {

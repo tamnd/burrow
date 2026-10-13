@@ -752,6 +752,8 @@ static const NetConnVT nx_conn_vt = {
     nx_m_set_write_deadline,
 };
 
+const IoWriterVT *const burrow__nx_conn_writer = &nx_conn_vt.writer;
+
 NetConn net_unix_conn_as_conn(NetUnixConn *c) {
     NetConn conn = {NULL, NULL};
     if (c != NULL) {
@@ -960,9 +962,12 @@ static Error nx_l_close(void *self) {
     return net_unix_listener_close((NetUnixListener *)self);
 }
 
+NetConn net_unix_listener_accept(NetUnixListener *l, Error *err) {
+    return net_unix_conn_as_conn(net_unix_listener_accept_unix(l, err));
+}
+
 static NetConn nx_l_accept(void *self, Error *err) {
-    return net_unix_conn_as_conn(
-        net_unix_listener_accept_unix((NetUnixListener *)self, err));
+    return net_unix_listener_accept((NetUnixListener *)self, err);
 }
 
 static NetAddr nx_l_addr(void *self) {

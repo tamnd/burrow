@@ -904,6 +904,8 @@ static const NetConnVT nu_conn_vt = {
     nu_m_set_write_deadline,
 };
 
+const IoWriterVT *const burrow__nu_conn_writer = &nu_conn_vt.writer;
+
 NetConn net_udp_conn_as_conn(NetUDPConn *c) {
     NetConn conn = {NULL, NULL};
     if (c != NULL) {

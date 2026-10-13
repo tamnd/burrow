@@ -562,6 +562,8 @@ static const NetConnVT ir_conn_vt = {
     ir_m_set_write_deadline,
 };
 
+const IoWriterVT *const burrow__ir_conn_writer = &ir_conn_vt.writer;
+
 NetConn net_ip_conn_as_conn(NetIPConn *c) {
     NetConn conn = {NULL, NULL};
     if (c != NULL) {

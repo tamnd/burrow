@@ -3827,6 +3827,41 @@ void burrow__sql_waiter_free(void *w) {
     sq_waiter_free((SqWaiter *)w);
 }
 
+/* A Stmt that was never prepared on a DB, with a sticky error or, when si is
+ * set, a Tx statement on si. The connection the statement sits on is a bare
+ * lock, the way Go's test gives it a sync.Mutex. */
+Error burrow__sql_stmt_close_detached(Error sticky, DriverStmt si) {
+    SqlStmt *s = BURROW_NEW(heap_allocator(), SqlStmt);
+    SqDC *dc = BURROW_NEW(heap_allocator(), SqDC);
+    if (s == NULL || dc == NULL) {
+        if (s != NULL)
+            mem_free(heap_allocator(), s, sizeof(SqlStmt), _Alignof(SqlStmt));
+        if (dc != NULL)
+            mem_free(heap_allocator(), dc, sizeof(SqDC), _Alignof(SqDC));
+        return burrow_err_out_of_memory;
+    }
+    sq_closemu_init(&s->closemu);
+    arena_init(&s->sticky_arena, heap_allocator(), 0);
+    s->sticky = sticky;
+    /* dc's own reference, which keeps the statement's unref from freeing it
+     * along with a db it does not have. */
+    sync_atomic_int64_store(&dc->refs, 1);
+    if (si.vt != NULL) {
+        s->cg_kind = SQ_CG_TX;
+        s->cgds = sq_ds_new(dc, si);
+        if (s->cgds == NULL)
+            s->sticky = burrow_err_out_of_memory;
+    }
+    Error err = sql_stmt_close(s);
+    if (s->cgds != NULL)
+        sq_ds_unref(s->cgds);
+    arena_free(&s->sticky_arena);
+    sq_vec_free(&s->css);
+    mem_free(heap_allocator(), s, sizeof(SqlStmt), _Alignof(SqlStmt));
+    mem_free(heap_allocator(), dc, sizeof(SqDC), _Alignof(SqDC));
+    return err;
+}
+
 Error burrow__sql_conn_grab_release(SqlConn *c) {
     SqRelease rel = {SQ_RELEASE_NONE, NULL};
     Error err = BURROW_NO_ERROR;

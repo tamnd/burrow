@@ -111,6 +111,8 @@ void burrow__sql_reqs_close_all(void *set);
 void burrow__sql_waiter_free(void *w);
 /* Conn.grabConn and then its release(nil). */
 Error burrow__sql_conn_grab_release(SqlConn *c);
+/* Stmt.Close on a Stmt made by hand: sticky, or a Tx statement on si. */
+Error burrow__sql_stmt_close_detached(Error sticky, DriverStmt si);
 /* Rows.closemuScanHold. */
 bool burrow__sql_rows_scan_hold(SqlRows *rs);
 bool burrow__sql_tx_is_done(SqlTx *tx);

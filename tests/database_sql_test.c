@@ -5948,7 +5948,8 @@ static void td_grab_once(void *env, TestingT *t) {
  * Conn without a connection is one grabConn refuses, and what is measured is
  * the grab and release around it. */
 static void testGrabConnAllocs(TestingT *t) {
-    SqlDB *db = new_test_db(t, NULL, "");
+    FakeConnector fc = {BURROW_STR_EMPTY, NULL, false, FAKE_DEFAULT};
+    SqlDB *db = new_test_db(t, &fc, NULL);
     if (db == NULL)
         return;
     Error err = BURROW_NO_ERROR;
@@ -6474,6 +6475,233 @@ static void TestQueryRowsScanner(TestingT *t) {
     test_database(t, testQueryRowsScanner, "ScanColumn");
 }
 
+TD_SENTINEL(td_err_in_next, "error in rows.Next");
+TD_SENTINEL(td_err_in_close, "error in rows.Close");
+
+static Error td_next_fails(Slice dest) {
+    (void)dest;
+    return td_err_in_next;
+}
+
+static void td_close_fails(SqlRows *rs, Error *err) {
+    (void)rs;
+    *err = td_err_in_close;
+}
+
+/* Scans the first name in people into v and gives back the error. */
+static Error td_scan_first_name(SqlDB *db, Alloc *a, Str *v) {
+    SqlRow row = sql_db_query_row(db, BURROW_S("SELECT|people|name|"), NO_ARGS);
+    return sql_row_scan_v(&row, a, v);
+}
+
+/* Test issue 6651 */
+static void testIssue6651(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    Str v = BURROW_STR_EMPTY;
+
+    Str want = error_text(td_err_in_next);
+    fdb_rows_cursor_next_hook = td_next_fails;
+    Error err = td_scan_first_name(db, a, &v);
+    fdb_rows_cursor_next_hook = NULL;
+    if (BURROW_OK(err) || !str_eq(error_text(err), want))
+        testing_t_errorf_v(t, "error = %q; want %q", err, want);
+
+    want = error_text(td_err_in_close);
+    burrow__sql_rows_close_hook = td_close_fails;
+    err = td_scan_first_name(db, a, &v);
+    burrow__sql_rows_close_hook = NULL;
+    if (BURROW_OK(err) || !str_eq(error_text(err), want))
+        testing_t_errorf_v(t, "error = %q; want %q", err, want);
+    arena_free(&ar);
+}
+
+static void TestIssue6651(TestingT *t) {
+    test_database(t, testIssue6651, NULL);
+}
+
+/* The waiter testPoolExhaustOnCancel gives its connector. It is called for
+ * all queries, including initial setup queries. The state is only assigned
+ * when no queries are made. */
+static SyncAtomicInt64 td_exhaust_state;
+static SyncWaitGroup td_exhaust_saturate;
+static Chan *td_exhaust_done_ping;
+
+static void td_exhaust_waiter(Context ctx) {
+    switch (sync_atomic_int64_load(&td_exhaust_state)) {
+    case 0:
+        /* Nothing. Initial database setup. */
+        break;
+    case 1: {
+        /* Only allow the first batch of queries to finish once the second
+         * batch of Ping queries have finished. */
+        sync_wait_group_done(&td_exhaust_saturate);
+        SelectCase cases[] = {
+            BURROW_RECV(context_done(ctx), NULL),
+            BURROW_RECV(td_exhaust_done_ping, NULL),
+        };
+        (void)chan_select(cases, 2);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+typedef struct TdExhaust {
+    TestingT *t;
+    SqlDB *db;
+    SyncWaitGroup saturate_done;
+} TdExhaust;
+
+static void td_exhaust_query(void *env) {
+    TdExhaust *e = env;
+    Error err = BURROW_NO_ERROR;
+    SqlRows *rows =
+        sql_db_query(e->db, BURROW_S("SELECT|people|name,photo|"), NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(e->t, "Query: %v", err);
+        return;
+    }
+    (void)sql_rows_close(rows);
+    sql_rows_free(rows);
+    sync_wait_group_done(&e->saturate_done);
+}
+
+/* Sleeps a little and then cancels the request it was given. */
+typedef struct TdExhaustCancel {
+    ContextCancelFunc cancel;
+    SyncWaitGroup done;
+} TdExhaustCancel;
+
+static void td_exhaust_cancel(void *env) {
+    TdExhaustCancel *c = env;
+    time_sleep(100 * TIME_MILLISECOND);
+    BURROW_CALLF0(c->cancel);
+    sync_wait_group_done(&c->done);
+}
+
+enum { TD_EXHAUST_MAX = 3 };
+
+static void testPoolExhaustOnCancel(TestingT *t) {
+    memset(&td_exhaust_saturate, 0, sizeof td_exhaust_saturate);
+    sync_atomic_int64_store(&td_exhaust_state, 0);
+    TdExhaust e = {t, NULL, {0}};
+    sync_wait_group_add(&td_exhaust_saturate, TD_EXHAUST_MAX);
+    sync_wait_group_add(&e.saturate_done, TD_EXHAUST_MAX);
+    td_exhaust_done_ping = chan_make(heap_allocator(), TYPE_BOOL, 0);
+
+    FakeConnector fc = {BURROW_STR_EMPTY, td_exhaust_waiter, false, FAKE_DEFAULT};
+    SqlDB *db = new_test_db(t, &fc, "people");
+    if (db == NULL) {
+        chan_free(td_exhaust_done_ping);
+        return;
+    }
+    e.db = db;
+
+    sql_db_set_max_open_conns(db, TD_EXHAUST_MAX);
+
+    /* First saturate the connection pool. Then start new requests for a
+     * connection that is canceled after it is requested. */
+    sync_atomic_int64_store(&td_exhaust_state, 1);
+    for (int i = 0; i < TD_EXHAUST_MAX; i++)
+        (void)go(BURROW_FN(Func, td_exhaust_query, &e));
+
+    sync_wait_group_wait(&td_exhaust_saturate);
+    bool closed = false;
+    ContextCancelFunc cancel = {NULL, NULL};
+    Context ctx = context_background();
+    if (testing_t_failed(t))
+        goto out;
+    sync_atomic_int64_store(&td_exhaust_state, 2);
+
+    /* Now cancel the request while it is waiting. */
+    ctx = context_with_timeout(heap_allocator(), context_background(), 2 * TIME_SECOND,
+                               &cancel);
+
+    for (int i = 0; i < TD_EXHAUST_MAX; i++) {
+        TdExhaustCancel req = {{NULL, NULL}, {0}};
+        Context ctx_req = context_with_cancel(heap_allocator(), ctx, &req.cancel);
+        sync_wait_group_add(&req.done, 1);
+        (void)go(BURROW_FN(Func, td_exhaust_cancel, &req));
+        Error err = sql_db_ping_context(db, ctx_req);
+        sync_wait_group_wait(&req.done);
+        context_release(ctx_req);
+        if (err.vt != context_canceled.vt || err.data != context_canceled.data) {
+            testing_t_errorf_v(t, "PingContext (Exhaust): %v", err);
+            goto out;
+        }
+    }
+    chan_close(td_exhaust_done_ping);
+    closed = true;
+    sync_wait_group_wait(&e.saturate_done);
+
+    /* Now try to open a normal connection. */
+    Error err = sql_db_ping_context(db, ctx);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "PingContext (Normal): %v", err);
+out:
+    if (!closed) {
+        chan_close(td_exhaust_done_ping);
+        sync_wait_group_wait(&e.saturate_done);
+    }
+    BURROW_CALLF0(cancel);
+    context_release(ctx);
+    close_db(t, db);
+    chan_free(td_exhaust_done_ping);
+}
+
+static void TestPoolExhaustOnCancel(TestingT *t) {
+    synctest_test(t, testPoolExhaustOnCancel);
+}
+
+TD_SENTINEL(td_err_stmt, "STMT ERROR");
+
+/* stubDriverStmt, whose Close returns the error it holds. */
+static Error td_stub_stmt_close(void *self) {
+    (void)self;
+    return td_err_stmt;
+}
+
+static Int td_stub_stmt_num_input(void *self) {
+    (void)self;
+    return -1;
+}
+
+static const DriverStmtVT td_stub_stmt_vt = {
+    .close = td_stub_stmt_close,
+    .num_input = td_stub_stmt_num_input,
+};
+
+static void testStatementClose(TestingT *t) {
+    Error want = td_err_stmt;
+
+    struct {
+        Error sticky;
+        DriverStmt si;
+        const char *msg;
+    } tests[] = {
+        {want, {NULL, NULL}, "stickyErr not propagated"},
+        {BURROW_NO_ERROR,
+         {&td_stub_stmt_vt, NULL},
+         "driverStmt.Close() error not propagated"},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
+        Error err = burrow__sql_stmt_close_detached(tests[i].sticky, tests[i].si);
+        if (err.vt != want.vt || err.data != want.data)
+            testing_t_errorf_v(t, "%s. Got stmt.Close() = %v, want = %v", tests[i].msg,
+                               err, want);
+    }
+}
+
+static void TestStatementClose(TestingT *t) {
+    synctest_test(t, testStatementClose);
+}
+
 #define TESTS(X)                                                                       \
     X(TestOpenDB)                                                                      \
     X(TestQuery)                                                                       \
@@ -6583,6 +6811,9 @@ static void TestQueryRowsScanner(TestingT *t) {
     X(TestColumnConverterWithUnknownInputCount)                                        \
     X(TestNullTypeScanErrorConsistency)                                                \
     X(TestNullTypeScanNil)                                                             \
-    X(TestQueryRowsScanner)
+    X(TestQueryRowsScanner)                                                            \
+    X(TestIssue6651)                                                                   \
+    X(TestPoolExhaustOnCancel)                                                         \
+    X(TestStatementClose)
 
 TESTING_MAIN(TESTS)

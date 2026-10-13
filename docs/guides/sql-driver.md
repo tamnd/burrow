@@ -41,6 +41,10 @@ show(d, a, BURROW_ANY(TYPE_UINT64, &huge));
 That prints:
 
 ```text
+int 7 -> int64 7
+uint8 200 -> int64 200
+float32 0.5 -> float64 0.5
+uint64 9223372036854775808: error: uint64 values with high bit set are not supported
 ```
 
 ## Valuer
@@ -83,6 +87,8 @@ show(d, a, BURROW_ANY(TYPE_OF(Celsius), &wrong));
 That prints:
 
 ```text
+Celsius {21.5} -> int64 215
+Celsius {-300}: error: -300 is below absolute zero
 ```
 
 A NULL pointer to a type with a `Value` method converts to nil without the method being called, as in Go.
@@ -103,6 +109,9 @@ show(driver_bool, a, BURROW_ANY(TYPE_STRING, &maybe));
 That prints:
 
 ```text
+string TRUE -> bool true
+int 1 -> bool true
+string maybe: error: sql/driver: couldn't convert "maybe" into type bool
 ```
 
 `DriverNull` and `DriverNotNull` wrap another converter. The first lets nil through and the second turns it into an error.
@@ -125,4 +134,6 @@ fmt_printf_v("last insert id: %v\n", err);
 That prints:
 
 ```text
+rows affected 3
+last insert id: LastInsertId is not supported by this driver
 ```

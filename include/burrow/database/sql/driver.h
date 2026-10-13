@@ -50,7 +50,6 @@
 extern "C" {
 #endif
 
-/* driver.Value. The nil Any is SQL's NULL. */
 /* Memory.
  *
  * Go's collector decides how long a driver's objects live, and here the
@@ -71,6 +70,7 @@ extern "C" {
  * Errors are burrow errors, and driver_err_bad_conn and driver_err_skip mean
  * what they do in Go: database/sql compares against them with errors_is. */
 
+/* driver.Value. The nil Any is SQL's NULL. */
 typedef Any DriverValue;
 
 /* driver.NamedValue, an argument with its name and its position. name is

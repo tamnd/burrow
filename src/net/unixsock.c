@@ -577,7 +577,8 @@ Int net_unix_conn_read_msg_unix(NetUnixConn *c, Slice p, Slice oob, Alloc *a, In
             e = burrow_err_out_of_memory;
     }
     if (BURROW_FAILED(e) && !nx_is_eof(e) &&
-        !(e.vt == burrow_err_out_of_memory.vt && e.data == burrow_err_out_of_memory.data))
+        !(e.vt == burrow_err_out_of_memory.vt &&
+          e.data == burrow_err_out_of_memory.data))
         e = burrow__net_op_error(NX_LIT("read"), c->c.fd.net, c->c.laddr, c->c.raddr,
                                  e);
     if (oobn != NULL)

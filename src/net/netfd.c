@@ -615,8 +615,8 @@ Int burrow__netfd_read_msg(burrow__NetFD *fd, Slice p, Slice oob, Int *oobn, Int
     return n;
 }
 
-Int burrow__netfd_write_msg(burrow__NetFD *fd, Slice p, Slice oob, const PalSockAddr *to,
-                            Int *oobn, Error *err) {
+Int burrow__netfd_write_msg(burrow__NetFD *fd, Slice p, Slice oob,
+                            const PalSockAddr *to, Int *oobn, Error *err) {
     Error e = BURROW_NO_ERROR;
     Int n = burrow__pfd_write_msg(&fd->pfd, p, oob, to, oobn, &e);
     BURROW_OUT(err, nf_wrap(NF_LIT(NF_WRITE_MSG_CALL), e));

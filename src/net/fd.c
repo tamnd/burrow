@@ -203,7 +203,8 @@ Int burrow__pfd_read_msg(burrow__PollFD *fd, Slice p, Slice oob, Int *oobn, Int 
         PalErrno pe = PAL_OK;
         int64_t on = 0;
         int32_t fl = 0;
-        int64_t r = pal_recvmsg(fd->sysfd, p.p, p.len, oob.p, oob.len, &on, &fl, from, &pe);
+        int64_t r =
+            pal_recvmsg(fd->sysfd, p.p, p.len, oob.p, oob.len, &on, &fl, from, &pe);
         if (r >= 0) {
             n = (Int)r;
             *oobn = (Int)on;

@@ -775,8 +775,8 @@ Int net_udp_conn_read_msg_udp_addr_port(NetUDPConn *c, Slice p, Slice oob, Int *
  * addr is NULL on a connected conn, and must not be on one that is not. It
  * gives back how much of p went, and in *oobn how much of oob, which is all
  * of it when the message went. oobn may be NULL. */
-Int net_udp_conn_write_msg_udp(NetUDPConn *c, Slice p, Slice oob, const NetUDPAddr *addr,
-                               Int *oobn, Error *err);
+Int net_udp_conn_write_msg_udp(NetUDPConn *c, Slice p, Slice oob,
+                               const NetUDPAddr *addr, Int *oobn, Error *err);
 
 /* WriteMsgUDPAddrPort, with the zero NetipAddrPort for no address. */
 Int net_udp_conn_write_msg_udp_addr_port(NetUDPConn *c, Slice p, Slice oob,

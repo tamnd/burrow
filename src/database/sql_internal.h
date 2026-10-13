@@ -99,6 +99,18 @@ DriverConn burrow__sql_conn_driver(SqlConn *c);
 DriverConn burrow__sql_tx_driver(SqlTx *tx);
 DriverRows burrow__sql_rows_driver(SqlRows *rs);
 DriverConnector burrow__sql_db_connector(SqlDB *db);
+/* connRequestSet, on a set of its own. add makes the waiter, which take_random
+ * and close_all leave for burrow__sql_waiter_free. */
+BURROW_OWNS(ret) void *burrow__sql_reqs_new(void);
+void burrow__sql_reqs_free(void *set);
+Int burrow__sql_reqs_len(void *set);
+BURROW_OWNS(ret) void *burrow__sql_reqs_add(void *set);
+bool burrow__sql_reqs_delete(void *set, void *w);
+void *burrow__sql_reqs_take_random(void *set);
+void burrow__sql_reqs_close_all(void *set);
+void burrow__sql_waiter_free(void *w);
+/* Conn.grabConn and then its release(nil). */
+Error burrow__sql_conn_grab_release(SqlConn *c);
 /* Rows.closemuScanHold. */
 bool burrow__sql_rows_scan_hold(SqlRows *rs);
 bool burrow__sql_tx_is_done(SqlTx *tx);

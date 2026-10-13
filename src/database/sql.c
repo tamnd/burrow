@@ -550,6 +550,10 @@ static void sq_ds_unref(SqDS *ds) {
     sq_dc_unref(dc);
 }
 
+static void sq_ds_unref_fn(void *ds) {
+    sq_ds_unref((SqDS *)ds);
+}
+
 /* ------------------------------------------------------------ dsnConnector */
 
 static DriverConn sq_dsn_connect(void *self, Context ctx, Error *err) {
@@ -821,47 +825,49 @@ static void sq_waiter_free(SqWaiter *w) {
     mem_free(heap_allocator(), w, sizeof(SqWaiter), _Alignof(SqWaiter));
 }
 
-static bool sq_reqs_add(SqlDB *db, SqWaiter *w) {
-    w->idx = db->reqs.len;
-    if (!sq_vec_push(&db->reqs, w)) {
+/* connRequestSet. The set keeps each waiter's index in it, so a delete is
+ * O(1), and a waiter that has been taken or closed has the index -1. */
+static bool sq_reqs_add(SqVec *reqs, SqWaiter *w) {
+    w->idx = reqs->len;
+    if (!sq_vec_push(reqs, w)) {
         w->idx = -1;
         return false;
     }
     return true;
 }
 
-static bool sq_reqs_delete(SqlDB *db, SqWaiter *w) {
+static bool sq_reqs_delete(SqVec *reqs, SqWaiter *w) {
     Int i = w->idx;
     if (i < 0)
         return false;
-    Int last = db->reqs.len - 1;
+    Int last = reqs->len - 1;
     if (i != last) {
-        SqWaiter *moved = (SqWaiter *)db->reqs.p[last];
-        db->reqs.p[i] = moved;
+        SqWaiter *moved = (SqWaiter *)reqs->p[last];
+        reqs->p[i] = moved;
         moved->idx = i;
     }
-    db->reqs.p[last] = NULL;
-    db->reqs.len = last;
+    reqs->p[last] = NULL;
+    reqs->len = last;
     w->idx = -1;
     return true;
 }
 
-static SqWaiter *sq_reqs_take_random(SqlDB *db) {
-    if (db->reqs.len == 0)
+static SqWaiter *sq_reqs_take_random(SqVec *reqs) {
+    if (reqs->len == 0)
         return NULL;
-    Int i = (Int)(runtime_rand64() % (uint64_t)db->reqs.len);
-    SqWaiter *w = (SqWaiter *)db->reqs.p[i];
-    (void)sq_reqs_delete(db, w);
+    Int i = (Int)(runtime_rand64() % (uint64_t)reqs->len);
+    SqWaiter *w = (SqWaiter *)reqs->p[i];
+    (void)sq_reqs_delete(reqs, w);
     return w;
 }
 
-static void sq_reqs_close_all(SqlDB *db) {
-    for (Int i = 0; i < db->reqs.len; i++) {
-        SqWaiter *w = (SqWaiter *)db->reqs.p[i];
+static void sq_reqs_close_all(SqVec *reqs) {
+    for (Int i = 0; i < reqs->len; i++) {
+        SqWaiter *w = (SqWaiter *)reqs->p[i];
         w->idx = -1;
         chan_close(w->ch);
     }
-    db->reqs.len = 0;
+    reqs->len = 0;
 }
 
 /* --------------------------------------------------------------- the pool */
@@ -895,7 +901,7 @@ static bool sq_put_conn_db_locked(SqlDB *db, SqDC *dc, Error err) {
         return false;
     if (db->max_open > 0 && db->num_open > db->max_open)
         return false;
-    SqWaiter *w = sq_reqs_take_random(db);
+    SqWaiter *w = sq_reqs_take_random(&db->reqs);
     if (w != NULL) {
         if (!BURROW_FAILED(err))
             dc->in_use = true;
@@ -1035,7 +1041,7 @@ static SqDC *sq_conn(SqlDB *db, Context ctx, int strategy, Error *err) {
 
     if (db->max_open > 0 && db->num_open >= db->max_open) {
         SqWaiter *w = sq_waiter_new();
-        if (w == NULL || !sq_reqs_add(db, w)) {
+        if (w == NULL || !sq_reqs_add(&db->reqs, w)) {
             sync_mutex_unlock(&db->mu);
             if (w != NULL)
                 sq_waiter_free(w);
@@ -1053,7 +1059,7 @@ static SqDC *sq_conn(SqlDB *db, Context ctx, int strategy, Error *err) {
         Int which = chan_select(cases, 2);
         if (which == 0) {
             sync_mutex_lock(&db->mu);
-            bool deleted = sq_reqs_delete(db, w);
+            bool deleted = sq_reqs_delete(&db->reqs, w);
             sync_mutex_unlock(&db->mu);
             sync_atomic_int64_add(&db->wait_duration, (int64_t)time_since(wait_start));
             if (!deleted) {
@@ -1431,7 +1437,7 @@ Error sql_db_close(SqlDB *db) {
     }
     db->free_conn.len = 0;
     db->closed = true;
-    sq_reqs_close_all(db);
+    sq_reqs_close_all(&db->reqs);
     db->opener_stop = true;
     sync_cond_broadcast(&db->opener_cond);
     sync_mutex_unlock(&db->mu);
@@ -1941,17 +1947,26 @@ typedef struct SqHeld {
     SqDS *ds;
 } SqHeld;
 
-static void sq_held_drop(void *env) {
+static void sq_held_release(void *env) {
     SqHeld *h = (SqHeld *)env;
-    if (h->ds != NULL) {
-        SqDS *ds = h->ds;
-        h->ds = NULL;
-        (void)sq_ds_close(ds);
-        sq_ds_unref(ds);
-    }
     SqRelease rel = h->rel;
     h->rel = (SqRelease){SQ_RELEASE_NONE, NULL};
     sq_release(rel, h->err);
+}
+
+/* A statement whose Close panics still lets go of the connection. */
+static void sq_held_drop(void *env) {
+    SqHeld *h = (SqHeld *)env;
+    BURROW_SCOPE {
+        BURROW_DEFER(sq_held_release, h);
+        if (h->ds != NULL) {
+            SqDS *ds = h->ds;
+            h->ds = NULL;
+            BURROW_DEFER(sq_ds_unref_fn, ds);
+            (void)sq_ds_close(ds);
+        }
+    }
+    BURROW_SCOPE_END;
 }
 
 static Error sq_ping_dc(Context ctx, SqDC *dc, SqRelease rel) {
@@ -2871,10 +2886,6 @@ static SqDC *sq_stmt_conn_stmt(SqlStmt *s, Context ctx, int strategy, SqRelease 
     return dc;
 }
 
-static void sq_ds_unref_fn(void *ds) {
-    sq_ds_unref((SqDS *)ds);
-}
-
 /* One go at Stmt.ExecContext, on a connection picked by strategy. */
 static SqlResult sq_stmt_exec_once(SqlStmt *s, Alloc *a, Context ctx, int strategy,
                                    Slice args, Error *e) {
@@ -3776,6 +3787,52 @@ DriverRows burrow__sql_rows_driver(SqlRows *rs) {
 
 DriverConnector burrow__sql_db_connector(SqlDB *db) {
     return db->connector;
+}
+
+void *burrow__sql_reqs_new(void) {
+    return BURROW_NEW(heap_allocator(), SqVec);
+}
+
+void burrow__sql_reqs_free(void *set) {
+    sq_vec_free((SqVec *)set);
+    mem_free(heap_allocator(), set, sizeof(SqVec), _Alignof(SqVec));
+}
+
+Int burrow__sql_reqs_len(void *set) {
+    return ((SqVec *)set)->len;
+}
+
+void *burrow__sql_reqs_add(void *set) {
+    SqWaiter *w = sq_waiter_new();
+    if (w != NULL && !sq_reqs_add((SqVec *)set, w)) {
+        sq_waiter_free(w);
+        return NULL;
+    }
+    return w;
+}
+
+bool burrow__sql_reqs_delete(void *set, void *w) {
+    return sq_reqs_delete((SqVec *)set, (SqWaiter *)w);
+}
+
+void *burrow__sql_reqs_take_random(void *set) {
+    return sq_reqs_take_random((SqVec *)set);
+}
+
+void burrow__sql_reqs_close_all(void *set) {
+    sq_reqs_close_all((SqVec *)set);
+}
+
+void burrow__sql_waiter_free(void *w) {
+    sq_waiter_free((SqWaiter *)w);
+}
+
+Error burrow__sql_conn_grab_release(SqlConn *c) {
+    SqRelease rel = {SQ_RELEASE_NONE, NULL};
+    Error err = BURROW_NO_ERROR;
+    if (sq_conn_grab(c, &rel, &err) != NULL)
+        sq_release(rel, BURROW_NO_ERROR);
+    return err;
 }
 
 bool burrow__sql_rows_scan_hold(SqlRows *rs) {

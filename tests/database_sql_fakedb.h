@@ -34,6 +34,7 @@
 #include "burrow/database/sql.h"
 #include "burrow/database/sql/driver.h"
 #include "burrow/declare.h"
+#include "burrow/defer.h"
 #include "burrow/fmt.h"
 #include "burrow/io.h"
 #include "burrow/mem/arena.h"
@@ -556,10 +557,19 @@ static Error fdb_stmt_close_go(FakeStmt *s) {
     return BURROW_NO_ERROR;
 }
 
+static void fdb_stmt_free_fn(void *s) {
+    fdb_stmt_free((FakeStmt *)s);
+}
+
+/* The statement is freed even when PANIC|Close| makes the close panic. */
 static Error fdb_stmt_close(void *self) {
     FakeStmt *s = self;
-    Error e = fdb_stmt_close_go(s);
-    fdb_stmt_free(s);
+    Error e = BURROW_NO_ERROR;
+    BURROW_SCOPE {
+        BURROW_DEFER(fdb_stmt_free_fn, s);
+        e = fdb_stmt_close_go(s);
+    }
+    BURROW_SCOPE_END;
     return e;
 }
 

@@ -5649,6 +5649,831 @@ static void TestRawBytesReuse(TestingT *t) {
     test_database(t, testRawBytesReuse, NULL);
 }
 
+static void td_arena_free(void *a) {
+    arena_free((Arena *)a);
+}
+
+/* A query for td_expect_panic to run. */
+typedef struct TdPanicCall {
+    SqlDB *db;
+    const char *query;
+    TestingT *t;
+} TdPanicCall;
+
+typedef void (*TdPanicFn)(TdPanicCall *c);
+
+static void td_panic_exec(TdPanicCall *c) {
+    BURROW_SCOPE {
+        Arena ar;
+        arena_init(&ar, heap_allocator(), 0);
+        BURROW_DEFER(td_arena_free, &ar);
+        Error err = BURROW_NO_ERROR;
+        (void)sql_db_exec(c->db, arena_allocator(&ar), str_from_cstr(c->query), NO_ARGS,
+                          &err);
+    }
+    BURROW_SCOPE_END;
+}
+
+static void td_panic_query(TdPanicCall *c) {
+    Error err = BURROW_NO_ERROR;
+    SqlRows *rows = sql_db_query(c->db, str_from_cstr(c->query), NO_ARGS, &err);
+    sql_rows_free(rows);
+}
+
+static void td_rows_free_fn(void *rows) {
+    sql_rows_free((SqlRows *)rows);
+}
+
+static void td_panic_query_close(TdPanicCall *c) {
+    Error err = BURROW_NO_ERROR;
+    SqlRows *rows = sql_db_query(c->db, str_from_cstr(c->query), NO_ARGS, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(c->t, "%v", err);
+    BURROW_SCOPE {
+        BURROW_DEFER(td_rows_free_fn, rows);
+        (void)sql_rows_close(rows);
+    }
+    BURROW_SCOPE_END;
+}
+
+static void td_expect_panic(TestingT *t, const char *name, TdPanicFn f,
+                            TdPanicCall *c) {
+    volatile bool panicked = false;
+    BURROW_TRY {
+        f(c);
+    }
+    BURROW_CATCH(p) {
+        (void)p;
+        panicked = true;
+    }
+    BURROW_TRY_END;
+    if (!panicked)
+        FATALF("%s did not panic", name);
+}
+
+static void testDriverPanic(TestingT *t) {
+    register_test_driver();
+    Error err = BURROW_NO_ERROR;
+    SqlDB *db = sql_open(BURROW_S("test"), fake_db_name, &err);
+    if (BURROW_FAILED(err))
+        FATALF("Open: %v", err);
+    /* Test that if driver panics, database/sql does not deadlock. */
+    TdPanicCall c = {db, NULL, t};
+    const char *exec_panics[][2] = {
+        {"Exec Exec", "PANIC|Exec|WIPE"},
+        {"Exec NumInput", "PANIC|NumInput|WIPE"},
+        {"Exec Close", "PANIC|Close|WIPE"},
+    };
+    for (size_t i = 0; i < sizeof exec_panics / sizeof exec_panics[0]; i++) {
+        c.query = exec_panics[i][1];
+        td_expect_panic(t, exec_panics[i][0], td_panic_exec, &c);
+        if (!EXEC(t, db, "WIPE")) /* check not deadlocked */
+            goto out;
+    }
+    /* should run successfully: Exec does not call Query */
+    if (!EXEC(t, db, "PANIC|Query|WIPE") || !EXEC(t, db, "WIPE"))
+        goto out;
+
+    if (!EXEC(t, db,
+              "CREATE|people|name=string,age=int32,photo=blob,dead=bool,"
+              "bdate=datetime"))
+        goto out;
+
+    c.query = "PANIC|Query|SELECT|people|age,name|";
+    td_expect_panic(t, "Query Query", td_panic_query, &c);
+    c.query = "PANIC|NumInput|SELECT|people|age,name|";
+    td_expect_panic(t, "Query NumInput", td_panic_query, &c);
+    c.query = "PANIC|Close|SELECT|people|age,name|";
+    td_expect_panic(t, "Query Close", td_panic_query_close, &c);
+    /* should run successfully: Query does not call Exec */
+    SqlRows *rows =
+        sql_db_query(db, BURROW_S("PANIC|Exec|SELECT|people|age,name|"), NO_ARGS, &err);
+    sql_rows_free(rows);
+    (void)EXEC(t, db, "WIPE"); /* check not deadlocked */
+out:
+    td_close_free(db);
+}
+
+static void TestDriverPanic(TestingT *t) {
+    synctest_test(t, testDriverPanic);
+}
+
+TD_SENTINEL(td_err_bad_prepare, "badConn Prepare");
+TD_SENTINEL(td_err_bad_begin, "badConn Begin");
+
+/* badConn implements a bad driver.Conn, for TestBadDriver. The Exec method
+ * panics. */
+static DriverStmt td_bad_prepare(void *self, Str query, Error *err) {
+    (void)self;
+    (void)query;
+    *err = td_err_bad_prepare;
+    return (DriverStmt){NULL, NULL};
+}
+
+static Error td_bad_close(void *self) {
+    (void)self;
+    return BURROW_NO_ERROR;
+}
+
+static DriverTx td_bad_begin(void *self, Error *err) {
+    (void)self;
+    *err = td_err_bad_begin;
+    return (DriverTx){NULL, NULL};
+}
+
+static DriverResult td_bad_exec(void *self, Alloc *a, Str query, Slice args,
+                                Error *err) {
+    (void)self;
+    (void)a;
+    (void)query;
+    (void)args;
+    (void)err;
+    panic_str(BURROW_S("badConn.Exec"));
+}
+
+static const DriverConnVT td_bad_conn_vt = {
+    .prepare = td_bad_prepare,
+    .close = td_bad_close,
+    .begin = td_bad_begin,
+    .exec = td_bad_exec,
+};
+
+/* badDriver is a driver.Driver that uses badConn. */
+static DriverConn td_bad_open(void *self, Str name, Error *err) {
+    (void)self;
+    (void)name;
+    *err = BURROW_NO_ERROR;
+    return (DriverConn){&td_bad_conn_vt, NULL};
+}
+
+static const DriverVT td_bad_driver_vt = {NULL, td_bad_open, NULL};
+
+/* Issue 15901. */
+static void testBadDriver(TestingT *t) {
+    sql_register(BURROW_S("bad"), (Driver){&td_bad_driver_vt, NULL});
+    Error err = BURROW_NO_ERROR;
+    SqlDB *db = sql_open(BURROW_S("bad"), BURROW_S("ignored"), &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+    TdPanicCall c = {db, "ignored", t};
+    volatile bool panicked = false;
+    BURROW_TRY {
+        td_panic_exec(&c);
+    }
+    BURROW_CATCH(p) {
+        panicked = true;
+        Str want = BURROW_S("badConn.Exec");
+        if (!str_eq(panic_text(p), want))
+            testing_t_errorf_v(t, "panic was %v, expected %v", panic_text(p), want);
+    }
+    BURROW_TRY_END;
+    td_close_free(db);
+    if (!panicked)
+        testing_t_errorf_v(t, "expected panic");
+}
+
+static void TestBadDriver(TestingT *t) {
+    synctest_test(t, testBadDriver);
+}
+
+typedef struct TdPingDriver {
+    bool fails;
+} TdPingDriver;
+
+TD_SENTINEL(td_ping_error, "Ping failed");
+
+/* pingConn is a badConn with Ping, and its data is the driver. */
+static Error td_ping_ping(void *self, Context ctx) {
+    (void)ctx;
+    if (((TdPingDriver *)self)->fails)
+        return td_ping_error;
+    return BURROW_NO_ERROR;
+}
+
+static const DriverConnVT td_ping_conn_vt = {
+    .prepare = td_bad_prepare,
+    .close = td_bad_close,
+    .begin = td_bad_begin,
+    .exec = td_bad_exec,
+    .ping = td_ping_ping,
+};
+
+static DriverConn td_ping_open(void *self, Str name, Error *err) {
+    (void)name;
+    *err = BURROW_NO_ERROR;
+    return (DriverConn){&td_ping_conn_vt, self};
+}
+
+static const DriverVT td_ping_driver_vt = {NULL, td_ping_open, NULL};
+
+static void testPing(TestingT *t) {
+    TdPingDriver driver = {false};
+    sql_register(BURROW_S("ping"), (Driver){&td_ping_driver_vt, &driver});
+
+    Error err = BURROW_NO_ERROR;
+    SqlDB *db = sql_open(BURROW_S("ping"), BURROW_S("ignored"), &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+
+    err = sql_db_ping(db);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "err was %#v, expected nil", err);
+        td_close_free(db);
+        return;
+    }
+
+    driver.fails = true;
+    err = sql_db_ping(db);
+    if (err.vt != td_ping_error.vt || err.data != td_ping_error.data)
+        testing_t_errorf_v(t, "err was %#v, expected pingError", err);
+    td_close_free(db);
+}
+
+static void TestPing(TestingT *t) {
+    synctest_test(t, testPing);
+}
+
+/* type Str string, a named string type of the test's own. */
+static const Type td_str_type = {
+    {(const Byte *)"Str", 3},
+    {(const Byte *)"database/sql", 12},
+    KIND_STRING,
+    (uint32_t)sizeof(Str),
+    (uint16_t)_Alignof(Str),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
+/* Issue 18101. */
+static void testTypedString(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    Str scanned = BURROW_STR_EMPTY;
+    SqlRow row = sql_db_query_row(db, BURROW_S("SELECT|people|name|name=?"),
+                                  ARGS(BURROW_S("Alice")));
+    Error err = sql_row_scan_v(&row, a, ((Any){&td_str_type, &scanned}));
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        FATALF("%v", err);
+    }
+    Str expected = BURROW_S("Alice");
+    if (!str_eq(scanned, expected))
+        testing_t_errorf_v(t, "expected %+v, got %+v", expected, scanned);
+    arena_free(&ar);
+}
+
+static void TestTypedString(TestingT *t) {
+    test_database(t, testTypedString, NULL);
+}
+
+static void td_grab_once(void *env, TestingT *t) {
+    (void)t;
+    Error err = burrow__sql_conn_grab_release((SqlConn *)env);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "%v", err);
+}
+
+/* Go's version grabs from a zero Conn. Here the Conn is a real one, since a
+ * Conn without a connection is one grabConn refuses, and what is measured is
+ * the grab and release around it. */
+static void testGrabConnAllocs(TestingT *t) {
+    SqlDB *db = new_test_db(t, NULL, "");
+    if (db == NULL)
+        return;
+    Error err = BURROW_NO_ERROR;
+    SqlConn *c = sql_db_conn(db, context_background(), &err);
+    if (BURROW_FAILED(err)) {
+        close_db(t, db);
+        FATALF("%v", err);
+    }
+    td_grab_once(c, t);
+    uint64_t before = mem_stats(heap_allocator()).allocs;
+    for (int i = 0; i < 1000; i++)
+        td_grab_once(c, t);
+    uint64_t n = mem_stats(heap_allocator()).allocs - before;
+    sql_conn_free(c);
+    close_db(t, db);
+    if (n > 0)
+        FATALF("Conn.grabConn allocated %v objects; want 0", n);
+}
+
+static void TestGrabConnAllocs(TestingT *t) {
+    synctest_test(t, testGrabConnAllocs);
+}
+
+static void td_want_len(TestingT *t, void *s, Int want) {
+    Int got = burrow__sql_reqs_len(s);
+    if (got != want)
+        testing_t_errorf_v(t, "Len = %d; want %d", got, want);
+    if (want == 0 && !testing_t_failed(t)) {
+        if (burrow__sql_reqs_take_random(s) != NULL)
+            FATALF("TakeRandom returned result when empty");
+    }
+}
+
+static void td_reqs_add_delete(void *env, TestingT *t) {
+    void *s = env;
+    td_want_len(t, s, 0);
+    void *dh = burrow__sql_reqs_add(s);
+    td_want_len(t, s, 1);
+    bool ok = burrow__sql_reqs_delete(s, dh);
+    if (!ok) {
+        burrow__sql_waiter_free(dh);
+        FATALF("failed to delete");
+    }
+    td_want_len(t, s, 0);
+    if (burrow__sql_reqs_delete(s, dh))
+        testing_t_errorf_v(t, "delete worked twice");
+    td_want_len(t, s, 0);
+    burrow__sql_waiter_free(dh);
+}
+
+static void td_reqs_take_before_delete(void *env, TestingT *t) {
+    void *s = env;
+    void *ch1 = burrow__sql_reqs_add(s);
+    td_want_len(t, s, 1);
+    void *got = burrow__sql_reqs_take_random(s);
+    if (got != ch1) {
+        burrow__sql_waiter_free(ch1);
+        FATALF("wrong take; ok=%v", got != NULL);
+    }
+    td_want_len(t, s, 0);
+    if (burrow__sql_reqs_delete(s, ch1))
+        testing_t_errorf_v(t, "unexpected delete after take");
+    burrow__sql_waiter_free(ch1);
+}
+
+enum { TD_REQS_N = 100 };
+
+static void td_reqs_get_take_many(void *env, TestingT *t) {
+    void *s = env;
+    void *in_order[TD_REQS_N];
+    void *back_out[TD_REQS_N];
+    bool taken[TD_REQS_N] = {false};
+    for (int i = 0; i < TD_REQS_N; i++)
+        in_order[i] = burrow__sql_reqs_add(s);
+    if (burrow__sql_reqs_len(s) != TD_REQS_N)
+        testing_t_errorf_v(t, "Len = %v; want %v", burrow__sql_reqs_len(s),
+                           (Int)TD_REQS_N);
+    int nout = 0;
+    while (!testing_t_failed(t) && burrow__sql_reqs_len(s) > 0) {
+        void *c = burrow__sql_reqs_take_random(s);
+        if (c == NULL) {
+            testing_t_errorf_v(t, "failed to take when non-empty");
+            break;
+        }
+        int at = -1;
+        for (int i = 0; i < TD_REQS_N; i++)
+            if (in_order[i] == c && !taken[i])
+                at = i;
+        if (at < 0) {
+            testing_t_errorf_v(t, "returned item not in remaining set");
+            break;
+        }
+        taken[at] = true;
+        back_out[nout++] = c;
+    }
+    for (int i = 0; i < TD_REQS_N; i++)
+        if (!taken[i] && !testing_t_failed(t))
+            testing_t_errorf_v(t, "items remain in expected map");
+    /* N! chance of flaking; N=100 is fine */
+    if (nout == TD_REQS_N && memcmp(in_order, back_out, sizeof in_order) == 0)
+        testing_t_errorf_v(t, "wasn't random");
+    burrow__sql_reqs_close_all(s);
+    for (int i = 0; i < TD_REQS_N; i++)
+        burrow__sql_waiter_free(in_order[i]);
+}
+
+static void td_reqs_close_delete(void *env, TestingT *t) {
+    void *s = env;
+    void *ch = burrow__sql_reqs_add(s);
+    td_want_len(t, s, 1);
+    burrow__sql_reqs_close_all(s);
+    td_want_len(t, s, 0);
+    if (burrow__sql_reqs_delete(s, ch))
+        testing_t_errorf_v(t, "unexpected delete after CloseAndRemoveAll");
+    burrow__sql_waiter_free(ch);
+}
+
+static void TestConnRequestSet(TestingT *t) {
+    static const struct {
+        const char *name;
+        void (*f)(void *, TestingT *);
+    } subs[] = {
+        {"add-delete", td_reqs_add_delete},
+        {"take-before-delete", td_reqs_take_before_delete},
+        {"get-take-many", td_reqs_get_take_many},
+        {"close-delete", td_reqs_close_delete},
+    };
+    for (size_t i = 0; i < sizeof subs / sizeof subs[0]; i++) {
+        void *s = burrow__sql_reqs_new();
+        (void)testing_t_run(t, str_from_cstr(subs[i].name),
+                            BURROW_FN(TestingTFunc, subs[i].f, s));
+        burrow__sql_reqs_free(s);
+    }
+}
+
+static void TestIssue69837(TestingT *t) {
+    Uint v = 1;
+    SqlNull u = {BURROW_ANY(TYPE_UINT, &v), true};
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Error err = BURROW_NO_ERROR;
+    DriverValue val = driver_default_parameter_converter.vt->convert_value(
+        driver_default_parameter_converter.data, arena_allocator(&ar), sql_null_any(&u),
+        &err);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "ConvertValue() error = %v, want nil", err);
+
+    if (val.t != TYPE_INT64)
+        testing_t_errorf_v(t, "val.(type): got %v, expected int64",
+                           val.t == NULL ? BURROW_S("<nil>") : type_name(val.t));
+    else if (*(const int64_t *)val.data != 1)
+        testing_t_errorf_v(t, "val: got %d, expected 1", *(const int64_t *)val.data);
+    arena_free(&ar);
+}
+
+typedef struct Issue69728Type {
+    Int id;
+    Str name;
+} Issue69728Type;
+extern const Type burrow_type_Issue69728Type;
+
+static Any td_issue69728_value(Issue69728Type *v, DriverAllocArg a,
+                               DriverErrorArg err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    Str s = fmt_sprintf_v(a, "%d, %s", v->id, v->name);
+    Bytes *b = BURROW_NEW(a, Bytes);
+    Byte *p = s.len > 0 ? BURROW_NEW_N(a, Byte, (size_t)s.len) : NULL;
+    if (b == NULL || (s.len > 0 && p == NULL)) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return (Any){NULL, NULL};
+    }
+    if (s.len > 0)
+        memcpy(p, s.p, (size_t)s.len);
+    *b = slice_from(p, s.len, s.len, TYPE_BYTE);
+    return BURROW_ANY(TYPE_BYTES, b);
+}
+
+#define ISSUE69728_TYPE_FIELDS(F, T) F(T, Int, id, "") F(T, Str, name, "")
+#define ISSUE69728_TYPE_METHODS(M, T) M(T, Value, td_issue69728_value, DRIVER_SIG_VALUE)
+BURROW_STRUCT_DEFINE_METHODS(Issue69728Type, ISSUE69728_TYPE_FIELDS,
+                             ISSUE69728_TYPE_METHODS);
+
+static void TestIssue69728(TestingT *t) {
+    Issue69728Type v = {42, BURROW_S("foobar")};
+    SqlNull for_value = {BURROW_ANY(TYPE_OF(Issue69728Type), &v), true};
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+
+    Error err = BURROW_NO_ERROR;
+    DriverValue v1 = sql_null_value(for_value, a, &err);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "forValue.Value() error = %v, want nil", err);
+
+    DriverValue v2 = td_issue69728_value(&v, a, &err);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "forValue.V.Value() error = %v, want nil", err);
+
+    if (v1.t != v2.t || v1.t != TYPE_BYTES ||
+        !bytes_equal(*(const Bytes *)v1.data, *(const Bytes *)v2.data))
+        testing_t_errorf_v(t, "not equal; v1 = %v, v2 = %v", v1, v2);
+    arena_free(&ar);
+}
+
+/* unknownInputsConnector, whose statements do not know how many inputs they
+ * take and convert every argument to "string". */
+static Str td_unknown_string = BURROW_S_INIT("string");
+
+static DriverValue td_unknown_convert(void *self, Alloc *a, Any v, Error *err) {
+    (void)self;
+    (void)a;
+    (void)v;
+    *err = BURROW_NO_ERROR;
+    return BURROW_ANY(TYPE_STRING, &td_unknown_string);
+}
+
+static const DriverValueConverterVT td_unknown_converter_vt = {NULL,
+                                                               td_unknown_convert};
+
+static Error td_unknown_stmt_close(void *self) {
+    (void)self;
+    return BURROW_NO_ERROR;
+}
+
+static Int td_unknown_num_input(void *self) {
+    (void)self;
+    return -1;
+}
+
+static DriverResult td_unknown_exec(void *self, Alloc *a, Slice args, Error *err) {
+    (void)self;
+    (void)a;
+    const DriverValue *v = (const DriverValue *)args.p;
+    if (args.len < 1 || v[0].t != TYPE_STRING) {
+        *err = fmt_errorf_v("Expected string, got %v", args.len < 1 || v[0].t == NULL
+                                                           ? BURROW_S("<nil>")
+                                                           : type_name(v[0].t));
+        return (DriverResult){NULL, NULL};
+    }
+    *err = BURROW_NO_ERROR;
+    return (DriverResult){NULL, NULL};
+}
+
+static DriverRows td_unknown_query(void *self, Slice args, Error *err) {
+    (void)self;
+    (void)args;
+    *err = BURROW_NO_ERROR;
+    return (DriverRows){NULL, NULL};
+}
+
+static DriverValueConverter td_unknown_column_converter(void *self, Int idx) {
+    (void)self;
+    (void)idx;
+    return (DriverValueConverter){&td_unknown_converter_vt, NULL};
+}
+
+static const DriverStmtVT td_unknown_stmt_vt = {
+    .close = td_unknown_stmt_close,
+    .num_input = td_unknown_num_input,
+    .exec = td_unknown_exec,
+    .query = td_unknown_query,
+    .column_converter = td_unknown_column_converter,
+};
+
+static DriverStmt td_unknown_prepare(void *self, Str query, Error *err) {
+    (void)self;
+    (void)query;
+    *err = BURROW_NO_ERROR;
+    return (DriverStmt){&td_unknown_stmt_vt, NULL};
+}
+
+static DriverTx td_unknown_begin(void *self, Error *err) {
+    (void)self;
+    *err = BURROW_NO_ERROR;
+    return (DriverTx){NULL, NULL};
+}
+
+static const DriverConnVT td_unknown_conn_vt = {
+    .prepare = td_unknown_prepare,
+    .close = td_bad_close,
+    .begin = td_unknown_begin,
+};
+
+static DriverConn td_unknown_connect(void *self, Context ctx, Error *err) {
+    (void)self;
+    (void)ctx;
+    *err = BURROW_NO_ERROR;
+    return (DriverConn){&td_unknown_conn_vt, NULL};
+}
+
+static Driver td_unknown_driver(void *self) {
+    (void)self;
+    return (Driver){NULL, NULL};
+}
+
+static const DriverConnectorVT td_unknown_connector_vt = {NULL, td_unknown_connect,
+                                                          td_unknown_driver, NULL};
+
+static void TestColumnConverterWithUnknownInputCount(TestingT *t) {
+    SqlDB *db = sql_open_db((DriverConnector){&td_unknown_connector_vt, NULL});
+    Error err = BURROW_NO_ERROR;
+    SqlStmt *stmt = sql_db_prepare(db, BURROW_S("SELECT ?"), &err);
+    if (BURROW_FAILED(err)) {
+        td_close_free(db);
+        FATALF("%v", err);
+    }
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    (void)sql_stmt_exec(stmt, arena_allocator(&ar), ARGS((Int)1), &err);
+    arena_free(&ar);
+    sql_stmt_free(stmt);
+    td_close_free(db);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+}
+
+typedef enum TdNullKind {
+    TD_NULL_INT32,
+    TD_NULL_INT64,
+    TD_NULL_FLOAT64,
+    TD_NULL_BOOL,
+    TD_NULL_STRING,
+    TD_NULL_TIME,
+} TdNullKind;
+
+/* One of the Null types, scanned from input. */
+typedef struct TdNullCase {
+    const char *name;
+    TdNullKind kind;
+    Any input;
+    bool want_err;
+    bool preset; /* start it off valid, with a value */
+} TdNullCase;
+
+/* Scans c->input into a fresh one of c->kind and says whether it came out
+ * valid. */
+static bool td_null_scan(const TdNullCase *c, Alloc *a, Error *err) {
+    switch (c->kind) {
+    case TD_NULL_INT32: {
+        SqlNullInt32 n = {c->preset ? 42 : 0, c->preset};
+        *err = sql_null_int32_scan(&n, a, c->input);
+        return n.valid;
+    }
+    case TD_NULL_INT64: {
+        SqlNullInt64 n = {c->preset ? 42 : 0, c->preset};
+        *err = sql_null_int64_scan(&n, a, c->input);
+        return n.valid;
+    }
+    case TD_NULL_FLOAT64: {
+        SqlNullFloat64 n = {c->preset ? 3.14 : 0, c->preset};
+        *err = sql_null_float64_scan(&n, a, c->input);
+        return n.valid;
+    }
+    case TD_NULL_BOOL: {
+        SqlNullBool n = {c->preset, c->preset};
+        *err = sql_null_bool_scan(&n, a, c->input);
+        return n.valid;
+    }
+    case TD_NULL_STRING: {
+        SqlNullString n = {c->preset ? BURROW_S("preset") : BURROW_STR_EMPTY,
+                           c->preset};
+        *err = sql_null_string_scan(&n, a, c->input);
+        return n.valid;
+    }
+    case TD_NULL_TIME: {
+        SqlNullTime n = {time_now(), c->preset};
+        *err = sql_null_time_scan(&n, a, c->input);
+        return n.valid;
+    }
+    default:
+        break;
+    }
+    return false;
+}
+
+static void td_null_consistency(void *env, TestingT *t) {
+    const TdNullCase *c = env;
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Error err = BURROW_NO_ERROR;
+    bool valid = td_null_scan(c, arena_allocator(&ar), &err);
+
+    /* Check that error matches expectation */
+    if (BURROW_FAILED(err) != c->want_err)
+        testing_t_errorf_v(t, "Scan() error = %v, wantErr %v", err, c->want_err);
+
+    /* The key invariant: Valid should be the opposite of whether we got an
+     * error (assuming non-nil input) */
+    if (BURROW_FAILED(err) && valid)
+        testing_t_errorf_v(t, "Scan() returned error but Valid=true; want Valid=false "
+                              "when err!=nil");
+    if (BURROW_OK(err) && !valid)
+        testing_t_errorf_v(t, "Scan() returned nil error but Valid=false; want "
+                              "Valid=true when err==nil");
+    arena_free(&ar);
+}
+
+/* Issue #45662: Null* types should have Valid=false when Scan returns an
+ * error. Previously, Valid was set to true before convertAssign was called, so
+ * if conversion failed, Valid would still be true despite the error. */
+static void TestNullTypeScanErrorConsistency(TestingT *t) {
+    static Byte nan_int[] = "not_a_number";
+    static Byte nan_float[] = "not_a_float";
+    static Byte nan_bool[] = "not_a_bool";
+    Bytes b_int = slice_from(nan_int, 12, 12, TYPE_BYTE);
+    Bytes b_float = slice_from(nan_float, 11, 11, TYPE_BYTE);
+    Bytes b_bool = slice_from(nan_bool, 10, 10, TYPE_BYTE);
+    int64_t i42 = 42;
+    double f314 = 3.14;
+    bool yes = true;
+    Str hello = BURROW_S("hello");
+    TdNullCase tests[] = {
+        {"NullInt32 with invalid input", TD_NULL_INT32, BURROW_ANY(TYPE_BYTES, &b_int),
+         true, false},
+        {"NullInt64 with invalid input", TD_NULL_INT64, BURROW_ANY(TYPE_BYTES, &b_int),
+         true, false},
+        {"NullFloat64 with invalid input", TD_NULL_FLOAT64,
+         BURROW_ANY(TYPE_BYTES, &b_float), true, false},
+        {"NullBool with invalid input", TD_NULL_BOOL, BURROW_ANY(TYPE_BYTES, &b_bool),
+         true, false},
+        /* Valid cases should still work */
+        {"NullInt32 with valid input", TD_NULL_INT32, BURROW_ANY(TYPE_INT64, &i42),
+         false, false},
+        {"NullInt64 with valid input", TD_NULL_INT64, BURROW_ANY(TYPE_INT64, &i42),
+         false, false},
+        {"NullFloat64 with valid input", TD_NULL_FLOAT64,
+         BURROW_ANY(TYPE_FLOAT64, &f314), false, false},
+        {"NullBool with valid input", TD_NULL_BOOL, BURROW_ANY(TYPE_BOOL, &yes), false,
+         false},
+        {"NullString with valid input", TD_NULL_STRING, BURROW_ANY(TYPE_STRING, &hello),
+         false, false},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++)
+        (void)testing_t_run(t, str_from_cstr(tests[i].name),
+                            BURROW_FN(TestingTFunc, td_null_consistency, &tests[i]));
+}
+
+static void td_null_scan_nil(void *env, TestingT *t) {
+    const TdNullCase *c = env;
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Error err = BURROW_NO_ERROR;
+    bool valid = td_null_scan(c, arena_allocator(&ar), &err);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "Scan(nil) error = %v; want nil", err);
+    if (valid)
+        testing_t_errorf_v(t, "Scan(nil) left Valid=true; want Valid=false");
+    arena_free(&ar);
+}
+
+/* TestNullTypeScanNil verifies that scanning nil sets Valid=false without
+ * error. */
+static void TestNullTypeScanNil(TestingT *t) {
+    Any nil = {NULL, NULL};
+    TdNullCase tests[] = {
+        {"NullString", TD_NULL_STRING, nil, false, true},
+        {"NullInt64", TD_NULL_INT64, nil, false, true},
+        {"NullInt32", TD_NULL_INT32, nil, false, true},
+        {"NullFloat64", TD_NULL_FLOAT64, nil, false, true},
+        {"NullBool", TD_NULL_BOOL, nil, false, true},
+        {"NullTime", TD_NULL_TIME, nil, false, true},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++)
+        (void)testing_t_run(t, str_from_cstr(tests[i].name),
+                            BURROW_FN(TestingTFunc, td_null_scan_nil, &tests[i]));
+}
+
+typedef struct TdScannerRow {
+    Int age;
+    TestStringType name;
+} TdScannerRow;
+
+static void testQueryRowsScanner(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+    Error err = BURROW_NO_ERROR;
+    SqlRows *rows =
+        sql_db_query(db, BURROW_S("SELECT|people|age,name|"), NO_ARGS, &err);
+    if (BURROW_FAILED(err))
+        FATALF("Query: %v", err);
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    TdScannerRow got[4];
+    Int n = 0;
+    while (sql_rows_next(rows)) {
+        TdScannerRow r = {0, {BURROW_STR_EMPTY}};
+        err =
+            sql_rows_scan_v(rows, a, &r.age, ((Any){TYPE_OF(TestStringType), &r.name}));
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "Scan: %v", err);
+            goto out;
+        }
+        if (n < 4)
+            got[n] = r;
+        n++;
+    }
+    err = sql_rows_err(rows);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "Err: %v", err);
+        goto out;
+    }
+    const TdScannerRow want[] = {
+        {1, {BURROW_S_INIT("Alice")}},
+        {2, {BURROW_S_INIT("Bob")}},
+        {3, {BURROW_S_INIT("Chris")}},
+    };
+    bool same = n == 3;
+    for (Int i = 0; same && i < n; i++)
+        same = got[i].age == want[i].age && str_eq(got[i].name.s, want[i].name.s);
+    if (!same)
+        testing_t_errorf_v(t,
+                           "mismatch: got %d rows, want 3 of age 1 to 3 and names "
+                           "Alice, Bob, Chris",
+                           n);
+out:
+    (void)sql_rows_close(rows);
+    sql_rows_free(rows);
+    arena_free(&ar);
+}
+
+static void TestQueryRowsScanner(TestingT *t) {
+    test_database(t, testQueryRowsScanner, "ScanColumn");
+}
+
 #define TESTS(X)                                                                       \
     X(TestOpenDB)                                                                      \
     X(TestQuery)                                                                       \
@@ -5746,6 +6571,18 @@ static void TestRawBytesReuse(TestingT *t) {
     X(TestContextCancelBetweenNextAndErr)                                              \
     X(TestContextCancelDuringScan)                                                     \
     X(TestNilErrorAfterClose)                                                          \
-    X(TestRawBytesReuse)
+    X(TestRawBytesReuse)                                                               \
+    X(TestDriverPanic)                                                                 \
+    X(TestBadDriver)                                                                   \
+    X(TestPing)                                                                        \
+    X(TestTypedString)                                                                 \
+    X(TestGrabConnAllocs)                                                              \
+    X(TestConnRequestSet)                                                              \
+    X(TestIssue69837)                                                                  \
+    X(TestIssue69728)                                                                  \
+    X(TestColumnConverterWithUnknownInputCount)                                        \
+    X(TestNullTypeScanErrorConsistency)                                                \
+    X(TestNullTypeScanNil)                                                             \
+    X(TestQueryRowsScanner)
 
 TESTING_MAIN(TESTS)

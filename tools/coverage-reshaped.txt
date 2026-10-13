@@ -292,6 +292,10 @@ debug/macho: method (FatArch) Segment: the receiver is a pointer to the arch, wh
 # value receiver. The reader lives in the struct here, so it takes a pointer.
 debug/pe: method (Section) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
 
+# include/burrow/debug/plan9obj.h: the same as for debug/pe, Go embeds
+# io.ReaderAt in Section and ReadAt has a value receiver.
+debug/plan9obj: method (Section) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
+
 # include/burrow/go/token.h: a func value in C is a function pointer with a
 # context argument, and a variadic list is a pointer and a count.
 go/token: method (*FileSet) AddExistingFiles: takes the files as a pointer and a count

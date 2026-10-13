@@ -79,6 +79,7 @@
 #include "burrow/debug/elf.h"
 #include "burrow/debug/macho.h"
 #include "burrow/debug/pe.h"
+#include "burrow/debug/plan9obj.h"
 #include "burrow/declare.h"
 #include "burrow/defer.h"
 #include "burrow/embed.h"

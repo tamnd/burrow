@@ -1,6 +1,6 @@
 # Debug information
 
-`burrow/debug/elf.h` is Go's `debug/elf`. It reads ELF files, the format of executables, shared libraries, object files and core dumps on Linux, the BSDs and most other Unix systems. `burrow/debug/dwarf.h` is Go's `debug/dwarf`, which reads the DWARF debugging information that compilers put in those files: the compilation units, functions, variables and types of a program, and the line tables that map machine addresses back to source lines. `burrow/debug/macho.h` is Go's `debug/macho`, which reads Mach-O, the format of executables and libraries on macOS and iOS, including the universal files that hold one for each processor. `burrow/debug/pe.h` is Go's `debug/pe`, which reads the PE and COFF files of Windows, its executables, DLLs and object files. Go's own `nm`, `objdump`, `addr2line` and `pprof` read binaries through them.
+`burrow/debug/elf.h` is Go's `debug/elf`. It reads ELF files, the format of executables, shared libraries, object files and core dumps on Linux, the BSDs and most other Unix systems. `burrow/debug/dwarf.h` is Go's `debug/dwarf`, which reads the DWARF debugging information that compilers put in those files: the compilation units, functions, variables and types of a program, and the line tables that map machine addresses back to source lines. `burrow/debug/macho.h` is Go's `debug/macho`, which reads Mach-O, the format of executables and libraries on macOS and iOS, including the universal files that hold one for each processor. `burrow/debug/pe.h` is Go's `debug/pe`, which reads the PE and COFF files of Windows, its executables, DLLs and object files. `burrow/debug/plan9obj.h` is Go's `debug/plan9obj`, which reads the a.out executables of Plan 9. Go's own `nm`, `objdump`, `addr2line` and `pprof` read binaries through them.
 
 ## ELF files
 
@@ -289,6 +289,81 @@ invalid PE file signature: 50 45 00 01
 optional header has unexpected Magic of 0x20c
 ```
 
+## Plan 9 a.out files
+
+`plan9obj_open` and `plan9obj_new_file` read a Plan 9 executable. The file has no section headers, just a header of eight big-endian words that gives the size of each part, so the five sections, `text`, `data`, `syms`, `spsz` and `pcsz`, are made up from those sizes and always all there. A 64-bit file has its entry point in eight more bytes after the header, and `ptr_size` in the header says which kind it is. `plan9obj_file_symbols` decodes the symbol table. A `'z'` symbol's name is a path made of the `'f'` symbols before it, which is how Plan 9 records the source files, and it comes back put together. `tiny_plan9` in the example file writes an 88-byte executable by hand:
+
+<!-- example: ../examples/debug/plan9obj.c#symbols -->
+```c
+Error err = BURROW_NO_ERROR;
+BytesReader *br = bytes_new_reader(a, tiny_plan9(a));
+Plan9objFile *f = plan9obj_new_file(a, bytes_reader_as_io_reader_at(br), &err);
+if (f == NULL) {
+    fmt_println_v(err);
+    return;
+}
+Plan9objFileHeader h = f->file_header;
+fmt_printf_v("magic %#x, entry %#x, %d-byte pointers\n", h.magic, h.entry,
+             h.ptr_size);
+for (Int i = 0; i < f->sections.len; i++) {
+    Plan9objSection *s = ((Plan9objSection **)f->sections.p)[i];
+    Plan9objSectionHeader sh = s->section_header;
+    fmt_printf_v("%s  offset %d size %d\n", sh.name, sh.offset, sh.size);
+}
+Slice syms = plan9obj_file_symbols(f, a, &err);
+for (Int i = 0; i < syms.len; i++) {
+    Plan9objSym *s = &((Plan9objSym *)syms.p)[i];
+    fmt_printf_v("%c %#x %s\n", s->type, s->value, s->name);
+}
+plan9obj_file_free(f);
+```
+
+That prints:
+
+```
+magic 0x1eb, entry 0x1020, 4-byte pointers
+text  offset 32 size 3
+data  offset 35 size 0
+syms  offset 35 size 53
+spsz  offset 88 size 0
+pcsz  offset 88 size 0
+f 0x1 /
+f 0x2 usr
+f 0x3 hello.c
+z 0x1 /usr/hello.c
+T 0x1020 main
+```
+
+The checks are few, as in Go: the magic number has to be one of the three known ones and the header has to be all there. A symbol table that stops in the middle of an entry makes `plan9obj_file_symbols` fail, and a path with a code that no `'f'` symbol gave is cut short at that code, the same as Go:
+
+<!-- example: ../examples/debug/plan9obj.c#errors -->
+```c
+Error err = BURROW_NO_ERROR;
+Slice data = tiny_plan9(a);
+memcpy(data.p, "\177ELF", 4);
+BytesReader *br = bytes_new_reader(a, data);
+Plan9objFile *f = plan9obj_new_file(a, bytes_reader_as_io_reader_at(br), &err);
+if (f == NULL)
+    fmt_println_v(err);
+
+// The symbol table now stops after main's value.
+data = tiny_plan9(a);
+put32((Byte *)data.p + 16, 47);
+br = bytes_new_reader(a, data);
+f = plan9obj_new_file(a, bytes_reader_as_io_reader_at(br), &err);
+Slice syms = plan9obj_file_symbols(f, a, &err);
+if (BURROW_FAILED(err))
+    fmt_println_v(syms.len, err);
+plan9obj_file_free(f);
+```
+
+That prints:
+
+```
+bad magic number '[127 69 76 70]' in record at byte 0x0
+0 unexpected EOF in record at byte 0x2f
+```
+
 ## How it is tested
 
-The tests check the output against Go's own. `tools/gen-debug-tests.sh` runs Go's `debug/elf` and `debug/dwarf` over every file in `debug/elf`'s testdata and the ELF files in `debug/dwarf`'s and writes down a text dump of everything they read: headers, sections, symbols, dynamic tables, every DWARF entry and type, and every line table row. The C tests build the same dump and compare it line by line. They do the same for about 1,850 damaged copies of the files, comparing a hash of the dump, so a malformed file gets the same error here as in Go. `tools/gen-debug-tests.sh macho` does the same for the files in `debug/macho`'s testdata and the Mach-O files in `debug/dwarf`'s, reading each one both as a universal file and as a plain one, and `tools/gen-debug-tests.sh pe` for the files in `debug/pe`'s testdata and the PE file in `debug/dwarf`'s. The tests in Go's packages that look at one value at a time are ported as well.
+The tests check the output against Go's own. `tools/gen-debug-tests.sh` runs Go's `debug/elf` and `debug/dwarf` over every file in `debug/elf`'s testdata and the ELF files in `debug/dwarf`'s and writes down a text dump of everything they read: headers, sections, symbols, dynamic tables, every DWARF entry and type, and every line table row. The C tests build the same dump and compare it line by line. They do the same for about 1,850 damaged copies of the files, comparing a hash of the dump, so a malformed file gets the same error here as in Go. `tools/gen-debug-tests.sh macho` does the same for the files in `debug/macho`'s testdata and the Mach-O files in `debug/dwarf`'s, reading each one both as a universal file and as a plain one, `tools/gen-debug-tests.sh pe` for the files in `debug/pe`'s testdata and the PE file in `debug/dwarf`'s, and `tools/gen-debug-tests.sh plan9obj` for the two files in `debug/plan9obj`'s testdata, with the damage aimed at the symbol table. The tests in Go's packages that look at one value at a time are ported as well.

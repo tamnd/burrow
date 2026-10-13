@@ -174,4 +174,13 @@ x509: failed to parse private key (use ParsePKCS8PrivateKey instead for this key
 2.25.329800735698586629295641978511506172918
 1.3.6.1.5.5.7.3.1
 invalid oid
+290 bytes
+CN=Example Root
+Ed25519
+65b60673d6ed884bf01c2c222d82ada0740f29ac
+2036-01-01T00:00:00Z
+signed by itself: yes
+request for www.example.com: ok
+CN=Example Root
+65b60673d6ed884bf01c2c222d82ada0740f29ac
 */

@@ -651,6 +651,531 @@ ecdsa_parse_uncompressed_public_key(a, elliptic_p256(), unhex(a, "00"), &err);
 print_error(err);
 ```
 
+## crypto/dsa
+
+`burrow/crypto/dsa.h` is the Digital Signature Algorithm of FIPS 186-3. Go deprecates it and so does this: it is here for checking signatures made by old systems, and new code should use Ed25519. Keys are structs of `BigInt` pointers, the shared parameters p, q and g, then y for the public key and x for the private one, so a key from somewhere else can be put together with `big_int_set_string` or `big_int_set_bytes`. `dsa_sign` gives the signature as two integers, r and s. The hash is not cut down to the length of q for you, and FIPS 186-3 says it should be:
+
+<!-- example: ../examples/crypto/dsa.c#sign -->
+```c
+DsaPrivateKey priv = test_key(a);
+
+// q is 160 bits, so the SHA-256 hash is cut down to its first 20 bytes.
+Sha256Sum256Ret sum = sha256_sum256(text("hello, world"));
+Int n = big_int_bit_len(priv.public_key.parameters.q) / 8;
+Slice hash = slice_from(sum.a, n, n, TYPE_BYTE);
+
+Error err = BURROW_NO_ERROR;
+BigInt *s;
+BigInt *r = dsa_sign(a, (IoReader){NULL, NULL}, &priv, hash, &s, &err);
+if (BURROW_FAILED(err))
+    return;
+
+printf("signature verified: %s\n",
+       dsa_verify(&priv.public_key, hash, r, s) ? "true" : "false");
+sum.a[0] ^= 1;
+printf("other hash verified: %s\n",
+       dsa_verify(&priv.public_key, hash, r, s) ? "true" : "false");
+```
+
+`dsa_generate_key` makes x and y for parameters that are already in the key. Making the parameters themselves with `dsa_generate_parameters` means finding two primes and can take several seconds. Many keys can share one set:
+
+<!-- example: ../examples/crypto/dsa.c#generate -->
+```c
+// New keys for parameters someone already has. dsa_generate_parameters
+// makes new ones, which takes seconds.
+DsaPrivateKey shared = test_key(a);
+DsaPrivateKey priv = {0};
+priv.public_key.parameters = shared.public_key.parameters;
+
+Error err = dsa_generate_key(&priv, a, (IoReader){NULL, NULL});
+if (BURROW_FAILED(err))
+    return;
+printf("x < q: %s\n",
+       big_int_cmp(priv.x, priv.public_key.parameters.q) < 0 ? "true" : "false");
+printf("y < p: %s\n",
+       big_int_cmp(priv.public_key.y, priv.public_key.parameters.p) < 0 ? "true"
+                                                                        : "false");
+```
+
+The functions that only report an error return it, as Go's do. `dsa_sign` gives `dsa_err_invalid_public_key` for a key it cannot sign with, which a key made by other code can be, so check for it with `errors_is`:
+
+<!-- example: ../examples/crypto/dsa.c#errors -->
+```c
+DsaParameters params = {0};
+print_error(dsa_generate_parameters(&params, a, (IoReader){NULL, NULL}, 7));
+
+DsaPrivateKey empty = {0};
+print_error(dsa_generate_key(&empty, a, (IoReader){NULL, NULL}));
+
+// A q whose length in bits is not a multiple of 8.
+DsaPrivateKey bad = test_key(a);
+bad.public_key.parameters.q = from_hex(a, "7F");
+Error err = BURROW_NO_ERROR;
+BigInt *s;
+dsa_sign(a, (IoReader){NULL, NULL}, &bad, text("hash"), &s, &err);
+print_error(err);
+printf("%d\n", errors_is(err, dsa_err_invalid_public_key));
+```
+
+## crypto/mlkem
+
+`burrow/crypto/mlkem.h` is ML-KEM, the key encapsulation method of FIPS 203 that was called Kyber. It is meant to hold up against a quantum computer. One side makes a decapsulation key and sends out the encapsulation key that goes with it. The other side uses that to make a shared key and a ciphertext, and sends back the ciphertext, which only the decapsulation key gets the shared key out of. Here Bob is a function, as he would be on another machine:
+
+<!-- example: ../examples/crypto/mlkem.c#bob -->
+```c
+// Bob gets Alice's encapsulation key, makes a shared key with it, and sends
+// back the ciphertext that carries it.
+static Slice bob(Alloc *a, Slice encapsulation_key, Slice *shared_key) {
+    Error err = BURROW_NO_ERROR;
+    MlkemEncapsulationKey768 *ek =
+        mlkem_new_encapsulation_key768(a, encapsulation_key, &err);
+    if (BURROW_FAILED(err))
+        return slice_nil(TYPE_BYTE);
+    Slice ciphertext;
+    *shared_key = mlkem_encapsulation_key768_encapsulate(ek, a, &ciphertext);
+    mlkem_encapsulation_key768_free(ek);
+    return ciphertext;
+}
+```
+
+<!-- example: ../examples/crypto/mlkem.c#alice -->
+```c
+// Alice makes a key and sends Bob the encapsulation key.
+Error err = BURROW_NO_ERROR;
+MlkemDecapsulationKey768 *dk = mlkem_generate_key768(a, &err);
+if (BURROW_FAILED(err))
+    return;
+Slice encapsulation_key = mlkem_encapsulation_key768_bytes(
+    mlkem_decapsulation_key768_encapsulation_key(dk), a);
+
+Slice bob_key;
+Slice ciphertext = bob(a, encapsulation_key, &bob_key);
+
+// Alice gets the shared key out of the ciphertext.
+Slice alice_key = mlkem_decapsulation_key768_decapsulate(dk, a, ciphertext, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%d %d %d %s\n", (int)encapsulation_key.len, (int)ciphertext.len,
+       (int)alice_key.len, bytes_equal(alice_key, bob_key) ? "true" : "false");
+mlkem_decapsulation_key768_free(dk);
+```
+
+There are two sizes, ML-KEM-768 and ML-KEM-1024, with the same functions under each number, and most programs want ML-KEM-768. Keys come from the allocator they are made with and go back with the `_free` function of their type. The encapsulation key of a decapsulation key is part of it, borrowed from it, and freed with it. Both kinds of key work out their matrices when they are made, so a decapsulation key is about 8 KB for ML-KEM-768 and 11 KB for ML-KEM-1024.
+
+A decapsulation key is stored as its 64 byte seed, which `mlkem_decapsulation_key768_bytes` gives and `mlkem_new_decapsulation_key768` takes, so the same seed always gives the same key. Encapsulation takes its randomness from the system, and `burrow/crypto/mlkem/mlkemtest.h` has the version that takes it as an argument, for known answer tests. This is the known answer test Go runs in FIPS mode:
+
+<!-- example: ../examples/crypto/mlkem.c#fixed -->
+```c
+// The same seed always gives the same key, and mlkemtest takes the
+// randomness of an encapsulation as an argument.
+Byte seed[MLKEM_SEED_SIZE], m[32];
+for (int i = 0; i < 64; i++)
+    seed[i] = (Byte)(0x01 + i);
+for (int i = 0; i < 32; i++)
+    m[i] = (Byte)(0x41 + i);
+
+Error err = BURROW_NO_ERROR;
+MlkemDecapsulationKey768 *dk = mlkem_new_decapsulation_key768(
+    a, slice_from(seed, sizeof seed, sizeof seed, TYPE_BYTE), &err);
+if (BURROW_FAILED(err))
+    return;
+Slice ciphertext;
+Slice key = mlkemtest_encapsulate768(
+    mlkem_decapsulation_key768_encapsulation_key(dk), a,
+    slice_from(m, sizeof m, sizeof m, TYPE_BYTE), &ciphertext, &err);
+if (BURROW_FAILED(err))
+    return;
+print_hex(a, key);
+print_hex(a, mlkem_decapsulation_key768_decapsulate(dk, a, ciphertext, &err));
+```
+
+The keys fit the KEM interfaces of `burrow/crypto.h`, for code that should not care which KEM it has:
+
+<!-- example: ../examples/crypto/mlkem.c#kem -->
+```c
+// Code that works with any KEM takes a CryptoDecapsulator.
+Error err = BURROW_NO_ERROR;
+MlkemDecapsulationKey1024 *dk = mlkem_generate_key1024(a, &err);
+if (BURROW_FAILED(err))
+    return;
+CryptoDecapsulator d = mlkem_decapsulation_key1024_as_decapsulator(dk);
+
+CryptoEncapsulator e = crypto_decapsulator_encapsulator(d);
+CryptoEncapsulateResult r = crypto_encapsulator_encapsulate(e, a);
+Slice key = crypto_decapsulator_decapsulate(d, a, r.ciphertext, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%.*s %d %s\n", (int)d.vt->self_type->name.len,
+       (const char *)d.vt->self_type->name.p, (int)r.ciphertext.len,
+       bytes_equal(key, r.shared_key) ? "true" : "false");
+mlkem_decapsulation_key1024_free(dk);
+```
+
+Keys and ciphertexts of the wrong length are errors, with Go's messages, and so is an encapsulation key with a coefficient that is not reduced. A ciphertext of the right length is never an error. One that was not made for the key, or was changed on the way, gives a shared key nobody else has, so the two sides find out when the first message under the key does not decrypt:
+
+<!-- example: ../examples/crypto/mlkem.c#errors -->
+```c
+Error err = BURROW_NO_ERROR;
+Byte zeros[MLKEM_ENCAPSULATION_KEY_SIZE768] = {0};
+Byte ones[MLKEM_ENCAPSULATION_KEY_SIZE768];
+memset(ones, 0xff, sizeof ones);
+
+mlkem_new_decapsulation_key768(a, slice_from(zeros, 32, 32, TYPE_BYTE), &err);
+print_error(err);
+mlkem_new_encapsulation_key768(
+    a, slice_from(ones, sizeof ones, sizeof ones, TYPE_BYTE), &err);
+print_error(err);
+
+MlkemDecapsulationKey768 *dk =
+    mlkem_new_decapsulation_key768(a, slice_from(zeros, 64, 64, TYPE_BYTE), &err);
+mlkem_decapsulation_key768_decapsulate(
+    dk, a, slice_from(zeros, 100, 100, TYPE_BYTE), &err);
+print_error(err);
+
+// A ciphertext of the right length that was never made for this key is
+// not an error. It gives a key nobody else has.
+Slice key = mlkem_decapsulation_key768_decapsulate(
+    dk, a,
+    slice_from(zeros, MLKEM_CIPHERTEXT_SIZE768, MLKEM_CIPHERTEXT_SIZE768,
+               TYPE_BYTE),
+    &err);
+print_error(err);
+printf("%d\n", (int)key.len);
+```
+
+Everything that touches secret data is constant time, as Go's code is, and the shared key goes through the same constant time selection Go uses for a ciphertext that does not check out. Go runs a self test and checks each new key against itself only in FIPS mode, which burrow does not have, so it does neither.
+
+## crypto/mldsa
+
+`burrow/crypto/mldsa.h` is ML-DSA, the signature scheme of FIPS 204 that was called Dilithium. Like ML-KEM it is meant to hold up against a quantum computer, and its keys and signatures are much bigger than those of Ed25519. There are three parameter sets, `mldsa_mldsa44`, `mldsa_mldsa65` and `mldsa_mldsa87`, and most programs want ML-DSA-44:
+
+<!-- example: ../examples/crypto/mldsa.c#sign -->
+```c
+// The signer makes a key and publishes the public key's bytes.
+Error err = BURROW_NO_ERROR;
+MldsaPrivateKey *sk = mldsa_generate_key(a, mldsa_mldsa44(), &err);
+if (BURROW_FAILED(err))
+    return;
+Slice pub_bytes = mldsa_public_key_bytes(mldsa_private_key_public_key(sk), a);
+
+// The context keeps signatures made for one purpose from passing for
+// another. Sign and Verify have to be given the same one.
+MldsaOptions opts = {BURROW_S("release manifest")};
+Slice msg = text("burrow v0.3.0");
+Slice sig = mldsa_private_key_sign(sk, a, (IoReader){0}, msg,
+                                   mldsa_options_as_signer_opts(&opts), &err);
+if (BURROW_FAILED(err))
+    return;
+
+// The verifier has only the public key's bytes.
+MldsaPublicKey *pk = mldsa_new_public_key(a, mldsa_mldsa44(), pub_bytes, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%d %d\n", (int)pub_bytes.len, (int)sig.len);
+print_error(mldsa_verify(pk, msg, sig, &opts));
+print_error(mldsa_verify(pk, msg, sig, NULL));
+print_error(mldsa_verify(pk, text("burrow v0.3.1"), sig, &opts));
+mldsa_public_key_free(pk);
+mldsa_private_key_free(sk);
+```
+
+The last two lines show what a verifier sees when the context or the message is not the one that was signed. Keys come from the allocator they are made with and go back with `mldsa_private_key_free` and `mldsa_public_key_free`. The public key of a private key is part of it and goes with it. Signing works out a fresh value from the system's generator each time, so two signatures of the same message differ. `mldsa_private_key_sign_deterministic` leaves that out, and a private key is stored as its 32 byte seed, so the same seed and message always give the same signature:
+
+<!-- example: ../examples/crypto/mldsa.c#deterministic -->
+```c
+// A private key is its 32 byte seed. The same seed gives the same key,
+// and SignDeterministic gives the same signature of the same message.
+Byte seed[MLDSA_PRIVATE_KEY_SIZE];
+for (int i = 0; i < MLDSA_PRIVATE_KEY_SIZE; i++)
+    seed[i] = (Byte)i;
+Error err = BURROW_NO_ERROR;
+MldsaPrivateKey *sk = mldsa_new_private_key(
+    a, mldsa_mldsa65(), slice_from(seed, sizeof seed, sizeof seed, TYPE_BYTE),
+    &err);
+if (BURROW_FAILED(err))
+    return;
+Slice sig = mldsa_private_key_sign_deterministic(sk, a, text("hello"),
+                                                 (CryptoSignerOpts){0}, &err);
+if (BURROW_FAILED(err))
+    return;
+Sha256Sum256Ret sum = sha256_sum256(sig);
+print_hex(a, slice_from(sum.a, sizeof sum.a, sizeof sum.a, TYPE_BYTE));
+mldsa_private_key_free(sk);
+```
+
+A private key is a `CryptoSigner` too, for code that should not care which scheme it has. Its options can be nil, an `MldsaOptions` with a context, or `CRYPTO_MLDSA_MU` for a message that is the 64 byte μ the caller worked out itself, which RFC 9881 calls external μ:
+
+<!-- example: ../examples/crypto/mldsa.c#signer -->
+```c
+// Code that works with any signature scheme takes a CryptoSigner.
+Error err = BURROW_NO_ERROR;
+MldsaPrivateKey *sk = mldsa_generate_key(a, mldsa_mldsa87(), &err);
+if (BURROW_FAILED(err))
+    return;
+CryptoSigner s = mldsa_private_key_signer(sk);
+Slice msg = text("any message");
+Slice sig =
+    crypto_signer_sign(s, a, (IoReader){0}, msg, (CryptoSignerOpts){0}, &err);
+if (BURROW_FAILED(err))
+    return;
+CryptoPublicKey pub = crypto_signer_public(s);
+printf("%.*s %d\n", (int)pub.t->name.len, (const char *)pub.t->name.p,
+       (int)sig.len);
+print_error(mldsa_verify(pub.data, msg, sig, NULL));
+mldsa_private_key_free(sk);
+```
+
+Keys and signatures of the wrong length are errors with Go's messages, and so are a context longer than 255 bytes and options that ask for a hash:
+
+<!-- example: ../examples/crypto/mldsa.c#errors -->
+```c
+Error err = BURROW_NO_ERROR;
+Byte zeros[MLDSA_MLDSA44_PUBLIC_KEY_SIZE] = {0};
+mldsa_new_private_key(a, mldsa_mldsa44(), slice_from(zeros, 16, 16, TYPE_BYTE),
+                      &err);
+print_error(err);
+mldsa_new_public_key(a, mldsa_mldsa65(),
+                     slice_from(zeros, sizeof zeros, sizeof zeros, TYPE_BYTE),
+                     &err);
+print_error(err);
+
+err = BURROW_NO_ERROR;
+MldsaPrivateKey *sk = mldsa_new_private_key(
+    a, mldsa_mldsa44(), slice_from(zeros, 32, 32, TYPE_BYTE), &err);
+MldsaOptions opts = {strings_repeat(a, BURROW_S("x"), 256)};
+mldsa_private_key_sign_deterministic(sk, a, text("hello"),
+                                     mldsa_options_as_signer_opts(&opts), &err);
+print_error(err);
+CryptoHash h = CRYPTO_SHA256;
+mldsa_private_key_sign_deterministic(sk, a, text("hello"),
+                                     crypto_hash_as_signer_opts(&h), &err);
+print_error(err);
+print_error(mldsa_verify(mldsa_private_key_public_key(sk), text("hello"),
+                         slice_from(zeros, 100, 100, TYPE_BYTE), NULL));
+mldsa_private_key_free(sk);
+```
+
+Everything that touches secret data is constant time, as Go's code is. Go runs a self test and checks each new key against itself only in FIPS mode, which burrow does not have, so it does neither.
+
+## crypto/hpke
+
+`burrow/crypto/hpke.h` is Hybrid Public Key Encryption, RFC 9180: a way to encrypt to someone's public key that is built out of a KEM, a KDF and an AEAD, each picked by its own handle. It has the DHKEMs over P-256, P-384, P-521 and X25519, ML-KEM-768 and ML-KEM-1024 on their own, and the post-quantum hybrids MLKEM768-X25519 (X-Wing), MLKEM768-P256 and MLKEM1024-P384. The KDFs are HKDF with SHA-256, SHA-384 and SHA-512, and SHAKE128 and SHAKE256. The AEADs are AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305, plus the export-only one. This is the example Go's documentation has:
+
+<!-- example: ../examples/crypto/hpke.c#exchange -->
+```c
+// In a real application, the private key would be stored and the
+// public key bytes sent to the sender.
+const HpkeKEM *kem = hpke_mlkem768_x25519();
+const HpkeKDF *kdf = hpke_hkdfsha256();
+const HpkeAEAD *aead = hpke_aes256_gcm();
+Error err = BURROW_NO_ERROR;
+HpkePrivateKey *k = hpke_kem_generate_key(kem, a, &err);
+if (BURROW_FAILED(err))
+    return;
+Slice public_key_bytes = hpke_public_key_bytes(hpke_private_key_public_key(k), a);
+
+// The sender parses the public key and seals a message to it.
+HpkePublicKey *pk = hpke_kem_new_public_key(kem, a, public_key_bytes, &err);
+if (BURROW_FAILED(err))
+    return;
+Slice ciphertext =
+    hpke_seal(a, pk, kdf, aead, text("example"), text("|-()-|"), &err);
+if (BURROW_FAILED(err))
+    return;
+
+// The recipient opens it with the private key.
+Slice plaintext = hpke_open(a, k, kdf, aead, text("example"), ciphertext, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("Decrypted message: %.*s\n", (int)plaintext.len, (const char *)plaintext.p);
+hpke_public_key_free(pk);
+hpke_private_key_free(k);
+```
+
+`hpke_seal` and `hpke_open` are for one message, and put the encapsulated key in front of the ciphertext. For more than one, `hpke_new_sender` gives the encapsulated key to send and a sender that seals each message with the next nonce, and `hpke_new_recipient` takes that key and opens them in the same order. Each side can also export secrets from the context, which is all an export-only context does. Keys come from the allocator they are made with and go back with `hpke_private_key_free` and `hpke_public_key_free`. The public key of a private key is borrowed from it. The handles for KEMs, KDFs and AEADs are static and never freed.
+
+`hpke_kem_derive_key_pair` makes the same key from the same input keying material every time, the way RFC 9180's test vectors do. This is the recipient of its first vector, which gets the first message out and exports a secret:
+
+<!-- example: ../examples/crypto/hpke.c#derive -->
+```c
+// The recipient of RFC 9180's first test vector, A.1, derives its key
+// from ikmR, and opens the first message the sender sent it.
+const HpkeKEM *kem = hpke_dhkem(ecdh_x25519());
+Error err = BURROW_NO_ERROR;
+HpkePrivateKey *k = hpke_kem_derive_key_pair(
+    kem, a,
+    unhex(a, "6db9df30aa07dd42ee5e8181afdb977e538f5e1fec8a06223f33f7013e525037"),
+    &err);
+if (BURROW_FAILED(err))
+    return;
+print_hex(a, hpke_public_key_bytes(hpke_private_key_public_key(k), a));
+
+Slice enc =
+    unhex(a, "37fda3567bdbd628e88668c3c8d7e97d1d1253b6d4ea6d44c150f741f1bf4431");
+HpkeRecipient *r =
+    hpke_new_recipient(a, enc, k, hpke_hkdfsha256(), hpke_aes128_gcm(),
+                       text("Ode on a Grecian Urn"), &err);
+if (BURROW_FAILED(err))
+    return;
+Slice pt = hpke_recipient_open(
+    r, a, text("Count-0"),
+    unhex(a, "f938558b5d72f1a23810b4be2ab4f84331acc02fc97babc53a52ae8218a355a9"
+             "6d8770ac83d07bea87e13c512a"),
+    &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%.*s\n", (int)pt.len, (const char *)pt.p);
+print_hex(a, hpke_recipient_export(r, a, BURROW_S(""), 32, &err));
+hpke_private_key_free(k);
+```
+
+An export-only context seals and opens nothing:
+
+<!-- example: ../examples/crypto/hpke.c#export -->
+```c
+// With ExportOnly the two sides share secrets and nothing else.
+const HpkeKEM *kem = hpke_dhkem(ecdh_p256());
+Error err = BURROW_NO_ERROR;
+HpkePrivateKey *k = hpke_kem_generate_key(kem, a, &err);
+if (BURROW_FAILED(err))
+    return;
+HpkeSender *s;
+Slice enc = hpke_new_sender(a, hpke_private_key_public_key(k), hpke_hkdfsha256(),
+                            hpke_export_only(), text("session"), &s, &err);
+if (BURROW_FAILED(err))
+    return;
+HpkeRecipient *r = hpke_new_recipient(a, enc, k, hpke_hkdfsha256(),
+                                      hpke_export_only(), text("session"), &err);
+if (BURROW_FAILED(err))
+    return;
+Slice x = hpke_sender_export(s, a, BURROW_S("key"), 16, &err);
+Slice y = hpke_recipient_export(r, a, BURROW_S("key"), 16, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%d %d %s\n", (int)enc.len, (int)x.len,
+       bytes_equal(x, y) ? "true" : "false");
+hpke_sender_seal(s, a, slice_nil(TYPE_BYTE), text("hi"), &err);
+print_error(err);
+hpke_private_key_free(k);
+```
+
+Keys can also be made out of keys of the other packages: `hpke_new_dhkem_private_key` takes any `EcdhKeyExchanger`, `hpke_new_mlkem_private_key` any ML-KEM `CryptoDecapsulator`, and `hpke_new_hybrid_private_key` one of each. A private key made of parts that are not plain keys of those packages has no bytes to give back, which is an error from `hpke_private_key_bytes`, as it is in Go. An ID nobody supports, and a ciphertext that does not open, are errors with Go's messages:
+
+<!-- example: ../examples/crypto/hpke.c#errors -->
+```c
+Error err = BURROW_NO_ERROR;
+hpke_new_kem(0x0021, &err);
+print_error(err);
+err = BURROW_NO_ERROR;
+hpke_new_aead(0xabcd, &err);
+print_error(err);
+err = BURROW_NO_ERROR;
+
+HpkePrivateKey *k = hpke_kem_generate_key(hpke_dhkem(ecdh_x25519()), a, &err);
+if (BURROW_FAILED(err))
+    return;
+Slice ct =
+    hpke_seal(a, hpke_private_key_public_key(k), hpke_hkdfsha256(),
+              hpke_cha_cha20_poly1305(), slice_nil(TYPE_BYTE), text("hi"), &err);
+if (BURROW_FAILED(err))
+    return;
+((Byte *)ct.p)[ct.len - 1] ^= 1;
+hpke_open(a, k, hpke_hkdfsha256(), hpke_cha_cha20_poly1305(), slice_nil(TYPE_BYTE),
+          ct, &err);
+print_error(err);
+hpke_private_key_free(k);
+```
+
+Go's tests set package variables to make an encapsulation come out as a vector says. burrow has no mutable globals, so its tests reach into `src/crypto/hpke_internal.h` for a sender that takes that randomness as an argument instead, and nothing of it is in the public header.
+
+## crypto/rsa
+
+`burrow/crypto/rsa.h` is RSA as PKCS #1 has it, for signatures and for encryption. It is mostly there for the protocols and certificates that already use it. A new design does better with Ed25519 or ML-DSA for signatures and with ECDH or ML-KEM to agree on a key. There are two ways to sign. PSS is the newer one, and PKCS #1 v1.5 is the one most certificates use. Both sign a hash the caller has already worked out:
+
+<!-- example: ../examples/crypto/rsa.c#sign -->
+```c
+Error err = BURROW_NO_ERROR;
+RsaPrivateKey *priv = rsa_generate_key(a, (IoReader){0}, 2048, &err);
+if (BURROW_FAILED(err))
+    return;
+
+// Both schemes sign the hash of the message, not the message itself.
+Sha256Sum256Ret sum = sha256_sum256(text("burrow v0.3.0"));
+Slice hashed = slice_from(sum.a, sizeof sum.a, sizeof sum.a, TYPE_BYTE);
+Slice sig =
+    rsa_sign_pss(a, crypto_rand_reader, priv, CRYPTO_SHA256, hashed, NULL, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%d\n", (int)sig.len);
+print_error(rsa_verify_pss(&priv->public_key, CRYPTO_SHA256, hashed, sig, NULL));
+
+// PKCS #1 v1.5 needs no randomness and gives the same signature each time.
+Slice old = rsa_sign_pkcs1_v15(a, (IoReader){0}, priv, CRYPTO_SHA256, hashed, &err);
+if (BURROW_FAILED(err))
+    return;
+print_error(rsa_verify_pkcs1_v15(&priv->public_key, CRYPTO_SHA256, hashed, old));
+
+// A signature of some other message does not verify.
+Sha256Sum256Ret other = sha256_sum256(text("burrow v0.3.1"));
+Slice other_hashed = slice_from(other.a, sizeof other.a, sizeof other.a, TYPE_BYTE);
+print_error(
+    rsa_verify_pss(&priv->public_key, CRYPTO_SHA256, other_hashed, sig, NULL));
+rsa_private_key_free(priv, a);
+```
+
+A key is a struct of `BigInt` pointers, as in Go, and everything in it comes from the allocator it was made with. `rsa_private_key_free` gives back a key that `rsa_generate_key` made, and an arena does the same for a whole batch. `rsa_generate_key` takes an `IoReader` with nothing in it to mean the system's generator. Signing with PSS and encrypting with OAEP read the reader they are given, as Go's do, so they need a real one, and `crypto_rand_reader` is the one to pass. Given an empty reader they panic, the way Go does with nil.
+
+For encryption, OAEP is the scheme to use, and PKCS #1 v1.5 encryption is only there for old protocols. RSA can only encrypt a message shorter than its key, so in practice it carries a key for a symmetric cipher. The label is bound into the ciphertext, and decrypting with a different one fails:
+
+<!-- example: ../examples/crypto/rsa.c#encrypt -->
+```c
+Error err = BURROW_NO_ERROR;
+RsaPrivateKey *priv = rsa_generate_key(a, (IoReader){0}, 2048, &err);
+if (BURROW_FAILED(err))
+    return;
+
+// The label is not secret, but decrypting needs the same one.
+Slice ct = rsa_encrypt_oaep(a, sha256_new(a), crypto_rand_reader, &priv->public_key,
+                            text("a session key"), text("orders"), &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%d\n", (int)ct.len);
+Slice pt = rsa_decrypt_oaep(a, sha256_new(a), (IoReader){0}, priv, ct,
+                            text("orders"), &err);
+if (BURROW_FAILED(err))
+    return;
+print_text(pt);
+rsa_decrypt_oaep(a, sha256_new(a), (IoReader){0}, priv, ct, text("invoices"), &err);
+print_error(err);
+rsa_private_key_free(priv, a);
+```
+
+Keys shorter than 1024 bits are an error everywhere, as they are since Go 1.24, and the errors have Go's messages. Tests that need small keys can turn the check off with `GODEBUG=rsa1024min=0`:
+
+<!-- example: ../examples/crypto/rsa.c#errors -->
+```c
+Error err = BURROW_NO_ERROR;
+rsa_generate_key(a, (IoReader){0}, 512, &err);
+print_error(err);
+
+err = BURROW_NO_ERROR;
+RsaPrivateKey *priv = rsa_generate_key(a, (IoReader){0}, 1024, &err);
+if (BURROW_FAILED(err))
+    return;
+// OAEP with SHA-256 fits 128 - 2*32 - 2 = 62 bytes in a 1024 bit key.
+Byte big[63] = {0};
+rsa_encrypt_oaep(a, sha256_new(a), crypto_rand_reader, &priv->public_key,
+                 slice_from(big, sizeof big, sizeof big, TYPE_BYTE), (Slice){0},
+                 &err);
+print_error(err);
+err = BURROW_NO_ERROR;
+rsa_sign_pkcs1_v15(a, (IoReader){0}, priv, CRYPTO_SHA256, text("not a hash"), &err);
+print_error(err);
+rsa_private_key_free(priv, a);
+```
+
+Everything that touches the private key is constant time, and so is checking the padding when decrypting. A key put together by hand should go through `rsa_private_key_precompute` before use, which checks it and works out the values that make the private key operations fast.
+
 ## crypto/x509/pkix
 
 `burrow/crypto/x509/pkix.h` has the ASN.1 structures that certificates, CRLs and OCSP share: distinguished names, algorithm identifiers, extensions and the old CRL types. Each one has a type descriptor carrying Go's asn1 struct tags, so `encoding/asn1` reads and writes them with no extra code. A `PkixName` is the friendly form of a name, and `pkix_name_to_rdn_sequence` turns it into the sequence of RDNs that goes on the wire:
@@ -684,3 +1209,208 @@ printf("%d attributes\n", (int)parsed.names.len);
 ```
 
 `names` keeps every attribute the parsed name had, including ones with no field of their own. `extra_names` is for the other direction: attributes put there are written into the name and win over a field of the same type. As in Go, a nil `extra_names` and an empty one are not the same thing when the name is printed, so leave it nil unless you mean to hide the uncommon attributes in `names`.
+
+## crypto/x509
+
+`burrow/crypto/x509.h` is Go's crypto/x509. It covers key formats, object identifiers, certificates, certificate requests, revocation lists and chain verification. Private keys go in and out of PKCS #8 as an `Any`, the same way Go uses `any`, so one call handles RSA, ECDSA, Ed25519, X25519 and ML-DSA keys. PKCS #1 and SEC 1 have calls of their own for RSA and EC keys:
+
+<!-- example: ../examples/crypto/x509.c#pkcs8 -->
+```c
+Byte seed[ED25519_SEED_SIZE] = {0};
+for (int i = 0; i < ED25519_SEED_SIZE; i++)
+    seed[i] = (Byte)i;
+Ed25519PrivateKey priv = ed25519_new_key_from_seed(
+    a, slice_from(seed, sizeof seed, sizeof seed, TYPE_BYTE));
+
+Error err = BURROW_NO_ERROR;
+Slice der = x509_marshal_pkcs8_private_key(
+    a, BURROW_ANY(TYPE_ED25519_PRIVATE_KEY, &priv), &err);
+if (BURROW_FAILED(err))
+    return;
+PemBlock block = {.type = BURROW_S("PRIVATE KEY"), .bytes = der};
+Slice pem = pem_encode_to_memory(a, &block);
+printf("%.*s", (int)pem.len, (const char *)pem.p);
+```
+
+Parsing gives back an `Any` whose type says which kind of key it holds. Public keys use the SubjectPublicKeyInfo form through `x509_parse_pkix_public_key` and `x509_marshal_pkix_public_key`. Handing a key to the wrong parser fails with the same hint Go gives:
+
+<!-- example: ../examples/crypto/x509.c#parse -->
+```c
+Slice rest;
+PemBlock *b = pem_decode(a, pem, &rest);
+Any key = x509_parse_pkcs8_private_key(a, b->bytes, &err);
+if (BURROW_FAILED(err))
+    return;
+if (key.t == TYPE_ED25519_PRIVATE_KEY) {
+    Ed25519PrivateKey *k = key.data;
+    Ed25519PublicKey pub = ed25519_private_key_public(*k, a);
+    Slice spki = x509_marshal_pkix_public_key(
+        a, BURROW_ANY(TYPE_ED25519_PUBLIC_KEY, &pub), &err);
+    print(hex_encode_to_string(a, spki));
+}
+
+// The wrong parser says which one to use.
+x509_parse_pkcs1_private_key(a, b->bytes, &err);
+print(error_text(err));
+```
+
+An `X509OID` holds the DER of an object identifier, so unlike `Asn1ObjectIdentifier` it has no limit on the size of an arc. `x509_parse_oid` reads the dotted form, and the text and binary marshal calls match Go's `encoding.TextMarshaler` and `encoding.BinaryMarshaler` methods:
+
+<!-- example: ../examples/crypto/x509.c#oid -->
+```c
+Error err = BURROW_NO_ERROR;
+X509OID oid = x509_parse_oid(a, BURROW_S("1.3.6.1.4.1.11129.2.4.2"), &err);
+Slice der = x509_oid_marshal_binary(oid, a, &err);
+print(hex_encode_to_string(a, der));
+
+// Arcs past 64 bits are fine too.
+oid = x509_parse_oid(a, BURROW_S("2.25.329800735698586629295641978511506172918"),
+                     &err);
+print(x509_oid_string(oid, a));
+
+print(
+    x509_oid_string(x509_ext_key_usage_oid(X509_EXT_KEY_USAGE_SERVER_AUTH, a), a));
+
+x509_parse_oid(a, BURROW_S("1.2."), &err);
+print(error_text(err));
+```
+
+`x509_create_certificate` signs a template with a parent's key, the same as Go's `CreateCertificate`. Fields left zero get Go's defaults: a CA with no subject key ID gets one from the SHA-256 of its public key, and the signature algorithm follows from the signer. A self-signed certificate is its own parent:
+
+<!-- example: ../examples/crypto/x509.c#create -->
+```c
+Byte seed[ED25519_SEED_SIZE] = {0};
+for (int i = 0; i < ED25519_SEED_SIZE; i++)
+    seed[i] = (Byte)(i + 1);
+Ed25519Signer ca_key;
+CryptoSigner ca_signer = ed25519_private_key_signer(
+    ed25519_new_key_from_seed(
+        a, slice_from(seed, sizeof seed, sizeof seed, TYPE_BYTE)),
+    &ca_key);
+
+X509Certificate tmpl = {0};
+tmpl.serial_number = big_new_int(a, 1);
+tmpl.subject.common_name = BURROW_S("Example Root");
+tmpl.not_before = time_date(2026, TIME_JANUARY, 1, 0, 0, 0, 0, time_utc_loc);
+tmpl.not_after = time_date(2036, TIME_JANUARY, 1, 0, 0, 0, 0, time_utc_loc);
+tmpl.key_usage = X509_KEY_USAGE_CERT_SIGN;
+tmpl.basic_constraints_valid = true;
+tmpl.is_ca = true;
+
+// Self-signed, so the template is its own parent.
+Error err = BURROW_NO_ERROR;
+Slice der = x509_create_certificate(
+    a, (IoReader){0}, &tmpl, &tmpl,
+    BURROW_ANY(TYPE_ED25519_PUBLIC_KEY, &ca_key.pub), ca_signer, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%d bytes\n", (int)der.len);
+```
+
+`x509_parse_certificate` reads the DER back into an `X509Certificate`, with every extension Go understands filled in and the raw bytes of each part kept next to it. `x509_certificate_check_signature_from` checks that a parent signed it:
+
+<!-- example: ../examples/crypto/x509.c#certparse -->
+```c
+X509Certificate *ca = x509_parse_certificate(a, der, &err);
+if (BURROW_FAILED(err))
+    return;
+print(pkix_name_string(ca->subject, a));
+print(x509_signature_algorithm_string(ca->signature_algorithm, a));
+print(hex_encode_to_string(a, ca->subject_key_id));
+print(time_format(ca->not_after, a, TIME_RFC3339));
+err = x509_certificate_check_signature_from(ca, ca);
+printf("signed by itself: %s\n", BURROW_FAILED(err) ? "no" : "yes");
+```
+
+Certificate requests work the same way. The request carries the subject, the names and the public key, and is signed by the key it asks a certificate for:
+
+<!-- example: ../examples/crypto/x509.c#request -->
+```c
+for (int i = 0; i < ED25519_SEED_SIZE; i++)
+    seed[i] = (Byte)(0x80 + i);
+Ed25519Signer leaf_key;
+CryptoSigner leaf_signer = ed25519_private_key_signer(
+    ed25519_new_key_from_seed(
+        a, slice_from(seed, sizeof seed, sizeof seed, TYPE_BYTE)),
+    &leaf_key);
+
+Str host = BURROW_S("www.example.com");
+X509CertificateRequest req = {0};
+req.subject.common_name = host;
+req.dns_names = slice_append(a, slice_nil(TYPE_STRING), &host, 1);
+Slice csr_der =
+    x509_create_certificate_request(a, (IoReader){0}, &req, leaf_signer, &err);
+if (BURROW_FAILED(err))
+    return;
+X509CertificateRequest *csr = x509_parse_certificate_request(a, csr_der, &err);
+if (BURROW_FAILED(err))
+    return;
+err = x509_certificate_request_check_signature(csr);
+printf("request for %.*s: %s\n", (int)csr->subject.common_name.len,
+       csr->subject.common_name.p, BURROW_FAILED(err) ? "bad" : "ok");
+```
+
+A CA then copies what it trusts from the request into a template and signs it. The authority key ID of the new certificate is the subject key ID of the parent:
+
+<!-- example: ../examples/crypto/x509.c#issue -->
+```c
+// The CA signs a certificate for the key in the request.
+X509Certificate leaf_tmpl = {0};
+leaf_tmpl.serial_number = big_new_int(a, 2);
+leaf_tmpl.subject = csr->subject;
+leaf_tmpl.dns_names = csr->dns_names;
+leaf_tmpl.not_before = tmpl.not_before;
+leaf_tmpl.not_after = time_date(2027, TIME_JANUARY, 1, 0, 0, 0, 0, time_utc_loc);
+leaf_tmpl.key_usage = X509_KEY_USAGE_DIGITAL_SIGNATURE;
+X509ExtKeyUsage server = X509_EXT_KEY_USAGE_SERVER_AUTH;
+leaf_tmpl.ext_key_usage = slice_append(a, slice_nil(TYPE_INT), &server, 1);
+Slice leaf_der = x509_create_certificate(a, (IoReader){0}, &leaf_tmpl, ca,
+                                         csr->public_key, ca_signer, &err);
+if (BURROW_FAILED(err))
+    return;
+X509Certificate *leaf = x509_parse_certificate(a, leaf_der, &err);
+if (BURROW_FAILED(err))
+    return;
+print(pkix_name_string(leaf->issuer, a));
+print(hex_encode_to_string(a, leaf->authority_key_id));
+```
+
+`x509_create_revocation_list` and `x509_parse_revocation_list` do the same for CRLs. Parsing does not fail on an extension it does not know. When such an extension is marked critical it goes in `unhandled_critical_extensions`, as in Go, and verification turns the certificate down unless the caller handles it and takes it out of that list.
+
+`x509_certificate_verify` builds chains from a certificate up to a root in `opts.roots`, through any intermediates in `opts.intermediates`, and checks names, validity periods, key usages, name constraints and policies along the way, the way Go's `Certificate.Verify` does. Each chain is an `X509CertificateChain` with the leaf first. A zero `current_time` means now, and with no roots it uses the system pool. When something is wrong the error says what, with Go's wording:
+
+<!-- example: ../examples/crypto/x509.c#verify -->
+```c
+X509CertPool *roots = x509_new_cert_pool(a);
+x509_cert_pool_add_cert(roots, ca);
+X509VerifyOptions opts = {0};
+opts.roots = roots;
+opts.dns_name = BURROW_S("www.example.com");
+opts.current_time = time_date(2026, TIME_JUNE, 1, 0, 0, 0, 0, time_utc_loc);
+Slice chains = x509_certificate_verify(leaf, a, opts, &err);
+if (BURROW_FAILED(err))
+    return;
+X509CertificateChain *chain = chains.p;
+printf("%d chain, %d certificates\n", (int)chains.len, (int)chain[0].len);
+
+opts.dns_name = BURROW_S("mail.example.com");
+x509_certificate_verify(leaf, a, opts, &err);
+print(error_text(err));
+
+opts.dns_name = BURROW_S("www.example.com");
+opts.current_time = time_date(2027, TIME_JUNE, 1, 0, 0, 0, 0, time_utc_loc);
+x509_certificate_verify(leaf, a, opts, &err);
+print(error_text(err));
+
+opts.roots = x509_new_cert_pool(a);
+opts.current_time = time_date(2026, TIME_JUNE, 1, 0, 0, 0, 0, time_utc_loc);
+x509_certificate_verify(leaf, a, opts, &err);
+print(error_text(err));
+```
+
+`x509_system_cert_pool` loads the system roots once, from the usual files and directories on Linux and the BSDs or from `SSL_CERT_FILE` and `SSL_CERT_DIR` when they are set. On macOS, iOS and Windows Go asks the platform to verify instead, and that is not done yet, so there the system pool is empty unless those variables name a file or directory.
+
+`x509_encrypt_pem_block` and `x509_decrypt_pem_block` handle the RFC 1423 `DEK-Info` encryption that old OpenSSL keys use. Go deprecates them because the scheme is weak and a wrong password is not always caught, and they are here for reading old files, not for writing new ones.
+
+One GODEBUG setting from Go applies: `x509rsacrt=0` makes `x509_parse_pkcs1_private_key` work out the CRT values again when the ones in the key are wrong, instead of failing. It is read once from the `GODEBUG` environment variable.
+

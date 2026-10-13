@@ -496,7 +496,7 @@ typedef DriverConn DriverNamedValueChecker;
 
 /* ---------------------------------------------------------- Driver, Connector */
 
-struct DriverDriver;
+struct Driver;
 
 /* driver.Connector, a driver with its configuration already worked out, for
  * sql_open_db. connect may be called from several goroutines at once. ctx is
@@ -505,7 +505,7 @@ typedef struct DriverConnectorVT {
     const Type *self_type;
     DriverConn (*connect)(void *self, Context ctx, Error *err);
     /* The driver the connector belongs to, for sql_db_driver. */
-    struct DriverDriver (*driver)(void *self);
+    struct Driver (*driver)(void *self);
     /* io.Closer, which sql_db_close calls when it is set. */
     Error (*close)(void *self);
 } DriverConnectorVT;
@@ -518,21 +518,21 @@ typedef struct DriverConnector {
 /* driver.Driver, which opens connections from a name in the driver's own
  * format. A driver registers itself with sql_register under a name, and
  * open may be called from several goroutines at once. */
-typedef struct DriverDriverVT {
+typedef struct DriverVT {
     const Type *self_type;
     DriverConn (*open)(void *self, Str name, Error *err);
     /* DriverContext, which parses the name once instead of on every open.
      * database/sql uses the Connector it returns for every connection. */
     DriverConnector (*open_connector)(void *self, Str name, Error *err);
-} DriverDriverVT;
+} DriverVT;
 
-typedef struct DriverDriver {
-    const DriverDriverVT *vt;
+typedef struct Driver {
+    const DriverVT *vt;
     void *data;
-} DriverDriver;
+} Driver;
 
-typedef DriverDriverVT DriverDriverContextVT;
-typedef DriverDriver DriverDriverContext;
+typedef DriverVT DriverDriverContextVT;
+typedef Driver DriverDriverContext;
 
 #ifdef __cplusplus
 }

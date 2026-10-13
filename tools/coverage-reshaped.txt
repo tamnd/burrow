@@ -268,3 +268,9 @@ go/token: method (*FileSet) AddExistingFiles: takes the files as a pointer and a
 go/token: method (*FileSet) Iterate: the callback is a TokenFileFunc, a function pointer with a context argument
 go/token: method (*FileSet) Read: decode is a TokenCodecFunc, a function pointer with a context argument
 go/token: method (*FileSet) Write: encode is a TokenCodecFunc, a function pointer with a context argument
+
+# include/burrow/go/ast.h: a func value is a function pointer with a context
+# argument, and burrow has no reflect.Value, so the field filter gets an Any.
+go/ast: func Inspect: f is an AstInspectFunc, a function pointer with a context argument
+go/ast: func PreorderStack: f is an AstPreorderStackFunc, a function pointer with a context argument
+go/ast: func NotNilFilter: takes an Any, which holds the type and the address a reflect.Value would

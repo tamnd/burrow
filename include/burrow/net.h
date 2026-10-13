@@ -35,6 +35,7 @@
 #include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/net/netip.h"
+#include "burrow/os.h"
 #include "burrow/own.h"
 #include "burrow/slice.h"
 #include "burrow/sync.h"
@@ -684,6 +685,17 @@ BURROW_STATIC(ret) Error net_tcp_conn_set_keep_alive_config(NetTCPConn *c,
 SyscallRawConn net_tcp_conn_syscall_conn(NetTCPConn *c, Error *err);
 SyscallRawConn net_tcp_listener_syscall_conn(NetTCPListener *l, Error *err);
 
+/* TCPConn.File and TCPListener.File: a copy of the socket under c or l as an
+ * OsFile made in a, which the caller closes, and which closing c or l leaves
+ * open. Its name is Go's, the network, the local address, "->" and the remote
+ * one. The copy is in blocking mode once os_file_fd has been asked for it, as
+ * Go's is after Fd, and until then it is in non blocking mode, so that a read
+ * through the OsFile can fail with EAGAIN. On Windows it is a socket from
+ * WSADuplicateSocket that is never in non blocking mode. A NULL c or l is
+ * EINVAL, and a failure is an OpError with Op "file". */
+BURROW_OWNS(ret) OsFile *net_tcp_conn_file(NetTCPConn *c, Alloc *a, Error *err);
+BURROW_OWNS(ret) OsFile *net_tcp_listener_file(NetTCPListener *l, Alloc *a, Error *err);
+
 /* c as a NetConn, and back: Go's conversion to net.Conn and its
  * conn.(*TCPConn), which gives NULL for a NetConn that is not a TCPConn. */
 NetConn net_tcp_conn_as_conn(NetTCPConn *c);
@@ -878,6 +890,9 @@ BURROW_STATIC(ret) Error net_udp_conn_set_write_buffer(NetUDPConn *c, Int bytes)
 /* UDPConn.SyscallConn, as net_tcp_conn_syscall_conn is. */
 SyscallRawConn net_udp_conn_syscall_conn(NetUDPConn *c, Error *err);
 
+/* UDPConn.File, as net_tcp_conn_file is. */
+BURROW_OWNS(ret) OsFile *net_udp_conn_file(NetUDPConn *c, Alloc *a, Error *err);
+
 /* c as a NetConn or a NetPacketConn, and back. */
 NetConn net_udp_conn_as_conn(NetUDPConn *c);
 BURROW_BORROWS(ret) NetUDPConn *net_conn_as_udp_conn(NetConn c);
@@ -1010,6 +1025,11 @@ BURROW_STATIC(ret) Error net_unix_conn_set_write_buffer(NetUnixConn *c, Int byte
 SyscallRawConn net_unix_conn_syscall_conn(NetUnixConn *c, Error *err);
 SyscallRawConn net_unix_listener_syscall_conn(NetUnixListener *l, Error *err);
 
+/* UnixConn.File and UnixListener.File, as the TCP ones are. */
+BURROW_OWNS(ret) OsFile *net_unix_conn_file(NetUnixConn *c, Alloc *a, Error *err);
+BURROW_OWNS(ret) OsFile *net_unix_listener_file(NetUnixListener *l, Alloc *a,
+                                                Error *err);
+
 /* c as a NetConn or a NetPacketConn, and back. */
 NetConn net_unix_conn_as_conn(NetUnixConn *c);
 BURROW_BORROWS(ret) NetUnixConn *net_conn_as_unix_conn(NetConn c);
@@ -1109,6 +1129,9 @@ BURROW_OWNS(ret) NetIPConn *net_listen_ip(Alloc *a, Str network, const NetIPAddr
 
 /* IPConn.SyscallConn. */
 SyscallRawConn net_ip_conn_syscall_conn(NetIPConn *c, Error *err);
+
+/* IPConn.File, as net_tcp_conn_file is. */
+BURROW_OWNS(ret) OsFile *net_ip_conn_file(NetIPConn *c, Alloc *a, Error *err);
 
 /* Read and Write, as NetConn's are, one packet at a time. */
 Int net_ip_conn_read(NetIPConn *c, Slice p, Error *err);
@@ -1619,6 +1642,22 @@ BURROW_OWNS(ret) Slice net_interface_multicast_addrs(const NetInterface *ifi, Al
 
 /* n as a NetAddr, which points at n, and nil for a NULL n. */
 NetAddr net_ip_net_as_addr(const NetIPNet *n);
+
+/* ------------------------------------------------------------------- files */
+
+/* FileConn, FileListener and FilePacketConn: a connection, listener or packet
+ * connection made in a from a copy of the socket in f, which f keeps, so the
+ * caller closes both. What comes back is a TCPConn, UDPConn, IPConn or
+ * UnixConn, or a TCPListener or UnixListener, by the socket's family and type,
+ * and one that is not of the kind asked for is EINVAL. Failures are OpErrors
+ * with Op "file", Net "file+net" and the file's name as the address, as in
+ * Go. f is left in blocking mode, since getting at its descriptor does that,
+ * and the copy is put in non blocking mode for the poller. A UnixListener
+ * made this way does not remove its socket file when it closes. These give
+ * ENOSYS on WASI for now. */
+BURROW_OWNS(ret) NetConn net_file_conn(Alloc *a, OsFile *f, Error *err);
+BURROW_OWNS(ret) NetListener net_file_listener(Alloc *a, OsFile *f, Error *err);
+BURROW_OWNS(ret) NetPacketConn net_file_packet_conn(Alloc *a, OsFile *f, Error *err);
 
 /* ------------------------------------------------------------- descriptors */
 

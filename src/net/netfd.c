@@ -578,6 +578,134 @@ Error burrow__netfd_accept(burrow__NetFD *fd, burrow__NetFD *out) {
     return BURROW_NO_ERROR;
 }
 
+/* ------------------------------------------------------------------ files */
+
+/* What the dup in File and in newFileFD fails with: on Unix the fcntl's Errno
+ * in an os.SyscallError, as poll.DupCloseOnExec names it, and on Windows the
+ * Errno of dupSocket as it is. */
+static Error nf_dup_error(PalErrno pe) {
+#if defined(BURROW_OS_WINDOWS)
+    return burrow__os_errno(pe);
+#else
+    return nf_syscall_error(NF_LIT("fcntl"), pe);
+#endif
+}
+
+static Byte *nf_put(Byte *p, Str s) {
+    if (s.len > 0)
+        memcpy(p, s.p, (size_t)s.len);
+    return p + s.len;
+}
+
+OsFile *burrow__netfd_dup(burrow__NetFD *fd, NetAddr laddr, NetAddr raddr, Alloc *a,
+                          Error *err) {
+    Error e = burrow__pfd_incref(&fd->pfd);
+    if (BURROW_FAILED(e)) {
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    PalErrno pe = PAL_OK;
+    int64_t s = pal_socket_dup(fd->pfd.sysfd, &pe);
+    (void)burrow__pfd_decref(&fd->pfd);
+    if (s < 0) {
+        BURROW_OUT(err, nf_dup_error(pe));
+        return NULL;
+    }
+    /* netFD.name, in an arena of its own, since the file keeps a copy. */
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *sa = arena_allocator(&ar);
+    Str ls = laddr.vt != NULL ? laddr.vt->string(laddr.data, sa) : BURROW_STR_EMPTY;
+    Str rs = raddr.vt != NULL ? raddr.vt->string(raddr.data, sa) : BURROW_STR_EMPTY;
+    Int n = fd->net.len + 1 + ls.len + 2 + rs.len;
+    Byte *name = (Byte *)mem_alloc_nozero(sa, (size_t)n, 1);
+    OsFile *f = NULL;
+    if (name != NULL) {
+        Byte *p = nf_put(name, fd->net);
+        p = nf_put(p, NF_LIT(":"));
+        p = nf_put(p, ls);
+        p = nf_put(p, NF_LIT("->"));
+        (void)nf_put(p, rs);
+        f = burrow__os_new_socket_file(a, s, str_from_bytes(name, n));
+    }
+    arena_free(&ar);
+    if (f == NULL) {
+        (void)pal_socket_close(s, NULL);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return f;
+}
+
+/* The network of the address Go's addrFunc makes for a socket of this family
+ * and type, which becomes the netFD's, or nothing for a pair it has no
+ * address for. */
+static Str nf_file_net(int32_t family, int32_t sotype) {
+    if (family == PAL_AF_UNIX) {
+        if (sotype == PAL_SOCK_STREAM)
+            return NF_LIT("unix");
+        if (sotype == PAL_SOCK_DGRAM)
+            return NF_LIT("unixgram");
+        if (sotype == PAL_SOCK_SEQPACKET)
+            return NF_LIT("unixpacket");
+        return BURROW_STR_EMPTY;
+    }
+    if (sotype == PAL_SOCK_STREAM)
+        return NF_LIT("tcp");
+    if (sotype == PAL_SOCK_DGRAM)
+        return NF_LIT("udp");
+    if (sotype == PAL_SOCK_RAW)
+        return NF_LIT("ip");
+    return BURROW_STR_EMPTY;
+}
+
+/* A copy closed because something after the dup failed, with that error. */
+static Error nf_file_fail(int64_t s, Error e) {
+    (void)pal_socket_close(s, NULL);
+    return e;
+}
+
+Error burrow__netfd_file_sock(OsFile *f, burrow__NetFileSock *out) {
+    memset(out, 0, sizeof *out);
+    out->s = -1;
+    /* dupFileSocket. Fd puts f in blocking mode, as it does in Go, and the
+     * copy shares that with f until it is made non blocking again. */
+    PalErrno pe = PAL_OK;
+    int64_t s = pal_socket_dup((int64_t)(intptr_t)os_file_fd(f), &pe);
+    if (s < 0)
+        return nf_dup_error(pe);
+    if (!pal_set_nonblock(s, true, &pe))
+        return nf_file_fail(s, nf_syscall_error(NF_LIT("setnonblock"), pe));
+    int64_t sotype = 0;
+    if (!pal_getsockopt(s, PAL_SO_TYPE, &sotype, &pe))
+        return nf_file_fail(s, nf_syscall_error(NF_LIT("getsockopt"), pe));
+    if (!pal_getsockname(s, &out->laddr, &pe))
+        return nf_file_fail(s, nf_syscall_error(NF_LIT("getsockname"), pe));
+    if (!pal_getpeername(s, &out->raddr, &pe))
+        memset(&out->raddr, 0, sizeof out->raddr);
+    int32_t family = out->laddr.family;
+    if (family != PAL_AF_INET && family != PAL_AF_INET6 && family != PAL_AF_UNIX)
+        return nf_file_fail(s, burrow__os_errno(PAL_EPROTONOSUPPORT));
+    out->s = s;
+    out->family = family;
+    out->sotype = (int32_t)sotype;
+    out->net = nf_file_net(family, out->sotype);
+    return BURROW_NO_ERROR;
+}
+
+Error burrow__netfd_from_file(burrow__NetFD *fd, const burrow__NetFileSock *fs) {
+    nf_new(fd, fs->s, fs->family, fs->sotype, fs->net);
+    Error e = nf_init(fd);
+    if (BURROW_FAILED(e)) {
+        (void)burrow__netfd_close(fd);
+        return e;
+    }
+    fd->laddr = fs->laddr;
+    fd->raddr = fs->raddr;
+    return BURROW_NO_ERROR;
+}
+
 /* --------------------------------------------------------------- the calls */
 
 Int burrow__netfd_read(burrow__NetFD *fd, Slice p, Error *err) {

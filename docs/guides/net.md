@@ -642,6 +642,60 @@ arena_free(&ar);
 
 Linux joins by the interface's index. macOS, the BSDs and Windows join by one of the interface's IPv4 addresses, so there an interface with no IPv4 address fails with "no such multicast network interface", which is Go's error. Go points anything more involved at golang.org/x/net/ipv4 and ipv6, which burrow does not have yet.
 
+## Sockets as files
+
+Each connection and listener has Go's `File` method, `net_tcp_conn_file`, `net_tcp_listener_file` and the rest, which hands back a copy of the socket as an `OsFile`. The copy stays open when the connection closes, and the caller closes it. `net_file_conn`, `net_file_listener` and `net_file_packet_conn` go the other way, which is how a socket handed over by a parent process or a service manager becomes a connection again. What comes back depends on the socket's family and type, so a TCP socket becomes a TCPConn and a datagram Unix socket a UnixConn, and asking for a listener from a socket that is not listening gives EINVAL:
+
+<!-- example: ../examples/net/file.c#file -->
+```c
+/* A copy of the listening socket as a file, which outlives the listener. */
+NetAddr was = l.vt->addr(l.data);
+Str before = was.vt->string(was.data, a);
+OsFile *f =
+    net_tcp_listener_file(net_listener_as_tcp_listener(l), heap_allocator(), &err);
+net_listener_free(l);
+if (f == NULL) {
+    fmt_printf_v("%v\n", err);
+    arena_free(&ar);
+    return;
+}
+
+/* And a listener again, from the file, on the same address. */
+NetListener l2 = net_file_listener(heap_allocator(), f, &err);
+(void)os_file_close(f);
+os_file_free(f);
+if (l2.vt == NULL) {
+    fmt_printf_v("%v\n", err);
+    arena_free(&ar);
+    return;
+}
+NetAddr now = l2.vt->addr(l2.data);
+Str after = now.vt->string(now.data, a);
+printf("same address: %s\n", str_eq(before, after) ? "yes" : "no");
+
+SyncWaitGroup wg = {0};
+sync_wait_group_go(&wg, BURROW_FN(Func, dial, &now));
+NetConn c = l2.vt->accept(l2.data, &err);
+if (c.vt != NULL) {
+    NetAddr ra = c.vt->remote_addr(c.data);
+    Str network = ra.vt->network(ra.data);
+    printf("accepted a %.*s connection\n", (int)network.len,
+           (const char *)network.p);
+    net_conn_free(c);
+}
+sync_wait_group_wait(&wg);
+net_listener_free(l2);
+```
+
+That prints:
+
+```
+same address: yes
+accepted a tcp connection
+```
+
+The file keeps its copy in non blocking mode until something asks for its descriptor with `os_file_fd`, which puts it in blocking mode first, as Go's `Fd` does, since code that takes a descriptor from a connection's file has always had a blocking one from Go. The connection made from a file gets a copy of its own, in non blocking mode for the poller, and leaves the file's alone. A Unix listener made from a file does not remove its socket file when it closes. On Windows the copy comes from `WSADuplicateSocket` and is never put in non blocking mode. WASI cannot copy a socket yet, so these give ENOSYS there.
+
 ## Dial and Listen
 
 `net_dial` and `net_listen` are Go's `Dial` and `Listen`. They take the network and the address as text, look up a host name and a service name for the port, and give back a `NetConn` or a `NetListener` whatever the network. `NetDialer` and `NetListenConfig` are the structs behind them, with Go's fields: a timeout, a deadline, a local address, the keep-alive settings, a resolver, and a `control` callback that sees the socket before it connects. The zero value of either works, and so does passing NULL.

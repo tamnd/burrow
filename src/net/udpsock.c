@@ -299,6 +299,35 @@ NetUDPConn *net_dial_udp(Alloc *a, Str network, const NetUDPAddr *laddr,
     return burrow__net_dial_udp(a, NULL, network, laddr, raddr, err);
 }
 
+OsFile *net_udp_conn_file(NetUDPConn *c, Alloc *a, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return NULL;
+    }
+    return burrow__conn_file(&c->c, a, err);
+}
+
+NetUDPConn *burrow__net_udp_conn_from_file(Alloc *a, const burrow__NetFileSock *fs,
+                                           Error *err) {
+    NetUDPConn *c =
+        (NetUDPConn *)mem_alloc(a, sizeof(NetUDPConn), _Alignof(NetUDPConn));
+    if (c == NULL) {
+        (void)pal_socket_close(fs->s, NULL);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    c->c.alloc = a;
+    Error e = burrow__netfd_from_file(&c->c.fd, fs);
+    if (BURROW_FAILED(e)) {
+        mem_free(a, c, sizeof(NetUDPConn), _Alignof(NetUDPConn));
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    nu_new_conn(c);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return c;
+}
+
 SyscallRawConn net_udp_conn_syscall_conn(NetUDPConn *c, Error *err) {
     if (c == NULL) {
         BURROW_OUT(err, burrow__net_einval());

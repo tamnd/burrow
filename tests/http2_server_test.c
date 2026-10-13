@@ -3699,7 +3699,8 @@ static bool h2t_big_start(H2tTester *st, TestingT *t) {
  * negative, and a Via header when via is true. */
 static bool h2t_write_prio_get(H2tTester *st, uint32_t id, int urgency, bool via) {
     char prio[16];
-    Str kv[4];
+    Str kv[4] = {BURROW_STR_EMPTY, BURROW_STR_EMPTY, BURROW_STR_EMPTY,
+                 BURROW_STR_EMPTY};
     size_t n = 0;
     if (urgency >= 0) {
         (void)snprintf(prio, sizeof prio, "u=%d", urgency);

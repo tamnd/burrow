@@ -1073,8 +1073,11 @@ static NetIPAddr *dl_ip_addr_from(NetipAddr ip) {
 
 NetIPConn *net_dialer_dial_ip(const NetDialer *d, Alloc *a, Context ctx, Str network,
                               NetipAddr laddr, NetipAddr raddr, Error *err) {
-    if (d == NULL)
-        d = &dl_zero_dialer;
+    NetDialer zero;
+    if (d == NULL) {
+        memset(&zero, 0, sizeof zero);
+        d = &zero;
+    }
     DlCtx dc;
     ArenaMark m = error_mark();
     NetIPAddr *la = dl_ip_addr_from(laddr);

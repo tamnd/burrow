@@ -810,10 +810,10 @@ Error sql_convert_assign(Alloc *a, DriverScanContext scan_ctx, Any dest,
 
 /* ---------------------------------------------------- driverArgsConnLocked */
 
-static Str sc_describe_named_value(const DriverNamedValue *nv) {
+static Str sc_describe_named_value(Alloc *a, const DriverNamedValue *nv) {
     if (nv->name.len == 0)
-        return fmt_sprintf_v(heap_allocator(), "$%d", nv->ordinal);
-    return fmt_sprintf_v(heap_allocator(), "with name %q", nv->name);
+        return fmt_sprintf_v(a, "$%d", nv->ordinal);
+    return fmt_sprintf_v(a, "with name %q", nv->name);
 }
 
 static Error sc_validate_named_value_name(Str name) {
@@ -986,7 +986,7 @@ Slice burrow__sql_driver_args_conn_locked(Alloc *a, DriverConn ci, const DriverS
                 continue;
             }
             BURROW_OUT(err, fmt_errorf_v("sql: converting argument %s type: %w",
-                                         sc_describe_named_value(nv), e));
+                                         sc_describe_named_value(a, nv), e));
             return (Slice){NULL, 0, 0, TYPE_DRIVER_NAMED_VALUE};
         }
     }

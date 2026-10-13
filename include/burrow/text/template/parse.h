@@ -431,10 +431,10 @@ BURROW_OWNS(ret) ParseIdentifierNode *parse_new_identifier(Alloc *a, Str ident);
 
 /* IdentifierNode.SetPos and SetTree. Each returns i, so that they chain the way
  * Go's do. */
-ParseIdentifierNode *parse_identifier_node_set_pos(ParseIdentifierNode *i,
-                                                   ParsePos pos);
-ParseIdentifierNode *parse_identifier_node_set_tree(ParseIdentifierNode *i,
-                                                    ParseTree *t);
+BURROW_BORROWS(ret, i) ParseIdentifierNode *
+parse_identifier_node_set_pos(ParseIdentifierNode *i, ParsePos pos);
+BURROW_BORROWS(ret, i) ParseIdentifierNode *
+parse_identifier_node_set_tree(ParseIdentifierNode *i, ParseTree *t);
 
 /* ChainNode.Add: appends a field, which has to start with a dot, as in Go,
  * which panics on one that does not. The field's bytes are not copied. False
@@ -480,8 +480,10 @@ BURROW_OWNS(ret) ParseTree *parse_new(Alloc *a, Str name, Slice funcs);
  * and those trees go into tree_set, a Map from Str to ParseTree pointers, under
  * their names. Returns t, or NULL with the error in *err. funcs, when not
  * empty, are the function maps for this parse. */
-ParseTree *parse_tree_parse(ParseTree *t, Str text, Str left_delim, Str right_delim,
-                            Map *tree_set, Slice funcs, Error *err);
+BURROW_BORROWS(ret, t) ParseTree *parse_tree_parse(ParseTree *t, Str text,
+                                                   Str left_delim, Str right_delim,
+                                                   Map *tree_set, Slice funcs,
+                                                   Error *err);
 
 /* Parse: parses text as a template called name, in a, and returns the map of
  * the trees it holds, keyed by name, as parse_tree_parse fills one in. On an

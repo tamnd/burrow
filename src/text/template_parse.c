@@ -45,7 +45,7 @@ Int burrow__parse_max_stack_depth = 10000;
 
 /* The parser's part of a Tree: the fields Go's Tree has for the parse, which
  * live on the C stack for as long as it runs. */
-typedef struct TpParser {
+typedef struct TppParser {
     burrow__Lexer *lex;
     burrow__Item token[3]; /* three-token lookahead for parser */
     Int peek_count;
@@ -53,27 +53,27 @@ typedef struct TpParser {
     Map *tree_set;
     Int action_line; /* line of left delim starting action */
     Int range_depth;
-    Int stack_depth; /* depth of nested parenthesized expressions */
+    Int stack_depth;  /* depth of nested parenthesized expressions */
     Int action_depth; /* depth of nested actions, for the stack check */
     uintptr_t stack_floor;
-} TpParser;
+} TppParser;
 
-static TpParser *tp_p(ParseTree *t) {
-    return (TpParser *)t->burrow__state;
+static TppParser *tpp_p(ParseTree *t) {
+    return (TppParser *)t->burrow__state;
 }
 
 /* -------------------------------------------------------------- errors */
 
-typedef struct TpError {
+typedef struct TppError {
     Error err;
-} TpError;
+} TppError;
 
-static const Type tp_error_desc = {
+static const Type tpp_error_desc = {
     BURROW_S_INIT("parseError"),
     BURROW_S_INIT("text/template/parse"),
     KIND_STRUCT,
-    (uint32_t)sizeof(TpError),
-    (uint16_t)_Alignof(TpError),
+    (uint32_t)sizeof(TppError),
+    (uint16_t)_Alignof(TppError),
     0,
     0,
     NULL,
@@ -85,41 +85,41 @@ static const Type tp_error_desc = {
     NULL,
 };
 
-BURROW_NORETURN static void tp_raise(Error err) {
-    TpError e = {err};
-    panic((Any){&tp_error_desc, &e});
+BURROW_NORETURN static void tpp_raise(Error err) {
+    TppError e = {err};
+    panic((Any){&tpp_error_desc, &e});
 }
 
-BURROW_NORETURN static void tp_oom(void) {
-    tp_raise(burrow_err_out_of_memory);
+BURROW_NORETURN static void tpp_oom(void) {
+    tpp_raise(burrow_err_out_of_memory);
 }
 
 /* errorf: formats the error with the template's name and the line of the
  * current token, and stops the parse. msg is the formatted text. */
-BURROW_NORETURN static void tp_errorf(ParseTree *t, Str msg) {
+BURROW_NORETURN static void tpp_errorf(ParseTree *t, Str msg) {
     t->root = NULL;
-    tp_raise(fmt_errorf_v("template: %s:%d: %s", t->parse_name, tp_p(t)->token[0].line,
-                          msg));
+    tpp_raise(fmt_errorf_v("template: %s:%d: %s", t->parse_name,
+                           tpp_p(t)->token[0].line, msg));
 }
 
-#define tp_errorf_v(t, ...)                                                            \
-    tp_errorf((t), fmt_sprintf_v(error_allocator(), __VA_ARGS__))
+#define tpp_errorf_v(t, ...)                                                           \
+    tpp_errorf((t), fmt_sprintf_v(error_allocator(), __VA_ARGS__))
 
 /* error: errorf with err's text. */
-BURROW_NORETURN static void tp_error(ParseTree *t, Error err) {
+BURROW_NORETURN static void tpp_error(ParseTree *t, Error err) {
     if (errors_is(err, burrow_err_out_of_memory))
-        tp_oom();
-    tp_errorf(t, error_text(err));
+        tpp_oom();
+    tpp_errorf(t, error_text(err));
 }
 
-static Str tp_item_string(burrow__Item i) {
+static Str tpp_item_string(burrow__Item i) {
     return burrow__parse_item_string(i, error_allocator());
 }
 
 /* unexpected: complains about token and stops the parse. */
-BURROW_NORETURN static void tp_unexpected(ParseTree *t, burrow__Item token,
-                                          const char *context) {
-    TpParser *p = tp_p(t);
+BURROW_NORETURN static void tpp_unexpected(ParseTree *t, burrow__Item token,
+                                           const char *context) {
+    TppParser *p = tpp_p(t);
     if (token.typ == BURROW__ITEM_ERROR) {
         Str extra = BURROW_STR_EMPTY;
         if (p->action_line != 0 && p->action_line != token.line) {
@@ -131,16 +131,16 @@ BURROW_NORETURN static void tp_unexpected(ParseTree *t, burrow__Item token,
                 extra = str_from_bytes(extra.p + skip, extra.len - skip);
             }
         }
-        tp_errorf_v(t, "%s%s", tp_item_string(token), extra);
+        tpp_errorf_v(t, "%s%s", tpp_item_string(token), extra);
     }
-    tp_errorf_v(t, "unexpected %s in %s", tp_item_string(token), context);
+    tpp_errorf_v(t, "unexpected %s in %s", tpp_item_string(token), context);
 }
 
 /* ------------------------------------------------------------- tokens */
 
 /* next: the next token. */
-static burrow__Item tp_next(ParseTree *t) {
-    TpParser *p = tp_p(t);
+static burrow__Item tpp_next(ParseTree *t) {
+    TppParser *p = tpp_p(t);
     if (p->peek_count > 0)
         p->peek_count--;
     else
@@ -149,30 +149,30 @@ static burrow__Item tp_next(ParseTree *t) {
 }
 
 /* backup: backs the input stream up one token. */
-static void tp_backup(ParseTree *t) {
-    tp_p(t)->peek_count++;
+static void tpp_backup(ParseTree *t) {
+    tpp_p(t)->peek_count++;
 }
 
 /* backup2: backs the input stream up two tokens. The zeroth token is already
  * there. */
-static void tp_backup2(ParseTree *t, burrow__Item t1) {
-    TpParser *p = tp_p(t);
+static void tpp_backup2(ParseTree *t, burrow__Item t1) {
+    TppParser *p = tpp_p(t);
     p->token[1] = t1;
     p->peek_count = 2;
 }
 
 /* backup3: backs the input stream up three tokens. The zeroth token is
  * already there. Reverse order: we're pushing back. */
-static void tp_backup3(ParseTree *t, burrow__Item t2, burrow__Item t1) {
-    TpParser *p = tp_p(t);
+static void tpp_backup3(ParseTree *t, burrow__Item t2, burrow__Item t1) {
+    TppParser *p = tpp_p(t);
     p->token[1] = t1;
     p->token[2] = t2;
     p->peek_count = 3;
 }
 
 /* peek: the next token, without taking it. */
-static burrow__Item tp_peek(ParseTree *t) {
-    TpParser *p = tp_p(t);
+static burrow__Item tpp_peek(ParseTree *t) {
+    TppParser *p = tpp_p(t);
     if (p->peek_count > 0)
         return p->token[p->peek_count - 1];
     p->peek_count = 1;
@@ -181,10 +181,10 @@ static burrow__Item tp_peek(ParseTree *t) {
 }
 
 /* nextNonSpace: the next token that is not a space. */
-static burrow__Item tp_next_non_space(ParseTree *t) {
+static burrow__Item tpp_next_non_space(ParseTree *t) {
     burrow__Item token;
     for (;;) {
-        token = tp_next(t);
+        token = tpp_next(t);
         if (token.typ != BURROW__ITEM_SPACE)
             break;
     }
@@ -192,27 +192,27 @@ static burrow__Item tp_next_non_space(ParseTree *t) {
 }
 
 /* peekNonSpace: the next token that is not a space, without taking it. */
-static burrow__Item tp_peek_non_space(ParseTree *t) {
-    burrow__Item token = tp_next_non_space(t);
-    tp_backup(t);
+static burrow__Item tpp_peek_non_space(ParseTree *t) {
+    burrow__Item token = tpp_next_non_space(t);
+    tpp_backup(t);
     return token;
 }
 
 /* expect: the next token, which has to be of the expected type. */
-static burrow__Item tp_expect(ParseTree *t, burrow__ItemType expected,
-                              const char *context) {
-    burrow__Item token = tp_next_non_space(t);
+static burrow__Item tpp_expect(ParseTree *t, burrow__ItemType expected,
+                               const char *context) {
+    burrow__Item token = tpp_next_non_space(t);
     if (token.typ != expected)
-        tp_unexpected(t, token, context);
+        tpp_unexpected(t, token, context);
     return token;
 }
 
 /* expectOneOf: the next token, which has to be one of two types. */
-static burrow__Item tp_expect_one_of(ParseTree *t, burrow__ItemType expected1,
-                                     burrow__ItemType expected2, const char *context) {
-    burrow__Item token = tp_next_non_space(t);
+static burrow__Item tpp_expect_one_of(ParseTree *t, burrow__ItemType expected1,
+                                      burrow__ItemType expected2, const char *context) {
+    burrow__Item token = tpp_next_non_space(t);
     if (token.typ != expected1 && token.typ != expected2)
-        tp_unexpected(t, token, context);
+        tpp_unexpected(t, token, context);
     return token;
 }
 
@@ -220,11 +220,11 @@ static burrow__Item tp_expect_one_of(ParseTree *t, burrow__ItemType expected1,
 
 /* How deep the parse goes before it asks the thread for its stack bounds,
  * which is a system call on some systems. */
-enum { TP_THREAD_CHECK_AFTER = 32 };
+enum { TPP_THREAD_CHECK_AFTER = 32 };
 
-#define TP_STACK_MARGIN ((uintptr_t)64 << 10)
+#define TPP_STACK_MARGIN ((uintptr_t)64 << 10)
 
-static uintptr_t tp_stack_here(void) {
+static uintptr_t tpp_stack_here(void) {
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(BURROW_OS_WASI)
     return (uintptr_t)__builtin_frame_address(0);
 #elif defined(_MSC_VER)
@@ -239,7 +239,7 @@ static uintptr_t tp_stack_here(void) {
 /* Whether the stack is too low to go deeper. stack_floor is 0 before the first
  * look, 1 when the bounds cannot be had, and 2 on a thread whose bounds are
  * left until the nesting is deep. */
-static bool tp_stack_low(TpParser *p, Int depth) {
+static bool tpp_stack_low(TppParser *p, Int depth) {
 #if defined(BURROW_OS_WASI)
     (void)p;
     (void)depth;
@@ -248,158 +248,159 @@ static bool tp_stack_low(TpParser *p, Int depth) {
     if (p->stack_floor == 0) {
         burrow__Stack *s = burrow__stack_current();
         if (s != NULL && s->lo != NULL)
-            p->stack_floor = (uintptr_t)s->lo + TP_STACK_MARGIN;
+            p->stack_floor = (uintptr_t)s->lo + TPP_STACK_MARGIN;
         else
             p->stack_floor = 2;
     }
     if (p->stack_floor == 2) {
-        if (depth < TP_THREAD_CHECK_AFTER)
+        if (depth < TPP_THREAD_CHECK_AFTER)
             return false;
         void *lo = NULL;
         if (!burrow__thread_stack_limit(&lo))
             lo = NULL;
-        p->stack_floor = lo == NULL ? 1 : (uintptr_t)lo + TP_STACK_MARGIN;
+        p->stack_floor = lo == NULL ? 1 : (uintptr_t)lo + TPP_STACK_MARGIN;
     }
     if (p->stack_floor == 1)
         return false;
-    return tp_stack_here() < p->stack_floor;
+    return tpp_stack_here() < p->stack_floor;
 #endif
 }
 
-static void tp_check_stack(ParseTree *t, Int depth) {
-    if (tp_stack_low(tp_p(t), depth))
-        tp_errorf(t, BURROW_S("max expression depth exceeded"));
+static void tpp_check_stack(ParseTree *t, Int depth) {
+    if (tpp_stack_low(tpp_p(t), depth))
+        tpp_errorf(t, BURROW_S("max expression depth exceeded"));
 }
 
 /* -------------------------------------------------------------- nodes */
 
-static void *tp_new_node(ParseTree *t, size_t size, ParseNodeType typ, ParsePos pos) {
+static void *tpp_new_node(ParseTree *t, size_t size, ParseNodeType typ, ParsePos pos) {
     void *n = burrow__parse_node_new(t->a, size, typ, pos, t);
     if (n == NULL)
-        tp_oom();
+        tpp_oom();
     return n;
 }
 
-#define TP_NEW(t, T, typ, pos) ((T *)tp_new_node((t), sizeof(T), (typ), (pos)))
+#define TPP_NEW(t, T, typ, pos) ((T *)tpp_new_node((t), sizeof(T), (typ), (pos)))
 
-static void tp_append(ParseTree *t, Slice *s, const Type *elem_type, const void *elem) {
+static void tpp_append(ParseTree *t, Slice *s, const Type *elem_type,
+                       const void *elem) {
     if (!burrow__parse_append(t->a, s, elem_type, elem))
-        tp_oom();
+        tpp_oom();
 }
 
-static void tp_append_node(ParseTree *t, Slice *s, ParseNode n) {
-    tp_append(t, s, TYPE_UNSAFE_POINTER, &n);
+static void tpp_append_node(ParseTree *t, Slice *s, ParseNode n) {
+    tpp_append(t, s, TYPE_UNSAFE_POINTER, &n);
 }
 
-static ParseNode tp_node(void *n) {
+static ParseNode tpp_node(void *n) {
     return (ParseNode)n;
 }
 
-static ParseListNode *tp_new_list(ParseTree *t, ParsePos pos) {
-    return TP_NEW(t, ParseListNode, PARSE_NODE_LIST, pos);
+static ParseListNode *tpp_new_list(ParseTree *t, ParsePos pos) {
+    return TPP_NEW(t, ParseListNode, PARSE_NODE_LIST, pos);
 }
 
-static ParseNode tp_new_text(ParseTree *t, ParsePos pos, Str text) {
-    ParseTextNode *n = TP_NEW(t, ParseTextNode, PARSE_NODE_TEXT, pos);
+static ParseNode tpp_new_text(ParseTree *t, ParsePos pos, Str text) {
+    ParseTextNode *n = TPP_NEW(t, ParseTextNode, PARSE_NODE_TEXT, pos);
     n->text = slice_from_str(t->a, text);
     if (n->text.p == NULL && text.len > 0)
-        tp_oom();
-    return tp_node(n);
+        tpp_oom();
+    return tpp_node(n);
 }
 
-static ParseNode tp_new_comment(ParseTree *t, ParsePos pos, Str text) {
-    ParseCommentNode *n = TP_NEW(t, ParseCommentNode, PARSE_NODE_COMMENT, pos);
+static ParseNode tpp_new_comment(ParseTree *t, ParsePos pos, Str text) {
+    ParseCommentNode *n = TPP_NEW(t, ParseCommentNode, PARSE_NODE_COMMENT, pos);
     n->text = text;
-    return tp_node(n);
+    return tpp_node(n);
 }
 
-static ParsePipeNode *tp_new_pipeline(ParseTree *t, ParsePos pos, Int line) {
-    ParsePipeNode *n = TP_NEW(t, ParsePipeNode, PARSE_NODE_PIPE, pos);
+static ParsePipeNode *tpp_new_pipeline(ParseTree *t, ParsePos pos, Int line) {
+    ParsePipeNode *n = TPP_NEW(t, ParsePipeNode, PARSE_NODE_PIPE, pos);
     n->line = line;
     return n;
 }
 
-static ParseNode tp_new_action(ParseTree *t, ParsePos pos, Int line,
-                               ParsePipeNode *pipe) {
-    ParseActionNode *n = TP_NEW(t, ParseActionNode, PARSE_NODE_ACTION, pos);
+static ParseNode tpp_new_action(ParseTree *t, ParsePos pos, Int line,
+                                ParsePipeNode *pipe) {
+    ParseActionNode *n = TPP_NEW(t, ParseActionNode, PARSE_NODE_ACTION, pos);
     n->line = line;
     n->pipe = pipe;
-    return tp_node(n);
+    return tpp_node(n);
 }
 
-static ParseCommandNode *tp_new_command(ParseTree *t, ParsePos pos) {
-    return TP_NEW(t, ParseCommandNode, PARSE_NODE_COMMAND, pos);
+static ParseCommandNode *tpp_new_command(ParseTree *t, ParsePos pos) {
+    return TPP_NEW(t, ParseCommandNode, PARSE_NODE_COMMAND, pos);
 }
 
-static Slice tp_split(ParseTree *t, Str s) {
+static Slice tpp_split(ParseTree *t, Str s) {
     Slice parts = strings_split(t->a, s, BURROW_S("."));
     if (parts.p == NULL)
-        tp_oom();
+        tpp_oom();
     return parts;
 }
 
-static ParseVariableNode *tp_new_variable(ParseTree *t, ParsePos pos, Str ident) {
-    ParseVariableNode *n = TP_NEW(t, ParseVariableNode, PARSE_NODE_VARIABLE, pos);
-    n->ident = tp_split(t, ident);
+static ParseVariableNode *tpp_new_variable(ParseTree *t, ParsePos pos, Str ident) {
+    ParseVariableNode *n = TPP_NEW(t, ParseVariableNode, PARSE_NODE_VARIABLE, pos);
+    n->ident = tpp_split(t, ident);
     return n;
 }
 
-static ParseNode tp_new_dot(ParseTree *t, ParsePos pos) {
-    return tp_node(TP_NEW(t, ParseDotNode, PARSE_NODE_DOT, pos));
+static ParseNode tpp_new_dot(ParseTree *t, ParsePos pos) {
+    return tpp_node(TPP_NEW(t, ParseDotNode, PARSE_NODE_DOT, pos));
 }
 
-static ParseNode tp_new_nil(ParseTree *t, ParsePos pos) {
-    return tp_node(TP_NEW(t, ParseNilNode, PARSE_NODE_NIL, pos));
+static ParseNode tpp_new_nil(ParseTree *t, ParsePos pos) {
+    return tpp_node(TPP_NEW(t, ParseNilNode, PARSE_NODE_NIL, pos));
 }
 
-static ParseNode tp_new_field(ParseTree *t, ParsePos pos, Str ident) {
-    ParseFieldNode *n = TP_NEW(t, ParseFieldNode, PARSE_NODE_FIELD, pos);
+static ParseNode tpp_new_field(ParseTree *t, ParsePos pos, Str ident) {
+    ParseFieldNode *n = TPP_NEW(t, ParseFieldNode, PARSE_NODE_FIELD, pos);
     /* [1:] to drop leading period */
-    n->ident = tp_split(t, str_from_bytes(ident.p + 1, ident.len - 1));
-    return tp_node(n);
+    n->ident = tpp_split(t, str_from_bytes(ident.p + 1, ident.len - 1));
+    return tpp_node(n);
 }
 
-static ParseChainNode *tp_new_chain(ParseTree *t, ParsePos pos, ParseNode node) {
-    ParseChainNode *n = TP_NEW(t, ParseChainNode, PARSE_NODE_CHAIN, pos);
+static ParseChainNode *tpp_new_chain(ParseTree *t, ParsePos pos, ParseNode node) {
+    ParseChainNode *n = TPP_NEW(t, ParseChainNode, PARSE_NODE_CHAIN, pos);
     n->node = node;
     return n;
 }
 
-static ParseNode tp_new_bool(ParseTree *t, ParsePos pos, bool true_) {
-    ParseBoolNode *n = TP_NEW(t, ParseBoolNode, PARSE_NODE_BOOL, pos);
+static ParseNode tpp_new_bool(ParseTree *t, ParsePos pos, bool true_) {
+    ParseBoolNode *n = TPP_NEW(t, ParseBoolNode, PARSE_NODE_BOOL, pos);
     n->true_ = true_;
-    return tp_node(n);
+    return tpp_node(n);
 }
 
-static ParseNode tp_new_string(ParseTree *t, ParsePos pos, Str orig, Str text) {
-    ParseStringNode *n = TP_NEW(t, ParseStringNode, PARSE_NODE_STRING, pos);
+static ParseNode tpp_new_string(ParseTree *t, ParsePos pos, Str orig, Str text) {
+    ParseStringNode *n = TPP_NEW(t, ParseStringNode, PARSE_NODE_STRING, pos);
     n->quoted = orig;
     n->text = text;
-    return tp_node(n);
+    return tpp_node(n);
 }
 
-static ParseNode tp_new_end(ParseTree *t, ParsePos pos) {
-    return tp_node(TP_NEW(t, burrow__ParseEndNode, BURROW__PARSE_NODE_END, pos));
+static ParseNode tpp_new_end(ParseTree *t, ParsePos pos) {
+    return tpp_node(TPP_NEW(t, burrow__ParseEndNode, BURROW__PARSE_NODE_END, pos));
 }
 
-static ParseNode tp_new_else(ParseTree *t, ParsePos pos, Int line) {
+static ParseNode tpp_new_else(ParseTree *t, ParsePos pos, Int line) {
     burrow__ParseElseNode *n =
-        TP_NEW(t, burrow__ParseElseNode, BURROW__PARSE_NODE_ELSE, pos);
+        TPP_NEW(t, burrow__ParseElseNode, BURROW__PARSE_NODE_ELSE, pos);
     n->line = line;
-    return tp_node(n);
+    return tpp_node(n);
 }
 
 /* What parseControl gives newIf, newRange and newWith. */
-typedef struct TpControl {
+typedef struct TppControl {
     ParsePos pos;
     Int line;
     ParsePipeNode *pipe;
     ParseListNode *list;
     ParseListNode *else_list;
-} TpControl;
+} TppControl;
 
-static ParseNode tp_new_branch(ParseTree *t, ParseNodeType typ, TpControl c) {
-    ParseBranchNode *n = TP_NEW(t, ParseBranchNode, typ, c.pos);
+static ParseNode tpp_new_branch(ParseTree *t, ParseNodeType typ, TppControl c) {
+    ParseBranchNode *n = TPP_NEW(t, ParseBranchNode, typ, c.pos);
     n->line = c.line;
     n->pipe = c.pipe;
     n->list = c.list;
@@ -407,32 +408,32 @@ static ParseNode tp_new_branch(ParseTree *t, ParseNodeType typ, TpControl c) {
     return &n->node_type;
 }
 
-static ParseNode tp_new_break(ParseTree *t, ParsePos pos, Int line) {
-    ParseBreakNode *n = TP_NEW(t, ParseBreakNode, PARSE_NODE_BREAK, pos);
+static ParseNode tpp_new_break(ParseTree *t, ParsePos pos, Int line) {
+    ParseBreakNode *n = TPP_NEW(t, ParseBreakNode, PARSE_NODE_BREAK, pos);
     n->line = line;
-    return tp_node(n);
+    return tpp_node(n);
 }
 
-static ParseNode tp_new_continue(ParseTree *t, ParsePos pos, Int line) {
-    ParseContinueNode *n = TP_NEW(t, ParseContinueNode, PARSE_NODE_CONTINUE, pos);
+static ParseNode tpp_new_continue(ParseTree *t, ParsePos pos, Int line) {
+    ParseContinueNode *n = TPP_NEW(t, ParseContinueNode, PARSE_NODE_CONTINUE, pos);
     n->line = line;
-    return tp_node(n);
+    return tpp_node(n);
 }
 
-static ParseNode tp_new_template(ParseTree *t, ParsePos pos, Int line, Str name,
-                                 ParsePipeNode *pipe) {
-    ParseTemplateNode *n = TP_NEW(t, ParseTemplateNode, PARSE_NODE_TEMPLATE, pos);
+static ParseNode tpp_new_template(ParseTree *t, ParsePos pos, Int line, Str name,
+                                  ParsePipeNode *pipe) {
+    ParseTemplateNode *n = TPP_NEW(t, ParseTemplateNode, PARSE_NODE_TEMPLATE, pos);
     n->line = line;
     n->name = name;
     n->pipe = pipe;
-    return tp_node(n);
+    return tpp_node(n);
 }
 
 /* ------------------------------------------------------------- numbers */
 
 /* float64(int64(f)) == f, without C's undefined conversion when f is out of
  * range, where Go's conversion gives a value that does not compare equal. */
-static bool tp_float_is_int64(double f, int64_t *out) {
+static bool tpp_float_is_int64(double f, int64_t *out) {
     if (!(f >= -9223372036854775808.0 && f < 9223372036854775808.0))
         return false;
     int64_t i = (int64_t)f;
@@ -443,7 +444,7 @@ static bool tp_float_is_int64(double f, int64_t *out) {
 }
 
 /* float64(uint64(f)) == f, the same way. */
-static bool tp_float_is_uint64(double f, uint64_t *out) {
+static bool tpp_float_is_uint64(double f, uint64_t *out) {
     if (!(f > -1.0 && f < 18446744073709551616.0))
         return false;
     uint64_t u = (uint64_t)f;
@@ -455,12 +456,12 @@ static bool tp_float_is_uint64(double f, uint64_t *out) {
 
 /* simplifyComplex: pulls out any other types that are represented by the
  * complex number. These all require that the imaginary part be zero. */
-static void tp_simplify_complex(ParseNumberNode *n) {
+static void tpp_simplify_complex(ParseNumberNode *n) {
     n->is_float = n->complex128.im == 0;
     if (n->is_float) {
         n->float64 = n->complex128.re;
-        n->is_int = tp_float_is_int64(n->float64, &n->int64);
-        n->is_uint = tp_float_is_uint64(n->float64, &n->uint64);
+        n->is_int = tpp_float_is_int64(n->float64, &n->int64);
+        n->is_uint = tpp_float_is_uint64(n->float64, &n->uint64);
     }
 }
 
@@ -507,7 +508,7 @@ ParseNumberNode *burrow__parse_new_number(ParseTree *t, ParsePos pos, Str text,
             return NULL;
         }
         n->is_complex = true;
-        tp_simplify_complex(n);
+        tpp_simplify_complex(n);
         return n;
     }
     /* Imaginary constants can only be complex unless they are zero. */
@@ -517,7 +518,7 @@ ParseNumberNode *burrow__parse_new_number(ParseTree *t, ParsePos pos, Str text,
         if (BURROW_OK(e)) {
             n->is_complex = true;
             n->complex128 = (Complex128){0, f};
-            tp_simplify_complex(n);
+            tpp_simplify_complex(n);
             return n;
         }
     }
@@ -561,9 +562,9 @@ ParseNumberNode *burrow__parse_new_number(ParseTree *t, ParsePos pos, Str text,
             /* If a floating-point extraction succeeded, extract the int if
              * needed. */
             if (!n->is_int)
-                n->is_int = tp_float_is_int64(f, &n->int64);
+                n->is_int = tpp_float_is_int64(f, &n->int64);
             if (!n->is_uint)
-                n->is_uint = tp_float_is_uint64(f, &n->uint64);
+                n->is_uint = tpp_float_is_uint64(f, &n->uint64);
         }
     }
     if (!n->is_int && !n->is_uint && !n->is_float) {
@@ -630,7 +631,7 @@ Str parse_tree_error_context(ParseTree *t, Alloc *a, ParseNode n, Str *context) 
 }
 
 /* hasFunction: whether a function is defined with this name. */
-static bool tp_has_function(ParseTree *t, Str name) {
+static bool tpp_has_function(ParseTree *t, Str name) {
     for (Int i = 0; i < t->funcs.len; i++) {
         Map *func_map = BURROW_AT(Map *, t->funcs, i);
         if (func_map == NULL)
@@ -643,25 +644,25 @@ static bool tp_has_function(ParseTree *t, Str name) {
 }
 
 /* startParse: initializes the parser, using the lexer. */
-static void tp_start_parse(ParseTree *t, TpParser *p, Slice funcs, burrow__Lexer *lex,
-                           Map *tree_set) {
+static void tpp_start_parse(ParseTree *t, TppParser *p, Slice funcs, burrow__Lexer *lex,
+                            Map *tree_set) {
     memset(p, 0, sizeof *p);
     t->root = NULL;
     t->burrow__state = p;
     p->lex = lex;
     Str dollar = BURROW_S("$");
-    tp_append(t, &p->vars, TYPE_STRING, &dollar);
+    tpp_append(t, &p->vars, TYPE_STRING, &dollar);
     t->funcs = funcs;
     p->tree_set = tree_set;
     lex->options = (burrow__LexOptions){
         .emit_comment = (t->mode & PARSE_PARSE_COMMENTS) != 0,
-        .break_ok = !tp_has_function(t, BURROW_S("break")),
-        .continue_ok = !tp_has_function(t, BURROW_S("continue")),
+        .break_ok = !tpp_has_function(t, BURROW_S("break")),
+        .continue_ok = !tpp_has_function(t, BURROW_S("continue")),
     };
 }
 
 /* stopParse: ends parsing. */
-static void tp_stop_parse(ParseTree *t) {
+static void tpp_stop_parse(ParseTree *t) {
     t->burrow__state = NULL;
     t->funcs = (Slice){0};
 }
@@ -695,35 +696,35 @@ bool parse_is_empty_tree(ParseNode n) {
 }
 
 /* add: adds tree to t's tree set. */
-static void tp_add(ParseTree *t) {
-    Map *tree_set = tp_p(t)->tree_set;
+static void tpp_add(ParseTree *t) {
+    Map *tree_set = tpp_p(t)->tree_set;
     ParseTree **tree = (ParseTree **)map_get(tree_set, &t->name);
-    if (tree == NULL || *tree == NULL || parse_is_empty_tree(tp_node((*tree)->root))) {
+    if (tree == NULL || *tree == NULL || parse_is_empty_tree(tpp_node((*tree)->root))) {
         if (!map_set(tree_set, &t->name, &t))
-            tp_oom();
+            tpp_oom();
         return;
     }
-    if (!parse_is_empty_tree(tp_node(t->root)))
-        tp_errorf_v(t, "template: multiple definition of template %q", t->name);
+    if (!parse_is_empty_tree(tpp_node(t->root)))
+        tpp_errorf_v(t, "template: multiple definition of template %q", t->name);
 }
 
-static ParseNode tp_text_or_action(ParseTree *t);
-static ParseNode tp_if_control(ParseTree *t);
-static ParseNode tp_with_control(ParseTree *t);
-static ParsePipeNode *tp_pipeline(ParseTree *t, const char *context,
-                                  burrow__ItemType end);
+static ParseNode tpp_text_or_action(ParseTree *t);
+static ParseNode tpp_if_control(ParseTree *t);
+static ParseNode tpp_with_control(ParseTree *t);
+static ParsePipeNode *tpp_pipeline(ParseTree *t, const char *context,
+                                   burrow__ItemType end);
 
 /* A tree for a define or block, which shares the parse with t. */
-static ParseTree *tp_new_sub_tree(ParseTree *t, TpParser *p, Str name) {
+static ParseTree *tpp_new_sub_tree(ParseTree *t, TppParser *p, Str name) {
     ParseTree *n = parse_new(t->a, name, (Slice){0});
     if (n == NULL)
-        tp_oom();
+        tpp_oom();
     n->text = t->text;
     n->mode = t->mode;
     n->left_delim = t->left_delim;
     n->right_delim = t->right_delim;
     n->parse_name = t->parse_name;
-    tp_start_parse(n, p, t->funcs, tp_p(t)->lex, tp_p(t)->tree_set);
+    tpp_start_parse(n, p, t->funcs, tpp_p(t)->lex, tpp_p(t)->tree_set);
     return n;
 }
 
@@ -732,10 +733,10 @@ static ParseTree *tp_new_sub_tree(ParseTree *t, TpParser *p, Str name) {
  *     textOrAction*
  *
  * Terminates at {{end}} or {{else}}, returned separately. */
-static ParseListNode *tp_item_list(ParseTree *t, ParseNode *next) {
-    ParseListNode *list = tp_new_list(t, tp_peek_non_space(t).pos);
-    while (tp_peek_non_space(t).typ != BURROW__ITEM_EOF) {
-        ParseNode n = tp_text_or_action(t);
+static ParseListNode *tpp_item_list(ParseTree *t, ParseNode *next) {
+    ParseListNode *list = tpp_new_list(t, tpp_peek_non_space(t).pos);
+    while (tpp_peek_non_space(t).typ != BURROW__ITEM_EOF) {
+        ParseNode n = tpp_text_or_action(t);
         switch (*n) {
         case BURROW__PARSE_NODE_END:
         case BURROW__PARSE_NODE_ELSE:
@@ -744,55 +745,55 @@ static ParseListNode *tp_item_list(ParseTree *t, ParseNode *next) {
         default:
             break;
         }
-        tp_append_node(t, &list->nodes, n);
+        tpp_append_node(t, &list->nodes, n);
     }
-    tp_errorf(t, BURROW_S("unexpected EOF"));
+    tpp_errorf(t, BURROW_S("unexpected EOF"));
 }
 
 /* parseDefinition parses a {{define}} ...  {{end}} template definition and
  * installs the definition in t's tree set. The "define" keyword has already
  * been scanned. */
-static void tp_parse_definition(ParseTree *t) {
+static void tpp_parse_definition(ParseTree *t) {
     static const char context[] = "define clause";
     burrow__Item name =
-        tp_expect_one_of(t, BURROW__ITEM_STRING, BURROW__ITEM_RAW_STRING, context);
+        tpp_expect_one_of(t, BURROW__ITEM_STRING, BURROW__ITEM_RAW_STRING, context);
     Error err = BURROW_NO_ERROR;
     t->name = strconv_unquote(t->a, name.val, &err);
     if (BURROW_FAILED(err))
-        tp_error(t, err);
-    tp_expect(t, BURROW__ITEM_RIGHT_DELIM, context);
+        tpp_error(t, err);
+    tpp_expect(t, BURROW__ITEM_RIGHT_DELIM, context);
     ParseNode end = NULL;
-    t->root = tp_item_list(t, &end);
+    t->root = tpp_item_list(t, &end);
     if (*end != BURROW__PARSE_NODE_END)
-        tp_errorf_v(t, "unexpected %s in %s", parse_node_string(end, error_allocator()),
-                    context);
-    tp_add(t);
-    tp_stop_parse(t);
+        tpp_errorf_v(t, "unexpected %s in %s",
+                     parse_node_string(end, error_allocator()), context);
+    tpp_add(t);
+    tpp_stop_parse(t);
 }
 
 /* parse is the top-level parser for a template, essentially the same as
  * itemList except it also parses {{define}} actions. It runs to EOF. */
-static void tp_parse(ParseTree *t) {
-    t->root = tp_new_list(t, tp_peek(t).pos);
-    while (tp_peek(t).typ != BURROW__ITEM_EOF) {
-        if (tp_peek(t).typ == BURROW__ITEM_LEFT_DELIM) {
-            burrow__Item delim = tp_next(t);
-            if (tp_next_non_space(t).typ == BURROW__ITEM_DEFINE) {
-                TpParser p;
+static void tpp_parse(ParseTree *t) {
+    t->root = tpp_new_list(t, tpp_peek(t).pos);
+    while (tpp_peek(t).typ != BURROW__ITEM_EOF) {
+        if (tpp_peek(t).typ == BURROW__ITEM_LEFT_DELIM) {
+            burrow__Item delim = tpp_next(t);
+            if (tpp_next_non_space(t).typ == BURROW__ITEM_DEFINE) {
+                TppParser p;
                 /* name will be updated once we know it. */
-                ParseTree *new_t = tp_new_sub_tree(t, &p, BURROW_S("definition"));
-                tp_parse_definition(new_t);
+                ParseTree *new_t = tpp_new_sub_tree(t, &p, BURROW_S("definition"));
+                tpp_parse_definition(new_t);
                 continue;
             }
-            tp_backup2(t, delim);
+            tpp_backup2(t, delim);
         }
-        ParseNode n = tp_text_or_action(t);
+        ParseNode n = tpp_text_or_action(t);
         switch (*n) {
         case BURROW__PARSE_NODE_END:
         case BURROW__PARSE_NODE_ELSE:
-            tp_errorf_v(t, "unexpected %s", parse_node_string(n, error_allocator()));
+            tpp_errorf_v(t, "unexpected %s", parse_node_string(n, error_allocator()));
         default:
-            tp_append_node(t, &t->root->nodes, n);
+            tpp_append_node(t, &t->root->nodes, n);
         }
     }
 }
@@ -802,13 +803,13 @@ static void tp_parse(ParseTree *t) {
  *     {{break}}
  *
  * Break keyword is past. */
-static ParseNode tp_break_control(ParseTree *t, ParsePos pos, Int line) {
-    burrow__Item token = tp_next_non_space(t);
+static ParseNode tpp_break_control(ParseTree *t, ParsePos pos, Int line) {
+    burrow__Item token = tpp_next_non_space(t);
     if (token.typ != BURROW__ITEM_RIGHT_DELIM)
-        tp_unexpected(t, token, "{{break}}");
-    if (tp_p(t)->range_depth == 0)
-        tp_errorf(t, BURROW_S("{{break}} outside {{range}}"));
-    return tp_new_break(t, pos, line);
+        tpp_unexpected(t, token, "{{break}}");
+    if (tpp_p(t)->range_depth == 0)
+        tpp_errorf(t, BURROW_S("{{break}} outside {{range}}"));
+    return tpp_new_break(t, pos, line);
 }
 
 /* Continue:
@@ -816,19 +817,19 @@ static ParseNode tp_break_control(ParseTree *t, ParsePos pos, Int line) {
  *     {{continue}}
  *
  * Continue keyword is past. */
-static ParseNode tp_continue_control(ParseTree *t, ParsePos pos, Int line) {
-    burrow__Item token = tp_next_non_space(t);
+static ParseNode tpp_continue_control(ParseTree *t, ParsePos pos, Int line) {
+    burrow__Item token = tpp_next_non_space(t);
     if (token.typ != BURROW__ITEM_RIGHT_DELIM)
-        tp_unexpected(t, token, "{{continue}}");
-    if (tp_p(t)->range_depth == 0)
-        tp_errorf(t, BURROW_S("{{continue}} outside {{range}}"));
-    return tp_new_continue(t, pos, line);
+        tpp_unexpected(t, token, "{{continue}}");
+    if (tpp_p(t)->range_depth == 0)
+        tpp_errorf(t, BURROW_S("{{continue}} outside {{range}}"));
+    return tpp_new_continue(t, pos, line);
 }
 
-static void tp_check_pipeline(ParseTree *t, ParsePipeNode *pipe, const char *context) {
+static void tpp_check_pipeline(ParseTree *t, ParsePipeNode *pipe, const char *context) {
     /* Reject empty pipelines */
     if (pipe->cmds.len == 0)
-        tp_errorf_v(t, "missing value for %s", context);
+        tpp_errorf_v(t, "missing value for %s", context);
     /* Only the first command of a pipeline can start with a non executable
      * operand */
     for (Int i = 1; i < pipe->cmds.len; i++) {
@@ -840,7 +841,7 @@ static void tp_check_pipeline(ParseTree *t, ParsePipeNode *pipe, const char *con
         case PARSE_NODE_NUMBER:
         case PARSE_NODE_STRING:
             /* With A|B|C, pipeline stage 2 is B */
-            tp_errorf_v(t, "non executable command in pipeline stage %d", i + 1);
+            tpp_errorf_v(t, "non executable command in pipeline stage %d", i + 1);
         default:
             break;
         }
@@ -848,16 +849,16 @@ static void tp_check_pipeline(ParseTree *t, ParsePipeNode *pipe, const char *con
 }
 
 /* parseControl: the pipeline and lists of an if, range or with. */
-static TpControl tp_parse_control(ParseTree *t, const char *context) {
-    TpParser *p = tp_p(t);
+static TppControl tpp_parse_control(ParseTree *t, const char *context) {
+    TppParser *p = tpp_p(t);
     Int nvars = p->vars.len;
-    TpControl c = {0, 0, NULL, NULL, NULL};
+    TppControl c = {0, 0, NULL, NULL, NULL};
     bool is_range = strcmp(context, "range") == 0;
-    c.pipe = tp_pipeline(t, context, BURROW__ITEM_RIGHT_DELIM);
+    c.pipe = tpp_pipeline(t, context, BURROW__ITEM_RIGHT_DELIM);
     if (is_range)
         p->range_depth++;
     ParseNode next = NULL;
-    c.list = tp_item_list(t, &next);
+    c.list = tpp_item_list(t, &next);
     if (is_range)
         p->range_depth--;
     switch (*next) {
@@ -875,20 +876,20 @@ static TpControl tp_parse_control(ParseTree *t, const char *context) {
          * To do this, parse the "if" or "with" as usual and stop at it
          * {{end}}; the subsequent{{end}} is assumed. This technique works
          * even for long if-else-if chains. */
-        if (strcmp(context, "if") == 0 && tp_peek(t).typ == BURROW__ITEM_IF) {
-            tp_next(t); /* Consume the "if" token. */
-            c.else_list = tp_new_list(t, parse_node_position(next));
-            tp_append_node(t, &c.else_list->nodes, tp_if_control(t));
+        if (strcmp(context, "if") == 0 && tpp_peek(t).typ == BURROW__ITEM_IF) {
+            tpp_next(t); /* Consume the "if" token. */
+            c.else_list = tpp_new_list(t, parse_node_position(next));
+            tpp_append_node(t, &c.else_list->nodes, tpp_if_control(t));
         } else if (strcmp(context, "with") == 0 &&
-                   tp_peek(t).typ == BURROW__ITEM_WITH) {
-            tp_next(t);
-            c.else_list = tp_new_list(t, parse_node_position(next));
-            tp_append_node(t, &c.else_list->nodes, tp_with_control(t));
+                   tpp_peek(t).typ == BURROW__ITEM_WITH) {
+            tpp_next(t);
+            c.else_list = tpp_new_list(t, parse_node_position(next));
+            tpp_append_node(t, &c.else_list->nodes, tpp_with_control(t));
         } else {
-            c.else_list = tp_item_list(t, &next);
+            c.else_list = tpp_item_list(t, &next);
             if (*next != BURROW__PARSE_NODE_END)
-                tp_errorf_v(t, "expected end; found %s",
-                            parse_node_string(next, error_allocator()));
+                tpp_errorf_v(t, "expected end; found %s",
+                             parse_node_string(next, error_allocator()));
         }
         break;
     default:
@@ -906,8 +907,8 @@ static TpControl tp_parse_control(ParseTree *t, const char *context) {
  *     {{if pipeline}} itemList {{else}} itemList {{end}}
  *
  * If keyword is past. */
-static ParseNode tp_if_control(ParseTree *t) {
-    return tp_new_branch(t, PARSE_NODE_IF, tp_parse_control(t, "if"));
+static ParseNode tpp_if_control(ParseTree *t) {
+    return tpp_new_branch(t, PARSE_NODE_IF, tpp_parse_control(t, "if"));
 }
 
 /* Range:
@@ -916,8 +917,8 @@ static ParseNode tp_if_control(ParseTree *t) {
  *     {{range pipeline}} itemList {{else}} itemList {{end}}
  *
  * Range keyword is past. */
-static ParseNode tp_range_control(ParseTree *t) {
-    return tp_new_branch(t, PARSE_NODE_RANGE, tp_parse_control(t, "range"));
+static ParseNode tpp_range_control(ParseTree *t) {
+    return tpp_new_branch(t, PARSE_NODE_RANGE, tpp_parse_control(t, "range"));
 }
 
 /* With:
@@ -926,8 +927,8 @@ static ParseNode tp_range_control(ParseTree *t) {
  *     {{with pipeline}} itemList {{else}} itemList {{end}}
  *
  * If keyword is past. */
-static ParseNode tp_with_control(ParseTree *t) {
-    return tp_new_branch(t, PARSE_NODE_WITH, tp_parse_control(t, "with"));
+static ParseNode tpp_with_control(ParseTree *t) {
+    return tpp_new_branch(t, PARSE_NODE_WITH, tpp_parse_control(t, "with"));
 }
 
 /* End:
@@ -935,8 +936,8 @@ static ParseNode tp_with_control(ParseTree *t) {
  *     {{end}}
  *
  * End keyword is past. */
-static ParseNode tp_end_control(ParseTree *t) {
-    return tp_new_end(t, tp_expect(t, BURROW__ITEM_RIGHT_DELIM, "end").pos);
+static ParseNode tpp_end_control(ParseTree *t) {
+    return tpp_new_end(t, tpp_expect(t, BURROW__ITEM_RIGHT_DELIM, "end").pos);
 }
 
 /* Else:
@@ -944,18 +945,18 @@ static ParseNode tp_end_control(ParseTree *t) {
  *     {{else}}
  *
  * Else keyword is past. */
-static ParseNode tp_else_control(ParseTree *t) {
-    burrow__Item peek = tp_peek_non_space(t);
+static ParseNode tpp_else_control(ParseTree *t) {
+    burrow__Item peek = tpp_peek_non_space(t);
     /* The "{{else if ... " and "{{else with ..." will be treated as "{{else}}{{if
      * ..." and "{{else}}{{with ...". So return the else node here. */
     if (peek.typ == BURROW__ITEM_IF || peek.typ == BURROW__ITEM_WITH)
-        return tp_new_else(t, peek.pos, peek.line);
-    burrow__Item token = tp_expect(t, BURROW__ITEM_RIGHT_DELIM, "else");
-    return tp_new_else(t, token.pos, token.line);
+        return tpp_new_else(t, peek.pos, peek.line);
+    burrow__Item token = tpp_expect(t, BURROW__ITEM_RIGHT_DELIM, "else");
+    return tpp_new_else(t, token.pos, token.line);
 }
 
-static Str tp_parse_template_name(ParseTree *t, burrow__Item token,
-                                  const char *context) {
+static Str tpp_parse_template_name(ParseTree *t, burrow__Item token,
+                                   const char *context) {
     Str name = BURROW_STR_EMPTY;
     switch ((int)token.typ) {
     case BURROW__ITEM_STRING:
@@ -963,11 +964,11 @@ static Str tp_parse_template_name(ParseTree *t, burrow__Item token,
         Error err = BURROW_NO_ERROR;
         name = strconv_unquote(t->a, token.val, &err);
         if (BURROW_FAILED(err))
-            tp_error(t, err);
+            tpp_error(t, err);
         break;
     }
     default:
-        tp_unexpected(t, token, context);
+        tpp_unexpected(t, token, context);
     }
     return name;
 }
@@ -978,25 +979,25 @@ static Str tp_parse_template_name(ParseTree *t, burrow__Item token,
  *
  * Block keyword is past. The name must be something that can evaluate to a
  * string. The pipeline is mandatory. */
-static ParseNode tp_block_control(ParseTree *t) {
+static ParseNode tpp_block_control(ParseTree *t) {
     static const char context[] = "block clause";
 
-    burrow__Item token = tp_next_non_space(t);
-    Str name = tp_parse_template_name(t, token, context);
-    ParsePipeNode *pipe = tp_pipeline(t, context, BURROW__ITEM_RIGHT_DELIM);
+    burrow__Item token = tpp_next_non_space(t);
+    Str name = tpp_parse_template_name(t, token, context);
+    ParsePipeNode *pipe = tpp_pipeline(t, context, BURROW__ITEM_RIGHT_DELIM);
 
-    TpParser p;
+    TppParser p;
     ParseTree *block =
-        tp_new_sub_tree(t, &p, name); /* name will be updated once we know it. */
+        tpp_new_sub_tree(t, &p, name); /* name will be updated once we know it. */
     ParseNode end = NULL;
-    block->root = tp_item_list(block, &end);
+    block->root = tpp_item_list(block, &end);
     if (*end != BURROW__PARSE_NODE_END)
-        tp_errorf_v(t, "unexpected %s in %s", parse_node_string(end, error_allocator()),
-                    context);
-    tp_add(block);
-    tp_stop_parse(block);
+        tpp_errorf_v(t, "unexpected %s in %s",
+                     parse_node_string(end, error_allocator()), context);
+    tpp_add(block);
+    tpp_stop_parse(block);
 
-    return tp_new_template(t, token.pos, token.line, name, pipe);
+    return tpp_new_template(t, token.pos, token.line, name, pipe);
 }
 
 /* Template:
@@ -1005,17 +1006,17 @@ static ParseNode tp_block_control(ParseTree *t) {
  *
  * Template keyword is past. The name must be something that can evaluate to a
  * string. */
-static ParseNode tp_template_control(ParseTree *t) {
+static ParseNode tpp_template_control(ParseTree *t) {
     static const char context[] = "template clause";
-    burrow__Item token = tp_next_non_space(t);
-    Str name = tp_parse_template_name(t, token, context);
+    burrow__Item token = tpp_next_non_space(t);
+    Str name = tpp_parse_template_name(t, token, context);
     ParsePipeNode *pipe = NULL;
-    if (tp_next_non_space(t).typ != BURROW__ITEM_RIGHT_DELIM) {
-        tp_backup(t);
+    if (tpp_next_non_space(t).typ != BURROW__ITEM_RIGHT_DELIM) {
+        tpp_backup(t);
         /* Do not pop variables; they persist until "end". */
-        pipe = tp_pipeline(t, context, BURROW__ITEM_RIGHT_DELIM);
+        pipe = tpp_pipeline(t, context, BURROW__ITEM_RIGHT_DELIM);
     }
-    return tp_new_template(t, token.pos, token.line, name, pipe);
+    return tpp_new_template(t, token.pos, token.line, name, pipe);
 }
 
 /* Action:
@@ -1025,119 +1026,121 @@ static ParseNode tp_template_control(ParseTree *t) {
  *
  * Left delim is past. Now get actions. First word could be a keyword such as
  * range. */
-static ParseNode tp_action(ParseTree *t) {
-    burrow__Item token = tp_next_non_space(t);
+static ParseNode tpp_action(ParseTree *t) {
+    burrow__Item token = tpp_next_non_space(t);
     switch ((int)token.typ) {
     case BURROW__ITEM_BLOCK:
-        return tp_block_control(t);
+        return tpp_block_control(t);
     case BURROW__ITEM_BREAK:
-        return tp_break_control(t, token.pos, token.line);
+        return tpp_break_control(t, token.pos, token.line);
     case BURROW__ITEM_CONTINUE:
-        return tp_continue_control(t, token.pos, token.line);
+        return tpp_continue_control(t, token.pos, token.line);
     case BURROW__ITEM_ELSE:
-        return tp_else_control(t);
+        return tpp_else_control(t);
     case BURROW__ITEM_END:
-        return tp_end_control(t);
+        return tpp_end_control(t);
     case BURROW__ITEM_IF:
-        return tp_if_control(t);
+        return tpp_if_control(t);
     case BURROW__ITEM_RANGE:
-        return tp_range_control(t);
+        return tpp_range_control(t);
     case BURROW__ITEM_TEMPLATE:
-        return tp_template_control(t);
+        return tpp_template_control(t);
     case BURROW__ITEM_WITH:
-        return tp_with_control(t);
+        return tpp_with_control(t);
     default:
         break;
     }
-    tp_backup(t);
-    token = tp_peek(t);
+    tpp_backup(t);
+    token = tpp_peek(t);
     /* Do not pop variables; they persist until "end". */
-    return tp_new_action(t, token.pos, token.line,
-                         tp_pipeline(t, "command", BURROW__ITEM_RIGHT_DELIM));
+    return tpp_new_action(t, token.pos, token.line,
+                          tpp_pipeline(t, "command", BURROW__ITEM_RIGHT_DELIM));
 }
 
 /* textOrAction:
  *
  *     text | comment | action */
-static ParseNode tp_text_or_action(ParseTree *t) {
-    burrow__Item token = tp_next_non_space(t);
+static ParseNode tpp_text_or_action(ParseTree *t) {
+    burrow__Item token = tpp_next_non_space(t);
     switch ((int)token.typ) {
     case BURROW__ITEM_TEXT:
-        return tp_new_text(t, token.pos, token.val);
+        return tpp_new_text(t, token.pos, token.val);
     case BURROW__ITEM_LEFT_DELIM: {
-        TpParser *p = tp_p(t);
-        tp_check_stack(t, p->action_depth + p->stack_depth);
+        TppParser *p = tpp_p(t);
+        tpp_check_stack(t, p->action_depth + p->stack_depth);
         p->action_depth++;
         p->action_line = token.line;
-        ParseNode n = tp_action(t);
+        ParseNode n = tpp_action(t);
         p->action_line = 0; /* clearActionLine */
         p->action_depth--;
         return n;
     }
     case BURROW__ITEM_COMMENT:
-        return tp_new_comment(t, token.pos, token.val);
+        return tpp_new_comment(t, token.pos, token.val);
     default:
-        tp_unexpected(t, token, "input");
+        tpp_unexpected(t, token, "input");
     }
 }
 
-static ParseCommandNode *tp_command(ParseTree *t);
+static ParseCommandNode *tpp_command(ParseTree *t);
 
 /* Pipeline:
  *
  *     declarations? command ('|' command)*
  */
-static ParsePipeNode *tp_pipeline(ParseTree *t, const char *context,
-                                  burrow__ItemType end) {
-    TpParser *p = tp_p(t);
-    burrow__Item token = tp_peek_non_space(t);
-    ParsePipeNode *pipe = tp_new_pipeline(t, token.pos, token.line);
+static ParsePipeNode *tpp_pipeline(ParseTree *t, const char *context,
+                                   burrow__ItemType end) {
+    TppParser *p = tpp_p(t);
+    burrow__Item token = tpp_peek_non_space(t);
+    ParsePipeNode *pipe = tpp_new_pipeline(t, token.pos, token.line);
     /* Are there declarations or assignments? */
     for (;;) {
-        burrow__Item v = tp_peek_non_space(t);
+        burrow__Item v = tpp_peek_non_space(t);
         if (v.typ != BURROW__ITEM_VARIABLE)
             break;
-        tp_next(t);
+        tpp_next(t);
         /* Since space is a token, we need 3-token look-ahead here in the
          * worst case: in "$x foo" we need to read "foo" (as opposed to ":=")
          * to know that $x is an argument variable rather than a declaration.
          * So remember the token adjacent to the variable so we can push it
          * back if necessary. */
-        burrow__Item token_after_variable = tp_peek(t);
-        burrow__Item next = tp_peek_non_space(t);
+        burrow__Item token_after_variable = tpp_peek(t);
+        burrow__Item next = tpp_peek_non_space(t);
         if (next.typ == BURROW__ITEM_ASSIGN || next.typ == BURROW__ITEM_DECLARE) {
             pipe->is_assign = next.typ == BURROW__ITEM_ASSIGN;
-            tp_next_non_space(t);
-            tp_append_node(t, &pipe->decl, tp_node(tp_new_variable(t, v.pos, v.val)));
-            tp_append(t, &p->vars, TYPE_STRING, &v.val);
+            tpp_next_non_space(t);
+            tpp_append_node(t, &pipe->decl,
+                            tpp_node(tpp_new_variable(t, v.pos, v.val)));
+            tpp_append(t, &p->vars, TYPE_STRING, &v.val);
         } else if (next.typ == BURROW__ITEM_CHAR && str_eq(next.val, BURROW_S(","))) {
-            tp_next_non_space(t);
-            tp_append_node(t, &pipe->decl, tp_node(tp_new_variable(t, v.pos, v.val)));
-            tp_append(t, &p->vars, TYPE_STRING, &v.val);
+            tpp_next_non_space(t);
+            tpp_append_node(t, &pipe->decl,
+                            tpp_node(tpp_new_variable(t, v.pos, v.val)));
+            tpp_append(t, &p->vars, TYPE_STRING, &v.val);
             if (strcmp(context, "range") == 0 && pipe->decl.len < 2) {
-                switch ((int)tp_peek_non_space(t).typ) {
+                switch ((int)tpp_peek_non_space(t).typ) {
                 case BURROW__ITEM_VARIABLE:
                 case BURROW__ITEM_RIGHT_DELIM:
                 case BURROW__ITEM_RIGHT_PAREN:
                     /* second initialized variable in a range pipeline */
                     continue;
                 default:
-                    tp_errorf(t, BURROW_S("range can only initialize variables"));
+                    tpp_errorf(t, BURROW_S("range can only initialize variables"));
                 }
             }
-            tp_errorf_v(t, "too many declarations in %s", context);
+            tpp_errorf_v(t, "too many declarations in %s", context);
         } else if (token_after_variable.typ == BURROW__ITEM_SPACE) {
-            tp_backup3(t, v, token_after_variable);
+            tpp_backup3(t, v, token_after_variable);
         } else {
-            tp_backup2(t, v);
+            tpp_backup2(t, v);
         }
         break;
     }
     for (;;) {
-        burrow__Item tok = tp_next_non_space(t);
+        burrow__Item tok = tpp_next_non_space(t);
         if (tok.typ == end) {
             /* At this point, the pipeline is complete */
-            tp_check_pipeline(t, pipe, context);
+            tpp_check_pipeline(t, pipe, context);
             return pipe;
         }
         switch ((int)tok.typ) {
@@ -1153,25 +1156,25 @@ static ParsePipeNode *tp_pipeline(ParseTree *t, const char *context,
         case BURROW__ITEM_STRING:
         case BURROW__ITEM_VARIABLE:
         case BURROW__ITEM_LEFT_PAREN:
-            tp_backup(t);
-            tp_append_node(t, &pipe->cmds, tp_node(tp_command(t)));
+            tpp_backup(t);
+            tpp_append_node(t, &pipe->cmds, tpp_node(tpp_command(t)));
             break;
         default:
-            tp_unexpected(t, tok, context);
+            tpp_unexpected(t, tok, context);
         }
     }
 }
 
 /* useVar: a node for a variable reference. It errors if the variable is not
  * defined. */
-static ParseNode tp_use_var(ParseTree *t, ParsePos pos, Str name) {
-    TpParser *p = tp_p(t);
-    ParseVariableNode *v = tp_new_variable(t, pos, name);
+static ParseNode tpp_use_var(ParseTree *t, ParsePos pos, Str name) {
+    TppParser *p = tpp_p(t);
+    ParseVariableNode *v = tpp_new_variable(t, pos, name);
     Str first = BURROW_AT(Str, v->ident, 0);
     for (Int i = 0; i < p->vars.len; i++)
         if (str_eq(BURROW_AT(Str, p->vars, i), first))
-            return tp_node(v);
-    tp_errorf_v(t, "undefined variable %q", first);
+            return tpp_node(v);
+    tpp_errorf_v(t, "undefined variable %q", first);
 }
 
 /* term:
@@ -1185,29 +1188,29 @@ static ParseNode tp_use_var(ParseTree *t, ParsePos pos, Str name) {
  *
  * A term is a simple "expression". A nil return means the next item is not a
  * term. */
-static ParseNode tp_term(ParseTree *t) {
-    burrow__Item token = tp_next_non_space(t);
+static ParseNode tpp_term(ParseTree *t) {
+    burrow__Item token = tpp_next_non_space(t);
     switch ((int)token.typ) {
     case BURROW__ITEM_IDENTIFIER: {
         bool check_func = (t->mode & PARSE_SKIP_FUNC_CHECK) == 0;
-        if (check_func && !tp_has_function(t, token.val))
-            tp_errorf_v(t, "function %q not defined", token.val);
+        if (check_func && !tpp_has_function(t, token.val))
+            tpp_errorf_v(t, "function %q not defined", token.val);
         ParseIdentifierNode *n = parse_new_identifier(t->a, token.val);
         if (n == NULL)
-            tp_oom();
-        return tp_node(parse_identifier_node_set_pos(
+            tpp_oom();
+        return tpp_node(parse_identifier_node_set_pos(
             parse_identifier_node_set_tree(n, t), token.pos));
     }
     case BURROW__ITEM_DOT:
-        return tp_new_dot(t, token.pos);
+        return tpp_new_dot(t, token.pos);
     case BURROW__ITEM_NIL:
-        return tp_new_nil(t, token.pos);
+        return tpp_new_nil(t, token.pos);
     case BURROW__ITEM_VARIABLE:
-        return tp_use_var(t, token.pos, token.val);
+        return tpp_use_var(t, token.pos, token.val);
     case BURROW__ITEM_FIELD:
-        return tp_new_field(t, token.pos, token.val);
+        return tpp_new_field(t, token.pos, token.val);
     case BURROW__ITEM_BOOL:
-        return tp_new_bool(t, token.pos, str_eq(token.val, BURROW_S("true")));
+        return tpp_new_bool(t, token.pos, str_eq(token.val, BURROW_S("true")));
     case BURROW__ITEM_CHAR_CONSTANT:
     case BURROW__ITEM_COMPLEX:
     case BURROW__ITEM_NUMBER: {
@@ -1215,32 +1218,32 @@ static ParseNode tp_term(ParseTree *t) {
         ParseNumberNode *number =
             burrow__parse_new_number(t, token.pos, token.val, token.typ, &err);
         if (BURROW_FAILED(err))
-            tp_error(t, err);
-        return tp_node(number);
+            tpp_error(t, err);
+        return tpp_node(number);
     }
     case BURROW__ITEM_LEFT_PAREN: {
-        TpParser *p = tp_p(t);
+        TppParser *p = tpp_p(t);
         if (p->stack_depth >= burrow__parse_max_stack_depth)
-            tp_errorf(t, BURROW_S("max expression depth exceeded"));
-        tp_check_stack(t, p->action_depth + p->stack_depth);
+            tpp_errorf(t, BURROW_S("max expression depth exceeded"));
+        tpp_check_stack(t, p->action_depth + p->stack_depth);
         p->stack_depth++;
         ParsePipeNode *pipe =
-            tp_pipeline(t, "parenthesized pipeline", BURROW__ITEM_RIGHT_PAREN);
+            tpp_pipeline(t, "parenthesized pipeline", BURROW__ITEM_RIGHT_PAREN);
         p->stack_depth--;
-        return tp_node(pipe);
+        return tpp_node(pipe);
     }
     case BURROW__ITEM_STRING:
     case BURROW__ITEM_RAW_STRING: {
         Error err = BURROW_NO_ERROR;
         Str s = strconv_unquote(t->a, token.val, &err);
         if (BURROW_FAILED(err))
-            tp_error(t, err);
-        return tp_new_string(t, token.pos, token.val, s);
+            tpp_error(t, err);
+        return tpp_new_string(t, token.pos, token.val, s);
     }
     default:
         break;
     }
-    tp_backup(t);
+    tpp_backup(t);
     return NULL;
 }
 
@@ -1251,15 +1254,15 @@ static ParseNode tp_term(ParseTree *t) {
  * An operand is a space-separated component of a command, a term possibly
  * followed by field accesses. A nil return means the next item is not an
  * operand. */
-static ParseNode tp_operand(ParseTree *t) {
-    ParseNode node = tp_term(t);
+static ParseNode tpp_operand(ParseTree *t) {
+    ParseNode node = tpp_term(t);
     if (node == NULL)
         return NULL;
-    if (tp_peek(t).typ == BURROW__ITEM_FIELD) {
-        ParseChainNode *chain = tp_new_chain(t, tp_peek(t).pos, node);
-        while (tp_peek(t).typ == BURROW__ITEM_FIELD)
-            if (!parse_chain_node_add(chain, t->a, tp_next(t).val))
-                tp_oom();
+    if (tpp_peek(t).typ == BURROW__ITEM_FIELD) {
+        ParseChainNode *chain = tpp_new_chain(t, tpp_peek(t).pos, node);
+        while (tpp_peek(t).typ == BURROW__ITEM_FIELD)
+            if (!parse_chain_node_add(chain, t->a, tpp_next(t).val))
+                tpp_oom();
         /* Compatibility with original API: If the term is of type NodeField
          * or NodeVariable, just put more fields on the original. Otherwise,
          * keep the Chain node. Obvious parsing errors involving literal values
@@ -1270,11 +1273,11 @@ static ParseNode tp_operand(ParseTree *t) {
         case PARSE_NODE_VARIABLE: {
             Str s = parse_chain_node_string(chain, t->a);
             if (s.len == 0)
-                tp_oom();
+                tpp_oom();
             if (*node == PARSE_NODE_FIELD)
-                node = tp_new_field(t, chain->pos, s);
+                node = tpp_new_field(t, chain->pos, s);
             else
-                node = tp_node(tp_new_variable(t, chain->pos, s));
+                node = tpp_node(tpp_new_variable(t, chain->pos, s));
             break;
         }
         case PARSE_NODE_BOOL:
@@ -1282,10 +1285,10 @@ static ParseNode tp_operand(ParseTree *t) {
         case PARSE_NODE_NUMBER:
         case PARSE_NODE_NIL:
         case PARSE_NODE_DOT:
-            tp_errorf_v(t, "unexpected . after term %q",
-                        parse_node_string(node, error_allocator()));
+            tpp_errorf_v(t, "unexpected . after term %q",
+                         parse_node_string(node, error_allocator()));
         default:
-            node = tp_node(chain);
+            node = tpp_node(chain);
         }
     }
     return node;
@@ -1298,41 +1301,42 @@ static ParseNode tp_operand(ParseTree *t) {
  * space-separated arguments up to a pipeline character or right delimiter. We
  * consume the pipe character but leave the right delim to terminate the
  * action. */
-static ParseCommandNode *tp_command(ParseTree *t) {
-    ParseCommandNode *cmd = tp_new_command(t, tp_peek_non_space(t).pos);
+static ParseCommandNode *tpp_command(ParseTree *t) {
+    ParseCommandNode *cmd = tpp_new_command(t, tpp_peek_non_space(t).pos);
     for (;;) {
-        tp_peek_non_space(t); /* skip leading spaces. */
-        ParseNode operand = tp_operand(t);
+        tpp_peek_non_space(t); /* skip leading spaces. */
+        ParseNode operand = tpp_operand(t);
         if (operand != NULL)
-            tp_append_node(t, &cmd->args, operand);
-        burrow__Item token = tp_next(t);
+            tpp_append_node(t, &cmd->args, operand);
+        burrow__Item token = tpp_next(t);
         if (token.typ == BURROW__ITEM_SPACE)
             continue;
         if (token.typ == BURROW__ITEM_RIGHT_DELIM ||
             token.typ == BURROW__ITEM_RIGHT_PAREN)
-            tp_backup(t);
+            tpp_backup(t);
         else if (token.typ != BURROW__ITEM_PIPE)
             /* nothing here; break loop below */
-            tp_unexpected(t, token, "operand");
+            tpp_unexpected(t, token, "operand");
         break;
     }
     if (cmd->args.len == 0)
-        tp_errorf(t, BURROW_S("empty command"));
+        tpp_errorf(t, BURROW_S("empty command"));
     return cmd;
 }
 
 /* recover: the error a parse stopped with, from the panic p. */
-static void tp_recover(ParseTree *t, Any p, Error *err) {
-    if (p.t != &tp_error_desc)
+static void tpp_recover(ParseTree *t, Any p, Error *err) {
+    if (p.t != &tpp_error_desc)
         panic(p);
     if (t != NULL)
-        tp_stop_parse(t);
-    *err = ((const TpError *)p.data)->err;
+        tpp_stop_parse(t);
+    *err = ((const TppError *)p.data)->err;
 }
 
 /* The body of Tree.Parse, which panics on an error. */
-static void tp_tree_parse(ParseTree *t, TpParser *p, burrow__Lexer *lexer, Str text,
-                          Str left_delim, Str right_delim, Map *tree_set, Slice funcs) {
+static void tpp_tree_parse(ParseTree *t, TppParser *p, burrow__Lexer *lexer, Str text,
+                           Str left_delim, Str right_delim, Map *tree_set,
+                           Slice funcs) {
     t->parse_name = t->name;
     t->left_delim = left_delim.len == 0 ? BURROW_S("{{") : left_delim;
     t->right_delim = right_delim.len == 0 ? BURROW_S("}}") : right_delim;
@@ -1340,28 +1344,28 @@ static void tp_tree_parse(ParseTree *t, TpParser *p, burrow__Lexer *lexer, Str t
     if (text.len > 0) {
         t->text = str_clone(t->a, text);
         if (t->text.len == 0)
-            tp_oom();
+            tpp_oom();
     } else {
         t->text = BURROW_STR_EMPTY;
     }
     burrow__parse_lex(lexer, t->name, t->text, t->left_delim, t->right_delim);
-    tp_start_parse(t, p, funcs, lexer, tree_set);
-    tp_parse(t);
-    tp_add(t);
-    tp_stop_parse(t);
+    tpp_start_parse(t, p, funcs, lexer, tree_set);
+    tpp_parse(t);
+    tpp_add(t);
+    tpp_stop_parse(t);
 }
 
 ParseTree *parse_tree_parse(ParseTree *t, Str text, Str left_delim, Str right_delim,
                             Map *tree_set, Slice funcs, Error *err) {
     Error e = BURROW_NO_ERROR;
     volatile bool failed = false;
-    TpParser p;
+    TppParser p;
     burrow__Lexer lexer;
     BURROW_TRY {
-        tp_tree_parse(t, &p, &lexer, text, left_delim, right_delim, tree_set, funcs);
+        tpp_tree_parse(t, &p, &lexer, text, left_delim, right_delim, tree_set, funcs);
     }
     BURROW_CATCH(v) {
-        tp_recover(t, v, &e);
+        tpp_recover(t, v, &e);
         failed = true;
     }
     BURROW_TRY_END;

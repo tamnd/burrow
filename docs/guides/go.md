@@ -973,3 +973,96 @@ a*(b+c) == f(x, y)[0]
 ```
 
 A node of any other type gives an error, and nothing is written. The printer works in an arena of its own, taken from the allocator you pass and given back before it returns, so the only memory it leaves behind is what the writer kept.
+
+## Formatting
+
+`burrow/go/format.h` is Go's `go/format`, the formatting gofmt does, as a library. `format_source` takes Go source as bytes and gives it back in gofmt's layout, with the imports sorted and number literals in their canonical form:
+
+<!-- example: ../examples/go/format.c#source -->
+```c
+Str src = BURROW_S("package main\n"
+                   "import (\n"
+                   "\"os\"\n"
+                   "\"fmt\"\n"
+                   ")\n"
+                   "func main() {\n"
+                   "if len(os.Args)>1{fmt.Println( \"hi\", os.Args[1] )}\n"
+                   "x:=0X1P4\n"
+                   "fmt.Println(x)\n"
+                   "}\n");
+Error err = BURROW_NO_ERROR;
+Slice out = format_source(a, slice_from_str(a, src), &err);
+if (BURROW_FAILED(err)) {
+    fmt_printf_v("format: %s\n", error_text(err));
+    return;
+}
+fmt_printf_v("%s", str_from_bytes(out.p, out.len));
+```
+
+That prints:
+
+```
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	if len(os.Args) > 1 {
+		fmt.Println("hi", os.Args[1])
+	}
+	x := 0x1p4
+	fmt.Println(x)
+}
+```
+
+The source does not have to be a whole file. A list of declarations or of statements works too, and comes back with the leading and trailing space it had and its first line's indentation kept, which is what an editor wants when it formats a selection. A syntax error is the `GoScannerErrorList` that go/parser gave back, and the result is a nil slice:
+
+<!-- example: ../examples/go/format.c#fragment -->
+```c
+// Two statements, indented one tab, with a blank line after them.
+Str src = BURROW_S("\tx:=1\n\tif x>0{y:=x*2;_=y}\n\n");
+Error err = BURROW_NO_ERROR;
+Slice out = format_source(a, slice_from_str(a, src), &err);
+if (BURROW_OK(err))
+    fmt_printf_v("%q\n", str_from_bytes(out.p, out.len));
+
+// A syntax error comes back as go/parser reported it.
+out = format_source(a, slice_from_str(a, BURROW_S("x := 1 +")), &err);
+if (BURROW_FAILED(err))
+    fmt_printf_v("error: %s\n", error_text(err));
+```
+
+That prints:
+
+```
+"\tx := 1\n\tif x > 0 {\n\t\ty := x * 2\n\t\t_ = y\n\t}\n\n"
+error: 3:1: expected operand, found '}'
+```
+
+The line and column in that error are in the source go/format parsed, which for a statement list has a package clause and a function wrapped around it, so they are Go's numbers and not quite where the fragment's text was.
+
+`format_node` formats a tree you already have, written to an `IoWriter`. It takes the same nodes as `printer_fprint`, and leaves the tree as it was, sorting a copy when a file's imports need it:
+
+<!-- example: ../examples/go/format.c#node -->
+```c
+Error err = BURROW_NO_ERROR;
+AstExpr x = parser_parse_expr(a, BURROW_S("(6+2*3)/4"), &err);
+if (BURROW_FAILED(err))
+    return;
+StringsBuilder b = STRINGS_BUILDER(a);
+err = format_node(a, strings_builder_as_io_writer(&b), token_new_file_set(a),
+                  BURROW_ANY(TYPE_AST_EXPR, &x));
+if (BURROW_OK(err))
+    fmt_printf_v("%s\n", strings_builder_string(&b));
+```
+
+That prints:
+
+```
+(6 + 2*3) / 4
+```
+
+`format_source` parses into the allocator you pass and leaves the tree there next to the result, so an arena is the easy choice. Formatting changes now and then between Go versions, and it can here too, so a check that compares output byte for byte should pin the library version.

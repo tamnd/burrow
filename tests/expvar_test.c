@@ -483,9 +483,7 @@ static void race_walker(void *arg) {
     sync_atomic_int64_add(&race_running, -1);
 }
 
-static void race_main(void *arg) {
-    (void)arg;
-    runtime_gomaxprocs(RACE_WORKERS + 1);
+static void race_run(void) {
     sync_atomic_int64_store(&race_running, RACE_WORKERS + 1);
     for (int64_t i = 0; i < RACE_WORKERS; i++) {
         if (!go(BURROW_FN(Func, race_adder, (void *)(Uintptr)i)))
@@ -511,7 +509,7 @@ static void TestMapGoroutines(TestingT *t) {
     sync_atomic_uint32_store(&race_stop, 0);
     sync_atomic_int64_store(&race_bad, 0);
 
-    runtime_main(BURROW_FN(Func, race_main, NULL));
+    race_run();
 
     CHECK_INT_EQ(sync_atomic_int64_load(&race_bad), 0);
     CHECK_INT_EQ(count_entries(&race_map), 8);

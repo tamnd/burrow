@@ -96,9 +96,18 @@ httptest_response_recorder_free(rec);
 http_request_free(r);
 ```
 
-That prints:
+With the variables from the sections above published, that prints:
 
 ```text
+200 application/json; charset=utf-8
+{
+"by_path": {"/": 3, "/about": 1},
+"cmdline":
+"memstats":
+"queue": 5,
+"requests": 4,
+"version": "1.4.2"
+}
 ```
 
 The pattern is `GET /debug/vars`, so other methods get 405. With `GODEBUG=httpmuxgo121=1` it is `/debug/vars` with no method, which is what Go does under that setting.

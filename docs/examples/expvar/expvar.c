@@ -77,4 +77,16 @@ int main(void) {
 }
 
 /* Output:
+requests 4
+by_path {"/": 3, "/about": 1}
+queue 5
+200 application/json; charset=utf-8
+{
+"by_path": {"/": 3, "/about": 1},
+"cmdline":
+"memstats":
+"queue": 5,
+"requests": 4,
+"version": "1.4.2"
+}
 */

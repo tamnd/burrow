@@ -171,7 +171,7 @@ static uint8_t *nl_rib(uint16_t proto, int64_t *len, PalErrno *e) {
         return NULL;
     }
     uint8_t *tab = NULL;
-    uint8_t *rb = nl_map(NL_RECV_BUF);
+    uint8_t *rb = nl_map((int64_t)NL_RECV_BUF);
     int64_t n = 0;
     int64_t cap = 0;
     NlSockAddr sa;
@@ -210,7 +210,7 @@ static uint8_t *nl_rib(uint16_t proto, int64_t *len, PalErrno *e) {
         goto fail;
     }
     for (;;) {
-        ssize_t nr = recvfrom(s, rb, NL_RECV_BUF, 0, NULL, NULL);
+        ssize_t nr = recvfrom(s, rb, (size_t)NL_RECV_BUF, 0, NULL, NULL);
         if (nr < 0) {
             if (errno == EINTR)
                 continue;
@@ -221,7 +221,7 @@ static uint8_t *nl_rib(uint16_t proto, int64_t *len, PalErrno *e) {
             goto fail;
         }
         if (n + (int64_t)nr > cap) {
-            int64_t ncap = cap == 0 ? 2 * NL_RECV_BUF : 2 * cap;
+            int64_t ncap = cap == 0 ? 2 * (int64_t)NL_RECV_BUF : 2 * cap;
             while (ncap < n + (int64_t)nr)
                 ncap *= 2;
             uint8_t *nt = nl_map(ncap);

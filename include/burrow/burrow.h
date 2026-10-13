@@ -97,6 +97,7 @@
 #include "burrow/fmt.h"
 #include "burrow/func.h"
 #include "burrow/go/ast.h"
+#include "burrow/go/build.h"
 #include "burrow/go/build/constraint.h"
 #include "burrow/go/constant.h"
 #include "burrow/go/doc.h"

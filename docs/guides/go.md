@@ -1162,3 +1162,69 @@ That prints:
 ```
 
 `doc_package_synopsis`, `doc_package_html`, `doc_package_markdown` and `doc_package_text` do the same with doc links resolved against the package, through the `CommentParser` and `CommentPrinter` that `doc_package_parser` and `doc_package_printer` set up. `doc_examples` finds the examples in a set of test files on its own, without the package they belong to.
+
+## Building packages
+
+`burrow/go/build.h` is Go's `go/build`, which decides what makes up a package: which files in a directory are compiled for a given system, what they import, and where an import path lives on disk. A `BuildContext` describes the build. `build_default` fills one in from the environment the way Go does, with `GOOS`, `GOARCH`, `GOROOT`, `GOPATH` and `CGO_ENABLED`, and any field can be changed afterwards. `build_context_import_dir` reads a directory under that context and sorts its files into the lists of a `BuildPackage`:
+
+<!-- example: ../examples/go/build.c#import -->
+```c
+BuildContext ctxt = build_default(a);
+ctxt.goos = BURROW_S("linux");
+ctxt.goarch = BURROW_S("amd64");
+Error err = BURROW_NO_ERROR;
+BuildPackage *p = build_context_import_dir(&ctxt, a, dir, 0, &err);
+if (BURROW_FAILED(err)) {
+    fmt_printf_v("%s\n", error_text(err));
+    return;
+}
+Str sp = BURROW_S(" ");
+fmt_printf_v("package %s: %s\n", p->name, p->doc);
+fmt_printf_v("go files: %s\n", strings_join(a, p->go_files, sp));
+fmt_printf_v("ignored: %s\n", strings_join(a, p->ignored_go_files, sp));
+fmt_printf_v("test files: %s\n", strings_join(a, p->test_go_files, sp));
+fmt_printf_v("imports: %s\n", strings_join(a, p->imports, sp));
+fmt_printf_v("test imports: %s\n", strings_join(a, p->test_imports, sp));
+fmt_printf_v("tags seen: %s\n", strings_join(a, p->all_tags, sp));
+```
+
+That prints:
+
+```
+package greet: Package greet says hello.
+go files: greet.go greet_linux.go
+ignored: gen.go greet_windows.go
+test files: greet_test.go
+imports: fmt os
+test imports: testing
+tags seen: ignore linux windows
+```
+
+`greet_windows.go` is left out by its name and `gen.go` by its `//go:build` line. Both end up in `ignored_go_files`, and the tags they mention are in `all_tags`, so a tool can tell which files could change under another build. `build_context_import` does the same for an import path. It looks in `GOROOT` and `GOPATH`, follows vendor directories, and in module mode asks `go list` through the `go` command in `GOROOT`, as Go does. A missing package still gives back a `BuildPackage` with what was learned along with the error. A directory without Go files gives a `BuildNoGoError`, and one holding two packages gives a `BuildMultiplePackageError`, which `errors_as` finds.
+
+`build_context_match_file` asks the same question about a single file:
+
+<!-- example: ../examples/go/build.c#match -->
+```c
+BuildContext ctxt = build_default(a);
+ctxt.goos = BURROW_S("windows");
+ctxt.goarch = BURROW_S("arm64");
+const char *names[] = {"greet.go", "greet_linux.go", "greet_windows.go", "gen.go"};
+for (int i = 0; i < 4; i++) {
+    Error err = BURROW_NO_ERROR;
+    Str name = str_from_cstr(names[i]);
+    bool ok = build_context_match_file(&ctxt, a, dir, name, &err);
+    fmt_printf_v("%s: %v\n", name, ok);
+}
+```
+
+That prints:
+
+```
+greet.go: true
+greet_linux.go: false
+greet_windows.go: true
+gen.go: false
+```
+
+The file system is reached through the hooks of the context, `join_path`, `read_dir`, `open_file` and the rest. They are left empty for the real file system, and setting them makes go/build work on files kept anywhere else.

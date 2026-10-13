@@ -447,6 +447,10 @@ static Any sc_clone_any(Alloc *a, Any v, Error *err) {
  * pointer it was given. */
 static Error sc_unsupported(Any src, Any dest) {
     Any dt = {dest.t, NULL};
+    /* A SqlRowsPtr destination is Go's *Rows, the pointer itself. */
+    if (dest.t == &burrow_type_SqlRowsPtr)
+        return fmt_errorf_v(
+            "unsupported Scan, storing driver.Value type %T into type %T", src, dt);
     return fmt_errorf_v("unsupported Scan, storing driver.Value type %T into type *%T",
                         src, dt);
 }
@@ -688,9 +692,6 @@ Error burrow__sql_convert_assign_rows(Alloc *a, Any dest, Any src, SqlRows *rows
             return e;
         }
     }
-
-    if (dt == &burrow_type_SqlRowsPtr)
-        return sc_unsupported(src, dest);
 
     void *dv = dest.data;
     Kind dk = dt->kind;

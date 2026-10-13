@@ -2264,13 +2264,20 @@ static bool sv_close_idle_conns(HttpServer *s) {
     return quiescent;
 }
 
-/* Runs a copy of an on_shutdown func, since the server can be freed before
- * the goroutine gets to it. */
+/* An on_shutdown func on its way to a goroutine, and the server whose
+ * conn_group counts it, so that http_server_free waits for it to finish. */
+typedef struct sv_Hook {
+    HttpServer *s;
+    Func fn;
+} sv_Hook;
+
 static void sv_run_on_shutdown(void *env) {
-    Func *f = (Func *)env;
-    Func fn = *f;
-    mem_free(heap_allocator(), f, sizeof *f, _Alignof(Func));
+    sv_Hook *h = (sv_Hook *)env;
+    HttpServer *s = h->s;
+    Func fn = h->fn;
+    mem_free(heap_allocator(), h, sizeof *h, _Alignof(sv_Hook));
     BURROW_CALLF0(fn);
+    sync_wait_group_done(&s->conn_group);
 }
 
 Error http_server_shutdown(HttpServer *s, Context ctx) {
@@ -2280,14 +2287,18 @@ Error http_server_shutdown(HttpServer *s, Context ctx) {
     Error lnerr = sv_close_listeners_locked(s);
     Func *fs = (Func *)s->on_shutdown.p;
     for (Int i = 0; i < s->on_shutdown.len; i++) {
-        Func *f = (Func *)mem_alloc(heap_allocator(), sizeof *f, _Alignof(Func));
-        if (f == NULL) {
+        sv_Hook *h =
+            (sv_Hook *)mem_alloc(heap_allocator(), sizeof *h, _Alignof(sv_Hook));
+        if (h == NULL) {
             BURROW_CALLF0(fs[i]);
             continue;
         }
-        *f = fs[i];
-        if (!go(BURROW_FN(Func, sv_run_on_shutdown, f))) {
-            mem_free(heap_allocator(), f, sizeof *f, _Alignof(Func));
+        h->s = s;
+        h->fn = fs[i];
+        sync_wait_group_add(&s->conn_group, 1);
+        if (!go(BURROW_FN(Func, sv_run_on_shutdown, h))) {
+            sync_wait_group_done(&s->conn_group);
+            mem_free(heap_allocator(), h, sizeof *h, _Alignof(sv_Hook));
             BURROW_CALLF0(fs[i]);
         }
     }

@@ -556,7 +556,7 @@ static void TestReaderChecks(TestingT *t) {
 }
 ```
 
-`iotest_truncate_writer` is the one writer: it passes the first n bytes through and drops the rest, while telling the caller every write went through. Go's `NewReadLogger` and `NewWriteLogger` are not here yet. They log through package `log`, and will come with it.
+`iotest_truncate_writer` is the one writer: it passes the first n bytes through and drops the rest, while telling the caller every write went through. `iotest_new_read_logger` and `iotest_new_write_logger` pass everything through and log each call with `log_printf`, as the prefix, the bytes in hex and the error when there is one, which is handy when you want to see what a protocol sends and receives.
 
 ## Checking a file system
 
@@ -648,6 +648,110 @@ docs/hello.txt: ReadAll vs fs.ReadFile: different data returned
 The messages are the ones Go's TestFS uses, down to the lower case "Readall" in one of them.
 
 The errors wrap what the FS returned, so `errors_is` finds `fs_err_permission` or whatever else is in there. Pass `slice_nil(TYPE_STRING)` for the names to check that an FS is empty.
+
+## Checking a slog handler
+
+`slogtest_test_handler` is `slogtest.TestHandler`, for anyone writing an `SlogHandler`. It logs through your handler once for each of the rules a handler has to keep: ignore an empty attribute, leave out a group with nothing in it, call `LogValue` on values, put the attributes from `with_attrs` in the right group, and so on. Then it calls your results function for what came out, one map for each record, and checks each one. For a handler that writes JSON, `json_unmarshal` into a `map[string]any` gives the maps it wants:
+
+<!-- example: ../examples/testing/slogtest.c#results -->
+```c
+/* The results function: each line the handler wrote, decoded as a JSON
+ * object into a map[string]any. */
+typedef struct Lines {
+    Alloc *a;
+    BytesBuffer *buf;
+} Lines;
+
+static Slice parse_lines(void *env) {
+    Lines *l = env;
+    Slice ms = slice_nil(TYPE_JSONV2_MAP_STRING_ANY);
+    Slice lines = bytes_split(l->a, bytes_buffer_bytes(l->buf), BURROW_B("\n"));
+    const Slice *ls = lines.p;
+    for (Int i = 0; i < lines.len; i++) {
+        if (ls[i].len == 0)
+            continue;
+        Map *m = NULL;
+        Error err =
+            json_unmarshal(l->a, ls[i], BURROW_ANY(TYPE_JSONV2_MAP_STRING_ANY, &m));
+        if (BURROW_FAILED(err))
+            return slice_nil(TYPE_JSONV2_MAP_STRING_ANY); /* in a real test, fatal */
+        ms = slice_append(l->a, ms, &m, 1);
+    }
+    return ms;
+}
+
+static void TestJSONHandler(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    BytesBuffer buf = BYTES_BUFFER(a);
+    SlogJSONHandler *h =
+        slog_new_json_handler(a, bytes_buffer_as_io_writer(&buf), NULL);
+
+    Lines l = {a, &buf};
+    Error err = slogtest_test_handler(slog_json_handler_as_handler(h),
+                                      BURROW_FN(SlogtestResultsFunc, parse_lines, &l));
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    fmt_println_v("the JSON handler passes");
+    arena_free(&ar);
+}
+```
+
+The error lists every check that failed, each with the rule it was checking and the file and line of the case. Here is a handler that leaves out the time:
+
+<!-- example: ../examples/testing/slogtest.c#broken -->
+```c
+/* A handler with a bug: it leaves the time out of every record. */
+static SlogAttr drop_time(void *ctx, Alloc *a, Slice groups, SlogAttr attr) {
+    (void)ctx;
+    (void)a;
+    if (groups.len == 0 && str_eq(attr.key, SLOG_TIME_KEY))
+        return (SlogAttr){0};
+    return attr;
+}
+
+static void TestNoTime(TestingT *t) {
+    (void)t;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    BytesBuffer buf = BYTES_BUFFER(a);
+    SlogHandlerOptions opts = {0};
+    opts.replace_attr = drop_time;
+    SlogJSONHandler *h =
+        slog_new_json_handler(a, bytes_buffer_as_io_writer(&buf), &opts);
+
+    Lines l = {a, &buf};
+    Error err = slogtest_test_handler(slog_json_handler_as_handler(h),
+                                      BURROW_FN(SlogtestResultsFunc, parse_lines, &l));
+
+    /* One line for each check that failed, ending with the file and line of
+     * the case, which are left off here. */
+    Str rest = error_text(err);
+    while (rest.len > 0) {
+        Str source = BURROW_STR_EMPTY;
+        bool found = false;
+        Str line = strings_cut(rest, BURROW_S("\n"), &rest, &found);
+        fmt_println_v(strings_cut(line, BURROW_S(" ("), &source, &found));
+    }
+    arena_free(&ar);
+}
+```
+
+That prints:
+
+```
+missing key "time": this test expects slog.TimeKey, slog.LevelKey and slog.MessageKey
+missing key "time": a Handler should handle the WithGroup method
+missing key "time": a Handler should handle multiple WithGroup and WithAttr calls
+missing key "time": a Handler should not output groups if there are no attributes
+missing key "time": a Handler should not output nested groups if there are no attributes
+```
+
+Five of the cases look for the time. The zero-time case checks the opposite, that a record whose time is zero has none, so this handler passes that one.
+
+`slogtest_run` is `slogtest.Run`, the same cases with one subtest each. It asks for a new handler at the start of each subtest and for the one record as a map at the end, so a failure names the case it came from.
 
 ## Porting a test from Go
 

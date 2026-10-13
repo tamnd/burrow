@@ -1,5 +1,5 @@
-/* Derived from Go's src/testing/iotest/reader_test.go, writer_test.go and
- * example_test.go.
+/* Derived from Go's src/testing/iotest/reader_test.go, writer_test.go,
+ * logger_test.go and example_test.go.
  * Go source: go1.27.1.
  *
  * Copyright 2019 The Go Authors. All rights reserved.
@@ -384,6 +384,153 @@ static void TestTruncateWriter(TestingT *t) {
     }
 }
 
+/* The standard logger's writer, flags and prefix, which the logger tests
+ * change and put back. */
+typedef struct LogSettings {
+    IoWriter w;
+    Int flags;
+    Str prefix;
+} LogSettings;
+
+static LogSettings log_settings_save(StringsBuilder *out, Str prefix) {
+    LogSettings old = {log_writer(), log_flags(), log_prefix()};
+    log_set_prefix(prefix);
+    log_set_output(strings_builder_as_io_writer(out));
+    log_set_flags(0);
+    return old;
+}
+
+static void log_settings_restore(LogSettings old) {
+    log_set_flags(old.flags);
+    log_set_prefix(old.prefix);
+    log_set_output(old.w);
+}
+
+/* Go's errWriter. */
+static Int err_write(void *self, Slice p, Error *err) {
+    (void)p;
+    BURROW_OUT(err, *(const Error *)self);
+    return 0;
+}
+
+static const IoWriterVT err_writer_vt = {NULL, err_write};
+
+static void TestWriteLogger(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    StringsBuilder l_out = STRINGS_BUILDER(a);
+    LogSettings old = log_settings_save(&l_out, S("lw: "));
+
+    StringsBuilder lw = STRINGS_BUILDER(a);
+    IoWriter wl =
+        iotest_new_write_logger(a, S("write:"), strings_builder_as_io_writer(&lw));
+    Error err = BURROW_NO_ERROR;
+    BURROW_CALL(wl, write, bytes_of(S("Hello, World!")), &err);
+    if (BURROW_FAILED(err)) {
+        log_settings_restore(old);
+        testing_t_fatalf_v(t, "Unexpectedly failed to write: %v", err);
+    }
+
+    Str g = strings_builder_string(&lw), w = S("Hello, World!");
+    if (!str_eq(g, w))
+        testing_t_errorf_v(t, "WriteLogger mismatch\n\tgot:  %q\n\twant: %q", g, w);
+    Str want_log_with_hex = fmt_sprintf_v(a, "lw: write: %x\n", S("Hello, World!"));
+    g = strings_builder_string(&l_out);
+    if (!str_eq(g, want_log_with_hex))
+        testing_t_errorf_v(t, "WriteLogger mismatch\n\tgot:  %q\n\twant: %q", g,
+                           want_log_with_hex);
+    log_settings_restore(old);
+    arena_free(&ar);
+}
+
+static void TestWriteLogger_errorOnWrite(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    StringsBuilder l_out = STRINGS_BUILDER(a);
+    LogSettings old = log_settings_save(&l_out, S("lw: "));
+
+    Error write_err = errors_new(a, S("Write Error!"));
+    IoWriter lw = {&err_writer_vt, &write_err};
+    IoWriter wl = iotest_new_write_logger(a, S("write:"), lw);
+    Error err = BURROW_NO_ERROR;
+    BURROW_CALL(wl, write, bytes_of(S("Hello, World!")), &err);
+    if (BURROW_OK(err)) {
+        log_settings_restore(old);
+        testing_t_fatalf_v(t, "Unexpectedly succeeded to write: %v", err);
+    }
+
+    Str want_log_with_hex =
+        fmt_sprintf_v(a, "lw: write: %x: %v\n", S(""), S("Write Error!"));
+    Str g = strings_builder_string(&l_out);
+    if (!str_eq(g, want_log_with_hex))
+        testing_t_errorf_v(t, "WriteLogger mismatch\n\tgot:  %q\n\twant: %q", g,
+                           want_log_with_hex);
+    log_settings_restore(old);
+    arena_free(&ar);
+}
+
+static void TestReadLogger(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    StringsBuilder l_out = STRINGS_BUILDER(a);
+    LogSettings old = log_settings_save(&l_out, S("lr: "));
+
+    Slice data = bytes_of(S("Hello, World!"));
+    Slice p = slice_make(a, TYPE_BYTE, data.len, data.len);
+    BytesReader *lr = bytes_new_reader(a, data);
+    IoReader rl = iotest_new_read_logger(a, S("read:"), bytes_reader_as_io_reader(lr));
+
+    Error err = BURROW_NO_ERROR;
+    Int n = BURROW_CALL(rl, read, p, &err);
+    if (BURROW_FAILED(err)) {
+        log_settings_restore(old);
+        testing_t_fatalf_v(t, "Unexpectedly failed to read: %v", err);
+    }
+
+    Slice g = slice_sub(p, 0, n);
+    if (!bytes_equal(g, data))
+        testing_t_errorf_v(t, "ReadLogger mismatch\n\tgot:  %q\n\twant: %q", g, data);
+    Str want_log_with_hex = fmt_sprintf_v(a, "lr: read: %x\n", S("Hello, World!"));
+    Str gs = strings_builder_string(&l_out);
+    if (!str_eq(gs, want_log_with_hex))
+        testing_t_errorf_v(t, "ReadLogger mismatch\n\tgot:  %q\n\twant: %q", gs,
+                           want_log_with_hex);
+    log_settings_restore(old);
+    arena_free(&ar);
+}
+
+static void TestReadLogger_errorOnRead(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    StringsBuilder l_out = STRINGS_BUILDER(a);
+    LogSettings old = log_settings_save(&l_out, S("lr: "));
+
+    Slice data = bytes_of(S("Hello, World!"));
+    Slice p = slice_make(a, TYPE_BYTE, data.len, data.len);
+
+    IoReader lr = iotest_err_reader(a, errors_new(a, S("io failure")));
+    IoReader rl = iotest_new_read_logger(a, S("read"), lr);
+    Error err = BURROW_NO_ERROR;
+    Int n = BURROW_CALL(rl, read, p, &err);
+    if (BURROW_OK(err)) {
+        log_settings_restore(old);
+        testing_t_fatalf_v(t, "Unexpectedly succeeded to read: %v", err);
+    }
+
+    Str want_log_with_hex =
+        fmt_sprintf_v(a, "lr: read %x: io failure\n", slice_sub(p, 0, n));
+    Str g = strings_builder_string(&l_out);
+    if (!str_eq(g, want_log_with_hex))
+        testing_t_errorf_v(t, "ReadLogger mismatch\n\tgot:  %q\n\twant: %q", g,
+                           want_log_with_hex);
+    log_settings_restore(old);
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestOneByteReader_nonEmptyReader)                                                \
     X(TestOneByteReader_emptyReader)                                                   \
@@ -398,6 +545,10 @@ static void TestTruncateWriter(TestingT *t) {
     X(TestBytesReader)                                                                 \
     X(TestFileReader)                                                                  \
     X(TestReaderReports)                                                               \
-    X(TestTruncateWriter)
+    X(TestTruncateWriter)                                                              \
+    X(TestWriteLogger)                                                                 \
+    X(TestWriteLogger_errorOnWrite)                                                    \
+    X(TestReadLogger)                                                                  \
+    X(TestReadLogger_errorOnRead)
 
 TESTING_MAIN(TESTS)

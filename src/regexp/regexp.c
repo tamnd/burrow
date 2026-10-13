@@ -76,60 +76,6 @@ static const Type rx_bytess_desc = {
     NULL,
 };
 
-/* [][]int */
-static const Type rx_intss_desc = {
-    {NULL, 0},
-    {NULL, 0},
-    KIND_SLICE,
-    (uint32_t)sizeof(Slice),
-    (uint16_t)_Alignof(Slice),
-    0,
-    0,
-    NULL,
-    NULL,
-    &rx_ints_desc,
-    NULL,
-    0,
-    0x72786932U, /* "rxi2" */
-    NULL,
-};
-
-/* [][]string */
-static const Type rx_strss_desc = {
-    {NULL, 0},
-    {NULL, 0},
-    KIND_SLICE,
-    (uint32_t)sizeof(Slice),
-    (uint16_t)_Alignof(Slice),
-    0,
-    0,
-    NULL,
-    NULL,
-    &rx_strs_desc,
-    NULL,
-    0,
-    0x72787332U, /* "rxs2" */
-    NULL,
-};
-
-/* [][][]byte */
-static const Type rx_bytesss_desc = {
-    {NULL, 0},
-    {NULL, 0},
-    KIND_SLICE,
-    (uint32_t)sizeof(Slice),
-    (uint16_t)_Alignof(Slice),
-    0,
-    0,
-    NULL,
-    NULL,
-    &rx_bytess_desc,
-    NULL,
-    0,
-    0x72786233U, /* "rxb3" */
-    NULL,
-};
-
 /* ---------------------------------------------------------------- compiling */
 
 typedef struct RxLenFrame {
@@ -555,7 +501,7 @@ static void rx_pad(RxCaps *c, Int ncap) {
 }
 
 static Slice rx_ints(Alloc *a, const Int *m, Int n) {
-    Slice s = slice_make(a, &rx_ints_desc, n, n);
+    Slice s = slice_make(a, TYPE_INT, n, n);
     if (s.p != NULL && n > 0)
         memcpy(s.p, m, (size_t)n * sizeof(Int));
     return s;
@@ -587,7 +533,7 @@ Str regexp_find_string(const Regexp *re, Str s) {
 static Slice rx_find_index(const Regexp *re, Alloc *a, RxInput *in) {
     Int m[2];
     if (!rx_find(re, in, 0, 2, m))
-        return slice_nil(&rx_ints_desc);
+        return slice_nil(TYPE_INT);
     return rx_ints(a, m, 2);
 }
 
@@ -622,7 +568,7 @@ static bool rx_find_submatch(const Regexp *re, RxInput *in, RxCaps *c) {
 
 /* The [][]byte FindSubmatch gives for the positions in m. */
 static Slice rx_bytes_submatch(Alloc *a, Slice b, const Int *m, Int n) {
-    Slice sub = slice_make(a, &rx_bytess_desc, n / 2, n / 2);
+    Slice sub = slice_make(a, TYPE_BYTES, n / 2, n / 2);
     if (sub.p == NULL)
         return sub;
     Slice *out = (Slice *)sub.p;
@@ -634,7 +580,7 @@ static Slice rx_bytes_submatch(Alloc *a, Slice b, const Int *m, Int n) {
 
 /* The []string FindStringSubmatch gives. */
 static Slice rx_str_submatch(Alloc *a, Str s, const Int *m, Int n) {
-    Slice sub = slice_make(a, &rx_strs_desc, n / 2, n / 2);
+    Slice sub = slice_make(a, TYPE_STRING, n / 2, n / 2);
     if (sub.p == NULL)
         return sub;
     Str *out = (Str *)sub.p;
@@ -649,7 +595,7 @@ Slice regexp_find_submatch(const Regexp *re, Alloc *a, Slice b) {
     RxInput in = rx_bytes(rx_bp(b), b.len);
     RxCaps c;
     if (!rx_find_submatch(re, &in, &c))
-        return slice_nil(&rx_bytess_desc);
+        return slice_nil(TYPE_BYTES);
     Slice sub = rx_bytes_submatch(a, b, c.m, c.n);
     rx_caps_free(&c);
     return sub;
@@ -659,7 +605,7 @@ Slice regexp_find_string_submatch(const Regexp *re, Alloc *a, Str s) {
     RxInput in = rx_bytes(s.p, s.len);
     RxCaps c;
     if (!rx_find_submatch(re, &in, &c))
-        return slice_nil(&rx_strs_desc);
+        return slice_nil(TYPE_STRING);
     Slice sub = rx_str_submatch(a, s, c.m, c.n);
     rx_caps_free(&c);
     return sub;
@@ -668,7 +614,7 @@ Slice regexp_find_string_submatch(const Regexp *re, Alloc *a, Str s) {
 static Slice rx_find_submatch_index(const Regexp *re, Alloc *a, RxInput *in) {
     RxCaps c;
     if (!rx_find_submatch(re, in, &c))
-        return slice_nil(&rx_ints_desc);
+        return slice_nil(TYPE_INT);
     Slice sub = rx_ints(a, c.m, c.n);
     rx_caps_free(&c);
     return sub;
@@ -774,15 +720,15 @@ static Slice rx_find_all(const Regexp *re, Alloc *a, const Byte *p, Int len, Sli
     const Type *desc;
     switch (kind) {
     case RX_ALL:
-        desc = is_str ? &rx_strs_desc : &rx_bytess_desc;
+        desc = is_str ? TYPE_STRING : TYPE_BYTES;
         break;
     case RX_ALL_SUBMATCH:
-        desc = is_str ? &rx_strss_desc : &rx_bytesss_desc;
+        desc = is_str ? &rx_strs_desc : &rx_bytess_desc;
         break;
     case RX_ALL_INDEX:
     case RX_ALL_SUBMATCH_INDEX:
     default:
-        desc = &rx_intss_desc;
+        desc = &rx_ints_desc;
         break;
     }
     Slice nil = slice_nil(desc);
@@ -791,7 +737,7 @@ static Slice rx_find_all(const Regexp *re, Alloc *a, const Byte *p, Int len, Sli
     if (!rx_matches_init(&it, re, p, len, n, ncap))
         return nil;
     Alloc *h = heap_allocator();
-    size_t esz = desc->elem->size;
+    size_t esz = desc->size;
     Byte *vec = NULL;
     Int count = 0, vcap = 0;
     bool oom = false;
@@ -898,11 +844,11 @@ Slice regexp_find_all_string_submatch_index(const Regexp *re, Alloc *a, Str s, I
 }
 
 Slice regexp_split(const Regexp *re, Alloc *a, Str s, Int n) {
-    Slice nil = slice_nil(&rx_strs_desc);
+    Slice nil = slice_nil(TYPE_STRING);
     if (n == 0)
         return nil;
     if (re->p->expr.len > 0 && s.len == 0) {
-        Slice one = slice_make(a, &rx_strs_desc, 1, 1);
+        Slice one = slice_make(a, TYPE_STRING, 1, 1);
         if (one.p != NULL)
             *(Str *)one.p = BURROW_STR_EMPTY;
         return one;
@@ -917,7 +863,7 @@ Slice regexp_split(const Regexp *re, Alloc *a, Str s, Int n) {
         nmatch++;
     rx_caps_free(&it.c);
 
-    Slice out = slice_make(a, &rx_strs_desc, 0, nmatch + 1);
+    Slice out = slice_make(a, TYPE_STRING, 0, nmatch + 1);
     if (out.p == NULL)
         return nil;
     Str *strs = (Str *)out.p;

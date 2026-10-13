@@ -323,3 +323,53 @@ Error burrow__pfd_set_deadline(burrow__PollFD *fd, Time t, uint32_t mode) {
 Error burrow__pfd_wait_write(burrow__PollFD *fd) {
     return pfd_wait(fd, BURROW_POLL_WRITE);
 }
+
+/* ------------------------------------------------------------ the raw calls */
+
+BURROW_SENTINEL_ERROR(burrow__net_err_unsupported_wait,
+                      "waiting for unsupported file type");
+
+/* pollDesc.prepare and wait for a descriptor that may not be in the poller
+ * yet, which Go lets through and then refuses to wait for. */
+static Error pfd_raw_prepare(burrow__PollFD *fd, uint32_t mode) {
+    if (fd->pd == NULL)
+        return BURROW_NO_ERROR;
+    return pfd_prepare(fd, mode);
+}
+
+static Error pfd_raw_wait(burrow__PollFD *fd, uint32_t mode) {
+    if (fd->pd == NULL)
+        return burrow__net_err_unsupported_wait;
+    return pfd_wait(fd, mode);
+}
+
+Error burrow__pfd_raw_control(burrow__PollFD *fd, SyscallFdFunc f) {
+    Error e = burrow__pfd_incref(fd);
+    if (BURROW_FAILED(e))
+        return e;
+    f.f(f.env, (Uintptr)fd->sysfd);
+    (void)burrow__pfd_decref(fd);
+    return BURROW_NO_ERROR;
+}
+
+static Error pfd_raw_io(burrow__PollFD *fd, SyscallFdDoneFunc f, bool read) {
+    uint32_t mode = read ? BURROW_POLL_READ : BURROW_POLL_WRITE;
+    if (!pfd_lock(fd, read))
+        return net_err_closed;
+    Error e = pfd_raw_prepare(fd, mode);
+    while (!BURROW_FAILED(e)) {
+        if (f.f(f.env, (Uintptr)fd->sysfd))
+            break;
+        e = pfd_raw_wait(fd, mode);
+    }
+    pfd_unlock(fd, read);
+    return e;
+}
+
+Error burrow__pfd_raw_read(burrow__PollFD *fd, SyscallFdDoneFunc f) {
+    return pfd_raw_io(fd, f, true);
+}
+
+Error burrow__pfd_raw_write(burrow__PollFD *fd, SyscallFdDoneFunc f) {
+    return pfd_raw_io(fd, f, false);
+}

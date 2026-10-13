@@ -16,6 +16,7 @@
 #include "burrow/error.h"
 #include "burrow/mem.h"
 #include "burrow/net.h"
+#include "burrow/net/netip.h"
 #include "burrow/platform.h"
 
 #include <stdint.h>
@@ -110,6 +111,64 @@ Str burrow__net_inet_addr_string(const burrow__NetInetAddr *a, Alloc *al) {
 }
 
 /* ------------------------------------------------------------ sockaddrs */
+
+/* An address burrow__net_inet_addr_new made, with the bytes its ip and zone
+ * point at after it, and the size to give back. */
+typedef struct IpAddrBox {
+    burrow__NetInetAddr a;
+    size_t size;
+} IpAddrBox;
+
+burrow__NetInetAddr *burrow__net_inet_addr_new(Alloc *a, const Byte *ip, Int iplen,
+                                               Int port, Str zone) {
+    size_t size = sizeof(IpAddrBox) + (size_t)iplen + (size_t)zone.len;
+    IpAddrBox *b = (IpAddrBox *)mem_alloc_nozero(a, size, _Alignof(IpAddrBox));
+    if (b == NULL)
+        return NULL;
+    b->size = size;
+    Byte *p = (Byte *)(b + 1);
+    if (iplen > 0)
+        memcpy(p, ip, (size_t)iplen);
+    b->a.ip = iplen > 0 ? slice_from(p, iplen, iplen, TYPE_BYTE) : (NetIP){0};
+    if (zone.len > 0)
+        memcpy(p + iplen, zone.p, (size_t)zone.len);
+    b->a.zone = str_from_bytes(p + iplen, zone.len);
+    b->a.port = port;
+    return &b->a;
+}
+
+void burrow__net_inet_addr_free(Alloc *a, burrow__NetInetAddr *addr) {
+    if (addr == NULL)
+        return;
+    IpAddrBox *b = (IpAddrBox *)(void *)addr;
+    mem_free(a, b, b->size, _Alignof(IpAddrBox));
+}
+
+NetipAddrPort burrow__net_inet_addr_port(const burrow__NetInetAddr *a) {
+    if (a == NULL)
+        return (NetipAddrPort){0};
+    bool ok = false;
+    NetipAddr na = netip_addr_from_slice(a->ip, &ok);
+    na = netip_addr_with_zone(na, a->zone);
+    return netip_addr_port_from(na, (uint16_t)a->port);
+}
+
+burrow__NetInetAddr *burrow__net_inet_from_addr_port(Alloc *a, NetipAddrPort ap) {
+    NetipAddr ip = netip_addr_port_addr(ap);
+    Byte bytes[16] = {0};
+    Int iplen = 0;
+    if (netip_addr_is4(ip)) {
+        NetipAddrAs4Ret b4 = netip_addr_as4(ip);
+        memcpy(bytes, b4.a, 4);
+        iplen = 4;
+    } else if (netip_addr_is_valid(ip)) {
+        NetipAddrAs16Ret b16 = netip_addr_as16(ip);
+        memcpy(bytes, b16.a, 16);
+        iplen = 16;
+    }
+    return burrow__net_inet_addr_new(a, bytes, iplen, (Int)netip_addr_port_port(ap),
+                                     netip_addr_zone(ip));
+}
 
 bool burrow__net_inet_from_sockaddr(const PalSockAddr *sa, NetIP *ip, Int *port,
                                     Str *zone, burrow__NetInetBytes *b) {
@@ -228,6 +287,23 @@ static Error ip_group_sockaddr(const void *addr, int32_t family, PalSockAddr *ou
     return burrow__net_ip_sockaddr(family, (NetIP){0}, a->port, a->zone, out);
 }
 
+/* TCPAddr.String and UDPAddr.String, which are the same text. */
+static Str ip_inet_text(const void *addr, int32_t family, Alloc *a) {
+    (void)family;
+    return burrow__net_inet_addr_string((const burrow__NetInetAddr *)addr, a);
+}
+
+/* The text of the address ip_group_sockaddr binds: IPv4zero or
+ * IPv6unspecified, with the group's port and zone. */
+static Str ip_group_text(const void *addr, int32_t family, Alloc *a) {
+    static const Byte v4zero[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+    static const Byte v6zero[16] = {0};
+    burrow__NetInetAddr g = *(const burrow__NetInetAddr *)addr;
+    g.ip = slice_from((void *)(uintptr_t)(family == PAL_AF_INET ? v4zero : v6zero), 16,
+                      16, TYPE_BYTE);
+    return burrow__net_inet_addr_string(&g, a);
+}
+
 /* TCPAddr.family and UDPAddr.family. */
 static int32_t ip_family(const burrow__NetInetAddr *a) {
     if (a == NULL || a->ip.len <= 4)
@@ -270,10 +346,10 @@ static int32_t ip_favorite_family(Str net, const burrow__NetInetAddr *laddr,
     return PAL_AF_INET6;
 }
 
-Error burrow__net_internet_socket(burrow__NetFD *fd, Str net,
-                                  const burrow__NetInetAddr *laddr,
+Error burrow__net_internet_socket(burrow__NetFD *fd, const burrow__NetSockCtl *ctl,
+                                  Str net, const burrow__NetInetAddr *laddr,
                                   const burrow__NetInetAddr *raddr, int32_t sotype,
-                                  bool listen, Time deadline) {
+                                  int32_t proto, bool listen) {
 #if defined(BURROW_OS_AIX) || defined(BURROW_OS_FREEBSD) ||                            \
     defined(BURROW_OS_OPENBSD) || defined(BURROW_OS_WINDOWS)
     /* These systems will not connect to the unspecified address, which means
@@ -295,7 +371,8 @@ Error burrow__net_internet_socket(burrow__NetFD *fd, Str net,
     /* listenDatagram binds a multicast group as the unspecified address. */
     bool group = sotype == PAL_SOCK_DGRAM && laddr != NULL && raddr == NULL &&
                  laddr->ip.p != NULL && net_ip_is_multicast(laddr->ip);
-    return burrow__netfd_socket(fd, net, family, sotype, 0, ipv6only, laddr, raddr,
-                                group, group ? ip_group_sockaddr : ip_inet_sockaddr,
-                                deadline);
+    return burrow__netfd_socket(fd, ctl, net, family, sotype, proto, ipv6only, laddr,
+                                raddr, group,
+                                group ? ip_group_sockaddr : ip_inet_sockaddr,
+                                group ? ip_group_text : ip_inet_text);
 }

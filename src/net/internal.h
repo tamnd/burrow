@@ -19,6 +19,7 @@
 #include "burrow/own.h"
 #include "burrow/pal.h"
 #include "burrow/slice.h"
+#include "burrow/syscall.h"
 #include "burrow/time.h"
 
 #include "../xnet/dnsmessage.h"
@@ -111,6 +112,17 @@ Error burrow__pfd_set_deadline(burrow__PollFD *fd, Time t, uint32_t mode);
  * caller is the only one who has the FD yet. */
 Error burrow__pfd_wait_write(burrow__PollFD *fd);
 
+/* poll.FD.RawControl, RawRead and RawWrite, which hand f the descriptor
+ * while holding it open. RawRead calls f until it says it is done, waiting
+ * for the descriptor to be readable in between, and RawWrite does the same
+ * for writing. A descriptor not in the poller yet, such as the one a
+ * Dialer's Control sees, cannot be waited for, and gives an error saying
+ * so instead. */
+extern const Error burrow__net_err_unsupported_wait;
+Error burrow__pfd_raw_control(burrow__PollFD *fd, SyscallFdFunc f);
+Error burrow__pfd_raw_read(burrow__PollFD *fd, SyscallFdDoneFunc f);
+Error burrow__pfd_raw_write(burrow__PollFD *fd, SyscallFdDoneFunc f);
+
 /* ------------------------------------------------------------------- netFD
  *
  * Go's netFD: a poll FD with what net knows about the socket around it, the
@@ -150,6 +162,27 @@ typedef struct burrow__NetFD {
 typedef Error (*burrow__NetToSockaddr)(const void *addr, int32_t family,
                                        PalSockAddr *out);
 
+/* The text of an address that a burrow__NetToSockaddr takes, as a Control
+ * function is given it, for a socket of family. */
+typedef Str (*burrow__NetAddrText)(const void *addr, int32_t family, Alloc *a);
+
+/* Go's ctrlCtxFn: a Dialer's ControlContext, or its Control or a
+ * ListenConfig's Control made to look like one. It sees the socket after it
+ * is made and before it is bound or connected, with network being "tcp4",
+ * "udp6", "unix" and the like, and address the text of the remote address,
+ * or of the local one when there is no remote. */
+BURROW_FUNC(burrow__NetCtrlFn, Error, Context ctx, Str network, Str address,
+            SyscallRawConn c);
+
+/* What a dial or a listen brings to a socket besides its addresses: the
+ * context a connect waits under, which a nil Context leaves with no deadline
+ * and nothing to cancel it, and the control function, which is left out
+ * when its f is NULL. */
+typedef struct burrow__NetSockCtl {
+    Context ctx;
+    burrow__NetCtrlFn ctrl;
+} burrow__NetSockCtl;
+
 /* What a burrow__NetToSockaddr gives for an address the system call would
  * turn down with EINVAL, such as a port past 65535, so that the caller can
  * report it as that call's error, the way Go's syscall package does. */
@@ -163,10 +196,24 @@ extern const Error burrow__net_err_sockaddr_einval;
  * listen to the group too. A connect waits, from a goroutine, until it is
  * done or deadline passes, and the zero Time is no deadline. On an error
  * nothing is left open. */
-Error burrow__netfd_socket(burrow__NetFD *fd, Str net, int32_t family, int32_t sotype,
-                           int32_t proto, bool ipv6only, const void *laddr,
-                           const void *raddr, bool group,
-                           burrow__NetToSockaddr to_sockaddr, Time deadline);
+Error burrow__netfd_socket(burrow__NetFD *fd, const burrow__NetSockCtl *ctl, Str net,
+                           int32_t family, int32_t sotype, int32_t proto, bool ipv6only,
+                           const void *laddr, const void *raddr, bool group,
+                           burrow__NetToSockaddr to_sockaddr,
+                           burrow__NetAddrText to_text);
+
+/* Go's rawConn and rawListener: the syscall.RawConn a Control function and
+ * SyscallConn hand out, over fd. The addresses are what its errors name, nil
+ * before the socket has any. A listener's can only be controlled, and its
+ * read and write give EINVAL. */
+typedef struct burrow__NetRawConn {
+    burrow__NetFD *fd;
+    NetAddr laddr;
+    NetAddr raddr;
+    bool listener;
+} burrow__NetRawConn;
+
+SyscallRawConn burrow__net_raw_conn(burrow__NetRawConn *rc);
 
 /* netFD.accept: the next connection, in out, with both its addresses. */
 Error burrow__netfd_accept(burrow__NetFD *fd, burrow__NetFD *out);
@@ -212,6 +259,8 @@ typedef struct burrow__NetConnCore {
     Alloc *alloc;
     NetAddr laddr;
     NetAddr raddr;
+    /* What SyscallConn hands out, set once the addresses are. */
+    burrow__NetRawConn raw;
 } burrow__NetConnCore;
 
 /* errMissingAddress, for a dial with no address to dial. */
@@ -269,6 +318,21 @@ bool burrow__net_inet_from_sockaddr(const PalSockAddr *sa, NetIP *ip, Int *port,
 BURROW_OWNS(ret) Str burrow__net_inet_addr_string(const burrow__NetInetAddr *a,
                                                   Alloc *al);
 
+/* An address in a with its own copy of ip's iplen bytes and of zone, which
+ * burrow__net_inet_addr_free gives back. This is what the TCPAddr and
+ * UDPAddr values a caller gets and frees are. */
+BURROW_OWNS(ret) burrow__NetInetAddr *
+burrow__net_inet_addr_new(Alloc *a, const Byte *ip, Int iplen, Int port, Str zone);
+void burrow__net_inet_addr_free(Alloc *a, burrow__NetInetAddr *addr);
+
+/* AddrPort and the FromAddrPort functions of TCPAddr and UDPAddr. */
+NetipAddrPort burrow__net_inet_addr_port(const burrow__NetInetAddr *a);
+BURROW_OWNS(ret) burrow__NetInetAddr *burrow__net_inet_from_addr_port(Alloc *a,
+                                                                      NetipAddrPort ap);
+
+/* The same for an IPAddr, which net_ip_addr_free gives back. */
+BURROW_OWNS(ret) NetIPAddr *burrow__net_ip_addr_new(Alloc *a, NetIP ip, Str zone);
+
 /* ipToSockaddr: the sockaddr of family for ip, port and zone. */
 Error burrow__net_ip_sockaddr(int32_t family, NetIP ip, Int port, Str zone,
                               PalSockAddr *out);
@@ -276,22 +340,86 @@ Error burrow__net_ip_sockaddr(int32_t family, NetIP ip, Int port, Str zone,
 /* To16, true when ip is 4 or 16 bytes long. */
 bool burrow__net_ip_to16(NetIP ip, Byte out[16]);
 
-/* internetSocket: a socket of type sotype for net, of the family Go would
- * choose for these addresses, bound, listening or connected the way
- * burrow__netfd_socket does it, with a connect that gives up at deadline
- * unless that is the zero Time. */
-Error burrow__net_internet_socket(burrow__NetFD *fd, Str net,
-                                  const burrow__NetInetAddr *laddr,
+/* internetSocket: a socket of type sotype and protocol proto for net, of the
+ * family Go would choose for these addresses, bound, listening or connected
+ * the way burrow__netfd_socket does it. */
+Error burrow__net_internet_socket(burrow__NetFD *fd, const burrow__NetSockCtl *ctl,
+                                  Str net, const burrow__NetInetAddr *laddr,
                                   const burrow__NetInetAddr *raddr, int32_t sotype,
-                                  bool listen, Time deadline);
+                                  int32_t proto, bool listen);
 
-/* DialTCP with a connect that gives up at deadline, which the resolver
- * needs and which the Dialer will be built on. The zero Time is no
- * deadline. */
-BURROW_OWNS(ret) NetTCPConn *burrow__net_dial_tcp_deadline(Alloc *a, Str network,
-                                                           const NetTCPAddr *laddr,
-                                                           const NetTCPAddr *raddr,
-                                                           Time deadline, Error *err);
+/* The part of a Dialer or a ListenConfig that the sockets of each kind need:
+ * the context and control function a socket is made with, and the
+ * keep-alive a new TCP connection gets, which is Go's newTCPConn rule. A
+ * zero one is what DialTCP and the other functions of each kind use.
+ * alloc_mu, when it is not NULL, is held around each use of the allocator,
+ * for the two TCP dials a Happy Eyeballs race runs at once. */
+typedef struct burrow__NetSysOpts {
+    burrow__NetSockCtl ctl;
+    SyncMutex *alloc_mu;
+    Duration keep_alive;
+    NetKeepAliveConfig keep_alive_config;
+} burrow__NetSysOpts;
+
+/* sysDialer.dialTCP, dialUDP and dialUnix, and sysListener.listenTCP,
+ * listenUDP, listenUnix and listenUnixgram: o may be NULL, and the error is
+ * the one to put in an OpError, which the caller adds, except that running
+ * out of memory is burrow_err_out_of_memory by itself. network has to be
+ * one of the kind's networks. */
+BURROW_OWNS(ret) NetTCPConn *
+burrow__net_sys_dial_tcp(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                         const NetTCPAddr *laddr, const NetTCPAddr *raddr, Error *err);
+BURROW_OWNS(ret) NetTCPListener *
+burrow__net_sys_listen_tcp(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                           const NetTCPAddr *laddr, Error *err);
+BURROW_OWNS(ret) NetUDPConn *
+burrow__net_sys_dial_udp(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                         const NetUDPAddr *laddr, const NetUDPAddr *raddr, Error *err);
+BURROW_OWNS(ret) NetUDPConn *
+burrow__net_sys_listen_udp(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                           const NetUDPAddr *laddr, Error *err);
+BURROW_OWNS(ret) NetUnixConn *
+burrow__net_sys_dial_unix(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                          const NetUnixAddr *laddr, const NetUnixAddr *raddr,
+                          Error *err);
+BURROW_OWNS(ret) NetUnixListener *
+burrow__net_sys_listen_unix(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                            const NetUnixAddr *laddr, Error *err);
+/* Whether c is an end of a net_pipe. */
+bool burrow__net_is_pipe(NetConn c);
+
+/* DialTCP, DialUDP and DialUnix with a Dialer's options in o, which may be
+ * NULL, and Go's checks and errors. */
+BURROW_OWNS(ret) NetTCPConn *burrow__net_dial_tcp(Alloc *a, const burrow__NetSysOpts *o,
+                                                  Str network, const NetTCPAddr *laddr,
+                                                  const NetTCPAddr *raddr, Error *err);
+BURROW_OWNS(ret) NetUDPConn *burrow__net_dial_udp(Alloc *a, const burrow__NetSysOpts *o,
+                                                  Str network, const NetUDPAddr *laddr,
+                                                  const NetUDPAddr *raddr, Error *err);
+BURROW_OWNS(ret) NetUnixConn *
+burrow__net_dial_unix(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                      const NetUnixAddr *laddr, const NetUnixAddr *raddr, Error *err);
+
+/* partialDeadline: the deadline for the next of addrs_remaining addresses
+ * when the whole dial has until deadline, both on the monotonic clock, with
+ * 0 for no deadline. burrow__net_err_timeout when the time is up. */
+Error burrow__net_partial_deadline(int64_t now, int64_t deadline, Int addrs_remaining,
+                                   int64_t *out);
+
+/* parseNetwork: the network without the protocol an "ip:" one has after it,
+ * in *afnet, and that protocol's number in *proto. needs_proto turns down an
+ * "ip" network that has none. */
+Error burrow__net_parse_network(Str network, bool needs_proto, Str *afnet, Int *proto);
+
+/* Resolver.lookupIPAddr, which the default resolver's is for a NULL r: the
+ * NetIPAddr values of host in a, for network, whose last byte says whether
+ * only IPv4 or only IPv6 is wanted. */
+BURROW_OWNS(ret) Slice burrow__net_lookup_ip_addr(NetResolver *r, Alloc *a, Context ctx,
+                                                  Str network, Str host, Error *err);
+
+BURROW_OWNS(ret) NetUnixConn *
+burrow__net_sys_listen_unixgram(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                                const NetUnixAddr *laddr, Error *err);
 
 /* ------------------------------------------------------------------ parse.go
  *

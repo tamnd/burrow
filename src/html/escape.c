@@ -95,10 +95,12 @@ static void html_unescape_entity(Byte *b, Int len, Int *dstp, Int *srcp) {
                 if ('0' <= c && c <= '9') {
                     x = 16 * x + (uint32_t)(c - '0');
                     continue;
-                } else if ('a' <= c && c <= 'f') {
+                }
+                if ('a' <= c && c <= 'f') {
                     x = 16 * x + (uint32_t)(c - 'a') + 10;
                     continue;
-                } else if ('A' <= c && c <= 'F') {
+                }
+                if ('A' <= c && c <= 'F') {
                     x = 16 * x + (uint32_t)(c - 'A') + 10;
                     continue;
                 }
@@ -148,21 +150,22 @@ static void html_unescape_entity(Byte *b, Int len, Int *dstp, Int *srcp) {
 
     const Byte *entity_name = s + 1;
     Int name_len = i - 1;
-    const burrow__HtmlEntity *e;
-    if (name_len == 0) {
-        /* No-op. */
-    } else if ((e = html_lookup(burrow__html_entity, burrow__html_entity_len,
-                                entity_name, name_len)) != NULL) {
-        *dstp = dst + html_put_rune(b, len, dst, e->r[0]);
-        *srcp = src + i;
-        return;
-    } else if ((e = html_lookup(burrow__html_entity2, burrow__html_entity2_len,
-                                entity_name, name_len)) != NULL) {
-        Int dst1 = dst + html_put_rune(b, len, dst, e->r[0]);
-        *dstp = dst1 + html_put_rune(b, len, dst1, e->r[1]);
-        *srcp = src + i;
-        return;
-    } else {
+    if (name_len > 0) {
+        const burrow__HtmlEntity *e = html_lookup(
+            burrow__html_entity, burrow__html_entity_len, entity_name, name_len);
+        if (e != NULL) {
+            *dstp = dst + html_put_rune(b, len, dst, e->r[0]);
+            *srcp = src + i;
+            return;
+        }
+        e = html_lookup(burrow__html_entity2, burrow__html_entity2_len, entity_name,
+                        name_len);
+        if (e != NULL) {
+            Int dst1 = dst + html_put_rune(b, len, dst, e->r[0]);
+            *dstp = dst1 + html_put_rune(b, len, dst1, e->r[1]);
+            *srcp = src + i;
+            return;
+        }
         Int max_len = name_len - 1;
         if (max_len > BURROW__HTML_LONGEST_ENTITY_WITHOUT_SEMICOLON)
             max_len = BURROW__HTML_LONGEST_ENTITY_WITHOUT_SEMICOLON;

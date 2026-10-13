@@ -309,10 +309,12 @@ static void tpn_write_to(TpnWriter *w, ParseNode n) {
     }
 }
 
-/* String: writeTo into a scratch arena, and the result copied into a. */
+/* String: writeTo into a scratch arena, and the result copied into a. Most
+ * nodes print to a few dozen bytes, so the arena asks for small chunks rather
+ * than the default 64KB. */
 static Str tpn_string(ParseNode n, Alloc *a) {
     Arena ar;
-    arena_init(&ar, heap_allocator(), 0);
+    arena_init(&ar, heap_allocator(), 256);
     TpnWriter w = {STRINGS_BUILDER(arena_allocator(&ar)), false};
     tpn_write_to(&w, n);
     Str s = strings_builder_string(&w.sb);

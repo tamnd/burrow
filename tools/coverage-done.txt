@@ -132,3 +132,5 @@ testing/slogtest
 testing/iotest
 net/http/httputil
 expvar
+text/template/parse
+html

@@ -46,6 +46,7 @@ docs/guides/net.md
 docs/guides/compress.md
 docs/guides/big.md
 docs/guides/mime.md
+docs/guides/html.md
 docs/guides/image.md
 docs/guides/uuid.md
 docs/guides/weak.md

@@ -160,9 +160,9 @@ static bool nt_network(Str network, Str *lit) {
 
 /* internetSocket, for a TCP stream. */
 static Error nt_internet_socket(burrow__NetFD *fd, Str net, const NetTCPAddr *laddr,
-                                const NetTCPAddr *raddr, bool listen) {
+                                const NetTCPAddr *raddr, bool listen, Time deadline) {
     return burrow__net_internet_socket(fd, net, nt_inet(laddr), nt_inet(raddr),
-                                       PAL_SOCK_STREAM, listen);
+                                       PAL_SOCK_STREAM, listen, deadline);
 }
 
 /* selfConnect: a connection whose two ends are the same address and port,
@@ -283,6 +283,13 @@ static void nt_new_conn(NetTCPConn *c) {
 
 NetTCPConn *net_dial_tcp(Alloc *a, Str network, const NetTCPAddr *laddr,
                          const NetTCPAddr *raddr, Error *err) {
+    return burrow__net_dial_tcp_deadline(a, network, laddr, raddr, (Time){0}, err);
+}
+
+NetTCPConn *burrow__net_dial_tcp_deadline(Alloc *a, Str network,
+                                          const NetTCPAddr *laddr,
+                                          const NetTCPAddr *raddr, Time deadline,
+                                          Error *err) {
     Str net = BURROW_STR_EMPTY;
     NetAddr src = net_tcp_addr_as_addr(laddr);
     NetAddr dst = net_tcp_addr_as_addr(raddr);
@@ -305,7 +312,7 @@ NetTCPConn *net_dial_tcp(Alloc *a, Str network, const NetTCPAddr *laddr,
     c->c.alloc = a;
     Error e = BURROW_NO_ERROR;
     for (int i = 0;; i++) {
-        e = nt_internet_socket(&c->c.fd, net, laddr, raddr, false);
+        e = nt_internet_socket(&c->c.fd, net, laddr, raddr, false, deadline);
         if (i >= 2 || (laddr != NULL && laddr->port != 0))
             break;
         if (BURROW_OK(e) ? !nt_self_connect(&c->c.fd) : !nt_spurious_enotavail(e))
@@ -543,7 +550,7 @@ NetTCPListener *net_listen_tcp(Alloc *a, Str network, const NetTCPAddr *laddr,
         return NULL;
     }
     l->alloc = a;
-    Error e = nt_internet_socket(&l->fd, net, laddr, NULL, true);
+    Error e = nt_internet_socket(&l->fd, net, laddr, NULL, true, (Time){0});
     if (BURROW_FAILED(e)) {
         mem_free(a, l, sizeof(NetTCPListener), _Alignof(NetTCPListener));
         BURROW_OUT(err, burrow__net_op_error(NT_LIT("listen"), network,

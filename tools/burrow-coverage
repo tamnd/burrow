@@ -140,6 +140,8 @@ RENAMED = {
     ("encoding/xml", "type TagPathError struct, Struct"): "XmlTagPathError.struct_type",
     # class is a keyword in C++, and burrow.h has to compile there.
     ("encoding/asn1", "type RawValue struct, Class"): "Asn1RawValue.cls",
+    ("debug/dwarf", "type Field struct, Class"): "DwarfField.cls",
+    ("debug/elf", "type FileHeader struct, Class"): "ElfFileHeader.cls",
     # 08-naming-abi.md section 0: libuuid and macOS's libc define both of
     # these with other signatures, and burrow-gen collisions says so.
     ("uuid", "func Parse"): "uuid_parse_str",
@@ -797,6 +799,11 @@ FUNC_TYPES = {
     "func(*Flag)": {"FlagVisitFunc"},
     "func() hash.Hash": {"HashNewFunc"},
     "func([]*Certificate) error": {"X509CertConstraint"},
+    "func(string) bool": {"ConstraintTagFunc"},
+    "func(os.FileInfo) bool": {"ParserFileFilter"},
+    "func() []map[string]interface{}": {"SlogtestResultsFunc"},
+    "func(*testing.T) slog.Handler": {"SlogtestNewHandlerFunc"},
+    "func(*testing.T) map[string]interface{}": {"SlogtestResultFunc"},
 }
 
 BUILTIN = {

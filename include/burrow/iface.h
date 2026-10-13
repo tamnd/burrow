@@ -360,7 +360,9 @@ BURROW_BORROWS(ret, box) Any burrow__any_of_ptr(const volatile void *v,
         Uint: burrow__any_of_uint,                                                     \
         default: BURROW__ANY_OF3(x))
 
-#define BURROW_ANY_OF(x)                                                               \
+/* The function BURROW_ANY_OF calls for x, without the call. For a macro that
+ * wants to take a few types of its own first and hand the rest on. */
+#define BURROW__ANY_OF_FN(x)                                                           \
     _Generic((x),                                                                      \
         Any: burrow__any_of_any,                                                       \
         Str: burrow__any_of_str,                                                       \
@@ -374,7 +376,9 @@ BURROW_BORROWS(ret, box) Any burrow__any_of_ptr(const volatile void *v,
         double: burrow__any_of_f64,                                                    \
         char *: burrow__any_of_cstr,                                                   \
         const char *: burrow__any_of_cstr,                                             \
-        default: BURROW__ANY_OF2(x))((x), &(burrow__AnyBox){.v = {0}})
+        default: BURROW__ANY_OF2(x))
+
+#define BURROW_ANY_OF(x) BURROW__ANY_OF_FN(x)((x), &(burrow__AnyBox){.v = {0}})
 
 #if defined(BURROW_SHORT) && BURROW_SHORT
 #define ANY_OF(x) BURROW_ANY_OF(x)

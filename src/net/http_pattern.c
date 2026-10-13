@@ -88,7 +88,7 @@ Str burrow__http_path_unescape(Alloc *a, Str path) {
 }
 
 /* x followed by y, or the empty string when a says no. */
-static Str pt_concat(Alloc *a, Str x, Str y) {
+static Str pt_str_concat(Alloc *a, Str x, Str y) {
     Int n = x.len + y.len;
     Byte *p = (Byte *)mem_alloc(a, (size_t)n, 1);
     if (p == NULL)
@@ -104,7 +104,7 @@ Str burrow__http_clean_path(Alloc *a, Str p) {
     if (p.len == 0)
         return BURROW_S("/");
     if (p.p[0] != '/') {
-        p = pt_concat(a, BURROW_S("/"), p);
+        p = pt_str_concat(a, BURROW_S("/"), p);
         if (p.len == 0)
             return p;
     }
@@ -118,7 +118,7 @@ Str burrow__http_clean_path(Alloc *a, Str p) {
         if (p.len == np.len + 1 && strings_has_prefix(p, np))
             np = p;
         else
-            np = pt_concat(a, np, BURROW_S("/"));
+            np = pt_str_concat(a, np, BURROW_S("/"));
     }
     return np;
 }

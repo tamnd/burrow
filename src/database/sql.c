@@ -3507,6 +3507,38 @@ DriverRows burrow__sql_rows_driver(SqlRows *rs) {
     return rs->rowsi;
 }
 
+bool burrow__sql_tx_is_done(SqlTx *tx) {
+    return sync_atomic_bool_load(&tx->done);
+}
+
+void *burrow__sql_rows_dc(SqlRows *rs) {
+    return rs->dc;
+}
+
+Duration burrow__sql_db_cleaner_run(SqlDB *db, Duration d, Int *nclosed,
+                                    bool *ordered) {
+    SqDC *closing = NULL;
+    sync_mutex_lock(&db->mu);
+    d = sq_cleaner_run_locked(db, d, &closing);
+    *ordered = true;
+    Time last = {0};
+    for (Int i = 0; i < db->free_conn.len; i++) {
+        SqDC *c = (SqDC *)db->free_conn.p[i];
+        if (time_after(last, c->returned_at)) {
+            *ordered = false;
+            break;
+        }
+        last = c->returned_at;
+    }
+    sync_mutex_unlock(&db->mu);
+    Int n = 0;
+    for (SqDC *c = closing; c != NULL; c = c->close_next)
+        n++;
+    sq_close_list(closing);
+    *nclosed = n;
+    return d;
+}
+
 Int burrow__sql_db_free_conn_open_stmts(SqlDB *db, Int i) {
     Int n = 0;
     sync_mutex_lock(&db->mu);

@@ -98,6 +98,11 @@ Int burrow__sql_stmt_num_css(SqlStmt *s);
 DriverConn burrow__sql_conn_driver(SqlConn *c);
 DriverConn burrow__sql_tx_driver(SqlTx *tx);
 DriverRows burrow__sql_rows_driver(SqlRows *rs);
+bool burrow__sql_tx_is_done(SqlTx *tx);
+void *burrow__sql_rows_dc(SqlRows *rs);
+/* connectionCleanerRunLocked under db.mu, which closes what it finds. ordered
+ * reports whether freeConn is still in returnedAt order afterwards. */
+Duration burrow__sql_db_cleaner_run(SqlDB *db, Duration d, Int *nclosed, bool *ordered);
 Int burrow__sql_db_free_conn_open_stmts(SqlDB *db, Int i);
 bool burrow__sql_rows_closed(SqlRows *rs);
 void burrow__sql_tx_set_keep_conn_on_rollback(SqlTx *tx, bool keep);

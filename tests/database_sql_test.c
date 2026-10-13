@@ -18,6 +18,7 @@
 
 #include "database_sql_fakedb.h"
 
+#include "burrow/math/rand.h"
 #include "burrow/proc.h"
 #include "burrow/synctest.h"
 #include "burrow/testing.h"
@@ -192,8 +193,11 @@ static void td_sub(void *env, TestingT *t) {
 
 /* testDatabase. require names a feature the driver must have, or is NULL:
  * ConnBeginTx, NamedValue and Validator leave out basic, and ScanColumn
- * leaves out all but scancols. */
+ * leaves out all but scancols. No connector lists BeginTx, so Go runs nothing
+ * for it, and neither does this. */
 static void test_database(TestingT *t, DbTest f, const char *require) {
+    if (require != NULL && strcmp(require, "BeginTx") == 0)
+        return;
     bool basic = require == NULL;
     bool deflt = require == NULL || strcmp(require, "ScanColumn") != 0;
     TdRun runs[3] = {
@@ -3923,6 +3927,839 @@ static void TestTxEndBadConn(TestingT *t) {
     test_database(t, testTxEndBadConn, NULL);
 }
 
+/* ------------------------------------------------------------ concurrency */
+
+/* concurrentTest, one kind per Go type. */
+typedef enum TdCtKind {
+    TD_CT_DB_QUERY,
+    TD_CT_DB_EXEC,
+    TD_CT_STMT_QUERY,
+    TD_CT_STMT_EXEC,
+    TD_CT_TX_QUERY,
+    TD_CT_TX_EXEC,
+    TD_CT_TX_STMT_QUERY,
+    TD_CT_TX_STMT_EXEC,
+    TD_CT_RANDOM,
+} TdCtKind;
+
+/* The kinds concurrentRandomTest picks from, which is all but itself. */
+#define TD_CT_NKIND 8
+
+typedef struct TdCt {
+    TdCtKind kind;
+    SqlDB *db;
+    SqlStmt *stmt;
+    SqlTx *tx;
+    struct TdCt *tests; /* concurrentRandomTest's, TD_CT_NKIND of them */
+} TdCt;
+
+static const char td_ct_select[] = "SELECT|people|name|";
+static const char td_ct_nosert[] =
+    "NOSERT|people|name=Chris,age=?,photo=CPHOTO,bdate=?";
+
+static bool td_ct_init(TestingT *t, TdCt *c, SqlDB *db) {
+    Error err = BURROW_NO_ERROR;
+    c->db = db;
+    switch (c->kind) {
+    case TD_CT_DB_QUERY:
+    case TD_CT_DB_EXEC:
+        return true;
+    case TD_CT_STMT_QUERY:
+        c->stmt = sql_db_prepare(db, str_from_cstr(td_ct_select), &err);
+        break;
+    case TD_CT_STMT_EXEC:
+        c->stmt = sql_db_prepare(db, str_from_cstr(td_ct_nosert), &err);
+        break;
+    case TD_CT_TX_QUERY:
+    case TD_CT_TX_EXEC:
+        c->tx = sql_db_begin(db, &err);
+        break;
+    case TD_CT_TX_STMT_QUERY:
+    case TD_CT_TX_STMT_EXEC:
+        c->tx = sql_db_begin(db, &err);
+        if (BURROW_OK(err))
+            c->stmt = sql_tx_prepare(c->tx,
+                                     str_from_cstr(c->kind == TD_CT_TX_STMT_QUERY
+                                                       ? td_ct_select
+                                                       : td_ct_nosert),
+                                     &err);
+        break;
+    case TD_CT_RANDOM:
+        for (int i = 0; i < TD_CT_NKIND; i++) {
+            c->tests[i].kind = (TdCtKind)i;
+            if (!td_ct_init(t, &c->tests[i], db))
+                return false;
+        }
+        return true;
+    default:
+        break;
+    }
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+        return false;
+    }
+    return true;
+}
+
+static void td_ct_finish(TdCt *c) {
+    if (c->kind == TD_CT_RANDOM) {
+        for (int i = 0; i < TD_CT_NKIND; i++)
+            td_ct_finish(&c->tests[i]);
+    }
+    if (c->stmt != NULL) {
+        (void)sql_stmt_close(c->stmt);
+        sql_stmt_free(c->stmt);
+        c->stmt = NULL;
+    }
+    if (c->tx != NULL) {
+        (void)sql_tx_rollback(c->tx);
+        sql_tx_free(c->tx);
+        c->tx = NULL;
+    }
+    c->db = NULL;
+}
+
+/* Reads every name, then closes rows. */
+static void td_ct_drain(SqlRows *rows) {
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Str name = BURROW_STR_EMPTY;
+    while (sql_rows_next(rows))
+        (void)sql_rows_scan_v(rows, arena_allocator(&ar), &name);
+    (void)sql_rows_close(rows);
+    sql_rows_free(rows);
+    arena_free(&ar);
+}
+
+static Error td_ct_test(TestingT *t, TdCt *c) {
+    Error err = BURROW_NO_ERROR;
+    SqlRows *rows = NULL;
+    Time bday = chris_birthday();
+    Arena ar;
+    switch (c->kind) {
+    case TD_CT_DB_QUERY:
+    case TD_CT_TX_QUERY:
+        rows = sql_db_query(c->db, str_from_cstr(td_ct_select), NO_ARGS, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "%v", err);
+            return err;
+        }
+        td_ct_drain(rows);
+        return BURROW_NO_ERROR;
+    case TD_CT_STMT_QUERY:
+    case TD_CT_TX_STMT_QUERY:
+        rows = sql_stmt_query(c->stmt, NO_ARGS, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "error on query:  %v", err);
+            return err;
+        }
+        td_ct_drain(rows);
+        return BURROW_NO_ERROR;
+    case TD_CT_DB_EXEC:
+    case TD_CT_TX_EXEC:
+    case TD_CT_STMT_EXEC:
+    case TD_CT_TX_STMT_EXEC:
+        arena_init(&ar, heap_allocator(), 0);
+        if (c->kind == TD_CT_DB_EXEC)
+            (void)sql_db_exec(c->db, arena_allocator(&ar), str_from_cstr(td_ct_nosert),
+                              ARGS((Int)3, ((Any){TYPE_TIME, &bday})), &err);
+        else if (c->kind == TD_CT_TX_EXEC)
+            (void)sql_tx_exec(c->tx, arena_allocator(&ar), str_from_cstr(td_ct_nosert),
+                              ARGS((Int)3, ((Any){TYPE_TIME, &bday})), &err);
+        else
+            (void)sql_stmt_exec(c->stmt, arena_allocator(&ar),
+                                ARGS((Int)3, ((Any){TYPE_TIME, &bday})), &err);
+        arena_free(&ar);
+        if (BURROW_FAILED(err)) {
+            if (c->kind == TD_CT_DB_EXEC || c->kind == TD_CT_TX_EXEC)
+                testing_t_errorf_v(t, "%v", err);
+            else
+                testing_t_errorf_v(t, "error on exec:  %v", err);
+        }
+        return err;
+    case TD_CT_RANDOM:
+        return td_ct_test(t, &c->tests[math_rand_intn(TD_CT_NKIND)]);
+    default:
+        break;
+    }
+    return err;
+}
+
+typedef struct TdCtRun {
+    TestingT *t;
+    TdCt *ct;
+    Chan *reqs;
+    SyncWaitGroup wg;
+} TdCtRun;
+
+static void td_ct_worker(void *env) {
+    TdCtRun *r = env;
+    bool v = false;
+    while (chan_recv(r->reqs, &v)) {
+        (void)td_ct_test(r->t, r->ct);
+        sync_wait_group_done(&r->wg);
+    }
+}
+
+/* doConcurrentTest. Go also sets GOMAXPROCS to maxProcs, which
+ * runtime_gomaxprocs cannot do once the scheduler is running, so here maxProcs
+ * only sets the number of workers. */
+static void td_ct_bubble(void *env) {
+    TdCtRun *r = env;
+    TestingT *t = r->t;
+    int max_procs = 1, num_reqs = 500;
+    if (testing_short()) {
+        max_procs = 4;
+        num_reqs = 50;
+    }
+
+    FakeConnector fc = {BURROW_STR_EMPTY, NULL, false, FAKE_DEFAULT};
+    SqlDB *db = new_test_db(t, &fc, "people");
+    if (db == NULL)
+        return;
+
+    if (td_ct_init(t, r->ct, db)) {
+        memset(&r->wg, 0, sizeof r->wg);
+        sync_wait_group_add(&r->wg, num_reqs);
+
+        r->reqs = chan_make(heap_allocator(), TYPE_BOOL, 0);
+        SyncWaitGroup workers;
+        memset(&workers, 0, sizeof workers);
+        for (int i = 0; i < max_procs * 2; i++)
+            (void)sync_wait_group_go(&workers, BURROW_FN(Func, td_ct_worker, r));
+
+        for (int i = 0; i < num_reqs; i++)
+            chan_send(r->reqs, &(bool){true});
+
+        sync_wait_group_wait(&r->wg);
+        chan_close(r->reqs);
+        sync_wait_group_wait(&workers);
+        chan_free(r->reqs);
+    }
+    td_ct_finish(r->ct);
+    close_db(t, db);
+}
+
+static void td_ct_sub(void *env, TestingT *t) {
+    TdCtRun *r = env;
+    r->t = t;
+    if (!synctest_run(BURROW_FN(Func, td_ct_bubble, r)))
+        testing_t_errorf_v(t, "synctest_run failed");
+}
+
+/* ------------------------------------------------------------ issues */
+
+static void td_bad_conn_on_close(SqlRows *rs, Error *err) {
+    (void)rs;
+    *err = driver_err_bad_conn;
+}
+
+static void testIssue6081(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    Int opens0 = 0, closes0 = 0;
+    driver_counts(&opens0, &closes0);
+
+    Error err = BURROW_NO_ERROR;
+    SqlStmt *stmt = sql_db_prepare(db, BURROW_S("SELECT|people|name|"), &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+    burrow__sql_rows_close_hook = td_bad_conn_on_close;
+    for (int i = 0; i < 10; i++) {
+        SqlRows *rows = sql_stmt_query(stmt, NO_ARGS, &err);
+        if (BURROW_FAILED(err)) {
+            burrow__sql_rows_close_hook = NULL;
+            sql_stmt_free(stmt);
+            FATALF("%v", err);
+        }
+        (void)sql_rows_close(rows);
+        sql_rows_free(rows);
+    }
+    burrow__sql_rows_close_hook = NULL;
+    Int n = burrow__sql_stmt_num_css(stmt);
+    if (n > 1)
+        testing_t_errorf_v(t, "len(css slice) = %d; want <= 1", n);
+    (void)sql_stmt_close(stmt);
+    n = burrow__sql_stmt_num_css(stmt);
+    if (n != 0)
+        testing_t_errorf_v(t, "len(css slice) after Close = %d; want 0", n);
+    sql_stmt_free(stmt);
+
+    Int opens = 0, closes = 0;
+    driver_counts(&opens, &closes);
+    opens -= opens0;
+    closes -= closes0;
+    if (opens < 9)
+        testing_t_errorf_v(t, "opens = %d; want >= 9", opens);
+    if (closes < 9)
+        testing_t_errorf_v(t, "closes = %d; want >= 9", closes);
+}
+
+static void TestIssue6081(TestingT *t) {
+    test_database(t, testIssue6081, NULL);
+}
+
+#define TD_MILLI_WAIT 30
+
+typedef struct TdStress {
+    SqlDB *db;
+    SqlStmt *stmt;
+    Chan *sem;
+} TdStress;
+
+static Duration td_rand_wait(void) {
+    return (Duration)math_rand_intn(TD_MILLI_WAIT) * TIME_MILLISECOND;
+}
+
+static void td_18429_one(void *env) {
+    TdStress *s = env;
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    Str qwait = duration_string(td_rand_wait(), a);
+
+    ContextCancelFunc cancel = {NULL, NULL};
+    Context ctx = context_with_timeout(heap_allocator(), context_background(),
+                                       td_rand_wait(), &cancel);
+
+    Error err = BURROW_NO_ERROR;
+    SqlTx *tx = sql_db_begin_tx(s->db, ctx, NULL, &err);
+    if (BURROW_OK(err)) {
+        char q[64];
+        snprintf(q, sizeof q, "WAIT|%.*s|SELECT|people|name|", (int)qwait.len,
+                 (const char *)qwait.p);
+        /* This is expected to give a cancel error most, but not all the time.
+         * Test failure will happen with a panic or other race condition being
+         * reported. */
+        SqlRows *rows = sql_tx_query_context(tx, ctx, str_from_cstr(q), NO_ARGS, &err);
+        if (rows != NULL) {
+            Str name = BURROW_STR_EMPTY;
+            /* Call Next to test Issue 21117 and check for races. */
+            while (sql_rows_next(rows)) {
+                /* Scan the buffer so it is read and checked for races. */
+                (void)sql_rows_scan_v(rows, a, &name);
+            }
+            (void)sql_rows_close(rows);
+            sql_rows_free(rows);
+        }
+        /* This call will race with the context cancel rollback to complete if
+         * the rollback itself isn't guarded. */
+        (void)sql_tx_rollback(tx);
+        sql_tx_free(tx);
+    }
+    BURROW_CALLF0(cancel);
+    arena_free(&ar);
+    bool v = false;
+    (void)chan_recv(s->sem, &v);
+}
+
+/* TestIssue18429 attempts to stress rolling back the transaction from a context
+ * cancel while simultaneously calling Tx.Rollback. Rolling back from a context
+ * happens concurrently so tx.rollback and tx.Commit must guard against double
+ * entry.
+ *
+ * In the test, a context is canceled while the query is in process so the
+ * internal rollback will run concurrently with the explicitly called
+ * Tx.Rollback.
+ *
+ * The addition of calling rows.Next also tests Issue 21117. */
+static void testIssue18429(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    TdStress s = {db, NULL, chan_make(heap_allocator(), TYPE_BOOL, 20)};
+    SyncWaitGroup wg;
+    memset(&wg, 0, sizeof wg);
+    for (int i = 0; i < 100; i++) {
+        chan_send(s.sem, &(bool){true});
+        (void)sync_wait_group_go(&wg, BURROW_FN(Func, td_18429_one, &s));
+    }
+    sync_wait_group_wait(&wg);
+    chan_free(s.sem);
+}
+
+static void TestIssue18429(TestingT *t) {
+    test_database(t, testIssue18429, NULL);
+}
+
+static void td_20160_one(void *env) {
+    TdStress *s = env;
+    ContextCancelFunc cancel = {NULL, NULL};
+    Context ctx = context_with_timeout(heap_allocator(), context_background(),
+                                       td_rand_wait(), &cancel);
+
+    /* This is expected to give a cancel error most, but not all the time.
+     * Test failure will happen with a panic or other race condition being
+     * reported. */
+    Error err = BURROW_NO_ERROR;
+    SqlRows *rows = sql_stmt_query_context(s->stmt, ctx, NO_ARGS, &err);
+    if (rows != NULL) {
+        (void)sql_rows_close(rows);
+        sql_rows_free(rows);
+    }
+    BURROW_CALLF0(cancel);
+    bool v = false;
+    (void)chan_recv(s->sem, &v);
+}
+
+/* TestIssue20160 attempts to test a short context life on a stmt Query. */
+static void testIssue20160(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    Error err = BURROW_NO_ERROR;
+    SqlStmt *stmt = sql_db_prepare_context(db, context_background(),
+                                           BURROW_S("SELECT|people|name|"), &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+
+    TdStress s = {db, stmt, chan_make(heap_allocator(), TYPE_BOOL, 20)};
+    SyncWaitGroup wg;
+    memset(&wg, 0, sizeof wg);
+    for (int i = 0; i < 100; i++) {
+        chan_send(s.sem, &(bool){true});
+        (void)sync_wait_group_go(&wg, BURROW_FN(Func, td_20160_one, &s));
+    }
+    sync_wait_group_wait(&wg);
+    chan_free(s.sem);
+    sql_stmt_free(stmt);
+}
+
+static void TestIssue20160(TestingT *t) {
+    test_database(t, testIssue20160, NULL);
+}
+
+/* hookTxGrabConn's closure. */
+static TestingT *td_18719_t;
+static SqlTx *td_18719_tx;
+static ContextCancelFunc td_18719_cancel;
+
+static void td_18719_grab(void) {
+    BURROW_CALLF0(td_18719_cancel);
+    synctest_wait();
+    if (!burrow__sql_tx_is_done(td_18719_tx))
+        testing_t_errorf_v(td_18719_t, "tx is not done");
+}
+
+/* TestIssue18719 closes the context right before use. The sql.driverConn will
+ * nil out the ci on close in a lock, but if another process uses it right after
+ * it will panic with on the nil ref.
+ *
+ * See https://golang.org/cl/35550 . */
+static void testIssue18719(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    ContextCancelFunc cancel = {NULL, NULL};
+    Context ctx = context_with_cancel(heap_allocator(), context_background(), &cancel);
+
+    Error err = BURROW_NO_ERROR;
+    SqlTx *tx = sql_db_begin_tx(db, ctx, NULL, &err);
+    if (BURROW_FAILED(err)) {
+        BURROW_CALLF0(cancel);
+        FATALF("%v", err);
+    }
+
+    td_18719_t = t;
+    td_18719_tx = tx;
+    td_18719_cancel = cancel;
+    burrow__sql_hook_tx_grab_conn = td_18719_grab;
+
+    /* This call will grab the connection and cancel the context after it has
+     * done so. Code after must deal with the canceled state. */
+    SqlRows *rows =
+        sql_tx_query_context(tx, ctx, BURROW_S("SELECT|people|name|"), NO_ARGS, &err);
+    burrow__sql_hook_tx_grab_conn = NULL;
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "expected error <nil> but got %v", err);
+
+    /* Rows may be ignored because it will be closed when the context is
+     * canceled. Do not explicitly rollback. The rollback will happen from the
+     * canceled context. */
+    BURROW_CALLF0(cancel);
+    synctest_wait();
+    if (rows != NULL)
+        sql_rows_free(rows);
+    sql_tx_free(tx);
+}
+
+static void TestIssue18719(TestingT *t) {
+    test_database(t, testIssue18719, "BeginTx");
+}
+
+static void testIssue20647(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    Context ctx = testing_t_context(t);
+
+    Error err = BURROW_NO_ERROR;
+    SqlConn *conn = sql_db_conn(db, ctx, &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+    fdb_get_fake_conn(burrow__sql_conn_driver(conn))->skip_dirty_session = true;
+
+    SqlStmt *stmt =
+        sql_conn_prepare_context(conn, ctx, BURROW_S("SELECT|people|name|"), &err);
+    SqlRows *rows1 = NULL, *rows2 = NULL;
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+        goto out;
+    }
+
+    rows1 = sql_stmt_query_context(stmt, ctx, NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "rows1 %v", err);
+        goto out;
+    }
+
+    rows2 = sql_stmt_query_context(stmt, ctx, NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "rows2 %v", err);
+        goto out;
+    }
+
+    if (burrow__sql_rows_dc(rows1) != burrow__sql_rows_dc(rows2))
+        testing_t_errorf_v(t, "stmt prepared on Conn does not use same connection");
+
+out:
+    if (rows2 != NULL)
+        sql_rows_free(rows2);
+    if (rows1 != NULL)
+        sql_rows_free(rows1);
+    if (stmt != NULL)
+        sql_stmt_free(stmt);
+    sql_conn_free(conn);
+}
+
+static void TestIssue20647(TestingT *t) {
+    test_database(t, testIssue20647, NULL);
+}
+
+static void TestConcurrency(TestingT *t) {
+    static const struct {
+        const char *name;
+        TdCtKind kind;
+    } list[] = {
+        {"Query", TD_CT_DB_QUERY},
+        {"Exec", TD_CT_DB_EXEC},
+        {"StmtQuery", TD_CT_STMT_QUERY},
+        {"StmtExec", TD_CT_STMT_EXEC},
+        {"TxQuery", TD_CT_TX_QUERY},
+        {"TxExec", TD_CT_TX_EXEC},
+        {"TxStmtQuery", TD_CT_TX_STMT_QUERY},
+        {"TxStmtExec", TD_CT_TX_STMT_EXEC},
+        {"Random", TD_CT_RANDOM},
+    };
+    for (size_t i = 0; i < sizeof list / sizeof list[0]; i++) {
+        TdCt tests[TD_CT_NKIND];
+        memset(tests, 0, sizeof tests);
+        TdCt ct;
+        memset(&ct, 0, sizeof ct);
+        ct.kind = list[i].kind;
+        ct.tests = tests;
+        TdCtRun r;
+        memset(&r, 0, sizeof r);
+        r.ct = &ct;
+        (void)testing_t_run(t, str_from_cstr(list[i].name),
+                            BURROW_FN(TestingTFunc, td_ct_sub, &r));
+    }
+}
+
+/* Go's defaultMaxIdleConns. */
+#define TD_DEFAULT_MAX_IDLE 2
+
+typedef struct TdLeak {
+    TestingT *t;
+    SqlDB *db;
+} TdLeak;
+
+static void td_leak_query(void *env) {
+    TdLeak *l = env;
+    Error err = BURROW_NO_ERROR;
+    SqlRows *r = sql_db_query(l->db, BURROW_S("SELECT|people|name|"), NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(l->t, "%v", err);
+        return;
+    }
+    (void)sql_rows_close(r);
+    sql_rows_free(r);
+}
+
+static void testConnectionLeak(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+    /* Start by opening defaultMaxIdleConns. */
+    SqlRows *rows[TD_DEFAULT_MAX_IDLE] = {NULL, NULL};
+    /* We need to SetMaxOpenConns > MaxIdleConns, so the DB can open a new
+     * connection and we can fill the idle queue with the released
+     * connections. */
+    sql_db_set_max_open_conns(db, TD_DEFAULT_MAX_IDLE + 1);
+    Error err = BURROW_NO_ERROR;
+    for (int ii = 0; ii < TD_DEFAULT_MAX_IDLE; ii++) {
+        SqlRows *r = sql_db_query(db, BURROW_S("SELECT|people|name|"), NO_ARGS, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "%v", err);
+            goto out;
+        }
+        rows[ii] = r;
+        (void)sql_rows_next(r);
+        err = sql_rows_err(r);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "%v", err);
+            goto out;
+        }
+    }
+    /* Now we have defaultMaxIdleConns busy connections. Open a new one, but
+     * wait until the busy connections are released before returning control
+     * to DB. The driver forgets the channels once it has used them, so they
+     * are kept here to free. */
+    Chan *wait_ch = chan_make(heap_allocator(), TYPE_BYTE, 1);
+    Chan *waiting_ch = chan_make(heap_allocator(), TYPE_BYTE, 1);
+    fdb_wait_ch = wait_ch;
+    fdb_waiting_ch = waiting_ch;
+    TdLeak l = {t, db};
+    SyncWaitGroup wg;
+    memset(&wg, 0, sizeof wg);
+    (void)sync_wait_group_go(&wg, BURROW_FN(Func, td_leak_query, &l));
+    /* Wait until the goroutine we've just created has started waiting. */
+    (void)chan_recv(waiting_ch, NULL);
+    /* Now close the busy connections. This provides a connection for the
+     * blocked goroutine and then fills up the idle queue. */
+    for (int ii = 0; ii < TD_DEFAULT_MAX_IDLE; ii++) {
+        sql_rows_free(rows[ii]);
+        rows[ii] = NULL;
+    }
+    /* At this point we give the new connection to DB. This connection is now
+     * useless, since the idle queue is full and there are no pending requests.
+     * DB should deal with this situation without leaking the connection. */
+    chan_send(wait_ch, &(Byte){0});
+    sync_wait_group_wait(&wg);
+    chan_free(wait_ch);
+    chan_free(waiting_ch);
+
+out:
+    for (int ii = 0; ii < TD_DEFAULT_MAX_IDLE; ii++) {
+        if (rows[ii] != NULL)
+            sql_rows_free(rows[ii]);
+    }
+}
+
+static void TestConnectionLeak(TestingT *t) {
+    test_database(t, testConnectionLeak, NULL);
+}
+
+/* Runs ten queries one at a time and reports how many more connections were
+ * closed for being over the idle limit than before. */
+static int64_t td_ten_queries(TestingT *t, SqlDB *db) {
+    int64_t pre = sql_db_stats(db).max_idle_closed;
+    for (int i = 0; i < 10; i++) {
+        Error err = BURROW_NO_ERROR;
+        SqlRows *rows =
+            sql_db_query(db, BURROW_S("SELECT|people|name|"), NO_ARGS, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "%v", err);
+            return -1;
+        }
+        (void)sql_rows_close(rows);
+        sql_rows_free(rows);
+    }
+    int64_t n = sql_db_stats(db).max_idle_closed - pre;
+    testing_t_logf_v(t, "MaxIdleClosed: %d", n);
+    return n;
+}
+
+static void testStatsMaxIdleClosedZero(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    sql_db_set_max_open_conns(db, 1);
+    sql_db_set_max_idle_conns(db, 1);
+    sql_db_set_conn_max_lifetime(db, 0);
+
+    int64_t n = td_ten_queries(t, db);
+    if (n >= 0 && n != 0)
+        testing_t_errorf_v(t, "expected 0 max idle closed conns, got: %d", n);
+}
+
+static void TestStatsMaxIdleClosedZero(TestingT *t) {
+    test_database(t, testStatsMaxIdleClosedZero, NULL);
+}
+
+static void testStatsMaxIdleClosedTen(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    sql_db_set_max_open_conns(db, 1);
+    sql_db_set_max_idle_conns(db, 0);
+    sql_db_set_conn_max_lifetime(db, 0);
+
+    int64_t n = td_ten_queries(t, db);
+    if (n >= 0 && n != 10)
+        testing_t_errorf_v(t, "expected 10 max idle closed conns, got: %d", n);
+}
+
+static void TestStatsMaxIdleClosedTen(TestingT *t) {
+    test_database(t, testStatsMaxIdleClosedTen, NULL);
+}
+
+/* testUseConns uses count concurrent connections with 1 nanosecond apart. */
+static void use_conns(TestingT *t, int count, SqlDB *db) {
+    SqlConn *conns[8] = {NULL};
+    Context ctx = context_background();
+    for (int i = 0; i < count; i++) {
+        time_sleep(TIME_NANOSECOND);
+        Error err = BURROW_NO_ERROR;
+        SqlConn *c = sql_db_conn(db, ctx, &err);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "%v", err);
+        conns[i] = c;
+    }
+
+    for (int i = count - 1; i >= 0; i--) {
+        time_sleep(TIME_NANOSECOND);
+        if (conns[i] == NULL)
+            continue;
+        Error err = sql_conn_close(conns[i]);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "%v", err);
+        sql_conn_free(conns[i]);
+    }
+}
+
+enum { TD_USED_CONNS = 5, TD_REUSED_CONNS = 2 };
+
+typedef struct TdIdleCase {
+    Duration want_max_idle_time;
+    Duration want_max_lifetime;
+    Duration want_next_check;
+    int64_t want_idle_closed;
+    int64_t want_max_idle_closed;
+    Duration time_offset;
+    Duration second_time_offset;
+} TdIdleCase;
+
+typedef struct TdIdle {
+    TestingT *t;
+    const TdIdleCase *item;
+} TdIdle;
+
+static void td_idle_bubble(void *env) {
+    TdIdle *r = env;
+    TestingT *t = r->t;
+    const TdIdleCase *item = r->item;
+
+    Time start_time = time_now();
+    FakeConnector fc = {BURROW_STR_EMPTY, NULL, false, FAKE_DEFAULT};
+    SqlDB *db = new_test_db(t, &fc, "people");
+    if (db == NULL)
+        return;
+
+    sql_db_set_max_open_conns(db, TD_USED_CONNS);
+    sql_db_set_max_idle_conns(db, TD_USED_CONNS);
+    sql_db_set_conn_max_idle_time(db, item->want_max_idle_time);
+    sql_db_set_conn_max_lifetime(db, item->want_max_lifetime);
+
+    int64_t pre_max_idle_closed = sql_db_stats(db).max_idle_time_closed;
+
+    /* Busy usedConns. */
+    use_conns(t, TD_USED_CONNS, db);
+
+    time_sleep(time_sub(time_add(start_time, item->time_offset), time_now()));
+
+    /* Reuse connections which should never be considered idle and exercises
+     * the sorting for issue 39471. */
+    use_conns(t, TD_REUSED_CONNS, db);
+
+    time_sleep(item->second_time_offset);
+
+    Int nclosed = 0;
+    bool ordered = true;
+    Duration nc = burrow__sql_db_cleaner_run(db, TIME_SECOND, &nclosed, &ordered);
+    if (nc != item->want_next_check) {
+        Arena ar;
+        arena_init(&ar, heap_allocator(), 0);
+        testing_t_errorf_v(
+            t, "got %v; want %v next check duration",
+            duration_string(nc, arena_allocator(&ar)),
+            duration_string(item->want_next_check, arena_allocator(&ar)));
+        arena_free(&ar);
+    }
+    /* Validate freeConn order. */
+    if (!ordered)
+        testing_t_errorf_v(t, "freeConn is not ordered by returnedAt");
+    if ((int64_t)nclosed != item->want_idle_closed)
+        testing_t_errorf_v(t, "got: %d; want %d closed conns", nclosed,
+                           item->want_idle_closed);
+
+    int64_t max_idle_closed =
+        sql_db_stats(db).max_idle_time_closed - pre_max_idle_closed;
+    if (max_idle_closed != item->want_max_idle_closed)
+        testing_t_errorf_v(t, "got: %d; want %d max idle closed conns", max_idle_closed,
+                           item->want_max_idle_closed);
+    close_db(t, db);
+}
+
+static void td_idle_sub(void *env, TestingT *t) {
+    TdIdle *r = env;
+    r->t = t;
+    if (!synctest_run(BURROW_FN(Func, td_idle_bubble, r)))
+        testing_t_errorf_v(t, "synctest_run failed");
+}
+
+static void TestMaxIdleTime(TestingT *t) {
+    static const TdIdleCase list[] = {
+        {
+            TIME_MILLISECOND,
+            0,
+            TIME_MILLISECOND - TIME_NANOSECOND,
+            TD_USED_CONNS - TD_REUSED_CONNS,
+            TD_USED_CONNS - TD_REUSED_CONNS,
+            10 * TIME_MILLISECOND,
+            0,
+        },
+        {
+            /* Want to close some connections via max idle time and one by max
+             * lifetime. */
+            TIME_MILLISECOND,
+            /* nowFunc() - MaxLifetime should be 1 * time.Nanosecond in
+             * connectionCleanerRunLocked. This guarantees that first opened
+             * connection is to be closed. Thus it is timeOffset +
+             * secondTimeOffset + 3 (+2 for Close while reusing conns and +1 for
+             * Conn). */
+            10 * TIME_MILLISECOND + 100 * TIME_NANOSECOND + 3 * TIME_NANOSECOND,
+            TIME_NANOSECOND,
+            /* Closed all not reused connections and extra one by max
+             * lifetime. */
+            TD_USED_CONNS - TD_REUSED_CONNS + 1,
+            TD_USED_CONNS - TD_REUSED_CONNS,
+            10 * TIME_MILLISECOND,
+            /* Add second offset because otherwise connections are expired via
+             * max lifetime in Close. */
+            100 * TIME_NANOSECOND,
+        },
+        {
+            TIME_HOUR,
+            0,
+            TIME_SECOND,
+            0,
+            0,
+            10 * TIME_MILLISECOND,
+            0,
+        },
+    };
+    for (size_t i = 0; i < sizeof list / sizeof list[0]; i++) {
+        Arena ar;
+        arena_init(&ar, heap_allocator(), 0);
+        TdIdle r = {NULL, &list[i]};
+        (void)testing_t_run(
+            t, duration_string(list[i].want_max_idle_time, arena_allocator(&ar)),
+            BURROW_FN(TestingTFunc, td_idle_sub, &r));
+        arena_free(&ar);
+    }
+}
+
 #define TESTS(X)                                                                       \
     X(TestOpenDB)                                                                      \
     X(TestQuery)                                                                       \
@@ -3999,6 +4836,16 @@ static void TestTxEndBadConn(TestingT *t) {
     X(TestIssue20575)                                                                  \
     X(TestIssue20622)                                                                  \
     X(TestErrBadConnReconnect)                                                         \
-    X(TestTxEndBadConn)
+    X(TestTxEndBadConn)                                                                \
+    X(TestIssue6081)                                                                   \
+    X(TestIssue18429)                                                                  \
+    X(TestIssue20160)                                                                  \
+    X(TestIssue18719)                                                                  \
+    X(TestIssue20647)                                                                  \
+    X(TestConcurrency)                                                                 \
+    X(TestConnectionLeak)                                                              \
+    X(TestStatsMaxIdleClosedZero)                                                      \
+    X(TestStatsMaxIdleClosedTen)                                                       \
+    X(TestMaxIdleTime)
 
 TESTING_MAIN(TESTS)

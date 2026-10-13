@@ -852,6 +852,11 @@ void burrow__expvar_remove_all(void) {
     sync_rw_mutex_unlock(&m->keys_mu);
 }
 
+void burrow__expvar_publish_defaults(void) {
+    burrow__expvar_remove_all();
+    ev_vars_setup(NULL);
+}
+
 void expvar_register(void) {
     (void)ev_need_vars();
     sync_once_do(&ev_register_once, BURROW_FN(Func, ev_register, NULL));

@@ -45,6 +45,7 @@ static void TestPublishedByDefault(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
+    burrow__expvar_publish_defaults();
 
     ExpvarVar cmdline = expvar_get(BURROW_S("cmdline"));
     CHECK(cmdline.vt != NULL);

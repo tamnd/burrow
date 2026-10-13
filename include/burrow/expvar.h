@@ -123,7 +123,7 @@ BURROW_FUNC(ExpvarFunc, Any, Alloc *a);
 extern const Type *const TYPE_EXPVAR_FUNC;
 
 /* Func.Value, f's result. */
-Any expvar_func_value(ExpvarFunc f, Alloc *a);
+BURROW_OWNS(ret) Any expvar_func_value(ExpvarFunc f, Alloc *a);
 
 /* Func.String: f's result as JSON, or "" if encoding/json says no, as in Go. */
 BURROW_OWNS(ret) Str expvar_func_string(ExpvarFunc f, Alloc *a);
@@ -164,7 +164,7 @@ typedef struct ExpvarMap {
 extern const Type *const TYPE_EXPVAR_MAP;
 
 /* Map.Init, which removes every key and returns v. */
-ExpvarMap *expvar_map_init(ExpvarMap *v);
+BURROW_BORROWS(ret, v) ExpvarMap *expvar_map_init(ExpvarMap *v);
 
 /* Map.Get, the nil Var when key is not there. */
 ExpvarVar expvar_map_get(ExpvarMap *v, Str key);
@@ -204,10 +204,10 @@ ExpvarVar expvar_get(Str name);
 /* expvar.NewInt, NewFloat, NewMap and NewString: a new variable, published as
  * name. They live as long as the program, and are NULL when there was no
  * memory for one. */
-ExpvarInt *expvar_new_int(Str name);
-ExpvarFloat *expvar_new_float(Str name);
-ExpvarMap *expvar_new_map(Str name);
-ExpvarString *expvar_new_string(Str name);
+BURROW_STATIC(ret) ExpvarInt *expvar_new_int(Str name);
+BURROW_STATIC(ret) ExpvarFloat *expvar_new_float(Str name);
+BURROW_STATIC(ret) ExpvarMap *expvar_new_map(Str name);
+BURROW_STATIC(ret) ExpvarString *expvar_new_string(Str name);
 
 /* expvar.Do, f for each published variable in name order. */
 void expvar_do(ExpvarDoFunc f);

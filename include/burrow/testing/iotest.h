@@ -9,9 +9,6 @@
  * iotest_writer_free give one back, or free the arena they came from.
  * A wrapper is nil when a refuses.
  *
- * Go's NewReadLogger and NewWriteLogger are not here yet. They print through
- * package log, and will come with it.
- *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -57,6 +54,17 @@ BURROW_OWNS(ret) IoReader iotest_err_reader(Alloc *a, Error err);
 /* iotest.TruncateWriter: writes the first n bytes to w and then throws the
  * rest away, while reporting every write as complete. */
 BURROW_OWNS(ret) IoWriter iotest_truncate_writer(Alloc *a, IoWriter w, int64_t n);
+
+/* iotest.NewWriteLogger: writes to w, and logs each write with log_printf
+ * through log's standard logger, as the prefix and the bytes written in hex,
+ * followed by the error when there is one. prefix has to outlive the
+ * writer. */
+BURROW_OWNS(ret) BURROW_BORROWS(ret, prefix) IoWriter
+iotest_new_write_logger(Alloc *a, Str prefix, IoWriter w);
+
+/* iotest.NewReadLogger: the same for each read from r. */
+BURROW_OWNS(ret) BURROW_BORROWS(ret, prefix) IoReader
+iotest_new_read_logger(Alloc *a, Str prefix, IoReader r);
 
 /* Give back a wrapper made above. Nothing happens to the reader or writer
  * it wraps. A nil one is fine. */

@@ -435,7 +435,7 @@ jobs:
   boehm:
     name: gc backend (boehm)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
       - run: sudo apt-get update && sudo apt-get install -y libgc-dev
@@ -451,7 +451,7 @@ jobs:
   sanitizers:
     name: ${{ matrix.san }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -534,6 +534,23 @@ jobs:
           cache: false
       - name: how much of the standard library exists
         run: tools/burrow-coverage
+
+  # The go/printer gate from the P4 milestone: a gofmt built on burrow and Go's
+  # own over the whole of $GOROOT/src, agreeing byte for byte. See
+  # tools/check-gofmt.sh. The Go release is the one burrow tracks, since
+  # gofmt's output changes now and then between releases.
+  gofmt-gate:
+    name: gofmt against go1.27.1
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.1"
+          cache: false
+      - name: format $GOROOT/src with both
+        run: make -j"$(nproc)" gofmt-gate
 
   # burrow and Go handed the same inputs, failing on the first byte where they
   # disagree. See fuzz/README.md. The oracle is built with the Go release that

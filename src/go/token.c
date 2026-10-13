@@ -265,6 +265,51 @@ bool token_pos_is_valid(TokenPos p) {
     return p != TOKEN_NO_POS;
 }
 
+/* ------------------------------------------------------------- descriptors */
+
+static Str tk_m_string(Token *self) {
+    return token_string(*self, error_allocator());
+}
+
+#define TK_SIG_STRING(IN, OUT) OUT(Str)
+#define TK_TOKEN_METHODS(M, T) M(T, String, tk_m_string, TK_SIG_STRING)
+
+BURROW_METHODS_DEFINE(Token, TK_TOKEN_METHODS);
+
+const Type burrow_type_Token = {
+    {(const Byte *)"Token", 5},
+    {(const Byte *)"go/token", 8},
+    KIND_INT,
+    (uint32_t)sizeof(Token),
+    (uint16_t)_Alignof(Token),
+    0,
+    (uint16_t)(sizeof(burrow__methods_Token) / sizeof(burrow__methods_Token[0])),
+    NULL,
+    burrow__methods_Token,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
+const Type burrow_type_TokenPos = {
+    {(const Byte *)"Pos", 3},
+    {(const Byte *)"go/token", 8},
+    KIND_INT,
+    (uint32_t)sizeof(TokenPos),
+    (uint16_t)_Alignof(TokenPos),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
 /* -------------------------------------------------------------------- files */
 
 /* Go's lineInfo, with its fields capitalised for encoding/gob, which is what

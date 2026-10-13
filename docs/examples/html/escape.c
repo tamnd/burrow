@@ -28,4 +28,8 @@ int main(void) {
 }
 
 /* Output:
+&#34;Fran &amp; Freddie&#39;s Diner&#34; &lt;tasty@example.com&gt;
+"Fran & Freddie's Diner" <tasty@example.com>
+café café café
+© 2026, ¬anentity;
 */

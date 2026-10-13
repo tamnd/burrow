@@ -15,6 +15,7 @@ fmt_println_v(html_escape_string(a, s));
 That prints:
 
 ```
+&#34;Fran &amp; Freddie&#39;s Diner&#34; &lt;tasty@example.com&gt;
 ```
 
 When there is nothing to escape you get the same string back, pointing at the same bytes, and nothing is allocated. Otherwise the result is made in the allocator you pass, and comes back empty if the allocator refuses.
@@ -35,6 +36,9 @@ fmt_println_v(html_unescape_string(a, BURROW_S("&copy 2026, &notanentity;")));
 That prints:
 
 ```
+"Fran & Freddie's Diner" <tasty@example.com>
+café café café
+© 2026, ¬anentity;
 ```
 
 The last line shows the rules browsers follow for text that only looks like a reference. A few old names, `&copy` and `&not` among them, are recognised without their semicolon, and the longest such name at the start of a word wins, which is why `&notanentity;` comes out starting with `¬`. Anything that matches nothing is left alone.

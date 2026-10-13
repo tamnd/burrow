@@ -410,3 +410,5 @@ global	src/log/slog_logger.c	slogl_std	package-vars	The default slog logger befo
 global	src/log/slog_logger.c	slogl_default	package-vars	defaultLogger in Go, an atomic pointer.
 global	src/log/slog_logger.c	slogl_log_target	package-vars	The logger log package output goes to after slog_set_default, an atomic pointer.
 global	src/log/slog_logger.c	slogl_capture_site	package-vars	capturePC in the handlerWriter Go makes in SetDefault, an atomic bool.
+global	src/text/template_parse.c	burrow__parse_max_stack_depth	package-vars	Go's maxStackDepth, a variable there too, which only the tests change, before any parse starts.
+global	src/text/template_parse_node.c	burrow__parse_text_format_q	package-vars	Go's textFormat, which only the tests change, around parses and String calls on the same thread, as Go's do.

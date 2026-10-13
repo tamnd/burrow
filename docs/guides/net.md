@@ -390,6 +390,60 @@ On Linux a name that starts with "@" is in the abstract namespace, has no file, 
 
 The datagram functions are the UDP ones with a `NetUnixAddr` in place of a `NetUDPAddr`: `net_unix_conn_read_from_unix` makes the sender's address in the allocator it is given, and `net_unix_conn_write_to_unix` sends to a name. `ReadMsgUnix`, `WriteMsgUnix` and the `File` methods, which pass descriptors, are still to come, and Windows is where TCP is for now.
 
+## Raw IP
+
+`net_listen_ip` and `net_dial_ip` are Go's `ListenIP` and `DialIP`, which make raw IP sockets. The network is "ip", "ip4" or "ip6" with the protocol after a colon, by number or by the name /etc/protocols gives it, so "ip4:icmp" and "ip4:1" are the same thing. A `NetIPAddr` is an address and a zone with no port. The system only hands out raw sockets to root, or to a program with CAP_NET_RAW on Linux, and anyone else gets an error, which is EPERM on Linux. This one sends an ICMP echo request to the loopback address and waits for the reply:
+
+<!-- example: ../examples/net/ipconn.c#ipconn -->
+```c
+Arena ar;
+arena_init(&ar, NULL, 0);
+Alloc *a = arena_allocator(&ar);
+Error err;
+/* Raw sockets need root, or CAP_NET_RAW on Linux. */
+NetIPConn *c = net_listen_ip(a, BURROW_S("ip4:icmp"), NULL, &err);
+if (c == NULL) {
+    Str s = error_text(err);
+    printf("%.*s\n", (int)s.len, (const char *)s.p);
+    arena_free(&ar);
+    return;
+}
+(void)net_ip_conn_set_deadline(c, time_add(time_now(), 5 * TIME_SECOND));
+
+/* An echo request: type 8, code 0, the checksum, an identifier and a
+ * sequence number, then the data. */
+Byte req[12] = {8, 0, 0, 0, 0x62, 0x78, 0, 1, 'p', 'i', 'n', 'g'};
+icmp_checksum(req, sizeof req);
+NetIPAddr *to =
+    net_resolve_ip_addr(a, BURROW_S("ip4"), BURROW_S("127.0.0.1"), &err);
+(void)net_ip_conn_write_to_ip(c, slice_from(req, sizeof req, sizeof req, TYPE_BYTE),
+                              to, &err);
+
+/* The socket sees every ICMP packet to this machine, so wait for the
+ * reply, which is type 0. read_from_ip takes the IPv4 header off. */
+for (;;) {
+    Byte got[128];
+    NetIPAddr *from = NULL;
+    Int n = net_ip_conn_read_from_ip(
+        c, slice_from(got, sizeof got, sizeof got, TYPE_BYTE), a, &from, &err);
+    if (BURROW_FAILED(err)) {
+        Str s = error_text(err);
+        printf("%.*s\n", (int)s.len, (const char *)s.p);
+        break;
+    }
+    if (n >= 8 && got[0] == 0 && memcmp(got + 4, req + 4, 4) == 0) {
+        Str s = net_ip_addr_string(from, a);
+        printf("echo reply from %.*s, %d bytes\n", (int)s.len, (const char *)s.p,
+               (int)n);
+        break;
+    }
+}
+net_ip_conn_free(c);
+arena_free(&ar);
+```
+
+On an IPv4 socket, `net_ip_conn_read_from_ip` and the `read_from` of the `NetPacketConn` take the IPv4 header off the front of each packet, as Go's `ReadFromIP` does, while `net_ip_conn_read` gives the packet as the system hands it over, header and all. `ReadMsgIP` and `WriteMsgIP` are still to come, and Windows is where TCP is for now.
+
 ## Dial and Listen
 
 `net_dial` and `net_listen` are Go's `Dial` and `Listen`. They take the network and the address as text, look up a host name and a service name for the port, and give back a `NetConn` or a `NetListener` whatever the network. `NetDialer` and `NetListenConfig` are the structs behind them, with Go's fields: a timeout, a deadline, a local address, the keep-alive settings, a resolver, and a `control` callback that sees the socket before it connects. The zero value of either works, and so does passing NULL.
@@ -451,7 +505,7 @@ port 80 zone lo
 dial tcp6: address 127.0.0.1: no suitable address found
 ```
 
-`net_listen_packet` is Go's `ListenPacket`, for "udp", "udp4", "udp6" and "unixgram". It gives back a `NetPacketConn`, whose `read_from` says who sent each packet and whose `write_to` sends one to any address. `net_udp_conn_as_packet_conn` and `net_unix_conn_as_packet_conn` turn the connections the UDP and Unix sections make into one, and `net_packet_conn_free` gives either back. The "ip" networks fail with ENOSYS for now, since raw IP sockets are not here yet.
+`net_listen_packet` is Go's `ListenPacket`, for "udp", "udp4", "udp6", "unixgram" and the "ip" networks with a protocol, such as "ip4:icmp". It gives back a `NetPacketConn`, whose `read_from` says who sent each packet and whose `write_to` sends one to any address. `net_udp_conn_as_packet_conn`, `net_unix_conn_as_packet_conn` and `net_ip_conn_as_packet_conn` turn the connections the UDP, Unix and IP sections make into one, and `net_packet_conn_free` gives any of them back.
 
 <!-- example: ../examples/net/listen_packet.c#listen-packet -->
 ```c
@@ -511,7 +565,7 @@ A name with several addresses is tried one address at a time, each with its shar
 
 `net_conn_free` and `net_listener_free` close what they are given and give it back, and `net_conn_as_tcp_conn` and its siblings get the concrete type when you need its methods. `net_resolve_tcp_addr`, `net_resolve_udp_addr` and `net_resolve_ip_addr` are Go's `ResolveTCPAddr` and friends, for when you want the address without the connection.
 
-When a dial fails, the error is a `NetOpError` with the op "dial", and it names the addresses it tried. Those addresses live in the error arena of the goroutine that dialed, so the error stays readable for as long as the goroutine keeps it, and a dial that works leaves nothing behind there. The "ip" networks need `IPConn`, which is still to come, so a dial on one fails with ENOSYS for now.
+When a dial fails, the error is a `NetOpError` with the op "dial", and it names the addresses it tried. Those addresses live in the error arena of the goroutine that dialed, so the error stays readable for as long as the goroutine keeps it, and a dial that works leaves nothing behind there.
 
 ## URLs
 

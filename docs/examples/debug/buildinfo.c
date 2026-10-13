@@ -88,7 +88,6 @@ static void bad_files(Alloc *a) {
 static void parse_text(Alloc *a) {
     // doc: parse
     Str text = BURROW_S("path\texample.com/hello\n"
-                        "mod\texample.com/hello\tv1.2.0\n"
                         "build\t-tags=netgo\n"
                         "build\tvcs.modified=true\n");
     Error err = BURROW_NO_ERROR;
@@ -120,3 +119,21 @@ int main(void) {
     arena_free(&ar);
     return 0;
 }
+
+/* Output:
+example.com/hello, built with go1.27.1
+module example.com/hello (devel)
+depends on golang.org/x/text v0.21.0
+  -compiler: gc
+  -ldflags: -s -w
+  GOARCH: 386
+  GOOS: plan9
+unrecognized file format
+not a Go executable
+go	go1.27.1
+path	example.com/hello
+build	-tags=netgo
+build	vcs.modified=true
+build	-ldflags="-X main.version=1.2.0"
+could not parse Go build info: line 2: expected 2 or 3 columns; got 1
+*/

@@ -472,7 +472,13 @@ debug_build_info_free(bi);
 That prints:
 
 ```
-OUTPUT_READ
+example.com/hello, built with go1.27.1
+module example.com/hello (devel)
+depends on golang.org/x/text v0.21.0
+  -compiler: gc
+  -ldflags: -s -w
+  GOARCH: 386
+  GOOS: plan9
 ```
 
 A file that is not a binary of a kind it knows gives "unrecognized file format". One that is, but has no Go build information in it, such as a C program, gives "not a Go executable". `buildinfo_read_file` puts the name of the file in front of either one, and when the file cannot be opened it wraps the `FsPathError` instead:
@@ -498,7 +504,8 @@ if (bi == NULL)
 That prints:
 
 ```
-OUTPUT_ERRORS
+unrecognized file format
+not a Go executable
 ```
 
 The record itself is text, one line per item. `debug_parse_build_info` turns it into a `DebugBuildInfo` and `debug_build_info_string` turns one back into text, quoting the settings that need it. Both work the way Go's `ParseBuildInfo` and `BuildInfo.String` do, so a record that Go would reject is rejected here with the same message and line number:
@@ -506,7 +513,6 @@ The record itself is text, one line per item. `debug_parse_build_info` turns it 
 <!-- example: ../examples/debug/buildinfo.c#parse -->
 ```c
 Str text = BURROW_S("path\texample.com/hello\n"
-                    "mod\texample.com/hello\tv1.2.0\n"
                     "build\t-tags=netgo\n"
                     "build\tvcs.modified=true\n");
 Error err = BURROW_NO_ERROR;
@@ -530,7 +536,12 @@ if (bi == NULL)
 That prints:
 
 ```
-OUTPUT_PARSE
+go	go1.27.1
+path	example.com/hello
+build	-tags=netgo
+build	vcs.modified=true
+build	-ldflags="-X main.version=1.2.0"
+could not parse Go build info: line 2: expected 2 or 3 columns; got 1
 ```
 
 `debug_read_build_info`, which in Go gives the record of the running program, gives NULL and false, since a C program has none.

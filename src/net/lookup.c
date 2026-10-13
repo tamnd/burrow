@@ -140,21 +140,15 @@ static NetResolver *lk_r(NetResolver *r) {
     return r != NULL ? r : &lk_default;
 }
 
-/* systemConf().hostLookupOrder and addrLookupOrder. The C library's order
- * only comes from a conf that says cgo is there, which the system's never
- * does, and Go without cgo goes on to its own lookups in its place. */
+/* systemConf().hostLookupOrder and addrLookupOrder. */
 static burrow__HostLookupOrder lk_host_order(NetResolver *r, Str host,
                                              burrow__DNSConfig **conf) {
-    burrow__HostLookupOrder o =
-        burrow__net_conf_host_lookup_order(burrow__net_system_conf(), r, host, conf);
-    return o == BURROW__HOST_LOOKUP_CGO ? BURROW__HOST_LOOKUP_FILES_DNS : o;
+    return burrow__net_conf_host_lookup_order(burrow__net_system_conf(), r, host, conf);
 }
 
 static burrow__HostLookupOrder lk_addr_order(NetResolver *r, Str addr,
                                              burrow__DNSConfig **conf) {
-    burrow__HostLookupOrder o =
-        burrow__net_conf_addr_lookup_order(burrow__net_system_conf(), r, addr, conf);
-    return o == BURROW__HOST_LOOKUP_CGO ? BURROW__HOST_LOOKUP_FILES_DNS : o;
+    return burrow__net_conf_addr_lookup_order(burrow__net_system_conf(), r, addr, conf);
 }
 
 static bool lk_is_ip(Str s, NetipAddr *ip) {
@@ -241,9 +235,7 @@ static Slice lk_copy_strs(Alloc *a, Slice src) {
     return out;
 }
 
-/* parseNetwork with needsProto false: the network, without the protocol an
- * "ip:" one may have after it, in *afnet. */
-static Error lk_parse_network(Str network, Str *afnet) {
+Error burrow__net_parse_network(Str network, bool needs_proto, Str *afnet, Int *proto) {
     static const char *const plain[] = {"tcp",  "tcp4", "tcp6",     "udp",
                                         "udp4", "udp6", "ip",       "ip4",
                                         "ip6",  "unix", "unixgram", "unixpacket"};
@@ -251,8 +243,10 @@ static Error lk_parse_network(Str network, Str *afnet) {
     Int i = network.len - 1;
     while (i >= 0 && network.p[i] != ':')
         i--;
+    *proto = 0;
     if (i < 0) {
-        if (!lk_one_of(network, plain, sizeof plain / sizeof plain[0]))
+        if (!lk_one_of(network, plain, sizeof plain / sizeof plain[0]) ||
+            (needs_proto && lk_one_of(network, ips, sizeof ips / sizeof ips[0])))
             return net_unknown_network_error(error_allocator(), network);
         *afnet = network;
         return BURROW_NO_ERROR;
@@ -261,11 +255,10 @@ static Error lk_parse_network(Str network, Str *afnet) {
     if (!lk_one_of(af, ips, sizeof ips / sizeof ips[0]))
         return net_unknown_network_error(error_allocator(), network);
     Str protostr = str_from_bytes(network.p + i + 1, network.len - i - 1);
-    Int proto = 0;
     Int used = 0;
-    if (!burrow__net_dtoi(protostr, &proto, &used) || used != protostr.len) {
+    if (!burrow__net_dtoi(protostr, proto, &used) || used != protostr.len) {
         Error e = BURROW_NO_ERROR;
-        (void)burrow__net_lookup_protocol(protostr, &e);
+        *proto = burrow__net_lookup_protocol(protostr, &e);
         if (BURROW_FAILED(e))
             return e;
     }
@@ -303,6 +296,10 @@ static Slice lk_lookup_ip(NetResolver *r, Alloc *a, Context ctx, Str network, St
                           Error *err) {
     burrow__DNSConfig *conf = NULL;
     burrow__HostLookupOrder order = lk_host_order(r, host, &conf);
+    if (order == BURROW__HOST_LOOKUP_CGO) {
+        burrow__dns_config_put(conf);
+        return burrow__net_cgo_lookup_ip(a, ctx, network, host, err);
+    }
     Slice ips = burrow__net_go_lookup_ip_cname_order(r, a, ctx, network, host, order,
                                                      conf, NULL, err);
     burrow__dns_config_put(conf);
@@ -498,9 +495,18 @@ Slice net_resolver_lookup_host(NetResolver *r, Alloc *a, Context ctx, Str host,
     }
     burrow__DNSConfig *conf = NULL;
     burrow__HostLookupOrder order = lk_host_order(r, host, &conf);
+    if (order == BURROW__HOST_LOOKUP_CGO) {
+        burrow__dns_config_put(conf);
+        return burrow__net_cgo_lookup_host(a, ctx, host, err);
+    }
     Slice out = burrow__net_go_lookup_host_order(r, a, ctx, host, order, conf, err);
     burrow__dns_config_put(conf);
     return out;
+}
+
+Slice burrow__net_lookup_ip_addr(NetResolver *r, Alloc *a, Context ctx, Str network,
+                                 Str host, Error *err) {
+    return lk_lookup_ip_addr(lk_r(r), a, ctx, network, host, err);
 }
 
 Slice net_resolver_lookup_ip_addr(NetResolver *r, Alloc *a, Context ctx, Str host,
@@ -515,7 +521,8 @@ Slice net_resolver_lookup_ip(NetResolver *r, Alloc *a, Context ctx, Str network,
     r = lk_r(r);
     Slice out = slice_nil(TYPE_NET_IP);
     Str afnet = BURROW_STR_EMPTY;
-    Error e = lk_parse_network(network, &afnet);
+    Int proto = 0;
+    Error e = burrow__net_parse_network(network, false, &afnet, &proto);
     if (BURROW_FAILED(e)) {
         BURROW_OUT(err, e);
         return out;
@@ -602,8 +609,6 @@ Int net_resolver_lookup_port(NetResolver *r, Context ctx, Str network, Str servi
                              Error *err) {
     static const char *const nets[] = {"tcp",  "tcp4", "tcp6", "udp",
                                        "udp4", "udp6", "ip"};
-    (void)r;
-    (void)ctx;
     BURROW_OUT(err, BURROW_NO_ERROR);
     Int port = 0;
     if (burrow__net_parse_port(service, &port)) {
@@ -614,8 +619,23 @@ Int net_resolver_lookup_port(NetResolver *r, Context ctx, Str network, Str servi
             BURROW_OUT(err, lk_addr_error(BURROW_S("unknown network"), network));
             return 0;
         }
+        /* r.lookupPort. Port lookup is not a DNS operation, and the C library
+         * is asked first when it can be. If it fails, the table Go has may
+         * still know the service (Go issue 18213). */
         Error e = BURROW_NO_ERROR;
-        port = burrow__net_lookup_port_map(network, service, &e);
+        if (!burrow__net_conf_must_use_go_resolver(burrow__net_system_conf(), r)) {
+            port = burrow__net_cgo_lookup_port(ctx, network, service, &e);
+            if (BURROW_FAILED(e)) {
+                Error ge = BURROW_NO_ERROR;
+                Int gport = burrow__net_lookup_port_map(network, service, &ge);
+                if (BURROW_OK(ge)) {
+                    port = gport;
+                    e = BURROW_NO_ERROR;
+                }
+            }
+        } else {
+            port = burrow__net_lookup_port_map(network, service, &e);
+        }
         if (BURROW_FAILED(e)) {
             BURROW_OUT(err, e);
             return 0;
@@ -639,7 +659,15 @@ Str net_resolver_lookup_cname(NetResolver *r, Alloc *a, Context ctx, Str host,
     burrow__DNSConfig *conf = NULL;
     burrow__HostLookupOrder order = lk_host_order(r, host, &conf);
     Error e = BURROW_NO_ERROR;
-    Str cname = burrow__net_go_lookup_cname(r, arena_allocator(&sar), ctx, host, order,
+    Str cname = BURROW_STR_EMPTY;
+    bool found = false;
+    if (order == BURROW__HOST_LOOKUP_CGO) {
+        cname = burrow__net_cgo_lookup_cname(arena_allocator(&sar), ctx, host, &e);
+        found = BURROW_OK(e);
+        e = BURROW_NO_ERROR;
+    }
+    if (!found)
+        cname = burrow__net_go_lookup_cname(r, arena_allocator(&sar), ctx, host, order,
                                             conf, &e);
     burrow__dns_config_put(conf);
     Str out = BURROW_STR_EMPTY;
@@ -967,8 +995,10 @@ Slice net_resolver_lookup_addr(NetResolver *r, Alloc *a, Context ctx, Str addr,
     burrow__DNSConfig *conf = NULL;
     burrow__HostLookupOrder order = lk_addr_order(r, addr, &conf);
     Error e = BURROW_NO_ERROR;
-    Slice names =
-        burrow__net_go_lookup_ptr(r, arena_allocator(&sar), ctx, addr, order, conf, &e);
+    Slice names = order == BURROW__HOST_LOOKUP_CGO
+                      ? burrow__net_cgo_lookup_ptr(arena_allocator(&sar), ctx, addr, &e)
+                      : burrow__net_go_lookup_ptr(r, arena_allocator(&sar), ctx, addr,
+                                                  order, conf, &e);
     burrow__dns_config_put(conf);
     Slice out = slice_nil(TYPE_STRING);
     if (BURROW_OK(e)) {

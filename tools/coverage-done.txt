@@ -111,3 +111,16 @@ crypto/fips140
 net/mail
 log
 go/token
+go/scanner
+go/version
+go/constant
+debug/dwarf
+debug/elf
+debug/gosym
+debug/macho
+debug/pe
+debug/plan9obj
+debug/buildinfo
+log/slog
+testing/slogtest
+testing/iotest

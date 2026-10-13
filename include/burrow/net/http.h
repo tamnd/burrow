@@ -1375,7 +1375,8 @@ bool http_server_register_on_shutdown(HttpServer *s, Func f);
 void http_server_set_keep_alives_enabled(HttpServer *s, bool v);
 
 /* Waits for the goroutine of every connection the server has served to end,
- * and gives back what the server holds. Not while it is serving, so after
+ * and for the functions http_server_shutdown started, and gives back what the
+ * server holds. Not while it is serving, so after
  * http_server_serve has returned and http_server_close or
  * http_server_shutdown has closed the connections, or the wait is for clients
  * to hang up. A handler still running keeps it waiting. */

@@ -475,111 +475,129 @@ static bool sc_compose_shape(const Method *m) {
 
 /* ------------------------------------------------------- convertAssignRows */
 
-static Error sc_assign_string(Alloc *a, Any dest, Str s, SqlRows *rows) {
+static bool sc_assign_string(Alloc *a, Any dest, Str s, SqlRows *rows, Error *out) {
     const Type *dt = dest.t;
     if (dt == TYPE_STRING) {
         Str c = str_clone(a, s);
-        if (c.len != s.len)
-            return burrow_err_out_of_memory;
+        if (c.len != s.len) {
+            *out = burrow_err_out_of_memory;
+            return true;
+        }
         *(Str *)dest.data = c;
-        return BURROW_NO_ERROR;
+        *out = BURROW_NO_ERROR;
+        return true;
     }
     if (sc_is_bytes(dt)) {
         *(Bytes *)dest.data = sc_clone_bytes(a, sc_str_bytes(s));
-        return BURROW_NO_ERROR;
+        *out = BURROW_NO_ERROR;
+        return true;
     }
     if (dt == &burrow_type_SqlRawBytes) {
         Alloc *ra = burrow__sql_rows_raw_alloc(rows, a);
         *(Bytes *)dest.data = burrow__sql_rows_setrawbuf(
             rows, sc_append(ra, burrow__sql_rows_rawbuf(rows), s));
-        return BURROW_NO_ERROR;
+        *out = BURROW_NO_ERROR;
+        return true;
     }
     if (dt == TYPE_UUID) {
         Error e = BURROW_NO_ERROR;
         Uuid u = uuid_parse_str(s, &e);
-        if (BURROW_FAILED(e))
-            return fmt_errorf_v(
+        if (BURROW_FAILED(e)) {
+            *out = fmt_errorf_v(
                 "converting driver.Value type string (%q) to a UUID: %v", s, e);
+            return true;
+        }
         *(Uuid *)dest.data = u;
-        return BURROW_NO_ERROR;
+        *out = BURROW_NO_ERROR;
+        return true;
     }
-    return (Error){NULL, NULL};
+    return false;
 }
 
-static Error sc_assign_bytes(Alloc *a, Any dest, Bytes s) {
+static bool sc_assign_bytes(Alloc *a, Any dest, Bytes s, Error *out) {
     const Type *dt = dest.t;
     if (dt == TYPE_STRING) {
         Str c = str_clone(a, sc_bytes_str(s));
-        if (c.len != s.len)
-            return burrow_err_out_of_memory;
+        if (c.len != s.len) {
+            *out = burrow_err_out_of_memory;
+            return true;
+        }
         *(Str *)dest.data = c;
-        return BURROW_NO_ERROR;
+        *out = BURROW_NO_ERROR;
+        return true;
     }
     if (dt == TYPE_ANY) {
         Bytes *b = BURROW_NEW(a, Bytes);
-        if (b == NULL)
-            return burrow_err_out_of_memory;
+        if (b == NULL) {
+            *out = burrow_err_out_of_memory;
+            return true;
+        }
         *b = sc_clone_bytes(a, s);
         *(Any *)dest.data = (Any){TYPE_BYTES, b};
-        return BURROW_NO_ERROR;
+        *out = BURROW_NO_ERROR;
+        return true;
     }
     if (sc_is_bytes(dt)) {
         *(Bytes *)dest.data = sc_clone_bytes(a, s);
-        return BURROW_NO_ERROR;
+        *out = BURROW_NO_ERROR;
+        return true;
     }
     if (dt == &burrow_type_SqlRawBytes) {
         s.elem = TYPE_BYTE;
         *(Bytes *)dest.data = s;
-        return BURROW_NO_ERROR;
+        *out = BURROW_NO_ERROR;
+        return true;
     }
     if (dt == TYPE_UUID) {
         Uuid *d = dest.data;
         if (s.len == (Int)sizeof d->b) {
             memcpy(d->b, s.p, sizeof d->b);
-            return BURROW_NO_ERROR;
+            *out = BURROW_NO_ERROR;
+            return true;
         }
         Uuid u;
         memset(&u, 0, sizeof u);
         Error e = uuid_unmarshal_text(&u, s);
-        if (BURROW_FAILED(e))
-            return fmt_errorf_v(
-                "converting driver.Value type []byte (%q) to a UUID: %v",
-                sc_bytes_str(s), e);
+        if (BURROW_FAILED(e)) {
+            *out =
+                fmt_errorf_v("converting driver.Value type []byte (%q) to a UUID: %v",
+                             sc_bytes_str(s), e);
+            return true;
+        }
         *d = u;
-        return BURROW_NO_ERROR;
+        *out = BURROW_NO_ERROR;
+        return true;
     }
-    return (Error){NULL, NULL};
+    return false;
 }
 
-static Error sc_assign_time(Alloc *a, Any dest, Time s, SqlRows *rows) {
+static bool sc_assign_time(Alloc *a, Any dest, Time s, SqlRows *rows, Error *out) {
     const Type *dt = dest.t;
     if (dt == TYPE_TIME) {
         *(Time *)dest.data = s;
-        return BURROW_NO_ERROR;
+        *out = BURROW_NO_ERROR;
+        return true;
     }
     if (dt == TYPE_STRING) {
         *(Str *)dest.data = time_format(s, a, TIME_RFC3339_NANO);
-        return BURROW_NO_ERROR;
+        *out = BURROW_NO_ERROR;
+        return true;
     }
     if (sc_is_bytes(dt)) {
         Bytes buf = {NULL, 0, 0, TYPE_BYTE};
         *(Bytes *)dest.data = time_append_format(s, a, buf, TIME_RFC3339_NANO);
-        return BURROW_NO_ERROR;
+        *out = BURROW_NO_ERROR;
+        return true;
     }
     if (dt == &burrow_type_SqlRawBytes) {
         Alloc *ra = burrow__sql_rows_raw_alloc(rows, a);
         *(Bytes *)dest.data = burrow__sql_rows_setrawbuf(
             rows, time_append_format(s, ra, burrow__sql_rows_rawbuf(rows),
                                      TIME_RFC3339_NANO));
-        return BURROW_NO_ERROR;
+        *out = BURROW_NO_ERROR;
+        return true;
     }
-    return (Error){NULL, NULL};
-}
-
-/* Whether e says "not handled here", the zero Error the helpers above return
- * when the destination is not one of theirs. */
-static bool sc_unhandled(Error e) {
-    return e.vt == NULL && e.data == NULL;
+    return false;
 }
 
 Error burrow__sql_convert_assign_rows(Alloc *a, Any dest, Any src, SqlRows *rows) {
@@ -595,16 +613,16 @@ Error burrow__sql_convert_assign_rows(Alloc *a, Any dest, Any src, SqlRows *rows
 
     /* Common cases, without reflect. */
     if (st == TYPE_STRING) {
-        Error e = sc_assign_string(a, dest, *(const Str *)src.data, rows);
-        if (!sc_unhandled(e))
+        Error e = BURROW_NO_ERROR;
+        if (sc_assign_string(a, dest, *(const Str *)src.data, rows, &e))
             return e;
     } else if (sc_is_bytes(st)) {
-        Error e = sc_assign_bytes(a, dest, *(const Bytes *)src.data);
-        if (!sc_unhandled(e))
+        Error e = BURROW_NO_ERROR;
+        if (sc_assign_bytes(a, dest, *(const Bytes *)src.data, &e))
             return e;
     } else if (st == TYPE_TIME) {
-        Error e = sc_assign_time(a, dest, *(const Time *)src.data, rows);
-        if (!sc_unhandled(e))
+        Error e = BURROW_NO_ERROR;
+        if (sc_assign_time(a, dest, *(const Time *)src.data, rows, &e))
             return e;
     } else if (st == NULL) {
         if (dt == TYPE_ANY) {

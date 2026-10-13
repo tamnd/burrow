@@ -24,6 +24,8 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "crypto_internal.h"
+
 #include <stdint.h>
 #include <string.h>
 
@@ -198,6 +200,10 @@ Hash crypto_hash_new(CryptoHash h, Alloc *a) {
     if (text.len == 0)
         text = BURROW_S("crypto: requested hash function unavailable");
     panic_str(text);
+}
+
+HashNewFunc burrow__crypto_hash_new_func(CryptoHash h) {
+    return crypto_lookup(h);
 }
 
 bool crypto_hash_available(CryptoHash h) {

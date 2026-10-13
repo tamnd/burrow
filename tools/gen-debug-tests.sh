@@ -41,8 +41,9 @@ pe) out="$root/tests/pe_test_gen.h" ;;
 plan9obj) out="$root/tests/plan9obj_test_gen.h" ;;
 gosym) out="$root/tests/gosym_test_gen.h" ;;
 xcoff) out="$root/tests/xcoff_test_gen.h" ;;
+buildinfo) out="$root/tests/buildinfo_test_gen.h" ;;
 *)
-	echo "usage: $0 [elf|macho|pe|plan9obj|gosym|xcoff]" >&2
+	echo "usage: $0 [elf|macho|pe|plan9obj|gosym|xcoff|buildinfo]" >&2
 	exit 2
 	;;
 esac
@@ -58,7 +59,10 @@ vendor() {
 		case $f in *_test.go) continue ;; esac
 		sed -e 's#"debug/dwarf"#"gen/dwarf"#' -e 's#"internal/zstd"#"gen/zstd"#' \
 			-e 's#"internal/saferio"#"gen/saferio"#' -e 's#"internal/abi"#"gen/abi"#' \
-			"$f" > "$tmp/$2/$(basename "$f")"
+			-e 's#"debug/elf"#"gen/elf"#' -e 's#"debug/macho"#"gen/macho"#' \
+			-e 's#"debug/pe"#"gen/pe"#' -e 's#"debug/plan9obj"#"gen/plan9obj"#' \
+			-e 's#"internal/xcoff"#"gen/xcoff"#' -e 's#"runtime/debug"#"gen/rtdebug"#' \
+			-e '/^\/\/go:linkname /d' "$f" > "$tmp/$2/$(basename "$f")"
 	done
 }
 vendor debug/elf elf
@@ -70,6 +74,12 @@ vendor internal/xcoff xcoff
 vendor debug/dwarf dwarf
 vendor internal/zstd zstd
 vendor internal/saferio saferio
+vendor debug/buildinfo buildinfo
+# Of runtime/debug, debug/buildinfo needs only the BuildInfo of mod.go, and
+# not the part that asks the runtime for its own.
+mkdir "$tmp/rtdebug"
+awk '/^\/\/ exported from runtime\./ { skip = 1 } skip && /^}/ { skip = 0; next } !skip' \
+	"$gosrc/runtime/debug/mod.go" | sed '/^	"runtime"$/d' > "$tmp/rtdebug/mod.go"
 
 mkdir "$tmp/elfdata" "$tmp/dwarfdata"
 for f in "$gosrc/debug/elf/testdata"/*; do
@@ -103,6 +113,37 @@ for f in "$gosrc/internal/xcoff/testdata"/*; do
 	case $f in *.c) continue ;; esac
 	cp "$f" "$tmp/xcoffdata/"
 done
+mkdir "$tmp/bidata" "$tmp/bibuild"
+cp -R "$gosrc/debug/buildinfo/testdata/." "$tmp/bidata/"
+cp "$gosrc/debug/buildinfo/buildinfo_test.go" "$tmp/bidata/"
+if [ "$mode" = buildinfo ]; then
+	# The hello program of Go's TestReadFile, with a module it depends on
+	# that is replaced by a directory, for each kind of binary debug/buildinfo
+	# reads. The builds use the go command there is, so the record says its
+	# release, and -ldflags with a space in it, so a setting has to be quoted.
+	mkdir -p "$tmp/hello/dep" "$tmp/gopath/src/example.com/m"
+	printf 'module example.com/m\n\ngo 1.18\n\nrequire example.com/dep v1.0.0\n\nreplace example.com/dep v1.0.0 => ./dep\n' \
+		> "$tmp/hello/go.mod"
+	printf 'package main\n\nimport _ "example.com/dep"\n\nfunc main() {}\n' > "$tmp/hello/hello.go"
+	printf 'module example.com/dep\n\ngo 1.18\n' > "$tmp/hello/dep/go.mod"
+	printf 'package dep\n' > "$tmp/hello/dep/dep.go"
+	printf 'package main\n\nfunc main() {}\n' > "$tmp/gopath/src/example.com/m/hello.go"
+	for t in linux/amd64/exe linux/amd64/pie linux/386/exe linux/arm/exe linux/ppc64/exe \
+		windows/amd64/exe windows/386/exe darwin/amd64/exe darwin/arm64/exe aix/ppc64/exe \
+		plan9/386/exe plan9/amd64/exe plan9/arm/exe; do
+		os=${t%%/*}
+		bm=${t##*/}
+		arch=${t#*/}
+		arch=${arch%/*}
+		(cd "$tmp/hello" && GOOS=$os GOARCH=$arch CGO_ENABLED=0 GO111MODULE=on GOFLAGS='' \
+			GOTOOLCHAIN=local GOPROXY=off GOCACHE="$tmp/gocache" go build -buildmode="$bm" \
+			-trimpath -buildvcs=false "-ldflags=-buildid= -s" -o "$tmp/bibuild/${os}_${arch}_$bm" .)
+	done
+	(cd "$tmp/gopath/src/example.com/m" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GO111MODULE=off \
+		GOPATH="$tmp/gopath" GOFLAGS='' GOTOOLCHAIN=local GOCACHE="$tmp/gocache" go build -trimpath \
+		"-ldflags=-buildid= -s" -o "$tmp/bibuild/gopath_linux_amd64_exe" .)
+	rm -rf "$tmp/gocache"
+fi
 mkdir "$tmp/gosymdata" "$tmp/abi"
 cp "$gosrc/debug/gosym/testdata/pcln115.gz" "$tmp/gosymdata/"
 if [ "$mode" = gosym ]; then
@@ -811,6 +852,10 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "xcoff" {
 		xcoffMain()
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "buildinfo" {
+		biMain()
 		return
 	}
 	var fs []*file
@@ -2778,6 +2823,407 @@ func xcoffMain() {
 	fmt.Fprintf(w, "static const DebugFile xcoff_files[] = {\n")
 	for i, f := range fs {
 		fmt.Fprintf(w, "    {%s, false, xcoff_file_%d, xcoff_dump_%d, xcoff_damage_%d},\n", cstr(f.name), i, i, i)
+	}
+	fmt.Fprintf(w, "};\n\n#endif\n")
+}
+GO
+
+cat > "$tmp/buildinfo.go" <<'GO'
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"gen/buildinfo"
+	debug "gen/rtdebug"
+)
+
+var biMagic = []byte("\xff Go buildinf:")
+
+// biDump is what Go's debug/buildinfo reads from data, as BuildInfo.String
+// gives it, or the error.
+func biDump(data []byte) (out []byte, ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	info, err := buildinfo.Read(bytes.NewReader(data))
+	if err != nil {
+		return []byte("error: " + err.Error() + "\n"), true
+	}
+	return []byte(info.String()), true
+}
+
+func biMustDump(name string, data []byte) []byte {
+	out, ok := biDump(data)
+	if !ok {
+		panic("Go panics on " + name)
+	}
+	return out
+}
+
+// biMinimize zeroes every piece of a binary that debug/buildinfo can do
+// without, so that a binary of a megabyte or two gzips to a few kilobytes:
+// the headers, the build information and what leads to it stay.
+func biMinimize(name string, data []byte) []byte {
+	want := biMustDump(name, data)
+	b := append([]byte(nil), data...)
+	for _, size := range []int{1 << 16, 1 << 12, 1 << 9, 1 << 6} {
+		for off := 0; off < len(b); off += size {
+			end := min(off+size, len(b))
+			if bytes.Count(b[off:end], []byte{0}) == end-off {
+				continue
+			}
+			saved := append([]byte(nil), b[off:end]...)
+			clear(b[off:end])
+			if got, ok := biDump(b); !ok || !bytes.Equal(got, want) {
+				copy(b[off:end], saved)
+			}
+		}
+	}
+	return b
+}
+
+// biFat makes a Mach-O universal binary of the two thin ones.
+func biFat(thin ...[]byte) []byte {
+	const align = 14
+	be, le := binary.BigEndian, binary.LittleEndian
+	hdr := make([]byte, 8+20*len(thin))
+	be.PutUint32(hdr, 0xcafebabe)
+	be.PutUint32(hdr[4:], uint32(len(thin)))
+	out := hdr
+	off := uint32(1 << align)
+	for i, f := range thin {
+		e := hdr[8+20*i:]
+		be.PutUint32(e, le.Uint32(f[4:]))
+		be.PutUint32(e[4:], le.Uint32(f[8:]))
+		be.PutUint32(e[8:], off)
+		be.PutUint32(e[12:], uint32(len(f)))
+		be.PutUint32(e[16:], align)
+		out = append(out, make([]byte, int(off)-len(out))...)
+		out = append(out, f...)
+		off = (off + uint32(len(f)) + 1<<align - 1) &^ (1<<align - 1)
+	}
+	return out
+}
+
+// biDamages changes the build information header and the strings after it
+// a bit at a time, the header of the binary and anywhere else, and cuts the
+// binary short in a few places.
+func biDamages(data []byte, seed uint64) []damage {
+	var ds []damage
+	x := seed
+	n := len(data)
+	add := func(pos int, xor byte) {
+		if pos < 0 || pos >= n || (xor == 0 && pos == 0) {
+			return
+		}
+		b := append([]byte(nil), data...)
+		if xor == 0 {
+			b = b[:pos]
+		} else {
+			b[pos] ^= xor
+		}
+		out, ok := biDump(b)
+		if !ok {
+			return
+		}
+		ds = append(ds, damage{pos, xor, fmt.Sprintf("%x", sha256.Sum256(out))[:16]})
+	}
+	if m := bytes.Index(data, biMagic); m >= 0 {
+		for i := 0; i < 48; i++ {
+			add(m+i, byte(1<<(i%8)))
+		}
+		add(m+2, 'G'^'N')
+		add(m+15, 2)
+		for i := 0; i < 12 && m+32 < n; i++ {
+			x = lcg(x)
+			add(m+32+int(x>>33)%min(400, n-m-32), byte(1<<((x>>20)%8)))
+		}
+		for _, cut := range []int{m + 8, m + 20, m + 31, m + 33, m + 40, m + 100} {
+			add(cut, 0)
+		}
+	}
+	for i := 0; i < 8; i++ {
+		x = lcg(x)
+		add(int(x>>33)%min(64, n), byte(1<<((x>>20)%8)))
+	}
+	for i := 0; i < 16; i++ {
+		x = lcg(x)
+		xor := byte(x >> 56)
+		if xor == 0 {
+			xor = 0x80
+		}
+		add(int(x>>33)%n, xor)
+	}
+	for _, cut := range []int{n / 2, n - 1, n * 3 / 4, 100} {
+		if cut > 0 && cut < n {
+			add(cut, 0)
+		}
+	}
+	return ds
+}
+
+func biBase64(name string) []byte {
+	s, err := os.ReadFile(filepath.Join("bidata", name))
+	if err != nil {
+		panic(err)
+	}
+	b, err := base64.StdEncoding.DecodeString(string(s))
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+// biIssue57002 is the input of Go's FuzzIssue57002, from its test file.
+func biIssue57002() []byte {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "bidata/buildinfo_test.go", nil, 0)
+	if err != nil {
+		panic(err)
+	}
+	var out []byte
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Name.Name != "FuzzIssue57002" {
+			continue
+		}
+		ast.Inspect(fd, func(n ast.Node) bool {
+			cl, ok := n.(*ast.CompositeLit)
+			if !ok || out != nil {
+				return out == nil
+			}
+			for _, e := range cl.Elts {
+				v, err := strconv.ParseUint(e.(*ast.BasicLit).Value, 0, 8)
+				if err != nil {
+					panic(err)
+				}
+				out = append(out, byte(v))
+			}
+			return false
+		})
+	}
+	if out == nil {
+		panic("no FuzzIssue57002 input")
+	}
+	return out
+}
+
+// biCorpus reads a file of Go's fuzzing corpus, one []byte value.
+func biCorpus(name string) []byte {
+	s, err := os.ReadFile(filepath.Join("bidata", name))
+	if err != nil {
+		panic(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(s)), "\n")
+	v := strings.TrimSuffix(strings.TrimPrefix(lines[1], "[]byte("), ")")
+	b, err := strconv.Unquote(v)
+	if err != nil {
+		panic(err)
+	}
+	return []byte(b)
+}
+
+// The inputs of the ParseBuildInfo cases: the seeds of Go's
+// FuzzParseBuildInfoRoundTrip, a line for each way a line can be wrong, and
+// then mixes of the lines.
+var biParseSeeds = []string{
+	"path\trsc.io/fortune\nmod\trsc.io/fortune\tv1.0.0\n",
+	"path\tcmd/test2json",
+	"go\t1.18\npath\texample.com/m\nmod\texample.com/m\t(devel)\t\nbuild\t-compiler=gc\n",
+	"go\t1.18\npath\texample.com/m\nbuild\t-compiler=gc\n",
+	"go 1.18\npath example.com/m\nbuild CRAZY_ENV=\"requires\\nescaping\"\n",
+	"",
+	"\n\n\n",
+	"path\ta\tb\n",
+	"path\tp\nmod\t\n",
+	"\n\n\nmod\tx\n",
+	"mod\ta\n",
+	"mod\ta\tb\n",
+	"mod\ta\tb\tc\td\n",
+	"dep\tx\n",
+	"dep\tx\tv1\th1:abc\n",
+	"=>\ta\tb\tc\n",
+	"mod\tm\tv\n=>\ta\tb\n",
+	"dep\tx\tv\n=>\ta\tb\tc\n=>\td\te\tf\n",
+	"mod\tm\tv\n=>\t../r\t\t\n",
+	"mod\tm\tv\nmod\tn\tw\th\n",
+	"dep\tx\tv\nmod\tm\tv\n=>\ta\tb\tc\ndep\ty\tw\ts\n=>\td\te\tf\n",
+	"build\t\n",
+	"build\t=x\n",
+	"build\t\"k\n",
+	"build\t\"k\"\n",
+	"build\t\"k\"x\n",
+	"build\t\"k\"\xff\n",
+	"build\t`k`\t\n",
+	"build\tk\n",
+	"build\tk k=v\n",
+	"build\t\"\"=v\n",
+	"build\tk=\"v\n",
+	"build\tk=a b\n",
+	"build\tk=`raw`\n",
+	"build\tk=`a\"b`\n",
+	"build\tk=\"a\\tb\"\n",
+	"build\t`k k`=v\n",
+	"build\tk=\n",
+	"build\tk=v=w\n",
+	"build\t\"\\x\"=v\n",
+	"build\t\"a=b\"=c\n",
+	"build\tk=\u00e9\n",
+	"build\tk=\"\\u00e9\"\n",
+	"build\tk=\"\\xff\"\n",
+	"build\tk=\"\u00e9\\n\\x00\"\n",
+	"build\t\"\\t\"=\"\\\"\"\n",
+	"build\tk=\"\\U0001f600 \\a\"\n",
+	"build\tk=v\r\n",
+	"build\tk=\xffv\n",
+	"build\tk==\n",
+	"build\t=\n",
+	"build\tk=`\n",
+	"path\tp\nbuild\tGOOS=linux\nbuild\t-ldflags=\"-s -w\"\nbuild\tvcs.modified=true\n",
+	"dep\ta\tb\tc\n=>\tx\n",
+	"unknown\tline\nmod\tm\tv\n",
+	"mod\tm\tv\n\nbuild\tk=v\n",
+}
+
+// biParseLines are what the mixes are made of.
+var biParseLines = []string{
+	"path\texample.com/m", "path\t", "mod\texample.com/m\t(devel)\t", "mod\tm\tv1.0.0\th1:x=",
+	"mod\tm", "dep\tgolang.org/x/text\tv0.3.0\th1:abc=", "dep\td\tv", "dep\t\t",
+	"=>\t../text\t\t", "=>\tr\tv\ts", "=>\tr", "build\t-compiler=gc", "build\tGOOS=linux",
+	"build\t-ldflags=\"-s -w\"", "build\tk=`v`", "build\t\"q k\"=v", "build\tk=a b",
+	"build\t=v", "build\t", "go\tgo1.27.1", "", "\t", "x",
+}
+
+func biParseDump(s string) string {
+	bi, err := debug.ParseBuildInfo(s)
+	if err != nil {
+		return "error: " + err.Error() + "\n"
+	}
+	s2 := bi.String()
+	if _, err := debug.ParseBuildInfo(s2); err != nil {
+		panic("String does not parse back: " + s2)
+	}
+	return "ok\n" + s2
+}
+
+func biMain() {
+	type src struct {
+		name string
+		data []byte
+		min  bool // minimised and gzipped
+		gz   bool
+	}
+	srcs := []src{
+		{"testdata/go117", biBase64("go117/go117.base64"), true, true},
+		{"testdata/notgo", biBase64("notgo/notgo.base64"), false, true},
+	}
+	corpus, err := os.ReadDir("bidata/fuzz/FuzzRead")
+	if err != nil {
+		panic(err)
+	}
+	for _, de := range corpus {
+		srcs = append(srcs, src{"testdata/fuzz/FuzzRead/" + de.Name(),
+			biCorpus("fuzz/FuzzRead/" + de.Name()), false, false})
+	}
+	srcs = append(srcs, src{"issue57002", biIssue57002(), false, false})
+	builds, err := os.ReadDir("bibuild")
+	if err != nil {
+		panic(err)
+	}
+	thin := map[string][]byte{}
+	for _, de := range builds {
+		b, err := os.ReadFile(filepath.Join("bibuild", de.Name()))
+		if err != nil {
+			panic(err)
+		}
+		b = biMinimize(de.Name(), b)
+		thin[de.Name()] = b
+		srcs = append(srcs, src{de.Name(), b, false, true})
+		if de.Name() == "darwin_arm64_exe" {
+			srcs = append(srcs, src{"darwin_fat_exe",
+				biFat(thin["darwin_amd64_exe"], b), false, true})
+		}
+	}
+	if len(builds) == 0 {
+		panic("no builds")
+	}
+
+	var fs []*file
+	for i, s := range srcs {
+		data := s.data
+		if s.min {
+			data = biMinimize(s.name, data)
+		}
+		f := &file{name: s.name, gz: s.gz, data: data, raw: data}
+		if s.gz {
+			f.raw = gosymGzip(data)
+		}
+		f.dump = biMustDump(s.name, data)
+		f.damage = biDamages(data, uint64(i)+1)
+		fs = append(fs, f)
+	}
+
+	inputs := append([]string(nil), biParseSeeds...)
+	x := uint64(7)
+	for i := 0; i < 200; i++ {
+		var b strings.Builder
+		x = lcg(x)
+		k := 1 + int(x>>33)%6
+		for j := 0; j < k; j++ {
+			x = lcg(x)
+			b.WriteString(biParseLines[int(x>>33)%len(biParseLines)])
+			x = lcg(x)
+			if j < k-1 || x>>60 != 0 {
+				b.WriteByte('\n')
+			}
+		}
+		inputs = append(inputs, b.String())
+	}
+
+	w := os.Stdout
+	fmt.Fprintf(w, "/* Generated by tools/gen-debug-tests.sh buildinfo from Go's debug/buildinfo,\n * runtime/debug and their testdata, and Go binaries built for it. Do not edit. */\n\n")
+	fmt.Fprintf(w, "#ifndef BURROW_TESTS_BUILDINFO_TEST_GEN_H\n#define BURROW_TESTS_BUILDINFO_TEST_GEN_H\n\n")
+	for i, f := range fs {
+		fmt.Fprintf(w, "/* %s, %d bytes. */\n", f.name, len(f.data))
+		writeBase64(w, fmt.Sprintf("buildinfo_file_%d", i), f.raw)
+		fmt.Fprintf(w, "static const char *const buildinfo_dump_%d[] = {\n", i)
+		for _, line := range strings.SplitAfter(string(f.dump), "\n") {
+			if line == "" {
+				continue
+			}
+			fmt.Fprintf(w, "    %s,\n", cstr(strings.TrimSuffix(line, "\n")))
+		}
+		fmt.Fprintf(w, "    NULL,\n};\n\n")
+		fmt.Fprintf(w, "static const DebugDamage buildinfo_damage_%d[] = {\n", i)
+		for _, d := range f.damage {
+			fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
+		}
+		fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+	}
+	fmt.Fprintf(w, "static const DebugFile buildinfo_files[] = {\n")
+	for i, f := range fs {
+		fmt.Fprintf(w, "    {%s, %t, buildinfo_file_%d, buildinfo_dump_%d, buildinfo_damage_%d},\n",
+			cstr(f.name), f.gz, i, i, i)
+	}
+	fmt.Fprintf(w, "};\n\n")
+	fmt.Fprintf(w, "/* What runtime/debug's ParseBuildInfo makes of each input: \"ok\" and then\n * BuildInfo.String, or the error. */\n")
+	fmt.Fprintf(w, "static const BuildinfoParseCase buildinfo_parse_cases[] = {\n")
+	for _, in := range inputs {
+		fmt.Fprintf(w, "    {%s, %d, %s},\n", cstr(in), len(in), cstr(biParseDump(in)))
 	}
 	fmt.Fprintf(w, "};\n\n#endif\n")
 }

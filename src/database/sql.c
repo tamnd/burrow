@@ -3162,6 +3162,8 @@ static void sq_rows_close_abandon(void *env) {
  * first, which is the order Go's chain of cancel funcs closes them in. */
 static Error sq_rows_close(SqlRows *rs, Error err) {
     Error e = BURROW_NO_ERROR;
+    /* Out here, since the scope's defers run after its own locals are gone. */
+    SqRowsClosing closing = {rs, false};
     BURROW_SCOPE {
         sq_closemu_lock(&rs->closemu);
         BURROW_DEFER(sq_closemu_unlock_fn, &rs->closemu);
@@ -3171,7 +3173,6 @@ static Error sq_rows_close(SqlRows *rs, Error err) {
         if (!BURROW_FAILED(rs->lasterr))
             rs->lasterr = sq_rows_keep(rs, err);
 
-        SqRowsClosing closing = {rs, false};
         BURROW_DEFER(sq_rows_close_abandon, &closing);
         BURROW_SCOPE {
             sync_mutex_lock(&rs->dc->mu);

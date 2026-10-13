@@ -5663,8 +5663,8 @@ typedef struct TdPanicCall {
 typedef void (*TdPanicFn)(TdPanicCall *c);
 
 static void td_panic_exec(TdPanicCall *c) {
+    Arena ar;
     BURROW_SCOPE {
-        Arena ar;
         arena_init(&ar, heap_allocator(), 0);
         BURROW_DEFER(td_arena_free, &ar);
         Error err = BURROW_NO_ERROR;

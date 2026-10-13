@@ -402,3 +402,9 @@ global	src/log/slog_logger.c	slogl_std	package-vars	The default slog logger befo
 global	src/log/slog_logger.c	slogl_default	package-vars	defaultLogger in Go, an atomic pointer.
 global	src/log/slog_logger.c	slogl_log_target	package-vars	The logger log package output goes to after slog_set_default, an atomic pointer.
 global	src/log/slog_logger.c	slogl_capture_site	package-vars	capturePC in the handlerWriter Go makes in SetDefault, an atomic bool.
+global	src/expvar/expvar.c	ev_vars	package-vars	The published variables, Go's vars. A Map, so a sync.Map for the entries and keys_mu for the key list and everything the list owns, and set up inside ev_vars_once.
+global	src/expvar/expvar.c	ev_vars_once	package-vars	Runs the publishing of cmdline and memstats once, the first time anything touches ev_vars. A SyncOnce.
+global	src/expvar/expvar.c	ev_cmdline_func	package-vars	The Func published as cmdline. Never written, only pointed at by its Var.
+global	src/expvar/expvar.c	ev_memstats_func	package-vars	The Func published as memstats. Never written, only pointed at by its Var.
+global	src/expvar/expvar.c	ev_handler_func	package-vars	The HandlerFunc behind expvar_handler. Never written, only pointed at by the Handlers made from it.
+global	src/expvar/expvar.c	ev_register_once	package-vars	Makes expvar_register put the handler on the default mux once. A SyncOnce.

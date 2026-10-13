@@ -123,3 +123,4 @@ log/slog
 testing/slogtest
 testing/iotest
 net/http/httputil
+expvar

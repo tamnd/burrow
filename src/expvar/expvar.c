@@ -14,6 +14,7 @@
 
 #include "burrow/expvar.h"
 
+#include "burrow/declare.h"
 #include "burrow/encoding/json.h"
 #include "burrow/log.h"
 #include "burrow/mem/arena.h"

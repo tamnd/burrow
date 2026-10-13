@@ -806,6 +806,7 @@ FUNC_TYPES = {
     "func() []map[string]interface{}": {"SlogtestResultsFunc"},
     "func(*testing.T) slog.Handler": {"SlogtestNewHandlerFunc"},
     "func(*testing.T) map[string]interface{}": {"SlogtestResultFunc"},
+    "func(KeyValue)": {"ExpvarDoFunc"},
 }
 
 BUILTIN = {

@@ -52,3 +52,6 @@ tests/hpke_test_gen.h
 tests/rsa_test_gen.h
 tests/x509_test_gen.h
 tests/x509_parse_test_gen.h
+tests/x509_verify_test_gen.h
+tests/x509_name_constraints_test_gen.h
+tests/x509_root_test_gen.h

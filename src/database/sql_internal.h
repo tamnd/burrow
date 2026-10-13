@@ -20,6 +20,12 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+/* The sentinels both halves return, errNilPtr from convert.go and the
+ * unexported ones from sql.go. */
+extern const Error sql_err_nil_ptr;
+extern const Error burrow__sql_err_db_closed;
+extern const Error burrow__sql_err_rows_closed;
+
 /* Rows' own descriptor, which a DriverScanContext carries so that
  * sql_convert_assign can find the Rows it was called for. */
 extern const Type burrow__sql_rows_type;

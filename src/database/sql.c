@@ -27,6 +27,7 @@
 #include "burrow/context.h"
 #include "burrow/core.h"
 #include "burrow/database/sql/driver.h"
+#include "burrow/defer.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
 #include "burrow/func.h"
@@ -206,6 +207,29 @@ static void sq_closemu_unlock(SqCloseMu *m) {
         sync_cond_broadcast(&m->write);
     }
     sync_mutex_unlock(&m->mu);
+}
+
+/* ----------------------------------------------------------------- panics
+ *
+ * A driver may panic, and Go's withLock and deferred unlocks see to it that
+ * nothing here stays locked when one does. The same goes here: a lock held
+ * across a call into the driver is let go by a deferred call, which runs on
+ * the way out of a panic as well as on the way out of the block. */
+
+static void sq_unlock(void *mu) {
+    sync_mutex_unlock((SyncMutex *)mu);
+}
+
+static void sq_closemu_runlock_fn(void *m) {
+    sq_closemu_runlock((SqCloseMu *)m);
+}
+
+static void sq_closemu_unlock_fn(void *m) {
+    sq_closemu_unlock((SqCloseMu *)m);
+}
+
+static void sq_arena_free(void *a) {
+    arena_free((Arena *)a);
 }
 
 /* ------------------------------------------------------------------ types */
@@ -572,12 +596,15 @@ static SqDS *sq_ds_new(SqDC *dc, DriverStmt si) {
  * error, which nothing in Go reads. */
 static Error sq_ds_close(SqDS *ds) {
     Error err = BURROW_NO_ERROR;
-    sync_mutex_lock(&ds->dc->mu);
-    if (!ds->closed) {
-        ds->closed = true;
-        err = ds->si.vt->close(ds->si.data);
+    BURROW_SCOPE {
+        sync_mutex_lock(&ds->dc->mu);
+        BURROW_DEFER(sq_unlock, &ds->dc->mu);
+        if (!ds->closed) {
+            ds->closed = true;
+            err = ds->si.vt->close(ds->si.data);
+        }
     }
-    sync_mutex_unlock(&ds->dc->mu);
+    BURROW_SCOPE_END;
     return err;
 }
 
@@ -613,21 +640,27 @@ static bool sq_dc_expired(const SqDC *dc, Duration timeout) {
 
 static Error sq_dc_reset_session(SqDC *dc, Context ctx) {
     Error err = BURROW_NO_ERROR;
-    sync_mutex_lock(&dc->mu);
-    if (dc->need_reset && dc->ci.vt->reset_session != NULL)
-        err = dc->ci.vt->reset_session(dc->ci.data, ctx);
-    sync_mutex_unlock(&dc->mu);
+    BURROW_SCOPE {
+        sync_mutex_lock(&dc->mu);
+        BURROW_DEFER(sq_unlock, &dc->mu);
+        if (dc->need_reset && dc->ci.vt->reset_session != NULL)
+            err = dc->ci.vt->reset_session(dc->ci.data, ctx);
+    }
+    BURROW_SCOPE_END;
     return err;
 }
 
 static bool sq_dc_validate(SqDC *dc, bool needs_reset) {
     bool ok = true;
-    sync_mutex_lock(&dc->mu);
-    if (needs_reset)
-        dc->need_reset = true;
-    if (dc->ci.vt->is_valid != NULL)
-        ok = dc->ci.vt->is_valid(dc->ci.data);
-    sync_mutex_unlock(&dc->mu);
+    BURROW_SCOPE {
+        sync_mutex_lock(&dc->mu);
+        BURROW_DEFER(sq_unlock, &dc->mu);
+        if (needs_reset)
+            dc->need_reset = true;
+        if (dc->ci.vt->is_valid != NULL)
+            ok = dc->ci.vt->is_valid(dc->ci.data);
+    }
+    BURROW_SCOPE_END;
     return ok;
 }
 
@@ -680,11 +713,15 @@ static Error sq_dc_final_close(SqDC *dc) {
         open = next;
     }
 
-    sync_mutex_lock(&dc->mu);
-    dc->final_closed = true;
-    Error err = dc->ci.vt->close(dc->ci.data);
-    dc->ci = (DriverConn){NULL, NULL};
-    sync_mutex_unlock(&dc->mu);
+    Error err = BURROW_NO_ERROR;
+    BURROW_SCOPE {
+        sync_mutex_lock(&dc->mu);
+        BURROW_DEFER(sq_unlock, &dc->mu);
+        dc->final_closed = true;
+        err = dc->ci.vt->close(dc->ci.data);
+        dc->ci = (DriverConn){NULL, NULL};
+    }
+    BURROW_SCOPE_END;
 
     sync_mutex_lock(&db->mu);
     db->num_open--;
@@ -903,37 +940,36 @@ static void sq_maybe_open_locked(SqlDB *db) {
 static void sq_open_new_connection(SqlDB *db) {
     Error err = BURROW_NO_ERROR;
     DriverConn ci = db->connector.vt->connect(db->connector.data, db->opener_ctx, &err);
-    sync_mutex_lock(&db->mu);
-    if (db->closed) {
-        if (!BURROW_FAILED(err))
+    SqDC *dc = NULL;
+    BURROW_SCOPE {
+        sync_mutex_lock(&db->mu);
+        BURROW_DEFER(sq_unlock, &db->mu);
+        if (db->closed) {
+            if (!BURROW_FAILED(err))
+                ci.vt->close(ci.data);
+            db->num_open--;
+            return;
+        }
+        if (BURROW_FAILED(err)) {
+            db->num_open--;
+            (void)sq_put_conn_db_locked(db, NULL, err);
+            sq_maybe_open_locked(db);
+            return;
+        }
+        dc = sq_dc_new(db, ci);
+        if (dc == NULL) {
+            db->num_open--;
             ci.vt->close(ci.data);
+            (void)sq_put_conn_db_locked(db, NULL, burrow_err_out_of_memory);
+            return;
+        }
+        if (sq_put_conn_db_locked(db, dc, BURROW_NO_ERROR))
+            return;
         db->num_open--;
-        sync_mutex_unlock(&db->mu);
-        return;
-    }
-    if (BURROW_FAILED(err)) {
-        db->num_open--;
-        (void)sq_put_conn_db_locked(db, NULL, err);
-        sq_maybe_open_locked(db);
-        sync_mutex_unlock(&db->mu);
-        return;
-    }
-    SqDC *dc = sq_dc_new(db, ci);
-    if (dc == NULL) {
-        db->num_open--;
+        db->num_dep--;
         ci.vt->close(ci.data);
-        (void)sq_put_conn_db_locked(db, NULL, burrow_err_out_of_memory);
-        sync_mutex_unlock(&db->mu);
-        return;
     }
-    if (sq_put_conn_db_locked(db, dc, BURROW_NO_ERROR)) {
-        sync_mutex_unlock(&db->mu);
-        return;
-    }
-    db->num_open--;
-    db->num_dep--;
-    ci.vt->close(ci.data);
-    sync_mutex_unlock(&db->mu);
+    BURROW_SCOPE_END;
     sq_dc_unref(dc);
 }
 
@@ -1810,6 +1846,18 @@ static SqDS *sq_stmt_prepare_on_conn_locked(SqlStmt *s, Context ctx, SqDC *dc,
     return ds;
 }
 
+/* prepareOnConnLocked under dc's lock, which Go takes with withLock. */
+static SqDS *sq_stmt_prepare_on_conn(SqlStmt *s, Context ctx, SqDC *dc, Error *err) {
+    SqDS *ds = NULL;
+    BURROW_SCOPE {
+        sync_mutex_lock(&dc->mu);
+        BURROW_DEFER(sq_unlock, &dc->mu);
+        ds = sq_stmt_prepare_on_conn_locked(s, ctx, dc, err);
+    }
+    BURROW_SCOPE_END;
+    return ds;
+}
+
 /* --------------------------------------------------------------- the *DC
  * functions, which run one thing on a connection and then release it. */
 
@@ -1819,13 +1867,17 @@ static DriverResult sq_result_from_statement(Alloc *a, Context ctx, DriverConn c
     DriverResult res = sq_no_result;
     Arena tmp;
     arena_init(&tmp, heap_allocator(), 0);
-    sync_mutex_lock(&ds->dc->mu);
-    Slice dargs = burrow__sql_driver_args_conn_locked(arena_allocator(&tmp), ci,
-                                                      &ds->si, args, &e);
-    if (!BURROW_FAILED(e))
-        res = sq_ctx_driver_stmt_exec(a, arena_allocator(&tmp), ctx, ds->si, dargs, &e);
-    sync_mutex_unlock(&ds->dc->mu);
-    arena_free(&tmp);
+    BURROW_SCOPE {
+        BURROW_DEFER(sq_arena_free, &tmp);
+        sync_mutex_lock(&ds->dc->mu);
+        BURROW_DEFER(sq_unlock, &ds->dc->mu);
+        Slice dargs = burrow__sql_driver_args_conn_locked(arena_allocator(&tmp), ci,
+                                                          &ds->si, args, &e);
+        if (!BURROW_FAILED(e))
+            res = sq_ctx_driver_stmt_exec(a, arena_allocator(&tmp), ctx, ds->si, dargs,
+                                          &e);
+    }
+    BURROW_SCOPE_END;
     *err = e;
     return BURROW_FAILED(e) ? sq_no_result : res;
 }
@@ -1836,26 +1888,86 @@ static DriverRows sq_rowsi_from_statement(Context ctx, DriverConn ci, SqDS *ds,
     DriverRows rowsi = sq_no_rows;
     Arena tmp;
     arena_init(&tmp, heap_allocator(), 0);
-    sync_mutex_lock(&ds->dc->mu);
-    Slice dargs = burrow__sql_driver_args_conn_locked(arena_allocator(&tmp), ci,
-                                                      &ds->si, args, &e);
-    if (!BURROW_FAILED(e))
-        rowsi = sq_ctx_driver_stmt_query(arena_allocator(&tmp), ctx, ds->si, dargs, &e);
-    sync_mutex_unlock(&ds->dc->mu);
-    arena_free(&tmp);
+    BURROW_SCOPE {
+        BURROW_DEFER(sq_arena_free, &tmp);
+        sync_mutex_lock(&ds->dc->mu);
+        BURROW_DEFER(sq_unlock, &ds->dc->mu);
+        Slice dargs = burrow__sql_driver_args_conn_locked(arena_allocator(&tmp), ci,
+                                                          &ds->si, args, &e);
+        if (!BURROW_FAILED(e))
+            rowsi =
+                sq_ctx_driver_stmt_query(arena_allocator(&tmp), ctx, ds->si, dargs, &e);
+    }
+    BURROW_SCOPE_END;
     *err = e;
     return BURROW_FAILED(e) ? sq_no_rows : rowsi;
 }
 
-static Error sq_ping_dc(Context ctx, SqDC *dc, SqRelease rel) {
-    Error err = BURROW_NO_ERROR;
-    if (dc->ci.vt->ping != NULL) {
+/* Prepares query on dc, under its lock. */
+static DriverStmt sq_dc_prepare(SqDC *dc, Context ctx, Str query, Error *err) {
+    DriverStmt si = {NULL, NULL};
+    BURROW_SCOPE {
         sync_mutex_lock(&dc->mu);
-        err = dc->ci.vt->ping(dc->ci.data, ctx);
-        sync_mutex_unlock(&dc->mu);
+        BURROW_DEFER(sq_unlock, &dc->mu);
+        si = sq_ctx_driver_prepare(ctx, dc->ci, query, err);
     }
-    sq_release(rel, err);
-    return err;
+    BURROW_SCOPE_END;
+    return si;
+}
+
+/* Closes a driver statement that never made it into a driverStmt. */
+static void sq_dc_close_si(SqDC *dc, DriverStmt si) {
+    BURROW_SCOPE {
+        sync_mutex_lock(&dc->mu);
+        BURROW_DEFER(sq_unlock, &dc->mu);
+        (void)si.vt->close(si.data);
+    }
+    BURROW_SCOPE_END;
+}
+
+/* What a *DC function has checked out from a connection. sq_held_drop is
+ * deferred over the whole function and gives it all back: the statement is
+ * closed and the connection released with err.
+ *
+ * That is execDC's deferred release(err). The other *DC functions in Go
+ * release by hand, so a driver that panics under them leaves the connection
+ * checked out for the collector, and C has no collector. They start err off
+ * as the bad-connection error instead, which is what Conn.Raw releases with
+ * after a panic, and set it to the real one once the driver has returned.
+ * Clearing rel hands the connection on to something else, a Rows usually. */
+typedef struct SqHeld {
+    SqRelease rel;
+    Error err;
+    SqDS *ds;
+} SqHeld;
+
+static void sq_held_drop(void *env) {
+    SqHeld *h = (SqHeld *)env;
+    if (h->ds != NULL) {
+        SqDS *ds = h->ds;
+        h->ds = NULL;
+        (void)sq_ds_close(ds);
+        sq_ds_unref(ds);
+    }
+    SqRelease rel = h->rel;
+    h->rel = (SqRelease){SQ_RELEASE_NONE, NULL};
+    sq_release(rel, h->err);
+}
+
+static Error sq_ping_dc(Context ctx, SqDC *dc, SqRelease rel) {
+    SqHeld held = {rel, driver_err_bad_conn, NULL};
+    BURROW_SCOPE {
+        BURROW_DEFER(sq_held_drop, &held);
+        Error err = BURROW_NO_ERROR;
+        if (dc->ci.vt->ping != NULL) {
+            sync_mutex_lock(&dc->mu);
+            BURROW_DEFER(sq_unlock, &dc->mu);
+            err = dc->ci.vt->ping(dc->ci.data, ctx);
+        }
+        held.err = err;
+    }
+    BURROW_SCOPE_END;
+    return held.err;
 }
 
 static void sq_cg_ref(SqGrabber kind, void *cg) {
@@ -1870,90 +1982,100 @@ static void sq_cg_ref(SqGrabber kind, void *cg) {
 static SqlStmt *sq_prepare_dc(SqlDB *db, Context ctx, SqDC *dc, SqRelease rel,
                               SqGrabber cg_kind, void *cg, Str query, SqlTx *add_to,
                               Error *err) {
-    Error e = BURROW_NO_ERROR;
-    sync_mutex_lock(&dc->mu);
-    SqDS *ds = sq_dc_prepare_locked(dc, ctx, cg_kind != SQ_CG_NONE, query, &e);
-    sync_mutex_unlock(&dc->mu);
-    if (ds == NULL) {
-        sq_release(rel, e);
-        BURROW_OUT(err, e);
-        return NULL;
+    SqHeld held = {rel, driver_err_bad_conn, NULL};
+    SqlStmt *s = NULL;
+    BURROW_SCOPE {
+        BURROW_DEFER(sq_held_drop, &held);
+        Error e = BURROW_NO_ERROR;
+        SqDS *ds = NULL;
+        BURROW_SCOPE {
+            sync_mutex_lock(&dc->mu);
+            BURROW_DEFER(sq_unlock, &dc->mu);
+            ds = sq_dc_prepare_locked(dc, ctx, cg_kind != SQ_CG_NONE, query, &e);
+        }
+        BURROW_SCOPE_END;
+        held.err = e;
+        if (ds == NULL) {
+            BURROW_OUT(err, e);
+            return NULL;
+        }
+        s = sq_stmt_new(db, query);
+        if (s != NULL && cg_kind == SQ_CG_NONE && !sq_vec_push(&s->css, ds)) {
+            sq_stmt_unref(s);
+            s = NULL;
+        }
+        if (s == NULL) {
+            sq_dc_remove_open_stmt(dc, ds);
+            held.ds = ds;
+            BURROW_OUT(err, burrow_err_out_of_memory);
+            return NULL;
+        }
+        s->cg_kind = cg_kind;
+        s->cg = cg;
+        sq_cg_ref(cg_kind, cg);
+        if (cg_kind != SQ_CG_NONE) {
+            s->cgds = ds;
+        } else {
+            s->last_num_closed = sync_atomic_int64_load(&db->num_closed);
+            sq_stmt_add_dep(s);
+        }
+        if (add_to != NULL)
+            sq_tx_add_stmt(add_to, s);
+        BURROW_OUT(err, BURROW_NO_ERROR);
     }
-    SqlStmt *s = sq_stmt_new(db, query);
-    if (s != NULL && cg_kind == SQ_CG_NONE && !sq_vec_push(&s->css, ds)) {
-        sq_stmt_unref(s);
-        s = NULL;
-    }
-    if (s == NULL) {
-        sq_dc_remove_open_stmt(dc, ds);
-        (void)sq_ds_close(ds);
-        sq_ds_unref(ds);
-        sq_release(rel, BURROW_NO_ERROR);
-        BURROW_OUT(err, burrow_err_out_of_memory);
-        return NULL;
-    }
-    s->cg_kind = cg_kind;
-    s->cg = cg;
-    sq_cg_ref(cg_kind, cg);
-    if (cg_kind != SQ_CG_NONE) {
-        s->cgds = ds;
-    } else {
-        s->last_num_closed = sync_atomic_int64_load(&db->num_closed);
-        sq_stmt_add_dep(s);
-    }
-    if (add_to != NULL)
-        sq_tx_add_stmt(add_to, s);
-    sq_release(rel, BURROW_NO_ERROR);
-    BURROW_OUT(err, BURROW_NO_ERROR);
+    BURROW_SCOPE_END;
     return s;
 }
 
 /* execDC. */
 static SqlResult sq_exec_dc(Alloc *a, Context ctx, SqDC *dc, SqRelease rel, Str query,
                             Slice args, Error *err) {
-    Error e = BURROW_NO_ERROR;
-    DriverConn ci = dc->ci;
-    if (ci.vt->exec_context != NULL || ci.vt->exec != NULL) {
-        DriverResult resi = sq_no_result;
-        Arena tmp;
-        arena_init(&tmp, heap_allocator(), 0);
-        sync_mutex_lock(&dc->mu);
-        Slice nvdargs = burrow__sql_driver_args_conn_locked(arena_allocator(&tmp), ci,
-                                                            NULL, args, &e);
-        if (!BURROW_FAILED(e))
-            resi = sq_ctx_driver_exec(a, arena_allocator(&tmp), ctx, ci, query, nvdargs,
-                                      &e);
-        sync_mutex_unlock(&dc->mu);
-        arena_free(&tmp);
-        if (!sq_same(e, driver_err_skip)) {
-            sq_release(rel, e);
-            BURROW_OUT(err, e);
-            return BURROW_FAILED(e) ? sq_no_result : resi;
+    SqHeld held = {rel, BURROW_NO_ERROR, NULL};
+    SqlResult res = sq_no_result;
+    BURROW_SCOPE {
+        BURROW_DEFER(sq_held_drop, &held);
+        Error e = BURROW_NO_ERROR;
+        DriverConn ci = dc->ci;
+        if (ci.vt->exec_context != NULL || ci.vt->exec != NULL) {
+            DriverResult resi = sq_no_result;
+            Arena tmp;
+            arena_init(&tmp, heap_allocator(), 0);
+            BURROW_SCOPE {
+                BURROW_DEFER(sq_arena_free, &tmp);
+                sync_mutex_lock(&dc->mu);
+                BURROW_DEFER(sq_unlock, &dc->mu);
+                Slice nvdargs = burrow__sql_driver_args_conn_locked(
+                    arena_allocator(&tmp), ci, NULL, args, &e);
+                if (!BURROW_FAILED(e))
+                    resi = sq_ctx_driver_exec(a, arena_allocator(&tmp), ctx, ci, query,
+                                              nvdargs, &e);
+            }
+            BURROW_SCOPE_END;
+            if (!sq_same(e, driver_err_skip)) {
+                held.err = e;
+                BURROW_OUT(err, e);
+                return BURROW_FAILED(e) ? sq_no_result : resi;
+            }
         }
-    }
 
-    sync_mutex_lock(&dc->mu);
-    DriverStmt si = sq_ctx_driver_prepare(ctx, ci, query, &e);
-    sync_mutex_unlock(&dc->mu);
-    if (BURROW_FAILED(e)) {
-        sq_release(rel, e);
+        DriverStmt si = sq_dc_prepare(dc, ctx, query, &e);
+        held.err = e;
+        if (BURROW_FAILED(e)) {
+            BURROW_OUT(err, e);
+            return sq_no_result;
+        }
+        SqDS *ds = sq_ds_new(dc, si);
+        if (ds == NULL) {
+            sq_dc_close_si(dc, si);
+            BURROW_OUT(err, burrow_err_out_of_memory);
+            return sq_no_result;
+        }
+        held.ds = ds;
+        res = sq_result_from_statement(a, ctx, ci, ds, args, &e);
+        held.err = e;
         BURROW_OUT(err, e);
-        return sq_no_result;
     }
-    SqDS *ds = sq_ds_new(dc, si);
-    if (ds == NULL) {
-        sync_mutex_lock(&dc->mu);
-        si.vt->close(si.data);
-        sync_mutex_unlock(&dc->mu);
-        sq_release(rel, BURROW_NO_ERROR);
-        BURROW_OUT(err, burrow_err_out_of_memory);
-        return sq_no_result;
-    }
-    SqlResult res = sq_result_from_statement(a, ctx, ci, ds, args, &e);
-    (void)sq_ds_close(ds);
-    sq_ds_unref(ds);
-    sq_release(rel, e);
-    BURROW_OUT(err, e);
+    BURROW_SCOPE_END;
     return res;
 }
 
@@ -1968,14 +2090,14 @@ static SqlRows *sq_rows_wrap(Context ctx, SqlTx *txctx, SqDC *dc, SqRelease rel,
                              Error *err) {
     SqlRows *rs = sq_rows_new(dc, rel, rowsi);
     if (rs == NULL) {
-        sync_mutex_lock(&dc->mu);
-        rowsi.vt->close(rowsi.data);
-        sync_mutex_unlock(&dc->mu);
-        if (close_stmt != NULL) {
-            (void)sq_ds_close(close_stmt);
-            sq_ds_unref(close_stmt);
+        SqHeld held = {rel, BURROW_NO_ERROR, close_stmt};
+        BURROW_SCOPE {
+            BURROW_DEFER(sq_held_drop, &held);
+            sync_mutex_lock(&dc->mu);
+            BURROW_DEFER(sq_unlock, &dc->mu);
+            rowsi.vt->close(rowsi.data);
         }
-        sq_release(rel, BURROW_NO_ERROR);
+        BURROW_SCOPE_END;
         BURROW_OUT(err, burrow_err_out_of_memory);
         return NULL;
     }
@@ -1998,55 +2120,62 @@ static SqlRows *sq_rows_wrap(Context ctx, SqlTx *txctx, SqDC *dc, SqRelease rel,
 /* queryDC. txctx is the Tx whose end also ends the Rows, or NULL. */
 static SqlRows *sq_query_dc(Context ctx, SqlTx *txctx, SqDC *dc, SqRelease rel,
                             Str query, Slice args, Error *err) {
-    Error e = BURROW_NO_ERROR;
-    DriverConn ci = dc->ci;
-    if (ci.vt->query_context != NULL || ci.vt->query != NULL) {
-        DriverRows rowsi = sq_no_rows;
-        Arena tmp;
-        arena_init(&tmp, heap_allocator(), 0);
-        sync_mutex_lock(&dc->mu);
-        Slice nvdargs = burrow__sql_driver_args_conn_locked(arena_allocator(&tmp), ci,
-                                                            NULL, args, &e);
-        if (!BURROW_FAILED(e))
-            rowsi =
-                sq_ctx_driver_query(arena_allocator(&tmp), ctx, ci, query, nvdargs, &e);
-        sync_mutex_unlock(&dc->mu);
-        arena_free(&tmp);
-        if (!sq_same(e, driver_err_skip)) {
-            if (BURROW_FAILED(e)) {
-                sq_release(rel, e);
+    SqHeld held = {rel, driver_err_bad_conn, NULL};
+    DriverRows rowsi = sq_no_rows;
+    SqDS *ds = NULL;
+    BURROW_SCOPE {
+        BURROW_DEFER(sq_held_drop, &held);
+        Error e = driver_err_skip;
+        DriverConn ci = dc->ci;
+        if (ci.vt->query_context != NULL || ci.vt->query != NULL) {
+            e = BURROW_NO_ERROR;
+            Arena tmp;
+            arena_init(&tmp, heap_allocator(), 0);
+            BURROW_SCOPE {
+                BURROW_DEFER(sq_arena_free, &tmp);
+                sync_mutex_lock(&dc->mu);
+                BURROW_DEFER(sq_unlock, &dc->mu);
+                Slice nvdargs = burrow__sql_driver_args_conn_locked(
+                    arena_allocator(&tmp), ci, NULL, args, &e);
+                if (!BURROW_FAILED(e))
+                    rowsi = sq_ctx_driver_query(arena_allocator(&tmp), ctx, ci, query,
+                                                nvdargs, &e);
+            }
+            BURROW_SCOPE_END;
+            if (BURROW_FAILED(e) && !sq_same(e, driver_err_skip)) {
+                held.err = e;
                 BURROW_OUT(err, e);
                 return NULL;
             }
-            return sq_rows_wrap(ctx, txctx, dc, rel, rowsi, NULL, NULL, err);
         }
-    }
 
-    sync_mutex_lock(&dc->mu);
-    DriverStmt si = sq_ctx_driver_prepare(ctx, ci, query, &e);
-    sync_mutex_unlock(&dc->mu);
-    if (BURROW_FAILED(e)) {
-        sq_release(rel, e);
-        BURROW_OUT(err, e);
-        return NULL;
+        if (sq_same(e, driver_err_skip)) {
+            e = BURROW_NO_ERROR;
+            DriverStmt si = sq_dc_prepare(dc, ctx, query, &e);
+            if (BURROW_FAILED(e)) {
+                held.err = e;
+                BURROW_OUT(err, e);
+                return NULL;
+            }
+            ds = sq_ds_new(dc, si);
+            if (ds == NULL) {
+                sq_dc_close_si(dc, si);
+                held.err = BURROW_NO_ERROR;
+                BURROW_OUT(err, burrow_err_out_of_memory);
+                return NULL;
+            }
+            held.ds = ds;
+            rowsi = sq_rowsi_from_statement(ctx, ci, ds, args, &e);
+            if (BURROW_FAILED(e)) {
+                held.err = e;
+                BURROW_OUT(err, e);
+                return NULL;
+            }
+            held.ds = NULL;
+        }
+        held.rel = (SqRelease){SQ_RELEASE_NONE, NULL};
     }
-    SqDS *ds = sq_ds_new(dc, si);
-    if (ds == NULL) {
-        sync_mutex_lock(&dc->mu);
-        si.vt->close(si.data);
-        sync_mutex_unlock(&dc->mu);
-        sq_release(rel, BURROW_NO_ERROR);
-        BURROW_OUT(err, burrow_err_out_of_memory);
-        return NULL;
-    }
-    DriverRows rowsi = sq_rowsi_from_statement(ctx, ci, ds, args, &e);
-    if (BURROW_FAILED(e)) {
-        (void)sq_ds_close(ds);
-        sq_ds_unref(ds);
-        sq_release(rel, e);
-        BURROW_OUT(err, e);
-        return NULL;
-    }
+    BURROW_SCOPE_END;
     return sq_rows_wrap(ctx, txctx, dc, rel, rowsi, ds, NULL, err);
 }
 
@@ -2067,12 +2196,20 @@ static void sq_tx_await_done(void *env) {
 static SqlTx *sq_begin_dc(SqlDB *db, Context ctx, SqDC *dc, SqRelease rel,
                           const SqlTxOptions *opts, Error *err) {
     Error e = BURROW_NO_ERROR;
-    sync_mutex_lock(&dc->mu);
     bool keep = dc->ci.vt->reset_session != NULL && dc->ci.vt->is_valid != NULL;
-    DriverTx txi = sq_ctx_driver_begin(ctx, opts, dc->ci, &e);
-    sync_mutex_unlock(&dc->mu);
+    DriverTx txi = {NULL, NULL};
+    SqHeld held = {rel, driver_err_bad_conn, NULL};
+    BURROW_SCOPE {
+        BURROW_DEFER(sq_held_drop, &held);
+        sync_mutex_lock(&dc->mu);
+        BURROW_DEFER(sq_unlock, &dc->mu);
+        txi = sq_ctx_driver_begin(ctx, opts, dc->ci, &e);
+        held.err = e;
+        if (!BURROW_FAILED(e))
+            held.rel = (SqRelease){SQ_RELEASE_NONE, NULL};
+    }
+    BURROW_SCOPE_END;
     if (BURROW_FAILED(e)) {
-        sq_release(rel, e);
         BURROW_OUT(err, e);
         return NULL;
     }
@@ -2083,9 +2220,13 @@ static SqlTx *sq_begin_dc(SqlDB *db, Context ctx, SqDC *dc, SqRelease rel,
     if (tx != NULL)
         tctx = context_with_cancel(heap_allocator(), ctx, &cancel);
     if (tx == NULL || BURROW_CONTEXT_IS_NIL(tctx)) {
-        sync_mutex_lock(&dc->mu);
-        Error re = txi.vt->rollback(txi.data);
-        sync_mutex_unlock(&dc->mu);
+        Error re = BURROW_NO_ERROR;
+        BURROW_SCOPE {
+            sync_mutex_lock(&dc->mu);
+            BURROW_DEFER(sq_unlock, &dc->mu);
+            re = txi.vt->rollback(txi.data);
+        }
+        BURROW_SCOPE_END;
         if (tx != NULL)
             mem_free(heap_allocator(), tx, sizeof(SqlTx), _Alignof(SqlTx));
         sq_release(rel, keep ? re : driver_err_bad_conn);
@@ -2319,11 +2460,14 @@ static void sq_conn_unref(SqlConn *c) {
 static Error sq_conn_close(SqlConn *c, Error err) {
     if (!sync_atomic_bool_compare_and_swap(&c->done, false, true))
         return sql_err_conn_done;
-    sq_closemu_lock(&c->closemu);
-    SqDC *dc = c->dc;
-    c->dc = NULL;
-    sq_put_conn(dc, err, true);
-    sq_closemu_unlock(&c->closemu);
+    BURROW_SCOPE {
+        sq_closemu_lock(&c->closemu);
+        BURROW_DEFER(sq_closemu_unlock_fn, &c->closemu);
+        SqDC *dc = c->dc;
+        c->dc = NULL;
+        sq_put_conn(dc, err, true);
+    }
+    BURROW_SCOPE_END;
     return err;
 }
 
@@ -2483,9 +2627,13 @@ Error sql_tx_commit(SqlTx *tx) {
     sq_closemu_lock(&tx->closemu);
     sq_closemu_unlock(&tx->closemu);
 
-    sync_mutex_lock(&tx->dc->mu);
-    Error err = tx->txi.vt->commit(tx->txi.data);
-    sync_mutex_unlock(&tx->dc->mu);
+    Error err = BURROW_NO_ERROR;
+    BURROW_SCOPE {
+        sync_mutex_lock(&tx->dc->mu);
+        BURROW_DEFER(sq_unlock, &tx->dc->mu);
+        err = tx->txi.vt->commit(tx->txi.data);
+    }
+    BURROW_SCOPE_END;
     sq_tx_end_stmts(tx, !sq_bad_conn(err));
     sq_tx_close(tx, err);
     return err;
@@ -2501,9 +2649,13 @@ static Error sq_tx_rollback(SqlTx *tx, bool discard_conn) {
     sq_closemu_lock(&tx->closemu);
     sq_closemu_unlock(&tx->closemu);
 
-    sync_mutex_lock(&tx->dc->mu);
-    Error err = tx->txi.vt->rollback(tx->txi.data);
-    sync_mutex_unlock(&tx->dc->mu);
+    Error err = BURROW_NO_ERROR;
+    BURROW_SCOPE {
+        sync_mutex_lock(&tx->dc->mu);
+        BURROW_DEFER(sq_unlock, &tx->dc->mu);
+        err = tx->txi.vt->rollback(tx->txi.data);
+    }
+    BURROW_SCOPE_END;
     sq_tx_end_stmts(tx, !sq_bad_conn(err));
     if (discard_conn)
         err = driver_err_bad_conn;
@@ -2589,74 +2741,63 @@ SqlStmt *sql_tx_stmt_context(SqlTx *tx, Context ctx, SqlStmt *stmt) {
     SqDC *dc = sq_tx_grab(tx, ctx, &rel, &e);
     if (dc == NULL)
         return sq_stmt_sticky(e);
-    if (tx->db != stmt->db) {
-        sq_release(rel, BURROW_NO_ERROR);
-        return sq_stmt_sticky(sq_new_error(
-            BURROW_S("sql: Tx.Stmt: statement from different database used")));
-    }
-    SqDS *ds = NULL;
-    SqlStmt *parent = NULL;
-    sync_mutex_lock(&stmt->mu);
-    if (stmt->closed || stmt->cg_kind != SQ_CG_NONE) {
-        sync_mutex_unlock(&stmt->mu);
-        sync_mutex_lock(&dc->mu);
-        DriverStmt si = sq_ctx_driver_prepare(ctx, dc->ci, stmt->query, &e);
-        sync_mutex_unlock(&dc->mu);
-        if (BURROW_FAILED(e)) {
-            SqlStmt *res = sq_stmt_sticky(e);
-            sq_release(rel, BURROW_NO_ERROR);
-            return res;
+    SqHeld held = {rel, BURROW_NO_ERROR, NULL};
+    SqlStmt *txs = NULL;
+    BURROW_SCOPE {
+        BURROW_DEFER(sq_held_drop, &held);
+        if (tx->db != stmt->db)
+            return sq_stmt_sticky(sq_new_error(
+                BURROW_S("sql: Tx.Stmt: statement from different database used")));
+        SqDS *ds = NULL;
+        SqlStmt *parent = NULL;
+        sync_mutex_lock(&stmt->mu);
+        if (stmt->closed || stmt->cg_kind != SQ_CG_NONE) {
+            sync_mutex_unlock(&stmt->mu);
+            DriverStmt si = sq_dc_prepare(dc, ctx, stmt->query, &e);
+            if (BURROW_FAILED(e))
+                return sq_stmt_sticky(e);
+            ds = sq_ds_new(dc, si);
+            if (ds == NULL) {
+                sq_dc_close_si(dc, si);
+                return NULL;
+            }
+        } else {
+            sq_stmt_remove_closed_locked(stmt);
+            for (Int i = 0; i < stmt->css.len; i++) {
+                SqDS *v = (SqDS *)stmt->css.p[i];
+                if (v->dc == dc) {
+                    ds = v;
+                    sq_ds_ref(ds);
+                    break;
+                }
+            }
+            sync_mutex_unlock(&stmt->mu);
+            if (ds == NULL) {
+                ds = sq_stmt_prepare_on_conn(stmt, ctx, dc, &e);
+                if (ds == NULL)
+                    return sq_stmt_sticky(e);
+            }
+            parent = stmt;
         }
-        ds = sq_ds_new(dc, si);
-        if (ds == NULL) {
-            sync_mutex_lock(&dc->mu);
-            si.vt->close(si.data);
-            sync_mutex_unlock(&dc->mu);
-            sq_release(rel, BURROW_NO_ERROR);
+        txs = sq_stmt_new(tx->db, stmt->query);
+        if (txs == NULL) {
+            if (parent == NULL)
+                (void)sq_ds_close(ds);
+            sq_ds_unref(ds);
             return NULL;
         }
-    } else {
-        sq_stmt_remove_closed_locked(stmt);
-        for (Int i = 0; i < stmt->css.len; i++) {
-            SqDS *v = (SqDS *)stmt->css.p[i];
-            if (v->dc == dc) {
-                ds = v;
-                sq_ds_ref(ds);
-                break;
-            }
+        txs->cg_kind = SQ_CG_TX;
+        txs->cg = tx;
+        sync_atomic_int64_add(&tx->refs, 1);
+        txs->cgds = ds;
+        if (parent != NULL) {
+            txs->parent = parent;
+            sq_stmt_ref(parent);
+            sq_stmt_add_dep(parent);
         }
-        sync_mutex_unlock(&stmt->mu);
-        if (ds == NULL) {
-            sync_mutex_lock(&dc->mu);
-            ds = sq_stmt_prepare_on_conn_locked(stmt, ctx, dc, &e);
-            sync_mutex_unlock(&dc->mu);
-            if (ds == NULL) {
-                SqlStmt *res = sq_stmt_sticky(e);
-                sq_release(rel, BURROW_NO_ERROR);
-                return res;
-            }
-        }
-        parent = stmt;
+        sq_tx_add_stmt(tx, txs);
     }
-    SqlStmt *txs = sq_stmt_new(tx->db, stmt->query);
-    if (txs == NULL) {
-        if (parent == NULL)
-            (void)sq_ds_close(ds);
-        sq_ds_unref(ds);
-        sq_release(rel, BURROW_NO_ERROR);
-        return NULL;
-    }
-    txs->cg_kind = SQ_CG_TX;
-    txs->cg = tx;
-    sync_atomic_int64_add(&tx->refs, 1);
-    txs->cgds = ds;
-    if (parent != NULL) {
-        txs->parent = parent;
-        sq_stmt_ref(parent);
-        sq_stmt_add_dep(parent);
-    }
-    sq_tx_add_stmt(tx, txs);
-    sq_release(rel, BURROW_NO_ERROR);
+    BURROW_SCOPE_END;
     return txs;
 }
 
@@ -2710,11 +2851,17 @@ static SqDC *sq_stmt_conn_stmt(SqlStmt *s, Context ctx, int strategy, SqRelease 
     sync_mutex_unlock(&s->mu);
 
     Error e = BURROW_NO_ERROR;
-    sync_mutex_lock(&dc->mu);
-    SqDS *ds = sq_stmt_prepare_on_conn_locked(s, ctx, dc, &e);
-    sync_mutex_unlock(&dc->mu);
+    SqDS *ds = NULL;
+    SqHeld held = {sq_release_dc(dc), driver_err_bad_conn, NULL};
+    BURROW_SCOPE {
+        BURROW_DEFER(sq_held_drop, &held);
+        ds = sq_stmt_prepare_on_conn(s, ctx, dc, &e);
+        held.err = e;
+        if (ds != NULL)
+            held.rel = (SqRelease){SQ_RELEASE_NONE, NULL};
+    }
+    BURROW_SCOPE_END;
     if (ds == NULL) {
-        sq_put_conn(dc, e, true);
         *err = e;
         return NULL;
     }
@@ -2724,22 +2871,40 @@ static SqDC *sq_stmt_conn_stmt(SqlStmt *s, Context ctx, int strategy, SqRelease 
     return dc;
 }
 
+static void sq_ds_unref_fn(void *ds) {
+    sq_ds_unref((SqDS *)ds);
+}
+
+/* One go at Stmt.ExecContext, on a connection picked by strategy. */
+static SqlResult sq_stmt_exec_once(SqlStmt *s, Alloc *a, Context ctx, int strategy,
+                                   Slice args, Error *e) {
+    SqRelease rel = {SQ_RELEASE_NONE, NULL};
+    SqDS *ds = NULL;
+    SqDC *dc = sq_stmt_conn_stmt(s, ctx, strategy, &rel, &ds, e);
+    if (dc == NULL)
+        return sq_no_result;
+    SqHeld held = {rel, driver_err_bad_conn, NULL};
+    SqlResult res = sq_no_result;
+    BURROW_SCOPE {
+        BURROW_DEFER(sq_held_drop, &held);
+        BURROW_DEFER(sq_ds_unref_fn, ds);
+        res = sq_result_from_statement(a, ctx, dc->ci, ds, args, e);
+        held.err = *e;
+    }
+    BURROW_SCOPE_END;
+    return res;
+}
+
 SqlResult sql_stmt_exec_context(SqlStmt *s, Alloc *a, Context ctx, Slice args,
                                 Error *err) {
-    sq_closemu_rlock(&s->closemu);
     Error e = BURROW_NO_ERROR;
     SqlResult res = sq_no_result;
-    SQ_RETRY(e, {
-        SqRelease rel = {SQ_RELEASE_NONE, NULL};
-        SqDS *ds = NULL;
-        SqDC *dc = sq_stmt_conn_stmt(s, ctx, strategy, &rel, &ds, &e);
-        if (dc != NULL) {
-            res = sq_result_from_statement(a, ctx, dc->ci, ds, args, &e);
-            sq_ds_unref(ds);
-            sq_release(rel, e);
-        }
-    });
-    sq_closemu_runlock(&s->closemu);
+    BURROW_SCOPE {
+        sq_closemu_rlock(&s->closemu);
+        BURROW_DEFER(sq_closemu_runlock_fn, &s->closemu);
+        SQ_RETRY(e, res = sq_stmt_exec_once(s, a, ctx, strategy, args, &e));
+    }
+    BURROW_SCOPE_END;
     BURROW_OUT(err, e);
     return res;
 }
@@ -2748,26 +2913,40 @@ SqlResult sql_stmt_exec(SqlStmt *s, Alloc *a, Slice args, Error *err) {
     return sql_stmt_exec_context(s, a, context_background(), args, err);
 }
 
+/* One go at Stmt.QueryContext, on a connection picked by strategy. */
+static SqlRows *sq_stmt_query_once(SqlStmt *s, Context ctx, int strategy, Slice args,
+                                   Error *e) {
+    SqRelease rel = {SQ_RELEASE_NONE, NULL};
+    SqDS *ds = NULL;
+    SqDC *dc = sq_stmt_conn_stmt(s, ctx, strategy, &rel, &ds, e);
+    if (dc == NULL)
+        return NULL;
+    SqHeld held = {rel, driver_err_bad_conn, NULL};
+    DriverRows rowsi = sq_no_rows;
+    BURROW_SCOPE {
+        BURROW_DEFER(sq_held_drop, &held);
+        BURROW_DEFER(sq_ds_unref_fn, ds);
+        rowsi = sq_rowsi_from_statement(ctx, dc->ci, ds, args, e);
+        held.err = *e;
+        if (!BURROW_FAILED(*e))
+            held.rel = (SqRelease){SQ_RELEASE_NONE, NULL};
+    }
+    BURROW_SCOPE_END;
+    if (BURROW_FAILED(*e))
+        return NULL;
+    SqlTx *txctx = s->cg_kind == SQ_CG_TX ? (SqlTx *)s->cg : NULL;
+    return sq_rows_wrap(ctx, txctx, dc, rel, rowsi, NULL, s, e);
+}
+
 SqlRows *sql_stmt_query_context(SqlStmt *s, Context ctx, Slice args, Error *err) {
-    sq_closemu_rlock(&s->closemu);
     Error e = BURROW_NO_ERROR;
     SqlRows *rows = NULL;
-    SQ_RETRY(e, {
-        SqRelease rel = {SQ_RELEASE_NONE, NULL};
-        SqDS *ds = NULL;
-        SqDC *dc = sq_stmt_conn_stmt(s, ctx, strategy, &rel, &ds, &e);
-        if (dc != NULL) {
-            DriverRows rowsi = sq_rowsi_from_statement(ctx, dc->ci, ds, args, &e);
-            sq_ds_unref(ds);
-            if (BURROW_FAILED(e)) {
-                sq_release(rel, e);
-            } else {
-                SqlTx *txctx = s->cg_kind == SQ_CG_TX ? (SqlTx *)s->cg : NULL;
-                rows = sq_rows_wrap(ctx, txctx, dc, rel, rowsi, NULL, s, &e);
-            }
-        }
-    });
-    sq_closemu_runlock(&s->closemu);
+    BURROW_SCOPE {
+        sq_closemu_rlock(&s->closemu);
+        BURROW_DEFER(sq_closemu_runlock_fn, &s->closemu);
+        SQ_RETRY(e, rows = sq_stmt_query_once(s, ctx, strategy, args, &e));
+    }
+    BURROW_SCOPE_END;
     BURROW_OUT(err, e);
     return rows;
 }
@@ -2787,34 +2966,34 @@ SqlRow sql_stmt_query_row(SqlStmt *s, Slice args) {
 }
 
 Error sql_stmt_close(SqlStmt *s) {
-    sq_closemu_lock(&s->closemu);
-    if (BURROW_FAILED(s->sticky)) {
-        sq_closemu_unlock(&s->closemu);
-        return s->sticky;
-    }
-    sync_mutex_lock(&s->mu);
-    if (s->closed) {
-        sync_mutex_unlock(&s->mu);
-        sq_closemu_unlock(&s->closemu);
-        return BURROW_NO_ERROR;
-    }
-    s->closed = true;
-    SqDS *txds = s->cgds;
-    s->cgds = NULL;
-    sync_mutex_unlock(&s->mu);
-
     Error err = BURROW_NO_ERROR;
-    if (s->cg_kind == SQ_CG_NONE) {
-        err = sq_stmt_remove_dep(s);
-    } else if (s->parent != NULL) {
-        /* txds is in the parent's css, which closes it. */
-        err = sq_stmt_remove_dep(s->parent);
-    } else {
-        err = sq_ds_close(txds);
+    BURROW_SCOPE {
+        sq_closemu_lock(&s->closemu);
+        BURROW_DEFER(sq_closemu_unlock_fn, &s->closemu);
+        if (BURROW_FAILED(s->sticky))
+            return s->sticky;
+        sync_mutex_lock(&s->mu);
+        if (s->closed) {
+            sync_mutex_unlock(&s->mu);
+            return BURROW_NO_ERROR;
+        }
+        s->closed = true;
+        SqDS *txds = s->cgds;
+        s->cgds = NULL;
+        sync_mutex_unlock(&s->mu);
+
+        if (txds != NULL)
+            BURROW_DEFER(sq_ds_unref_fn, txds);
+        if (s->cg_kind == SQ_CG_NONE) {
+            err = sq_stmt_remove_dep(s);
+        } else if (s->parent != NULL) {
+            /* txds is in the parent's css, which closes it. */
+            err = sq_stmt_remove_dep(s->parent);
+        } else {
+            err = sq_ds_close(txds);
+        }
     }
-    if (txds != NULL)
-        sq_ds_unref(txds);
-    sq_closemu_unlock(&s->closemu);
+    BURROW_SCOPE_END;
     return err;
 }
 
@@ -2938,46 +3117,83 @@ static bool sq_rows_init_context_close(SqlRows *rs, Context ctx, SqlTx *tx) {
     return true;
 }
 
-/* Rows.close. The cursors that came out of rs are closed with it, newest
- * first, which is the order Go's chain of cancel funcs closes them in. */
-static Error sq_rows_close(SqlRows *rs, Error err) {
-    sq_closemu_lock(&rs->closemu);
-    if (rs->closed) {
-        sq_closemu_unlock(&rs->closemu);
-        return BURROW_NO_ERROR;
-    }
-    rs->closed = true;
-    if (!BURROW_FAILED(rs->lasterr))
-        rs->lasterr = sq_rows_keep(rs, err);
+/* What Rows.close still has to give back if the driver panics part way
+ * through it. Go leaves the connection checked out then, along with the
+ * statement and the goroutine waiting on the context; this lets them go, the
+ * connection as a bad one. done is set when close got to the end itself. */
+typedef struct SqRowsClosing {
+    SqlRows *rs;
+    bool done;
+} SqRowsClosing;
 
-    sync_mutex_lock(&rs->dc->mu);
-    Error e = rs->rowsi.vt->close(rs->rowsi.data);
-    sync_mutex_unlock(&rs->dc->mu);
-    burrow__SqlRowsCloseHook hook = burrow__sql_rows_close_hook;
-    if (hook != NULL)
-        hook(rs, &e);
-
+static void sq_rows_close_abandon(void *env) {
+    SqRowsClosing *c = (SqRowsClosing *)env;
+    if (c->done)
+        return;
+    SqlRows *rs = c->rs;
     sync_atomic_bool_store(&rs->closing, true);
-    for (SqlRows *c = rs->children; c != NULL; c = c->child_next)
-        (void)sq_rows_close(c, rs->lasterr);
     if (rs->has_ctx)
         BURROW_CALLF0(rs->cancel);
-    if (rs->close_stmt != NULL) {
-        (void)sq_ds_close(rs->close_stmt);
-        sq_ds_unref(rs->close_stmt);
-        rs->close_stmt = NULL;
-    }
-    SqRelease rel = rs->release;
+    SqHeld held = {rs->release, driver_err_bad_conn, rs->close_stmt};
     rs->release = (SqRelease){SQ_RELEASE_NONE, NULL};
-    sq_release(rel, e);
+    rs->close_stmt = NULL;
+    sq_held_drop(&held);
     if (rs->dep_stmt != NULL) {
         SqlStmt *s = rs->dep_stmt;
         rs->dep_stmt = NULL;
         (void)sq_stmt_remove_dep(s);
         sq_stmt_unref(s);
     }
-    rs->lasterr = sq_rows_keep(rs, sq_rows_lasterr_or(rs, e));
-    sq_closemu_unlock(&rs->closemu);
+}
+
+/* Rows.close. The cursors that came out of rs are closed with it, newest
+ * first, which is the order Go's chain of cancel funcs closes them in. */
+static Error sq_rows_close(SqlRows *rs, Error err) {
+    Error e = BURROW_NO_ERROR;
+    BURROW_SCOPE {
+        sq_closemu_lock(&rs->closemu);
+        BURROW_DEFER(sq_closemu_unlock_fn, &rs->closemu);
+        if (rs->closed)
+            return BURROW_NO_ERROR;
+        rs->closed = true;
+        if (!BURROW_FAILED(rs->lasterr))
+            rs->lasterr = sq_rows_keep(rs, err);
+
+        SqRowsClosing closing = {rs, false};
+        BURROW_DEFER(sq_rows_close_abandon, &closing);
+        BURROW_SCOPE {
+            sync_mutex_lock(&rs->dc->mu);
+            BURROW_DEFER(sq_unlock, &rs->dc->mu);
+            e = rs->rowsi.vt->close(rs->rowsi.data);
+        }
+        BURROW_SCOPE_END;
+        burrow__SqlRowsCloseHook hook = burrow__sql_rows_close_hook;
+        if (hook != NULL)
+            hook(rs, &e);
+
+        sync_atomic_bool_store(&rs->closing, true);
+        for (SqlRows *c = rs->children; c != NULL; c = c->child_next)
+            (void)sq_rows_close(c, rs->lasterr);
+        if (rs->has_ctx)
+            BURROW_CALLF0(rs->cancel);
+        if (rs->close_stmt != NULL) {
+            (void)sq_ds_close(rs->close_stmt);
+            sq_ds_unref(rs->close_stmt);
+            rs->close_stmt = NULL;
+        }
+        closing.done = true;
+        SqRelease rel = rs->release;
+        rs->release = (SqRelease){SQ_RELEASE_NONE, NULL};
+        sq_release(rel, e);
+        if (rs->dep_stmt != NULL) {
+            SqlStmt *s = rs->dep_stmt;
+            rs->dep_stmt = NULL;
+            (void)sq_stmt_remove_dep(s);
+            sq_stmt_unref(s);
+        }
+        rs->lasterr = sq_rows_keep(rs, sq_rows_lasterr_or(rs, e));
+    }
+    BURROW_SCOPE_END;
     return e;
 }
 
@@ -2998,12 +3214,25 @@ static void sq_rows_unhold(SqlRows *rs) {
     }
 }
 
+static bool sq_rows_next_dc_locked(SqlRows *rs, bool *do_close);
+
 /* nextLocked. */
 static bool sq_rows_next_locked(SqlRows *rs, bool *do_close) {
     *do_close = false;
     if (rs->closed)
         return false;
-    sync_mutex_lock(&rs->dc->mu);
+    bool ok = true;
+    BURROW_SCOPE {
+        sync_mutex_lock(&rs->dc->mu);
+        BURROW_DEFER(sq_unlock, &rs->dc->mu);
+        ok = sq_rows_next_dc_locked(rs, do_close);
+    }
+    BURROW_SCOPE_END;
+    return ok;
+}
+
+/* The part of nextLocked under the connection's lock. */
+static bool sq_rows_next_dc_locked(SqlRows *rs, bool *do_close) {
     if (!rs->next_called) {
         rs->numcols = rs->rowsi.vt->columns(rs->rowsi.data).len;
         rs->next_called = true;
@@ -3033,7 +3262,6 @@ static bool sq_rows_next_locked(SqlRows *rs, bool *do_close) {
         else if (!rs->rowsi.vt->has_next_result_set(rs->rowsi.data))
             *do_close = true;
     }
-    sync_mutex_unlock(&rs->dc->mu);
     return ok;
 }
 
@@ -3045,9 +3273,13 @@ bool sql_rows_next(SqlRows *rs) {
     if (sync_atomic_bool_load(&rs->has_cd))
         return false;
     bool do_close = false;
-    sq_closemu_rlock(&rs->closemu);
-    bool ok = sq_rows_next_locked(rs, &do_close);
-    sq_closemu_runlock(&rs->closemu);
+    bool ok = false;
+    BURROW_SCOPE {
+        sq_closemu_rlock(&rs->closemu);
+        BURROW_DEFER(sq_closemu_runlock_fn, &rs->closemu);
+        ok = sq_rows_next_locked(rs, &do_close);
+    }
+    BURROW_SCOPE_END;
     if (do_close)
         (void)sql_rows_close(rs);
     if (do_close && !ok)
@@ -3059,24 +3291,31 @@ bool sql_rows_next_result_set(SqlRows *rs) {
     sq_rows_unhold(rs);
     bool do_close = false;
     bool ok = false;
-    sq_closemu_rlock(&rs->closemu);
-    if (!rs->closed) {
-        rs->next_called = false;
-        sq_rows_free_lastcols(rs);
-        if (!sq_rows_next_result_setter(rs)) {
-            do_close = true;
-        } else {
-            sync_mutex_lock(&rs->dc->mu);
-            rs->lasterr =
-                sq_rows_keep(rs, rs->rowsi.vt->next_result_set(rs->rowsi.data));
-            sync_mutex_unlock(&rs->dc->mu);
-            if (BURROW_FAILED(rs->lasterr))
+    BURROW_SCOPE {
+        sq_closemu_rlock(&rs->closemu);
+        BURROW_DEFER(sq_closemu_runlock_fn, &rs->closemu);
+        if (!rs->closed) {
+            rs->next_called = false;
+            sq_rows_free_lastcols(rs);
+            if (!sq_rows_next_result_setter(rs)) {
                 do_close = true;
-            else
-                ok = true;
+            } else {
+                Error e = BURROW_NO_ERROR;
+                BURROW_SCOPE {
+                    sync_mutex_lock(&rs->dc->mu);
+                    BURROW_DEFER(sq_unlock, &rs->dc->mu);
+                    e = rs->rowsi.vt->next_result_set(rs->rowsi.data);
+                }
+                BURROW_SCOPE_END;
+                rs->lasterr = sq_rows_keep(rs, e);
+                if (BURROW_FAILED(rs->lasterr))
+                    do_close = true;
+                else
+                    ok = true;
+            }
         }
     }
-    sq_closemu_runlock(&rs->closemu);
+    BURROW_SCOPE_END;
     if (do_close)
         (void)sql_rows_close(rs);
     return ok;
@@ -3095,38 +3334,49 @@ Error sql_rows_err(SqlRows *rs) {
     return e;
 }
 
+/* Copies the driver's column names into a, under the connection's lock. */
+static Error sq_rows_column_names(SqlRows *rs, Alloc *a, Slice *out) {
+    Error e = BURROW_NO_ERROR;
+    BURROW_SCOPE {
+        sync_mutex_lock(&rs->dc->mu);
+        BURROW_DEFER(sq_unlock, &rs->dc->mu);
+        Slice cols = rs->rowsi.vt->columns(rs->rowsi.data);
+        Str *names = NULL;
+        if (cols.len > 0) {
+            names = BURROW_NEW_N(a, Str, (size_t)cols.len);
+            if (names == NULL)
+                return burrow_err_out_of_memory;
+        }
+        const Str *src = (const Str *)cols.p;
+        for (Int i = 0; i < cols.len; i++) {
+            names[i] = BURROW_STR_EMPTY;
+            if (src[i].len > 0) {
+                names[i] = str_clone(a, src[i]);
+                if (names[i].p == NULL)
+                    return burrow_err_out_of_memory;
+            }
+        }
+        *out = slice_from(names, cols.len, cols.len, TYPE_STRING);
+    }
+    BURROW_SCOPE_END;
+    return e;
+}
+
 Slice sql_rows_columns(SqlRows *rs, Alloc *a, Error *err) {
     Slice out = slice_from(NULL, 0, 0, TYPE_STRING);
-    sq_closemu_rlock(&rs->closemu);
-    if (rs->closed) {
-        BURROW_OUT(err, sq_rows_lasterr_or(rs, burrow__sql_err_rows_closed));
-        sq_closemu_runlock(&rs->closemu);
-        return out;
-    }
+    Slice names = out;
     Error e = BURROW_NO_ERROR;
-    sync_mutex_lock(&rs->dc->mu);
-    Slice cols = rs->rowsi.vt->columns(rs->rowsi.data);
-    Str *names = NULL;
-    if (cols.len > 0) {
-        names = BURROW_NEW_N(a, Str, (size_t)cols.len);
-        if (names == NULL)
-            e = burrow_err_out_of_memory;
+    BURROW_SCOPE {
+        sq_closemu_rlock(&rs->closemu);
+        BURROW_DEFER(sq_closemu_runlock_fn, &rs->closemu);
+        if (rs->closed)
+            e = sq_rows_lasterr_or(rs, burrow__sql_err_rows_closed);
+        else
+            e = sq_rows_column_names(rs, a, &names);
     }
-    const Str *src = (const Str *)cols.p;
-    for (Int i = 0; !BURROW_FAILED(e) && i < cols.len; i++) {
-        names[i] = BURROW_STR_EMPTY;
-        if (src[i].len > 0) {
-            names[i] = str_clone(a, src[i]);
-            if (names[i].p == NULL)
-                e = burrow_err_out_of_memory;
-        }
-    }
-    sync_mutex_unlock(&rs->dc->mu);
-    sq_closemu_runlock(&rs->closemu);
+    BURROW_SCOPE_END;
     BURROW_OUT(err, e);
-    if (BURROW_FAILED(e))
-        return out;
-    return slice_from(names, cols.len, cols.len, TYPE_STRING);
+    return BURROW_FAILED(e) ? out : names;
 }
 
 /* rowsColumnInfoSetupConnLocked. */
@@ -3177,17 +3427,20 @@ static Error sq_column_info(Alloc *a, DriverRows rowsi, Slice *out) {
 
 Slice sql_rows_column_types(SqlRows *rs, Alloc *a, Error *err) {
     Slice out = slice_from(NULL, 0, 0, TYPE_UNSAFE_POINTER);
-    sq_closemu_rlock(&rs->closemu);
-    if (rs->closed) {
-        BURROW_OUT(err, sq_rows_lasterr_or(rs, burrow__sql_err_rows_closed));
-        sq_closemu_runlock(&rs->closemu);
-        return out;
-    }
-    sync_mutex_lock(&rs->dc->mu);
     Slice list = out;
-    Error e = sq_column_info(a, rs->rowsi, &list);
-    sync_mutex_unlock(&rs->dc->mu);
-    sq_closemu_runlock(&rs->closemu);
+    Error e = BURROW_NO_ERROR;
+    BURROW_SCOPE {
+        sq_closemu_rlock(&rs->closemu);
+        BURROW_DEFER(sq_closemu_runlock_fn, &rs->closemu);
+        if (rs->closed) {
+            e = sq_rows_lasterr_or(rs, burrow__sql_err_rows_closed);
+        } else {
+            sync_mutex_lock(&rs->dc->mu);
+            BURROW_DEFER(sq_unlock, &rs->dc->mu);
+            e = sq_column_info(a, rs->rowsi, &list);
+        }
+    }
+    BURROW_SCOPE_END;
     BURROW_OUT(err, e);
     return BURROW_FAILED(e) ? out : list;
 }
@@ -3214,17 +3467,21 @@ static Error sq_rows_scan_locked(SqlRows *rs, Alloc *a, Slice dest) {
     if (sq_rows_column_scanner(rs)) {
         rs->scan_alloc = a;
         Error out = BURROW_NO_ERROR;
-        sync_mutex_lock(&rs->dc->mu);
-        for (Int i = 0; i < dest.len; i++) {
-            DriverScanContext scan_ctx = {{&burrow__sql_rows_type, rs}};
-            Error e = rs->rowsi.vt->scan_column(rs->rowsi.data, scan_ctx, i, d[i]);
-            if (BURROW_FAILED(e)) {
-                out = fmt_errorf_v("sql: Scan error on column index %d, name %q: %w", i,
-                                   sq_rows_column_name(rs, i), e);
-                break;
+        BURROW_SCOPE {
+            sync_mutex_lock(&rs->dc->mu);
+            BURROW_DEFER(sq_unlock, &rs->dc->mu);
+            for (Int i = 0; i < dest.len; i++) {
+                DriverScanContext scan_ctx = {{&burrow__sql_rows_type, rs}};
+                Error e = rs->rowsi.vt->scan_column(rs->rowsi.data, scan_ctx, i, d[i]);
+                if (BURROW_FAILED(e)) {
+                    out =
+                        fmt_errorf_v("sql: Scan error on column index %d, name %q: %w",
+                                     i, sq_rows_column_name(rs, i), e);
+                    break;
+                }
             }
         }
-        sync_mutex_unlock(&rs->dc->mu);
+        BURROW_SCOPE_END;
         rs->scan_alloc = NULL;
         return out;
     }
@@ -3246,17 +3503,27 @@ static bool sq_args_have_raw_bytes(Slice dest) {
     return false;
 }
 
+/* Drops the read lock Scan took, unless it is now held for RawBytes. */
+static void sq_rows_scan_unlock(void *env) {
+    SqlRows *rs = (SqlRows *)env;
+    if (!rs->scan_hold)
+        sq_closemu_runlock(&rs->closemu);
+}
+
 Error sql_rows_scan(SqlRows *rs, Alloc *a, Slice dest) {
     if (rs->scan_hold)
         return sq_new_error(
             BURROW_S("sql: Scan called without calling Next (closemuScanHold)"));
-    sq_closemu_rlock(&rs->closemu);
-    rs->raw.len = 0;
-    Error err = sq_rows_scan_locked(rs, a, dest);
-    if (!BURROW_FAILED(err) && sq_args_have_raw_bytes(dest))
-        rs->scan_hold = true;
-    else
-        sq_closemu_runlock(&rs->closemu);
+    Error err = BURROW_NO_ERROR;
+    BURROW_SCOPE {
+        sq_closemu_rlock(&rs->closemu);
+        BURROW_DEFER(sq_rows_scan_unlock, rs);
+        rs->raw.len = 0;
+        err = sq_rows_scan_locked(rs, a, dest);
+        if (!BURROW_FAILED(err) && sq_args_have_raw_bytes(dest))
+            rs->scan_hold = true;
+    }
+    BURROW_SCOPE_END;
     return err;
 }
 

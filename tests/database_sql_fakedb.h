@@ -390,13 +390,6 @@ static DriverTx fdb_conn_begin(void *self, Error *err) {
     return (DriverTx){&fdb_tx_vt, c->curr_tx};
 }
 
-static DriverTx fdb_conn_begin_tx(void *self, Context ctx, DriverTxOptions opts,
-                                  Error *err) {
-    (void)ctx;
-    (void)opts;
-    return fdb_conn_begin(self, err);
-}
-
 static Error fdb_conn_reset_session(void *self, Context ctx) {
     (void)ctx;
     FakeConn *c = self;
@@ -1481,7 +1474,6 @@ static const DriverConnVT fdb_conn_vt = {
     .close = fdb_conn_close,
     .begin = fdb_conn_begin,
     .prepare_context = fdb_conn_prepare_context,
-    .begin_tx = fdb_conn_begin_tx,
     .exec_context = fdb_conn_exec_context,
     .query_context = fdb_conn_query_context,
     .reset_session = fdb_conn_reset_session,
@@ -1753,7 +1745,6 @@ static const DriverConnVT fdb_scan_conn_vt = {
     .close = fdb_conn_close,
     .begin = fdb_conn_begin,
     .prepare_context = fdb_scan_conn_prepare_context,
-    .begin_tx = fdb_conn_begin_tx,
     .exec_context = fdb_conn_exec_context,
     .query_context = fdb_conn_query_context,
     .reset_session = fdb_conn_reset_session,

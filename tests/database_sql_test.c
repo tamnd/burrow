@@ -21,6 +21,7 @@
 #include "burrow/proc.h"
 #include "burrow/synctest.h"
 #include "burrow/testing.h"
+#include "burrow/uuid.h"
 
 #include <string.h>
 
@@ -1995,6 +1996,445 @@ static void TestQueryRowClosingStmt(TestingT *t) {
     test_database(t, testQueryRowClosingStmt, NULL);
 }
 
+typedef struct NullTestRow {
+    Any null_param;
+    Any not_null_param;
+    Any scan_null_val;
+} NullTestRow;
+
+typedef struct NullTestSpec {
+    const char *null_type;
+    const char *not_null_type;
+    NullTestRow rows[6];
+    /* reflect.DeepEqual on two values of the scan type. */
+    bool (*eq)(const void *got, const void *want);
+} NullTestSpec;
+
+#define NV(T, ...) ((Any){TYPE_OF(T), &(T){__VA_ARGS__}})
+#define NIL ((Any){NULL, NULL})
+
+static const NullTestSpec *td_null_spec;
+
+static void null_test_run(TestingT *t, SqlDB *db) {
+    const NullTestSpec *spec = td_null_spec;
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    SqlStmt *stmt = NULL;
+    Str create = fmt_sprintf_v(a, "CREATE|t|id=int32,name=string,nullf=%s,notnullf=%s",
+                               spec->null_type, spec->not_null_type);
+    Error err = BURROW_NO_ERROR;
+    (void)sql_db_exec(db, a, create, NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "Exec of %q: %v", create, err);
+        goto out;
+    }
+
+    /* Inserts with db.Exec: */
+    if (!EXECV(t, db, "INSERT|t|id=?,name=?,nullf=?,notnullf=?", 1, BURROW_S("alice"),
+               spec->rows[0].null_param, spec->rows[0].not_null_param) ||
+        !EXECV(t, db, "INSERT|t|id=?,name=?,nullf=?,notnullf=?", 2, BURROW_S("bob"),
+               spec->rows[1].null_param, spec->rows[1].not_null_param))
+        goto out;
+
+    /* Inserts with a prepared statement: */
+    stmt =
+        sql_db_prepare(db, BURROW_S("INSERT|t|id=?,name=?,nullf=?,notnullf=?"), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "prepare: %v", err);
+        goto out;
+    }
+    (void)sql_stmt_exec_v(stmt, a, &err, 3, BURROW_S("chris"), spec->rows[2].null_param,
+                          spec->rows[2].not_null_param);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "exec insert chris: %v", err);
+    (void)sql_stmt_exec_v(stmt, a, &err, 4, BURROW_S("dave"), spec->rows[3].null_param,
+                          spec->rows[3].not_null_param);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "exec insert dave: %v", err);
+    (void)sql_stmt_exec_v(stmt, a, &err, 5, BURROW_S("eleanor"),
+                          spec->rows[4].null_param, spec->rows[4].not_null_param);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "exec insert eleanor: %v", err);
+
+    /* Can't put null val into non-null col */
+    const NullTestRow *row5 = &spec->rows[5];
+    (void)sql_stmt_exec_v(stmt, a, &err, 6, BURROW_S("bob"), row5->null_param,
+                          row5->not_null_param);
+    if (!BURROW_FAILED(err))
+        testing_t_errorf_v(t,
+                           "expected error inserting nil val with prepared statement "
+                           "Exec: NULL=%#v, NOT-NULL=%#v",
+                           row5->null_param, row5->not_null_param);
+
+    /* Go leaves this one unchecked: fakeConn implements the optional Execer
+     * interface, so arguably succeeding is the correct behavior. */
+    (void)sql_db_exec_v(db, a, &err, BURROW_S("INSERT|t|id=?,name=?,nullf=?"), 999, NIL,
+                        NIL);
+
+    const Type *paramtype = spec->rows[0].null_param.t;
+    Any bind_val = {paramtype, mem_alloc(a, paramtype->size, paramtype->align)};
+    if (paramtype == TYPE_OF(SqlNull)) {
+        /* Null[T]: the T is the one the parameter's v points at. */
+        const Type *vt = ((const SqlNull *)spec->rows[0].null_param.data)->v.t;
+        ((SqlNull *)bind_val.data)->v = (Any){vt, mem_alloc(a, vt->size, vt->align)};
+    }
+
+    for (Int i = 0; i < 5; i++) {
+        Int id = i + 1;
+        SqlRow row = sql_db_query_row_v(db, BURROW_S("SELECT|t|nullf|id=?"), id);
+        err = sql_row_scan(&row, a, slice_from(&bind_val, 1, 1, TYPE_ANY));
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "id=%d Scan: %v", id, err);
+        if (!spec->eq(bind_val.data, spec->rows[i].scan_null_val.data))
+            testing_t_errorf_v(t, "id=%d got %#v, want %#v", id, bind_val,
+                               spec->rows[i].scan_null_val);
+    }
+out:
+    if (stmt != NULL)
+        sql_stmt_free(stmt);
+    arena_free(&ar);
+}
+
+static void null_test(TestingT *t, const NullTestSpec *spec) {
+    td_null_spec = spec;
+    test_database(t, null_test_run, NULL);
+}
+
+static bool eq_null_string(const void *got, const void *want) {
+    const SqlNullString *g = got, *w = want;
+    return g->valid == w->valid && str_eq(g->string, w->string);
+}
+
+static bool eq_null_str(const void *got, const void *want) {
+    const SqlNull *g = got, *w = want;
+    return g->valid == w->valid &&
+           str_eq(*(const Str *)g->v.data, *(const Str *)w->v.data);
+}
+
+static bool eq_null_int64(const void *got, const void *want) {
+    const SqlNullInt64 *g = got, *w = want;
+    return g->valid == w->valid && g->int64 == w->int64;
+}
+
+static bool eq_null_int32(const void *got, const void *want) {
+    const SqlNullInt32 *g = got, *w = want;
+    return g->valid == w->valid && g->int32 == w->int32;
+}
+
+static bool eq_null_int16(const void *got, const void *want) {
+    const SqlNullInt16 *g = got, *w = want;
+    return g->valid == w->valid && g->int16 == w->int16;
+}
+
+static bool eq_null_byte(const void *got, const void *want) {
+    const SqlNullByte *g = got, *w = want;
+    return g->valid == w->valid && g->byte == w->byte;
+}
+
+static bool eq_null_float64(const void *got, const void *want) {
+    const SqlNullFloat64 *g = got, *w = want;
+    return g->valid == w->valid && g->float64 == w->float64;
+}
+
+static bool eq_null_bool(const void *got, const void *want) {
+    const SqlNullBool *g = got, *w = want;
+    return g->valid == w->valid && g->bool_ == w->bool_;
+}
+
+static bool eq_null_time(const void *got, const void *want) {
+    const SqlNullTime *g = got, *w = want;
+    return g->valid == w->valid && time_equal(g->time, w->time);
+}
+
+static bool eq_null_uuid(const void *got, const void *want) {
+    const SqlNull *g = got, *w = want;
+    return g->valid == w->valid &&
+           memcmp(((const Uuid *)g->v.data)->b, ((const Uuid *)w->v.data)->b, 16) == 0;
+}
+
+static void TestNullStringParam(TestingT *t) {
+    NullTestSpec spec = {
+        "nullstring",
+        "string",
+        {
+            {NV(SqlNullString, BURROW_S_INIT("aqua"), true),
+             BURROW_ANY_OF(BURROW_S("")),
+             NV(SqlNullString, BURROW_S_INIT("aqua"), true)},
+            {NV(SqlNullString, BURROW_S_INIT("brown"), false),
+             BURROW_ANY_OF(BURROW_S("")), NV(SqlNullString, BURROW_S_INIT(""), false)},
+            {BURROW_ANY_OF(BURROW_S("chartreuse")), BURROW_ANY_OF(BURROW_S("")),
+             NV(SqlNullString, BURROW_S_INIT("chartreuse"), true)},
+            {NV(SqlNullString, BURROW_S_INIT("darkred"), true),
+             BURROW_ANY_OF(BURROW_S("")),
+             NV(SqlNullString, BURROW_S_INIT("darkred"), true)},
+            {NV(SqlNullString, BURROW_S_INIT("eel"), false),
+             BURROW_ANY_OF(BURROW_S("")), NV(SqlNullString, BURROW_S_INIT(""), false)},
+            {BURROW_ANY_OF(BURROW_S("foo")),
+             NV(SqlNullString, BURROW_S_INIT("black"), false), NIL},
+        },
+        eq_null_string,
+    };
+    null_test(t, &spec);
+}
+
+#define NSTR(lit, ok) NV(SqlNull, {TYPE_STRING, &(Str)BURROW_S_INIT(lit)}, (ok))
+
+static void TestGenericNullStringParam(TestingT *t) {
+    NullTestSpec spec = {
+        "nullstring",
+        "string",
+        {
+            {NSTR("aqua", true), BURROW_ANY_OF(BURROW_S("")), NSTR("aqua", true)},
+            {NSTR("brown", false), BURROW_ANY_OF(BURROW_S("")), NSTR("", false)},
+            {BURROW_ANY_OF(BURROW_S("chartreuse")), BURROW_ANY_OF(BURROW_S("")),
+             NSTR("chartreuse", true)},
+            {NSTR("darkred", true), BURROW_ANY_OF(BURROW_S("")), NSTR("darkred", true)},
+            {NSTR("eel", false), BURROW_ANY_OF(BURROW_S("")), NSTR("", false)},
+            {BURROW_ANY_OF(BURROW_S("foo")), NSTR("black", false), NIL},
+        },
+        eq_null_str,
+    };
+    null_test(t, &spec);
+}
+
+static void TestNullInt64Param(TestingT *t) {
+    NullTestSpec spec = {
+        "nullint64",
+        "int64",
+        {
+            {NV(SqlNullInt64, 31, true), BURROW_ANY_OF(1), NV(SqlNullInt64, 31, true)},
+            {NV(SqlNullInt64, -22, false), BURROW_ANY_OF(1),
+             NV(SqlNullInt64, 0, false)},
+            {BURROW_ANY_OF(22), BURROW_ANY_OF(1), NV(SqlNullInt64, 22, true)},
+            {NV(SqlNullInt64, 33, true), BURROW_ANY_OF(1), NV(SqlNullInt64, 33, true)},
+            {NV(SqlNullInt64, 222, false), BURROW_ANY_OF(1),
+             NV(SqlNullInt64, 0, false)},
+            {BURROW_ANY_OF(0), NV(SqlNullInt64, 31, false), NIL},
+        },
+        eq_null_int64,
+    };
+    null_test(t, &spec);
+}
+
+static void TestNullInt32Param(TestingT *t) {
+    NullTestSpec spec = {
+        "nullint32",
+        "int32",
+        {
+            {NV(SqlNullInt32, 31, true), BURROW_ANY_OF(1), NV(SqlNullInt32, 31, true)},
+            {NV(SqlNullInt32, -22, false), BURROW_ANY_OF(1),
+             NV(SqlNullInt32, 0, false)},
+            {BURROW_ANY_OF(22), BURROW_ANY_OF(1), NV(SqlNullInt32, 22, true)},
+            {NV(SqlNullInt32, 33, true), BURROW_ANY_OF(1), NV(SqlNullInt32, 33, true)},
+            {NV(SqlNullInt32, 222, false), BURROW_ANY_OF(1),
+             NV(SqlNullInt32, 0, false)},
+            {BURROW_ANY_OF(0), NV(SqlNullInt32, 31, false), NIL},
+        },
+        eq_null_int32,
+    };
+    null_test(t, &spec);
+}
+
+static void TestNullInt16Param(TestingT *t) {
+    NullTestSpec spec = {
+        "nullint16",
+        "int16",
+        {
+            {NV(SqlNullInt16, 31, true), BURROW_ANY_OF(1), NV(SqlNullInt16, 31, true)},
+            {NV(SqlNullInt16, -22, false), BURROW_ANY_OF(1),
+             NV(SqlNullInt16, 0, false)},
+            {BURROW_ANY_OF(22), BURROW_ANY_OF(1), NV(SqlNullInt16, 22, true)},
+            {NV(SqlNullInt16, 33, true), BURROW_ANY_OF(1), NV(SqlNullInt16, 33, true)},
+            {NV(SqlNullInt16, 222, false), BURROW_ANY_OF(1),
+             NV(SqlNullInt16, 0, false)},
+            {BURROW_ANY_OF(0), NV(SqlNullInt16, 31, false), NIL},
+        },
+        eq_null_int16,
+    };
+    null_test(t, &spec);
+}
+
+static void TestNullByteParam(TestingT *t) {
+    NullTestSpec spec = {
+        "nullbyte",
+        "byte",
+        {
+            {NV(SqlNullByte, 31, true), BURROW_ANY_OF(1), NV(SqlNullByte, 31, true)},
+            {NV(SqlNullByte, 0, false), BURROW_ANY_OF(1), NV(SqlNullByte, 0, false)},
+            {BURROW_ANY_OF(22), BURROW_ANY_OF(1), NV(SqlNullByte, 22, true)},
+            {NV(SqlNullByte, 33, true), BURROW_ANY_OF(1), NV(SqlNullByte, 33, true)},
+            {NV(SqlNullByte, 222, false), BURROW_ANY_OF(1), NV(SqlNullByte, 0, false)},
+            {BURROW_ANY_OF(0), NV(SqlNullByte, 31, false), NIL},
+        },
+        eq_null_byte,
+    };
+    null_test(t, &spec);
+}
+
+static void TestNullFloat64Param(TestingT *t) {
+    NullTestSpec spec = {
+        "nullfloat64",
+        "float64",
+        {
+            {NV(SqlNullFloat64, 31.2, true), BURROW_ANY_OF(1),
+             NV(SqlNullFloat64, 31.2, true)},
+            {NV(SqlNullFloat64, 13.1, false), BURROW_ANY_OF(1),
+             NV(SqlNullFloat64, 0, false)},
+            {BURROW_ANY_OF(-22.9), BURROW_ANY_OF(1), NV(SqlNullFloat64, -22.9, true)},
+            {NV(SqlNullFloat64, 33.81, true), BURROW_ANY_OF(1),
+             NV(SqlNullFloat64, 33.81, true)},
+            {NV(SqlNullFloat64, 222, false), BURROW_ANY_OF(1),
+             NV(SqlNullFloat64, 0, false)},
+            {BURROW_ANY_OF(10), NV(SqlNullFloat64, 31.2, false), NIL},
+        },
+        eq_null_float64,
+    };
+    null_test(t, &spec);
+}
+
+static void TestNullBoolParam(TestingT *t) {
+    NullTestSpec spec = {
+        "nullbool",
+        "bool",
+        {
+            {NV(SqlNullBool, false, true), BURROW_ANY_OF(true),
+             NV(SqlNullBool, false, true)},
+            {NV(SqlNullBool, true, false), BURROW_ANY_OF(false),
+             NV(SqlNullBool, false, false)},
+            {BURROW_ANY_OF(true), BURROW_ANY_OF(true), NV(SqlNullBool, true, true)},
+            {NV(SqlNullBool, true, true), BURROW_ANY_OF(false),
+             NV(SqlNullBool, true, true)},
+            {NV(SqlNullBool, true, false), BURROW_ANY_OF(true),
+             NV(SqlNullBool, false, false)},
+            {BURROW_ANY_OF(true), NV(SqlNullBool, true, false), NIL},
+        },
+        eq_null_bool,
+    };
+    null_test(t, &spec);
+}
+
+static void TestNullTimeParam(TestingT *t) {
+    Time t0 = {0};
+    Time t1 = time_date(2000, TIME_JANUARY, 1, 8, 9, 10, 11, time_utc_loc);
+    Time t2 = time_date(2010, TIME_JANUARY, 1, 8, 9, 10, 11, time_utc_loc);
+    NullTestSpec spec = {
+        "nulldatetime",
+        "datetime",
+        {
+            {NV(SqlNullTime, t1, true), BURROW_ANY(TYPE_TIME, &t2),
+             NV(SqlNullTime, t1, true)},
+            {NV(SqlNullTime, t1, false), BURROW_ANY(TYPE_TIME, &t2),
+             NV(SqlNullTime, t0, false)},
+            {BURROW_ANY(TYPE_TIME, &t1), BURROW_ANY(TYPE_TIME, &t2),
+             NV(SqlNullTime, t1, true)},
+            {NV(SqlNullTime, t1, true), BURROW_ANY(TYPE_TIME, &t2),
+             NV(SqlNullTime, t1, true)},
+            {NV(SqlNullTime, t1, false), BURROW_ANY(TYPE_TIME, &t2),
+             NV(SqlNullTime, t0, false)},
+            {BURROW_ANY(TYPE_TIME, &t2), NV(SqlNullTime, t1, false), NIL},
+        },
+        eq_null_time,
+    };
+    null_test(t, &spec);
+}
+
+static void TestNullUUIDParam(TestingT *t) {
+    Uuid u0 = {{0}};
+    Uuid u1 = uuid_must_parse(BURROW_S("46cd2740-6081-4289-a659-03b61ebb92f7"));
+    Uuid u2 = uuid_must_parse(BURROW_S("46cd2740-6081-4289-a659-03b61ebb92f7"));
+    NullTestSpec spec = {
+        "nulluuid",
+        "uuid",
+        {
+            {NV(SqlNull, {TYPE_UUID, &u1}, true), BURROW_ANY(TYPE_UUID, &u2),
+             NV(SqlNull, {TYPE_UUID, &u1}, true)},
+            {NV(SqlNull, {TYPE_UUID, &u1}, false), BURROW_ANY(TYPE_UUID, &u2),
+             NV(SqlNull, {TYPE_UUID, &u0}, false)},
+            {BURROW_ANY(TYPE_UUID, &u1), BURROW_ANY(TYPE_UUID, &u2),
+             NV(SqlNull, {TYPE_UUID, &u1}, true)},
+            {NV(SqlNull, {TYPE_UUID, &u1}, true), BURROW_ANY(TYPE_UUID, &u2),
+             NV(SqlNull, {TYPE_UUID, &u1}, true)},
+            {NV(SqlNull, {TYPE_UUID, &u1}, false), BURROW_ANY(TYPE_UUID, &u2),
+             NV(SqlNull, {TYPE_UUID, &u0}, false)},
+            {BURROW_ANY(TYPE_UUID, &u2), NV(SqlNull, {TYPE_UUID, &u1}, false), NIL},
+        },
+        eq_null_uuid,
+    };
+    null_test(t, &spec);
+}
+
+/* golang.org/issue/4859 */
+static void testQueryRowNilScanDest(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+    /* nil pointer */
+    SqlRow row = sql_db_query_row(db, BURROW_S("SELECT|people|name|"), NO_ARGS);
+    Any name = {TYPE_STRING, NULL};
+    Error err = sql_row_scan(&row, heap_allocator(), slice_from(&name, 1, 1, TYPE_ANY));
+    const char *want =
+        "sql: Scan error on column index 0, name \"name\": destination pointer is nil";
+    if (!BURROW_FAILED(err) || !str_eq(error_text(err), str_from_cstr(want)))
+        testing_t_errorf_v(t, "error = %q; want %q", error_text(err), want);
+}
+
+static void TestQueryRowNilScanDest(TestingT *t) {
+    test_database(t, testQueryRowNilScanDest, NULL);
+}
+
+static void testIssue4902(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+    Int opens0 = fdb_open_count;
+    SqlStmt *stmt = NULL;
+    Error err = BURROW_NO_ERROR;
+    for (int i = 0; i < 10; i++) {
+        stmt = sql_db_prepare(db, BURROW_S("SELECT|people|name|"), &err);
+        if (BURROW_FAILED(err))
+            FATALF("%v", err);
+        err = sql_stmt_close(stmt);
+        sql_stmt_free(stmt);
+        if (BURROW_FAILED(err))
+            FATALF("%v", err);
+    }
+    Int opens = fdb_open_count - opens0;
+    if (opens > 1)
+        testing_t_errorf_v(t, "opens = %d; want <= 1", opens);
+}
+
+static void TestIssue4902(TestingT *t) {
+    test_database(t, testIssue4902, NULL);
+}
+
+/* Issue 3857
+ * This used to deadlock. */
+static void testSimultaneousQueries(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+    Error err = BURROW_NO_ERROR;
+    SqlTx *tx = sql_db_begin(db, &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+    SqlRows *r1 = sql_tx_query(tx, BURROW_S("SELECT|people|name|"), NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+    } else {
+        SqlRows *r2 = sql_tx_query(tx, BURROW_S("SELECT|people|name|"), NO_ARGS, &err);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "%v", err);
+        if (r2 != NULL)
+            sql_rows_free(r2);
+    }
+    if (r1 != NULL)
+        sql_rows_free(r1);
+    (void)sql_tx_rollback(tx);
+    sql_tx_free(tx);
+}
+
+static void TestSimultaneousQueries(TestingT *t) {
+    test_database(t, testSimultaneousQueries, NULL);
+}
+
 #define TESTS(X)                                                                       \
     X(TestOpenDB)                                                                      \
     X(TestQuery)                                                                       \
@@ -2037,6 +2477,19 @@ static void TestQueryRowClosingStmt(TestingT *t) {
     X(TestCloseStmtBeforeRows)                                                         \
     X(TestNullByteSlice)                                                               \
     X(TestPointerParamsAndScans)                                                       \
-    X(TestQueryRowClosingStmt)
+    X(TestQueryRowClosingStmt)                                                         \
+    X(TestNullStringParam)                                                             \
+    X(TestGenericNullStringParam)                                                      \
+    X(TestNullInt64Param)                                                              \
+    X(TestNullInt32Param)                                                              \
+    X(TestNullInt16Param)                                                              \
+    X(TestNullByteParam)                                                               \
+    X(TestNullFloat64Param)                                                            \
+    X(TestNullBoolParam)                                                               \
+    X(TestNullTimeParam)                                                               \
+    X(TestNullUUIDParam)                                                               \
+    X(TestQueryRowNilScanDest)                                                         \
+    X(TestIssue4902)                                                                   \
+    X(TestSimultaneousQueries)
 
 TESTING_MAIN(TESTS)

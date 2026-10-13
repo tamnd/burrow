@@ -118,7 +118,8 @@ static bool elf_get_string(Slice section, uint64_t start, Str *out) {
     if (start >= (uint64_t)section.len)
         return false;
     const Byte *p = (const Byte *)section.p;
-    const Byte *end = (const Byte *)memchr(p + start, 0, (size_t)section.len - start);
+    const Byte *end =
+        (const Byte *)memchr(p + start, 0, (size_t)((uint64_t)section.len - start));
     if (end == NULL)
         return false;
     *out = str_from_bytes(p + start, (Int)(end - (p + start)));
@@ -1061,7 +1062,7 @@ static Error elf_read_headers(ElfFile *f, IoReaderAt r, Alloc *tmp) {
         ElfProg *p = &progs[i];
         ElfProgHeader *ph = &p->prog_header;
         if (!is64) {
-            ph->type = elf_u32(big, d + offsetof(ElfProg32, type));
+            ph->type = (ElfProgType)elf_u32(big, d + offsetof(ElfProg32, type));
             ph->flags = elf_u32(big, d + offsetof(ElfProg32, flags));
             ph->off = elf_u32(big, d + offsetof(ElfProg32, off));
             ph->vaddr = elf_u32(big, d + offsetof(ElfProg32, vaddr));
@@ -1070,7 +1071,7 @@ static Error elf_read_headers(ElfFile *f, IoReaderAt r, Alloc *tmp) {
             ph->memsz = elf_u32(big, d + offsetof(ElfProg32, memsz));
             ph->align = elf_u32(big, d + offsetof(ElfProg32, align));
         } else {
-            ph->type = elf_u32(big, d + offsetof(ElfProg64, type));
+            ph->type = (ElfProgType)elf_u32(big, d + offsetof(ElfProg64, type));
             ph->flags = elf_u32(big, d + offsetof(ElfProg64, flags));
             ph->off = elf_u64(big, d + offsetof(ElfProg64, off));
             ph->vaddr = elf_u64(big, d + offsetof(ElfProg64, vaddr));
@@ -1165,11 +1166,13 @@ static Error elf_read_headers(ElfFile *f, IoReaderAt r, Alloc *tmp) {
             if (BURROW_FAILED(e))
                 return e;
             if (!is64) {
-                s->compression_type = elf_u32(big, ch + offsetof(ElfChdr32, type));
+                s->compression_type =
+                    (ElfCompressionType)elf_u32(big, ch + offsetof(ElfChdr32, type));
                 sh->size = elf_u32(big, ch + offsetof(ElfChdr32, size));
                 sh->addralign = elf_u32(big, ch + offsetof(ElfChdr32, addralign));
             } else {
-                s->compression_type = elf_u32(big, ch + offsetof(ElfChdr64, type));
+                s->compression_type =
+                    (ElfCompressionType)elf_u32(big, ch + offsetof(ElfChdr64, type));
                 sh->size = elf_u64(big, ch + offsetof(ElfChdr64, size));
                 sh->addralign = elf_u64(big, ch + offsetof(ElfChdr64, addralign));
             }

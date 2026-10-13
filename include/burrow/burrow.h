@@ -129,6 +129,7 @@
 #include "burrow/hash/crc64.h"
 #include "burrow/hash/fnv.h"
 #include "burrow/hash/maphash.h"
+#include "burrow/html.h"
 #include "burrow/iface.h"
 #include "burrow/image.h"
 #include "burrow/image/color.h"

@@ -267,7 +267,7 @@ static NetUDPConn *nu_socket(Alloc *a, Str net, const NetUDPAddr *laddr,
     }
     c->c.alloc = a;
     *err = burrow__net_internet_socket(&c->c.fd, net, nu_inet(laddr), nu_inet(raddr),
-                                       PAL_SOCK_DGRAM, listen);
+                                       PAL_SOCK_DGRAM, listen, (Time){0});
     if (BURROW_FAILED(*err)) {
         mem_free(a, c, sizeof(NetUDPConn), _Alignof(NetUDPConn));
         return NULL;

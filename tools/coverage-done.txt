@@ -128,3 +128,5 @@ log/slog
 testing/slogtest
 testing/iotest
 net/http/httputil
+text/template/parse
+html

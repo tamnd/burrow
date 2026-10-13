@@ -1200,8 +1200,7 @@ x509_parse_ec_private_key_oid(Alloc *a, const Asn1ObjectIdentifier *named_curve_
     }
     Byte buf[66];
     memset(buf, 0, sizeof buf);
-    if (pk.len > 0)
-        /* NOLINTNEXTLINE(clang-analyzer-unix.cstring.NullArg) */
+    if (pk.len > 0 && pk.p != NULL)
         memcpy(buf + (size - pk.len), pk.p, (size_t)pk.len);
     EcdsaPrivateKey *key =
         ecdsa_parse_raw_private_key(a, curve, x509_bytes(buf, size), err);
@@ -4067,6 +4066,10 @@ Slice x509_decrypt_pem_block(Alloc *a, const PemBlock *b, Slice password, Error 
         goto out;
     }
     CipherBlockMode dec = cipher_new_cbc_decrypter(ta, block, iv);
+    if (dec.vt == NULL) {
+        e = burrow_err_out_of_memory;
+        goto out;
+    }
     cipher_block_mode_crypt_blocks(dec, data, b->bytes);
 
     if (dlen == 0 || dlen % ciph->block_size != 0) {
@@ -4135,8 +4138,8 @@ PemBlock *x509_encrypt_pem_block(Alloc *a, IoReader rand, Str block_type, Slice 
     size_t nl = strlen(ciph->name);
     size_t dl = nl + 1 + (size_t)hex.len;
     Byte *dp = (Byte *)mem_alloc_nozero(a, dl, 1);
-    if (encrypted.p == NULL || out == NULL || headers == NULL || dp == NULL ||
-        (hex.len > 0 && hex.p == NULL)) {
+    if (enc.vt == NULL || encrypted.p == NULL || out == NULL || headers == NULL ||
+        dp == NULL || (hex.len > 0 && hex.p == NULL)) {
         e = burrow_err_out_of_memory;
         out = NULL;
         goto done;

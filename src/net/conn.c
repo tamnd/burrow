@@ -288,7 +288,9 @@ static const NetErrContext nc_canceled_value = {0};
 const Error burrow__net_err_timeout = {&nc_timeout_vt, &nc_timeout_value};
 const Error burrow__net_err_canceled = {&nc_canceled_vt, &nc_canceled_value};
 
-/* Each has only the one value, so a retained copy is the same error. */
+/* There is only one of each. error_retain's generic copy would match only the
+ * original and lose the Is that finds the context's error, which a DNSError
+ * that crossed goroutines then no longer unwrapped to. */
 static Error nc_timeout_clone(const void *self, Alloc *a) {
     (void)self;
     (void)a;

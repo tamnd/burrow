@@ -16,6 +16,7 @@
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
 #include "burrow/net.h"
+#include "burrow/netpoll.h"
 #include "burrow/os.h"
 #include "burrow/platform.h"
 #include "burrow/testing.h"
@@ -109,11 +110,25 @@ static void listen_twice(TestingT *t, Str network, const NetInterface *ifi,
     net_udp_conn_free(cs[1]);
 }
 
+/* Not in Go: a socket here needs the readiness poll FD, which Windows and
+ * wasip1 don't have yet. */
+static bool multicast_need_udp(TestingT *t) {
+#if defined(BURROW_NETPOLL_READINESS) && !defined(BURROW_OS_WASI)
+    (void)t;
+    return true;
+#else
+    testing_t_skip_v(t, "UDP here needs the readiness poll FD");
+    return false;
+#endif
+}
+
 static void TestIPv4MulticastListener(TestingT *t) {
     if (testing_short()) {
         testing_t_skip_v(t, "skipping test: no external network in -short mode");
         return;
     }
+    if (!multicast_need_udp(t))
+        return;
     if (!burrow__net_supports_ipv4()) {
         testing_t_skip_v(t, "IPv4 is not supported");
         return;
@@ -136,6 +151,8 @@ static void TestIPv6MulticastListener(TestingT *t) {
         testing_t_skip_v(t, "skipping test: no external network in -short mode");
         return;
     }
+    if (!multicast_need_udp(t))
+        return;
     if (!burrow__net_supports_ipv6()) {
         testing_t_skip_v(t, "IPv6 is not supported");
         return;

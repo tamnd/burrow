@@ -693,13 +693,21 @@ static const DriverValueConverter fdb_any_type_converter = {&fdb_any_vt, NULL};
 
 static DriverNull fdb_null_bool, fdb_null_default, fdb_null_string;
 static DriverNotNull fdb_not_null_default, fdb_not_null_string;
+static SyncOnce fdb_converters_once;
 
-static DriverValueConverter fdb_converter_for_type(Str typ) {
+/* The driver's converters are not constant expressions, so they are filled in once,
+ * before the first statement is prepared. */
+static void fdb_init_converters(void *env) {
+    (void)env;
     fdb_null_bool.converter = driver_bool;
     fdb_null_default.converter = driver_default_parameter_converter;
     fdb_null_string.converter = fdb_driver_string;
     fdb_not_null_default.converter = driver_default_parameter_converter;
     fdb_not_null_string.converter = fdb_driver_string;
+}
+
+static DriverValueConverter fdb_converter_for_type(Str typ) {
+    sync_once_do(&fdb_converters_once, BURROW_FN(Func, fdb_init_converters, NULL));
     static const char *const not_null_default[] = {"byte",    "int16",    "int64",
                                                    "float64", "datetime", "uuid"};
     static const char *const null_default[] = {

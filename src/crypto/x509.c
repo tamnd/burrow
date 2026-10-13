@@ -4205,8 +4205,7 @@ static Error x509_marshal_ext_key_usage(Alloc *a, Slice ext_usages,
         o[i] = (Asn1ObjectIdentifier){(void *)(uintptr_t)eku->oid, eku->len, eku->len,
                                       TYPE_INT};
     }
-    if (unknown_usages.len > 0)
-        /* NOLINTNEXTLINE(clang-analyzer-unix.cstring.NullArg) */
+    if (unknown_usages.len > 0 && o != NULL && unknown_usages.p != NULL)
         memcpy(o + ext_usages.len, unknown_usages.p,
                (size_t)unknown_usages.len * sizeof *o);
     return x509_marshal_extension(a, ext, ext->id, false,
@@ -4323,14 +4322,13 @@ static Error x509_ip_and_mask(Alloc *a, const NetIPNet *ip_net, Slice *out) {
                         "IPv6 mask");
     Int n = masked.len + ip_net->mask.len;
     *out = slice_make(a, TYPE_BYTE, n, n);
-    if (out->p == NULL && n != 0)
+    Byte *p = out->p;
+    if (p == NULL && n != 0)
         return burrow_err_out_of_memory;
-    if (masked.len > 0)
-        /* NOLINTNEXTLINE(clang-analyzer-unix.cstring.NullArg) */
-        memcpy(out->p, masked.p, (size_t)masked.len);
-    if (ip_net->mask.len > 0)
-        /* NOLINTNEXTLINE(clang-analyzer-unix.cstring.NullArg) */
-        memcpy((Byte *)out->p + masked.len, ip_net->mask.p, (size_t)ip_net->mask.len);
+    if (p != NULL && masked.len > 0 && masked.p != NULL)
+        memcpy(p, masked.p, (size_t)masked.len);
+    if (p != NULL && ip_net->mask.len > 0 && ip_net->mask.p != NULL)
+        memcpy(p + masked.len, ip_net->mask.p, (size_t)ip_net->mask.len);
     return BURROW_NO_ERROR;
 }
 

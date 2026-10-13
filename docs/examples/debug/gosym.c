@@ -121,4 +121,13 @@ int main(void) {
 }
 
 /* Output:
+0x1000-0x1020 main.main: package main, receiver "", name main
+0x1020-0x1040 main.(*T).String: package main, receiver "(*T)", name String
+0x1004 is /tmp/hello.go:3 in main.main
+0x1010 is /tmp/hello.go:4 in main.main
+0x1025 is /tmp/hello.go:8 in main.(*T).String
+line 9 starts at 0x102f in main.(*T).String
+unknown file: /tmp/bye.go
+no code at /tmp/hello.go:6
+bad symbol type '102' at byte 0x4
 */

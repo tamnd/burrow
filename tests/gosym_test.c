@@ -322,7 +322,9 @@ static void dump(Alloc *a, IoWriter w, Slice data) {
         return;
     }
     uint64_t text = binary_little_endian_uint64(data);
-    Int l = (Int)binary_little_endian_uint32(slice_sub(data, 8, 12));
+    const Byte *d = (const Byte *)data.p;
+    Int l = (Int)((uint32_t)d[8] | (uint32_t)d[9] << 8 | (uint32_t)d[10] << 16 |
+                  (uint32_t)d[11] << 24);
     if (l > data.len - 12) {
         fmt_fprintf_v(w, "short %d symtab=%d\n", data.len, l);
         return;
@@ -416,8 +418,12 @@ static const DebugFile *find_file(const char *name) {
  * table. */
 static Slice file_pcln(Alloc *a, const char *name, Slice *symtab, uint64_t *text) {
     Slice data = file_bytes(a, find_file(name));
+    if (data.p == NULL || data.len < 12)
+        abort();
     *text = binary_little_endian_uint64(data);
-    Int l = (Int)binary_little_endian_uint32(slice_sub(data, 8, 12));
+    const Byte *d = (const Byte *)data.p;
+    Int l = (Int)((uint32_t)d[8] | (uint32_t)d[9] << 8 | (uint32_t)d[10] << 16 |
+                  (uint32_t)d[11] << 24);
     *symtab = slice_sub(data, 12, 12 + l);
     return slice_sub(data, 12 + l, data.len);
 }

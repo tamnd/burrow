@@ -296,6 +296,13 @@ debug/pe: method (Section) ReadAt: the receiver is a pointer, since the embedded
 # io.ReaderAt in Section and ReadAt has a value receiver.
 debug/plan9obj: method (Section) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
 
+# include/burrow/debug/gosym.h: Go's Func embeds *Sym, so it has Sym's methods
+# with a value receiver. Here they take a pointer to the Func and use its sym.
+debug/gosym: method (Func) BaseName: the receiver is a pointer, and the method is Sym's through the embedded *Sym
+debug/gosym: method (Func) PackageName: the receiver is a pointer, and the method is Sym's through the embedded *Sym
+debug/gosym: method (Func) ReceiverName: the receiver is a pointer, and the method is Sym's through the embedded *Sym
+debug/gosym: method (Func) Static: the receiver is a pointer, and the method is Sym's through the embedded *Sym
+
 # include/burrow/go/token.h: a func value in C is a function pointer with a
 # context argument, and a variadic list is a pointer and a count.
 go/token: method (*FileSet) AddExistingFiles: takes the files as a pointer and a count

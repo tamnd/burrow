@@ -383,6 +383,7 @@ global	src/crypto/elliptic.c	elliptic_nist	tables	The four NIST curves with thei
 global	src/crypto/elliptic.c	elliptic_once	tables	A SyncOnce, which is the synchronisation for elliptic_nist.
 global	src/crypto/ecdsa.c	ecdsa_curves	tables	The four FIPS curves with their orders as moduli and N-2, filled in once by ecdsa_init and only read after that, as Go's sync.OnceValue has it.
 global	src/crypto/ecdsa.c	ecdsa_once	tables	A SyncOnce, which is the synchronisation for ecdsa_curves.
+global	src/crypto/rsa.c	rsa_debug_flags	godebug	The rsa1024min setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/log/log.c	log_std	package-vars	The standard logger, log.std in Go. Its flags are atomic and its prefix and output each have a lock inside the logger, as in Go, so any thread may use it and change it.
 global	src/log/log.c	log_writing	package-vars	Thread local. Set around the call to the writer and read by that writer on the same thread before it can block, so nothing else sees it.
 global	src/log/slog_handler.c	slogh_std	package-vars	The handler the default slog logger starts with. Nothing in it changes after it is set up statically, and the mutex in it is only there because every handler has one.

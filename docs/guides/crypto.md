@@ -1088,6 +1088,94 @@ hpke_private_key_free(k);
 
 Go's tests set package variables to make an encapsulation come out as a vector says. burrow has no mutable globals, so its tests reach into `src/crypto/hpke_internal.h` for a sender that takes that randomness as an argument instead, and nothing of it is in the public header.
 
+## crypto/rsa
+
+`burrow/crypto/rsa.h` is RSA as PKCS #1 has it, for signatures and for encryption. It is mostly there for the protocols and certificates that already use it. A new design does better with Ed25519 or ML-DSA for signatures and with ECDH or ML-KEM to agree on a key. There are two ways to sign. PSS is the newer one, and PKCS #1 v1.5 is the one most certificates use. Both sign a hash the caller has already worked out:
+
+<!-- example: ../examples/crypto/rsa.c#sign -->
+```c
+Error err = BURROW_NO_ERROR;
+RsaPrivateKey *priv = rsa_generate_key(a, (IoReader){0}, 2048, &err);
+if (BURROW_FAILED(err))
+    return;
+
+// Both schemes sign the hash of the message, not the message itself.
+Sha256Sum256Ret sum = sha256_sum256(text("burrow v0.3.0"));
+Slice hashed = slice_from(sum.a, sizeof sum.a, sizeof sum.a, TYPE_BYTE);
+Slice sig =
+    rsa_sign_pss(a, crypto_rand_reader, priv, CRYPTO_SHA256, hashed, NULL, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%d\n", (int)sig.len);
+print_error(rsa_verify_pss(&priv->public_key, CRYPTO_SHA256, hashed, sig, NULL));
+
+// PKCS #1 v1.5 needs no randomness and gives the same signature each time.
+Slice old = rsa_sign_pkcs1_v15(a, (IoReader){0}, priv, CRYPTO_SHA256, hashed, &err);
+if (BURROW_FAILED(err))
+    return;
+print_error(rsa_verify_pkcs1_v15(&priv->public_key, CRYPTO_SHA256, hashed, old));
+
+// A signature of some other message does not verify.
+Sha256Sum256Ret other = sha256_sum256(text("burrow v0.3.1"));
+Slice other_hashed = slice_from(other.a, sizeof other.a, sizeof other.a, TYPE_BYTE);
+print_error(
+    rsa_verify_pss(&priv->public_key, CRYPTO_SHA256, other_hashed, sig, NULL));
+rsa_private_key_free(priv, a);
+```
+
+A key is a struct of `BigInt` pointers, as in Go, and everything in it comes from the allocator it was made with. `rsa_private_key_free` gives back a key that `rsa_generate_key` made, and an arena does the same for a whole batch. `rsa_generate_key` takes an `IoReader` with nothing in it to mean the system's generator. Signing with PSS and encrypting with OAEP read the reader they are given, as Go's do, so they need a real one, and `crypto_rand_reader` is the one to pass. Given an empty reader they panic, the way Go does with nil.
+
+For encryption, OAEP is the scheme to use, and PKCS #1 v1.5 encryption is only there for old protocols. RSA can only encrypt a message shorter than its key, so in practice it carries a key for a symmetric cipher. The label is bound into the ciphertext, and decrypting with a different one fails:
+
+<!-- example: ../examples/crypto/rsa.c#encrypt -->
+```c
+Error err = BURROW_NO_ERROR;
+RsaPrivateKey *priv = rsa_generate_key(a, (IoReader){0}, 2048, &err);
+if (BURROW_FAILED(err))
+    return;
+
+// The label is not secret, but decrypting needs the same one.
+Slice ct = rsa_encrypt_oaep(a, sha256_new(a), crypto_rand_reader, &priv->public_key,
+                            text("a session key"), text("orders"), &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%d\n", (int)ct.len);
+Slice pt = rsa_decrypt_oaep(a, sha256_new(a), (IoReader){0}, priv, ct,
+                            text("orders"), &err);
+if (BURROW_FAILED(err))
+    return;
+print_text(pt);
+rsa_decrypt_oaep(a, sha256_new(a), (IoReader){0}, priv, ct, text("invoices"), &err);
+print_error(err);
+rsa_private_key_free(priv, a);
+```
+
+Keys shorter than 1024 bits are an error everywhere, as they are since Go 1.24, and the errors have Go's messages. Tests that need small keys can turn the check off with `GODEBUG=rsa1024min=0`:
+
+<!-- example: ../examples/crypto/rsa.c#errors -->
+```c
+Error err = BURROW_NO_ERROR;
+rsa_generate_key(a, (IoReader){0}, 512, &err);
+print_error(err);
+
+err = BURROW_NO_ERROR;
+RsaPrivateKey *priv = rsa_generate_key(a, (IoReader){0}, 1024, &err);
+if (BURROW_FAILED(err))
+    return;
+// OAEP with SHA-256 fits 128 - 2*32 - 2 = 62 bytes in a 1024 bit key.
+Byte big[63] = {0};
+rsa_encrypt_oaep(a, sha256_new(a), crypto_rand_reader, &priv->public_key,
+                 slice_from(big, sizeof big, sizeof big, TYPE_BYTE), (Slice){0},
+                 &err);
+print_error(err);
+err = BURROW_NO_ERROR;
+rsa_sign_pkcs1_v15(a, (IoReader){0}, priv, CRYPTO_SHA256, text("not a hash"), &err);
+print_error(err);
+rsa_private_key_free(priv, a);
+```
+
+Everything that touches the private key is constant time, and so is checking the padding when decrypting. A key put together by hand should go through `rsa_private_key_precompute` before use, which checks it and works out the values that make the private key operations fast.
+
 ## crypto/x509/pkix
 
 `burrow/crypto/x509/pkix.h` has the ASN.1 structures that certificates, CRLs and OCSP share: distinguished names, algorithm identifiers, extensions and the old CRL types. Each one has a type descriptor carrying Go's asn1 struct tags, so `encoding/asn1` reads and writes them with no extra code. A `PkixName` is the friendly form of a name, and `pkix_name_to_rdn_sequence` turns it into the sequence of RDNs that goes on the wire:

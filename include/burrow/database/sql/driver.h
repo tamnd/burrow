@@ -28,26 +28,6 @@
  * int64_t, double, bool, Bytes, Str or Time, or a decimal, which is any type
  * with a Decompose method. See driver_is_value.
  *
- * MEMORY
- *
- * Go's collector decides how long a driver's objects live, and here the
- * methods that end them say so. A Conn lives until its close, a Stmt until its
- * close, a Rows until its close and a Tx until its commit or rollback, and
- * database/sql calls each of those exactly once and then forgets the object.
- * A Result has no method that ends it, so the exec slots take an allocator and
- * the Result, with anything it points to, comes from that. So does a converted
- * value, from the allocator convert_value is given.
- *
- * Strings and slices passed to a method are the caller's and are only good
- * until the method returns, so a driver copies anything it keeps. What a Rows
- * gives back, its column names, its type names and the values next writes into
- * dest, belongs to the Rows. Names and type names are good until close, and
- * values until the next call to next or close, which is what Go's Rows.Next
- * says about a buffer it puts in dest.
- *
- * Errors are burrow errors, and driver_err_bad_conn and driver_err_skip mean
- * what they do in Go: database/sql compares against them with errors_is.
- *
  * Copyright 2011 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -71,6 +51,26 @@ extern "C" {
 #endif
 
 /* driver.Value. The nil Any is SQL's NULL. */
+/* Memory.
+ *
+ * Go's collector decides how long a driver's objects live, and here the
+ * methods that end them say so. A Conn lives until its close, a Stmt until its
+ * close, a Rows until its close and a Tx until its commit or rollback, and
+ * database/sql calls each of those exactly once and then forgets the object.
+ * A Result has no method that ends it, so the exec slots take an allocator and
+ * the Result, with anything it points to, comes from that. So does a converted
+ * value, from the allocator convert_value is given.
+ *
+ * Strings and slices passed to a method are the caller's and are only good
+ * until the method returns, so a driver copies anything it keeps. What a Rows
+ * gives back, its column names, its type names and the values next writes into
+ * dest, belongs to the Rows. Names and type names are good until close, and
+ * values until the next call to next or close, which is what Go's Rows.Next
+ * says about a buffer it puts in dest.
+ *
+ * Errors are burrow errors, and driver_err_bad_conn and driver_err_skip mean
+ * what they do in Go: database/sql compares against them with errors_is. */
+
 typedef Any DriverValue;
 
 /* driver.NamedValue, an argument with its name and its position. name is

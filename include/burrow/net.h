@@ -1437,13 +1437,13 @@ BURROW_OWNS(ret) NetInterface *net_interface_by_name(Alloc *a, Str name, Error *
  * them. Go calls this Addrs, which is the name net_interface_addrs already
  * has here. */
 BURROW_OWNS(ret) Slice net_interface_addrs_of(const NetInterface *ifi, Alloc *a,
-                                               Error *err);
+                                              Error *err);
 
 /* Interface.MulticastAddrs: the multicast groups ifi has joined, a Slice of
  * NetAddr, each one a NetIPAddr. There are none on NetBSD, OpenBSD and
  * DragonFly, where Go does not look either. */
 BURROW_OWNS(ret) Slice net_interface_multicast_addrs(const NetInterface *ifi, Alloc *a,
-                                                      Error *err);
+                                                     Error *err);
 
 /* n as a NetAddr, which points at n, and nil for a NULL n. */
 NetAddr net_ip_net_as_addr(const NetIPNet *n);

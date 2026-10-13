@@ -114,3 +114,4 @@ debug/macho
 debug/pe
 debug/plan9obj
 debug/buildinfo
+log/slog

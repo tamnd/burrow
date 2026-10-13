@@ -319,3 +319,13 @@ go/ast: func NotNilFilter: takes an Any, which holds the type and the address a 
 # include/burrow/go/doc.h: Go takes the mode as an optional ...any and panics
 # on anything but zero or one doc.Mode, so C takes the DocMode itself.
 go/doc: func NewFromFiles: takes the mode as a DocMode, 0 being none, where Go takes an optional ...any that can only hold a doc.Mode
+
+# include/burrow/log/slog.h: a Record carries five attributes inline, so the
+# functions that only read one take a pointer to it. A Value can hold its
+# payload inline too, and the Any that Value.Any returns points into it.
+log/slog: method (Record) NumAttrs: takes the record by pointer, since it is large and only read
+log/slog: method (Record) Attrs: f is a function pointer with a context argument, and the record is passed by pointer
+log/slog: method (Value) Any: takes the value by pointer, because the Any it returns can point into it
+log/slog: method (Value) LogValuer: returns the LogValuer as an Any holding it, which is how a Value keeps one
+log/slog: method (Record) Source: fills in a Source and returns whether there is one, since there is nowhere for Go's pointer to point
+log/slog: func NewMultiHandler: takes the handlers as a pointer and a count, as io_multi_writer does

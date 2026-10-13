@@ -133,6 +133,7 @@
 #include "burrow/io/fs.h"
 #include "burrow/iter.h"
 #include "burrow/log.h"
+#include "burrow/log/slog.h"
 #include "burrow/map.h"
 #include "burrow/maps.h"
 #include "burrow/math.h"

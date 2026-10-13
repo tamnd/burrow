@@ -116,3 +116,102 @@ recovered: bad config: 0 servers
 ```
 
 The message comes from `error_allocator`, which is where the library's other formatted panics get theirs.
+
+## Structured logging
+
+`burrow/log/slog.h` is Go's `log/slog`. A record is a time, a level, a message and a list of attributes, each a key and a value, and a handler turns records into output. The text handler writes `key=value` pairs and the JSON handler writes one JSON object a line. A `SlogLogger` sits in front of a handler and builds the records:
+
+<!-- example: ../examples/log/slog.c#text -->
+```c
+SlogHandlerOptions opts = {0};
+opts.replace_attr = no_time;
+SlogTextHandler *h = slog_new_text_handler(a, to_stdout, &opts);
+SlogLogger *logger = slog_new(a, slog_text_handler_as_handler(h));
+
+slog_logger_info_v(logger, "server started", "port", 8080,
+                   slog_bool(BURROW_S("tls"), false));
+slog_logger_debug_v(logger, "not shown, debug is below the default level");
+slog_logger_warn_v(logger, "slow request",
+                   slog_string(BURROW_S("path"), BURROW_S("/a b")),
+                   slog_duration(BURROW_S("took"), 1500 * TIME_MILLISECOND));
+
+SlogLogger *req = slog_logger_with_v(logger, "request_id", "f00d");
+SlogLogger *db = slog_logger_with_group(req, BURROW_S("db"));
+slog_logger_error_v(db, "query failed", "table", "users", "err", io_eof);
+
+slog_logger_free(db);
+slog_logger_free(req);
+slog_logger_free(logger);
+slog_handler_free(slog_text_handler_as_handler(h));
+```
+
+That prints:
+
+```text
+level=INFO msg="server started" port=8080 tls=false
+level=WARN msg="slow request" path="/a b" took=1.5s
+level=ERROR msg="query failed" request_id=f00d db.table=users db.err=EOF
+```
+
+The `_v` macros take attributes the way Go's `...any` does. A key followed by its value is one attribute, and an `SlogAttr` made by `slog_string`, `slog_int`, `slog_duration` and the rest is another. A key with no value after it, or a value where a key should be, is logged under `!BADKEY`. C's `true` and `false` are ints, so a bare one logs as `1` or `0`; `slog_bool` is how to log a bool.
+
+`slog_logger_with_v` makes a logger whose records all carry some attributes, and `slog_logger_with_group` one whose attributes go under a group name, which the text handler writes as `db.table`. Both make a new logger to free, and it shares its handler's state with the one it came from, so free the derived loggers first. The debug line isn't printed, because a handler with no level set drops anything below `SLOG_LEVEL_INFO`.
+
+The lines have no time in them because of `replace_attr` in the options, which sees every attribute before it is written and can change it or drop it. Returning the zero `SlogAttr` drops it. The time, level, message and source come through it too, under `SLOG_TIME_KEY` and the other key names, with no groups:
+
+<!-- example: ../examples/log/slog.c#replace -->
+```c
+/* Drops the time from every line, so that the output stays the same from one
+ * run to the next. */
+static SlogAttr no_time(void *ctx, Alloc *a, Slice groups, SlogAttr attr) {
+    (void)ctx;
+    (void)a;
+    if (groups.len == 0 && str_eq(attr.key, SLOG_TIME_KEY))
+        return (SlogAttr){0};
+    return attr;
+}
+```
+
+## Levels and JSON
+
+The JSON handler takes the same options. Setting `level` to a `SlogLevelVar` lets the minimum level change while the program runs, from any thread:
+
+<!-- example: ../examples/log/slog.c#json -->
+```c
+SlogLevelVar level = {0};
+slog_level_var_set(&level, SLOG_LEVEL_DEBUG);
+SlogHandlerOptions opts = {0};
+opts.replace_attr = no_time;
+opts.level = slog_level_var_as_leveler(&level);
+SlogJSONHandler *h = slog_new_json_handler(a, to_stdout, &opts);
+SlogLogger *logger = slog_new(a, slog_json_handler_as_handler(h));
+
+slog_logger_debug_v(logger, "cache miss", "key", "user:42");
+slog_logger_info_v(logger, "login",
+                   slog_group_v(BURROW_S("user"), "id", 42, "name", "ada"));
+
+slog_level_var_set(&level, SLOG_LEVEL_INFO);
+slog_logger_debug_v(logger, "not shown any more");
+
+slog_logger_free(logger);
+slog_handler_free(slog_json_handler_as_handler(h));
+```
+
+That prints:
+
+```text
+{"level":"DEBUG","msg":"cache miss","key":"user:42"}
+{"level":"INFO","msg":"login","user":{"id":42,"name":"ada"}}
+```
+
+`slog_group_v` makes a group attribute on the stack, which the JSON handler writes as a nested object. The levels are ints, with `SLOG_LEVEL_DEBUG`, `SLOG_LEVEL_INFO`, `SLOG_LEVEL_WARN` and `SLOG_LEVEL_ERROR` at -4, 0, 4 and 8, and anything in between is fine. `slog_level_string` names one as Go does, such as `WARN+2`.
+
+Values are borrowed and never copied. A string attribute points at the caller's bytes and an `Any` points at the caller's value, so they have to last until the call that logs them returns, which arguments to a `_v` macro always do. The handlers in the package format what `slog_logger_with` gives them straight away, so those attributes needn't outlive the call either.
+
+## slog and log together
+
+The default slog logger, which `slog_info_v` and the other functions without `logger` in their names use, writes through the standard logger in `log`, so its lines get log's prefix and flags. `slog_set_default` turns that around: from then on the standard logger's lines go to the new slog handler as records, as in Go. Their level is `SLOG_LEVEL_INFO` unless `slog_set_log_logger_level` has changed it. Calling `log_set_output` afterwards breaks the connection again.
+
+`slog_new_log_logger` goes the other way for a single logger. It makes a `LogLogger` whose lines become records at a level you choose, for code that only knows how to write to a `LogLogger`.
+
+With `add_source` set, a handler writes the file and line of the call, which the `_v` macros pass along from `__FILE__` and `__LINE__`. The plain functions under them, which take a `Slice` of `Any`, have only what `runtime_caller` can find, and that doesn't include file names yet.

@@ -153,6 +153,15 @@ enum {
 };
 void burrow__log_at(LogLogger *l, const char *file, int line, int how, Str format,
                     Slice v);
+/* Logger.output with the file and line already known, for log/slog's default
+ * handler. An empty file is "???", which is what Go writes when it cannot
+ * find one. */
+BURROW_STATIC(ret) Error burrow__log_output_site(LogLogger *l, Str file, Int line,
+                                                 Str s);
+/* The file and line of the log call whose line is being written, when a
+ * writer is called from inside one on this thread and the site is known. Go's
+ * slog finds it from the stack. False otherwise. */
+bool burrow__log_writing_site(Str *file, Int *line);
 BURROW_NORETURN void burrow__log_fatal_at(LogLogger *l, const char *file, int line,
                                           int how, Str format, Slice v);
 BURROW_NORETURN void burrow__log_panic_at(LogLogger *l, const char *file, int line,

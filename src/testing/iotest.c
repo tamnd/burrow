@@ -1,4 +1,4 @@
-/* Derived from Go's src/testing/iotest/reader.go and writer.go. See
+/* Derived from Go's src/testing/iotest/reader.go, writer.go and logger.go. See
  * include/burrow/testing/iotest.h.
  * Go source: go1.27.1.
  *
@@ -11,6 +11,7 @@
 
 #include "burrow/bytes.h"
 #include "burrow/fmt.h"
+#include "burrow/log.h"
 #include "burrow/mem/heap.h"
 #include "burrow/type.h"
 
@@ -256,6 +257,68 @@ IoWriter iotest_truncate_writer(Alloc *a, IoWriter w, int64_t n) {
     t->w = w;
     t->n = n;
     return (IoWriter){&truncate_writer_vt, t};
+}
+
+/* ----------------------------------------------------- writeLogger, readLogger */
+
+typedef struct WriteLogger {
+    Str prefix;
+    IoWriter w;
+} WriteLogger;
+
+IOTEST_TYPE(write_logger_desc, "writeLogger", WriteLogger);
+
+static Int write_logger_write(void *self, Slice p, Error *err) {
+    WriteLogger *l = (WriteLogger *)self;
+    Error e = BURROW_NO_ERROR;
+    Int n = BURROW_CALL(l->w, write, p, &e);
+    if (BURROW_FAILED(e))
+        log_printf_v("%s %x: %v", l->prefix, slice_sub(p, 0, n), e);
+    else
+        log_printf_v("%s %x", l->prefix, slice_sub(p, 0, n));
+    BURROW_OUT(err, e);
+    return n;
+}
+
+static const IoWriterVT write_logger_vt = {&write_logger_desc, write_logger_write};
+
+IoWriter iotest_new_write_logger(Alloc *a, Str prefix, IoWriter w) {
+    WriteLogger *l = (WriteLogger *)iotest_new(a, &write_logger_desc);
+    if (l == NULL)
+        return (IoWriter){0};
+    l->prefix = prefix;
+    l->w = w;
+    return (IoWriter){&write_logger_vt, l};
+}
+
+typedef struct ReadLogger {
+    Str prefix;
+    IoReader r;
+} ReadLogger;
+
+IOTEST_TYPE(read_logger_desc, "readLogger", ReadLogger);
+
+static Int read_logger_read(void *self, Slice p, Error *err) {
+    ReadLogger *l = (ReadLogger *)self;
+    Error e = BURROW_NO_ERROR;
+    Int n = BURROW_CALL(l->r, read, p, &e);
+    if (BURROW_FAILED(e))
+        log_printf_v("%s %x: %v", l->prefix, slice_sub(p, 0, n), e);
+    else
+        log_printf_v("%s %x", l->prefix, slice_sub(p, 0, n));
+    BURROW_OUT(err, e);
+    return n;
+}
+
+static const IoReaderVT read_logger_vt = {&read_logger_desc, read_logger_read};
+
+IoReader iotest_new_read_logger(Alloc *a, Str prefix, IoReader r) {
+    ReadLogger *l = (ReadLogger *)iotest_new(a, &read_logger_desc);
+    if (l == NULL)
+        return (IoReader){0};
+    l->prefix = prefix;
+    l->r = r;
+    return (IoReader){&read_logger_vt, l};
 }
 
 /* ------------------------------------------------------------- TestReader */

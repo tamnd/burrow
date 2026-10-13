@@ -1052,15 +1052,18 @@ bool burrow__http2_write_scheduler_is_rfc9218(Http2WriteScheduler ws);
  * whatever the stream has queued. AdjustStream may name a stream that is not
  * open. Push queues a frame, and Pop takes the next one that can be written,
  * or says false. */
-bool burrow__http2_write_scheduler_open_stream(Http2WriteScheduler ws, uint32_t stream_id,
+bool burrow__http2_write_scheduler_open_stream(Http2WriteScheduler ws,
+                                               uint32_t stream_id,
                                                Http2OpenStreamOptions opts);
 void burrow__http2_write_scheduler_close_stream(Http2WriteScheduler ws,
                                                 uint32_t stream_id);
 void burrow__http2_write_scheduler_adjust_stream(Http2WriteScheduler ws,
                                                  uint32_t stream_id,
                                                  Http2PriorityParam p);
-bool burrow__http2_write_scheduler_push(Http2WriteScheduler ws, Http2FrameWriteRequest wr);
-bool burrow__http2_write_scheduler_pop(Http2WriteScheduler ws, Http2FrameWriteRequest *wr);
+bool burrow__http2_write_scheduler_push(Http2WriteScheduler ws,
+                                        Http2FrameWriteRequest wr);
+bool burrow__http2_write_scheduler_pop(Http2WriteScheduler ws,
+                                       Http2FrameWriteRequest *wr);
 void burrow__http2_write_scheduler_free(Http2WriteScheduler ws);
 
 #endif

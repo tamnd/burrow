@@ -24,20 +24,23 @@ static Slice append_string(Alloc *a, Slice b, const char *s, size_t n) {
 // information, each with its length in front. A real binary would come from
 // buildinfo_read_file.
 static Slice tiny_go_binary(Alloc *a) {
-    Byte hdr[32] = {0};
-    binary_big_endian_put_uint32(slice_from(hdr, 4, 4, TYPE_BYTE), PLAN9OBJ_MAGIC386);
     Byte info[32] = {0};
     memcpy(info, "\xff Go buildinf:", 14);
     info[14] = 4; // the size of a pointer
     info[15] = 2; // the strings follow the header
-    Slice b = slice_make(a, TYPE_BYTE, 0, 512);
+    Slice data = slice_make(a, TYPE_BYTE, 0, 512);
+    data = slice_append(a, data, info, 32);
+    data = append_string(a, data, "go1.27.1", 8);
+    data = append_string(a, data, mod_text, sizeof mod_text - 1);
+
+    // The data segment starts right after the header.
+    Byte hdr[32] = {0};
+    binary_big_endian_put_uint32(slice_from(hdr, 4, 4, TYPE_BYTE), PLAN9OBJ_MAGIC386);
+    binary_big_endian_put_uint32(slice_from(hdr + 8, 4, 4, TYPE_BYTE),
+                                 (uint32_t)data.len);
+    Slice b = slice_make(a, TYPE_BYTE, 0, 32 + data.len);
     b = slice_append(a, b, hdr, 32);
-    b = slice_append(a, b, info, 32);
-    b = append_string(a, b, "go1.27.1", 8);
-    b = append_string(a, b, mod_text, sizeof mod_text - 1);
-    // The size of the data segment, which starts right after the header.
-    binary_big_endian_put_uint32(slice_sub(b, 8, 12), (uint32_t)(b.len - 32));
-    return b;
+    return slice_append(a, b, data.p, data.len);
 }
 
 static void read_binary(Alloc *a) {

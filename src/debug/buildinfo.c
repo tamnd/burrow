@@ -602,7 +602,7 @@ done:
     return ok;
 }
 
-Buildinfo *buildinfo_read(Alloc *a, IoReaderAt r, Error *err) {
+DebugBuildInfo *buildinfo_read(Alloc *a, IoReaderAt r, Error *err) {
     Arena tmp;
     arena_init(&tmp, a, 0);
     Str vers = BURROW_STR_EMPTY, mod = BURROW_STR_EMPTY;
@@ -627,7 +627,7 @@ Buildinfo *buildinfo_read(Alloc *a, IoReaderAt r, Error *err) {
     return bi;
 }
 
-Buildinfo *buildinfo_read_file(Alloc *a, Str name, Error *err) {
+DebugBuildInfo *buildinfo_read_file(Alloc *a, Str name, Error *err) {
     Error e = BURROW_NO_ERROR;
     Buildinfo *bi = NULL;
     OsFile *f = os_open(a, name, &e);

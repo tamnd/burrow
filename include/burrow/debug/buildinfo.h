@@ -50,11 +50,11 @@ typedef DebugBuildInfo Buildinfo;
  * NAME: not a Go executable", or, when the file could not be opened or read,
  * wraps the FsPathError, which names it already. debug_build_info_free gives
  * the result back. */
-BURROW_OWNS(ret) Buildinfo *buildinfo_read_file(Alloc *a, Str name, Error *err);
+BURROW_OWNS(ret) DebugBuildInfo *buildinfo_read_file(Alloc *a, Str name, Error *err);
 
 /* buildinfo.Read: the build information of the Go binary r reads, from
  * offset 0. r is only read during the call. */
-BURROW_OWNS(ret) Buildinfo *buildinfo_read(Alloc *a, IoReaderAt r, Error *err);
+BURROW_OWNS(ret) DebugBuildInfo *buildinfo_read(Alloc *a, IoReaderAt r, Error *err);
 
 #ifdef __cplusplus
 }

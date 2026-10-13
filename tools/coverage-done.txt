@@ -103,6 +103,7 @@ crypto/fips140
 net/mail
 log
 go/token
+debug/buildinfo
 debug/dwarf
 debug/elf
 debug/gosym

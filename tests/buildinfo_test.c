@@ -141,11 +141,24 @@ static void TestReadFile(TestingT *t) {
         Slice data = file_bytes(a, df);
         Str name = fmt_sprintf_v(a, "%s/%s", dir, str_from_cstr(df->name));
 
-        /* valid_modules and valid_gopath. */
+        /* valid_modules and valid_gopath. Go does not find the record in
+         * the Plan 9 arm build, and there the error has to be the one Go
+         * gave. */
         err = os_write_file(name, data, 0644);
         CHECK(BURROW_OK(err));
         got = BURROW_STR_EMPTY;
         e = read_file_error(a, name, &got);
+        Str go_dump = str_from_cstr(df->dump[0]);
+        bool found = false;
+        Str go_err = strings_cut_prefix(go_dump, BURROW_S("error: "), &found);
+        go_err = strings_trim_suffix(go_err, BURROW_S("\n"));
+        if (found) {
+            want = fmt_sprintf_v(a, "could not read Go build info from %s: %s", name,
+                                 go_err);
+            if (!str_eq(e, want))
+                testing_t_errorf_v(t, "%s: got error %q, want %q", df->name, e, want);
+            continue;
+        }
         if (e.len > 0) {
             testing_t_errorf_v(t, "%s: unexpected error: %s", df->name, e);
             continue;
@@ -162,6 +175,8 @@ static void TestReadFile(TestingT *t) {
         }
         Slice b = slice_make(a, TYPE_BYTE, data.len, data.len);
         Byte *p = (Byte *)b.p;
+        if (p == NULL)
+            continue;
 
         /* invalid_modules and invalid_gopath. */
         memcpy(p, data.p, (size_t)data.len);
@@ -174,7 +189,14 @@ static void TestReadFile(TestingT *t) {
 
         /* invalid_str_len: 16TB ought to be enough for anyone. */
         memcpy(p, data.p, (size_t)data.len);
-        (void)binary_put_uvarint(slice_sub(b, m + 32, b.len), UINT64_C(16) << 40);
+        Byte v[BINARY_MAX_VARINT_LEN64];
+        Int n = binary_put_uvarint(slice_from(v, sizeof v, sizeof v, TYPE_BYTE),
+                                   UINT64_C(16) << 40);
+        if (m + 32 + n > b.len) {
+            testing_t_errorf_v(t, "%s: no room after the header", df->name);
+            continue;
+        }
+        memcpy(p + m + 32, v, (size_t)n);
         err = os_write_file(name, b, 0644);
         CHECK(BURROW_OK(err));
         e = read_file_error(a, name, &got);
@@ -329,8 +351,8 @@ static bool byte_exe_data_reader(void *ctx, uint64_t addr, IoSectionReader *sr,
 }
 
 static void TestSearchMagic(TestingT *t) {
-    enum { HEADER = 32, ALIGN = 16, CHUNK = BURROW__BUILDINFO_SEARCH_CHUNK };
-    static const struct {
+    const Int HEADER = 32, ALIGN = 16, CHUNK = BURROW__BUILDINFO_SEARCH_CHUNK;
+    const struct {
         const char *name;
         Int size;
         Int at; /* where the magic goes, or -1 */

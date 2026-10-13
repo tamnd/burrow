@@ -120,7 +120,7 @@ if [ "$mode" = buildinfo ]; then
 	# The hello program of Go's TestReadFile, with a module it depends on
 	# that is replaced by a directory, for each kind of binary debug/buildinfo
 	# reads. The builds use the go command there is, so the record says its
-	# release, and -ldflags with a space in it, so a setting has to be quoted.
+	# release.
 	mkdir -p "$tmp/hello/dep" "$tmp/gopath/src/example.com/m"
 	printf 'module example.com/m\n\ngo 1.18\n\nrequire example.com/dep v1.0.0\n\nreplace example.com/dep v1.0.0 => ./dep\n' \
 		> "$tmp/hello/go.mod"
@@ -135,9 +135,12 @@ if [ "$mode" = buildinfo ]; then
 		bm=${t##*/}
 		arch=${t#*/}
 		arch=${arch%/*}
+		# internal/xcoff will not open an AIX binary with no symbol table.
+		ldflags="-buildid= -s"
+		[ "$os" = aix ] && ldflags=-buildid=
 		(cd "$tmp/hello" && GOOS=$os GOARCH=$arch CGO_ENABLED=0 GO111MODULE=on GOFLAGS='' \
 			GOTOOLCHAIN=local GOPROXY=off GOCACHE="$tmp/gocache" go build -buildmode="$bm" \
-			-trimpath -buildvcs=false "-ldflags=-buildid= -s" -o "$tmp/bibuild/${os}_${arch}_$bm" .)
+			-trimpath -buildvcs=false "-ldflags=$ldflags" -o "$tmp/bibuild/${os}_${arch}_$bm" .)
 	done
 	(cd "$tmp/gopath/src/example.com/m" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GO111MODULE=off \
 		GOPATH="$tmp/gopath" GOFLAGS='' GOTOOLCHAIN=local GOCACHE="$tmp/gocache" go build -trimpath \

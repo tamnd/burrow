@@ -195,6 +195,10 @@ typedef struct LogSite {
     bool have;
 } LogSite;
 
+/* The site of the line being handed to a writer on this thread, for
+ * burrow__log_writing_site. */
+static BURROW_THREAD_LOCAL LogSite log_writing;
+
 /* What goes after the header: s as it is, or v formatted as how says. */
 typedef struct LogMsg {
     Str format;
@@ -215,8 +219,10 @@ BURROW_NOINLINE static Error log_emit(LogLogger *l, LogSite site, LogMsg m) {
 
     if ((flag & (LOG_LSHORTFILE | LOG_LLONGFILE)) != 0 && !site.have) {
         Uintptr pc = 0;
-        if (!runtime_caller(site.depth + 1, &pc, &site.file, &site.line) ||
-            site.file.len == 0) {
+        if (runtime_caller(site.depth + 1, &pc, &site.file, &site.line) &&
+            site.file.len > 0) {
+            site.have = true;
+        } else {
             site.file = BURROW_S("???");
             site.line = 0;
         }
@@ -248,7 +254,10 @@ BURROW_NOINLINE static Error log_emit(LogLogger *l, LogSite site, LogMsg m) {
     Error err = BURROW_NO_ERROR;
     sync_mutex_lock(&l->out_mu);
     IoWriter w = log_out(l);
+    LogSite prev = log_writing;
+    log_writing = site;
     w.vt->write(w.data, buf, &err);
+    log_writing = prev;
     sync_mutex_unlock(&l->out_mu);
 
     arena_free(&ar);
@@ -430,6 +439,14 @@ void burrow__log_at(LogLogger *l, const char *file, int line, int how, Str forma
     (void)log_emit(log_or_std(l), log_site_at(file, line), log_msg(how, format, v));
 }
 
+Error burrow__log_output_site(LogLogger *l, Str file, Int line, Str s) {
+    LogSite site = {0};
+    site.have = true;
+    site.file = file.len > 0 ? file : BURROW_S("???");
+    site.line = file.len > 0 ? line : 0;
+    return log_emit(log_or_std(l), site, log_msg_str(s));
+}
+
 void burrow__log_fatal_at(LogLogger *l, const char *file, int line, int how, Str format,
                           Slice v) {
     log_die(log_or_std(l), log_site_at(file, line), how, format, v);
@@ -438,4 +455,12 @@ void burrow__log_fatal_at(LogLogger *l, const char *file, int line, int how, Str
 void burrow__log_panic_at(LogLogger *l, const char *file, int line, int how, Str format,
                           Slice v) {
     log_raise(log_or_std(l), log_site_at(file, line), how, format, v);
+}
+
+bool burrow__log_writing_site(Str *file, Int *line) {
+    if (!log_writing.have)
+        return false;
+    *file = log_writing.file;
+    *line = log_writing.line;
+    return true;
 }

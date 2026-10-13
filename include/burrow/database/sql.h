@@ -186,6 +186,10 @@ extern const Type burrow_type_SqlScanner;
 
 #define SQL_SIG_SCAN(IN, OUT) IN(0, DriverAllocArg) IN(1, Any) OUT(Error)
 
+/* The signature of a Compose method, which Go's convertAssign calls to scan a
+ * decimal into a type that can build itself from one. */
+#define SQL_SIG_COMPOSE(IN, OUT) IN(0, DriverDecomposed) OUT(Error)
+
 /* sql.RawBytes. A destination that takes the bytes of a column without
  * copying them, so they point into memory the Rows owns and are good until
  * the next call to next, scan or close. Pass it as an Any whose type is
@@ -461,8 +465,8 @@ SqlRow sql_db_query_row(SqlDB *db, Str query, Slice args);
 /* DB.BeginTx and DB.Begin. Starts a transaction, which keeps a connection
  * until it commits or rolls back, and rolls back if ctx is cancelled first.
  * opts may be NULL for the defaults. */
-BURROW_OWNS(ret) SqlTx *sql_db_begin_tx(SqlDB *db, Context ctx, const SqlTxOptions *opts,
-                                        Error *err);
+BURROW_OWNS(ret) SqlTx *sql_db_begin_tx(SqlDB *db, Context ctx,
+                                        const SqlTxOptions *opts, Error *err);
 BURROW_OWNS(ret) SqlTx *sql_db_begin(SqlDB *db, Error *err);
 
 /* DB.Conn. One connection from the pool, kept until it is closed, for work

@@ -45,6 +45,7 @@
     }
 
 DR_IFACE_TYPE(DriverValuer, "Valuer");
+DR_IFACE_TYPE(DriverRows, "Rows");
 
 /* Only ever named in a signature, so unsafe pointers as far as reflection can
  * tell, with names that say what they point at. */

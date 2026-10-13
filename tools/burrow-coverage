@@ -800,6 +800,9 @@ FUNC_TYPES = {
     "func() hash.Hash": {"HashNewFunc"},
     "func(string) bool": {"ConstraintTagFunc"},
     "func(os.FileInfo) bool": {"ParserFileFilter"},
+    "func() []map[string]interface{}": {"SlogtestResultsFunc"},
+    "func(*testing.T) slog.Handler": {"SlogtestNewHandlerFunc"},
+    "func(*testing.T) map[string]interface{}": {"SlogtestResultFunc"},
 }
 
 BUILTIN = {

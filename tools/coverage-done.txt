@@ -116,3 +116,4 @@ debug/plan9obj
 debug/buildinfo
 log/slog
 testing/slogtest
+testing/iotest

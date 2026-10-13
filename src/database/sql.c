@@ -397,6 +397,7 @@ struct SqlRows {
 
     Bytes raw;
     Arena raw_arena;
+    Alloc *scan_alloc; /* what the Scan under way was given */
     Arena err_arena;
     SyncAtomicInt64 refs;
 };
@@ -3186,6 +3187,7 @@ static Error sq_rows_scan_locked(SqlRows *rs, Alloc *a, Slice dest) {
                             rs->numcols, dest.len);
     const Any *d = (const Any *)dest.p;
     if (sq_rows_column_scanner(rs)) {
+        rs->scan_alloc = a;
         Error out = BURROW_NO_ERROR;
         sync_mutex_lock(&rs->dc->mu);
         for (Int i = 0; i < dest.len; i++) {
@@ -3198,6 +3200,7 @@ static Error sq_rows_scan_locked(SqlRows *rs, Alloc *a, Slice dest) {
             }
         }
         sync_mutex_unlock(&rs->dc->mu);
+        rs->scan_alloc = NULL;
         return out;
     }
     for (Int i = 0; i < rs->numcols; i++) {
@@ -3332,6 +3335,10 @@ Bytes burrow__sql_rows_setrawbuf(SqlRows *rs, Bytes b) {
     return slice_from((Byte *)b.p + off, b.len - off, b.cap - off, TYPE_BYTE);
 }
 
+Alloc *burrow__sql_rows_scan_alloc(SqlRows *rs) {
+    return rs->scan_alloc;
+}
+
 Alloc *burrow__sql_rows_raw_alloc(SqlRows *rs, Alloc *a) {
     if (rs == NULL)
         return a;
@@ -3350,4 +3357,59 @@ SqlRows *burrow__sql_rows_cursor(SqlRows *parent, DriverRows rows, Error *err) {
     parent->children = rs;
     BURROW_OUT(err, BURROW_NO_ERROR);
     return rs;
+}
+
+/* ------------------------------------------------------- for the tests */
+
+Int burrow__sql_db_num_open(SqlDB *db) {
+    sync_mutex_lock(&db->mu);
+    Int n = db->num_open;
+    sync_mutex_unlock(&db->mu);
+    return n;
+}
+
+Int burrow__sql_db_num_free(SqlDB *db) {
+    sync_mutex_lock(&db->mu);
+    Int n = db->free_conn.len;
+    sync_mutex_unlock(&db->mu);
+    return n;
+}
+
+DriverConn burrow__sql_db_free_conn(SqlDB *db, Int i) {
+    sync_mutex_lock(&db->mu);
+    DriverConn ci = {NULL, NULL};
+    if (i >= 0 && i < db->free_conn.len)
+        ci = ((SqDC *)db->free_conn.p[i])->ci;
+    sync_mutex_unlock(&db->mu);
+    return ci;
+}
+
+Int burrow__sql_db_num_waiting(SqlDB *db) {
+    sync_mutex_lock(&db->mu);
+    Int n = db->reqs.len;
+    sync_mutex_unlock(&db->mu);
+    return n;
+}
+
+int64_t burrow__sql_db_num_closed(SqlDB *db) {
+    return sync_atomic_int64_load(&db->num_closed);
+}
+
+Int burrow__sql_stmt_num_css(SqlStmt *s) {
+    sync_mutex_lock(&s->mu);
+    Int n = s->css.len;
+    sync_mutex_unlock(&s->mu);
+    return n;
+}
+
+DriverConn burrow__sql_conn_driver(SqlConn *c) {
+    return c->dc != NULL ? c->dc->ci : (DriverConn){NULL, NULL};
+}
+
+DriverConn burrow__sql_tx_driver(SqlTx *tx) {
+    return tx->dc != NULL ? tx->dc->ci : (DriverConn){NULL, NULL};
+}
+
+DriverRows burrow__sql_rows_driver(SqlRows *rs) {
+    return rs->rowsi;
 }

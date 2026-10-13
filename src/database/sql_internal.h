@@ -39,6 +39,10 @@ BURROW_BORROWS(ret, rs) Bytes burrow__sql_rows_rawbuf(SqlRows *rs);
 BURROW_BORROWS(ret, b) Bytes burrow__sql_rows_setrawbuf(SqlRows *rs, Bytes b);
 Alloc *burrow__sql_rows_raw_alloc(SqlRows *rs, Alloc *a);
 
+/* The allocator the program gave the sql_rows_scan that is calling the
+ * driver's scan_column, or NULL outside one. */
+Alloc *burrow__sql_rows_scan_alloc(SqlRows *rs);
+
 /* A driver Rows that came back as a column's value, as a Rows of its own on
  * parent's connection, which parent closes when it closes. NULL with *err set
  * when there is no memory. */
@@ -59,5 +63,16 @@ Driver burrow__sql_driver_lookup(Str name, bool *ok);
 BURROW_OWNS(ret) Slice burrow__sql_driver_args_conn_locked(Alloc *a, DriverConn ci,
                                                            const DriverStmt *si,
                                                            Slice args, Error *err);
+
+/* For the tests, which in Go read these straight out of the structs. */
+Int burrow__sql_db_num_open(SqlDB *db);
+Int burrow__sql_db_num_free(SqlDB *db);
+DriverConn burrow__sql_db_free_conn(SqlDB *db, Int i);
+Int burrow__sql_db_num_waiting(SqlDB *db);
+int64_t burrow__sql_db_num_closed(SqlDB *db);
+Int burrow__sql_stmt_num_css(SqlStmt *s);
+DriverConn burrow__sql_conn_driver(SqlConn *c);
+DriverConn burrow__sql_tx_driver(SqlTx *tx);
+DriverRows burrow__sql_rows_driver(SqlRows *rs);
 
 #endif /* BURROW_DATABASE_SQL_INTERNAL_H */

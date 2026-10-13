@@ -805,6 +805,10 @@ Error sql_convert_assign(Alloc *a, DriverScanContext scan_ctx, Any dest,
     SqlRows *rows = NULL;
     if (scan_ctx.burrow__v.t == &burrow__sql_rows_type)
         rows = scan_ctx.burrow__v.data;
+    if (a == NULL && rows != NULL)
+        a = burrow__sql_rows_scan_alloc(rows);
+    if (a == NULL)
+        return fmt_errorf_v("sql: ConvertAssign called without an allocator");
     return burrow__sql_convert_assign_rows(a, dest, src, rows);
 }
 

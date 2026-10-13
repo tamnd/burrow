@@ -336,8 +336,9 @@ static inline Any sql_null_any(SqlNull *n) {
  * comes from a.
  *
  * For a driver that sets scan_column: pass the scan_ctx it was given, which
- * lets SqlRawBytes point into the Rows. Anywhere else pass a zero
- * DriverScanContext. */
+ * lets SqlRawBytes point into the Rows, and pass NULL for a, which then means
+ * the allocator the program gave sql_rows_scan. Anywhere else pass a zero
+ * DriverScanContext and an allocator. */
 BURROW_OWNS(dest) Error sql_convert_assign(Alloc *a, DriverScanContext scan_ctx,
                                            Any dest, DriverValue src);
 

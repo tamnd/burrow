@@ -75,6 +75,8 @@
 #include "burrow/crypto/sha512.h"
 #include "burrow/crypto/subtle.h"
 #include "burrow/crypto/x509/pkix.h"
+#include "burrow/debug/dwarf.h"
+#include "burrow/debug/elf.h"
 #include "burrow/declare.h"
 #include "burrow/defer.h"
 #include "burrow/embed.h"

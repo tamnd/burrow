@@ -107,3 +107,5 @@ go/token
 go/scanner
 go/version
 go/constant
+debug/dwarf
+debug/elf

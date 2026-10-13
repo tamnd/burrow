@@ -262,6 +262,12 @@ crypto/ecdh: method (*PublicKey) Curve: returns a pointer to one of the four cur
 # back, and two values come back through out parameters.
 net: func Pipe: takes an allocator and returns both ends through out parameters
 
+# include/burrow/debug/elf.h: Go gets ReadAt by embedding the io.ReaderAt in
+# Section and Prog, so the receiver is the struct value. Here the method reads
+# through the reader_at field, which lives in the struct, so it takes a pointer.
+debug/elf: method (Section) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
+debug/elf: method (Prog) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
+
 # include/burrow/go/token.h: a func value in C is a function pointer with a
 # context argument, and a variadic list is a pointer and a count.
 go/token: method (*FileSet) AddExistingFiles: takes the files as a pointer and a count

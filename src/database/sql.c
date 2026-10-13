@@ -684,7 +684,8 @@ static SqDS *sq_dc_prepare_locked(SqDC *dc, Context ctx, bool has_cg, Str query,
     }
     SqDS *ds = sq_ds_new(dc, si);
     if (ds == NULL) {
-        si.vt->close(si.data);
+        if (si.vt != NULL)
+            si.vt->close(si.data);
         *err = burrow_err_out_of_memory;
         return NULL;
     }
@@ -3000,7 +3001,7 @@ Error sql_stmt_close(SqlStmt *s) {
         } else if (s->parent != NULL) {
             /* txds is in the parent's css, which closes it. */
             err = sq_stmt_remove_dep(s->parent);
-        } else {
+        } else if (txds != NULL) {
             err = sq_ds_close(txds);
         }
     }
@@ -3093,7 +3094,7 @@ static void sq_rows_await_done(void *env) {
     if (which == 0 && !sync_atomic_bool_load(&rs->closing)) {
         rs->context_done = context_err(rs->closectx);
         sync_atomic_bool_store(&rs->has_cd, true);
-    } else if (which == 1) {
+    } else if (which == 1 && rs->await_tx != NULL) {
         rs->context_done = context_err(rs->await_tx->ctx);
         sync_atomic_bool_store(&rs->has_cd, true);
     }
@@ -3268,9 +3269,8 @@ static bool sq_rows_next_dc_locked(SqlRows *rs, bool *do_close) {
     bool ok = true;
     if (BURROW_FAILED(rs->lasterr)) {
         ok = false;
-        if (!sq_same(rs->lasterr, io_eof) || !sq_rows_next_result_setter(rs))
-            *do_close = true;
-        else if (!rs->rowsi.vt->has_next_result_set(rs->rowsi.data))
+        if (!sq_same(rs->lasterr, io_eof) || !sq_rows_next_result_setter(rs) ||
+            !rs->rowsi.vt->has_next_result_set(rs->rowsi.data))
             *do_close = true;
     }
     return ok;

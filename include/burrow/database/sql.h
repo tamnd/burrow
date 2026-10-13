@@ -23,7 +23,17 @@
  * again on whichever connection runs it, a transaction keeps one connection
  * until it commits or rolls back, and a bad connection is retried on another.
  *
- * Memory. Go's collector decides when a DB, a Conn, a Tx, a Stmt and a Rows go
+ * Everything here has to run inside runtime_main, because the pool starts
+ * goroutines.
+ *
+ * Copyright 2011 The Go Authors. All rights reserved.
+ * Copyright 2026 The burrow Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style licence that can be found
+ * in the LICENSE file. */
+
+/* burrow:package database/sql */
+
+/* Memory. Go's collector decides when a DB, a Conn, a Tx, a Stmt and a Rows go
  * away. Here each of them comes from the heap and is counted, and each has two
  * calls that end it. The _close call is Go's Close, Commit or Rollback, and
  * leaves the object in place, so that sql_rows_err still answers after the
@@ -51,17 +61,7 @@
  * driver's own checks and then by driver_default_parameter_converter, so an
  * integer type becomes an int64_t, a pointer is followed, and a type with a
  * Value method, as described in driver.h, is asked for its value. An
- * SqlNamedArg names an argument and an SqlOut marks one as an output.
- *
- * Everything here has to run inside runtime_main, because the pool starts
- * goroutines.
- *
- * Copyright 2011 The Go Authors. All rights reserved.
- * Copyright 2026 The burrow Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style licence that can be found
- * in the LICENSE file. */
-
-/* burrow:package database/sql */
+ * SqlNamedArg names an argument and an SqlOut marks one as an output. */
 
 #ifndef BURROW_DATABASE_SQL_H
 #define BURROW_DATABASE_SQL_H
@@ -116,7 +116,7 @@ extern const Type burrow_type_SqlNamedArg;
 SqlNamedArg sql_named(Str name, Any value);
 
 /* The Any for an argument list. */
-static inline Any sql_named_any(SqlNamedArg *n) {
+BURROW_BORROWS(ret, n) static inline Any sql_named_any(SqlNamedArg *n) {
     return (Any){TYPE_OF(SqlNamedArg), n};
 }
 
@@ -260,48 +260,49 @@ extern const Type burrow_type_SqlNullFloat64;
 extern const Type burrow_type_SqlNullBool;
 extern const Type burrow_type_SqlNullTime;
 
-BURROW_OWNS(ns) Error sql_null_string_scan(SqlNullString *ns, Alloc *a, Any value);
+BURROW_OWNS(ret) BURROW_OWNS(ns) Error sql_null_string_scan(SqlNullString *ns, Alloc *a,
+                                                            Any value);
 BURROW_OWNS(ret) DriverValue sql_null_string_value(SqlNullString ns, Alloc *a,
                                                    Error *err);
-Error sql_null_int64_scan(SqlNullInt64 *n, Alloc *a, Any value);
+BURROW_OWNS(ret) Error sql_null_int64_scan(SqlNullInt64 *n, Alloc *a, Any value);
 BURROW_OWNS(ret) DriverValue sql_null_int64_value(SqlNullInt64 n, Alloc *a, Error *err);
-Error sql_null_int32_scan(SqlNullInt32 *n, Alloc *a, Any value);
+BURROW_OWNS(ret) Error sql_null_int32_scan(SqlNullInt32 *n, Alloc *a, Any value);
 BURROW_OWNS(ret) DriverValue sql_null_int32_value(SqlNullInt32 n, Alloc *a, Error *err);
-Error sql_null_int16_scan(SqlNullInt16 *n, Alloc *a, Any value);
+BURROW_OWNS(ret) Error sql_null_int16_scan(SqlNullInt16 *n, Alloc *a, Any value);
 BURROW_OWNS(ret) DriverValue sql_null_int16_value(SqlNullInt16 n, Alloc *a, Error *err);
-Error sql_null_byte_scan(SqlNullByte *n, Alloc *a, Any value);
+BURROW_OWNS(ret) Error sql_null_byte_scan(SqlNullByte *n, Alloc *a, Any value);
 BURROW_OWNS(ret) DriverValue sql_null_byte_value(SqlNullByte n, Alloc *a, Error *err);
-Error sql_null_float64_scan(SqlNullFloat64 *n, Alloc *a, Any value);
+BURROW_OWNS(ret) Error sql_null_float64_scan(SqlNullFloat64 *n, Alloc *a, Any value);
 BURROW_OWNS(ret) DriverValue sql_null_float64_value(SqlNullFloat64 n, Alloc *a,
                                                     Error *err);
-Error sql_null_bool_scan(SqlNullBool *n, Alloc *a, Any value);
+BURROW_OWNS(ret) Error sql_null_bool_scan(SqlNullBool *n, Alloc *a, Any value);
 BURROW_OWNS(ret) DriverValue sql_null_bool_value(SqlNullBool n, Alloc *a, Error *err);
-Error sql_null_time_scan(SqlNullTime *n, Alloc *a, Any value);
+BURROW_OWNS(ret) Error sql_null_time_scan(SqlNullTime *n, Alloc *a, Any value);
 BURROW_OWNS(ret) DriverValue sql_null_time_value(SqlNullTime n, Alloc *a, Error *err);
 
 /* The Anys for a scan or an argument list. */
-static inline Any sql_null_string_any(SqlNullString *n) {
+BURROW_BORROWS(ret, n) static inline Any sql_null_string_any(SqlNullString *n) {
     return (Any){TYPE_OF(SqlNullString), n};
 }
-static inline Any sql_null_int64_any(SqlNullInt64 *n) {
+BURROW_BORROWS(ret, n) static inline Any sql_null_int64_any(SqlNullInt64 *n) {
     return (Any){TYPE_OF(SqlNullInt64), n};
 }
-static inline Any sql_null_int32_any(SqlNullInt32 *n) {
+BURROW_BORROWS(ret, n) static inline Any sql_null_int32_any(SqlNullInt32 *n) {
     return (Any){TYPE_OF(SqlNullInt32), n};
 }
-static inline Any sql_null_int16_any(SqlNullInt16 *n) {
+BURROW_BORROWS(ret, n) static inline Any sql_null_int16_any(SqlNullInt16 *n) {
     return (Any){TYPE_OF(SqlNullInt16), n};
 }
-static inline Any sql_null_byte_any(SqlNullByte *n) {
+BURROW_BORROWS(ret, n) static inline Any sql_null_byte_any(SqlNullByte *n) {
     return (Any){TYPE_OF(SqlNullByte), n};
 }
-static inline Any sql_null_float64_any(SqlNullFloat64 *n) {
+BURROW_BORROWS(ret, n) static inline Any sql_null_float64_any(SqlNullFloat64 *n) {
     return (Any){TYPE_OF(SqlNullFloat64), n};
 }
-static inline Any sql_null_bool_any(SqlNullBool *n) {
+BURROW_BORROWS(ret, n) static inline Any sql_null_bool_any(SqlNullBool *n) {
     return (Any){TYPE_OF(SqlNullBool), n};
 }
-static inline Any sql_null_time_any(SqlNullTime *n) {
+BURROW_BORROWS(ret, n) static inline Any sql_null_time_any(SqlNullTime *n) {
     return (Any){TYPE_OF(SqlNullTime), n};
 }
 
@@ -321,12 +322,12 @@ typedef struct SqlNull {
 
 extern const Type burrow_type_SqlNull;
 
-BURROW_OWNS(n) Error sql_null_scan(SqlNull *n, Alloc *a, Any value);
+BURROW_OWNS(ret) BURROW_OWNS(n) Error sql_null_scan(SqlNull *n, Alloc *a, Any value);
 /* nil when not valid, and otherwise the T run through its own Value method if
  * it has one and then driver_default_parameter_converter. */
 BURROW_OWNS(ret) DriverValue sql_null_value(SqlNull n, Alloc *a, Error *err);
 
-static inline Any sql_null_any(SqlNull *n) {
+BURROW_BORROWS(ret, n) static inline Any sql_null_any(SqlNull *n) {
     return (Any){TYPE_OF(SqlNull), n};
 }
 
@@ -339,8 +340,9 @@ static inline Any sql_null_any(SqlNull *n) {
  * lets SqlRawBytes point into the Rows, and pass NULL for a, which then means
  * the allocator the program gave sql_rows_scan. Anywhere else pass a zero
  * DriverScanContext and an allocator. */
-BURROW_OWNS(dest) Error sql_convert_assign(Alloc *a, DriverScanContext scan_ctx,
-                                           Any dest, DriverValue src);
+BURROW_OWNS(ret) BURROW_OWNS(dest) Error sql_convert_assign(Alloc *a,
+                                                            DriverScanContext scan_ctx,
+                                                            Any dest, DriverValue src);
 
 /* ----------------------------------------------------------------- Errors */
 
@@ -393,15 +395,15 @@ BURROW_OWNS(ret) SqlDB *sql_open_db(DriverConnector c);
 
 /* DB.Close. Closes the idle connections and stops new ones being made. A
  * connection in use closes when it is returned. Calling it twice is fine. */
-Error sql_db_close(SqlDB *db);
+BURROW_OWNS(ret) Error sql_db_close(SqlDB *db);
 
 /* Closes db if it is open and lets go of it. */
 void sql_db_free(SqlDB *db);
 
 /* DB.PingContext and DB.Ping. Gets a connection, opening one if none is idle,
  * and asks the driver to ping it if it can. */
-Error sql_db_ping_context(SqlDB *db, Context ctx);
-Error sql_db_ping(SqlDB *db);
+BURROW_OWNS(ret) Error sql_db_ping_context(SqlDB *db, Context ctx);
+BURROW_OWNS(ret) Error sql_db_ping(SqlDB *db);
 
 /* DB.SetMaxIdleConns. How many idle connections the pool keeps, 2 to begin
  * with. 0 or less keeps none, and more than the open limit is cut to it. */
@@ -477,7 +479,7 @@ BURROW_OWNS(ret) SqlConn *sql_db_conn(SqlDB *db, Context ctx, Error *err);
 /* ------------------------------------------------------------------- Conn */
 
 /* sql.Conn. The same calls as the DB's, all on the one connection. */
-Error sql_conn_ping_context(SqlConn *c, Context ctx);
+BURROW_OWNS(ret) Error sql_conn_ping_context(SqlConn *c, Context ctx);
 BURROW_OWNS(ret) SqlResult sql_conn_exec_context(SqlConn *c, Alloc *a, Context ctx,
                                                  Str query, Slice args, Error *err);
 BURROW_OWNS(ret) SqlRows *sql_conn_query_context(SqlConn *c, Context ctx, Str query,
@@ -494,11 +496,11 @@ BURROW_FUNC(SqlRawFunc, Error, DriverConn driver_conn);
 /* Conn.Raw. Calls f with the driver's connection, holding the connection's
  * lock, for driver features database/sql has no call for. f must not keep the
  * connection after it returns. */
-Error sql_conn_raw(SqlConn *c, SqlRawFunc f);
+BURROW_OWNS(ret) Error sql_conn_raw(SqlConn *c, SqlRawFunc f);
 
 /* Conn.Close. Returns the connection to the pool. Calls after it return
  * sql_err_conn_done, and so does a second close. */
-Error sql_conn_close(SqlConn *c);
+BURROW_OWNS(ret) Error sql_conn_close(SqlConn *c);
 
 /* Closes c if it is open and lets go of it. */
 void sql_conn_free(SqlConn *c);
@@ -508,8 +510,8 @@ void sql_conn_free(SqlConn *c);
 /* Tx.Commit and Tx.Rollback. Each ends the transaction and closes the
  * statements prepared in it. Either one after the end returns sql_err_tx_done.
  */
-Error sql_tx_commit(SqlTx *tx);
-Error sql_tx_rollback(SqlTx *tx);
+BURROW_OWNS(ret) Error sql_tx_commit(SqlTx *tx);
+BURROW_OWNS(ret) Error sql_tx_rollback(SqlTx *tx);
 
 /* Rolls tx back if it has not ended and lets go of it. */
 void sql_tx_free(SqlTx *tx);
@@ -548,7 +550,7 @@ SqlRow sql_stmt_query_row_context(SqlStmt *s, Context ctx, Slice args);
 SqlRow sql_stmt_query_row(SqlStmt *s, Slice args);
 
 /* Stmt.Close. Calling it twice is fine. */
-Error sql_stmt_close(SqlStmt *s);
+BURROW_OWNS(ret) Error sql_stmt_close(SqlStmt *s);
 
 /* Closes s if it is open and lets go of it. */
 void sql_stmt_free(SqlStmt *s);
@@ -566,7 +568,7 @@ bool sql_rows_next_result_set(SqlRows *rs);
 
 /* Rows.Err. The error that ended the rows, if there was one other than
  * reaching the end. Good after close. */
-Error sql_rows_err(SqlRows *rs);
+BURROW_BORROWS(ret, rs) Error sql_rows_err(SqlRows *rs);
 
 /* Rows.Columns. The column names, a Slice of Str, copied into a. An error once
  * the Rows is closed. */
@@ -593,11 +595,12 @@ BURROW_OWNS(ret) Slice sql_rows_column_types(SqlRows *rs, Alloc *a, Error *err);
  * Storing NULL anywhere but an Any, Bytes, a pointer or a Scanner is an error.
  * The _v form takes the destinations as pointers, the way fmt_sscan_v does.
  */
-BURROW_OWNS(dest) Error sql_rows_scan(SqlRows *rs, Alloc *a, Slice dest);
+BURROW_OWNS(ret) BURROW_OWNS(dest) Error sql_rows_scan(SqlRows *rs, Alloc *a,
+                                                       Slice dest);
 
 /* Rows.Close. Ends the query and returns its connection. Calling it twice is
  * fine. */
-Error sql_rows_close(SqlRows *rs);
+BURROW_OWNS(ret) Error sql_rows_close(SqlRows *rs);
 
 /* Closes rs if it is open and lets go of it. */
 void sql_rows_free(SqlRows *rs);
@@ -612,10 +615,10 @@ extern const Type burrow_type_SqlRowsPtr;
 /* Row.Scan. The first row's columns, as sql_rows_scan stores them, or
  * sql_err_no_rows when there is no row. Frees the Rows, after which a second
  * scan returns sql_err_no_rows. A destination cannot be SqlRawBytes. */
-BURROW_OWNS(dest) Error sql_row_scan(SqlRow *r, Alloc *a, Slice dest);
+BURROW_OWNS(ret) BURROW_OWNS(dest) Error sql_row_scan(SqlRow *r, Alloc *a, Slice dest);
 
 /* Row.Err. The query's error, without scanning. */
-Error sql_row_err(const SqlRow *r);
+BURROW_BORROWS(ret, r) Error sql_row_err(const SqlRow *r);
 
 /* ------------------------------------------------------------ ColumnType */
 

@@ -99,7 +99,7 @@ void burrow__sql_stmt_force_prepare(SqlStmt *s);
 void *burrow__sql_db_free_dc(SqlDB *db, Int i);
 void burrow__sql_dc_unref(void *dc);
 bool burrow__sql_dc_closed(void *dc);
-Int burrow__sql_dc_num_open_stmt(void *dc);
+Int burrow__sql_dc_num_open_stmt(void *p);
 bool burrow__sql_dc_has_driver(void *dc);
 Int burrow__sql_stmt_num_css(SqlStmt *s);
 DriverConn burrow__sql_conn_driver(SqlConn *c);

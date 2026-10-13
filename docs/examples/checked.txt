@@ -58,3 +58,4 @@ docs/guides/debug.md
 docs/guides/go.md
 docs/guides/expvar.md
 docs/guides/sql-driver.md
+docs/guides/sql.md

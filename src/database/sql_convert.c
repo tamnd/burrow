@@ -1024,6 +1024,8 @@ Slice burrow__sql_driver_args_conn_locked(Alloc *a, DriverConn ci, const DriverS
 
 /* ------------------------------------------------------- the nullable types */
 
+/* T is a type, which cannot be parenthesised. */
+/* NOLINTBEGIN(bugprone-macro-parentheses) */
 #define SQL_NULL_SCAN(fn, T, member, ctype)                                            \
     Error fn(T *n, Alloc *a, Any value) {                                              \
         value = burrow__driver_unwrap(value);                                          \
@@ -1037,6 +1039,7 @@ Slice burrow__sql_driver_args_conn_locked(Alloc *a, DriverConn ci, const DriverS
         n->valid = !BURROW_FAILED(e);                                                  \
         return e;                                                                      \
     }
+/* NOLINTEND(bugprone-macro-parentheses) */
 
 SQL_NULL_SCAN(sql_null_string_scan, SqlNullString, string, TYPE_STRING)
 SQL_NULL_SCAN(sql_null_int64_scan, SqlNullInt64, int64, TYPE_INT64)
@@ -1152,10 +1155,12 @@ DriverValue sql_null_value(SqlNull n, Alloc *a, Error *err) {
 
 /* The Value methods take a value receiver, and a method thunk passes a
  * pointer, so each has a wrapper. */
+/* NOLINTBEGIN(bugprone-macro-parentheses) */
 #define SQL_NULL_VALUE_METHOD(mfn, T, fn)                                              \
     static Any mfn(T *n, DriverAllocArg a, DriverErrorArg err) {                       \
         return fn(*n, a, err);                                                         \
     }
+/* NOLINTEND(bugprone-macro-parentheses) */
 
 SQL_NULL_VALUE_METHOD(sc_ns_value, SqlNullString, sql_null_string_value)
 SQL_NULL_VALUE_METHOD(sc_n64_value, SqlNullInt64, sql_null_int64_value)

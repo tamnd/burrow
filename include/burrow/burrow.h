@@ -75,6 +75,7 @@
 #include "burrow/crypto/sha512.h"
 #include "burrow/crypto/subtle.h"
 #include "burrow/crypto/x509/pkix.h"
+#include "burrow/database/sql.h"
 #include "burrow/database/sql/driver.h"
 #include "burrow/debug/buildinfo.h"
 #include "burrow/debug/dwarf.h"

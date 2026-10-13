@@ -94,4 +94,15 @@ int main(void) {
 }
 
 /* Output:
+page: <ul>{{range .Items}}{{template "item" .}}{{end}}</ul>
+item: <li>{{.}}</li>
+text   "Hello, "
+action {{.Name}}, 1 argument(s)
+text   "! You have "
+action {{len .Mail}}, 2 argument(s)
+text   " letters."
+template: bad:1: unexpected EOF
+template: bad:1: function "shout" not defined
+template: bad:2: unexpected right paren
+<nil> {{.Name | shout}}
 */

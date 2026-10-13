@@ -556,7 +556,7 @@ static void TestReaderChecks(TestingT *t) {
 }
 ```
 
-`iotest_truncate_writer` is the one writer: it passes the first n bytes through and drops the rest, while telling the caller every write went through. Go's `NewReadLogger` and `NewWriteLogger` are not here yet. They log through package `log`, and will come with it.
+`iotest_truncate_writer` is the one writer: it passes the first n bytes through and drops the rest, while telling the caller every write went through. `iotest_new_read_logger` and `iotest_new_write_logger` pass everything through and log each call with `log_printf`, as the prefix, the bytes in hex and the error when there is one, which is handy when you want to see what a protocol sends and receives.
 
 ## Checking a file system
 

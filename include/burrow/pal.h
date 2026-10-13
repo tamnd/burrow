@@ -1608,10 +1608,9 @@ bool pal_user_lookup(int64_t uid, PalUser *out, PalErrno *err);
  * systems and not others, and a port in network byte order in the middle of it.
  * Converting once, in the backend, is the whole reason this layer exists.
  *
- * pal_getaddrinfo and pal_if_enumerate are not implemented yet. They arrive with
- * the resolver and with net.Interfaces. wasip1 has none of this: its sockets
- * are the ones the host hands in already open, and every call here answers
- * PAL_ENOSYS there. */
+ * pal_if_enumerate is not implemented yet. It arrives with net.Interfaces.
+ * wasip1 has none of this: its sockets are the ones the host hands in already
+ * open, and every call here answers PAL_ENOSYS there. */
 
 enum { PAL_AF_UNSPEC = 0, PAL_AF_INET = 1, PAL_AF_INET6 = 2, PAL_AF_UNIX = 3 };
 enum {
@@ -1732,16 +1731,68 @@ typedef struct PalAddrInfo {
     int32_t protocol;
 } PalAddrInfo;
 
-/* Resolve host and service into at most cap results, returning how many were
- * written, or -1. Nothing is allocated, which is the difference from the
+/* The ways the system's resolver says a lookup failed, which are the EAI_ codes
+ * Go's cgo resolver tells apart. PAL_EAI_OTHER is any code not listed, and the
+ * text says which. */
+enum {
+    PAL_EAI_OTHER = 1,
+    PAL_EAI_ADDRFAMILY = 2,
+    PAL_EAI_AGAIN = 3,
+    PAL_EAI_NODATA = 4,
+    PAL_EAI_NONAME = 5,
+    PAL_EAI_OVERFLOW = 6,
+    PAL_EAI_SERVICE = 7,
+    PAL_EAI_SYSTEM = 8
+};
+
+/* Why a lookup failed. code is a PAL_EAI_ value, err is what errno said for
+ * PAL_EAI_SYSTEM and 0 when it said nothing, and text is gai_strerror's words
+ * for the code, which is the text of Go's addrinfoErrno. */
+typedef struct PalLookupError {
+    int32_t code;
+    PalErrno err;
+    char text[120];
+} PalLookupError;
+
+/* Flags for pal_getaddrinfo, which are the AI_ flags Go's cgo resolver passes.
+ * A flag the system does not have, or does not take in a query, is dropped. */
+enum { PAL_AI_CANONNAME = 1, PAL_AI_V4MAPPED = 2, PAL_AI_ALL = 4 };
+
+/* Resolve host and service, either of which may be NULL, into out, and answer
+ * how many results there were, which may be more than cap. Only the first cap
+ * are written, so a caller that gets back more than it had room for asks
+ * again with more room. Nothing is allocated, which is the difference from the
  * platform call this sits on and the reason there is no free to pair with it.
+ * family is PAL_AF_UNSPEC for either, socktype and protocol are 0 for any.
+ * Failure is -1, with err filled in. A result in a family this layer has no
+ * shape for comes back with PAL_AF_UNSPEC.
  *
- * This is the blocking resolver, which runs on a thread of its own the way Go's
- * cgo resolver does. The pure Go resolver, which reads resolv.conf and speaks
- * DNS itself, is portable code above this line and does not come through
- * here. */
+ * This is the blocking resolver, the system's own, and a call can take as long
+ * as the system's DNS timeouts. net runs it on a thread of its own the way Go
+ * runs its cgo resolver, so that no goroutine's thread waits on it. The pure
+ * resolver, which reads resolv.conf and speaks DNS itself, is portable code
+ * above this line and does not come through here. */
 int64_t pal_getaddrinfo(const char *host, const char *service, int32_t family,
-                        int32_t socktype, PalAddrInfo *out, int64_t cap, PalErrno *err);
+                        int32_t socktype, int32_t protocol, int32_t flags,
+                        PalAddrInfo *out, int64_t cap, PalLookupError *err);
+
+/* The name the system has for addr, from getnameinfo with NI_NAMEREQD, into
+ * host with its NUL. False with err filled in on failure, and PAL_EAI_OVERFLOW
+ * there means cap was too small. */
+bool pal_getnameinfo(const PalSockAddr *addr, char *host, int64_t cap,
+                     PalLookupError *err);
+
+/* res_nsearch, or res_search on Linux and OpenBSD as in Go: a DNS query for
+ * name of type rtype and class rclass, through the system's stub resolver,
+ * with the reply into ans. Answers the reply's length, which can be more than
+ * cap when the reply did not fit, -1 when the query failed, or -2 when
+ * res_ninit did, with its errno as the error or PAL_EOTHER if it left none.
+ * The error of a -1 is PAL_ENOSYS where the call is not there to reach without
+ * linking another library, which is glibc older than 2.34 and every system but
+ * Linux, macOS and the BSDs. Go's cgo resolver uses this for CNAME and goes on
+ * to its own when it fails, so ENOSYS costs nothing but the system's opinion. */
+int64_t pal_res_search(const char *name, int32_t rclass, int32_t rtype, uint8_t *ans,
+                       int64_t cap, PalErrno *err);
 
 enum {
     PAL_IFF_UP = 1u << 0,

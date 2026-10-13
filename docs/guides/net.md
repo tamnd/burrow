@@ -567,6 +567,48 @@ A name with several addresses is tried one address at a time, each with its shar
 
 When a dial fails, the error is a `NetOpError` with the op "dial", and it names the addresses it tried. Those addresses live in the error arena of the goroutine that dialed, so the error stays readable for as long as the goroutine keeps it, and a dial that works leaves nothing behind there.
 
+## Looking up names
+
+`net_lookup_host`, `net_lookup_ip`, `net_lookup_port`, `net_lookup_addr` and the record lookups are Go's, and so is the choice of who answers them. There are two resolvers. One is Go's own, which reads `/etc/hosts`, `/etc/resolv.conf` and `/etc/nsswitch.conf` and talks to the name servers itself. The other is the system's `getaddrinfo` and `getnameinfo`, which Go reaches through cgo and burrow reaches through its platform layer. A lookup goes to the system when the configuration has something Go's resolver does not understand, such as an NSS module or mDNS in `nsswitch.conf`, and on macOS, where the system is always asked. `GODEBUG=netdns=go` and `GODEBUG=netdns=cgo` force one or the other, `GODEBUG=netdns=1` says which was picked and why, and a `NetResolver` with `prefer_go` set gets Go's.
+
+<!-- example: ../examples/net/lookup.c#lookup -->
+```c
+Arena ar;
+arena_init(&ar, NULL, 0);
+Alloc *a = arena_allocator(&ar);
+Error err;
+
+/* A service by name. The system is asked first where there is one, and
+ * Go's own table answers when it does not know. */
+Int port = net_lookup_port(BURROW_S("tcp"), BURROW_S("https"), &err);
+printf("https is port %d\n", (int)port);
+
+/* A host, through whichever resolver the system's configuration and
+ * GODEBUG=netdns= pick. */
+Slice addrs = net_lookup_host(a, BURROW_S("localhost"), &err);
+printf("localhost has 127.0.0.1: %s\n", has(addrs, "127.0.0.1") ? "yes" : "no");
+
+/* The same through Go's resolver, which reads the hosts file itself. */
+NetResolver r = {0};
+r.prefer_go = true;
+addrs = net_resolver_lookup_host(&r, a, context_background(), BURROW_S("localhost"),
+                                 &err);
+printf("and so says Go's: %s\n", has(addrs, "127.0.0.1") ? "yes" : "no");
+arena_free(&ar);
+```
+
+That prints:
+
+```
+https is port 443
+localhost has 127.0.0.1: yes
+and so says Go's: yes
+```
+
+The system's calls block the thread that makes them, and burrow has no way to hand a goroutine's thread to another one while that happens, the way cgo does. So the calls run on threads of their own, which wait around for a while for the next lookup and then exit, and the goroutine waits for the answer as it would for a socket. A context that is done stops the wait but not the call, which finishes on its own thread and is thrown away. At most 500 calls run at once, fewer when the limit on open files is low, which is Go's rule.
+
+Windows and wasip1 always use Go's resolver for now. wasip1 has no other, and Go's Windows lookups go through `GetAddrInfoW` and `DnsQuery_W` in a way of their own that is still to come.
+
 ## URLs
 
 `url_parse` splits a URL into a `Url` with the same fields as Go's `url.URL`. `path` holds the decoded path and `url_escaped_path` gives back the form that goes on the wire. The parse makes one allocation that holds the `Url` and every string in it, so the input can go away while the `Url` lives, and `url_free` gives it back. With an arena you do not need to free at all. In these examples `P(s)` is short for `(int)(s).len, (const char *)(s).p`, the two arguments that `%.*s` wants:

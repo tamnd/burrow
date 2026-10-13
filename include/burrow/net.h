@@ -1081,15 +1081,22 @@ extern const Type *const TYPE_NET_NS;
  *     Slice addrs = net_lookup_host(a, BURROW_S("example.com"), &err);
  *     Slice mx = net_resolver_lookup_mx(NULL, a, ctx, BURROW_S("example.com"), &err);
  *
- * This is Go's own resolver, the one it calls the pure Go one. It reads
- * /etc/hosts, /etc/resolv.conf and /etc/nsswitch.conf the way Go does, looks
- * again at most every five seconds, and asks the name servers over UDP, then
- * TCP for an answer that was cut short. Go can also hand a lookup to the C
- * library through cgo, and burrow never does, so the settings that ask for
- * that, such as GODEBUG=netdns=cgo, act as Go does when cgo is not there.
- * Go on Windows asks the system, and burrow does not yet: it reads the hosts
- * file there and asks 127.0.0.1 and ::1, which is what a missing resolv.conf
- * means, until the name servers of the network adapters can be read.
+ * There are two resolvers behind this, as in Go. Go's own, the one it calls
+ * the pure Go one, reads /etc/hosts, /etc/resolv.conf and /etc/nsswitch.conf
+ * the way Go does, looks again at most every five seconds, and asks the name
+ * servers over UDP, then TCP for an answer that was cut short. The other is
+ * the system's, getaddrinfo and getnameinfo, which Go reaches through cgo and
+ * burrow through the platform layer. Which one a lookup gets is decided the
+ * way Go decides it, from the configuration files, the environment and
+ * GODEBUG=netdns=go or netdns=cgo, and prefer_go below asks for Go's. The
+ * system's calls block, so they run on threads kept for them, and the
+ * goroutine waits the way it would for a socket.
+ *
+ * wasip1 has no system resolver to ask and always gets Go's. So does Windows
+ * for now, where Go asks the system in a way of its own that burrow does not
+ * have yet: it reads the hosts file there and asks 127.0.0.1 and ::1, which is
+ * what a missing resolv.conf means, until the name servers of the network
+ * adapters can be read.
  *
  * A NULL NetResolver is the default one, as a nil *Resolver is in Go. The
  * results are made in a, the slice and the strings and addresses in it, and
@@ -1110,8 +1117,7 @@ BURROW_FUNC(NetResolverDial, NetConn, Alloc *a, Context ctx, Str network, Str ad
             bool *packet, Error *err);
 
 typedef struct NetResolver {
-    /* Go's resolver rather than the system's. burrow only has Go's, so this
-     * changes nothing, and is here to keep the struct Go's shape. */
+    /* Go's resolver rather than the system's, wherever there is a choice. */
     bool prefer_go;
 
     /* A temporary error from any one query fails the whole lookup, rather

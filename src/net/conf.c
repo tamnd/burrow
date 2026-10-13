@@ -4,10 +4,12 @@
  * Go source: go1.27.1.
  *
  * Go can hand a lookup to the C library through cgo, and decides here when it
- * should. burrow has no such path, so the system's conf says cgo is not
- * available, and every answer is one of the orders Go's own resolver can
- * follow. The rest of the logic is kept whole, with cgo_available as a field,
- * so that Go's tests of it run as they are.
+ * should. burrow's equivalent is src/net/cgo.c, which asks the system through
+ * the platform layer, and what Go calls cgo is that here. It is there on every
+ * system but wasip1, which has no resolver to ask, and Windows, whose own
+ * lookups are still to come. With neither the netgo nor the netcgo build tag,
+ * GODEBUG=netdns= is the only switch, as in a Go binary built the usual way.
+ * cgo_available is a field so that Go's tests of the logic run as they are.
  *
  * Copyright 2015 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -83,6 +85,49 @@ static void cf_print(Str line) {
         slice_from((void *)(uintptr_t)line.p, line.len, line.len, TYPE_UINT8), &err);
 }
 
+static bool cf_goos(const burrow__NetConf *c, const char *name) {
+    return str_eq(c->goos, str_from_cstr(name));
+}
+
+/* cgoAvailable. */
+#if defined(BURROW_OS_WINDOWS) || defined(BURROW_OS_WASI)
+#define CF_CGO_AVAILABLE false
+#else
+#define CF_CGO_AVAILABLE true
+#endif
+
+static bool cf_env_set(Str key, bool nonempty) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    bool found = false;
+    Str v = os_lookup_env(arena_allocator(&ar), key, &found);
+    bool set = found && (!nonempty || v.len > 0);
+    arena_free(&ar);
+    return set;
+}
+
+/* The part of initConfVal that sets preferCgo, from things that do not change
+ * while the program runs. */
+static bool cf_prefer_cgo(const burrow__NetConf *c) {
+    if (!c->cgo_available)
+        return false;
+    /* goosPrefersCgo. Darwin pops up dialog boxes at a program that asks DNS
+     * itself, and DNS requests do not work on Android. */
+    if (cf_goos(c, "windows") || cf_goos(c, "plan9") || cf_goos(c, "darwin") ||
+        cf_goos(c, "ios") || cf_goos(c, "android"))
+        return true;
+    if (cf_goos(c, "js") || cf_goos(c, "wasip1"))
+        return false;
+    /* LOCALDOMAIN changes what the C library does merely by being set, even
+     * to nothing. */
+    if (cf_env_set(CF_LIT("LOCALDOMAIN"), false) ||
+        cf_env_set(CF_LIT("RES_OPTIONS"), true) ||
+        cf_env_set(CF_LIT("HOSTALIASES"), true))
+        return true;
+    /* OpenBSD lets ASR_CONFIG move resolv.conf, and only libc knows where. */
+    return cf_goos(c, "openbsd") && cf_env_set(CF_LIT("ASR_CONFIG"), true);
+}
+
 static void cf_init(void *env) {
     (void)env;
     burrow__NetConf *c = &cf_system.val;
@@ -96,8 +141,8 @@ static void cf_init(void *env) {
     c->net_go = is_go;
     c->net_cgo = is_cgo;
     c->dns_debug_level = level > INT32_MAX ? INT32_MAX : (int32_t)level;
-    c->prefer_cgo = false;
-    c->cgo_available = false;
+    c->cgo_available = CF_CGO_AVAILABLE;
+    c->prefer_cgo = cf_prefer_cgo(c);
 
     if (c->dns_debug_level > 0) {
         Arena ar;
@@ -111,12 +156,21 @@ static void cf_init(void *env) {
             cf_print(
                 CF_LIT("go package net: GODEBUG=netdns contains an invalid dns mode, "
                        "ignoring it\n"));
-        /* cgoAvailable is false, so this is always Go's first case. */
-        if (is_cgo)
+        /* There is no netgo or netcgo build tag, so only Go's first case,
+         * for no cgo, and its last are ever taken. */
+        if (!c->cgo_available && is_cgo)
             cf_print(CF_LIT("go package net: ignoring GODEBUG=netdns=cgo as the binary "
                             "was compiled without support for the cgo resolver\n"));
-        else
+        else if (!c->cgo_available)
             cf_print(CF_LIT("go package net: using the Go DNS resolver\n"));
+        else if (is_go)
+            cf_print(CF_LIT(
+                "go package net: GODEBUG setting forcing use of the Go resolver\n"));
+        else if (is_cgo)
+            cf_print(CF_LIT(
+                "go package net: GODEBUG setting forcing use of the cgo resolver\n"));
+        else
+            cf_print(CF_LIT("go package net: dynamic selection of DNS resolver\n"));
         arena_free(&ar);
     }
 }
@@ -127,10 +181,6 @@ const burrow__NetConf *burrow__net_system_conf(void) {
 }
 
 /* --------------------------------------------------------------- the order */
-
-static bool cf_goos(const burrow__NetConf *c, const char *name) {
-    return str_eq(c->goos, str_from_cstr(name));
-}
 
 bool burrow__net_conf_must_use_go_resolver(const burrow__NetConf *c,
                                            const NetResolver *r) {

@@ -303,6 +303,20 @@ crypto/hpke: func Seal: takes the PublicKey and the ciphersuite as pointers, as 
 crypto/hpke: func NewRecipient: takes the PrivateKey and the ciphersuite as pointers, as none of them can be implemented outside the package
 crypto/hpke: func Open: takes the PrivateKey and the ciphersuite as pointers, as none of them can be implemented outside the package
 
+# include/burrow/crypto/mldsa.h: Go's Parameters is a small value that compares
+# equal to itself. Here each parameter set is one static object and the calls
+# that give or take a Parameters use a pointer to it, which compares with ==.
+crypto/mldsa: func MLDSA44: returns a pointer to one of the three parameter sets, compared with ==
+crypto/mldsa: func MLDSA65: returns a pointer to one of the three parameter sets, compared with ==
+crypto/mldsa: func MLDSA87: returns a pointer to one of the three parameter sets, compared with ==
+crypto/mldsa: method (*PublicKey) Parameters: returns a pointer to one of the three parameter sets, compared with ==
+crypto/mldsa: method (Parameters) PublicKeySize: takes a pointer to one of the three parameter sets
+crypto/mldsa: method (Parameters) SignatureSize: takes a pointer to one of the three parameter sets
+crypto/mldsa: method (Parameters) String: takes a pointer to one of the three parameter sets
+crypto/mldsa: func GenerateKey: takes a pointer to one of the three parameter sets
+crypto/mldsa: func NewPrivateKey: takes a pointer to one of the three parameter sets
+crypto/mldsa: func NewPublicKey: takes a pointer to one of the three parameter sets
+
 # include/burrow/net.h: Go returns both ends and leaves the memory to the
 # collector. Here the pipe comes from an allocator and net_pipe_free gives it
 # back, and two values come back through out parameters.

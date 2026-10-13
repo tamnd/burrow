@@ -24,8 +24,17 @@ struct OsFile {
     Alloc *a;
     void *dirinfo; /* an OsDirInfo once the file is read as a directory */
     bool append_mode;
-    bool stdio; /* one of the three os_stdin and the others hand out */
+    bool stdio;    /* one of the three os_stdin and the others hand out */
+    bool socket;   /* closed with pal_socket_close, which Windows needs */
+    bool nonblock; /* os_file_fd puts it back in blocking mode first */
 };
+
+/* net's newUnixFile and newWindowsFile: an OsFile for the socket fd, which a
+ * net File method made, named name. It is closed as a socket, and os_file_fd
+ * puts it in blocking mode, since that is what code that asks a connection's
+ * file for its descriptor has always had back from Go. NULL when out of
+ * memory, with fd left open. Windows has no such rule, as in Go. */
+OsFile *burrow__os_new_socket_file(Alloc *a, int64_t fd, Str name);
 
 /* A file just opened, under another name: the same descriptor in a new
  * OsFile, with f freed and not closed. NULL when out of memory, with f left as

@@ -49,11 +49,18 @@ crypto/aes
 crypto
 crypto/cipher
 crypto/des
+crypto/dsa
 crypto/ecdh
 crypto/ecdsa
 crypto/elliptic
 crypto/ed25519
 crypto/rc4
+crypto/mlkem
+crypto/mlkem/mlkemtest
+crypto/mldsa
+crypto/hpke
+crypto/rsa
+
 crypto/x509/pkix
 container/list
 container/ring
@@ -99,6 +106,7 @@ archive/tar
 archive/zip
 encoding/asn1
 path/filepath
+crypto/x509
 syscall
 crypto/fips140
 net/mail

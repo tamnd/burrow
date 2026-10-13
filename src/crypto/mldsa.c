@@ -744,7 +744,7 @@ static void mldsa_pk_decode(const Byte *pk, uint16_t (*t1)[MLDSA_N],
 
 /* hintEncode, into the ω + k bytes at y. */
 static void mldsa_hint_encode(Byte *y, Byte (*h)[MLDSA_N], const MldsaParameters *p) {
-    memset(y, 0, (size_t)(p->omega + p->k));
+    memset(y, 0, (size_t)p->omega + (size_t)p->k);
     Byte idx = 0;
     for (int i = 0; i < p->k; i++) {
         for (int j = 0; j < MLDSA_N; j++) {

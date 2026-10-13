@@ -488,7 +488,7 @@ The `File` methods are still to come, and Windows is where TCP is for now.
 
 ## Raw IP
 
-`net_listen_ip` and `net_dial_ip` are Go's `ListenIP` and `DialIP`, which make raw IP sockets. The network is "ip", "ip4" or "ip6" with the protocol after a colon, by number or by the name /etc/protocols gives it, so "ip4:icmp" and "ip4:1" are the same thing. A `NetIPAddr` is an address and a zone with no port. The system only hands out raw sockets to root, or to a program with CAP_NET_RAW on Linux, and anyone else gets an error, which is EPERM on Linux. This one sends an ICMP echo request to the loopback address and waits for the reply:
+`net_listen_ip` and `net_dial_ip` are Go's `ListenIP` and `DialIP`, which make raw IP sockets. The network is "ip", "ip4" or "ip6" with the protocol after a colon, by number or by the name /etc/protocols gives it, so "ip4:icmp" and "ip4:1" are the same thing. A `NetIPAddr` is an address and a zone with no port. The system only hands out raw sockets to root, or to a program with CAP_NET_RAW on Linux, and anyone else gets an error, which is EPERM on Linux. `net_dialer_dial_ip` is the Dialer's `DialIP`, new in Go 1.27, which takes `NetipAddr` values and a context. This one sends an ICMP echo request to the loopback address and waits for the reply:
 
 <!-- example: ../examples/net/ipconn.c#ipconn -->
 ```c
@@ -818,6 +818,10 @@ A name with several addresses is tried one address at a time, each with its shar
 `net_conn_free` and `net_listener_free` close what they are given and give it back, and `net_conn_as_tcp_conn` and its siblings get the concrete type when you need its methods. `net_resolve_tcp_addr`, `net_resolve_udp_addr` and `net_resolve_ip_addr` are Go's `ResolveTCPAddr` and friends, for when you want the address without the connection.
 
 When a dial fails, the error is a `NetOpError` with the op "dial", and it names the addresses it tried. Those addresses live in the error arena of the goroutine that dialed, so the error stays readable for as long as the goroutine keeps it, and a dial that works leaves nothing behind there.
+
+### Multipath TCP
+
+Multipath TCP lets one connection use several paths at once, such as Wi-Fi and a mobile link, and only Linux has it. As in Go, a TCP listener asks for it unless told otherwise and a dial does not. `net_listen_config_set_multipath_tcp` and `net_dialer_set_multipath_tcp` change that, and `net_listen_config_multipath_tcp` and `net_dialer_multipath_tcp` say what was asked for. Left alone, both follow the GODEBUG environment variable as Go reads it: multipathtcp=0 turns it off for listeners, 1 turns it on for dials, and 3 turns it on for dials and off for listeners. A socket that cannot have Multipath TCP, because the kernel is too old or it is turned off, falls back to plain TCP without an error, and a peer that does not speak it gets plain TCP too, so `net_tcp_conn_multipath_tcp` is how to tell what a connection ended up with. On anything but Linux it always says no.
 
 ## Looking up names
 

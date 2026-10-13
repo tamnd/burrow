@@ -238,8 +238,9 @@ NetIPConn *burrow__net_sys_listen_ip(Alloc *a, const burrow__NetSysOpts *o, Str 
     return c;
 }
 
-NetIPConn *net_dial_ip(Alloc *a, Str network, const NetIPAddr *laddr,
-                       const NetIPAddr *raddr, Error *err) {
+NetIPConn *burrow__net_dial_ip(Alloc *a, const burrow__NetSysOpts *o, Str network,
+                               const NetIPAddr *laddr, const NetIPAddr *raddr,
+                               Error *err) {
     NetAddr src = net_ip_addr_as_addr(laddr);
     if (raddr == NULL) {
         BURROW_OUT(err, burrow__net_op_error(IR_LIT("dial"), network, src, ir_nil_addr,
@@ -247,12 +248,17 @@ NetIPConn *net_dial_ip(Alloc *a, Str network, const NetIPAddr *laddr,
         return NULL;
     }
     Error e = BURROW_NO_ERROR;
-    NetIPConn *c = ir_socket(a, NULL, network, laddr, raddr, false, &e);
+    NetIPConn *c = ir_socket(a, o, network, laddr, raddr, false, &e);
     if (c == NULL && !ir_is_oom(e))
         e = burrow__net_op_error(IR_LIT("dial"), network, src,
                                  net_ip_addr_as_addr(raddr), e);
     BURROW_OUT(err, e);
     return c;
+}
+
+NetIPConn *net_dial_ip(Alloc *a, Str network, const NetIPAddr *laddr,
+                       const NetIPAddr *raddr, Error *err) {
+    return burrow__net_dial_ip(a, NULL, network, laddr, raddr, err);
 }
 
 NetIPConn *net_listen_ip(Alloc *a, Str network, const NetIPAddr *laddr, Error *err) {

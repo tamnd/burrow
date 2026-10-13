@@ -1625,7 +1625,9 @@ enum {
     PAL_SOCK_RAW = 3,
     PAL_SOCK_SEQPACKET = 4
 };
-enum { PAL_IPPROTO_TCP = 6, PAL_IPPROTO_UDP = 17 };
+/* PAL_IPPROTO_MPTCP is Linux's number for Multipath TCP, which no other system
+ * has. */
+enum { PAL_IPPROTO_TCP = 6, PAL_IPPROTO_UDP = 17, PAL_IPPROTO_MPTCP = 262 };
 
 /* An address, in host byte order everywhere a number appears. addr holds four
  * bytes for IPv4 and sixteen for IPv6, most significant first, which is how an
@@ -1805,6 +1807,19 @@ bool pal_shutdown(int64_t fd, int32_t how, PalErrno *err);
  * and a sysctl on macOS, FreeBSD and OpenBSD. 0 when the system does not say,
  * and then the caller uses SOMAXCONN. */
 int32_t pal_listen_backlog_max(void);
+
+/* Linux's unix.KernelVersionGE: whether the running kernel is major.minor or
+ * newer, by the release uname gives, such as "6.8.0-45-generic". A release
+ * that does not parse counts as new enough. False on every other system. */
+bool pal_kernel_version_ge(int32_t major, int32_t minor);
+
+/* Whether the TCP socket fd is speaking Multipath TCP, which is the second half
+ * of Go's isUsingMultipathTCP. With sol_mptcp, which kernels from 5.16 on have,
+ * that is getsockopt MPTCP_INFO not failing with EOPNOTSUPP or ENOPROTOOPT, the
+ * errors of a connection that fell back to plain TCP, and without it the
+ * socket having been made with PAL_IPPROTO_MPTCP. False on every system but
+ * Linux. */
+bool pal_mptcp_in_use(int64_t fd, bool sol_mptcp);
 
 /* One result from a name lookup. */
 typedef struct PalAddrInfo {

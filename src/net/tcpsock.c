@@ -12,6 +12,7 @@
 
 #include "internal.h"
 
+#include "burrow/atomic.h"
 #include "burrow/declare.h"
 #include "burrow/error.h"
 #include "burrow/io.h"
@@ -176,10 +177,89 @@ static bool nt_network(Str network, Str *lit) {
 /* internetSocket, for a TCP stream. */
 static Error nt_internet_socket(burrow__NetFD *fd, const burrow__NetSysOpts *o, Str net,
                                 const NetTCPAddr *laddr, const NetTCPAddr *raddr,
-                                bool listen) {
+                                int32_t proto, bool listen) {
     return burrow__net_internet_socket(fd, o != NULL ? &o->ctl : NULL, net,
                                        nt_inet(laddr), nt_inet(raddr), PAL_SOCK_STREAM,
-                                       0, listen);
+                                       proto, listen);
+}
+
+/* ------------------------------------------------------------------ MPTCP */
+
+/* Go's mptcpsock_linux.go. Whether the kernel has Multipath TCP is worked out
+ * by the first socket that wants it, as Go's mptcpOnce does, and kept here
+ * with a release store after the probed bit. Two racing probes store the
+ * same thing. */
+enum { NT_MPTCP_PROBED = 1, NT_MPTCP_AVAILABLE = 2, NT_MPTCP_SOL = 4 };
+
+#if defined(BURROW_OS_LINUX)
+static uint32_t nt_mptcp;
+#endif
+
+/* initMPTCPavailable. An error other than the two that say the protocol is
+ * not there counts as there, since it may be later. SOL_MPTCP came in
+ * Linux 5.16. */
+static uint32_t nt_mptcp_probe(void) {
+#if defined(BURROW_OS_LINUX)
+    uint32_t bits = burrow__atomic_load_acquire_u32(&nt_mptcp);
+    if (bits & NT_MPTCP_PROBED)
+        return bits;
+    bits = NT_MPTCP_PROBED;
+    int32_t family = burrow__net_supports_ipv4() ? PAL_AF_INET : PAL_AF_INET6;
+    PalErrno pe = PAL_OK;
+    int64_t s = pal_socket(family, PAL_SOCK_STREAM, PAL_IPPROTO_MPTCP, &pe);
+    if (s >= 0)
+        (void)pal_socket_close(s, NULL);
+    if (s >= 0 || (pe != PAL_EPROTONOSUPPORT && pe != PAL_EINVAL)) {
+        bits |= NT_MPTCP_AVAILABLE;
+        if (pal_kernel_version_ge(5, 16))
+            bits |= NT_MPTCP_SOL;
+    }
+    burrow__atomic_store_release_u32(&nt_mptcp, bits);
+    return bits;
+#else
+    return NT_MPTCP_PROBED;
+#endif
+}
+
+static bool nt_mptcp_from_godebug(const char *on1, const char *on2) {
+    Str v = BURROW_STR_EMPTY;
+    if (!burrow__net_godebug("multipathtcp", &v))
+        return false;
+    return str_eq(v, str_from_cstr(on1)) || str_eq(v, str_from_cstr(on2));
+}
+
+bool burrow__net_mptcp_dial(uint8_t status) {
+    if (status == 1)
+        return true;
+    if (status == 2)
+        return false;
+    /* MPTCP forced on with GODEBUG=multipathtcp=1, or on dialers only. */
+    return nt_mptcp_from_godebug("1", "3");
+}
+
+bool burrow__net_mptcp_listen(uint8_t status) {
+    if (status == 1)
+        return true;
+    if (status == 2)
+        return false;
+    /* Off with GODEBUG=multipathtcp=0, or on dialers only. */
+    return !nt_mptcp_from_godebug("0", "3");
+}
+
+/* isUsingMultipathTCP. Go asks through the poll FD, and a closed one fails
+ * with ErrNetClosing, which is not one of the fallback errors, so a closed
+ * connection says yes on a 5.16 kernel and no before it, and this keeps
+ * that. */
+static bool nt_using_mptcp(burrow__NetFD *fd) {
+    uint32_t bits = nt_mptcp_probe();
+    if ((bits & NT_MPTCP_AVAILABLE) == 0)
+        return false;
+    bool sol = (bits & NT_MPTCP_SOL) != 0;
+    if (BURROW_FAILED(burrow__pfd_incref(&fd->pfd)))
+        return sol;
+    bool on = pal_mptcp_in_use(fd->pfd.sysfd, sol);
+    (void)burrow__pfd_decref(&fd->pfd);
+    return on;
 }
 
 /* selfConnect: a connection whose two ends are the same address and port,
@@ -289,6 +369,15 @@ Error net_tcp_conn_set_keep_alive_config(NetTCPConn *c, NetKeepAliveConfig confi
     return nt_set_op(c, e);
 }
 
+bool net_tcp_conn_multipath_tcp(NetTCPConn *c, Error *err) {
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return false;
+    }
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return nt_using_mptcp(&c->c.fd);
+}
+
 /* newTCPConn: Nagle off, and keep-alives on unless the Dialer or the
  * ListenConfig says otherwise. A KeepAliveConfig that is not enabled gives
  * way to KeepAlive, whose zero is the defaults and which turns keep-alives
@@ -316,6 +405,24 @@ static void nt_unlock(const burrow__NetSysOpts *o) {
         sync_mutex_unlock(o->alloc_mu);
 }
 
+/* doDialTCPProto: the dial, tried again when the system hands out the very
+ * port it dials, or says it has no address to give, as Go does. */
+static Error nt_do_dial(NetTCPConn *c, const burrow__NetSysOpts *o, Str net,
+                        const NetTCPAddr *laddr, const NetTCPAddr *raddr,
+                        int32_t proto) {
+    Error e = BURROW_NO_ERROR;
+    for (int i = 0;; i++) {
+        e = nt_internet_socket(&c->c.fd, o, net, laddr, raddr, proto, false);
+        if (i >= 2 || (laddr != NULL && laddr->port != 0))
+            break;
+        if (BURROW_OK(e) ? !nt_self_connect(&c->c.fd) : !nt_spurious_enotavail(e))
+            break;
+        if (BURROW_OK(e))
+            (void)burrow__netfd_close(&c->c.fd);
+    }
+    return e;
+}
+
 NetTCPConn *burrow__net_sys_dial_tcp(Alloc *a, const burrow__NetSysOpts *o, Str network,
                                      const NetTCPAddr *laddr, const NetTCPAddr *raddr,
                                      Error *err) {
@@ -333,16 +440,14 @@ NetTCPConn *burrow__net_sys_dial_tcp(Alloc *a, const burrow__NetSysOpts *o, Str 
         return NULL;
     }
     c->c.alloc = a;
-    Error e = BURROW_NO_ERROR;
-    for (int i = 0;; i++) {
-        e = nt_internet_socket(&c->c.fd, o, net, laddr, raddr, false);
-        if (i >= 2 || (laddr != NULL && laddr->port != 0))
-            break;
-        if (BURROW_OK(e) ? !nt_self_connect(&c->c.fd) : !nt_spurious_enotavail(e))
-            break;
-        if (BURROW_OK(e))
-            (void)burrow__netfd_close(&c->c.fd);
-    }
+    /* dialMPTCP, which falls back to plain TCP on any error at all, since
+     * MPTCP can be turned off or blocked in more ways than one. */
+    bool mptcp = o != NULL ? o->mptcp : burrow__net_mptcp_dial(0);
+    Error e = burrow__net_einval();
+    if (mptcp && (nt_mptcp_probe() & NT_MPTCP_AVAILABLE) != 0)
+        e = nt_do_dial(c, o, net, laddr, raddr, PAL_IPPROTO_MPTCP);
+    if (BURROW_FAILED(e))
+        e = nt_do_dial(c, o, net, laddr, raddr, 0);
     if (BURROW_FAILED(e)) {
         nt_lock(o);
         mem_free(a, c, sizeof(NetTCPConn), _Alignof(NetTCPConn));
@@ -764,7 +869,13 @@ NetTCPListener *burrow__net_sys_listen_tcp(Alloc *a, const burrow__NetSysOpts *o
         return NULL;
     }
     l->alloc = a;
-    Error e = nt_internet_socket(&l->fd, o, net, laddr, NULL, true);
+    /* listenMPTCP, falling back as the dial does. */
+    bool mptcp = o != NULL ? o->mptcp : burrow__net_mptcp_listen(0);
+    Error e = burrow__net_einval();
+    if (mptcp && (nt_mptcp_probe() & NT_MPTCP_AVAILABLE) != 0)
+        e = nt_internet_socket(&l->fd, o, net, laddr, NULL, PAL_IPPROTO_MPTCP, true);
+    if (BURROW_FAILED(e))
+        e = nt_internet_socket(&l->fd, o, net, laddr, NULL, 0, true);
     if (BURROW_FAILED(e)) {
         mem_free(a, l, sizeof(NetTCPListener), _Alignof(NetTCPListener));
         BURROW_OUT(err, e);

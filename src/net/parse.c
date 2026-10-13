@@ -154,6 +154,41 @@ bool burrow__net_dtoi(Str s, Int *n, Int *used) {
     return i != 0;
 }
 
+bool burrow__net_xtoi(Str s, Int *n, Int *used) {
+    Int v = 0;
+    Int i = 0;
+    for (; i < s.len; i++) {
+        Byte c = s.p[i];
+        if (c >= '0' && c <= '9')
+            v = v * 16 + (c - '0');
+        else if (c >= 'a' && c <= 'f')
+            v = v * 16 + (c - 'a') + 10;
+        else if (c >= 'A' && c <= 'F')
+            v = v * 16 + (c - 'A') + 10;
+        else
+            break;
+        if (v >= BURROW__NET_BIG) {
+            *n = 0;
+            *used = i;
+            return false;
+        }
+    }
+    *n = i == 0 ? 0 : v;
+    *used = i;
+    return i != 0;
+}
+
+bool burrow__net_xtoi2(Str s, Byte e, Byte *b) {
+    *b = 0;
+    if (s.len > 2 && s.p[2] != e)
+        return false;
+    Int n = 0;
+    Int used = 0;
+    bool ok = burrow__net_xtoi(str_from_bytes(s.p, s.len < 2 ? s.len : 2), &n, &used);
+    *b = (Byte)n;
+    return ok && used == 2;
+}
+
 bool burrow__net_has_upper_case(Str s) {
     for (Int i = 0; i < s.len; i++)
         if (s.p[i] >= 'A' && s.p[i] <= 'Z')

@@ -368,66 +368,6 @@ static Str du_split_host_zone(Str host, Str *zone) {
     return host;
 }
 
-/* What a Dialer would do with a name server's address, which resolv.conf
- * only ever gives as an IP address and a port. */
-static NetConn du_dial(Alloc *a, Context ctx, Str network, Str server, Time deadline,
-                       Error *err) {
-    NetConn none = {NULL, NULL};
-    NetAddr nil_addr = {NULL, NULL};
-    Str port;
-    Error e = BURROW_NO_ERROR;
-    Str host = net_split_host_port(server, &port, &e);
-    if (BURROW_FAILED(e)) {
-        *err = burrow__net_op_error(BURROW_S("dial"), network, nil_addr, nil_addr, e);
-        return none;
-    }
-    Str zone;
-    host = du_split_host_zone(host, &zone);
-    NetIP ip = net_parse_ip(a, host);
-    Int pn = 0, used = 0;
-    if (ip.p == NULL) {
-        *err = burrow__net_op_error(BURROW_S("dial"), network, nil_addr, nil_addr,
-                                    burrow__net_err_no_suitable_address);
-        return none;
-    }
-    if (!burrow__net_dtoi(port, &pn, &used) || used != port.len || pn > 0xffff) {
-        *err = burrow__net_op_error(BURROW_S("dial"), network, nil_addr, nil_addr,
-                                    burrow__net_err_unknown_port);
-        return none;
-    }
-    bool udp = str_eq(network, BURROW_S("udp"));
-    NetUDPAddr ua = {ip, pn, zone};
-    NetTCPAddr ta = {ip, pn, zone};
-    /* dialSerial looks at the context before each address. */
-    Error ce = context_err(ctx);
-    if (BURROW_FAILED(ce)) {
-        NetAddr ra = udp ? net_udp_addr_as_addr(&ua) : net_tcp_addr_as_addr(&ta);
-        *err = burrow__net_op_error(BURROW_S("dial"), network, nil_addr, ra,
-                                    burrow__net_map_err(ce));
-        return none;
-    }
-    if (udp) {
-        NetUDPConn *c = net_dial_udp(a, network, NULL, &ua, err);
-        return c != NULL ? net_udp_conn_as_conn(c) : none;
-    }
-    NetTCPConn *c = burrow__net_dial_tcp_deadline(a, network, NULL, &ta, deadline, err);
-    return c != NULL ? net_tcp_conn_as_conn(c) : none;
-}
-
-/* Close c, and give back what this package made for it, which the free
- * functions do in one. */
-static void du_close(NetConn c) {
-    NetUDPConn *uc = net_conn_as_udp_conn(c);
-    NetTCPConn *tc = net_conn_as_tcp_conn(c);
-    if (uc != NULL) {
-        net_udp_conn_free(uc);
-    } else if (tc != NULL) {
-        net_tcp_conn_free(tc);
-    } else {
-        (void)c.vt->closer.close(c.data);
-    }
-}
-
 /* One try over one network. ma has the answer, and sa the rest. */
 static Error du_round_trip(NetResolver *r, Alloc *sa, Alloc *ma, Context ctx,
                            Str network, Str server, Duration timeout, uint16_t id,
@@ -444,17 +384,17 @@ static Error du_round_trip(NetResolver *r, Alloc *sa, Alloc *ma, Context ctx,
     Error err = BURROW_NO_ERROR;
     NetConn c;
     bool packet = false;
-    if (r->dial.f != NULL) {
-        ContextCancelFunc cancel;
-        Context dctx = context_with_deadline(sa, ctx, when, &cancel);
-        c = BURROW_CALLF(r->dial, sa, dctx.vt != NULL ? dctx : ctx, network, server,
-                         &packet, &err);
-        BURROW_CALLF0(cancel);
-        if (dctx.vt != NULL)
-            context_release(dctx);
-    } else {
-        c = du_dial(sa, ctx, network, server, deadline, &err);
-    }
+    ContextCancelFunc cancel;
+    Context dctx = context_with_deadline(sa, ctx, when, &cancel);
+    if (dctx.vt == NULL)
+        return burrow_err_out_of_memory;
+    /* Resolver.dial: the Resolver's Dial, or a zero Dialer's. */
+    if (r->dial.f != NULL)
+        c = BURROW_CALLF(r->dial, sa, dctx, network, server, &packet, &err);
+    else
+        c = net_dialer_dial_context(NULL, sa, dctx, network, server, &err);
+    BURROW_CALLF0(cancel);
+    context_release(dctx);
     if (BURROW_FAILED(err))
         return burrow__net_map_err(err);
     if (net_conn_as_udp_conn(c) != NULL)
@@ -464,7 +404,7 @@ static Error du_round_trip(NetResolver *r, Alloc *sa, Alloc *ma, Context ctx,
         err = du_packet_round_trip(c, ma, id, q, udp_req, p, h);
     else
         err = du_stream_round_trip(c, ma, id, q, tcp_req, p, h);
-    du_close(c);
+    net_conn_free(c);
     if (BURROW_FAILED(err))
         return burrow__net_map_err(err);
     return BURROW_NO_ERROR;

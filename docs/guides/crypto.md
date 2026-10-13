@@ -556,6 +556,101 @@ printf("%d %d\n", (int)priv.len,
        big_int_cmp(x, gx) == 0 && big_int_cmp(y, gy) == 0);
 ```
 
+## crypto/ecdsa
+
+`burrow/crypto/ecdsa.h` is the Elliptic Curve Digital Signature Algorithm of FIPS 186-5 over P-224, P-256, P-384 and P-521. A key is made for a curve, signs a digest, which is the hash of the message rather than the message, and the public half checks the signature. `ecdsa_sign_asn1` gives the DER encoding X.509 and TLS use:
+
+<!-- example: ../examples/crypto/ecdsa.c#sign -->
+```c
+Error err = BURROW_NO_ERROR;
+EcdsaPrivateKey *priv =
+    ecdsa_generate_key(a, elliptic_p256(), (IoReader){NULL, NULL}, &err);
+if (BURROW_FAILED(err))
+    return;
+
+Sha256Sum256Ret hash = sha256_sum256(text("hello, world"));
+Slice h = slice_from(hash.a, 32, 32, TYPE_BYTE);
+
+Slice sig = ecdsa_sign_asn1(a, (IoReader){NULL, NULL}, priv, h, &err);
+if (BURROW_FAILED(err))
+    return;
+
+bool valid = ecdsa_verify_asn1(&priv->public_key, h, sig);
+printf("signature verified: %s\n", valid ? "true" : "false");
+```
+
+The random source is ignored for the four NIST curves, as it is in Go from 1.26, and the bytes come from the system's generator, so a nil `IoReader` is the usual thing to pass. The nonce for each signature comes out of an HMAC_DRBG seeded from those bytes, the private key and the digest, so a broken generator does not give the key away. Two signatures of the same digest still differ. When a signature has to be the same every time, `ecdsa_private_key_sign` with a nil reader and the hash named in the options gives the deterministic signature of RFC 6979. This is the P-256 example of its appendix A.2.5:
+
+<!-- example: ../examples/crypto/ecdsa.c#deterministic -->
+```c
+// The P-256 key of RFC 6979, appendix A.2.5.
+Error err = BURROW_NO_ERROR;
+EcdsaPrivateKey *priv = ecdsa_parse_raw_private_key(
+    a, elliptic_p256(),
+    unhex(a, "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"),
+    &err);
+if (BURROW_FAILED(err))
+    return;
+
+Sha256Sum256Ret hash = sha256_sum256(text("sample"));
+CryptoHash sha256 = CRYPTO_SHA256;
+Slice sig = ecdsa_private_key_sign(priv, a, (IoReader){NULL, NULL},
+                                   slice_from(hash.a, 32, 32, TYPE_BYTE),
+                                   crypto_hash_as_signer_opts(&sha256), &err);
+if (BURROW_FAILED(err))
+    return;
+print_hex(a, sig);
+```
+
+`ecdsa_public_key_bytes` gives the uncompressed point and `ecdsa_private_key_bytes` the scalar, as long as the curve's order. `ecdsa_parse_uncompressed_public_key` and `ecdsa_parse_raw_private_key` take them back and check them, and the `_equal` functions compare keys in constant time:
+
+<!-- example: ../examples/crypto/ecdsa.c#encoding -->
+```c
+Error err = BURROW_NO_ERROR;
+EcdsaPrivateKey *priv =
+    ecdsa_generate_key(a, elliptic_p384(), (IoReader){NULL, NULL}, &err);
+if (BURROW_FAILED(err))
+    return;
+
+Slice pub_bytes = ecdsa_public_key_bytes(&priv->public_key, a, &err);
+Slice priv_bytes = ecdsa_private_key_bytes(priv, a, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%d %d\n", (int)pub_bytes.len, (int)priv_bytes.len);
+
+EcdsaPublicKey *pub =
+    ecdsa_parse_uncompressed_public_key(a, elliptic_p384(), pub_bytes, &err);
+EcdsaPrivateKey *back =
+    ecdsa_parse_raw_private_key(a, elliptic_p384(), priv_bytes, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%d %d\n",
+       ecdsa_public_key_equal(&priv->public_key,
+                              BURROW_ANY(TYPE_ECDSA_PUBLIC_KEY, pub)),
+       ecdsa_private_key_equal(priv, BURROW_ANY(TYPE_ECDSA_PRIVATE_KEY, back)));
+```
+
+Keys and signatures come from the allocator they are made with, and `ecdsa_private_key_free` and `ecdsa_public_key_free` give a key back. `ecdsa_sign` and `ecdsa_verify` are the older interface with r and s as `BigInt` values, and `ecdsa_private_key_signer` makes a key a `CryptoSigner`. An empty digest, a scalar of the wrong length and an encoding that is not a point are errors with Go's messages:
+
+<!-- example: ../examples/crypto/ecdsa.c#errors -->
+```c
+Error err = BURROW_NO_ERROR;
+EcdsaPrivateKey *priv =
+    ecdsa_generate_key(a, elliptic_p256(), (IoReader){NULL, NULL}, &err);
+if (BURROW_FAILED(err))
+    return;
+ecdsa_sign_asn1(a, (IoReader){NULL, NULL}, priv, (Slice){0}, &err);
+print_error(err);
+
+err = BURROW_NO_ERROR;
+ecdsa_parse_raw_private_key(a, elliptic_p256(), unhex(a, "0102"), &err);
+print_error(err);
+
+err = BURROW_NO_ERROR;
+ecdsa_parse_uncompressed_public_key(a, elliptic_p256(), unhex(a, "00"), &err);
+print_error(err);
+```
+
 ## crypto/x509/pkix
 
 `burrow/crypto/x509/pkix.h` has the ASN.1 structures that certificates, CRLs and OCSP share: distinguished names, algorithm identifiers, extensions and the old CRL types. Each one has a type descriptor carrying Go's asn1 struct tags, so `encoding/asn1` reads and writes them with no extra code. A `PkixName` is the friendly form of a name, and `pkix_name_to_rdn_sequence` turns it into the sequence of RDNs that goes on the wire:

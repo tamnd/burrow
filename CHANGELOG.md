@@ -4,6 +4,35 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API, and none of it has been through a security review yet.
 
+## v0.2.3 (2026-10-13)
+
+The rest of syscall, sockets and most of net, the first crypto packages, the start of net/http, the go/* packages up to go/build, the debug/* readers, and log with log/slog.
+
+### Added
+
+- `syscall`: the hand-written Unix and Linux calls (#341), the socket calls, control messages, netlink and LSF (#342), `ForkExec`, `StartProcess`, `Exec` and `SysProcAttr` on Unix (#343), the hand-written calls for macOS and FreeBSD (#344) and routing messages, BPF and `Conn` for the BSDs (#345), and on Windows the hand-written calls (#346) and `StartProcess` with the rest of exec (#347).
+- wasip1 under wasmtime as a target (#348), with a poll(2) netpoll backend for it and Cosmopolitan (#349), and the FreeBSD suite run every night (#351).
+- `crypto/subtle` with data independent timing on arm64 (#352), `crypto/hmac`, `crypto/hkdf` and `crypto/pbkdf2` (#353), `crypto/rand` (#357), `crypto/aes` and `crypto/cipher` (#359), `crypto/des` and `crypto/rc4` (#363), the top level `crypto` package (#364), `crypto/ed25519` (#365), `crypto/ecdh` (#366), `crypto/elliptic` (#367), `crypto/fips140` (#368), the FIPS `bigmod` (#376), `crypto/x509/pkix` (#377), `cryptobyte` from golang.org/x/crypto (#398) and `crypto/ecdsa` (#400).
+- `net`: `IP`, `IPMask` and `IPNet` (#361), `Conn`, `Addr`, `Listener`, `OpError` and `Pipe` (#371), sockets in the platform layer (#373), the poll FD (#378), TCP (#383), UDP (#384) and Unix sockets (#385), the resolver config, hosts file and `DNSError` (#391), and `Resolver` with the Lookup functions and the DNS client (#395).
+- `net/mail` (#372).
+- From golang.org/x/net: `idna` (#374), `dnsmessage` (#380), `hpack` (#386) and `httpguts` (#387).
+- `net/http`: the structured field values parser (#388) and the HTTP/2 frame layer (#389), then `Header`, the status texts, `DetectContentType` and `Protocols` (#397), the chunked transfer coding (#422), cookies (#423), and reading requests and responses (#429).
+- `log` (#396), `log/slog` (#447), `testing/slogtest`, which slog's JSON and text handlers pass (#448), and `testing/iotest`'s `NewReadLogger` and `NewWriteLogger` (#449).
+- `go/token` (#426), `go/scanner` (#427), `go/version` (#428), `go/constant` (#430), `go/ast` (#431), `go/build/constraint` (#432), `go/parser` (#434), `go/doc/comment` (#435), `go/printer` (#436), `go/format` (#437), `go/doc` (#438) and `go/build` (#439).
+- `debug/elf` and `debug/dwarf` (#440), `debug/macho` (#441), `debug/pe` (#442), `debug/plan9obj` (#443), `debug/gosym` (#444), `internal/xcoff` (#445), and `debug/buildinfo` with the `BuildInfo` half of `runtime/debug` (#446).
+
+### Changed
+
+- The `regexp` functions that return slices say what their elements are (#433).
+- Releases are published as full releases, old tags can be backfilled, and the release archives build without `-Werror` (#375, #379, #390).
+- macos-x64-clang gets 35 minutes in CI, and container images come from ECR Public (#425).
+
+### Fixed
+
+- `runtime`: a goroutine ends with the final switch so ASan frees its fake stack (#360), a select woken by a close leaves the channel's queue (#369), and a fired deadline is waited for and channel timers are dropped under the send lock (#421).
+- `net`: the `CIDRMask` size check is widened before it multiplies (#362), and the socket tests run again everywhere, with error identity kept through `error_retain` (#392, #393).
+- The FreeBSD build and tests (#394), the wasip1 build without `Utime` (#356), the CPU feature test on DIT (#355), the bigmod masks under MSVC (#381), `check-amalg` for opt-in packages (#382), and fixes to hpack and bufio from the server runs (#399).
+
 ## v0.2.2 (2026-10-05)
 
 More of P2: the rest of os, os/exec, os/signal, os/user, embed, time/tzdata, and syscall's constants, types and generated functions.

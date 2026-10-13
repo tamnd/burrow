@@ -1666,7 +1666,7 @@ static Error gb_import_go(BuildContext *ctxt, Alloc *a, BuildPackage *p, Str pat
             Error oerr = BURROW_NO_ERROR;
             IoReadCloser f =
                 gb_open_file(ctxt, a, gb_join2(ctxt, a, parent, GB_S("go.mod")), &oerr);
-            if (BURROW_OK(oerr)) {
+            if (BURROW_OK(oerr) && f.vt != NULL) {
                 Byte buf[100];
                 Error rerr = BURROW_NO_ERROR;
                 IoReader r = io_read_closer_as_io_reader(f);

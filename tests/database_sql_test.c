@@ -1,5 +1,5 @@
 /* database/sql against the fake driver in database_sql_fakedb.h, from Go's
- * sql_test.go.
+ * sql_test.go, convert_test.go and the one test in fakedb_test.go.
  *
  * Each test that Go runs through testDatabase runs here three times, once for
  * each of the connectors: basic, which has only the bare minimum of a driver
@@ -20,6 +20,7 @@
 
 #include "burrow/math/rand.h"
 #include "burrow/proc.h"
+#include "burrow/slices.h"
 #include "burrow/synctest.h"
 #include "burrow/testing.h"
 #include "burrow/uuid.h"
@@ -7739,6 +7740,28 @@ static void TestConvertAssignNoContext(TestingT *t) {
         testing_t_errorf_v(t, "after ConvertAssign: got %v, want %v", got, want);
 }
 
+/* ------------------------------------------------------------ fakedb_test.go */
+
+/* Dummy, a driver with no methods. Registering it only needs it to be there. */
+static const DriverVT td_dummy_driver_vt = {NULL, NULL, NULL};
+
+static void TestDrivers(TestingT *t) {
+    /* So that register_test_driver does not register "test" a second time. */
+    register_test_driver();
+    burrow__sql_unregister_all_drivers();
+    sql_register(BURROW_S("test"), fdriver);
+    sql_register(BURROW_S("invalid"), (Driver){&td_dummy_driver_vt, NULL});
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Slice all = sql_drivers(arena_allocator(&ar));
+    Str test = BURROW_S("test"), invalid = BURROW_S("invalid");
+    if (all.len < 2 || !slices_is_sorted(all) || !slices_contains(all, &test) ||
+        !slices_contains(all, &invalid))
+        testing_t_errorf_v(
+            t, "Drivers = %v, want sorted list with at least [invalid, test]", all);
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestOpenDB)                                                                      \
     X(TestQuery)                                                                       \
@@ -7859,6 +7882,7 @@ static void TestConvertAssignNoContext(TestingT *t) {
     X(TestUserDefinedBytes)                                                            \
     X(TestDriverArgs)                                                                  \
     X(TestDecimal)                                                                     \
-    X(TestConvertAssignNoContext)
+    X(TestConvertAssignNoContext)                                                      \
+    X(TestDrivers)
 
 TESTING_MAIN(TESTS)

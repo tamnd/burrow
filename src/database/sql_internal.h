@@ -63,6 +63,9 @@ BURROW_OWNS(dest) Error burrow__sql_convert_assign_rows(Alloc *a, Any dest, Any 
 /* The driver registered under name, from the registry sql_register fills. */
 Driver burrow__sql_driver_lookup(Str name, bool *ok);
 
+/* unregisterAllDrivers, for TestDrivers. */
+void burrow__sql_unregister_all_drivers(void);
+
 /* driverArgsConnLocked. Turns a query's arguments, a Slice of Any, into a
  * Slice of DriverNamedValue made in a, the way the driver's checks and its
  * statement's column converters say. si is the statement, or NULL when there

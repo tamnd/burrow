@@ -91,6 +91,17 @@ void sql_register(Str name, Driver driver) {
     sync_rw_mutex_unlock(&sql_drivers_mu);
 }
 
+void burrow__sql_unregister_all_drivers(void) {
+    sync_rw_mutex_lock(&sql_drivers_mu);
+    for (Int i = 0; i < sql_drivers_len; i++) {
+        Str name = sql_drivers_list[i].name;
+        if (name.len > 0)
+            mem_free(heap_allocator(), (void *)(uintptr_t)name.p, (size_t)name.len, 1);
+    }
+    sql_drivers_len = 0;
+    sync_rw_mutex_unlock(&sql_drivers_mu);
+}
+
 Driver burrow__sql_driver_lookup(Str name, bool *ok) {
     Driver d = {NULL, NULL};
     *ok = false;

@@ -98,6 +98,7 @@
 #include "burrow/func.h"
 #include "burrow/go/scanner.h"
 #include "burrow/go/token.h"
+#include "burrow/go/version.h"
 #include "burrow/hash.h"
 #include "burrow/hash/adler32.h"
 #include "burrow/hash/crc32.h"

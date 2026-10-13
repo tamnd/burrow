@@ -779,7 +779,7 @@ BURROW_BORROWS(ret, mux) HttpHandler http_serve_mux_as_handler(HttpServeMux *mux
 typedef struct HttpFileVT {
     IoReadCloserVT read_closer;
     int64_t (*seek)(void *self, int64_t offset, int whence, Error *err);
-    Slice (*readdir)(void *self, Alloc *a, Int count, Error *err);   /* of FsFileInfo */
+    Slice (*readdir)(void *self, Alloc *a, Int count, Error *err); /* of FsFileInfo */
     FsFileInfo (*stat)(void *self, Alloc *a, Error *err);
     Slice (*read_dir)(void *self, Alloc *a, Int count, Error *err); /* of FsDirEntry */
 } HttpFileVT;

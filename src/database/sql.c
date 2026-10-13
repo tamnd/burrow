@@ -3507,6 +3507,14 @@ DriverRows burrow__sql_rows_driver(SqlRows *rs) {
     return rs->rowsi;
 }
 
+DriverConnector burrow__sql_db_connector(SqlDB *db) {
+    return db->connector;
+}
+
+bool burrow__sql_rows_scan_hold(SqlRows *rs) {
+    return rs->scan_hold;
+}
+
 bool burrow__sql_tx_is_done(SqlTx *tx) {
     return sync_atomic_bool_load(&tx->done);
 }

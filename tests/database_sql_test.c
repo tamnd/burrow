@@ -4760,6 +4760,895 @@ static void TestMaxIdleTime(TestingT *t) {
     }
 }
 
+/* ------------------------------------------------------- driver variants */
+
+/* Closes db and waits for its connections to finish closing before freeing
+ * it, for the tests that open a DB by driver name and defer db.Close. */
+static void td_close_free(SqlDB *db) {
+    (void)sql_db_close(db);
+    synctest_wait();
+    sql_db_free(db);
+}
+
+/* nvcDriver and nvcConn. The conn is the fake one, with CheckNamedValue added
+ * by its vtable. */
+typedef struct DecimalInt {
+    Int value;
+} DecimalInt;
+extern const Type burrow_type_DecimalInt;
+#define DECIMAL_INT_FIELDS(F, T) F(T, Int, value, "")
+BURROW_STRUCT_DEFINE(DecimalInt, DECIMAL_INT_FIELDS);
+
+/* Go's doNotInclude is struct{}. A descriptor needs a field, so this has one
+ * nobody reads. */
+typedef struct DoNotInclude {
+    Byte unused;
+} DoNotInclude;
+extern const Type burrow_type_DoNotInclude;
+#define DO_NOT_INCLUDE_FIELDS(F, T) F(T, Byte, unused, "")
+BURROW_STRUCT_DEFINE(DoNotInclude, DO_NOT_INCLUDE_FIELDS);
+
+BURROW_SLICE_TYPE(Int64Slice, int64_t);
+
+static Str td_out_string = BURROW_S_INIT("OUT:*string");
+
+static Error td_nvc_check(void *self, Alloc *a, DriverNamedValue *nv) {
+    (void)self;
+    (void)a;
+    const Type *t = nv->value.t;
+    if (t == TYPE_OF(SqlOut)) {
+        SqlOut *o = nv->value.data;
+        if (o->dest.t != TYPE_STRING)
+            return fmt_errorf_v("unknown NameValueCheck OUTPUT type");
+        *(Str *)o->dest.data = BURROW_S("from-server");
+        nv->value = (Any){TYPE_STRING, &td_out_string};
+        return BURROW_NO_ERROR;
+    }
+    if (t == TYPE_OF(DecimalInt) || t == TYPE_OF(Int64Slice))
+        return BURROW_NO_ERROR;
+    if (t == TYPE_OF(DoNotInclude))
+        return driver_err_remove_argument;
+    return driver_err_skip;
+}
+
+static Error td_nvc_skip_check(void *self, Alloc *a, DriverNamedValue *nv) {
+    (void)self;
+    (void)a;
+    (void)nv;
+    return driver_err_skip;
+}
+
+static const DriverConnVT td_nvc_conn_vt = {
+    .close = fdb_conn_close,
+    .begin = fdb_conn_begin,
+    .prepare_context = fdb_conn_prepare_context,
+    .exec_context = fdb_conn_exec_context,
+    .query_context = fdb_conn_query_context,
+    .reset_session = fdb_conn_reset_session,
+    .is_valid = fdb_conn_is_valid,
+    .check_named_value = td_nvc_check,
+};
+
+static const DriverConnVT td_nvc_skip_conn_vt = {
+    .close = fdb_conn_close,
+    .begin = fdb_conn_begin,
+    .prepare_context = fdb_conn_prepare_context,
+    .exec_context = fdb_conn_exec_context,
+    .query_context = fdb_conn_query_context,
+    .reset_session = fdb_conn_reset_session,
+    .is_valid = fdb_conn_is_valid,
+    .check_named_value = td_nvc_skip_check,
+};
+
+typedef struct TdNvcDriver {
+    bool skip_named_value_check;
+} TdNvcDriver;
+
+static DriverConn td_nvc_open(void *self, Str name, Error *err) {
+    const TdNvcDriver *d = self;
+    FakeConn *c = fdb_open(name, err);
+    if (c == NULL)
+        return (DriverConn){NULL, NULL};
+    c->db->allow_any = true;
+    return (DriverConn){
+        d->skip_named_value_check ? &td_nvc_skip_conn_vt : &td_nvc_conn_vt, c};
+}
+
+static const DriverVT td_nvc_driver_vt = {NULL, td_nvc_open, NULL};
+static TdNvcDriver td_nvc = {false}, td_nvc_skip = {true};
+
+static void testNamedValueChecker(TestingT *t) {
+    sql_register(BURROW_S("NamedValueCheck"), (Driver){&td_nvc_driver_vt, &td_nvc});
+    Error err = BURROW_NO_ERROR;
+    SqlDB *db = sql_open(BURROW_S("NamedValueCheck"), BURROW_STR_EMPTY, &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+
+    Context ctx = testing_t_context(t);
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    (void)sql_db_exec_context(db, a, ctx, BURROW_S("WIPE"), NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "exec wipe %v", err);
+        goto out;
+    }
+
+    (void)sql_db_exec_context(
+        db, a, ctx, BURROW_S("CREATE|keys|dec1=any,str1=string,out1=string,array1=any"),
+        NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "exec create %v", err);
+        goto out;
+    }
+
+    Str o1 = BURROW_STR_EMPTY;
+    DecimalInt dec = {123};
+    static int64_t array[] = {42, 128, 707};
+    Int64Slice arr = slice_from(array, 3, 3, TYPE_OF(int64_t));
+    DoNotInclude dni = {0};
+    SqlOut out = {{TYPE_STRING, &o1}, false};
+    SqlNamedArg named_a = sql_named(BURROW_S("A"), (Any){TYPE_OF(DecimalInt), &dec});
+    SqlNamedArg named_o1 = sql_named(BURROW_S("O1"), (Any){TYPE_OF(SqlOut), &out});
+    (void)sql_db_exec_context(
+        db, a, ctx, BURROW_S("INSERT|keys|dec1=?A,str1=?,out1=?O1,array1=?"),
+        ARGS(sql_named_any(&named_a), BURROW_S("hello"), sql_named_any(&named_o1),
+             ((Any){TYPE_OF(Int64Slice), &arr}), ((Any){TYPE_OF(DoNotInclude), &dni})),
+        &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "exec insert %v", err);
+        goto out;
+    }
+
+    Str str1 = BURROW_STR_EMPTY;
+    DecimalInt dec1 = {0};
+    Int64Slice arr1 = slice_nil(TYPE_OF(int64_t));
+    SqlRow row = sql_db_query_row_context(
+        db, ctx, BURROW_S("SELECT|keys|dec1,str1,array1|"), NO_ARGS);
+    err = sql_row_scan_v(&row, a, ((Any){TYPE_OF(DecimalInt), &dec1}), &str1,
+                         ((Any){TYPE_OF(Int64Slice), &arr1}));
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "select %v", err);
+        goto out;
+    }
+
+    if (!str_eq(o1, BURROW_S("from-server")))
+        testing_t_errorf_v(t, "got %q wanted %q for index %d", o1,
+                           BURROW_S("from-server"), 0);
+    if (dec1.value != 123)
+        testing_t_errorf_v(t,
+                           "got decimalInt{value:%d} wanted decimalInt{value:123} for "
+                           "index %d",
+                           dec1.value, 1);
+    if (!str_eq(str1, BURROW_S("hello")))
+        testing_t_errorf_v(t, "got %q wanted %q for index %d", str1, BURROW_S("hello"),
+                           2);
+    bool same = arr1.len == 3;
+    for (Int i = 0; same && i < 3; i++)
+        same = ((const int64_t *)arr1.p)[i] == array[i];
+    if (!same)
+        testing_t_errorf_v(t, "got %v wanted []int64{42, 128, 707} for index %d", arr1,
+                           3);
+
+out:
+    arena_free(&ar);
+    td_close_free(db);
+}
+
+static void TestNamedValueChecker(TestingT *t) {
+    synctest_test(t, testNamedValueChecker);
+}
+
+static void testNamedValueCheckerSkip(TestingT *t) {
+    sql_register(BURROW_S("NamedValueCheckSkip"),
+                 (Driver){&td_nvc_driver_vt, &td_nvc_skip});
+    Error err = BURROW_NO_ERROR;
+    SqlDB *db = sql_open(BURROW_S("NamedValueCheckSkip"), BURROW_STR_EMPTY, &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+
+    Context ctx = testing_t_context(t);
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    (void)sql_db_exec_context(db, a, ctx, BURROW_S("WIPE"), NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "exec wipe %v", err);
+        goto out;
+    }
+
+    (void)sql_db_exec_context(db, a, ctx, BURROW_S("CREATE|keys|dec1=any"), NO_ARGS,
+                              &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "exec create %v", err);
+        goto out;
+    }
+
+    DecimalInt dec = {123};
+    SqlNamedArg named_a = sql_named(BURROW_S("A"), (Any){TYPE_OF(DecimalInt), &dec});
+    (void)sql_db_exec_context(db, a, ctx, BURROW_S("INSERT|keys|dec1=?A"),
+                              ARGS(sql_named_any(&named_a)), &err);
+    if (BURROW_OK(err))
+        testing_t_errorf_v(t, "expected error with bad argument, got %v", err);
+
+out:
+    arena_free(&ar);
+    td_close_free(db);
+}
+
+static void TestNamedValueCheckerSkip(TestingT *t) {
+    synctest_test(t, testNamedValueCheckerSkip);
+}
+
+/* fakeDriverCtx, a fake driver that is also a DriverContext. */
+static DriverConnector td_ctx_open_connector(void *self, Str name, Error *err) {
+    (void)self;
+    FakeConnector *fc = BURROW_NEW(heap_allocator(), FakeConnector);
+    if (fc == NULL) {
+        *err = burrow_err_out_of_memory;
+        return (DriverConnector){NULL, NULL};
+    }
+    *fc = (FakeConnector){name, NULL, false, FAKE_DEFAULT};
+    *err = BURROW_NO_ERROR;
+    return fdb_connector(fc);
+}
+
+static const DriverVT td_ctx_driver_vt = {NULL, fdb_driver_open, td_ctx_open_connector};
+
+static void testOpenConnector(TestingT *t) {
+    sql_register(BURROW_S("testctx"), (Driver){&td_ctx_driver_vt, NULL});
+    Error err = BURROW_NO_ERROR;
+    SqlDB *db = sql_open(BURROW_S("testctx"), BURROW_S("people"), &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+
+    DriverConnector c = burrow__sql_db_connector(db);
+    if (c.vt != &fdb_connector_vt) {
+        testing_t_errorf_v(t, "not using *fakeConnector");
+        td_close_free(db);
+        return;
+    }
+    FakeConnector *fc = c.data;
+
+    err = sql_db_close(db);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "%v", err);
+    else if (!fc->closed)
+        testing_t_errorf_v(t, "connector is not closed");
+    td_close_free(db);
+    mem_free(heap_allocator(), fc, sizeof *fc, _Alignof(FakeConnector));
+}
+
+static void TestOpenConnector(TestingT *t) {
+    synctest_test(t, testOpenConnector);
+}
+
+/* ctxOnlyDriver and ctxOnlyConn: a conn with QueryContext and ExecContext but
+ * not their older forms. */
+typedef struct TdCtxOnlyConn {
+    FakeConn *fc;
+    bool query_ctx_called;
+    bool exec_ctx_called;
+} TdCtxOnlyConn;
+
+static DriverTx td_ctx_only_begin(void *self, Error *err) {
+    return fdb_conn_begin(((TdCtxOnlyConn *)self)->fc, err);
+}
+
+static Error td_ctx_only_close(void *self) {
+    TdCtxOnlyConn *c = self;
+    Error err = fdb_conn_close(c->fc);
+    mem_free(heap_allocator(), c, sizeof *c, _Alignof(TdCtxOnlyConn));
+    return err;
+}
+
+/* Prepare is still part of the Conn interface, so while it isn't used must be
+ * defined for compatibility. */
+static DriverStmt td_ctx_only_prepare(void *self, Str query, Error *err) {
+    (void)self;
+    (void)query;
+    (void)err;
+    panic_str(BURROW_S("not used"));
+}
+
+static DriverStmt td_ctx_only_prepare_context(void *self, Context ctx, Str query,
+                                              Error *err) {
+    return fdb_conn_prepare_context(((TdCtxOnlyConn *)self)->fc, ctx, query, err);
+}
+
+static DriverRows td_ctx_only_query_context(void *self, Context ctx, Str query,
+                                            Slice args, Error *err) {
+    TdCtxOnlyConn *c = self;
+    c->query_ctx_called = true;
+    return fdb_conn_query_context(c->fc, ctx, query, args, err);
+}
+
+static DriverResult td_ctx_only_exec_context(void *self, Alloc *a, Context ctx,
+                                             Str query, Slice args, Error *err) {
+    TdCtxOnlyConn *c = self;
+    c->exec_ctx_called = true;
+    return fdb_conn_exec_context(c->fc, a, ctx, query, args, err);
+}
+
+static const DriverConnVT td_ctx_only_conn_vt = {
+    .prepare = td_ctx_only_prepare,
+    .close = td_ctx_only_close,
+    .begin = td_ctx_only_begin,
+    .prepare_context = td_ctx_only_prepare_context,
+    .exec_context = td_ctx_only_exec_context,
+    .query_context = td_ctx_only_query_context,
+};
+
+static DriverConn td_ctx_only_open(void *self, Str name, Error *err) {
+    (void)self;
+    FakeConn *fc = fdb_open(name, err);
+    if (fc == NULL)
+        return (DriverConn){NULL, NULL};
+    TdCtxOnlyConn *c = BURROW_NEW(heap_allocator(), TdCtxOnlyConn);
+    if (c == NULL)
+        panic_str(BURROW_S("out of memory"));
+    c->fc = fc;
+    return (DriverConn){&td_ctx_only_conn_vt, c};
+}
+
+static const DriverVT td_ctx_only_driver_vt = {NULL, td_ctx_only_open, NULL};
+
+/* TestQueryExecContextOnly ensures drivers only need to implement QueryContext
+ * and ExecContext methods. */
+static void testQueryExecContextOnly(TestingT *t) {
+    /* Ensure connection does not implement non-context interfaces. */
+    if (td_ctx_only_conn_vt.exec != NULL)
+        FATALF("ctxOnlyConn must not implement driver.Execer");
+    if (td_ctx_only_conn_vt.query != NULL)
+        FATALF("ctxOnlyConn must not implement driver.Queryer");
+
+    sql_register(BURROW_S("ContextOnly"), (Driver){&td_ctx_only_driver_vt, NULL});
+    Error err = BURROW_NO_ERROR;
+    SqlDB *db = sql_open(BURROW_S("ContextOnly"), BURROW_STR_EMPTY, &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+
+    Context ctx = testing_t_context(t);
+
+    SqlConn *conn = sql_db_conn(db, ctx, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "db.Conn %v", err);
+        td_close_free(db);
+        return;
+    }
+    TdCtxOnlyConn *coc = burrow__sql_conn_driver(conn).data;
+    coc->fc->skip_dirty_session = true;
+
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    (void)sql_conn_exec_context(conn, a, ctx, BURROW_S("WIPE"), NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "exec wipe %v", err);
+        goto out;
+    }
+
+    (void)sql_conn_exec_context(conn, a, ctx, BURROW_S("CREATE|keys|v1=string"),
+                                NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "exec create %v", err);
+        goto out;
+    }
+    Str expected_value = BURROW_S("value1");
+    (void)sql_conn_exec_context(conn, a, ctx, BURROW_S("INSERT|keys|v1=?"),
+                                ARGS(expected_value), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "exec insert %v", err);
+        goto out;
+    }
+    SqlRows *rows =
+        sql_conn_query_context(conn, ctx, BURROW_S("SELECT|keys|v1|"), NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "query select %v", err);
+        goto out;
+    }
+    Str v1 = BURROW_STR_EMPTY;
+    while (sql_rows_next(rows)) {
+        err = sql_rows_scan_v(rows, a, &v1);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "rows scan %v", err);
+            break;
+        }
+    }
+    (void)sql_rows_close(rows);
+    sql_rows_free(rows);
+    if (testing_t_failed(t))
+        goto out;
+
+    if (!str_eq(v1, expected_value)) {
+        testing_t_errorf_v(t, "expected %q, got %q", expected_value, v1);
+        goto out;
+    }
+
+    if (!coc->exec_ctx_called)
+        testing_t_errorf_v(t, "ExecContext not called");
+    if (!coc->query_ctx_called)
+        testing_t_errorf_v(t, "QueryContext not called");
+
+out:
+    arena_free(&ar);
+    sql_conn_free(conn);
+    td_close_free(db);
+}
+
+static void TestQueryExecContextOnly(TestingT *t) {
+    synctest_test(t, testQueryExecContextOnly);
+}
+
+/* ------------------------------------------------------ errors and cancel */
+
+TD_SENTINEL(td_err_test_scan_wrap, "errTestScanWrap");
+
+typedef struct AlwaysErrScanner {
+    Byte unused;
+} AlwaysErrScanner;
+extern const Type burrow_type_AlwaysErrScanner;
+
+static Error td_always_err_scan(AlwaysErrScanner *s, DriverAllocArg a, Any src) {
+    (void)s;
+    (void)a;
+    (void)src;
+    return td_err_test_scan_wrap;
+}
+
+#define ALWAYS_ERR_SCANNER_FIELDS(F, T) F(T, Byte, unused, "")
+#define ALWAYS_ERR_SCANNER_METHODS(M, T) M(T, Scan, td_always_err_scan, SQL_SIG_SCAN)
+BURROW_STRUCT_DEFINE_METHODS(AlwaysErrScanner, ALWAYS_ERR_SCANNER_FIELDS,
+                             ALWAYS_ERR_SCANNER_METHODS);
+
+/* Issue 38099: Ensure that Rows.Scan properly wraps underlying errors. */
+static void testRowsScanProperlyWrapsErrors(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    Error err = BURROW_NO_ERROR;
+    SqlRows *rows = sql_db_query(db, BURROW_S("SELECT|people|age|"), NO_ARGS, &err);
+    if (BURROW_FAILED(err))
+        FATALF("Query: %v", err);
+
+    AlwaysErrScanner res = {0};
+
+    while (sql_rows_next(rows)) {
+        err = sql_rows_scan_v(rows, heap_allocator(),
+                              ((Any){TYPE_OF(AlwaysErrScanner), &res}));
+        if (BURROW_OK(err)) {
+            testing_t_errorf_v(t, "expecting back an error");
+            break;
+        }
+        if (!errors_is(err, td_err_test_scan_wrap)) {
+            testing_t_errorf_v(t, "errors.Is mismatch\n%v\nWant: %v", err,
+                               td_err_test_scan_wrap);
+            break;
+        }
+        /* Ensure that error substring matching still correctly works. */
+        if (!strings_contains(error_text(err), error_text(td_err_test_scan_wrap))) {
+            testing_t_errorf_v(t, "Error %v does not contain %v", err,
+                               td_err_test_scan_wrap);
+            break;
+        }
+    }
+    sql_rows_free(rows);
+}
+
+static void TestRowsScanProperlyWrapsErrors(TestingT *t) {
+    test_database(t, testRowsScanProperlyWrapsErrors, NULL);
+}
+
+/* errEmpty is returned when an empty value is found. */
+TD_SENTINEL(td_err_empty, "empty value");
+
+typedef struct AlwaysErrValuer {
+    Byte unused;
+} AlwaysErrValuer;
+extern const Type burrow_type_AlwaysErrValuer;
+
+static Any td_always_err_value(AlwaysErrValuer *v, DriverAllocArg a,
+                               DriverErrorArg err) {
+    (void)v;
+    (void)a;
+    BURROW_OUT(err, td_err_empty);
+    return (Any){NULL, NULL};
+}
+
+#define ALWAYS_ERR_VALUER_FIELDS(F, T) F(T, Byte, unused, "")
+#define ALWAYS_ERR_VALUER_METHODS(M, T)                                                \
+    M(T, Value, td_always_err_value, DRIVER_SIG_VALUE)
+BURROW_STRUCT_DEFINE_METHODS(AlwaysErrValuer, ALWAYS_ERR_VALUER_FIELDS,
+                             ALWAYS_ERR_VALUER_METHODS);
+
+static void td_check_err_empty(TestingT *t, Error err) {
+    if (BURROW_OK(err))
+        FATALF("expecting back an error");
+    if (!errors_is(err, td_err_empty))
+        FATALF("errors.Is mismatch\n%v\nWant: %v", err, td_err_empty);
+    /* Ensure that error substring matching still correctly works. */
+    if (!strings_contains(error_text(err), error_text(td_err_empty)))
+        FATALF("Error %v does not contain %v", err, td_err_empty);
+}
+
+static void td_args_exec(TestingT *t) {
+    FakeConnector fc = {BURROW_STR_EMPTY, NULL, false, FAKE_DEFAULT};
+    SqlDB *db = new_test_db(t, &fc, "people");
+    if (db == NULL)
+        return;
+    AlwaysErrValuer v = {0};
+    Error err = BURROW_NO_ERROR;
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    (void)sql_db_exec(db, arena_allocator(&ar), BURROW_S("INSERT|keys|dec1=?"),
+                      ARGS(((Any){TYPE_OF(AlwaysErrValuer), &v})), &err);
+    arena_free(&ar);
+    td_check_err_empty(t, err);
+    close_db(t, db);
+}
+
+static void td_args_query(TestingT *t) {
+    FakeConnector fc = {BURROW_STR_EMPTY, NULL, false, FAKE_DEFAULT};
+    SqlDB *db = new_test_db(t, &fc, "people");
+    if (db == NULL)
+        return;
+    AlwaysErrValuer v = {0};
+    Error err = BURROW_NO_ERROR;
+    SqlRows *rows = sql_db_query(db, BURROW_S("INSERT|keys|dec1=?"),
+                                 ARGS(((Any){TYPE_OF(AlwaysErrValuer), &v})), &err);
+    if (rows != NULL)
+        sql_rows_free(rows);
+    td_check_err_empty(t, err);
+    close_db(t, db);
+}
+
+/* A subtest body, boxed so it can travel through a closure's env. */
+typedef struct TdSubFn {
+    void (*f)(TestingT *t);
+} TdSubFn;
+
+static void td_synctest_sub(void *env, TestingT *t) {
+    synctest_test(t, ((TdSubFn *)env)->f);
+}
+
+/* Like Go's synctestSubtest: a subtest whose body runs in a bubble. */
+static void synctest_subtest(TestingT *t, const char *name, TdSubFn *fn) {
+    (void)testing_t_run(t, str_from_cstr(name),
+                        BURROW_FN(TestingTFunc, td_synctest_sub, fn));
+}
+
+/* Issue 64707: Ensure that Stmt.Exec and Stmt.Query properly wraps underlying
+ * errors. */
+static void TestDriverArgsWrapsErrors(TestingT *t) {
+    TdSubFn exec = {td_args_exec}, query = {td_args_query};
+    synctest_subtest(t, "exec", &exec);
+    synctest_subtest(t, "query", &query);
+}
+
+typedef struct TdRawScan {
+    TestingT *t;
+    const char *mode;
+} TdRawScan;
+
+static void td_go_cancel(void *env) {
+    BURROW_CALLF0(*(ContextCancelFunc *)env);
+}
+
+/* From go.dev/issue/60304. */
+static void td_raw_scan_bubble(void *env) {
+    TdRawScan *rs = env;
+    TestingT *t = rs->t;
+    const char *mode = rs->mode;
+    FakeConnector fc = {BURROW_STR_EMPTY, NULL, false, FAKE_DEFAULT};
+    SqlDB *db = new_test_db(t, &fc, "people");
+    if (db == NULL)
+        return;
+
+    /* cancel used to call close asynchronously. This test checks that it waits
+     * so as not to interfere with RawBytes. */
+    ContextCancelFunc cancel = {NULL, NULL};
+    Context ctx = context_with_cancel(heap_allocator(), context_background(), &cancel);
+
+    Error err = BURROW_NO_ERROR;
+    SqlRows *r =
+        sql_db_query_context(db, ctx, BURROW_S("SELECT|people|name|"), NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+        BURROW_CALLF0(cancel);
+        close_db(t, db);
+        return;
+    }
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    int num_rows = 0;
+    Byte sink = 0;
+    while (sql_rows_next(r)) {
+        if (strcmp(mode, "top") == 0 && num_rows == 2) {
+            /* cancel between Next and Scan is observed by Scan as err =
+             * context.Canceled. */
+            BURROW_CALLF0(cancel);
+            synctest_wait();
+        }
+        num_rows++;
+        SqlRawBytes s = {NULL, 0, 0, TYPE_BYTE};
+        err =
+            sql_rows_scan_v(r, arena_allocator(&ar), ((Any){TYPE_OF(SqlRawBytes), &s}));
+        if (num_rows == 3 && errors_is(err, context_canceled)) {
+            if (burrow__sql_rows_scan_hold(r))
+                testing_t_errorf_v(t, "expected closemu NOT to be held");
+            break;
+        }
+        if (!burrow__sql_rows_scan_hold(r))
+            testing_t_errorf_v(t, "expected closemu to be held");
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "%v", err);
+            goto out;
+        }
+        testing_t_logf_v(t, "read %q", s);
+        if (strcmp(mode, "bottom") == 0 && num_rows == 2) {
+            /* cancel before Next should be observed by Next, exiting the
+             * loop. */
+            BURROW_CALLF0(cancel);
+            synctest_wait();
+        }
+        if (strcmp(mode, "go") == 0 && num_rows == 2) {
+            /* cancel at any future time, to catch other cases */
+            (void)go(BURROW_FN(Func, td_go_cancel, &cancel));
+        }
+        for (Int i = 0; i < s.len; i++) /* some operation reading from the raw memory */
+            sink = (Byte)(sink + ((const Byte *)s.p)[i]);
+        /* r.Columns must not deadlock acquiring closemu.RLock. */
+        Error cerr = BURROW_NO_ERROR;
+        (void)sql_rows_columns(r, arena_allocator(&ar), &cerr);
+    }
+    (void)sink;
+    if (burrow__sql_rows_scan_hold(r))
+        testing_t_errorf_v(t, "closemu held; should not be");
+
+    /* There are 3 rows. We canceled after reading 2 so we expect either 2 or 3
+     * depending on how the awaitDone goroutine schedules. */
+    switch (num_rows) {
+    case 0:
+    case 1:
+        testing_t_errorf_v(t, "got %d rows; want 2+", num_rows);
+        break;
+    case 2:
+        err = sql_rows_err(r);
+        if (!errors_is(err, context_canceled))
+            testing_t_errorf_v(t, "unexpected error: %v", err);
+        break;
+    default:
+        /* Made it to the end. This is rare, but fine. Permit it. */
+        break;
+    }
+
+    err = sql_rows_close(r);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "%v", err);
+out:
+    sql_rows_free(r);
+    arena_free(&ar);
+    BURROW_CALLF0(cancel);
+    close_db(t, db);
+}
+
+static void td_raw_scan_sub(void *env, TestingT *t) {
+    TdRawScan *rs = env;
+    rs->t = t;
+    if (!synctest_run(BURROW_FN(Func, td_raw_scan_bubble, rs)))
+        testing_t_errorf_v(t, "synctest_run failed");
+}
+
+static void TestContextCancelDuringRawBytesScan(TestingT *t) {
+    static const char *const modes[] = {"nocancel", "top", "bottom", "go"};
+    for (size_t i = 0; i < sizeof modes / sizeof modes[0]; i++) {
+        TdRawScan rs = {NULL, modes[i]};
+        (void)testing_t_run(t, str_from_cstr(modes[i]),
+                            BURROW_FN(TestingTFunc, td_raw_scan_sub, &rs));
+    }
+}
+
+static void testContextCancelBetweenNextAndErr(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+    ContextCancelFunc cancel = {NULL, NULL};
+    Context ctx = context_with_cancel(heap_allocator(), context_background(), &cancel);
+
+    Error err = BURROW_NO_ERROR;
+    SqlRows *r =
+        sql_db_query_context(db, ctx, BURROW_S("SELECT|people|name|"), NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        BURROW_CALLF0(cancel);
+        FATALF("%v", err);
+    }
+    while (sql_rows_next(r)) {
+    }
+    BURROW_CALLF0(cancel); /* wake up the awaitDone goroutine */
+    synctest_wait();
+    err = sql_rows_err(r);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "%v", err);
+    sql_rows_free(r);
+}
+
+static void TestContextCancelBetweenNextAndErr(TestingT *t) {
+    test_database(t, testContextCancelBetweenNextAndErr, NULL);
+}
+
+/* testScanner, whose scanf is a closure in Go: here it sends src on
+ * scan_start and returns once scan_end gives it something, or is closed. */
+typedef struct TdTestScanner {
+    Chan *scan_start;
+    Chan *scan_end;
+} TdTestScanner;
+
+static Error td_test_scan(void *self, Alloc *a, Any src) {
+    (void)a;
+    TdTestScanner *ts = self;
+    chan_send(ts->scan_start, &src);
+    bool v = false;
+    (void)chan_recv(ts->scan_end, &v);
+    return BURROW_NO_ERROR;
+}
+
+static const SqlScannerVT td_test_scanner_vt = {NULL, td_test_scan};
+
+typedef struct TdScanGo {
+    SqlRows *r;
+    SqlScanner scanner;
+} TdScanGo;
+
+static void td_scan_go(void *env) {
+    TdScanGo *g = env;
+    (void)sql_rows_scan_v(g->r, heap_allocator(),
+                          ((Any){TYPE_OF(SqlScanner), &g->scanner}));
+}
+
+static void testContextCancelDuringScan(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    ContextCancelFunc cancel = {NULL, NULL};
+    Context ctx = context_with_cancel(heap_allocator(), context_background(), &cancel);
+
+    TdTestScanner ts = {chan_make(heap_allocator(), TYPE_ANY, 0),
+                        chan_make(heap_allocator(), TYPE_BOOL, 0)};
+
+    /* Start a query, and pause it mid-scan. */
+    static Byte alice[] = {'A', 'l', 'i', 'c', 'e'};
+    Bytes want = slice_from(alice, 5, 5, TYPE_BYTE);
+    Error err = BURROW_NO_ERROR;
+    SqlRows *r = sql_db_query_context(db, ctx, BURROW_S("SELECT|people|name|name=?"),
+                                      ARGS(BURROW_S("Alice")), &err);
+    SyncWaitGroup wg;
+    memset(&wg, 0, sizeof wg);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+        goto out;
+    }
+    if (!sql_rows_next(r)) {
+        testing_t_errorf_v(t, "r.Next() = false, want true");
+        goto out;
+    }
+    TdScanGo g = {r, {&td_test_scanner_vt, &ts}};
+    (void)sync_wait_group_go(&wg, BURROW_FN(Func, td_scan_go, &g));
+    Any got = {NULL, NULL};
+    (void)chan_recv(ts.scan_start, &got);
+    if (!fdb_is_bytes(got.t)) {
+        testing_t_errorf_v(t, "r.Scan returned %s, want []byte", type_name(got.t));
+    } else {
+        Bytes got_bytes = *(const Bytes *)got.data;
+        if (!bytes_equal(got_bytes, want)) {
+            testing_t_errorf_v(t, "before cancel: r.Scan returned %q, want %q",
+                               got_bytes, want);
+        } else {
+            /* Cancel the query. */
+            BURROW_CALLF0(cancel);
+            synctest_wait();
+
+            /* Cancelling the query should not have changed the result. */
+            if (!bytes_equal(got_bytes, want))
+                testing_t_errorf_v(t, "after cancel: r.Scan result is now %q, want %q",
+                                   got_bytes, want);
+        }
+    }
+    chan_close(ts.scan_end);
+    sync_wait_group_wait(&wg);
+
+out:
+    if (r != NULL)
+        sql_rows_free(r);
+    chan_free(ts.scan_start);
+    chan_free(ts.scan_end);
+    BURROW_CALLF0(cancel);
+}
+
+static void TestContextCancelDuringScan(TestingT *t) {
+    test_database(t, testContextCancelDuringScan, NULL);
+}
+
+static void testNilErrorAfterClose(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    /* This WithCancel is important; Rows contains an optimization to avoid
+     * spawning a goroutine when the query/transaction context cannot be
+     * canceled, but this test tests a bug which is caused by said goroutine. */
+    ContextCancelFunc cancel = {NULL, NULL};
+    Context ctx = context_with_cancel(heap_allocator(), context_background(), &cancel);
+
+    Error err = BURROW_NO_ERROR;
+    SqlRows *r =
+        sql_db_query_context(db, ctx, BURROW_S("SELECT|people|name|"), NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        BURROW_CALLF0(cancel);
+        FATALF("%v", err);
+    }
+
+    err = sql_rows_close(r);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+    } else {
+        synctest_wait();
+        err = sql_rows_err(r);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "%v", err);
+    }
+    sql_rows_free(r);
+    BURROW_CALLF0(cancel);
+}
+
+static void TestNilErrorAfterClose(TestingT *t) {
+    test_database(t, testNilErrorAfterClose, NULL);
+}
+
+/* Runs query and scans its first row into raw. */
+static bool td_scan_first_raw(TestingT *t, SqlDB *db, const char *query, Alloc *a,
+                              SqlRawBytes *raw, Str *copy) {
+    Error err = BURROW_NO_ERROR;
+    SqlRows *rows = sql_db_query(db, str_from_cstr(query), NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+        return false;
+    }
+    (void)sql_rows_next(rows);
+    (void)sql_rows_scan_v(rows, a, ((Any){TYPE_OF(SqlRawBytes), raw}));
+    if (copy != NULL)
+        *copy = str_clone(a, str_from_bytes(raw->p, raw->len));
+    (void)sql_rows_close(rows);
+    sql_rows_free(rows);
+    return true;
+}
+
+/* Issue #65201.
+ *
+ * If a RawBytes is reused across multiple queries, subsequent queries
+ * shouldn't overwrite driver-owned memory from previous queries. */
+static void testRawBytesReuse(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    SqlRawBytes raw = {NULL, 0, 0, TYPE_BYTE};
+    Str name1 = BURROW_STR_EMPTY, name2 = BURROW_STR_EMPTY;
+
+    /* The RawBytes in this query aliases driver-owned memory. */
+    if (td_scan_first_raw(t, db, "SELECT|people|name|", a, &raw, &name1) &&
+        /* The RawBytes in this query does not alias driver-owned memory. */
+        td_scan_first_raw(t, db, "SELECT|people|age|", a, &raw, NULL) &&
+        /* Repeat the first query. Nothing should have changed. */
+        td_scan_first_raw(t, db, "SELECT|people|name|", a, &raw, &name2) &&
+        !str_eq(name1, name2))
+        testing_t_errorf_v(t, "Scan read name %q, want %q", name2, name1);
+    arena_free(&ar);
+}
+
+static void TestRawBytesReuse(TestingT *t) {
+    test_database(t, testRawBytesReuse, NULL);
+}
+
 #define TESTS(X)                                                                       \
     X(TestOpenDB)                                                                      \
     X(TestQuery)                                                                       \
@@ -4846,6 +5735,17 @@ static void TestMaxIdleTime(TestingT *t) {
     X(TestConnectionLeak)                                                              \
     X(TestStatsMaxIdleClosedZero)                                                      \
     X(TestStatsMaxIdleClosedTen)                                                       \
-    X(TestMaxIdleTime)
+    X(TestMaxIdleTime)                                                                 \
+    X(TestNamedValueChecker)                                                           \
+    X(TestNamedValueCheckerSkip)                                                       \
+    X(TestOpenConnector)                                                               \
+    X(TestQueryExecContextOnly)                                                        \
+    X(TestRowsScanProperlyWrapsErrors)                                                 \
+    X(TestDriverArgsWrapsErrors)                                                       \
+    X(TestContextCancelDuringRawBytesScan)                                             \
+    X(TestContextCancelBetweenNextAndErr)                                              \
+    X(TestContextCancelDuringScan)                                                     \
+    X(TestNilErrorAfterClose)                                                          \
+    X(TestRawBytesReuse)
 
 TESTING_MAIN(TESTS)

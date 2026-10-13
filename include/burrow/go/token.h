@@ -42,6 +42,7 @@
 #include "burrow/own.h"
 #include "burrow/slice.h"
 #include "burrow/sync.h"
+#include "burrow/type.h"
 
 #include <stdbool.h>
 
@@ -254,6 +255,14 @@ enum { TOKEN_NO_POS = 0 };
 
 /* Pos.IsValid: p is not TOKEN_NO_POS. */
 bool token_pos_is_valid(TokenPos p);
+
+/* The type descriptors of Token, which has its String method, and Pos, so
+ * that either can go to fmt as an Any and print the way Go prints it. */
+extern const Type burrow_type_Token;
+extern const Type burrow_type_TokenPos;
+
+#define TYPE_TOKEN TYPE_OF(Token)
+#define TYPE_TOKEN_POS TYPE_OF(TokenPos)
 
 /* -------------------------------------------------------------------- files */
 

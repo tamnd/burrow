@@ -58,6 +58,7 @@
 #include "burrow/crypto/aes.h"
 #include "burrow/crypto/cipher.h"
 #include "burrow/crypto/des.h"
+#include "burrow/crypto/dsa.h"
 #include "burrow/crypto/ecdh.h"
 #include "burrow/crypto/ecdsa.h"
 #include "burrow/crypto/ed25519.h"

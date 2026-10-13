@@ -3413,3 +3413,43 @@ DriverConn burrow__sql_tx_driver(SqlTx *tx) {
 DriverRows burrow__sql_rows_driver(SqlRows *rs) {
     return rs->rowsi;
 }
+
+Int burrow__sql_db_free_conn_open_stmts(SqlDB *db, Int i) {
+    Int n = 0;
+    sync_mutex_lock(&db->mu);
+    if (i >= 0 && i < db->free_conn.len) {
+        SqDC *dc = db->free_conn.p[i];
+        sync_mutex_lock(&dc->mu);
+        for (SqDS *ds = dc->open_stmt; ds != NULL; ds = ds->os_next)
+            n++;
+        sync_mutex_unlock(&dc->mu);
+    }
+    sync_mutex_unlock(&db->mu);
+    return n;
+}
+
+bool burrow__sql_rows_closed(SqlRows *rs) {
+    sq_closemu_rlock(&rs->closemu);
+    bool closed = rs->closed;
+    sq_closemu_runlock(&rs->closemu);
+    return closed;
+}
+
+void burrow__sql_tx_set_keep_conn_on_rollback(SqlTx *tx, bool keep) {
+    tx->keep_conn_on_rollback = keep;
+}
+
+bool burrow__sql_stmt_closed(SqlStmt *s) {
+    sync_mutex_lock(&s->mu);
+    bool closed = s->closed;
+    sync_mutex_unlock(&s->mu);
+    return closed;
+}
+
+Error burrow__sql_stmt_sticky_err(SqlStmt *s) {
+    return s->sticky;
+}
+
+SqlStmt *burrow__sql_stmt_parent(SqlStmt *s) {
+    return s->parent;
+}

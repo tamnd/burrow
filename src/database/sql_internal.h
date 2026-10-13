@@ -74,5 +74,11 @@ Int burrow__sql_stmt_num_css(SqlStmt *s);
 DriverConn burrow__sql_conn_driver(SqlConn *c);
 DriverConn burrow__sql_tx_driver(SqlTx *tx);
 DriverRows burrow__sql_rows_driver(SqlRows *rs);
+Int burrow__sql_db_free_conn_open_stmts(SqlDB *db, Int i);
+bool burrow__sql_rows_closed(SqlRows *rs);
+void burrow__sql_tx_set_keep_conn_on_rollback(SqlTx *tx, bool keep);
+bool burrow__sql_stmt_closed(SqlStmt *s);
+Error burrow__sql_stmt_sticky_err(SqlStmt *s);
+SqlStmt *burrow__sql_stmt_parent(SqlStmt *s);
 
 #endif /* BURROW_DATABASE_SQL_INTERNAL_H */

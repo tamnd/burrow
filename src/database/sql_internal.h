@@ -39,6 +39,13 @@ BURROW_BORROWS(ret, rs) Bytes burrow__sql_rows_rawbuf(SqlRows *rs);
 BURROW_BORROWS(ret, b) Bytes burrow__sql_rows_setrawbuf(SqlRows *rs, Bytes b);
 Alloc *burrow__sql_rows_raw_alloc(SqlRows *rs, Alloc *a);
 
+/* Go's &Rows{}, a Rows with no connection or driver rows behind it, for a test
+ * that converts into its raw buffer. reset_raw is rows.raw = rows.raw[:0], and
+ * free gives the Rows and its buffer back. */
+BURROW_OWNS(ret) SqlRows *burrow__sql_rows_bare_new(void);
+void burrow__sql_rows_bare_reset_raw(SqlRows *rs);
+void burrow__sql_rows_bare_free(SqlRows *rs);
+
 /* The allocator the program gave the sql_rows_scan that is calling the
  * driver's scan_column, or NULL outside one. */
 Alloc *burrow__sql_rows_scan_alloc(SqlRows *rs);

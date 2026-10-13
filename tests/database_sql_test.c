@@ -6706,6 +6706,1006 @@ static void TestStatementClose(TestingT *t) {
     synctest_test(t, testStatementClose);
 }
 
+/* ------------------------------------------------------------ convert_test.go */
+
+/* type userDefined float64, userDefinedSlice []int, userDefinedString string
+ * and userDefinedBytes []byte, named types of the test's own. */
+#define TCV_NAMED(var, nm, kind, ctype, elem)                                          \
+    static const Type var = {                                                          \
+        BURROW_S_INIT(nm),                                                             \
+        BURROW_S_INIT("database/sql"),                                                 \
+        kind,                                                                          \
+        (uint32_t)sizeof(ctype),                                                       \
+        (uint16_t)_Alignof(ctype),                                                     \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        elem,                                                                          \
+        NULL,                                                                          \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+    }
+
+TCV_NAMED(tcv_user_defined_type, "userDefined", KIND_FLOAT64, double, NULL);
+TCV_NAMED(tcv_user_defined_slice_type, "userDefinedSlice", KIND_SLICE, Slice, TYPE_INT);
+TCV_NAMED(tcv_user_defined_string_type, "userDefinedString", KIND_STRING, Str, NULL);
+TCV_NAMED(tcv_user_defined_bytes_type, "userDefinedBytes", KIND_SLICE, Slice,
+          TYPE_BYTE);
+
+BURROW_PTR_TYPE(TcvInt64Ptr, int64_t);
+
+static const int64_t tcv_answer = 42;
+
+/* Target variables for scanning into. */
+static Str tcv_scanstr;
+static Bytes tcv_scanbytes;
+static SqlRawBytes tcv_scanraw;
+static Int tcv_scanint;
+static uint8_t tcv_scanuint8;
+static uint16_t tcv_scanuint16;
+static bool tcv_scanbool;
+static float tcv_scanf32;
+static double tcv_scanf64;
+static Time tcv_scantime;
+static Uuid tcv_scanuuid;
+static int64_t *tcv_scanptr;
+static Any tcv_scaniface;
+
+typedef struct TcvCase {
+    Any s, d; /* source and destination */
+
+    /* following are used if they're non-zero */
+    int64_t wantint;
+    uint64_t wantuint;
+    const char *wantstr;
+    const char *wantbytes;
+    const char *wantraw;
+    float wantf32;
+    double wantf64;
+    Time wanttime;
+    bool wantbool; /* used if d is of type bool */
+    const Uuid *wantuuid;
+    const char *wanterr;
+    Any wantiface;
+    const int64_t *wantptr; /* if non-NULL, *d's pointed value must be equal to it */
+    bool wantnil;           /* if true, *d must be a NULL int64 pointer */
+    double wantusrdef;
+    const char *wantusrstr;
+} TcvCase;
+
+#define TCV_D(ty, p) ((Any){(ty), (p)})
+#define TCV_VAL(T, ty, v) ((Any){(ty), &(T){v}})
+#define TCV_STR(lit) ((Any){TYPE_STRING, &BURROW_S(lit)})
+#define TCV_BYTES(lit)                                                                 \
+    ((Any){TYPE_BYTES, &(Bytes){(void *)(uintptr_t)("" lit), (Int)(sizeof(lit) - 1),   \
+                                (Int)(sizeof(lit) - 1), TYPE_BYTE}})
+
+static int64_t tcv_int_value(Any d) {
+    if (d.t == TYPE_INT)
+        return (int64_t)*(const Int *)d.data;
+    return *(const int64_t *)d.data;
+}
+
+static uint64_t tcv_uint_value(Any d) {
+    if (d.t == TYPE_UINT8)
+        return *(const uint8_t *)d.data;
+    return *(const uint16_t *)d.data;
+}
+
+static Str tcv_bytes_str(Bytes b) {
+    return (Str){b.p, b.len};
+}
+
+/* reflect.DeepEqual for the values the table stores into an Any. */
+static bool tcv_iface_equal(Any want, Any got) {
+    if (want.t != got.t)
+        return false;
+    if (want.t == NULL)
+        return true;
+    if (want.t == TYPE_FLOAT64)
+        return *(const double *)want.data == *(const double *)got.data;
+    if (want.t == TYPE_INT64)
+        return *(const int64_t *)want.data == *(const int64_t *)got.data;
+    if (want.t == TYPE_BOOL)
+        return *(const bool *)want.data == *(const bool *)got.data;
+    if (want.t == TYPE_STRING)
+        return str_eq(*(const Str *)want.data, *(const Str *)got.data);
+    if (want.t == TYPE_TIME)
+        return time_equal(*(const Time *)want.data, *(const Time *)got.data);
+    if (want.t == TYPE_BYTES) {
+        Bytes w = *(const Bytes *)want.data, g = *(const Bytes *)got.data;
+        if ((w.p == NULL) != (g.p == NULL))
+            return false;
+        return str_eq(tcv_bytes_str(w), tcv_bytes_str(g));
+    }
+    return false;
+}
+
+#define TCV_ERRF(format, ...)                                                          \
+    testing_t_errorf_v(t, "convertAssign #%d: for %v (%T) -> *%T, " format, (Int)n,    \
+                       ct->s, ct->s, dt, __VA_ARGS__)
+
+static void tcv_check(TestingT *t, size_t n, const TcvCase *ct, Error err) {
+    Any dt = {ct->d.t, NULL};
+    Str errstr = BURROW_FAILED(err) ? error_text(err) : BURROW_STR_EMPTY;
+    Str wanterr = str_from_cstr(ct->wanterr != NULL ? ct->wanterr : "");
+    if (!str_eq(errstr, wanterr))
+        TCV_ERRF("got error %q, want error %q", errstr, wanterr);
+    if (ct->wantstr != NULL && !str_eq(str_from_cstr(ct->wantstr), tcv_scanstr))
+        TCV_ERRF("want string %q, got %q", ct->wantstr, tcv_scanstr);
+    if (ct->wantbytes != NULL &&
+        !str_eq(str_from_cstr(ct->wantbytes), tcv_bytes_str(tcv_scanbytes)))
+        TCV_ERRF("want byte %q, got %q", ct->wantbytes, tcv_bytes_str(tcv_scanbytes));
+    if (ct->wantraw != NULL &&
+        !str_eq(str_from_cstr(ct->wantraw), tcv_bytes_str(tcv_scanraw)))
+        TCV_ERRF("want RawBytes %q, got %q", ct->wantraw, tcv_bytes_str(tcv_scanraw));
+    if (ct->wantint != 0 && ct->wantint != tcv_int_value(ct->d))
+        TCV_ERRF("want int %d, got %d", ct->wantint, tcv_int_value(ct->d));
+    if (ct->wantuint != 0 && ct->wantuint != tcv_uint_value(ct->d))
+        TCV_ERRF("want uint %d, got %d", ct->wantuint, tcv_uint_value(ct->d));
+    if (ct->wantf32 != 0 && ct->wantf32 != *(const float *)ct->d.data)
+        TCV_ERRF("want float32 %v, got %v", ct->wantf32, *(const float *)ct->d.data);
+    if (ct->wantf64 != 0 && ct->wantf64 != *(const double *)ct->d.data)
+        TCV_ERRF("want float32 %v, got %v", ct->wantf64, *(const double *)ct->d.data);
+    if (ct->d.t == TYPE_BOOL && *(const bool *)ct->d.data != ct->wantbool &&
+        ct->wanterr == NULL)
+        TCV_ERRF("want bool %v, got %v", ct->wantbool, *(const bool *)ct->d.data);
+    if (!time_is_zero(ct->wanttime) &&
+        !time_equal(ct->wanttime, *(const Time *)ct->d.data)) {
+        Time want = ct->wanttime, got = *(const Time *)ct->d.data;
+        Any wa = {TYPE_TIME, &want}, ga = {TYPE_TIME, &got};
+        TCV_ERRF("want time %v, got %v", wa, ga);
+    }
+    if (ct->wantuuid != NULL &&
+        memcmp(ct->wantuuid->b, ((const Uuid *)ct->d.data)->b, 16) != 0) {
+        Uuid want = *ct->wantuuid, got = *(const Uuid *)ct->d.data;
+        Any wa = {TYPE_UUID, &want}, ga = {TYPE_UUID, &got};
+        TCV_ERRF("want uuid %v, got %v", wa, ga);
+    }
+    if (ct->wantnil && *(int64_t *const *)ct->d.data != NULL)
+        TCV_ERRF("want nil, got %v", **(int64_t *const *)ct->d.data);
+    if (ct->wantptr != NULL) {
+        const int64_t *p = *(int64_t *const *)ct->d.data;
+        if (p == NULL)
+            TCV_ERRF("want pointer to %v, got nil", *ct->wantptr);
+        else if (*ct->wantptr != *p)
+            TCV_ERRF("want pointer to %v, got %v", *ct->wantptr, *p);
+    }
+    if (ct->d.t == TYPE_ANY) {
+        if (!tcv_iface_equal(ct->wantiface, tcv_scaniface)) {
+            TCV_ERRF("want interface %#v, got %#v", ct->wantiface, tcv_scaniface);
+            return;
+        }
+        if (ct->s.t == TYPE_BYTES) {
+            Bytes src = *(const Bytes *)ct->s.data;
+            Bytes dst = *(const Bytes *)tcv_scaniface.data;
+            if (src.len > 0 && dst.p == src.p)
+                TCV_ERRF("%s", "copy into interface{} didn't copy []byte data");
+        }
+    }
+    if (ct->wantusrdef != 0 && ct->wantusrdef != *(const double *)ct->d.data)
+        TCV_ERRF("want userDefined %f, got %f", ct->wantusrdef,
+                 *(const double *)ct->d.data);
+    if (ct->wantusrstr != NULL &&
+        !str_eq(str_from_cstr(ct->wantusrstr), *(const Str *)ct->d.data))
+        TCV_ERRF("want userDefined %q, got %q", ct->wantusrstr,
+                 *(const Str *)ct->d.data);
+}
+
+static void TestConversions(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    TimeLocation *here = time_fixed_zone(heap_allocator(), BURROW_S("here"), -3600 * 8);
+    Time some_time = time_from_unix(123, 0);
+    Time t1 = time_utc(time_from_unix(1, 0));
+    Time t_here = time_in(time_from_unix(1453874597, 0), here);
+    Time t12 = time_utc(time_from_unix(1, 2));
+    Time t25 = time_utc(time_from_unix(2, 5));
+    Time t_zero = {0};
+    Uuid want_uuid = uuid_must_parse(BURROW_S("97b6a4e0-5323-43e9-82c8-88110d6686d6"));
+    Byte uuid_raw[16] = {0x97, 0xb6, 0xa4, 0xe0, 0x53, 0x23, 0x43, 0xe9,
+                         0x82, 0xc8, 0x88, 0x11, 0x0d, 0x66, 0x86, 0xd6};
+    Bytes uuid_bytes = {uuid_raw, 16, 16, TYPE_BYTE};
+    Byte b123[3] = {1, 2, 3};
+    Bytes b123_bytes = {b123, 3, 3, TYPE_BYTE};
+    Bytes nil_bytes = {NULL, 0, 0, TYPE_BYTE};
+    Bytes want_byteslice = {(void *)(uintptr_t)"byteslice", 9, 9, TYPE_BYTE};
+    double usrdef[3] = {0, 0, 0};
+    Slice usrslice = {NULL, 0, 0, TYPE_INT};
+    Str usrstr = BURROW_STR_EMPTY;
+    Complex128 c12 = {1, 2};
+
+    TcvCase tests[] = {
+        /* Exact conversions (destination pointer type matches source type) */
+        {.s = TCV_STR("foo"), .d = TCV_D(TYPE_STRING, &tcv_scanstr), .wantstr = "foo"},
+        {.s = TCV_VAL(Int, TYPE_INT, 123),
+         .d = TCV_D(TYPE_INT, &tcv_scanint),
+         .wantint = 123},
+        {.s = TCV_D(TYPE_TIME, &some_time),
+         .d = TCV_D(TYPE_TIME, &tcv_scantime),
+         .wanttime = some_time},
+
+        /* To strings */
+        {.s = TCV_STR("string"),
+         .d = TCV_D(TYPE_STRING, &tcv_scanstr),
+         .wantstr = "string"},
+        {.s = TCV_BYTES("byteslice"),
+         .d = TCV_D(TYPE_STRING, &tcv_scanstr),
+         .wantstr = "byteslice"},
+        {.s = TCV_VAL(Int, TYPE_INT, 123),
+         .d = TCV_D(TYPE_STRING, &tcv_scanstr),
+         .wantstr = "123"},
+        {.s = TCV_VAL(int8_t, TYPE_INT8, 123),
+         .d = TCV_D(TYPE_STRING, &tcv_scanstr),
+         .wantstr = "123"},
+        {.s = TCV_VAL(int64_t, TYPE_INT64, 123),
+         .d = TCV_D(TYPE_STRING, &tcv_scanstr),
+         .wantstr = "123"},
+        {.s = TCV_VAL(uint8_t, TYPE_UINT8, 123),
+         .d = TCV_D(TYPE_STRING, &tcv_scanstr),
+         .wantstr = "123"},
+        {.s = TCV_VAL(uint16_t, TYPE_UINT16, 123),
+         .d = TCV_D(TYPE_STRING, &tcv_scanstr),
+         .wantstr = "123"},
+        {.s = TCV_VAL(uint32_t, TYPE_UINT32, 123),
+         .d = TCV_D(TYPE_STRING, &tcv_scanstr),
+         .wantstr = "123"},
+        {.s = TCV_VAL(uint64_t, TYPE_UINT64, 123),
+         .d = TCV_D(TYPE_STRING, &tcv_scanstr),
+         .wantstr = "123"},
+        {.s = TCV_VAL(double, TYPE_FLOAT64, 1.5),
+         .d = TCV_D(TYPE_STRING, &tcv_scanstr),
+         .wantstr = "1.5"},
+
+        /* From time.Time: */
+        {.s = TCV_D(TYPE_TIME, &t1),
+         .d = TCV_D(TYPE_STRING, &tcv_scanstr),
+         .wantstr = "1970-01-01T00:00:01Z"},
+        {.s = TCV_D(TYPE_TIME, &t_here),
+         .d = TCV_D(TYPE_STRING, &tcv_scanstr),
+         .wantstr = "2016-01-26T22:03:17-08:00"},
+        {.s = TCV_D(TYPE_TIME, &t12),
+         .d = TCV_D(TYPE_STRING, &tcv_scanstr),
+         .wantstr = "1970-01-01T00:00:01.000000002Z"},
+        {.s = TCV_D(TYPE_TIME, &t_zero),
+         .d = TCV_D(TYPE_STRING, &tcv_scanstr),
+         .wantstr = "0001-01-01T00:00:00Z"},
+        {.s = TCV_D(TYPE_TIME, &t12),
+         .d = TCV_D(TYPE_BYTES, &tcv_scanbytes),
+         .wantbytes = "1970-01-01T00:00:01.000000002Z"},
+        {.s = TCV_D(TYPE_TIME, &t12),
+         .d = TCV_D(TYPE_ANY, &tcv_scaniface),
+         .wantiface = TCV_D(TYPE_TIME, &t12)},
+
+        /* To []byte */
+        {.s = TCV_D(NULL, NULL),
+         .d = TCV_D(TYPE_BYTES, &tcv_scanbytes),
+         .wantbytes = NULL},
+        {.s = TCV_STR("string"),
+         .d = TCV_D(TYPE_BYTES, &tcv_scanbytes),
+         .wantbytes = "string"},
+        {.s = TCV_BYTES("byteslice"),
+         .d = TCV_D(TYPE_BYTES, &tcv_scanbytes),
+         .wantbytes = "byteslice"},
+        {.s = TCV_VAL(Int, TYPE_INT, 123),
+         .d = TCV_D(TYPE_BYTES, &tcv_scanbytes),
+         .wantbytes = "123"},
+        {.s = TCV_VAL(int8_t, TYPE_INT8, 123),
+         .d = TCV_D(TYPE_BYTES, &tcv_scanbytes),
+         .wantbytes = "123"},
+        {.s = TCV_VAL(int64_t, TYPE_INT64, 123),
+         .d = TCV_D(TYPE_BYTES, &tcv_scanbytes),
+         .wantbytes = "123"},
+        {.s = TCV_VAL(uint8_t, TYPE_UINT8, 123),
+         .d = TCV_D(TYPE_BYTES, &tcv_scanbytes),
+         .wantbytes = "123"},
+        {.s = TCV_VAL(uint16_t, TYPE_UINT16, 123),
+         .d = TCV_D(TYPE_BYTES, &tcv_scanbytes),
+         .wantbytes = "123"},
+        {.s = TCV_VAL(uint32_t, TYPE_UINT32, 123),
+         .d = TCV_D(TYPE_BYTES, &tcv_scanbytes),
+         .wantbytes = "123"},
+        {.s = TCV_VAL(uint64_t, TYPE_UINT64, 123),
+         .d = TCV_D(TYPE_BYTES, &tcv_scanbytes),
+         .wantbytes = "123"},
+        {.s = TCV_VAL(double, TYPE_FLOAT64, 1.5),
+         .d = TCV_D(TYPE_BYTES, &tcv_scanbytes),
+         .wantbytes = "1.5"},
+
+        /* To RawBytes */
+        {.s = TCV_D(NULL, NULL),
+         .d = TCV_D(&burrow_type_SqlRawBytes, &tcv_scanraw),
+         .wantraw = NULL},
+        {.s = TCV_BYTES("byteslice"),
+         .d = TCV_D(&burrow_type_SqlRawBytes, &tcv_scanraw),
+         .wantraw = "byteslice"},
+        {.s = TCV_STR("string"),
+         .d = TCV_D(&burrow_type_SqlRawBytes, &tcv_scanraw),
+         .wantraw = "string"},
+        {.s = TCV_VAL(Int, TYPE_INT, 123),
+         .d = TCV_D(&burrow_type_SqlRawBytes, &tcv_scanraw),
+         .wantraw = "123"},
+        {.s = TCV_VAL(int8_t, TYPE_INT8, 123),
+         .d = TCV_D(&burrow_type_SqlRawBytes, &tcv_scanraw),
+         .wantraw = "123"},
+        {.s = TCV_VAL(int64_t, TYPE_INT64, 123),
+         .d = TCV_D(&burrow_type_SqlRawBytes, &tcv_scanraw),
+         .wantraw = "123"},
+        {.s = TCV_VAL(uint8_t, TYPE_UINT8, 123),
+         .d = TCV_D(&burrow_type_SqlRawBytes, &tcv_scanraw),
+         .wantraw = "123"},
+        {.s = TCV_VAL(uint16_t, TYPE_UINT16, 123),
+         .d = TCV_D(&burrow_type_SqlRawBytes, &tcv_scanraw),
+         .wantraw = "123"},
+        {.s = TCV_VAL(uint32_t, TYPE_UINT32, 123),
+         .d = TCV_D(&burrow_type_SqlRawBytes, &tcv_scanraw),
+         .wantraw = "123"},
+        {.s = TCV_VAL(uint64_t, TYPE_UINT64, 123),
+         .d = TCV_D(&burrow_type_SqlRawBytes, &tcv_scanraw),
+         .wantraw = "123"},
+        {.s = TCV_VAL(double, TYPE_FLOAT64, 1.5),
+         .d = TCV_D(&burrow_type_SqlRawBytes, &tcv_scanraw),
+         .wantraw = "1.5"},
+        /* Time has been placed here to check that the RawBytes slice gets
+         * correctly reset when calling time_append_format. */
+        {.s = TCV_D(TYPE_TIME, &t25),
+         .d = TCV_D(&burrow_type_SqlRawBytes, &tcv_scanraw),
+         .wantraw = "1970-01-01T00:00:02.000000005Z"},
+
+        /* Strings to integers */
+        {.s = TCV_STR("255"), .d = TCV_D(TYPE_UINT8, &tcv_scanuint8), .wantuint = 255},
+        {.s = TCV_STR("256"),
+         .d = TCV_D(TYPE_UINT8, &tcv_scanuint8),
+         .wanterr =
+             "converting driver.Value type string (\"256\") to a uint8: value out of "
+             "range"},
+        {.s = TCV_STR("256"),
+         .d = TCV_D(TYPE_UINT16, &tcv_scanuint16),
+         .wantuint = 256},
+        {.s = TCV_STR("-1"), .d = TCV_D(TYPE_INT, &tcv_scanint), .wantint = -1},
+        {.s = TCV_STR("foo"),
+         .d = TCV_D(TYPE_INT, &tcv_scanint),
+         .wanterr =
+             "converting driver.Value type string (\"foo\") to a int: invalid syntax"},
+
+        /* int64 to smaller integers */
+        {.s = TCV_VAL(int64_t, TYPE_INT64, 5),
+         .d = TCV_D(TYPE_UINT8, &tcv_scanuint8),
+         .wantuint = 5},
+        {.s = TCV_VAL(int64_t, TYPE_INT64, 256),
+         .d = TCV_D(TYPE_UINT8, &tcv_scanuint8),
+         .wanterr =
+             "converting driver.Value type int64 (\"256\") to a uint8: value out of "
+             "range"},
+        {.s = TCV_VAL(int64_t, TYPE_INT64, 256),
+         .d = TCV_D(TYPE_UINT16, &tcv_scanuint16),
+         .wantuint = 256},
+        {.s = TCV_VAL(int64_t, TYPE_INT64, 65536),
+         .d = TCV_D(TYPE_UINT16, &tcv_scanuint16),
+         .wanterr =
+             "converting driver.Value type int64 (\"65536\") to a uint16: value out "
+             "of range"},
+
+        /* True bools */
+        {.s = TCV_VAL(bool, TYPE_BOOL, true),
+         .d = TCV_D(TYPE_BOOL, &tcv_scanbool),
+         .wantbool = true},
+        {.s = TCV_STR("True"), .d = TCV_D(TYPE_BOOL, &tcv_scanbool), .wantbool = true},
+        {.s = TCV_STR("TRUE"), .d = TCV_D(TYPE_BOOL, &tcv_scanbool), .wantbool = true},
+        {.s = TCV_STR("1"), .d = TCV_D(TYPE_BOOL, &tcv_scanbool), .wantbool = true},
+        {.s = TCV_VAL(Int, TYPE_INT, 1),
+         .d = TCV_D(TYPE_BOOL, &tcv_scanbool),
+         .wantbool = true},
+        {.s = TCV_VAL(int64_t, TYPE_INT64, 1),
+         .d = TCV_D(TYPE_BOOL, &tcv_scanbool),
+         .wantbool = true},
+        {.s = TCV_VAL(uint16_t, TYPE_UINT16, 1),
+         .d = TCV_D(TYPE_BOOL, &tcv_scanbool),
+         .wantbool = true},
+
+        /* False bools */
+        {.s = TCV_VAL(bool, TYPE_BOOL, false),
+         .d = TCV_D(TYPE_BOOL, &tcv_scanbool),
+         .wantbool = false},
+        {.s = TCV_STR("false"),
+         .d = TCV_D(TYPE_BOOL, &tcv_scanbool),
+         .wantbool = false},
+        {.s = TCV_STR("FALSE"),
+         .d = TCV_D(TYPE_BOOL, &tcv_scanbool),
+         .wantbool = false},
+        {.s = TCV_STR("0"), .d = TCV_D(TYPE_BOOL, &tcv_scanbool), .wantbool = false},
+        {.s = TCV_VAL(Int, TYPE_INT, 0),
+         .d = TCV_D(TYPE_BOOL, &tcv_scanbool),
+         .wantbool = false},
+        {.s = TCV_VAL(int64_t, TYPE_INT64, 0),
+         .d = TCV_D(TYPE_BOOL, &tcv_scanbool),
+         .wantbool = false},
+        {.s = TCV_VAL(uint16_t, TYPE_UINT16, 0),
+         .d = TCV_D(TYPE_BOOL, &tcv_scanbool),
+         .wantbool = false},
+
+        /* Not bools */
+        {.s = TCV_STR("yup"),
+         .d = TCV_D(TYPE_BOOL, &tcv_scanbool),
+         .wanterr = "sql/driver: couldn't convert \"yup\" into type bool"},
+        {.s = TCV_VAL(Int, TYPE_INT, 2),
+         .d = TCV_D(TYPE_BOOL, &tcv_scanbool),
+         .wanterr = "sql/driver: couldn't convert 2 into type bool"},
+
+        /* Floats */
+        {.s = TCV_VAL(double, TYPE_FLOAT64, 1.5),
+         .d = TCV_D(TYPE_FLOAT64, &tcv_scanf64),
+         .wantf64 = 1.5},
+        {.s = TCV_VAL(int64_t, TYPE_INT64, 1),
+         .d = TCV_D(TYPE_FLOAT64, &tcv_scanf64),
+         .wantf64 = 1},
+        {.s = TCV_VAL(double, TYPE_FLOAT64, 1.5),
+         .d = TCV_D(TYPE_FLOAT32, &tcv_scanf32),
+         .wantf32 = 1.5f},
+        {.s = TCV_STR("1.5"), .d = TCV_D(TYPE_FLOAT32, &tcv_scanf32), .wantf32 = 1.5f},
+        {.s = TCV_STR("1.5"), .d = TCV_D(TYPE_FLOAT64, &tcv_scanf64), .wantf64 = 1.5},
+
+        /* UUIDs */
+        {.s = TCV_STR("97b6a4e0-5323-43e9-82c8-88110d6686d6"),
+         .d = TCV_D(TYPE_UUID, &tcv_scanuuid),
+         .wantuuid = &want_uuid},
+        {.s = TCV_STR("97B6A4E0-5323-43E9-82C8-88110D6686D6"),
+         .d = TCV_D(TYPE_UUID, &tcv_scanuuid),
+         .wantuuid = &want_uuid},
+        {.s = TCV_STR("x"),
+         .d = TCV_D(TYPE_UUID, &tcv_scanuuid),
+         .wanterr =
+             "converting driver.Value type string (\"x\") to a UUID: invalid uuid"},
+        {.s = TCV_BYTES("97b6a4e0-5323-43e9-82c8-88110d6686d6"),
+         .d = TCV_D(TYPE_UUID, &tcv_scanuuid),
+         .wantuuid = &want_uuid},
+        {.s = TCV_BYTES("97B6A4E0-5323-43E9-82C8-88110D6686D6"),
+         .d = TCV_D(TYPE_UUID, &tcv_scanuuid),
+         .wantuuid = &want_uuid},
+        {.s = TCV_D(TYPE_BYTES, &uuid_bytes),
+         .d = TCV_D(TYPE_UUID, &tcv_scanuuid),
+         .wantuuid = &want_uuid},
+        {.s = TCV_BYTES("x"),
+         .d = TCV_D(TYPE_UUID, &tcv_scanuuid),
+         .wanterr =
+             "converting driver.Value type []byte (\"x\") to a UUID: invalid uuid"},
+
+        /* Pointers */
+        {.s = TCV_D(NULL, NULL),
+         .d = TCV_D(TYPE_OF(TcvInt64Ptr), &tcv_scanptr),
+         .wantnil = true},
+        {.s = TCV_VAL(int64_t, TYPE_INT64, 42),
+         .d = TCV_D(TYPE_OF(TcvInt64Ptr), &tcv_scanptr),
+         .wantptr = &tcv_answer},
+
+        /* To interface{} */
+        {.s = TCV_VAL(double, TYPE_FLOAT64, 1.5),
+         .d = TCV_D(TYPE_ANY, &tcv_scaniface),
+         .wantiface = TCV_VAL(double, TYPE_FLOAT64, 1.5)},
+        {.s = TCV_VAL(int64_t, TYPE_INT64, 1),
+         .d = TCV_D(TYPE_ANY, &tcv_scaniface),
+         .wantiface = TCV_VAL(int64_t, TYPE_INT64, 1)},
+        {.s = TCV_STR("str"),
+         .d = TCV_D(TYPE_ANY, &tcv_scaniface),
+         .wantiface = TCV_STR("str")},
+        {.s = TCV_BYTES("byteslice"),
+         .d = TCV_D(TYPE_ANY, &tcv_scaniface),
+         .wantiface = TCV_D(TYPE_BYTES, &want_byteslice)},
+        {.s = TCV_VAL(bool, TYPE_BOOL, true),
+         .d = TCV_D(TYPE_ANY, &tcv_scaniface),
+         .wantiface = TCV_VAL(bool, TYPE_BOOL, true)},
+        {.s = TCV_D(NULL, NULL), .d = TCV_D(TYPE_ANY, &tcv_scaniface)},
+        {.s = TCV_D(TYPE_BYTES, &nil_bytes),
+         .d = TCV_D(TYPE_ANY, &tcv_scaniface),
+         .wantiface = TCV_D(TYPE_BYTES, &nil_bytes)},
+
+        /* To a user-defined type */
+        {.s = TCV_VAL(double, TYPE_FLOAT64, 1.5),
+         .d = TCV_D(&tcv_user_defined_type, &usrdef[0]),
+         .wantusrdef = 1.5},
+        {.s = TCV_VAL(int64_t, TYPE_INT64, 123),
+         .d = TCV_D(&tcv_user_defined_type, &usrdef[1]),
+         .wantusrdef = 123},
+        {.s = TCV_STR("1.5"),
+         .d = TCV_D(&tcv_user_defined_type, &usrdef[2]),
+         .wantusrdef = 1.5},
+        {.s = TCV_D(TYPE_BYTES, &b123_bytes),
+         .d = TCV_D(&tcv_user_defined_slice_type, &usrslice),
+         .wanterr = "unsupported Scan, storing driver.Value type []uint8 into type "
+                    "*sql.userDefinedSlice"},
+        {.s = TCV_STR("str"),
+         .d = TCV_D(&tcv_user_defined_string_type, &usrstr),
+         .wantusrstr = "str"},
+
+        /* Other errors */
+        {.s = TCV_D(TYPE_COMPLEX128, &c12),
+         .d = TCV_D(TYPE_STRING, &tcv_scanstr),
+         .wanterr = "unsupported Scan, storing driver.Value type complex128 into type "
+                    "*string"},
+    };
+    for (size_t n = 0; n < sizeof tests / sizeof tests[0]; n++) {
+        Error err = burrow__sql_convert_assign_rows(a, tests[n].d, tests[n].s, NULL);
+        tcv_check(t, n, &tests[n], err);
+    }
+    arena_free(&ar);
+    time_location_free(here);
+}
+
+static void TestNullString(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    SqlNullString ns = {BURROW_STR_EMPTY, false};
+    Any dest = {TYPE_OF(SqlNullString), &ns};
+    (void)burrow__sql_convert_assign_rows(a, dest, TCV_BYTES("foo"), NULL);
+    if (!ns.valid)
+        testing_t_errorf_v(t, "expecting not null");
+    if (!str_eq(ns.string, BURROW_S("foo")))
+        testing_t_errorf_v(t, "expecting foo; got %q", ns.string);
+    (void)burrow__sql_convert_assign_rows(a, dest, TCV_D(NULL, NULL), NULL);
+    if (ns.valid)
+        testing_t_errorf_v(t, "expecting null on nil");
+    if (ns.string.len != 0)
+        testing_t_errorf_v(t, "expecting blank on nil; got %q", ns.string);
+    arena_free(&ar);
+}
+
+static void TestValueConverters(TestingT *t) {
+    SqlNullString hi = {BURROW_S("hi"), true}, null = {BURROW_STR_EMPTY, false};
+    struct {
+        DriverValueConverter c;
+        Any in, out;
+        const char *err;
+    } tests[] = {
+        {driver_default_parameter_converter,
+         {TYPE_OF(SqlNullString), &hi},
+         TCV_STR("hi"),
+         ""},
+        {driver_default_parameter_converter,
+         {TYPE_OF(SqlNullString), &null},
+         {NULL, NULL},
+         ""},
+    };
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
+        Error err = BURROW_NO_ERROR;
+        DriverValue out =
+            tests[i].c.vt->convert_value(tests[i].c.data, a, tests[i].in, &err);
+        Str goterr = BURROW_FAILED(err) ? error_text(err) : BURROW_STR_EMPTY;
+        if (!str_eq(goterr, str_from_cstr(tests[i].err)))
+            testing_t_errorf_v(t, "test %d: %T(%v) error = %q; want error = %q", (Int)i,
+                               tests[i].in, tests[i].in, goterr, tests[i].err);
+        if (tests[i].err[0] != '\0')
+            continue;
+        if (!tcv_iface_equal(tests[i].out, out))
+            testing_t_errorf_v(t, "test %d: %T(%v) = %v (%T); want %v (%T)", (Int)i,
+                               tests[i].in, tests[i].in, out, out, tests[i].out,
+                               tests[i].out);
+    }
+    arena_free(&ar);
+}
+
+typedef struct TcvRawCase {
+    const char *name;
+    Any in;
+    const char *want;
+} TcvRawCase;
+
+static bool tcv_raw_test(TestingT *t, SqlRows *rows, Bytes *buf, const TcvRawCase *tt) {
+    Error err = burrow__sql_convert_assign_rows(
+        heap_allocator(), (Any){&burrow_type_SqlRawBytes, buf}, tt->in, rows);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%s: convertAssign = %v", tt->name, err);
+        return false;
+    }
+    if (!str_eq(tcv_bytes_str(*buf), str_from_cstr(tt->want))) {
+        testing_t_errorf_v(t, "%s: got %q (len %d); want %q (len %d)", tt->name,
+                           tcv_bytes_str(*buf), buf->len, tt->want,
+                           (Int)strlen(tt->want));
+        return false;
+    }
+    return true;
+}
+
+/* Tests that assigning to RawBytes doesn't allocate (and also works). */
+static void TestRawBytesAllocs(TestingT *t) {
+    Time t25 = time_utc(time_from_unix(2, 5));
+    TcvRawCase tests[] = {
+        {"uint64", TCV_VAL(uint64_t, TYPE_UINT64, 12345678), "12345678"},
+        {"uint32", TCV_VAL(uint32_t, TYPE_UINT32, 1234), "1234"},
+        {"uint16", TCV_VAL(uint16_t, TYPE_UINT16, 12), "12"},
+        {"uint8", TCV_VAL(uint8_t, TYPE_UINT8, 1), "1"},
+        {"uint", TCV_VAL(Uint, TYPE_UINT, 123), "123"},
+        {"int", TCV_VAL(Int, TYPE_INT, 123), "123"},
+        {"int8", TCV_VAL(int8_t, TYPE_INT8, 1), "1"},
+        {"int16", TCV_VAL(int16_t, TYPE_INT16, 12), "12"},
+        {"int32", TCV_VAL(int32_t, TYPE_INT32, 1234), "1234"},
+        {"int64", TCV_VAL(int64_t, TYPE_INT64, 12345678), "12345678"},
+        {"float32", TCV_VAL(float, TYPE_FLOAT32, 1.5f), "1.5"},
+        {"float64", TCV_VAL(double, TYPE_FLOAT64, 64), "64"},
+        {"bool", TCV_VAL(bool, TYPE_BOOL, false), "false"},
+        {"time", TCV_D(TYPE_TIME, &t25), "1970-01-01T00:00:02.000000005Z"},
+    };
+    size_t ntests = sizeof tests / sizeof tests[0];
+
+    Bytes buf = {NULL, 0, 0, TYPE_BYTE};
+    SqlRows *rows = burrow__sql_rows_bare_new();
+    if (rows == NULL)
+        FATALF("%v", burrow_err_out_of_memory);
+
+    /* testing.AllocsPerRun: one run to warm up, then the average of 100. */
+    uint64_t before = 0;
+    for (int run = 0; run <= 100; run++) {
+        if (run == 1)
+            before = mem_stats(heap_allocator()).allocs;
+        for (size_t i = 0; i < ntests; i++) {
+            burrow__sql_rows_bare_reset_raw(rows);
+            if (!tcv_raw_test(t, rows, &buf, &tests[i])) {
+                burrow__sql_rows_bare_free(rows);
+                return;
+            }
+        }
+    }
+    double n = (double)(mem_stats(heap_allocator()).allocs - before) / 100;
+    if (n > 0.5) {
+        burrow__sql_rows_bare_free(rows);
+        FATALF("allocs = %v; want 0", n);
+    }
+
+    /* Go allows one allocation here for its string to interface{} conversion,
+     * which C does not have. */
+    TcvRawCase str_case = {"string", TCV_STR("foo"), "foo"};
+    for (int run = 0; run <= 100; run++) {
+        if (run == 1)
+            before = mem_stats(heap_allocator()).allocs;
+        if (!tcv_raw_test(t, rows, &buf, &str_case)) {
+            burrow__sql_rows_bare_free(rows);
+            return;
+        }
+    }
+    n = (double)(mem_stats(heap_allocator()).allocs - before) / 100;
+    burrow__sql_rows_bare_free(rows);
+    if (n > 1.5)
+        FATALF("allocs = %v; want max 1", n);
+}
+
+/* https://golang.org/issues/13905 */
+static void TestUserDefinedBytes(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Slice u = {NULL, 0, 0, TYPE_BYTE};
+    Byte foo[3] = {'f', 'o', 'o'};
+    Bytes v = {foo, 3, 3, TYPE_BYTE};
+
+    (void)burrow__sql_convert_assign_rows(arena_allocator(&ar),
+                                          (Any){&tcv_user_defined_bytes_type, &u},
+                                          (Any){TYPE_BYTES, &v}, NULL);
+    bool same = u.len > 0 && u.p == v.p;
+    Int ulen = u.len;
+    arena_free(&ar);
+    if (ulen == 0)
+        FATALF("userDefinedBytes got no bytes");
+    if (same)
+        FATALF("userDefinedBytes got potentially dirty driver memory");
+}
+
+/* type Valuer_V string, whose Value has a value receiver. */
+typedef Str TcvValuerV;
+
+static Any tcv_valuer_v_value(TcvValuerV *v, DriverAllocArg a, DriverErrorArg err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    Str *s = BURROW_NEW(a, Str);
+    if (s == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return (Any){NULL, NULL};
+    }
+    *s = strings_to_upper(a, *v);
+    return (Any){TYPE_STRING, s};
+}
+
+#define TCV_VALUER_V_METHODS(M, T) M(T, Value, tcv_valuer_v_value, DRIVER_SIG_VALUE)
+BURROW_METHODS_DEFINE(TcvValuerV, TCV_VALUER_V_METHODS);
+
+static const Type tcv_valuer_v_type = {
+    BURROW_S_INIT("Valuer_V"),
+    BURROW_S_INIT("database/sql"),
+    KIND_STRING,
+    (uint32_t)sizeof(Str),
+    (uint16_t)_Alignof(Str),
+    0,
+    1,
+    NULL,
+    burrow__methods_TcvValuerV,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
+/* *Valuer_V, a pointer to it. */
+static const Type tcv_valuer_v_ptr_type = {
+    {NULL, 0},
+    {NULL, 0},
+    KIND_POINTER,
+    (uint32_t)sizeof(void *),
+    (uint16_t)_Alignof(void *),
+    0,
+    0,
+    NULL,
+    NULL,
+    &tcv_valuer_v_type,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
+/* type Valuer_P string, whose Value has a pointer receiver and so belongs to
+ * *Valuer_P, which can be nil. */
+static const Type tcv_valuer_p_type = {
+    BURROW_S_INIT("Valuer_P"),
+    BURROW_S_INIT("database/sql"),
+    KIND_STRING,
+    (uint32_t)sizeof(Str),
+    (uint16_t)_Alignof(Str),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
+typedef Str *TcvValuerPPtr;
+
+static Any tcv_valuer_p_value(TcvValuerPPtr *p, DriverAllocArg a, DriverErrorArg err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    Str *s = BURROW_NEW(a, Str);
+    if (s == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return (Any){NULL, NULL};
+    }
+    if (*p == NULL)
+        *s = BURROW_S("nil-to-str");
+    else
+        *s = strings_to_upper(a, **p);
+    return (Any){TYPE_STRING, s};
+}
+
+#define TCV_VALUER_P_METHODS(M, T) M(T, Value, tcv_valuer_p_value, DRIVER_SIG_VALUE)
+BURROW_METHODS_DEFINE(TcvValuerPPtr, TCV_VALUER_P_METHODS);
+
+static const Type tcv_valuer_p_ptr_type = {
+    {NULL, 0},
+    {NULL, 0},
+    KIND_POINTER,
+    (uint32_t)sizeof(void *),
+    (uint16_t)_Alignof(void *),
+    0,
+    1,
+    NULL,
+    burrow__methods_TcvValuerPPtr,
+    &tcv_valuer_p_type,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
+static void TestDriverArgs(TestingT *t) {
+    TcvValuerV foo = BURROW_S("foo");
+    TcvValuerV *nil_valuer_v_ptr = NULL;
+    TcvValuerPPtr nil_valuer_p_ptr = NULL;
+    Str *nil_str_ptr = NULL;
+    struct {
+        Any arg;
+        Any want;
+    } tests[] = {
+        {{&tcv_valuer_v_type, &foo}, TCV_STR("FOO")},
+        {{&tcv_valuer_v_ptr_type, &nil_valuer_v_ptr}, {NULL, NULL}},
+        {{&tcv_valuer_p_ptr_type, &nil_valuer_p_ptr}, TCV_STR("nil-to-str")},
+        {TCV_STR("plain-str"), TCV_STR("plain-str")},
+        {{TYPE_OF(StrPtr), &nil_str_ptr}, {NULL, NULL}},
+    };
+    DriverStmt si = {&td_stub_stmt_vt, NULL};
+    DriverConn ci;
+    memset(&ci, 0, sizeof ci);
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
+        Arena ar;
+        arena_init(&ar, heap_allocator(), 0);
+        Error err = BURROW_NO_ERROR;
+        Slice got = burrow__sql_driver_args_conn_locked(
+            arena_allocator(&ar), ci, &si, slice_from(&tests[i].arg, 1, 1, TYPE_ANY),
+            &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "test[%d]: %v", (Int)i, err);
+        } else {
+            const DriverNamedValue *nv = got.p;
+            Any gotv = {NULL, NULL};
+            if (got.len == 1)
+                gotv = nv[0].value;
+            if (got.len != 1 || nv[0].ordinal != 1 || nv[0].name.len != 0 ||
+                !tcv_iface_equal(tests[i].want, gotv))
+                testing_t_errorf_v(t, "test[%d]: got %v, want ordinal 1 value %v",
+                                   (Int)i, gotv, tests[i].want);
+        }
+        arena_free(&ar);
+    }
+}
+
+typedef struct TcvDec {
+    Byte form;
+    bool neg;
+    Byte coefficient[16];
+    int32_t exponent;
+} TcvDec;
+extern const Type burrow_type_TcvDec;
+
+static DriverDecomposed tcv_dec_decompose(TcvDec *d, Bytes buf) {
+    (void)buf;
+    DriverDecomposed out = {d->form, d->neg,
+                            slice_from(d->coefficient, 16, 16, TYPE_BYTE), d->exponent};
+    return out;
+}
+
+static Error tcv_dec_compose(TcvDec *d, DriverDecomposed p) {
+    switch (p.form) {
+    case 1:
+    case 2:
+        d->form = p.form;
+        d->neg = p.negative;
+        return BURROW_NO_ERROR;
+    case 0:
+        break;
+    default:
+        return fmt_errorf_v("unknown form %d", (Int)p.form);
+    }
+    d->form = p.form;
+    d->neg = p.negative;
+    d->exponent = p.exponent;
+
+    /* This isn't strictly correct, as the extra bytes could be all zero,
+     * ignore this for this test. */
+    if (p.coefficient.len > 16)
+        return fmt_errorf_v("coefficient too large");
+    memcpy(d->coefficient, p.coefficient.p, (size_t)p.coefficient.len);
+    return BURROW_NO_ERROR;
+}
+
+#define TCV_DEC_FIELDS(F, T)                                                           \
+    F(T, Byte, form, "")                                                               \
+    F(T, bool, neg, "")                                                                \
+    F(T, int32_t, exponent, "")
+#define TCV_DEC_METHODS(M, T)                                                          \
+    M(T, Compose, tcv_dec_compose, SQL_SIG_COMPOSE)                                    \
+    M(T, Decompose, tcv_dec_decompose, DRIVER_SIG_DECOMPOSE)
+BURROW_STRUCT_DEFINE_METHODS(TcvDec, TCV_DEC_FIELDS, TCV_DEC_METHODS);
+
+typedef struct TcvDecFinite {
+    bool neg;
+    Byte coefficient[16];
+    int32_t exponent;
+} TcvDecFinite;
+extern const Type burrow_type_TcvDecFinite;
+
+static DriverDecomposed tcv_dec_finite_decompose(TcvDecFinite *d, Bytes buf) {
+    (void)buf;
+    DriverDecomposed out = {0, d->neg, slice_from(d->coefficient, 16, 16, TYPE_BYTE),
+                            d->exponent};
+    return out;
+}
+
+static Error tcv_dec_finite_compose(TcvDecFinite *d, DriverDecomposed p) {
+    switch (p.form) {
+    case 1:
+    case 2:
+        return fmt_errorf_v("unsupported form %d", (Int)p.form);
+    case 0:
+        break;
+    default:
+        return fmt_errorf_v("unknown form %d", (Int)p.form);
+    }
+    d->neg = p.negative;
+    d->exponent = p.exponent;
+
+    /* This isn't strictly correct, as the extra bytes could be all zero,
+     * ignore this for this test. */
+    if (p.coefficient.len > 16)
+        return fmt_errorf_v("coefficient too large");
+    memcpy(d->coefficient, p.coefficient.p, (size_t)p.coefficient.len);
+    return BURROW_NO_ERROR;
+}
+
+#define TCV_DEC_FINITE_FIELDS(F, T)                                                    \
+    F(T, bool, neg, "")                                                                \
+    F(T, int32_t, exponent, "")
+#define TCV_DEC_FINITE_METHODS(M, T)                                                   \
+    M(T, Compose, tcv_dec_finite_compose, SQL_SIG_COMPOSE)                             \
+    M(T, Decompose, tcv_dec_finite_decompose, DRIVER_SIG_DECOMPOSE)
+BURROW_STRUCT_DEFINE_METHODS(TcvDecFinite, TCV_DEC_FINITE_FIELDS,
+                             TCV_DEC_FINITE_METHODS);
+
+typedef struct TcvDecimalCase {
+    const char *name;
+    Any in;
+    TcvDec out;
+    bool err;
+} TcvDecimalCase;
+
+static bool tcv_dec_equal(const TcvDec *a, const TcvDec *b) {
+    return a->form == b->form && a->neg == b->neg && a->exponent == b->exponent &&
+           memcmp(a->coefficient, b->coefficient, sizeof a->coefficient) == 0;
+}
+
+static void tcv_decimal_sub(void *env, TestingT *t) {
+    const TcvDecimalCase *item = env;
+    TcvDec out;
+    memset(&out, 0, sizeof out);
+    Error err = burrow__sql_convert_assign_rows(
+        heap_allocator(), (Any){TYPE_OF(TcvDec), &out}, item->in, NULL);
+    if (item->err) {
+        if (BURROW_OK(err))
+            FATALF("unexpected nil error");
+        return;
+    }
+    if (BURROW_FAILED(err))
+        FATALF("unexpected error: %v", err);
+    if (!tcv_dec_equal(&out, &item->out))
+        FATALF("got form %d exponent %d, want form %d exponent %d", (Int)out.form,
+               (Int)out.exponent, (Int)item->out.form, (Int)item->out.exponent);
+}
+
+static void TestDecimal(TestingT *t) {
+    TcvDec same, bad_form;
+    TcvDecFinite diff;
+    memset(&same, 0, sizeof same);
+    memset(&bad_form, 0, sizeof bad_form);
+    memset(&diff, 0, sizeof diff);
+    same.exponent = -6;
+    diff.exponent = -6;
+    bad_form.form = 200;
+    TcvDec want;
+    memset(&want, 0, sizeof want);
+    want.exponent = -6;
+    TcvDec none;
+    memset(&none, 0, sizeof none);
+
+    TcvDecimalCase list[] = {
+        {"same", {TYPE_OF(TcvDec), &same}, want, false},
+
+        /* Ensure reflection is not used to assign the value by using different
+         * types. */
+        {"diff", {TYPE_OF(TcvDecFinite), &diff}, want, false},
+
+        {"bad-form", {TYPE_OF(TcvDec), &bad_form}, none, true},
+    };
+    for (size_t i = 0; i < sizeof list / sizeof list[0]; i++)
+        (void)testing_t_run(t, str_from_cstr(list[i].name),
+                            BURROW_FN(TestingTFunc, tcv_decimal_sub, &list[i]));
+}
+
+static void TestConvertAssignNoContext(TestingT *t) {
+    Int want = 42;
+    int64_t got = 0;
+    DriverScanContext scan_ctx;
+    memset(&scan_ctx, 0, sizeof scan_ctx);
+    Error err = sql_convert_assign(heap_allocator(), scan_ctx, (Any){TYPE_INT64, &got},
+                                   (Any){TYPE_INT, &want});
+    if (BURROW_FAILED(err))
+        FATALF("ConvertAssign: %v", err);
+    if (got != (int64_t)want)
+        testing_t_errorf_v(t, "after ConvertAssign: got %v, want %v", got, want);
+}
+
 #define TESTS(X)                                                                       \
     X(TestOpenDB)                                                                      \
     X(TestQuery)                                                                       \
@@ -6818,6 +7818,14 @@ static void TestStatementClose(TestingT *t) {
     X(TestQueryRowsScanner)                                                            \
     X(TestIssue6651)                                                                   \
     X(TestPoolExhaustOnCancel)                                                         \
-    X(TestStatementClose)
+    X(TestStatementClose)                                                              \
+    X(TestConversions)                                                                 \
+    X(TestNullString)                                                                  \
+    X(TestValueConverters)                                                             \
+    X(TestRawBytesAllocs)                                                              \
+    X(TestUserDefinedBytes)                                                            \
+    X(TestDriverArgs)                                                                  \
+    X(TestDecimal)                                                                     \
+    X(TestConvertAssignNoContext)
 
 TESTING_MAIN(TESTS)

@@ -3648,6 +3648,28 @@ Alloc *burrow__sql_rows_raw_alloc(SqlRows *rs, Alloc *a) {
     return arena_allocator(&rs->raw_arena);
 }
 
+SqlRows *burrow__sql_rows_bare_new(void) {
+    SqlRows *rs = BURROW_NEW(heap_allocator(), SqlRows);
+    if (rs == NULL)
+        return NULL;
+    rs->raw = slice_from(NULL, 0, 0, TYPE_BYTE);
+    arena_init(&rs->raw_arena, heap_allocator(), 0);
+    arena_init(&rs->err_arena, heap_allocator(), 0);
+    return rs;
+}
+
+void burrow__sql_rows_bare_reset_raw(SqlRows *rs) {
+    rs->raw.len = 0;
+}
+
+void burrow__sql_rows_bare_free(SqlRows *rs) {
+    if (rs == NULL)
+        return;
+    arena_free(&rs->raw_arena);
+    arena_free(&rs->err_arena);
+    mem_free(heap_allocator(), rs, sizeof(SqlRows), _Alignof(SqlRows));
+}
+
 SqlRows *burrow__sql_rows_cursor(SqlRows *parent, DriverRows rows, Error *err) {
     SqlRows *rs = sq_rows_new(parent->dc, (SqRelease){SQ_RELEASE_NONE, NULL}, rows);
     if (rs == NULL) {

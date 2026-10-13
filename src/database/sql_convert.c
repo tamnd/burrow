@@ -400,9 +400,8 @@ static bool sc_as_bytes(Alloc *a, Bytes buf, Any src, Bytes *out) {
         return true;
     }
     if (k == KIND_FLOAT32 || k == KIND_FLOAT64) {
-        Str s = strconv_format_float(a, sc_float_of(t, src.data), 'g', -1,
-                                     k == KIND_FLOAT32 ? 32 : 64);
-        *out = sc_append(a, buf, s);
+        *out = strconv_append_float(a, buf, sc_float_of(t, src.data), 'g', -1,
+                                    k == KIND_FLOAT32 ? 32 : 64);
         return true;
     }
     if (k == KIND_BOOL) {

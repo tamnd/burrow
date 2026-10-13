@@ -292,7 +292,7 @@ static const ErrorVT nd_temporary_vt = {
 #define ND_TEXT_ERROR(name, vt, text)                                                  \
     static const NetDNSTextError name##__v = {                                         \
         {(const Byte *)("" text), (Int)(sizeof(text) - 1)}};                           \
-    const Error name = {&vt, &name##__v}
+    const Error name = {&(vt), &name##__v}
 
 ND_TEXT_ERROR(burrow__net_err_no_such_host, nd_not_found_vt, "no such host");
 ND_TEXT_ERROR(burrow__net_err_unknown_port, nd_not_found_vt, "unknown port");

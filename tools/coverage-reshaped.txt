@@ -317,6 +317,14 @@ crypto/mldsa: func GenerateKey: takes a pointer to one of the three parameter se
 crypto/mldsa: func NewPrivateKey: takes a pointer to one of the three parameter sets
 crypto/mldsa: func NewPublicKey: takes a pointer to one of the three parameter sets
 
+# include/burrow/crypto/x509.h: Go takes the private key as an `any` and asks
+# it for crypto.Signer at run time. C cannot ask an Any what it implements, so
+# the signer is the parameter, and a zero one gives Go's error for a key that
+# is not a crypto.Signer.
+crypto/x509: func CreateCertificate: takes priv as a CryptoSigner, since an Any cannot be asked whether it is a crypto.Signer
+crypto/x509: func CreateCertificateRequest: takes priv as a CryptoSigner, since an Any cannot be asked whether it is a crypto.Signer
+crypto/x509: method (*Certificate) CreateCRL: takes priv as a CryptoSigner, since an Any cannot be asked whether it is a crypto.Signer
+
 # include/burrow/net.h: Go returns both ends and leaves the memory to the
 # collector. Here the pipe comes from an allocator and net_pipe_free gives it
 # back, and two values come back through out parameters.

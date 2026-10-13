@@ -1212,7 +1212,7 @@ printf("%d attributes\n", (int)parsed.names.len);
 
 ## crypto/x509
 
-`burrow/crypto/x509.h` is Go's crypto/x509. This first part covers the key formats, object identifiers and the old encrypted PEM blocks; certificates, requests, revocation lists and chain building come next. Private keys go in and out of PKCS #8 as an `Any`, the same way Go uses `any`, so one call handles RSA, ECDSA, Ed25519, X25519 and ML-DSA keys. PKCS #1 and SEC 1 have calls of their own for RSA and EC keys:
+`burrow/crypto/x509.h` is Go's crypto/x509. It covers key formats, object identifiers, certificates, certificate requests and revocation lists; chain building comes next. Private keys go in and out of PKCS #8 as an `Any`, the same way Go uses `any`, so one call handles RSA, ECDSA, Ed25519, X25519 and ML-DSA keys. PKCS #1 and SEC 1 have calls of their own for RSA and EC keys:
 
 <!-- example: ../examples/crypto/x509.c#pkcs8 -->
 ```c
@@ -1274,6 +1274,108 @@ print(
 x509_parse_oid(a, BURROW_S("1.2."), &err);
 print(error_text(err));
 ```
+
+`x509_create_certificate` signs a template with a parent's key, the same as Go's `CreateCertificate`. Fields left zero get Go's defaults: a CA with no subject key ID gets one from the SHA-256 of its public key, and the signature algorithm follows from the signer. A self-signed certificate is its own parent:
+
+<!-- example: ../examples/crypto/x509.c#create -->
+```c
+Byte seed[ED25519_SEED_SIZE] = {0};
+for (int i = 0; i < ED25519_SEED_SIZE; i++)
+    seed[i] = (Byte)(i + 1);
+Ed25519Signer ca_key;
+CryptoSigner ca_signer = ed25519_private_key_signer(
+    ed25519_new_key_from_seed(
+        a, slice_from(seed, sizeof seed, sizeof seed, TYPE_BYTE)),
+    &ca_key);
+
+X509Certificate tmpl = {0};
+tmpl.serial_number = big_new_int(a, 1);
+tmpl.subject.common_name = BURROW_S("Example Root");
+tmpl.not_before = time_date(2026, TIME_JANUARY, 1, 0, 0, 0, 0, time_utc_loc);
+tmpl.not_after = time_date(2036, TIME_JANUARY, 1, 0, 0, 0, 0, time_utc_loc);
+tmpl.key_usage = X509_KEY_USAGE_CERT_SIGN;
+tmpl.basic_constraints_valid = true;
+tmpl.is_ca = true;
+
+// Self-signed, so the template is its own parent.
+Error err = BURROW_NO_ERROR;
+Slice der = x509_create_certificate(
+    a, (IoReader){0}, &tmpl, &tmpl,
+    BURROW_ANY(TYPE_ED25519_PUBLIC_KEY, &ca_key.pub), ca_signer, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%d bytes\n", (int)der.len);
+```
+
+`x509_parse_certificate` reads the DER back into an `X509Certificate`, with every extension Go understands filled in and the raw bytes of each part kept next to it. `x509_certificate_check_signature_from` checks that a parent signed it:
+
+<!-- example: ../examples/crypto/x509.c#certparse -->
+```c
+X509Certificate *ca = x509_parse_certificate(a, der, &err);
+if (BURROW_FAILED(err))
+    return;
+print(pkix_name_string(ca->subject, a));
+print(x509_signature_algorithm_string(ca->signature_algorithm, a));
+print(hex_encode_to_string(a, ca->subject_key_id));
+print(time_format(ca->not_after, a, TIME_RFC3339));
+err = x509_certificate_check_signature_from(ca, ca);
+printf("signed by itself: %s\n", BURROW_FAILED(err) ? "no" : "yes");
+```
+
+Certificate requests work the same way. The request carries the subject, the names and the public key, and is signed by the key it asks a certificate for:
+
+<!-- example: ../examples/crypto/x509.c#request -->
+```c
+for (int i = 0; i < ED25519_SEED_SIZE; i++)
+    seed[i] = (Byte)(0x80 + i);
+Ed25519Signer leaf_key;
+CryptoSigner leaf_signer = ed25519_private_key_signer(
+    ed25519_new_key_from_seed(
+        a, slice_from(seed, sizeof seed, sizeof seed, TYPE_BYTE)),
+    &leaf_key);
+
+Str host = BURROW_S("www.example.com");
+X509CertificateRequest req = {0};
+req.subject.common_name = host;
+req.dns_names = slice_append(a, slice_nil(TYPE_STRING), &host, 1);
+Slice csr_der =
+    x509_create_certificate_request(a, (IoReader){0}, &req, leaf_signer, &err);
+if (BURROW_FAILED(err))
+    return;
+X509CertificateRequest *csr = x509_parse_certificate_request(a, csr_der, &err);
+if (BURROW_FAILED(err))
+    return;
+err = x509_certificate_request_check_signature(csr);
+printf("request for %.*s: %s\n", (int)csr->subject.common_name.len,
+       csr->subject.common_name.p, BURROW_FAILED(err) ? "bad" : "ok");
+```
+
+A CA then copies what it trusts from the request into a template and signs it. The authority key ID of the new certificate is the subject key ID of the parent:
+
+<!-- example: ../examples/crypto/x509.c#issue -->
+```c
+// The CA signs a certificate for the key in the request.
+X509Certificate leaf_tmpl = {0};
+leaf_tmpl.serial_number = big_new_int(a, 2);
+leaf_tmpl.subject = csr->subject;
+leaf_tmpl.dns_names = csr->dns_names;
+leaf_tmpl.not_before = tmpl.not_before;
+leaf_tmpl.not_after = time_date(2027, TIME_JANUARY, 1, 0, 0, 0, 0, time_utc_loc);
+leaf_tmpl.key_usage = X509_KEY_USAGE_DIGITAL_SIGNATURE;
+X509ExtKeyUsage server = X509_EXT_KEY_USAGE_SERVER_AUTH;
+leaf_tmpl.ext_key_usage = slice_append(a, slice_nil(TYPE_INT), &server, 1);
+Slice leaf_der = x509_create_certificate(a, (IoReader){0}, &leaf_tmpl, ca,
+                                         csr->public_key, ca_signer, &err);
+if (BURROW_FAILED(err))
+    return;
+X509Certificate *leaf = x509_parse_certificate(a, leaf_der, &err);
+if (BURROW_FAILED(err))
+    return;
+print(pkix_name_string(leaf->issuer, a));
+print(hex_encode_to_string(a, leaf->authority_key_id));
+```
+
+`x509_create_revocation_list` and `x509_parse_revocation_list` do the same for CRLs. Parsing does not fail on an extension it does not know. When such an extension is marked critical it goes in `unhandled_critical_extensions`, as in Go, and verification turns the certificate down unless the caller handles it and takes it out of that list.
 
 `x509_encrypt_pem_block` and `x509_decrypt_pem_block` handle the RFC 1423 `DEK-Info` encryption that old OpenSSL keys use. Go deprecates them because the scheme is weak and a wrong password is not always caught, and they are here for reading old files, not for writing new ones.
 

@@ -1,9 +1,9 @@
 #!/bin/sh
 # Regenerates tests/x509_test_gen.h and tests/x509_parse_test_gen.h: the keys,
 # certificates, PEM blocks and numbers in Go's crypto/x509 tests that
-# tests/x509_test.c and tests/x509_parse_test.c use, read out of the Go sources
-# so none of them is copied by hand. testingKey's "TESTING KEY" becomes "PRIVATE
-# KEY" the same as in Go.
+# tests/x509_test.c, tests/x509_parse_test.c and tests/x509_create_test.c use,
+# read out of the Go sources so none of them is copied by hand. testingKey's
+# "TESTING KEY" becomes "PRIVATE KEY" the same as in Go.
 #
 # The Go on PATH should be the release the port follows. GOROOT can be set to
 # point at another source tree.
@@ -186,7 +186,8 @@ with open(out, "w") as f:
 PY
 
 # The certificates, CSRs and CRLs that the parsing tests in parser_test.go and
-# x509_test.go read go to a header of their own for tests/x509_parse_test.c.
+# x509_test.go read go to a header of their own for tests/x509_parse_test.c,
+# which tests/x509_create_test.c shares.
 python3 - "$goroot/src/crypto/x509" "$root/tests/x509_parse_test_gen.h" <<'PY'
 import re
 import sys
@@ -335,6 +336,29 @@ define(
 )
 define("ipv4_mapped_san_cert", go_string("ipv4MappedSANCert", x509_test))
 define("ipv4_mapped_constraint_cert", go_string("ipv4MappedConstraintCert", x509_test))
+
+# The certificates and keys the creation tests sign with or read.
+define("ed25519_crl_certificate", pem_only(go_string("ed25519CRLCertificate", x509_test)))
+define(
+    "ed25519_crl_key",
+    one(r"\nvar ed25519CRLKey = testingKey\(`(.*?)`\)", x509_test),
+)
+create_crl = func("TestCreateRevocationList", x509_test)
+define("utf8_ca_base64", one(r'utf8CAStr := "([^"]+)"', create_crl))
+define("utf8_key_base64", one(r'utf8KeyStr := "([^"]+)"', create_crl))
+for name in ["44", "65", "87"]:
+    define_parts(
+        f"mldsa{name}_certificate_pem",
+        pem_only(one(rf"\nvar rfc9881ExampleCertificateMLDSA{name} = `(.*?)`", x509_test)),
+    )
+ia5 = re.findall(r'cert: +"([0-9a-f]+)",', func("TestIA5SANEnforcement", x509_test))
+assert len(ia5) == 3
+for i, c in enumerate(ia5):
+    define(f"ia5_unmarshal_cert_{i}", c)
+define(
+    "ocsp_tbs_hex",
+    one(r'ocspTBSHex := "([0-9a-f]+)"', func("TestDisableSHA1ForCertOnly", x509_test)),
+)
 
 with open(out, "w") as f:
     f.write(

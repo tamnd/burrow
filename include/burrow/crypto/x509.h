@@ -3,8 +3,8 @@
  * This part has the key formats: PKCS #1 and SEC 1 private keys, PKCS #8 for
  * any of them, PKIX public keys, the old encrypted PEM blocks of RFC 1423, and
  * OIDs. It also parses certificates, certificate requests and revocation
- * lists, and checks the signatures on them. Reading a key the way most
- * programs meet one:
+ * lists, checks the signatures on them, and makes new ones of each. Reading a
+ * key the way most programs meet one:
  *
  *     PemBlock *b = pem_decode(a, pem, &rest);
  *     Any key = x509_parse_pkcs8_private_key(a, b->bytes, &err);
@@ -588,6 +588,64 @@ BURROW_OWNS(ret) PkixCertificateList *x509_parse_crl(Alloc *a, Slice crl_bytes,
 /* ParseDERCRL: the CRL in der, from a. Deprecated in Go, as above. */
 BURROW_OWNS(ret) PkixCertificateList *x509_parse_dercrl(Alloc *a, Slice der,
                                                         Error *err);
+
+/* ---------------------------------------------------------------- creating */
+
+/* CreateCertificate: a new certificate in DER, from a, made from template and
+ * signed by priv as parent. The certificate is self-signed when parent is
+ * template. pub is the public key of the new certificate, in an Any the way
+ * x509_marshal_pkix_public_key takes one, and priv is the signer of parent,
+ * whose public key has to be parent's when parent has one.
+ *
+ * Of template, these are used: authority_key_id, basic_constraints_valid,
+ * crl_distribution_points, dns_names, email_addresses, excluded_dns_domains,
+ * excluded_email_addresses, excluded_ip_ranges, excluded_uri_domains,
+ * ext_key_usage, extra_extensions, ip_addresses, is_ca,
+ * issuing_certificate_url, key_usage, max_path_len, max_path_len_zero,
+ * not_after, not_before, ocsp_server, permitted_dns_domains,
+ * permitted_dns_domains_critical, permitted_email_addresses,
+ * permitted_ip_ranges, permitted_uri_domains, policies, policy_identifiers,
+ * raw_subject, serial_number, signature_algorithm, subject, subject_key_id,
+ * unknown_ext_key_usage and uris. policy_identifiers is only used instead of
+ * policies when GODEBUG has x509usepolicies=0.
+ *
+ * A NULL serial_number gets 20 random bytes from rand, with the top bit
+ * cleared. A CA without a subject_key_id gets the first 20 bytes of the
+ * SHA-256 of its public key, or the SHA-1 of it with GODEBUG x509sha256skid=0.
+ * A zero rand is crypto_rand_reader, and a zero priv is an error, as a key
+ * that is not a crypto.Signer is in Go. */
+BURROW_OWNS(ret) Slice x509_create_certificate(Alloc *a, IoReader rand,
+                                               const X509Certificate *template_,
+                                               const X509Certificate *parent, Any pub,
+                                               CryptoSigner priv, Error *err);
+
+/* CreateCertificateRequest: a new PKCS #10 certificate request in DER, from
+ * a, made from template and signed by priv. Of template, these are used:
+ * attributes, dns_names, email_addresses, extra_extensions, ip_addresses,
+ * uris, raw_subject, signature_algorithm and subject. The public key is
+ * priv's. */
+BURROW_OWNS(ret) Slice x509_create_certificate_request(
+    Alloc *a, IoReader rand, const X509CertificateRequest *template_, CryptoSigner priv,
+    Error *err);
+
+/* CreateRevocationList: a new X.509 v2 CRL in DER, from a, made from template
+ * and signed by priv as issuer. issuer has to have the CRL signing key usage
+ * and a subject key ID. Of template, these are used:
+ * revoked_certificate_entries, or revoked_certificates when there are none,
+ * number, this_update, next_update, extra_extensions and
+ * signature_algorithm. */
+BURROW_OWNS(ret) Slice x509_create_revocation_list(Alloc *a, IoReader rand,
+                                                   const X509RevocationList *template_,
+                                                   const X509Certificate *issuer,
+                                                   CryptoSigner priv, Error *err);
+
+/* Certificate.CreateCRL: a CRL in DER, from a, signed by priv as c, listing
+ * revoked_certs, a slice of PkixRevokedCertificate. Deprecated in Go in
+ * favour of x509_create_revocation_list, since it writes a v1 CRL. */
+BURROW_OWNS(ret) Slice x509_certificate_create_crl(const X509Certificate *c, Alloc *a,
+                                                   IoReader rand, CryptoSigner priv,
+                                                   Slice revoked_certs, Time now,
+                                                   Time expiry, Error *err);
 
 /* ------------------------------------------------------- encrypted PEM */
 

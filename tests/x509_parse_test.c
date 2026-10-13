@@ -2,8 +2,8 @@
  * parser_test.go and the tests of x509_test.go that read fixed certificates,
  * CSRs and CRLs.
  *
- * The tests that make a certificate first with CreateCertificate come with
- * certificate creation. TestDomainNameValid has its own copy of
+ * The tests that make a certificate first with CreateCertificate are in
+ * x509_create_test.c. TestDomainNameValid has its own copy of
  * domainToReverseLabels, which Go only keeps for that test. TestCertificateParse
  * leaves out the VerifyHostname call, which comes with verification.
  * TestParsePolicies reads the two certificates it uses from testdata through

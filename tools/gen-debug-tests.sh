@@ -2896,25 +2896,28 @@ func biMinimize(name string, data []byte) []byte {
 	return b
 }
 
-// biFat makes a Mach-O universal binary of the two thin ones.
+// biFat makes a Mach-O universal binary of the thin ones.
 func biFat(thin ...[]byte) []byte {
 	const align = 14
 	be, le := binary.BigEndian, binary.LittleEndian
-	hdr := make([]byte, 8+20*len(thin))
-	be.PutUint32(hdr, 0xcafebabe)
-	be.PutUint32(hdr[4:], uint32(len(thin)))
-	out := hdr
+	out := make([]byte, 8+20*len(thin))
+	be.PutUint32(out, 0xcafebabe)
+	be.PutUint32(out[4:], uint32(len(thin)))
 	off := uint32(1 << align)
+	var offs []uint32
 	for i, f := range thin {
-		e := hdr[8+20*i:]
+		e := out[8+20*i:]
 		be.PutUint32(e, le.Uint32(f[4:]))
 		be.PutUint32(e[4:], le.Uint32(f[8:]))
 		be.PutUint32(e[8:], off)
 		be.PutUint32(e[12:], uint32(len(f)))
 		be.PutUint32(e[16:], align)
-		out = append(out, make([]byte, int(off)-len(out))...)
-		out = append(out, f...)
+		offs = append(offs, off)
 		off = (off + uint32(len(f)) + 1<<align - 1) &^ (1<<align - 1)
+	}
+	for i, f := range thin {
+		out = append(out, make([]byte, int(offs[i])-len(out))...)
+		out = append(out, f...)
 	}
 	return out
 }

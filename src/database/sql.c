@@ -108,6 +108,14 @@ static void sq_vec_free(SqVec *v) {
     v->cap = 0;
 }
 
+/* Hooks for the tests, which Go keeps as package variables of the same names:
+ * hookTxGrabConn, rollbackHook, bypassRowsAwaitDone and rowsCloseHook. Only
+ * tests set them, while nothing else is running. */
+burrow__SqlHook burrow__sql_hook_tx_grab_conn;
+burrow__SqlHook burrow__sql_rollback_hook;
+bool burrow__sql_bypass_rows_await_done;
+burrow__SqlRowsCloseHook burrow__sql_rows_close_hook;
+
 /* --------------------------------------------------------- closingMutex */
 
 /* closemu.go's closingMutex: a read-write lock where a waiting writer keeps
@@ -1641,6 +1649,8 @@ static SqDC *sq_tx_grab(SqlTx *tx, Context ctx, SqRelease *rel, Error *err) {
         *err = sql_err_tx_done;
         return NULL;
     }
+    if (burrow__sql_hook_tx_grab_conn != NULL) /* test hook */
+        burrow__sql_hook_tx_grab_conn();
     sync_atomic_int64_add(&tx->refs, 1);
     *rel = (SqRelease){SQ_RELEASE_TX, tx};
     *err = BURROW_NO_ERROR;
@@ -2485,6 +2495,8 @@ Error sql_tx_commit(SqlTx *tx) {
 static Error sq_tx_rollback(SqlTx *tx, bool discard_conn) {
     if (!sync_atomic_bool_compare_and_swap(&tx->done, false, true))
         return sql_err_tx_done;
+    if (burrow__sql_rollback_hook != NULL)
+        burrow__sql_rollback_hook();
     BURROW_CALLF0(tx->cancel);
     sq_closemu_lock(&tx->closemu);
     sq_closemu_unlock(&tx->closemu);
@@ -2905,6 +2917,8 @@ static bool sq_rows_init_context_close(SqlRows *rs, Context ctx, SqlTx *tx) {
     Chan *txd = tx != NULL ? context_done(tx->ctx) : NULL;
     if (context_done(ctx) == NULL && txd == NULL)
         return true;
+    if (burrow__sql_bypass_rows_await_done)
+        return true;
     ContextCancelFunc cancel = {NULL, NULL};
     Context closectx = context_with_cancel(heap_allocator(), ctx, &cancel);
     if (BURROW_CONTEXT_IS_NIL(closectx))
@@ -2939,6 +2953,9 @@ static Error sq_rows_close(SqlRows *rs, Error err) {
     sync_mutex_lock(&rs->dc->mu);
     Error e = rs->rowsi.vt->close(rs->rowsi.data);
     sync_mutex_unlock(&rs->dc->mu);
+    burrow__SqlRowsCloseHook hook = burrow__sql_rows_close_hook;
+    if (hook != NULL)
+        hook(rs, &e);
 
     sync_atomic_bool_store(&rs->closing, true);
     for (SqlRows *c = rs->children; c != NULL; c = c->child_next)
@@ -3406,12 +3423,24 @@ Int burrow__sql_db_num_deps(SqlDB *db) {
     return n;
 }
 
-void *burrow__sql_db_conn(SqlDB *db, Context ctx, Error *err) {
-    return sq_conn(db, ctx, SQ_CACHED_OR_NEW, err);
+void *burrow__sql_db_conn(SqlDB *db, Context ctx, bool always_new, Error *err) {
+    return sq_conn(db, ctx, always_new ? SQ_ALWAYS_NEW : SQ_CACHED_OR_NEW, err);
 }
 
-void burrow__sql_dc_release(void *dc, Error err) {
-    sq_put_conn(dc, err, true);
+void burrow__sql_db_put_conn(void *dc, Error err, bool reset_session) {
+    sq_put_conn(dc, err, reset_session);
+}
+
+DriverConn burrow__sql_dc_driver(void *dc) {
+    return ((SqDC *)dc)->ci;
+}
+
+void burrow__sql_stmt_force_prepare(SqlStmt *s) {
+    sync_mutex_lock(&s->mu);
+    for (Int i = 0; i < s->css.len; i++)
+        sq_ds_unref((SqDS *)s->css.p[i]);
+    s->css.len = 0;
+    sync_mutex_unlock(&s->mu);
 }
 
 void *burrow__sql_db_free_dc(SqlDB *db, Int i) {

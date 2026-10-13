@@ -2649,11 +2649,11 @@ static void testMaxOpenConnsOnBusy(TestingT *t, SqlDB *db) {
     void *conn[3] = {NULL, NULL, NULL};
     for (int i = 0; i < 3; i++) {
         Error err = BURROW_NO_ERROR;
-        conn[i] = burrow__sql_db_conn(db, ctx, &err);
+        conn[i] = burrow__sql_db_conn(db, ctx, false, &err);
         if (BURROW_FAILED(err)) {
             testing_t_errorf_v(t, "db open conn fail: %v", err);
             for (int j = 0; j < i; j++)
-                burrow__sql_dc_release(conn[j], BURROW_NO_ERROR);
+                burrow__sql_db_put_conn(conn[j], BURROW_NO_ERROR, true);
             unset_close_hook();
             return;
         }
@@ -2668,13 +2668,13 @@ static void testMaxOpenConnsOnBusy(TestingT *t, SqlDB *db) {
     if (g != 3)
         testing_t_errorf_v(t, "free conns = %d; want %d", g, (Int)3);
 
-    burrow__sql_dc_release(conn[0], BURROW_NO_ERROR);
-    burrow__sql_dc_release(conn[1], BURROW_NO_ERROR);
+    burrow__sql_db_put_conn(conn[0], BURROW_NO_ERROR, true);
+    burrow__sql_db_put_conn(conn[1], BURROW_NO_ERROR, true);
     g = burrow__sql_db_num_open(db);
     if (g != 2)
         testing_t_errorf_v(t, "free conns = %d; want %d", g, (Int)2);
 
-    burrow__sql_dc_release(conn[2], BURROW_NO_ERROR);
+    burrow__sql_db_put_conn(conn[2], BURROW_NO_ERROR, true);
     g = burrow__sql_db_num_open(db);
     if (g != 2)
         testing_t_errorf_v(t, "free conns = %d; want %d", g, (Int)2);
@@ -3153,6 +3153,776 @@ static void TestStmtCloseOrder(TestingT *t) {
     test_database(t, testStmtCloseOrder, NULL);
 }
 
+enum { TD_MAX_BAD_CONN_RETRIES = 2 };
+
+/* What manyErrBadConnSetup's first function does: prepare query, when there is
+ * one, before the connections go bad. */
+static SqlDB *many_err_bad_conn_setup(TestingT *t, FakeConnector *fc,
+                                      const char *prepare, SqlStmt **stmt) {
+    SqlDB *db = new_test_db(t, fc, "people");
+    if (db == NULL)
+        return NULL;
+    Error err = BURROW_NO_ERROR;
+    if (prepare != NULL) {
+        *stmt = sql_db_prepare(db, str_from_cstr(prepare), &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "%v", err);
+            close_db(t, db);
+            return NULL;
+        }
+    }
+
+    enum { nconn = TD_MAX_BAD_CONN_RETRIES + 1 };
+    sql_db_set_max_idle_conns(db, nconn);
+    sql_db_set_max_open_conns(db, nconn);
+    /* open enough connections */
+    SqlRows *rows[nconn] = {NULL};
+    bool ok = true;
+    for (int i = 0; i < nconn && ok; i++) {
+        rows[i] = sql_db_query(db, BURROW_S("SELECT|people|age,name|"), NO_ARGS, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "%v", err);
+            ok = false;
+        }
+    }
+    for (int i = 0; i < nconn; i++)
+        if (rows[i] != NULL)
+            sql_rows_free(rows[i]);
+
+    Int n = burrow__sql_db_num_open(db);
+    Int nfree = burrow__sql_db_num_free(db);
+    if (ok && n != nconn) {
+        testing_t_errorf_v(t, "unexpected numOpen %d (was expecting %d)", n,
+                           (Int)nconn);
+        ok = false;
+    } else if (ok && nfree != nconn) {
+        testing_t_errorf_v(t, "unexpected len(db.freeConn) %d (was expecting %d)",
+                           nfree, (Int)nconn);
+        ok = false;
+    }
+    if (!ok) {
+        if (prepare != NULL)
+            sql_stmt_free(*stmt);
+        close_db(t, db);
+        return NULL;
+    }
+    for (Int i = 0; i < nfree; i++)
+        fdb_get_fake_conn(burrow__sql_db_free_conn(db, i))->sticky_bad = true;
+    return db;
+}
+
+/* Test cases where there's more than maxBadConnRetries bad connections in the
+ * pool (issue 8834). */
+static void testManyErrBadConn(TestingT *t) {
+    FakeConnector fc;
+    Error err = BURROW_NO_ERROR;
+    SqlStmt *stmt = NULL;
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+
+    /* Query */
+    memset(&fc, 0, sizeof fc);
+    SqlDB *db = many_err_bad_conn_setup(t, &fc, NULL, NULL);
+    if (db == NULL)
+        goto out;
+    SqlRows *rows =
+        sql_db_query(db, BURROW_S("SELECT|people|age,name|"), NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+    } else {
+        err = sql_rows_close(rows);
+        sql_rows_free(rows);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "%v", err);
+    }
+    close_db(t, db);
+    if (testing_t_failed(t))
+        goto out;
+
+    /* Exec */
+    memset(&fc, 0, sizeof fc);
+    db = many_err_bad_conn_setup(t, &fc, NULL, NULL);
+    if (db == NULL)
+        goto out;
+    (void)sql_db_exec(db, arena_allocator(&ar),
+                      BURROW_S("INSERT|people|name=Julia,age=19"), NO_ARGS, &err);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "%v", err);
+    close_db(t, db);
+    if (testing_t_failed(t))
+        goto out;
+
+    /* Begin */
+    memset(&fc, 0, sizeof fc);
+    db = many_err_bad_conn_setup(t, &fc, NULL, NULL);
+    if (db == NULL)
+        goto out;
+    SqlTx *tx = sql_db_begin(db, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+    } else {
+        err = sql_tx_rollback(tx);
+        sql_tx_free(tx);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "%v", err);
+    }
+    close_db(t, db);
+    if (testing_t_failed(t))
+        goto out;
+
+    /* Prepare */
+    memset(&fc, 0, sizeof fc);
+    db = many_err_bad_conn_setup(t, &fc, NULL, NULL);
+    if (db == NULL)
+        goto out;
+    stmt = sql_db_prepare(db, BURROW_S("SELECT|people|age,name|"), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+    } else {
+        err = sql_stmt_close(stmt);
+        sql_stmt_free(stmt);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "%v", err);
+    }
+    close_db(t, db);
+    if (testing_t_failed(t))
+        goto out;
+
+    /* Stmt.Exec */
+    memset(&fc, 0, sizeof fc);
+    db = many_err_bad_conn_setup(t, &fc, "INSERT|people|name=Julia,age=19", &stmt);
+    if (db == NULL)
+        goto out;
+    (void)sql_stmt_exec(stmt, arena_allocator(&ar), NO_ARGS, &err);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "%v", err);
+    err = sql_stmt_close(stmt);
+    sql_stmt_free(stmt);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "%v", err);
+    close_db(t, db);
+    if (testing_t_failed(t))
+        goto out;
+
+    /* Stmt.Query */
+    memset(&fc, 0, sizeof fc);
+    db = many_err_bad_conn_setup(t, &fc, "SELECT|people|age,name|", &stmt);
+    if (db == NULL)
+        goto out;
+    rows = sql_stmt_query(stmt, NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+    } else {
+        err = sql_rows_close(rows);
+        sql_rows_free(rows);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "%v", err);
+    }
+    err = sql_stmt_close(stmt);
+    sql_stmt_free(stmt);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "%v", err);
+    close_db(t, db);
+    if (testing_t_failed(t))
+        goto out;
+
+    /* Conn */
+    memset(&fc, 0, sizeof fc);
+    db = many_err_bad_conn_setup(t, &fc, NULL, NULL);
+    if (db == NULL)
+        goto out;
+    Context ctx = context_background();
+    SqlConn *conn = sql_db_conn(db, ctx, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+    } else {
+        fdb_get_fake_conn(burrow__sql_conn_driver(conn))->skip_dirty_session = true;
+        err = sql_conn_close(conn);
+        sql_conn_free(conn);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "%v", err);
+    }
+    close_db(t, db);
+    if (testing_t_failed(t))
+        goto out;
+
+    /* Ping */
+    memset(&fc, 0, sizeof fc);
+    db = many_err_bad_conn_setup(t, &fc, NULL, NULL);
+    if (db == NULL)
+        goto out;
+    err = sql_db_ping_context(db, ctx);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "%v", err);
+    close_db(t, db);
+out:
+    arena_free(&ar);
+}
+
+static void TestManyErrBadConn(TestingT *t) {
+    synctest_test(t, testManyErrBadConn);
+}
+
+static Chan *td_send_query;
+static ContextCancelFunc td_rollback_cancel;
+
+static void td_grab_conn_hook(void) {
+    BURROW_CALLF0(td_rollback_cancel);
+    bool v = false;
+    (void)chan_recv(td_send_query, &v);
+}
+
+static void td_rollback_hook(void) {
+    chan_close(td_send_query);
+}
+
+/* Scans the one tx_status row of query on tx, or the db when tx is NULL. */
+static bool tx_status(TestingT *t, SqlDB *db, SqlTx *tx, const char *want) {
+    Str status = BURROW_STR_EMPTY;
+    Str q = BURROW_S("SELECT|tx_status|tx_status|");
+    SqlRow row = tx != NULL ? sql_tx_query_row(tx, q, NO_ARGS)
+                            : sql_db_query_row(db, q, NO_ARGS);
+    Error err = sql_row_scan_v(&row, heap_allocator(), &status);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+        return false;
+    }
+    bool ok = str_eq(status, str_from_cstr(want));
+    if (!ok)
+        testing_t_errorf_v(t, "tx_status=%q, wanted %q", status, str_from_cstr(want));
+    mem_free(heap_allocator(), (void *)(uintptr_t)status.p, (size_t)status.len, 1);
+    return ok;
+}
+
+/* Issue 34775: Ensure that a Tx cannot commit after a rollback. */
+static void testTxCannotCommitAfterRollback(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "tx_status"))
+        return;
+
+    /* First check query reporting is correct. */
+    if (!tx_status(t, db, NULL, "autocommit"))
+        return;
+
+    Context ctx = context_with_cancel(heap_allocator(), context_background(),
+                                      &td_rollback_cancel);
+
+    Error err = BURROW_NO_ERROR;
+    SqlTx *tx = sql_db_begin_tx(db, ctx, NULL, &err);
+    if (BURROW_FAILED(err)) {
+        BURROW_CALLF0(td_rollback_cancel);
+        FATALF("%v", err);
+    }
+
+    /* Ignore dirty session for this test. A failing test should trigger the
+     * dirty session flag as well, but that isn't exactly what this should test
+     * for. */
+    fdb_get_fake_conn(burrow__sql_tx_driver(tx))->skip_dirty_session = true;
+
+    if (tx_status(t, db, tx, "transaction")) {
+        /* 1. Begin a transaction.
+         * 2. (A) Start a query, (B) begin Tx rollback through a ctx cancel.
+         * 3. Check if 2.A has committed in Tx (pass) or outside of Tx (fail). */
+        td_send_query = chan_make(heap_allocator(), TYPE_BOOL, 0);
+        /* The Tx status is returned through the row results, ensure that the
+         * rows results are not canceled. */
+        burrow__sql_bypass_rows_await_done = true;
+        burrow__sql_hook_tx_grab_conn = td_grab_conn_hook;
+        burrow__sql_rollback_hook = td_rollback_hook;
+
+        /* A failure here would be expected if skipDirtySession was not set to
+         * true above. */
+        (void)tx_status(t, db, tx, "transaction");
+
+        burrow__sql_hook_tx_grab_conn = NULL;
+        burrow__sql_rollback_hook = NULL;
+        burrow__sql_bypass_rows_await_done = false;
+        chan_free(td_send_query);
+        td_send_query = NULL;
+    }
+    (void)sql_tx_rollback(tx);
+    sql_tx_free(tx);
+    BURROW_CALLF0(td_rollback_cancel);
+}
+
+static void TestTxCannotCommitAfterRollback(TestingT *t) {
+    test_database(t, testTxCannotCommitAfterRollback, NULL);
+}
+
+/* Issue 40985 transaction statement deadlock while context cancel. */
+static void testTxStmtDeadlock(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    ContextCancelFunc cancel = {NULL, NULL};
+    Context ctx = context_with_cancel(heap_allocator(), context_background(), &cancel);
+    Error err = BURROW_NO_ERROR;
+    SqlTx *tx = sql_db_begin_tx(db, ctx, NULL, &err);
+    if (BURROW_FAILED(err)) {
+        BURROW_CALLF0(cancel);
+        FATALF("%v", err);
+    }
+
+    SqlStmt *stmt = sql_tx_prepare(tx, BURROW_S("SELECT|people|name,age|age=?"), &err);
+    if (BURROW_FAILED(err)) {
+        sql_tx_free(tx);
+        BURROW_CALLF0(cancel);
+        FATALF("%v", err);
+    }
+    BURROW_CALLF0(cancel);
+    /* Run number of stmt queries to reproduce deadlock from context cancel. */
+    for (int i = 0; i < 1000; i++) {
+        /* Encounter any close related errors (e.g. ErrTxDone, stmt is closed)
+         * is expected due to context cancel. */
+        SqlRows *rows = sql_stmt_query(stmt, ARGS((Int)1), &err);
+        if (BURROW_FAILED(err))
+            break;
+        sql_rows_free(rows);
+    }
+    (void)sql_tx_rollback(tx);
+    sql_stmt_free(stmt);
+    sql_tx_free(tx);
+}
+
+static void TestTxStmtDeadlock(TestingT *t) {
+    test_database(t, testTxStmtDeadlock, NULL);
+}
+
+typedef struct TdFresh {
+    TestingT *t;
+    SqlDB *db;
+    Chan *after_put_conn;
+    bool bad_reset;
+} TdFresh;
+
+static void td_fresh_conn(void *env) {
+    TdFresh *f = env;
+    Error err = BURROW_NO_ERROR;
+    void *conn = burrow__sql_db_conn(f->db, context_background(), true, &err);
+    if (!BURROW_FAILED(err))
+        burrow__sql_db_put_conn(conn, err, false);
+    else
+        testing_t_errorf_v(f->t, "db.conn: %v", err);
+    chan_close(f->after_put_conn);
+}
+
+static void td_fresh_bubble(void *env) {
+    TdFresh *f = env;
+    TestingT *t = f->t;
+    Context ctx = context_background();
+
+    FakeConnector fc;
+    memset(&fc, 0, sizeof fc);
+    SqlDB *db = new_test_db(t, &fc, "magicquery");
+    if (db == NULL)
+        return;
+    f->db = db;
+
+    sql_db_set_max_open_conns(db, 1);
+
+    clear_all_conns(t, db);
+
+    sql_db_set_max_idle_conns(db, 1);
+    sql_db_set_conn_max_lifetime(db, 10 * TIME_SECOND);
+
+    Error err = BURROW_NO_ERROR;
+    void *conn = burrow__sql_db_conn(db, ctx, true, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+        close_db(t, db);
+        return;
+    }
+
+    f->after_put_conn = chan_make(heap_allocator(), TYPE_BOOL, 0);
+    (void)go(BURROW_FN(Func, td_fresh_conn, f));
+    synctest_wait();
+
+    if (!testing_t_failed(t)) {
+        synctest_sleep(11 * TIME_SECOND);
+
+        fdb_get_fake_conn(burrow__sql_dc_driver(conn))->sticky_bad = f->bad_reset;
+
+        burrow__sql_db_put_conn(conn, err, true);
+    } else {
+        burrow__sql_db_put_conn(conn, err, true);
+    }
+
+    bool v = false;
+    (void)chan_recv(f->after_put_conn, &v);
+    chan_free(f->after_put_conn);
+    close_db(t, db);
+}
+
+static void td_fresh_sub(void *env, TestingT *t) {
+    TdFresh *f = env;
+    f->t = t;
+    if (!synctest_run(BURROW_FN(Func, td_fresh_bubble, f)))
+        testing_t_errorf_v(t, "synctest_run failed");
+}
+
+/* Issue32530 encounters an issue where a connection may expire right after it
+ * comes out of a used connection pool even when a new connection is
+ * requested. */
+static void TestConnExpiresFreshOutOfPool(TestingT *t) {
+    static const struct {
+        bool expired;
+        bool bad_reset;
+    } exec_cases[] = {
+        {false, false},
+        {true, false},
+        {false, true},
+    };
+    for (size_t i = 0; i < sizeof exec_cases / sizeof exec_cases[0]; i++) {
+        char name[64];
+        snprintf(name, sizeof name, "expired=%s,badReset=%s",
+                 exec_cases[i].expired ? "true" : "false",
+                 exec_cases[i].bad_reset ? "true" : "false");
+        TdFresh f = {NULL, NULL, NULL, exec_cases[i].bad_reset};
+        (void)testing_t_run(t, str_from_cstr(name),
+                            BURROW_FN(TestingTFunc, td_fresh_sub, &f));
+    }
+}
+
+/* TestIssue20575 ensures the Rows from query does not block closing a
+ * transaction. Ensure Rows is closed while closing a transaction. */
+static void testIssue20575(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    Error err = BURROW_NO_ERROR;
+    SqlTx *tx = sql_db_begin(db, &err);
+    if (BURROW_FAILED(err))
+        FATALF("%v", err);
+    ContextCancelFunc cancel = {NULL, NULL};
+    Context ctx = context_with_timeout(heap_allocator(), context_background(),
+                                       3 * TIME_SECOND, &cancel);
+    SqlRows *rows = sql_tx_query_context(tx, ctx, BURROW_S("SELECT|people|age,name|"),
+                                         NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        sql_tx_free(tx);
+        BURROW_CALLF0(cancel);
+        FATALF("%v", err);
+    }
+    /* Do not close Rows from QueryContext. */
+    err = sql_tx_rollback(tx);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+    } else {
+        bool done = false, ok = false;
+        bool v = false;
+        done = chan_try_recv(context_done(ctx), &v, &ok);
+        if (done)
+            testing_t_errorf_v(
+                t, "timeout: failed to rollback query without closing rows: %v",
+                context_err(ctx));
+    }
+    sql_rows_free(rows);
+    sql_tx_free(tx);
+    BURROW_CALLF0(cancel);
+}
+
+static void TestIssue20575(TestingT *t) {
+    test_database(t, testIssue20575, NULL);
+}
+
+/* TestIssue20622 tests closing the transaction before rows is closed, requires
+ * the race detector to fail. */
+static void testIssue20622(TestingT *t, SqlDB *db) {
+    if (!populate(t, db, "people"))
+        return;
+
+    ContextCancelFunc cancel = {NULL, NULL};
+    Context ctx = context_with_cancel(heap_allocator(), context_background(), &cancel);
+
+    Error err = BURROW_NO_ERROR;
+    SqlTx *tx = sql_db_begin_tx(db, ctx, NULL, &err);
+    if (BURROW_FAILED(err)) {
+        BURROW_CALLF0(cancel);
+        FATALF("%v", err);
+    }
+
+    SqlRows *rows =
+        sql_tx_query(tx, BURROW_S("SELECT|people|age,name|"), NO_ARGS, &err);
+    if (BURROW_FAILED(err)) {
+        sql_tx_free(tx);
+        BURROW_CALLF0(cancel);
+        FATALF("%v", err);
+    }
+
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Int count = 0;
+    while (sql_rows_next(rows)) {
+        count++;
+        Int age = 0;
+        Str name = BURROW_STR_EMPTY;
+        err = sql_rows_scan_v(rows, arena_allocator(&ar), &age, &name);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "scan failed %v", err);
+            break;
+        }
+
+        if (count == 1)
+            BURROW_CALLF0(cancel);
+        time_sleep(100 * TIME_MILLISECOND);
+    }
+    (void)sql_rows_close(rows);
+    (void)sql_tx_commit(tx);
+    sql_rows_free(rows);
+    sql_tx_free(tx);
+    arena_free(&ar);
+    BURROW_CALLF0(cancel);
+}
+
+static void TestIssue20622(TestingT *t) {
+    test_database(t, testIssue20622, NULL);
+}
+
+/* simulateBadConn's state, which Go keeps in the closure. */
+static bool td_broken, td_retried;
+
+static bool td_bad_once(void) {
+    if (!td_broken) {
+        td_broken = true;
+        return true;
+    }
+    td_retried = true;
+    return false;
+}
+
+static bool td_bad_always(void) {
+    if (!td_broken)
+        td_broken = true;
+    return td_broken;
+}
+
+typedef struct TdBadOp {
+    SqlDB *db;
+    SqlStmt *stmt;
+    bool commit;
+} TdBadOp;
+
+static Error td_db_exec(TdBadOp *op, Alloc *a) {
+    Error err = BURROW_NO_ERROR;
+    (void)sql_db_exec_v(op->db, a, &err, BURROW_S("INSERT|t1|name=?,age=?,dead=?"),
+                        BURROW_S("Gordon"), (Int)3, true);
+    return err;
+}
+
+static Error td_db_query(TdBadOp *op, Alloc *a) {
+    (void)a;
+    Error err = BURROW_NO_ERROR;
+    SqlRows *rows =
+        sql_db_query(op->db, BURROW_S("SELECT|t1|age,name|"), NO_ARGS, &err);
+    if (!BURROW_FAILED(err)) {
+        err = sql_rows_close(rows);
+        sql_rows_free(rows);
+    }
+    return err;
+}
+
+static Error td_db_prepare(TdBadOp *op, Alloc *a) {
+    (void)a;
+    Error err = BURROW_NO_ERROR;
+    SqlStmt *stmt =
+        sql_db_prepare(op->db, BURROW_S("INSERT|t1|name=?,age=?,dead=?"), &err);
+    if (BURROW_FAILED(err))
+        return err;
+    (void)sql_stmt_close(stmt);
+    sql_stmt_free(stmt);
+    return BURROW_NO_ERROR;
+}
+
+static Error td_stmt_exec(TdBadOp *op, Alloc *a) {
+    Error err = BURROW_NO_ERROR;
+    (void)sql_stmt_exec(op->stmt, a, ARGS(BURROW_S("Gopher"), (Int)3, false), &err);
+    return err;
+}
+
+static Error td_stmt_query(TdBadOp *op, Alloc *a) {
+    (void)a;
+    Error err = BURROW_NO_ERROR;
+    SqlRows *rows = sql_stmt_query(op->stmt, NO_ARGS, &err);
+    if (!BURROW_FAILED(err)) {
+        err = sql_rows_close(rows);
+        sql_rows_free(rows);
+    }
+    return err;
+}
+
+static void simulate_bad_conn(TestingT *t, SqlDB *db, const char *name,
+                              bool (**hook)(void), Error (*op)(TdBadOp *, Alloc *),
+                              TdBadOp *env) {
+    td_broken = false;
+    td_retried = false;
+    Int num_open = burrow__sql_db_num_open(db);
+
+    /* simulate a broken connection on the first try */
+    *hook = td_bad_once;
+
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Error err = op(env, arena_allocator(&ar));
+    *hook = NULL;
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%s: %v", name, err);
+        arena_free(&ar);
+        return;
+    }
+    arena_free(&ar);
+
+    if (!td_broken || !td_retried)
+        testing_t_errorf_v(t, "%s: Failed to simulate broken connection", name);
+
+    Int now = burrow__sql_db_num_open(db);
+    if (num_open != now)
+        testing_t_errorf_v(t, "%s: leaked %d connection(s)!", name, now - num_open);
+}
+
+/* golang.org/issue/5718 */
+static void testErrBadConnReconnect(TestingT *t, SqlDB *db) {
+    if (!EXEC(t, db, "CREATE|t1|name=string,age=int32,dead=bool"))
+        return;
+
+    TdBadOp op = {db, NULL, false};
+
+    /* db.Exec */
+    simulate_bad_conn(t, db, "db.Exec prepare", &fdb_hook_prepare_bad_conn, td_db_exec,
+                      &op);
+    simulate_bad_conn(t, db, "db.Exec exec", &fdb_hook_exec_bad_conn, td_db_exec, &op);
+
+    /* db.Query */
+    simulate_bad_conn(t, db, "db.Query prepare", &fdb_hook_prepare_bad_conn,
+                      td_db_query, &op);
+    simulate_bad_conn(t, db, "db.Query query", &fdb_hook_query_bad_conn, td_db_query,
+                      &op);
+
+    /* db.Prepare */
+    simulate_bad_conn(t, db, "db.Prepare", &fdb_hook_prepare_bad_conn, td_db_prepare,
+                      &op);
+
+    /* stmt.Exec */
+    Error err = BURROW_NO_ERROR;
+    SqlStmt *stmt1 =
+        sql_db_prepare(db, BURROW_S("INSERT|t1|name=?,age=?,dead=?"), &err);
+    if (BURROW_FAILED(err))
+        FATALF("prepare: %v", err);
+    /* make sure we must prepare the stmt first */
+    burrow__sql_stmt_force_prepare(stmt1);
+
+    op.stmt = stmt1;
+    simulate_bad_conn(t, db, "stmt.Exec prepare", &fdb_hook_prepare_bad_conn,
+                      td_stmt_exec, &op);
+    simulate_bad_conn(t, db, "stmt.Exec exec", &fdb_hook_exec_bad_conn, td_stmt_exec,
+                      &op);
+
+    /* stmt.Query */
+    SqlStmt *stmt2 = sql_db_prepare(db, BURROW_S("SELECT|t1|age,name|"), &err);
+    if (BURROW_FAILED(err)) {
+        sql_stmt_free(stmt1);
+        FATALF("prepare: %v", err);
+    }
+    /* make sure we must prepare the stmt first */
+    burrow__sql_stmt_force_prepare(stmt2);
+
+    op.stmt = stmt2;
+    simulate_bad_conn(t, db, "stmt.Query prepare", &fdb_hook_prepare_bad_conn,
+                      td_stmt_query, &op);
+    simulate_bad_conn(t, db, "stmt.Query exec", &fdb_hook_query_bad_conn, td_stmt_query,
+                      &op);
+    sql_stmt_free(stmt2);
+    sql_stmt_free(stmt1);
+}
+
+static void TestErrBadConnReconnect(TestingT *t) {
+    test_database(t, testErrBadConnReconnect, NULL);
+}
+
+static Error td_end_tx(TdBadOp *op, SqlTx *tx) {
+    return op->commit ? sql_tx_commit(tx) : sql_tx_rollback(tx);
+}
+
+static Error td_tx_exec(TdBadOp *op, Alloc *a) {
+    Error err = BURROW_NO_ERROR;
+    SqlTx *tx = sql_db_begin(op->db, &err);
+    if (BURROW_FAILED(err))
+        return err;
+    (void)sql_tx_exec(tx, a, BURROW_S("INSERT|t1|name=?,age=?,dead=?"),
+                      ARGS(BURROW_S("Gordon"), (Int)3, true), &err);
+    if (!BURROW_FAILED(err))
+        err = td_end_tx(op, tx);
+    sql_tx_free(tx);
+    return err;
+}
+
+static Error td_tx_query(TdBadOp *op, Alloc *a) {
+    (void)a;
+    Error err = BURROW_NO_ERROR;
+    SqlTx *tx = sql_db_begin(op->db, &err);
+    if (BURROW_FAILED(err))
+        return err;
+    SqlRows *rows = sql_tx_query(tx, BURROW_S("SELECT|t1|age,name|"), NO_ARGS, &err);
+    if (!BURROW_FAILED(err)) {
+        (void)sql_rows_close(rows);
+        sql_rows_free(rows);
+        err = td_end_tx(op, tx);
+    }
+    sql_tx_free(tx);
+    return err;
+}
+
+static void simulate_bad_tx_end(TestingT *t, SqlDB *db, const char *name,
+                                bool (**hook)(void), Error (*op)(TdBadOp *, Alloc *),
+                                TdBadOp *env) {
+    td_broken = false;
+    Int num_open = burrow__sql_db_num_open(db);
+
+    *hook = td_bad_always;
+
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Error err = op(env, arena_allocator(&ar));
+    *hook = NULL;
+    if (!errors_is(err, driver_err_bad_conn)) {
+        testing_t_errorf_v(t, "%s: %v", name, err);
+        arena_free(&ar);
+        return;
+    }
+    arena_free(&ar);
+
+    if (!td_broken)
+        testing_t_errorf_v(t, "%s: Failed to simulate broken connection", name);
+
+    Int now = burrow__sql_db_num_open(db);
+    if (num_open != now)
+        testing_t_errorf_v(t, "%s: leaked %d connection(s)!", name, now - num_open);
+}
+
+/* golang.org/issue/11264 */
+static void testTxEndBadConn(TestingT *t, SqlDB *db) {
+    sql_db_set_max_idle_conns(db, 0);
+    if (!EXEC(t, db, "CREATE|t1|name=string,age=int32,dead=bool"))
+        return;
+    sql_db_set_max_idle_conns(db, 1);
+
+    TdBadOp commit = {db, NULL, true}, rollback = {db, NULL, false};
+
+    /* db.Exec */
+    simulate_bad_tx_end(t, db, "db.Tx.Exec commit", &fdb_hook_commit_bad_conn,
+                        td_tx_exec, &commit);
+    simulate_bad_tx_end(t, db, "db.Tx.Exec rollback", &fdb_hook_rollback_bad_conn,
+                        td_tx_exec, &rollback);
+
+    /* db.Query */
+    simulate_bad_tx_end(t, db, "db.Tx.Query commit", &fdb_hook_commit_bad_conn,
+                        td_tx_query, &commit);
+    simulate_bad_tx_end(t, db, "db.Tx.Query rollback", &fdb_hook_rollback_bad_conn,
+                        td_tx_query, &rollback);
+}
+
+static void TestTxEndBadConn(TestingT *t) {
+    test_database(t, testTxEndBadConn, NULL);
+}
+
 #define TESTS(X)                                                                       \
     X(TestOpenDB)                                                                      \
     X(TestQuery)                                                                       \
@@ -3221,6 +3991,14 @@ static void TestStmtCloseOrder(TestingT *t) {
     X(TestRowsCloseOrder)                                                              \
     X(TestRowsImplicitClose)                                                           \
     X(TestRowsCloseError)                                                              \
-    X(TestStmtCloseOrder)
+    X(TestStmtCloseOrder)                                                              \
+    X(TestManyErrBadConn)                                                              \
+    X(TestTxCannotCommitAfterRollback)                                                 \
+    X(TestTxStmtDeadlock)                                                              \
+    X(TestConnExpiresFreshOutOfPool)                                                   \
+    X(TestIssue20575)                                                                  \
+    X(TestIssue20622)                                                                  \
+    X(TestErrBadConnReconnect)                                                         \
+    X(TestTxEndBadConn)
 
 TESTING_MAIN(TESTS)

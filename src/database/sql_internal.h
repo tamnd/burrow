@@ -64,6 +64,15 @@ BURROW_OWNS(ret) Slice burrow__sql_driver_args_conn_locked(Alloc *a, DriverConn 
                                                            const DriverStmt *si,
                                                            Slice args, Error *err);
 
+/* hookTxGrabConn, rollbackHook, bypassRowsAwaitDone and rowsCloseHook, which
+ * only tests set. */
+typedef void (*burrow__SqlHook)(void);
+typedef void (*burrow__SqlRowsCloseHook)(SqlRows *rs, Error *err);
+extern burrow__SqlHook burrow__sql_hook_tx_grab_conn;
+extern burrow__SqlHook burrow__sql_rollback_hook;
+extern bool burrow__sql_bypass_rows_await_done;
+extern burrow__SqlRowsCloseHook burrow__sql_rows_close_hook;
+
 /* For the tests, which in Go read these straight out of the structs. */
 Int burrow__sql_db_num_open(SqlDB *db);
 Int burrow__sql_db_num_free(SqlDB *db);
@@ -71,10 +80,13 @@ DriverConn burrow__sql_db_free_conn(SqlDB *db, Int i);
 Int burrow__sql_db_num_waiting(SqlDB *db);
 int64_t burrow__sql_db_num_closed(SqlDB *db);
 Int burrow__sql_db_num_deps(SqlDB *db);
-/* db.conn(ctx, cachedOrNewConn) and driverConn.releaseConn, with the
- * driverConn kept opaque. */
-void *burrow__sql_db_conn(SqlDB *db, Context ctx, Error *err);
-void burrow__sql_dc_release(void *dc, Error err);
+/* db.conn, db.putConn and driverConn.ci, with the driverConn kept opaque.
+ * always_new is alwaysNewConn rather than cachedOrNewConn. */
+void *burrow__sql_db_conn(SqlDB *db, Context ctx, bool always_new, Error *err);
+void burrow__sql_db_put_conn(void *dc, Error err, bool reset_session);
+DriverConn burrow__sql_dc_driver(void *dc);
+/* stmt.css = nil, which makes the next use prepare again. */
+void burrow__sql_stmt_force_prepare(SqlStmt *s);
 /* One of db.freeConn with a reference taken, which burrow__sql_dc_unref gives
  * back, so that a test can look at it after the pool has let go of it. */
 void *burrow__sql_db_free_dc(SqlDB *db, Int i);

@@ -83,7 +83,9 @@ void gc_collect(void);
  * burrow__gc_unlink takes that back. burrow__gc_read reads *link under the
  * collector's lock, so the answer is not torn by a collection running at the
  * same time. Without the collector nothing is owned, nothing links, and
- * burrow__gc_read is a plain read. */
+ * burrow__gc_read is a plain read. burrow__gc_running says whether the collector
+ * has been started, for runtime_read_mem_stats, which must not start it. */
+bool burrow__gc_running(void);
 bool burrow__gc_is(const Alloc *a);
 bool burrow__gc_owns(const void *p);
 bool burrow__gc_link(void **link, const void *p);

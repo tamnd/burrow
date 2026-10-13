@@ -1,6 +1,6 @@
 # Debug information
 
-`burrow/debug/elf.h` is Go's `debug/elf`. It reads ELF files, the format of executables, shared libraries, object files and core dumps on Linux, the BSDs and most other Unix systems. `burrow/debug/dwarf.h` is Go's `debug/dwarf`, which reads the DWARF debugging information that compilers put in those files: the compilation units, functions, variables and types of a program, and the line tables that map machine addresses back to source lines. `burrow/debug/macho.h` is Go's `debug/macho`, which reads Mach-O, the format of executables and libraries on macOS and iOS, including the universal files that hold one for each processor. `burrow/debug/pe.h` is Go's `debug/pe`, which reads the PE and COFF files of Windows, its executables, DLLs and object files. `burrow/debug/plan9obj.h` is Go's `debug/plan9obj`, which reads the a.out executables of Plan 9. Go's own `nm`, `objdump`, `addr2line` and `pprof` read binaries through them.
+`burrow/debug/elf.h` is Go's `debug/elf`. It reads ELF files, the format of executables, shared libraries, object files and core dumps on Linux, the BSDs and most other Unix systems. `burrow/debug/dwarf.h` is Go's `debug/dwarf`, which reads the DWARF debugging information that compilers put in those files: the compilation units, functions, variables and types of a program, and the line tables that map machine addresses back to source lines. `burrow/debug/macho.h` is Go's `debug/macho`, which reads Mach-O, the format of executables and libraries on macOS and iOS, including the universal files that hold one for each processor. `burrow/debug/pe.h` is Go's `debug/pe`, which reads the PE and COFF files of Windows, its executables, DLLs and object files. `burrow/debug/plan9obj.h` is Go's `debug/plan9obj`, which reads the a.out executables of Plan 9. `burrow/debug/gosym.h` is Go's `debug/gosym`, which reads the tables a Go binary keeps to turn a program counter into a function, a file and a line. Go's own `nm`, `objdump`, `addr2line` and `pprof` read binaries through them.
 
 ## ELF files
 
@@ -364,6 +364,85 @@ bad magic number '[127 69 76 70]' in record at byte 0x0
 0 unexpected EOF in record at byte 0x2f
 ```
 
+## Go symbol tables
+
+Every Go binary carries a table that maps program counters to functions, files and lines, the pclntab, and binaries from before Go 1.3 also carry a symbol table of their own. `debug/gosym` reads both. It does not read the binary itself: take the bytes of the `.gopclntab` and `.gosymtab` sections and the address of `.text` from `burrow/debug/elf.h`, `macho.h` or `pe.h`, give the pclntab and the address to `gosym_new_line_table`, and give that and the symbol table to `gosym_new_table`. With a pclntab from Go 1.2 or later the symbol table can be empty, and the functions come from the pclntab. Before that the line table is a plain run of bytes that only makes sense next to the symbol table, and the example writes such a pair by hand, a file `/tmp/hello.go` with two functions in it:
+
+<!-- example: ../examples/debug/gosym.c#lookups -->
+```c
+Error err = BURROW_NO_ERROR;
+GosymLineTable *lt = gosym_new_line_table(a, tiny_lines(), 0x1000);
+GosymTable *tab = gosym_new_table(a, tiny_symtab(a), lt, &err);
+if (tab == NULL) {
+    fmt_println_v(err);
+    return;
+}
+for (Int i = 0; i < tab->funcs.len; i++) {
+    GosymFunc *f = &((GosymFunc *)tab->funcs.p)[i];
+    fmt_printf_v("%#x-%#x %s: package %s, receiver %q, name %s\n", f->entry, f->end,
+                 f->sym->name, gosym_func_package_name(f),
+                 gosym_func_receiver_name(f), gosym_func_base_name(f));
+}
+uint64_t pcs[] = {0x1004, 0x1010, 0x1025};
+for (size_t i = 0; i < 3; i++) {
+    Int line = 0;
+    GosymFunc *fn = NULL;
+    Str file = gosym_table_pc_to_line(tab, pcs[i], &line, &fn);
+    fmt_printf_v("%#x is %s:%d in %s\n", pcs[i], file, line, fn->sym->name);
+}
+GosymFunc *fn = NULL;
+uint64_t pc = gosym_table_line_to_pc(tab, BURROW_S("/tmp/hello.go"), 9, &fn, &err);
+fmt_printf_v("line 9 starts at %#x in %s\n", pc, fn->sym->name);
+gosym_table_free(tab);
+gosym_line_table_free(lt);
+```
+
+That prints:
+
+```
+0x1000-0x1020 main.main: package main, receiver "", name main
+0x1020-0x1040 main.(*T).String: package main, receiver "(*T)", name String
+0x1004 is /tmp/hello.go:3 in main.main
+0x1010 is /tmp/hello.go:4 in main.main
+0x1025 is /tmp/hello.go:8 in main.(*T).String
+line 9 starts at 0x102f in main.(*T).String
+```
+
+A file the table does not know and a line with no code on it are two different errors, and a symbol table that does not decode makes `gosym_new_table` fail with the byte it stopped at:
+
+<!-- example: ../examples/debug/gosym.c#errors -->
+```c
+Error err = BURROW_NO_ERROR;
+GosymLineTable *lt = gosym_new_line_table(a, tiny_lines(), 0x1000);
+GosymTable *tab = gosym_new_table(a, tiny_symtab(a), lt, &err);
+GosymFunc *fn = NULL;
+(void)gosym_table_line_to_pc(tab, BURROW_S("/tmp/bye.go"), 1, &fn, &err);
+fmt_println_v(err);
+err = BURROW_NO_ERROR;
+(void)gosym_table_line_to_pc(tab, BURROW_S("/tmp/hello.go"), 6, &fn, &err);
+fmt_println_v(err);
+gosym_table_free(tab);
+
+// The type of the first symbol loses its top bit.
+Slice symtab = tiny_symtab(a);
+((Byte *)symtab.p)[4] &= 0x7f;
+err = BURROW_NO_ERROR;
+tab = gosym_new_table(a, symtab, lt, &err);
+if (tab == NULL)
+    fmt_println_v(err);
+gosym_line_table_free(lt);
+```
+
+That prints:
+
+```
+unknown file: /tmp/bye.go
+no code at /tmp/hello.go:6
+bad symbol type '102' at byte 0x4
+```
+
+A damaged pclntab mostly shows up as a read out of range. The lookups on a Go 1.2 or later table catch that the way Go's do and give back -1, 0 or an empty name. Where Go's code has no such catch, the C version panics at the same point Go would, with a burrow panic that `BURROW_TRY` catches. Either way it never reads past the bytes it was given.
+
 ## How it is tested
 
-The tests check the output against Go's own. `tools/gen-debug-tests.sh` runs Go's `debug/elf` and `debug/dwarf` over every file in `debug/elf`'s testdata and the ELF files in `debug/dwarf`'s and writes down a text dump of everything they read: headers, sections, symbols, dynamic tables, every DWARF entry and type, and every line table row. The C tests build the same dump and compare it line by line. They do the same for about 1,850 damaged copies of the files, comparing a hash of the dump, so a malformed file gets the same error here as in Go. `tools/gen-debug-tests.sh macho` does the same for the files in `debug/macho`'s testdata and the Mach-O files in `debug/dwarf`'s, reading each one both as a universal file and as a plain one, `tools/gen-debug-tests.sh pe` for the files in `debug/pe`'s testdata and the PE file in `debug/dwarf`'s, and `tools/gen-debug-tests.sh plan9obj` for the two files in `debug/plan9obj`'s testdata, with the damage aimed at the symbol table. The tests in Go's packages that look at one value at a time are ported as well.
+The tests check the output against Go's own. `tools/gen-debug-tests.sh` runs Go's `debug/elf` and `debug/dwarf` over every file in `debug/elf`'s testdata and the ELF files in `debug/dwarf`'s and writes down a text dump of everything they read: headers, sections, symbols, dynamic tables, every DWARF entry and type, and every line table row. The C tests build the same dump and compare it line by line. They do the same for about 1,850 damaged copies of the files, comparing a hash of the dump, so a malformed file gets the same error here as in Go. `tools/gen-debug-tests.sh macho` does the same for the files in `debug/macho`'s testdata and the Mach-O files in `debug/dwarf`'s, reading each one both as a universal file and as a plain one, `tools/gen-debug-tests.sh pe` for the files in `debug/pe`'s testdata and the PE file in `debug/dwarf`'s, and `tools/gen-debug-tests.sh plan9obj` for the two files in `debug/plan9obj`'s testdata, with the damage aimed at the symbol table. `tools/gen-debug-tests.sh gosym` builds `debug/gosym`'s `pclinetest` program with the Go on the machine and runs it, the Go 1.15 pclntab in its testdata, and symbol tables in each of the old formats, through every lookup the package has. The tests in Go's packages that look at one value at a time are ported as well.

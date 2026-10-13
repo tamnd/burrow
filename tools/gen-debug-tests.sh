@@ -14,6 +14,9 @@
 # Go's PE test files and the PE one in debug/dwarf's testdata, through debug/pe.
 # The plan9obj one, tests/plan9obj_test_gen.h, does Go's two Plan 9 a.out files
 # through debug/plan9obj, with the damage aimed at the symbol table as well.
+# The gosym one, tests/gosym_test_gen.h, does Go's Go 1.15 pclntab, the one of
+# pclinetest, which it builds from Go's testdata for linux/amd64, and symbol
+# tables in each of the older formats made up here, through debug/gosym.
 #
 # The Go packages are copied out of GOSRC, a Go source tree that defaults to
 # the one the go command has, into a scratch module and built from there, so
@@ -32,8 +35,9 @@ elf) out="$root/tests/debug_test_gen.h" ;;
 macho) out="$root/tests/macho_test_gen.h" ;;
 pe) out="$root/tests/pe_test_gen.h" ;;
 plan9obj) out="$root/tests/plan9obj_test_gen.h" ;;
+gosym) out="$root/tests/gosym_test_gen.h" ;;
 *)
-	echo "usage: $0 [elf|macho|pe|plan9obj]" >&2
+	echo "usage: $0 [elf|macho|pe|plan9obj|gosym]" >&2
 	exit 2
 	;;
 esac
@@ -48,13 +52,15 @@ vendor() {
 	for f in "$gosrc/$1"/*.go; do
 		case $f in *_test.go) continue ;; esac
 		sed -e 's#"debug/dwarf"#"gen/dwarf"#' -e 's#"internal/zstd"#"gen/zstd"#' \
-			-e 's#"internal/saferio"#"gen/saferio"#' "$f" > "$tmp/$2/$(basename "$f")"
+			-e 's#"internal/saferio"#"gen/saferio"#' -e 's#"internal/abi"#"gen/abi"#' \
+			"$f" > "$tmp/$2/$(basename "$f")"
 	done
 }
 vendor debug/elf elf
 vendor debug/macho macho
 vendor debug/pe pe
 vendor debug/plan9obj plan9obj
+vendor debug/gosym gosym
 vendor debug/dwarf dwarf
 vendor internal/zstd zstd
 vendor internal/saferio saferio
@@ -86,6 +92,58 @@ for f in "$gosrc/debug/plan9obj/testdata"/*; do
 	case $f in *.c) continue ;; esac
 	cp "$f" "$tmp/plan9data/"
 done
+mkdir "$tmp/gosymdata" "$tmp/abi"
+cp "$gosrc/debug/gosym/testdata/pcln115.gz" "$tmp/gosymdata/"
+if [ "$mode" = gosym ]; then
+	mkdir "$tmp/pclinetest"
+	for f in main.go pclinetest.h pclinetest.s; do
+		cp "$gosrc/debug/gosym/testdata/$f" "$tmp/pclinetest/"
+	done
+	printf 'module pclinetest\n\ngo 1.22\n' > "$tmp/pclinetest/go.mod"
+	(cd "$tmp/pclinetest" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+		go build -trimpath -ldflags=-buildid= -o "$tmp/gosymdata/pclinetest" .)
+fi
+# debug/gosym takes the magic numbers of the pclntab from internal/abi, which
+# a module outside the Go tree cannot import.
+cat > "$tmp/abi/abi.go" <<'GO'
+package abi
+
+type PCLnTabMagic uint32
+
+const (
+	Go12PCLnTabMagic  PCLnTabMagic = 0xfffffffb
+	Go116PCLnTabMagic PCLnTabMagic = 0xfffffffa
+	Go118PCLnTabMagic PCLnTabMagic = 0xfffffff0
+	Go120PCLnTabMagic PCLnTabMagic = 0xfffffff1
+)
+GO
+# What the dump needs to see of a LineTable and a Table.
+cat > "$tmp/gosym/export.go" <<'GO'
+package gosym
+
+import (
+	"encoding/binary"
+	"fmt"
+)
+
+func (t *LineTable) Info() string {
+	t.isGo12()
+	s := fmt.Sprintf("version=%d quantum=%d ptrsize=%d textstart=%#x nfunctab=%d nfiletab=%d tabs=%d,%d,%d,%d,%d,%d",
+		t.version, t.quantum, t.ptrsize, t.textStart, t.nfunctab, t.nfiletab,
+		len(t.funcnametab), len(t.cutab), len(t.funcdata), len(t.functab),
+		len(t.filetab), len(t.pctab))
+	if t.version >= ver12 {
+		if t.binary == binary.BigEndian {
+			s += " big"
+		} else {
+			s += " little"
+		}
+	}
+	return s
+}
+
+func (t *Table) Go12() bool { return t.go12line != nil }
+GO
 cp "$gosrc/debug/elf/elf.go" "$tmp/elf.go.txt"
 cp "$gosrc/debug/macho/macho.go" "$tmp/macho.go.txt"
 cp "$gosrc/debug/dwarf/const.go" "$tmp/const.go.txt"
@@ -734,6 +792,10 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "plan9obj" {
 		plan9Main()
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "gosym" {
+		gosymMain()
 		return
 	}
 	var fs []*file
@@ -1590,6 +1652,637 @@ func plan9Main() {
 		fmt.Fprintf(w, "    {%s, false, plan9obj_file_%d, plan9obj_dump_%d, plan9obj_damage_%d},\n", cstr(f.name), i, i, i)
 	}
 	fmt.Fprintf(w, "};\n\n#endif\n")
+}
+GO
+
+cat > "$tmp/gosym.go" <<'GO'
+package main
+
+import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	stdelf "debug/elf"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"os"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+
+	"gen/gosym"
+)
+
+// A test file for debug/gosym is a container for the three things NewTable
+// and NewLineTable take: the text address, eight bytes little-endian, then
+// the length of the symbol table, four bytes, then the symbol table, then the
+// pclntab to the end.
+func gosymContainer(text uint64, symtab, pcln []byte) []byte {
+	b := make([]byte, 12, 12+len(symtab)+len(pcln))
+	binary.LittleEndian.PutUint64(b, text)
+	binary.LittleEndian.PutUint32(b[8:], uint32(len(symtab)))
+	b = append(b, symtab...)
+	return append(b, pcln...)
+}
+
+// gosymList prints a hash of all the lines and then some of them: the first
+// dozen, every 128th and the last.
+func gosymList(w *bytes.Buffer, label string, lines []string) {
+	h := sha256.New()
+	for _, l := range lines {
+		io.WriteString(h, l)
+		io.WriteString(h, "\n")
+	}
+	fmt.Fprintf(w, "%s n=%d sha=%x\n", label, len(lines), h.Sum(nil)[:8])
+	for i, l := range lines {
+		if i < 12 || i%128 == 0 || i == len(lines)-1 {
+			fmt.Fprintf(w, "  %s\n", l)
+		}
+	}
+}
+
+func gosymTry(f func()) (panicked bool) {
+	defer func() {
+		if recover() != nil {
+			panicked = true
+		}
+	}()
+	f()
+	return false
+}
+
+func dumpGosym(w *bytes.Buffer, data []byte) {
+	if len(data) < 12 {
+		fmt.Fprintf(w, "short %d\n", len(data))
+		return
+	}
+	text := binary.LittleEndian.Uint64(data)
+	l := int(binary.LittleEndian.Uint32(data[8:]))
+	if l > len(data)-12 {
+		fmt.Fprintf(w, "short %d symtab=%d\n", len(data), l)
+		return
+	}
+	symtab := make([]byte, l)
+	copy(symtab, data[12:])
+	pcln := data[12+l:]
+	fmt.Fprintf(w, "text=%#x symtab=%d pcln=%d\n", text, l, len(pcln))
+	lt := gosym.NewLineTable(pcln, text)
+	fmt.Fprintf(w, "linetable %s\n", lt.Info())
+	for _, pc := range []uint64{text - 1, text, text + 1, text + 2, text + 5, text + 16,
+		text + 64, text + 0x100, text + 0x1000} {
+		fmt.Fprintf(w, "lt pc %#x line=%d\n", pc, lt.PCToLine(pc))
+	}
+	for _, line := range []int{-1, 0, 1, 2, 3, 5, 10, 20, 50, 100} {
+		fmt.Fprintf(w, "lt line %d pc=%#x\n", line, lt.LineToPC(line, text+0x10000))
+	}
+
+	var tab *gosym.Table
+	var err error
+	if gosymTry(func() { tab, err = gosym.NewTable(symtab, lt) }) {
+		fmt.Fprintf(w, "newtable panic\n")
+		return
+	}
+	if err != nil {
+		fmt.Fprintf(w, "newtable err=%q\n", err.Error())
+		return
+	}
+	fmt.Fprintf(w, "table go12=%t\n", tab.Go12())
+	fi := func(f *gosym.Func) int {
+		for i := range tab.Funcs {
+			if f == &tab.Funcs[i] {
+				return i
+			}
+		}
+		return -1
+	}
+	si := func(s *gosym.Sym) int {
+		for i := range tab.Syms {
+			if s == &tab.Syms[i] {
+				return i
+			}
+		}
+		return -1
+	}
+	oi := func(o *gosym.Obj) int {
+		for i := range tab.Objs {
+			if o == &tab.Objs[i] {
+				return i
+			}
+		}
+		return -1
+	}
+
+	var lines []string
+	for i := range tab.Syms {
+		s := &tab.Syms[i]
+		lines = append(lines, fmt.Sprintf("%#x %d %q gotype=%#x func=%d static=%t pkg=%q recv=%q base=%q",
+			s.Value, s.Type, s.Name, s.GoType, fi(s.Func), s.Static(), s.PackageName(),
+			s.ReceiverName(), s.BaseName()))
+	}
+	gosymList(w, "syms", lines)
+
+	lines = nil
+	for i := range tab.Funcs {
+		f := &tab.Funcs[i]
+		var ps, ls []string
+		for _, s := range f.Params {
+			ps = append(ps, s.Name)
+		}
+		for _, s := range f.Locals {
+			ls = append(ls, s.Name)
+		}
+		desc := "nil"
+		switch {
+		case f.LineTable == nil:
+		case f.LineTable == lt:
+			desc = "shared"
+		default:
+			desc = fmt.Sprintf("pc=%#x line=%d len=%d", f.LineTable.PC, f.LineTable.Line,
+				len(f.LineTable.Data))
+		}
+		lines = append(lines, fmt.Sprintf("%#x-%#x %q frame=%d params=%q locals=%q obj=%d %s",
+			f.Entry, f.End, f.Sym.Name, f.FrameSize, ps, ls, oi(f.Obj), desc))
+	}
+	gosymList(w, "funcs", lines)
+
+	lines = nil
+	for i := range tab.Objs {
+		o := &tab.Objs[i]
+		first := -1
+		if len(o.Funcs) > 0 {
+			first = fi(&o.Funcs[0])
+		}
+		var ps []string
+		for _, s := range o.Paths {
+			ps = append(ps, fmt.Sprintf("%#x:%s", s.Value, s.Name))
+		}
+		lines = append(lines, fmt.Sprintf("funcs=%d first=%d paths=%q", len(o.Funcs), first, ps))
+	}
+	gosymList(w, "objs", lines)
+
+	var files []string
+	for name := range tab.Files {
+		files = append(files, name)
+	}
+	sort.Strings(files)
+	lines = nil
+	for _, name := range files {
+		lines = append(lines, fmt.Sprintf("%q obj=%d", name, oi(tab.Files[name])))
+	}
+	gosymList(w, "files", lines)
+
+	// PCToFunc, SymByAddr and PCToLine at the edges of some functions.
+	pcs := []uint64{0, text - 1, text, ^uint64(0)}
+	n := len(tab.Funcs)
+	for i := range tab.Funcs {
+		if i < 4 || i%256 == 0 || i == n-1 {
+			f := &tab.Funcs[i]
+			pcs = append(pcs, f.Entry, f.Entry+1, f.End-1, f.End)
+		}
+	}
+	type fileLine struct {
+		file string
+		line int
+	}
+	var back []fileLine
+	for _, pc := range pcs {
+		name := "nil"
+		if s := tab.SymByAddr(pc); s != nil {
+			name = strconv.Quote(s.Name)
+		}
+		var file string
+		var line int
+		var fn *gosym.Func
+		where := "panic"
+		if !gosymTry(func() { file, line, fn = tab.PCToLine(pc) }) {
+			where = fmt.Sprintf("%q:%d fn=%d", file, line, fi(fn))
+			if fn != nil && len(back) < 3 {
+				back = append(back, fileLine{file, line})
+			}
+		}
+		fmt.Fprintf(w, "pc %#x func=%d sym=%s line %s\n", pc, fi(tab.PCToFunc(pc)), name, where)
+	}
+
+	// LineToPC for some of the files, a file that is not there, and the lines
+	// PCToLine gave above.
+	var tries []fileLine
+	if len(files) > 0 {
+		for _, k := range []int{0, len(files) / 2, len(files) - 1} {
+			for _, line := range []int{0, 1, 9, 40} {
+				tries = append(tries, fileLine{files[k], line})
+			}
+		}
+	}
+	tries = append(tries, fileLine{"nope.go", 1})
+	tries = append(tries, back...)
+	for _, tr := range tries {
+		var pc uint64
+		var fn *gosym.Func
+		var err error
+		if gosymTry(func() { pc, fn, err = tab.LineToPC(tr.file, tr.line) }) {
+			fmt.Fprintf(w, "ltp %q:%d panic\n", tr.file, tr.line)
+			continue
+		}
+		fmt.Fprintf(w, "ltp %q:%d pc=%#x fn=%d%s\n", tr.file, tr.line, pc, fi(fn), errs(err))
+	}
+
+	names := []string{"main.main", "runtime.main", "nope"}
+	for i := 0; i < 2 && i < len(tab.Syms); i++ {
+		names = append(names, tab.Syms[i].Name)
+	}
+	for i := 0; i < 2 && i < len(tab.Funcs); i++ {
+		names = append(names, tab.Funcs[i].Sym.Name)
+	}
+	for _, name := range names {
+		fmt.Fprintf(w, "lookup %q sym=%d func=%d\n", name, si(tab.LookupSym(name)),
+			fi(tab.LookupFunc(name)))
+	}
+
+	// NewTable rewrote the names in symtab, so a second one sees them as they
+	// are now.
+	var tab2 *gosym.Table
+	if gosymTry(func() { tab2, err = gosym.NewTable(symtab, lt) }) {
+		fmt.Fprintf(w, "again panic\n")
+		return
+	}
+	if err != nil {
+		fmt.Fprintf(w, "again err=%q\n", err.Error())
+		return
+	}
+	lines = nil
+	for i := range tab2.Syms {
+		lines = append(lines, strconv.Quote(tab2.Syms[i].Name))
+	}
+	gosymList(w, "again", lines)
+}
+
+func safeGosymDump(data []byte) (out []byte, ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	var w bytes.Buffer
+	dumpGosym(&w, data)
+	return w.Bytes(), true
+}
+
+// gosymDamages damages the text address and the length, the symbol table,
+// and with pcln set the pclntab, mostly its header and the function table
+// after it. Each damaged copy is a new slice as long as the file, so a cut one
+// keeps the capacity the C test gives it too.
+func gosymDamages(data []byte, seed uint64, pcln bool) []damage {
+	var ds []damage
+	x := seed
+	n := len(data)
+	l := int(binary.LittleEndian.Uint32(data[8:]))
+	p := 12 + l
+	add := func(pos int, xor byte) {
+		if pos < 0 || pos >= n || (xor == 0 && pos == 0) {
+			return
+		}
+		b := make([]byte, n)
+		copy(b, data)
+		if xor == 0 {
+			b = b[:pos]
+		} else {
+			b[pos] ^= xor
+		}
+		out, ok := safeGosymDump(b)
+		if !ok {
+			return
+		}
+		ds = append(ds, damage{pos, xor, fmt.Sprintf("%x", sha256.Sum256(out))[:16]})
+	}
+	set := func(pos int, v byte) {
+		if pos < n && data[pos] != v {
+			add(pos, data[pos]^v)
+		}
+	}
+	for i := 0; i < 6; i++ {
+		x = lcg(x)
+		add(int(x>>33)%12, byte(1<<((x>>20)%8)))
+	}
+	if l > 0 {
+		for i := 0; i < 24; i++ {
+			x = lcg(x)
+			add(12+int(x>>33)%l, byte(x>>40)|1)
+		}
+		for i := 0; i < 6; i++ {
+			x = lcg(x)
+			add(12+int(x>>33)%l, 0)
+		}
+		add(12+l/2, 0)
+	}
+	if m := n - p; pcln && m > 0 {
+		// The magic as each of the others, then the quantum and the pointer
+		// size.
+		for _, v := range []byte{0xfb, 0xfa, 0xf0, 0xf1, 0xfe} {
+			set(p, v)
+		}
+		for _, v := range []byte{1, 2, 3, 4} {
+			set(p+6, v)
+		}
+		for _, v := range []byte{0, 4, 8} {
+			set(p+7, v)
+		}
+		for i := 0; i < 24; i++ {
+			x = lcg(x)
+			add(p+int(x>>33)%min(m, 72), byte(1<<((x>>20)%8)))
+		}
+		for i := 0; i < 16; i++ {
+			x = lcg(x)
+			add(p+int(x>>33)%min(m, 4096), byte(x>>40)|1)
+		}
+		for i := 0; i < 12; i++ {
+			x = lcg(x)
+			add(p+int(x>>33)%m, byte(x>>40)|1)
+		}
+		for _, cut := range []int{m / 2, m - 1, m / 8, 72, 40, 16, 15, 8} {
+			if cut > 0 && cut < m {
+				add(p+cut, 0)
+			}
+		}
+	}
+	add(11, 0)
+	add(4, 0)
+	return ds
+}
+
+// A gosymEnt is a symbol for the symbol tables made up here, in the old
+// formats and the newer one.
+type gosymEnt struct {
+	typ    byte
+	value  uint64
+	name   string
+	codes  []uint16 // the path of a 'z' or 'Z' symbol
+	gotype uint64
+}
+
+func gosymEnts(early bool) []gosymEnt {
+	var es []gosymEnt
+	if early {
+		// A function before any path, which has no Obj.
+		es = append(es, gosymEnt{'T', 0xff0, "main.early", nil, 0})
+	}
+	return append(es, []gosymEnt{
+		{'f', 1, "/", nil, 0},
+		{'f', 2, "tmp", nil, 0},
+		{'f', 3, "a.go", nil, 0},
+		{'f', 4, "b.go", nil, 0},
+		{'f', 5, "c.go", nil, 0},
+		{'f', 6, "pkg", nil, 0},
+		{'Z', 1, "", []uint16{1, 2, 3}, 0},
+		{'z', 100, "", []uint16{1, 2, 4}, 0},
+		{'z', 180, "", nil, 0},
+		{'z', 300, "", []uint16{2, 5}, 0},
+		{'z', 340, "", nil, 0},
+		{'T', 0x1000, "main.main", nil, 0x4000},
+		{'m', 0x28, ".frame", nil, 0},
+		{'p', 8, "x", nil, 0x4010},
+		{'p', 16, "y", nil, 0x4010},
+		{'a', 8, "tmp", nil, 0x4020},
+		{'t', 0x1030, "main.helper·1", nil, 0},
+		{'m', 0x10, ".frame", nil, 0},
+		{'D', 0x5000, "main.data", nil, 0x4030},
+		{'B', 0x6000, "main.bss", nil, 0},
+		{'T', 0x1050, "pkg.(*T).Method", nil, 0},
+		{'l', 0x1060, "pkg.T[...].Gen", nil, 0},
+		{'Z', 1, "", []uint16{6, 3}, 0},
+		{'T', 0x1080, "runtime.main", nil, 0},
+		{'a', 24, "n", nil, 0},
+		{'L', 0x10a0, "pkg.(*T[...]).M", nil, 0},
+		{'T', 0x10c0, "type:.eq.main.T", nil, 0},
+		{'T', 0x1100, "runtime.etext", nil, 0},
+		{'d', 0x5008, "github.com/x/y.z", nil, 0},
+		{'U', 0, "undef", nil, 0},
+	}...)
+}
+
+func gosymName(e gosymEnt) []byte {
+	b := append([]byte(e.name), 0)
+	if e.typ == 'z' || e.typ == 'Z' {
+		for _, c := range e.codes {
+			b = binary.BigEndian.AppendUint16(b, c)
+		}
+		b = append(b, 0, 0)
+	}
+	return b
+}
+
+// gosymOldSymtab writes the symbols in the format of Go 1.0, big-endian, or
+// little-endian after the prefix of the one between Go 1.0 and Go 1.1.
+func gosymOldSymtab(es []gosymEnt, order binary.AppendByteOrder) []byte {
+	var b []byte
+	if order == binary.LittleEndian {
+		b = []byte{0xfe, 0xff, 0xff, 0xff, 0x00, 0x00}
+	}
+	for _, e := range es {
+		b = order.AppendUint32(b, uint32(e.value))
+		b = append(b, e.typ|0x80)
+		b = append(b, gosymName(e)...)
+		b = order.AppendUint32(b, uint32(e.gotype))
+	}
+	return b
+}
+
+// gosymNewSymtab writes the symbols in the format of Go 1.1, with every
+// third value fixed-width and the rest varints.
+func gosymNewSymtab(es []gosymEnt, order binary.AppendByteOrder, ptrsz int) []byte {
+	b := []byte{0xff, 0xff, 0xff, 0xfd, 0x00, 0x00, 0x00, byte(ptrsz)}
+	if order == binary.LittleEndian {
+		b[0], b[3] = 0xfd, 0xff
+	}
+	put := func(v uint64) {
+		if ptrsz == 8 {
+			b = order.AppendUint64(b, v)
+		} else {
+			b = order.AppendUint32(b, uint32(v))
+		}
+	}
+	for i, e := range es {
+		c := e.typ - 'A'
+		if e.typ >= 'a' {
+			c = e.typ - 'a' + 26
+		}
+		wide := i%3 == 0
+		if wide {
+			c |= 0x40
+		}
+		if e.gotype != 0 {
+			c |= 0x80
+		}
+		b = append(b, c)
+		if wide {
+			put(e.value)
+		} else {
+			b = binary.AppendUvarint(b, e.value)
+		}
+		if e.gotype != 0 {
+			put(e.gotype)
+		}
+		b = append(b, gosymName(e)...)
+	}
+	return b
+}
+
+// gosymOldLines makes a line table in the format before Go 1.2 that covers
+// pcs bytes of text.
+func gosymOldLines(seed uint64, pcs int) []byte {
+	var b []byte
+	x := seed
+	for pc := 0; pc < pcs; {
+		x = lcg(x)
+		v := byte(x >> 40)
+		switch (x >> 33) % 10 {
+		case 6:
+			b = append(b, 129+v%16)
+			pc += int(v%16) + 1
+		case 7:
+			b = append(b, 65+v%4)
+			pc++
+		case 8:
+			b = append(b, 0, 0, 0, 0, v%24)
+			pc++
+		default:
+			b = append(b, 1+v%6)
+			pc++
+		}
+	}
+	return b
+}
+
+func gosymGzip(b []byte) []byte {
+	var buf bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		panic(err)
+	}
+	zw.Write(b)
+	zw.Close()
+	return buf.Bytes()
+}
+
+func gosymMain() {
+	zr, err := gzip.NewReader(bytes.NewReader(must(os.ReadFile("gosymdata/pcln115.gz"))))
+	if err != nil {
+		panic(err)
+	}
+	pcln115 := must(io.ReadAll(zr))
+
+	ef, err := stdelf.Open("gosymdata/pclinetest")
+	if err != nil {
+		panic(err)
+	}
+	textSec := ef.Section(".text")
+	textdat := must(textSec.Data())
+	pclntab := must(ef.Section(".gopclntab").Data())
+	var gosymtab []byte
+	if s := ef.Section(".gosymtab"); s != nil {
+		gosymtab = must(s.Data())
+	}
+
+	// The functions of the Go 1.15 table, some of them, as symbols for a
+	// table that has both.
+	tab115, err := gosym.NewTable(nil, gosym.NewLineTable(pcln115, 0x1001000))
+	if err != nil {
+		panic(err)
+	}
+	var picked []*gosym.Func
+	for i := range tab115.Funcs {
+		f := &tab115.Funcs[i]
+		if i < 3 || f.Name == "main.main" || f.Name == "runtime.main" {
+			picked = append(picked, f)
+		}
+	}
+	var es115 []gosymEnt
+	for _, e := range gosymEnts(false)[:11] {
+		es115 = append(es115, e)
+	}
+	for i, f := range picked {
+		es115 = append(es115, gosymEnt{'T', f.Entry, f.Name, nil, 0},
+			gosymEnt{'m', uint64(8 * (i + 1)), ".frame", nil, 0},
+			gosymEnt{'p', 8, "arg", nil, 0})
+	}
+	es115 = append(es115, gosymEnt{'D', 0x2000000, "main.data", nil, 0})
+
+	old := gosymOldLines(7, 0x110)
+	fs := []*file{
+		{name: "gosym/pcln115", data: gosymContainer(0x1001000, nil, pcln115)},
+		{name: "gosym/pclinetest", data: gosymContainer(textSec.Addr, gosymtab, pclntab)},
+		{name: "gosym/go115-symtab", data: gosymContainer(0x1001000,
+			gosymNewSymtab(es115, binary.LittleEndian, 8), pcln115)},
+		{name: "gosym/old-be", data: gosymContainer(0x1000,
+			gosymOldSymtab(gosymEnts(false), binary.BigEndian), old)},
+		{name: "gosym/old-le", data: gosymContainer(0x1000,
+			gosymOldSymtab(gosymEnts(false), binary.LittleEndian), old)},
+		{name: "gosym/new-be4", data: gosymContainer(0x1000,
+			gosymNewSymtab(gosymEnts(true), binary.BigEndian, 4), old)},
+		{name: "gosym/new-le8", data: gosymContainer(0x1000,
+			gosymNewSymtab(gosymEnts(false), binary.LittleEndian, 8), old)},
+	}
+	for i, f := range fs {
+		f.gz = true
+		f.raw = gosymGzip(f.data)
+		out, ok := safeGosymDump(f.data)
+		if !ok {
+			panic("Go panics on " + f.name)
+		}
+		f.dump = out
+		// The pclntab of go115-symtab is pcln115's, damaged already.
+		f.damage = gosymDamages(f.data, uint64(i)+1, f.name != "gosym/go115-symtab")
+	}
+
+	// The two functions in pclinetest.s that TestPCLine reads, and the text
+	// they are in.
+	tab, err := gosym.NewTable(gosymtab, gosym.NewLineTable(pclntab, textSec.Addr))
+	if err != nil {
+		panic(err)
+	}
+	lo, hi := ^uint64(0), uint64(0)
+	for _, name := range []string{"main.linefrompc", "main.pcfromline"} {
+		f := tab.LookupFunc(name)
+		lo, hi = min(lo, f.Entry), max(hi, f.End)
+	}
+
+	w := os.Stdout
+	fmt.Fprintf(w, "/* Generated by tools/gen-debug-tests.sh gosym from Go's debug/gosym and\n * its testdata, with pclinetest built by %s. Do not edit. */\n\n", runtime.Version())
+	fmt.Fprintf(w, "#ifndef BURROW_TESTS_GOSYM_TEST_GEN_H\n#define BURROW_TESTS_GOSYM_TEST_GEN_H\n\n")
+	for i, f := range fs {
+		fmt.Fprintf(w, "/* %s, %d bytes, %d gzipped. */\n", f.name, len(f.data), len(f.raw))
+		writeBase64(w, fmt.Sprintf("gosym_file_%d", i), f.raw)
+		fmt.Fprintf(w, "static const char *const gosym_dump_%d[] = {\n", i)
+		for _, line := range strings.SplitAfter(string(f.dump), "\n") {
+			if line == "" {
+				continue
+			}
+			fmt.Fprintf(w, "    %s,\n", cstr(strings.TrimSuffix(line, "\n")))
+		}
+		fmt.Fprintf(w, "    NULL,\n};\n\n")
+		fmt.Fprintf(w, "static const DebugDamage gosym_damage_%d[] = {\n", i)
+		for _, d := range f.damage {
+			fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
+		}
+		fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+	}
+	fmt.Fprintf(w, "static const DebugFile gosym_files[] = {\n")
+	for i, f := range fs {
+		fmt.Fprintf(w, "    {%s, true, gosym_file_%d, gosym_dump_%d, gosym_damage_%d},\n", cstr(f.name), i, i, i)
+	}
+	fmt.Fprintf(w, "};\n\n")
+	fmt.Fprintf(w, "/* The text of main.linefrompc and main.pcfromline in pclinetest. */\n")
+	fmt.Fprintf(w, "#define GOSYM_PCLINE_TEXT_ADDR UINT64_C(%#x)\n\n", lo)
+	writeBase64(w, "gosym_pcline_text", textdat[lo-textSec.Addr:hi-textSec.Addr])
+	fmt.Fprintf(w, "#endif\n")
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 GO
 

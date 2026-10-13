@@ -615,7 +615,7 @@ Slice burrow__xcoff_section_data(XcoffSection *s, Alloc *a, Error *err) {
         xcoff_nil_panic();
     Slice out = {NULL, 0, 0, TYPE_BYTE};
     int64_t size = io_section_reader_size(&s->sr);
-    if (size < 0)
+    if (size < 0 || (uint64_t)size > (uint64_t)INTPTR_MAX)
         xcoff_makeslice_panic();
     Byte *buf = NULL;
     int64_t n = 0, cap = 0;

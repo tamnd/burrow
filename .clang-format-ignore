@@ -44,3 +44,14 @@ src/crypto/fiat_p521_32.h
 src/crypto/fiat_p521_64.h
 src/crypto/nistec_p256_table.h
 tests/ecdsa_test_gen.h
+tests/dsa_test_gen.h
+tests/mlkem_test_gen.h
+tests/mldsa_test_gen.h
+tests/chacha20poly1305_test_gen.h
+tests/hpke_test_gen.h
+tests/rsa_test_gen.h
+tests/x509_test_gen.h
+tests/x509_parse_test_gen.h
+tests/x509_verify_test_gen.h
+tests/x509_name_constraints_test_gen.h
+tests/x509_root_test_gen.h

@@ -717,6 +717,134 @@ print_error(err);
 printf("%d\n", errors_is(err, dsa_err_invalid_public_key));
 ```
 
+## crypto/mlkem
+
+`burrow/crypto/mlkem.h` is ML-KEM, the key encapsulation method of FIPS 203 that was called Kyber. It is meant to hold up against a quantum computer. One side makes a decapsulation key and sends out the encapsulation key that goes with it. The other side uses that to make a shared key and a ciphertext, and sends back the ciphertext, which only the decapsulation key gets the shared key out of. Here Bob is a function, as he would be on another machine:
+
+<!-- example: ../examples/crypto/mlkem.c#bob -->
+```c
+// Bob gets Alice's encapsulation key, makes a shared key with it, and sends
+// back the ciphertext that carries it.
+static Slice bob(Alloc *a, Slice encapsulation_key, Slice *shared_key) {
+    Error err = BURROW_NO_ERROR;
+    MlkemEncapsulationKey768 *ek =
+        mlkem_new_encapsulation_key768(a, encapsulation_key, &err);
+    if (BURROW_FAILED(err))
+        return slice_nil(TYPE_BYTE);
+    Slice ciphertext;
+    *shared_key = mlkem_encapsulation_key768_encapsulate(ek, a, &ciphertext);
+    mlkem_encapsulation_key768_free(ek);
+    return ciphertext;
+}
+```
+
+<!-- example: ../examples/crypto/mlkem.c#alice -->
+```c
+// Alice makes a key and sends Bob the encapsulation key.
+Error err = BURROW_NO_ERROR;
+MlkemDecapsulationKey768 *dk = mlkem_generate_key768(a, &err);
+if (BURROW_FAILED(err))
+    return;
+Slice encapsulation_key = mlkem_encapsulation_key768_bytes(
+    mlkem_decapsulation_key768_encapsulation_key(dk), a);
+
+Slice bob_key;
+Slice ciphertext = bob(a, encapsulation_key, &bob_key);
+
+// Alice gets the shared key out of the ciphertext.
+Slice alice_key = mlkem_decapsulation_key768_decapsulate(dk, a, ciphertext, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%d %d %d %s\n", (int)encapsulation_key.len, (int)ciphertext.len,
+       (int)alice_key.len, bytes_equal(alice_key, bob_key) ? "true" : "false");
+mlkem_decapsulation_key768_free(dk);
+```
+
+There are two sizes, ML-KEM-768 and ML-KEM-1024, with the same functions under each number, and most programs want ML-KEM-768. Keys come from the allocator they are made with and go back with the `_free` function of their type. The encapsulation key of a decapsulation key is part of it, borrowed from it, and freed with it. Both kinds of key work out their matrices when they are made, so a decapsulation key is about 8 KB for ML-KEM-768 and 11 KB for ML-KEM-1024.
+
+A decapsulation key is stored as its 64 byte seed, which `mlkem_decapsulation_key768_bytes` gives and `mlkem_new_decapsulation_key768` takes, so the same seed always gives the same key. Encapsulation takes its randomness from the system, and `burrow/crypto/mlkem/mlkemtest.h` has the version that takes it as an argument, for known answer tests. This is the known answer test Go runs in FIPS mode:
+
+<!-- example: ../examples/crypto/mlkem.c#fixed -->
+```c
+// The same seed always gives the same key, and mlkemtest takes the
+// randomness of an encapsulation as an argument.
+Byte seed[MLKEM_SEED_SIZE], m[32];
+for (int i = 0; i < 64; i++)
+    seed[i] = (Byte)(0x01 + i);
+for (int i = 0; i < 32; i++)
+    m[i] = (Byte)(0x41 + i);
+
+Error err = BURROW_NO_ERROR;
+MlkemDecapsulationKey768 *dk = mlkem_new_decapsulation_key768(
+    a, slice_from(seed, sizeof seed, sizeof seed, TYPE_BYTE), &err);
+if (BURROW_FAILED(err))
+    return;
+Slice ciphertext;
+Slice key = mlkemtest_encapsulate768(
+    mlkem_decapsulation_key768_encapsulation_key(dk), a,
+    slice_from(m, sizeof m, sizeof m, TYPE_BYTE), &ciphertext, &err);
+if (BURROW_FAILED(err))
+    return;
+print_hex(a, key);
+print_hex(a, mlkem_decapsulation_key768_decapsulate(dk, a, ciphertext, &err));
+```
+
+The keys fit the KEM interfaces of `burrow/crypto.h`, for code that should not care which KEM it has:
+
+<!-- example: ../examples/crypto/mlkem.c#kem -->
+```c
+// Code that works with any KEM takes a CryptoDecapsulator.
+Error err = BURROW_NO_ERROR;
+MlkemDecapsulationKey1024 *dk = mlkem_generate_key1024(a, &err);
+if (BURROW_FAILED(err))
+    return;
+CryptoDecapsulator d = mlkem_decapsulation_key1024_as_decapsulator(dk);
+
+CryptoEncapsulator e = crypto_decapsulator_encapsulator(d);
+CryptoEncapsulateResult r = crypto_encapsulator_encapsulate(e, a);
+Slice key = crypto_decapsulator_decapsulate(d, a, r.ciphertext, &err);
+if (BURROW_FAILED(err))
+    return;
+printf("%.*s %d %s\n", (int)d.vt->self_type->name.len,
+       (const char *)d.vt->self_type->name.p, (int)r.ciphertext.len,
+       bytes_equal(key, r.shared_key) ? "true" : "false");
+mlkem_decapsulation_key1024_free(dk);
+```
+
+Keys and ciphertexts of the wrong length are errors, with Go's messages, and so is an encapsulation key with a coefficient that is not reduced. A ciphertext of the right length is never an error. One that was not made for the key, or was changed on the way, gives a shared key nobody else has, so the two sides find out when the first message under the key does not decrypt:
+
+<!-- example: ../examples/crypto/mlkem.c#errors -->
+```c
+Error err = BURROW_NO_ERROR;
+Byte zeros[MLKEM_ENCAPSULATION_KEY_SIZE768] = {0};
+Byte ones[MLKEM_ENCAPSULATION_KEY_SIZE768];
+memset(ones, 0xff, sizeof ones);
+
+mlkem_new_decapsulation_key768(a, slice_from(zeros, 32, 32, TYPE_BYTE), &err);
+print_error(err);
+mlkem_new_encapsulation_key768(
+    a, slice_from(ones, sizeof ones, sizeof ones, TYPE_BYTE), &err);
+print_error(err);
+
+MlkemDecapsulationKey768 *dk =
+    mlkem_new_decapsulation_key768(a, slice_from(zeros, 64, 64, TYPE_BYTE), &err);
+mlkem_decapsulation_key768_decapsulate(
+    dk, a, slice_from(zeros, 100, 100, TYPE_BYTE), &err);
+print_error(err);
+
+// A ciphertext of the right length that was never made for this key is
+// not an error. It gives a key nobody else has.
+Slice key = mlkem_decapsulation_key768_decapsulate(
+    dk, a,
+    slice_from(zeros, MLKEM_CIPHERTEXT_SIZE768, MLKEM_CIPHERTEXT_SIZE768,
+               TYPE_BYTE),
+    &err);
+print_error(err);
+printf("%d\n", (int)key.len);
+```
+
+Everything that touches secret data is constant time, as Go's code is, and the shared key goes through the same constant time selection Go uses for a ciphertext that does not check out. Go runs a self test and checks each new key against itself only in FIPS mode, which burrow does not have, so it does neither.
+
 ## crypto/x509/pkix
 
 `burrow/crypto/x509/pkix.h` has the ASN.1 structures that certificates, CRLs and OCSP share: distinguished names, algorithm identifiers, extensions and the old CRL types. Each one has a type descriptor carrying Go's asn1 struct tags, so `encoding/asn1` reads and writes them with no extra code. A `PkixName` is the friendly form of a name, and `pkix_name_to_rdn_sequence` turns it into the sequence of RDNs that goes on the wire:

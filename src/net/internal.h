@@ -242,10 +242,11 @@ Error burrow__netfd_shutdown(burrow__NetFD *fd, int32_t how);
  * it, as "setsockopt". */
 Error burrow__netfd_setsockopt(burrow__NetFD *fd, int32_t opt, int64_t value);
 
-/* Whether this machine can make IPv4 sockets, and IPv6 sockets that take
- * IPv4 as well, which decides the family of a listener on every address.
- * Probed once, as Go does. */
+/* Whether this machine can make IPv4 sockets, IPv6 sockets, and IPv6 sockets
+ * that take IPv4 as well, which decides the family of a listener on every
+ * address. Probed once, as Go does. */
 bool burrow__net_supports_ipv4(void);
+bool burrow__net_supports_ipv6(void);
 bool burrow__net_supports_ipv4map(void);
 
 /* -------------------------------------------------------------------- conn
@@ -464,6 +465,38 @@ BURROW_OWNS(ret) Slice burrow__net_get_fields(Alloc *a, Str s);
  * took, and whether there was one. It gives up at big. */
 #define BURROW__NET_BIG 0xFFFFFF
 bool burrow__net_dtoi(Str s, Int *n, Int *used);
+
+/* xtoi, the same in hex, which gives 0 when it gives up, and xtoi2: the byte
+ * in the two hex digits at the start of s, which have to be followed by e or
+ * by nothing. */
+bool burrow__net_xtoi(Str s, Int *n, Int *used);
+bool burrow__net_xtoi2(Str s, Byte e, Byte *b);
+
+/* The errors interface.go keeps for itself. */
+extern const Error burrow__net_err_invalid_interface;
+extern const Error burrow__net_err_invalid_interface_index;
+extern const Error burrow__net_err_invalid_interface_name;
+extern const Error burrow__net_err_no_such_interface;
+extern const Error burrow__net_err_no_such_multicast_interface;
+
+/* parseProcNetIGMP and parseProcNetIGMP6: the groups in a Linux /proc file,
+ * of ifi or of every interface when it is NULL, added to *out, which grows in
+ * a. A file that cannot be opened adds nothing. False only when a runs out of
+ * memory. They are built everywhere so that the tests can read Go's copies of
+ * the files. */
+bool burrow__net_parse_proc_net_igmp(Alloc *a, Str path, const NetInterface *ifi,
+                                     Slice *out);
+bool burrow__net_parse_proc_net_igmp6(Alloc *a, Str path, const NetInterface *ifi,
+                                      Slice *out);
+
+/* The zone cache. burrow__net_zone_name is zoneCache.name: the interface
+ * called by index, kept for the life of the process, or the index in decimal
+ * written into buf, which has room for 24 bytes. burrow__net_zone_index is
+ * zoneCache.index. burrow__net_zone_cache_update is zoneCache.update(nil,
+ * force), which the tests call. */
+Str burrow__net_zone_name(Int index, Byte *buf);
+Int burrow__net_zone_index(Str name);
+void burrow__net_zone_cache_update(bool force);
 
 /* hasUpperCase, lowerASCIIBytes, stringsEqualFold and stringsHasSuffixFold,
  * all ASCII only. */

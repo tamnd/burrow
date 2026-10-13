@@ -443,6 +443,109 @@ bad symbol type '102' at byte 0x4
 
 A damaged pclntab mostly shows up as a read out of range. The lookups on a Go 1.2 or later table catch that the way Go's do and give back -1, 0 or an empty name. Where Go's code has no such catch, the C version panics at the same point Go would, with a burrow panic that `BURROW_TRY` catches. Either way it never reads past the bytes it was given.
 
+## Go build information
+
+Every Go binary carries a record of how it was built: the Go release, the main package and its module, the modules it depends on, and settings such as the target and the linker flags. `buildinfo_read_file` and `buildinfo_read` find that record in an ELF, PE, Mach-O, XCOFF or Plan 9 binary, for any target, and give it back as a `Buildinfo`, which is runtime/debug's `DebugBuildInfo`. The binary below is a Plan 9 one made in memory, so the example has something to read:
+
+<!-- example: ../examples/debug/buildinfo.c#read -->
+```c
+Error err = BURROW_NO_ERROR;
+BytesReader *br = bytes_new_reader(a, tiny_go_binary(a));
+Buildinfo *bi = buildinfo_read(a, bytes_reader_as_io_reader_at(br), &err);
+if (bi == NULL) {
+    fmt_println_v(err);
+    return;
+}
+fmt_printf_v("%s, built with %s\n", bi->path, bi->go_version);
+fmt_printf_v("module %s %s\n", bi->main.path, bi->main.version);
+for (Int i = 0; i < bi->deps.len; i++) {
+    DebugModule *m = ((DebugModule **)bi->deps.p)[i];
+    fmt_printf_v("depends on %s %s\n", m->path, m->version);
+}
+for (Int i = 0; i < bi->settings.len; i++) {
+    DebugBuildSetting *s = &((DebugBuildSetting *)bi->settings.p)[i];
+    fmt_printf_v("  %s: %s\n", s->key, s->value);
+}
+debug_build_info_free(bi);
+```
+
+That prints:
+
+```
+example.com/hello, built with go1.27.1
+module example.com/hello (devel)
+depends on golang.org/x/text v0.21.0
+  -compiler: gc
+  -ldflags: -s -w
+  GOARCH: 386
+  GOOS: plan9
+```
+
+A file that is not a binary of a kind it knows gives "unrecognized file format". One that is, but has no Go build information in it, such as a C program, gives "not a Go executable". `buildinfo_read_file` puts the name of the file in front of either one, and when the file cannot be opened it wraps the `FsPathError` instead:
+
+<!-- example: ../examples/debug/buildinfo.c#errors -->
+```c
+Error err = BURROW_NO_ERROR;
+BytesReader *br = bytes_new_reader(a, BURROW_B("hello"));
+Buildinfo *bi = buildinfo_read(a, bytes_reader_as_io_reader_at(br), &err);
+if (bi == NULL)
+    fmt_println_v(err);
+
+// One byte of the magic changes, so the record is not found.
+Slice b = tiny_go_binary(a);
+((Byte *)b.p)[32 + 2] = 'N';
+br = bytes_new_reader(a, b);
+err = BURROW_NO_ERROR;
+bi = buildinfo_read(a, bytes_reader_as_io_reader_at(br), &err);
+if (bi == NULL)
+    fmt_println_v(err);
+```
+
+That prints:
+
+```
+unrecognized file format
+not a Go executable
+```
+
+The record itself is text, one line per item. `debug_parse_build_info` turns it into a `DebugBuildInfo` and `debug_build_info_string` turns one back into text, quoting the settings that need it. Both work the way Go's `ParseBuildInfo` and `BuildInfo.String` do, so a record that Go would reject is rejected here with the same message and line number:
+
+<!-- example: ../examples/debug/buildinfo.c#parse -->
+```c
+Str text = BURROW_S("path\texample.com/hello\n"
+                    "build\t-tags=netgo\n"
+                    "build\tvcs.modified=true\n");
+Error err = BURROW_NO_ERROR;
+DebugBuildInfo *bi = debug_parse_build_info(a, text, &err);
+if (bi == NULL) {
+    fmt_println_v(err);
+    return;
+}
+bi->go_version = BURROW_S("go1.27.1");
+DebugBuildSetting extra = {BURROW_S("-ldflags"), BURROW_S("-X main.version=1.2.0")};
+bi->settings = slice_append(bi->a, bi->settings, &extra, 1);
+fmt_print_v(debug_build_info_string(bi, a));
+debug_build_info_free(bi);
+
+// A module line with only a path in it.
+bi = debug_parse_build_info(a, BURROW_S("path\tp\nmod\texample.com/hello\n"), &err);
+if (bi == NULL)
+    fmt_println_v(err);
+```
+
+That prints:
+
+```
+go	go1.27.1
+path	example.com/hello
+build	-tags=netgo
+build	vcs.modified=true
+build	-ldflags="-X main.version=1.2.0"
+could not parse Go build info: line 2: expected 2 or 3 columns; got 1
+```
+
+`debug_read_build_info`, which in Go gives the record of the running program, gives NULL and false, since a C program has none.
+
 ## How it is tested
 
-The tests check the output against Go's own. `tools/gen-debug-tests.sh` runs Go's `debug/elf` and `debug/dwarf` over every file in `debug/elf`'s testdata and the ELF files in `debug/dwarf`'s and writes down a text dump of everything they read: headers, sections, symbols, dynamic tables, every DWARF entry and type, and every line table row. The C tests build the same dump and compare it line by line. They do the same for about 1,850 damaged copies of the files, comparing a hash of the dump, so a malformed file gets the same error here as in Go. `tools/gen-debug-tests.sh macho` does the same for the files in `debug/macho`'s testdata and the Mach-O files in `debug/dwarf`'s, reading each one both as a universal file and as a plain one, `tools/gen-debug-tests.sh pe` for the files in `debug/pe`'s testdata and the PE file in `debug/dwarf`'s, and `tools/gen-debug-tests.sh plan9obj` for the two files in `debug/plan9obj`'s testdata, with the damage aimed at the symbol table. `tools/gen-debug-tests.sh gosym` builds `debug/gosym`'s `pclinetest` program with the Go on the machine and runs it, the Go 1.15 pclntab in its testdata, and symbol tables in each of the old formats, through every lookup the package has. The tests in Go's packages that look at one value at a time are ported as well.
+The tests check the output against Go's own. `tools/gen-debug-tests.sh` runs Go's `debug/elf` and `debug/dwarf` over every file in `debug/elf`'s testdata and the ELF files in `debug/dwarf`'s and writes down a text dump of everything they read: headers, sections, symbols, dynamic tables, every DWARF entry and type, and every line table row. The C tests build the same dump and compare it line by line. They do the same for about 1,850 damaged copies of the files, comparing a hash of the dump, so a malformed file gets the same error here as in Go. `tools/gen-debug-tests.sh macho` does the same for the files in `debug/macho`'s testdata and the Mach-O files in `debug/dwarf`'s, reading each one both as a universal file and as a plain one, `tools/gen-debug-tests.sh pe` for the files in `debug/pe`'s testdata and the PE file in `debug/dwarf`'s, and `tools/gen-debug-tests.sh plan9obj` for the two files in `debug/plan9obj`'s testdata, with the damage aimed at the symbol table. `tools/gen-debug-tests.sh gosym` builds `debug/gosym`'s `pclinetest` program with the Go on the machine and runs it, the Go 1.15 pclntab in its testdata, and symbol tables in each of the old formats, through every lookup the package has. The tests in Go's packages that look at one value at a time are ported as well. `tools/gen-debug-tests.sh buildinfo` builds a small Go program for Linux, Windows, macOS, AIX and Plan 9 on several architectures, as plain and position independent executables, as a universal macOS binary, and in GOPATH mode, and records what `debug/buildinfo` reads from each of them and from the binaries in its testdata, whole and damaged. It also records what `runtime/debug`'s `ParseBuildInfo` makes of a few hundred inputs, good and bad.

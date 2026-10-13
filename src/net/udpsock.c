@@ -640,6 +640,161 @@ Int net_udp_conn_write_to(NetUDPConn *c, Slice p, NetAddr addr, Error *err) {
     return net_udp_conn_write_to_udp(c, p, (const NetUDPAddr *)addr.data, err);
 }
 
+/* ---------------------------------------------------------------- messages */
+
+/* readMsg, with the sender's sockaddr in from. */
+static Int nu_read_msg(NetUDPConn *c, Slice p, Slice oob, Int *oobn, Int *flags,
+                       PalSockAddr *from, Error *err) {
+    Int on = 0;
+    Int fl = 0;
+    Error e = BURROW_NO_ERROR;
+    Int n = burrow__netfd_read_msg(&c->c.fd, p, oob, &on, &fl, from, &e);
+    if (BURROW_FAILED(e))
+        e = burrow__net_op_error(NU_LIT("read"), c->c.fd.net, c->c.laddr, c->c.raddr,
+                                 e);
+    if (oobn != NULL)
+        *oobn = on;
+    if (flags != NULL)
+        *flags = fl;
+    *err = e;
+    return n;
+}
+
+Int net_udp_conn_read_msg_udp(NetUDPConn *c, Slice p, Slice oob, Alloc *a, Int *oobn,
+                              Int *flags, NetUDPAddr **addr, Error *err) {
+    if (addr != NULL)
+        *addr = NULL;
+    NetipAddrPort ap = {0};
+    Error e = BURROW_NO_ERROR;
+    Int n = net_udp_conn_read_msg_udp_addr_port(c, p, oob, oobn, flags, &ap, &e);
+    if (addr != NULL && netip_addr_port_is_valid(ap)) {
+        /* UDPAddrFromAddrPort. */
+        NetipAddr ip = netip_addr_port_addr(ap);
+        NetipAddrAs16Ret b = netip_addr_as16(ip);
+        bool v4 = netip_addr_is4(ip);
+        *addr = nu_addr_new(a, v4 ? b.a + 12 : b.a, v4 ? 4 : 16,
+                            (Int)netip_addr_port_port(ap), netip_addr_zone(ip));
+        if (*addr == NULL && BURROW_OK(e))
+            e = burrow_err_out_of_memory;
+    }
+    BURROW_OUT(err, e);
+    return n;
+}
+
+Int net_udp_conn_read_msg_udp_addr_port(NetUDPConn *c, Slice p, Slice oob, Int *oobn,
+                                        Int *flags, NetipAddrPort *addr, Error *err) {
+    if (oobn != NULL)
+        *oobn = 0;
+    if (flags != NULL)
+        *flags = 0;
+    if (addr != NULL)
+        *addr = (NetipAddrPort){0};
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    PalSockAddr from = {0};
+    Error e = BURROW_NO_ERROR;
+    Int n = nu_read_msg(c, p, oob, oobn, flags, &from, &e);
+    if (addr != NULL) {
+        NuAddr got = {0};
+        if (burrow__net_inet_from_sockaddr(&from, &got.a.ip, &got.a.port, &got.a.zone,
+                                           &got.b)) {
+            NetipAddr ip =
+                got.a.ip.len == 4
+                    ? netip_addr_from4(got.b.ip)
+                    : netip_addr_with_zone(netip_addr_from16(got.b.ip), got.a.zone);
+            *addr = netip_addr_port_from(ip, (uint16_t)got.a.port);
+        }
+    }
+    BURROW_OUT(err, e);
+    return n;
+}
+
+/* writeMsg past its checks: to the address, when there is one. */
+static Int nu_write_msg(NetUDPConn *c, Slice p, Slice oob, bool has_addr, NetIP ip,
+                        Int port, Str zone, Int *oobn, Error *err) {
+    PalSockAddr to = {0};
+    if (has_addr) {
+        Error e = burrow__net_ip_sockaddr(c->c.fd.family, ip, port, zone, &to);
+        if (BURROW_FAILED(e)) {
+            *err = burrow__netfd_write_msg_error(e);
+            return 0;
+        }
+    }
+    return burrow__netfd_write_msg(&c->c.fd, p, oob, has_addr ? &to : NULL, oobn, err);
+}
+
+Int net_udp_conn_write_msg_udp(NetUDPConn *c, Slice p, Slice oob,
+                               const NetUDPAddr *addr, Int *oobn, Error *err) {
+    if (oobn != NULL)
+        *oobn = 0;
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    Error e = BURROW_NO_ERROR;
+    Int n = 0;
+    Int on = 0;
+    if (c->c.fd.is_connected && addr != NULL)
+        e = net_err_write_to_connected;
+    else if (!c->c.fd.is_connected && addr == NULL)
+        e = burrow__net_err_missing_address;
+    else if (addr == NULL)
+        n = nu_write_msg(c, p, oob, false, slice_nil(TYPE_BYTE), 0, BURROW_STR_EMPTY,
+                         &on, &e);
+    else
+        n = nu_write_msg(c, p, oob, true, addr->ip, addr->port, addr->zone, &on, &e);
+    if (BURROW_FAILED(e))
+        e = burrow__net_op_error(NU_LIT("write"), c->c.fd.net, c->c.laddr,
+                                 net_udp_addr_as_addr(addr), e);
+    if (oobn != NULL)
+        *oobn = on;
+    BURROW_OUT(err, e);
+    return n;
+}
+
+Int net_udp_conn_write_msg_udp_addr_port(NetUDPConn *c, Slice p, Slice oob,
+                                         NetipAddrPort addr, Int *oobn, Error *err) {
+    if (oobn != NULL)
+        *oobn = 0;
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    Error e = BURROW_NO_ERROR;
+    Int n = 0;
+    Int on = 0;
+    NetipAddr ip = netip_addr_port_addr(addr);
+    bool valid = netip_addr_port_is_valid(addr);
+    if (c->c.fd.is_connected && valid) {
+        e = net_err_write_to_connected;
+    } else if (!c->c.fd.is_connected && !valid) {
+        e = burrow__net_err_missing_address;
+    } else if (!valid) {
+        n = nu_write_msg(c, p, oob, false, slice_nil(TYPE_BYTE), 0, BURROW_STR_EMPTY,
+                         &on, &e);
+    } else if (c->c.fd.family == PAL_AF_INET && !netip_addr_is4(ip) &&
+               !netip_addr_is4_in6(ip)) {
+        /* addrPortToSockaddrInet4. */
+        NetAddrError ae = {NU_LIT("non-IPv4 address"),
+                           netip_addr_string(ip, error_allocator())};
+        e = net_addr_error_as_error(&ae, error_allocator());
+    } else {
+        NetipAddrAs16Ret b = netip_addr_as16(ip);
+        NetIP nip = slice_from(b.a, 16, 16, TYPE_BYTE);
+        n = nu_write_msg(c, p, oob, true, nip, (Int)netip_addr_port_port(addr),
+                         netip_addr_zone(ip), &on, &e);
+    }
+    if (BURROW_FAILED(e))
+        e = burrow__net_op_error(NU_LIT("write"), c->c.fd.net, c->c.laddr,
+                                 nu_ap_addr(addr), e);
+    if (oobn != NULL)
+        *oobn = on;
+    BURROW_OUT(err, e);
+    return n;
+}
+
 Error net_udp_conn_close(NetUDPConn *c) {
     if (c == NULL)
         return burrow__net_einval();

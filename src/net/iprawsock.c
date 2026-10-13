@@ -386,6 +386,73 @@ Int net_ip_conn_write_to(NetIPConn *c, Slice p, NetAddr addr, Error *err) {
     return net_ip_conn_write_to_ip(c, p, (const NetIPAddr *)addr.data, err);
 }
 
+Int net_ip_conn_read_msg_ip(NetIPConn *c, Slice p, Slice oob, Alloc *a, Int *oobn,
+                            Int *flags, NetIPAddr **addr, Error *err) {
+    if (oobn != NULL)
+        *oobn = 0;
+    if (flags != NULL)
+        *flags = 0;
+    if (addr != NULL)
+        *addr = NULL;
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    PalSockAddr from = {0};
+    Int on = 0;
+    Int fl = 0;
+    Error e = BURROW_NO_ERROR;
+    Int n = burrow__netfd_read_msg(&c->c.fd, p, oob, &on, &fl, &from, &e);
+    IrAddr got;
+    memset(&got, 0, sizeof got);
+    if (addr != NULL && ir_from_sockaddr(&from, &got)) {
+        *addr = burrow__net_ip_addr_new(a, got.a.ip, got.a.zone);
+        if (*addr == NULL && BURROW_OK(e))
+            e = burrow_err_out_of_memory;
+    }
+    if (BURROW_FAILED(e) && !ir_is_oom(e))
+        e = burrow__net_op_error(IR_LIT("read"), c->c.fd.net, c->c.laddr, c->c.raddr,
+                                 e);
+    if (oobn != NULL)
+        *oobn = on;
+    if (flags != NULL)
+        *flags = fl;
+    BURROW_OUT(err, e);
+    return n;
+}
+
+Int net_ip_conn_write_msg_ip(NetIPConn *c, Slice p, Slice oob, const NetIPAddr *addr,
+                             Int *oobn, Error *err) {
+    if (oobn != NULL)
+        *oobn = 0;
+    if (c == NULL) {
+        BURROW_OUT(err, burrow__net_einval());
+        return 0;
+    }
+    Error e = BURROW_NO_ERROR;
+    Int n = 0;
+    Int on = 0;
+    if (c->c.fd.is_connected) {
+        e = net_err_write_to_connected;
+    } else if (addr == NULL) {
+        e = burrow__net_err_missing_address;
+    } else {
+        PalSockAddr to = {0};
+        e = burrow__net_ip_sockaddr(c->c.fd.family, addr->ip, 0, addr->zone, &to);
+        if (BURROW_FAILED(e))
+            e = burrow__netfd_write_msg_error(e);
+        else
+            n = burrow__netfd_write_msg(&c->c.fd, p, oob, &to, &on, &e);
+    }
+    if (BURROW_FAILED(e))
+        e = burrow__net_op_error(IR_LIT("write"), c->c.fd.net, c->c.laddr,
+                                 net_ip_addr_as_addr(addr), e);
+    if (oobn != NULL)
+        *oobn = on;
+    BURROW_OUT(err, e);
+    return n;
+}
+
 Error net_ip_conn_close(NetIPConn *c) {
     if (c == NULL)
         return burrow__net_einval();

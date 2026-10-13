@@ -237,6 +237,11 @@ static void TestIPConnWriteErrors(TestingT *t) {
     CHECK(net_ip_conn_write_to(c, p, net_udp_addr_as_addr(&u), &e) == 0);
     CHECK_STR_EQ(c_text(error_text(e), buf, sizeof buf),
                  "write ip4 0.0.0.0->:0: invalid argument");
+    Int oobn = -1;
+    CHECK(net_ip_conn_write_msg_ip(c, p, (Slice){0}, NULL, &oobn, &e) == 0);
+    CHECK_INT_EQ(oobn, 0);
+    CHECK_STR_EQ(c_text(error_text(e), buf, sizeof buf),
+                 "write ip4 0.0.0.0: missing address");
     net_ip_conn_free(c);
 }
 
@@ -297,13 +302,75 @@ static void TestIPConnICMPEcho(TestingT *t) {
     net_packet_conn_free(pc);
 }
 
+/* The same echo through WriteMsgIP and ReadMsgIP, which leaves the IPv4
+ * header in front of the reply, as Go's readMsg does. */
+static void TestIPConnICMPEchoMsg(TestingT *t) {
+    need_root(t);
+    NetIPAddr lo = ip4(127, 0, 0, 1);
+    Error e = BURROW_NO_ERROR;
+    NetIPConn *c = net_listen_ip(heap_allocator(), S("ip4:icmp"), &lo, &e);
+    if (c == NULL) {
+        testing_t_errorf_v(t, "ListenIP: %v", e);
+        return;
+    }
+    (void)net_ip_conn_set_deadline(c, time_add(time_now(), 5 * TIME_SECOND));
+    Byte req[12] = {8, 0, 0, 0, 0x62, 0x79, 0, 1, 'p', 'i', 'n', 'g'};
+    uint32_t sum = 0;
+    for (size_t i = 0; i < sizeof req; i += 2)
+        sum += (uint32_t)req[i] << 8 | req[i + 1];
+    while (sum >> 16 != 0)
+        sum = (sum & 0xffff) + (sum >> 16);
+    sum = ~sum & 0xffff;
+    req[2] = (Byte)(sum >> 8);
+    req[3] = (Byte)sum;
+    Int oobn = -1;
+    Int n =
+        net_ip_conn_write_msg_ip(c, slice_from(req, sizeof req, sizeof req, TYPE_BYTE),
+                                 (Slice){0}, &lo, &oobn, &e);
+    if (n != (Int)sizeof req || BURROW_FAILED(e)) {
+        testing_t_errorf_v(t, "WriteMsgIP: %d, %v", n, e);
+        net_ip_conn_free(c);
+        return;
+    }
+    CHECK_INT_EQ(oobn, 0);
+    bool replied = false;
+    for (int tries = 0; tries < 8 && !replied; tries++) {
+        Byte got[128];
+        Byte oob[64];
+        NetIPAddr *from = NULL;
+        Int flags = -1;
+        n = net_ip_conn_read_msg_ip(c,
+                                    slice_from(got, sizeof got, sizeof got, TYPE_BYTE),
+                                    slice_from(oob, sizeof oob, sizeof oob, TYPE_BYTE),
+                                    a, &oobn, &flags, &from, &e);
+        if (BURROW_FAILED(e)) {
+            testing_t_errorf_v(t, "ReadMsgIP: %v", e);
+            break;
+        }
+        CHECK(from != NULL);
+        CHECK_INT_EQ(oobn, 0);
+        CHECK_INT_EQ(flags, 0);
+        Int hl = (Int)(got[0] & 0x0f) << 2;
+        if (got[0] >> 4 == 4 && n == hl + (Int)sizeof req && got[hl] == 0 &&
+            got[hl + 4] == 0x62 && got[hl + 5] == 0x79) {
+            replied = true;
+            char buf[32];
+            CHECK_STR_EQ(c_text(net_ip_addr_string(from, a), buf, sizeof buf),
+                         "127.0.0.1");
+        }
+    }
+    CHECK(replied);
+    net_ip_conn_free(c);
+}
+
 #define TESTS(X)                                                                       \
     X(TestIPConnErrors)                                                                \
     X(TestDialListenIPArgs)                                                            \
     X(TestIPConnLocalName)                                                             \
     X(TestIPConnRemoteName)                                                            \
     X(TestIPConnWriteErrors)                                                           \
-    X(TestIPConnICMPEcho)
+    X(TestIPConnICMPEcho)                                                              \
+    X(TestIPConnICMPEchoMsg)
 
 static int net_ipraw_main(TestingM *m) {
     arena_init(&ar, NULL, 0);

@@ -10,6 +10,9 @@
 
 #include "burrow/net.h"
 
+#include "internal.h"
+
+#include "burrow/context.h"
 #include "burrow/declare.h"
 #include "burrow/error.h"
 #include "burrow/io.h"
@@ -147,6 +150,131 @@ static const ErrorVT nc_closing_vt = {
 static const NetErrNetClosing nc_closing_value = {0};
 
 const Error net_err_closed = {&nc_closing_vt, &nc_closing_value};
+
+/* ------------------------------------------------- errTimeout, errCanceled */
+
+/* timeoutError and canceledError, which keep the words Go has always used for
+ * a lookup or a dial whose context ran out, "i/o timeout" and "operation was
+ * canceled", while errors_is still finds the context's own error in them. */
+typedef struct NetErrContext {
+    Byte timeout;
+} NetErrContext;
+
+static Str nc_ctx_m_error(NetErrContext *self) {
+    return self->timeout ? NC_LIT("i/o timeout") : NC_LIT("operation was canceled");
+}
+
+static bool nc_ctx_m_timeout(NetErrContext *self) {
+    return self->timeout != 0;
+}
+
+#define NC_CTX_METHODS(M, T)                                                           \
+    M(T, Error, nc_ctx_m_error, NC_SIG_STRING)                                         \
+    M(T, Temporary, nc_ctx_m_timeout, NC_SIG_BOOL)                                     \
+    M(T, Timeout, nc_ctx_m_timeout, NC_SIG_BOOL)
+
+BURROW_METHODS_DEFINE(NetErrContext, NC_CTX_METHODS);
+
+/* Only the timeout is a net.Error. canceledError has no Timeout or Temporary
+ * in Go, so its type lists Error alone. */
+#define NC_CANCELED_METHODS(M, T) M(T, Error, nc_ctx_m_error, NC_SIG_STRING)
+
+typedef NetErrContext NetErrCanceled;
+
+BURROW_METHODS_DEFINE(NetErrCanceled, NC_CANCELED_METHODS);
+
+static const Type nc_timeout_desc = {
+    BURROW_S_INIT("timeoutError"),
+    BURROW_S_INIT("net"),
+    KIND_STRUCT,
+    (uint32_t)sizeof(NetErrContext),
+    (uint16_t)_Alignof(NetErrContext),
+    0,
+    NC_COUNT(burrow__methods_NetErrContext),
+    NULL,
+    burrow__methods_NetErrContext,
+    NULL,
+    NULL,
+    0,
+    0x6e657469U, /* "neti" */
+    NULL,
+};
+
+static const Type nc_canceled_desc = {
+    BURROW_S_INIT("canceledError"),
+    BURROW_S_INIT("net"),
+    KIND_STRUCT,
+    (uint32_t)sizeof(NetErrContext),
+    (uint16_t)_Alignof(NetErrContext),
+    0,
+    NC_COUNT(burrow__methods_NetErrCanceled),
+    NULL,
+    burrow__methods_NetErrCanceled,
+    NULL,
+    NULL,
+    0,
+    0x6e657463U, /* "netc" */
+    NULL,
+};
+
+static Str nc_ctx_message(const void *self) {
+    return nc_ctx_m_error((NetErrContext *)(uintptr_t)self);
+}
+
+static bool nc_same(Error a, Error b) {
+    return a.vt == b.vt && a.data == b.data;
+}
+
+static bool nc_timeout_is(const void *self, Error target) {
+    (void)self;
+    return nc_same(target, context_deadline_exceeded);
+}
+
+static bool nc_canceled_is(const void *self, Error target) {
+    (void)self;
+    return nc_same(target, context_canceled);
+}
+
+static Error nc_timeout_clone(const void *self, Alloc *a);
+static Error nc_canceled_clone(const void *self, Alloc *a);
+
+static const ErrorVT nc_timeout_vt = {
+    &nc_timeout_desc, nc_ctx_message, NULL, NULL, nc_timeout_is, NULL, nc_timeout_clone,
+};
+
+static const ErrorVT nc_canceled_vt = {
+    &nc_canceled_desc, nc_ctx_message, NULL, NULL, nc_canceled_is, NULL,
+    nc_canceled_clone,
+};
+
+static const NetErrContext nc_timeout_value = {1};
+static const NetErrContext nc_canceled_value = {0};
+
+const Error burrow__net_err_timeout = {&nc_timeout_vt, &nc_timeout_value};
+const Error burrow__net_err_canceled = {&nc_canceled_vt, &nc_canceled_value};
+
+/* There is only one of each. error_retain's generic copy would match only the
+ * original and lose the Is that finds the context's error, which a DNSError
+ * that crossed goroutines then no longer unwrapped to. */
+static Error nc_timeout_clone(const void *self, Alloc *a) {
+    (void)self;
+    (void)a;
+    return burrow__net_err_timeout;
+}
+
+static Error nc_canceled_clone(const void *self, Alloc *a) {
+    (void)self;
+    (void)a;
+    return burrow__net_err_canceled;
+}
+
+Error burrow__net_map_err(Error err) {
+    if (nc_same(err, context_canceled))
+        return burrow__net_err_canceled;
+    if (nc_same(err, context_deadline_exceeded))
+        return burrow__net_err_timeout;
+    return err;
+}
 
 /* There is only the one, so a retained copy is the same error and errors_is
  * still finds it. */

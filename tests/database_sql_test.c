@@ -6248,7 +6248,7 @@ static Driver td_unknown_driver(void *self) {
 static const DriverConnectorVT td_unknown_connector_vt = {NULL, td_unknown_connect,
                                                           td_unknown_driver, NULL};
 
-static void TestColumnConverterWithUnknownInputCount(TestingT *t) {
+static void testColumnConverterWithUnknownInputCount(TestingT *t) {
     SqlDB *db = sql_open_db((DriverConnector){&td_unknown_connector_vt, NULL});
     Error err = BURROW_NO_ERROR;
     SqlStmt *stmt = sql_db_prepare(db, BURROW_S("SELECT ?"), &err);
@@ -6264,6 +6264,10 @@ static void TestColumnConverterWithUnknownInputCount(TestingT *t) {
     td_close_free(db);
     if (BURROW_FAILED(err))
         FATALF("%v", err);
+}
+
+static void TestColumnConverterWithUnknownInputCount(TestingT *t) {
+    synctest_test(t, testColumnConverterWithUnknownInputCount);
 }
 
 typedef enum TdNullKind {

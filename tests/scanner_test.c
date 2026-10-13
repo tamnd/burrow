@@ -108,13 +108,13 @@ static void TestNext(TestingT *t) {
     arena_free(&ar);
 }
 
-typedef struct Token {
+typedef struct ScanToken {
     Rune tok;
     Str text;
-} Token;
+} ScanToken;
 
 /* Printed from Go's tokenList by a Go program, so the bytes are the same. */
-static const Token token_list[] = {
+static const ScanToken token_list[] = {
     {TEXT_SCANNER_COMMENT, BURROW_S_INIT("// line comments")},
     {TEXT_SCANNER_COMMENT, BURROW_S_INIT("//")},
     {TEXT_SCANNER_COMMENT, BURROW_S_INIT("////")},
@@ -334,7 +334,7 @@ static void test_scan(TestingT *t, Uint mode) {
     Rune tok = text_scanner_scan(&s);
     Int line = 1;
     for (int i = 0; i < n_tokens; i++) {
-        const Token *k = &token_list[i];
+        const ScanToken *k = &token_list[i];
         if ((mode & TEXT_SCANNER_SKIP_COMMENTS) == 0 ||
             k->tok != TEXT_SCANNER_COMMENT) {
             check_tok(t, a, &s, line, tok, k->tok, k->text);
@@ -402,7 +402,7 @@ static void TestPosition(TestingT *t) {
     text_scanner_scan(&s);
     TextScannerPosition pos = {{0}, 4, 1, 5};
     for (int i = 0; i < n_tokens; i++) {
-        const Token *k = &token_list[i];
+        const ScanToken *k = &token_list[i];
         if (s.position.offset != pos.offset)
             testing_t_errorf_v(t, "offset = %d, want %d for %q", s.position.offset,
                                pos.offset, k->text);

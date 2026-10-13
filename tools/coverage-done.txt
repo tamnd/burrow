@@ -50,6 +50,7 @@ crypto
 crypto/cipher
 crypto/des
 crypto/ecdh
+crypto/ecdsa
 crypto/elliptic
 crypto/ed25519
 crypto/rc4
@@ -105,3 +106,17 @@ log
 net/http/cookiejar
 net/http/cgi
 net/http/fcgi
+go/token
+go/scanner
+go/version
+go/constant
+debug/dwarf
+debug/elf
+debug/gosym
+debug/macho
+debug/pe
+debug/plan9obj
+debug/buildinfo
+log/slog
+testing/slogtest
+testing/iotest

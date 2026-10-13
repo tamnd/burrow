@@ -1,6 +1,6 @@
 # Debug information
 
-`burrow/debug/elf.h` is Go's `debug/elf`. It reads ELF files, the format of executables, shared libraries, object files and core dumps on Linux, the BSDs and most other Unix systems. `burrow/debug/dwarf.h` is Go's `debug/dwarf`, which reads the DWARF debugging information that compilers put in those files: the compilation units, functions, variables and types of a program, and the line tables that map machine addresses back to source lines. Go's own `nm`, `objdump`, `addr2line` and `pprof` read binaries through them.
+`burrow/debug/elf.h` is Go's `debug/elf`. It reads ELF files, the format of executables, shared libraries, object files and core dumps on Linux, the BSDs and most other Unix systems. `burrow/debug/dwarf.h` is Go's `debug/dwarf`, which reads the DWARF debugging information that compilers put in those files: the compilation units, functions, variables and types of a program, and the line tables that map machine addresses back to source lines. `burrow/debug/macho.h` is Go's `debug/macho`, which reads Mach-O, the format of executables and libraries on macOS and iOS, including the universal files that hold one for each processor. Go's own `nm`, `objdump`, `addr2line` and `pprof` read binaries through them.
 
 ## ELF files
 
@@ -145,6 +145,78 @@ Go reads types by recursion and lets its stack grow as far as a type goes. A C t
 
 `dwarf_reader_seek_pc` finds the unit holding a program counter, and `dwarf_data_ranges` gives the address ranges of a unit or a function. `dwarf_data_line_reader` opens the line table of a unit. `dwarf_line_reader_next` steps through its rows, each a `DwarfLineEntry` with an address, a file, a line and a column, and `dwarf_line_reader_seek_pc` finds the row for an address directly. `dwarf_line_reader_tell` and `dwarf_line_reader_seek` save and restore a position in the table, as in Go. These read DWARF 2 to 5. Like Go, they do not follow split DWARF out to the `.dwo` files that GCC writes with `-gsplit-dwarf`, but the skeleton units left in the executable read as usual.
 
+## Mach-O files
+
+`macho_open` and `macho_new_file` read a Mach-O file the way the ELF ones read an ELF file. They read the header and every load command at once, which gives the segments and their sections, the symbol table, the dynamic symbol table, the libraries the file links against and its rpaths. `MachoFile.loads` holds the load commands in file order. Go's `Load` is an interface, and here each one is a pointer to a `MachoLoadBytes` with a `kind` saying which struct it starts, so a `MACHO_LOAD_KIND_SEGMENT` one is a `MachoSegment`. `tiny_macho` in the example file writes a 216-byte executable by hand:
+
+<!-- example: ../examples/debug/macho.c#loads -->
+```c
+Slice data = tiny_macho(a);
+Error err = BURROW_NO_ERROR;
+BytesReader *br = bytes_new_reader(a, data);
+MachoFile *f = macho_new_file(a, bytes_reader_as_io_reader_at(br), &err);
+if (f == NULL) {
+    fmt_println_v(err);
+    return;
+}
+MachoFileHeader h = f->file_header;
+fmt_println_v(macho_cpu_string(h.cpu, a), macho_type_string(h.type, a), h.ncmd,
+              "load commands");
+for (Int i = 0; i < f->loads.len; i++) {
+    MachoLoad l = ((MachoLoad *)f->loads.p)[i];
+    if (l->kind == MACHO_LOAD_KIND_SEGMENT) {
+        MachoSegment *seg = (MachoSegment *)l;
+        MachoSegmentHeader sh = seg->segment_header;
+        fmt_printf_v("segment %q addr %#x size %#x\n", sh.name, sh.addr, sh.memsz);
+    } else if (l->kind == MACHO_LOAD_KIND_RPATH) {
+        fmt_printf_v("rpath %q\n", ((MachoRpath *)l)->path);
+    }
+}
+MachoSection *text = macho_file_section(f, BURROW_S("__text"));
+Slice code = macho_section_data(text, a, &err);
+fmt_printf_v("%s,%s holds % x\n", text->section_header.seg,
+             text->section_header.name, code);
+macho_file_free(f);
+```
+
+That prints:
+
+```
+CpuAmd64 Exec 2 load commands
+segment "__TEXT" addr 0x100000000 size 0x1000
+rpath "/usr/lib"
+__TEXT,__text holds 31 c0 c3
+```
+
+`macho_file_segment` and `macho_file_section` find a segment or a section by name, and `macho_section_data`, `macho_section_open` and the segment versions read their contents. `macho_file_dwarf` gives the DWARF data from the `__debug_` and `__zdebug_` sections, uncompressing the ones with a `ZLIB` header first. `macho_file_imported_symbols` and `macho_file_imported_libraries` give what the program needs from elsewhere. Memory works as it does for ELF: a `MachoFile` keeps what it read in an arena of its own, `macho_file_free` gives it back and closes a file from `macho_open`, and what the other functions return comes from the allocator they are given.
+
+A universal file starts with a table of the files inside it. `macho_new_fat_file` and `macho_open_fat` read that table and every file it lists, and give each one as a `MachoFatArch` holding a `MachoFile`. A plain Mach-O file is not a universal one, and gives `macho_err_not_fat`, so a program that takes either kind can try the universal reader first and fall back to the plain one on that error. Anything else that is wrong with a file is usually a `MachoFormatError`:
+
+<!-- example: ../examples/debug/macho.c#fat -->
+```c
+Error err = BURROW_NO_ERROR;
+BytesReader *br = bytes_new_reader(a, tiny_macho(a));
+MachoFatFile *ff = macho_new_fat_file(a, bytes_reader_as_io_reader_at(br), &err);
+if (ff == NULL && errors_is(err, macho_err_not_fat))
+    fmt_println_v("not universal:", err);
+
+Str text = BURROW_S("This is a text file, not an executable.");
+br = bytes_new_reader(a, slice_from_str(a, text));
+MachoFile *f = macho_new_file(a, bytes_reader_as_io_reader_at(br), &err);
+const MachoFormatError *fe = errors_as(err, TYPE_MACHO_FORMAT_ERROR);
+if (f == NULL && fe != NULL)
+    fmt_println_v("at offset", fe->off, "of the file:", fe->msg);
+```
+
+That prints:
+
+```
+not universal: not a fat Mach-O file in record at byte 0x0
+at offset 0 of the file: invalid magic number
+```
+
+Go's `ImportedSymbols` slices the symbol table with the numbers in the dynamic symbol table without checking them first, so a file that lies about them makes it panic. `macho_file_imported_symbols` panics in the same cases with the same message. The panic is a plain one rather than the runtime error Go's would be, so recover from it as you would from any panic.
+
 ## How it is tested
 
-The tests check the output against Go's own. `tools/gen-debug-tests.sh` runs Go's `debug/elf` and `debug/dwarf` over every file in `debug/elf`'s testdata and the ELF files in `debug/dwarf`'s and writes down a text dump of everything they read: headers, sections, symbols, dynamic tables, every DWARF entry and type, and every line table row. The C tests build the same dump and compare it line by line. They do the same for about 1,850 damaged copies of the files, comparing a hash of the dump, so a malformed file gets the same error here as in Go. The tests in Go's packages that look at one value at a time are ported as well.
+The tests check the output against Go's own. `tools/gen-debug-tests.sh` runs Go's `debug/elf` and `debug/dwarf` over every file in `debug/elf`'s testdata and the ELF files in `debug/dwarf`'s and writes down a text dump of everything they read: headers, sections, symbols, dynamic tables, every DWARF entry and type, and every line table row. The C tests build the same dump and compare it line by line. They do the same for about 1,850 damaged copies of the files, comparing a hash of the dump, so a malformed file gets the same error here as in Go. `tools/gen-debug-tests.sh macho` does the same for the files in `debug/macho`'s testdata and the Mach-O files in `debug/dwarf`'s, reading each one both as a universal file and as a plain one. The tests in Go's packages that look at one value at a time are ported as well.

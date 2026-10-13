@@ -109,3 +109,4 @@ go/version
 go/constant
 debug/dwarf
 debug/elf
+debug/macho

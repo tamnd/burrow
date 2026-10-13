@@ -185,8 +185,26 @@ const Type burrow_type_AstObjKind = {
 
 /* The lists and maps the nodes hold. */
 AT_SLICE(at_slice_expr, &burrow_type_AstExpr);
-AT_SLICE(at_slice_stmt, &burrow_type_AstStmt);
-AT_SLICE(at_slice_decl, &burrow_type_AstDecl);
+/* []ast.Stmt and []ast.Decl, which go/printer takes as a node. */
+#define AT_SLICE_PUB(name, elem)                                                       \
+    const Type name = {                                                                \
+        {NULL, 0},                                                                     \
+        {NULL, 0},                                                                     \
+        KIND_SLICE,                                                                    \
+        (uint32_t)sizeof(Slice),                                                       \
+        (uint16_t)_Alignof(Slice),                                                     \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        elem,                                                                          \
+        NULL,                                                                          \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+    }
+AT_SLICE_PUB(burrow_type_AstStmtSlice, &burrow_type_AstStmt);
+AT_SLICE_PUB(burrow_type_AstDeclSlice, &burrow_type_AstDecl);
 AT_SLICE(at_slice_spec, &burrow_type_AstSpec);
 AT_SLICE(at_slice_ident, &burrow_type_AstIdentPtr);
 AT_SLICE(at_slice_comment, &burrow_type_AstCommentPtr);
@@ -513,7 +531,7 @@ AT_PTR(AstBranchStmt);
 
 static const Field at_fields_block_stmt[] = {
     AT_FIELD(AstBlockStmt, "Lbrace", lbrace, burrow_type_TokenPos),
-    AT_FIELD(AstBlockStmt, "List", list, at_slice_stmt),
+    AT_FIELD(AstBlockStmt, "List", list, burrow_type_AstStmtSlice),
     AT_FIELD(AstBlockStmt, "Rbrace", rbrace, burrow_type_TokenPos),
 };
 AT_STRUCT(AstBlockStmt, "BlockStmt", at_fields_block_stmt);
@@ -533,7 +551,7 @@ static const Field at_fields_case_clause[] = {
     AT_FIELD(AstCaseClause, "Case", case_, burrow_type_TokenPos),
     AT_FIELD(AstCaseClause, "List", list, at_slice_expr),
     AT_FIELD(AstCaseClause, "Colon", colon, burrow_type_TokenPos),
-    AT_FIELD(AstCaseClause, "Body", body, at_slice_stmt),
+    AT_FIELD(AstCaseClause, "Body", body, burrow_type_AstStmtSlice),
 };
 AT_STRUCT(AstCaseClause, "CaseClause", at_fields_case_clause);
 AT_PTR(AstCaseClause);
@@ -560,7 +578,7 @@ static const Field at_fields_comm_clause[] = {
     AT_FIELD(AstCommClause, "Case", case_, burrow_type_TokenPos),
     AT_FIELD(AstCommClause, "Comm", comm, burrow_type_AstStmt),
     AT_FIELD(AstCommClause, "Colon", colon, burrow_type_TokenPos),
-    AT_FIELD(AstCommClause, "Body", body, at_slice_stmt),
+    AT_FIELD(AstCommClause, "Body", body, burrow_type_AstStmtSlice),
 };
 AT_STRUCT(AstCommClause, "CommClause", at_fields_comm_clause);
 AT_PTR(AstCommClause);
@@ -658,7 +676,7 @@ static const Field at_fields_file[] = {
     AT_FIELD(AstFile, "Doc", doc, burrow_type_AstCommentGroupPtr),
     AT_FIELD(AstFile, "Package", package, burrow_type_TokenPos),
     AT_FIELD(AstFile, "Name", name, burrow_type_AstIdentPtr),
-    AT_FIELD(AstFile, "Decls", decls, at_slice_decl),
+    AT_FIELD(AstFile, "Decls", decls, burrow_type_AstDeclSlice),
     AT_FIELD(AstFile, "FileStart", file_start, burrow_type_TokenPos),
     AT_FIELD(AstFile, "FileEnd", file_end, burrow_type_TokenPos),
     AT_FIELD(AstFile, "Scope", scope, burrow_type_AstScopePtr),

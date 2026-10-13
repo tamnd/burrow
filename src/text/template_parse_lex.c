@@ -33,11 +33,17 @@
 #define TPL_LEFT_COMMENT BURROW_S("/*")
 #define TPL_RIGHT_COMMENT BURROW_S("*/")
 
+/* s[i:] and s[lo:hi]. The empty cases skip the pointer sum, since an empty
+ * input may have no bytes behind it at all. */
 static Str tpl_from(Str s, Int i) {
+    if (i >= s.len)
+        return BURROW_STR_EMPTY;
     return str_from_bytes(s.p + i, s.len - i);
 }
 
 static Str tpl_slice(Str s, Int lo, Int hi) {
+    if (hi <= lo)
+        return BURROW_STR_EMPTY;
     return str_from_bytes(s.p + lo, hi - lo);
 }
 

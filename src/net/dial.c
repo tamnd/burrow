@@ -284,7 +284,8 @@ static Error dl_resolve_addr_list(NetResolver *r, Alloc *a, Context ctx, Str op,
     Int n = 0;
     for (Int i = 0; i < out->n; i++) {
         const DlAddr *x = &out->p[i];
-        if (!str_eq(dl_addr(x).vt->network(dl_addr(x).data), hnet))
+        NetAddr xa = dl_addr(x);
+        if (xa.vt == NULL || !str_eq(xa.vt->network(xa.data), hnet))
             return dl_addr_error(DL_LIT("mismatched local address type"),
                                  dl_hint_string(hint));
         if (!wildcard && !dl_is_wildcard(dl_ip(x)) && !dl_match_family(dl_ip(x), hip))
@@ -912,13 +913,14 @@ static NetConn dl_dial_parallel(DlSys *sd, Alloc *a, Context ctx, DlList primari
     return c;
 }
 
-static const NetDialer dl_zero_dialer;
-
 NetConn net_dialer_dial_context(const NetDialer *d, Alloc *a, Context ctx, Str network,
                                 Str address, Error *err) {
     NetConn none = {NULL, NULL};
-    if (d == NULL)
-        d = &dl_zero_dialer;
+    NetDialer zero;
+    if (d == NULL) {
+        memset(&zero, 0, sizeof zero);
+        d = &zero;
+    }
     DlCtx dc;
     if (!dl_ctx_begin(d, ctx, &dc)) {
         dl_ctx_end(&dc);
@@ -979,8 +981,11 @@ NetConn net_dial_timeout(Alloc *a, Str network, Str address, Duration timeout,
  * that the errors can name them. */
 NetTCPConn *net_dialer_dial_tcp(const NetDialer *d, Alloc *a, Context ctx, Str network,
                                 NetipAddrPort laddr, NetipAddrPort raddr, Error *err) {
-    if (d == NULL)
-        d = &dl_zero_dialer;
+    NetDialer zero;
+    if (d == NULL) {
+        memset(&zero, 0, sizeof zero);
+        d = &zero;
+    }
     DlCtx dc;
     ArenaMark m = error_mark();
     NetTCPAddr *la = net_tcp_addr_from_addr_port(error_allocator(), laddr);
@@ -1003,8 +1008,11 @@ NetTCPConn *net_dialer_dial_tcp(const NetDialer *d, Alloc *a, Context ctx, Str n
 
 NetUDPConn *net_dialer_dial_udp(const NetDialer *d, Alloc *a, Context ctx, Str network,
                                 NetipAddrPort laddr, NetipAddrPort raddr, Error *err) {
-    if (d == NULL)
-        d = &dl_zero_dialer;
+    NetDialer zero;
+    if (d == NULL) {
+        memset(&zero, 0, sizeof zero);
+        d = &zero;
+    }
     DlCtx dc;
     ArenaMark m = error_mark();
     NetUDPAddr *la = net_udp_addr_from_addr_port(error_allocator(), laddr);
@@ -1028,8 +1036,11 @@ NetUDPConn *net_dialer_dial_udp(const NetDialer *d, Alloc *a, Context ctx, Str n
 NetUnixConn *net_dialer_dial_unix(const NetDialer *d, Alloc *a, Context ctx,
                                   Str network, const NetUnixAddr *laddr,
                                   const NetUnixAddr *raddr, Error *err) {
-    if (d == NULL)
-        d = &dl_zero_dialer;
+    NetDialer zero;
+    if (d == NULL) {
+        memset(&zero, 0, sizeof zero);
+        d = &zero;
+    }
     DlCtx dc;
     if (!dl_ctx_begin(d, ctx, &dc)) {
         dl_ctx_end(&dc);
@@ -1113,8 +1124,6 @@ static Error dl_listen_control(void *env, Context ctx, Str network, Str address,
     return BURROW_CALLF(lc->control, network, address, c);
 }
 
-static const NetListenConfig dl_zero_listen_config;
-
 static burrow__NetSysOpts dl_listen_opts(const NetListenConfig *lc, Context ctx) {
     burrow__NetSysOpts o;
     memset(&o, 0, sizeof o);
@@ -1130,8 +1139,11 @@ static burrow__NetSysOpts dl_listen_opts(const NetListenConfig *lc, Context ctx)
 NetListener net_listen_config_listen(const NetListenConfig *lc, Alloc *a, Context ctx,
                                      Str network, Str address, Error *err) {
     NetListener none = {NULL, NULL};
-    if (lc == NULL)
-        lc = &dl_zero_listen_config;
+    NetListenConfig zero;
+    if (lc == NULL) {
+        memset(&zero, 0, sizeof zero);
+        lc = &zero;
+    }
     ArenaMark m = error_mark();
     DlList addrs = {NULL, 0};
     Error e = dl_resolve_addr_list(NULL, error_allocator(), ctx, DL_LIT("listen"),
@@ -1186,8 +1198,11 @@ NetPacketConn net_listen_config_listen_packet(const NetListenConfig *lc, Alloc *
                                               Context ctx, Str network, Str address,
                                               Error *err) {
     NetPacketConn none = {NULL, NULL};
-    if (lc == NULL)
-        lc = &dl_zero_listen_config;
+    NetListenConfig zero;
+    if (lc == NULL) {
+        memset(&zero, 0, sizeof zero);
+        lc = &zero;
+    }
     ArenaMark m = error_mark();
     DlList addrs = {NULL, 0};
     Error e = dl_resolve_addr_list(NULL, error_allocator(), ctx, DL_LIT("listen"),

@@ -49,6 +49,11 @@ IoCloser net_listener_as_io_closer(NetListener l) {
     return cl;
 }
 
+IoCloser net_packet_conn_as_io_closer(NetPacketConn c) {
+    IoCloser cl = {c.vt != NULL ? &c.vt->closer : NULL, c.data};
+    return cl;
+}
+
 /* --------------------------------------------------------------- net.Error */
 
 /* The method called name on err's type, if it is a func() bool, which is

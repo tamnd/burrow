@@ -158,29 +158,19 @@ static NetListener local_listener(TestingT *t, Str network, Str *dir) {
     return l;
 }
 
-/* newLocalPacketListener, as a NetConn, since ListenPacket is still to come. */
-static NetConn local_packet_listener(TestingT *t, Str network, Str *dir) {
-    NetConn none = {NULL, NULL};
+/* newLocalPacketListener */
+static NetPacketConn local_packet_listener(TestingT *t, Str network, Str *dir) {
     *dir = BURROW_STR_EMPTY;
+    Str address = S("127.0.0.1:0");
+    if (str_eq(network, S("udp6")))
+        address = S("[::1]:0");
+    else if (str_eq(network, S("unixgram")))
+        address = unix_path(t, dir);
     Error e = BURROW_NO_ERROR;
-    if (str_eq(network, S("unixgram"))) {
-        NetUnixAddr ua = {unix_path(t, dir), S("unixgram")};
-        NetUnixConn *c = net_listen_unixgram(heap_allocator(), network, &ua, &e);
-        if (c == NULL) {
-            testing_t_errorf_v(t, "ListenUnixgram: %v", e);
-            return none;
-        }
-        return net_unix_conn_as_conn(c);
-    }
-    NetUDPAddr *la = net_resolve_udp_addr(
-        a, network, str_eq(network, S("udp6")) ? S("[::1]:0") : S("127.0.0.1:0"), &e);
-    NetUDPConn *c =
-        la != NULL ? net_listen_udp(heap_allocator(), network, la, &e) : NULL;
-    if (c == NULL) {
-        testing_t_errorf_v(t, "ListenUDP(%s): %v", network, e);
-        return none;
-    }
-    return net_udp_conn_as_conn(c);
+    NetPacketConn c = net_listen_packet(heap_allocator(), network, address, &e);
+    if (BURROW_FAILED(e))
+        testing_t_errorf_v(t, "ListenPacket(%s, %s): %v", network, address, e);
+    return c;
 }
 
 static void remove_dir(Str dir) {
@@ -545,7 +535,7 @@ static void TestDialerControl(TestingT *t) {
         if (!testable(network))
             continue;
         Str dir;
-        NetConn c1 = local_packet_listener(t, network, &dir);
+        NetPacketConn c1 = local_packet_listener(t, network, &dir);
         if (c1.vt == NULL)
             continue;
         int calls = 0;
@@ -558,7 +548,7 @@ static void TestDialerControl(TestingT *t) {
         if (BURROW_FAILED(e) || calls != 1)
             testing_t_errorf_v(t, "%s: %v, %d calls", network, e, calls);
         net_conn_free(c2);
-        net_conn_free(c1);
+        net_packet_conn_free(c1);
         remove_dir(dir);
     }
 }
@@ -664,7 +654,7 @@ static void TestDialContext(TestingT *t) {
         if (!testable(network))
             continue;
         Str dir;
-        NetConn c1 = local_packet_listener(t, network, &dir);
+        NetPacketConn c1 = local_packet_listener(t, network, &dir);
         if (c1.vt == NULL)
             continue;
         IdSeen seen = {0};
@@ -701,7 +691,7 @@ static void TestDialContext(TestingT *t) {
         else if (seen.id != id)
             testing_t_errorf_v(t, "%s: got id %d, want %d", network, seen.id, id);
         net_conn_free(c2);
-        net_conn_free(c1);
+        net_packet_conn_free(c1);
         remove_dir(dir);
     }
 }
@@ -779,6 +769,135 @@ static void TestDialTimeoutGivesUp(TestingT *t) {
     CHECK(BURROW_OK(e));
     net_conn_free(c);
     net_listener_free(l);
+}
+
+/* A packet from c reaches pc, which answers the address it came from. Both
+ * ends get a deadline, so that a lost packet fails instead of hanging. */
+static void packet_exchange(TestingT *t, NetPacketConn pc, NetConn c) {
+    Time dl = time_add(time_now(), 5 * TIME_SECOND);
+    (void)pc.vt->set_deadline(pc.data, dl);
+    (void)c.vt->set_deadline(c.data, dl);
+    char ping[] = "ping";
+    char pong[] = "pong";
+    char buf[16];
+    Error e = BURROW_NO_ERROR;
+    Int n = c.vt->writer.write(c.data, bytes_of(ping, 4), &e);
+    if (n != 4 || BURROW_FAILED(e)) {
+        testing_t_errorf_v(t, "Write: %d, %v", n, e);
+        return;
+    }
+    NetAddr from = {NULL, NULL};
+    n = pc.vt->read_from(pc.data, bytes_of(buf, sizeof buf), a, &from, &e);
+    if (n != 4 || memcmp(buf, ping, 4) != 0 || BURROW_FAILED(e) || from.vt == NULL) {
+        testing_t_errorf_v(t, "ReadFrom: %d, %v", n, e);
+        return;
+    }
+    n = pc.vt->write_to(pc.data, bytes_of(pong, 4), from, &e);
+    if (n != 4 || BURROW_FAILED(e)) {
+        testing_t_errorf_v(t, "WriteTo: %d, %v", n, e);
+        return;
+    }
+    n = c.vt->reader.read(c.data, bytes_of(buf, sizeof buf), &e);
+    if (n != 4 || memcmp(buf, pong, 4) != 0 || BURROW_FAILED(e))
+        testing_t_errorf_v(t, "Read: %d, %v", n, e);
+}
+
+/* A packet listener on each datagram network, used through NetPacketConn. */
+static void TestListenPacket(TestingT *t) {
+    need_sockets(t);
+    const char *networks[] = {"udp", "udp4", "udp6", "unixgram"};
+    for (size_t i = 0; i < sizeof networks / sizeof networks[0]; i++) {
+        Str network = str_from_cstr(networks[i]);
+        if (!testable(network))
+            continue;
+        Str dir = BURROW_STR_EMPTY;
+        NetPacketConn pc = local_packet_listener(t, network, &dir);
+        if (pc.vt == NULL) {
+            remove_dir(dir);
+            continue;
+        }
+        bool unixgram = str_eq(network, S("unixgram"));
+        NetAddr la = pc.vt->local_addr(pc.data);
+        CHECK(str_eq(la.vt->network(la.data), unixgram ? S("unixgram") : S("udp")));
+        CHECK((net_packet_conn_as_unix_conn(pc) != NULL) == unixgram);
+        CHECK((net_packet_conn_as_udp_conn(pc) != NULL) == !unixgram);
+        Error e = BURROW_NO_ERROR;
+        NetConn c = {NULL, NULL};
+        Str cdir = BURROW_STR_EMPTY;
+        if (unixgram) {
+            /* A unixgram socket needs a name of its own to be answered. */
+            NetUnixAddr ca = {unix_path(t, &cdir), S("unixgram")};
+            NetUnixAddr ra = {fmt_sprintf_v(a, "%s/s", dir), S("unixgram")};
+            NetUnixConn *uc = net_dial_unix(heap_allocator(), network, &ca, &ra, &e);
+            if (uc != NULL)
+                c = net_unix_conn_as_conn(uc);
+        } else {
+            c = net_dial(heap_allocator(), network, addr_str(la), &e);
+        }
+        if (c.vt != NULL)
+            packet_exchange(t, pc, c);
+        else
+            testing_t_errorf_v(t, "Dial(%s): %v", network, e);
+        net_conn_free(c);
+        net_packet_conn_free(pc);
+        remove_dir(cdir);
+        remove_dir(dir);
+    }
+}
+
+/* The networks ListenPacket does not take, each as an OpError. */
+static void TestListenPacketErrors(TestingT *t) {
+    need_sockets(t);
+    char buf[128];
+    Error e = BURROW_NO_ERROR;
+    NetPacketConn c =
+        net_listen_packet(heap_allocator(), S("tcp"), S("127.0.0.1:0"), &e);
+    CHECK(c.vt == NULL);
+    CHECK_STR_EQ(
+        c_text(error_text(e), buf, sizeof buf),
+        "listen tcp 127.0.0.1:0: address 127.0.0.1:0: unexpected address type");
+    c = net_listen_packet(heap_allocator(), S("bogus"), S("127.0.0.1:0"), &e);
+    CHECK(c.vt == NULL);
+    CHECK_STR_EQ(c_text(error_text(e), buf, sizeof buf),
+                 "listen bogus: unknown network bogus");
+    c = net_listen_packet(heap_allocator(), S("ip4:icmp"), S("127.0.0.1"), &e);
+    CHECK(c.vt == NULL && BURROW_FAILED(e));
+    CHECK(errors_as(e, TYPE_NET_OP_ERROR) != NULL);
+    /* And Listen does not take a datagram network. */
+    NetListener l = net_listen(heap_allocator(), S("udp"), S("127.0.0.1:0"), &e);
+    CHECK(l.vt == NULL);
+    CHECK_STR_EQ(
+        c_text(error_text(e), buf, sizeof buf),
+        "listen udp 127.0.0.1:0: address 127.0.0.1:0: unexpected address type");
+    l = net_listen(heap_allocator(), S("ip4:icmp"), S("127.0.0.1"), &e);
+    CHECK(l.vt == NULL);
+    CHECK_STR_EQ(
+        c_text(error_text(e), buf, sizeof buf),
+        "listen ip4:icmp 127.0.0.1: address 127.0.0.1: unexpected address type");
+}
+
+/* Go does not check the Unix network a Listen or a ListenPacket is given
+ * against the one it makes, so a "unixgram" Listen is a listener on a
+ * datagram socket and a "unix" ListenPacket is a packet connection on a
+ * listening stream one. Both work, and this keeps it that way. */
+static void TestListenTakesEitherUnixNetwork(TestingT *t) {
+#if !defined(HAVE_UNIXGRAM)
+    testing_t_skip_v(t, "no unixgram sockets here");
+#else
+    Str dir = BURROW_STR_EMPTY;
+    Error e = BURROW_NO_ERROR;
+    NetListener l = net_listen(heap_allocator(), S("unixgram"), unix_path(t, &dir), &e);
+    if (l.vt == NULL)
+        testing_t_errorf_v(t, "Listen(unixgram): %v", e);
+    net_listener_free(l);
+    remove_dir(dir);
+    NetPacketConn c =
+        net_listen_packet(heap_allocator(), S("unix"), unix_path(t, &dir), &e);
+    if (c.vt == NULL)
+        testing_t_errorf_v(t, "ListenPacket(unix): %v", e);
+    net_packet_conn_free(c);
+    remove_dir(dir);
+#endif
 }
 
 /* ------------------------------------------------------------ the Resolve */
@@ -994,6 +1113,9 @@ static void TestResolveIPAddr(TestingT *t) {
     X(TestListenConfigControl)                                                         \
     X(TestADialErrorIsAnOpError)                                                       \
     X(TestDialTimeoutGivesUp)                                                          \
+    X(TestListenPacket)                                                                \
+    X(TestListenPacketErrors)                                                          \
+    X(TestListenTakesEitherUnixNetwork)                                                \
     X(TestResolveTCPAddr)                                                              \
     X(TestResolveUDPAddr)                                                              \
     X(TestResolveIPAddr)

@@ -616,6 +616,39 @@ NetUDPConn *net_conn_as_udp_conn(NetConn c) {
     return (NetUDPConn *)c.data;
 }
 
+static Int nu_m_read_from(void *self, Slice p, Alloc *a, NetAddr *addr, Error *err) {
+    return net_udp_conn_read_from((NetUDPConn *)self, p, a, addr, err);
+}
+
+static Int nu_m_write_to(void *self, Slice p, NetAddr addr, Error *err) {
+    return net_udp_conn_write_to((NetUDPConn *)self, p, addr, err);
+}
+
+static const NetPacketConnVT nu_packet_conn_vt = {
+    {&nu_conn_desc, nu_m_close},
+    nu_m_read_from,
+    nu_m_write_to,
+    nu_m_local_addr,
+    nu_m_set_deadline,
+    nu_m_set_read_deadline,
+    nu_m_set_write_deadline,
+};
+
+NetPacketConn net_udp_conn_as_packet_conn(NetUDPConn *c) {
+    NetPacketConn conn = {NULL, NULL};
+    if (c != NULL) {
+        conn.vt = &nu_packet_conn_vt;
+        conn.data = c;
+    }
+    return conn;
+}
+
+NetUDPConn *net_packet_conn_as_udp_conn(NetPacketConn c) {
+    if (c.vt != &nu_packet_conn_vt)
+        return NULL;
+    return (NetUDPConn *)c.data;
+}
+
 void net_udp_conn_free(NetUDPConn *c) {
     if (c == NULL)
         return;

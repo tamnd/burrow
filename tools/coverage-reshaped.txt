@@ -261,3 +261,71 @@ crypto/ecdh: method (*PublicKey) Curve: returns a pointer to one of the four cur
 # collector. Here the pipe comes from an allocator and net_pipe_free gives it
 # back, and two values come back through out parameters.
 net: func Pipe: takes an allocator and returns both ends through out parameters
+
+# include/burrow/debug/elf.h: Go gets ReadAt by embedding the io.ReaderAt in
+# Section and Prog, so the receiver is the struct value. Here the method reads
+# through the reader_at field, which lives in the struct, so it takes a pointer.
+debug/elf: method (Section) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
+debug/elf: method (Prog) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
+
+# include/burrow/debug/macho.h: Go embeds io.ReaderAt in Section and Segment
+# and a LoadBytes in every load, so ReadAt and Raw have value receivers that
+# reach into the embedded field. The loads are pointers in File.Loads and the
+# reader lives in the struct, so these take a pointer. FatArch embeds *File and
+# its methods take the FatArch by pointer for the same reason.
+debug/macho: method (Section) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
+debug/macho: method (Segment) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
+debug/macho: method (LoadBytes) Raw: the receiver is a pointer, since loads are held by pointer
+debug/macho: method (Segment) Raw: the receiver is a pointer, since loads are held by pointer
+debug/macho: method (Dylib) Raw: the receiver is a pointer, since loads are held by pointer
+debug/macho: method (Symtab) Raw: the receiver is a pointer, since loads are held by pointer
+debug/macho: method (Dysymtab) Raw: the receiver is a pointer, since loads are held by pointer
+debug/macho: method (Rpath) Raw: the receiver is a pointer, since loads are held by pointer
+debug/macho: method (FatArch) Close: the receiver is a pointer to the arch, which holds the embedded File
+debug/macho: method (FatArch) DWARF: the receiver is a pointer to the arch, which holds the embedded File
+debug/macho: method (FatArch) ImportedLibraries: the receiver is a pointer to the arch, which holds the embedded File
+debug/macho: method (FatArch) ImportedSymbols: the receiver is a pointer to the arch, which holds the embedded File
+debug/macho: method (FatArch) Section: the receiver is a pointer to the arch, which holds the embedded File
+debug/macho: method (FatArch) Segment: the receiver is a pointer to the arch, which holds the embedded File
+
+# include/burrow/debug/pe.h: Go embeds io.ReaderAt in Section, so ReadAt has a
+# value receiver. The reader lives in the struct here, so it takes a pointer.
+debug/pe: method (Section) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
+
+# include/burrow/debug/plan9obj.h: the same as for debug/pe, Go embeds
+# io.ReaderAt in Section and ReadAt has a value receiver.
+debug/plan9obj: method (Section) ReadAt: the receiver is a pointer, since the embedded reader lives in the struct
+
+# include/burrow/debug/gosym.h: Go's Func embeds *Sym, so it has Sym's methods
+# with a value receiver. Here they take a pointer to the Func and use its sym.
+debug/gosym: method (Func) BaseName: the receiver is a pointer, and the method is Sym's through the embedded *Sym
+debug/gosym: method (Func) PackageName: the receiver is a pointer, and the method is Sym's through the embedded *Sym
+debug/gosym: method (Func) ReceiverName: the receiver is a pointer, and the method is Sym's through the embedded *Sym
+debug/gosym: method (Func) Static: the receiver is a pointer, and the method is Sym's through the embedded *Sym
+
+# include/burrow/go/token.h: a func value in C is a function pointer with a
+# context argument, and a variadic list is a pointer and a count.
+go/token: method (*FileSet) AddExistingFiles: takes the files as a pointer and a count
+go/token: method (*FileSet) Iterate: the callback is a TokenFileFunc, a function pointer with a context argument
+go/token: method (*FileSet) Read: decode is a TokenCodecFunc, a function pointer with a context argument
+go/token: method (*FileSet) Write: encode is a TokenCodecFunc, a function pointer with a context argument
+
+# include/burrow/go/ast.h: a func value is a function pointer with a context
+# argument, and burrow has no reflect.Value, so the field filter gets an Any.
+go/ast: func Inspect: f is an AstInspectFunc, a function pointer with a context argument
+go/ast: func PreorderStack: f is an AstPreorderStackFunc, a function pointer with a context argument
+go/ast: func NotNilFilter: takes an Any, which holds the type and the address a reflect.Value would
+
+# include/burrow/go/doc.h: Go takes the mode as an optional ...any and panics
+# on anything but zero or one doc.Mode, so C takes the DocMode itself.
+go/doc: func NewFromFiles: takes the mode as a DocMode, 0 being none, where Go takes an optional ...any that can only hold a doc.Mode
+
+# include/burrow/log/slog.h: a Record carries five attributes inline, so the
+# functions that only read one take a pointer to it. A Value can hold its
+# payload inline too, and the Any that Value.Any returns points into it.
+log/slog: method (Record) NumAttrs: takes the record by pointer, since it is large and only read
+log/slog: method (Record) Attrs: f is a function pointer with a context argument, and the record is passed by pointer
+log/slog: method (Value) Any: takes the value by pointer, because the Any it returns can point into it
+log/slog: method (Value) LogValuer: returns the LogValuer as an Any holding it, which is how a Value keeps one
+log/slog: method (Record) Source: fills in a Source and returns whether there is one, since there is nowhere for Go's pointer to point
+log/slog: func NewMultiHandler: takes the handlers as a pointer and a count, as io_multi_writer does

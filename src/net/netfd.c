@@ -627,6 +627,19 @@ Error burrow__netfd_setsockopt(burrow__NetFD *fd, int32_t opt, int64_t value) {
     return nf_wrap(NF_LIT("setsockopt"), e);
 }
 
+Error burrow__netfd_setsockopt_mreq(burrow__NetFD *fd, int32_t opt, const PalMreq *m) {
+    Error e = burrow__pfd_incref(&fd->pfd);
+    if (BURROW_FAILED(e))
+        return e;
+    PalErrno pe = PAL_OK;
+    if (!pal_setsockopt_mreq(fd->pfd.sysfd, opt, m, &pe))
+        e = burrow__os_errno(pe);
+    Error d = burrow__pfd_decref(&fd->pfd);
+    if (BURROW_OK(e))
+        e = d;
+    return nf_wrap(NF_LIT("setsockopt"), e);
+}
+
 /* ---------------------------------------------------------------- rawConn */
 
 static Error nf_raw_control(void *self, SyscallFdFunc f) {

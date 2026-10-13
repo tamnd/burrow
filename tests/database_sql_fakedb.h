@@ -1600,10 +1600,15 @@ static Slice fdb_basic_values_to_named(FakeBasicStmt *bs, Alloc *a, Slice args,
 
 static DriverResult fdb_basic_exec(void *self, Alloc *a, Slice args, Error *err) {
     FakeBasicStmt *bs = self;
-    Slice nvs = fdb_basic_values_to_named(bs, a, args, err);
-    if (BURROW_FAILED(*err))
-        return (DriverResult){NULL, NULL};
-    return fdb_stmt_exec_context(bs->s, a, context_background(), nvs, err);
+    /* The insert keeps copies of the values, so they only need to last the call. */
+    Arena tmp;
+    arena_init(&tmp, heap_allocator(), 0);
+    Slice nvs = fdb_basic_values_to_named(bs, arena_allocator(&tmp), args, err);
+    DriverResult res = {NULL, NULL};
+    if (!BURROW_FAILED(*err))
+        res = fdb_stmt_exec_context(bs->s, a, context_background(), nvs, err);
+    arena_free(&tmp);
+    return res;
 }
 
 static DriverRows fdb_basic_query(void *self, Slice args, Error *err) {

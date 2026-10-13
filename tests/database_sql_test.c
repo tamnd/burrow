@@ -28,11 +28,23 @@
 
 #define NO_ARGS slice_nil(TYPE_ANY)
 #define ARGS(...) BURROW__FMT_ARGS(BURROW_ANY_OF, __VA_ARGS__)
+
 #define FATALF(...)                                                                    \
     do {                                                                               \
         testing_t_errorf_v(t, __VA_ARGS__);                                            \
         return;                                                                        \
     } while (0)
+
+/* Runs a prepared statement whose result the test doesn't read, with the result
+ * in an arena that is freed straight after. */
+static Error td_exec_stmt(SqlStmt *s, Slice args) {
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Error err = BURROW_NO_ERROR;
+    (void)sql_stmt_exec(s, arena_allocator(&ar), args, &err);
+    arena_free(&ar);
+    return err;
+}
 
 static const Str fake_db_name = BURROW_S_INIT("foo");
 
@@ -1037,7 +1049,7 @@ static void testTxPrepare(TestingT *t, SqlDB *db) {
         sql_tx_free(tx);
         return;
     }
-    (void)sql_stmt_exec_v(stmt, heap_allocator(), &err, BURROW_S("Bobby"), 7);
+    err = td_exec_stmt(stmt, ARGS(BURROW_S("Bobby"), 7));
     if (BURROW_FAILED(err))
         testing_t_errorf_v(t, "Exec = %v", err);
     err = sql_tx_commit(tx);
@@ -1068,7 +1080,7 @@ static void testTxStmt(TestingT *t, SqlDB *db) {
         return;
     }
     SqlStmt *txs = sql_tx_stmt(tx, stmt);
-    (void)sql_stmt_exec_v(txs, heap_allocator(), &err, BURROW_S("Bobby"), 7);
+    err = td_exec_stmt(txs, ARGS(BURROW_S("Bobby"), 7));
     if (BURROW_FAILED(err))
         testing_t_errorf_v(t, "Exec = %v", err);
     err = sql_tx_commit(tx);
@@ -1105,12 +1117,12 @@ static void testTxStmtPreparedOnce(TestingT *t, SqlDB *db) {
     SqlStmt *txs1 = sql_tx_stmt(tx, stmt);
     SqlStmt *txs2 = sql_tx_stmt(tx, stmt);
 
-    (void)sql_stmt_exec_v(txs1, heap_allocator(), &err, BURROW_S("Go"), 7);
+    err = td_exec_stmt(txs1, ARGS(BURROW_S("Go"), 7));
     if (BURROW_FAILED(err))
         testing_t_errorf_v(t, "Exec = %v", err);
     sql_stmt_free(txs1);
 
-    (void)sql_stmt_exec_v(txs2, heap_allocator(), &err, BURROW_S("Gopher"), 8);
+    err = td_exec_stmt(txs2, ARGS(BURROW_S("Gopher"), 8));
     if (BURROW_FAILED(err))
         testing_t_errorf_v(t, "Exec = %v", err);
     sql_stmt_free(txs2);
@@ -1155,7 +1167,7 @@ static void testTxStmtClosedRePrepares(TestingT *t, SqlDB *db) {
         testing_t_errorf_v(t, "%v", burrow__sql_stmt_sticky_err(txs));
     if (burrow__sql_stmt_parent(txs) != NULL)
         testing_t_errorf_v(t, "expected nil parentStmt");
-    (void)sql_stmt_exec_v(txs, heap_allocator(), &err, BURROW_S("Eric"), 82);
+    err = td_exec_stmt(txs, ARGS(BURROW_S("Eric"), 82));
     if (BURROW_FAILED(err))
         testing_t_errorf_v(t, "txs.Exec = %v", err);
     err = sql_stmt_close(txs);
@@ -1205,11 +1217,11 @@ static void testParentStmtOutlivesTxStmt(TestingT *t, SqlDB *db) {
     if (BURROW_FAILED(err))
         testing_t_errorf_v(t, "tx.Rollback() = %v", err);
     /* txs must not be valid. */
-    (void)sql_stmt_exec_v(txs, heap_allocator(), &err, BURROW_S("Suzan"), 30);
+    err = td_exec_stmt(txs, ARGS(BURROW_S("Suzan"), 30));
     if (!BURROW_FAILED(err))
         testing_t_errorf_v(t, "txs.Exec(), expected err");
     /* Stmt must still be valid. */
-    (void)sql_stmt_exec_v(stmt, heap_allocator(), &err, BURROW_S("Janina"), 25);
+    err = td_exec_stmt(stmt, ARGS(BURROW_S("Janina"), 25));
     if (BURROW_FAILED(err))
         testing_t_errorf_v(t, "stmt.Exec() = %v", err);
 
@@ -1249,7 +1261,7 @@ static void testTxStmtFromTxStmtRePrepares(TestingT *t, SqlDB *db) {
         testing_t_errorf_v(t, "%v", burrow__sql_stmt_sticky_err(txs2));
     if (burrow__sql_stmt_parent(txs2) != NULL)
         testing_t_errorf_v(t, "expected nil parentStmt");
-    (void)sql_stmt_exec_v(txs2, heap_allocator(), &err, BURROW_S("Eric"), 82);
+    err = td_exec_stmt(txs2, ARGS(BURROW_S("Eric"), 82));
     if (BURROW_FAILED(err))
         testing_t_errorf_v(t, "%v", err);
 
@@ -1364,7 +1376,7 @@ static void testTxErrBadConn(TestingT *t) {
         testing_t_errorf_v(t, "Begin = %v", err);
     } else {
         SqlStmt *txs = sql_tx_stmt(tx, stmt);
-        (void)sql_stmt_exec_v(txs, heap_allocator(), &err, BURROW_S("Bobby"), 7);
+        err = td_exec_stmt(txs, ARGS(BURROW_S("Bobby"), 7));
         if (BURROW_FAILED(err))
             testing_t_errorf_v(t, "Exec = %v", err);
         else if (BURROW_FAILED(err = sql_tx_commit(tx)))
@@ -3414,6 +3426,7 @@ static void testTxCannotCommitAfterRollback(TestingT *t, SqlDB *db) {
     SqlTx *tx = sql_db_begin_tx(db, ctx, NULL, &err);
     if (BURROW_FAILED(err)) {
         BURROW_CALLF0(td_rollback_cancel);
+        context_release(ctx);
         FATALF("%v", err);
     }
 
@@ -3446,6 +3459,7 @@ static void testTxCannotCommitAfterRollback(TestingT *t, SqlDB *db) {
     (void)sql_tx_rollback(tx);
     sql_tx_free(tx);
     BURROW_CALLF0(td_rollback_cancel);
+    context_release(ctx);
 }
 
 static void TestTxCannotCommitAfterRollback(TestingT *t) {
@@ -3463,6 +3477,7 @@ static void testTxStmtDeadlock(TestingT *t, SqlDB *db) {
     SqlTx *tx = sql_db_begin_tx(db, ctx, NULL, &err);
     if (BURROW_FAILED(err)) {
         BURROW_CALLF0(cancel);
+        context_release(ctx);
         FATALF("%v", err);
     }
 
@@ -3470,6 +3485,7 @@ static void testTxStmtDeadlock(TestingT *t, SqlDB *db) {
     if (BURROW_FAILED(err)) {
         sql_tx_free(tx);
         BURROW_CALLF0(cancel);
+        context_release(ctx);
         FATALF("%v", err);
     }
     BURROW_CALLF0(cancel);
@@ -3485,6 +3501,7 @@ static void testTxStmtDeadlock(TestingT *t, SqlDB *db) {
     (void)sql_tx_rollback(tx);
     sql_stmt_free(stmt);
     sql_tx_free(tx);
+    context_release(ctx);
 }
 
 static void TestTxStmtDeadlock(TestingT *t) {
@@ -3604,6 +3621,7 @@ static void testIssue20575(TestingT *t, SqlDB *db) {
     if (BURROW_FAILED(err)) {
         sql_tx_free(tx);
         BURROW_CALLF0(cancel);
+        context_release(ctx);
         FATALF("%v", err);
     }
     /* Do not close Rows from QueryContext. */
@@ -3622,6 +3640,7 @@ static void testIssue20575(TestingT *t, SqlDB *db) {
     sql_rows_free(rows);
     sql_tx_free(tx);
     BURROW_CALLF0(cancel);
+    context_release(ctx);
 }
 
 static void TestIssue20575(TestingT *t) {
@@ -3641,6 +3660,7 @@ static void testIssue20622(TestingT *t, SqlDB *db) {
     SqlTx *tx = sql_db_begin_tx(db, ctx, NULL, &err);
     if (BURROW_FAILED(err)) {
         BURROW_CALLF0(cancel);
+        context_release(ctx);
         FATALF("%v", err);
     }
 
@@ -3649,6 +3669,7 @@ static void testIssue20622(TestingT *t, SqlDB *db) {
     if (BURROW_FAILED(err)) {
         sql_tx_free(tx);
         BURROW_CALLF0(cancel);
+        context_release(ctx);
         FATALF("%v", err);
     }
 
@@ -3675,6 +3696,7 @@ static void testIssue20622(TestingT *t, SqlDB *db) {
     sql_tx_free(tx);
     arena_free(&ar);
     BURROW_CALLF0(cancel);
+    context_release(ctx);
 }
 
 static void TestIssue20622(TestingT *t) {
@@ -4252,6 +4274,7 @@ static void td_18429_one(void *env) {
     arena_free(&ar);
     bool v = false;
     (void)chan_recv(s->sem, &v);
+    context_release(ctx);
 }
 
 /* TestIssue18429 attempts to stress rolling back the transaction from a context
@@ -4301,6 +4324,7 @@ static void td_20160_one(void *env) {
     BURROW_CALLF0(cancel);
     bool v = false;
     (void)chan_recv(s->sem, &v);
+    context_release(ctx);
 }
 
 /* TestIssue20160 attempts to test a short context life on a stmt Query. */
@@ -4358,6 +4382,7 @@ static void testIssue18719(TestingT *t, SqlDB *db) {
     SqlTx *tx = sql_db_begin_tx(db, ctx, NULL, &err);
     if (BURROW_FAILED(err)) {
         BURROW_CALLF0(cancel);
+        context_release(ctx);
         FATALF("%v", err);
     }
 
@@ -4382,6 +4407,7 @@ static void testIssue18719(TestingT *t, SqlDB *db) {
     if (rows != NULL)
         sql_rows_free(rows);
     sql_tx_free(tx);
+    context_release(ctx);
 }
 
 static void TestIssue18719(TestingT *t) {
@@ -5355,6 +5381,7 @@ static void td_raw_scan_bubble(void *env) {
     if (BURROW_FAILED(err)) {
         testing_t_errorf_v(t, "%v", err);
         BURROW_CALLF0(cancel);
+        context_release(ctx);
         close_db(t, db);
         return;
     }
@@ -5430,6 +5457,7 @@ out:
     arena_free(&ar);
     BURROW_CALLF0(cancel);
     close_db(t, db);
+    context_release(ctx);
 }
 
 static void td_raw_scan_sub(void *env, TestingT *t) {
@@ -5459,6 +5487,7 @@ static void testContextCancelBetweenNextAndErr(TestingT *t, SqlDB *db) {
         sql_db_query_context(db, ctx, BURROW_S("SELECT|people|name|"), NO_ARGS, &err);
     if (BURROW_FAILED(err)) {
         BURROW_CALLF0(cancel);
+        context_release(ctx);
         FATALF("%v", err);
     }
     while (sql_rows_next(r)) {
@@ -5469,6 +5498,7 @@ static void testContextCancelBetweenNextAndErr(TestingT *t, SqlDB *db) {
     if (BURROW_FAILED(err))
         testing_t_errorf_v(t, "%v", err);
     sql_rows_free(r);
+    context_release(ctx);
 }
 
 static void TestContextCancelBetweenNextAndErr(TestingT *t) {
@@ -5561,6 +5591,7 @@ out:
     chan_free(ts.scan_start);
     chan_free(ts.scan_end);
     BURROW_CALLF0(cancel);
+    context_release(ctx);
 }
 
 static void TestContextCancelDuringScan(TestingT *t) {
@@ -5582,6 +5613,7 @@ static void testNilErrorAfterClose(TestingT *t, SqlDB *db) {
         sql_db_query_context(db, ctx, BURROW_S("SELECT|people|name|"), NO_ARGS, &err);
     if (BURROW_FAILED(err)) {
         BURROW_CALLF0(cancel);
+        context_release(ctx);
         FATALF("%v", err);
     }
 
@@ -5596,6 +5628,7 @@ static void testNilErrorAfterClose(TestingT *t, SqlDB *db) {
     }
     sql_rows_free(r);
     BURROW_CALLF0(cancel);
+    context_release(ctx);
 }
 
 static void TestNilErrorAfterClose(TestingT *t) {

@@ -444,6 +444,37 @@ static Any sc_clone_any(Alloc *a, Any v, Error *err) {
 
 /* The text of a destination's type for an error, which Go prints as the
  * pointer it was given. */
+/* The int, uint and float cases of convertAssign, which go through the text of
+ * src. The text is only needed until it is parsed, so it goes in an arena of its
+ * own rather than the caller's allocator, which would keep it. */
+static Error sc_assign_number(const Type *dt, void *dv, Any src) {
+    Kind dk = dt->kind;
+    Arena tmp;
+    arena_init(&tmp, heap_allocator(), 0);
+    Str s = sc_as_string(arena_allocator(&tmp), src);
+    Error e = BURROW_NO_ERROR;
+    if (sc_is_int_kind(dk)) {
+        int64_t i64 = strconv_parse_int(s, 10, sc_bits(dt), &e);
+        if (BURROW_OK(e))
+            sc_set_int(dt, dv, i64);
+    } else if (sc_is_uint_kind(dk)) {
+        uint64_t u64 = strconv_parse_uint(s, 10, sc_bits(dt), &e);
+        if (BURROW_OK(e))
+            sc_set_uint(dt, dv, u64);
+    } else {
+        double f64 = strconv_parse_float(s, sc_bits(dt), &e);
+        if (BURROW_OK(e) && dk == KIND_FLOAT32)
+            *(float *)dv = (float)f64;
+        else if (BURROW_OK(e))
+            *(double *)dv = f64;
+    }
+    if (BURROW_FAILED(e))
+        e = fmt_errorf_v("converting driver.Value type %T (%q) to a %s: %v", src, s,
+                         kind_name(dk), sc_strconv_err(e));
+    arena_free(&tmp);
+    return e;
+}
+
 static Error sc_unsupported(Any src, Any dest) {
     Any dt = {dest.t, NULL};
     /* A SqlRowsPtr destination is Go's *Rows, the pointer itself. */
@@ -761,44 +792,11 @@ Error burrow__sql_convert_assign_rows(Alloc *a, Any dest, Any src, SqlRows *rows
         *(void **)dv = np;
         return burrow__sql_convert_assign_rows(a, (Any){et, np}, src, rows);
     }
-    if (sc_is_int_kind(dk)) {
+    if (sc_is_int_kind(dk) || sc_is_uint_kind(dk) || dk == KIND_FLOAT32 ||
+        dk == KIND_FLOAT64) {
         if (st == NULL)
             return fmt_errorf_v("converting NULL to %s is unsupported", kind_name(dk));
-        Str s = sc_as_string(a, src);
-        Error e = BURROW_NO_ERROR;
-        int64_t i64 = strconv_parse_int(s, 10, sc_bits(dt), &e);
-        if (BURROW_FAILED(e))
-            return fmt_errorf_v("converting driver.Value type %T (%q) to a %s: %v", src,
-                                s, kind_name(dk), sc_strconv_err(e));
-        sc_set_int(dt, dv, i64);
-        return BURROW_NO_ERROR;
-    }
-    if (sc_is_uint_kind(dk)) {
-        if (st == NULL)
-            return fmt_errorf_v("converting NULL to %s is unsupported", kind_name(dk));
-        Str s = sc_as_string(a, src);
-        Error e = BURROW_NO_ERROR;
-        uint64_t u64 = strconv_parse_uint(s, 10, sc_bits(dt), &e);
-        if (BURROW_FAILED(e))
-            return fmt_errorf_v("converting driver.Value type %T (%q) to a %s: %v", src,
-                                s, kind_name(dk), sc_strconv_err(e));
-        sc_set_uint(dt, dv, u64);
-        return BURROW_NO_ERROR;
-    }
-    if (dk == KIND_FLOAT32 || dk == KIND_FLOAT64) {
-        if (st == NULL)
-            return fmt_errorf_v("converting NULL to %s is unsupported", kind_name(dk));
-        Str s = sc_as_string(a, src);
-        Error e = BURROW_NO_ERROR;
-        double f64 = strconv_parse_float(s, sc_bits(dt), &e);
-        if (BURROW_FAILED(e))
-            return fmt_errorf_v("converting driver.Value type %T (%q) to a %s: %v", src,
-                                s, kind_name(dk), sc_strconv_err(e));
-        if (dk == KIND_FLOAT32)
-            *(float *)dv = (float)f64;
-        else
-            *(double *)dv = f64;
-        return BURROW_NO_ERROR;
+        return sc_assign_number(dt, dv, src);
     }
     if (dk == KIND_STRING) {
         if (st == NULL)

@@ -274,3 +274,7 @@ go/token: method (*FileSet) Write: encode is a TokenCodecFunc, a function pointe
 go/ast: func Inspect: f is an AstInspectFunc, a function pointer with a context argument
 go/ast: func PreorderStack: f is an AstPreorderStackFunc, a function pointer with a context argument
 go/ast: func NotNilFilter: takes an Any, which holds the type and the address a reflect.Value would
+
+# include/burrow/go/doc.h: Go takes the mode as an optional ...any and panics
+# on anything but zero or one doc.Mode, so C takes the DocMode itself.
+go/doc: func NewFromFiles: takes the mode as a DocMode, 0 being none, where Go takes an optional ...any that can only hold a doc.Mode

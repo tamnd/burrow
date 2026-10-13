@@ -9,6 +9,8 @@
 #ifndef BURROW_SRC_LOG_SLOG_INTERNAL_H
 #define BURROW_SRC_LOG_SLOG_INTERNAL_H
 
+/* burrow:package log/slog */
+
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/log/slog.h"

@@ -835,8 +835,8 @@ static void TestCompressedSection(TestingT *t) {
         if (pos != target)
             testing_t_fatalf_v(t, "want position %d, got %d", target, pos);
         int64_t end = pos + 16 > n ? n : pos + 16;
-        Int k =
-            io_read_full(r, (Slice){buf + pos, end - pos, end - pos, TYPE_BYTE}, &err);
+        Slice dst = {buf + pos, (Int)(end - pos), (Int)(end - pos), TYPE_BYTE};
+        Int k = io_read_full(r, dst, &err);
         if (BURROW_FAILED(err))
             testing_t_fatalf_v(t, "read: %s", error_text(err));
         for (Int i = 0; i < k; i++) {

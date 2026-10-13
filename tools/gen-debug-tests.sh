@@ -17,6 +17,10 @@
 # The gosym one, tests/gosym_test_gen.h, does Go's Go 1.15 pclntab, the one of
 # pclinetest, which it builds from Go's testdata for linux/amd64, and symbol
 # tables in each of the older formats made up here, through debug/gosym.
+# The xcoff one, tests/xcoff_test_gen.h, does Go's two AIX executables and two
+# AIX big archives through internal/xcoff, which debug/buildinfo reads AIX
+# binaries with. The damage goes at the section headers, symbols, loader
+# section and the decimal fields of the archive headers.
 #
 # The Go packages are copied out of GOSRC, a Go source tree that defaults to
 # the one the go command has, into a scratch module and built from there, so
@@ -36,8 +40,9 @@ macho) out="$root/tests/macho_test_gen.h" ;;
 pe) out="$root/tests/pe_test_gen.h" ;;
 plan9obj) out="$root/tests/plan9obj_test_gen.h" ;;
 gosym) out="$root/tests/gosym_test_gen.h" ;;
+xcoff) out="$root/tests/xcoff_test_gen.h" ;;
 *)
-	echo "usage: $0 [elf|macho|pe|plan9obj|gosym]" >&2
+	echo "usage: $0 [elf|macho|pe|plan9obj|gosym|xcoff]" >&2
 	exit 2
 	;;
 esac
@@ -61,6 +66,7 @@ vendor debug/macho macho
 vendor debug/pe pe
 vendor debug/plan9obj plan9obj
 vendor debug/gosym gosym
+vendor internal/xcoff xcoff
 vendor debug/dwarf dwarf
 vendor internal/zstd zstd
 vendor internal/saferio saferio
@@ -91,6 +97,11 @@ mkdir "$tmp/plan9data"
 for f in "$gosrc/debug/plan9obj/testdata"/*; do
 	case $f in *.c) continue ;; esac
 	cp "$f" "$tmp/plan9data/"
+done
+mkdir "$tmp/xcoffdata"
+for f in "$gosrc/internal/xcoff/testdata"/*; do
+	case $f in *.c) continue ;; esac
+	cp "$f" "$tmp/xcoffdata/"
 done
 mkdir "$tmp/gosymdata" "$tmp/abi"
 cp "$gosrc/debug/gosym/testdata/pcln115.gz" "$tmp/gosymdata/"
@@ -796,6 +807,10 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "gosym" {
 		gosymMain()
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "xcoff" {
+		xcoffMain()
 		return
 	}
 	var fs []*file
@@ -2283,6 +2298,488 @@ func must[T any](v T, err error) T {
 		panic(err)
 	}
 	return v
+}
+GO
+
+cat > "$tmp/xcoff.go" <<'GO'
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"strings"
+
+	"gen/xcoff"
+)
+
+// Anything bigger than this that Go would allocate in one go is left out of
+// the dump, and the C dump leaves out the same.
+const xcoffBig = 1 << 24
+
+var xcoffSectionNames = []string{".text", ".data", ".bss", ".loader", ".dwinfo",
+	".dwabrev", ".dwabrevxx", ".debug", "", ".nosuch"}
+
+var xcoffSectionTypes = []uint32{xcoff.STYP_TEXT, xcoff.STYP_DATA, xcoff.STYP_BSS,
+	xcoff.STYP_LOADER, xcoff.STYP_DEBUG, xcoff.STYP_TYPCHK,
+	xcoff.STYP_DWARF | xcoff.SSUBTYP_DWINFO, xcoff.STYP_DWARF | xcoff.SSUBTYP_DWLINE}
+
+func xcoffSize(s *xcoff.Section) int64 {
+	return s.ReaderAt.(*io.SectionReader).Size()
+}
+
+func xcoffCSectBig(f *xcoff.File, name string) bool {
+	for _, s := range f.Symbols {
+		if s.Name == name && s.AuxCSect.SymbolType == xcoff.XTY_SD {
+			return uint64(s.AuxCSect.Length) > xcoffBig
+		}
+	}
+	return false
+}
+
+func xcoffImportsBig(f *xcoff.File) bool {
+	s := f.SectionByType(xcoff.STYP_LOADER)
+	if s == nil {
+		return false
+	}
+	var h [56]byte
+	n := 32
+	if f.TargetMachine == xcoff.U64_TOCMAGIC {
+		n = 56
+	}
+	if _, err := s.ReadAt(h[:n], 0); err != nil {
+		return false
+	}
+	istlen := binary.BigEndian.Uint32(h[12:])
+	stlen := binary.BigEndian.Uint32(h[24:])
+	if n == 56 {
+		stlen = binary.BigEndian.Uint32(h[20:])
+	}
+	return istlen > xcoffBig || stlen > xcoffBig
+}
+
+func xcoffDWARFBig(f *xcoff.File) bool {
+	for _, t := range []uint32{xcoff.SSUBTYP_DWABREV, xcoff.SSUBTYP_DWINFO,
+		xcoff.SSUBTYP_DWLINE, xcoff.SSUBTYP_DWRNGES, xcoff.SSUBTYP_DWSTR} {
+		if s := f.SectionByType(xcoff.STYP_DWARF | t); s != nil && xcoffSize(s) > xcoffBig {
+			return true
+		}
+	}
+	return false
+}
+
+func dumpXcoffFile(w *bytes.Buffer, f *xcoff.File) {
+	fmt.Fprintf(w, "header magic=%#x\n", f.TargetMachine)
+	for i, s := range f.Sections {
+		fmt.Fprintf(w, "section %d %q va=%#x size=%#x type=%#x relptr=%#x nreloc=%d\n", i,
+			s.Name, s.VirtualAddress, s.Size, s.Type, s.Relptr, s.Nreloc)
+		var rl bytes.Buffer
+		for _, r := range s.Relocs {
+			if r.Symbol != nil {
+				fmt.Fprintf(&rl, "%#x %q", r.VirtualAddress, r.Symbol.Name)
+			} else {
+				fmt.Fprintf(&rl, "%#x nil", r.VirtualAddress)
+			}
+			fmt.Fprintf(&rl, " %t %t %d %d\n", r.Signed, r.InstructionFixed, r.Length, r.Type)
+		}
+		fmt.Fprintf(w, "  relocs n=%d %s\n", len(s.Relocs), blob(rl.Bytes(), nil))
+		if xcoffSize(s) > xcoffBig {
+			fmt.Fprintf(w, "  data big\n")
+		} else {
+			b, err := s.Data()
+			fmt.Fprintf(w, "  data %s\n", blob(b, err))
+		}
+		var buf [8]byte
+		n, err := s.ReadAt(buf[:], 4)
+		fmt.Fprintf(w, "  readat n=%d % x%s\n", n, buf[:n], errs(err))
+	}
+	fmt.Fprintf(w, "strtab %s\n", blob(f.StringTable, nil))
+	fmt.Fprintf(w, "symbols n=%d\n", len(f.Symbols))
+	for _, s := range f.Symbols {
+		fmt.Fprintf(w, "  %q value=%#x sect=%d class=%d fcn=%d csect=%d/%d/%d\n", s.Name,
+			s.Value, s.SectionNumber, s.StorageClass, s.AuxFcn.Size, s.AuxCSect.Length,
+			s.AuxCSect.StorageMappingClass, s.AuxCSect.SymbolType)
+	}
+	for _, name := range xcoffSectionNames {
+		if s := f.Section(name); s != nil {
+			fmt.Fprintf(w, "section %q size=%#x\n", name, s.Size)
+		} else {
+			fmt.Fprintf(w, "section %q nil\n", name)
+		}
+	}
+	for _, t := range xcoffSectionTypes {
+		if s := f.SectionByType(t); s != nil {
+			fmt.Fprintf(w, "type %#x %q\n", t, s.Name)
+		} else {
+			fmt.Fprintf(w, "type %#x nil\n", t)
+		}
+	}
+	// CSect of the first dozen names of SD symbols, then of one that is not
+	// there.
+	var names []string
+	for _, s := range f.Symbols {
+		if len(names) == 12 {
+			break
+		}
+		if s.AuxCSect.SymbolType == xcoff.XTY_SD && !slicesContains(names, s.Name) {
+			names = append(names, s.Name)
+		}
+	}
+	names = append(names, "nosuch")
+	for _, name := range names {
+		if xcoffCSectBig(f, name) {
+			fmt.Fprintf(w, "csect %q big\n", name)
+			continue
+		}
+		if b := f.CSect(name); b != nil {
+			fmt.Fprintf(w, "csect %q %s\n", name, blob(b, nil))
+		} else {
+			fmt.Fprintf(w, "csect %q nil\n", name)
+		}
+	}
+	if xcoffImportsBig(f) {
+		fmt.Fprintf(w, "imports skipped\n")
+	} else {
+		syms, err := f.ImportedSymbols()
+		fmt.Fprintf(w, "imported n=%d%s\n", len(syms), errs(err))
+		for _, s := range syms {
+			fmt.Fprintf(w, "  %q %q\n", s.Name, s.Library)
+		}
+		libs, err := f.ImportedLibraries()
+		dumpStrings(w, "libraries", libs, err)
+		dumpStrings(w, "libpaths", f.LibraryPaths, nil)
+	}
+	if xcoffDWARFBig(f) {
+		fmt.Fprintf(w, "dwarf big\n")
+		return
+	}
+	d, err := f.DWARF()
+	if err != nil {
+		fmt.Fprintf(w, "dwarf err=%q\n", err.Error())
+		return
+	}
+	// The DWARF dump is the one the ELF and Mach-O tests check line by line,
+	// so only its hash is kept here.
+	var dw bytes.Buffer
+	dumpDWARF(&dw, d)
+	fmt.Fprintf(w, "dwarf %s\n", blob(dw.Bytes(), nil))
+}
+
+func slicesContains(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+func dumpXcoffArchive(w *bytes.Buffer, data []byte) {
+	arch, err := xcoff.NewArchive(bytes.NewReader(data))
+	if err != nil {
+		fmt.Fprintf(w, "archive err=%q\n", err.Error())
+		return
+	}
+	fmt.Fprintf(w, "archive members=%d\n", len(arch.Members))
+	for i, m := range arch.Members {
+		fmt.Fprintf(w, "member %d %q size=%d\n", i, m.Name, m.Size)
+		f, err := arch.GetFile(m.Name)
+		if err != nil {
+			fmt.Fprintf(w, "newfile err=%q\n", err.Error())
+			continue
+		}
+		dumpXcoffFile(w, f)
+	}
+	_, err = arch.GetFile("nosuch.o")
+	fmt.Fprintf(w, "getfile%s\n", errs(err))
+}
+
+// Every file goes through NewFile and NewArchive both, and one of them says
+// it is not the right kind.
+func dumpXcoff(w *bytes.Buffer, data []byte) {
+	f, err := xcoff.NewFile(bytes.NewReader(data))
+	if err != nil {
+		fmt.Fprintf(w, "newfile err=%q\n", err.Error())
+	} else {
+		dumpXcoffFile(w, f)
+	}
+	dumpXcoffArchive(w, data)
+}
+
+// xcoffChainEnds says whether NewArchive gets to the last member, or to an
+// error, within 64 members. Damage that sends the chain round in a loop has
+// NewArchive read members until it runs out of memory, so it is left out.
+func xcoffChainEnds(data []byte) bool {
+	if len(data) < 128 || string(data[:8]) != xcoff.AIAMAGBIG {
+		return true
+	}
+	dec := func(b []byte) (int64, bool) {
+		v, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+		return v, err == nil
+	}
+	off, ok := dec(data[68:88])
+	if !ok || off == 0 {
+		return true
+	}
+	last, ok := dec(data[88:108])
+	if !ok {
+		return true
+	}
+	for i := 0; i < 64; i++ {
+		if off < 0 || off > int64(len(data))-112 {
+			return true
+		}
+		h := data[off : off+112]
+		if _, ok := dec(h[:20]); !ok {
+			return true
+		}
+		namlen, ok := dec(h[108:112])
+		if !ok || namlen < 0 {
+			return true
+		}
+		fileoff := off + 112 + namlen
+		if fileoff&1 != 0 {
+			fileoff++
+		}
+		if fileoff+2 > int64(len(data)) || string(data[fileoff:fileoff+2]) != "`\n" {
+			return true
+		}
+		if off == last {
+			return true
+		}
+		if off, ok = dec(h[20:40]); !ok {
+			return true
+		}
+	}
+	return false
+}
+
+func safeXcoffDump(data []byte) (out []byte, ok bool) {
+	if !xcoffChainEnds(data) {
+		return nil, false
+	}
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	var w bytes.Buffer
+	dumpXcoff(&w, data)
+	return w.Bytes(), true
+}
+
+// xcoffTargets gives the bytes of the XCOFF file at base worth damaging: the
+// file header, the fields of each section header, the loader header and its
+// import IDs, the first relocations of each section, and the fields of the
+// symbol entries.
+func xcoffTargets(data []byte, base int) []int {
+	var ts []int
+	n := len(data)
+	in := func(p int) {
+		if p >= 0 && p < n {
+			ts = append(ts, p)
+		}
+	}
+	if base < 0 || base+24 > n {
+		return ts
+	}
+	be := binary.BigEndian
+	d := data[base:]
+	is32 := be.Uint16(d) == xcoff.U802TOCMAGIC
+	hdrsz, shsz, relsz := 24, 72, 14
+	var symptr uint64
+	var nsyms uint32
+	if is32 {
+		hdrsz, shsz, relsz = 20, 40, 10
+		symptr, nsyms = uint64(be.Uint32(d[8:])), be.Uint32(d[12:])
+	} else {
+		symptr, nsyms = be.Uint64(d[8:]), be.Uint32(d[20:])
+	}
+	for i := 0; i < hdrsz; i++ {
+		in(base + i)
+	}
+	opthdr := int(be.Uint16(d[16:]))
+	nscns := int(be.Uint16(d[2:]))
+	for i := 0; i < nscns; i++ {
+		sh := base + hdrsz + opthdr + i*shsz
+		if sh+shsz > n {
+			break
+		}
+		h := data[sh : sh+shsz]
+		var fields []int
+		var scnptr, relptr uint64
+		var nreloc int
+		var typ uint32
+		if is32 {
+			fields = []int{0, 7, 15, 16, 19, 23, 27, 33, 39}
+			scnptr, relptr = uint64(be.Uint32(h[20:])), uint64(be.Uint32(h[24:]))
+			nreloc, typ = int(be.Uint16(h[32:])), be.Uint32(h[36:])
+		} else {
+			fields = []int{0, 7, 23, 24, 31, 39, 47, 59, 67}
+			scnptr, relptr = be.Uint64(h[32:]), be.Uint64(h[40:])
+			nreloc, typ = int(be.Uint32(h[56:])), be.Uint32(h[64:])
+		}
+		for _, f := range fields {
+			in(sh + f)
+		}
+		if typ == xcoff.STYP_LOADER && scnptr < uint64(n) {
+			lh := base + int(scnptr)
+			for j := 0; j < 56; j++ {
+				in(lh + j)
+			}
+			if lh+56 <= n {
+				istlen := int(min(be.Uint32(data[lh+12:]), 64))
+				impoff := be.Uint64(data[lh+24:])
+				if is32 {
+					impoff = uint64(be.Uint32(data[lh+20:]))
+				}
+				if impoff < uint64(n) {
+					for j := 0; j < istlen; j++ {
+						in(lh + int(impoff) + j)
+					}
+				}
+			}
+		}
+		if relptr != 0 && relptr < uint64(n) {
+			for j := 0; j < min(nreloc, 8); j++ {
+				r := base + int(relptr) + j*relsz
+				in(r + relsz - 3)
+				in(r + relsz - 2)
+			}
+		}
+	}
+	if symptr < uint64(n) {
+		for i := 0; i < int(min(nsyms, 200)); i++ {
+			e := base + int(symptr) + i*18
+			for _, f := range []int{7, 11, 13, 15, 16, 17} {
+				in(e + f)
+			}
+		}
+		st := base + int(symptr) + int(nsyms)*18
+		for j := 0; j < 8; j++ {
+			in(st + j)
+		}
+	}
+	return ts
+}
+
+func xcoffDamages(data []byte, seed uint64) []damage {
+	var ds []damage
+	x := seed
+	n := len(data)
+	add := func(pos int, xor byte) {
+		if pos < 0 || pos >= n || (xor == 0 && pos == 0) {
+			return
+		}
+		b := append([]byte(nil), data...)
+		if xor == 0 {
+			b = b[:pos]
+		} else {
+			b[pos] ^= xor
+		}
+		out, ok := safeXcoffDump(b)
+		if !ok {
+			return
+		}
+		ds = append(ds, damage{pos, xor, fmt.Sprintf("%x", sha256.Sum256(out))[:16]})
+	}
+	var ts []int
+	cuts := []int{n / 2, n - 1, n * 3 / 4, 100, 30, 3}
+	if n >= 128 && string(data[:8]) == xcoff.AIAMAGBIG {
+		// The decimal fields of the archive header and of each member header,
+		// where a low bit turns one digit into another, and the files inside.
+		for i := 8; i < 128; i++ {
+			ts = append(ts, i)
+		}
+		off, _ := strconv.ParseInt(strings.TrimSpace(string(data[68:88])), 10, 64)
+		for i := 0; i < 8 && off > 0 && off+114 <= int64(n); i++ {
+			for j := 0; j < 114; j++ {
+				ts = append(ts, int(off)+j)
+			}
+			namlen, _ := strconv.ParseInt(strings.TrimSpace(string(data[off+108:off+112])), 10, 64)
+			fileoff := off + 112 + namlen
+			if fileoff&1 != 0 {
+				fileoff++
+			}
+			ts = append(ts, xcoffTargets(data, int(fileoff)+2)...)
+			cuts = append(cuts, int(off)+50, int(fileoff)+1)
+			next, err := strconv.ParseInt(strings.TrimSpace(string(data[off+20:off+40])), 10, 64)
+			if err != nil || next == off {
+				break
+			}
+			off = next
+		}
+	} else {
+		ts = xcoffTargets(data, 0)
+		if n >= 24 {
+			symptr := int(binary.BigEndian.Uint32(data[8:]))
+			if binary.BigEndian.Uint16(data) == xcoff.U64_TOCMAGIC {
+				symptr = int(binary.BigEndian.Uint64(data[8:]))
+			}
+			cuts = append(cuts, symptr+9, symptr+100)
+		}
+	}
+	for i := 0; i < 90 && len(ts) > 0; i++ {
+		x = lcg(x)
+		add(ts[int(x>>33)%len(ts)], byte(1<<((x>>20)%8)))
+	}
+	for i := 0; i < 16; i++ {
+		x = lcg(x)
+		xor := byte(x >> 56)
+		if xor == 0 {
+			xor = 0x80
+		}
+		add(int(x>>33)%n, xor)
+	}
+	for _, cut := range cuts {
+		if cut > 0 && cut < n {
+			add(cut, 0)
+		}
+	}
+	return ds
+}
+
+func xcoffMain() {
+	fs := load("xcoffdata")
+	for i, f := range fs {
+		f.name = "xcoff/" + f.name
+		out, ok := safeXcoffDump(f.data)
+		if !ok {
+			panic("Go panics on " + f.name)
+		}
+		f.dump = out
+		f.damage = xcoffDamages(f.data, uint64(i)+1)
+	}
+
+	w := os.Stdout
+	fmt.Fprintf(w, "/* Generated by tools/gen-debug-tests.sh xcoff from Go's internal/xcoff and\n * its testdata. Do not edit. */\n\n")
+	fmt.Fprintf(w, "#ifndef BURROW_TESTS_XCOFF_TEST_GEN_H\n#define BURROW_TESTS_XCOFF_TEST_GEN_H\n\n")
+	for i, f := range fs {
+		fmt.Fprintf(w, "/* %s, %d bytes. */\n", f.name, len(f.raw))
+		writeBase64(w, fmt.Sprintf("xcoff_file_%d", i), f.raw)
+		fmt.Fprintf(w, "static const char *const xcoff_dump_%d[] = {\n", i)
+		for _, line := range strings.SplitAfter(string(f.dump), "\n") {
+			if line == "" {
+				continue
+			}
+			fmt.Fprintf(w, "    %s,\n", cstr(strings.TrimSuffix(line, "\n")))
+		}
+		fmt.Fprintf(w, "    NULL,\n};\n\n")
+		fmt.Fprintf(w, "static const DebugDamage xcoff_damage_%d[] = {\n", i)
+		for _, d := range f.damage {
+			fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
+		}
+		fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+	}
+	fmt.Fprintf(w, "static const DebugFile xcoff_files[] = {\n")
+	for i, f := range fs {
+		fmt.Fprintf(w, "    {%s, false, xcoff_file_%d, xcoff_dump_%d, xcoff_damage_%d},\n", cstr(f.name), i, i, i)
+	}
+	fmt.Fprintf(w, "};\n\n#endif\n")
 }
 GO
 

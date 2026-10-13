@@ -59,10 +59,10 @@ BURROW_ARRAY_TYPE_DECL(RuntimeMemStatsBySizes, RuntimeMemStatsBySize, 61);
     F(T, uint64_t, heap_objects, HeapObjects, "")                                      \
     F(T, uint64_t, stack_inuse, StackInuse, "")                                        \
     F(T, uint64_t, stack_sys, StackSys, "")                                            \
-    F(T, uint64_t, mspan_inuse, MSpanInuse, "")                                        \
-    F(T, uint64_t, mspan_sys, MSpanSys, "")                                            \
-    F(T, uint64_t, mcache_inuse, MCacheInuse, "")                                      \
-    F(T, uint64_t, mcache_sys, MCacheSys, "")                                          \
+    F(T, uint64_t, m_span_inuse, MSpanInuse, "")                                       \
+    F(T, uint64_t, m_span_sys, MSpanSys, "")                                           \
+    F(T, uint64_t, m_cache_inuse, MCacheInuse, "")                                     \
+    F(T, uint64_t, m_cache_sys, MCacheSys, "")                                         \
     F(T, uint64_t, buck_hash_sys, BuckHashSys, "")                                     \
     F(T, uint64_t, gc_sys, GCSys, "")                                                  \
     F(T, uint64_t, other_sys, OtherSys, "")                                            \
@@ -73,7 +73,7 @@ BURROW_ARRAY_TYPE_DECL(RuntimeMemStatsBySizes, RuntimeMemStatsBySize, 61);
     F(T, RuntimeMemStatsPauses, pause_end, PauseEnd, "")                               \
     F(T, uint32_t, num_gc, NumGC, "")                                                  \
     F(T, uint32_t, num_forced_gc, NumForcedGC, "")                                     \
-    F(T, double, gc_cpu_fraction, GCCPUFraction, "")                                   \
+    F(T, double, gccpu_fraction, GCCPUFraction, "")                                    \
     F(T, bool, enable_gc, EnableGC, "")                                                \
     F(T, bool, debug_gc, DebugGC, "")                                                  \
     F(T, RuntimeMemStatsBySizes, by_size, BySize, "")

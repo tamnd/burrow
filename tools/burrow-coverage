@@ -698,6 +698,16 @@ class Headers:
             for name in names:
                 self.members.setdefault(name, set()).update(members)
                 self.embeds.setdefault(name, set()).update(embeds)
+        # A struct declared with BURROW_STRUCT_AS_DECL has its fields in an X
+        # macro, one F(T, type, name, GoName, tag) for each.
+        for m in re.finditer(r"\bBURROW_STRUCT_AS_DECL\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)", code):
+            d = re.search(
+                r"#\s*define\s+%s\s*\(\s*F\s*,\s*T\s*\)((?:[^\n]*\\\n)*[^\n]*)" % m.group(2),
+                code,
+            )
+            if d:
+                fields = re.findall(r"\bF\s*\(\s*T\s*,[^,]*,\s*(\w+)\s*,", d.group(1))
+                self.members.setdefault(m.group(1), set()).update(fields)
         # typedef ImageVT ImageRGBA64ImageVT; an interface that C spells the
         # same as another, because the extra methods are optional slots in the
         # one vtable. The alias has everything the original has.

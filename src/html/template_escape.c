@@ -222,13 +222,13 @@ static burrow__HtContext hte_errorf(Alloc *a, HtmlTemplateErrorCode k, ParseNode
 }
 
 static Str hte_concat(Alloc *a, Str x, Str y) {
-    return fmt_sprintf_v(a, BURROW_S("%s%s"), x, y);
+    return fmt_sprintf_v(a, "%s%s", x, y);
 }
 
 static BURROW_NORETURN void hte_shared(ParseNode n) {
     Alloc *a = error_allocator();
-    panic_str(fmt_sprintf_v(a, BURROW_S("node %s shared between templates"),
-                            parse_node_string(n, a)));
+    panic_str(
+        fmt_sprintf_v(a, "node %s shared between templates", parse_node_string(n, a)));
 }
 
 static burrow__HtContext *hte_new_ctx(Alloc *a, burrow__HtContext c) {
@@ -326,8 +326,8 @@ static burrow__HtContext hte_escape(burrow__HtEscaper *e, burrow__HtContext c,
         break;
     }
     Alloc *a = error_allocator();
-    panic_str(fmt_sprintf_v(a, BURROW_S("escaping %s is unimplemented"),
-                            parse_node_string(n, a)));
+    panic_str(
+        fmt_sprintf_v(a, "escaping %s is unimplemented", parse_node_string(n, a)));
 }
 
 /* predefinedEscapers: the escapers text/template predefines that are the
@@ -423,9 +423,8 @@ static burrow__HtContext hte_escape_action(burrow__HtEscaper *e, burrow__HtConte
                  str_eq(ident, BURROW_S("html"))))
                 return hte_errorf(
                     e->a, HTML_TEMPLATE_ERR_PREDEFINED_ESCAPER, &n->node_type, n->line,
-                    fmt_sprintf_v(
-                        e->a, BURROW_S("predefined escaper %q disallowed in template"),
-                        ident));
+                    fmt_sprintf_v(e->a, "predefined escaper %q disallowed in template",
+                                  ident));
         }
     }
     Slice s = slice_make(e->a, TYPE_STRING, 0, 3);
@@ -458,9 +457,8 @@ static burrow__HtContext hte_escape_action(burrow__HtEscaper *e, burrow__HtConte
         case BURROW__HT_URL_PART_UNKNOWN:
             return hte_errorf(
                 e->a, HTML_TEMPLATE_ERR_AMBIG_CONTEXT, &n->node_type, n->line,
-                fmt_sprintf_v(
-                    e->a, BURROW_S("%s appears in an ambiguous context within a URL"),
-                    parse_node_string(&n->node_type, e->a)));
+                fmt_sprintf_v(e->a, "%s appears in an ambiguous context within a URL",
+                              parse_node_string(&n->node_type, e->a)));
         default:
             panic_str(burrow__ht_url_part_string(error_allocator(), c.url_part));
         }
@@ -771,11 +769,11 @@ static burrow__HtContext hte_join(Alloc *a, burrow__HtContext x, burrow__HtConte
             return j;
     }
 
-    return hte_errorf(
-        a, HTML_TEMPLATE_ERR_BRANCH_END, node, 0,
-        fmt_sprintf_v(a, BURROW_S("{{%s}} branches end in different contexts: %s, %s"),
-                      node_name, burrow__ht_context_string(a, x),
-                      burrow__ht_context_string(a, y)));
+    return hte_errorf(a, HTML_TEMPLATE_ERR_BRANCH_END, node, 0,
+                      fmt_sprintf_v(a,
+                                    "{{%s}} branches end in different contexts: %s, %s",
+                                    node_name, burrow__ht_context_string(a, x),
+                                    burrow__ht_context_string(a, y)));
 }
 
 static burrow__HtRangeContext *hte_new_range_context(Alloc *a,
@@ -963,10 +961,9 @@ static burrow__HtContext hte_escape_tree(burrow__HtEscaper *e, burrow__HtContext
         if (h != NULL && *h != NULL)
             return hte_errorf(
                 e->a, HTML_TEMPLATE_ERR_NO_SUCH_TEMPLATE, node, line,
-                fmt_sprintf_v(e->a, BURROW_S("%q is an incomplete or empty template"),
-                              name));
+                fmt_sprintf_v(e->a, "%q is an incomplete or empty template", name));
         return hte_errorf(e->a, HTML_TEMPLATE_ERR_NO_SUCH_TEMPLATE, node, line,
-                          fmt_sprintf_v(e->a, BURROW_S("no such template %q"), name));
+                          fmt_sprintf_v(e->a, "no such template %q", name));
     }
     if (!str_eq(*dname, name)) {
         /* Use any template derived during an earlier call to escapeTemplate
@@ -1057,8 +1054,7 @@ static burrow__HtContext hte_compute_out_ctx(burrow__HtEscaper *e, burrow__HtCon
     if (!ok && c1.state != BURROW__HT_STATE_ERROR)
         return hte_errorf(
             e->a, HTML_TEMPLATE_ERR_OUTPUT_CONTEXT, &t->tree->root->node_type, 0,
-            fmt_sprintf_v(e->a,
-                          BURROW_S("cannot compute output context for template %s"),
+            fmt_sprintf_v(e->a, "cannot compute output context for template %s",
                           text_template_name(t)));
     return c1;
 }
@@ -1185,7 +1181,7 @@ static burrow__HtContext hte_context_after_text(Alloc *a, burrow__HtContext c, S
         if (j >= 0) {
             *nread = s.len;
             return hte_errorf(a, HTML_TEMPLATE_ERR_BAD_HTML, NULL, 0,
-                              fmt_sprintf_v(a, BURROW_S("%q in unquoted attr: %q"),
+                              fmt_sprintf_v(a, "%q in unquoted attr: %q",
                                             burrow__ht_sub(s, j, j + 1),
                                             burrow__ht_sub(s, 0, i)));
         }
@@ -1300,7 +1296,7 @@ static burrow__HtContext hte_escape_text(burrow__HtEscaper *e, burrow__HtContext
         if (i == i1 && c.state == c1.state) {
             Alloc *a = error_allocator();
             panic_str(fmt_sprintf_v(
-                a, BURROW_S("infinite loop from %s to %s on %q..%q"),
+                a, "infinite loop from %s to %s on %q..%q",
                 burrow__ht_context_string(a, c), burrow__ht_context_string(a, c1),
                 burrow__ht_sub(s, 0, i), burrow__ht_sub(s, i, s.len)));
         }
@@ -1376,10 +1372,9 @@ Error burrow__ht_escape_template(HtmlTemplate *tmpl, ParseNode node, Str name) {
         herr = c.err;
         herr->name = name;
     } else if (c.state != BURROW__HT_STATE_TEXT) {
-        herr = burrow__ht_errorf(
-            ns->a, HTML_TEMPLATE_ERR_END_CONTEXT, NULL, 0,
-            fmt_sprintf_v(ns->a, BURROW_S("ends in a non-text context: %s"),
-                          burrow__ht_context_string(ns->a, c)));
+        herr = burrow__ht_errorf(ns->a, HTML_TEMPLATE_ERR_END_CONTEXT, NULL, 0,
+                                 fmt_sprintf_v(ns->a, "ends in a non-text context: %s",
+                                               burrow__ht_context_string(ns->a, c)));
         herr->name = name;
     }
     HtmlTemplate **t = map_get(ns->set, &name);

@@ -112,6 +112,7 @@ crypto/fips140
 net/mail
 log
 net/http/cookiejar
+net/http/cgi
 go/token
 go/scanner
 go/version

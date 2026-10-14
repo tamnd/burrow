@@ -43,6 +43,44 @@ static void show(ReflectValue v) {
 }
 // doc: end
 
+// doc: func-type
+/* A function type reflect can call, and a struct with a method. */
+BURROW_FUNC(Scale, Int, Int x, Int by);
+#define SCALE_SIG(IN, OUT) IN(0, Int) IN(1, Int) OUT(Int)
+BURROW_FUNC_TYPE_DEFINE(Scale, SCALE_SIG);
+
+static Int scale(void *env, Int x, Int by) {
+    (void)env;
+    return x * by;
+}
+
+#define TEMP_FIELDS(F, T) F(T, double, C, "")
+BURROW_STRUCT_DECL(Temp, TEMP_FIELDS);
+
+static double temp_fahrenheit(Temp *t) {
+    return t->C * 9 / 5 + 32;
+}
+
+#define TEMP_SIG_Fahrenheit(IN, OUT) OUT(double)
+#define TEMP_METHODS(M, T) M(T, Fahrenheit, temp_fahrenheit, TEMP_SIG_Fahrenheit)
+BURROW_STRUCT_DEFINE_METHODS(Temp, TEMP_FIELDS, TEMP_METHODS);
+
+/* What MakeFunc wraps: it adds its two arguments. The result has to outlast
+ * the call, so it lives in the env. */
+typedef struct Sum {
+    Int n;
+    ReflectValue out;
+} Sum;
+
+static Slice add_impl(void *env, Slice args) {
+    Sum *s = env;
+    const ReflectValue *in = args.p;
+    s->n = reflect_value_int(in[0]) + reflect_value_int(in[1]);
+    s->out = reflect_value_of(BURROW_ANY(TYPE_INT, &s->n));
+    return slice_from(&s->out, 1, 1, TYPE_REFLECT_VALUE);
+}
+// doc: end
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -124,6 +162,33 @@ int main(void) {
         reflect_type_convertible_to(TYPE_BYTES, reflect_array_of(4, TYPE_UINT8)));
     // doc: end
 
+    // doc: call
+    Scale sc = BURROW_FN(Scale, scale, NULL);
+    ReflectValue fv = reflect_value_of(BURROW_ANY(TYPE_OF(Scale), &sc));
+    Int x = 21, by = 2;
+    ReflectValue args[] = {reflect_value_of(BURROW_ANY(TYPE_INT, &x)),
+                           reflect_value_of(BURROW_ANY(TYPE_INT, &by))};
+    Slice in = slice_from(args, 2, 2, TYPE_REFLECT_VALUE);
+    Slice out = reflect_value_call(fv, a, in);
+    fmt_printf_v("%s returned %d\n", reflect_type_string(reflect_value_type(fv)),
+                 reflect_value_int(((ReflectValue *)out.p)[0]));
+
+    Sum sum = {0};
+    ReflectValue add = reflect_make_func(
+        a, TYPE_OF(Scale), BURROW_FN(ReflectMakeFuncImpl, add_impl, &sum));
+    out = reflect_value_call(add, a, in);
+    fmt_printf_v("made func returned %d\n",
+                 reflect_value_int(((ReflectValue *)out.p)[0]));
+
+    Temp temp = {100};
+    ReflectValue tmv = reflect_value_of(BURROW_ANY(TYPE_OF(Temp), &temp));
+    ReflectValue fm = reflect_value_method_by_name(tmv, a, BURROW_S("Fahrenheit"));
+    out = reflect_value_call(fm, a, slice_nil(TYPE_REFLECT_VALUE));
+    fmt_printf_v("%d method, %s = %v\n", reflect_value_num_method(tmv),
+                 reflect_type_string(reflect_value_type(fm)),
+                 reflect_value_float(((ReflectValue *)out.p)[0]));
+    // doc: end
+
     arena_free(&ar);
     return 0;
 }
@@ -143,4 +208,7 @@ map[string]int with 1 entry, port = 9090
 float64 9090
 []uint8 of length 4
 int to *int: false, []byte to [4]byte: true
+func(int, int) int returned 42
+made func returned 23
+1 method, func() float64 = 212
 */

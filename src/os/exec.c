@@ -117,10 +117,7 @@ static uint64_t os_signal_ops_hash(const void *p, uint64_t seed) {
 }
 
 static const TypeOps os_signal_ops = {
-    os_signal_ops_equal,
-    os_signal_ops_hash,
-    NULL,
-    NULL,
+    os_signal_ops_equal, os_signal_ops_hash, NULL, NULL, NULL,
 };
 
 static const Type os_signal_type = {

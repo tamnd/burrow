@@ -417,6 +417,12 @@ of parameters, read through `type_num_in`, `type_in`, `type_num_out` and
 list of fields, and adding a second would grow every descriptor of every kind to
 pay for a kind most programs never reflect on.
 
+### Function values
+
+A function value is a code pointer and an env, so calling one needs its C signature, which reflect does not have. `BURROW_FUNC_TYPE_DEFINE` writes a thunk for it next to the type, the same shape as a method thunk with the function value where the receiver goes, and puts it in the descriptor's `ops->call`. `reflect.Value.Call` calls through that. A variadic type keeps the element type of its last parameter in `elem`, which is how Call knows to gather the trailing arguments into a slice.
+
+Going the other way, a function from `MakeFunc` and a method value have no C function of their signature behind them. Each is a function value whose code pointer is one marker function inside reflect and whose env is a closure, and Call looks for the marker before it looks at the descriptor. A call made from C lands on the marker, which panics.
+
 ### Method order
 
 `type_method_by_name` is a linear scan. It was a binary search, on the strength

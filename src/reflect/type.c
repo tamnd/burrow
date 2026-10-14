@@ -20,6 +20,8 @@
 #include "burrow/panic.h"
 #include "burrow/runtime.h"
 #include "burrow/strconv.h"
+#include "burrow/unicode.h"
+#include "burrow/utf8.h"
 
 /* ------------------------------------------------------------ the keepsakes
  *
@@ -555,15 +557,29 @@ bool reflect_type_is_variadic(ReflectType t) {
     return t->elem != NULL;
 }
 
+const Method *burrow__reflect_method_set(const Type *t, uint16_t *n) {
+    if (t->nmethod == 0 && t->kind == KIND_POINTER && t->name.len == 0 &&
+        t->elem != NULL && t->elem->kind != KIND_POINTER &&
+        t->elem->kind != KIND_INTERFACE)
+        t = t->elem;
+    *n = t->methods == NULL ? 0 : t->nmethod;
+    return t->methods;
+}
+
+bool burrow__reflect_exported(Str name) {
+    if (name.len == 0)
+        return false;
+    Int size;
+    return unicode_is_upper(utf8_decode_rune_in_string(name, &size));
+}
+
 Int reflect_type_num_method(ReflectType t) {
+    uint16_t nm;
+    const Method *ms = burrow__reflect_method_set(t, &nm);
     Int n = 0;
-    if (t->methods == NULL)
-        return 0;
-    for (uint16_t i = 0; i < t->nmethod; i++) {
-        Str name = t->methods[i].name;
-        if (name.len > 0 && name.p[0] >= 'A' && name.p[0] <= 'Z')
+    for (uint16_t i = 0; i < nm; i++)
+        if (burrow__reflect_exported(ms[i].name))
             n++;
-    }
     return n;
 }
 
@@ -905,6 +921,112 @@ ReflectType reflect_chan_of(ReflectChanDir dir, ReflectType t) {
     }
     return rf_made_type(KIND_CHAN, t, NULL, len, (uint32_t)sizeof(Chan *),
                         (uint16_t)_Alignof(Chan *));
+}
+
+/* FuncOf. A function type is made from two lists of types, which do not fit
+ * the four words rf_made is keyed by, so each list is interned first, one type
+ * at a time, as a chain of nodes kept in rf_made under RF_MADE_LIST. Two lists
+ * holding the same types in the same order come out as one node, and the type
+ * is kept under its two nodes. */
+
+#define RF_MADE_LIST ((uintptr_t)KIND_MAX + 1)
+
+/* The node for ts[0..n), or NULL for the empty list. Called with the lock held. */
+static const void *rf_list_locked(const Type *const *ts, Int n) {
+    const void *l = NULL;
+    for (Int i = 0; i < n; i++) {
+        const void *ck[4] = {(const void *)RF_MADE_LIST, l, ts[i],
+                             (const void *)(uintptr_t)(i + 1)};
+        const void *const *have = map_get(rf_made, ck);
+        if (have != NULL) {
+            l = *have;
+            continue;
+        }
+        const void *node = mem_alloc(arena_allocator(&rf_arena), 1, 1);
+        if (node == NULL || !map_set(rf_made, ck, &node))
+            rf_out_of_memory();
+        l = node;
+    }
+    return l;
+}
+
+/* The types in s, a Slice of ReflectType, after the checks Go makes. */
+static const Type *const *rf_type_list(Slice s) {
+    const Type *const *ts = s.p;
+    for (Int i = 0; i < s.len; i++)
+        if (ts[i] == NULL)
+            runtime_panic(
+                BURROW_S("invalid memory address or nil pointer dereference"));
+    return ts;
+}
+
+ReflectType reflect_func_of(Slice in, Slice out, bool variadic) {
+    const Type *const *ins = rf_type_list(in);
+    const Type *const *outs = rf_type_list(out);
+    if (variadic && (in.len == 0 || ins[in.len - 1]->kind != KIND_SLICE))
+        panic_str(BURROW_S("reflect.FuncOf: last arg of variadic func must be slice"));
+    if (in.len + out.len > 128)
+        panic_str(BURROW_S("reflect.FuncOf: too many arguments"));
+    Int n = in.len + out.len;
+    rf_enter();
+    const void *ck[4] = {(const void *)(uintptr_t)KIND_FUNC,
+                         rf_list_locked(ins, in.len), rf_list_locked(outs, out.len),
+                         (const void *)(uintptr_t)variadic};
+    const Type *const *have = map_get(rf_made, ck);
+    if (have != NULL) {
+        const Type *t = *have;
+        burrow__unlock(&rf_lock);
+        return t;
+    }
+    Alloc *a = arena_allocator(&rf_arena);
+    Type *t = BURROW_NEW(a, Type);
+    Field *fs = n > 0 ? mem_alloc(a, (size_t)n * sizeof(Field), _Alignof(Field)) : NULL;
+    if (t == NULL || (n > 0 && fs == NULL))
+        rf_out_of_memory();
+    for (Int i = 0; i < n; i++) {
+        bool is_in = i < in.len;
+        fs[i] = (Field){{NULL, 0},
+                        {NULL, 0},
+                        is_in ? ins[i] : outs[i - in.len],
+                        is_in ? (uint32_t)i : 0};
+    }
+    *t = (Type){{NULL, 0},
+                {NULL, 0},
+                KIND_FUNC,
+                (uint32_t)sizeof(Func),
+                (uint16_t)_Alignof(Func),
+                (uint16_t)n,
+                0,
+                fs,
+                NULL,
+                variadic ? ins[in.len - 1]->elem : NULL,
+                NULL,
+                (uint32_t)in.len,
+                0,
+                NULL};
+    const Type *made = t;
+    if (!map_set(rf_made, ck, &made))
+        rf_out_of_memory();
+    burrow__unlock(&rf_lock);
+    return made;
+}
+
+void *burrow__reflect_keep(const void *const key[4], size_t size, size_t align,
+                           bool (*init)(void *p, Alloc *a, const void *ctx),
+                           const void *ctx) {
+    rf_enter();
+    void *const *have = map_get(rf_made, key);
+    if (have != NULL) {
+        void *p = *have;
+        burrow__unlock(&rf_lock);
+        return p;
+    }
+    Alloc *a = arena_allocator(&rf_arena);
+    void *p = mem_alloc(a, size, align);
+    if (p == NULL || !init(p, a, ctx) || !map_set(rf_made, key, &p))
+        rf_out_of_memory();
+    burrow__unlock(&rf_lock);
+    return p;
 }
 
 /* -------------------------------------------------------------------- zeros */

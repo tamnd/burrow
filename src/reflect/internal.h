@@ -23,6 +23,10 @@
 #define BURROW__RF_EMBED_RO 4u
 #define BURROW__RF_RO (BURROW__RF_STICKY_RO | BURROW__RF_EMBED_RO)
 
+/* A function value Value.Method made, which Go's reflect tells apart from
+ * other functions, refusing to take its methods. */
+#define BURROW__RF_METHOD 8u
+
 /* Go's flag.ro: what a value made from v carries, which is STICKY_RO when v
  * was read-only in either way. */
 #define BURROW__RF_RO_OF(v) (((v).flag & BURROW__RF_RO) ? BURROW__RF_STICKY_RO : 0u)
@@ -84,5 +88,24 @@ const void *burrow__reflect_assign(ReflectValue x, const Type *dst, Any *box,
 /* At least size bytes of zeros, which nothing may write, for Zero to point at.
  * They last the program. */
 BURROW_STATIC(ret) const void *burrow__reflect_zero(size_t size);
+
+/* The methods a value of type t has, and how many: t's own, or for an unnamed
+ * pointer to a type with methods, that type's, since a method's receiver is a
+ * pointer whichever way Go would have declared it. Unexported ones included. */
+const Method *burrow__reflect_method_set(const Type *t, uint16_t *n);
+
+/* Whether a method called name is exported, which is Go's test: the first
+ * letter is upper case, in any script. */
+bool burrow__reflect_exported(Str name);
+
+/* What rf_made holds under key, or a new block of size bytes put there first,
+ * made by init with the package lock held. init may allocate from a, which
+ * lasts as long as the program, and returns false when it runs out. key[0] is
+ * one of the BURROW__RF_KEEP numbers, which no kind uses. */
+#define BURROW__RF_KEEP_METHOD ((uintptr_t)KIND_MAX + 2)
+
+void *burrow__reflect_keep(const void *const key[4], size_t size, size_t align,
+                           bool (*init)(void *p, Alloc *a, const void *ctx),
+                           const void *ctx);
 
 #endif /* BURROW_SRC_REFLECT_INTERNAL_H */

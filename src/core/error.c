@@ -44,10 +44,7 @@ static uint64_t error_ops_hash(const void *p, uint64_t seed) {
 }
 
 static const TypeOps error_ops = {
-    error_ops_equal,
-    error_ops_hash,
-    NULL,
-    NULL,
+    error_ops_equal, error_ops_hash, NULL, NULL, NULL,
 };
 
 const Type burrow_type_Error = {

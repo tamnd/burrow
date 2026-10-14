@@ -213,4 +213,87 @@ float64 9090
 int to *int: false, []byte to [4]byte: true
 ```
 
-A conversion that is not allowed panics. So does a slice to an array that is longer than the slice, which `reflect_type_convertible_to` cannot see from the types alone, so `reflect_value_can_convert` checks the value too. Converting to an interface only works for the empty interface for now. An interface with methods needs the method set of the type going in, which reflect does not have yet.
+A conversion that is not allowed panics. So does a slice to an array that is longer than the slice, which `reflect_type_convertible_to` cannot see from the types alone, so `reflect_value_can_convert` checks the value too. Converting to an interface only works for the empty interface for now. An interface with methods is a vtable in burrow, and reflect cannot yet find the vtable a type has for one.
+
+## Calls and methods
+
+`reflect_value_call` calls a function value with arguments given as a Slice of `ReflectValue`, and gives back its results the same way. A function type needs a descriptor for that, and `BURROW_FUNC_TYPE_DEFINE` makes one from a signature list spelled the way a method's is in `burrow/declare.h`. The descriptor carries a call thunk, which is what reflect calls through. `reflect_make_func` goes the other way and makes a function of a given type out of a C function that takes and returns Values. Methods declared with `BURROW_STRUCT_DEFINE_METHODS` are found with `reflect_value_method_by_name`, which gives back a method value with the receiver already bound:
+
+<!-- example: ../examples/reflect/reflect.c#func-type -->
+```c
+/* A function type reflect can call, and a struct with a method. */
+BURROW_FUNC(Scale, Int, Int x, Int by);
+#define SCALE_SIG(IN, OUT) IN(0, Int) IN(1, Int) OUT(Int)
+BURROW_FUNC_TYPE_DEFINE(Scale, SCALE_SIG);
+
+static Int scale(void *env, Int x, Int by) {
+    (void)env;
+    return x * by;
+}
+
+#define TEMP_FIELDS(F, T) F(T, double, C, "")
+BURROW_STRUCT_DECL(Temp, TEMP_FIELDS);
+
+static double temp_fahrenheit(Temp *t) {
+    return t->C * 9 / 5 + 32;
+}
+
+#define TEMP_SIG_Fahrenheit(IN, OUT) OUT(double)
+#define TEMP_METHODS(M, T) M(T, Fahrenheit, temp_fahrenheit, TEMP_SIG_Fahrenheit)
+BURROW_STRUCT_DEFINE_METHODS(Temp, TEMP_FIELDS, TEMP_METHODS);
+
+/* What MakeFunc wraps: it adds its two arguments. The result has to outlast
+ * the call, so it lives in the env. */
+typedef struct Sum {
+    Int n;
+    ReflectValue out;
+} Sum;
+
+static Slice add_impl(void *env, Slice args) {
+    Sum *s = env;
+    const ReflectValue *in = args.p;
+    s->n = reflect_value_int(in[0]) + reflect_value_int(in[1]);
+    s->out = reflect_value_of(BURROW_ANY(TYPE_INT, &s->n));
+    return slice_from(&s->out, 1, 1, TYPE_REFLECT_VALUE);
+}
+```
+
+Then, in a function with an allocator `a`:
+
+<!-- example: ../examples/reflect/reflect.c#call -->
+```c
+Scale sc = BURROW_FN(Scale, scale, NULL);
+ReflectValue fv = reflect_value_of(BURROW_ANY(TYPE_OF(Scale), &sc));
+Int x = 21, by = 2;
+ReflectValue args[] = {reflect_value_of(BURROW_ANY(TYPE_INT, &x)),
+                       reflect_value_of(BURROW_ANY(TYPE_INT, &by))};
+Slice in = slice_from(args, 2, 2, TYPE_REFLECT_VALUE);
+Slice out = reflect_value_call(fv, a, in);
+fmt_printf_v("%s returned %d\n", reflect_type_string(reflect_value_type(fv)),
+             reflect_value_int(((ReflectValue *)out.p)[0]));
+
+Sum sum = {0};
+ReflectValue add = reflect_make_func(
+    a, TYPE_OF(Scale), BURROW_FN(ReflectMakeFuncImpl, add_impl, &sum));
+out = reflect_value_call(add, a, in);
+fmt_printf_v("made func returned %d\n",
+             reflect_value_int(((ReflectValue *)out.p)[0]));
+
+Temp temp = {100};
+ReflectValue tmv = reflect_value_of(BURROW_ANY(TYPE_OF(Temp), &temp));
+ReflectValue fm = reflect_value_method_by_name(tmv, a, BURROW_S("Fahrenheit"));
+out = reflect_value_call(fm, a, slice_nil(TYPE_REFLECT_VALUE));
+fmt_printf_v("%d method, %s = %v\n", reflect_value_num_method(tmv),
+             reflect_type_string(reflect_value_type(fm)),
+             reflect_value_float(((ReflectValue *)out.p)[0]));
+```
+
+That prints:
+
+```text
+func(int, int) int returned 42
+made func returned 23
+1 method, func() float64 = 212
+```
+
+`reflect_value_call_slice` passes the last argument of a variadic function as a slice, as `f(xs...)` does in Go, and `reflect_func_of` makes a function type at run time. A function made by `reflect_make_func`, or a method value, has no C function of the right signature behind it, so it can be called through reflect and stored where a function of its type goes, but calling it from C panics. Every receiver is a pointer in burrow, so a struct and a pointer to it have the same methods, in name order.

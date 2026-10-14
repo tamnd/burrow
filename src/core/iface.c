@@ -127,6 +127,7 @@ static uint64_t any_ops_hash(const void *p, uint64_t seed) {
 static const TypeOps any_ops = {
     any_ops_equal, any_ops_hash, NULL, /* copy: two pointers, memcpy is right */
     NULL,                              /* zero: two pointers, memset is right */
+    NULL,                              /* call: not a function */
 };
 
 /* "interface {}" is what Go's reflect prints for the empty interface, since any

@@ -9,6 +9,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "burrow/text/template/parse.h"
+
 #include "burrow/core.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"

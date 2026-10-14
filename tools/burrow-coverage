@@ -189,6 +189,11 @@ RENAMED = {
     ("text/template", "func ParseFiles"): "text_template_from_files",
     ("text/template", "func ParseGlob"): "text_template_from_glob",
     ("text/template", "func ParseFS"): "text_template_from_fs",
+    # include/burrow/html/template.h names these the way text/template.h does.
+    ("html/template", "method (*Template) New"): "html_template_new_associated",
+    ("html/template", "func ParseFiles"): "html_template_from_files",
+    ("html/template", "func ParseGlob"): "html_template_from_glob",
+    ("html/template", "func ParseFS"): "html_template_from_fs",
 }
 
 

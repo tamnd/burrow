@@ -546,7 +546,7 @@ static burrow__HtContext htx_t_after_name(Alloc *a, burrow__HtContext c, Str s,
     return c;
 }
 
-static const burrow__HtState htx_attr_start_states[] = {
+const burrow__HtState burrow__ht_attr_start_states[BURROW__HT_ATTR_COUNT] = {
     BURROW__HT_STATE_ATTR,         /* attrNone */
     BURROW__HT_STATE_JS,           /* attrScript */
     BURROW__HT_STATE_ATTR,         /* attrScriptType */
@@ -578,7 +578,7 @@ static burrow__HtContext htx_t_before_value(Alloc *a, burrow__HtContext c, Str s
     default:
         break;
     }
-    c.state = htx_attr_start_states[c.attr];
+    c.state = burrow__ht_attr_start_states[c.attr];
     c.delim = delim;
     *nread = i;
     return c;
@@ -613,7 +613,7 @@ static const Str htx_tag_end_separators = S_("> \t\n\f/");
 
 /* tSpecialTagEnd is the context transition function for raw text and RCDATA
  * element states. */
-static burrow__HtContext htx_t_special_tag_end(Alloc *a, burrow__HtContext c, Str s,
+burrow__HtContext burrow__ht_t_special_tag_end(Alloc *a, burrow__HtContext c, Str s,
                                                Int *nread) {
     (void)a;
     if (c.element != BURROW__HT_ELEMENT_NONE) {
@@ -1168,7 +1168,7 @@ const burrow__HtTransition burrow__ht_transition_func[BURROW__HT_STATE_COUNT] = 
     [BURROW__HT_STATE_AFTER_NAME] = htx_t_after_name,
     [BURROW__HT_STATE_BEFORE_VALUE] = htx_t_before_value,
     [BURROW__HT_STATE_HTML_CMT] = htx_t_html_cmt,
-    [BURROW__HT_STATE_RCDATA] = htx_t_special_tag_end,
+    [BURROW__HT_STATE_RCDATA] = burrow__ht_t_special_tag_end,
     [BURROW__HT_STATE_ATTR] = htx_t_attr,
     [BURROW__HT_STATE_URL] = htx_t_url,
     [BURROW__HT_STATE_META_CONTENT] = htx_t_meta_content,

@@ -139,6 +139,21 @@ Str burrow__ht_stringify(Alloc *a, Slice args, burrow__HtContentType *t) {
     return fmt_sprint(a, c);
 }
 
+/* evalArgs: what text/template's print makes of args, or the one string when
+ * there is one. */
+Str burrow__ht_eval_args(Alloc *a, Slice args) {
+    if (args.len == 1 && BURROW_AT(Any, args, 0).t == TYPE_STRING)
+        return *(const Str *)BURROW_AT(Any, args, 0).data;
+    /* Go changes the caller's arguments in place. A copy leaves them be. */
+    Slice c = slice_make(a, TYPE_ANY, args.len, args.len);
+    if (args.len > 0 && c.p == NULL)
+        burrow__ht_oom();
+    for (Int i = 0; i < args.len; i++)
+        BURROW_AT(Any, c, i) =
+            htc_indirect_to_stringer_or_error(BURROW_AT(Any, args, i));
+    return fmt_sprint(a, c);
+}
+
 /* attrTypeMap, in byte order so that it can be searched. */
 static const struct {
     Str name;

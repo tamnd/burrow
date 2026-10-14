@@ -137,3 +137,4 @@ database/sql
 text/template/parse
 html
 text/template
+html/template

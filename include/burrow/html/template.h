@@ -23,6 +23,20 @@
  * As in Go, using these types is a promise that the content is safe, and the
  * template takes it at its word. Don't put text from a user in one.
  *
+ * Templates. html_template_new, html_template_parse and html_template_execute
+ * are used the way text/template's are. The first run escapes the template:
+ *
+ *     Error err = BURROW_NO_ERROR;
+ *     HtmlTemplate *t = html_template_parse(html_template_new(a, BURROW_S("p")),
+ *                                           BURROW_S("<p>{{.}}</p>"), &err);
+ *     t = html_template_must(t, err);
+ *     Str s = BURROW_S("<b>World</b>");
+ *     err = html_template_execute(t, out, BURROW_ANY(TYPE_STRING, &s));
+ *
+ * writes <p>&lt;b&gt;World&lt;/b&gt;</p>, where an HtmlTemplateHTML holding
+ * the same bytes would have been written as it is. Once a template or one
+ * associated with it has run, none of them can be parsed into or cloned.
+ *
  * The escapers. html_template_html_escaper and the others below are what the
  * template's html, js and urlquery functions do, for use outside a template.
  * They are text/template's under the names Go gives them here. */
@@ -33,9 +47,11 @@
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/io.h"
+#include "burrow/io/fs.h"
 #include "burrow/mem.h"
 #include "burrow/own.h"
 #include "burrow/slice.h"
+#include "burrow/text/template.h"
 #include "burrow/text/template/parse.h"
 #include "burrow/type.h"
 
@@ -173,6 +189,110 @@ BURROW_OWNS(ret) Str html_template_error_error(const HtmlTemplateError *e, Alloc
  * get burrow_err_out_of_memory. */
 BURROW_OWNS(ret) Error html_template_error_as_error(Alloc *a,
                                                     const HtmlTemplateError *e);
+
+/* --------------------------------------------------------------- templates */
+
+/* FuncMap, text/template's. */
+typedef TextTemplateFuncMap HtmlTemplateFuncMap;
+
+/* The part of a template that the templates associated with it share. */
+typedef struct burrow__HtNameSpace burrow__HtNameSpace;
+
+/* Template, a text/template template that makes output safe to put in an HTML
+ * page. text is the text/template template underneath it, and tree is that
+ * template's parse tree, NULL until the template is parsed. The first time a
+ * template runs, it is escaped: its tree is rewritten so that every action's
+ * output goes through the escaper for where it lands. escape_err is what
+ * escaping gave, nil before the template has been escaped, and is kept, so
+ * a template that failed to escape fails each time it is run. */
+typedef struct HtmlTemplate {
+    Error escape_err;
+    TextTemplate *text;
+    ParseTree *tree;
+    burrow__HtNameSpace *ns;
+} HtmlTemplate;
+
+/* New: a new HTML template with the given name, made in a, as are the
+ * templates associated with it, their parse trees and what escaping them
+ * makes. NULL when a refuses. */
+BURROW_OWNS(ret) HtmlTemplate *html_template_new(Alloc *a, Str name);
+
+/* Template.New: a new HTML template associated with t, with the same
+ * delimiters. A template already there with the name is reset and is not
+ * associated with t any more. */
+BURROW_BORROWS(ret, t) HtmlTemplate *html_template_new_associated(HtmlTemplate *t,
+                                                                  Str name);
+
+/* Name: the template's name. */
+BURROW_BORROWS(ret, t) Str html_template_name(const HtmlTemplate *t);
+
+/* Templates: the templates associated with t, t included, as a Slice of
+ * HtmlTemplate pointers made in a, in no particular order. */
+BURROW_OWNS(ret) Slice html_template_templates(HtmlTemplate *t, Alloc *a);
+
+/* Option: text_template_option for t. Returns t. */
+BURROW_BORROWS(ret, t) HtmlTemplate *html_template_option(HtmlTemplate *t, Slice opt);
+
+/* Execute: escapes t, the first time, and runs it with data, writing what it
+ * makes to wr. An escaping error is an HtmlTemplateError and comes back every
+ * time; the other errors are text_template_execute's. Templates can be run
+ * from several threads at once. */
+BURROW_STATIC(ret) Error html_template_execute(HtmlTemplate *t, IoWriter wr, Any data);
+
+/* ExecuteTemplate: Execute for the template called name associated with t. */
+BURROW_STATIC(ret) Error html_template_execute_template(HtmlTemplate *t, IoWriter wr,
+                                                        Str name, Any data);
+
+/* DefinedTemplates: text_template_defined_templates for t. */
+BURROW_OWNS(ret) Str html_template_defined_templates(HtmlTemplate *t, Alloc *a);
+
+/* Parse: parses text as the body of t, as text_template_parse does, and adds
+ * the templates it defines to t's. Templates can be redefined until t or one
+ * associated with it has been run, and after that Parse fails. Returns t, or
+ * NULL with the error in *err. */
+BURROW_BORROWS(ret, t) HtmlTemplate *html_template_parse(HtmlTemplate *t, Str text,
+                                                         Error *err);
+
+/* AddParseTree: a new template with the name and parse tree, associated with
+ * t. Fails once t or one associated with it has been run. */
+BURROW_BORROWS(ret, t) HtmlTemplate *
+html_template_add_parse_tree(HtmlTemplate *t, Str name, ParseTree *tree, Error *err);
+
+/* Clone: a copy of t and the templates associated with it, made in a, with the
+ * parse trees copied, so that templates parsed into the clone are not in t.
+ * Fails once t has been run. */
+BURROW_OWNS(ret) HtmlTemplate *html_template_clone(HtmlTemplate *t, Alloc *a,
+                                                   Error *err);
+
+/* Funcs: text_template_funcs for t. Returns t. */
+BURROW_BORROWS(ret, t) HtmlTemplate *html_template_funcs(HtmlTemplate *t,
+                                                         HtmlTemplateFuncMap funcs);
+
+/* Delims: text_template_delims for t. Returns t. */
+BURROW_RETAINS(left, right) BURROW_BORROWS(ret, t) HtmlTemplate *
+html_template_delims(HtmlTemplate *t, Str left, Str right);
+
+/* Lookup: the template called name associated with t, or NULL. */
+BURROW_BORROWS(ret, t) HtmlTemplate *html_template_lookup(HtmlTemplate *t, Str name);
+
+/* Must: t, or a panic with err when it failed. */
+BURROW_BORROWS(ret, t) HtmlTemplate *html_template_must(HtmlTemplate *t, Error err);
+
+/* ParseFiles, ParseGlob and ParseFS, as text/template's. The method forms
+ * parse into t and return it, and the package level forms make the templates
+ * in a and return the one for the first file. */
+BURROW_BORROWS(ret, t) HtmlTemplate *
+html_template_parse_files(HtmlTemplate *t, Slice filenames, Error *err);
+BURROW_OWNS(ret) HtmlTemplate *html_template_from_files(Alloc *a, Slice filenames,
+                                                        Error *err);
+BURROW_BORROWS(ret, t) HtmlTemplate *html_template_parse_glob(HtmlTemplate *t,
+                                                              Str pattern, Error *err);
+BURROW_OWNS(ret) HtmlTemplate *html_template_from_glob(Alloc *a, Str pattern,
+                                                       Error *err);
+BURROW_BORROWS(ret, t) HtmlTemplate *html_template_parse_fs(HtmlTemplate *t, Fs fsys,
+                                                            Slice patterns, Error *err);
+BURROW_OWNS(ret) HtmlTemplate *html_template_from_fs(Alloc *a, Fs fsys, Slice patterns,
+                                                     Error *err);
 
 /* ---------------------------------------------------------------- escapers
  *

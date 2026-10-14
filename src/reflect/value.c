@@ -1088,29 +1088,30 @@ IterSeq2 reflect_value_seq2(ReflectValue v, Alloc *a) {
 /* ---------------------------------------------------------------- equality */
 
 bool reflect_value_comparable(ReflectValue v) {
-    switch ((int)rf_kind(v)) {
-    case KIND_INVALID:
+    const Type *t = v.typ;
+    if (t == NULL)
         return false;
+    switch ((int)t->kind) {
     case KIND_ARRAY: {
-        Kind ek = v.typ->elem->kind;
+        Kind ek = t->elem->kind;
         if (ek == KIND_INTERFACE || ek == KIND_ARRAY || ek == KIND_STRUCT) {
-            for (Int i = 0; i < (Int)v.typ->len; i++)
+            for (Int i = 0; i < (Int)t->len; i++)
                 if (!reflect_value_comparable(reflect_value_index(v, i)))
                     return false;
             return true;
         }
-        return reflect_type_comparable(v.typ);
+        return reflect_type_comparable(t);
     }
     case KIND_INTERFACE:
         return reflect_value_is_nil(v) ||
                reflect_value_comparable(reflect_value_elem(v));
     case KIND_STRUCT:
-        for (uint16_t i = 0; i < v.typ->nfield; i++)
+        for (uint16_t i = 0; i < t->nfield; i++)
             if (!reflect_value_comparable(reflect_value_field(v, (Int)i)))
                 return false;
         return true;
     default:
-        return reflect_type_comparable(v.typ);
+        return reflect_type_comparable(t);
     }
 }
 

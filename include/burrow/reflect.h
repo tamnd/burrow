@@ -32,7 +32,14 @@
  * reflect_value_map_index and reflect_value_map_keys hand back Values that
  * point into the map, which stay good until the map is next written to.
  *
- * Misuse panics
+ * Copyright 2009 The Go Authors. All rights reserved.
+ * Copyright 2026 The burrow Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style licence that can be found
+ * in the LICENSE file. */
+
+/* burrow:package reflect */
+
+/* Misuse panics
  *
  * Asking a Value for something its kind does not have, Int of a string or
  * Field of a slice, is a mistake in the program rather than a condition to
@@ -46,14 +53,7 @@
  * it, and the vtable names the value's type. Looking through one, which
  * reflect_value_of, reflect_type_of and reflect_value_elem all do, gives that
  * type and that pointer. For an error made by errors_new, whose vtable names
- * no type, the answer stays the error itself.
- *
- * Copyright 2009 The Go Authors. All rights reserved.
- * Copyright 2026 The burrow Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style licence that can be found
- * in the LICENSE file. */
-
-/* burrow:package reflect */
+ * no type, the answer stays the error itself. */
 
 #ifndef BURROW_REFLECT_H
 #define BURROW_REFLECT_H

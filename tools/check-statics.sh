@@ -171,6 +171,8 @@ FNR == 1 {
         sub(/[\[=;].*$/, "", lhs)
     }
     sub(/[ \t]+$/, "", lhs)
+    # An array has its brackets between the name and the equals sign.
+    while (sub(/[ \t]*\[[^]]*\]$/, "", lhs)) {}
     if (match(lhs, /[A-Za-z_][A-Za-z0-9_]*$/)) {
         name = substr(lhs, RSTART, RLENGTH)
         # A line that stops at a type, like the head of a static table of an

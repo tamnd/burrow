@@ -1403,7 +1403,7 @@ void *burrow__reflect_keep(const void *const key[4], size_t size, size_t align,
 /* -------------------------------------------------------------------- zeros */
 
 /* What Zero points at for the types most programs have, never written. */
-static _Alignas(MaxAlign) const Byte rf_zero_small[1024];
+static _Alignas(MaxAlign) const Byte rf_zero_small[1024] = {0};
 
 const void *burrow__reflect_zero(size_t size) {
     if (size <= sizeof rf_zero_small)

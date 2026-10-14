@@ -68,7 +68,7 @@ static Slice ints_of(Int *p, Int n) {
 
 /* Runs f(env) and copies the text of its panic, if there was one, into buf. */
 static bool panics(void (*f)(void *), void *env, char *buf, size_t n) {
-    bool got = false;
+    volatile bool got = false;
     buf[0] = 0;
     BURROW_TRY {
         f(env);
@@ -100,7 +100,7 @@ BURROW_SLICE_TYPE(Uintptrs, Uintptr);
 BURROW_SLICE_TYPE(Int16s, int16_t);
 BURROW_SLICE_TYPE(Int8s, int8_t);
 BURROW_SLICE_TYPE(Strs, Str);
-BURROW_SLICE_TYPE(Bytes, uint8_t);
+BURROW_SLICE_TYPE(U8s, uint8_t);
 BURROW_SLICE_TYPE(Float64s, double);
 BURROW_SLICE_TYPE(IntsSlice, Ints);
 BURROW_MAP_TYPE(StrIntMap, Str, Int);
@@ -769,8 +769,7 @@ static void TestBytes(TestingT *t) {
 static void TestIndex(TestingT *t) {
     uint8_t xs[] = {1, 2, 3, 4, 5, 6, 7, 8};
     Slice s = slice_from(xs, 8, 8, TYPE_UINT8);
-    Any x =
-        reflect_value_interface(reflect_value_index(val(&burrow_type_Bytes, &s), 3));
+    Any x = reflect_value_interface(reflect_value_index(val(&burrow_type_U8s, &s), 3));
     if (x.t != TYPE_UINT8 || *(const uint8_t *)x.data != xs[3])
         testing_t_errorf_v(t, "xs.Index(3) is not %d", xs[3]);
     Byte8 xa = {{10, 20, 30, 40, 50, 60, 70, 80}};
@@ -1035,7 +1034,7 @@ static void value_text(ReflectValue v, char *buf, size_t n) {
 }
 
 static void iterate_to_string(ReflectMapIter *it, char *out, size_t n) {
-    char lines[8][32];
+    char lines[8][40];
     int count = 0;
     while (reflect_map_iter_next(it) && count < 8) {
         char k[16], v[16];
@@ -1521,7 +1520,7 @@ static void TestDeepEqual(TestingT *t) {
         {BURROW_ANY(&burrow_type_IntStrMap, &m12),
          BURROW_ANY(&burrow_type_IntStrMap, &m21), true},
         {BURROW_ANY(&type_func, &fn1), BURROW_ANY(&type_func, &fn2), true},
-        {BURROW_ANY(&burrow_type_Bytes, &sby), BURROW_ANY(&burrow_type_Bytes, &sby_b),
+        {BURROW_ANY(&burrow_type_U8s, &sby), BURROW_ANY(&burrow_type_U8s, &sby_b),
          true},
         {BURROW_ANY(&type_MyBytes_unnamed, &smb),
          BURROW_ANY(&type_MyBytes_unnamed, &smb_b), true},
@@ -1584,11 +1583,11 @@ static void TestDeepEqual(TestingT *t) {
          false},
         {BURROW_ANY(&burrow_type_UintStrMap, &mu),
          BURROW_ANY(&burrow_type_IntStrMap, &m21), false},
-        {BURROW_ANY(&burrow_type_Bytes, &sby), BURROW_ANY(&type_MyBytes_unnamed, &smb),
+        {BURROW_ANY(&burrow_type_U8s, &sby), BURROW_ANY(&type_MyBytes_unnamed, &smb),
          false},
         {BURROW_ANY(&type_MyBytes_unnamed, &smb), BURROW_ANY(&type_MyBytes, &smb_b),
          false},
-        {BURROW_ANY(&burrow_type_Bytes, &sby), BURROW_ANY(&type_MyBytes, &smb), false},
+        {BURROW_ANY(&burrow_type_U8s, &sby), BURROW_ANY(&type_MyBytes, &smb), false},
 
         /* Possible loops. */
         {BURROW_ANY(&type_ptr_Loop, &ploop1), BURROW_ANY(&type_ptr_Loop, &ploop1),

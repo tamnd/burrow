@@ -660,6 +660,92 @@ bool type_same(const Type *a, const Type *b);
  * is a buffer to size correctly once rather than a case to handle. */
 BURROW_BORROWS(ret, buf) Str type_qualified_name(const Type *t, Byte *buf, Int cap);
 
+/* -------------------------------------------------------------- implements
+ *
+ * A type satisfies an interface in C when somebody filled in a vtable for it,
+ * and that vtable is a static object nothing else knows about. reflect needs to
+ * find it to put a value into an interface with methods, which is what Set,
+ * Call, Convert and TypeAssert all do when the destination is an io.Reader or a
+ * fmt.Stringer rather than an any:
+ *
+ *     static const IoWriterVT buf_writer_vt = {TYPE_OF(Buf), buf_write};
+ *     BURROW_IMPLEMENTS(Buf, IoWriter, buf_writer_vt);
+ *
+ * One line at file scope, next to the vtable, for each interface the type is
+ * known to reflect as satisfying. It goes in the same kind of section as
+ * BURROW_REGISTER_TYPE, read the first time anybody asks, and costs nothing for
+ * a program that never does. A type and an interface with no line between them
+ * have no vtable as far as reflect can tell, even when the type has every
+ * method, and reflect says so rather than guessing.
+ *
+ * T and I are spelled the way TYPE_OF takes them. vt is the vtable itself, not
+ * a pointer to it, and its first member should name T as its self_type, which
+ * is what a type assertion back out of the interface reads. */
+typedef struct TypeImpl {
+    const Type *type;
+    const Type *iface;
+    const void *vt;
+} TypeImpl;
+
+#if defined(__APPLE__) && defined(__GNUC__)
+#define BURROW__IMPL_SECTION                                                           \
+    BURROW__TYPE_NO_REDZONE __attribute__((used, section("__DATA,__burrowimpl")))
+#elif defined(_WIN32) && defined(__GNUC__)
+#define BURROW__IMPL_SECTION                                                           \
+    BURROW__TYPE_NO_REDZONE __attribute__((used, section(".brwi$b")))
+#elif defined(__ELF__) && defined(__GNUC__)
+#define BURROW__IMPL_SECTION                                                           \
+    BURROW__TYPE_NO_REDZONE __attribute__((used, section("burrowimpl")))
+#endif
+
+#if defined(BURROW__IMPL_SECTION)
+#define BURROW__IMPL_SECTION_ENTRY(T, I, vt)                                           \
+    static const TypeImpl burrow__impl_##T##_##I = {TYPE_OF(T), TYPE_OF(I), &(vt)};    \
+    BURROW__IMPL_SECTION static const TypeImpl *const burrow__implref_##T##_##I =      \
+        &burrow__impl_##T##_##I
+#elif defined(_MSC_VER)
+/* Not static, for the reason given at BURROW__TYPE_SECTION_ENTRY. */
+#define BURROW__IMPL_SECTION_ENTRY(T, I, vt)                                           \
+    static const TypeImpl burrow__impl_##T##_##I = {TYPE_OF(T), TYPE_OF(I), &(vt)};    \
+    __pragma(section(".brwi$b", read)) __declspec(allocate(".brwi$b"))                 \
+    const TypeImpl *const burrow__implref_##T##_##I = &burrow__impl_##T##_##I
+#elif defined(__GNUC__)
+#define BURROW__IMPL_SECTION_ENTRY(T, I, vt)                                           \
+    static const TypeImpl burrow__impl_##T##_##I = {TYPE_OF(T), TYPE_OF(I), &(vt)};    \
+    __attribute__((constructor)) static void burrow__register_impl_##T##_##I(void) {   \
+        (void)type_register_impl(&burrow__impl_##T##_##I, NULL);                       \
+    }                                                                                  \
+    extern const TypeImpl *const burrow__implref_##T##_##I
+#else
+#define BURROW__IMPL_SECTION_ENTRY(T, I, vt)                                           \
+    _Static_assert(0, "BURROW_IMPLEMENTS needs sections or constructors, neither "     \
+                      "of which this compiler has. Call type_register_impl at the "    \
+                      "start of main instead.")
+#endif
+
+/* Record that vt is T's vtable for the interface I, at file scope. The
+ * semicolon is yours. */
+#define BURROW_IMPLEMENTS(T, I, vt) BURROW__IMPL_SECTION_ENTRY(T, I, vt)
+
+/* T's vtable for the interface iface, or NULL when none was recorded. Both are
+ * compared as pointers, so a type is found under the descriptor it was recorded
+ * with and no other. */
+BURROW_STATIC(ret) const void *type_vtable(const Type *t, const Type *iface);
+
+/* Record a vtable while the program is running, for a type in a module loaded
+ * after startup, the way type_register does for a name. The record has to stay
+ * where it is for as long as the program runs.
+ *
+ * True when the pair now has a vtable, which includes the case where it already
+ * had this one. False with type_err_conflict when it already had a different
+ * one, which stays, with burrow_err_out_of_memory when the table could not
+ * grow, and with type_err_impl_incomplete when impl or any of its three members
+ * is NULL. */
+bool type_register_impl(const TypeImpl *impl, Error *err);
+
+/* What type_register_impl says about a record missing a part. */
+extern const Error type_err_impl_incomplete;
+
 #ifdef __cplusplus
 }
 #endif

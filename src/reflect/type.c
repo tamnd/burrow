@@ -26,9 +26,10 @@
 static burrow__Lock rf_lock;
 static Arena rf_arena;
 static bool rf_ready;
-static Map *rf_interned;    /* Str to the same Str, the copy in rf_arena */
-static Map *rf_type_string; /* const Type * to its String */
-static Int *rf_iota[256];   /* rf_iota[c][k] is c*256 + k, made on first use */
+static Map *rf_interned;     /* Str to the same Str, the copy in rf_arena */
+static Map *rf_type_string;  /* const Type * to its String */
+static Map *rf_value_errors; /* message to its RfValueErrorBox */
+static Int *rf_iota[256];    /* rf_iota[c][k] is c*256 + k, made on first use */
 
 static const Str rf_oom = {(const Byte *)"reflect: out of memory", 22};
 
@@ -41,7 +42,8 @@ static void rf_enter(void) {
     Alloc *a = arena_allocator(&rf_arena);
     rf_interned = map_make(a, TYPE_STRING, TYPE_STRING, 0);
     rf_type_string = map_make(a, TYPE_UNSAFE_POINTER, TYPE_STRING, 0);
-    if (rf_interned == NULL || rf_type_string == NULL) {
+    rf_value_errors = map_make(a, TYPE_STRING, TYPE_UNSAFE_POINTER, 0);
+    if (rf_interned == NULL || rf_type_string == NULL || rf_value_errors == NULL) {
         burrow__unlock(&rf_lock);
         panic_str(rf_oom);
     }
@@ -137,17 +139,95 @@ static Str rfb_intern(RfBuf *b) {
     return s;
 }
 
-void burrow__reflect_panic(Str a, Str b, Str c) {
+Str burrow__reflect_concat(Str a, Str b, Str c) {
     RfBuf buf = {0};
     rfb_str(&buf, a);
     rfb_str(&buf, b);
     rfb_str(&buf, c);
-    panic_str(rfb_intern(&buf));
+    return rfb_intern(&buf);
+}
+
+void burrow__reflect_panic(Str a, Str b, Str c) {
+    panic_str(burrow__reflect_concat(a, b, c));
+}
+
+/* ------------------------------------------------------------- ValueError
+ *
+ * A Value method called on the wrong kind panics with an error, as Go's does,
+ * so that the message prints and errors_as finds the ReflectValueError. Each
+ * method and kind pair gets one error, made the first time and kept, since a
+ * panic's value has to outlive the frame that raised it. */
+
+typedef struct RfValueErrorBox {
+    ReflectValueError e;
+    Str message;
+} RfValueErrorBox;
+
+static Str rf_value_error_message(const void *self) {
+    return ((const RfValueErrorBox *)self)->message;
+}
+
+static Error rf_value_error_clone(const void *self, Alloc *a);
+
+static const ErrorVT rf_value_error_vt = {
+    &burrow_type_ReflectValueError, rf_value_error_message, NULL, NULL, NULL, NULL,
+    rf_value_error_clone,
+};
+
+/* The box is never freed, so a clone can share it. */
+static Error rf_value_error_clone(const void *self, Alloc *a) {
+    (void)a;
+    return (Error){&rf_value_error_vt, self};
+}
+
+static void rf_value_error_text(RfBuf *b, const ReflectValueError *e) {
+    rfb_cstr(b, "reflect: call of ");
+    rfb_str(b, e->method);
+    if (e->kind == KIND_INVALID) {
+        rfb_cstr(b, " on zero Value");
+        return;
+    }
+    rfb_cstr(b, " on ");
+    rfb_str(b, reflect_kind_string(e->kind));
+    rfb_cstr(b, " Value");
+}
+
+Str reflect_value_error_error(ReflectValueError *e, Alloc *a) {
+    RfBuf b = {0};
+    rf_value_error_text(&b, e);
+    Str s = BURROW_STR_EMPTY;
+    Byte *p = b.failed ? NULL : mem_alloc_nozero(a, (size_t)b.len, 1);
+    if (p != NULL) {
+        memcpy(p, b.p, (size_t)b.len);
+        s = str_from_bytes(p, b.len);
+    }
+    mem_free(heap_allocator(), b.p, (size_t)b.cap, 1);
+    return s;
 }
 
 void burrow__reflect_panic_kind(Str method, Kind k) {
     ReflectValueError e = {method, k};
-    panic(BURROW_ANY(TYPE_REFLECT_VALUE_ERROR, &e));
+    RfBuf b = {0};
+    rf_value_error_text(&b, &e);
+    Str msg = rfb_intern(&b);
+
+    rf_enter();
+    const void *const *have = map_get(rf_value_errors, &msg);
+    const void *box = have != NULL ? *have : NULL;
+    if (box == NULL) {
+        RfValueErrorBox *nb = BURROW_NEW(arena_allocator(&rf_arena), RfValueErrorBox);
+        if (nb == NULL)
+            rf_out_of_memory();
+        nb->e.method = rf_intern_locked(method);
+        nb->e.kind = k;
+        nb->message = msg;
+        box = nb;
+        if (!map_set(rf_value_errors, &msg, &box))
+            rf_out_of_memory();
+    }
+    burrow__unlock(&rf_lock);
+    Error err = {&rf_value_error_vt, box};
+    panic(BURROW_ANY(TYPE_ERROR, &err));
 }
 
 BURROW_NORETURN static void rf_panic_type(const char *msg, const Type *t) {
@@ -609,6 +689,86 @@ ReflectType reflect_type_of(Any i) {
             break;
     }
     return t;
+}
+
+/* Identity, or with under set, whether the underlying types are identical,
+ * which looks past the names of t and u themselves and nothing deeper. */
+static bool rf_identical(const Type *t, const Type *u, bool under) {
+    if (t == u)
+        return true;
+    if (t == NULL || u == NULL || t->kind != u->kind)
+        return false;
+    if (!under && (t->name.len > 0 || u->name.len > 0))
+        return false;
+    switch ((int)t->kind) {
+    case KIND_ARRAY:
+        return t->len == u->len && rf_identical(t->elem, u->elem, false);
+    case KIND_CHAN:
+        return rf_chan_dir(t) == rf_chan_dir(u) &&
+               rf_identical(t->elem, u->elem, false);
+    case KIND_POINTER:
+    case KIND_SLICE:
+        return rf_identical(t->elem, u->elem, false);
+    case KIND_MAP:
+        return rf_identical(t->key, u->key, false) &&
+               rf_identical(t->elem, u->elem, false);
+    case KIND_FUNC: {
+        Int nin = type_num_in(t);
+        Int nout = type_num_out(t);
+        if (nin != type_num_in(u) || nout != type_num_out(u) ||
+            (t->elem != NULL) != (u->elem != NULL))
+            return false;
+        for (Int i = 0; i < nin; i++)
+            if (!rf_identical(type_in(t, i), type_in(u, i), false))
+                return false;
+        for (Int i = 0; i < nout; i++)
+            if (!rf_identical(type_out(t, i), type_out(u, i), false))
+                return false;
+        return true;
+    }
+    case KIND_STRUCT:
+        if (t->nfield != u->nfield)
+            return false;
+        for (uint16_t i = 0; i < t->nfield; i++) {
+            const Field *f = &t->fields[i];
+            const Field *g = &u->fields[i];
+            if (!str_eq(f->name, g->name) || !str_eq(f->tag, g->tag) ||
+                burrow__reflect_embedded(f) != burrow__reflect_embedded(g) ||
+                !rf_identical(f->type, g->type, false))
+                return false;
+            /* An unexported name is only the same name in the same package. */
+            if (!field_is_exported(f) && !str_eq(t->pkg_path, u->pkg_path))
+                return false;
+        }
+        return true;
+    case KIND_INTERFACE:
+        /* Two interfaces with methods are only the same through their
+         * descriptor, which the first test above has already tried. */
+        return t->nmethod == 0 && u->nmethod == 0;
+    default:
+        /* The rest are the predeclared kinds, where the kind is the
+         * underlying type. */
+        return under;
+    }
+}
+
+bool burrow__reflect_identical(const Type *t, const Type *u) {
+    return rf_identical(t, u, false);
+}
+
+bool burrow__reflect_assignable(const Type *dst, const Type *v) {
+    if (dst == v)
+        return true;
+    if (dst == NULL || v == NULL || dst->kind != v->kind ||
+        (dst->name.len > 0 && v->name.len > 0))
+        return false;
+    /* A chan T goes into a <-chan T or a chan<- T, Go's
+     * specialChannelAssignability. */
+    if (dst->kind == KIND_CHAN && rf_chan_dir(v) == REFLECT_BOTH_DIR &&
+        (dst->name.len == 0 || v->name.len == 0) &&
+        rf_identical(dst->elem, v->elem, false))
+        return true;
+    return rf_identical(dst, v, true);
 }
 
 /* ------------------------------------------------------------------ fields */

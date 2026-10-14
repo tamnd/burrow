@@ -765,7 +765,7 @@ static void rfs_select_free(const RfsSelect *s, bool buf) {
         mem_free(s->a, s->boxes, (size_t)s->n * sizeof(RfBox), alignof(RfBox));
     }
     if (buf)
-        mem_free(s->a, s->buf, s->size == 0 ? 1 : s->size, alignof(max_align_t));
+        mem_free(s->a, s->buf, s->size == 0 ? 1 : s->size, BURROW_ALIGN_MAX);
 }
 
 static Int rfs_select_run(const RfsSelect *s) {
@@ -803,7 +803,7 @@ Int reflect_select(Alloc *a, Slice cases, ReflectValue *recv, bool *recv_ok) {
         s.cs = rfs_alloc(a, (size_t)s.n * sizeof(SelectCase), alignof(SelectCase));
         s.boxes = rfs_alloc(a, (size_t)s.n * sizeof(RfBox), alignof(RfBox));
     }
-    s.buf = rfs_alloc(a, s.size, alignof(max_align_t));
+    s.buf = rfs_alloc(a, s.size, BURROW_ALIGN_MAX);
     bool ok = false;
     have_default = false;
     for (Int i = 0; i < s.n; i++) {

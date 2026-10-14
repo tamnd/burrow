@@ -1660,7 +1660,7 @@ static void TestArrayOf(TestingT *t) {
         ReflectValue v = reflect_value_elem(reflect_new(a, at));
         ReflectValue vok = reflect_value_elem(reflect_new(a, at));
         ReflectValue vnot = reflect_value_elem(reflect_new(a, at));
-        _Alignas(max_align_t) Byte buf[64];
+        _Alignas(MaxAlign) Byte buf[64];
         for (Int i = 0; i < reflect_value_len(v); i++) {
             table->value(a, i, buf);
             reflect_value_set(reflect_value_index(v, i), val(table->t, buf));

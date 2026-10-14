@@ -1403,7 +1403,7 @@ void *burrow__reflect_keep(const void *const key[4], size_t size, size_t align,
 /* -------------------------------------------------------------------- zeros */
 
 /* What Zero points at for the types most programs have, never written. */
-static _Alignas(max_align_t) const Byte rf_zero_small[1024];
+static _Alignas(MaxAlign) const Byte rf_zero_small[1024];
 
 const void *burrow__reflect_zero(size_t size) {
     if (size <= sizeof rf_zero_small)
@@ -1412,7 +1412,7 @@ const void *burrow__reflect_zero(size_t size) {
     /* A bigger block replaces a smaller one, and the smaller one stays where it
      * is, since Values from Zero may still point at it. */
     if (size > rf_zero_big_size) {
-        Byte *p = mem_alloc(arena_allocator(&rf_arena), size, _Alignof(max_align_t));
+        Byte *p = mem_alloc(arena_allocator(&rf_arena), size, BURROW_ALIGN_MAX);
         if (p == NULL)
             rf_out_of_memory();
         rf_zero_big = p;

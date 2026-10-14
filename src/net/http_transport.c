@@ -733,6 +733,23 @@ static tp_IdleBucket *tp_idle_bucket(HttpTransport *t, Str key, bool make) {
     return b;
 }
 
+/* IdleConnCountForTesting, from Go's export_test.go. */
+Int burrow__http_transport_idle_conn_count_for_testing(HttpTransport *t, Str scheme,
+                                                       Str addr) {
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Str key = burrow__http_connect_method_key(arena_allocator(&ar), NULL, scheme, addr,
+                                              false);
+    Int n = 0;
+    sync_mutex_lock(&t->idle_mu);
+    tp_IdleBucket *b = tp_idle_bucket(t, key, false);
+    if (b != NULL)
+        n = b->n;
+    sync_mutex_unlock(&t->idle_mu);
+    arena_free(&ar);
+    return n;
+}
+
 /* Takes b out and frees it once it has no connections or wants left. */
 static void tp_idle_bucket_trim(HttpTransport *t, tp_IdleBucket *b) {
     if (b->n > 0 || tp_queue_len(&b->wait) > 0)

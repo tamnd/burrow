@@ -111,6 +111,7 @@ syscall
 crypto/fips140
 net/mail
 log
+net/http/cookiejar
 go/token
 go/scanner
 go/version

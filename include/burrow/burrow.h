@@ -170,6 +170,7 @@
 #include "burrow/net/http/httputil.h"
 #include "burrow/net/mail.h"
 #include "burrow/net/netip.h"
+#include "burrow/net/smtp.h"
 #include "burrow/net/textproto.h"
 #include "burrow/net/url.h"
 #include "burrow/num.h"

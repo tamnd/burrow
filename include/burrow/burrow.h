@@ -83,6 +83,7 @@
 #include "burrow/crypto/x509.h"
 
 #include "burrow/crypto/x509/pkix.h"
+#include "burrow/database/sql/driver.h"
 #include "burrow/debug/buildinfo.h"
 #include "burrow/debug/dwarf.h"
 #include "burrow/debug/elf.h"

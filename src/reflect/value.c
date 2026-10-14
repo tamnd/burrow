@@ -709,7 +709,7 @@ static ReflectValue rf_field_by_index(ReflectValue v, Slice index, Error *err,
                 Str msg = burrow__reflect_concat(
                     BURROW_S("reflect: indirection through nil pointer to embedded "
                              "struct field "),
-                    reflect_type_string(v.typ->elem), BURROW_STR_EMPTY);
+                    v.typ->elem->name, BURROW_STR_EMPTY);
                 *err = errors_new(error_allocator(), msg);
                 return (ReflectValue){0};
             }

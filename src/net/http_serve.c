@@ -8,6 +8,7 @@
  * in the LICENSE file. */
 
 #include "../xnet/httpguts.h"
+#include "http2.h"
 #include "http_internal.h"
 #include "internal.h"
 
@@ -382,6 +383,14 @@ static Int sv_max_header_value_count(const HttpServer *s) {
                                          : HTTP_DEFAULT_MAX_HEADER_VALUE_COUNT;
 }
 
+bool burrow__http_server_do_keep_alives(HttpServer *srv) {
+    return sv_do_keep_alives(srv);
+}
+
+Int burrow__http_server_max_header_value_count(HttpServer *srv) {
+    return sv_max_header_value_count(srv);
+}
+
 /* initialReadLimitSize, with bufio's slop. */
 static int64_t sv_initial_read_limit_size(const HttpServer *s) {
     return (int64_t)sv_max_header_bytes(s) + 4096;
@@ -400,6 +409,9 @@ static HttpProtocols sv_protocols(const HttpServer *s) {
         return *s->protocols;
     HttpProtocols p = {0};
     http_protocols_set_http1(&p, true);
+    /* GODEBUG http2server=0 is the historic way to turn HTTP/2 off. */
+    if (!burrow__http_godebug_http2server_disabled())
+        http_protocols_set_http2(&p, true);
     return p;
 }
 
@@ -1623,6 +1635,11 @@ static void sv_server_handler_serve(HttpServer *s, HttpResponseWriter rw,
     http_handler_serve_http(handler, rw, req);
 }
 
+void burrow__http_server_handler_serve(HttpServer *srv, HttpResponseWriter w,
+                                       HttpRequest *req) {
+    sv_server_handler_serve(srv, w, req);
+}
+
 /* A copy of a caught panic's value that outlives the frame that caught it, as
  * sync's once does. */
 static Any sv_keep(burrow__PanicValue *storage, Any v) {
@@ -1768,6 +1785,36 @@ static void sv_free_rwc(NetConn rwc) {
         net_unix_conn_free(unix_conn);
 }
 
+/* hasPreface: whether the connection starts with the first n bytes of the
+ * HTTP/2 client preface. The read limit keeps bufr from taking in anything
+ * past them, so the HTTP/2 server can read the rest from the connection. */
+static bool sv_has_preface(sv_Conn *c, Int n) {
+    static const char preface[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+    c->r.remain = (int64_t)n - (int64_t)bufio_reader_buffered(c->bufr);
+    Error err = BURROW_NO_ERROR;
+    Slice got = bufio_reader_peek(c->bufr, n, &err);
+    c->r.remain = INT64_MAX;
+    return !BURROW_FAILED(err) && got.len == n &&
+           memcmp(got.p, preface, (size_t)n) == 0;
+}
+
+/* maybeServeUnencryptedHTTP2 and serveHTTP2Conn: true when the connection
+ * was an HTTP/2 one and is now done. */
+static bool sv_maybe_serve_unencrypted_http2(sv_Conn *c) {
+    HttpServer *s = c->server;
+    if (!burrow__http2_server_configured(s))
+        return false;
+    if (!sv_has_preface(c, 14)) /* "PRI * HTTP/2.0" */
+        return false;
+    if (!sv_has_preface(c, 24))
+        return false;
+    sv_set_state(c, HTTP_STATE_ACTIVE, false);
+    (void)sv_set_read_deadline(c->rwc, sv_zero_time());
+    (void)sv_set_write_deadline(c->rwc, sv_zero_time());
+    burrow__http2_serve_conn(s, sv_alloc(s), c->rwc, c->cctx, true);
+    return true;
+}
+
 /* conn.serve, on a goroutine of its own. */
 static void sv_conn_serve(void *env) {
     sv_Conn *c = (sv_Conn *)env;
@@ -1804,6 +1851,10 @@ static void sv_conn_serve(void *env) {
     Duration d = sv_read_header_timeout(s);
     if (d > 0)
         (void)sv_set_read_deadline(c->rwc, time_add(time_now(), d));
+
+    if (http_protocols_unencrypted_http2(sv_protocols(s)) &&
+        sv_maybe_serve_unencrypted_http2(c))
+        goto done;
 
     if (!http_protocols_http1(sv_protocols(s)))
         goto done;
@@ -2050,6 +2101,17 @@ static Error sv_accept_loop(HttpServer *s, sv_Listener *ln, NetListener orig,
     }
 }
 
+/* onceSetNextProtoDefaults, without the TLS parts. It runs on every Serve,
+ * which is fine since configuring is done once. */
+static bool sv_setup_http2(HttpServer *s) {
+    HttpProtocols p = sv_protocols(s);
+    if (!http_protocols_http2(p) && !http_protocols_unencrypted_http2(p))
+        return true;
+    if (burrow__http_godebug_http2server_disabled())
+        return true;
+    return burrow__http2_configure_server(s);
+}
+
 Error http_server_serve(HttpServer *s, NetListener l) {
     Alloc *sa = sv_alloc(s);
     sv_Listener *ln = (sv_Listener *)mem_alloc(sa, sizeof *ln, _Alignof(sv_Listener));
@@ -2061,6 +2123,10 @@ Error http_server_serve(HttpServer *s, NetListener l) {
     ln->l = l;
 
     Error err;
+    if (!sv_setup_http2(s)) {
+        err = burrow_err_out_of_memory;
+        goto close;
+    }
     if (!sv_track_listener(s, ln, true)) {
         err = http_err_server_closed;
         goto close;

@@ -125,6 +125,12 @@ void burrow__http2_frame_write_request_reply_to_writer(Http2FrameWriteRequest *w
  * and next, like the two lists of Okasaki's functional queue without having
  * to reverse one. prev and next_q link the queues into a ring. */
 
+/* What both schedulers start with. */
+typedef struct HwsBase {
+    Alloc *a;
+    Http2WriteRefHooks hooks;
+} HwsBase;
+
 typedef struct HwsQueue {
     Http2FrameWriteRequest *curr;
     Int curr_len;
@@ -189,7 +195,8 @@ static Http2FrameWriteRequest *hws_queue_peek(HwsQueue *q) {
 /* consume takes up to n bytes from the first frame, which comes off the
  * queue when it is used up and stays with the rest when it is not. False
  * when no bytes were taken. */
-static bool hws_queue_consume(HwsQueue *q, int32_t n, Http2FrameWriteRequest *out) {
+static bool hws_queue_consume(const HwsBase *b, HwsQueue *q, int32_t n,
+                              Http2FrameWriteRequest *out) {
     memset(out, 0, sizeof *out);
     if (hws_queue_empty(q))
         return false;
@@ -203,11 +210,25 @@ static bool hws_queue_consume(HwsQueue *q, int32_t n, Http2FrameWriteRequest *ou
         (void)hws_queue_shift(q);
         break;
     default:
+        /* One request is two now, and each holds the stream. */
         *first = rest;
+        if (b->hooks.retain != NULL)
+            b->hooks.retain(b->hooks.ctx, first);
         break;
     }
     *out = consumed;
     return true;
+}
+
+/* Hands each request still in q to the drop hook, for a queue about to be
+ * emptied without them being written. */
+static void hws_queue_drop_all(const HwsBase *b, HwsQueue *q) {
+    if (b->hooks.drop == NULL)
+        return;
+    for (Int i = q->curr_pos; i < q->curr_len; i++)
+        b->hooks.drop(b->hooks.ctx, &q->curr[i]);
+    for (Int i = 0; i < q->next_len; i++)
+        b->hooks.drop(b->hooks.ctx, &q->nextq[i]);
 }
 
 static void hws_queue_free_arrays(Alloc *a, HwsQueue *q) {
@@ -337,12 +358,15 @@ static bool hws_push(Alloc *a, HwsQueue *control, Map *streams,
     return hws_queue_push(a, q, wr);
 }
 
-static void hws_free_streams(Alloc *a, Map *streams) {
+static void hws_free_streams(const HwsBase *b, Map *streams) {
     MapIter it = map_iter(streams);
     const void *k;
     void *v;
-    while (map_next(&it, &k, &v))
-        hws_queue_destroy(a, *(HwsQueue **)v);
+    while (map_next(&it, &k, &v)) {
+        HwsQueue *q = *(HwsQueue **)v;
+        hws_queue_drop_all(b, q);
+        hws_queue_destroy(b->a, q);
+    }
     map_free(streams);
 }
 
@@ -353,7 +377,7 @@ static Map *hws_make_streams(Alloc *a) {
 /* ------------------------------------------------------------ round robin */
 
 typedef struct HwsRoundRobin {
-    Alloc *a;
+    HwsBase base;
     /* SETTINGS, PING and the like. */
     HwsQueue control;
     /* Stream ID to queue. */
@@ -367,7 +391,7 @@ typedef struct HwsRoundRobin {
 static bool hws_rr_open_stream(void *self, uint32_t id, Http2OpenStreamOptions opts) {
     (void)opts;
     HwsRoundRobin *ws = (HwsRoundRobin *)self;
-    HwsQueue *q = hws_open(ws->a, ws->streams, &ws->pool, id);
+    HwsQueue *q = hws_open(ws->base.a, ws->streams, &ws->pool, id);
     if (q == NULL)
         return false;
     hws_ring_insert(&ws->head, q);
@@ -381,7 +405,8 @@ static void hws_rr_close_stream(void *self, uint32_t id) {
         return;
     hws_ring_remove(&ws->head, q);
     map_del(ws->streams, &id);
-    hws_pool_put(ws->a, &ws->pool, q);
+    hws_queue_drop_all(&ws->base, q);
+    hws_pool_put(ws->base.a, &ws->pool, q);
 }
 
 static void hws_rr_adjust_stream(void *self, uint32_t id, Http2PriorityParam p) {
@@ -392,7 +417,7 @@ static void hws_rr_adjust_stream(void *self, uint32_t id, Http2PriorityParam p) 
 
 static bool hws_rr_push(void *self, Http2FrameWriteRequest wr) {
     HwsRoundRobin *ws = (HwsRoundRobin *)self;
-    return hws_push(ws->a, &ws->control, ws->streams, wr);
+    return hws_push(ws->base.a, &ws->control, ws->streams, wr);
 }
 
 static bool hws_rr_pop(void *self, Http2FrameWriteRequest *wr) {
@@ -407,7 +432,7 @@ static bool hws_rr_pop(void *self, Http2FrameWriteRequest *wr) {
         return false;
     HwsQueue *q = ws->head;
     for (;;) {
-        if (hws_queue_consume(q, INT32_MAX, wr)) {
+        if (hws_queue_consume(&ws->base, q, INT32_MAX, wr)) {
             ws->head = q->next;
             return true;
         }
@@ -420,8 +445,9 @@ static bool hws_rr_pop(void *self, Http2FrameWriteRequest *wr) {
 
 static void hws_rr_free(void *self) {
     HwsRoundRobin *ws = (HwsRoundRobin *)self;
-    Alloc *a = ws->a;
-    hws_free_streams(a, ws->streams);
+    Alloc *a = ws->base.a;
+    hws_free_streams(&ws->base, ws->streams);
+    hws_queue_drop_all(&ws->base, &ws->control);
     hws_pool_free(a, &ws->pool);
     hws_queue_free_arrays(a, &ws->control);
     mem_free(a, ws, sizeof *ws, _Alignof(HwsRoundRobin));
@@ -439,7 +465,7 @@ Http2WriteScheduler burrow__http2_new_round_robin_write_scheduler(Alloc *a) {
     HwsRoundRobin *ws = mem_alloc(a, sizeof *ws, _Alignof(HwsRoundRobin));
     if (ws == NULL)
         return none;
-    ws->a = a;
+    ws->base.a = a;
     ws->streams = hws_make_streams(a);
     if (ws->streams == NULL) {
         mem_free(a, ws, sizeof *ws, _Alignof(HwsRoundRobin));
@@ -454,7 +480,7 @@ Http2WriteScheduler burrow__http2_new_round_robin_write_scheduler(Alloc *a) {
 enum { HWS_URGENCIES = 8 };
 
 typedef struct HwsRFC9218 {
-    Alloc *a;
+    HwsBase base;
     /* SETTINGS, PING and the like. */
     HwsQueue control;
     /* The rings of streams, by urgency from u=0 to u=7, and then by
@@ -490,7 +516,7 @@ static bool hws_pr_open_stream(void *self, uint32_t id, Http2OpenStreamOptions o
     if (buffered)
         priority = ws->update_priority;
     HwsQueue **head = hws_pr_head(ws, priority);
-    HwsQueue *q = hws_open(ws->a, ws->streams, &ws->pool, id);
+    HwsQueue *q = hws_open(ws->base.a, ws->streams, &ws->pool, id);
     if (q == NULL)
         return false;
     if (buffered)
@@ -507,7 +533,8 @@ static void hws_pr_close_stream(void *self, uint32_t id) {
         return;
     hws_ring_remove(hws_pr_head(ws, q->priority), q);
     map_del(ws->streams, &id);
-    hws_pool_put(ws->a, &ws->pool, q);
+    hws_queue_drop_all(&ws->base, q);
+    hws_pool_put(ws->base.a, &ws->pool, q);
 }
 
 static void hws_pr_adjust_stream(void *self, uint32_t id, Http2PriorityParam p) {
@@ -527,7 +554,7 @@ static void hws_pr_adjust_stream(void *self, uint32_t id, Http2PriorityParam p) 
 
 static bool hws_pr_push(void *self, Http2FrameWriteRequest wr) {
     HwsRFC9218 *ws = (HwsRFC9218 *)self;
-    return hws_push(ws->a, &ws->control, ws->streams, wr);
+    return hws_push(ws->base.a, &ws->control, ws->streams, wr);
 }
 
 static bool hws_pr_pop(void *self, Http2FrameWriteRequest *wr) {
@@ -553,7 +580,7 @@ static bool hws_pr_pop(void *self, Http2FrameWriteRequest *wr) {
             if (q == NULL)
                 continue;
             for (;;) {
-                if (hws_queue_consume(q, INT32_MAX, wr)) {
+                if (hws_queue_consume(&ws->base, q, INT32_MAX, wr)) {
                     /* Incremental streams are written in turn, as each can
                      * use a part straight away. One that is not is written
                      * to the end before the next, but head still moves to
@@ -573,8 +600,9 @@ static bool hws_pr_pop(void *self, Http2FrameWriteRequest *wr) {
 
 static void hws_pr_free(void *self) {
     HwsRFC9218 *ws = (HwsRFC9218 *)self;
-    Alloc *a = ws->a;
-    hws_free_streams(a, ws->streams);
+    Alloc *a = ws->base.a;
+    hws_free_streams(&ws->base, ws->streams);
+    hws_queue_drop_all(&ws->base, &ws->control);
     hws_pool_free(a, &ws->pool);
     hws_queue_free_arrays(a, &ws->control);
     mem_free(a, ws, sizeof *ws, _Alignof(HwsRFC9218));
@@ -592,7 +620,7 @@ Http2WriteScheduler burrow__http2_new_priority_write_scheduler_rfc9218(Alloc *a)
     HwsRFC9218 *ws = mem_alloc(a, sizeof *ws, _Alignof(HwsRFC9218));
     if (ws == NULL)
         return none;
-    ws->a = a;
+    ws->base.a = a;
     ws->streams = hws_make_streams(a);
     if (ws->streams == NULL) {
         mem_free(a, ws, sizeof *ws, _Alignof(HwsRFC9218));
@@ -633,6 +661,12 @@ bool burrow__http2_write_scheduler_push(Http2WriteScheduler ws,
 bool burrow__http2_write_scheduler_pop(Http2WriteScheduler ws,
                                        Http2FrameWriteRequest *wr) {
     return ws.vt->pop(ws.self, wr);
+}
+
+void burrow__http2_write_scheduler_set_hooks(Http2WriteScheduler ws,
+                                             Http2WriteRefHooks hooks) {
+    /* Both kinds start with an HwsBase. */
+    ((HwsBase *)ws.self)->hooks = hooks;
 }
 
 void burrow__http2_write_scheduler_free(Http2WriteScheduler ws) {

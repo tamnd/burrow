@@ -569,6 +569,17 @@ static inline void http_response_writer_write_header(HttpResponseWriter w,
     w.vt->write_header(w.data, status_code);
 }
 
+/* http.ErrBodyNotAllowed, from writing a body after a status that does not
+ * have one, such as 204 or 304, or for a request method that does not, such
+ * as HEAD. */
+extern const Error http_err_body_not_allowed;
+
+/* http.TrailerPrefix. A header key that starts with it is a trailer, under the
+ * rest of the key, rather than a header. It is for a trailer whose name was
+ * not known before the header went out, so it could not be named in a Trailer
+ * field. */
+#define HTTP_TRAILER_PREFIX BURROW_S("Trailer:")
+
 /* http.Handler, which answers a request. serve_http writes the response to w
  * and returns when it is done, and neither w nor r is to be used after that. A
  * handler that wants the body has to read it before it writes, since a server

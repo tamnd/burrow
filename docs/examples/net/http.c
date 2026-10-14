@@ -202,6 +202,45 @@ static void route(Alloc *a) {
     // doc: end
 }
 
+static void hello(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    http_header_set(http_response_writer_header(w), BURROW_S("Cache-Control"),
+                    BURROW_S("no-store"));
+    if (!str_eq(r->method, BURROW_S("GET"))) {
+        http_error(w, BURROW_S("only GET here"), HTTP_STATUS_METHOD_NOT_ALLOWED);
+        return;
+    }
+    fmt_fprintf_v(http_response_writer_as_io_writer(w), "<p>hello from %s</p>",
+                  r->url->path);
+}
+
+static void recorder(Alloc *a) {
+    // doc: httptest
+    HttpHandlerFunc h = BURROW_FN(HttpHandlerFunc, hello, NULL);
+    const char *methods[] = {"GET", "POST"};
+    for (size_t i = 0; i < sizeof methods / sizeof methods[0]; i++) {
+        HttpRequest *r = httptest_new_request(a, str_from_cstr(methods[i]),
+                                              BURROW_S("/greet"), (IoReader){0});
+        HttptestResponseRecorder *rec = httptest_new_recorder(a);
+        http_handler_func_serve_http(
+            h, httptest_response_recorder_as_response_writer(rec), r);
+
+        HttpResponse *res = httptest_response_recorder_result(rec);
+        Error err;
+        Slice body = io_read_all(a, io_read_closer_as_io_reader(res->body), &err);
+        fmt_printf_v("%s %s\n", r->method, res->status);
+        fmt_printf_v("  Content-Type: %s\n",
+                     http_header_get(res->header, BURROW_S("Content-Type")));
+        fmt_printf_v("  Cache-Control: %s\n",
+                     http_header_get(res->header, BURROW_S("Cache-Control")));
+        Str text = {(const Byte *)body.p, body.len};
+        fmt_printf_v("  body: %q\n", text);
+        httptest_response_recorder_free(rec);
+        http_request_free(r);
+    }
+    // doc: end
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -212,6 +251,7 @@ int main(void) {
     cookies(a);
     wire(a);
     route(a);
+    recorder(a);
     arena_free(&ar);
     return 0;
 }

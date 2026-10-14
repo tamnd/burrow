@@ -53,6 +53,10 @@ static const Type mx_handler_func_desc = {
 
 const Type *const TYPE_HTTP_HANDLER_FUNC = &mx_handler_func_desc;
 
+BURROW_SENTINEL_ERROR(
+    http_err_body_not_allowed,
+    "http: request method or response status code does not allow body");
+
 static const Type mx_redirect_handler_desc = {
     {(const Byte *)"redirectHandler", 15},
     {(const Byte *)"net/http", 8},

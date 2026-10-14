@@ -721,26 +721,30 @@ ReflectType reflect_type_of(Any i) {
 }
 
 /* Identity, or with under set, whether the underlying types are identical,
- * which looks past the names of t and u themselves and nothing deeper. */
-static bool rf_identical(const Type *t, const Type *u, bool under) {
+ * which looks past the names of t and u themselves and nothing deeper. With
+ * tags clear, struct tags are not compared at any depth, and two named types
+ * with the same name and package are the same when their underlying types are,
+ * which is how Go's conversions see them. */
+static bool rf_identical(const Type *t, const Type *u, bool under, bool tags) {
     if (t == u)
         return true;
     if (t == NULL || u == NULL || t->kind != u->kind)
         return false;
-    if (!under && (t->name.len > 0 || u->name.len > 0))
+    if (!under && (t->name.len > 0 || u->name.len > 0) &&
+        (tags || !str_eq(t->name, u->name) || !str_eq(t->pkg_path, u->pkg_path)))
         return false;
     switch ((int)t->kind) {
     case KIND_ARRAY:
-        return t->len == u->len && rf_identical(t->elem, u->elem, false);
+        return t->len == u->len && rf_identical(t->elem, u->elem, false, tags);
     case KIND_CHAN:
         return rf_chan_dir(t) == rf_chan_dir(u) &&
-               rf_identical(t->elem, u->elem, false);
+               rf_identical(t->elem, u->elem, false, tags);
     case KIND_POINTER:
     case KIND_SLICE:
-        return rf_identical(t->elem, u->elem, false);
+        return rf_identical(t->elem, u->elem, false, tags);
     case KIND_MAP:
-        return rf_identical(t->key, u->key, false) &&
-               rf_identical(t->elem, u->elem, false);
+        return rf_identical(t->key, u->key, false, tags) &&
+               rf_identical(t->elem, u->elem, false, tags);
     case KIND_FUNC: {
         Int nin = type_num_in(t);
         Int nout = type_num_out(t);
@@ -748,10 +752,10 @@ static bool rf_identical(const Type *t, const Type *u, bool under) {
             (t->elem != NULL) != (u->elem != NULL))
             return false;
         for (Int i = 0; i < nin; i++)
-            if (!rf_identical(type_in(t, i), type_in(u, i), false))
+            if (!rf_identical(type_in(t, i), type_in(u, i), false, tags))
                 return false;
         for (Int i = 0; i < nout; i++)
-            if (!rf_identical(type_out(t, i), type_out(u, i), false))
+            if (!rf_identical(type_out(t, i), type_out(u, i), false, tags))
                 return false;
         return true;
     }
@@ -761,9 +765,9 @@ static bool rf_identical(const Type *t, const Type *u, bool under) {
         for (uint16_t i = 0; i < t->nfield; i++) {
             const Field *f = &t->fields[i];
             const Field *g = &u->fields[i];
-            if (!str_eq(f->name, g->name) || !str_eq(f->tag, g->tag) ||
+            if (!str_eq(f->name, g->name) || (tags && !str_eq(f->tag, g->tag)) ||
                 burrow__reflect_embedded(f) != burrow__reflect_embedded(g) ||
-                !rf_identical(f->type, g->type, false))
+                !rf_identical(f->type, g->type, false, tags))
                 return false;
             /* An unexported name is only the same name in the same package. */
             if (!field_is_exported(f) && !str_eq(t->pkg_path, u->pkg_path))
@@ -771,9 +775,12 @@ static bool rf_identical(const Type *t, const Type *u, bool under) {
         }
         return true;
     case KIND_INTERFACE:
-        /* Two interfaces with methods are only the same through their
-         * descriptor, which the first test above has already tried. */
-        return t->nmethod == 0 && u->nmethod == 0;
+        /* Only through the descriptor, which the first test above has
+         * already tried. The empty interface is the one descriptor TYPE_ANY,
+         * and the others are vtable interfaces whose descriptors do not list
+         * their methods, so two of them cannot be told apart from two
+         * different interfaces. */
+        return false;
     default:
         /* The rest are the predeclared kinds, where the kind is the
          * underlying type. */
@@ -782,7 +789,11 @@ static bool rf_identical(const Type *t, const Type *u, bool under) {
 }
 
 bool burrow__reflect_identical(const Type *t, const Type *u) {
-    return rf_identical(t, u, false);
+    return rf_identical(t, u, false, true);
+}
+
+bool burrow__reflect_same_underlying(const Type *t, const Type *u) {
+    return rf_identical(t, u, true, false);
 }
 
 bool burrow__reflect_assignable(const Type *dst, const Type *v) {
@@ -795,9 +806,9 @@ bool burrow__reflect_assignable(const Type *dst, const Type *v) {
      * specialChannelAssignability. */
     if (dst->kind == KIND_CHAN && rf_chan_dir(v) == REFLECT_BOTH_DIR &&
         (dst->name.len == 0 || v->name.len == 0) &&
-        rf_identical(dst->elem, v->elem, false))
+        rf_identical(dst->elem, v->elem, false, true))
         return true;
-    return rf_identical(dst, v, true);
+    return rf_identical(dst, v, true, true);
 }
 
 /* -------------------------------------------------------------- made types

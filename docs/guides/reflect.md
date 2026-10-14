@@ -186,3 +186,31 @@ That prints:
 ```text
 map[string]int with 1 entry, port = 9090
 ```
+
+## Conversions
+
+`reflect_value_convert` does what a Go conversion `T(x)` does, for a type known only at run time. Numbers convert to each other the way they do in Go, a string goes to and from a `[]byte` or a `[]rune`, a slice goes to an array or a pointer to an array of the same element type, and a value goes to a named type with the same underlying type. `reflect_type_convertible_to` asks whether a conversion is allowed at all, and `reflect_type_assignable_to` whether a value can be stored as it is, without one:
+
+<!-- example: ../examples/reflect/reflect.c#convert -->
+```c
+ReflectValue f = reflect_value_convert(port, a, TYPE_FLOAT64);
+fmt_printf_v("%s %v\n", reflect_type_string(reflect_value_type(f)),
+             reflect_value_float(f));
+ReflectValue b = reflect_value_convert(kv, a, TYPE_BYTES);
+fmt_printf_v("%s of length %d\n", reflect_type_string(reflect_value_type(b)),
+             reflect_value_len(b));
+fmt_printf_v(
+    "int to *int: %t, []byte to [4]byte: %t\n",
+    reflect_type_convertible_to(TYPE_INT, reflect_pointer_to(TYPE_INT)),
+    reflect_type_convertible_to(TYPE_BYTES, reflect_array_of(4, TYPE_UINT8)));
+```
+
+That prints:
+
+```text
+float64 9090
+[]uint8 of length 4
+int to *int: false, []byte to [4]byte: true
+```
+
+A conversion that is not allowed panics. So does a slice to an array that is longer than the slice, which `reflect_type_convertible_to` cannot see from the types alone, so `reflect_value_can_convert` checks the value too. Converting to an interface only works for the empty interface for now. An interface with methods needs the method set of the type going in, which reflect does not have yet.

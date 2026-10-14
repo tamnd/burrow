@@ -111,6 +111,19 @@ int main(void) {
                  reflect_value_int(reflect_value_map_index(m, kv)));
     // doc: end
 
+    // doc: convert
+    ReflectValue f = reflect_value_convert(port, a, TYPE_FLOAT64);
+    fmt_printf_v("%s %v\n", reflect_type_string(reflect_value_type(f)),
+                 reflect_value_float(f));
+    ReflectValue b = reflect_value_convert(kv, a, TYPE_BYTES);
+    fmt_printf_v("%s of length %d\n", reflect_type_string(reflect_value_type(b)),
+                 reflect_value_len(b));
+    fmt_printf_v(
+        "int to *int: %t, []byte to [4]byte: %t\n",
+        reflect_type_convertible_to(TYPE_INT, reflect_pointer_to(TYPE_INT)),
+        reflect_type_convertible_to(TYPE_BYTES, reflect_array_of(4, TYPE_UINT8)));
+    // doc: end
+
     arena_free(&ar);
     return 0;
 }
@@ -127,4 +140,7 @@ after the change: false
 settable: v false, e true
 Port 9090, 3 tags, last "us"
 map[string]int with 1 entry, port = 9090
+float64 9090
+[]uint8 of length 4
+int to *int: false, []byte to [4]byte: true
 */

@@ -60,6 +60,10 @@ ReflectStructField burrow__reflect_field(const Type *t, Int i);
  * are too. */
 bool burrow__reflect_identical(const Type *t, const Type *u);
 
+/* Whether t and u have identical underlying types once struct tags are left
+ * out, the test Go's Convert uses. */
+bool burrow__reflect_same_underlying(const Type *t, const Type *u);
+
 /* Whether a value of type v can be stored as a dst without a conversion, Go's
  * directlyAssignable. Interfaces it leaves to the caller. */
 bool burrow__reflect_assignable(const Type *dst, const Type *v);

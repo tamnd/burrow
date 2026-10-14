@@ -185,6 +185,16 @@ BURROW_STATIC(ret) Str reflect_type_string(ReflectType t);
 Int reflect_type_bits(ReflectType t);
 
 bool reflect_type_comparable(ReflectType t);
+
+/* AssignableTo: whether a value of type t can be stored in a u as it is.
+ * ConvertibleTo: whether Convert takes a value of type t to a u, though for a
+ * slice to an array it can still panic on a short slice. Both panic on a nil u.
+ *
+ * Every type goes into the empty interface. An interface with methods takes
+ * only values of its own type for now, since telling whether t implements it
+ * needs method sets that reflect does not have yet. */
+bool reflect_type_assignable_to(ReflectType t, ReflectType u);
+bool reflect_type_convertible_to(ReflectType t, ReflectType u);
 ReflectChanDir reflect_type_chan_dir(ReflectType t);
 
 /* Elem works for arrays, channels, maps, pointers and slices, and Key for
@@ -496,6 +506,16 @@ void reflect_value_set_pointer(ReflectValue v, void *x);
  * already has. */
 void reflect_value_set_len(ReflectValue v, Int n);
 void reflect_value_set_cap(ReflectValue v, Int n);
+
+/* Convert: v as a value of type t, by Go's conversion rules, with whatever it
+ * needs made in a. Between types with the same underlying type the result
+ * shares v's bytes unless v can be set, in which case it gets a copy. Convert
+ * panics when there is no such conversion and when a slice is too short for
+ * the array it is converted to. CanConvert says whether Convert would work for
+ * this v. */
+BURROW_OWNS(ret) BURROW_BORROWS(ret, v) ReflectValue
+reflect_value_convert(ReflectValue v, Alloc *a, ReflectType t);
+bool reflect_value_can_convert(ReflectValue v, ReflectType t);
 
 /* SetZero: v = the zero value of its type. */
 void reflect_value_set_zero(ReflectValue v);

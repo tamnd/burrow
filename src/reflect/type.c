@@ -304,6 +304,11 @@ static void rf_write_type(RfBuf *b, const Type *t);
 /* A function type's parameters and results, what follows func in its String
  * and a method's name in an interface's. */
 static void rf_write_sig(RfBuf *b, const Type *t) {
+    /* A method listed without a signature reads as one taking nothing. */
+    if (t == NULL) {
+        rfb_cstr(b, "()");
+        return;
+    }
     Int nin = type_num_in(t);
     Int nout = type_num_out(t);
     bool variadic = t->elem != NULL;

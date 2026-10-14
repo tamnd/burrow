@@ -44,6 +44,32 @@ IoCloser net_conn_as_io_closer(NetConn c) {
     return cl;
 }
 
+static Int nc_rwc_read(void *self, Slice p, Error *err) {
+    NetConn c = *(NetConn *)self;
+    return c.vt->reader.read(c.data, p, err);
+}
+
+static Int nc_rwc_write(void *self, Slice p, Error *err) {
+    NetConn c = *(NetConn *)self;
+    return c.vt->writer.write(c.data, p, err);
+}
+
+static Error nc_rwc_close(void *self) {
+    NetConn c = *(NetConn *)self;
+    return c.vt->closer.close(c.data);
+}
+
+static const IoReadWriteCloserVT nc_rwc_vt = {
+    {NULL, nc_rwc_read},
+    {NULL, nc_rwc_write},
+    {NULL, nc_rwc_close},
+};
+
+IoReadWriteCloser net_conn_as_io_read_write_closer(NetConn *c) {
+    IoReadWriteCloser rwc = {c != NULL && c->vt != NULL ? &nc_rwc_vt : NULL, c};
+    return rwc;
+}
+
 IoCloser net_listener_as_io_closer(NetListener l) {
     IoCloser cl = {l.vt != NULL ? &l.vt->closer : NULL, l.data};
     return cl;

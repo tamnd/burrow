@@ -367,6 +367,12 @@ void json_decoder_disallow_unknown_fields(JsonDecoder *d);
  * or a read error sticks: every later call returns it again. */
 BURROW_STATIC(ret) Error json_decoder_decode(JsonDecoder *d, Any v);
 
+/* Decoder.Decode, with what goes into v made in a rather than in the
+ * decoder's allocator. Not a Go function. It is for a caller that reads values
+ * for as long as a connection lasts and gives back what each one holds once it
+ * is done with it, which net/rpc/jsonrpc does after every request. */
+BURROW_STATIC(ret) Error json_decoder_decode_in(JsonDecoder *d, Alloc *a, Any v);
+
 /* Decoder.Buffered. A reader over the bytes the decoder has read from r but
  * not used yet. It reads from the decoder's buffer, so it is good until the
  * next call on d. */

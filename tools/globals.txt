@@ -402,6 +402,7 @@ global	src/log/log.c	log_std	package-vars	The standard logger, log.std in Go. It
 global	src/net/http_transport.c	tp_default_transport	package-vars	DefaultTransport. Its own mutexes guard the pool and the calls, and the settings are only read.
 global	src/net/http_transport.c	tp_env_proxy_cache	package-vars	envProxyFunc's cache of the proxy settings in the environment. Go keeps it behind a sync.Once, and here it is loaded on first use under its own mutex.
 global	src/net/http_client.c	cl_default_client	package-vars	DefaultClient. Its fields are only read, and the default transport guards itself.
+global	src/net/rpc.c	rs_default_server	package-vars	DefaultServer. Its service map is read and written only under its own RWMutex, and each method counts its calls under its own mutex.
 global	src/log/log.c	log_writing	package-vars	Thread local. Set around the call to the writer and read by that writer on the same thread before it can block, so nothing else sees it.
 global	src/log/slog_handler.c	slogh_std	package-vars	The handler the default slog logger starts with. Nothing in it changes after it is set up statically, and the mutex in it is only there because every handler has one.
 global	src/log/slog_logger.c	burrow__slog_log_logger_level	package-vars	logLoggerLevel in Go, a LevelVar, which is read and written atomically.

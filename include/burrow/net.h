@@ -316,6 +316,12 @@ typedef struct NetListener {
 IoReader net_conn_as_io_reader(NetConn c);
 IoWriter net_conn_as_io_writer(NetConn c);
 IoCloser net_conn_as_io_closer(NetConn c);
+
+/* The same for io.ReadWriteCloser, which needs one vtable with all three in it,
+ * and NetConnVT has no such member to point at. So this one reads, writes and
+ * closes through c, which has to stay where it is for as long as what this
+ * gives is in use. Not a Go function: Go converts without being asked. */
+IoReadWriteCloser net_conn_as_io_read_write_closer(NetConn *c);
 IoCloser net_listener_as_io_closer(NetListener l);
 
 /* net.PacketConn, a packet-oriented connection, which any number of

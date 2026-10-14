@@ -1112,6 +1112,8 @@ struct JsonDecoder {
     bool had_peeked;
     bool had_eof;
     Alloc *a;
+    /* Where err lives, so that it goes when the decoder does. */
+    Arena earena;
     BytesReader buffered;
 };
 
@@ -1121,6 +1123,7 @@ JsonDecoder *json_new_decoder(Alloc *a, IoReader r) {
     if (d == NULL)
         return NULL;
     d->a = a;
+    arena_init(&d->earena, a, 0);
     d->opts = json_default_options_v1();
     d->dec = jsontext_new_decoder_v(a, r, 1, d->opts);
     if (d->dec == NULL) {
@@ -1134,6 +1137,7 @@ void json_decoder_free(JsonDecoder *d) {
     if (d == NULL)
         return;
     jsontext_decoder_free(d->dec);
+    arena_free(&d->earena);
     mem_free(d->a, d, sizeof(JsonDecoder), _Alignof(JsonDecoder));
 }
 
@@ -1147,11 +1151,11 @@ void json_decoder_disallow_unknown_fields(JsonDecoder *d) {
 
 /* Keeps err as the decoder's sticky error and returns it. */
 static Error jx_decoder_fail(JsonDecoder *d, Error err) {
-    d->err = error_retain(d->a, err);
+    d->err = error_retain(arena_allocator(&d->earena), err);
     return d->err;
 }
 
-Error json_decoder_decode(JsonDecoder *d, Any v) {
+static Error jx_decode_with(JsonDecoder *d, Alloc *va, Any v) {
     if (BURROW_FAILED(d->err))
         return d->err;
     Error err = BURROW_NO_ERROR;
@@ -1166,7 +1170,15 @@ Error json_decoder_decode(JsonDecoder *d, Any v) {
     d->had_peeked = false;
     d->had_eof = false;
     Slice in = {(void *)(uintptr_t)b.p, b.len, b.len, TYPE_BYTE};
-    return jsonv2_unmarshal_v(d->a, in, v, 1, d->opts);
+    return jsonv2_unmarshal_v(va, in, v, 1, d->opts);
+}
+
+Error json_decoder_decode(JsonDecoder *d, Any v) {
+    return jx_decode_with(d, d->a, v);
+}
+
+Error json_decoder_decode_in(JsonDecoder *d, Alloc *a, Any v) {
+    return jx_decode_with(d, a, v);
 }
 
 IoReader json_decoder_buffered(JsonDecoder *d) {

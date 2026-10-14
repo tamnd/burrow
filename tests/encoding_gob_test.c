@@ -19,6 +19,7 @@
 #include "burrow/io.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
+#include "burrow/mem/track.h"
 #include "burrow/panic.h"
 #include "burrow/proc.h"
 #include "burrow/slice.h"
@@ -372,6 +373,56 @@ static Int nbr_read(void *self, Slice p, Error *err) {
 
 static const IoReaderVT nbr_vt = {NULL, nbr_read};
 
+/* gob_decoder_decode_in, which is not Go's: what goes into the value is made
+ * in the allocator it is given, so it is still good once the decoder and
+ * everything the decoder made are gone. */
+static void TestGobDecodeIn(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    BytesBuffer buf = BYTES_BUFFER(a);
+    GobEncoder *e = gob_new_encoder(a, bytes_buffer_as_io_writer(&buf));
+    Str first = BURROW_S("first"), second = BURROW_S("second");
+    want_err(t, "encode first", gob_encoder_encode(e, BURROW_ANY(TYPE_STRING, &first)),
+             "<nil>");
+    want_err(t, "encode second",
+             gob_encoder_encode(e, BURROW_ANY(TYPE_STRING, &second)), "<nil>");
+    gob_encoder_free(e);
+
+    Arena dar, var;
+    arena_init(&dar, NULL, 0);
+    arena_init(&var, NULL, 0);
+    Track tr;
+    track_init(&tr, arena_allocator(&var));
+    BytesReader br;
+    bytes_reader_reset(&br, bytes_buffer_bytes(&buf));
+    GobDecoder *d =
+        gob_new_decoder(arena_allocator(&dar), bytes_reader_as_io_reader(&br));
+    Str got1 = BURROW_STR_EMPTY, got2 = BURROW_STR_EMPTY;
+    want_err(
+        t, "decode first",
+        gob_decoder_decode_in(d, track_allocator(&tr), BURROW_ANY(TYPE_STRING, &got1)),
+        "<nil>");
+    if (track_live(&tr) == 0)
+        testing_t_errorf_v(t, "nothing of the first value was made in a");
+    size_t live = track_live(&tr);
+    want_err(
+        t, "decode second",
+        gob_decoder_decode_in(d, track_allocator(&tr), BURROW_ANY(TYPE_STRING, &got2)),
+        "<nil>");
+    if (track_live(&tr) <= live)
+        testing_t_errorf_v(t, "nothing of the second value was made in a");
+    gob_decoder_free(d);
+    arena_free(&dar);
+    if (!str_eq(got1, first))
+        testing_t_errorf_v(t, "first = %q, want %q", got1, first);
+    if (!str_eq(got2, second))
+        testing_t_errorf_v(t, "second = %q, want %q", got2, second);
+    track_free(&tr);
+    arena_free(&var);
+    arena_free(&ar);
+}
+
 static void TestGobStreams(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -604,6 +655,7 @@ static void TestGobNesting(TestingT *t) {
     X(TestGobBinaryMarshaler)                                                          \
     X(TestGobInterface)                                                                \
     X(TestGobStreams)                                                                  \
+    X(TestGobDecodeIn)                                                                 \
     X(TestGobLargeSlice)                                                               \
     X(TestGobNesting)
 

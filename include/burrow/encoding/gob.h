@@ -184,6 +184,16 @@ BURROW_OWNS(v) BURROW_STATIC(ret) Error gob_decoder_decode(GobDecoder *d, Any v)
 /* Decoder.DecodeValue, which in C is the same call. */
 BURROW_OWNS(v) BURROW_STATIC(ret) Error gob_decoder_decode_value(GobDecoder *d, Any v);
 
+/* Decoder.Decode, with the strings, slices and maps that go into v made in a
+ * rather than in the decoder's allocator. Not a Go function. A stream can go
+ * on for as long as a connection does, and a caller that gives back what each
+ * value holds once it is done with it, as net/rpc does after every request,
+ * needs those to come from somewhere other than an allocator that lasts as
+ * long as the decoder. What the decoder keeps for itself, such as the types it
+ * has been sent, still comes from the decoder's allocator. */
+BURROW_OWNS(v) BURROW_STATIC(ret) Error gob_decoder_decode_in(GobDecoder *d, Alloc *a,
+                                                              Any v);
+
 #ifdef __cplusplus
 }
 #endif

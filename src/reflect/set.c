@@ -111,8 +111,9 @@ const void *burrow__reflect_assign(ReflectValue x, const Type *dst, Any *box,
     if (burrow__reflect_assignable(dst, x.typ))
         return x.ptr;
     /* Only the empty interface for now: one with methods needs the method
-     * table of x's type, which comes with Implements. */
-    if (dst->kind == KIND_INTERFACE && dst->nmethod == 0 && dst->size == sizeof(Any)) {
+     * table of x's type, which comes with Implements. The empty interface is
+     * Any, the one interface whose first word is a Type rather than a vtable. */
+    if (dst == TYPE_ANY) {
         const Type *t = x.typ;
         void *p = x.ptr;
         if (t->kind == KIND_INTERFACE && !burrow__reflect_unwrap(&t, &p))
@@ -576,7 +577,7 @@ Int reflect_copy(ReflectValue dst, ReflectValue src) {
     Slice ds = rfs_elems(dst);
     Slice ss = rfs_elems(src);
     Int n = ds.len < ss.len ? ds.len : ss.len;
-    if (n > 0 && de->size > 0)
+    if (n > 0 && de->size > 0 && ds.p != NULL && ss.p != NULL)
         memmove(ds.p, ss.p, (size_t)n * de->size);
     return n;
 }

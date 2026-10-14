@@ -258,7 +258,18 @@ IoRuneReader io_rune_scanner_as_io_rune_reader(IoRuneScanner rs) {
 
 /* ------------------------------------------------------------- method sets */
 
-#define IO_IFACE_TYPE(cname, gonm)                                                     \
+/* Read and Write, each with a thunk that calls through the vtable of the
+ * interface value it is handed, as BURROW_IFACE_TYPE_DEFINE's do. */
+#define IO_READER_METHODS(M, T) M(T, Read, read, IO_SIG_READ)
+#define IO_WRITER_METHODS(M, T) M(T, Write, write, IO_SIG_WRITE)
+IO_READER_METHODS(BURROW__IFACE_METHOD_DEFS, IoReader)
+IO_WRITER_METHODS(BURROW__IFACE_METHOD_DEFS, IoWriter)
+static const Method io_reader_methods[] = {
+    IO_READER_METHODS(BURROW__METHOD_ENTRY, IoReader)};
+static const Method io_writer_methods[] = {
+    IO_WRITER_METHODS(BURROW__METHOD_ENTRY, IoWriter)};
+
+#define IO_IFACE_TYPE(cname, gonm, methods)                                            \
     const Type burrow_type_##cname = {                                                 \
         {(const Byte *)(gonm), (Int)(sizeof(gonm) - 1)},                               \
         {(const Byte *)"io", 2},                                                       \
@@ -266,9 +277,9 @@ IoRuneReader io_rune_scanner_as_io_rune_reader(IoRuneScanner rs) {
         (uint32_t)sizeof(cname),                                                       \
         (uint16_t)_Alignof(cname),                                                     \
         0,                                                                             \
-        0,                                                                             \
+        (uint16_t)(sizeof(methods) / sizeof((methods)[0])),                            \
         NULL,                                                                          \
-        NULL,                                                                          \
+        methods,                                                                       \
         NULL,                                                                          \
         NULL,                                                                          \
         0,                                                                             \
@@ -276,8 +287,8 @@ IoRuneReader io_rune_scanner_as_io_rune_reader(IoRuneScanner rs) {
         NULL,                                                                          \
     }
 
-IO_IFACE_TYPE(IoReader, "Reader");
-IO_IFACE_TYPE(IoWriter, "Writer");
+IO_IFACE_TYPE(IoReader, "Reader", io_reader_methods);
+IO_IFACE_TYPE(IoWriter, "Writer", io_writer_methods);
 
 /* Only here to be named in a signature, so as far as reflection can tell it is
  * an unsafe pointer, with a name that says what it points at. */

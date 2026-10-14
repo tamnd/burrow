@@ -1,16 +1,14 @@
-/* package reflect: Convert, CanConvert, ConvertibleTo and AssignableTo. Go's
- * convertOp and the cvt functions from reflect/value.go, and the type tests
- * from reflect/type.go.
+/* package reflect: Convert, CanConvert, ConvertibleTo, AssignableTo and
+ * Implements. Go's convertOp and the cvt functions from reflect/value.go, and
+ * the type tests from reflect/type.go.
  *
  * A conversion that makes a new value puts it in the Alloc it is given. One
  * between types with the same underlying type only relabels the bytes, so it
  * shares v's when v cannot be written and copies them when it can, as Go's
  * cvtDirect does.
  *
- * Conversion to an interface works for the empty interface. An interface with
- * methods is a vtable here, and reflect has no way yet to find the vtable a
- * type has for an interface, so the only value that converts to one is a value
- * of that same interface type.
+ * Conversion to an interface with methods takes the vtable recorded for the
+ * value's type, as iface.c explains.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -48,6 +46,8 @@ typedef enum RfcOp {
     RFC_DIRECT,
     RFC_T2E,
     RFC_I2E,
+    RFC_T2I,
+    RFC_I2I,
 } RfcOp;
 
 static bool rfc_is_int(Kind k) {
@@ -130,9 +130,11 @@ static RfcOp rfc_op(const Type *dst, const Type *src) {
         src->name.len == 0 && burrow__reflect_same_underlying(dst->elem, src->elem))
         return RFC_DIRECT;
 
-    /* Everything implements the empty interface. */
-    if (dst == TYPE_ANY)
-        return sk == KIND_INTERFACE ? RFC_I2E : RFC_T2E;
+    if (dk == KIND_INTERFACE && burrow__reflect_implements(dst, src)) {
+        if (dst == TYPE_ANY)
+            return sk == KIND_INTERFACE ? RFC_I2E : RFC_T2E;
+        return sk == KIND_INTERFACE ? RFC_I2I : RFC_T2I;
+    }
     return RFC_NONE;
 }
 
@@ -146,7 +148,15 @@ BURROW_NORETURN static void rfc_nil_type(const char *method) {
 bool reflect_type_assignable_to(ReflectType t, ReflectType u) {
     if (u == NULL)
         rfc_nil_type("AssignableTo");
-    return burrow__reflect_assignable(u, t) || u == TYPE_ANY;
+    return burrow__reflect_assignable(u, t) || burrow__reflect_implements(u, t);
+}
+
+bool reflect_type_implements(ReflectType t, ReflectType u) {
+    if (u == NULL)
+        rfc_nil_type("Implements");
+    if (u->kind != KIND_INTERFACE)
+        panic_str(BURROW_S("reflect: non-interface type passed to Type.Implements"));
+    return burrow__reflect_implements(u, t);
 }
 
 bool reflect_type_convertible_to(ReflectType t, ReflectType u) {
@@ -379,6 +389,23 @@ static ReflectValue rfc_i2e(Alloc *a, ReflectValue v, uint32_t ro, const Type *t
     return rfc_make(t, box, ro);
 }
 
+/* A concrete value into an interface with methods, which holds a copy of it. */
+static ReflectValue rfc_t2i(Alloc *a, ReflectValue v, uint32_t ro, const Type *t) {
+    void *c = rfc_new(a, v.typ);
+    type_copy(v.typ, c, v.ptr);
+    Iface *box = rfc_new(a, t);
+    burrow__reflect_to_iface(t, v.typ, c, box, "reflect.Value.Convert");
+    return rfc_make(t, box, ro);
+}
+
+/* An interface value into another interface with methods, which holds what it
+ * holds. */
+static ReflectValue rfc_i2i(Alloc *a, ReflectValue v, uint32_t ro, const Type *t) {
+    Iface *box = rfc_new(a, t);
+    burrow__reflect_to_iface(t, v.typ, v.ptr, box, "reflect.Value.Convert");
+    return rfc_make(t, box, ro);
+}
+
 static ReflectValue rfc_convert(Alloc *a, ReflectValue v, RfcOp op, const Type *t) {
     uint32_t ro = BURROW__RF_RO_OF(v);
     switch ((int)op) {
@@ -444,6 +471,10 @@ static ReflectValue rfc_convert(Alloc *a, ReflectValue v, RfcOp op, const Type *
         return rfc_t2e(a, v, ro, t);
     case RFC_I2E:
         return rfc_i2e(a, v, ro, t);
+    case RFC_T2I:
+        return rfc_t2i(a, v, ro, t);
+    case RFC_I2I:
+        return rfc_i2i(a, v, ro, t);
     default:
         break;
     }

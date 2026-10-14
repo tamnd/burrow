@@ -241,6 +241,10 @@ static int64_t reader_io_seek(void *self, int64_t offset, int whence, Error *err
 static const IoReaderVT reader_reader_vt = {&reader_desc, reader_io_read};
 static const IoSeekerVT reader_seeker_vt = {&reader_desc, reader_io_seek};
 
+/* So that reflect can put a *strings.Reader into an io.Reader. */
+BURROW_IMPLEMENTS_DESC(strings_reader_reader, &reader_desc, TYPE_OF(IoReader),
+                       reader_reader_vt);
+
 IoReader strings_reader_as_io_reader(StringsReader *r) {
     IoReader rd = {&reader_reader_vt, r};
     return rd;

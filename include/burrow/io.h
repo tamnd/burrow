@@ -721,12 +721,20 @@ IoWriteCloser io_pipe_writer_as_io_write_closer(IoPipeWriter *w);
  *
  * The reader's vtable has to name that descriptor as its self_type, which is
  * what TYPE_OF(Buf) gives. bytes.Buffer, bytes.Reader, strings.Reader and
- * strings.Builder in this library have theirs. */
+ * strings.Builder in this library have theirs.
+ *
+ * The descriptors for IoReader and IoWriter list Read and Write with the
+ * first two signatures, so reflect counts one method on each, as Go does, and
+ * a type listing Read the same way implements io.Reader as far as reflect's
+ * Implements can tell. Putting a value of it into one still takes the vtable,
+ * which BURROW_IMPLEMENTS in burrow/type.h records. */
 typedef Error *IoErrorArg;
 extern const Type burrow_type_IoReader;
 extern const Type burrow_type_IoWriter;
 extern const Type burrow_type_IoErrorArg;
 
+#define IO_SIG_READ(IN, OUT) IN(0, Bytes) IN(1, IoErrorArg) OUT(Int)
+#define IO_SIG_WRITE(IN, OUT) IN(0, Bytes) IN(1, IoErrorArg) OUT(Int)
 #define IO_SIG_WRITE_TO(IN, OUT) IN(0, IoWriter) IN(1, IoErrorArg) OUT(int64_t)
 #define IO_SIG_READ_FROM(IN, OUT) IN(0, IoReader) IN(1, IoErrorArg) OUT(int64_t)
 #define IO_SIG_WRITE_STRING(IN, OUT) IN(0, Str) IN(1, IoErrorArg) OUT(Int)

@@ -2,10 +2,10 @@
  * AssignableTo and Comparable.
  *
  * These are Go's tests from all_test.go and set_test.go, under Go's names.
- * Some entries need a value turned into an interface with methods, such as a
+ * Some entries put a value into an interface with methods, such as a
  * *bytes.Buffer into an io.Reader. An interface with methods is a vtable here,
- * and reflect cannot find the vtable a type has for an interface yet, so those
- * entries are left out and the test says where.
+ * and reflect finds the one a type has from what BURROW_IMPLEMENTS recorded,
+ * which bytes.Buffer and strings.Builder do for io.Reader and io.Writer.
  *
  * Go's MakeRO and IsRO come from its export_test.go. Here they set and read the
  * same flag bit, from the package's internal header.
@@ -386,6 +386,176 @@ static void should_panic(TestingT *t, const char *expect, void (*f)(void *),
         testing_t_errorf_v(t, "%q does not contain %q", buf, expect);
 }
 
+/* -------------------------------------------------------------- interfaces
+ *
+ * The interfaces implementsTests and the interface entries of convertTests
+ * use. burrow's io.Reader and io.Writer descriptors list their methods, so
+ * those two are the library's own. io.ReaderAt and io.ReadWriter have C types
+ * but no descriptors, ast.Expr is a node pointer in burrow's go/ast rather
+ * than an interface, and so is ast.Ident's, so each of these is a stand-in
+ * written here, with Go's name, package and methods. */
+
+/* A descriptor with methods and no fields. */
+#define DESCM(name, pkg, kind, size, align, nmethod, methods)                          \
+    {                                                                                  \
+        name,                                                                          \
+        pkg,                                                                           \
+        kind,                                                                          \
+        (uint32_t)(size),                                                              \
+        (uint16_t)(align),                                                             \
+        0,                                                                             \
+        nmethod,                                                                       \
+        NULL,                                                                          \
+        methods,                                                                       \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+    }
+
+/* io.ReaderAt. */
+#define READER_AT_METHODS(M, T) M(T, ReadAt, read_at, IO_SIG_READ_AT)
+READER_AT_METHODS(BURROW__IFACE_METHOD_DEFS, IoReaderAt)
+static const Method reader_at_methods[] = {
+    READER_AT_METHODS(BURROW__METHOD_ENTRY, IoReaderAt)};
+static const Type ty_ReaderAt =
+    DESCM(S_("ReaderAt"), S_("io"), KIND_INTERFACE, sizeof(IoReaderAt),
+          _Alignof(IoReaderAt), 1, reader_at_methods);
+
+/* io.ReadWriter. */
+#define READ_WRITER_METHODS(M, T)                                                      \
+    M(T, Read, reader.read, IO_SIG_READ)                                               \
+    M(T, Write, writer.write, IO_SIG_WRITE)
+READ_WRITER_METHODS(BURROW__IFACE_METHOD_DEFS, IoReadWriter)
+static const Method read_writer_methods[] = {
+    READ_WRITER_METHODS(BURROW__METHOD_ENTRY, IoReadWriter)};
+static const Type ty_ReadWriter =
+    DESCM(S_("ReadWriter"), S_("io"), KIND_INTERFACE, sizeof(IoReadWriter),
+          _Alignof(IoReadWriter), 2, read_writer_methods);
+
+/* The vtable a bytes.Buffer has as an io.ReadWriter, which is its two others
+ * side by side. Recorded at run time, since the parts are only to be had from
+ * the functions that hand out the other two. */
+static void record_read_writer(void) {
+    static IoReadWriterVT vt;
+    static TypeImpl impl;
+    vt.reader = *bytes_buffer_as_io_reader(NULL).vt;
+    vt.writer = *bytes_buffer_as_io_writer(NULL).vt;
+    impl = (TypeImpl){TYPE_BYTES_BUFFER, &ty_ReadWriter, &vt};
+    Error err = BURROW_NO_ERROR;
+    if (!type_register_impl(&impl, &err))
+        abort();
+}
+
+/* ast.Expr, and notASTExpr, which has the same three methods. Interface methods
+ * go in name order, so exprNode comes last. */
+typedef struct ExprVT {
+    const Type *self_type;
+    TokenPos (*end)(void *self);
+    TokenPos (*pos)(void *self);
+    void (*expr_node)(void *self);
+} ExprVT;
+
+typedef struct Expr {
+    const ExprVT *vt;
+    void *data;
+} Expr;
+
+#define EXPR_SIG_Pos(IN, OUT) OUT(TokenPos)
+#define EXPR_SIG_None(IN, OUT)
+#define EXPR_METHODS(M, T)                                                             \
+    M(T, End, end, EXPR_SIG_Pos)                                                       \
+    M(T, Pos, pos, EXPR_SIG_Pos)                                                       \
+    M(T, exprNode, expr_node, EXPR_SIG_None)
+EXPR_METHODS(BURROW__IFACE_METHOD_DEFS, Expr)
+static const Method expr_methods[] = {EXPR_METHODS(BURROW__METHOD_ENTRY, Expr)};
+static const Type burrow_type_Expr =
+    DESCM(S_("Expr"), S_("go/ast"), KIND_INTERFACE, sizeof(Expr), _Alignof(Expr), 3,
+          expr_methods);
+static const Type ty_notASTExpr = DESCM(S_("notASTExpr"), TEST_PKG, KIND_INTERFACE,
+                                        sizeof(Expr), _Alignof(Expr), 3, expr_methods);
+
+/* ast.Ident, which implements ast.Expr, and notAnExpr, which has the methods
+ * but is not from go/ast, so its exprNode is not ast.Expr's. Each method
+ * returns token.NoPos. */
+typedef struct Ident {
+    TokenPos name_pos;
+} Ident;
+
+typedef struct NotAnExpr {
+    char unused;
+} NotAnExpr;
+
+static TokenPos no_pos(void *self) {
+    (void)self;
+    return 0;
+}
+
+static void expr_node(void *self) {
+    (void)self;
+}
+
+#define EXPR_IMPL_METHODS(M, T)                                                        \
+    M(T, End, no_pos, EXPR_SIG_Pos)                                                    \
+    M(T, Pos, no_pos, EXPR_SIG_Pos)                                                    \
+    M(T, exprNode, expr_node, EXPR_SIG_None)
+BURROW_METHODS_DEFINE(Ident, EXPR_IMPL_METHODS);
+BURROW_METHODS_DEFINE(NotAnExpr, EXPR_IMPL_METHODS);
+
+static const Type burrow_type_Ident =
+    DESCM(S_("Ident"), S_("go/ast"), KIND_STRUCT, sizeof(Ident), _Alignof(Ident), 3,
+          burrow__methods_Ident);
+static const Type ty_notAnExpr =
+    DESCM(S_("notAnExpr"), TEST_PKG, KIND_STRUCT, sizeof(NotAnExpr),
+          _Alignof(NotAnExpr), 3, burrow__methods_NotAnExpr);
+
+static const ExprVT ident_expr_vt = {&burrow_type_Ident, no_pos, no_pos, expr_node};
+BURROW_IMPLEMENTS(Ident, Expr, ident_expr_vt);
+
+typedef struct ImplementsTest {
+    ReflectType x, t;
+    bool b;
+} ImplementsTest;
+
+/* implementsTests, whose x is the type new(x) points at, which is how Go names
+ * a type there. Go's second entry, a bytes.Buffer that does not implement
+ * io.Reader because Read is on *bytes.Buffer, is left out: a receiver here is
+ * always a pointer, so T and *T have the same methods, and bytes.Buffer
+ * records its vtable for the struct. */
+static Int implements_tests(ImplementsTest *out) {
+    ReflectType buf = reflect_pointer_to(TYPE_BYTES_BUFFER);
+    ReflectType ident = reflect_pointer_to(&burrow_type_Ident);
+    ReflectType not_an_expr = reflect_pointer_to(&ty_notAnExpr);
+    ImplementsTest tests[] = {
+        {buf, TYPE_OF(IoReader), true},
+        {buf, &ty_ReaderAt, false},
+        {ident, &burrow_type_Expr, true},
+        {not_an_expr, &burrow_type_Expr, false},
+        {ident, &ty_notASTExpr, false},
+        {&ty_notASTExpr, &burrow_type_Expr, false},
+        {&burrow_type_Expr, &ty_notASTExpr, false},
+        {not_an_expr, &ty_notASTExpr, true},
+    };
+    memcpy(out, tests, sizeof tests);
+    return NELEM(tests);
+}
+
+/* ReaderV(x) and ReadWriterV(x), here for x a new(bytes.Buffer). */
+static ReflectValue vreader(Alloc *a) {
+    IoReader *r = mk(a, TYPE_OF(IoReader));
+    *r = bytes_buffer_as_io_reader(mk(a, TYPE_BYTES_BUFFER));
+    return settable(TYPE_OF(IoReader), r);
+}
+
+static ReflectValue vread_writer(Alloc *a) {
+    IoReader r = bytes_buffer_as_io_reader(mk(a, TYPE_BYTES_BUFFER));
+    IoReadWriter *rw = mk(a, &ty_ReadWriter);
+    rw->vt = type_vtable(TYPE_BYTES_BUFFER, &ty_ReadWriter);
+    rw->data = r.data;
+    return settable(&ty_ReadWriter, rw);
+}
+
 typedef struct Op {
     Alloc *a;
     ReflectValue v;
@@ -409,6 +579,7 @@ typedef struct ConvertTest {
  * the top of Go's table, which is run here rather than pasted. */
 static Int convert_tests(Alloc *a, ConvertTest *tab) {
     Int n = 0;
+    record_read_writer();
 
     /* numbers */
     const Type *numbers[] = {
@@ -702,11 +873,13 @@ static Int convert_tests(Alloc *a, ConvertTest *tab) {
     E(vnil(&ty_BytesChanRecv), vnil(&ty_BytesChanRecv));
     E(vnil(&ty_BytesChanSend), vnil(&ty_BytesChanSend));
 
-    /* interfaces. Go's last three entries put a *bytes.Buffer into an
-     * io.Reader and an io.ReadWriter, which needs the vtable *bytes.Buffer has
-     * for each, so they are left out. */
+    /* interfaces */
+    ReflectType buf = reflect_pointer_to(TYPE_BYTES_BUFFER);
     E(vnum(a, TYPE_INT, 1), vany(a, vnum(a, TYPE_INT, 1)));
     E(vstr(a, TYPE_STRING, "hello"), vany(a, vstr(a, TYPE_STRING, "hello")));
+    E(vnew(a, buf), vreader(a));
+    E(vread_writer(a), vreader(a));
+    E(vnew(a, buf), vread_writer(a));
 #undef BISHOP
 #undef QUEEN
 #undef MONKEYS
@@ -1056,22 +1229,29 @@ NAMED(ty_IntPtr1, "IntPtr1", KIND_POINTER, void *, &burrow_type_Int, NULL, 0);
 NAMED(ty_Ch, "Ch", KIND_CHAN, void *, &burrow_type_Any, NULL, RECV);
 UNNAMED(ty_chan_any_recv, KIND_CHAN, void *, &burrow_type_Any, NULL, RECV);
 
-/* Go runs implementsTests here too. Those ask whether *bytes.Buffer, *ast.Ident
- * and a test type implement io.Reader, ast.Expr and a test interface, which
- * needs method sets, so they wait for Implements. */
+static void TestImplements(TestingT *t) {
+    ImplementsTest tests[16];
+    Int n = implements_tests(tests);
+    for (Int i = 0; i < n; i++) {
+        bool b = reflect_type_implements(tests[i].x, tests[i].t);
+        if (b != tests[i].b)
+            testing_t_errorf_v(t, "(%s).Implements(%s) = %t, want %t", ts(tests[i].x),
+                               ts(tests[i].t), b, tests[i].b);
+    }
+}
+
 static void TestAssignableTo(TestingT *t) {
-    struct {
-        ReflectType x, t;
-        bool b;
-    } tests[] = {
+    ImplementsTest tests[32] = {
         {&ty_chan_int, &ty_chan_int_recv, true},
         {&ty_chan_int_recv, &ty_chan_int, false},
         {&ty_p_int, &ty_IntPtr, true},
         {&ty_IntPtr, &ty_p_int, true},
         {&ty_IntPtr, &ty_IntPtr1, false},
         {&ty_Ch, &ty_chan_any_recv, true},
+        /* test runs implementsTests too */
     };
-    for (Int i = 0; i < NELEM(tests); i++) {
+    Int n = 6 + implements_tests(tests + 6);
+    for (Int i = 0; i < n; i++) {
         bool b = reflect_type_assignable_to(tests[i].x, tests[i].t);
         if (b != tests[i].b)
             testing_t_errorf_v(t, "(%s).AssignableTo(%s) = %t, want %t", ts(tests[i].x),
@@ -1079,8 +1259,6 @@ static void TestAssignableTo(TestingT *t) {
     }
 }
 
-/* Go's #5 puts *bytes.Buffer keys and values into a map[io.Reader]io.Writer,
- * which needs the vtables *bytes.Buffer has for the two, so it is left out. */
 static void TestImplicitMapConversion(TestingT *t) {
     Arena ar;
     Alloc *a = arena_allocator(arena_new(&ar));
@@ -1139,6 +1317,26 @@ static void TestImplicitMapConversion(TestingT *t) {
             testing_t_errorf_v(t, "#4 MapIndex(1) is not 2");
     }
     {
+        /* convert both, with non-empty interfaces */
+        ReflectValue mv =
+            reflect_make_map(a, reflect_map_of(TYPE_OF(IoReader), TYPE_OF(IoWriter)));
+        ReflectType pb = reflect_pointer_to(TYPE_BYTES_BUFFER);
+        BytesBuffer *b1 = mk(a, TYPE_BYTES_BUFFER);
+        BytesBuffer *b2 = mk(a, TYPE_BYTES_BUFFER);
+        reflect_value_set_map_index(mv, val(pb, &b1), val(pb, &b2));
+        Map *m = *(Map **)mv.ptr;
+        IoReader k = bytes_buffer_as_io_reader(b1);
+        const IoWriter *x = map_get(m, &k);
+        if (x == NULL || x->vt != bytes_buffer_as_io_writer(b2).vt || x->data != b2)
+            testing_t_errorf_v(t, "#5 after SetMapIndex(b1, b2): not b2");
+        /* Go's Elem gives back the *bytes.Buffer. An interface here holds a
+         * pointer to the value and its vtable names bytes.Buffer, so Elem
+         * gives the Buffer b2 points at. */
+        ReflectValue e = reflect_value_elem(reflect_value_map_index(mv, val(pb, &b1)));
+        if (e.ptr != b2)
+            testing_t_errorf_v(t, "#5 MapIndex(b1) is not b2");
+    }
+    {
         /* convert channel direction */
         ReflectType ct = reflect_chan_of(REFLECT_BOTH_DIR, TYPE_INT);
         ReflectValue mv = reflect_make_map(
@@ -1182,6 +1380,110 @@ static void TestImplicitMapConversion(TestingT *t) {
     arena_free(&ar);
 }
 
+static void TestImplicitSetConversion(TestingT *t) {
+    /* Assume TestImplicitMapConversion covered the basics. Just make sure
+     * conversions are being applied at all. */
+    Arena ar;
+    Alloc *a = arena_allocator(arena_new(&ar));
+    IoReader r = {NULL, NULL};
+    BytesBuffer *b = mk(a, TYPE_BYTES_BUFFER);
+    ReflectValue rv = settable(TYPE_OF(IoReader), &r);
+    reflect_value_set(rv, val(reflect_pointer_to(TYPE_BYTES_BUFFER), &b));
+    if (r.vt != bytes_buffer_as_io_reader(b).vt || r.data != b)
+        testing_t_errorf_v(t, "after Set: r does not hold b");
+    arena_free(&ar);
+}
+
+static void TestImplicitSendConversion(TestingT *t) {
+    Arena ar;
+    Alloc *a = arena_allocator(arena_new(&ar));
+    ReflectValue c =
+        reflect_make_chan(a, reflect_chan_of(REFLECT_BOTH_DIR, TYPE_OF(IoReader)), 10);
+    BytesBuffer *b = mk(a, TYPE_BYTES_BUFFER);
+    reflect_value_send(c, val(reflect_pointer_to(TYPE_BYTES_BUFFER), &b));
+    bool ok = false;
+    ReflectValue bb = reflect_value_recv(c, a, &ok);
+    const IoReader *r = bb.ptr;
+    if (!ok || r->vt != bytes_buffer_as_io_reader(b).vt || r->data != b)
+        testing_t_errorf_v(t, "Received something other than b");
+    reflect_value_close(c);
+    arena_free(&ar);
+}
+
+/* io.WriteString, func(w io.Writer, s string) (n int, err error), whose two
+ * results take a call thunk written out by hand. */
+BURROW_FUNC(WriteStringFn, Int, IoWriter w, Str s, Error *err);
+
+static Int write_string_adapter(void *env, IoWriter w, Str s, Error *err) {
+    (void)env;
+    return io_write_string(w, s, err);
+}
+
+static void write_string_call(const void *fn, void **args, void **rets) {
+    const WriteStringFn *f = fn;
+    Error err = BURROW_NO_ERROR;
+    *(Int *)rets[0] = f->f(f->env, *(IoWriter *)args[0], *(Str *)args[1], &err);
+    *(Error *)rets[1] = err;
+}
+
+static const TypeOps write_string_ops = {NULL, NULL, NULL, NULL, write_string_call};
+static const Field write_string_sig[] = {
+    {S_(""), S_(""), TYPE_OF(IoWriter), 0},
+    {S_(""), S_(""), TYPE_STRING, 1},
+    {S_(""), S_(""), TYPE_INT, 0},
+    {S_(""), S_(""), TYPE_OF(Error), 0},
+};
+static const Type ty_write_string = {
+    NONAME,
+    NONAME,
+    KIND_FUNC,
+    sizeof(Func),
+    _Alignof(Func),
+    4,
+    0,
+    write_string_sig,
+    NULL,
+    NULL,
+    NULL,
+    2,
+    0,
+    &write_string_ops,
+};
+
+static void TestImplicitCallConversion(TestingT *t) {
+    /* Arguments must be assignable to parameter types. */
+    Arena ar;
+    Alloc *a = arena_allocator(arena_new(&ar));
+    WriteStringFn fn = BURROW_FN(WriteStringFn, write_string_adapter, NULL);
+    ReflectValue fv = val(&ty_write_string, &fn);
+    StringsBuilder b = STRINGS_BUILDER(a);
+    StringsBuilder *bp = &b;
+    Str hello = BURROW_S("hello world");
+    ReflectValue in[] = {val(reflect_pointer_to(TYPE_STRINGS_BUILDER), &bp),
+                         val(TYPE_STRING, &hello)};
+    reflect_value_call(fv, a, slice_from(in, 2, 2, TYPE_REFLECT_VALUE));
+    if (!str_eq(strings_builder_string(&b), BURROW_S("hello world")))
+        testing_t_errorf_v(t, "After call: string=%q want %q",
+                           strings_builder_string(&b), "hello world");
+    arena_free(&ar);
+}
+
+static void TestImplicitAppendConversion(TestingT *t) {
+    /* Arguments must be assignable to the slice's element type. */
+    Arena ar;
+    Alloc *a = arena_allocator(arena_new(&ar));
+    Slice s = {NULL, 0, 0, TYPE_OF(IoReader)};
+    ReflectValue sv = settable(reflect_slice_of(TYPE_OF(IoReader)), &s);
+    BytesBuffer *b = mk(a, TYPE_BYTES_BUFFER);
+    ReflectValue in[] = {val(reflect_pointer_to(TYPE_BYTES_BUFFER), &b)};
+    reflect_value_set(sv,
+                      reflect_append(a, sv, slice_from(in, 1, 1, TYPE_REFLECT_VALUE)));
+    const IoReader *r = s.p;
+    if (s.len != 1 || r[0].vt != bytes_buffer_as_io_reader(b).vt || r[0].data != b)
+        testing_t_errorf_v(t, "after append: s does not hold b");
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestConvert)                                                                     \
     X(TestConvertPanic)                                                                \
@@ -1189,7 +1491,12 @@ static void TestImplicitMapConversion(TestingT *t) {
     X(TestConvertNaNs)                                                                 \
     X(TestComparable)                                                                  \
     X(TestConvertibleTo)                                                               \
+    X(TestImplements)                                                                  \
     X(TestAssignableTo)                                                                \
-    X(TestImplicitMapConversion)
+    X(TestImplicitMapConversion)                                                       \
+    X(TestImplicitSetConversion)                                                       \
+    X(TestImplicitSendConversion)                                                      \
+    X(TestImplicitCallConversion)                                                      \
+    X(TestImplicitAppendConversion)
 
 TESTING_MAIN(TESTS)

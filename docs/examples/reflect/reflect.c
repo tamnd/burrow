@@ -81,6 +81,30 @@ static Slice add_impl(void *env, Slice args) {
 }
 // doc: end
 
+// doc: iface-type
+/* An interface with Temp's one method, and Temp's vtable for it. */
+typedef struct FahrenheiterVT {
+    const Type *self_type;
+    double (*fahrenheit)(void *self);
+} FahrenheiterVT;
+
+typedef struct Fahrenheiter {
+    const FahrenheiterVT *vt;
+    void *data;
+} Fahrenheiter;
+
+#define FAHRENHEITER_METHODS(M, T) M(T, Fahrenheit, fahrenheit, TEMP_SIG_Fahrenheit)
+BURROW_IFACE_TYPE_DECL(Fahrenheiter);
+BURROW_IFACE_TYPE_DEFINE(Fahrenheiter, FAHRENHEITER_METHODS);
+
+static double temp_fahrenheit_of(void *t) {
+    return temp_fahrenheit(t);
+}
+
+static const FahrenheiterVT temp_fahrenheiter = {TYPE_OF(Temp), temp_fahrenheit_of};
+BURROW_IMPLEMENTS(Temp, Fahrenheiter, temp_fahrenheiter);
+// doc: end
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -189,6 +213,28 @@ int main(void) {
                  reflect_value_float(((ReflectValue *)out.p)[0]));
     // doc: end
 
+    // doc: iface
+    ReflectType ft = TYPE_OF(Fahrenheiter);
+    fmt_printf_v("Temp: %t, int: %t\n", reflect_type_implements(TYPE_OF(Temp), ft),
+                 reflect_type_implements(TYPE_INT, ft));
+
+    Fahrenheiter fh;
+    if (reflect_type_assert(tmv, ft, &fh))
+        fmt_printf_v("asserted, %v\n", fh.vt->fahrenheit(fh.data));
+
+    Fahrenheiter held = {0};
+    Fahrenheiter *hp = &held;
+    ReflectValue hv =
+        reflect_value_elem(reflect_value_of(BURROW_ANY(reflect_pointer_to(ft), &hp)));
+    reflect_value_set(hv, tmv);
+    ReflectValue hm = reflect_value_method(hv, a, 0);
+    out = reflect_value_call(hm, a, slice_nil(TYPE_REFLECT_VALUE));
+    fmt_printf_v("%s holds %s, method gives %v\n",
+                 reflect_type_string(reflect_value_type(hv)),
+                 reflect_type_string(reflect_value_type(reflect_value_elem(hv))),
+                 reflect_value_float(((ReflectValue *)out.p)[0]));
+    // doc: end
+
     arena_free(&ar);
     return 0;
 }
@@ -211,4 +257,7 @@ int to *int: false, []byte to [4]byte: true
 func(int, int) int returned 42
 made func returned 23
 1 method, func() float64 = 212
+Temp: true, int: false
+asserted, 212
+Fahrenheiter holds Temp, method gives 212
 */

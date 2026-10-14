@@ -243,6 +243,10 @@ static const IoReaderVT bytes_reader_reader_vt = {&bytes_reader_desc,
 static const IoSeekerVT bytes_reader_seeker_vt = {&bytes_reader_desc,
                                                   bytes_reader_io_seek};
 
+/* So that reflect can put a *bytes.Reader into an io.Reader. */
+BURROW_IMPLEMENTS_DESC(bytes_reader_reader, &bytes_reader_desc, TYPE_OF(IoReader),
+                       bytes_reader_reader_vt);
+
 IoReader bytes_reader_as_io_reader(BytesReader *r) {
     IoReader rd = {&bytes_reader_reader_vt, r};
     return rd;

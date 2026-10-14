@@ -213,7 +213,7 @@ float64 9090
 int to *int: false, []byte to [4]byte: true
 ```
 
-A conversion that is not allowed panics. So does a slice to an array that is longer than the slice, which `reflect_type_convertible_to` cannot see from the types alone, so `reflect_value_can_convert` checks the value too. Converting to an interface only works for the empty interface for now. An interface with methods is a vtable in burrow, and reflect cannot yet find the vtable a type has for one.
+A conversion that is not allowed panics. So does a slice to an array that is longer than the slice, which `reflect_type_convertible_to` cannot see from the types alone, so `reflect_value_can_convert` checks the value too. Converting to an interface with methods takes the vtable the type recorded for it, which the next sections come to.
 
 ## Calls and methods
 
@@ -297,3 +297,67 @@ made func returned 23
 ```
 
 `reflect_value_call_slice` passes the last argument of a variadic function as a slice, as `f(xs...)` does in Go, and `reflect_func_of` makes a function type at run time. A function made by `reflect_make_func`, or a method value, has no C function of the right signature behind it, so it can be called through reflect and stored where a function of its type goes, but calling it from C panics. Every receiver is a pointer in burrow, so a struct and a pointer to it have the same methods, in name order.
+
+## Interfaces
+
+An interface with methods is a vtable and a data pointer in burrow, and a vtable is C function pointers written by hand, so reflect cannot make one the way Go does. `BURROW_IMPLEMENTS(T, I, vt)` in `burrow/type.h` records the vtable a type has for an interface, and that record is what Set, Call, Convert and `reflect_type_assert` use to put a value into one. `BURROW_IFACE_TYPE_DEFINE` in `burrow/declare.h` makes an interface's descriptor from a list of its methods, spelled the way a struct's methods are, so that reflect can count them and call them on an interface value:
+
+<!-- example: ../examples/reflect/reflect.c#iface-type -->
+```c
+/* An interface with Temp's one method, and Temp's vtable for it. */
+typedef struct FahrenheiterVT {
+    const Type *self_type;
+    double (*fahrenheit)(void *self);
+} FahrenheiterVT;
+
+typedef struct Fahrenheiter {
+    const FahrenheiterVT *vt;
+    void *data;
+} Fahrenheiter;
+
+#define FAHRENHEITER_METHODS(M, T) M(T, Fahrenheit, fahrenheit, TEMP_SIG_Fahrenheit)
+BURROW_IFACE_TYPE_DECL(Fahrenheiter);
+BURROW_IFACE_TYPE_DEFINE(Fahrenheiter, FAHRENHEITER_METHODS);
+
+static double temp_fahrenheit_of(void *t) {
+    return temp_fahrenheit(t);
+}
+
+static const FahrenheiterVT temp_fahrenheiter = {TYPE_OF(Temp), temp_fahrenheit_of};
+BURROW_IMPLEMENTS(Temp, Fahrenheiter, temp_fahrenheiter);
+```
+
+Then `reflect_type_implements` answers for it, `reflect_type_assert` puts a Temp into one, and so does setting an interface variable through reflect:
+
+<!-- example: ../examples/reflect/reflect.c#iface -->
+```c
+ReflectType ft = TYPE_OF(Fahrenheiter);
+fmt_printf_v("Temp: %t, int: %t\n", reflect_type_implements(TYPE_OF(Temp), ft),
+             reflect_type_implements(TYPE_INT, ft));
+
+Fahrenheiter fh;
+if (reflect_type_assert(tmv, ft, &fh))
+    fmt_printf_v("asserted, %v\n", fh.vt->fahrenheit(fh.data));
+
+Fahrenheiter held = {0};
+Fahrenheiter *hp = &held;
+ReflectValue hv =
+    reflect_value_elem(reflect_value_of(BURROW_ANY(reflect_pointer_to(ft), &hp)));
+reflect_value_set(hv, tmv);
+ReflectValue hm = reflect_value_method(hv, a, 0);
+out = reflect_value_call(hm, a, slice_nil(TYPE_REFLECT_VALUE));
+fmt_printf_v("%s holds %s, method gives %v\n",
+             reflect_type_string(reflect_value_type(hv)),
+             reflect_type_string(reflect_value_type(reflect_value_elem(hv))),
+             reflect_value_float(((ReflectValue *)out.p)[0]));
+```
+
+That prints:
+
+```text
+Temp: true, int: false
+asserted, 212
+Fahrenheiter holds Temp, method gives 212
+```
+
+The first field of the vtable is the descriptor of the type it is for, which is how reflect tells what an interface value holds. A type that has every method an interface's descriptor lists implements it, as in Go, even with no vtable recorded, but putting a value of it into the interface panics and says which record is missing. io.Reader and io.Writer list their methods this way, and bytes.Buffer, bytes.Reader, strings.Reader, strings.Builder, bufio.Reader and bufio.Writer record their vtables for them. Every receiver is a pointer in burrow, so `T` implements whatever `*T` does, and an interface holding a pointer gives the value it points at to `reflect_value_elem`.

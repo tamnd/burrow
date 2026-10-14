@@ -516,6 +516,12 @@ static Int buffer_io_write(void *self, Slice p, Error *err) {
 static const IoReaderVT buffer_reader_vt = {&bytes_buffer_desc, buffer_io_read};
 static const IoWriterVT buffer_writer_vt = {&bytes_buffer_desc, buffer_io_write};
 
+/* So that reflect can put a *bytes.Buffer into either. */
+BURROW_IMPLEMENTS_DESC(bytes_buffer_reader, &bytes_buffer_desc, TYPE_OF(IoReader),
+                       buffer_reader_vt);
+BURROW_IMPLEMENTS_DESC(bytes_buffer_writer, &bytes_buffer_desc, TYPE_OF(IoWriter),
+                       buffer_writer_vt);
+
 IoReader bytes_buffer_as_io_reader(BytesBuffer *b) {
     IoReader r = {&buffer_reader_vt, b};
     return r;

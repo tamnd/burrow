@@ -762,7 +762,7 @@ ReflectValue reflect_value_field_by_name_func(ReflectValue v, ReflectNameMatch m
 
 /* Where the key for a map with key type kt is, for key, or a panic like Go's
  * assignTo. An interface key gets boxed into *box. */
-static const void *rf_map_key(ReflectValue key, const Type *kt, Any *box,
+static const void *rf_map_key(ReflectValue key, const Type *kt, RfBox *box,
                               const char *context) {
     /* Go's assignTo reads the type of a zero Value without looking. */
     if (key.typ == NULL)
@@ -772,7 +772,7 @@ static const void *rf_map_key(ReflectValue key, const Type *kt, Any *box,
 
 ReflectValue reflect_value_map_index(ReflectValue v, ReflectValue key) {
     rf_must_be(v, KIND_MAP, "reflect.Value.MapIndex");
-    Any box;
+    RfBox box;
     const void *k = rf_map_key(key, v.typ->key, &box, "reflect.Value.MapIndex");
     Map *m = rf_word(v.ptr);
     if (m == NULL)

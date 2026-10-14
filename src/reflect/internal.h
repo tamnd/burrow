@@ -10,6 +10,7 @@
 #include "burrow/reflect.h"
 
 #include "burrow/core.h"
+#include "burrow/iface.h"
 
 #include <stddef.h>
 
@@ -78,12 +79,32 @@ bool burrow__reflect_assignable(const Type *dst, const Type *v);
 #define BURROW__RF_ITER_ON 1
 #define BURROW__RF_ITER_DONE 2
 
+/* Room for a value put into an interface on its way to being stored, an any
+ * or an interface with methods, both of which are two words. */
+typedef union RfBox {
+    Any any;
+    Iface iface;
+} RfBox;
+
 /* Where the bytes of x are as a value of type dst, for storing them there:
  * x's own when its type is assignable to dst, and *box, filled in, when dst is
- * the empty interface. Anything else panics the way Go's assignTo does, with
- * context at the front of the message. */
-const void *burrow__reflect_assign(ReflectValue x, const Type *dst, Any *box,
+ * an interface x's type implements. Anything else panics the way Go's assignTo
+ * does, with context at the front of the message. */
+const void *burrow__reflect_assign(ReflectValue x, const Type *dst, RfBox *box,
                                    const char *context);
+
+/* Whether a value of type t goes into the interface u, Go's implements: always
+ * for the empty interface, when a vtable for t as u was recorded, and when u
+ * lists its methods and t has every one of them. */
+bool burrow__reflect_implements(const Type *u, const Type *t);
+
+/* The value at p, of type t, as the interface u with methods, in *out. That
+ * takes the vtable recorded for t, or for what t points at when t is an
+ * unnamed pointer. An interface t gives what it holds, and a nil one gives a
+ * nil u. With no vtable to use, it panics, with context at the front of the
+ * message. */
+void burrow__reflect_to_iface(const Type *u, const Type *t, void *p, Iface *out,
+                              const char *context);
 
 /* At least size bytes of zeros, which nothing may write, for Zero to point at.
  * They last the program. */

@@ -184,6 +184,11 @@ global	src/runtime/registry.c	registry_lock	type-registry	The reader writer lock
 global	src/runtime/registry.c	registry_slots	type-registry	The table. Written under registry_lock when it is built and when it grows, read under it the rest of the time.
 global	src/runtime/registry.c	registry_cap	type-registry	How many slots there are, always a power of two. Same lock as the table it describes, because the two have to change together.
 global	src/runtime/registry.c	registry_len	type-registry	How many of the slots are taken. Same lock, same reason.
+global	src/runtime/impl.c	impl_once	type-registry	Guards the one read of the implements section that builds the table, as registry_once does for the types.
+global	src/runtime/impl.c	impl_lock	type-registry	The reader writer lock over the three fields below. Read on every type_vtable, taken for writing only by type_register_impl.
+global	src/runtime/impl.c	impl_slots	type-registry	The table of implements records. Written when it is built, under impl_once, and when it grows, under impl_lock. Read under impl_lock.
+global	src/runtime/impl.c	impl_cap	type-registry	How many slots there are, always a power of two. Same lock as the table, because the two change together.
+global	src/runtime/impl.c	impl_len	type-registry	How many of the slots are taken. Same lock, same reason.
 global	src/pal/machine_posix.c	cached_page	machine	Relaxed atomic, and the race is benign by construction. Two threads arriving together both ask the system, both get the same number, and both write it. There is nothing published alongside it, so there is nothing for a release store to order.
 global	src/pal/machine_windows.c	cached_page	machine	The Windows half of cached_page above, with the same reasoning.
 global	src/pal/cpu.c	cached_features	machine	Relaxed atomic, like cached_page. The processor and GODEBUG give every thread the same answer, so two threads that both work it out write the same value.

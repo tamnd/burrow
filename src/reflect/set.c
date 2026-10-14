@@ -106,21 +106,24 @@ static void rfs_store_uint(void *p, uint32_t size, uint64_t x) {
     }
 }
 
-const void *burrow__reflect_assign(ReflectValue x, const Type *dst, Any *box,
+const void *burrow__reflect_assign(ReflectValue x, const Type *dst, RfBox *box,
                                    const char *context) {
     if (burrow__reflect_assignable(dst, x.typ))
         return x.ptr;
-    /* Only the empty interface for now: one with methods needs the method
-     * table of x's type, which comes with Implements. The empty interface is
-     * Any, the one interface whose first word is a Type rather than a vtable. */
-    if (dst == TYPE_ANY) {
-        const Type *t = x.typ;
-        void *p = x.ptr;
-        if (t->kind == KIND_INTERFACE && !burrow__reflect_unwrap(&t, &p))
-            *box = (Any){NULL, NULL};
-        else
-            *box = BURROW_ANY(t, p);
-        return box;
+    if (dst->kind == KIND_INTERFACE && burrow__reflect_implements(dst, x.typ)) {
+        /* The empty interface is Any, the one interface whose first word is
+         * a Type rather than a vtable. */
+        if (dst == TYPE_ANY) {
+            const Type *t = x.typ;
+            void *p = x.ptr;
+            if (t->kind == KIND_INTERFACE && !burrow__reflect_unwrap(&t, &p))
+                box->any = (Any){NULL, NULL};
+            else
+                box->any = BURROW_ANY(t, p);
+            return &box->any;
+        }
+        burrow__reflect_to_iface(dst, x.typ, x.ptr, &box->iface, context);
+        return &box->iface;
     }
     Str a = burrow__reflect_concat(str_from_cstr(context), BURROW_S(": value of type "),
                                    reflect_type_string(x.typ));
@@ -171,7 +174,7 @@ ReflectValue reflect_value_addr(ReflectValue v, Alloc *a) {
 void reflect_value_set(ReflectValue v, ReflectValue x) {
     rfs_must_be_assignable(v, "reflect.Value.Set");
     rfs_must_be_exported(x, "reflect.Value.Set");
-    Any box;
+    RfBox box;
     const void *src = burrow__reflect_assign(x, v.typ, &box, "reflect.Set");
     rfs_copy(v.typ, v.ptr, src);
 }
@@ -297,7 +300,7 @@ void reflect_value_set_map_index(ReflectValue v, ReflectValue key, ReflectValue 
     rfs_must_be(v, KIND_MAP, "reflect.Value.SetMapIndex");
     rfs_must_be_exported(v, "reflect.Value.SetMapIndex");
     rfs_must_be_exported(key, "reflect.Value.SetMapIndex");
-    Any kbox;
+    RfBox kbox;
     const void *k =
         burrow__reflect_assign(key, v.typ->key, &kbox, "reflect.Value.SetMapIndex");
     Map *m = rfs_word(v.ptr);
@@ -307,7 +310,7 @@ void reflect_value_set_map_index(ReflectValue v, ReflectValue key, ReflectValue 
         return;
     }
     rfs_must_be_exported(elem, "reflect.Value.SetMapIndex");
-    Any ebox;
+    RfBox ebox;
     const void *e =
         burrow__reflect_assign(elem, v.typ->elem, &ebox, "reflect.Value.SetMapIndex");
     if (!map_set(m, k, e))
@@ -330,7 +333,7 @@ void reflect_value_set_iter_key(ReflectValue v, ReflectMapIter *it) {
     rfs_must_be_assignable(v, "reflect.Value.SetIterKey");
     rfs_must_be_exported(it->m, "reflect.Value.SetIterKey");
     ReflectValue k = rfs_make(it->m.typ->key, it->key, BURROW__RF_RO_OF(it->m));
-    Any box;
+    RfBox box;
     const void *src = burrow__reflect_assign(k, v.typ, &box, "reflect.MapIter.SetKey");
     rfs_copy(v.typ, v.ptr, src);
 }
@@ -340,7 +343,7 @@ void reflect_value_set_iter_value(ReflectValue v, ReflectMapIter *it) {
     rfs_must_be_assignable(v, "reflect.Value.SetIterValue");
     rfs_must_be_exported(it->m, "reflect.Value.SetIterValue");
     ReflectValue e = rfs_make(it->m.typ->elem, it->val, BURROW__RF_RO_OF(it->m));
-    Any box;
+    RfBox box;
     const void *src =
         burrow__reflect_assign(e, v.typ, &box, "reflect.MapIter.SetValue");
     rfs_copy(v.typ, v.ptr, src);
@@ -616,7 +619,7 @@ static bool rfs_send(ReflectValue v, ReflectValue x, bool nb, const char *method
     if (!(reflect_type_chan_dir(v.typ) & REFLECT_SEND_DIR))
         panic_str(BURROW_S("reflect: send on recv-only channel"));
     rfs_must_be_exported(x, method);
-    Any box;
+    RfBox box;
     const void *p = burrow__reflect_assign(x, v.typ->elem, &box, "reflect.Value.Send");
     Chan *c = rfs_word(v.ptr);
     if (nb)

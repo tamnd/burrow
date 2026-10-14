@@ -437,6 +437,14 @@ The order still matters, because it is the order a caller enumerating a type's
 methods sees. `type_methods_sorted` is there for a type's own test to say out
 loud that its list is in Go's order.
 
+### Interfaces with methods
+
+An interface with methods is a vtable pointer and a data pointer, and the vtable is a struct of C function pointers with the interface's own signatures. Go makes the table an interface value needs when it compiles the conversion, and reflect makes one from the method set at run time when it has to. C can do neither, since nothing can write a function of a given C signature while the program runs. So a vtable is written by hand, and `BURROW_IMPLEMENTS(T, I, vt)` records it. The records go into a linker section, the same way `BURROW_REGISTER_TYPE` records names, and `type_vtable(t, i)` finds one. `type_register_impl` does the same at run time, for a module loaded after startup.
+
+`Implements` says yes for a recorded vtable, and also for a type that has every method the interface's descriptor lists, with the same types, as Go would. `BURROW_IFACE_TYPE_DEFINE` makes a descriptor that lists them, with a thunk for each method that calls through the vtable, which is how `Value.Method` on an interface value works. Putting a value into an interface, through Set, Call, Convert, a channel send or `TypeAssert`, always takes the recorded vtable, so a type with the methods and no record implements the interface and still panics when it goes in, with a message naming the record it lacks.
+
+The first word of every vtable is the descriptor of the type it is for. That is how reflect finds what an interface value holds without a type word in the value. A sentinel error's table has `NULL` there, so a value holding one stays of its interface type. Since every receiver is a pointer, an interface holding a `*T` unwraps to the `T` it points at, and `Elem` gives the struct rather than the pointer.
+
 ### What is still not covered
 
 `reflect.MakeFunc`, which synthesises a function pointer with an arbitrary

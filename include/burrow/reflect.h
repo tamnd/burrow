@@ -190,11 +190,26 @@ bool reflect_type_comparable(ReflectType t);
  * ConvertibleTo: whether Convert takes a value of type t to a u, though for a
  * slice to an array it can still panic on a short slice. Both panic on a nil u.
  *
- * Every type goes into the empty interface. An interface with methods takes
- * only values of its own type for now, since telling whether t implements it
- * needs method sets that reflect does not have yet. */
+ * Every type goes into the empty interface, and a type goes into an interface
+ * with methods when it implements it, as Implements says below. */
 bool reflect_type_assignable_to(ReflectType t, ReflectType u);
 bool reflect_type_convertible_to(ReflectType t, ReflectType u);
+
+/* Implements: whether t implements the interface u. It panics on a nil u and
+ * on a u that is not an interface.
+ *
+ * Every type implements the empty interface. For one with methods, t does when
+ * a vtable for it was recorded with BURROW_IMPLEMENTS, which type.h describes,
+ * and when u's descriptor lists its methods, as BURROW_IFACE_TYPE_DEFINE makes
+ * it do, and t has all of them. Putting a value into an interface takes the
+ * recorded vtable, so a type that has the methods and no vtable implements u
+ * and still cannot go into one, and Set or Call panics saying so. Of the
+ * library's interfaces only io.Reader and io.Writer list their methods so far,
+ * so for the rest only a recorded vtable counts.
+ *
+ * A receiver here is always a pointer, so T implements whatever *T does, where
+ * in Go a method with a pointer receiver leaves T out. */
+bool reflect_type_implements(ReflectType t, ReflectType u);
 ReflectChanDir reflect_type_chan_dir(ReflectType t);
 
 /* Elem works for arrays, channels, maps, pointers and slices, and Key for
@@ -238,8 +253,9 @@ BURROW_STATIC(ret) ReflectType reflect_type_in(ReflectType t, Int i);
 BURROW_STATIC(ret) ReflectType reflect_type_out(ReflectType t, Int i);
 bool reflect_type_is_variadic(ReflectType t);
 
-/* NumMethod counts exported methods, which is what Go counts. Methods and
- * the rest of what goes with them are with the values, below. */
+/* NumMethod counts exported methods, which is what Go counts, and for an
+ * interface type every method its descriptor lists. Methods and the rest of
+ * what goes with them are with the values, below. */
 Int reflect_type_num_method(ReflectType t);
 
 /* Whether x fits in the type, which has to be a number type of that family. */
@@ -290,7 +306,12 @@ typedef struct ReflectValue {
 /* Method: one method of a type. The type is the method's with the receiver as
  * its first parameter, and func is a function of that type, which reflect can
  * call and C cannot. index is the method's place among the type's exported
- * methods. */
+ * methods.
+ *
+ * A method of an interface type has no receiver to take, so its type is the
+ * method's own and func is the zero Value, as in Go. An interface's methods
+ * are all of the ones its descriptor lists, unexported ones too, and pkg_path
+ * is set for those. */
 typedef struct ReflectMethod {
     Str name;
     Str pkg_path;
@@ -308,8 +329,9 @@ bool reflect_method_is_exported(ReflectMethod m);
  * A receiver in burrow is always a pointer, so a type's methods are the ones
  * Go would give both T and *T, and a pointer made by PointerTo has the
  * methods of the type it points at. Method panics for an index out of range,
- * and MethodByName returns false when there is no such exported method. The
- * func of either is kept for as long as the program runs. */
+ * except on an interface type, where it gives the zero Method as Go's does,
+ * and MethodByName returns false when there is no such method. The func of
+ * either is kept for as long as the program runs. */
 ReflectMethod reflect_type_method(ReflectType t, Int i);
 bool reflect_type_method_by_name(ReflectType t, Str name, ReflectMethod *m);
 
@@ -363,6 +385,18 @@ bool reflect_value_can_interface(ReflectValue v);
 /* Interface: the value as an Any. It points at the value rather than copying
  * it. An interface value comes back as what it holds. */
 BURROW_BORROWS(ret, v) Any reflect_value_interface(ReflectValue v);
+
+/* TypeAssert: v as a value of type t in out, which has room for one, and
+ * true, or the zero t in out and false. Go's TypeAssert[T](v), which is
+ * v.Interface().(T) without the interface in the middle.
+ *
+ * An interface v asserts what it holds, so a nil one gives false. An interface
+ * t takes any value whose type implements it, and an interface with methods
+ * takes it with the vtable recorded for that type, as Implements says above.
+ * An interface put into out points at v's value rather than holding a copy,
+ * the way Interface's Any does. It panics on the zero Value and on one that
+ * came out of an unexported field. */
+bool reflect_type_assert(ReflectValue v, ReflectType t, void *out);
 
 /* InterfaceData, which Go deprecated: the two words of an interface value. */
 typedef struct ReflectInterfaceData {
@@ -439,7 +473,11 @@ Int reflect_value_num_method(ReflectValue v);
 /* Method and MethodByName: v's method bound to v, as a function value made in
  * a, which takes the method's own parameters. The receiver is v's pointer,
  * not a copy, so v has to outlive the method value. MethodByName gives the
- * zero Value when there is no such method. */
+ * zero Value when there is no such method.
+ *
+ * For an interface value it is the method of what the interface holds, called
+ * through its vtable, and Method panics on a nil one. Calling one of an
+ * interface's unexported methods panics too. */
 BURROW_OWNS(ret) BURROW_BORROWS(ret, v) ReflectValue
 reflect_value_method(ReflectValue v, Alloc *a, Int i);
 BURROW_OWNS(ret) BURROW_BORROWS(ret, v) ReflectValue

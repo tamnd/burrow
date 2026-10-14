@@ -113,8 +113,10 @@ void burrow__http_godebug_set(const char *value);
  * net/http/internal's chunked encoding, the wire format of a body sent with
  * Transfer-Encoding: chunked. */
 
-/* internal.ErrLineTooLong, "header line too long". */
+/* internal.ErrLineTooLong, "header line too long", and its text, which
+ * httputil_err_line_too_long points at too. */
 extern const Error burrow__http_err_line_too_long;
+extern const Str burrow__http_line_too_long_text;
 
 /* parseHexUint. A chunk's size from its hex digits, at most 16 of them. */
 uint64_t burrow__http_parse_hex_uint(Slice v, Error *err);

@@ -4,7 +4,21 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API, and none of it has been through a security review yet.
 
-## v0.2.4 (2026-10-19)
+## v0.2.5 (2026-10-14)
+
+All of reflect, and text/template on top of it.
+
+### Added
+
+- `reflect`: types, the Value read side and `DeepEqual` (#481), the setters, the makers and the type constructors (#483), `Convert`, `CanConvert`, `ConvertibleTo` and `AssignableTo` (#484), `Call`, `MakeFunc`, `FuncOf` and method sets (#485), `Implements`, `TypeAssert` and interfaces with methods (#486), `StructOf` (#487), and `Select`, `SliceAt`, `TypeFor` and the iterators over fields and methods (#488).
+- `text/template` (#489), with Go's exec and multi tests and all eight of its examples. A descriptor signature can now end in `OUT(ErrorResult)` for Go's `(T, error)`.
+
+### Fixed
+
+- `text/template/parse` includes its package header first, which the amalgamation needs (#482).
+- The v0.2.4 entry below had the wrong date.
+
+## v0.2.4 (2026-10-14)
 
 net/http with HTTP/2, the rest of net, net/rpc and net/smtp, more of crypto up to x509, expvar and database/sql, and the first two pieces of the template packages.
 

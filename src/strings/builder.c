@@ -167,6 +167,10 @@ static Int builder_io_write(void *self, Slice p, Error *err) {
 
 static const IoWriterVT builder_writer_vt = {&builder_desc, builder_io_write};
 
+/* So that reflect can put a *strings.Builder into an io.Writer. */
+BURROW_IMPLEMENTS_DESC(strings_builder_writer, &builder_desc, TYPE_OF(IoWriter),
+                       builder_writer_vt);
+
 IoWriter strings_builder_as_io_writer(StringsBuilder *b) {
     IoWriter w = {&builder_writer_vt, b};
     return w;

@@ -299,6 +299,41 @@ static ReflectChanDir rf_chan_dir(const Type *t) {
     return t->len == 0 ? REFLECT_BOTH_DIR : (ReflectChanDir)t->len;
 }
 
+static void rf_write_type(RfBuf *b, const Type *t);
+
+/* A function type's parameters and results, what follows func in its String
+ * and a method's name in an interface's. */
+static void rf_write_sig(RfBuf *b, const Type *t) {
+    Int nin = type_num_in(t);
+    Int nout = type_num_out(t);
+    bool variadic = t->elem != NULL;
+    rfb_cstr(b, "(");
+    for (Int i = 0; i < nin; i++) {
+        const Type *in = type_in(t, i);
+        if (i > 0)
+            rfb_cstr(b, ", ");
+        if (variadic && i == nin - 1 && in != NULL && in->kind == KIND_SLICE) {
+            rfb_cstr(b, "...");
+            rf_write_type(b, in->elem);
+        } else {
+            rf_write_type(b, in);
+        }
+    }
+    rfb_cstr(b, ")");
+    if (nout == 1) {
+        rfb_cstr(b, " ");
+        rf_write_type(b, type_out(t, 0));
+    } else if (nout > 1) {
+        rfb_cstr(b, " (");
+        for (Int i = 0; i < nout; i++) {
+            if (i > 0)
+                rfb_cstr(b, ", ");
+            rf_write_type(b, type_out(t, i));
+        }
+        rfb_cstr(b, ")");
+    }
+}
+
 static void rf_write_type(RfBuf *b, const Type *t) {
     if (t == NULL) {
         rfb_cstr(b, "<nil>");
@@ -356,37 +391,10 @@ static void rf_write_type(RfBuf *b, const Type *t) {
             rfb_cstr(b, ")");
         return;
     }
-    case KIND_FUNC: {
-        Int nin = type_num_in(t);
-        Int nout = type_num_out(t);
-        bool variadic = t->elem != NULL;
-        rfb_cstr(b, "func(");
-        for (Int i = 0; i < nin; i++) {
-            const Type *in = type_in(t, i);
-            if (i > 0)
-                rfb_cstr(b, ", ");
-            if (variadic && i == nin - 1 && in != NULL && in->kind == KIND_SLICE) {
-                rfb_cstr(b, "...");
-                rf_write_type(b, in->elem);
-            } else {
-                rf_write_type(b, in);
-            }
-        }
-        rfb_cstr(b, ")");
-        if (nout == 1) {
-            rfb_cstr(b, " ");
-            rf_write_type(b, type_out(t, 0));
-        } else if (nout > 1) {
-            rfb_cstr(b, " (");
-            for (Int i = 0; i < nout; i++) {
-                if (i > 0)
-                    rfb_cstr(b, ", ");
-                rf_write_type(b, type_out(t, i));
-            }
-            rfb_cstr(b, ")");
-        }
+    case KIND_FUNC:
+        rfb_cstr(b, "func");
+        rf_write_sig(b, t);
         return;
-    }
     case KIND_STRUCT:
         if (t->nfield == 0) {
             rfb_cstr(b, "struct {}");
@@ -417,7 +425,17 @@ static void rf_write_type(RfBuf *b, const Type *t) {
         rfb_cstr(b, " }");
         return;
     case KIND_INTERFACE:
-        rfb_cstr(b, "interface {}");
+        if (t->nmethod == 0 || t->methods == NULL) {
+            rfb_cstr(b, "interface {}");
+            return;
+        }
+        rfb_cstr(b, "interface {");
+        for (uint16_t i = 0; i < t->nmethod; i++) {
+            rfb_cstr(b, i > 0 ? "; " : " ");
+            rfb_str(b, t->methods[i].name);
+            rf_write_sig(b, t->methods[i].ftype);
+        }
+        rfb_cstr(b, " }");
         return;
     default:
         rfb_str(b, kind_name(t->kind));
@@ -576,6 +594,10 @@ bool burrow__reflect_exported(Str name) {
 Int reflect_type_num_method(ReflectType t) {
     uint16_t nm;
     const Method *ms = burrow__reflect_method_set(t, &nm);
+    /* An interface's count takes in its unexported methods too, as Go's
+     * does. */
+    if (t->kind == KIND_INTERFACE)
+        return nm;
     Int n = 0;
     for (uint16_t i = 0; i < nm; i++)
         if (burrow__reflect_exported(ms[i].name))
@@ -791,12 +813,24 @@ static bool rf_identical(const Type *t, const Type *u, bool under, bool tags) {
         }
         return true;
     case KIND_INTERFACE:
-        /* Only through the descriptor, which the first test above has
-         * already tried. The empty interface is the one descriptor TYPE_ANY,
-         * and the others are vtable interfaces whose descriptors do not list
-         * their methods, so two of them cannot be told apart from two
-         * different interfaces. */
-        return false;
+        /* Two that list their methods are the same when the lists are. One
+         * that does not, a library interface or TYPE_ANY, is only itself,
+         * which the first test above has already tried, since nothing tells
+         * it apart from a different interface that does not list them
+         * either. */
+        if (t->nmethod == 0 || u->nmethod == 0 || t->methods == NULL ||
+            u->methods == NULL || t->nmethod != u->nmethod)
+            return false;
+        for (uint16_t i = 0; i < t->nmethod; i++) {
+            const Method *m = &t->methods[i];
+            const Method *n = &u->methods[i];
+            if (!str_eq(m->name, n->name) ||
+                !rf_identical(m->ftype, n->ftype, false, tags))
+                return false;
+            if (!burrow__reflect_exported(m->name) && !str_eq(t->pkg_path, u->pkg_path))
+                return false;
+        }
+        return true;
     default:
         /* The rest are the predeclared kinds, where the kind is the
          * underlying type. */

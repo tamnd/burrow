@@ -502,7 +502,7 @@ extern "C" {
  * there because a method with no parameters and no result is an ordinary thing
  * to want, Close being the obvious one, and an empty initialiser list is not
  * legal C. The field count below subtracts it. */
-#define BURROW__METHOD_DEFS(T, mname, fn, SIG)                                         \
+#define BURROW__METHOD_FTYPE(T, mname, SIG)                                            \
     static const Field burrow__sig_##T##_##mname[] = {                                 \
         SIG(BURROW__SIG_IN_FIELD, BURROW__SIG_OUT_FIELD){BURROW_S_INIT(""),            \
                                                          BURROW_S_INIT(""), NULL, 0},  \
@@ -527,7 +527,10 @@ extern "C" {
         (uint32_t)burrow__nin_##T##_##mname,                                           \
         0,                                                                             \
         NULL,                                                                          \
-    };                                                                                 \
+    };
+
+#define BURROW__METHOD_DEFS(T, mname, fn, SIG)                                         \
+    BURROW__METHOD_FTYPE(T, mname, SIG)                                                \
     static void burrow__thunk_##T##_##mname(void *recv, void **args, void **rets) {    \
         (void)args;                                                                    \
         (void)rets;                                                                    \
@@ -571,6 +574,66 @@ extern "C" {
         (uint16_t)(sizeof burrow__methods_##T / sizeof burrow__methods_##T[0]),        \
         burrow__fields_##T,                                                            \
         burrow__methods_##T,                                                           \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+    }
+
+/* -------------------------------------------------------------- interfaces
+ *
+ * A descriptor for an interface with methods that lists them, which is what
+ * lets reflect tell whether a type implements it and call a method on a value
+ * held in one:
+ *
+ *     typedef struct ShapeVT {
+ *         const Type *self_type;
+ *         double (*area)(void *self);
+ *     } ShapeVT;
+ *     typedef struct Shape {
+ *         const ShapeVT *vt;
+ *         void *data;
+ *     } Shape;
+ *
+ *     #define SHAPE_SIG_Area(IN, OUT) OUT(double)
+ *     #define SHAPE_METHODS(M, T) M(T, Area, area, SHAPE_SIG_Area)
+ *     BURROW_IFACE_TYPE_DEFINE(Shape, SHAPE_METHODS);
+ *
+ * The list is the one a struct's methods take, with the vtable member where the
+ * function went. A member of an embedded vtable is written as a path, so
+ * io.ReadWriter's Read would be reader.read. Each method gets a thunk that calls
+ * through the vtable of the interface value it is handed, so calling one through
+ * reflect reaches the method of whatever the value holds.
+ *
+ * Name order again, which is the order Go's reflect gives an interface's methods
+ * in too, whatever order the source declared them in. */
+#define BURROW__IFACE_METHOD_DEFS(I, mname, member, SIG)                               \
+    BURROW__METHOD_FTYPE(I, mname, SIG)                                                \
+    static void burrow__thunk_##I##_##mname(void *recv, void **args, void **rets) {    \
+        const I *burrow__i = (const I *)recv;                                          \
+        (void)args;                                                                    \
+        (void)rets;                                                                    \
+        SIG(BURROW__SIG_SKIP2, BURROW__SIG_STORE)                                      \
+        burrow__i->vt->member(                                                         \
+            burrow__i->data SIG(BURROW__SIG_PASS, BURROW__SIG_SKIP1));                 \
+    }
+
+#define BURROW_IFACE_TYPE_DECL(I) extern const Type burrow_type_##I
+
+#define BURROW_IFACE_TYPE_DEFINE(I, METHODS)                                           \
+    METHODS(BURROW__IFACE_METHOD_DEFS, I)                                              \
+    static const Method burrow__methods_##I[] = {METHODS(BURROW__METHOD_ENTRY, I)};    \
+    const Type burrow_type_##I = {                                                     \
+        BURROW_S_INIT(#I),                                                             \
+        {NULL, 0},                                                                     \
+        KIND_INTERFACE,                                                                \
+        (uint32_t)sizeof(I),                                                           \
+        (uint16_t)_Alignof(I),                                                         \
+        0,                                                                             \
+        (uint16_t)(sizeof burrow__methods_##I / sizeof burrow__methods_##I[0]),        \
+        NULL,                                                                          \
+        burrow__methods_##I,                                                           \
         NULL,                                                                          \
         NULL,                                                                          \
         0,                                                                             \

@@ -84,16 +84,28 @@ static void rfn_invoke(const Type *ft, const void *fn, void **args, void **rets)
     ft->ops->call(fn, args, rets);
 }
 
-/* A method value: the method and the receiver it was taken from. */
+/* A method value: the method and the receiver it was taken from. iface says
+ * the receiver is an interface value, whose method goes through its vtable. */
 typedef struct RfnMethodValue {
     RfnClosure c;
     const Method *m;
     void *recv;
+    bool iface;
     Func fn;
 } RfnMethodValue;
 
 static void rfn_method_value_call(const RfnClosure *c, void **args, void **rets) {
     const RfnMethodValue *mv = (const RfnMethodValue *)c;
+    /* Go's methodReceiver, which checks these when the call is made rather
+     * than when the method value is. */
+    if (mv->iface) {
+        if (!burrow__reflect_exported(mv->m->name))
+            panic_str(BURROW_S("reflect: Call of unexported method"));
+        Iface i;
+        memcpy(&i, mv->recv, sizeof i);
+        if (i.vt == NULL)
+            panic_str(BURROW_S("reflect: Call of method on nil interface value"));
+    }
     mv->m->thunk(mv->recv, args, rets);
 }
 
@@ -127,12 +139,18 @@ static const Type *rfn_out(const Type *ft, Int i) {
 
 /* ------------------------------------------------------------------ methods */
 
-/* The i'th exported method in t's method set, counting from zero, or NULL. */
+/* Whether the method called name is one Method and NumMethod count: an
+ * exported one, or any method of an interface, as in Go. */
+static bool rfn_counts(const Type *t, Str name) {
+    return t->kind == KIND_INTERFACE || burrow__reflect_exported(name);
+}
+
+/* The i'th counted method in t's method set, counting from zero, or NULL. */
 static const Method *rfn_method(const Type *t, Int i) {
     uint16_t n;
     const Method *ms = burrow__reflect_method_set(t, &n);
     for (uint16_t j = 0; j < n; j++) {
-        if (!burrow__reflect_exported(ms[j].name))
+        if (!rfn_counts(t, ms[j].name))
             continue;
         if (i-- == 0)
             return &ms[j];
@@ -140,13 +158,13 @@ static const Method *rfn_method(const Type *t, Int i) {
     return NULL;
 }
 
-/* Where the exported method called name is among t's exported methods, or -1. */
+/* Where the counted method called name is among t's counted methods, or -1. */
 static Int rfn_method_index(const Type *t, Str name) {
     uint16_t n;
     const Method *ms = burrow__reflect_method_set(t, &n);
     Int k = 0;
     for (uint16_t j = 0; j < n; j++) {
-        if (!burrow__reflect_exported(ms[j].name))
+        if (!rfn_counts(t, ms[j].name))
             continue;
         if (str_eq(ms[j].name, name))
             return k;
@@ -201,7 +219,23 @@ static bool rfn_method_func_init(void *p, Alloc *a, const void *ctx) {
     return true;
 }
 
+/* Go's interfaceType.Method: the method with no receiver and no Func, and the
+ * zero Method for an index out of range. An unexported one has the
+ * interface's package path. */
+static ReflectMethod rfn_iface_method(const Type *t, Int i) {
+    const Method *m = i < 0 ? NULL : rfn_method(t, i);
+    if (m == NULL)
+        return (ReflectMethod){0};
+    Str pkg = BURROW_STR_EMPTY;
+    if (!burrow__reflect_exported(m->name))
+        pkg = t->pkg_path.len > 0 ? t->pkg_path : BURROW_S("main");
+    return (ReflectMethod){
+        m->name, pkg, rfn_func_type(NULL, m->ftype), {NULL, NULL, 0}, i};
+}
+
 ReflectMethod reflect_type_method(ReflectType t, Int i) {
+    if (t->kind == KIND_INTERFACE)
+        return rfn_iface_method(t, i);
     const Method *m = i < 0 ? NULL : rfn_method(t, i);
     if (m == NULL)
         panic_str(BURROW_S("reflect: Method index out of range"));
@@ -236,12 +270,22 @@ ReflectValue reflect_value_method(ReflectValue v, Alloc *a, Int i) {
         m = rfn_method(v.typ, i);
     if (m == NULL)
         panic_str(BURROW_S("reflect: Method index out of range"));
+    bool iface = v.typ->kind == KIND_INTERFACE;
+    if (iface) {
+        Iface x;
+        memcpy(&x, v.ptr, sizeof x);
+        if (x.vt == NULL)
+            panic_str(BURROW_S("reflect: Method on nil interface value"));
+    }
     RfnMethodValue *mv = rfn_alloc(a, sizeof *mv, _Alignof(RfnMethodValue));
     mv->c.call = rfn_method_value_call;
     mv->m = m;
     /* A method's own type answers the method set, and then the receiver is the
-     * value. Otherwise v is a pointer borrowing its element's methods. */
+     * value, which for an interface is the interface value the method's thunk
+     * calls through. Otherwise v is a pointer borrowing its element's
+     * methods. */
     mv->recv = v.typ->nmethod > 0 ? v.ptr : rfn_word(v.ptr);
+    mv->iface = iface;
     mv->fn = (Func){rfn_marker, &mv->c};
     return (ReflectValue){rfn_func_type(NULL, m->ftype), &mv->fn,
                           BURROW__RF_RO_OF(v) | BURROW__RF_METHOD};
@@ -334,12 +378,12 @@ static Slice rfn_call(ReflectValue v, Alloc *a, Slice in, bool is_slice) {
 
     Int nin = type_num_in(ft);
     void *argv_small[16];
-    Any box_small[16];
+    RfBox box_small[16];
     void **argv = argv_small;
-    Any *box = box_small;
+    RfBox *box = box_small;
     if (nin > 16) {
         argv = rfn_alloc(a, (size_t)nin * sizeof(void *), _Alignof(void *));
-        box = rfn_alloc(a, (size_t)nin * sizeof(Any), _Alignof(Any));
+        box = rfn_alloc(a, (size_t)nin * sizeof(RfBox), _Alignof(RfBox));
     }
     for (Int i = 0; i < n; i++) {
         rfn_must_be_exported(xs[i], method);
@@ -365,7 +409,7 @@ static Slice rfn_call(ReflectValue v, Alloc *a, Slice in, bool is_slice) {
                 burrow__reflect_panic(s, ops, BURROW_STR_EMPTY);
             }
             rfn_must_be_exported(x, method);
-            Any b;
+            RfBox b;
             const void *p = burrow__reflect_assign(x, elem, &b, "reflect.Set");
             type_copy(elem, (Byte *)rest.p + (size_t)i * elem->size, p);
         }
@@ -450,7 +494,7 @@ static void rfn_make_func_call(const RfnClosure *c, void **args, void **rets) {
             rfn_bad_result("returned value obtained from unexported field");
         if (t->size == 0)
             continue;
-        Any box;
+        RfBox box;
         const void *p = burrow__reflect_assign(v, t, &box, "reflect.MakeFunc");
         type_copy(t, rets[i], p);
     }

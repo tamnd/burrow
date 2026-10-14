@@ -99,6 +99,10 @@ static Int bufio_reader_io_read(void *self, Slice p, Error *err) {
 static const IoReaderVT bufio_reader_reader_vt = {&bufio_reader_desc,
                                                   bufio_reader_io_read};
 
+/* So that reflect can put a *bufio.Reader into an io.Reader. */
+BURROW_IMPLEMENTS_DESC(bufio_reader_reader, &bufio_reader_desc, TYPE_OF(IoReader),
+                       bufio_reader_reader_vt);
+
 static void bufio_reader_init(BufioReader *b, Byte *buf, Int size, IoReader r) {
     b->buf = buf;
     b->size = size;
@@ -701,6 +705,10 @@ static Int bufio_writer_io_write(void *self, Slice p, Error *err) {
 
 static const IoWriterVT bufio_writer_writer_vt = {&bufio_writer_desc,
                                                   bufio_writer_io_write};
+
+/* So that reflect can put a *bufio.Writer into an io.Writer. */
+BURROW_IMPLEMENTS_DESC(bufio_writer_writer, &bufio_writer_desc, TYPE_OF(IoWriter),
+                       bufio_writer_writer_vt);
 
 BufioWriter *bufio_new_writer_size(Alloc *a, IoWriter w, Int size) {
     /* Is it already a Writer? */

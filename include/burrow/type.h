@@ -699,25 +699,25 @@ typedef struct TypeImpl {
 #endif
 
 #if defined(BURROW__IMPL_SECTION)
-#define BURROW__IMPL_SECTION_ENTRY(T, I, vt)                                           \
-    static const TypeImpl burrow__impl_##T##_##I = {TYPE_OF(T), TYPE_OF(I), &(vt)};    \
-    BURROW__IMPL_SECTION static const TypeImpl *const burrow__implref_##T##_##I =      \
-        &burrow__impl_##T##_##I
+#define BURROW__IMPL_SECTION_ENTRY(id, t, i, vt)                                       \
+    static const TypeImpl burrow__impl_##id = {t, i, &(vt)};                           \
+    BURROW__IMPL_SECTION static const TypeImpl *const burrow__implref_##id =           \
+        &burrow__impl_##id
 #elif defined(_MSC_VER)
 /* Not static, for the reason given at BURROW__TYPE_SECTION_ENTRY. */
-#define BURROW__IMPL_SECTION_ENTRY(T, I, vt)                                           \
-    static const TypeImpl burrow__impl_##T##_##I = {TYPE_OF(T), TYPE_OF(I), &(vt)};    \
+#define BURROW__IMPL_SECTION_ENTRY(id, t, i, vt)                                       \
+    static const TypeImpl burrow__impl_##id = {t, i, &(vt)};                           \
     __pragma(section(".brwi$b", read)) __declspec(allocate(".brwi$b"))                 \
-    const TypeImpl *const burrow__implref_##T##_##I = &burrow__impl_##T##_##I
+    const TypeImpl *const burrow__implref_##id = &burrow__impl_##id
 #elif defined(__GNUC__)
-#define BURROW__IMPL_SECTION_ENTRY(T, I, vt)                                           \
-    static const TypeImpl burrow__impl_##T##_##I = {TYPE_OF(T), TYPE_OF(I), &(vt)};    \
-    __attribute__((constructor)) static void burrow__register_impl_##T##_##I(void) {   \
-        (void)type_register_impl(&burrow__impl_##T##_##I, NULL);                       \
+#define BURROW__IMPL_SECTION_ENTRY(id, t, i, vt)                                       \
+    static const TypeImpl burrow__impl_##id = {t, i, &(vt)};                           \
+    __attribute__((constructor)) static void burrow__register_impl_##id(void) {        \
+        (void)type_register_impl(&burrow__impl_##id, NULL);                            \
     }                                                                                  \
-    extern const TypeImpl *const burrow__implref_##T##_##I
+    extern const TypeImpl *const burrow__implref_##id
 #else
-#define BURROW__IMPL_SECTION_ENTRY(T, I, vt)                                           \
+#define BURROW__IMPL_SECTION_ENTRY(id, t, i, vt)                                       \
     _Static_assert(0, "BURROW_IMPLEMENTS needs sections or constructors, neither "     \
                       "of which this compiler has. Call type_register_impl at the "    \
                       "start of main instead.")
@@ -725,7 +725,13 @@ typedef struct TypeImpl {
 
 /* Record that vt is T's vtable for the interface I, at file scope. The
  * semicolon is yours. */
-#define BURROW_IMPLEMENTS(T, I, vt) BURROW__IMPL_SECTION_ENTRY(T, I, vt)
+#define BURROW_IMPLEMENTS(T, I, vt)                                                    \
+    BURROW__IMPL_SECTION_ENTRY(T##_##I, TYPE_OF(T), TYPE_OF(I), vt)
+
+/* The same for descriptors TYPE_OF cannot name, a static one in a library
+ * file, say. t and i are the two descriptors' addresses and id is any name
+ * unique in the file, which the record's own name is made from. */
+#define BURROW_IMPLEMENTS_DESC(id, t, i, vt) BURROW__IMPL_SECTION_ENTRY(id, t, i, vt)
 
 /* T's vtable for the interface iface, or NULL when none was recorded. Both are
  * compared as pointers, so a type is found under the descriptor it was recorded

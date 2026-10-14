@@ -171,7 +171,8 @@ BURROW_OWNS(ret) Str html_template_error_error(const HtmlTemplateError *e, Alloc
 /* An Error for e, with its message made and e copied into a. errors_as with
  * TYPE_HTML_TEMPLATE_ERROR gives the copy back. On an allocation failure you
  * get burrow_err_out_of_memory. */
-BURROW_OWNS(ret) Error html_template_error_as_error(Alloc *a, const HtmlTemplateError *e);
+BURROW_OWNS(ret) Error html_template_error_as_error(Alloc *a,
+                                                    const HtmlTemplateError *e);
 
 /* ---------------------------------------------------------------- escapers
  *

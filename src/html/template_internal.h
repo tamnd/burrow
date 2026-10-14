@@ -38,23 +38,23 @@ enum {
 typedef uint8_t burrow__HtState;
 
 enum {
-    BURROW__HT_STATE_TEXT,           /* parsed character data */
-    BURROW__HT_STATE_TAG,            /* before an attribute name, or the tag end */
-    BURROW__HT_STATE_ATTR_NAME,      /* in an attribute name */
-    BURROW__HT_STATE_AFTER_NAME,     /* after an attribute name, before any = */
-    BURROW__HT_STATE_BEFORE_VALUE,   /* after the =, before the value */
-    BURROW__HT_STATE_HTML_CMT,       /* in an HTML comment */
-    BURROW__HT_STATE_RCDATA,         /* in a textarea or title element */
-    BURROW__HT_STATE_ATTR,           /* in an attribute of no special kind */
-    BURROW__HT_STATE_URL,            /* in a URL attribute */
-    BURROW__HT_STATE_SRCSET,         /* in a srcset attribute */
-    BURROW__HT_STATE_JS,             /* in script code */
-    BURROW__HT_STATE_JS_DQ_STR,      /* in a JS "string" */
-    BURROW__HT_STATE_JS_SQ_STR,      /* in a JS 'string' */
-    BURROW__HT_STATE_JS_TMPL_LIT,    /* in a JS `template literal` */
-    BURROW__HT_STATE_JS_REGEXP,      /* in a JS /regexp/ */
-    BURROW__HT_STATE_JS_BLOCK_CMT,   /* in a JS block comment */
-    BURROW__HT_STATE_JS_LINE_CMT,    /* in a JS // line comment */
+    BURROW__HT_STATE_TEXT,              /* parsed character data */
+    BURROW__HT_STATE_TAG,               /* before an attribute name, or the tag end */
+    BURROW__HT_STATE_ATTR_NAME,         /* in an attribute name */
+    BURROW__HT_STATE_AFTER_NAME,        /* after an attribute name, before any = */
+    BURROW__HT_STATE_BEFORE_VALUE,      /* after the =, before the value */
+    BURROW__HT_STATE_HTML_CMT,          /* in an HTML comment */
+    BURROW__HT_STATE_RCDATA,            /* in a textarea or title element */
+    BURROW__HT_STATE_ATTR,              /* in an attribute of no special kind */
+    BURROW__HT_STATE_URL,               /* in a URL attribute */
+    BURROW__HT_STATE_SRCSET,            /* in a srcset attribute */
+    BURROW__HT_STATE_JS,                /* in script code */
+    BURROW__HT_STATE_JS_DQ_STR,         /* in a JS "string" */
+    BURROW__HT_STATE_JS_SQ_STR,         /* in a JS 'string' */
+    BURROW__HT_STATE_JS_TMPL_LIT,       /* in a JS `template literal` */
+    BURROW__HT_STATE_JS_REGEXP,         /* in a JS /regexp/ */
+    BURROW__HT_STATE_JS_BLOCK_CMT,      /* in a JS block comment */
+    BURROW__HT_STATE_JS_LINE_CMT,       /* in a JS // line comment */
     BURROW__HT_STATE_JS_HTML_OPEN_CMT,  /* in a JS <!-- line comment */
     BURROW__HT_STATE_JS_HTML_CLOSE_CMT, /* in a JS --> line comment */
     BURROW__HT_STATE_CSS,               /* in CSS */

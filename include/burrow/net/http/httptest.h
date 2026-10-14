@@ -1,10 +1,9 @@
-/* net/http/httptest, for testing HTTP handlers.
+/* net/http/httptest, for testing HTTP handlers and clients.
  *
- * Go's net/http/httptest without its Server, which needs the net/http server
- * and comes with it. What is here is enough to test a handler without a
- * network: httptest_new_request makes a request the way a server would hand
- * one to a handler, and an HttptestResponseRecorder is a response writer that
- * keeps what the handler did with it.
+ * Two ways to test a handler. Without a network, httptest_new_request makes a
+ * request the way a server would hand one to a handler, and an
+ * HttptestResponseRecorder is a response writer that keeps what the handler did
+ * with it:
  *
  *     HttpRequest *r = httptest_new_request(a, BURROW_S("GET"),
  *                                           BURROW_S("/hello"), (IoReader){0});
@@ -14,6 +13,15 @@
  *     // res->status_code, res->header and res->body are what h wrote
  *     httptest_response_recorder_free(rec);
  *     http_request_free(r);
+ *
+ * And with one, an HttptestServer serves a handler on a port of the loopback
+ * address and has a client to talk to it with:
+ *
+ *     HttptestServer *ts = httptest_new_server(NULL, h);
+ *     HttpResponse *res = http_client_get(httptest_server_client(ts), ts->url, &err);
+ *     // ...
+ *     http_response_free(res);
+ *     httptest_server_free(ts);
  *
  * Copyright 2016 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -32,8 +40,10 @@
 #include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
+#include "burrow/net.h"
 #include "burrow/net/http.h"
 #include "burrow/own.h"
+#include "burrow/sync.h"
 #include "burrow/type.h"
 
 #include <stdbool.h>
@@ -162,6 +172,85 @@ void httptest_response_recorder_flush(HttptestResponseRecorder *rw);
  * says no. */
 BURROW_BORROWS(ret, rw) HttpResponse *
 httptest_response_recorder_result(HttptestResponseRecorder *rw);
+
+/* -------------------------------------------------------------------- Server */
+
+/* httptest.Server, an HTTP server on a port of the loopback address, for
+ * tests that need a real one.
+ *
+ * url is "http://" and the address it is listening on, such as
+ * "http://127.0.0.1:41721". listener is what it listens on, and config is the
+ * server, whose fields can be set between httptest_new_unstarted_server and
+ * httptest_server_start. transport is what httptest_server_client's client
+ * sends with, which takes a dial to example.com or a subdomain of it, on port
+ * 80, to the server instead, as Go's does.
+ *
+ * Go's TLS server, NewTLSServer and StartTLS with the certificate, waits for
+ * crypto/tls, and so does NewTestServer, which serves on a network in memory
+ * with TLS as well. The -httptest.serve flag is not here either.
+ *
+ * The rest is the server's own. */
+typedef struct HttptestServer {
+    Str url;
+    NetListener listener;
+    HttpServer config;
+    HttpTransport transport;
+    HttpClient client;
+    Alloc *a;
+
+    /* The server's own. */
+    Arena arena;
+    SyncMutex mu; /* guards the rest */
+    bool started;
+    bool closed;
+    struct burrow__HttptestConn *conns; /* except the ones that are over */
+    Int nconns, cap_conns;
+    HttpConnStateFunc old_hook;
+    SyncWaitGroup wg;
+} HttptestServer;
+
+/* httptest.NewServer. A server for handler, started, which is
+ * httptest_new_unstarted_server and then httptest_server_start. A nil
+ * handler serves with http_default_serve_mux, as a server does. Give it back
+ * with httptest_server_free. */
+BURROW_OWNS(ret) HttptestServer *httptest_new_server(Alloc *a, HttpHandler handler);
+
+/* httptest.NewUnstartedServer. A server for handler, listening on a port of
+ * 127.0.0.1, or of ::1 when there is no IPv4, but not serving yet, so that
+ * config can be changed first. Start it with httptest_server_start.
+ *
+ * a is where the server, its connections and its client's responses are
+ * made, the heap when it is NULL, and has to be one any goroutine can use at
+ * once. Panics with "httptest: failed to listen on a port: " and the reason
+ * when there is no port to be had, as Go's does, and with "httptest: out of
+ * memory" when a says no. */
+BURROW_OWNS(ret) HttptestServer *httptest_new_unstarted_server(Alloc *a,
+                                                               HttpHandler handler);
+
+/* Server.Start. Starts serving on its own goroutine. Panics with "Server
+ * already started" the second time, and with "Start of closed Server" after
+ * httptest_server_close. */
+void httptest_server_start(HttptestServer *s);
+
+/* Server.Close. Stops listening, closes the connections that are idle, and
+ * waits for the requests still going to be over and their connections
+ * closed. Closing again does nothing. */
+void httptest_server_close(HttptestServer *s);
+
+/* Server.CloseClientConnections. Closes every connection to the server, idle
+ * or not. Go closes them on goroutines of their own, since closing a TLS
+ * connection can block, and waits five seconds at most. Closing one that is
+ * not TLS does not block, and here they are closed one after the other. */
+void httptest_server_close_client_connections(HttptestServer *s);
+
+/* Server.Client. A client set up to talk to the server, which can be changed,
+ * and whose idle connections httptest_server_close closes. It goes with the
+ * server. */
+BURROW_BORROWS(ret, s) HttpClient *httptest_server_client(HttptestServer *s);
+
+/* httptest_server_close, then gives back everything the server has. The
+ * responses its client gave have to be freed first. NULL is fine. */
+void httptest_server_free(HttptestServer *s);
 
 /* httptest's parseContentLength, which Result uses: s without the spaces at
  * either end as a decimal number from 0 to 2^63-1, or -1 when it is not one.

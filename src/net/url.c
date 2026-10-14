@@ -115,6 +115,30 @@ static Error url_error_unwrap_slot(const void *self) {
     return ((const UrlError *)self)->err;
 }
 
+/* Error, Temporary and Timeout, so that a UrlError is a net.Error the way
+ * Go's *url.Error is. */
+static Str url_error_m_error(UrlError *self) {
+    return ((const UrlErrorBox *)self)->message;
+}
+
+static bool url_error_m_temporary(UrlError *self) {
+    return url_error_temporary(self);
+}
+
+static bool url_error_m_timeout(UrlError *self) {
+    return url_error_timeout(self);
+}
+
+#define URL_SIG_STRING(IN, OUT) OUT(Str)
+#define URL_SIG_BOOL(IN, OUT) OUT(bool)
+
+#define URL_ERROR_METHODS(M, T)                                                        \
+    M(T, Error, url_error_m_error, URL_SIG_STRING)                                     \
+    M(T, Temporary, url_error_m_temporary, URL_SIG_BOOL)                               \
+    M(T, Timeout, url_error_m_timeout, URL_SIG_BOOL)
+
+BURROW_METHODS_DEFINE(UrlError, URL_ERROR_METHODS);
+
 static const Type url_error_desc = {
     {(const Byte *)"Error", 5},
     {(const Byte *)"net/url", 7},
@@ -122,9 +146,9 @@ static const Type url_error_desc = {
     (uint32_t)sizeof(UrlError),
     (uint16_t)_Alignof(UrlError),
     0,
-    0,
+    (uint16_t)(sizeof(burrow__methods_UrlError) / sizeof(burrow__methods_UrlError[0])),
     NULL,
-    NULL,
+    burrow__methods_UrlError,
     NULL,
     NULL,
     0,

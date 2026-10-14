@@ -245,6 +245,21 @@ bool reflect_type_can_seq2(ReflectType t);
 /* TypeOf: the dynamic type of i, NULL for a nil one. */
 BURROW_STATIC(ret) ReflectType reflect_type_of(Any i);
 
+/* PointerTo, SliceOf, MapOf, ArrayOf and ChanOf: the type *t, []t, map[key]elem,
+ * [length]elem and a channel of t. Each is made once and kept for the life of
+ * the program, so the same question gives the same pointer. C has no way to
+ * find a type the compiler already made, so a made []int is a different
+ * descriptor from one somebody declared, though it is the same type to every
+ * question reflect answers about it. SliceOf(uint8) is TYPE_BYTES.
+ *
+ * MapOf panics when key is not comparable, ArrayOf for a negative length and
+ * ChanOf for a direction that is not one of the three. */
+BURROW_STATIC(ret) ReflectType reflect_pointer_to(ReflectType t);
+BURROW_STATIC(ret) ReflectType reflect_slice_of(ReflectType t);
+BURROW_STATIC(ret) ReflectType reflect_map_of(ReflectType key, ReflectType elem);
+BURROW_STATIC(ret) ReflectType reflect_array_of(Int length, ReflectType elem);
+BURROW_STATIC(ret) ReflectType reflect_chan_of(ReflectChanDir dir, ReflectType t);
+
 /* ------------------------------------------------------------------ values */
 
 /* Value: a type and where a value of it is. The zero ReflectValue is Go's zero
@@ -433,6 +448,114 @@ bool reflect_deep_equal(Any x, Any y);
 /* Swapper: a function swapping elements i and j of the slice that s holds. It
  * points at s's data, so the slice header has to stay where it is. */
 BURROW_BORROWS(ret, s) SwapFunc reflect_swapper(Any s);
+
+/* ------------------------------------------------------------------ writing
+ *
+ * A Value can be set when it is addressable, which means it was reached
+ * through a pointer, an element of a slice or New, and did not come out of an
+ * unexported field. The setters panic otherwise, with Go's text.
+ *
+ * Whatever makes a new value takes an Alloc for it, since a Value has to
+ * point somewhere. New, Append, Recv and the rest put the bytes there, and a
+ * Value they return lasts as long as that memory does. */
+
+/* Zero: the zero value of t, which can be read and not set. It points at
+ * zeros the package keeps, so it needs no memory of its own. */
+BURROW_STATIC(ret) ReflectValue reflect_zero(ReflectType t);
+
+/* New: a pointer to a new zero t, made in a. NewAt: a pointer to the t at p,
+ * with the pointer itself made in a. */
+BURROW_OWNS(ret) ReflectValue reflect_new(Alloc *a, ReflectType t);
+BURROW_OWNS(ret) ReflectValue reflect_new_at(Alloc *a, ReflectType t, void *p);
+
+/* Addr: a pointer to v, which has to be addressable. The pointer is made in
+ * a. */
+BURROW_OWNS(ret) ReflectValue reflect_value_addr(ReflectValue v, Alloc *a);
+
+/* Set: v = x, where x has to be assignable to v's type. An interface value
+ * set this way holds a pointer to x's bytes, as an Any always does, so x has
+ * to outlive it. Setting an interface with methods from a value that is not
+ * already of that interface type is not supported yet. */
+void reflect_value_set(ReflectValue v, ReflectValue x);
+
+/* The setters for each family of kinds, which convert x to v's type the way a
+ * Go conversion would, so SetInt of 300 on an int8 stores 44. */
+void reflect_value_set_bool(ReflectValue v, bool x);
+void reflect_value_set_int(ReflectValue v, int64_t x);
+void reflect_value_set_uint(ReflectValue v, uint64_t x);
+void reflect_value_set_float(ReflectValue v, double x);
+void reflect_value_set_complex(ReflectValue v, Complex128 x);
+
+/* SetString stores the Str as it is, so v shares its bytes. SetBytes does the
+ * same for a []byte. */
+BURROW_RETAINS(x) void reflect_value_set_string(ReflectValue v, Str x);
+BURROW_RETAINS(x) void reflect_value_set_bytes(ReflectValue v, Slice x);
+void reflect_value_set_pointer(ReflectValue v, void *x);
+
+/* SetLen and SetCap change a slice's length and capacity inside what it
+ * already has. */
+void reflect_value_set_len(ReflectValue v, Int n);
+void reflect_value_set_cap(ReflectValue v, Int n);
+
+/* SetZero: v = the zero value of its type. */
+void reflect_value_set_zero(ReflectValue v);
+
+/* SetMapIndex: m[key] = elem, or delete(m, key) when elem is the zero Value.
+ * The map copies both, using the allocator it was made with. */
+void reflect_value_set_map_index(ReflectValue v, ReflectValue key, ReflectValue elem);
+
+/* SetIterKey and SetIterValue: v = the key or the element the iterator is on. */
+void reflect_value_set_iter_key(ReflectValue v, ReflectMapIter *it);
+void reflect_value_set_iter_value(ReflectValue v, ReflectMapIter *it);
+
+/* Grow makes room for n more elements in the slice v without changing its
+ * length, getting new memory from a when it has to. Clear zeroes a slice's
+ * elements or empties a map. */
+void reflect_value_grow(ReflectValue v, Alloc *a, Int n);
+void reflect_value_clear(ReflectValue v);
+
+/* Slice and Slice3: v[i:j] and v[i:j:k] for an array, which has to be
+ * addressable, a slice, or for Slice a string. The result shares v's elements,
+ * and its header is made in a. */
+BURROW_OWNS(ret) BURROW_BORROWS(ret, v) ReflectValue reflect_value_slice(ReflectValue v,
+                                                                         Alloc *a,
+                                                                         Int i, Int j);
+BURROW_OWNS(ret) BURROW_BORROWS(ret, v) ReflectValue
+reflect_value_slice3(ReflectValue v, Alloc *a, Int i, Int j, Int k);
+
+/* MakeSlice, MakeMap, MakeMapWithSize and MakeChan: a new slice, map or
+ * channel of type t, made in a. The map and the channel are made with
+ * map_make and chan_make, and are let go of with map_free and chan_free when
+ * a is not an arena. */
+BURROW_OWNS(ret) ReflectValue reflect_make_slice(Alloc *a, ReflectType t, Int len,
+                                                 Int cap);
+BURROW_OWNS(ret) ReflectValue reflect_make_map(Alloc *a, ReflectType t);
+BURROW_OWNS(ret) ReflectValue reflect_make_map_with_size(Alloc *a, ReflectType t,
+                                                         Int n);
+BURROW_OWNS(ret) ReflectValue reflect_make_chan(Alloc *a, ReflectType t, Int buffer);
+
+/* Append: append(s, x...), where x is a Slice of ReflectValue. AppendSlice:
+ * append(s, t...). Both give a new slice made in a, which shares s's array
+ * when it has room, as append does. */
+BURROW_OWNS(ret) BURROW_BORROWS(ret, s) ReflectValue reflect_append(Alloc *a,
+                                                                    ReflectValue s,
+                                                                    Slice x);
+BURROW_OWNS(ret) BURROW_BORROWS(ret, s) ReflectValue
+reflect_append_slice(Alloc *a, ReflectValue s, ReflectValue t);
+
+/* Copy: copy(dst, src) for slices and arrays, and from a string into a []byte.
+ * Returns how many elements it copied. */
+Int reflect_copy(ReflectValue dst, ReflectValue src);
+
+/* Channels. Send and Recv block, TrySend and TryRecv do not. Recv and TryRecv
+ * put what they receive in memory made in a, and set *ok the way Go's second
+ * result is set. TryRecv gives the zero Value when nothing was ready. */
+void reflect_value_send(ReflectValue v, ReflectValue x);
+bool reflect_value_try_send(ReflectValue v, ReflectValue x);
+BURROW_OWNS(ret) ReflectValue reflect_value_recv(ReflectValue v, Alloc *a, bool *ok);
+BURROW_OWNS(ret) ReflectValue reflect_value_try_recv(ReflectValue v, Alloc *a,
+                                                     bool *ok);
+void reflect_value_close(ReflectValue v);
 
 #ifdef __cplusplus
 }

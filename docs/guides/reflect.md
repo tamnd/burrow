@@ -4,7 +4,7 @@
 
 C has no type information at run time, so reflection only sees types that have a descriptor. The builtins have one, and so does every type declared with `burrow/declare.h`. [The design note](../design/07-reflect.md) explains why it works this way and what to do with a struct from a header you cannot change.
 
-This half of the package reads. Setting values, making new ones, converting and calling functions come with the half that writes.
+It can read values and write them, make new ones, and make the types to hold them. Converting between types and calling functions are still to come.
 
 ## Declaring a type
 
@@ -134,3 +134,55 @@ Go's odd cases come along. A NaN is not equal to itself, a nil slice is not equa
 ## Maps and iterators
 
 `reflect_value_map_range` gives a `ReflectMapIter` that walks a map in Go's order, which is to say no particular order. `reflect_value_seq` and `reflect_value_seq2` give the `IterSeq` and `IterSeq2` that Go's `Value.Seq` and `Value.Seq2` do, so a program can range over a number, a string, an array, a slice, a map or a channel it only has as a `ReflectValue`. The values they hand to the loop body are good until the body returns.
+
+## Setting values
+
+A value can only be set when reflection reached it through a pointer, the same rule Go has. `reflect_value_of(BURROW_ANY(TYPE_OF(Config), &c))` looks at `c` but cannot change it, while going through a `*Config` and asking for the element gives a value that can be set, and so can the fields under it:
+
+<!-- example: ../examples/reflect/reflect.c#set -->
+```c
+Config *p = &c;
+ReflectValue e =
+    reflect_value_elem(reflect_value_of(BURROW_ANY(reflect_pointer_to(t), &p)));
+fmt_printf_v("settable: v %t, e %t\n", reflect_value_can_set(v),
+             reflect_value_can_set(e));
+reflect_value_set_int(reflect_value_field_by_name(e, BURROW_S("Port")), 9090);
+ReflectValue tv = reflect_value_field_by_name(e, BURROW_S("Tags"));
+Str more = BURROW_S("us");
+ReflectValue extra[] = {reflect_value_of(BURROW_ANY(TYPE_STRING, &more))};
+reflect_value_set(
+    tv, reflect_append(a, tv, slice_from(extra, 1, 1, TYPE_REFLECT_VALUE)));
+fmt_printf_v("Port %d, %d tags, last %q\n", c.Port, c.Tags.len,
+             ((Str *)c.Tags.p)[c.Tags.len - 1]);
+```
+
+That prints:
+
+```text
+settable: v false, e true
+Port 9090, 3 tags, last "us"
+```
+
+Setting a value that cannot be set panics with Go's message, and so does setting a field that is not exported, or setting a value of the wrong type. `reflect_value_can_set` asks first.
+
+## Making values and types
+
+`reflect_new`, `reflect_zero`, `reflect_make_slice`, `reflect_make_map` and `reflect_make_chan` make values of a type known only at run time, and `reflect_pointer_to`, `reflect_slice_of`, `reflect_array_of`, `reflect_map_of` and `reflect_chan_of` make the types. A type made twice is the same descriptor both times, so two made types can be compared with `==`:
+
+<!-- example: ../examples/reflect/reflect.c#make -->
+```c
+ReflectType mt = reflect_map_of(TYPE_STRING, TYPE_INT);
+ReflectValue m = reflect_make_map(a, mt);
+Str key = BURROW_S("port");
+ReflectValue kv = reflect_value_of(BURROW_ANY(TYPE_STRING, &key));
+reflect_value_set_map_index(m, kv, port);
+fmt_printf_v("%s with %d entry, port = %d\n", reflect_type_string(mt),
+             reflect_value_len(m),
+             reflect_value_int(reflect_value_map_index(m, kv)));
+```
+
+That prints:
+
+```text
+map[string]int with 1 entry, port = 9090
+```

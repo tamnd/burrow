@@ -84,6 +84,33 @@ int main(void) {
                                     BURROW_ANY(TYPE_OF(Config), &d)));
     // doc: end
 
+    // doc: set
+    Config *p = &c;
+    ReflectValue e =
+        reflect_value_elem(reflect_value_of(BURROW_ANY(reflect_pointer_to(t), &p)));
+    fmt_printf_v("settable: v %t, e %t\n", reflect_value_can_set(v),
+                 reflect_value_can_set(e));
+    reflect_value_set_int(reflect_value_field_by_name(e, BURROW_S("Port")), 9090);
+    ReflectValue tv = reflect_value_field_by_name(e, BURROW_S("Tags"));
+    Str more = BURROW_S("us");
+    ReflectValue extra[] = {reflect_value_of(BURROW_ANY(TYPE_STRING, &more))};
+    reflect_value_set(
+        tv, reflect_append(a, tv, slice_from(extra, 1, 1, TYPE_REFLECT_VALUE)));
+    fmt_printf_v("Port %d, %d tags, last %q\n", c.Port, c.Tags.len,
+                 ((Str *)c.Tags.p)[c.Tags.len - 1]);
+    // doc: end
+
+    // doc: make
+    ReflectType mt = reflect_map_of(TYPE_STRING, TYPE_INT);
+    ReflectValue m = reflect_make_map(a, mt);
+    Str key = BURROW_S("port");
+    ReflectValue kv = reflect_value_of(BURROW_ANY(TYPE_STRING, &key));
+    reflect_value_set_map_index(m, kv, port);
+    fmt_printf_v("%s with %d entry, port = %d\n", reflect_type_string(mt),
+                 reflect_value_len(m),
+                 reflect_value_int(reflect_value_map_index(m, kv)));
+    // doc: end
+
     arena_free(&ar);
     return 0;
 }
@@ -97,4 +124,7 @@ Tags ([]string, json "tags") = ["web" "eu"]
 Port 8080, Host valid false
 c == d: true
 after the change: false
+settable: v false, e true
+Port 9090, 3 tags, last "us"
+map[string]int with 1 entry, port = 9090
 */

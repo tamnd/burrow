@@ -9,12 +9,16 @@
 #include "internal.h"
 
 #include <float.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
+#include "burrow/chan.h"
 #include "burrow/lock.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
 #include "burrow/panic.h"
+#include "burrow/runtime.h"
 #include "burrow/strconv.h"
 
 /* ------------------------------------------------------------ the keepsakes
@@ -30,8 +34,30 @@ static Map *rf_interned;     /* Str to the same Str, the copy in rf_arena */
 static Map *rf_type_string;  /* const Type * to its String */
 static Map *rf_value_errors; /* message to its RfValueErrorBox */
 static Int *rf_iota[256];    /* rf_iota[c][k] is c*256 + k, made on first use */
+static Map *rf_made;         /* RfMadeKey to the type PointerTo and the rest made */
+static Byte *rf_zero_big;    /* zeros for Zero of a type too big for rf_zero_small */
+static size_t rf_zero_big_size;
 
 static const Str rf_oom = {(const Byte *)"reflect: out of memory", 22};
+
+/* The key rf_made is keyed by, [4]unsafe.Pointer: the kind, the element, the
+ * key and the length of the type made. */
+static const Type rf_made_key = {
+    {NULL, 0},
+    {NULL, 0},
+    KIND_ARRAY,
+    (uint32_t)(4 * sizeof(void *)),
+    (uint16_t)_Alignof(void *),
+    0,
+    0,
+    NULL,
+    NULL,
+    &burrow_type_UnsafePointer,
+    NULL,
+    4,
+    0,
+    NULL,
+};
 
 /* Takes the lock and makes sure the arena and the maps are there. */
 static void rf_enter(void) {
@@ -43,7 +69,9 @@ static void rf_enter(void) {
     rf_interned = map_make(a, TYPE_STRING, TYPE_STRING, 0);
     rf_type_string = map_make(a, TYPE_UNSAFE_POINTER, TYPE_STRING, 0);
     rf_value_errors = map_make(a, TYPE_STRING, TYPE_UNSAFE_POINTER, 0);
-    if (rf_interned == NULL || rf_type_string == NULL || rf_value_errors == NULL) {
+    rf_made = map_make(a, &rf_made_key, TYPE_UNSAFE_POINTER, 0);
+    if (rf_interned == NULL || rf_type_string == NULL || rf_value_errors == NULL ||
+        rf_made == NULL) {
         burrow__unlock(&rf_lock);
         panic_str(rf_oom);
     }
@@ -770,6 +798,125 @@ bool burrow__reflect_assignable(const Type *dst, const Type *v) {
         rf_identical(dst->elem, v->elem, false))
         return true;
     return rf_identical(dst, v, true);
+}
+
+/* -------------------------------------------------------------- made types
+ *
+ * PointerTo, SliceOf, MapOf, ArrayOf and ChanOf. Each type is made once, in
+ * rf_arena, and kept in rf_made under its kind and its parts, so that asking
+ * twice gives the same descriptor, as it does in Go. Go looks through the types
+ * compiled into the program before making one, which C has no way to do. The
+ * one such type the package knows about is []byte, which SliceOf hands back. A
+ * made type is still identical to any other descriptor for the same unnamed
+ * type, in the sense burrow__reflect_identical gives. */
+
+static const Type *rf_made_type(Kind k, const Type *elem, const Type *key, uint32_t len,
+                                uint32_t size, uint16_t align) {
+    const void *ck[4] = {(const void *)(uintptr_t)k, elem, key,
+                         (const void *)(uintptr_t)len};
+    rf_enter();
+    const Type *const *have = map_get(rf_made, ck);
+    if (have != NULL) {
+        const Type *t = *have;
+        burrow__unlock(&rf_lock);
+        return t;
+    }
+    Type *t = BURROW_NEW(arena_allocator(&rf_arena), Type);
+    if (t == NULL)
+        rf_out_of_memory();
+    *t = (Type){{NULL, 0}, {NULL, 0}, k,    size, align, 0, 0,
+                NULL,      NULL,      elem, key,  len,   0, NULL};
+    const Type *made = t;
+    if (!map_set(rf_made, ck, &made))
+        rf_out_of_memory();
+    burrow__unlock(&rf_lock);
+    return made;
+}
+
+ReflectType reflect_pointer_to(ReflectType t) {
+    if (t == NULL)
+        runtime_panic(BURROW_S("invalid memory address or nil pointer dereference"));
+    return rf_made_type(KIND_POINTER, t, NULL, 0, (uint32_t)sizeof(void *),
+                        (uint16_t)_Alignof(void *));
+}
+
+ReflectType reflect_slice_of(ReflectType t) {
+    if (t == NULL)
+        runtime_panic(BURROW_S("invalid memory address or nil pointer dereference"));
+    if (t == TYPE_UINT8)
+        return TYPE_BYTES;
+    return rf_made_type(KIND_SLICE, t, NULL, 0, (uint32_t)sizeof(Slice),
+                        (uint16_t)_Alignof(Slice));
+}
+
+ReflectType reflect_map_of(ReflectType key, ReflectType elem) {
+    if (key == NULL || elem == NULL)
+        runtime_panic(BURROW_S("invalid memory address or nil pointer dereference"));
+    if (!type_is_comparable(key))
+        rf_panic_type("reflect.MapOf: invalid key type ", key);
+    return rf_made_type(KIND_MAP, elem, key, 0, (uint32_t)sizeof(Map *),
+                        (uint16_t)_Alignof(Map *));
+}
+
+ReflectType reflect_array_of(Int length, ReflectType elem) {
+    if (length < 0)
+        panic_str(BURROW_S("reflect: negative length passed to ArrayOf"));
+    if (elem == NULL)
+        runtime_panic(BURROW_S("invalid memory address or nil pointer dereference"));
+    /* The descriptor keeps both in 32 bits, which is the space there is. */
+    if ((uint64_t)length > UINT32_MAX ||
+        (elem->size > 0 && (uint64_t)length > UINT32_MAX / elem->size))
+        panic_str(BURROW_S("reflect.ArrayOf: array size would exceed virtual address "
+                           "space"));
+    return rf_made_type(KIND_ARRAY, elem, NULL, (uint32_t)length,
+                        elem->size * (uint32_t)length, elem->align);
+}
+
+ReflectType reflect_chan_of(ReflectChanDir dir, ReflectType t) {
+    if (t == NULL)
+        runtime_panic(BURROW_S("invalid memory address or nil pointer dereference"));
+    if (t->size >= 1U << 16)
+        panic_str(BURROW_S("reflect.ChanOf: element size too large"));
+    uint32_t len;
+    switch ((int)dir) {
+    case REFLECT_SEND_DIR:
+        len = REFLECT_SEND_DIR;
+        break;
+    case REFLECT_RECV_DIR:
+        len = REFLECT_RECV_DIR;
+        break;
+    case REFLECT_BOTH_DIR:
+        /* A channel descriptor says both ways with 0. */
+        len = 0;
+        break;
+    default:
+        panic_str(BURROW_S("reflect.ChanOf: invalid dir"));
+    }
+    return rf_made_type(KIND_CHAN, t, NULL, len, (uint32_t)sizeof(Chan *),
+                        (uint16_t)_Alignof(Chan *));
+}
+
+/* -------------------------------------------------------------------- zeros */
+
+/* What Zero points at for the types most programs have, never written. */
+static _Alignas(max_align_t) const Byte rf_zero_small[1024];
+
+const void *burrow__reflect_zero(size_t size) {
+    if (size <= sizeof rf_zero_small)
+        return rf_zero_small;
+    rf_enter();
+    /* A bigger block replaces a smaller one, and the smaller one stays where it
+     * is, since Values from Zero may still point at it. */
+    if (size > rf_zero_big_size) {
+        Byte *p = mem_alloc(arena_allocator(&rf_arena), size, _Alignof(max_align_t));
+        if (p == NULL)
+            rf_out_of_memory();
+        rf_zero_big = p;
+        rf_zero_big_size = size;
+    }
+    const Byte *p = rf_zero_big;
+    burrow__unlock(&rf_lock);
+    return p;
 }
 
 /* ------------------------------------------------------------------ fields */

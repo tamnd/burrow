@@ -154,7 +154,7 @@ const Type burrow_type_ReflectStructField = {
 
 /* ------------------------------------------------------------------ helpers */
 
-#define RF_RO(v) ((v).flag & BURROW__RF_RO)
+#define RF_RO(v) BURROW__RF_RO_OF(v)
 
 static Kind rf_kind(ReflectValue v) {
     return v.typ == NULL ? KIND_INVALID : v.typ->kind;
@@ -637,7 +637,8 @@ ReflectValue reflect_value_index(ReflectValue v, Int i) {
         if (i < 0 || i >= (Int)v.typ->len)
             panic_str(BURROW_S("reflect: array index out of range"));
         const Type *e = v.typ->elem;
-        return rf_make(e, (Byte *)v.ptr + (size_t)i * e->size, v.flag);
+        return rf_make(e, (Byte *)v.ptr + (size_t)i * e->size,
+                       (v.flag & BURROW__RF_ADDR) | RF_RO(v));
     }
     case KIND_SLICE: {
         const Slice *s = v.ptr;
@@ -666,7 +667,7 @@ ReflectValue reflect_value_elem(ReflectValue v) {
         void *p = rf_word(v.ptr);
         if (p == NULL)
             return (ReflectValue){0};
-        return rf_make(v.typ->elem, p, BURROW__RF_ADDR | RF_RO(v));
+        return rf_make(v.typ->elem, p, BURROW__RF_ADDR | (v.flag & BURROW__RF_RO));
     }
     default:
         rf_panic_value("reflect.Value.Elem", v);
@@ -685,9 +686,11 @@ ReflectValue reflect_value_field(ReflectValue v, Int i) {
     if (i < 0 || i >= (Int)v.typ->nfield)
         panic_str(BURROW_S("reflect: Field index out of range"));
     const Field *f = &v.typ->fields[i];
-    uint32_t flag = v.flag;
+    /* An unexported embedded struct is read-only and its exported fields are
+     * not, so only the sticky kind comes down from v. */
+    uint32_t flag = v.flag & (BURROW__RF_ADDR | BURROW__RF_STICKY_RO);
     if (!field_is_exported(f))
-        flag |= BURROW__RF_RO;
+        flag |= field_is_embedded(f) ? BURROW__RF_EMBED_RO : BURROW__RF_STICKY_RO;
     return rf_make(f->type, (Byte *)v.ptr + f->offset, flag);
 }
 
@@ -770,19 +773,7 @@ static const void *rf_map_key(ReflectValue key, const Type *kt, Any *box,
     /* Go's assignTo reads the type of a zero Value without looking. */
     if (key.typ == NULL)
         runtime_panic(BURROW_S("invalid memory address or nil pointer dereference"));
-    if (burrow__reflect_assignable(kt, key.typ))
-        return key.ptr;
-    /* Only the empty interface for now: a key of some other interface type
-     * needs the method table of the key's type, which comes with Implements
-     * and Convert. */
-    if (kt->kind == KIND_INTERFACE && kt->nmethod == 0) {
-        *box = BURROW_ANY(key.typ, key.ptr);
-        return box;
-    }
-    Str a = burrow__reflect_concat(str_from_cstr(context), BURROW_S(": value of type "),
-                                   reflect_type_string(key.typ));
-    burrow__reflect_panic(a, BURROW_S(" is not assignable to type "),
-                          reflect_type_string(kt));
+    return burrow__reflect_assign(key, kt, box, context);
 }
 
 ReflectValue reflect_value_map_index(ReflectValue v, ReflectValue key) {
@@ -816,7 +807,11 @@ Slice reflect_value_map_keys(ReflectValue v, Alloc *a) {
     return (Slice){out, i, n, TYPE_REFLECT_VALUE};
 }
 
-enum { RF_ITER_FRESH, RF_ITER_ON, RF_ITER_DONE };
+enum {
+    RF_ITER_FRESH = BURROW__RF_ITER_FRESH,
+    RF_ITER_ON = BURROW__RF_ITER_ON,
+    RF_ITER_DONE = BURROW__RF_ITER_DONE
+};
 
 ReflectMapIter *reflect_value_map_range(ReflectValue v, Alloc *a) {
     rf_must_be(v, KIND_MAP, "reflect.Value.MapRange");

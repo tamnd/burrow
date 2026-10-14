@@ -76,6 +76,9 @@ global	src/reflect/type.c	rf_interned	type-registry	Interned strings, the panic 
 global	src/reflect/type.c	rf_type_string	type-registry	Each type's String, made once. Read and written only under rf_lock.
 global	src/reflect/type.c	rf_value_errors	type-registry	The boxed ValueError behind each distinct panic message, so that a panic does not allocate twice for the same one. Read and written only under rf_lock.
 global	src/reflect/type.c	rf_iota	type-registry	Blocks of consecutive Ints that one element field indexes point into, made on first use. Written only under rf_lock, and a block is never changed once it is published.
+global	src/reflect/type.c	rf_made	type-registry	The types PointerTo, SliceOf, MapOf, ArrayOf and ChanOf have made, by kind and parts, so that each is made once. Read and written only under rf_lock.
+global	src/reflect/type.c	rf_zero_big	type-registry	The biggest block of zeros Zero has needed past the static one, in rf_arena. Read and written only under rf_lock, and never written through.
+global	src/reflect/type.c	rf_zero_big_size	type-registry	How big rf_zero_big is. Read and written only under rf_lock.
 global	src/runtime/mcontext.c	resuming	scheduler	Thread local, and it only exists on the ucontext path. Written by a switch and read by the trampoline on the other side of that same switch, on the same thread, with nothing in between.
 global	src/runtime/mcontext.c	annotate_prev	scheduler	Thread local, and it only exists in a build with the address sanitizer on. Written on the old stack and read on the new one, on the same thread, with nothing in between, the same as resuming above.
 global	src/runtime/mcontext.c	tsan_pool_lock	scheduler	This is the synchronisation for the three below, and it only exists in a build with the thread sanitizer on. Held for the handful of instructions that move a fiber into or out of the pool, never across the call that makes one.

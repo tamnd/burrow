@@ -125,8 +125,8 @@ static void wire(Alloc *a) {
 }
 
 /* A ResponseWriter that prints the status a handler sends, with Location and
- * Allow when it sets them, and the body of a 200. There is no server yet to
- * send any of it to a client. */
+ * Allow when it sets them, and the body of a 200, so the example needs no
+ * server and no client. */
 typedef struct Printer {
     HttpHeader header;
     Int code;
@@ -161,7 +161,17 @@ static HttpHeader printer_header(void *self) {
 }
 
 static const HttpResponseWriterVT printer_vt = {
-    {NULL, printer_write}, printer_header, printer_write_header};
+    {NULL, printer_write},
+    printer_header,
+    printer_write_header,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+};
 
 static void show_note(void *env, HttpResponseWriter w, HttpRequest *r) {
     (void)env;

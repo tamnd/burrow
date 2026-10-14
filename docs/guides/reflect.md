@@ -389,3 +389,42 @@ struct { X int "json:\"x\""; Y int "json:\"y\"" }
 ```
 
 It panics where Go's StructOf does, with Go's messages. A struct gets the methods of an embedded first field, and of an embedded interface wherever it is, though calling one of the interface's panics, as in Go. Two rules of burrow's own also apply. A field is embedded when it is named for its type, so an anonymous field with any other name panics. And a field is exported when its name starts with an ASCII upper case letter, so a package path on an exported name panics too. No vtable can be made at run time, so a made struct goes into an interface with methods only through reflect: `reflect_type_implements` answers for it, and `reflect_value_method_by_name` calls its methods.
+
+## Select and the type iterators
+
+`reflect_type_fields`, `reflect_type_methods`, `reflect_type_ins` and `reflect_type_outs` give an `IterSeq` over what Field, Method, In and Out give one at a time, and `reflect_value_fields` and `reflect_value_methods` give an `IterSeq2` that pairs each field or method with its value. `reflect_select` is Go's `reflect.Select`: it takes a Slice of `ReflectSelectCase`, waits until one of them can go ahead, and says which one did, with the value a receive got:
+
+<!-- example: ../examples/reflect/reflect.c#select -->
+```c
+IterSeq2 fs = reflect_value_fields(sv, a);
+fs.f(fs.env, BURROW_FN(IterYield2, print_field, NULL));
+IterSeq ins = reflect_type_ins(TYPE_OF(Scale));
+ins.f(ins.env, BURROW_FN(IterYield, print_in, NULL));
+
+ReflectType ct = reflect_chan_of(REFLECT_BOTH_DIR, TYPE_INT);
+ReflectValue idle = reflect_make_chan(a, ct, 0);
+ReflectValue ready = reflect_make_chan(a, ct, 1);
+Int five = 5;
+reflect_value_send(ready, reflect_value_of(BURROW_ANY(TYPE_INT, &five)));
+ReflectSelectCase cases[] = {
+    {REFLECT_SELECT_RECV, idle, {0}},
+    {REFLECT_SELECT_RECV, ready, {0}},
+};
+ReflectValue got;
+bool ok;
+Int chosen =
+    reflect_select(a, slice_from(cases, 2, 2, TYPE_REFLECT_SELECT_CASE), &got, &ok);
+fmt_printf_v("case %d got %v, %t\n", chosen, reflect_value_interface(got), ok);
+```
+
+That prints:
+
+```text
+X = 0
+Y = 7
+in: int
+in: int
+case 1 got 5, true
+```
+
+A case with a zero `chan` never goes ahead, as with a nil channel in Go, and a send on a closed channel panics. The value a receive got lives in the allocator passed in. `reflect_slice_at` is Go's `SliceAt`, which makes a slice over memory the caller already has, and `reflect_type_for(T)` is `TypeFor[T]`.

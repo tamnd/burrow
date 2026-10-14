@@ -105,6 +105,24 @@ static const FahrenheiterVT temp_fahrenheiter = {TYPE_OF(Temp), temp_fahrenheit_
 BURROW_IMPLEMENTS(Temp, Fahrenheiter, temp_fahrenheiter);
 // doc: end
 
+// doc: iterate
+/* What the iterators call: one prints a field and its value, the other the
+ * type of a parameter. Returning false would stop the loop. */
+static bool print_field(void *env, const void *k, const void *v) {
+    (void)env;
+    const ReflectStructField *f = k;
+    fmt_printf_v("%s = %v\n", f->name,
+                 reflect_value_interface(*(const ReflectValue *)v));
+    return true;
+}
+
+static bool print_in(void *env, const void *t) {
+    (void)env;
+    fmt_printf_v("in: %s\n", reflect_type_string(*(const ReflectType *)t));
+    return true;
+}
+// doc: end
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -249,6 +267,28 @@ int main(void) {
                  reflect_value_interface(sv), same);
     // doc: end
 
+    // doc: select
+    IterSeq2 fs = reflect_value_fields(sv, a);
+    fs.f(fs.env, BURROW_FN(IterYield2, print_field, NULL));
+    IterSeq ins = reflect_type_ins(TYPE_OF(Scale));
+    ins.f(ins.env, BURROW_FN(IterYield, print_in, NULL));
+
+    ReflectType ct = reflect_chan_of(REFLECT_BOTH_DIR, TYPE_INT);
+    ReflectValue idle = reflect_make_chan(a, ct, 0);
+    ReflectValue ready = reflect_make_chan(a, ct, 1);
+    Int five = 5;
+    reflect_value_send(ready, reflect_value_of(BURROW_ANY(TYPE_INT, &five)));
+    ReflectSelectCase cases[] = {
+        {REFLECT_SELECT_RECV, idle, {0}},
+        {REFLECT_SELECT_RECV, ready, {0}},
+    };
+    ReflectValue got;
+    bool ok;
+    Int chosen =
+        reflect_select(a, slice_from(cases, 2, 2, TYPE_REFLECT_SELECT_CASE), &got, &ok);
+    fmt_printf_v("case %d got %v, %t\n", chosen, reflect_value_interface(got), ok);
+    // doc: end
+
     arena_free(&ar);
     return 0;
 }
@@ -276,4 +316,9 @@ asserted, 212
 Fahrenheiter holds Temp, method gives 212
 struct { X int "json:\"x\""; Y int "json:\"y\"" }
 {0 7}, same type again: true
+X = 0
+Y = 7
+in: int
+in: int
+case 1 got 5, true
 */

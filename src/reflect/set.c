@@ -587,6 +587,24 @@ Int reflect_copy(ReflectValue dst, ReflectValue src) {
 
 /* ------------------------------------------------------- maps and channels */
 
+ReflectValue reflect_slice_at(Alloc *a, ReflectType t, void *p, Int n) {
+    if (n < 0)
+        runtime_panic(BURROW_S("unsafe.Slice: len out of range"));
+    if (t->size == 0 && p == NULL && n > 0)
+        runtime_panic(BURROW_S("unsafe.Slice: ptr is nil and len is not zero"));
+    /* Go's check that the n elements fit between p and the end of memory,
+     * which a nil p never has room for. */
+    uintptr_t room = (uintptr_t)0 - (uintptr_t)p;
+    if (t->size > 0 && (uint64_t)n > (uint64_t)(room / t->size)) {
+        if (p == NULL)
+            runtime_panic(BURROW_S("unsafe.Slice: ptr is nil and len is not zero"));
+        runtime_panic(BURROW_S("unsafe.Slice: len out of range"));
+    }
+    Slice *h = rfs_alloc(a, sizeof(Slice), alignof(Slice));
+    *h = (Slice){p, n, n, t};
+    return rfs_make(reflect_slice_of(t), h, 0);
+}
+
 ReflectValue reflect_make_map(Alloc *a, ReflectType t) {
     return reflect_make_map_with_size(a, t, 0);
 }
@@ -664,6 +682,151 @@ ReflectValue reflect_value_recv(ReflectValue v, Alloc *a, bool *ok) {
 
 ReflectValue reflect_value_try_recv(ReflectValue v, Alloc *a, bool *ok) {
     return rfs_recv(v, a, ok, true, "reflect.Value.TryRecv");
+}
+
+/* Select. The cases are checked first, as Go's select0 does, and only then is
+ * anything made, so a case that panics leaves nothing behind. A received value
+ * goes into one block of a big enough for any of the receive cases, since only
+ * the case that runs writes to it. */
+#define RFS_SELECT_STACK 16
+
+static const Type *rfs_select_chan(ReflectValue ch, ReflectChanDir dir,
+                                   const char *msg) {
+    rfs_must_be(ch, KIND_CHAN, "unknown method");
+    rfs_must_be_exported(ch, "unknown method");
+    if (!(reflect_type_chan_dir(ch.typ) & dir))
+        panic_str(str_from_cstr(msg));
+    return ch.typ->elem;
+}
+
+/* Checks case i, and when cs is not NULL fills in cs[i], with box as the room
+ * for a send's value. Returns the received element's type for a receive on a
+ * channel, NULL otherwise. */
+static const Type *rfs_select_case(const ReflectSelectCase *rc, SelectCase *cs,
+                                   RfBox *box, bool *have_default) {
+    SelectCase c = {.op = SELECT_DEFAULT};
+    const Type *recv = NULL;
+    switch (rc->dir) {
+    case REFLECT_SELECT_DEFAULT:
+        if (*have_default)
+            panic_str(BURROW_S("reflect.Select: multiple default cases"));
+        *have_default = true;
+        if (rc->chan.typ != NULL)
+            panic_str(BURROW_S("reflect.Select: default case has Chan value"));
+        if (rc->send.typ != NULL)
+            panic_str(BURROW_S("reflect.Select: default case has Send value"));
+        break;
+    case REFLECT_SELECT_SEND: {
+        c.op = SELECT_SEND;
+        if (rc->chan.typ == NULL)
+            break;
+        const Type *e =
+            rfs_select_chan(rc->chan, REFLECT_SEND_DIR,
+                            "reflect.Select: SendDir case using recv-only channel");
+        if (rc->send.typ == NULL)
+            panic_str(BURROW_S("reflect.Select: SendDir case missing Send value"));
+        rfs_must_be_exported(rc->send, "unknown method");
+        c.c = rfs_word(rc->chan.ptr);
+        c.send = burrow__reflect_assign(rc->send, e, box, "reflect.Select");
+        break;
+    }
+    case REFLECT_SELECT_RECV:
+        c.op = SELECT_RECV;
+        if (rc->send.typ != NULL)
+            panic_str(BURROW_S("reflect.Select: RecvDir case has Send value"));
+        if (rc->chan.typ == NULL)
+            break;
+        recv = rfs_select_chan(rc->chan, REFLECT_RECV_DIR,
+                               "reflect.Select: RecvDir case using send-only channel");
+        c.c = rfs_word(rc->chan.ptr);
+        break;
+    default:
+        panic_str(BURROW_S("reflect.Select: invalid Dir"));
+    }
+    if (cs != NULL)
+        *cs = c;
+    return recv;
+}
+
+/* What reflect_select made in a for one call, given back when the call is
+ * done with it, and also when the select panics on a closed channel. */
+typedef struct RfsSelect {
+    Alloc *a;
+    Int n;
+    SelectCase *cs;
+    RfBox *boxes;
+    void *buf;
+    size_t size;
+} RfsSelect;
+
+static void rfs_select_free(const RfsSelect *s, bool buf) {
+    if (s->n > RFS_SELECT_STACK) {
+        mem_free(s->a, s->cs, (size_t)s->n * sizeof(SelectCase), alignof(SelectCase));
+        mem_free(s->a, s->boxes, (size_t)s->n * sizeof(RfBox), alignof(RfBox));
+    }
+    if (buf)
+        mem_free(s->a, s->buf, s->size == 0 ? 1 : s->size, alignof(max_align_t));
+}
+
+static Int rfs_select_run(const RfsSelect *s) {
+    volatile Int chosen = -1;
+    BURROW_TRY {
+        chosen = chan_select(s->cs, s->n);
+    }
+    BURROW_CATCH(r) {
+        rfs_select_free(s, true);
+        panic(r);
+    }
+    BURROW_TRY_END;
+    return chosen;
+}
+
+Int reflect_select(Alloc *a, Slice cases, ReflectValue *recv, bool *recv_ok) {
+    if (cases.len > 65536)
+        panic_str(BURROW_S("reflect.Select: too many cases (max 65536)"));
+    const ReflectSelectCase *rc = cases.p;
+    RfsSelect s = {a, cases.len, NULL, NULL, NULL, 0};
+
+    bool have_default = false;
+    for (Int i = 0; i < s.n; i++) {
+        RfBox box;
+        const Type *e = rfs_select_case(&rc[i], NULL, &box, &have_default);
+        if (e != NULL && e->size > s.size)
+            s.size = e->size;
+    }
+
+    SelectCase stack_cases[RFS_SELECT_STACK];
+    RfBox stack_boxes[RFS_SELECT_STACK];
+    s.cs = stack_cases;
+    s.boxes = stack_boxes;
+    if (s.n > RFS_SELECT_STACK) {
+        s.cs = rfs_alloc(a, (size_t)s.n * sizeof(SelectCase), alignof(SelectCase));
+        s.boxes = rfs_alloc(a, (size_t)s.n * sizeof(RfBox), alignof(RfBox));
+    }
+    s.buf = rfs_alloc(a, s.size, alignof(max_align_t));
+    bool ok = false;
+    have_default = false;
+    for (Int i = 0; i < s.n; i++) {
+        (void)rfs_select_case(&rc[i], &s.cs[i], &s.boxes[i], &have_default);
+        if (s.cs[i].op == SELECT_RECV) {
+            s.cs[i].recv = s.buf;
+            s.cs[i].ok = &ok;
+        }
+    }
+
+    Int chosen = rfs_select_run(&s);
+    ReflectValue got = {0};
+    bool is_recv = s.cs[chosen].op == SELECT_RECV;
+    if (is_recv)
+        got = rfs_make(rc[chosen].chan.typ->elem, s.buf, 0);
+    else
+        ok = false;
+    rfs_select_free(&s, !is_recv);
+    if (recv != NULL)
+        *recv = got;
+    if (recv_ok != NULL)
+        *recv_ok = ok;
+    return chosen;
 }
 
 void reflect_value_close(ReflectValue v) {

@@ -132,5 +132,7 @@ testing/slogtest
 testing/iotest
 net/http/httputil
 expvar
+database/sql/driver
+database/sql
 text/template/parse
 html

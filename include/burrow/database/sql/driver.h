@@ -352,6 +352,10 @@ typedef struct DriverRows {
     void *data;
 } DriverRows;
 
+/* The descriptor of a Rows, for a driver that returns one as a column's value:
+ * a cursor, which database/sql scans into a SqlRowsPtr. */
+extern const Type burrow_type_DriverRows;
+
 /* The optional interfaces of a Rows, by their Go names. */
 typedef DriverRowsVT DriverRowsColumnScannerVT;
 typedef DriverRows DriverRowsColumnScanner;

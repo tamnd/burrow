@@ -401,3 +401,19 @@ log/slog: method (Value) Any: takes the value by pointer, because the Any it ret
 log/slog: method (Value) LogValuer: returns the LogValuer as an Any holding it, which is how a Value keeps one
 log/slog: method (Record) Source: fills in a Source and returns whether there is one, since there is nowhere for Go's pointer to point
 log/slog: func NewMultiHandler: takes the handlers as a pointer and a count, as io_multi_writer does
+
+# include/burrow/database/sql.h: a Row is an error and a Rows pointer, scanned
+# once, and scanning frees the Rows. Returning it by value means query_row has
+# nothing of its own to allocate and the caller has nothing to free.
+database/sql: method (*DB) QueryRow: returns the Row by value
+database/sql: method (*DB) QueryRowContext: returns the Row by value
+database/sql: method (*Stmt) QueryRow: returns the Row by value
+database/sql: method (*Stmt) QueryRowContext: returns the Row by value
+database/sql: method (*Tx) QueryRow: returns the Row by value
+database/sql: method (*Tx) QueryRowContext: returns the Row by value
+database/sql: method (*Conn) QueryRowContext: returns the Row by value
+# Go's Raw passes the driver connection as an interface{} that the callback
+# asserts back to the driver's type. Here it is the DriverConn itself.
+database/sql: method (*Conn) Raw: the callback gets the DriverConn, which is what Go's interface{} holds
+# burrow has no reflect.Type. A column's scan type is the type descriptor.
+database/sql: method (*ColumnType) ScanType: returns the type descriptor in place of a reflect.Type

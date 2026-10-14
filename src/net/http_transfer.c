@@ -127,7 +127,7 @@ typedef struct HbTransfer {
 } HbTransfer;
 
 /* bodyAllowedForStatus. */
-static bool hb_body_allowed_for_status(Int status) {
+bool burrow__http_body_allowed_for_status(Int status) {
     if (status >= 100 && status <= 199)
         return false;
     return status != 204 && status != 304;
@@ -639,7 +639,7 @@ Error burrow__http_read_transfer(HttpRequest *req, HttpResponse *resp, BufioRead
      * allows a body, has a body that ends with the connection. RFC 7230
      * section 3.3. */
     if (is_response && real_length == -1 && !t.chunked &&
-        hb_body_allowed_for_status(t.status_code))
+        burrow__http_body_allowed_for_status(t.status_code))
         t.close = true;
 
     /* The body. */
@@ -647,7 +647,7 @@ Error burrow__http_read_transfer(HttpRequest *req, HttpResponse *resp, BufioRead
     t.body = http_no_body;
     if (t.chunked) {
         if (!is_response || (!hb_no_response_body_expected(t.request_method) &&
-                             hb_body_allowed_for_status(t.status_code))) {
+                             burrow__http_body_allowed_for_status(t.status_code))) {
             b = (HbBody *)mem_alloc(a, sizeof *b, _Alignof(HbBody));
             if (b == NULL)
                 return burrow_err_out_of_memory;

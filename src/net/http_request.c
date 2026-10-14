@@ -1,5 +1,5 @@
 /* Derived from Go's src/net/http/request.go, the parts that read a request
- * from the wire and look at one.
+ * from the wire, write one to it and look at one.
  * Go source: go1.27.1.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
@@ -9,20 +9,29 @@
 
 #include "http_internal.h"
 
+#include "../xnet/httpguts.h"
 #include "http_ascii.h"
 
 #include "burrow/bufio.h"
+#include "burrow/bytes.h"
+#include "burrow/context.h"
 #include "burrow/core.h"
 #include "burrow/encoding/base64.h"
 #include "burrow/error.h"
+#include "burrow/fmt.h"
+#include "burrow/func.h"
 #include "burrow/io.h"
 #include "burrow/map.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
+#include "burrow/mem/heap.h"
 #include "burrow/net/http.h"
 #include "burrow/net/textproto.h"
 #include "burrow/net/url.h"
+#include "burrow/runtime.h"
 #include "burrow/slice.h"
+#include "burrow/strings.h"
+#include "burrow/type.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -320,4 +329,457 @@ void http_request_free(HttpRequest *r) {
     burrow__http_body_free(r->wire);
     arena_free(&r->arena);
     mem_free(r->a, r, sizeof *r, _Alignof(HttpRequest));
+}
+
+/* ------------------------------------------------------------------ writing */
+
+static const Str hq_text_missing_host =
+    BURROW_S_INIT("http: Request.Write on Request with no Host or URL set");
+static const Str hq_text_invalid_host = BURROW_S_INIT("http: invalid Host header");
+static const Str hq_text_ctl_in_url =
+    BURROW_S_INIT("net/http: can't write control character in Request.URL");
+static const Str hq_text_nil_context = BURROW_S_INIT("net/http: nil Context");
+
+/* The fields Request.write writes itself, from the request's other fields,
+ * and so leaves out of the header. */
+static const Str hq_req_write_exclude[] = {
+    BURROW_S_INIT("Host"),           BURROW_S_INIT("User-Agent"),
+    BURROW_S_INIT("Content-Length"), BURROW_S_INIT("Transfer-Encoding"),
+    BURROW_S_INIT("Trailer"),
+};
+
+/* requestBodyReadError, which holds the error it wraps after the vtable. */
+static Str hq_body_read_error_message(const void *self) {
+    return error_text(*(const Error *)self);
+}
+
+static Error hq_body_read_error_clone(const void *self, Alloc *a);
+
+static const ErrorVT hq_body_read_error_vt = {
+    NULL, hq_body_read_error_message, NULL, NULL, NULL, NULL, hq_body_read_error_clone,
+};
+
+static Error hq_body_read_error_in(Alloc *a, Error inner) {
+    Error *box = (Error *)mem_alloc(a, sizeof *box, _Alignof(Error));
+    if (box == NULL)
+        return burrow_err_out_of_memory;
+    *box = error_retain(a, inner);
+    return (Error){&hq_body_read_error_vt, box};
+}
+
+static Error hq_body_read_error_clone(const void *self, Alloc *a) {
+    return hq_body_read_error_in(a, *(const Error *)self);
+}
+
+Error burrow__http_request_body_read_error(Error inner) {
+    return hq_body_read_error_in(error_allocator(), inner);
+}
+
+bool burrow__http_is_request_body_read_error(Error err, Error *inner) {
+    if (err.vt != &hq_body_read_error_vt)
+        return false;
+    if (inner != NULL)
+        *inner = *(const Error *)err.data;
+    return true;
+}
+
+/* removeZone. "[fe80::1%en0]:8080" without its zone, "[fe80::1]:8080". */
+static Str hq_remove_zone(Alloc *a, Str host) {
+    if (host.len == 0 || host.p[0] != '[')
+        return host;
+    Int i = host.len - 1;
+    while (i >= 0 && host.p[i] != ']')
+        i--;
+    if (i < 0)
+        return host;
+    Int j = i - 1;
+    while (j >= 0 && host.p[j] != '%')
+        j--;
+    if (j < 0)
+        return host;
+    Byte *p = (Byte *)mem_alloc_nozero(a, (size_t)(j + host.len - i), 1);
+    if (p == NULL)
+        return host;
+    memcpy(p, host.p, (size_t)j);
+    memcpy(p + j, host.p + i, (size_t)(host.len - i));
+    return str_from_bytes(p, j + host.len - i);
+}
+
+/* Whether w can take a byte at a time, Go's io.ByteWriter, so that writing to
+ * it costs nothing without a bufio.Writer in front. */
+static bool hq_is_byte_writer(IoWriter w) {
+    if (w.vt == NULL || w.vt->self_type == NULL)
+        return false;
+    const Type *t = w.vt->self_type;
+    if (t == TYPE_BUFIO_WRITER || t == TYPE_STRINGS_BUILDER || t == TYPE_BYTES_BUFFER)
+        return true;
+    return type_method_by_name(t, BURROW_S("WriteByte")) != NULL;
+}
+
+/* headerNewlineToSpace and then textproto.TrimString. */
+static Str hq_header_value(Alloc *a, Str v) {
+    Int lo = 0, hi = v.len;
+    while (lo < hi &&
+           (v.p[lo] == ' ' || v.p[lo] == '\t' || v.p[lo] == '\n' || v.p[lo] == '\r'))
+        lo++;
+    while (hi > lo && (v.p[hi - 1] == ' ' || v.p[hi - 1] == '\t' ||
+                       v.p[hi - 1] == '\n' || v.p[hi - 1] == '\r'))
+        hi--;
+    v = str_from_bytes(v.p + lo, hi - lo);
+    if (v.len == 0 || (memchr(v.p, '\n', (size_t)v.len) == NULL &&
+                       memchr(v.p, '\r', (size_t)v.len) == NULL))
+        return v;
+    Byte *p = (Byte *)mem_alloc_nozero(a, (size_t)v.len, 1);
+    if (p == NULL)
+        return v;
+    for (Int i = 0; i < v.len; i++)
+        p[i] = v.p[i] == '\n' || v.p[i] == '\r' ? ' ' : v.p[i];
+    return str_from_bytes(p, v.len);
+}
+
+static Error hq_close_body(HttpRequest *r) {
+    if (r->body.vt == NULL)
+        return BURROW_NO_ERROR;
+    return r->body.vt->closer.close(r->body.data);
+}
+
+/* The rest of Request.write, once the scratch arena is there. *closed says
+ * whether the body has been closed, or handed to the code that closes it. */
+static Error hq_write(HttpRequest *r, IoWriter w, bool using_proxy, HttpHeader extra,
+                      burrow__HttpWaitFunc wait, Alloc *sa,
+                      burrow__HttpTransferWriter *tw, BufioWriter **bwp, bool *closed) {
+    /* The host from the Host field when there is one, and from the URL when
+     * not, cleaned in case it has something unexpected in it. */
+    Str host = r->host;
+    if (host.len == 0) {
+        if (r->url == NULL)
+            return hq_error(&hq_text_missing_host);
+        host = r->url->host;
+    }
+    Error err = BURROW_NO_ERROR;
+    host = burrow__httpguts_punycode_host_port(sa, host, &err);
+    if (BURROW_FAILED(err))
+        return err;
+    /* A Host that is not valid in a header is sent as "", not altered, since
+     * an altered one opens a way to smuggle a request. A proxy can do nothing
+     * with an empty one, so that is an error. */
+    if (!burrow__httpguts_valid_host_header(host)) {
+        if (using_proxy)
+            return hq_error(&hq_text_invalid_host);
+        host = BURROW_STR_EMPTY;
+    }
+    /* RFC 6874 has a client take the IPv6 zone off an outgoing URI. */
+    host = hq_remove_zone(sa, host);
+
+    if (r->url == NULL)
+        runtime_panic(BURROW_S("http: Request.Write on Request with a nil URL"));
+    const Url *u = r->url;
+    Str ruri = url_request_uri(u, sa);
+    if (using_proxy && u->scheme.len > 0 && u->opaque.len == 0) {
+        ruri = fmt_sprintf_v(sa, "%s://%s%s", u->scheme, host, ruri);
+    } else if (str_eq(r->method, BURROW_S("CONNECT")) && u->path.len == 0) {
+        /* CONNECT gives just the host and port, not a whole URL. */
+        ruri = host;
+        if (u->opaque.len > 0)
+            ruri = u->opaque;
+    }
+    if (burrow__http_string_contains_ctl_byte(ruri))
+        return hq_error(&hq_text_ctl_in_url);
+
+    /* A writer that is not buffered gets a BufioWriter in front of it. */
+    if (!hq_is_byte_writer(w)) {
+        *bwp = bufio_new_writer(sa, w);
+        if (*bwp == NULL)
+            return burrow_err_out_of_memory;
+        w = bufio_writer_as_io_writer(*bwp);
+    }
+
+    Str method = r->method.len > 0 ? r->method : BURROW_S("GET");
+    (void)io_write_string(w, fmt_sprintf_v(sa, "%s %s HTTP/1.1\r\n", method, ruri),
+                          &err);
+    if (BURROW_FAILED(err))
+        return err;
+
+    (void)io_write_string(w, fmt_sprintf_v(sa, "Host: %s\r\n", host), &err);
+    if (BURROW_FAILED(err))
+        return err;
+
+    /* The default User-Agent unless the header has one, which may be empty so
+     * that none is sent. */
+    Str user_agent = BURROW_S("Go-http-client/1.1");
+    if (burrow__http_header_has(r->header, BURROW_S("User-Agent")))
+        user_agent = http_header_get(r->header, BURROW_S("User-Agent"));
+    if (user_agent.len > 0) {
+        user_agent = hq_header_value(sa, user_agent);
+        (void)io_write_string(w, fmt_sprintf_v(sa, "User-Agent: %s\r\n", user_agent),
+                              &err);
+        if (BURROW_FAILED(err))
+            return err;
+    }
+
+    /* The body, content_length, close and trailer. */
+    err = burrow__http_new_transfer_writer(tw, sa, r, NULL);
+    if (BURROW_FAILED(err))
+        return err;
+    err = burrow__http_transfer_writer_write_header(tw, sa, w);
+    if (BURROW_FAILED(err))
+        return err;
+
+    err = burrow__http_header_write_except(
+        r->header, w, hq_req_write_exclude,
+        (Int)(sizeof hq_req_write_exclude / sizeof hq_req_write_exclude[0]));
+    if (BURROW_FAILED(err))
+        return err;
+
+    if (extra != NULL) {
+        err = http_header_write(extra, w);
+        if (BURROW_FAILED(err))
+            return err;
+    }
+
+    (void)io_write_string(w, BURROW_S("\r\n"), &err);
+    if (BURROW_FAILED(err))
+        return err;
+
+    /* Flush, and wait for 100-continue if it is expected. */
+    BufioWriter *wbuf = burrow__http_bufio_writer_of(w);
+    if (wait.f != NULL) {
+        if (wbuf != NULL) {
+            err = bufio_writer_flush(wbuf);
+            if (BURROW_FAILED(err))
+                return err;
+        }
+        if (!wait.f(wait.env)) {
+            *closed = true;
+            (void)hq_close_body(r);
+            return BURROW_NO_ERROR;
+        }
+    }
+
+    if (wbuf != NULL && tw->flush_headers) {
+        err = bufio_writer_flush(wbuf);
+        if (BURROW_FAILED(err))
+            return err;
+    }
+
+    /* The body and the trailer. */
+    *closed = true;
+    err = burrow__http_transfer_writer_write_body(tw, sa, w);
+    if (BURROW_FAILED(err)) {
+        if (tw->body_read_error.vt == err.vt && tw->body_read_error.data == err.data)
+            err = burrow__http_request_body_read_error(err);
+        return err;
+    }
+
+    if (*bwp != NULL)
+        return bufio_writer_flush(*bwp);
+    return BURROW_NO_ERROR;
+}
+
+Error burrow__http_request_write(HttpRequest *r, IoWriter w, bool using_proxy,
+                                 HttpHeader extra, burrow__HttpWaitFunc wait) {
+    Arena scratch;
+    arena_init(&scratch, heap_allocator(), 0);
+    burrow__HttpTransferWriter tw;
+    memset(&tw, 0, sizeof tw);
+    BufioWriter *bw = NULL;
+    bool closed = false;
+    Error err = hq_write(r, w, using_proxy, extra, wait, arena_allocator(&scratch), &tw,
+                         &bw, &closed);
+    if (!closed) {
+        Error cerr = hq_close_body(r);
+        if (BURROW_FAILED(cerr) && BURROW_OK(err))
+            err = cerr;
+    }
+    burrow__http_transfer_writer_done(&tw);
+    /* An error made in the scratch arena has to outlive it. */
+    if (BURROW_FAILED(err))
+        err = error_retain(error_allocator(), err);
+    bufio_writer_free(bw);
+    arena_free(&scratch);
+    return err;
+}
+
+Error http_request_write(HttpRequest *r, IoWriter w) {
+    return burrow__http_request_write(r, w, false, NULL, (burrow__HttpWaitFunc){0});
+}
+
+Error http_request_write_proxy(HttpRequest *r, IoWriter w) {
+    return burrow__http_request_write(r, w, true, NULL, (burrow__HttpWaitFunc){0});
+}
+
+/* --------------------------------------------------------------- NewRequest */
+
+/* What GetBody for a body NewRequest knows copies: the reader as it was when
+ * the request was made, and the arena of the request to put the copies in. */
+typedef struct hq_BodySnapshot {
+    Arena *arena;
+    BytesReader bytes;
+    StringsReader str;
+    bool is_str;
+} hq_BodySnapshot;
+
+/* GetBody for such a body: a fresh reader of the same bytes. */
+static IoReadCloser hq_get_body_snapshot(void *env, Error *err) {
+    const hq_BodySnapshot *snap = (const hq_BodySnapshot *)env;
+    Alloc *a = arena_allocator(snap->arena);
+    IoNopCloser *nc = (IoNopCloser *)mem_alloc(a, sizeof *nc, _Alignof(IoNopCloser));
+    if (nc == NULL) {
+        *err = burrow_err_out_of_memory;
+        return (IoReadCloser){0};
+    }
+    if (snap->is_str) {
+        StringsReader *sr =
+            (StringsReader *)mem_alloc(a, sizeof *sr, _Alignof(StringsReader));
+        if (sr == NULL) {
+            *err = burrow_err_out_of_memory;
+            return (IoReadCloser){0};
+        }
+        *sr = snap->str;
+        *nc = io_nop_closer(strings_reader_as_io_reader(sr));
+    } else {
+        BytesReader *br =
+            (BytesReader *)mem_alloc(a, sizeof *br, _Alignof(BytesReader));
+        if (br == NULL) {
+            *err = burrow_err_out_of_memory;
+            return (IoReadCloser){0};
+        }
+        *br = snap->bytes;
+        *nc = io_nop_closer(bytes_reader_as_io_reader(br));
+    }
+    *err = BURROW_NO_ERROR;
+    return io_nop_closer_as_io_read_closer(nc);
+}
+
+static IoReadCloser hq_get_no_body(void *env, Error *err) {
+    (void)env;
+    *err = BURROW_NO_ERROR;
+    return http_no_body;
+}
+
+HttpRequest *http_new_request(Alloc *a, Str method, Str url, IoReader body,
+                              Error *err) {
+    return http_new_request_with_context(a, context_background(), method, url, body,
+                                         err);
+}
+
+HttpRequest *http_new_request_with_context(Alloc *a, Context ctx, Str method, Str url,
+                                           IoReader body, Error *err) {
+    /* "" is documented to mean GET, and people rely on that. */
+    if (method.len == 0)
+        method = BURROW_S("GET");
+    if (!hq_valid_method(method)) {
+        *err = fmt_errorf_v("net/http: invalid method %q", method);
+        return NULL;
+    }
+    if (ctx.vt == NULL) {
+        *err = hq_error(&hq_text_nil_context);
+        return NULL;
+    }
+    HttpRequest *req = (HttpRequest *)mem_alloc(a, sizeof *req, _Alignof(HttpRequest));
+    if (req == NULL) {
+        *err = burrow_err_out_of_memory;
+        return NULL;
+    }
+    req->a = a;
+    arena_init(&req->arena, a, 0);
+    Alloc *ra = arena_allocator(&req->arena);
+
+    Error e;
+    Url *u = url_parse(ra, url, &e);
+    if (u == NULL) {
+        *err = error_retain(error_allocator(), e);
+        http_request_free(req);
+        return NULL;
+    }
+    /* The host's colon and port are normalized, issue 14836. */
+    if (u->host.len > 0 && u->host.p[u->host.len - 1] == ':')
+        u->host.len--;
+    req->ctx = ctx;
+    req->method = str_clone(ra, method);
+    req->url = u;
+    req->proto = BURROW_S("HTTP/1.1");
+    req->proto_major = 1;
+    req->proto_minor = 1;
+    req->header = http_header_make(ra);
+    req->host = u->host;
+    req->transfer_encoding = slice_from(NULL, 0, 0, TYPE_STRING);
+    if (req->header == NULL || (method.len > 0 && req->method.len == 0)) {
+        *err = burrow_err_out_of_memory;
+        http_request_free(req);
+        return NULL;
+    }
+
+    if (body.vt != NULL) {
+        IoNopCloser *nc =
+            (IoNopCloser *)mem_alloc(ra, sizeof *nc, _Alignof(IoNopCloser));
+        if (nc == NULL) {
+            *err = burrow_err_out_of_memory;
+            http_request_free(req);
+            return NULL;
+        }
+        *nc = io_nop_closer(body);
+        req->body = io_nop_closer_as_io_read_closer(nc);
+
+        const Type *t = body.vt->self_type;
+        hq_BodySnapshot snap = {.arena = &req->arena};
+        bool known = true;
+        if (t != NULL && t == TYPE_BYTES_BUFFER) {
+            BytesBuffer *b = (BytesBuffer *)body.data;
+            req->content_length = bytes_buffer_len(b);
+            bytes_reader_reset(&snap.bytes, bytes_buffer_bytes(b));
+        } else if (t != NULL && t == TYPE_BYTES_READER) {
+            BytesReader *b = (BytesReader *)body.data;
+            req->content_length = bytes_reader_len(b);
+            snap.bytes = *b;
+        } else if (t != NULL && t == TYPE_STRINGS_READER) {
+            StringsReader *s = (StringsReader *)body.data;
+            req->content_length = strings_reader_len(s);
+            snap.str = *s;
+            snap.is_str = true;
+        } else {
+            known = false;
+        }
+        if (known) {
+            hq_BodySnapshot *sp =
+                (hq_BodySnapshot *)mem_alloc(ra, sizeof *sp, _Alignof(hq_BodySnapshot));
+            if (sp == NULL) {
+                *err = burrow_err_out_of_memory;
+                http_request_free(req);
+                return NULL;
+            }
+            *sp = snap;
+            req->get_body = BURROW_FN(HttpGetBodyFunc, hq_get_body_snapshot, sp);
+        }
+        /* For a client request a content_length of 0 means either none or not
+         * known, and the only way to say none is a nil body. Too much code
+         * wants a body that is not nil, so http_no_body says it instead. */
+        if (req->get_body.f != NULL && req->content_length == 0) {
+            req->body = http_no_body;
+            req->get_body = BURROW_FN(HttpGetBodyFunc, hq_get_no_body, NULL);
+        }
+    }
+    *err = BURROW_NO_ERROR;
+    return req;
+}
+
+Context http_request_context(const HttpRequest *r) {
+    if (r->ctx.vt != NULL)
+        return r->ctx;
+    return context_background();
+}
+
+HttpRequest *http_request_with_context(const HttpRequest *r, Alloc *a, Context ctx) {
+    if (ctx.vt == NULL)
+        runtime_panic(BURROW_S("nil context"));
+    HttpRequest *r2 = (HttpRequest *)mem_alloc(a, sizeof *r2, _Alignof(HttpRequest));
+    if (r2 == NULL)
+        return NULL;
+    *r2 = *r;
+    r2->ctx = ctx;
+    /* The copy owns nothing of r's. */
+    r2->a = a;
+    arena_init(&r2->arena, a, 0);
+    r2->wire = NULL;
+    return r2;
 }

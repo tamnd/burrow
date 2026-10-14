@@ -40,7 +40,7 @@ static void need_sockets(TestingT *t) {
 
 /* testableNetwork for "ip", "ip4" and "ip6": only root may have a raw
  * socket. */
-static bool privileged(void) {
+static bool is_privileged(void) {
 #if !defined(HAVE_SOCKETS) || defined(BURROW_OS_WINDOWS)
     return false;
 #else
@@ -50,7 +50,7 @@ static bool privileged(void) {
 
 static void need_root(TestingT *t) {
     need_sockets(t);
-    if (!privileged())
+    if (!is_privileged())
         testing_t_skip_v(t, "raw sockets need root");
 }
 
@@ -131,7 +131,7 @@ static void TestDialerDialIP(TestingT *t) {
         net_ip_conn_free(c);
         CHECK_STR_EQ(c_text(error_text(e), buf, sizeof buf), tests[i].want);
     }
-    if (!privileged())
+    if (!is_privileged())
         return;
     Error e = BURROW_NO_ERROR;
     NetIPConn *c = net_dialer_dial_ip(NULL, heap_allocator(), context_background(),
@@ -163,7 +163,7 @@ static void TestDialListenIPArgs(TestingT *t) {
     };
     for (int pass = 0; pass < 2; pass++) {
         bool should_fail = pass == 0;
-        if (!should_fail && !privileged())
+        if (!should_fail && !is_privileged())
             break;
         size_t n = should_fail ? sizeof fails / sizeof fails[0]
                                : sizeof works / sizeof works[0];

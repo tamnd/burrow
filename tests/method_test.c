@@ -12,6 +12,7 @@
 
 #include "burrow/core.h"
 #include "burrow/declare.h"
+#include "burrow/error.h"
 #include "burrow/type.h"
 
 #include "check.h"
@@ -80,11 +81,25 @@ static Int counter_get(Counter *c) {
     return c->N;
 }
 
+/* Go's (bool, error), which the C function spells as a trailing Error *. */
+static bool counter_below(Counter *c, Int n, Error *err) {
+    if (n < 0) {
+        *err = errors_new(error_allocator(), BURROW_S("negative limit"));
+        return false;
+    }
+    return c->N < n;
+}
+
 #define COUNTER_SIG_Add(IN, OUT) IN(0, Int)
+#define COUNTER_SIG_Below(IN, OUT)                                                     \
+    IN(0, Int)                                                                         \
+    OUT(bool)                                                                          \
+    OUT(ErrorResult)
 #define COUNTER_SIG_Get(IN, OUT) OUT(Int)
 
 #define COUNTER_METHODS(M, T)                                                          \
     M(T, Add, counter_add, COUNTER_SIG_Add)                                            \
+    M(T, Below, counter_below, COUNTER_SIG_Below)                                      \
     M(T, Get, counter_get, COUNTER_SIG_Get)
 
 BURROW_STRUCT_DEFINE_METHODS(Counter, COUNTER_FIELDS, COUNTER_METHODS);
@@ -128,7 +143,7 @@ static const Type jumbled_type = {
 
 static void TestATypeKnowsHowManyMethodsItHas(TestingT *t) {
     CHECK_INT_EQ(TYPE_OF(Point)->nmethod, 4);
-    CHECK_INT_EQ(TYPE_OF(Counter)->nmethod, 2);
+    CHECK_INT_EQ(TYPE_OF(Counter)->nmethod, 3);
     CHECK_INT_EQ(TYPE_OF(Plain)->nmethod, 0);
     CHECK(TYPE_OF(Plain)->methods == NULL);
 }
@@ -314,6 +329,38 @@ static void TestAMethodWithBothIsCalled(TestingT *t) {
     CHECK(str_eq(got, BURROW_S("somewhere")));
 }
 
+static void TestAnErrorResultIsASecondResult(TestingT *t) {
+    const Type *below = type_method_by_name(TYPE_OF(Counter), BURROW_S("Below"))->ftype;
+
+    CHECK_INT_EQ(type_num_in(below), 1);
+    CHECK_INT_EQ(type_num_out(below), 2);
+    CHECK(type_out(below, 0) == TYPE_OF(bool));
+    CHECK(type_out(below, 1) == TYPE_OF(Error));
+}
+
+static void TestAMethodWithAnErrorResultFillsBothSlots(TestingT *t) {
+    const Method *m = type_method_by_name(TYPE_OF(Counter), BURROW_S("Below"));
+    ArenaMark mark = error_mark();
+    Counter c = {3};
+    Int n = 5;
+    bool got = false;
+    Error err = BURROW_NO_ERROR;
+    void *args[] = {&n};
+    void *rets[] = {&got, &err};
+
+    CHECK(method_call(m, &c, args, rets));
+    CHECK(got);
+    CHECK(BURROW_OK(err));
+
+    n = -1;
+    got = true;
+    CHECK(method_call(m, &c, args, rets));
+    CHECK(!got);
+    CHECK(BURROW_FAILED(err));
+    CHECK(str_eq(error_text(err), BURROW_S("negative limit")));
+    error_release(mark);
+}
+
 static void TestTheSecondTypesMethodsAreItsOwn(TestingT *t) {
     Counter c = {0};
     Int n = 5;
@@ -377,6 +424,8 @@ static void TestANameAndAMethodNameAreEnoughToMakeTheCall(TestingT *t) {
     X(TestAMethodWithArgumentsGetsThemInOrder)                                         \
     X(TestAMethodWithAResultWritesItWhereItWasTold)                                    \
     X(TestAMethodWithBothIsCalled)                                                     \
+    X(TestAnErrorResultIsASecondResult)                                                \
+    X(TestAMethodWithAnErrorResultFillsBothSlots)                                      \
     X(TestTheSecondTypesMethodsAreItsOwn)                                              \
     X(TestCallingNothingSaysSoRatherThanCrashing)                                      \
     X(TestANameAndAMethodNameAreEnoughToMakeTheCall)

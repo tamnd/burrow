@@ -180,6 +180,15 @@ RENAMED = {
     # net.InterfaceAddrs is every address on the machine, so the method that
     # gives one interface's is net_interface_addrs_of.
     ("net", "method (*Interface) Addrs"): "net_interface_addrs_of",
+    # include/burrow/text/template.h: text_template_new is the package level
+    # New, so the method that makes an associated template is named for that,
+    # and the package level Parse functions, which make the template rather
+    # than parse into one, are text_template_from_files and the rest, leaving
+    # the plain names to the methods.
+    ("text/template", "method (*Template) New"): "text_template_new_associated",
+    ("text/template", "func ParseFiles"): "text_template_from_files",
+    ("text/template", "func ParseGlob"): "text_template_from_glob",
+    ("text/template", "func ParseFS"): "text_template_from_fs",
 }
 
 

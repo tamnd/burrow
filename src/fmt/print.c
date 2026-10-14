@@ -1078,10 +1078,7 @@ static int compare(const Type *t, const void *a, const void *b) {
     }
 }
 
-typedef struct KeyValue {
-    const void *key;
-    void *value;
-} KeyValue;
+typedef burrow__FmtSortEntry KeyValue;
 
 /* A stable merge sort, since keys that compare equal keep the order the map
  * gave them in Go too, and that is what slices.SortStableFunc promises. */
@@ -1111,6 +1108,11 @@ static void sort_map_entries(const Type *kt, KeyValue *v, KeyValue *tmp, Int n) 
     while (j < n)
         tmp[k++] = v[j++];
     memcpy(v, tmp, (size_t)n * sizeof *v);
+}
+
+void burrow__fmtsort(const Type *kt, burrow__FmtSortEntry *v, burrow__FmtSortEntry *tmp,
+                     Int n) {
+    sort_map_entries(kt, v, tmp, n);
 }
 
 /* ------------------------------------------------------------------ values */

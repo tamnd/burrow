@@ -523,7 +523,10 @@ reflect_value_method_by_name(ReflectValue v, Alloc *a, Str name);
  * was declared with BURROW_FUNC_TYPE, whose descriptor knows how to call it.
  * A function of any other type cannot be called this way, and Call panics
  * saying so. A C function returns at most one value, so one declared in C has
- * at most one result, where Go's would have several. */
+ * at most one result, where Go's could have several. The exception is a result
+ * followed by an error, which the C function gives back through a trailing
+ * Error pointer and its signature lists as OUT(ErrorResult), as declare.h
+ * explains. */
 BURROW_OWNS(ret) Slice reflect_value_call(ReflectValue v, Alloc *a, Slice in);
 BURROW_OWNS(ret) Slice reflect_value_call_slice(ReflectValue v, Alloc *a, Slice in);
 

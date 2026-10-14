@@ -174,8 +174,11 @@ FNR == 1 {
     if (match(lhs, /[A-Za-z_][A-Za-z0-9_]*$/)) {
         name = substr(lhs, RSTART, RLENGTH)
         # A line that stops at a type, like the head of a static table of an
-        # unnamed struct, has no name on it yet.
-        if (name !~ /^(struct|union|enum|const|static|inline|void|int|char|bool)$/)
+        # unnamed struct, has no name on it yet. One that stops at a macro,
+        # like static BURROW_SLICE_TYPE_DEFINE(Name, T), defines a name the
+        # macro pastes together from its arguments, which this cannot see.
+        if (name !~ /^(struct|union|enum|const|static|inline|void|int|char|bool)$/ &&
+            name !~ /^[A-Z][A-Z0-9_]*$/)
             note(name, FILENAME)
     }
 }

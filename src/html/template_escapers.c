@@ -166,20 +166,6 @@ Str burrow__ht_html_escaper(Alloc *a, Slice args) {
     return hte_html_replacer(a, s, HTE_TABLE(hte_html_replacement_table), true);
 }
 
-static const Str hte_delim_ends[] = {
-    S_(""),
-    S_("\""),
-    S_("'"),
-    /* Determined empirically by running the below in various browsers.
-     * var div = document.createElement("DIV");
-     * for (var i = 0; i < 0x10000; ++i) {
-     *   div.innerHTML = "<span title=x" + String.fromCharCode(i) + "-bar>";
-     *   if (div.getElementsByTagName("SPAN")[0].title.indexOf("bar") < 0)
-     *     document.write("<p>U+" + i.toString(16));
-     * } */
-    S_(" \t\n\f\r>"),
-};
-
 /* stripTags takes a snippet of HTML and returns only the text content. For
  * example, `<b>&iexcl;Hi!</b> <script>...</script>` -> `&iexcl;Hi! `. */
 Str burrow__ht_strip_tags(Alloc *a, Str html) {
@@ -218,7 +204,8 @@ Str burrow__ht_strip_tags(Alloc *a, Str html) {
             i = i1;
             continue;
         }
-        Int k = strings_index_any(burrow__ht_sub(s, i, s.len), hte_delim_ends[c.delim]);
+        Int k = strings_index_any(burrow__ht_sub(s, i, s.len),
+                                  burrow__ht_delim_ends[c.delim]);
         if (k < 0)
             break;
         Int i1 = i + k;

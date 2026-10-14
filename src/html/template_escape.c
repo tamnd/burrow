@@ -1064,7 +1064,7 @@ static burrow__HtContext hte_compute_out_ctx(burrow__HtEscaper *e, burrow__HtCon
 }
 
 /* delimEnds: the bytes that end each delim. */
-static const Str hte_delim_ends[] = {
+const Str burrow__ht_delim_ends[BURROW__HT_DELIM_SPACE_OR_TAG_END + 1] = {
     [BURROW__HT_DELIM_NONE] = S_(""),
     [BURROW__HT_DELIM_DOUBLE_QUOTE] = S_("\""),
     [BURROW__HT_DELIM_SINGLE_QUOTE] = S_("'"),
@@ -1170,7 +1170,7 @@ static burrow__HtContext hte_context_after_text(Alloc *a, burrow__HtContext c, S
 
     /* We are at the beginning of an attribute value. */
 
-    Int i = strings_index_any(s, hte_delim_ends[c.delim]);
+    Int i = strings_index_any(s, burrow__ht_delim_ends[c.delim]);
     if (i == -1)
         i = s.len;
     if (c.delim == BURROW__HT_DELIM_SPACE_OR_TAG_END) {

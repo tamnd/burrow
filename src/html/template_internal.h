@@ -199,6 +199,9 @@ burrow__HtContext burrow__ht_t_special_tag_end(Alloc *a, burrow__HtContext c, St
 /* attrStartStates: the state an attribute value of each kind starts in. */
 extern const burrow__HtState burrow__ht_attr_start_states[BURROW__HT_ATTR_COUNT];
 
+/* delimEnds: the bytes that end each delim. */
+extern const Str burrow__ht_delim_ends[BURROW__HT_DELIM_SPACE_OR_TAG_END + 1];
+
 /* indexTagEnd: where the end tag </tag in s starts, matching tag in any case,
  * or -1. */
 Int burrow__ht_index_tag_end(Str s, Str tag);
